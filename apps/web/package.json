@@ -11,11 +11,13 @@
     "test:build": "node --test test/build/*.test.mjs",
     "typecheck": "tsc -p tsconfig.json",
     "bootstrap:admin": "node tools/bootstrap-admin.mjs",
-    "test:identity:integration": "node --test test/integration/*.test.mjs"
+    "test:identity:integration": "node --test test/integration/*.test.mjs",
+    "test:integration": "node tools/run-web-integration.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.25.0",
     "argon2": "0.45.2",
+    "fastify": "5.12.8",
     "pg": "8.23.1"
   },
   "devDependencies": {
