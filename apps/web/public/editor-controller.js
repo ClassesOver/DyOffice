@@ -54,7 +54,8 @@ function payloadOf(blocks) {
 function rebase(serverBlocks, baseline, local) {
   const baseByIndex = new Map(baseline.filter(block => block.docxIndex !== undefined).map(block => [block.docxIndex, block]))
   const localByIndex = new Map(local.filter(block => block.docxIndex !== undefined).map(block => [block.docxIndex, block]))
-  return serverBlocks.map(block => {
+  const baselineKeys = new Set(baseline.map(block => block.key))
+  const merged = serverBlocks.map(block => {
     const mine = localByIndex.get(block.docxIndex)
     const base = baseByIndex.get(block.docxIndex)
     if (!mine || !base || !block.editable) return block
@@ -62,6 +63,16 @@ function rebase(serverBlocks, baseline, local) {
     if (mine.text !== base.text) return { ...block, text: mine.text, key: mine.key }
     return { ...block, key: mine.key }
   })
+  // Paragraphs created after the request was sent have no server identity yet.
+  for (const block of local) {
+    if (block.deleted || block.docxIndex !== undefined || baselineKeys.has(block.key)) continue
+    merged.push({ ...block })
+  }
+  return merged
+}
+
+function structuralChange(blocks) {
+  return blocks.some(block => block.deleted || block.docxIndex === undefined)
 }
 
 /**
@@ -122,13 +133,21 @@ export function createEditorSession({ readDocx, acquireLease, commitDocx, newKey
           idempotencyKey: newKey(),
           blocks: payloadOf(baseline),
         })
-        guard.settleSave(ticket, 'committed')
+        const structural = structuralChange(baseline)
         try {
           const doc = await readDocx(fileId)
+          guard.settleSave(ticket, 'committed')
           baseRevision = doc.file.revision
           const serverBlocks = tag(doc.blocks, keySeq)
           blocks = guard.getState().dirty ? rebase(serverBlocks, baseline, blocks) : serverBlocks
         } catch {
+          // A structural commit changes docxIndex values. Saving again from the
+          // pre-save projection would be rejected, so wait for a fresh open.
+          if (structural) {
+            guard.settleSave(ticket, 'unknown')
+            return { ok: false, unknown: true, state: snapshot() }
+          }
+          guard.settleSave(ticket, 'committed')
           baseRevision = revision.revision
           if (!guard.getState().dirty) blocks = baseline.filter(block => !block.deleted)
         }

@@ -40,6 +40,63 @@ test('edits made during a docx save stay dirty and keep the newer text', async (
   assert.equal(commits, 1)
 })
 
+test('a paragraph inserted during a save is kept after the server projection returns', async () => {
+  const pending = deferred()
+  let commits = 0
+  const session = createEditorSession({
+    acquireLease: async () => ({ leaseEpoch: 2 }),
+    readDocx: async () => ({
+      file: commits ? nextRevision : revision,
+      leaseEpoch: 2,
+      blocks: [{ docxIndex: 0, type: 'paragraph', text: commits ? 'Hello!' : 'Hello', editable: true }],
+    }),
+    commitDocx: async () => {
+      commits += 1
+      return pending.promise
+    },
+    newKey: () => 'key-123456',
+  })
+  await session.open('file-1')
+  session.updateBlock(0, 'Hello!')
+  const saving = session.save()
+  const inserted = session.insertParagraph()
+  session.updateBlock(inserted.blocks.length - 1, 'New paragraph')
+  pending.resolve(nextRevision)
+  const result = await saving
+  assert.equal(result.ok, true)
+  assert.equal(result.state.blocks.at(-1).text, 'New paragraph')
+  assert.equal(result.state.blocks.at(-1).docxIndex, undefined)
+  assert.equal(result.state.dirty, true)
+  assert.equal(commits, 1)
+})
+
+test('a structural save without a fresh projection blocks another save', async () => {
+  let commits = 0
+  const session = createEditorSession({
+    acquireLease: async () => ({ leaseEpoch: 2 }),
+    readDocx: async () => {
+      if (commits) throw new Error('refresh failed')
+      return { file: revision, leaseEpoch: 2, blocks: [
+        { docxIndex: 0, type: 'paragraph', text: 'Keep', editable: true },
+        { docxIndex: 1, type: 'paragraph', text: 'Drop', editable: true },
+      ] }
+    },
+    commitDocx: async () => {
+      commits += 1
+      return nextRevision
+    },
+    newKey: () => 'key-123456',
+  })
+  await session.open('file-1')
+  session.deleteBlock(1)
+  const lost = await session.save()
+  assert.equal(lost.unknown, true)
+  assert.equal(lost.state.blocks.some(block => block.text === 'Drop' && block.deleted), true)
+  const blocked = await session.save()
+  assert.equal(blocked.unknown, true)
+  assert.equal(commits, 1)
+})
+
 test('a conflict keeps the draft and an unknown result blocks another save', async () => {
   let commits = 0
   let mode = 'conflict'
