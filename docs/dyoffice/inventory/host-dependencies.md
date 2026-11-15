@@ -52,3 +52,43 @@ This does not replace the existing desktop CI or constitute completed T00 accept
 - [ ] Run legacy `npm run test:web`, Web tests, and the upstream impacted suites in a real checkout and record their exit codes.
 
 **Release constraint:** a passing import gate is not permission to enable live editing, multiuser access or enterprise production. T00 is incomplete until this checklist and its evidence are finished.
+
+
+## 2026-11-15 continued implementation: reproducible IPC usage scan
+
+The repository now contains `tools/audit-web-host.mjs`, a source scanner
+for public preload methods and renderer references, plus
+`tools/audit-web-host.test.mjs` (3 fixture tests). The independent Web
+CI workflow runs the scanner and records per-app method counts.
+
+The actual exposed preload bridges were verified from current source:
+
+| Format | Preload bridge | Parsed top-level methods (initial) | First Web integration priority |
+| --- | --- | ---: | --- |
+| DOCX | `window.desktop` | 110 | `openDocx`, `onOpenDocx`, `saveDocx`, `aiStream` |
+| XLSX | `window.desktopApi` | 38 | native workbook open/save, work-item/AI transport |
+| PPTX | `window.slidesApi` | 208 | `openPptx`, `save`, `aiStream` |
+| PDF | `window.pdfApi` | 82 | `readFile`, `save`, `aiStream` |
+
+These figures are **scanner-derived initial counts of the main typed API
+literal**, not a complete inventory of dynamically registered or
+secondary bridges (notably Slides also exposes `window.desktop` for
+file actions, and the apps expose project/naming bridges). The full
+per-file renderer usage report must be generated in a complete checkout.
+Methods are not classified `browser-native` or `server-api` solely by
+their names: T00 requires tracing each main process handler and its side
+effects. The inventory does not assert that any Office renderer has
+already been adapted.
+
+Commands to run in the checked-out repository:
+
+```sh
+node --test tools/audit-web-host.test.mjs
+node tools/audit-web-host.mjs > /tmp/dyoffice-host-audit.json
+```
+
+The scanner intentionally reports unknown renderer methods instead of
+silently ignoring them. It uses conservative lexical extraction and
+cannot prove that every dynamic API reference or indirect IPC path
+has been found. A syntax-aware full graph/handler review is still a
+necessary T00 completion gate.
