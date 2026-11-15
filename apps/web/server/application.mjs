@@ -98,9 +98,13 @@ export async function createApplication({directory,userToken,adminToken,encrypti
           if(typeof value.name!=='string'||!value.name.trim()||value.name.length>200)fail('数据源名称无效');
           if(value.apiKey!==undefined&&typeof value.apiKey!=='string')fail('密钥格式无效');
           const id=value.id??randomUUID();if(typeof id!=='string')fail('数据源 ID 无效');
-          const previous=state.sources.find(s=>s.id===id);
-          const source={id,name:value.name,url:httpUrl(value.url),secret:value.apiKey===undefined?previous?.secret:value.apiKey?store.seal(value.apiKey):undefined};
-          await store.update(s=>{s.sources=s.sources.filter(x=>x.id!==id);s.sources.push(source);});return send({id});
+          const url=httpUrl(value.url);const sealed=value.apiKey?store.seal(value.apiKey):undefined;
+          // Resolve an omitted key against the queued state, not the snapshot taken before the body arrived.
+          await store.update(s=>{
+            const previous=s.sources.find(x=>x.id===id);
+            const source={id,name:value.name,url,secret:value.apiKey===undefined?previous?.secret:sealed};
+            s.sources=s.sources.filter(x=>x.id!==id);s.sources.push(source);
+          });return send({id});
         }
       }
       if(path==='/api/files') {
@@ -118,11 +122,15 @@ export async function createApplication({directory,userToken,adminToken,encrypti
       const fileMatch=path.match(/^\/api\/files\/([a-zA-Z0-9-]+)$/);
       if(fileMatch&&req.method==='GET') {
         const file=state.files.find(f=>f.id===fileMatch[1]);if(!file)fail('文件不存在',404);
+        // Read first: a failed read must answer with a JSON error, not a download named after the file.
+        const content=await readFile(join(filePath,file.id));
         res.setHeader('Content-Type','application/octet-stream');res.setHeader('Content-Disposition',`attachment; filename*=UTF-8''${encodeURIComponent(file.name)}`);
-        return res.end(await readFile(join(filePath,file.id)));
+        return res.end(content);
       }
       return send({error:'接口不存在'},404);
     } catch(error) {
+      // A response already under way cannot carry an error body; a second writeHead would throw out of this async handler.
+      if(res.headersSent){res.destroy(error);return;}
       const body={error:error.status?error.message:'服务暂时不可用'};
       if(error.status && typeof error.publicCode==='string') body.code=error.publicCode;
       send(body,error.status||500);

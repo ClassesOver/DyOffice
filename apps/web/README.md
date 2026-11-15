@@ -36,6 +36,40 @@ Mount the GenOffice Docs renderer (ribbon, pagination, comments, tracked changes
 
 Run `npm run test:web` for HTTP access-boundary and persistence tests. Runtime dependencies are scoped to this app so starting the Web server does not install or launch Electron.
 
+## Local password account bootstrap (T03a; CLI only)
+
+The repository now includes a PostgreSQL migration runner, an Argon2id password
+hasher and a **trusted-operator-only** one-time administrator bootstrap CLI.
+This does **not** make the existing Web token-login UI a production identity
+system; browser login, session revocation, throttling and per-user file RLS
+remain T03b/T04.
+
+Use the locked Web dependencies and an already provisioned PostgreSQL 16+
+database. Supply a dedicated *migration* role through `DYOFFICE_DATABASE_URL`
+and an explicit deployment UUID. Do not use the migration role for regular app
+traffic. Run the command from the repository root:
+
+```sh
+npm ci --prefix apps/web --workspaces=false --include=dev
+DYOFFICE_DATABASE_URL='postgresql://MIGRATION_USER@db-host/dbname' \
+  node apps/web/tools/bootstrap-admin.mjs \
+  --deployment-id 'REPLACE-WITH-DEPLOYMENT-UUID' \
+  --username admin.local
+```
+
+The CLI prompts for the password twice in a TTY without echoing it, runs the
+identity migrations transactionally, and creates the initial administrator,
+role and personal workspace in a single transaction. It refuses a second
+bootstrap in that deployment. For controlled non-interactive installation
+only, `--password-stdin` reads one line from a pipe; **never** supply passwords
+through argv, environment variables, shell history or logs. There is no
+HTTP bootstrap endpoint or default admin password.
+
+Run the identity tests using the dedicated [identity schema CI workflow](../../.github/workflows/dyoffice-identity-schema.yml).
+This validates the actual native Argon2id module, PostgreSQL migrations,
+concurrent initializations and CLI. Do not enable this account store for Web
+users until T03b/T04 authorization and resource-isolation gates are met.
+
 ## Web-only build baseline (T00)
 
 Install without the root Electron postinstall:

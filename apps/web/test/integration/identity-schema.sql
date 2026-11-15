@@ -1,6 +1,9 @@
 -- Run with psql -v ON_ERROR_STOP=1 from repository root against disposable PostgreSQL.
 -- The surrounding transaction rolls back all fixture accounts and tables.
 BEGIN;
+-- Isolate this fixture from any tables created by the real migration runner.
+CREATE SCHEMA dyoffice_identity_constraint_test;
+SET LOCAL search_path TO dyoffice_identity_constraint_test, public;
 \i apps/web/server/db/migrations/0001_identity.sql
 DO $$
 DECLARE
