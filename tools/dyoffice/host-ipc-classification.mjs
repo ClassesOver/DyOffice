@@ -54,7 +54,9 @@ export function classify(rows, spec) {
 }
 
 const cell = (s) => String(s).replaceAll('|', '\\|').replaceAll('\n', ' ')
-const channels = (row) => row.ipc.map((u) => (u.channel === null ? u.op : u.op + ' `' + u.channel + '`')).join('<br>') || '—'
+// GFM unescapes \| inside table cells before code spans; backticks would end the span
+const code = (s) => '`' + cell(s).replaceAll('`', "'") + '`'
+const channels = (row) => row.ipc.map((u) => (u.channel === null ? cell(u.op) : cell(u.op) + ' ' + code(u.channel))).join('<br>') || '—'
 
 export function renderMarkdown(result, spec) {
   const { classified } = result

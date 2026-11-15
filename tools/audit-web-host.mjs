@@ -170,6 +170,8 @@ function isPresenceCheck(node) {
   if (ts.isArrayLiteralExpression(parent) && ts.isCallExpression(parent.parent) && parent.parent.arguments.at(-1) === parent && /^(?:React\.)?use[A-Z]\w*$/.test(parent.parent.expression.getText())) return true
   if (ts.isTypeOfExpression(parent) || ts.isIfStatement(parent) || ts.isConditionalExpression(parent) && parent.condition === node) return true
   if (ts.isPrefixUnaryExpression(parent) && parent.operator === ts.SyntaxKind.ExclamationToken) return true
+  // `window.x && window.x.y()`: the left operand only guards; the right side is visited on its own
+  if (ts.isBinaryExpression(parent) && parent.left === node && parent.operatorToken.kind === ts.SyntaxKind.AmpersandAmpersandToken) return true
   return ts.isBinaryExpression(parent) && [ts.SyntaxKind.EqualsEqualsEqualsToken, ts.SyntaxKind.ExclamationEqualsEqualsToken, ts.SyntaxKind.EqualsEqualsToken, ts.SyntaxKind.ExclamationEqualsToken].includes(parent.operatorToken.kind)
 }
 
@@ -201,10 +203,12 @@ export function analyzeRenderer(rootPaths, bridgeNames, base = root, paths = {})
   const bridgeOf = (expr) => {
     const node = unwrap(expr)
     if (!node) return null
-    if (ts.isPropertyAccessExpression(node)) {
+    // window.x, globalThis.x, window['x']
+    const key = ts.isPropertyAccessExpression(node) ? node.name.text
+      : ts.isElementAccessExpression(node) && ts.isStringLiteralLike(node.argumentExpression) ? node.argumentExpression.text : null
+    if (key !== null) {
       const obj = unwrap(node.expression)
-      if (ts.isIdentifier(obj) && (obj.text === 'window' || obj.text === 'globalThis') && bridges.has(node.name.text)) return node.name.text
-      return null
+      return ts.isIdentifier(obj) && (obj.text === 'window' || obj.text === 'globalThis') && bridges.has(key) ? key : null
     }
     if (ts.isIdentifier(node)) { const sym = symbolOf(node); return (sym && valued.get(sym)) ?? null }
     if (ts.isCallExpression(node)) { const sym = symbolOf(unwrap(node.expression)); return (sym && returning.get(sym)) ?? null }

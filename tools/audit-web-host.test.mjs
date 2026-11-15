@@ -111,6 +111,24 @@ function D() { project().resolveChat(); register(window.desktop); const copy = [
   assert.deepEqual(opaque.map((o) => o.text).sort(), ['[window.desktop]', 'register(window.desktop)'])
 })
 
+test('treats && guards as presence checks and resolves bracket access to a bridge', async (t) => {
+  const base = await tree(t, {
+    'r/a.ts': `
+export function A() {
+  if (window.desktop && window.desktop.open) window.desktop.open()
+  const ok = window.desktop && window.desktop.save()
+  window['desktop'].close()
+  const b = globalThis['desktop']
+  b.print()
+  const fn = () => { if (ok) return window.desktop; return null }
+}
+`,
+  })
+  const { calls, opaque } = analyzeRenderer([join(base, 'r/a.ts')], ['desktop'], base)
+  assert.deepEqual(calls.map((c) => c.method).sort(), ['close', 'open', 'open', 'print', 'save'])
+  assert.deepEqual(opaque.map((o) => o.text), ['return window.desktop;'], 'a multi-statement accessor stays opaque')
+})
+
 test('audits four apps, joins renderer calls and reports unmatched members', async (t) => {
   const files = {}
   const apps = { docs: 'desktop', sheets: 'desktopApi', slides: 'slidesApi', pdf: 'pdfApi' }

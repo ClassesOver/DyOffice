@@ -47,6 +47,14 @@ test('markdown escapes table cells and lists every member', () => {
   assert.match(md, /\| \*\*all\*\* \| 0 \| 0 \| 0 \| 1 \| 0 \| 1 \|/)
 })
 
+test('non-literal channel text cannot break the table row', () => {
+  const spec = { schema: 1, status: 'proposed', statusNote: 'note', classes, rules: [rule('r', '.', 'unsupported')] }
+  const md = renderMarkdown(classify([row('docs/desktop.a', { ipc: [{ op: 'invoke', channel: '?a || `b`' }] })], spec), spec)
+  const line = md.split('\n').find((l) => l.startsWith('| `desktop.a`'))
+  assert.equal(line.split(/(?<!\\)\|/).length - 2, 6, 'exactly six cells')
+  assert.ok(line.includes("`?a \\|\\| 'b'`"))
+})
+
 test('repository inventory is fully classified and the generated document is current', async () => {
   const { problems, markdown, result } = await build()
   assert.deepEqual(problems, [])
