@@ -35,3 +35,16 @@ An earlier run failed on the CI PostgreSQL service port mapping (`ports: [5432]`
 6. Additional T03b work: login/logout/me endpoints, password verification with a fake hash for absent users, rate limiting and resource bounds, secure session cookies in HTTP responses, CSRF tokens/Origin validation, logout-from-all-devices and session activity audits.
 
 This work remains compatible with the user-confirmed decision to use **local username/password accounts only**, without OIDC/Keycloak/SSO.
+
+## Continued isolated work: session-bound CSRF / Origin policy
+
+Added two **new files**, without touching the existing Web HTTP router or any native editor:
+
+- `apps/web/server/auth/csrf-policy.mjs`: explicit `createCsrfPolicy({secret,trustedOrigin})`; uses a configured key of at least 32 bytes and SHA-256 HMAC bound to the trusted PostgreSQL-authenticated `deploymentId` and `sessionId`. It requires an exact trusted HTTPS `Origin` (HTTP only for localhost), a matching `X-DyOffice-CSRF` token, and rejects duplicate/malformed Origin and CSRF headers. It does not trust client Host or X-Forwarded-Host.
+- `apps/web/test/csrf-policy.test.mjs`: 4 focused tests for valid tokens, session/deployment binding, origin/subdomain spoofing, duplicates, malformed tokens and unsafe configuration.
+
+Isolated Node 22.16.0 check: `node --check apps/web/server/auth/csrf-policy.mjs` and `node --test apps/web/test/csrf-policy.test.mjs` **passed (4/4)**. The dedicated [T03b PostgreSQL session CI](https://github.com/ClassesOver/DyOffice/actions/runs/43773079282) and the [identity CI](https://github.com/ClassesOver/DyOffice/actions/runs/43773079196) have also passed at commit `3cba563ae3e9853cdb95f83bd8159f1a48e4658c`.
+
+**Not yet connected:** Do not call `csrf.issue()` based on browser-supplied principal IDs. A future authenticated `/api/v1/auth/csrf` endpoint may expose it only after validating the server-side session and must send `Cache-Control: no-store`. All cookie-authenticated writes require this policy in the HTTP adapter. Session revocation and write authorization remain mandatory even with a valid CSRF token. This is **not** a completed login/CSRF integration or production-ready authorization flow.
+
+The PR stays in **Draft** so the separately owned DOCX editor and shared Web gate can complete their review before integration.
