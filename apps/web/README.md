@@ -112,4 +112,6 @@ Admin updates apply supplied sections against the latest state inside the instan
 
 每个请求由服务端生成独立 `X-Request-ID`，不信任或回显客户端同名请求头。JSON 错误响应保持原有 HTTP 状态码、`application/json` 和 `error` 文案，增量提供 `type: about:blank`、`title`、`status`、`detail`、`requestId`；成功响应正文不变。错误中不包含请求 URL、查询参数或内部异常详情，500 继续返回通用文案。
 
-此接缝不代表 T02 完成：Fastify 模块化、完整 `/api/v1` 迁移（当前仅有只读文件桥接）、限流、ready/live 和优雅关闭仍待实施；未实现 T03 本地账号密码/服务端会话撤销，不能用它宣称正式登录或退出能力。
+`buildApp` in `server/src/app.mjs` is a separate Fastify shell for the modular `/api/v1` migration. It serves live/ready probes, server-generated request IDs, Problem errors, static schemas, a single-process rate limit, and graceful close. Routes that are still owned by the legacy server return 501 from this shell. `dev:web` and `start:web` still boot `createApplication`; this shell is not production authentication.
+
+此接缝不代表 T02 完成：旧文件、偏好、Admin 和 DOCX 路由尚未迁入 Fastify。未实现 T03 本地账号密码/服务端会话撤销，不能用它宣称正式登录或退出能力。
