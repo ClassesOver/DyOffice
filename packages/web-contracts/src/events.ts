@@ -18,7 +18,7 @@ export function decodeHostEvent(raw: string): HostEvent {
   try { data = JSON.parse(raw) } catch { throw new HostError('INVALID_RESPONSE', 'Invalid host event JSON') }
   if (!data || typeof data !== 'object' || Array.isArray(data)) throw new HostError('INVALID_RESPONSE', 'Invalid host event envelope')
   const v = data as Record<string, unknown>
-  if (v.protocolVersion !== HOST_PROTOCOL_VERSION || !['editor.register', 'editor.ready', 'command.request', 'command.ack', 'command.result', 'sync.required'].includes(String(v.type)) ||
+  if (v.protocolVersion !== HOST_PROTOCOL_VERSION || typeof v.type !== 'string' || !['editor.register', 'editor.ready', 'command.request', 'command.ack', 'command.result', 'sync.required'].includes(v.type) ||
       !['messageId','sessionId','fileId'].every(k => typeof v[k] === 'string' && (v[k] as string).length > 0) ||
       !v.payload || typeof v.payload !== 'object' || Array.isArray(v.payload)) {
     throw new HostError('INVALID_RESPONSE', 'Host event has missing or invalid fields')

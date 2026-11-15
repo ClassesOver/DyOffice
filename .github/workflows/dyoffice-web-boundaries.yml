@@ -4,6 +4,12 @@ on:
   push:
     branches: [main, feat/dyoffice-web]
     paths:
+      - 'package.json'
+      - 'package-lock.json'
+      - 'LICENSE'
+      - 'NOTICE'
+      - 'tools/dyoffice/**'
+      - 'docs/dyoffice/inventory/compatibility*'
       - 'apps/**'
       - 'packages/**'
       - 'tools/check-web-boundaries*'
@@ -13,6 +19,12 @@ on:
       - '.github/workflows/dyoffice-web-boundaries.yml'
   pull_request:
     paths:
+      - 'package.json'
+      - 'package-lock.json'
+      - 'LICENSE'
+      - 'NOTICE'
+      - 'tools/dyoffice/**'
+      - 'docs/dyoffice/inventory/compatibility*'
       - 'apps/**'
       - 'packages/**'
       - 'tools/check-web-boundaries*'
@@ -36,10 +48,16 @@ jobs:
           node-version: 22
       - name: Install Web gate dependencies without Electron
         run: npm ci --prefix apps/web --workspaces=false --ignore-scripts --include=dev
+      - name: Test compatibility baseline and CI coverage
+        run: node --test tools/dyoffice/*.test.mjs
+      - name: Reject unreviewed dependency and font baseline drift
+        run: node tools/dyoffice/compatibility-baseline.mjs --check
       - name: Test browser dependency gate
         run: node --test tools/check-web-boundaries.test.mjs
       - name: Test BrowserHost contracts
         run: node --experimental-strip-types --test apps/web/test/unit/host-contract.test.mjs
+      - name: Test SSE AgentTransport adapter
+        run: node --experimental-strip-types --test apps/web/test/unit/ai-transport.test.mjs
       - name: Test editor host inventory scanner
         run: node --test tools/audit-web-host.test.mjs
       # Fails on renderer calls to undeclared bridge members or unresolvable preload members.
@@ -52,3 +70,9 @@ jobs:
         run: node tools/dyoffice/host-ipc-classification.mjs --check
       - name: Reject Node or Electron imports in the local Web dependency graph
         run: node tools/check-web-boundaries.mjs
+      - name: Typecheck BrowserHost and Web contracts
+        run: npm run typecheck:web
+      - name: Build and HTTP smoke test the Web prototype
+        run: npm run test:web:build
+      - name: Test legacy Web API
+        run: npm run test:web

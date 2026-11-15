@@ -5,6 +5,7 @@ import { join, extname, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createStore } from './store.mjs';
 import { withMcp } from './mcp.mjs';
+import { serveReadOnlyFiles } from './readonly-files.mjs';
 const publicPath=join(dirname(fileURLToPath(import.meta.url)),'../public');
 const formats=new Set(['docx','xlsx','pptx','pdf']);
 const fail=(message,status=400)=>{throw Object.assign(new Error(message),{status});};
@@ -21,6 +22,7 @@ function sameToken(a,b){const x=Buffer.from(a||'');const y=Buffer.from(b||'');re
 const publicModel=({id,model,enabled})=>({id,model,enabled});
 
 export async function createApplication({directory,userToken,adminToken,encryptionKey}) {
+  if(process.env.NODE_ENV==='production') throw new Error('Development token server is not allowed in production');
   if(!userToken||!adminToken||userToken===adminToken) throw new Error('Personal and admin tokens must be distinct and nonempty');
   const store=await createStore(directory,encryptionKey); const filePath=join(directory,'files');await mkdir(filePath,{recursive:true,mode:0o700});
   return createServer(async(req,res)=>{
@@ -36,7 +38,10 @@ export async function createApplication({directory,userToken,adminToken,encrypti
       const token=req.headers.authorization?.replace(/^Bearer /,'');const admin=sameToken(token,adminToken);
       if(!admin&&!sameToken(token,userToken)) return send({error:'请登录'},401);
       if(path.startsWith('/api/admin/')&&!admin) return send({error:'需要管理员权限'},403);
+      const personalResource=path==='/api/preferences'||path==='/api/sources'||path==='/api/files'||path.startsWith('/api/files/')||path==='/api/v1/capabilities'||path.startsWith('/api/v1/files/');
+      if(admin&&personalResource) return send({error:'需要个人工作区权限'},403);
       const state=store.read();
+      if(await serveReadOnlyFiles(req,res,{url,state,filePath})) return;
       if(path==='/api/preferences') {
         if(req.method==='GET') return send(state.preferences);
         if(req.method==='PUT') {
@@ -54,23 +59,26 @@ export async function createApplication({directory,userToken,adminToken,encrypti
         if(req.method==='GET') return send({models:state.admin.models.map(redact),mcp:state.admin.mcp.map(redact)});
         if(req.method==='PUT') {
           const value=await body(req);fields(value,['models','mcp']);
-          const next={...state.admin};
-          for(const kind of ['models','mcp']) if(value[kind]!==undefined) {
-            if(!Array.isArray(value[kind])||value[kind].length>50)fail('配置列表无效');
-            const ids=new Set();
-            next[kind]=value[kind].map(item=>{
-              fields(item,kind==='models'?['id','model','baseUrl','apiKey','enabled']:['id','transport','url','apiKey','enabled']);
-              if(typeof item.id!=='string'||!item.id.trim()||item.id.length>100||ids.has(item.id))fail('配置 ID 无效或重复');ids.add(item.id);
-              if(item.enabled!==undefined&&typeof item.enabled!=='boolean')fail('启用状态无效');
-              if(item.apiKey!==undefined&&(typeof item.apiKey!=='string'||item.apiKey.length>8192))fail('密钥格式无效');
-              const previous=state.admin[kind].find(x=>x.id===item.id);
-              const result={id:item.id,enabled:item.enabled??true,secret:item.apiKey===undefined?previous?.secret:item.apiKey?store.seal(item.apiKey):undefined};
-              if(kind==='mcp'){if(item.transport!=='http')fail('MCP 仅支持 HTTP');return {...result,transport:'http',url:httpUrl(item.url)};}
-              if(typeof item.model!=='string'||!item.model.trim())fail('模型名称不能为空');
-              return {...result,model:item.model,baseUrl:httpUrl(item.baseUrl)};
-            });
-          }
-          await store.update(s=>{s.admin=next;});return send({models:next.models.map(redact),mcp:next.mcp.map(redact)});
+          let next;
+          await store.update(s=>{
+            next={...s.admin};
+            for(const kind of ['models','mcp']) if(value[kind]!==undefined) {
+              if(!Array.isArray(value[kind])||value[kind].length>50)fail('配置列表无效');
+              const ids=new Set();
+              next[kind]=value[kind].map(item=>{
+                fields(item,kind==='models'?['id','model','baseUrl','apiKey','enabled']:['id','transport','url','apiKey','enabled']);
+                if(typeof item.id!=='string'||!item.id.trim()||item.id.length>100||ids.has(item.id))fail('配置 ID 无效或重复');ids.add(item.id);
+                if(item.enabled!==undefined&&typeof item.enabled!=='boolean')fail('启用状态无效');
+                if(item.apiKey!==undefined&&(typeof item.apiKey!=='string'||item.apiKey.length>8192))fail('密钥格式无效');
+                const previous=s.admin[kind].find(x=>x.id===item.id);
+                const result={id:item.id,enabled:item.enabled??true,secret:item.apiKey===undefined?previous?.secret:item.apiKey?store.seal(item.apiKey):undefined};
+                if(kind==='mcp'){if(item.transport!=='http')fail('MCP 仅支持 HTTP');return {...result,transport:'http',url:httpUrl(item.url)};}
+                if(typeof item.model!=='string'||!item.model.trim())fail('模型名称不能为空');
+                return {...result,model:item.model,baseUrl:httpUrl(item.baseUrl)};
+              });
+            }
+            s.admin=next;
+          });return send({models:next.models.map(redact),mcp:next.mcp.map(redact)});
         }
       }
       const mcpMatch=path.match(/^\/api\/admin\/mcp\/([^/]+)\/test$/);

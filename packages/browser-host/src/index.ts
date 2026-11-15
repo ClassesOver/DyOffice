@@ -1,8 +1,8 @@
 import { HostError, hostError } from '../../web-contracts/src/errors.ts'
+import type { RevisionRef, SaveInput } from '../../web-contracts/src/api.ts'
 import { isRevisionRef, isSaveInput } from '../../web-contracts/src/api.ts'
 import { UNSUPPORTED_CAPABILITIES } from '../../web-contracts/src/host.ts'
 import type { BrowserHost, CapabilityCatalog } from '../../web-contracts/src/host.ts'
-import type { RevisionRef, SaveInput } from '../../web-contracts/src/api.ts'
 
 const CAPABILITIES = new Set(['unsupported', 'read_only', 'editable'])
 const ALLOWED_PREFS = new Set(['theme', 'language', 'authorName', 'autoSave', 'showAssistant'])
@@ -12,14 +12,11 @@ function nonempty(value: string, field: string): void {
 function safeCapabilities(value: unknown): CapabilityCatalog {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw hostError('INVALID_RESPONSE', 'getCapabilities')
   const v = value as Record<string, unknown>
-  if (!['docx', 'xlsx', 'pptx', 'pdf'].every(k => CAPABILITIES.has(String(v[k])))) throw hostError('INVALID_RESPONSE', 'getCapabilities')
+  if (!['docx', 'xlsx', 'pptx', 'pdf'].every(k => typeof v[k] === 'string' && CAPABILITIES.has(v[k]))) throw hostError('INVALID_RESPONSE', 'getCapabilities')
   return { docx: v.docx, xlsx: v.xlsx, pptx: v.pptx, pdf: v.pdf } as CapabilityCatalog
 }
 
-// Contract fields only: server-internal fields (owner, storage keys, signed secrets) never reach editor code.
-function pickRevision(v: RevisionRef): RevisionRef {
-  return { fileId: v.fileId, revision: v.revision, sha256: v.sha256, size: v.size }
-}
+// Contract fields only: caller-supplied identity (ownerId, deploymentId) never reaches the adapter.
 function pickSaveInput(v: SaveInput): SaveInput {
   const { fileId, uploadId, baseRevision, idempotencyKey, leaseEpoch, sourceCommandId } = v
   return sourceCommandId === undefined
@@ -41,6 +38,10 @@ function availableCapabilities(declared: CapabilityCatalog, adapter: Partial<Bro
   ) as CapabilityCatalog
 }
 
+function publicRevision(value: RevisionRef): RevisionRef {
+  return { fileId: value.fileId, revision: value.revision, sha256: value.sha256, size: value.size }
+}
+
 /** Explicit Web adapter: missing methods fail closed rather than pretending desktop IPC works. */
 export function createBrowserHost(adapter: Partial<BrowserHost> = {}): BrowserHost {
   return {
@@ -53,7 +54,7 @@ export function createBrowserHost(adapter: Partial<BrowserHost> = {}): BrowserHo
       if (!adapter.open) throw hostError('UNSUPPORTED', 'open')
       const result = await adapter.open(fileId)
       if (!result || !isRevisionRef(result.file) || result.file.fileId !== fileId || !['docx','xlsx','pptx','pdf'].includes(result.format) || !isSameOriginPath(result.downloadEndpoint)) throw hostError('INVALID_RESPONSE', 'open')
-      return { file: pickRevision(result.file), format: result.format, downloadEndpoint: result.downloadEndpoint, capabilities: availableCapabilities(safeCapabilities(result.capabilities), adapter) }
+      return { file: publicRevision(result.file), format: result.format, downloadEndpoint: result.downloadEndpoint, capabilities: availableCapabilities(safeCapabilities(result.capabilities), adapter) }
     },
     async readBytes(fileId, revision) {
       nonempty(fileId, 'fileId'); nonempty(revision, 'revision')
@@ -75,7 +76,7 @@ export function createBrowserHost(adapter: Partial<BrowserHost> = {}): BrowserHo
       if (!adapter.commitSave) throw hostError('UNSUPPORTED', 'commitSave')
       const revision = await adapter.commitSave(pickSaveInput(input))
       if (!isRevisionRef(revision) || revision.fileId !== input.fileId) throw hostError('INVALID_RESPONSE', 'commitSave')
-      return pickRevision(revision)
+      return publicRevision(revision)
     },
     async getPreferences() {
       if (!adapter.getPreferences) throw hostError('UNSUPPORTED', 'getPreferences')

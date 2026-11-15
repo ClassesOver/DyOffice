@@ -1,5 +1,5 @@
 const root=document.querySelector('#app');
-const admin=location.pathname==='/admin';
+const admin=['/admin','/admin.html'].includes(location.pathname);
 const key=admin?'dyoffice-admin-token':'dyoffice-user-token';
 let token=sessionStorage.getItem(key)||'',view=admin?'models':'files',files=[];
 const el=(tag,text,attrs={})=>{const e=document.createElement(tag);if(text!==undefined)e.textContent=text;Object.assign(e,attrs);return e;};

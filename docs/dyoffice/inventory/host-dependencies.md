@@ -91,3 +91,20 @@ must run and why; it is not evidence that a Web adapter exists or works.
 - [ ] Run legacy `npm run test:web`, Web tests, and the upstream impacted suites in a real checkout and record their exit codes.
 
 **Release constraint:** a passing import gate is not permission to enable live editing, multiuser access or enterprise production. T00 is incomplete until this checklist and its evidence are finished.
+
+
+## Superseded initial scan counts
+
+An earlier lexical version of `tools/audit-web-host.mjs` reported 110/38/208/82
+methods for the main Docs/Sheets/Slides/PDF bridges. The Sheets figure was
+wrong: the regex skipped every `async` member (105 exist), and secondary
+bridges were not counted. The AST/type-checker scanner described above replaces
+those numbers. The original caveat still holds: a member's class is a proposed
+mapping until its main-process handler and side effects are traced and the
+named adapter task verifies it.
+
+```sh
+node --test tools/audit-web-host.test.mjs tools/dyoffice/host-ipc-classification.test.mjs
+node tools/audit-web-host.mjs --summary
+node tools/dyoffice/host-ipc-classification.mjs --check
+```
