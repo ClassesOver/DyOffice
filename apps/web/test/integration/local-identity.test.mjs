@@ -24,7 +24,8 @@ test('real PostgreSQL migration, Argon2id password verification and concurrent f
     assert.equal(await hasher.verifyPassword(hash, password), true)
     assert.equal(await hasher.verifyPassword(hash, 'not the real passphrase'), false)
     assert.equal(await hasher.verifyPassword('invalid', password), false)
-    assert.equal(await hasher.verifyPassword('$argon2id$v=19$m=19456,t=2,p=1
+    const malformedHash = String.fromCharCode(36) + ['argon2id', 'v=19', 'm=19456,t=2,p=1', 'A'.repeat(22), 'B'.repeat(43)].join(String.fromCharCode(36))
+    assert.equal(await hasher.verifyPassword(malformedHash, password), false)
     assert.notEqual(hash, await hasher.hashPassword(password), 'random salt should differ')
 
     const deploymentId = randomUUID()
