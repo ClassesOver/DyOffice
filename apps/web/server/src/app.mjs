@@ -68,6 +68,13 @@ export async function buildApp(input) {
     reply.header('X-Content-Type-Options', 'nosniff')
     reply.header('Referrer-Policy', 'no-referrer')
     const path = requestPath(request.url)
+    // Health probes and static pages are public and read-only. Refuse other
+    // methods here, before the body parser buffers up to the file limit for an
+    // unauthenticated caller.
+    if ((HEALTH.has(path) || !path.startsWith('/api/')) && request.method !== 'GET' && request.method !== 'HEAD') {
+      reply.header('Allow', 'GET, HEAD')
+      return reply.code(405).type('application/json; charset=utf-8').send(problem(405, request.id))
+    }
     if (HEALTH.has(path)) return undefined
     const limited = hit(clientAddress(request))
     if (limited) {
