@@ -62,7 +62,10 @@
     "test:web:docs": "node --experimental-strip-types --test apps/web/test/native-docs/*.test.mjs",
     "pretest:web:docs": "npm run build:web:docs",
     "typecheck:web:docs": "tsc -p apps/web/tsconfig.docs.json",
-    "test:web:jobs": "npm run test:jobs --prefix apps/web --workspaces=false"
+    "test:web:jobs": "npm run test:jobs --prefix apps/web --workspaces=false",
+    "build:web:native": "node tools/dyoffice/build-native-sandbox.mjs",
+    "typecheck:web:worker": "npm run typecheck:worker --prefix apps/web --workspaces=false",
+    "test:web:sandbox": "npm run test:sandbox --prefix apps/web --workspaces=false"
   },
   "dependencies": {
     "ws": "^8.21.1"

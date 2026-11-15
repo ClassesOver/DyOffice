@@ -212,3 +212,7 @@ npm run dev:web
 此 checkpoint **未接入公开任务路由、调度守护循环、原生 executor、OS 沙箱或任务输出提交**，现有 Web 启动不要求 Redis，也不在启动时伪造成功任务。`docx.roundtrip` 仅为内部测试保留类型；T08 仍未完成。T06 的 revision_outbox 仍保留意图，不把当前 job dispatcher 当成文档索引事件已消费。
 
 `npm run test:web:jobs` 使用真实独立 PostgreSQL 与 Redis/BullMQ，另需 `DYOFFICE_TEST_REDIS_URL` 指向隔离 loopback Redis。测试仅操作随机专属队列 namespace；恢复测试清空该队列并真实断开客户端连接，不清空共享 Redis。测试 fixture 使用固定摘要 Redis 7.4，CI 也固定相同镜像。不得将测试连接指向业务服务。具体结果和开放项见 [T08a 证据](../../docs/dyoffice/evidence/t08a-durable-jobs.md)。
+
+### T08b 原生 XLSX 与开发环境隔离
+
+已增加真实 Rust XLSX archive roundtrip 和开发环境 Docker OS 沙箱，构建/测试入口见 [Worker 说明](worker/README.md)。隔离限制、真实资源耗尽测试及边界见 [T08b 证据](../../docs/dyoffice/evidence/t08b-native-sandbox.md)。此阶段尚未接入公开任务路由、调度守护循环或 T06 同事务输出/任务成功提交；T08 仍在进行，production 仍关闭。

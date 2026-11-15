@@ -35,3 +35,10 @@ test('durable job gate uses real pinned Redis and runs PostgreSQL/BullMQ recover
   assert.match(workflow,/DYOFFICE_TEST_REDIS_URL: redis:\/\/127\.0\.0\.1:6379\/15/)
   assert.match(workflow,/run: npm run test:web:jobs/)
 })
+
+ test('native sandbox gate builds the locked Rust engine and verifies real kernel resource limits', () => {
+  const job = workflow.split('\n  native-worker:')[1]
+  assert.ok(job,'native worker job required')
+  for (const command of ['npm ci --prefix apps/web --workspaces=false --ignore-scripts --include=dev','npm run build:web:native -- --with-probe','npm run typecheck:web:worker','npm run test:web:sandbox']) assert.ok(job.includes('run: ' + command),command)
+  assert.match(job,/node-version: 22/)
+})

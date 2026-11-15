@@ -47,3 +47,5 @@ _scratch-*
 apps/web/.dyoffice/
 
 /apps/web/dist-docs/
+
+/.dyoffice-native-build/
