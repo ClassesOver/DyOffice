@@ -76,5 +76,7 @@ jobs:
         run: npm run typecheck:web
       - name: Build and HTTP smoke test the Web prototype
         run: npm run test:web:build
+      - name: Test Fastify API compatibility and shutdown
+        run: npm run test:web:integration
       - name: Test legacy Web API
         run: npm run test:web

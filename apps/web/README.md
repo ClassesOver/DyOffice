@@ -60,7 +60,7 @@ only static methods. Source mode and built mode both retain API authorization.
 `NODE_ENV=production` still refuses startup: this seam does not make the temporary
 shared-token server production-ready. T02 API migration and T03 identity remain
 required before production deployment. Type checking currently
-covers BrowserHost and Web contracts, not the legacy JavaScript prototype or all
+covers BrowserHost, Web contracts and the new Fastify TypeScript modules, not the legacy JavaScript prototype or all
 upstream renderer packages. HTTP smoke checks do not replace real browser UI or
 native document round-trip acceptance.
 
@@ -74,4 +74,8 @@ Admin updates apply supplied sections against the latest state inside the instan
 
 每个请求由服务端生成独立 `X-Request-ID`，不信任或回显客户端同名请求头。JSON 错误响应保持原有 HTTP 状态码、`application/json` 和 `error` 文案，增量提供 `type: about:blank`、`title`、`status`、`detail`、`requestId`；成功响应正文不变。错误中不包含请求 URL、查询参数或内部异常详情，500 继续返回通用文案。
 
-此接缝不代表 T02 完成：Fastify 模块化、完整 `/api/v1` 迁移（当前仅有只读文件桥接）、限流、ready/live 和优雅关闭仍待实施；未实现 T03 本地账号密码/服务端会话撤销，不能用它宣称正式登录或退出能力。
+Fastify 应用工厂位于 `server/src/app.ts`，`dev:web` / `start:web` 已使用该入口。独立健康模块提供 `/api/v1/health/live` 与 `/api/v1/health/ready`，就绪检查当前只验证开发存储。请求 ID 由服务端生成；按直连 IP 每分钟最多 600 个请求，健康检查豁免，不信任客户端代理头。SIGTERM/SIGINT 停止监听并等待在途请求完成。限流计数只在单进程内存中，不能用于多实例生产部署。
+
+旧接口通过兼容模块继续处理，接管发生在限流之后、正文解析之前，保留既有 JSON/50 MiB 上传限制、权限与错误契约。`createApplication()` 仍保留，供旧回归及回退使用。运行 `npm run test:web:integration` 检查真实 HTTP 的兼容行为、限流与子进程关闭；`typecheck:web` 同时检查新的 TypeScript 服务端。Node 22.12 使用脚本中的 `--experimental-strip-types` 启动 TypeScript。
+
+T02 仍需逐领域迁移旧路由与完整 `/api/v1` 契约；T03 本地账号密码/服务端会话撤销和 T04 数据库隔离尚未实现。生产启动守卫保留，不能据此宣称正式登录、生产就绪或企业验收完成。

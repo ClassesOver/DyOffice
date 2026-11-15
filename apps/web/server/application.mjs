@@ -22,14 +22,17 @@ async function bytes(request,limit=1024*1024) {let size=0;const chunks=[];for aw
 const body=async req=>{try{return JSON.parse((await bytes(req)).toString());}catch(e){if(e.status)throw e;fail('JSON 格式无效');}};
 const publicModel=({id,model,enabled})=>({id,model,enabled});
 
-export async function createApplication({directory,userToken,adminToken,encryptionKey,assetMode,assetDirectory}) {
+/** @param {import('./src/config.ts').WebConfig} config */
+export async function createApplicationHandler(config) {
+  const {directory,userToken,adminToken,encryptionKey,assetMode,assetDirectory}=config;
   if(process.env.NODE_ENV==='production') throw new Error('Development token server is not allowed in production');
   if(!userToken||!adminToken||userToken===adminToken) throw new Error('Personal and admin tokens must be distinct and nonempty');
   const serveStatic=await createStaticAssets({assetMode,assetDirectory});
   const store=await createStore(directory,encryptionKey); const filePath=join(directory,'files');await mkdir(filePath,{recursive:true,mode:0o700});
-  return createServer(async(req,res)=>{
+  /** @param {string} requestId */
+  const handleRequest=async(req,res,requestId=randomUUID())=>{
     // Generate locally: client-supplied IDs can contain secrets or collide across requests.
-    const requestId=randomUUID();res.setHeader('X-Request-ID',requestId);
+    res.setHeader('X-Request-ID',requestId);
     const send=(value,status=200)=>sendJson(res,status,value);
     try {
       const url=new URL(req.url,'http://localhost');const path=url.pathname;
@@ -121,5 +124,12 @@ export async function createApplication({directory,userToken,adminToken,encrypti
       }
       return send({error:'接口不存在'},404);
     } catch(error) {send({error:error.status?error.message:'服务暂时不可用'},error.status||500);}
-  });
+  };
+  return {handleRequest,store};
+}
+
+// Keep the old Node server entry for contract tests and rollback during migration.
+export async function createApplication(config) {
+  const {handleRequest}=await createApplicationHandler(config);
+  return createServer((req,res)=>handleRequest(req,res));
 }

@@ -306,20 +306,20 @@
       "size": 2630
     },
     "apps/web/package-lock.json": {
-      "sha256": "476c9e203aceb1e779f4b503c15e1e9c6f6a5eb50c6602a2aab0924274ec1262",
-      "size": 78055
+      "sha256": "a0b4b57fc3a8ab8f705db103e8cb91ff178d9a54d83f51d17aa03a5c23089a65",
+      "size": 101054
     },
     "apps/web/package.json": {
-      "sha256": "a0c66653480d419836572db1cab28893e97643fd5f89577210929352ee7092f8",
-      "size": 518
+      "sha256": "9f51c8779dd4c7ba705a3798be1c79ba7ad50489a83907db067e8df1033a9210",
+      "size": 816
     },
     "package-lock.json": {
-      "sha256": "ef6b2b646ebd68aab6edd1ea3a00cd8729de1c56c24519c1ab52ef8114e51da6",
-      "size": 586368
+      "sha256": "02a65e1987848e3d3d8b91029cab65285bf5b5fb27f37ea28cdb746d09e7a2d2",
+      "size": 609497
     },
     "package.json": {
-      "sha256": "8485fd34d79968bdb45d1aa0164a669c3a06d746ef3ed3611dde6394c73db8e2",
-      "size": 6625
+      "sha256": "c2b5cafa3ee57d64c1cecbb46b3b65d47fe987a4c607eb9aa0143082e5051544",
+      "size": 6718
     },
     "packages/ui/src/fonts/Carlito-Bold.ttf": {
       "sha256": "ed778b78ce652f5b17647344fb9a4c4dcb2e6f8bafe75a0366300da7f8c199ac",
@@ -370,9 +370,21 @@
       }
     },
     "apps/web/package-lock.json": {
+      "@fastify/rate-limit": {
+        "version": "10.3.0",
+        "integrity": "sha512-eIGkG9XKQs0nyynatApA3EVrojHOuq4l6fhB4eeCk4PIOeadvOJz9/4w3vGI44Go17uaXOWEcPkaD8kuKm7g6Q=="
+      },
       "@modelcontextprotocol/sdk": {
         "version": "1.32.2",
         "integrity": "sha512-SWsVtH/0vULSQStoZ6xxH2K09Li8fXYTMC64ZeogCdpZ3XSi1eCPOByV1OpuJxuI3OcmHhosDWYyii07tpPsLw=="
+      },
+      "@types/node": {
+        "version": "22.20.5",
+        "integrity": "sha512-U2+DNr+wSjpsTS/wZGYHq7GcwfuSmKiKvoPvK22zwTlRhU91yOniN4qRR5KhIjvif7ysw/dz/hKmfDH0Ris4aA=="
+      },
+      "fastify": {
+        "version": "5.12.8",
+        "integrity": "sha512-moP8exb2sCHLUbJkwp+I6C0padhy4D8lp0SdmzY7HhSdZuqm7O/u3o2aq7u8okaQ//33QDzj3G/u+FsSdB8Qzw=="
       },
       "typescript": {
         "version": "5.9.3",

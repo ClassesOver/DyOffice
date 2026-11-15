@@ -18,7 +18,7 @@ export const configuration = {
   fonts: ['apps/docs/src/renderer/fonts', 'packages/ui/src/fonts'],
   npm: {
     'package-lock.json': ['typescript', 'electron', '@modelcontextprotocol/sdk', '@embedpdf/pdfium', 'pdfjs-dist', 'pdf-lib', '@univerjs/core'],
-    'apps/web/package-lock.json': ['@modelcontextprotocol/sdk', 'typescript'],
+    'apps/web/package-lock.json': ['@modelcontextprotocol/sdk', 'typescript', 'fastify', '@fastify/rate-limit', '@types/node'],
   },
   cargo: ['apps/sheets/native/xlsx-engine/Cargo.lock', 'apps/sheets/native/win-clipboard-helper/Cargo.lock'],
 }
