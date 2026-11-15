@@ -3,6 +3,12 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "exports": { ".": "./src/index.ts" },
-  "dependencies": { "@dyoffice/web-contracts": "*" }
+  "exports": {
+    ".": "./src/index.ts",
+    "./ai-transport": "./src/ai-transport.ts"
+  },
+  "dependencies": {
+    "@dyoffice/web-contracts": "*",
+    "@genoffice/agent-core": "*"
+  }
 }
