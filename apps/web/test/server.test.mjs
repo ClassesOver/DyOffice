@@ -155,3 +155,42 @@ test('an omitted admin key preserves the latest key committed while the body arr
   const after=JSON.parse(await readFile(join(directory,'state.json'),'utf8')).admin.models[0].secret;
   assert.ok(before);assert.equal(after,before);
 });
+
+test('an omitted source key preserves the latest key committed while the body arrives', async t => {
+  const {request}=await import('node:http');
+  const directory=await mkdtemp(join(tmpdir(),'dyoffice-source-key-race-'));
+  const server=await createApplication({directory,userToken:'personal',adminToken:'admin',encryptionKey:'test'});
+  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+  t.after(async()=>{await new Promise(resolve=>server.close(resolve));await rm(directory,{recursive:true,force:true});});
+  const base=`http://127.0.0.1:${server.address().port}`;
+  const put=body=>fetch(base+'/api/sources',{method:'PUT',headers:{Authorization:'Bearer personal','Content-Type':'application/json'},body:JSON.stringify(body)});
+  const source={id:'s1',name:'source',url:'https://example.com/'};
+  assert.equal((await put({...source,apiKey:'fake-old-key'})).status,200);
+  const observed=new Promise(resolve=>server.once('request',resolve));
+  const slow=request(base+'/api/sources',{method:'PUT',headers:{Authorization:'Bearer personal','Content-Type':'application/json'}});
+  t.after(()=>slow.destroy());
+  const response=new Promise((resolve,reject)=>{slow.on('error',reject);slow.on('response',res=>{res.resume();res.on('end',()=>resolve(res.statusCode));});});
+  slow.write('{');await observed;
+  const fast=await put({...source,apiKey:'fake-new-key'});
+  assert.equal(fast.status,200);await fast.text();
+  const sealed=async()=>JSON.parse(await readFile(join(directory,'state.json'),'utf8')).sources.find(s=>s.id==='s1').secret;
+  const before=await sealed();
+  slow.end(JSON.stringify({...source,name:'renamed'}).slice(1));assert.equal(await response,200);
+  assert.ok(before);assert.equal(await sealed(),before,'the omitted key must not resurrect the stale key');
+});
+
+test('a missing stored file returns a JSON error, not an attachment', async t => {
+  const {unlink}=await import('node:fs/promises');
+  const directory=await mkdtemp(join(tmpdir(),'dyoffice-missing-file-'));
+  const server=await createApplication({directory,userToken:'personal',adminToken:'admin',encryptionKey:'test'});
+  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+  t.after(async()=>{await new Promise(resolve=>server.close(resolve));await rm(directory,{recursive:true,force:true});});
+  const base=`http://127.0.0.1:${server.address().port}`;
+  const file=await (await fetch(base+'/api/files',{method:'POST',headers:{Authorization:'Bearer personal','X-File-Name':'a.docx'},body:'PK data'})).json();
+  await unlink(join(directory,'files',file.id));
+  const response=await fetch(base+`/api/files/${file.id}`,{headers:{Authorization:'Bearer personal'}});
+  assert.equal(response.status,500);
+  assert.equal(response.headers.get('content-disposition'),null);
+  assert.match(response.headers.get('content-type'),/application\/json/);
+  assert.equal((await response.json()).error,'服务暂时不可用');
+});
