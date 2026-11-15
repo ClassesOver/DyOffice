@@ -1,25 +1,85 @@
 import { readdir, readFile } from 'node:fs/promises'
-import { join, relative, extname } from 'node:path'
+import { join, relative, extname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { createRequire } from 'node:module'
+
+const require = createRequire(new URL('../apps/web/package.json', import.meta.url))
+const ts = require('typescript')
 
 const root = fileURLToPath(new URL('../', import.meta.url))
 const apps = Object.freeze({ docs: 'desktop', sheets: 'desktopApi', slides: 'slidesApi', pdf: 'pdfApi' })
 const sourceExts = new Set(['.ts', '.tsx', '.js', '.jsx'])
 const skipDirs = new Set(['node_modules', 'dist', 'out', 'build', 'assets', 'fonts'])
 
-export function preloadMethodNames(source) {
-  // Two-space top-level method entries inside a typed preload API object.
-  // The first object is the intended public bridge for these four apps.
-  const start = source.search(/^const (?:desktopApi|api): (?:DesktopApi|SlidesApi|PdfApi) = \{/m)
-  if (start < 0) return []
-  const region = source.slice(start).split(/^\}/m)[0]
-  return [...new Set([...region.matchAll(/^  ([a-zA-Z_$][\w$]*)\s*(?::|\()/gm)].map(m => m[1]))].sort()
+function parse(source, file = 'source.tsx') {
+  const ast = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true)
+  if (ast.parseDiagnostics.length) throw new Error('Cannot parse host inventory source: ' + file)
+  return ast
 }
 
-export function rendererMethodNames(source, bridge) {
-  const escaped = bridge.replace(/[.*+?^$\{\}()|[\]\\]/g, '\\$&')
-  const expression = new RegExp('\\bwindow\\.' + escaped + '\\??\\.([a-zA-Z_$][\\w$]*)', 'g')
-  return [...source.matchAll(expression)].map(m => m[1])
+function propertyName(node) {
+  if (ts.isIdentifier(node) || ts.isStringLiteral(node)) return node.text
+  if (ts.isComputedPropertyName(node) && ts.isStringLiteral(node.expression)) return node.expression.text
+  return null
+}
+
+function access(node) {
+  if (ts.isPropertyAccessExpression(node)) return { object: node.expression, name: node.name.text }
+  if (ts.isElementAccessExpression(node) && ts.isStringLiteral(node.argumentExpression)) return { object: node.expression, name: node.argumentExpression.text }
+  return null
+}
+
+function exposedVariable(ast, bridge) {
+  let name
+  function visit(node) {
+    if (ts.isCallExpression(node)) {
+      const method = access(node.expression)
+      if (method?.name === 'exposeInMainWorld' && ts.isIdentifier(method.object) && method.object.text === 'contextBridge' &&
+          node.arguments[0] && ts.isStringLiteral(node.arguments[0]) && node.arguments[0].text === bridge &&
+          node.arguments[1] && ts.isIdentifier(node.arguments[1])) name = node.arguments[1].text
+    }
+    ts.forEachChild(node, visit)
+  }
+  visit(ast)
+  return name
+}
+
+export function preloadMethodNames(source, bridge) {
+  const ast = parse(source, 'preload.ts')
+  const exposed = bridge ? exposedVariable(ast, bridge) : undefined
+  if (bridge && !exposed) throw new Error('Expected preload bridge ' + bridge + ' not found')
+  const names = []
+  let found = false
+  function visit(node) {
+    if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer && ts.isObjectLiteralExpression(node.initializer)) {
+      const matches = exposed ? node.name.text === exposed :
+        node.type && ts.isTypeReferenceNode(node.type) && ts.isIdentifier(node.type.typeName) && ['DesktopApi','SlidesApi','PdfApi'].includes(node.type.typeName.text)
+      if (matches) {
+        if (found) throw new Error('Ambiguous public API objects in preload')
+        found = true
+        for (const member of node.initializer.properties) {
+          const name = member.name && propertyName(member.name)
+          if (!name || ts.isSpreadAssignment(member)) throw new Error('Unsupported public API member; inventory cannot be partial')
+          names.push(name)
+        }
+      }
+    }
+    ts.forEachChild(node, visit)
+  }
+  visit(ast)
+  return [...new Set(names)].sort()
+}
+
+export function rendererMethodNames(source, bridge, file = 'renderer.tsx') {
+  const names = []
+  function visit(node) {
+    const method = access(node)
+    const api = method && access(method.object)
+    if (api?.name === bridge && ts.isIdentifier(api.object) && api.object.text === 'window') names.push(method.name)
+    ts.forEachChild(node, visit)
+  }
+  visit(parse(source, file))
+  return names
 }
 
 async function sourceFiles(directory) {
@@ -39,17 +99,14 @@ export async function auditWebHost(base = root) {
   for (const [app, bridge] of Object.entries(apps)) {
     const preloadPath = join(base, 'apps', app, 'src/preload/index.ts')
     const preload = await readFile(preloadPath, 'utf8')
-    if (!preload.includes("contextBridge.exposeInMainWorld('" + bridge + "'")) {
-      throw new Error(app + ': expected preload bridge ' + bridge + ' not found')
-    }
-    const declared = preloadMethodNames(preload)
+    const declared = preloadMethodNames(preload, bridge)
     if (!declared.length) throw new Error(app + ': no public methods could be parsed')
     const used = new Map()
     const unmatched = new Set()
     const rendererPaths = await sourceFiles(join(base, 'apps', app, 'src/renderer'))
     for (const path of rendererPaths) {
       const contents = await readFile(path, 'utf8')
-      for (const name of rendererMethodNames(contents, bridge)) {
+      for (const name of rendererMethodNames(contents, bridge, path)) {
         const item = used.get(name) ?? { count: 0, files: new Set() }
         item.count++
         item.files.add(relative(base, path))
@@ -69,7 +126,7 @@ export async function auditWebHost(base = root) {
   return reports
 }
 
-if (process.argv[1] && fileURLToPath(import.meta.url) === fileURLToPath(new URL('file://' + process.argv[1]))) {
+if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])) {
   try {
     const report = await auditWebHost()
     console.log(JSON.stringify(report, null, 2))

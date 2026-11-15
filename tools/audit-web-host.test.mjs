@@ -34,3 +34,38 @@ test('requires bridge identity and reports methods used by renderer', async t =>
   assert.equal(report.docs.methods.find(m=>m.name==='open').calls,2)
   assert.deepEqual(report.docs.unknownRendererMethods,['missing'])
 })
+
+test('extracts async and differently formatted API members, not nested object fields', () => {
+  const source = `const desktopApi: DesktopApi = {
+    async selectWorkbook() { const nested = { fake: 1 }; return nested },
+    'saveWorkbook': async () => ({ nested: 1 }),
+    onSave(handler) { return () => {} }, open: () => 1,
+  }`
+  assert.deepEqual(preloadMethodNames(source), ['onSave','open','saveWorkbook','selectWorkbook'])
+})
+
+test('ignores comment/string bridge lookalikes and recognizes literal bracket access', () => {
+  const source = `// window.desktop.fake()
+    const text = "window.desktop.missing()";
+    /* window.desktop.never() */
+    window.desktop.open(); window['desktop']['save'](); window.desktop?.close?.();`
+  assert.deepEqual(rendererMethodNames(source, 'desktop'), ['open','save','close'])
+})
+
+test('refuses unresolved spread/computed API entries instead of publishing a partial count', () => {
+  assert.throws(() => preloadMethodNames('const api: DesktopApi = { open() {}, ...more }'), /Unsupported.*API member/)
+  assert.throws(() => preloadMethodNames('const api: DesktopApi = { [methodName]() {} }'), /Unsupported.*API member/)
+})
+
+test('selects the actual exposed bridge rather than a decoy typed object or comment', () => {
+  const source = `const decoy: DesktopApi = { wrong() {} };
+    const actual: DesktopApi = { async open() {} };
+    // contextBridge.exposeInMainWorld('desktop', decoy)
+    contextBridge.exposeInMainWorld("desktop", actual);`
+  assert.deepEqual(preloadMethodNames(source, 'desktop'), ['open'])
+  assert.throws(() => preloadMethodNames(source, 'missing'), /Expected preload bridge missing not found/)
+})
+
+test('invalid source fails closed rather than returning partial inventory', () => {
+  assert.throws(() => rendererMethodNames('window.desktop.', 'desktop'), /Cannot parse host inventory source/)
+})

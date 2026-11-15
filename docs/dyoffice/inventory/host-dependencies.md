@@ -58,19 +58,19 @@ This does not replace the existing desktop CI or constitute completed T00 accept
 
 The repository now contains `tools/audit-web-host.mjs`, a source scanner
 for public preload methods and renderer references, plus
-`tools/audit-web-host.test.mjs` (3 fixture tests). The independent Web
+`tools/audit-web-host.test.mjs` (8 fixture tests). The independent Web
 CI workflow runs the scanner and records per-app method counts.
 
 The actual exposed preload bridges were verified from current source:
 
-| Format | Preload bridge | Parsed top-level methods (initial) | First Web integration priority |
+| Format | Preload bridge | Parsed top-level methods (AST) | First Web integration priority |
 | --- | --- | ---: | --- |
 | DOCX | `window.desktop` | 110 | `openDocx`, `onOpenDocx`, `saveDocx`, `aiStream` |
-| XLSX | `window.desktopApi` | 38 | native workbook open/save, work-item/AI transport |
+| XLSX | `window.desktopApi` | 105 | native workbook open/save, work-item/AI transport |
 | PPTX | `window.slidesApi` | 208 | `openPptx`, `save`, `aiStream` |
 | PDF | `window.pdfApi` | 82 | `readFile`, `save`, `aiStream` |
 
-These figures are **scanner-derived initial counts of the main typed API
+These figures are **scanner-derived counts of the main exposed API
 literal**, not a complete inventory of dynamically registered or
 secondary bridges (notably Slides also exposes `window.desktop` for
 file actions, and the apps expose project/naming bridges). The full
@@ -87,8 +87,19 @@ node --test tools/audit-web-host.test.mjs
 node tools/audit-web-host.mjs > /tmp/dyoffice-host-audit.json
 ```
 
-The scanner intentionally reports unknown renderer methods instead of
-silently ignoring them. It uses conservative lexical extraction and
-cannot prove that every dynamic API reference or indirect IPC path
-has been found. A syntax-aware full graph/handler review is still a
-necessary T00 completion gate.
+The scanner intentionally reports unknown renderer references instead of silently
+ignoring them. It uses the Web workspace's pinned TypeScript parser to select the
+actual `contextBridge.exposeInMainWorld` binding and its direct object members,
+including async and quoted methods. Renderer scanning ignores comments/strings
+and includes literal bracket and optional access. Unresolved spread/computed API
+members, ambiguous objects and syntax errors fail closed instead of yielding a
+partial count. Install Web dependencies with the command above before running.
+
+The former lexical extractor omitted async methods: Sheets showed 38 declarations
+and 58 unmatched renderer names. AST extraction finds 105 declarations and zero
+unmatched names in the current four main bridges (Docs 110, Slides 208, PDF 82 also
+have zero unmatched names). This corrects the audit, not the editors. A static
+match is **not** evidence of a working Web adapter, permission check or native
+roundtrip. Aliases/destructuring, dynamically constructed references, secondary
+bridges and per-handler lifecycle/signature/error/effect tracing remain outside
+this scan. A complete graph/handler review is still required for T00 completion.
