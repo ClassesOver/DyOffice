@@ -7,12 +7,14 @@ on:
       - 'apps/**'
       - 'packages/**'
       - 'tools/check-web-boundaries*'
+      - 'tools/audit-web-host*'
       - '.github/workflows/dyoffice-web-boundaries.yml'
   pull_request:
     paths:
       - 'apps/**'
       - 'packages/**'
       - 'tools/check-web-boundaries*'
+      - 'tools/audit-web-host*'
       - '.github/workflows/dyoffice-web-boundaries.yml'
   workflow_dispatch:
 
@@ -34,5 +36,11 @@ jobs:
         run: node --test tools/check-web-boundaries.test.mjs
       - name: Test BrowserHost contracts
         run: node --experimental-strip-types --test apps/web/test/unit/host-contract.test.mjs
+      - name: Test editor host inventory scanner
+        run: node --test tools/audit-web-host.test.mjs
+      - name: Scan four native editor bridges
+        run: |
+          node tools/audit-web-host.mjs > "$RUNNER_TEMP/dyoffice-host-audit.json"
+          node -e 'const a=require(process.env.RUNNER_TEMP+"/dyoffice-host-audit.json"); for(const [name,v] of Object.entries(a)) console.log(name+": "+v.declaredCount+" methods, "+v.unknownRendererMethods.length+" unmatched")'
       - name: Reject Node or Electron imports in the local Web dependency graph
         run: node tools/check-web-boundaries.mjs
