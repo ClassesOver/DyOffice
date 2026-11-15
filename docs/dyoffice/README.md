@@ -123,7 +123,7 @@ WS 断线后手工编辑、HTTP 保存和普通 AI 流应继续可用；依赖�
 | --- | --- | --- |
 | T00 浏览器依赖边界与宿主盘点 | 部分实现；完整四格式适配审计待完成 | [宿主清单](inventory/host-dependencies.md) |
 | T01 BrowserHost 和 Agent SSE 客户端契约 | 基础契约/适配器已提交；尚未接入真实编辑器 | [T01 记录](evidence/t01-browser-host-checkpoint.md) |
-| T02 版本化 HTTP 与模块化 API 壳 | 只读文件接缝和 Fastify `buildApp` 壳已接入；开发入口仍是旧服务器，路由迁移和生产认证未完成 | [T02 模块化 API](evidence/t02-modular-api.md) · [文件读取](evidence/t02-file-read-checkpoint.md) |
+| T02 版本化 HTTP 与模块化 API | 开发入口已切到 Fastify；旧路由按模块接入并保持契约。仍是开发令牌服务器，不是生产登录 | [T02 模块化 API](evidence/t02-modular-api.md) · [文件读取](evidence/t02-file-read-checkpoint.md) |
 | T03a 本地账号存储与密码规则 | 原生 Argon2id、PostgreSQL 事务迁移和首个管理员 CLI 已实现，真实数据库/双初始化竞争测试与 Web 回归 CI 通过；泄露密码库与生产安全放行仍待完善 | [T03a 真实测试](evidence/t03a-real-identity-checkpoint.md) · [用户指南](../../apps/web/README.md) |
 | T03b–T26 企业完整交付 | 尚未验收 | [任务列表](implementation-plan.md) 与 [验收矩阵](acceptance-matrix.md) |
 
