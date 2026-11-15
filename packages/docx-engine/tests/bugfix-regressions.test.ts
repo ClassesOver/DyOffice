@@ -88,6 +88,13 @@ describe('escapeXmlText', () => {
     expect(escapeXmlText('a\u0000b\u000Bc\td\ne')).toBe('abc\td\ne')
     expect(escapeXmlText('<a & b>')).toBe('&lt;a &amp; b&gt;')
   })
+
+  it('strips U+FFFE/U+FFFF and lone surrogates but keeps valid astral pairs', () => {
+    expect(escapeXmlText('a\uFFFEb\uFFFFc')).toBe('abc')
+    expect(escapeXmlText('x\uD800y\uDC00z')).toBe('xyz')
+    expect(escapeXmlText('end\uD83D')).toBe('end')
+    expect(escapeXmlText('emoji 😀 𠀀')).toBe('emoji 😀 𠀀')
+  })
 })
 
 describe('textHasComplexScript', () => {

@@ -133,3 +133,18 @@ test('HTTP docx editing commits one revision and preserves history, leases and i
   const pdfId = (await pdf.json()).id
   assert.equal((await fetch(base + `/api/v1/files/${pdfId}/docx`, { headers })).status, 400)
 })
+
+test('edited and inserted text never writes characters that are illegal in XML 1.0', async () => {
+  const { bytes } = await sampleDocx()
+  const projected = await projectDocx(bytes)
+  const edited = await applyDocxTextEdits(bytes, [
+    ...projected.map(block => (block.text === 'Hello' ? { docxIndex: block.docxIndex, text: 'A￾B￿C\uD800D\u0001E 😀' } : { docxIndex: block.docxIndex })),
+    { text: 'new\uDC00para' },
+  ])
+  const xml = await part(edited, 'word/document.xml')
+  // XML 1.0 Char: #x9 | #xA | #xD | [#x20-#xD7FF] | [#xE000-#xFFFD] | [#x10000-#x10FFFF]
+  const illegal = [...xml].filter(c => { const n = c.codePointAt(0); return (n < 0x20 && n !== 9 && n !== 10 && n !== 13) || (n >= 0xD800 && n <= 0xDFFF) || n === 0xFFFE || n === 0xFFFF })
+  assert.deepEqual(illegal, [])
+  assert.match(xml, /ABCDE 😀/)
+  assert.match(xml, /newpara/)
+})
