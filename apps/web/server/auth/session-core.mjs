@@ -52,6 +52,7 @@ const SQL_ISSUE = [
   "SELECT $1::uuid, u.deployment_id, u.id, $4::bytea, u.auth_version, clock_timestamp() + ($5::bigint * INTERVAL '1 millisecond')",
   'FROM dyoffice_users u',
   "WHERE u.deployment_id = $2::uuid AND u.id = $3::uuid AND u.status = 'active' AND u.disabled_at IS NULL",
+  'AND ($6::bigint IS NULL OR u.auth_version = $6::bigint)',
   'AND EXISTS (SELECT 1 FROM dyoffice_user_roles r WHERE r.deployment_id = u.deployment_id AND r.user_id = u.id)',
   'RETURNING id, expires_at'
 ].join(' ')
@@ -91,13 +92,18 @@ export function createSessionService({ pool, idleTimeoutMs = DEFAULT_IDLE_MS, ab
       idleTimeoutMs > absoluteTimeoutMs) throw new TypeError('Invalid session lifetime')
 
   return Object.freeze({
-    async issue({ deploymentId, userId }) {
+    async issue({ deploymentId, userId, expectedAuthVersion = null }) {
       validId(deploymentId, 'deployment ID')
       validId(userId, 'user ID')
+      if (expectedAuthVersion !== null &&
+          !(typeof expectedAuthVersion === 'string' && /^[1-9][0-9]*$/.test(expectedAuthVersion) &&
+            BigInt(expectedAuthVersion) <= 9223372036854775807n)) {
+        throw new TypeError('Invalid expected authentication version')
+      }
       const sessionId = randomUUID()
       const token = randomBytes(32).toString('base64url')
       const result = await pool.query(SQL_ISSUE, [
-        sessionId, deploymentId, userId, tokenDigest(token), absoluteTimeoutMs,
+        sessionId, deploymentId, userId, tokenDigest(token), absoluteTimeoutMs, expectedAuthVersion,
       ])
       if (result.rowCount !== 1) return null
       return {
