@@ -33,7 +33,7 @@ Final observed gates:
 
 Independent read-only review finished before the fix pass. Its Important findings and the regraded audit-correlation finding each have a reproduced failing regression followed by the final green suite. No second review is claimed. The sole deferred minor is documented below. Local gate results are not a GitHub Actions success claim. The browser test uses real Chromium 149, temporary self-signed TLS, browser-managed cookies and real PostgreSQL. Certificate errors are ignored only inside that isolated test context. It verifies cookie accessibility/attributes and login/me/CSRF rejection/logout behavior; it is not a completed login UI or native Office E2E.
 
-Known deferred minor: a caller deleting its current session using an uppercase UUID does revoke server authority but misses the case-sensitive cookie-clear comparison. APIs return canonical lowercase IDs; a CSRF refresh clears an invalid cookie. This is a convenience bug, not retained server access, and remains recorded for a later fix.
+Historical minor at this checkpoint (subsequently fixed by the T03c canonical-UUID regression): a caller deleting its current session using an uppercase UUID does revoke server authority but misses the case-sensitive cookie-clear comparison. APIs return canonical lowercase IDs; a CSRF refresh clears an invalid cookie. This is a convenience bug, not retained server access, and is now covered by the T03c fix.
 
 ## Configuration and remaining gates
 

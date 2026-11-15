@@ -352,3 +352,13 @@ test('an account already blocked across peers cannot consume the remaining globa
   for (let i = 0; i < 5; i++) await assert.rejects(() => throttle.reserve('blocked-account', `192.0.2.${i + 2}`), { statusCode: 429 })
   await assert.doesNotReject(() => throttle.reserve('owner', '192.0.2.100'))
 })
+
+test('canonical UUID comparison clears the cookie when self-revocation uses uppercase input', async t => {
+  const { app, login } = await fixture(t)
+  const signed = await login(), cookie = headerCookie(signed).split('; ')[0]
+  const listed = (await app.inject({ method: 'GET', url: '/api/v1/auth/sessions', headers: { cookie } })).json()
+  const id = listed.sessions.find(row => row.current).id.toUpperCase()
+  const revoked = await app.inject({ method: 'DELETE', url: '/api/v1/auth/sessions/' + id, headers: { cookie, origin, 'x-csrf-token': signed.json().csrfToken } })
+  assert.equal(revoked.statusCode, 204)
+  assert.ok(revoked.headers['set-cookie']?.some(value => value.includes('Max-Age=0')))
+})

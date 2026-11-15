@@ -16,7 +16,10 @@ export async function identityFixture(t) {
   t.after(async () => {
     try {
       for (const operation of cleanup) await operation()
-      for (const id of deploymentIds) await pool.query('DELETE FROM deployments WHERE id=$1', [id])
+      for (const id of deploymentIds) {
+        await pool.query('DELETE FROM password_action_tokens WHERE deployment_id=$1', [id])
+        await pool.query('DELETE FROM deployments WHERE id=$1', [id])
+      }
     } finally { await pool.end() }
   })
   const db = createIdentityStore(pool)

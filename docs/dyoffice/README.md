@@ -126,6 +126,7 @@ WS 断线后手工编辑、HTTP 保存和普通 AI 流应继续可用；依赖�
 | T02 版本化 HTTP / Fastify 接缝 | Fastify 启动层、兼容模块、健康检查、限流及关闭已接入；领域迁移和生产认证未完成 | [Fastify 记录](evidence/t02-fastify-checkpoint.md)、[文件读取记录](evidence/t02-file-read-checkpoint.md) |
 | T03a 本地账号存储/密码/Admin bootstrap | 基础实现与真实 PostgreSQL/终端测试已提交；HTTP 登录与 RLS 未完成 | [T03a 记录](evidence/t03a-account-bootstrap.md) |
 | T03b 本地登录与服务器会话 | 实验 API、真实数据库/浏览器测试已实施；生产与完整 UI 未开放 | [T03b 记录](evidence/t03b-local-sessions.md) |
-| T03c–T26 企业完整交付 | 尚未验收 | [任务列表](implementation-plan.md) 与 [验收矩阵](acceptance-matrix.md) |
+| T03c 账号与密码生命周期 | 实验 API、并发/回滚与浏览器验证已实施；清理策略、UI 与 RLS 未完成 | [T03c 记录](evidence/t03c-account-lifecycle.md) |
+| T04–T26 企业完整交付 | 尚未验收 | [任务列表](implementation-plan.md) 与 [验收矩阵](acceptance-matrix.md) |
 
 四格式浏览器编辑与版本保存仍未打通。既有单用户 Bearer + JSON 文件原型不允许用于生产；本阶段的 `sha256:` revision 只校验只读文件字节，不提供 CAS/写租约/历史版本能力。新客户端不得显示原生编辑或 AI 写入已支持。

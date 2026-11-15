@@ -32,7 +32,7 @@ export function createAccountService({ db, passwords, deploymentId }: { db: Iden
       try { username = normalizeUsername(usernameInput) } catch { /* Same lookup + dummy work for invalid identities. */ }
       const [user] = await db.orm.select().from(users).where(and(eq(users.deploymentId, deploymentId), eq(users.username, username))).limit(1)
       const valid = await passwords.verifyCandidate(password, user?.passwordHash)
-      if (!valid || !user || user.status !== 'active') return null
+      if (!valid || !user || user.status !== 'active' || user.passwordResetRequired) return null
       return { userId: user.id, deploymentId, authVersion: user.authVersion }
     },
   }

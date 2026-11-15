@@ -1,11 +1,12 @@
 import { hash, verify, parseOptions } from '@node-rs/argon2'
 import { randomBytes } from 'node:crypto'
+import { readFile, stat } from 'node:fs/promises'
 
 const policy = { algorithm: 2, version: 1, memoryCost: 19456, timeCost: 2, parallelism: 1, outputLen: 32 }
 // Small offline starter denylist, not a comprehensive breached-password corpus.
 // Deployments can append an approved local corpus; plaintext never leaves this process.
 const commonPasswords = ['passwordpassword', 'password123456789', '123456789012345', '12345678901234567890', 'qwertyuiopasdfgh', 'correct horse battery staple', 'letmeinletmeinletmein']
-const failure = (code: string) => Object.assign(new Error(code), { code })
+const failure = (code: string) => Object.assign(new Error(code), { code, statusCode: code === 'AUTH_BUSY' ? 503 : ['INVALID_USERNAME', 'INVALID_PASSWORD'].includes(code) ? 400 : 500, ...(code === 'AUTH_BUSY' ? { retryAfter: 1 } : {}) })
 
 export function normalizeUsername(value: unknown): string {
   if (typeof value !== 'string') throw failure('INVALID_USERNAME')
@@ -59,3 +60,12 @@ export async function createPasswordService(options: { blockedPasswords?: string
   }
 }
 export type PasswordService = Awaited<ReturnType<typeof createPasswordService>>
+
+export async function loadPasswordBlocklist(path?: string): Promise<string[]> {
+  if (!path) return []
+  const info = await stat(path)
+  if (!info.isFile() || info.size > 16 * 1024 * 1024) throw new Error('Password blocklist must be a regular file up to 16 MiB')
+  const text = await readFile(path, 'utf8')
+  if (Buffer.byteLength(text, 'utf8') > 16 * 1024 * 1024) throw new Error('Password blocklist is too large')
+  return text.replace(/^\uFEFF/, '').split(/\r?\n/).filter(Boolean)
+}

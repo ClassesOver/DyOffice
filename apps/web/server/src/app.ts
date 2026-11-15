@@ -6,12 +6,14 @@ import { registerHealthRoutes } from './modules/health/routes.ts'
 import { registerLegacyRoutes } from './modules/legacy/routes.ts'
 import { createApiShell } from './framework.ts'
 import type { IdentityStore } from './db/identity.ts'
-import { createPasswordService, type PasswordService } from './modules/auth/passwords.ts'
+import { createPasswordService, loadPasswordBlocklist, type PasswordService } from './modules/auth/passwords.ts'
 import { createAccountService } from './modules/auth/service.ts'
 import { createSessionService, authError } from './modules/auth/sessions.ts'
 import { createCsrfService, cookies } from './modules/auth/csrf.ts'
 import { createLoginThrottle, type LoginLimits } from './modules/auth/throttle.ts'
 import { registerAuthRoutes } from './modules/auth/routes.ts'
+import { createUserService } from './modules/admin/users/service.ts'
+import { registerUserRoutes } from './modules/admin/users/routes.ts'
 
 export async function buildApp(config: WebConfig): Promise<FastifyInstance> {
   const { handleRequest, store } = await createApplicationHandler(config)
@@ -24,7 +26,7 @@ export async function buildApp(config: WebConfig): Promise<FastifyInstance> {
 
 export interface LocalWebConfig {
   db: IdentityStore; deploymentId: string; origin: string; csrfKey: string; passwords?: PasswordService;
-  loginLimits?: LoginLimits; idleMs?: number; absoluteMs?: number; closeDb?: () => Promise<void>
+  passwordBlocklistFile?: string; loginLimits?: LoginLimits; idleMs?: number; absoluteMs?: number; closeDb?: () => Promise<void>
 }
 export async function buildLocalApp(config: LocalWebConfig): Promise<FastifyInstance> {
   if (process.env.NODE_ENV === 'production') throw new Error('Local runtime is not allowed in production before T04 RLS gates')
@@ -35,7 +37,7 @@ export async function buildLocalApp(config: LocalWebConfig): Promise<FastifyInst
     if (!result.rowCount) throw new Error('Local deployment has not been bootstrapped')
   }
   await assertReady()
-  const passwords = config.passwords ?? await createPasswordService()
+  const passwords = config.passwords ?? await createPasswordService({ blockedPasswords: await loadPasswordBlocklist(config.passwordBlocklistFile) })
   const accounts = createAccountService({ db: config.db, passwords, deploymentId: config.deploymentId })
   const sessions = createSessionService({ db: config.db, accounts, deploymentId: config.deploymentId, idleMs: config.idleMs, absoluteMs: config.absoluteMs })
   const csrf = createCsrfService({ db: config.db, deploymentId: config.deploymentId, origin: config.origin, key: config.csrfKey })
@@ -43,7 +45,9 @@ export async function buildLocalApp(config: LocalWebConfig): Promise<FastifyInst
   const app = await createApiShell()
   if (config.closeDb) app.addHook('onClose', () => config.closeDb!())
   registerHealthRoutes(app, async () => { try { await assertReady(); return true } catch { return false } })
-  registerAuthRoutes(app, { sessions, csrf, throttle })
+  const users = createUserService({ db: config.db, accounts, sessions, passwords, deploymentId: config.deploymentId })
+  registerAuthRoutes(app, { sessions, csrf, throttle, users })
+  registerUserRoutes(app, users, csrf)
   app.route({
     method: app.supportedMethods as HTTPMethods[], url: '/*',
     onRequest: async request => {

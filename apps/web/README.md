@@ -97,3 +97,10 @@ T02 仍需逐领域迁移旧路由与完整 `/api/v1` 契约；T03 本地账号�
 浏览器流程先 GET `/api/v1/auth/csrf`，保留服务端 HttpOnly Cookie，把返回的 `csrfToken` 放入 `X-CSRF-Token` 后 POST `/api/v1/auth/login`；写请求要求准确的同源 Origin。登录响应只返回用户 DTO 与 CSRF proof，实际会话令牌只在 Secure Cookie。使用与 Origin 对齐的 HTTPS 入口验证浏览器，不以手动传 Cookie 代替验证。
 
 `npm run test:web:e2e` 使用真实 Chromium + TLS + PostgreSQL 检查 Cookie 与退出；先运行 `apps/web/node_modules/.bin/playwright install chromium --with-deps`。安全边界、实测结果和一个已记录的小写/大写 UUID 清 Cookie 限制见 `docs/dyoffice/evidence/t03b-local-sessions.md`。
+
+
+### T03c 管理员与密码操作 API
+
+本地实验模式增加 `/api/v1/admin/users` 的查询/开户，以及指定账号的状态、角色、激活重发和密码重置操作。敏感操作需最近 15 分钟内的密码验证与 Origin/CSRF；新账号默认仅个人角色。激活/重置秘密只返回一次、15 分钟过期，POST `/api/v1/auth/password-action` 在匿名挑战后用 JSON 消费，不生成凭据 URL，也不发送邮件。重置签发立即冻结旧密码登录并撤销旧会话；过期后需管理员重发。自己的改密使用 `/api/v1/auth/change-password`，验证旧密码后替换会话 Cookie。
+
+`DYOFFICE_PASSWORD_BLOCKLIST_FILE` 现在同时作用于 CLI 和本地服务的激活/改密。使用受信任的本地 UTF-8 文件（最多 16 MiB，建议绝对路径）；不把内置小列表当完整泄露密码库。真实数据库、锁竞态、回滚与 Chromium API 流程见 `docs/dyoffice/evidence/t03c-account-lifecycle.md`。已消费/过期的密码令牌记录清理仍是已知维护项；完整 Admin UI、业务 RLS、外部 Token 与租约仍待后续任务，production 继续关闭。

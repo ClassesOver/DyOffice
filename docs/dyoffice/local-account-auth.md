@@ -124,3 +124,6 @@ DyOffice **不引入 OIDC、Keycloak、SAML、LDAP 或第三方身份提供方**
 ## 当前实现进度（2026-11-15）
 
 T03a 账号/密码/bootstrap 与 T03b 独立本地会话 API 已有实现和真实 PostgreSQL 测试；Chromium + TLS 已验证 Cookie/登录/退出。详见 [T03a](evidence/t03a-account-bootstrap.md) 与 [T03b](evidence/t03b-local-sessions.md)。本文的完整目标接口、Admin 生命周期、受限认证查询角色、RLS、生产与工作区 UI 仍需后续任务验收，不能把实验登录等同于完整身份系统完成。
+
+
+T03c 已补充受控开户、停用/恢复、角色更新、短期一次性激活/重置、自助改密及撤销事务，见 [T03c](evidence/t03c-account-lifecycle.md)。密码阻断语料已连接本地服务入口；生产、完整 UI、RLS 和历史令牌清理仍未验收。

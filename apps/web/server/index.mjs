@@ -20,7 +20,7 @@ async function configuredApplication() {
   const csrfKey=process.env.DYOFFICE_CSRF_KEY;
   if(!connectionString||!deploymentId||!origin||!csrfKey) throw new Error('Local account configuration missing');
   const {db,close}=connectIdentityStore(connectionString);
-  try { return await buildLocalApp({db,deploymentId,origin,csrfKey,closeDb:close}); }
+  try { return await buildLocalApp({db,deploymentId,origin,csrfKey,passwordBlocklistFile:process.env.DYOFFICE_PASSWORD_BLOCKLIST_FILE,closeDb:close}); }
   catch(error) { await close(); throw error; }
 }
 

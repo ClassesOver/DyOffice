@@ -1,7 +1,6 @@
 import { emitKeypressEvents } from 'node:readline'
-import { readFile } from 'node:fs/promises'
 import { connectIdentityStore } from '../../apps/web/server/src/db/identity.ts'
-import { createPasswordService } from '../../apps/web/server/src/modules/auth/passwords.ts'
+import { createPasswordService, loadPasswordBlocklist } from '../../apps/web/server/src/modules/auth/passwords.ts'
 import { createAccountService } from '../../apps/web/server/src/modules/auth/service.ts'
 
 async function prompt(label: string, hidden = false): Promise<string> {
@@ -46,8 +45,7 @@ async function main() {
   const url = process.env.DYOFFICE_DATABASE_URL
   const deploymentId = process.env.DYOFFICE_DEPLOYMENT_ID
   if (!url || !deploymentId) throw new Error('DYOFFICE_DATABASE_URL and DYOFFICE_DEPLOYMENT_ID are required')
-  const blockedPasswords = process.env.DYOFFICE_PASSWORD_BLOCKLIST_FILE
-    ? (await readFile(process.env.DYOFFICE_PASSWORD_BLOCKLIST_FILE, 'utf8')).split(/\r?\n/).filter(Boolean) : []
+  const blockedPasswords = await loadPasswordBlocklist(process.env.DYOFFICE_PASSWORD_BLOCKLIST_FILE)
   const username = await prompt('Administrator username: ')
   const password = await prompt('Password (hidden, at least 15 characters): ', true)
   const confirmation = await prompt('Confirm password (hidden): ', true)
