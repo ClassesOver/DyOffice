@@ -4,16 +4,14 @@ on:
   push:
     branches: [main, feat/dyoffice-web]
     paths:
-      - 'apps/web/**'
-      - 'packages/browser-host/**'
-      - 'packages/web-contracts/**'
+      - 'apps/**'
+      - 'packages/**'
       - 'tools/check-web-boundaries*'
       - '.github/workflows/dyoffice-web-boundaries.yml'
   pull_request:
     paths:
-      - 'apps/web/**'
-      - 'packages/browser-host/**'
-      - 'packages/web-contracts/**'
+      - 'apps/**'
+      - 'packages/**'
       - 'tools/check-web-boundaries*'
       - '.github/workflows/dyoffice-web-boundaries.yml'
   workflow_dispatch:
@@ -30,9 +28,11 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
+      - name: Install Web gate dependencies without Electron
+        run: npm ci --prefix apps/web --workspaces=false --ignore-scripts --include=dev
       - name: Test browser dependency gate
         run: node --test tools/check-web-boundaries.test.mjs
       - name: Test BrowserHost contracts
         run: node --experimental-strip-types --test apps/web/test/unit/host-contract.test.mjs
-      - name: Reject direct Node or Electron imports in Web client
+      - name: Reject Node or Electron imports in the local Web dependency graph
         run: node tools/check-web-boundaries.mjs

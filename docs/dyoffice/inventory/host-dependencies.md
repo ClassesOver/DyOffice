@@ -17,14 +17,29 @@
 
 ## Web-specific boundary gate
 
-The initial check `node tools/check-web-boundaries.mjs` walks only browser-side roots:
+The check `node tools/check-web-boundaries.mjs` starts at browser-side roots:
 `apps/web/src`, `apps/web/public`, `packages/browser-host/src`, and
-`packages/web-contracts/src`. It blocks direct static/dynamic imports or `require`
-of Node builtins, Electron and `@genoffice/electron-utils`.
+`packages/web-contracts/src`. It parses JavaScript/TypeScript syntax using the
+Web workspace's pinned TypeScript 5.9.3 dependency, so comments and ordinary
+strings are not treated as imports. It follows literal local imports/re-exports,
+literal dynamic imports/require, and workspace package exports to detect indirect
+Node/Electron imports, including JS-extension imports resolving to TS source.
+Cycles are visited once. Unsupported workspace exports and unresolved local code
+imports fail closed instead of reporting a clean scan.
 
-The check **does not claim** to analyze indirect or computed dynamic imports, package exports, bundler resolution, generated code or transitive dependencies. Browser production builds, runtime tests and a full importer graph audit remain required. It deliberately excludes `apps/web/server` and the worker, which must use Node modules. No speculative allowlist is added just to make a build pass.
+The check **does not claim** to analyze computed dynamic imports, tsconfig/bundler
+aliases, wildcard/array package exports, third-party dependency graphs, generated
+code, asset transforms or runtime globals. Exact workspace exports support the
+`browser`, matching `import`/`require`, and `default` conditions in declaration order. Type-only imports
+are conservatively checked as well. Browser production builds, runtime tests and a
+full importer graph audit remain required. Server/worker roots are not scanned
+unless imported from a browser entry; their normal Node use is allowed.
 
-Run `node --test tools/check-web-boundaries.test.mjs` for the gate's own behavioral tests. The independent CI job runs those tests and the boundary scanner without installing Electron. This does not replace the existing desktop CI.
+Install the small Web dependency set with
+`npm ci --prefix apps/web --workspaces=false --ignore-scripts --include=dev`, then
+run `node --test tools/check-web-boundaries.test.mjs`. CI runs these tests and the
+scanner without installing Electron, including on changes to shared apps/packages.
+This does not replace the existing desktop CI or constitute completed T00 acceptance.
 
 ## Remaining T00 audit before T01
 
