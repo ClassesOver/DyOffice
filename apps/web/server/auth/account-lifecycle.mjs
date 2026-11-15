@@ -192,8 +192,8 @@ export function createAccountLifecycle({ pool, passwordHasher, sessionService, c
           return { userId: user.id, status: user.status }
         }
         const status = input.enabled ? (user.password_hash ? 'active' : 'pending') : 'disabled'
-        await client.query(`/* account:set_status */ UPDATE dyoffice_users SET status = $3,
-          disabled_at = CASE WHEN $3 = 'disabled' THEN clock_timestamp() ELSE NULL END,
+        await client.query(`/* account:set_status */ UPDATE dyoffice_users SET status = $3::varchar,
+          disabled_at = CASE WHEN $3::varchar = 'disabled' THEN clock_timestamp() ELSE NULL END,
           auth_version = auth_version + 1, updated_at = clock_timestamp() WHERE deployment_id = $1 AND id = $2`,
         [deploymentId, user.id, status])
         await invalidate(client, user.id)
