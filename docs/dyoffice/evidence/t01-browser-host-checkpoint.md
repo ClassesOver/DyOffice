@@ -46,3 +46,28 @@ The GitHub remote was checked after writing the files; the remote head then was 
 ## Decision
 
 Proceed with the existing GenOffice Agent Core and editor-local tools. Keep provider keys and access policy on the server. Do not enable a format merely because its `CapabilityState` type can express `editable`; only a real adapter with successful native-file roundtrip tests may advertise that value.
+
+
+## Continued work (2026-11-15)
+
+- Fixed the capability adapter so an advertised `editable` format cannot be exposed as usable when read or save operations are absent. Missing read methods now resolve to `unsupported`; missing save methods cap a readable format at `read_only`.
+- Enforced expected personal preference value types before returning browser-facing settings, instead of merely filtering property names.
+- Added `packages/browser-host/src/ai-transport.ts`: an `AgentTransport` adapter to the planned POST `/api/v1/ai/turns` SSE endpoint. It maps ordered `delta`, `reasoning`, `tool_call`, `phase`, `usage`, `stop_reason`, `error`, `done` events, terminates once, aborts an in-flight request and sends an explicit cancellation request. It does **not** include any provider credentials.
+- Added `tools/audit-web-host.mjs` and tests to enumerate typed public preload APIs and renderer method calls across all four formats. Its results are source inventory only, not a validated implementation mapping.
+- Registered new Web workspace package entries (including existing `apps/web`) in the root `package-lock.json`; validated JSON structure and preserved the ordering of unchanged entries.
+- The separate Web CI workflow now invokes BrowserHost tests, SSE tests, import boundary tests, and the IPC inventory scanner.
+
+**Fresh isolated verification:**
+
+```text
+node --experimental-strip-types --test apps/web/test/unit/host-contract.test.mjs apps/web/test/unit/ai-transport.test.mjs
+12 passed, 0 failed
+
+node --test tools/audit-web-host.test.mjs
+3 passed, 0 failed
+
+node --test tools/check-web-boundaries.test.mjs
+2 passed, 0 failed
+```
+
+These results come from mirrored/fixture source files under Node v22.16.0; the GitHub-hosted CI and whole-repository installation/build/test gates have **not** been verified green. The SSE endpoint and cancel route are planned server APIs, not yet implemented; no browser editor has been connected to them. The current front end therefore must not claim AI editing works. Real authenticated streams, saving/rollback, concurrency and four-format roundtrips remain open.
