@@ -1,0 +1,13 @@
+{
+  "name": "@dyoffice/web-contracts",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./api": "./src/api.ts",
+    "./errors": "./src/errors.ts",
+    "./events": "./src/events.ts",
+    "./host": "./src/host.ts",
+    "./tools": "./src/tools.ts"
+  }
+}
