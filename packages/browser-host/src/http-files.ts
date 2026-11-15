@@ -1,0 +1,57 @@
+import { createBrowserHost } from './index.ts'
+import { HostError, hostError } from '../../web-contracts/src/errors.ts'
+import type { BrowserHost, CapabilityCatalog } from '../../web-contracts/src/host.ts'
+import type { OpenFileResult, PublicSettings } from '../../web-contracts/src/api.ts'
+
+export interface HttpFileHostOptions {
+  fetchImpl?: typeof fetch
+  /** Temporary development bearer-header bridge; production should use an authenticated same-origin session. */
+  getAuthHeaders?: () => HeadersInit
+}
+
+function responseError(status: number): HostError {
+  if (status === 401 || status === 403) return hostError('UNAUTHORIZED', 'request')
+  if (status === 409) return hostError('CONFLICT', 'request')
+  if (status >= 500) return hostError('UNAVAILABLE', 'request')
+  return hostError('INVALID_RESPONSE', 'request')
+}
+
+/** Retrieve legacy imported bytes; no edit/save capabilities are exposed before revision transactions exist. */
+export function createHttpFileHost(options: HttpFileHostOptions = {}): BrowserHost {
+  const fetchImpl = options.fetchImpl ?? fetch
+  async function get(path: string): Promise<Response> {
+    const response = await fetchImpl(path, {
+      method: 'GET',
+      credentials: 'same-origin',
+      cache: 'no-store',
+      headers: options.getAuthHeaders?.(),
+    })
+    if (!response.ok) throw responseError(response.status)
+    return response
+  }
+  async function json(path: string): Promise<unknown> {
+    const response = await get(path)
+    if (!response.headers.get('content-type')?.includes('application/json')) throw hostError('INVALID_RESPONSE', 'JSON content type')
+    try { return await response.json() }
+    catch { throw hostError('INVALID_RESPONSE', 'JSON body') }
+  }
+  return createBrowserHost({
+    getCapabilities: async () => await json('/api/v1/capabilities') as CapabilityCatalog,
+    open: async fileId => await json(`/api/v1/files/${encodeURIComponent(fileId)}`) as OpenFileResult,
+    readBytes: async (fileId, revision) => {
+      const response = await get(`/api/v1/files/${encodeURIComponent(fileId)}/content?revision=${encodeURIComponent(revision)}`)
+      if (!response.headers.get('content-type')?.startsWith('application/octet-stream')) throw hostError('INVALID_RESPONSE', 'file content type')
+      const bytes = new Uint8Array(await response.arrayBuffer())
+      if (bytes.byteLength > 50 * 1024 * 1024) throw hostError('PAYLOAD_TOO_LARGE', 'file download')
+      // Legacy SHA-based revision verifies bytes were not corrupted/truncated in transit.
+      const match = /^sha256:([a-f0-9]{64})$/.exec(revision)
+      if (match) {
+        const digest = await crypto.subtle.digest('SHA-256', bytes)
+        const actual = Array.from(new Uint8Array(digest), v => v.toString(16).padStart(2, '0')).join('')
+        if (actual !== match[1]) throw hostError('INVALID_RESPONSE', 'file integrity')
+      }
+      return bytes
+    },
+    getPreferences: async () => await json('/api/preferences') as PublicSettings,
+  })
+}
