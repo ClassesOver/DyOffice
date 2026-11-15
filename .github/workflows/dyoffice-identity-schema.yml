@@ -44,8 +44,26 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
+      - name: Install isolated Web dependencies with native Argon2id
+        run: npm ci --prefix apps/web --workspaces=false --include=dev --no-audit --no-fund
       - name: Test migration/bootstrap transaction orchestration
         run: node --test apps/web/test/db-migrations.test.mjs apps/web/test/auth-bootstrap.test.mjs
+      - name: Test native password and database integration
+        env:
+          DYOFFICE_TEST_DATABASE_URL: postgresql://dyoffice_test:local-ci-only-not-for-production@localhost:5432/dyoffice_identity_test
+        run: node --test apps/web/test/integration/bootstrap-cli.test.mjs apps/web/test/integration/local-identity.test.mjs
+      - name: Exercise one-time administrator CLI against PostgreSQL
+        env:
+          DYOFFICE_DATABASE_URL: postgresql://dyoffice_test:local-ci-only-not-for-production@localhost:5432/dyoffice_identity_test
+        run: |
+          set -euo pipefail
+          PASS=$(node -e "process.stdout.write(require('node:crypto').randomBytes(32).toString('base64url'))")
+          printf '%s\n' "$PASS" | node apps/web/tools/bootstrap-admin.mjs --deployment-id 99999999-9999-4999-8999-999999999999 --username initial.admin --password-stdin
+          if printf '%s\n' "$PASS" | node apps/web/tools/bootstrap-admin.mjs --deployment-id 99999999-9999-4999-8999-999999999999 --username another.admin --password-stdin; then
+            echo 'Second bootstrap unexpectedly succeeded' >&2
+            exit 1
+          fi
+          test "$(PGPASSWORD=local-ci-only-not-for-production psql -h localhost -U dyoffice_test -d dyoffice_identity_test -Atc "select count(*) from dyoffice_admin_bootstrap where deployment_id='99999999-9999-4999-8999-999999999999'")" = 1
       - name: Ensure PostgreSQL client is installed
         run: command -v psql >/dev/null || (sudo apt-get update && sudo apt-get install -y --no-install-recommends postgresql-client)
       - name: Verify identity constraints on real PostgreSQL
