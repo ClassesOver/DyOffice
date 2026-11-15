@@ -61,6 +61,57 @@ git diff --check
 
 No test was skipped. PostgreSQL identity tests were not re-run here; this slice does not change auth, sessions, or migrations. GitHub CI is the record for the pushed commit.
 
-## Still open for T02
+## Cutover (2026-11-15)
 
-Legacy file, preference, admin, DOCX, and MCP routes still live in `createApplication`. The shell's 501 responses are the migration marker, not a cutover. Rate limiting and graceful shutdown apply only to `buildApp`. Production login, Fastify route schemas for business APIs, and real readiness checks for PostgreSQL and object storage are not done. Do not mark T02 or M0 complete from this note.
+`dev:web` and `start:web` now call `buildApp` and listen on Fastify. `createApplication` builds the same app and returns its Node server so the existing suite keeps using `listen` and `close`.
+
+Route modules:
+
+- `modules/pages` for static assets
+- `modules/preferences`
+- `modules/admin` for models, admin config, and MCP test
+- `modules/sources`
+- `modules/files`
+- `modules/documents` for the DOCX editor and read-only v1 file bridge
+- health probes through the existing secret-free handler
+
+A workspace context is required for those routes. Without it, `/api/*` still returns 501. Business request bodies are buffered by Fastify and checked by the same module validators as before. Health routes keep their static schemas. No request or MCP payload is compiled as a route schema.
+
+`SIGTERM` and `SIGINT` call `app.close()`. The rate limit remains one process and does not trust `X-Forwarded-For`.
+
+API credential checks run in the Fastify `onRequest` hook, before the body parser. An unauthenticated or wrong-role write is rejected without buffering the file-sized body. Health probes and static pages stay public. A regression leaves an 8 MiB `Content-Length` unfinished and still receives 401 or 403 within one second.
+
+RED for this cutover, before `legacy-context.mjs` existed:
+
+```sh
+node --test apps/web/test/integration/route-cutover.test.mjs
+# 1 failed, ERR_MODULE_NOT_FOUND for legacy-context.mjs
+```
+
+GREEN on Node v22.23.4 after the cutover:
+
+```sh
+npm run test:web
+# 52 passed, 0 failed
+
+npm run test:web:integration -- test/integration/api-compat.test.mjs
+# 5 passed
+
+npm run test:web:integration -- test/integration/route-cutover.test.mjs
+# 1 passed
+
+npm run typecheck:web
+# exit 0
+
+node tools/check-web-boundaries.mjs
+# 24 files, 0 violations
+
+npm run test:web:build
+# 2 passed
+```
+
+The boundary fixture also links the hoisted root `node_modules`. Without that link, a workspace install could not resolve TypeScript from a checkout path that contains a space or hash, and the gate exited before printing violations.
+
+## Still not production
+
+Local username/password login, session revocation, PostgreSQL readiness, and a multi-process rate limit are not part of this cutover. `NODE_ENV=production` still refuses to start. Do not treat the development token server as T03 or T04.

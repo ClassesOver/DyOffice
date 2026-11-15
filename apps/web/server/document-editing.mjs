@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import { mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { sendJson } from './http-response.mjs'
+import { rawBody } from './src/http-helpers.mjs'
 import { applyDocxTextEdits, projectDocx } from './docx-session.mjs'
 
 const UUID = '[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}'
@@ -45,6 +46,11 @@ function leaseOf(editing, fileId) {
 }
 
 async function readBody(request, limit) {
+  const captured = request[rawBody]
+  if (Buffer.isBuffer(captured)) {
+    if (captured.length > limit) fail('请求内容过大', 413)
+    return captured
+  }
   let size = 0
   const chunks = []
   for await (const chunk of request) {
