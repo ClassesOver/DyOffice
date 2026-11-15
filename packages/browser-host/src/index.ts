@@ -15,19 +15,29 @@ function safeCapabilities(value: unknown): CapabilityCatalog {
   return { docx: v.docx, xlsx: v.xlsx, pptx: v.pptx, pdf: v.pdf } as CapabilityCatalog
 }
 
+function availableCapabilities(declared: CapabilityCatalog, adapter: Partial<BrowserHost>): CapabilityCatalog {
+  const canRead = typeof adapter.open === 'function' && typeof adapter.readBytes === 'function'
+  const canWrite = canRead && typeof adapter.stageSave === 'function' && typeof adapter.commitSave === 'function'
+  return Object.fromEntries(
+    (['docx', 'xlsx', 'pptx', 'pdf'] as const).map(format => [
+      format, !canRead ? 'unsupported' : declared[format] === 'editable' && !canWrite ? 'read_only' : declared[format],
+    ]),
+  ) as CapabilityCatalog
+}
+
 /** Explicit Web adapter: missing methods fail closed rather than pretending desktop IPC works. */
 export function createBrowserHost(adapter: Partial<BrowserHost> = {}): BrowserHost {
   return {
     async getCapabilities() {
       if (!adapter.getCapabilities) return UNSUPPORTED_CAPABILITIES
-      return safeCapabilities(await adapter.getCapabilities())
+      return availableCapabilities(safeCapabilities(await adapter.getCapabilities()), adapter)
     },
     async open(fileId) {
       nonempty(fileId, 'fileId')
       if (!adapter.open) throw hostError('UNSUPPORTED', 'open')
       const result = await adapter.open(fileId)
       if (!result || !isRevisionRef(result.file) || result.file.fileId !== fileId || !['docx','xlsx','pptx','pdf'].includes(result.format) || typeof result.downloadEndpoint !== 'string') throw hostError('INVALID_RESPONSE', 'open')
-      return { ...result, capabilities: safeCapabilities(result.capabilities) }
+      return { ...result, capabilities: availableCapabilities(safeCapabilities(result.capabilities), adapter) }
     },
     async readBytes(fileId, revision) {
       nonempty(fileId, 'fileId'); nonempty(revision, 'revision')
@@ -55,6 +65,10 @@ export function createBrowserHost(adapter: Partial<BrowserHost> = {}): BrowserHo
       if (!adapter.getPreferences) throw hostError('UNSUPPORTED', 'getPreferences')
       const prefs = await adapter.getPreferences()
       if (!prefs || typeof prefs !== 'object' || Array.isArray(prefs) || !['light','dark','system'].includes(prefs.theme) || typeof prefs.language !== 'string') throw hostError('INVALID_RESPONSE', 'getPreferences')
+      if (prefs.authorName !== undefined && (typeof prefs.authorName !== 'string' || prefs.authorName.length > 100)) throw hostError('INVALID_RESPONSE', 'getPreferences')
+      for (const name of ['autoSave', 'showAssistant'] as const) {
+        if (prefs[name] !== undefined && typeof prefs[name] !== 'boolean') throw hostError('INVALID_RESPONSE', 'getPreferences')
+      }
       const safe: Record<string, unknown> = {}
       for (const [key, value] of Object.entries(prefs)) if (ALLOWED_PREFS.has(key)) safe[key] = value
       return safe as unknown as typeof prefs
