@@ -37,7 +37,10 @@ export function createPasswordHasher({ maxConcurrent = 2 } = {}) {
     async verifyPassword(hash, password) {
       if (typeof password !== 'string' || Buffer.byteLength(password, 'utf8') > 1024) return false
       if (!inspectArgon2idHash(hash)) return false
-      return limited(() => argon2.verify(hash, password))
+      return limited(async () => {
+        try { return await argon2.verify(hash, password) }
+        catch { return false } // Corrupt PHC data is an invalid credential, not a leaked native error.
+      })
     },
   })
 }
