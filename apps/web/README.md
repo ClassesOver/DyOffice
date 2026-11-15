@@ -22,7 +22,9 @@ Open `http://127.0.0.1:3080` for the personal workspace and `/admin` for adminis
 - HTTP data-source configuration with encrypted credentials.
 - Admin-only model endpoint/key configuration and enabled-model catalog.
 - Admin-only Streamable HTTP MCP configuration and real connection/tool discovery using the official MCP SDK. No stdio subprocess transport.
-- Separate personal/admin bearer tokens. Secrets encrypted with AES-256-GCM and omitted from read responses.
+- Separate personal/admin bearer tokens. The admin token manages configuration, but cannot read or modify personal files, preferences or data sources. Secrets encrypted with AES-256-GCM and omitted from read responses.
+
+The development token server refuses startup when `NODE_ENV=production`, before reading or creating its data directory. This guard is not OIDC authentication or multi-user resource isolation; production identity and ownership controls remain unimplemented.
 
 ## Remaining implementation
 

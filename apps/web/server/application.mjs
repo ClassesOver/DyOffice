@@ -21,6 +21,7 @@ function sameToken(a,b){const x=Buffer.from(a||'');const y=Buffer.from(b||'');re
 const publicModel=({id,model,enabled})=>({id,model,enabled});
 
 export async function createApplication({directory,userToken,adminToken,encryptionKey}) {
+  if(process.env.NODE_ENV==='production') throw new Error('Development token server is not allowed in production');
   if(!userToken||!adminToken||userToken===adminToken) throw new Error('Personal and admin tokens must be distinct and nonempty');
   const store=await createStore(directory,encryptionKey); const filePath=join(directory,'files');await mkdir(filePath,{recursive:true,mode:0o700});
   return createServer(async(req,res)=>{
@@ -36,6 +37,8 @@ export async function createApplication({directory,userToken,adminToken,encrypti
       const token=req.headers.authorization?.replace(/^Bearer /,'');const admin=sameToken(token,adminToken);
       if(!admin&&!sameToken(token,userToken)) return send({error:'请登录'},401);
       if(path.startsWith('/api/admin/')&&!admin) return send({error:'需要管理员权限'},403);
+      const personalResource=path==='/api/preferences'||path==='/api/sources'||path==='/api/files'||path.startsWith('/api/files/');
+      if(admin&&personalResource) return send({error:'需要个人工作区权限'},403);
       const state=store.read();
       if(path==='/api/preferences') {
         if(req.method==='GET') return send(state.preferences);

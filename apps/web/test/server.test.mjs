@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm, readFile } from 'node:fs/promises';
+import { mkdtemp, rm, readFile, access } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createApplication } from '../server/application.mjs';
@@ -60,4 +60,53 @@ test('persists preferences and encrypted secrets across server restart',async t=
   server=await start();t.after(()=>new Promise(resolve=>server.close(resolve)));
   base=`http://127.0.0.1:${server.address().port}`;
   assert.equal((await(await fetch(base+'/api/preferences',{headers:{Authorization:'Bearer personal'}})).json()).theme,'dark');
+});
+
+
+test('production refuses the development token server before creating data', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'dyoffice-production-'));
+  const data = join(directory, 'not-created');
+  t.after(() => rm(directory, {recursive:true, force:true}));
+  const previous = process.env.NODE_ENV;
+  process.env.NODE_ENV = 'production';
+  try {
+    await assert.rejects(createApplication({directory:data, userToken:'personal', adminToken:'admin', encryptionKey:'test'}), /development.*token|token.*production/i);
+    await assert.rejects(access(data), {code:'ENOENT'});
+  } finally {
+    if (previous === undefined) delete process.env.NODE_ENV;
+    else process.env.NODE_ENV = previous;
+  }
+});
+
+test('configuration admin cannot read or mutate personal resources', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'dyoffice-ownership-'));
+  const server = await createApplication({directory, userToken:'personal', adminToken:'admin', encryptionKey:'test'});
+  server.listen(0, '127.0.0.1');
+  await new Promise(resolve => server.once('listening', resolve));
+  t.after(async () => { await new Promise(resolve => server.close(resolve)); await rm(directory, {recursive:true,force:true}); });
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const request = (path, token, method='GET', body) => fetch(base+path, {method, headers:{Authorization:`Bearer ${token}`, 'Content-Type':'application/json'}, body:body===undefined?undefined:JSON.stringify(body)});
+  const uploaded = await fetch(base+'/api/files', {method:'POST', headers:{Authorization:'Bearer personal', 'X-File-Name':'private.pdf'}, body:'%PDF-1.7 personal bytes'});
+  assert.equal(uploaded.status, 201);
+  const file = await uploaded.json();
+  for (const path of ['/api/files', `/api/files/${file.id}`, '/api/preferences', '/api/sources']) {
+    const response = await request(path, 'admin');
+    assert.equal(response.status, 403, `admin must not read ${path}`);
+    assert.equal(JSON.stringify(await response.json()).includes('private.pdf'), false);
+  }
+  assert.equal((await request('/api/preferences', 'admin', 'PUT', {theme:'dark'})).status, 403);
+  assert.equal((await request('/api/sources', 'admin', 'PUT', {name:'admin source',url:'https://example.com'})).status, 403);
+  assert.equal((await fetch(base+'/api/files', {method:'POST', headers:{Authorization:'Bearer admin','X-File-Name':'admin.pdf'}, body:'%PDF-1.7 admin bytes'})).status, 403);
+  const personalDownload = await request(`/api/files/${file.id}`, 'personal');
+  assert.equal(personalDownload.status, 200);
+  assert.equal(await personalDownload.text(), '%PDF-1.7 personal bytes');
+  assert.equal((await (await request('/api/files', 'personal')).json()).length, 1);
+  assert.equal((await (await request('/api/preferences', 'personal')).json()).theme, 'system');
+  assert.deepEqual(await (await request('/api/sources', 'personal')).json(), []);
+  assert.equal((await request('/api/preferences', 'personal', 'PUT', {theme:'dark'})).status, 200);
+  assert.equal((await request('/api/sources', 'personal', 'PUT', {name:'personal source',url:'https://example.com'})).status, 200);
+  assert.equal((await request('/api/admin/config', 'admin')).status, 200);
+  assert.equal((await request('/api/admin/config', 'personal')).status, 403);
+  assert.equal((await request('/api/models', 'admin')).status, 200);
+  assert.equal((await request('/api/models', 'personal')).status, 200);
 });
