@@ -48,3 +48,11 @@ test('HttpFileHost rejects corrupted bytes even if proxy reports success', async
   })
   await assert.rejects(host.readBytes(id,expected),e=>e.code==='INVALID_RESPONSE')
 })
+
+test('HttpFileHost fails before buffering an oversized Content-Length', async () => {
+  const id = randomUUID()
+  const host = createHttpFileHost({
+    fetchImpl: async () => new Response('short', {status:200,headers:{'content-type':'application/octet-stream','content-length':String(50 * 1024 * 1024 + 1)}}),
+  })
+  await assert.rejects(host.readBytes(id,'revision-1'),e=>e.code==='PAYLOAD_TOO_LARGE')
+})
