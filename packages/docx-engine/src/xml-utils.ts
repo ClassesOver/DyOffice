@@ -114,9 +114,11 @@ export function serializeXNode(node: XNode): string {
   return inner === '' ? `<${name}${attrs}/>` : `<${name}${attrs}>${inner}</${name}>`
 }
 
-// Control characters outside \t \n \r are illegal in XML 1.0 even when escaped
+// Characters outside the XML 1.0 Char production are illegal even when escaped:
+// C0 controls other than \t \n \r, the noncharacters U+FFFE/U+FFFF, and UTF-16
+// surrogates that are not part of a valid pair (Word refuses the whole part).
 // eslint-disable-next-line no-control-regex
-const ILLEGAL_XML_CHARS = /[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g
+const ILLEGAL_XML_CHARS = /[\u0000-\u0008\u000B\u000C\u000E-\u001F￾￿]|[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g
 
 export function escapeXmlText(text: string): string {
   return text
