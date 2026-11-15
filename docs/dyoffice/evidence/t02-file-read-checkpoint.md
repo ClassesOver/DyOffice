@@ -9,7 +9,7 @@
   - `GET /api/v1/files/:fileId`: returns an OpenFileResult-shaped DTO with SHA-256, size, format and read-only file URL; its `sha256:<digest>` revision is only a content validator, not a PostgreSQL version ledger.
   - `GET /api/v1/files/:fileId/content?revision=...`: returns original bytes with `no-store`; missing revision returns 400, changed revision returns 409 and unknown ID returns 404. No endpoint for new document writes is added.
 - `apps/web/server/application.mjs` plugs the handler **after existing bearer authentication and personal/admin separation**. Admin tokens cannot read private file bytes or metadata via the new routes.
-- `packages/browser-host/src/http-files.ts` exposes `createHttpFileHost()` with same-origin HTTP fetching, permission/status mapping, strict content type handling and SHA-based payload integrity checking. Its `stageSave` / `commitSave` remain unavailable.
+- `packages/browser-host/src/http-files.ts` exposes `createHttpFileHost()` with same-origin HTTP fetching, permission/status mapping, strict content type handling, a streaming 50 MiB download cap (including early Content-Length rejection), and SHA-based payload integrity checking. Its `stageSave` / `commitSave` remain unavailable.
 - Regression tests in `apps/web/test/readonly-files.test.mjs`, `readonly-api.test.mjs` and `test/unit/http-files.test.mjs`. The Web CI workflow now runs the TypeScript adapter test; the legacy Web test command covers the two plain-MJS server tests.
 
 ## Test evidence
@@ -18,7 +18,7 @@ In a temporary mirror of the changed read-only module and BrowserHost adapter, u
 
 ```sh
 node --experimental-strip-types --test apps/web/test/unit/http-files.test.mjs apps/web/test/readonly-files.test.mjs
-# 3 tests passed, 0 failed
+# 4 tests passed, 0 failed
 
 tsc --noEmit --strict --target es2022 --lib dom,es2022 --module nodenext --moduleResolution nodenext \
   --allowImportingTsExtensions packages/browser-host/src/{http-files,index}.ts packages/web-contracts/src/*.ts
