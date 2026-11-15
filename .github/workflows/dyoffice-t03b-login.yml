@@ -5,6 +5,8 @@ on:
     branches: [feat/dyoffice-t03b-login-service]
     paths:
       - 'apps/web/server/auth/login-*'
+      - 'apps/web/server/auth/http-auth-adapter.mjs'
+      - 'apps/web/test/http-auth-adapter.test.mjs'
       - 'apps/web/server/auth/session-core.mjs'
       - 'apps/web/server/db/migrations/0002_login_rate_limits.sql'
       - 'apps/web/test/login-*'
@@ -13,6 +15,8 @@ on:
   pull_request:
     paths:
       - 'apps/web/server/auth/login-*'
+      - 'apps/web/server/auth/http-auth-adapter.mjs'
+      - 'apps/web/test/http-auth-adapter.test.mjs'
       - 'apps/web/server/auth/session-core.mjs'
       - 'apps/web/server/db/migrations/0002_login_rate_limits.sql'
       - 'apps/web/test/login-*'
@@ -46,15 +50,17 @@ jobs:
           node-version: 22
       - name: Reject malformed login and session source
         run: |
+          node --check apps/web/server/auth/http-auth-adapter.mjs
           node --check apps/web/server/auth/login-service.mjs
           node --check apps/web/server/auth/login-throttle.mjs
           node --check apps/web/server/auth/session-core.mjs
+          node --check apps/web/test/http-auth-adapter.test.mjs
           node --check apps/web/test/login-service.test.mjs
           node --check apps/web/test/login-throttle.test.mjs
           node --check apps/web/test/login-session-fence.test.mjs
           node --check apps/web/test/integration/local-login.postgres.test.mjs
       - name: Run login, throttle and auth-version unit tests
-        run: node --test apps/web/test/login-service.test.mjs apps/web/test/login-throttle.test.mjs apps/web/test/login-session-fence.test.mjs
+        run: node --test apps/web/test/login-service.test.mjs apps/web/test/login-throttle.test.mjs apps/web/test/login-session-fence.test.mjs apps/web/test/http-auth-adapter.test.mjs
       - name: Install isolated Web dependencies
         run: npm ci --prefix apps/web --workspaces=false --include=dev --no-audit --no-fund
       - name: Test real PostgreSQL login limits and password-reset race
