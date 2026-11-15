@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createApplication } from '../../server/application.mjs'
@@ -25,6 +25,12 @@ async function loadBuildApp() {
     assert.fail(`T02 modular API is not implemented (${error.code ?? error.name}: ${error.message})`)
   }
 }
+
+test('development entry still boots the legacy token server', async () => {
+  const source = await readFile(new URL('../../server/index.mjs', import.meta.url), 'utf8')
+  assert.match(source, /createApplication/)
+  assert.equal(source.includes('buildApp'), false)
+})
 
 test('legacy file, preference, and admin routes keep status codes and omit secrets', async (t) => {
   const directory = await mkdtemp(join(tmpdir(), 'dyoffice-api-compat-'))

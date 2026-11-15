@@ -306,20 +306,20 @@
       "size": 2630
     },
     "apps/web/package-lock.json": {
-      "sha256": "ad79cb11197c080142c18ae0fd68f432719b26cbbcd549331f3f828b968fb985",
-      "size": 86075
+      "sha256": "603bca52671ecf98a8dc43cdcc75f5b5df4dbbbcde0b7ffd7a87afba89724f2d",
+      "size": 106420
     },
     "apps/web/package.json": {
-      "sha256": "db2c87105afe744f1337219a97da364b770a2bb342b9f0c6940b0e18dabf2e3b",
-      "size": 734
+      "sha256": "ac4f6b61bd622b0606475e382e223d76e4a75db0a10693e46af5bcd44cf078f8",
+      "size": 821
     },
     "package-lock.json": {
-      "sha256": "2decb2ab23da740e9e5fbec532b9a9043178058ea5b5da9231932d0c12f0a5bb",
-      "size": 594083
+      "sha256": "83f09d2bf77cb06bc1f939d8f75c24038b20eb5b506504c17fd5c4fa6944cd09",
+      "size": 614449
     },
     "package.json": {
-      "sha256": "8485fd34d79968bdb45d1aa0164a669c3a06d746ef3ed3611dde6394c73db8e2",
-      "size": 6625
+      "sha256": "a2e28356d0809812ebd9d9a602cbce1d0877d7c9a6db1e5f5c98120c9cba97f0",
+      "size": 6721
     },
     "packages/ui/src/fonts/Carlito-Bold.ttf": {
       "sha256": "ed778b78ce652f5b17647344fb9a4c4dcb2e6f8bafe75a0366300da7f8c199ac",
@@ -356,6 +356,10 @@
         "version": "43.8.3",
         "integrity": "sha512-KgvSm3bHXz96hSXzqxyRjLeli80rIdszbDQFKlRSfckmGazTPCH/CxUN31Dp9c5rFKTQSNf9gPJRWl1yWNB3pA=="
       },
+      "fastify": {
+        "version": "5.12.8",
+        "integrity": "sha512-moP8exb2sCHLUbJkwp+I6C0padhy4D8lp0SdmzY7HhSdZuqm7O/u3o2aq7u8okaQ//33QDzj3G/u+FsSdB8Qzw=="
+      },
       "pdf-lib": {
         "version": "1.17.1",
         "integrity": "sha512-V/mpyJAoTsN4cnP31vc0wfNA1+p20evqqnap0KLoRUN0Yk/p3wN52DOEsL4oBFcLdb76hlpKPtzJIgo67j/XLw=="
@@ -373,6 +377,10 @@
       "@modelcontextprotocol/sdk": {
         "version": "1.32.2",
         "integrity": "sha512-SWsVtH/0vULSQStoZ6xxH2K09Li8fXYTMC64ZeogCdpZ3XSi1eCPOByV1OpuJxuI3OcmHhosDWYyii07tpPsLw=="
+      },
+      "fastify": {
+        "version": "5.12.8",
+        "integrity": "sha512-moP8exb2sCHLUbJkwp+I6C0padhy4D8lp0SdmzY7HhSdZuqm7O/u3o2aq7u8okaQ//33QDzj3G/u+FsSdB8Qzw=="
       },
       "typescript": {
         "version": "5.9.3",

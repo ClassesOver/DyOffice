@@ -78,3 +78,5 @@ jobs:
         run: npm run test:web:build
       - name: Test legacy Web API
         run: npm run test:web
+      - name: Test modular API compatibility shell
+        run: npm run test:web:integration -- test/integration/api-compat.test.mjs
