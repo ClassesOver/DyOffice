@@ -1,3 +1,4 @@
+import { sendJson } from './http-response.mjs';
 import { createServer } from 'node:http';
 import { timingSafeEqual, randomUUID } from 'node:crypto';
 import { readFile, mkdir, writeFile, unlink } from 'node:fs/promises';
@@ -26,7 +27,9 @@ export async function createApplication({directory,userToken,adminToken,encrypti
   const serveStatic=await createStaticAssets({assetMode,assetDirectory});
   const store=await createStore(directory,encryptionKey); const filePath=join(directory,'files');await mkdir(filePath,{recursive:true,mode:0o700});
   return createServer(async(req,res)=>{
-    const send=(value,status=200)=>{res.writeHead(status,{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store'});res.end(JSON.stringify(value));};
+    // Generate locally: client-supplied IDs can contain secrets or collide across requests.
+    const requestId=randomUUID();res.setHeader('X-Request-ID',requestId);
+    const send=(value,status=200)=>sendJson(res,status,value);
     try {
       const url=new URL(req.url,'http://localhost');const path=url.pathname;
       res.setHeader('X-Content-Type-Options','nosniff');res.setHeader('Referrer-Policy','no-referrer');

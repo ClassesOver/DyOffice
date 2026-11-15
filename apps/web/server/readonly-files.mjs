@@ -1,3 +1,4 @@
+import { sendJson as json } from './http-response.mjs'
 import { readFile } from 'node:fs/promises'
 import { createHash } from 'node:crypto'
 import { join } from 'node:path'
@@ -5,11 +6,6 @@ import { join } from 'node:path'
 const UUID = '[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}'
 const FILE_PATH = new RegExp(`^/api/v1/files/(${UUID})(?:/(content))?$`, 'i')
 const CAPABILITIES = Object.freeze({ docx: 'unsupported', xlsx: 'unsupported', pptx: 'unsupported', pdf: 'unsupported' })
-
-function json(res, status, value) {
-  res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' })
-  res.end(JSON.stringify(value))
-}
 
 /** Development-only read bridge. The caller MUST authenticate the personal user before invoking this function. */
 export async function serveReadOnlyFiles(req, res, { url, state, filePath }) {
