@@ -24,7 +24,7 @@ Open `http://127.0.0.1:3080` for the personal workspace and `/admin` for adminis
 - Admin-only Streamable HTTP MCP configuration and real connection/tool discovery using the official MCP SDK. No stdio subprocess transport.
 - Separate personal/admin bearer tokens. The admin token manages configuration, but cannot read or modify personal files, preferences or data sources. Secrets encrypted with AES-256-GCM and omitted from read responses.
 
-The development token server refuses startup when `NODE_ENV=production`, before reading or creating its data directory. This guard is not OIDC authentication or multi-user resource isolation; production identity and ownership controls remain unimplemented.
+The development token server refuses startup when `NODE_ENV=production`, before reading or creating its data directory. This guard is not production account authentication or multi-user resource isolation. Production will use **local username/password authentication**, Admin-managed accounts, PostgreSQL-backed server sessions and personal resource ownership. OIDC/Keycloak/SSO are explicitly out of scope. See `docs/dyoffice/local-account-auth.md`. These features are **not implemented yet**.
 
 ## Remaining implementation
 
@@ -74,4 +74,4 @@ Admin updates apply supplied sections against the latest state inside the instan
 
 每个请求由服务端生成独立 `X-Request-ID`，不信任或回显客户端同名请求头。JSON 错误响应保持原有 HTTP 状态码、`application/json` 和 `error` 文案，增量提供 `type: about:blank`、`title`、`status`、`detail`、`requestId`；成功响应正文不变。错误中不包含请求 URL、查询参数或内部异常详情，500 继续返回通用文案。
 
-此接缝不代表 T02 完成：Fastify 模块化、完整 `/api/v1` 迁移（当前仅有只读文件桥接）、限流、ready/live 和优雅关闭仍待实施；未实现 T03 OIDC/会话撤销，不能用它宣称真实登录或退出能力。
+此接缝不代表 T02 完成：Fastify 模块化、完整 `/api/v1` 迁移（当前仅有只读文件桥接）、限流、ready/live 和优雅关闭仍待实施；未实现 T03 本地账号密码/服务端会话撤销，不能用它宣称正式登录或退出能力。
