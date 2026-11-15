@@ -20,7 +20,7 @@ node --test apps/web/test/db-migrations.test.mjs apps/web/test/auth-bootstrap.te
 # 7 passed, 0 failed
 ```
 
-The fake-pool tests validate **transaction choreography only**; they do not prove PostgreSQL serialization or driver compatibility. The GitHub workflow is a separate real PostgreSQL schema test. Do not mark that gate passed until its final result is checked.
+The fake-pool tests validate **transaction choreography only**; they do not prove PostgreSQL serialization or driver compatibility. **PostgreSQL 16 CI passed** on commit `8594456fef79108e8a2ce152a1adfb831d8d8419`: [identity-schema workflow #43734682872](https://github.com/ClassesOver/DyOffice/actions/runs/43734682872). Its `identity-schema` job shows success for the 7 transaction tests and real PostgreSQL SQL constraints (username uniqueness, cross-deployment FK, duplicate bootstrap marker, active-user password requirement). This is not proof of executing `applyMigrations()` or `bootstrapInitialAdmin()` through a real Node PostgreSQL driver.
 
 ## Outstanding blockers
 
