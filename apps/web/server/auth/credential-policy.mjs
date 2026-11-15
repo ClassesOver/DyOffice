@@ -40,7 +40,7 @@ export function inspectArgon2idHash(value) {
   if (!match) return null
   const [memoryKiB, passes, parallelism] = match.slice(1, 4).map(Number)
   if (!Number.isSafeInteger(memoryKiB) || !Number.isSafeInteger(passes) || !Number.isSafeInteger(parallelism) ||
-      memoryKiB < 19456 || passes < 2 || parallelism < 1 || parallelism > 16 ||
+      memoryKiB < 19456 || memoryKiB > 262144 || passes < 2 || passes > 10 || parallelism < 1 || parallelism > 8 ||
       match[4].length < 22 || match[5].length < 22) return null
   return { memoryKiB, passes, parallelism }
 }
