@@ -29,6 +29,7 @@ export function validateNewPassword(value) {
   if (codepoints < PASSWORD_MIN_CODEPOINTS || codepoints > PASSWORD_MAX_CODEPOINTS || bytes > PASSWORD_MAX_UTF8_BYTES) {
     throw new TypeError('Password outside allowed length')
   }
+  if (new Set(Array.from(value)).size === 1) throw new TypeError('Password is trivially predictable')
   if (COMMON_PASSWORDS.has(value.toLowerCase())) throw new TypeError('Password is commonly used')
   return true
 }
