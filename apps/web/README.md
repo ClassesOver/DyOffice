@@ -45,13 +45,21 @@ npm run test:web:build
 
 The pinned Vite build emits `apps/web/dist/index.html`, `admin.html`, hashed browser
 assets and a manifest. The smoke test builds into a disposable directory, serves
-that output over HTTP, and checks both pages and every referenced JS/CSS asset.
+that output through the API server over HTTP, and checks both pages, every
+referenced JS/CSS asset, and same-origin API authorization.
 No Electron application or native engine is built or started.
 
 This is a build baseline for the existing personal/Admin prototype, not the
-four-format editor integration. `start:web` still serves the source `public/`
-interface with the existing API server. The static build alone has no API; a
-production static-host/API integration is still required. Type checking currently
+four-format editor integration. `start:web` defaults to the source `public/`
+interface. For local same-origin build/API verification, first run `build:web`,
+then start with `DYOFFICE_ASSET_MODE=built npm run start:web` and the development
+credentials described above. Built mode serves only the two HTML entries and
+manifest-listed assets, fails startup if the build is absent/incomplete, and does
+not expose the manifest, source files, or arbitrary files. GET and HEAD are the
+only static methods. Source mode and built mode both retain API authorization.
+`NODE_ENV=production` still refuses startup: this seam does not make the temporary
+shared-token server production-ready. T02 API migration and T03 identity remain
+required before production deployment. Type checking currently
 covers BrowserHost and Web contracts, not the legacy JavaScript prototype or all
 upstream renderer packages. HTTP smoke checks do not replace real browser UI or
 native document round-trip acceptance.
