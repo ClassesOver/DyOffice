@@ -32,5 +32,7 @@ jobs:
           node-version: 22
       - name: Test browser dependency gate
         run: node --test tools/check-web-boundaries.test.mjs
+      - name: Test BrowserHost contracts
+        run: node --experimental-strip-types --test apps/web/test/unit/host-contract.test.mjs
       - name: Reject direct Node or Electron imports in Web client
         run: node tools/check-web-boundaries.mjs
