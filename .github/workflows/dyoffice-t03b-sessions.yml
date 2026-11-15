@@ -5,13 +5,17 @@ on:
     branches: [feat/dyoffice-t03b-session-core]
     paths:
       - 'apps/web/server/auth/session-core.mjs'
+      - 'apps/web/server/auth/csrf-policy.mjs'
       - 'apps/web/test/session-core.test.mjs'
+      - 'apps/web/test/csrf-policy.test.mjs'
       - 'apps/web/test/integration/session-core.postgres.test.mjs'
       - '.github/workflows/dyoffice-t03b-sessions.yml'
   pull_request:
     paths:
       - 'apps/web/server/auth/session-core.mjs'
+      - 'apps/web/server/auth/csrf-policy.mjs'
       - 'apps/web/test/session-core.test.mjs'
+      - 'apps/web/test/csrf-policy.test.mjs'
       - 'apps/web/test/integration/session-core.postgres.test.mjs'
       - '.github/workflows/dyoffice-t03b-sessions.yml'
   workflow_dispatch:
@@ -43,10 +47,12 @@ jobs:
       - name: Check session files for syntax errors
         run: |
           node --check apps/web/server/auth/session-core.mjs
+          node --check apps/web/server/auth/csrf-policy.mjs
           node --check apps/web/test/session-core.test.mjs
+          node --check apps/web/test/csrf-policy.test.mjs
           node --check apps/web/test/integration/session-core.postgres.test.mjs
       - name: Test cookie parsing and scoped session service
-        run: node --test apps/web/test/session-core.test.mjs
+        run: node --test apps/web/test/session-core.test.mjs apps/web/test/csrf-policy.test.mjs
       - name: Install isolated Web dependencies
         run: npm ci --prefix apps/web --workspaces=false --include=dev --no-audit --no-fund
       - name: Test PostgreSQL session lifecycle, expiry, revocation and deployment isolation
