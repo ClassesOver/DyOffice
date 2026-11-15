@@ -1,0 +1,37 @@
+name: DyOffice actual UI capture
+on:
+  push:
+    branches: [feat/dyoffice-ui-capture]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  capture:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    env:
+      DYOFFICE_USER_TOKEN: local-preview-user
+      DYOFFICE_ADMIN_TOKEN: local-preview-admin
+      DYOFFICE_ENCRYPTION_KEY: local-preview-encryption
+      DYOFFICE_DATA_DIR: /tmp/dyoffice-preview-data
+      HOST: 127.0.0.1
+      PORT: 3080
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 22
+      - run: npm ci --prefix apps/web --workspaces=false --ignore-scripts --include=dev
+      - run: npm install --prefix /tmp/dyoffice-capture --ignore-scripts playwright@1.61.1
+      - run: /tmp/dyoffice-capture/node_modules/.bin/playwright install --with-deps chromium
+      - name: Run the unchanged application and photograph its real UI
+        run: |
+          node apps/web/server/index.mjs > /tmp/dyoffice-server.log 2>&1 &
+          for i in $(seq 1 30); do if curl -fsS http://127.0.0.1:3080/ >/dev/null; then break; fi; sleep 1; done
+          node tools/dyoffice/capture-ui.mjs
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        if: always()
+        with:
+          name: dyoffice-real-ui
+          path: screenshots/
+          retention-days: 7
