@@ -79,6 +79,8 @@ A workspace context is required for those routes. Without it, `/api/*` still ret
 
 `SIGTERM` and `SIGINT` call `app.close()`. The rate limit remains one process and does not trust `X-Forwarded-For`.
 
+API credential checks run in the Fastify `onRequest` hook, before the body parser. An unauthenticated or wrong-role write is rejected without buffering the file-sized body. Health probes and static pages stay public. A regression leaves an 8 MiB `Content-Length` unfinished and still receives 401 or 403 within one second.
+
 RED for this cutover, before `legacy-context.mjs` existed:
 
 ```sh
