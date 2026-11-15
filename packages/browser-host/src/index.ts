@@ -1,5 +1,5 @@
 import { HostError, hostError } from '../../web-contracts/src/errors.ts'
-import type { RevisionRef } from '../../web-contracts/src/api.ts'
+import type { RevisionRef, SaveInput } from '../../web-contracts/src/api.ts'
 import { isRevisionRef, isSaveInput } from '../../web-contracts/src/api.ts'
 import { UNSUPPORTED_CAPABILITIES } from '../../web-contracts/src/host.ts'
 import type { BrowserHost, CapabilityCatalog } from '../../web-contracts/src/host.ts'
@@ -14,6 +14,18 @@ function safeCapabilities(value: unknown): CapabilityCatalog {
   const v = value as Record<string, unknown>
   if (!['docx', 'xlsx', 'pptx', 'pdf'].every(k => typeof v[k] === 'string' && CAPABILITIES.has(v[k]))) throw hostError('INVALID_RESPONSE', 'getCapabilities')
   return { docx: v.docx, xlsx: v.xlsx, pptx: v.pptx, pdf: v.pdf } as CapabilityCatalog
+}
+
+// Contract fields only: caller-supplied identity (ownerId, deploymentId) never reaches the adapter.
+function pickSaveInput(v: SaveInput): SaveInput {
+  const { fileId, uploadId, baseRevision, idempotencyKey, leaseEpoch, sourceCommandId } = v
+  return sourceCommandId === undefined
+    ? { fileId, uploadId, baseRevision, idempotencyKey, leaseEpoch }
+    : { fileId, uploadId, baseRevision, idempotencyKey, leaseEpoch, sourceCommandId }
+}
+/** A same-origin absolute path: no scheme, no protocol-relative `//`, no backslash or whitespace. */
+function isSameOriginPath(value: unknown): value is string {
+  return typeof value === 'string' && /^\/(?![/\\])[^\s\\]*$/.test(value)
 }
 
 function availableCapabilities(declared: CapabilityCatalog, adapter: Partial<BrowserHost>): CapabilityCatalog {
@@ -41,7 +53,7 @@ export function createBrowserHost(adapter: Partial<BrowserHost> = {}): BrowserHo
       nonempty(fileId, 'fileId')
       if (!adapter.open) throw hostError('UNSUPPORTED', 'open')
       const result = await adapter.open(fileId)
-      if (!result || !isRevisionRef(result.file) || result.file.fileId !== fileId || !['docx','xlsx','pptx','pdf'].includes(result.format) || typeof result.downloadEndpoint !== 'string') throw hostError('INVALID_RESPONSE', 'open')
+      if (!result || !isRevisionRef(result.file) || result.file.fileId !== fileId || !['docx','xlsx','pptx','pdf'].includes(result.format) || !isSameOriginPath(result.downloadEndpoint)) throw hostError('INVALID_RESPONSE', 'open')
       return { file: publicRevision(result.file), format: result.format, downloadEndpoint: result.downloadEndpoint, capabilities: availableCapabilities(safeCapabilities(result.capabilities), adapter) }
     },
     async readBytes(fileId, revision) {
@@ -62,7 +74,7 @@ export function createBrowserHost(adapter: Partial<BrowserHost> = {}): BrowserHo
     async commitSave(input) {
       if (!isSaveInput(input)) throw hostError('INVALID_REVISION', 'commitSave')
       if (!adapter.commitSave) throw hostError('UNSUPPORTED', 'commitSave')
-      const revision = await adapter.commitSave(input)
+      const revision = await adapter.commitSave(pickSaveInput(input))
       if (!isRevisionRef(revision) || revision.fileId !== input.fileId) throw hostError('INVALID_RESPONSE', 'commitSave')
       return publicRevision(revision)
     },

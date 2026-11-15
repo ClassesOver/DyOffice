@@ -89,3 +89,18 @@ test('commitSave only returns public revision fields', async () => {
   const host=createBrowserHost({commitSave:async()=>({...validRevision,apiKey:'secret'})})
   assert.deepEqual(await host.commitSave(validSave),validRevision)
 })
+
+test('download endpoints must be same-origin paths', async () => {
+  const caps = { docx:'read_only', xlsx:'read_only', pptx:'read_only', pdf:'read_only' }
+  for (const downloadEndpoint of ['', 'https://evil.example/f', '//evil.example/f', 'javascript:alert(1)', 'api/files', '/\\evil.example', '/a b']) {
+    const host = createBrowserHost({ open: async () => ({ file:validRevision, format:'docx', downloadEndpoint, capabilities:caps }) })
+    await assert.rejects(host.open('file-a'), err => err.code === 'INVALID_RESPONSE', downloadEndpoint)
+  }
+})
+
+test('commitSave forwards only SaveInput fields, never caller-supplied identity', async () => {
+  let seen
+  const host = createBrowserHost({ commitSave: async (input) => { seen = input; return validRevision } })
+  await host.commitSave({ ...validSave, ownerId:'user-b', deploymentId:'other', sourceCommandId:'cmd-1' })
+  assert.deepEqual(seen, { ...validSave, sourceCommandId:'cmd-1' })
+})

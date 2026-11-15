@@ -65,8 +65,9 @@ font metric/rendering behavior in the selected browser/worker images.
 
 ## What remains open before T00 is complete
 
-- Complete the per-IPC/per-tool call inventory and classify live/headless/unsupported
-  execution; the current host-dependencies document remains an initial map.
+- Complete the per-IPC/per-tool call inventory: every bridge member now has a
+  proposed class in [host-ipc.md](host-ipc.md); signatures/error modes and the
+  agent tool live/headless split are still open.
 - Build and exercise the actual browser host, not only a file-import scaffold.
 - Lock validated Node/Rust/worker image/architecture choices, including font assets,
   after native/WASM spikes; no image digest is invented in this baseline.

@@ -14,6 +14,8 @@ on:
       - 'packages/**'
       - 'tools/check-web-boundaries*'
       - 'tools/audit-web-host*'
+      - 'tools/dyoffice/host-ipc-classification*'
+      - 'docs/dyoffice/inventory/host-ipc*'
       - '.github/workflows/dyoffice-web-boundaries.yml'
   pull_request:
     paths:
@@ -27,6 +29,8 @@ on:
       - 'packages/**'
       - 'tools/check-web-boundaries*'
       - 'tools/audit-web-host*'
+      - 'tools/dyoffice/host-ipc-classification*'
+      - 'docs/dyoffice/inventory/host-ipc*'
       - '.github/workflows/dyoffice-web-boundaries.yml'
   workflow_dispatch:
 
@@ -58,10 +62,14 @@ jobs:
         run: node --experimental-strip-types --test apps/web/test/unit/http-files.test.mjs
       - name: Test editor host inventory scanner
         run: node --test tools/audit-web-host.test.mjs
+      # Fails on renderer calls to undeclared bridge members or unresolvable preload members.
       - name: Scan four native editor bridges
-        run: |
-          node tools/audit-web-host.mjs > "$RUNNER_TEMP/dyoffice-host-audit.json"
-          node -e 'const a=require(process.env.RUNNER_TEMP+"/dyoffice-host-audit.json"); for(const [name,v] of Object.entries(a)) console.log(name+": "+v.declaredCount+" methods, "+v.unknownRendererMethods.length+" unmatched")'
+        run: node tools/audit-web-host.mjs --summary
+      - name: Test host IPC classification
+        run: node --test tools/dyoffice/host-ipc-classification.test.mjs
+      # Every preload member must map to exactly one Web class; generated table must be current.
+      - name: Check four-format host IPC classification
+        run: node tools/dyoffice/host-ipc-classification.mjs --check
       - name: Reject Node or Electron imports in the local Web dependency graph
         run: node tools/check-web-boundaries.mjs
       - name: Typecheck BrowserHost and Web contracts

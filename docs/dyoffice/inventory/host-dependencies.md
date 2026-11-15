@@ -41,10 +41,49 @@ run `node --test tools/check-web-boundaries.test.mjs`. CI runs these tests and t
 scanner without installing Electron, including on changes to shared apps/packages.
 This does not replace the existing desktop CI or constitute completed T00 acceptance.
 
+## Four-format bridge inventory and classification
+
+`node tools/audit-web-host.mjs --summary` parses each editor preload with the
+TypeScript AST and lists every `contextBridge` bridge (not only the main one:
+`aiNamingApi`, `projectApi`, `nativeSpell` and the Slides attachment `desktop`
+bridge are included), each member's IPC channels and its lifecycle
+(`request`/`subscription`/`notify`/`local`). Renderer call sites are resolved
+with a type checker over the renderer program plus workspace packages, so
+aliases are matched by symbol and bridges passed into helpers are traced into
+the helper. It exits non-zero on renderer calls to undeclared members and on
+unresolvable preload members; references it cannot resolve are listed as
+`opaqueReferences` (currently none).
+
+Snapshot (2026-11-15): Docs 117, Sheets 114, Slides 221, PDF 86 members (538).
+17 members have no renderer call site (e.g. `aiChat`, `projectApi.listChats`).
+
+[host-ipc.md](host-ipc.md) is generated from the rules in
+[host-ipc-classification.json](host-ipc-classification.json) and assigns every
+member exactly one class with the plan task that must verify it:
+204 `browser-native`, 169 `server-api`, 58 `isolated-worker`, 53 `unsupported`,
+54 `desktop-only`. `node tools/dyoffice/host-ipc-classification.mjs --check`
+fails CI on a new unclassified member, a stale rule or an outdated table.
+
+Notable findings that change downstream estimates:
+
+- Slides keeps the deck model and its 123 deck-session members in the Electron main
+  process. `@genoffice/pptx-ops` has no Node imports, so the proposed Web seam is
+  a browser-worker deck session (T10); `@genoffice/pptx-engine` still has three
+  Node-importing files to isolate first.
+- PDF document operations run on Node (pdf-lib, PDFium WASM, `node:crypto`,
+  `node:zlib`) and are proposed as worker jobs; signing (OS certificate stores),
+  OCR (OS engine) and printer enumeration are proposed as unsupported.
+- Sheets data access is the Rust sidecar (22 members); workbook connections,
+  external links and cross-window range picking are proposed as unsupported
+  until T15 provides governed data sources.
+
+The classification is a **proposed design mapping**. A rule records where a call
+must run and why; it is not evidence that a Web adapter exists or works.
+
 ## Remaining T00 audit before T01
 
-- [ ] Enumerate all renderer calls into `window.desktop` / preload APIs for Docs, Sheets, Slides and PDF; record each signature, lifecycle and error mode.
-- [ ] Classify every call as `browser-native`, `server-api`, `isolated-worker`, `unsupported` or `desktop-only`. Verify the mapping in code rather than guessing.
+- [ ] Enumerate all renderer calls into `window.desktop` / preload APIs for Docs, Sheets, Slides and PDF; record each signature, lifecycle and error mode. *Members, channels, lifecycle and call sites are recorded above; argument/return signatures and error modes (throw vs `null` vs `{ok:false}`) are not yet extracted.*
+- [ ] Classify every call as `browser-native`, `server-api`, `isolated-worker`, `unsupported` or `desktop-only`. Verify the mapping in code rather than guessing. *All 538 members have a proposed class; each is verified only by the adapter task named in its rule.*
 - [ ] Check native XLSX Rust sidecar compatibility/ABI and whether production Web needs a server worker; test fixtures and external Excel reopen behavior.
 - [ ] Check PDFium WASM/worker bundling and font licensing; preserve genuine text edits versus annotations.
 - [ ] Validate stream cancellation, save and user permission semantics against browser reality; do not assume Electron e2e passes prove Web behavior.
@@ -54,52 +93,18 @@ This does not replace the existing desktop CI or constitute completed T00 accept
 **Release constraint:** a passing import gate is not permission to enable live editing, multiuser access or enterprise production. T00 is incomplete until this checklist and its evidence are finished.
 
 
-## 2026-11-15 continued implementation: reproducible IPC usage scan
+## Superseded initial scan counts
 
-The repository now contains `tools/audit-web-host.mjs`, a source scanner
-for public preload methods and renderer references, plus
-`tools/audit-web-host.test.mjs` (8 fixture tests). The independent Web
-CI workflow runs the scanner and records per-app method counts.
-
-The actual exposed preload bridges were verified from current source:
-
-| Format | Preload bridge | Parsed top-level methods (AST) | First Web integration priority |
-| --- | --- | ---: | --- |
-| DOCX | `window.desktop` | 110 | `openDocx`, `onOpenDocx`, `saveDocx`, `aiStream` |
-| XLSX | `window.desktopApi` | 105 | native workbook open/save, work-item/AI transport |
-| PPTX | `window.slidesApi` | 208 | `openPptx`, `save`, `aiStream` |
-| PDF | `window.pdfApi` | 82 | `readFile`, `save`, `aiStream` |
-
-These figures are **scanner-derived counts of the main exposed API
-literal**, not a complete inventory of dynamically registered or
-secondary bridges (notably Slides also exposes `window.desktop` for
-file actions, and the apps expose project/naming bridges). The full
-per-file renderer usage report must be generated in a complete checkout.
-Methods are not classified `browser-native` or `server-api` solely by
-their names: T00 requires tracing each main process handler and its side
-effects. The inventory does not assert that any Office renderer has
-already been adapted.
-
-Commands to run in the checked-out repository:
+An earlier lexical version of `tools/audit-web-host.mjs` reported 110/38/208/82
+methods for the main Docs/Sheets/Slides/PDF bridges. The Sheets figure was
+wrong: the regex skipped every `async` member (105 exist), and secondary
+bridges were not counted. The AST/type-checker scanner described above replaces
+those numbers. The original caveat still holds: a member's class is a proposed
+mapping until its main-process handler and side effects are traced and the
+named adapter task verifies it.
 
 ```sh
-node --test tools/audit-web-host.test.mjs
-node tools/audit-web-host.mjs > /tmp/dyoffice-host-audit.json
+node --test tools/audit-web-host.test.mjs tools/dyoffice/host-ipc-classification.test.mjs
+node tools/audit-web-host.mjs --summary
+node tools/dyoffice/host-ipc-classification.mjs --check
 ```
-
-The scanner intentionally reports unknown renderer references instead of silently
-ignoring them. It uses the Web workspace's pinned TypeScript parser to select the
-actual `contextBridge.exposeInMainWorld` binding and its direct object members,
-including async and quoted methods. Renderer scanning ignores comments/strings
-and includes literal bracket and optional access. Unresolved spread/computed API
-members, ambiguous objects and syntax errors fail closed instead of yielding a
-partial count. Install Web dependencies with the command above before running.
-
-The former lexical extractor omitted async methods: Sheets showed 38 declarations
-and 58 unmatched renderer names. AST extraction finds 105 declarations and zero
-unmatched names in the current four main bridges (Docs 110, Slides 208, PDF 82 also
-have zero unmatched names). This corrects the audit, not the editors. A static
-match is **not** evidence of a working Web adapter, permission check or native
-roundtrip. Aliases/destructuring, dynamically constructed references, secondary
-bridges and per-handler lifecycle/signature/error/effect tracing remain outside
-this scan. A complete graph/handler review is still required for T00 completion.
