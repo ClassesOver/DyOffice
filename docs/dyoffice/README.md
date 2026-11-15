@@ -123,8 +123,8 @@ WS 断线后手工编辑、HTTP 保存和普通 AI 流应继续可用；依赖�
 | --- | --- | --- |
 | T00 浏览器依赖边界与宿主盘点 | 部分实现；完整四格式适配审计待完成 | [宿主清单](inventory/host-dependencies.md) |
 | T01 BrowserHost 和 Agent SSE 客户端契约 | 基础契约/适配器已提交；尚未接入真实编辑器 | [T01 记录](evidence/t01-browser-host-checkpoint.md) |
-| T02 版本化 HTTP 文件只读接缝 | 开发服务器已接入；Fastify 迁移和生产认证未完成 | [T02 文件读取记录](evidence/t02-file-read-checkpoint.md) |
+| T02 版本化 HTTP 与模块化 API 壳 | 只读文件接缝和 Fastify `buildApp` 壳已接入；开发入口仍是旧服务器，路由迁移和生产认证未完成 | [T02 模块化 API](evidence/t02-modular-api.md) · [文件读取](evidence/t02-file-read-checkpoint.md) |
 | T03a 本地账号存储与密码规则 | 原生 Argon2id、PostgreSQL 事务迁移和首个管理员 CLI 已实现，真实数据库/双初始化竞争测试与 Web 回归 CI 通过；泄露密码库与生产安全放行仍待完善 | [T03a 真实测试](evidence/t03a-real-identity-checkpoint.md) · [用户指南](../../apps/web/README.md) |
 | T03b–T26 企业完整交付 | 尚未验收 | [任务列表](implementation-plan.md) 与 [验收矩阵](acceptance-matrix.md) |
 
-四格式浏览器编辑与版本保存仍未打通。既有单用户 Bearer + JSON 文件原型不允许用于生产；本阶段的 `sha256:` revision 只校验只读文件字节，不提供 CAS/写租约/历史版本能力。新客户端不得显示原生编辑或 AI 写入已支持。
+DOCX 已能在浏览器中编辑并保存段落文本。保存使用单进程基线、租约和幂等检查，不是 PostgreSQL 版本事务，也不是完整 Docs 功能。XLSX、PPTX、PDF 仍只导入下载。既有单用户 Bearer + JSON 文件原型不允许用于生产。新客户端不得把 AI 写入或四格式原生编辑显示为已支持。

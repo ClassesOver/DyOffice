@@ -64,13 +64,13 @@ docs/dyoffice/               当前计划及 inventory/ evidence/ adr/
 
 ## 2. 检查命令与执行纪律
 
-当前已存在 `npm run test:web`、`dev:web`、`start:web`。下列脚本由 T00/T02 创建后才可运行，不能在文档中宣称它们当前已存在：
+当前已存在 `npm run test:web`、`dev:web`、`start:web`，以及 T02 增加的 `npm run test:web:integration -- <test-file>`。该命令只运行 `apps/web/test/integration/` 下的一个测试文件。`api-compat` 是 HTTP 契约，不连接 PostgreSQL、S3 或 Redis。下表其余脚本仍未创建，不能宣称它们已存在：
 
 | 命令 | 责任 |
 | --- | --- |
 | `npm run test:web:legacy` | 原有 `apps/web/test/*.test.mjs` 回归 |
 | `npm run test:web:unit -- <test-file>` | Web Vitest 单元测试，允许文件筛选 |
-| `npm run test:web:integration -- <test-file>` | 真实 PostgreSQL/S3/Redis 的契约测试 |
+| `npm run test:web:integration -- <test-file>` | 运行一个 Web 集成测试文件。当前 `api-compat` 只覆盖 HTTP；PostgreSQL 身份测试仍在 identity workflow，不在此脚本的默认范围内 |
 | `npm run test:web:e2e -- <spec-file>` | 浏览器原生编辑与端到端流程 |
 | `npm run test:web:security` | 越权、SSRF、注入、上传、Token、安全边界 |
 | `npm run test:web:recovery` | 崩溃、断流、备份/恢复、升级回滚 |
@@ -113,6 +113,8 @@ docs/dyoffice/               当前计划及 inventory/ evidence/ adr/
 **依赖：** T01。**文件：** 新建 `apps/web/server/src/app.ts`、`config.ts`、`modules/health/routes.ts`、`test/integration/api-compat.test.ts`；逐步替代 `server/application.mjs`、`index.mjs`，保留迁移期原接口适配。
 
 **接口：** `buildApp(config): Promise<FastifyInstance>`，版本化 `/api/v1`，统一 Problem DTO 和请求 ID。
+
+**状态（2026-11-15，未完成）：** `buildApp` 壳已提供 live/ready、服务端请求 ID、Problem 错误、静态 Schema、单进程限流、请求体上限和关闭。未迁移路由返回 501，不假装旧接口已搬迁。`dev:web` / `start:web` 仍启动原来的开发令牌服务器。证据见 [t02-modular-api.md](evidence/t02-modular-api.md)。下面的复选框保持未勾选。
 
 - [ ] 固化旧文件/偏好/Admin 接口的授权、状态码和密钥脱敏测试。
 - [ ] 运行 `npm run test:web:integration -- api-compat.test.ts`，新增 API 未实现应 RED。

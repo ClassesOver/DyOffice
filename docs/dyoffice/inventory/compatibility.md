@@ -33,6 +33,8 @@ rather than equating it with runtime acceptance, an SBOM or an image digest.
 | Verification host | Node 24.22.1, Linux | This task's standalone checks and Web regressions execute here | CI Node 22 and production runtime still require their own results |
 | TypeScript | Root and Web locks 5.9.3 | Exact lock input available | Does not establish whole-repo typecheck success |
 | MCP SDK | Root lock 1.32.1; Web lock 1.32.2 | Two different installation contexts; Web server uses `apps/web` install | Do not claim protocol/client compatibility from package version or mocked handshake |
+| Web start/test scripts | `apps/web/package.json` scripts only | `dev`, `start`, and `test` load `tsx` so the server can import the DOCX engine sources. `test:web:integration` runs one named integration file | `tsx` comes from the workspace install. The boundary workflow uses `npm ci --ignore-scripts` and does not run Electron's postinstall |
+| Fastify | Web and root locks 5.12.8 | Locked for the modular API shell. `dev:web` still starts the legacy Node server | Not a production cutover, route migration, or security review of the framework |
 | Electron | Root lock 43.8.3 | Desktop dependency retained upstream | Web must not need Electron runtime; desktop version is not a server ABI guarantee |
 | Univer | `@univerjs/core` 0.25.1 | Existing spreadsheet UI dependency | Browser adapter, formula persistence and real Excel reopen pending |
 | PDF | PDFium 2.15.1, PDF.js 6.2.108, pdf-lib 1.17.1 | Parser/renderer package identities | WASM assets/workers/CSP, fonts and genuine text edit/export pending |
