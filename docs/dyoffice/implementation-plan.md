@@ -137,7 +137,7 @@ docs/dyoffice/               当前计划及 inventory/ evidence/ adr/
 
 ### T04 资源授权与 RLS
 
-**依赖：** T03。**文件：** `modules/policy/authorize.ts`、`db/context.ts`、`db/migrations/0002_rls.sql`、`test/integration/ownership-rls.test.ts`。
+**依赖：** T03。**文件：** `modules/policy/authorize.ts`、`db/context.ts`、`db/migrations/0003_rls.sql`、`test/integration/ownership-rls.test.ts`。
 
 **接口：** `withPrincipalTransaction(principal, fn)`、`authorize()`；角色不隐式包含文件所有权。
 
@@ -149,7 +149,7 @@ docs/dyoffice/               当前计划及 inventory/ evidence/ adr/
 
 ### T05 对象存储、上传与个人文件生命周期
 
-**依赖：** T04。**文件：** `storage/{object-store,s3,local-dev}.ts`、`modules/files/{routes,service,validation}.ts`、`db/migrations/0003_files.sql`、`test/integration/files.test.ts`。
+**依赖：** T04。**文件：** `storage/{object-store,s3,local-dev}.ts`、`modules/files/{routes,service,validation}.ts`、`db/migrations/0004_files.sql`、`test/integration/files.test.ts`。
 
 **接口：** `stageUpload(principal, fileMeta)`、`finishUpload(principal,uploadId)`、`openFile()`；上传引用绑定所有者。
 
@@ -161,7 +161,7 @@ docs/dyoffice/               当前计划及 inventory/ evidence/ adr/
 
 ### T06 保存事务、历史版本和单写者租约
 
-**依赖：** T05。**文件：** `modules/revisions/{service,routes}.ts`、`modules/leases/service.ts`、`outbox/service.ts`、`db/migrations/0004_revisions.sql`、`test/integration/revision-commit.test.ts`、`test/unit/save-generation.test.ts`。
+**依赖：** T05。**文件：** `modules/revisions/{service,routes}.ts`、`modules/leases/service.ts`、`outbox/service.ts`、`db/migrations/0005_revisions.sql`、`test/integration/revision-commit.test.ts`、`test/unit/save-generation.test.ts`。
 
 **接口：** `commitRevision()`、`acquireLease()/renewLease()/takeoverLease()`；文件修改基于 T01 SaveInput。
 

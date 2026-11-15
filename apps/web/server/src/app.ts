@@ -1,60 +1,60 @@
-import Fastify, { type FastifyInstance, type FastifyRequest, type FastifyReply } from 'fastify'
-import { METHODS } from 'node:http'
-import rateLimit from '@fastify/rate-limit'
-import { randomUUID } from 'node:crypto'
+import type { FastifyInstance, HTTPMethods } from 'fastify'
 import { createApplicationHandler } from '../application.mjs'
 import { isStoreReady } from '../health.mjs'
-import { sendJson } from '../http-response.mjs'
 import type { WebConfig } from './config.ts'
 import { registerHealthRoutes } from './modules/health/routes.ts'
 import { registerLegacyRoutes } from './modules/legacy/routes.ts'
-
-function sendSafeError(error: unknown, request: FastifyRequest, reply: FastifyReply) {
-  const errorStatus = (error as { statusCode?: number } | null)?.statusCode
-  const status = typeof errorStatus === 'number' && errorStatus >= 400 && errorStatus < 500
-    ? errorStatus : 500
-  for (const [name, value] of Object.entries(reply.getHeaders())) {
-    if (value !== undefined) reply.raw.setHeader(name, value)
-  }
-  reply.raw.setHeader('X-Request-ID', request.id)
-  reply.raw.setHeader('Referrer-Policy', 'no-referrer')
-  reply.hijack()
-  sendJson(reply.raw, status, { error: status === 500 ? '服务暂时不可用' : '请求无效' })
-}
+import { createApiShell } from './framework.ts'
+import type { IdentityStore } from './db/identity.ts'
+import { createPasswordService, type PasswordService } from './modules/auth/passwords.ts'
+import { createAccountService } from './modules/auth/service.ts'
+import { createSessionService, authError } from './modules/auth/sessions.ts'
+import { createCsrfService, cookies } from './modules/auth/csrf.ts'
+import { createLoginThrottle, type LoginLimits } from './modules/auth/throttle.ts'
+import { registerAuthRoutes } from './modules/auth/routes.ts'
 
 export async function buildApp(config: WebConfig): Promise<FastifyInstance> {
-  // Validate prototype credentials/production guard before any listener is created.
   const { handleRequest, store } = await createApplicationHandler(config)
-  const app = Fastify({
-    logger: false,
-    frameworkErrors: sendSafeError,
-    trustProxy: false,
-    requestIdHeader: false,
-    genReqId: () => randomUUID(),
-    bodyLimit: 1024 * 1024,
-    requestTimeout: 120_000,
-    connectionTimeout: 120_000,
-    return503OnClosing: true,
-  })
-  // Preserve safe rejection for every Node HTTP request method. CONNECT uses
-  // Node's separate tunnel event and is not an application request route.
-  for (const method of METHODS) {
-    if (method !== 'CONNECT' && !app.supportedMethods.includes(method)) {
-      app.addHttpMethod(method, { hasBody: true })
-    }
-  }
-  app.addHook('onRequest', async (request, reply) => {
-    reply.raw.setHeader('X-Request-ID', request.id)
-    reply.raw.setHeader('X-Content-Type-Options', 'nosniff')
-    reply.raw.setHeader('Referrer-Policy', 'no-referrer')
-  })
-  app.setErrorHandler(sendSafeError)
-  await app.register(rateLimit, {
-    global: true, max: config.rateLimit?.max ?? 600, timeWindow: config.rateLimit?.timeWindow ?? 60_000,
-    keyGenerator: request => request.ip,
-  })
+  const app = await createApiShell(config.rateLimit)
   registerHealthRoutes(app, () => isStoreReady(config.directory, store))
   registerLegacyRoutes(app, handleRequest)
+  await app.ready()
+  return app
+}
+
+export interface LocalWebConfig {
+  db: IdentityStore; deploymentId: string; origin: string; csrfKey: string; passwords?: PasswordService;
+  loginLimits?: LoginLimits; idleMs?: number; absoluteMs?: number; closeDb?: () => Promise<void>
+}
+export async function buildLocalApp(config: LocalWebConfig): Promise<FastifyInstance> {
+  if (process.env.NODE_ENV === 'production') throw new Error('Local runtime is not allowed in production before T04 RLS gates')
+  if ('userToken' in config || 'adminToken' in config) throw new Error('Local mode rejects development tokens')
+  async function assertReady() {
+    await config.db.assertCurrent()
+    const result = await config.db.pool.query('SELECT 1 FROM deployments WHERE id=$1 AND bootstrap_completed=true', [config.deploymentId])
+    if (!result.rowCount) throw new Error('Local deployment has not been bootstrapped')
+  }
+  await assertReady()
+  const passwords = config.passwords ?? await createPasswordService()
+  const accounts = createAccountService({ db: config.db, passwords, deploymentId: config.deploymentId })
+  const sessions = createSessionService({ db: config.db, accounts, deploymentId: config.deploymentId, idleMs: config.idleMs, absoluteMs: config.absoluteMs })
+  const csrf = createCsrfService({ db: config.db, deploymentId: config.deploymentId, origin: config.origin, key: config.csrfKey })
+  const throttle = createLoginThrottle(config.db, config.deploymentId, config.csrfKey, config.loginLimits)
+  const app = await createApiShell()
+  if (config.closeDb) app.addHook('onClose', () => config.closeDb!())
+  registerHealthRoutes(app, async () => { try { await assertReady(); return true } catch { return false } })
+  registerAuthRoutes(app, { sessions, csrf, throttle })
+  app.route({
+    method: app.supportedMethods as HTTPMethods[], url: '/*',
+    onRequest: async request => {
+      if (request.url.startsWith('/api/')) {
+        await sessions.authenticate(cookies(request).session ?? '')
+        throw authError(501) // T04+ must implement isolated resources; never fall back to JSON.
+      }
+      throw authError(404)
+    },
+    handler: async () => { throw authError(404) },
+  })
   await app.ready()
   return app
 }

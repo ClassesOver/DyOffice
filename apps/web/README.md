@@ -88,3 +88,12 @@ T02 仍需逐领域迁移旧路由与完整 `/api/v1` 契约；T03 本地账号�
 账号集成测试需要 `DYOFFICE_TEST_DATABASE_URL` 指向隔离的 `dyoffice_test` 或 `dyoffice_test_*` PostgreSQL 数据库；缺少数据库会失败，不会跳过或换成内存实现。Linux/macOS 的 CLI 终端回归还需要 Python 3 标准库。`npm run test:web:integration` 运行账号、PTY 和 Fastify 测试；CI 提供独立 PostgreSQL 17 服务。
 
 这些模块还没有提供 Cookie 会话或账号登录界面，也没有接管旧 JSON 个人数据。开发 Token 启动路径及 production 拒绝保持生效；完整进度与实际证据见 `docs/dyoffice/evidence/t03a-account-bootstrap.md`。
+
+
+### T03b 本地会话实验入口
+
+`DYOFFICE_AUTH_MODE=local` 启用独立的 PostgreSQL 会话 API。先用 CLI 初始化账号，并设置 `DYOFFICE_DATABASE_URL`、`DYOFFICE_DEPLOYMENT_ID`、准确的 `DYOFFICE_ORIGIN` 和至少 32 字节的随机持久化 `DYOFFICE_CSRF_KEY`；取消开发用户/Admin Token 后启动。它提供登录挑战、登录/退出、`me`、重新认证、个人会话查询/撤销，未实现的个人文件和配置路由返回 501，不访问旧 JSON 数据。网页登录/工作区界面与 T04 RLS 尚待接入，production 仍拒绝启动。
+
+浏览器流程先 GET `/api/v1/auth/csrf`，保留服务端 HttpOnly Cookie，把返回的 `csrfToken` 放入 `X-CSRF-Token` 后 POST `/api/v1/auth/login`；写请求要求准确的同源 Origin。登录响应只返回用户 DTO 与 CSRF proof，实际会话令牌只在 Secure Cookie。使用与 Origin 对齐的 HTTPS 入口验证浏览器，不以手动传 Cookie 代替验证。
+
+`npm run test:web:e2e` 使用真实 Chromium + TLS + PostgreSQL 检查 Cookie 与退出；先运行 `apps/web/node_modules/.bin/playwright install chromium --with-deps`。安全边界、实测结果和一个已记录的小写/大写 UUID 清 Cookie 限制见 `docs/dyoffice/evidence/t03b-local-sessions.md`。

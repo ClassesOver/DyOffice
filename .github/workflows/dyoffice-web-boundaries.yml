@@ -62,6 +62,8 @@ jobs:
           node-version: 22
       - name: Install Web gate dependencies without Electron
         run: npm ci --prefix apps/web --workspaces=false --ignore-scripts --include=dev
+      - name: Install Chromium for TLS session acceptance
+        run: apps/web/node_modules/.bin/playwright install chromium --with-deps
       - name: Test compatibility baseline and CI coverage
         run: node --test tools/dyoffice/*.test.mjs
       - name: Reject unreviewed dependency and font baseline drift
@@ -94,5 +96,7 @@ jobs:
         run: npm run test:web:build
       - name: Test Fastify API compatibility and shutdown
         run: npm run test:web:integration
+      - name: Test browser session lifecycle over TLS
+        run: npm run test:web:e2e
       - name: Test legacy Web API
         run: npm run test:web

@@ -12,7 +12,7 @@ No DOCX editor, shared contract, dependency lock, CI or application source is ch
 
 ## Implementation prerequisites and file boundary
 
-Use the existing planned modules: `server/src/modules/auth/{passwords,sessions,service,routes,throttle,csrf}.ts`, `modules/admin/users/`, `modules/policy/authorize.ts`, `db/context.ts`, and `0001_identity.sql`/`0002_rls.sql`. Add `test/integration/{auth-session,ownership-rls,revocation-race}.test.ts` and disposable PostgreSQL fixtures. Coordinate dependency/CI changes after the current DOCX candidate; do not overwrite its manifests.
+Use the existing planned modules: `server/src/modules/auth/{passwords,sessions,service,routes,throttle,csrf}.ts`, `modules/admin/users/`, `modules/policy/authorize.ts`, `db/context.ts`, and `0001_identity.sql`/`0003_rls.sql`. Add `test/integration/{auth-session,ownership-rls,revocation-race}.test.ts` and disposable PostgreSQL fixtures. Coordinate dependency/CI changes after the current DOCX candidate; do not overwrite its manifests.
 
 Keep the approved password controls unchanged: Argon2id with independent salts and measured resource limits; local normalized username unique within deployment; no default password/public Admin registration; secure server sessions, Origin/CSRF, layered throttle and generic login errors. `users.id` is the stable identity; no email-based merging. Concurrent account creation must use the database uniqueness constraint, not a prior existence check alone. Tests assert only one account/workspace is provisioned for duplicate normalized names.
 
@@ -61,3 +61,8 @@ Use real PostgreSQL with a migration connection and a separate restricted runtim
 Independent security review required explicit lock ordering/race tests, uniqueness under concurrency and restricted short-lived secrets; all are reflected here. Existing development auth/route/legacy tests were rerun, **10/10 passed**. They are not evidence of the planned local-account system.
 
 The current executor has no `docker`, `psql` or `postgres` executable. No real PostgreSQL migration, RLS, local-account login or revocation-race test has been executed. Provision a disposable database/test harness as the first implementation step. All T03/T04 acceptance above remains pending; no fake database or external-IdP acceptance is claimed.
+
+
+### 后续环境与实现记录（2026-11-15）
+
+上面的无 Docker/PostgreSQL 记录属于本计划初稿时的执行环境。当前执行环境已提供隔离 PostgreSQL 17；T03a/T03b 已跑真实账号、会话、登录期间停用、等待期间撤销和 Chromium TLS 回归，见 [T03b 证据](../evidence/t03b-local-sessions.md)。这些测试仍使用迁移权限连接，不构成这里要求的 T04 受限业务角色、FORCE RLS 或完整业务写入撤销竞态验收。

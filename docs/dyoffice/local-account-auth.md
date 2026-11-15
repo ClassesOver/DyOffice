@@ -119,3 +119,8 @@ DyOffice **不引入 OIDC、Keycloak、SAML、LDAP 或第三方身份提供方**
 本文件是**新决策的唯一认证专项设计入口**。若未来考虑多因素认证，应单独批准为本地账号的可选第二因素，不应以此自动引回 OIDC/外部身份平台。需要新增 SSO 必须经过范围变更，不属于当前需求。
 
 本轮只修改架构/任务/验收文档；**未声称已创建数据库用户表、已实现生产登录、密码存储或已通过安全测试**。现有 `apps/web` 开发 Token 服务保持不变并继续禁止 production 启动。第一项真实交付从 T03a 的测试及迁移开始。
+
+
+## 当前实现进度（2026-11-15）
+
+T03a 账号/密码/bootstrap 与 T03b 独立本地会话 API 已有实现和真实 PostgreSQL 测试；Chromium + TLS 已验证 Cookie/登录/退出。详见 [T03a](evidence/t03a-account-bootstrap.md) 与 [T03b](evidence/t03b-local-sessions.md)。本文的完整目标接口、Admin 生命周期、受限认证查询角色、RLS、生产与工作区 UI 仍需后续任务验收，不能把实验登录等同于完整身份系统完成。

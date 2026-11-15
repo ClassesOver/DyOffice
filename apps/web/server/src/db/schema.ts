@@ -18,3 +18,7 @@ export const passwordActionTokens = pgTable('password_action_tokens', {
   expiresAt: at('expires_at').notNull(), consumedAt: at('consumed_at'), createdAt: at('created_at').notNull(), issuedBy: uuid('issued_by').notNull(),
 })
 export const authAuditEvents = pgTable('auth_audit_events', { id: uuid('id').primaryKey(), deploymentId: uuid('deployment_id').notNull(), actorId: uuid('actor_id').notNull(), event: text('event').notNull(), createdAt: at('created_at').notNull() })
+
+export const loginChallenges = pgTable('login_challenges', { deploymentId: uuid('deployment_id').notNull(), tokenHash: text('token_hash').primaryKey(), expiresAt: at('expires_at').notNull(), consumedAt: at('consumed_at') })
+export const loginThrottles = pgTable('login_throttles', { deploymentId: uuid('deployment_id').notNull(), kind: text('kind').notNull(), keyHash: text('key_hash').notNull(), attempts: integer('attempts').notNull(), strikes: integer('strikes').notNull(), windowStartedAt: at('window_started_at').notNull(), blockedUntil: at('blocked_until') })
+export const authSecurityEvents = pgTable('auth_security_events', { id: uuid('id').primaryKey(), deploymentId: uuid('deployment_id').notNull(), actorId: uuid('actor_id'), requestId: uuid('request_id').notNull(), sessionId: uuid('session_id'), accountKey: text('account_key'), event: text('event').notNull(), createdAt: at('created_at').notNull() })

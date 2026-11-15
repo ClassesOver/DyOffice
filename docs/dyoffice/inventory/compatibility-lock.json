@@ -306,20 +306,20 @@
       "size": 2630
     },
     "apps/web/package-lock.json": {
-      "sha256": "e4659ab19dbf90cdc421c29ec1b8613e4dd6195ff26adf3fc06818bd46d3f221",
-      "size": 117647
+      "sha256": "e6472367b27566f54f17140b1cc01048a4e35ec9d95e47c415944afb9bd39d1c",
+      "size": 119681
     },
     "apps/web/package.json": {
-      "sha256": "f7a718998245f3430a89779a7b77179c5733922c42d945c00529edf9da30ba1f",
-      "size": 924
+      "sha256": "546a10198f8eb0af25207b7e2dee188b8c583e4d6c5dcf8fa8de04166486ccce",
+      "size": 1036
     },
     "package-lock.json": {
-      "sha256": "1589b2b999dba582042a8ac511dd1b82ed816f50e9942a6fc56774a546a64e63",
-      "size": 626074
+      "sha256": "2a3a805869c11d972bd1c8a975d5a5b1ea7e1825d6aaac8d8c006f445a3c89d5",
+      "size": 628120
     },
     "package.json": {
-      "sha256": "c79f3ea77f5c58b1402666c809d4c002b718f9a8856f26b4ef898aea2f01c433",
-      "size": 6810
+      "sha256": "570c9bda764aa6ff06ff4e39b81aa91a3b298778ffdf7566ecc01c440adf14bc",
+      "size": 6887
     },
     "packages/ui/src/fonts/Carlito-Bold.ttf": {
       "sha256": "ed778b78ce652f5b17647344fb9a4c4dcb2e6f8bafe75a0366300da7f8c199ac",
@@ -381,6 +381,10 @@
       "@node-rs/argon2": {
         "version": "2.2.2",
         "integrity": "sha512-NtdlPPWtR5U4BxX5EGJYza+UklNaoWORmkaKCMqf/nyKeXWKVwNt8KfQoRpNT7OB1DcEwmePafO4wZyW+sbfCQ=="
+      },
+      "@playwright/test": {
+        "version": "1.61.1",
+        "integrity": "sha512-8nKv6+0RJSL9FE4jYOEGXnPeM/Hg12qZpmqzZjRh3qM0Y7c3z1mrOTfFLids72RDQYVh9WpLEfR5WdpNX4fkig=="
       },
       "@types/node": {
         "version": "22.20.5",
