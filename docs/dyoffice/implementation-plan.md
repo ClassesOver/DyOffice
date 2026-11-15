@@ -207,6 +207,8 @@ docs/dyoffice/               当前计划及 inventory/ evidence/ adr/
 
 2026-11-15 后续接缝：真实 Rust XLSX archive roundtrip、开发环境容器 OS 隔离与资源耗尽测试已实现，见 [T08b 证据](evidence/t08b-native-sandbox.md)。T06 同事务输出/任务成功、公开 API/守护循环及 revision_outbox 消费仍待实现；T08 继续执行。
 
+2026-11-15 后续接缝：受限 job principal、上传/租约用途及 attempt fencing、T06 输出与任务成功同事务核心已实现，见 [T08c 证据](evidence/t08c-atomic-job-output.md)。原生 controller/heartbeat 到该核心的完整链、公开 API/守护循环及 revision_outbox 消费继续执行；T08 未标记完成。
+
 ### T09 XLSX 原生 Web 适配
 
 **依赖：** T07/T08。**文件：** `apps/web/src/editors/sheets-entry.tsx`、`worker/src/jobs/xlsx.ts`、`test/e2e/sheets-roundtrip.spec.ts`；适配 `apps/sheets/src/renderer` 与现有 xlsx-gateway/native 边界。

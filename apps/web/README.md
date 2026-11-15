@@ -201,7 +201,7 @@ npm run dev:web
 
 ### T08a 持久任务与投递基础（内部接缝）
 
-当前迁移版本为 7。更新服务前用独立非超级用户 owner 执行 `npm run provision:runtime`，安装全部不可变迁移和最小授权。已有 v6 会话、对象版本、租约、幂等回执、outbox 和配额保留；迁移没有重写前六个 SQL 文件。
+T08a 建立版本 7 的任务表；当前迁移版本为 9，新增任务输出与租约用途约束见下文 T08c。更新服务前用独立非超级用户 owner 执行 `npm run provision:runtime`，安装全部不可变迁移和最小授权。已有 v6 会话、对象版本、租约、幂等回执、outbox 和配额保留；迁移没有重写前六个 SQL 文件。
 
 内部任务服务将 `native_jobs` 和 `job_outbox` 同事务创建，按用户限制活动任务数、按键幂等重试；输入只允许本人文件的版本 UUID `artifactId`，当前基线和会话/authVersion 由服务器捕获。取消、deadline、执行次数、领取 hash/epoch 均以 PostgreSQL 为准。任务继承原认证事务的空闲超时，不授予更长的后台会话。
 
@@ -216,3 +216,7 @@ npm run dev:web
 ### T08b 原生 XLSX 与开发环境隔离
 
 已增加真实 Rust XLSX archive roundtrip 和开发环境 Docker OS 沙箱，构建/测试入口见 [Worker 说明](worker/README.md)。隔离限制、真实资源耗尽测试及边界见 [T08b 证据](../../docs/dyoffice/evidence/t08b-native-sandbox.md)。此阶段尚未接入公开任务路由、调度守护循环或 T06 同事务输出/任务成功提交；T08 仍在进行，production 仍关闭。
+
+### T08c 受限任务输出事务
+
+内部任务凭据已复用 T06 文件/上传/租约/CAS/配额/回执/outbox 保存核心，在同一事务写入输出版本、释放任务租约并标记成功。浏览器与任务租约显式分用途；已完成、旧 attempt、取消或过期凭据不能继续写。当前版本 9，更新前以 owner 运行上述 `npm run provision:runtime` 安装不可变迁移和新增 business 函数授权。实际数据库回滚、提交后进程死亡与升级证据见 [T08c](../../docs/dyoffice/evidence/t08c-atomic-job-output.md)。真实 Rust 适配器到此核心的常驻执行链、公开 API 和 revision_outbox 消费仍待继续实现。

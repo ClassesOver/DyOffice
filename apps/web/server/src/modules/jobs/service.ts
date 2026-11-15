@@ -11,7 +11,7 @@ export function createJobService({ transactions,enabledTypes = [],maxActiveJobs 
   if (!Number.isSafeInteger(maxActiveJobs) || maxActiveJobs < 1 || maxActiveJobs > 1000 || !Number.isSafeInteger(maxAttempts) || maxAttempts < 1 || maxAttempts > 10 || !Number.isSafeInteger(deadlineMs) || deadlineMs < 100 || deadlineMs > 3600_000 || !Number.isSafeInteger(idleMs) || idleMs < 1 || idleMs > 2592000000) throw new Error('Invalid job policy')
   const enabled = new Set(enabledTypes)
   for (const type of enabled) if (!/^(docx|xlsx|pptx|pdf)\.[a-z][a-z0-9_]{0,31}$/.test(type)) throw new Error('Invalid job type')
-  const run = <T>(token: string,write: boolean,fn: (c: PoolClient,p: BusinessPrincipal) => Promise<T>) => runFileTransaction(transactions,token,write ? 'files:write' : 'files:read',fn)
+  const run = <T>(token: string,write: boolean,fn: (c: PoolClient,p: BusinessPrincipal) => Promise<T>) => runFileTransaction(transactions,token,write ? 'files:write' : 'files:read',(c,p) => { if (p.job) throw authError(404); return fn(c,p) })
   return {
     async enqueueJob(token: string,type: string,input: { artifactId: string },idempotencyKey: string) {
       if (!enabled.has(type) || !input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).some(key => key !== 'artifactId') || typeof idempotencyKey !== 'string' || !/^[A-Za-z0-9_-]{8,128}$/.test(idempotencyKey)) throw authError(400)
@@ -42,7 +42,11 @@ export function createJobService({ transactions,enabledTypes = [],maxActiveJobs 
     cancelJob: (token: string,id: string) => run<ReturnType<typeof dto>>(token,true,async (c,p) => {
       const row = (await c.query<Row>('SELECT * FROM native_jobs WHERE deployment_id=$1 AND owner_id=$2 AND id=$3 FOR UPDATE',[...scope(p),uuid(id)])).rows[0]
       if (!row) throw authError(404)
-      if (['queued','running'].includes(row.state)) return dto((await c.query<Row>("UPDATE native_jobs SET state='cancelled',error_code='CANCELLED',finished_at=clock_timestamp(),claim_epoch=LEAST(claim_epoch+1,9007199254740991),claim_hash=NULL,lease_until=NULL WHERE id=$1 RETURNING *",[row.id])).rows[0])
+      if (['queued','running'].includes(row.state)) {
+        const cancelled = (await c.query<Row>("UPDATE native_jobs SET state='cancelled',error_code='CANCELLED',finished_at=clock_timestamp(),claim_epoch=LEAST(claim_epoch+1,9007199254740991),claim_hash=NULL,lease_until=NULL WHERE id=$1 RETURNING *",[row.id])).rows[0]
+        await c.query('UPDATE edit_leases SET expires_at=clock_timestamp() WHERE deployment_id=$1 AND owner_id=$2 AND job_id=$3',[...scope(p),row.id])
+        return dto(cancelled)
+      }
       return dto(row)
     }),
   }
