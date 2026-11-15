@@ -1,4 +1,4 @@
-import argon2 from 'argon2'
+import * as argon2 from 'argon2'
 import { validateNewPassword, inspectArgon2idHash } from './credential-policy.mjs'
 
 const ARGON2_OPTIONS = Object.freeze({
