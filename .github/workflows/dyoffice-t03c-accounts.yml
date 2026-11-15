@@ -4,10 +4,14 @@ on:
   push:
     branches: [feat/dyoffice-t03c-account-lifecycle]
     paths:
-      - 'apps/web/server/auth/account-lifecycle.mjs'
-      - 'apps/web/server/db/migrations/0003_account_lifecycle_audit.sql'
+      - 'apps/web/server/auth/**'
+      - 'apps/web/server/db/**'
       - 'apps/web/test/account-lifecycle.test.mjs'
       - 'apps/web/test/integration/account-lifecycle.postgres.test.mjs'
+      - 'apps/web/test/integration/local-identity.test.mjs'
+      - 'apps/web/test/integration/local-login.postgres.test.mjs'
+      - 'apps/web/package*.json'
+      - 'package*.json'
       - '.github/workflows/dyoffice-t03c-accounts.yml'
   pull_request:
     paths:
@@ -15,7 +19,10 @@ on:
       - 'apps/web/server/db/**'
       - 'apps/web/test/account-lifecycle.test.mjs'
       - 'apps/web/test/integration/account-lifecycle.postgres.test.mjs'
+      - 'apps/web/test/integration/local-identity.test.mjs'
+      - 'apps/web/test/integration/local-login.postgres.test.mjs'
       - 'apps/web/package*.json'
+      - 'package*.json'
       - '.github/workflows/dyoffice-t03c-accounts.yml'
   workflow_dispatch:
 
@@ -29,7 +36,7 @@ concurrency:
 jobs:
   account-lifecycle:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     services:
       postgres:
         image: postgres:16
@@ -55,7 +62,9 @@ jobs:
           node --check apps/web/test/account-lifecycle.test.mjs
           node --check apps/web/test/integration/account-lifecycle.postgres.test.mjs
           node --test apps/web/test/account-lifecycle.test.mjs
-      - name: Install locked Web dependencies without Electron
+      - name: Install workspace dependencies without launching Electron
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Install locked Web dependencies with native Argon2id
         run: npm ci --prefix apps/web --workspaces=false --include=dev --no-audit --no-fund
       - name: Real PostgreSQL activation, reset, revocation, races and rollback
         env:

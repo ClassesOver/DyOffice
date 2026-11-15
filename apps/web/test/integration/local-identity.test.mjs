@@ -15,7 +15,7 @@ test('real PostgreSQL migration, Argon2id password verification and concurrent f
   const hasher = createPasswordHasher({ maxConcurrent: 2 })
   const password = 'Some really long 🧠 passphrase 2026'
   try {
-    assert.deepEqual(await applyMigrations(pool), ['0001_identity.sql','0002_login_rate_limits.sql'])
+    assert.deepEqual(await applyMigrations(pool), ['0001_identity.sql','0002_login_rate_limits.sql','0003_account_lifecycle_audit.sql'])
     assert.deepEqual(await applyMigrations(pool), [])
 
     const hash = await hasher.hashPassword(password)
