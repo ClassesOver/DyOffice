@@ -118,4 +118,4 @@ DyOffice **不引入 OIDC、Keycloak、SAML、LDAP 或第三方身份提供方**
 
 本文件是**新决策的唯一认证专项设计入口**。若未来考虑多因素认证，应单独批准为本地账号的可选第二因素，不应以此自动引回 OIDC/外部身份平台。需要新增 SSO 必须经过范围变更，不属于当前需求。
 
-本轮只修改架构/任务/验收文档；**未声称已创建数据库用户表、已实现生产登录、密码存储或已通过安全测试**。现有 `apps/web` 开发 Token 服务保持不变并继续禁止 production 启动。第一项真实交付从 T03a 的测试及迁移开始。
+**截至 2026-11-16：** T03a 已提交 PostgreSQL 身份表迁移、真实 Argon2id 哈希/验证、数据库迁移事务执行器和一次性管理员初始化 CLI，并取得 [PostgreSQL + Argon2id 常规 CI 通过证据](https://github.com/ClassesOver/DyOffice/actions/runs/43738397505)。详见 [T03a 实际实现与剩余风险](evidence/t03a-real-identity-checkpoint.md)。这**不代表**已实现账号密码网页登录、正式会话、Admin 用户管理、RLS、完整泄露密码黑名单或已通过生产安全评审。现有 `apps/web` 开发 Token 服务仍保持不变，并继续拒绝 production 启动。
