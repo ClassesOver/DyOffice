@@ -68,7 +68,17 @@ jobs:
           --health-interval 5s --health-timeout 3s --health-retries 20
           --tmpfs=/data:rw,uid=10001,gid=10001,size=512m
           --tmpfs=/logs:rw,uid=10001,gid=10001,size=32m
+      redis:
+        image: redis@sha256:7f7d30b7fdd09467bac58198a1f166dd69789d348d4fe859cccb20e0cf287fbe
+        ports:
+          - 6379:6379
+        options: >-
+          --memory=128m --cpus=1 --read-only --user=999:999
+          --tmpfs=/data:rw,uid=999,gid=999,size=32m
+          --health-cmd "redis-cli ping"
+          --health-interval 5s --health-timeout 3s --health-retries 10
     env:
+      DYOFFICE_TEST_REDIS_URL: redis://127.0.0.1:6379/15
       DYOFFICE_TEST_S3_ENDPOINT: http://127.0.0.1:9000
       DYOFFICE_TEST_S3_ACCESS_KEY: dyoffice-ci-s3-test
       DYOFFICE_TEST_S3_SECRET_KEY: dyoffice-ci-s3-test-only-secret
@@ -114,6 +124,8 @@ jobs:
         run: npm run test:web:build
       - name: Test Fastify API compatibility and shutdown
         run: npm run test:web:integration
+      - name: Test durable PostgreSQL jobs and real BullMQ recovery
+        run: npm run test:web:jobs
       - name: Test immutable storage and bounded structural validation
         run: npm run test:web:storage
       - name: Test browser session lifecycle over TLS

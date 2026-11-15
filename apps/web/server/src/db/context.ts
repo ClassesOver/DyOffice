@@ -9,6 +9,7 @@ export function createPrincipalTransactions({ pool, deploymentId, idleMs = 8 * 3
   deploymentId = deploymentId.toLowerCase()
   let admitted: ReturnType<typeof assertRuntimePool> | undefined
   return {
+    get sessionIdleMs() { return idleMs },
     async withPrincipalTransaction<T>(credential: SessionCredential, operation: (connection: PoolClient, principal: BusinessPrincipal) => Promise<T>): Promise<T> {
       await (admitted ??= assertRuntimePool(pool, 'business'))
       if (credential?.kind !== 'session' || typeof credential.token !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(credential.token)) throw authError()

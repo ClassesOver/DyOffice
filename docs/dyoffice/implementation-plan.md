@@ -203,6 +203,8 @@ docs/dyoffice/               当前计划及 inventory/ evidence/ adr/
 - [ ] GREEN；原生工具被杀不会击穿 API 进程；已提交任务不重复写版本。
 - [ ] 提交 `feat(jobs): add durable isolated native execution`。
 
+2026-11-15 接缝进展：内部 PostgreSQL 任务/outbox、独立 worker 角色、幂等入队、领取 fencing 与真实 BullMQ 重建投递已实现，见 [T08a 证据](evidence/t08a-durable-jobs.md)。公开路由、原生 executor/OS 沙箱、T06 同事务输出提交和 revision_outbox 消费仍待后续实现，T08 未标记完成。
+
 ### T09 XLSX 原生 Web 适配
 
 **依赖：** T07/T08。**文件：** `apps/web/src/editors/sheets-entry.tsx`、`worker/src/jobs/xlsx.ts`、`test/e2e/sheets-roundtrip.spec.ts`；适配 `apps/sheets/src/renderer` 与现有 xlsx-gateway/native 边界。

@@ -132,7 +132,7 @@ T02 仍需逐领域迁移旧路由与完整 `/api/v1` 契约；本地账号、�
 
 ### T05b 实验文件 API
 
-先用迁移 owner 运行 `npm run provision:runtime` 安装 migration 5 和新表最小授权，再使用前述两套受限运行连接启动。文件功能默认关闭；在隔离开发环境设置 `DYOFFICE_FILE_API=experimental`，并选择一个存储：
+先用迁移 owner 运行 `npm run provision:runtime` 安装当前全部不可变迁移和新表最小授权，再使用前述两套受限运行连接启动。文件功能默认关闭；在隔离开发环境设置 `DYOFFICE_FILE_API=experimental`，并选择一个存储：
 
 - 本地盘：`DYOFFICE_OBJECT_STORE=local-dev`，显式指定独立目录 `DYOFFICE_OBJECT_DIRECTORY`。不能指向旧原型状态目录，也不用于多副本/HA。
 - S3：`DYOFFICE_OBJECT_STORE=s3`、`DYOFFICE_S3_BUCKET`、`DYOFFICE_S3_REGION`；使用标准 AWS SDK 环境凭据或运行角色。可选 `DYOFFICE_S3_ENDPOINT`、`DYOFFICE_S3_FORCE_PATH_STYLE=true|false`。自定义非 loopback endpoint 必须 HTTPS，URL 不允许用户信息或查询秘密。bucket 需预先创建并保持私有，启动检查 HeadBucket；本服务不创建生产 bucket 或 IAM/加密策略。
@@ -183,7 +183,7 @@ T05b 提供原件生命周期；下文 T06 增加受控的版本保存 API。未
 
 ### T07 原生 DOCX 浏览器实验入口
 
-在上述 local 会话、migration 6、文件实验 API 和 HTTPS Origin 配置完成后，使用 Node 22 在仓库根目录执行：
+在上述 local 会话、当前全部迁移、文件实验 API 和 HTTPS Origin 配置完成后，使用 Node 22 在仓库根目录执行：
 
 ```sh
 npm ci --ignore-scripts --include=dev
@@ -198,3 +198,17 @@ npm run dev:web
 页面复用 GenOffice 的 Tiptap 渲染器、DOCX parser/writer、分页和字体，通过会话 BrowserHost 保存；Ctrl+S 提交新版本。使用租约续期、显式接管、捕获基线 CAS 与幂等回执。失去租约后只读，未知保存结果保留草稿并先确认原请求；保存期间的新输入不会被旧响应清空。版本下载使用既有 content API，单个历史版本元数据新增 `GET /api/v1/files/:id/revisions/:revision`。
 
 这仍是纵向开发接缝：登录/文件列表 UI、AI、完整桌面功能替代、崩溃草稿恢复与外部 Word QA 尚待后续验收，production 拒绝保持生效。浏览器不能调用桌面文件路径或通用 IPC。测试使用真正的 Chromium + TLS + 独立 PostgreSQL：`npm run test:web:docs` 会先重新构建，需预先安装 Chromium 并配置隔离的 `DYOFFICE_TEST_DATABASE_URL`。类型检查为 `npm run typecheck:web:docs`；现有 Docs 与 docx-engine 测试必须使用 Node 22。
+
+### T08a 持久任务与投递基础（内部接缝）
+
+当前迁移版本为 7。更新服务前用独立非超级用户 owner 执行 `npm run provision:runtime`，安装全部不可变迁移和最小授权。已有 v6 会话、对象版本、租约、幂等回执、outbox 和配额保留；迁移没有重写前六个 SQL 文件。
+
+内部任务服务将 `native_jobs` 和 `job_outbox` 同事务创建，按用户限制活动任务数、按键幂等重试；输入只允许本人文件的版本 UUID `artifactId`，当前基线和会话/authVersion 由服务器捕获。取消、deadline、执行次数、领取 hash/epoch 均以 PostgreSQL 为准。任务继承原认证事务的空闲超时，不授予更长的后台会话。
+
+可由运维额外预建一个 `NOINHERIT NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOREPLICATION` 的 worker login，设置 `DYOFFICE_WORKER_ROLE` 后再次运行上述 owner CLI。worker 仅能 EXECUTE 五个固定任务函数，没有账号、文件或任务表的直接读取权限；auth/business 角色不能调用领取/派发函数或内部 helper。该可选角色不是生产运行许可，也不创建或更改任何密码。任务表 FORCE RLS；内部跨用户调度仅在受限函数内由独立迁移 owner 扫描任务元数据。
+
+已提供内部 BullMQ 队列/dispatcher：消息只有任务 ID 与投递 epoch。确认丢失会重新投递，已确认的 queued/过期 running 任务也会周期性重建提示，Redis 清空不会抹掉 PostgreSQL 任务。Redis 客户端连接失败有启动期限及有限请求重试，后台连接会重连。已完成 BullMQ 消息不等于业务任务成功；只有下一阶段真实原生输出与 T06 同事务完成后才能标记成功。
+
+此 checkpoint **未接入公开任务路由、调度守护循环、原生 executor、OS 沙箱或任务输出提交**，现有 Web 启动不要求 Redis，也不在启动时伪造成功任务。`docx.roundtrip` 仅为内部测试保留类型；T08 仍未完成。T06 的 revision_outbox 仍保留意图，不把当前 job dispatcher 当成文档索引事件已消费。
+
+`npm run test:web:jobs` 使用真实独立 PostgreSQL 与 Redis/BullMQ，另需 `DYOFFICE_TEST_REDIS_URL` 指向隔离 loopback Redis。测试仅操作随机专属队列 namespace；恢复测试清空该队列并真实断开客户端连接，不清空共享 Redis。测试 fixture 使用固定摘要 Redis 7.4，CI 也固定相同镜像。不得将测试连接指向业务服务。具体结果和开放项见 [T08a 证据](../../docs/dyoffice/evidence/t08a-durable-jobs.md)。

@@ -61,7 +61,8 @@
     "build:web:docs": "vite build --config apps/web/vite.docs.config.ts",
     "test:web:docs": "node --experimental-strip-types --test apps/web/test/native-docs/*.test.mjs",
     "pretest:web:docs": "npm run build:web:docs",
-    "typecheck:web:docs": "tsc -p apps/web/tsconfig.docs.json"
+    "typecheck:web:docs": "tsc -p apps/web/tsconfig.docs.json",
+    "test:web:jobs": "npm run test:jobs --prefix apps/web --workspaces=false"
   },
   "dependencies": {
     "ws": "^8.21.1"

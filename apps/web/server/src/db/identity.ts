@@ -55,7 +55,7 @@ export function connectIdentityStore(connectionString: string) {
 }
 
 async function loadMigrations() {
-  return Promise.all(['0001_identity.sql', '0002_auth_sessions.sql', '0003_account_lifecycle.sql', '0004_rls.sql', '0005_files.sql', '0006_revisions.sql'].map(async (file, i) => {
+  return Promise.all(['0001_identity.sql', '0002_auth_sessions.sql', '0003_account_lifecycle.sql', '0004_rls.sql', '0005_files.sql', '0006_revisions.sql', '0007_jobs.sql'].map(async (file, i) => {
     const sql = await readFile(new URL('./migrations/' + file, import.meta.url), 'utf8')
     return { version: i + 1, sql, digest: createHash('sha256').update(sql).digest('hex') }
   }))

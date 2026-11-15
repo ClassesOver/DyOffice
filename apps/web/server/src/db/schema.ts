@@ -33,3 +33,18 @@ export const uploads = pgTable('uploads', { id: uuid('id').primaryKey(), deploym
 export const editLeases = pgTable('edit_leases', { deploymentId: uuid('deployment_id').notNull(), ownerId: uuid('owner_id').notNull(), fileId: uuid('file_id').notNull(), sessionId: uuid('session_id').notNull(), authVersion: integer('auth_version').notNull(), editorId: uuid('editor_id').notNull(), leaseEpoch: bigint('lease_epoch', { mode: 'number' }).notNull(), expiresAt: at('expires_at').notNull() })
 export const revisionCommits = pgTable('revision_commits', { deploymentId: uuid('deployment_id').notNull(), ownerId: uuid('owner_id').notNull(), fileId: uuid('file_id').notNull(), idempotencyKey: text('idempotency_key').notNull(), requestHash: text('request_hash').notNull(), uploadId: uuid('upload_id').notNull(), revisionId: uuid('revision_id').notNull(), baseRevision: uuid('base_revision').notNull(), leaseEpoch: bigint('lease_epoch', { mode: 'number' }).notNull(), requestedSourceCommandId: uuid('requested_source_command_id'), createdAt: at('created_at').notNull() })
 export const revisionOutbox = pgTable('revision_outbox', { id: uuid('id').primaryKey(), deploymentId: uuid('deployment_id').notNull(), ownerId: uuid('owner_id').notNull(), fileId: uuid('file_id').notNull(), revisionId: uuid('revision_id').notNull(), eventType: text('event_type').notNull(), payload: jsonb('payload').$type<Record<string, unknown>>().notNull(), createdAt: at('created_at').notNull(), publishedAt: at('published_at') })
+
+export const nativeJobs = pgTable('native_jobs', {
+  id: uuid('id').primaryKey(), deploymentId: uuid('deployment_id').notNull(), ownerId: uuid('owner_id').notNull(),
+  sessionId: uuid('session_id').notNull(), authVersion: integer('auth_version').notNull(), idleMs: bigint('idle_ms', { mode: 'number' }).notNull(),
+  fileId: uuid('file_id').notNull(), artifactId: uuid('artifact_id').notNull(), type: text('type').notNull(),
+  idempotencyKey: text('idempotency_key').notNull(), requestHash: text('request_hash').notNull(), state: text('state').notNull(),
+  attempts: integer('attempts').notNull(), maxAttempts: integer('max_attempts').notNull(), claimEpoch: bigint('claim_epoch', { mode: 'number' }).notNull(),
+  claimHash: text('claim_hash'), leaseUntil: at('lease_until'), resultRevision: uuid('result_revision'), errorCode: text('error_code'),
+  createdAt: at('created_at').notNull(), deadlineAt: at('deadline_at').notNull(), finishedAt: at('finished_at'),
+})
+export const jobOutbox = pgTable('job_outbox', {
+  jobId: uuid('job_id').primaryKey(), deploymentId: uuid('deployment_id').notNull(), ownerId: uuid('owner_id').notNull(),
+  deliveryEpoch: bigint('delivery_epoch', { mode: 'number' }).notNull(), leaseHash: text('lease_hash'), leaseUntil: at('lease_until'),
+  nextDeliveryAt: at('next_delivery_at').notNull(), lastSentAt: at('last_sent_at'),
+})

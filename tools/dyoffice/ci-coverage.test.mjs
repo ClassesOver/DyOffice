@@ -29,3 +29,9 @@ test('native DOCX gate builds the real renderer and tests it on Node 22 with Pos
   assert.match(native,/DYOFFICE_TEST_DATABASE_URL:/)
   assert.match(native,/image: postgres@sha256:/)
 })
+
+test('durable job gate uses real pinned Redis and runs PostgreSQL/BullMQ recovery tests', () => {
+  assert.match(workflow,/image: redis@sha256:[a-f0-9]{64}/)
+  assert.match(workflow,/DYOFFICE_TEST_REDIS_URL: redis:\/\/127\.0\.0\.1:6379\/15/)
+  assert.match(workflow,/run: npm run test:web:jobs/)
+})

@@ -11,7 +11,7 @@ async function main() {
     const { rows: [owner] } = await db.pool.query('SELECT rolsuper,rolbypassrls FROM pg_roles WHERE rolname=current_user')
     if (owner.rolsuper || owner.rolbypassrls) throw new Error('Non-superuser migration owner required')
     await db.migrate()
-    await provisionRuntimeRoles(db.pool, { authRole, businessRole })
+    await provisionRuntimeRoles(db.pool, { authRole, businessRole,workerRole: process.env.DYOFFICE_WORKER_ROLE })
     console.log('Runtime database grants installed. No login password was created or changed.')
   } finally { await close() }
 }
