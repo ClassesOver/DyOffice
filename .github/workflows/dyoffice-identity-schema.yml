@@ -52,6 +52,8 @@ jobs:
         env:
           DYOFFICE_TEST_DATABASE_URL: postgresql://dyoffice_test:local-ci-only-not-for-production@localhost:5432/dyoffice_identity_test
         run: node --test apps/web/test/integration/bootstrap-cli.test.mjs apps/web/test/integration/local-identity.test.mjs
+      - name: Ensure PostgreSQL client is installed
+        run: command -v psql >/dev/null || (sudo apt-get update && sudo apt-get install -y --no-install-recommends postgresql-client)
       - name: Exercise one-time administrator CLI against PostgreSQL
         env:
           DYOFFICE_DATABASE_URL: postgresql://dyoffice_test:local-ci-only-not-for-production@localhost:5432/dyoffice_identity_test
@@ -64,8 +66,6 @@ jobs:
             exit 1
           fi
           test "$(PGPASSWORD=local-ci-only-not-for-production psql -h localhost -U dyoffice_test -d dyoffice_identity_test -Atc "select count(*) from dyoffice_admin_bootstrap where deployment_id='99999999-9999-4999-8999-999999999999'")" = 1
-      - name: Ensure PostgreSQL client is installed
-        run: command -v psql >/dev/null || (sudo apt-get update && sudo apt-get install -y --no-install-recommends postgresql-client)
       - name: Verify identity constraints on real PostgreSQL
         env:
           PGHOST: localhost
