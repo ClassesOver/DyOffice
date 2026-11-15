@@ -8,7 +8,7 @@ import { join } from 'node:path'
 const exec = promisify(execFile)
 const MAX_FILE = 32 * 1024 * 1024
 const nativeCommands = new Set(['open','read_range','recalc_cells','save_archive','close'])
-const probeCommands = new Set(['probe','network','pids','sleep','busy','allocate','flood','output','symlink'])
+const probeCommands = new Set(['park','probe','network','pids','sleep','busy','allocate','flood','output','symlink'])
 let active = 0, activeMemory = 0
 export class SandboxError extends Error {
   readonly code: string
@@ -61,10 +61,10 @@ export function createSandboxProcess({ image,allowedCommands,limits = {} }: { im
         const commands = metadata.Config.Cmd?.[0] === 'xlsx' ? nativeCommands : metadata.Config.Cmd?.[0] === 'probe' ? probeCommands : null
         if (!commands || entry?.length!==1 || entry[0]!=='/usr/local/bin/supervisor' || metadata.Config.Cmd?.length!==1 || Object.keys(metadata.Config.Volumes ?? {}).length || [...permitted].some(value => !commands.has(value))) throw new SandboxError('UNTRUSTED_IMAGE')
         check()
-        created = command(['create','-i','--init','--pull=never','--name',name,'--label','dyoffice.sandbox=true','--user','10001:10001','--workdir','/work','--network','none','--read-only','--cap-drop','ALL','--security-opt','no-new-privileges','--memory',policy.memoryMiB+'m','--memory-swap',policy.memoryMiB+'m','--cpus',String(policy.cpus),'--pids-limit',String(policy.pids),'--ulimit','core=0:0','--ulimit','nofile=64:64','--ulimit',`cpu=${policy.cpuSeconds}:${policy.cpuSeconds+1}`,'--ulimit',`fsize=${MAX_FILE}:${MAX_FILE}`,'--tmpfs','/work:rw,noexec,nosuid,size=128m,uid=10001,gid=10001,mode=0700','--env','LANG=C.UTF-8','--env','TMPDIR=/work',image])
+        created = command(['create','--rm','-i','--init','--pull=never','--name',name,'--label','dyoffice.sandbox=true','--user','10001:10001','--workdir','/work','--network','none','--read-only','--cap-drop','ALL','--security-opt','no-new-privileges','--memory',policy.memoryMiB+'m','--memory-swap',policy.memoryMiB+'m','--cpus',String(policy.cpus),'--pids-limit',String(policy.pids),'--ulimit','core=0:0','--ulimit','nofile=64:64','--ulimit',`cpu=${policy.cpuSeconds}:${policy.cpuSeconds+1}`,'--ulimit',`fsize=${MAX_FILE}:${MAX_FILE}`,'--tmpfs','/work:rw,noexec,nosuid,size=128m,uid=10001,gid=10001,mode=0700','--env','LANG=C.UTF-8','--env','TMPDIR=/work','--env','DYOFFICE_WALL_MS=' + policy.wallMs,image])
         await created; check()
         const [container] = JSON.parse((await command(['inspect',name])).stdout), host = container.HostConfig
-        if (container.Config.User!=='10001:10001' || host.NetworkMode!=='none' || host.Init!==true || !host.ReadonlyRootfs || host.Privileged || host.PidMode==='host' || host.IpcMode==='host' || !host.CapDrop?.includes('ALL') || !host.SecurityOpt?.includes('no-new-privileges') || host.Memory!==policy.memoryMiB*1024*1024 || host.MemorySwap!==host.Memory || host.PidsLimit!==policy.pids || (host.Binds?.length ?? 0) || (host.Mounts?.length ?? 0)) throw new SandboxError('INVALID_CONTAINER_POLICY')
+        if (container.Config.User!=='10001:10001' || host.NetworkMode!=='none' || host.Init!==true || host.AutoRemove!==true || !host.ReadonlyRootfs || host.Privileged || host.PidMode==='host' || host.IpcMode==='host' || !host.CapDrop?.includes('ALL') || !host.SecurityOpt?.includes('no-new-privileges') || host.Memory!==policy.memoryMiB*1024*1024 || host.MemorySwap!==host.Memory || host.PidsLimit!==policy.pids || (host.Binds?.length ?? 0) || (host.Mounts?.length ?? 0)) throw new SandboxError('INVALID_CONTAINER_POLICY')
         check()
         attached = spawn('/usr/bin/docker',args(['start','-a','-i',name]),{ env: dockerEnv(),stdio: ['pipe','pipe','pipe'],windowsHide: true })
         const child = attached
@@ -97,11 +97,11 @@ export function createSandboxProcess({ image,allowedCommands,limits = {} }: { im
               if (state && !state.Running && (code!==137 || state.OOMKilled || attempt===5)) break
               await new Promise(resolve => setTimeout(resolve,20))
             }
-            let report: { oomKilled?: boolean; stderrLimited?: boolean; exitCode?: number } | undefined
+            let report: { oomKilled?: boolean; stderrLimited?: boolean; timedOut?: boolean; exitCode?: number } | undefined
             const match = /^DYOFFICE_SANDBOX_STATUS=(\{[^\n]+\})\n$/.exec(supervisorLog)
             if (match) { try { report = JSON.parse(match[1]) } catch {} }
             const oom = state?.OOMKilled === true || report?.oomKilled === true
-            const failure = new SandboxError(report?.stderrLimited ? 'OUTPUT_LIMIT' : oom || [152,153].includes(code ?? 0) ? 'RESOURCE_LIMIT' : 'NATIVE_FAILED',code ?? undefined,oom)
+            const failure = new SandboxError(report?.timedOut ? 'SANDBOX_TIMEOUT' : report?.stderrLimited ? 'OUTPUT_LIMIT' : oom || [152,153].includes(code ?? 0) ? 'RESOURCE_LIMIT' : 'NATIVE_FAILED',code ?? undefined,oom)
             failure.cause = { state,exitCode: code }; fail(failure)
           }
         }))

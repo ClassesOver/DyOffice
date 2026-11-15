@@ -15,7 +15,8 @@
     "test:storage": "node --experimental-strip-types --test test/storage/*.test.mjs",
     "test:jobs": "node --experimental-strip-types --test test/jobs/*.test.mjs",
     "test:sandbox": "node --experimental-strip-types --test --test-concurrency=1 test/sandbox/*.test.mjs",
-    "typecheck:worker": "tsc -p worker/tsconfig.json"
+    "typecheck:worker": "tsc -p worker/tsconfig.json",
+    "test:native-jobs": "node --experimental-strip-types --test --test-concurrency=1 test/native-jobs/*.test.mjs"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "3.1169.0",

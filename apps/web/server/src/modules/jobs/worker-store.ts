@@ -28,6 +28,7 @@ export function createJobWorkerStore({ pool,deploymentId,leaseMs = 30_000,delive
     } finally { c.release(discard) }
   }
   return {
+    get claimLeaseMs() { return leaseMs },
     async takeDelivery(): Promise<JobDelivery | null> { const token = secret(), value = await call<Omit<JobDelivery,'token'> | null>('take_job_delivery',[deployment,tokenHash(token),deliveryLeaseMs]); return value ? { ...value,token } : null },
     ackDelivery: (value: JobDelivery) => call<boolean>('ack_job_delivery',[deployment,uuid(value.jobId),value.deliveryEpoch,tokenHash(value.token),reconcileMs]),
     async claim(id: string): Promise<JobClaim | null> { const token = secret(), value = await call<Omit<JobClaim,'token'> | null>('claim_native_job',[deployment,uuid(id),tokenHash(token),leaseMs]); return value ? { ...value,token } : null },

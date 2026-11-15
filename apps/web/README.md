@@ -220,3 +220,7 @@ T08a 建立版本 7 的任务表；当前迁移版本为 9，新增任务输出�
 ### T08c 受限任务输出事务
 
 内部任务凭据已复用 T06 文件/上传/租约/CAS/配额/回执/outbox 保存核心，在同一事务写入输出版本、释放任务租约并标记成功。浏览器与任务租约显式分用途；已完成、旧 attempt、取消或过期凭据不能继续写。当前版本 9，更新前以 owner 运行上述 `npm run provision:runtime` 安装不可变迁移和新增 business 函数授权。实际数据库回滚、提交后进程死亡与升级证据见 [T08c](../../docs/dyoffice/evidence/t08c-atomic-job-output.md)。真实 Rust 适配器到此核心的常驻执行链、公开 API 和 revision_outbox 消费仍待继续实现。
+
+### T08d 真实原生执行处理器
+
+内部 `xlsx.roundtrip` 处理器已连通真实 Rust 容器、领取/编辑租约 heartbeat、授权输入读取、输出校验与同事务版本/任务成功。取消、撤销、失锁和可控关闭会中止原生工作；运行中的控制进程被强杀后，独立 supervisor 期限与 Docker 自动删除负责回收容器。构建与测试见 [Worker 说明](worker/README.md)，实际 PostgreSQL/Rust/Redis 证据见 [T08d](../../docs/dyoffice/evidence/t08d-native-executor.md)。公开 API、可启动的常驻 Worker、启动回收及 revision_outbox 消费仍待继续实现，production 仍关闭。

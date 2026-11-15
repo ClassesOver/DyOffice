@@ -39,6 +39,10 @@ test('durable job gate uses real pinned Redis and runs PostgreSQL/BullMQ recover
  test('native sandbox gate builds the locked Rust engine and verifies real kernel resource limits', () => {
   const job = workflow.split('\n  native-worker:')[1]
   assert.ok(job,'native worker job required')
-  for (const command of ['npm ci --prefix apps/web --workspaces=false --ignore-scripts --include=dev','npm run build:web:native -- --with-probe','npm run typecheck:web:worker','npm run test:web:sandbox']) assert.ok(job.includes('run: ' + command),command)
+  for (const command of ['npm ci --prefix apps/web --workspaces=false --ignore-scripts --include=dev','npm run build:web:native -- --with-probe','npm run typecheck:web:worker','npm run test:web:sandbox','npm run test:web:native-jobs']) assert.ok(job.includes('run: ' + command),command)
   assert.match(job,/node-version: 22/)
+  assert.match(job,/image: postgres@sha256:[a-f0-9]{64}/)
+  assert.match(job,/image: redis@sha256:[a-f0-9]{64}/)
+  assert.match(job,/DYOFFICE_TEST_DATABASE_URL:/)
+  assert.match(job,/DYOFFICE_TEST_REDIS_URL:/)
 })

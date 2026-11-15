@@ -171,6 +171,30 @@ jobs:
   native-worker:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres@sha256:a77aa70e641402a21411b92b721c58d10f23b50ae5fdd2333efd22d166e1e5f7
+        env:
+          POSTGRES_DB: dyoffice_test
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: dyoffice-ci-test-only
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d dyoffice_test"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+      redis:
+        image: redis@sha256:7f7d30b7fdd09467bac58198a1f166dd69789d348d4fe859cccb20e0cf287fbe
+        ports:
+          - 6379:6379
+        options: >-
+          --memory=128m --cpus=1 --read-only --user=999:999
+          --tmpfs=/data:rw,uid=999,gid=999,size=32m
+          --health-cmd "redis-cli ping"
+          --health-interval 5s --health-timeout 3s --health-retries 10
+    env:
+      DYOFFICE_TEST_DATABASE_URL: postgresql://postgres:dyoffice-ci-test-only@127.0.0.1:5432/dyoffice_test
+      DYOFFICE_TEST_REDIS_URL: redis://127.0.0.1:6379/15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -184,3 +208,5 @@ jobs:
         run: npm run typecheck:web:worker
       - name: Exercise real container isolation and native XLSX bytes
         run: npm run test:web:sandbox
+      - name: Test real native job output, cancellation, recovery and BullMQ redelivery
+        run: npm run test:web:native-jobs

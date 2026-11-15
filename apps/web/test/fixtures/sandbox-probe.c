@@ -16,6 +16,7 @@ int main(void) {
   while (fgets(line,sizeof(line),stdin)) {
     const char *p=strstr(line,"\"requestId\":\""); if (!p) return 3; p+=13;
     size_t i=0; while(p[i] && p[i]!='"' && i<sizeof(id)-1) { id[i]=p[i]; i++; } id[i]=0;
+    if(strstr(line,"\"command\":\"park\"")) { printf("{\"version\":1,\"requestId\":\"%s\",\"ok\":true,\"result\":{\"parked\":true}}\n",id); sleep(60); continue; }
     if(strstr(line,"\"command\":\"sleep\"")) { sleep(60); continue; }
     if(strstr(line,"\"command\":\"busy\"")) { volatile unsigned long n=0; for(;;) n++; }
     if(strstr(line,"\"command\":\"allocate\"")) { for(;;) { volatile char *b=malloc(1024*1024); if(!b) return 4; for(size_t j=0;j<1024*1024;j+=4096) b[j]=1; } }

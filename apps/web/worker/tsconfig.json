@@ -1,4 +1,4 @@
 {
   "extends": "../server/tsconfig.json",
-  "include": ["src/sandbox/**/*.ts", "src/native/xlsx.ts"]
+  "include": ["src/sandbox/**/*.ts", "src/native/xlsx.ts", "src/jobs/**/*.ts"]
 }

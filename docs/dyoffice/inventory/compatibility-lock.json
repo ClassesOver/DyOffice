@@ -310,16 +310,16 @@
       "size": 157313
     },
     "apps/web/package.json": {
-      "sha256": "610dd390cf442adb67ed3a218abc43fd2e328e2a663b8983c696a927393bd23f",
-      "size": 1558
+      "sha256": "5d2f82094055fdcf40ea1f5e7c6cd7fdfff236754f6b82dae1afda9b4d8dec41",
+      "size": 1673
     },
     "package-lock.json": {
       "sha256": "ef7d0f3046571ba392a46d0930129f8d0fdfbb2837eaf79905ef6810d38396c0",
       "size": 655074
     },
     "package.json": {
-      "sha256": "5538e9a311ab29e68fe50aa140af72b5f802250e33bc15e0a243ce61e0922a30",
-      "size": 7685
+      "sha256": "7a019d45eb0219394c16d44e340a23bca10b26d2bed3912aefda5d43262cbfc8",
+      "size": 7778
     },
     "packages/ui/src/fonts/Carlito-Bold.ttf": {
       "sha256": "ed778b78ce652f5b17647344fb9a4c4dcb2e6f8bafe75a0366300da7f8c199ac",

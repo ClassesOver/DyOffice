@@ -1,5 +1,5 @@
 //! Fixed child launcher. Resource evidence comes from the live cgroup, not child logs.
-use std::{fs, io::Read, process::{Command, Stdio}, sync::{Arc, atomic::{AtomicUsize, Ordering}}, thread, time::Duration};
+use std::{fs, io::Read, process::{Command, Stdio}, sync::{Arc, atomic::{AtomicUsize, Ordering}}, thread, time::{Duration, Instant}};
 use std::os::unix::process::ExitStatusExt;
 
 fn oom_kills() -> std::io::Result<u64> {
@@ -14,6 +14,9 @@ fn main() {
         [_, mode] if mode == "probe" => "/usr/local/bin/sandbox-probe",
         _ => std::process::exit(78),
     };
+    let wall_ms = std::env::var("DYOFFICE_WALL_MS").ok().and_then(|n| n.parse::<u64>().ok())
+        .filter(|n| (500..=180_000).contains(n)).unwrap_or_else(|| std::process::exit(78));
+    let started = Instant::now();
     let baseline = oom_kills().unwrap_or_else(|_| std::process::exit(78));
     let mut child = Command::new(executable).stdin(Stdio::inherit()).stdout(Stdio::inherit())
         .stderr(Stdio::piped()).spawn().unwrap_or_else(|_| std::process::exit(78));
@@ -33,7 +36,11 @@ fn main() {
         }
     });
     let mut stderr_limited = false;
+    let mut timed_out = false;
     let status = loop {
+        if started.elapsed() >= Duration::from_millis(wall_ms) && !timed_out {
+            timed_out = true; let _ = child.kill();
+        }
         if stderr_bytes.load(Ordering::Relaxed) > 65536 && !stderr_limited {
             stderr_limited = true; let _ = child.kill();
         }
@@ -45,6 +52,6 @@ fn main() {
     };
     let oom = oom_kills().map(|n| n > baseline).unwrap_or_else(|_| std::process::exit(78));
     let code = status.code().unwrap_or_else(|| 128 + status.signal().unwrap_or(0));
-    eprintln!("DYOFFICE_SANDBOX_STATUS={{\"oomKilled\":{},\"stderrLimited\":{},\"exitCode\":{}}}", oom, stderr_limited, code);
-    std::process::exit(if stderr_limited { 90 } else { code });
+    eprintln!("DYOFFICE_SANDBOX_STATUS={{\"oomKilled\":{},\"stderrLimited\":{},\"timedOut\":{},\"exitCode\":{}}}", oom, stderr_limited, timed_out, code);
+    std::process::exit(if timed_out { 124 } else if stderr_limited { 90 } else { code });
 }
