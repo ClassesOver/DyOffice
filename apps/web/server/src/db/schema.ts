@@ -1,4 +1,4 @@
-import { pgTable, uuid, text, boolean, integer, timestamp } from 'drizzle-orm/pg-core'
+import { pgTable, uuid, text, boolean, integer, timestamp, jsonb } from 'drizzle-orm/pg-core'
 // SQL migrations own database constraints; these mappings serve typed reads.
 const at = (name: string) => timestamp(name, { withTimezone: true })
 export const deployments = pgTable('deployments', { id: uuid('id').primaryKey(), bootstrapCompleted: boolean('bootstrap_completed').notNull().default(false), createdAt: at('created_at').notNull().defaultNow() })
@@ -22,3 +22,5 @@ export const authAuditEvents = pgTable('auth_audit_events', { id: uuid('id').pri
 export const loginChallenges = pgTable('login_challenges', { deploymentId: uuid('deployment_id').notNull(), tokenHash: text('token_hash').primaryKey(), expiresAt: at('expires_at').notNull(), consumedAt: at('consumed_at') })
 export const loginThrottles = pgTable('login_throttles', { deploymentId: uuid('deployment_id').notNull(), kind: text('kind').notNull(), keyHash: text('key_hash').notNull(), attempts: integer('attempts').notNull(), strikes: integer('strikes').notNull(), windowStartedAt: at('window_started_at').notNull(), blockedUntil: at('blocked_until') })
 export const authSecurityEvents = pgTable('auth_security_events', { id: uuid('id').primaryKey(), deploymentId: uuid('deployment_id').notNull(), actorId: uuid('actor_id'), requestId: uuid('request_id').notNull(), sessionId: uuid('session_id'), accountKey: text('account_key'), subjectUserId: uuid('subject_user_id'), event: text('event').notNull(), createdAt: at('created_at').notNull() })
+
+export const personalPreferences = pgTable('personal_preferences', { deploymentId: uuid('deployment_id').notNull(), ownerId: uuid('owner_id').notNull(), workspaceId: uuid('workspace_id').notNull(), data: jsonb('data').$type<Record<string, unknown>>().notNull(), revision: integer('revision').notNull() })

@@ -1,4 +1,5 @@
 import { resolve } from 'node:path';
+import { Pool } from 'pg';
 import { buildApp, buildLocalApp } from './src/app.ts';
 import { connectIdentityStore } from './src/db/identity.ts';
 
@@ -14,14 +15,19 @@ async function configuredApplication() {
   if(mode!=='local') throw new Error('Unknown authentication mode');
   if(process.env.NODE_ENV==='production') throw new Error('Production local runtime is not ready');
   if(process.env.DYOFFICE_USER_TOKEN||process.env.DYOFFICE_ADMIN_TOKEN) throw new Error('Local mode rejects development tokens');
-  const connectionString=process.env.DYOFFICE_DATABASE_URL;
+  if(process.env.DYOFFICE_DATABASE_URL) throw new Error('Migration credentials are not accepted by the runtime');
+  const connectionString=process.env.DYOFFICE_AUTH_DATABASE_URL;
+  const businessConnectionString=process.env.DYOFFICE_BUSINESS_DATABASE_URL;
   const deploymentId=process.env.DYOFFICE_DEPLOYMENT_ID;
   const origin=process.env.DYOFFICE_ORIGIN;
   const csrfKey=process.env.DYOFFICE_CSRF_KEY;
-  if(!connectionString||!deploymentId||!origin||!csrfKey) throw new Error('Local account configuration missing');
+  if(!connectionString||!businessConnectionString||!deploymentId||!origin||!csrfKey) throw new Error('Local account configuration missing');
   const {db,close}=connectIdentityStore(connectionString);
-  try { return await buildLocalApp({db,deploymentId,origin,csrfKey,passwordBlocklistFile:process.env.DYOFFICE_PASSWORD_BLOCKLIST_FILE,closeDb:close}); }
-  catch(error) { await close(); throw error; }
+  let businessPool;
+  try {
+    businessPool=new Pool({connectionString:businessConnectionString,max:4,connectionTimeoutMillis:5000});
+    return await buildLocalApp({db,businessPool,deploymentId,origin,csrfKey,passwordBlocklistFile:process.env.DYOFFICE_PASSWORD_BLOCKLIST_FILE,closeDb:async()=>{await Promise.all([close(),businessPool.end()]);}});
+  } catch(error) { await Promise.allSettled([close(),businessPool?.end()]); throw error; }
 }
 
 let app,closing;

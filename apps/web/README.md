@@ -78,7 +78,7 @@ Fastify 应用工厂位于 `server/src/app.ts`，`dev:web` / `start:web` 已使�
 
 旧接口通过兼容模块继续处理，接管发生在限流之后、正文解析之前，保留既有 JSON/50 MiB 上传限制、权限与错误契约。`createApplication()` 仍保留，供旧回归及回退使用。运行 `npm run test:web:integration` 检查真实 HTTP 的兼容行为、限流与子进程关闭；`typecheck:web` 同时检查新的 TypeScript 服务端。Node 22.12 使用脚本中的 `--experimental-strip-types` 启动 TypeScript。
 
-T02 仍需逐领域迁移旧路由与完整 `/api/v1` 契约；T03 本地账号密码/服务端会话撤销和 T04 数据库隔离尚未实现。生产启动守卫保留，不能据此宣称正式登录、生产就绪或企业验收完成。
+T02 仍需逐领域迁移旧路由与完整 `/api/v1` 契约；本地账号、服务端撤销和工作区/偏好 RLS 接缝已实现，见下文 T03/T04；完整文件隔离和 UI 仍待实现。生产启动守卫保留，不能据此宣称正式登录、生产就绪或企业验收完成。
 
 
 ### T03a 本地账号基础（尚未接入网页登录）
@@ -92,15 +92,29 @@ T02 仍需逐领域迁移旧路由与完整 `/api/v1` 契约；T03 本地账号�
 
 ### T03b 本地会话实验入口
 
-`DYOFFICE_AUTH_MODE=local` 启用独立的 PostgreSQL 会话 API。先用 CLI 初始化账号，并设置 `DYOFFICE_DATABASE_URL`、`DYOFFICE_DEPLOYMENT_ID`、准确的 `DYOFFICE_ORIGIN` 和至少 32 字节的随机持久化 `DYOFFICE_CSRF_KEY`；取消开发用户/Admin Token 后启动。它提供登录挑战、登录/退出、`me`、重新认证、个人会话查询/撤销，未实现的个人文件和配置路由返回 501，不访问旧 JSON 数据。网页登录/工作区界面与 T04 RLS 尚待接入，production 仍拒绝启动。
+`DYOFFICE_AUTH_MODE=local` 启用独立的 PostgreSQL 会话 API。先按下文 T04 配置独立数据库账号，并用 CLI 初始化账号。运行服务时设置 `DYOFFICE_AUTH_DATABASE_URL`、`DYOFFICE_BUSINESS_DATABASE_URL`、`DYOFFICE_DEPLOYMENT_ID`、准确的 `DYOFFICE_ORIGIN` 和至少 32 字节的随机持久化 `DYOFFICE_CSRF_KEY`；取消迁移连接变量和开发用户/Admin Token 后启动。它提供登录挑战、登录/退出、`me`、重新认证、个人会话查询/撤销，未实现的个人文件和其他配置路由返回 501，不访问旧 JSON 数据。网页登录/工作区界面尚待接入，工作区/偏好 RLS 已接入，production 仍拒绝启动。
 
 浏览器流程先 GET `/api/v1/auth/csrf`，保留服务端 HttpOnly Cookie，把返回的 `csrfToken` 放入 `X-CSRF-Token` 后 POST `/api/v1/auth/login`；写请求要求准确的同源 Origin。登录响应只返回用户 DTO 与 CSRF proof，实际会话令牌只在 Secure Cookie。使用与 Origin 对齐的 HTTPS 入口验证浏览器，不以手动传 Cookie 代替验证。
 
-`npm run test:web:e2e` 使用真实 Chromium + TLS + PostgreSQL 检查 Cookie 与退出；先运行 `apps/web/node_modules/.bin/playwright install chromium --with-deps`。安全边界、实测结果和一个已记录的小写/大写 UUID 清 Cookie 限制见 `docs/dyoffice/evidence/t03b-local-sessions.md`。
+`npm run test:web:e2e` 使用真实 Chromium + TLS + PostgreSQL 检查 Cookie 与退出；先运行 `apps/web/node_modules/.bin/playwright install chromium --with-deps`。安全边界、实测结果；大小写 UUID 清 Cookie 问题已由 T03c 修复见 `docs/dyoffice/evidence/t03b-local-sessions.md`。
 
 
 ### T03c 管理员与密码操作 API
 
 本地实验模式增加 `/api/v1/admin/users` 的查询/开户，以及指定账号的状态、角色、激活重发和密码重置操作。敏感操作需最近 15 分钟内的密码验证与 Origin/CSRF；新账号默认仅个人角色。激活/重置秘密只返回一次、15 分钟过期，POST `/api/v1/auth/password-action` 在匿名挑战后用 JSON 消费，不生成凭据 URL，也不发送邮件。重置签发立即冻结旧密码登录并撤销旧会话；过期后需管理员重发。自己的改密使用 `/api/v1/auth/change-password`，验证旧密码后替换会话 Cookie。
 
-`DYOFFICE_PASSWORD_BLOCKLIST_FILE` 现在同时作用于 CLI 和本地服务的激活/改密。使用受信任的本地 UTF-8 文件（最多 16 MiB，建议绝对路径）；不把内置小列表当完整泄露密码库。真实数据库、锁竞态、回滚与 Chromium API 流程见 `docs/dyoffice/evidence/t03c-account-lifecycle.md`。已消费/过期的密码令牌记录清理仍是已知维护项；完整 Admin UI、业务 RLS、外部 Token 与租约仍待后续任务，production 继续关闭。
+`DYOFFICE_PASSWORD_BLOCKLIST_FILE` 现在同时作用于 CLI 和本地服务的激活/改密。使用受信任的本地 UTF-8 文件（最多 16 MiB，建议绝对路径）；不把内置小列表当完整泄露密码库。真实数据库、锁竞态、回滚与 Chromium API 流程见 `docs/dyoffice/evidence/t03c-account-lifecycle.md`。已消费/过期的密码令牌记录清理仍是已知维护项；完整 Admin UI、文件/任务隔离、外部 Token 与租约仍待后续任务，production 继续关闭。
+
+
+### T04 受限数据库账号与偏好隔离
+
+本地实验服务要求 PostgreSQL 17、独立的迁移 owner、认证 login 和业务 login。三个角色均为 `NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOREPLICATION NOINHERIT`，运行角色不得拥有表或有任何角色成员关系。使用专用数据库，由迁移 owner 拥有数据库和应用表；密码通过受控秘密管理或 psql 的 `\password` 设置，避免放入命令参数/日志。本工具不创建角色或密码。
+
+1. 运维先创建上述三个角色和专用数据库，分别准备 owner/auth/business 的连接秘密。
+2. 仅在迁移终端配置 `DYOFFICE_DATABASE_URL`（owner）、`DYOFFICE_AUTH_ROLE`、`DYOFFICE_BUSINESS_ROLE`，运行 `npm run provision:runtime`。它执行不可变迁移并在事务中安装最小授权；会撤销该数据库 PUBLIC 的 CREATE/TEMP 及应用 schema 的 CREATE，因此不能指向共享业务数据库。
+3. 用同一 owner 连接、稳定的 `DYOFFICE_DEPLOYMENT_ID` 和交互终端运行 `npm run bootstrap:admin`，密码隐藏输入。迁移/初始化秘密不交给 Web 进程。
+4. 服务环境取消 `DYOFFICE_DATABASE_URL`，改用 `DYOFFICE_AUTH_DATABASE_URL` 与 `DYOFFICE_BUSINESS_DATABASE_URL`，再按上文配置 local 模式、Origin、CSRF Key 和 HTTPS。运行 `npm run dev:web`。启动会检查两角色的权限、函数所有者、FORCE RLS 和同一数据库；旧单连接配置会失败。
+
+`GET/PUT /api/preferences` 和 `/api/v1/preferences` 使用 Cookie 推导个人身份，支持 theme、language、authorName、autoSave、showAssistant。PUT 需要 Origin/CSRF；owner 等额外字段被拒绝。业务事务锁定账号和会话直到提交，停用/撤销与写入有明确提交顺序；Admin 没有他人偏好的所有权。旧 JSON 原型数据不自动迁移给新账号。
+
+集成测试的隔离 PostgreSQL 管理连接需能创建/删除测试数据库和角色；测试在随机专用数据库内使用真实的三个非超级用户角色，不能拿超级用户测试冒充 RLS 验收。详情见 [T04 证据](../../docs/dyoffice/evidence/t04-rls-checkpoint.md)。生产仍关闭；文件、后台任务、外部 Token 和四格式编辑尚未由此交付。

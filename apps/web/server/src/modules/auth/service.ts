@@ -19,6 +19,7 @@ export function createAccountService({ db, passwords, deploymentId }: { db: Iden
         const id = randomUUID()
         await connection.query("INSERT INTO users(id,deployment_id,username_normalized,password_hash,password_changed_at,status) VALUES($1,$2,$3,$4,now(),'active')", [id, deploymentId, username, encoded])
         await connection.query("INSERT INTO user_roles(deployment_id,user_id,role) VALUES($1,$2,'config_admin'),($1,$2,'personal')", [deploymentId, id])
+        await connection.query("SELECT set_config('dyoffice.deployment_id',$1,true),set_config('dyoffice.user_id',$2,true)", [deploymentId, id])
         await connection.query('INSERT INTO workspaces(id,deployment_id,owner_id) VALUES($1,$2,$3)', [randomUUID(), deploymentId, id])
         await connection.query("INSERT INTO auth_audit_events(id,deployment_id,actor_id,event) VALUES($1,$2,$3,'admin_bootstrapped')", [randomUUID(), deploymentId, id])
         await connection.query('UPDATE deployments SET bootstrap_completed=true WHERE id=$1', [deploymentId])

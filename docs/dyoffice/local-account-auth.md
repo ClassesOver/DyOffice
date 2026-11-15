@@ -127,3 +127,5 @@ T03a 账号/密码/bootstrap 与 T03b 独立本地会话 API 已有实现和真�
 
 
 T03c 已补充受控开户、停用/恢复、角色更新、短期一次性激活/重置、自助改密及撤销事务，见 [T03c](evidence/t03c-account-lifecycle.md)。密码阻断语料已连接本地服务入口；生产、完整 UI、RLS 和历史令牌清理仍未验收。
+
+T04 已接入独立受限认证/业务连接和个人工作区/偏好 RLS，运行配置改为两套连接；迁移 owner 连接不得传给 Web 服务。见 [配置](../../apps/web/README.md) 与 [实测证据](evidence/t04-rls-checkpoint.md)。文件/任务/外部 Token 的所有权还需各自模块接入，production 继续关闭。

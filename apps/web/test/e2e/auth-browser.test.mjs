@@ -8,13 +8,13 @@ import { createServer } from 'node:https'
 import { randomBytes } from 'node:crypto'
 import { chromium } from '@playwright/test'
 import { buildLocalApp } from '../../server/src/app.ts'
+import { restrictedFixture } from '../helpers/restricted.mjs'
 import { identityFixture, password } from '../helpers/identity.mjs'
 
-async function tlsFixture(t) {
-  const f = await identityFixture(t)
+async function tlsFixture(t, restricted = false) {
   const directory = await mkdtemp(join(tmpdir(), 'dyoffice-auth-tls-'))
   let app, browser, server
-  f.cleanup.push(async () => {
+  t.after(async () => {
     await browser?.close()
     if (server) { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)) }
     await app?.close()
@@ -24,7 +24,8 @@ async function tlsFixture(t) {
   server = createServer({ key: await readFile(join(directory, 'key.pem')), cert: await readFile(join(directory, 'cert.pem')) }, (req, res) => app.routing(req, res))
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
   const origin = `https://127.0.0.1:${server.address().port}`
-  app = await buildLocalApp({ db: f.db, passwords: f.passwords, deploymentId: f.deploymentId, origin, csrfKey: randomBytes(32).toString('hex') })
+  const f = restricted ? await restrictedFixture(t, { origin }) : await identityFixture(t)
+  app = restricted ? f.app : await buildLocalApp({ db: f.db, passwords: f.passwords, deploymentId: f.deploymentId, origin, csrfKey: randomBytes(32).toString('hex') })
   browser = await chromium.launch({ headless: true })
   const context = await browser.newContext({ ignoreHTTPSErrors: true })
   const page = await context.newPage()
@@ -109,4 +110,25 @@ test('Chromium admin/API lifecycle activates an account, rotates its password an
     return (await fetch('/api/v1/auth/password-action', { method: 'POST', headers: { 'content-type': 'application/json', 'x-csrf-token': c.csrfToken }, body: JSON.stringify({ token: action.token, purpose: action.purpose, password }) })).status
   }, { action: reset.body.action, password: 'reset lanterns drift over distant silver rivers 3579' })
   assert.equal(redeemed, 204)
+})
+
+
+test('Chromium TLS sessions keep Alice and Bob preferences isolated with restricted database roles', { timeout: 30_000 }, async t => {
+  const { browser, page, origin, bob } = await tlsFixture(t, true)
+  const other = await browser.newContext({ ignoreHTTPSErrors: true })
+  const bobPage = await other.newPage()
+  await bobPage.goto(origin + '/')
+  const login = (page, username) => page.evaluate(async ({ username, password }) => {
+    const challenge = await (await fetch('/api/v1/auth/csrf')).json()
+    const response = await fetch('/api/v1/auth/login', { method: 'POST', headers: { 'content-type': 'application/json', 'x-csrf-token': challenge.csrfToken }, body: JSON.stringify({ username, password }) })
+    return { status: response.status, body: await response.json() }
+  }, { username, password })
+  const a = await login(page, 'alice'), b = await login(bobPage, 'bob')
+  assert.equal(a.status, 200); assert.equal(b.status, 200)
+  const update = (page, csrf, body) => page.evaluate(async ({ csrf, body }) => (await fetch('/api/preferences', { method: 'PUT', headers: { 'content-type': 'application/json', 'x-csrf-token': csrf }, body: JSON.stringify(body) })).status, { csrf, body })
+  assert.equal(await update(page, a.body.csrfToken, { authorName: 'Alice' }), 200)
+  assert.equal(await update(bobPage, b.body.csrfToken, { authorName: 'Bob' }), 200)
+  assert.equal(await update(page, a.body.csrfToken, { ownerId: bob.user.id, authorName: 'forged' }), 400)
+  assert.equal(await page.evaluate(async () => (await (await fetch('/api/v1/preferences')).json()).authorName), 'Alice')
+  assert.equal(await bobPage.evaluate(async () => (await (await fetch('/api/preferences')).json()).authorName), 'Bob')
 })

@@ -76,6 +76,7 @@ export function createUserService({ db, accounts, sessions, passwords, deploymen
           const id = randomUUID()
           await connection.query("INSERT INTO users(id,deployment_id,username_normalized,display_name,status) VALUES($1,$2,$3,$4,'pending')", [id, deploymentId, username, displayName])
           await connection.query("INSERT INTO user_roles(deployment_id,user_id,role) VALUES($1,$2,'personal')", [deploymentId, id])
+          await connection.query("SELECT set_config('dyoffice.deployment_id',$1,true),set_config('dyoffice.user_id',$2,true)", [deploymentId, id])
           await connection.query('INSERT INTO workspaces(id,deployment_id,owner_id) VALUES($1,$2,$3)', [randomUUID(), deploymentId, id])
           const action = await issue(connection, id, principal.userId, 'activate', 1)
           await appendAuthEvent(connection, deploymentId, 'admin_user_created', { ...context, actorId: principal.userId, sessionId: principal.sessionId, subjectUserId: id })

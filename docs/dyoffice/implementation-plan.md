@@ -137,6 +137,8 @@ docs/dyoffice/               当前计划及 inventory/ evidence/ adr/
 
 ### T04 资源授权与 RLS
 
+2026-11-15 接缝进展：独立受限 auth/business 连接、工作区/偏好 FORCE RLS、数据库推导身份、撤销与写入锁顺序已实现并测试，见 [T04 证据](evidence/t04-rls-checkpoint.md)。本阶段使用个人偏好验证完整业务事务；文件、后台任务、外部 Token 随 T05/T08/T19 接入，不将尚不存在的入口标记完成。
+
 **依赖：** T03。**文件：** `modules/policy/authorize.ts`、`db/context.ts`、`db/migrations/0004_rls.sql`、`test/integration/ownership-rls.test.ts`。
 
 **接口：** `withPrincipalTransaction(principal, fn)`、`authorize()`；角色不隐式包含文件所有权。
