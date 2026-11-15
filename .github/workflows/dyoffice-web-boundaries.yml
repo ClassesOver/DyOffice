@@ -41,6 +41,20 @@ jobs:
   boundary-check:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres@sha256:a77aa70e641402a21411b92b721c58d10f23b50ae5fdd2333efd22d166e1e5f7
+        env:
+          POSTGRES_DB: dyoffice_test
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: dyoffice-ci-test-only
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d dyoffice_test"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      DYOFFICE_TEST_DATABASE_URL: postgresql://postgres:dyoffice-ci-test-only@127.0.0.1:5432/dyoffice_test
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -56,6 +70,8 @@ jobs:
         run: node --test tools/check-web-boundaries.test.mjs
       - name: Test BrowserHost contracts
         run: node --experimental-strip-types --test apps/web/test/unit/host-contract.test.mjs
+      - name: Test Argon2 password policy and bounded work
+        run: node --experimental-strip-types --test apps/web/test/unit/passwords.test.mjs
       - name: Test SSE AgentTransport adapter
         run: node --experimental-strip-types --test apps/web/test/unit/ai-transport.test.mjs
       - name: Test HTTP BrowserHost read adapter
