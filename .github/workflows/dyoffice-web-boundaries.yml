@@ -54,6 +54,8 @@ jobs:
         run: node --experimental-strip-types --test apps/web/test/unit/host-contract.test.mjs
       - name: Test SSE AgentTransport adapter
         run: node --experimental-strip-types --test apps/web/test/unit/ai-transport.test.mjs
+      - name: Test HTTP BrowserHost read adapter
+        run: node --experimental-strip-types --test apps/web/test/unit/http-files.test.mjs
       - name: Test editor host inventory scanner
         run: node --test tools/audit-web-host.test.mjs
       - name: Scan four native editor bridges
