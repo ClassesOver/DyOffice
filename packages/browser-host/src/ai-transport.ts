@@ -1,4 +1,4 @@
-import type { AgentTransport, AgentStreamRequest, AgentStreamCallbacks, AgentToolCall, AgentPhase, AgentTokenUsage } from '../../agent-core/src/types.ts'
+import type { AgentTransport, AgentStreamRequest, AgentStreamCallbacks, AgentToolCall, AgentPhase, AgentTokenUsage } from '@genoffice/agent-core'
 
 const MAX_SSE_EVENT_BYTES = 256 * 1024
 
