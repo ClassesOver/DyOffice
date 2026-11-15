@@ -4,9 +4,9 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "node server/index.mjs",
-    "start": "node server/index.mjs",
-    "test": "node --test test/*.test.mjs",
+    "dev": "node --import tsx server/index.mjs",
+    "start": "node --import tsx server/index.mjs",
+    "test": "node --import tsx --test test/*.test.mjs",
     "build": "vite build --config vite.config.mjs",
     "test:build": "node --test test/build/*.test.mjs",
     "typecheck": "tsc -p tsconfig.json",

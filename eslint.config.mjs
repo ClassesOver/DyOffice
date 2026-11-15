@@ -69,6 +69,13 @@ export default tseslint.config(
     },
   },
   {
+    // The Web prototype pages run in the browser. Node globals still cover the server.
+    files: ['apps/web/public/**/*.js'],
+    languageOptions: {
+      globals: { ...globals.browser },
+    },
+  },
+  {
     // Plain JS build/tool scripts run in Node without type info.
     files: ['**/*.{js,mjs,cjs}'],
     languageOptions: {
