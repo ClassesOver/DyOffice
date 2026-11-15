@@ -5,6 +5,11 @@ on:
     branches: [main, feat/dyoffice-web]
     paths:
       - 'package.json'
+      - 'package-lock.json'
+      - 'LICENSE'
+      - 'NOTICE'
+      - 'tools/dyoffice/**'
+      - 'docs/dyoffice/inventory/compatibility*'
       - 'apps/**'
       - 'packages/**'
       - 'tools/check-web-boundaries*'
@@ -13,6 +18,11 @@ on:
   pull_request:
     paths:
       - 'package.json'
+      - 'package-lock.json'
+      - 'LICENSE'
+      - 'NOTICE'
+      - 'tools/dyoffice/**'
+      - 'docs/dyoffice/inventory/compatibility*'
       - 'apps/**'
       - 'packages/**'
       - 'tools/check-web-boundaries*'
@@ -34,6 +44,10 @@ jobs:
           node-version: 22
       - name: Install Web gate dependencies without Electron
         run: npm ci --prefix apps/web --workspaces=false --ignore-scripts --include=dev
+      - name: Test compatibility baseline and CI coverage
+        run: node --test tools/dyoffice/*.test.mjs
+      - name: Reject unreviewed dependency and font baseline drift
+        run: node tools/dyoffice/compatibility-baseline.mjs --check
       - name: Test browser dependency gate
         run: node --test tools/check-web-boundaries.test.mjs
       - name: Test BrowserHost contracts

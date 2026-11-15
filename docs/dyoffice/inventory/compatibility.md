@@ -19,9 +19,11 @@ A changed, missing, or added covered input fails the check. To intentionally acc
 new inputs, review the dependency/font/native change first, run `--write`, inspect
 the JSON diff and rerun the checks. `--check` never writes the baseline. A matching
 snapshot only proves input identity; it does not prove that the files are safe or
-that a native binary works. This is a standalone T00 checkpoint, not yet a release CI
-gate; later deployment work should consume the manifest rather than equating it with
-an SBOM or an image digest.
+that a native binary works. The Web CI gate runs the checker regressions and
+read-only baseline validation,
+including on root-lock, license, font, checker and baseline changes. This is still
+only a T00 input-consistency gate; later deployment work should consume the manifest
+rather than equating it with runtime acceptance, an SBOM or an image digest.
 
 ## Inspected versions and execution boundaries
 
