@@ -2,7 +2,8 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { mkdtemp, mkdir, writeFile, rm, symlink } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, dirname } from 'node:path'
+import { createRequire } from 'node:module'
 import { checkWebBoundaries, forbiddenSpecifier, inspectSource } from './check-web-boundaries.mjs'
 
 test('disallows Node builtins and Electron in browser source', () => {
@@ -56,17 +57,16 @@ test('runs the CLI from a checkout path containing URL-reserved characters', asy
   t.after(() => rm(root, { recursive: true, force: true }))
   await mkdir(join(root, 'tools'), { recursive: true })
   await mkdir(join(root, 'apps/web/src'), { recursive: true })
-  await symlink(new URL('../apps/web/node_modules', import.meta.url), join(root, 'apps/web/node_modules'), 'dir')
-  // Workspace installs hoist TypeScript to the repository root. The copied
-  // checkout has to see that parent node_modules, including when its path
-  // contains a space or hash.
-  await symlink(new URL('../node_modules', import.meta.url), join(root, 'node_modules'), 'dir')
+  // Resolve the actual package: root npm ci may hoist it out of apps/web.
+  const require = createRequire(new URL('../apps/web/package.json', import.meta.url))
+  await mkdir(join(root, 'apps/web/node_modules'), { recursive: true })
+  await symlink(dirname(require.resolve('typescript/package.json')), join(root, 'apps/web/node_modules/typescript'), 'dir')
   const script = join(root, 'tools/check-web-boundaries.mjs')
   await writeFile(script, await readFile(new URL('./check-web-boundaries.mjs', import.meta.url)))
   await writeFile(join(root, 'apps/web/src/app.ts'), "import fs from 'node:fs'\n")
   const result = spawnSync(process.execPath, [script], { encoding: 'utf8' })
   assert.equal(result.status, 1, result.stderr)
-  assert.match(result.stdout, /scanned 1 files, 1 violations/)
+  assert.match(result.stdout, /scanned 1 files, 1 violations/, result.stderr)
   assert.match(result.stderr, /browser code imports forbidden module node:fs/)
 })
 
