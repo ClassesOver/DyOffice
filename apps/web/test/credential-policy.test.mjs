@@ -14,10 +14,10 @@ test('password policy allows long passphrases and Unicode without normalization'
   assert.equal(validateNewPassword('a many words long passphrase'), true)
   assert.equal(validateNewPassword('🧠'.repeat(15) + ' some text'), true)
   assert.equal(validateNewPassword('  leading and trailing spaces  '), true)
-  for (const value of ['', 'short', 'password123456789', '123456789012345', 'qwertyuiopasdfgh', 'a'.repeat(257), '🧠'.repeat(257), 'a'.repeat(15) + '\u0000', 42, undefined]) {
+  for (const value of ['', 'short', 'password123456789', '123456789012345', 'qwertyuiopasdfgh', 'a'.repeat(15), '🧠'.repeat(15), 'a'.repeat(257), '🧠'.repeat(257), 'a'.repeat(15) + '\u0000', 42, undefined]) {
     assert.throws(() => validateNewPassword(value), TypeError)
   }
-  assert.equal(validateNewPassword('🧠'.repeat(256)), true) // 256 codepoints, 1024 UTF-8 bytes
+  assert.equal(validateNewPassword('🧠🦉'.repeat(128)), true) // 256 codepoints, 1024 UTF-8 bytes
 })
 
 test('password hash inspector accepts only adequate Argon2id PHC metadata', () => {
