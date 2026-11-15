@@ -24,7 +24,7 @@ export async function createStaticAssets({ assetMode = 'source', assetDirectory 
     return path;
   };
   if (assetMode === 'source') {
-    allowed.add('app.js'); allowed.add('style.css');
+    allowed.add('app.js'); allowed.add('style.css'); allowed.add('editor-controller.js');
   } else {
     const manifest = JSON.parse(await readFile(await resolvedFile('.vite/manifest.json'), 'utf8'));
     if (!manifest || Array.isArray(manifest) || typeof manifest !== 'object' || !Object.keys(manifest).length) throw new Error('Invalid Web build manifest');
