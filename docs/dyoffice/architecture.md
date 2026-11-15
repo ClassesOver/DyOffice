@@ -121,17 +121,17 @@ ACK 只表示收到，`applied_uncommitted` 只表示编辑器改变，只有服
 
 ## 6. 身份、权限与数据库
 
-企业身份优先对接客户 OIDC IdP，由成熟身份服务提供 MFA；SAML/LDAP 通过身份网关接入，不能在产品中自造简化协议。浏览器使用 BFF 会话和 HttpOnly/Secure Cookie，写请求有 CSRF 校验；外部 Harness 使用最小权限 Bearer Token。开发双 Token 仅允许开发模式，不作为企业登录。
+身份认证**使用 DyOffice 自建本地用户名与密码**，不引入 OIDC、Keycloak、SAML、LDAP、SSO 或外部身份服务。Fastify + PostgreSQL 管理账号、密码散列、会话、管理员开户/停用与密码重置；用户使用浏览器 HttpOnly/Secure/SameSite 会话 Cookie，写请求做 CSRF 和 Origin 校验。外部 Harness 使用每用户独立签发的最小权限 Bearer API Token，**不能用账户密码直接调用 MCP**。开发双 Token 只允许开发模式，不作为企业登录或生产会话。详见 [本地账号认证设计](local-account-auth.md)。
 
-`Principal={deploymentId,userId,roles,scopes,sessionId}` 只由服务端认证建立。部署标识由受信配置/域名绑定得出，不信任自由填写的 Host 或请求体。角色分为普通用户、配置管理员、运维、审计员；管理员可改配置，不默认拥有个人文件读取权。紧急访问需单独授权、限时、理由和全程审计。
+`Principal={deploymentId,userId,roles,scopes,sessionId}` 只由服务端验证本地账号和会话建立。部署标识由受信配置/域名绑定得出，不信任自由填写的 Host 或请求体。角色分为普通用户、配置管理员、运维、审计员；管理员可改配置，不默认拥有个人文件读取权。紧急访问需单独授权、限时、理由和全程审计。
 
 拟建关系：
 
 | 表 | 关键字段/约束 |
 | --- | --- |
-| users / identities | 稳定 UUID；OIDC `(issuer,subject)` 唯一；disabledAt |
+| users / user_roles | 稳定 UUID；部署内唯一归一化 username；Argon2id password_hash、账号状态/密码版本；角色变更有审计 |
 | workspaces | `deploymentId,ownerUserId` 唯一；只实现个人工作区 |
-| sessions / api_tokens | 会话撤销；Token 仅存哈希、前缀、权限、到期与使用时间 |
+| sessions / api_tokens / password_action_tokens | 服务端会话与撤销；仅存令牌哈希；API Token 绑定 owner/scopes；激活/重置 Token 一次性短时效 |
 | files | 所有者、工作区、格式、当前 revision、大小、删除状态、分类标签 |
 | file_revisions / uploads | 不可变 objectKey、sha256、字节数、提交来源、上传状态 |
 | edit_leases / editor_sessions | fileId、sessionId、leaseEpoch、expiresAt、editorGeneration |
@@ -143,6 +143,9 @@ ACK 只表示收到，`applied_uncommitted` 只表示编辑器改变，只有服
 | audit_events / usage_ledger | 脱敏审计、账实核对；缺失 usage 标记 unknown 而非 0 |
 
 个人资源都包含并索引部署/所有者边界，关联采用匹配边界的复合约束，防止跨用户 fileId 关联。应用查询显式带作用域，PostgreSQL RLS 作纵深防护。运行角色不得是 superuser、表 owner 或 BYPASSRLS；必要表启用 FORCE RLS。连接池使用事务内 `SET LOCAL` 注入身份，异常和连接复用测试必须证明不串用户；后台任务也必须用明确的任务主体。[S2]
+
+
+本地密码凭据采用 Argon2id + 独立随机盐（起点内存 19 MiB、迭代 2、并行 1，须在目标设备实测）；单因素密码最低 15 字符，允许长密码短语、不设强制复杂度组合、不定期强制改密，使用常见泄露密码阻断列表。登录按账户/IP/全局分层限流，错误统一防用户枚举；管理员创建账户、一次性初始化、停用、重置和再认证必须可审计。会话仅存哈希，密码/角色变化和停用时撤销会话/API Token 并在文档提交前重验。生产不允许使用默认账号/密码或开发双 Token。参考 [本地账号认证设计](local-account-auth.md) 与 OWASP/NIST 约束。
 
 密钥用独立随机主密钥或 KMS 信封加密，密文关联 deployment/config/provider 的 AAD；有 keyId 和轮换流程。省略新密钥意味着保留；清空须独立动作；读取只返回 hasKey。Admin 配置用 revision/If-Match 防丢更新。Provider 禁用后不能回退到桌面环境变量或其他用户密钥。
 
