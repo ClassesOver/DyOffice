@@ -63,3 +63,29 @@ test('invalid typed preference values are rejected rather than exposed as truste
   const host = createBrowserHost({getPreferences:async()=>({theme:'dark',language:'zh',authorName:{apiKey:'secret'},autoSave:'true'})})
   await assert.rejects(host.getPreferences(), err=>err.code==='INVALID_RESPONSE')
 })
+
+const validCapabilities = { docx:'editable', xlsx:'read_only', pptx:'unsupported', pdf:'read_only' }
+test('capability enums reject arrays and coercible objects', async () => {
+  for (const docx of [['editable'], {toString:()=> 'editable'}]) {
+    const host = createBrowserHost({getCapabilities:async()=>({...validCapabilities,docx})})
+    await assert.rejects(host.getCapabilities(), err => err.code === 'INVALID_RESPONSE')
+  }
+})
+test('host event type rejects a single-element array', () => {
+  assert.throws(()=>decodeHostEvent(JSON.stringify({protocolVersion:1,messageId:'m',sessionId:'s',fileId:'f',type:['command.request'],payload:{}})), err=>err.code === 'INVALID_RESPONSE')
+})
+test('public preferences validate every optional field type', async () => {
+  for (const invalid of [{authorName:{apiKey:'secret'}},{autoSave:'false'},{showAssistant:1}]) {
+    await assert.rejects(createBrowserHost({getPreferences:async()=>({theme:'dark',language:'zh',...invalid})}).getPreferences(), err=>err.code === 'INVALID_RESPONSE')
+  }
+  const prefs={theme:'system',language:'zh',authorName:'',autoSave:false,showAssistant:true}
+  assert.deepEqual(await createBrowserHost({getPreferences:async()=>prefs}).getPreferences(),prefs)
+})
+test('open only returns public DTO fields, including its nested revision', async () => {
+  const host=createBrowserHost({readBytes:async()=>new Uint8Array([1]),stageSave:async()=>({uploadId:'u'}),commitSave:async()=>validRevision,open:async()=>({file:{...validRevision,apiKey:'secret'},format:'docx',downloadEndpoint:'/files/a',capabilities:validCapabilities,apiKey:'secret'})})
+  assert.deepEqual(await host.open('file-a'),{file:validRevision,format:'docx',downloadEndpoint:'/files/a',capabilities:validCapabilities})
+})
+test('commitSave only returns public revision fields', async () => {
+  const host=createBrowserHost({commitSave:async()=>({...validRevision,apiKey:'secret'})})
+  assert.deepEqual(await host.commitSave(validSave),validRevision)
+})
