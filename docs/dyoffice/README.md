@@ -10,8 +10,9 @@
 | 文档 | 解决的问题 | 主要读者 |
 | --- | --- | --- |
 | [architecture.md](architecture.md) | 后端选择、HTTP/SSE/WS、Agent 执行位置、宿主接口、权限、保存一致性、MCP 和数据源契约 | 架构师、开发、安全 |
+| [local-account-auth.md](local-account-auth.md) | 本地用户名密码、管理员账号管理、Argon2id、服务端会话、密码重置和 API Token | 后端、开发 Agent、安全、企业实施 |
 | [implementation-plan.md](implementation-plan.md) | T00–T26 共 27 个任务；代码路径、依赖、接口、失败测试、验证、提交与里程碑 | 开发、Codex/其他开发 Agent、QA |
-| [enterprise-delivery.md](enterprise-delivery.md) | 页面与业务场景、客户调研、私有部署、SSO、安全、迁移、备份、灰度、运营和商业交付 | 产品、实施、客户、SRE |
+| [enterprise-delivery.md](enterprise-delivery.md) | 页面与业务场景、客户调研、私有部署、本地账号管理、安全、迁移、备份、灰度、运营和商业交付 | 产品、实施、客户、SRE |
 | [acceptance-matrix.md](acceptance-matrix.md) | 四格式/身份/AI/MCP/数据源/恢复的验收场景、性能目标、发布门槛和证据模板 | QA、安全、业务验收人 |
 | [reuse.md](reuse.md) | 既定的 GenOffice 最大复用方向及全局 Admin 范围 | 所有参与者 |
 
@@ -60,7 +61,11 @@ WS 断线后手工编辑、HTTP 保存和普通 AI 流应继续可用；依赖�
 
 ### 3.6 企业完成：产品、系统和交付都要验收
 
-企业就绪不仅是构建成功，还包括 OIDC/MFA、隔离和外发策略、真实模型与数据源验证、可恢复文件、可观测成本、安全扫描、备份恢复演练、灰度回滚、客户 UAT 和运维移交。单机 Compose 不能宣称 HA；没有恢复演练不能宣称备份可靠。
+企业就绪不仅是构建成功，还包括本地账号/密码管理、管理员开户与停用、会话安全、隔离和外发策略、真实模型与数据源验证、可恢复文件、可观测成本、安全扫描、备份恢复演练、灰度回滚、客户 UAT 和运维移交。单机 Compose 不能宣称 HA；没有恢复演练不能宣称备份可靠。
+
+### 3.7 身份方案变更：仅用本地账户密码
+
+用户已明确取消 OIDC/Keycloak/SSO 接入，使用 DyOffice 自带的账号密码管理：管理员创建/停用账号与重置密码，用户通过用户名密码登录自己的工作区，后端持久化独立的服务器会话；外部 Agent 仍使用由用户发放的最小权限 Bearer Token。已有开发双 Token 原型不得直接用于企业生产。实施和安全验收以 [本地账号认证专项设计](local-account-auth.md) 为准；T03、T22 和验收矩阵已同步修改。
 
 ## 4. 当前事实与开发增量
 
