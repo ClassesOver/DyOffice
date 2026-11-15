@@ -24,13 +24,47 @@ Open `http://127.0.0.1:3080` for the personal workspace and `/admin` for adminis
 - Admin-only Streamable HTTP MCP configuration and real connection/tool discovery using the official MCP SDK. No stdio subprocess transport.
 - Separate personal/admin bearer tokens. The admin token manages configuration, but cannot read or modify personal files, preferences or data sources. Secrets encrypted with AES-256-GCM and omitted from read responses.
 
-The development token server refuses startup when `NODE_ENV=production`, before reading or creating its data directory. This guard is not OIDC authentication or multi-user resource isolation; production identity and ownership controls remain unimplemented.
+The development token server refuses startup when `NODE_ENV=production`, before reading or creating its data directory. This guard is not production account authentication or multi-user resource isolation. Production will use **local username/password authentication**, Admin-managed accounts, PostgreSQL-backed server sessions and personal resource ownership. OIDC/Keycloak/SSO are explicitly out of scope. See `docs/dyoffice/local-account-auth.md`. These features are **not implemented yet**.
 
 ## Remaining implementation
 
 Native browser editor integration, document save/revision lifecycle, model chat/tool execution, database connectors and query integration, source edit/delete/test UI, file folders/favorites/recent views, multi-user login and deployment hardening. Preference fields for editor features are persisted now and will be applied as each editor is integrated. This is a development foundation, not a completed Office editor.
 
 Run `npm run test:web` for HTTP access-boundary and persistence tests. Runtime dependencies are scoped to this app so starting the Web server does not install or launch Electron.
+
+## Local password account bootstrap (T03a; CLI only)
+
+The repository now includes a PostgreSQL migration runner, an Argon2id password
+hasher and a **trusted-operator-only** one-time administrator bootstrap CLI.
+This does **not** make the existing Web token-login UI a production identity
+system; browser login, session revocation, throttling and per-user file RLS
+remain T03b/T04.
+
+Use the locked Web dependencies and an already provisioned PostgreSQL 16+
+database. Supply a dedicated *migration* role through `DYOFFICE_DATABASE_URL`
+and an explicit deployment UUID. Do not use the migration role for regular app
+traffic. Run the command from the repository root:
+
+```sh
+npm ci --prefix apps/web --workspaces=false --include=dev
+DYOFFICE_DATABASE_URL='postgresql://MIGRATION_USER@db-host/dbname' \
+  node apps/web/tools/bootstrap-admin.mjs \
+  --deployment-id 'REPLACE-WITH-DEPLOYMENT-UUID' \
+  --username admin.local
+```
+
+The CLI prompts for the password twice in a TTY without echoing it, runs the
+identity migrations transactionally, and creates the initial administrator,
+role and personal workspace in a single transaction. It refuses a second
+bootstrap in that deployment. For controlled non-interactive installation
+only, `--password-stdin` reads one line from a pipe; **never** supply passwords
+through argv, environment variables, shell history or logs. There is no
+HTTP bootstrap endpoint or default admin password.
+
+Run the identity tests using the dedicated [identity schema CI workflow](../../.github/workflows/dyoffice-identity-schema.yml).
+This validates the actual native Argon2id module, PostgreSQL migrations,
+concurrent initializations and CLI. Do not enable this account store for Web
+users until T03b/T04 authorization and resource-isolation gates are met.
 
 ## Web-only build baseline (T00)
 
@@ -74,4 +108,4 @@ Admin updates apply supplied sections against the latest state inside the instan
 
 每个请求由服务端生成独立 `X-Request-ID`，不信任或回显客户端同名请求头。JSON 错误响应保持原有 HTTP 状态码、`application/json` 和 `error` 文案，增量提供 `type: about:blank`、`title`、`status`、`detail`、`requestId`；成功响应正文不变。错误中不包含请求 URL、查询参数或内部异常详情，500 继续返回通用文案。
 
-此接缝不代表 T02 完成：Fastify 模块化、完整 `/api/v1` 迁移（当前仅有只读文件桥接）、限流、ready/live 和优雅关闭仍待实施；未实现 T03 OIDC/会话撤销，不能用它宣称真实登录或退出能力。
+此接缝不代表 T02 完成：Fastify 模块化、完整 `/api/v1` 迁移（当前仅有只读文件桥接）、限流、ready/live 和优雅关闭仍待实施；未实现 T03 本地账号密码/服务端会话撤销，不能用它宣称正式登录或退出能力。

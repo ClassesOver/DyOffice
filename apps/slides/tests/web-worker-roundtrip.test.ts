@@ -2,7 +2,8 @@
 /** Node-side reuse gate, not browser UI, authorization or visual-fidelity acceptance.
  * Unlike edit-flow's direct model mutation, this crosses runTxn + native render + disk IO.
  */
-import {afterEach, describe, expect, it} from 'vitest'
+import {afterEach, describe, expect, it, vi} from 'vitest'
+import JSZip from 'jszip'
 import {mkdtemp, readFile, rm, writeFile} from 'node:fs/promises'
 import {tmpdir} from 'node:os'
 import {join} from 'node:path'
@@ -10,8 +11,16 @@ import {addElement, createBlankPptx, openPptx, savePptx, type OpenedPptx, type T
 import {runTxn} from '@genoffice/pptx-ops'
 import {buildRenderSlide} from '@genoffice/pptx-render'
 
+
+async function expectSameParts(left: Uint8Array, right: Uint8Array) {
+  const a = await JSZip.loadAsync(left), b = await JSZip.loadAsync(right)
+  const names = Object.keys(a.files).filter(name => !a.files[name]!.dir).sort()
+  expect(Object.keys(b.files).filter(name => !b.files[name]!.dir).sort()).toEqual(names)
+  for (const name of names) expect(await a.files[name]!.async('uint8array'), name).toEqual(await b.files[name]!.async('uint8array'))
+}
+
 const directories: string[] = []
-afterEach(async () => { for (const directory of directories.splice(0)) await rm(directory, {recursive:true, force:true}) })
+afterEach(async () => { vi.useRealTimers(); for (const directory of directories.splice(0)) await rm(directory, {recursive:true, force:true}) })
 
 function firstText(opened: OpenedPptx): TextElement {
   const element=opened.deck.slides[0]!.elements.find(item => item.type==='text' || item.type==='shape')
@@ -50,11 +59,16 @@ describe('Web worker reuse: native PPTX engine + ops + render', () => {
     expect(render.widthPx).toBe(960)
     expect(JSON.stringify(render)).toContain('DyOffice')
     for (const {path,xml} of preserved) expect(reopened.archive.readText(path),path).toBe(xml)
-    expect(await savePptx(reopened)).toEqual(edited)
+    // ZIP container timestamps can change; fidelity is the bytes of every package part.
+    vi.useFakeTimers({toFake:['Date']})
+    vi.setSystemTime(Date.now() + 4000)
+    const later = await savePptx(reopened)
+    expect(later).not.toEqual(edited) // Reproduces a different DOS timestamp, not a document edit.
+    await expectSameParts(later, edited)
     // Heuristic metrics suffice for this data-flow check, not a font/layout fidelity claim.
   })
 
-  it('rejects an invalid native op batch without changing bytes or a separately opened model', async () => {
+  it('rejects an invalid native op batch without changing package parts or a separately opened model', async () => {
     const {opened,bytes}=await diskFixture()
     const other=await openPptx(bytes)
     const before=await savePptx(opened)
@@ -64,8 +78,8 @@ describe('Web worker reuse: native PPTX engine + ops + render', () => {
     ]})
     expect(rejected.applied).toBe(false)
     expect(rejected.failures?.length).toBeGreaterThan(0)
-    expect(await savePptx(opened)).toEqual(before)
-    expect(await savePptx(other)).toEqual(bytes)
+    await expectSameParts(await savePptx(opened), before)
+    await expectSameParts(await savePptx(other), bytes)
     // Separate model state is not a substitute for server principal/session authorization.
   })
 })

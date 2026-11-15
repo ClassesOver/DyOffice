@@ -1,0 +1,93 @@
+name: DyOffice local identity schema gate
+
+on:
+  push:
+    branches: [main, feat/dyoffice-web]
+    paths:
+      - 'apps/web/server/auth/**'
+      - 'apps/web/server/db/**'
+      - 'apps/web/tools/bootstrap-admin.mjs'
+      - 'apps/web/test/integration/**'
+      - 'apps/web/package.json'
+      - 'apps/web/package-lock.json'
+      - 'package-lock.json'
+      - 'apps/web/test/auth-bootstrap.test.mjs'
+      - 'apps/web/test/db-migrations.test.mjs'
+      - 'apps/web/test/integration/identity-schema.sql'
+      - '.github/workflows/dyoffice-identity-schema.yml'
+  pull_request:
+    paths:
+      - 'apps/web/server/auth/**'
+      - 'apps/web/server/db/**'
+      - 'apps/web/tools/bootstrap-admin.mjs'
+      - 'apps/web/test/integration/**'
+      - 'apps/web/package.json'
+      - 'apps/web/package-lock.json'
+      - 'package-lock.json'
+      - 'apps/web/test/auth-bootstrap.test.mjs'
+      - 'apps/web/test/db-migrations.test.mjs'
+      - 'apps/web/test/integration/identity-schema.sql'
+      - '.github/workflows/dyoffice-identity-schema.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  identity-schema:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: dyoffice_test
+          POSTGRES_PASSWORD: local-ci-only-not-for-production
+          POSTGRES_DB: dyoffice_identity_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U dyoffice_test -d dyoffice_identity_test"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+      - name: Install isolated Web dependencies with native Argon2id
+        run: npm ci --prefix apps/web --workspaces=false --include=dev --no-audit --no-fund
+      - name: Test migration/bootstrap transaction orchestration
+        run: node --test apps/web/test/db-migrations.test.mjs apps/web/test/auth-bootstrap.test.mjs
+      - name: Check identity source and test syntax before database work
+        run: |
+          node --check apps/web/server/auth/passwords.mjs
+          node --check apps/web/server/auth/bootstrap-admin.mjs
+          node --check apps/web/server/db/migrate.mjs
+          node --check apps/web/tools/bootstrap-admin.mjs
+          node --check apps/web/test/integration/local-identity.test.mjs
+      - name: Test native password and database integration
+        env:
+          DYOFFICE_TEST_DATABASE_URL: postgresql://dyoffice_test:local-ci-only-not-for-production@localhost:5432/dyoffice_identity_test
+        run: node --test apps/web/test/integration/bootstrap-cli.test.mjs apps/web/test/integration/local-identity.test.mjs
+      - name: Ensure PostgreSQL client is installed
+        run: command -v psql >/dev/null || (sudo apt-get update && sudo apt-get install -y --no-install-recommends postgresql-client)
+      - name: Exercise one-time administrator CLI against PostgreSQL
+        env:
+          DYOFFICE_DATABASE_URL: postgresql://dyoffice_test:local-ci-only-not-for-production@localhost:5432/dyoffice_identity_test
+        run: |
+          set -euo pipefail
+          PASS=$(node -e "process.stdout.write(require('node:crypto').randomBytes(32).toString('base64url'))")
+          printf '%s\n' "$PASS" | node apps/web/tools/bootstrap-admin.mjs --deployment-id 99999999-9999-4999-8999-999999999999 --username initial.admin --password-stdin
+          if printf '%s\n' "$PASS" | node apps/web/tools/bootstrap-admin.mjs --deployment-id 99999999-9999-4999-8999-999999999999 --username another.admin --password-stdin; then
+            echo 'Second bootstrap unexpectedly succeeded' >&2
+            exit 1
+          fi
+          test "$(PGPASSWORD=local-ci-only-not-for-production psql -h localhost -U dyoffice_test -d dyoffice_identity_test -Atc "select count(*) from dyoffice_admin_bootstrap where deployment_id='99999999-9999-4999-8999-999999999999'")" = 1
+      - name: Verify identity constraints on real PostgreSQL
+        env:
+          PGHOST: localhost
+          PGPORT: '5432'
+          PGUSER: dyoffice_test
+          PGPASSWORD: local-ci-only-not-for-production
+          PGDATABASE: dyoffice_identity_test
+        run: psql -X -v ON_ERROR_STOP=1 -f apps/web/test/integration/identity-schema.sql

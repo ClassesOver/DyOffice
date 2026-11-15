@@ -28,6 +28,7 @@ Inspected baselines:
 
 - Product file support is DOCX, XLSX, PPTX and PDF only. Exclude standalone Markdown/HTML editor entry points and unsupported document formats; retain internal dependencies needed by the four supported formats.
 - Personal workspaces only; no team/member management or team permission UI.
+- Authentication is first-party username/password with Admin-managed accounts, secure server sessions and per-user workspaces. Do not add OIDC/Keycloak/SSO to the implementation plan; external Harness integrations use independent scoped HTTP API Tokens. See [local-account-auth.md](local-account-auth.md).
 - Retain personal preferences. Move models, service credentials and global defaults into Admin; keep secrets server-side.
 - Retain data-source management. For capabilities missing from GenOffice, selectively reuse sm's existing adapters after inspecting dependencies and tests, without importing its whole reporting/team architecture.
 - Preserve GenOffice licenses and provenance. Record source revisions for any code adopted from sm.

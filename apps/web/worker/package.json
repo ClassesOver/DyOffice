@@ -1,0 +1,21 @@
+{
+  "name": "@dyoffice/native-pptx-validation",
+  "private": true,
+  "type": "module",
+  "description": "Isolated Node-only PPTX validation harness; not a deployed worker service",
+  "scripts": {
+    "test": "vitest run --config vitest.pptx.config.mjs",
+    "typecheck": "tsc -p tsconfig.pptx.json"
+  },
+  "devDependencies": {
+    "@types/node": "22.20.5",
+    "bidi-js": "1.0.3",
+    "fast-xml-parser": "5.12.0",
+    "jszip": "3.10.1",
+    "opentype.js": "2.0.0",
+    "typescript": "5.9.3",
+    "utif2": "4.1.0",
+    "vitest": "4.1.12",
+    "vite": "7.3.7"
+  }
+}

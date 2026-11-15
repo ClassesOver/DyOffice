@@ -8,7 +8,7 @@
 
 **Tech Stack:** TypeScript、React/Vite、Fastify、PostgreSQL/Drizzle、S3、Redis/BullMQ（任务阶段引入）、现有 GenOffice 包及官方 MCP SDK；具体版本由 T00 锁定。
 
-**Spec:** [architecture.md](architecture.md)、[enterprise-delivery.md](enterprise-delivery.md)、[acceptance-matrix.md](acceptance-matrix.md)。原有约束见 `reuse.md`、`../../DYOFFICE.md`。
+**Spec:** [architecture.md](architecture.md)、[local-account-auth.md](local-account-auth.md)、[enterprise-delivery.md](enterprise-delivery.md)、[acceptance-matrix.md](acceptance-matrix.md)。原有约束见 `reuse.md`、`../../DYOFFICE.md`。
 
 ## 全局约束
 
@@ -18,7 +18,7 @@
 - 全局模型、媒体、搜索、重排、HTTP MCP 和凭据在 Admin；个人偏好不能覆盖安全策略。
 - MCP 对用户只开放 HTTP；URL Token 仅隔离开发测试，production 开启即拒绝启动。
 - HTTP 持久提交是文件真相；WS ACK、本地编辑和模型回答不是保存成功。
-- 所有用户权限由服务端身份派生；不接受客户端任意 owner/user/deployment 参数作为授权依据。
+- 所有用户权限由本地账号密码登录产生的服务端会话派生；管理员创建账户、个人独立 workspace；不引入 OIDC/SSO，不接受客户端任意 owner/user/deployment 参数作为授权依据。
 - 复用代码保留许可、NOTICE 和来源 SHA；原生 ABI、字体和模型外发策略逐项验收。
 - 项目实施分支为 `feat/dyoffice-web`；每任务使用小 PR/提交，禁止把所有阶段合成不可审查的大补丁。
 
@@ -120,17 +120,20 @@ docs/dyoffice/               当前计划及 inventory/ evidence/ adr/
 - [ ] 运行 legacy + integration + build；所有旧契约保持或明确提供迁移响应。
 - [ ] 提交 `refactor(web): introduce modular api without contract regressions`。
 
-### T03 身份、会话与最小持久数据层
+### T03 本地账号密码、管理员用户管理与服务端会话
 
-**依赖：** T02。**文件：** `server/src/modules/auth/{service,routes,oidc}.ts`、`db/schema.ts`、`db/migrations/0001_identity.sql`、`test/integration/auth-session.test.ts`（均拟建）。
+**依赖：** T02。**文件：** 拟建 `server/src/modules/auth/{service,routes,passwords,sessions,throttle,csrf}.ts`、`server/src/modules/admin/users/{routes,service}.ts`、`db/schema.ts`、`db/migrations/0001_identity.sql`、`tools/dyoffice/bootstrap-admin.ts`、`test/integration/{auth-session,admin-users,password-reset}.test.ts`。
 
-**接口：** `authenticate(request): Promise<Principal>`、`revokeSession(principal,sessionId)`；OIDC `(issuer,subject)` 绑定稳定用户。
+**接口：** `authenticate(request): Promise<Principal>`、`createLocalSession(userId)`、`verifyPassword(userId,password)`、`revokeSession(principal,sessionId)`、`disableUser(admin,targetId)`；身份稳定键是数据库中的用户 UUID，`(deploymentId,usernameNormalized)` 唯一，不接受外部身份签名/回调。专门设计和接口约束见 [local-account-auth.md](local-account-auth.md)。
 
-- [ ] 测试登录状态轮换、CSRF、错误 issuer/audience、账号停用、会话撤销，以及生产启动时拒绝开发双 Token。
-- [ ] 运行对应 integration，未有真实身份存储时为 RED。
-- [ ] 实现 OIDC/BFF、HttpOnly/Secure Cookie、一次性登录 state/nonce、服务端会话和个人 workspace 创建；IdP 密钥不进入浏览器。
-- [ ] 用本地测试 IdP 与真实 PostgreSQL 验证登录/退出/停用；不得依赖共享测试用户掩盖隔离。
-- [ ] 提交 `feat(auth): add oidc sessions and personal identities`。
+- [ ] **T03a，RED：** 先测试用户名归一化/重复、首次 Admin bootstrap 并发、无默认密码、空/弱/泄露密码拒绝、Argon2id 散列独立盐、用户名不存在与错误密码等成本验证、账号禁用拒绝；在尚无服务时记录失败。
+- [ ] **T03a，GREEN：** 加 users/user_roles/password_action_tokens/session 表和约束；Argon2id 起始不少于 19 MiB、t=2、p=1（目标主机基准校准）；单因素密码至少 15 字符、允许长短语/Unicode、无强制复杂度规则；交互式一次性 Admin 初始化，生产拒绝默认密码/开发双 Token。
+- [ ] **T03b，RED：** 测试登录、登出、`me`、新会话 ID、Cookie `Secure/HttpOnly/SameSite`、CSRF/Origin、重复 Cookie、密码枚举、IP+账号限流、空闲/绝对超时、登录与撤销并发、生产启动守卫；拒绝错误身份不泄漏存在性。
+- [ ] **T03b，GREEN：** 实现本地 `POST /api/v1/auth/login`、`logout`、`GET /api/v1/auth/me`、`reauth` 及个人会话查询/撤销；随机会话令牌只在 Cookie，数据库仅保存散列、`auth_version` 与撤销状态；所有敏感请求建立授权 Principal。
+- [ ] **T03c，RED：** 管理员创建/停用/恢复账号、修改角色、短期激活/重置 Token 一次性并发消费、管理员再认证、旧会话/API Token 撤销、管理员不可查看用户个人文件；新建账号不自行拥有管理权限。
+- [ ] **T03c，GREEN：** 管理员用户列表、开户、激活、停用、角色修改和密码重置；允许用户校验旧密码后修改密码，失效旧会话与写租约；每个账号初始化个人 workspace；管理操作审计，重置令牌不记日志。
+- [ ] 以真实 PostgreSQL + HTTP/浏览器运行以上 GREEN、`npm run test:web`、Web 类型/构建门禁、`git diff --check`；提供失败复现、密码哈希资源压力与撤销时延证据；没有真实 DB 记 blocked 而非通过。
+- [ ] 提交一系列可独立复核的小 PR：`feat(auth): add password hashing and admin bootstrap`、`feat(auth): add local login sessions`、`feat(admin): manage local accounts and resets`。未完成 T03/T04 不允许生产写入。
 
 ### T04 资源授权与 RLS
 
@@ -348,17 +351,17 @@ docs/dyoffice/               当前计划及 inventory/ evidence/ adr/
 - [ ] 全部安全门槛 GREEN；外部渗透测试独立留证，高危未关闭不得放行。
 - [ ] 提交 `feat(security): harden enterprise document and ai boundaries`。
 
-### T22 企业身份接入与数据迁移工具
+### T22 本地账号迁移、用户初始化与数据迁移工具
 
-**依赖：** T03/T04/T12/T20。**文件：** `tools/dyoffice/migrate-state.ts`、`tools/dyoffice/validate-migration.ts`、`deploy/dyoffice/config/identity.example.yaml`、`test/integration/legacy-migration.test.ts`。
+**依赖：** T03/T04/T12/T20。**文件：** `tools/dyoffice/migrate-state.ts`、`tools/dyoffice/validate-migration.ts`、`deploy/dyoffice/config/local-auth.example.yaml`、`test/integration/legacy-migration.test.ts`。
 
 **接口：** `migrateLegacyState(input,dryRun)`，显式将单用户原型映射到指定用户，绝不自动广播给所有用户。
 
 - [ ] 测试重复导入、缺少旧加密 Key、重名文件、损坏对象、未知 owner、停用员工和 Admin 角色错误映射。
 - [ ] migration integration RED。
-- [ ] 输出预演报告，原文件/密钥先备份；复制校验而非就地破坏；接客户 IdP、MFA、账号停用与 session 撤销流程。
+- [ ] 输出预演报告，原文件/密钥先备份；复制校验而非就地破坏；将旧开发数据显式绑定新本地账号 UUID，不自动生成弱密码，不迁移开发 Bearer Token 为生产登录；管理员一次性开户和停用/session 撤销流程可复核。
 - [ ] 核对数量/总字节/hash/归属/凭据状态，第二次运行无重复；恢复原环境演练成功。
-- [ ] 提交 `feat(delivery): add safe identity and legacy data migration`。
+- [ ] 提交 `feat(delivery): migrate legacy state into scoped local accounts`。
 
 ### T23 可观测性、发布包与部署
 
