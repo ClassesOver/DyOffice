@@ -22,11 +22,14 @@ jobs:
         with:
           node-version: 22
       - run: npm ci --prefix apps/web --workspaces=false --ignore-scripts --include=dev
-      - run: npm install --prefix /tmp/dyoffice-capture --ignore-scripts playwright@1.61.1
+      - run: npm install --prefix /tmp/dyoffice-capture --ignore-scripts playwright@1.61.1 tsx@4.23.1 jszip@3.10.1 fast-xml-parser@5.12.0 utif2@4.1.0
       - run: /tmp/dyoffice-capture/node_modules/.bin/playwright install --with-deps chromium
       - name: Run the unchanged application and photograph its real UI
         run: |
-          node apps/web/server/index.mjs > /tmp/dyoffice-server.log 2>&1 &
+          mkdir -p node_modules/@genoffice
+          for pkg in zip-gate agent-core pptx-engine docx-engine; do ln -s "$GITHUB_WORKSPACE/packages/$pkg" "node_modules/@genoffice/$pkg"; done
+          for pkg in jszip fast-xml-parser utif2; do ln -s "/tmp/dyoffice-capture/node_modules/$pkg" "node_modules/$pkg"; done
+          node --import /tmp/dyoffice-capture/node_modules/tsx/dist/loader.mjs apps/web/server/index.mjs > /tmp/dyoffice-server.log 2>&1 &
           for i in $(seq 1 30); do if curl -fsS http://127.0.0.1:3080/ >/dev/null; then break; fi; sleep 1; done
           node tools/dyoffice/capture-ui.mjs
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
