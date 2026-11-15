@@ -58,6 +58,13 @@ jobs:
         run: npm ci --prefix apps/web --workspaces=false --include=dev --no-audit --no-fund
       - name: Test migration/bootstrap transaction orchestration
         run: node --test apps/web/test/db-migrations.test.mjs apps/web/test/auth-bootstrap.test.mjs
+      - name: Check identity source and test syntax before database work
+        run: |
+          node --check apps/web/server/auth/passwords.mjs
+          node --check apps/web/server/auth/bootstrap-admin.mjs
+          node --check apps/web/server/db/migrate.mjs
+          node --check apps/web/tools/bootstrap-admin.mjs
+          node --check apps/web/test/integration/local-identity.test.mjs
       - name: Test native password and database integration
         env:
           DYOFFICE_TEST_DATABASE_URL: postgresql://dyoffice_test:local-ci-only-not-for-production@localhost:5432/dyoffice_identity_test
