@@ -2,9 +2,11 @@
 
 This is the Web adaptation inside the cloned GenOffice repository, based on upstream `19a389b39be75f611ec21dcda4a7b91a658239d2`. UI and browser integration reference: ClassesOver/sm PR #245 (`beeb717b31e2201cc1e541c54b2f750f606d99e2`). Upstream engines and license notices remain in place.
 
-## Run
+The first sections describe the original bearer-token prototype. The separate PostgreSQL local-account runtime is documented in T03–T07 below; its native DOCX entry uses Cookie sessions and does not read prototype JSON state. Neither path is enabled for production.
 
-Requires Node 22.12+. From the repository root:
+## Run the original prototype
+
+Use Node 22.x, version 22.12 or newer. From the repository root:
 
 ```sh
 npm install --prefix apps/web --workspaces=false --ignore-scripts
@@ -24,11 +26,11 @@ Open `http://127.0.0.1:3080` for the personal workspace and `/admin` for adminis
 - Admin-only Streamable HTTP MCP configuration and real connection/tool discovery using the official MCP SDK. No stdio subprocess transport.
 - Separate personal/admin bearer tokens. The admin token manages configuration, but cannot read or modify personal files, preferences or data sources. Secrets encrypted with AES-256-GCM and omitted from read responses.
 
-The development token server refuses startup when `NODE_ENV=production`, before reading or creating its data directory. This guard is not production account authentication or multi-user resource isolation. Production will use **local username/password authentication**, Admin-managed accounts, PostgreSQL-backed server sessions and personal resource ownership. OIDC/Keycloak/SSO are explicitly out of scope. See `docs/dyoffice/local-account-auth.md`. These features are **not implemented yet**.
+The development token server refuses startup when `NODE_ENV=production`, before reading or creating its data directory. This guard is not production account authentication or multi-user resource isolation. Production will use **local username/password authentication**, Admin-managed accounts, PostgreSQL-backed server sessions and personal resource ownership. OIDC/Keycloak/SSO are explicitly out of scope. See `docs/dyoffice/local-account-auth.md`. The experimental local-account/session/file APIs are implemented in the separate runtime described below; the production release gates and full workspace UI remain unfinished.
 
 ## Remaining implementation
 
-Native browser editor integration, document save/revision lifecycle, model chat/tool execution, database connectors and query integration, source edit/delete/test UI, file folders/favorites/recent views, multi-user login and deployment hardening. Preference fields for editor features are persisted now and will be applied as each editor is integrated. This is a development foundation, not a completed Office editor.
+The other three native browser editors, full model chat/tool execution, durable native jobs, database query integration, source-management UI, file folders/favorites/recent views, local-account login/workspace UI and deployment hardening. Experimental DOCX editing and revision commits are available through the explicitly enabled local runtime below. Preference fields for editor features are persisted now and will be applied as each editor is integrated. This is a development foundation, not a completed Office editor.
 
 Run `npm run test:web` for HTTP access-boundary and persistence tests. Runtime dependencies are scoped to this app so starting the Web server does not install or launch Electron.
 
@@ -151,7 +153,7 @@ T02 仍需逐领域迁移旧路由与完整 `/api/v1` 契约；本地账号、�
 
 所有操作依赖 Cookie 会话；写入还需准确 Origin 和 `X-CSRF-Token`。不接受 owner、objectKey 或客户端哈希作为授权/完整性证明。上传完成前没有可下载文件；finish 失败可在期限内重试，成功重试返回同一初始版本。接收阶段响应丢失时，不要覆盖对象，可尝试 finish 确认是否已就绪。后台对象操作未结束时，客户端断线仍占用传输名额；满额返回临时 503。
 
-T05b 提供原件生命周期；下文 T06 增加受控的版本保存 API。原生编辑器仍未接入，能力目录仍全部 unsupported。浏览器/工作区 UI、编辑器、操作系统解析隔离与恶意内容扫描、保留清理、完整恢复和企业部署尚未完成，production 继续关闭。仅使用授权测试文件进行隔离开发。真实 PostgreSQL/S3/HTTP/TLS 证据见 [T05b 记录](../../docs/dyoffice/evidence/t05b-file-lifecycle.md)。
+T05b 提供原件生命周期；下文 T06 增加受控的版本保存 API。未开启下文 T07 实验入口时，能力目录仍全部 unsupported。完整工作区 UI、其他原生编辑器、操作系统解析隔离与恶意内容扫描、保留清理、完整恢复和企业部署尚未完成，production 继续关闭。仅使用授权测试文件进行隔离开发。真实 PostgreSQL/S3/HTTP/TLS 证据见 [T05b 记录](../../docs/dyoffice/evidence/t05b-file-lifecycle.md)。
 
 
 ### T06 租约、保存提交与历史
@@ -177,3 +179,22 @@ T05b 提供原件生命周期；下文 T06 增加受控的版本保存 API。原
 历史恢复接口会校验并复制原件到一个新的 ready 上传；随后用该 uploadId、当前 baseRevision 和有效租约调用 commits。恢复不能覆盖其后发生的新修改，最终产生一个新版本而非把指针倒退。`GET /api/v1/files/:id/content?revision=UUID` 可下载该文件任何保留版本的校验后原件。回收站仍需先恢复文件再访问版本。
 
 所有历史版本、待清理对象继续占配额；尚无自动硬删除或历史回收。outbox 当前只在保存事务内持久记录事件意图，T08 才实现派发，不能把它当外部任务已完成。真实 PostgreSQL/S3/Chromium 测试、升级与已知边界见 [T06 证据](../../docs/dyoffice/evidence/t06-revision-transactions.md)。完整原生编辑、解析 OS 沙箱、生产部署和客户验收仍未完成。
+
+
+### T07 原生 DOCX 浏览器实验入口
+
+在上述 local 会话、migration 6、文件实验 API 和 HTTPS Origin 配置完成后，使用 Node 22 在仓库根目录执行：
+
+```sh
+npm ci --ignore-scripts --include=dev
+npm run build:web:docs
+# 在已配置 local 模式的服务环境中启用原生入口
+export DYOFFICE_NATIVE_DOCX=experimental
+npm run dev:web
+```
+
+默认只读取 `apps/web/dist-docs` 的构建清单；可用受信任的服务配置 `DYOFFICE_NATIVE_DOCX_DIRECTORY` 指向同类完整输出目录。缺少文件 API 或构建资源会拒绝启动，不回退到源文件服务。通过登录 API 建立 Secure Cookie 后，导入 DOCX，再访问 `/native-docx/?fileId=<文件 UUID>`。该路径要求本人拥有未删除的 DOCX；静态资源也需要有效会话。开启该入口后，能力目录和打开结果只将 DOCX 标记为 editable，其他三格式仍 unsupported。
+
+页面复用 GenOffice 的 Tiptap 渲染器、DOCX parser/writer、分页和字体，通过会话 BrowserHost 保存；Ctrl+S 提交新版本。使用租约续期、显式接管、捕获基线 CAS 与幂等回执。失去租约后只读，未知保存结果保留草稿并先确认原请求；保存期间的新输入不会被旧响应清空。版本下载使用既有 content API，单个历史版本元数据新增 `GET /api/v1/files/:id/revisions/:revision`。
+
+这仍是纵向开发接缝：登录/文件列表 UI、AI、完整桌面功能替代、崩溃草稿恢复与外部 Word QA 尚待后续验收，production 拒绝保持生效。浏览器不能调用桌面文件路径或通用 IPC。测试使用真正的 Chromium + TLS + 独立 PostgreSQL：`npm run test:web:docs` 会先重新构建，需预先安装 Chromium 并配置隔离的 `DYOFFICE_TEST_DATABASE_URL`。类型检查为 `npm run typecheck:web:docs`；现有 Docs 与 docx-engine 测试必须使用 Node 22。

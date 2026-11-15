@@ -15,6 +15,9 @@ export function forbiddenSpecifier(specifier) {
   const clean = specifier.replace(/^node:/, '')
   if (specifier.startsWith('node:')) return true
   if (specifier === 'electron' || specifier.startsWith('electron/')) return true
+  // These existing renderer helpers contain only browser-safe pure logic.
+  // Follow their transitive imports normally; never allow the package root.
+  if (['@genoffice/electron-utils/safe-external-url','@genoffice/electron-utils/headless-export'].includes(specifier)) return false
   if (specifier === '@genoffice/electron-utils' || specifier.startsWith('@genoffice/electron-utils/')) return true
   return builtins.has(clean.split('/')[0])
 }
@@ -23,6 +26,12 @@ function imports(source, file) {
   const ast = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true)
   const found = []
   function visit(node) {
+    if ((ts.isImportDeclaration(node) && node.importClause?.isTypeOnly) ||
+        (ts.isExportDeclaration(node) && node.isTypeOnly)) return
+    const bindings = ts.isImportDeclaration(node) ? node.importClause?.namedBindings : ts.isExportDeclaration(node) ? node.exportClause : undefined
+    if (bindings && (ts.isNamedImports(bindings) || ts.isNamedExports(bindings)) &&
+        bindings.elements.length && bindings.elements.every(element => element.isTypeOnly) &&
+        !(ts.isImportDeclaration(node) && node.importClause?.name)) return
     let argument
     let mode = 'import'
     if (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) argument = node.moduleSpecifier

@@ -5,7 +5,6 @@ import { cookies } from '../auth/csrf.ts'
 import { authError } from '../auth/sessions.ts'
 import { MAX_OBJECT_BYTES } from '../../storage/object-store.ts'
 import type { FileService } from './service.ts'
-import { UNSUPPORTED_CAPABILITIES } from '../../../../../../packages/web-contracts/src/host.ts'
 
 import { uuidSchema as id, fileParamsSchema as params, emptyQuerySchema as emptyQuery } from './http-schema.ts'
 import { registerRevisionRoutes } from '../revisions/routes.ts'
@@ -56,7 +55,7 @@ export function registerFileRoutes(app: FastifyInstance, files: FileService, ses
     api.addHook('onError', async request => { if (!admitted.get(request)?.running) release(request) })
     if (saves) registerRevisionRoutes(api,{ ...saves, transfer })
     api.addContentTypeParser('application/octet-stream', { parseAs: 'buffer', bodyLimit: MAX_OBJECT_BYTES }, (_request, body, done) => done(null, body))
-    api.get('/api/v1/capabilities', { schema: { querystring: emptyQuery } }, async () => UNSUPPORTED_CAPABILITIES)
+    api.get('/api/v1/capabilities', { schema: { querystring: emptyQuery } }, async () => files.capabilities)
     api.get('/api/v1/storage/usage', { schema: { querystring: emptyQuery } }, request => files.usage(token(request)))
     api.post('/api/v1/files/uploads', { bodyLimit: 4096, schema: { querystring: emptyQuery, body: { type: 'object', additionalProperties: false, required: ['name','size'], properties: { name: { type: 'string', minLength: 1, maxLength: 255 }, size: { type: 'integer', minimum: 1, maximum: MAX_OBJECT_BYTES } } } } }, async (request, reply) => {
       const staged = await files.stageUpload(token(request), request.body as { name: string; size: number })

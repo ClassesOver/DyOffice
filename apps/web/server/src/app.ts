@@ -1,3 +1,4 @@
+import { createStaticAssets } from '../static-assets.mjs'
 import type { FastifyInstance, HTTPMethods } from 'fastify'
 import { createApplicationHandler } from '../application.mjs'
 import { isStoreReady } from '../health.mjs'
@@ -36,7 +37,7 @@ export async function buildApp(config: WebConfig): Promise<FastifyInstance> {
 
 export interface LocalWebConfig {
   db: IdentityStore; businessPool?: Pool; deploymentId: string; origin: string; csrfKey: string; passwords?: PasswordService;
-  objectStore?: ObjectStore; filePolicy?: FilePolicy;
+  objectStore?: ObjectStore; filePolicy?: FilePolicy; nativeDocsDirectory?: string;
   passwordBlocklistFile?: string; loginLimits?: LoginLimits; idleMs?: number; absoluteMs?: number; closeDb?: () => Promise<void>
 }
 export async function buildLocalApp(config: LocalWebConfig): Promise<FastifyInstance> {
@@ -54,6 +55,8 @@ export async function buildLocalApp(config: LocalWebConfig): Promise<FastifyInst
     await assertRuntimePool(config.businessPool, 'business')
     await assertSharedDatabase(config.db.pool, config.businessPool)
   }
+  if (config.nativeDocsDirectory && !config.objectStore) throw new Error('Native DOCX requires File API')
+  const nativeDocs = config.nativeDocsDirectory ? await createStaticAssets({ assetMode: 'built',assetDirectory: config.nativeDocsDirectory,pages: ['index.html'],assetInventory: '.vite/native-assets.json',cacheControl: 'private, no-store' }) : undefined
   const passwords = config.passwords ?? await createPasswordService({ blockedPasswords: await loadPasswordBlocklist(config.passwordBlocklistFile) })
   const accounts = createAccountService({ db: config.db, passwords, deploymentId: config.deploymentId })
   const sessions = createSessionService({ db: config.db, accounts, deploymentId: config.deploymentId, idleMs: config.idleMs, absoluteMs: config.absoluteMs })
@@ -69,10 +72,30 @@ export async function buildLocalApp(config: LocalWebConfig): Promise<FastifyInst
     const transactions = createPrincipalTransactions({ pool: config.businessPool, deploymentId: config.deploymentId, idleMs: config.idleMs })
     registerPreferenceRoutes(app, createPreferenceService(transactions), sessions, csrf)
     if (config.objectStore) {
-      const files = createFileService({ transactions, objects: config.objectStore, ...config.filePolicy })
+      const files = createFileService({ transactions, objects: config.objectStore, ...config.filePolicy, capabilities: nativeDocs ? { docx: 'editable',xlsx: 'unsupported',pptx: 'unsupported',pdf: 'unsupported' } : undefined })
       const leases = createLeaseService({ transactions })
       const revisions = createRevisionService({ transactions, objects: config.objectStore, files, ...config.filePolicy })
       registerFileRoutes(app,files,sessions,csrf,{ leases, revisions })
+      if (nativeDocs) app.route({
+        method: ['GET','HEAD'], url: '/native-docx/*',
+        onRequest: async (request,reply) => {
+          reply.raw.setHeader('Cache-Control','private, no-store')
+          reply.raw.setHeader('Content-Security-Policy',"default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data: blob:; worker-src 'self' blob:; connect-src 'self' blob:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'")
+          await sessions.authenticate(cookies(request).session ?? '')
+        },
+        handler: async (request,reply) => {
+          const url = new URL(request.url,config.origin), path = url.pathname.slice('/native-docx'.length)
+          if (path === '/' || path === '/index.html') {
+            const opened = await files.openFile(cookies(request).session ?? '',url.searchParams.get('fileId') ?? '')
+            if (opened.format !== 'docx') throw authError(404)
+          }
+          // No source fallback and no arbitrary file paths: only verified build assets.
+          const response = reply.raw
+          const served = await nativeDocs(request.raw,response,path)
+          if (!served) throw authError(404)
+          reply.hijack()
+        },
+      })
     }
   }
   app.route({

@@ -9,7 +9,7 @@ export type FileRow = { id: string; workspace_id: string; name: string; format: 
 export const uuid = (id: string) => { if (typeof id !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) throw authError(400); return id.toLowerCase() }
 export const scope = (p: BusinessPrincipal) => [p.deploymentId,p.userId]
 export const objectKey = (p: BusinessPrincipal, revisionId: string) => `${p.deploymentId}/${p.userId}/objects/${revisionId}`
-export const openResult = (row: FileRow): OpenFileResult => ({ file: { fileId: row.id, revision: row.current_revision, sha256: row.sha256, size: row.size }, format: row.format,
+export const openResult = (row: FileRow): OpenFileResult => ({ name: row.name, file: { fileId: row.id, revision: row.current_revision, sha256: row.sha256, size: row.size }, format: row.format,
   downloadEndpoint: `/api/v1/files/${row.id}/content?revision=${row.current_revision}`, capabilities: UNSUPPORTED_CAPABILITIES })
 export const fileDto = (row: FileRow) => ({ id: row.id, name: row.name, format: row.format, revision: row.current_revision, size: row.size, sha256: row.sha256, createdAt: row.created_at.toISOString(), updatedAt: row.updated_at.toISOString(), deletedAt: row.deleted_at?.toISOString() ?? null })
 

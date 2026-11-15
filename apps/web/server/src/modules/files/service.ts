@@ -1,19 +1,23 @@
+import { UNSUPPORTED_CAPABILITIES, type CapabilityCatalog } from '../../../../../../packages/web-contracts/src/host.ts'
 import { randomUUID } from 'node:crypto'
 import type { PoolClient } from 'pg'
 import type { BusinessPrincipal, PrincipalTransactions } from '../../db/context.ts'
 import type { ObjectStore } from '../../storage/object-store.ts'
 import { MAX_OBJECT_BYTES } from '../../storage/object-store.ts'
 import { validateFileName, validateUpload } from './validation.ts'
-import { uuid, scope, objectKey, openResult, fileDto, lockAccount, lockUpload, loadFile, releaseReservation, runFileTransaction, type FileRow } from './queries.ts'
+import { uuid, scope, objectKey, openResult as unsupportedOpenResult, fileDto, lockAccount, lockUpload, loadFile, releaseReservation, runFileTransaction, type FileRow } from './queries.ts'
 import { assertLiveLease } from '../leases/queries.ts'
 import { authError } from '../auth/sessions.ts'
 
 export interface FilePolicy { quotaBytes?: number; maxUploads?: number; uploadTtlMs?: number }
 
-export function createFileService({ transactions, objects, quotaBytes = 1024 ** 3, maxUploads = 16, uploadTtlMs = 15 * 60_000 }: { transactions: PrincipalTransactions; objects: ObjectStore } & FilePolicy) {
+export function createFileService({ transactions, objects, quotaBytes = 1024 ** 3, maxUploads = 16, uploadTtlMs = 15 * 60_000, capabilities = UNSUPPORTED_CAPABILITIES }: { capabilities?: CapabilityCatalog; transactions: PrincipalTransactions; objects: ObjectStore } & FilePolicy) {
   if (![quotaBytes,maxUploads,uploadTtlMs].every(value => Number.isSafeInteger(value) && value > 0) || quotaBytes > Number.MAX_SAFE_INTEGER / 2 || maxUploads > 1000 || uploadTtlMs > 24 * 3600_000) throw new Error('Invalid file policy')
   const run = <T>(token: string, action: 'files:read' | 'files:write', fn: (connection: PoolClient, principal: BusinessPrincipal) => Promise<T>) => runFileTransaction(transactions,token,action,fn)
+  const catalog = Object.freeze({ ...capabilities })
+  const openResult = (row: FileRow) => ({ ...unsupportedOpenResult(row),capabilities: catalog })
   const service = {
+    capabilities: catalog,
     async stageUpload(token: string, metadata: { name: string; size: number }) {
       if (!metadata || typeof metadata !== 'object' || Object.keys(metadata).some(key => !['name','size'].includes(key))) throw authError(400)
       const name = metadata.name, format = validateFileName(name), size = metadata.size

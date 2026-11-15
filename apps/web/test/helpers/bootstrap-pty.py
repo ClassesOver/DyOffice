@@ -35,10 +35,12 @@ try:
             if sent < len(prompts) and prompts[sent][0] in transcript:
                 os.write(master, prompts[sent][1])
                 sent += 1
-        if child.poll() is not None:
-            break
+        # Drain the terminal through EOF even if the exit status is ready.
     if child.poll() is None:
-        raise RuntimeError('Interactive bootstrap timed out after prompt ' + str(sent))
+        try:
+            child.wait(timeout=max(0, deadline - time.monotonic()))
+        except subprocess.TimeoutExpired:
+            raise RuntimeError('Interactive bootstrap timed out after prompt ' + str(sent))
     if child.returncode != 0 or b'Administrator created.' not in transcript:
         raise RuntimeError('Interactive bootstrap failed')
     if password in transcript:

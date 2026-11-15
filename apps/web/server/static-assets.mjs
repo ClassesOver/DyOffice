@@ -8,14 +8,16 @@ const contentTypes = {
   '.css':'text/css; charset=utf-8', '.png':'image/png', '.jpg':'image/jpeg',
   '.jpeg':'image/jpeg', '.svg':'image/svg+xml', '.webp':'image/webp',
   '.ico':'image/x-icon', '.woff':'font/woff', '.woff2':'font/woff2',
-  '.ttf':'font/ttf', '.wasm':'application/wasm',
+  '.mjs':'text/javascript; charset=utf-8', '.ttf':'font/ttf', '.wasm':'application/wasm',
 };
 
-/** Source is the legacy default. Built mode is a local integration seam, not production auth. */
-export async function createStaticAssets({ assetMode = 'source', assetDirectory } = {}) {
+/** Source is the legacy default. Built mode is a local integration seam, not production auth.
+ * @param {{assetMode?: string, assetDirectory?: string, pages?: string[], assetInventory?: string, cacheControl?: string}} options
+ */
+export async function createStaticAssets({ assetMode = 'source', assetDirectory, pages = ['index.html', 'admin.html'], assetInventory, cacheControl = 'no-cache' } = {}) {
   if (!['source', 'built'].includes(assetMode)) throw new Error('Unknown Web asset mode');
   const directory = await realpath(assetDirectory ?? join(webRoot, assetMode === 'built' ? 'dist' : 'public'));
-  const allowed = new Set(['index.html', 'admin.html']);
+  const allowed = new Set(pages);
   const resolvedFile = async name => {
     const path = await realpath(join(directory, name));
     const inside = relative(directory, path);
@@ -32,6 +34,11 @@ export async function createStaticAssets({ assetMode = 'source', assetDirectory 
       if (typeof name !== 'string' || !/^assets\/[A-Za-z0-9_./-]+$/.test(name) || name.split('/').some(part => !part || part === '.' || part === '..') || !contentTypes[extname(name)]) throw new Error('Unsafe Web build asset');
       allowed.add(name);
     };
+    if (assetInventory) {
+      const inventory = JSON.parse(await readFile(await resolvedFile(assetInventory), 'utf8'));
+      if (!Array.isArray(inventory)) throw new Error('Invalid build inventory');
+      for (const name of inventory) add(name);
+    }
     for (const entry of Object.values(manifest)) {
       if (!entry || typeof entry !== 'object' || Array.isArray(entry)) throw new Error('Invalid Web build entry');
       add(entry.file);
@@ -51,7 +58,7 @@ export async function createStaticAssets({ assetMode = 'source', assetDirectory 
     }
     // Recheck realpath on each request: replacing an asset with an escaping symlink is not allowed.
     const data = await readFile(await resolvedFile(name));
-    response.writeHead(200, { 'Content-Type':contentTypes[extname(name)], 'Cache-Control':'no-cache', 'Content-Length':data.length });
+    response.writeHead(200, { 'Content-Type':contentTypes[extname(name)], 'Cache-Control':cacheControl, 'Content-Length':data.length });
     response.end(request.method === 'HEAD' ? undefined : data);
     return true;
   };

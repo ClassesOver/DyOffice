@@ -1,4 +1,5 @@
 import { resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { Pool } from 'pg';
 import { configuredObjectStore } from './src/storage/config.ts';
 import { buildApp, buildLocalApp } from './src/app.ts';
@@ -28,7 +29,10 @@ async function configuredApplication() {
   try {
     businessPool=new Pool({connectionString:businessConnectionString,max:4,connectionTimeoutMillis:5000});
     storage=await configuredObjectStore(process.env);
-    return await buildLocalApp({db,businessPool,...storage,deploymentId,origin,csrfKey,passwordBlocklistFile:process.env.DYOFFICE_PASSWORD_BLOCKLIST_FILE,closeDb:async()=>{storage.close();await Promise.all([close(),businessPool.end()]);}});
+    const nativeFlag=process.env.DYOFFICE_NATIVE_DOCX;
+    if(nativeFlag && nativeFlag!=='experimental') throw new Error('Unknown native DOCX mode');
+    const nativeDocsDirectory=nativeFlag ? resolve(process.env.DYOFFICE_NATIVE_DOCX_DIRECTORY||fileURLToPath(new URL('../dist-docs/',import.meta.url))) : undefined;
+    return await buildLocalApp({db,businessPool,...storage,nativeDocsDirectory,deploymentId,origin,csrfKey,passwordBlocklistFile:process.env.DYOFFICE_PASSWORD_BLOCKLIST_FILE,closeDb:async()=>{storage.close();await Promise.all([close(),businessPool.end()]);}});
   } catch(error) { storage?.close();await Promise.allSettled([close(),businessPool?.end()]); throw error; }
 }
 

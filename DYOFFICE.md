@@ -19,7 +19,7 @@ Reference: ClassesOver/sm PR #245 `beeb717b31e2201cc1e541c54b2f750f606d99e2`.
 
 Implemented a runnable Web service and personal/Admin interfaces in `apps/web`, HTTP bearer access boundaries, encrypted credentials, preferences, file import/download, HTTP data-source configuration and official SDK HTTP MCP handshake/tool discovery. Root scripts: `dev:web`, `start:web`, `test:web`.
 
-Native browser editor adaptation, model-assisted editing, and production local account/password authentication have not yet been implemented. The upstream desktop apps and engine packages are preserved for reuse; the current Web interface does not claim to edit Office documents. Detailed startup instructions and remaining work are in `apps/web/README.md`.
+The local-account experimental runtime now provides restricted PostgreSQL sessions, private file lifecycle and conflict-safe revision commits. An explicitly enabled native DOCX browser entry reuses the upstream renderer and engine for paragraph/table editing and saving. Other native formats, model-assisted editing, the full workspace UI and production release gates remain unfinished. Detailed startup instructions and remaining work are in `apps/web/README.md`.
 
 ## Reuse direction
 

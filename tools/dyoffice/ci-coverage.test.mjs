@@ -19,3 +19,13 @@ test('push and pull-request filters include standalone baseline inputs and check
     }
   }
 })
+
+test('native DOCX gate builds the real renderer and tests it on Node 22 with PostgreSQL and Chromium', () => {
+  const native = workflow.split('\n  native-docx:')[1]
+  assert.ok(native,'native DOCX job required')
+  for (const command of ['npm ci --ignore-scripts --include=dev','npm run typecheck:web:docs','npm run test:web:docs','npm test --workspace @genoffice/docs','npm test --workspace @genoffice/docx-engine']) assert.ok(native.includes('run: ' + command),command)
+  assert.match(native,/node-version: 22/)
+  assert.match(native,/playwright install chromium --with-deps/)
+  assert.match(native,/DYOFFICE_TEST_DATABASE_URL:/)
+  assert.match(native,/image: postgres@sha256:/)
+})

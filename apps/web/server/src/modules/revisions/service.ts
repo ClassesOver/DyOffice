@@ -94,6 +94,13 @@ export function createRevisionService({ transactions, objects, files, quotaBytes
         return { fileId, revision: upload.revision_id, sha256: upload.sha256, size: upload.expected_size }
       })
     },
+    async getRevision(token: string, fileId: string, revision: string) {
+      const id = uuid(fileId), rev = uuid(revision)
+      return run(token,'files:read',async (connection, principal) => {
+        await loadFile(connection,principal,id)
+        return revisionRef(id,await historyRow(connection,principal,id,rev))
+      })
+    },
     async listRevisions(token: string, fileId: string, { cursor, limit = 50 }: { cursor?: string; limit?: number } = {}) {
       const id = uuid(fileId), after = cursor === undefined ? null : uuid(cursor)
       if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) throw authError(400)

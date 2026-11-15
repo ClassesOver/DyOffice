@@ -13,7 +13,7 @@ import { createPreferenceService } from '../../server/src/modules/preferences/se
 import { password } from './identity.mjs'
 export const restrictedOrigin = 'https://office.example'
 
-export async function restrictedFixture(t, { origin = restrictedOrigin, objectStore, filePolicy, businessMax = 1 } = {}) {
+export async function restrictedFixture(t, { origin = restrictedOrigin, objectStore, filePolicy, nativeDocsDirectory, businessMax = 1 } = {}) {
   const source = process.env.DYOFFICE_TEST_DATABASE_URL
   assert.ok(source, 'Disposable PostgreSQL admin connection required')
   assert.match(new URL(source).pathname, /^\/dyoffice_test(?:_[a-z0-9_]+)?$/)
@@ -73,7 +73,7 @@ export async function restrictedFixture(t, { origin = restrictedOrigin, objectSt
   }
   const alice = await signUser('alice'), bob = await signUser('bob')
   const csrfKey = randomBytes(32).toString('hex')
-  const app = await buildLocalApp({ db, businessPool, passwords, deploymentId, origin, csrfKey, objectStore, filePolicy })
+  const app = await buildLocalApp({ db, businessPool, passwords, deploymentId, origin, csrfKey, objectStore, filePolicy, nativeDocsDirectory })
   cleanup.push(() => app.close())
   const transactions = createPrincipalTransactions({ pool: businessPool, deploymentId })
   const preferences = createPreferenceService(transactions)

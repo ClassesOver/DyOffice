@@ -1,0 +1,6 @@
+.dyoffice-native-docs { height: 100vh; display: flex; flex-direction: column; color: var(--text); background: var(--surface); }
+.dyoffice-native-docs > .app { flex: 1; min-height: 0; }
+.dyoffice-docs-state { flex: none; min-height: 1.5rem; padding: 0.25rem 0.75rem; font: 0.8rem sans-serif; background: var(--surface); color: var(--text); border-bottom: 1px solid var(--border); }
+.dyoffice-docs-state button { margin-inline-start: 0.75rem; color: var(--text); background: var(--surface); border: 1px solid var(--border); border-radius: 0.25rem; padding: 0.15rem 0.5rem; cursor: pointer; }
+
+.dyoffice-docs-state a { margin-inline-start: 0.75rem; color: var(--text); }

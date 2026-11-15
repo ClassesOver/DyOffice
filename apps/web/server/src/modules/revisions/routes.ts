@@ -36,6 +36,7 @@ export function registerRevisionRoutes(api: FastifyInstance, { leases, revisions
     if (uuid(body.fileId) !== uuid(fileId(request))) throw authError(400)
     return revisions.commitRevision(token(request),body)
   }))
+  api.get('/api/v1/files/:id/revisions/:revision', { schema: { params: object({ id, revision: id }), querystring } }, request => revisions.getRevision(token(request),fileId(request),(request.params as { revision: string }).revision))
   api.get('/api/v1/files/:id/revisions', { schema: { params, querystring: object({ cursor: id, limit: { type: 'string', pattern: '^(?:[1-9][0-9]?|100)$' } },[]) } }, request => {
     const query = request.query as { cursor?: string; limit?: string }
     return revisions.listRevisions(token(request),fileId(request),{ cursor: query.cursor, limit: query.limit === undefined ? undefined : Number(query.limit) })

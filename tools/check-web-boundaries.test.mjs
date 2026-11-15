@@ -56,7 +56,11 @@ test('runs the CLI from a checkout path containing URL-reserved characters', asy
   t.after(() => rm(root, { recursive: true, force: true }))
   await mkdir(join(root, 'tools'), { recursive: true })
   await mkdir(join(root, 'apps/web/src'), { recursive: true })
-  await symlink(new URL('../apps/web/node_modules', import.meta.url), join(root, 'apps/web/node_modules'), 'dir')
+  const { createRequire } = await import('node:module')
+  const { dirname } = await import('node:path')
+  const require = createRequire(new URL('../apps/web/package.json',import.meta.url))
+  await mkdir(join(root,'apps/web/node_modules'),{ recursive: true })
+  await symlink(dirname(require.resolve('typescript/package.json')),join(root,'apps/web/node_modules/typescript'),'dir')
   const script = join(root, 'tools/check-web-boundaries.mjs')
   await writeFile(script, await readFile(new URL('./check-web-boundaries.mjs', import.meta.url)))
   await writeFile(join(root, 'apps/web/src/app.ts'), "import fs from 'node:fs'\n")
@@ -148,4 +152,33 @@ test('uses require export conditions for CommonJS dependencies', async t => {
   const result = await checkWebBoundaries(root)
   assert.equal(result.violations.length, 1)
   assert.match(result.violations[0], /unsafe.js:1:.*node:fs/)
+})
+
+test('runtime graph omits erased type imports and exports but keeps mixed and side effect imports', () => {
+  const erased = `import type { PathLike } from 'node:fs';
+export type { PathLike } from 'node:fs';
+import { type PathLike } from 'node:fs';
+export { type PathLike } from 'node:fs';`
+  assert.deepEqual(inspectSource(erased,'types.ts'),[])
+  assert.equal(inspectSource("import { type PathLike,readFile } from 'node:fs'; import 'node:path'",'runtime.ts').length,2)
+})
+test('two pure renderer utility subpaths remain traversable while Electron runtime exports are rejected', () => {
+  assert.equal(forbiddenSpecifier('@genoffice/electron-utils/safe-external-url'),false)
+  assert.equal(forbiddenSpecifier('@genoffice/electron-utils/headless-export'),false)
+  assert.equal(forbiddenSpecifier('@genoffice/electron-utils/atomic-write'),true)
+})
+
+ test('pure helper exceptions are followed and cannot hide a Node dependency', async t => {
+  const root = await mkdtemp(join(tmpdir(),'dyoffice-pure-helper-'))
+  t.after(() => rm(root,{ recursive: true,force: true }))
+  const files = {
+    'apps/web/src/app.ts': "import { x } from '@genoffice/electron-utils/safe-external-url'",
+    'packages/electron-utils/package.json': JSON.stringify({ name: '@genoffice/electron-utils',exports: { './safe-external-url': './src/safe.ts' } }),
+    'packages/electron-utils/src/safe.ts': "import fs from 'node:fs'; export const x = fs",
+  }
+  for (const [path,source] of Object.entries(files)) { await mkdir(join(root,path,'..'),{ recursive: true }); await writeFile(join(root,path),source) }
+  const result = await checkWebBoundaries(root)
+  assert.equal(result.scanned,2)
+  assert.equal(result.violations.length,1)
+  assert.match(result.violations[0],/safe.ts:1:.*node:fs/)
 })

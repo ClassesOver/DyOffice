@@ -189,6 +189,8 @@ docs/dyoffice/               当前计划及 inventory/ evidence/ adr/
 - [ ] E2E GREEN；受影响 `@genoffice/docs`、docx-engine 回归；外部 Word 兼容样本由 QA 记录证据。
 - [ ] 提交 `feat(docs): deliver native docx web editing roundtrip`。
 
+2026-11-15 接缝进展：原生 DOCX 实验入口已复用现有 Renderer/docx-engine 接入会话 BrowserHost、租约与版本保存；测试与边界见 [T07 证据](evidence/t07-native-docx.md)。外部 Word QA 与后续工作区/AI/企业门槛仍开放，不将此纵向接缝当成整个 M1 或四格式交付。
+
 ### T08 持久任务、原生 Worker 与沙箱
 
 **依赖：** T04/T06。**文件：** `modules/jobs/{service,routes}.ts`、`outbox/dispatcher.ts`、`worker/src/{main.ts,native/xlsx.ts,sandbox/process.ts}`、`test/integration/jobs.test.ts`、`test/recovery/job-crash.test.ts`。

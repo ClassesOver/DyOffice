@@ -2,7 +2,7 @@ export type OfficeFormat = 'docx' | 'xlsx' | 'pptx' | 'pdf'
 export type Principal = Readonly<{ userId: string; sessionId: string; deploymentId: string; scopes: readonly string[] }>
 export type RevisionRef = Readonly<{ fileId: string; revision: string; sha256: string; size: number }>
 export type SaveInput = Readonly<{ fileId: string; uploadId: string; baseRevision: string; idempotencyKey: string; leaseEpoch: number; sourceCommandId?: string }>
-export type OpenFileResult = Readonly<{ file: RevisionRef; format: OfficeFormat; downloadEndpoint: string; capabilities: import('./host.ts').CapabilityCatalog }>
+export type OpenFileResult = Readonly<{ name?: string; file: RevisionRef; format: OfficeFormat; downloadEndpoint: string; capabilities: import('./host.ts').CapabilityCatalog }>
 export type PublicSettings = Readonly<{ theme: 'light' | 'dark' | 'system'; language: string; authorName?: string; autoSave?: boolean; showAssistant?: boolean }>
 
 export function isRevisionRef(value: unknown): value is RevisionRef {

@@ -121,7 +121,15 @@ export type PendingPdfExport = {
 }
 
 /** The App state the file actions need; built fresh per call. */
+export interface DocsEditorHandle {
+  getSelection(): { from: number; to: number; text: string } | null
+  serialize(): Promise<Uint8Array | null>
+  save(): Promise<boolean>
+  isDirty(): boolean
+}
+export interface DocsHostLifecycle { documentOpened(): void; beforeSave(): Promise<void>; afterSave(accepted: boolean): void }
 export interface FileActionContext {
+  hostLifecycle?: DocsHostLifecycle
   editor: Editor | null
   doc: DocState | null
   dirtyRef: { current: boolean }
@@ -639,6 +647,7 @@ export async function loadFile(
       ctx.setStatus(t('appOpenedFile', { name: result.name }))
     }
     void window.desktop.getRecentFiles().then(ctx.setRecent)
+    ctx.hostLifecycle?.documentOpened()
     return 'ok'
   } catch (err) {
     if (generation !== openGeneration) return 'superseded'
@@ -1198,6 +1207,7 @@ async function saveOnce(
   if (!doc || !editor) return false
   ctx.saveInFlightRef.current = true
   ctx.saveIncompleteRef.current = false
+  let nativeSaved = false
   try {
     // a mid-stream save would serialize (and write) a truncated document
     const generation = docGeneration
@@ -1208,6 +1218,7 @@ async function saveOnce(
     window.dispatchEvent(new Event('ai-docs-commit-tables'))
     // identity snapshot: detects edits that arrive while the save is in flight
     const fontSettingsVersion = ctx.fontSettingsVersionRef?.current
+    if (ctx.hostLifecycle) await ctx.hostLifecycle.beforeSave()
     const docSnapshot = editor.state.doc
     const bytes = await buildDocBytes(ctx)
     if (!bytes) return false
@@ -1323,6 +1334,7 @@ async function saveOnce(
       // No success toast: the doc is still dirty (state raced the save), and the
       // close-guard's saveUntilPersisted retries would repeat it on every pass —
       // the converging complete save below toasts once.
+      nativeSaved = true
       return true
     }
     // Reload from saved bytes so docxIndex anchors point at the new file.
@@ -1440,6 +1452,7 @@ async function saveOnce(
       auto ? t('appAutoSavedAt', { time: new Date().toLocaleTimeString() }) : t('appSaved'),
     )
     if (!auto) showToast(t('appSaved'))
+    nativeSaved = true
     return true
   } catch (err) {
     ctx.setStatus(t('appSaveFailed', { error: String(err) }))
@@ -1447,6 +1460,7 @@ async function saveOnce(
     return false
   } finally {
     ctx.saveInFlightRef.current = false
+    ctx.hostLifecycle?.afterSave(nativeSaved && !ctx.saveIncompleteRef.current)
   }
 }
 
