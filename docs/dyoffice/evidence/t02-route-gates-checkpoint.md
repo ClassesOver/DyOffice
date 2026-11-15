@@ -41,3 +41,13 @@ The integration test `route-gates.test.mjs` was committed for `npm run test:web`
 - T03/T04 enterprise identity and resource isolation must precede production file writes, incoming MCP edit tools, or customer data.
 
 **Status:** T02 partial; no four-format editor roundtrip, model execution, document revision transaction or production deployment claim.
+
+## GitHub CI verification
+
+The push workflow associated with commit `a53510ac5bf9b2180b3013d253f6bf1909456ea4` completed **successfully**:
+
+- [DyOffice Web boundary gate run 43727729869](https://github.com/ClassesOver/DyOffice/actions/runs/43727729869).
+- The `boundary-check` job reports success for BrowserHost contracts, SSE adapter, HTTP file adapter, IPC inventory/classification, browser dependency boundaries, TypeScript typecheck, production Web build+HTTP smoke, and **Test legacy Web API**.
+- The integrated `route-gates.test.mjs` is part of `npm run test:web` through its `test/*.test.mjs` glob, so the Web gate exercised it in the full Web dependency environment.
+
+**Still not verified:** a production-grade OIDC/Fastify service, PostgreSQL/MinIO integration, four native editor roundtrips, model-provider execution or enterprise security/recovery acceptance.
