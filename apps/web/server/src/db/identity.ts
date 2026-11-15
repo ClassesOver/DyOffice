@@ -1,7 +1,7 @@
 import { Pool, type PoolClient } from 'pg'
 import { drizzle } from 'drizzle-orm/node-postgres'
-import { readFile } from 'node:fs/promises'
-import { createHash } from 'node:crypto'
+import { loadMigrations } from './migration-manifest.ts'
+export { getMigrationManifest } from './migration-manifest.ts'
 import * as schema from './schema.ts'
 
 export function createIdentityStore(pool: Pool) {
@@ -52,11 +52,4 @@ export type IdentityStore = ReturnType<typeof createIdentityStore>
 export function connectIdentityStore(connectionString: string) {
   const pool = new Pool({ connectionString, max: 4, connectionTimeoutMillis: 5000 })
   return { db: createIdentityStore(pool), close: () => pool.end() }
-}
-
-async function loadMigrations() {
-  return Promise.all(['0001_identity.sql', '0002_auth_sessions.sql', '0003_account_lifecycle.sql', '0004_rls.sql', '0005_files.sql', '0006_revisions.sql', '0007_jobs.sql', '0008_job_output.sql', '0009_job_leases.sql'].map(async (file, i) => {
-    const sql = await readFile(new URL('./migrations/' + file, import.meta.url), 'utf8')
-    return { version: i + 1, sql, digest: createHash('sha256').update(sql).digest('hex') }
-  }))
 }

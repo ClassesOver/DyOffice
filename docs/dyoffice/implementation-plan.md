@@ -211,6 +211,8 @@ docs/dyoffice/               当前计划及 inventory/ evidence/ adr/
 
 2026-11-15 后续接缝：实际 Rust XLSX executor 已连通 heartbeat、失锁/取消/撤销终止与 T06 输出提交，真实 Redis 重复投递只保存一个版本；控制进程执行中被强杀的独立超时/回收测试已通过，见 [T08d 证据](evidence/t08d-native-executor.md)。公开 API、常驻服务/启动回收及 revision_outbox 消费仍在继续；T08 未标记完成。
 
+2026-11-15 后续接缝：实验 Cookie 任务 API、A/B/Admin/CSRF/字段约束与 Worker/业务角色的只读 checksum 就绪校验已实现，原生 7 项链路已改为从公开 API 入队，见 [T08e 证据](evidence/t08e-job-api-readiness.md)。常驻服务与正常关闭现已连通真实任务消费；启动回收/异常恢复及 revision_outbox 消费继续实现；T08 未标记完成。
+
 ### T09 XLSX 原生 Web 适配
 
 **依赖：** T07/T08。**文件：** `apps/web/src/editors/sheets-entry.tsx`、`worker/src/jobs/xlsx.ts`、`test/e2e/sheets-roundtrip.spec.ts`；适配 `apps/sheets/src/renderer` 与现有 xlsx-gateway/native 边界。

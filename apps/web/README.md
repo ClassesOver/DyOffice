@@ -201,11 +201,11 @@ npm run dev:web
 
 ### T08a 持久任务与投递基础（内部接缝）
 
-T08a 建立版本 7 的任务表；当前迁移版本为 9，新增任务输出与租约用途约束见下文 T08c。更新服务前用独立非超级用户 owner 执行 `npm run provision:runtime`，安装全部不可变迁移和最小授权。已有 v6 会话、对象版本、租约、幂等回执、outbox 和配额保留；迁移没有重写前六个 SQL 文件。
+T08a 建立版本 7 的任务表；当前迁移版本为 10，新增任务输出、租约用途与受限就绪校验见下文 T08c/T08e。更新服务前用独立非超级用户 owner 执行 `npm run provision:runtime`，安装全部不可变迁移和最小授权。已有 v6 会话、对象版本、租约、幂等回执、outbox 和配额保留；迁移没有重写前六个 SQL 文件。
 
 内部任务服务将 `native_jobs` 和 `job_outbox` 同事务创建，按用户限制活动任务数、按键幂等重试；输入只允许本人文件的版本 UUID `artifactId`，当前基线和会话/authVersion 由服务器捕获。取消、deadline、执行次数、领取 hash/epoch 均以 PostgreSQL 为准。任务继承原认证事务的空闲超时，不授予更长的后台会话。
 
-可由运维额外预建一个 `NOINHERIT NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOREPLICATION` 的 worker login，设置 `DYOFFICE_WORKER_ROLE` 后再次运行上述 owner CLI。worker 仅能 EXECUTE 五个固定任务函数，没有账号、文件或任务表的直接读取权限；auth/business 角色不能调用领取/派发函数或内部 helper。该可选角色不是生产运行许可，也不创建或更改任何密码。任务表 FORCE RLS；内部跨用户调度仅在受限函数内由独立迁移 owner 扫描任务元数据。
+可由运维额外预建一个 `NOINHERIT NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOREPLICATION` 的 worker login，设置 `DYOFFICE_WORKER_ROLE` 后再次运行上述 owner CLI。worker 仅能 EXECUTE 五个固定任务函数（当前另有一个只读 schema 校验函数），没有账号、文件或任务表的直接读取权限；auth/business 角色不能调用领取/派发函数或内部 helper。该可选角色不是生产运行许可，也不创建或更改任何密码。任务表 FORCE RLS；内部跨用户调度仅在受限函数内由独立迁移 owner 扫描任务元数据。
 
 已提供内部 BullMQ 队列/dispatcher：消息只有任务 ID 与投递 epoch。确认丢失会重新投递，已确认的 queued/过期 running 任务也会周期性重建提示，Redis 清空不会抹掉 PostgreSQL 任务。Redis 客户端连接失败有启动期限及有限请求重试，后台连接会重连。已完成 BullMQ 消息不等于业务任务成功；只有下一阶段真实原生输出与 T06 同事务完成后才能标记成功。
 
@@ -219,8 +219,14 @@ T08a 建立版本 7 的任务表；当前迁移版本为 9，新增任务输出�
 
 ### T08c 受限任务输出事务
 
-内部任务凭据已复用 T06 文件/上传/租约/CAS/配额/回执/outbox 保存核心，在同一事务写入输出版本、释放任务租约并标记成功。浏览器与任务租约显式分用途；已完成、旧 attempt、取消或过期凭据不能继续写。当前版本 9，更新前以 owner 运行上述 `npm run provision:runtime` 安装不可变迁移和新增 business 函数授权。实际数据库回滚、提交后进程死亡与升级证据见 [T08c](../../docs/dyoffice/evidence/t08c-atomic-job-output.md)。真实 Rust 适配器到此核心的常驻执行链、公开 API 和 revision_outbox 消费仍待继续实现。
+内部任务凭据已复用 T06 文件/上传/租约/CAS/配额/回执/outbox 保存核心，在同一事务写入输出版本、释放任务租约并标记成功。浏览器与任务租约显式分用途；已完成、旧 attempt、取消或过期凭据不能继续写。该阶段版本 9（当前版本 10，见 T08e），更新前以 owner 运行上述 `npm run provision:runtime` 安装不可变迁移和新增 business 函数授权。实际数据库回滚、提交后进程死亡与升级证据见 [T08c](../../docs/dyoffice/evidence/t08c-atomic-job-output.md)。真实 Rust 适配器到此核心的常驻执行链、公开 API 和 revision_outbox 消费仍待继续实现。
 
 ### T08d 真实原生执行处理器
 
 内部 `xlsx.roundtrip` 处理器已连通真实 Rust 容器、领取/编辑租约 heartbeat、授权输入读取、输出校验与同事务版本/任务成功。取消、撤销、失锁和可控关闭会中止原生工作；运行中的控制进程被强杀后，独立 supervisor 期限与 Docker 自动删除负责回收容器。构建与测试见 [Worker 说明](worker/README.md)，实际 PostgreSQL/Rust/Redis 证据见 [T08d](../../docs/dyoffice/evidence/t08d-native-executor.md)。公开 API、可启动的常驻 Worker、启动回收及 revision_outbox 消费仍待继续实现，production 仍关闭。
+
+### T08e 任务 API 与版本就绪检查
+
+在现有 local 账号和实验 File API 配置上增加 `DYOFFICE_NATIVE_JOBS=experimental`。可用 `POST /api/v1/jobs`（type 为 `xlsx.roundtrip`，input 仅含本人文件版本 UUID artifactId，另含 idempotencyKey）、`GET /api/v1/jobs`、`GET /api/v1/jobs/:id`、无请求体的 `POST /api/v1/jobs/:id/cancel`。写请求使用现有 Origin/CSRF/Cookie；返回 202 是 PostgreSQL 接受排队，成功状态由实际输出提交决定。
+
+当前迁移版本 10，先用 owner 运行 `npm run provision:runtime`。业务/worker 角色通过只读布尔函数核验完整迁移 checksum，不直接读取迁移表，不使用 owner/auth 连接代替受限角色。API 可以持久化离线队列意图；独立 Worker 使用 `npm run start:web:worker`。其环境设置 `DYOFFICE_NATIVE_WORKER=experimental`、worker/business 数据库 URL、同一 deployment ID、Redis URL、构建 manifest 的 nativeImage ID 和相同 object-store 配置；不得包含 owner/auth URL 或旧开发 token。启动回收和更完整故障恢复继续实现。端点、角色与真实 API→Redis→Rust 验证见 [T08e 证据](../../docs/dyoffice/evidence/t08e-job-api-readiness.md)。

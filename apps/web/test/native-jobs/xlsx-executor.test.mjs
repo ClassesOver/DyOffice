@@ -2,12 +2,15 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
-import { execFile } from 'node:child_process'
+import { fileURLToPath } from 'node:url'
+import { spawn,execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import JSZip from 'jszip'
 import { fileFixture,importFile } from '../helpers/files.mjs'
 import { sandboxFixture } from '../helpers/native-sandbox.mjs'
 import { createXlsxNativeWorker } from '../../worker/src/native/xlsx.ts'
+import { createCsrfService } from '../../server/src/modules/auth/csrf.ts'
+import { restrictedOrigin } from '../helpers/restricted.mjs'
 import { createJobService } from '../../server/src/modules/jobs/service.ts'
 import { createJobWorkerStore } from '../../server/src/modules/jobs/worker-store.ts'
 import { createLeaseService } from '../../server/src/modules/leases/service.ts'
@@ -17,7 +20,7 @@ const exec = promisify(execFile)
 const gate = () => { let resolve; const promise = new Promise(r => { resolve=r }); return { promise,resolve } }
 async function fixture(t,{ paused = false,leaseMs = 3000 } = {}) {
   const { createXlsxJobExecutor } = await import('../../worker/src/jobs/xlsx.ts')
-  const f = await fileFixture(t,{ worker: true })
+  const f = await fileFixture(t,{ worker: true,nativeJobs: true })
   const original = await readFile(new URL('../../../shell/build/shell-new/blank.xlsx',import.meta.url))
   const zip = await JSZip.loadAsync(original)
   zip.file('customXml/native-job-preserve.xml','<private>Retain this exact original part</private>')
@@ -30,7 +33,10 @@ async function fixture(t,{ paused = false,leaseMs = 3000 } = {}) {
   t.after(() => resume.resolve())
   const native = createXlsxNativeWorker(paused ? { run: (input,execute,options) => sandbox.run(input,async session => { started.resolve(); await resume.promise; return execute(session) },options) } : sandbox)
   const executor = createXlsxJobExecutor({ store,files: f.files,leases,revisions,native,heartbeatMs: 250 })
-  const job = await jobs.enqueueJob(f.alice.token,'xlsx.roundtrip',{ artifactId: file.file.revision },randomUUID())
+  const csrf = createCsrfService({ db: f.db,deploymentId: f.deploymentId,origin: restrictedOrigin,key: f.csrfKey })
+  const accepted = await f.app.inject({ method: 'POST',url: '/api/v1/jobs',headers: { cookie: '__Host-dyoffice-session=' + f.alice.token,origin: restrictedOrigin,'x-csrf-token': csrf.sessionToken(f.alice.token) },payload: { type: 'xlsx.roundtrip',input: { artifactId: file.file.revision },idempotencyKey: randomUUID() } })
+  assert.equal(accepted.statusCode,202)
+  const job = accepted.json()
   return { ...f,bytes,file: file.file,jobs,store,leases,revisions,executor,job,started,resume }
 }
 async function metadata(f) {
@@ -140,5 +146,62 @@ test('controller shutdown aborts native work, releases its edit lease and leaves
   assert.ok(next.epoch>first.epoch)
   await preserved(f,await f.executor.execute(next))
   assert.deepEqual(await metadata(f),{ state: 'succeeded',error: null,versions: 2,receipts: 1,events: 1 })
+  await noContainers()
+})
+
+async function daemonEnvironment(f) {
+  const manifest = JSON.parse(await readFile(process.env.DYOFFICE_TEST_NATIVE_MANIFEST ?? new URL('../../../../.dyoffice-native-build/manifest.json',import.meta.url),'utf8'))
+  return { PATH: process.env.PATH,NODE_ENV: 'test',DYOFFICE_NATIVE_WORKER: 'experimental',DYOFFICE_WORKER_DATABASE_URL: f.urls.worker,DYOFFICE_BUSINESS_DATABASE_URL: f.urls.business,DYOFFICE_DEPLOYMENT_ID: f.deploymentId,DYOFFICE_REDIS_URL: process.env.DYOFFICE_TEST_REDIS_URL,DYOFFICE_NATIVE_IMAGE: manifest.nativeImage,DYOFFICE_FILE_API: 'experimental',DYOFFICE_OBJECT_STORE: 'local-dev',DYOFFICE_OBJECT_DIRECTORY: f.directory }
+}
+function daemon(env) {
+  const child = spawn(process.execPath,['--experimental-strip-types',fileURLToPath(new URL('../../worker/src/main.ts',import.meta.url))],{ env,stdio: ['ignore','pipe','pipe'] })
+  let stdout = '',stderr = '',readyTimer
+  const exited = new Promise(resolve => child.once('exit',resolve))
+  const ready = new Promise((resolve,reject) => {
+    readyTimer=setTimeout(() => reject(new Error('Worker daemon did not become ready')),12000)
+    child.once('error',reject); child.once('exit',() => { clearTimeout(readyTimer); reject(new Error('Worker daemon exited before ready')) })
+    child.stdout.on('data',chunk => { stdout += chunk; if (stdout.includes('dyoffice-worker: ready\n')) { clearTimeout(readyTimer); resolve() } })
+  }); void ready.catch(() => {})
+  child.stderr.on('data',chunk => { stderr += chunk })
+  return { child,ready,exited,get stdout() { return stdout },get stderr() { return stderr },async close() {
+    clearTimeout(readyTimer)
+    if (child.exitCode===null && child.signalCode===null) {
+      child.kill('SIGTERM'); const timeout=setTimeout(() => child.kill('SIGKILL'),8000)
+      try { await exited } finally { clearTimeout(timeout) }
+    }
+  } }
+}
+test('runnable daemon starts with restricted pools, consumes real queued API jobs and shuts down cleanly',{ timeout: 35_000 },async t => {
+  const f = await fixture(t), service = daemon(await daemonEnvironment(f))
+  try {
+    await service.ready
+    const deadline=Date.now()+12000
+    let stored
+    do { stored=await f.jobs.getJob(f.alice.token,f.job.id); if (stored.state==='succeeded') break; assert.ok(Date.now()<deadline,'Worker daemon did not commit the queued job'); await new Promise(resolve => setTimeout(resolve,50)) } while(true)
+    await preserved(f,{ revision: stored.resultRevision })
+    assert.deepEqual(await metadata(f),{ state: 'succeeded',error: null,versions: 2,receipts: 1,events: 1 })
+  } finally {
+    await service.close()
+    const cleanup = await createJobQueue({ url: process.env.DYOFFICE_TEST_REDIS_URL,name: 'dyoffice-native-' + f.deploymentId })
+    try { await cleanup.queue.obliterate({ force: true }) } finally { await cleanup.close() }
+  }
+  assert.equal(service.child.exitCode,0); assert.equal(service.stderr,'')
+  await noContainers()
+})
+test('daemon refuses production, privileged credentials and stale schema before claiming jobs',{ timeout: 35_000 },async t => {
+  const f = await fixture(t), env = await daemonEnvironment(f)
+  const original = (await f.ownerPool.query('SELECT sha256 FROM identity_migrations WHERE version=5')).rows[0].sha256
+  const cases = [{ ...env,NODE_ENV: 'production' },{ ...env,DYOFFICE_DATABASE_URL: f.urls.owner },{ ...env,DYOFFICE_AUTH_DATABASE_URL: f.urls.auth }]
+  cases.push({ ...env,stale: true })
+  try {
+    for (const environment of cases) {
+      if ('stale' in environment) await f.ownerPool.query("UPDATE identity_migrations SET sha256=$1 WHERE version=5",['0'.repeat(64)])
+      const { stale,...settings }=environment
+      const service=daemon(settings)
+      try { await bounded(service.exited) } finally { await service.close() }
+      assert.equal(service.child.exitCode,1); assert.equal(service.stdout,''); assert.equal(service.stderr,'dyoffice-worker: startup failed\n')
+    }
+  } finally { await f.ownerPool.query('UPDATE identity_migrations SET sha256=$1 WHERE version=5',[original]) }
+  assert.deepEqual(await metadata(f),{ state: 'queued',error: null,versions: 1,receipts: 0,events: 0 })
   await noContainers()
 })

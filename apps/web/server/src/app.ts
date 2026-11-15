@@ -6,6 +6,8 @@ import type { WebConfig } from './config.ts'
 import { registerHealthRoutes } from './modules/health/routes.ts'
 import { registerLegacyRoutes } from './modules/legacy/routes.ts'
 import { createApiShell } from './framework.ts'
+import { registerJobRoutes } from './modules/jobs/routes.ts'
+import { createJobService } from './modules/jobs/service.ts'
 import { createLeaseService } from './modules/leases/service.ts'
 import { createRevisionService } from './modules/revisions/service.ts'
 import { createFileService, type FilePolicy } from './modules/files/service.ts'
@@ -37,7 +39,7 @@ export async function buildApp(config: WebConfig): Promise<FastifyInstance> {
 
 export interface LocalWebConfig {
   db: IdentityStore; businessPool?: Pool; deploymentId: string; origin: string; csrfKey: string; passwords?: PasswordService;
-  objectStore?: ObjectStore; filePolicy?: FilePolicy; nativeDocsDirectory?: string;
+  objectStore?: ObjectStore; filePolicy?: FilePolicy; nativeDocsDirectory?: string; nativeJobs?: boolean;
   passwordBlocklistFile?: string; loginLimits?: LoginLimits; idleMs?: number; absoluteMs?: number; closeDb?: () => Promise<void>
 }
 export async function buildLocalApp(config: LocalWebConfig): Promise<FastifyInstance> {
@@ -55,6 +57,8 @@ export async function buildLocalApp(config: LocalWebConfig): Promise<FastifyInst
     await assertRuntimePool(config.businessPool, 'business')
     await assertSharedDatabase(config.db.pool, config.businessPool)
   }
+  if (config.nativeJobs!==undefined && typeof config.nativeJobs!=='boolean') throw new Error('Invalid native job configuration')
+  if (config.nativeJobs && !config.objectStore) throw new Error('Native jobs require File API')
   if (config.nativeDocsDirectory && !config.objectStore) throw new Error('Native DOCX requires File API')
   const nativeDocs = config.nativeDocsDirectory ? await createStaticAssets({ assetMode: 'built',assetDirectory: config.nativeDocsDirectory,pages: ['index.html'],assetInventory: '.vite/native-assets.json',cacheControl: 'private, no-store' }) : undefined
   const passwords = config.passwords ?? await createPasswordService({ blockedPasswords: await loadPasswordBlocklist(config.passwordBlocklistFile) })
@@ -76,6 +80,7 @@ export async function buildLocalApp(config: LocalWebConfig): Promise<FastifyInst
       const leases = createLeaseService({ transactions })
       const revisions = createRevisionService({ transactions, objects: config.objectStore, files, ...config.filePolicy })
       registerFileRoutes(app,files,sessions,csrf,{ leases, revisions })
+      if (config.nativeJobs) registerJobRoutes(app,createJobService({ transactions,enabledTypes: ['xlsx.roundtrip'] }),sessions,csrf)
       if (nativeDocs) app.route({
         method: ['GET','HEAD'], url: '/native-docx/*',
         onRequest: async (request,reply) => {

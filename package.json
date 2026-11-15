@@ -66,7 +66,8 @@
     "build:web:native": "node tools/dyoffice/build-native-sandbox.mjs",
     "typecheck:web:worker": "npm run typecheck:worker --prefix apps/web --workspaces=false",
     "test:web:sandbox": "npm run test:sandbox --prefix apps/web --workspaces=false",
-    "test:web:native-jobs": "npm run test:native-jobs --prefix apps/web --workspaces=false"
+    "test:web:native-jobs": "npm run test:native-jobs --prefix apps/web --workspaces=false",
+    "start:web:worker": "npm run start:worker --prefix apps/web --workspaces=false"
   },
   "dependencies": {
     "ws": "^8.21.1"

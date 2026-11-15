@@ -17,7 +17,7 @@ import { mkdtemp,rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-test('migrations 8/9 preserve v6 files and receipts plus v7 queued/running claims and delivery intents',async t => {
+test('migrations 8–10 preserve v6 files and receipts plus v7 queued/running claims and delivery intents',async t => {
   const directory = await mkdtemp(join(tmpdir(),'dyoffice-job-upgrade-'))
   t.after(() => rm(directory,{ recursive: true,force: true }))
   const objects = await createLocalObjectStore({ directory }), bytes = await docxBytes(), deploymentId = randomUUID(), base = randomUUID(), revision = randomUUID(), fileId = randomUUID(), uploadId = randomUUID(), editorId = randomUUID(), eventId = randomUUID()
@@ -68,7 +68,8 @@ test('migrations 8/9 preserve v6 files and receipts plus v7 queued/running claim
   assert.deepEqual(versions.slice(0,7),firstSeven)
   assert.equal(versions[7].version,8)
   assert.equal(versions[8].version,9)
-  assert.equal(versions.length,9)
+  assert.equal(versions[9].version,10)
+  assert.equal(versions.length,10)
   const resumed = await createJobWorkerStore({ pool: f.workerPool,deploymentId }).renew({ ...oldClaim,token: claimToken })
   assert.equal(resumed.epoch,oldClaim.epoch)
   assert.equal((await f.ownerPool.query('SELECT state FROM native_jobs WHERE id=$1',[queuedId])).rows[0].state,'queued')
