@@ -41,8 +41,32 @@ export function createHttpFileHost(options: HttpFileHostOptions = {}): BrowserHo
     readBytes: async (fileId, revision) => {
       const response = await get(`/api/v1/files/${encodeURIComponent(fileId)}/content?revision=${encodeURIComponent(revision)}`)
       if (!response.headers.get('content-type')?.startsWith('application/octet-stream')) throw hostError('INVALID_RESPONSE', 'file content type')
-      const bytes = new Uint8Array(await response.arrayBuffer())
-      if (bytes.byteLength > 50 * 1024 * 1024) throw hostError('PAYLOAD_TOO_LARGE', 'file download')
+      const limit = 50 * 1024 * 1024
+      const declaredLength = response.headers.get('content-length')
+      if (declaredLength !== null && (!/^\d+$/.test(declaredLength) || !Number.isSafeInteger(Number(declaredLength)))) throw hostError('INVALID_RESPONSE', 'file length')
+      if (declaredLength !== null && Number(declaredLength) > limit) throw hostError('PAYLOAD_TOO_LARGE', 'file download')
+      if (!response.body) throw hostError('INVALID_RESPONSE', 'missing file stream')
+      const reader = response.body.getReader()
+      const chunks: Uint8Array[] = []
+      let size = 0
+      try {
+        for (;;) {
+          const { done, value } = await reader.read()
+          if (done) break
+          size += value.byteLength
+          if (size > limit) throw hostError('PAYLOAD_TOO_LARGE', 'file download')
+          chunks.push(value)
+        }
+      } catch (error) {
+        await reader.cancel().catch(() => {})
+        throw error
+      } finally {
+        reader.releaseLock()
+      }
+      const bytes = new Uint8Array(size)
+      let offset = 0
+      for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength }
+      if (declaredLength !== null && bytes.byteLength !== Number(declaredLength)) throw hostError('INVALID_RESPONSE', 'file length mismatch')
       // Legacy SHA-based revision verifies bytes were not corrupted/truncated in transit.
       const match = /^sha256:([a-f0-9]{64})$/.exec(revision)
       if (match) {

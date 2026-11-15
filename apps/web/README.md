@@ -45,13 +45,21 @@ npm run test:web:build
 
 The pinned Vite build emits `apps/web/dist/index.html`, `admin.html`, hashed browser
 assets and a manifest. The smoke test builds into a disposable directory, serves
-that output over HTTP, and checks both pages and every referenced JS/CSS asset.
+that output through the API server over HTTP, and checks both pages, every
+referenced JS/CSS asset, and same-origin API authorization.
 No Electron application or native engine is built or started.
 
 This is a build baseline for the existing personal/Admin prototype, not the
-four-format editor integration. `start:web` still serves the source `public/`
-interface with the existing API server. The static build alone has no API; a
-production static-host/API integration is still required. Type checking currently
+four-format editor integration. `start:web` defaults to the source `public/`
+interface. For local same-origin build/API verification, first run `build:web`,
+then start with `DYOFFICE_ASSET_MODE=built npm run start:web` and the development
+credentials described above. Built mode serves only the two HTML entries and
+manifest-listed assets, fails startup if the build is absent/incomplete, and does
+not expose the manifest, source files, or arbitrary files. GET and HEAD are the
+only static methods. Source mode and built mode both retain API authorization.
+`NODE_ENV=production` still refuses startup: this seam does not make the temporary
+shared-token server production-ready. T02 API migration and T03 identity remain
+required before production deployment. Type checking currently
 covers BrowserHost and Web contracts, not the legacy JavaScript prototype or all
 upstream renderer packages. HTTP smoke checks do not replace real browser UI or
 native document round-trip acceptance.
@@ -61,3 +69,9 @@ native document round-trip acceptance.
 Run exactly one server process/application instance per data directory. The JSON store's queue protects only that instance; starting another instance on the same directory is unsupported and can overwrite metadata, even when both uploads return success. Do not use clustered workers, multiple replicas or rolling overlap with a shared prototype directory. There is currently no inter-process ownership lock.
 
 Admin updates apply supplied sections against the latest state inside the instance queue; omitted sections and omitted keys are preserved. Concurrent updates to the same section remain last-writer-wins, not revision-checked. This is not the planned PostgreSQL CAS, document revision, lease, or idempotency implementation (T04/T06/T12). File endpoints currently import and download originals; they do not implement editing-save transactions.
+
+### T02 请求与错误迁移接缝
+
+每个请求由服务端生成独立 `X-Request-ID`，不信任或回显客户端同名请求头。JSON 错误响应保持原有 HTTP 状态码、`application/json` 和 `error` 文案，增量提供 `type: about:blank`、`title`、`status`、`detail`、`requestId`；成功响应正文不变。错误中不包含请求 URL、查询参数或内部异常详情，500 继续返回通用文案。
+
+此接缝不代表 T02 完成：Fastify 模块化、完整 `/api/v1` 迁移（当前仅有只读文件桥接）、限流、ready/live 和优雅关闭仍待实施；未实现 T03 OIDC/会话撤销，不能用它宣称真实登录或退出能力。

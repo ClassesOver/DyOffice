@@ -147,3 +147,48 @@ test('audits four apps, joins renderer calls and reports unmatched members', asy
   assert.equal(rows.length, 12)
   assert.ok(rows.some((r) => r.id === 'pdf/projectApi.listChats' && r.calls === 1))
 })
+
+// Cases contributed with the parallel upstream AST rewrite, expressed against this API.
+const exposedMembers = (source, bridge) => names(preloadBridges(source).bridges.find((b) => b.name === bridge))
+
+test('extracts async, quoted and computed-string API members, not nested object fields', () => {
+  const source = `const desktopApi: DesktopApi = {
+    async selectWorkbook() { const nested = { fake: 1 }; return nested },
+    'saveWorkbook': async () => ({ nested: 1 }),
+    ['closeWorkbook']: () => 1,
+    onSave(handler) { return () => {} }, open: () => 1,
+  }
+  contextBridge.exposeInMainWorld('desktopApi', desktopApi)`
+  assert.deepEqual(exposedMembers(source, 'desktopApi'), ['closeWorkbook', 'onSave', 'open', 'saveWorkbook', 'selectWorkbook'])
+})
+
+test('ignores comment/string bridge lookalikes and recognizes literal bracket access', async (t) => {
+  const base = await tree(t, { 'r/a.ts': `// window.desktop.fake()
+    const text = "window.desktop.missing()";
+    /* window.desktop.never() */
+    window.desktop.open(); window['desktop']['save'](); window.desktop?.close?.();` })
+  const { calls } = analyzeRenderer([join(base, 'r/a.ts')], ['desktop'], base)
+  assert.deepEqual(calls.map((c) => c.method), ['open', 'save', 'close'])
+})
+
+test('reports unresolved spread/computed API entries instead of a silently partial count', () => {
+  const { bridges } = preloadBridges(`const api: DesktopApi = { open() {}, ...more, [methodName]() {} }
+contextBridge.exposeInMainWorld('desktop', api)`)
+  assert.deepEqual(names(bridges[0]), ['open'])
+  assert.equal(bridges[0].unresolved.length, 2)
+})
+
+test('selects the actual exposed bridge rather than a decoy typed object or comment', () => {
+  const source = `const decoy: DesktopApi = { wrong() {} };
+    const actual: DesktopApi = { async open() {} };
+    // contextBridge.exposeInMainWorld('desktop', decoy)
+    contextBridge.exposeInMainWorld("desktop", actual);`
+  assert.deepEqual(preloadBridges(source).bridges.map((b) => b.name), ['desktop'])
+  assert.deepEqual(exposedMembers(source, 'desktop'), ['open'])
+})
+
+test('invalid source fails closed rather than returning partial inventory', async (t) => {
+  assert.throws(() => preloadBridges('const api = { open() {} \ncontextBridge.exposeInMainWorld("x", api'), /Cannot parse host inventory source/)
+  const base = await tree(t, { 'r/a.ts': 'window.desktop.' })
+  assert.throws(() => analyzeRenderer([join(base, 'r/a.ts')], ['desktop'], base), /Cannot parse host inventory source/)
+})

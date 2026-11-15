@@ -1,12 +1,12 @@
+import { sendJson } from './http-response.mjs';
 import { createServer } from 'node:http';
 import { timingSafeEqual, randomUUID } from 'node:crypto';
 import { readFile, mkdir, writeFile, unlink } from 'node:fs/promises';
-import { join, extname, dirname } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { join, extname } from 'node:path';
 import { createStore } from './store.mjs';
 import { withMcp } from './mcp.mjs';
+import { createStaticAssets } from './static-assets.mjs';
 import { serveReadOnlyFiles } from './readonly-files.mjs';
-const publicPath=join(dirname(fileURLToPath(import.meta.url)),'../public');
 const formats=new Set(['docx','xlsx','pptx','pdf']);
 const fail=(message,status=400)=>{throw Object.assign(new Error(message),{status});};
 const object=v=>v && typeof v==='object' && !Array.isArray(v);
@@ -21,19 +21,21 @@ const body=async req=>{try{return JSON.parse((await bytes(req)).toString());}cat
 function sameToken(a,b){const x=Buffer.from(a||'');const y=Buffer.from(b||'');return x.length===y.length&&timingSafeEqual(x,y);}
 const publicModel=({id,model,enabled})=>({id,model,enabled});
 
-export async function createApplication({directory,userToken,adminToken,encryptionKey}) {
+export async function createApplication({directory,userToken,adminToken,encryptionKey,assetMode,assetDirectory}) {
   if(process.env.NODE_ENV==='production') throw new Error('Development token server is not allowed in production');
   if(!userToken||!adminToken||userToken===adminToken) throw new Error('Personal and admin tokens must be distinct and nonempty');
+  const serveStatic=await createStaticAssets({assetMode,assetDirectory});
   const store=await createStore(directory,encryptionKey); const filePath=join(directory,'files');await mkdir(filePath,{recursive:true,mode:0o700});
   return createServer(async(req,res)=>{
-    const send=(value,status=200)=>{res.writeHead(status,{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store'});res.end(JSON.stringify(value));};
+    // Generate locally: client-supplied IDs can contain secrets or collide across requests.
+    const requestId=randomUUID();res.setHeader('X-Request-ID',requestId);
+    const send=(value,status=200)=>sendJson(res,status,value);
     try {
       const url=new URL(req.url,'http://localhost');const path=url.pathname;
       res.setHeader('X-Content-Type-Options','nosniff');res.setHeader('Referrer-Policy','no-referrer');
       if(!path.startsWith('/api/')) {
-        const name=path==='/'?'index.html':path==='/admin'?'admin.html':path.slice(1);
-        if(!['index.html','admin.html','app.js','style.css'].includes(name)) return send({error:'页面不存在'},404);
-        const content=await readFile(join(publicPath,name));res.setHeader('Content-Type',name.endsWith('.css')?'text/css':name.endsWith('.js')?'text/javascript':'text/html; charset=utf-8');return res.end(content);
+        if(await serveStatic(req,res,path)) return;
+        return send({error:'页面不存在'},404);
       }
       const token=req.headers.authorization?.replace(/^Bearer /,'');const admin=sameToken(token,adminToken);
       if(!admin&&!sameToken(token,userToken)) return send({error:'请登录'},401);

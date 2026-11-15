@@ -8,7 +8,7 @@
 // match wins. --check fails when a member is unclassified, a rule matches
 // nothing (stale), a rule names an unknown class, or host-ipc.md is out of date.
 import { readFile, writeFile } from 'node:fs/promises'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { auditWebHost, inventoryRows } from '../audit-web-host.mjs'
 
@@ -115,11 +115,12 @@ export async function build(base = root) {
   for (const [app, r] of Object.entries(report)) {
     for (const m of r.unknownRendererMethods) problems.push(app + ': renderer calls undeclared member ' + m)
     for (const o of r.opaqueReferences) problems.push(app + ': unresolved bridge reference at ' + o.file + ':' + o.line)
+    for (const b of r.bridges) for (const u of b.unresolved) problems.push(app + ': unresolved preload member in ' + b.name + ': ' + u)
   }
   return { problems, markdown: renderMarkdown(result, spec), result }
 }
 
-if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])) {
   const write = process.argv.includes('--write')
   const { problems, markdown, result } = await build()
   if (problems.length) {

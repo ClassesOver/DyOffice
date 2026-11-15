@@ -7,7 +7,7 @@
 // member access nor a simple alias/destructure ("opaqueReferences").
 import { readdir, readFile } from 'node:fs/promises'
 import { createRequire } from 'node:module'
-import { join, relative, extname } from 'node:path'
+import { join, relative, extname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const require = createRequire(new URL('../apps/web/package.json', import.meta.url))
@@ -21,7 +21,10 @@ const IPC_METHODS = new Set(['invoke', 'send', 'sendSync', 'on', 'once', 'remove
 
 function parse(path, text) {
   const kind = path.endsWith('.tsx') || path.endsWith('.jsx') ? ts.ScriptKind.TSX : ts.ScriptKind.TS
-  return ts.createSourceFile(path, text, ts.ScriptTarget.Latest, true, kind)
+  const sf = ts.createSourceFile(path, text, ts.ScriptTarget.Latest, true, kind)
+  // a recovered syntax tree can silently drop members; never publish a partial inventory
+  if (sf.parseDiagnostics.length) throw new Error('Cannot parse host inventory source: ' + path)
+  return sf
 }
 
 function unwrap(node) {
@@ -32,6 +35,7 @@ function unwrap(node) {
 function propertyName(name) {
   if (ts.isIdentifier(name) || ts.isPrivateIdentifier(name)) return name.text
   if (ts.isStringLiteralLike(name) || ts.isNumericLiteral(name)) return name.text
+  if (ts.isComputedPropertyName(name) && ts.isStringLiteralLike(name.expression)) return name.expression.text
   return null
 }
 
@@ -192,6 +196,9 @@ export function analyzeRenderer(rootPaths, bridgeNames, base = root, paths = {})
   })
   const checker = program.getTypeChecker()
   const files = program.getSourceFiles().filter((sf) => !sf.isDeclarationFile && !sf.fileName.includes('/node_modules/'))
+  for (const sf of files) {
+    if (program.getSyntacticDiagnostics(sf).length) throw new Error('Cannot parse host inventory source: ' + relative(base, sf.fileName))
+  }
   const valued = new Map() // symbol -> bridge
   const returning = new Map() // function symbol -> bridge
   const traced = new Set() // argument nodes resolved into a parameter
@@ -399,7 +406,7 @@ export function inventoryRows(report) {
   return rows
 }
 
-if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])) {
   try {
     const report = await auditWebHost()
     if (process.argv.includes('--summary')) {
