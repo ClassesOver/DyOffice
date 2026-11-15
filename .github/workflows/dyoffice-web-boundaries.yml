@@ -4,6 +4,7 @@ on:
   push:
     branches: [main, feat/dyoffice-web]
     paths:
+      - 'package.json'
       - 'apps/**'
       - 'packages/**'
       - 'tools/check-web-boundaries*'
@@ -11,6 +12,7 @@ on:
       - '.github/workflows/dyoffice-web-boundaries.yml'
   pull_request:
     paths:
+      - 'package.json'
       - 'apps/**'
       - 'packages/**'
       - 'tools/check-web-boundaries*'
@@ -44,3 +46,9 @@ jobs:
           node -e 'const a=require(process.env.RUNNER_TEMP+"/dyoffice-host-audit.json"); for(const [name,v] of Object.entries(a)) console.log(name+": "+v.declaredCount+" methods, "+v.unknownRendererMethods.length+" unmatched")'
       - name: Reject Node or Electron imports in the local Web dependency graph
         run: node tools/check-web-boundaries.mjs
+      - name: Typecheck BrowserHost and Web contracts
+        run: npm run typecheck:web
+      - name: Build and HTTP smoke test the Web prototype
+        run: npm run test:web:build
+      - name: Test legacy Web API
+        run: npm run test:web

@@ -29,3 +29,27 @@ Open `http://127.0.0.1:3080` for the personal workspace and `/admin` for adminis
 Native browser editor integration, document save/revision lifecycle, model chat/tool execution, database connectors and query integration, source edit/delete/test UI, file folders/favorites/recent views, multi-user login and deployment hardening. Preference fields for editor features are persisted now and will be applied as each editor is integrated. This is a development foundation, not a completed Office editor.
 
 Run `npm run test:web` for HTTP access-boundary and persistence tests. Runtime dependencies are scoped to this app so starting the Web server does not install or launch Electron.
+
+## Web-only build baseline (T00)
+
+Install without the root Electron postinstall:
+
+```sh
+npm ci --prefix apps/web --workspaces=false --ignore-scripts --include=dev
+npm run typecheck:web
+npm run build:web
+npm run test:web:build
+```
+
+The pinned Vite build emits `apps/web/dist/index.html`, `admin.html`, hashed browser
+assets and a manifest. The smoke test builds into a disposable directory, serves
+that output over HTTP, and checks both pages and every referenced JS/CSS asset.
+No Electron application or native engine is built or started.
+
+This is a build baseline for the existing personal/Admin prototype, not the
+four-format editor integration. `start:web` still serves the source `public/`
+interface with the existing API server. The static build alone has no API; a
+production static-host/API integration is still required. Type checking currently
+covers BrowserHost and Web contracts, not the legacy JavaScript prototype or all
+upstream renderer packages. HTTP smoke checks do not replace real browser UI or
+native document round-trip acceptance.

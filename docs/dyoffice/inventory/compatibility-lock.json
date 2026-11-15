@@ -306,20 +306,20 @@
       "size": 2630
     },
     "apps/web/package-lock.json": {
-      "sha256": "e709af99982ee6187f413d5aa680b3e26703a4adbb32bff976249cab2c1afc54",
-      "size": 43565
+      "sha256": "476c9e203aceb1e779f4b503c15e1e9c6f6a5eb50c6602a2aab0924274ec1262",
+      "size": 78055
     },
     "apps/web/package.json": {
-      "sha256": "8effd76a0fa76bd65cb76aae0237e0e38d3543acaf76ce2cdf0e68ab4ca81797",
-      "size": 349
+      "sha256": "a0c66653480d419836572db1cab28893e97643fd5f89577210929352ee7092f8",
+      "size": 518
     },
     "package-lock.json": {
       "sha256": "6c93ea93af687de6c5a5193d881e4412ab801154c561f1c4dad0283b2067191e",
       "size": 585567
     },
     "package.json": {
-      "sha256": "4ab8e1f52e448869641f56aa089fa814b919b5e30b653415ec8e5f9ba33f551d",
-      "size": 6394
+      "sha256": "8485fd34d79968bdb45d1aa0164a669c3a06d746ef3ed3611dde6394c73db8e2",
+      "size": 6625
     },
     "packages/ui/src/fonts/Carlito-Bold.ttf": {
       "sha256": "ed778b78ce652f5b17647344fb9a4c4dcb2e6f8bafe75a0366300da7f8c199ac",
