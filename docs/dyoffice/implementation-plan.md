@@ -114,13 +114,13 @@ docs/dyoffice/               当前计划及 inventory/ evidence/ adr/
 
 **接口：** `buildApp(config): Promise<FastifyInstance>`，版本化 `/api/v1`，统一 Problem DTO 和请求 ID。
 
-**状态（2026-11-15，未完成）：** `buildApp` 壳已提供 live/ready、服务端请求 ID、Problem 错误、静态 Schema、单进程限流、请求体上限和关闭。未迁移路由返回 501，不假装旧接口已搬迁。`dev:web` / `start:web` 仍启动原来的开发令牌服务器。证据见 [t02-modular-api.md](evidence/t02-modular-api.md)。下面的复选框保持未勾选。
+**状态（2026-11-15）：** `dev:web` / `start:web` 已切到 Fastify `buildApp`。偏好、Admin、数据源、文件、DOCX 和静态页面按模块注册，旧 HTTP 契约仍由现有测试保持。健康检查使用静态 Schema；业务请求体继续用模块里的固定校验器，不编译外部输入。限流和关闭只作用于单个进程。没有本地登录、PostgreSQL 就绪检查或多副本限流，不能据此宣称生产认证。证据见 [t02-modular-api.md](evidence/t02-modular-api.md)。
 
-- [ ] 固化旧文件/偏好/Admin 接口的授权、状态码和密钥脱敏测试。
-- [ ] 运行 `npm run test:web:integration -- api-compat.test.ts`，新增 API 未实现应 RED。
-- [ ] 接入 Fastify、可信静态 Schema、错误边界、限流、优雅关闭、ready/live 区分，原型逻辑逐模块迁移而非大重写。
-- [ ] 运行 legacy + integration + build；所有旧契约保持或明确提供迁移响应。
-- [ ] 提交 `refactor(web): introduce modular api without contract regressions`。
+- [x] 固化旧文件/偏好/Admin 接口的授权、状态码和密钥脱敏测试。
+- [x] 运行 `npm run test:web:integration -- api-compat.test.ts`，新增 API 未实现应 RED。
+- [x] 接入 Fastify、可信静态 Schema、错误边界、限流、优雅关闭、ready/live 区分，原型逻辑逐模块迁移而非大重写。
+- [x] 运行 legacy + integration + build；所有旧契约保持或明确提供迁移响应。
+- [x] 提交 `refactor(web): introduce modular api without contract regressions`。
 
 ### T03 本地账号密码、管理员用户管理与服务端会话
 

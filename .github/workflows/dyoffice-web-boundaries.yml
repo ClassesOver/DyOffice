@@ -80,3 +80,5 @@ jobs:
         run: npm run test:web
       - name: Test modular API compatibility shell
         run: npm run test:web:integration -- test/integration/api-compat.test.mjs
+      - name: Test legacy routes on the Fastify shell
+        run: npm run test:web:integration -- test/integration/route-cutover.test.mjs
