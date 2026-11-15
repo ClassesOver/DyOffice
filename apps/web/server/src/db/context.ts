@@ -19,9 +19,12 @@ export function createPrincipalTransactions({ pool, deploymentId, idleMs = 8 * 3
         await connection.query("SET LOCAL statement_timeout='10s'")
         const { rows: [locked] } = await connection.query('SELECT * FROM lock_business_session($1::uuid,$2::text,$3::bigint)', [deploymentId, tokenHash(credential.token), idleMs])
         if (!locked) throw authError()
-        const principal: BusinessPrincipal = Object.freeze({ deploymentId, userId: locked.user_id, sessionId: locked.session_id, authVersion: locked.auth_version, roles: Object.freeze(locked.roles), scopes: Object.freeze(locked.roles.includes('personal') ? ['workspace:read','preferences:read','preferences:write'] : []) })
+        const principal: BusinessPrincipal = Object.freeze({ deploymentId, userId: locked.user_id, sessionId: locked.session_id, authVersion: locked.auth_version, roles: Object.freeze(locked.roles), scopes: Object.freeze(locked.roles.includes('personal') ? ['workspace:read','preferences:read','preferences:write','files:read','files:write'] : []) })
         await connection.query("SELECT set_config('dyoffice.deployment_id',$1,true),set_config('dyoffice.user_id',$2,true),set_config('dyoffice.session_id',$3,true)", [deploymentId, principal.userId, principal.sessionId])
         const result = await operation(connection, principal)
+        // Object I/O may outlast a session deadline. Locks prevent revocation
+        // races, but clock-based expiry must also be checked before commit.
+        await connection.query('SELECT * FROM lock_business_session($1::uuid,$2::text,$3::bigint)', [deploymentId, tokenHash(credential.token), idleMs])
         await connection.query('COMMIT')
         return result
       } catch (error) {

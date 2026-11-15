@@ -6,6 +6,7 @@ const identifier = (value: string) => { if (!/^[a-z][a-z0-9_]{2,62}$/.test(value
 const quoted = (value: string) => '"' + value.replaceAll('"', '""') + '"'
 const table = (schema: string, name: string) => quoted(schema) + '.' + quoted(name)
 const authTables = ['users','user_roles','sessions','password_action_tokens','login_challenges','login_throttles','auth_security_events','auth_audit_events','deployments','identity_migrations']
+const personalTables = ['workspaces','personal_preferences','files','file_revisions','uploads','storage_accounts']
 async function grantRuntimePrivileges(connection: Queryable, { authRole, businessRole }: { authRole: string; businessRole: string }) {
   const auth = identifier(authRole), business = identifier(businessRole)
   if (authRole === businessRole) throw new Error('Authentication and business roles must differ')
@@ -21,7 +22,7 @@ async function grantRuntimePrivileges(connection: Queryable, { authRole, busines
   await connection.query(`GRANT CONNECT ON DATABASE ${quoted(location.database)} TO ${auth},${business}`)
   await connection.query(`REVOKE CREATE ON SCHEMA ${quoted(schema)} FROM PUBLIC`)
   await connection.query(`GRANT USAGE ON SCHEMA ${quoted(schema)} TO ${auth},${business}`)
-  for (const name of [...authTables,'workspaces','personal_preferences']) await connection.query(`REVOKE ALL ON ${table(schema,name)} FROM ${auth},${business}`)
+  for (const name of [...authTables,...personalTables]) await connection.query(`REVOKE ALL ON ${table(schema,name)} FROM ${auth},${business}`)
   for (const name of ['users','sessions','password_action_tokens']) await connection.query(`GRANT SELECT,INSERT,UPDATE ON ${table(schema,name)} TO ${auth}`)
   await connection.query(`GRANT SELECT,INSERT,DELETE ON ${table(schema,'user_roles')} TO ${auth}`)
   for (const name of ['login_challenges','login_throttles']) await connection.query(`GRANT SELECT,INSERT,UPDATE,DELETE ON ${table(schema,name)} TO ${auth}`)
@@ -29,6 +30,8 @@ async function grantRuntimePrivileges(connection: Queryable, { authRole, busines
   await connection.query(`GRANT INSERT ON ${table(schema,'auth_security_events')},${table(schema,'workspaces')} TO ${auth}`)
   await connection.query(`GRANT SELECT ON ${table(schema,'workspaces')} TO ${business}`)
   await connection.query(`GRANT SELECT,INSERT,UPDATE,DELETE ON ${table(schema,'personal_preferences')} TO ${business}`)
+  for (const name of ['files','uploads','storage_accounts']) await connection.query(`GRANT SELECT,INSERT,UPDATE ON ${table(schema,name)} TO ${business}`)
+  await connection.query(`GRANT SELECT,INSERT ON ${table(schema,'file_revisions')} TO ${business}`)
   await connection.query(`GRANT EXECUTE ON FUNCTION ${table(schema,'lock_business_session')}(uuid,text,bigint) TO ${business}`)
 }
 
@@ -53,13 +56,13 @@ export async function assertRuntimePool(pool: Pool, kind: 'auth' | 'business') {
   const privileges = (await pool.query("SELECT has_schema_privilege(current_user,$1,'CREATE') AS create_schema,has_database_privilege(current_user,current_database(),'CREATE,TEMPORARY') AS create_database_objects", [role.schema])).rows[0]
   if (privileges.create_schema || privileges.create_database_objects) throw new Error('Runtime role must not create schema objects')
   const required: Record<string, string[]> = kind === 'business'
-    ? { workspaces: ['SELECT'], personal_preferences: ['SELECT','INSERT','UPDATE','DELETE'] }
+    ? { files: ['SELECT','INSERT','UPDATE'], uploads: ['SELECT','INSERT','UPDATE'], storage_accounts: ['SELECT','INSERT','UPDATE'], file_revisions: ['SELECT','INSERT'], workspaces: ['SELECT'], personal_preferences: ['SELECT','INSERT','UPDATE','DELETE'] }
     : { users: ['SELECT','INSERT','UPDATE'], user_roles: ['SELECT','INSERT','DELETE'], sessions: ['SELECT','INSERT','UPDATE'], password_action_tokens: ['SELECT','INSERT','UPDATE'], login_challenges: ['SELECT','INSERT','UPDATE','DELETE'], login_throttles: ['SELECT','INSERT','UPDATE','DELETE'], auth_security_events: ['INSERT'], identity_migrations: ['SELECT'], deployments: ['SELECT'], workspaces: ['INSERT'] }
-  for (const name of [...authTables,'workspaces','personal_preferences']) {
+  for (const name of [...authTables,...personalTables]) {
     const relation = table(role.schema, name)
     const flags = (await pool.query("SELECT c.relowner=r.oid AS owned,c.relrowsecurity,c.relforcerowsecurity,has_table_privilege(current_user,c.oid,'TRUNCATE') AS truncate,EXISTS(SELECT 1 FROM aclexplode(COALESCE(c.relacl,acldefault('r',c.relowner))) a WHERE a.grantee=r.oid AND a.is_grantable) AS table_delegatable,EXISTS(SELECT 1 FROM pg_attribute att CROSS JOIN LATERAL aclexplode(att.attacl) a WHERE att.attrelid=c.oid AND a.grantee=r.oid AND a.is_grantable) AS column_delegatable FROM pg_class c JOIN pg_roles r ON r.rolname=current_user WHERE c.oid=$1::regclass", [relation])).rows[0]
     if (!flags || flags.owned || flags.truncate || (flags.table_delegatable || flags.column_delegatable)) throw new Error('Runtime role must not own or truncate application tables')
-    if (['workspaces','personal_preferences'].includes(name) && (!flags.relrowsecurity || !flags.relforcerowsecurity)) throw new Error('Personal tables require FORCE RLS')
+    if (personalTables.includes(name) && (!flags.relrowsecurity || !flags.relforcerowsecurity)) throw new Error('Personal tables require FORCE RLS')
     for (const permission of ['SELECT','INSERT','UPDATE','DELETE','REFERENCES','TRIGGER','MAINTAIN']) {
       if (required[name]?.includes(permission)) continue
       const column = ['SELECT','INSERT','UPDATE','REFERENCES'].includes(permission)

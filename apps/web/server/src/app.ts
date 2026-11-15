@@ -5,6 +5,9 @@ import type { WebConfig } from './config.ts'
 import { registerHealthRoutes } from './modules/health/routes.ts'
 import { registerLegacyRoutes } from './modules/legacy/routes.ts'
 import { createApiShell } from './framework.ts'
+import { createFileService, type FilePolicy } from './modules/files/service.ts'
+import { registerFileRoutes } from './modules/files/routes.ts'
+import type { ObjectStore } from './storage/object-store.ts'
 import type { Pool } from 'pg'
 import { assertRuntimePool, assertSharedDatabase } from './db/roles.ts'
 import { createPrincipalTransactions } from './db/context.ts'
@@ -31,6 +34,7 @@ export async function buildApp(config: WebConfig): Promise<FastifyInstance> {
 
 export interface LocalWebConfig {
   db: IdentityStore; businessPool?: Pool; deploymentId: string; origin: string; csrfKey: string; passwords?: PasswordService;
+  objectStore?: ObjectStore; filePolicy?: FilePolicy;
   passwordBlocklistFile?: string; loginLimits?: LoginLimits; idleMs?: number; absoluteMs?: number; closeDb?: () => Promise<void>
 }
 export async function buildLocalApp(config: LocalWebConfig): Promise<FastifyInstance> {
@@ -42,6 +46,7 @@ export async function buildLocalApp(config: LocalWebConfig): Promise<FastifyInst
     if (!result.rowCount) throw new Error('Local deployment has not been bootstrapped')
   }
   await assertReady()
+  if (config.objectStore && !config.businessPool) throw new Error('File API requires restricted business pool')
   if (config.businessPool) {
     await assertRuntimePool(config.db.pool, 'auth')
     await assertRuntimePool(config.businessPool, 'business')
@@ -61,6 +66,7 @@ export async function buildLocalApp(config: LocalWebConfig): Promise<FastifyInst
   if (config.businessPool) {
     const transactions = createPrincipalTransactions({ pool: config.businessPool, deploymentId: config.deploymentId, idleMs: config.idleMs })
     registerPreferenceRoutes(app, createPreferenceService(transactions), sessions, csrf)
+    if (config.objectStore) registerFileRoutes(app, createFileService({ transactions, objects: config.objectStore, ...config.filePolicy }), sessions, csrf)
   }
   app.route({
     method: app.supportedMethods as HTTPMethods[], url: '/*',

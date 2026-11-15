@@ -151,7 +151,7 @@ docs/dyoffice/               当前计划及 inventory/ evidence/ adr/
 
 ### T05 对象存储、上传与个人文件生命周期
 
-2026-11-15 接缝进展：不可覆盖的本地盘/S3 存储、SHA-256 读回验证和四格式结构预检已实现，见 [T05a 证据](evidence/t05a-object-storage.md)。文件元数据、配额、作用域上传/完成/下载及回收站仍在后续实现，本任务未完成。
+2026-11-15 接缝进展：不可覆盖的本地盘/S3 存储、SHA-256 读回验证和四格式结构预检已实现，见 [T05a 证据](evidence/t05a-object-storage.md)。后续 [T05b](evidence/t05b-file-lifecycle.md) 已接入文件元数据、配额、作用域上传/完成/下载及回收站的实验 API。完整 UI、编辑保存、保留清理和企业安全门槛仍由后续任务完成，不据此宣称生产可用。
 
 **依赖：** T04。**文件：** `storage/{object-store,s3,local-dev}.ts`、`modules/files/{routes,service,validation}.ts`、`db/migrations/0005_files.sql`、`test/integration/files.test.ts`。
 

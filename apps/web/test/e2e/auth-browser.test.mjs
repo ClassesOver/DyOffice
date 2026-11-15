@@ -11,7 +11,7 @@ import { buildLocalApp } from '../../server/src/app.ts'
 import { restrictedFixture } from '../helpers/restricted.mjs'
 import { identityFixture, password } from '../helpers/identity.mjs'
 
-async function tlsFixture(t, restricted = false) {
+async function tlsFixture(t, restricted = false, fileApi = false) {
   const directory = await mkdtemp(join(tmpdir(), 'dyoffice-auth-tls-'))
   let app, browser, server
   t.after(async () => {
@@ -24,7 +24,9 @@ async function tlsFixture(t, restricted = false) {
   server = createServer({ key: await readFile(join(directory, 'key.pem')), cert: await readFile(join(directory, 'cert.pem')) }, (req, res) => app.routing(req, res))
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
   const origin = `https://127.0.0.1:${server.address().port}`
-  const f = restricted ? await restrictedFixture(t, { origin }) : await identityFixture(t)
+  const { createLocalObjectStore } = await import('../../server/src/storage/local-dev.ts')
+  const objectStore = fileApi ? await createLocalObjectStore({ directory: join(directory, 'objects') }) : undefined
+  const f = restricted ? await restrictedFixture(t, { origin, objectStore }) : await identityFixture(t)
   app = restricted ? f.app : await buildLocalApp({ db: f.db, passwords: f.passwords, deploymentId: f.deploymentId, origin, csrfKey: randomBytes(32).toString('hex') })
   browser = await chromium.launch({ headless: true })
   const context = await browser.newContext({ ignoreHTTPSErrors: true })
@@ -131,4 +133,41 @@ test('Chromium TLS sessions keep Alice and Bob preferences isolated with restric
   assert.equal(await update(page, a.body.csrfToken, { ownerId: bob.user.id, authorName: 'forged' }), 400)
   assert.equal(await page.evaluate(async () => (await (await fetch('/api/v1/preferences')).json()).authorName), 'Alice')
   assert.equal(await bobPage.evaluate(async () => (await (await fetch('/api/preferences')).json()).authorName), 'Bob')
+})
+
+
+test('Chromium TLS file lifecycle uses scoped cookies for import, download, recycle and restore', { timeout: 30_000 }, async t => {
+  const { page, browser, origin } = await tlsFixture(t, true, true)
+  const bytes = await readFile(new URL('../../../../packages/docx-engine/tests/fixtures/truths/render-sectafter-no-blank/probe.docx', import.meta.url))
+  const login = (page, username) => page.evaluate(async ({ username, password }) => {
+    const challenge = await (await fetch('/api/v1/auth/csrf')).json()
+    const response = await fetch('/api/v1/auth/login', { method: 'POST', headers: { 'content-type': 'application/json', 'x-csrf-token': challenge.csrfToken }, body: JSON.stringify({ username, password }) })
+    return { status: response.status, body: await response.json() }
+  }, { username, password })
+  const signed = await login(page,'alice')
+  assert.equal(signed.status,200)
+  const imported = await page.evaluate(async ({ csrf, bytes }) => {
+    const headers = { 'content-type': 'application/json', 'x-csrf-token': csrf }
+    const stage = await fetch('/api/v1/files/uploads', { method: 'POST', headers, body: JSON.stringify({ name: 'browser.docx', size: bytes.length }) })
+    const upload = await stage.json()
+    const receive = await fetch('/api/v1/uploads/' + upload.uploadId + '/content', { method: 'PUT', headers: { 'content-type': 'application/octet-stream', 'x-csrf-token': csrf }, body: new Uint8Array(bytes) })
+    const finish = await fetch('/api/v1/uploads/' + upload.uploadId + '/finish', { method: 'POST', headers: { 'x-csrf-token': csrf } })
+    return { stage: stage.status, receive: receive.status, finish: finish.status, opened: await finish.json() }
+  }, { csrf: signed.body.csrfToken, bytes: [...bytes] })
+  assert.equal(imported.stage,201); assert.equal(imported.receive,200); assert.equal(imported.finish,200)
+  const downloaded = await page.evaluate(async endpoint => Array.from(new Uint8Array(await (await fetch(endpoint)).arrayBuffer())), imported.opened.downloadEndpoint)
+  assert.deepEqual(Buffer.from(downloaded),bytes)
+  const other = await browser.newContext({ ignoreHTTPSErrors: true }), bob = await other.newPage()
+  await bob.goto(origin + '/')
+  assert.equal((await login(bob,'bob')).status,200)
+  assert.equal(await bob.evaluate(async endpoint => (await fetch(endpoint)).status, imported.opened.downloadEndpoint),404)
+  const lifecycle = await page.evaluate(async ({ id, endpoint, csrf }) => {
+    const headers = { 'x-csrf-token': csrf }
+    const trash = await fetch('/api/v1/files/' + id, { method: 'DELETE', headers })
+    const denied = await fetch(endpoint)
+    const restore = await fetch('/api/v1/files/' + id + '/restore', { method: 'POST', headers })
+    const reopened = await fetch(endpoint)
+    return [trash.status,denied.status,restore.status,reopened.status]
+  }, { id: imported.opened.file.fileId, endpoint: imported.opened.downloadEndpoint, csrf: signed.body.csrfToken })
+  assert.deepEqual(lifecycle,[204,404,204,200])
 })

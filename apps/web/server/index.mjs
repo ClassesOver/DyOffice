@@ -1,5 +1,6 @@
 import { resolve } from 'node:path';
 import { Pool } from 'pg';
+import { configuredObjectStore } from './src/storage/config.ts';
 import { buildApp, buildLocalApp } from './src/app.ts';
 import { connectIdentityStore } from './src/db/identity.ts';
 
@@ -23,11 +24,12 @@ async function configuredApplication() {
   const csrfKey=process.env.DYOFFICE_CSRF_KEY;
   if(!connectionString||!businessConnectionString||!deploymentId||!origin||!csrfKey) throw new Error('Local account configuration missing');
   const {db,close}=connectIdentityStore(connectionString);
-  let businessPool;
+  let businessPool,storage;
   try {
     businessPool=new Pool({connectionString:businessConnectionString,max:4,connectionTimeoutMillis:5000});
-    return await buildLocalApp({db,businessPool,deploymentId,origin,csrfKey,passwordBlocklistFile:process.env.DYOFFICE_PASSWORD_BLOCKLIST_FILE,closeDb:async()=>{await Promise.all([close(),businessPool.end()]);}});
-  } catch(error) { await Promise.allSettled([close(),businessPool?.end()]); throw error; }
+    storage=await configuredObjectStore(process.env);
+    return await buildLocalApp({db,businessPool,...storage,deploymentId,origin,csrfKey,passwordBlocklistFile:process.env.DYOFFICE_PASSWORD_BLOCKLIST_FILE,closeDb:async()=>{storage.close();await Promise.all([close(),businessPool.end()]);}});
+  } catch(error) { storage?.close();await Promise.allSettled([close(),businessPool?.end()]); throw error; }
 }
 
 let app,closing;

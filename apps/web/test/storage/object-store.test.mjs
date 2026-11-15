@@ -4,7 +4,7 @@ import { mkdtemp, rm, readdir, writeFile, symlink } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
-import { S3Client, CreateBucketCommand, PutObjectCommand, DeleteObjectsCommand, ListObjectsV2Command, DeleteBucketCommand } from '@aws-sdk/client-s3'
+import { s3Fixture } from '../helpers/s3.mjs'
 
 const key = () => `${randomUUID()}/${randomUUID()}/objects/${randomUUID()}`
 const hello = Buffer.from('hello'), hash = '2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824'
@@ -20,22 +20,7 @@ async function fixture(t, kind) {
       await writeFile(join(directory, files[0]), bytes)
     } }
   }
-  const endpoint = process.env.DYOFFICE_TEST_S3_ENDPOINT
-  assert.ok(endpoint, 'Real disposable S3-compatible service required')
-  const url = new URL(endpoint)
-  assert.ok(['127.0.0.1','localhost'].includes(url.hostname), 'Tests only access a loopback S3 service')
-  const client = new S3Client({ endpoint, region: 'us-east-1', forcePathStyle: true, credentials: { accessKeyId: process.env.DYOFFICE_TEST_S3_ACCESS_KEY, secretAccessKey: process.env.DYOFFICE_TEST_S3_SECRET_KEY } })
-  const bucket = 'dyoffice-test-' + randomUUID()
-  await client.send(new CreateBucketCommand({ Bucket: bucket }))
-  t.after(async () => {
-    try {
-      const { Contents = [] } = await client.send(new ListObjectsV2Command({ Bucket: bucket }))
-      if (Contents.length) await client.send(new DeleteObjectsCommand({ Bucket: bucket, Delete: { Objects: Contents.map(({ Key }) => ({ Key })) } }))
-      await client.send(new DeleteBucketCommand({ Bucket: bucket }))
-    } finally { client.destroy() }
-  })
-  const { createS3ObjectStore } = await import('../../server/src/storage/s3.ts')
-  return { store: createS3ObjectStore({ client, bucket }), client, bucket, corrupt: (Key, Body) => client.send(new PutObjectCommand({ Bucket: bucket, Key, Body })) }
+  return s3Fixture(t)
 }
 for (const kind of ['local','s3']) {
   test(`${kind} immutable put computes SHA-256 and refuses overwrites including equal bytes`, async t => {
@@ -97,4 +82,19 @@ for (const kind of ['local','s3']) test(`${kind} publication snapshots caller by
   input.fill(0)
   const reference = await pending
   assert.deepEqual(await store.readVerified(reference), hello)
+})
+
+test('file storage configuration requires explicit experimental backend and refuses unsafe endpoints', async () => {
+  const { configuredObjectStore } = await import('../../server/src/storage/config.ts')
+  assert.equal((await configuredObjectStore({})).objectStore,undefined)
+  for (const environment of [
+    { DYOFFICE_OBJECT_STORE: 'local-dev' },
+    { DYOFFICE_FILE_API: 'production', DYOFFICE_OBJECT_STORE: 'local-dev' },
+    { DYOFFICE_FILE_API: 'experimental', DYOFFICE_OBJECT_STORE: 'local-dev' },
+    { DYOFFICE_FILE_API: 'experimental', DYOFFICE_OBJECT_STORE: 'unknown' },
+    { DYOFFICE_FILE_API: 'experimental', DYOFFICE_OBJECT_STORE: 'local-dev', DYOFFICE_FILE_QUOTA_BYTES: '-1' },
+  ]) await assert.rejects(() => configuredObjectStore(environment))
+  for (const endpoint of ['http://storage.example','https://user:secret@storage.example','https://storage.example?token=secret']) {
+    await assert.rejects(() => configuredObjectStore({ DYOFFICE_FILE_API: 'experimental', DYOFFICE_OBJECT_STORE: 's3', DYOFFICE_S3_REGION: 'us-east-1', DYOFFICE_S3_BUCKET: 'private-test', DYOFFICE_S3_ENDPOINT: endpoint }))
+  }
 })

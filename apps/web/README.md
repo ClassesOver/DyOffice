@@ -85,14 +85,14 @@ T02 仍需逐领域迁移旧路由与完整 `/api/v1` 契约；本地账号、�
 
 `server/src/modules/auth` 与 `server/src/db` 已提供 PostgreSQL 账号/角色/工作区表、Argon2id 密码验证和并发安全的一次性 Admin 初始化。`npm run bootstrap:admin` 必须在交互终端运行；显式提供 `DYOFFICE_DATABASE_URL` 与稳定 UUID `DYOFFICE_DEPLOYMENT_ID`，密码在终端隐藏输入并确认，不能放命令参数或密码环境变量。可用 `DYOFFICE_PASSWORD_BLOCKLIST_FILE` 加载部署批准的本地密码阻断语料；内置小列表只是起步，不能代表完整泄露密码覆盖。
 
-账号集成测试需要 `DYOFFICE_TEST_DATABASE_URL` 指向隔离的 `dyoffice_test` 或 `dyoffice_test_*` PostgreSQL 数据库；缺少数据库会失败，不会跳过或换成内存实现。Linux/macOS 的 CLI 终端回归还需要 Python 3 标准库。`npm run test:web:integration` 运行账号、PTY 和 Fastify 测试；CI 提供独立 PostgreSQL 17 服务。
+账号集成测试需要 `DYOFFICE_TEST_DATABASE_URL` 指向隔离的 `dyoffice_test` 或 `dyoffice_test_*` PostgreSQL 数据库；缺少数据库会失败，不会跳过或换成内存实现。Linux/macOS 的 CLI 终端回归还需要 Python 3 标准库。`npm run test:web:integration` 运行账号、PTY、Fastify 和文件事务测试；文件用例还需下文的隔离 S3 测试环境变量。CI 提供独立 PostgreSQL 17 与固定摘要的 S3 兼容测试服务。
 
 这些模块还没有提供 Cookie 会话或账号登录界面，也没有接管旧 JSON 个人数据。开发 Token 启动路径及 production 拒绝保持生效；完整进度与实际证据见 `docs/dyoffice/evidence/t03a-account-bootstrap.md`。
 
 
 ### T03b 本地会话实验入口
 
-`DYOFFICE_AUTH_MODE=local` 启用独立的 PostgreSQL 会话 API。先按下文 T04 配置独立数据库账号，并用 CLI 初始化账号。运行服务时设置 `DYOFFICE_AUTH_DATABASE_URL`、`DYOFFICE_BUSINESS_DATABASE_URL`、`DYOFFICE_DEPLOYMENT_ID`、准确的 `DYOFFICE_ORIGIN` 和至少 32 字节的随机持久化 `DYOFFICE_CSRF_KEY`；取消迁移连接变量和开发用户/Admin Token 后启动。它提供登录挑战、登录/退出、`me`、重新认证、个人会话查询/撤销，未实现的个人文件和其他配置路由返回 501，不访问旧 JSON 数据。网页登录/工作区界面尚待接入，工作区/偏好 RLS 已接入，production 仍拒绝启动。
+`DYOFFICE_AUTH_MODE=local` 启用独立的 PostgreSQL 会话 API。先按下文 T04 配置独立数据库账号，并用 CLI 初始化账号。运行服务时设置 `DYOFFICE_AUTH_DATABASE_URL`、`DYOFFICE_BUSINESS_DATABASE_URL`、`DYOFFICE_DEPLOYMENT_ID`、准确的 `DYOFFICE_ORIGIN` 和至少 32 字节的随机持久化 `DYOFFICE_CSRF_KEY`；取消迁移连接变量和开发用户/Admin Token 后启动。它提供登录挑战、登录/退出、`me`、重新认证、个人会话查询/撤销，未启用文件实验 API 时，个人文件及其他未实现的配置路由返回 501，不访问旧 JSON 数据。网页登录/工作区界面尚待接入，工作区/偏好 RLS 已接入，production 仍拒绝启动。
 
 浏览器流程先 GET `/api/v1/auth/csrf`，保留服务端 HttpOnly Cookie，把返回的 `csrfToken` 放入 `X-CSRF-Token` 后 POST `/api/v1/auth/login`；写请求要求准确的同源 Origin。登录响应只返回用户 DTO 与 CSRF proof，实际会话令牌只在 Secure Cookie。使用与 Origin 对齐的 HTTPS 入口验证浏览器，不以手动传 Cookie 代替验证。
 
@@ -121,8 +121,34 @@ T02 仍需逐领域迁移旧路由与完整 `/api/v1` 契约；本地账号、�
 
 ### T05a 对象存储与结构校验基础
 
-已增加单次发布的本地盘/S3 adapter、读回 SHA-256 校验，以及 DOCX/XLSX/PPTX/PDF 结构预检。它们尚未接入文件 HTTP 路由；当前不能用本地账号上传/编辑文件。配额、文件元数据、上传完成事务、回收站与受控下载继续由 T05 实现，production 仍关闭。
+已增加单次发布的本地盘/S3 adapter、读回 SHA-256 校验，以及 DOCX/XLSX/PPTX/PDF 结构预检。该历史阶段尚未接入文件 HTTP 路由；下文 T05b 已在显式实验配置下接入原件导入/下载，编辑仍未实现。配额、文件元数据、上传完成事务、回收站与受控下载继续由 T05 实现，production 仍关闭。
 
 `npm run test:web:storage` 运行真实临时磁盘、S3 兼容服务和解析工作线程测试。必须显式配置隔离测试服务的 `DYOFFICE_TEST_S3_ENDPOINT`（仅 loopback）、`DYOFFICE_TEST_S3_ACCESS_KEY`、`DYOFFICE_TEST_S3_SECRET_KEY`；缺少服务会失败，不会跳过或改用内存存储。测试账号只应拥有临时测试服务的权限；测试创建并删除随机 `dyoffice-test-*` bucket。CI 使用固定摘要的 RustFS 服务，仅为兼容性测试，生产对象存储仍由部署方配置。
 
 预检保留原始字节，不执行文档脚本；解析工作线程有并发/超时和 JS 堆限制，但不能替代操作系统内存隔离或恶意内容扫描。完整 F13/T21 安全门槛尚未验收。完整边界、依赖版本和实测记录见 [T05a 证据](../../docs/dyoffice/evidence/t05a-object-storage.md)。
+
+
+### T05b 实验文件 API
+
+先用迁移 owner 运行 `npm run provision:runtime` 安装 migration 5 和新表最小授权，再使用前述两套受限运行连接启动。文件功能默认关闭；在隔离开发环境设置 `DYOFFICE_FILE_API=experimental`，并选择一个存储：
+
+- 本地盘：`DYOFFICE_OBJECT_STORE=local-dev`，显式指定独立目录 `DYOFFICE_OBJECT_DIRECTORY`。不能指向旧原型状态目录，也不用于多副本/HA。
+- S3：`DYOFFICE_OBJECT_STORE=s3`、`DYOFFICE_S3_BUCKET`、`DYOFFICE_S3_REGION`；使用标准 AWS SDK 环境凭据或运行角色。可选 `DYOFFICE_S3_ENDPOINT`、`DYOFFICE_S3_FORCE_PATH_STYLE=true|false`。自定义非 loopback endpoint 必须 HTTPS，URL 不允许用户信息或查询秘密。bucket 需预先创建并保持私有，启动检查 HeadBucket；本服务不创建生产 bucket 或 IAM/加密策略。
+
+可用 `DYOFFICE_FILE_QUOTA_BYTES` 设置每用户配额，默认 1 GiB；单文件最多 32 MiB，最多 16 个活动上传，上传 15 分钟过期。回收站和等待安全清理的已发布对象仍计入容量。尚无硬删除/回收任务，因此保守计费的未引用对象不会自动退还额度。变更配额不会删除已有文件。
+
+| 操作 | 版本化接口 |
+| --- | --- |
+| 预留上传 | `POST /api/v1/files/uploads`，JSON `{name,size}` |
+| 发送完整字节 | `PUT /api/v1/uploads/:id/content`，`application/octet-stream` |
+| 提交初始文件 | `POST /api/v1/uploads/:id/finish`，空请求体 |
+| 取消尚未提交上传 | `DELETE /api/v1/uploads/:id` |
+| 列表/回收站 | `GET /api/v1/files?trash=true|false&limit=1..100&cursor=UUID` |
+| 打开元数据 | `GET /api/v1/files/:id` |
+| 原件下载 | `GET /api/v1/files/:id/content?revision=UUID` |
+| 重命名/回收/恢复 | `PATCH /api/v1/files/:id`（JSON `{name}`）、`DELETE /api/v1/files/:id`、`POST /api/v1/files/:id/restore` |
+| 容量 | `GET /api/v1/storage/usage` |
+
+所有操作依赖 Cookie 会话；写入还需准确 Origin 和 `X-CSRF-Token`。不接受 owner、objectKey 或客户端哈希作为授权/完整性证明。上传完成前没有可下载文件；finish 失败可在期限内重试，成功重试返回同一初始版本。接收阶段响应丢失时，不要覆盖对象，可尝试 finish 确认是否已就绪。后台对象操作未结束时，客户端断线仍占用传输名额；满额返回临时 503。
+
+这是受控的原件生命周期 API，不能保存编辑后的新版本；能力目录仍全部 unsupported。浏览器/工作区 UI、编辑器、操作系统解析隔离与恶意内容扫描、保留清理、完整恢复和企业部署尚未完成，production 继续关闭。仅使用授权测试文件进行隔离开发。真实 PostgreSQL/S3/HTTP/TLS 证据见 [T05b 记录](../../docs/dyoffice/evidence/t05b-file-lifecycle.md)。

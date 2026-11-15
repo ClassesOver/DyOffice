@@ -13,7 +13,7 @@ import { createPreferenceService } from '../../server/src/modules/preferences/se
 import { password } from './identity.mjs'
 export const restrictedOrigin = 'https://office.example'
 
-export async function restrictedFixture(t, { origin = restrictedOrigin } = {}) {
+export async function restrictedFixture(t, { origin = restrictedOrigin, objectStore, filePolicy, businessMax = 1 } = {}) {
   const source = process.env.DYOFFICE_TEST_DATABASE_URL
   assert.ok(source, 'Disposable PostgreSQL admin connection required')
   assert.match(new URL(source).pathname, /^\/dyoffice_test(?:_[a-z0-9_]+)?$/)
@@ -58,7 +58,7 @@ export async function restrictedFixture(t, { origin = restrictedOrigin } = {}) {
   const ownerPool = makePool('owner'), ownerDb = createIdentityStore(ownerPool)
   await ownerDb.migrate()
   await provisionRuntimeRoles(ownerPool, { authRole: names.auth, businessRole: names.business })
-  const authPool = makePool('auth'), businessPool = makePool('business', 1), db = createIdentityStore(authPool)
+  const authPool = makePool('auth'), businessPool = makePool('business', businessMax), db = createIdentityStore(authPool)
   const passwords = await createPasswordService(), deploymentId = randomUUID()
   const ownerAccounts = createAccountService({ db: ownerDb, passwords, deploymentId })
   const initial = await ownerAccounts.bootstrapAdmin({ username: 'owner', password })
@@ -73,7 +73,7 @@ export async function restrictedFixture(t, { origin = restrictedOrigin } = {}) {
   }
   const alice = await signUser('alice'), bob = await signUser('bob')
   const csrfKey = randomBytes(32).toString('hex')
-  const app = await buildLocalApp({ db, businessPool, passwords, deploymentId, origin, csrfKey })
+  const app = await buildLocalApp({ db, businessPool, passwords, deploymentId, origin, csrfKey, objectStore, filePolicy })
   cleanup.push(() => app.close())
   const transactions = createPrincipalTransactions({ pool: businessPool, deploymentId })
   const preferences = createPreferenceService(transactions)
