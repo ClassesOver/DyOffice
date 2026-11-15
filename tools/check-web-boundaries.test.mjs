@@ -57,6 +57,10 @@ test('runs the CLI from a checkout path containing URL-reserved characters', asy
   await mkdir(join(root, 'tools'), { recursive: true })
   await mkdir(join(root, 'apps/web/src'), { recursive: true })
   await symlink(new URL('../apps/web/node_modules', import.meta.url), join(root, 'apps/web/node_modules'), 'dir')
+  // Workspace installs hoist TypeScript to the repository root. The copied
+  // checkout has to see that parent node_modules, including when its path
+  // contains a space or hash.
+  await symlink(new URL('../node_modules', import.meta.url), join(root, 'node_modules'), 'dir')
   const script = join(root, 'tools/check-web-boundaries.mjs')
   await writeFile(script, await readFile(new URL('./check-web-boundaries.mjs', import.meta.url)))
   await writeFile(join(root, 'apps/web/src/app.ts'), "import fs from 'node:fs'\n")
