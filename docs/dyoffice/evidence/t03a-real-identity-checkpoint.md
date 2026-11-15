@@ -15,7 +15,7 @@
 
 - [Dependency lock + native Argon2 + PostgreSQL integration + Web build CI](https://github.com/ClassesOver/DyOffice/actions/runs/43737553545): **success**, including generated lockfile push.
 - [Normal identity CI with Argon2id, real PostgreSQL bootstrap CLI and isolated SQL constraints](https://github.com/ClassesOver/DyOffice/actions/runs/43737896623): **success**.
-- A later change adds a regression check for malformed PHC hashes; that exact commit's CI result must be checked separately before being declared green.
+- [Final repaired identity CI run #43738397505](https://github.com/ClassesOver/DyOffice/actions/runs/43738397505): **success** at commit `6f3d616b654724ffcf332122bc0bcef9240bcba4`, including the malformed PHC fail-closed regression, transaction tests, actual PostgreSQL + Argon2id integration, secure CLI and SQL constraint tests. A subsequent CI-only change adds an explicit early `node --check` step to prevent future malformed test files.
 
 The identity CI exercises a disposable PostgreSQL database and test-only credentials. It is not a production security assessment. Previous failed CI runs were due to the SQL constraint fixture re-creating tables from an already applied migration. They were fixed by isolating the fixture in a temporary schema, not by weakening the database constraints.
 
@@ -28,3 +28,5 @@ The identity CI exercises a disposable PostgreSQL database and test-only credent
 5. **Release:** current Web app still uses development Bearer tokens and intentionally refuses `NODE_ENV=production`. The new local password store is **not yet wired to user-facing routes**. No claim of production login or native Office editing.
 
 Implementation direction remains strictly local username/password without OIDC/SSO. See [local-account-auth.md](../local-account-auth.md) and [acceptance-matrix.md](../acceptance-matrix.md).
+
+The two intermediate failed identity runs were diagnosed: the first introduced test line was truncated during a file update, and a later patch accidentally retained duplicated invalid tail text. The test file has been reduced to a single valid test body; the repaired run passed. These were test-source syntax failures, not failures in Argon2id hashing or PostgreSQL transaction behavior.
