@@ -5,6 +5,7 @@ import { join, extname, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createStore } from './store.mjs';
 import { withMcp } from './mcp.mjs';
+import { serveReadOnlyFiles } from './readonly-files.mjs';
 const publicPath=join(dirname(fileURLToPath(import.meta.url)),'../public');
 const formats=new Set(['docx','xlsx','pptx','pdf']);
 const fail=(message,status=400)=>{throw Object.assign(new Error(message),{status});};
@@ -37,9 +38,10 @@ export async function createApplication({directory,userToken,adminToken,encrypti
       const token=req.headers.authorization?.replace(/^Bearer /,'');const admin=sameToken(token,adminToken);
       if(!admin&&!sameToken(token,userToken)) return send({error:'请登录'},401);
       if(path.startsWith('/api/admin/')&&!admin) return send({error:'需要管理员权限'},403);
-      const personalResource=path==='/api/preferences'||path==='/api/sources'||path==='/api/files'||path.startsWith('/api/files/');
+      const personalResource=path==='/api/preferences'||path==='/api/sources'||path==='/api/files'||path.startsWith('/api/files/')||path==='/api/v1/capabilities'||path.startsWith('/api/v1/files/');
       if(admin&&personalResource) return send({error:'需要个人工作区权限'},403);
       const state=store.read();
+      if(await serveReadOnlyFiles(req,res,{url,state,filePath})) return;
       if(path==='/api/preferences') {
         if(req.method==='GET') return send(state.preferences);
         if(req.method==='PUT') {
