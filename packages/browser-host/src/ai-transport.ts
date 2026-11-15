@@ -1,4 +1,4 @@
-import type { AgentTransport, AgentStreamRequest, AgentStreamCallbacks, AgentToolCall, AgentPhase, AgentTokenUsage } from '@genoffice/agent-core'
+import type { AgentTransport, AgentStreamRequest, AgentStreamCallbacks, AgentToolCall, AgentTokenUsage } from '@genoffice/agent-core'
 
 const MAX_SSE_EVENT_BYTES = 256 * 1024
 
@@ -38,7 +38,7 @@ export function createSseAgentTransport(options: SseTransportOptions = {}): Agen
         else if (event === 'tool_call') {
           if (typeof data.id !== 'string' || typeof data.name !== 'string' || !data.input || typeof data.input !== 'object' || Array.isArray(data.input)) throw new Error('Invalid complete tool call')
           callbacks.onToolCall(data as unknown as AgentToolCall)
-        } else if (event === 'phase' && typeof data.kind === 'string') callbacks.onPhase?.(data as unknown as AgentPhase)
+        } else if (event === 'phase' && typeof data.kind === 'string') callbacks.onPhase?.(data as unknown as Parameters<NonNullable<AgentStreamCallbacks['onPhase']>>[0])
         else if (event === 'usage') callbacks.onUsage?.(data as AgentTokenUsage)
         else if (event === 'stop_reason' && typeof data.reason === 'string') callbacks.onStopReason?.(data.reason)
         else if (event === 'error') finish(typeof data.message === 'string' ? data.message : 'AI stream failed')
