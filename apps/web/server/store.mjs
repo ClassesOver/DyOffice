@@ -12,9 +12,11 @@ export async function createStore(directory, encryptionKey) {
   let queue = Promise.resolve();
   return {
     read: () => structuredClone(state),
+    // Mutators may be synchronous or async. Await them before serialization;
+    // a thrown/rejected mutator aborts the isolated snapshot and keeps the queue usable.
     update(change) {
       const result = queue.then(async () => {
-        const next = structuredClone(state); change(next);
+        const next = structuredClone(state); await change(next);
         await writeFile(path+'.tmp',JSON.stringify(next),{mode:0o600});
         await rename(path+'.tmp',path); state=next;
       });
