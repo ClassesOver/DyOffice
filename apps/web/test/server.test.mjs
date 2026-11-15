@@ -110,3 +110,48 @@ test('configuration admin cannot read or mutate personal resources', async t => 
   assert.equal((await request('/api/models', 'admin')).status, 200);
   assert.equal((await request('/api/models', 'personal')).status, 200);
 });
+
+test('concurrent admin sections preserve the other committed section', async t => {
+  const {request} = await import('node:http');
+  const directory=await mkdtemp(join(tmpdir(),'dyoffice-admin-race-'));
+  const server=await createApplication({directory,userToken:'personal',adminToken:'admin',encryptionKey:'test'});
+  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+  t.after(async()=>{await new Promise(resolve=>server.close(resolve));await rm(directory,{recursive:true,force:true});});
+  const base=`http://127.0.0.1:${server.address().port}`;
+  const observed=new Promise(resolve=>server.once('request',resolve));
+  const slow=request(base+'/api/admin/config',{method:'PUT',headers:{Authorization:'Bearer admin','Content-Type':'application/json'}});
+  t.after(()=>slow.destroy());
+  const slowResponse=new Promise((resolve,reject)=>{slow.on('error',reject);slow.on('response',res=>{res.resume();res.on('end',()=>resolve(res.statusCode));});});
+  slow.write('{');await observed;
+  const mcp={id:'m',transport:'http',url:'https://example.com/',enabled:true,apiKey:'fake-key'};
+  const fast=await fetch(base+'/api/admin/config',{method:'PUT',headers:{Authorization:'Bearer admin','Content-Type':'application/json'},body:JSON.stringify({mcp:[mcp]})});
+  assert.equal(fast.status,200);await fast.text();
+  slow.end('"models":[{"id":"x","model":"x","baseUrl":"https://example.com/","enabled":true}]}');
+  assert.equal(await slowResponse,200);
+  const state=JSON.parse(await readFile(join(directory,'state.json'),'utf8'));
+  assert.equal(state.admin.models.length,1);
+  assert.equal(state.admin.mcp.length,1);
+  assert.equal(state.admin.mcp[0].id,'m');
+  assert.ok(state.admin.mcp[0].secret);
+});
+
+test('an omitted admin key preserves the latest key committed while the body arrives', async t => {
+  const {request}=await import('node:http');
+  const directory=await mkdtemp(join(tmpdir(),'dyoffice-admin-key-race-'));
+  const server=await createApplication({directory,userToken:'personal',adminToken:'admin',encryptionKey:'test'});
+  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+  t.after(async()=>{await new Promise(resolve=>server.close(resolve));await rm(directory,{recursive:true,force:true});});
+  const base=`http://127.0.0.1:${server.address().port}`;
+  const observed=new Promise(resolve=>server.once('request',resolve));
+  const slow=request(base+'/api/admin/config',{method:'PUT',headers:{Authorization:'Bearer admin','Content-Type':'application/json'}});
+  t.after(()=>slow.destroy());
+  const response=new Promise((resolve,reject)=>{slow.on('error',reject);slow.on('response',res=>{res.resume();res.on('end',()=>resolve(res.statusCode));});});
+  slow.write('{');await observed;
+  const model={id:'x',model:'x',baseUrl:'https://example.com/',enabled:true};
+  const fast=await fetch(base+'/api/admin/config',{method:'PUT',headers:{Authorization:'Bearer admin','Content-Type':'application/json'},body:JSON.stringify({models:[{...model,apiKey:'fake-new-key'}]})});
+  assert.equal(fast.status,200);await fast.text();
+  const before=JSON.parse(await readFile(join(directory,'state.json'),'utf8')).admin.models[0].secret;
+  slow.end(JSON.stringify({models:[model]}).slice(1));assert.equal(await response,200);
+  const after=JSON.parse(await readFile(join(directory,'state.json'),'utf8')).admin.models[0].secret;
+  assert.ok(before);assert.equal(after,before);
+});
