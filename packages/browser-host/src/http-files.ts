@@ -1,12 +1,14 @@
 import { createBrowserHost } from './index.ts'
 import { HostError, hostError } from '../../web-contracts/src/errors.ts'
 import type { BrowserHost, CapabilityCatalog } from '../../web-contracts/src/host.ts'
-import type { OpenFileResult, PublicSettings } from '../../web-contracts/src/api.ts'
+import type { OpenFileResult, PublicSettings, RevisionRef, SaveInput } from '../../web-contracts/src/api.ts'
 
 export interface HttpFileHostOptions {
   fetchImpl?: typeof fetch
   /** Temporary development bearer-header bridge; production should use an authenticated same-origin session. */
   getAuthHeaders?: () => HeadersInit
+  /** When true, stage and commit DOCX bytes. Off by default so read-only hosts stay read-only. */
+  enableSaves?: boolean
 }
 
 function responseError(status: number): HostError {
@@ -16,7 +18,7 @@ function responseError(status: number): HostError {
   return hostError('INVALID_RESPONSE', 'request')
 }
 
-/** Retrieve legacy imported bytes; no edit/save capabilities are exposed before revision transactions exist. */
+/** Read imported bytes. Saves are off unless `enableSaves` is set, so a read-only host cannot advertise editing. */
 export function createHttpFileHost(options: HttpFileHostOptions = {}): BrowserHost {
   const fetchImpl = options.fetchImpl ?? fetch
   async function get(path: string): Promise<Response> {
@@ -34,6 +36,14 @@ export function createHttpFileHost(options: HttpFileHostOptions = {}): BrowserHo
     if (!response.headers.get('content-type')?.includes('application/json')) throw hostError('INVALID_RESPONSE', 'JSON content type')
     try { return await response.json() }
     catch { throw hostError('INVALID_RESPONSE', 'JSON body') }
+  }
+  async function post(path: string, body: BodyInit, contentType: string): Promise<Response> {
+    const headers = new Headers(options.getAuthHeaders?.())
+    headers.set('Content-Type', contentType)
+    const response = await fetchImpl(path, { method: 'POST', credentials: 'same-origin', cache: 'no-store', headers, body })
+    if (!response.ok) throw responseError(response.status)
+    if (!response.headers.get('content-type')?.includes('application/json')) throw hostError('INVALID_RESPONSE', 'JSON content type')
+    return response
   }
   return createBrowserHost({
     getCapabilities: async () => await json('/api/v1/capabilities') as CapabilityCatalog,
@@ -77,5 +87,24 @@ export function createHttpFileHost(options: HttpFileHostOptions = {}): BrowserHo
       return bytes
     },
     getPreferences: async () => await json('/api/preferences') as PublicSettings,
+    ...(options.enableSaves ? {
+      async stageSave(bytes: Uint8Array, fileId: string): Promise<{ uploadId: string }> {
+        const response = await post(`/api/v1/files/${encodeURIComponent(fileId)}/uploads`, bytes, 'application/octet-stream')
+        const value = await response.json() as { uploadId?: unknown }
+        if (!value || typeof value.uploadId !== 'string' || !value.uploadId) throw hostError('INVALID_RESPONSE', 'stageSave')
+        return { uploadId: value.uploadId }
+      },
+      async commitSave(input: SaveInput): Promise<RevisionRef> {
+        const response = await post(`/api/v1/files/${encodeURIComponent(input.fileId)}/revisions`, JSON.stringify({
+          fileId: input.fileId,
+          uploadId: input.uploadId,
+          baseRevision: input.baseRevision,
+          idempotencyKey: input.idempotencyKey,
+          leaseEpoch: input.leaseEpoch,
+          ...(input.sourceCommandId ? { sourceCommandId: input.sourceCommandId } : {}),
+        }), 'application/json')
+        return await response.json() as RevisionRef
+      },
+    } : {}),
   })
 }

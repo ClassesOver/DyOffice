@@ -7,6 +7,7 @@ import { createStore } from './store.mjs';
 import { withMcp } from './mcp.mjs';
 import { createStaticAssets } from './static-assets.mjs';
 import { serveReadOnlyFiles } from './readonly-files.mjs';
+import { EDITING_CAPABILITIES, serveDocumentEditing } from './document-editing.mjs';
 import { authorizeDevApi } from './request-boundary.mjs';
 import { serveHealth } from './health.mjs';
 const formats=new Set(['docx','xlsx','pptx','pdf']);
@@ -42,7 +43,8 @@ export async function createApplication({directory,userToken,adminToken,encrypti
       const access=authorizeDevApi(req,{userToken,adminToken},path);
       if('status' in access) return send({error:access.error},access.status);
       const state=store.read();
-      if(await serveReadOnlyFiles(req,res,{url,state,filePath})) return;
+      if(await serveDocumentEditing(req,res,{url,state,store,filePath})) return;
+      if(await serveReadOnlyFiles(req,res,{url,state,filePath,capabilities:EDITING_CAPABILITIES})) return;
       if(path==='/api/preferences') {
         if(req.method==='GET') return send(state.preferences);
         if(req.method==='PUT') {
@@ -120,6 +122,10 @@ export async function createApplication({directory,userToken,adminToken,encrypti
         return res.end(await readFile(join(filePath,file.id)));
       }
       return send({error:'接口不存在'},404);
-    } catch(error) {send({error:error.status?error.message:'服务暂时不可用'},error.status||500);}
+    } catch(error) {
+      const body={error:error.status?error.message:'服务暂时不可用'};
+      if(error.status && typeof error.publicCode==='string') body.code=error.publicCode;
+      send(body,error.status||500);
+    }
   });
 }
