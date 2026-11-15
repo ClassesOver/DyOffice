@@ -7,17 +7,21 @@ This is the Web adaptation inside the cloned GenOffice repository, based on upst
 Requires Node 22.12+. From the repository root:
 
 ```sh
-npm install --prefix apps/web --workspaces=false --ignore-scripts
+npm ci --ignore-scripts
 # Export distinct DYOFFICE_USER_TOKEN and DYOFFICE_ADMIN_TOKEN values,
 # plus a persistent DYOFFICE_ENCRYPTION_KEY (see .env.example).
 npm run dev:web
 ```
 
+DOCX editing loads `@genoffice/docx-engine` in the server process, so the Web app needs this repository install rather than an `apps/web`-only install. `npm run dev:web` starts Node with `tsx` and does not launch Electron. An `apps/web`-only install can still serve the older shell, but opening a DOCX editor will fail until the workspace packages are installed.
+
 Open `http://127.0.0.1:3080` for the personal workspace and `/admin` for administration. Use the corresponding access token. Configuration is read from environment variables; `.env.example` is a template and is not loaded automatically. Persist the data directory and encryption key together.
 
 ## Current implementation
 
-- Personal file import/download restricted to DOCX, XLSX, PPTX and PDF.
+- Personal DOCX open/edit/save. The page edits plain paragraph, heading, and list text. Saves call GenOffice `docx-engine` so unchanged paragraphs, tables, pictures, styles, and headers stay in the original OOXML package. Complex paragraphs (tabs, fields, revisions, content controls) are shown and preserved, not rewritten as plain text.
+- In-process document revisions: a save names the base revision, lease epoch, and idempotency key. A stale base or lease returns 409 and keeps the draft. Repeating the same save returns the original revision. The previous bytes stay available at the old revision URL. This queue is single-process JSON state, not PostgreSQL CAS.
+- Personal file import/download restricted to DOCX, XLSX, PPTX and PDF. Only DOCX is editable.
 - Personal theme, language, author, autosave and assistant preferences.
 - HTTP data-source configuration with encrypted credentials.
 - Admin-only model endpoint/key configuration and enabled-model catalog.
@@ -28,7 +32,7 @@ The development token server refuses startup when `NODE_ENV=production`, before 
 
 ## Remaining implementation
 
-Native browser editor integration, document save/revision lifecycle, model chat/tool execution, database connectors and query integration, source edit/delete/test UI, file folders/favorites/recent views, multi-user login and deployment hardening. Preference fields for editor features are persisted now and will be applied as each editor is integrated. This is a development foundation, not a completed Office editor.
+Mount the GenOffice Docs renderer (ribbon, pagination, comments, tracked changes, and selection) on this DOCX host instead of the paragraph surface. Then adapt XLSX, PPTX, and PDF the same way, reusing each native editor and keeping non-browser work behind authorized APIs. Model chat/tool execution, database connectors and query integration, source edit/delete/test UI, file folders/favorites/recent views, multi-user login, and deployment hardening are still open. Autosave uses the saved preference; the assistant preference is stored and not yet shown. The revision check above is the single-process bridge, not T06's PostgreSQL transaction.
 
 Run `npm run test:web` for HTTP access-boundary and persistence tests. Runtime dependencies are scoped to this app so starting the Web server does not install or launch Electron.
 
@@ -68,7 +72,7 @@ native document round-trip acceptance.
 
 Run exactly one server process/application instance per data directory. The JSON store's queue protects only that instance; starting another instance on the same directory is unsupported and can overwrite metadata, even when both uploads return success. Do not use clustered workers, multiple replicas or rolling overlap with a shared prototype directory. There is currently no inter-process ownership lock.
 
-Admin updates apply supplied sections against the latest state inside the instance queue; omitted sections and omitted keys are preserved. Concurrent updates to the same section remain last-writer-wins, not revision-checked. This is not the planned PostgreSQL CAS, document revision, lease, or idempotency implementation (T04/T06/T12). File endpoints currently import and download originals; they do not implement editing-save transactions.
+Admin updates apply supplied sections against the latest state inside the instance queue; omitted sections and omitted keys are preserved. Concurrent updates to the same section remain last-writer-wins, not revision-checked. This is not the planned PostgreSQL CAS, document revision, lease, or idempotency implementation (T04/T06/T12). DOCX saves replace the current bytes only after the base revision and lease match, and they archive the previous bytes. That check is local to one server process. It is not a multi-replica transaction, and a crash between the file rename and the JSON write can still leave the archive and the current bytes ahead of the idempotency record. Re-open the document before saving again in that case.
 
 ### T02 请求与错误迁移接缝
 

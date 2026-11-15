@@ -89,7 +89,7 @@ export function createHttpFileHost(options: HttpFileHostOptions = {}): BrowserHo
     getPreferences: async () => await json('/api/preferences') as PublicSettings,
     ...(options.enableSaves ? {
       async stageSave(bytes: Uint8Array, fileId: string): Promise<{ uploadId: string }> {
-        const response = await post(`/api/v1/files/${encodeURIComponent(fileId)}/uploads`, bytes, 'application/octet-stream')
+        const response = await post(`/api/v1/files/${encodeURIComponent(fileId)}/uploads`, bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer, 'application/octet-stream')
         const value = await response.json() as { uploadId?: unknown }
         if (!value || typeof value.uploadId !== 'string' || !value.uploadId) throw hostError('INVALID_RESPONSE', 'stageSave')
         return { uploadId: value.uploadId }
