@@ -61,3 +61,18 @@ test('invalid parameters and unavailable database reject without fail-open',asyn
   const unavailable=createPgLoginThrottle({pool:bad,hmacKey,limits})
   await assert.rejects(unavailable.consume({deploymentId,usernameNormalized:'alice',ipAddress:'192.0.2.10'}),/Login throttle unavailable/)
 })
+
+test('IPv6 clients share one IP budget per /64 and mapped IPv4 shares the IPv4 budget',async()=>{
+  const pool=fixture(),throttle=createPgLoginThrottle({pool,hmacKey,limits})
+  // Distinct accounts so only the per-IP budget (5) can deny.
+  const sameNet=['2001:db8:1:2::1','2001:db8:1:2::2','2001:DB8:1:2:ffff::9','2001:0db8:0001:0002:0:0:0:3','2001:db8:1:2:a:b:c:d','2001:db8:1:2::77']
+  const answers=[]
+  for(const [i,ip] of sameNet.entries()) answers.push((await throttle.consume({deploymentId,usernameNormalized:'user'+i,ipAddress:ip})).allowed)
+  assert.deepEqual(answers,[true,true,true,true,true,false])
+  assert.equal((await throttle.consume({deploymentId,usernameNormalized:'other1',ipAddress:'2001:db8:1:3::1'})).allowed,true,'another /64 has its own budget')
+  const mapped=[]
+  for(const [i,ip] of ['198.51.100.7','::ffff:198.51.100.7','::FFFF:198.51.100.7','198.51.100.7','::ffff:c633:6407','198.51.100.7'].entries()) {
+    mapped.push((await throttle.consume({deploymentId,usernameNormalized:'mapped'+i,ipAddress:ip})).allowed)
+  }
+  assert.deepEqual(mapped,[true,true,true,true,true,false])
+})

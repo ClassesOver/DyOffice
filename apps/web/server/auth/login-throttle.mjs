@@ -21,6 +21,35 @@ const CLAIM = [
   'RETURNING attempts',
 ].join(' ')
 
+/** Expand a valid IPv6 literal (no zone) to eight 16-bit groups. */
+function ipv6Groups(address) {
+  let text = address.toLowerCase()
+  const tail = /(\d+\.\d+\.\d+\.\d+)$/.exec(text)
+  if (tail) {
+    const [a, b, c, d] = tail[1].split('.').map(Number)
+    text = text.slice(0, -tail[1].length) + ((a << 8) | b).toString(16) + ':' + ((c << 8) | d).toString(16)
+  }
+  const [head, rest] = text.split('::')
+  const left = head ? head.split(':') : []
+  const right = rest === undefined ? [] : rest ? rest.split(':') : []
+  const fill = rest === undefined ? [] : new Array(8 - left.length - right.length).fill('0')
+  return [...left, ...fill, ...right].map(group => parseInt(group, 16))
+}
+
+/**
+ * Per-IP budget identity. One IPv6 client typically controls a whole /64, so
+ * IPv6 is counted per /64; IPv4-mapped IPv6 shares the plain IPv4 budget.
+ */
+export function ipBudgetIdentity(ipAddress) {
+  const address = ipAddress.split('%')[0]
+  if (isIP(address) === 4) return address
+  const groups = ipv6Groups(address)
+  if (groups.slice(0, 5).every(g => g === 0) && groups[5] === 0xffff) {
+    return [groups[6] >> 8, groups[6] & 255, groups[7] >> 8, groups[7] & 255].join('.')
+  }
+  return groups.slice(0, 4).map(g => g.toString(16)).join(':') + '::/64'
+}
+
 function validateLimits(limits) {
   if (!limits || typeof limits !== 'object' || Array.isArray(limits)) throw new TypeError('Invalid login limit policy')
   const copy = {}
@@ -63,7 +92,7 @@ export function createPgLoginThrottle({ pool, hmacKey, limits = DEFAULT_LIMITS }
       // across all requests prevents deadlocks under contention.
       const buckets = [
         { category: 'global', identity: deploymentId },
-        { category: 'ip', identity: ipAddress.toLowerCase() },
+        { category: 'ip', identity: ipBudgetIdentity(ipAddress) },
         { category: 'account', identity: usernameNormalized },
       ]
       const client = await pool.connect()
