@@ -165,6 +165,8 @@ docs/dyoffice/               当前计划及 inventory/ evidence/ adr/
 
 ### T06 保存事务、历史版本和单写者租约
 
+2026-11-15 接缝进展：实验 API 已实现 editor/session 租约、同基线 CAS、不可变幂等回执、历史下载/恢复为新版本，以及同事务 outbox 意图，见 [T06 证据](evidence/t06-revision-transactions.md)。原生 UI/BrowserHost 保存链路由 T07 接入；outbox 派发由 T08 实现，不据此宣称编辑器或企业交付已完成。
+
 **依赖：** T05。**文件：** `modules/revisions/{service,routes}.ts`、`modules/leases/service.ts`、`outbox/service.ts`、`db/migrations/0006_revisions.sql`、`test/integration/revision-commit.test.ts`、`test/unit/save-generation.test.ts`。
 
 **接口：** `commitRevision()`、`acquireLease()/renewLease()/takeoverLease()`；文件修改基于 T01 SaveInput。

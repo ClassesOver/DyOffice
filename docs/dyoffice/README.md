@@ -129,6 +129,7 @@ WS 断线后手工编辑、HTTP 保存和普通 AI 流应继续可用；依赖�
 | T03c 账号与密码生命周期 | 实验 API、并发/回滚与浏览器验证已实施；清理策略与 UI 未完成，RLS 接缝见 T04 | [T03c 记录](evidence/t03c-account-lifecycle.md) |
 | T04 受限连接与个人偏好隔离 | 工作区/偏好 FORCE RLS、撤销写入顺序及权限检查已实施；文件/任务等待所属模块接入 | [T04 记录](evidence/t04-rls-checkpoint.md) |
 | T05 对象存储与上传 | 本地盘/S3、格式预检、配额与原件导入/下载/回收 API 已实施；编辑保存、UI 和回收清理仍待后续 | [T05a](evidence/t05a-object-storage.md)、[T05b](evidence/t05b-file-lifecycle.md) |
-| T06–T26 企业完整交付 | 尚未验收 | [任务列表](implementation-plan.md) 与 [验收矩阵](acceptance-matrix.md) |
+| T06 保存、历史与租约 | 实验保存 CAS、幂等回执、租约 fencing、历史恢复和事务 outbox 已实施；原生 UI 与派发待后续 | [T06 记录](evidence/t06-revision-transactions.md) |
+| T07–T26 企业完整交付 | 尚未验收 | [任务列表](implementation-plan.md) 与 [验收矩阵](acceptance-matrix.md) |
 
 四格式浏览器编辑与版本保存仍未打通。既有单用户 Bearer + JSON 文件原型不允许用于生产；本阶段的 `sha256:` revision 只校验只读文件字节，不提供 CAS/写租约/历史版本能力。新客户端不得显示原生编辑或 AI 写入已支持。

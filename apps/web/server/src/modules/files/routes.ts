@@ -7,11 +7,13 @@ import { MAX_OBJECT_BYTES } from '../../storage/object-store.ts'
 import type { FileService } from './service.ts'
 import { UNSUPPORTED_CAPABILITIES } from '../../../../../../packages/web-contracts/src/host.ts'
 
-const id = { type: 'string', pattern: '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$' } as const
-const emptyQuery = { type: 'object', additionalProperties: false, properties: {} } as const
-const params = { type: 'object', additionalProperties: false, required: ['id'], properties: { id } } as const
+import { uuidSchema as id, fileParamsSchema as params, emptyQuerySchema as emptyQuery } from './http-schema.ts'
+import { registerRevisionRoutes } from '../revisions/routes.ts'
+import type { RevisionService } from '../revisions/service.ts'
+import type { LeaseService } from '../leases/service.ts'
+
 const token = (request: FastifyRequest) => cookies(request).session ?? ''
-export function registerFileRoutes(app: FastifyInstance, files: FileService, sessions: SessionService, csrf: ReturnType<typeof createCsrfService>) {
+export function registerFileRoutes(app: FastifyInstance, files: FileService, sessions: SessionService, csrf: ReturnType<typeof createCsrfService>, saves?: { revisions: RevisionService; leases: LeaseService }) {
   app.register(async api => {
     let activeTransfers = 0
     const admitted = new WeakMap<FastifyRequest, { running: boolean; closed: boolean }>()
@@ -37,7 +39,7 @@ export function registerFileRoutes(app: FastifyInstance, files: FileService, ses
       await sessions.authenticate(credential)
       // Hold admission through processing AND response completion. A client
       // disconnect cannot free capacity while object work still owns buffers.
-      if (['PUT','GET','HEAD'].includes(request.method) && request.routeOptions.url?.endsWith('/content')) {
+      if ((['PUT','GET','HEAD'].includes(request.method) && request.routeOptions.url?.endsWith('/content')) || (request.method === 'POST' && (request.routeOptions.url?.endsWith('/commits') || request.routeOptions.url?.endsWith('/restoration-uploads')))) {
         if (request.method === 'PUT') {
           const upload = await files.preflightUpload(credential, (request.params as { id: string }).id)
           const length = request.headers['content-length']
@@ -52,6 +54,7 @@ export function registerFileRoutes(app: FastifyInstance, files: FileService, ses
     })
     api.addHook('onResponse', async request => close(request))
     api.addHook('onError', async request => { if (!admitted.get(request)?.running) release(request) })
+    if (saves) registerRevisionRoutes(api,{ ...saves, transfer })
     api.addContentTypeParser('application/octet-stream', { parseAs: 'buffer', bodyLimit: MAX_OBJECT_BYTES }, (_request, body, done) => done(null, body))
     api.get('/api/v1/capabilities', { schema: { querystring: emptyQuery } }, async () => UNSUPPORTED_CAPABILITIES)
     api.get('/api/v1/storage/usage', { schema: { querystring: emptyQuery } }, request => files.usage(token(request)))

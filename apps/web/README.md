@@ -151,4 +151,29 @@ T02 仍需逐领域迁移旧路由与完整 `/api/v1` 契约；本地账号、�
 
 所有操作依赖 Cookie 会话；写入还需准确 Origin 和 `X-CSRF-Token`。不接受 owner、objectKey 或客户端哈希作为授权/完整性证明。上传完成前没有可下载文件；finish 失败可在期限内重试，成功重试返回同一初始版本。接收阶段响应丢失时，不要覆盖对象，可尝试 finish 确认是否已就绪。后台对象操作未结束时，客户端断线仍占用传输名额；满额返回临时 503。
 
-这是受控的原件生命周期 API，不能保存编辑后的新版本；能力目录仍全部 unsupported。浏览器/工作区 UI、编辑器、操作系统解析隔离与恶意内容扫描、保留清理、完整恢复和企业部署尚未完成，production 继续关闭。仅使用授权测试文件进行隔离开发。真实 PostgreSQL/S3/HTTP/TLS 证据见 [T05b 记录](../../docs/dyoffice/evidence/t05b-file-lifecycle.md)。
+T05b 提供原件生命周期；下文 T06 增加受控的版本保存 API。原生编辑器仍未接入，能力目录仍全部 unsupported。浏览器/工作区 UI、编辑器、操作系统解析隔离与恶意内容扫描、保留清理、完整恢复和企业部署尚未完成，production 继续关闭。仅使用授权测试文件进行隔离开发。真实 PostgreSQL/S3/HTTP/TLS 证据见 [T05b 记录](../../docs/dyoffice/evidence/t05b-file-lifecycle.md)。
+
+
+### T06 租约、保存提交与历史
+
+实验文件 API 现在支持服务器保存事务。先用独立 migration owner 运行 `npm run provision:runtime` 安装 migration 6 和最小授权，再按上文用 auth/business 受限连接、显式实验存储启动。旧迁移校验和不变，不要删除历史记录来绕过版本检查。
+
+每个编辑器实例应新建 UUID `editorId`，不能因为共享 Cookie 就共享编辑器 ID。租约默认 45 秒，约每 15 秒续租；另一页默认无法取得现有有效租约，需用户明确接管。租约 epoch 单调增加，旧页面、旧会话或已过期的写入不能提交。原生 UI 和 BrowserHost 的新保存传输仍待 T07 接入；现有能力目录没有据此标为 editable。
+
+| 操作 | 接口与请求体 |
+| --- | --- |
+| 查看/取得租约 | `GET /api/v1/files/:id/lease`；`POST` 同路径，JSON `{editorId}` |
+| 续租 | `POST /api/v1/files/:id/lease/renew`，`{editorId,leaseEpoch}` |
+| 明确接管 | `POST /api/v1/files/:id/lease/takeover`，`{editorId,expectedEpoch}` |
+| 释放 | `DELETE /api/v1/files/:id/lease`，`{editorId,leaseEpoch}` |
+| 预留编辑上传 | `POST /api/v1/files/:id/uploads`，`{size,baseRevision,leaseEpoch,editorId}` |
+| 发送字节 | 复用 `PUT /api/v1/uploads/:uploadId/content`，完整 `application/octet-stream` |
+| 提交保存 | `POST /api/v1/files/:id/commits`，`{fileId,uploadId,baseRevision,idempotencyKey,leaseEpoch,sourceCommandId?}` |
+| 历史 | `GET /api/v1/files/:id/revisions?limit=1..100&cursor=revisionUUID` |
+| 预留历史恢复 | `POST /api/v1/files/:id/restoration-uploads`，`{revision,baseRevision,leaseEpoch,editorId}` |
+
+取得新版本 uploadId 后调用 commits；不要调用初次导入的 finish，后者会拒绝版本上传。成功返回 `RevisionRef`，只有 DB 事务提交后才算保存。并发旧基线或旧租约返回 409，保留本地草稿；相同成功幂等键/请求重试返回原版本，不再次写对象或事件。幂等键为 8–128 位字母、数字、下划线或连字符，建议随机 UUID。同一成功键换请求会冲突。可选 sourceCommandId 当前仅作为**未验证的客户端请求标签**保存和参与请求哈希，不代表命令已授权/执行；真实命令关联由 T17 接入。
+
+历史恢复接口会校验并复制原件到一个新的 ready 上传；随后用该 uploadId、当前 baseRevision 和有效租约调用 commits。恢复不能覆盖其后发生的新修改，最终产生一个新版本而非把指针倒退。`GET /api/v1/files/:id/content?revision=UUID` 可下载该文件任何保留版本的校验后原件。回收站仍需先恢复文件再访问版本。
+
+所有历史版本、待清理对象继续占配额；尚无自动硬删除或历史回收。outbox 当前只在保存事务内持久记录事件意图，T08 才实现派发，不能把它当外部任务已完成。真实 PostgreSQL/S3/Chromium 测试、升级与已知边界见 [T06 证据](../../docs/dyoffice/evidence/t06-revision-transactions.md)。完整原生编辑、解析 OS 沙箱、生产部署和客户验收仍未完成。

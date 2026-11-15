@@ -6,6 +6,7 @@ import type { Principal } from '../../../../../packages/web-contracts/src/api.ts
 export type BusinessPrincipal = Principal & { roles: readonly string[]; authVersion: number }
 export interface SessionCredential { kind: 'session'; token: string }
 export function createPrincipalTransactions({ pool, deploymentId, idleMs = 8 * 3600_000 }: { pool: Pool; deploymentId: string; idleMs?: number }) {
+  deploymentId = deploymentId.toLowerCase()
   let admitted: ReturnType<typeof assertRuntimePool> | undefined
   return {
     async withPrincipalTransaction<T>(credential: SessionCredential, operation: (connection: PoolClient, principal: BusinessPrincipal) => Promise<T>): Promise<T> {

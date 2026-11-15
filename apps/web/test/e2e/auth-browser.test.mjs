@@ -171,3 +171,45 @@ test('Chromium TLS file lifecycle uses scoped cookies for import, download, recy
   }, { id: imported.opened.file.fileId, endpoint: imported.opened.downloadEndpoint, csrf: signed.body.csrfToken })
   assert.deepEqual(lifecycle,[204,404,204,200])
 })
+
+test('Chromium TLS saves, retries, fences a stale editor and restores history as a new revision', { timeout: 30_000 }, async t => {
+  const { page } = await tlsFixture(t,true,true)
+  const original = await readFile(new URL('../../../../packages/docx-engine/tests/fixtures/truths/render-sectafter-no-blank/probe.docx', import.meta.url))
+  const { default: JSZip } = await import('jszip'), zip = await JSZip.loadAsync(original)
+  zip.file('word/document.xml',(await zip.file('word/document.xml').async('string')).replace('</w:body>','<w:p><w:r><w:t>Browser committed text</w:t></w:r></w:p></w:body>'))
+  const changed = await zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' })
+  const result = await page.evaluate(async ({ password, original, changed }) => {
+    const challenge = await (await fetch('/api/v1/auth/csrf')).json()
+    const signed = await (await fetch('/api/v1/auth/login',{ method: 'POST', headers: { 'content-type': 'application/json', 'x-csrf-token': challenge.csrfToken }, body: JSON.stringify({ username: 'alice', password }) })).json()
+    const json = async (method, url, body) => {
+      const reply = await fetch(url,{ method, headers: body === undefined ? { 'x-csrf-token': signed.csrfToken } : { 'content-type': 'application/json', 'x-csrf-token': signed.csrfToken }, body: body === undefined ? undefined : JSON.stringify(body) })
+      return { status: reply.status, body: await reply.json() }
+    }
+    const put = async (uploadId, bytes) => (await fetch('/api/v1/uploads/' + uploadId + '/content',{ method: 'PUT', headers: { 'content-type': 'application/octet-stream', 'x-csrf-token': signed.csrfToken }, body: new Uint8Array(bytes) })).status
+    const imported = await json('POST','/api/v1/files/uploads',{ name: 'save-browser.docx', size: original.length })
+    const initialReceive = await put(imported.body.uploadId,original)
+    const opened = await json('POST','/api/v1/uploads/' + imported.body.uploadId + '/finish')
+    const fileId = opened.body.file.fileId, base = '/api/v1/files/' + fileId, editorId = crypto.randomUUID()
+    const lease = await json('POST',base + '/lease',{ editorId })
+    const staged = await json('POST',base + '/uploads',{ size: changed.length, baseRevision: opened.body.file.revision, leaseEpoch: lease.body.leaseEpoch, editorId })
+    const receive = await put(staged.body.uploadId,changed)
+    const input = { fileId, uploadId: staged.body.uploadId, baseRevision: opened.body.file.revision, leaseEpoch: lease.body.leaseEpoch, idempotencyKey: crypto.randomUUID() }
+    const committed = await json('POST',base + '/commits',input)
+    const retried = await json('POST',base + '/commits',input)
+    const nextEditor = crypto.randomUUID(), taken = await json('POST',base + '/lease/takeover',{ editorId: nextEditor, expectedEpoch: lease.body.leaseEpoch })
+    const stale = await json('POST',base + '/uploads',{ size: changed.length, baseRevision: committed.body.revision, leaseEpoch: lease.body.leaseEpoch, editorId })
+    const download = Array.from(new Uint8Array(await (await fetch(base + '/content?revision=' + committed.body.revision)).arrayBuffer()))
+    const restoration = await json('POST',base + '/restoration-uploads',{ revision: opened.body.file.revision, baseRevision: committed.body.revision, leaseEpoch: taken.body.leaseEpoch, editorId: nextEditor })
+    const restored = await json('POST',base + '/commits',{ fileId, uploadId: restoration.body.uploadId, baseRevision: committed.body.revision, leaseEpoch: taken.body.leaseEpoch, idempotencyKey: crypto.randomUUID() })
+    const restoredBytes = Array.from(new Uint8Array(await (await fetch(base + '/content?revision=' + restored.body.revision)).arrayBuffer()))
+    const history = await (await fetch(base + '/revisions')).json()
+    return { statuses: [imported.status,initialReceive,opened.status,lease.status,staged.status,receive,committed.status,retried.status,taken.status,stale.status,restoration.status,restored.status], initial: opened.body.file, saved: committed.body, retried: retried.body, restored: restored.body, download, restoredBytes, history }
+  },{ password, original: [...original], changed: [...changed] })
+  assert.deepEqual(result.statuses,[201,200,200,200,201,200,200,200,200,409,201,200])
+  assert.deepEqual(result.retried,result.saved)
+  assert.notEqual(result.restored.revision,result.initial.revision)
+  assert.notEqual(result.restored.revision,result.saved.revision)
+  assert.deepEqual(Buffer.from(result.download),changed)
+  assert.deepEqual(Buffer.from(result.restoredBytes),original)
+  assert.equal(result.history.revisions.length,3)
+})

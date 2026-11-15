@@ -5,6 +5,8 @@ import type { WebConfig } from './config.ts'
 import { registerHealthRoutes } from './modules/health/routes.ts'
 import { registerLegacyRoutes } from './modules/legacy/routes.ts'
 import { createApiShell } from './framework.ts'
+import { createLeaseService } from './modules/leases/service.ts'
+import { createRevisionService } from './modules/revisions/service.ts'
 import { createFileService, type FilePolicy } from './modules/files/service.ts'
 import { registerFileRoutes } from './modules/files/routes.ts'
 import type { ObjectStore } from './storage/object-store.ts'
@@ -66,7 +68,12 @@ export async function buildLocalApp(config: LocalWebConfig): Promise<FastifyInst
   if (config.businessPool) {
     const transactions = createPrincipalTransactions({ pool: config.businessPool, deploymentId: config.deploymentId, idleMs: config.idleMs })
     registerPreferenceRoutes(app, createPreferenceService(transactions), sessions, csrf)
-    if (config.objectStore) registerFileRoutes(app, createFileService({ transactions, objects: config.objectStore, ...config.filePolicy }), sessions, csrf)
+    if (config.objectStore) {
+      const files = createFileService({ transactions, objects: config.objectStore, ...config.filePolicy })
+      const leases = createLeaseService({ transactions })
+      const revisions = createRevisionService({ transactions, objects: config.objectStore, files, ...config.filePolicy })
+      registerFileRoutes(app,files,sessions,csrf,{ leases, revisions })
+    }
   }
   app.route({
     method: app.supportedMethods as HTTPMethods[], url: '/*',
