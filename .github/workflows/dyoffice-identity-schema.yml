@@ -6,6 +6,11 @@ on:
     paths:
       - 'apps/web/server/auth/**'
       - 'apps/web/server/db/**'
+      - 'apps/web/tools/bootstrap-admin.mjs'
+      - 'apps/web/test/integration/**'
+      - 'apps/web/package.json'
+      - 'apps/web/package-lock.json'
+      - 'package-lock.json'
       - 'apps/web/test/auth-bootstrap.test.mjs'
       - 'apps/web/test/db-migrations.test.mjs'
       - 'apps/web/test/integration/identity-schema.sql'
@@ -14,6 +19,11 @@ on:
     paths:
       - 'apps/web/server/auth/**'
       - 'apps/web/server/db/**'
+      - 'apps/web/tools/bootstrap-admin.mjs'
+      - 'apps/web/test/integration/**'
+      - 'apps/web/package.json'
+      - 'apps/web/package-lock.json'
+      - 'package-lock.json'
       - 'apps/web/test/auth-bootstrap.test.mjs'
       - 'apps/web/test/db-migrations.test.mjs'
       - 'apps/web/test/integration/identity-schema.sql'
