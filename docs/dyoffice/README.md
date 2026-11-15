@@ -11,6 +11,7 @@
 | --- | --- | --- |
 | [architecture.md](architecture.md) | 后端选择、HTTP/SSE/WS、Agent 执行位置、宿主接口、权限、保存一致性、MCP 和数据源契约 | 架构师、开发、安全 |
 | [local-account-auth.md](local-account-auth.md) | 本地用户名密码、管理员账号管理、Argon2id、服务端会话、密码重置和 API Token | 后端、开发 Agent、安全、企业实施 |
+| [ADR-0001](adr/0001-local-account-password-auth.md) | 已确认的不接 OIDC、采用本地账号密码的架构决策及变更门槛 | 架构师、开发 Agent、审查人员 |
 | [implementation-plan.md](implementation-plan.md) | T00–T26 共 27 个任务；代码路径、依赖、接口、失败测试、验证、提交与里程碑 | 开发、Codex/其他开发 Agent、QA |
 | [enterprise-delivery.md](enterprise-delivery.md) | 页面与业务场景、客户调研、私有部署、本地账号管理、安全、迁移、备份、灰度、运营和商业交付 | 产品、实施、客户、SRE |
 | [acceptance-matrix.md](acceptance-matrix.md) | 四格式/身份/AI/MCP/数据源/恢复的验收场景、性能目标、发布门槛和证据模板 | QA、安全、业务验收人 |
