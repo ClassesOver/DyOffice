@@ -41,10 +41,49 @@ run `node --test tools/check-web-boundaries.test.mjs`. CI runs these tests and t
 scanner without installing Electron, including on changes to shared apps/packages.
 This does not replace the existing desktop CI or constitute completed T00 acceptance.
 
+## Four-format bridge inventory and classification
+
+`node tools/audit-web-host.mjs --summary` parses each editor preload with the
+TypeScript AST and lists every `contextBridge` bridge (not only the main one:
+`aiNamingApi`, `projectApi`, `nativeSpell` and the Slides attachment `desktop`
+bridge are included), each member's IPC channels and its lifecycle
+(`request`/`subscription`/`notify`/`local`). Renderer call sites are resolved
+with a type checker over the renderer program plus workspace packages, so
+aliases are matched by symbol and bridges passed into helpers are traced into
+the helper. It exits non-zero on renderer calls to undeclared members and on
+unresolvable preload members; references it cannot resolve are listed as
+`opaqueReferences` (currently none).
+
+Snapshot (2026-11-15): Docs 117, Sheets 114, Slides 221, PDF 86 members (538).
+17 members have no renderer call site (e.g. `aiChat`, `projectApi.listChats`).
+
+[host-ipc.md](host-ipc.md) is generated from the rules in
+[host-ipc-classification.json](host-ipc-classification.json) and assigns every
+member exactly one class with the plan task that must verify it:
+204 `browser-native`, 169 `server-api`, 58 `isolated-worker`, 53 `unsupported`,
+54 `desktop-only`. `node tools/dyoffice/host-ipc-classification.mjs --check`
+fails CI on a new unclassified member, a stale rule or an outdated table.
+
+Notable findings that change downstream estimates:
+
+- Slides keeps the deck model and its 123 deck-session members in the Electron main
+  process. `@genoffice/pptx-ops` has no Node imports, so the proposed Web seam is
+  a browser-worker deck session (T10); `@genoffice/pptx-engine` still has three
+  Node-importing files to isolate first.
+- PDF document operations run on Node (pdf-lib, PDFium WASM, `node:crypto`,
+  `node:zlib`) and are proposed as worker jobs; signing (OS certificate stores),
+  OCR (OS engine) and printer enumeration are proposed as unsupported.
+- Sheets data access is the Rust sidecar (22 members); workbook connections,
+  external links and cross-window range picking are proposed as unsupported
+  until T15 provides governed data sources.
+
+The classification is a **proposed design mapping**. A rule records where a call
+must run and why; it is not evidence that a Web adapter exists or works.
+
 ## Remaining T00 audit before T01
 
-- [ ] Enumerate all renderer calls into `window.desktop` / preload APIs for Docs, Sheets, Slides and PDF; record each signature, lifecycle and error mode.
-- [ ] Classify every call as `browser-native`, `server-api`, `isolated-worker`, `unsupported` or `desktop-only`. Verify the mapping in code rather than guessing.
+- [ ] Enumerate all renderer calls into `window.desktop` / preload APIs for Docs, Sheets, Slides and PDF; record each signature, lifecycle and error mode. *Members, channels, lifecycle and call sites are recorded above; argument/return signatures and error modes (throw vs `null` vs `{ok:false}`) are not yet extracted.*
+- [ ] Classify every call as `browser-native`, `server-api`, `isolated-worker`, `unsupported` or `desktop-only`. Verify the mapping in code rather than guessing. *All 538 members have a proposed class; each is verified only by the adapter task named in its rule.*
 - [ ] Check native XLSX Rust sidecar compatibility/ABI and whether production Web needs a server worker; test fixtures and external Excel reopen behavior.
 - [ ] Check PDFium WASM/worker bundling and font licensing; preserve genuine text edits versus annotations.
 - [ ] Validate stream cancellation, save and user permission semantics against browser reality; do not assume Electron e2e passes prove Web behavior.
