@@ -1,12 +1,15 @@
 import { randomUUID } from 'node:crypto'
 import Fastify from 'fastify'
 import { assertModularConfig } from './config.mjs'
+import { rawBody } from './http-helpers.mjs'
+import { registerLegacyRoutes } from './legacy-dispatch.mjs'
 import { registerHealthRoutes } from './modules/health/routes.mjs'
 import { problem, publicStatus } from './problem.mjs'
 import { createFixedWindowLimiter } from './rate-limit.mjs'
 
 const HEALTH = new Set(['/api/v1/health/live', '/api/v1/health/ready'])
 const BODY_LIMIT = 1024 * 1024
+const FILE_BODY_LIMIT = 50 * 1024 * 1024
 const METHODS = ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS']
 
 function pathname(url) {
@@ -19,8 +22,8 @@ function clientAddress(request) {
 }
 
 /**
- * Versioned API shell. The development server in ../index.mjs still owns
- * dev:web and start:web until each legacy route is moved.
+ * Versioned API shell. A legacy workspace context mounts the personal and
+ * admin routes. Without that context, unmigrated API paths stay 501.
  */
 export async function buildApp(input) {
   const config = assertModularConfig(input)
@@ -28,11 +31,18 @@ export async function buildApp(input) {
   const app = Fastify({
     logger: false,
     trustProxy: false,
-    bodyLimit: BODY_LIMIT,
+    bodyLimit: config.legacy ? FILE_BODY_LIMIT : BODY_LIMIT,
     requestIdHeader: false,
     genReqId: () => randomUUID(),
     ajv: { customOptions: { removeAdditional: false, coerceTypes: false, allErrors: false } },
   })
+  if (config.legacy) {
+    app.removeAllContentTypeParsers()
+    app.addContentTypeParser('*', { parseAs: 'buffer' }, (request, body, done) => {
+      request.raw[rawBody] = body
+      done(null, body)
+    })
+  }
 
   app.addHook('onRequest', async (request, reply) => {
     reply.header('X-Request-ID', request.id)
@@ -68,6 +78,7 @@ export async function buildApp(input) {
     return reply.code(status).type('application/json; charset=utf-8').send(problem(status, request.id))
   })
 
-  registerHealthRoutes(app, { readyCheck: config.readyCheck })
+  if (config.legacy) registerLegacyRoutes(app, config.legacy)
+  else registerHealthRoutes(app, { readyCheck: config.readyCheck })
   return app
 }

@@ -1,5 +1,5 @@
 const ENVIRONMENTS = new Set(['development', 'test'])
-const CONFIG_KEYS = new Set(['env', 'logger', 'rateLimit', 'readyCheck'])
+const CONFIG_KEYS = new Set(['env', 'logger', 'rateLimit', 'readyCheck', 'legacy'])
 
 /**
  * Rejects production and any field the shell does not understand.
@@ -31,10 +31,18 @@ export function assertModularConfig(config) {
     throw new Error('Modular API rateLimit window is invalid')
   }
   if (typeof config.readyCheck !== 'function') throw new Error('Modular API readyCheck must be a function')
+  let legacy
+  if (config.legacy !== undefined) {
+    legacy = config.legacy
+    if (!legacy || typeof legacy !== 'object' || typeof legacy.serveStatic !== 'function' || !legacy.store || !legacy.credentials) {
+      throw new Error('Unsupported modular API config: legacy')
+    }
+  }
   return {
     env: config.env,
     logger: false,
     rateLimit: { max: limit.max, windowMs: limit.windowMs },
     readyCheck: config.readyCheck,
+    legacy,
   }
 }

@@ -57,6 +57,7 @@ test('Fastify shell serves legacy preference and admin contracts when a workspac
 
   const missing = await fetch(`${base}/api/missing?secret=private`, { headers: personal })
   assert.equal(missing.status, 404)
-  assert.equal((await missing.json()).error, '接口不存在')
-  assert.equal(JSON.stringify(await missing.json()).includes('private'), false)
+  const missingBody = await missing.json()
+  assert.equal(missingBody.error, '接口不存在')
+  assert.equal(JSON.stringify(missingBody).includes('private'), false)
 })
