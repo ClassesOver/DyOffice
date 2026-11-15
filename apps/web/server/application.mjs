@@ -1,12 +1,14 @@
 import { sendJson } from './http-response.mjs';
 import { createServer } from 'node:http';
-import { timingSafeEqual, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import { readFile, mkdir, writeFile, unlink } from 'node:fs/promises';
 import { join, extname } from 'node:path';
 import { createStore } from './store.mjs';
 import { withMcp } from './mcp.mjs';
 import { createStaticAssets } from './static-assets.mjs';
 import { serveReadOnlyFiles } from './readonly-files.mjs';
+import { authorizeDevApi } from './request-boundary.mjs';
+import { serveHealth } from './health.mjs';
 const formats=new Set(['docx','xlsx','pptx','pdf']);
 const fail=(message,status=400)=>{throw Object.assign(new Error(message),{status});};
 const object=v=>v && typeof v==='object' && !Array.isArray(v);
@@ -18,7 +20,6 @@ function httpUrl(value) {
 }
 async function bytes(request,limit=1024*1024) {let size=0;const chunks=[];for await(const chunk of request){size+=chunk.length;if(size>limit) fail('请求内容过大',413);chunks.push(chunk);}return Buffer.concat(chunks);}
 const body=async req=>{try{return JSON.parse((await bytes(req)).toString());}catch(e){if(e.status)throw e;fail('JSON 格式无效');}};
-function sameToken(a,b){const x=Buffer.from(a||'');const y=Buffer.from(b||'');return x.length===y.length&&timingSafeEqual(x,y);}
 const publicModel=({id,model,enabled})=>({id,model,enabled});
 
 export async function createApplication({directory,userToken,adminToken,encryptionKey,assetMode,assetDirectory}) {
@@ -37,11 +38,9 @@ export async function createApplication({directory,userToken,adminToken,encrypti
         if(await serveStatic(req,res,path)) return;
         return send({error:'页面不存在'},404);
       }
-      const token=req.headers.authorization?.replace(/^Bearer /,'');const admin=sameToken(token,adminToken);
-      if(!admin&&!sameToken(token,userToken)) return send({error:'请登录'},401);
-      if(path.startsWith('/api/admin/')&&!admin) return send({error:'需要管理员权限'},403);
-      const personalResource=path==='/api/preferences'||path==='/api/sources'||path==='/api/files'||path.startsWith('/api/files/')||path==='/api/v1/capabilities'||path.startsWith('/api/v1/files/');
-      if(admin&&personalResource) return send({error:'需要个人工作区权限'},403);
+      if(await serveHealth(req,res,{path,dataDirectory:directory,store})) return;
+      const access=authorizeDevApi(req,{userToken,adminToken},path);
+      if('status' in access) return send({error:access.error},access.status);
       const state=store.read();
       if(await serveReadOnlyFiles(req,res,{url,state,filePath})) return;
       if(path==='/api/preferences') {
