@@ -1,0 +1,116 @@
+import { createHash } from 'node:crypto'
+import { crc32 } from 'node:zlib'
+import { fromBufferPromise } from 'yauzl'
+import { XMLParser, XMLValidator } from 'fast-xml-parser'
+import { PDFDocument } from 'pdf-lib'
+import type { OfficeFormat } from '../../../../../../packages/web-contracts/src/api.ts'
+import { MAX_OBJECT_BYTES, storageError } from '../../storage/object-store.ts'
+
+export const uploadLimits = Object.freeze({ maxBytes: MAX_OBJECT_BYTES, maxEntries: 4096, maxPartBytes: 32 * 1024 * 1024, maxInflatedBytes: 128 * 1024 * 1024, maxXmlBytes: 4 * 1024 * 1024 })
+export interface FileValidationPolicy { maxBytes: number; maxEntries: number; maxPartBytes: number; maxInflatedBytes: number; maxXmlBytes: number }
+type Limits = FileValidationPolicy
+const definitions = {
+  docx: { path: 'word/document.xml', type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml', root: 'document', namespace: 'http://schemas.openxmlformats.org/wordprocessingml/2006/main', mime: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' },
+  xlsx: { path: 'xl/workbook.xml', type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml', root: 'workbook', namespace: 'http://schemas.openxmlformats.org/spreadsheetml/2006/main', mime: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' },
+  pptx: { path: 'ppt/presentation.xml', type: 'application/vnd.openxmlformats-officedocument.presentationml.presentation.main+xml', root: 'presentation', namespace: 'http://schemas.openxmlformats.org/presentationml/2006/main', mime: 'application/vnd.openxmlformats-officedocument.presentationml.presentation' },
+} as const
+
+export function validateFileName(name: string): OfficeFormat {
+  if (typeof name !== 'string' || name.trim() !== name || Buffer.byteLength(name) > 255 || name.startsWith('.') || /[\\/\u0000-\u001f\u007f\u202a-\u202e\u2066-\u2069]/u.test(name)) throw storageError(400)
+  const format = name.split('.').at(-1)?.toLowerCase()
+  if (!['docx','xlsx','pptx','pdf'].includes(format ?? '') || !name.includes('.')) throw storageError(400)
+  return format as OfficeFormat
+}
+
+function xmlRoot(bytes: Buffer, expected: string, namespace: string): Record<string, unknown> {
+  const encoding = bytes[0] === 0xff && bytes[1] === 0xfe ? 'utf-16le' : bytes[0] === 0xfe && bytes[1] === 0xff ? 'utf-16be' : 'utf-8'
+  const xml = new TextDecoder(encoding, { fatal: true }).decode(bytes)
+  if (/<!\s*(?:DOCTYPE|ENTITY)/i.test(xml) || XMLValidator.validate(xml) !== true) throw storageError(400)
+  const parsed = new XMLParser({ ignoreAttributes: false, processEntities: false, parseTagValue: false, parseAttributeValue: false }).parse(xml)
+  const names = Object.keys(parsed).filter(name => !name.startsWith('?'))
+  if (names.length !== 1) throw storageError(400)
+  const name = names[0], value = parsed[name]
+  const prefix = name.includes(':') ? name.split(':')[0] : ''
+  if (name.split(':').at(-1) !== expected || !value || typeof value !== 'object' || value[prefix ? '@_xmlns:' + prefix : '@_xmlns'] !== namespace) throw storageError(400)
+  return value
+}
+function children(root: Record<string, unknown>, name: string, namespace: string): Record<string, unknown>[] {
+  const found: Record<string, unknown>[] = []
+  for (const [key, value] of Object.entries(root)) {
+    if (key.startsWith('@_') || key.split(':').at(-1) !== name) continue
+    const prefix = key.includes(':') ? key.split(':')[0] : ''
+    const declaration = prefix ? '@_xmlns:' + prefix : '@_xmlns'
+    for (const child of Array.isArray(value) ? value : [value]) {
+      if (!child || typeof child !== 'object' || (child[declaration] ?? root[declaration]) !== namespace) throw storageError(400)
+      found.push(child)
+    }
+  }
+  return found
+}
+
+async function validateOffice(bytes: Buffer, format: keyof typeof definitions, limits: Limits) {
+  const definition = definitions[format]
+  // Reject ZIP64, split archives and trailing junk before opening any entries.
+  let end = -1
+  for (let at = bytes.length - 22; at >= Math.max(0, bytes.length - 22 - 65535); at--) {
+    if (bytes.readUInt32LE(at) === 0x06054b50 && at + 22 + bytes.readUInt16LE(at + 20) === bytes.length) { end = at; break }
+  }
+  if (end < 0 || bytes.readUInt16LE(end + 4) || bytes.readUInt16LE(end + 6) || bytes.readUInt16LE(end + 8) !== bytes.readUInt16LE(end + 10) || bytes.readUInt16LE(end + 10) === 65535 || bytes.readUInt32LE(end + 12) === 0xffffffff || bytes.readUInt32LE(end + 16) === 0xffffffff || (end >= 20 && bytes.readUInt32LE(end - 20) === 0x07064b50)) throw storageError(400)
+  const directory = bytes.readUInt32LE(end + 16)
+  if (directory + bytes.readUInt32LE(end + 12) !== end) throw storageError(400)
+  const zip = await fromBufferPromise(bytes, { lazyEntries: true, autoClose: false, strictFileNames: true, validateEntrySizes: true })
+  const names = new Set<string>(), parts = new Map<string, Buffer>()
+  let total = 0, count = 0
+  try {
+    if (zip.entryCount > limits.maxEntries) throw storageError(413)
+    for await (const entry of zip.eachEntry()) {
+      if (++count > limits.maxEntries || entry.uncompressedSize > limits.maxPartBytes || total + entry.uncompressedSize > limits.maxInflatedBytes) throw storageError(413)
+      const name = entry.fileName
+      if (names.has(name.toLowerCase()) || name.includes('\\') || name.includes('\0') || name.split('/').some(segment => segment === '..' || segment === '.') || name.startsWith('/') || /vbaProject/i.test(name) || entry.isEncrypted() || ![0,8].includes(entry.compressionMethod) || entry.versionNeededToExtract >= 45 || ((entry.externalFileAttributes >>> 16) & 0xf000) === 0xa000) throw storageError(400)
+      names.add(name.toLowerCase())
+      const header = await zip.readLocalFileHeaderPromise(entry)
+      if (!header.fileName.equals(entry.fileNameRaw) || header.generalPurposeBitFlag !== entry.generalPurposeBitFlag || header.compressionMethod !== entry.compressionMethod || header.fileDataStart + entry.compressedSize > directory) throw storageError(400)
+      if (!(entry.generalPurposeBitFlag & 8) && (header.crc32 !== entry.crc32 || header.compressedSize !== entry.compressedSize || header.uncompressedSize !== entry.uncompressedSize)) throw storageError(400)
+      const structural = ['[Content_Types].xml','_rels/.rels',definition.path].includes(name)
+      if (structural && entry.uncompressedSize > limits.maxXmlBytes) throw storageError(413)
+      const chunks: Buffer[] = [], stream = await zip.openReadStreamPromise(entry)
+      let size = 0, crc = 0
+      try {
+        for await (const chunk of stream) {
+          size += chunk.length; total += chunk.length
+          if (size > entry.uncompressedSize || size > limits.maxPartBytes || total > limits.maxInflatedBytes) throw storageError(400)
+          crc = crc32(chunk, crc)
+          if (structural) chunks.push(chunk)
+        }
+      } finally { stream.destroy() }
+      if (size !== entry.uncompressedSize || crc !== entry.crc32) throw storageError(400)
+      if (structural) parts.set(name, Buffer.concat(chunks, size))
+    }
+  } finally { zip.close() }
+  if (!['[Content_Types].xml','_rels/.rels',definition.path].every(name => parts.has(name))) throw storageError(400)
+  const types = xmlRoot(parts.get('[Content_Types].xml')!, 'Types', 'http://schemas.openxmlformats.org/package/2006/content-types')
+  const overrides = children(types, 'Override', 'http://schemas.openxmlformats.org/package/2006/content-types')
+  if (overrides.filter(item => item['@_PartName'] === '/' + definition.path && item['@_ContentType'] === definition.type).length !== 1 || [...children(types,'Default', 'http://schemas.openxmlformats.org/package/2006/content-types'),...overrides].some(item => /macroEnabled|vbaProject/i.test(String(item['@_ContentType'])))) throw storageError(400)
+  const relations = xmlRoot(parts.get('_rels/.rels')!, 'Relationships', 'http://schemas.openxmlformats.org/package/2006/relationships')
+  const roots = children(relations,'Relationship', 'http://schemas.openxmlformats.org/package/2006/relationships').filter(item => item['@_Type'] === 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument')
+  if (roots.length !== 1 || roots[0]['@_TargetMode'] === 'External' || ![definition.path,'/' + definition.path].includes(String(roots[0]['@_Target']))) throw storageError(400)
+  xmlRoot(parts.get(definition.path)!, definition.root, definition.namespace)
+}
+
+export async function validateUploadInternal(bytes: Buffer, name: string, policy: Partial<Limits> = {}) {
+  const format = validateFileName(name), limits = { ...uploadLimits,...policy }
+  if (Object.values(limits).some(value => !Number.isSafeInteger(value) || value < 1)) throw storageError(400)
+  if (!Buffer.isBuffer(bytes) || bytes.length === 0) throw storageError(400)
+  if (bytes.length > limits.maxBytes || bytes.length > MAX_OBJECT_BYTES) throw storageError(413)
+  try {
+    if (format === 'pdf') {
+      if (!/^%PDF-(?:1\.[0-9]|2\.0)/.test(bytes.subarray(0, 9).toString('ascii')) || !/%%EOF\s*$/.test(bytes.subarray(-1024).toString('latin1'))) throw storageError(400)
+      const document = await PDFDocument.load(bytes, { ignoreEncryption: false, throwOnInvalidObject: true, updateMetadata: false })
+      if (document.getPageCount() < 1) throw storageError(400)
+    } else await validateOffice(bytes, format, limits)
+  } catch (error) {
+    if ((error as { statusCode?: number }).statusCode === 413) throw error
+    throw storageError(400)
+  }
+  return Object.freeze({ format, mime: format === 'pdf' ? 'application/pdf' : definitions[format].mime, size: bytes.length, sha256: createHash('sha256').update(bytes).digest('hex') })
+}

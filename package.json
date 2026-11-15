@@ -56,7 +56,8 @@
     "test:web:integration": "npm run test:integration --prefix apps/web --workspaces=false",
     "bootstrap:admin": "node --experimental-strip-types tools/dyoffice/bootstrap-admin.ts",
     "test:web:e2e": "npm run test:e2e --prefix apps/web --workspaces=false",
-    "provision:runtime": "node --experimental-strip-types tools/dyoffice/provision-runtime.ts"
+    "provision:runtime": "node --experimental-strip-types tools/dyoffice/provision-runtime.ts",
+    "test:web:storage": "npm run test:storage --prefix apps/web --workspaces=false"
   },
   "dependencies": {
     "ws": "^8.21.1"

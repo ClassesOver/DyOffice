@@ -118,3 +118,11 @@ T02 仍需逐领域迁移旧路由与完整 `/api/v1` 契约；本地账号、�
 `GET/PUT /api/preferences` 和 `/api/v1/preferences` 使用 Cookie 推导个人身份，支持 theme、language、authorName、autoSave、showAssistant。PUT 需要 Origin/CSRF；owner 等额外字段被拒绝。业务事务锁定账号和会话直到提交，停用/撤销与写入有明确提交顺序；Admin 没有他人偏好的所有权。旧 JSON 原型数据不自动迁移给新账号。
 
 集成测试的隔离 PostgreSQL 管理连接需能创建/删除测试数据库和角色；测试在随机专用数据库内使用真实的三个非超级用户角色，不能拿超级用户测试冒充 RLS 验收。详情见 [T04 证据](../../docs/dyoffice/evidence/t04-rls-checkpoint.md)。生产仍关闭；文件、后台任务、外部 Token 和四格式编辑尚未由此交付。
+
+### T05a 对象存储与结构校验基础
+
+已增加单次发布的本地盘/S3 adapter、读回 SHA-256 校验，以及 DOCX/XLSX/PPTX/PDF 结构预检。它们尚未接入文件 HTTP 路由；当前不能用本地账号上传/编辑文件。配额、文件元数据、上传完成事务、回收站与受控下载继续由 T05 实现，production 仍关闭。
+
+`npm run test:web:storage` 运行真实临时磁盘、S3 兼容服务和解析工作线程测试。必须显式配置隔离测试服务的 `DYOFFICE_TEST_S3_ENDPOINT`（仅 loopback）、`DYOFFICE_TEST_S3_ACCESS_KEY`、`DYOFFICE_TEST_S3_SECRET_KEY`；缺少服务会失败，不会跳过或改用内存存储。测试账号只应拥有临时测试服务的权限；测试创建并删除随机 `dyoffice-test-*` bucket。CI 使用固定摘要的 RustFS 服务，仅为兼容性测试，生产对象存储仍由部署方配置。
+
+预检保留原始字节，不执行文档脚本；解析工作线程有并发/超时和 JS 堆限制，但不能替代操作系统内存隔离或恶意内容扫描。完整 F13/T21 安全门槛尚未验收。完整边界、依赖版本和实测记录见 [T05a 证据](../../docs/dyoffice/evidence/t05a-object-storage.md)。
