@@ -1,0 +1,1022 @@
+{
+  "schemaVersion": 1,
+  "files": {
+    "LICENSE": {
+      "sha256": "68e32334df324ef4fc79fad3a26487e5abac36055a484bb6c8d7ecf9d8350885",
+      "size": 11345
+    },
+    "NOTICE": {
+      "sha256": "26fa7a458f2463af07f96af3d4b26b3cc3b4de688340838e3c9b3b958d390882",
+      "size": 2489
+    },
+    "apps/docs/package.json": {
+      "sha256": "1a8d51b03d83c26348204736273f8fef4eaaef5c907c76ddf57713eb3c7b51d2",
+      "size": 2662
+    },
+    "apps/docs/src/renderer/fonts/AptosGO-Bold.ttf": {
+      "sha256": "5b4a666c9df686840ced68062df3c8cf8b8e490a778732e89b4dc9e3fbcbea9d",
+      "size": 80172
+    },
+    "apps/docs/src/renderer/fonts/AptosGO-BoldItalic.ttf": {
+      "sha256": "bff8e28e70713f1bd1559c9f3b4951c84523ba6c7ccbf9fb2fabccb76ad8056b",
+      "size": 76104
+    },
+    "apps/docs/src/renderer/fonts/AptosGO-Italic.ttf": {
+      "sha256": "c6ae569c47cf9c7da760097c0791d8d2d6904dfa6cb36d492a0071d6a2284ea3",
+      "size": 80204
+    },
+    "apps/docs/src/renderer/fonts/AptosGO-Regular.ttf": {
+      "sha256": "01bd71b913a07ce4ab94745a56c6498eedd579e88eb747af654c624c7f3248a4",
+      "size": 79212
+    },
+    "apps/docs/src/renderer/fonts/AptosNarrowGO-Bold.ttf": {
+      "sha256": "a2f8584adb15fb1c8422ba91b08c2404d9703defb0e2245ee5af8d3c9330a02a",
+      "size": 79796
+    },
+    "apps/docs/src/renderer/fonts/AptosNarrowGO-BoldItalic.ttf": {
+      "sha256": "6265d496b5c65589f12df01494b1e104b35c02c5ce1c7db7a66ff85f6f072f08",
+      "size": 75836
+    },
+    "apps/docs/src/renderer/fonts/AptosNarrowGO-Italic.ttf": {
+      "sha256": "b724b77f72709f43b1fd62d7c01f3dd094fdc3c983f4deb1e24e10db90f5e26d",
+      "size": 80184
+    },
+    "apps/docs/src/renderer/fonts/AptosNarrowGO-Regular.ttf": {
+      "sha256": "5c41ab90a7777910b9b79f45a8215eeeb193d9dbddd73db17b56ddff32707629",
+      "size": 79192
+    },
+    "apps/docs/src/renderer/fonts/BookmanOldStyleGO-Bold.ttf": {
+      "sha256": "630237df475d8f88ded563e90dad4024b9a3af4514a0422f47b68a1c63243208",
+      "size": 41772
+    },
+    "apps/docs/src/renderer/fonts/BookmanOldStyleGO-BoldItalic.ttf": {
+      "sha256": "e59e9e958710314d54c8530180c7d589afb2edd8420417dc01295dc0bfa83146",
+      "size": 43824
+    },
+    "apps/docs/src/renderer/fonts/BookmanOldStyleGO-Italic.ttf": {
+      "sha256": "1483b5a0fa2d6d3b4fc778670156d5826d3dbdc0a073c24d1b5cf4b4cdf3555e",
+      "size": 44156
+    },
+    "apps/docs/src/renderer/fonts/BookmanOldStyleGO-Regular.ttf": {
+      "sha256": "bc8d1f42d7bb29e7c7c37eff6f4c18f2fd65999d7466ad455b948e66da5939ab",
+      "size": 42236
+    },
+    "apps/docs/src/renderer/fonts/Caladea-Bold.ttf": {
+      "sha256": "74eda4fc5ffba0d8dc4aa76d41499f5ab76168d9ed6141c6417064c6244db9b6",
+      "size": 58892
+    },
+    "apps/docs/src/renderer/fonts/Caladea-BoldItalic.ttf": {
+      "sha256": "f47a35ad6cd0efa9914d93f9d03c93e30c55da43674bccfabac73b3c0d522c01",
+      "size": 61828
+    },
+    "apps/docs/src/renderer/fonts/Caladea-Italic.ttf": {
+      "sha256": "9c968bf60ba1e851cdfea77c71e3540c57792f77482dd241acc29d1425569c4e",
+      "size": 61860
+    },
+    "apps/docs/src/renderer/fonts/Caladea-Regular.ttf": {
+      "sha256": "d2f6cad33f191e65b68bd74e6d4f7708080a41b32db635866109df3090265d91",
+      "size": 58964
+    },
+    "apps/docs/src/renderer/fonts/CambriaCyrillicGO-Bold.ttf": {
+      "sha256": "1e0df04900187dd7468f47aab3a869c4eb813bccaf74997aa3b455a1744d844a",
+      "size": 37608
+    },
+    "apps/docs/src/renderer/fonts/CambriaCyrillicGO-BoldItalic.ttf": {
+      "sha256": "bd881315fc28ff6590ab105814ed01b0512e596e216c4840216cf0278310a74a",
+      "size": 40576
+    },
+    "apps/docs/src/renderer/fonts/CambriaCyrillicGO-Italic.ttf": {
+      "sha256": "4eb095cbbbc73ace67c207ab1a66f342666a5082c9268feda02901d4eb5de0fa",
+      "size": 40520
+    },
+    "apps/docs/src/renderer/fonts/CambriaCyrillicGO-Regular.ttf": {
+      "sha256": "b92ca217748f3b6871dbf2b3bde392874b60d90b3a0d6116b3730772ace12f54",
+      "size": 37560
+    },
+    "apps/docs/src/renderer/fonts/CenturyGothicGO-Bold.ttf": {
+      "sha256": "969ee748d20e6c4d77fb189f6c70ac1ad8e9b9fdac5c2beee9dd7ec46fea151f",
+      "size": 38268
+    },
+    "apps/docs/src/renderer/fonts/CenturyGothicGO-BoldItalic.ttf": {
+      "sha256": "52a3741bc259624793ea202a77dbebe1e1cb9045c14ec517f0b476af24d59410",
+      "size": 40772
+    },
+    "apps/docs/src/renderer/fonts/CenturyGothicGO-Italic.ttf": {
+      "sha256": "5c8cee83ff13b4fdc4125480d9830506614523ceb6548675f5e8e2db6d9cb4fe",
+      "size": 40440
+    },
+    "apps/docs/src/renderer/fonts/CenturyGothicGO-Regular.ttf": {
+      "sha256": "d371161bf24039b4245c17e1f7965011946d66bb1bce267e7ae1530b31a6617f",
+      "size": 38296
+    },
+    "apps/docs/src/renderer/fonts/DavidGO-Bold.ttf": {
+      "sha256": "ffa2f8fca40364bdaceb7e2eafeadedf96fa5f8b1f7a2660c642ed0758d5ab5c",
+      "size": 40408
+    },
+    "apps/docs/src/renderer/fonts/DavidGO-Regular.ttf": {
+      "sha256": "ab7d336b92b5209d5b48f63d0e90f05b30a5d83833478630f9ef67d75ac81eb5",
+      "size": 40252
+    },
+    "apps/docs/src/renderer/fonts/GenOfficeBalancedSpace.woff2": {
+      "sha256": "ae071f467dbf2fa6bf92cfc94c4e98becf93947df05e63dde11b11f70a8aa24f",
+      "size": 284
+    },
+    "apps/docs/src/renderer/fonts/GenOfficeBengali-Bold.woff2": {
+      "sha256": "ace0aa228915eca922faec43312a9ee0a4c3424efb1135f1a5b69830eaceaa83",
+      "size": 64616
+    },
+    "apps/docs/src/renderer/fonts/GenOfficeBengali-Regular.woff2": {
+      "sha256": "75edd63c608052e1583900537053a839c685e8fa8e0bbb0ac0ed9582c3c0e75e",
+      "size": 61564
+    },
+    "apps/docs/src/renderer/fonts/GenOfficeCheLatinKR.woff2": {
+      "sha256": "b7513082199d4adf3d690349dfcb0809f7c24322b478a2e8b6944c96b4b0bdd6",
+      "size": 8720
+    },
+    "apps/docs/src/renderer/fonts/GenOfficeCordia-Bold.woff2": {
+      "sha256": "a6791e13ed0cfcca2915e47bce8e5911b42aa069eff25a1199179660709a6425",
+      "size": 10284
+    },
+    "apps/docs/src/renderer/fonts/GenOfficeCordia-Regular.woff2": {
+      "sha256": "c874dfd0f4da925632d50aeb6e40a30a317cc2aae39ce417f8386383cebd543f",
+      "size": 10292
+    },
+    "apps/docs/src/renderer/fonts/GenOfficeDMSans-Bold-subset.woff2": {
+      "sha256": "2a6f9734e8159cbdccc6b5f6e231df46951dca421f952ca8df092094ff5fbd2b",
+      "size": 28428
+    },
+    "apps/docs/src/renderer/fonts/GenOfficeDMSans-Regular-subset.woff2": {
+      "sha256": "f1bcc5ed226ad133fb270f11d78ea5b838570e910f3db3f1a00c1bc2fe9547fa",
+      "size": 28632
+    },
+    "apps/docs/src/renderer/fonts/GenOfficeGothicKR-Regular-subset.woff2": {
+      "sha256": "c72779cf46f16c8d45e8db2b1377f4e627d43264e906107666f2c2621e9423b6",
+      "size": 281980
+    },
+    "apps/docs/src/renderer/fonts/GenOfficePUABlank.woff2": {
+      "sha256": "0e8cc57987463a4aee44634acffe77482e1f4451d96b66ae4f83f7cc8ef3dfba",
+      "size": 312
+    },
+    "apps/docs/src/renderer/fonts/GenOfficePoppins-Bold-subset.woff2": {
+      "sha256": "ec6c07101aa4d62b559847a93e3e9358554bd253e153f7fdfbf74d866b59a024",
+      "size": 14128
+    },
+    "apps/docs/src/renderer/fonts/GenOfficePoppins-Regular-subset.woff2": {
+      "sha256": "a43b5060988c6400673f99ce795ea6814ecc86dcb9adb33a5b78f9308708344b",
+      "size": 14160
+    },
+    "apps/docs/src/renderer/fonts/GenOfficeSansKR-Regular-subset.woff2": {
+      "sha256": "c87a603e5a7149c7b510df6c1cb50482db23aed13ddc172e5eb8e5f7992891ce",
+      "size": 298464
+    },
+    "apps/docs/src/renderer/fonts/GenOfficeSarabun-Bold.woff2": {
+      "sha256": "dbcd6187fe29cc91eb283d612ebe7480d27259313e05b37dbb1d7164db6188ff",
+      "size": 10108
+    },
+    "apps/docs/src/renderer/fonts/GenOfficeSarabun-Regular.woff2": {
+      "sha256": "2317ffd941d706e78dd4c21bc2ff0516728fe6f7fd4637f329ac3a922379b55a",
+      "size": 10164
+    },
+    "apps/docs/src/renderer/fonts/GenOfficeSerifKR-Regular-subset.woff2": {
+      "sha256": "c32385f2503d99e33433e3c8557079efc6f05561c3f7dc23faa27b850168ef38",
+      "size": 591860
+    },
+    "apps/docs/src/renderer/fonts/GenOfficeTamil-Regular.woff2": {
+      "sha256": "b1571cf888c26f1c7822d169bfa201f3e4cf58f03d5eb76885f10c3cc2b5c1ef",
+      "size": 33072
+    },
+    "apps/docs/src/renderer/fonts/GenOfficeUIKanaJP-Bold.woff2": {
+      "sha256": "68e149ce17eeb14bbdfaf7775e157439f34baab027d29d72e7e4de549cc7a78c",
+      "size": 26204
+    },
+    "apps/docs/src/renderer/fonts/GenOfficeUIKanaJP-Regular.woff2": {
+      "sha256": "3910237ea1074a33fb3b16a18f9df166573895e3a3f9914e837ab9215226ee05",
+      "size": 25288
+    },
+    "apps/docs/src/renderer/fonts/KristenITCGO-Regular.ttf": {
+      "sha256": "29afbdc9efe73dfa66e6a724113a41dbdd29eade8ffee95f5866c33beec7380b",
+      "size": 22848
+    },
+    "apps/docs/src/renderer/fonts/LICENSE-OFL.txt": {
+      "sha256": "992656df2b40e317ea54b4d3b7ca47a48eec11c2eaaf46bd74effd600714841a",
+      "size": 5154
+    },
+    "apps/docs/src/renderer/fonts/LiberationMono-Bold.ttf": {
+      "sha256": "bd62a0672d0b9b6710b01df434c80ad54fa5f0835207eb7b17b7a761463067bb",
+      "size": 307996
+    },
+    "apps/docs/src/renderer/fonts/LiberationMono-BoldItalic.ttf": {
+      "sha256": "79451f3c09fe25116098853b7a2ca6e2436220ccc11af022979adbcf195be130",
+      "size": 284068
+    },
+    "apps/docs/src/renderer/fonts/LiberationMono-Italic.ttf": {
+      "sha256": "605c01c711b44480a7508d349dfbf3264e81fa43d69e61cfa7d10b86e764c4d1",
+      "size": 281536
+    },
+    "apps/docs/src/renderer/fonts/LiberationMono-Regular.ttf": {
+      "sha256": "f2b83c763e8afd21709333370bed4774337fae82267937e2b5aea7e2fbd922c1",
+      "size": 319508
+    },
+    "apps/docs/src/renderer/fonts/LiberationSans-Bold.ttf": {
+      "sha256": "788abee4c806d660e8aee46689dd8540cd4bb98da03dcc9d171ce3efd99a9173",
+      "size": 414456
+    },
+    "apps/docs/src/renderer/fonts/LiberationSans-BoldItalic.ttf": {
+      "sha256": "698da70fc191cc5f33ad4d6d3fe830fe4624b898ea2e3169955928b7c491f1ee",
+      "size": 408996
+    },
+    "apps/docs/src/renderer/fonts/LiberationSans-Italic.ttf": {
+      "sha256": "e5bae5c4cde31f22142753855f4f8fb86da6ff39955ed3c0a11248b0d16948b0",
+      "size": 415816
+    },
+    "apps/docs/src/renderer/fonts/LiberationSans-Regular.ttf": {
+      "sha256": "76d04c18ea243f426b7de1f3ad208e927008f961dc5945e5aad352d0dfde8ee8",
+      "size": 410712
+    },
+    "apps/docs/src/renderer/fonts/LiberationSerif-Bold.ttf": {
+      "sha256": "d754ba427cfe0bca54ae052384baa8f842da5bd6550ad4da024ac441e7a7d5ce",
+      "size": 370096
+    },
+    "apps/docs/src/renderer/fonts/LiberationSerif-BoldItalic.ttf": {
+      "sha256": "f17db8af71e24d2066b587546021d4f0b296be389512b658dec3c09affeb11a7",
+      "size": 376772
+    },
+    "apps/docs/src/renderer/fonts/LiberationSerif-Italic.ttf": {
+      "sha256": "0e3dea9f8d613e006ccfa62201f33e265d19167bd0907725c3e145368b04fc2e",
+      "size": 375632
+    },
+    "apps/docs/src/renderer/fonts/LiberationSerif-Regular.ttf": {
+      "sha256": "058ea80864aef09a23f45cbec2bb5400bc3dfbdea01c3f10538a21fcb497fb74",
+      "size": 393576
+    },
+    "apps/docs/src/renderer/fonts/NotoNaskhArabic-Regular-subset.woff2": {
+      "sha256": "9c90d66fa736481513d86f17927ca22f5054bcd4c702d3cc7c8a611ca9a091ec",
+      "size": 69624
+    },
+    "apps/docs/src/renderer/fonts/NotoSansArabic-Regular-subset.woff2": {
+      "sha256": "3ae72fd620251f4c1da3f295ea49a4d949eadc08c16fc83b36d0959f09c72ed3",
+      "size": 63672
+    },
+    "apps/docs/src/renderer/fonts/NotoSansCJKsc-Regular-subset.woff2": {
+      "sha256": "c3ed44a467b3a42ad06bd1d95147f169753b6675d244a63c1f1101899de48c42",
+      "size": 2102776
+    },
+    "apps/docs/src/renderer/fonts/NotoSerifCJKsc-Regular-subset.woff2": {
+      "sha256": "8805e730c330fd4940eefa8618b57abc196a0bd1dfe393b7492b88aad0130f37",
+      "size": 2809656
+    },
+    "apps/docs/src/renderer/fonts/README.md": {
+      "sha256": "4df778a41916dc9361bc24a332640932058c7c2be3a57c815553408ba4ea7e46",
+      "size": 19881
+    },
+    "apps/pdf/package.json": {
+      "sha256": "643543bc55b872f58ce71f870240e6acbe9cc9a6dcb35c526692b25f4d376ec8",
+      "size": 1293
+    },
+    "apps/sheets/native/win-clipboard-helper/.cargo/config.toml": {
+      "sha256": "4feafc9c9445638ae783f4e3d24320b0949f159e926bea8ce63a23439d800ef7",
+      "size": 455
+    },
+    "apps/sheets/native/win-clipboard-helper/Cargo.lock": {
+      "sha256": "deacbf4ee024220d5cabb0dad2d1ece8c16d9592048ff82e3d495a8326a4e06e",
+      "size": 3122
+    },
+    "apps/sheets/native/win-clipboard-helper/Cargo.toml": {
+      "sha256": "b7909a3c9b7c13ee5127388d60ddadba6f4f0e308f8f89fbb4cfe4c307c5011a",
+      "size": 526
+    },
+    "apps/sheets/native/xlsx-engine/.cargo/config.toml": {
+      "sha256": "c3a093cf61eef5d13557ff523a352ba778755b193af8a6b345a988ed71cc9d6c",
+      "size": 665
+    },
+    "apps/sheets/native/xlsx-engine/Cargo.lock": {
+      "sha256": "61bce5c8a94ecdb160e4ea61aee6cb59dfccc7a19a1f573b153bb4e9bd3bfc6c",
+      "size": 26098
+    },
+    "apps/sheets/native/xlsx-engine/Cargo.toml": {
+      "sha256": "e6f92e34c346e156c7e65648856e1296c7fe7ca136a001fbf919f2c336bfb9ba",
+      "size": 664
+    },
+    "apps/sheets/package.json": {
+      "sha256": "d6d6b83f70b555bc399c7c7ebf2f5d1d951ece49b30472efca07789fbb483ba0",
+      "size": 3141
+    },
+    "apps/slides/package.json": {
+      "sha256": "efbf943f786be3251bf9fa91ea1a3ad2ff89d2d232556486b3b41af87ca280d2",
+      "size": 2630
+    },
+    "apps/web/package-lock.json": {
+      "sha256": "e709af99982ee6187f413d5aa680b3e26703a4adbb32bff976249cab2c1afc54",
+      "size": 43565
+    },
+    "apps/web/package.json": {
+      "sha256": "8effd76a0fa76bd65cb76aae0237e0e38d3543acaf76ce2cdf0e68ab4ca81797",
+      "size": 349
+    },
+    "package-lock.json": {
+      "sha256": "6c93ea93af687de6c5a5193d881e4412ab801154c561f1c4dad0283b2067191e",
+      "size": 585567
+    },
+    "package.json": {
+      "sha256": "4ab8e1f52e448869641f56aa089fa814b919b5e30b653415ec8e5f9ba33f551d",
+      "size": 6394
+    },
+    "packages/ui/src/fonts/Carlito-Bold.ttf": {
+      "sha256": "ed778b78ce652f5b17647344fb9a4c4dcb2e6f8bafe75a0366300da7f8c199ac",
+      "size": 686240
+    },
+    "packages/ui/src/fonts/Carlito-BoldItalic.ttf": {
+      "sha256": "0468067dde1d54111862f20f3fc4a5e8dcbc0ad4549e318c601b8ff7bdec935d",
+      "size": 812344
+    },
+    "packages/ui/src/fonts/Carlito-Italic.ttf": {
+      "sha256": "de59348ac812a347537b90a3d70796cfd5369048ecf9c78f5bca79ab55dd28a7",
+      "size": 619052
+    },
+    "packages/ui/src/fonts/Carlito-Regular.ttf": {
+      "sha256": "cca497a63f1cf8111d2189424ec38b95002e43799efe4f1486ec7f8063bb93c1",
+      "size": 631712
+    }
+  },
+  "npm": {
+    "package-lock.json": {
+      "@embedpdf/pdfium": {
+        "version": "2.15.1",
+        "integrity": "sha512-qDH4gEkGSQT0iM+07Hpm3LyvoB7PEFbW3Qyk6+LPkEYLJYfHagkHM1OzYlDq2EDOhJRguykTkzdMOT3/w27x5Q=="
+      },
+      "@modelcontextprotocol/sdk": {
+        "version": "1.32.1",
+        "integrity": "sha512-2DdE+SJDtzLEEWzY1ZjY7Q+VcPhcV1KisD3zI4u0XZyktsjHum1mwbMI+JaulUBi2OZk+KJAi2uPXzxichPkdw=="
+      },
+      "@univerjs/core": {
+        "version": "0.25.1",
+        "integrity": "sha512-0FQjuL1HdPtl8NsU5muT8HNtuA4yMEvbBLgewyqUVQmT5oks89a3jdqxi5/dvHYDRvW7wssVjZitfbL79el3Jg=="
+      },
+      "electron": {
+        "version": "43.8.3",
+        "integrity": "sha512-KgvSm3bHXz96hSXzqxyRjLeli80rIdszbDQFKlRSfckmGazTPCH/CxUN31Dp9c5rFKTQSNf9gPJRWl1yWNB3pA=="
+      },
+      "pdf-lib": {
+        "version": "1.17.1",
+        "integrity": "sha512-V/mpyJAoTsN4cnP31vc0wfNA1+p20evqqnap0KLoRUN0Yk/p3wN52DOEsL4oBFcLdb76hlpKPtzJIgo67j/XLw=="
+      },
+      "pdfjs-dist": {
+        "version": "6.2.108",
+        "integrity": "sha512-YxFb+SQcodN2rnX9Tn3dHYlqfb7NjlzzfONPpJd+AKoKtUjEdevTfbC07d5TcczzOK6261auRkP/M8OBHs9vFQ=="
+      },
+      "typescript": {
+        "version": "5.9.3",
+        "integrity": "sha512-jl1vZzPDinLr9eUt3J/t7V6FgNEw9QjvBPdysz9KfQDD41fQrC2Y4vKQdiaUpFT4bXlb1RHhLpp8wtm6M5TgSw=="
+      }
+    },
+    "apps/web/package-lock.json": {
+      "@modelcontextprotocol/sdk": {
+        "version": "1.32.2",
+        "integrity": "sha512-SWsVtH/0vULSQStoZ6xxH2K09Li8fXYTMC64ZeogCdpZ3XSi1eCPOByV1OpuJxuI3OcmHhosDWYyii07tpPsLw=="
+      },
+      "typescript": {
+        "version": "5.9.3",
+        "integrity": "sha512-jl1vZzPDinLr9eUt3J/t7V6FgNEw9QjvBPdysz9KfQDD41fQrC2Y4vKQdiaUpFT4bXlb1RHhLpp8wtm6M5TgSw=="
+      }
+    }
+  },
+  "cargo": {
+    "apps/sheets/native/xlsx-engine/Cargo.lock": [
+      {
+        "name": "adler2",
+        "version": "2.0.1",
+        "checksum": "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
+      },
+      {
+        "name": "aho-corasick",
+        "version": "1.1.4",
+        "checksum": "ddd31a130427c27518df266943a5308ed92d4b226cc639f5a8f1002816174301"
+      },
+      {
+        "name": "android_system_properties",
+        "version": "0.1.5",
+        "checksum": "819e7219dbd41043ac279b19830f2efc897156490d7fd6ea916720117ee66311"
+      },
+      {
+        "name": "approx",
+        "version": "0.5.1",
+        "checksum": "cab112f0a86d568ea0e627cc1d6be74a1e9cd55214684db5561995f6dad897c6"
+      },
+      {
+        "name": "arrayvec",
+        "version": "0.7.8",
+        "checksum": "d3fb67a6e08acf24fdeccbac2cb6ac4305825bd1f117462e0e6f2f193345ad56"
+      },
+      {
+        "name": "atoi_simd",
+        "version": "0.18.1",
+        "checksum": "f3cdb3708a128e559a30fb830e8a77a5022ee6902806925c216658652b452a44"
+      },
+      {
+        "name": "autocfg",
+        "version": "1.5.1",
+        "checksum": "f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53"
+      },
+      {
+        "name": "base64",
+        "version": "0.22.1",
+        "checksum": "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
+      },
+      {
+        "name": "bitcode",
+        "version": "0.6.9",
+        "checksum": "0a6ed1b54d8dc333e7be604d00fa9262f4635485ffea923647b6521a5fff045d"
+      },
+      {
+        "name": "bitcode_derive",
+        "version": "0.6.9",
+        "checksum": "238b90427dfad9da4a9abd60f3ec1cdee6b80454bde49ed37f1781dd8e9dc7f9"
+      },
+      {
+        "name": "bitflags",
+        "version": "2.13.1",
+        "checksum": "b588b76d00fde79687d7646a9b5bdf3cc0f655e0bbd080335a95d7e96f3587da"
+      },
+      {
+        "name": "bumpalo",
+        "version": "3.20.3",
+        "checksum": "72f5acc6cb2ba439de613abc23857ec3d78374d8ed5ac84e9d11336e87da8649"
+      },
+      {
+        "name": "bytemuck",
+        "version": "1.25.2",
+        "checksum": "95832e849adfb21180ccb6826a99da14e5d266ae5c2e668e1602cf234f153797"
+      },
+      {
+        "name": "byteorder",
+        "version": "1.5.0",
+        "checksum": "1fd0f2584146f6f2ef48085050886acf353beff7305ebd1ae69500e27c67f64b"
+      },
+      {
+        "name": "calamine",
+        "version": "0.37.0",
+        "checksum": "c9ca341b94bc4b29e08970b1a03914fad2dfe177e2ecb67fcd6de9046004aafb"
+      },
+      {
+        "name": "cc",
+        "version": "1.4.0",
+        "checksum": "5add81bb678e6cb321aff7fa0dc7689ad82b112dbc032cea19f91d6b8e3582b9"
+      },
+      {
+        "name": "cfb",
+        "version": "0.15.0",
+        "checksum": "0f13298d9178622b7916ec5d01d470425c04273c8ed07e87b1c38b34c4f4612b"
+      },
+      {
+        "name": "cfg_aliases",
+        "version": "0.2.2",
+        "checksum": "f079e83a288787bcd14a6aea84cee5c87a67c5a3e660c30f557a3d24761b3527"
+      },
+      {
+        "name": "cfg-if",
+        "version": "1.0.4",
+        "checksum": "9330f8b2ff13f34540b44e946ef35111825727b38d33286ef986142615121801"
+      },
+      {
+        "name": "chacha20",
+        "version": "0.10.2",
+        "checksum": "65c35e4b699c7e15ccbe7ee35c005e4fc0a278d22238a2857e6ce2dadeda1b06"
+      },
+      {
+        "name": "chrono",
+        "version": "0.4.45",
+        "checksum": "1aa79e62e7697b8e29b513a68abacf485adcd1fe8284a4316c5ae868e6633327"
+      },
+      {
+        "name": "chrono-tz",
+        "version": "0.10.4",
+        "checksum": "a6139a8597ed92cf816dfb33f5dd6cf0bb93a6adc938f11039f371bc5bcd26c3"
+      },
+      {
+        "name": "codepage",
+        "version": "0.1.2",
+        "checksum": "48f68d061bc2828ae826206326e61251aca94c1e4a5305cf52d9138639c918b4"
+      },
+      {
+        "name": "core-foundation-sys",
+        "version": "0.8.7",
+        "checksum": "773648b94d0e5d620f64f280777445740e61fe701025087ec8b57f45c791888b"
+      },
+      {
+        "name": "cpufeatures",
+        "version": "0.3.1",
+        "checksum": "5ca28b0ae3115b884660db4118d803791fd6756b6e88f39c0f3f7859060d7566"
+      },
+      {
+        "name": "crc32fast",
+        "version": "1.5.0",
+        "checksum": "9481c1c90cbf2ac953f07c8d4a58aa3945c425b7185c9154d67a65e4230da511"
+      },
+      {
+        "name": "csv",
+        "version": "1.4.0",
+        "checksum": "52cd9d68cf7efc6ddfaaee42e7288d3a99d613d4b50f76ce9827ae0c6e14f938"
+      },
+      {
+        "name": "csv-core",
+        "version": "0.1.13",
+        "checksum": "704a3c26996a80471189265814dbc2c257598b96b8a7feae2d31ace646bb9782"
+      },
+      {
+        "name": "debug_unsafe",
+        "version": "0.1.4",
+        "checksum": "7eed2c4702fa172d1ce21078faa7c5203e69f5394d48cc436d25928394a867a2"
+      },
+      {
+        "name": "either",
+        "version": "1.17.0",
+        "checksum": "9e5e8f6c15a24b9a3ee5efec809ccd006d3b30e8b3bb63c39af737c7f87daa1d"
+      },
+      {
+        "name": "encoding_rs",
+        "version": "0.8.35",
+        "checksum": "75030f3c4f45dafd7586dd6780965a8c7e8e285a5ecb86713e63a79c5b2766f3"
+      },
+      {
+        "name": "equivalent",
+        "version": "1.0.2",
+        "checksum": "877a4ace8713b0bcf2a4e7eec82529c029f1d0619886d18145fea96c3ffe5c0f"
+      },
+      {
+        "name": "errno",
+        "version": "0.3.14",
+        "checksum": "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
+      },
+      {
+        "name": "fast-float2",
+        "version": "0.2.3",
+        "checksum": "f8eb564c5c7423d25c886fb561d1e4ee69f72354d16918afa32c08811f6b6a55"
+      },
+      {
+        "name": "fastrand",
+        "version": "2.4.1",
+        "checksum": "9f1f227452a390804cdb637b74a86990f2a7d7ba4b7d5693aac9b4dd6defd8d6"
+      },
+      {
+        "name": "find-msvc-tools",
+        "version": "0.1.9",
+        "checksum": "5baebc0774151f905a1a2cc41989300b1e6fbb29aff0ceffa1064fdd3088d582"
+      },
+      {
+        "name": "flate2",
+        "version": "1.1.9",
+        "checksum": "843fba2746e448b37e26a819579957415c8cef339bf08564fe8b7ddbd959573c"
+      },
+      {
+        "name": "fnv",
+        "version": "1.0.7",
+        "checksum": "3f9eec918d3f24069decb9af1554cad7c880e2da24a9afd88aca000531ab82c1"
+      },
+      {
+        "name": "futures-core",
+        "version": "0.3.32",
+        "checksum": "7e3450815272ef58cec6d564423f6e755e25379b217b0bc688e295ba24df6b1d"
+      },
+      {
+        "name": "futures-task",
+        "version": "0.3.32",
+        "checksum": "037711b3d59c33004d3856fbdc83b99d4ff37a24768fa1be9ce3538a1cde4393"
+      },
+      {
+        "name": "futures-util",
+        "version": "0.3.32",
+        "checksum": "389ca41296e6190b48053de0321d02a77f32f8a5d2461dd38762c0593805c6d6"
+      },
+      {
+        "name": "getrandom",
+        "version": "0.4.3",
+        "checksum": "300e883d756b2e4ec94e02791f39b04b522276138852cfc41d9fb7e904106099"
+      },
+      {
+        "name": "glam",
+        "version": "0.33.2",
+        "checksum": "7f22fb22f065b308be0d8724e3706c7fa3fc2a6c7d6899df4cad7860e7a75436"
+      },
+      {
+        "name": "hashbrown",
+        "version": "0.17.1",
+        "checksum": "ed5909b6e89a2db4456e54cd5f673791d7eca6732202bbf2a9cc504fe2f9b84a"
+      },
+      {
+        "name": "iana-time-zone",
+        "version": "0.1.65",
+        "checksum": "e31bc9ad994ba00e440a8aa5c9ef0ec67d5cb5e5cb0cc7f8b744a35b389cc470"
+      },
+      {
+        "name": "iana-time-zone-haiku",
+        "version": "0.1.2",
+        "checksum": "f31827a206f56af32e590ba56d5d2d085f558508192593743f16b2306495269f"
+      },
+      {
+        "name": "indexmap",
+        "version": "2.14.0",
+        "checksum": "d466e9454f08e4a911e14806c24e16fba1b4c121d1ea474396f396069cf949d9"
+      },
+      {
+        "name": "ironcalc",
+        "version": "0.9.1",
+        "checksum": "aabf0987c9f8e941476a7bfd2564496ca9f97bbf25a7165f7d499895b35fff0c"
+      },
+      {
+        "name": "ironcalc_base",
+        "version": "0.9.1",
+        "checksum": "ecf55ea346dcda5e0f0034d8300dc2d40ffbcb64e7c4db23bfa1d8a0cf11c738"
+      },
+      {
+        "name": "itertools",
+        "version": "0.15.0",
+        "checksum": "8b4baf93f58d4425749ca49a51c50ebab072c5df6994d08fed93541c331481dc"
+      },
+      {
+        "name": "itoa",
+        "version": "1.0.18",
+        "checksum": "8f42a60cbdf9a97f5d2305f08a87dc4e09308d1276d28c869c684d7777685682"
+      },
+      {
+        "name": "js-sys",
+        "version": "0.3.103",
+        "checksum": "53b44bfcdb3f8d5837a46dae1ca9660a837176eee74a28b229bc626816589102"
+      },
+      {
+        "name": "libc",
+        "version": "0.2.186",
+        "checksum": "68ab91017fe16c622486840e4c83c9a37afeff978bd239b5293d61ece587de66"
+      },
+      {
+        "name": "libm",
+        "version": "0.2.16",
+        "checksum": "b6d2cec3eae94f9f509c767b45932f1ada8350c4bdb85af2fcab4a3c14807981"
+      },
+      {
+        "name": "linux-raw-sys",
+        "version": "0.12.1",
+        "checksum": "32a66949e030da00e8c7d4434b251670a91556f4144941d37452769c25d58a53"
+      },
+      {
+        "name": "log",
+        "version": "0.4.33",
+        "checksum": "0ceec5bc11778974d1bcb055b18002eba7f4b3518b6a0081b3af5f21666da9ad"
+      },
+      {
+        "name": "memchr",
+        "version": "2.8.3",
+        "checksum": "cf8baf1c55e62ffcace7a9f06f4bd9cd3f0c4beb022d3b367256b91b87513d98"
+      },
+      {
+        "name": "miniz_oxide",
+        "version": "0.8.9",
+        "checksum": "1fa76a2c86f704bdb222d66965fb3d63269ce38518b83cb0575fca855ebb6316"
+      },
+      {
+        "name": "nix",
+        "version": "0.31.3",
+        "checksum": "cf20d2fde8ff38632c426f1165ed7436270b44f199fc55284c38276f9db47c3d"
+      },
+      {
+        "name": "num-traits",
+        "version": "0.2.19",
+        "checksum": "071dfc062690e90b734c0b2273ce72ad0ffa95f0c74596bc250dcfd960262841"
+      },
+      {
+        "name": "once_cell",
+        "version": "1.21.4",
+        "checksum": "9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50"
+      },
+      {
+        "name": "phf",
+        "version": "0.12.1",
+        "checksum": "913273894cec178f401a31ec4b656318d95473527be05c0752cc41cdc32be8b7"
+      },
+      {
+        "name": "phf_shared",
+        "version": "0.12.1",
+        "checksum": "06005508882fb681fd97892ecff4b7fd0fee13ef1aa569f8695dae7ab9099981"
+      },
+      {
+        "name": "pin-project-lite",
+        "version": "0.2.17",
+        "checksum": "a89322df9ebe1c1578d689c92318e070967d1042b512afbe49518723f4e6d5cd"
+      },
+      {
+        "name": "proc-macro2",
+        "version": "1.0.106",
+        "checksum": "8fd00f0bb2e90d81d1044c2b32617f68fcb9fa3bb7640c23e9c748e53fb30934"
+      },
+      {
+        "name": "quick-xml",
+        "version": "0.38.4",
+        "checksum": "b66c2058c55a409d601666cffe35f04333cf1013010882cec174a7467cd4e21c"
+      },
+      {
+        "name": "quick-xml",
+        "version": "0.42.0",
+        "checksum": "41b1177fdf999d2321d3fb46ff47159d9c1fb9ad66a4879f8c50a0b504615e9b"
+      },
+      {
+        "name": "quote",
+        "version": "1.0.46",
+        "checksum": "dfbc457d0c7a0759a614551b11a6409e5951f6c7537be1f1b7682b9ae9230368"
+      },
+      {
+        "name": "r-efi",
+        "version": "6.0.0",
+        "checksum": "f8dcc9c7d52a811697d2151c701e0d08956f92b0e24136cf4cf27b57a6a0d9bf"
+      },
+      {
+        "name": "rand",
+        "version": "0.10.3",
+        "checksum": "65c9fb96cbc91e3478eaae79a69fcd3f1ae4ad052e471fe6732fff548984b4af"
+      },
+      {
+        "name": "rand_core",
+        "version": "0.10.1",
+        "checksum": "63b8176103e19a2643978565ca18b50549f6101881c443590420e4dc998a3c69"
+      },
+      {
+        "name": "regex",
+        "version": "1.13.1",
+        "checksum": "f020237b6c8eed93db2e2cb53c00c60a8e1bc73da7d073199a1180401450218d"
+      },
+      {
+        "name": "regex-automata",
+        "version": "0.4.16",
+        "checksum": "8fcfdb36bda0c880c5931cdc7a2bcdc8ba4556847b9d912bca70bc94708711ad"
+      },
+      {
+        "name": "regex-lite",
+        "version": "0.1.9",
+        "checksum": "cab834c73d247e67f4fae452806d17d3c7501756d98c8808d7c9c7aa7d18f973"
+      },
+      {
+        "name": "regex-syntax",
+        "version": "0.8.11",
+        "checksum": "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
+      },
+      {
+        "name": "roxmltree",
+        "version": "0.21.1",
+        "checksum": "f1964b10c76125c36f8afe190065a4bf9a87bf324842c05701330bba9f1cacbb"
+      },
+      {
+        "name": "rustix",
+        "version": "1.1.4",
+        "checksum": "b6fe4565b9518b83ef4f91bb47ce29620ca828bd32cb7e408f0062e9930ba190"
+      },
+      {
+        "name": "rustversion",
+        "version": "1.0.23",
+        "checksum": "cf54715a573b99ac80df0bc206da022bcd442c974952c7b9720069370852e21f"
+      },
+      {
+        "name": "ryu",
+        "version": "1.0.23",
+        "checksum": "9774ba4a74de5f7b1c1451ed6cd5285a32eddb5cccb8cc655a4e50009e06477f"
+      },
+      {
+        "name": "serde",
+        "version": "1.0.228",
+        "checksum": "9a8e94ea7f378bd32cbbd37198a4a91436180c5bb472411e48b5ec2e2124ae9e"
+      },
+      {
+        "name": "serde_core",
+        "version": "1.0.228",
+        "checksum": "41d385c7d4ca58e59fc732af25c3983b67ac852c1a25000afe1175de458b67ad"
+      },
+      {
+        "name": "serde_derive",
+        "version": "1.0.228",
+        "checksum": "d540f220d3187173da220f885ab66608367b6574e925011a9353e4badda91d79"
+      },
+      {
+        "name": "serde_json",
+        "version": "1.0.150",
+        "checksum": "e8014e44b4736ed0538adeecded0fce2a272f22dc9578a7eb6b2d9993c74cfb9"
+      },
+      {
+        "name": "shlex",
+        "version": "2.0.1",
+        "checksum": "f8fadd59c855ef2080decdef8ff161eb6661b86933c9d82e5ba29dc602a55aba"
+      },
+      {
+        "name": "simd-adler32",
+        "version": "0.3.10",
+        "checksum": "3a219298ac11a56ea9a6d2120044824d6f01aeb034955e7af7bc16858527deea"
+      },
+      {
+        "name": "siphasher",
+        "version": "1.0.3",
+        "checksum": "8ee5873ec9cce0195efcb7a4e9507a04cd49aec9c83d0389df45b1ef7ba2e649"
+      },
+      {
+        "name": "slab",
+        "version": "0.4.12",
+        "checksum": "0c790de23124f9ab44544d7ac05d60440adc586479ce501c1d6d7da3cd8c9cf5"
+      },
+      {
+        "name": "statrs",
+        "version": "0.19.1",
+        "checksum": "c1837f9a1bd13dabbdbb04489c39451482d3cdd35a6e1a0d0f3570dea2b8c8be"
+      },
+      {
+        "name": "syn",
+        "version": "2.0.119",
+        "checksum": "872831b642d1a07999a962a351ed35b955ea2cfc8f3862091e2a240a84f17297"
+      },
+      {
+        "name": "syn",
+        "version": "3.0.9",
+        "checksum": "d78c8dee4c7bf0e14673097256fed6142ce9d3b85a408189d07482442145823b"
+      },
+      {
+        "name": "tempfile",
+        "version": "3.27.0",
+        "checksum": "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
+      },
+      {
+        "name": "thiserror",
+        "version": "2.0.21",
+        "checksum": "09e52cb86a36cede5cb101bf8908837b3e4c6e5e59fe7fd85c23fb56200d189e"
+      },
+      {
+        "name": "thiserror-impl",
+        "version": "2.0.21",
+        "checksum": "fe5197923287db20a58125f0bc85c062f7f2c892de97b18c356f9efb14b28524"
+      },
+      {
+        "name": "typed-path",
+        "version": "0.13.0",
+        "checksum": "9ce898823d8cd0f028662d2f349694b1af0a5cc9be83f1d213a00d3147445e1e"
+      },
+      {
+        "name": "unicode-ident",
+        "version": "1.0.24",
+        "checksum": "e6e4313cd5fcd3dad5cafa179702e2b244f760991f45397d14d4ebf38247da75"
+      },
+      {
+        "name": "uuid",
+        "version": "1.24.0",
+        "checksum": "bf3923a6f5c4c6382e0b653c4117f48d631ea17f38ed86e2a828e6f7412f5239"
+      },
+      {
+        "name": "wasm-bindgen",
+        "version": "0.2.126",
+        "checksum": "4b067c0c11094aef6b7a801c1e34a26affafdf3d051dba08456b868789aaf9a4"
+      },
+      {
+        "name": "wasm-bindgen-macro",
+        "version": "0.2.126",
+        "checksum": "167ce5e579f6bcf889c4f7175a8a5a585de84e8ff93976ce393efa5f2837aab1"
+      },
+      {
+        "name": "wasm-bindgen-macro-support",
+        "version": "0.2.126",
+        "checksum": "f3997c7839262f4ef12cf90b818d6340c18e80f263f1a94bf157d0ec4420380e"
+      },
+      {
+        "name": "wasm-bindgen-shared",
+        "version": "0.2.126",
+        "checksum": "dc1b4cb0cc549fcf58d7dfc081778139b3d283a081644e833e84682ad71cea24"
+      },
+      {
+        "name": "web-time",
+        "version": "1.1.0",
+        "checksum": "5a6580f308b1fad9207618087a65c04e7a10bc77e02c8e84e9b00dd4b12fa0bb"
+      },
+      {
+        "name": "windows-core",
+        "version": "0.62.2",
+        "checksum": "b8e83a14d34d0623b51dce9581199302a221863196a1dde71a7663a4c2be9deb"
+      },
+      {
+        "name": "windows-implement",
+        "version": "0.60.2",
+        "checksum": "053e2e040ab57b9dc951b72c264860db7eb3b0200ba345b4e4c3b14f67855ddf"
+      },
+      {
+        "name": "windows-interface",
+        "version": "0.59.3",
+        "checksum": "3f316c4a2570ba26bbec722032c4099d8c8bc095efccdc15688708623367e358"
+      },
+      {
+        "name": "windows-link",
+        "version": "0.2.1",
+        "checksum": "f0805222e57f7521d6a62e36fa9163bc891acd422f971defe97d64e70d0a4fe5"
+      },
+      {
+        "name": "windows-result",
+        "version": "0.4.1",
+        "checksum": "7781fa89eaf60850ac3d2da7af8e5242a5ea78d1a11c49bf2910bb5a73853eb5"
+      },
+      {
+        "name": "windows-strings",
+        "version": "0.5.1",
+        "checksum": "7837d08f69c77cf6b07689544538e017c1bfcf57e34b4c0ff58e6c2cd3b37091"
+      },
+      {
+        "name": "windows-sys",
+        "version": "0.61.2",
+        "checksum": "ae137229bcbd6cdf0f7b80a31df61766145077ddf49416a728b02cb3921ff3fc"
+      },
+      {
+        "name": "xlsx-sidecar",
+        "version": "0.1.0"
+      },
+      {
+        "name": "zip",
+        "version": "9.1.0",
+        "checksum": "2886b00003a72c4ccee3f42cfc34908d33b2508a74d827dc2a4244706475c704"
+      },
+      {
+        "name": "zlib-rs",
+        "version": "0.6.6",
+        "checksum": "b142a20ec14a91d5bc708c1dc21b080c550113d8aa77afa29635673a65dd02c5"
+      },
+      {
+        "name": "zmij",
+        "version": "1.0.23",
+        "checksum": "29666d0abbfad1e3dc4dcf6144730dd3a3ab225bbbdac83319345b1b44ccfc1b"
+      },
+      {
+        "name": "zopfli",
+        "version": "0.8.3",
+        "checksum": "f05cd8797d63865425ff89b5c4a48804f35ba0ce8d125800027ad6017d2b5249"
+      }
+    ],
+    "apps/sheets/native/win-clipboard-helper/Cargo.lock": [
+      {
+        "name": "itoa",
+        "version": "1.0.19",
+        "checksum": "3bd1574e617a9a6c1f8f8181bd7e841e1f20e4277607ef28945765188d6284d4"
+      },
+      {
+        "name": "memchr",
+        "version": "2.8.3",
+        "checksum": "cf8baf1c55e62ffcace7a9f06f4bd9cd3f0c4beb022d3b367256b91b87513d98"
+      },
+      {
+        "name": "proc-macro2",
+        "version": "1.0.107",
+        "checksum": "985e7ec9bb745e6ce6535b544d84d6cd6f7ad8bd711c398938ae983b91a766d9"
+      },
+      {
+        "name": "quote",
+        "version": "1.0.47",
+        "checksum": "1fbf4db142a473a8d80c26bbf18454ed458bf8d26c8219c331daecfdbd079001"
+      },
+      {
+        "name": "serde",
+        "version": "1.0.229",
+        "checksum": "4148590afebada386688f18773da617792bf2ef03ffc1e4cbd2b1d45b023e0ba"
+      },
+      {
+        "name": "serde_core",
+        "version": "1.0.229",
+        "checksum": "67dca2c9c51e58a4791a4b1ed58308b39c64224d349a935ab5039aa360942a48"
+      },
+      {
+        "name": "serde_derive",
+        "version": "1.0.229",
+        "checksum": "e7a5d71263a5a7d47b41f6b3f06ba276f10cc18b0931f1799f710578e2309348"
+      },
+      {
+        "name": "serde_json",
+        "version": "1.0.154",
+        "checksum": "e7e9cc8b1b85264074fbcc02a88680c4096b1e47df8f739dceb03bf482f04bd6"
+      },
+      {
+        "name": "syn",
+        "version": "3.0.10",
+        "checksum": "4ae9ccbea3a7b0b09443036490c8f34a8b1b760fd345e5c0dae0aac718faea79"
+      },
+      {
+        "name": "unicode-ident",
+        "version": "1.0.27",
+        "checksum": "a2c754d6c33795a1c324727428e5a7dedb5b06195f9890bdbcba760d3e246563"
+      },
+      {
+        "name": "win-clipboard-helper",
+        "version": "0.1.0"
+      },
+      {
+        "name": "windows-link",
+        "version": "0.2.1",
+        "checksum": "f0805222e57f7521d6a62e36fa9163bc891acd422f971defe97d64e70d0a4fe5"
+      },
+      {
+        "name": "windows-sys",
+        "version": "0.61.2",
+        "checksum": "ae137229bcbd6cdf0f7b80a31df61766145077ddf49416a728b02cb3921ff3fc"
+      },
+      {
+        "name": "zmij",
+        "version": "1.0.23",
+        "checksum": "29666d0abbfad1e3dc4dcf6144730dd3a3ab225bbbdac83319345b1b44ccfc1b"
+      }
+    ]
+  }
+}
