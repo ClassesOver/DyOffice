@@ -45,3 +45,21 @@ test('stream event parser rejects oversized events, stale protocol, and malforme
   assert.throws(() => decodeHostEvent(JSON.stringify({...good,fileId:''})), err => err.code === 'INVALID_RESPONSE')
   assert.throws(() => decodeHostEvent(' '.repeat(MAX_HOST_EVENT_BYTES+1)), err => err.code === 'PAYLOAD_TOO_LARGE')
 })
+
+test('advertised editable capability is not allowed without a working byte and save adapter', async () => {
+  const advertised = { docx:'editable', xlsx:'read_only', pptx:'unsupported', pdf:'unsupported' }
+  const host = createBrowserHost({ getCapabilities:async()=>advertised })
+  assert.deepEqual(await host.getCapabilities(), {docx:'unsupported',xlsx:'unsupported',pptx:'unsupported',pdf:'unsupported'})
+  const partial = createBrowserHost({
+    getCapabilities:async()=>advertised,
+    open:async()=>({file:validRevision,format:'docx',downloadEndpoint:'/api/files/file-a',capabilities:advertised}),
+    readBytes:async()=>new Uint8Array([1]),
+  })
+  assert.deepEqual(await partial.getCapabilities(), {docx:'read_only',xlsx:'read_only',pptx:'unsupported',pdf:'unsupported'})
+  assert.equal((await partial.open('file-a')).capabilities.docx,'read_only')
+})
+
+test('invalid typed preference values are rejected rather than exposed as trusted settings', async () => {
+  const host = createBrowserHost({getPreferences:async()=>({theme:'dark',language:'zh',authorName:{apiKey:'secret'},autoSave:'true'})})
+  await assert.rejects(host.getPreferences(), err=>err.code==='INVALID_RESPONSE')
+})
