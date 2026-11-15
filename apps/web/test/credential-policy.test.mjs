@@ -24,7 +24,7 @@ test('password hash inspector accepts only adequate Argon2id PHC metadata', () =
   const salt = 'a'.repeat(24)
   const digest = 'b'.repeat(43)
   assert.deepEqual(inspectArgon2idHash('$argon2id$v=19$m=19456,t=2,p=1$' + salt + '$' + digest), { memoryKiB:19456,passes:2,parallelism:1 })
-  for (const header of ['$argon2i$v=19$m=19456,t=2,p=1', '$argon2id$v=16$m=19456,t=2,p=1', '$argon2id$v=19$m=1000,t=2,p=1', '$argon2id$v=19$m=19456,t=1,p=1', '$argon2id$v=19$m=19456,t=2,p=0']) {
+  for (const header of ['$argon2i$v=19$m=19456,t=2,p=1', '$argon2id$v=16$m=19456,t=2,p=1', '$argon2id$v=19$m=1000,t=2,p=1', '$argon2id$v=19$m=19456,t=1,p=1', '$argon2id$v=19$m=19456,t=2,p=0', '$argon2id$v=19$m=999999999,t=2,p=1', '$argon2id$v=19$m=19456,t=9999999,p=1']) {
     assert.equal(inspectArgon2idHash(header + '$' + salt + '$' + digest), null)
   }
   assert.equal(inspectArgon2idHash('sha256:abc'), null)
