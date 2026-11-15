@@ -65,3 +65,81 @@ test('multiple small SSE frames in one large network chunk remain valid', async(
   assert.equal(calls.filter(x=>x[0]==='done').length,1)
   assert.equal(calls.filter(x=>x[0]==='error').length,0)
 })
+
+test('rejects URL-normalized cross-origin endpoints before sending prompts', () => {
+  for (const endpoint of ['/\n/evil.example/turns', '/\r/evil.example/turns', '/\t/evil.example/turns']) {
+    assert.equal(new URL(endpoint, 'https://app.example').origin, 'https://evil.example')
+    assert.throws(() => createSseAgentTransport({endpoint}), /origin-relative/)
+  }
+})
+
+test('stream and cancellation requests disallow redirects', async () => {
+  const requests = []
+  let started
+  const ready = new Promise(resolve => { started = resolve })
+  const transport = createSseAgentTransport({fetchImpl:async (url, init) => {
+    requests.push({url, init})
+    if (url.endsWith('/cancel')) return new Response(null, {status:204})
+    started()
+    return new Promise((resolve,reject) => init.signal.addEventListener('abort', () => reject(new DOMException('Aborted','AbortError')), {once:true}))
+  },createTurnId:()=> 'redirect-test'})
+  const {callbacks} = callbackRecorder()
+  const handle = transport.stream({system:'private prompt',messages:[],tools:[]},callbacks)
+  await ready
+  handle.cancel()
+  assert.equal(requests.length,2)
+  for (const {init} of requests) {
+    assert.equal(init.credentials,'same-origin')
+    assert.equal(init.redirect,'error')
+    assert.equal(init.mode,'same-origin')
+  }
+})
+
+test('307 and 308 cannot forward a model prompt to a second origin', async () => {
+  const {createServer} = await import('node:http')
+  let leakedRequests = 0
+  const sink = createServer((req,res) => { leakedRequests++; req.resume();res.writeHead(200,{'Content-Type':'text/event-stream'});res.end(event('done',{})) })
+  const listen = server => new Promise(resolve => server.listen(0,'127.0.0.1',resolve))
+  const close = server => new Promise(resolve => server.close(resolve))
+  await listen(sink)
+  const sinkUrl = `http://127.0.0.1:${sink.address().port}/sink`
+  let status = 307
+  const origin = createServer((req,res) => { req.resume();res.writeHead(status,{Location:sinkUrl});res.end() })
+  try {
+    await listen(origin)
+    for (status of [307,308]) {
+      const calls=[]
+      const transport=createSseAgentTransport({fetchImpl:(url,init)=>fetch(new URL(url,`http://127.0.0.1:${origin.address().port}`),init)})
+      await new Promise(resolve => transport.stream({system:'test-only-private-prompt',messages:[],tools:[]},{onDelta(){},onToolCall(){},onError:error=>calls.push(error),onDone:resolve}))
+      assert.equal(leakedRequests,0,`HTTP ${status} forwarded prompt`)
+      assert.equal(calls.length,1)
+    }
+  } finally { await close(origin); await close(sink) }
+})
+
+test('unterminated multiline events fail at the cumulative byte limit and cancel the reader', async () => {
+  let readerCancelled=false
+  const body = new ReadableStream({start(controller) {
+    controller.enqueue(new TextEncoder().encode('event: delta\n' + ('data: ' + '字'.repeat(1024) + '\n').repeat(100)))
+    // Keep open without the frame terminator, like a stalled or malicious provider.
+  },cancel(){readerCancelled=true}})
+  const transport=createSseAgentTransport({fetchImpl:async()=>new Response(body,{headers:{'Content-Type':'text/event-stream'}})})
+  const {calls,callbacks}=callbackRecorder()
+  let handle
+  let timeout
+  try {
+    await Promise.race([
+      new Promise(resolve=> {handle=transport.stream({system:'',messages:[],tools:[]},{...callbacks,onDone(){callbacks.onDone();resolve()}})}),
+      new Promise((resolve,reject)=> {timeout=setTimeout(()=>reject(new Error('oversized open frame was not rejected')),300)})
+    ])
+    assert.deepEqual(calls.map(x=>x[0]),['error','done'])
+    assert.match(calls[0][1], /too large/)
+    assert.equal(readerCancelled,true)
+  } finally {clearTimeout(timeout);handle?.cancel()}
+})
+
+test('rejects query and fragment endpoints that cannot form a cancellation path', () => {
+  for (const endpoint of ['/api/turns?mode=1','/api/turns#fragment','/api/turns?','/api/turns#']) {
+    assert.throws(() => createSseAgentTransport({endpoint}), /origin-relative/)
+  }
+})

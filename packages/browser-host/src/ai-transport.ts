@@ -3,6 +3,7 @@ import type { AgentTransport, AgentStreamRequest, AgentStreamCallbacks, AgentToo
 const MAX_SSE_EVENT_BYTES = 256 * 1024
 
 export interface SseTransportOptions {
+  /** Origin-relative path only: no query, fragment, controls or redirects. */
   endpoint?: string
   fetchImpl?: typeof fetch
   createTurnId?: () => string
@@ -11,7 +12,8 @@ export interface SseTransportOptions {
 /** Browser-side adapter for server-mediated model streams; never holds provider secrets. */
 export function createSseAgentTransport(options: SseTransportOptions = {}): AgentTransport {
   const endpoint = options.endpoint ?? '/api/v1/ai/turns'
-  if (!endpoint.startsWith('/') || endpoint.startsWith('//') || endpoint.includes('\\')) {
+  if (!endpoint.startsWith('/') || endpoint.startsWith('//') || endpoint.includes('\\') || /[\u0000-\u0020\u007f?#]/.test(endpoint) ||
+      new URL(endpoint, 'https://dyoffice.invalid').origin !== 'https://dyoffice.invalid') {
     throw new Error('AI stream endpoint must be an origin-relative path')
   }
   const fetchImpl = options.fetchImpl ?? fetch
@@ -49,7 +51,7 @@ export function createSseAgentTransport(options: SseTransportOptions = {}): Agen
         try {
           const response = await fetchImpl(endpoint, {
             method: 'POST',
-            credentials: 'same-origin',
+            credentials: 'same-origin', mode: 'same-origin', redirect: 'error',
             headers: { Accept: 'text/event-stream', 'Content-Type': 'application/json' },
             body: JSON.stringify({ turnId, request }),
             signal: controller.signal,
@@ -61,13 +63,22 @@ export function createSseAgentTransport(options: SseTransportOptions = {}): Agen
           let pending = ''
           let event = 'message'
           let dataLines: string[] = []
+          let dataBytes = 0
+          const encoder = new TextEncoder()
           const acceptLine = (line: string) => {
+            if (encoder.encode(line).byteLength > MAX_SSE_EVENT_BYTES) throw new Error('AI stream event too large')
             if (line === '') {
               if (dataLines.length) emit(event, dataLines.join('\n'))
               event = 'message'
               dataLines = []
+              dataBytes = 0
             } else if (line.startsWith('event:')) event = line.slice(6).trimStart()
-            else if (line.startsWith('data:')) dataLines.push(line.slice(5).trimStart())
+            else if (line.startsWith('data:')) {
+              const data = line.slice(5).trimStart()
+              dataBytes += encoder.encode(data).byteLength + (dataLines.length ? 1 : 0)
+              if (dataBytes > MAX_SSE_EVENT_BYTES) throw new Error('AI stream event too large')
+              dataLines.push(data)
+            }
           }
           while (!finished) {
             const { done, value } = await reader.read()
@@ -96,7 +107,7 @@ export function createSseAgentTransport(options: SseTransportOptions = {}): Agen
           finish()
           // Aborting the response alone does not guarantee the server stopped the model.
           void fetchImpl(endpoint + '/' + encodeURIComponent(turnId) + '/cancel', {
-            method: 'POST', credentials: 'same-origin',
+            method: 'POST', credentials: 'same-origin', mode: 'same-origin', redirect: 'error',
           }).catch(() => {})
         },
       }
