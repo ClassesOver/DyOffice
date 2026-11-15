@@ -1,0 +1,38 @@
+name: DyOffice native PPTX gate
+
+on:
+  push:
+    branches: [main, feat/dyoffice-web]
+    paths:
+      - 'apps/web/worker/**'
+      - 'apps/slides/tests/**'
+      - 'packages/**'
+      - 'tsconfig.base.json'
+      - '.github/workflows/dyoffice-native-pptx.yml'
+  pull_request:
+    paths:
+      - 'apps/web/worker/**'
+      - 'apps/slides/tests/**'
+      - 'packages/**'
+      - 'tsconfig.base.json'
+      - '.github/workflows/dyoffice-native-pptx.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  native-pptx:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+      - name: Install isolated PPTX harness without Electron or lifecycle scripts
+        run: npm ci --prefix apps/web/worker --workspaces=false --ignore-scripts --include=dev
+      - name: Typecheck native PPTX session and regressions
+        run: npm run typecheck --prefix apps/web/worker --workspaces=false
+      - name: Test native session, package roundtrip and adjacent text operations
+        run: npm test --prefix apps/web/worker --workspaces=false

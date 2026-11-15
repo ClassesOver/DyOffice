@@ -1,0 +1,106 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "strict": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "esModuleInterop": true,
+    "allowImportingTsExtensions": true,
+    "baseUrl": ".",
+    "types": [
+      "node"
+    ],
+    "lib": [
+      "ES2022",
+      "DOM",
+      "DOM.Iterable"
+    ],
+    "paths": {
+      "@genoffice/docx-engine/metafile": [
+        "../../../packages/docx-engine/src/metafile.ts"
+      ],
+      "@genoffice/pptx-engine": [
+        "../../../packages/pptx-engine/src/index.ts"
+      ],
+      "@genoffice/pptx-engine/custgeom": [
+        "../../../packages/pptx-engine/src/custgeom.ts"
+      ],
+      "@genoffice/pptx-engine/table-grid": [
+        "../../../packages/pptx-engine/src/table-grid.ts"
+      ],
+      "@genoffice/pptx-engine/identity": [
+        "../../../packages/pptx-engine/src/identity.ts"
+      ],
+      "@genoffice/pptx-engine/chart-workbook": [
+        "../../../packages/pptx-engine/src/chart-workbook.ts"
+      ],
+      "@genoffice/pptx-engine/dgm-hier": [
+        "../../../packages/pptx-engine/src/dgm-hier.ts"
+      ],
+      "@genoffice/pptx-engine/model3d": [
+        "../../../packages/pptx-engine/src/model3d.ts"
+      ],
+      "@genoffice/pptx-engine/named-action": [
+        "../../../packages/pptx-engine/src/named-action.ts"
+      ],
+      "@genoffice/pptx-engine/background-promote": [
+        "../../../packages/pptx-engine/src/background-promote.ts"
+      ],
+      "@genoffice/pptx-ops": [
+        "../../../packages/pptx-ops/src/index.ts"
+      ],
+      "@genoffice/pptx-ops/op-docs": [
+        "../../../packages/pptx-ops/src/op-docs.ts"
+      ],
+      "@genoffice/pptx-ops/font-size": [
+        "../../../packages/pptx-ops/src/font-size.ts"
+      ],
+      "@genoffice/pptx-render": [
+        "../../../packages/pptx-render/src/index.ts"
+      ],
+      "@genoffice/pptx-render/preset-geometry": [
+        "../../../packages/pptx-render/src/preset-geometry.ts"
+      ],
+      "@genoffice/pptx-render/auto-num": [
+        "../../../packages/pptx-render/src/auto-num.ts"
+      ],
+      "@genoffice/zip-gate": [
+        "../../../packages/zip-gate/src/index.ts"
+      ],
+      "jszip": [
+        "./node_modules/jszip"
+      ],
+      "fast-xml-parser": [
+        "./node_modules/fast-xml-parser"
+      ],
+      "utif2": [
+        "./node_modules/utif2"
+      ],
+      "opentype.js": [
+        "./node_modules/opentype.js"
+      ],
+      "bidi-js": [
+        "./node_modules/bidi-js"
+      ],
+      "vitest": [
+        "node_modules/vitest"
+      ],
+      "@genoffice/agent-core/redact-range": [
+        "../../../packages/agent-core/src/redact-range.ts"
+      ],
+      "@genoffice/docx-engine/math": [
+        "../../../packages/docx-engine/src/math.ts"
+      ]
+    }
+  },
+  "include": [
+    "src/native/pptx-session.ts",
+    "../../slides/tests/pptx-session.test.ts",
+    "../../slides/tests/web-worker-roundtrip.test.ts",
+    "../../../packages/pptx-ops/tests/settext-paragraph-structure.test.ts",
+    "../../../packages/pptx-ops/src/raw.d.ts",
+    "../../../packages/pptx-render/src/bidi-js.d.ts"
+  ]
+}
