@@ -1,0 +1,47 @@
+import { test } from 'node:test'
+import assert from 'node:assert/strict'
+import { createBrowserHost } from '../../../../packages/browser-host/src/index.ts'
+import { HostError } from '../../../../packages/web-contracts/src/errors.ts'
+import { decodeHostEvent, MAX_HOST_EVENT_BYTES } from '../../../../packages/web-contracts/src/events.ts'
+
+const sha256 = 'a'.repeat(64)
+const validRevision = { fileId:'file-a', revision:'revision-1', sha256, size:10 }
+const validSave = { fileId:'file-a', uploadId:'upload-a', baseRevision:'revision-0', idempotencyKey:'key-1', leaseEpoch:0 }
+
+test('missing Web bridge never claims edit support or successful operations', async () => {
+  const host = createBrowserHost()
+  assert.deepEqual(await host.getCapabilities(), { docx:'unsupported', xlsx:'unsupported', pptx:'unsupported', pdf:'unsupported' })
+  await assert.rejects(host.open('file-a'), err => err instanceof HostError && err.code === 'UNSUPPORTED')
+  await assert.rejects(host.commitSave(validSave), err => err.code === 'UNSUPPORTED')
+})
+
+test('invalid revisions are rejected before invoking adapter', async () => {
+  let calls = 0
+  const host = createBrowserHost({ commitSave: async () => { calls++; return validRevision } })
+  await assert.rejects(host.commitSave({ ...validSave, baseRevision:'' }), err => err.code === 'INVALID_REVISION')
+  await assert.rejects(host.commitSave({ ...validSave, leaseEpoch:-1 }), err => err.code === 'INVALID_REVISION')
+  assert.equal(calls, 0)
+  assert.deepEqual(await host.commitSave(validSave), validRevision)
+})
+
+test('invalid or cross-file responses fail closed', async () => {
+  const host = createBrowserHost({
+    open: async () => ({ file:{ ...validRevision, revision:'' }, format:'docx', downloadEndpoint:'/a', capabilities:{ docx:'editable',xlsx:'read_only',pptx:'read_only',pdf:'read_only' } }),
+    commitSave: async () => ({ ...validRevision, fileId:'other-user-file' })
+  })
+  await assert.rejects(host.open('file-a'), err => err.code === 'INVALID_RESPONSE')
+  await assert.rejects(host.commitSave(validSave), err => err.code === 'INVALID_RESPONSE')
+})
+
+test('preferences response excludes secrets and extra server fields', async () => {
+  const host = createBrowserHost({ getPreferences: async () => ({theme:'dark',language:'zh',apiKey:'never-export',admin:{ secret:'x' }}) })
+  assert.deepEqual(await host.getPreferences(), { theme:'dark',language:'zh' })
+})
+
+test('stream event parser rejects oversized events, stale protocol, and malformed envelopes', () => {
+  const good = { protocolVersion:1, messageId:'m1', sessionId:'s1', fileId:'f1',type:'editor.ready',payload:{} }
+  assert.deepEqual(decodeHostEvent(JSON.stringify(good)), good)
+  assert.throws(() => decodeHostEvent(JSON.stringify({...good,protocolVersion:0})), err => err.code === 'INVALID_RESPONSE')
+  assert.throws(() => decodeHostEvent(JSON.stringify({...good,fileId:''})), err => err.code === 'INVALID_RESPONSE')
+  assert.throws(() => decodeHostEvent(' '.repeat(MAX_HOST_EVENT_BYTES+1)), err => err.code === 'PAYLOAD_TOO_LARGE')
+})
