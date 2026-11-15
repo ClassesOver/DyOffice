@@ -1,0 +1,8 @@
+{
+  "name": "@dyoffice/web",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {"dev": "node server/index.mjs", "start": "node server/index.mjs", "test": "node --test test/*.test.mjs"},
+  "dependencies": {"@modelcontextprotocol/sdk": "^1.25.0"}
+}

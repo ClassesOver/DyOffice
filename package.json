@@ -1,8 +1,8 @@
 {
-  "name": "genoffice",
+  "name": "dyoffice",
   "version": "0.1.0",
   "private": true,
-  "description": "AI-native office suite (docs, sheets, slides, pdf, markdown, html)",
+  "description": "dyoffice web: DOCX, XLSX, PPTX and PDF personal workspace",
   "license": "Apache-2.0",
   "engines": {
     "node": ">=22.12.0",
@@ -46,7 +46,10 @@
     "licenses": "node tools/check-licenses.mjs",
     "dist:mac": "npm run notices && npm run build:all && npm run native:build:universal -w @genoffice/sheets && npm run dist:mac -w @genoffice/shell",
     "dist:win": "npm run notices && npm run build:all && npm run dist:win -w @genoffice/shell",
-    "dist:linux": "npm run notices && npm run build:all && npm run dist:linux -w @genoffice/shell"
+    "dist:linux": "npm run notices && npm run build:all && npm run dist:linux -w @genoffice/shell",
+    "dev:web": "npm run dev --prefix apps/web --workspaces=false",
+    "test:web": "npm test --prefix apps/web --workspaces=false",
+    "start:web": "npm start --prefix apps/web --workspaces=false"
   },
   "dependencies": {
     "ws": "^8.21.1"
