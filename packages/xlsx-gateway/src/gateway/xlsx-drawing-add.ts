@@ -2,6 +2,7 @@
 /// OOXML parts: a chart part, a drawing part (created or extended), the
 /// worksheet/drawing relationships, and the [Content_Types].xml overrides.
 
+import { buildChartCategoryXml, defaultChartSeriesColor } from './xlsx-chart'
 import { ensureRelationshipNamespace } from './xlsx-namespace'
 import { nextFreeRelationshipId } from './xlsx-sheets'
 
@@ -530,25 +531,6 @@ const DLBL_POSITIONS: Record<NonNullable<ChartAdd['dataLabelPosition']>, string>
   'outside-end': 'outEnd',
 }
 
-/// Office theme accent cycle — same order as the renderer's chartColors, so
-/// Excel opens a new chart with the colors the canvas showed.
-const OFFICE_PALETTE = [
-  '4472C4',
-  'ED7D31',
-  'A5A5A5',
-  'FFC000',
-  '5B9BD5',
-  '70AD47',
-  '264478',
-  '9E480E',
-  '636363',
-  '997300',
-] as const
-
-function paletteArgb(index: number): string {
-  return OFFICE_PALETTE[index % OFFICE_PALETTE.length] ?? '4472C4'
-}
-
 export function buildChartXml(chart: ChartAdd): string {
   const isPieLike = chart.chartType === 'pie' || chart.chartType === 'doughnut'
   const isScatter = chart.chartType === 'scatter'
@@ -794,16 +776,7 @@ function buildSeriesXml(
   index: number,
   chartType: ChartAdd['chartType'],
 ): string {
-  const categories = series.categories.slice(0, series.values.length)
-  const cat =
-    categories.length === 0
-      ? ''
-      : '<c:cat>' +
-        (series.categoriesRef
-          ? `<c:strRef><c:f>${escapeXmlText(series.categoriesRef)}</c:f>` +
-            `<c:strCache>${pointCount(categories.length)}${strPoints(categories)}</c:strCache></c:strRef>`
-          : `<c:strLit>${pointCount(categories.length)}${strPoints(categories)}</c:strLit>`) +
-        '</c:cat>'
+  const cat = buildChartCategoryXml(series.categories, series.values.length, series.categoriesRef)
   const val =
     '<c:val>' +
     (series.valuesRef
@@ -818,7 +791,7 @@ function buildSeriesXml(
   // only appears when explicitly asked for.
   const spPr = isPieLike
     ? seriesColorXml(series.color, false)
-    : seriesColorXml(series.color ?? `#${paletteArgb(index)}`, isLineLike)
+    : seriesColorXml(series.color ?? defaultChartSeriesColor(index), isLineLike)
   return (
     '<c:ser>' +
     `<c:idx val="${index}"/><c:order val="${index}"/>` +
@@ -850,7 +823,7 @@ function sliceColors(series: ChartAddSeries): Readonly<Record<string, string>> {
   return Object.fromEntries(
     series.values.map((_, idx) => [
       String(idx),
-      series.pointColors?.[idx] ?? `#${paletteArgb(idx)}`,
+      series.pointColors?.[idx] ?? defaultChartSeriesColor(idx),
     ]),
   )
 }
@@ -913,7 +886,7 @@ function buildScatterSeriesXml(series: ChartAddSeries, index: number): string {
     '<c:ser>' +
     `<c:idx val="${index}"/><c:order val="${index}"/>` +
     `<c:tx><c:v>${escapeXmlText(series.name)}</c:v></c:tx>` +
-    seriesColorXml(series.color ?? `#${paletteArgb(index)}`, true) +
+    seriesColorXml(series.color ?? defaultChartSeriesColor(index), true) +
     dataPointsXml(series.pointColors, series.pointExplosions) +
     xVal +
     yVal +
@@ -923,12 +896,6 @@ function buildScatterSeriesXml(series: ChartAddSeries, index: number): string {
 
 function pointCount(count: number): string {
   return `<c:ptCount val="${count}"/>`
-}
-
-function strPoints(values: readonly string[]): string {
-  return values
-    .map((value, i) => `<c:pt idx="${i}"><c:v>${escapeXmlText(value)}</c:v></c:pt>`)
-    .join('')
 }
 
 function numPoints(values: readonly number[]): string {

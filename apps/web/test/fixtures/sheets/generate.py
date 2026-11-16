@@ -27,3 +27,16 @@ with ZipFile(output,'w') as archive:
  for name,xml in sorted(parts.items()):
   info=ZipInfo(name,date_time=(2020,1,1,0,0,0));info.compress_type=ZIP_DEFLATED;archive.writestr(info,xml.encode())
 (root/'acceptance.json').write_text(json.dumps({'sha256':hashlib.sha256(output.read_bytes()).hexdigest(),'parts':{n:hashlib.sha256(v.encode()).hexdigest() for n,v in sorted(parts.items())},'expected':{'A2':12.5,'B2':{'formula':'A2*2','cached':999,'calculated':25},'C2':{'serial':45292,'date':'2024-01-01'},'D2':{'raw':0.125,'display':'12.50%'},'E2':{'raw':1234.567,'unit':'kg'},'F2':{'formula':'SUM(Revenue)','cached':-1,'calculated':20},'name':'Revenue','chart':'Revenue chart'}},indent=2)+'\n')
+# Preserve the original no-category/no-fill sample above as a legacy
+# regression. This second fixture matches a supported values-only writer edit:
+# ordinal labels for the missing category source and an explicit palette fill
+# for the bare series (LibreOffice otherwise imports it with FillStyle=NONE).
+compatible=dict(parts)
+compatible['xl/charts/chart1.xml']=parts['xl/charts/chart1.xml'].replace(
+ '</c:tx>', '</c:tx><c:spPr><a:solidFill><a:srgbClr val="4472C4"/></a:solidFill></c:spPr>', 1
+).replace(
+ '<c:val>', '<c:cat><c:strLit><c:ptCount val="2"/><c:pt idx="0"><c:v>1</c:v></c:pt><c:pt idx="1"><c:v>2</c:v></c:pt></c:strLit></c:cat><c:val>', 1
+)
+with ZipFile(root/'acceptance-chart-compatible.xlsx','w') as archive:
+ for name,xml in sorted(compatible.items()):
+  info=ZipInfo(name,date_time=(2020,1,1,0,0,0));info.compress_type=ZIP_DEFLATED;archive.writestr(info,xml.encode())
