@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { readFile, rename, unlink, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
+import { revisionError } from './errors.mjs'
 
 function sha256(bytes) {
   return createHash('sha256').update(bytes).digest('hex')
@@ -33,5 +34,20 @@ export async function projectCommittedBytes({ store, filePath, fileId, bytes }) 
     if (!file) return
     file.size = bytes.length
     file.updatedAt = new Date().toISOString()
+  })
+}
+
+/**
+ * Publish bytes only while this revision is still the head. The check and the
+ * legacy file write share the journal queue, so a newer commit cannot be
+ * overwritten by an older replay.
+ */
+export async function projectCurrentHead({ journal, objects, ownerId, store, filePath, fileId, saved }) {
+  await journal.transaction(fileId, async (snapshot) => {
+    const file = snapshot.files[fileId]
+    if (!file || file.ownerId !== ownerId || file.revision !== saved.ref.revision || file.objectId !== saved.objectId) return
+    const opened = await objects.downloadObject({ ownerId, objectId: saved.objectId })
+    if (opened.sha256 !== saved.ref.sha256 || opened.sha256 !== file.sha256) throw revisionError('HASH_MISMATCH', 503)
+    await projectCommittedBytes({ store, filePath, fileId, bytes: opened.bytes })
   })
 }

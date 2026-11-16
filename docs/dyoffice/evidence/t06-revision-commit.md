@@ -35,6 +35,7 @@ The DOCX HTTP test additionally renews, takes over, fences the old epoch, and re
 - `POST /api/v1/files/:id/leases/acquire|renew|takeover`, `POST /api/v1/files/:id/commits`, `POST /api/v1/files/:id/restore`
 - DOCX paragraph save, upload commit, and history download use the same ledger
 - The paragraph page renews its lease before save and every 15 seconds while it is open
+- A DOCX retry is applied to the bytes of its named base revision. Replaying an older revision returns that revision and does not replace the current head's file bytes
 - Outbox rows are recorded inside the commit. Nothing delivers them (that is T08)
 
 Default lease TTL is 45 seconds. Takeover always advances the epoch. A second session cannot acquire a live lease. The development token is one session id, so two browser tabs fence each other by takeover on open, not by a second user id.

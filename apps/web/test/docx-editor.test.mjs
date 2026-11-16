@@ -190,6 +190,43 @@ test('HTTP lease renewal, takeover, and restore publish one new current revision
   assert.equal(rejected.status, 400)
 })
 
+test('a lost structural DOCX save retries from its base and a later edit stays current', async (t) => {
+  const base = await start(t)
+  const { bytes } = await sampleDocx()
+  const headers = { Authorization: 'Bearer personal', 'Content-Type': 'application/json' }
+  const uploaded = await fetch(base + '/api/files', { method: 'POST', headers: { Authorization: 'Bearer personal', 'X-File-Name': encodeURIComponent('笔记.docx') }, body: bytes })
+  const file = await uploaded.json()
+  const opened = await (await fetch(base + `/api/v1/files/${file.id}/docx`, { headers })).json()
+  const lease = await (await fetch(base + `/api/v1/files/${file.id}/lease`, { method: 'POST', headers })).json()
+  const inserted = {
+    baseRevision: opened.file.revision,
+    leaseEpoch: lease.leaseEpoch,
+    idempotencyKey: 'docx-insert-01',
+    blocks: [...opened.blocks.map((block) => ({ docxIndex: block.docxIndex })), { text: 'Added line' }],
+  }
+  const save = (body) => fetch(base + `/api/v1/files/${file.id}/docx`, { method: 'POST', headers, body: JSON.stringify(body) })
+  const first = await save(inserted)
+  assert.equal(first.status, 200)
+  const revision = await first.json()
+  const retry = await save(inserted)
+  assert.equal(retry.status, 200)
+  assert.equal((await retry.json()).revision, revision.revision)
+  const reread = await (await fetch(base + `/api/v1/files/${file.id}/docx`, { headers })).json()
+  assert.equal(reread.blocks.some((block) => block.text === 'Added line'), true)
+  const later = await save({
+    baseRevision: reread.file.revision,
+    leaseEpoch: lease.leaseEpoch,
+    idempotencyKey: 'docx-insert-02',
+    blocks: reread.blocks.map((block) => block.text === 'Added line' ? { docxIndex: block.docxIndex, text: 'Added line kept' } : { docxIndex: block.docxIndex }),
+  })
+  assert.equal(later.status, 200)
+  const staleRetry = await save(inserted)
+  assert.equal(staleRetry.status, 200)
+  assert.equal((await staleRetry.json()).revision, revision.revision)
+  const current = await part(Buffer.from(await (await fetch(base + '/api/files/' + file.id, { headers })).arrayBuffer()), 'word/document.xml')
+  assert.match(current, /Added line kept/)
+})
+
 test('edited and inserted text never writes characters that are illegal in XML 1.0', async () => {
   const { bytes } = await sampleDocx()
   const projected = await projectDocx(bytes)

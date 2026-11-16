@@ -1,13 +1,14 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
-import { mkdtemp, readFile, rm } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createSaveGenerationGuard } from '../../../../packages/browser-host/src/save-generation.ts'
 import { createLeaseService } from '../../server/src/modules/leases/service.mjs'
 import { createFileJournal, createMemoryJournal } from '../../server/src/modules/revisions/journal.mjs'
 import { revisionError } from '../../server/src/modules/revisions/errors.mjs'
+import { projectCurrentHead } from '../../server/src/modules/revisions/projection.mjs'
 import { createRevisionService } from '../../server/src/modules/revisions/service.mjs'
 import { createOutboxService } from '../../server/src/outbox/service.mjs'
 import { createLocalObjectStore } from '../../server/src/storage/local-dev.mjs'
@@ -154,6 +155,32 @@ test('a missing object never becomes a revision', async (t) => {
     (error) => error.code === 'HASH_MISMATCH',
   )
   assert.equal(revisions.listRevisions(principal, fileId).length, 1)
+})
+
+test('replaying an older commit does not replace the bytes of the current head', async (t) => {
+  const { directory, revisions, objects, journal, fileId, head } = await setup(t)
+  const files = join(directory, 'files')
+  await mkdir(files, { recursive: true })
+  await writeFile(join(files, fileId), ZIP)
+  const meta = { files: [{ id: fileId, size: ZIP.length }] }
+  const store = { update: async (fn) => { await fn(meta) } }
+  const project = (saved) => projectCurrentHead({
+    journal, objects, ownerId: principal.ownerId, store, filePath: files, fileId, saved,
+  })
+  const firstUpload = await stage(objects, ZIP_B, 'a.docx')
+  await revisions.noteUpload(principal, { fileId, uploadId: firstUpload.uploadId })
+  const first = await revisions.commitRevision(principal, saveInput(fileId, head, firstUpload.uploadId, 'replay-head-a'))
+  await project(first)
+  const secondUpload = await stage(objects, ZIP_C, 'b.docx')
+  await revisions.noteUpload(principal, { fileId, uploadId: secondUpload.uploadId })
+  const second = await revisions.commitRevision(principal, saveInput(fileId, first.ref, secondUpload.uploadId, 'replay-head-b'))
+  await project(second)
+  const replay = await revisions.commitRevision(principal, saveInput(fileId, head, firstUpload.uploadId, 'replay-head-a'))
+  assert.equal(replay.replayed, true)
+  assert.equal(replay.ref.revision, first.ref.revision)
+  await project(replay)
+  assert.deepEqual(await readFile(join(files, fileId)), ZIP_C)
+  assert.equal(revisions.current(principal, fileId).revision, second.ref.revision)
 })
 
 test('restoring a historical revision creates a new head and keeps the old object', async (t) => {

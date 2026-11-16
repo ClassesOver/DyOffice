@@ -2,7 +2,7 @@ import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { sendJson } from '../../../http-response.mjs'
 import { rawBody } from '../../http-helpers.mjs'
-import { projectCommittedBytes } from './projection.mjs'
+import { projectCurrentHead } from './projection.mjs'
 import {
   assertIdempotencyKey,
   assertLeaseEpoch,
@@ -68,9 +68,15 @@ async function ensureHead(ctx, state, fileId) {
 }
 
 async function project(ctx, principal, fileId, saved) {
-  const opened = await ctx.revisionsRuntime.objects.downloadObject({ ownerId: principal.ownerId, objectId: saved.objectId })
-  if (opened.sha256 !== saved.ref.sha256) throw revisionError('HASH_MISMATCH', 503)
-  await projectCommittedBytes({ store: ctx.store, filePath: ctx.filePath, fileId, bytes: opened.bytes })
+  await projectCurrentHead({
+    journal: ctx.revisionsRuntime.journal,
+    objects: ctx.revisionsRuntime.objects,
+    ownerId: principal.ownerId,
+    store: ctx.store,
+    filePath: ctx.filePath,
+    fileId,
+    saved,
+  })
 }
 
 /** Lease, commit, and restore routes. Identity is the dev principal, never a body field. */

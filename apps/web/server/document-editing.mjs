@@ -4,7 +4,7 @@ import { sendJson } from './http-response.mjs'
 import { rawBody } from './src/http-helpers.mjs'
 import { applyDocxTextEdits, projectDocx } from './docx-session.mjs'
 import { assertRevisionId } from './src/modules/revisions/errors.mjs'
-import { projectCommittedBytes } from './src/modules/revisions/projection.mjs'
+import { projectCurrentHead } from './src/modules/revisions/projection.mjs'
 
 const UUID = '[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}'
 const ROUTE = new RegExp(`^/api/v1/files/(${UUID})(?:/(uploads|revisions|lease|docx|content))?$`, 'i')
@@ -80,10 +80,30 @@ async function registerCurrent(runtime, file, filePath, fileId) {
 
 async function commitStaged(runtime, store, filePath, fileId, input) {
   const saved = await runtime.revisions.commitRevision(runtime.principal, input)
-  const opened = await runtime.objects.downloadObject({ ownerId: runtime.principal.ownerId, objectId: saved.objectId })
-  if (opened.sha256 !== saved.ref.sha256) fail('存储的文件不可用', 503)
-  await projectCommittedBytes({ store, filePath, fileId, bytes: opened.bytes })
+  await projectCurrentHead({
+    journal: runtime.journal,
+    objects: runtime.objects,
+    ownerId: runtime.principal.ownerId,
+    store,
+    filePath,
+    fileId,
+    saved,
+  })
   return saved.ref
+}
+
+async function bytesForRevision(runtime, fileId, revision) {
+  const row = runtime.revisions.readRevision(runtime.principal, fileId, revision)
+  if (!row) fail('版本冲突，文档已被更新', 409, 'REVISION_CONFLICT')
+  let opened
+  try {
+    opened = await runtime.objects.downloadObject({ ownerId: runtime.principal.ownerId, objectId: row.objectId })
+  } catch (error) {
+    if (error?.code === 'NOT_FOUND') fail('存储的文件不可用', 503)
+    throw error
+  }
+  if (opened.sha256 !== row.sha256) fail('存储的文件不可用', 503)
+  return opened.bytes
 }
 
 async function serveHistorical(req, res, { url, state, fileId, runtime }) {
@@ -186,14 +206,16 @@ export async function serveDocumentEditing(req, res, { url, state, store, filePa
     catch { fail('JSON 格式无效') }
     if (!body || typeof body !== 'object' || Array.isArray(body)) fail('JSON 格式无效')
     if (Object.keys(body).some((key) => !['baseRevision', 'leaseEpoch', 'idempotencyKey', 'blocks', 'sourceCommandId'].includes(key))) fail('请求包含不支持的字段')
-    const previous = await registerCurrent(ledger, file, filePath, fileId)
+    await registerCurrent(ledger, file, filePath, fileId)
+    const baseRevision = requireBase(body.baseRevision)
+    const previous = await bytesForRevision(ledger, fileId, baseRevision)
     const nextBytes = Buffer.from(await applyDocxTextEdits(previous, body.blocks))
     const staged = await ledger.objects.stageUpload({ ownerId: ledger.principal.ownerId, name: file.name, bytes: nextBytes })
     await ledger.revisions.noteUpload(ledger.principal, { fileId, uploadId: staged.uploadId })
     const revision = await commitStaged(ledger, store, filePath, fileId, {
       fileId,
       uploadId: staged.uploadId,
-      baseRevision: requireBase(body.baseRevision),
+      baseRevision,
       leaseEpoch: requireLease(body.leaseEpoch),
       idempotencyKey: requireKey(body.idempotencyKey),
       sourceCommandId: body.sourceCommandId,
