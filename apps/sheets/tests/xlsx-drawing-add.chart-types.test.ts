@@ -15,6 +15,36 @@ const chart = (chartType: ChartAdd['chartType'], categories: readonly string[]):
 })
 
 describe('buildChartXml chart types', () => {
+  it.each(['column', 'bar', 'line', 'area', 'pie', 'doughnut', 'radar', 'combo'] as const)(
+    '%s supplies 1-based literal categories when no categories or reference were supplied',
+    (chartType) => {
+      const xml = buildChartXml(chart(chartType, []))
+      expect(xml).toContain(
+        '<c:cat><c:strLit><c:ptCount val="3"/>' +
+          '<c:pt idx="0"><c:v>1</c:v></c:pt><c:pt idx="1"><c:v>2</c:v></c:pt>' +
+          '<c:pt idx="2"><c:v>3</c:v></c:pt></c:strLit></c:cat>',
+      )
+    },
+  )
+
+  it('preserves a cache-less category reference instead of fabricating ordinal cache entries', () => {
+    const xml = buildChartXml({
+      chartType: 'column',
+      title: 'Reference only',
+      series: [
+        { name: 'Revenue', values: [12.5, 7.5], categories: [], categoriesRef: 'Data!$A$2:$A$3' },
+      ],
+    })
+    expect(xml).toContain('<c:cat><c:strRef><c:f>Data!$A$2:$A$3</c:f></c:strRef></c:cat>')
+    expect(xml).not.toContain('<c:strCache>')
+    expect(xml).not.toContain('<c:strLit>')
+  })
+
+  it('keeps scatter ordinal X values at zero when no categories were supplied', () => {
+    const xml = buildChartXml(chart('scatter', []))
+    expect(xml).toContain('<c:xVal><c:numLit><c:ptCount val="3"/><c:pt idx="0"><c:v>0</c:v></c:pt>')
+    expect(xml).not.toContain('<c:cat>')
+  })
   it('scatter plots xVal/yVal against two value axes and no category axis', () => {
     const xml = buildChartXml(chart('scatter', ['1', '2', '3']))
     expect(xml).toContain('<c:scatterChart>')

@@ -1,0 +1,43 @@
+{
+  "sha256": "6834536e6ba5f41215157d12220377f62e218d234552edc2a243feb05f6493fb",
+  "parts": {
+    "[Content_Types].xml": "1bff4dfaa17134440fd37b99e3818f18142c9b6f586f153adf5522a5dfb0451d",
+    "_rels/.rels": "fc5715a86467973c771fed6cf49203ed48734dcbd0f24088be6bbb6e290cd7b5",
+    "customXml/t09-preserve.xml": "bd7d1aa934d2886ecdd00d30ae2d00960f65de6e5f3b01cf71e5049a8b93b1f5",
+    "xl/_rels/workbook.xml.rels": "28906971a4188eb079fb6fe42e1cfb7405e5cb83fe608d8442579131f3a9f0cf",
+    "xl/charts/chart1.xml": "c5d8eb2f649872ed58c0ab90b97c199d7d0765a675811c13b59a4e0f7c3e6ac5",
+    "xl/drawings/_rels/drawing1.xml.rels": "5ef8692f50853d943025f7cef440bae5be0697c0ee09a1183b1f8e79f6d10496",
+    "xl/drawings/drawing1.xml": "35ee2b7037311dca5206d251c1fe484ec39ec41412fcf2bb250d3f1dd88eeb09",
+    "xl/styles.xml": "9666ac1ea7b31e1c8254ef879c5d6fa0d7a44195cbe66e149c878c34e8a7ea75",
+    "xl/workbook.xml": "897d35e3542efc159e710375d6f990816becfe4804d0d66e025ae8458d6f38ae",
+    "xl/worksheets/_rels/sheet1.xml.rels": "37a5eb99636b488610e17b20bcc98b40a1eabcaeb2f82a21089f8d0aaceef1c7",
+    "xl/worksheets/sheet1.xml": "83d6c13fd2c68260c05024afd1ad30acd3c80d22285699987de2e8ed2caf3410"
+  },
+  "expected": {
+    "A2": 12.5,
+    "B2": {
+      "formula": "A2*2",
+      "cached": 999,
+      "calculated": 25
+    },
+    "C2": {
+      "serial": 45292,
+      "date": "2024-01-01"
+    },
+    "D2": {
+      "raw": 0.125,
+      "display": "12.50%"
+    },
+    "E2": {
+      "raw": 1234.567,
+      "unit": "kg"
+    },
+    "F2": {
+      "formula": "SUM(Revenue)",
+      "cached": -1,
+      "calculated": 20
+    },
+    "name": "Revenue",
+    "chart": "Revenue chart"
+  }
+}

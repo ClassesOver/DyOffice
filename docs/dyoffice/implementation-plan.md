@@ -262,11 +262,14 @@ docs/dyoffice/               当前计划及 inventory/ evidence/ adr/
 
 **接口：** `mountSheetsEditor()`；原生解析/保存输出沿用 T06 RevisionRef，不暴露本机路径。
 
-- [ ] 测试公式而非缓存值、日期/百分比、原始数值及单位、命名区域、图表、批量 AI 撤销、未知部件保留。
-- [ ] E2E RED，并保存 fixture 原件哈希。
-- [ ] 浏览器复用 Univer 与已有工具；必须的原生操作走 T08，禁止用不同库偷偷替代保真链。
+- [x] 测试公式而非缓存值、日期/百分比、原始数值及单位、命名区域、图表、批量 AI 撤销、未知部件保留。
+- [x] E2E RED，并保存 fixture 原件哈希。
+- [x] 浏览器复用 Univer 与已有工具；必须的原生操作走 T08，禁止用不同库偷偷替代保真链。
 - [ ] E2E 与 `@genoffice/xlsx-gateway`、受影响 sheets/native 回归 GREEN；外部 Excel 复开核验。
 - [ ] 提交 `feat(sheets): adapt native workbook editing to web`。
+
+
+当前草稿 PR：[#30](https://github.com/ClassesOver/DyOffice/pull/30)。六个真实浏览器场景与完整原生专项套件已通过；最终审查和外部 Excel 复开仍未完成，T09 不标记闭环。启动与证据见 [T09 runtime](evidence/t09-runtime.md)。
 
 ### T10 PPTX 原生 Web 适配
 

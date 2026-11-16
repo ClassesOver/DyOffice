@@ -30,6 +30,23 @@ const TARGET_PLOTS: Record<NonNullable<WorkbookChartEdit['chartType']>, PlotElem
 const SYNTH_CAT_AXIS_ID = '900000001'
 const SYNTH_VAL_AXIS_ID = '900000002'
 
+const OFFICE_CHART_PALETTE = [
+  '4472C4',
+  'ED7D31',
+  'A5A5A5',
+  'FFC000',
+  '5B9BD5',
+  '70AD47',
+  '264478',
+  '9E480E',
+  '636363',
+  '997300',
+] as const
+
+export function defaultChartSeriesColor(index: number): string {
+  return `#${OFFICE_CHART_PALETTE[index % OFFICE_CHART_PALETTE.length] ?? '4472C4'}`
+}
+
 interface PlotMatch {
   readonly family: string
   readonly inner: string
@@ -171,7 +188,16 @@ function replacePlots(chartXml: string, plots: readonly PlotMatch[], replacement
   return xml.slice(0, first) + replacement + xml.slice(first)
 }
 
-export function applyChartEdit(chartXml: string, edit: WorkbookChartEdit): string {
+export interface ChartEditContext {
+  /// The chart part has an external chartStyle/themeOverride relationship.
+  readonly hasExternalStyle?: boolean | undefined
+}
+
+export function applyChartEdit(
+  chartXml: string,
+  edit: WorkbookChartEdit,
+  context: ChartEditContext = {},
+): string {
   let xml = chartXml
   // Full series replacement runs BEFORE a type conversion in the same batch:
   // a journal merges both when the user re-points data and later converts the
@@ -216,7 +242,7 @@ export function applyChartEdit(chartXml: string, edit: WorkbookChartEdit): strin
   if (edit.pointExplosions !== undefined) xml = setPointExplosions(xml, edit.pointExplosions)
   if (edit.series !== undefined) {
     for (const entry of edit.series) {
-      xml = setSeriesData(xml, entry)
+      xml = setSeriesData(xml, entry, context)
     }
   }
   return xml
@@ -492,7 +518,7 @@ function replaceSeries(
     .map((entry, index) =>
       plot === 'scatterChart'
         ? buildScatterSeriesReplacement(entry, index)
-        : buildSeriesReplacement(entry, index),
+        : buildSeriesReplacement(entry, index, plot),
     )
     .join('')
   const nextInner =
@@ -595,7 +621,7 @@ function replaceComboSeries(
             (entry.plot ?? defaultFamily) === group.family &&
             (entry.secondaryAxis === true) === group.secondary,
         )
-        .map(({ entry, index }) => buildSeriesReplacement(entry, index))
+        .map(({ entry, index }) => buildSeriesReplacement(entry, index, group.family))
         .join('')
       const inner = familyInner(group.family)
       const labels = /<\/c:ser>(<c:dLbls>[\s\S]*?<\/c:dLbls>)/.exec(inner)?.[1] ?? ''
@@ -636,29 +662,48 @@ function replaceComboSeries(
 function buildSeriesReplacement(
   entry: NonNullable<WorkbookChartEdit['seriesSet']>[number],
   index: number,
+  family: string,
 ): string {
+  const color =
+    entry.color ??
+    (family === 'barChart' || family === 'areaChart' ? defaultChartSeriesColor(index) : undefined)
   const spPr =
-    entry.color === undefined
+    color === undefined
       ? ''
-      : `<c:spPr><a:solidFill><a:srgbClr val="${entry.color.slice(1).toUpperCase()}"/></a:solidFill></c:spPr>`
-  const categories = entry.categories?.slice(0, entry.values.length)
-  const catPoints = (categories ?? [])
-    .map((value, idx) => `<c:pt idx="${idx}"><c:v>${escapeXmlText(value)}</c:v></c:pt>`)
-    .join('')
-  const cat =
-    categories === undefined || categories.length === 0
-      ? ''
-      : '<c:cat>' +
-        (entry.categoriesRef !== undefined
-          ? `<c:strRef><c:f>${escapeXmlText(entry.categoriesRef)}</c:f>` +
-            `<c:strCache><c:ptCount val="${categories.length}"/>${catPoints}</c:strCache></c:strRef>`
-          : `<c:strLit><c:ptCount val="${categories.length}"/>${catPoints}</c:strLit>`) +
-        '</c:cat>'
+      : `<c:spPr><a:solidFill><a:srgbClr val="${color.slice(1).toUpperCase()}"/></a:solidFill></c:spPr>`
+  const cat = buildChartCategoryXml(entry.categories, entry.values.length, entry.categoriesRef)
   const val = `<c:val>${numDataXml(entry.valuesRef, entry.values)}</c:val>`
   return (
     `<c:ser><c:idx val="${index}"/><c:order val="${index}"/>` +
     `<c:tx><c:v>${escapeXmlText(entry.name)}</c:v></c:tx>${spPr}${cat}${val}</c:ser>`
   )
+}
+
+/// Category-based plots use explicit 1-based labels when the caller has no
+/// category source. c:cat is optional in OOXML; writing labels is an interop
+/// default, not schema repair. A reference without cached labels is still a
+/// real source and must not acquire invented ordinal labels or an empty cache.
+/// Scatter X data deliberately does not use this helper.
+export function buildChartCategoryXml(
+  categories: readonly string[] | undefined,
+  valueCount: number,
+  ref: string | undefined,
+): string {
+  const supplied = categories?.slice(0, valueCount) ?? []
+  if (supplied.length === 0 && ref !== undefined) {
+    return `<c:cat><c:strRef><c:f>${escapeXmlText(ref)}</c:f></c:strRef></c:cat>`
+  }
+  const labels =
+    supplied.length > 0 ? supplied : Array.from({ length: valueCount }, (_, idx) => String(idx + 1))
+  if (labels.length === 0) return ''
+  const data =
+    `<c:ptCount val="${labels.length}"/>` +
+    labels
+      .map((value, idx) => `<c:pt idx="${idx}"><c:v>${escapeXmlText(value)}</c:v></c:pt>`)
+      .join('')
+  return ref !== undefined
+    ? `<c:cat><c:strRef><c:f>${escapeXmlText(ref)}</c:f><c:strCache>${data}</c:strCache></c:strRef></c:cat>`
+    : `<c:cat><c:strLit>${data}</c:strLit></c:cat>`
 }
 
 /// numRef with cache when a ref is given, numLit otherwise.
@@ -860,15 +905,45 @@ function patchAxisInnerTitle(axisInner: string, title: string | null): string {
 function setSeriesData(
   chartXml: string,
   entry: NonNullable<WorkbookChartEdit['series']>[number],
+  context: ChartEditContext,
 ): string {
-  const isScatter = /<c:scatterChart[\s>]/.test(chartXml)
+  const plots = matchPlots(chartXml)
   const seriesPattern = /<c:ser>[\s\S]*?<\/c:ser>/g
   let found = false
   let position = -1
-  const result = chartXml.replace(seriesPattern, (serXml) => {
+  const result = chartXml.replace(seriesPattern, (serXml, offset: number) => {
     position += 1
     if (position !== entry.index) return serXml
     found = true
+    const plot = plots.find(
+      (plot) => offset > plot.index && offset < plot.index + plot.whole.length,
+    )
+    const isScatter = plot?.family === 'scatterChart'
+    const catPattern = /<c:cat\s*\/>|<c:cat>[\s\S]*?<\/c:cat>/
+    const previousCat = catPattern.exec(serXml)?.[0] ?? ''
+    const hasCategorySource = /<c:(?:strRef|numRef|multiLvlStrRef)[\s>]/.test(previousCat)
+    // An empty preview of a reference-only source is not an empty replacement
+    // cache. Keep the source (including numeric/date/multilevel representation).
+    const previousCatRefXml = /<c:f>([\s\S]*?)<\/c:f>/.exec(previousCat)?.[1]
+    const sameCategoryRef =
+      entry.categoriesRef === undefined || escapeXmlText(entry.categoriesRef) === previousCatRefXml
+    let categories =
+      entry.categories?.length === 0 && hasCategorySource && sameCategoryRef
+        ? undefined
+        : entry.categories
+    const noCategoryData =
+      previousCat === '' || /^<c:cat\s*\/>$|^<c:cat>\s*<\/c:cat>$/.test(previousCat)
+    if (
+      !isScatter &&
+      plot !== undefined &&
+      REPLACEABLE_PLOTS.includes(plot.family) &&
+      noCategoryData &&
+      entry.categoriesRef === undefined &&
+      entry.values !== undefined &&
+      (categories === undefined || categories.length === 0)
+    ) {
+      categories = entry.values.map((_, idx) => String(idx + 1))
+    }
     let next = serXml
     if (entry.name !== undefined) {
       const tx = `<c:tx><c:v>${escapeXmlText(entry.name)}</c:v></c:tx>`
@@ -883,21 +958,45 @@ function setSeriesData(
           next.slice(anchor.index + anchor[0].length)
       }
     }
-    if (entry.categories !== undefined) {
-      if (isScatter) {
-        next = setScatterXValues(next, entry.categories, entry.categoriesRef)
+    if (
+      !isScatter &&
+      (categories === undefined || categories.length === 0) &&
+      entry.categoriesRef !== undefined &&
+      (!hasCategorySource || !sameCategoryRef)
+    ) {
+      // A new reference with no labels is a source without a cache. Keep an
+      // existing numeric/multilevel source shape when re-pointing it.
+      const cat = hasCategorySource
+        ? previousCat
+            .replace(
+              /<c:f>[\s\S]*?<\/c:f>/,
+              () => `<c:f>${escapeXmlText(entry.categoriesRef!)}</c:f>`,
+            )
+            .replace(
+              /<c:(strCache|numCache|multiLvlStrCache)(?:\s[^>]*)?>[\s\S]*?<\/c:\1>|<c:(?:strCache|numCache|multiLvlStrCache)\s*\/>/g,
+              '',
+            )
+        : buildChartCategoryXml(undefined, 0, entry.categoriesRef)
+      if (previousCat !== '') {
+        next = next.replace(catPattern, () => cat)
       } else {
-        const catPattern = /<c:cat\/>|<c:cat>[\s\S]*?<\/c:cat>/
-        const previousCat = catPattern.exec(next)?.[0] ?? ''
+        const valElement = /<c:val\s*\/>|<c:val>/.exec(next)
+        if (!valElement) throw new ChartEditError('Chart series has no value element.')
+        next = next.slice(0, valElement.index) + cat + next.slice(valElement.index)
+      }
+      categories = undefined
+    }
+    if (categories !== undefined) {
+      if (isScatter) {
+        next = setScatterXValues(next, categories, entry.categoriesRef)
+      } else {
         // Numeric categories cached as numRef/numLit (dates) keep that
         // shape and its formatCode; a strRef rewrite drops the format for good.
-        const numeric = entry.categories.map((value) => Number(value))
+        const numeric = categories.map((value) => Number(value))
         const keepNumeric =
           /<c:num(?:Ref|Lit)[\s>]/.test(previousCat) &&
-          entry.categories.length > 0 &&
-          entry.categories.every(
-            (value, idx) => value.trim() !== '' && Number.isFinite(numeric[idx]),
-          )
+          categories.length > 0 &&
+          categories.every((value, idx) => value.trim() !== '' && Number.isFinite(numeric[idx]))
         // A ref-less entry must not demote an existing reference to a
         // literal: keep the previous c:f (already escaped) and only refresh
         // the cache.
@@ -911,7 +1010,7 @@ function setSeriesData(
             /<c:formatCode>([^<]*)<\/c:formatCode>/.exec(previousCat)?.[1] ?? 'General'
           const data =
             `<c:formatCode>${formatCode}</c:formatCode>` +
-            `<c:ptCount val="${entry.categories.length}"/>` +
+            `<c:ptCount val="${categories.length}"/>` +
             numeric.map((value, idx) => `<c:pt idx="${idx}"><c:v>${value}</c:v></c:pt>`).join('')
           // c:f is mandatory inside numRef, so ref-less data must be a literal.
           cat =
@@ -921,8 +1020,8 @@ function setSeriesData(
                 `<c:numCache>${data}</c:numCache></c:numRef></c:cat>`
         } else {
           const points =
-            `<c:ptCount val="${entry.categories.length}"/>` +
-            entry.categories
+            `<c:ptCount val="${categories.length}"/>` +
+            categories
               .map((value, idx) => `<c:pt idx="${idx}"><c:v>${escapeXmlText(value)}</c:v></c:pt>`)
               .join('')
           // c:f is mandatory inside strRef, so ref-less data must be a literal.
@@ -966,6 +1065,28 @@ function setSeriesData(
             `<c:numCache>${data}</c:numCache></c:numRef></c:${tag}>`
       if (!valPattern.test(next)) throw new ChartEditError('Chart series has no value element.')
       next = next.replace(valPattern, () => val)
+      // Minimal legacy charts without a theme/style or drawing properties
+      // import as transparent bars in LibreOffice. Repair only the edited bare
+      // bar series; explicit noFill, gradients, point styles and chart styles
+      // remain the author's choice. Unedited chart parts are never normalized.
+      if (
+        plot?.family === 'barChart' &&
+        !context.hasExternalStyle &&
+        !/<c:spPr[\s/>]|<a:(?:noFill|solidFill|gradFill|blipFill|pattFill|grpFill)[\s/>]/.test(
+          serXml,
+        ) &&
+        !/<(?:[\w]+:)?(?:style|colorStyle|themeOverride|AlternateContent|externalData)[\s/>]/.test(
+          chartXml,
+        )
+      ) {
+        const anchor = /<\/c:tx>|<c:order\b[^>]*\/>/.exec(next)
+        if (!anchor) throw new ChartEditError('Chart series is missing idx/order structure.')
+        // tx, when present, follows order and precedes spPr.
+        const txEnd = next.indexOf('</c:tx>')
+        const at = txEnd === -1 ? anchor.index + anchor[0].length : txEnd + '</c:tx>'.length
+        const fill = `<c:spPr><a:solidFill><a:srgbClr val="${defaultChartSeriesColor(position).slice(1)}"/></a:solidFill></c:spPr>`
+        next = next.slice(0, at) + fill + next.slice(at)
+      }
     }
     return next
   })

@@ -240,6 +240,7 @@ function ToolSymbol({ symbol }: { readonly symbol: string }): React.JSX.Element 
 }
 
 interface ExcelShellProps {
+  readonly assistantAvailable?: boolean
   readonly openingWorkbook: boolean
   readonly prompt: string
   readonly preview: ChangePlan | null
@@ -483,6 +484,7 @@ const PIVOT_MODEL_ERRORS: Record<PivotModelError, StringKey> = {
 }
 
 export function ExcelShell({
+  assistantAvailable = true,
   prompt,
   preview,
   selectionFormat,
@@ -599,7 +601,7 @@ export function ExcelShell({
   })
   // Persisted so a closed AI panel stays closed on next launch (docs/slides parity)
   const [isCopilotOpen, setIsCopilotOpen] = useState(() =>
-    aiPanelInitiallyOpen('ai-sheets-show-ai'),
+    assistantAvailable && aiPanelInitiallyOpen('ai-sheets-show-ai'),
   )
   // the sidebar switch is a soft hide; it closes the panel when it turns off
   const aiSidebarEnabled = useAiSidebarEnabled(setIsCopilotOpen)
@@ -895,7 +897,7 @@ export function ExcelShell({
   return (
     <main
       className={`app-shell ${isCopilotOpen ? '' : 'copilot-collapsed'}${
-        !isCopilotOpen && !aiSidebarEnabled ? ' copilot-off' : ''
+        (!assistantAvailable || (!isCopilotOpen && !aiSidebarEnabled)) ? ' copilot-off' : ''
       }`}
       inert={openingWorkbook}
       aria-busy={openingWorkbook}
@@ -1024,6 +1026,7 @@ export function ExcelShell({
             setIsCopilotOpen(true)
             onSend(nextPrompt)
           }}
+          assistantAvailable={assistantAvailable}
           aiOpen={isCopilotOpen}
           onAiToggle={() => setIsCopilotOpen((open) => !open)}
         />
@@ -1031,7 +1034,7 @@ export function ExcelShell({
 
       {/* AI panel docks on the left, full height under the ribbon (unified with docs) */}
       <div className="sheet-body">
-        <AiChatPanel
+        {assistantAvailable && <AiChatPanel
           isOpen={isCopilotOpen}
           hideRail={!aiSidebarEnabled}
           hasContent={sheetHasContent}
@@ -1066,7 +1069,7 @@ export function ExcelShell({
           onCitation={onAiCitation}
           onExpand={() => setIsCopilotOpen(true)}
           onCollapse={() => setIsCopilotOpen(false)}
-        />
+        />}
         <div className="sheet-main">
           <section className="workbook-area">
             <div id="univer-container" className="spreadsheet" />
@@ -1087,7 +1090,7 @@ export function ExcelShell({
               </div>
             )}
           </section>
-          {aiSelectionAskAnchor && aiScopeRange && !aiBusy && (
+          {assistantAvailable && aiSelectionAskAnchor && aiScopeRange && !aiBusy && (
             <AiSelectionAsk
               anchor={aiSelectionAskAnchor}
               range={aiScopeRange}
@@ -1995,6 +1998,7 @@ function Ribbon({
   onCommand,
   onAiRun,
   aiOpen,
+  assistantAvailable,
   onAiToggle,
   onListNames,
   calcManual,
@@ -2032,6 +2036,7 @@ function Ribbon({
   /** Open the AI panel and immediately send the given prompt */
   readonly onAiRun: (prompt: string) => void
   /** AI side panel visibility (docs/slides parity: the entry button toggles it) */
+  readonly assistantAvailable: boolean
   readonly aiOpen: boolean
   readonly onAiToggle: () => void
   readonly onRefreshPivot: () => string | null
@@ -3532,7 +3537,7 @@ function Ribbon({
     : [...fontSizes, echoSize].sort((a, b) => a - b)
   return (
     <div className="ribbon" data-ribbon-body="">
-      <RibbonGroup label={t('appGroupAiAssistant')}>
+      {assistantAvailable && <RibbonGroup label={t('appGroupAiAssistant')}>
         <button
           className={`ribbon-tool as-button large ai-entry ${aiOpen ? 'active' : ''}`}
           data-tip={t('aiOpenAssistant')}
@@ -3602,7 +3607,7 @@ function Ribbon({
             <strong>{t('aiAnalyzeBtn')}</strong>
           </span>
         </button>
-      </RibbonGroup>
+      </RibbonGroup>}
       <RibbonGroup label={t('appGroupClipboard')}>
         <button
           className="ribbon-tool as-button large"

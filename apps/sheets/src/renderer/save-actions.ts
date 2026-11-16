@@ -8,6 +8,9 @@
 import type { WorkbookFile, WorkbookFilterState, WorkbookSaveRequest } from '../shared/desktop-api'
 import {
   carryLateJournalCells,
+  hasLateNonCellChanges,
+  acknowledgeJournal,
+  snapshotJournal,
   isSheetRemoved,
   journalSize,
   snapshotJournalCells,
@@ -33,6 +36,8 @@ import {
   handleExportCsv,
   serializeActiveSheetCsv,
 } from './csv-export'
+import { chartEditsWithUndo, visualEditsWithUndo } from './save-ack'
+import { mutationAdmission, type MutationPhase } from './mutation-admission'
 import { settleFormulas } from './formula-settle'
 import type { CellScalar, CellState } from '@genoffice/xlsx-gateway/domain/workbook.types'
 import type { SheetRedactionState } from '@genoffice/xlsx-gateway/gateway/xlsx-redaction'
@@ -69,6 +74,12 @@ export interface SaveContext {
     opened: WorkbookFile,
     opts?: { continueChat?: boolean; onInitialRangeLoaded?: () => void },
   ) => void | Promise<boolean>
+  /** Web opt-in: adopt the saved session without replacing the live runtime.
+   * The caller retains the open-time metadata/visual baseline used by undo. */
+  applySavedWorkbook?: (file: WorkbookFile) => void | Promise<void>
+  /** Await debounced chart reads after formulas settle, before snapshotting. */
+  flushPendingChanges?: () => Promise<void>
+  onMutationPhase?: (phase: MutationPhase) => void
   /** pending-edit badge; the reopen resets it to 0 before late edits are carried over */
   setPendingEdits?: (count: number) => void
   /** live cell readout, for the cached values of formulas an MCP batch wrote (optional in tests) */
@@ -111,6 +122,9 @@ export interface SaveContext {
 /// CSV files whose "keep this format?" question was already answered with
 /// "Continue as CSV" — asked once per file, like modern Excel's banner.
 const confirmedCsvSaves = new Set<string>()
+// A committed structural base cannot be replayed safely after a refused
+// reinstall. Keep the live editor intact and refuse subsequent writes.
+const savesAwaitingReload = new WeakSet<LazyWorkbookState>()
 
 /// One formula cell's value the recalc overlay contributes to a save request.
 export type RecalculatedFormulaValue = {
@@ -430,12 +444,120 @@ export interface SaveOutcome {
  * (main enforces the overwrite policy; the request carries it). Callers pass
  * mode 'save-as' with it.
  */
+/** Conservative before-snapshot decision, shared by admission and adoption. */
+function canSaveInPlace(ctx: SaveContext, state: LazyWorkbookState): boolean {
+  const j = state.editJournal
+  const structuralOps = toSaveStructuralOps(j)
+  const sheetOps = toSaveSheetOps(j)
+  const visualAdditions = toSaveVisualAdds(j)
+  const cellImageAdditions = toSaveCellImageAdds(j)
+  const tableAdditions = toSaveTableAdds(j)
+  const tableEdits = toSaveTableEdits(j)
+  const pivotAdditions = toSavePivotAdds(j)
+  const sparklineAdditions = toSaveSparklineAdds(j)
+  const bulkConstantFills = toSaveBulkConstantFills(j)
+  const chartEdits = chartEditsWithUndo(j, state.file.visuals ?? [], toSaveChartEdits(j))
+  const visualEdits = visualEditsWithUndo(j, state.file.visuals ?? [], toSaveVisualEdits(j))
+  const sheetProtections = [...j.sheetProtection]
+  const workbookProtectionState = j.workbookProtection.desired
+  const themeState = j.theme.colors === undefined && j.theme.fonts === undefined ? null : j.theme
+  const protectedRangeStates = [...j.protectedRangesDirty]
+  const slicerState = ctx.slicerState?.() ?? null
+  return Boolean(
+    ctx.applySavedWorkbook &&
+    structuralOps.length === 0 &&
+    sheetOps.length === 0 &&
+    visualAdditions.length === 0 &&
+    cellImageAdditions.length === 0 &&
+    tableAdditions.length === 0 &&
+    tableEdits.length === 0 &&
+    pivotAdditions.length === 0 &&
+    sparklineAdditions.length === 0 &&
+    bulkConstantFills.length === 0 &&
+    chartEdits.every(
+      (edit) =>
+        edit.chartType === undefined &&
+        edit.seriesSet === undefined &&
+        edit.seriesColors === undefined &&
+        edit.pointColors === undefined &&
+        edit.pointExplosions === undefined &&
+        // An omitted reference cannot clear a reference already on disk.
+        // Reopen after adding/changing one so undo starts from the new base.
+        (edit.series ?? []).every((series) => {
+          const baseline = state.file.visuals?.find(
+            (visual) => visual.chartPath === edit.chartPath,
+          )?.chart?.series[series.index]
+          return (
+            (series.valuesRef === undefined ||
+              (baseline !== undefined && series.valuesRef === baseline.valuesRef)) &&
+            (series.categoriesRef === undefined ||
+              (baseline !== undefined && series.categoriesRef === baseline.categoriesRef))
+          )
+        }),
+    ) &&
+    visualEdits.every(
+      (edit) =>
+        !edit.remove &&
+        edit.zIndex === undefined &&
+        edit.fillColor === undefined &&
+        edit.lineColor === undefined &&
+        edit.frameSize === undefined,
+    ) &&
+    sheetProtections.length === 0 &&
+    workbookProtectionState === null &&
+    themeState === null &&
+    protectedRangeStates.length === 0 &&
+    slicerState === null
+  )
+}
+
 export async function handleSave(
   ctx: SaveContext,
   mode: 'save' | 'save-as' | 'recovery',
   quiet = false,
   explicitTarget?: { path: string; overwrite: boolean },
   defaultName?: string,
+): Promise<SaveOutcome> {
+  const state = ctx.lazyWorkbookRef.current
+  if (!state) return handlePreparedSave(ctx, mode, quiet, explicitTarget, defaultName, false)
+  await settleFormulas(ctx.univerRef.current)
+  await ctx.flushPendingChanges?.()
+  if (ctx.lazyWorkbookRef.current !== state) return { ok: false }
+  // Recovery never replaces a runtime; ordinary in-place saves retain late edits.
+  if (mode === 'recovery' || !ctx.applySavedWorkbook || canSaveInPlace(ctx, state)) {
+    return handlePreparedSave(ctx, mode, quiet, explicitTarget, defaultName, Boolean(ctx.applySavedWorkbook) && mode !== 'recovery')
+  }
+  const gate = mutationAdmission(state.editJournal)
+  const unsubscribe = ctx.onMutationPhase ? gate.subscribe(ctx.onMutationPhase) : () => {}
+  const lock = gate.close() // close synchronously, BEFORE waiting for active work
+  try {
+    // freeze only after task drain AND formula/chart convergence. While draining,
+    // admitted tasks may finish their writes and invoke their child applies.
+    await lock.drain()
+    await lock.flush(async () => {
+      await settleFormulas(ctx.univerRef.current)
+      await ctx.flushPendingChanges?.()
+    })
+    await lock.freeze()
+    if (ctx.lazyWorkbookRef.current !== state) return { ok: false }
+    return await handlePreparedSave(ctx, mode, quiet, explicitTarget, defaultName, canSaveInPlace(ctx, state))
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    ctx.setMessage(message)
+    return { ok: false, error: message }
+  } finally {
+    lock.release()
+    unsubscribe()
+  }
+}
+
+async function handlePreparedSave(
+  ctx: SaveContext,
+  mode: 'save' | 'save-as' | 'recovery',
+  quiet: boolean,
+  explicitTarget: { path: string; overwrite: boolean } | undefined,
+  defaultName: string | undefined,
+  canApplyInPlace: boolean,
 ): Promise<SaveOutcome> {
   const state = ctx.lazyWorkbookRef.current
   // Captured at save start (the Ctrl+S moment): the post-save session swap
@@ -473,12 +595,41 @@ export async function handleSave(
     if (mode !== 'recovery') ctx.setMessage(t('appDemoNoSave'))
     return { ok: false }
   }
+  if (savesAwaitingReload.has(state)) {
+    const error =
+      'The file was saved, but newer workbook changes remain only in this editor. Saving and downloading are blocked to prevent replaying structural edits. Keep this editor open and copy those changes to another workbook before reloading.'
+    if (mode !== 'recovery') ctx.setMessage(error)
+    return { ok: false, error }
+  }
+  if (ctx.lazyWorkbookRef.current !== state) return { ok: false }
+  if (
+    ctx.applySavedWorkbook &&
+    journalSize(state.editJournal) === 0 &&
+    !ctx.redactionStates?.() &&
+    !ctx.slicerState?.() &&
+    !ctx.externalLinkOps?.() &&
+    mode === 'save' &&
+    !state.file.restoredFromRecovery &&
+    !state.file.unsavedNew &&
+    externalLinkFormulaValueCount(state) === 0
+  ) {
+    return { ok: false, reason: 'no-edits' }
+  }
+  const journalAtSave = snapshotJournal(state.editJournal)
   const edits = toSaveEdits(state.editJournal)
   const cellsAtSave = snapshotJournalCells(state.editJournal)
   const bulkConstantFills = toSaveBulkConstantFills(state.editJournal)
   const structuralOps = toSaveStructuralOps(state.editJournal)
-  const chartEdits = toSaveChartEdits(state.editJournal)
-  const visualEdits = toSaveVisualEdits(state.editJournal)
+  const chartEdits = chartEditsWithUndo(
+    state.editJournal,
+    state.file.visuals ?? [],
+    toSaveChartEdits(state.editJournal),
+  )
+  const visualEdits = visualEditsWithUndo(
+    state.editJournal,
+    state.file.visuals ?? [],
+    toSaveVisualEdits(state.editJournal),
+  )
   const visualAdditions = toSaveVisualAdds(state.editJournal)
   const cellImageAdditions = toSaveCellImageAdds(state.editJournal)
   const tableAdditions = toSaveTableAdds(state.editJournal)
@@ -866,6 +1017,15 @@ export async function handleSave(
       ctx.setMessage(t('appSaveCanceled'))
       return { ok: false }
     }
+    if (canApplyInPlace) {
+      await ctx.applySavedWorkbook!(result.file)
+      acknowledgeJournal(state.editJournal, journalAtSave)
+      ctx.setPendingEdits?.(journalSize(state.editJournal))
+      const saved = t('appSaved')
+      ctx.setMessage(saved)
+      if (!quiet) showToast(saved)
+      return { ok: true, ...(result.file.path !== undefined ? { path: result.file.path } : {}) }
+    }
     if (!splitSave) {
       // Cross-save undo: carry the Univer undo stack over the session swap.
       // Saves with sheet add/remove/rename ops opt out — sheets created this
@@ -879,7 +1039,7 @@ export async function handleSave(
           : null,
       )
       ctx.stashViewRestore(viewAtSave)
-      if (!(await reopenCarryingLateEdits(ctx, state, cellsAtSave, result.file))) {
+      if (!(await reopenCarryingLateEdits(ctx, state, cellsAtSave, journalAtSave, result.file))) {
         return { ok: false }
       }
       const saved = t('appSaved')
@@ -936,14 +1096,14 @@ export async function handleSave(
       if (ctx.lazyWorkbookRef.current !== state) return { ok: false }
       if (second.canceled) {
         ctx.stashViewRestore(viewAtSave)
-        if (!(await reopenCarryingLateEdits(ctx, state, cellsAtSave, result.file))) {
+        if (!(await reopenCarryingLateEdits(ctx, state, cellsAtSave, journalAtSave, result.file))) {
           return { ok: false }
         }
         ctx.setMessage(t('appSaveSecondCanceled'))
         return { ok: false }
       }
       ctx.stashViewRestore(viewAtSave)
-      if (!(await reopenCarryingLateEdits(ctx, state, cellsAtSave, second.file))) {
+      if (!(await reopenCarryingLateEdits(ctx, state, cellsAtSave, journalAtSave, second.file))) {
         return { ok: false }
       }
       const saved = t('appSavedTwoPhase')
@@ -953,7 +1113,7 @@ export async function handleSave(
     } catch (error: unknown) {
       if (ctx.lazyWorkbookRef.current !== state) return { ok: false }
       ctx.stashViewRestore(viewAtSave)
-      if (!(await reopenCarryingLateEdits(ctx, state, cellsAtSave, result.file))) {
+      if (!(await reopenCarryingLateEdits(ctx, state, cellsAtSave, journalAtSave, result.file))) {
         return { ok: false }
       }
       const failed = t('appSaveSecondFailed', {
@@ -982,14 +1142,44 @@ async function reopenCarryingLateEdits(
   ctx: SaveContext,
   state: LazyWorkbookState,
   cellsAtSave: JournalCellSnapshot,
+  journalAtSave: ReturnType<typeof snapshotJournal>,
   file: WorkbookFile,
 ): Promise<boolean> {
+  if (hasLateNonCellChanges(state.editJournal, journalAtSave)) {
+    savesAwaitingReload.add(state)
+    ctx.setMessage(
+      'The file was saved, but newer workbook changes remain only in this editor. Saving and downloading are blocked. Keep this editor open and copy those changes to another workbook before reloading.',
+    )
+    ctx.setPendingEdits?.(journalSize(state.editJournal))
+    return false
+  }
+  // Read the view at replacement time: a user can scroll or switch sheets
+  // while disk/network work is pending.
+  const workbook = ctx.univerRef.current?.univerAPI.getActiveWorkbook()
+  const sheet = workbook?.getActiveSheet()
+  if (workbook && sheet) {
+    let range: ReturnType<typeof workbook.getActiveRange> | null = null
+    try {
+      range = workbook.getActiveRange()
+    } catch {
+      /* stale whole-column selection */
+    }
+    const row = range?.getRow() ?? 0
+    const column = range?.getColumn() ?? 0
+    const anchor = getScrollAnchor(workbook, sheet)
+    ctx.stashViewRestore({
+      sheetId: sheet.getSheetId(),
+      row,
+      column,
+      viewRow: anchor?.row ?? row,
+      viewColumn: anchor?.column ?? column,
+    })
+  }
   if ((await ctx.openLazyWorkbook(file, { continueChat: true })) === false) return false
   const next = ctx.lazyWorkbookRef.current
   if (!next || next === state) return true
-  if (carryLateJournalCells(state.editJournal, cellsAtSave, next.editJournal) > 0) {
-    ctx.setPendingEdits?.(journalSize(next.editJournal))
-  }
+  carryLateJournalCells(state.editJournal, cellsAtSave, next.editJournal)
+  ctx.setPendingEdits?.(journalSize(next.editJournal))
   return true
 }
 

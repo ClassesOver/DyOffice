@@ -165,6 +165,30 @@ test('resolves wildcard workspace exports and still rejects real transitive Node
  const result=await checkWebBoundaries(root);assert.equal(result.violations.length,1);assert.match(result.violations[0],/csv-limits.ts.*node:fs/)
 })
 
+test('follows wildcard workspace exports and gives exact and more specific exports priority', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'dyoffice-wildcard-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const files = {
+    'apps/web/src/main.ts': "import '@genoffice/shared/gateway/native'; import '@genoffice/shared/exact'; import '@genoffice/shared/safe/module'",
+    'packages/shared/package.json': JSON.stringify({name:'@genoffice/shared',exports:{'./*':'./src/*.ts','./exact':'./exact.ts','./safe/*':{browser:'./browser/*.ts',default:'./node/*.ts'}}}),
+    'packages/shared/src/gateway/native.ts': "import 'node:fs'",
+    'packages/shared/exact.ts': 'export const x = 1',
+    'packages/shared/browser/module.ts': 'export const x = 1',
+    'packages/shared/node/module.ts': "import 'node:path'",
+  }
+  for (const [path, content] of Object.entries(files)) {
+    await mkdir(join(root, path, '..'), { recursive: true })
+    await writeFile(join(root, path), content)
+  }
+  const result = await checkWebBoundaries(root)
+  assert.equal(result.scanned, 4)
+  assert.equal(result.violations.length, 1)
+  assert.match(result.violations[0], /gateway\/native.ts:1:.*node:fs/)
+  await writeFile(join(root, 'apps/web/src/main.ts'), "import '@genoffice/shared/blocked'")
+  await writeFile(join(root, 'packages/shared/package.json'), JSON.stringify({name:'@genoffice/shared',exports:{'./*':'./src/*.ts','./blocked':null}}))
+  await assert.rejects(checkWebBoundaries(root), /Unsupported workspace export/)
+})
+
 test('follows Vite worker code queries while retaining raw asset imports', async t => {
  const root=await mkdtemp(join(tmpdir(),'boundary-worker-'));t.after(()=>rm(root,{recursive:true,force:true}))
  const files={'apps/web/src/main.ts':"import Worker from '../../../packages/helper/worker.ts?worker&inline'; import text from './readme.ts?raw'",'packages/helper/worker.ts':"import 'node:fs'",'apps/web/src/readme.ts':"// text asset"}

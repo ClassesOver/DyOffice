@@ -71,4 +71,3 @@ Local Node 24.22.1. Existing external npm packages were reused to fit the execut
 all workspace links were redirected to this exact candidate's sources. This is **not a fresh-install proof**.
 The target CI above ran its own declared install; the candidate's CI must independently do the same.
 No production credentials, real business documents or customer data were used.
-

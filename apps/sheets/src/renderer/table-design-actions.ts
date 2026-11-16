@@ -1,3 +1,4 @@
+import { admitMutation, mutationAdmission } from './mutation-admission'
 /**
  * Table Design tab + Ctrl+T: Excel ListObject editing over both session
  * tables (journal tableAdds, rendered by Univer's table plugin) and tables
@@ -283,7 +284,9 @@ function runGuarded(
   ctx: TableDesignContext,
   action: () => string | void | Promise<string | void>,
 ): void {
-  void (async () => {
+  const journal = ctx.lazyWorkbookRef.current?.editJournal
+  if (!admitMutation(journal, ctx.setMessage)) return
+  const work = async () => {
     try {
       const message = await action()
       const state = ctx.lazyWorkbookRef.current
@@ -293,7 +296,8 @@ function runGuarded(
       ctx.setMessage(error instanceof Error ? error.message : t('appTableCreateFailed'))
     }
     ctx.refreshSelection()
-  })()
+  }
+  void (journal ? mutationAdmission(journal).run(work) : work()).catch((error) => ctx.setMessage(String(error)))
 }
 
 /// Streamed sheets may not have the rows around the table resident yet; an
