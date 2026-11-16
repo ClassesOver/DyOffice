@@ -1,3 +1,4 @@
+import {registerProbeAssets} from './modules/providers/probe-assets.ts'
 import {createAdminProviderPipeline,type AdminPipelineProfile} from './modules/providers/admin-pipeline.ts'
 import {registerLocalProviderProbe} from './modules/providers/local-probe.ts'
 import { createSheetsSaveService, type SheetsPlanner, type SheetsSaveNative } from './modules/sheets/save.ts'
@@ -57,12 +58,15 @@ export interface LocalWebConfig {
   db: IdentityStore; businessPool?: Pool; deploymentId: string; origin: string; csrfKey: string; passwords?: PasswordService;
   objectStore?: ObjectStore; filePolicy?: FilePolicy; nativeDocsDirectory?: string; nativeSheetsDirectory?: string; nativeJobs?: boolean; sheetsNative?: SheetsNative & Partial<SheetsSaveNative>; sheetsPlanner?: SheetsPlanner; sheetsPackageReader?: SheetsPackageReader; localShellDirectory?: string;
   globalConfigKeyring?: SecretKeyring;
+  adminProviderProbeDirectory?:string;
   adminProviderProbe?: {profiles:readonly AdminPipelineProfile[]};
   passwordBlocklistFile?: string; loginLimits?: LoginLimits; idleMs?: number; absoluteMs?: number; closeDb?: () => Promise<void>
 }
 export async function buildLocalApp(config: LocalWebConfig): Promise<FastifyInstance> {
   if (process.env.NODE_ENV === 'production') throw new Error('Local runtime is not allowed in production before enterprise release gates')
   if(config.adminProviderProbe!==undefined && (!config.adminProviderProbe || Object.keys(config.adminProviderProbe).some(k=>k!=='profiles') || !Array.isArray(config.adminProviderProbe.profiles) || !config.adminProviderProbe.profiles.length || !config.businessPool || !config.globalConfigKeyring || config.adminProviderProbe.profiles.some(p=>p.deploymentId!==config.deploymentId)))throw new Error('Invalid local provider probe configuration')
+  if(config.adminProviderProbeDirectory!==undefined && (!config.adminProviderProbe || typeof config.adminProviderProbeDirectory!=='string' || !config.adminProviderProbeDirectory))throw new Error('Probe assets require explicit local probe')
+  const probeAssets=config.adminProviderProbeDirectory?await createStaticAssets({assetMode:'built',assetDirectory:config.adminProviderProbeDirectory,pages:['index.html'],cacheControl:'private, no-store'}):undefined
   if ('userToken' in config || 'adminToken' in config) throw new Error('Local mode rejects development tokens')
   async function assertReady() {
     await config.db.assertCurrent()
@@ -103,7 +107,7 @@ export async function buildLocalApp(config: LocalWebConfig): Promise<FastifyInst
   if (config.businessPool) {
     const transactions = createPrincipalTransactions({ pool: config.businessPool, deploymentId: config.deploymentId, idleMs: config.idleMs })
     if(config.adminProviderProbe){
-      try{probe=createAdminProviderPipeline({transactions,keyring:config.globalConfigKeyring!,profiles:config.adminProviderProbe.profiles});registerLocalProviderProbe(app,{pipeline:probe,sessions,csrf})}
+      try{probe=createAdminProviderPipeline({transactions,keyring:config.globalConfigKeyring!,profiles:config.adminProviderProbe.profiles});registerLocalProviderProbe(app,{pipeline:probe,sessions,csrf});if(probeAssets)registerProbeAssets(app,probeAssets,sessions)}
       catch{probe?.dispose();await app.close();throw new Error('Invalid local provider probe configuration')}
     }
     registerPreferenceRoutes(app, createPreferenceService(transactions), sessions, csrf)
