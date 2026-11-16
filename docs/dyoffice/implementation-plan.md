@@ -104,11 +104,13 @@ docs/dyoffice/               当前计划及 inventory/ evidence/ adr/
 
 **接口：** 输出第 1 节全部共享类型和 BrowserHost；`getCapabilities(): Promise<CapabilityCatalog>` 明确区分 unsupported、read_only、editable。
 
-- [ ] 编写未知宿主方法、错误 DTO、缺失版本号、超大事件和 secret 字段泄漏测试。
-- [ ] 运行 `npm run test:web:unit -- host-contract.test.mjs`，确认契约缺失导致 RED。
-- [ ] 实现类型和静态校验；未知功能明确失败，不返回假成功；为 Electron 现有行为保留适配入口。
-- [ ] 同命令 GREEN，`typecheck:web` 通过，验证无 Node 依赖混入浏览器包。
-- [ ] 提交 `feat(web): define host and transport contracts`。
+- [x] 编写未知宿主方法、错误 DTO、缺失版本号、超大事件和 secret 字段泄漏测试。
+- [x] 运行 `npm run test:web:unit -- host-contract.test.mjs`，确认契约缺失导致 RED。
+- [x] 实现类型和静态校验；未知功能明确失败，不返回假成功；为 Electron 现有行为保留适配入口。
+- [x] 同命令 GREEN，`typecheck:web` 通过，验证无 Node 依赖混入浏览器包。
+- [x] 提交 `feat(web): define host and transport contracts`。
+
+**有界验收（2026-11-16）：** 原 T01 共享契约与 BrowserHost 骨架五项已按 [最终验收证据](evidence/t01-final-acceptance.md) 核验。此处仅签收契约和适配接缝，不代表四格式真实编辑、AI/MCP、事件 payload 授权或生产部署完成。按用户最新决定，不以 CI 作为此次合并条件；没有新 CI 成功声明。
 
 ### T02 模块化 API 与原型迁移接缝
 

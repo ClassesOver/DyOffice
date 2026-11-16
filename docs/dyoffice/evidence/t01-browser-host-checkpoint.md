@@ -163,3 +163,7 @@ The first Web run in the isolated copy omitted workspace-local dependency direct
 ### Current integration decision (2026-11-16)
 
 Integrated documentation-only target `2c9003f4a429ebb29a67371891e4cc3bcf829ab6` without reverting T00's bounded acceptance or its final runtime evidence. The owner's later explicit instruction excludes CI from the merge condition; earlier CI-required statements above are historical, not a claim of a new CI pass. Local verification and absence of conflicts or actionable review findings remain required. Automated reviews were quota-blocked and are not approvals. This command-only PR does not by itself mark every T01 checklist item complete.
+
+## Final bounded acceptance (2026-11-16)
+
+The original T01 contract/skeleton checklist is now covered by [final acceptance](t01-final-acceptance.md). This supersedes the earlier partial status and missing-command notes for that bounded scope. Four-editor integration, runtime authorization, durable saves and production validation remain their own task gates. Historical failures and incomplete full-suite attempts above are retained, not relabeled as passes.
