@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createAiDocument } from '../src/renderer/ai/create-document'
 import { handleExportCsv } from '../src/renderer/csv-export'
 import { createEditJournal } from '../src/renderer/edit-journal'
-import { FORMULA_SETTLE_TIMEOUT_MS } from '../src/renderer/formula-settle'
+import { FORMULA_SETTLE_TIMEOUT_MS, settleFormulas } from '../src/renderer/formula-settle'
 import { setModuleLang } from '../src/renderer/i18n/locale'
 import {
   handleExportPdf,
@@ -18,7 +18,7 @@ const tick = () => new Promise((resolve) => setTimeout(resolve, 0))
 /// A fully loaded one-row workbook (A1 = 2, B1 = 3, C1 = A1*B1) whose formula
 /// result has not landed yet, as right after the stream completes on a file
 /// saved without cached values.
-function harness(pendingFormula = true) {
+function harness(pendingFormula = true, appliedBarrier = true) {
   const cells: { v?: number; f?: string }[] = [
     { v: 2 },
     { v: 3 },
@@ -53,6 +53,13 @@ function harness(pendingFormula = true) {
   }
   const calculate = vi.fn()
   let calculationEnd: ((state: number) => void) | null = null
+  let resolveApplied: (() => void) | null = null
+  const applied = vi.fn(
+    () =>
+      new Promise<void>((resolve) => {
+        resolveApplied = resolve
+      }),
+  )
   const workbook = {
     getActiveSheet: () => worksheet,
     getActiveRange: () => null,
@@ -67,6 +74,7 @@ function harness(pendingFormula = true) {
       getActiveWorkbook: () => workbook,
       getFormula: () => ({
         executeCalculation: calculate,
+        ...(appliedBarrier ? { onCalculationResultApplied: applied } : {}),
         calculationEnd: (callback: (state: number) => void) => {
           calculationEnd = callback
           return { dispose: () => undefined }
@@ -103,10 +111,19 @@ function harness(pendingFormula = true) {
       runOps: () => Promise.reject(new Error('not used')),
     } as PageLayoutContext,
     calculate,
+    applied,
+    cells,
+    runtime,
+    notifyCalculationEnd: () => calculationEnd?.(1),
+    applyCalculationResult: (value = 6) => {
+      cells[2]!.v = value
+      resolveApplied?.()
+    },
     /** the engine's pass lands in the model and reports its end */
     finishCalculation: () => {
       cells[2]!.v = 6
       calculationEnd?.(1)
+      resolveApplied?.()
     },
   }
 }
@@ -142,11 +159,21 @@ describe('exports right after the load wait for the formula results', () => {
     expect(exportCsv.mock.calls[0]?.[0].content).toBe('2,3,6\r\n')
   })
 
-  it('CSV export of a settled workbook runs no calculation', async () => {
+  it('CSV export recalculates retained caches and waits past calculationEnd for the model apply', async () => {
     const h = harness(false)
-    await handleExportCsv(h.csvContext)
-    expect(h.calculate).not.toHaveBeenCalled()
-    expect(exportCsv.mock.calls[0]?.[0].content).toBe('2,3,6\r\n')
+    h.cells[0]!.v = 21.25
+    // The prior cache is still present: non-null is not proof of freshness.
+    const exported = handleExportCsv(h.csvContext)
+    await tick()
+    expect(h.calculate).toHaveBeenCalledTimes(1)
+    expect(h.applied).toHaveBeenCalledTimes(1)
+    expect(exportCsv).not.toHaveBeenCalled()
+    h.notifyCalculationEnd()
+    await tick()
+    expect(exportCsv).not.toHaveBeenCalled()
+    h.applyCalculationResult(63.75)
+    await exported
+    expect(exportCsv.mock.calls[0]?.[0].content).toBe('21.25,3,63.75\r\n')
   })
 
   it('CSV export of a workbook replaced during the pass is dropped', async () => {
@@ -206,9 +233,38 @@ describe('exports right after the load wait for the formula results', () => {
     expect(host).not.toBeNull()
   })
 
+  it('legacy fallback settles only formulas missing a cache', async () => {
+    const h = harness(true, false)
+    const settling = settleFormulas(h.runtime)
+    await tick()
+    expect(h.calculate).toHaveBeenCalledTimes(1)
+    h.finishCalculation()
+    await settling
+  })
+
+  it('legacy fallback does not wait for every retained formula cache', async () => {
+    vi.useFakeTimers()
+    const h = harness(false, false)
+    const settling = settleFormulas(h.runtime)
+    h.finishCalculation()
+    await settling
+    expect(h.calculate).toHaveBeenCalledTimes(1)
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('the model-applied barrier times out instead of allowing a stale snapshot', async () => {
+    vi.useFakeTimers()
+    const h = harness(false)
+    const settling = settleFormulas(h.runtime)
+    const rejected = expect(settling).rejects.toThrow('Formula results were not applied')
+    await vi.advanceTimersByTimeAsync(FORMULA_SETTLE_TIMEOUT_MS)
+    await rejected
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
   it('an engine that never settles still exports after the bound', async () => {
     vi.useFakeTimers()
-    const h = harness()
+    const h = harness(true, false)
     const exported = handleExportCsv(h.csvContext)
     await vi.advanceTimersByTimeAsync(2 * FORMULA_SETTLE_TIMEOUT_MS + 1000)
     await exported

@@ -1,3 +1,4 @@
+import { admitMutation, mutationAdmission, type MutationLease } from './mutation-admission'
 /**
  * Putting a picture into a note.
  *
@@ -55,7 +56,7 @@ export function handleRemoveNotePicture(
   column: number,
 ): void {
   const state = ctx.lazyWorkbookRef.current
-  if (!state) return
+  if (!state || !admitMutation(state.editJournal, ctx.setMessage)) return
   recordNotePicture(state.editJournal, { sheetId, row, column, picture: null })
   // the note itself did not change, so nothing else would mark the sheet
   recordNoteChange(state.editJournal, sheetId)
@@ -63,7 +64,7 @@ export function handleRemoveNotePicture(
   ctx.setMessage(t('appNotePictureRemoved', { cell: formatAddress(row, column) }))
 }
 
-async function insertNotePictureFile(
+export async function insertNotePictureFile(
   ctx: RibbonCommandContext,
   runtime: UniverRuntime,
   sheetId: string,
@@ -71,43 +72,49 @@ async function insertNotePictureFile(
   column: number,
   file: File,
 ): Promise<void> {
-  const problem = pictureFileProblem(file)
-  if (problem) {
-    ctx.setMessage(t(problem === 'too-large' ? 'appPictureTooLarge' : 'appPictureBadType'))
-    return
-  }
-  const mediaType = pictureMediaType(file.type)
-  if (!MEDIA_TYPES.has(mediaType)) {
-    ctx.setMessage(t('appPictureBadType'))
-    return
-  }
-  const state = ctx.lazyWorkbookRef.current
-  if (!state) {
-    ctx.setMessage(t('appPictureNeedsFile'))
-    return
-  }
-  const dataUrl = await readAsDataUrl(file)
-  if (!dataUrl) return
-  const size = await measureImage(dataUrl)
-  // The picture is painted onto the note's shape, so the note has to be there.
-  // A note with nothing but a picture is what Excel's own picture-in-a-popup
-  // is, so an empty note is made rather than refused.
-  await ensureNote(ctx, runtime, sheetId, row, column)
-  recordNotePicture(state.editJournal, {
-    sheetId,
-    row,
-    column,
-    picture: {
-      mediaType: mediaType as 'image/png' | 'image/jpeg' | 'image/gif',
-      dataUrl,
-      widthPx: size.width,
-      heightPx: size.height,
-      name: file.name,
-    },
-  })
-  recordNoteChange(state.editJournal, sheetId)
-  ctx.setPendingEdits(journalSize(state.editJournal))
-  ctx.setMessage(t('appNotePictureInserted', { cell: formatAddress(row, column) }))
+  const stateAtStart = ctx.lazyWorkbookRef.current
+  if (!stateAtStart || !admitMutation(stateAtStart.editJournal, ctx.setMessage)) return
+  await mutationAdmission(stateAtStart.editJournal).run(async (lease) => {
+    const problem = pictureFileProblem(file)
+    if (problem) {
+      ctx.setMessage(t(problem === 'too-large' ? 'appPictureTooLarge' : 'appPictureBadType'))
+      return
+    }
+    const mediaType = pictureMediaType(file.type)
+    if (!MEDIA_TYPES.has(mediaType)) {
+      ctx.setMessage(t('appPictureBadType'))
+      return
+    }
+    const state = ctx.lazyWorkbookRef.current
+    if (!state) {
+      ctx.setMessage(t('appPictureNeedsFile'))
+      return
+    }
+    const dataUrl = await readAsDataUrl(file)
+    if (!dataUrl) return
+    const size = await measureImage(dataUrl)
+    // The picture is painted onto the note's shape, so the note has to be there.
+    // A note with nothing but a picture is what Excel's own picture-in-a-popup
+    // is, so an empty note is made rather than refused.
+    if (ctx.lazyWorkbookRef.current !== state) return
+    if (!(await ensureNote(ctx, runtime, sheetId, row, column, lease))) return
+    mutationAdmission(state.editJournal).assertWritable()
+    recordNotePicture(state.editJournal, {
+      sheetId,
+      row,
+      column,
+      picture: {
+        mediaType: mediaType as 'image/png' | 'image/jpeg' | 'image/gif',
+        dataUrl,
+        widthPx: size.width,
+        heightPx: size.height,
+        name: file.name,
+      },
+    })
+    recordNoteChange(state.editJournal, sheetId)
+    ctx.setPendingEdits(journalSize(state.editJournal))
+    ctx.setMessage(t('appNotePictureInserted', { cell: formatAddress(row, column) }))
+  }).catch((error) => ctx.setMessage(error instanceof Error ? error.message : String(error)))
 }
 
 /// Creates the note at the cell when there is none, so a picture can be the
@@ -118,15 +125,18 @@ async function ensureNote(
   sheetId: string,
   row: number,
   column: number,
-): Promise<void> {
+  lease: MutationLease,
+): Promise<boolean> {
   const sheet = runtime.univerAPI.getActiveWorkbook()?.getSheetBySheetId(sheetId)
-  if (!sheet) return
+  if (!sheet) return false
   const hasNote = sheet.getNotes().some((note) => note.row === row && note.col === column)
-  if (hasNote) return
-  await ctx.runOps(
+  if (hasNote) return true
+  const outcome = await ctx.runOps(
     [{ op: 'set_note', sheetId, address: formatAddress(row, column), text: '' }],
     null,
+    lease,
   )
+  return outcome.ok
 }
 
 function readAsDataUrl(file: File): Promise<string | null> {
@@ -134,6 +144,7 @@ function readAsDataUrl(file: File): Promise<string | null> {
     const reader = new FileReader()
     reader.onload = () => resolve(typeof reader.result === 'string' ? reader.result : null)
     reader.onerror = () => resolve(null)
+    reader.onabort = () => resolve(null)
     reader.readAsDataURL(file)
   })
 }

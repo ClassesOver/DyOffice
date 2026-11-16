@@ -1,3 +1,4 @@
+import { configuredSheetsRuntime } from './src/modules/sheets/runtime.ts';
 import { resolve } from 'node:path';
 import { localShellDirectory } from './local-shell-config.mjs';
 import { fileURLToPath } from 'node:url';
@@ -9,6 +10,8 @@ import { connectIdentityStore } from './src/db/identity.ts';
 async function configuredApplication() {
   const mode=process.env.DYOFFICE_AUTH_MODE||'development';
   const shellDirectory=localShellDirectory(process.env);
+  const sheetsFlag=process.env.DYOFFICE_NATIVE_XLSX;
+  if(sheetsFlag && (sheetsFlag!=='experimental'||mode!=='local')) throw new Error('Native Sheets requires explicit experimental local mode');
   const jobFlag=process.env.DYOFFICE_NATIVE_JOBS;
   if(jobFlag && (jobFlag!=='experimental'||mode!=='local')) throw new Error('Native jobs require explicit experimental local mode');
   if(mode==='development') return buildApp({
@@ -29,15 +32,17 @@ async function configuredApplication() {
   const csrfKey=process.env.DYOFFICE_CSRF_KEY;
   if(!connectionString||!businessConnectionString||!deploymentId||!origin||!csrfKey) throw new Error('Local account configuration missing');
   const {db,close}=connectIdentityStore(connectionString);
-  let businessPool,storage;
+  let businessPool,storage,sheets;
   try {
     businessPool=new Pool({connectionString:businessConnectionString,max:4,connectionTimeoutMillis:5000});
     storage=await configuredObjectStore(process.env);
     const nativeFlag=process.env.DYOFFICE_NATIVE_DOCX;
     if(nativeFlag && nativeFlag!=='experimental') throw new Error('Unknown native DOCX mode');
     const nativeDocsDirectory=nativeFlag ? resolve(process.env.DYOFFICE_NATIVE_DOCX_DIRECTORY||fileURLToPath(new URL('../dist-docs/',import.meta.url))) : undefined;
-    return await buildLocalApp({db,businessPool,...storage,nativeDocsDirectory,localShellDirectory:shellDirectory,nativeJobs:jobFlag==='experimental',deploymentId,origin,csrfKey,passwordBlocklistFile:process.env.DYOFFICE_PASSWORD_BLOCKLIST_FILE,closeDb:async()=>{storage.close();await Promise.all([close(),businessPool.end()]);}});
-  } catch(error) { storage?.close();await Promise.allSettled([close(),businessPool?.end()]); throw error; }
+    sheets=await configuredSheetsRuntime(process.env);
+    const {close:closeSheets,...sheetsConfig}=sheets ?? {};
+    return await buildLocalApp({db,businessPool,...storage,...sheetsConfig,nativeDocsDirectory,localShellDirectory:shellDirectory,nativeJobs:jobFlag==='experimental',deploymentId,origin,csrfKey,passwordBlocklistFile:process.env.DYOFFICE_PASSWORD_BLOCKLIST_FILE,closeDb:async()=>{await closeSheets?.();storage.close();await Promise.all([close(),businessPool.end()]);}});
+  } catch(error) { await sheets?.close();storage?.close();await Promise.allSettled([close(),businessPool?.end()]); throw error; }
 }
 
 let app,closing;

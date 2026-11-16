@@ -20,7 +20,12 @@ export function createJobService({ transactions,enabledTypes = [],maxActiveJobs 
         // Serialize enqueue/idempotency/quota before taking a file or job lock.
         await c.query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))",[p.deploymentId + '/' + p.userId + '/native-jobs'])
         const prior = (await c.query<Row>('SELECT * FROM native_jobs WHERE deployment_id=$1 AND owner_id=$2 AND idempotency_key=$3 FOR SHARE',[...scope(p),idempotencyKey])).rows[0]
-        if (prior) { if (prior.request_hash !== hash) throw authError(409); return dto(prior) }
+        if (prior) {
+          if (prior.request_hash !== hash) throw authError(409)
+          const retired = await c.query('SELECT 1 FROM files WHERE deployment_id=$1 AND owner_id=$2 AND id=$3 AND purge_started_at IS NOT NULL',[...scope(p),prior.file_id])
+          if (retired.rowCount) throw authError(410)
+          return dto(prior)
+        }
         const artifact = (await c.query('SELECT r.file_id,f.current_revision,f.format FROM file_revisions r JOIN files f ON f.deployment_id=r.deployment_id AND f.owner_id=r.owner_id AND f.id=r.file_id WHERE r.deployment_id=$1 AND r.owner_id=$2 AND r.id=$3 AND f.deleted_at IS NULL FOR SHARE OF f',[...scope(p),artifactId])).rows[0]
         if (!artifact) throw authError(404)
         if (artifact.current_revision !== artifactId) throw authError(409)

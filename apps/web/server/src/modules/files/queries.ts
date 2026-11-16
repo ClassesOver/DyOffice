@@ -26,7 +26,10 @@ export async function lockAccount(connection: PoolClient, principal: BusinessPri
   if (!workspace) throw authError(404)
   await connection.query('INSERT INTO storage_accounts(deployment_id,owner_id,workspace_id) VALUES($1,$2,$3) ON CONFLICT(deployment_id,owner_id) DO NOTHING', [...values,workspace.id])
   await connection.query('SELECT 1 FROM storage_accounts WHERE deployment_id=$1 AND owner_id=$2 FOR UPDATE', values)
-  const expired = await connection.query("WITH candidates AS (SELECT id,expected_size,state FROM uploads WHERE deployment_id=$1 AND owner_id=$2 AND state IN ('staged','receiving','ready') AND expires_at<=clock_timestamp() ORDER BY id FOR UPDATE) UPDATE uploads u SET state='expired' FROM candidates c WHERE u.deployment_id=$1 AND u.owner_id=$2 AND u.id=c.id RETURNING c.expected_size,c.state AS previous_state", values)
+  // One cutoff per cleanup statement makes the expiry index usable. Rows that
+  // expire later remain reserved until the next sweep; final authority/upload
+  // deadline checks still use wall-clock time. Do not use transaction start time.
+  const expired = await connection.query("WITH candidates AS (SELECT id,expected_size,state FROM uploads WHERE deployment_id=$1 AND owner_id=$2 AND state IN ('staged','receiving','ready') AND expires_at<=statement_timestamp() ORDER BY id FOR UPDATE) UPDATE uploads u SET state='expired' FROM candidates c WHERE u.deployment_id=$1 AND u.owner_id=$2 AND u.id=c.id RETURNING c.expected_size,c.state AS previous_state", values)
   if (expired.rowCount) await connection.query('UPDATE storage_accounts SET reserved_bytes=reserved_bytes-$3,stored_bytes=stored_bytes+$4 WHERE deployment_id=$1 AND owner_id=$2', [...values,expired.rows.reduce((sum, row) => sum + row.expected_size, 0),expired.rows.filter(row => row.previous_state !== 'staged').reduce((sum, row) => sum + row.expected_size, 0)])
   const row = (await connection.query('SELECT * FROM storage_accounts WHERE deployment_id=$1 AND owner_id=$2', values)).rows[0]
   return { workspaceId: workspace.id as string, reservedBytes: Number(row.reserved_bytes), storedBytes: Number(row.stored_bytes) }
@@ -43,7 +46,7 @@ export async function lockUpload(connection: PoolClient, principal: BusinessPrin
 }
 export async function loadFile(connection: PoolClient, principal: BusinessPrincipal, id: string, includeTrash = false, lock = 'SHARE') {
   if (principal.job && (id!==principal.job.fileId || includeTrash)) throw authError(404)
-  const row = (await connection.query<FileRow>(`SELECT f.*,r.object_key,r.sha256,r.size FROM files f JOIN file_revisions r ON r.deployment_id=f.deployment_id AND r.owner_id=f.owner_id AND r.file_id=f.id AND r.id=f.current_revision WHERE f.deployment_id=$1 AND f.owner_id=$2 AND f.id=$3 ${includeTrash ? '' : 'AND f.deleted_at IS NULL'} FOR ${lock} OF f`, [...scope(principal),id])).rows[0]
+  const row = (await connection.query<FileRow>(`SELECT f.*,r.object_key,r.sha256,r.size FROM files f JOIN file_revisions r ON r.deployment_id=f.deployment_id AND r.owner_id=f.owner_id AND r.file_id=f.id AND r.id=f.current_revision WHERE f.deployment_id=$1 AND f.owner_id=$2 AND f.id=$3 AND f.purge_started_at IS NULL ${includeTrash ? '' : 'AND f.deleted_at IS NULL'} FOR ${lock} OF f`, [...scope(principal),id])).rows[0]
   if (!row) throw authError(404)
   return row
 }

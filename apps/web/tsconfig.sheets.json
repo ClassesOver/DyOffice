@@ -1,0 +1,5 @@
+{
+  "extends": "../sheets/tsconfig.json",
+  "compilerOptions": { "allowImportingTsExtensions": true, "noEmit": true },
+  "include": ["src/editors/sheets-entry.tsx", "../sheets/src/renderer/**/*.d.ts"]
+}

@@ -114,14 +114,14 @@ docs/dyoffice/               当前计划及 inventory/ evidence/ adr/
 
 ### T02 模块化 API 与原型迁移接缝
 
-**依赖：** T01。**文件：** 新建 `apps/web/server/src/app.ts`、`config.ts`、`modules/health/routes.ts`、`test/integration/api-compat.test.ts`；逐步替代 `server/application.mjs`、`index.mjs`，保留迁移期原接口适配。
+**依赖：** T01。**文件：** 新建 `apps/web/server/src/app.ts`、`config.ts`、`modules/health/routes.ts`、`test/integration/api-compat.test.mjs`；逐步替代 `server/application.mjs`、`index.mjs`，保留迁移期原接口适配。
 
 **接口：** `buildApp(config): Promise<FastifyInstance>`，版本化 `/api/v1`，统一 Problem DTO 和请求 ID。
 
 **状态（2026-11-15）：** `dev:web` / `start:web` 已切到 Fastify `buildApp`。偏好、Admin、数据源、文件、DOCX 和静态页面按模块注册，旧 HTTP 契约仍由现有测试保持。健康检查使用静态 Schema；业务请求体继续用模块里的固定校验器，不编译外部输入。限流和关闭只作用于单个进程。没有本地登录、PostgreSQL 就绪检查或多副本限流，不能据此宣称生产认证。证据见 [t02-modular-api.md](evidence/t02-modular-api.md)。
 
 - [x] 固化旧文件/偏好/Admin 接口的授权、状态码和密钥脱敏测试。
-- [x] 运行 `npm run test:web:integration -- api-compat.test.ts`，新增 API 未实现应 RED。
+- [x] 运行 `npm run test:web:integration -- test/integration/api-compat.test.mjs`，新增 API 未实现应 RED。
 - [x] 接入 Fastify、可信静态 Schema、错误边界、限流、优雅关闭、ready/live 区分，原型逻辑逐模块迁移而非大重写。
 - [x] 运行 legacy + integration + build；所有旧契约保持或明确提供迁移响应。
 - [x] 提交 `refactor(web): introduce modular api without contract regressions`。
@@ -184,18 +184,21 @@ docs/dyoffice/               当前计划及 inventory/ evidence/ adr/
 
 **接口：** `stageUpload(principal, fileMeta)`、`finishUpload(principal,uploadId)`、`openFile()`；上传引用绑定所有者。
 
-**状态（2026-11-16）：完成。** 证据见 [t05-local-object-store.md](evidence/t05-local-object-store.md)。四格式、伪 ZIP、空文件、超额、路径穿越、跨 owner、未完成不可下载、中断不留下完成对象、服务器 SHA-256（不信任 ETag）、配额、回收站、共享 blob、过期暂存、HTTP 暂存/完成/下载/丢弃/恢复/清空、进程内 S3 替身，以及 MinIO 上的同一生命周期，都有测试。`dyoffice_files` 只在对象写入成功后插入。`/api/files` 仍是开发令牌原型目录，不是这套存储。
+**当前新栈状态（2026-11-16 复核）：部分完成，完整生命周期尚未闭环。** [t05-local-object-store.md](evidence/t05-local-object-store.md) 保留的是旧栈 `dyoffice_files` / 旧生命周期接口的历史验收，不能当作当前新栈的清空、物理删除或配额回收验收。当前新栈使用 `files`、`file_revisions`、`uploads`、`storage_accounts`，已接入受限事务与 FORCE RLS；不存在“新栈数据库 RLS 仍待 T04”的延期。
 
-**明确延期：**
+**当前已实现范围：** 不可变对象上传与服务器哈希校验、作用域元数据/下载、配额预留、回收站及恢复。最终新栈验收范围见 [T03/T04 最终验收](evidence/t03-t04-current-stack-acceptance.md)；如果该证据未覆盖某一生命周期路径，不得借历史旧栈测试补成通过。
 
-- **T04：** `dyoffice_files` 不启用 RLS。应用层 owner 过滤不是 `FORCE ROW LEVEL SECURITY`。
-- **运维：** 多节点高可用对象存储不在本仓库的适配器里。CI 的 MinIO 只证明 S3 兼容协议，不是生产集群。
+**有界实现与剩余工作：**
 
-- [x] 测试四格式类型验证、伪 ZIP、空文件、超额、路径穿越、跨用户 uploadId、未完成上传不能下载。
-- [x] 运行 files integration，确认没有元数据/对象分离保障时 RED。
-- [x] 实现 S3 adapter、不可变对象键、配额、服务器哈希、回收站与受控下载；开发本地盘 adapter 不进入企业 HA。进程内替身覆盖这些行为。数据库 RLS 仍待 T04。
-- [x] 同测试 GREEN；模拟上传中断不产生已完成文件，校验内容哈希而非 ETag。
-- [x] 提交 `feat(files): add scoped immutable object storage`。
+- 未完成上传：已写入后取消或过期的对象仍计入 `stored_bytes`，本次仅对写入完成且无引用的终态对象增加有界回收，见 [终态上传回收证据](evidence/t05-abandoned-upload-reclamation.md)。曾处于 receiving 的不确定对象可能有晚到 PUT，仍不能仅凭 TTL 删除并释放配额。
+- 回收站永久清空：新增显式逐文件 purge 候选，先提交不可恢复的引用屏障，再有界物理删除和一次性配额退款；审计身份保留为墓碑。基于目标0672c66的新迁移编号为0016/0017，不改已应用0015。完整相关真实PG/RustFS/Redis回归260/260通过，见 [永久清空证据](evidence/t05-permanent-trash-purge.md)。这是逐文件重试API，不是浏览器批量清空或后台调度，也不清理版本化桶和不确定晚到PUT。
+- 验收：真实 PostgreSQL 的跨用户、引用/恢复竞态、删除后事务回滚及进程崩溃重试，以及真实对象存储的物理删除/版本桶语义，已在上述隔离真实服务回归中验证；纯控制流或存储替身测试不替代这些门禁。
+- 运维：多节点高可用对象存储与生产集群容量不在当前适配器验收范围内。
+
+- [x] 已有作用域上传、不可变对象键、服务器哈希、配额预留、回收站与受控下载实现。
+- [x] 已完成写入且无引用的终态上传回收通过隔离 PostgreSQL / RustFS 验收；不确定 receiving 和版本化桶不回收。
+- [x] 新栈显式逐文件永久清理与引用保留策略完成设计、实现和有界竞态验收；批量UI、后台调度、版本桶及未知PUT仍不包含。
+- [ ] 完整生命周期按当前新栈重新收口，不将旧 `dyoffice_files` 结果计入。
 
 ### T06 保存事务、历史版本和单写者租约
 
@@ -263,11 +266,14 @@ docs/dyoffice/               当前计划及 inventory/ evidence/ adr/
 
 **接口：** `mountSheetsEditor()`；原生解析/保存输出沿用 T06 RevisionRef，不暴露本机路径。
 
-- [ ] 测试公式而非缓存值、日期/百分比、原始数值及单位、命名区域、图表、批量 AI 撤销、未知部件保留。
-- [ ] E2E RED，并保存 fixture 原件哈希。
-- [ ] 浏览器复用 Univer 与已有工具；必须的原生操作走 T08，禁止用不同库偷偷替代保真链。
+- [x] 测试公式而非缓存值、日期/百分比、原始数值及单位、命名区域、图表、批量 AI 撤销、未知部件保留。
+- [x] E2E RED，并保存 fixture 原件哈希。
+- [x] 浏览器复用 Univer 与已有工具；必须的原生操作走 T08，禁止用不同库偷偷替代保真链。
 - [ ] E2E 与 `@genoffice/xlsx-gateway`、受影响 sheets/native 回归 GREEN；外部 Excel 复开核验。
 - [ ] 提交 `feat(sheets): adapt native workbook editing to web`。
+
+
+当前草稿 PR：[#30](https://github.com/ClassesOver/DyOffice/pull/30)。六个真实浏览器场景与完整原生专项套件已通过；最终审查和外部 Excel 复开仍未完成，T09 不标记闭环。启动与证据见 [T09 runtime](evidence/t09-runtime.md)。
 
 ### T10 PPTX 原生 Web 适配
 
@@ -495,4 +501,3 @@ docs/dyoffice/               当前计划及 inventory/ evidence/ adr/
 每个 PR 必须写明基线、范围、接口变化、迁移影响、失败复现、通过命令/环境、证据位置、剩余风险和回滚方法。职责边界或协议变化增加 ADR；不因工具建议擅自改变用户已确认范围。
 
 任务完成需要代码、测试、可复现证据和文档同步。里程碑完成还需要端到端演示与 gate 审核。企业完成还需要客户环境验收、恢复演练、运营可见性与负责人签收。除各任务显式记录的有界验收外，未勾选任务不因计划创建而完成。
-

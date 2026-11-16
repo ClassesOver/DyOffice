@@ -1,3 +1,4 @@
+import { admitMutation, mutationAdmission } from './mutation-admission'
 /**
  * Cell navigation (Name Box / Go To / formula / symbol) and data tools
  * (advanced filter, subtotal, consolidate, outline, format-as-table).
@@ -75,7 +76,9 @@ export function handleImportCsv(ctx: DataToolsContext): void {
   input.onchange = () => {
     const file = input.files?.[0]
     if (!file) return
-    void (async () => {
+    const state = ctx.lazyWorkbookRef.current
+    if (!state || !admitMutation(state.editJournal, ctx.setMessage)) return
+    void mutationAdmission(state.editJournal).run(async () => {
       // the same ceiling the open path uses (the user's setting): one limit
       // for every way a delimited file comes in
       // a failed settings IPC falls back to the default, never to no limit
@@ -87,8 +90,9 @@ export function handleImportCsv(ctx: DataToolsContext): void {
         return
       }
       const buffer = await file.arrayBuffer()
+      if (ctx.lazyWorkbookRef.current !== state) return
       importCsvText(ctx, decodeCsvBuffer(new Uint8Array(buffer), CSV_CHARSET_BY_LANG[getLang()]))
-    })().catch(() => ctx.setMessage(t('appCsvTooLarge')))
+    }).catch((error) => ctx.setMessage(error instanceof Error ? error.message : t('appCsvTooLarge')))
   }
   input.click()
 }

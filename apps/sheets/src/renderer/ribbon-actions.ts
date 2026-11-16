@@ -1,3 +1,4 @@
+import type { MutationLease } from './mutation-admission'
 /**
  * The ribbon command dispatcher. Extracted from App.tsx; the App component
  * passes a RibbonCommandContext built fresh per call so refs and state never
@@ -150,6 +151,7 @@ export interface RibbonCommandContext {
   runOps: (
     ops: readonly WorkbookOperation[],
     successMessage?: string | null,
+    mutationLease?: MutationLease,
   ) => Promise<ApplyOutcome>
   traceArrowsRef: { current: { disposables: { dispose(): void }[]; nextId: number } }
   sparklineDisposablesRef: { current: { dispose(): void }[] }

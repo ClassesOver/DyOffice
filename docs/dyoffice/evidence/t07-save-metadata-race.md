@@ -35,3 +35,20 @@ The unconditional `pagehide` disposal was noted as a potential back/forward-cach
 The owner subsequently directed tests that cannot run locally to CI. The existing `DyOffice Web boundary gate` / `native-docx` job installs its Chromium, provisions its isolated PostgreSQL, runs native Web type checking, builds and executes the TLS browser suite, and regresses the complete Docs renderer and DOCX engine. This change adds the seven bridge/generation Node cases to that job. Repository Actions settings are not changed by this PR. A queued or newly created workflow is not a successful run; report results against the exact PR head.
 
 Final bounded local rerun after the review fixes: four renderer regression files **85/85 passed, zero skipped** (including all 35 new cases), bridge/generation **7/7 passed, zero skipped**. With a 768 MiB heap cap, final native Web type checking (`tsc -p apps/web/tsconfig.docs.json`) passed. This does not replace the interrupted full-renderer suite or the blocked browser cases above.
+
+## Integration re-verification against c33dd65 (2026-11-16)
+
+The candidate retains the original seven source/test files from PR head `58465279` and integrates target `c33dd65afd8f4426830889e11e1493d54af69fe4`. Workflow resolution retains the complete native-sheets job and the added bridge/generation step; implementation-plan resolution preserves the target T02 changes. No repository security settings changed.
+
+Fresh results on the integrated candidate:
+- Four native-save renderer regression files: **85/85 passed**, zero skips.
+- Shared BrowserHost lease/bridge barriers plus Docs bridge/generation: **31/31 passed**, zero skips.
+- Real isolated PostgreSQL + RustFS BrowserHost/revision suites: **26/26 passed**, zero skips, including lost receipts, takeover, stale renewal, rollback, RLS, corruption and immutable-object replay. The initial run without S3 was 25/26; rerun with a separate disposable RustFS endpoint passed all 26. Services were stopped afterwards.
+- Production DOCX build: passed in **16.80 seconds**, with existing large-bundle warning.
+- Workflow coverage **8/8** and updated Worker boundary suite **21/21** passed.
+- Aggregate native Web typecheck now includes the newly merged Sheets source graph: 768 MiB cap failed with explicit V8 heap exhaustion; 1536 MiB cap was killed with exit 137. This integrated aggregate is **not passed** and requires CI. Earlier bounded-head typecheck success does not substitute for it.
+- Real-PG browser suite using installed Chromium with `chromiumSandbox: true`: **1 non-browser case passed; 5 browser launches failed** with `socket() failed: Operation not permitted`, before page assertions. This local-only executable adaptation is not committed. No sandbox was disabled.
+
+An independent reviewer verified that the seven unchanged source/test files match the original PR blobs, reviewed the generation and metadata fences plus shared-host interface compatibility, and independently ran the seven lightweight guard/bridge cases. Real browser metadata/save/switching, full Docs aggregate and desktop office compatibility remain unverified. Keep this PR draft until its missing gates are satisfied.
+
+The focused metadata-race test TypeScript configuration also passed on this integrated candidate; it is not the aggregate Web typecheck.

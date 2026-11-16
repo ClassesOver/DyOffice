@@ -177,6 +177,46 @@ export async function readArchiveEntriesText(
   }
 }
 
+/** Original mutation planner shared by the streaming desktop and bounded Web inputs. */
+export async function planWorkbookMutation(
+  source: EntrySource,
+  request: Omit<StreamingSaveRequest, 'client' | 'sourcePath' | 'targetPath'>,
+): Promise<MutationPlan> {
+  return planCellEditsToXlsx(
+    source,
+    request.edits,
+    request.structuralOps ?? [],
+    request.chartEdits ?? [],
+    request.sheetPlan,
+    request.filterStates ?? [],
+    request.hyperlinkEdits ?? [],
+    request.cfStates ?? [],
+    request.dvStates ?? [],
+    request.sheetProtections ?? [],
+    request.definedNamesState ?? null,
+    request.visualAdditions ?? [],
+    request.pageSetupStates ?? [],
+    request.noteStates ?? [],
+    request.tableAdditions ?? [],
+    request.pivotAdditions ?? [],
+    request.pivotCacheRefreshPaths ?? [],
+    request.pivotRefreshUpdates ?? [],
+    request.visualEdits ?? [],
+    request.sparklineAdditions ?? [],
+    request.formulaValues ?? [],
+    request.themeState ?? null,
+    request.workbookProtectionState ?? null,
+    request.protectedRangeStates ?? [],
+    request.bulkConstantFills ?? [],
+    request.tabColorStates ?? [],
+    request.tableEdits ?? [],
+    request.cellImageAdditions ?? [],
+    request.externalLinkOps ?? null,
+    request.redactionStates ?? null,
+    request.slicerState ?? null,
+  )
+}
+
 /// Streaming save channel: the gateway plans patched entry contents in
 /// memory, the sidecar reassembles the archive on disk — untouched entries
 /// are raw-copied compressed bytes, verified afterwards via CRC manifests.
@@ -193,39 +233,7 @@ export async function saveWorkbookViaSidecar(
       await request.client.archiveManifest(request.sourcePath),
     ).entries
     const source = createSidecarEntrySource(request.client, request.sourcePath, manifest, workDir)
-    const plan = await planCellEditsToXlsx(
-      source,
-      request.edits,
-      request.structuralOps ?? [],
-      request.chartEdits ?? [],
-      request.sheetPlan,
-      request.filterStates ?? [],
-      request.hyperlinkEdits ?? [],
-      request.cfStates ?? [],
-      request.dvStates ?? [],
-      request.sheetProtections ?? [],
-      request.definedNamesState ?? null,
-      request.visualAdditions ?? [],
-      request.pageSetupStates ?? [],
-      request.noteStates ?? [],
-      request.tableAdditions ?? [],
-      request.pivotAdditions ?? [],
-      request.pivotCacheRefreshPaths ?? [],
-      request.pivotRefreshUpdates ?? [],
-      request.visualEdits ?? [],
-      request.sparklineAdditions ?? [],
-      request.formulaValues ?? [],
-      request.themeState ?? null,
-      request.workbookProtectionState ?? null,
-      request.protectedRangeStates ?? [],
-      request.bulkConstantFills ?? [],
-      request.tabColorStates ?? [],
-      request.tableEdits ?? [],
-      request.cellImageAdditions ?? [],
-      request.externalLinkOps ?? null,
-      request.redactionStates ?? null,
-      request.slicerState ?? null,
-    )
+    const plan = await planWorkbookMutation(source, request)
 
     const replacements = await writePlanContents(workDir, 'replace', plan.replaced)
     const additions = [

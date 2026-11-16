@@ -9,6 +9,7 @@ import {
   overlayBetraysCache,
   recalcResultKeepsCache,
   setSupportedFunctionProbe,
+  setEvaluableDefinedNames,
 } from '../src/renderer/univer-sync'
 import type { UniverRuntime } from '../src/renderer/univer-state'
 
@@ -30,6 +31,7 @@ const ENGINE_FUNCTIONS = new Set([
 ])
 
 afterEach(() => {
+  setEvaluableDefinedNames([])
   setSupportedFunctionProbe(null)
 })
 
@@ -277,4 +279,17 @@ describe('formulaKeepsCache with defined names and table references', () => {
     expect(formulaKeepsCache('VLOOKUP(F5,table_data,2,FALSE)', false)).toBe(false)
     expect(formulaKeepsCache('SUM(rng_data)', false)).toBe(false)
   })
+})
+
+describe('installed Web defined names',()=>{
+ it('evaluates only explicitly installed names and invalidates cached verdicts',()=>{
+  expect(formulaKeepsCache('SUM(Revenue)')).toBe(true)
+  setEvaluableDefinedNames(['Revenue'])
+  expect(formulaKeepsCache('SUM(revenue)')).toBe(false)
+  expect(formulaKeepsCache('SUM(Missing)')).toBe(true)
+  expect(formulaKeepsCache('[1]Sheet1!A1+Revenue')).toBe(true)
+  expect(formulaKeepsCache('SUM(Table1[Revenue])')).toBe(true)
+  setEvaluableDefinedNames([])
+  expect(formulaKeepsCache('SUM(Revenue)')).toBe(true)
+ })
 })

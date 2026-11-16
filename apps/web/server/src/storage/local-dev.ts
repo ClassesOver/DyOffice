@@ -1,8 +1,8 @@
-import { mkdir, lstat, realpath, open, link, unlink } from 'node:fs/promises'
+import { mkdir, lstat, realpath, open, link, unlink, access } from 'node:fs/promises'
 import { constants } from 'node:fs'
 import { resolve, join } from 'node:path'
 import { randomUUID } from 'node:crypto'
-import { assertObjectReference, collectVerified, objectReference, storageError, type ObjectStore } from './object-store.ts'
+import { assertObjectKey, assertObjectReference, collectVerified, verifyStream, objectReference, storageError, type ObjectRef, type ObjectStore } from './object-store.ts'
 
 // Development only: one dedicated directory owned by the service account.
 // Never share this adapter across replicas or with another local writer.
@@ -15,7 +15,20 @@ export async function createLocalObjectStore({ directory }: { directory: string 
   }
   await assertDirectory()
   const path = (key: string) => join(root, key.replaceAll('/', '_'))
+  async function read<T>(reference: ObjectRef, consume: (source: AsyncIterable<Uint8Array>, reference: ObjectRef) => Promise<T>): Promise<T> {
+    assertObjectReference(reference)
+    try {
+      await assertDirectory()
+      const handle = await open(path(reference.key), constants.O_RDONLY | constants.O_NOFOLLOW)
+      try {
+        const stat = await handle.stat()
+        if (!stat.isFile() || stat.size !== reference.size) throw storageError()
+        return await consume(handle.createReadStream({ autoClose: false }), reference)
+      } finally { await handle.close() }
+    } catch { throw storageError() }
+  }
   return {
+    async checkReady() { await assertDirectory(); await access(root, constants.R_OK | constants.W_OK | constants.X_OK) },
     async putImmutable(key, bytes) {
       const reference = objectReference(key, bytes)
       bytes = Buffer.from(bytes)
@@ -38,17 +51,16 @@ export async function createLocalObjectStore({ directory }: { directory: string 
         await unlink(temporary).catch(error => { if (error.code !== 'ENOENT') throw storageError() })
       }
     },
-    async readVerified(reference) {
-      assertObjectReference(reference)
+    async removeUnreferenced(key) {
+      assertObjectKey(key)
       try {
         await assertDirectory()
-        const handle = await open(path(reference.key), constants.O_RDONLY | constants.O_NOFOLLOW)
-        try {
-          const stat = await handle.stat()
-          if (!stat.isFile() || stat.size !== reference.size) throw storageError()
-          return await collectVerified(handle.createReadStream({ autoClose: false }), reference)
-        } finally { await handle.close() }
+        await unlink(path(key)).catch(error => { if (error.code !== 'ENOENT') throw error })
+        const parent = await open(root, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW)
+        try { await parent.sync() } finally { await parent.close() }
       } catch { throw storageError() }
     },
+    readVerified: reference => read(reference, collectVerified),
+    verifyObject: reference => read(reference, verifyStream),
   }
 }

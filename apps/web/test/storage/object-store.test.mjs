@@ -28,6 +28,7 @@ for (const kind of ['local','s3']) {
     const objectKey = key(), ref = await store.putImmutable(objectKey, hello)
     assert.deepEqual(ref, { key: objectKey, size: 5, sha256: hash })
     assert.deepEqual(await store.readVerified(ref), hello)
+    assert.equal(await store.verifyObject(ref), undefined)
     await assert.rejects(() => store.putImmutable(objectKey, hello), { statusCode: 409 })
     await assert.rejects(() => store.putImmutable(objectKey, Buffer.from('changed')), { statusCode: 409 })
     assert.deepEqual(await store.readVerified(ref), hello)
@@ -50,6 +51,15 @@ for (const kind of ['local','s3']) {
     await corrupt(ref.key, Buffer.from('jello')) // Same length, so length checks alone cannot detect corruption.
     await assert.rejects(() => store.readVerified(ref), { statusCode: 503 })
     await assert.rejects(() => store.readVerified({ ...ref, key: key() }), { statusCode: 503 })
+  })
+  test(`${kind} verification-only rejects corruption, incorrect size/hash and missing objects`, async t => {
+    const { store, corrupt } = await fixture(t, kind)
+    const ref = await store.putImmutable(key(), hello)
+    await assert.rejects(() => store.verifyObject({ ...ref, size: 4 }))
+    await assert.rejects(() => store.verifyObject({ ...ref, sha256: '0'.repeat(64) }))
+    await corrupt(ref.key, Buffer.from('jello')) // Same length, so length checks alone cannot detect corruption.
+    await assert.rejects(() => store.verifyObject(ref), { statusCode: 503 })
+    await assert.rejects(() => store.verifyObject({ ...ref, key: key() }), { statusCode: 503 })
   })
   test(`${kind} object names and sizes cannot escape the trusted namespace or allocation bound`, async t => {
     const { store } = await fixture(t, kind)
@@ -74,6 +84,7 @@ test('local object store refuses symlink roots and symlink replacements of publi
   await writeFile(join(directory, 'secret'), hello)
   await symlink(join(directory, 'secret'), join(directory, 'store', filename))
   await assert.rejects(() => store.readVerified(ref), { statusCode: 503 })
+  await assert.rejects(() => store.verifyObject(ref), { statusCode: 503 })
 })
 
 for (const kind of ['local','s3']) test(`${kind} publication snapshots caller bytes before asynchronous I/O`, async t => {
