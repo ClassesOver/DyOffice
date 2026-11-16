@@ -26,6 +26,17 @@ async function writeJson(path, value) {
   await rename(temporary, path)
 }
 
+function createExclusive() {
+  const tails = new Map()
+  return function exclusive(key, fn) {
+    const previous = tails.get(key) ?? Promise.resolve()
+    let release
+    const gate = new Promise((resolve) => { release = resolve })
+    tails.set(key, gate)
+    return previous.then(() => {}, () => {}).then(fn).finally(() => release())
+  }
+}
+
 /**
  * Single-directory content-addressed store for development.
  * It is not the enterprise S3 adapter and it does not enforce database RLS.
@@ -44,6 +55,7 @@ export async function createLocalObjectStore({ directory, maxObjectBytes, maxOwn
   await mkdir(staging, { recursive: true, mode: 0o700 })
   await mkdir(objects, { recursive: true, mode: 0o700 })
   await mkdir(temporary, { recursive: true, mode: 0o700 })
+  const exclusive = createExclusive()
 
   async function ownerBytes(ownerId) {
     let total = 0
@@ -66,46 +78,52 @@ export async function createLocalObjectStore({ directory, maxObjectBytes, maxOwn
     async stageUpload({ ownerId, name, bytes }) {
       assertOwnerId(ownerId)
       const { format } = validateOfficeObject({ name, bytes, maxBytes: maxObjectBytes })
-      const used = await ownerBytes(ownerId)
-      if (used + bytes.length > maxOwnerBytes) reject('QUOTA')
-      const uploadId = randomUUID()
-      const sha256 = digest(bytes)
-      const scratch = join(temporary, `${uploadId}.bin`)
-      await writeFile(scratch, bytes, { mode: 0o600 })
-      try {
-        if (afterBytesWritten) await afterBytesWritten()
-        const blob = join(blobs, sha256)
+      return exclusive(ownerId, async () => {
+        const used = await ownerBytes(ownerId)
+        if (used + bytes.length > maxOwnerBytes) reject('QUOTA')
+        const uploadId = randomUUID()
+        const sha256 = digest(bytes)
+        const scratch = join(temporary, `${uploadId}.bin`)
+        await writeFile(scratch, bytes, { mode: 0o600 })
         try {
-          await rename(scratch, blob)
+          if (afterBytesWritten) await afterBytesWritten()
+          const blob = join(blobs, sha256)
+          try {
+            await rename(scratch, blob)
+          } catch (error) {
+            if (error.code !== 'EEXIST') throw error
+            await rm(scratch, { force: true })
+          }
+          await mkdir(join(staging, ownerId), { recursive: true, mode: 0o700 })
+          await writeJson(join(staging, ownerId, `${uploadId}.json`), {
+            uploadId, ownerId, name, format, size: bytes.length, sha256, finished: false,
+          })
         } catch (error) {
-          if (error.code !== 'EEXIST') throw error
           await rm(scratch, { force: true })
+          throw error
         }
-        await mkdir(join(staging, ownerId), { recursive: true, mode: 0o700 })
-        await writeJson(join(staging, ownerId, `${uploadId}.json`), {
-          uploadId, ownerId, name, format, size: bytes.length, sha256, finished: false,
-        })
-      } catch (error) {
-        await rm(scratch, { force: true })
-        throw error
-      }
-      return { uploadId, sha256, size: bytes.length, format, finished: false }
+        return { uploadId, sha256, size: bytes.length, format, finished: false }
+      })
     },
 
     async finishUpload({ ownerId, uploadId }) {
       assertOwnerId(ownerId)
       if (typeof uploadId !== 'string' || !/^[0-9a-f-]{36}$/i.test(uploadId)) reject('NOT_FOUND', 404)
-      const recordPath = join(staging, ownerId, `${uploadId}.json`)
-      const record = await readJson(recordPath)
-      if (!record || record.ownerId !== ownerId) reject('NOT_FOUND', 404)
-      if (record.finished && record.objectId) {
-        return { objectId: record.objectId, sha256: record.sha256, size: record.size, format: record.format }
-      }
-      const objectId = randomUUID()
-      await mkdir(join(objects, ownerId), { recursive: true, mode: 0o700 })
-      await writeJson(join(objects, ownerId, `${objectId}.json`), { ...record, objectId, finished: true })
-      await writeJson(recordPath, { ...record, objectId, finished: true })
-      return { objectId, sha256: record.sha256, size: record.size, format: record.format }
+      return exclusive(ownerId, async () => {
+        const recordPath = join(staging, ownerId, `${uploadId}.json`)
+        const record = await readJson(recordPath)
+        if (!record || record.ownerId !== ownerId) reject('NOT_FOUND', 404)
+        const objectId = record.objectId ?? randomUUID()
+        if (record.finished && record.objectId) {
+          return { objectId: record.objectId, sha256: record.sha256, size: record.size, format: record.format }
+        }
+        const completed = { ...record, objectId, finished: true }
+        if (!record.objectId) await writeJson(recordPath, { ...record, objectId, finished: false })
+        await mkdir(join(objects, ownerId), { recursive: true, mode: 0o700 })
+        await writeJson(join(objects, ownerId, `${objectId}.json`), completed)
+        await writeJson(recordPath, completed)
+        return { objectId, sha256: record.sha256, size: record.size, format: record.format }
+      })
     },
 
     async openObject({ ownerId, objectId }) {

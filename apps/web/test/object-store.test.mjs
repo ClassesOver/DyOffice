@@ -69,6 +69,37 @@ test('staged uploads are owner-scoped, unfinished bytes are not readable, and th
   assert.equal(names.some((name) => String(name).includes('..')), false)
 })
 
+test('concurrent uploads for one owner cannot pass the quota together', async (t) => {
+  const { createLocalObjectStore } = await loadStore()
+  const directory = await mkdtemp(join(tmpdir(), 'dyoffice-objects-quota-'))
+  t.after(() => rm(directory, { recursive: true, force: true }))
+  const payload = Buffer.concat([ZIP, Buffer.alloc(56)])
+  const store = await createLocalObjectStore({ directory, maxObjectBytes: 64, maxOwnerBytes: 96 })
+  const results = await Promise.allSettled([
+    store.stageUpload({ ownerId: 'owner-a', name: 'a.docx', bytes: payload }),
+    store.stageUpload({ ownerId: 'owner-a', name: 'b.docx', bytes: payload }),
+  ])
+  const accepted = results.filter((result) => result.status === 'fulfilled')
+  const rejected = results.filter((result) => result.status === 'rejected')
+  assert.equal(accepted.length, 1)
+  assert.equal(rejected.length, 1)
+  assert.equal(rejected[0].reason.code, 'QUOTA')
+})
+
+test('overlapping finish calls publish one object', async (t) => {
+  const { store, directory } = await fixture(t)
+  const staged = await store.stageUpload({ ownerId: 'owner-a', name: 'notes.docx', bytes: ZIP })
+  const [first, second] = await Promise.all([
+    store.finishUpload({ ownerId: 'owner-a', uploadId: staged.uploadId }),
+    store.finishUpload({ ownerId: 'owner-a', uploadId: staged.uploadId }),
+  ])
+  assert.equal(first.objectId, second.objectId)
+  const records = (await readdir(join(directory, 'objects', 'owner-a'))).filter((name) => name.endsWith('.json'))
+  assert.deepEqual(records, [`${first.objectId}.json`])
+  const replay = await store.finishUpload({ ownerId: 'owner-a', uploadId: staged.uploadId })
+  assert.equal(replay.objectId, first.objectId)
+})
+
 test('a failure after the bytes are written does not publish a completed object', async (t) => {
   const { createLocalObjectStore } = await loadStore()
   const directory = await mkdtemp(join(tmpdir(), 'dyoffice-objects-abort-'))

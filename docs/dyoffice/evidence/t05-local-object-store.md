@@ -21,6 +21,7 @@ Node v22.23.4. 3 failed, 0 passed. Each failure was `ERR_MODULE_NOT_FOUND` for `
 - `server/src/storage/validation.mjs` accepts DOCX, XLSX, PPTX, and PDF only. OOXML must start with a real ZIP local, empty, or spanned header. PDF must start with `%PDF-`. Empty files, oversized files, other extensions, and names containing a slash, backslash, NUL, or `..` are rejected.
 - `server/src/storage/local-dev.mjs` writes one immutable blob per SHA-256. A client `etag` is ignored. `stageUpload` does not make bytes readable. `finishUpload` is owner-scoped and idempotent. Another owner gets `NOT_FOUND` for both the upload id and the object id. A throw after the temp bytes are written deletes that temp file and writes no metadata.
 - The current personal upload route is unchanged. This store is not the enterprise S3 adapter and is not safe to treat as highly available.
+- Quota reservation and upload completion are serialized per owner. Two concurrent uploads cannot both pass a limit their combined size exceeds, and overlapping `finishUpload` calls return one object id.
 
 ## GREEN
 
