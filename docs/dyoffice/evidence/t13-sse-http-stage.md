@@ -37,4 +37,4 @@ must approve any candidate tool before execution. T13 checklist is not closed.
 - Independent review repeated all 41 and separately verified pre-aborted signal cancellation exits cleanly without dispatch or orphan capacity.
 - Browser Web TypeScript configuration passed. Strict targeted TypeScript check of provider routes/coordinator and transitive dependencies passed.
 - Source boundary graph: 990 files, zero violations.
-- Complete server TypeScript attempt was killed with exit 137; not reported as a pass. Full monorepo/native suites were not run in this stage. These limits do not become successes through the focused tests.
+- Initial complete server TypeScript attempts were killed with exit 137. After other test services/workers released resources, an unchanged-code exclusive retry with a 512 MiB Node heap completed with exit 0. Both complete browser and server configurations have now passed; the initial failures remain recorded. Full monorepo/native suites were not run in this stage. Focused tests are not a full-monorepo pass.
