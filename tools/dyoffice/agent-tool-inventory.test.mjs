@@ -39,3 +39,15 @@ test('shadowed or mutable tool-name bindings fail closed and shorthand schemas a
   const rows=inspectTools("const inputSchema={}; const t={name:'found',inputSchema};",'fixture.ts')
   assert.deepEqual(rows.map(r=>r.name),['found'])
 })
+
+test('classification cannot override extracted source evidence', () => {
+  const rows=inspectTools("const x={name:'a',inputSchema:{}}",'fixture.ts')
+  const rule={id:'fixture.ts#a',placement:'live',web:'Editor',verifyIn:'T14',rationale:'State',name:'fake',sourceSha256:'fake',schemaSha256:'fake',file:'fake',line:0}
+  const result=classifyTools(rows,{schema:1,tools:[rule]})[0]
+  for(const field of ['name','file','line','sourceSha256','schemaSha256']) assert.equal(result[field],rows[0][field])
+})
+test('static computed tool properties are inventoried', () => {
+  assert.throws(()=>inspectTools("const t={name:'a',[schemaKey]:{}}",'fixture.ts'))
+  assert.throws(()=>inspectTools("const NAME='outer'; import * as NAME from 'x'; const t={name:NAME,inputSchema:{}}",'fixture.ts'))
+  assert.equal(inspectTools("const t={['name']:'a',['inputSchema']:{}}",'fixture.ts')[0]?.name,'a')
+})

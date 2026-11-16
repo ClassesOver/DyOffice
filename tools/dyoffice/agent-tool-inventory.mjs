@@ -11,14 +11,14 @@ export const ROOTS = ['apps/docs/src/renderer/ai', 'apps/sheets/src/renderer/ai'
 const REGISTRY='docs/dyoffice/inventory/agent-tools.json'
 const DOCUMENT='docs/dyoffice/inventory/agent-tools.md'
 const hash = value => createHash('sha256').update(value).digest('hex')
-const key = node => ts.isIdentifier(node) || ts.isStringLiteral(node) ? node.text : null
+const key = node => ts.isIdentifier(node) || ts.isStringLiteral(node) ? node.text : ts.isComputedPropertyName(node) && ts.isStringLiteral(node.expression) ? node.expression.text : null
 
 export function inspectTools(source, file) {
   const ast=ts.createSourceFile(file,source,ts.ScriptTarget.Latest,true)
   if(ast.parseDiagnostics.length) throw new Error('Cannot parse '+file)
   const constants=new Map(), bindings=new Map(), assigned=new Set(), rows=[]
   function collect(node) {
-    if ((ts.isVariableDeclaration(node) || ts.isParameter(node) || ts.isBindingElement(node) || ts.isFunctionDeclaration(node) || ts.isFunctionExpression(node) || ts.isClassDeclaration(node) || ts.isClassExpression(node) || ts.isImportSpecifier(node) || ts.isImportClause(node)) && node.name && ts.isIdentifier(node.name)) {
+    if ((ts.isVariableDeclaration(node) || ts.isParameter(node) || ts.isBindingElement(node) || ts.isFunctionDeclaration(node) || ts.isFunctionExpression(node) || ts.isClassDeclaration(node) || ts.isClassExpression(node) || ts.isImportSpecifier(node) || ts.isNamespaceImport(node) || ts.isImportClause(node)) && node.name && ts.isIdentifier(node.name)) {
       bindings.set(node.name.text,(bindings.get(node.name.text)??0)+1)
     }
     if(ts.isVariableDeclaration(node)&&ts.isIdentifier(node.name)&&node.initializer&&ts.isStringLiteral(node.initializer)&&
@@ -34,6 +34,7 @@ export function inspectTools(source, file) {
   function visit(node) {
     if(ts.isObjectLiteralExpression(node)) {
       const properties=new Map(node.properties.filter(p=>p.name).map(p=>[key(p.name),ts.isPropertyAssignment(p)?p.initializer:ts.isShorthandPropertyAssignment(p)?p.name:null]))
+      if(properties.has('name') && node.properties.some(p => p.name && ts.isComputedPropertyName(p.name) && key(p.name) === null)) throw new Error('Unresolved computed tool property in '+file)
       if(properties.has('inputSchema')) {
         const n=properties.get('name')
         const name=n&&(ts.isStringLiteral(n)?n.text:ts.isIdentifier(n)&&bindings.get(n.text)===1&&!assigned.has(n.text)?constants.get(n.text):null)
@@ -73,7 +74,7 @@ export function classifyTools(rows, spec) {
     const rule=map.get(row.id)
     if(!rule) throw new Error('Unclassified tool: '+row.id)
     map.delete(row.id)
-    return {...row,...rule}
+    return {...row,placement:rule.placement,web:rule.web,verifyIn:rule.verifyIn,rationale:rule.rationale}
   })
   if(map.size) throw new Error('Stale classification: '+[...map.keys()].join(', '))
   return result
