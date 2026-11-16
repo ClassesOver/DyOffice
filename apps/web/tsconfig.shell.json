@@ -333,6 +333,7 @@
   },
   "include": [
     "src/shell/**/*.ts",
-    "src/shell/**/*.tsx"
+    "src/shell/**/*.tsx",
+    "src/editors/**/*.ts"
   ]
 }

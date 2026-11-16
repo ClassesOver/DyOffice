@@ -14,7 +14,7 @@ export default defineConfig({
     emptyOutDir: true,
     manifest: true,
     rollupOptions: {
-      input: { workspace: `${web}/public/index.html`, admin: `${web}/public/admin.html`, legacy: `${web}/public/legacy.html` },
+      input: { workspace: `${web}/public/index.html`, admin: `${web}/public/admin.html`, legacy: `${web}/public/legacy.html`, pdf: `${web}/public/pdf.html` },
     },
   },
 });
