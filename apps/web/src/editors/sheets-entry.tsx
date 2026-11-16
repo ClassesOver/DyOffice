@@ -1,0 +1,75 @@
+import ReactDOM from 'react-dom/client'
+import {useState} from 'react'
+import {createSessionFileHost, type SessionFileHost} from '../../../../packages/browser-host/src/files.ts'
+import {createSheetsBridge} from './sheets-bridge.ts'
+import {messages} from './messages.ts'
+import type {SheetsEditorHandle} from '../../../sheets/src/renderer/App'
+import {App} from '../../../sheets/src/renderer/App'
+import {LocaleProvider,setModuleLang} from '../../../sheets/src/renderer/i18n/locale'
+import {installCanvasFontFallback,registerTextDingbatsFace,untilCellFontsLoaded} from '../../../sheets/src/renderer/cell-font-fallback'
+import type {DesktopApi} from '../../../sheets/src/shared/desktop-api'
+import {installScreenTips,applyAiPanelPrefs} from '@genoffice/ui'
+import '@genoffice/ui/tokens.css'
+import '@genoffice/ui/screentip.css'
+import '@genoffice/ui/ai-model-picker.css'
+import '@genoffice/ui/ai-queue-strip.css'
+import '@genoffice/ui/ai-usage.css'
+import '@genoffice/ui/ai-skills.css'
+import '@genoffice/ui/color-picker.css'
+import '@genoffice/ui/dropdown.css'
+import '@genoffice/ui/ribbon-collapse.css'
+import '@genoffice/ui/markdown.css'
+import '@genoffice/ui/ai-panel-prefs.css'
+import '@genoffice/ui/ai-scope-quote.css'
+import '@univerjs/preset-sheets-core/lib/index.css'
+import '../../../sheets/src/renderer/styles.css'
+
+import './sheets.css'
+
+export async function mountSheetsEditor(host: SessionFileHost, container: HTMLElement, fileId: string) {
+  container.textContent = messages.zh.opening
+  const opened = await host.open(fileId)
+  if (opened.format !== 'xlsx') throw new Error(messages.zh.failed)
+  const prefs = await host.getPreferences(), locale = prefs.language === 'en' ? 'en' : 'zh', text = messages[locale]
+  setModuleLang(locale); document.documentElement.lang = locale
+  if (prefs.theme === 'system') delete document.documentElement.dataset.theme
+  else document.documentElement.dataset.theme = prefs.theme
+  let changed = () => {}, editor: SheetsEditorHandle | null = null
+  const bridge = createSheetsBridge(host,fileId,prefs,{onChange:()=>changed()})
+  Object.defineProperty(window,'desktopApi',{value:bridge.api as unknown as DesktopApi,configurable:true})
+  applyAiPanelPrefs(await bridge.api.getAiPanelPrefs()); installScreenTips(); installCanvasFontFallback()
+  const loads: Promise<unknown>[] = [registerTextDingbatsFace()]
+  for (const variant of ['', 'bold ', 'italic ', 'italic bold ']) for (const family of ['Calibri','Aptos',"'Aptos Narrow'",'Carlito']) loads.push(document.fonts.load(`${variant}16px ${family}`).catch(()=>{}))
+  await untilCellFontsLoaded(Promise.all(loads))
+  let initialLease = true
+  try { await host.acquireLease(fileId) } catch { initialLease = false }
+  const stop = host.startRenewal(fileId), unsubscribe = host.subscribe(()=>changed())
+  function NativeWorkbook() {
+    const [,tick] = useState(0), [loaded,setLoaded] = useState(false), [failed,setFailed] = useState(false)
+    changed = () => tick(value=>value+1)
+    const state = host.getState(fileId)
+    const readOnly = failed || !state.lease || state.status === 'unknown' || bridge.needsConfirmation() || state.status === 'unauthorized'
+    const status = failed ? text.failed : !loaded ? text.opening : (state.status === 'unknown' || bridge.needsConfirmation()) ? text.unknown : state.status === 'unauthorized' ? text.unauthorized : !state.lease ? (initialLease ? text.conflict : text.readOnly) : bridge.isDirty() ? '' : text.ready
+    return <div className="dyoffice-native-sheets">
+      <div className="dyoffice-sheets-state" role="status">{status}
+        <a href={`/api/v1/files/${fileId}/content?revision=${state.revision.revision}`} download>{text.download}</a>
+        {!state.lease && !failed && <button onClick={()=>{void host.takeoverLease(fileId).then(()=>{initialLease=true}).catch(()=>{})}}>{text.takeover}</button>}
+        {bridge.needsConfirmation() && <button onClick={()=>{void bridge.confirmSave().catch(()=>{})}}>{text.retry}</button>}
+      </div>
+      <App queuedWorkbookAtBoot host={{readOnly,assistantAvailable:false,onWorkbookOpened:()=>setLoaded(true),onOpenFailed:()=>setFailed(true),onEditorReady:handle=>{editor=handle}}} />
+    </div>
+  }
+  const root = ReactDOM.createRoot(container)
+  root.render(<LocaleProvider initial={locale}><NativeWorkbook /></LocaleProvider>)
+  const beforeUnload = (event: BeforeUnloadEvent) => { if (editor?.isDirty() || host.getState(fileId).status === 'unknown') { event.preventDefault(); event.returnValue='' } }
+  window.addEventListener('beforeunload',beforeUnload)
+  return {save:()=>editor?.save() ?? Promise.resolve(false),dispose(){window.removeEventListener('beforeunload',beforeUnload);stop();unsubscribe();root.unmount();bridge.dispose()}}
+}
+async function bootstrap() {
+  const host=createSessionFileHost(),fileId=new URL(location.href).searchParams.get('fileId') ?? ''
+  try {
+    const mounted=await mountSheetsEditor(host,document.getElementById('root')!,fileId)
+    window.addEventListener('pagehide',()=>{void host.releaseLease(fileId,true).catch(()=>{});mounted.dispose();host.dispose()},{once:true})
+  } catch(error){host.dispose();throw error}
+}
+void bootstrap().catch(()=>{document.getElementById('root')!.textContent=messages.zh.failed})

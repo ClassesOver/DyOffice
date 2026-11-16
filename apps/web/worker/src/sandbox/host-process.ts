@@ -8,7 +8,7 @@ import { join,isAbsolute } from 'node:path'
 import { SandboxError,type SandboxSession,type SandboxLimits } from './contracts.ts'
 const exec=promisify(execFile),MAX=32*1024*1024
 const UUID=/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/
-const commands=new Set(['open','close','save_archive','read_range','recalc_cells','probe','network','pids','sleep','busy','allocate','flood','output','symlink','park'])
+const commands=new Set(['open','close','save_archive','read_range','read_formula_cells','read_row_outline','recalc_cells','probe','network','pids','sleep','busy','allocate','flood','output','symlink','park'])
 const environment={ PATH: '/usr/bin:/bin',LANG: 'C.UTF-8',SYSTEMD_COLORS: '0',SYSTEMD_PAGER: 'cat' }
 let active=0,memory=0
 async function bounded(file: FileHandle,size: number) {
@@ -68,6 +68,13 @@ export function createHostProcess({ binary,sha256,deploymentId,allowedCommands,l
           protocol+=Buffer.byteLength(chunk); if(protocol>p.protocolBytes)return fail(new SandboxError('OUTPUT_LIMIT'))
           line+=chunk
           for(;;){const i=line.indexOf('\n');if(i<0)break;const text=line.slice(0,i);line=line.slice(i+1)
+            // IronCalc's existing importer prints this known diagnostic when
+            // a saved formula has no cached value. It is not a protocol reply.
+            // Count it against both total protocol and a separate noise budget;
+            // never echo workbook-derived diagnostics into controller logs.
+            if(/^Unexpected type \([^\r\n]{0,64}\) in [^\r\n]{1,512}$/.test(text)){
+              stderr+=Buffer.byteLength(text);if(stderr>65536)return fail(new SandboxError('OUTPUT_LIMIT'));continue
+            }
             try{const packet=JSON.parse(text),waiter=pending.get(packet.requestId);if(packet.version!==1||typeof packet.ok!=='boolean'||!waiter)return fail(new SandboxError('INVALID_PROTOCOL'));pending.delete(packet.requestId);packet.ok?waiter.resolve(packet.result):waiter.reject(new SandboxError('NATIVE_FAILED'))}catch{return fail(new SandboxError('INVALID_PROTOCOL'))}
           }
         })
@@ -92,7 +99,19 @@ export function createHostProcess({ binary,sha256,deploymentId,allowedCommands,l
         const file=await open(dir+'/input.xlsx',constants.O_WRONLY|constants.O_CREAT|constants.O_EXCL|constants.O_NOFOLLOW,0o400)
         try{await file.chown(uid,uid);await file.writeFile(bytes);await file.sync()}finally{await file.close()}
         check()
+        let partBytes=0,partCount=0
         const session:SandboxSession={
+          async writePart(value){
+            check()
+            if(!(value instanceof Uint8Array)||value.length>MAX||partBytes+value.length>MAX||partCount>=256)throw new SandboxError('INPUT_LIMIT')
+            const bytes=Buffer.from(value),name='part-'+randomUUID()
+            partBytes+=bytes.length;partCount++
+            const writing=(async()=>{
+              const file=await open(dir+'/'+name,constants.O_WRONLY|constants.O_CREAT|constants.O_EXCL|constants.O_NOFOLLOW,0o444)
+              try{await file.writeFile(bytes);await file.sync();check();return '/work/'+name}finally{await file.close()}
+            })()
+            transfers.add(writing);try{return await writing}finally{transfers.delete(writing)}
+          },
           request(command,args){try{check();if(!permitted.has(command))return Promise.reject(new SandboxError('UNSUPPORTED_COMMAND'));if(!args||typeof args!=='object'||Array.isArray(args)||['command','version','requestId'].some(k=>Object.hasOwn(args,k))||pending.size>=8)return Promise.reject(new SandboxError('INVALID_REQUEST'));const requestId='host-'+(++sequence),text=JSON.stringify({version:1,requestId,command,...args})+'\n';if(Buffer.byteLength(text)>65536)return Promise.reject(new SandboxError('INPUT_LIMIT'));return new Promise((resolve,reject)=>{pending.set(requestId,{resolve,reject});running.stdin!.write(text,error=>{if(error)fail(new SandboxError('NATIVE_FAILED'))})})}catch(error){return Promise.reject(error)}},
           async readOutput(){
             check()

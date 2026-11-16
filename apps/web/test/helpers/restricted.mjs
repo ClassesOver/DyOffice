@@ -13,7 +13,7 @@ import { createPreferenceService } from '../../server/src/modules/preferences/se
 import { password } from './identity.mjs'
 export const restrictedOrigin = 'https://office.example'
 
-export async function restrictedFixture(t, { origin = restrictedOrigin, objectStore, filePolicy, nativeDocsDirectory, nativeJobs = false, worker = false, beforeMigrate, businessMax = 1 } = {}) {
+export async function restrictedFixture(t, { origin = restrictedOrigin, objectStore, filePolicy, nativeDocsDirectory, nativeSheetsDirectory, nativeJobs = false, sheetsNative, sheetsPlanner, sheetsPackageReader, worker = false, beforeMigrate, businessMax = 1 } = {}) {
   const source = process.env.DYOFFICE_TEST_DATABASE_URL
   assert.ok(source, 'Disposable PostgreSQL admin connection required')
   assert.match(new URL(source).pathname, /^\/dyoffice_test(?:_[a-z0-9_]+)?$/)
@@ -76,7 +76,7 @@ export async function restrictedFixture(t, { origin = restrictedOrigin, objectSt
   const alice = await signUser('alice'), bob = await signUser('bob')
   const workerPool = worker ? makePool('worker') : undefined
   const csrfKey = randomBytes(32).toString('hex')
-  const app = await buildLocalApp({ db, businessPool, passwords, deploymentId, origin, csrfKey, objectStore, filePolicy, nativeDocsDirectory, nativeJobs })
+  const app = await buildLocalApp({ db, businessPool, passwords, deploymentId, origin, csrfKey, objectStore, filePolicy, nativeDocsDirectory, nativeSheetsDirectory, nativeJobs, sheetsNative, sheetsPlanner, sheetsPackageReader })
   cleanup.push(() => app.close())
   const transactions = createPrincipalTransactions({ pool: businessPool, deploymentId })
   const preferences = createPreferenceService(transactions)

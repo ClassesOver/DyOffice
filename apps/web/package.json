@@ -17,7 +17,9 @@
     "test:sandbox": "node --experimental-strip-types --test --test-concurrency=1 test/sandbox/*.test.mjs test/host-native/*.test.mjs",
     "typecheck:worker": "tsc -p worker/tsconfig.json",
     "test:native-jobs": "node --experimental-strip-types --test --test-concurrency=1 test/native-jobs/*.test.mjs",
-    "start:worker": "node --experimental-strip-types worker/src/main.ts"
+    "start:worker": "node --experimental-strip-types worker/src/main.ts",
+    "build:sheets": "vite build --config vite.sheets.config.ts && node server/sheets/build.mjs",
+    "test:native-sheets": "node --experimental-strip-types --test --test-concurrency=1 test/native-sheets/*.test.mjs"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "3.1169.0",

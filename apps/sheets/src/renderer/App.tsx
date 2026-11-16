@@ -617,11 +617,26 @@ function dateTextKind(value: string): 'date-like' | 'text' {
   return kind
 }
 
+export interface SheetsEditorHandle {
+  save(): Promise<boolean>
+  isDirty(): boolean
+}
+export interface SheetsEditorHost {
+  readOnly: boolean
+  assistantAvailable: boolean
+  onWorkbookOpened?(): void
+  onOpenFailed?(): void
+  onEditorReady?(handle: SheetsEditorHandle | null): void
+}
 export function App({
   queuedWorkbookAtBoot = false,
+  host,
 }: {
   queuedWorkbookAtBoot?: boolean
+  host?: SheetsEditorHost
 }): React.JSX.Element {
+  const hostRef = useRef(host)
+  hostRef.current = host
   const adapterRef = useRef(new InMemoryWorkbookAdapter(initialSnapshot))
   const univerRef = useRef<UniverRuntime | null>(null)
   const lazyWorkbookRef = useRef<LazyWorkbookState | null>(null)
@@ -712,6 +727,13 @@ export function App({
   const [preview, setPreview] = useState<ChangePlan | null>(null)
   const [_revision, setRevision] = useState(0)
   const [workbookFile, setWorkbookFile] = useState<WorkbookFile | null>(null)
+  useEffect(() => {
+    if (host) univerRef.current?.univerAPI.getActiveWorkbook()?.setEditable(!host.readOnly)
+  }, [host?.readOnly, workbookFile])
+  useEffect(() => {
+    host?.onEditorReady?.({save: async () => (await handleSave('save')).ok, isDirty: () => pendingEditsForClose(pendingEdits, editingCellRef.current) > 0})
+    return () => host?.onEditorReady?.(null)
+  })
   /// The workbook's refreshable data connections (web queries for now).
   const [queryConnections, setQueryConnections] = useState<QueryConnection[]>([])
   const [pendingEdits, setPendingEdits] = useState(0)
@@ -1305,6 +1327,7 @@ export function App({
     operations: readonly WorkbookOperation[],
     summary: string,
   ): { ok: true; plan: ChangePlan } | { ok: false; error: string } {
+    if (hostRef.current?.readOnly) return {ok:false,error:t('appSaveFailed')}
     return proposeOperationsImpl(planContext(), operations, summary)
   }
 
@@ -1321,6 +1344,7 @@ export function App({
   /** gsk login state for the cloud-tools gate (refreshed on mount and window focus) */
   const gskLoggedInRef = useRef(false)
   useEffect(() => {
+    if (hostRef.current?.assistantAvailable === false) return
     let alive = true
     const refresh = () => {
       void window.desktopApi
@@ -2220,6 +2244,7 @@ export function App({
   }
 
   useEffect(() => {
+    if (hostRef.current?.assistantAvailable === false) return
     const loadSettings = () => void window.desktopApi.getAiSettings().then(setAiSettingsState)
     loadSettings()
     return window.desktopApi.onAiSettingsChanged?.(loadSettings)
@@ -4000,6 +4025,7 @@ export function App({
     overrideAttachments?: readonly AttachmentMeta[],
     retryIndex?: number,
   ): void {
+    if (hostRef.current?.readOnly || hostRef.current?.assistantAvailable === false) return
     const instruction = (overrideInstruction ?? prompt).trim()
     if (!instruction || aiBusy) return
     runToolsRef.current = []
@@ -4763,6 +4789,7 @@ export function App({
   }
 
   function handleRibbonCommand(command: string): void {
+    if (hostRef.current?.readOnly) return
     if (command.startsWith('query-refresh:')) {
       void refreshQueryConnection(command.slice('query-refresh:'.length))
       return
@@ -5204,6 +5231,7 @@ export function App({
     // drivers read Univer's render state through the Facade).
     if ((window as unknown as Record<string, unknown>).__genofficeDebugHooks === true) {
       ;(window as unknown as Record<string, unknown>).__genofficeDebug = {
+        applyOps: (ops: WorkbookOperation[]) => mcpSheetHandlersRef.current?.applyOps(ops,false),
         univerAPI: univerRef.current?.univerAPI,
         findReplaceService: univerRef.current?.univer.__getInjector().get(IFindReplaceService),
         // ground truth for typing-into-the-adopted-spare failures: the
@@ -5241,7 +5269,7 @@ export function App({
     applyWorkbookNotes(univerRef.current, selected)
     threadStore.load(selected)
     threadPane.close()
-    applyDefinedNames(univerRef.current, selected, state)
+    applyDefinedNames(univerRef.current, selected, state, hostRef.current !== undefined)
     const runtime = univerRef.current
     if (runtime) {
       requestAnimationFrame(() => {
@@ -5394,6 +5422,8 @@ export function App({
     } else {
       opts?.onInitialRangeLoaded?.()
     }
+    if (hostRef.current) univerRef.current?.univerAPI.getActiveWorkbook()?.setEditable(!hostRef.current.readOnly)
+    hostRef.current?.onWorkbookOpened?.()
     return true
   }
 
@@ -5484,6 +5514,7 @@ export function App({
       setMessage(selected.emptyCsv ? '' : t('appOpened', { name: selected.name }))
     } catch (error: unknown) {
       setMessage(error instanceof Error ? error.message : t('appOpenFailed'))
+      hostRef.current?.onOpenFailed?.()
       finishOpening()
     }
   }
@@ -5494,6 +5525,7 @@ export function App({
     explicitTarget?: { path: string; overwrite: boolean },
     defaultName?: string,
   ): Promise<SaveOutcome> {
+    if (hostRef.current?.readOnly) return {ok:false}
     // Manual and AI saves take the same gate as the timers: a recovery copy
     // written beside a real save would outlive it as a phantom Restore prompt.
     const gate = saveGateRef.current
@@ -5670,6 +5702,7 @@ export function App({
       }
     },
     applyOps: async (ops, dryRun) => {
+      if (hostRef.current?.readOnly && !dryRun) return {ok:false,reason:t('appSaveFailed')}
       const runtime = univerRef.current
       const state = lazyWorkbookRef.current
       const workbook = runtime?.univerAPI.getActiveWorkbook()
@@ -6018,6 +6051,7 @@ export function App({
         />
       )}
       <ExcelShell
+        assistantAvailable={host?.assistantAvailable ?? true}
         openingWorkbook={openingWorkbook}
         prompt={prompt}
         preview={preview}
@@ -6091,9 +6125,9 @@ export function App({
         zoomPercent={zoomPercent}
         statusBarFuncs={statusBarFuncs}
         onToggleStatusBarFunc={toggleStatusBarStat}
-        canSave={pendingEdits > 0 || workbookFile?.unsavedNew === true}
+        canSave={!host?.readOnly && (pendingEdits > 0 || workbookFile?.unsavedNew === true)}
         onSave={() => void handleSave('save')}
-        canSaveAs={workbookFile !== null}
+        canSaveAs={!host && workbookFile !== null}
         onSaveAs={() => void handleSave('save-as')}
         onNameWithAi={() => void nameWithAi()}
         onRedo={handleRedo}

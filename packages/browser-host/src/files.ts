@@ -3,8 +3,8 @@ import { isRevisionRef, type OpenFileResult, type RevisionRef, type SaveInput } 
 import { hostError, HostError } from '../../web-contracts/src/errors.ts'
 
 type Lease = { leaseEpoch: number; editorId: string; expiresAt: string }
-type Pending = { input: SaveInput; sha256: string; size: number }
-type Context = { leaseOperation: number; revision: RevisionRef; name: string; lease: Lease | null; pending: Pending | null; status: 'idle' | 'saving' | 'unknown' | 'conflict' | 'unauthorized'; staged: Map<string, { base: string; epoch: number; sha256: string; size: number }> }
+type Pending = { touchedEntries?: string[]; input: SaveInput; sha256: string; size: number }
+type Context = { preparing: boolean; leaseOperation: number; revision: RevisionRef; name: string; lease: Lease | null; pending: Pending | null; status: 'idle' | 'saving' | 'unknown' | 'conflict' | 'unauthorized'; staged: Map<string, { base: string; epoch: number; sha256: string; size: number }> }
 const uuid = (value: string) => { if (typeof value !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value)) throw hostError('INVALID_REVISION','identifier'); return value.toLowerCase() }
 const digest = async (bytes: Uint8Array) => Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',bytes.slice().buffer as ArrayBuffer)),value => value.toString(16).padStart(2,'0')).join('')
 function errorFor(status: number) {
@@ -43,7 +43,7 @@ export function createSessionFileHost({ fetchImpl = fetch, editorId = crypto.ran
       // Cached proof permits a pagehide keepalive request to start synchronously
       // before disposal clears private browser state.
       const proof = csrf ?? await csrfToken()
-      const reply = await request(path,{ method,keepalive,headers: { 'x-csrf-token': proof,...(body === undefined ? {} : { 'content-type': binary ? 'application/octet-stream' : 'application/json' }) }, body: body === undefined ? undefined : binary ? body as BodyInit : JSON.stringify(body) })
+      const reply = await request(path,{ method,keepalive,headers: { 'x-csrf-token': proof,...(body === undefined ? {} : { 'content-type': binary ? 'application/octet-stream' : 'application/json' }) }, ...(body === undefined ? {} : {body: binary ? body as BodyInit : JSON.stringify(body)}) })
       if (reply.status === 403 && attempt === 0) { csrf = undefined; continue }
       return readJson(reply)
     }
@@ -82,11 +82,11 @@ export function createSessionFileHost({ fetchImpl = fetch, editorId = crypto.ran
     getCapabilities: () => get('/api/v1/capabilities'),
     async open(fileId) {
       const id = uuid(fileId)
-      if (contexts.get(id)?.pending) throw hostError('UNAVAILABLE','unconfirmed commit')
+      if (contexts.get(id)?.pending || contexts.get(id)?.preparing) throw hostError('UNAVAILABLE','unconfirmed commit')
       const result = await get(`/api/v1/files/${id}`) as OpenFileResult & { name?: string }
       if (!isRevisionRef(result?.file) || result.file.fileId !== id) throw hostError('INVALID_RESPONSE','open')
       const name = typeof result.name === 'string' && result.name.length <= 255 ? result.name : id + '.' + result.format
-      contexts.set(id,{ leaseOperation: 0,revision: { ...result.file },name,lease: null,pending: null,status: 'idle',staged: new Map() }); remember(result.file); emit()
+      contexts.set(id,{ preparing: false,leaseOperation: 0,revision: { ...result.file },name,lease: null,pending: null,status: 'idle',staged: new Map() }); remember(result.file); emit()
       return result
     },
     async readBytes(fileId, revision) {
@@ -114,7 +114,7 @@ export function createSessionFileHost({ fetchImpl = fetch, editorId = crypto.ran
     },
     async stageSave(bytes, fileId) {
       const id = uuid(fileId), ctx = context(id), lease = ctx.lease
-      if (!lease || ctx.pending) throw hostError(ctx.pending ? 'UNAVAILABLE' : 'CONFLICT','stage')
+      if (!lease || ctx.pending || ctx.preparing) throw hostError(ctx.pending || ctx.preparing ? 'UNAVAILABLE' : 'CONFLICT','stage')
       const snapshot = bytes.slice(), sha256 = await digest(snapshot), base = ctx.revision.revision
       try {
         const result = await mutation(`/api/v1/files/${id}/uploads`,'POST',{ size: snapshot.byteLength,baseRevision: base,leaseEpoch: lease.leaseEpoch,editorId: editor })
@@ -126,7 +126,7 @@ export function createSessionFileHost({ fetchImpl = fetch, editorId = crypto.ran
     },
     async commitSave(input) {
       const id = uuid(input.fileId), ctx = context(id), staged = ctx.staged.get(input.uploadId)
-      if (!staged || staged.base !== input.baseRevision || staged.epoch !== input.leaseEpoch || ctx.pending) throw hostError('INVALID_REVISION','snapshot')
+      if (!staged || staged.base !== input.baseRevision || staged.epoch !== input.leaseEpoch || ctx.pending || ctx.preparing) throw hostError('INVALID_REVISION','snapshot')
       return commit(id,ctx,{ input: Object.freeze({ ...input }),sha256: staged.sha256,size: staged.size })
     },
     getPreferences: () => get('/api/preferences'),
@@ -144,6 +144,39 @@ export function createSessionFileHost({ fetchImpl = fetch, editorId = crypto.ran
     },
     async releaseLease(fileId: string, keepalive = false) { const id = uuid(fileId), ctx = context(id), lease = ctx.lease, operation = ++ctx.leaseOperation; if (lease) { await mutation(`/api/v1/files/${id}/lease`,'DELETE',{ editorId: editor,leaseEpoch: lease.leaseEpoch },false,keepalive); if (operation === ctx.leaseOperation) { ctx.lease = null; emit() } } },
     async reconcile(fileId: string) { const id = uuid(fileId), ctx = context(id); if (!ctx.pending) return { ...ctx.revision }; return commit(id,ctx,ctx.pending) },
+    async reconcileSheets(fileId: string) {
+      const id=uuid(fileId),ctx=context(id),pending=ctx.pending
+      if (!pending?.touchedEntries) throw hostError('INVALID_REVISION','sheet receipt')
+      const saved=await commit(id,ctx,pending)
+      return {...saved,touchedEntries:[...pending.touchedEntries]}
+    },
+    async saveSheets(fileId: string, edits: unknown) {
+      const id = uuid(fileId), ctx = context(id), lease = ctx.lease, base = ctx.revision.revision
+      // An uncertain receipt must be reconciled before replaying edits: sheet
+      // insertion and other structural commands are not idempotent operations.
+      if (ctx.pending || ctx.preparing) throw hostError('UNAVAILABLE','unconfirmed save')
+      if (!lease) throw hostError('CONFLICT','lease')
+      ctx.preparing = true; ctx.status = 'saving'; emit()
+      let committing = false
+      try {
+        const snapshot = structuredClone(edits)
+        const draft = await mutation(`/api/v1/files/${id}/sheets/uploads`,'POST',{ baseRevision: base,leaseEpoch: lease.leaseEpoch,editorId: editor,request: snapshot })
+        const uploadId = uuid(draft?.uploadId)
+        if (draft.baseRevision !== base || draft.leaseEpoch !== lease.leaseEpoch || typeof draft.sha256 !== 'string' || !/^[a-f0-9]{64}$/.test(draft.sha256) || !Number.isSafeInteger(draft.size) || draft.size < 1 || draft.size > 32 * 1024 * 1024) throw hostError('INVALID_RESPONSE','prepared workbook')
+        if (context(id) !== ctx || ctx.revision.revision !== base || ctx.lease?.leaseEpoch !== lease.leaseEpoch) throw hostError('CONFLICT','changed save authority')
+        if (!Array.isArray(draft.touchedEntries) || draft.touchedEntries.length > 256 || draft.touchedEntries.some((name: unknown) => typeof name !== 'string' || name.length > 1024)) throw hostError('INVALID_RESPONSE','changed parts')
+        committing = true
+        const saved = await commit(id,ctx,{ touchedEntries: [...draft.touchedEntries], input: Object.freeze({fileId: id,uploadId,baseRevision: base,leaseEpoch: lease.leaseEpoch,idempotencyKey: crypto.randomUUID()}),sha256: draft.sha256,size: draft.size })
+        return {...saved,touchedEntries: draft.touchedEntries as string[]}
+      } catch (error) {
+        if (!committing) {
+          const code = (error as HostError).code
+          ctx.status = code === 'UNAUTHORIZED' ? 'unauthorized' : code === 'CONFLICT' ? 'conflict' : 'idle'
+          if (code === 'UNAUTHORIZED' || code === 'CONFLICT') ctx.lease = null
+        }
+        throw error
+      } finally { ctx.preparing = false; emit() }
+    },
     async save(fileId: string, bytes: Uint8Array) {
       const id = uuid(fileId), ctx = context(id)
       if (ctx.pending) { const prior = ctx.pending; const recovered = await commit(id,ctx,prior); if (await digest(bytes) === prior.sha256) return recovered }

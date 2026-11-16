@@ -1129,7 +1129,10 @@ export function applyDefinedNames(
   runtime: UniverRuntime | null,
   file: WorkbookFile,
   state: LazyWorkbookState,
+  evaluateInstalledNames = false,
 ): void {
+  setEvaluableDefinedNames([])
+  const evaluable: string[] = []
   const workbook = runtime?.univerAPI.getActiveWorkbook()
   if (!workbook) return
   // Excel allows one definition per (name, scope) and resolves sheet-scope
@@ -1176,6 +1179,9 @@ export function applyDefinedNames(
             })
             .build(),
         )
+        // Web can evaluate unambiguous installed names that reference ordinary
+        // cells. Scoped collisions, named formulas, and external refs stay cached.
+        if (evaluateInstalledNames && defined.sheetIndex === undefined && file.definedNames.filter(entry=>entry.name.toLowerCase()===defined.name.toLowerCase()).length === 1 && !containsUnresolvedNames(defined.formula) && extractFunctionNames(defined.formula).length === 0 && !defined.formula.includes('#REF!')) evaluable.push(defined.name)
       } catch {
         // Names the engine can't model stay file-only; the save keeps them.
         state.uninstalledDefinedNames.add(defined.name)
@@ -1184,6 +1190,7 @@ export function applyDefinedNames(
   } finally {
     journalSuppression.active = false
   }
+  setEvaluableDefinedNames(evaluable)
 }
 
 /// An author-less comment carries no marker, so the marker is recognised by
@@ -4475,6 +4482,11 @@ export function usesLocaleDependentFunction(formula: string): boolean {
 /// table references. The verdict only applies when the cell has a cache — with
 /// nothing to keep, the engine's attempt beats a blank cell (genoffice#2125).
 const keepsCacheMemo = new Map<string, boolean>()
+let evaluableDefinedNames = new Set<string>()
+export function setEvaluableDefinedNames(names: readonly string[]): void {
+  evaluableDefinedNames = new Set(names.map(name=>name.toLowerCase()))
+  keepsCacheMemo.clear()
+}
 
 /// Window onto the running formula engine's function registry. Installed
 /// once the Univer instance exists; without one every function counts as
@@ -4517,7 +4529,7 @@ export function formulaKeepsCache(formula: string, hasCachedValue = true): boole
     verdict =
       formula.includes('__xludf.') ||
       usesLocaleDependentFunction(formula) ||
-      containsUnresolvedNames(formula) ||
+      containsUnresolvedNames(formula,name=>evaluableDefinedNames.has(name.toLowerCase())) ||
       (probe !== null && registryReady && callsUnsupportedFunction(formula, probe))
     // A verdict taken before the builtins landed would pin "supported" on
     // every function for the rest of the session.
