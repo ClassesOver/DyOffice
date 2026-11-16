@@ -318,8 +318,8 @@
       "size": 654324
     },
     "package.json": {
-      "sha256": "94d3e444c1c6276af435ac2d73e5fc6d971de05dda77dbc03ba442056dc57d4a",
-      "size": 7971
+      "sha256": "967cd35aa9db5cc84200aebc7b14327255727b07be274debd9366bd55b639fc2",
+      "size": 8023
     },
     "packages/ui/src/fonts/Carlito-Bold.ttf": {
       "sha256": "ed778b78ce652f5b17647344fb9a4c4dcb2e6f8bafe75a0366300da7f8c199ac",

@@ -53,3 +53,8 @@ test('T00 tool placements are checked and inventory-only changes trigger both ev
   assert.match(workflow, /run: node tools\/dyoffice\/agent-tool-inventory\.mjs --check/)
   assert.equal((workflow.match(/'docs\/dyoffice\/inventory\/agent-tools\*'/g) ?? []).length, 2)
 })
+
+test('T01 CI executes the documented selectable unit command and watches its runner', () => {
+  assert.match(workflow, /run: npm run test:web:unit -- host-contract\.test\.mjs/)
+  assert.equal((workflow.match(/'tools\/run-web-unit\.mjs'/g) ?? []).length, 2)
+})

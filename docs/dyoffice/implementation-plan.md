@@ -64,12 +64,12 @@ docs/dyoffice/               当前计划及 inventory/ evidence/ adr/
 
 ## 2. 检查命令与执行纪律
 
-当前已存在 `npm run test:web`、`dev:web`、`start:web`，以及 T02 增加的 `npm run test:web:integration -- <test-file>`。该命令只运行 `apps/web/test/integration/` 下的一个测试文件。`api-compat` 是 HTTP 契约，不连接 PostgreSQL、S3 或 Redis。下表其余脚本仍未创建，不能宣称它们已存在：
+当前已存在 `npm run test:web`、`dev:web`、`start:web`，以及 T02 增加的 `npm run test:web:integration -- <test-file>`。该命令只运行 `apps/web/test/integration/` 下的一个测试文件。`api-compat` 是 HTTP 契约，不连接 PostgreSQL、S3 或 Redis。另已提供 `npm run test:web:unit -- host-contract.test.mjs`，运行现有 Node.js 契约测试；不接受不存在的 `.ts` 测试名。下表尚未实现的计划脚本仍不能宣称已存在：
 
 | 命令 | 责任 |
 | --- | --- |
 | `npm run test:web:legacy` | 原有 `apps/web/test/*.test.mjs` 回归 |
-| `npm run test:web:unit -- <test-file>` | Web Vitest 单元测试，允许文件筛选 |
+| `npm run test:web:unit -- <test-file>` | Web Node.js 单元测试，按现有 `.test.mjs` basename 筛选；无参数运行全部 unit 测试 |
 | `npm run test:web:integration -- <test-file>` | 运行一个 Web 集成测试文件。当前 `api-compat` 只覆盖 HTTP；PostgreSQL 身份测试仍在 identity workflow，不在此脚本的默认范围内 |
 | `npm run test:web:e2e -- <spec-file>` | 浏览器原生编辑与端到端流程 |
 | `npm run test:web:security` | 越权、SSRF、注入、上传、Token、安全边界 |
@@ -100,12 +100,12 @@ docs/dyoffice/               当前计划及 inventory/ evidence/ adr/
 
 ### T01 共享契约与 BrowserHost 骨架
 
-**依赖：** T00。**文件：** 新建 `packages/web-contracts/{package.json,src/host.ts,src/api.ts,src/events.ts,src/tools.ts,src/errors.ts}`、`packages/browser-host/src/index.ts`、`apps/web/test/unit/host-contract.test.ts`。
+**依赖：** T00。**文件：** 新建 `packages/web-contracts/{package.json,src/host.ts,src/api.ts,src/events.ts,src/tools.ts,src/errors.ts}`、`packages/browser-host/src/index.ts`、`apps/web/test/unit/host-contract.test.mjs`。
 
 **接口：** 输出第 1 节全部共享类型和 BrowserHost；`getCapabilities(): Promise<CapabilityCatalog>` 明确区分 unsupported、read_only、editable。
 
 - [ ] 编写未知宿主方法、错误 DTO、缺失版本号、超大事件和 secret 字段泄漏测试。
-- [ ] 运行 `npm run test:web:unit -- host-contract.test.ts`，确认契约缺失导致 RED。
+- [ ] 运行 `npm run test:web:unit -- host-contract.test.mjs`，确认契约缺失导致 RED。
 - [ ] 实现类型和静态校验；未知功能明确失败，不返回假成功；为 Electron 现有行为保留适配入口。
 - [ ] 同命令 GREEN，`typecheck:web` 通过，验证无 Node 依赖混入浏览器包。
 - [ ] 提交 `feat(web): define host and transport contracts`。
