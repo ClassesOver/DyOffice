@@ -1,3 +1,5 @@
+import { registerFixedProviderProbe } from './modules/providers/fixed-probe.ts'
+import type { AdminPipelineProfile } from './modules/providers/admin-pipeline.ts'
 import { registerAdminSyntheticProbe } from './modules/providers/synthetic-probe.ts'
 import { createSheetsSaveService, type SheetsPlanner, type SheetsSaveNative } from './modules/sheets/save.ts'
 import { createSheetsService, type SheetsNative, type SheetsPackageReader } from './modules/sheets/service.ts'
@@ -57,12 +59,17 @@ export interface LocalWebConfig {
   objectStore?: ObjectStore; filePolicy?: FilePolicy; nativeDocsDirectory?: string; nativeSheetsDirectory?: string; nativeJobs?: boolean; sheetsNative?: SheetsNative & Partial<SheetsSaveNative>; sheetsPlanner?: SheetsPlanner; sheetsPackageReader?: SheetsPackageReader; localShellDirectory?: string;
   globalConfigKeyring?: SecretKeyring;
   adminAiSyntheticProbe?: boolean;
+  // Explicit network-capable fixed probe, NOT the offline diagnostic. No automatic run.
+  adminProviderProbe?: { profiles: readonly AdminPipelineProfile[] };
+  providerShutdownTimeoutMs?: number;
   passwordBlocklistFile?: string; loginLimits?: LoginLimits; idleMs?: number; absoluteMs?: number; closeDb?: () => Promise<void>
 }
 export async function buildLocalApp(config: LocalWebConfig): Promise<FastifyInstance> {
   if (process.env.NODE_ENV === 'production') throw new Error('Local runtime is not allowed in production before enterprise release gates')
   if (config.adminAiSyntheticProbe !== undefined && typeof config.adminAiSyntheticProbe !== 'boolean') throw new Error('Invalid synthetic probe configuration')
   if (config.adminAiSyntheticProbe && !config.businessPool) throw new Error('Synthetic probe requires restricted business pool')
+  if (config.providerShutdownTimeoutMs !== undefined && (!Number.isSafeInteger(config.providerShutdownTimeoutMs) || config.providerShutdownTimeoutMs < 1 || config.providerShutdownTimeoutMs > 35_000)) throw new Error('Invalid provider shutdown timeout')
+  if (config.adminProviderProbe !== undefined && (!config.adminProviderProbe || Object.keys(config.adminProviderProbe).join() !== 'profiles' || !Array.isArray(config.adminProviderProbe.profiles) || !config.adminProviderProbe.profiles.length || !config.businessPool || !config.globalConfigKeyring || config.adminProviderProbe.profiles.some(p=>!p || p.deploymentId!==config.deploymentId))) throw new Error('Invalid provider probe configuration')
   if ('userToken' in config || 'adminToken' in config) throw new Error('Local mode rejects development tokens')
   async function assertReady() {
     await config.db.assertCurrent()
@@ -92,15 +99,27 @@ export async function buildLocalApp(config: LocalWebConfig): Promise<FastifyInst
   const csrf = createCsrfService({ db: config.db, deploymentId: config.deploymentId, origin: config.origin, key: config.csrfKey })
   const throttle = createLoginThrottle(config.db, config.deploymentId, config.csrfKey, config.loginLimits)
   const app = await createApiShell()
+  try {
   if (config.localShellDirectory) await registerLocalShell(app,config.localShellDirectory)
-  if (config.closeDb) app.addHook('onClose', () => config.closeDb!())
+  const ownedProbes: {dispose():void;drain(options?:{timeoutMs?:number}):Promise<void>}[]=[]
+  app.addHook('preClose',async()=>{for(const probe of ownedProbes)probe.dispose()})
+  app.addHook('onClose',async()=>{
+    for(const probe of ownedProbes)probe.dispose()
+    await Promise.all(ownedProbes.map(probe=>probe.drain({timeoutMs:config.providerShutdownTimeoutMs})))
+    // Failed/dirty probe drain intentionally skips shared-pool closure.
+    if(config.closeDb)await config.closeDb()
+  })
   registerHealthRoutes(app, createReadinessProbe({ identityReady: assertReady, businessPool: config.businessPool, objectStore: config.objectStore }))
   const users = createUserService({ db: config.db, accounts, sessions, passwords, deploymentId: config.deploymentId })
   registerAuthRoutes(app, { sessions, csrf, throttle, users })
   registerUserRoutes(app, users, csrf)
   if (config.businessPool) {
     const transactions = createPrincipalTransactions({ pool: config.businessPool, deploymentId: config.deploymentId, idleMs: config.idleMs })
-    if (config.adminAiSyntheticProbe === true) registerAdminSyntheticProbe(app, { transactions, sessions, csrf })
+    if (config.adminAiSyntheticProbe === true) ownedProbes.push(registerAdminSyntheticProbe(app, { transactions, sessions, csrf }))
+    if(config.adminProviderProbe){
+      try{ownedProbes.push(registerFixedProviderProbe(app,{deploymentId:config.deploymentId,transactions,sessions,csrf,keyring:config.globalConfigKeyring!,profiles:config.adminProviderProbe.profiles}))}
+      catch(error){await app.close();throw error}
+    }
     registerPreferenceRoutes(app, createPreferenceService(transactions), sessions, csrf)
     registerWorkspaceRoutes(app, createWorkspaceService(transactions), sessions, csrf)
     registerGlobalConfigRoutes(app, createGlobalConfigService({transactions, keyring: config.globalConfigKeyring}), sessions, csrf)
@@ -169,4 +188,11 @@ export async function buildLocalApp(config: LocalWebConfig): Promise<FastifyInst
   })
   await app.ready()
   return app
+  } catch(error) {
+    // Includes asynchronous plugin/ready failures after private pipeline creation.
+    // A dirty drain may reject; preserve the original startup failure, never force
+    // close shared resources past that failure.
+    await app.close().catch(()=>{})
+    throw error
+  }
 }

@@ -234,3 +234,72 @@ test('ambiguous committed reservation response cannot report clean drain or clos
  await assert.rejects(shutdown(),/drain/);assert.equal(closed,0)
  assert.equal((await f.ownerPool.query('SELECT state FROM provider_budget_reservations')).rows[0].state,'reserved')
 })
+async function wiredApp(f,options={}){
+ const {buildLocalApp}=await import('../../server/src/app.ts')
+ const app=await buildLocalApp({db:f.db,businessPool:f.businessPool,passwords:f.passwords,deploymentId:f.deploymentId,origin:'https://office.example',csrfKey:f.csrfKey,globalConfigKeyring:keyring,adminAiSyntheticProbe:true,adminProviderProbe:{profiles:[f.profile]},...options})
+ f.cleanup.push(()=>app.close().catch(()=>{}))
+ return app
+}
+function probeHeaders(f){const csrf=createCsrfService({db:f.db,deploymentId:f.deploymentId,origin:'https://office.example',key:f.csrfKey});return {cookie:'__Host-dyoffice-session='+f.adminSigned.token,origin:'https://office.example','x-csrf-token':csrf.sessionToken(f.adminSigned.token)}}
+test('actual default-off fixed probe accepts only synthetic scenario and never mounts generic AI',async t=>{
+ const n=network(t),f=await fixture(t),app=await wiredApp(f)
+ const h=probeHeaders(f),url='/api/v1/admin/ai-probe/turns',payload={turnId:f.turnId,modelId:'primary',scenario:'hello'}
+ assert.equal((await f.app.inject({method:'POST',url,headers:h,payload})).statusCode,501)
+ for(const extra of [{request},{apiKey:'synthetic'},{endpoint:'https://evil.example'}])assert.equal((await app.inject({method:'POST',url,headers:h,payload:{...payload,...extra}})).statusCode,400)
+ assert.equal((await app.inject({method:'POST',url:'/api/v1/ai/turns',headers:h,payload:{}})).statusCode,501)
+ const csrf=createCsrfService({db:f.db,deploymentId:f.deploymentId,origin:'https://office.example',key:f.csrfKey})
+ const member={...h,cookie:'__Host-dyoffice-session='+f.alice.token,'x-csrf-token':csrf.sessionToken(f.alice.token)}
+ assert.equal((await app.inject({method:'POST',url,headers:member,payload})).statusCode,403)
+ assert.equal(n.writes,0)
+ const r=await app.inject({method:'POST',url,headers:h,payload})
+ assert.equal(r.statusCode,200);assert.equal(n.writes,1)
+ const body=JSON.parse(n.wire);assert.deepEqual(body.tools,undefined);assert.equal(body.messages.at(-1).content,'Synthetic hello probe.')
+ // Mock tool output must remain rejected, never executed by the probe route.
+ assert.match(r.body,/event: error/)
+})
+for(const timeout of [false,true])test(`actual loopback app close ${timeout?'times out without pool close':'drains unknown before pool close'}`,async t=>{
+ const {request:httpRequest}=await import('node:http')
+ const n=network(t,()=>{const res=new Readable({read(){}});res.push(validChunks[0]);return res}),f=await fixture(t)
+ let closed=0
+ const app=await wiredApp(f,{providerShutdownTimeoutMs:timeout?50:2000,closeDb:async()=>{
+  assert.equal((await f.ownerPool.query('SELECT state FROM provider_budget_reservations')).rows[0].state,'unknown')
+  await f.businessPool.end();closed++
+ }})
+ const address=await app.listen({host:'127.0.0.1',port:0}),delta=deferred()
+ const response=new Promise((resolve,reject)=>{
+  const req=httpRequest(address+'/api/v1/admin/ai-probe/turns',{method:'POST',agent:false,headers:{...probeHeaders(f),'content-type':'application/json'}},res=>{
+   let body='';res.on('data',c=>{body+=c;if(body.includes('event: delta'))delta.resolve()});res.on('end',()=>resolve(body));res.on('error',reject)
+  });req.on('error',reject);req.end(JSON.stringify({turnId:f.turnId,modelId:'primary',scenario:'hello'}))
+ })
+ await bounded(delta.promise)
+ const lock=await f.ownerPool.connect();await lock.query('BEGIN');await lock.query('SELECT * FROM provider_budget_reservations FOR UPDATE')
+ const closing=Promise.all([app.close(),app.close()]);void closing.catch(()=>{})
+ try{
+  if(timeout){await assert.rejects(bounded(closing),/drain/);assert.equal(closed,0)}
+  else{await new Promise(r=>setTimeout(r,60));assert.equal(closed,0)}
+  await lock.query('ROLLBACK');lock.release()
+  if(!timeout){await bounded(closing);assert.equal(closed,1);await app.close();assert.equal(closed,1)}
+  else{
+   const until=Date.now()+2000
+   while((await f.ownerPool.query('SELECT state FROM provider_budget_reservations')).rows[0].state!=='unknown'){
+    if(Date.now()>until)throw Error('late unknown missing');await new Promise(r=>setTimeout(r,5))
+   }
+   assert.equal(closed,0)
+  }
+  assert.equal(n.writes,1);assert.equal((String(await response).match(/event: done/g)||[]).length,1)
+ }catch(e){try{await lock.query('ROLLBACK');lock.release()}catch{};throw e}
+})
+
+test('actual fixed probe completes a tool-free mocked provider response',async t=>{
+ const n=network(t,[validChunks[0],frame({choices:[{delta:{},finish_reason:'stop'}]}),validChunks[2],validChunks[3]]),f=await fixture(t),app=await wiredApp(f)
+ const r=await app.inject({method:'POST',url:'/api/v1/admin/ai-probe/turns',headers:probeHeaders(f),payload:{turnId:f.turnId,modelId:'primary',scenario:'hello'}})
+ assert.equal(r.statusCode,200);assert.doesNotMatch(r.body,/event: error/);assert.match(r.body,/event: delta/)
+ assert.equal((r.body.match(/event: done/g)||[]).length,1);assert.equal(n.writes,1)
+})
+test('actual app rejects malformed provider admission and shutdown deadline',async t=>{
+ const {buildLocalApp}=await import('../../server/src/app.ts'),f=await fixture(t)
+ const base={db:f.db,businessPool:f.businessPool,passwords:f.passwords,deploymentId:f.deploymentId,origin:'https://office.example',csrfKey:f.csrfKey,globalConfigKeyring:keyring}
+ for(const value of [null,false,{}, {profiles:[]},{profiles:[{...f.profile,deploymentId:'other'}]}, {profiles:[f.profile],enabled:true}])await assert.rejects(buildLocalApp({...base,adminProviderProbe:value}),/probe/)
+ await assert.rejects(buildLocalApp({...base,globalConfigKeyring:undefined,adminProviderProbe:{profiles:[f.profile]}}),/probe/)
+ for(const value of [0,35001,'50',NaN])await assert.rejects(buildLocalApp({...base,providerShutdownTimeoutMs:value}),/timeout/)
+})
