@@ -91,3 +91,34 @@ test('provider exception and oversized events are redacted',async()=>{
    assert.deepEqual(events,[])
  }
 })
+
+test('cancel identity errors are redacted',async()=>{
+ const service=setup({identity:async()=>{throw new Error('postgres://private-password@example/identity')}})
+ await assert.rejects(()=>service.cancel('a','turn'),/^Error: AI turn unavailable$/)
+})
+
+test('cancel deadline rejects stalled identity and bounds uncooperative lookup capacity',{timeout:150},async()=>{
+ let identityCalls=0
+ const service=createProviderTurns({identity:()=>{identityCalls++;return new Promise(()=>{})},authorize:async()=>({identity:owner,revision:'1'}),revalidate:async()=>{},stream:async function*(){}},{cancelTimeoutMs:10,maxActive:1})
+ const result=service.cancel('a','turn')
+ await assert.rejects(()=>service.cancel('a','other'),/AI cancellation capacity reached/)
+ await assert.rejects(()=>result,/AI cancellation timed out/)
+ await assert.rejects(()=>service.cancel('a','third'),/AI cancellation capacity reached/)
+ assert.equal(identityCalls,1)
+})
+
+test('late cancellation identity cannot abort a turn after the deadline; settled lookup frees capacity',{timeout:200},async()=>{
+ let started,late,signal
+ const ready=new Promise(resolve=>started=resolve)
+ const service=createProviderTurns({identity:async token=>token==='slow'?new Promise(resolve=>late=resolve):owner,authorize:async()=>({identity:owner,revision:'1'}),revalidate:async()=>{},stream:async function*(p,r,s){signal=s;started();await new Promise(()=>{})}},{timeoutMs:1000,cancelTimeoutMs:10,maxActive:1})
+ const running=service.run(input,()=>{});await ready
+ await assert.rejects(()=>service.cancel('slow','turn'),/AI cancellation timed out/)
+ late(owner);await new Promise(resolve=>setTimeout(resolve,0))
+ assert.equal(signal.aborted,false)
+ assert.equal(await service.cancel('a','turn'),true)
+ await assert.rejects(()=>running,/AI turn cancelled/)
+})
+
+test('invalid cancellation timeout is rejected',()=>{
+ for(const cancelTimeoutMs of [0,-1,NaN,Infinity,2147483648]) assert.throws(()=>createProviderTurns({}, {cancelTimeoutMs}),/Invalid AI turn limits/)
+})
