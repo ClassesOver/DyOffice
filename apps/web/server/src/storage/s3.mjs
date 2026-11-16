@@ -20,14 +20,22 @@ function createExclusive() {
   }
 }
 
+const DEFAULT_STAGED_UPLOAD_TTL_MS = 24 * 60 * 60 * 1000
+
 /**
  * Object store on an S3-shaped client. The supplied client may be the
  * in-process fake. This is not highly available storage and it does not
  * enforce database row-level security. The caller passes the server owner id.
  * A client ETag is never stored or trusted as the content hash.
+ * Abandoned staged uploads expire the same way as the local disk store.
  */
-export function createS3ObjectStore({ client, maxObjectBytes, maxOwnerBytes, afterBytesWritten, afterReferencePublished } = {}) {
+export function createS3ObjectStore({
+  client, maxObjectBytes, maxOwnerBytes, afterBytesWritten, afterReferencePublished, beforeObjectPublished,
+  stagedUploadTtlMs = DEFAULT_STAGED_UPLOAD_TTL_MS, now = Date.now,
+} = {}) {
   if (!client || typeof client.put !== 'function' || typeof client.get !== 'function') reject('UNSAFE_CLIENT')
+  if (!Number.isSafeInteger(stagedUploadTtlMs) || stagedUploadTtlMs < 1000) reject('UNSAFE_TTL')
+  if (typeof now !== 'function') reject('UNSAFE_TTL')
   if (!Number.isSafeInteger(maxObjectBytes) || maxObjectBytes < 1) reject('UNSAFE_QUOTA')
   if (!Number.isSafeInteger(maxOwnerBytes) || maxOwnerBytes < maxObjectBytes) reject('UNSAFE_QUOTA')
   const exclusive = createExclusive()
@@ -55,6 +63,11 @@ export function createS3ObjectStore({ client, maxObjectBytes, maxOwnerBytes, aft
     return `blobs/${sha256}`
   }
 
+  function isExpiredStage(record) {
+    return record.finished !== true && Number.isSafeInteger(record.stagedAt) &&
+      now() - record.stagedAt > stagedUploadTtlMs
+  }
+
   async function recordsUnder(prefix, include) {
     const found = []
     for (const key of await client.list(prefix)) {
@@ -66,7 +79,7 @@ export function createS3ObjectStore({ client, maxObjectBytes, maxOwnerBytes, aft
   }
 
   async function blobStillNeeded(sha256) {
-    const staged = await recordsUnder('staging/', (record) => record.sha256 === sha256 && record.finished !== true)
+    const staged = await recordsUnder('staging/', (record) => record.sha256 === sha256 && record.finished !== true && !isExpiredStage(record))
     if (staged.length > 0) return true
     const kept = await recordsUnder('objects/', (record) => record.sha256 === sha256)
     return kept.length > 0
@@ -79,11 +92,25 @@ export function createS3ObjectStore({ client, maxObjectBytes, maxOwnerBytes, aft
         if (!key.endsWith('.json')) continue
         const record = await readJson(key)
         if (!record || !Number.isSafeInteger(record.size)) continue
-        if (record.finished && prefix.startsWith('staging/')) continue
+        if (prefix.startsWith('staging/') && (record.finished || isExpiredStage(record))) continue
         total += record.size
       }
     }
     return total
+  }
+
+  async function sweepExpiredStages(ownerId) {
+    for (const key of await client.list(`staging/${ownerId}/`)) {
+      if (!key.endsWith('.json')) continue
+      const record = await readJson(key)
+      if (!record || !isExpiredStage(record)) continue
+      await client.delete(key)
+      if (typeof record.sha256 === 'string' && /^[0-9a-f]{64}$/.test(record.sha256)) {
+        await exclusiveSha(record.sha256, async () => {
+          if (!(await blobStillNeeded(record.sha256))) await client.delete(blobKey(record.sha256))
+        })
+      }
+    }
   }
 
   return {
@@ -91,6 +118,7 @@ export function createS3ObjectStore({ client, maxObjectBytes, maxOwnerBytes, aft
       assertOwnerId(ownerId)
       const { format } = validateOfficeObject({ name, bytes, maxBytes: maxObjectBytes })
       return exclusive(ownerId, async () => {
+        await sweepExpiredStages(ownerId)
         const used = await ownerBytes(ownerId)
         if (used + bytes.length > maxOwnerBytes) reject('QUOTA')
         const uploadId = randomUUID()
@@ -100,7 +128,7 @@ export function createS3ObjectStore({ client, maxObjectBytes, maxOwnerBytes, aft
         let published = false
         try {
           await writeJson(recordKey, {
-            uploadId, ownerId, name, format, size: bytes.length, sha256, finished: false,
+            uploadId, ownerId, name, format, size: bytes.length, sha256, finished: false, stagedAt: now(),
           })
           published = true
           if (afterReferencePublished) await afterReferencePublished()
@@ -124,11 +152,15 @@ export function createS3ObjectStore({ client, maxObjectBytes, maxOwnerBytes, aft
         if (record.finished && record.objectId) {
           return { objectId: record.objectId, sha256: record.sha256, size: record.size, format: record.format }
         }
-        const completed = { ...record, objectId, finished: true }
-        if (!record.objectId) await writeJson(recordKey, { ...record, objectId, finished: false })
-        await writeJson(objectKey(ownerId, objectId), completed)
-        await writeJson(recordKey, completed)
-        return { objectId, sha256: record.sha256, size: record.size, format: record.format }
+        return exclusiveSha(record.sha256, async () => {
+          if (isExpiredStage(record)) reject('NOT_FOUND', 404)
+          if (beforeObjectPublished) await beforeObjectPublished()
+          const completed = { ...record, objectId, finished: true }
+          if (!record.objectId) await writeJson(recordKey, { ...record, objectId, finished: false })
+          await writeJson(objectKey(ownerId, objectId), completed)
+          await writeJson(recordKey, completed)
+          return { objectId, sha256: record.sha256, size: record.size, format: record.format }
+        })
       })
     },
 

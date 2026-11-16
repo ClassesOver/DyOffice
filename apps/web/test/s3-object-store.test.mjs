@@ -45,6 +45,27 @@ test('a failure before the blob is published leaves no object', async () => {
   assert.deepEqual(await client.list(''), [])
 })
 
+test('an abandoned staged upload expires and releases an unshared blob', async () => {
+  const hour = 60 * 60 * 1000
+  let clock = Date.parse('2026-11-16T00:00:00Z')
+  const lostBytes = Buffer.concat([ZIP, Buffer.alloc(24, 1)])
+  const sharedBytes = Buffer.concat([ZIP, Buffer.alloc(24, 2)])
+  const { client, store: objectStore } = store(
+    { maxObjectBytes: lostBytes.length, maxOwnerBytes: lostBytes.length * 2 },
+    { stagedUploadTtlMs: hour, now: () => clock },
+  )
+  const lost = await objectStore.stageUpload({ ownerId: 'owner-a', name: 'a.docx', bytes: lostBytes })
+  const shared = await objectStore.stageUpload({ ownerId: 'owner-b', name: 'b.docx', bytes: sharedBytes })
+  await objectStore.finishUpload({ ownerId: 'owner-b', uploadId: shared.uploadId })
+  clock += hour + 1
+  await assert.rejects(objectStore.finishUpload({ ownerId: 'owner-a', uploadId: lost.uploadId }), { code: 'NOT_FOUND' })
+  const fresh = Buffer.concat([ZIP, Buffer.alloc(24, 3)])
+  await objectStore.stageUpload({ ownerId: 'owner-a', name: 'c.docx', bytes: fresh })
+  assert.equal((await client.list('blobs/')).includes(`blobs/${lost.sha256}`), false)
+  assert.equal((await client.list('blobs/')).includes(`blobs/${shared.sha256}`), true)
+  assert.throws(() => createS3ObjectStore({ client, maxObjectBytes: 32, maxOwnerBytes: 64, stagedUploadTtlMs: 0 }), { code: 'UNSAFE_TTL' })
+})
+
 test('quota, trash, and the last shared blob follow the local store rules', async () => {
   const { client, store: objectStore } = store({ maxObjectBytes: WIDE.length, maxOwnerBytes: WIDE.length })
   const first = await finished(objectStore, 'owner-a', 'one.docx', WIDE)

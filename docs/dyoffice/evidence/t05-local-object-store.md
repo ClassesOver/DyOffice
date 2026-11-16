@@ -80,7 +80,17 @@ The file passes against the in-process client. It does not open a network socket
 node --test apps/web/test/file-catalog.test.mjs apps/web/test/files-schema.test.mjs
 ```
 
-Those files pass. The schema test reads the migration text and checks that RLS is only named in a comment.
+Those files pass. The schema test reads the migration text and checks that RLS is only named in a comment. The adapter uses the same staged-upload expiry as the local disk store.
+
+## Abandoned staged uploads
+
+An unfinished upload records `stagedAt`. After `stagedUploadTtlMs` (default 24 hours) it no longer counts against the owner quota, `finishUpload` returns `NOT_FOUND` for it, and the owner's next `stageUpload` removes the record under the owner lock. Its blob is removed only if no object or live staged upload still references the SHA-256. Without this, a client that lost its `finish` request kept those bytes on the quota permanently, with no way to discard them. Records written before `stagedAt` existed never expire.
+
+```sh
+node --test apps/web/test/object-staging-expiry.test.mjs
+```
+
+Before the change all three tests failed (quota stayed full, the expired upload finished, the unshared blob remained). After the change the file passes.
 
 ## Still open
 

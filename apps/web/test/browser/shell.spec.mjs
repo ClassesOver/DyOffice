@@ -61,3 +61,38 @@ test('original shell chrome, real import/open/return, theme and independent Admi
  expect(await page.evaluate(()=>sessionStorage.getItem('dyoffice-admin-token'))).toBeNull();
  expect(errors).toEqual([]);
 });
+
+test('native personal settings persist preferences, reject failures and preserve dirty editor',async({page})=>{
+ await page.goto('/');await page.getByLabel('个人访问令牌').fill('visual-test-user');await page.getByRole('button',{name:'登录',exact:true}).click();
+ await page.locator('.account-btn').click();await page.getByRole('button',{name:'个人设置',exact:true}).click();
+ const dialog=page.getByRole('dialog');await expect(dialog).toBeVisible();
+ await expect(dialog).toContainText('不是 Genspark 账户登录');
+ await page.screenshot({path:'test-results/genoffice-web-settings-account.png',fullPage:true});
+ await dialog.getByRole('button',{name:'通用',exact:true}).click();
+ await expect(dialog.locator('#set-author-name')).toBeEnabled();
+ await dialog.locator('#set-author-name').fill('Web settings browser author');
+ const saved=page.waitForResponse(r=>r.url().endsWith('/api/preferences')&&r.request().method()==='PUT');
+ await dialog.locator('#set-author-name').press('Enter');expect((await saved).ok()).toBe(true);
+ await dialog.locator('.set-pane').evaluate(el=>{el.scrollTop=0});
+ await expect(dialog.getByText('灰色项目尚未适配 Web。',{exact:false})).toBeVisible();
+ await page.screenshot({path:'test-results/genoffice-web-settings-general.png',fullPage:true});
+ await dialog.locator('#set-author-name').scrollIntoViewIfNeeded();
+ await page.screenshot({path:'test-results/genoffice-web-settings-general-files.png',fullPage:true});
+ await expect(dialog.locator('.set-nav-item:disabled')).toHaveCount(5);
+ await dialog.locator('.set-close').click();
+ await page.locator('.account-btn').click();await page.getByRole('button',{name:'个人设置',exact:true}).click();
+ await dialog.getByRole('button',{name:'通用',exact:true}).click();
+ await expect(dialog.locator('#set-author-name')).toHaveValue('Web settings browser author');
+ const auto=dialog.getByRole('switch',{name:'所有文档自动保存',exact:true});await expect(auto).toHaveAttribute('aria-checked',/^(true|false)$/);const before=await auto.getAttribute('aria-checked');
+ await page.route('**/api/preferences',route=>route.request().method()==='PUT'?route.fulfill({status:503,contentType:'application/json',body:JSON.stringify({error:'settings write unavailable'})}):route.continue());
+ await auto.click();await expect(dialog.getByRole('alert')).toHaveText('settings write unavailable');
+ await expect(auto).toHaveAttribute('aria-checked',before);
+ await page.unroute('**/api/preferences');await dialog.locator('.set-close').click();
+ // Existing dirty editor remains mounted while settings opens and closes.
+ await page.locator('.quick-card').first().click();
+ const editor=page.frameLocator('.web-editor-frame');await editor.locator('textarea').first().fill('Settings must preserve this draft');
+ await page.locator('.tab-item').first().click();await page.locator('.account-btn').click();await page.getByRole('button',{name:'个人设置',exact:true}).click();
+ page.once('dialog',d=>d.dismiss());await dialog.getByRole('button',{name:'退出登录',exact:true}).click();
+ await expect(dialog).toBeVisible();await dialog.locator('.set-close').click();
+ await page.locator('.tab-item').nth(1).click();await expect(editor.locator('textarea').first()).toHaveValue('Settings must preserve this draft');
+});
