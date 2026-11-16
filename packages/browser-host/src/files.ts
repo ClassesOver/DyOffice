@@ -156,13 +156,18 @@ export async function mountDocsEditor(host: DocsEditorHost, element: HTMLElement
     const submittedRevision = revision
     try {
       await ensureLease()
+      if (closed) return { ok: false }
       const committed = await host.commitDocx(fileId, {
         baseRevision: submittedRevision,
         leaseEpoch,
         idempotencyKey: crypto.randomUUID(),
         blocks: payload(submitted),
       })
+      // The commit is durable even if refreshing its projection fails.
+      revision = committed.revision
+      if (closed) return { ok: true, revision }
       opened = await host.readDocx(fileId)
+      if (closed) return { ok: true, revision }
       revision = opened.file.revision || committed.revision
       const serverBlocks = opened.blocks.map((block) => ({ ...block }))
       if (sameText(submitted, blocks)) {
