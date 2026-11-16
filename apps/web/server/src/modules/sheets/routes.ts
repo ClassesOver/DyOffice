@@ -35,6 +35,7 @@ export function registerSheetsRoutes(app: FastifyInstance, sheets: ReturnType<ty
     if (saves) route<SheetsSaveInput>('/api/v1/files/:id/sheets/uploads', {
       baseRevision: uuidSchema, editorId: uuidSchema, leaseEpoch: {type: 'integer', minimum: 1, maximum: Number.MAX_SAFE_INTEGER}, request: {type: 'object'},
     }, (token,id,body,signal) => saves.prepare(token,id,body,signal), 4 * 1024 * 1024)
+    route<{revision:string;visualId:string}>('/api/v1/files/:id/sheets/media',{...revisionBody,visualId:{type:'string',minLength:1,maxLength:512,pattern:'^[^/\\\\]+$'}},(token,id,body,signal)=>sheets.readMedia(token,id,body.revision,body.visualId,signal))
     const sheetName={type:'string',minLength:1,maxLength:255}
     const range={type:'object',additionalProperties:false,required:['startRow','endRow','startColumn','endColumn'],properties:{startRow:{type:'integer',minimum:0,maximum:1048575},endRow:{type:'integer',minimum:0,maximum:1048575},startColumn:{type:'integer',minimum:0,maximum:16383},endColumn:{type:'integer',minimum:0,maximum:16383}}}
     route<RecalcInput & {revision:string}>('/api/v1/files/:id/sheets/recalculate', {...revisionBody,

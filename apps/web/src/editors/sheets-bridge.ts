@@ -2,6 +2,7 @@ import type {SessionFileHost} from '../../../../packages/browser-host/src/files.
 import {hostError} from '../../../../packages/web-contracts/src/errors.ts'
 import {messages} from './messages.ts'
 import {
+  workbookMediaRequestSchema,workbookMediaResultSchema,
   workbookFileSchema, workbookRangeRequestSchema, workbookRangeResultSchema,
   workbookFormulaCellsRequestSchema, workbookFormulaCellsResultSchema, workbookRowOutlineResultSchema,
   workbookRedactionsResultSchema, workbookSlicerStateResultSchema, workbookQueriesResultSchema,
@@ -79,6 +80,7 @@ export function createSheetsBridge(host: SessionFileHost, fileId: string, prefs:
     notifyPendingEdits(count: number){pendingEdits=count;onChange()},
     selectWorkbook:open,
     async closeWorkbook(id: string){sessions.delete(id)},
+    async readWorkbookMedia(input){const request=workbookMediaRequestSchema.parse(input),current=session(request.sessionId);return workbookMediaResultSchema.parse(await call(current.revision,'media',{visualId:request.visualId}))},
     async recalcWorkbook(input){
       const request=workbookRecalcRequestSchema.parse(input),current=session(request.sessionId)
       const result=await call(current.revision,'recalculate',{edits:request.edits.map(({sheetId,...e})=>({sheetName:sheet(current,sheetId),...e})),reads:request.reads.map(({sheetId,range})=>({sheetName:sheet(current,sheetId),range}))})

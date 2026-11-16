@@ -6,6 +6,7 @@ type Files = ReturnType<typeof createFileService>
 export interface SheetRange { startRow: number; endRow: number; startColumn: number; endColumn: number }
 export type SheetsPackageReader = (bytes: Buffer) => Promise<unknown>
 export interface SheetsNative {
+  readMedia?(input:Uint8Array,visualId:string,signal?:AbortSignal):Promise<unknown>
   recalculate?(input: Uint8Array, request: RecalcInput, signal?: AbortSignal): Promise<unknown>
   readSheet?(input: Uint8Array, sheetName: string, kind: 'formulas' | 'outline', signal?: AbortSignal): Promise<unknown>
   inspect(input: Uint8Array, signal?: AbortSignal): Promise<unknown>
@@ -35,6 +36,7 @@ export function createSheetsService({ files, native, readPackage, maxConcurrent 
     } finally { active-- }
   }
   return {
+    readMedia: (token:string,fileId:string,revision:string,visualId:string,signal?:AbortSignal)=>read(token,fileId,revision,bytes=>{if(!native.readMedia)throw authError(501);return native.readMedia(bytes,visualId,signal)},signal),
     recalculate: (token: string, fileId: string, revision: string, request: RecalcInput, signal?: AbortSignal) => read(token,fileId,revision,bytes=>{if(!native.recalculate)throw authError(501);return native.recalculate(bytes,request,signal)},signal),
     readSheet: (token: string, fileId: string, revision: string, sheetName: string, kind: 'formulas' | 'outline', signal?: AbortSignal) => read(token,fileId,revision,bytes => { if (!native.readSheet) throw authError(501); return native.readSheet(bytes,sheetName,kind,signal) },signal),
     readPackage: (token: string, fileId: string, revision: string, signal?: AbortSignal) => read(token,fileId,revision,bytes => { if (!readPackage) throw authError(501); return readPackage(bytes) },signal),

@@ -15,7 +15,7 @@ export async function configuredSheetsRuntime(environment: NodeJS.ProcessEnv = p
   if (flag!=='experimental' || environment.DYOFFICE_AUTH_MODE!=='local' || environment.NODE_ENV==='production') throw new Error('Native Sheets requires experimental local mode')
   const binary=environment.DYOFFICE_NATIVE_BINARY,sha256=environment.DYOFFICE_NATIVE_SHA256,deploymentId=environment.DYOFFICE_DEPLOYMENT_ID
   if (!binary || !sha256 || !deploymentId) throw new Error('Native Sheets configuration missing')
-  const sandbox=createHostProcess({binary,sha256,deploymentId,allowedCommands:['open','close','read_range','read_formula_cells','read_row_outline','recalc_cells','save_archive']})
+  const sandbox=createHostProcess({binary,sha256,deploymentId,allowedCommands:['open','close','read_range','read_formula_cells','read_row_outline','read_media','recalc_cells','save_archive']})
   const gatewayPath=resolve(environment.DYOFFICE_XLSX_GATEWAY_MODULE ?? fileURLToPath(new URL('../../../../dist-sheets-server/gateway.mjs',import.meta.url)))
   const gateway=await import(pathToFileURL(gatewayPath).href) as {planWorkbookSave:SheetsPlanner;readWorkbookPackage:SheetsPackageReader}
   if (typeof gateway.planWorkbookSave!=='function' || typeof gateway.readWorkbookPackage!=='function') throw new Error('Native Sheets gateway build missing')

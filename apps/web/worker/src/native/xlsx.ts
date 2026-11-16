@@ -30,6 +30,14 @@ export interface XlsxMutationPlan {
  * not an editor or persisted recalculation implementation. */
 export function createXlsxNativeWorker(process: NativeProcess) {
   return {
+    readMedia(input: Uint8Array,visualId:string,signal?:AbortSignal) {
+      if(typeof visualId!=='string'||visualId.length<1||visualId.length>512||visualId.includes('/')||visualId.includes('\\'))return Promise.reject(new SandboxError('INPUT_LIMIT'))
+      return process.run(input,async io=>{
+        const source=opened(await io.request('open',{path:'/work/input.xlsx',locale:'en'}))
+        try {return await io.request('read_media',{sessionId:source.sessionId,visualId})}
+        finally {await io.request('close',{sessionId:source.sessionId})}
+      },{signal})
+    },
     recalculate(input: Uint8Array, request: RecalcInput, signal?: AbortSignal) {
       const coordinate=(n:number,max:number)=>Number.isInteger(n)&&n>=0&&n<max
       const named=(name:string)=>typeof name==='string'&&name.length>0&&name.length<=255
