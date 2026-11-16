@@ -1,3 +1,5 @@
+import {createAdminProviderPipeline,type AdminPipelineProfile} from './modules/providers/admin-pipeline.ts'
+import {registerLocalProviderProbe} from './modules/providers/local-probe.ts'
 import { createSheetsSaveService, type SheetsPlanner, type SheetsSaveNative } from './modules/sheets/save.ts'
 import { createSheetsService, type SheetsNative, type SheetsPackageReader } from './modules/sheets/service.ts'
 import { registerSheetsRoutes } from './modules/sheets/routes.ts'
@@ -55,10 +57,12 @@ export interface LocalWebConfig {
   db: IdentityStore; businessPool?: Pool; deploymentId: string; origin: string; csrfKey: string; passwords?: PasswordService;
   objectStore?: ObjectStore; filePolicy?: FilePolicy; nativeDocsDirectory?: string; nativeSheetsDirectory?: string; nativeJobs?: boolean; sheetsNative?: SheetsNative & Partial<SheetsSaveNative>; sheetsPlanner?: SheetsPlanner; sheetsPackageReader?: SheetsPackageReader; localShellDirectory?: string;
   globalConfigKeyring?: SecretKeyring;
+  adminProviderProbe?: {profiles:readonly AdminPipelineProfile[]};
   passwordBlocklistFile?: string; loginLimits?: LoginLimits; idleMs?: number; absoluteMs?: number; closeDb?: () => Promise<void>
 }
 export async function buildLocalApp(config: LocalWebConfig): Promise<FastifyInstance> {
   if (process.env.NODE_ENV === 'production') throw new Error('Local runtime is not allowed in production before enterprise release gates')
+  if(config.adminProviderProbe!==undefined && (!config.adminProviderProbe || Object.keys(config.adminProviderProbe).some(k=>k!=='profiles') || !Array.isArray(config.adminProviderProbe.profiles) || !config.adminProviderProbe.profiles.length || !config.businessPool || !config.globalConfigKeyring || config.adminProviderProbe.profiles.some(p=>p.deploymentId!==config.deploymentId)))throw new Error('Invalid local provider probe configuration')
   if ('userToken' in config || 'adminToken' in config) throw new Error('Local mode rejects development tokens')
   async function assertReady() {
     await config.db.assertCurrent()
@@ -89,13 +93,19 @@ export async function buildLocalApp(config: LocalWebConfig): Promise<FastifyInst
   const throttle = createLoginThrottle(config.db, config.deploymentId, config.csrfKey, config.loginLimits)
   const app = await createApiShell()
   if (config.localShellDirectory) await registerLocalShell(app,config.localShellDirectory)
-  if (config.closeDb) app.addHook('onClose', () => config.closeDb!())
+  let probe:ReturnType<typeof createAdminProviderPipeline>|undefined
+  app.addHook('preClose',async()=>{probe?.dispose()})
+  app.addHook('onClose',async()=>{if(probe){probe.dispose();await probe.drain();};if(config.closeDb)await config.closeDb()})
   registerHealthRoutes(app, createReadinessProbe({ identityReady: assertReady, businessPool: config.businessPool, objectStore: config.objectStore }))
   const users = createUserService({ db: config.db, accounts, sessions, passwords, deploymentId: config.deploymentId })
   registerAuthRoutes(app, { sessions, csrf, throttle, users })
   registerUserRoutes(app, users, csrf)
   if (config.businessPool) {
     const transactions = createPrincipalTransactions({ pool: config.businessPool, deploymentId: config.deploymentId, idleMs: config.idleMs })
+    if(config.adminProviderProbe){
+      try{probe=createAdminProviderPipeline({transactions,keyring:config.globalConfigKeyring!,profiles:config.adminProviderProbe.profiles});registerLocalProviderProbe(app,{pipeline:probe,sessions,csrf})}
+      catch{probe?.dispose();await app.close();throw new Error('Invalid local provider probe configuration')}
+    }
     registerPreferenceRoutes(app, createPreferenceService(transactions), sessions, csrf)
     registerWorkspaceRoutes(app, createWorkspaceService(transactions), sessions, csrf)
     registerGlobalConfigRoutes(app, createGlobalConfigService({transactions, keyring: config.globalConfigKeyring}), sessions, csrf)
@@ -154,6 +164,7 @@ export async function buildLocalApp(config: LocalWebConfig): Promise<FastifyInst
   app.route({
     method: app.supportedMethods as HTTPMethods[], url: '/*',
     onRequest: async request => {
+      if(request.url.split('?')[0]!.startsWith('/api/v1/admin/ai-probe'))throw authError(404)
       if (request.url.startsWith('/api/')) {
         await sessions.authenticate(cookies(request).session ?? '')
         throw authError(501) // T04+ must implement isolated resources; never fall back to JSON.
