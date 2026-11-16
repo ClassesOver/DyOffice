@@ -164,3 +164,40 @@ test('resolves wildcard workspace exports and still rejects real transitive Node
  for(const [path,content] of Object.entries(files)){await mkdir(dirname(join(root,path)),{recursive:true});await writeFile(join(root,path),content)}
  const result=await checkWebBoundaries(root);assert.equal(result.violations.length,1);assert.match(result.violations[0],/csv-limits.ts.*node:fs/)
 })
+
+test('follows Vite worker code queries while retaining raw asset imports', async t => {
+ const root=await mkdtemp(join(tmpdir(),'boundary-worker-'));t.after(()=>rm(root,{recursive:true,force:true}))
+ const files={'apps/web/src/main.ts':"import Worker from '../../../packages/helper/worker.ts?worker&inline'; import text from './readme.ts?raw'",'packages/helper/worker.ts':"import 'node:fs'",'apps/web/src/readme.ts':"// text asset"}
+ for(const [path,content] of Object.entries(files)){await mkdir(dirname(join(root,path)),{recursive:true});await writeFile(join(root,path),content)}
+ for (const query of ['?worker&inline', '?sharedworker', '?url']) {
+  await writeFile(join(root,'apps/web/src/main.ts'), `import Worker from '../../../packages/helper/worker.ts${query}'; import text from '../../../packages/helper/text.ts?raw'`)
+  await writeFile(join(root,'packages/helper/text.ts'), "import 'electron'")
+  const result=await checkWebBoundaries(root);assert.equal(result.violations.length,1);assert.match(result.violations[0],/worker.ts.*node:fs/)
+ }
+})
+test('computed imports fail closed; literal concatenations are inspected',()=>{
+ for(const source of ["const target='node:fs'; import(target)","import(`./${name}.js`)","require(name)"]){assert.match(inspectSource(source,'entry.ts')[0],/Unresolved dynamic browser dependency/)}
+ assert.match(inspectSource("import('node:' + 'fs')",'entry.ts')[0],/forbidden module node:fs/)
+ assert.deepEqual(inspectSource("import('./' + 'safe.js')",'entry.ts'),[])
+ assert.match(inspectSource("import 'node:fs?worker'",'entry.ts')[0],/forbidden module/)
+})
+
+test('tracks Worker and SharedWorker URL module entry points', async t => {
+ const root=await mkdtemp(join(tmpdir(),'boundary-worker-url-'));t.after(()=>rm(root,{recursive:true,force:true}))
+ await mkdir(join(root,'apps/web/src'),{recursive:true});await mkdir(join(root,'packages/helper'),{recursive:true})
+ await writeFile(join(root,'packages/helper/w.ts'),"import 'node:fs'")
+ for(const worker of ['Worker','SharedWorker']) {
+  await writeFile(join(root,'apps/web/src/main.ts'),`new ${worker}(new URL('../../../packages/helper/w.ts', import.meta.url), {type:'module'})`)
+  const result=await checkWebBoundaries(root);assert.equal(result.violations.length,1);assert.match(result.violations[0],/w.ts.*node:fs/)
+ }
+ assert.match(inspectSource('new Worker(url)', 'entry.ts')[0],/Unresolved dynamic browser dependency/)
+})
+test('only exact raw without worker is a text exemption',async t=>{
+ const root=await mkdtemp(join(tmpdir(),'boundary-query-'));t.after(()=>rm(root,{recursive:true,force:true}))
+ await mkdir(join(root,'apps/web/src'),{recursive:true});await mkdir(join(root,'packages/helper'),{recursive:true})
+ await writeFile(join(root,'packages/helper/w.ts'),"import 'node:fs'")
+ for(const query of ['?worker&raw','?sharedworker&raw','?raw=1','?r%61w']) {
+  await writeFile(join(root,'apps/web/src/main.ts'),`import x from '../../../packages/helper/w.ts${query}'`)
+  const result=await checkWebBoundaries(root);assert.equal(result.violations.length,1,query)
+ }
+})
