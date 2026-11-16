@@ -17,7 +17,7 @@ test('T12 upgrades v17 ledger without rewriting ACK purge or session authority',
  }})
  const after=(await f.ownerPool.query('SELECT * FROM identity_migrations ORDER BY version')).rows
  assert.deepEqual(after.slice(0,17),ledger)
- assert.deepEqual(after.map(m=>m.version),Array.from({length:19},(_,i)=>i+1))
+ assert.deepEqual(after.map(m=>m.version),Array.from({length:migrations.length},(_,i)=>i+1))
  // Runtime provisioning reasserts grants; function definitions and identities must stay intact.
  const current=await functions(f.ownerPool)
  for(let i=0;i<before.length;i++)for(const key of ['oid','proowner','prosrc','prosecdef','proconfig'])assert.deepEqual(current[i][key],before[i][key])

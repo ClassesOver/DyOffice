@@ -19,7 +19,7 @@ const historyDto = (row: History) => ({ revision: row.id, parentRevision: row.pa
 
 export function createRevisionService({ transactions, objects, files, quotaBytes = 1024 ** 3, maxUploads = 16, uploadTtlMs = 15 * 60_000 }: { transactions: PrincipalTransactions; objects: ObjectStore; files: FileService } & FilePolicy) {
   if (![quotaBytes,maxUploads,uploadTtlMs].every(value => Number.isSafeInteger(value) && value > 0) || quotaBytes > Number.MAX_SAFE_INTEGER / 2 || maxUploads > 1000 || uploadTtlMs > 24 * 3600_000) throw new Error('Invalid file policy')
-  const run = <T>(token: FileCredential, action: 'files:read' | 'files:write', operation: (connection: PoolClient, principal: BusinessPrincipal) => Promise<T>) => runFileTransaction(transactions,token,action,operation)
+  const run = <T>(token: FileCredential, action: 'files:read' | 'files:write', operation: (connection: PoolClient, principal: BusinessPrincipal) => Promise<T>) => runFileTransaction(transactions,token,action,operation).catch(error => { if (error?.code==='23514' && error?.constraint==='command_revision_guard') throw authError(409); throw error })
   async function historyRow(connection: PoolClient, principal: BusinessPrincipal, fileId: string, revision: string): Promise<History> {
     if (principal.job) throw authError(404)
     const row = (await connection.query<History>('SELECT * FROM file_revisions WHERE deployment_id=$1 AND owner_id=$2 AND file_id=$3 AND id=$4', [...scope(principal),fileId,revision])).rows[0]
