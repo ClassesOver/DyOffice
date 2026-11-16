@@ -5,8 +5,8 @@ without Docker. This remains an experimental backend, not a production release.
 
 Requirements: Node 22, Linux with systemd 255+ as the service manager and cgroup
 v2, a C compiler, and Rust supporting edition 2024 (locally tested: 1.93.0).
-PostgreSQL 17 and Redis run as separate host services. The controller currently
-requires root to create restricted transient units and transfer files through
+PostgreSQL 17, Redis and S3-compatible object storage run as separate services.
+The controller currently requires root to create restricted transient units and transfer files through
 validated process-root descriptors. Native tasks themselves use unique dynamic
 nonroot users, no capabilities, private network and bounded resources.
 
@@ -31,7 +31,16 @@ Required controller configuration:
 - `DYOFFICE_REDIS_URL`: loopback Redis URL or authenticated TLS Redis URL
 - `DYOFFICE_NATIVE_BINARY`: absolute path to the compiled XLSX executable
 - `DYOFFICE_NATIVE_SHA256`: its SHA-256 hexadecimal digest
-- Explicit File API object-store configuration matching the API instance
+- `DYOFFICE_FILE_API=experimental` and `DYOFFICE_OBJECT_STORE=s3`
+- `DYOFFICE_S3_BUCKET` and `DYOFFICE_S3_REGION`, matching the API's private bucket,
+  with standard AWS SDK credentials/role; optionally `DYOFFICE_S3_ENDPOINT` and
+  `DYOFFICE_S3_FORCE_PATH_STYLE`
+
+The controller refuses missing or non-S3 storage before opening database or
+queue connections. `local-dev` remains available to a standalone API under one
+service account, but cannot be shared with this root controller: its `0600`
+objects would be unreadable by a nonroot API. Configure both services for the
+same S3 bucket when enabling native job execution.
 
 Run `npm run start:web:worker` with these settings. Startup verifies migration
 checksums, shared database identity, bootstrap readiness, storage and native
@@ -47,8 +56,12 @@ fresh roots, symlinks and other deployments are preserved.
 For native isolation tests, set `DYOFFICE_TEST_HOST_MANIFEST` to the absolute
 manifest path and run Node 22 with `--experimental-strip-types --test` on
 `apps/web/test/host-native/*.test.mjs`. Database/native integration tests also
-require disposable PostgreSQL and Redis URLs. These tests do not silently skip
-when required services are unavailable.
+require disposable PostgreSQL and Redis URLs. The daemon tests in
+`npm run test:web:native-jobs` also require a loopback S3-compatible service via
+`DYOFFICE_TEST_S3_ENDPOINT`, `DYOFFICE_TEST_S3_ACCESS_KEY` and
+`DYOFFICE_TEST_S3_SECRET_KEY`; each test creates and removes its own bucket.
+Preserve these test variables when running the suite as root. These tests do
+not silently skip when required services are unavailable.
 
 ## Revision event delivery
 

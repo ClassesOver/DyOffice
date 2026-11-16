@@ -1,21 +1,34 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { execFile } from 'node:child_process'
-import { promisify } from 'node:util'
-import { fileURLToPath } from 'node:url'
+import { PassThrough } from 'node:stream'
+import { parseBootstrapArgs, readBootstrapPassword } from '../../tools/bootstrap-admin.mjs'
 
-test('bootstrap CLI refuses noninteractive password injection without printing credentials', async () => {
-  const file = fileURLToPath(new URL('../../../../tools/dyoffice/bootstrap-admin.ts', import.meta.url))
-  await assert.rejects(
-    promisify(execFile)(process.execPath, ['--experimental-strip-types', file], {
-      env: { ...process.env, DYOFFICE_DATABASE_URL: 'postgresql://hidden:db-secret@127.0.0.1:1/unused', DYOFFICE_ADMIN_PASSWORD: 'injected-password-secret' },
-    }),
-    error => {
-      assert.equal(error.code, 1)
-      assert.match(error.stderr, /interactive terminal required/i)
-      assert.equal(error.stderr.includes('db-secret'), false)
-      assert.equal(error.stderr.includes('injected-password-secret'), false)
-      return true
-    },
-  )
+test('admin bootstrap refuses password options and requires explicit account coordinates', () => {
+  const args = parseBootstrapArgs(['--deployment-id','11111111-1111-4111-8111-111111111111','--username','admin.local','--password-stdin'])
+  assert.equal(args.passwordStdin, true)
+  assert.equal(args.username, 'admin.local')
+  for (const invalid of [
+    ['--password','plaintext'],
+    ['--deployment-id','1','--username','u','--password','plaintext'],
+    ['--deployment-id','1'],
+    ['--deployment-id','1','--username','u','--username','v'],
+    ['--deployment-id','1','--username','u','--password-stdin','--password-stdin'],
+  ]) assert.throws(() => parseBootstrapArgs(invalid))
+})
+
+test('password-stdin reads one secret without echoing or normalizing whitespace', async () => {
+  const input = new PassThrough()
+  const output = new PassThrough()
+  input.end('  long unusual passphrase  \n')
+  const password = await readBootstrapPassword({passwordStdin:true},input,output)
+  assert.equal(password,'  long unusual passphrase  ')
+  assert.equal(output.read(),null)
+})
+
+test('password-stdin rejects embedded newlines and overlong input', async () => {
+  for(const value of ['password1\npassword2\n','x'.repeat(1026)+'\n']){
+    const input = new PassThrough()
+    input.end(value)
+    await assert.rejects(readBootstrapPassword({passwordStdin:true},input),/one line|too long/)
+  }
 })

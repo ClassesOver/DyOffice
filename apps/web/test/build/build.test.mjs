@@ -13,10 +13,13 @@ test('Web-only production build emits both pages with loadable assets', async ()
   let server;
   try {
     execFileSync('npm', ['run', 'build', '--workspaces=false', '--', '--outDir', output], { cwd: web, stdio: 'pipe' });
-    const { buildApp } = await import('../../server/src/app.ts');
-    server = await buildApp({ directory:data, userToken:'user', adminToken:'admin', encryptionKey:'test', assetMode:'built', assetDirectory:output });
-    const origin = await server.listen({ port:0, host:'127.0.0.1' });
-    for (const page of ['', 'admin', 'admin.html', 'index.html']) {
+    const { createApplication } = await import('../../server/application.mjs');
+    server = await createApplication({ directory:data, userToken:'user', adminToken:'admin', encryptionKey:'test', assetMode:'built', assetDirectory:output });
+    server.listen(0, '127.0.0.1');
+    await new Promise(resolve => server.once('listening', resolve));
+    const address = server.address();
+    const origin = `http://127.0.0.1:${address.port}`;
+    for (const page of ['', 'admin', 'admin.html', 'index.html', 'legacy.html']) {
       const response = await fetch(`${origin}/${page}`);
       assert.equal(response.status, 200);
       assert.equal(new URL(response.url).pathname, `/${page}`);
@@ -39,7 +42,7 @@ test('Web-only production build emits both pages with loadable assets', async ()
     assert.ok(Object.values(manifest).some(entry => entry.file.endsWith('.js')));
     assert.ok(Object.values(manifest).some(entry => entry.file.endsWith('.css')));
   } finally {
-    if (server) await server.close();
+    if (server) await new Promise(resolve => server.close(resolve));
     await rm(output, { recursive: true, force: true });
     await rm(data, { recursive: true, force: true });
   }

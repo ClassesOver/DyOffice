@@ -4,13 +4,13 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "node --experimental-strip-types server/index.mjs",
-    "start": "node --experimental-strip-types server/index.mjs",
-    "test": "node --test test/*.test.mjs",
+    "dev": "node --import tsx server/index.mjs",
+    "start": "node --import tsx server/index.mjs",
+    "test": "node --import tsx --test test/*.test.mjs",
     "build": "vite build --config vite.config.mjs",
-    "test:build": "node --experimental-strip-types --test test/build/*.test.mjs",
+    "test:build": "node --test test/build/*.test.mjs",
     "typecheck": "tsc -p tsconfig.json && tsc -p server/tsconfig.json",
-    "test:integration": "node --experimental-strip-types --test test/integration/*.test.mjs",
+    "test:integration": "node tools/run-web-integration.mjs",
     "test:e2e": "node --experimental-strip-types --test test/e2e/*.test.mjs",
     "test:storage": "node --experimental-strip-types --test test/storage/*.test.mjs",
     "test:jobs": "node --experimental-strip-types --test test/jobs/*.test.mjs",
@@ -19,7 +19,12 @@
     "test:native-jobs": "node --experimental-strip-types --test --test-concurrency=1 test/native-jobs/*.test.mjs",
     "start:worker": "node --experimental-strip-types worker/src/main.ts",
     "build:sheets": "vite build --config vite.sheets.config.ts && node server/sheets/build.mjs",
-    "test:native-sheets": "node --experimental-strip-types --test --test-concurrency=1 test/native-sheets/*.test.mjs"
+    "test:native-sheets": "node --experimental-strip-types --test --test-concurrency=1 test/native-sheets/*.test.mjs",
+    "bootstrap:admin": "node tools/bootstrap-admin.mjs",
+    "test:identity:integration": "node --test test/integration/*.test.mjs",
+    "test:shell": "vitest run --config vitest.shell.config.mjs",
+    "typecheck:shell": "tsc -p tsconfig.shell.json",
+    "test:integration:local": "node --import tsx --test test/local-integration/*.test.mjs"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "3.1169.0",
@@ -32,15 +37,25 @@
     "fastify": "5.12.8",
     "pdf-lib": "1.17.1",
     "pg": "8.23.1",
-    "yauzl": "3.4.0"
+    "yauzl": "3.4.0",
+    "argon2": "0.45.2"
   },
   "devDependencies": {
-    "@playwright/test": "1.61.1",
-    "@types/node": "22.20.5",
+    "@playwright/test": "1.62.1",
+    "@types/node": "24.13.3",
     "@types/pg": "8.23.1",
     "@types/yauzl": "3.4.0",
     "jszip": "3.10.1",
     "typescript": "5.9.3",
-    "vite": "7.3.7"
+    "vite": "7.3.7",
+    "@types/react": "19.2.17",
+    "@types/react-dom": "19.2.3",
+    "@vitejs/plugin-react": "5.2.0",
+    "jsdom": "28.1.0",
+    "react": "19.2.7",
+    "react-dom": "19.2.7",
+    "tsx": "4.23.1",
+    "utif2": "4.1.0",
+    "vitest": "4.1.12"
   }
 }

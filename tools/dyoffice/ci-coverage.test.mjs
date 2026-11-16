@@ -40,7 +40,7 @@ test('durable job gate uses real host Redis and runs PostgreSQL/BullMQ recovery 
  test('native sandbox gate builds the locked Rust engine and verifies real kernel resource limits', () => {
   const job = workflow.split('\n  native-worker:')[1]
   assert.ok(job,'native worker job required')
-  for (const command of ['npm ci --prefix apps/web --workspaces=false --ignore-scripts --include=dev','npm run build:web:native -- --with-probe','npm run typecheck:web:worker','sudo --preserve-env=PATH,DYOFFICE_TEST_HOST_MANIFEST npm run test:web:sandbox','sudo --preserve-env=PATH,DYOFFICE_TEST_HOST_MANIFEST,DYOFFICE_TEST_DATABASE_URL,DYOFFICE_TEST_REDIS_URL npm run test:web:native-jobs']) assert.ok(job.includes('run: ' + command),command)
+  for (const command of ['npm ci --prefix apps/web --workspaces=false --ignore-scripts --include=dev','npm run build:web:native -- --with-probe','npm run typecheck:web:worker','sudo --preserve-env=PATH,DYOFFICE_TEST_HOST_MANIFEST npm run test:web:sandbox','sudo --preserve-env=PATH,DYOFFICE_TEST_HOST_MANIFEST,DYOFFICE_TEST_DATABASE_URL,DYOFFICE_TEST_REDIS_URL,DYOFFICE_TEST_S3_ENDPOINT,DYOFFICE_TEST_S3_ACCESS_KEY,DYOFFICE_TEST_S3_SECRET_KEY npm run test:web:native-jobs']) assert.ok(job.includes('run: ' + command),command)
   assert.match(job,/node-version: 22/)
   assert.doesNotMatch(job,/services:|image:|docker/i)
   assert.match(job,/sudo --preserve-env=GITHUB_ACTIONS bash tools\/dyoffice\/ci-host-services.sh/)

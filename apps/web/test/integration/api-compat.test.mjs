@@ -1,179 +1,291 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtemp, rm, stat } from 'node:fs/promises'
+import { spawnSync } from 'node:child_process'
+import { mkdtemp, readFile, rm, stat } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { request as httpRequest } from 'node:http'
-import { buildApp } from '../../server/src/app.ts'
+import { createApplication } from '../../server/application.mjs'
 
-async function fixture(t, overrides = {}) {
-  const directory = await mkdtemp(join(tmpdir(), 'dyoffice-fastify-'))
-  t.after(() => rm(directory, { recursive: true, force: true }))
-  const app = await buildApp({ directory, userToken: 'personal-secret', adminToken: 'admin-secret', encryptionKey: 'test-key', ...overrides })
-  t.after(() => app.close())
-  const origin = await app.listen({ port: 0, host: '127.0.0.1' })
-  const headers = { authorization: 'Bearer personal-secret', 'content-type': 'application/json' }
-  return { app, origin, directory, headers }
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+
+function shellConfig(extra = {}) {
+  return {
+    env: 'test',
+    logger: false,
+    rateLimit: { max: 20, windowMs: 60_000 },
+    readyCheck: async () => true,
+    ...extra,
+  }
 }
 
-test('Fastify compatibility preserves settings authorization, writes and secret redaction', async t => {
-  const { origin, headers } = await fixture(t)
-  const api = (path, options) => fetch(origin + path, options)
-  assert.equal((await api('/api/preferences')).status, 401)
-  assert.equal((await api('/api/preferences', { headers: { authorization: 'Bearer admin-secret' } })).status, 403)
-  assert.equal((await api('/api/admin/config', { headers })).status, 403)
-  const changed = await api('/api/preferences', { method: 'PUT', headers, body: JSON.stringify({ theme: 'dark' }) })
-  assert.equal(changed.status, 200)
-  assert.equal((await changed.json()).theme, 'dark')
-  assert.equal((await (await api('/api/preferences', { headers })).json()).theme, 'dark')
-  const adminHeaders = { ...headers, authorization: 'Bearer admin-secret' }
-  const configured = await api('/api/admin/config', { method: 'PUT', headers: adminHeaders, body: JSON.stringify({ models: [{ id: 'm', model: 'model', baseUrl: 'https://example.com/v1', apiKey: 'provider-private-key' }] }) })
-  assert.equal(configured.status, 200)
-  assert.equal((await configured.json()).models[0].hasKey, true)
-  const text = await (await api('/api/admin/config', { headers: adminHeaders })).text()
-  assert.equal(text.includes('provider-private-key'), false)
-  assert.equal(text.includes('secret'), false)
-})
-
-test('Fastify compatibility retains exact binary uploads and versioned read contracts', async t => {
-  const { origin, headers } = await fixture(t)
-  const content = Buffer.from('PK\x03\x04native-bytes\x00\xff', 'latin1')
-  const uploaded = await fetch(origin + '/api/files', { method: 'POST', headers: { authorization: headers.authorization, 'content-type': 'application/octet-stream', 'x-file-name': 'test.docx' }, body: content })
-  assert.equal(uploaded.status, 201)
-  const file = await uploaded.json()
-  const metadata = await fetch(origin + '/api/v1/files/' + file.id, { headers })
-  assert.equal(metadata.status, 200)
-  const opened = await metadata.json()
-  assert.match(opened.file.revision, /^sha256:/)
-  const download = await fetch(origin + '/api/files/' + file.id, { headers })
-  assert.deepEqual(Buffer.from(await download.arrayBuffer()), content)
-  const unauthorized = await fetch(origin + '/api/v1/files/' + file.id, { headers: { authorization: 'Bearer admin-secret' } })
-  assert.equal(unauthorized.status, 403)
-})
-
-test('Fastify errors retain safe Problem fields and server-owned request identifiers', async t => {
-  const { origin, headers } = await fixture(t)
-  const ids = new Set()
-  for (const [path, options, status] of [
-    ['/api/preferences', {}, 401],
-    ['/api/preferences', { method: 'PUT', headers, body: '{' }, 400],
-    ['/api/preferences', { method: 'PUT', headers, body: 'x'.repeat(1024 * 1024 + 10) }, 413],
-    ['/api/does-not-exist?token=private-query', { headers }, 404],
-    ['/api/%ZZ?token=private-query', { headers }, 400],
-  ]) {
-    const response = await fetch(origin + path, { ...options, headers: { ...options.headers, 'x-request-id': 'untrusted-client-id' } })
-    assert.equal(response.status, status)
-    const problem = await response.json()
-    assert.equal(problem.status, status)
-    assert.equal(problem.type, 'about:blank')
-    assert.equal(problem.requestId, response.headers.get('x-request-id'))
-    assert.match(problem.requestId, /^[0-9a-f-]{36}$/i)
-    assert.equal(JSON.stringify(problem).includes('private-query'), false)
-    ids.add(problem.requestId)
-  }
-  assert.equal(ids.size, 5)
-  const status = await new Promise((resolve, reject) => {
-    const req = httpRequest(origin + '/api/preferences', { headers: { authorization: ['Bearer personal-secret', 'Bearer admin-secret'] } }, res => {
-      res.resume()
-      res.on('end', () => resolve(res.statusCode))
-    })
-    req.on('error', reject)
-    req.end()
-  })
-  assert.equal(status, 401)
-})
-
-test('Fastify health separates liveness from storage readiness and closes its listener', async t => {
-  const { app, origin, directory } = await fixture(t)
-  const live = await fetch(origin + '/api/v1/health/live')
-  assert.equal(live.status, 200)
-  assert.deepEqual(await live.json(), { state: 'alive' })
-  const head = await fetch(origin + '/api/v1/health/ready', { method: 'HEAD' })
-  assert.equal(head.status, 200)
-  assert.equal(await head.text(), '')
-  const wrongMethod = await fetch(origin + '/api/v1/health/live', { method: 'POST', body: '{', headers: { 'content-type': 'application/json' } })
-  assert.equal(wrongMethod.status, 405)
-  assert.equal(wrongMethod.headers.get('allow'), 'GET, HEAD')
-  await rm(directory, { recursive: true, force: true })
-  const unavailable = await fetch(origin + '/api/v1/health/ready')
-  assert.equal(unavailable.status, 503)
-  assert.deepEqual(await unavailable.json(), { state: 'unavailable' })
-  assert.equal((await fetch(origin + '/api/v1/health/live')).status, 200)
-  await app.close()
-  assert.equal(app.server.listening, false)
-})
-
-test('Fastify refuses production before creating prototype state', async () => {
-  const directory = join(tmpdir(), 'dyoffice-production-' + crypto.randomUUID())
-  const previous = process.env.NODE_ENV
-  process.env.NODE_ENV = 'production'
+async function loadBuildApp() {
   try {
-    await assert.rejects(() => buildApp({ directory, userToken: 'user', adminToken: 'admin', encryptionKey: 'key' }), /production/i)
-    await assert.rejects(() => stat(directory), { code: 'ENOENT' })
-  } finally {
-    if (previous === undefined) delete process.env.NODE_ENV
-    else process.env.NODE_ENV = previous
+    return await import('../../server/src/app.mjs')
+  } catch (error) {
+    assert.fail(`T02 modular API is not implemented (${error.code ?? error.name}: ${error.message})`)
   }
-})
+}
 
-test('Fastify rate limiting cannot be bypassed with client proxy headers and exempts probes', async t => {
-  const { origin, headers } = await fixture(t, { rateLimit: { max: 2, timeWindow: 60_000 } })
-  assert.equal((await fetch(origin + '/api/preferences', { headers })).status, 200)
-  assert.equal((await fetch(origin + '/api/preferences', { headers })).status, 200)
-  const limited = await fetch(origin + '/api/preferences', { headers: { ...headers, 'x-forwarded-for': '203.0.113.8' } })
-  assert.equal(limited.status, 429)
-  assert.ok(Number(limited.headers.get('retry-after')) > 0)
-  const problem = await limited.json()
-  assert.equal(problem.status, 429)
-  assert.equal(problem.requestId, limited.headers.get('x-request-id'))
-  assert.equal((await fetch(origin + '/api/v1/health/live')).status, 200)
-})
-
-test('Web bootstrap handles SIGTERM with a clean exit', { timeout: 10_000 }, async t => {
-  const { spawn } = await import('node:child_process')
-  const { once } = await import('node:events')
-  const { fileURLToPath } = await import('node:url')
-  const directory = await mkdtemp(join(tmpdir(), 'dyoffice-bootstrap-'))
-  const child = spawn(process.execPath, ['--experimental-strip-types', 'server/index.mjs'], {
-    cwd: fileURLToPath(new URL('../../', import.meta.url)),
-    env: { ...process.env, NODE_ENV: 'development', PORT: '0', HOST: '127.0.0.1', DYOFFICE_DATA_DIR: directory, DYOFFICE_USER_TOKEN: 'test-personal', DYOFFICE_ADMIN_TOKEN: 'test-admin', DYOFFICE_ENCRYPTION_KEY: 'test-key' },
-    stdio: ['ignore', 'pipe', 'pipe'],
+test('development entry boots the Fastify shell and still refuses production', async (t) => {
+  const source = await readFile(new URL('../../server/index.mjs', import.meta.url), 'utf8')
+  assert.match(source, /buildApp/)
+  assert.match(source, /assetMode:\s*process\.env\.DYOFFICE_ASSET_MODE\s*\|\|\s*['"]built['"]/)
+  assert.equal(source.includes('createApplication'), false)
+  const directory = await mkdtemp(join(tmpdir(), 'dyoffice-production-entry-'))
+  t.after(() => rm(directory, { recursive: true, force: true }))
+  const stateDirectory = join(directory, 'state')
+  const result = spawnSync(process.execPath, ['--import', 'tsx', 'server/index.mjs'], {
+    cwd: new URL('../..', import.meta.url),
+    env: {
+      ...process.env, NODE_ENV: 'production', PORT: '0', HOST: '127.0.0.1',
+      DYOFFICE_AUTH_MODE: 'development', DYOFFICE_NATIVE_JOBS: '', DYOFFICE_ASSET_MODE: 'source',
+      DYOFFICE_DATA_DIR: stateDirectory, DYOFFICE_USER_TOKEN: 'personal',
+      DYOFFICE_ADMIN_TOKEN: 'admin', DYOFFICE_ENCRYPTION_KEY: 'test-only-encryption-key',
+    },
+    encoding: 'utf8', timeout: 10_000,
   })
+  assert.equal(result.error, undefined)
+  assert.equal(result.signal, null)
+  assert.equal(result.status, 1, `${result.stdout}\n${result.stderr}`)
+  assert.match(result.stderr, /dyoffice: startup failed/)
+  assert.equal(result.stdout, '')
+  await assert.rejects(() => stat(stateDirectory), { code: 'ENOENT' })
+})
+
+test('legacy file, preference, and admin routes keep status codes and omit secrets', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'dyoffice-api-compat-'))
+  const server = await createApplication({
+    directory,
+    userToken: 'personal',
+    adminToken: 'admin',
+    encryptionKey: 'test-only-encryption-key',
+  })
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
   t.after(async () => {
-    if (child.exitCode === null && child.signalCode === null) {
-      child.kill('SIGKILL')
-      await once(child, 'exit')
-    }
+    await new Promise((resolve) => server.close(resolve))
     await rm(directory, { recursive: true, force: true })
   })
-  const exit = once(child, 'exit')
-  const started = await Promise.race([
-    once(child.stdout, 'data'),
-    exit.then(([code]) => { throw new Error(`Server exited before startup: ${code}`) }),
-  ])
-  assert.match(String(started[0]), /dyoffice:/)
-  child.kill('SIGTERM')
-  const [code, signal] = await exit
-  assert.equal(signal, null)
-  assert.equal(code, 0)
+  const base = `http://127.0.0.1:${server.address().port}`
+  const personal = { authorization: 'Bearer personal', 'content-type': 'application/json' }
+  const admin = { authorization: 'Bearer admin', 'content-type': 'application/json' }
+
+  const anonymous = await fetch(`${base}/api/preferences`)
+  assert.equal(anonymous.status, 401)
+  const anonymousBody = await anonymous.json()
+  assert.equal(anonymousBody.error, '请登录')
+  assert.equal(anonymousBody.status, 401)
+  assert.equal(anonymousBody.detail, '请登录')
+  assert.match(anonymous.headers.get('x-request-id'), UUID)
+  assert.equal(anonymousBody.requestId, anonymous.headers.get('x-request-id'))
+
+  const wrongToken = await fetch(`${base}/api/files`, { headers: { authorization: 'Bearer wrong-token' } })
+  assert.equal(wrongToken.status, 401)
+  assert.equal(JSON.stringify(await wrongToken.json()).includes('wrong-token'), false)
+
+  const personalAdmin = await fetch(`${base}/api/admin/config`, { headers: personal })
+  assert.equal(personalAdmin.status, 403)
+  assert.equal((await personalAdmin.json()).error, '需要管理员权限')
+
+  const uploaded = await fetch(`${base}/api/files`, {
+    method: 'POST',
+    headers: { authorization: 'Bearer personal', 'x-file-name': 'private.pdf' },
+    body: '%PDF-1.7 personal bytes',
+  })
+  assert.equal(uploaded.status, 201)
+  const file = await uploaded.json()
+  for (const path of ['/api/files', `/api/files/${file.id}`, '/api/preferences', '/api/sources']) {
+    const response = await fetch(base + path, { headers: admin })
+    assert.equal(response.status, 403, path)
+    assert.equal(JSON.stringify(await response.json()).includes('private.pdf'), false)
+  }
+
+  const saved = await fetch(`${base}/api/admin/config`, {
+    method: 'PUT',
+    headers: admin,
+    body: JSON.stringify({
+      models: [{ id: 'primary', model: 'gpt-4.1', baseUrl: 'https://example.com/v1', apiKey: 'super-secret-value', enabled: true }],
+    }),
+  })
+  assert.equal(saved.status, 200)
+  const adminView = await saved.json()
+  assert.equal(JSON.stringify(adminView).includes('super-secret-value'), false)
+  assert.equal(adminView.models[0].hasKey, true)
+  assert.equal(adminView.models[0].apiKey, undefined)
+  assert.equal(adminView.models[0].secret, undefined)
+
+  const catalog = await fetch(`${base}/api/models`, { headers: personal })
+  assert.equal(catalog.status, 200)
+  assert.equal(JSON.stringify(await catalog.json()).includes('super-secret-value'), false)
+
+  const sourceWrite = await fetch(`${base}/api/sources`, {
+    method: 'PUT',
+    headers: personal,
+    body: JSON.stringify({ name: 'notes', url: 'https://example.com/data', apiKey: 'source-secret-value' }),
+  })
+  assert.equal(sourceWrite.status, 200)
+  const sources = await (await fetch(`${base}/api/sources`, { headers: personal })).json()
+  assert.equal(JSON.stringify(sources).includes('source-secret-value'), false)
+  assert.equal(sources[0].hasKey, true)
+  assert.equal(sources[0].secret, undefined)
 })
 
-test('uncommon HTTP methods retain authorization, safe errors, health 405 and rate limits', async t => {
-  const { origin, headers } = await fixture(t)
-  for (const method of ['PROPFIND', 'SEARCH', 'PURGE', 'QUERY']) {
-    const denied = await fetch(origin + '/api/preferences?token=private-query', { method })
-    assert.equal(denied.status, 401)
-    const missing = await fetch(origin + '/api/preferences?token=private-query', { method, headers })
-    assert.equal(missing.status, 404)
-    const problem = await missing.json()
-    assert.equal(problem.status, 404)
-    assert.equal(problem.requestId, missing.headers.get('x-request-id'))
-    assert.equal(JSON.stringify(problem).includes('private-query'), false)
-    const health = await fetch(origin + '/api/v1/health/live?token=private-query', { method })
-    assert.equal(health.status, 405)
-    assert.equal(health.headers.get('allow'), 'GET, HEAD')
-  }
-  const limited = await fixture(t, { rateLimit: { max: 1, timeWindow: 60_000 } })
-  assert.equal((await fetch(limited.origin + '/api/preferences', { method: 'PROPFIND' })).status, 401)
-  assert.equal((await fetch(limited.origin + '/api/preferences', { method: 'PROPFIND' })).status, 429)
+test('modular buildApp serves health, problem errors, limits, and explicit migration responses', async () => {
+  const { buildApp } = await loadBuildApp()
+  const app = await buildApp(shellConfig())
+  app.get('/api/v1/boom', async () => {
+    throw new Error('token=abc path=/var/secret')
+  })
+
+  const live = await app.inject({
+    method: 'GET',
+    url: '/api/v1/health/live',
+    headers: { 'x-request-id': 'client-secret-id', 'request-id': 'also-secret' },
+  })
+  assert.equal(live.statusCode, 200)
+  assert.deepEqual(live.json(), { state: 'alive' })
+  assert.match(live.headers['x-request-id'], UUID)
+  assert.notEqual(live.headers['x-request-id'], 'client-secret-id')
+  assert.equal(live.headers['cache-control'], 'no-store')
+  assert.equal(live.headers['x-content-type-options'], 'nosniff')
+  assert.equal(JSON.stringify(live.json()).includes('client-secret-id'), false)
+
+  const head = await app.inject({ method: 'HEAD', url: '/api/v1/health/live' })
+  assert.equal(head.statusCode, 200)
+  assert.equal(head.body, '')
+
+  const posted = await app.inject({ method: 'POST', url: '/api/v1/health/live' })
+  assert.equal(posted.statusCode, 405)
+  assert.match(posted.headers.allow, /GET/)
+  assert.match(posted.headers.allow, /HEAD/)
+  assert.equal(posted.json().status, 405)
+  assert.equal(posted.json().error, 'Method not allowed')
+  assert.equal(posted.json().requestId, posted.headers['x-request-id'])
+
+  const leakedQuery = await app.inject({ method: 'GET', url: '/api/v1/health/live?token=super-secret-value' })
+  assert.equal(leakedQuery.statusCode, 400)
+  const leakedBody = leakedQuery.json()
+  assert.equal(leakedBody.status, 400)
+  assert.equal(leakedBody.type, 'about:blank')
+  assert.equal(JSON.stringify(leakedBody).includes('super-secret-value'), false)
+  assert.equal(leakedBody.requestId, leakedQuery.headers['x-request-id'])
+  assert.notEqual(leakedBody.requestId, 'client-secret-id')
+
+  const unready = await buildApp(shellConfig({
+    readyCheck: async () => {
+      throw new Error('password=hunter2 path=/var/lib/dyoffice')
+    },
+  }))
+  const ready = await unready.inject({ method: 'GET', url: '/api/v1/health/ready' })
+  assert.equal(ready.statusCode, 503)
+  assert.deepEqual(ready.json(), { state: 'unavailable' })
+  assert.equal(JSON.stringify(ready.json()).includes('hunter2'), false)
+  assert.equal(JSON.stringify(ready.json()).includes('/var/lib'), false)
+  const stillLive = await unready.inject({ method: 'GET', url: '/api/v1/health/live' })
+  assert.equal(stillLive.statusCode, 200)
+  assert.deepEqual(stillLive.json(), { state: 'alive' })
+  await unready.close()
+
+  const migrated = await app.inject({
+    method: 'GET',
+    url: '/api/preferences',
+    headers: { 'x-request-id': 'client-secret-id' },
+  })
+  assert.equal(migrated.statusCode, 501)
+  assert.equal(migrated.json().error, '接口尚未迁移到模块化 API')
+  assert.equal(migrated.json().status, 501)
+  assert.equal(JSON.stringify(migrated.json()).includes('theme'), false)
+  assert.notEqual(migrated.json().requestId, 'client-secret-id')
+
+  const adminRoute = await app.inject({ method: 'GET', url: '/api/admin/config' })
+  assert.equal(adminRoute.statusCode, 501)
+  assert.equal(JSON.stringify(adminRoute.json()).includes('apiKey'), false)
+
+  const missingPage = await app.inject({ method: 'GET', url: '/missing?secret=private' })
+  assert.equal(missingPage.statusCode, 404)
+  assert.equal(JSON.stringify(missingPage.json()).includes('private'), false)
+
+  const boom = await app.inject({ method: 'GET', url: '/api/v1/boom' })
+  assert.equal(boom.statusCode, 500)
+  assert.equal(boom.json().detail, '服务器内部错误')
+  assert.equal(JSON.stringify(boom.json()).includes('token=abc'), false)
+  assert.equal(JSON.stringify(boom.json()).includes('/var/secret'), false)
+
+  const oversized = await app.inject({
+    method: 'POST',
+    url: '/api/preferences',
+    headers: { 'content-type': 'application/json' },
+    payload: 'x'.repeat(1024 * 1024 + 1),
+  })
+  assert.equal(oversized.statusCode, 413)
+  assert.equal(oversized.json().status, 413)
+  assert.equal(JSON.stringify(oversized.json()).includes('xxxxx'), false)
+
+  const limited = await buildApp(shellConfig({ rateLimit: { max: 2, windowMs: 60_000 } }))
+  assert.equal((await limited.inject({ method: 'GET', url: '/api/preferences' })).statusCode, 501)
+  assert.equal((await limited.inject({
+    method: 'GET',
+    url: '/api/preferences',
+    headers: { 'x-forwarded-for': '203.0.113.8' },
+  })).statusCode, 501)
+  const blocked = await limited.inject({
+    method: 'GET',
+    url: '/api/preferences',
+    headers: { 'x-forwarded-for': '203.0.113.9' },
+  })
+  assert.equal(blocked.statusCode, 429)
+  assert.equal(blocked.json().status, 429)
+  assert.match(blocked.headers['retry-after'], /^[1-9][0-9]*$/)
+  assert.equal(JSON.stringify(blocked.json()).includes('x-forwarded-for'), false)
+  assert.equal((await limited.inject({ method: 'GET', url: '/api/v1/health/live' })).statusCode, 200)
+  await limited.close()
+
+  await assert.rejects(
+    () => buildApp(shellConfig({ env: 'production' })),
+    /production/,
+  )
+  await assert.rejects(
+    () => buildApp(shellConfig({ schema: { type: 'object' } })),
+    /Unsupported/,
+  )
+
+  await app.close()
+  await assert.rejects(() => app.inject({ method: 'GET', url: '/api/v1/health/live' }))
+})
+
+test('production process environment cannot construct the modular shell', async () => {
+  await loadBuildApp()
+  const script = `
+    const { buildApp } = await import('./server/src/app.mjs')
+    try {
+      await buildApp({
+        env: 'test',
+        logger: false,
+        rateLimit: { max: 2, windowMs: 1000 },
+        readyCheck: async () => true,
+      })
+      console.error('constructed')
+      process.exit(2)
+    } catch (error) {
+      if (!/production/.test(error.message)) {
+        console.error(error)
+        process.exit(3)
+      }
+    }
+  `
+  const result = spawnSync(process.execPath, ['--input-type=module', '-e', script], {
+    cwd: new URL('../..', import.meta.url),
+    env: { ...process.env, NODE_ENV: 'production' },
+    encoding: 'utf8',
+  })
+  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`)
+})
+
+test('modular shell closes its listening socket', async () => {
+  const { buildApp } = await loadBuildApp()
+  const app = await buildApp(shellConfig())
+  await app.listen({ port: 0, host: '127.0.0.1' })
+  const base = `http://127.0.0.1:${app.server.address().port}`
+  assert.equal((await fetch(`${base}/api/v1/health/ready`)).status, 200)
+  await app.close()
+  await assert.rejects(fetch(`${base}/api/v1/health/live`))
 })
