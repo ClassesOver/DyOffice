@@ -13,6 +13,7 @@ import {
   save,
   type FileActionContext,
 } from "../src/renderer/file-actions";
+import { createEvenOddHfState } from "../src/renderer/even-odd-hf-state";
 import { createMirrorMarginsState } from "../src/renderer/mirror-margins-state";
 import { EMPTY_HF_VARIANTS } from "../src/renderer/doc-state";
 
@@ -441,3 +442,69 @@ it('retries pending mirror-margin intent into actual DOCX settings bytes', async
   expect((await parseDocx(await readFile(path))).mirrorMargins).toBe(true)
   expect(input.getSnapshot()).toMatchObject({ enabled: true, dirty: false })
 })
+
+it('does not mark clean when even-odd-header intent is pending before React context updates', async () => {
+  const { ctx, state } = await fixture('', false, false)
+  let token = {},
+    ready = true
+  Object.assign(state, { getEvenOddHfSaveState: () => ({ token, ready }) })
+  window.desktop.saveDocx = async () => {
+    token = {}
+    ready = false
+    return { ok: true }
+  }
+  expect(await save(ctx, false, false)).toBe(true)
+  expect(state.saveIncompleteRef.current).toBe(true)
+})
+it('keeps a save incomplete if even-odd-header input was unrendered when capture began', async () => {
+  const { ctx, state } = await fixture('', false, false)
+  const token = {}
+  let ready = false
+  Object.assign(state, { getEvenOddHfSaveState: () => ({ token, ready }) })
+  window.desktop.saveDocx = async () => {
+    ready = true
+    return { ok: true }
+  }
+  expect(await save(ctx, false, false)).toBe(true)
+  expect(state.saveIncompleteRef.current).toBe(true)
+  expect(await save(ctx, false, false)).toBe(true)
+  expect(state.saveIncompleteRef.current).toBe(false)
+})
+
+
+it('retries pending even/odd header intent into actual DOCX settings bytes', async () => {
+  const { ctx, state, path } = await fixture('', false, false)
+  const input = createEvenOddHfState()
+  const render = () => {
+    Object.assign(state, {
+      evenOddHf: input.getSnapshot().enabled,
+      evenOddHfDirty: input.getSnapshot().dirty,
+    })
+    input.markRendered(input.getSnapshot().token)
+  }
+  Object.assign(state, {
+    getEvenOddHfSaveState: input.getSaveState,
+    setEvenOddHf: input.setEnabled,
+    setEvenOddHfDirty: input.setDirty,
+  })
+  render()
+  let writes = 0
+  window.desktop.saveDocx = async (target, data) => {
+    await writeFile(target, new Uint8Array(data))
+    if (++writes === 1) {
+      input.setEnabled(true)
+      input.setDirty(true)
+    }
+    return { ok: true }
+  }
+  expect(await save(ctx, false, false)).toBe(true)
+  expect(state.saveIncompleteRef.current).toBe(true)
+  expect(input.getSnapshot()).toMatchObject({ enabled: true, dirty: true })
+  expect((await parseDocx(await readFile(path))).evenAndOddHeaders ?? false).toBe(false)
+  render()
+  expect(await save(ctx, false, false)).toBe(true)
+  expect(state.saveIncompleteRef.current).toBe(false)
+  expect((await parseDocx(await readFile(path))).evenAndOddHeaders).toBe(true)
+  expect(input.getSnapshot()).toMatchObject({ enabled: true, dirty: false })
+})
+
