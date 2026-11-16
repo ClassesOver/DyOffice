@@ -5,6 +5,7 @@ import { authorizeDevApi } from '../request-boundary.mjs'
 import { assertModularConfig } from './config.mjs'
 import { rawBody } from './http-helpers.mjs'
 import { registerLegacyRoutes } from './legacy-dispatch.mjs'
+import { isLocalAuthPath, registerLocalAuthRoutes } from './modules/auth/routes.mjs'
 import { registerHealthRoutes } from './modules/health/routes.mjs'
 import { problem, publicStatus } from './problem.mjs'
 import { createFixedWindowLimiter } from './rate-limit.mjs'
@@ -85,6 +86,7 @@ export async function buildApp(input) {
     // first so an unauthenticated request never allocates that buffer.
     // Health probes and static pages stay public.
     if (!config.legacy || !path.startsWith('/api/')) return undefined
+    if (config.localAuth && isLocalAuthPath(path)) return undefined
     const access = authorizeDevApi(request.raw, config.legacy.credentials, path)
     if (!('status' in access)) return undefined
     return reply.code(access.status).type('application/json; charset=utf-8').send(authProblem(access.status, access.error, request.id))
@@ -114,5 +116,6 @@ export async function buildApp(input) {
 
   if (config.legacy) registerLegacyRoutes(app, config.legacy)
   else registerHealthRoutes(app, { readyCheck: config.readyCheck })
+  if (config.localAuth) registerLocalAuthRoutes(app, config.localAuth)
   return app
 }

@@ -26,7 +26,7 @@ function fakePool() {
             state.roles.length === 0) return {rowCount:0,rows:[]}
         return { rowCount:1, rows:[{
           session_id:state.session.id,user_id:state.session.userId,
-          deployment_id:state.session.deploymentId,expires_at:new Date(),
+          deployment_id:state.session.deploymentId,auth_version:'1',expires_at:new Date(),
           roles:state.roles,
         }] }
       }

@@ -1,5 +1,7 @@
 # T03c account lifecycle: verified internal service, not production activation
 
+> Later closeout: login and admin routes are registered by `buildApp({ localAuth })`. See [t03-closeout.md](t03-closeout.md).
+
 > 2026-11-16 · Branch `feat/dyoffice-t03c-account-lifecycle` · Draft PR #10, stacked on PR #8 (which depends on PR #5).
 > Verified code commit: `cbd53ed2254bb0981a7cda6e96792a51f9b03592`. This note is a subsequent documentation-only change.
 

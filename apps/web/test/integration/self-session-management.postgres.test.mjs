@@ -18,7 +18,7 @@ const connectionString = process.env.DYOFFICE_TEST_DATABASE_URL
 if (!connectionString) throw Error('Disposable PostgreSQL connection required')
 const origin = 'https://office.example.test', password = 'Long varied test account passphrase 2026!'
 const migrations = ['0001_identity.sql', '0002_login_rate_limits.sql', '0003_files.sql', '0004_revisions.sql',
-  '0005_account_lifecycle_audit.sql', '0006_self_password_change.sql', '0007_session_security_events.sql']
+  '0005_account_lifecycle_audit.sql', '0006_self_password_change.sql', '0007_session_security_events.sql', '0008_account_roles.sql']
 
 test('real HTTP/PostgreSQL session management preserves owner and transaction boundaries', { timeout: 120_000 }, async t => {
   const schema = 'sessions_' + randomBytes(8).toString('hex')

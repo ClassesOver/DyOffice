@@ -126,16 +126,23 @@ docs/dyoffice/               当前计划及 inventory/ evidence/ adr/
 
 **依赖：** T02。**文件：** 拟建 `server/src/modules/auth/{service,routes,passwords,sessions,throttle,csrf}.ts`、`server/src/modules/admin/users/{routes,service}.ts`、`db/schema.ts`、`db/migrations/0001_identity.sql`、`tools/dyoffice/bootstrap-admin.ts`、`test/integration/{auth-session,admin-users,password-reset}.test.ts`。
 
-**接口：** `authenticate(request): Promise<Principal>`、`createLocalSession(userId)`、`verifyPassword(userId,password)`、`revokeSession(principal,sessionId)`、`disableUser(admin,targetId)`；身份稳定键是数据库中的用户 UUID，`(deploymentId,usernameNormalized)` 唯一，不接受外部身份签名/回调。专门设计和接口约束见 [local-account-auth.md](local-account-auth.md)。
+**接口：** `authenticate(request)` 在 `session-core.mjs`；`principalContext(session)` 与 `canReadPersonalFiles(principal, ownerUserId)` 在 `auth/principal.mjs`，供 T04 的 `withPrincipalTransaction` 使用。身份稳定键是数据库中的用户 UUID，`(deploymentId,usernameNormalized)` 唯一。不实现 RLS。专门设计见 [local-account-auth.md](local-account-auth.md)。收口证据见 [t03-closeout.md](evidence/t03-closeout.md)。
 
-- [ ] **T03a，RED：** 先测试用户名归一化/重复、首次 Admin bootstrap 并发、无默认密码、空/弱/泄露密码拒绝、Argon2id 散列独立盐、用户名不存在与错误密码等成本验证、账号禁用拒绝；在尚无服务时记录失败。
-- [ ] **T03a，GREEN：** 加 users/user_roles/password_action_tokens/session 表和约束；Argon2id 起始不少于 19 MiB、t=2、p=1（目标主机基准校准）；单因素密码至少 15 字符、允许长短语/Unicode、无强制复杂度规则；交互式一次性 Admin 初始化，生产拒绝默认密码/开发双 Token。
-- [ ] **T03b，RED：** 测试登录、登出、`me`、新会话 ID、Cookie `Secure/HttpOnly/SameSite`、CSRF/Origin、重复 Cookie、密码枚举、IP+账号限流、空闲/绝对超时、登录与撤销并发、生产启动守卫；拒绝错误身份不泄漏存在性。
-- [ ] **T03b，GREEN：** 实现本地 `POST /api/v1/auth/login`、`logout`、`GET /api/v1/auth/me`、`reauth` 及个人会话查询/撤销；随机会话令牌只在 Cookie，数据库仅保存散列、`auth_version` 与撤销状态；所有敏感请求建立授权 Principal。
-- [ ] **T03c，RED：** 管理员创建/停用/恢复账号、修改角色、短期激活/重置 Token 一次性并发消费、管理员再认证、旧会话/API Token 撤销、管理员不可查看用户个人文件；新建账号不自行拥有管理权限。
-- [ ] **T03c，GREEN：** 管理员用户列表、开户、激活、停用、角色修改和密码重置；允许用户校验旧密码后修改密码，失效旧会话与写租约；每个账号初始化个人 workspace；管理操作审计，重置令牌不记日志。
-- [ ] 以真实 PostgreSQL + HTTP/浏览器运行以上 GREEN、`npm run test:web`、Web 类型/构建门禁、`git diff --check`；提供失败复现、密码哈希资源压力与撤销时延证据；没有真实 DB 记 blocked 而非通过。
-- [ ] 提交一系列可独立复核的小 PR：`feat(auth): add password hashing and admin bootstrap`、`feat(auth): add local login sessions`、`feat(admin): manage local accounts and resets`。未完成 T03/T04 不允许生产写入。
+**状态（2026-11-16）：T03 身份与会话完成。** 默认 `dev:web` 仍使用开发令牌，`NODE_ENV=production` 仍拒绝启动。本地账号路由只在 `buildApp({ localAuth })` 上注册。
+
+- [x] **T03a，RED：** 用户名归一化/重复、首次 Admin bootstrap 并发、无默认密码、空/弱/常见密码拒绝、Argon2id 独立盐、不存在用户与错误密码的同等哈希、账号禁用拒绝。失败先于服务存在，记录在 [t03a-account-foundation.md](evidence/t03a-account-foundation.md)。
+- [x] **T03a，GREEN：** `0001_identity.sql` 含 users/user_roles/password_action_tokens/sessions/personal workspace。Argon2id 为 m=19456、t=2、p=1。密码至少 15 个码位，允许长短语和 Unicode，无复杂度规则。一次性 CLI bootstrap，生产拒绝开发双 Token。完整离线泄露密码库和目标主机压测延期到运维，原因见收口证据。
+- [x] **T03b，RED/GREEN：** `POST /api/v1/auth/login`、`logout`、`GET /me`、`POST /reauth`、`GET/DELETE /sessions`、`POST /sessions/revoke-others`。Cookie 为 `__Host-`、`Secure`、`HttpOnly`、`SameSite=Lax`。数据库只存会话散列和 `auth_version`。CSRF/Origin、重复 Cookie、统一错误、IP+账号+全局限流、空闲/绝对超时、登录与撤销并发均有测试。认证路由上的 Principal 来自 `principalContext`。开发令牌进程上的旧文件路由仍不切换，等到 T04，避免在没有 RLS 时把多用户登录接到个人文件上。
+- [x] **T03c，RED/GREEN：** 管理员开户、列表、停用/恢复、角色替换、一次性激活/重置、再认证、自助改密。新建账号只有 `user` 角色，并写入个人 workspace。审计不记令牌或密码。`canReadPersonalFiles` 只比较 owner，`config_admin` 不因此读到他人文件。
+- [x] 本机 PostgreSQL 16 跑过身份、登录、账号、改密和个人会话集成测试，迁移 `0001`–`0008` 与文件/版本表共存。`npm run test:web` 155 通过、1 条 MinIO 跳过；`typecheck:web`、边界检查、`test:web:build`、兼容性基线和 `git diff --check` 通过。浏览器点击登录页未做：默认界面仍是开发令牌。
+- [x] 既有 PR：密码与 bootstrap、会话核心（#5）、登录（#8）、账号生命周期（#10，本分支续作并改编号）。未完成 T04 前不允许生产写入。
+
+**明确延期：**
+
+- **T04：** `FORCE ROW LEVEL SECURITY`、应用库最小权限、连接池身份清理。本任务只提供 Principal。
+- **T19：** 外部 API Token 表尚不存在。停用、改密和角色变更增加 `auth_version` 并撤销浏览器会话；Token 撤销要等 Token 存储出现。
+- **运维：** 完整泄露密码语料、Argon2 主机并发压测、速率桶 GC、受信反向代理 IP。当前阻断列表只是小的预过滤。
+- **写租约：** `dropWriteLeasesForOwner` 清掉调用方传入的进程内账本租约。默认开发进程没有把这份账本接进 PostgreSQL 改密事务；接上是持有账本的进程的事，不改 T06 提交规则。
 
 ### T04 资源授权与 RLS
 

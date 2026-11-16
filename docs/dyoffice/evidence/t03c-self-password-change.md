@@ -1,5 +1,7 @@
 # T03c：用户自行改密、会话轮换与事务验收
 
+> 收口说明见 [t03-closeout.md](t03-closeout.md)。改密路由由 `buildApp({ localAuth })` 注册。
+
 > 日期：2026-11-16。归属：PR #10 / `feat/dyoffice-t03c-account-lifecycle`。
 > 本次代码提交：`2d2b3e0e76124c6b07636b9eebb87b9e1ad70640`。
 > 状态：独立服务和 HTTP 测试闭环已实现；**未挂载共享 Fastify 服务、未完成管理界面或生产权限验收**。

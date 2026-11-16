@@ -68,7 +68,7 @@ const SQL_AUTH = [
   'AND s.revoked_at IS NULL AND s.expires_at > clock_timestamp()',
   "AND s.last_seen_at > clock_timestamp() - ($3::bigint * INTERVAL '1 millisecond')",
   'AND EXISTS (SELECT 1 FROM dyoffice_user_roles r WHERE r.deployment_id = u.deployment_id AND r.user_id = u.id)',
-  'RETURNING s.id AS session_id, s.user_id, s.deployment_id, s.expires_at,',
+  'RETURNING s.id AS session_id, s.user_id, s.deployment_id, s.auth_version, s.expires_at,',
   '(SELECT ARRAY(SELECT r.role::text FROM dyoffice_user_roles r',
   'WHERE r.deployment_id = s.deployment_id AND r.user_id = s.user_id ORDER BY r.role)) AS roles'
 ].join(' ')
@@ -123,6 +123,7 @@ export function createSessionService({ pool, idleTimeoutMs = DEFAULT_IDLE_MS, ab
         sessionId: row.session_id,
         userId: row.user_id,
         deploymentId: row.deployment_id,
+        authVersion: row.auth_version == null ? null : String(row.auth_version),
         roles: row.roles,
         expiresAt: row.expires_at,
       }
