@@ -4,6 +4,7 @@ on:
   push:
     branches: [feat/dyoffice-t03b-session-core]
     paths:
+      - 'tools/dyoffice/runtime-lock*'
       - 'apps/web/server/auth/session-core.mjs'
       - 'apps/web/server/auth/csrf-policy.mjs'
       - 'apps/web/test/session-core.test.mjs'
@@ -12,6 +13,7 @@ on:
       - '.github/workflows/dyoffice-t03b-sessions.yml'
   pull_request:
     paths:
+      - 'tools/dyoffice/runtime-lock*'
       - 'apps/web/server/auth/session-core.mjs'
       - 'apps/web/server/auth/csrf-policy.mjs'
       - 'apps/web/test/session-core.test.mjs'
@@ -25,11 +27,11 @@ permissions:
 
 jobs:
   session-core:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     services:
       postgres:
-        image: postgres:16
+        image: postgres:16@sha256:dd2bf3ce2dc83a81674cf7f217fcfd8a5009a4b325dda5b843bfee82a06cff6f
         env:
           POSTGRES_USER: dyoffice_test
           POSTGRES_PASSWORD: local-ci-only-not-for-production
@@ -43,7 +45,9 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: 22
+          node-version: '22.23.5'
+      - name: Verify immutable Node runtime
+        run: node tools/dyoffice/runtime-lock.mjs --runtime
       - name: Check session files for syntax errors
         run: |
           node --check apps/web/server/auth/session-core.mjs

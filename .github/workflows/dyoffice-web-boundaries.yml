@@ -4,6 +4,7 @@ on:
   push:
     branches: [main, feat/dyoffice-web]
     paths:
+      - 'tools/dyoffice/runtime-lock*'
       - 'package.json'
       - 'package-lock.json'
       - 'LICENSE'
@@ -16,9 +17,11 @@ on:
       - 'tools/audit-web-host*'
       - 'tools/dyoffice/host-ipc-classification*'
       - 'docs/dyoffice/inventory/host-ipc*'
+      - 'docs/dyoffice/inventory/agent-tools*'
       - '.github/workflows/dyoffice-web-boundaries.yml'
   pull_request:
     paths:
+      - 'tools/dyoffice/runtime-lock*'
       - 'package.json'
       - 'package-lock.json'
       - 'LICENSE'
@@ -31,6 +34,7 @@ on:
       - 'tools/audit-web-host*'
       - 'tools/dyoffice/host-ipc-classification*'
       - 'docs/dyoffice/inventory/host-ipc*'
+      - 'docs/dyoffice/inventory/agent-tools*'
       - '.github/workflows/dyoffice-web-boundaries.yml'
   workflow_dispatch:
 
@@ -52,6 +56,8 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22.23.5
+      - name: Verify immutable Node runtime
+        run: node tools/dyoffice/runtime-lock.mjs --runtime
       - name: Verify immutable host Node
         run: node tools/dyoffice/host-runtime.mjs --node-only
       - name: Provision host database Redis and object storage
@@ -71,6 +77,8 @@ jobs:
         run: npm exec --workspace @dyoffice/web -- playwright install chromium --with-deps
       - name: Test compatibility baseline and CI coverage
         run: node --test tools/dyoffice/*.test.mjs
+      - name: Check reviewed Agent and MCP tool placements
+        run: node tools/dyoffice/agent-tool-inventory.mjs --check
       - name: Reject unreviewed dependency and font baseline drift
         run: node tools/dyoffice/compatibility-baseline.mjs --check
       - name: Test browser dependency gate
@@ -147,6 +155,8 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22.23.5
+      - name: Verify immutable Node runtime
+        run: node tools/dyoffice/runtime-lock.mjs --runtime
       - name: Verify immutable host Node
         run: node tools/dyoffice/host-runtime.mjs --node-only
       - name: Provision host database and Redis
@@ -190,6 +200,8 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22.23.5
+      - name: Verify immutable Node runtime
+        run: node tools/dyoffice/runtime-lock.mjs --runtime
       - name: Verify immutable host Node
         run: node tools/dyoffice/host-runtime.mjs --node-only
       - name: Install Web dependencies without Electron

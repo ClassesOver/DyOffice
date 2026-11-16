@@ -48,3 +48,8 @@ test('durable job gate uses real host Redis and runs PostgreSQL/BullMQ recovery 
   assert.match(job,/DYOFFICE_TEST_DATABASE_URL:/)
   assert.match(job,/DYOFFICE_TEST_REDIS_URL:/)
 })
+
+test('T00 tool placements are checked and inventory-only changes trigger both events', () => {
+  assert.match(workflow, /run: node tools\/dyoffice\/agent-tool-inventory\.mjs --check/)
+  assert.equal((workflow.match(/'docs\/dyoffice\/inventory\/agent-tools\*'/g) ?? []).length, 2)
+})

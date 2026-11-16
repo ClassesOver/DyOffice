@@ -65,3 +65,15 @@ security review of the root controller and host service policy; full reproducibl
 OS/toolchain distribution. Before combining #36 with this stack, retain every
 new job, extend its workflow inventory, and re-run the combined tree. A green
 legacy-container job cannot stand in for these host service tests.
+
+## Integration with the accepted legacy CI lock
+
+The follow-up candidate includes target `474ce46` (#33/#36) without changing
+PR #32 or its ref. Only two files overlap: the boundary workflow preserves all
+three host jobs and their existing commands while adding #33 inventory checks
+and #36's immediate per-job Node admission; CI coverage keeps both sets of
+assertions. The other 22 target files are copied exactly. Combined lock and
+coverage checks pass 15/15 locally; the exact combined commit requires new CI.
+The earlier `c010023` run passed all three real host runtime admission steps,
+including RustFS streaming verification, but its later regression jobs were
+still running at this checkpoint.
