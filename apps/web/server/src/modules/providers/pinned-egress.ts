@@ -1,0 +1,144 @@
+import dns from 'node:dns/promises'
+import https from 'node:https'
+import {isIP} from 'node:net'
+import {createHash} from 'node:crypto'
+import type {ClientRequest,IncomingMessage} from 'node:http'
+import type {TLSSocket} from 'node:tls'
+
+export interface EgressProfile {
+ deploymentId:string;entryId:string;revision:number;providerId:string;model:string;baseUrl:string;endpoint:string;allowedIpv4:readonly string[]
+}
+export interface EgressScope extends Omit<EgressProfile,'allowedIpv4'> {
+ credential:Uint8Array;requestDigest:string;turnId:string;reservationId:string;claimId:string;signal:AbortSignal
+}
+const fail=()=>new Error('Provider transport unavailable')
+const profileFields=['deploymentId','entryId','revision','providerId','model','baseUrl','endpoint'] as const
+function publicIpv4(address:string):boolean {
+ if(isIP(address)!==4)return false
+ const first=Number(address.split('.')[0])
+ return first>0&&first<224&&![10,100,127,169,172,192,198,203].includes(first)
+}
+function url(value:string):URL {
+ const u=new URL(value)
+ if(u.href!==value||u.protocol!=='https:'||u.port||u.username||u.password||u.search||u.hash||isIP(u.hostname)||u.hostname.includes(':'))throw fail()
+ return u
+}
+/**
+ * Unmounted admin transport preparation. No credential authority or budget is
+ * created here; compose ONLY behind #74's unique durable dispatch gate.
+ * IPv6 and broad special IPv4 ranges intentionally fail closed.
+ */
+export function createPinnedProviderTransport({profiles,timeoutMs=30_000,maxConcurrent=8,maxResponseBytes=8*1024*1024}:{
+ profiles:readonly EgressProfile[];timeoutMs?:number;maxConcurrent?:number;maxResponseBytes?:number
+}) {
+ let approved:Readonly<EgressProfile>[]
+ try{
+  if(!Array.isArray(profiles)||profiles.length>256||![timeoutMs,maxConcurrent,maxResponseBytes].every(Number.isSafeInteger)||timeoutMs<1||timeoutMs>120_000||maxConcurrent<1||maxConcurrent>64||maxResponseBytes<1||maxResponseBytes>32*1024*1024)throw fail()
+  approved=profiles.map((p:EgressProfile)=>{
+   if(!p||Object.keys(p).length!==8||Object.keys(p).some(k=>![...profileFields,'allowedIpv4'].includes(k as typeof profileFields[number]))||
+      profileFields.some(k=>k==='revision'?!Number.isSafeInteger(p[k])||p[k]<0:typeof p[k]!=='string'||!p[k]||p[k].length>2048))throw fail()
+   const endpoint=url(p.endpoint),base=url(p.baseUrl)
+   if(endpoint.origin!==base.origin||!Array.isArray(p.allowedIpv4)||!p.allowedIpv4.length||p.allowedIpv4.length>64||p.allowedIpv4.some((a:string)=>!publicIpv4(a))||new Set(p.allowedIpv4).size!==p.allowedIpv4.length)throw fail()
+   return Object.freeze({...p,allowedIpv4:Object.freeze([...p.allowedIpv4])})
+  })
+ }catch{throw fail()}
+ let active=0
+ return {
+  activeCount:()=>active,
+  async send(scope:EgressScope,body:Uint8Array,onChunk:(chunk:Uint8Array)=>void|Promise<void>):Promise<void>{
+   let credential:Buffer|undefined,wire:Buffer|undefined
+   let request:ClientRequest|undefined,response:IncomingMessage|undefined
+   let deadline:ReturnType<typeof setTimeout>|undefined
+   let release=false,externalSignal:AbortSignal|undefined
+   const pending=new Set<Promise<unknown>>(),control=new AbortController()
+   const stop=()=>control.abort()
+   let rejectStop:()=>void=()=>{}
+   const stopped=new Promise<never>((_,reject)=>{rejectStop=()=>reject(fail())})
+   void stopped.catch(()=>{})
+   const abort=()=>{rejectStop();request?.destroy(fail());response?.destroy(fail())}
+   control.signal.addEventListener('abort',abort,{once:true})
+   const step=<T>(operation:()=>Promise<T>):Promise<T>=>{
+    if(control.signal.aborted)return Promise.reject(fail())
+    const work=Promise.resolve().then(()=>{if(control.signal.aborted)throw fail();return operation()})
+    pending.add(work);void work.then(()=>pending.delete(work),()=>pending.delete(work))
+    return Promise.race([work,stopped])
+   }
+   try{
+    const suppliedSignal=scope?.signal
+    if(!(suppliedSignal instanceof AbortSignal))throw fail()
+    externalSignal=suppliedSignal
+    if(!scope||![scope.reservationId,scope.claimId,scope.turnId].every(v=>typeof v==='string'&&/^[A-Za-z0-9_-]{1,128}$/.test(v))||!(body instanceof Uint8Array)||body.byteLength>1024*1024||!body.byteLength||typeof onChunk!=='function'||externalSignal.aborted||active>=maxConcurrent)throw fail()
+    // Only primitives/private snapshots survive the first await.
+    const matches=approved.filter(p=>profileFields.every(k=>p[k]===scope[k]))
+    if(matches.length!==1||!(scope.credential instanceof Uint8Array)||scope.credential.byteLength<1||scope.credential.byteLength>8192||!/^[a-f0-9]{64}$/.test(scope.requestDigest))throw fail()
+    const profile=matches[0]!,target=url(profile.endpoint)
+    wire=Buffer.from(body);credential=Buffer.from(scope.credential)
+    if(credential.some(b=>b<33||b>126)||createHash('sha256').update(wire).digest('hex')!==scope.requestDigest)throw fail()
+    const text=new TextDecoder('utf-8',{fatal:true}).decode(wire),payload=JSON.parse(text)
+    if(!payload||typeof payload!=='object'||Array.isArray(payload)||JSON.stringify(payload)!==text||payload.model!==profile.model||payload.stream!==true)throw fail()
+    active++;release=true
+    externalSignal.addEventListener('abort',stop,{once:true})
+    deadline=setTimeout(stop,timeoutMs)
+    if(externalSignal.aborted)stop()
+    const answers=await step(()=>dns.lookup(target.hostname,{all:true,verbatim:true}))
+    if(!answers.length||answers.length>64||answers.some(a=>a.family!==4||!publicIpv4(a.address)||!profile.allowedIpv4.includes(a.address)))throw fail()
+    const pinned=answers[0]!.address
+    let verified=false
+    response=await step(()=>new Promise<IncomingMessage>((resolve,reject)=>{
+     let finished=false,received:IncomingMessage|undefined
+     const complete=()=>{if(finished&&received)resolve(received)}
+     const options:https.RequestOptions & {autoSelectFamily:boolean}={
+      method:'POST',agent:false,family:4,autoSelectFamily:false,
+      servername:target.hostname,rejectUnauthorized:true,maxHeaderSize:16*1024,
+      lookup:(hostname,options,callback)=>{
+       if(hostname!==target.hostname){(callback as Function)(fail());return}
+       if(typeof options==='object'&&options?.all)(callback as Function)(null,[{address:pinned,family:4}])
+       else (callback as Function)(null,pinned,4)
+      },
+      headers:{'content-type':'application/json','accept':'text/event-stream','content-length':wire!.length,'authorization':'Bearer '+credential!.toString('ascii')},
+     }
+     request=https.request(target,options,res=>{
+      res.on('error',()=>{}) // Destruction before iteration must not escape as an unhandled error.
+      if(control.signal.aborted||!verified){res.destroy();reject(fail());return}
+      response=res;received=res;complete()
+     })
+     request.once('finish',()=>{finished=true;complete()})
+     request.on('error',()=>reject(fail()))
+     request.once('socket',socket=>{
+      const tls=socket as TLSSocket
+      tls.once('secureConnect',()=>{
+       if(control.signal.aborted||!tls.authorized||tls.remoteAddress!==pinned||tls.remotePort!==443){request?.destroy(fail());reject(fail());return}
+       verified=true
+       // No flushHeaders/write/end occurs before verified TLS peer.
+       request!.end(wire)
+      })
+     })
+    }))
+    if(response.statusCode!==200||typeof response.headers['content-type']!=='string'||
+       response.headers['content-type'].split(';',1)[0]!.trim().toLowerCase()!=='text/event-stream'||
+       response.headers['content-encoding']!==undefined&&response.headers['content-encoding']!=='identity')throw fail()
+    const iterator=response[Symbol.asyncIterator]()
+    let received=0
+    for(;;){
+     const result=await step(()=>iterator.next())
+     if(result.done)break
+     if(!(result.value instanceof Uint8Array))throw fail()
+     received+=result.value.byteLength
+     if(received>maxResponseBytes)throw fail()
+     const chunk=Buffer.from(result.value)
+     await step(async()=>{await onChunk(chunk)})
+    }
+   }catch{throw fail()}
+   finally{
+    if(deadline)clearTimeout(deadline)
+    externalSignal?.removeEventListener('abort',stop)
+    control.abort();control.signal.removeEventListener('abort',abort)
+    request?.destroy();response?.destroy()
+    credential?.fill(0);wire?.fill(0)
+    // OS DNS and trusted callback work may ignore cancellation. Retain capacity
+    // until actual work settles, not merely until the caller observes timeout.
+    if(release){if(pending.size)void Promise.allSettled([...pending]).then(()=>{active--});else active--}
+   }
+  },
+ }
+}
