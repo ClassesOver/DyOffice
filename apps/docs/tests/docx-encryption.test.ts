@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import {
   commitDocPasswordSave,
   currentDocPasswordIntentRevision,
@@ -20,6 +20,8 @@ import {
   setDocPassword,
   snapshotDocPassword,
 } from '../src/main/docx-encryption'
+
+vi.mock('electron', () => ({ ipcRenderer: {}, webUtils: {}, net: {}, protocol: {} }))
 
 const plainDocx = () => readFileSync(join(__dirname, 'pagination-corpus/docx/kitchen-sink.docx'))
 
