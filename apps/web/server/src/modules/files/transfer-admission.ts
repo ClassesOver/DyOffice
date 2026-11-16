@@ -28,6 +28,7 @@ function createAdmission() {
     if (!waiter) return
     clearTimeout(waiter.timer)
     waiter.request.raw.removeListener('aborted', waiter.onAbort)
+    waiter.reply.raw.removeListener('close', waiter.onAbort)
     active++
     admitted.set(waiter.request, { running: false, closed: false })
     waiter.request.raw.once('aborted', () => close(waiter.request))
@@ -55,17 +56,29 @@ function createAdmission() {
         const granted = new Promise<boolean>(resolve => { waiter.settle = resolve })
         waiter.onAbort = () => {
           const index = waiters.indexOf(waiter)
-          if (index >= 0) { waiters.splice(index, 1); clearTimeout(waiter.timer); waiter.settle(false) }
+          if (index >= 0) {
+            waiters.splice(index, 1)
+            clearTimeout(waiter.timer)
+            request.raw.removeListener('aborted', waiter.onAbort)
+            reply.raw.removeListener('close', waiter.onAbort)
+            waiter.settle(false)
+          }
         }
         request.raw.once('aborted', waiter.onAbort)
+        reply.raw.once('close', waiter.onAbort)
         waiter.timer = setTimeout(() => {
           const index = waiters.indexOf(waiter)
-          if (index >= 0) { waiters.splice(index, 1); waiter.request.raw.removeListener('aborted', waiter.onAbort); waiter.settle(false) }
+          if (index >= 0) {
+            waiters.splice(index, 1)
+            request.raw.removeListener('aborted', waiter.onAbort)
+            reply.raw.removeListener('close', waiter.onAbort)
+            waiter.settle(false)
+          }
         }, options.waitMs)
         waiters.push(waiter)
         return granted.then(ok => {
           if (ok) return
-          if (request.raw.aborted) throw authError(400)
+          if (request.raw.aborted || reply.raw.destroyed) throw authError(400)
           throw Object.assign(authError(503), { retryAfter: 1 })
         })
       }
