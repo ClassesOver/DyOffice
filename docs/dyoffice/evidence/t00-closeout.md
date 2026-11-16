@@ -1,5 +1,7 @@
 # T00 closure review: source gates complete, runtime pinning still open
 
+> Historical checkpoint. For the 2026-11-16 integrated baseline acceptance, see [final source/runtime evidence](t00-final-source-acceptance.md). The original observations below are retained, not current unresolved-status claims.
+
 Reviewed target: `26ee881ea626f5704fc2e532fd65b852117d68f6` (tree
 `25ecfc0105ceceba43377744a8e2a7112ebab606`), plus this PR's inventory/CI/documentation changes.
 Date: 2026-11-16. The candidate preserves T01 #31 and does not include the unmerged #21 new identity/worker stack.
@@ -69,3 +71,4 @@ Local Node 24.22.1. Existing external npm packages were reused to fit the execut
 all workspace links were redirected to this exact candidate's sources. This is **not a fresh-install proof**.
 The target CI above ran its own declared install; the candidate's CI must independently do the same.
 No production credentials, real business documents or customer data were used.
+

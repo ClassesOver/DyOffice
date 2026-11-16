@@ -1,5 +1,7 @@
 # T00 engineering gates: checkpoint, not completion
 
+> Historical checkpoint. For the 2026-11-16 integrated baseline acceptance, see [final source/runtime evidence](t00-final-source-acceptance.md). The original observations below are retained, not current unresolved-status claims.
+
 Baseline inspected: `31382af2217a6ac32ea3c7208138f1aa8e23f146` on
 `feat/dyoffice-web`, plus this checkpoint's CI/type-resolution/baseline changes.
 Environment: Linux, Node 24.22.1, Web-only dependency install. This is not a
@@ -63,3 +65,4 @@ real model/data-source/Harness and external Office tests are not covered here.
 
 Do not mark T00 or M0 complete from this checkpoint. Preserve not-run/blocked
 statuses; passing scaffold gates is not four-format editing or enterprise readiness.
+

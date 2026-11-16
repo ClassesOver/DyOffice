@@ -1,8 +1,7 @@
 # T00 small-sample authenticated API performance baseline
 
 This is an initial measurement instrument, not section 8 production capacity
-acceptance. Real measurements are pending exact-commit CI; no numbers are
-invented here. It uses real PostgreSQL and the existing restricted runtime
+acceptance. The bounded CI observation below is now recorded; it is not production capacity evidence. It uses real PostgreSQL and the existing restricted runtime
 fixtures, local sessions, application HTTP routes and ten synthetic DOCX files.
 No customer service, credential, file or production database is used.
 
@@ -59,10 +58,36 @@ Node/PG/Redis/RustFS versions.
 | 24-hour stability | not_run | Dedicated endurance environment and integrity/leak checks |
 | RPO/RTO | not_run | T24 actual backup/recovery exercise |
 
-Full T00 performance acceptance cannot be inferred from these three small GET
+Full section 8/T25 performance acceptance cannot be inferred from these three small GET
 workloads. T25 must validate the agreed targets on a frozen release environment.
 
 Review caught an initial 1,818-request plan conflicting with the unchanged global
 600/minute limiter. A workload-bound regression failed first, then passed after
 reducing to 558 total requests. No rate-limit protection was changed or failure
 removed. These are intentionally small observations, not a tail-latency SLO proof.
+
+## Verified CI observation (2026-11-16)
+
+- Run: [43815137000](https://github.com/ClassesOver/DyOffice/actions/runs/43815137000), PR #32 head `157cc1c3549cdc2e91371b7b8ee2f1e4a90c7f89`.
+- Artifact: `t00-small-api-baseline`, ID `14203275027`, 10,191 ZIP bytes. Independently downloaded ZIP SHA256 `83f0e0fecaf11be50960bf5bdfebe69edd2cac4ef19f6d7e90f9d863d7ea3ad8` equals GitHub's declared digest.
+- JSON `gitCommit` is the PR test merge `65a81a49cdeba3b16e9349250fbac08eb88ec586`, whose parents are target `474ce46` and head `157cc1c`. Both test merge and PR head have exact tree `0497e30318ef2776b800ad194631a10dfa060148`; thus this observation is attributable to the candidate source, not an unrelated run.
+- Report complete=true; 558 total attempts including first observations and warmups; 0 incorrect/failed responses. This is the report's bounded correctness result, not the conclusion of every workflow/job.
+- Node 22.23.5, Linux x64, AMD EPYC 7763, 2 reported logical CPUs, runner image 20261111.370.1, 8,317,935,616 total memory bytes. Observed environment, not reserved or immutable hardware.
+- Root lock SHA256 `577f8a9d9953165a78531f8c1062aa43054ee22b2d411648366d8ece43724499`; report retains 13 migration checksums and synthetic fixture SHA `49ec7bb8ced69c5277ae64a46ff1d50166ac7014888004b6df412d7e94a821cf` (4,224 bytes × 10 files).
+
+Each cell below lists all three rounds, not a merged or cherry-picked percentile. Latencies are client-observed milliseconds, not server-only time.
+
+| Route | Concurrency | Round p95 ms (1 / 2 / 3) | Completed requests/s (1 / 2 / 3) |
+| --- | --- | --- | --- |
+| file metadata | 1 | 6.143 / 9.291 / 7.957 | 204.96 / 192.24 / 205.77 |
+| file metadata | 4 | 30.546 / 38.532 / 18.317 | 210.33 / 193.72 / 297.18 |
+| files list (10) | 1 | 8.616 / 11.036 / 5.687 | 164.48 / 181.71 / 212.65 |
+| files list (10) | 4 | 53.370 / 26.849 / 29.235 | 156.87 / 252.99 / 251.82 |
+| personal preferences | 1 | 11.547 / 6.525 / 6.606 | 163.22 / 211.52 / 210.22 |
+| personal preferences | 4 | 24.838 / 19.813 / 18.413 | 227.97 / 297.65 / 283.80 |
+
+First observations were 89.122 / 15.360 / 11.052 ms for list/preferences/metadata respectively; fixture setup had already primed state. They are not cold starts. API+client process CPU: 1,936,925 user and 368,737 system microseconds; RSS before/after 170,889,216 / 181,166,080 bytes; peak 205,372 KiB includes setup. PostgreSQL resources excluded.
+
+All eight remaining categories in the report remain not_run or blocked: server-side p95, 100 sessions/25 editors/10 AI runs/4 native tasks, revision commit, four-format opening, approved model workload, revocation timing, 24-hour endurance and recovery RPO/RTO. No capacity or Section 8 threshold is accepted from these numbers. Legacy database conversion is excluded by the owner's current scope and is not a delivery blocker; accidental old-ledger refusal remains a safety gate.
+
+Independent review recomputed all 558 raw sample outcomes and 18 per-round p95/throughput rows, and independently verified the source-tree relationship and ZIP digest. `cgroupCpuMax` and `cgroupMemoryMax` are null in the report: limits were not obtained, not proof of unlimited or measured quotas.
