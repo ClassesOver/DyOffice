@@ -13,6 +13,7 @@ const id = {type:'string',pattern:'^[A-Za-z0-9_-]{1,128}$'}
  * can receive requests and charge usage. No free-form input or tool execution. */
 export function registerFixedProviderProbeRoutes(app: FastifyInstance, options: {
   pipeline: {turns: TurnRunner}; authorize(token:string):Promise<void>;
+  entries?: readonly {id:string;label:string}[];
   csrf: Pick<ReturnType<typeof createCsrfService>,'requireSession'>; maxOutputBytes?: number
 }) {
   const maxOutputBytes = options.maxOutputBytes ?? 8 * 1024 * 1024
@@ -22,10 +23,12 @@ export function registerFixedProviderProbeRoutes(app: FastifyInstance, options: 
       reply.header('Cache-Control','private, no-store')
       const token=cookies(request).session
       if (!token) throw authError()
-      if(request.method!=='GET')options.csrf.requireSession(request,token)
+      if(request.method!=='GET' && request.method!=='HEAD')options.csrf.requireSession(request,token)
       await options.authorize(token)
     })
-    api.post('/api/v1/admin/ai-probe/turns',{bodyLimit:1024*1024,schema:{querystring:object({}),body:object({turnId:id,modelId:id,scenario:{type:'string',enum:['hello']}})}},async (request,reply) => {
+    // Configured choices only, not a claim that grants/credentials/budget are available.
+    api.get('/api/v1/admin/ai-probe/configuration',{schema:{querystring:object({})}},async()=>({experimental:true,entries:options.entries??[]}))
+    api.post('/api/v1/admin/ai-probe/turns',{bodyLimit:1024*1024,schema:{querystring:object({}),body:object({turnId:id,modelId:{type:'string',pattern:'^[A-Za-z0-9][A-Za-z0-9_-]{0,99}$'},scenario:{type:'string',enum:['hello']}})}},async (request,reply) => {
       const body=request.body as {turnId:string;modelId:string;scenario:'hello'}
       const controller=new AbortController(), response=reply.raw
       let bytes=0

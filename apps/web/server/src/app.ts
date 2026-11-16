@@ -1,3 +1,4 @@
+import {registerProbeAssets} from './modules/providers/probe-assets.ts'
 import { registerFixedProviderProbe } from './modules/providers/fixed-probe.ts'
 import type { AdminPipelineProfile } from './modules/providers/admin-pipeline.ts'
 import { registerAdminSyntheticProbe } from './modules/providers/synthetic-probe.ts'
@@ -60,6 +61,7 @@ export interface LocalWebConfig {
   globalConfigKeyring?: SecretKeyring;
   adminAiSyntheticProbe?: boolean;
   // Explicit network-capable fixed probe, NOT the offline diagnostic. No automatic run.
+  adminProviderProbeDirectory?: string;
   adminProviderProbe?: { profiles: readonly AdminPipelineProfile[] };
   providerShutdownTimeoutMs?: number;
   passwordBlocklistFile?: string; loginLimits?: LoginLimits; idleMs?: number; absoluteMs?: number; closeDb?: () => Promise<void>
@@ -70,6 +72,8 @@ export async function buildLocalApp(config: LocalWebConfig): Promise<FastifyInst
   if (config.adminAiSyntheticProbe && !config.businessPool) throw new Error('Synthetic probe requires restricted business pool')
   if (config.providerShutdownTimeoutMs !== undefined && (!Number.isSafeInteger(config.providerShutdownTimeoutMs) || config.providerShutdownTimeoutMs < 1 || config.providerShutdownTimeoutMs > 35_000)) throw new Error('Invalid provider shutdown timeout')
   if (config.adminProviderProbe !== undefined && (!config.adminProviderProbe || Object.keys(config.adminProviderProbe).join() !== 'profiles' || !Array.isArray(config.adminProviderProbe.profiles) || !config.adminProviderProbe.profiles.length || !config.businessPool || !config.globalConfigKeyring || config.adminProviderProbe.profiles.some(p=>!p || p.deploymentId!==config.deploymentId))) throw new Error('Invalid provider probe configuration')
+  if(config.adminProviderProbeDirectory!==undefined && (!config.adminProviderProbe || typeof config.adminProviderProbeDirectory!=='string' || !config.adminProviderProbeDirectory))throw new Error('Probe assets require explicit local probe')
+  const probeAssets=config.adminProviderProbeDirectory?await createStaticAssets({assetMode:'built',assetDirectory:config.adminProviderProbeDirectory,pages:['index.html'],cacheControl:'private, no-store'}):undefined
   if ('userToken' in config || 'adminToken' in config) throw new Error('Local mode rejects development tokens')
   async function assertReady() {
     await config.db.assertCurrent()
@@ -117,7 +121,7 @@ export async function buildLocalApp(config: LocalWebConfig): Promise<FastifyInst
     const transactions = createPrincipalTransactions({ pool: config.businessPool, deploymentId: config.deploymentId, idleMs: config.idleMs })
     if (config.adminAiSyntheticProbe === true) ownedProbes.push(registerAdminSyntheticProbe(app, { transactions, sessions, csrf }))
     if(config.adminProviderProbe){
-      try{ownedProbes.push(registerFixedProviderProbe(app,{deploymentId:config.deploymentId,transactions,sessions,csrf,keyring:config.globalConfigKeyring!,profiles:config.adminProviderProbe.profiles}))}
+      try{const probe=registerFixedProviderProbe(app,{deploymentId:config.deploymentId,transactions,sessions,csrf,keyring:config.globalConfigKeyring!,profiles:config.adminProviderProbe.profiles});ownedProbes.push(probe);if(probeAssets)registerProbeAssets(app,probeAssets,probe.authorize)}
       catch(error){await app.close();throw error}
     }
     registerPreferenceRoutes(app, createPreferenceService(transactions), sessions, csrf)

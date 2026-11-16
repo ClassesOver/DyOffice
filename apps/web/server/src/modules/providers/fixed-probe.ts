@@ -14,10 +14,13 @@ export function registerFixedProviderProbe(app: FastifyInstance, config:
     sessions: Pick<SessionService,'authenticate'>
     csrf: Parameters<typeof registerFixedProviderProbeRoutes>[1]['csrf']
   }) {
-  if (!Array.isArray(config.profiles) || !config.profiles.length
-    || config.profiles.some(p => !p || p.deploymentId !== config.deploymentId)
-    || new Set(config.profiles.map(p => p.entryId)).size !== config.profiles.length) throw new Error('Invalid provider probe configuration')
+  if (!Array.isArray(config.profiles) || !config.profiles.length || config.profiles.length>128) throw new Error('Provider probe requires 1–128 profiles')
+  if (config.profiles.some(p => !p || p.deploymentId !== config.deploymentId)
+    || new Set(config.profiles.map(p => p.entryId)).size !== config.profiles.length) throw new Error('Invalid provider probe deployment or duplicate entry ID')
+  // Intersection of coordinator and budget IDs; reject unsupported IDs at startup.
+  if (config.profiles.some(p=>typeof p.entryId!=='string' || !/^[A-Za-z0-9][A-Za-z0-9_-]{0,99}$/.test(p.entryId))) throw new Error('Provider probe entry IDs must be 1–100 ASCII letters, digits, hyphens or underscores, starting with a letter or digit')
   const pipeline = createAdminProviderPipeline(config)
+  const entries = config.profiles.map(p=>Object.freeze({id:p.entryId,label:p.entryId}))
   let disposed = false
   async function identity(token: string) {
     if (disposed) throw authError(403)
@@ -30,7 +33,7 @@ export function registerFixedProviderProbe(app: FastifyInstance, config:
     authorize: async token => ({identity:await identity(token),revision:'fixed-probe-v1'}),
     async revalidate(token,permit) { if(JSON.stringify(await identity(token))!==JSON.stringify(permit.identity))throw authError(403) },
     async *stream() {},
-  },{timeoutMs:5000,maxActive:1})
+  },{timeoutMs:5000,maxActive:16})
   const dispose = () => { disposed=true;admission.dispose();pipeline.dispose() }
   const drain = async ({timeoutMs=35_000}:{timeoutMs?:number}={}) => {
     if(!disposed || !Number.isSafeInteger(timeoutMs) || timeoutMs<1 || timeoutMs>35_000)throw new Error('Provider probe drain unavailable')
@@ -42,12 +45,13 @@ export function registerFixedProviderProbe(app: FastifyInstance, config:
       }
     })()])
   }
+  const authorize = async (token:string) => {
+    try { await admission.run({token,modelId:'fixed-probe',turnId:randomUUID(),request:{system:'',messages:[],tools:[]}},async()=>{}) }
+    catch { throw authError(403) }
+  }
   try {
     app.addHook('preClose',async()=>{dispose()})
-    registerFixedProviderProbeRoutes(app,{pipeline,csrf:config.csrf,authorize:async token=>{
-      try { await admission.run({token,modelId:'fixed-probe',turnId:randomUUID(),request:{system:'',messages:[],tools:[]}},async()=>{}) }
-      catch { throw authError(403) }
-    }})
+    registerFixedProviderProbeRoutes(app,{pipeline,csrf:config.csrf,authorize,entries})
   } catch (error) {dispose();throw error}
-  return {dispose,drain}
+  return {dispose,drain,authorize}
 }
