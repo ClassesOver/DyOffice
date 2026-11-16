@@ -1,5 +1,6 @@
 # T03/T04 integration acceptance matrix
 
+> Final evidence update, 2026-11-16: this page retains its dated preparation history. The final #32 combination subsequently passed; see [current matrix H](t03-t04-current-stack-acceptance.md) for exact final results, source continuity, visual evidence and remaining scope. Older pending wording below is not the current status.
 > Scope update, 2026-11-16: Historical pre-CI inventory for the initial #21 integration. Its pending statements describe that checkpoint, not the later #38 run. See [current-stack acceptance](t03-t04-current-stack-acceptance.md): #38 passed real PG/browser gates, while the final history/host combination remains pending and must revalidate the now-fixed history-attribution regression.
 
 ## Scope and evidence rules
@@ -95,3 +96,4 @@ Paths in the test column are relative to `apps/web/test/`.
   before COMMIT and injects a controlled rollback. Syntax check passed; the
   attempted focused execution failed at missing database configuration, not
   at a behavioral assertion. This is pending CI evidence, not RED→GREEN.
+

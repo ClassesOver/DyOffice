@@ -1,5 +1,6 @@
 # T03/T04 local-account isolation and revocation test plan
 
+> Final evidence update, 2026-11-16: this page retains its dated preparation history. The final #32 combination subsequently passed; see [current matrix H](../evidence/t03-t04-current-stack-acceptance.md) for exact final results, source continuity, visual evidence and remaining scope. Older pending wording below is not the current status.
 > Scope update, 2026-11-16: Historical pre-implementation test plan. Statements below about missing RLS and pending PG describe its original baseline. See [current-stack acceptance](../evidence/t03-t04-current-stack-acceptance.md) for #38 real restricted-role/race evidence and the still-unaccepted final combination. This notice does not complete T19, legacy migration or production.
 
 Status: T04 business isolation/RLS requirements remain pending. The linked T03 account/session results do not establish these gates.
@@ -68,3 +69,4 @@ The current executor has no `docker`, `psql` or `postgres` executable. No real P
 ### 后续环境与实现记录（2026-11-15）
 
 上面的无 Docker/PostgreSQL 记录属于本计划初稿时的执行环境。当前执行环境已提供隔离 PostgreSQL 17；T03a/T03b 已跑真实账号、会话、登录期间停用、等待期间撤销和 Chromium TLS 回归，见 [T03b 证据](../evidence/t03b-local-sessions.md)。这些测试仍使用迁移权限连接，不构成这里要求的 T04 受限业务角色、FORCE RLS 或完整业务写入撤销竞态验收。
+

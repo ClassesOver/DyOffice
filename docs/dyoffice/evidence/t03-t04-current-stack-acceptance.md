@@ -2,6 +2,84 @@
 
 > Owner scope update, 2026-11-16: legacy-database import/conversion is explicitly excluded from this delivery and is not an acceptance blocker. Preserve fail-closed rejection of accidentally connecting the new runtime to a legacy ledger and preserve existing data. No automatic conversion, reassignment, deletion or claim that migration was implemented.
 
+## Current decision: bounded new-stack acceptance closed (2026-11-16)
+
+The earlier A–G snapshot below is retained as history, not the current status.
+Its final-combination pending gates are superseded by evidence H below. This closes
+T03 local accounts and T04 isolation **for the connected local-account resources**,
+not every planned future entry, the old database upgrade path, or production release.
+No product code or security settings are changed by this evidence update.
+
+### H. Exact final source and independently checked results
+
+- Final PR #32 head: `157cc1c3549cdc2e91371b7b8ee2f1e4a90c7f89`.
+- Merged source: `9b2c7aa587ab403935a46ae1f43ea8e326c84547`.
+  GitHub compare returned no file differences between these commits (not truncated).
+- Initial review baseline: `6f3702a514fbfdfcecec6746c9614a2ae0784369`.
+  Publication baseline: `4386e6e8767c3810195799b8c6bf60958dcc02fa` after T01 #44.
+  The intervening four-file delta only adds Host contract tests and T01 documents;
+  the T03/T04 implementation and real-service acceptance sources remain unchanged.
+  Comparison from the #32 merge lists only T00/T01 documentation, unit-command,
+  package-script, workflow and compatibility-inventory changes. No auth, database,
+  local-account UI, resource service or acceptance-test source changed. This is source
+  continuity evidence, not a new execution of all services at the current commit.
+- [Final Web run 43815137000](https://github.com/ClassesOver/DyOffice/actions/runs/43815137000):
+  boundary-check, native-docx and native-worker all completed successfully.
+  [Boundary job 133125360838](https://github.com/ClassesOver/DyOffice/actions/runs/43815137000/job/133125360838)
+  raw logs were reread for the table below; the earlier branch results are not used
+  as a substitute for this final combined run.
+
+| Final combined gate | Observed result |
+| --- | --- |
+| Isolated wrong-legacy-ledger guard | 1 passed, 0 skipped |
+| Visible original-shell local-account browser suite | 5 passed, 0 skipped: Admin lifecycle, Home/settings, self-password change, sessions, login history |
+| Real PostgreSQL local integration | 156 passed, 0 skipped; includes all 12 password/role/session writer-lock order/rollback cases and final history attribution/grant checks |
+| Durable SQL jobs | 36 passed, 0 skipped |
+| Object storage | 22 passed, 0 skipped |
+| TLS browser/API suite | 5 passed, 0 skipped |
+| Separate legacy Web regression | 229 passed, 1 optional S3 skip; not a skip in the new account isolation suite |
+| Web typecheck, minimal build and original local-shell build | Successful steps |
+| Native worker and original Docs/DOCX regression | Separate final jobs successful; not a claim about all four format round trips |
+
+The final log explicitly includes immutable history attribution across rename/reuse,
+one-MVCC-snapshot failure attribution, fixed latest-20 projection, function grants,
+revoked/expired credentials, and A/B/Admin direct-SQL and HTTP isolation. It also
+includes same-backend size-one pool reuse/rollback, configured-local rejection of
+shared legacy endpoints, and job/role-epoch revocation. These close the relevant
+OPEN final-combination entries in historical sections 3–5 below.
+
+### Visual evidence and limits
+
+Downloaded final artifact `local-account-original-shell` (ID `14202611200`),
+SHA-256 `f8af667030892280558c36fe4fb44591ab7a2c1bb011e44a13e750404ba2e5a2`,
+matching GitHub's artifact digest. Reviewed all seven PNGs: Home, account,
+general settings, Admin complete, password-changed, sessions and login-history.
+They show the existing Home/Settings shell, aligned password fields, current-only
+session status after revoke-others, and minimal history time/outcome projection.
+No password or one-time activation/reset code is visible. Long settings pages are
+scroll views, not proof that all offscreen controls fit at once. This visual review
+is limited to the supplied viewport/light-theme captures; it is not responsive,
+dark-mode, accessibility or full four-editor visual certification. Interaction
+claims above come from the executed browser tests, not from screenshots alone.
+
+### Scope that remains outside this closure
+
+- AI/Agent, data-source and MCP resources are not yet connected in this new stack.
+  Default denial is tested; their future resource authorization is not completed.
+- External API tokens and their revocation belong to T19. New entry points must
+  derive and fence their principals, not trust caller-supplied owner IDs.
+- Legacy import/conversion is excluded by the owner. Wrong-ledger refusal and
+  preservation remain enforced. #28 was closed as superseded, not merged or
+  declared fully upgraded against a real legacy database.
+- Production enablement, full breach corpus, target-host password cost/capacity,
+  comprehensive audit export/retention, and all-format editor acceptance remain
+  separate delivery gates. Existing production refusal is not removed.
+- This update rereads final run evidence and source continuity; it does not claim
+  new PostgreSQL/browser tests were run locally for the documentation commit.
+  The owner excludes CI from this merge condition; Actions stays unchanged.
+
+## Historical preparation snapshot (superseded by H above)
+
 Snapshot: 2026-11-16. This document records **which code was actually tested**.
 It does not turn branch-local results into an unrun final-combination result, authorize
 a merge or deployment, or check off T19, legacy-data migration or production.
@@ -133,3 +211,4 @@ These are requested scope corrections, **not automatic completion checkboxes**:
 A coherent plan must be accurate even while work is incomplete. These edits clarify the
 evidence boundary; they cannot replace a missing test, an unsupported route, a migration
 exercise, a reviewed deployable artifact or production authorization.
+

@@ -130,7 +130,15 @@ docs/dyoffice/               当前计划及 inventory/ evidence/ adr/
 
 > **用户范围更新（2026-11-16）：** 本次不考虑旧库数据导入/转换，不以旧库迁移作为交付阻断。仍保留误连旧库拒绝和原数据不受破坏的安全保护，不执行自动迁移、重分配或删除。
 
-> **范围说明（2026-11-16）：** 下列 T03 完成记录及接口/延期描述属于历史 MJS / `dyoffice_schema_migrations` 栈，不是新 TS 本地账号栈的全局完成声明。新栈 #38 已有真实 PG 141 项和可见浏览器 4 项证据；新增登录历史的归属锁竞争已取得真实 PG 红绿修复证据；最终组合尚未发布/验收。详见 [新栈验收矩阵](evidence/t03-t04-current-stack-acceptance.md)。保留历史结果，不把新旧库迁移链或测试数量混用。
+> **范围说明（2026-11-16）：** 下列 T03 完成记录及接口/延期描述属于历史 MJS / `dyoffice_schema_migrations` 栈，不是新 TS 本地账号栈的全局完成声明。新栈 #32 最终组合已合入；精确 head `157cc1c` 的真实 PG 156/156、可见浏览器 5/5、作业 36/36、存储 22/22 和 TLS 5/5 均通过且无跳过。当前源连续性与最终截图已复核，当前已接入范围的 T03/T04 有界验收闭环；不包含 AI/数据源/MCP、T19 或生产。详见 [新栈验收矩阵](evidence/t03-t04-current-stack-acceptance.md)。保留历史结果，不把新旧库迁移链或测试数量混用。
+
+**新 TS 本地账号栈验收（2026-11-16）：**
+
+- [x] 身份唯一性、首次管理员、密码策略及会话认证边界：最终真实数据库证据 H。
+- [x] 管理员开户/激活/重置/停用/角色变更及再认证：最终数据库与可见浏览器证据 H。
+- [x] 自助改密、会话列出/撤销/撤销其他、最小登录历史及撤销写入竞态：最终组合证据 H。
+- [x] 原 Home/Settings 交互与最终七张截图复核；范围限记录的视口，不宣称全终端视觉验收。
+- [x] 新栈结果、精确源码连续性及未纳入范围均记录在矩阵 H；以下旧栈历史保留原貌。
 
 **依赖：** T02。**文件：** 拟建 `server/src/modules/auth/{service,routes,passwords,sessions,throttle,csrf}.ts`、`server/src/modules/admin/users/{routes,service}.ts`、`db/schema.ts`、`db/migrations/0001_identity.sql`、`tools/dyoffice/bootstrap-admin.ts`、`test/integration/{auth-session,admin-users,password-reset}.test.ts`。
 
@@ -154,19 +162,19 @@ docs/dyoffice/               当前计划及 inventory/ evidence/ adr/
 
 ### T04 资源授权与 RLS
 
-> **新栈进度（2026-11-16）：** #38 已验证受限连接、业务 RLS、A/B/Admin 隔离和 12 项密码/角色/会话撤销写入竞态。以下原检查清单保留未验收状态，最终最新组合必须重跑真实数据库、浏览器、任务与旧库拒绝门禁，不能直接继承分支 PASS。详见 [新栈验收矩阵](evidence/t03-t04-current-stack-acceptance.md)。外部 Token/T19、旧数据转换与生产不在本次完成范围内。
+> **新栈有界验收（2026-11-16）：** #32 最终组合的数据库、浏览器、任务、旧库拒绝和原生门禁已通过。已复核精确日志、截图与当前源码连续性，见 [矩阵 H](evidence/t03-t04-current-stack-acceptance.md)。下列勾选仅限当前已接入账户、偏好、工作区、文件/版本/租约和作业入口；不代表 AI/数据源/MCP、外部 Token/T19、旧数据转换或生产完成。
 
-2026-11-15 接缝进展：独立受限 auth/business 连接、工作区/偏好 FORCE RLS、数据库推导身份、撤销与写入锁顺序已实现并测试，见 [T04 证据](evidence/t04-rls-checkpoint.md)。本阶段使用个人偏好验证完整业务事务；文件、后台任务、外部 Token 随 T05/T08/T19 接入，不将尚不存在的入口标记完成。
+历史记录（2026-11-15）接缝进展：独立受限 auth/business 连接、工作区/偏好 FORCE RLS、数据库推导身份、撤销与写入锁顺序已实现并测试，见 [T04 证据](evidence/t04-rls-checkpoint.md)。本阶段使用个人偏好验证完整业务事务；文件、后台任务、外部 Token 随 T05/T08/T19 接入，不将尚不存在的入口标记完成。
 
-**依赖：** T03。**文件：** `modules/policy/authorize.ts`、`db/context.ts`、`db/migrations/0004_rls.sql`、`test/integration/ownership-rls.test.ts`。
+**依赖：** T03。**当前文件：** `apps/web/server/src/modules/policy/authorize.ts`、`apps/web/server/src/db/{context,roles}.ts`、`apps/web/server/src/db/migrations/`、`apps/web/test/local-integration/{ownership-rls,authority-write-races,revocation-race,pr28-runtime-boundary}.test.mjs`。
 
-**接口：** `withPrincipalTransaction(principal, fn)`、`authorize()`；角色不隐式包含文件所有权。
+**当前接口：** `createPrincipalTransactions().withPrincipalTransaction(credential, operation)` 在事务内推导主体并在提交前复核；`authorize()` 同时约束 deployment、owner 和 scope。角色不隐式包含文件所有权。实际实现位于 `apps/web/server/src/`；旧 Principal 对象接口仅作历史记录。
 
-- [ ] 测试 A/B 交叉访问、同池连接复用、异常回滚、Admin 读取他人文件、跨 owner 外键、后台任务错误主体。
-- [ ] integration RED；明确以非 owner 应用账号测试，不拿数据库超级用户做假隔离证明。
-- [ ] 加作用域过滤、FORCE RLS、事务内身份设置、复合边界约束和默认拒绝策略。
-- [ ] 每种入口和 DB 直连策略测试 GREEN；权限缺失按约定返回无泄漏错误。
-- [ ] 提交 `feat(security): enforce ownership across api and database`。
+- [x] A/B 交叉访问、同池连接复用、异常回滚、Admin 读取他人文件、跨 owner 外键、后台任务错误主体：最终 PG/作业门禁通过。
+- [x] 受限非 owner auth/business/worker 角色及拒绝特权配置的负向用例通过，不以超级用户证明隔离；历史 RED 记录保留，不虚构新的 RED 执行。
+- [x] 当前资源作用域过滤、FORCE RLS、事务内身份设置、复合边界约束和默认拒绝已合入并通过最终组合验证。
+- [x] 当前已接入入口及 DB 策略 GREEN；缺失/外人资源错误无泄漏。未来入口必须另行接入验收。
+- [x] 新栈实现通过 #32 合入；旧方案 #28 以被取代关闭，不合入旧迁移链。
 
 ### T05 对象存储、上传与个人文件生命周期
 
