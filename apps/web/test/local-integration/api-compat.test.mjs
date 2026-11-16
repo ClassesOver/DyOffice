@@ -142,7 +142,7 @@ test('Web bootstrap handles SIGTERM with a clean exit', { timeout: 10_000 }, asy
   const { once } = await import('node:events')
   const { fileURLToPath } = await import('node:url')
   const directory = await mkdtemp(join(tmpdir(), 'dyoffice-bootstrap-'))
-  const child = spawn(process.execPath, ['--experimental-strip-types', 'server/index.mjs'], {
+  const child = spawn(process.execPath, ['--import','tsx', 'server/index.mjs'], {
     cwd: fileURLToPath(new URL('../../', import.meta.url)),
     env: { ...process.env, NODE_ENV: 'development', PORT: '0', HOST: '127.0.0.1', DYOFFICE_AUTH_MODE: 'development', DYOFFICE_ASSET_MODE: 'source', DYOFFICE_DATA_DIR: directory, DYOFFICE_USER_TOKEN: 'test-personal', DYOFFICE_ADMIN_TOKEN: 'test-admin', DYOFFICE_ENCRYPTION_KEY: 'test-key' },
     stdio: ['ignore', 'pipe', 'pipe'],
