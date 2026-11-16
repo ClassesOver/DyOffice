@@ -6,7 +6,7 @@ import { fileFixture,docxBytes } from '../helpers/files.mjs'
 import { password } from '../helpers/identity.mjs'
 import { createJobWorkerStore } from '../../server/src/modules/jobs/worker-store.ts'
 import { tokenHash } from '../../server/src/modules/auth/sessions.ts'
-import { createIdentityStore } from '../../server/src/db/identity.ts'
+import { createIdentityStore, getMigrationManifest } from '../../server/src/db/identity.ts'
 import { createAccountService } from '../../server/src/modules/auth/service.ts'
 import { createPasswordService } from '../../server/src/modules/auth/passwords.ts'
 import { createSessionService } from '../../server/src/modules/auth/sessions.ts'
@@ -17,7 +17,7 @@ import { mkdtemp,rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-test('migrations 8–12 preserve v6 files and receipts plus v7 queued/running claims and delivery intents',async t => {
+test('forward migrations preserve v6 files and receipts plus v7 queued/running claims and delivery intents',async t => {
   const directory = await mkdtemp(join(tmpdir(),'dyoffice-job-upgrade-'))
   t.after(() => rm(directory,{ recursive: true,force: true }))
   const objects = await createLocalObjectStore({ directory }), bytes = await docxBytes(), deploymentId = randomUUID(), base = randomUUID(), revision = randomUUID(), fileId = randomUUID(), uploadId = randomUUID(), editorId = randomUUID(), eventId = randomUUID()
@@ -71,7 +71,8 @@ test('migrations 8–12 preserve v6 files and receipts plus v7 queued/running cl
   assert.equal(versions[9].version,10)
   assert.equal(versions[10].version,11)
   assert.equal(versions[11].version,12)
-  assert.equal(versions.length,12)
+  assert.equal(versions[12].version,13)
+  assert.deepEqual(versions,await getMigrationManifest())
   const resumed = await createJobWorkerStore({ pool: f.workerPool,deploymentId }).renew({ ...oldClaim,token: claimToken })
   assert.equal(resumed.epoch,oldClaim.epoch)
   assert.equal((await f.ownerPool.query('SELECT state FROM native_jobs WHERE id=$1',[queuedId])).rows[0].state,'queued')
