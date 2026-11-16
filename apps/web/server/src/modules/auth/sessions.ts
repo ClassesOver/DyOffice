@@ -3,7 +3,7 @@ import type { PoolClient } from 'pg'
 import type { Principal } from '../../../../../../packages/web-contracts/src/api.ts'
 import type { IdentityStore } from '../../db/identity.ts'
 import type { createAccountService } from './service.ts'
-import { appendAuthEvent, type AuthContext } from './audit.ts'
+import { appendAuthEvent, appendLoginAttempt, type AuthContext } from './audit.ts'
 
 export const authError = (statusCode = 401) => Object.assign(new Error('Authentication failed'), { statusCode })
 export const tokenHash = (token: string) => createHash('sha256').update(token).digest('hex')
@@ -81,7 +81,7 @@ export function createSessionService({ db, accounts, deploymentId, idleMs = 8 * 
     withAuthority, absoluteMs,
     async login(username: unknown, password: unknown, context: AuthContext = {}) {
       const candidate = await accounts.verifyCredentials(username, password)
-      if (!candidate) { await appendAuthEvent(db.pool, deploymentId, 'login_failed', context); throw authError() }
+      if (!candidate) { await db.transaction(connection => appendLoginAttempt(connection, deploymentId, 'login_failed', username, context)); throw authError() }
       return db.transaction(async connection => {
         const { rows: [user] } = await connection.query('SELECT * FROM users WHERE deployment_id=$1 AND id=$2 FOR SHARE', [deploymentId, candidate.userId])
         if (!user || user.status !== 'active' || user.password_reset_required || user.auth_version !== candidate.authVersion) throw authError()
@@ -100,6 +100,10 @@ export function createSessionService({ db, accounts, deploymentId, idleMs = 8 * 
         })
       } catch (error) { if ((error as { statusCode?: number }).statusCode !== 401) throw error }
     },
+    loginHistory: (token: string) => withSession(token, [], async connection => {
+      const result = await connection.query<{ occurred_at: Date; outcome: 'success' | 'failure' | 'throttled' }>('SELECT * FROM read_login_history($1,$2,$3)', [deploymentId, tokenHash(token), idleMs])
+      return result.rows.map(row => ({ occurredAt: row.occurred_at.toISOString(), outcome: row.outcome }))
+    }),
     list: (token: string) => withSession(token, [], async (connection, principal, _session, now) => {
       const result = await connection.query('SELECT id,created_at,last_seen_at,expires_at FROM sessions WHERE deployment_id=$1 AND user_id=$2 AND auth_version=$3 AND revoked_at IS NULL AND expires_at>$4 AND last_seen_at>$4-$5*interval \'1 millisecond\' ORDER BY created_at,id', [deploymentId, principal.userId, principal.authVersion, now, idleMs])
       return result.rows.map(row => ({ id: row.id, createdAt: row.created_at.toISOString(), lastSeenAt: row.last_seen_at.toISOString(), expiresAt: row.expires_at.toISOString(), current: row.id === principal.sessionId }))
