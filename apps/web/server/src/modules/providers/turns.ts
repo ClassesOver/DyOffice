@@ -40,8 +40,8 @@ function normalize(event: TurnEvent): TurnEvent {
   if (new TextEncoder().encode(json).length > 256 * 1024) throw fail('AI turn unavailable')
   return JSON.parse(json) as TurnEvent
 }
-export function createProviderTurns<P extends TurnPermit>(deps: TurnDependencies<P>, {timeoutMs = 120_000,maxActive = 16}: {timeoutMs?: number;maxActive?: number} = {}) {
-  if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 2_147_483_647 || !Number.isSafeInteger(maxActive) || maxActive < 1) throw new Error('Invalid AI turn limits')
+export function createProviderTurns<P extends TurnPermit>(deps: TurnDependencies<P>, {timeoutMs = 120_000,maxActive = 16,maxOutputBytes = 4 * 1024 * 1024}: {timeoutMs?: number;maxActive?: number;maxOutputBytes?: number} = {}) {
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 2_147_483_647 || !Number.isSafeInteger(maxActive) || maxActive < 1 || !Number.isSafeInteger(maxOutputBytes) || maxOutputBytes < 1) throw new Error('Invalid AI turn limits')
   const all = new Set<AbortController>()
   const active = new Map<string,AbortController>()
   return {
@@ -69,6 +69,7 @@ export function createProviderTurns<P extends TurnPermit>(deps: TurnDependencies
         return Promise.race([work,stopped])
       }
       let iterator: AsyncIterator<TurnEvent> | undefined
+      let outputBytes = 0
       try {
         const identity = await step(()=>deps.identity(token))
         key = identityKey(identity) + ':' + turnId
@@ -82,6 +83,10 @@ export function createProviderTurns<P extends TurnPermit>(deps: TurnDependencies
           const result = await step(()=>iterator!.next())
           if (result.done) break
           const event = normalize(result.value)
+          // Budget normalized JSON payload bytes, not UTF-16 code units.
+          const eventBytes = new TextEncoder().encode(JSON.stringify(event)).byteLength
+          if (eventBytes > maxOutputBytes - outputBytes) throw fail('AI turn output limit exceeded')
+          outputBytes += eventBytes
           await step(()=>deps.revalidate(token,permit))
           await step(async()=>{await emit(event)})
         }
