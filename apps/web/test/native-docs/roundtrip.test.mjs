@@ -206,3 +206,33 @@ test('actual server entry enables only the explicit native build and refuses mis
     })
   }
 })
+
+test('page-color edits during a delayed native commit remain dirty and persist on the next save', { timeout: 120_000 },async t => {
+  const f = await fixture(t)
+  await f.page.goto(f.origin + '/native-docx/?fileId=' + f.opened.file.fileId)
+  await f.page.locator('.tiptap.doc-page[contenteditable="true"]').waitFor({ timeout: 45_000 })
+  let reached, release, first = true
+  const started = new Promise(resolve => { reached = resolve }), gate = new Promise(resolve => { release = resolve })
+  t.after(() => release())
+  await f.page.route('**/commits',async route => {
+    if (!first) return route.continue()
+    first = false
+    const response = await route.fetch()
+    reached(); await gate; await route.fulfill({ response })
+  })
+  await f.page.keyboard.press('Control+s'); await started
+  await f.page.getByRole('button',{ name: 'Design',exact: true }).click()
+  await f.page.getByRole('button',{ name: 'Page Color',exact: true }).click()
+  await f.page.getByRole('gridcell',{ name: 'Red',exact: true }).click()
+  release()
+  await expect(f.page.locator('.dyoffice-docs-state')).toHaveText('Download saved version')
+  await expect(f.page.locator('.doc-zoom').first()).toHaveCSS('--page-bg','#FF0000')
+  const next = f.page.waitForResponse(reply => reply.url().endsWith('/commits') && reply.status() === 200)
+  await f.page.keyboard.press('Control+s'); await next
+  await expect(f.page.locator('.dyoffice-docs-state')).toHaveText('EditingDownload saved version')
+  const current = await f.files.openFile(f.alice.token,f.opened.file.fileId)
+  const zip = await JSZip.loadAsync(await f.files.readFile(f.alice.token,current.file.fileId,current.file.revision))
+  assert.match(await zip.file('word/document.xml').async('string'),/w:background[^>]*w:color="FF0000"/)
+  await f.page.reload()
+  await expect(f.page.locator('.doc-zoom').first()).toHaveCSS('--page-bg','#FF0000',{ timeout: 45_000 })
+})
