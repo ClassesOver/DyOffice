@@ -155,11 +155,11 @@ docs/dyoffice/               当前计划及 inventory/ evidence/ adr/
 
 **接口：** `stageUpload(principal, fileMeta)`、`finishUpload(principal,uploadId)`、`openFile()`；上传引用绑定所有者。
 
-**状态（2026-11-16）：** 开发用本地内容寻址存储已落地，见 [t05-local-object-store.md](evidence/t05-local-object-store.md)。它校验四格式、用服务器 SHA-256、拒绝未完成和跨 owner 读取，并有所有者回收站：丢弃后不能下载、配额仍占用、清空后才释放；相同内容的 blob 在最后一个 owner 清空前保留。个人开发令牌可以通过 `POST /api/v1/objects` 暂存字节、`POST /api/v1/objects/uploads/:uploadId/finish` 完成，再用 `GET /api/v1/objects/:objectId` 下载自己已完成且未丢弃的对象。请求不能指定 owner，客户端哈希被忽略，未完成上传不能下载，超额返回 413。管理员和其他 owner 拿不到这些字节。现有 `/api/files` 上传路由仍不写入这个存储，也不是 S3 或 RLS。
+**状态（2026-11-16）：** 开发用本地内容寻址存储、个人令牌的 HTTP 暂存/完成/下载，以及进程内 S3 替身适配器已落地，见 [t05-local-object-store.md](evidence/t05-local-object-store.md)。适配器按服务器 SHA-256 校验字节，不信任客户端 ETag；配额、回收站和共享 blob 规则与本地盘一致。未完成的暂存超过 24 小时后不再占用配额，也不能再完成；下一次暂存会清掉过期记录，只有没有其他引用时才删除 blob。`dyoffice_files` 在对象写入之后才插入，数据库失败不会留下指向该对象的完成行。表上的所有者过滤是应用层条件。**PENDING T04：** 迁移不启用 RLS。本地盘适配器和进程内替身都不是企业 HA。现有 `/api/files` 原型路由仍不写入这套存储。
 
 - [x] 测试四格式类型验证、伪 ZIP、空文件、超额、路径穿越、跨用户 uploadId、未完成上传不能下载。
-- [ ] 运行 files integration，确认没有元数据/对象分离保障时 RED。
-- [ ] 实现 S3 adapter、不可变对象键、配额、服务器哈希、回收站与受控下载；开发本地盘 adapter 不进入企业 HA。
+- [x] 运行 files integration，确认没有元数据/对象分离保障时 RED。
+- [x] 实现 S3 adapter、不可变对象键、配额、服务器哈希、回收站与受控下载；开发本地盘 adapter 不进入企业 HA。进程内替身覆盖这些行为。数据库 RLS 仍待 T04。
 - [x] 同测试 GREEN；模拟上传中断不产生已完成文件，校验内容哈希而非 ETag。
 - [x] 提交 `feat(files): add scoped immutable object storage`。
 

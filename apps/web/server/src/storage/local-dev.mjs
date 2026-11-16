@@ -42,8 +42,15 @@ function createExclusive() {
  * It is not the enterprise S3 adapter and it does not enforce database RLS.
  * Callers must pass the owner id established by the server.
  */
-export async function createLocalObjectStore({ directory, maxObjectBytes, maxOwnerBytes, afterBytesWritten, afterReferencePublished } = {}) {
+const DEFAULT_STAGED_UPLOAD_TTL_MS = 24 * 60 * 60 * 1000
+
+export async function createLocalObjectStore({
+  directory, maxObjectBytes, maxOwnerBytes, afterBytesWritten, afterReferencePublished, beforeObjectPublished,
+  stagedUploadTtlMs = DEFAULT_STAGED_UPLOAD_TTL_MS, now = Date.now,
+} = {}) {
   if (!directory || typeof directory !== 'string') reject('UNSAFE_DIRECTORY')
+  if (!Number.isSafeInteger(stagedUploadTtlMs) || stagedUploadTtlMs < 1000) reject('UNSAFE_TTL')
+  if (typeof now !== 'function') reject('UNSAFE_TTL')
   if (!Number.isSafeInteger(maxObjectBytes) || maxObjectBytes < 1) reject('UNSAFE_QUOTA')
   if (!Number.isSafeInteger(maxOwnerBytes) || maxOwnerBytes < maxObjectBytes) reject('UNSAFE_QUOTA')
   const root = directory
@@ -66,6 +73,14 @@ export async function createLocalObjectStore({ directory, maxObjectBytes, maxOwn
       if (error.code !== 'EEXIST') throw error
       await rm(scratch, { force: true })
     }
+  }
+
+  // An unfinished upload whose client never called finish (crash, network loss)
+  // must not hold quota or a blob forever. Records written before stagedAt
+  // existed have no timestamp and are left alone.
+  function isExpiredStage(record) {
+    return record.finished !== true && Number.isSafeInteger(record.stagedAt) &&
+      now() - record.stagedAt > stagedUploadTtlMs
   }
 
   function objectPath(ownerId, objectId) {
@@ -91,7 +106,7 @@ export async function createLocalObjectStore({ directory, maxObjectBytes, maxOwn
   }
 
   async function blobStillNeeded(sha256) {
-    const staged = await recordsUnder(staging, (record) => record.sha256 === sha256 && record.finished !== true)
+    const staged = await recordsUnder(staging, (record) => record.sha256 === sha256 && record.finished !== true && !isExpiredStage(record))
     if (staged.length > 0) return true
     const kept = await recordsUnder(objects, (record) => record.sha256 === sha256)
     return kept.length > 0
@@ -107,11 +122,30 @@ export async function createLocalObjectStore({ directory, maxObjectBytes, maxOwn
         if (!name.endsWith('.json')) continue
         const record = await readJson(join(base, name))
         if (!record || !Number.isSafeInteger(record.size)) continue
-        if (record.finished && base.startsWith(staging)) continue
+        if (base.startsWith(staging) && (record.finished || isExpiredStage(record))) continue
         total += record.size
       }
     }
     return total
+  }
+
+  /** Remove the owner's expired staging records; caller holds the owner lock. */
+  async function sweepExpiredStages(ownerId) {
+    const base = join(staging, ownerId)
+    let names = []
+    try { names = await readdir(base) }
+    catch (error) { if (error.code !== 'ENOENT') throw error }
+    for (const name of names) {
+      if (!name.endsWith('.json')) continue
+      const record = await readJson(join(base, name))
+      if (!record || !isExpiredStage(record)) continue
+      await rm(join(base, name), { force: true })
+      if (typeof record.sha256 === 'string' && /^[0-9a-f]{64}$/.test(record.sha256)) {
+        await exclusiveSha(record.sha256, async () => {
+          if (!(await blobStillNeeded(record.sha256))) await rm(join(blobs, record.sha256), { force: true })
+        })
+      }
+    }
   }
 
   return {
@@ -119,6 +153,7 @@ export async function createLocalObjectStore({ directory, maxObjectBytes, maxOwn
       assertOwnerId(ownerId)
       const { format } = validateOfficeObject({ name, bytes, maxBytes: maxObjectBytes })
       return exclusive(ownerId, async () => {
+        await sweepExpiredStages(ownerId)
         const used = await ownerBytes(ownerId)
         if (used + bytes.length > maxOwnerBytes) reject('QUOTA')
         const uploadId = randomUUID()
@@ -131,7 +166,7 @@ export async function createLocalObjectStore({ directory, maxObjectBytes, maxOwn
           if (afterBytesWritten) await afterBytesWritten()
           await mkdir(join(staging, ownerId), { recursive: true, mode: 0o700 })
           await writeJson(recordPath, {
-            uploadId, ownerId, name, format, size: bytes.length, sha256, finished: false,
+            uploadId, ownerId, name, format, size: bytes.length, sha256, finished: false, stagedAt: now(),
           })
           published = true
           if (afterReferencePublished) await afterReferencePublished()
@@ -158,12 +193,20 @@ export async function createLocalObjectStore({ directory, maxObjectBytes, maxOwn
         if (record.finished && record.objectId) {
           return { objectId: record.objectId, sha256: record.sha256, size: record.size, format: record.format }
         }
-        const completed = { ...record, objectId, finished: true }
-        if (!record.objectId) await writeJson(recordPath, { ...record, objectId, finished: false })
-        await mkdir(join(objects, ownerId), { recursive: true, mode: 0o700 })
-        await writeJson(join(objects, ownerId, `${objectId}.json`), completed)
-        await writeJson(recordPath, completed)
-        return { objectId, sha256: record.sha256, size: record.size, format: record.format }
+        // Blob deletion (purge, expired-stage sweep) holds the per-hash lock and
+        // ignores expired staging records. Check expiry and publish the object
+        // under that same lock so the TTL cannot elapse between the two while a
+        // concurrent deletion decides this blob is unreferenced.
+        return exclusiveSha(record.sha256, async () => {
+          if (isExpiredStage(record)) reject('NOT_FOUND', 404)
+          if (beforeObjectPublished) await beforeObjectPublished()
+          const completed = { ...record, objectId, finished: true }
+          if (!record.objectId) await writeJson(recordPath, { ...record, objectId, finished: false })
+          await mkdir(join(objects, ownerId), { recursive: true, mode: 0o700 })
+          await writeJson(join(objects, ownerId, `${objectId}.json`), completed)
+          await writeJson(recordPath, completed)
+          return { objectId, sha256: record.sha256, size: record.size, format: record.format }
+        })
       })
     },
 
