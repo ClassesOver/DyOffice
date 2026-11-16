@@ -43,7 +43,7 @@ export function createSessionFileHost({ fetchImpl = fetch, editorId = crypto.ran
       // Cached proof permits a pagehide keepalive request to start synchronously
       // before disposal clears private browser state.
       const proof = csrf ?? await csrfToken()
-      const reply = await request(path,{ method,keepalive,headers: { 'x-csrf-token': proof,...(body === undefined ? {} : { 'content-type': binary ? 'application/octet-stream' : 'application/json' }) }, body: body === undefined ? undefined : binary ? body as BodyInit : JSON.stringify(body) })
+      const reply = await request(path,{ method,keepalive,headers: { 'x-csrf-token': proof,...(body === undefined ? {} : { 'content-type': binary ? 'application/octet-stream' : 'application/json' }) },...(body === undefined ? {} : { body: binary ? body as BodyInit : JSON.stringify(body) }) })
       if (reply.status === 403 && attempt === 0) { csrf = undefined; continue }
       return readJson(reply)
     }
