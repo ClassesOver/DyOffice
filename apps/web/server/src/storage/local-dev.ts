@@ -2,7 +2,7 @@ import { mkdir, lstat, realpath, open, link, unlink, access } from 'node:fs/prom
 import { constants } from 'node:fs'
 import { resolve, join } from 'node:path'
 import { randomUUID } from 'node:crypto'
-import { assertObjectReference, collectVerified, verifyStream, objectReference, storageError, type ObjectRef, type ObjectStore } from './object-store.ts'
+import { assertObjectKey, assertObjectReference, collectVerified, verifyStream, objectReference, storageError, type ObjectRef, type ObjectStore } from './object-store.ts'
 
 // Development only: one dedicated directory owned by the service account.
 // Never share this adapter across replicas or with another local writer.
@@ -50,6 +50,15 @@ export async function createLocalObjectStore({ directory }: { directory: string 
         await handle?.close()
         await unlink(temporary).catch(error => { if (error.code !== 'ENOENT') throw storageError() })
       }
+    },
+    async removeUnreferenced(key) {
+      assertObjectKey(key)
+      try {
+        await assertDirectory()
+        await unlink(path(key)).catch(error => { if (error.code !== 'ENOENT') throw error })
+        const parent = await open(root, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW)
+        try { await parent.sync() } finally { await parent.close() }
+      } catch { throw storageError() }
     },
     readVerified: reference => read(reference, collectVerified),
     verifyObject: reference => read(reference, verifyStream),

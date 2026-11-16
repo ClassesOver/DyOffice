@@ -1,6 +1,6 @@
-import { GetObjectCommand, PutObjectCommand, HeadBucketCommand, type S3Client } from '@aws-sdk/client-s3'
+import { DeleteObjectCommand, GetBucketVersioningCommand, GetObjectCommand, PutObjectCommand, HeadBucketCommand, type S3Client } from '@aws-sdk/client-s3'
 import { Readable } from 'node:stream'
-import { assertObjectReference, collectVerified, verifyStream, objectReference, storageError, type ObjectRef, type ObjectStore } from './object-store.ts'
+import { assertObjectKey, assertObjectReference, collectVerified, verifyStream, objectReference, storageError, type ObjectRef, type ObjectStore } from './object-store.ts'
 
 // The caller owns client lifecycle and credentials. The bucket must be private,
 // precreated and dedicated; no public or presigned download URL is issued here.
@@ -37,6 +37,18 @@ export function createS3ObjectStore({ client, bucket }: { client: S3Client; buck
         if (status === 409 || status === 412) throw storageError(409)
         throw storageError()
       }
+    },
+    async removeUnreferenced(key) {
+      assertObjectKey(key)
+      const abortSignal = AbortSignal.timeout(5_000)
+      try {
+        // Delete markers do not free physical bytes. Never credit quota on a
+        // versioned (including suspended) bucket. Missing IAM permission fails closed.
+        const versioning = await client.send(new GetBucketVersioningCommand({ Bucket: bucket }), { abortSignal })
+        if (versioning.Status !== undefined) throw storageError()
+        const result = await client.send(new DeleteObjectCommand({ Bucket: bucket, Key: key }), { abortSignal })
+        if (result.DeleteMarker || result.VersionId !== undefined) throw storageError()
+      } catch { throw storageError() }
     },
     readVerified: reference => read(reference, collectVerified),
     verifyObject: reference => read(reference, verifyStream),

@@ -127,13 +127,14 @@ test('a browser save on a newer lease fences previously staged native output',as
   await assert.rejects(() => f.revisions.stageUpload(auth,f.fileId,{ size: bytes.length,baseRevision: f.input.artifactId,leaseEpoch: native.leaseEpoch,editorId: auth.jobId }),{ statusCode: 409 })
 })
 test('a job deadline elapsed during real object I/O rolls back every output metadata change',async t => {
-  let delay = false
-  const f = await setup(t,{ wrapObjects: base => ({ ...base,async readVerified(ref) { if (delay) await new Promise(resolve => setTimeout(resolve,750)); return base.readVerified(ref) } }) })
+  let delay = false, delayedVerification = false
+  const f = await setup(t,{ wrapObjects: base => ({ ...base,async verifyObject(ref) { if (delay) { delayedVerification = true; await new Promise(resolve => setTimeout(resolve,750)) }; return base.verifyObject(ref) } }) })
   const { auth,job } = await claimed(f), save = await output(f,auth), before = await snapshot(f)
   await f.transactions.withPrincipalTransaction({ kind: 'session',token: f.alice.token },c => c.query("UPDATE native_jobs SET deadline_at=clock_timestamp()+interval '500 milliseconds' WHERE id=$1",[job.id]))
   delay = true
   await assert.rejects(() => f.revisions.commitRevision(auth,save),{ statusCode: 401 })
   delay = false
+  assert.equal(delayedVerification,true,'deadline must cross the verification-only object I/O path')
   assert.deepEqual(await snapshot(f),before)
   assert.equal((await f.jobs.getJob(f.alice.token,job.id)).state,'running')
 })

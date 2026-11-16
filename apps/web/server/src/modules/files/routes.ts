@@ -38,7 +38,7 @@ export function registerFileRoutes(app: FastifyInstance, files: FileService, ses
       await sessions.authenticate(credential)
       // Hold admission through processing AND response completion. A client
       // disconnect cannot free capacity while object work still owns buffers.
-      if ((['PUT','GET','HEAD'].includes(request.method) && request.routeOptions.url?.endsWith('/content')) || (request.method === 'POST' && (request.routeOptions.url?.endsWith('/finish') || request.routeOptions.url?.endsWith('/commits') || request.routeOptions.url?.endsWith('/restoration-uploads')))) {
+      if ((['PUT','GET','HEAD'].includes(request.method) && request.routeOptions.url?.endsWith('/content')) || (request.method === 'POST' && (request.routeOptions.url?.endsWith('/uploads') || request.routeOptions.url?.endsWith('/purge') || request.routeOptions.url?.endsWith('/finish') || request.routeOptions.url?.endsWith('/commits') || request.routeOptions.url?.endsWith('/restoration-uploads')))) {
         if (request.method === 'PUT') {
           const upload = await files.preflightUpload(credential, (request.params as { id: string }).id)
           const length = request.headers['content-length']
@@ -57,10 +57,10 @@ export function registerFileRoutes(app: FastifyInstance, files: FileService, ses
     api.addContentTypeParser('application/octet-stream', { parseAs: 'buffer', bodyLimit: MAX_OBJECT_BYTES }, (_request, body, done) => done(null, body))
     api.get('/api/v1/capabilities', { schema: { querystring: emptyQuery } }, async () => files.capabilities)
     api.get('/api/v1/storage/usage', { schema: { querystring: emptyQuery } }, request => files.usage(token(request)))
-    api.post('/api/v1/files/uploads', { bodyLimit: 4096, schema: { querystring: emptyQuery, body: { type: 'object', additionalProperties: false, required: ['name','size'], properties: { name: { type: 'string', minLength: 1, maxLength: 255 }, size: { type: 'integer', minimum: 1, maximum: MAX_OBJECT_BYTES } } } } }, async (request, reply) => {
+    api.post('/api/v1/files/uploads', { bodyLimit: 4096, schema: { querystring: emptyQuery, body: { type: 'object', additionalProperties: false, required: ['name','size'], properties: { name: { type: 'string', minLength: 1, maxLength: 255 }, size: { type: 'integer', minimum: 1, maximum: MAX_OBJECT_BYTES } } } } }, (request, reply) => transfer(request, reply, async () => {
       const staged = await files.stageUpload(token(request), request.body as { name: string; size: number })
       return reply.code(201).send(staged)
-    })
+    }))
     api.put('/api/v1/uploads/:id/content', { bodyLimit: MAX_OBJECT_BYTES, schema: { params, querystring: emptyQuery } }, (request, reply) => transfer(request, reply, async () => {
       if (request.headers['content-type']?.split(';')[0].trim().toLowerCase() !== 'application/octet-stream') throw authError(415)
       return files.receiveUpload(token(request), (request.params as { id: string }).id, request.body as Buffer)
@@ -92,6 +92,11 @@ export function registerFileRoutes(app: FastifyInstance, files: FileService, ses
       await files.trashFile(token(request), (request.params as { id: string }).id)
       return reply.code(204).send()
     })
+    api.post('/api/v1/files/:id/purge', { bodyLimit: 4096, schema: { params, querystring: emptyQuery } }, (request, reply) => transfer(request, reply, async () => {
+      if (request.body !== undefined) throw authError(400)
+      const result = await files.purgeFile(token(request), (request.params as { id: string }).id)
+      return reply.code(result.state === 'purged' ? 200 : 202).send(result)
+    }))
     api.post('/api/v1/files/:id/restore', { schema: { params, querystring: emptyQuery } }, async (request, reply) => {
       if (request.body !== undefined) throw authError(400)
       await files.restoreFile(token(request), (request.params as { id: string }).id)
