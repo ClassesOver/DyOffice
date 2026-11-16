@@ -155,11 +155,13 @@ docs/dyoffice/               当前计划及 inventory/ evidence/ adr/
 
 **接口：** `stageUpload(principal, fileMeta)`、`finishUpload(principal,uploadId)`、`openFile()`；上传引用绑定所有者。
 
-- [ ] 测试四格式类型验证、伪 ZIP、空文件、超额、路径穿越、跨用户 uploadId、未完成上传不能下载。
+**状态（2026-11-15）：** 开发用本地内容寻址存储已落地，见 [t05-local-object-store.md](evidence/t05-local-object-store.md)。它校验四格式、拒绝伪 ZIP/空文件/超额/不安全文件名，用服务器 SHA-256 而不是客户端 ETag，未完成上传不能读取，跨 owner 的 uploadId 和 objectId 返回同样的 NOT_FOUND。它没有接入当前 HTTP 上传路由，也不是 S3、回收站或 RLS。
+
+- [x] 测试四格式类型验证、伪 ZIP、空文件、超额、路径穿越、跨用户 uploadId、未完成上传不能下载。
 - [ ] 运行 files integration，确认没有元数据/对象分离保障时 RED。
 - [ ] 实现 S3 adapter、不可变对象键、配额、服务器哈希、回收站与受控下载；开发本地盘 adapter 不进入企业 HA。
-- [ ] 同测试 GREEN；模拟上传中断不产生已完成文件，校验内容哈希而非 ETag。
-- [ ] 提交 `feat(files): add scoped immutable object storage`。
+- [x] 同测试 GREEN；模拟上传中断不产生已完成文件，校验内容哈希而非 ETag。
+- [x] 提交 `feat(files): add scoped immutable object storage`。
 
 ### T06 保存事务、历史版本和单写者租约
 
