@@ -205,7 +205,9 @@ docs/dyoffice/               当前计划及 inventory/ evidence/ adr/
 
 **接口：** `commitRevision()`、`acquireLease()/renewLease()/takeoverLease()`；文件修改基于 T01 SaveInput。
 
-**状态（2026-11-16）：** T06 行为已完成，证据见 [t06-revision-commit.md](evidence/t06-revision-commit.md)。保存先写不可变对象，再在单进程账本事务里提交 revision、幂等记录和 outbox；租约有获取、续期、接管和 45 秒过期。DOCX 段落保存走这组接口。实时 PostgreSQL 连接、RLS、多进程和 outbox 投递不在本任务内，原因写在证据页。没有表格编辑。
+**当前 TS 栈复核（2026-11-16）：** `server/src/modules/revisions/service.ts` 与 `leases/service.ts` 已接入 PostgreSQL 主体事务、RLS、CAS、不可变回执、历史恢复及同事务 outbox 意图；BrowserHost 的原生保存入口使用这条链。当前真实数据库测试位于 `apps/web/test/local-integration/revision-commit.test.mjs`。以下账本勾选属于历史 MJS 栈，不能代替当前 PG/RustFS 回归或 outbox 投递、恢复与生产验收。T07 元数据竞态专项见 [复核记录](evidence/t07-save-metadata-race.md)。
+
+**历史 MJS 栈状态（2026-11-16）：** T06 行为已完成，证据见 [t06-revision-commit.md](evidence/t06-revision-commit.md)。保存先写不可变对象，再在单进程账本事务里提交 revision、幂等记录和 outbox；租约有获取、续期、接管和 45 秒过期。DOCX 段落保存走这组接口。实时 PostgreSQL 连接、RLS、多进程和 outbox 投递不在本任务内，原因写在证据页。没有表格编辑。
 
 - [x] 覆盖并发同基线、旧 leaseEpoch、幂等键不同内容、对象成功 DB 失败、响应丢失、旧保存响应覆盖新编辑状态。
 - [x] 对应 unit/integration 覆盖上述失败；客户端保存世代测试仍在 `save-generation`。
@@ -219,7 +221,9 @@ docs/dyoffice/               当前计划及 inventory/ evidence/ adr/
 
 **接口：** `mountDocsEditor(host,element,fileId)`，输出编辑器注册、序列化和选区能力。
 
-**状态（2026-11-16）：** 浏览器挂载、桌面桥、纯文本单元格和分页切片已有测试，见 [t07-docs-browser-mount.md](evidence/t07-docs-browser-mount.md)。`mountDocsEditor` 能编辑段落和单段单元格、撤销、保存并重开，复杂表格和页眉留在包内。`createWebDesktop` 把打开/保存交给宿主，字体只报告已配置的替换，打印只调用浏览器打印且不返回假路径，未知方法和图片剪贴板抛出 `UNSUPPORTED`。`computePageSlices` 把超出页高的块放到下一页。功能区页面仍未挂上。外部 Word 复开推迟到运维：本环境没有 Word 或 LibreOffice。
+**当前原生入口复核（2026-11-16）：** `apps/web/src/editors/native-docs.tsx` 已挂载原生 Renderer `App` 和功能区，使用 `docs-bridge.ts` 与会话 BrowserHost。当前测试在 `apps/web/test/native-docs/roundtrip.test.mjs`，覆盖段落、表格、原始部件保留、租约接管、断回执和在途编辑；本轮新增页面颜色在途保存场景，运行范围与阻断见 [专项证据](evidence/t07-save-metadata-race.md)。以下描述仅是历史简化入口状态，“未挂功能区”“没有 LibreOffice”不作为当前环境结论。外部 Word/办公套件兼容性仍须逐样本留证，安装软件不等于验收通过。
+
+**历史简化入口状态（2026-11-16）：** 浏览器挂载、桌面桥、纯文本单元格和分页切片已有测试，见 [t07-docs-browser-mount.md](evidence/t07-docs-browser-mount.md)。`mountDocsEditor` 能编辑段落和单段单元格、撤销、保存并重开，复杂表格和页眉留在包内。`createWebDesktop` 把打开/保存交给宿主，字体只报告已配置的替换，打印只调用浏览器打印且不返回假路径，未知方法和图片剪贴板抛出 `UNSUPPORTED`。`computePageSlices` 把超出页高的块放到下一页。功能区页面仍未挂上。外部 Word 复开推迟到运维：本环境没有 Word 或 LibreOffice。
 
 - [ ] E2E 写入打开、段落/表格修改、保存、刷新、下载、再次打开和修订/撤销场景。段落保存、刷新重开、下载、本地撤销和纯文本单元格已测；功能区撤销未做。
 - [x] 浏览器测试在尚未接入时 RED，而非以空白预览页算通过。
@@ -491,3 +495,4 @@ docs/dyoffice/               当前计划及 inventory/ evidence/ adr/
 每个 PR 必须写明基线、范围、接口变化、迁移影响、失败复现、通过命令/环境、证据位置、剩余风险和回滚方法。职责边界或协议变化增加 ADR；不因工具建议擅自改变用户已确认范围。
 
 任务完成需要代码、测试、可复现证据和文档同步。里程碑完成还需要端到端演示与 gate 审核。企业完成还需要客户环境验收、恢复演练、运营可见性与负责人签收。除各任务显式记录的有界验收外，未勾选任务不因计划创建而完成。
+

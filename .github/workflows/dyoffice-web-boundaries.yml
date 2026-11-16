@@ -181,6 +181,8 @@ jobs:
         run: npm ci --ignore-scripts --include=dev
       - name: Install Chromium
         run: node_modules/.bin/playwright install chromium --with-deps
+      - name: Regress native save generation and Web bridge state
+        run: node --experimental-strip-types --test apps/web/test/unit/save-generation.test.mjs apps/web/test/unit/docs-bridge-save.test.mjs
       - name: Check native Web host types
         run: npm run typecheck:web:docs
       - name: Build real DOCX renderer and test native edits over TLS
@@ -242,3 +244,4 @@ jobs:
           name: host-runtime-native-worker
           path: .dyoffice-runtime-evidence/host-runtime.json
           if-no-files-found: warn
+

@@ -2259,6 +2259,7 @@ export function App({ host }: { host?: { readOnly: boolean; assistantAvailable: 
     null,
   )
   fileCtxRef.current = {
+    getCurrentSaveContext: () => fileCtxRef.current,
     hostLifecycle: host?.lifecycle,
     editor,
     doc,
