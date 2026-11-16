@@ -77,3 +77,38 @@ Consumers must be idempotent and reauthorize the underlying revision before
 reading it. This T08 transport does not claim that the later search/indexing
 features have been implemented. Events remain durable in SQL; retention and
 consumer-specific completion must not be inferred from queue acknowledgement.
+
+## Isolated Sheets package gateway
+
+The Sheets runtime no longer imports the parser/planner into the API process.
+Build `node apps/web/server/sheets/build.mjs` to produce both `gateway.mjs`
+(for direct library tests) and the self-contained `gateway-process.mjs` runner.
+Production-path execution only uses the runner inside the existing systemd
+sandbox, with the same dynamic UID, private root/network, dropped capabilities,
+cgroup limits, wall timeout and process-group termination as the Rust engine.
+There is no non-isolated fallback. Missing root/systemd, bundle or dependencies
+must fail startup before Sheets is advertised as editable.
+
+Optional `DYOFFICE_XLSX_GATEWAY_RUNNER` selects a trusted deployment-installed
+runner file. The old `DYOFFICE_XLSX_GATEWAY_MODULE` setting is rejected instead
+of executing arbitrary in-process modules. Startup hashes the Node executable
+and runner; each invocation verifies the hashes before copying read-only files
+into its private root. The trusted Node interpreter can be up to160 MiB; the
+Rust executable bound remains64 MiB. No user/request supplies either path.
+
+Package reads and save plans receive request cancellation; shutdown aborts and
+awaits both Rust and Node calls. Native admission is bounded and the host's two
+slots are shared within the controller. Workbooks, total staged parts and output
+remain bounded to32 MiB; request JSON is bounded to4 MiB, plans to256 unique safe
+part names. The independent32 MiB JSON result bound includes base64/escaping
+overhead: a near-limit plan can be explicitly rejected rather than allocated
+without limit. Existing256 MiB ZIP inflation limits are unchanged inside the
+sandbox and its512 MiB memory limit still applies.
+
+Tests in `test/host-native/gateway.test.mjs` require a real root/systemd host.
+They cover actual package/plan execution, cancelling an active Node process,
+and retained UID/root/credential policy. Local protocol/service tests do not
+substitute for those tests. In the current non-root, non-systemd workspace they
+are blocked with `HOST_BACKEND_UNAVAILABLE`; this change remains unverified at
+the real-host gate until the existing native-worker CI runs them successfully.
+

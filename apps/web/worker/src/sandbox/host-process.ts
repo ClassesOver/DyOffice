@@ -8,7 +8,7 @@ import { join,isAbsolute } from 'node:path'
 import { SandboxError,type SandboxSession,type SandboxLimits } from './contracts.ts'
 const exec=promisify(execFile),MAX=32*1024*1024
 const UUID=/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/
-const commands=new Set(['open','close','save_archive','read_range','read_formula_cells','read_row_outline','read_media','recalc_cells','probe','network','pids','sleep','busy','allocate','flood','output','symlink','park'])
+const commands=new Set(['open','close','save_archive','read_range','read_formula_cells','read_row_outline','read_media','recalc_cells','probe','network','pids','sleep','busy','allocate','flood','output','symlink','park','gateway_package','gateway_plan'])
 const environment={ PATH: '/usr/bin:/bin',LANG: 'C.UTF-8',SYSTEMD_COLORS: '0',SYSTEMD_PAGER: 'cat' }
 let active=0,memory=0
 async function bounded(file: FileHandle,size: number) {
@@ -17,9 +17,10 @@ async function bounded(file: FileHandle,size: number) {
   if(length!==size)throw new SandboxError('OUTPUT_LIMIT')
   return buffer.subarray(0,length)
 }
-export function createHostProcess({ binary,sha256,deploymentId,allowedCommands,limits={} }: { binary: string; sha256: string; deploymentId: string; allowedCommands: readonly string[]; limits?: SandboxLimits }) {
+export function createHostProcess({ binary,sha256,deploymentId,allowedCommands,limits={},script }: { binary: string; sha256: string; deploymentId: string; allowedCommands: readonly string[]; limits?: SandboxLimits; script?: {path:string;sha256:string} }) {
   if (process.env.NODE_ENV==='production' || process.getuid?.()!==0) throw new SandboxError('HOST_BACKEND_UNAVAILABLE')
   if (!isAbsolute(binary) || !/^[a-f0-9]{64}$/.test(sha256) || !UUID.test(deploymentId)) throw new SandboxError('UNTRUSTED_BINARY')
+  if(script && (!isAbsolute(script.path) || !/^[a-f0-9]{64}$/.test(script.sha256)))throw new SandboxError('UNTRUSTED_BINARY')
   const p={ memoryMiB: 512,pids: 64,cpuSeconds: 15,cpus: 1,wallMs: 30000,protocolBytes: 8*1024*1024,outputBytes: MAX,...limits }
   for (const [key,min,max] of [['memoryMiB',64,1024],['pids',8,128],['cpuSeconds',1,120],['wallMs',500,180000],['protocolBytes',1024,16*1024*1024],['outputBytes',1,MAX]] as const) if (!Number.isInteger(p[key]) || p[key]<min || p[key]>max) throw new SandboxError('INVALID_LIMIT')
   if (!Number.isFinite(p.cpus) || p.cpus<0.25 || p.cpus>2 || !allowedCommands.length || allowedCommands.some(c => !commands.has(c))) throw new SandboxError('INVALID_POLICY')
@@ -49,19 +50,29 @@ export function createHostProcess({ binary,sha256,deploymentId,allowedCommands,l
       const timer=setTimeout(()=>fail(new SandboxError('SANDBOX_TIMEOUT')),p.wallMs)
       const initializing=(async()=>{
         const native=await open(binary,constants.O_RDONLY|constants.O_NOFOLLOW|constants.O_NONBLOCK)
+        // A trusted Node interpreter is larger than the Rust engine. This does
+        // not enlarge the 32 MiB untrusted workbook/part/output limits.
+        const binaryLimit=script?160*1024*1024:64*1024*1024
         let source: Buffer
-        try { const stat=await native.stat(); if(!stat.isFile()||stat.size<1||stat.size>64*1024*1024)throw new SandboxError('UNTRUSTED_BINARY'); source=await bounded(native,stat.size) } finally { await native.close() }
-        if (source.length>64*1024*1024 || createHash('sha256').update(source).digest('hex')!==sha256) throw new SandboxError('UNTRUSTED_BINARY')
+        try { const stat=await native.stat(); if(!stat.isFile()||stat.size<1||stat.size>binaryLimit)throw new SandboxError('UNTRUSTED_BINARY'); source=await bounded(native,stat.size) } finally { await native.close() }
+        if (source.length>binaryLimit || createHash('sha256').update(source).digest('hex')!==sha256) throw new SandboxError('UNTRUSTED_BINARY')
         await mkdir(base,{ mode: 0o700 }); check()
         for(const directory of ['bin','work','tmp','var/tmp','proc','sys','dev']) await mkdir(join(root,directory),{ recursive:true,mode: 0o755 })
         await writeFile(join(root,'bin/native'),source,{mode:0o555})
+        if(script){
+          const file=await open(script.path,constants.O_RDONLY|constants.O_NOFOLLOW|constants.O_NONBLOCK)
+          let bundle:Buffer
+          try{const stat=await file.stat();if(!stat.isFile()||stat.size<1||stat.size>MAX)throw new SandboxError('UNTRUSTED_BINARY');bundle=await bounded(file,stat.size)}finally{await file.close()}
+          if(createHash('sha256').update(bundle).digest('hex')!==script.sha256)throw new SandboxError('UNTRUSTED_BINARY')
+          await writeFile(join(root,'bin/gateway.mjs'),bundle,{mode:0o444})
+        }
         const deps=(await exec('/usr/bin/ldd',[join(root,'bin/native')],{ env:environment,timeout:5000,maxBuffer:65536 })).stdout
         if(deps.includes('not found')) throw new SandboxError('MISSING_NATIVE_DEPENDENCY')
         const libraries=[...new Set(deps.match(/\/[^\s()]+/g) ?? [])]
         for(const path of libraries) { if(!isAbsolute(path)) throw new SandboxError('MISSING_NATIVE_DEPENDENCY'); const dest=join(root,path); await mkdir(join(dest,'..'),{recursive:true}); await copyFile(path,dest); await chmod(dest,0o555) }
         check()
         const properties=['DynamicUser=yes','User=dyjob'+id.replaceAll('-','').slice(0,24),'RootDirectory='+root,'WorkingDirectory=/work','MountAPIVFS=yes','ProtectSystem=strict','ProtectHome=yes','TemporaryFileSystem=/work:rw,nosuid,nodev,noexec,size=128M,mode=0711 /tmp:rw,nosuid,nodev,noexec,size=16M,mode=1777','ReadWritePaths=/work /tmp','PrivateNetwork=yes','PrivateDevices=yes','ProtectProc=invisible','ProcSubset=pid','ProtectControlGroups=yes','ProtectKernelTunables=yes','NoNewPrivileges=yes','CapabilityBoundingSet=','RestrictAddressFamilies=AF_UNIX','SystemCallFilter=@system-service','UMask=0077','KillMode=control-group','TimeoutStopSec=2','MemoryMax='+p.memoryMiB+'M','MemorySwapMax=0','OOMPolicy=kill','TasksMax='+p.pids,'CPUQuota='+Math.round(p.cpus*100)+'%','LimitCPU='+p.cpuSeconds+':'+(p.cpuSeconds+1),'LimitCORE=0','LimitFSIZE='+MAX,'LimitNOFILE=64','RuntimeMaxSec='+p.wallMs+'ms','Environment=LANG=C.UTF-8 TMPDIR=/work PATH=/bin']
-        child=spawn('/usr/bin/systemd-run',['--quiet','--pipe','--wait','--service-type=exec','--unit='+stem,...properties.flatMap(value=>['--property='+value]),'/bin/native'],{env:environment,stdio:['pipe','pipe','pipe']})
+        child=spawn('/usr/bin/systemd-run',['--quiet','--pipe','--wait','--service-type=exec','--unit='+stem,...properties.flatMap(value=>['--property='+value]),'/bin/native',...(script?['/bin/gateway.mjs']:[])],{env:environment,stdio:['pipe','pipe','pipe']})
         const running=child
         running.stdin!.on('error',()=>{if(!normal)fail(new SandboxError('NATIVE_FAILED'))})
         running.stdout!.setEncoding('utf8').on('data',(chunk:string)=>{
@@ -141,3 +152,4 @@ export function createHostProcess({ binary,sha256,deploymentId,allowedCommands,l
     },
   }
 }
+

@@ -5,7 +5,7 @@ import type { RevisionService } from '../revisions/service.ts'
 import { authError } from '../auth/sessions.ts'
 import type { XlsxMutationPlan } from '../../../../worker/src/native/xlsx.ts'
 
-export type SheetsPlanner = (bytes: Buffer, sheets: readonly { id: string; name: string }[], request: unknown) => Promise<XlsxMutationPlan>
+export type SheetsPlanner = (bytes: Buffer, sheets: readonly { id: string; name: string }[], request: unknown, signal?: AbortSignal) => Promise<XlsxMutationPlan>
 export interface SheetsSaveNative {
   inspect(input: Uint8Array, signal?: AbortSignal): Promise<unknown>
   savePlan(input: Uint8Array, plan: XlsxMutationPlan, signal?: AbortSignal): Promise<{ bytes: Buffer }>
@@ -34,7 +34,7 @@ export function createSheetsSaveService({ files, leases, revisions, native, plan
         signal?.throwIfAborted()
         const metadata = await native.inspect(bytes, signal) as { sheets: {id: string; name: string}[] }
         if (!metadata || !Array.isArray(metadata.sheets) || metadata.sheets.some(sheet => typeof sheet?.id !== 'string' || typeof sheet.name !== 'string')) throw new Error('Invalid workbook metadata')
-        const mutation = await plan(bytes, metadata.sheets, input.request)
+        const mutation = await plan(bytes, metadata.sheets, input.request, signal)
         signal?.throwIfAborted()
         const saved = await native.savePlan(bytes, mutation, signal)
         signal?.throwIfAborted()
@@ -55,3 +55,4 @@ export function createSheetsSaveService({ files, leases, revisions, native, plan
     },
   }
 }
+
