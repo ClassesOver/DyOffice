@@ -57,6 +57,35 @@ export async function createLocalObjectStore({ directory, maxObjectBytes, maxOwn
   await mkdir(temporary, { recursive: true, mode: 0o700 })
   const exclusive = createExclusive()
 
+  function objectPath(ownerId, objectId) {
+    return join(objects, ownerId, `${objectId}.json`)
+  }
+
+  async function recordsUnder(base, include) {
+    const found = []
+    let owners = []
+    try { owners = await readdir(base) }
+    catch (error) { if (error.code !== 'ENOENT') throw error }
+    for (const ownerId of owners) {
+      let names = []
+      try { names = await readdir(join(base, ownerId)) }
+      catch (error) { if (error.code !== 'ENOENT') throw error }
+      for (const name of names) {
+        if (!name.endsWith('.json')) continue
+        const record = await readJson(join(base, ownerId, name))
+        if (record && include(record)) found.push(record)
+      }
+    }
+    return found
+  }
+
+  async function blobStillNeeded(sha256) {
+    const staged = await recordsUnder(staging, (record) => record.sha256 === sha256 && record.finished !== true)
+    if (staged.length > 0) return true
+    const kept = await recordsUnder(objects, (record) => record.sha256 === sha256)
+    return kept.length > 0
+  }
+
   async function ownerBytes(ownerId) {
     let total = 0
     for (const base of [join(staging, ownerId), join(objects, ownerId)]) {
@@ -126,14 +155,57 @@ export async function createLocalObjectStore({ directory, maxObjectBytes, maxOwn
       })
     },
 
-    async openObject({ ownerId, objectId }) {
+    async openObject(input) {
+      return this.downloadObject(input)
+    },
+
+    async downloadObject({ ownerId, objectId }) {
       assertOwnerId(ownerId)
       if (typeof objectId !== 'string' || !/^[0-9a-f-]{36}$/i.test(objectId)) reject('NOT_FOUND', 404)
-      const record = await readJson(join(objects, ownerId, `${objectId}.json`))
-      if (!record || record.ownerId !== ownerId || record.finished !== true) reject('NOT_FOUND', 404)
+      const record = await readJson(objectPath(ownerId, objectId))
+      if (!record || record.ownerId !== ownerId || record.finished !== true || record.state === 'trash') reject('NOT_FOUND', 404)
       const bytes = await readFile(join(blobs, record.sha256))
       if (digest(bytes) !== record.sha256) reject('HASH_MISMATCH', 500)
       return { bytes, sha256: record.sha256, size: record.size, format: record.format }
+    },
+
+    async trashObject({ ownerId, objectId }) {
+      assertOwnerId(ownerId)
+      if (typeof objectId !== 'string' || !/^[0-9a-f-]{36}$/i.test(objectId)) reject('NOT_FOUND', 404)
+      return exclusive(ownerId, async () => {
+        const path = objectPath(ownerId, objectId)
+        const record = await readJson(path)
+        if (!record || record.ownerId !== ownerId || record.finished !== true) reject('NOT_FOUND', 404)
+        if (record.state !== 'trash') await writeJson(path, { ...record, state: 'trash' })
+        return { objectId, state: 'trash' }
+      })
+    },
+
+    async restoreObject({ ownerId, objectId }) {
+      assertOwnerId(ownerId)
+      if (typeof objectId !== 'string' || !/^[0-9a-f-]{36}$/i.test(objectId)) reject('NOT_FOUND', 404)
+      return exclusive(ownerId, async () => {
+        const path = objectPath(ownerId, objectId)
+        const record = await readJson(path)
+        if (!record || record.ownerId !== ownerId || record.state !== 'trash') reject('NOT_FOUND', 404)
+        const restored = { ...record }
+        delete restored.state
+        await writeJson(path, restored)
+        return { objectId, state: 'active' }
+      })
+    },
+
+    async purgeObject({ ownerId, objectId }) {
+      assertOwnerId(ownerId)
+      if (typeof objectId !== 'string' || !/^[0-9a-f-]{36}$/i.test(objectId)) reject('NOT_FOUND', 404)
+      return exclusive(ownerId, async () => {
+        const path = objectPath(ownerId, objectId)
+        const record = await readJson(path)
+        if (!record || record.ownerId !== ownerId || record.state !== 'trash') reject('NOT_FOUND', 404)
+        await rm(path, { force: true })
+        if (!(await blobStillNeeded(record.sha256))) await rm(join(blobs, record.sha256), { force: true })
+        return { objectId, state: 'purged' }
+      })
     },
   }
 }
