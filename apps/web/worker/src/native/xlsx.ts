@@ -1,5 +1,6 @@
 import { setTimeout as delay } from 'node:timers/promises'
 import { SandboxError, type SandboxSession } from '../sandbox/contracts.ts'
+import { createNativeAdmission, type NativeProcess } from './admission.ts'
 
 export interface RecalcInput {edits: {sheetName: string; row: number; column: number; input: string}[]; reads: {sheetName: string; range: {startRow: number; endRow: number; startColumn: number; endColumn: number}}[]}
 type Opened = { sessionId: string; sheets: { id: string; name: string }[] }
@@ -20,19 +21,17 @@ async function waitForSheet(io: SandboxSession, sessionId: string, sheetId: stri
     await delay(50, undefined, {signal})
   }
 }
-interface NativeProcess {
-  run<T>(input: Uint8Array,execute: (session: SandboxSession) => Promise<T>,options?: { signal?: AbortSignal }): Promise<T>
-}
 export interface XlsxMutationPlan {
   replaced: ReadonlyMap<string,string>; added: ReadonlyMap<string,string>; addedBinary: ReadonlyMap<string,Uint8Array>; removedEntries: readonly string[]
 }
 /** Uses the original sidecar's archive writer. This is an archive roundtrip,
  * not an editor or persisted recalculation implementation. */
 export function createXlsxNativeWorker(process: NativeProcess) {
+  const native = createNativeAdmission(process)
   return {
     readMedia(input: Uint8Array,visualId:string,signal?:AbortSignal) {
       if(typeof visualId!=='string'||visualId.length<1||visualId.length>512||visualId.includes('/')||visualId.includes('\\'))return Promise.reject(new SandboxError('INPUT_LIMIT'))
-      return process.run(input,async io=>{
+      return native.run(input,async io=>{
         const source=opened(await io.request('open',{path:'/work/input.xlsx',locale:'en'}))
         try {return await io.request('read_media',{sessionId:source.sessionId,visualId})}
         finally {await io.request('close',{sessionId:source.sessionId})}
@@ -48,7 +47,7 @@ export function createXlsxNativeWorker(process: NativeProcess) {
         count+=(a.endRow-a.startRow+1)*(a.endColumn-a.startColumn+1)
         return count>20000
       })) return Promise.reject(new SandboxError('INPUT_LIMIT'))
-      return process.run(input,async io=>{
+      return native.run(input,async io=>{
         const source=opened(await io.request('open',{path:'/work/input.xlsx',locale:'en'}))
         try {
           const names=new Set(source.sheets.map(s=>s.name))
@@ -58,7 +57,7 @@ export function createXlsxNativeWorker(process: NativeProcess) {
       },{signal})
     },
     inspect(input:Uint8Array,signal?:AbortSignal){
-      return process.run(input,async io=>{
+      return native.run(input,async io=>{
         const result=await io.request('open',{path:'/work/input.xlsx',locale:'en'}) as Record<string,unknown>
         const source=opened(result)
         await io.request('close',{sessionId:source.sessionId})
@@ -68,7 +67,7 @@ export function createXlsxNativeWorker(process: NativeProcess) {
     },
     readSheet(input: Uint8Array, sheetName: string, kind: 'formulas' | 'outline', signal?: AbortSignal) {
       if (kind !== 'formulas' && kind !== 'outline') return Promise.reject(new SandboxError('UNSUPPORTED_COMMAND'))
-      return process.run(input, async io => {
+      return native.run(input, async io => {
         const source = opened(await io.request('open', {path: '/work/input.xlsx', locale: 'en'}))
         try {
           const sheet = source.sheets.find(sheet => sheet.name === sheetName)
@@ -80,7 +79,7 @@ export function createXlsxNativeWorker(process: NativeProcess) {
     },
     readRange(input:Uint8Array,sheetName:string,range:{startRow:number;endRow:number;startColumn:number;endColumn:number},signal?:AbortSignal){
       if(!range||Object.keys(range).sort().join(',')!=='endColumn,endRow,startColumn,startRow'||Object.values(range).some(value=>!Number.isInteger(value)||value<0)||range.endRow<range.startRow||range.endColumn<range.startColumn||range.endRow>=1048576||range.endColumn>=16384||(range.endRow-range.startRow+1)*(range.endColumn-range.startColumn+1)>20000)return Promise.reject(new SandboxError('INPUT_LIMIT'))
-      return process.run(input,async io=>{
+      return native.run(input,async io=>{
         const source=opened(await io.request('open',{path:'/work/input.xlsx',locale:'en'}))
         try{
           const sheet=source.sheets.find(sheet=>sheet.name===sheetName)
@@ -91,7 +90,7 @@ export function createXlsxNativeWorker(process: NativeProcess) {
       },{signal})
     },
     savePlan(input: Uint8Array,plan: XlsxMutationPlan,signal?: AbortSignal) {
-      return process.run(input,async io=>{
+      return native.run(input,async io=>{
         const validName=(name:string)=>typeof name==='string'&&name.length>0&&name.length<=1024&&!name.startsWith('/')&&!name.includes('\\')&&!name.split('/').some(part=>part==='..'||part==='.'||part==='')
         const replacementNames=[...plan.replaced.keys()],additionNames=[...plan.added.keys(),...plan.addedBinary.keys()],removed=[...plan.removedEntries]
         const names=[...replacementNames,...additionNames,...removed]
@@ -112,7 +111,7 @@ export function createXlsxNativeWorker(process: NativeProcess) {
       },{signal})
     },
     roundtrip(input: Uint8Array,signal?: AbortSignal) {
-      return process.run(input,async io => {
+      return native.run(input,async io => {
         const source = opened(await io.request('open',{ path: '/work/input.xlsx',locale: 'en' }))
         await io.request('save_archive',{ sourcePath: '/work/input.xlsx',targetPath: '/work/output.xlsx',replacements: [],removals: [],additions: [] })
         const saved = opened(await io.request('open',{ path: '/work/output.xlsx',locale: 'en' }))
