@@ -1,0 +1,170 @@
+import { UNSUPPORTED_CAPABILITIES, type CapabilityCatalog } from '../../../../../../packages/web-contracts/src/host.ts'
+import { randomUUID } from 'node:crypto'
+import type { PoolClient } from 'pg'
+import type { BusinessPrincipal, PrincipalTransactions, FileCredential } from '../../db/context.ts'
+import type { ObjectStore } from '../../storage/object-store.ts'
+import { MAX_OBJECT_BYTES } from '../../storage/object-store.ts'
+import { validateFileName, validateUpload } from './validation.ts'
+import { uuid, scope, objectKey, openResult as unsupportedOpenResult, fileDto, lockAccount, lockUpload, loadFile, releaseReservation, runFileTransaction, type FileRow } from './queries.ts'
+import { assertLiveLease } from '../leases/queries.ts'
+import { authError } from '../auth/sessions.ts'
+
+export interface FilePolicy { quotaBytes?: number; maxUploads?: number; uploadTtlMs?: number }
+
+export function createFileService({ transactions, objects, quotaBytes = 1024 ** 3, maxUploads = 16, uploadTtlMs = 15 * 60_000, capabilities = UNSUPPORTED_CAPABILITIES }: { capabilities?: CapabilityCatalog; transactions: PrincipalTransactions; objects: ObjectStore } & FilePolicy) {
+  if (![quotaBytes,maxUploads,uploadTtlMs].every(value => Number.isSafeInteger(value) && value > 0) || quotaBytes > Number.MAX_SAFE_INTEGER / 2 || maxUploads > 1000 || uploadTtlMs > 24 * 3600_000) throw new Error('Invalid file policy')
+  const run = <T>(token: FileCredential, action: 'files:read' | 'files:write', fn: (connection: PoolClient, principal: BusinessPrincipal) => Promise<T>) => runFileTransaction(transactions,token,action,fn)
+  const personal: typeof run = (token,action,fn) => run(token,action,(connection,principal) => {
+    if (principal.job) throw authError(404)
+    return fn(connection,principal)
+  })
+  const catalog = Object.freeze({ ...capabilities })
+  const openResult = (row: FileRow) => ({ ...unsupportedOpenResult(row),capabilities: catalog })
+  const service = {
+    capabilities: catalog,
+    async stageUpload(token: FileCredential, metadata: { name: string; size: number }) {
+      if (!metadata || typeof metadata !== 'object' || Object.keys(metadata).some(key => !['name','size'].includes(key))) throw authError(400)
+      const name = metadata.name, format = validateFileName(name), size = metadata.size
+      if (!Number.isSafeInteger(size) || size < 1) throw authError(400)
+      if (size > MAX_OBJECT_BYTES) throw authError(413)
+      return personal(token, 'files:write', async (connection, principal) => {
+        const account = await lockAccount(connection, principal)
+        if (account.reservedBytes + account.storedBytes + size > quotaBytes) throw authError(413)
+        const pending = await connection.query("SELECT 1 FROM uploads WHERE deployment_id=$1 AND owner_id=$2 AND state IN ('staged','receiving','ready')", scope(principal))
+        if (pending.rowCount! >= maxUploads) throw Object.assign(authError(429), { retryAfter: 60 })
+        const id = randomUUID(), fileId = randomUUID(), revisionId = randomUUID()
+        const result = await connection.query("INSERT INTO uploads(id,deployment_id,owner_id,workspace_id,file_id,revision_id,name,format,expected_size,auth_version,state,expires_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'staged',clock_timestamp()+$11*interval '1 millisecond') RETURNING expires_at", [id,...scope(principal),account.workspaceId,fileId,revisionId,name,format,size,principal.authVersion,uploadTtlMs])
+        await connection.query('UPDATE storage_accounts SET reserved_bytes=reserved_bytes+$3 WHERE deployment_id=$1 AND owner_id=$2', [...scope(principal),size])
+        return { uploadId: id, fileId, expiresAt: (result.rows[0].expires_at as Date).toISOString() }
+      })
+    },
+    preflightUpload: (token: FileCredential, uploadId: string) => run(token, 'files:write', async (connection, principal) => {
+      const row = await lockUpload(connection, principal, uuid(uploadId))
+      if (row.state !== 'staged') throw authError(409)
+      if (row.kind === 'revision') {
+        await loadFile(connection,principal,row.file_id)
+        await assertLiveLease(connection,principal,row.file_id,Number(row.lease_epoch),row.editor_id!)
+      }
+      return { size: row.expected_size }
+    }),
+    async receiveUpload(token: FileCredential, uploadId: string, input: Buffer) {
+      const id = uuid(uploadId), attempt = randomUUID()
+      const claimed = await run(token, 'files:write', async (connection, principal) => {
+        await lockAccount(connection, principal)
+        const row = await lockUpload(connection, principal, id)
+        if (row.state !== 'staged') throw authError(409)
+        if (row.kind === 'revision') {
+          await loadFile(connection,principal,row.file_id)
+          await assertLiveLease(connection,principal,row.file_id,Number(row.lease_epoch),row.editor_id!)
+        }
+        await connection.query("UPDATE uploads SET state='receiving',attempt_id=$4 WHERE deployment_id=$1 AND owner_id=$2 AND id=$3", [...scope(principal),id,attempt])
+        return { row, key: objectKey(principal,row.revision_id) }
+      })
+      let published = false
+      try {
+        if (!Buffer.isBuffer(input) || input.length !== claimed.row.expected_size) throw authError(400)
+        const bytes = Buffer.from(input), validated = await validateUpload(bytes, claimed.row.name)
+        if (validated.format !== claimed.row.format) throw authError(400)
+        // Once publication starts, an error may mean an object exists. Retain
+        // the reservation/row until expiry; never delete an ambiguous object.
+        published = true
+        const reference = await objects.putImmutable(claimed.key, bytes)
+        if (reference.key !== claimed.key || reference.size !== validated.size || reference.sha256 !== validated.sha256) throw authError(503)
+        return await run(token, 'files:write', async (connection, principal) => {
+          await lockAccount(connection, principal)
+          const row = await lockUpload(connection, principal, id)
+          if (row.state !== 'receiving' || row.attempt_id !== attempt) throw authError(409)
+          if (row.kind === 'revision') {
+            await loadFile(connection,principal,row.file_id)
+            await assertLiveLease(connection,principal,row.file_id,Number(row.lease_epoch),row.editor_id!)
+          }
+          await connection.query("UPDATE uploads SET state='ready',sha256=$4 WHERE deployment_id=$1 AND owner_id=$2 AND id=$3", [...scope(principal),id,validated.sha256])
+          return { uploadId: id, sha256: validated.sha256, size: validated.size }
+        })
+      } catch (error) {
+        if (!published) await run(token, 'files:write', async (connection, principal) => {
+          await lockAccount(connection, principal)
+          const row = await lockUpload(connection, principal, id)
+          if (row.state === 'receiving' && row.attempt_id === attempt) await releaseReservation(connection, principal, row, 'cancelled')
+        }).catch(() => {}) // Revoked authority may not mutate cleanup state; TTL later releases it.
+        throw error
+      }
+    },
+    async finishUpload(token: FileCredential, uploadId: string) {
+      const id = uuid(uploadId)
+      return personal(token, 'files:write', async (connection, principal) => {
+        await lockAccount(connection, principal)
+        const row = await lockUpload(connection, principal, id)
+        if (row.kind !== 'import') throw authError(409)
+        if (row.state === 'committed') {
+          const file = await loadFile(connection,principal,row.file_id)
+          return openResult({ ...file, current_revision: row.revision_id, sha256: row.sha256!, size: row.expected_size })
+        }
+        if (row.state !== 'ready' || !row.sha256) throw authError(409)
+        await objects.readVerified({ key: objectKey(principal,row.revision_id), size: row.expected_size, sha256: row.sha256 })
+        await connection.query('INSERT INTO files(id,deployment_id,owner_id,workspace_id,name,format,current_revision) VALUES($1,$2,$3,$4,$5,$6,$7)', [row.file_id,...scope(principal),row.workspace_id,row.name,row.format,row.revision_id])
+        await connection.query('INSERT INTO file_revisions(id,deployment_id,owner_id,file_id,object_key,sha256,size) VALUES($1,$2,$3,$4,$5,$6,$7)', [row.revision_id,...scope(principal),row.file_id,objectKey(principal,row.revision_id),row.sha256,row.expected_size])
+        await connection.query("UPDATE uploads SET state='committed',completed_file_id=file_id WHERE deployment_id=$1 AND owner_id=$2 AND id=$3", [...scope(principal),id])
+        await connection.query('UPDATE storage_accounts SET reserved_bytes=reserved_bytes-$3,stored_bytes=stored_bytes+$3 WHERE deployment_id=$1 AND owner_id=$2', [...scope(principal),row.expected_size])
+        const result = openResult(await loadFile(connection, principal, row.file_id))
+        // A locked row does not freeze time. Recheck after object I/O and all
+        // metadata writes; an expired initial finish rolls the whole txn back.
+        await lockUpload(connection, principal, id, true)
+        return result
+      })
+    },
+    async cancelUpload(token: FileCredential, uploadId: string) {
+      const id = uuid(uploadId)
+      return run(token, 'files:write', async (connection, principal) => {
+        await lockAccount(connection, principal)
+        const row = await lockUpload(connection, principal, id)
+        if (row.state === 'cancelled') return
+        if (row.state === 'committed' || row.state === 'receiving') throw authError(409)
+        if (row.state === 'staged' || row.state === 'ready') await releaseReservation(connection, principal, row, 'cancelled')
+      })
+    },
+    openFile: (token: FileCredential, fileId: string) => run(token, 'files:read', async (connection, principal) => openResult(await loadFile(connection, principal, uuid(fileId)))),
+    download: (token: FileCredential, fileId: string, revision: string) => run(token, 'files:read', async (connection, principal) => {
+      const row = await loadFile(connection, principal, uuid(fileId))
+      if (principal.job && uuid(revision)!==principal.job.baseRevision) throw authError(404)
+      const historical = (await connection.query('SELECT object_key,size,sha256 FROM file_revisions WHERE deployment_id=$1 AND owner_id=$2 AND file_id=$3 AND id=$4', [...scope(principal),row.id,uuid(revision)])).rows[0]
+      if (!historical) throw authError(404)
+      const bytes = await objects.readVerified({ key: historical.object_key, size: historical.size, sha256: historical.sha256 })
+      return { bytes, name: row.name, format: row.format }
+    }),
+    async readFile(token: FileCredential, fileId: string, revision: string): Promise<Buffer> { return (await service.download(token,fileId,revision)).bytes },
+    listFiles: async (token: FileCredential, { trash = false, cursor, limit = 50 }: { trash?: boolean; cursor?: string; limit?: number } = {}) => {
+      if (typeof trash !== 'boolean' || !Number.isSafeInteger(limit) || limit < 1 || limit > 100) throw authError(400)
+      const after = cursor === undefined ? null : uuid(cursor)
+      return personal(token, 'files:read', async (connection, principal) => {
+        const result = await connection.query<FileRow>('SELECT f.*,r.size,r.sha256 FROM files f JOIN file_revisions r ON r.deployment_id=f.deployment_id AND r.owner_id=f.owner_id AND r.file_id=f.id AND r.id=f.current_revision WHERE f.deployment_id=$1 AND f.owner_id=$2 AND (f.deleted_at IS NOT NULL)=$3 AND ($4::uuid IS NULL OR f.id>$4) ORDER BY f.id LIMIT $5', [...scope(principal),trash,after,limit + 1])
+        return { files: result.rows.slice(0,limit).map(fileDto), nextCursor: result.rows.length > limit ? result.rows[limit - 1].id : null }
+      })
+    },
+    async renameFile(token: FileCredential, fileId: string, name: string) {
+      const format = validateFileName(name), id = uuid(fileId)
+      return personal(token, 'files:write', async (connection, principal) => {
+        const row = await loadFile(connection, principal, id, false, 'UPDATE')
+        if (format !== row.format) throw authError(400)
+        await connection.query('UPDATE files SET name=$4,updated_at=clock_timestamp() WHERE deployment_id=$1 AND owner_id=$2 AND id=$3', [...scope(principal),id,name])
+      })
+    },
+    trashFile: (token: FileCredential, fileId: string) => personal(token, 'files:write', async (connection, principal) => {
+      const id = uuid(fileId)
+      await loadFile(connection, principal, id, true, 'UPDATE')
+      await connection.query('UPDATE edit_leases SET lease_epoch=lease_epoch+1,expires_at=clock_timestamp() WHERE deployment_id=$1 AND owner_id=$2 AND file_id=$3', [...scope(principal),id])
+      await connection.query('UPDATE files SET deleted_at=COALESCE(deleted_at,clock_timestamp()),updated_at=clock_timestamp() WHERE deployment_id=$1 AND owner_id=$2 AND id=$3', [...scope(principal),id])
+    }),
+    restoreFile: (token: FileCredential, fileId: string) => personal(token, 'files:write', async (connection, principal) => {
+      const id = uuid(fileId)
+      await loadFile(connection, principal, id, true, 'UPDATE')
+      await connection.query('UPDATE files SET deleted_at=NULL,updated_at=clock_timestamp() WHERE deployment_id=$1 AND owner_id=$2 AND id=$3', [...scope(principal),id])
+    }),
+    usage: (token: FileCredential) => personal(token, 'files:read', async (connection, principal) => {
+      const account = await lockAccount(connection, principal)
+      return { reservedBytes: account.reservedBytes, storedBytes: account.storedBytes, quotaBytes }
+    }),
+  }
+  return service
+}
+export type FileService = ReturnType<typeof createFileService>

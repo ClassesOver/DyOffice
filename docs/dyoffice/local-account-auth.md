@@ -118,4 +118,13 @@ DyOffice **不引入 OIDC、Keycloak、SAML、LDAP 或第三方身份提供方**
 
 本文件是**新决策的唯一认证专项设计入口**。若未来考虑多因素认证，应单独批准为本地账号的可选第二因素，不应以此自动引回 OIDC/外部身份平台。需要新增 SSO 必须经过范围变更，不属于当前需求。
 
-**截至 2026-11-16：** T03 身份、会话和管理员账号操作已完成，收口记录在 [t03-closeout.md](evidence/t03-closeout.md)。默认开发进程仍用开发 Token 并拒绝 production 启动。RLS、完整泄露密码库和生产写入仍未完成。
+## 当前实现进度与两套入口（2026-11-16）
+
+- **模块化账号服务：** `apps/web/server/auth/*.mjs` 与 `server/src/app.mjs` 的 `buildApp({ localAuth })` 已提供账号、会话及管理员接口，记录见 [T03 收口](evidence/t03-closeout.md) 和 [模块化 T03c](evidence/t03c-account-lifecycle.md#modular-auth-runtime)。默认开发进程仍使用开发 Token，不连接该账号数据库；其文件/版本账本尚未切换到账号 RLS。
+- **独立 local 实验运行时：** `DYOFFICE_AUTH_MODE=local` 使用 `server/src/app.ts`、Cookie 会话及独立受限 auth/business 连接，已接入工作区/偏好、文件、版本、租约和任务权限。原生 DOCX 与宿主机 XLSX 任务需显式实验开关；见 [本地实验 T03c](evidence/t03c-account-lifecycle.md#local-experimental-runtime)、[T04](evidence/t04-rls-checkpoint.md) 和 [T08](evidence/t08-docker-free-closure.md)。完整登录/Admin/工作区 UI、外部 API Token、保留清理及企业交付仍未完成。
+
+两套账号实现使用不同数据库。模块化服务的迁移位于 `server/db/migrations`，版本 0001–0008，表名以 `dyoffice_` 开头，日志为 `dyoffice_schema_migrations`；从仓库根目录运行 `node apps/web/tools/bootstrap-admin.mjs --deployment-id UUID --username LOGIN` 初始化。local 实验服务的迁移位于 `server/src/db/migrations`，版本 0001–0012，日志为 `identity_migrations`；从仓库根目录运行 `npm run provision:runtime` 和交互式 `npm run bootstrap:admin`，使用 `DYOFFICE_DEPLOYMENT_ID`。两套 CLI 的 `DYOFFICE_DATABASE_URL` 必须指向各自的迁移数据库；`apps/web` 包内同名 bootstrap 脚本指向模块化 CLI，不是根脚本。
+
+这些编号属于各自独立的不可变历史，不构成相互升级路径。保留既有 SQL 与校验和，不重编号已应用迁移、不删除历史行绕过检查，也不自动合并账号、会话或旧 JSON 个人数据。local 授权工具会撤销数据库 PUBLIC 的 CREATE/TEMP，必须使用专用数据库。Web 运行时只接受该专用库的受限连接，迁移 owner 不交给 Web 进程。准确配置见 [Web README](../../apps/web/README.md)。
+
+两种 Web 入口都拒绝 `NODE_ENV=production`。上述实现与历史测试记录不是本次合并的新验收结果，也不意味着生产、安全或完整企业交付已经放行。完整泄露密码库、部署资源基准与尚未实现的业务范围仍按各自记录验收。

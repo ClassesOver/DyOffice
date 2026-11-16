@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
-import { mkdtemp, readFile, rm } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, stat } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createApplication } from '../../server/application.mjs'
@@ -26,11 +26,30 @@ async function loadBuildApp() {
   }
 }
 
-test('development entry boots the Fastify shell and still refuses production', async () => {
+test('development entry boots the Fastify shell and still refuses production', async (t) => {
   const source = await readFile(new URL('../../server/index.mjs', import.meta.url), 'utf8')
   assert.match(source, /buildApp/)
-  assert.match(source, /Development token server is not allowed in production/)
+  assert.match(source, /assetMode:\s*process\.env\.DYOFFICE_ASSET_MODE\s*\|\|\s*['"]built['"]/)
   assert.equal(source.includes('createApplication'), false)
+  const directory = await mkdtemp(join(tmpdir(), 'dyoffice-production-entry-'))
+  t.after(() => rm(directory, { recursive: true, force: true }))
+  const stateDirectory = join(directory, 'state')
+  const result = spawnSync(process.execPath, ['--import', 'tsx', 'server/index.mjs'], {
+    cwd: new URL('../..', import.meta.url),
+    env: {
+      ...process.env, NODE_ENV: 'production', PORT: '0', HOST: '127.0.0.1',
+      DYOFFICE_AUTH_MODE: 'development', DYOFFICE_NATIVE_JOBS: '', DYOFFICE_ASSET_MODE: 'source',
+      DYOFFICE_DATA_DIR: stateDirectory, DYOFFICE_USER_TOKEN: 'personal',
+      DYOFFICE_ADMIN_TOKEN: 'admin', DYOFFICE_ENCRYPTION_KEY: 'test-only-encryption-key',
+    },
+    encoding: 'utf8', timeout: 10_000,
+  })
+  assert.equal(result.error, undefined)
+  assert.equal(result.signal, null)
+  assert.equal(result.status, 1, `${result.stdout}\n${result.stderr}`)
+  assert.match(result.stderr, /dyoffice: startup failed/)
+  assert.equal(result.stdout, '')
+  await assert.rejects(() => stat(stateDirectory), { code: 'ENOENT' })
 })
 
 test('legacy file, preference, and admin routes keep status codes and omit secrets', async (t) => {

@@ -45,3 +45,7 @@ _scratch-*
 # dyoffice personal workspace and encrypted service settings
 .dyoffice/
 apps/web/.dyoffice/
+
+/apps/web/dist-docs/
+
+/.dyoffice-native-build/

@@ -5,3 +5,5 @@ import { mountDocsEditor, type DocsEditorHandle } from '../../../../packages/bro
 export async function mountWebDocs(element: HTMLElement, fileId: string): Promise<DocsEditorHandle> {
   return mountDocsEditor(createHttpEditorHost(), element, fileId)
 }
+
+export { mountDocsEditor } from './native-docs.tsx'

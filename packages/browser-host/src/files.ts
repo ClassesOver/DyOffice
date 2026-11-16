@@ -250,3 +250,5 @@ export async function mountDocsEditor(host: DocsEditorHost, element: HTMLElement
   draw()
   return { getState: snapshot, updateText, updateCell, undo, save, destroy }
 }
+
+export { createSessionFileHost, type SessionFileHost } from './session-files.ts'
