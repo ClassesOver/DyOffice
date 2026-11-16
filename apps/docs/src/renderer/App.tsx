@@ -1,3 +1,4 @@
+import { usePageColorState } from './page-color-state'
 import { FloatWatch } from './editor/float-watch'
 import { scriptFontHtml } from './editor/script-fonts'
 import { carryDocSeen } from './ai/tools'
@@ -888,8 +889,7 @@ export function App({ host }: { host?: { readOnly: boolean; assistantAvailable: 
   const [sectionsDirty, setSectionsDirty] = useState<number[]>([])
   /** Start type pending write to the trailing sectPr after inserting a continuous section break */
   const [trailingStartType, setTrailingStartType] = useState<SectionInfo['startType'] | null>(null)
-  const [pageColor, setPageColor] = useState<string | null>(null)
-  const [pageColorDirty, setPageColorDirty] = useState(false)
+  const { pageColor, setPageColor, pageColorDirty, setPageColorDirty, getPageColorSaveState } = usePageColorState()
   const [header, setHeader] = useState<HeaderFooter | null>(null)
   const [headerDirty, setHeaderDirty] = useState(false)
   const [footer, setFooter] = useState<HeaderFooter | null>(null)
@@ -2260,6 +2260,7 @@ export function App({ host }: { host?: { readOnly: boolean; assistantAvailable: 
   )
   fileCtxRef.current = {
     getCurrentSaveContext: () => fileCtxRef.current,
+    getPageColorSaveState,
     hostLifecycle: host?.lifecycle,
     editor,
     doc,
