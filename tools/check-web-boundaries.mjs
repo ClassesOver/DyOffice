@@ -27,11 +27,8 @@ function imports(source, file) {
   const found = []
   function visit(node) {
     if ((ts.isImportDeclaration(node) && node.importClause?.isTypeOnly) ||
-        (ts.isExportDeclaration(node) && node.isTypeOnly)) return
-    const bindings = ts.isImportDeclaration(node) ? node.importClause?.namedBindings : ts.isExportDeclaration(node) ? node.exportClause : undefined
-    if (bindings && (ts.isNamedImports(bindings) || ts.isNamedExports(bindings)) &&
-        bindings.elements.length && bindings.elements.every(element => element.isTypeOnly) &&
-        !(ts.isImportDeclaration(node) && node.importClause?.name)) return
+        (ts.isExportDeclaration(node) && node.isTypeOnly) ||
+        (ts.isImportEqualsDeclaration(node) && node.isTypeOnly)) return
     let argument
     let mode = 'import'
     if (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) argument = node.moduleSpecifier
