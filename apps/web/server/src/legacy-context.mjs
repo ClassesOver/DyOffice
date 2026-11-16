@@ -1,10 +1,10 @@
-import { access, constants } from 'node:fs/promises'
-import { mkdir } from 'node:fs/promises'
+import { access, constants, mkdir } from 'node:fs/promises'
 import { join } from 'node:path'
 import { createStaticAssets } from '../static-assets.mjs'
 import { createStore } from '../store.mjs'
 import { DEV_PERSONAL_OWNER, objectStoreDirectory } from './modules/objects/routes.mjs'
 import { createLocalObjectStore } from './storage/local-dev.mjs'
+import { createRevisionRuntime } from './modules/revisions/runtime.mjs'
 
 export async function createLegacyContext({ directory, userToken, adminToken, encryptionKey, assetMode, assetDirectory, objectQuota }) {
   if (!userToken || !adminToken || userToken === adminToken) {
@@ -21,6 +21,7 @@ export async function createLegacyContext({ directory, userToken, adminToken, en
     maxObjectBytes,
     maxOwnerBytes,
   })
+  const revisionsRuntime = await createRevisionRuntime({ directory, objects: objectStore })
   return {
     directory,
     credentials: { userToken, adminToken },
@@ -29,6 +30,7 @@ export async function createLegacyContext({ directory, userToken, adminToken, en
     objectStore,
     objectOwnerId: DEV_PERSONAL_OWNER,
     objectMaxBytes: maxObjectBytes,
+    revisionsRuntime,
     serveStatic,
     async ready() {
       try {
