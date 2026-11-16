@@ -90,11 +90,13 @@ docs/dyoffice/               当前计划及 inventory/ evidence/ adr/
 
 **接口：** 产出每个 IPC 的来源、调用方、Web 实现位置与能力状态；产出锁定依赖/镜像清单。
 
-- [ ] 创建边界检查用例：浏览器入口导入 `node:fs`/Electron 必须报错；所有拟复用工具标记 live/headless/unsupported。
-- [ ] 运行检查得到预期违规列表，确认是依赖边界问题而非缺少安装。
-- [ ] 盘点四个 renderer/preload/main、原生 Rust、字体和 MCP 实际 lockfile；创建上述测试脚本与 Web 专用 CI，不全面重构上游。
-- [ ] 跑现有 `npm run test:web`，保存真实结果；新边界检查和最小 Web 构建为 GREEN。
-- [ ] 提交 `chore(web): inventory host boundaries and establish web gates`。
+- [x] 创建边界检查用例：浏览器入口导入 `node:fs`/Electron 必须报错；所有拟复用工具标记 live/headless/unsupported。
+- [x] 运行检查得到预期违规列表，确认是依赖边界问题而非缺少安装。
+- [x] 盘点四个 renderer/preload/main、原生 Rust、字体和 MCP 实际 lockfile；创建上述测试脚本与 Web 专用 CI，不全面重构上游。
+- [x] 跑现有 `npm run test:web`，保存真实结果；新边界检查和最小 Web 构建为 GREEN。
+- [x] 提交 `chore(web): inventory host boundaries and establish web gates`。
+
+**有界验收（2026-11-16）：** 原 T00 五项基线/盘点/构建任务已核验，证据见 [最终源代码与运行时记录](evidence/t00-final-source-acceptance.md) 和 [小样本性能记录](evidence/t00-performance-baseline.md)。仅签收工程基线，不代表四格式功能、AI/MCP 授权、生产镜像或第 8 节/T25 容量验收。保留历史阶段记录；新文档提交不借用旧提交的 CI。
 
 ### T01 共享契约与 BrowserHost 骨架
 
@@ -478,4 +480,4 @@ docs/dyoffice/               当前计划及 inventory/ evidence/ adr/
 
 每个 PR 必须写明基线、范围、接口变化、迁移影响、失败复现、通过命令/环境、证据位置、剩余风险和回滚方法。职责边界或协议变化增加 ADR；不因工具建议擅自改变用户已确认范围。
 
-任务完成需要代码、测试、可复现证据和文档同步。里程碑完成还需要端到端演示与 gate 审核。企业完成还需要客户环境验收、恢复演练、运营可见性与负责人签收。本次仅编写计划，以上任务没有因文档创建而被标记为完成。
+任务完成需要代码、测试、可复现证据和文档同步。里程碑完成还需要端到端演示与 gate 审核。企业完成还需要客户环境验收、恢复演练、运营可见性与负责人签收。除各任务显式记录的有界验收外，未勾选任务不因计划创建而完成。
