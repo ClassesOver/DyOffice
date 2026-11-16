@@ -133,3 +133,20 @@ After #29 merged, rebased the candidate tree onto target
 applying only these eight T01 files. Fresh verification: host contracts 17/17,
 `typecheck:web` exit 0, Web API 198 pass / 1 existing skip. This base does not yet
 contain the pending #21 runtime, whose separate combination is recorded above.
+
+## Selectable unit command acceptance supplement (2026-11-16)
+
+Base: target `474ce46a0e4878ffc9903a56e96d2242da04f13c`; all tracked source blobs independently matched before edits. This supersedes only the earlier missing-command note, not historic CI failures.
+
+- `npm run test:web:unit -- host-contract.test.mjs` executes the actual `.mjs` source: 17/17 passed. The original plan's nonexistent `.ts` example is corrected, not silently aliased.
+- No selector executes all existing Web unit tests: 39/39 passed. One or multiple exact basenames supported; unknown, traversal and Node CLI selectors fail closed rather than silently executing a different suite.
+- Runner regressions: 3/3; CI command/path regression was RED before workflow wiring, then GREEN. The Web workflow now invokes the same documented command and watches runner-only changes.
+- `typecheck:web` passed; boundary scan traversed 129 browser-reachable files with zero Node/Electron violations. The Node test runner resides under tools, outside browser runtime.
+- Existing `test:web`: 198 pass, 1 pre-existing optional skip. This is not a fresh install or whole-monorepo test claim.
+- Only root script metadata changes; no dependency/version change. Compatibility manifest refresh must differ only in root package.json hash/size.
+
+These are local candidate results. Exact published candidate CI remains required before claiming T01 accepted. Shared DTOs do not implement future authenticated AI dispatch, approval execution or four-editor workflows. T00 dependency acceptance remains separately coordinated.
+
+Additional local verification: tools regressions 29/29, Web production-build/HTTP smoke 2/2. Independent reviewer reran runner 3/3, selected contracts 17/17 and all unit 39/39. Compatibility refresh was compared structurally and changes only `files.package.json`.
+
+The complete root `npm test` was also attempted: preceding packages passed (27, 384, 65 and 9 tests; DOCX engine 2239 passed/1 existing skip), then `@genoffice/pdf2docx` was terminated with `Killed`/exit 137. The command did not finish, so this candidate has **no whole-monorepo green claim**. This was outside the unit-command change; no test was weakened or removed. Local dependencies were reused, not a fresh install.

@@ -98,12 +98,12 @@ docs/dyoffice/               当前计划及 inventory/ evidence/ adr/
 
 ### T01 共享契约与 BrowserHost 骨架
 
-**依赖：** T00。**文件：** 新建 `packages/web-contracts/{package.json,src/host.ts,src/api.ts,src/events.ts,src/tools.ts,src/errors.ts}`、`packages/browser-host/src/index.ts`、`apps/web/test/unit/host-contract.test.ts`。
+**依赖：** T00。**文件：** 新建 `packages/web-contracts/{package.json,src/host.ts,src/api.ts,src/events.ts,src/tools.ts,src/errors.ts}`、`packages/browser-host/src/index.ts`、`apps/web/test/unit/host-contract.test.mjs`。
 
 **接口：** 输出第 1 节全部共享类型和 BrowserHost；`getCapabilities(): Promise<CapabilityCatalog>` 明确区分 unsupported、read_only、editable。
 
 - [ ] 编写未知宿主方法、错误 DTO、缺失版本号、超大事件和 secret 字段泄漏测试。
-- [ ] 运行 `npm run test:web:unit -- host-contract.test.ts`，确认契约缺失导致 RED。
+- [ ] 运行 `npm run test:web:unit -- host-contract.test.mjs`，确认契约缺失导致 RED。
 - [ ] 实现类型和静态校验；未知功能明确失败，不返回假成功；为 Electron 现有行为保留适配入口。
 - [ ] 同命令 GREEN，`typecheck:web` 通过，验证无 Node 依赖混入浏览器包。
 - [ ] 提交 `feat(web): define host and transport contracts`。

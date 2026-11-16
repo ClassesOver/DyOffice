@@ -14,6 +14,7 @@ on:
       - 'apps/**'
       - 'packages/**'
       - 'tools/check-web-boundaries*'
+      - 'tools/run-web-unit.mjs'
       - 'tools/audit-web-host*'
       - 'tools/dyoffice/host-ipc-classification*'
       - 'docs/dyoffice/inventory/host-ipc*'
@@ -31,6 +32,7 @@ on:
       - 'apps/**'
       - 'packages/**'
       - 'tools/check-web-boundaries*'
+      - 'tools/run-web-unit.mjs'
       - 'tools/audit-web-host*'
       - 'tools/dyoffice/host-ipc-classification*'
       - 'docs/dyoffice/inventory/host-ipc*'
@@ -63,7 +65,7 @@ jobs:
       - name: Test browser dependency gate
         run: node --test tools/check-web-boundaries.test.mjs
       - name: Test BrowserHost contracts
-        run: node --experimental-strip-types --test apps/web/test/unit/host-contract.test.mjs
+        run: npm run test:web:unit -- host-contract.test.mjs
       - name: Test SSE AgentTransport adapter
         run: node --experimental-strip-types --test apps/web/test/unit/ai-transport.test.mjs
       - name: Test HTTP BrowserHost read adapter
