@@ -1843,6 +1843,14 @@ export function SettingsModal({
   const [webError, setWebError] = useState('')
   const [webBusy, setWebBusy] = useState(Boolean(web))
   const [webReady, setWebReady] = useState(!web)
+  const [webDirty, setWebDirty] = useState(false)
+  const [webSaved, setWebSaved] = useState(false)
+  const [webLanguage, setWebLanguage] = useState<'zh' | 'en'>('zh')
+  const webDraft = useRef<WebSettingsPreferences | null>(null)
+  const webBaseline = useRef<WebSettingsPreferences | null>(null)
+  const webSaving = useRef(false)
+  const webMounted = useRef(true)
+  useEffect(() => { webMounted.current = true; return () => { webMounted.current = false } }, [])
   const [section, setSection] = useState<SectionId>(target?.section ?? 'account')
   const navRef = useRef<HTMLElement | null>(null)
   const navPill = useSlidingIndicator(navRef, '.set-nav-item.active', section)
@@ -1878,25 +1886,67 @@ export function SettingsModal({
     setAutoSaveOn(prefs.autoSave === true)
     setAiPrefs(prev => ({ ...prev, showAiSidebar: prefs.showAssistant !== false }))
   }
-  const saveWebPreferences = async (patch: Partial<WebSettingsPreferences>) => {
-    if (!web || webBusy) return
+  const resetWebPreferences = (prefs: WebSettingsPreferences) => {
+    webDraft.current = { ...prefs }
+    webBaseline.current = { ...prefs }
+    setWebLanguage(prefs.language)
+    applyWebPreferences(prefs)
+    setWebDirty(false)
+  }
+  const editWebPreferences = (patch: Partial<WebSettingsPreferences>) => {
+    if (!webDraft.current || webSaving.current || !webReady) return
+    const next = { ...webDraft.current, ...patch }
+    webDraft.current = next
+    applyWebPreferences(next)
+    setWebLanguage(next.language)
+    setWebDirty(JSON.stringify(next) !== JSON.stringify(webBaseline.current))
+    setWebSaved(false)
+  }
+  const saveWebPreferences = async () => {
+    if (!web || webBusy || webSaving.current || !webDraft.current || !webDirty) return
+    const snapshot = { ...webDraft.current }
+    const patch = Object.fromEntries(Object.entries(snapshot).filter(([key, value]) => value !== webBaseline.current?.[key as keyof WebSettingsPreferences])) as Partial<WebSettingsPreferences>
+    webSaving.current = true
+    setWebBusy(true)
+    setWebError('')
+    setWebSaved(false)
+    try {
+      const prefs = await web.save(patch)
+      if (!webMounted.current) return
+      resetWebPreferences(prefs)
+      setWebSaved(true)
+      if (prefs.theme === 'system') document.documentElement.removeAttribute('data-theme')
+      else document.documentElement.setAttribute('data-theme', prefs.theme)
+    } catch (error) {
+      if (webMounted.current) setWebError(error instanceof Error ? error.message : '设置未保存')
+    } finally { webSaving.current = false; if (webMounted.current) setWebBusy(false) }
+  }
+  const reloadWebPreferences = async () => {
+    if (!web || webSaving.current || webBusy) return
+    if (webDirty && !window.confirm('重新读取会放弃未保存的个人偏好，是否继续？')) return
+    webSaving.current = true
     setWebBusy(true)
     setWebError('')
     try {
-      const prefs = await web.save(patch)
-      applyWebPreferences(prefs)
-      if (patch.theme) {
-        if (prefs.theme === 'system') document.documentElement.removeAttribute('data-theme')
-        else document.documentElement.setAttribute('data-theme', prefs.theme)
-      }
+      const prefs = await web.load()
+      if (!webMounted.current) return
+      resetWebPreferences(prefs)
+      setWebReady(true)
+      setWebSaved(false)
     } catch (error) {
-      setWebError(error instanceof Error ? error.message : '设置未保存')
-    } finally { setWebBusy(false) }
+      if (webMounted.current) setWebError(error instanceof Error ? error.message : '设置加载失败')
+    } finally { webSaving.current = false; if (webMounted.current) setWebBusy(false) }
+  }
+  const closeSettings = () => {
+    if (web && webSaving.current) { setWebError('正在保存或读取个人偏好，请稍候。'); return }
+    if (web && webDraft.current && JSON.stringify(webDraft.current) !== JSON.stringify(webBaseline.current)
+      && !window.confirm('个人偏好尚未保存，是否放弃更改并关闭？')) return
+    onClose()
   }
   useEffect(() => {
     let alive = true
     if (web) {
-      void web.load().then(prefs => { if (alive) { applyWebPreferences(prefs); setWebReady(true) } })
+      void web.load().then(prefs => { if (alive) { resetWebPreferences(prefs); setWebReady(true) } })
         .catch(error => { if (alive) setWebError(error instanceof Error ? error.message : '设置加载失败') })
         .finally(() => { if (alive) setWebBusy(false) })
       return () => { alive = false }
@@ -1978,14 +2028,26 @@ export function SettingsModal({
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose()
+      if (e.key === 'Escape') closeSettings()
     }
     window.addEventListener('keydown', handler)
     return () => window.removeEventListener('keydown', handler)
-  }, [onClose])
+  })
+
+  useEffect(() => {
+    if (!web) return
+    const handler = (event: BeforeUnloadEvent) => {
+      if (webSaving.current || (webDraft.current && JSON.stringify(webDraft.current) !== JSON.stringify(webBaseline.current))) {
+        event.preventDefault()
+        event.returnValue = ''
+      }
+    }
+    window.addEventListener('beforeunload', handler)
+    return () => window.removeEventListener('beforeunload', handler)
+  }, [Boolean(web)])
 
   const applyTheme = (next: UiTheme) => {
-    if (web) { void saveWebPreferences({ theme: next }); return }
+    if (web) { editWebPreferences({ theme: next }); return }
     setTheme(next)
     void window.aiOffice.setTheme(next)
     if (next === 'system') document.documentElement.removeAttribute('data-theme')
@@ -1998,12 +2060,12 @@ export function SettingsModal({
   }
 
   const commitAuthorName = () => {
-    if (web) { void saveWebPreferences({ authorName: authorName.value }); return }
+    if (web) { void saveWebPreferences(); return }
     void window.aiOffice.setAuthorName?.(authorName.value).then(setAuthorName)
   }
 
   const updateAiPrefs = (patch: Partial<AiPanelPrefs>) => {
-    if (web) { if (patch.showAiSidebar !== undefined) void saveWebPreferences({ showAssistant: patch.showAiSidebar }); return }
+    if (web) { if (patch.showAiSidebar !== undefined) editWebPreferences({ showAssistant: !webDraft.current?.showAssistant }); return }
     setAiPrefs((prev) => ({ ...prev, ...patch }))
     void window.aiOffice.setAiPanelPrefs(patch).then(setAiPrefs)
   }
@@ -2053,13 +2115,13 @@ export function SettingsModal({
     <div
       className="set-overlay"
       onMouseDown={(e) => {
-        if (e.target === e.currentTarget) onClose()
+        if (e.target === e.currentTarget) closeSettings()
       }}
     >
       <div className="set-dialog" role="dialog" aria-modal="true" aria-label={t('settings')}>
         <div className="set-header">
           <h2 className="set-title">{t('settings')}</h2>
-          <button className="set-close" onClick={onClose} aria-label={t('cancel')}>
+          <button className="set-close" onClick={closeSettings} aria-label={t('cancel')}>
             <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true">
               <path
                 d="M2 2l10 10M12 2L2 12"
@@ -2114,6 +2176,11 @@ export function SettingsModal({
             key={section}
           >
             {webError && <p role="alert" className="set-web-error">{webError}</p>}
+            {web && <div className="set-pane-footer">
+              <span role="status">{webBusy ? '保存或读取中…' : webDirty ? '个人偏好未保存' : webSaved ? '个人偏好已保存；语言刷新后生效' : '语言更改保存后刷新生效'}</span>
+              <button type="button" className="set-btn primary" disabled={webBusy || !webReady || !webDirty} onClick={() => void saveWebPreferences()}>保存个人偏好</button>
+              <button type="button" className="set-btn" disabled={webBusy} onClick={() => void reloadWebPreferences()}>重新读取</button>
+            </div>}
             {web && section === 'account' && web.account}
             {!web && section === 'account' && (
               <>
@@ -2189,10 +2256,10 @@ export function SettingsModal({
                   </div>
                   <Dropdown
                     className="set-dd"
-                    value={lang}
+                    value={web ? webLanguage : lang}
                     ariaLabel={t('language')}
                     options={LANG_OPTIONS.filter(opt => !web || opt.value === 'zh' || opt.value === 'en').map((opt) => ({ value: opt.value, label: opt.label }))}
-                    onPick={(v) => setLang(v as typeof lang)}
+                    onPick={(v) => web ? editWebPreferences({ language: v as 'zh' | 'en' }) : setLang(v as typeof lang)}
                   />
                 </div>
                 <div className="set-field">
@@ -2354,10 +2421,10 @@ export function SettingsModal({
                     maxLength={web ? 100 : AUTHOR_NAME_MAX}
                     spellCheck={false}
                     autoComplete="off"
-                    onChange={(e) => setAuthorName((prev) => ({ ...prev, value: e.target.value }))}
-                    onBlur={commitAuthorName}
+                    onChange={(e) => web ? editWebPreferences({ authorName: e.target.value }) : setAuthorName((prev) => ({ ...prev, value: e.target.value }))}
+                    onBlur={web ? undefined : commitAuthorName}
                     onKeyDown={(e) => {
-                      if (e.key === 'Enter') e.currentTarget.blur()
+                      if (e.key === 'Enter') { if (web) { e.preventDefault(); void saveWebPreferences() } else e.currentTarget.blur() }
                     }}
                   />
                 </div>
@@ -2387,7 +2454,7 @@ export function SettingsModal({
                     aria-label={t('setAutoSave')}
                     onClick={() => {
                       const next = !autoSaveOn
-                      if (web) { void saveWebPreferences({ autoSave: next }); return }
+                      if (web) { editWebPreferences({ autoSave: !webDraft.current?.autoSave }); return }
                       setAutoSaveOn(next)
                       void window.aiOffice.setAutoSaveDefault?.(next).catch(() => {})
                     }}

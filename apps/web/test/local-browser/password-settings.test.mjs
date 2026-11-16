@@ -2,7 +2,8 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import {fileURLToPath} from 'node:url'
 import {mkdir} from 'node:fs/promises'
-import {chromium,expect} from '@playwright/test'
+import {expect} from '@playwright/test'
+import {launchTestBrowser} from '../helpers/browser.mjs'
 import {fileFixture} from '../helpers/files.mjs'
 import {password} from '../helpers/identity.mjs'
 import {buildLocalApp} from '../../server/src/app.ts'
@@ -11,7 +12,7 @@ test('original Settings changes password with real session rotation and revokes 
  const f=await fileFixture(t,{origin})
  const app=await buildLocalApp({db:f.db,businessPool:f.businessPool,passwords:f.passwords,deploymentId:f.deploymentId,origin,csrfKey:f.csrfKey,objectStore:f.objects,localShellDirectory:fileURLToPath(new URL('../../dist-local-shell',import.meta.url))})
  f.cleanup.push(()=>app.close());await app.listen({port:4200,host:'127.0.0.1'})
- const browser=await chromium.launch();t.after(()=>browser.close());const context=await browser.newContext({viewport:{width:1440,height:1100}});const page=await context.newPage()
+ const browser=await launchTestBrowser();t.after(()=>browser.close());const context=await browser.newContext({viewport:{width:1440,height:1100}});const page=await context.newPage()
  const login=async value=>{await page.getByLabel('用户名',{exact:true}).fill('alice');await page.getByLabel('密码',{exact:true}).fill(value);await page.getByRole('button',{name:'登录',exact:true}).click()}
  await page.goto(origin);await login(password);await expect(page.locator('.home')).toBeVisible()
  const oldCookie=(await context.cookies()).find(c=>c.name==='__Host-dyoffice-session').value

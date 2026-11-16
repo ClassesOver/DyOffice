@@ -3,7 +3,8 @@ import assert from 'node:assert/strict'
 import {fileURLToPath} from 'node:url'
 import {randomUUID} from 'node:crypto'
 import {mkdir} from 'node:fs/promises'
-import {chromium,expect} from '@playwright/test'
+import {expect} from '@playwright/test'
+import {launchTestBrowser} from '../helpers/browser.mjs'
 import {fileFixture} from '../helpers/files.mjs'
 import {password} from '../helpers/identity.mjs'
 import {buildLocalApp} from '../../server/src/app.ts'
@@ -14,7 +15,7 @@ test('original account login history displays only its private bounded projectio
  const app=await buildLocalApp({db:f.db,businessPool:f.businessPool,passwords:f.passwords,deploymentId:f.deploymentId,origin,csrfKey:f.csrfKey,objectStore:f.objects,localShellDirectory:fileURLToPath(new URL('../../dist-local-shell',import.meta.url))})
  f.cleanup.push(()=>app.close());await app.listen({port:4204,host:'127.0.0.1'})
  assert.equal((await app.inject('/api/v1/auth/login-history')).statusCode,401)
- const browser=await chromium.launch();t.after(()=>browser.close());const context=await browser.newContext({viewport:{width:1440,height:1100}});const page=await context.newPage()
+ const browser=await launchTestBrowser();t.after(()=>browser.close());const context=await browser.newContext({viewport:{width:1440,height:1100}});const page=await context.newPage()
  await page.goto(origin)
  const sign=async(username,value)=>{await page.getByLabel('用户名',{exact:true}).fill(username);await page.getByLabel('密码',{exact:true}).fill(value);const response=page.waitForResponse(r=>r.url().endsWith('/auth/login')&&r.request().method()==='POST');await page.getByRole('button',{name:'登录',exact:true}).click();return response}
  assert.equal((await sign('alice','wrong password phrase')).status(),401)
