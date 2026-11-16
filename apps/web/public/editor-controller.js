@@ -80,7 +80,7 @@ function structuralChange(blocks) {
  * A lost response stays unknown until the document is opened again.
  * Edits made while the request is in flight stay dirty after a commit.
  */
-export function createEditorSession({ readDocx, acquireLease, commitDocx, newKey = () => crypto.randomUUID() }) {
+export function createEditorSession({ readDocx, acquireLease, commitDocx, renewLease, newKey = () => crypto.randomUUID() }) {
   const guard = createSaveGuard()
   const keySeq = { count: 1 }
   let fileId = null
@@ -120,8 +120,27 @@ export function createEditorSession({ readDocx, acquireLease, commitDocx, newKey
       guard.markEdited()
       return snapshot()
     },
+    async renew() {
+      if (!renewLease || !fileId || leaseEpoch == null) return snapshot()
+      const renewed = await renewLease(fileId, leaseEpoch)
+      if (!renewed || typeof renewed.leaseEpoch !== 'number') throw new Error('租约续期无效')
+      leaseEpoch = renewed.leaseEpoch
+      return snapshot()
+    },
     async save() {
       if (guard.getState().status === 'unknown') return { ok: false, unknown: true, state: snapshot() }
+      if (renewLease) {
+        try {
+          const renewed = await renewLease(fileId, leaseEpoch)
+          if (!renewed || typeof renewed.leaseEpoch !== 'number') throw new Error('租约续期无效')
+          leaseEpoch = renewed.leaseEpoch
+        } catch (error) {
+          const status = error?.status
+          if (status === 409) return { ok: false, conflict: true, state: snapshot() }
+          if (status === 400) return { ok: false, invalid: true, state: snapshot() }
+          return { ok: false, state: snapshot() }
+        }
+      }
       let ticket
       try { ticket = guard.beginSave() }
       catch { return { ok: false, pending: true, state: snapshot() } }

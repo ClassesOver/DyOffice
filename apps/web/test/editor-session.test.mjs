@@ -128,3 +128,29 @@ test('a conflict keeps the draft and an unknown result blocks another save', asy
   assert.equal(blocked.unknown, true)
   assert.equal(commits, 2)
 })
+
+test('a failed lease renewal keeps the draft and does not commit', async () => {
+  let commits = 0
+  let renewed = 0
+  const session = createEditorSession({
+    acquireLease: async () => ({ leaseEpoch: 2 }),
+    renewLease: async (_id, epoch) => {
+      renewed += 1
+      assert.equal(epoch, 2)
+      const error = new Error('lease')
+      error.status = 409
+      throw error
+    },
+    readDocx: async () => ({ file: revision, leaseEpoch: 2, blocks: [{ docxIndex: 0, type: 'paragraph', text: 'Hello', editable: true }] }),
+    commitDocx: async () => { commits += 1; return nextRevision },
+    newKey: () => 'key-123456',
+  })
+  await session.open('file-1')
+  session.updateBlock(0, 'Still here')
+  const saved = await session.save()
+  assert.equal(saved.conflict, true)
+  assert.equal(saved.state.dirty, true)
+  assert.equal(saved.state.blocks[0].text, 'Still here')
+  assert.equal(renewed, 1)
+  assert.equal(commits, 0)
+})

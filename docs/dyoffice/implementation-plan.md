@@ -114,13 +114,13 @@ docs/dyoffice/               当前计划及 inventory/ evidence/ adr/
 
 **接口：** `buildApp(config): Promise<FastifyInstance>`，版本化 `/api/v1`，统一 Problem DTO 和请求 ID。
 
-**状态（2026-11-15，未完成）：** `buildApp` 壳已提供 live/ready、服务端请求 ID、Problem 错误、静态 Schema、单进程限流、请求体上限和关闭。未迁移路由返回 501，不假装旧接口已搬迁。`dev:web` / `start:web` 仍启动原来的开发令牌服务器。证据见 [t02-modular-api.md](evidence/t02-modular-api.md)。下面的复选框保持未勾选。
+**状态（2026-11-15）：** `dev:web` / `start:web` 已切到 Fastify `buildApp`。偏好、Admin、数据源、文件、DOCX 和静态页面按模块注册，旧 HTTP 契约仍由现有测试保持。健康检查使用静态 Schema；业务请求体继续用模块里的固定校验器，不编译外部输入。限流和关闭只作用于单个进程。没有本地登录、PostgreSQL 就绪检查或多副本限流，不能据此宣称生产认证。证据见 [t02-modular-api.md](evidence/t02-modular-api.md)。
 
-- [ ] 固化旧文件/偏好/Admin 接口的授权、状态码和密钥脱敏测试。
-- [ ] 运行 `npm run test:web:integration -- api-compat.test.ts`，新增 API 未实现应 RED。
-- [ ] 接入 Fastify、可信静态 Schema、错误边界、限流、优雅关闭、ready/live 区分，原型逻辑逐模块迁移而非大重写。
-- [ ] 运行 legacy + integration + build；所有旧契约保持或明确提供迁移响应。
-- [ ] 提交 `refactor(web): introduce modular api without contract regressions`。
+- [x] 固化旧文件/偏好/Admin 接口的授权、状态码和密钥脱敏测试。
+- [x] 运行 `npm run test:web:integration -- api-compat.test.ts`，新增 API 未实现应 RED。
+- [x] 接入 Fastify、可信静态 Schema、错误边界、限流、优雅关闭、ready/live 区分，原型逻辑逐模块迁移而非大重写。
+- [x] 运行 legacy + integration + build；所有旧契约保持或明确提供迁移响应。
+- [x] 提交 `refactor(web): introduce modular api without contract regressions`。
 
 ### T03 本地账号密码、管理员用户管理与服务端会话
 
@@ -155,11 +155,18 @@ docs/dyoffice/               当前计划及 inventory/ evidence/ adr/
 
 **接口：** `stageUpload(principal, fileMeta)`、`finishUpload(principal,uploadId)`、`openFile()`；上传引用绑定所有者。
 
-- [ ] 测试四格式类型验证、伪 ZIP、空文件、超额、路径穿越、跨用户 uploadId、未完成上传不能下载。
-- [ ] 运行 files integration，确认没有元数据/对象分离保障时 RED。
-- [ ] 实现 S3 adapter、不可变对象键、配额、服务器哈希、回收站与受控下载；开发本地盘 adapter 不进入企业 HA。
-- [ ] 同测试 GREEN；模拟上传中断不产生已完成文件，校验内容哈希而非 ETag。
-- [ ] 提交 `feat(files): add scoped immutable object storage`。
+**状态（2026-11-16）：完成。** 证据见 [t05-local-object-store.md](evidence/t05-local-object-store.md)。四格式、伪 ZIP、空文件、超额、路径穿越、跨 owner、未完成不可下载、中断不留下完成对象、服务器 SHA-256（不信任 ETag）、配额、回收站、共享 blob、过期暂存、HTTP 暂存/完成/下载/丢弃/恢复/清空、进程内 S3 替身，以及 MinIO 上的同一生命周期，都有测试。`dyoffice_files` 只在对象写入成功后插入。`/api/files` 仍是开发令牌原型目录，不是这套存储。
+
+**明确延期：**
+
+- **T04：** `dyoffice_files` 不启用 RLS。应用层 owner 过滤不是 `FORCE ROW LEVEL SECURITY`。
+- **运维：** 多节点高可用对象存储不在本仓库的适配器里。CI 的 MinIO 只证明 S3 兼容协议，不是生产集群。
+
+- [x] 测试四格式类型验证、伪 ZIP、空文件、超额、路径穿越、跨用户 uploadId、未完成上传不能下载。
+- [x] 运行 files integration，确认没有元数据/对象分离保障时 RED。
+- [x] 实现 S3 adapter、不可变对象键、配额、服务器哈希、回收站与受控下载；开发本地盘 adapter 不进入企业 HA。进程内替身覆盖这些行为。数据库 RLS 仍待 T04。
+- [x] 同测试 GREEN；模拟上传中断不产生已完成文件，校验内容哈希而非 ETag。
+- [x] 提交 `feat(files): add scoped immutable object storage`。
 
 ### T06 保存事务、历史版本和单写者租约
 
@@ -167,11 +174,13 @@ docs/dyoffice/               当前计划及 inventory/ evidence/ adr/
 
 **接口：** `commitRevision()`、`acquireLease()/renewLease()/takeoverLease()`；文件修改基于 T01 SaveInput。
 
-- [ ] 覆盖并发同基线、旧 leaseEpoch、幂等键不同内容、对象成功 DB 失败、响应丢失、旧保存响应覆盖新编辑状态。
-- [ ] 对应 unit/integration RED。
-- [ ] 实现 staged object -> DB CAS/revision/idempotency/outbox 单事务；冲突保留草稿，接管租约 fencing；恢复历史创建新版本。
-- [ ] GREEN；两个并发请求仅一条新当前版本；重试返回原 revision；无缺失对象引用。
-- [ ] 提交 `feat(files): make commits conflict-safe and idempotent`。
+**状态（2026-11-16）：** T06 行为已完成，证据见 [t06-revision-commit.md](evidence/t06-revision-commit.md)。保存先写不可变对象，再在单进程账本事务里提交 revision、幂等记录和 outbox；租约有获取、续期、接管和 45 秒过期。DOCX 段落保存走这组接口。实时 PostgreSQL 连接、RLS、多进程和 outbox 投递不在本任务内，原因写在证据页。没有表格编辑。
+
+- [x] 覆盖并发同基线、旧 leaseEpoch、幂等键不同内容、对象成功 DB 失败、响应丢失、旧保存响应覆盖新编辑状态。
+- [x] 对应 unit/integration 覆盖上述失败；客户端保存世代测试仍在 `save-generation`。
+- [x] 实现 staged object -> 账本 CAS/revision/idempotency/outbox 单事务；冲突保留草稿，接管租约 fencing；恢复历史创建新版本。开发账本代替尚未接入的 PostgreSQL 连接。
+- [x] GREEN；两个并发请求仅一条新当前版本；重试返回原 revision；无缺失对象引用。
+- [x] 提交 `feat(files): make commits conflict-safe and idempotent`。
 
 ### T07 DOCX 原生浏览器纵向闭环
 
@@ -226,6 +235,8 @@ docs/dyoffice/               当前计划及 inventory/ evidence/ adr/
 **依赖：** T07/T08。**文件：** `apps/web/src/editors/pdf-entry.tsx`、`worker/src/jobs/pdf-export.ts`、`test/e2e/pdf-roundtrip.spec.ts`；适配 `apps/pdf/src/renderer`。
 
 **接口：** `mountPdfEditor()`，能力区分阅读、批注、文本修改、页操作和导出。
+
+**状态（2026-11-16）：** 能力门已区分文本页、扫描页和空白页，并报告未嵌入字体与未验证签名，见 [t11-pdf-capabilities.md](evidence/t11-pdf-capabilities.md)。批注、改字、调页、脱敏仍被拒绝；覆盖文字不是删除原文；加密文件不返回页序。浏览器挂载、PDFium/WASM、CSP、真实改字和批注写入仍延期，原因见证据页。不依赖 T07 的 DOCX 挂载，也不走 T08 worker。
 
 - [ ] 测试真实文本流修改、批注、页序、密码文件、签名失效提示、缺字/字体、扫描页能力限制。
 - [ ] E2E RED；覆盖文字不等同于删除原文的安全性，脱敏能力单独标记。

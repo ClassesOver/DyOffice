@@ -123,8 +123,10 @@ WS 断线后手工编辑、HTTP 保存和普通 AI 流应继续可用；依赖�
 | --- | --- | --- |
 | T00 浏览器依赖边界与宿主盘点 | 部分实现；完整四格式适配审计待完成 | [宿主清单](inventory/host-dependencies.md) |
 | T01 BrowserHost 和 Agent SSE 客户端契约 | 基础契约/适配器已提交；尚未接入真实编辑器 | [T01 记录](evidence/t01-browser-host-checkpoint.md) |
-| T02 版本化 HTTP 与模块化 API 壳 | 只读文件接缝和 Fastify `buildApp` 壳已接入；开发入口仍是旧服务器，路由迁移和生产认证未完成 | [T02 模块化 API](evidence/t02-modular-api.md) · [文件读取](evidence/t02-file-read-checkpoint.md) |
+| T02 版本化 HTTP 与模块化 API | 开发入口已切到 Fastify；旧路由按模块接入并保持契约。仍是开发令牌服务器，不是生产登录 | [T02 模块化 API](evidence/t02-modular-api.md) · [文件读取](evidence/t02-file-read-checkpoint.md) |
 | T03a 本地账号存储与密码规则 | 原生 Argon2id、PostgreSQL 事务迁移和首个管理员 CLI 已实现，真实数据库/双初始化竞争测试与 Web 回归 CI 通过；泄露密码库与生产安全放行仍待完善 | [T03a 真实测试](evidence/t03a-real-identity-checkpoint.md) · [用户指南](../../apps/web/README.md) |
-| T03b–T26 企业完整交付 | 尚未验收 | [任务列表](implementation-plan.md) 与 [验收矩阵](acceptance-matrix.md) |
+| T05 本地不可变对象存储 | 内容寻址存储、回收站，以及开发令牌的上传和下载已落地；不是 S3 或 RLS | [T05 记录](evidence/t05-local-object-store.md) |
+| T06 保存事务、租约和历史版本 | 开发账本上的事务、历史、租约和 HTTP 保存行为已完成。实时数据库连接、RLS、多进程和 outbox 投递另有归属 | [T06 记录](evidence/t06-revision-commit.md) |
+| T03b–T04、T07–T26 企业完整交付 | 尚未验收。T03b/T03c 由其他进行中的变更负责 | [任务列表](implementation-plan.md) 与 [验收矩阵](acceptance-matrix.md) |
 
-DOCX 已能在浏览器中编辑并保存段落文本。保存使用单进程基线、租约和幂等检查，不是 PostgreSQL 版本事务，也不是完整 Docs 功能。XLSX、PPTX、PDF 仍只导入下载。既有单用户 Bearer + JSON 文件原型不允许用于生产。新客户端不得把 AI 写入或四格式原生编辑显示为已支持。
+DOCX 已能在浏览器中编辑并保存段落文本。保存先写入不可变对象，再由单进程版本账本提交基线、租约和幂等记录；PostgreSQL 表形在迁移 `0004_revisions.sql`，当前进程不连接数据库做版本提交。这不是完整 Docs 功能。XLSX、PPTX、PDF 仍只导入下载。既有单用户 Bearer + JSON 文件原型不允许用于生产。新客户端不得把 AI 写入或四格式原生编辑显示为已支持。

@@ -25,6 +25,7 @@ export interface DocxCommitInput {
 
 export interface HttpEditorHost extends BrowserHost {
   acquireLease(fileId: string): Promise<{ leaseEpoch: number }>
+  renewLease(fileId: string, leaseEpoch: number): Promise<{ leaseEpoch: number }>
   readDocx(fileId: string): Promise<DocxProjection>
   commitDocx(fileId: string, input: DocxCommitInput): Promise<RevisionRef>
 }
@@ -58,6 +59,11 @@ export function createHttpEditorHost(options: HttpFileHostOptions = {}): HttpEdi
     catch { throw hostError('INVALID_RESPONSE', 'JSON body') }
   }
   return Object.assign(host, {
+    async renewLease(fileId: string, leaseEpoch: number) {
+      const value = await request(`/api/v1/files/${encodeURIComponent(fileId)}/leases/renew`, 'POST', JSON.stringify({ leaseEpoch })) as { leaseEpoch?: unknown }
+      if (!value || typeof value.leaseEpoch !== 'number' || !Number.isSafeInteger(value.leaseEpoch) || value.leaseEpoch < 1) throw hostError('INVALID_RESPONSE', 'lease')
+      return { leaseEpoch: value.leaseEpoch }
+    },
     async acquireLease(fileId: string) {
       const value = await request(`/api/v1/files/${encodeURIComponent(fileId)}/lease`, 'POST', '{}') as { leaseEpoch?: unknown }
       if (!value || typeof value.leaseEpoch !== 'number' || !Number.isSafeInteger(value.leaseEpoch) || value.leaseEpoch < 1) throw hostError('INVALID_RESPONSE', 'lease')

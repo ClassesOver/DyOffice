@@ -5,7 +5,7 @@ on:
     branches: [feat/dyoffice-t03c-account-lifecycle]
     paths:
       - 'apps/web/server/auth/self-session-management*'
-      - 'apps/web/server/db/migrations/0005_session_security_events.sql'
+      - 'apps/web/server/db/migrations/0007_session_security_events.sql'
       - 'apps/web/test/self-session-management*'
       - 'apps/web/test/session-security-schema.test.mjs'
       - 'apps/web/test/integration/self-session-management.postgres.test.mjs'

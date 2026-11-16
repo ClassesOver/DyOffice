@@ -22,7 +22,7 @@ Ruling: add an immutable migration in this branch's existing `server/db/migratio
 
 ## Database migration
 
-`0005_session_security_events.sql` adds a composite unique identity on `(deployment_id,user_id,id)` in sessions and owner-bound audit FKs for both actor and target sessions. The DB rejects cross-owner audit references. Audit action/target/count shape is constrained. No plaintext session secrets are stored.
+`0007_session_security_events.sql` adds a composite unique identity on `(deployment_id,user_id,id)` in sessions and owner-bound audit FKs for both actor and target sessions. The DB rejects cross-owner audit references. Audit action/target/count shape is constrained. No plaintext session secrets are stored.
 
 No cascading deletion is configured. Session cleanup and audit archival must honor references. Production least-privilege/append-only grants, FORCE RLS, storage bounds and retention remain integration gates. Tests use a disposable privileged PostgreSQL instance, not proof of production RLS.
 

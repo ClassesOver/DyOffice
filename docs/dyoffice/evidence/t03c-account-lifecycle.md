@@ -7,7 +7,7 @@
 
 This branch adds an internal account lifecycle service, an additive database migration, focused tests, and a dedicated workflow. It does **not** mount any HTTP route, change Admin UI, relax the development server's production guard, or alter the Fastify entry, DOCX/other editors, source management, file ownership or revision code.
 
-Parent commits `a38adc8b` (another worker's IPv6 login budget correction) and `c2a211d3` (parent integration) were incorporated through non-forced merge commits, preserving their files unchanged. The only inherited authentication tests modified are the expected migration lists in `local-identity.test.mjs` and `local-login.postgres.test.mjs`: both now explicitly include `0003_account_lifecycle_audit.sql`. Previous migration bytes remain unchanged. No dependency or shared workflow was edited by this work.
+Parent commits `a38adc8b` (another worker's IPv6 login budget correction) and `c2a211d3` (parent integration) were incorporated through non-forced merge commits, preserving their files unchanged. The only inherited authentication tests modified are the expected migration lists in `local-identity.test.mjs` and `local-login.postgres.test.mjs`: both now explicitly include `0005_account_lifecycle_audit.sql` after the file and revision migrations. Previous migration bytes remain unchanged. No dependency or shared workflow was edited by this work.
 
 ## Implemented operations
 

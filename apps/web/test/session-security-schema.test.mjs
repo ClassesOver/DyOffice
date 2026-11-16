@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
-const source = await readFile(new URL('../server/db/migrations/0005_session_security_events.sql', import.meta.url), 'utf8').catch(error => { if (error.code === 'ENOENT') return ''; throw error })
+const source = await readFile(new URL('../server/db/migrations/0007_session_security_events.sql', import.meta.url), 'utf8').catch(error => { if (error.code === 'ENOENT') return ''; throw error })
 
 test('session security audit enforces owner-bound session references and action shape', () => {
   assert.match(source, /CREATE TABLE dyoffice_session_security_events/)

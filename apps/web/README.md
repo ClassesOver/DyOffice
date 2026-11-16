@@ -20,7 +20,7 @@ Open `http://127.0.0.1:3080` for the personal workspace and `/admin` for adminis
 ## Current implementation
 
 - Personal DOCX open/edit/save. The page edits plain paragraph, heading, and list text. Saves call GenOffice `docx-engine` so unchanged paragraphs, tables, pictures, styles, and headers stay in the original OOXML package. Complex paragraphs (tabs, fields, revisions, content controls) are shown and preserved, not rewritten as plain text.
-- In-process document revisions: a save names the base revision, lease epoch, and idempotency key. A stale base or lease returns 409 and keeps the draft. Repeating the same save returns the original revision. The previous bytes stay available at the old revision URL. This queue is single-process JSON state, not PostgreSQL CAS.
+- Document revisions: a save names the base revision, lease epoch, and idempotency key. The server writes the bytes to the local immutable object store, then commits the base revision, lease, idempotency record, and outbox entry in one in-process journal transaction. A stale base or lease returns 409 and keeps the draft. Repeating the same save returns the original revision. Restoring an older revision creates a new head. The journal is single-process and is the development stand-in for the PostgreSQL transaction in `server/db/migrations/0004_revisions.sql`. The Web process does not open PostgreSQL to commit revisions, and the journal does not enforce row-level security.
 - Personal file import/download restricted to DOCX, XLSX, PPTX and PDF. Only DOCX is editable.
 - Personal theme, language, author, autosave and assistant preferences.
 - HTTP data-source configuration with encrypted credentials.
@@ -32,7 +32,11 @@ The development token server refuses startup when `NODE_ENV=production`, before 
 
 ## Remaining implementation
 
-Mount the GenOffice Docs renderer (ribbon, pagination, comments, tracked changes, and selection) on this DOCX host instead of the paragraph surface. Then adapt XLSX, PPTX, and PDF the same way, reusing each native editor and keeping non-browser work behind authorized APIs. Model chat/tool execution, database connectors and query integration, source edit/delete/test UI, file folders/favorites/recent views, multi-user login, and deployment hardening are still open. Autosave uses the saved preference; the assistant preference is stored and not yet shown. The revision check above is the single-process bridge, not T06's PostgreSQL transaction.
+T05 object storage is complete for this repository. Personal objects can be staged, finished, downloaded, trashed, restored, and purged. The server checks SHA-256, enforces quota, expires abandoned uploads, and keeps a file row only after the object exists. An in-process client covers those rules in `npm run test:web`. A MinIO job, [dyoffice-t05-s3.yml](../../.github/workflows/dyoffice-t05-s3.yml), runs the same lifecycle against S3 when `DYOFFICE_S3_ENDPOINT` is set; the test skips when it is not. Row-level security remains T04. Multi-node highly available storage remains an operations concern. The older `/api/files` directory is the development-token prototype, not this store.
+
+A PDF capability gate reports page order, text versus scanned versus blank pages, unembedded fonts, and unverified signatures. It refuses annotation, text edit, page reorder, redaction, cover-text-as-deletion, and trusting a signature. Password-marked files are not readable. Browser PDF editing, PDFium, and WASM are not mounted. See `docs/dyoffice/evidence/t11-pdf-capabilities.md`.
+
+T06 save transactions, revision history, and single-writer leases are complete for this development server. The done and deferred checklist is in `docs/dyoffice/evidence/t06-revision-commit.md`. Mount the GenOffice Docs renderer (ribbon, pagination, comments, tracked changes, and selection) on this DOCX host instead of the paragraph surface. Then adapt the other formats the same way, reusing each native editor and keeping non-browser work behind authorized APIs. Model chat/tool execution, database connectors and query integration, source edit/delete/test UI, file folders/favorites/recent views, multi-user login, and deployment hardening are still open. Autosave uses the saved preference; the assistant preference is stored and not yet shown.
 
 Run `npm run test:web` for HTTP access-boundary and persistence tests. Runtime dependencies are scoped to this app so starting the Web server does not install or launch Electron.
 
@@ -106,12 +110,40 @@ native document round-trip acceptance.
 
 Run exactly one server process/application instance per data directory. The JSON store's queue protects only that instance; starting another instance on the same directory is unsupported and can overwrite metadata, even when both uploads return success. Do not use clustered workers, multiple replicas or rolling overlap with a shared prototype directory. There is currently no inter-process ownership lock.
 
-Admin updates apply supplied sections against the latest state inside the instance queue; omitted sections and omitted keys are preserved. Concurrent updates to the same section remain last-writer-wins, not revision-checked. This is not the planned PostgreSQL CAS, document revision, lease, or idempotency implementation (T04/T06/T12). DOCX saves replace the current bytes only after the base revision and lease match, and they archive the previous bytes. That check is local to one server process. It is not a multi-replica transaction, and a crash between the file rename and the JSON write can still leave the archive and the current bytes ahead of the idempotency record. Re-open the document before saving again in that case.
+Admin updates apply supplied sections against the latest state inside the instance queue; omitted sections and omitted keys are preserved. Concurrent updates to the same section remain last-writer-wins, not revision-checked. This is not PostgreSQL CAS for settings (T12) or row-level security (T04). DOCX saves publish a revision only after the immutable object is stored and the in-process journal accepts the base revision, lease epoch, and idempotency key. That journal is local to one server process. A crash after the object write and before the journal publish leaves an unreferenced object and no new revision; retry the same idempotency key. A crash after the journal publish and before the legacy current-file copy can be repaired by repeating that same request. Do not run two processes on one data directory.
 
 ### T02 请求与错误迁移接缝
 
 每个请求由服务端生成独立 `X-Request-ID`，不信任或回显客户端同名请求头。JSON 错误响应保持原有 HTTP 状态码、`application/json` 和 `error` 文案，增量提供 `type: about:blank`、`title`、`status`、`detail`、`requestId`；成功响应正文不变。错误中不包含请求 URL、查询参数或内部异常详情，500 继续返回通用文案。
 
-`buildApp` in `server/src/app.mjs` is a separate Fastify shell for the modular `/api/v1` migration. It serves live/ready probes, server-generated request IDs, Problem errors, static schemas, a single-process rate limit, and graceful close. Routes that are still owned by the legacy server return 501 from this shell. `dev:web` and `start:web` still boot `createApplication`; this shell is not production authentication.
+`dev:web` and `start:web` boot Fastify through `buildApp`. Preferences, admin configuration, data sources, files, DOCX editing, and static pages are registered as modules on that shell. Health probes use static schemas. Business bodies keep the existing module validators. The process rate limit and shutdown cover one process. `NODE_ENV=production` still refuses startup. This is not local-account login or resource isolation.
 
-此接缝不代表 T02 完成：旧文件、偏好、Admin 和 DOCX 路由尚未迁入 Fastify。未实现 T03 本地账号密码/服务端会话撤销，不能用它宣称正式登录或退出能力。
+
+## Original GenOffice shell entry
+
+Build first (`npm run build:web`), then `npm run start:web`. The start command now
+selects built assets by default. The workspace directly imports the original
+`apps/shell` AppFrame, Home, TabBar, locale, FileBadge assets, home/tabbar CSS and
+shared UI tokens. Desktop defaults are unchanged; optional Home and AppFrame slots
+provide the Web account area and DOM editor container instead of WebContentsView.
+
+This checkpoint restores the **entry shell**, not all four editor ribbons. The
+already-merged DOCX paragraph editor remains in a retained iframe; XLSX/PPTX/PDF
+native renderer migrations remain separate. Import, file listing and preferences
+use the existing authenticated Web API. New DOCX/XLSX/PPTX files use the original
+GenOffice blank templates. PDF creation and the desktop Ask entry are disabled.
+Stars are explicitly page-session-only until a persistent starred API exists.
+Unavailable desktop operations report unsupported rather than pretend to succeed.
+Admin retains a separate token and route; no Genspark account flow is invoked.
+
+Switching Home/document tabs retains each iframe. Closing tabs or exiting checks
+the child editor's dirty/saving/unknown state. Legacy sidebar, return and logout
+also check it; refresh uses beforeunload. Pending auto-save timers are disposed on
+confirmed discard, and stale saves do not redraw a newer screen.
+
+Verification: `test:shell` mounts the actual components in jsdom (not visual proof),
+`typecheck:shell` checks their real sources, and the `DyOffice original shell UI`
+workflow runs Chromium against real APIs, verifies import/open/tab return/theme/
+Admin separation and canceled dirty navigation, then uploads screenshots/traces.
+Local Chromium launch is blocked by this executor's socket restriction; visual
+acceptance must wait for that workflow, not be inferred from jsdom or Vite.

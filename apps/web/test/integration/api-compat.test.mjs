@@ -26,10 +26,11 @@ async function loadBuildApp() {
   }
 }
 
-test('development entry still boots the legacy token server', async () => {
+test('development entry boots the Fastify shell and still refuses production', async () => {
   const source = await readFile(new URL('../../server/index.mjs', import.meta.url), 'utf8')
-  assert.match(source, /createApplication/)
-  assert.equal(source.includes('buildApp'), false)
+  assert.match(source, /buildApp/)
+  assert.match(source, /Development token server is not allowed in production/)
+  assert.equal(source.includes('createApplication'), false)
 })
 
 test('legacy file, preference, and admin routes keep status codes and omit secrets', async (t) => {

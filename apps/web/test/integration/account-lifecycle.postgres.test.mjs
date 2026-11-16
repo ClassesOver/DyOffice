@@ -30,7 +30,7 @@ test('account lifecycle uses real PostgreSQL, Argon2id, sessions and CSRF', { ti
     await root.query(`CREATE SCHEMA "${schema}"`)
     pool = new pg.Pool({ connectionString, max: 8, options: `-c search_path=${schema},public`,
       connectionTimeoutMillis: 5000, statement_timeout: 20000 })
-    assert.deepEqual(await applyMigrations(pool), ['0001_identity.sql', '0002_login_rate_limits.sql', '0003_account_lifecycle_audit.sql','0004_self_password_change.sql','0005_session_security_events.sql'])
+    assert.deepEqual(await applyMigrations(pool), ['0001_identity.sql', '0002_login_rate_limits.sql', '0003_files.sql', '0004_revisions.sql', '0005_account_lifecycle_audit.sql', '0006_self_password_change.sql', '0007_session_security_events.sql'])
     assert.deepEqual(await applyMigrations(pool), [])
     const deploymentId = randomUUID()
     const hasher = createPasswordHasher({ maxConcurrent: 4 })

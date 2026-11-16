@@ -6,7 +6,7 @@
 
 ## 范围和并行开发约束
 
-本轮只新增 `password-change.mjs`、`password-change-http.mjs`、对应测试、`0004_self_password_change.sql` 和独立 CI。三个既有身份/登录/账号生命周期集成测试只更新了一行迁移清单。没有修改旧迁移内容、账号生命周期服务、Session 核心、Fastify 入口、编辑器、文件保存/回收站、数据源、UI、依赖清单或锁文件。
+本轮只新增 `password-change.mjs`、`password-change-http.mjs`、对应测试、`0006_self_password_change.sql` 和独立 CI。三个既有身份/登录/账号生命周期集成测试只更新了一行迁移清单。没有修改旧迁移内容、账号生命周期服务、Session 核心、Fastify 入口、编辑器、文件保存/回收站、数据源、UI、依赖清单或锁文件。
 
 代码以 PR #10 的 `2476c2693b296542d0d9f64603af37a73620497d` 为基线，用 expected SHA 校验后快速前进推送；没有强制推送、修改其他 worker 分支或执行合并。PR #12 的文件回收站不属于本轮范围。
 
