@@ -269,8 +269,8 @@ test('session expiry while finish reads the real object rolls back file and quot
   const upload = await f.files.stageUpload(f.alice.token, { name: 'expiry.docx', size: bytes.length })
   await f.files.receiveUpload(f.alice.token, upload.uploadId, bytes)
   const ready = deferred(), release = deferred()
-  const gated = createFileService({ transactions: f.transactions, objects: { ...f.objects, async readVerified(reference) {
-    const result = await f.objects.readVerified(reference)
+  const gated = createFileService({ transactions: f.transactions, objects: { ...f.objects, async verifyObject(reference) {
+    const result = await f.objects.verifyObject(reference)
     ready.resolve(); await release.promise
     return result
   } } })
@@ -294,8 +294,8 @@ test('upload expiry while finish verifies the object rolls back metadata and ret
   await f.files.receiveUpload(f.alice.token, upload.uploadId, bytes)
   await own(f, connection => connection.query("UPDATE uploads SET expires_at=clock_timestamp()+interval '500 milliseconds' WHERE deployment_id=$1 AND owner_id=$2 AND id=$3", [f.deploymentId,f.alice.user.id,upload.uploadId]))
   const ready = deferred(), release = deferred()
-  const gated = createFileService({ transactions: f.transactions, objects: { ...f.objects, async readVerified(reference) {
-    const result = await f.objects.readVerified(reference)
+  const gated = createFileService({ transactions: f.transactions, objects: { ...f.objects, async verifyObject(reference) {
+    const result = await f.objects.verifyObject(reference)
     ready.resolve(); await release.promise
     return result
   } } })
@@ -376,8 +376,8 @@ test('a finishing import holds authority through commit before account disable m
   const upload = await f.files.stageUpload(f.alice.token,{ name: 'commits-first.docx', size: bytes.length })
   await f.files.receiveUpload(f.alice.token,upload.uploadId,bytes)
   const ready = deferred(), release = deferred()
-  const gated = createFileService({ transactions: f.transactions, objects: { ...f.objects, async readVerified(reference) {
-    const result = await f.objects.readVerified(reference)
+  const gated = createFileService({ transactions: f.transactions, objects: { ...f.objects, async verifyObject(reference) {
+    const result = await f.objects.verifyObject(reference)
     ready.resolve(); await release.promise
     return result
   } } })

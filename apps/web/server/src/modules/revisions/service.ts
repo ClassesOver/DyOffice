@@ -84,7 +84,7 @@ export function createRevisionService({ transactions, objects, files, quotaBytes
         const file = await loadFile(connection,principal,fileId,false,'UPDATE')
         await assertLiveLease(connection,principal,fileId,epoch,upload.editor_id)
         if (file.current_revision !== base) throw authError(409)
-        await objects.readVerified({ key: objectKey(principal,upload.revision_id), size: upload.expected_size, sha256: upload.sha256 })
+        await objects.verifyObject({ key: objectKey(principal,upload.revision_id), size: upload.expected_size, sha256: upload.sha256 })
         const source = upload.restored_from ? 'restore' : 'save'
         await connection.query('INSERT INTO file_revisions(id,deployment_id,owner_id,file_id,object_key,sha256,size,source,parent_revision,restored_from) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)',[upload.revision_id,...scope(principal),fileId,objectKey(principal,upload.revision_id),upload.sha256,upload.expected_size,source,base,upload.restored_from])
         const changed = await connection.query('UPDATE files SET current_revision=$4,updated_at=clock_timestamp() WHERE deployment_id=$1 AND owner_id=$2 AND id=$3 AND current_revision=$5 RETURNING id',[...scope(principal),fileId,upload.revision_id,base])
