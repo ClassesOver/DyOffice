@@ -54,3 +54,15 @@ DYOFFICE_NATIVE_SHA256=<该二进制的实际 SHA-256>
 ## 持续回归
 
 GitHub Actions 增加独立 `native-sheets` 作业：Node 22、主机 PostgreSQL、Chromium、锁定的 Rust 1.93.0，构建原编辑器与 gateway，运行真实原生 Sheets 专项套件、原 XLSX gateway 和名称计算回归。该作业不依赖 Docker。新增工作流覆盖断言已通过；远端作业结果需以 PR checks 为准。
+
+## Runtime 合并与 CI 收口（2026-11-16）
+
+合并 `feat/t08-docker-free-closure`（其 11399380 已完整并入 `feat/dyoffice-web` 线）：TS 服务端为权威，PDF 能力门与原 DOCX 测试保留，browser-host 会话实现收拢至 `session-files.ts` 并保留 `saveSheets` 幂等回执。合并修复：
+
+- `tsconfig.docs.json` 显式包含 `apps/sheets/src/renderer/env.d.ts`，`Window.desktopApi` 全局声明对 native-docx 类型检查可见（此前 TS2551 连锁 TS7006）。
+- CI native-sheets 作业按 workspace Playwright 版本安装 Chromium：根仓与 `apps/web` 的 Playwright 版本不同步时，仅按根仓安装会缺少测试进程实际解析的浏览器构建。安装步骤现同时覆盖两者。
+- 边界扫描类型擦除采用保守语义：仅整句 type-only 声明（含 import-equals）被擦除；named-type 导入保留并报违规，与 T08 基线测试一致。
+- `WorkbookVisuals` 图表编辑器范围对象改为显式回退赋值，消除双类型检查配置下的 TS2783。
+- 回环测试在点击保存前轮询依赖公式（B2=42.5）落定：保存载荷经 `readCells` 活读 Univer 模型公式缓存，异步重算窗口内点击会把旧缓存 25 固化进提交字节。
+
+结果：远端 CI 10/10 全绿（含 native-sheets 7m35s、native-docx 22m37s、boundary-check 6m29s）。外部 Excel 复开核验仍未执行，T09 保持草稿直至该人工门禁完成。
