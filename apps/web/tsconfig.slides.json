@@ -1,0 +1,5 @@
+{
+  "extends": "../slides/tsconfig.json",
+  "compilerOptions": { "allowImportingTsExtensions": true, "noEmit": true },
+  "include": ["src/editors/slides-entry.tsx", "src/editors/slides-bridge.ts", "src/editors/messages.ts", "../slides/src/renderer/**/*.d.ts", "../../packages/pptx-render/src/**/*.d.ts"]
+}

@@ -97,6 +97,8 @@
   },
   "include": [
     "src/native/pptx-session.ts",
+    "src/native/pptx-session-child.ts",
+    "src/native/pptx-session-host.ts",
     "../../slides/tests/pptx-session.test.ts",
     "../../slides/tests/web-worker-roundtrip.test.ts",
     "../../../packages/pptx-ops/tests/settext-paragraph-structure.test.ts",

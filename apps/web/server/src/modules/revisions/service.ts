@@ -107,6 +107,24 @@ export function createRevisionService({ transactions, objects, files, quotaBytes
         return { fileId, revision: upload.revision_id, sha256: upload.sha256, size: upload.expected_size }
       })
     },
+    /** Internal PPTX draft adoption proof. Not a browser route: the upload ID
+     * was retained by the server that staged the export, never supplied by UI. */
+    async verifyUploadCommit(token: FileCredential, fileId: string, input: { uploadId: string; revision: string; baseRevision: string }) {
+      const id = uuid(fileId), uploadId = uuid(input.uploadId), revision = uuid(input.revision), base = uuid(input.baseRevision)
+      return run(token, 'files:read', async (connection, principal) => {
+        if (principal.job) throw authError(409)
+        const file = await loadFile(connection, principal, id)
+        if (file.current_revision !== revision) throw authError(409)
+        const result = await connection.query(
+          `SELECT 1 FROM uploads u JOIN revision_commits c
+           ON c.deployment_id=u.deployment_id AND c.owner_id=u.owner_id AND c.upload_id=u.id
+           WHERE u.deployment_id=$1 AND u.owner_id=$2 AND u.file_id=$3 AND u.id=$4
+           AND u.revision_id=$5 AND u.base_revision=$6 AND u.session_id=$7
+           AND u.state='committed' AND c.revision_id=u.revision_id AND c.base_revision=u.base_revision`,
+          [...scope(principal), id, uploadId, revision, base, principal.sessionId])
+        if (result.rowCount !== 1) throw authError(409)
+      })
+    },
     async getRevision(token: FileCredential, fileId: string, revision: string) {
       const id = uuid(fileId), rev = uuid(revision)
       return run(token,'files:read',async (connection, principal) => {

@@ -292,6 +292,44 @@ export function createSessionFileHost({ fetchImpl = fetch, editorId = crypto.ran
         throw error
       } finally { ctx.preparing = false; emit() }
     },
+    // Slides save: the server exports the generation-pinned pptx session and
+    // stages it through the same T06 upload/receipt protocol as sheets. The
+    // request is the renderer session pointer {revision, generation}; the
+    // server resolves it against its in-process session and returns the
+    // prepared draft receipt. Never replays while a receipt is unconfirmed.
+    async saveSlides(fileId: string, request: unknown) {
+      const id = uuid(fileId), ctx = liveContext(id), lease = ctx.lease, base = ctx.revision.revision
+      if (ctx.pending || ctx.preparing) throw hostError('UNAVAILABLE','unconfirmed save')
+      if (!lease) throw hostError('CONFLICT','lease')
+      ctx.preparing = true; ctx.status = 'saving'; emit()
+      let committing = false
+      try {
+        const snapshot = structuredClone(request)
+        const draft = await mutation(`/api/v1/files/${id}/slides/uploads`,'POST',{ baseRevision: base,leaseEpoch: lease.leaseEpoch,editorId: editor,request: snapshot })
+        const uploadId = uuid(draft?.uploadId)
+        if (draft.baseRevision !== base || draft.leaseEpoch !== lease.leaseEpoch || typeof draft.sha256 !== 'string' || !/^[a-f0-9]{64}$/.test(draft.sha256) || !Number.isSafeInteger(draft.size) || draft.size < 1 || draft.size > 32 * 1024 * 1024) throw hostError('INVALID_RESPONSE','prepared deck')
+        if (context(id) !== ctx || ctx.revision.revision !== base || ctx.lease?.leaseEpoch !== lease.leaseEpoch) throw hostError('CONFLICT','changed save authority')
+        // Changed zip parts are optional (the slides save service does not diff them yet);
+        // the receipt itself stays the T06 idempotent commit.
+        const touchedEntries = Array.isArray(draft.touchedEntries) && draft.touchedEntries.length <= 256 && draft.touchedEntries.every((name: unknown) => typeof name === 'string' && name.length <= 1024) ? [...draft.touchedEntries as string[]] : []
+        committing = true
+        const saved = await commit(id,ctx,{ touchedEntries, input: Object.freeze({fileId: id,uploadId,baseRevision: base,leaseEpoch: lease.leaseEpoch,idempotencyKey: crypto.randomUUID()}),sha256: draft.sha256,size: draft.size })
+        return {...saved,touchedEntries}
+      } catch (error) {
+        if (!committing) {
+          const code = (error as HostError).code
+          ctx.status = code === 'UNAUTHORIZED' ? 'unauthorized' : code === 'CONFLICT' ? 'conflict' : 'idle'
+          if (code === 'UNAUTHORIZED' || code === 'CONFLICT') revokeLease(id,ctx)
+        }
+        throw error
+      } finally { ctx.preparing = false; emit() }
+    },
+    async reconcileSlides(fileId: string) {
+      const id = uuid(fileId), ctx = context(id), pending = ctx.pending
+      if (!pending) throw hostError('INVALID_REVISION','slides receipt')
+      const saved = await commit(id,ctx,pending)
+      return {...saved,touchedEntries:[...(pending.touchedEntries ?? [])]}
+    },
     async save(fileId: string, bytes: Uint8Array) {
       const id = uuid(fileId), ctx = context(id)
       if (ctx.pending) { const prior = ctx.pending; const recovered = await commit(id,ctx,prior); if (await digest(bytes) === prior.sha256) return recovered }
