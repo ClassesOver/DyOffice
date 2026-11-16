@@ -153,3 +153,14 @@ test('uses require export conditions for CommonJS dependencies', async t => {
   assert.equal(result.violations.length, 1)
   assert.match(result.violations[0], /unsafe.js:1:.*node:fs/)
 })
+
+test('erases only whole type declarations, retaining named-type and mixed runtime imports',()=>{
+ assert.deepEqual(inspectSource("import type {X} from 'node:fs'; export type {Y} from 'electron'; import type Z = require('node:path')",'entry.ts'),[])
+ for(const source of ["import {type X} from 'node:fs'","import {type X,value} from 'node:fs'","import 'node:fs'"])assert.equal(inspectSource(source,'entry.ts').length,1)
+})
+test('resolves wildcard workspace exports and still rejects real transitive Node imports',async t=>{
+ const root=await mkdtemp(join(tmpdir(),'dyoffice-pattern-'));t.after(()=>rm(root,{recursive:true,force:true}))
+ const files={'apps/web/src/main.ts':"import '@genoffice/shared/gateway/csv-limits'",'packages/shared/package.json':JSON.stringify({name:'@genoffice/shared',exports:{'./*':'./src/*.ts'}}),'packages/shared/src/gateway/csv-limits.ts':"import 'node:fs'"}
+ for(const [path,content] of Object.entries(files)){await mkdir(dirname(join(root,path)),{recursive:true});await writeFile(join(root,path),content)}
+ const result=await checkWebBoundaries(root);assert.equal(result.violations.length,1);assert.match(result.violations[0],/csv-limits.ts.*node:fs/)
+})

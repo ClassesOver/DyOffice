@@ -7,6 +7,7 @@ const contentTypes = {
   '.html':'text/html; charset=utf-8', '.js':'text/javascript; charset=utf-8',
   '.css':'text/css; charset=utf-8', '.png':'image/png', '.jpg':'image/jpeg',
   '.jpeg':'image/jpeg', '.svg':'image/svg+xml', '.webp':'image/webp',
+  '.docx':'application/octet-stream', '.xlsx':'application/octet-stream', '.pptx':'application/octet-stream',
   '.ico':'image/x-icon', '.woff':'font/woff', '.woff2':'font/woff2',
   '.ttf':'font/ttf', '.wasm':'application/wasm',
 };
@@ -28,6 +29,7 @@ export async function createStaticAssets({ assetMode = 'source', assetDirectory 
   } else {
     const manifest = JSON.parse(await readFile(await resolvedFile('.vite/manifest.json'), 'utf8'));
     if (!manifest || Array.isArray(manifest) || typeof manifest !== 'object' || !Object.keys(manifest).length) throw new Error('Invalid Web build manifest');
+    if (manifest['legacy.html']?.isEntry) allowed.add('legacy.html');
     const add = name => {
       if (typeof name !== 'string' || !/^assets\/[A-Za-z0-9_./-]+$/.test(name) || name.split('/').some(part => !part || part === '.' || part === '..') || !contentTypes[extname(name)]) throw new Error('Unsafe Web build asset');
       allowed.add(name);
