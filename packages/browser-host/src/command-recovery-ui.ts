@@ -52,6 +52,18 @@ function result(
     throw Error('Invalid recovery receipt')
   return structuredClone(r)
 }
+/** Stop waiting without assuming that the underlying operation was rolled back. */
+function untilStopped<T>(operation: Promise<T>, signal: AbortSignal): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const stop = () => reject(Error('Recovery request stopped'))
+    signal.addEventListener('abort', stop, { once: true })
+    operation.then(
+      (value) => { signal.removeEventListener('abort', stop); resolve(value) },
+      (error) => { signal.removeEventListener('abort', stop); reject(error) },
+    )
+    if (signal.aborted) stop()
+  })
+}
 /** Fixed same-origin requests; no editor identity, execution, retries or takeover. */
 export function createHttpCommandRecoveryClient({
   getCsrfToken,
@@ -74,12 +86,13 @@ export function createHttpCommandRecoveryClient({
       throw Error('Invalid recovery digest')
     const ctrl = new AbortController()
     pending.add(ctrl)
+    let received: Response | undefined
     try {
-      const csrf = await getCsrfToken()
+      const csrf = await untilStopped(getCsrfToken(), ctrl.signal)
       if (typeof csrf !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(csrf))
         throw Error('Invalid CSRF token')
       if (disposed || ctrl.signal.aborted) throw Error('Recovery request stopped')
-      const response = await fetchImpl('/api/v1/command-recovery/' + action, {
+      const response = await untilStopped(fetchImpl('/api/v1/command-recovery/' + action, {
         method: 'POST',
         mode: 'same-origin',
         redirect: 'error',
@@ -92,7 +105,11 @@ export function createHttpCommandRecoveryClient({
           commandId,
           ...(action === 'abandon' ? { observedDigest } : {}),
         }),
-      })
+      }).then((response) => {
+        received = response
+        if (ctrl.signal.aborted) void response.body?.cancel().catch(() => {})
+        return response
+      }), ctrl.signal)
       if (disposed || ctrl.signal.aborted) throw Error('Recovery request stopped')
       if (!response.ok) {
         const e = Object.assign(
@@ -116,7 +133,7 @@ export function createHttpCommandRecoveryClient({
         const decoder = new TextDecoder('utf-8', { fatal: true })
         let size = 0
         for (;;) {
-          const chunk = await reader.read()
+          const chunk = await untilStopped(reader.read(), ctrl.signal)
           if (disposed || ctrl.signal.aborted) throw Error('Recovery request stopped')
           if (chunk.done) break
           size += chunk.value.byteLength
@@ -125,7 +142,7 @@ export function createHttpCommandRecoveryClient({
         }
         text += decoder.decode()
       } finally {
-        await reader.cancel().catch(() => {})
+        void reader.cancel().catch(() => {})
         reader.releaseLock()
       }
       if (disposed || ctrl.signal.aborted) throw Error('Recovery request stopped')
@@ -134,6 +151,8 @@ export function createHttpCommandRecoveryClient({
         throw Error('Unconfirmed abandonment')
       return parsed
     } finally {
+      if (received?.body && !received.body.locked)
+        void received.body.cancel().catch(() => {})
       pending.delete(ctrl)
     }
   }

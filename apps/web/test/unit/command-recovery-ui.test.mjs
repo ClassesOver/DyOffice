@@ -288,3 +288,72 @@ test('standalone CSRF bootstrap also refuses redirects and cross-origin mode', a
   )
   assert.match(source, /fetch\('\/api\/v1\/auth\/csrf',\{mode:'same-origin',redirect:'error'/)
 })
+
+test('cancel settles stalled CSRF and fences its late token without sending', async () => {
+  let token, calls = 0
+  const client = mod.createHttpCommandRecoveryClient({
+    getCsrfToken: () => new Promise(r => { token = r }),
+    fetchImpl: async () => { calls++; return Response.json(row) },
+  })
+  const pending = client.lookup(fileId, commandId)
+  const outcome = pending.then(() => 'success', () => 'stopped')
+  client.cancelPending()
+  await tick()
+  assert.equal(await Promise.race([outcome, Promise.resolve('pending')]), 'stopped')
+  token('c'.repeat(43))
+  await tick()
+  assert.equal(calls, 0)
+})
+
+test('dispose settles stalled response read even if stream cancellation never settles', async () => {
+  let cancelled = 0
+  const client = mod.createHttpCommandRecoveryClient({
+    getCsrfToken: async () => 'c'.repeat(43),
+    fetchImpl: async () => new Response(new ReadableStream({
+      cancel() { cancelled++; return new Promise(() => {}) },
+    }), { headers: { 'content-type': 'application/json' } }),
+  })
+  const pending = client.lookup(fileId, commandId)
+  const outcome = pending.then(() => 'success', () => 'stopped')
+  await tick()
+  client.dispose()
+  await tick()
+  assert.equal(await Promise.race([outcome, Promise.resolve('pending')]), 'stopped')
+  assert.equal(cancelled, 1)
+})
+
+test('cancel settles stalled mutation fetch and cancels late body without replay', async () => {
+  let reply, calls = 0, cancelled = 0
+  const client = mod.createHttpCommandRecoveryClient({
+    getCsrfToken: async () => 'c'.repeat(43),
+    fetchImpl: () => { calls++; return new Promise(r => { reply = r }) },
+  })
+  const pending = client.abandon(fileId, commandId, digest)
+  const outcome = pending.then(() => 'success', () => 'stopped')
+  await tick()
+  client.cancelPending()
+  await tick()
+  assert.equal(await Promise.race([outcome, Promise.resolve('pending')]), 'stopped')
+  reply(new Response(new ReadableStream({ cancel() { cancelled++ } }), {
+    headers: { 'content-type': 'application/json' },
+  }))
+  await tick()
+  assert.equal(calls, 1)
+  assert.equal(cancelled, 1)
+})
+
+test('cancellation between response arrival and await continuation releases body', async () => {
+  let reply, cancelled = 0
+  const raw = new Promise(r => { reply = r })
+  const client = mod.createHttpCommandRecoveryClient({
+    getCsrfToken: async () => 'c'.repeat(43), fetchImpl: () => raw,
+  })
+  const pending = client.lookup(fileId, commandId)
+  await tick()
+  raw.then(() => client.cancelPending())
+  reply(new Response(new ReadableStream({ cancel() { cancelled++ } }), {
+    headers: { 'content-type': 'application/json' },
+  }))
+  await assert.rejects(pending, /stopped/)
+  assert.equal(cancelled, 1)
+})
