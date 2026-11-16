@@ -2,9 +2,9 @@
 /// OOXML parts: a chart part, a drawing part (created or extended), the
 /// worksheet/drawing relationships, and the [Content_Types].xml overrides.
 
-import { buildChartCategoryXml, defaultChartSeriesColor } from './xlsx-chart'
-import { ensureRelationshipNamespace } from './xlsx-namespace'
-import { nextFreeRelationshipId } from './xlsx-sheets'
+import { buildChartCategoryXml, defaultChartSeriesColor } from './xlsx-chart.ts'
+import { ensureRelationshipNamespace } from './xlsx-namespace.ts'
+import { nextFreeRelationshipId } from './xlsx-sheets.ts'
 
 export class VisualAddError extends Error {}
 

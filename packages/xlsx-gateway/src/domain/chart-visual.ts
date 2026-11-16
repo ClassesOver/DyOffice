@@ -1,6 +1,6 @@
 import * as numfmt from 'numfmt'
 
-import { columnLabel, parseAddress, parseRange, rangeCellCount } from './cell-address'
+import { columnLabel, parseAddress, parseRange, rangeCellCount } from './cell-address.ts'
 
 /// Chart visual built from a data range. Structurally a subset of the shared
 /// WorkbookVisualObject so both the demo snapshot and the lazy edit journal

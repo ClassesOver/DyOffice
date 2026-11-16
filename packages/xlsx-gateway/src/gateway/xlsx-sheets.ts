@@ -1,5 +1,5 @@
-import { FORMULA_REFERENCE_PATTERN, qualifierMatches } from './xlsx-structure'
-import { ensureRelationshipNamespace } from './xlsx-namespace'
+import { FORMULA_REFERENCE_PATTERN, qualifierMatches } from './xlsx-structure.ts'
+import { ensureRelationshipNamespace } from './xlsx-namespace.ts'
 
 /// '>' is legal inside XML attribute values (sheet names can carry it), so
 /// element scans consume quoted runs atomically instead of using [^>]*.

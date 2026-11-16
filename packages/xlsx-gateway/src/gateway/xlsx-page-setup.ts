@@ -3,8 +3,8 @@
 /// attributes), and maintains the sheet-scoped `_xlnm.Print_Area` defined
 /// name in workbook.xml. Untouched attributes and elements stay verbatim.
 
-import { columnIndex, parseRange } from '../domain/cell-address'
-import { parseSheetElements } from './xlsx-sheets'
+import { columnIndex, parseRange } from '../domain/cell-address.ts'
+import { parseSheetElements } from './xlsx-sheets.ts'
 
 export class PageSetupError extends Error {}
 

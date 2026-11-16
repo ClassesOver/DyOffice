@@ -1,10 +1,10 @@
 import type { AgentMessage, AgentToolCall, AgentToolDef } from '@genoffice/agent-core'
-import { aiFetch } from '../fetch'
-import { httpBodyDetail } from '../http-error'
-import { gensparkAttributionHeaders, opencodeSessionHeaders } from '../providers'
-import type { AiChatResponse, AiProviderConfig, AiTokenUsage } from '../types'
-import { createStreamWatchdog, type StreamWatchdog } from '../watchdog'
-import { toGeminiSchema } from './gemini-schema'
+import { aiFetch } from '../fetch.ts'
+import { httpBodyDetail } from '../http-error.ts'
+import { gensparkAttributionHeaders, opencodeSessionHeaders } from '../providers.ts'
+import type { AiChatResponse, AiProviderConfig, AiTokenUsage } from '../types.ts'
+import { createStreamWatchdog, type StreamWatchdog } from '../watchdog.ts'
+import { toGeminiSchema } from './gemini-schema.ts'
 import {
   endpointUrl,
   isPlainObject,
@@ -16,7 +16,7 @@ import {
   throwIfToolCountOverBudget,
   usageCount,
   type StreamCallbacks,
-} from './shared'
+} from './shared.ts'
 
 export const GEMINI_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta'
 

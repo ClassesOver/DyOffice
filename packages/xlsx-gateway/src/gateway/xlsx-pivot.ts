@@ -3,9 +3,9 @@
 /// consumes. Anything outside the supported envelope lands in `unsupported`
 /// (with a reason) instead of producing a silently wrong refresh.
 
-import type { PivotFilterDef } from '../domain/pivot-filters'
-import { parsePivotFormula } from '../domain/pivot-formula'
-import { isValidGrouping, type PivotFieldGrouping } from '../domain/pivot-grouping'
+import type { PivotFilterDef } from '../domain/pivot-filters.ts'
+import { parsePivotFormula } from '../domain/pivot-formula.ts'
+import { isValidGrouping, type PivotFieldGrouping } from '../domain/pivot-grouping.ts'
 import {
   isPivotAggregation,
   PIVOT_BASE_ITEM_NEXT,
@@ -14,12 +14,12 @@ import {
   showDataAsNeedsBaseField,
   showDataAsNeedsBaseItem,
   type PivotShowDataAs,
-} from '../domain/pivot-value-modes'
+} from '../domain/pivot-value-modes.ts'
 
 export class PivotParseError extends Error {}
 
-export type { PivotFieldGrouping } from '../domain/pivot-grouping'
-export type { PivotFilterDef, PivotLabelFilter, PivotValueFilter } from '../domain/pivot-filters'
+export type { PivotFieldGrouping } from '../domain/pivot-grouping.ts'
+export type { PivotFilterDef, PivotLabelFilter, PivotValueFilter } from '../domain/pivot-filters.ts'
 
 export type PivotSharedItem = string | number | boolean | null
 
@@ -55,7 +55,7 @@ export interface PivotLayoutLine {
   readonly dataField: number
 }
 
-export type { PivotShowDataAs } from '../domain/pivot-value-modes'
+export type { PivotShowDataAs } from '../domain/pivot-value-modes.ts'
 
 export interface PivotDataField {
   readonly name: string

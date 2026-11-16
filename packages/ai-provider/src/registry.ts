@@ -1,18 +1,18 @@
-import { ANTHROPIC_BASE_URL } from './protocols/anthropic'
-import { GEMINI_BASE_URL } from './protocols/gemini'
-import { AI_PROVIDERS, DEEPSEEK_V41_FLASH, GENSPARK_LLM_BASE_URLS } from './providers'
+import { ANTHROPIC_BASE_URL } from './protocols/anthropic.ts'
+import { GEMINI_BASE_URL } from './protocols/gemini.ts'
+import { AI_PROVIDERS, DEEPSEEK_V41_FLASH, GENSPARK_LLM_BASE_URLS } from './providers.ts'
 import {
   customProtocolBaseUrl,
   normalizeCustomProfile,
   resolveCustomProfile,
-} from './custom-profile'
-import { appendPath, normalizeBaseUrl, stripTrailingV1 } from './url-compose'
-import { modelHasFixedSampling, modelLacksVision } from './model-heuristics'
-import type { AiProviderConfig, AiProviderId, AiProviderMeta } from './types'
+} from './custom-profile.ts'
+import { appendPath, normalizeBaseUrl, stripTrailingV1 } from './url-compose.ts'
+import { modelHasFixedSampling, modelLacksVision } from './model-heuristics.ts'
+import type { AiProviderConfig, AiProviderId, AiProviderMeta } from './types.ts'
 
 /** The shipped model-family guesses live in ./model-heuristics; re-exported for callers. */
-export { normalizeBaseUrl } from './url-compose'
-export { modelEchoesReasoning, modelHasFixedSampling, modelLacksVision } from './model-heuristics'
+export { normalizeBaseUrl } from './url-compose.ts'
+export { modelEchoesReasoning, modelHasFixedSampling, modelLacksVision } from './model-heuristics.ts'
 
 /** Wire protocols every provider maps onto, including the official Codex app-server bridge. */
 export type AiProtocol =

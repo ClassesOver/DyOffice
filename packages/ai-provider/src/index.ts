@@ -25,7 +25,7 @@ export type {
   AiTokenUsage,
   GenSparkAccountStatus,
   LegacyAiSettings,
-} from './types'
+} from './types.ts'
 export {
   AI_PROVIDERS,
   DEFAULT_MAX_OUTPUT_TOKENS,
@@ -38,7 +38,7 @@ export {
   defaultAiSettings,
   maxOutputTokensOf,
   resolveAiSettings,
-} from './providers'
+} from './providers.ts'
 export {
   activeCustomEndpoint,
   customEndpointLabel,
@@ -47,16 +47,16 @@ export {
   resolveCustomEndpoints,
   selectCustomEndpoint,
   upsertCustomEndpoint,
-} from './custom-endpoints'
+} from './custom-endpoints.ts'
 export {
   AI_CUSTOM_PROTOCOLS,
   declaredModelProfile,
   normalizeCustomProfile,
   resolveCustomProfile,
-} from './custom-profile'
-export type { ResolvedCustomProfile } from './custom-profile'
-export { resolveProfileCredential } from './credential-env'
-export type { EnvLookup } from './credential-env'
+} from './custom-profile.ts'
+export type { ResolvedCustomProfile } from './custom-profile.ts'
+export { resolveProfileCredential } from './credential-env.ts'
+export type { EnvLookup } from './credential-env.ts'
 export {
   AI_MEDIA_PROVIDERS,
   GEMINI_MEDIA_BASE_URL,
@@ -71,39 +71,39 @@ export {
   providerHasCapability,
   resolveAiMediaSettings,
   videoAnalysisAvailable,
-} from './media'
-export type { MediaCapability } from './media'
+} from './media.ts'
+export type { MediaCapability } from './media.ts'
 export {
   AI_SEARCH_PROVIDERS,
   activeSearchProvider,
   defaultAiSearchSettings,
   resolveAiSearchSettings,
-} from './search-settings'
+} from './search-settings.ts'
 export {
   analyzeMediaWithProvider,
   generateImageWithProvider,
   sniffImageMime,
   testMediaProvider,
-} from './media-protocols'
+} from './media-protocols.ts'
 export type {
   AnalyzeMediaInput,
   ByokMediaProviderId,
   GenerateImageInput,
   MediaBlob,
-} from './media-protocols'
+} from './media-protocols.ts'
 export {
   AI_PROVIDER_ADAPTERS,
   getProviderAdapter,
   modelLacksVision,
   normalizeBaseUrl,
-} from './registry'
+} from './registry.ts'
 export type {
   AiProtocol,
   ProviderAdapter,
   ProviderCapabilities,
   ResolvedEndpoint,
-} from './registry'
-export { sanitizeAiSettings, sanitizeCliPath, validCliPath } from './ai-settings-guard'
+} from './registry.ts'
+export { sanitizeAiSettings, sanitizeCliPath, validCliPath } from './ai-settings-guard.ts'
 export {
   isThinkingEffort,
   resolveThinkingEffort,
@@ -111,20 +111,20 @@ export {
   THINKING_LEVELS,
   type ThinkingEffort,
   type ThinkingShape,
-} from './thinking-effort'
-export { chatForProvider } from './chat'
-export { setAiUserAgent, setRescueFetch } from './fetch'
-export { isAiNetworkError } from './network-error'
-export { isAiOverloadedError } from './overload-error'
-export { isAiRegionBlockedError } from './region-error'
-export { parseOutputCapRejection } from './output-cap'
-export { AiCreditsError, sseLines, streamForProvider } from './stream'
-export type { StreamCallbacks } from './stream'
+} from './thinking-effort.ts'
+export { chatForProvider } from './chat.ts'
+export { setAiUserAgent, setRescueFetch } from './fetch.ts'
+export { isAiNetworkError } from './network-error.ts'
+export { isAiOverloadedError } from './overload-error.ts'
+export { isAiRegionBlockedError } from './region-error.ts'
+export { parseOutputCapRejection } from './output-cap.ts'
+export { AiCreditsError, sseLines, streamForProvider } from './stream.ts'
+export type { StreamCallbacks } from './stream.ts'
 export {
   AI_CHAT_RESPONSE_TIMEOUT_MS,
   AI_CONNECT_TIMEOUT_MS,
   AI_IDLE_TIMEOUT_MS,
   AiTimeoutError,
   createStreamWatchdog,
-} from './watchdog'
-export type { StreamWatchdog } from './watchdog'
+} from './watchdog.ts'
+export type { StreamWatchdog } from './watchdog.ts'

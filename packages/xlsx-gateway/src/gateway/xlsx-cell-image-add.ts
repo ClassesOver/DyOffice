@@ -16,7 +16,7 @@ import {
   relativeTarget,
   relsPathFor,
   type MutablePackage,
-} from './xlsx-drawing-add'
+} from './xlsx-drawing-add.ts'
 
 export class CellImageSaveError extends Error {}
 

@@ -1,8 +1,8 @@
 /// x14 sparkline writer: appends sparkline groups to a worksheet's extLst
 /// (creating extLst / the x14 ext as needed). Existing groups stay verbatim.
 
-import { parseAddress } from '../domain/cell-address'
-import { MAX_GRID_COLUMNS, MAX_GRID_ROWS } from '../shared/grid-bounds'
+import { parseAddress } from '../domain/cell-address.ts'
+import { MAX_GRID_COLUMNS, MAX_GRID_ROWS } from '../shared/grid-bounds.ts'
 
 export class SparklineAddError extends Error {}
 

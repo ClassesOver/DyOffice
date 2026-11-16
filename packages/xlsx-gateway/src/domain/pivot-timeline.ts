@@ -1,7 +1,7 @@
 /// Pure-function model for pivot timelines: a month-granularity date-range
 /// filter over one pivot dimension field. The range maps to a member set and
 /// rides the same hidden-items mechanism as slicers (applyPivotSlicer).
-import { parseDateParts } from './pivot-grouping'
+import { parseDateParts } from './pivot-grouping.ts'
 
 /// Months count monotonically from year 0 (`year * 12 + month - 1`), so ranges
 /// compare and iterate as plain integers across year boundaries.

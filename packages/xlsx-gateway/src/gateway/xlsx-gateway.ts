@@ -11,16 +11,16 @@ import type {
   ChangePlan,
   WorkbookSnapshot,
   WorksheetState,
-} from '../domain/workbook.types'
+} from '../domain/workbook.types.ts'
 import type {
   WorkbookChartEdit,
   WorkbookRichRun,
   WorkbookStyleEdit,
   WorkbookVisualEdit,
-} from '../shared/edit-schemas'
-import { spillsDynamicArray, withFutureFunctionMarkers } from './future-functions'
-import { decodeXlsxEscapes, decodeXmlText, encodeXlsxEscapes } from './xlsx-escapes'
-import { MINIMAL_STYLESHEET_XML } from './xlsx-default-styles'
+} from '../shared/edit-schemas.ts'
+import { spillsDynamicArray, withFutureFunctionMarkers } from './future-functions.ts'
+import { decodeXlsxEscapes, decodeXmlText, encodeXlsxEscapes } from './xlsx-escapes.ts'
+import { MINIMAL_STYLESHEET_XML } from './xlsx-default-styles.ts'
 import {
   applyWorkbookLinkBreak,
   orderedExternalLinkParts,
@@ -28,10 +28,10 @@ import {
   transformChartForLinkBreak,
   transformSheetForLinkBreak,
   transformWorkbookForLinkBreak,
-} from './xlsx-external-links'
-import { applyChartEdit } from './xlsx-chart'
-import { applyVisualEdits } from './xlsx-drawing-edit'
-import { applyCellImageAdditions } from './xlsx-cell-image-add'
+} from './xlsx-external-links.ts'
+import { applyChartEdit } from './xlsx-chart.ts'
+import { applyVisualEdits } from './xlsx-drawing-edit.ts'
+import { applyCellImageAdditions } from './xlsx-cell-image-add.ts'
 import {
   applyVisualAdditions,
   type ChartAdd,
@@ -41,7 +41,7 @@ import {
   resolveChartPivotSource,
   resolveRelTarget,
   type ShapeAdd,
-} from './xlsx-drawing-add'
+} from './xlsx-drawing-add.ts'
 import {
   applyTableAdditions,
   areasOverlap,
@@ -49,31 +49,31 @@ import {
   parseRef,
   type TableArea,
   type TableStyleOptions,
-} from './xlsx-table-add'
+} from './xlsx-table-add.ts'
 import {
   applyTableEdits,
   sheetTableParts,
   type LocatedTable,
   type TableEdit,
-} from './xlsx-table-edit'
-import type { PivotFilterDef } from '../domain/pivot-filters'
+} from './xlsx-table-edit.ts'
+import type { PivotFilterDef } from '../domain/pivot-filters.ts'
 import {
   applyPivotAdditions,
   type PivotAddGrouping,
   type PivotAddRowLine,
   type PivotValueSpec,
-} from './xlsx-pivot-add'
-import type { SheetFilterState } from './xlsx-filter'
+} from './xlsx-pivot-add.ts'
+import type { SheetFilterState } from './xlsx-filter.ts'
 import {
   applyFilterState,
   applyRowVisibilityState,
   applyTableFilterState,
   FilterEditError,
-} from './xlsx-filter'
-import { normalizeOoxmlPartPrefix } from './xlsx-namespace'
-import { resolvedStyleEntries } from './xlsx-style-entries'
-import { escapeRegExp } from './xlsx-sheets'
-import type { SheetAllocation, SheetEditPlan, SheetElement } from './xlsx-sheets'
+} from './xlsx-filter.ts'
+import { normalizeOoxmlPartPrefix } from './xlsx-namespace.ts'
+import { resolvedStyleEntries } from './xlsx-style-entries.ts'
+import { escapeRegExp } from './xlsx-sheets.ts'
+import type { SheetAllocation, SheetEditPlan, SheetElement } from './xlsx-sheets.ts'
 import {
   addWorksheetOverride,
   addWorksheetRelationship,
@@ -105,51 +105,51 @@ import {
   stripPageSetupRelIds,
   validateSheetName,
   worksheetReferencesSheet,
-} from './xlsx-sheets'
-import type { StructuralOp } from './xlsx-structure'
-import { applyCfRules, type CfWireRule } from './xlsx-cf'
+} from './xlsx-sheets.ts'
+import type { StructuralOp } from './xlsx-structure.ts'
+import { applyCfRules, type CfWireRule } from './xlsx-cf.ts'
 import {
   applyDefinedNamesState,
   DefinedNameError,
   type DefinedNamesState,
-} from './xlsx-defined-names'
-import { applyDvRules, type DvCellArea, type DvWireRule } from './xlsx-dv'
-import { applyPageSetupState, applyPrintAreas, type SheetPageSetupState } from './xlsx-page-setup'
+} from './xlsx-defined-names.ts'
+import { applyDvRules, type DvCellArea, type DvWireRule } from './xlsx-dv.ts'
+import { applyPageSetupState, applyPrintAreas, type SheetPageSetupState } from './xlsx-page-setup.ts'
 import {
   applyProtectedRanges,
   applySheetProtection,
   applyWorkbookProtection,
   type ProtectedRangeState,
   type SheetProtectionWrite,
-} from './xlsx-protection'
-import { applyTabColor } from './xlsx-tab-color'
-import { applyThemeState, type WorkbookThemeState } from './xlsx-theme'
-import { applySheetNotes, type SheetNote } from './xlsx-notes'
+} from './xlsx-protection.ts'
+import { applyTabColor } from './xlsx-tab-color.ts'
+import { applyThemeState, type WorkbookThemeState } from './xlsx-theme.ts'
+import { applySheetNotes, type SheetNote } from './xlsx-notes.ts'
 import {
   applyRedactionNameMirror,
   applyRedactionPart,
   rekeyRedactionStates,
   type SheetRedactionState,
-} from './xlsx-redaction'
+} from './xlsx-redaction.ts'
 import {
   applySparklineAdditions,
   type SheetSparklineAddition,
   type SparklineGroupAdd,
-} from './xlsx-sparkline'
+} from './xlsx-sparkline.ts'
 import {
   applySlicerState,
   SlicerAddError,
   type SlicerRemovalWrite,
   type SlicerStateWrite,
   type SlicerControlWrite,
-} from './xlsx-slicer'
-import { setPivotRefreshOnLoad } from './xlsx-pivot'
-import { applyPivotLayoutExpansions, type PivotRefreshUpdate } from './xlsx-pivot-expand'
+} from './xlsx-slicer.ts'
+import { setPivotRefreshOnLoad } from './xlsx-pivot.ts'
+import { applyPivotLayoutExpansions, type PivotRefreshUpdate } from './xlsx-pivot-expand.ts'
 import {
   applyHyperlinkEdits,
   ensureRelationshipNamespace,
   type HyperlinkEdit,
-} from './xlsx-hyperlinks'
+} from './xlsx-hyperlinks.ts'
 import {
   applyStructuralOps,
   inferWorksheetAddresses,
@@ -164,8 +164,8 @@ import {
   shiftVmlObjectAnchors,
   StructuralShiftError,
   type TableColumnInsertion,
-} from './xlsx-structure'
-import { StylesheetEditor } from './xlsx-styles'
+} from './xlsx-structure.ts'
+import { StylesheetEditor } from './xlsx-styles.ts'
 
 /** Shared with the CLI's pre-open check so both layers accept the same files. */
 export const XLSX_ZIP_LIMITS = {
@@ -175,7 +175,7 @@ export const XLSX_ZIP_LIMITS = {
 } as const
 const MAX_ENTRY_COUNT = XLSX_ZIP_LIMITS.maxParts
 const MAX_UNCOMPRESSED_BYTES = XLSX_ZIP_LIMITS.maxTotalBytes
-import { MAX_GRID_COLUMNS, MAX_GRID_ROWS } from '../shared/grid-bounds'
+import { MAX_GRID_COLUMNS, MAX_GRID_ROWS } from '../shared/grid-bounds.ts'
 
 export { MAX_GRID_COLUMNS, MAX_GRID_ROWS }
 
@@ -319,7 +319,11 @@ class PackageEditor {
   private readonly removed = new Set<string>()
   private readonly addedPaths = new Set<string>()
 
-  constructor(private readonly source: EntrySource) {}
+  private readonly source: EntrySource
+
+  constructor(source: EntrySource) {
+    this.source = source
+  }
 
   async paths(): Promise<readonly string[]> {
     const base = (await this.source.paths()).filter((path) => !this.removed.has(path))
@@ -950,15 +954,15 @@ export interface SheetPivotAddition {
   readonly values: readonly PivotValueSpec[]
 }
 
-export type { PivotRefreshUpdate } from './xlsx-pivot-expand'
-export { PivotExpandError } from './xlsx-pivot-expand'
-export type { SheetSparklineAddition } from './xlsx-sparkline'
+export type { PivotRefreshUpdate } from './xlsx-pivot-expand.ts'
+export { PivotExpandError } from './xlsx-pivot-expand.ts'
+export type { SheetSparklineAddition } from './xlsx-sparkline.ts'
 export {
   SlicerAddError,
   parseSlicerState,
   SLICER_REL_TYPE,
   type SlicerPartState,
-} from './xlsx-slicer'
+} from './xlsx-slicer.ts'
 
 /// Renderer-facing slicer state: control writes addressed by sheet NAME (the
 /// main process resolves the session's sheet ids; the planner resolves the

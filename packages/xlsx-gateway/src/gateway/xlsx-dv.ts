@@ -7,7 +7,7 @@
 /// instead, paired with nothing in the legacy section — the fallback shape
 /// Excel itself writes for those rules.
 
-import { MAX_GRID_COLUMNS, MAX_GRID_ROWS } from '../shared/grid-bounds'
+import { MAX_GRID_COLUMNS, MAX_GRID_ROWS } from '../shared/grid-bounds.ts'
 
 export class DvEditError extends Error {}
 

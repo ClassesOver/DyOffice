@@ -1,4 +1,4 @@
-import { chartDataFromValues, type ChartGridValue, type ParsedChartData } from './chart-visual'
+import { chartDataFromValues, type ChartGridValue, type ParsedChartData } from './chart-visual.ts'
 
 /// Excel's Insert → Recommended Charts, heuristic edition: rank chart kinds
 /// by the shape of the selected data. Pure so it unit-tests without Univer.

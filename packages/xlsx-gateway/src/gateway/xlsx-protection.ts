@@ -1,7 +1,7 @@
 /// Worksheet protection: `<sheetProtection>` with Excel's permission flags
 /// and password hash. Also: workbook structure protection
 /// (`<workbookProtection>`) and allow-edit ranges (`<protectedRanges>`).
-import type { SheetPasswordHash } from './xlsx-protection-hash'
+import type { SheetPasswordHash } from './xlsx-protection-hash.ts'
 
 export class SheetProtectionError extends Error {}
 

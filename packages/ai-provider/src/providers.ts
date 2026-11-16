@@ -1,8 +1,8 @@
-import { normalizeCustomProfile } from './custom-profile'
-import { resolveCustomEndpoints } from './custom-endpoints'
-import { defaultAiMediaSettings, resolveAiMediaSettings } from './media'
-import { defaultAiSearchSettings, resolveAiSearchSettings } from './search-settings'
-import type { AiProviderId, AiProviderMeta, AiSettings, LegacyAiSettings } from './types'
+import { normalizeCustomProfile } from './custom-profile.ts'
+import { resolveCustomEndpoints } from './custom-endpoints.ts'
+import { defaultAiMediaSettings, resolveAiMediaSettings } from './media.ts'
+import { defaultAiSearchSettings, resolveAiSearchSettings } from './search-settings.ts'
+import type { AiProviderId, AiProviderMeta, AiSettings, LegacyAiSettings } from './types.ts'
 
 /**
  * Genspark server-side LLM proxy endpoints. All three protocols share the

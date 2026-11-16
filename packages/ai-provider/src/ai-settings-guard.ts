@@ -15,16 +15,16 @@ import { statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 
-import { normalizeCustomProfile } from './custom-profile'
-import { isThinkingEffort } from './thinking-effort'
-import { AI_PROVIDER_ADAPTERS, normalizeBaseUrl } from './registry'
+import { normalizeCustomProfile } from './custom-profile.ts'
+import { isThinkingEffort } from './thinking-effort.ts'
+import { AI_PROVIDER_ADAPTERS, normalizeBaseUrl } from './registry.ts'
 import type {
   AiCustomEndpoint,
   AiCustomProfile,
   AiProviderConfig,
   AiProviderId,
   AiSettings,
-} from './types'
+} from './types.ts'
 
 const PROVIDER_IDS = Object.keys(AI_PROVIDER_ADAPTERS) as AiProviderId[]
 

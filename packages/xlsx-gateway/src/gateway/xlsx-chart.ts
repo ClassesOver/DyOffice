@@ -1,4 +1,4 @@
-import type { WorkbookChartEdit } from '../shared/edit-schemas'
+import type { WorkbookChartEdit } from '../shared/edit-schemas.ts'
 
 /// Surgical edits to a chart part (xl/charts/chartN.xml): title text, chart
 /// type conversion within the axis-based family, and series solid colors.

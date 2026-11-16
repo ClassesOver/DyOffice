@@ -12,11 +12,11 @@
 // failure, which is right for a chat turn and wrong for a background probe of a
 // local server that is very often simply not running. The user agent it would
 // have added is still set, since gateways reject a bare `node`.
-import { customProtocolBaseUrl } from './custom-profile'
-import type { AiCustomModelProfile, AiCustomProtocol, CodexModelCatalog } from './types'
-import { withUserAgent } from './fetch'
-import { endpointUrl, readCappedResponseText } from './protocols/shared'
-import { createStreamWatchdog } from './watchdog'
+import { customProtocolBaseUrl } from './custom-profile.ts'
+import type { AiCustomModelProfile, AiCustomProtocol, CodexModelCatalog } from './types.ts'
+import { withUserAgent } from './fetch.ts'
+import { endpointUrl, readCappedResponseText } from './protocols/shared.ts'
+import { createStreamWatchdog } from './watchdog.ts'
 
 /** a server this slow is not usable for chat either, and the settings field must stay responsive */
 const REQUEST_TIMEOUT_MS = 5000

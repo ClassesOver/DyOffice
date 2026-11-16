@@ -1,6 +1,6 @@
-import { allowedByValueFilter, matchesLabelFilter, type PivotFilterDef } from './pivot-filters'
-import { evaluatePivotFormula, parsePivotFormula } from './pivot-formula'
-import { groupValue, type PivotFieldGrouping } from './pivot-grouping'
+import { allowedByValueFilter, matchesLabelFilter, type PivotFilterDef } from './pivot-filters.ts'
+import { evaluatePivotFormula, parsePivotFormula } from './pivot-formula.ts'
+import { groupValue, type PivotFieldGrouping } from './pivot-grouping.ts'
 import {
   defaultDataFieldCaption,
   normalizePivotPageFields,
@@ -9,8 +9,8 @@ import {
   showDataAsNeedsBaseItem,
   type PivotAggregation,
   type PivotShowDataAs,
-} from './pivot-value-modes'
-import type { AddPivotOperation } from './workbook-dsl'
+} from './pivot-value-modes.ts'
+import type { AddPivotOperation } from './workbook-dsl.ts'
 
 export type PivotScalar = string | number | boolean | null
 
@@ -151,7 +151,7 @@ export interface ResolvedShowAsBase {
   readonly baseItemIndex: number | undefined
 }
 
-export { AGG_CAPTIONS } from './pivot-value-modes'
+export { AGG_CAPTIONS } from './pivot-value-modes.ts'
 
 export const PIVOT_SOURCE_ROW_LIMIT = 10_001
 export const PIVOT_SOURCE_COL_LIMIT = 200

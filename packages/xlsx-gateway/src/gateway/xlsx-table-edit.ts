@@ -1,5 +1,5 @@
-import { relsPathFor, resolveRelTarget, type MutablePackage } from './xlsx-drawing-add'
-import { escapeRegExp, removeRelationshipById } from './xlsx-sheets'
+import { relsPathFor, resolveRelTarget, type MutablePackage } from './xlsx-drawing-add.ts'
+import { escapeRegExp, removeRelationshipById } from './xlsx-sheets.ts'
 import {
   TABLE_REL_TYPE,
   areaToRef,
@@ -11,7 +11,7 @@ import {
   parseRef,
   type TableArea,
   type TableStyleOptions,
-} from './xlsx-table-add'
+} from './xlsx-table-add.ts'
 
 /// Table Design changes to tables already in the file: the table part is
 /// rewritten in place (name, ref, columns, header/totals bands, style info)

@@ -1,6 +1,6 @@
-import { MAX_GRID_COLUMNS, MAX_GRID_ROWS } from '../shared/grid-bounds'
-import { columnIndex, columnLabel } from './cell-address'
-import type { StructuralOperation } from './workbook-dsl'
+import { MAX_GRID_COLUMNS, MAX_GRID_ROWS } from '../shared/grid-bounds.ts'
+import { columnIndex, columnLabel } from './cell-address.ts'
+import type { StructuralOperation } from './workbook-dsl.ts'
 
 /**
  * Rewrites A1-style references in a formula after rows/columns shift, the way
