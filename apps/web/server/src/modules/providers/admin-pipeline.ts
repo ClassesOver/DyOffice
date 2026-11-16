@@ -69,7 +69,7 @@ export function createAdminProviderPipeline({transactions,keyring,profiles,timeo
  async function lookup(token:string,modelId:string):Promise<Permit>{
   if(disposed)throw fail()
   return transactions.withPrincipalTransaction({kind:'session',token},async(c,p)=>{
-   if(!p.roles.includes('config_admin'))throw fail()
+   if(disposed||!p.roles.includes('config_admin'))throw fail()
    const identity={deploymentId:p.deploymentId,userId:p.userId,sessionId:p.sessionId}
    await c.query("SELECT set_config('dyoffice.global_session_hash',$1,true),set_config('dyoffice.global_idle_ms',$2,true)",[tokenHash(token),String(transactions.sessionIdleMs)])
    await c.query('SELECT pg_advisory_xact_lock_shared(hashtextextended($1,0))',['dyoffice:global-config:'+p.deploymentId])
@@ -147,5 +147,5 @@ export function createAdminProviderPipeline({transactions,keyring,profiles,timeo
    }
   },
  },{timeoutMs,maxActive:1})
- return {turns,transportActiveCount:transport.activeCount,dispose(){disposed=true;for(const c of active)c.abort();for(const key of Object.values(keys))key.fill(0)}}
+ return {turns,transportActiveCount:transport.activeCount,dispose(){disposed=true;turns.dispose();for(const c of active)c.abort();for(const key of Object.values(keys))key.fill(0)}}
 }

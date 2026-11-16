@@ -42,12 +42,20 @@ function normalize(event: TurnEvent): TurnEvent {
 }
 export function createProviderTurns<P extends TurnPermit>(deps: TurnDependencies<P>, {timeoutMs = 120_000,maxActive = 16,cancelTimeoutMs = 10_000,maxOutputBytes = 4 * 1024 * 1024}: {timeoutMs?: number;maxActive?: number;cancelTimeoutMs?: number;maxOutputBytes?: number} = {}) {
   if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 2_147_483_647 || !Number.isSafeInteger(maxActive) || maxActive < 1 || !Number.isSafeInteger(cancelTimeoutMs) || cancelTimeoutMs < 1 || cancelTimeoutMs > 2_147_483_647 || !Number.isSafeInteger(maxOutputBytes) || maxOutputBytes < 1) throw new Error('Invalid AI turn limits')
+  let disposed = false
+  const cancellationStops = new Set<() => void>()
   const all = new Set<AbortController>()
   const active = new Map<string,AbortController>()
   const cancellationLookups = new Set<Promise<TurnIdentity>>()
   return {
     activeCount: () => all.size,
+    dispose() {
+      disposed = true
+      for (const controller of all) controller.abort(fail('AI turn unavailable'))
+      for (const stop of cancellationStops) stop()
+    },
     async run(input: {token:string;modelId:string;turnId:string;request:unknown;signal?:AbortSignal}, emit:(event:TurnEvent)=>void|Promise<void>) {
+      if (disposed) throw fail('AI turn unavailable')
       if (!validId(input.turnId) || !validId(input.modelId) || typeof input.token !== 'string') throw fail('Invalid AI request')
       const {token,modelId,turnId} = input
       const request = snapshot(input.request)
@@ -116,26 +124,30 @@ export function createProviderTurns<P extends TurnPermit>(deps: TurnDependencies
       }
     },
     async cancel(token:string,turnId:string) {
+      if (disposed) throw fail('AI turn unavailable')
       if (!validId(turnId)) return false
       if (typeof token !== 'string') throw fail('AI turn unavailable')
       if (cancellationLookups.size >= maxActive) throw fail('AI cancellation capacity reached')
-      const lookup = Promise.resolve().then(()=>deps.identity(token))
+      const lookup = Promise.resolve().then(()=>{if(disposed)throw fail('AI turn unavailable');return deps.identity(token)})
       cancellationLookups.add(lookup)
       // A timed-out lookup still owns its slot until the dependency actually settles.
       void lookup.then(()=>cancellationLookups.delete(lookup),()=>cancellationLookups.delete(lookup))
       let deadline: ReturnType<typeof setTimeout> | undefined
+      let stop!: () => void
+      const shutdown = new Promise<never>((_,reject)=>{stop=()=>reject(fail('AI turn unavailable'));cancellationStops.add(stop)})
       const expired = new Promise<never>((_resolve,reject)=>{
         deadline = setTimeout(()=>reject(fail('AI cancellation timed out')),cancelTimeoutMs)
       })
       try {
-        const identity = await Promise.race([lookup,expired])
+        const identity = await Promise.race([lookup,expired,shutdown])
+        if (disposed) throw fail('AI turn unavailable')
         const controller = active.get(identityKey(identity)+':'+turnId)
         if (!controller) return false
         controller.abort(fail('AI turn cancelled'))
         return true
       } catch (error) {
         throw error instanceof TurnError ? error : fail('AI turn unavailable')
-      } finally { clearTimeout(deadline) }
+      } finally { clearTimeout(deadline); cancellationStops.delete(stop) }
     },
   }
 }
