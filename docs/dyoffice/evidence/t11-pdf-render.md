@@ -31,3 +31,19 @@ The file first failed because the viewer module did not exist. After the mount, 
 | Annotation writing | Deferred. The next T11 slice |
 | Real text-stream editing | Deferred. No write path yet |
 | Glyph coverage for missing fonts | Deferred. The font dictionary check remains structural |
+
+## Review hardening and limits
+
+The viewer and extraction helper configure packed PDF.js CMaps; a real Type0
+`UniGB-UCS2-H` fixture extracts `中文`. Same-origin CMap serving only accepts
+installed `.bcmap` basenames and verifies realpath confinement. Failed document
+loading destroys the PDF.js task; failed rendering clears partial output.
+The viewer rejects inputs above 64 MiB, more than 100 pages, a page above 16M
+pixels, or retained pages above 64M pixels before allocating the next canvas.
+These are allocation guards, not a parser sandbox or CPU deadline. The internal
+PDFium regression helper is not an HTTP API and must not be exposed to arbitrary
+uploads without independent worker/resource isolation.
+
+This is a new read-only PDF.js surface, not reuse of the complete native GenOffice
+PDF editor/ribbon. Unchanged-byte comparison is not edited-document roundtrip
+acceptance. CJK extraction does not prove glyph coverage or visual font parity.

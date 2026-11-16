@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto'
+import { dirname, join, sep } from 'node:path'
 import { readFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { PDF_OPEN_OPTIONS } from '../../../src/editors/pdf-csp.ts'
@@ -71,7 +72,7 @@ async function withDocument(pdfium, bytes, fn) {
 
 async function pageText(bytes) {
   const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs')
-  const task = pdfjs.getDocument({ data: Uint8Array.from(bytes), ...PDF_OPEN_OPTIONS })
+  const task = pdfjs.getDocument({ data: Uint8Array.from(bytes), ...PDF_OPEN_OPTIONS, cMapUrl: join(dirname(require.resolve('pdfjs-dist/package.json')), 'cmaps') + sep, cMapPacked: true, standardFontDataUrl: join(dirname(require.resolve('pdfjs-dist/package.json')), 'standard_fonts') + sep })
   try {
     const doc = await task.promise
     const texts = []

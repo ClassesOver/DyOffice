@@ -1,0 +1,75 @@
+name: DyOffice personal session management
+
+on:
+  push:
+    branches: [feat/dyoffice-web]
+    paths:
+      - 'apps/web/server/auth/self-session-management*'
+      - 'apps/web/server/db/migrations/0007_session_security_events.sql'
+      - 'apps/web/test/self-session-management*'
+      - 'apps/web/test/session-security-schema.test.mjs'
+      - 'apps/web/test/integration/self-session-management.postgres.test.mjs'
+      - '.github/workflows/dyoffice-self-sessions.yml'
+  pull_request:
+    paths:
+      - 'apps/web/server/auth/**'
+      - 'apps/web/server/db/**'
+      - 'apps/web/test/self-session-management*'
+      - 'apps/web/test/session-security-schema.test.mjs'
+      - 'apps/web/test/integration/self-session-management.postgres.test.mjs'
+      - 'apps/web/package*.json'
+      - '.github/workflows/dyoffice-self-sessions.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dyoffice-self-sessions-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  self-sessions:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: dyoffice_test
+          POSTGRES_PASSWORD: local-ci-only-not-for-production
+          POSTGRES_DB: dyoffice_sessions_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U dyoffice_test -d dyoffice_sessions_test"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 2
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 22
+      - name: Syntax and focused owner-session unit/HTTP tests
+        run: |
+          node --check apps/web/server/auth/self-session-management.mjs
+          node --check apps/web/server/auth/self-session-management-http.mjs
+          node --check apps/web/test/integration/self-session-management.postgres.test.mjs
+          node --test apps/web/test/self-session-management.test.mjs apps/web/test/self-session-management-http.test.mjs apps/web/test/session-security-schema.test.mjs
+      - name: Install workspace dependencies without launching Electron
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Install locked Web dependencies with native Argon2id
+        run: npm ci --prefix apps/web --workspaces=false --include=dev --no-audit --no-fund
+      - name: Real PostgreSQL owner isolation, pagination, revocation, races and audit rollback
+        env:
+          DYOFFICE_TEST_DATABASE_URL: postgresql://dyoffice_test:local-ci-only-not-for-production@localhost:5432/dyoffice_sessions_test
+        run: node --test apps/web/test/integration/self-session-management.postgres.test.mjs
+      - name: Web API regressions
+        run: npm run test:web
+      - name: Web typecheck and production build smoke
+        run: |
+          npm run typecheck:web
+          npm run test:web:build
+      - name: Whitespace checks
+        run: git diff --check HEAD^

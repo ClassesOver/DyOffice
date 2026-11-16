@@ -18,19 +18,27 @@ function pdfjs(): Promise<Pdfjs> {
 
 /** Draw each page into the host. Annotation, text edit, reorder, and redaction are not offered. */
 export async function mountPdfEditor(host: HTMLElement, bytes: Uint8Array) {
+  if (bytes.byteLength > 64 * 1024 * 1024) throw new Error('PDF_RENDER_LIMIT')
   const lib = await pdfjs()
   const task = lib.getDocument({
     data: bytes.slice(),
     ...PDF_OPEN_OPTIONS,
+    cMapUrl: new URL('/pdfjs/cmaps/', location.origin).href,
+    cMapPacked: true,
     standardFontDataUrl: new URL('/pdfjs/standard_fonts/', location.origin).href,
   })
-  const doc = await task.promise
   host.replaceChildren()
   const pages: { page: number, width: number, height: number, text: string }[] = []
   try {
+    const doc = await task.promise
+    if (doc.numPages > 100) throw new Error('PDF_RENDER_LIMIT')
+    let totalPixels = 0
     for (let number = 1; number <= doc.numPages; number += 1) {
       const page = await doc.getPage(number)
       const viewport = page.getViewport({ scale: 1 })
+      const pixels = Math.ceil(viewport.width) * Math.ceil(viewport.height)
+      totalPixels += pixels
+      if (!Number.isFinite(pixels) || viewport.width <= 0 || viewport.height <= 0 || pixels > 16_000_000 || totalPixels > 64_000_000) throw new Error('PDF_RENDER_LIMIT')
       const canvas = document.createElement('canvas')
       canvas.className = 'pdf-page'
       canvas.width = Math.floor(viewport.width)
@@ -46,6 +54,9 @@ export async function mountPdfEditor(host: HTMLElement, bytes: Uint8Array) {
       host.append(figure)
       pages.push({ page: number, width: viewport.width, height: viewport.height, text })
     }
+  } catch (error) {
+    host.replaceChildren()
+    throw error
   } finally {
     await task.destroy()
   }

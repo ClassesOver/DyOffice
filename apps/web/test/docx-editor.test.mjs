@@ -55,7 +55,8 @@ test('docx-engine text edit keeps bold, untouched paragraphs, tables, styles and
   const projected = await projectDocx(bytes)
   assert.equal(projected.find(block => block.text === 'Hello').editable, true)
   assert.equal(projected.find(block => block.text.includes('Tabbed')).editable, false)
-  assert.equal(projected.find(block => block.type === 'table').editable, false)
+  assert.deepEqual(projected.find(block => block.type === 'table').cells, [['CellKeep']])
+  assert.equal(projected.find(block => block.type === 'table').editable, true)
   const edited = await applyDocxTextEdits(bytes, projected.map(block => (
     block.text === 'Hello' ? { docxIndex: block.docxIndex, text: 'Hello there' } : { docxIndex: block.docxIndex }
   )))
@@ -240,4 +241,29 @@ test('edited and inserted text never writes characters that are illegal in XML 1
   assert.deepEqual(illegal, [])
   assert.match(xml, /ABCDE 😀/)
   assert.match(xml, /newpara/)
+})
+
+test('a plain table cell is rewritten in place and the package reopens with the new text', async () => {
+  const { bytes, styles, header } = await sampleDocx()
+  const projected = await projectDocx(bytes)
+  const table = projected.find(block => block.type === 'table')
+  assert.deepEqual(table.cells, [['CellKeep']])
+  const edited = await applyDocxTextEdits(bytes, projected.map(block => (
+    block.type === 'table' ? { docxIndex: block.docxIndex, cells: [['CellEdited']] } : { docxIndex: block.docxIndex }
+  )))
+  const again = await projectDocx(edited)
+  assert.deepEqual(again.find(block => block.type === 'table').cells, [['CellEdited']])
+  assert.equal(again.some(block => block.text === 'Keep me'), true)
+  const saved = Buffer.from(edited)
+  assert.equal(await part(saved, 'word/styles.xml'), styles)
+  assert.equal(await part(saved, 'word/header1.xml'), header)
+  const xml = await part(saved, 'word/document.xml')
+  assert.match(xml, /<w:tbl[\s>]/)
+  assert.match(xml, /<w:tc[\s>]/)
+  assert.match(xml, /CellEdited/)
+  assert.equal(xml.includes('CellKeep'), false)
+  assert.match(xml, /Keep me/)
+  await assert.rejects(applyDocxTextEdits(bytes, projected.map(block => (
+    block.type === 'table' ? { docxIndex: block.docxIndex, text: 'flattened' } : { docxIndex: block.docxIndex }
+  ))), error => error.publicCode === 'INVALID_DOCUMENT')
 })
