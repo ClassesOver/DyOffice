@@ -124,3 +124,12 @@ steps were skipped. Rerun the exact published candidate before T01 acceptance.
 Four-editor feature completion, authenticated event dispatch, durable save
 semantics and approval execution are later task gates. Types or DTO projections
 do not prove those paths are implemented or authorized.
+
+### Refreshed onto merged PDF target
+
+After #29 merged, rebased the candidate tree onto target
+`9410065e1cfb3be421c30b9e3a846c5477dbb606`. Its exact base tree
+`b6623ccd0a18bafa4b31a5f67946f49c6701ac97` was independently matched before
+applying only these eight T01 files. Fresh verification: host contracts 17/17,
+`typecheck:web` exit 0, Web API 198 pass / 1 existing skip. This base does not yet
+contain the pending #21 runtime, whose separate combination is recorded above.
