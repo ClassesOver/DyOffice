@@ -29,7 +29,10 @@ export async function createStaticAssets({ assetMode = 'source', assetDirectory 
   } else {
     const manifest = JSON.parse(await readFile(await resolvedFile('.vite/manifest.json'), 'utf8'));
     if (!manifest || Array.isArray(manifest) || typeof manifest !== 'object' || !Object.keys(manifest).length) throw new Error('Invalid Web build manifest');
-    if (manifest['legacy.html']?.isEntry) allowed.add('legacy.html');
+    // Identical MPA inputs share a chunk, so Vite may omit the HTML entry from its manifest.
+    // Allow only this explicit built page, still checked for existence and realpath confinement.
+    try { await resolvedFile('legacy.html'); allowed.add('legacy.html'); }
+    catch (error) { if (error.code !== 'ENOENT') throw error; }
     const add = name => {
       if (typeof name !== 'string' || !/^assets\/[A-Za-z0-9_./-]+$/.test(name) || name.split('/').some(part => !part || part === '.' || part === '..') || !contentTypes[extname(name)]) throw new Error('Unsafe Web build asset');
       allowed.add(name);

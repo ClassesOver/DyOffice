@@ -19,7 +19,7 @@ test('Web-only production build emits both pages with loadable assets', async ()
     await new Promise(resolve => server.once('listening', resolve));
     const address = server.address();
     const origin = `http://127.0.0.1:${address.port}`;
-    for (const page of ['', 'admin', 'admin.html', 'index.html']) {
+    for (const page of ['', 'admin', 'admin.html', 'index.html', 'legacy.html']) {
       const response = await fetch(`${origin}/${page}`);
       assert.equal(response.status, 200);
       assert.equal(new URL(response.url).pathname, `/${page}`);

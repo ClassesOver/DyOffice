@@ -29,6 +29,8 @@ test('original shell chrome, real import/open/return, theme and independent Admi
  await page.locator('.tab-item').nth(1).locator('.tab-close').click();
  await expect(page.locator('.tab-item')).toHaveCount(2);
  await page.locator('.tab-item').first().click();await expect(page.locator('.home')).toBeVisible();await expect(frame).toBeHidden();
+ await expect(page.locator('.home').getByText('blank.docx',{exact:true}).first()).toBeVisible();
+ await page.screenshot({path:'test-results/genoffice-web-home-with-document.png',fullPage:true});
  await page.locator('.tab-item').nth(1).click();await expect(frame).toBeVisible();
  await page.locator('.tab-item').first().click();
  await page.locator('.account-btn').click();await page.getByLabel('主题',{exact:true}).selectOption('dark');await expect(page.locator('html')).toHaveAttribute('data-theme','dark');
