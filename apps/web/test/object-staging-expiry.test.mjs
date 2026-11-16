@@ -61,3 +61,38 @@ test('a fresh staged upload still finishes and the TTL option is validated', asy
   t.after(() => rm(directory, { recursive: true, force: true }))
   await assert.rejects(createLocalObjectStore({ directory, maxObjectBytes: 32, maxOwnerBytes: 64, stagedUploadTtlMs: 0 }), { code: 'UNSAFE_TTL' })
 })
+
+test('a finish that passed the expiry check cannot lose its blob to a concurrent purge', async (t) => {
+  let release
+  const paused = new Promise((resolve) => { release = resolve })
+  let reached
+  const atPublish = new Promise((resolve) => { reached = resolve })
+  let pauseOnce = false
+  const { store, advance } = await fixture(t, {
+    async beforeObjectPublished() {
+      if (!pauseOnce) return
+      pauseOnce = false
+      reached()
+      await paused
+    },
+  })
+  const bytes = DOCX(7)
+  const other = await store.stageUpload({ ownerId: 'owner-b', name: 'b.docx', bytes })
+  const otherObject = await store.finishUpload({ ownerId: 'owner-b', uploadId: other.uploadId })
+  const mine = await store.stageUpload({ ownerId: 'owner-a', name: 'a.docx', bytes })
+  await store.trashObject({ ownerId: 'owner-b', objectId: otherObject.objectId })
+  pauseOnce = true
+  const finishing = store.finishUpload({ ownerId: 'owner-a', uploadId: mine.uploadId })
+  await atPublish
+  // The TTL elapses after the finish passed its check, then owner-b purges its last copy.
+  advance(HOUR + 1)
+  const purging = store.purgeObject({ ownerId: 'owner-b', objectId: otherObject.objectId })
+  // Give the purge every chance to finish while the finish is still paused.
+  // With correct locking it blocks on the per-hash lock instead.
+  await Promise.race([purging.catch(() => {}), new Promise((resolve) => setTimeout(resolve, 200))])
+  release()
+  const done = await finishing
+  await purging
+  const opened = await store.downloadObject({ ownerId: 'owner-a', objectId: done.objectId })
+  assert.equal(opened.sha256, mine.sha256)
+})

@@ -45,7 +45,7 @@ function createExclusive() {
 const DEFAULT_STAGED_UPLOAD_TTL_MS = 24 * 60 * 60 * 1000
 
 export async function createLocalObjectStore({
-  directory, maxObjectBytes, maxOwnerBytes, afterBytesWritten, afterReferencePublished,
+  directory, maxObjectBytes, maxOwnerBytes, afterBytesWritten, afterReferencePublished, beforeObjectPublished,
   stagedUploadTtlMs = DEFAULT_STAGED_UPLOAD_TTL_MS, now = Date.now,
 } = {}) {
   if (!directory || typeof directory !== 'string') reject('UNSAFE_DIRECTORY')
@@ -193,13 +193,20 @@ export async function createLocalObjectStore({
         if (record.finished && record.objectId) {
           return { objectId: record.objectId, sha256: record.sha256, size: record.size, format: record.format }
         }
-        if (isExpiredStage(record)) reject('NOT_FOUND', 404)
-        const completed = { ...record, objectId, finished: true }
-        if (!record.objectId) await writeJson(recordPath, { ...record, objectId, finished: false })
-        await mkdir(join(objects, ownerId), { recursive: true, mode: 0o700 })
-        await writeJson(join(objects, ownerId, `${objectId}.json`), completed)
-        await writeJson(recordPath, completed)
-        return { objectId, sha256: record.sha256, size: record.size, format: record.format }
+        // Blob deletion (purge, expired-stage sweep) holds the per-hash lock and
+        // ignores expired staging records. Check expiry and publish the object
+        // under that same lock so the TTL cannot elapse between the two while a
+        // concurrent deletion decides this blob is unreferenced.
+        return exclusiveSha(record.sha256, async () => {
+          if (isExpiredStage(record)) reject('NOT_FOUND', 404)
+          if (beforeObjectPublished) await beforeObjectPublished()
+          const completed = { ...record, objectId, finished: true }
+          if (!record.objectId) await writeJson(recordPath, { ...record, objectId, finished: false })
+          await mkdir(join(objects, ownerId), { recursive: true, mode: 0o700 })
+          await writeJson(join(objects, ownerId, `${objectId}.json`), completed)
+          await writeJson(recordPath, completed)
+          return { objectId, sha256: record.sha256, size: record.size, format: record.format }
+        })
       })
     },
 
