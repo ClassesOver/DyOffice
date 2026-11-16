@@ -43,8 +43,7 @@ function fixture() {
           {
             authority: structuredClone(authority),
             verifyCommit: async (record, revision) =>
-              revision.revision === 'r2' &&
-              record.envelope.commandId === 'command',
+              revision.revision === 'r2' && record.envelope.commandId === 'command',
           },
           structuredClone(rows.get(key) ?? null),
         )
@@ -97,10 +96,7 @@ test('changed arguments or envelope cannot reuse approval or command identity', 
   await assert.rejects(() =>
     f.service.beginExecution({ ...f.envelope, editorGeneration: 4 }, p.digest),
   )
-  assert.equal(
-    (await f.service.getCommandOutcome(f.envelope)).state,
-    'approved',
-  )
+  assert.equal((await f.service.getCommandOutcome(f.envelope)).state, 'approved')
 })
 test('stale editor generation, base revision, lease and missing scopes fail closed', async () => {
   for (const change of [
@@ -123,10 +119,7 @@ test('duplicate concurrent execution claims admit exactly one and later lookup s
     f.service.beginExecution(f.envelope, p.digest),
   ])
   assert.equal(results.filter((r) => r.status === 'fulfilled').length, 1)
-  assert.equal(
-    (await f.service.getCommandOutcome(f.envelope)).state,
-    'unknown_outcome',
-  )
+  assert.equal((await f.service.getCommandOutcome(f.envelope)).state, 'unknown_outcome')
   await assert.rejects(() => f.service.beginExecution(f.envelope, p.digest))
 })
 test('approval expires and one session cannot see another session command', async () => {
@@ -148,30 +141,19 @@ test('commit requires verified T06 receipt and cancellation cannot undo committe
     sha256: 'a'.repeat(64),
     size: 10,
   }
-  await assert.rejects(() =>
-    f.service.recordCommitted(f.envelope, { ...good, revision: 'forged' }),
-  )
-  assert.equal(
-    (await f.service.recordCommitted(f.envelope, good)).state,
-    'committed',
-  )
+  await assert.rejects(() => f.service.recordCommitted(f.envelope, { ...good, revision: 'forged' }))
+  assert.equal((await f.service.recordCommitted(f.envelope, good)).state, 'committed')
   assert.equal((await f.service.cancelCommand(f.envelope)).state, 'committed')
 })
 test('cancelling an ambiguous application does not claim rollback and newer edits block undo', async () => {
   const f = fixture()
   const p = await approved(f),
     claim = await f.service.beginExecution(f.envelope, p.digest)
-  assert.equal(
-    (await f.service.cancelCommand(f.envelope)).state,
-    'unknown_outcome',
-  )
+  assert.equal((await f.service.cancelCommand(f.envelope)).state, 'unknown_outcome')
   await f.service.reportApplied(f.envelope, claim.claimId, 4)
   f.setAuthority({ editorGeneration: 5 })
   await assert.rejects(() => f.service.beginUndo(f.envelope))
-  assert.equal(
-    (await f.service.getCommandOutcome(f.envelope)).state,
-    'applied_uncommitted',
-  )
+  assert.equal((await f.service.getCommandOutcome(f.envelope)).state, 'applied_uncommitted')
 })
 test('registry policy change after approval invalidates dispatch', async () => {
   const f = fixture()
@@ -185,13 +167,7 @@ test('registry policy change after approval invalidates dispatch', async () => {
 })
 test('bounded canonical JSON rejects accessors, cyclic, unsupported and non-finite inputs', async () => {
   const f = fixture()
-  for (const args of [
-    () => {},
-    NaN,
-    undefined,
-    new Date(),
-    { nested: Infinity },
-  ])
+  for (const args of [() => {}, NaN, undefined, new Date(), { nested: Infinity }])
     await assert.rejects(() =>
       f.service.proposeCommand({
         ...f.envelope,
@@ -235,4 +211,16 @@ test('lease revoked while awaiting journal lock cannot claim apply or undo', asy
       operation === 'apply' ? 'approved' : 'applied_uncommitted',
     )
   }
+})
+
+test('committed outcome cannot trust a row without original writer provenance', async () => {
+  const f = fixture()
+  await approved(f)
+  const [key, row] = [...f.rows][0]
+  const revision = { fileId: 'file', revision: 'forged', sha256: 'a'.repeat(64), size: 10 }
+  f.rows.set(key, { ...row, state: 'committed', revision })
+  await assert.rejects(() => f.service.getCommandOutcome(f.envelope), /receipt/)
+  assert.equal(f.rows.get(key).revision.revision, 'forged')
+  f.rows.set(key, { ...row, state: 'committed', revision: { ...revision, revision: 'r2' } })
+  assert.equal((await f.service.getCommandOutcome(f.envelope)).revision.revision, 'r2')
 })

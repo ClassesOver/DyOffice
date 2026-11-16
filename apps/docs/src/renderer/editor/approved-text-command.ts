@@ -2,6 +2,7 @@ import type { DocumentMutationFence } from '../document-mutation-fence'
 import type { Editor } from '@tiptap/core'
 import type { Node as PmNode } from '@tiptap/pm/model'
 import type { Step } from '@tiptap/pm/transform'
+import type { Transaction } from '@tiptap/pm/state'
 import type { CommandEnvelope } from '../../../../../packages/web-contracts/src/tools.ts'
 import type { AtomicEditorTools } from '../../../../../packages/browser-host/src/tool-executor.ts'
 export interface TextCommandAuthority {
@@ -19,17 +20,22 @@ export function createApprovedTextCommandAdapter({
   authority,
   canWrite,
   mutationFence,
+  dispatchAuthorized,
 }: {
   editor: Editor
   authority: () => TextCommandAuthority
   canWrite: () => boolean
   mutationFence: DocumentMutationFence
+  /** Optional synchronous exact-transaction gate owned by an isolated host. */
+  dispatchAuthorized?: (transaction: Transaction) => void
 }): AtomicEditorTools & { dispose(): void } {
   let disposed = false,
     lastDoc = editor.state.doc,
     lastSelection = editor.state.selection
   if (!mutationFence?.snapshot || typeof canWrite !== 'function')
     throw Error('Live editor authority required')
+  const dispatch =
+    dispatchAuthorized ?? ((transaction: Transaction) => editor.view.dispatch(transaction))
   const tokens = new WeakMap<
     object,
     {
@@ -137,7 +143,7 @@ export function createApprovedTextCommandAdapter({
         before = state.doc,
         after = tr.doc
       exact(e)
-      editor.view.dispatch(tr)
+      dispatch(tr)
       const next = current()
       if (
         !mutationFence.snapshot().ready ||
@@ -176,7 +182,7 @@ export function createApprovedTextCommandAdapter({
       for (const step of entry.steps) tr = tr.step(step)
       if (!tr.doc.eq(entry.before)) throw Error('Invalid batch inverse')
       tokens.delete(token)
-      editor.view.dispatch(tr)
+      dispatch(tr)
       const next = current()
       if (
         !mutationFence.snapshot().ready ||

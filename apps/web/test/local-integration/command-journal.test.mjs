@@ -387,17 +387,15 @@ test('database rejects incomplete command identity even from an otherwise author
 async function bind(f) {
   const digest = await apply(f),
     input = await draft(f)
-  await f
-    .make(4)
-    .adapter.bindCommandUpload({
-      commandId: f.envelope.commandId,
-      fileId: f.envelope.fileId,
-      digest,
-      uploadId: input.uploadId,
-      sha256: f.initial.sha256,
-      size: f.bytes.length,
-      idempotencyKey: input.idempotencyKey,
-    })
+  await f.make(4).adapter.bindCommandUpload({
+    commandId: f.envelope.commandId,
+    fileId: f.envelope.fileId,
+    digest,
+    uploadId: input.uploadId,
+    sha256: f.initial.sha256,
+    size: f.bytes.length,
+    idempotencyKey: input.idempotencyKey,
+  })
   return input
 }
 test('T06 commit and undo are mutually exclusive without a separate receipt-report window', async (t) => {
@@ -531,3 +529,60 @@ test('a bound upload cannot omit or replace sourceCommandId to bypass atomic jou
   const saved = await f.revisions.commitRevision(f.alice.token, input)
   assert.deepEqual((await f.make(4).service.getCommandOutcome(f.envelope)).revision, saved)
 })
+
+test('committed outcome keeps original writer editor provenance after refresh', async (t) => {
+  const f = await fixture(t),
+    input = await bind(f)
+  const saved = await f.revisions.commitRevision(f.alice.token, input)
+  assert.deepEqual((await f.make(4).service.getCommandOutcome(f.envelope)).revision, saved)
+  const fresh = pg.createPostgresCommandJournal({
+    transactions: f.transactions,
+    token: f.alice.token,
+    editorId: randomUUID(),
+    editorGeneration: 4,
+  })
+  await assert.rejects(
+    createCommandService({ journal: fresh, lookupTool: () => tool }).getCommandOutcome(f.envelope),
+    /receipt/,
+  )
+})
+for (const corruption of ['missing-binding', 'other-command', 'hash'])
+  test('committed outcome revalidates provenance: ' + corruption, async (t) => {
+    const f = await fixture(t),
+      input = await bind(f)
+    const saved = await f.revisions.commitRevision(f.alice.token, input)
+    const c = await f.ownerPool.connect()
+    try {
+      await c.query('BEGIN')
+      await c.query(
+        "SELECT set_config('dyoffice.deployment_id',$1,true),set_config('dyoffice.user_id',$2,true),set_config('dyoffice.session_id',$3,true)",
+        [f.deploymentId, f.alice.user.id, f.alice.sessionId],
+      )
+      // Privileged test corruption, never a business-role capability.
+      if (corruption === 'missing-binding')
+        await c.query('DELETE FROM command_upload_bindings WHERE command_id=$1', [
+          f.envelope.commandId,
+        ])
+      else if (corruption === 'hash')
+        await c.query('UPDATE command_upload_bindings SET sha256=$2 WHERE command_id=$1', [
+          f.envelope.commandId,
+          'b'.repeat(64),
+        ])
+      else
+        await c.query(
+          'UPDATE revision_commits SET requested_source_command_id=$2 WHERE upload_id=$1',
+          [input.uploadId, randomUUID()],
+        )
+      await c.query('COMMIT')
+    } catch (e) {
+      await c.query('ROLLBACK')
+      throw e
+    } finally {
+      c.release()
+    }
+    await assert.rejects(f.make(4).service.getCommandOutcome(f.envelope), /receipt/)
+    assert.equal(
+      (await f.files.openFile(f.alice.token, f.initial.fileId)).file.revision,
+      saved.revision,
+    )
+  })
