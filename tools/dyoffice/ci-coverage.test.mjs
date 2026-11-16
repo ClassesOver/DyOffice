@@ -49,6 +49,19 @@ test('durable job gate uses real host Redis and runs PostgreSQL/BullMQ recovery 
   assert.match(job,/DYOFFICE_TEST_REDIS_URL:/)
 })
 
+test('native Sheets gate builds original renderer and Rust and runs real edit-save-reopen acceptance', () => {
+ const job=workflow.split('\n  native-sheets:')[1]
+ assert.ok(job,'native Sheets job required')
+ for(const command of ['npm ci --ignore-scripts --include=dev','npm run build:web:native -- --with-probe','npm run build:sheets --workspace=@dyoffice/web','npx tsc -p apps/web/tsconfig.sheets.json','sudo --preserve-env=PATH,DYOFFICE_TEST_HOST_MANIFEST,DYOFFICE_TEST_DATABASE_URL,PLAYWRIGHT_BROWSERS_PATH npm run test:native-sheets --workspace=@dyoffice/web','npx vitest run --root packages/xlsx-gateway --maxWorkers=1','npx vitest run --root apps/sheets --maxWorkers=1 tests/defined-name-recalculation.test.ts']) assert.ok(job.includes('run: '+command),command)
+ assert.match(job,/node-version: 22/)
+ assert.match(job,/playwright install chromium --with-deps/)
+ assert.match(job,/PLAYWRIGHT_BROWSERS_PATH:.*github.workspace/)
+ assert.match(job,/sudo --preserve-env=PATH,DYOFFICE_TEST_HOST_MANIFEST,DYOFFICE_TEST_DATABASE_URL,PLAYWRIGHT_BROWSERS_PATH/)
+ assert.match(job,/ci-host-services\.sh/)
+ assert.match(job,/rustup toolchain install 1\.93\.0/)
+ assert.doesNotMatch(job,/services:|image:|docker/i)
+})
+
 test('T00 tool placements are checked and inventory-only changes trigger both events', () => {
   assert.match(workflow, /run: node tools\/dyoffice\/agent-tool-inventory\.mjs --check/)
   assert.equal((workflow.match(/'docs\/dyoffice\/inventory\/agent-tools\*'/g) ?? []).length, 2)

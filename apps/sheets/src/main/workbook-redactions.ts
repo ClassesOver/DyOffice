@@ -1,3 +1,4 @@
+import type { EntrySource } from '@genoffice/xlsx-gateway/gateway/xlsx-gateway'
 /**
  * Reading the cells the reader withheld from the model, from the workbook
  * package part that records them (`xl/gxRedactions.json`), or — when that part
@@ -97,20 +98,27 @@ export async function readWorkbookRedactionPart(
   snapshotPath: string,
 ): Promise<RedactionPartRead> {
   const manifest = manifestNamesSchema.parse(await client.archiveManifest(snapshotPath))
-  if (manifest.entries.some((entry) => entry.name === REDACTION_PART_PATH)) {
+  return readWorkbookRedactionSource({
+    paths: async () => manifest.entries.map(entry => entry.name),
+    readText: path => readArchiveEntryText(client, snapshotPath, path),
+  })
+}
+
+export async function readWorkbookRedactionSource(source: Pick<EntrySource, 'paths' | 'readText'>): Promise<RedactionPartRead> {
+  if ((await source.paths()).includes(REDACTION_PART_PATH)) {
     try {
-      const text = await readArchiveEntryText(client, snapshotPath, REDACTION_PART_PATH)
+      const text = await source.readText(REDACTION_PART_PATH)
       return { status: 'ok', states: parseRedactionPart(text), source: 'part' }
     } catch (error) {
       // The mirror is a rescue, not a second diagnosis: only an answer it can
       // actually give replaces the part's. When it cannot, the part's error is
       // the one worth showing — it names what is actually wrong with the file.
-      const fromMirror = await readRedactionNameMirror(client, snapshotPath)
+      const fromMirror = await readRedactionNameMirror(source)
       if (fromMirror.status === 'ok') return fromMirror
       return { status: 'unreadable', error: messageOf(error) }
     }
   }
-  return readRedactionNameMirror(client, snapshotPath)
+  return readRedactionNameMirror(source)
 }
 
 /**
@@ -123,11 +131,10 @@ export async function readWorkbookRedactionPart(
  * parse must not be read as "nothing was withheld".
  */
 async function readRedactionNameMirror(
-  client: ArchiveClient,
-  snapshotPath: string,
+  source: Pick<EntrySource, 'readText'>,
 ): Promise<RedactionPartRead> {
   try {
-    const workbookXml = await readArchiveEntryText(client, snapshotPath, WORKBOOK_PART_PATH)
+    const workbookXml = await source.readText(WORKBOOK_PART_PATH)
     // The mirror records each sheet by its position, so the positions are read
     // back out of the same file — the one the marks have to be resolved against.
     const states = parseRedactionNameMirror(

@@ -65,4 +65,3 @@ real model/data-source/Harness and external Office tests are not covered here.
 
 Do not mark T00 or M0 complete from this checkpoint. Preserve not-run/blocked
 statuses; passing scaffold gates is not four-format editing or enterprise readiness.
-

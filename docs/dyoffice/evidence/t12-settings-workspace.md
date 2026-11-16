@@ -2,7 +2,18 @@
 
 日期：2026-11-16。范围是 `DYOFFICE_AUTH_MODE=local` 的 TypeScript 本地账号运行时。本轮按用户要求不启用、不修改、不等待 CI；全部结果来自本地实际执行。
 
-## 最新目标整合（2026-11-16）
+## 最新目标复测（10793fc，2026-11-16）
+
+本次从已审 PR #52 `d5f794fad6768efd087707b04e40a54e29b8b0bf` 保留历史整合目标 `10793fcdc93f033c33a886434be35f3a6d83733d`（含 #30/#65/#66）。此前 d86 结果及原始浏览器截图仅为历史，不替代本次复测。
+
+- 目标全部非 T12 blob 经 SHA 核对；`app.ts`/`index.mjs` 两处冲突同时保留 T12 keyring/工作区与 Sheets 配置、启动及关闭。保留 File/Sheets 共用两槽限流。0001–0017 与目标完全一致，0018/0019 不改摘要；不支持私自应用旧 PR 0014/0015 的分叉 ledger。
+- 真实 PostgreSQL 17.11 + RustFS 1.0.6 + Redis 8.0.2 全相关回归：**292 项，291 通过、1 失败、0 跳过**。唯一失败为 `jobs/revision-delivery.test.mjs` 第一次 take 在 PostgreSQL 函数内遇到 `57014 statement timeout`。原代码独占复测该文件 **2/2 通过**，未确定初次超时根因，不把首次全套改写为全绿，也不归因于 Redis 故障。
+- 另以真实 S3 后端运行永久清理、回滚/进程退出重试、回收、共享 I/O admission 及 ACK 截止期：**27/27 通过，0 跳过**。所有服务只使用新建随机测试数据库/角色/桶；测试后已停止，没有触碰真实用户对象。
+- Web+unit：**366 通过、1 既有可选跳过**。Shell DOM：**86/86**。server、frontend、Shell TypeScript 与 local-shell 构建通过；边界 **997 文件/0 违规**；兼容性输入 **84 文件/0 变化**（不是运行时兼容验收）。
+- 独立 DOCX 构建采用 768MB heap 和工作区 TMPDIR，仍在 transform 阶段 **exit 137/Killed**，未完成构建；未推定 OOM 根因。本次没有新的 Chromium 页面断言，原环境 Unix socket 权限/跨进程 loopback 限制仍未解除。Shell DOM、桌面 Office 独立实验均不替代当前 Web 页面或 DOCX 主题/往返验收。
+- 独立复审未发现整合阻断，允许更新 draft，但不据此认定满足完整合并验收。保持 draft/未合并；不宣称全仓、CI、真实浏览器或原生 DOCX 全绿。全局配置检查仍为 `connection: not_run`，不扩充外部 Provider/MCP 执行权限。
+
+## 历史目标整合（d86ae1a7，2026-11-16）
 
 本轮以 `feat/dyoffice-web@d86ae1a7ecd93859328bc73e25d2357648da2301` 为目标，整合原 PR #52 `b7d7e3d268891a00946d0f6fe2c08af053b10a6e`。以下历史浏览器和原生编辑证据仍属于原基线，不替代新目标的复测。
 
@@ -15,7 +26,7 @@
 - 新目标原生 DOCX 构建尝试在 transform 阶段被环境终止（Killed），未产出 dist-docs；原生 DOCX 浏览器及 roundtrip 不登记为本轮通过。
 - 全局检查仍为配置/密钥检查，`connection: not_run`。没有新增 Provider/MCP 外部执行能力、批量清空 UI、版本桶删除或生产部署。
 
-### 新目标本地验证结果
+### 历史 d86 目标本地验证结果
 
 - 最终整套 `local-integration/*.test.mjs + jobs/*.test.mjs + storage/*.test.mjs`：**290/290，0失败、0跳过**。真实 PostgreSQL 17.11、RustFS 1.0.6、Redis 8.0.2；使用随机新测试数据库/角色/桶，没有清理真实用户数据。
 - 额外实际S3回收、永久清理、跨用户I/O限流及ACK重复验收：**25/25，0失败、0跳过**，包括物理删除后进程退出、回滚重试与精确一次计账。

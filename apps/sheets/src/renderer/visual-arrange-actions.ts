@@ -1,3 +1,4 @@
+import { admitMutation, mutationAdmission } from './mutation-admission'
 /**
  * Right-click menu and Arrange-tab commands for floating objects: z-order,
  * align/distribute, rotate/flip, cut/copy/paste, and the dialogs' applies.
@@ -115,6 +116,7 @@ export function handleVisualCommand(
   targetId?: string,
 ): boolean {
   if (!command.startsWith('visual:')) return false
+  if (!admitMutation(ctx.lazyWorkbookRef.current?.editJournal, ctx.setMessage)) return true
   const [, group = '', argument = ''] = command.split(':')
   const runtime = ctx.univerRef.current
   const state = ctx.lazyWorkbookRef.current
@@ -141,11 +143,12 @@ export function handleVisualCommand(
   switch (group) {
     case 'cut':
     case 'copy':
-      void copyVisual(ctx, visual).then((copied) => {
+      void mutationAdmission(state.editJournal).run(async () => {
+        const copied = await copyVisual(ctx, visual)
         if (!copied) return
         if (group === 'cut') ctx.shapeEditRef.current(visualId, { remove: true })
         else ctx.setMessage(t('appVisualCopied'))
-      })
+      }).catch((error) => ctx.setMessage(String(error)))
       return true
     case 'alt-text':
     case 'size':
@@ -159,7 +162,7 @@ export function handleVisualCommand(
       return true
     }
     case 'embed-in-cell':
-      void embedVisualInCell(ctx, runtime, state, visual)
+      void mutationAdmission(state.editJournal).run(() => embedVisualInCell(ctx, runtime, state, visual)).catch((error) => ctx.setMessage(String(error)))
       return true
     case 'z':
       reorder(ctx, runtime, state, visual, argument as ZOrderOp)

@@ -34,7 +34,7 @@ function literalSpecifier(node) {
   return null
 }
 
-// TypeScript/esbuild erase these wrappers before Vite sees glob calls.
+// TypeScript/esbuild erase these wrappers before Vite sees glob/worker expressions.
 function unwrapExpression(node) {
   while (node && (ts.isParenthesizedExpression(node) || ts.isAsExpression(node) ||
       ts.isTypeAssertionExpression(node) || ts.isNonNullExpression(node) ||
@@ -58,12 +58,13 @@ function imports(source, file) {
         ['glob', 'globEager'].includes(callee.name.text)) {
       found.push({ specifier: null, mode: 'glob', line: ast.getLineAndCharacterOfPosition(node.getStart(ast)).line + 1 })
     }
+    const constructor = ts.isNewExpression(node) ? unwrapExpression(node.expression) : undefined
     let argument
     let mode = 'import'
     if (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) argument = node.moduleSpecifier
     else if (ts.isImportEqualsDeclaration(node) && ts.isExternalModuleReference(node.moduleReference)) argument = node.moduleReference.expression
     else if (ts.isCallExpression(node) && (node.expression.kind === ts.SyntaxKind.ImportKeyword || (ts.isIdentifier(node.expression) && node.expression.text === 'require'))) argument = node.arguments[0]
-    else if (ts.isNewExpression(node) && ts.isIdentifier(node.expression) && ['Worker', 'SharedWorker'].includes(node.expression.text)) {
+    else if (constructor && ts.isIdentifier(constructor) && ['Worker', 'SharedWorker'].includes(constructor.text)) {
       const value = node.arguments?.[0]
       // Vite's statically resolved Worker(new URL(path, import.meta.url)).
       if (value && ts.isNewExpression(value) && ts.isIdentifier(value.expression) && value.expression.text === 'URL' &&
@@ -164,23 +165,30 @@ async function localDependency(specifier, mode, importer, packages, base) {
     if (!pkg) return null // Third-party package bundles remain a build gate.
     const subpath = '.' + specifier.slice(name.length)
     let value = pkg.manifest.exports
-    let wildcard
+    let replacement
     if (value && typeof value === 'object' && Object.keys(value).some(key => key.startsWith('.'))) {
       if (Object.hasOwn(value, subpath)) value = value[subpath]
       else {
-        const pattern = Object.keys(value).filter(key => key.includes('*')).sort((a,b) => b.indexOf('*') - a.indexOf('*') || b.length-a.length).find(key => {
-          const [prefix,suffix] = key.split('*')
-          return subpath.startsWith(prefix) && subpath.endsWith(suffix) && subpath.length >= prefix.length+suffix.length
-        })
-        if (pattern) { const [prefix,suffix] = pattern.split('*'); wildcard=subpath.slice(prefix.length,subpath.length-suffix.length);value=value[pattern] }
-        else value = undefined
+        // Node export patterns prefer the longest prefix, then longest key.
+        // Resolve the selected target normally so patterns cannot hide Node imports.
+        const pattern = Object.keys(value).filter(key => {
+          const star = key.indexOf('*')
+          return star >= 0 && star === key.lastIndexOf('*') &&
+            subpath.startsWith(key.slice(0, star)) && subpath.endsWith(key.slice(star + 1)) &&
+            subpath.length >= key.length - 1
+        }).sort((a, b) => b.indexOf('*') - a.indexOf('*') || b.length - a.length)[0]
+        if (pattern) {
+          const star = pattern.indexOf('*')
+          replacement = subpath.slice(star, subpath.length - (pattern.length - star - 1))
+          value = value[pattern]
+        } else value = null
       }
     }
     else if (subpath !== '.') value = null
     let entry = exportTarget(value, mode)
+    if (entry && replacement !== undefined) entry = entry.replaceAll('*', replacement)
     if (!pkg.manifest.exports) entry = subpath === '.' ? (pkg.manifest.module || pkg.manifest.main || './index.js') : subpath
     if (!entry) throw new Error(`Unsupported workspace export ${specifier} imported by ${relative(base, importer)}`)
-    if (wildcard !== undefined) entry = entry.replaceAll('*', wildcard)
     target = resolve(pkg.directory, entry)
   }
   const within = relative(base, target)

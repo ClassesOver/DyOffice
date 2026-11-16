@@ -1,6 +1,14 @@
+import { readFile } from 'node:fs/promises'
+import JSZip from 'jszip'
 import { describe, expect, it } from 'vitest'
 
 import { applyChartEdit, ChartEditError } from '@genoffice/xlsx-gateway/gateway/xlsx-chart'
+import {
+  assembleWithJsZip,
+  assertOnlyTouchedEntriesChanged,
+  createBufferEntrySource,
+  planCellEditsToXlsx,
+} from '@genoffice/xlsx-gateway/gateway/xlsx-gateway'
 
 const BAR_CHART =
   '<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart">' +
@@ -25,6 +33,49 @@ const UNTITLED_PIE =
   '<c:plotArea><c:pieChart><c:varyColors val="1"/>' +
   '<c:ser><c:idx val="0"/><c:order val="0"/><c:cat/><c:val/></c:ser>' +
   '</c:pieChart></c:plotArea></c:chart></c:chartSpace>'
+
+describe('chart planner style relationships', () => {
+  it.each(['chartStyle', 'chartColorStyle', 'themeOverride'])(
+    'keeps external %s relationships and authored defaults during a data edit',
+    async (type) => {
+      const zip = await JSZip.loadAsync(
+        await readFile(new URL('../../web/test/fixtures/sheets/acceptance.xlsx', import.meta.url)),
+      )
+      const relsPath = 'xl/charts/_rels/chart1.xml.rels'
+      const target = 'xl/charts/style1.xml'
+      // Namespaced/expanded relationships exercise the package's normalizer.
+      zip.file(
+        relsPath,
+        '<p:Relationships xmlns:p="http://schemas.openxmlformats.org/package/2006/relationships">' +
+          `<p:Relationship Id="rIdStyle" Type="http://schemas.microsoft.com/office/2011/relationships/${type}" Target="style1.xml"></p:Relationship>` +
+          '</p:Relationships>',
+      )
+      zip.file(target, '<style original="preserve"/>')
+      const original = await zip.generateAsync({ type: 'nodebuffer' })
+      const plan = await planCellEditsToXlsx(
+        await createBufferEntrySource(original),
+        [],
+        [],
+        [
+          {
+            chartPath: 'xl/charts/chart1.xml',
+            series: [{ index: 0, values: [3, 4] }],
+          },
+        ],
+      )
+      expect(plan.replaced.get('xl/charts/chart1.xml')).not.toContain('4472C4')
+      expect(plan.replaced.has(relsPath)).toBe(false)
+      expect(plan.replaced.has(target)).toBe(false)
+      const mutation = await assembleWithJsZip(original, plan)
+      const after = await JSZip.loadAsync(mutation.buffer)
+      expect(await after.file(relsPath)!.async('string')).toBe(
+        await zip.file(relsPath)!.async('string'),
+      )
+      expect(await after.file(target)!.async('string')).toBe('<style original="preserve"/>')
+      assertOnlyTouchedEntriesChanged(mutation)
+    },
+  )
+})
 
 describe('applyChartEdit title', () => {
   it('replaces the first run text, blanks the rest, keeps run styling', () => {
@@ -417,6 +468,201 @@ describe('applyChartEdit axis titles', () => {
 })
 
 describe('applyChartEdit series data', () => {
+  const ordinalCat =
+    '<c:cat><c:strLit><c:ptCount val="2"/>' +
+    '<c:pt idx="0"><c:v>1</c:v></c:pt><c:pt idx="1"><c:v>2</c:v></c:pt></c:strLit></c:cat>'
+
+  it('keeps the original no-category acceptance sample as a regression and repairs only a data edit', async () => {
+    const bytes = await readFile(
+      new URL('../../web/test/fixtures/sheets/acceptance.xlsx', import.meta.url),
+    )
+    const zip = await JSZip.loadAsync(bytes)
+    const original = await zip.file('xl/charts/chart1.xml')!.async('string')
+    expect(original).not.toContain('<c:cat>')
+    expect(applyChartEdit(original, { chartPath: 'xl/charts/chart1.xml' })).toBe(original)
+    const titleOnly = applyChartEdit(original, {
+      chartPath: 'xl/charts/chart1.xml',
+      title: 'Revenue',
+    })
+    expect(titleOnly).not.toContain('<c:cat>')
+    const updated = applyChartEdit(original, {
+      chartPath: 'xl/charts/chart1.xml',
+      series: [{ index: 0, values: [12.5, 7.5] }],
+    })
+    expect(updated).toContain(ordinalCat + '<c:val>')
+    expect(updated).toContain('<c:numRef><c:f>Acceptance!$A$2:$A$3</c:f>')
+    expect(updated).toContain(
+      '<c:spPr><a:solidFill><a:srgbClr val="4472C4"/></a:solidFill></c:spPr>',
+    )
+    const compatible = await JSZip.loadAsync(
+      await readFile(
+        new URL('../../web/test/fixtures/sheets/acceptance-chart-compatible.xlsx', import.meta.url),
+      ),
+    )
+    expect(await compatible.file('xl/charts/chart1.xml')!.async('string')).toBe(updated)
+    expect(Object.keys(compatible.files).sort()).toEqual(Object.keys(zip.files).sort())
+    for (const path of Object.keys(zip.files).filter((path) => path !== 'xl/charts/chart1.xml')) {
+      expect(await compatible.file(path)!.async('uint8array')).toEqual(
+        await zip.file(path)!.async('uint8array'),
+      )
+    }
+  })
+
+  it.each(['', '<c:cat/>', '<c:cat></c:cat>'])(
+    'fills missing or empty categories on the edited series only (%s)',
+    (cat) => {
+      const original = BAR_CHART.replace('<c:cat/>', cat)
+      const untouchedSeries = [...original.matchAll(/<c:ser>[\s\S]*?<\/c:ser>/g)][1]![0]
+      const updated = applyChartEdit(original, {
+        chartPath: 'xl/charts/chart1.xml',
+        series: [{ index: 0, values: [12.5, 7.5] }],
+      })
+      expect(updated).toContain(ordinalCat + '<c:val>')
+      expect(updated).toContain(untouchedSeries)
+    },
+  )
+
+  it.each([
+    '<c:cat><c:strRef><c:f>Data!$A$2:$A$3</c:f></c:strRef></c:cat>',
+    '<c:cat><c:numRef><c:f>Data!$A$2:$A$3</c:f></c:numRef></c:cat>',
+    '<c:cat><c:numLit><c:formatCode>mmm-yy</c:formatCode><c:ptCount val="2"/><c:pt idx="0"><c:v>45292</c:v></c:pt></c:numLit></c:cat>',
+    '<c:cat><c:multiLvlStrRef><c:f>Data!$A$2:$B$3</c:f></c:multiLvlStrRef></c:cat>',
+  ])(
+    'preserves existing reference, numeric/date, and multilevel categories on values-only edits (%s)',
+    (cat) => {
+      const original = BAR_CHART.replace('<c:cat/>', cat)
+      const updated = applyChartEdit(original, {
+        chartPath: 'xl/charts/chart1.xml',
+        series: [{ index: 0, values: [3, 4] }],
+      })
+      expect(updated).toContain(cat)
+      expect(updated).not.toContain(ordinalCat)
+    },
+  )
+
+  it('does not mistake an empty preview vector for replacement of a cache-less category ref', () => {
+    const cat = '<c:cat><c:strRef><c:f>Data!$A$2:$A$3</c:f></c:strRef></c:cat>'
+    const original = BAR_CHART.replace('<c:cat/>', cat)
+    const updated = applyChartEdit(original, {
+      chartPath: 'xl/charts/chart1.xml',
+      series: [{ index: 0, categories: [], values: [3, 4] }],
+    })
+    expect(updated).toContain(cat)
+    expect(updated).not.toContain('<c:strCache><c:ptCount val="0"/>')
+  })
+
+  it('writes a default palette fill on a bare bar series only when its data is edited', () => {
+    const original = BAR_CHART.replace('<c:cat/>', '')
+    const updated = applyChartEdit(original, {
+      chartPath: 'xl/charts/chart1.xml',
+      series: [{ index: 0, values: [3, 4] }],
+    })
+    expect(updated).toContain(
+      '</c:tx><c:spPr><a:solidFill><a:srgbClr val="4472C4"/></a:solidFill></c:spPr><c:invertIfNegative',
+    )
+    const titleOnly = applyChartEdit(original, { chartPath: 'xl/charts/chart1.xml', title: 'New' })
+    expect(titleOnly).not.toContain('4472C4')
+  })
+
+  it.each([
+    '<c:spPr><a:noFill/></c:spPr>',
+    '<c:spPr><a:gradFill><a:gsLst/></a:gradFill></c:spPr>',
+    '<c:spPr><a:solidFill><a:schemeClr val="accent2"/></a:solidFill></c:spPr>',
+    '<c:spPr/>',
+  ])('preserves explicit series drawing properties during data edits (%s)', (spPr) => {
+    const original = BAR_CHART.replace('<c:invertIfNegative', spPr + '<c:invertIfNegative')
+    const updated = applyChartEdit(original, {
+      chartPath: 'xl/charts/chart1.xml',
+      series: [{ index: 0, values: [3, 4] }],
+    })
+    expect(updated).toContain(spPr)
+    expect(updated).not.toContain('4472C4')
+  })
+
+  it.each([
+    '<c:style val="10"/>',
+    '<mc:AlternateContent><mc:Choice Requires="c14"><c14:style val="102"/></mc:Choice></mc:AlternateContent>',
+    '<c:externalData r:id="rId1"/>',
+  ])('does not override a chart style or external data while updating values (%s)', (style) => {
+    const original = BAR_CHART.replace('<c:chart>', style + '<c:chart>')
+    const updated = applyChartEdit(original, {
+      chartPath: 'xl/charts/chart1.xml',
+      series: [{ index: 0, values: [3, 4] }],
+    })
+    expect(updated).not.toContain('4472C4')
+  })
+
+  it('preserves external chart styles supplied by the package context', () => {
+    const updated = applyChartEdit(
+      BAR_CHART,
+      {
+        chartPath: 'xl/charts/chart1.xml',
+        series: [{ index: 0, values: [3, 4] }],
+      },
+      { hasExternalStyle: true },
+    )
+    expect(updated).not.toContain('4472C4')
+  })
+
+  it('does not fill a series with authored point drawing properties', () => {
+    const original = BAR_CHART.replace(
+      '<c:invertIfNegative',
+      '<c:dPt><c:idx val="0"/><c:spPr><a:noFill/></c:spPr></c:dPt><c:invertIfNegative',
+    )
+    const updated = applyChartEdit(original, {
+      chartPath: 'xl/charts/chart1.xml',
+      series: [{ index: 0, values: [3, 4] }],
+    })
+    expect(updated).not.toContain('4472C4')
+  })
+
+  it('adds a category reference without inventing a cache on a values-only edit', () => {
+    const updated = applyChartEdit(BAR_CHART, {
+      chartPath: 'xl/charts/chart1.xml',
+      series: [{ index: 0, values: [3, 4], categoriesRef: 'Data!$A$2:$A$3' }],
+    })
+    expect(updated).toContain('<c:cat><c:strRef><c:f>Data!$A$2:$A$3</c:f></c:strRef></c:cat>')
+  })
+
+  it.each(['strRef', 'numRef', 'multiLvlStrRef'])(
+    'preserves a cache-less %s source when a preview repeats its reference with empty categories',
+    (tag) => {
+      const cat = `<c:cat><c:${tag}><c:f>Data!$A$2:$A$3</c:f></c:${tag}></c:cat>`
+      const original = BAR_CHART.replace('<c:cat/>', cat)
+      const updated = applyChartEdit(original, {
+        chartPath: 'xl/charts/chart1.xml',
+        series: [{ index: 0, categories: [], categoriesRef: 'Data!$A$2:$A$3', values: [3, 4] }],
+      })
+      expect(updated).toContain(cat)
+    },
+  )
+
+  it('leaves an unsupported 3D plot category source and styling alone', () => {
+    const original = BAR_CHART.replaceAll('barChart', 'bar3DChart').replace('<c:cat/>', '')
+    const updated = applyChartEdit(original, {
+      chartPath: 'xl/charts/chart1.xml',
+      series: [{ index: 0, values: [3, 4] }],
+    })
+    expect(updated).not.toContain('<c:cat>')
+    expect(updated).not.toContain('4472C4')
+  })
+
+  it('keeps numeric and multilevel reference shapes when re-pointed without a cache', () => {
+    for (const tag of ['numRef', 'multiLvlStrRef']) {
+      const cat = `<c:cat><c:${tag}><c:f>Data!$A$2:$A$3</c:f></c:${tag}></c:cat>`
+      const original = BAR_CHART.replace('<c:cat/>', cat)
+      const updated = applyChartEdit(original, {
+        chartPath: 'xl/charts/chart1.xml',
+        series: [
+          { index: 0, categories: [], categoriesRef: "'New & data'!$A$2:$A$3", values: [3, 4] },
+        ],
+      })
+      expect(updated).toContain(
+        `<c:cat><c:${tag}><c:f>'New &amp; data'!$A$2:$A$3</c:f></c:${tag}></c:cat>`,
+      )
+    }
+  })
+
   it('rewrites name, values, and categories with refs and caches', () => {
     const xml = applyChartEdit(AXIS_CHART, {
       chartPath: 'xl/charts/chart1.xml',
@@ -746,6 +992,18 @@ describe('applyChartEdit point explosions', () => {
 })
 
 describe('applyChartEdit seriesSet', () => {
+  it.each([undefined, []])('preserves a reference without a category cache (%s)', (categories) => {
+    const xml = applyChartEdit(AXIS_CHART, {
+      chartPath: 'xl/charts/chart1.xml',
+      seriesSet: [
+        { name: 'Reference only', values: [1, 2], categories, categoriesRef: 'Data!$A$2:$A$3' },
+      ],
+    })
+    expect(xml).toContain('<c:cat><c:strRef><c:f>Data!$A$2:$A$3</c:f></c:strRef></c:cat>')
+    expect(xml).not.toContain('<c:strCache>')
+    expect(xml).not.toContain('<c:strLit>')
+  })
+
   it('rebuilds the series in order with refs, caches, and colors', () => {
     const xml = applyChartEdit(AXIS_CHART, {
       chartPath: 'xl/charts/chart1.xml',
@@ -771,9 +1029,12 @@ describe('applyChartEdit seriesSet', () => {
       "<c:val><c:numRef><c:f>'D'!$B$2:$B$3</c:f><c:numCache><c:formatCode>General</c:formatCode>" +
         '<c:ptCount val="2"/><c:pt idx="0"><c:v>1</c:v></c:pt>',
     )
-    // ref-less series: literal values, no c:cat at all
+    // Ref-less category data defaults to 1-based labels.
     expect(xml).toContain(
       '<c:ser><c:idx val="1"/><c:order val="1"/><c:tx><c:v>North</c:v></c:tx>' +
+        '<c:spPr><a:solidFill><a:srgbClr val="ED7D31"/></a:solidFill></c:spPr>' +
+        '<c:cat><c:strLit><c:ptCount val="2"/><c:pt idx="0"><c:v>1</c:v></c:pt>' +
+        '<c:pt idx="1"><c:v>2</c:v></c:pt></c:strLit></c:cat>' +
         '<c:val><c:numLit><c:ptCount val="2"/><c:pt idx="0"><c:v>3</c:v></c:pt>',
     )
     // old series (its tx ref and data) is gone

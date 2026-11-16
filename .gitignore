@@ -49,3 +49,7 @@ apps/web/.dyoffice/
 /apps/web/dist-docs/
 
 /.dyoffice-native-build/
+
+/apps/web/dist-sheets/
+
+/apps/web/dist-sheets-server/

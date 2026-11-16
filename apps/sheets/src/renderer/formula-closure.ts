@@ -120,7 +120,7 @@ const ERROR_LITERAL_PATTERN =
 
 /// True when the formula uses an identifier that is not a function call —
 /// a defined name or an external reference the closure cannot resolve.
-export function containsUnresolvedNames(formula: string): boolean {
+export function containsUnresolvedNames(formula: string, resolvedName?: (name: string) => boolean): boolean {
   const segments = formula.split('"')
   for (let index = 0; index < segments.length; index += 2) {
     // [n]Sheet!ref / '[n]Sheet name'!ref / 'C:\dir\[Book.xlsx]Sheet'!ref is
@@ -138,7 +138,7 @@ export function containsUnresolvedNames(formula: string): boolean {
       const name = match[0]
       if (name === 'TRUE' || name === 'FALSE') continue
       const rest = stripped.slice(match.index + name.length)
-      if (!/^\s*\(/.test(rest)) return true
+      if (!/^\s*\(/.test(rest) && !resolvedName?.(name)) return true
     }
   }
   return false

@@ -2840,8 +2840,8 @@ function ChartEditor({
                 setRanges((previous) => ({
                   ...previous,
                   [String(index)]: {
-                    categories: '',
                     ...previous[String(index)],
+                    categories: previous[String(index)]?.categories ?? '',
                     values: event.target.value,
                   },
                 }))
@@ -2858,8 +2858,8 @@ function ChartEditor({
                 setRanges((previous) => ({
                   ...previous,
                   [String(index)]: {
-                    values: '',
                     ...previous[String(index)],
+                    values: previous[String(index)]?.values ?? '',
                     categories: event.target.value,
                   },
                 }))

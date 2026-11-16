@@ -1,3 +1,4 @@
+import { admitMutation, mutationAdmission } from './mutation-admission'
 /**
  * Chart/shape/image insertion (ribbon and AI ops). Extracted from App.tsx;
  * the App component passes a VisualActionContext built fresh per call so
@@ -93,6 +94,8 @@ function pushVisualAddUndo(
   state: LazyWorkbookState,
   visual: WorkbookVisualObject,
 ): void {
+  if (ctx.lazyWorkbookRef.current !== state) throw new Error('Workbook changed before the pending visual could be inserted. Retry in the current workbook.')
+  mutationAdmission(state.editJournal).assertWritable()
   recordVisualAdd(state.editJournal, visual)
   pushVisualUndo(runtime, {
     undo: () => {
@@ -168,6 +171,17 @@ function insertDemoChartFromSelection(
 }
 
 export async function handleInsertChart(
+  ctx: VisualActionContext,
+  chartKind: string,
+): Promise<void> {
+  const journal = ctx.lazyWorkbookRef.current?.editJournal
+  if (!journal) return handleInsertChartNow(ctx, chartKind)
+  try {
+    await mutationAdmission(journal).run(() => handleInsertChartNow(ctx, chartKind))
+  } catch (error) { ctx.setMessage(error instanceof Error ? error.message : String(error)) }
+}
+
+async function handleInsertChartNow(
   ctx: VisualActionContext,
   chartKind: string,
 ): Promise<void> {
@@ -301,6 +315,17 @@ export async function handleInsertPivotChart(
   ctx: VisualActionContext,
   chartKind: string,
 ): Promise<void> {
+  const journal = ctx.lazyWorkbookRef.current?.editJournal
+  if (!journal) return handleInsertPivotChartNow(ctx, chartKind)
+  try {
+    await mutationAdmission(journal).run(() => handleInsertPivotChartNow(ctx, chartKind))
+  } catch (error) { ctx.setMessage(error instanceof Error ? error.message : String(error)) }
+}
+
+async function handleInsertPivotChartNow(
+  ctx: VisualActionContext,
+  chartKind: string,
+): Promise<void> {
   const runtime = ctx.univerRef.current
   const state = ctx.lazyWorkbookRef.current
   if (!runtime) return
@@ -388,6 +413,7 @@ export async function handleInsertPivotChart(
  * rectangle (or single click = default 1in square) becomes the shape's anchor.
  */
 export function startShapeDraw(ctx: VisualActionContext, shapeType: string): void {
+  if (!admitMutation(ctx.lazyWorkbookRef.current?.editJournal, ctx.setMessage)) return
   const runtime = ctx.univerRef.current
   if (!runtime) return
   if (!ctx.lazyWorkbookRef.current) {
@@ -403,6 +429,7 @@ export function insertShapeAtAnchor(
   shapeType: string,
   anchor: WorkbookVisualObject['anchor'],
 ): void {
+  if (!admitMutation(ctx.lazyWorkbookRef.current?.editJournal, ctx.setMessage)) return
   const runtime = ctx.univerRef.current
   const state = ctx.lazyWorkbookRef.current
   if (!runtime || !state) return
@@ -429,6 +456,7 @@ export function handleInsertShape(
   shapeType: string,
   isTextBox: boolean,
 ): void {
+  if (!admitMutation(ctx.lazyWorkbookRef.current?.editJournal, ctx.setMessage)) return
   const runtime = ctx.univerRef.current
   const state = ctx.lazyWorkbookRef.current
   if (!runtime) return
@@ -608,6 +636,18 @@ export async function insertAiChartVisual(
   state: LazyWorkbookState,
   op: AddChartOperation,
 ): Promise<void> {
+  const journal = ctx.lazyWorkbookRef.current?.editJournal
+  if (!journal) return insertAiChartVisualNow(ctx, runtime, state, op)
+  mutationAdmission(journal).assertWritable()
+  await insertAiChartVisualNow(ctx, runtime, state, op)
+}
+
+async function insertAiChartVisualNow(
+  ctx: VisualActionContext,
+  runtime: UniverRuntime,
+  state: LazyWorkbookState,
+  op: AddChartOperation,
+): Promise<void> {
   const workbook = runtime.univerAPI.getActiveWorkbook()
   const target = workbook?.getSheetBySheetId(op.sheetId)
   if (!workbook || !target) throw new Error(`Unknown sheet: ${op.sheetId}`)
@@ -664,6 +704,7 @@ export function insertAiShapeVisual(
 }
 
 export function handleInsertPicture(ctx: VisualActionContext): void {
+  if (!admitMutation(ctx.lazyWorkbookRef.current?.editJournal, ctx.setMessage)) return
   if (!pictureTargetReady(ctx)) return
   const input = document.createElement('input')
   input.type = 'file'
@@ -698,26 +739,28 @@ export function handleInsertPictureFile(
     ctx.setMessage(t(problem === 'too-large' ? 'appPictureTooLarge' : 'appPictureBadType'))
     return
   }
+  const state = ctx.lazyWorkbookRef.current
+  if (!state || !admitMutation(state.editJournal, ctx.setMessage)) return
   const mediaType = pictureMediaType(file.type)
-  const reader = new FileReader()
-  reader.onload = () => {
-    const dataUrl = typeof reader.result === 'string' ? reader.result : null
+  void mutationAdmission(state.editJournal).run(async () => {
+    const dataUrl = await new Promise<string | null>((resolve) => {
+      const reader = new FileReader()
+      reader.onload = () => resolve(typeof reader.result === 'string' ? reader.result : null)
+      reader.onerror = () => resolve(null)
+      reader.onabort = () => resolve(null)
+      reader.readAsDataURL(file)
+    })
     if (!dataUrl) return
-    const image = new Image()
-    image.onload = () =>
-      insertPictureVisual(
-        ctx,
-        dataUrl,
-        mediaType,
-        file.name,
-        image.naturalWidth,
-        image.naturalHeight,
-        anchor,
-      )
-    image.onerror = () => insertPictureVisual(ctx, dataUrl, mediaType, file.name, 480, 320, anchor)
-    image.src = dataUrl
-  }
-  reader.readAsDataURL(file)
+    const size = await new Promise<{ width: number; height: number }>((resolve) => {
+      const image = new Image()
+      image.onload = () => resolve({ width: image.naturalWidth, height: image.naturalHeight })
+      image.onerror = () => resolve({ width: 480, height: 320 })
+      image.src = dataUrl
+    })
+    if (ctx.lazyWorkbookRef.current !== state) return
+    mutationAdmission(state.editJournal).assertWritable()
+    insertPictureVisual(ctx, dataUrl, mediaType, file.name, size.width, size.height, anchor)
+  }).catch((error) => ctx.setMessage(error instanceof Error ? error.message : String(error)))
 }
 
 /// Grid cell under a viewport point (drop target), mirroring Univer's own
@@ -801,6 +844,7 @@ export function handleInsertScreenshot(
   width: number,
   height: number,
 ): void {
+  if (!admitMutation(ctx.lazyWorkbookRef.current?.editJournal, ctx.setMessage)) return
   insertPictureVisual(ctx, dataUrl, 'image/png', 'Screenshot.png', width, height)
 }
 
@@ -810,6 +854,7 @@ export function handleInsertEquation(
   width: number,
   height: number,
 ): void {
+  if (!admitMutation(ctx.lazyWorkbookRef.current?.editJournal, ctx.setMessage)) return
   insertPictureVisual(ctx, dataUrl, 'image/png', 'Equation.png', width, height)
 }
 
@@ -819,6 +864,7 @@ export function handleInsertIcon(
   size: number,
   name: string,
 ): void {
+  if (!admitMutation(ctx.lazyWorkbookRef.current?.editJournal, ctx.setMessage)) return
   insertPictureVisual(ctx, dataUrl, 'image/png', `${name.replace(/\s+/g, '-')}.png`, size, size)
 }
 

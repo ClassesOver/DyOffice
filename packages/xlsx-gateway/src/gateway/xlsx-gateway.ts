@@ -1656,7 +1656,20 @@ export async function planCellEditsToXlsx(
   // chart XML.
   for (const chartEdit of chartEdits) {
     const chartXml = await pkg.readText(chartEdit.chartPath)
-    pkg.write(chartEdit.chartPath, applyChartEdit(chartXml, chartEdit))
+    const chartRelsPath = relsPathFor(chartEdit.chartPath)
+    const chartRelsXml = (await pkg.has(chartRelsPath))
+      ? normalizeOoxmlPartPrefix(await pkg.readText(chartRelsPath))
+      : ''
+    // Read-only style context: never rewrite relationships or their targets.
+    // Expanded Relationship elements are legal, too; parseRelationships uses
+    // the package's customary empty-element representation.
+    const chartRels = parseRelationships(
+      chartRelsXml.replace(/<Relationship\b([^>]*?)>\s*<\/Relationship>/g, '<Relationship$1/>'),
+    )
+    const hasExternalStyle = chartRels.some((rel) =>
+      /\/(?:chartStyle|chartColorStyle|colorStyle|themeOverride|theme)$/.test(rel.type),
+    )
+    pkg.write(chartEdit.chartPath, applyChartEdit(chartXml, chartEdit, { hasExternalStyle }))
     touchedEntries.add(chartEdit.chartPath)
   }
 
