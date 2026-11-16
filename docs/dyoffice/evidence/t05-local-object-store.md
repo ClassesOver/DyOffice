@@ -62,6 +62,16 @@ node --test apps/web/test/object-upload.test.mjs
 
 Before the routes existed both tests received 404 instead of 201. After the routes, the file passes.
 
+## Abandoned staged uploads
+
+An unfinished upload records `stagedAt`. After `stagedUploadTtlMs` (default 24 hours) it no longer counts against the owner quota, `finishUpload` returns `NOT_FOUND` for it, and the owner's next `stageUpload` removes the record under the owner lock. Its blob is removed only if no object or live staged upload still references the SHA-256. Without this, a client that lost its `finish` request kept those bytes on the quota permanently, with no way to discard them. Records written before `stagedAt` existed never expire.
+
+```sh
+node --test apps/web/test/object-staging-expiry.test.mjs
+```
+
+Before the change all three tests failed (quota stayed full, the expired upload finished, the unshared blob remained). After the change the file passes.
+
 ## Still open
 
 S3, PostgreSQL file rows, and RLS. Do not check the remaining T05 boxes from this note.
