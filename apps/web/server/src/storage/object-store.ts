@@ -7,6 +7,7 @@ export interface ObjectStore {
   checkReady?(): Promise<void>
   putImmutable(key: string, bytes: Buffer): Promise<ObjectRef>
   readVerified(reference: ObjectRef): Promise<Buffer>
+  verifyObject(reference: ObjectRef): Promise<void>
 }
 export function storageError(statusCode = 503): Error & { statusCode: number } {
   return Object.assign(new Error('Object storage operation rejected'), { statusCode })
@@ -27,15 +28,22 @@ export function assertObjectReference(ref: ObjectRef) {
   if (!Number.isSafeInteger(ref.size) || ref.size < 1 || ref.size > MAX_OBJECT_BYTES || typeof ref.sha256 !== 'string' || !/^[0-9a-f]{64}$/.test(ref.sha256)) throw storageError(400)
 }
 export async function collectVerified(source: AsyncIterable<Uint8Array>, reference: ObjectRef): Promise<Buffer> {
+  const chunks: Buffer[] = []
+  await verifyStream(source, reference, bytes => chunks.push(Buffer.from(bytes)))
+  return Buffer.concat(chunks, reference.size)
+}
+
+// Hash each borrowed chunk synchronously before advancing the source. The
+// verification-only path never retains payload chunks or allocates a full object.
+export async function verifyStream(source: AsyncIterable<Uint8Array>, reference: ObjectRef, collect?: (bytes: Uint8Array) => void): Promise<void> {
   assertObjectReference(reference)
-  const chunks: Buffer[] = [], hash = createHash('sha256')
+  const hash = createHash('sha256')
   let size = 0
   for await (const chunk of source) {
     size += chunk.byteLength
     if (size > reference.size) throw storageError()
-    const bytes = Buffer.from(chunk)
-    hash.update(bytes); chunks.push(bytes)
+    hash.update(chunk)
+    collect?.(chunk)
   }
   if (size !== reference.size || hash.digest('hex') !== reference.sha256) throw storageError()
-  return Buffer.concat(chunks, size)
 }

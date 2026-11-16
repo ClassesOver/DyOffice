@@ -101,7 +101,7 @@ export function createFileService({ transactions, objects, quotaBytes = 1024 ** 
           return openResult({ ...file, current_revision: row.revision_id, sha256: row.sha256!, size: row.expected_size })
         }
         if (row.state !== 'ready' || !row.sha256) throw authError(409)
-        await objects.readVerified({ key: objectKey(principal,row.revision_id), size: row.expected_size, sha256: row.sha256 })
+        await objects.verifyObject({ key: objectKey(principal,row.revision_id), size: row.expected_size, sha256: row.sha256 })
         await connection.query('INSERT INTO files(id,deployment_id,owner_id,workspace_id,name,format,current_revision) VALUES($1,$2,$3,$4,$5,$6,$7)', [row.file_id,...scope(principal),row.workspace_id,row.name,row.format,row.revision_id])
         await connection.query('INSERT INTO file_revisions(id,deployment_id,owner_id,file_id,object_key,sha256,size) VALUES($1,$2,$3,$4,$5,$6,$7)', [row.revision_id,...scope(principal),row.file_id,objectKey(principal,row.revision_id),row.sha256,row.expected_size])
         await connection.query("UPDATE uploads SET state='committed',completed_file_id=file_id WHERE deployment_id=$1 AND owner_id=$2 AND id=$3", [...scope(principal),id])
