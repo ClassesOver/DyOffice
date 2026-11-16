@@ -9,6 +9,7 @@ export type BusinessCredential = SessionCredential | JobCredential
 export type BusinessPrincipal = Principal & { roles: readonly string[]; authVersion: number; job?: Readonly<{ id: string; epoch: number; fileId: string; baseRevision: string }> }
 export interface SessionCredential { kind: 'session'; token: string }
 export function createPrincipalTransactions({ pool, deploymentId, idleMs = 8 * 3600_000 }: { pool: Pool; deploymentId: string; idleMs?: number }) {
+  if (!Number.isSafeInteger(idleMs) || idleMs < 1 || idleMs > 2592000000) throw new Error('Invalid session idle lifetime')
   deploymentId = deploymentId.toLowerCase()
   let admitted: ReturnType<typeof assertRuntimePool> | undefined
   return {
