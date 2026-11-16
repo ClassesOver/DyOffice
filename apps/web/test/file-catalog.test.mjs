@@ -54,7 +54,7 @@ function catalog() {
 
 test('a file row is readable only by its owner and only while active', async () => {
   const { files } = catalog()
-  assert.equal(files.scope.enforcement, 'pending-t04')
+  assert.equal(files.scope.enforcement, 'app-owner-filter')
   const saved = await files.saveNewFile({ deploymentId: DEPLOYMENT, ownerId: OWNER_A, name: 'notes.docx', bytes: ZIP })
   const downloaded = await files.downloadFile({ deploymentId: DEPLOYMENT, ownerId: OWNER_A, fileId: saved.fileId })
   assert.deepEqual(downloaded.bytes, ZIP)

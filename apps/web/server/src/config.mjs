@@ -1,5 +1,5 @@
 const ENVIRONMENTS = new Set(['development', 'test'])
-const CONFIG_KEYS = new Set(['env', 'logger', 'rateLimit', 'readyCheck', 'legacy'])
+const CONFIG_KEYS = new Set(['env', 'logger', 'rateLimit', 'readyCheck', 'legacy', 'auth'])
 
 /**
  * Rejects production and any field the shell does not understand.
@@ -38,11 +38,25 @@ export function assertModularConfig(config) {
       throw new Error('Unsupported modular API config: legacy')
     }
   }
+  let auth
+  if (config.auth !== undefined) {
+    auth = config.auth
+    if (!auth || typeof auth !== 'object' || Array.isArray(auth)) {
+      throw new Error('Unsupported modular API config: auth')
+    }
+    const extra = Object.keys(auth).filter((key) => key !== 'authenticate')
+    if (extra.length > 0) throw new Error(`Unsupported modular API config: ${extra.join(',')}`)
+    if (typeof auth.authenticate !== 'function') {
+      throw new Error('Modular API auth.authenticate must be a function')
+    }
+    auth = { authenticate: auth.authenticate }
+  }
   return {
     env: config.env,
     logger: false,
     rateLimit: { max: limit.max, windowMs: limit.windowMs },
     readyCheck: config.readyCheck,
     legacy,
+    auth,
   }
 }

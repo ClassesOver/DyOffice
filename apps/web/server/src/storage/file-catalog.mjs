@@ -29,13 +29,13 @@ const SELECT_OWNED = `SELECT id, state
 
 /**
  * File rows point at objects that are already stored.
- * Owner filtering here is application code. Database RLS is pending T04.
- * enforcement is always 'pending-t04' so callers cannot treat this as isolation.
+ * These statements filter by owner. PostgreSQL FORCE RLS in 0005_rls.sql is
+ * the isolation proof. This filter is not that proof.
  */
 export function createFileCatalog({ db, objectStore } = {}) {
   if (!db || typeof db.query !== 'function') reject('UNSAFE_DATABASE')
   if (!objectStore || typeof objectStore.stageUpload !== 'function') reject('UNSAFE_STORE')
-  const scope = { enforcement: 'pending-t04' }
+  const scope = { enforcement: 'app-owner-filter' }
 
   return {
     scope,

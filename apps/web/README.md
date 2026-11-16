@@ -20,7 +20,7 @@ Open `http://127.0.0.1:3080` for the personal workspace and `/admin` for adminis
 ## Current implementation
 
 - Personal DOCX open/edit/save. The page edits plain paragraph, heading, and list text. Saves call GenOffice `docx-engine` so unchanged paragraphs, tables, pictures, styles, and headers stay in the original OOXML package. Complex paragraphs (tabs, fields, revisions, content controls) are shown and preserved, not rewritten as plain text.
-- Document revisions: a save names the base revision, lease epoch, and idempotency key. The server writes the bytes to the local immutable object store, then commits the base revision, lease, idempotency record, and outbox entry in one in-process journal transaction. A stale base or lease returns 409 and keeps the draft. Repeating the same save returns the original revision. Restoring an older revision creates a new head. The journal is single-process and is the development stand-in for the PostgreSQL transaction in `server/db/migrations/0004_revisions.sql`. The Web process does not open PostgreSQL to commit revisions, and the journal does not enforce row-level security.
+- Document revisions: a save names the base revision, lease epoch, and idempotency key. The server writes the bytes to the local immutable object store, then commits the base revision, lease, idempotency record, and outbox entry in one in-process journal transaction. A stale base or lease returns 409 and keeps the draft. Repeating the same save returns the original revision. Restoring an older revision creates a new head. The journal is single-process and is the development stand-in for the PostgreSQL transaction in `server/db/migrations/0004_revisions.sql`. The Web process does not open PostgreSQL to commit revisions. Owned PostgreSQL tables, including that ledger, have `FORCE ROW LEVEL SECURITY` in `server/db/migrations/0005_rls.sql`. The journal itself is not that policy.
 - Personal file import/download restricted to DOCX, XLSX, PPTX and PDF. Only DOCX is editable.
 - Personal theme, language, author, autosave and assistant preferences.
 - HTTP data-source configuration with encrypted credentials.
@@ -32,7 +32,9 @@ The development token server refuses startup when `NODE_ENV=production`, before 
 
 ## Remaining implementation
 
-T05 object storage is complete for this repository. Personal objects can be staged, finished, downloaded, trashed, restored, and purged. The server checks SHA-256, enforces quota, expires abandoned uploads, and keeps a file row only after the object exists. An in-process client covers those rules in `npm run test:web`. A MinIO job, [dyoffice-t05-s3.yml](../../.github/workflows/dyoffice-t05-s3.yml), runs the same lifecycle against S3 when `DYOFFICE_S3_ENDPOINT` is set; the test skips when it is not. Row-level security remains T04. Multi-node highly available storage remains an operations concern. The older `/api/files` directory is the development-token prototype, not this store.
+T04 row-level security is in place for the owned PostgreSQL tables. `0005_rls.sql` enables and forces policies for files, workspaces, revisions, leases, idempotency, outbox, and the identity rows a user owns. Database work runs as `dyoffice_app` with `set_config('app.current_user', …, true)` inside the transaction. `createAuthorizer(pool)` is what a job uses to check an artifact id. The development token server does not open that pool. Evidence is in `docs/dyoffice/evidence/t04-row-level-security.md`, and CI runs it in [dyoffice-t04-rls.yml](../../.github/workflows/dyoffice-t04-rls.yml) when `DYOFFICE_TEST_DATABASE_URL` is set. `npm run test:web` skips that PostgreSQL file when the variable is absent.
+
+T05 object storage is complete for this repository. Personal objects can be staged, finished, downloaded, trashed, restored, and purged. The server checks SHA-256, enforces quota, expires abandoned uploads, and keeps a file row only after the object exists. An in-process client covers those rules in `npm run test:web`. A MinIO job, [dyoffice-t05-s3.yml](../../.github/workflows/dyoffice-t05-s3.yml), runs the same lifecycle against S3 when `DYOFFICE_S3_ENDPOINT` is set; the test skips when it is not. Multi-node highly available storage remains an operations concern. The older `/api/files` directory is the development-token prototype, not this store.
 
 T06 save transactions, revision history, and single-writer leases are complete for this development server. The done and deferred checklist is in `docs/dyoffice/evidence/t06-revision-commit.md`. Mount the GenOffice Docs renderer (ribbon, pagination, comments, tracked changes, and selection) on this DOCX host instead of the paragraph surface. Then adapt the other formats the same way, reusing each native editor and keeping non-browser work behind authorized APIs. Model chat/tool execution, database connectors and query integration, source edit/delete/test UI, file folders/favorites/recent views, multi-user login, and deployment hardening are still open. Autosave uses the saved preference; the assistant preference is stored and not yet shown.
 
@@ -43,8 +45,9 @@ Run `npm run test:web` for HTTP access-boundary and persistence tests. Runtime d
 The repository now includes a PostgreSQL migration runner, an Argon2id password
 hasher and a **trusted-operator-only** one-time administrator bootstrap CLI.
 This does **not** make the existing Web token-login UI a production identity
-system; browser login, session revocation, throttling and per-user file RLS
-remain T03b/T04.
+system. Browser login, session revocation, and throttling remain T03.
+Per-user row-level security for owned tables is migration `0005_rls.sql`.
+The development token server does not open that database pool.
 
 Use the locked Web dependencies and an already provisioned PostgreSQL 16+
 database. Supply a dedicated *migration* role through `DYOFFICE_DATABASE_URL`
@@ -69,8 +72,9 @@ HTTP bootstrap endpoint or default admin password.
 
 Run the identity tests using the dedicated [identity schema CI workflow](../../.github/workflows/dyoffice-identity-schema.yml).
 This validates the actual native Argon2id module, PostgreSQL migrations,
-concurrent initializations and CLI. Do not enable this account store for Web
-users until T03b/T04 authorization and resource-isolation gates are met.
+concurrent initializations and CLI. Do not point Web users at this account
+store until T03 mounts sessions on the request path. The T04 runtime role
+and policies are in place; the development token server still does not use them.
 
 ## Web-only build baseline (T00)
 
@@ -108,7 +112,7 @@ native document round-trip acceptance.
 
 Run exactly one server process/application instance per data directory. The JSON store's queue protects only that instance; starting another instance on the same directory is unsupported and can overwrite metadata, even when both uploads return success. Do not use clustered workers, multiple replicas or rolling overlap with a shared prototype directory. There is currently no inter-process ownership lock.
 
-Admin updates apply supplied sections against the latest state inside the instance queue; omitted sections and omitted keys are preserved. Concurrent updates to the same section remain last-writer-wins, not revision-checked. This is not PostgreSQL CAS for settings (T12) or row-level security (T04). DOCX saves publish a revision only after the immutable object is stored and the in-process journal accepts the base revision, lease epoch, and idempotency key. That journal is local to one server process. A crash after the object write and before the journal publish leaves an unreferenced object and no new revision; retry the same idempotency key. A crash after the journal publish and before the legacy current-file copy can be repaired by repeating that same request. Do not run two processes on one data directory.
+Admin updates apply supplied sections against the latest state inside the instance queue; omitted sections and omitted keys are preserved. Concurrent updates to the same section remain last-writer-wins, not revision-checked. This is not PostgreSQL CAS for settings (T12). The JSON preference store is not row-level security; owned PostgreSQL tables are covered by T04 (`0005_rls.sql`). DOCX saves publish a revision only after the immutable object is stored and the in-process journal accepts the base revision, lease epoch, and idempotency key. That journal is local to one server process. A crash after the object write and before the journal publish leaves an unreferenced object and no new revision; retry the same idempotency key. A crash after the journal publish and before the legacy current-file copy can be repaired by repeating that same request. Do not run two processes on one data directory.
 
 ### T02 请求与错误迁移接缝
 

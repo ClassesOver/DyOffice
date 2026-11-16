@@ -3,6 +3,7 @@ import { STATUS_CODES } from 'node:http'
 import Fastify from 'fastify'
 import { authorizeDevApi } from '../request-boundary.mjs'
 import { assertModularConfig } from './config.mjs'
+import { devPrincipalFor, principalFromSession } from './modules/policy/principal.mjs'
 import { rawBody } from './http-helpers.mjs'
 import { registerLegacyRoutes } from './legacy-dispatch.mjs'
 import { registerHealthRoutes } from './modules/health/routes.mjs'
@@ -26,6 +27,11 @@ function clientAddress(request) {
 function requestPath(url) {
   try { return new URL(url, 'http://localhost').pathname }
   catch { return pathname(url) }
+}
+
+function attachPrincipal(request, principal) {
+  request.principal = principal
+  request.raw.dyofficePrincipal = principal
 }
 
 function authProblem(status, error, requestId) {
@@ -84,10 +90,34 @@ export async function buildApp(input) {
     // The body parser buffers up to the file limit. Check API credentials
     // first so an unauthenticated request never allocates that buffer.
     // Health probes and static pages stay public.
-    if (!config.legacy || !path.startsWith('/api/')) return undefined
+    if (!path.startsWith('/api/')) return undefined
+    // A session authenticator, when configured, is the only API identity.
+    // The development bearer remains the identity until that authenticator is mounted.
+    if (config.auth) {
+      let session
+      try {
+        session = await config.auth.authenticate(request.raw)
+      } catch {
+        return reply.code(503).type('application/json; charset=utf-8').send(authProblem(503, '服务暂时不可用', request.id))
+      }
+      const principal = principalFromSession(session)
+      if (!principal) {
+        return reply.code(401).type('application/json; charset=utf-8').send(authProblem(401, '请登录', request.id))
+      }
+      attachPrincipal(request, principal)
+      return undefined
+    }
+    if (!config.legacy) return undefined
     const access = authorizeDevApi(request.raw, config.legacy.credentials, path)
-    if (!('status' in access)) return undefined
-    return reply.code(access.status).type('application/json; charset=utf-8').send(authProblem(access.status, access.error, request.id))
+    if ('status' in access) {
+      return reply.code(access.status).type('application/json; charset=utf-8').send(authProblem(access.status, access.error, request.id))
+    }
+    const principal = devPrincipalFor(access.principal)
+    if (!principal) {
+      return reply.code(401).type('application/json; charset=utf-8').send(authProblem(401, '请登录', request.id))
+    }
+    attachPrincipal(request, principal)
+    return undefined
   })
 
   app.setErrorHandler((error, request, reply) => {

@@ -1,12 +1,12 @@
 # T06 revision commits, history, and single-writer leases
 
-> 2026-11-16 · Development ledger. Not a live PostgreSQL pool, not RLS, not S3, and not an XLSX editor.
+> 2026-11-16 · Development ledger. Not a live PostgreSQL pool and not an XLSX editor. Row-level security for these tables is in T04 migration `0005_rls.sql`.
 
 ## Why this slice
 
 T05's local object store is already on `feat/dyoffice-web`. Login and resource-isolation work is proceeding separately. Revision commits need an owner id supplied by the caller; they do not decide who the caller is. The personal development token maps to one fixed principal (`ownerId` `dev-personal`, deployment `dev`, session `dev-editor`). Request bodies cannot choose an owner.
 
-The Web process commits through `createMemoryJournal` / `createFileJournal`. That queue is the transaction: a thrown callback publishes no revision, idempotency row, or outbox event. `server/db/migrations/0004_revisions.sql` is the PostgreSQL shape of the same ledger and is applied by the existing migration runner. This process does not open a database connection to commit a revision. Row-level security remains T04.
+The Web process commits through `createMemoryJournal` / `createFileJournal`. That queue is the transaction: a thrown callback publishes no revision, idempotency row, or outbox event. `server/db/migrations/0004_revisions.sql` is the PostgreSQL shape of the same ledger and is applied by the existing migration runner. This process does not open a database connection to commit a revision. T04 enables and forces row-level security on these tables in `0005_rls.sql`. The dev principal is still supplied by the caller on the journal path. See [t04-row-level-security.md](t04-row-level-security.md).
 
 The running server uses the same local object store and `dev-personal` owner as the development object HTTP routes. Revision calls do not choose a different owner.
 
@@ -64,7 +64,7 @@ T06's save behavior is complete on the development ledger. The Web process prove
 | HTTP acquire, renew, takeover, commit, restore, DOCX save | `docx-editor.test.mjs` and the route commit test |
 | Another owner | `NOT_FOUND` |
 | Restart of the file journal | reload replays the same revision |
-| SQL shape without RLS | `0004_revisions.sql` assertion |
+| SQL ledger shape, with RLS forced by T04 | `0004_revisions.sql` still creates the tables. `0005_rls.sql` forces the policies |
 
 The route test was red before the head projection change: replaying commit A left A's bytes on disk after B was the head. It is green after the projection reads the head inside the journal queue.
 
@@ -72,8 +72,7 @@ The route test was red before the head projection change: replaying commit A lef
 
 | Item | Owner | Why it is not part of this T06 closeout |
 | --- | --- | --- |
-| Row-level security and database role isolation for these tables | T04 | `0004_revisions.sql` creates no policy and does not enable RLS. The dev principal is supplied by the caller. |
-| Live PostgreSQL execution of the revision transaction | ops | The migration is the schema and is applied by the migration runner. The Web process uses the journal adapter, which is the stand-in while the server is still one dev-token process. |
+| Live PostgreSQL execution of the revision transaction | ops | The policies are in `0005_rls.sql`. The Web process still uses the journal adapter and does not open a database connection. The dev principal is supplied by the caller. |
 | More than one process on one data directory | ops | The journal queue is in-process. A second process can overwrite the file. Run one server per data directory. |
 | Outbox delivery | T08 | Rows are written in the commit transaction. No dispatcher consumes them. |
 | Native Docs ribbon, full editor generation wiring, and four-format round trip | T07 | The paragraph editor and `createSaveGenerationGuard` cover the current DOCX save. Mounting the Docs renderer is T07. |

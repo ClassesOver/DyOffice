@@ -367,12 +367,17 @@ test('another owner cannot read or commit a file, and the file journal replays a
   assert.equal(reloaded.listRevisions(principal, fileId).length, 2)
 })
 
-test('revision SQL records leases, idempotency, and outbox without enabling row level security', async () => {
+test('revision SQL records leases, idempotency, and outbox, and T04 forces row level security', async () => {
   const sql = await readFile(new URL('../../server/db/migrations/0004_revisions.sql', import.meta.url), 'utf8')
-  for (const name of ['dyoffice_revision_files', 'dyoffice_file_revisions', 'dyoffice_edit_leases', 'dyoffice_revision_idempotency', 'dyoffice_outbox']) {
+  const names = ['dyoffice_revision_files', 'dyoffice_file_revisions', 'dyoffice_edit_leases', 'dyoffice_revision_idempotency', 'dyoffice_outbox']
+  for (const name of names) {
     assert.match(sql, new RegExp(`CREATE TABLE ${name} \\(`))
   }
   assert.match(sql, /PRIMARY KEY \(deployment_id, owner_id, file_id, idempotency_key\)/)
   assert.match(sql, /lease_epoch BIGINT NOT NULL/)
-  assert.doesNotMatch(sql, /ENABLE ROW LEVEL SECURITY|CREATE POLICY|BYPASSRLS/i)
+  assert.doesNotMatch(sql, /ENABLE ROW LEVEL SECURITY|CREATE POLICY|(?<!NO)BYPASSRLS/i)
+  const rls = await readFile(new URL('../../server/db/migrations/0005_rls.sql', import.meta.url), 'utf8')
+  for (const name of names) {
+    assert.match(rls, new RegExp(`ALTER TABLE ${name} FORCE ROW LEVEL SECURITY`))
+  }
 })

@@ -1,6 +1,6 @@
 # T05 local immutable object store
 
-> 2026-11-16 · T05 complete for repository scope. RLS is deferred to T04. Multi-node HA storage is deferred to operations. The `/api/files` prototype directory is unchanged.
+> 2026-11-16 · T05 complete for repository scope. Row-level security for `dyoffice_files` is in T04 migration `0005_rls.sql`. Multi-node HA storage is deferred to operations. The `/api/files` prototype directory is unchanged.
 
 ## Why this slice
 
@@ -74,13 +74,13 @@ The file passes against the in-process client. It does not open a network socket
 
 ## File rows
 
-`0003_files.sql` creates `dyoffice_files`. The object key and SHA-256 are constrained. The table references the identity user. The migration comment says row-level security is pending T04, and the executable SQL does not enable RLS or create a policy. `createFileCatalog` inserts a row only after `finishUpload`. If that insert fails, the object can remain and no completed row points at it. Download reads an active row for the requested owner and then checks the stored bytes. Another owner and a trashed row are `NOT_FOUND`. If the row is already trash and the object store update failed, `trashFile` retries the object update instead of returning `NOT_FOUND`. `scope.enforcement` is `pending-t04`.
+`0003_files.sql` creates `dyoffice_files`. The object key and SHA-256 are constrained. The table references the identity user. That migration's executable SQL does not enable RLS, because it was already applied; T04 adds `ENABLE` and `FORCE ROW LEVEL SECURITY` in `0005_rls.sql`. `createFileCatalog` inserts a row only after `finishUpload`. If that insert fails, the object can remain and no completed row points at it. Download reads an active row for the requested owner and then checks the stored bytes. Another owner and a trashed row are `NOT_FOUND`. If the row is already trash and the object store update failed, `trashFile` retries the object update instead of returning `NOT_FOUND`. `scope.enforcement` is `app-owner-filter`. That filter is not the isolation proof. The proof is the T04 PostgreSQL test.
 
 ```sh
 node --test apps/web/test/file-catalog.test.mjs apps/web/test/files-schema.test.mjs
 ```
 
-Those files pass. The schema test reads the migration text and checks that RLS is only named in a comment. The adapter uses the same staged-upload expiry as the local disk store.
+Those files pass. The schema test still checks that `0003_files.sql` itself does not enable RLS. `rls-migration.test.mjs` checks that `0005_rls.sql` forces it. The adapter uses the same staged-upload expiry as the local disk store.
 
 ## Abandoned staged uploads
 
@@ -125,5 +125,5 @@ node --test apps/web/test/s3-http-sign.test.mjs apps/web/test/s3-minio.test.mjs
 | File row only after the object exists | Done. `file-catalog.test.mjs`, `0003_files.sql` |
 | S3-compatible lifecycle | Done in CI against MinIO. Skipped locally without the endpoint |
 | `/api/files` prototype directory | Left as the development-token prototype. Scoped bytes use `/api/v1/objects` |
-| Row-level security | Deferred to T04. The migration does not enable RLS |
+| Row-level security | Done in T04. `0005_rls.sql` forces RLS on `dyoffice_files`. See [t04-row-level-security.md](t04-row-level-security.md) |
 | Multi-node highly available storage | Deferred to operations. MinIO in CI is one container, not a production cluster |

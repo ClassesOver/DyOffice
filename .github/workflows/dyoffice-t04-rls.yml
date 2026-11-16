@@ -1,0 +1,58 @@
+name: DyOffice T04 row-level security
+
+on:
+  push:
+    branches: [feat/dyoffice-web, cursor/t04-rls-resource-auth-e34a]
+    paths:
+      - 'apps/web/server/db/**'
+      - 'apps/web/server/src/modules/policy/**'
+      - 'apps/web/server/src/app.mjs'
+      - 'apps/web/server/src/config.mjs'
+      - 'apps/web/test/ownership-rls.test.mjs'
+      - 'apps/web/test/rls-migration.test.mjs'
+      - 'apps/web/test/principal-context.test.mjs'
+      - '.github/workflows/dyoffice-t04-rls.yml'
+  pull_request:
+    paths:
+      - 'apps/web/server/db/**'
+      - 'apps/web/server/src/modules/policy/**'
+      - 'apps/web/server/src/app.mjs'
+      - 'apps/web/server/src/config.mjs'
+      - 'apps/web/test/ownership-rls.test.mjs'
+      - 'apps/web/test/rls-migration.test.mjs'
+      - 'apps/web/test/principal-context.test.mjs'
+      - '.github/workflows/dyoffice-t04-rls.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  ownership-rls:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: dyoffice_test
+          POSTGRES_PASSWORD: local-ci-only-not-for-production
+          POSTGRES_DB: dyoffice_rls_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U dyoffice_test -d dyoffice_rls_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+      - name: Install isolated Web dependencies
+        run: npm ci --prefix apps/web --workspaces=false --include=dev --no-audit --no-fund
+      - name: Test ownership policies against PostgreSQL
+        env:
+          DYOFFICE_TEST_DATABASE_URL: postgresql://dyoffice_test:local-ci-only-not-for-production@localhost:5432/dyoffice_rls_test
+        run: node --test apps/web/test/rls-migration.test.mjs apps/web/test/principal-context.test.mjs apps/web/test/ownership-rls.test.mjs

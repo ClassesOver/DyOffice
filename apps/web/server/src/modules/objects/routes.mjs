@@ -1,5 +1,6 @@
 import { join } from 'node:path'
 import { fail, readBytes } from '../../http-helpers.mjs'
+import { ownerIdFromRequest } from '../policy/principal.mjs'
 
 /** Dev-token stand-in. The caller cannot choose another owner. */
 export const DEV_PERSONAL_OWNER = 'dev-personal'
@@ -40,6 +41,7 @@ function disposition(name) {
  * The owner id comes from the server, never from the request.
  */
 export async function handleObjects(req, res, ctx, { path, send }) {
+  const ownerId = ownerIdFromRequest(req, ctx.objectOwnerId)
   if (path === '/api/v1/objects') {
     if (req.method !== 'POST') fail('方法不允许', 405)
     let name
@@ -48,7 +50,7 @@ export async function handleObjects(req, res, ctx, { path, send }) {
     const bytes = await readBytes(req, ctx.objectMaxBytes)
     let staged
     try {
-      staged = await ctx.objectStore.stageUpload({ ownerId: ctx.objectOwnerId, name, bytes })
+      staged = await ctx.objectStore.stageUpload({ ownerId, name, bytes })
     } catch (error) {
       rejectStore(error)
     }
@@ -66,7 +68,7 @@ export async function handleObjects(req, res, ctx, { path, send }) {
     if (req.method !== 'POST') fail('方法不允许', 405)
     let completed
     try {
-      completed = await ctx.objectStore.finishUpload({ ownerId: ctx.objectOwnerId, uploadId: finish[1] })
+      completed = await ctx.objectStore.finishUpload({ ownerId, uploadId: finish[1] })
     } catch (error) {
       rejectStore(error)
     }
@@ -74,9 +76,9 @@ export async function handleObjects(req, res, ctx, { path, send }) {
     return true
   }
   const lifecycle = [
-    [TRASH_PATH, (objectId) => ctx.objectStore.trashObject({ ownerId: ctx.objectOwnerId, objectId })],
-    [RESTORE_PATH, (objectId) => ctx.objectStore.restoreObject({ ownerId: ctx.objectOwnerId, objectId })],
-    [PURGE_PATH, (objectId) => ctx.objectStore.purgeObject({ ownerId: ctx.objectOwnerId, objectId })],
+    [TRASH_PATH, (objectId) => ctx.objectStore.trashObject({ ownerId, objectId })],
+    [RESTORE_PATH, (objectId) => ctx.objectStore.restoreObject({ ownerId, objectId })],
+    [PURGE_PATH, (objectId) => ctx.objectStore.purgeObject({ ownerId, objectId })],
   ]
   for (const [pattern, action] of lifecycle) {
     const hit = pattern.exec(path)
@@ -94,7 +96,7 @@ export async function handleObjects(req, res, ctx, { path, send }) {
   if (req.method !== 'GET') fail('方法不允许', 405)
   let opened
   try {
-    opened = await ctx.objectStore.downloadObject({ ownerId: ctx.objectOwnerId, objectId: match[1] })
+    opened = await ctx.objectStore.downloadObject({ ownerId, objectId: match[1] })
   } catch (error) {
     if (error?.code === 'NOT_FOUND') fail('文件不存在', 404)
     fail('服务暂时不可用', 500)

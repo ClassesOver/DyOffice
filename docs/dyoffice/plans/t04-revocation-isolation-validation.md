@@ -1,6 +1,6 @@
 # T03/T04 local-account isolation and revocation test plan
 
-Status: design and test requirements only; no database validation result is claimed.
+Status: T04 ownership policies and cross-owner denial are recorded in [t04-row-level-security.md](../evidence/t04-row-level-security.md). Revocation races, reset-token consumption, and session lock ordering remain T03. This file is still the test requirement list, not a second authentication design.
 
 ## Source of truth and scope
 
@@ -58,6 +58,4 @@ Use real PostgreSQL with a migration connection and a separate restricted runtim
 
 ## Actual evidence and outstanding infrastructure
 
-Independent security review required explicit lock ordering/race tests, uniqueness under concurrency and restricted short-lived secrets; all are reflected here. Existing development auth/route/legacy tests were rerun, **10/10 passed**. They are not evidence of the planned local-account system.
-
-The current executor has no `docker`, `psql` or `postgres` executable. No real PostgreSQL migration, RLS, local-account login or revocation-race test has been executed. Provision a disposable database/test harness as the first implementation step. All T03/T04 acceptance above remains pending; no fake database or external-IdP acceptance is claimed.
+T04 ownership, pool reuse, admin denial, cross-owner constraints, and the non-owner runtime role are executed in [t04-row-level-security.md](../evidence/t04-row-level-security.md) against PostgreSQL 16. The revocation race, reset-token consumption, and session lock-order cases in this plan remain T03 and have not been claimed here. The development token server still does not open the runtime pool. No external-IdP acceptance is claimed.

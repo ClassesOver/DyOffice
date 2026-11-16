@@ -3,6 +3,7 @@ import { join } from 'node:path'
 import { sendJson } from '../../../http-response.mjs'
 import { rawBody } from '../../http-helpers.mjs'
 import { projectCurrentHead } from './projection.mjs'
+import { normalizePrincipal } from '../policy/principal.mjs'
 import {
   assertIdempotencyKey,
   assertLeaseEpoch,
@@ -79,7 +80,7 @@ async function project(ctx, principal, fileId) {
   })
 }
 
-/** Lease, commit, and restore routes. Identity is the dev principal, never a body field. */
+/** Lease, commit, and restore routes. Identity is the request principal, never a body field. */
 export async function handleRevisionRoutes(req, res, ctx, { url, state }) {
   if (!ctx.revisionsRuntime) return false
   const lease = LEASE.exec(url.pathname)
@@ -88,7 +89,10 @@ export async function handleRevisionRoutes(req, res, ctx, { url, state }) {
   if (!lease && !commit && !restore) return false
   if (req.method !== 'POST') throw revisionError('INVALID', 405, 'Method not allowed')
   const fileId = (lease || commit || restore)[1].toLowerCase()
-  const { revisions, leases, principal } = ctx.revisionsRuntime
+  const { revisions, leases } = ctx.revisionsRuntime
+  const principal = req.dyofficePrincipal
+    ? normalizePrincipal(req.dyofficePrincipal)
+    : ctx.revisionsRuntime.principal
   await ensureHead(ctx, state, fileId)
   if (lease) {
     const action = lease[2].toLowerCase()

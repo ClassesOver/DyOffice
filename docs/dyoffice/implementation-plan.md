@@ -139,15 +139,24 @@ docs/dyoffice/               当前计划及 inventory/ evidence/ adr/
 
 ### T04 资源授权与 RLS
 
-**依赖：** T03。**文件：** `modules/policy/authorize.ts`、`db/context.ts`、`db/migrations/0002_rls.sql`、`test/integration/ownership-rls.test.ts`。
+**依赖：** T03。**文件：** `server/src/modules/policy/{authorize,principal}.mjs`、`server/db/context.mjs`、`server/db/migrations/0005_rls.sql`、`apps/web/test/ownership-rls.test.mjs`。计划中的 `0002_rls.sql` 号已被登录限流占用，策略放在 `0005_rls.sql`。
 
-**接口：** `withPrincipalTransaction(principal, fn)`、`authorize()`；角色不隐式包含文件所有权。
+**接口：** `withPrincipalTransaction(principal, fn)`、`authorize(principal, action, resource)`；角色不隐式包含文件所有权。T08 使用 `createAuthorizer(pool)`，动作为 `job:enqueue` / `job:cancel`，资源只接受已授权的 artifact id。
 
-- [ ] 测试 A/B 交叉访问、同池连接复用、异常回滚、Admin 读取他人文件、跨 owner 外键、后台任务错误主体。
-- [ ] integration RED；明确以非 owner 应用账号测试，不拿数据库超级用户做假隔离证明。
-- [ ] 加作用域过滤、FORCE RLS、事务内身份设置、复合边界约束和默认拒绝策略。
-- [ ] 每种入口和 DB 直连策略测试 GREEN；权限缺失按约定返回无泄漏错误。
-- [ ] 提交 `feat(security): enforce ownership across api and database`。
+**状态（2026-11-16）：完成。** 证据见 [t04-row-level-security.md](evidence/t04-row-level-security.md)。已有所有者表 `ENABLE` 且 `FORCE ROW LEVEL SECURITY`。Fastify 把已验证主体挂到请求上。事务内使用 `set_config('app.current_user', …, true)`，等价于 `SET LOCAL`。跨所有者拒绝在 PostgreSQL 16 上由非超级用户、非表所有者、`NOBYPASSRLS` 的 `dyoffice_app` 证明。没有 `DYOFFICE_TEST_DATABASE_URL` 时该集成测试跳过。
+
+**明确延期：**
+
+- 开发进程仍使用个人开发令牌主体。`createSessionService.authenticate()` 的返回值可以由可选的 `auth.authenticate` 接入；`server/index.mjs` 还没有挂上它。会话查找仍使用迁移连接。`dyoffice_auth` 可以读凭据表，不能读文件、版本或 outbox，留给并行的 T03 切换。
+- 双连接撤销竞争、密码重置一次性消费和锁顺序属于 T03，不在本任务里改会话实现。
+- 偏好、数据源和对话还没有所有者表。任务行本身属于 T08。登录限流桶没有所有者，不启用 RLS，应用角色没有权限。
+- 正在运行的版本提交仍是单进程账本，不打开 PostgreSQL。账本表的策略只在走 `withPrincipalTransaction` 时生效。
+
+- [x] 测试 A/B 交叉访问、同池连接复用、异常回滚、Admin 读取他人文件、跨 owner 外键、后台任务错误主体。
+- [x] integration 先因缺少 `0005_rls.sql` 失败；随后以非 owner 应用账号测试，不拿数据库超级用户做假隔离证明。
+- [x] 加作用域过滤、FORCE RLS、事务内身份设置、复合边界约束和默认拒绝策略。
+- [x] HTTP 会话入口和 DB 直连策略测试 GREEN；权限缺失与不存在返回同一无泄漏错误。
+- [x] 提交 `feat(security): enforce ownership across api and database`。
 
 ### T05 对象存储、上传与个人文件生命周期
 
@@ -159,12 +168,12 @@ docs/dyoffice/               当前计划及 inventory/ evidence/ adr/
 
 **明确延期：**
 
-- **T04：** `dyoffice_files` 不启用 RLS。应用层 owner 过滤不是 `FORCE ROW LEVEL SECURITY`。
+- **T04：** 已完成。`0005_rls.sql` 对 `dyoffice_files` 强制 RLS。目录模块里的 owner 过滤仍然存在，它不是隔离证明。证据见 [t04-row-level-security.md](evidence/t04-row-level-security.md)。
 - **运维：** 多节点高可用对象存储不在本仓库的适配器里。CI 的 MinIO 只证明 S3 兼容协议，不是生产集群。
 
 - [x] 测试四格式类型验证、伪 ZIP、空文件、超额、路径穿越、跨用户 uploadId、未完成上传不能下载。
 - [x] 运行 files integration，确认没有元数据/对象分离保障时 RED。
-- [x] 实现 S3 adapter、不可变对象键、配额、服务器哈希、回收站与受控下载；开发本地盘 adapter 不进入企业 HA。进程内替身覆盖这些行为。数据库 RLS 仍待 T04。
+- [x] 实现 S3 adapter、不可变对象键、配额、服务器哈希、回收站与受控下载；开发本地盘 adapter 不进入企业 HA。进程内替身覆盖这些行为。数据库 RLS 由 T04 的 `0005_rls.sql` 完成。
 - [x] 同测试 GREEN；模拟上传中断不产生已完成文件，校验内容哈希而非 ETag。
 - [x] 提交 `feat(files): add scoped immutable object storage`。
 
@@ -174,7 +183,7 @@ docs/dyoffice/               当前计划及 inventory/ evidence/ adr/
 
 **接口：** `commitRevision()`、`acquireLease()/renewLease()/takeoverLease()`；文件修改基于 T01 SaveInput。
 
-**状态（2026-11-16）：** T06 行为已完成，证据见 [t06-revision-commit.md](evidence/t06-revision-commit.md)。保存先写不可变对象，再在单进程账本事务里提交 revision、幂等记录和 outbox；租约有获取、续期、接管和 45 秒过期。DOCX 段落保存走这组接口。实时 PostgreSQL 连接、RLS、多进程和 outbox 投递不在本任务内，原因写在证据页。没有表格编辑。
+**状态（2026-11-16）：** T06 行为已完成，证据见 [t06-revision-commit.md](evidence/t06-revision-commit.md)。保存先写不可变对象，再在单进程账本事务里提交 revision、幂等记录和 outbox；租约有获取、续期、接管和 45 秒过期。DOCX 段落保存走这组接口。实时 PostgreSQL 连接、多进程和 outbox 投递不在本任务内。这些表的 RLS 随后由 T04 写在 `0005_rls.sql`，运行中的账本进程仍不连接数据库。没有表格编辑。
 
 - [x] 覆盖并发同基线、旧 leaseEpoch、幂等键不同内容、对象成功 DB 失败、响应丢失、旧保存响应覆盖新编辑状态。
 - [x] 对应 unit/integration 覆盖上述失败；客户端保存世代测试仍在 `save-generation`。
