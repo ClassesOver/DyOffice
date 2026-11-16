@@ -110,6 +110,13 @@ export function createSessionService({ db, accounts, deploymentId, idleMs = 8 * 
       await appendAuthEvent(connection, deploymentId, 'session_revoked', { ...context, actorId: principal.userId, sessionId: result.rows[0].id })
       return { self: principal.sessionId === result.rows[0].id }
     }),
+    revokeOthers: (token: string, context: AuthContext = {}) => withAuthority(token, { lockUsers: 'update', lockAllCredentials: true }, async ({ connection, principal }) => {
+      // Serialize against login and other credential changes. Only sessions
+      // already present are revoked; future logins remain valid. Keep this
+      // session and auth_version unchanged, never accept a caller-selected owner.
+      const revoked = await connection.query('UPDATE sessions SET revoked_at=clock_timestamp() WHERE deployment_id=$1 AND user_id=$2 AND id<>$3 AND revoked_at IS NULL RETURNING id', [deploymentId, principal.userId, principal.sessionId])
+      for (const row of revoked.rows) await appendAuthEvent(connection, deploymentId, 'session_revoked', { ...context, actorId: principal.userId, sessionId: row.id })
+    }),
     async reauthenticate(token: string, password: unknown, context: AuthContext = {}) {
       const initial = await withSession(token, [], async (_connection, principal) => principal)
       const candidate = await accounts.verifyCredentials(initial.username, password)
