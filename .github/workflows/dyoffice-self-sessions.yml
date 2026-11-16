@@ -4,6 +4,7 @@ on:
   push:
     branches: [feat/dyoffice-web]
     paths:
+      - 'tools/dyoffice/runtime-lock*'
       - 'apps/web/server/auth/self-session-management*'
       - 'apps/web/server/db/migrations/0007_session_security_events.sql'
       - 'apps/web/test/self-session-management*'
@@ -12,6 +13,7 @@ on:
       - '.github/workflows/dyoffice-self-sessions.yml'
   pull_request:
     paths:
+      - 'tools/dyoffice/runtime-lock*'
       - 'apps/web/server/auth/**'
       - 'apps/web/server/db/**'
       - 'apps/web/test/self-session-management*'
@@ -30,11 +32,11 @@ concurrency:
 
 jobs:
   self-sessions:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     services:
       postgres:
-        image: postgres:16
+        image: postgres:16@sha256:dd2bf3ce2dc83a81674cf7f217fcfd8a5009a4b325dda5b843bfee82a06cff6f
         env:
           POSTGRES_USER: dyoffice_test
           POSTGRES_PASSWORD: local-ci-only-not-for-production
@@ -50,7 +52,9 @@ jobs:
           fetch-depth: 2
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
-          node-version: 22
+          node-version: '22.23.5'
+      - name: Verify immutable Node runtime
+        run: node tools/dyoffice/runtime-lock.mjs --runtime
       - name: Syntax and focused owner-session unit/HTTP tests
         run: |
           node --check apps/web/server/auth/self-session-management.mjs
