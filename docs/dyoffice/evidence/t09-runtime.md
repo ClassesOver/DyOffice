@@ -66,3 +66,13 @@ GitHub Actions 增加独立 `native-sheets` 作业：Node 22、主机 PostgreSQL
 - 回环测试在点击保存前轮询依赖公式（B2=42.5）落定：保存载荷经 `readCells` 活读 Univer 模型公式缓存，异步重算窗口内点击会把旧缓存 25 固化进提交字节。
 
 结果：远端 CI 10/10 全绿（含 native-sheets 7m35s、native-docx 22m37s、boundary-check 6m29s）。外部 Excel 复开核验仍未执行，T09 保持草稿直至该人工门禁完成。
+
+## 本地 systemd 验收启动与保存字节核验（2026-11-16）
+
+本地原生构建使用锁定 Cargo.lock、Rust/Cargo 1.98.1（本机已有 stable）和 Node 24.18.0。CI 的 Rust 1.93.0 / Node 22 固定配置未变。构建产物 SHA-256 为 `2edfc39a9b0f7a7a2505c342b67396fc99239601c02dae490c5a0297186c58af`，源码摘要为 `9a7a316022020ea827709d1a35a8f17349d9183962dd3f1ab7139c95d5ca7fac`。
+
+`tools/dyoffice/acceptance-sheets.mjs` 经指定命令 sudo 授权后成功启动：校验原生二进制、实际运行 systemd 非 root 动态用户沙箱、初始化独立数据库角色、导入验收工作簿，并监听 `https://127.0.0.1:3443/`。文档执行不使用 Docker；本次数据库仍使用此前独立测试 PostgreSQL 服务。首次创建数据库因空间不足失败，之后重试成功；未清理其他服务的数据。
+
+通过正常密码登录和 CSRF/Cookie 的独立 HTTP 核验：能力目录、文件列表、原生 inspect/range 和下载均返回 200。历史中有初次导入及一次保存；保存版本 `75914d9c-9f1f-4c07-804f-7465ea6c4f99` 为 3993 字节，SHA-256 为 `9e08733f971143ca504314f5369851a84665bc8867cf983f8c616b911c55e1cb`。下载的 worksheet XML 包含新增 A4 公式 `SUM(A2,A3)` 及缓存 20，B2/F2 公式、C2 日期格式、D2 百分比、E2 单位、Revenue 名称和自定义 XML 内容保留。A2 当前仍为 12.5，没有据此宣称 A2=21.25 场景通过。核验完成后只退出该独立核验会话，保持用户页面会话和服务运行。
+
+已导出已提交工作簿至本地忽略目录 `.dyoffice-native-build/t09-acceptance-saved.xlsx` 供真实 Excel 复开。浏览器自动化受到宿主 `Request workspace is not owned by this CLI` 错误阻塞；图片可见性、外部 Excel 复开及服务退出清理仍未验收。

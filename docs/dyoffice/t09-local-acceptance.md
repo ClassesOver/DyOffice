@@ -88,8 +88,17 @@ recorded in `docs/dyoffice/evidence/t09-runtime.md`.
 
 ## Current validation
 
-The launcher has passed Node syntax checking and its prerequisite failure path
-was exercised without root/a native build. Its successful startup, interactive
-flow and cleanup still require a root-capable local run. The renderer build
-passed independently. See PR #30 checks for automated renderer/native regression
-results; this runbook makes no claim that local Excel verification has occurred.
+The launcher passed Node syntax checking and its prerequisite failure path was
+exercised without root/a native build. Local startup has now succeeded with
+Rust/Cargo 1.98.1 and Node 24.18.0: executable-hash validation, the actual systemd
+sandbox launch, restricted database initialization and the loopback HTTPS service
+all completed. CI remains pinned to Rust 1.93.0 and Node 22.
+
+Authenticated API verification found an imported revision followed by a saved
+revision. The saved workbook contains the added A4 formula `SUM(A2,A3)` with
+cached value 20; the original formats, defined name and custom XML part remain.
+This verifies committed bytes and native reads, not visual browser acceptance.
+The A2=21.25 scenario, browser image display and actual Excel reopen remain open.
+Browser automation was blocked by the host error
+`Request workspace is not owned by this CLI`. Successful shutdown/cleanup has
+not been verified while this acceptance service remains running.
