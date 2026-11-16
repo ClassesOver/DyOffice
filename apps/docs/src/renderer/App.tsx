@@ -1,4 +1,5 @@
 import { usePageColorState } from './page-color-state'
+import { useMirrorMarginsState } from './mirror-margins-state'
 import { FloatWatch } from './editor/float-watch'
 import { scriptFontHtml } from './editor/script-fonts'
 import { carryDocSeen } from './ai/tools'
@@ -900,8 +901,7 @@ export function App({ host }: { host?: { readOnly: boolean; assistantAvailable: 
   const [titlePgDirty, setTitlePgDirty] = useState(false)
   const [evenOddHf, setEvenOddHf] = useState(false)
   const [evenOddHfDirty, setEvenOddHfDirty] = useState(false)
-  const [mirrorMargins, setMirrorMargins] = useState(false)
-  const [mirrorMarginsDirty, setMirrorMarginsDirty] = useState(false)
+  const { mirrorMargins, setMirrorMargins, mirrorMarginsDirty, setMirrorMarginsDirty, getMirrorMarginsSaveState } = useMirrorMarginsState()
   const [pageInfo, setPageInfo] = useState({ current: 1, total: 1 })
   // last page's number for the document-end footer: text for the page marker, num for
   // even/odd parity (section restarts / pageNumberFmt make both differ from the physical count)
@@ -2261,6 +2261,7 @@ export function App({ host }: { host?: { readOnly: boolean; assistantAvailable: 
   fileCtxRef.current = {
     getCurrentSaveContext: () => fileCtxRef.current,
     getPageColorSaveState,
+    getMirrorMarginsSaveState,
     hostLifecycle: host?.lifecycle,
     editor,
     doc,
