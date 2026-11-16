@@ -71,3 +71,65 @@ node --test tools/check-web-boundaries.test.mjs
 ```
 
 These results come from mirrored/fixture source files under Node v22.16.0; the GitHub-hosted CI and whole-repository installation/build/test gates have **not** been verified green. The SSE endpoint and cancel route are planned server APIs, not yet implemented; no browser editor has been connected to them. The current front end therefore must not claim AI editing works. Real authenticated streams, saving/rollback, concurrency and four-format roundtrips remain open.
+
+## Contract completion candidate (2026-11-16)
+
+This update supersedes the earlier counts and missing-contract notes, not the
+historical evidence. It remains a candidate until exact-head CI passes.
+
+- Added required principal roles, an opaque `JobRef` identity, and the planned
+  `CommandEnvelope` fields. `isCommandEnvelope` checks the version/generation/
+  lease/hash metadata shape; it does not compute argument hashes, approve commands
+  or authenticate callers. T08 owns endpoint-specific job status DTOs.
+- Added `Problem` and `decodeProblem`: malformed error fields fail closed, and
+  unknown fields such as stack/credentials are excluded from the returned DTO.
+  Server-authored detail/error strings still require safe server-side messages.
+- `decodeHostEvent` now projects only the documented envelope fields. Payloads
+  remain event-specific data; this is not a general recursive secret scrubber.
+  T17 producers/consumers must validate payload schemas before dispatch.
+- Added compile-time positive/negative examples for all missing types to the Web
+  typecheck. Kept PR #21's optional `OpenFileResult.name` for compatibility.
+- The existing Web CI already executes `host-contract.test.mjs` and
+  `typecheck:web`; no new unsupported command is claimed. The original plan's
+  `test:web:unit` alias is still not present: the exact command is below.
+
+Verified in an isolated candidate based on target `3dc6046`, plus a separate
+combination with the pending PR #21 integration source (Node v24.22.1):
+
+```sh
+node --experimental-strip-types --test apps/web/test/unit/host-contract.test.mjs
+# Before changes: 14 pass, 3 new regression failures. After: 17 pass.
+npm run typecheck:web
+# Browser contracts plus PR #21 server typecheck: exit 0.
+node tools/check-web-boundaries.mjs
+# 588 files scanned, 0 violations in the combination source.
+```
+
+The type fixture also failed before implementation with the expected missing
+exports/roles diagnostics, then passed including `@ts-expect-error` negative cases.
+Independent review reran all 17 host tests successfully. After refreshing the
+parallel local-shell source files, the combined Web API suite passed 205 tests
+with 1 existing skip; this is a local combined candidate, not exact remote CI.
+
+A whole-repository `npm test` was attempted. It stopped in `@genoffice/html2docx`
+at `tests/features.test.ts` and `tests/pagebg-restore.test.ts`: Chromium could not
+create its process-singleton socket (Operation not permitted), with crash-report
+paths read-only. This is not a full-suite pass and does not establish browser E2E.
+
+Latest observed target CI at `3dc604610a3fdb427cfe31d05a874cb764279e77`:
+[Web boundary run 43799429056](https://github.com/ClassesOver/DyOffice/actions/runs/43799429056)
+failed at checkout with `Repository not found` / git exit 128; host/typecheck/build
+steps were skipped. Rerun the exact published candidate before T01 acceptance.
+
+Four-editor feature completion, authenticated event dispatch, durable save
+semantics and approval execution are later task gates. Types or DTO projections
+do not prove those paths are implemented or authorized.
+
+### Refreshed onto merged PDF target
+
+After #29 merged, rebased the candidate tree onto target
+`9410065e1cfb3be421c30b9e3a846c5477dbb606`. Its exact base tree
+`b6623ccd0a18bafa4b31a5f67946f49c6701ac97` was independently matched before
+applying only these eight T01 files. Fresh verification: host contracts 17/17,
+`typecheck:web` exit 0, Web API 198 pass / 1 existing skip. This base does not yet
+contain the pending #21 runtime, whose separate combination is recorded above.
