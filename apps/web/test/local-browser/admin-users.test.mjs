@@ -85,6 +85,6 @@ test('administrator UI creates activates resets and manages roles with authorita
  await confirm(user,'/api/v1/admin/users/'+f.bob.user.id);await expect(row(user,'bob')).toContainText('active')
  // No secrets in URL/storage or screenshots: all issued codes have been hidden.
  for(const p of [owner,user,resetPage])assert.deepEqual(await p.evaluate(()=>[...Object.keys(localStorage),...Object.keys(sessionStorage)].filter(k=>/token|password|session/i.test(k))),[])
- await mkdir('test-results',{recursive:true});await user.screenshot({path:'test-results/local-admin-complete.png',fullPage:true})
+ await mkdir('test-results',{recursive:true});await user.screenshot({path:'test-results/local-shell-admin-complete.png',fullPage:true})
  assert.deepEqual(errors,[])
 })
