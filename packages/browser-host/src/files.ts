@@ -46,7 +46,24 @@ function payload(blocks: DocsBlock[]): Array<{ docxIndex?: number; text?: string
  * Browser DOCX surface. Bytes stay on the host: this view edits the projection
  * and commits through the caller's save API. It does not mount the desktop ribbon.
  */
-export async function mountDocsEditor(host: DocsEditorHost, element: HTMLElement, fileId: string): Promise<DocsEditorHandle> {
+function sameText(left: DocsBlock[], right: DocsBlock[]): boolean {
+  return left.length === right.length && left.every((block, index) => block.text === right[index]?.text)
+}
+
+function keepNewerEdits(server: DocsBlock[], submitted: DocsBlock[], current: DocsBlock[]): DocsBlock[] {
+  return server.map((block, index) => {
+    const before = submitted[index]
+    const after = current[index]
+    if (before && after && before.text !== after.text && block.editable) return { ...block, text: after.text }
+    return { ...block }
+  })
+}
+
+function errorCode(error: unknown): string {
+  return error && typeof error === 'object' && 'code' in error ? String((error as { code: unknown }).code) : ''
+}
+
+export async function mountDocsEditor(host: DocsEditorHost, element: HTMLElement, fileId: string, options: { renewEveryMs?: number } = {}): Promise<DocsEditorHandle> {
   const document = element.ownerDocument
   if (!document) throw new Error('Editor element has no document')
   let leaseEpoch = (await host.acquireLease(fileId)).leaseEpoch
@@ -56,6 +73,7 @@ export async function mountDocsEditor(host: DocsEditorHost, element: HTMLElement
   let dirty = false
   const undoStack: string[][] = []
   let closed = false
+  let saving = false
 
   function snapshot(): DocsEditorState {
     return { fileId, revision, dirty, blocks: blocks.map((block) => ({ ...block })) }
@@ -110,32 +128,64 @@ export async function mountDocsEditor(host: DocsEditorHost, element: HTMLElement
     return true
   }
 
-  async function save(): Promise<{ ok: boolean; conflict?: boolean; revision?: string }> {
-    if (closed) return { ok: false }
+  async function ensureLease(): Promise<void> {
+    if (!host.renewLease) return
     try {
-      if (host.renewLease) leaseEpoch = (await host.renewLease(fileId, leaseEpoch)).leaseEpoch
+      leaseEpoch = (await host.renewLease(fileId, leaseEpoch)).leaseEpoch
+    } catch (error) {
+      if (errorCode(error) !== 'CONFLICT') throw error
+      leaseEpoch = (await host.acquireLease(fileId)).leaseEpoch
+    }
+  }
+
+  async function renewQuietly(): Promise<void> {
+    if (closed || saving || !host.renewLease) return
+    try {
+      const next = await host.renewLease(fileId, leaseEpoch)
+      if (!closed) leaseEpoch = next.leaseEpoch
+    } catch { /* The next save reacquires an expired lease. */ }
+  }
+
+  const renewEveryMs = options.renewEveryMs ?? 15_000
+  const timer = host.renewLease && renewEveryMs > 0 ? setInterval(() => { void renewQuietly() }, renewEveryMs) : undefined
+
+  async function save(): Promise<{ ok: boolean; conflict?: boolean; revision?: string }> {
+    if (closed || saving) return { ok: false }
+    saving = true
+    const submitted = blocks.map((block) => ({ ...block }))
+    const submittedRevision = revision
+    try {
+      await ensureLease()
       const committed = await host.commitDocx(fileId, {
-        baseRevision: revision,
+        baseRevision: submittedRevision,
         leaseEpoch,
         idempotencyKey: crypto.randomUUID(),
-        blocks: payload(blocks),
+        blocks: payload(submitted),
       })
       opened = await host.readDocx(fileId)
       revision = opened.file.revision || committed.revision
-      blocks = opened.blocks.map((block) => ({ ...block }))
-      dirty = false
-      undoStack.length = 0
+      const serverBlocks = opened.blocks.map((block) => ({ ...block }))
+      if (sameText(submitted, blocks)) {
+        blocks = serverBlocks
+        dirty = false
+        undoStack.length = 0
+      } else {
+        blocks = keepNewerEdits(serverBlocks, submitted, blocks)
+        dirty = true
+      }
       draw()
       return { ok: true, revision }
     } catch (error) {
-      const code = error && typeof error === 'object' && 'code' in error ? String((error as { code: unknown }).code) : ''
-      if (code === 'CONFLICT') return { ok: false, conflict: true }
+      if (errorCode(error) === 'CONFLICT') return { ok: false, conflict: true }
       return { ok: false }
+    } finally {
+      saving = false
     }
   }
 
   function destroy(): void {
     closed = true
+    if (timer !== undefined) clearInterval(timer)
     element.replaceChildren()
   }
 

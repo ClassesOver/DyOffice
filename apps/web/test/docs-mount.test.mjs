@@ -90,3 +90,66 @@ test('mounted docs editor edits a paragraph, keeps the table, saves, and reopens
   assert.match(await part(current, 'word/header1.xml'), /SECRET-HEADER/)
   again.destroy()
 })
+
+test('edits typed during a save stay dirty after the server projection returns', async () => {
+  const { mountDocsEditor } = await import('../../../packages/browser-host/src/files.ts')
+  let release
+  const pending = new Promise((resolve) => { release = resolve })
+  let reads = 0
+  const host = {
+    acquireLease: async () => ({ leaseEpoch: 2 }),
+    readDocx: async () => ({
+      file: { fileId: 'file-1', revision: reads ? 'rev_b' : 'rev_a', sha256: 'ab'.repeat(32), size: 4 },
+      leaseEpoch: 2,
+      blocks: [{ docxIndex: 0, type: 'paragraph', text: reads++ ? 'Hello there' : 'Hello', editable: true }],
+    }),
+    commitDocx: async () => pending,
+  }
+  const dom = new JSDOM('<!DOCTYPE html><div id="editor"></div>')
+  const editor = await mountDocsEditor(host, dom.window.document.getElementById('editor'), 'file-1')
+  editor.updateText(0, 'Hello there')
+  const saving = editor.save()
+  editor.updateText(0, 'Hello there!')
+  release({ fileId: 'file-1', revision: 'rev_b', sha256: 'cd'.repeat(32), size: 8 })
+  const saved = await saving
+  assert.equal(saved.ok, true)
+  assert.equal(editor.getState().blocks[0].text, 'Hello there!')
+  assert.equal(editor.getState().dirty, true)
+  editor.destroy()
+})
+
+test('an expired lease is reacquired before save and renewal stops on destroy', async () => {
+  const { mountDocsEditor } = await import('../../../packages/browser-host/src/files.ts')
+  let renews = 0
+  let acquires = 0
+  let committedEpoch = 0
+  const host = {
+    acquireLease: async () => ({ leaseEpoch: ++acquires === 1 ? 2 : 3 }),
+    renewLease: async (_id, epoch) => {
+      renews += 1
+      if (epoch === 2) throw Object.assign(new Error('expired'), { code: 'CONFLICT' })
+      return { leaseEpoch: epoch }
+    },
+    readDocx: async () => ({
+      file: { fileId: 'file-1', revision: 'rev_a', sha256: 'ab'.repeat(32), size: 4 },
+      leaseEpoch: 2,
+      blocks: [{ docxIndex: 0, type: 'paragraph', text: 'Hello', editable: true }],
+    }),
+    commitDocx: async (_id, input) => {
+      committedEpoch = input.leaseEpoch
+      return { fileId: 'file-1', revision: 'rev_b', sha256: 'cd'.repeat(32), size: 8 }
+    },
+  }
+  const dom = new JSDOM('<!DOCTYPE html><div id="editor"></div>')
+  const editor = await mountDocsEditor(host, dom.window.document.getElementById('editor'), 'file-1', { renewEveryMs: 20 })
+  await new Promise((resolve) => setTimeout(resolve, 50))
+  assert.ok(renews >= 1)
+  editor.updateText(0, 'Hello there')
+  const saved = await editor.save()
+  assert.equal(saved.ok, true)
+  assert.equal(committedEpoch, 3)
+  editor.destroy()
+  const stopped = renews
+  await new Promise((resolve) => setTimeout(resolve, 50))
+  assert.equal(renews, stopped)
+})
