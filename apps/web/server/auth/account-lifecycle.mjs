@@ -58,6 +58,7 @@ export function createAccountLifecycle({ pool, passwordHasher, sessionService, c
       !Number.isSafeInteger(idleTimeoutMs) || idleTimeoutMs < 60_000 || idleTimeoutMs > 86_400_000) {
     throw new TypeError('Account lifecycle requires validated authentication services and configuration')
   }
+  deploymentId = deploymentId.toLowerCase()
 
   async function read(sql, params) {
     try { const result = await pool.query(sql, params); return result.rowCount === 1 ? result.rows[0] : null }

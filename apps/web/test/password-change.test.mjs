@@ -133,3 +133,12 @@ test('rejects foreign principals, unsafe configuration and malformed hasher outp
   await assert.rejects(hash.service.changePassword(request, input), code('UNAVAILABLE'))
   assert.equal(hash.state.calls.some(c => c.sql === 'BEGIN'), false)
 })
+
+test('uppercase deployment configuration matches the lowercase session principal', async () => {
+  const f = fixture()
+  const service = createPasswordChangeService({ ...f.deps, deploymentId: deploymentId.toUpperCase() })
+  const changed = await service.changePassword(request, input)
+  assert.match(changed.cookie, /^__Host-dyoffice_session=/)
+  const update = f.state.calls.find(call => call.sql.includes('password-change:update'))
+  assert.equal(update.params[0], deploymentId)
+})

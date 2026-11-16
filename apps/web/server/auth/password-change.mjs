@@ -27,6 +27,7 @@ export function createPasswordChangeService({ pool, passwordHasher, sessionServi
       !csrfPolicy || typeof csrfPolicy.verify !== 'function' || !throttle || typeof throttle.consume !== 'function' ||
       !validId(deploymentId) || ![idleTimeoutMs, absoluteTimeoutMs].every(n => Number.isSafeInteger(n) && n >= 60_000 && n <= 86_400_000) ||
       idleTimeoutMs > absoluteTimeoutMs) throw new TypeError('Validated password-change dependencies and configuration required')
+  deploymentId = deploymentId.toLowerCase()
 
   return Object.freeze({
     async changePassword(request, input) {

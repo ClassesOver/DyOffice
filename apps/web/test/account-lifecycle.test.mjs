@@ -170,3 +170,12 @@ test('action redemption consumes a token once and requires a new login instead o
   await assert.rejects(f.service.redeemPasswordAction(request, { token, newPassword }), isCode('INVALID_ACTION'))
   assert.equal(f.state.hashes, 1)
 })
+
+test('uppercase deployment configuration matches the lowercase session principal', async () => {
+  const f = fixture()
+  const service = createAccountLifecycle({ ...f.dependencies, deploymentId: deploymentId.toUpperCase() })
+  const created = await service.createAccount(request, createInput)
+  assert.equal(created.username, 'alice.user')
+  const insert = f.state.calls.find(call => call.sql.includes('account:create_user'))
+  assert.equal(insert.params[1], deploymentId)
+})
