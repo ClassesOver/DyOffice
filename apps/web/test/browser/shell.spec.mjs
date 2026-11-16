@@ -30,6 +30,11 @@ test('original shell chrome, real import/open/return, theme and independent Admi
  await expect(page.locator('.tab-item')).toHaveCount(2);
  await page.locator('.tab-item').first().click();await expect(page.locator('.home')).toBeVisible();await expect(frame).toBeHidden();
  await expect(page.locator('.home').getByText('blank.docx',{exact:true}).first()).toBeVisible();
+ await page.locator('.home .star-btn').first().click();
+ await expect(page.locator('.home .star-btn').first()).toHaveClass(/starred/);
+ await page.locator('.sidebar-nav .nav-item').nth(1).click();
+ await expect(page.locator('.home').getByText('blank.docx',{exact:true}).first()).toBeVisible();
+ await page.locator('.sidebar-nav .nav-item').first().click();
  await page.screenshot({path:'test-results/genoffice-web-home-with-document.png',fullPage:true});
  await page.locator('.tab-item').nth(1).click();await expect(frame).toBeVisible();
  await page.locator('.tab-item').first().click();
@@ -41,6 +46,13 @@ test('original shell chrome, real import/open/return, theme and independent Admi
  await expect(page).toHaveURL(/\/$/);
  await page.locator('.tab-item').nth(1).click();
  await expect(editor.locator('textarea').first()).toHaveValue('Unsaved browser regression');
+ await editor.getByRole('button',{name:'保存',exact:true}).click();
+ await expect(editor.locator('#status')).toContainText('已保存');
+ await page.locator('.tab-item').nth(1).locator('.tab-close').click();
+ await expect(page.locator('.tab-item')).toHaveCount(1);
+ await page.locator('.home').getByText('blank.docx',{exact:true}).first().dblclick();
+ await expect(editor.locator('textarea').first()).toHaveValue('Unsaved browser regression');
+ await editor.locator('textarea').first().fill('Deliberately discarded browser draft');
  page.once('dialog',dialog=>dialog.accept());
  await page.locator('.tab-item').nth(1).locator('.tab-close').click();
  await expect(page.locator('.tab-item')).toHaveCount(1);
