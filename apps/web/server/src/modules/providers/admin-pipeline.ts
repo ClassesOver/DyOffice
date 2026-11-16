@@ -147,5 +147,12 @@ export function createAdminProviderPipeline({transactions,keyring,profiles,timeo
    }
   },
  },{timeoutMs,maxActive:1})
- return {turns,transportActiveCount:transport.activeCount,dispose(){disposed=true;for(const c of active)c.abort();for(const key of Object.values(keys))key.fill(0)}}
+ return {turns,transportActiveCount:transport.activeCount,async catalog(token:string){
+  const entries:{id:string;label:string}[]=[]
+  for(const profile of configured){try{await lookup(token,profile.entryId);entries.push({id:profile.entryId,label:profile.entryId})}catch{/* unavailable profiles are never advertised */}}
+  return entries
+ },async drain(){
+  const until=Date.now()+35_000
+  while(active.size||turns.activeCount()||transport.activeCount()){if(Date.now()>=until)throw fail();await new Promise(resolve=>setTimeout(resolve,10))}
+ },dispose(){disposed=true;turns.abortAll();for(const c of active)c.abort();for(const key of Object.values(keys))key.fill(0)}}
 }

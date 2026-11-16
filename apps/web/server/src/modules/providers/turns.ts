@@ -46,6 +46,7 @@ export function createProviderTurns<P extends TurnPermit>(deps: TurnDependencies
   const active = new Map<string,AbortController>()
   return {
     activeCount: () => all.size,
+    abortAll:()=>{for(const control of all)control.abort(fail('AI turn cancelled'))},
     async run(input: {token:string;modelId:string;turnId:string;request:unknown;signal?:AbortSignal}, emit:(event:TurnEvent)=>void|Promise<void>) {
       if (!validId(input.turnId) || !validId(input.modelId) || typeof input.token !== 'string') throw fail('Invalid AI request')
       const {token,modelId,turnId} = input
