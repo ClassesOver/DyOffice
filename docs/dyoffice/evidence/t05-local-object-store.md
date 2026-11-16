@@ -1,6 +1,6 @@
 # T05 local immutable object store
 
-> 2026-11-15 · Branch `cursor/t05-object-store-afe4` · **Partial. Not S3, not RLS, not wired to HTTP upload.**
+> 2026-11-16 · Includes the recycle-bin slice on `cursor/t05-recycle-bin-afe4` · **Partial. Not S3, not RLS, not wired to HTTP upload.**
 
 ## Why this slice
 
@@ -32,6 +32,16 @@ node --test apps/web/test/object-store.test.mjs
 
 `npm run test:web`, `npm run typecheck:web`, and `node tools/check-web-boundaries.mjs` are recorded in the pull request after the full run.
 
+## Recycle bin and download
+
+`downloadObject` returns finished bytes only to the owning caller. `trashObject` hides them and still counts them against the owner quota. `restoreObject` makes them readable again. `purgeObject` removes a trashed record and frees that quota. The content blob is removed only when no remaining object or unfinished upload references its SHA-256, so one owner cannot delete another owner's copy.
+
+```sh
+node --test apps/web/test/object-recycle.test.mjs
+```
+
+Before the methods existed this failed because `downloadObject` and `trashObject` were not functions. After the implementation the file passes.
+
 ## Still open
 
-S3, quotas beyond the two limits on this adapter, recycle bin, HTTP download of these objects, PostgreSQL file rows, and RLS. Do not check the remaining T05 boxes from this note.
+S3, mounting these operations on the live HTTP routes, PostgreSQL file rows, and RLS. Do not check the remaining T05 boxes from this note.
