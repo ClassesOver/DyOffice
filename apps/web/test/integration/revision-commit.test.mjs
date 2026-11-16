@@ -241,6 +241,66 @@ test('replaying an older commit does not replace the bytes of the current head',
   assert.equal(revisions.current(principal, fileId).revision, second.ref.revision)
 })
 
+test('restoring from a stale base conflicts and leaves the current head in place', async (t) => {
+  const { revisions, outbox, objects, fileId, head } = await setup(t)
+  const staged = await stage(objects, ZIP_B)
+  await revisions.noteUpload(principal, { fileId, uploadId: staged.uploadId })
+  const saved = await revisions.commitRevision(principal, saveInput(fileId, head, staged.uploadId, 'restore-base-edit'))
+  await assert.rejects(
+    revisions.restoreRevision(principal, {
+      fileId,
+      sourceRevision: head.revision,
+      baseRevision: head.revision,
+      leaseEpoch: 1,
+      idempotencyKey: 'restore-stale-1',
+    }),
+    (error) => error.code === 'REVISION_CONFLICT',
+  )
+  assert.equal(revisions.current(principal, fileId).revision, saved.ref.revision)
+  assert.equal(outbox.list(principal).length, 1)
+  const restored = await revisions.restoreRevision(principal, {
+    fileId,
+    sourceRevision: head.revision,
+    baseRevision: saved.ref.revision,
+    leaseEpoch: 1,
+    idempotencyKey: 'restore-fresh-01',
+  })
+  assert.notEqual(restored.ref.revision, head.revision)
+  assert.equal(restored.ref.sha256, head.sha256)
+  assert.equal(revisions.current(principal, fileId).revision, restored.ref.revision)
+})
+
+test('a journal write failure after the commit decision publishes no revision', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'dyoffice-journal-fail-'))
+  t.after(() => rm(directory, { recursive: true, force: true }))
+  const objects = await createLocalObjectStore({ directory: join(directory, 'objects'), maxObjectBytes: 1024, maxOwnerBytes: 8192 })
+  let armed = false
+  const journal = createMemoryJournal({
+    persist: async () => { if (armed) throw Object.assign(new Error('disk'), { code: 'JOURNAL_FAILED' }) },
+  })
+  const revisions = createRevisionService({ journal, objects, now: () => 1_700_000_000_000 })
+  const outbox = createOutboxService(journal)
+  const fileId = randomUUID()
+  const head = await revisions.registerHead(principal, { fileId, name: 'notes.docx', bytes: ZIP })
+  const staged = await stage(objects, ZIP_B)
+  await revisions.noteUpload(principal, { fileId, uploadId: staged.uploadId })
+  armed = true
+  await assert.rejects(
+    revisions.commitRevision(principal, saveInput(fileId, head, staged.uploadId, 'disk-fail-key1')),
+    (error) => error.code === 'JOURNAL_FAILED',
+  )
+  assert.equal(revisions.listRevisions(principal, fileId).length, 1)
+  assert.equal(outbox.list(principal).length, 0)
+  armed = false
+  const saved = await revisions.commitRevision(principal, saveInput(fileId, head, staged.uploadId, 'disk-fail-key1'))
+  assert.equal(saved.replayed, false)
+  assert.equal(revisions.listRevisions(principal, fileId).length, 2)
+  for (const row of revisions.listRevisions(principal, fileId)) {
+    const opened = await objects.downloadObject({ ownerId: principal.ownerId, objectId: row.objectId })
+    assert.equal(opened.sha256, row.sha256)
+  }
+})
+
 test('restoring a historical revision creates a new head and keeps the old object', async (t) => {
   const { revisions, objects, fileId, head } = await setup(t)
   const staged = await stage(objects, ZIP_B)

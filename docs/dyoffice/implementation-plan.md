@@ -169,7 +169,7 @@ docs/dyoffice/               当前计划及 inventory/ evidence/ adr/
 
 **接口：** `commitRevision()`、`acquireLease()/renewLease()/takeoverLease()`；文件修改基于 T01 SaveInput。
 
-**状态（2026-11-16）：** 开发用单进程版本账本已落地，见 [t06-revision-commit.md](evidence/t06-revision-commit.md)。它先把字节写入 T05 本地对象存储，再在同一个日志事务里做基线 CAS、租约 fencing、幂等和 outbox。DOCX 段落保存走这组接口。运行中的 Web 进程还没有连接 PostgreSQL 来提交版本；`0004_revisions.sql` 是同一规则的数据库形状，不启用 RLS。没有接入表格编辑。
+**状态（2026-11-16）：** T06 行为已完成，证据见 [t06-revision-commit.md](evidence/t06-revision-commit.md)。保存先写不可变对象，再在单进程账本事务里提交 revision、幂等记录和 outbox；租约有获取、续期、接管和 45 秒过期。DOCX 段落保存走这组接口。实时 PostgreSQL 连接、RLS、多进程和 outbox 投递不在本任务内，原因写在证据页。没有表格编辑。
 
 - [x] 覆盖并发同基线、旧 leaseEpoch、幂等键不同内容、对象成功 DB 失败、响应丢失、旧保存响应覆盖新编辑状态。
 - [x] 对应 unit/integration 覆盖上述失败；客户端保存世代测试仍在 `save-generation`。

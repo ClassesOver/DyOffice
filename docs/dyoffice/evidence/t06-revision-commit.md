@@ -4,7 +4,7 @@
 
 ## Why this slice
 
-T05's local object store is already on `feat/dyoffice-web`. Login and resource-isolation work is proceeding separately. Revision commits need an owner id supplied by the caller; they do not decide who the caller is. The personal development token maps to one fixed principal (`personal` / `dev` / `dev-personal`). Request bodies cannot choose an owner.
+T05's local object store is already on `feat/dyoffice-web`. Login and resource-isolation work is proceeding separately. Revision commits need an owner id supplied by the caller; they do not decide who the caller is. The personal development token maps to one fixed principal (`ownerId` `dev-personal`, deployment `dev`, session `dev-editor`). Request bodies cannot choose an owner.
 
 The Web process commits through `createMemoryJournal` / `createFileJournal`. That queue is the transaction: a thrown callback publishes no revision, idempotency row, or outbox event. `server/db/migrations/0004_revisions.sql` is the PostgreSQL shape of the same ledger and is applied by the existing migration runner. This process does not open a database connection to commit a revision. Row-level security remains T04.
 
@@ -40,6 +40,41 @@ The DOCX HTTP test additionally renews, takes over, fences the old epoch, and re
 
 Default lease TTL is 45 seconds. Takeover always advances the epoch. A second session cannot acquire a live lease. The development token is one session id, so two browser tabs fence each other by takeover on open, not by a second user id.
 
-## Still open
+## Closeout
 
-Live PostgreSQL transactions, row-level security, more than one server process, S3, job dispatch from the outbox, and the native Docs ribbon. Do not treat this ledger as a multi-replica lock.
+T06's save behavior is complete on the development ledger. The Web process proves the rules below with tests. Items that belong to a later task are listed as deferred instead of left implicit.
+
+### Done
+
+| Behavior | Proof |
+| --- | --- |
+| `commitRevision` from a staged object, one new head | `revision-commit.test.mjs` concurrent same-base case |
+| Same base, two callers: one commit and one `REVISION_CONFLICT` | same test; the conflict does not add an outbox row |
+| Stale `leaseEpoch` after takeover or after the 45s TTL | lease test; expired renew is `LEASE_CONFLICT` |
+| `acquireLease` while another live session holds the file | `LEASE_HELD`; takeover then advances the epoch |
+| `renewLease` extends only the current holder and epoch | lease test |
+| Same idempotency key, different bytes | `IDEMPOTENCY_CONFLICT` |
+| Lost response, same key and bytes | original revision, no second history or outbox row |
+| Object durable, journal transaction fails | no revision or outbox row; retry commits that same object |
+| Journal persist fails after the decision | memory ledger stays unchanged; retry commits |
+| Missing object | no revision row |
+| Restore of history | new revision id, same object; stale base is `REVISION_CONFLICT` and the head stays |
+| Late save response versus newer edits | `save-generation.test.mjs` and the generation case in `revision-commit.test.mjs` |
+| Replay must not replace a newer file | route test projects the current head; DOCX structural retry keeps the later edit |
+| HTTP acquire, renew, takeover, commit, restore, DOCX save | `docx-editor.test.mjs` and the route commit test |
+| Another owner | `NOT_FOUND` |
+| Restart of the file journal | reload replays the same revision |
+| SQL shape without RLS | `0004_revisions.sql` assertion |
+
+The route test was red before the head projection change: replaying commit A left A's bytes on disk after B was the head. It is green after the projection reads the head inside the journal queue.
+
+### Deferred
+
+| Item | Owner | Why it is not part of this T06 closeout |
+| --- | --- | --- |
+| Row-level security and database role isolation for these tables | T04 | `0004_revisions.sql` creates no policy and does not enable RLS. The dev principal is supplied by the caller. |
+| Live PostgreSQL execution of the revision transaction | ops | The migration is the schema and is applied by the migration runner. The Web process uses the journal adapter, which is the stand-in while the server is still one dev-token process. |
+| More than one process on one data directory | ops | The journal queue is in-process. A second process can overwrite the file. Run one server per data directory. |
+| Outbox delivery | T08 | Rows are written in the commit transaction. No dispatcher consumes them. |
+| Native Docs ribbon, full editor generation wiring, and four-format round trip | T07 | The paragraph editor and `createSaveGenerationGuard` cover the current DOCX save. Mounting the Docs renderer is T07. |
+| Spreadsheet, slide, and PDF editors | later format tasks | This task does not add those save paths. |
