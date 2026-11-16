@@ -282,6 +282,18 @@ test('same-size corruption of a ready save object prevents all new references an
   assert.equal((await owned(f,connection => connection.query('SELECT * FROM revision_outbox'))).rowCount,0)
 })
 
+test('personal revision staging reclaims cancelled completed drafts without touching history',async t=>{
+ const bytes=await docxBytes(),f=await revisionFixture(t,{filePolicy:{quotaBytes:bytes.length*2}})
+ const first=await stage(f,bytes)
+ await f.files.cancelUpload(f.alice.token,first.uploadId)
+ assert.equal((await f.files.usage(f.alice.token)).storedBytes,bytes.length*2)
+ const second=await f.revisions.stageUpload(f.alice.token,f.fileId,{size:bytes.length,baseRevision:f.initial.revision,leaseEpoch:f.lease.leaseEpoch,editorId:f.editorId})
+ assert.ok(second.uploadId)
+ const usage=await f.files.usage(f.alice.token)
+ assert.equal(usage.storedBytes,bytes.length);assert.equal(usage.reservedBytes,bytes.length)
+ assert.deepEqual(await f.files.readFile(f.alice.token,f.fileId,f.initial.revision),bytes)
+})
+
 test('finish and commit verify integrity without collecting object payloads', async t => {
   let verified = 0
   const f = await revisionFixture(t, { wrapObjects: base => ({ ...base,

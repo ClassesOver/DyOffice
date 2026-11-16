@@ -46,7 +46,7 @@ export async function lockUpload(connection: PoolClient, principal: BusinessPrin
 }
 export async function loadFile(connection: PoolClient, principal: BusinessPrincipal, id: string, includeTrash = false, lock = 'SHARE') {
   if (principal.job && (id!==principal.job.fileId || includeTrash)) throw authError(404)
-  const row = (await connection.query<FileRow>(`SELECT f.*,r.object_key,r.sha256,r.size FROM files f JOIN file_revisions r ON r.deployment_id=f.deployment_id AND r.owner_id=f.owner_id AND r.file_id=f.id AND r.id=f.current_revision WHERE f.deployment_id=$1 AND f.owner_id=$2 AND f.id=$3 ${includeTrash ? '' : 'AND f.deleted_at IS NULL'} FOR ${lock} OF f`, [...scope(principal),id])).rows[0]
+  const row = (await connection.query<FileRow>(`SELECT f.*,r.object_key,r.sha256,r.size FROM files f JOIN file_revisions r ON r.deployment_id=f.deployment_id AND r.owner_id=f.owner_id AND r.file_id=f.id AND r.id=f.current_revision WHERE f.deployment_id=$1 AND f.owner_id=$2 AND f.id=$3 AND f.purge_started_at IS NULL ${includeTrash ? '' : 'AND f.deleted_at IS NULL'} FOR ${lock} OF f`, [...scope(principal),id])).rows[0]
   if (!row) throw authError(404)
   return row
 }

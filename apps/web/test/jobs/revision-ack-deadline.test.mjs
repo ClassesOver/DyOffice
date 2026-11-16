@@ -3,7 +3,6 @@ import assert from 'node:assert/strict'
 import {randomUUID} from 'node:crypto'
 import {jobFixture} from '../helpers/jobs.mjs'
 import {loadMigrations} from '../../server/src/db/migration-manifest.ts'
-import {provisionRuntimeRoles} from '../../server/src/db/roles.ts'
 import {createIdentityStore} from '../../server/src/db/identity.ts'
 import {createJobWorkerStore} from '../../server/src/modules/jobs/worker-store.ts'
 
@@ -54,7 +53,9 @@ test('forward ACK repair preserves the v14 ledger, function identity and runtime
       await pool.query('INSERT INTO identity_migrations VALUES($1,$2)',[migration.version,migration.digest])
     }
     const owner=(await pool.query('SELECT current_user AS name')).rows[0].name
-    await provisionRuntimeRoles(pool,{authRole:owner.replace(/_owner$/,'_auth'),businessRole:owner.replace(/_owner$/,'_business'),workerRole:owner.replace(/_owner$/,'_worker')})
+    // Recreate the existing v14 worker grant without requiring columns added
+    // by later migrations. The outer fixture provisions all current privileges.
+    await pool.query('GRANT EXECUTE ON FUNCTION ack_revision_delivery(uuid,uuid,bigint,text,integer) TO '+owner.replace(/_owner$/,'_worker'))
     ledger=(await pool.query('SELECT * FROM identity_migrations ORDER BY version')).rows
     authority=await snapshot(pool)
     await createIdentityStore(pool).migrate()
@@ -65,7 +66,7 @@ test('forward ACK repair preserves the v14 ledger, function identity and runtime
   await f.ownerDb.assertCurrent()
   const current=(await f.ownerPool.query('SELECT * FROM identity_migrations ORDER BY version')).rows
   assert.deepEqual(current.slice(0,14),ledger)
-  assert.equal(current.at(-1).version,15)
+  assert.equal(current.at(-1).version,(await loadMigrations()).at(-1).version)
   assert.deepEqual(await snapshot(f.ownerPool),authority)
   assert.equal(await f.worker.takeRevisionDelivery(),null)
   for(const pool of [f.authPool,f.businessPool])await assert.rejects(()=>pool.query('SELECT ack_revision_delivery($1,$2,1,$3,100)',[f.deploymentId,randomUUID(),'a'.repeat(64)]),{code:'42501'})

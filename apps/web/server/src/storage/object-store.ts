@@ -7,6 +7,9 @@ export interface ObjectStore {
   checkReady?(): Promise<void>
   putImmutable(key: string, bytes: Buffer): Promise<ObjectRef>
   readVerified(reference: ObjectRef): Promise<Buffer>
+  // Internal only: caller must prove terminal publication and no live references.
+  // Missing objects succeed; adapters unable to physically reclaim must reject.
+  removeUnreferenced?(key: string): Promise<void>
   verifyObject(reference: ObjectRef): Promise<void>
 }
 export function storageError(statusCode = 503): Error & { statusCode: number } {
