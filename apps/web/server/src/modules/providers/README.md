@@ -21,3 +21,15 @@ Uncooperative dependencies retain their capacity slot until they settle; capacit
 exhaustion then fails closed rather than admitting more orphan work. Operational
 recovery for a permanently stuck adapter requires replacing that adapter/process.
 No route, real provider, secret store or durable usage ledger is enabled here.
+
+Cancellation identity lookups have a separate configurable deadline (`cancelTimeoutMs`,
+default 10 seconds) and at most `maxActive` outstanding lookups. A stalled lookup
+retains its slot until settlement, even after its caller times out; late identities
+cannot cancel turns. Identity adapter errors are redacted. These are local process
+limits, not distributed rate limiting or a substitute for route authentication.
+
+The coordinator also caps cumulative normalized JSON event payload bytes per turn
+(default 4 MiB, configurable with `maxOutputBytes`), measured as UTF-8. The event
+that would exceed the budget is not emitted; cancellation and cleanup follow the
+normal failure path. This is a payload resource limit, not token billing, SSE wire
+framing, or a replacement for provider-side generation limits.
