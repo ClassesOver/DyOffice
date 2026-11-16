@@ -348,6 +348,7 @@ export function createEditJournal(): EditJournal {
 }
 
 export function recordNoteChange(journal: EditJournal, sheetId: string): void {
+  invalidateJournalEntry(journal, `/noteDirty/${JSON.stringify(sheetId)}`)
   journal.noteDirty.add(sheetId)
 }
 
@@ -391,6 +392,7 @@ export function toSavePageSetupStates(
 }
 
 export function recordDefinedNamesChange(journal: EditJournal): void {
+  invalidateJournalEntry(journal, '/definedNames')
   journal.definedNames.dirty = true
 }
 
@@ -403,6 +405,7 @@ export function recordWorkbookProtection(
 }
 
 export function recordProtectedRangesChange(journal: EditJournal, sheetId: string): void {
+  invalidateJournalEntry(journal, `/protectedRangesDirty/${JSON.stringify(sheetId)}`)
   journal.protectedRangesDirty.add(sheetId)
 }
 
@@ -434,10 +437,12 @@ export function recordSheetProtection(
 }
 
 export function recordCfChange(journal: EditJournal, sheetId: string): void {
+  invalidateJournalEntry(journal, `/cfDirty/${JSON.stringify(sheetId)}`)
   journal.cfDirty.add(sheetId)
 }
 
 export function recordDvChange(journal: EditJournal, sheetId: string): void {
+  invalidateJournalEntry(journal, `/dvDirty/${JSON.stringify(sheetId)}`)
   journal.dvDirty.add(sheetId)
 }
 
@@ -476,6 +481,7 @@ export function toSaveHyperlinkEdits(journal: EditJournal): WorkbookHyperlinkEdi
 }
 
 export function recordFilterChange(journal: EditJournal, sheetId: string): void {
+  invalidateJournalEntry(journal, `/filterDirty/${JSON.stringify(sheetId)}`)
   journal.filterDirty.add(sheetId)
 }
 
@@ -2560,9 +2566,90 @@ export function carryLateJournalCells(
   return carried
 }
 
+// Acknowledgment is separate from the journal: undo closures and streamed
+// overlays still need the original entries after an in-place save.
+const savedJournalEntries = new WeakMap<EditJournal, Map<string, string>>()
+const savedJournals = new WeakMap<EditJournal, EditJournal>()
+const journalChangeVersions = new WeakMap<EditJournal, Map<string, number>>()
+
+export function savedJournal(journal: EditJournal): EditJournal | undefined {
+  return savedJournals.get(journal)
+}
+
+export function journalFingerprint(value: unknown): string {
+  return JSON.stringify(value, (_key, child) =>
+    child instanceof Map ? { map: [...child] } : child instanceof Set ? { set: [...child] } : child,
+  )
+}
+
+function journalEntries(journal: EditJournal): Map<string, string> {
+  const entries = new Map<string, string>()
+  const visit = (value: unknown, path: string): void => {
+    if (value instanceof Map) {
+      for (const [key, child] of value) visit(child, `${path}/${JSON.stringify(key)}`)
+    } else if (value instanceof Set) {
+      for (const key of value) entries.set(`${path}/${JSON.stringify(key)}`, 'true')
+    } else if (Array.isArray(value)) {
+      value.forEach((child, index) => entries.set(`${path}/${index}`, JSON.stringify(child)))
+    } else if (value && typeof value === 'object' && (path === '' || path === '/sheets')) {
+      for (const [key, child] of Object.entries(value)) visit(child, `${path}/${key}`)
+    } else {
+      entries.set(path, JSON.stringify(value))
+    }
+  }
+  visit(journal, '')
+  for (const [path, version] of journalChangeVersions.get(journal) ?? [])
+    entries.set(`${path}/version`, String(version))
+  return entries
+}
+
+export function snapshotJournal(journal: EditJournal): EditJournal {
+  const snapshot = structuredClone(journal)
+  journalChangeVersions.set(snapshot, new Map(journalChangeVersions.get(journal)))
+  return snapshot
+}
+
+export function acknowledgeJournal(journal: EditJournal, snapshot: EditJournal): void {
+  savedJournalEntries.set(journal, journalEntries(snapshot))
+  savedJournals.set(journal, snapshot)
+}
+
+/** A dirty set already contains the sheet after its first edit; version it. */
+function invalidateJournalEntry(journal: EditJournal, path: string): void {
+  let versions = journalChangeVersions.get(journal)
+  if (!versions) {
+    versions = new Map()
+    journalChangeVersions.set(journal, versions)
+  }
+  versions.set(path, (versions.get(path) ?? 0) + 1)
+}
+
+/** Reinstall is safe only for late cell entries with unchanged coordinates.
+ * Other edits may own live Univer models, drawing locators, or sheet IDs.
+ * Refuse the swap instead of pretending a copied journal restores those. */
+export function hasLateNonCellChanges(journal: EditJournal, snapshot: EditJournal): boolean {
+  const current = journalEntries(journal)
+  const before = journalEntries(snapshot)
+  for (const [path, value] of current) {
+    if (!path.startsWith('/cells/') && before.get(path) !== value) return true
+  }
+  for (const path of before.keys()) {
+    if (!path.startsWith('/cells/') && !current.has(path)) return true
+  }
+  return false
+}
+
 /// Counts what a save would actually write, so entries on removed sheets
 /// don't inflate the pending-edit badge.
 export function journalSize(journal: EditJournal): number {
+  const saved = savedJournalEntries.get(journal)
+  if (saved) {
+    const current = journalEntries(journal)
+    let changed = 0
+    for (const [key, value] of current) if (saved.get(key) !== value) changed++
+    for (const key of saved.keys()) if (!current.has(key)) changed++
+    return changed
+  }
   let total = journal.chartEdits.size + sheetOpCount(journal)
   for (const visual of journal.visualAdds) {
     if (!isSheetRemoved(journal, visual.sheetId)) total += 1

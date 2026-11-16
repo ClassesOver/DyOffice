@@ -14,7 +14,7 @@ import JSZip from 'jszip'
 import { fileFixture, docxBytes, importFile } from '../helpers/files.mjs'
 import { password } from '../helpers/identity.mjs'
 
-const sheetsDirectory = fileURLToPath(new URL('../../dist-sheets/',import.meta.url))
+const sheetsDirectory = process.env.DYOFFICE_TEST_SHEETS_DIRECTORY ?? fileURLToPath(new URL('../../dist-sheets/',import.meta.url))
 async function fixture(t) {
   const directory = await mkdtemp(join(tmpdir(),'dyoffice-native-sheets-'))
   let f, browser, server
@@ -29,8 +29,10 @@ async function fixture(t) {
   await new Promise(resolve => server.listen(0,'127.0.0.1',resolve))
   const origin = `https://127.0.0.1:${server.address().port}`
   const {planWorkbookSave,readWorkbookPackage}=await sheetsGateway(t)
-  const native=createXlsxNativeWorker(await sandboxFixture('native'))
-  f = await fileFixture(t,{ origin,nativeSheetsDirectory: sheetsDirectory,sheetsNative:native,sheetsPlanner:planWorkbookSave,sheetsPackageReader:readWorkbookPackage })
+  const engine=createXlsxNativeWorker(await sandboxFixture('native'))
+  const native=Object.fromEntries(Object.entries(engine).map(([name,operation])=>[name,async(...args)=>{try{return await operation(...args)}catch(error){t.diagnostic('Native '+name+' failed: '+String(error?.code ?? error?.message ?? error));throw error}}]))
+  const planner=async(...args)=>{try{return await planWorkbookSave(...args)}catch(error){t.diagnostic('Workbook planner failed: '+String(error?.message ?? error));throw error}}
+  f = await fileFixture(t,{ origin,nativeSheetsDirectory: sheetsDirectory,sheetsNative:native,sheetsPlanner:planner,sheetsPackageReader:readWorkbookPackage })
   await f.preferences.update(f.alice.token,{ language: 'en',autoSave: false,showAssistant: false })
   const original = await readFile(new URL('../fixtures/sheets/acceptance.xlsx',import.meta.url)), opened = await importFile(f,f.alice.token,original,'acceptance.xlsx')
   browser = await chromium.launch({ headless: true })
@@ -72,10 +74,8 @@ test('native Sheets edits, saves and reopens the hashed acceptance workbook thro
  const revision=await f.files.openFile(f.alice.token,f.opened.file.fileId)
  assert.equal(revision.file.revision,f.opened.file.revision,'Opening a workbook must not create a saved revision')
  await f.page.evaluate(()=>{window.__genofficeDebug.univerAPI.getActiveWorkbook().getActiveSheet().getRange('A2').setValue(21.25)})
- // Wait for the dependent formula to settle before saving: the save payload
- // reads live formula cache values, so clicking during the async recalc
- // window would persist the stale cached 25 and fail the 42.5 assertion.
- await expect.poll(()=>f.page.evaluate(()=>window.__genofficeDebug.univerAPI.getActiveWorkbook().getActiveSheet().getRange('B2').getValue()),{timeout:30000}).toBe(42.5)
+ // Save immediately: formula and chart synchronization belong to the save
+ // pipeline, not an acceptance-test delay that hides stale cache races.
  const save=f.page.locator('.qa-btn').first()
  await expect(save).toBeEnabled()
  await save.click()
@@ -88,7 +88,12 @@ test('native Sheets edits, saves and reopens the hashed acceptance workbook thro
  assert.match(savedXml,/<v>21\.25<\/v>/)
  assert.match(savedXml,/<c[^>]*r="B2"[^>]*>[\s\S]*?<f[^>]*>A2\*2<\/f>[\s\S]*?<v>42\.5<\/v>/)
  assert.match(await after.file('xl/workbook.xml').async('string'),/name="Revenue"/)
- assert.deepEqual(await before.file('xl/charts/chart1.xml').async('nodebuffer'),await after.file('xl/charts/chart1.xml').async('nodebuffer'))
+ const savedChart=await after.file('xl/charts/chart1.xml').async('string')
+ assert.match(savedChart,/<c:f>Acceptance!\$A\$2:\$A\$3<\/c:f>/)
+ assert.match(savedChart,/<c:pt idx="0"><c:v>21\.25<\/c:v><\/c:pt>/)
+ assert.match(savedChart,/<c:pt idx="1"><c:v>7\.5<\/c:v><\/c:pt>/)
+ assert.match(savedChart,/<c:spPr><a:solidFill><a:srgbClr val="4472C4"\/>/)
+ assert.deepEqual(await before.file('xl/drawings/drawing1.xml').async('nodebuffer'),await after.file('xl/drawings/drawing1.xml').async('nodebuffer'))
  await f.page.reload()
  await expect.poll(()=>f.page.evaluate(()=>window.__genofficeDebug?.univerAPI.getActiveWorkbook()?.getActiveSheet()?.getRange('A2').getValue()),{timeout:30000}).toBe(21.25)
 

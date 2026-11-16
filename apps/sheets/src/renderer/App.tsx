@@ -480,11 +480,13 @@ import {
 import { handleExportCsv as handleExportCsvImpl, type CsvExportContext } from './csv-export'
 import { effectivePageBreaks, installPageBreakPreview } from './page-break-preview'
 import { mapProtectedRanges } from './protected-ranges'
+import { settleFormulas } from './formula-settle'
 import { handleSave as handleSaveImpl, type SaveContext, type SaveOutcome } from './save-actions'
 import {
   applyChartEdit as applyChartEditImpl,
   applyShapeEdit as applyShapeEditImpl,
   flushPendingChartDataSync,
+  flushChartDataSync,
   queueChartDataSync as queueChartDataSyncImpl,
   queueChartRefResync,
   readChartVector as readChartVectorImpl,
@@ -621,9 +623,18 @@ function dateTextKind(value: string): 'date-like' | 'text' {
 
 export interface SheetsEditorHandle {
   save(): Promise<boolean>
+  /** Commit the editor and await formula/chart work without writing the file. */
+  flush(): Promise<boolean>
+  /** Wait behind any current save and drain late edits; fail closed if still dirty. */
+  saveAndWait(): Promise<boolean>
+  saveForDownload(): Promise<boolean>
+  /** Reopen the host revision only while clean. */
+  reload(): Promise<boolean>
   isDirty(): boolean
 }
 export interface SheetsEditorHost {
+  /** Opt in only when the host returns stable sheet/drawing IDs after saving. */
+  inPlaceSave?: boolean
   readOnly: boolean
   assistantAvailable: boolean
   onWorkbookOpened?(): void
@@ -730,7 +741,50 @@ export function App({
   const [_revision, setRevision] = useState(0)
   const [workbookFile, setWorkbookFile] = useState<WorkbookFile | null>(null)
   useEffect(() => {
-    host?.onEditorReady?.({save: async () => (await handleSave('save')).ok, isDirty: () => pendingEditsForClose(pendingEdits, editingCellRef.current) > 0})
+    host?.onEditorReady?.({
+      save: async () => (await handleSave('save')).ok,
+      flush: () => saveGateRef.current.run(flushEditor),
+      saveAndWait,
+      saveForDownload: saveAndWait,
+      reload: () => saveGateRef.current.run(async () => {
+        if (editorIsDirty()) return false
+        const selected = await window.desktopApi.selectWorkbook()
+        if (!selected || 'passwordRequired' in selected || editorIsDirty()) return false
+        // openLazyWorkbook installs the skeleton before its first async range.
+        // Keep takeover read-only until that range belongs to the new model.
+        return new Promise<boolean>((resolve) => {
+          let settled = false, initialRangeLoaded = false
+          let checkTimer: ReturnType<typeof setTimeout> | undefined
+          const finish = (ready: boolean): void => {
+            if (settled) return
+            settled = true
+            clearTimeout(timeout)
+            clearTimeout(checkTimer)
+            resolve(ready)
+          }
+          const timeout = setTimeout(() => finish(false), 30_000)
+          const check = (): void => {
+            if (settled || !initialRangeLoaded) return
+            const state = lazyWorkbookRef.current
+            const workbook = univerRef.current?.univerAPI.getActiveWorkbook()
+            const sheet = workbook?.getActiveSheet()
+            if (state?.file.sessionId !== selected.sessionId ||
+              workbook?.getId() !== `file-${selected.sha256}`) return finish(false)
+            const loaded = sheet && state.loadedRanges.get(sheet.getSheetId())
+            if (loaded && loaded.endRow >= loaded.startRow &&
+              loaded.endColumn >= loaded.startColumn) return finish(!editorIsDirty())
+            // A concurrent initial-sheet load may own the same request key;
+            // its duplicate returns early, so also wait for installed data.
+            checkTimer = setTimeout(check, 25)
+          }
+          void openLazyWorkbook(selected, { onInitialRangeLoaded: () => {
+            initialRangeLoaded = true
+            check()
+          } }).then((opened) => { if (!opened) finish(false) }, () => finish(false))
+        })
+      }),
+      isDirty: editorIsDirty,
+    })
     return () => host?.onEditorReady?.(null)
   })
   /// The workbook's refreshable data connections (web queries for now).
@@ -1239,18 +1293,40 @@ export function App({
   }
 
   function saveContext(): SaveContext {
+    let redactionsAtSave: readonly SheetRedactionState[] | null = null
     return {
       univerRef,
       lazyWorkbookRef,
       setMessage,
       openLazyWorkbook,
+      ...(hostRef.current?.inPlaceSave ? {
+        applySavedWorkbook: (file: WorkbookFile) => {
+          const state = lazyWorkbookRef.current
+          if (!state) return
+          // Journal and visual undo closures refer to the open-time baseline.
+          // Only the backing session identity changes; no Univer install runs.
+          const previousSession = state.file.sessionId
+          state.file = { ...file, visuals: state.file.visuals, sheets: state.file.sheets }
+          workbookFileRef.current = state.file
+          setWorkbookFile(state.file)
+          if (redactionsAtSave !== null) loadedRedactionStatesRef.current = redactionsAtSave
+          if (previousSession !== file.sessionId) void window.desktopApi.closeWorkbook(previousSession).catch(() => undefined)
+        },
+      } : {}),
+      flushPendingChanges: async () => {
+        flushPendingChartDataSync(visualSyncContext())
+        await flushChartDataSync(visualSyncContext())
+      },
       setPendingEdits,
       readCells: (addresses, sheetId) => readCellsImpl(readContext(), addresses, sheetId),
       // null until the file's own part has been read: an empty array means
       // "clear the part" to the gateway, and a save that lands before the read
       // would wipe the withheld-cell marks the file already carries.
-      redactionStates: () =>
-        loadedRedactionStatesRef.current === null ? null : redactionStatesRef.current,
+      redactionStates: () => {
+        if (loadedRedactionStatesRef.current === null || !redactionsPendingSave()) return null
+        redactionsAtSave = structuredClone(redactionStatesRef.current)
+        return redactionsAtSave
+      },
       slicerState: () => {
         // Only a session that changed its slicers rides them on the save:
         // untouched panels keep their parts byte-identical (raw-copied), and
@@ -5517,6 +5593,34 @@ export function App({
       hostRef.current?.onOpenFailed?.()
       finishOpening()
     }
+  }
+
+  function editorIsDirty(): boolean {
+    const state = lazyWorkbookRef.current
+    return editingCellRef.current || Boolean(state && journalSize(state.editJournal) > 0) ||
+      redactionsPendingSave() || slicersDirtyRef.current || pendingExternalLinkOpsRef.current !== null
+  }
+
+  async function flushEditor(): Promise<boolean> {
+    const state = lazyWorkbookRef.current
+    if (!(await commitActiveEditor())) return false
+    await settleFormulas(univerRef.current)
+    flushPendingChartDataSync(visualSyncContext())
+    await flushChartDataSync(visualSyncContext())
+    return lazyWorkbookRef.current === state && !editingCellRef.current
+  }
+
+  async function saveAndWait(): Promise<boolean> {
+    return saveGateRef.current.run(async () => {
+      if (hostRef.current?.readOnly) return !editorIsDirty()
+      for (let attempt = 0; attempt < 4; attempt++) {
+        if (!(await flushEditor())) return false
+        const saved = await handleSaveImpl(saveContext(), 'save', true)
+        if (!saved.ok && saved.reason !== 'no-edits') return false
+        if (!editorIsDirty()) return true
+      }
+      return false
+    })
   }
 
   async function handleSave(

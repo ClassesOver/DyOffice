@@ -50,6 +50,7 @@ export interface VisualSyncContext {
       timer: ReturnType<typeof setTimeout> | null
       dirty: Map<string, CellBounds>
       pending: Map<string, CellBounds>
+      running?: Promise<void> | null
     }
   }
   setMessage: (message: string) => void
@@ -80,8 +81,28 @@ export function queueChartDataSync(
   if (ctx.chartSyncRef.current.timer) clearTimeout(ctx.chartSyncRef.current.timer)
   ctx.chartSyncRef.current.timer = setTimeout(() => {
     ctx.chartSyncRef.current.timer = null
-    void runChartDataSync(ctx)
+    void flushChartDataSync(ctx)
   }, 500)
+}
+
+export async function flushChartDataSync(ctx: VisualSyncContext): Promise<void> {
+  if (ctx.chartSyncRef.current.timer) {
+    clearTimeout(ctx.chartSyncRef.current.timer)
+    ctx.chartSyncRef.current.timer = null
+  }
+  if (ctx.chartSyncRef.current.running) await ctx.chartSyncRef.current.running
+  if (ctx.chartSyncRef.current.dirty.size > 0) {
+    const run = runChartDataSync(ctx)
+    ctx.chartSyncRef.current.running = run
+    try {
+      await run
+    } finally {
+      if (ctx.chartSyncRef.current.running === run) ctx.chartSyncRef.current.running = null
+    }
+  } else if (ctx.chartSyncRef.current.running) {
+    await ctx.chartSyncRef.current.running
+  }
+  if (ctx.chartSyncRef.current.dirty.size > 0) await flushChartDataSync(ctx)
 }
 
 /// Re-queues the ranges a sync held back while their formulas were still
