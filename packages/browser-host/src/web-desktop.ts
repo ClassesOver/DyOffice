@@ -73,9 +73,9 @@ export function createWebDesktop(options: WebDesktopOptions) {
       const saved = await options.saveBytes(path || options.fileId, bytes)
       return { ok: true, revision: saved.revision }
     },
-    async saveDocxAs(path: string, data: ArrayBuffer) { return this.saveDocx(path, data) },
-    async saveDocxNew(_name: string, data: ArrayBuffer) { return this.saveDocx(options.fileId, data) },
-    async saveDocxTo(path: string, data: ArrayBuffer) { return this.saveDocx(path, data) },
+    async saveDocxAs(_name: string, _data: ArrayBuffer, _sourcePath?: string) { throw hostError('UNSUPPORTED', 'saveDocxAs') },
+    async saveDocxNew(_name: string, _data: ArrayBuffer) { throw hostError('UNSUPPORTED', 'saveDocxNew') },
+    async saveDocxTo(_path: string, _data: ArrayBuffer, _overwrite?: boolean) { throw hostError('UNSUPPORTED', 'saveDocxTo') },
     async fontAliases(names: readonly string[]) {
       const fonts = options.fonts ?? {}
       return Object.fromEntries(names.map((name) => [name, fonts[name] ? [...fonts[name]] : []]))

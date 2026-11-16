@@ -37,7 +37,7 @@ This was red while `web-desktop.ts` was missing and green after the bridge exist
 
 ## Plain table cells
 
-A table whose every cell is one plain paragraph is editable. The save patches that cell with `patchTableCellTexts` and leaves the surrounding `w:tbl` / `w:tr` / `w:tc` bytes in place. A plain-text rewrite of the whole table is still rejected. The mounted editor exposes one field per cell, undoes the cell edit, saves, and reopens the package through `parseDocx`.
+Only tables whose every cell is one strictly plain, single-run paragraph (or empty paragraph), with no paragraph/run identity attributes, are editable. Rich/multiple runs, bookmarks, revisions and other unsupported paragraph children reject plain-grid writes. The save passes null for unchanged cells to preserve their exact XML, and patches only changed cells with `patchTableCellTexts` and leaves the surrounding `w:tbl` / `w:tr` / `w:tc` bytes in place. A plain-text rewrite of the whole table is still rejected. The mounted editor exposes one field per cell, undoes the cell edit, saves, and reopens the package through `parseDocx`.
 
 This was red while the projection omitted `cells` (`table.cells` was `undefined`) and green after the patch path existed.
 
@@ -60,3 +60,7 @@ The import failed before the path pointed at `apps/docs/src/renderer/pagination-
 The GenOffice Docs ribbon `App` is not mounted. `Ribbon` takes the live tiptap editor, section, watermark, ink, and Zotero callbacks, and `App` is the desktop shell around that editor. `createWebDesktop` throws `UNSUPPORTED` for those desktop-only calls instead of reporting success. Putting that shell into the scanned web bundle would also import `@genoffice/font-metrics`, which reads font files with Node. That mount is still T07 work.
 
 An external Word or LibreOffice reopen is deferred to operations. This environment has neither `soffice` nor `libreoffice`, so a Word process cannot be started here. The in-repo reopen is `parseDocx` on the saved package, which is what the cell test checks. It is not a Word compatibility sample.
+
+## PR #24 safety follow-up
+
+`saveDocxNew`, `saveDocxAs` and `saveDocxTo` reject `UNSUPPORTED`: the host contract only updates an existing file and cannot safely create copies or enforce explicit-target overwrite policy. Normal save still uses the host. The latest target save lifecycle guards and committed-revision advancement are retained during the conflict resolution. Regression: `apps/web/test/pr24-safety.test.mjs` plus `docs-save-lifecycle.test.mjs`.

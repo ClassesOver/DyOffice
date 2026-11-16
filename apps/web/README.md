@@ -28,15 +28,17 @@ Open `http://127.0.0.1:3080` for the personal workspace and `/admin` for adminis
 - Admin-only Streamable HTTP MCP configuration and real connection/tool discovery using the official MCP SDK. No stdio subprocess transport.
 - Separate personal/admin bearer tokens. The admin token manages configuration, but cannot read or modify personal files, preferences or data sources. Secrets encrypted with AES-256-GCM and omitted from read responses.
 
-The development token server refuses startup when `NODE_ENV=production`, before reading or creating its data directory. This guard is not production account authentication or multi-user resource isolation. Production will use **local username/password authentication**, Admin-managed accounts, PostgreSQL-backed server sessions and personal resource ownership. OIDC/Keycloak/SSO are explicitly out of scope. See `docs/dyoffice/local-account-auth.md`. These features are **not implemented yet**.
+The development token server refuses startup when `NODE_ENV=production`, before reading or creating its data directory. Local username/password accounts, admin user management, and PostgreSQL sessions are implemented behind `buildApp({ localAuth })`. See `docs/dyoffice/evidence/t03-closeout.md`. The default process does not open that database, and file routes still use the development token until T04. OIDC/Keycloak/SSO stay out of scope. Global model and service settings stay in Admin. Personal files stay on the owning account.
 
 ## Remaining implementation
 
+T03 local accounts are complete for identity and sessions. The checklist is in `docs/dyoffice/evidence/t03-closeout.md`. `buildApp({ localAuth })` serves login, logout, `me`, reauth, password change, activation/reset, personal session revoke, and admin user create/list/disable/role/reset. The default `dev:web` process still uses the development bearer tokens and still refuses `NODE_ENV=production`. Replacing those tokens on file routes waits for T04 row-level security. External API tokens wait for T19. A full breached-password corpus and host Argon2 benchmarks wait for operations.
+
 T05 object storage is complete for this repository. Personal objects can be staged, finished, downloaded, trashed, restored, and purged. The server checks SHA-256, enforces quota, expires abandoned uploads, and keeps a file row only after the object exists. An in-process client covers those rules in `npm run test:web`. A MinIO job, [dyoffice-t05-s3.yml](../../.github/workflows/dyoffice-t05-s3.yml), runs the same lifecycle against S3 when `DYOFFICE_S3_ENDPOINT` is set; the test skips when it is not. Row-level security remains T04. Multi-node highly available storage remains an operations concern. The older `/api/files` directory is the development-token prototype, not this store.
 
-A PDF capability gate reports page order for a plain file and refuses annotation, text edit, page reorder, redaction, and cover-text-as-deletion. Password-marked files are not readable. Browser PDF editing is not mounted. See `docs/dyoffice/evidence/t11-pdf-capabilities.md`.
+A PDF capability gate reports page order, text versus scanned versus blank pages, unembedded fonts, and unverified signatures. It refuses annotation, text edit, page reorder, redaction, cover-text-as-deletion, and trusting a signature. Password-marked files are not readable. Browser PDF editing, PDFium, and WASM are not mounted. See `docs/dyoffice/evidence/t11-pdf-capabilities.md`.
 
-T06 save transactions, revision history, and single-writer leases are complete for this development server. The done and deferred checklist is in `docs/dyoffice/evidence/t06-revision-commit.md`. `mountDocsEditor` now opens a DOCX, edits a paragraph or a plain table cell, undoes that local change, and saves through the host. `createWebDesktop` replaces the file, font, print, and text-clipboard calls and throws `UNSUPPORTED` for desktop-only methods instead of reporting success. The evidence is `docs/dyoffice/evidence/t07-docs-browser-mount.md`. Mount the GenOffice Docs renderer (ribbon, pagination, comments, tracked changes, and selection) on this bridge. Then adapt the other formats the same way, reusing each native editor and keeping non-browser work behind authorized APIs. Model chat/tool execution, database connectors and query integration, source edit/delete/test UI, file folders/favorites/recent views, multi-user login, and deployment hardening are still open. Autosave uses the saved preference; the assistant preference is stored and not yet shown.
+T06 save transactions, revision history, and single-writer leases are complete for this development server. The done and deferred checklist is in `docs/dyoffice/evidence/t06-revision-commit.md`. `mountDocsEditor` now opens a DOCX, edits a paragraph, undoes that local change, and saves through the host; see `docs/dyoffice/evidence/t07-docs-browser-mount.md`. Mount the GenOffice Docs renderer (ribbon, pagination, comments, tracked changes, and selection) on this DOCX host instead of that surface. Then adapt the other formats the same way, reusing each native editor and keeping non-browser work behind authorized APIs. Model chat/tool execution, database connectors and query integration, source edit/delete/test UI, file folders/favorites/recent views, and deployment hardening are still open. Autosave uses the saved preference; the assistant preference is stored and not yet shown.
 
 Run `npm run test:web` for HTTP access-boundary and persistence tests. Runtime dependencies are scoped to this app so starting the Web server does not install or launch Electron.
 
@@ -44,9 +46,8 @@ Run `npm run test:web` for HTTP access-boundary and persistence tests. Runtime d
 
 The repository now includes a PostgreSQL migration runner, an Argon2id password
 hasher and a **trusted-operator-only** one-time administrator bootstrap CLI.
-This does **not** make the existing Web token-login UI a production identity
-system; browser login, session revocation, throttling and per-user file RLS
-remain T03b/T04.
+This CLI is the only bootstrap path. Browser login is the local-auth route
+set, not this command. Per-user file RLS remains T04.
 
 Use the locked Web dependencies and an already provisioned PostgreSQL 16+
 database. Supply a dedicated *migration* role through `DYOFFICE_DATABASE_URL`
@@ -71,8 +72,8 @@ HTTP bootstrap endpoint or default admin password.
 
 Run the identity tests using the dedicated [identity schema CI workflow](../../.github/workflows/dyoffice-identity-schema.yml).
 This validates the actual native Argon2id module, PostgreSQL migrations,
-concurrent initializations and CLI. Do not enable this account store for Web
-users until T03b/T04 authorization and resource-isolation gates are met.
+concurrent initializations and CLI. Do not point the default development
+server at this account store until T04 isolates personal files.
 
 ## Web-only build baseline (T00)
 
@@ -100,8 +101,8 @@ manifest-listed assets, fails startup if the build is absent/incomplete, and doe
 not expose the manifest, source files, or arbitrary files. GET and HEAD are the
 only static methods. Source mode and built mode both retain API authorization.
 `NODE_ENV=production` still refuses startup: this seam does not make the temporary
-shared-token server production-ready. T02 API migration and T03 identity remain
-required before production deployment. Type checking currently
+shared-token server production-ready. T04 resource isolation remains required
+before production deployment. Type checking currently
 covers BrowserHost and Web contracts, not the legacy JavaScript prototype or all
 upstream renderer packages. HTTP smoke checks do not replace real browser UI or
 native document round-trip acceptance.
@@ -147,3 +148,5 @@ workflow runs Chromium against real APIs, verifies import/open/tab return/theme/
 Admin separation and canceled dirty navigation, then uploads screenshots/traces.
 Local Chromium launch is blocked by this executor's socket restriction; visual
 acceptance must wait for that workflow, not be inferred from jsdom or Vite.
+
+PR #24 follow-up adds a conservative plain-table-cell projection and a partial Web desktop bridge. New-document, Save As and explicit-target saves reject `UNSUPPORTED` because the bridge has no create/copy/overwrite-policy host operation. Tables containing multiple runs, paragraph identities, bookmarks, tracked changes or other unsupported paragraph structure remain read-only. Unchanged cells retain their original XML bytes. This does not mount the original Docs ribbon.

@@ -100,6 +100,14 @@ function cellRunIsPlain(run) {
 
 /** A table whose every cell is one plain paragraph can be patched in place. */
 export function plainTableCells(block) {
+  // The string patcher rebuilds paragraphs. Accept only a single plain run,
+  // optionally with preserved paragraph/run properties, never bookmarks,
+  // revisions, paragraph identities or unmodelled paragraph children.
+  const xml = block?.originalXml
+  if (typeof xml !== 'string' || COMPLEX_XML.test(xml) || /<w:\w+Change\b/.test(xml)) return null
+  const paragraphs = xml.match(/<w:p\b[^>]*\/>|<w:p\b[^>]*>[\s\S]*?<\/w:p>/g) ?? []
+  const simple = /^<w:p>\s*(?:<w:pPr>(?:(?!<\/w:pPr>)[\s\S])*<\/w:pPr>\s*)?(?:<w:r>\s*(?:<w:rPr>(?:(?!<\/w:rPr>)[\s\S])*<\/w:rPr>\s*)?<w:t(?: xml:space=(?:"preserve"|'preserve'))?>[^<]*<\/w:t>\s*<\/w:r>\s*)?<\/w:p>$/
+  if (!paragraphs.length || paragraphs.some(p => p !== '<w:p/>' && !simple.test(p))) return null
   const rows = block?.table?.rows
   if (!Array.isArray(rows) || rows.length === 0) return null
   const cells = []
@@ -110,7 +118,7 @@ export function plainTableCells(block) {
       if (!cell || cell.gridGap || cell.nestedTables?.length || cell.anchoredBoxes?.length || cell.vMerge || (cell.colSpan ?? 1) > 1) return null
       if (!Array.isArray(cell.paras) || cell.paras.length !== 1 || typeof cell.paras[0] !== 'string') return null
       const runs = cell.richParas?.[0]?.runs ?? []
-      if (runs.some(run => !cellRunIsPlain(run))) return null
+      if (runs.length > 1 || runs.some(run => !cellRunIsPlain(run))) return null
       line.push(cell.paras[0])
     }
     cells.push(line)
@@ -161,7 +169,14 @@ export async function applyDocxTextEdits(bytes, instructions) {
         if (item.text !== undefined || item.deleted || !cells || !sameCellGrid(cells, item.cells)) instructionError('该内容不能按纯文本修改')
         const changed = cells.some((row, rowIndex) => row.some((text, column) => text !== item.cells[rowIndex][column]))
         if (!changed) saveBlocks.push({ kind: 'original', docxIndex: block.docxIndex })
-        else saveBlocks.push({ kind: 'xml', docxIndex: block.docxIndex, xml: patchTableCellTexts(block.originalXml, item.cells.map(row => row.map(text => [text]))) })
+        else saveBlocks.push({ kind: 'xml', docxIndex: block.docxIndex, xml: patchTableCellTexts(block.originalXml, item.cells.map((row, r) => row.map((text, c) => {
+          if (text === cells[r][c]) return null
+          if (text !== '') return [text]
+          // The legacy empty-string patch drops rPr. Preserve the original
+          // single run properties using the engine's rich paragraph seam.
+          const rawRPr = block.table.rows[r][c].richParas?.[0]?.runs?.[0]?.rawRPr || ''
+          return [{ runs: [], xml: `<w:r>${rawRPr}<w:t xml:space="preserve"></w:t></w:r>` }]
+        }))) })
         continue
       }
       const plain = isPlainTextBlock(block)

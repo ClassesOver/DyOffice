@@ -114,6 +114,7 @@ export async function mountDocsEditor(host: DocsEditorHost, element: HTMLElement
           row.forEach((cell, column) => {
             const cellElement = document.createElement('td')
             const field = document.createElement('textarea')
+            field.dataset.index = String(index)
             field.dataset.row = String(rowIndex)
             field.dataset.column = String(column)
             field.value = cell
@@ -166,6 +167,8 @@ export async function mountDocsEditor(host: DocsEditorHost, element: HTMLElement
       return { ...item, cells, text: cells.flat().join('') }
     })
     dirty = true
+    const field = element.querySelector(`textarea[data-index="${index}"][data-row="${row}"][data-column="${column}"]`)
+    if (field instanceof element.ownerDocument.defaultView!.HTMLTextAreaElement && field.value !== text) field.value = text
     markDirty()
   }
 
@@ -206,13 +209,18 @@ export async function mountDocsEditor(host: DocsEditorHost, element: HTMLElement
     const submittedRevision = revision
     try {
       await ensureLease()
+      if (closed) return { ok: false }
       const committed = await host.commitDocx(fileId, {
         baseRevision: submittedRevision,
         leaseEpoch,
         idempotencyKey: crypto.randomUUID(),
         blocks: payload(submitted),
       })
+      // The commit is durable even if refreshing its projection fails.
+      revision = committed.revision
+      if (closed) return { ok: true, revision }
       opened = await host.readDocx(fileId)
+      if (closed) return { ok: true, revision }
       revision = opened.file.revision || committed.revision
       const serverBlocks = opened.blocks.map(cloneBlock)
       if (sameText(submitted, blocks)) {
