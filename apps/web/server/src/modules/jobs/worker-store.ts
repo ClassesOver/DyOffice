@@ -5,6 +5,7 @@ import { tokenHash } from '../auth/sessions.ts'
 import { uuid } from '../files/queries.ts'
 
 export type JobClaim = { jobId: string; artifactId: string; fileId: string; baseRevision: string; type: string; epoch: number; attempt: number; leaseUntil: string; deadlineAt: string; ownerId: string; sessionId: string; authVersion: number; objectKey: string; sha256: string; size: number; token: string }
+export type RevisionDelivery = { eventId: string; deliveryEpoch: number; token: string }
 export type JobDelivery = { jobId: string; deliveryEpoch: number; token: string }
 export function createJobWorkerStore({ pool,deploymentId,leaseMs = 30_000,deliveryLeaseMs = 10_000,reconcileMs = 30_000 }: { pool: Pool; deploymentId: string; leaseMs?: number; deliveryLeaseMs?: number; reconcileMs?: number }) {
   const deployment = uuid(deploymentId)
@@ -29,6 +30,8 @@ export function createJobWorkerStore({ pool,deploymentId,leaseMs = 30_000,delive
   }
   return {
     get claimLeaseMs() { return leaseMs },
+    async takeRevisionDelivery(): Promise<RevisionDelivery | null> { const token=secret(),value=await call<Omit<RevisionDelivery,'token'> | null>('take_revision_delivery',[deployment,tokenHash(token),deliveryLeaseMs]); return value ? {...value,token} : null },
+    ackRevisionDelivery: (value: RevisionDelivery) => call<boolean>('ack_revision_delivery',[deployment,uuid(value.eventId),value.deliveryEpoch,tokenHash(value.token),reconcileMs]),
     async takeDelivery(): Promise<JobDelivery | null> { const token = secret(), value = await call<Omit<JobDelivery,'token'> | null>('take_job_delivery',[deployment,tokenHash(token),deliveryLeaseMs]); return value ? { ...value,token } : null },
     ackDelivery: (value: JobDelivery) => call<boolean>('ack_job_delivery',[deployment,uuid(value.jobId),value.deliveryEpoch,tokenHash(value.token),reconcileMs]),
     async claim(id: string): Promise<JobClaim | null> { const token = secret(), value = await call<Omit<JobClaim,'token'> | null>('claim_native_job',[deployment,uuid(id),tokenHash(token),leaseMs]); return value ? { ...value,token } : null },

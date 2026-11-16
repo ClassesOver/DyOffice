@@ -27,22 +27,24 @@ test('native DOCX gate builds the real renderer and tests it on Node 22 with Pos
   assert.match(native,/node-version: 22/)
   assert.match(native,/playwright install chromium --with-deps/)
   assert.match(native,/DYOFFICE_TEST_DATABASE_URL:/)
-  assert.match(native,/image: postgres@sha256:/)
+  assert.match(native,/ci-host-services\.sh/)
+  assert.doesNotMatch(workflow,/services:|image:/)
 })
 
-test('durable job gate uses real pinned Redis and runs PostgreSQL/BullMQ recovery tests', () => {
-  assert.match(workflow,/image: redis@sha256:[a-f0-9]{64}/)
-  assert.match(workflow,/DYOFFICE_TEST_REDIS_URL: redis:\/\/127\.0\.0\.1:6379\/15/)
+test('durable job gate uses real host Redis and runs PostgreSQL/BullMQ recovery tests', () => {
+  assert.match(workflow,/ci-host-services\.sh --objectstore/)
+  assert.match(workflow,/DYOFFICE_TEST_REDIS_URL: redis:\/\/127\.0\.0\.1:16379\/15/)
   assert.match(workflow,/run: npm run test:web:jobs/)
 })
 
  test('native sandbox gate builds the locked Rust engine and verifies real kernel resource limits', () => {
   const job = workflow.split('\n  native-worker:')[1]
   assert.ok(job,'native worker job required')
-  for (const command of ['npm ci --prefix apps/web --workspaces=false --ignore-scripts --include=dev','npm run build:web:native -- --with-probe','npm run typecheck:web:worker','npm run test:web:sandbox','npm run test:web:native-jobs']) assert.ok(job.includes('run: ' + command),command)
+  for (const command of ['npm ci --prefix apps/web --workspaces=false --ignore-scripts --include=dev','npm run build:web:native -- --with-probe','npm run typecheck:web:worker','sudo --preserve-env=PATH,DYOFFICE_TEST_HOST_MANIFEST npm run test:web:sandbox','sudo --preserve-env=PATH,DYOFFICE_TEST_HOST_MANIFEST,DYOFFICE_TEST_DATABASE_URL,DYOFFICE_TEST_REDIS_URL npm run test:web:native-jobs']) assert.ok(job.includes('run: ' + command),command)
   assert.match(job,/node-version: 22/)
-  assert.match(job,/image: postgres@sha256:[a-f0-9]{64}/)
-  assert.match(job,/image: redis@sha256:[a-f0-9]{64}/)
+  assert.doesNotMatch(job,/services:|image:|docker/i)
+  assert.match(job,/sudo --preserve-env=GITHUB_ACTIONS bash tools\/dyoffice\/ci-host-services.sh/)
+  assert.match(job,/rustup toolchain install 1\.93\.0/)
   assert.match(job,/DYOFFICE_TEST_DATABASE_URL:/)
   assert.match(job,/DYOFFICE_TEST_REDIS_URL:/)
 })

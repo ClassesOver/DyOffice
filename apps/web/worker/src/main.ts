@@ -9,9 +9,10 @@ import { createFileService } from '../../server/src/modules/files/service.ts'
 import { createLeaseService } from '../../server/src/modules/leases/service.ts'
 import { createRevisionService } from '../../server/src/modules/revisions/service.ts'
 import { createJobWorkerStore } from '../../server/src/modules/jobs/worker-store.ts'
-import { createJobQueue,createJobDispatcher } from '../../server/src/outbox/dispatcher.ts'
+import { createJobQueue,createJobDispatcher,createRevisionQueue,createRevisionDispatcher } from '../../server/src/outbox/dispatcher.ts'
 import { uuid } from '../../server/src/modules/files/queries.ts'
-import { createSandboxProcess } from './sandbox/process.ts'
+import { recoverHostProcesses } from './sandbox/host-recovery.ts'
+import { createHostProcess } from './sandbox/host-process.ts'
 import { createXlsxNativeWorker } from './native/xlsx.ts'
 import { createXlsxJobExecutor } from './jobs/xlsx.ts'
 
@@ -20,10 +21,11 @@ export async function startNativeWorker(environment: NodeJS.ProcessEnv = process
   if (environment.DYOFFICE_DATABASE_URL || environment.DYOFFICE_AUTH_DATABASE_URL || environment.DYOFFICE_USER_TOKEN || environment.DYOFFICE_ADMIN_TOKEN) throw new Error('Worker rejects privileged or unrelated credentials')
   const required = (name: string) => { const value=environment[name]; if (!value) throw new Error('Worker configuration missing'); return value }
   const deploymentId=uuid(required('DYOFFICE_DEPLOYMENT_ID'))
-  const workerUrl=required('DYOFFICE_WORKER_DATABASE_URL'),businessUrl=required('DYOFFICE_BUSINESS_DATABASE_URL'),redisUrl=required('DYOFFICE_REDIS_URL'),image=required('DYOFFICE_NATIVE_IMAGE')
+  const workerUrl=required('DYOFFICE_WORKER_DATABASE_URL'),businessUrl=required('DYOFFICE_BUSINESS_DATABASE_URL'),redisUrl=required('DYOFFICE_REDIS_URL'),binary=required('DYOFFICE_NATIVE_BINARY'),sha256=required('DYOFFICE_NATIVE_SHA256')
   const controller=new AbortController(),active=new Set<Promise<unknown>>()
   let workerPool: Pool | undefined,businessPool: Pool | undefined,storage: Awaited<ReturnType<typeof configuredObjectStore>> | undefined
   let queue: Awaited<ReturnType<typeof createJobQueue>> | undefined,consumer: ReturnType<Awaited<ReturnType<typeof createJobQueue>>['consume']> | undefined
+  let revisionQueue: Awaited<ReturnType<typeof createRevisionQueue>> | undefined
   let loop: Promise<void> | undefined,started=false,closing: Promise<void> | undefined,resolveClosed!: () => void,rejectClosed!: (error: unknown) => void
   const closed=new Promise<void>((resolve,reject) => { resolveClosed=resolve; rejectClosed=reject }); void closed.catch(() => {})
   const check = () => { if (controller.signal.aborted) throw new Error('Worker startup aborted') }
@@ -39,7 +41,7 @@ export async function startNativeWorker(environment: NodeJS.ProcessEnv = process
       await Promise.allSettled([...active])
       await loop
     } finally {
-      try { await queue?.close() }
+      try { await Promise.all([queue?.close(),revisionQueue?.close()]) }
       finally {
         storage?.close()
         await Promise.allSettled([workerPool?.end(),businessPool?.end()])
@@ -55,9 +57,11 @@ export async function startNativeWorker(environment: NodeJS.ProcessEnv = process
     await assertRuntimePool(workerPool,'worker'); check()
     await assertRuntimePool(businessPool,'business'); check()
     await assertSharedDatabase(workerPool,businessPool); check()
+    if (!(await workerPool.query('SELECT native_deployment_ready($1::uuid) AS ready',[deploymentId])).rows[0].ready) throw new Error('Worker deployment is not bootstrapped')
     storage=await configuredObjectStore(environment); check()
     if (!storage.objectStore) throw new Error('Native worker requires explicit File API storage')
-    const sandbox=createSandboxProcess({ image,allowedCommands: ['open','read_range','recalc_cells','save_archive','close'] })
+    await recoverHostProcesses(deploymentId); check()
+    const sandbox=createHostProcess({ binary,sha256,deploymentId,allowedCommands: ['open','read_range','recalc_cells','save_archive','close'] })
     // Boot and close the actual isolated program before accepting jobs. No
     // document is parsed and no task or output is fabricated for readiness.
     await sandbox.run(Buffer.from('worker-startup'),async () => {},{ signal: controller.signal }); check()
@@ -75,10 +79,19 @@ export async function startNativeWorker(environment: NodeJS.ProcessEnv = process
     try { await Promise.race([consumer.waitUntilReady(),new Promise((_,reject) => { readyTimer=setTimeout(() => reject(new Error('Worker queue startup timeout')),3000) })]) }
     finally { clearTimeout(readyTimer) }
     check()
+    revisionQueue=await createRevisionQueue({url:redisUrl,name:'dyoffice-revisions-'+deploymentId,onError:warn});check()
+    const revisionsDispatcher=createRevisionDispatcher({store,queue:revisionQueue})
     const dispatcher=createJobDispatcher({ store,queue })
+    let nextRecovery=Date.now()+60_000
     loop=(async () => {
       while (!controller.signal.aborted) {
-        try { for (let i=0;i<16 && !controller.signal.aborted;i++) if (!await dispatcher.runOnce()) break }
+        try {
+          if(Date.now()>=nextRecovery){
+            nextRecovery=Date.now()+60_000
+            try{await recoverHostProcesses(deploymentId)}catch{warn()}
+          }
+          for (let i=0;i<16 && !controller.signal.aborted;i++) if (!await dispatcher.runOnce()) break
+          for (let i=0;i<16 && !controller.signal.aborted;i++) if (!await revisionsDispatcher.runOnce()) break }
         catch { if (!controller.signal.aborted) warn() }
         await delay(1000,undefined,{ signal: controller.signal }).catch(() => {})
       }

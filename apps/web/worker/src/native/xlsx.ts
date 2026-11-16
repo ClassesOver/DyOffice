@@ -1,4 +1,4 @@
-import { SandboxError, type SandboxSession } from '../sandbox/process.ts'
+import { SandboxError, type SandboxSession } from '../sandbox/contracts.ts'
 
 type Opened = { sessionId: string; sheets: { name: string }[] }
 function opened(value: unknown): Opened {

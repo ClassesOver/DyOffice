@@ -14,7 +14,7 @@
     "test:e2e": "node --experimental-strip-types --test test/e2e/*.test.mjs",
     "test:storage": "node --experimental-strip-types --test test/storage/*.test.mjs",
     "test:jobs": "node --experimental-strip-types --test test/jobs/*.test.mjs",
-    "test:sandbox": "node --experimental-strip-types --test --test-concurrency=1 test/sandbox/*.test.mjs",
+    "test:sandbox": "node --experimental-strip-types --test --test-concurrency=1 test/sandbox/*.test.mjs test/host-native/*.test.mjs",
     "typecheck:worker": "tsc -p worker/tsconfig.json",
     "test:native-jobs": "node --experimental-strip-types --test --test-concurrency=1 test/native-jobs/*.test.mjs",
     "start:worker": "node --experimental-strip-types worker/src/main.ts"

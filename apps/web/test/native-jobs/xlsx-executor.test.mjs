@@ -2,6 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
+import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { spawn,execFile } from 'node:child_process'
 import { promisify } from 'node:util'
@@ -15,7 +16,7 @@ import { createJobService } from '../../server/src/modules/jobs/service.ts'
 import { createJobWorkerStore } from '../../server/src/modules/jobs/worker-store.ts'
 import { createLeaseService } from '../../server/src/modules/leases/service.ts'
 import { createRevisionService } from '../../server/src/modules/revisions/service.ts'
-import { createJobQueue,createJobDispatcher } from '../../server/src/outbox/dispatcher.ts'
+import { createJobQueue,createJobDispatcher,createRevisionQueue } from '../../server/src/outbox/dispatcher.ts'
 const exec = promisify(execFile)
 const gate = () => { let resolve; const promise = new Promise(r => { resolve=r }); return { promise,resolve } }
 async function fixture(t,{ paused = false,leaseMs = 3000 } = {}) {
@@ -45,8 +46,10 @@ async function metadata(f) {
     return (await c.query('SELECT (SELECT state FROM native_jobs WHERE id=$1) AS state,(SELECT error_code FROM native_jobs WHERE id=$1) AS error,(SELECT count(*)::int FROM file_revisions WHERE file_id=$2) AS versions,(SELECT count(*)::int FROM revision_commits WHERE file_id=$2) AS receipts,(SELECT count(*)::int FROM revision_outbox WHERE file_id=$2) AS events',[f.job.id,f.file.fileId])).rows[0]
   })
 }
-async function noContainers() {
-  assert.equal((await exec('/usr/bin/docker',['ps','-aq','--filter','label=dyoffice.sandbox=true'])).stdout.trim(),'')
+async function noNativeServices() {
+  const output=(await exec('/usr/bin/systemctl',['list-units','--all','--plain','--no-legend','--no-pager','dyoffice-*.service'])).stdout
+  const taskUnits=output.split('\n').map(line=>line.trim().split(/\s+/)[0]).filter(name=>/^dyoffice-[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}-[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}\.service$/.test(name))
+  assert.deepEqual(taskUnits,[])
 }
 async function bounded(promise) {
   let timer
@@ -68,7 +71,7 @@ test('real native XLSX output traverses validation and atomically commits one ve
   assert.equal((await f.leases.getLease(f.alice.token,f.file.fileId)).active,false)
   await preserved(f,result)
   assert.equal(await f.store.claim(f.job.id),null)
-  await noContainers()
+  await noNativeServices()
 })
 test('heartbeat renews both SQL claim and edit lease while a real Rust container remains active',{ timeout: 30_000 },async t => {
   const f = await fixture(t,{ paused: true,leaseMs: 2000 }), claim = await f.store.claim(f.job.id)
@@ -79,7 +82,7 @@ test('heartbeat renews both SQL claim and edit lease while a real Rust container
   assert.equal(await f.store.claim(f.job.id),null,'Heartbeat must prevent a second claimant')
   assert.equal((await f.leases.getLease(f.alice.token,f.file.fileId)).active,true)
   f.resume.resolve(); const result = await bounded(finished)
-  await preserved(f,result); await noContainers()
+  await preserved(f,result); await noNativeServices()
 })
 test('database cancellation kills an already active Rust container and publishes no output',{ timeout: 30_000 },async t => {
   const f = await fixture(t,{ paused: true }), claim = await f.store.claim(f.job.id)
@@ -90,7 +93,7 @@ test('database cancellation kills an already active Rust container and publishes
   f.resume.resolve()
   assert.deepEqual(await metadata(f),{ state: 'cancelled',error: 'CANCELLED',versions: 1,receipts: 0,events: 0 })
   assert.equal((await f.leases.getLease(f.alice.token,f.file.fileId)).active,false)
-  await noContainers()
+  await noNativeServices()
 })
 test('session revocation aborts an active native container without holding identity locks across native execution',{ timeout: 30_000 },async t => {
   const f = await fixture(t,{ paused: true }), claim = await f.store.claim(f.job.id)
@@ -99,7 +102,7 @@ test('session revocation aborts an active native container without holding ident
   await bounded(f.sessions.revoke(f.alice.token,f.alice.sessionId))
   await assert.rejects(() => bounded(finished),{ code: 'AUTHORITY_LOST' }); f.resume.resolve()
   assert.deepEqual(await metadata(f),{ state: 'cancelled',error: 'AUTH_REVOKED',versions: 1,receipts: 0,events: 0 })
-  await noContainers()
+  await noNativeServices()
 })
 test('lost SQL claim kills the old native process; only the reclaimed epoch can commit output',{ timeout: 30_000 },async t => {
   const f = await fixture(t,{ paused: true }), first = await f.store.claim(f.job.id)
@@ -108,11 +111,11 @@ test('lost SQL claim kills the old native process; only the reclaimed epoch can 
   await f.transactions.withPrincipalTransaction({ kind: 'session',token: f.alice.token },c => c.query("UPDATE native_jobs SET lease_until=clock_timestamp()-interval '1 second' WHERE id=$1",[f.job.id]))
   const next = await f.store.claim(f.job.id)
   assert.ok(next.epoch>first.epoch)
-  await assert.rejects(() => bounded(finished),{ code: 'AUTHORITY_LOST' }); f.resume.resolve(); await noContainers()
+  await assert.rejects(() => bounded(finished),{ code: 'AUTHORITY_LOST' }); f.resume.resolve(); await noNativeServices()
   const result = await bounded(f.executor.execute(next))
   await preserved(f,result)
   assert.deepEqual(await metadata(f),{ state: 'succeeded',error: null,versions: 2,receipts: 1,events: 1 })
-  await noContainers()
+  await noNativeServices()
 })
 test('real BullMQ delivery and duplicate hints run the actual Rust writer and retain one durable output',{ timeout: 30_000 },async t => {
   const f = await fixture(t), url = process.env.DYOFFICE_TEST_REDIS_URL
@@ -131,7 +134,7 @@ test('real BullMQ delivery and duplicate hints run the actual Rust writer and re
   const stored = await f.jobs.getJob(f.alice.token,f.job.id)
   assert.equal(stored.state,'succeeded'); await preserved(f,{ revision: stored.resultRevision })
   assert.deepEqual(await metadata(f),{ state: 'succeeded',error: null,versions: 2,receipts: 1,events: 1 })
-  await noContainers()
+  await noNativeServices()
 })
 
 test('controller shutdown aborts native work, releases its edit lease and leaves a resumable SQL job',{ timeout: 30_000 },async t => {
@@ -141,17 +144,17 @@ test('controller shutdown aborts native work, releases its edit lease and leaves
   await assert.rejects(() => bounded(finished),{ code: 'ABORTED' }); f.resume.resolve()
   assert.deepEqual(await metadata(f),{ state: 'queued',error: 'WORKER_FAILED',versions: 1,receipts: 0,events: 0 })
   assert.equal((await f.leases.getLease(f.alice.token,f.file.fileId)).active,false)
-  await noContainers()
+  await noNativeServices()
   const next = await f.store.claim(f.job.id)
   assert.ok(next.epoch>first.epoch)
   await preserved(f,await f.executor.execute(next))
   assert.deepEqual(await metadata(f),{ state: 'succeeded',error: null,versions: 2,receipts: 1,events: 1 })
-  await noContainers()
+  await noNativeServices()
 })
 
 async function daemonEnvironment(f) {
-  const manifest = JSON.parse(await readFile(process.env.DYOFFICE_TEST_NATIVE_MANIFEST ?? new URL('../../../../.dyoffice-native-build/manifest.json',import.meta.url),'utf8'))
-  return { PATH: process.env.PATH,NODE_ENV: 'test',DYOFFICE_NATIVE_WORKER: 'experimental',DYOFFICE_WORKER_DATABASE_URL: f.urls.worker,DYOFFICE_BUSINESS_DATABASE_URL: f.urls.business,DYOFFICE_DEPLOYMENT_ID: f.deploymentId,DYOFFICE_REDIS_URL: process.env.DYOFFICE_TEST_REDIS_URL,DYOFFICE_NATIVE_IMAGE: manifest.nativeImage,DYOFFICE_FILE_API: 'experimental',DYOFFICE_OBJECT_STORE: 'local-dev',DYOFFICE_OBJECT_DIRECTORY: f.directory }
+  const manifest = JSON.parse(await readFile(process.env.DYOFFICE_TEST_HOST_MANIFEST ?? new URL('../../../../.dyoffice-native-build/host-manifest.json',import.meta.url),'utf8'))
+  return { PATH: process.env.PATH,NODE_ENV: 'test',DYOFFICE_NATIVE_WORKER: 'experimental',DYOFFICE_WORKER_DATABASE_URL: f.urls.worker,DYOFFICE_BUSINESS_DATABASE_URL: f.urls.business,DYOFFICE_DEPLOYMENT_ID: f.deploymentId,DYOFFICE_REDIS_URL: process.env.DYOFFICE_TEST_REDIS_URL,DYOFFICE_NATIVE_BINARY: manifest.nativeBinary,DYOFFICE_NATIVE_SHA256: manifest.nativeSha256,DYOFFICE_FILE_API: 'experimental',DYOFFICE_OBJECT_STORE: 'local-dev',DYOFFICE_OBJECT_DIRECTORY: f.directory,DYOFFICE_WORKER_RUNTIME_DIRECTORY: join(f.directory,'worker-control') }
 }
 function daemon(env) {
   const child = spawn(process.execPath,['--experimental-strip-types',fileURLToPath(new URL('../../worker/src/main.ts',import.meta.url))],{ env,stdio: ['ignore','pipe','pipe'] })
@@ -180,18 +183,28 @@ test('runnable daemon starts with restricted pools, consumes real queued API job
     do { stored=await f.jobs.getJob(f.alice.token,f.job.id); if (stored.state==='succeeded') break; assert.ok(Date.now()<deadline,'Worker daemon did not commit the queued job'); await new Promise(resolve => setTimeout(resolve,50)) } while(true)
     await preserved(f,{ revision: stored.resultRevision })
     assert.deepEqual(await metadata(f),{ state: 'succeeded',error: null,versions: 2,receipts: 1,events: 1 })
+    const events=await createRevisionQueue({url:process.env.DYOFFICE_TEST_REDIS_URL,name:'dyoffice-revisions-'+f.deploymentId})
+    try {
+      let hints=[];const publishDeadline=Date.now()+5000
+      while(!hints.length&&Date.now()<publishDeadline){hints=await events.queue.getWaiting();if(!hints.length)await new Promise(resolve=>setTimeout(resolve,50))}
+      assert.equal(hints.length,1);assert.deepEqual(Object.keys(hints[0].data),['eventId'])
+      const row=await f.transactions.withPrincipalTransaction({kind:'session',token:f.alice.token},async c=>(await c.query('SELECT revision_id FROM revision_outbox WHERE id=$1',[hints[0].data.eventId])).rows[0])
+      assert.equal(row.revision_id,stored.resultRevision)
+    }finally{await events.close()}
   } finally {
     await service.close()
+    const events=await createRevisionQueue({url:process.env.DYOFFICE_TEST_REDIS_URL,name:'dyoffice-revisions-'+f.deploymentId})
+    try{await events.queue.obliterate({force:true})}finally{await events.close()}
     const cleanup = await createJobQueue({ url: process.env.DYOFFICE_TEST_REDIS_URL,name: 'dyoffice-native-' + f.deploymentId })
     try { await cleanup.queue.obliterate({ force: true }) } finally { await cleanup.close() }
   }
   assert.equal(service.child.exitCode,0); assert.equal(service.stderr,'')
-  await noContainers()
+  await noNativeServices()
 })
-test('daemon refuses production, privileged credentials and stale schema before claiming jobs',{ timeout: 35_000 },async t => {
+test('daemon refuses production, privileged credentials, unknown deployment and stale schema before claiming jobs',{ timeout: 35_000 },async t => {
   const f = await fixture(t), env = await daemonEnvironment(f)
   const original = (await f.ownerPool.query('SELECT sha256 FROM identity_migrations WHERE version=5')).rows[0].sha256
-  const cases = [{ ...env,NODE_ENV: 'production' },{ ...env,DYOFFICE_DATABASE_URL: f.urls.owner },{ ...env,DYOFFICE_AUTH_DATABASE_URL: f.urls.auth }]
+  const cases = [{ ...env,NODE_ENV: 'production' },{ ...env,DYOFFICE_DATABASE_URL: f.urls.owner },{ ...env,DYOFFICE_AUTH_DATABASE_URL: f.urls.auth },{ ...env,DYOFFICE_DEPLOYMENT_ID: randomUUID() }]
   cases.push({ ...env,stale: true })
   try {
     for (const environment of cases) {
@@ -203,5 +216,5 @@ test('daemon refuses production, privileged credentials and stale schema before 
     }
   } finally { await f.ownerPool.query('UPDATE identity_migrations SET sha256=$1 WHERE version=5',[original]) }
   assert.deepEqual(await metadata(f),{ state: 'queued',error: null,versions: 1,receipts: 0,events: 0 })
-  await noContainers()
+  await noNativeServices()
 })

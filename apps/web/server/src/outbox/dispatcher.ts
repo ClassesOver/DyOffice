@@ -58,3 +58,31 @@ export function createJobDispatcher({ store,queue }: { store: JobWorkerStore; qu
     },
   }
 }
+
+// Revision notifications are opaque hints. Receiving/publishing one does not
+// assert that indexing or any other downstream projection has processed it.
+export async function createRevisionQueue({url,name,onError=()=>{}}:{url:string;name:string;onError?:(error:Error)=>void}) {
+  if(!/^dyoffice-revisions-[a-z0-9-]{1,80}$/.test(name))throw new Error('Invalid revision queue name')
+  const queue=new Queue<{eventId:string}>(name,{connection:connectionOptions(url)})
+  queue.on('error',error=>{try{onError(error)}catch{}})
+  let timer:ReturnType<typeof setTimeout>|undefined
+  try{await Promise.race([queue.waitUntilReady(),new Promise((_,reject)=>{timer=setTimeout(()=>reject(new Error('Revision queue startup timeout')),3000)})])}
+  catch(error){await queue.close().catch(()=>{});throw error}finally{clearTimeout(timer)}
+  return {
+    queue,
+    async publish(eventId:string){
+      if(!/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(eventId))throw new Error('Invalid revision event')
+      await queue.add('file.revision.committed',{eventId},{jobId:eventId,removeOnComplete:true,removeOnFail:true})
+    },
+    close:()=>queue.close(),
+  }
+}
+export function createRevisionDispatcher({store,queue}:{store:JobWorkerStore;queue:{publish(eventId:string):Promise<void>}}){
+  return {async runOnce(){
+    const delivery=await store.takeRevisionDelivery()
+    if(!delivery)return false
+    await queue.publish(delivery.eventId)
+    await store.ackRevisionDelivery(delivery)
+    return true
+  }}
+}

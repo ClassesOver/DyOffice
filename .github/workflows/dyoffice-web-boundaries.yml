@@ -39,55 +39,21 @@ permissions:
 
 jobs:
   boundary-check:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
-    services:
-      postgres:
-        image: postgres@sha256:a77aa70e641402a21411b92b721c58d10f23b50ae5fdd2333efd22d166e1e5f7
-        env:
-          POSTGRES_DB: dyoffice_test
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: dyoffice-ci-test-only
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U postgres -d dyoffice_test"
-          --health-interval 5s --health-timeout 5s --health-retries 10
-      objectstore:
-        image: rustfs/rustfs@sha256:b81d16a90ee25bd9511280127ca1471788c6e874cf0f0da759645f46b2dc1d74
-        env:
-          RUSTFS_ACCESS_KEY: dyoffice-ci-s3-test
-          RUSTFS_SECRET_KEY: dyoffice-ci-s3-test-only-secret
-          RUSTFS_VOLUMES: /data
-          RUSTFS_CONSOLE_ENABLE: 'false'
-        ports:
-          - 9000:9000
-        options: >-
-          --memory=768m --cpus=2
-          --health-cmd "curl -fsS http://localhost:9000/health/ready"
-          --health-interval 5s --health-timeout 3s --health-retries 20
-          --tmpfs=/data:rw,uid=10001,gid=10001,size=512m
-          --tmpfs=/logs:rw,uid=10001,gid=10001,size=32m
-      redis:
-        image: redis@sha256:7f7d30b7fdd09467bac58198a1f166dd69789d348d4fe859cccb20e0cf287fbe
-        ports:
-          - 6379:6379
-        options: >-
-          --memory=128m --cpus=1 --read-only --user=999:999
-          --tmpfs=/data:rw,uid=999,gid=999,size=32m
-          --health-cmd "redis-cli ping"
-          --health-interval 5s --health-timeout 3s --health-retries 10
     env:
-      DYOFFICE_TEST_REDIS_URL: redis://127.0.0.1:6379/15
-      DYOFFICE_TEST_S3_ENDPOINT: http://127.0.0.1:9000
+      DYOFFICE_TEST_REDIS_URL: redis://127.0.0.1:16379/15
+      DYOFFICE_TEST_S3_ENDPOINT: http://127.0.0.1:19000
       DYOFFICE_TEST_S3_ACCESS_KEY: dyoffice-ci-s3-test
       DYOFFICE_TEST_S3_SECRET_KEY: dyoffice-ci-s3-test-only-secret
-      DYOFFICE_TEST_DATABASE_URL: postgresql://postgres:dyoffice-ci-test-only@127.0.0.1:5432/dyoffice_test
+      DYOFFICE_TEST_DATABASE_URL: postgresql://postgres:dyoffice-ci-test-only@127.0.0.1:55432/dyoffice_test
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
+      - name: Provision host database Redis and object storage
+        run: sudo --preserve-env=GITHUB_ACTIONS bash tools/dyoffice/ci-host-services.sh --objectstore
       - name: Install Web gate dependencies without Electron
         run: npm ci --prefix apps/web --workspaces=false --ignore-scripts --include=dev
       - name: Install Chromium for TLS session acceptance
@@ -134,27 +100,17 @@ jobs:
         run: npm run test:web
 
   native-docx:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 45
-    services:
-      postgres:
-        image: postgres@sha256:a77aa70e641402a21411b92b721c58d10f23b50ae5fdd2333efd22d166e1e5f7
-        env:
-          POSTGRES_DB: dyoffice_test
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: dyoffice-ci-test-only
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U postgres -d dyoffice_test"
-          --health-interval 5s --health-timeout 5s --health-retries 10
     env:
-      DYOFFICE_TEST_DATABASE_URL: postgresql://postgres:dyoffice-ci-test-only@127.0.0.1:5432/dyoffice_test
+      DYOFFICE_TEST_DATABASE_URL: postgresql://postgres:dyoffice-ci-test-only@127.0.0.1:55432/dyoffice_test
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
+      - name: Provision host database and Redis
+        run: sudo --preserve-env=GITHUB_ACTIONS bash tools/dyoffice/ci-host-services.sh
       - name: Install renderer sources without Electron lifecycle scripts
         run: npm ci --ignore-scripts --include=dev
       - name: Install Chromium
@@ -169,32 +125,13 @@ jobs:
         run: npm test --workspace @genoffice/docx-engine
 
   native-worker:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
-    services:
-      postgres:
-        image: postgres@sha256:a77aa70e641402a21411b92b721c58d10f23b50ae5fdd2333efd22d166e1e5f7
-        env:
-          POSTGRES_DB: dyoffice_test
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: dyoffice-ci-test-only
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U postgres -d dyoffice_test"
-          --health-interval 5s --health-timeout 5s --health-retries 10
-      redis:
-        image: redis@sha256:7f7d30b7fdd09467bac58198a1f166dd69789d348d4fe859cccb20e0cf287fbe
-        ports:
-          - 6379:6379
-        options: >-
-          --memory=128m --cpus=1 --read-only --user=999:999
-          --tmpfs=/data:rw,uid=999,gid=999,size=32m
-          --health-cmd "redis-cli ping"
-          --health-interval 5s --health-timeout 3s --health-retries 10
     env:
-      DYOFFICE_TEST_DATABASE_URL: postgresql://postgres:dyoffice-ci-test-only@127.0.0.1:5432/dyoffice_test
-      DYOFFICE_TEST_REDIS_URL: redis://127.0.0.1:6379/15
+      RUSTUP_TOOLCHAIN: 1.93.0
+      DYOFFICE_TEST_HOST_MANIFEST: ${{ github.workspace }}/.dyoffice-native-build/host-manifest.json
+      DYOFFICE_TEST_DATABASE_URL: postgresql://postgres:dyoffice-ci-test-only@127.0.0.1:55432/dyoffice_test
+      DYOFFICE_TEST_REDIS_URL: redis://127.0.0.1:16379/15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -202,11 +139,15 @@ jobs:
           node-version: 22
       - name: Install Web dependencies without Electron
         run: npm ci --prefix apps/web --workspaces=false --ignore-scripts --include=dev
+      - name: Provision independent host database and Redis
+        run: sudo --preserve-env=GITHUB_ACTIONS bash tools/dyoffice/ci-host-services.sh
+      - name: Install pinned Rust toolchain
+        run: rustup toolchain install 1.93.0 --profile minimal
       - name: Compile original locked Rust engine and bounded native transport
         run: npm run build:web:native -- --with-probe
       - name: Typecheck worker adapters
         run: npm run typecheck:web:worker
-      - name: Exercise real container isolation and native XLSX bytes
-        run: npm run test:web:sandbox
+      - name: Exercise real host isolation and native XLSX bytes
+        run: sudo --preserve-env=PATH,DYOFFICE_TEST_HOST_MANIFEST npm run test:web:sandbox
       - name: Test real native job output, cancellation, recovery and BullMQ redelivery
-        run: npm run test:web:native-jobs
+        run: sudo --preserve-env=PATH,DYOFFICE_TEST_HOST_MANIFEST,DYOFFICE_TEST_DATABASE_URL,DYOFFICE_TEST_REDIS_URL npm run test:web:native-jobs

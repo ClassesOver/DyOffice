@@ -310,8 +310,8 @@
       "size": 157313
     },
     "apps/web/package.json": {
-      "sha256": "6e496daf53a43d96ac0659268e3144add228ad9eabb3df09a0d10e746bd6a725",
-      "size": 1747
+      "sha256": "ace2d41f2a442db12bd9618eb499d56d2ddeeb6d89b49ec8470a3d89bdf552c3",
+      "size": 1775
     },
     "package-lock.json": {
       "sha256": "ef7d0f3046571ba392a46d0930129f8d0fdfbb2837eaf79905ef6810d38396c0",

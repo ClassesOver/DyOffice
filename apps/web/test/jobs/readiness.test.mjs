@@ -27,3 +27,10 @@ test('worker admission rejects altered, missing or unknown migrations before any
   await f.ownerPool.query('DELETE FROM identity_migrations WHERE version=5')
   await assert.rejects(() => assertRuntimePool(f.workerPool,'worker'),/schema|migration/i)
 })
+
+test('worker checks a bootstrapped deployment without auth or business metadata access',async t => {
+  const f=await jobFixture(t)
+  assert.equal((await f.workerPool.query('SELECT native_deployment_ready($1) AS ready',[f.deploymentId])).rows[0].ready,true)
+  assert.equal((await f.workerPool.query('SELECT native_deployment_ready(gen_random_uuid()) AS ready')).rows[0].ready,false)
+  for (const pool of [f.authPool,f.businessPool]) await assert.rejects(() => pool.query('SELECT native_deployment_ready($1)',[f.deploymentId]),{ code: '42501' })
+})

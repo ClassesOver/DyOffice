@@ -193,15 +193,17 @@ docs/dyoffice/               当前计划及 inventory/ evidence/ adr/
 
 ### T08 持久任务、原生 Worker 与沙箱
 
-**依赖：** T04/T06。**文件：** `modules/jobs/{service,routes}.ts`、`outbox/dispatcher.ts`、`worker/src/{main.ts,native/xlsx.ts,sandbox/process.ts}`、`test/integration/jobs.test.ts`、`test/recovery/job-crash.test.ts`。
+2026-11-16 当前状态：无 Docker 执行、常驻 Worker、启动回收和 revision outbox 发布均已实现，已通过独立审查和全部本次回归，T08 已闭环（实验后端范围，production 仍关闭）。见 [当前 T08 验收证据](evidence/t08-docker-free-closure.md)。下面 2026-11-15 的进展记录为历史快照。
+
+**依赖：** T04/T06。**文件：** `modules/jobs/{service,routes}.ts`、`outbox/dispatcher.ts`、`worker/src/{main.ts,native/xlsx.ts,sandbox/host-process.ts,sandbox/host-recovery.ts}`、`test/jobs/*.test.mjs`、`test/native-jobs/*.test.mjs`、`test/host-native/*.test.mjs`。
 
 **接口：** `enqueueJob(principal,type,input): Promise<JobRef>`、`cancelJob()`；输入仅授权 artifactId，输出通过 T06 提交。
 
-- [ ] 测试 enqueue 事务后投递前崩溃、Redis 重建、Worker 丢锁、重复执行、超时、取消、旧版本写入。
-- [ ] 对应测试 RED。
-- [ ] PostgreSQL 任务/outbox 为权威；BullMQ 调度；任务隔离工作目录、CPU/内存/超时、有限命令 allowlist、禁网默认。
-- [ ] GREEN；原生工具被杀不会击穿 API 进程；已提交任务不重复写版本。
-- [ ] 提交 `feat(jobs): add durable isolated native execution`。
+- [x] 测试 enqueue 事务后投递前崩溃、Redis 重建、Worker 丢锁、重复执行、超时、取消、旧版本写入。
+- [x] 对应测试 RED。
+- [x] PostgreSQL 任务/outbox 为权威；BullMQ 调度；任务隔离工作目录、CPU/内存/超时、有限命令 allowlist、禁网默认。
+- [x] GREEN；原生工具被杀不会击穿 API 进程；已提交任务不重复写版本。
+- [x] 提交 `feat(jobs): add durable isolated native execution`。
 
 2026-11-15 接缝进展：内部 PostgreSQL 任务/outbox、独立 worker 角色、幂等入队、领取 fencing 与真实 BullMQ 重建投递已实现，见 [T08a 证据](evidence/t08a-durable-jobs.md)。公开路由、原生 executor/OS 沙箱、T06 同事务输出提交和 revision_outbox 消费仍待后续实现，T08 未标记完成。
 

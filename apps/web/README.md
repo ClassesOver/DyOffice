@@ -211,22 +211,14 @@ T08a 建立版本 7 的任务表；当前迁移版本为 10，新增任务输出
 
 此 checkpoint **未接入公开任务路由、调度守护循环、原生 executor、OS 沙箱或任务输出提交**，现有 Web 启动不要求 Redis，也不在启动时伪造成功任务。`docx.roundtrip` 仅为内部测试保留类型；T08 仍未完成。T06 的 revision_outbox 仍保留意图，不把当前 job dispatcher 当成文档索引事件已消费。
 
-`npm run test:web:jobs` 使用真实独立 PostgreSQL 与 Redis/BullMQ，另需 `DYOFFICE_TEST_REDIS_URL` 指向隔离 loopback Redis。测试仅操作随机专属队列 namespace；恢复测试清空该队列并真实断开客户端连接，不清空共享 Redis。测试 fixture 使用固定摘要 Redis 7.4，CI 也固定相同镜像。不得将测试连接指向业务服务。具体结果和开放项见 [T08a 证据](../../docs/dyoffice/evidence/t08a-durable-jobs.md)。
+`npm run test:web:jobs` 使用真实独立 PostgreSQL 与 Redis/BullMQ，另需 `DYOFFICE_TEST_REDIS_URL` 指向隔离 loopback Redis。测试仅操作随机专属队列 namespace；恢复测试清空该队列并真实断开客户端连接，不清空共享 Redis。历史 T08a fixture 使用 Redis 7.4 容器；当前测试与 CI 已切换宿主机 Redis。不得将测试连接指向业务服务。具体结果和开放项见 [T08a 证据](../../docs/dyoffice/evidence/t08a-durable-jobs.md)。
 
-### T08b 原生 XLSX 与开发环境隔离
+### T08 当前运行方式（2026-11-16）
 
-已增加真实 Rust XLSX archive roundtrip 和开发环境 Docker OS 沙箱，构建/测试入口见 [Worker 说明](worker/README.md)。隔离限制、真实资源耗尽测试及边界见 [T08b 证据](../../docs/dyoffice/evidence/t08b-native-sandbox.md)。此阶段尚未接入公开任务路由、调度守护循环或 T06 同事务输出/任务成功提交；T08 仍在进行，production 仍关闭。
+原生 Worker 已切换为无 Docker 的 Linux/systemd 受限进程。构建原始 Rust 引擎后，使用 `host-manifest.json` 中的绝对二进制路径与 SHA-256，分别设置 `DYOFFICE_NATIVE_BINARY` 和 `DYOFFICE_NATIVE_SHA256`。配置和权限要求见 [宿主机运行说明](worker/HOST-RUNTIME.md)。旧 T08a–e 证据记录当时状态，不再作为当前部署步骤。
 
-### T08c 受限任务输出事务
+迁移版本为 12，先用 owner 执行 `npm run provision:runtime`。API 设置 `DYOFFICE_NATIVE_JOBS=experimental`，提供任务入队、列表、查询与取消；入队输入仅含本人 artifactId、类型和幂等键，使用现有 Cookie/Origin/CSRF。独立 Worker 设置 `DYOFFICE_NATIVE_WORKER=experimental`，使用受限 worker/business 连接及相同 deployment、对象存储配置。
 
-内部任务凭据已复用 T06 文件/上传/租约/CAS/配额/回执/outbox 保存核心，在同一事务写入输出版本、释放任务租约并标记成功。浏览器与任务租约显式分用途；已完成、旧 attempt、取消或过期凭据不能继续写。该阶段版本 9（当前版本 10，见 T08e），更新前以 owner 运行上述 `npm run provision:runtime` 安装不可变迁移和新增 business 函数授权。实际数据库回滚、提交后进程死亡与升级证据见 [T08c](../../docs/dyoffice/evidence/t08c-atomic-job-output.md)。真实 Rust 适配器到此核心的常驻执行链、公开 API 和 revision_outbox 消费仍待继续实现。
+Worker 的原生执行、心跳、取消/失锁终止及 T06 同事务输出提交已连通。systemd 独立期限处理控制进程死亡，部署范围内的过期残留由启动与定期回收处理。revision outbox 使用 SQL 租约和确认令牌向 Redis 发布 eventId，支持重复提示和队列丢失后的重建；发布不代表搜索索引已完成。
 
-### T08d 真实原生执行处理器
-
-内部 `xlsx.roundtrip` 处理器已连通真实 Rust 容器、领取/编辑租约 heartbeat、授权输入读取、输出校验与同事务版本/任务成功。取消、撤销、失锁和可控关闭会中止原生工作；运行中的控制进程被强杀后，独立 supervisor 期限与 Docker 自动删除负责回收容器。构建与测试见 [Worker 说明](worker/README.md)，实际 PostgreSQL/Rust/Redis 证据见 [T08d](../../docs/dyoffice/evidence/t08d-native-executor.md)。公开 API、可启动的常驻 Worker、启动回收及 revision_outbox 消费仍待继续实现，production 仍关闭。
-
-### T08e 任务 API 与版本就绪检查
-
-在现有 local 账号和实验 File API 配置上增加 `DYOFFICE_NATIVE_JOBS=experimental`。可用 `POST /api/v1/jobs`（type 为 `xlsx.roundtrip`，input 仅含本人文件版本 UUID artifactId，另含 idempotencyKey）、`GET /api/v1/jobs`、`GET /api/v1/jobs/:id`、无请求体的 `POST /api/v1/jobs/:id/cancel`。写请求使用现有 Origin/CSRF/Cookie；返回 202 是 PostgreSQL 接受排队，成功状态由实际输出提交决定。
-
-当前迁移版本 10，先用 owner 运行 `npm run provision:runtime`。业务/worker 角色通过只读布尔函数核验完整迁移 checksum，不直接读取迁移表，不使用 owner/auth 连接代替受限角色。API 可以持久化离线队列意图；独立 Worker 使用 `npm run start:web:worker`。其环境设置 `DYOFFICE_NATIVE_WORKER=experimental`、worker/business 数据库 URL、同一 deployment ID、Redis URL、构建 manifest 的 nativeImage ID 和相同 object-store 配置；不得包含 owner/auth URL 或旧开发 token。启动回收和更完整故障恢复继续实现。端点、角色与真实 API→Redis→Rust 验证见 [T08e 证据](../../docs/dyoffice/evidence/t08e-job-api-readiness.md)。
+PostgreSQL、Redis 与测试对象存储采用宿主机独立服务。无 Docker 构建、隔离、任务和存储测试已运行；T08 已通过最终审查与本次全部回归；验收见 [T08 闭环证据](../../docs/dyoffice/evidence/t08-docker-free-closure.md)，production 保持关闭。

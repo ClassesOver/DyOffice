@@ -1,9 +1,7 @@
-import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
+import { randomUUID } from 'node:crypto'
 export async function sandboxFixture(kind = 'probe',limits = {}) {
-  const { createSandboxProcess } = await import('../../worker/src/sandbox/process.ts')
-  const metadata = JSON.parse(await readFile(process.env.DYOFFICE_TEST_NATIVE_MANIFEST ?? new URL('../../../../.dyoffice-native-build/manifest.json',import.meta.url),'utf8'))
-  const image = kind === 'native' ? metadata.nativeImage : metadata.probeImage
-  assert.match(image,/^sha256:[a-f0-9]{64}$/)
-  return createSandboxProcess({ image,allowedCommands: kind === 'native' ? ['open','read_range','recalc_cells','save_archive','close'] : ['probe','network','pids','sleep','busy','allocate','flood','output','symlink'],limits })
+  const { createHostProcess } = await import('../../worker/src/sandbox/host-process.ts')
+  const metadata = JSON.parse(await readFile(process.env.DYOFFICE_TEST_HOST_MANIFEST ?? new URL('../../../../.dyoffice-native-build/host-manifest.json',import.meta.url),'utf8'))
+  return createHostProcess({ deploymentId: randomUUID(),binary: kind === 'native' ? metadata.nativeBinary : metadata.probeBinary,sha256: kind === 'native' ? metadata.nativeSha256 : metadata.probeSha256,allowedCommands: kind === 'native' ? ['open','read_range','recalc_cells','save_archive','close'] : ['probe','network','pids','sleep','busy','allocate','flood','output','symlink'],limits })
 }

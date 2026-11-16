@@ -7,9 +7,11 @@ import { promisify } from 'node:util'
 import { createApiShell } from '../../server/src/framework.ts'
 import { registerHealthRoutes } from '../../server/src/modules/health/routes.ts'
 
-async function noContainers() {
-  const { stdout } = await promisify(execFile)('/usr/bin/docker',['ps','-aq','--filter','label=dyoffice.sandbox=true'])
-  assert.equal(stdout.trim(),'','A sandbox container survived cleanup')
+async function noNativeServices() {
+  const { stdout } = await promisify(execFile)('/usr/bin/systemctl',['list-units','--all','--plain','--no-legend','--no-pager','dyoffice-*.service'])
+  const uuid='[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}'
+  const owned=new RegExp('^dyoffice-'+uuid+'-'+uuid+'\\.service$')
+  assert.deepEqual(stdout.split('\n').map(row=>row.trim().split(/\s+/)[0]).filter(name=>owned.test(name)),[])
 }
 test('native process is nonroot, read only, capability-free and receives no controller credentials', { timeout: 20_000 },async () => {
   const runner = await sandboxFixture(), canary = 'test-only-native-environment-sentinel'
@@ -17,13 +19,13 @@ test('native process is nonroot, read only, capability-free and receives no cont
   try {
     await runner.run(Buffer.from('private input'),async session => {
       const status = await session.request('probe',{})
-      assert.equal(status.uid,10001); assert.equal(status.gid,10001)
+      assert.ok(status.uid>0); assert.equal(status.gid,status.uid)
       assert.equal(status.rootWritable,false); assert.equal(status.secretPresent,false)
       assert.equal(status.noNewPrivs,1); assert.equal(status.capEff,'0000000000000000')
       assert.equal(status.inputReadable,true)
       await assert.rejects(() => session.request('sh',{}),{ code: 'UNSUPPORTED_COMMAND' })
     })
-    await noContainers()
+    await noNativeServices()
   } finally { delete process.env.DYOFFICE_TEST_CANARY }
 })
 test('network namespace cannot reach the host API and process count is kernel-bounded', { timeout: 20_000 },async t => {
@@ -40,9 +42,9 @@ test('network namespace cannot reach the host API and process count is kernel-bo
     assert.equal(pids.limited,true)
   })
   assert.equal(await (await fetch(`http://127.0.0.1:${server.address().port}`)).text(),'api-alive')
-  await noContainers()
+  await noNativeServices()
 })
-test('wall deadline, cancellation and output flood kill their container and leave API process alive', { timeout: 30_000 },async () => {
+test('wall deadline, cancellation and output flood kill their service and leave API process alive', { timeout: 30_000 },async () => {
   const timed = await sandboxFixture('probe',{ wallMs: 1500 })
   await assert.rejects(() => timed.run(Buffer.from('probe'),session => session.request('sleep',{})),{ code: 'SANDBOX_TIMEOUT' })
   const cancel = await sandboxFixture(), controller = new AbortController()
@@ -52,7 +54,7 @@ test('wall deadline, cancellation and output flood kill their container and leav
   },{ signal: controller.signal }),{ code: 'ABORTED' })
   const flooded = await sandboxFixture('probe',{ protocolBytes: 16384 })
   await assert.rejects(() => flooded.run(Buffer.from('probe'),session => session.request('flood',{})),{ code: 'OUTPUT_LIMIT' })
-  await noContainers()
+  await noNativeServices()
 })
 test('CPU and memory resource limits kill native processes without terminating the API process', { timeout: 30_000 },async t => {
   const app = await createApiShell()
@@ -73,7 +75,7 @@ test('CPU and memory resource limits kill native processes without terminating t
     assert.equal(error.code,'RESOURCE_LIMIT'); assert.equal(error.oomKilled,true); return true
   })
   await health()
-  await noContainers()
+  await noNativeServices()
 })
 test('output transfer reads one bounded regular file and rejects symlink substitution', { timeout: 20_000 },async () => {
   const runner = await sandboxFixture()
@@ -84,7 +86,7 @@ test('output transfer reads one bounded regular file and rejects symlink substit
   await assert.rejects(() => runner.run(Buffer.from('probe'),async session => {
     await session.request('symlink',{}); return session.readOutput()
   }),{ code: 'INVALID_OUTPUT' })
-  await noContainers()
+  await noNativeServices()
 })
 test('admission is bounded and cancellation during startup releases all resources for the next job', { timeout: 20_000 },async () => {
   const runner = await sandboxFixture(), first = new AbortController(), second = new AbortController()
@@ -93,6 +95,6 @@ test('admission is bounded and cancellation during startup releases all resource
   await assert.rejects(() => runner.run(Buffer.from('third'),session => session.request('probe',{})),{ code: 'SANDBOX_BUSY' })
   first.abort(); second.abort()
   assert.equal((await one).code,'ABORTED'); assert.equal((await two).code,'ABORTED')
-  assert.equal((await runner.run(Buffer.from('next'),session => session.request('probe',{}))).uid,10001)
-  await noContainers()
+  assert.ok((await runner.run(Buffer.from('next'),session => session.request('probe',{}))).uid>0)
+  await noNativeServices()
 })
