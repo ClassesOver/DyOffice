@@ -1,3 +1,4 @@
+import {installDefinedNameDependencies} from './defined-name-dependencies'
 import {installHostReadOnlyGuard} from './host-read-only'
 import { focusWorksheet } from './sheet-focus'
 import {
@@ -2263,6 +2264,7 @@ export function App({
         (!document.documentElement.hasAttribute('data-theme') && prefersDark.matches)
       )
     }
+    installDefinedNameDependencies()
     const runtime = createUniver({
       // green selection/highlight instead of Univer's default blue
       theme: greenTheme,
