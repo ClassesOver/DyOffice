@@ -71,7 +71,17 @@ export function createSessionService({ db, accounts, deploymentId, idleMs = 8 * 
       if (options.requireAdmin && !principal.roles.includes('config_admin')) throw authError(403)
       if (options.requireRecent && now.getTime() - (session.reauthenticated_at ?? session.created_at).getTime() > 15 * 60_000) throw authError(403)
       await connection.query('UPDATE sessions SET last_seen_at=$1 WHERE id=$2', [now, session.id])
-      return operation({ connection, principal, session, now, users })
+      // Capture immutable deadlines before callbacks rotate/revoke credentials
+      // (password changes and self-revocation intentionally invalidate the token).
+      // Row locks serialize revocation, but do not stop wall-clock expiry.
+      const expiresAt = session.expires_at.getTime()
+      const idleDeadline = now.getTime() + idleMs
+      const recentDeadline = (session.reauthenticated_at ?? session.created_at).getTime() + 15 * 60_000
+      const result = await operation({ connection, principal, session, now, users })
+      const finishedAt: Date = (await connection.query('SELECT clock_timestamp() AS now')).rows[0].now
+      if (finishedAt.getTime() >= expiresAt || finishedAt.getTime() >= idleDeadline) throw authError()
+      if (options.requireRecent && finishedAt.getTime() > recentDeadline) throw authError(403)
+      return result
     })
   }
   function withSession<T>(token: string, extraIds: string[], operation: (connection: PoolClient, principal: SessionPrincipal, session: AuthoritySession, now: Date) => Promise<T>) {
