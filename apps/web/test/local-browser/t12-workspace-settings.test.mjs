@@ -93,9 +93,11 @@ test('T12 original Home persists folders stars recents and trash while themes pr
     await account(page, '个人设置')
     const settings = page.getByRole('dialog')
     await settings.getByRole('button', {name: '通用', exact: true}).click()
+    await settings.locator('#set-author-name').fill('T12 '+theme+' author')
     await settings.getByLabel('主题', {exact: true}).click()
     const saved = page.waitForResponse(response => response.url().endsWith('/preferences') && response.request().method() === 'PUT')
-    await page.getByRole('option', {name: title, exact: true}).click(); assert.equal((await saved).status(), 200)
+    await page.getByRole('option', {name: title, exact: true}).click()
+    await settings.getByRole('button', {name: '保存个人偏好', exact: true}).click(); assert.equal((await saved).status(), 200)
     await expect(page.locator('html')).toHaveAttribute('data-theme', theme)
     await settings.locator('.set-close').click()
     for (const [name, bytes] of originals) {

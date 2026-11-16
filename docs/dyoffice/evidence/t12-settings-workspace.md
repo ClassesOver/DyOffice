@@ -1,3 +1,5 @@
+> Latest integration and evidence boundaries: [T12 UI refresh after #72](t12-ui-refresh.md). The dated results and screenshots below are historical unless explicitly restated there.
+
 # T12：个人工作区、个人偏好与管理员全局配置
 
 日期：2026-11-16。范围是 `DYOFFICE_AUTH_MODE=local` 的 TypeScript 本地账号运行时。本轮按用户要求不启用、不修改、不等待 CI；全部结果来自本地实际执行。

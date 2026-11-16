@@ -42,15 +42,16 @@ async function open(id:string){
  const result=await client.request<{name:string;format:string;file:{fileId:string};downloadEndpoint:string}>(`/api/v1/files/${encodeURIComponent(id)}`)
  await client.request(`/api/v1/workspace/files/${encodeURIComponent(id)}/open`,'POST')
  notifyFilesChanged()
- if(result.format!=='docx'||capabilities.docx!=='editable'){
+ const editor=result.format==='docx'?'native-docx':result.format==='xlsx'?'native-xlsx':null
+ if(!editor||capabilities[result.format]!=='editable'){
   if(!result.downloadEndpoint.startsWith('/api/v1/files/'))throw new Error('下载地址无效。')
   const link=document.createElement('a');link.href=result.downloadEndpoint;link.download=result.name;link.click();return
  }
  // Native editor forbids framing. Use its guarded top-level lifecycle, not a legacy iframe.
- location.assign(`/native-docx/?fileId=${encodeURIComponent(result.file.fileId)}`)
+ location.assign(`/${editor}/?fileId=${encodeURIComponent(result.file.fileId)}`)
 }
 let busy=false
-async function upload(file:File){if(busy)throw new Error('正在导入，请稍候');if(!/\.(docx|xlsx|pptx|pdf)$/i.test(file.name))throw new Error('请选择 DOCX、XLSX、PPTX 或 PDF 文件。');busy=true;try{const result=await client.upload(file);if(/\.docx$/i.test(file.name)&&capabilities.docx==='editable')await open(result.file.fileId);else{await client.request(`/api/v1/workspace/files/${encodeURIComponent(result.file.fileId)}/open`,'POST');notifyFilesChanged();notice('文件已导入，点击文件可下载原件。')}}finally{busy=false}}
+async function upload(file:File){if(busy)throw new Error('正在导入，请稍候');if(!/\.(docx|xlsx|pptx|pdf)$/i.test(file.name))throw new Error('请选择 DOCX、XLSX、PPTX 或 PDF 文件。');busy=true;try{const result=await client.upload(file);if(['docx','xlsx'].includes(result.format)&&capabilities[result.format]==='editable')await open(result.file.fileId);else{await client.request(`/api/v1/workspace/files/${encodeURIComponent(result.file.fileId)}/open`,'POST');notifyFilesChanged();notice('文件已导入，点击文件可下载原件。')}}finally{busy=false}}
 async function browse(){const input=document.createElement('input');input.type='file';input.accept='.docx,.xlsx,.pptx,.pdf';input.onchange=()=>{const file=input.files?.[0];if(file)void upload(file).catch(e=>notice(e.message))};input.click()}
 const unsupported=async()=>{throw new Error('此桌面操作尚未适配到本地 Web。')}
 function installBridge(){
