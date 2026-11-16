@@ -1,4 +1,36 @@
-# Native PPTX validation harness
+# Native worker adapters and validation
+
+The experimental XLSX Worker now runs the original Rust engine as a restricted
+systemd process on Linux, without Docker. See [host runtime setup](HOST-RUNTIME.md)
+for build requirements, privileges, environment variables and recovery behavior.
+
+```sh
+npm ci --prefix apps/web --workspaces=false --ignore-scripts --include=dev
+npm run build:web:native -- --with-probe
+npm run typecheck:web:worker
+# Set DYOFFICE_TEST_HOST_MANIFEST to the absolute host-manifest.json path:
+npm run test:web:sandbox
+# With dedicated PostgreSQL and Redis test URLs:
+npm run test:web:native-jobs
+```
+
+The runtime verifies the configured executable SHA-256. Each native invocation
+uses a unique dynamic nonroot user, private filesystem and network, bounded
+resources, and a service-manager deadline that survives controller death.
+The trusted controller currently requires root; API users cannot configure its
+binary, command policy or systemd properties. Production mode remains refused.
+
+Migration version 12 includes deployment readiness and revision-event dispatch.
+Run owner provisioning before starting restricted business/worker pools. The
+native output and successful task state commit together through the T06
+transaction. Revision publication emits only an event UUID and does not assert
+that a downstream search index has consumed it.
+
+The XLSX adapter currently performs an unedited archive roundtrip and reopens
+its result. Edited spreadsheets and their browser interface belong to T09.
+The sandbox NodeNext typecheck covers sandbox, jobs, native XLSX and daemon code.
+
+## Native PPTX validation harness
 
 This private package is a test tool, not a deployed worker or HTTP service. It installs its own pinned development dependencies, without installing the root Electron workspace or changing the DOCX Web lockfile.
 

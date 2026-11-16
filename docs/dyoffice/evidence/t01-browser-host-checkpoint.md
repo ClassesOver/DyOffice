@@ -150,3 +150,12 @@ These are local candidate results. Exact published candidate CI remains required
 Additional local verification: tools regressions 29/29, Web production-build/HTTP smoke 2/2. Independent reviewer reran runner 3/3, selected contracts 17/17 and all unit 39/39. Compatibility refresh was compared structurally and changes only `files.package.json`.
 
 The complete root `npm test` was also attempted: preceding packages passed (27, 384, 65 and 9 tests; DOCX engine 2239 passed/1 existing skip), then `@genoffice/pdf2docx` was terminated with `Killed`/exit 137. The command did not finish, so this candidate has **no whole-monorepo green claim**. This was outside the unit-command change; no test was weakened or removed. Local dependencies were reused, not a fresh install.
+
+
+### Target integration
+
+Rebased onto merged #32 target `9b2c7aa587ab403935a46ae1f43ea8e326c84547`, exact tree `0497e30318ef2776b800ad194631a10dfa060148`. All tracked source blobs were verified before applying only the command delta. Preserved the complete three-job host/runtime/real-service/browser workflow and new account code. Prior local counts above remain scoped to old baseline; combination results follow separately. Actions disabled at repository level, unchanged. No merge or CI success is claimed.
+
+Combination verification on the merged #32 source: selectable Host17/17; all Web unit43/43; CI/runner10/10; typecheck:web passed; boundary600/0; compatibility84/0; existing Web229 passed/1 existing optional skip. Independent review verified that the workflow diff is exactly two path-filter additions and the Host command substitution, preserving all three jobs and real-service gates. Corrected the plan table's old Vitest label to the actual Node.js runner.
+
+The first Web run in the isolated copy omitted workspace-local dependency directories and incorrectly resolved root yauzl, failing auth-only-admission/docs-mount/pdf-cmap-safety. Restoring read-only reuse of the already installed apps/web and apps/pdf dependency directories made the unchanged tests pass; no dependency or test was modified to suppress this failure. Still not a fresh install. Exact new-head CI remains unavailable while repository Actions is disabled; prior safety-review merge refusal remains in force.

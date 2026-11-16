@@ -10,17 +10,7 @@ export async function serveHealth(request, response, { path, dataDirectory, stor
     return true
   }
   const live = path.endsWith('/live')
-  let ready = false
-  if (live) ready = true
-  else {
-    try {
-      await access(dataDirectory, constants.R_OK | constants.W_OK)
-      const snapshot = store.read()
-      ready = Boolean(snapshot && Array.isArray(snapshot.files) && snapshot.preferences)
-    } catch {
-      ready = false
-    }
-  }
+  const ready = live || await isStoreReady(dataDirectory, store)
   const status = ready ? 200 : 503
   // Neither probe includes sensitive config, file names, tokens, or filesystem paths.
   if (request.method === 'HEAD') {
@@ -28,4 +18,14 @@ export async function serveHealth(request, response, { path, dataDirectory, stor
     response.end()
   } else sendJson(response, status, { state: ready ? (live ? 'alive' : 'ready') : 'unavailable' })
   return true
+}
+
+export async function isStoreReady(dataDirectory, store) {
+  try {
+    await access(dataDirectory, constants.R_OK | constants.W_OK)
+    const snapshot = store.read()
+    return Boolean(snapshot && Array.isArray(snapshot.files) && snapshot.preferences)
+  } catch {
+    return false
+  }
 }

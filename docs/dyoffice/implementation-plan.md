@@ -64,12 +64,12 @@ docs/dyoffice/               当前计划及 inventory/ evidence/ adr/
 
 ## 2. 检查命令与执行纪律
 
-当前已存在 `npm run test:web`、`dev:web`、`start:web`，以及 T02 增加的 `npm run test:web:integration -- <test-file>`。该命令只运行 `apps/web/test/integration/` 下的一个测试文件。`api-compat` 是 HTTP 契约，不连接 PostgreSQL、S3 或 Redis。下表其余脚本仍未创建，不能宣称它们已存在：
+当前已存在 `npm run test:web`、`dev:web`、`start:web`，以及 T02 增加的 `npm run test:web:integration -- <test-file>`。该命令只运行 `apps/web/test/integration/` 下的一个测试文件。`api-compat` 是 HTTP 契约，不连接 PostgreSQL、S3 或 Redis。另已提供 `npm run test:web:unit -- host-contract.test.mjs`，运行现有 Node.js 契约测试；不接受不存在的 `.ts` 测试名。下表尚未实现的计划脚本仍不能宣称已存在：
 
 | 命令 | 责任 |
 | --- | --- |
 | `npm run test:web:legacy` | 原有 `apps/web/test/*.test.mjs` 回归 |
-| `npm run test:web:unit -- <test-file>` | Web Vitest 单元测试，允许文件筛选 |
+| `npm run test:web:unit -- <test-file>` | Web Node.js 单元测试，按现有 `.test.mjs` basename 筛选；无参数运行全部 unit 测试 |
 | `npm run test:web:integration -- <test-file>` | 运行一个 Web 集成测试文件。当前 `api-compat` 只覆盖 HTTP；PostgreSQL 身份测试仍在 identity workflow，不在此脚本的默认范围内 |
 | `npm run test:web:e2e -- <spec-file>` | 浏览器原生编辑与端到端流程 |
 | `npm run test:web:security` | 越权、SSRF、注入、上传、Token、安全边界 |
@@ -124,11 +124,15 @@ docs/dyoffice/               当前计划及 inventory/ evidence/ adr/
 
 ### T03 本地账号密码、管理员用户管理与服务端会话
 
+> **用户范围更新（2026-11-16）：** 本次不考虑旧库数据导入/转换，不以旧库迁移作为交付阻断。仍保留误连旧库拒绝和原数据不受破坏的安全保护，不执行自动迁移、重分配或删除。
+
+> **范围说明（2026-11-16）：** 下列 T03 完成记录及接口/延期描述属于历史 MJS / `dyoffice_schema_migrations` 栈，不是新 TS 本地账号栈的全局完成声明。新栈 #38 已有真实 PG 141 项和可见浏览器 4 项证据；新增登录历史的归属锁竞争已取得真实 PG 红绿修复证据；最终组合尚未发布/验收。详见 [新栈验收矩阵](evidence/t03-t04-current-stack-acceptance.md)。保留历史结果，不把新旧库迁移链或测试数量混用。
+
 **依赖：** T02。**文件：** 拟建 `server/src/modules/auth/{service,routes,passwords,sessions,throttle,csrf}.ts`、`server/src/modules/admin/users/{routes,service}.ts`、`db/schema.ts`、`db/migrations/0001_identity.sql`、`tools/dyoffice/bootstrap-admin.ts`、`test/integration/{auth-session,admin-users,password-reset}.test.ts`。
 
 **接口：** `authenticate(request)` 在 `session-core.mjs`；`principalContext(session)` 与 `canReadPersonalFiles(principal, ownerUserId)` 在 `auth/principal.mjs`，供 T04 的 `withPrincipalTransaction` 使用。身份稳定键是数据库中的用户 UUID，`(deploymentId,usernameNormalized)` 唯一。不实现 RLS。专门设计见 [local-account-auth.md](local-account-auth.md)。收口证据见 [t03-closeout.md](evidence/t03-closeout.md)。
 
-**状态（2026-11-16）：T03 身份与会话完成。** 默认 `dev:web` 仍使用开发令牌，`NODE_ENV=production` 仍拒绝启动。本地账号路由只在 `buildApp({ localAuth })` 上注册。
+**历史旧栈状态（2026-11-16）：T03 身份与会话检查点完成。** 默认 `dev:web` 仍使用开发令牌，`NODE_ENV=production` 仍拒绝启动。本地账号路由只在 `buildApp({ localAuth })` 上注册。
 
 - [x] **T03a，RED：** 用户名归一化/重复、首次 Admin bootstrap 并发、无默认密码、空/弱/常见密码拒绝、Argon2id 独立盐、不存在用户与错误密码的同等哈希、账号禁用拒绝。失败先于服务存在，记录在 [t03a-account-foundation.md](evidence/t03a-account-foundation.md)。
 - [x] **T03a，GREEN：** `0001_identity.sql` 含 users/user_roles/password_action_tokens/sessions/personal workspace。Argon2id 为 m=19456、t=2、p=1。密码至少 15 个码位，允许长短语和 Unicode，无复杂度规则。一次性 CLI bootstrap，生产拒绝开发双 Token。完整离线泄露密码库和目标主机压测延期到运维，原因见收口证据。
@@ -146,7 +150,11 @@ docs/dyoffice/               当前计划及 inventory/ evidence/ adr/
 
 ### T04 资源授权与 RLS
 
-**依赖：** T03。**文件：** `modules/policy/authorize.ts`、`db/context.ts`、`db/migrations/0002_rls.sql`、`test/integration/ownership-rls.test.ts`。
+> **新栈进度（2026-11-16）：** #38 已验证受限连接、业务 RLS、A/B/Admin 隔离和 12 项密码/角色/会话撤销写入竞态。以下原检查清单保留未验收状态，最终最新组合必须重跑真实数据库、浏览器、任务与旧库拒绝门禁，不能直接继承分支 PASS。详见 [新栈验收矩阵](evidence/t03-t04-current-stack-acceptance.md)。外部 Token/T19、旧数据转换与生产不在本次完成范围内。
+
+2026-11-15 接缝进展：独立受限 auth/business 连接、工作区/偏好 FORCE RLS、数据库推导身份、撤销与写入锁顺序已实现并测试，见 [T04 证据](evidence/t04-rls-checkpoint.md)。本阶段使用个人偏好验证完整业务事务；文件、后台任务、外部 Token 随 T05/T08/T19 接入，不将尚不存在的入口标记完成。
+
+**依赖：** T03。**文件：** `modules/policy/authorize.ts`、`db/context.ts`、`db/migrations/0004_rls.sql`、`test/integration/ownership-rls.test.ts`。
 
 **接口：** `withPrincipalTransaction(principal, fn)`、`authorize()`；角色不隐式包含文件所有权。
 
@@ -158,7 +166,9 @@ docs/dyoffice/               当前计划及 inventory/ evidence/ adr/
 
 ### T05 对象存储、上传与个人文件生命周期
 
-**依赖：** T04。**文件：** `storage/{object-store,s3,local-dev}.ts`、`modules/files/{routes,service,validation}.ts`、`db/migrations/0003_files.sql`、`test/integration/files.test.ts`。
+2026-11-15 接缝进展：不可覆盖的本地盘/S3 存储、SHA-256 读回验证和四格式结构预检已实现，见 [T05a 证据](evidence/t05a-object-storage.md)。后续 [T05b](evidence/t05b-file-lifecycle.md) 已接入文件元数据、配额、作用域上传/完成/下载及回收站的实验 API。完整 UI、编辑保存、保留清理和企业安全门槛仍由后续任务完成，不据此宣称生产可用。
+
+**依赖：** T04。**文件：** `storage/{object-store,s3,local-dev}.ts`、`modules/files/{routes,service,validation}.ts`、`db/migrations/0005_files.sql`、`test/integration/files.test.ts`。
 
 **接口：** `stageUpload(principal, fileMeta)`、`finishUpload(principal,uploadId)`、`openFile()`；上传引用绑定所有者。
 
@@ -177,7 +187,9 @@ docs/dyoffice/               当前计划及 inventory/ evidence/ adr/
 
 ### T06 保存事务、历史版本和单写者租约
 
-**依赖：** T05。**文件：** `modules/revisions/{service,routes}.ts`、`modules/leases/service.ts`、`outbox/service.ts`、`db/migrations/0004_revisions.sql`、`test/integration/revision-commit.test.ts`、`test/unit/save-generation.test.ts`。
+2026-11-15 接缝进展：实验 API 已实现 editor/session 租约、同基线 CAS、不可变幂等回执、历史下载/恢复为新版本，以及同事务 outbox 意图，见 [T06 证据](evidence/t06-revision-transactions.md)。原生 UI/BrowserHost 保存链路由 T07 接入；outbox 派发由 T08 实现，不据此宣称编辑器或企业交付已完成。
+
+**依赖：** T05。**文件：** `modules/revisions/{service,routes}.ts`、`modules/leases/service.ts`、`outbox/service.ts`、`db/migrations/0006_revisions.sql`、`test/integration/revision-commit.test.ts`、`test/unit/save-generation.test.ts`。
 
 **接口：** `commitRevision()`、`acquireLease()/renewLease()/takeoverLease()`；文件修改基于 T01 SaveInput。
 
@@ -203,17 +215,31 @@ docs/dyoffice/               当前计划及 inventory/ evidence/ adr/
 - [ ] E2E GREEN；受影响 `@genoffice/docs`、docx-engine 回归；外部 Word 兼容样本由 QA 记录证据。
 - [ ] 提交 `feat(docs): deliver native docx web editing roundtrip`。
 
+2026-11-15 接缝进展：原生 DOCX 实验入口已复用现有 Renderer/docx-engine 接入会话 BrowserHost、租约与版本保存；测试与边界见 [T07 证据](evidence/t07-native-docx.md)。外部 Word QA 与后续工作区/AI/企业门槛仍开放，不将此纵向接缝当成整个 M1 或四格式交付。
+
 ### T08 持久任务、原生 Worker 与沙箱
 
-**依赖：** T04/T06。**文件：** `modules/jobs/{service,routes}.ts`、`outbox/dispatcher.ts`、`worker/src/{main.ts,native/xlsx.ts,sandbox/process.ts}`、`test/integration/jobs.test.ts`、`test/recovery/job-crash.test.ts`。
+2026-11-16 当前状态：无 Docker 执行、常驻 Worker、启动回收和 revision outbox 发布均已实现，已通过独立审查和全部本次回归，T08 已闭环（实验后端范围，production 仍关闭）。见 [当前 T08 验收证据](evidence/t08-docker-free-closure.md)。下面 2026-11-15 的进展记录为历史快照。
+
+**依赖：** T04/T06。**文件：** `modules/jobs/{service,routes}.ts`、`outbox/dispatcher.ts`、`worker/src/{main.ts,native/xlsx.ts,sandbox/host-process.ts,sandbox/host-recovery.ts}`、`test/jobs/*.test.mjs`、`test/native-jobs/*.test.mjs`、`test/host-native/*.test.mjs`。
 
 **接口：** `enqueueJob(principal,type,input): Promise<JobRef>`、`cancelJob()`；输入仅授权 artifactId，输出通过 T06 提交。
 
-- [ ] 测试 enqueue 事务后投递前崩溃、Redis 重建、Worker 丢锁、重复执行、超时、取消、旧版本写入。
-- [ ] 对应测试 RED。
-- [ ] PostgreSQL 任务/outbox 为权威；BullMQ 调度；任务隔离工作目录、CPU/内存/超时、有限命令 allowlist、禁网默认。
-- [ ] GREEN；原生工具被杀不会击穿 API 进程；已提交任务不重复写版本。
-- [ ] 提交 `feat(jobs): add durable isolated native execution`。
+- [x] 测试 enqueue 事务后投递前崩溃、Redis 重建、Worker 丢锁、重复执行、超时、取消、旧版本写入。
+- [x] 对应测试 RED。
+- [x] PostgreSQL 任务/outbox 为权威；BullMQ 调度；任务隔离工作目录、CPU/内存/超时、有限命令 allowlist、禁网默认。
+- [x] GREEN；原生工具被杀不会击穿 API 进程；已提交任务不重复写版本。
+- [x] 提交 `feat(jobs): add durable isolated native execution`。
+
+2026-11-15 接缝进展：内部 PostgreSQL 任务/outbox、独立 worker 角色、幂等入队、领取 fencing 与真实 BullMQ 重建投递已实现，见 [T08a 证据](evidence/t08a-durable-jobs.md)。公开路由、原生 executor/OS 沙箱、T06 同事务输出提交和 revision_outbox 消费仍待后续实现，T08 未标记完成。
+
+2026-11-15 后续接缝：真实 Rust XLSX archive roundtrip、开发环境容器 OS 隔离与资源耗尽测试已实现，见 [T08b 证据](evidence/t08b-native-sandbox.md)。T06 同事务输出/任务成功、公开 API/守护循环及 revision_outbox 消费仍待实现；T08 继续执行。
+
+2026-11-15 后续接缝：受限 job principal、上传/租约用途及 attempt fencing、T06 输出与任务成功同事务核心已实现，见 [T08c 证据](evidence/t08c-atomic-job-output.md)。原生 controller/heartbeat 到该核心的完整链、公开 API/守护循环及 revision_outbox 消费继续执行；T08 未标记完成。
+
+2026-11-15 后续接缝：实际 Rust XLSX executor 已连通 heartbeat、失锁/取消/撤销终止与 T06 输出提交，真实 Redis 重复投递只保存一个版本；控制进程执行中被强杀的独立超时/回收测试已通过，见 [T08d 证据](evidence/t08d-native-executor.md)。公开 API、常驻服务/启动回收及 revision_outbox 消费仍在继续；T08 未标记完成。
+
+2026-11-15 后续接缝：实验 Cookie 任务 API、A/B/Admin/CSRF/字段约束与 Worker/业务角色的只读 checksum 就绪校验已实现，原生 7 项链路已改为从公开 API 入队，见 [T08e 证据](evidence/t08e-job-api-readiness.md)。常驻服务与正常关闭现已连通真实任务消费；启动回收/异常恢复及 revision_outbox 消费继续实现；T08 未标记完成。
 
 ### T09 XLSX 原生 Web 适配
 

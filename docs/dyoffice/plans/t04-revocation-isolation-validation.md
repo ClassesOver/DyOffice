@@ -1,18 +1,20 @@
 # T03/T04 local-account isolation and revocation test plan
 
-Status: design and test requirements only; no database validation result is claimed.
+> Scope update, 2026-11-16: Historical pre-implementation test plan. Statements below about missing RLS and pending PG describe its original baseline. See [current-stack acceptance](../evidence/t03-t04-current-stack-acceptance.md) for #38 real restricted-role/race evidence and the still-unaccepted final combination. This notice does not complete T19, legacy migration or production.
+
+Status: T04 business isolation/RLS requirements remain pending. The linked T03 account/session results do not establish these gates.
 
 ## Source of truth and scope
 
 Follow [local-account-auth.md](../local-account-auth.md), [architecture.md](../architecture.md) and T03/T04 in [implementation-plan.md](../implementation-plan.md). The local-account decision was introduced in `2983615f86b255f332ad5b2f5003dae5e63ab7af` and developer guidance aligned at `144e06091129e2751fc6d7ae5cfe2665c5398f6f`. Local usernames/passwords and Admin-managed accounts are the approved direction. This document supplements that design with concurrency and isolation tests, not another authentication design or an external IdP proposal.
 
-Current server authentication remains the development-only `personal`/`admin` token boundary and one shared JSON store. It cannot represent two independent users. Do not put the old shared store behind local login and call it isolated. Production must not fall back to development tokens. Do not automatically assign existing JSON files to the first login; T22 requires explicit owner mapping/dry-run.
+The initial server baseline used only the development `personal`/`admin` token boundary and one shared JSON store. The experimental local-account runtime added by T03a–T03c is separate and has real authentication tests, but still lacks T04 restricted business roles/RLS. The shared JSON store cannot represent two independent users. Do not put the old shared store behind local login and call it isolated. Production must not fall back to development tokens. Do not automatically assign existing JSON files to the first login; T22 requires explicit owner mapping/dry-run.
 
 No DOCX editor, shared contract, dependency lock, CI or application source is changed by this plan. The smallest future vertical validation is local account -> server session -> A/B personal preferences -> revocation, with genuine PostgreSQL behind it. File save capability remains unavailable until T05/T06 are implemented.
 
 ## Implementation prerequisites and file boundary
 
-Use the existing planned modules: `server/src/modules/auth/{passwords,sessions,service,routes,throttle,csrf}.ts`, `modules/admin/users/`, `modules/policy/authorize.ts`, `db/context.ts`, and `0001_identity.sql`/`0002_rls.sql`. Add `test/integration/{auth-session,ownership-rls,revocation-race}.test.ts` and disposable PostgreSQL fixtures. Coordinate dependency/CI changes after the current DOCX candidate; do not overwrite its manifests.
+Use the existing planned modules: `server/src/modules/auth/{passwords,sessions,service,routes,throttle,csrf}.ts`, `modules/admin/users/`, `modules/policy/authorize.ts`, `db/context.ts`, and `0001_identity.sql`/`0004_rls.sql`. Add `test/integration/{auth-session,ownership-rls,revocation-race}.test.ts` and disposable PostgreSQL fixtures. Coordinate dependency/CI changes after the current DOCX candidate; do not overwrite its manifests.
 
 Keep the approved password controls unchanged: Argon2id with independent salts and measured resource limits; local normalized username unique within deployment; no default password/public Admin registration; secure server sessions, Origin/CSRF, layered throttle and generic login errors. `users.id` is the stable identity; no email-based merging. Concurrent account creation must use the database uniqueness constraint, not a prior existence check alone. Tests assert only one account/workspace is provisioned for duplicate normalized names.
 
@@ -61,3 +63,8 @@ Use real PostgreSQL with a migration connection and a separate restricted runtim
 Independent security review required explicit lock ordering/race tests, uniqueness under concurrency and restricted short-lived secrets; all are reflected here. Existing development auth/route/legacy tests were rerun, **10/10 passed**. They are not evidence of the planned local-account system.
 
 The current executor has no `docker`, `psql` or `postgres` executable. No real PostgreSQL migration, RLS, local-account login or revocation-race test has been executed. Provision a disposable database/test harness as the first implementation step. All T03/T04 acceptance above remains pending; no fake database or external-IdP acceptance is claimed.
+
+
+### 后续环境与实现记录（2026-11-15）
+
+上面的无 Docker/PostgreSQL 记录属于本计划初稿时的执行环境。当前执行环境已提供隔离 PostgreSQL 17；T03a/T03b 已跑真实账号、会话、登录期间停用、等待期间撤销和 Chromium TLS 回归，见 [T03b 证据](../evidence/t03b-local-sessions.md)。这些测试仍使用迁移权限连接，不构成这里要求的 T04 受限业务角色、FORCE RLS 或完整业务写入撤销竞态验收。

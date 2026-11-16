@@ -53,6 +53,14 @@ export async function buildApp(input) {
     bodyLimit: config.legacy ? FILE_BODY_LIMIT : BODY_LIMIT,
     requestIdHeader: false,
     genReqId: () => randomUUID(),
+    frameworkErrors(error, request, reply) {
+      const status = publicStatus(error)
+      reply.header('X-Request-ID', request.id)
+      reply.header('Cache-Control', 'no-store')
+      reply.header('X-Content-Type-Options', 'nosniff')
+      reply.header('Referrer-Policy', 'no-referrer')
+      return reply.code(status).type('application/json; charset=utf-8').send(problem(status, request.id))
+    },
     ajv: { customOptions: { removeAdditional: false, coerceTypes: false, allErrors: false } },
   })
   if (config.legacy) {

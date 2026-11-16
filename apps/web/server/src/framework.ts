@@ -1,0 +1,54 @@
+import Fastify, { type FastifyRequest, type FastifyReply } from 'fastify'
+import { METHODS } from 'node:http'
+import rateLimit from '@fastify/rate-limit'
+import { randomUUID } from 'node:crypto'
+import { sendJson } from '../http-response.mjs'
+
+function sendSafeError(error: unknown, request: FastifyRequest, reply: FastifyReply) {
+  const errorStatus = (error as { statusCode?: number } | null)?.statusCode
+  const status = typeof errorStatus === 'number' && errorStatus >= 400 && errorStatus < 600
+    ? errorStatus : 500
+  for (const [name, value] of Object.entries(reply.getHeaders())) {
+    if (value !== undefined) reply.raw.setHeader(name, value)
+  }
+  const retryAfter = (error as { retryAfter?: number } | null)?.retryAfter
+  if (typeof retryAfter === 'number' && Number.isFinite(retryAfter) && retryAfter > 0) reply.raw.setHeader('Retry-After', Math.ceil(retryAfter))
+  reply.raw.setHeader('X-Request-ID', request.id)
+  reply.raw.setHeader('Referrer-Policy', 'no-referrer')
+  reply.hijack()
+  sendJson(reply.raw, status, { error: status >= 500 ? '服务暂时不可用' : '请求无效' })
+}
+
+
+export async function createApiShell(limits?: { max: number; timeWindow: number }) {
+  const app = Fastify({
+    logger: false,
+    ajv: { customOptions: { removeAdditional: false, coerceTypes: false, useDefaults: false } },
+    frameworkErrors: sendSafeError,
+    trustProxy: false,
+    requestIdHeader: false,
+    genReqId: () => randomUUID(),
+    bodyLimit: 1024 * 1024,
+    requestTimeout: 120_000,
+    connectionTimeout: 120_000,
+    return503OnClosing: true,
+  })
+  // Preserve safe rejection for every Node HTTP request method. CONNECT uses
+  // Node's separate tunnel event and is not an application request route.
+  for (const method of METHODS) {
+    if (method !== 'CONNECT' && !app.supportedMethods.includes(method)) {
+      app.addHttpMethod(method, { hasBody: true })
+    }
+  }
+  app.addHook('onRequest', async (request, reply) => {
+    reply.raw.setHeader('X-Request-ID', request.id)
+    reply.raw.setHeader('X-Content-Type-Options', 'nosniff')
+    reply.raw.setHeader('Referrer-Policy', 'no-referrer')
+  })
+  app.setErrorHandler(sendSafeError)
+  await app.register(rateLimit, {
+    global: true, max: limits?.max ?? 600, timeWindow: limits?.timeWindow ?? 60_000,
+    keyGenerator: request => request.ip,
+  })
+  return app
+}

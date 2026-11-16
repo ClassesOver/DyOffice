@@ -526,11 +526,12 @@ import {
   save as saveImpl,
   suggestedSaveAsName,
   writeRecoveryCopy as writeRecoveryCopyImpl,
+  buildDocBytes,
   type FileActionContext,
   type PendingPdfExport,
 } from './file-actions'
 import { BlockIndex } from './pagination-index'
-import { isPhasedContentPending } from './phased-content'
+import { isPhasedContentPending, waitForFullContent } from './phased-content'
 import { sameSectionInfos } from './pagination-sections'
 import {
   blocksKeepSlicing,
@@ -799,7 +800,7 @@ function shadowPlanDiff(
   return diffs
 }
 
-export function App() {
+export function App({ host }: { host?: { readOnly: boolean; assistantAvailable: boolean; preferenceScope: string; onEditorReady?(handle: import('./file-actions').DocsEditorHandle | null): void; lifecycle: import('./file-actions').DocsHostLifecycle; onDocumentEdited(): void; onOpenFailed(): void } } = {}) {
   // subscribe to language switches for re-render; strings all go through module-level t, so memoized callbacks never capture stale closures
   const { lang } = useI18n()
   const [doc, setDoc] = useState<DocState | null>(null)
@@ -828,7 +829,7 @@ export function App() {
   } | null>(null)
   const [_recent, setRecent] = useState<string[]>([])
   const [settings, setSettings] = useState<AiSettings>(DEFAULT_SETTINGS)
-  const [showAi, setShowAi] = useState(() => aiPanelInitiallyOpen('aidocs.showAi'))
+  const [showAi, setShowAi] = useState(() => host?.assistantAvailable === false ? false : aiPanelInitiallyOpen('aidocs.showAi'))
   // Settings › "show the AI sidebar" off hides the panel and its rail the way Word
   // treats the Copilot pane: an explicit Ask-AI action (ribbon, context menu,
   // shortcut, preset) still opens the panel for this document, and closing it
@@ -1195,7 +1196,7 @@ export function App() {
     otherName: string
     entries: CompareEntry[]
   } | null>(null)
-  const [autoSave, setAutoSave] = useAutoSavePref('aidocs.autoSave', window.desktop)
+  const [autoSave, setAutoSave] = useAutoSavePref(host ? `dyoffice.docs.${host.preferenceScope}.autoSave` : 'aidocs.autoSave', window.desktop)
   // tab closed but this renderer kept alive (shell freeze workaround): go inert
   const [tornDown, setTornDown] = useState(false)
   const [aiPreset, setAiPreset] = useState<{
@@ -1557,6 +1558,7 @@ export function App() {
     // typing in the main document takes ribbon routing back from any textbox
     onFocus: () => setActiveSubEditor(null),
     onUpdate: () => {
+      host?.onDocumentEdited()
       dirtyRef.current = true
       forceRender()
     },
@@ -1823,8 +1825,8 @@ export function App() {
   useEffect(() => {
     void window.desktop.getRecentFiles().then(setRecent)
     const loadSettings = () => void window.desktop.getAiSettings().then(setSettings)
-    loadSettings()
-    return window.desktop.onAiSettingsChanged?.(loadSettings)
+    if (host?.assistantAvailable !== false) loadSettings()
+    return host ? undefined : window.desktop.onAiSettingsChanged?.(loadSettings)
   }, [])
 
   useEffect(() => {
@@ -2093,7 +2095,7 @@ export function App() {
   // ---- protection enforcement (Review > Protect Document) ----
   const editRestriction = protection?.enforced ? protection.edit : null
   /** modify password set but not entered: honor-system write lock, document read-only */
-  const writeLocked = !!writeProtection?.hash && !modifyUnlocked
+  const writeLocked = host?.readOnly === true || (!!writeProtection?.hash && !modifyUnlocked)
   /** body is read-only (readOnly/forms/comments restriction or write lock) */
   const isProtected =
     writeLocked ||
@@ -2186,7 +2188,7 @@ export function App() {
   // MCP bridge: let an external agent drive this visible editor. Commands arrive
   // from the shell main process and run against the live ctx (refs refresh per render).
   useEffect(() => {
-    if (tornDown || !editor) return
+    if (host || tornDown || !editor) return
     return installMcpBridge({ getCtx: () => fileCtxRef.current })
   }, [tornDown, editor])
 
@@ -2257,6 +2259,7 @@ export function App() {
     null,
   )
   fileCtxRef.current = {
+    hostLifecycle: host?.lifecycle,
     editor,
     doc,
     dirtyRef,
@@ -2407,7 +2410,10 @@ export function App() {
     const outcome = await loadFileImpl(fileCtxRef.current, result)
     // a failed open with no document yet (boot, or the open that superseded the
     // boot open) must land on blank instead of the "Opening…" screen
-    if (outcome === 'failed' && !fileCtxRef.current.doc) await newFileImpl(fileCtxRef.current)
+    if (outcome === 'failed') {
+      if (host) host.onOpenFailed()
+      else if (!fileCtxRef.current.doc) await newFileImpl(fileCtxRef.current)
+    }
     return outcome
   }, [])
   const resetFile = useCallback(() => newFileImpl(fileCtxRef.current), [])
@@ -3041,7 +3047,7 @@ export function App() {
 
   useEffect(
     () =>
-      window.desktop.onZoteroRequest(async (request) => {
+      host ? undefined : window.desktop.onZoteroRequest(async (request) => {
         try {
           const activeEditor = editorRef.current
           if (!activeEditor) throw new Error('No active GenOffice document')
@@ -6171,6 +6177,26 @@ export function App() {
   const hasUnsavedChanges = isDocDirty(fileCtxRef.current)
   anyDirtyRef.current = hasUnsavedChanges
 
+  useEffect(() => {
+    if (!host?.onEditorReady || !editor || !doc || tornDown) return
+    host.onEditorReady({
+      getSelection() {
+        const current = editorRef.current
+        if (!current || current.isDestroyed) return null
+        const { from,to } = current.state.selection
+        return { from,to,text: current.state.doc.textBetween(from,to,'\n') }
+      },
+      async serialize() {
+        await waitForFullContent()
+        window.dispatchEvent(new Event('ai-docs-commit-tables'))
+        return buildDocBytes(fileCtxRef.current)
+      },
+      save: () => host.readOnly ? Promise.resolve(false) : save(false),
+      isDirty: () => isDocDirty(fileCtxRef.current),
+    })
+    return () => host.onEditorReady?.(null)
+  },[host?.onEditorReady,host?.readOnly,editor,!!doc,tornDown,save])
+
   // close guard: the main process queries dirty state before closing a tab/window; choosing "Save" runs a full save and reports back
   useEffect(() => {
     const offCheck = window.desktop.onCloseCheck?.(() => {
@@ -8427,7 +8453,7 @@ export function App() {
       />
 
       <div className="app-main">
-        {doc && (
+        {doc && host?.assistantAvailable !== false && (
           <div
             className={`ai-dock${showAi ? '' : ' collapsed'}${
               !aiSidebarEnabled && !showAi ? ' ai-dock-off' : ''

@@ -306,20 +306,20 @@
       "size": 2630
     },
     "apps/web/package-lock.json": {
-      "sha256": "61367930f8653f6995e3c633905fae9d1a124a494a1250c2c020ec63d21a87be",
-      "size": 178305
+      "sha256": "cffec858042589c3659af705e8c78fe6bc617d82d8f30c681e0790b162245d90",
+      "size": 220435
     },
     "apps/web/package.json": {
-      "sha256": "43d9d8bb45b9c187c8bb45259d7902e9425dfbe4beb4fcd45048db850e200226",
-      "size": 1301
+      "sha256": "f6d7b6a50e292932347a87612bc10cf6825f5101c0225c68b704bbe61a6eb1a0",
+      "size": 2310
     },
     "package-lock.json": {
-      "sha256": "d5bf77a58daa44b5870f949c4215b368075b5a99aa14281cb44db86fb87b3b2d",
-      "size": 614343
+      "sha256": "577f8a9d9953165a78531f8c1062aa43054ee22b2d411648366d8ece43724499",
+      "size": 654324
     },
     "package.json": {
-      "sha256": "a1281922168b718a17c035d142b7ca34774499f16ec182e08b3332d0253b53fc",
-      "size": 6773
+      "sha256": "967cd35aa9db5cc84200aebc7b14327255727b07be274debd9366bd55b639fc2",
+      "size": 8023
     },
     "packages/ui/src/fonts/Carlito-Bold.ttf": {
       "sha256": "ed778b78ce652f5b17647344fb9a4c4dcb2e6f8bafe75a0366300da7f8c199ac",
@@ -374,17 +374,69 @@
       }
     },
     "apps/web/package-lock.json": {
+      "@aws-sdk/client-s3": {
+        "version": "3.1169.0",
+        "integrity": "sha512-5IjQ2R1TM5lMuUvCvCfGNG9q6g3nxdputC9FY7YQJf1ygVUwsOruEYxQqpjik1nZdl8mNvV57Mhivtp2JbgBtg=="
+      },
+      "@fastify/rate-limit": {
+        "version": "10.3.0",
+        "integrity": "sha512-eIGkG9XKQs0nyynatApA3EVrojHOuq4l6fhB4eeCk4PIOeadvOJz9/4w3vGI44Go17uaXOWEcPkaD8kuKm7g6Q=="
+      },
       "@modelcontextprotocol/sdk": {
         "version": "1.32.2",
         "integrity": "sha512-SWsVtH/0vULSQStoZ6xxH2K09Li8fXYTMC64ZeogCdpZ3XSi1eCPOByV1OpuJxuI3OcmHhosDWYyii07tpPsLw=="
+      },
+      "@node-rs/argon2": {
+        "version": "2.2.2",
+        "integrity": "sha512-NtdlPPWtR5U4BxX5EGJYza+UklNaoWORmkaKCMqf/nyKeXWKVwNt8KfQoRpNT7OB1DcEwmePafO4wZyW+sbfCQ=="
+      },
+      "@playwright/test": {
+        "version": "1.62.1",
+        "integrity": "sha512-DTcUc8qii+cpHvtOwggMtBRMjKZHXYWdw8syRYu2vtzuq4Wxphqq4NfCs5Zt44L6mA8rfDfj+PHnxFc/FeK6mQ=="
+      },
+      "@types/node": {
+        "version": "24.13.3",
+        "integrity": "sha512-Dh8vAsV36ig5wa9OX4pXvMc9D3Veibfw2wix0CUwYODLD8nkj9UsLjASr49nPg+2eKzxhBV+v7L8pXvT4e639Q=="
+      },
+      "@types/pg": {
+        "version": "8.23.1",
+        "integrity": "sha512-fKVHpikPdg4GKks3JuLEhvwSyvwzF23hnabPy6DD8ljVbC7+6J5dQzdv4arV6jqq57djnMgs1HKBxX4P8aBI3A=="
+      },
+      "@types/yauzl": {
+        "version": "3.4.0",
+        "integrity": "sha512-NRPn5w6h8dhcnmx3YIRQcqMywY/+nND/uOkJessedcrowO3C0AssHp3tMJpxKAwOhFOo0OV1y9VtsC5hbKKBAw=="
+      },
+      "drizzle-orm": {
+        "version": "0.45.4",
+        "integrity": "sha512-NiM1YZpJ2UxyeE67DpDDZ+Tsw4YLX3trSlkNT7Tm9eKoUNb1LvaAaQzXgYQsWs+AQ9TUmmwMmBOCXuqqxUWKKQ=="
+      },
+      "fast-xml-parser": {
+        "version": "5.12.1",
+        "integrity": "sha512-wR8dO/fx+z8C5exuem1e7BKOWvjsuzvjS/tvA/Xu3Z1zQqJGcXrPzXbcAiaMgp2KjreEROcTkmnnisrcmJ2hYQ=="
       },
       "fastify": {
         "version": "5.12.8",
         "integrity": "sha512-moP8exb2sCHLUbJkwp+I6C0padhy4D8lp0SdmzY7HhSdZuqm7O/u3o2aq7u8okaQ//33QDzj3G/u+FsSdB8Qzw=="
       },
+      "jszip": {
+        "version": "3.10.1",
+        "integrity": "sha512-xXDvecyTpGLrqFrvkrUSoxxfJI5AH7U8zxxtVclpsUtMCq4JQ290LY8AW5c7Ggnr/Y/oK+bQMbqK2qmtk3pN4g=="
+      },
+      "pdf-lib": {
+        "version": "1.17.1",
+        "integrity": "sha512-V/mpyJAoTsN4cnP31vc0wfNA1+p20evqqnap0KLoRUN0Yk/p3wN52DOEsL4oBFcLdb76hlpKPtzJIgo67j/XLw=="
+      },
+      "pg": {
+        "version": "8.23.1",
+        "integrity": "sha512-aL96AHANtWjPLDOLqnhx+ngp9+UK7ETEU8VJrDCGvsSSi/mGLcWYsS6Herg7lmaBJe4uwrfqsa7gTEFaSizDoQ=="
+      },
       "typescript": {
         "version": "5.9.3",
         "integrity": "sha512-jl1vZzPDinLr9eUt3J/t7V6FgNEw9QjvBPdysz9KfQDD41fQrC2Y4vKQdiaUpFT4bXlb1RHhLpp8wtm6M5TgSw=="
+      },
+      "yauzl": {
+        "version": "3.4.0",
+        "integrity": "sha512-jIH9yLR9wqr0wOS0TpBvo/g/2UgZH5qePVbjgRliiF0BYvOZyaBknKsF+x9Iht0O6sqgnB93rCICdOZFecJuDw=="
       }
     }
   },
