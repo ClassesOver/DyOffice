@@ -65,6 +65,9 @@ function tokenize(source) {
       continue
     }
     if (char === '(') { index = skipLiteral(source, index); continue }
+    // A closing literal delimiter outside a string cannot advance the generic
+    // token scan below. Reject malformed content instead of blocking the worker.
+    if (char === ')') reject('UNREADABLE')
     if (char === '<') {
       if (source[index + 1] === '<') { index += 2; continue }
       index += 1
