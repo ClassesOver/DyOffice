@@ -135,6 +135,8 @@ export interface FileActionContext {
   getCurrentSaveContext?: () => FileActionContext
   /** Page-color input only, including a synchronous intent awaiting React commit. */
   getPageColorSaveState?: () => { token: object; ready: boolean }
+  /** Mirror-margin input only, including intent awaiting React commit. */
+  getMirrorMarginsSaveState?: () => { token: object; ready: boolean }
   editor: Editor | null
   doc: DocState | null
   dirtyRef: { current: boolean }

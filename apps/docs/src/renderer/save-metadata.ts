@@ -68,10 +68,13 @@ export const saveMetadataKeys = [
 export function captureSaveMetadata(ctx: FileActionContext) {
   const values = saveMetadataKeys.map((key) => ctx[key]);
   const color = ctx.getPageColorSaveState?.();
+  const margins = ctx.getMirrorMarginsSaveState?.();
   return {
     changed(current: FileActionContext): boolean {
       const latestColor = current.getPageColorSaveState?.();
       if (color && (!color.ready || !latestColor?.ready || color.token !== latestColor.token)) return true;
+      const latestMargins = current.getMirrorMarginsSaveState?.();
+      if (margins && (!margins.ready || !latestMargins?.ready || margins.token !== latestMargins.token)) return true;
       return saveMetadataKeys.some(
         (key, index) => !Object.is(values[index], current[key]),
       );
