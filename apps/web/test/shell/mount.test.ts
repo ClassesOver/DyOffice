@@ -9,7 +9,8 @@ test('the original shell mounts with native chrome and real Web bridge queries',
  await vi.waitFor(()=>expect(document.querySelector('.home .sidebar .logo-lockup')).not.toBeNull())
  await vi.waitFor(()=>expect(document.querySelectorAll('.quick-card').length).toBe(5))
  expect(document.querySelector('.tab-bar')).not.toBeNull()
- expect(requests).toContain('/api/files')
+ // The files list loads asynchronously after the home shell renders.
+ await vi.waitFor(()=>expect(requests).toContain('/api/files'))
  expect(document.querySelector('.account-entry')?.textContent).toContain('个人工作区')
  expect(document.querySelector('.home')?.textContent).not.toContain('.md')
  ;(document.querySelector('.account-btn') as HTMLButtonElement).click()
