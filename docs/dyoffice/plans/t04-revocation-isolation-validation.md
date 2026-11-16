@@ -1,5 +1,8 @@
 # T03/T04 local-account isolation and revocation test plan
 
+> Final evidence update, 2026-11-16: this page retains its dated preparation history. The final #32 combination subsequently passed; see [current matrix H](../evidence/t03-t04-current-stack-acceptance.md) for exact final results, source continuity, visual evidence and remaining scope. Older pending wording below is not the current status.
+> Scope update, 2026-11-16: Historical pre-implementation test plan. Statements below about missing RLS and pending PG describe its original baseline. See [current-stack acceptance](../evidence/t03-t04-current-stack-acceptance.md) for #38 real restricted-role/race evidence and the still-unaccepted final combination. This notice does not complete T19, legacy migration or production.
+
 Status: T04 business isolation/RLS requirements remain pending. The linked T03 account/session results do not establish these gates.
 
 ## Source of truth and scope

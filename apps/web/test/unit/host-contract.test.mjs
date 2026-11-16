@@ -104,3 +104,46 @@ test('commitSave forwards only SaveInput fields, never caller-supplied identity'
   await host.commitSave({ ...validSave, ownerId:'user-b', deploymentId:'other', sourceCommandId:'cmd-1' })
   assert.deepEqual(seen, { ...validSave, sourceCommandId:'cmd-1' })
 })
+
+// Removing projection must fail this regression: transport metadata is not a
+// permission to expose extra server fields. Payload content is a separate schema.
+test('host events project only envelope fields, dropping unexpected credentials', () => {
+  const good={protocolVersion:1,messageId:'m',sessionId:'s',fileId:'f',type:'editor.ready',payload:{}}
+  assert.deepEqual(decodeHostEvent(JSON.stringify({...good,apiKey:'test-secret',headers:{authorization:'Bearer test'}})),good)
+})
+
+test('Problem decoder rejects malformed DTOs and projects only public error fields', async () => {
+  const errors=await import('../../../../packages/web-contracts/src/errors.ts')
+  assert.equal(typeof errors.decodeProblem,'function')
+  const problem={type:'about:blank',title:'Conflict',status:409,detail:'Version conflict',requestId:'r1',error:'Version conflict',code:'CONFLICT'}
+  assert.deepEqual(errors.decodeProblem({...problem,stack:'private',apiKey:'test-secret'}),problem)
+  for(const patch of [{status:'409'},{status:200},{status:600},{requestId:''},{detail:{}},{type:[]},{code:{secret:'x'}}]) {
+    assert.throws(()=>errors.decodeProblem({...problem,...patch}),err=>err.code==='INVALID_RESPONSE')
+  }
+})
+
+test('CommandEnvelope requires version, generation, lease and arguments hash', async () => {
+  const tools=await import('../../../../packages/web-contracts/src/tools.ts')
+  assert.equal(typeof tools.isCommandEnvelope,'function')
+  const value={commandId:'c',fileId:'f',baseRevision:'r',editorGeneration:0,leaseEpoch:1,argsHash:sha256,payload:{text:'hello'}}
+  assert.equal(tools.isCommandEnvelope(value),true)
+  for(const patch of [{baseRevision:''},{editorGeneration:-1},{editorGeneration:'0'},{leaseEpoch:NaN},{argsHash:'missing'},{payload:[]}]) {
+    assert.equal(tools.isCommandEnvelope({...value,...patch}),false)
+  }
+})
+
+test('unknown desktop methods are not exposed through the BrowserHost adapter', () => {
+  let calls = 0
+  const host = createBrowserHost({ unknownDesktopMethod: () => { calls++; return 'ok' } })
+  assert.equal(Object.hasOwn(host, 'unknownDesktopMethod'), false)
+  assert.throws(() => host.unknownDesktopMethod(), TypeError)
+  assert.equal(calls, 0)
+})
+
+test('missing protocol versions and oversized UTF-8 events fail closed', () => {
+  const event = { messageId:'m', sessionId:'s', fileId:'f', type:'editor.ready', payload:{} }
+  assert.throws(() => decodeHostEvent(JSON.stringify(event)), err => err.code === 'INVALID_RESPONSE')
+  const raw = JSON.stringify({ ...event, protocolVersion:1, payload:{ text:'界'.repeat(90000) } })
+  assert.ok(raw.length < MAX_HOST_EVENT_BYTES)
+  assert.throws(() => decodeHostEvent(raw), err => err.code === 'PAYLOAD_TOO_LARGE')
+})

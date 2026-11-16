@@ -64,12 +64,12 @@ docs/dyoffice/               当前计划及 inventory/ evidence/ adr/
 
 ## 2. 检查命令与执行纪律
 
-当前已存在 `npm run test:web`、`dev:web`、`start:web`，以及 T02 增加的 `npm run test:web:integration -- <test-file>`。该命令只运行 `apps/web/test/integration/` 下的一个测试文件。`api-compat` 是 HTTP 契约，不连接 PostgreSQL、S3 或 Redis。下表其余脚本仍未创建，不能宣称它们已存在：
+当前已存在 `npm run test:web`、`dev:web`、`start:web`，以及 T02 增加的 `npm run test:web:integration -- <test-file>`。该命令只运行 `apps/web/test/integration/` 下的一个测试文件。`api-compat` 是 HTTP 契约，不连接 PostgreSQL、S3 或 Redis。另已提供 `npm run test:web:unit -- host-contract.test.mjs`，运行现有 Node.js 契约测试；不接受不存在的 `.ts` 测试名。下表尚未实现的计划脚本仍不能宣称已存在：
 
 | 命令 | 责任 |
 | --- | --- |
 | `npm run test:web:legacy` | 原有 `apps/web/test/*.test.mjs` 回归 |
-| `npm run test:web:unit -- <test-file>` | Web Vitest 单元测试，允许文件筛选 |
+| `npm run test:web:unit -- <test-file>` | Web Node.js 单元测试，按现有 `.test.mjs` basename 筛选；无参数运行全部 unit 测试 |
 | `npm run test:web:integration -- <test-file>` | 运行一个 Web 集成测试文件。当前 `api-compat` 只覆盖 HTTP；PostgreSQL 身份测试仍在 identity workflow，不在此脚本的默认范围内 |
 | `npm run test:web:e2e -- <spec-file>` | 浏览器原生编辑与端到端流程 |
 | `npm run test:web:security` | 越权、SSRF、注入、上传、Token、安全边界 |
@@ -90,23 +90,27 @@ docs/dyoffice/               当前计划及 inventory/ evidence/ adr/
 
 **接口：** 产出每个 IPC 的来源、调用方、Web 实现位置与能力状态；产出锁定依赖/镜像清单。
 
-- [ ] 创建边界检查用例：浏览器入口导入 `node:fs`/Electron 必须报错；所有拟复用工具标记 live/headless/unsupported。
-- [ ] 运行检查得到预期违规列表，确认是依赖边界问题而非缺少安装。
-- [ ] 盘点四个 renderer/preload/main、原生 Rust、字体和 MCP 实际 lockfile；创建上述测试脚本与 Web 专用 CI，不全面重构上游。
-- [ ] 跑现有 `npm run test:web`，保存真实结果；新边界检查和最小 Web 构建为 GREEN。
-- [ ] 提交 `chore(web): inventory host boundaries and establish web gates`。
+- [x] 创建边界检查用例：浏览器入口导入 `node:fs`/Electron 必须报错；所有拟复用工具标记 live/headless/unsupported。
+- [x] 运行检查得到预期违规列表，确认是依赖边界问题而非缺少安装。
+- [x] 盘点四个 renderer/preload/main、原生 Rust、字体和 MCP 实际 lockfile；创建上述测试脚本与 Web 专用 CI，不全面重构上游。
+- [x] 跑现有 `npm run test:web`，保存真实结果；新边界检查和最小 Web 构建为 GREEN。
+- [x] 提交 `chore(web): inventory host boundaries and establish web gates`。
+
+**有界验收（2026-11-16）：** 原 T00 五项基线/盘点/构建任务已核验，证据见 [最终源代码与运行时记录](evidence/t00-final-source-acceptance.md) 和 [小样本性能记录](evidence/t00-performance-baseline.md)。仅签收工程基线，不代表四格式功能、AI/MCP 授权、生产镜像或第 8 节/T25 容量验收。保留历史阶段记录；新文档提交不借用旧提交的 CI。
 
 ### T01 共享契约与 BrowserHost 骨架
 
-**依赖：** T00。**文件：** 新建 `packages/web-contracts/{package.json,src/host.ts,src/api.ts,src/events.ts,src/tools.ts,src/errors.ts}`、`packages/browser-host/src/index.ts`、`apps/web/test/unit/host-contract.test.ts`。
+**依赖：** T00。**文件：** 新建 `packages/web-contracts/{package.json,src/host.ts,src/api.ts,src/events.ts,src/tools.ts,src/errors.ts}`、`packages/browser-host/src/index.ts`、`apps/web/test/unit/host-contract.test.mjs`。
 
 **接口：** 输出第 1 节全部共享类型和 BrowserHost；`getCapabilities(): Promise<CapabilityCatalog>` 明确区分 unsupported、read_only、editable。
 
-- [ ] 编写未知宿主方法、错误 DTO、缺失版本号、超大事件和 secret 字段泄漏测试。
-- [ ] 运行 `npm run test:web:unit -- host-contract.test.ts`，确认契约缺失导致 RED。
-- [ ] 实现类型和静态校验；未知功能明确失败，不返回假成功；为 Electron 现有行为保留适配入口。
-- [ ] 同命令 GREEN，`typecheck:web` 通过，验证无 Node 依赖混入浏览器包。
-- [ ] 提交 `feat(web): define host and transport contracts`。
+- [x] 编写未知宿主方法、错误 DTO、缺失版本号、超大事件和 secret 字段泄漏测试。
+- [x] 运行 `npm run test:web:unit -- host-contract.test.mjs`，确认契约缺失导致 RED。
+- [x] 实现类型和静态校验；未知功能明确失败，不返回假成功；为 Electron 现有行为保留适配入口。
+- [x] 同命令 GREEN，`typecheck:web` 通过，验证无 Node 依赖混入浏览器包。
+- [x] 提交 `feat(web): define host and transport contracts`。
+
+**有界验收（2026-11-16）：** 原 T01 共享契约与 BrowserHost 骨架五项已按 [最终验收证据](evidence/t01-final-acceptance.md) 核验。此处仅签收契约和适配接缝，不代表四格式真实编辑、AI/MCP、事件 payload 授权或生产部署完成。按用户最新决定，不以 CI 作为此次合并条件；没有新 CI 成功声明。
 
 ### T02 模块化 API 与原型迁移接缝
 
@@ -124,11 +128,23 @@ docs/dyoffice/               当前计划及 inventory/ evidence/ adr/
 
 ### T03 本地账号密码、管理员用户管理与服务端会话
 
+> **用户范围更新（2026-11-16）：** 本次不考虑旧库数据导入/转换，不以旧库迁移作为交付阻断。仍保留误连旧库拒绝和原数据不受破坏的安全保护，不执行自动迁移、重分配或删除。
+
+> **范围说明（2026-11-16）：** 下列 T03 完成记录及接口/延期描述属于历史 MJS / `dyoffice_schema_migrations` 栈，不是新 TS 本地账号栈的全局完成声明。新栈 #32 最终组合已合入；精确 head `157cc1c` 的真实 PG 156/156、可见浏览器 5/5、作业 36/36、存储 22/22 和 TLS 5/5 均通过且无跳过。当前源连续性与最终截图已复核，当前已接入范围的 T03/T04 有界验收闭环；不包含 AI/数据源/MCP、T19 或生产。详见 [新栈验收矩阵](evidence/t03-t04-current-stack-acceptance.md)。保留历史结果，不把新旧库迁移链或测试数量混用。
+
+**新 TS 本地账号栈验收（2026-11-16）：**
+
+- [x] 身份唯一性、首次管理员、密码策略及会话认证边界：最终真实数据库证据 H。
+- [x] 管理员开户/激活/重置/停用/角色变更及再认证：最终数据库与可见浏览器证据 H。
+- [x] 自助改密、会话列出/撤销/撤销其他、最小登录历史及撤销写入竞态：最终组合证据 H。
+- [x] 原 Home/Settings 交互与最终七张截图复核；范围限记录的视口，不宣称全终端视觉验收。
+- [x] 新栈结果、精确源码连续性及未纳入范围均记录在矩阵 H；以下旧栈历史保留原貌。
+
 **依赖：** T02。**文件：** 拟建 `server/src/modules/auth/{service,routes,passwords,sessions,throttle,csrf}.ts`、`server/src/modules/admin/users/{routes,service}.ts`、`db/schema.ts`、`db/migrations/0001_identity.sql`、`tools/dyoffice/bootstrap-admin.ts`、`test/integration/{auth-session,admin-users,password-reset}.test.ts`。
 
 **接口：** `authenticate(request)` 在 `session-core.mjs`；`principalContext(session)` 与 `canReadPersonalFiles(principal, ownerUserId)` 在 `auth/principal.mjs`，供 T04 的 `withPrincipalTransaction` 使用。身份稳定键是数据库中的用户 UUID，`(deploymentId,usernameNormalized)` 唯一。不实现 RLS。专门设计见 [local-account-auth.md](local-account-auth.md)。收口证据见 [t03-closeout.md](evidence/t03-closeout.md)。
 
-**状态（2026-11-16）：T03 身份与会话完成。** 默认 `dev:web` 仍使用开发令牌，`NODE_ENV=production` 仍拒绝启动。本地账号路由只在 `buildApp({ localAuth })` 上注册。
+**历史旧栈状态（2026-11-16）：T03 身份与会话检查点完成。** 默认 `dev:web` 仍使用开发令牌，`NODE_ENV=production` 仍拒绝启动。本地账号路由只在 `buildApp({ localAuth })` 上注册。
 
 - [x] **T03a，RED：** 用户名归一化/重复、首次 Admin bootstrap 并发、无默认密码、空/弱/常见密码拒绝、Argon2id 独立盐、不存在用户与错误密码的同等哈希、账号禁用拒绝。失败先于服务存在，记录在 [t03a-account-foundation.md](evidence/t03a-account-foundation.md)。
 - [x] **T03a，GREEN：** `0001_identity.sql` 含 users/user_roles/password_action_tokens/sessions/personal workspace。Argon2id 为 m=19456、t=2、p=1。密码至少 15 个码位，允许长短语和 Unicode，无复杂度规则。一次性 CLI bootstrap，生产拒绝开发双 Token。完整离线泄露密码库和目标主机压测延期到运维，原因见收口证据。
@@ -146,17 +162,19 @@ docs/dyoffice/               当前计划及 inventory/ evidence/ adr/
 
 ### T04 资源授权与 RLS
 
-2026-11-15 接缝进展：独立受限 auth/business 连接、工作区/偏好 FORCE RLS、数据库推导身份、撤销与写入锁顺序已实现并测试，见 [T04 证据](evidence/t04-rls-checkpoint.md)。本阶段使用个人偏好验证完整业务事务；文件、后台任务、外部 Token 随 T05/T08/T19 接入，不将尚不存在的入口标记完成。
+> **新栈有界验收（2026-11-16）：** #32 最终组合的数据库、浏览器、任务、旧库拒绝和原生门禁已通过。已复核精确日志、截图与当前源码连续性，见 [矩阵 H](evidence/t03-t04-current-stack-acceptance.md)。下列勾选仅限当前已接入账户、偏好、工作区、文件/版本/租约和作业入口；不代表 AI/数据源/MCP、外部 Token/T19、旧数据转换或生产完成。
 
-**依赖：** T03。**文件：** `modules/policy/authorize.ts`、`db/context.ts`、`db/migrations/0004_rls.sql`、`test/integration/ownership-rls.test.ts`。
+历史记录（2026-11-15）接缝进展：独立受限 auth/business 连接、工作区/偏好 FORCE RLS、数据库推导身份、撤销与写入锁顺序已实现并测试，见 [T04 证据](evidence/t04-rls-checkpoint.md)。本阶段使用个人偏好验证完整业务事务；文件、后台任务、外部 Token 随 T05/T08/T19 接入，不将尚不存在的入口标记完成。
 
-**接口：** `withPrincipalTransaction(principal, fn)`、`authorize()`；角色不隐式包含文件所有权。
+**依赖：** T03。**当前文件：** `apps/web/server/src/modules/policy/authorize.ts`、`apps/web/server/src/db/{context,roles}.ts`、`apps/web/server/src/db/migrations/`、`apps/web/test/local-integration/{ownership-rls,authority-write-races,revocation-race,pr28-runtime-boundary}.test.mjs`。
 
-- [ ] 测试 A/B 交叉访问、同池连接复用、异常回滚、Admin 读取他人文件、跨 owner 外键、后台任务错误主体。
-- [ ] integration RED；明确以非 owner 应用账号测试，不拿数据库超级用户做假隔离证明。
-- [ ] 加作用域过滤、FORCE RLS、事务内身份设置、复合边界约束和默认拒绝策略。
-- [ ] 每种入口和 DB 直连策略测试 GREEN；权限缺失按约定返回无泄漏错误。
-- [ ] 提交 `feat(security): enforce ownership across api and database`。
+**当前接口：** `createPrincipalTransactions().withPrincipalTransaction(credential, operation)` 在事务内推导主体并在提交前复核；`authorize()` 同时约束 deployment、owner 和 scope。角色不隐式包含文件所有权。实际实现位于 `apps/web/server/src/`；旧 Principal 对象接口仅作历史记录。
+
+- [x] A/B 交叉访问、同池连接复用、异常回滚、Admin 读取他人文件、跨 owner 外键、后台任务错误主体：最终 PG/作业门禁通过。
+- [x] 受限非 owner auth/business/worker 角色及拒绝特权配置的负向用例通过，不以超级用户证明隔离；历史 RED 记录保留，不虚构新的 RED 执行。
+- [x] 当前资源作用域过滤、FORCE RLS、事务内身份设置、复合边界约束和默认拒绝已合入并通过最终组合验证。
+- [x] 当前已接入入口及 DB 策略 GREEN；缺失/外人资源错误无泄漏。未来入口必须另行接入验收。
+- [x] 新栈实现通过 #32 合入；旧方案 #28 以被取代关闭，不合入旧迁移链。
 
 ### T05 对象存储、上传与个人文件生命周期
 
@@ -201,9 +219,9 @@ docs/dyoffice/               当前计划及 inventory/ evidence/ adr/
 
 **接口：** `mountDocsEditor(host,element,fileId)`，输出编辑器注册、序列化和选区能力。
 
-**状态（2026-11-16）：** 浏览器挂载的第一段已落地，见 [t07-docs-browser-mount.md](evidence/t07-docs-browser-mount.md)。`mountDocsEditor` 打开服务端 DOCX 投影，编辑段落，撤销本地修改，保存后重新挂载仍能看到新文本，表格和页眉留在包内。桌面 Docs 功能区仍调用 `window.desktop`，没有整页搬进浏览器。分页、字体替换、剪贴板 worker 和外部 Word 复开仍未做。
+**状态（2026-11-16）：** 浏览器挂载、桌面桥、纯文本单元格和分页切片已有测试，见 [t07-docs-browser-mount.md](evidence/t07-docs-browser-mount.md)。`mountDocsEditor` 能编辑段落和单段单元格、撤销、保存并重开，复杂表格和页眉留在包内。`createWebDesktop` 把打开/保存交给宿主，字体只报告已配置的替换，打印只调用浏览器打印且不返回假路径，未知方法和图片剪贴板抛出 `UNSUPPORTED`。`computePageSlices` 把超出页高的块放到下一页。功能区页面仍未挂上。外部 Word 复开推迟到运维：本环境没有 Word 或 LibreOffice。
 
-- [ ] E2E 写入打开、段落/表格修改、保存、刷新、下载、再次打开和修订/撤销场景。段落保存、刷新重开、下载和本地撤销已测；表格单元格改写、分页和功能区撤销未做。
+- [ ] E2E 写入打开、段落/表格修改、保存、刷新、下载、再次打开和修订/撤销场景。段落保存、刷新重开、下载、本地撤销和纯文本单元格已测；功能区撤销未做。
 - [x] 浏览器测试在尚未接入时 RED，而非以空白预览页算通过。
 - [ ] 复用 Renderer/docx-engine，接入 host 字节、字体、worker、剪贴板替代和分页；保留原始未编辑部件。
 - [ ] E2E GREEN；受影响 `@genoffice/docs`、docx-engine 回归；外部 Word 兼容样本由 QA 记录证据。
@@ -268,7 +286,7 @@ docs/dyoffice/               当前计划及 inventory/ evidence/ adr/
 
 **接口：** `mountPdfEditor()`，能力区分阅读、批注、文本修改、页操作和导出。
 
-**状态（2026-11-16）：** 能力门已区分文本页、扫描页和空白页，并报告未嵌入字体与未验证签名，见 [t11-pdf-capabilities.md](evidence/t11-pdf-capabilities.md)。批注、改字、调页、脱敏仍被拒绝；覆盖文字不是删除原文；加密文件不返回页序。浏览器挂载、PDFium/WASM、CSP、真实改字和批注写入仍延期，原因见证据页。不依赖 T07 的 DOCX 挂载，也不走 T08 worker。
+**状态（2026-11-16）：** 能力门已区分文本页、扫描页和空白页，并报告未嵌入字体与未验证签名，见 [t11-pdf-capabilities.md](evidence/t11-pdf-capabilities.md)。PDF 页签挂载 PDF.js 阅读页，CSP 不允许 eval 或内联脚本；PDFium WASM 对未改动的导出字节做像素重开校验，见 [t11-pdf-render.md](evidence/t11-pdf-render.md)。批注、改字、调页、脱敏仍被拒绝；覆盖文字不是删除原文；加密文件不栅格化。真实改字和批注写入仍延期。不依赖 T07 的 DOCX 挂载，也不走 T08 worker。
 
 - [ ] 测试真实文本流修改、批注、页序、密码文件、签名失效提示、缺字/字体、扫描页能力限制。
 - [ ] E2E RED；覆盖文字不等同于删除原文的安全性，脱敏能力单独标记。
@@ -475,4 +493,4 @@ docs/dyoffice/               当前计划及 inventory/ evidence/ adr/
 
 每个 PR 必须写明基线、范围、接口变化、迁移影响、失败复现、通过命令/环境、证据位置、剩余风险和回滚方法。职责边界或协议变化增加 ADR；不因工具建议擅自改变用户已确认范围。
 
-任务完成需要代码、测试、可复现证据和文档同步。里程碑完成还需要端到端演示与 gate 审核。企业完成还需要客户环境验收、恢复演练、运营可见性与负责人签收。本次仅编写计划，以上任务没有因文档创建而被标记为完成。
+任务完成需要代码、测试、可复现证据和文档同步。里程碑完成还需要端到端演示与 gate 审核。企业完成还需要客户环境验收、恢复演练、运营可见性与负责人签收。除各任务显式记录的有界验收外，未勾选任务不因计划创建而完成。

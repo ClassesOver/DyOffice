@@ -44,7 +44,18 @@ export function registerAuthRoutes(app: FastifyInstance, { sessions, csrf, throt
     reply.header('Set-Cookie', [serializeCookie(SESSION_COOKIE, '', 0), serializeCookie(LOGIN_COOKIE, '', 0)])
     return reply.code(204).send()
   })
+  app.get('/api/v1/auth/login-history', { schema: { querystring: { type: 'object', additionalProperties: false, properties: {} } } }, async request => ({ events: await sessions.loginHistory(cookies(request).session ?? '') }))
   app.get('/api/v1/auth/sessions', async request => ({ sessions: await sessions.list(cookies(request).session ?? '') }))
+  app.post('/api/v1/auth/sessions/revoke-others', {
+    bodyLimit: 1024,
+    schema: { querystring: { type: 'object', additionalProperties: false, properties: {} } },
+  }, async (request, reply) => {
+    if (request.body !== undefined && (!request.body || typeof request.body !== 'object' || Array.isArray(request.body) || Object.keys(request.body).length !== 0)) throw authError(400)
+    const token = cookies(request).session
+    csrf.requireSession(request, token)
+    await sessions.revokeOthers(token!, { requestId: request.id })
+    return reply.code(204).send()
+  })
   app.delete<{ Params: { id: string } }>('/api/v1/auth/sessions/:id', { schema: { params: { type: 'object', required: ['id'], properties: { id: { type: 'string', pattern: '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$' } } } } }, async (request, reply) => {
     const token = cookies(request).session
     csrf.requireSession(request, token)

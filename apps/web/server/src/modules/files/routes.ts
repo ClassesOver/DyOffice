@@ -38,7 +38,7 @@ export function registerFileRoutes(app: FastifyInstance, files: FileService, ses
       await sessions.authenticate(credential)
       // Hold admission through processing AND response completion. A client
       // disconnect cannot free capacity while object work still owns buffers.
-      if ((['PUT','GET','HEAD'].includes(request.method) && request.routeOptions.url?.endsWith('/content')) || (request.method === 'POST' && (request.routeOptions.url?.endsWith('/commits') || request.routeOptions.url?.endsWith('/restoration-uploads')))) {
+      if ((['PUT','GET','HEAD'].includes(request.method) && request.routeOptions.url?.endsWith('/content')) || (request.method === 'POST' && (request.routeOptions.url?.endsWith('/finish') || request.routeOptions.url?.endsWith('/commits') || request.routeOptions.url?.endsWith('/restoration-uploads')))) {
         if (request.method === 'PUT') {
           const upload = await files.preflightUpload(credential, (request.params as { id: string }).id)
           const length = request.headers['content-length']
@@ -65,10 +65,10 @@ export function registerFileRoutes(app: FastifyInstance, files: FileService, ses
       if (request.headers['content-type']?.split(';')[0].trim().toLowerCase() !== 'application/octet-stream') throw authError(415)
       return files.receiveUpload(token(request), (request.params as { id: string }).id, request.body as Buffer)
     }))
-    api.post('/api/v1/uploads/:id/finish', { bodyLimit: 4096, schema: { params, querystring: emptyQuery } }, request => {
+    api.post('/api/v1/uploads/:id/finish', { bodyLimit: 4096, schema: { params, querystring: emptyQuery } }, (request, reply) => transfer(request, reply, async () => {
       if (request.body !== undefined) throw authError(400)
       return files.finishUpload(token(request), (request.params as { id: string }).id)
-    })
+    }))
     api.delete('/api/v1/uploads/:id', { schema: { params, querystring: emptyQuery } }, async (request, reply) => {
       await files.cancelUpload(token(request), (request.params as { id: string }).id)
       return reply.code(204).send()

@@ -2,6 +2,7 @@ import { createSheetsSaveService, type SheetsPlanner, type SheetsSaveNative } fr
 import { createSheetsService, type SheetsNative, type SheetsPackageReader } from './modules/sheets/service.ts'
 import { registerSheetsRoutes } from './modules/sheets/routes.ts'
 import { createStaticAssets } from '../static-assets.mjs'
+import { registerLocalShell } from './local-shell.ts'
 import type { FastifyInstance, HTTPMethods } from 'fastify'
 import { buildApp as buildModularApp } from './app.mjs'
 import { createLegacyContext } from './legacy-context.mjs'
@@ -46,7 +47,7 @@ export async function buildApp(config: WebConfig): Promise<FastifyInstance> {
 
 export interface LocalWebConfig {
   db: IdentityStore; businessPool?: Pool; deploymentId: string; origin: string; csrfKey: string; passwords?: PasswordService;
-  objectStore?: ObjectStore; filePolicy?: FilePolicy; nativeDocsDirectory?: string; nativeSheetsDirectory?: string; nativeJobs?: boolean; sheetsNative?: SheetsNative & Partial<SheetsSaveNative>; sheetsPlanner?: SheetsPlanner; sheetsPackageReader?: SheetsPackageReader;
+  objectStore?: ObjectStore; filePolicy?: FilePolicy; nativeDocsDirectory?: string; nativeSheetsDirectory?: string; nativeJobs?: boolean; sheetsNative?: SheetsNative & Partial<SheetsSaveNative>; sheetsPlanner?: SheetsPlanner; sheetsPackageReader?: SheetsPackageReader; localShellDirectory?: string;
   passwordBlocklistFile?: string; loginLimits?: LoginLimits; idleMs?: number; absoluteMs?: number; closeDb?: () => Promise<void>
 }
 export async function buildLocalApp(config: LocalWebConfig): Promise<FastifyInstance> {
@@ -59,8 +60,9 @@ export async function buildLocalApp(config: LocalWebConfig): Promise<FastifyInst
   }
   await assertReady()
   if (config.objectStore && !config.businessPool) throw new Error('File API requires restricted business pool')
+  // Authentication is privileged even when no business routes are enabled.
+  await assertRuntimePool(config.db.pool, 'auth')
   if (config.businessPool) {
-    await assertRuntimePool(config.db.pool, 'auth')
     await assertRuntimePool(config.businessPool, 'business')
     await assertSharedDatabase(config.db.pool, config.businessPool)
   }
@@ -68,6 +70,7 @@ export async function buildLocalApp(config: LocalWebConfig): Promise<FastifyInst
   if (config.sheetsPlanner && (!config.sheetsNative?.savePlan || !config.objectStore)) throw new Error('Sheets saves require native writer and File API')
   if (config.sheetsNative && !config.objectStore) throw new Error('Native sheets require File API')
   if (config.nativeJobs && !config.objectStore) throw new Error('Native jobs require File API')
+  if (config.localShellDirectory && !config.objectStore) throw new Error('Local shell requires scoped File API')
   if (config.nativeDocsDirectory && !config.objectStore) throw new Error('Native DOCX requires File API')
   if (config.nativeSheetsDirectory && (!config.objectStore || !config.sheetsNative?.readSheet || !config.sheetsNative?.savePlan || !config.sheetsPlanner || !config.sheetsPackageReader)) throw new Error('Native Sheets requires complete native adapters')
   const nativeSheets = config.nativeSheetsDirectory ? await createStaticAssets({assetMode:'built',assetDirectory:config.nativeSheetsDirectory,pages:['index.html'],assetInventory:'.vite/native-assets.json',cacheControl:'private, no-store'}) : undefined
@@ -78,6 +81,7 @@ export async function buildLocalApp(config: LocalWebConfig): Promise<FastifyInst
   const csrf = createCsrfService({ db: config.db, deploymentId: config.deploymentId, origin: config.origin, key: config.csrfKey })
   const throttle = createLoginThrottle(config.db, config.deploymentId, config.csrfKey, config.loginLimits)
   const app = await createApiShell()
+  if (config.localShellDirectory) await registerLocalShell(app,config.localShellDirectory)
   if (config.closeDb) app.addHook('onClose', () => config.closeDb!())
   registerHealthRoutes(app, async () => { try { await assertReady(); return true } catch { return false } })
   const users = createUserService({ db: config.db, accounts, sessions, passwords, deploymentId: config.deploymentId })

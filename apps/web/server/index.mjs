@@ -1,5 +1,6 @@
 import { configuredSheetsRuntime } from './src/modules/sheets/runtime.ts';
 import { resolve } from 'node:path';
+import { localShellDirectory } from './local-shell-config.mjs';
 import { fileURLToPath } from 'node:url';
 import { Pool } from 'pg';
 import { configuredObjectStore } from './src/storage/config.ts';
@@ -8,6 +9,7 @@ import { connectIdentityStore } from './src/db/identity.ts';
 
 async function configuredApplication() {
   const mode=process.env.DYOFFICE_AUTH_MODE||'development';
+  const shellDirectory=localShellDirectory(process.env);
   const sheetsFlag=process.env.DYOFFICE_NATIVE_XLSX;
   if(sheetsFlag && (sheetsFlag!=='experimental'||mode!=='local')) throw new Error('Native Sheets requires explicit experimental local mode');
   const jobFlag=process.env.DYOFFICE_NATIVE_JOBS;
@@ -39,7 +41,7 @@ async function configuredApplication() {
     const nativeDocsDirectory=nativeFlag ? resolve(process.env.DYOFFICE_NATIVE_DOCX_DIRECTORY||fileURLToPath(new URL('../dist-docs/',import.meta.url))) : undefined;
     sheets=await configuredSheetsRuntime(process.env);
     const {close:closeSheets,...sheetsConfig}=sheets ?? {};
-    return await buildLocalApp({db,businessPool,...storage,...sheetsConfig,nativeDocsDirectory,nativeJobs:jobFlag==='experimental',deploymentId,origin,csrfKey,passwordBlocklistFile:process.env.DYOFFICE_PASSWORD_BLOCKLIST_FILE,closeDb:async()=>{await closeSheets?.();storage.close();await Promise.all([close(),businessPool.end()]);}});
+    return await buildLocalApp({db,businessPool,...storage,...sheetsConfig,nativeDocsDirectory,localShellDirectory:shellDirectory,nativeJobs:jobFlag==='experimental',deploymentId,origin,csrfKey,passwordBlocklistFile:process.env.DYOFFICE_PASSWORD_BLOCKLIST_FILE,closeDb:async()=>{await closeSheets?.();storage.close();await Promise.all([close(),businessPool.end()]);}});
   } catch(error) { await sheets?.close();storage?.close();await Promise.allSettled([close(),businessPool?.end()]); throw error; }
 }
 

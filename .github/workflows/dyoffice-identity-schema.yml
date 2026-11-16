@@ -4,6 +4,7 @@ on:
   push:
     branches: [main, feat/dyoffice-web]
     paths:
+      - 'tools/dyoffice/runtime-lock*'
       - 'apps/web/server/auth/**'
       - 'apps/web/server/db/**'
       - 'apps/web/tools/bootstrap-admin.mjs'
@@ -17,6 +18,7 @@ on:
       - '.github/workflows/dyoffice-identity-schema.yml'
   pull_request:
     paths:
+      - 'tools/dyoffice/runtime-lock*'
       - 'apps/web/server/auth/**'
       - 'apps/web/server/db/**'
       - 'apps/web/tools/bootstrap-admin.mjs'
@@ -35,11 +37,11 @@ permissions:
 
 jobs:
   identity-schema:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     services:
       postgres:
-        image: postgres:16
+        image: postgres:16@sha256:dd2bf3ce2dc83a81674cf7f217fcfd8a5009a4b325dda5b843bfee82a06cff6f
         env:
           POSTGRES_USER: dyoffice_test
           POSTGRES_PASSWORD: local-ci-only-not-for-production
@@ -53,7 +55,9 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: 22
+          node-version: '22.23.5'
+      - name: Verify immutable Node runtime
+        run: node tools/dyoffice/runtime-lock.mjs --runtime
       - name: Install isolated Web dependencies with native Argon2id
         run: npm ci --prefix apps/web --workspaces=false --include=dev --no-audit --no-fund
       - name: Test migration/bootstrap transaction orchestration

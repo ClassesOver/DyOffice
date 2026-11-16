@@ -3,7 +3,7 @@ import type { PoolClient } from 'pg'
 import type { Principal } from '../../../../../../packages/web-contracts/src/api.ts'
 import type { IdentityStore } from '../../db/identity.ts'
 import type { createAccountService } from './service.ts'
-import { appendAuthEvent, type AuthContext } from './audit.ts'
+import { appendAuthEvent, appendLoginAttempt, type AuthContext } from './audit.ts'
 
 export const authError = (statusCode = 401) => Object.assign(new Error('Authentication failed'), { statusCode })
 export const tokenHash = (token: string) => createHash('sha256').update(token).digest('hex')
@@ -71,7 +71,17 @@ export function createSessionService({ db, accounts, deploymentId, idleMs = 8 * 
       if (options.requireAdmin && !principal.roles.includes('config_admin')) throw authError(403)
       if (options.requireRecent && now.getTime() - (session.reauthenticated_at ?? session.created_at).getTime() > 15 * 60_000) throw authError(403)
       await connection.query('UPDATE sessions SET last_seen_at=$1 WHERE id=$2', [now, session.id])
-      return operation({ connection, principal, session, now, users })
+      // Capture immutable deadlines before callbacks rotate/revoke credentials
+      // (password changes and self-revocation intentionally invalidate the token).
+      // Row locks serialize revocation, but do not stop wall-clock expiry.
+      const expiresAt = session.expires_at.getTime()
+      const idleDeadline = now.getTime() + idleMs
+      const recentDeadline = (session.reauthenticated_at ?? session.created_at).getTime() + 15 * 60_000
+      const result = await operation({ connection, principal, session, now, users })
+      const finishedAt: Date = (await connection.query('SELECT clock_timestamp() AS now')).rows[0].now
+      if (finishedAt.getTime() >= expiresAt || finishedAt.getTime() >= idleDeadline) throw authError()
+      if (options.requireRecent && finishedAt.getTime() > recentDeadline) throw authError(403)
+      return result
     })
   }
   function withSession<T>(token: string, extraIds: string[], operation: (connection: PoolClient, principal: SessionPrincipal, session: AuthoritySession, now: Date) => Promise<T>) {
@@ -81,7 +91,7 @@ export function createSessionService({ db, accounts, deploymentId, idleMs = 8 * 
     withAuthority, absoluteMs,
     async login(username: unknown, password: unknown, context: AuthContext = {}) {
       const candidate = await accounts.verifyCredentials(username, password)
-      if (!candidate) { await appendAuthEvent(db.pool, deploymentId, 'login_failed', context); throw authError() }
+      if (!candidate) { await db.transaction(connection => appendLoginAttempt(connection, deploymentId, 'login_failed', username, context)); throw authError() }
       return db.transaction(async connection => {
         const { rows: [user] } = await connection.query('SELECT * FROM users WHERE deployment_id=$1 AND id=$2 FOR SHARE', [deploymentId, candidate.userId])
         if (!user || user.status !== 'active' || user.password_reset_required || user.auth_version !== candidate.authVersion) throw authError()
@@ -100,6 +110,10 @@ export function createSessionService({ db, accounts, deploymentId, idleMs = 8 * 
         })
       } catch (error) { if ((error as { statusCode?: number }).statusCode !== 401) throw error }
     },
+    loginHistory: (token: string) => withSession(token, [], async connection => {
+      const result = await connection.query<{ occurred_at: Date; outcome: 'success' | 'failure' | 'throttled' }>('SELECT * FROM read_login_history($1,$2,$3)', [deploymentId, tokenHash(token), idleMs])
+      return result.rows.map(row => ({ occurredAt: row.occurred_at.toISOString(), outcome: row.outcome }))
+    }),
     list: (token: string) => withSession(token, [], async (connection, principal, _session, now) => {
       const result = await connection.query('SELECT id,created_at,last_seen_at,expires_at FROM sessions WHERE deployment_id=$1 AND user_id=$2 AND auth_version=$3 AND revoked_at IS NULL AND expires_at>$4 AND last_seen_at>$4-$5*interval \'1 millisecond\' ORDER BY created_at,id', [deploymentId, principal.userId, principal.authVersion, now, idleMs])
       return result.rows.map(row => ({ id: row.id, createdAt: row.created_at.toISOString(), lastSeenAt: row.last_seen_at.toISOString(), expiresAt: row.expires_at.toISOString(), current: row.id === principal.sessionId }))
@@ -109,6 +123,13 @@ export function createSessionService({ db, accounts, deploymentId, idleMs = 8 * 
       if (!result.rowCount) throw authError(404)
       await appendAuthEvent(connection, deploymentId, 'session_revoked', { ...context, actorId: principal.userId, sessionId: result.rows[0].id })
       return { self: principal.sessionId === result.rows[0].id }
+    }),
+    revokeOthers: (token: string, context: AuthContext = {}) => withAuthority(token, { lockUsers: 'update', lockAllCredentials: true }, async ({ connection, principal }) => {
+      // Serialize against login and other credential changes. Only sessions
+      // already present are revoked; future logins remain valid. Keep this
+      // session and auth_version unchanged, never accept a caller-selected owner.
+      const revoked = await connection.query('UPDATE sessions SET revoked_at=clock_timestamp() WHERE deployment_id=$1 AND user_id=$2 AND id<>$3 AND revoked_at IS NULL RETURNING id', [deploymentId, principal.userId, principal.sessionId])
+      for (const row of revoked.rows) await appendAuthEvent(connection, deploymentId, 'session_revoked', { ...context, actorId: principal.userId, sessionId: row.id })
     }),
     async reauthenticate(token: string, password: unknown, context: AuthContext = {}) {
       const initial = await withSession(token, [], async (_connection, principal) => principal)

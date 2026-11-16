@@ -12,6 +12,10 @@ This T00 inventory covers reuse of GenOffice's agent loop, editor tools and MCP 
 
 Read alongside [the implementation plan](../implementation-plan.md), [architecture](../architecture.md), [host inventory](host-dependencies.md) and [compatibility baseline](compatibility.md).
 
+## Current per-tool classification
+
+The [generated tool inventory](agent-tools.md) now enumerates 151 explicit tool definitions with reviewed live/headless/unsupported placement, Web seam and verification task. `node tools/dyoffice/agent-tool-inventory.mjs --check` rejects unknown/stale classifications and source/schema drift. This supersedes the earlier absence of a per-tool table, not the runtime/security limitations below.
+
 ## Reuse map
 
 | Surface | Evidence | Keep | Adapt |

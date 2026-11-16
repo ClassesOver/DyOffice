@@ -13,5 +13,5 @@
       "@genoffice/agent-core": ["../../packages/agent-core/src/index.ts"]
     }
   },
-  "include": ["../../packages/browser-host/src/**/*.ts", "../../packages/web-contracts/src/**/*.ts"]
+  "include": ["../../packages/browser-host/src/**/*.ts", "../../packages/web-contracts/src/**/*.ts", "test/unit/host-contract-types.ts"]
 }

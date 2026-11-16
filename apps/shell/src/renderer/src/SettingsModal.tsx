@@ -1786,6 +1786,7 @@ export interface WebSettingsPreferences {
   showAssistant: boolean
 }
 export interface WebSettingsAdapter {
+  accountLabel?: string
   account: ReactNode
   load(): Promise<WebSettingsPreferences>
   save(patch: Partial<WebSettingsPreferences>): Promise<WebSettingsPreferences>
@@ -2102,7 +2103,7 @@ export function SettingsModal({
                   {authorName.value || authorName.fallback || t('setSecAccount')}
                 </span>
                 <span className="set-nav-account-email">
-                  {web ? '个人工作区 · 开发访问' : loggedIn ? email : t('setNotLoggedIn')}
+                  {web ? (web.accountLabel ?? '个人工作区 · 开发访问') : loggedIn ? email : t('setNotLoggedIn')}
                 </span>
               </span>
             </button>

@@ -5,6 +5,8 @@ const MAX_SSE_EVENT_BYTES = 256 * 1024
 export interface SseTransportOptions {
   /** Origin-relative path only: no query, fragment, controls or redirects. */
   endpoint?: string
+  /** Absolute turn deadline, including headers and body. */
+  timeoutMs?: number
   fetchImpl?: typeof fetch
   createTurnId?: () => string
 }
@@ -16,6 +18,8 @@ export function createSseAgentTransport(options: SseTransportOptions = {}): Agen
       new URL(endpoint, 'https://dyoffice.invalid').origin !== 'https://dyoffice.invalid') {
     throw new Error('AI stream endpoint must be an origin-relative path')
   }
+  const timeoutMs = options.timeoutMs ?? 120_000
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0 || timeoutMs > 2_147_483_647) throw new Error('Invalid AI stream timeout')
   const fetchImpl = options.fetchImpl ?? fetch
   const createTurnId = options.createTurnId ?? (() => crypto.randomUUID())
   return {
@@ -24,9 +28,21 @@ export function createSseAgentTransport(options: SseTransportOptions = {}): Agen
       const controller = new AbortController()
       let finished = false
       let cancelled = false
+      let deadline: ReturnType<typeof setTimeout> | undefined
+      let reader: ReadableStreamDefaultReader<Uint8Array> | undefined
+      let cancellationSent = false
+      const requestCancellation = () => {
+        if (cancellationSent) return
+        cancellationSent = true
+        // Best effort only; the server must also impose its own deadline.
+        try { void fetchImpl(endpoint + '/' + encodeURIComponent(turnId) + '/cancel', {
+          method: 'POST', credentials: 'same-origin', mode: 'same-origin', redirect: 'error',
+        }).catch(() => {}) } catch { /* cancellation remains best effort */ }
+      }
       const finish = (error?: string) => {
         if (finished) return
         finished = true
+        clearTimeout(deadline)
         if (error && !cancelled) callbacks.onError(error)
         callbacks.onDone()
       }
@@ -46,14 +62,20 @@ export function createSseAgentTransport(options: SseTransportOptions = {}): Agen
         else if (event === 'error') finish(typeof data.message === 'string' ? data.message : 'AI stream failed')
         else if (event === 'done') finish()
       }
+      deadline = setTimeout(() => {
+        if (finished) return
+        controller.abort()
+        void reader?.cancel().catch(() => {})
+        requestCancellation()
+        finish('AI stream timed out')
+      }, timeoutMs)
       void (async () => {
-        let reader: ReadableStreamDefaultReader<Uint8Array> | undefined
         try {
           const response = await fetchImpl(endpoint, {
             method: 'POST',
             credentials: 'same-origin', mode: 'same-origin', redirect: 'error',
             headers: { Accept: 'text/event-stream', 'Content-Type': 'application/json' },
-            body: JSON.stringify({ turnId, request }),
+            body: JSON.stringify({ turnId, request: { system: request.system, messages: request.messages, tools: request.tools } }),
             signal: controller.signal,
           })
           if (!response.ok) throw new Error('AI stream HTTP ' + response.status)
@@ -106,9 +128,8 @@ export function createSseAgentTransport(options: SseTransportOptions = {}): Agen
           controller.abort()
           finish()
           // Aborting the response alone does not guarantee the server stopped the model.
-          void fetchImpl(endpoint + '/' + encodeURIComponent(turnId) + '/cancel', {
-            method: 'POST', credentials: 'same-origin', mode: 'same-origin', redirect: 'error',
-          }).catch(() => {})
+          void reader?.cancel().catch(() => {})
+          requestCancellation()
         },
       }
     },

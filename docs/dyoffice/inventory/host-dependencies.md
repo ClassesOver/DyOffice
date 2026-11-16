@@ -80,7 +80,9 @@ Notable findings that change downstream estimates:
 The classification is a **proposed design mapping**. A rule records where a call
 must run and why; it is not evidence that a Web adapter exists or works.
 
-## Remaining T00 audit before T01
+## Historical extended audit checklist
+
+Current source-gate results and unresolved runtime pinning are in [T00 closure review](../evidence/t00-closeout.md). This historical list includes later runtime/adapter acceptance and must not be treated as proof that those features work.
 
 - [ ] Enumerate all renderer calls into `window.desktop` / preload APIs for Docs, Sheets, Slides and PDF; record each signature, lifecycle and error mode. *Members, channels, lifecycle and call sites are recorded above; argument/return signatures and error modes (throw vs `null` vs `{ok:false}`) are not yet extracted.*
 - [ ] Classify every call as `browser-native`, `server-api`, `isolated-worker`, `unsupported` or `desktop-only`. Verify the mapping in code rather than guessing. *All 538 members have a proposed class; each is verified only by the adapter task named in its rule.*

@@ -4,8 +4,17 @@ import { createHash, randomUUID } from 'node:crypto'
 import { lifecycleFixture, responseAuth, origin } from '../helpers/lifecycle.mjs'
 import { password } from '../helpers/identity.mjs'
 
+// FORCE RLS applies to the non-BYPASS migration owner too. Test setup reads
+// must choose the exact new owner's scope; never grant the runtime a bypass.
+async function scopedWorkspaces(ownerDb, deploymentId, userId) {
+  return ownerDb.transaction(async connection => {
+    await connection.query("SELECT set_config('dyoffice.deployment_id',$1,true),set_config('dyoffice.user_id',$2,true)", [deploymentId, userId])
+    return connection.query('SELECT * FROM workspaces WHERE deployment_id=$1 AND owner_id=$2', [deploymentId, userId])
+  })
+}
+
 test('admin creates one normalized pending personal account/workspace and stores only activation hashes', async t => {
-  const { create, request, pool, deploymentId, login, redeem } = await lifecycleFixture(t)
+  const { create, request, pool, ownerDb, deploymentId, login, redeem } = await lifecycleFixture(t)
   const created = await create('  Alice.Example  ')
   assert.equal(created.user.username, 'alice.example')
   assert.equal(created.user.status, 'pending')
@@ -15,7 +24,8 @@ test('admin creates one normalized pending personal account/workspace and stores
   const stored = (await pool.query('SELECT * FROM password_action_tokens WHERE deployment_id=$1 AND user_id=$2', [deploymentId, created.user.id])).rows[0]
   assert.equal(stored.token_hash, createHash('sha256').update(created.action.token).digest('hex'))
   assert.equal(JSON.stringify(stored).includes(created.action.token), false)
-  assert.equal((await pool.query('SELECT * FROM workspaces WHERE deployment_id=$1 AND owner_id=$2', [deploymentId, created.user.id])).rowCount, 1)
+  assert.equal((await pool.query('SELECT * FROM workspaces WHERE deployment_id=$1 AND owner_id=$2', [deploymentId, created.user.id])).rowCount, 0)
+  assert.equal((await scopedWorkspaces(ownerDb, deploymentId, created.user.id)).rowCount, 1)
   const listed = await request('GET', '/api/v1/admin/users?limit=1')
   assert.equal(listed.statusCode, 200)
   assert.equal(listed.json().users.length, 1)
@@ -31,12 +41,13 @@ test('admin creates one normalized pending personal account/workspace and stores
 })
 
 test('duplicate usernames have one winner under concurrent admin creation and never double-provision', async t => {
-  const { request, pool, deploymentId } = await lifecycleFixture(t)
+  const { request, pool, ownerDb, deploymentId } = await lifecycleFixture(t)
   const outcomes = await Promise.all(['  Alice  ', 'alice'].map(username => request('POST', '/api/v1/admin/users', { username })))
   assert.deepEqual(outcomes.map(x => x.statusCode).sort(), [201, 409])
   const found = (await pool.query("SELECT id FROM users WHERE deployment_id=$1 AND username_normalized='alice'", [deploymentId])).rows
   assert.equal(found.length, 1)
-  assert.equal((await pool.query('SELECT * FROM workspaces WHERE deployment_id=$1 AND owner_id=$2', [deploymentId, found[0].id])).rowCount, 1)
+  assert.equal((await pool.query('SELECT * FROM workspaces WHERE deployment_id=$1 AND owner_id=$2', [deploymentId, found[0].id])).rowCount, 0)
+  assert.equal((await scopedWorkspaces(ownerDb, deploymentId, found[0].id)).rowCount, 1)
   assert.equal((await request('POST', '/api/v1/admin/users', { username: 'forged', roles: ['config_admin'] })).statusCode, 400)
 })
 
@@ -132,7 +143,7 @@ test('administrator authority revoked before a waiting mutation is revalidated u
     let waited = false
     const deadline = Date.now() + 4000
     while (Date.now() < deadline) {
-      if ((await f.pool.query("SELECT 1 FROM pg_stat_activity WHERE application_name=$1 AND wait_event_type='Lock'", [f.pool.options.application_name])).rowCount) { waited = true; break }
+      if ((await f.observer.query("SELECT 1 FROM pg_stat_activity WHERE application_name=$1 AND wait_event_type='Lock'", [f.authPool.options.application_name])).rowCount) { waited = true; break }
       await new Promise(resolve => setImmediate(resolve))
     }
     assert.equal(waited, true)

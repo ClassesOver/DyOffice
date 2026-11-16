@@ -8,6 +8,7 @@ export interface DocxBlockView {
   type: string
   text: string
   editable: boolean
+  cells?: string[][]
 }
 
 export interface DocxProjection {
@@ -20,7 +21,7 @@ export interface DocxCommitInput {
   baseRevision: string
   leaseEpoch: number
   idempotencyKey: string
-  blocks: Array<{ docxIndex?: number; text?: string; deleted?: boolean }>
+  blocks: Array<{ docxIndex?: number; text?: string; deleted?: boolean; cells?: string[][] }>
 }
 
 export interface HttpEditorHost extends BrowserHost {
@@ -37,12 +38,17 @@ function responseError(status: number): HostError {
   return hostError('INVALID_RESPONSE', 'request')
 }
 
+function isCells(value: unknown): value is string[][] {
+  return Array.isArray(value) && value.every((row) => Array.isArray(row) && row.every((cell) => typeof cell === 'string'))
+}
+
 function isBlock(value: unknown): value is DocxBlockView {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false
   const block = value as Record<string, unknown>
   return (block.docxIndex === undefined || (typeof block.docxIndex === 'number' && Number.isSafeInteger(block.docxIndex) && block.docxIndex >= 0)) &&
     typeof block.type === 'string' && block.type.length > 0 &&
-    typeof block.text === 'string' && typeof block.editable === 'boolean'
+    typeof block.text === 'string' && typeof block.editable === 'boolean' &&
+    (block.cells === undefined || isCells(block.cells))
 }
 
 /** BrowserHost plus the DOCX projection used by the Web editor. Saves stay on the authenticated same-origin API. */

@@ -2,7 +2,7 @@ import { createHmac } from 'node:crypto'
 import type { IdentityStore } from '../../db/identity.ts'
 import { normalizeUsername } from './passwords.ts'
 import { authError } from './sessions.ts'
-import { appendAuthEvent, type AuthContext } from './audit.ts'
+import { appendLoginAttempt, type AuthContext } from './audit.ts'
 
 export interface LoginLimits { accountMax?: number; ipMax?: number; globalMax?: number; windowMs?: number }
 export function createLoginThrottle(db: IdentityStore, deploymentId: string, key: string, config: LoginLimits = {}) {
@@ -36,7 +36,7 @@ export function createLoginThrottle(db: IdentityStore, deploymentId: string, key
           await connection.query('UPDATE login_throttles SET attempts=$1,window_started_at=$2,blocked_until=$3,strikes=$4 WHERE deployment_id=$5 AND kind=$6 AND key_hash=$7', [state.attempts, state.started, state.blockedUntil, state.strikes, deploymentId, state.item.kind, state.item.hash])
         }
         async function reject(retry: number) {
-          await appendAuthEvent(connection, deploymentId, 'login_throttled', { ...context, accountKey: account.hash })
+          await appendLoginAttempt(connection, deploymentId, 'login_throttled', username, { ...context, accountKey: account.hash })
           return retry
         }
         const globalState = await load(global)

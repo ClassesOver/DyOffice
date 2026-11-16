@@ -1,0 +1,13 @@
+# T15 pinned HTTPS JSON transport foundation
+
+This is a transport primitive, NOT a source authorization service. It is not registered on an API route. A future authenticated service must first resolve T12 versioned configuration/credentials and verify a dedicated source grant. Do not pass request JSON into its configuration constructor.
+
+Trusted operator configuration maps each source ID to one exact HTTPS URL and a nonempty exact IP allowlist. No wildcards/CIDRs or automatic acceptance of DNS results. Approved enterprise private IPs are possible; link-local, multicast, unspecified, IPv4-mapped IPv6 and known metadata addresses are refused. This is not an exhaustive cloud metadata discovery mechanism: operators must never approve sensitive endpoints.
+
+Every request resolves all DNS answers and refuses the request if any address is unapproved. The actual socket connects to the verified literal IP, with the original Host header and DNS TLS identity, preventing a second DNS lookup from substituting an unverified destination. New client/agent per request; no ambient proxy or pooled socket. URL userinfo is forbidden; redirects and compressed bodies are rejected. Only GET, JSON content type, HTTP 200, bounded raw UTF-8 JSON, bounded total time and caller cancellation are supported. There is no caller-selected URL, headers or body. Optional server-configured CA trust is explicit and does not disable certificate verification.
+
+Validation uses a real ephemeral HTTPS server with generated one-day test certificate, not only injected transport mocks. Test configuration explicitly approves localhost and its certificate; nothing is installed into global trust. Covered: IPv4, DNS and IPv6, unapproved target/DNS results, certificate rejection, redirects (one request only), oversized/invalid/truncated JSON, compressed response refusal, timeout, cancellation, configuration mutation and pre-abort. Four test groups pass. Independent review found an omitted AWS IPv6 metadata address; compressed/expanded regression failed before the explicit denial, then passed. Trusted-but-wrong certificate SAN also rejects. Strict standalone TypeScript check passes on Node 24.22.1.
+
+Limitations: no production source was contacted; no source credentials, T12 config UI, source grants, database driver or SQL permission mapping implemented. Full T15 remains open. Tests require OpenSSL and IPv6 loopback; unsupported environments should report failure rather than falsely pass. Actions unchanged, no CI result claimed.
+
+Node HTTPS request/TLS options reference: https://nodejs.org/download/release/latest-jod/docs/api/https.html

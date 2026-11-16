@@ -75,3 +75,17 @@ for (const backend of ['local-dev','s3']) test(`actual local server enables scop
   assert.deepEqual(Buffer.from(await (await fetch(address + opened.downloadEndpoint, { headers })).arrayBuffer()), bytes)
   child.kill('SIGTERM'); assert.deepEqual(await exited,[0,null])
 })
+
+
+test('auth-only app admits restricted auth and refuses table-owner connections', async t => {
+  const f = await restrictedFixture(t)
+  const { buildLocalApp } = await import('../../server/src/app.ts')
+  const options = { passwords: f.passwords, deploymentId: f.deploymentId, origin: restrictedOrigin, csrfKey: f.csrfKey }
+  let unexpected
+  try {
+    await assert.rejects(async () => { unexpected = await buildLocalApp({ ...options, db: f.ownerDb }) }, /Runtime role/)
+  } finally { await unexpected?.close() }
+  const app = await buildLocalApp({ ...options, db: f.db })
+  f.cleanup.push(() => app.close())
+  assert.equal((await app.inject({ method: 'GET', url: '/api/v1/auth/csrf' })).statusCode, 200)
+})

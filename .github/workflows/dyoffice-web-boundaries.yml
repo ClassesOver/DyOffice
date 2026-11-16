@@ -4,6 +4,7 @@ on:
   push:
     branches: [main, feat/dyoffice-web]
     paths:
+      - 'tools/dyoffice/runtime-lock*'
       - 'package.json'
       - 'package-lock.json'
       - 'LICENSE'
@@ -13,12 +14,15 @@ on:
       - 'apps/**'
       - 'packages/**'
       - 'tools/check-web-boundaries*'
+      - 'tools/run-web-unit.mjs'
       - 'tools/audit-web-host*'
       - 'tools/dyoffice/host-ipc-classification*'
       - 'docs/dyoffice/inventory/host-ipc*'
+      - 'docs/dyoffice/inventory/agent-tools*'
       - '.github/workflows/dyoffice-web-boundaries.yml'
   pull_request:
     paths:
+      - 'tools/dyoffice/runtime-lock*'
       - 'package.json'
       - 'package-lock.json'
       - 'LICENSE'
@@ -28,9 +32,11 @@ on:
       - 'apps/**'
       - 'packages/**'
       - 'tools/check-web-boundaries*'
+      - 'tools/run-web-unit.mjs'
       - 'tools/audit-web-host*'
       - 'tools/dyoffice/host-ipc-classification*'
       - 'docs/dyoffice/inventory/host-ipc*'
+      - 'docs/dyoffice/inventory/agent-tools*'
       - '.github/workflows/dyoffice-web-boundaries.yml'
   workflow_dispatch:
 
@@ -51,21 +57,36 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: 22
+          node-version: '22.23.5'
+      - name: Verify immutable Node runtime
+        run: node tools/dyoffice/runtime-lock.mjs --runtime
+      - name: Verify immutable host Node
+        run: node tools/dyoffice/host-runtime.mjs --node-only
       - name: Provision host database Redis and object storage
         run: sudo --preserve-env=GITHUB_ACTIONS bash tools/dyoffice/ci-host-services.sh --objectstore
+      - name: Verify actual host runtime
+        run: node tools/dyoffice/host-runtime.mjs --objectstore
       - name: Install workspace dependencies without launching Electron
         run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Verify wrong-database rejection in isolated PostgreSQL
+        env:
+          DYOFFICE_LEGACY_GUARD_TEST_DATABASE_URL: postgresql://postgres:dyoffice-ci-test-only@127.0.0.1:55432/dyoffice_test_legacy_guard
+        run: |
+          cd apps/web
+          node --input-type=module -e 'import { Pool } from "pg"; const p = new Pool({connectionString: process.env.DYOFFICE_TEST_DATABASE_URL}); try { await p.query("CREATE DATABASE dyoffice_test_legacy_guard"); } finally { await p.end(); }'
+          node --import tsx --test test/db-safety/*.test.mjs
       - name: Install Chromium for TLS session acceptance
         run: npm exec --workspace @dyoffice/web -- playwright install chromium --with-deps
       - name: Test compatibility baseline and CI coverage
         run: node --test tools/dyoffice/*.test.mjs
+      - name: Check reviewed Agent and MCP tool placements
+        run: node tools/dyoffice/agent-tool-inventory.mjs --check
       - name: Reject unreviewed dependency and font baseline drift
         run: node tools/dyoffice/compatibility-baseline.mjs --check
       - name: Test browser dependency gate
         run: node --test tools/check-web-boundaries.test.mjs
       - name: Test BrowserHost contracts
-        run: node --experimental-strip-types --test apps/web/test/unit/host-contract.test.mjs
+        run: npm run test:web:unit -- host-contract.test.mjs
       - name: Test Argon2 password policy and bounded work
         run: node --experimental-strip-types --test apps/web/test/unit/passwords.test.mjs
       - name: Test SSE AgentTransport adapter
@@ -92,6 +113,17 @@ jobs:
         run: npm run typecheck:web
       - name: Build and HTTP smoke test the Web prototype
         run: npm run test:web:build
+      - name: Build the original Home and Settings local-account entry
+        run: cd apps/web && npx --no-install vite build --config vite.local-shell.config.mjs
+      - name: Verify local login Home Settings and ownership in Chromium
+        run: cd apps/web && node --import tsx --test test/local-browser/*.test.mjs
+      - name: Retain real local-account Home and Settings screenshots
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: local-account-original-shell
+          path: apps/web/test-results/local-shell-*.png
+          if-no-files-found: warn
       - name: Test isolated local account and revision runtime
         run: npm run test:web:integration:local
       - name: Test durable PostgreSQL jobs and real BullMQ recovery
@@ -107,6 +139,26 @@ jobs:
       - name: Test legacy routes on the Fastify shell
         run: npm run test:web:integration -- test/integration/route-cutover.test.mjs
 
+      - name: Measure small synthetic local API baseline
+        env:
+          DYOFFICE_RUN_PERFORMANCE_BASELINE: synthetic-ci-only
+        run: cd apps/web && node --import tsx --test test/performance/api-baseline.test.mjs
+      - name: Retain small API baseline (not capacity acceptance)
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: t00-small-api-baseline
+          path: apps/web/test-results/performance-baseline.json
+          if-no-files-found: warn
+
+      - name: Retain host runtime provenance
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: host-runtime-boundary-check
+          path: .dyoffice-runtime-evidence/host-runtime.json
+          if-no-files-found: warn
+
   native-docx:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
@@ -116,9 +168,15 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: 22
+          node-version: '22.23.5'
+      - name: Verify immutable Node runtime
+        run: node tools/dyoffice/runtime-lock.mjs --runtime
+      - name: Verify immutable host Node
+        run: node tools/dyoffice/host-runtime.mjs --node-only
       - name: Provision host database and Redis
         run: sudo --preserve-env=GITHUB_ACTIONS bash tools/dyoffice/ci-host-services.sh
+      - name: Verify actual host runtime
+        run: node tools/dyoffice/host-runtime.mjs
       - name: Install renderer sources without Electron lifecycle scripts
         run: npm ci --ignore-scripts --include=dev
       - name: Install Chromium
@@ -131,6 +189,14 @@ jobs:
         run: npm test --workspace @genoffice/docs
       - name: Regress original DOCX engine
         run: npm test --workspace @genoffice/docx-engine
+
+      - name: Retain host runtime provenance
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: host-runtime-native-docx
+          path: .dyoffice-runtime-evidence/host-runtime.json
+          if-no-files-found: warn
 
   native-worker:
     runs-on: ubuntu-24.04
@@ -147,13 +213,19 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: 22
+          node-version: '22.23.5'
+      - name: Verify immutable Node runtime
+        run: node tools/dyoffice/runtime-lock.mjs --runtime
+      - name: Verify immutable host Node
+        run: node tools/dyoffice/host-runtime.mjs --node-only
       - name: Install Web dependencies without Electron
         run: npm ci --prefix apps/web --workspaces=false --ignore-scripts --include=dev
       - name: Provision independent host database and Redis
         run: sudo --preserve-env=GITHUB_ACTIONS bash tools/dyoffice/ci-host-services.sh --objectstore
       - name: Install pinned Rust toolchain
         run: rustup toolchain install 1.93.0 --profile minimal
+      - name: Verify actual native host runtime
+        run: node tools/dyoffice/host-runtime.mjs --objectstore --native
       - name: Compile original locked Rust engine and bounded native transport
         run: npm run build:web:native -- --with-probe
       - name: Typecheck worker adapters
@@ -163,6 +235,13 @@ jobs:
       - name: Test real native job output, cancellation, recovery and BullMQ redelivery
         run: sudo --preserve-env=PATH,DYOFFICE_TEST_HOST_MANIFEST,DYOFFICE_TEST_DATABASE_URL,DYOFFICE_TEST_REDIS_URL,DYOFFICE_TEST_S3_ENDPOINT,DYOFFICE_TEST_S3_ACCESS_KEY,DYOFFICE_TEST_S3_SECRET_KEY npm run test:web:native-jobs
 
+      - name: Retain host runtime provenance
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: host-runtime-native-worker
+          path: .dyoffice-runtime-evidence/host-runtime.json
+          if-no-files-found: warn
 
   native-sheets:
     runs-on: ubuntu-24.04

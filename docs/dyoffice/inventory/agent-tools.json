@@ -1,0 +1,1063 @@
+{
+  "schema": 1,
+  "status": "proposed-placement-not-runtime-capability",
+  "tools": [
+    {
+      "id": "apps/docs/src/renderer/ai/floating-ops.ts#insert_picture",
+      "placement": "live",
+      "web": "Authorized active-editor tool dispatcher",
+      "verifyIn": "T14",
+      "rationale": "Executor consumes active document/selection or editor-owned state; no silent headless fallback."
+    },
+    {
+      "id": "apps/docs/src/renderer/ai/floating-ops.ts#insert_text_box",
+      "placement": "live",
+      "web": "Authorized active-editor tool dispatcher",
+      "verifyIn": "T14",
+      "rationale": "Executor consumes active document/selection or editor-owned state; no silent headless fallback."
+    },
+    {
+      "id": "apps/docs/src/renderer/ai/floating-ops.ts#set_watermark",
+      "placement": "live",
+      "web": "Authorized active-editor tool dispatcher",
+      "verifyIn": "T14",
+      "rationale": "Executor consumes active document/selection or editor-owned state; no silent headless fallback."
+    },
+    {
+      "id": "apps/docs/src/renderer/ai/page-setup.ts#insert_section_break",
+      "placement": "live",
+      "web": "Authorized active-editor tool dispatcher",
+      "verifyIn": "T14",
+      "rationale": "Executor consumes active document/selection or editor-owned state; no silent headless fallback."
+    },
+    {
+      "id": "apps/docs/src/renderer/ai/page-setup.ts#set_page_setup",
+      "placement": "live",
+      "web": "Authorized active-editor tool dispatcher",
+      "verifyIn": "T14",
+      "rationale": "Executor consumes active document/selection or editor-owned state; no silent headless fallback."
+    },
+    {
+      "id": "apps/docs/src/renderer/ai/skills-skill.ts#run_cli",
+      "placement": "unsupported",
+      "web": "No Web exposure; return explicit unsupported",
+      "verifyIn": "T19",
+      "rationale": "Desktop app/process or non-four-format facility is not an authorized Web capability; do not forward arbitrary local commands."
+    },
+    {
+      "id": "apps/docs/src/renderer/ai/style-ops.ts#define_style",
+      "placement": "live",
+      "web": "Authorized active-editor tool dispatcher",
+      "verifyIn": "T14",
+      "rationale": "Executor consumes active document/selection or editor-owned state; no silent headless fallback."
+    },
+    {
+      "id": "apps/docs/src/renderer/ai/style-ops.ts#list_styles",
+      "placement": "live",
+      "web": "Authorized active-editor tool dispatcher",
+      "verifyIn": "T14",
+      "rationale": "Executor consumes active document/selection or editor-owned state; no silent headless fallback."
+    },
+    {
+      "id": "apps/docs/src/renderer/ai/tools.ts#accept_changes",
+      "placement": "live",
+      "web": "Authorized active-editor tool dispatcher",
+      "verifyIn": "T14",
+      "rationale": "Executor consumes active document/selection or editor-owned state; no silent headless fallback."
+    },
+    {
+      "id": "apps/docs/src/renderer/ai/tools.ts#add_comment",
+      "placement": "live",
+      "web": "Authorized active-editor tool dispatcher",
+      "verifyIn": "T14",
+      "rationale": "Executor consumes active document/selection or editor-owned state; no silent headless fallback."
+    },
+    {
+      "id": "apps/docs/src/renderer/ai/tools.ts#analyze_media",
+      "placement": "headless",
+      "web": "Server Provider Gateway with Admin policy",
+      "verifyIn": "T13",
+      "rationale": "Credentials, search/media requests and egress policy belong on the server; returned edits still require an active editor."
+    },
+    {
+      "id": "apps/docs/src/renderer/ai/tools.ts#apply_ops",
+      "placement": "live",
+      "web": "Authorized active-editor tool dispatcher",
+      "verifyIn": "T14",
+      "rationale": "Executor consumes active document/selection or editor-owned state; no silent headless fallback."
+    },
+    {
+      "id": "apps/docs/src/renderer/ai/tools.ts#create_document",
+      "placement": "headless",
+      "web": "Isolated original-engine job plus revision commit",
+      "verifyIn": "T08",
+      "rationale": "Reuse original native/CLI/document operation with fixed executables, scoped artifacts and resource limits; output is not a committed revision."
+    },
+    {
+      "id": "apps/docs/src/renderer/ai/tools.ts#delete_comment",
+      "placement": "live",
+      "web": "Authorized active-editor tool dispatcher",
+      "verifyIn": "T14",
+      "rationale": "Executor consumes active document/selection or editor-owned state; no silent headless fallback."
+    },
+    {
+      "id": "apps/docs/src/renderer/ai/tools.ts#delete_note",
+      "placement": "live",
+      "web": "Authorized active-editor tool dispatcher",
+      "verifyIn": "T14",
+      "rationale": "Executor consumes active document/selection or editor-owned state; no silent headless fallback."
+    },
+    {
+      "id": "apps/docs/src/renderer/ai/tools.ts#edit_chart",
+      "placement": "live",
+      "web": "Authorized active-editor tool dispatcher",
+      "verifyIn": "T14",
+      "rationale": "Executor consumes active document/selection or editor-owned state; no silent headless fallback."
+    },
+    {
+      "id": "apps/docs/src/renderer/ai/tools.ts#edit_note",
+      "placement": "live",
+      "web": "Authorized active-editor tool dispatcher",
+      "verifyIn": "T14",
+      "rationale": "Executor consumes active document/selection or editor-owned state; no silent headless fallback."
+    },
+    {
+      "id": "apps/docs/src/renderer/ai/tools.ts#generate_image",
+      "placement": "headless",
+      "web": "Server Provider Gateway with Admin policy",
+      "verifyIn": "T13",
+      "rationale": "Credentials, search/media requests and egress policy belong on the server; returned edits still require an active editor."
+    },
+    {
+      "id": "apps/docs/src/renderer/ai/tools.ts#get_document_context",
+      "placement": "live",
+      "web": "Authorized active-editor tool dispatcher",
+      "verifyIn": "T14",
+      "rationale": "Executor consumes active document/selection or editor-owned state; no silent headless fallback."
+    },
+    {
+      "id": "apps/docs/src/renderer/ai/tools.ts#image_search",
+      "placement": "headless",
+      "web": "Server Provider Gateway with Admin policy",
+      "verifyIn": "T13",
+      "rationale": "Credentials, search/media requests and egress policy belong on the server; returned edits still require an active editor."
+    },
+    {
+      "id": "apps/docs/src/renderer/ai/tools.ts#insert_chart",
+      "placement": "live",
+      "web": "Authorized active-editor tool dispatcher",
+      "verifyIn": "T14",
+      "rationale": "Executor consumes active document/selection or editor-owned state; no silent headless fallback."
+    },
+    {
+      "id": "apps/docs/src/renderer/ai/tools.ts#insert_content",
+      "placement": "live",
+      "web": "Authorized active-editor tool dispatcher",
+      "verifyIn": "T14",
+      "rationale": "Executor consumes active document/selection or editor-owned state; no silent headless fallback."
+    },
+    {
+      "id": "apps/docs/src/renderer/ai/tools.ts#insert_endnote",
+      "placement": "live",
+      "web": "Authorized active-editor tool dispatcher",
+      "verifyIn": "T14",
+      "rationale": "Executor consumes active document/selection or editor-owned state; no silent headless fallback."
+    },
+    {
+      "id": "apps/docs/src/renderer/ai/tools.ts#insert_footnote",
+      "placement": "live",
+      "web": "Authorized active-editor tool dispatcher",
+      "verifyIn": "T14",
+      "rationale": "Executor consumes active document/selection or editor-owned state; no silent headless fallback."
+    },
+    {
+      "id": "apps/docs/src/renderer/ai/tools.ts#insert_image",
+      "placement": "live",
+      "web": "Authorized active-editor tool dispatcher",
+      "verifyIn": "T14",
+      "rationale": "Executor consumes active document/selection or editor-owned state; no silent headless fallback."
+    },
+    {
+      "id": "apps/docs/src/renderer/ai/tools.ts#read_blocks",
+      "placement": "live",
+      "web": "Authorized active-editor tool dispatcher",
+      "verifyIn": "T14",
+      "rationale": "Executor consumes active document/selection or editor-owned state; no silent headless fallback."
+    },
+    {
+      "id": "apps/docs/src/renderer/ai/tools.ts#read_comments",
+      "placement": "live",
+      "web": "Authorized active-editor tool dispatcher",
+      "verifyIn": "T14",
+      "rationale": "Executor consumes active document/selection or editor-owned state; no silent headless fallback."
+    },
+    {
+      "id": "apps/docs/src/renderer/ai/tools.ts#read_notes",
+      "placement": "live",
+      "web": "Authorized active-editor tool dispatcher",
+      "verifyIn": "T14",
+      "rationale": "Executor consumes active document/selection or editor-owned state; no silent headless fallback."
+    },
+    {
+      "id": "apps/docs/src/renderer/ai/tools.ts#read_revisions",
+      "placement": "live",
+      "web": "Authorized active-editor tool dispatcher",
+      "verifyIn": "T14",
+      "rationale": "Executor consumes active document/selection or editor-owned state; no silent headless fallback."
+    },
+    {
+      "id": "apps/docs/src/renderer/ai/tools.ts#reject_changes",
+      "placement": "live",
+      "web": "Authorized active-editor tool dispatcher",
+      "verifyIn": "T14",
+      "rationale": "Executor consumes active document/selection or editor-owned state; no silent headless fallback."
+    },
+    {
+      "id": "apps/docs/src/renderer/ai/tools.ts#replace_blocks",
+      "placement": "live",
+      "web": "Authorized active-editor tool dispatcher",
+      "verifyIn": "T14",
+      "rationale": "Executor consumes active document/selection or editor-owned state; no silent headless fallback."
+    },
+    {
+      "id": "apps/docs/src/renderer/ai/tools.ts#replace_selection",
+      "placement": "live",
+      "web": "Authorized active-editor tool dispatcher",
+      "verifyIn": "T14",
+      "rationale": "Executor consumes active document/selection or editor-owned state; no silent headless fallback."
+    },
+    {
+      "id": "apps/docs/src/renderer/ai/tools.ts#reply_comment",
+      "placement": "live",
+      "web": "Authorized active-editor tool dispatcher",
+      "verifyIn": "T14",
+      "rationale": "Executor consumes active document/selection or editor-owned state; no silent headless fallback."
+    },
+    {
+      "id": "apps/docs/src/renderer/ai/tools.ts#resolve_comment",
+      "placement": "live",
+      "web": "Authorized active-editor tool dispatcher",
+      "verifyIn": "T14",
+      "rationale": "Executor consumes active document/selection or editor-owned state; no silent headless fallback."
+    },
+    {
+      "id": "apps/docs/src/renderer/ai/tools.ts#set_header_footer",
+      "placement": "live",
+      "web": "Authorized active-editor tool dispatcher",
+      "verifyIn": "T14",
+      "rationale": "Executor consumes active document/selection or editor-owned state; no silent headless fallback."
+    },
+    {
+      "id": "apps/docs/src/renderer/ai/tools.ts#web_search",
+      "placement": "headless",
+      "web": "Server Provider Gateway with Admin policy",
+      "verifyIn": "T13",
+      "rationale": "Credentials, search/media requests and egress policy belong on the server; returned edits still require an active editor."
+    },
+    {
+      "id": "apps/docs/src/renderer/ai/tools.ts#write_document",
+      "placement": "live",
+      "web": "Authorized active-editor tool dispatcher",
+      "verifyIn": "T14",
+      "rationale": "Executor consumes active document/selection or editor-owned state; no silent headless fallback."
+    },
+    {
+      "id": "apps/pdf/src/renderer/ai/tools.ts#add_form_mark",
+      "placement": "live",
+      "web": "Authorized active-editor tool dispatcher",
+      "verifyIn": "T14",
+      "rationale": "Executor consumes active document/selection or editor-owned state; no silent headless fallback."
+    },
+    {
+      "id": "apps/pdf/src/renderer/ai/tools.ts#add_note",
+      "placement": "live",
+      "web": "Authorized active-editor tool dispatcher",
+      "verifyIn": "T14",
+      "rationale": "Executor consumes active document/selection or editor-owned state; no silent headless fallback."
+    },
+    {
+      "id": "apps/pdf/src/renderer/ai/tools.ts#apply_ops",
+      "placement": "live",
+      "web": "Authorized active-editor tool dispatcher",
+      "verifyIn": "T14",
+      "rationale": "Executor consumes active document/selection or editor-owned state; no silent headless fallback."
+    },
+    {
+      "id": "apps/pdf/src/renderer/ai/tools.ts#create_document",
+      "placement": "headless",
+      "web": "Isolated original-engine job plus revision commit",
+      "verifyIn": "T08",
+      "rationale": "Reuse original native/CLI/document operation with fixed executables, scoped artifacts and resource limits; output is not a committed revision."
+    },
+    {
+      "id": "apps/pdf/src/renderer/ai/tools.ts#crop_image",
+      "placement": "live",
+      "web": "Authorized active-editor tool dispatcher",
+      "verifyIn": "T14",
+      "rationale": "Executor consumes active document/selection or editor-owned state; no silent headless fallback."
+    },
+    {
+      "id": "apps/pdf/src/renderer/ai/tools.ts#crop_pages",
+      "placement": "live",
+      "web": "Authorized active-editor tool dispatcher",
+      "verifyIn": "T14",
+      "rationale": "Executor consumes active document/selection or editor-owned state; no silent headless fallback."
+    },
+    {
+      "id": "apps/pdf/src/renderer/ai/tools.ts#delete_image",
+      "placement": "live",
+      "web": "Authorized active-editor tool dispatcher",
+      "verifyIn": "T14",
+      "rationale": "Executor consumes active document/selection or editor-owned state; no silent headless fallback."
+    },
+    {
+      "id": "apps/pdf/src/renderer/ai/tools.ts#delete_inserted_text",
+      "placement": "live",
+      "web": "Authorized active-editor tool dispatcher",
+      "verifyIn": "T14",
+      "rationale": "Executor consumes active document/selection or editor-owned state; no silent headless fallback."
+    },
+    {
+      "id": "apps/pdf/src/renderer/ai/tools.ts#delete_markup",
+      "placement": "live",
+      "web": "Authorized active-editor tool dispatcher",
+      "verifyIn": "T14",
+      "rationale": "Executor consumes active document/selection or editor-owned state; no silent headless fallback."
+    },
+    {
+      "id": "apps/pdf/src/renderer/ai/tools.ts#delete_note",
+      "placement": "live",
+      "web": "Authorized active-editor tool dispatcher",
+      "verifyIn": "T14",
+      "rationale": "Executor consumes active document/selection or editor-owned state; no silent headless fallback."
+    },
+    {
+      "id": "apps/pdf/src/renderer/ai/tools.ts#edit_block",
+      "placement": "live",
+      "web": "Authorized active-editor tool dispatcher",
+      "verifyIn": "T14",
+      "rationale": "Executor consumes active document/selection or editor-owned state; no silent headless fallback."
+    },
+    {
+      "id": "apps/pdf/src/renderer/ai/tools.ts#edit_inserted_text",
+      "placement": "live",
+      "web": "Authorized active-editor tool dispatcher",
+      "verifyIn": "T14",
+      "rationale": "Executor consumes active document/selection or editor-owned state; no silent headless fallback."
+    },
+    {
+      "id": "apps/pdf/src/renderer/ai/tools.ts#edit_note",
+      "placement": "live",
+      "web": "Authorized active-editor tool dispatcher",
+      "verifyIn": "T14",
+      "rationale": "Executor consumes active document/selection or editor-owned state; no silent headless fallback."
+    },
+    {
+      "id": "apps/pdf/src/renderer/ai/tools.ts#edit_text",
+      "placement": "live",
+      "web": "Authorized active-editor tool dispatcher",
+      "verifyIn": "T14",
+      "rationale": "Executor consumes active document/selection or editor-owned state; no silent headless fallback."
+    },
+    {
+      "id": "apps/pdf/src/renderer/ai/tools.ts#extract_pages",
+      "placement": "live",
+      "web": "Authorized active-editor tool dispatcher",
+      "verifyIn": "T14",
+      "rationale": "Executor consumes active document/selection or editor-owned state; no silent headless fallback."
+    },
+    {
+      "id": "apps/pdf/src/renderer/ai/tools.ts#find_sensitive_info",
+      "placement": "live",
+      "web": "Authorized active-editor tool dispatcher",
+      "verifyIn": "T14",
+      "rationale": "Executor consumes active document/selection or editor-owned state; no silent headless fallback."
+    },
+    {
+      "id": "apps/pdf/src/renderer/ai/tools.ts#flip_image",
+      "placement": "live",
+      "web": "Authorized active-editor tool dispatcher",
+      "verifyIn": "T14",
+      "rationale": "Executor consumes active document/selection or editor-owned state; no silent headless fallback."
+    },
+    {
+      "id": "apps/pdf/src/renderer/ai/tools.ts#generate_image",
+      "placement": "headless",
+      "web": "Server Provider Gateway with Admin policy",
+      "verifyIn": "T13",
+      "rationale": "Credentials, search/media requests and egress policy belong on the server; returned edits still require an active editor."
+    },
+    {
+      "id": "apps/pdf/src/renderer/ai/tools.ts#get_outline",
+      "placement": "live",
+      "web": "Authorized active-editor tool dispatcher",
+      "verifyIn": "T14",
+      "rationale": "Executor consumes active document/selection or editor-owned state; no silent headless fallback."
+    },
+    {
+      "id": "apps/pdf/src/renderer/ai/tools.ts#goto_page",
+      "placement": "live",
+      "web": "Authorized active-editor tool dispatcher",
+      "verifyIn": "T14",
+      "rationale": "Executor consumes active document/selection or editor-owned state; no silent headless fallback."
+    },
+    {
+      "id": "apps/pdf/src/renderer/ai/tools.ts#image_search",
+      "placement": "headless",
+      "web": "Server Provider Gateway with Admin policy",
+      "verifyIn": "T13",
+      "rationale": "Credentials, search/media requests and egress policy belong on the server; returned edits still require an active editor."
+    },
+    {
+      "id": "apps/pdf/src/renderer/ai/tools.ts#insert_blank_page",
+      "placement": "live",
+      "web": "Authorized active-editor tool dispatcher",
+      "verifyIn": "T14",
+      "rationale": "Executor consumes active document/selection or editor-owned state; no silent headless fallback."
+    },
+    {
+      "id": "apps/pdf/src/renderer/ai/tools.ts#insert_image",
+      "placement": "live",
+      "web": "Authorized active-editor tool dispatcher",
+      "verifyIn": "T14",
+      "rationale": "Executor consumes active document/selection or editor-owned state; no silent headless fallback."
+    },
+    {
+      "id": "apps/pdf/src/renderer/ai/tools.ts#insert_text",
+      "placement": "live",
+      "web": "Authorized active-editor tool dispatcher",
+      "verifyIn": "T14",
+      "rationale": "Executor consumes active document/selection or editor-owned state; no silent headless fallback."
+    },
+    {
+      "id": "apps/pdf/src/renderer/ai/tools.ts#list_form_fields",
+      "placement": "live",
+      "web": "Authorized active-editor tool dispatcher",
+      "verifyIn": "T14",
+      "rationale": "Executor consumes active document/selection or editor-owned state; no silent headless fallback."
+    },
+    {
+      "id": "apps/pdf/src/renderer/ai/tools.ts#list_inserted_text",
+      "placement": "live",
+      "web": "Authorized active-editor tool dispatcher",
+      "verifyIn": "T14",
+      "rationale": "Executor consumes active document/selection or editor-owned state; no silent headless fallback."
+    },
+    {
+      "id": "apps/pdf/src/renderer/ai/tools.ts#list_page_images",
+      "placement": "live",
+      "web": "Authorized active-editor tool dispatcher",
+      "verifyIn": "T14",
+      "rationale": "Executor consumes active document/selection or editor-owned state; no silent headless fallback."
+    },
+    {
+      "id": "apps/pdf/src/renderer/ai/tools.ts#markup_text",
+      "placement": "live",
+      "web": "Authorized active-editor tool dispatcher",
+      "verifyIn": "T14",
+      "rationale": "Executor consumes active document/selection or editor-owned state; no silent headless fallback."
+    },
+    {
+      "id": "apps/pdf/src/renderer/ai/tools.ts#merge_pages",
+      "placement": "live",
+      "web": "Authorized active-editor tool dispatcher",
+      "verifyIn": "T14",
+      "rationale": "Executor consumes active document/selection or editor-owned state; no silent headless fallback."
+    },
+    {
+      "id": "apps/pdf/src/renderer/ai/tools.ts#move_inserted_text",
+      "placement": "live",
+      "web": "Authorized active-editor tool dispatcher",
+      "verifyIn": "T14",
+      "rationale": "Executor consumes active document/selection or editor-owned state; no silent headless fallback."
+    },
+    {
+      "id": "apps/pdf/src/renderer/ai/tools.ts#move_text_block",
+      "placement": "live",
+      "web": "Authorized active-editor tool dispatcher",
+      "verifyIn": "T14",
+      "rationale": "Executor consumes active document/selection or editor-owned state; no silent headless fallback."
+    },
+    {
+      "id": "apps/pdf/src/renderer/ai/tools.ts#read_annotations",
+      "placement": "live",
+      "web": "Authorized active-editor tool dispatcher",
+      "verifyIn": "T14",
+      "rationale": "Executor consumes active document/selection or editor-owned state; no silent headless fallback."
+    },
+    {
+      "id": "apps/pdf/src/renderer/ai/tools.ts#read_pages",
+      "placement": "live",
+      "web": "Authorized active-editor tool dispatcher",
+      "verifyIn": "T14",
+      "rationale": "Executor consumes active document/selection or editor-owned state; no silent headless fallback."
+    },
+    {
+      "id": "apps/pdf/src/renderer/ai/tools.ts#remove_image_background",
+      "placement": "live",
+      "web": "Authorized active-editor tool dispatcher",
+      "verifyIn": "T14",
+      "rationale": "Executor consumes active document/selection or editor-owned state; no silent headless fallback."
+    },
+    {
+      "id": "apps/pdf/src/renderer/ai/tools.ts#replace_image",
+      "placement": "live",
+      "web": "Authorized active-editor tool dispatcher",
+      "verifyIn": "T14",
+      "rationale": "Executor consumes active document/selection or editor-owned state; no silent headless fallback."
+    },
+    {
+      "id": "apps/pdf/src/renderer/ai/tools.ts#replace_pages",
+      "placement": "live",
+      "web": "Authorized active-editor tool dispatcher",
+      "verifyIn": "T14",
+      "rationale": "Executor consumes active document/selection or editor-owned state; no silent headless fallback."
+    },
+    {
+      "id": "apps/pdf/src/renderer/ai/tools.ts#reply_note",
+      "placement": "live",
+      "web": "Authorized active-editor tool dispatcher",
+      "verifyIn": "T14",
+      "rationale": "Executor consumes active document/selection or editor-owned state; no silent headless fallback."
+    },
+    {
+      "id": "apps/pdf/src/renderer/ai/tools.ts#rotate_image",
+      "placement": "live",
+      "web": "Authorized active-editor tool dispatcher",
+      "verifyIn": "T14",
+      "rationale": "Executor consumes active document/selection or editor-owned state; no silent headless fallback."
+    },
+    {
+      "id": "apps/pdf/src/renderer/ai/tools.ts#search_text",
+      "placement": "live",
+      "web": "Authorized active-editor tool dispatcher",
+      "verifyIn": "T14",
+      "rationale": "Executor consumes active document/selection or editor-owned state; no silent headless fallback."
+    },
+    {
+      "id": "apps/pdf/src/renderer/ai/tools.ts#set_header_footer",
+      "placement": "live",
+      "web": "Authorized active-editor tool dispatcher",
+      "verifyIn": "T14",
+      "rationale": "Executor consumes active document/selection or editor-owned state; no silent headless fallback."
+    },
+    {
+      "id": "apps/pdf/src/renderer/ai/tools.ts#set_image_opacity",
+      "placement": "live",
+      "web": "Authorized active-editor tool dispatcher",
+      "verifyIn": "T14",
+      "rationale": "Executor consumes active document/selection or editor-owned state; no silent headless fallback."
+    },
+    {
+      "id": "apps/pdf/src/renderer/ai/tools.ts#set_page_size",
+      "placement": "live",
+      "web": "Authorized active-editor tool dispatcher",
+      "verifyIn": "T14",
+      "rationale": "Executor consumes active document/selection or editor-owned state; no silent headless fallback."
+    },
+    {
+      "id": "apps/pdf/src/renderer/ai/tools.ts#set_watermark",
+      "placement": "live",
+      "web": "Authorized active-editor tool dispatcher",
+      "verifyIn": "T14",
+      "rationale": "Executor consumes active document/selection or editor-owned state; no silent headless fallback."
+    },
+    {
+      "id": "apps/pdf/src/renderer/ai/tools.ts#split_pages",
+      "placement": "live",
+      "web": "Authorized active-editor tool dispatcher",
+      "verifyIn": "T14",
+      "rationale": "Executor consumes active document/selection or editor-owned state; no silent headless fallback."
+    },
+    {
+      "id": "apps/pdf/src/renderer/ai/tools.ts#split_pdf",
+      "placement": "live",
+      "web": "Authorized active-editor tool dispatcher",
+      "verifyIn": "T14",
+      "rationale": "Executor consumes active document/selection or editor-owned state; no silent headless fallback."
+    },
+    {
+      "id": "apps/pdf/src/renderer/ai/tools.ts#transform_image",
+      "placement": "live",
+      "web": "Authorized active-editor tool dispatcher",
+      "verifyIn": "T14",
+      "rationale": "Executor consumes active document/selection or editor-owned state; no silent headless fallback."
+    },
+    {
+      "id": "apps/sheets/src/renderer/ai/files-skill.ts#read_attachment",
+      "placement": "headless",
+      "web": "Owner-scoped artifact/knowledge service",
+      "verifyIn": "T16",
+      "rationale": "Replace local paths with authorized artifact ids and enforce retrieval ownership; no raw desktop filesystem access."
+    },
+    {
+      "id": "apps/sheets/src/renderer/ai/image-skill.ts#generate_image",
+      "placement": "headless",
+      "web": "Server Provider Gateway with Admin policy",
+      "verifyIn": "T13",
+      "rationale": "Credentials, search/media requests and egress policy belong on the server; returned edits still require an active editor."
+    },
+    {
+      "id": "apps/sheets/src/renderer/ai/image-skill.ts#image_search",
+      "placement": "headless",
+      "web": "Server Provider Gateway with Admin policy",
+      "verifyIn": "T13",
+      "rationale": "Credentials, search/media requests and egress policy belong on the server; returned edits still require an active editor."
+    },
+    {
+      "id": "apps/sheets/src/renderer/ai/merge-skill.ts#merge_attached_workbooks",
+      "placement": "headless",
+      "web": "Isolated original-engine job plus revision commit",
+      "verifyIn": "T08",
+      "rationale": "Reuse original native/CLI/document operation with fixed executables, scoped artifacts and resource limits; output is not a committed revision."
+    },
+    {
+      "id": "apps/sheets/src/renderer/ai/search-skill.ts#web_search",
+      "placement": "headless",
+      "web": "Server Provider Gateway with Admin policy",
+      "verifyIn": "T13",
+      "rationale": "Credentials, search/media requests and egress policy belong on the server; returned edits still require an active editor."
+    },
+    {
+      "id": "apps/sheets/src/renderer/ai/tools.ts#aggregate_range",
+      "placement": "live",
+      "web": "Authorized active-editor tool dispatcher",
+      "verifyIn": "T14",
+      "rationale": "Executor consumes active document/selection or editor-owned state; no silent headless fallback."
+    },
+    {
+      "id": "apps/sheets/src/renderer/ai/tools.ts#create_document",
+      "placement": "headless",
+      "web": "Isolated original-engine job plus revision commit",
+      "verifyIn": "T08",
+      "rationale": "Reuse original native/CLI/document operation with fixed executables, scoped artifacts and resource limits; output is not a committed revision."
+    },
+    {
+      "id": "apps/sheets/src/renderer/ai/tools.ts#find_cells",
+      "placement": "live",
+      "web": "Authorized active-editor tool dispatcher",
+      "verifyIn": "T14",
+      "rationale": "Executor consumes active document/selection or editor-owned state; no silent headless fallback."
+    },
+    {
+      "id": "apps/sheets/src/renderer/ai/tools.ts#get_workbook_context",
+      "placement": "live",
+      "web": "Authorized active-editor tool dispatcher",
+      "verifyIn": "T14",
+      "rationale": "Executor consumes active document/selection or editor-owned state; no silent headless fallback."
+    },
+    {
+      "id": "apps/sheets/src/renderer/ai/tools.ts#load_guide",
+      "placement": "headless",
+      "web": "Read-only bundled guide service",
+      "verifyIn": "T14",
+      "rationale": "Static guide lookup can run without an editor; preserve original allowed-domain/content limits."
+    },
+    {
+      "id": "apps/sheets/src/renderer/ai/tools.ts#propose_operations",
+      "placement": "live",
+      "web": "Authorized active-editor tool dispatcher",
+      "verifyIn": "T14",
+      "rationale": "Executor consumes active document/selection or editor-owned state; no silent headless fallback."
+    },
+    {
+      "id": "apps/sheets/src/renderer/ai/tools.ts#read_cells",
+      "placement": "live",
+      "web": "Authorized active-editor tool dispatcher",
+      "verifyIn": "T14",
+      "rationale": "Executor consumes active document/selection or editor-owned state; no silent headless fallback."
+    },
+    {
+      "id": "apps/sheets/src/renderer/ai/tools.ts#read_formats",
+      "placement": "live",
+      "web": "Authorized active-editor tool dispatcher",
+      "verifyIn": "T14",
+      "rationale": "Executor consumes active document/selection or editor-owned state; no silent headless fallback."
+    },
+    {
+      "id": "apps/sheets/src/renderer/ai/tools.ts#read_range",
+      "placement": "live",
+      "web": "Authorized active-editor tool dispatcher",
+      "verifyIn": "T14",
+      "rationale": "Executor consumes active document/selection or editor-owned state; no silent headless fallback."
+    },
+    {
+      "id": "apps/sheets/src/renderer/ai/tools.ts#read_sheet_features",
+      "placement": "live",
+      "web": "Authorized active-editor tool dispatcher",
+      "verifyIn": "T14",
+      "rationale": "Executor consumes active document/selection or editor-owned state; no silent headless fallback."
+    },
+    {
+      "id": "apps/sheets/src/renderer/ai/tools.ts#select_range",
+      "placement": "live",
+      "web": "Authorized active-editor tool dispatcher",
+      "verifyIn": "T14",
+      "rationale": "Executor consumes active document/selection or editor-owned state; no silent headless fallback."
+    },
+    {
+      "id": "apps/sheets/src/renderer/ai/tools.ts#trace_dependents",
+      "placement": "live",
+      "web": "Authorized active-editor tool dispatcher",
+      "verifyIn": "T14",
+      "rationale": "Executor consumes active document/selection or editor-owned state; no silent headless fallback."
+    },
+    {
+      "id": "apps/sheets/src/renderer/ai/tools.ts#trace_precedents",
+      "placement": "live",
+      "web": "Authorized active-editor tool dispatcher",
+      "verifyIn": "T14",
+      "rationale": "Executor consumes active document/selection or editor-owned state; no silent headless fallback."
+    },
+    {
+      "id": "apps/shell/src/main/mcp/tools/document-tools.ts#apply_ops",
+      "placement": "live",
+      "web": "Authenticated live-editor command journal",
+      "verifyIn": "T17",
+      "rationale": "Desktop MCP currently targets a visible editor/session. Replace webContents/path addressing with authorized session and command ids."
+    },
+    {
+      "id": "apps/shell/src/main/mcp/tools/document-tools.ts#check_document",
+      "placement": "headless",
+      "web": "Isolated original-engine job plus revision commit",
+      "verifyIn": "T08",
+      "rationale": "Reuse original native/CLI/document operation with fixed executables, scoped artifacts and resource limits; output is not a committed revision."
+    },
+    {
+      "id": "apps/shell/src/main/mcp/tools/document-tools.ts#convert_document",
+      "placement": "headless",
+      "web": "Isolated original-engine job plus revision commit",
+      "verifyIn": "T08",
+      "rationale": "Reuse original native/CLI/document operation with fixed executables, scoped artifacts and resource limits; output is not a committed revision."
+    },
+    {
+      "id": "apps/shell/src/main/mcp/tools/document-tools.ts#create_docx",
+      "placement": "headless",
+      "web": "Isolated original-engine job plus revision commit",
+      "verifyIn": "T08",
+      "rationale": "Reuse original native/CLI/document operation with fixed executables, scoped artifacts and resource limits; output is not a committed revision."
+    },
+    {
+      "id": "apps/shell/src/main/mcp/tools/document-tools.ts#fill_template",
+      "placement": "headless",
+      "web": "Isolated original-engine job plus revision commit",
+      "verifyIn": "T08",
+      "rationale": "Reuse original native/CLI/document operation with fixed executables, scoped artifacts and resource limits; output is not a committed revision."
+    },
+    {
+      "id": "apps/shell/src/main/mcp/tools/document-tools.ts#get_app_info",
+      "placement": "unsupported",
+      "web": "No Web exposure; return explicit unsupported",
+      "verifyIn": "T19",
+      "rationale": "Desktop app/process or non-four-format facility is not an authorized Web capability; do not forward arbitrary local commands."
+    },
+    {
+      "id": "apps/shell/src/main/mcp/tools/document-tools.ts#insert_content",
+      "placement": "live",
+      "web": "Authenticated live-editor command journal",
+      "verifyIn": "T17",
+      "rationale": "Desktop MCP currently targets a visible editor/session. Replace webContents/path addressing with authorized session and command ids."
+    },
+    {
+      "id": "apps/shell/src/main/mcp/tools/document-tools.ts#insert_picture",
+      "placement": "live",
+      "web": "Authenticated live-editor command journal",
+      "verifyIn": "T17",
+      "rationale": "Desktop MCP currently targets a visible editor/session. Replace webContents/path addressing with authorized session and command ids."
+    },
+    {
+      "id": "apps/shell/src/main/mcp/tools/document-tools.ts#open_in_genoffice",
+      "placement": "unsupported",
+      "web": "No Web exposure; return explicit unsupported",
+      "verifyIn": "T19",
+      "rationale": "Desktop app/process or non-four-format facility is not an authorized Web capability; do not forward arbitrary local commands."
+    },
+    {
+      "id": "apps/shell/src/main/mcp/tools/document-tools.ts#read_blocks",
+      "placement": "live",
+      "web": "Authenticated live-editor command journal",
+      "verifyIn": "T17",
+      "rationale": "Desktop MCP currently targets a visible editor/session. Replace webContents/path addressing with authorized session and command ids."
+    },
+    {
+      "id": "apps/shell/src/main/mcp/tools/document-tools.ts#read_document",
+      "placement": "live",
+      "web": "Authenticated live-editor command journal",
+      "verifyIn": "T17",
+      "rationale": "Desktop MCP currently targets a visible editor/session. Replace webContents/path addressing with authorized session and command ids."
+    },
+    {
+      "id": "apps/shell/src/main/mcp/tools/document-tools.ts#read_docx",
+      "placement": "headless",
+      "web": "Isolated original-engine job plus revision commit",
+      "verifyIn": "T08",
+      "rationale": "Reuse original native/CLI/document operation with fixed executables, scoped artifacts and resource limits; output is not a committed revision."
+    },
+    {
+      "id": "apps/shell/src/main/mcp/tools/document-tools.ts#read_docx_properties",
+      "placement": "headless",
+      "web": "Isolated original-engine job plus revision commit",
+      "verifyIn": "T08",
+      "rationale": "Reuse original native/CLI/document operation with fixed executables, scoped artifacts and resource limits; output is not a committed revision."
+    },
+    {
+      "id": "apps/shell/src/main/mcp/tools/document-tools.ts#replace_blocks",
+      "placement": "live",
+      "web": "Authenticated live-editor command journal",
+      "verifyIn": "T17",
+      "rationale": "Desktop MCP currently targets a visible editor/session. Replace webContents/path addressing with authorized session and command ids."
+    },
+    {
+      "id": "apps/shell/src/main/mcp/tools/open-documents-tools.ts#open_documents",
+      "placement": "live",
+      "web": "Authenticated live-editor command journal",
+      "verifyIn": "T17",
+      "rationale": "Desktop MCP currently targets a visible editor/session. Replace webContents/path addressing with authorized session and command ids."
+    },
+    {
+      "id": "apps/shell/src/main/mcp/tools/pdf-tools.ts#read_pdf",
+      "placement": "headless",
+      "web": "Isolated original-engine job plus revision commit",
+      "verifyIn": "T08",
+      "rationale": "Reuse original native/CLI/document operation with fixed executables, scoped artifacts and resource limits; output is not a committed revision."
+    },
+    {
+      "id": "apps/shell/src/main/mcp/tools/session-tools.ts#create_session",
+      "placement": "live",
+      "web": "Authenticated live-editor command journal",
+      "verifyIn": "T17",
+      "rationale": "Desktop MCP currently targets a visible editor/session. Replace webContents/path addressing with authorized session and command ids."
+    },
+    {
+      "id": "apps/shell/src/main/mcp/tools/session-tools.ts#save_session",
+      "placement": "live",
+      "web": "Authenticated live-editor command journal",
+      "verifyIn": "T17",
+      "rationale": "Desktop MCP currently targets a visible editor/session. Replace webContents/path addressing with authorized session and command ids."
+    },
+    {
+      "id": "apps/shell/src/main/mcp/tools/sheets-tools.ts#apply_sheet_ops",
+      "placement": "live",
+      "web": "Authenticated live-editor command journal",
+      "verifyIn": "T17",
+      "rationale": "Desktop MCP currently targets a visible editor/session. Replace webContents/path addressing with authorized session and command ids."
+    },
+    {
+      "id": "apps/shell/src/main/mcp/tools/sheets-tools.ts#create_xlsx",
+      "placement": "headless",
+      "web": "Isolated original-engine job plus revision commit",
+      "verifyIn": "T08",
+      "rationale": "Reuse original native/CLI/document operation with fixed executables, scoped artifacts and resource limits; output is not a committed revision."
+    },
+    {
+      "id": "apps/shell/src/main/mcp/tools/sheets-tools.ts#read_sheet",
+      "placement": "live",
+      "web": "Authenticated live-editor command journal",
+      "verifyIn": "T17",
+      "rationale": "Desktop MCP currently targets a visible editor/session. Replace webContents/path addressing with authorized session and command ids."
+    },
+    {
+      "id": "apps/shell/src/main/mcp/tools/sheets-tools.ts#sheet_links",
+      "placement": "headless",
+      "web": "Isolated original-engine job plus revision commit",
+      "verifyIn": "T08",
+      "rationale": "Reuse original native/CLI/document operation with fixed executables, scoped artifacts and resource limits; output is not a committed revision."
+    },
+    {
+      "id": "apps/shell/src/main/mcp/tools/slides-tools.ts#apply_slide_ops",
+      "placement": "live",
+      "web": "Authenticated live-editor command journal",
+      "verifyIn": "T17",
+      "rationale": "Desktop MCP currently targets a visible editor/session. Replace webContents/path addressing with authorized session and command ids."
+    },
+    {
+      "id": "apps/shell/src/main/mcp/tools/slides-tools.ts#create_pptx",
+      "placement": "headless",
+      "web": "Isolated original-engine job plus revision commit",
+      "verifyIn": "T08",
+      "rationale": "Reuse original native/CLI/document operation with fixed executables, scoped artifacts and resource limits; output is not a committed revision."
+    },
+    {
+      "id": "apps/shell/src/main/mcp/tools/slides-tools.ts#read_deck",
+      "placement": "live",
+      "web": "Authenticated live-editor command journal",
+      "verifyIn": "T17",
+      "rationale": "Desktop MCP currently targets a visible editor/session. Replace webContents/path addressing with authorized session and command ids."
+    },
+    {
+      "id": "apps/slides/src/renderer/ai/files-skill.ts#read_attachment",
+      "placement": "headless",
+      "web": "Owner-scoped artifact/knowledge service",
+      "verifyIn": "T16",
+      "rationale": "Replace local paths with authorized artifact ids and enforce retrieval ownership; no raw desktop filesystem access."
+    },
+    {
+      "id": "apps/slides/src/renderer/ai/slides-skill.ts#analyze_media",
+      "placement": "headless",
+      "web": "Server Provider Gateway with Admin policy",
+      "verifyIn": "T13",
+      "rationale": "Credentials, search/media requests and egress policy belong on the server; returned edits still require an active editor."
+    },
+    {
+      "id": "apps/slides/src/renderer/ai/slides-skill.ts#apply_ops",
+      "placement": "live",
+      "web": "Authorized active-editor tool dispatcher",
+      "verifyIn": "T14",
+      "rationale": "Executor consumes active document/selection or editor-owned state; no silent headless fallback."
+    },
+    {
+      "id": "apps/slides/src/renderer/ai/slides-skill.ts#ask_clarification",
+      "placement": "live",
+      "web": "Authorized active-editor tool dispatcher",
+      "verifyIn": "T14",
+      "rationale": "Executor consumes active document/selection or editor-owned state; no silent headless fallback."
+    },
+    {
+      "id": "apps/slides/src/renderer/ai/slides-skill.ts#edit_chart",
+      "placement": "live",
+      "web": "Authorized active-editor tool dispatcher",
+      "verifyIn": "T14",
+      "rationale": "Executor consumes active document/selection or editor-owned state; no silent headless fallback."
+    },
+    {
+      "id": "apps/slides/src/renderer/ai/slides-skill.ts#execute_slide_script",
+      "placement": "live",
+      "web": "Authorized active-editor tool dispatcher",
+      "verifyIn": "T14",
+      "rationale": "Executor consumes active document/selection or editor-owned state; no silent headless fallback."
+    },
+    {
+      "id": "apps/slides/src/renderer/ai/slides-skill.ts#generate_deck",
+      "placement": "live",
+      "web": "Authorized active-editor tool dispatcher",
+      "verifyIn": "T14",
+      "rationale": "Executor consumes active document/selection or editor-owned state; no silent headless fallback."
+    },
+    {
+      "id": "apps/slides/src/renderer/ai/slides-skill.ts#generate_image",
+      "placement": "headless",
+      "web": "Server Provider Gateway with Admin policy",
+      "verifyIn": "T13",
+      "rationale": "Credentials, search/media requests and egress policy belong on the server; returned edits still require an active editor."
+    },
+    {
+      "id": "apps/slides/src/renderer/ai/slides-skill.ts#image_search",
+      "placement": "headless",
+      "web": "Server Provider Gateway with Admin policy",
+      "verifyIn": "T13",
+      "rationale": "Credentials, search/media requests and egress policy belong on the server; returned edits still require an active editor."
+    },
+    {
+      "id": "apps/slides/src/renderer/ai/slides-skill.ts#insert_web_image",
+      "placement": "live",
+      "web": "Authorized active-editor tool dispatcher",
+      "verifyIn": "T14",
+      "rationale": "Executor consumes active document/selection or editor-owned state; no silent headless fallback."
+    },
+    {
+      "id": "apps/slides/src/renderer/ai/slides-skill.ts#list_style_templates",
+      "placement": "live",
+      "web": "Authorized active-editor tool dispatcher",
+      "verifyIn": "T14",
+      "rationale": "Executor consumes active document/selection or editor-owned state; no silent headless fallback."
+    },
+    {
+      "id": "apps/slides/src/renderer/ai/slides-skill.ts#load_guide",
+      "placement": "headless",
+      "web": "Read-only bundled guide service",
+      "verifyIn": "T14",
+      "rationale": "Static guide lookup can run without an editor; preserve original allowed-domain/content limits."
+    },
+    {
+      "id": "apps/slides/src/renderer/ai/slides-skill.ts#plan_deck",
+      "placement": "live",
+      "web": "Authorized active-editor tool dispatcher",
+      "verifyIn": "T14",
+      "rationale": "Executor consumes active document/selection or editor-owned state; no silent headless fallback."
+    },
+    {
+      "id": "apps/slides/src/renderer/ai/slides-skill.ts#read_slide",
+      "placement": "live",
+      "web": "Authorized active-editor tool dispatcher",
+      "verifyIn": "T14",
+      "rationale": "Executor consumes active document/selection or editor-owned state; no silent headless fallback."
+    },
+    {
+      "id": "apps/slides/src/renderer/ai/slides-skill.ts#regenerate_slide",
+      "placement": "live",
+      "web": "Authorized active-editor tool dispatcher",
+      "verifyIn": "T14",
+      "rationale": "Executor consumes active document/selection or editor-owned state; no silent headless fallback."
+    },
+    {
+      "id": "apps/slides/src/renderer/ai/slides-skill.ts#replace_image",
+      "placement": "live",
+      "web": "Authorized active-editor tool dispatcher",
+      "verifyIn": "T14",
+      "rationale": "Executor consumes active document/selection or editor-owned state; no silent headless fallback."
+    },
+    {
+      "id": "apps/slides/src/renderer/ai/slides-skill.ts#save_style_template",
+      "placement": "live",
+      "web": "Authorized active-editor tool dispatcher",
+      "verifyIn": "T14",
+      "rationale": "Executor consumes active document/selection or editor-owned state; no silent headless fallback."
+    },
+    {
+      "id": "apps/slides/src/renderer/ai/slides-skill.ts#web_search",
+      "placement": "headless",
+      "web": "Server Provider Gateway with Admin policy",
+      "verifyIn": "T13",
+      "rationale": "Credentials, search/media requests and egress policy belong on the server; returned edits still require an active editor."
+    },
+    {
+      "id": "packages/agent-core/src/attachments-skill.ts#read_attachment",
+      "placement": "headless",
+      "web": "Owner-scoped artifact/knowledge service",
+      "verifyIn": "T16",
+      "rationale": "Replace local paths with authorized artifact ids and enforce retrieval ownership; no raw desktop filesystem access."
+    },
+    {
+      "id": "packages/agent-core/src/cli-skill.ts#load_guide",
+      "placement": "headless",
+      "web": "Read-only bundled guide service",
+      "verifyIn": "T14",
+      "rationale": "Static guide lookup can run without an editor; preserve original allowed-domain/content limits."
+    },
+    {
+      "id": "packages/agent-core/src/cli-skill.ts#run_genoffice",
+      "placement": "headless",
+      "web": "Isolated original-engine job plus revision commit",
+      "verifyIn": "T08",
+      "rationale": "Reuse original native/CLI/document operation with fixed executables, scoped artifacts and resource limits; output is not a committed revision."
+    },
+    {
+      "id": "packages/agent-core/src/create-document-skill.ts#create_document",
+      "placement": "headless",
+      "web": "Isolated original-engine job plus revision commit",
+      "verifyIn": "T08",
+      "rationale": "Reuse original native/CLI/document operation with fixed executables, scoped artifacts and resource limits; output is not a committed revision."
+    },
+    {
+      "id": "packages/agent-core/src/knowledge-base-skill.ts#read_knowledge_file",
+      "placement": "headless",
+      "web": "Owner-scoped artifact/knowledge service",
+      "verifyIn": "T16",
+      "rationale": "Replace local paths with authorized artifact ids and enforce retrieval ownership; no raw desktop filesystem access."
+    },
+    {
+      "id": "packages/agent-core/src/knowledge-base-skill.ts#search_knowledge_base",
+      "placement": "headless",
+      "web": "Owner-scoped artifact/knowledge service",
+      "verifyIn": "T16",
+      "rationale": "Replace local paths with authorized artifact ids and enforce retrieval ownership; no raw desktop filesystem access."
+    },
+    {
+      "id": "packages/agent-core/src/mind-map.ts#generate_mindmap",
+      "placement": "unsupported",
+      "web": "No Web exposure; return explicit unsupported",
+      "verifyIn": "T19",
+      "rationale": "Desktop app/process or non-four-format facility is not an authorized Web capability; do not forward arbitrary local commands."
+    }
+  ]
+}
