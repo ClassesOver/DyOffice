@@ -78,16 +78,50 @@ export async function projectDocx(bytes) {
     console.error('docx parse failed', error instanceof Error ? error.name : 'Error')
     fail(400, '文件不是可编辑的 DOCX', 'INVALID_DOCUMENT')
   }
-  return visibleBlocks(parsed).map(block => ({
-    docxIndex: block.docxIndex,
-    type: block.type,
-    text: projectionText(block),
-    editable: isPlainTextBlock(block),
-  }))
+  return visibleBlocks(parsed).map(block => {
+    const cells = block.type === 'table' ? plainTableCells(block) : null
+    return {
+      docxIndex: block.docxIndex,
+      type: block.type,
+      text: projectionText(block),
+      editable: isPlainTextBlock(block) || Boolean(cells),
+      ...(cells ? { cells } : {}),
+    }
+  })
 }
 
 function instructionError(message) {
   fail(400, message, 'INVALID_DOCUMENT')
+}
+
+function cellRunIsPlain(run) {
+  return !run?.image && !run?.math && !run?.link && !run?.instrField && !run?.noteRef && !run?.drawing
+}
+
+/** A table whose every cell is one plain paragraph can be patched in place. */
+export function plainTableCells(block) {
+  const rows = block?.table?.rows
+  if (!Array.isArray(rows) || rows.length === 0) return null
+  const cells = []
+  for (const row of rows) {
+    if (!Array.isArray(row) || row.length === 0) return null
+    const line = []
+    for (const cell of row) {
+      if (!cell || cell.gridGap || cell.nestedTables?.length || cell.anchoredBoxes?.length || cell.vMerge || (cell.colSpan ?? 1) > 1) return null
+      if (!Array.isArray(cell.paras) || cell.paras.length !== 1 || typeof cell.paras[0] !== 'string') return null
+      const runs = cell.richParas?.[0]?.runs ?? []
+      if (runs.some(run => !cellRunIsPlain(run))) return null
+      line.push(cell.paras[0])
+    }
+    cells.push(line)
+  }
+  return cells
+}
+
+function sameCellGrid(current, next) {
+  return Array.isArray(next) && next.length === current.length && next.every((row, rowIndex) => (
+    Array.isArray(row) && row.length === current[rowIndex].length && row.every(text => typeof text === 'string' && text.length <= MAX_TEXT)
+  ))
 }
 
 /**
@@ -98,7 +132,7 @@ export async function applyDocxTextEdits(bytes, instructions) {
   if (!Array.isArray(instructions) || instructions.length > MAX_BLOCKS) instructionError('文档结构无效')
   let parsed
   try {
-    const { parseDocx, saveDocx } = await loadEngine()
+    const { parseDocx, saveDocx, patchTableCellTexts } = await loadEngine()
     parsed = await parseDocx(bytes)
     const visible = visibleBlocks(parsed)
     const byIndex = new Map(visible.map(block => [block.docxIndex, block]))
@@ -107,7 +141,7 @@ export async function applyDocxTextEdits(bytes, instructions) {
     for (const item of instructions) {
       if (!item || typeof item !== 'object' || Array.isArray(item)) instructionError('文档结构无效')
       const keys = Object.keys(item)
-      if (keys.some(key => !['docxIndex', 'text', 'deleted'].includes(key))) instructionError('文档结构无效')
+      if (keys.some(key => !['docxIndex', 'text', 'deleted', 'cells'].includes(key))) instructionError('文档结构无效')
       if (item.docxIndex === undefined) {
         if (item.deleted) instructionError('新建段落不能删除')
         if (typeof item.text !== 'string' || item.text.length > MAX_TEXT) instructionError('段落文本无效')
@@ -120,6 +154,14 @@ export async function applyDocxTextEdits(bytes, instructions) {
       seen.add(item.docxIndex)
       if (item.deleted) {
         if (!isPlainTextBlock(block)) instructionError('该内容不能删除')
+        continue
+      }
+      const cells = block.type === 'table' ? plainTableCells(block) : null
+      if (item.cells !== undefined) {
+        if (item.text !== undefined || item.deleted || !cells || !sameCellGrid(cells, item.cells)) instructionError('该内容不能按纯文本修改')
+        const changed = cells.some((row, rowIndex) => row.some((text, column) => text !== item.cells[rowIndex][column]))
+        if (!changed) saveBlocks.push({ kind: 'original', docxIndex: block.docxIndex })
+        else saveBlocks.push({ kind: 'xml', docxIndex: block.docxIndex, xml: patchTableCellTexts(block.originalXml, item.cells.map(row => row.map(text => [text]))) })
         continue
       }
       const plain = isPlainTextBlock(block)
