@@ -63,6 +63,8 @@ function fail(reply, error) {
   return reply.code(status).send({ error: STATUS[code] ? code : 'UNAVAILABLE' })
 }
 
+// Enforce this at Fastify body-reader time, including the legacy Buffer parser,
+// rather than buffering the larger file-upload limit before jsonBody checks.
 const AUTH_JSON_BYTES = 8192
 
 function jsonBody(value, keys) {
@@ -93,7 +95,7 @@ export function registerLocalAuthRoutes(app, auth) {
     return true
   }
 
-  app.post('/api/v1/auth/login', async (request, reply) => {
+  app.post('/api/v1/auth/login', { bodyLimit: AUTH_JSON_BYTES }, async (request, reply) => {
     if (!guardWrite(request, reply)) return undefined
     const body = jsonBody(request.body, ['username', 'password'])
     const ip = request.ip
@@ -109,7 +111,7 @@ export function registerLocalAuthRoutes(app, auth) {
     return reply.code(status).send({ error: status === 429 ? 'RATE_LIMITED' : 'INVALID_CREDENTIALS' })
   })
 
-  app.post('/api/v1/auth/logout', async (request, reply) => {
+  app.post('/api/v1/auth/logout', { bodyLimit: AUTH_JSON_BYTES }, async (request, reply) => {
     if (!guardWrite(request, reply)) return undefined
     try {
       const principal = await sessionService.authenticate(view(request), { deploymentId })
@@ -136,7 +138,7 @@ export function registerLocalAuthRoutes(app, auth) {
     return { csrfToken: csrfPolicy.issue(principal) }
   })
 
-  app.post('/api/v1/auth/reauth', async (request, reply) => {
+  app.post('/api/v1/auth/reauth', { bodyLimit: AUTH_JSON_BYTES }, async (request, reply) => {
     if (!guardWrite(request, reply)) return undefined
     const body = jsonBody(request.body, ['password'])
     if (!body) return reply.code(400).send({ error: 'INVALID_INPUT' })
@@ -148,7 +150,7 @@ export function registerLocalAuthRoutes(app, auth) {
     }
   })
 
-  app.post('/api/v1/auth/change-password', async (request, reply) => {
+  app.post('/api/v1/auth/change-password', { bodyLimit: AUTH_JSON_BYTES }, async (request, reply) => {
     if (!guardWrite(request, reply)) return undefined
     const body = jsonBody(request.body, ['currentPassword', 'newPassword'])
     if (!body) return reply.code(400).send({ error: 'INVALID_INPUT' })
@@ -165,7 +167,7 @@ export function registerLocalAuthRoutes(app, auth) {
     }
   })
 
-  app.post('/api/v1/auth/password-action', async (request, reply) => {
+  app.post('/api/v1/auth/password-action', { bodyLimit: AUTH_JSON_BYTES }, async (request, reply) => {
     if (!guardWrite(request, reply)) return undefined
     const body = jsonBody(request.body, ['token', 'newPassword'])
     if (!body) return reply.code(400).send({ error: 'INVALID_INPUT' })
@@ -189,7 +191,7 @@ export function registerLocalAuthRoutes(app, auth) {
     }
   })
 
-  app.delete('/api/v1/auth/sessions/:id', async (request, reply) => {
+  app.delete('/api/v1/auth/sessions/:id', { bodyLimit: AUTH_JSON_BYTES }, async (request, reply) => {
     if (!guardWrite(request, reply)) return undefined
     if (!UUID.test(request.params.id || '')) return reply.code(400).send({ error: 'INVALID_INPUT' })
     try {
@@ -202,7 +204,7 @@ export function registerLocalAuthRoutes(app, auth) {
     }
   })
 
-  app.post('/api/v1/auth/sessions/revoke-others', async (request, reply) => {
+  app.post('/api/v1/auth/sessions/revoke-others', { bodyLimit: AUTH_JSON_BYTES }, async (request, reply) => {
     if (!guardWrite(request, reply)) return undefined
     const extra = jsonBody(request.body ?? {}, [])
     if (request.body != null && request.body !== '' && extra == null) {
@@ -231,7 +233,7 @@ export function registerLocalAuthRoutes(app, auth) {
     }
   })
 
-  app.post('/api/v1/admin/users', async (request, reply) => {
+  app.post('/api/v1/admin/users', { bodyLimit: AUTH_JSON_BYTES }, async (request, reply) => {
     if (!guardWrite(request, reply)) return undefined
     const body = jsonBody(request.body, ['username', 'displayName', 'adminPassword'])
     if (!body) return reply.code(400).send({ error: 'INVALID_INPUT' })
@@ -243,11 +245,11 @@ export function registerLocalAuthRoutes(app, auth) {
     }
   })
 
-  app.patch('/api/v1/admin/users/:id', async (request, reply) => {
+  app.patch('/api/v1/admin/users/:id', { bodyLimit: AUTH_JSON_BYTES }, async (request, reply) => {
     if (!guardWrite(request, reply)) return undefined
     if (!UUID.test(request.params.id || '')) return reply.code(400).send({ error: 'INVALID_INPUT' })
-    const body = request.body
-    if (!body || typeof body !== 'object' || Array.isArray(body) || typeof body.adminPassword !== 'string') {
+    const body = jsonBody(request.body, ['enabled', 'roles', 'adminPassword'])
+    if (!body || typeof body.adminPassword !== 'string') {
       return reply.code(400).send({ error: 'INVALID_INPUT' })
     }
     const keys = Object.keys(body).filter(key => key !== 'adminPassword')
@@ -269,7 +271,7 @@ export function registerLocalAuthRoutes(app, auth) {
     }
   })
 
-  app.post('/api/v1/admin/users/:id/password-reset', async (request, reply) => {
+  app.post('/api/v1/admin/users/:id/password-reset', { bodyLimit: AUTH_JSON_BYTES }, async (request, reply) => {
     if (!guardWrite(request, reply)) return undefined
     if (!UUID.test(request.params.id || '')) return reply.code(400).send({ error: 'INVALID_INPUT' })
     const body = jsonBody(request.body, ['adminPassword'])
