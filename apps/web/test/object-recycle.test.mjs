@@ -60,6 +60,30 @@ test('trashing does not free quota and a shared blob survives the other owner', 
   assert.equal((await readdir(join(shared.directory, 'blobs'))).includes(left.sha256), false)
 })
 
+test('purging the last copy cannot delete a concurrent upload of the same bytes', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'dyoffice-recycle-race-'))
+  t.after(() => rm(directory, { recursive: true, force: true }))
+  let objectId
+  let armed = false
+  const store = await createLocalObjectStore({
+    directory,
+    maxObjectBytes: 64,
+    maxOwnerBytes: 96,
+    afterReferencePublished: async () => {
+      if (!armed) return
+      await store.trashObject({ ownerId: 'owner-a', objectId })
+      await store.purgeObject({ ownerId: 'owner-a', objectId })
+    },
+  })
+  const existing = await finished(store, 'owner-a', 'same.docx', ZIP)
+  objectId = existing.objectId
+  armed = true
+  const staged = await store.stageUpload({ ownerId: 'owner-b', name: 'same.docx', bytes: ZIP })
+  const completed = await store.finishUpload({ ownerId: 'owner-b', uploadId: staged.uploadId })
+  const downloaded = await store.downloadObject({ ownerId: 'owner-b', objectId: completed.objectId })
+  assert.deepEqual(downloaded.bytes, ZIP)
+})
+
 test('an unfinished upload cannot be downloaded or trashed', async (t) => {
   const { store } = await storeIn(t, { maxObjectBytes: 64, maxOwnerBytes: 96 })
   const staged = await store.stageUpload({ ownerId: 'owner-a', name: 'notes.docx', bytes: ZIP })

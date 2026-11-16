@@ -42,7 +42,7 @@ function createExclusive() {
  * It is not the enterprise S3 adapter and it does not enforce database RLS.
  * Callers must pass the owner id established by the server.
  */
-export async function createLocalObjectStore({ directory, maxObjectBytes, maxOwnerBytes, afterBytesWritten } = {}) {
+export async function createLocalObjectStore({ directory, maxObjectBytes, maxOwnerBytes, afterBytesWritten, afterReferencePublished } = {}) {
   if (!directory || typeof directory !== 'string') reject('UNSAFE_DIRECTORY')
   if (!Number.isSafeInteger(maxObjectBytes) || maxObjectBytes < 1) reject('UNSAFE_QUOTA')
   if (!Number.isSafeInteger(maxOwnerBytes) || maxOwnerBytes < maxObjectBytes) reject('UNSAFE_QUOTA')
@@ -56,6 +56,17 @@ export async function createLocalObjectStore({ directory, maxObjectBytes, maxOwn
   await mkdir(objects, { recursive: true, mode: 0o700 })
   await mkdir(temporary, { recursive: true, mode: 0o700 })
   const exclusive = createExclusive()
+  const exclusiveSha = createExclusive()
+
+  async function installBlob(scratch, sha256) {
+    const blob = join(blobs, sha256)
+    try {
+      await rename(scratch, blob)
+    } catch (error) {
+      if (error.code !== 'EEXIST') throw error
+      await rm(scratch, { force: true })
+    }
+  }
 
   function objectPath(ownerId, objectId) {
     return join(objects, ownerId, `${objectId}.json`)
@@ -113,22 +124,23 @@ export async function createLocalObjectStore({ directory, maxObjectBytes, maxOwn
         const uploadId = randomUUID()
         const sha256 = digest(bytes)
         const scratch = join(temporary, `${uploadId}.bin`)
+        const recordPath = join(staging, ownerId, `${uploadId}.json`)
         await writeFile(scratch, bytes, { mode: 0o600 })
+        let published = false
         try {
           if (afterBytesWritten) await afterBytesWritten()
-          const blob = join(blobs, sha256)
-          try {
-            await rename(scratch, blob)
-          } catch (error) {
-            if (error.code !== 'EEXIST') throw error
-            await rm(scratch, { force: true })
-          }
           await mkdir(join(staging, ownerId), { recursive: true, mode: 0o700 })
-          await writeJson(join(staging, ownerId, `${uploadId}.json`), {
+          await writeJson(recordPath, {
             uploadId, ownerId, name, format, size: bytes.length, sha256, finished: false,
           })
+          published = true
+          if (afterReferencePublished) await afterReferencePublished()
+          // The staging record is visible before the shared blob is installed.
+          // A purge of another owner's last copy then sees this reference.
+          await exclusiveSha(sha256, () => installBlob(scratch, sha256))
         } catch (error) {
           await rm(scratch, { force: true })
+          if (published) await rm(recordPath, { force: true })
           throw error
         }
         return { uploadId, sha256, size: bytes.length, format, finished: false }
@@ -203,7 +215,9 @@ export async function createLocalObjectStore({ directory, maxObjectBytes, maxOwn
         const record = await readJson(path)
         if (!record || record.ownerId !== ownerId || record.state !== 'trash') reject('NOT_FOUND', 404)
         await rm(path, { force: true })
-        if (!(await blobStillNeeded(record.sha256))) await rm(join(blobs, record.sha256), { force: true })
+        await exclusiveSha(record.sha256, async () => {
+          if (!(await blobStillNeeded(record.sha256))) await rm(join(blobs, record.sha256), { force: true })
+        })
         return { objectId, state: 'purged' }
       })
     },

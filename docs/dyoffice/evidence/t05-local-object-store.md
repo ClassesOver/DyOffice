@@ -34,7 +34,7 @@ node --test apps/web/test/object-store.test.mjs
 
 ## Recycle bin and download
 
-`downloadObject` returns finished bytes only to the owning caller. `trashObject` hides them and still counts them against the owner quota. `restoreObject` makes them readable again. `purgeObject` removes a trashed record and frees that quota. The content blob is removed only when no remaining object or unfinished upload references its SHA-256, so one owner cannot delete another owner's copy.
+`downloadObject` returns finished bytes only to the owning caller. `trashObject` hides them and still counts them against the owner quota. `restoreObject` makes them readable again. `purgeObject` removes a trashed record and frees that quota. The content blob is removed only when no remaining object or unfinished upload references its SHA-256, so one owner cannot delete another owner's copy. The staging record is published before the shared blob is installed, and deletion of that blob takes the same per-hash lock, so a purge cannot remove bytes that a concurrent upload has already claimed.
 
 ```sh
 node --test apps/web/test/object-recycle.test.mjs
