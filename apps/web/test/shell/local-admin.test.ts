@@ -116,3 +116,9 @@ test('self role replacement is explicit, preserves personal and requires a fresh
  await vi.waitFor(()=>expect(changed).toHaveBeenCalledOnce())
  expect(client.setRoles).toHaveBeenCalledWith('me',['personal']);root.unmount()
 })
+test('password action purpose has an explicit stable accessible label',async()=>{
+ const root=mount(h(PasswordActionForm,{onClose:()=>{}}))
+ await vi.waitFor(()=>expect(document.querySelector('select')).not.toBeNull())
+ expect(document.querySelector('select')?.getAttribute('aria-label')).toBe('用途')
+ root.unmount()
+})
