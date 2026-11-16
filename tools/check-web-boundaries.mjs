@@ -34,7 +34,7 @@ function literalSpecifier(node) {
   return null
 }
 
-// TypeScript/esbuild erase these wrappers before Vite sees glob calls.
+// TypeScript/esbuild erase these wrappers before Vite sees glob/worker expressions.
 function unwrapExpression(node) {
   while (node && (ts.isParenthesizedExpression(node) || ts.isAsExpression(node) ||
       ts.isTypeAssertionExpression(node) || ts.isNonNullExpression(node) ||
@@ -58,12 +58,13 @@ function imports(source, file) {
         ['glob', 'globEager'].includes(callee.name.text)) {
       found.push({ specifier: null, mode: 'glob', line: ast.getLineAndCharacterOfPosition(node.getStart(ast)).line + 1 })
     }
+    const constructor = ts.isNewExpression(node) ? unwrapExpression(node.expression) : undefined
     let argument
     let mode = 'import'
     if (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) argument = node.moduleSpecifier
     else if (ts.isImportEqualsDeclaration(node) && ts.isExternalModuleReference(node.moduleReference)) argument = node.moduleReference.expression
     else if (ts.isCallExpression(node) && (node.expression.kind === ts.SyntaxKind.ImportKeyword || (ts.isIdentifier(node.expression) && node.expression.text === 'require'))) argument = node.arguments[0]
-    else if (ts.isNewExpression(node) && ts.isIdentifier(node.expression) && ['Worker', 'SharedWorker'].includes(node.expression.text)) {
+    else if (constructor && ts.isIdentifier(constructor) && ['Worker', 'SharedWorker'].includes(constructor.text)) {
       const value = node.arguments?.[0]
       // Vite's statically resolved Worker(new URL(path, import.meta.url)).
       if (value && ts.isNewExpression(value) && ts.isIdentifier(value.expression) && value.expression.text === 'URL' &&

@@ -258,3 +258,20 @@ test('transparent TypeScript and parenthesized glob expressions fail closed',()=
   "((import.meta as any)!.glob as any)!('./*.ts')",
  ]) assert.match(inspectSource(source,'entry.ts')[0],/Unsupported Vite glob dependency/,source)
 })
+
+test('transparent Worker and SharedWorker constructors cannot hide transitive Node imports', async t => {
+ const root=await mkdtemp(join(tmpdir(),'boundary-wrapped-worker-'));t.after(()=>rm(root,{recursive:true,force:true}))
+ await mkdir(join(root,'apps/web/src'),{recursive:true});await mkdir(join(root,'packages/helper'),{recursive:true})
+ await writeFile(join(root,'packages/helper/w.ts'),"import 'node:fs'")
+ for(const worker of ['Worker','SharedWorker']) for(const constructor of [
+  `(${worker})`, `(${worker} as any)`, `${worker}!`, `(${worker} satisfies Function)`,
+  `(<any>${worker})`, `(${worker}<any>)`, `(((${worker} as any)!) as any)`,
+ ]) {
+  const source=`new ${constructor}(new URL('../../../packages/helper/w.ts', import.meta.url), {type:'module'})`
+  await writeFile(join(root,'apps/web/src/main.ts'),source)
+  const result=await checkWebBoundaries(root)
+  assert.equal(result.scanned,2,source)
+  assert.match(result.violations[0],/w.ts.*node:fs/,source)
+ }
+ for(const worker of ['Worker','SharedWorker']) assert.match(inspectSource(`new (${worker} as any)(path)`,'entry.ts')[0],/Unresolved dynamic browser dependency/)
+})
