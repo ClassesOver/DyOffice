@@ -21,7 +21,7 @@ No product code or security settings are changed by this evidence update.
   the T03/T04 implementation and real-service acceptance sources remain unchanged.
   Comparison from the #32 merge lists only T00/T01 documentation, unit-command,
   package-script, workflow and compatibility-inventory changes. No auth, database,
-  local-account UI, resource service or acceptance-test source changed. This is source
+  local-account UI, resource service or T03/T04 real-service acceptance-test source changed. This is source
   continuity evidence, not a new execution of all services at the current commit.
 - [Final Web run 43815137000](https://github.com/ClassesOver/DyOffice/actions/runs/43815137000):
   boundary-check, native-docx and native-worker all completed successfully.
