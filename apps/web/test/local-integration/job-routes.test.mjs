@@ -54,7 +54,7 @@ test('job HTTP routes stay disabled without explicit experimental configuration'
 })
 
 test('real server entry enables job API from explicit local configuration without a Redis connection',{ timeout: 25_000 },async t => {
-  const f = await setup(t), child = spawn(process.execPath,['--experimental-strip-types',fileURLToPath(new URL('../../server/index.mjs',import.meta.url))],{
+  const f = await setup(t), child = spawn(process.execPath,['--import','tsx',fileURLToPath(new URL('../../server/index.mjs',import.meta.url))],{
     env: { PATH: process.env.PATH,NODE_ENV: 'test',HOST: '127.0.0.1',PORT: '0',DYOFFICE_AUTH_MODE: 'local',DYOFFICE_NATIVE_JOBS: 'experimental',DYOFFICE_AUTH_DATABASE_URL: f.urls.auth,DYOFFICE_BUSINESS_DATABASE_URL: f.urls.business,DYOFFICE_DEPLOYMENT_ID: f.deploymentId,DYOFFICE_ORIGIN: restrictedOrigin,DYOFFICE_CSRF_KEY: f.csrfKey,DYOFFICE_FILE_API: 'experimental',DYOFFICE_OBJECT_STORE: 'local-dev',DYOFFICE_OBJECT_DIRECTORY: f.directory },stdio: ['ignore','pipe','pipe'],
   })
   const exited = new Promise(resolve => child.once('exit',resolve))

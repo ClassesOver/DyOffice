@@ -326,3 +326,43 @@ a top-level editor page with browser Back, not a completed multi-tab local workf
 Admin/account/password UI is not yet connected here; unsupported format creation is
 disabled and stars remain page-session-only. Local-account Chromium acceptance lives
 in `test/local-browser`, requires real PostgreSQL, and fails when that service is absent.
+
+## T12 backend-only workspace and configuration APIs
+
+This backend batch does **not** ship the T12 Home/Settings UI. The existing client
+is retained, including its current UI limitations: persistent folder/star/recent APIs
+are available, but the old UI has not been wired to them and retains its prior
+page-session behavior. With a `businessPool` configured,
+`buildLocalApp` registers the following HTTP APIs by default; lack of UI or a keyring
+does not disable those routes:
+
+- `/api/v1/workspace/*`: owner-scoped folders, listing, stars, recent activity and
+  membership operations, using current cookie sessions, mutation CSRF and forced RLS.
+- `GET /api/v1/settings/public`: authenticated safe catalog/default projection only.
+- `/api/v1/admin/config`, `/check`, `/rotate-key`: `config_admin` operations with
+  session/CSRF checks, optimistic revision validation, encrypted keys and audit.
+  A configuration administrator receives no authority over another user's files.
+
+Apply the unchanged migrations **0018_global_config.sql** and **0019_workspace.sql**
+together with this manifest/role provisioning version. Applied 0001–0017 checksums
+remain unchanged. Runtime pools must pass the current schema checksum and role
+checks. A private deployment that previously applied the old PR's conflicting
+0014/0015 is not silently upgraded; never bypass the checksum guard.
+
+`DYOFFICE_CONFIG_KEYRING` accepts JSON with `activeKeyId` and a `keys` mapping of key
+IDs to canonical base64-encoded 32-byte keys. Provision it through the deployment's
+secret mechanism, independently of CSRF/account credentials. Do not commit/log it.
+Without a keyring, catalog/metadata access remains possible but secret writes and
+operations requiring decryption fail closed. Blank/omitted keys preserve existing
+ciphertext; explicit clearing is separate. Rotation is atomic with revision/audit.
+
+Configuration checks are local validation only and report `connection: "not_run"`.
+There is no new outbound Provider/MCP execution, secret-consumer endpoint, automatic
+network connection, bulk-purge UI, or production authorization in this batch.
+Keep using the declared `node --import tsx` server entry: Provider catalog metadata
+contains runtime TypeScript imports. The separate provision-runtime CLI retains
+its existing native strip-types contract.
+
+See [backend-only validation](../../docs/dyoffice/evidence/t12-backend.md) for exact
+coverage and limits. Backend API tests do not stand in for current browser, UI
+session-switch/save-failure, or native DOCX theme/roundtrip acceptance.

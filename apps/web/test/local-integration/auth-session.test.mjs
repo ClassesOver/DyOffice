@@ -265,7 +265,7 @@ test('server startup selects local mode without creating prototype data or accep
   const directory = await mkdtemp(join(tmpdir(), 'dyoffice-local-start-'))
   const data = join(directory, 'prototype-must-not-exist')
   const env = { ...process.env, NODE_ENV: 'development', DYOFFICE_FILE_API: '', DYOFFICE_OBJECT_STORE: '', DYOFFICE_AUTH_MODE: 'local', DYOFFICE_DATABASE_URL: '', DYOFFICE_AUTH_DATABASE_URL: urls.auth, DYOFFICE_BUSINESS_DATABASE_URL: urls.business, DYOFFICE_DEPLOYMENT_ID: deploymentId, DYOFFICE_ORIGIN: origin, DYOFFICE_CSRF_KEY: randomBytes(32).toString('hex'), DYOFFICE_DATA_DIR: data, DYOFFICE_USER_TOKEN: '', DYOFFICE_ADMIN_TOKEN: '', HOST: '127.0.0.1', PORT: '0' }
-  const child = spawn(process.execPath, ['--experimental-strip-types', 'server/index.mjs'], { cwd: fileURLToPath(new URL('../../', import.meta.url)), env, stdio: ['ignore', 'pipe', 'pipe'] })
+  const child = spawn(process.execPath, ['--import','tsx', 'server/index.mjs'], { cwd: fileURLToPath(new URL('../../', import.meta.url)), env, stdio: ['ignore', 'pipe', 'pipe'] })
   cleanup.push(async () => {
     if (child.exitCode === null && child.signalCode === null) { child.kill('SIGTERM'); await once(child, 'exit') }
     await rm(directory, { recursive: true, force: true })

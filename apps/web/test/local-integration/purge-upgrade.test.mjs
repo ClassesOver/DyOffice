@@ -20,7 +20,7 @@ test('v15 database upgrades forward to reclamation/purge without changing applie
   } })
   const after = (await f.ownerPool.query('SELECT * FROM identity_migrations ORDER BY version')).rows
   assert.deepEqual(after.slice(0,15), before)
-  assert.deepEqual(after.map(m => m.version), Array.from({ length: 17 }, (_, i) => i + 1))
+  assert.deepEqual(after.map(m => m.version), Array.from({ length: migrations.length }, (_, i) => i + 1))
   assert.deepEqual(await ack(f.ownerPool), authority)
   await f.ownerDb.migrate()
   assert.deepEqual((await f.ownerPool.query('SELECT * FROM identity_migrations ORDER BY version')).rows, after)

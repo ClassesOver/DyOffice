@@ -187,7 +187,7 @@ test('actual server entry enables only the explicit native build and refuses mis
   const f = await fileFixture(t), opened = await importFile(f,f.alice.token,await docxBytes())
   const cwd = fileURLToPath(new URL('../../',import.meta.url))
   const env = { ...process.env,NODE_ENV: 'development',DYOFFICE_AUTH_MODE: 'local',DYOFFICE_DATABASE_URL: '',DYOFFICE_AUTH_DATABASE_URL: f.urls.auth,DYOFFICE_BUSINESS_DATABASE_URL: f.urls.business,DYOFFICE_DEPLOYMENT_ID: f.deploymentId,DYOFFICE_ORIGIN: 'https://office.example',DYOFFICE_CSRF_KEY: f.csrfKey,DYOFFICE_USER_TOKEN: '',DYOFFICE_ADMIN_TOKEN: '',DYOFFICE_FILE_API: 'experimental',DYOFFICE_OBJECT_STORE: 'local-dev',DYOFFICE_OBJECT_DIRECTORY: f.directory,DYOFFICE_NATIVE_DOCX: 'experimental',DYOFFICE_NATIVE_DOCX_DIRECTORY: '',PORT: '0',HOST: '127.0.0.1' }
-  const child = spawn(process.execPath,['--experimental-strip-types','server/index.mjs'],{ cwd,env,stdio: ['ignore','pipe','pipe'] })
+  const child = spawn(process.execPath,['--import','tsx','server/index.mjs'],{ cwd,env,stdio: ['ignore','pipe','pipe'] })
   f.cleanup.push(async () => { if (child.exitCode === null && child.signalCode === null) { child.kill('SIGTERM'); await once(child,'exit') } })
   const exited = once(child,'exit')
   const [output] = await Promise.race([once(child.stdout,'data'),exited.then(() => { throw new Error('Native entry exited before startup') })])
@@ -199,7 +199,7 @@ test('actual server entry enables only the explicit native build and refuses mis
   assert.equal((await (await fetch(address + '/api/v1/capabilities',{ headers })).json()).docx,'editable')
   child.kill('SIGTERM'); assert.deepEqual(await exited,[0,null])
   for (const invalid of [{ DYOFFICE_NATIVE_DOCX: 'enabled' },{ DYOFFICE_FILE_API: '',DYOFFICE_OBJECT_STORE: '' }]) {
-    await assert.rejects(promisify(execFile)(process.execPath,['--experimental-strip-types','server/index.mjs'],{ cwd,env: { ...env,...invalid },timeout: 5000 }),error => {
+    await assert.rejects(promisify(execFile)(process.execPath,['--import','tsx','server/index.mjs'],{ cwd,env: { ...env,...invalid },timeout: 5000 }),error => {
       assert.equal(error.code,1)
       assert.equal(error.stderr.includes(f.urls.auth),false)
       return true
