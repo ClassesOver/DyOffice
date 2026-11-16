@@ -96,4 +96,3 @@ Paths in the test column are relative to `apps/web/test/`.
   before COMMIT and injects a controlled rollback. Syntax check passed; the
   attempted focused execution failed at missing database configuration, not
   at a behavioral assertion. This is pending CI evidence, not RED→GREEN.
-

@@ -211,4 +211,3 @@ These are requested scope corrections, **not automatic completion checkboxes**:
 A coherent plan must be accurate even while work is incomplete. These edits clarify the
 evidence boundary; they cannot replace a missing test, an unsupported route, a migration
 exercise, a reviewed deployable artifact or production authorization.
-
