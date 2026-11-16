@@ -245,7 +245,7 @@ docs/dyoffice/               当前计划及 inventory/ evidence/ adr/
 
 **接口：** `mountPdfEditor()`，能力区分阅读、批注、文本修改、页操作和导出。
 
-**状态（2026-11-16）：** 能力门已区分文本页、扫描页和空白页，并报告未嵌入字体与未验证签名，见 [t11-pdf-capabilities.md](evidence/t11-pdf-capabilities.md)。批注、改字、调页、脱敏仍被拒绝；覆盖文字不是删除原文；加密文件不返回页序。浏览器挂载、PDFium/WASM、CSP、真实改字和批注写入仍延期，原因见证据页。不依赖 T07 的 DOCX 挂载，也不走 T08 worker。
+**状态（2026-11-16）：** 能力门已区分文本页、扫描页和空白页，并报告未嵌入字体与未验证签名，见 [t11-pdf-capabilities.md](evidence/t11-pdf-capabilities.md)。PDF 页签挂载 PDF.js 阅读页，CSP 不允许 eval 或内联脚本；PDFium WASM 对未改动的导出字节做像素重开校验，见 [t11-pdf-render.md](evidence/t11-pdf-render.md)。批注、改字、调页、脱敏仍被拒绝；覆盖文字不是删除原文；加密文件不栅格化。真实改字和批注写入仍延期。不依赖 T07 的 DOCX 挂载，也不走 T08 worker。
 
 - [ ] 测试真实文本流修改、批注、页序、密码文件、签名失效提示、缺字/字体、扫描页能力限制。
 - [ ] E2E RED；覆盖文字不等同于删除原文的安全性，脱敏能力单独标记。

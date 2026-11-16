@@ -96,3 +96,18 @@ test('native personal settings persist preferences, reject failures and preserve
  await expect(dialog).toBeVisible();await dialog.locator('.set-close').click();
  await page.locator('.tab-item').nth(1).click();await expect(editor.locator('textarea').first()).toHaveValue('Settings must preserve this draft');
 });
+
+
+test('PDF shell opens CJK with same-origin CMaps and no parser writes', async ({page}) => {
+ const {cjkPdf} = await import('../fixtures/cjk-pdf.mjs');
+ const errors=[]; page.on('pageerror', error=>errors.push(error.message));
+ await page.goto('/'); await page.getByLabel('个人访问令牌').fill('visual-test-user'); await page.getByRole('button',{name:'登录',exact:true}).click();
+ const chooser=page.waitForEvent('filechooser'); await page.locator('.quick-card').last().click();
+ await (await chooser).setFiles({name:'cjk-review.pdf',mimeType:'application/pdf',buffer:await cjkPdf()});
+ const frame=page.locator('.web-editor-frame'); await expect(frame).toHaveAttribute('src',/^\/pdf.html\?file=/);
+ const pdf=page.frameLocator('.web-editor-frame'); await expect(pdf.locator('#status')).toContainText('已按原始字节打开');
+ await expect(pdf.locator('.pdf-text')).toHaveText('中文'); await expect(pdf.locator('canvas')).toHaveCount(1);
+ await page.screenshot({path:'test-results/genoffice-web-pdf-cjk.png',fullPage:true});
+ await page.locator('.tab-item').nth(1).locator('.tab-close').click(); await expect(page.locator('.web-editor-frame')).toHaveCount(0);
+ expect(errors).toEqual([]);
+});
