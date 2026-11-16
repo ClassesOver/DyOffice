@@ -55,4 +55,12 @@ export function registerAdminSyntheticProbe(app: FastifyInstance, {
     } catch { throw authError(403) }
     finally { reply.raw.off('close', disconnect) }
   })
+  return {dispose,async drain({timeoutMs=35_000}:{timeoutMs?:number}={}){
+    if(!disposed||!Number.isSafeInteger(timeoutMs)||timeoutMs<1||timeoutMs>35_000)throw new Error('Synthetic probe drain unavailable')
+    const deadline=performance.now()+timeoutMs
+    while(turns.pendingCount()){
+      if(performance.now()>=deadline)throw new Error('Synthetic probe drain timed out')
+      await new Promise(resolve=>setTimeout(resolve,Math.min(10,Math.max(1,deadline-performance.now()))))
+    }
+  }}
 }
