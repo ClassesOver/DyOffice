@@ -155,7 +155,7 @@ docs/dyoffice/               当前计划及 inventory/ evidence/ adr/
 
 **接口：** `stageUpload(principal, fileMeta)`、`finishUpload(principal,uploadId)`、`openFile()`；上传引用绑定所有者。
 
-**状态（2026-11-16）：** 开发用本地内容寻址存储已落地，见 [t05-local-object-store.md](evidence/t05-local-object-store.md)。它校验四格式、用服务器 SHA-256、拒绝未完成和跨 owner 读取，并有所有者回收站：丢弃后不能下载、配额仍占用、清空后才释放；相同内容的 blob 在最后一个 owner 清空前保留。个人开发令牌可以通过 `GET /api/v1/objects/:objectId` 下载自己已完成且未丢弃的对象；管理员和其他 owner 拿不到这些字节。现有 `/api/files` 上传路由仍不写入这个存储，也不是 S3 或 RLS。
+**状态（2026-11-16）：** 开发用本地内容寻址存储已落地，见 [t05-local-object-store.md](evidence/t05-local-object-store.md)。它校验四格式、用服务器 SHA-256、拒绝未完成和跨 owner 读取，并有所有者回收站：丢弃后不能下载、配额仍占用、清空后才释放；相同内容的 blob 在最后一个 owner 清空前保留。个人开发令牌可以通过 `POST /api/v1/objects` 暂存字节、`POST /api/v1/objects/uploads/:uploadId/finish` 完成，再用 `GET /api/v1/objects/:objectId` 下载自己已完成且未丢弃的对象。请求不能指定 owner，客户端哈希被忽略，未完成上传不能下载，超额返回 413。管理员和其他 owner 拿不到这些字节。现有 `/api/files` 上传路由仍不写入这个存储，也不是 S3 或 RLS。
 
 - [x] 测试四格式类型验证、伪 ZIP、空文件、超额、路径穿越、跨用户 uploadId、未完成上传不能下载。
 - [ ] 运行 files integration，确认没有元数据/对象分离保障时 RED。
