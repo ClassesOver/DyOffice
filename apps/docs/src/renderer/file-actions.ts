@@ -137,6 +137,8 @@ export interface FileActionContext {
   getPageColorSaveState?: () => { token: object; ready: boolean }
   /** Mirror-margin input only, including intent awaiting React commit. */
   getMirrorMarginsSaveState?: () => { token: object; ready: boolean }
+  /** Even/odd header flag only, not header content or section links. */
+  getEvenOddHfSaveState?: () => { token: object; ready: boolean }
   editor: Editor | null
   doc: DocState | null
   dirtyRef: { current: boolean }
