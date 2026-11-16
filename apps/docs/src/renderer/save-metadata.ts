@@ -67,8 +67,11 @@ export const saveMetadataKeys = [
 
 export function captureSaveMetadata(ctx: FileActionContext) {
   const values = saveMetadataKeys.map((key) => ctx[key]);
+  const color = ctx.getPageColorSaveState?.();
   return {
     changed(current: FileActionContext): boolean {
+      const latestColor = current.getPageColorSaveState?.();
+      if (color && (!color.ready || !latestColor?.ready || color.token !== latestColor.token)) return true;
       return saveMetadataKeys.some(
         (key, index) => !Object.is(values[index], current[key]),
       );

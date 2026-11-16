@@ -133,6 +133,8 @@ export interface FileActionContext {
   hostLifecycle?: DocsHostLifecycle
   /** Read the latest React state after asynchronous native serialization/write. */
   getCurrentSaveContext?: () => FileActionContext
+  /** Page-color input only, including a synchronous intent awaiting React commit. */
+  getPageColorSaveState?: () => { token: object; ready: boolean }
   editor: Editor | null
   doc: DocState | null
   dirtyRef: { current: boolean }

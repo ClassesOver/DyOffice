@@ -348,3 +348,31 @@ it("does not write stale paths when the document changes while beforeSave reconc
   expect(await saving).toBe(false);
   expect(writes).toBe(0);
 });
+
+it('does not mark clean when page-color intent is pending before React context updates', async () => {
+  const { ctx, state } = await fixture('', false, false)
+  let token = {},
+    ready = true
+  Object.assign(state, { getPageColorSaveState: () => ({ token, ready }) })
+  window.desktop.saveDocx = async () => {
+    token = {}
+    ready = false
+    return { ok: true }
+  }
+  expect(await save(ctx, false, false)).toBe(true)
+  expect(state.saveIncompleteRef.current).toBe(true)
+})
+it('keeps a save incomplete if page-color input was unrendered when capture began', async () => {
+  const { ctx, state } = await fixture('', false, false)
+  const token = {}
+  let ready = false
+  Object.assign(state, { getPageColorSaveState: () => ({ token, ready }) })
+  window.desktop.saveDocx = async () => {
+    ready = true
+    return { ok: true }
+  }
+  expect(await save(ctx, false, false)).toBe(true)
+  expect(state.saveIncompleteRef.current).toBe(true)
+  expect(await save(ctx, false, false)).toBe(true)
+  expect(state.saveIncompleteRef.current).toBe(false)
+})
