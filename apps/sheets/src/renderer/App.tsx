@@ -1,3 +1,4 @@
+import {installHostReadOnlyGuard} from './host-read-only'
 import { focusWorksheet } from './sheet-focus'
 import {
   activateFormulaClosure,
@@ -727,9 +728,6 @@ export function App({
   const [preview, setPreview] = useState<ChangePlan | null>(null)
   const [_revision, setRevision] = useState(0)
   const [workbookFile, setWorkbookFile] = useState<WorkbookFile | null>(null)
-  useEffect(() => {
-    if (host) univerRef.current?.univerAPI.getActiveWorkbook()?.setEditable(!host.readOnly)
-  }, [host?.readOnly, workbookFile])
   useEffect(() => {
     host?.onEditorReady?.({save: async () => (await handleSave('save')).ok, isDirty: () => pendingEditsForClose(pendingEdits, editingCellRef.current) > 0})
     return () => host?.onEditorReady?.(null)
@@ -2372,6 +2370,7 @@ export function App({
     // lazy redi proxy, so assigning onto the resolved instance only shadows
     // the proxy — Univer-internal callers keep hitting the real method.
     installJournalSuppressionUndoFilter()
+    installHostReadOnlyGuard(runtime,()=>hostRef.current?.readOnly === true)
     // Opening a file must not re-measure row heights (Excel renders stored
     // heights verbatim), and clipped multi-line cells must show their FIRST
     // line like Excel does.
@@ -5422,7 +5421,6 @@ export function App({
     } else {
       opts?.onInitialRangeLoaded?.()
     }
-    if (hostRef.current) univerRef.current?.univerAPI.getActiveWorkbook()?.setEditable(!hostRef.current.readOnly)
     hostRef.current?.onWorkbookOpened?.()
     return true
   }

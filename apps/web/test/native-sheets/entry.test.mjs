@@ -198,6 +198,8 @@ test('second browser editor is read only until explicit takeover',{timeout:90000
  const second=await f.context.newPage();await second.addInitScript(()=>{window.__genofficeDebugHooks=true});await second.goto(url)
  await expect(second.locator('.dyoffice-sheets-state')).toContainText('Read only',{timeout:30000})
  await expect.poll(()=>second.evaluate(()=>window.__genofficeDebug?.univerAPI.getActiveWorkbook()?.getActiveSheet()?.getRange('A2').getValue()),{timeout:30000}).toBe(12.5)
+ const stillReadOnly=await second.evaluate(async()=>{const r=window.__genofficeDebug.univerAPI.getActiveWorkbook().getActiveSheet().getRange('A2');try{await r.setValue(77)}catch{}return r.getValue()})
+ assert.equal(stillReadOnly,12.5,'readonly user command must not overwrite imported cells')
  const rejected=await second.evaluate(()=>{const d=window.__genofficeDebug,s=d.univerAPI.getActiveWorkbook().getActiveSheet().getSheetId();return d.applyOps([{op:'set_cell',sheetId:s,address:'A2',value:99}])})
  assert.equal(rejected.ok,false)
  assert.equal((await f.files.openFile(f.alice.token,id)).file.revision,f.opened.file.revision)
