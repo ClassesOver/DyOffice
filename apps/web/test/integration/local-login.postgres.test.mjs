@@ -24,7 +24,7 @@ test('local password login is session-bound, rate-limited across pools, and refu
   const ipAddress='192.0.2.10'
   const password='Very long valid 🦉 password 2026!'
   try {
-    assert.deepEqual(await applyMigrations(pool), ['0001_identity.sql','0002_login_rate_limits.sql'])
+    assert.deepEqual(await applyMigrations(pool), ['0001_identity.sql','0002_login_rate_limits.sql','0003_files.sql'])
     assert.deepEqual(await applyMigrations(pool), [])
     const deploymentId=randomUUID()
     const admin=await bootstrapInitialAdmin({
