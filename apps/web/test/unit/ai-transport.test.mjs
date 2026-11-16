@@ -143,3 +143,83 @@ test('rejects query and fragment endpoints that cannot form a cancellation path'
     assert.throws(() => createSseAgentTransport({endpoint}), /origin-relative/)
   }
 })
+
+test('serializes only AgentStreamRequest fields, never client routing or credentials', async () => {
+  let body
+  const transport=createSseAgentTransport({fetchImpl:async(url,init)=>{body=JSON.parse(init.body);return stream(event('done',{}))}})
+  await new Promise(resolve=>transport.stream({system:'s',messages:[],tools:[],apiKey:'secret',baseUrl:'https://evil.example',ownerId:'other'}, {...callbackRecorder().callbacks,onDone:resolve}))
+  assert.deepEqual(body.request,{system:'s',messages:[],tools:[]})
+})
+
+test('timeout aborts stalled headers, emits one error/done and requests server cancellation once', async () => {
+  const requests=[]
+  let signal
+  const transport=createSseAgentTransport({timeoutMs:10,createTurnId:()=> 'timeout',fetchImpl:async(url,init)=>{
+    requests.push(url)
+    if(url.endsWith('/cancel'))return new Response(null,{status:204})
+    signal=init.signal
+    return new Promise((resolve,reject)=>signal.addEventListener('abort',()=>reject(new Error('aborted')),{once:true}))
+  }})
+  const {calls,callbacks}=callbackRecorder()
+  const handle=transport.stream({system:'',messages:[],tools:[]},callbacks)
+  await new Promise(resolve=>setTimeout(resolve,40))
+  try {
+    assert.deepEqual(calls.map(x=>x[0]),['error','done'])
+    assert.match(calls[0][1],/timed out/)
+    assert.equal(signal.aborted,true)
+    handle.cancel()
+    assert.deepEqual(requests,['/api/v1/ai/turns','/api/v1/ai/turns/timeout/cancel'])
+  } finally {handle.cancel()}
+})
+
+test('timeout configuration must be finite and positive',()=>{
+  for(const timeoutMs of [0,-1,Infinity,NaN,2147483648]) assert.throws(()=>createSseAgentTransport({timeoutMs}),/timeout/)
+})
+
+test('deadline also cancels a stalled response body and suppresses late terminal callbacks',async()=>{
+  let readerCancelled=false
+  const body=new ReadableStream({start(controller){controller.enqueue(new TextEncoder().encode(event('delta',{text:'partial'})))},cancel(){readerCancelled=true}})
+  const transport=createSseAgentTransport({timeoutMs:10,fetchImpl:async(url)=>url.endsWith('/cancel')?new Response(null,{status:204}):new Response(body,{headers:{'content-type':'text/event-stream'}})})
+  const {calls,callbacks}=callbackRecorder()
+  transport.stream({system:'',messages:[],tools:[]},callbacks)
+  await new Promise(resolve=>setTimeout(resolve,40))
+  assert.deepEqual(calls.map(x=>x[0]),['delta','error','done'])
+  assert.equal(readerCancelled,true)
+})
+
+test('successful completion clears deadline and does not send cancellation',async()=>{
+  const requests=[]
+  const transport=createSseAgentTransport({timeoutMs:10,fetchImpl:async(url)=>{requests.push(url);return stream(event('done',{}))}})
+  const {calls,callbacks}=callbackRecorder()
+  transport.stream({system:'',messages:[],tools:[]},callbacks)
+  await new Promise(resolve=>setTimeout(resolve,40))
+  assert.deepEqual(calls,[['done']])
+  assert.equal(requests.length,1)
+})
+
+test('incomplete tool arguments fail closed; absent usage never manufactures billed tokens',async()=>{
+  const transport=createSseAgentTransport({fetchImpl:async()=>stream(event('tool_call',{id:'t',name:'write',input:'{"broken":'})+event('done',{}))})
+  const {calls,callbacks}=callbackRecorder()
+  await new Promise(resolve=>transport.stream({system:'',messages:[],tools:[]},{...callbacks,onDone(){callbacks.onDone();resolve()}}))
+  assert.deepEqual(calls.map(x=>x[0]),['error','done'])
+})
+
+test('late response after deadline emits no deltas and releases reader',async()=>{
+  let deliver
+  let readerCancelled=false
+  const transport=createSseAgentTransport({timeoutMs:10,fetchImpl:async url=>url.endsWith('/cancel')?new Response(null,{status:204}):new Promise(resolve=>{deliver=resolve})})
+  const {calls,callbacks}=callbackRecorder()
+  transport.stream({system:'',messages:[],tools:[]},callbacks)
+  await new Promise(resolve=>setTimeout(resolve,30))
+  deliver(new Response(new ReadableStream({start(controller){controller.enqueue(new TextEncoder().encode(event('delta',{text:'late'})+event('done',{})))},cancel(){readerCancelled=true}}),{headers:{'content-type':'text/event-stream'}}))
+  await delay()
+  assert.deepEqual(calls.map(x=>x[0]),['error','done'])
+  assert.equal(readerCancelled,true)
+})
+
+test('successful stream without usage does not invent zero usage',async()=>{
+  const transport=createSseAgentTransport({fetchImpl:async()=>stream(event('delta',{text:'ok'})+event('done',{}))})
+  const {calls,callbacks}=callbackRecorder()
+  await new Promise(resolve=>transport.stream({system:'',messages:[],tools:[]},{...callbacks,onDone(){callbacks.onDone();resolve()}}))
+  assert.deepEqual(calls.map(x=>x[0]),['delta','done'])
+})
