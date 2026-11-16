@@ -142,9 +142,24 @@ export function createCommandService({
       })
     },
     getCommandOutcome(input: CommandEnvelope) {
-      return run(input, false, (x, current) => ({
-        value: current ? existing(current, x.digest) : null,
-      }))
+      return run(input, false, async (x, current) => {
+        const row = current ? existing(current, x.digest) : null
+        // A committed state is not itself evidence of this writer's T06 receipt.
+        // Revalidate provenance under the same authority/command locks. Fresh
+        // editors fail closed here; read-only recovery is a separate later integration.
+        if (row?.state === 'committed') {
+          const revision = row.revision
+          if (
+            !isRevisionRef(revision) ||
+            revision.fileId !== x.envelope.fileId ||
+            revision.revision === x.envelope.baseRevision ||
+            !x.tx.verifyCommit ||
+            (await x.tx.verifyCommit(structuredClone(row), structuredClone(revision))) !== true
+          )
+            throw commandError('Unverified committed receipt')
+        }
+        return { value: row }
+      })
     },
     cancelCommand(input: CommandEnvelope) {
       return run(input, false, (x, current) => {
