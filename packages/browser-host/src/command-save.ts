@@ -92,7 +92,7 @@ export function createCommandSaveCoordinator({
         throw Error('Stale command snapshot')
       busy = true
       try {
-        const bytes = (await serialize()).slice()
+        const bytes = new Uint8Array(await serialize())
         const sha256 = Array.from(
           new Uint8Array(await crypto.subtle.digest('SHA-256', bytes.buffer as ArrayBuffer)),
           (n) => n.toString(16).padStart(2, '0'),
