@@ -52,3 +52,24 @@ adapter parsing/SSRF policy, customer-authorized real-model tests, native editor
 wiring, and T14 command approval/execution are separate unaccepted integrations.
 The default product endpoint remains unavailable. Passing mock transport tests is
 not T13 completion and is not proof of a real model response.
+
+## Coordinator resource bounds
+
+Cancellation identity lookups have a separate configurable deadline (`cancelTimeoutMs`,
+default 10 seconds) and at most `maxActive` outstanding lookups. A stalled lookup
+retains its slot until settlement, even after its caller times out; late identities
+cannot cancel turns. Identity adapter errors are redacted. These are local process
+limits, not distributed rate limiting or a substitute for route authentication.
+
+The coordinator also caps cumulative normalized JSON event payload bytes per turn
+(default 4 MiB, configurable with `maxOutputBytes`), measured as UTF-8. The event
+that would exceed the budget is not emitted; cancellation and cleanup follow the
+normal failure path. This is a payload resource limit, not token billing, SSE wire
+framing, or a replacement for provider-side generation limits.
+
+## Explicit admin pipeline foundation
+
+The candidate includes T12-backed admin-only budget/credential composition, pinned
+transport and parser adapters from #74/#76/#78. They remain explicitly constructed
+and unmounted. Synthetic PostgreSQL tests and mock DNS/HTTPS are not real provider
+acceptance; ordinary-member entitlement and production wiring remain outside scope.

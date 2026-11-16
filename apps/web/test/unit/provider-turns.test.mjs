@@ -92,6 +92,63 @@ test('provider exception and oversized events are redacted',async()=>{
  }
 })
 
+test('cancel identity errors are redacted',async()=>{
+ const service=setup({identity:async()=>{throw new Error('postgres://private-password@example/identity')}})
+ await assert.rejects(()=>service.cancel('a','turn'),/^Error: AI turn unavailable$/)
+})
+
+test('cancel deadline rejects stalled identity and bounds uncooperative lookup capacity',{timeout:150},async()=>{
+ let identityCalls=0
+ const service=createProviderTurns({identity:()=>{identityCalls++;return new Promise(()=>{})},authorize:async()=>({identity:owner,revision:'1'}),revalidate:async()=>{},stream:async function*(){}},{cancelTimeoutMs:10,maxActive:1})
+ const result=service.cancel('a','turn')
+ await assert.rejects(()=>service.cancel('a','other'),/AI cancellation capacity reached/)
+ await assert.rejects(()=>result,/AI cancellation timed out/)
+ await assert.rejects(()=>service.cancel('a','third'),/AI cancellation capacity reached/)
+ assert.equal(identityCalls,1)
+})
+
+test('late cancellation identity cannot abort a turn after the deadline; settled lookup frees capacity',{timeout:200},async()=>{
+ let started,late,signal
+ const ready=new Promise(resolve=>started=resolve)
+ const service=createProviderTurns({identity:async token=>token==='slow'?new Promise(resolve=>late=resolve):owner,authorize:async()=>({identity:owner,revision:'1'}),revalidate:async()=>{},stream:async function*(p,r,s){signal=s;started();await new Promise(()=>{})}},{timeoutMs:1000,cancelTimeoutMs:10,maxActive:1})
+ const running=service.run(input,()=>{});await ready
+ await assert.rejects(()=>service.cancel('slow','turn'),/AI cancellation timed out/)
+ late(owner);await new Promise(resolve=>setTimeout(resolve,0))
+ assert.equal(signal.aborted,false)
+ assert.equal(await service.cancel('a','turn'),true)
+ await assert.rejects(()=>running,/AI turn cancelled/)
+})
+
+test('invalid cancellation timeout is rejected',()=>{
+ for(const cancelTimeoutMs of [0,-1,NaN,Infinity,2147483648]) assert.throws(()=>createProviderTurns({}, {cancelTimeoutMs}),/Invalid AI turn limits/)
+})
+
+test('cumulative output budget rejects many individually small events before over-limit emission',async()=>{
+ const events=[]
+ let cancelled=false
+ const delta={type:'delta',text:'small'}
+ const size=new TextEncoder().encode(JSON.stringify(delta)).byteLength
+ const deps={identity:async()=>owner,authorize:async()=>({identity:owner,revision:'1'}),revalidate:async()=>{},stream:async function*(p,r,signal){try{yield delta;yield delta;yield delta}finally{cancelled=signal.aborted}}}
+ const service=createProviderTurns(deps,{maxOutputBytes:size*2})
+ await assert.rejects(()=>service.run(input,e=>events.push(e)),/AI turn output limit exceeded/)
+ assert.deepEqual(events,[delta,delta]);assert.equal(cancelled,true)
+})
+
+test('cumulative limit counts UTF-8 bytes, accepts exact budget and rejects one byte less',async()=>{
+ const delta={type:'delta',text:'你好😀'}
+ const size=new TextEncoder().encode(JSON.stringify(delta)).byteLength
+ for(const budget of [size,size-1]){
+  const events=[]
+  const service=createProviderTurns({identity:async()=>owner,authorize:async()=>({identity:owner,revision:'1'}),revalidate:async()=>{},stream:async function*(){yield delta}},{maxOutputBytes:budget})
+  if(budget===size){await service.run(input,e=>events.push(e));assert.deepEqual(events,[delta])}
+  else{await assert.rejects(()=>service.run(input,e=>events.push(e)),/output limit/);assert.deepEqual(events,[])}
+ }
+})
+
+test('output budget rejects invalid configuration',()=>{
+ for(const maxOutputBytes of [0,-1,NaN,Infinity,1.5,Number.MAX_SAFE_INTEGER+1]) assert.throws(()=>createProviderTurns({}, {maxOutputBytes}),/Invalid AI turn limits/)
+})
+
 test('transport disconnect cancels a turn before permit lookup settles, retaining orphan capacity',async()=>{
  let release,entered;const started=new Promise(r=>entered=r)
  const service=createProviderTurns({identity:async()=>owner,authorize:()=>{entered();return new Promise(r=>release=r)},revalidate:async()=>{},stream:async function*(){throw Error('must not dispatch')}},{timeoutMs:60,maxActive:1})

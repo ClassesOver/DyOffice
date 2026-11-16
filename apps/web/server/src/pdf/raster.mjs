@@ -54,6 +54,28 @@ function rasterPage(pdfium, doc, index) {
   }
 }
 
+// Preflight the whole document before allocating any bitmap, so a late large
+// page cannot consume resources after earlier pages have already been rendered.
+function validateRasterBudget(pdfium, doc) {
+  const count = pdfium._FPDF_GetPageCount(doc)
+  if (!Number.isInteger(count) || count < 1 || count > 100) reject('PDF_RENDER_LIMIT')
+  let total = 0
+  for (let index = 0; index < count; index += 1) {
+    const page = pdfium._FPDF_LoadPage(doc, index)
+    if (!page) reject('UNREADABLE')
+    try {
+      const width = pdfium._FPDF_GetPageWidthF(page)
+      const height = pdfium._FPDF_GetPageHeightF(page)
+      const pixels = Math.ceil(width) * Math.ceil(height)
+      if (!Number.isFinite(pixels) || width <= 0 || height <= 0 || pixels > 16_000_000 || pixels > 64_000_000 - total) reject('PDF_RENDER_LIMIT')
+      total += pixels
+    } finally {
+      pdfium._FPDF_ClosePage(page)
+    }
+  }
+  return count
+}
+
 async function withDocument(pdfium, bytes, fn) {
   const ptr = pdfium._malloc(bytes.length)
   pdfium.HEAPU8.set(bytes, ptr)
@@ -92,11 +114,12 @@ async function pageText(bytes) {
  * the reopen check for an unchanged export. Encrypted files produce no pixels.
  */
 export async function renderPdfPages(bytes) {
+  if (bytes.byteLength > 64 * 1024 * 1024) reject('PDF_RENDER_LIMIT')
   const report = await inspectPdf(bytes)
   if (report.encrypted) return { encrypted: true, pages: [] }
   const pdfium = await loadPdfium()
   const pages = await withDocument(pdfium, bytes, async (doc) => {
-    const count = pdfium._FPDF_GetPageCount(doc)
+    const count = validateRasterBudget(pdfium, doc)
     const rendered = []
     for (let index = 0; index < count; index += 1) rendered.push(rasterPage(pdfium, doc, index))
     return rendered

@@ -236,3 +236,15 @@ test('lease revoked while awaiting journal lock cannot claim apply or undo', asy
     )
   }
 })
+
+test('committed outcome cannot trust a row without original writer provenance', async () => {
+  const f = fixture()
+  await approved(f)
+  const [key, row] = [...f.rows][0]
+  const revision = { fileId: 'file', revision: 'forged', sha256: 'a'.repeat(64), size: 10 }
+  f.rows.set(key, { ...row, state: 'committed', revision })
+  await assert.rejects(() => f.service.getCommandOutcome(f.envelope), /receipt/)
+  assert.equal(f.rows.get(key).revision.revision, 'forged')
+  f.rows.set(key, { ...row, state: 'committed', revision: { ...revision, revision: 'r2' } })
+  assert.equal((await f.service.getCommandOutcome(f.envelope)).revision.revision, 'r2')
+})

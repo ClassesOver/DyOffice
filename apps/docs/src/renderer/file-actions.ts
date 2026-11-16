@@ -97,6 +97,7 @@ import { isDocDirty, resetCrossDocEditState } from './doc-dirty'
 import { pruneUnreferencedNumbering } from './numbering-actions'
 import { applySectPrRewrites, type SectPrRewrite } from './sectpr-rewrite'
 import { createSaveSerializer } from './save-until-persisted'
+import { captureSaveMetadata } from './save-metadata'
 import { checkMissingFonts, collectDocFonts } from './font-check'
 import { loadBundledStandIns } from './line-metrics'
 import { isBundledFont, isFontAvailable, setDocFontTable } from './text-layout/font-rules'
@@ -130,6 +131,8 @@ export interface DocsEditorHandle {
 export interface DocsHostLifecycle { documentOpened(): void; beforeSave(): Promise<void>; afterSave(accepted: boolean): void }
 export interface FileActionContext {
   hostLifecycle?: DocsHostLifecycle
+  /** Read the latest React state after asynchronous native serialization/write. */
+  getCurrentSaveContext?: () => FileActionContext
   editor: Editor | null
   doc: DocState | null
   dirtyRef: { current: boolean }
@@ -1208,9 +1211,9 @@ async function saveOnce(
   ctx.saveInFlightRef.current = true
   ctx.saveIncompleteRef.current = false
   let nativeSaved = false
+  const generation = docGeneration
   try {
     // a mid-stream save would serialize (and write) a truncated document
-    const generation = docGeneration
     await waitForFullContent()
     // the wait ended because another document replaced this one: nothing to write
     if (docGeneration !== generation) return false
@@ -1219,8 +1222,11 @@ async function saveOnce(
     // identity snapshot: detects edits that arrive while the save is in flight
     const fontSettingsVersion = ctx.fontSettingsVersionRef?.current
     if (ctx.hostLifecycle) await ctx.hostLifecycle.beforeSave()
+    if (docGeneration !== generation) return false
     const docSnapshot = editor.state.doc
+    const metadataSnapshot = captureSaveMetadata(ctx)
     const bytes = await buildDocBytes(ctx)
+    if (docGeneration !== generation) return false
     if (!bytes) return false
     const buffer = bytes.buffer.slice(
       bytes.byteOffset,
@@ -1239,6 +1245,7 @@ async function saveOnce(
         buffer,
         explicitTarget.overwrite,
       )
+      if (docGeneration !== generation) return false
       if (!result.ok) {
         ctx.setStatus(t('appSaveFailed', { error: result.error ?? '' }))
         showToast(t('appSaveFailed', { error: result.error ?? '' }), 'error')
@@ -1248,6 +1255,7 @@ async function saveOnce(
       savedPath = result.path!
       passwordIntentPending = result.passwordIntentPending === true
       if (result.dataUrl) fullBytes = await fetchDocBytes(result.dataUrl)
+      if (docGeneration !== generation) return false
       if (!doc.filePath) pathlessDocSavedPath = savedPath
     } else if (saveAs || !savedPath) {
       // A never-saved document still called "Untitled" gets a name derived from its
@@ -1278,6 +1286,7 @@ async function saveOnce(
             dialogNameFor(newDocName, autoName, doc.fileName),
             buffer,
           )
+      if (docGeneration !== generation) return false
       if (!result.ok) {
         const exportAs = (result as Awaited<ReturnType<typeof window.desktop.saveDocxAs>>).exportAs
         if (exportAs && result.path && exportRequest) {
@@ -1291,9 +1300,11 @@ async function saveOnce(
       savedPath = result.path!
       passwordIntentPending = result.passwordIntentPending === true
       if (result.dataUrl) fullBytes = await fetchDocBytes(result.dataUrl)
+      if (docGeneration !== generation) return false
       if (!doc.filePath) pathlessDocSavedPath = savedPath
     } else {
       const result = await window.desktop.saveDocx(savedPath, buffer, auto)
+      if (docGeneration !== generation) return false
       if (!result.ok) {
         // external-modified: the main process already prompted (or the autosave
         // deferred to a manual save) — stay dirty, no second dialog/error banner
@@ -1308,8 +1319,10 @@ async function saveOnce(
     }
     // parse before the identity check: a document opened during this await must not be rewritten
     const reparsed = await parseDocxOffThread(fullBytes ?? bytes)
+    if (docGeneration !== generation) return false
     if (
       editor.state.doc !== docSnapshot ||
+      metadataSnapshot.changed(ctx.getCurrentSaveContext?.() ?? ctx) ||
       passwordIntentPending ||
       ctx.fontSettingsVersionRef?.current !== fontSettingsVersion
     ) {
@@ -1455,12 +1468,13 @@ async function saveOnce(
     nativeSaved = true
     return true
   } catch (err) {
+    if (docGeneration !== generation) return false
     ctx.setStatus(t('appSaveFailed', { error: String(err) }))
     if (!auto) showToast(t('appSaveFailed', { error: String(err) }), 'error')
     return false
   } finally {
     ctx.saveInFlightRef.current = false
-    ctx.hostLifecycle?.afterSave(nativeSaved && !ctx.saveIncompleteRef.current)
+    if (docGeneration === generation) ctx.hostLifecycle?.afterSave(nativeSaved && !ctx.saveIncompleteRef.current)
   }
 }
 
