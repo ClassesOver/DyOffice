@@ -11,7 +11,7 @@ const context = await createLegacyContext({
   userToken: process.env.DYOFFICE_USER_TOKEN,
   adminToken: process.env.DYOFFICE_ADMIN_TOKEN,
   encryptionKey: process.env.DYOFFICE_ENCRYPTION_KEY,
-  assetMode: process.env.DYOFFICE_ASSET_MODE || 'source',
+  assetMode: process.env.DYOFFICE_ASSET_MODE || 'built',
 })
 const app = await buildApp({
   env: 'development',

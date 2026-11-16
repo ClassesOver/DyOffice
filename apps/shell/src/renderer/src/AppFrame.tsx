@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'react'
-import { Home } from './Home'
+import { Home, type HomeProps } from './Home'
+import type {ReactNode} from 'react'
+import type {TabSummary} from '../../shared/tabs-api'
 import { Onboarding } from './Onboarding'
 import { StarPromptCard } from './StarPromptCard'
 import { TabBar } from './TabBar'
@@ -7,9 +9,13 @@ import { TabBar } from './TabBar'
 interface AppFrameProps {
   /** resolved before first paint (main.tsx) so home never flashes under the overlay */
   initialOnboardingSeen: boolean
+  homeProps?:HomeProps
+  renderEditor?:(tab:TabSummary)=>ReactNode
+  editorContent?:ReactNode
 }
 
-export function AppFrame({ initialOnboardingSeen }: AppFrameProps) {
+export function AppFrame({ initialOnboardingSeen, homeProps, renderEditor, editorContent }: AppFrameProps) {
+  const [activeTab,setActiveTab] = useState<TabSummary | undefined>()
   const [homeActive, setHomeActive] = useState(true)
   const [showOnboarding, setShowOnboarding] = useState(!initialOnboardingSeen)
   const [starPromptDocOpens, setStarPromptDocOpens] = useState<number | null>(null)
@@ -17,6 +23,7 @@ export function AppFrame({ initialOnboardingSeen }: AppFrameProps) {
   useEffect(() => {
     const applyTabs = (tabs: Awaited<ReturnType<typeof window.aiOfficeTabs.list>>) => {
       const active = tabs.find((tab) => tab.active)
+      setActiveTab(active)
       setHomeActive(!active || active.kind === 'home')
     }
     void window.aiOfficeTabs.list().then(applyTabs)
@@ -54,8 +61,10 @@ export function AppFrame({ initialOnboardingSeen }: AppFrameProps) {
       {/* docs/sheets tabs render as WebContentsView children of this window, positioned
        * by the main process to cover this area — only Home paints its own content here. */}
       <div className="app-frame-content" style={{ visibility: homeActive ? 'visible' : 'hidden' }}>
-        <Home />
+        <Home {...homeProps}/>
       </div>
+      {editorContent}
+      {!homeActive && activeTab && renderEditor?.(activeTab)}
       {/* editor WebContentsViews paint above ALL shell DOM, so the overlay only
        * renders while the home tab is active — it comes back when home does */}
       {showOnboarding && homeActive && <Onboarding onDone={finishOnboarding} />}
