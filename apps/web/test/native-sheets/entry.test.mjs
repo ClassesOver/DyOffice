@@ -72,6 +72,10 @@ test('native Sheets edits, saves and reopens the hashed acceptance workbook thro
  const revision=await f.files.openFile(f.alice.token,f.opened.file.fileId)
  assert.equal(revision.file.revision,f.opened.file.revision,'Opening a workbook must not create a saved revision')
  await f.page.evaluate(()=>{window.__genofficeDebug.univerAPI.getActiveWorkbook().getActiveSheet().getRange('A2').setValue(21.25)})
+ // Wait for the dependent formula to settle before saving: the save payload
+ // reads live formula cache values, so clicking during the async recalc
+ // window would persist the stale cached 25 and fail the 42.5 assertion.
+ await expect.poll(()=>f.page.evaluate(()=>window.__genofficeDebug.univerAPI.getActiveWorkbook().getActiveSheet().getRange('B2').getValue()),{timeout:30000}).toBe(42.5)
  const save=f.page.locator('.qa-btn').first()
  await expect(save).toBeEnabled()
  await save.click()
