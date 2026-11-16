@@ -33,3 +33,28 @@ test('original settings uses only Web capabilities and does not fake a failed pr
  expect(forbidden).toEqual([])
  root.unmount()
 })
+
+test('Web preference saves fence same-turn clicks and cannot change theme after unmount',async()=>{
+ HTMLElement.prototype.scrollIntoView=vi.fn()
+ document.documentElement.dataset.theme='light'
+ document.body.innerHTML='<div id="settings-race"></div>'
+ const prefs:WebSettingsPreferences={theme:'light',language:'zh',authorName:'',autoSave:false,showAssistant:true}
+ let writes=0;let finish:(value:WebSettingsPreferences)=>void=()=>{}
+ const root=createRoot(document.querySelector('#settings-race')!)
+ root.render(h(LocaleProvider,{initial:'zh',children:h(SettingsModal,{status:null,loggingOut:false,loginWaiting:false,loginUrl:null,urlCopied:false,onOpenLoginUrl(){},onCopyLoginUrl(){},onLogin(){},onLogout(){},onClose(){},web:{account:h('p',null,'Account'),load:async()=>prefs,save:async()=>{writes++;return new Promise(resolve=>{finish=resolve})}}})}))
+ await vi.waitFor(()=>expect(document.querySelector('.set-dialog')).not.toBeNull())
+ ;([...document.querySelectorAll<HTMLButtonElement>('.set-nav-item')].find(b=>b.textContent==='通用')!).click()
+ await vi.waitFor(()=>expect(document.querySelector<HTMLButtonElement>('[role="switch"][aria-label="所有文档自动保存"]')?.disabled).toBe(false))
+ const toggle=document.querySelector<HTMLButtonElement>('[role="switch"][aria-label="所有文档自动保存"]')!
+ toggle.click();toggle.click()
+ expect(writes).toBe(1)
+ finish({...prefs,autoSave:true})
+ await vi.waitFor(()=>expect(toggle.getAttribute('aria-checked')).toBe('true'))
+ document.querySelector<HTMLButtonElement>('[aria-label="主题"]')!.click()
+ await vi.waitFor(()=>expect(document.querySelector('[role="option"][aria-label="深色"]')).not.toBeNull())
+ document.querySelector<HTMLButtonElement>('[role="option"][aria-label="深色"]')!.click()
+ await vi.waitFor(()=>expect(writes).toBe(2))
+ root.unmount();finish({...prefs,theme:'dark'})
+ await new Promise(resolve=>setTimeout(resolve,0))
+ expect(document.documentElement.dataset.theme).toBe('light')
+})

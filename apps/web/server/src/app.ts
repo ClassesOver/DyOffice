@@ -18,6 +18,8 @@ import { assertRuntimePool, assertSharedDatabase } from './db/roles.ts'
 import { createPrincipalTransactions } from './db/context.ts'
 import { createPreferenceService } from './modules/preferences/service.ts'
 import { registerPreferenceRoutes } from './modules/preferences/routes.ts'
+import { createWorkspaceService } from './modules/workspace/service.ts'
+import { registerWorkspaceRoutes } from './modules/workspace/routes.ts'
 import type { IdentityStore } from './db/identity.ts'
 import { createPasswordService, loadPasswordBlocklist, type PasswordService } from './modules/auth/passwords.ts'
 import { createAccountService } from './modules/auth/service.ts'
@@ -27,6 +29,9 @@ import { createLoginThrottle, type LoginLimits } from './modules/auth/throttle.t
 import { registerAuthRoutes } from './modules/auth/routes.ts'
 import { createUserService } from './modules/admin/users/service.ts'
 import { registerUserRoutes } from './modules/admin/users/routes.ts'
+import { createGlobalConfigService } from './modules/admin/service.ts'
+import { registerGlobalConfigRoutes } from './modules/admin/routes.ts'
+import type { SecretKeyring } from './modules/admin/secrets.ts'
 
 export async function buildApp(config: WebConfig): Promise<FastifyInstance> {
   if (process.env.NODE_ENV === 'production') throw new Error('Development token server is not allowed in production')
@@ -45,6 +50,7 @@ export async function buildApp(config: WebConfig): Promise<FastifyInstance> {
 export interface LocalWebConfig {
   db: IdentityStore; businessPool?: Pool; deploymentId: string; origin: string; csrfKey: string; passwords?: PasswordService;
   objectStore?: ObjectStore; filePolicy?: FilePolicy; nativeDocsDirectory?: string; nativeJobs?: boolean; localShellDirectory?: string;
+  globalConfigKeyring?: SecretKeyring;
   passwordBlocklistFile?: string; loginLimits?: LoginLimits; idleMs?: number; absoluteMs?: number; closeDb?: () => Promise<void>
 }
 export async function buildLocalApp(config: LocalWebConfig): Promise<FastifyInstance> {
@@ -83,6 +89,8 @@ export async function buildLocalApp(config: LocalWebConfig): Promise<FastifyInst
   if (config.businessPool) {
     const transactions = createPrincipalTransactions({ pool: config.businessPool, deploymentId: config.deploymentId, idleMs: config.idleMs })
     registerPreferenceRoutes(app, createPreferenceService(transactions), sessions, csrf)
+    registerWorkspaceRoutes(app, createWorkspaceService(transactions), sessions, csrf)
+    registerGlobalConfigRoutes(app, createGlobalConfigService({transactions, keyring: config.globalConfigKeyring}), sessions, csrf)
     if (config.objectStore) {
       const files = createFileService({ transactions, objects: config.objectStore, ...config.filePolicy, capabilities: nativeDocs ? { docx: 'editable',xlsx: 'unsupported',pptx: 'unsupported',pdf: 'unsupported' } : undefined })
       const leases = createLeaseService({ transactions })

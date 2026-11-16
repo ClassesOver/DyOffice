@@ -9,7 +9,7 @@ The first sections describe the default development-token runtime and its modula
 | Entry | Data and migrations | Administrator bootstrap |
 | --- | --- | --- |
 | Default `DYOFFICE_AUTH_MODE=development`: `server/src/app.mjs`, development bearer tokens | JSON workspace and single-process revision journal. Optional `buildApp({ localAuth })` services use a separate modular account database: `server/db/migrations/0001`–`0008`, `dyoffice_*` tables, `dyoffice_schema_migrations` journal. The default process does not connect to that database. | `node apps/web/tools/bootstrap-admin.mjs --deployment-id UUID --username LOGIN`, or the `apps/web` package's `bootstrap:admin` script; see the CLI section below. |
-| Explicit `DYOFFICE_AUTH_MODE=local`: `server/src/app.ts` → `buildLocalApp` | Dedicated PostgreSQL 17 database: `server/src/db/migrations/0001`–`0012`, unprefixed application tables and `identity_migrations` journal. Separate migration owner, auth, business and optional worker logins. | From the repository root: `npm run provision:runtime`, then interactive `npm run bootstrap:admin` (`tools/dyoffice/bootstrap-admin.ts`), with `DYOFFICE_DEPLOYMENT_ID` set. |
+| Explicit `DYOFFICE_AUTH_MODE=local`: `server/src/app.ts` → `buildLocalApp` | Dedicated PostgreSQL 17 database: `server/src/db/migrations/0001`–`0015`, unprefixed application tables and `identity_migrations` journal. Separate migration owner, auth, business and optional worker logins. | From the repository root: `npm run provision:runtime`, then interactive `npm run bootstrap:admin` (`tools/dyoffice/bootstrap-admin.ts`), with `DYOFFICE_DEPLOYMENT_ID` set. |
 
 Use different databases for these two account implementations. Each bootstrap command accepts a migration connection through `DYOFFICE_DATABASE_URL`, but initializes only its own schema; it does not import accounts, sessions, revisions or migration history from the other implementation. Local role provisioning revokes database-wide PUBLIC CREATE/TEMP privileges, so it must not target the modular account database or a shared business database. The local runtime's auth/business/worker connections must, in turn, refer to the same dedicated local database and schema.
 
@@ -171,7 +171,7 @@ PR #24 follow-up adds a conservative plain-table-cell projection and a partial W
 
 ## Separate local-account experimental runtime
 
-以下 T03–T08 配置仅适用于 `server/src/app.ts` 的 `buildLocalApp` 和 `DYOFFICE_AUTH_MODE=local`。阶段检查点记录当时的开放项；当前 native Worker 状态以下面的 T08 当前运行方式为准。默认开发 Token 入口不会因此连接 PostgreSQL，模块化 `.mjs` 账号库也不会自动迁移到此入口。
+以下本地账号配置仅适用于 `server/src/app.ts` 的 `buildLocalApp` 和 `DYOFFICE_AUTH_MODE=local`。阶段检查点记录当时的开放项；当前 native Worker 状态以下面的 T08 当前运行方式为准，工作区与配置见 T12。默认开发 Token 入口不会因此连接 PostgreSQL，模块化 `.mjs` 账号库也不会自动迁移到此入口。
 
 ### T03a 本地实验账号基础与初始化
 
@@ -210,6 +210,32 @@ T03a 是历史基础检查点；当前 Cookie 会话见下文 T03b，账号登�
 `GET/PUT /api/preferences` 和 `/api/v1/preferences` 使用 Cookie 推导个人身份，支持 theme、language、authorName、autoSave、showAssistant。PUT 需要 Origin/CSRF；owner 等额外字段被拒绝。业务事务锁定账号和会话直到提交，停用/撤销与写入有明确提交顺序；Admin 没有他人偏好的所有权。旧 JSON 原型数据不自动迁移给新账号。
 
 集成测试的隔离 PostgreSQL 管理连接需能创建/删除测试数据库和角色；测试在随机专用数据库内使用真实的三个非超级用户角色，不能拿超级用户测试冒充 RLS 验收。详情见 [T04 证据](../../docs/dyoffice/evidence/t04-rls-checkpoint.md)。生产仍关闭；文件、后台任务、外部 Token 和四格式编辑尚未由此交付。
+
+### T12 个人工作区、偏好与全局配置
+
+本地账号的原 Home 现在通过 `/api/v1/workspace/` 使用 PostgreSQL 持久化文件夹、收藏和最近打开时间。个人文件根目录可浏览全部活动文件；从最近列表移除只清除访问记录。文件软删除进入回收站，恢复保留内容、版本、收藏及目录关联。目录只能在为空时删除，回收文件的目录关联也计入非空判断；不提供永久清空回收站。配置管理员仍只能访问自己的文件和文件夹。
+
+个人设置仅保存 `theme`、`language`、`authorName`、`autoSave`、`showAssistant`。原 Settings 界面使用独立的偏好适配器；全局模型配置不接受这些字段，个人偏好也不接受 Provider Key。退出或会话失效会使旧请求响应作废。保存与检查在客户端同步互斥，失败保留非密钥草稿；无法确认写入结果时，必须主动读取最新状态后核对，不能自动重放。
+
+`config_admin` 的账户菜单提供独立“全局配置”。它复用原 Provider 的对话、图像生成、图像/视频分析、网页/图片搜索元数据，并提供重排及 HTTP MCP 目录。生成和分析使用各自模型候选与默认项；依赖桌面账户的服务保持不可用。默认项只能指向已启用配置；停用或删除后取消该默认，不暗中选择其他服务商。
+
+| 接口 | 行为 |
+|---|---|
+| `GET /api/v1/settings/public` | 当前会话可见的已启用目录与默认项；不包含 endpoint、`hasKey`、密钥或密文 |
+| `GET /api/v1/admin/config` | 管理员配置元数据、`revision`、`hasKey` 和 Provider 目录 |
+| `PUT /api/v1/admin/config` | `{expectedRevision, patch}`；也接受合法 `If-Match`。缺失版本为 428，版本冲突为 409，全部变更原子回滚 |
+| `POST /api/v1/admin/config/check` | 检查已保存配置与密钥可解密性，返回 `connection: "not_run"` |
+| `POST /api/v1/admin/config/rotate-key` | 按预期版本使用服务器活动密钥重加密，任一失败全部回滚 |
+
+检查按钮不会发起外部网络请求；真实模型流、搜索执行和 MCP 调用还需要各自执行路径的授权与网络边界验收（T13/T16/T18）。旧 `/api/admin/config`、`/api/models` 等开发 Token 路径继续不向本地 Cookie 入口开放。
+
+**密钥配置。** 迁移 owner 先运行现有 `npm run provision:runtime`，安装追加迁移 `0014_global_config.sql`、`0015_workspace.sql` 和最小权限。运行进程可通过秘密管理系统注入 `DYOFFICE_CONFIG_KEYRING`，其 JSON 结构为 `{"activeKeyId":"config-v1","keys":{"config-v1":"<32 字节随机值的规范 base64>"}}`。这是结构示例，尖括号内容必须替换为实际秘密；不要提交到仓库或写入日志。它必须独立于 CSRF Key、账号密码和 Provider API Key。服务端验证 keyId、编码与长度，错误启动消息不包含输入。未配置 keyring 时仍可读取公共目录及维护非密钥元数据，但保存新密钥和重加密返回不可用，不会临时生成主密钥。
+
+API Key 输入留空或不提供表示保留原值，只有显式 `clearKey: true` 才清空。更换已有密钥配置的 Provider 或类型时，必须同时替换或清空，不能把旧密钥带给新服务商。秘密使用随机 IV 的 AES-256-GCM，AAD 绑定 deployment、配置 ID、Provider、类型和 keyId；GET、审计和错误不会返回秘密。
+
+**轮换。** 在秘密管理中保留旧 keyId/key，加入新随机 key，并把 `activeKeyId` 指向新项后重启服务。管理员读取最新版本、执行“轮换加密密钥”，核对成功版本，再运行“检查已保存配置”。在所有相关部署均完成迁移、历史备份解密需求已有安排之前保留旧 key；缺失旧 key 会使检查/轮换失败，事务保留原密文与版本。轮换不更换 Provider 的 API Key，也不保存面板草稿。
+
+构建原 Home 使用 `npx vite build --config apps/web/vite.local-shell.config.mjs`。浏览器回归位于 `test/local-browser/`，需要真实 PostgreSQL 与 Chromium；默认使用 Playwright 配套浏览器，也可显式设置 `DYOFFICE_TEST_CHROMIUM_PATH` 并在证据中记录版本。当前验证范围与命令见 [T12 验收记录](../../docs/dyoffice/evidence/t12-settings-workspace.md)，不能把配置目录或原件下载等同于尚未接入的四格式原生编辑能力。
 
 ### T05a 对象存储与结构校验基础
 
@@ -307,7 +333,7 @@ T08a 建立版本 7 的任务表；下文历史检查点记录到版本 10，当
 
 原生 Worker 已切换为无 Docker 的 Linux/systemd 受限进程。构建原始 Rust 引擎后，使用 `host-manifest.json` 中的绝对二进制路径与 SHA-256，分别设置 `DYOFFICE_NATIVE_BINARY` 和 `DYOFFICE_NATIVE_SHA256`。配置和权限要求见 [宿主机运行说明](worker/HOST-RUNTIME.md)。旧 T08a–e 证据记录当时状态，不再作为当前部署步骤。
 
-迁移版本为 12，先用 owner 执行 `npm run provision:runtime`。API 设置 `DYOFFICE_NATIVE_JOBS=experimental`，提供任务入队、列表、查询与取消；入队输入仅含本人 artifactId、类型和幂等键，使用现有 Cookie/Origin/CSRF。独立 Worker 设置 `DYOFFICE_NATIVE_WORKER=experimental`，使用受限 worker/business 连接及相同 deployment、对象存储配置。
+T08 追加迁移至版本 12；当前完整运行时还包含 T12 的版本 14/15，先用 owner 执行 `npm run provision:runtime` 安装全部登记迁移。API 设置 `DYOFFICE_NATIVE_JOBS=experimental`，提供任务入队、列表、查询与取消；入队输入仅含本人 artifactId、类型和幂等键，使用现有 Cookie/Origin/CSRF。独立 Worker 设置 `DYOFFICE_NATIVE_WORKER=experimental`，使用受限 worker/business 连接及相同 deployment、对象存储配置。
 
 Worker 的原生执行、心跳、取消/失锁终止及 T06 同事务输出提交已连通。systemd 独立期限处理控制进程死亡，部署范围内的过期残留由启动与定期回收处理。revision outbox 使用 SQL 租约和确认令牌向 Redis 发布 eventId，支持重复提示和队列丢失后的重建；发布不代表搜索索引已完成。
 
@@ -323,6 +349,10 @@ above. Log in with a real local account; no development-token/JSON fallback exis
 The original Home/Settings components use the cookie/CSRF file and preferences APIs.
 New/imported DOCX editing additionally requires the native DOCX entry. It opens as
 a top-level editor page with browser Back, not a completed multi-tab local workflow.
-Admin/account/password UI is not yet connected here; unsupported format creation is
-disabled and stars remain page-session-only. Local-account Chromium acceptance lives
-in `test/local-browser`, requires real PostgreSQL, and fails when that service is absent.
+Account/password/session and Admin user/configuration panels are connected here.
+Personal folders, stars and true recent-open timestamps persist in PostgreSQL; trash
+can be restored from the account menu. Unsupported native format creation remains
+disabled. Local-account Chromium acceptance lives in `test/local-browser`, requires
+real PostgreSQL, and fails when that service is absent. T12 native DOCX theme/save
+coverage is in `test/native-docs/theme.test.mjs`; import/download of the other three
+formats does not claim their native editors are enabled.

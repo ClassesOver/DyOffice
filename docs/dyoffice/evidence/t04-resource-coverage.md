@@ -10,6 +10,8 @@ Scope: read-only inspection of coordinator's unpublished `t03-t04-closure` candi
 
 ## Current local runtime registrations
 
+T12 update: the local runtime now also registers personal `/api/v1/workspace/*`, public `/api/v1/settings/public`, and role-gated `/api/v1/admin/config` plus configuration check/key rotation. These use the restricted transaction layer and added FORCE RLS tables; they do not enable the legacy provider paths listed below. See [T12 evidence](t12-settings-workspace.md). This paragraph supplements the dated T04 review; it does not convert future AI/MCP execution into accepted scope.
+
 - `server/src/app.ts:buildLocalApp` registers credential-backed auth/Admin users, preferences, files/uploads/content/revisions/leases/quota/capabilities and optional native jobs. File and revision transactions rederive authority from a session, not request-supplied owner. Job transactions use scoped live credentials. Admin role does not grant foreign file ownership.
 - Actual consumers are `local-main.tsx` / `local-client.ts`, original Home bridge and native DOCX file host. Admin UI operates account metadata, not an implicit cross-owner file viewer.
 - Existing real-PG suites cover ownership-rls, files, revision-commit, job-routes, scoped-startup, revocation-race and authority-write-races; final combined run still required. The previously delivered three #28 regressions add foreign/missing job error equivalence, role-epoch invalidated enqueue/cancel, and fully configured app legacy fallback refusal.

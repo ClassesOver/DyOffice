@@ -293,15 +293,17 @@ docs/dyoffice/               当前计划及 inventory/ evidence/ adr/
 
 ### T12 工作区、个人偏好与 Admin 全局配置
 
-**依赖：** T04/T05/T07。**文件：** `apps/web/src/{workspace,admin}`、`modules/admin/{routes,service,secrets}.ts`、`packages/browser-host/src/preferences.ts`、`test/integration/settings-boundary.test.ts`、`test/e2e/workspace.spec.ts`。
+**依赖：** T04/T05/T07。**当前文件：** `apps/web/src/shell/{local-main,local-home-bridge,GlobalSettingsPanel,WorkspaceTrash}`、`server/src/modules/{admin,workspace}`、`packages/browser-host/src/preferences.ts`、`test/local-integration/{settings-boundary,workspace}.test.mjs`、`test/local-browser/t12-workspace-settings.test.mjs`、`test/native-docs/theme.test.mjs`。
 
 **接口：** `getPublicSettings()`、`saveGlobalConfig(expectedRevision, patch)`、`updatePreferences()`。
 
-- [ ] 测试模型/媒体/搜索/重排目录、保留省略的 Key、显式清空、版本冲突、退出后旧响应、个人字段注入全局配置。
-- [ ] unit/integration/E2E RED。
-- [ ] 复用 GenOffice settings/provider 元数据和 UI；加入文件夹、最近、收藏、回收站；密钥加密和轮换，不发送完整 AiSettings 到前端。
-- [ ] GREEN；暗色主题不改变文档输出；表单失败保留草稿，保存/测试防重复点击。
-- [ ] 提交 `feat(settings): separate personal workspace and global admin`。
+- [x] 测试模型/媒体/搜索/重排目录、保留省略的 Key、显式清空、版本冲突、退出后旧响应、个人字段注入全局配置。
+- [x] unit/integration/E2E RED→GREEN；记录真实工作区501、会话/草稿竞争、CAS/轮换、目录模型与整页布局失败和修复。
+- [x] 复用 GenOffice settings/provider 元数据和 UI；加入文件夹、最近、收藏、回收站；密钥加密和轮换，不发送完整 AiSettings 到前端。
+- [x] GREEN；DOCX 原生同一编辑在浅/深主题保存的正文 XML 完全一致，四格式原件下载字节不变；表单失败保留草稿，保存/检查防重复点击。
+- [x] 提交 `feat(settings): separate personal workspace and global admin`。
+
+2026-11-16：实现与本地验收完成，详见 [T12 验收证据](evidence/t12-settings-workspace.md)。全局检查仅验证配置与密钥可解密，不进行模型/搜索/MCP 外部连通测试；T13/T16/T18 执行接入、其他三格式原生保存和 production 不由此标记完成。本轮按用户要求不以 CI 为条件。
 
 ### T13 Provider Gateway 与原生助手流
 

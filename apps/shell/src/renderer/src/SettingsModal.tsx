@@ -1843,6 +1843,9 @@ export function SettingsModal({
   const [webError, setWebError] = useState('')
   const [webBusy, setWebBusy] = useState(Boolean(web))
   const [webReady, setWebReady] = useState(!web)
+  const webSaving = useRef(false)
+  const webMounted = useRef(true)
+  useEffect(() => { webMounted.current = true; return () => { webMounted.current = false } }, [])
   const [section, setSection] = useState<SectionId>(target?.section ?? 'account')
   const navRef = useRef<HTMLElement | null>(null)
   const navPill = useSlidingIndicator(navRef, '.set-nav-item.active', section)
@@ -1879,19 +1882,21 @@ export function SettingsModal({
     setAiPrefs(prev => ({ ...prev, showAiSidebar: prefs.showAssistant !== false }))
   }
   const saveWebPreferences = async (patch: Partial<WebSettingsPreferences>) => {
-    if (!web || webBusy) return
+    if (!web || webBusy || webSaving.current) return
+    webSaving.current = true
     setWebBusy(true)
     setWebError('')
     try {
       const prefs = await web.save(patch)
+      if (!webMounted.current) return
       applyWebPreferences(prefs)
       if (patch.theme) {
         if (prefs.theme === 'system') document.documentElement.removeAttribute('data-theme')
         else document.documentElement.setAttribute('data-theme', prefs.theme)
       }
     } catch (error) {
-      setWebError(error instanceof Error ? error.message : '设置未保存')
-    } finally { setWebBusy(false) }
+      if (webMounted.current) setWebError(error instanceof Error ? error.message : '设置未保存')
+    } finally { webSaving.current = false; if (webMounted.current) setWebBusy(false) }
   }
   useEffect(() => {
     let alive = true

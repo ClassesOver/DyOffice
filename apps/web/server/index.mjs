@@ -5,6 +5,7 @@ import { Pool } from 'pg';
 import { configuredObjectStore } from './src/storage/config.ts';
 import { buildApp, buildLocalApp } from './src/app.ts';
 import { connectIdentityStore } from './src/db/identity.ts';
+import { parseConfigKeyring } from './src/modules/admin/keyring-config.ts';
 
 async function configuredApplication() {
   const mode=process.env.DYOFFICE_AUTH_MODE||'development';
@@ -27,6 +28,7 @@ async function configuredApplication() {
   const deploymentId=process.env.DYOFFICE_DEPLOYMENT_ID;
   const origin=process.env.DYOFFICE_ORIGIN;
   const csrfKey=process.env.DYOFFICE_CSRF_KEY;
+  const globalConfigKeyring=parseConfigKeyring(process.env.DYOFFICE_CONFIG_KEYRING);
   if(!connectionString||!businessConnectionString||!deploymentId||!origin||!csrfKey) throw new Error('Local account configuration missing');
   const {db,close}=connectIdentityStore(connectionString);
   let businessPool,storage;
@@ -36,7 +38,7 @@ async function configuredApplication() {
     const nativeFlag=process.env.DYOFFICE_NATIVE_DOCX;
     if(nativeFlag && nativeFlag!=='experimental') throw new Error('Unknown native DOCX mode');
     const nativeDocsDirectory=nativeFlag ? resolve(process.env.DYOFFICE_NATIVE_DOCX_DIRECTORY||fileURLToPath(new URL('../dist-docs/',import.meta.url))) : undefined;
-    return await buildLocalApp({db,businessPool,...storage,nativeDocsDirectory,localShellDirectory:shellDirectory,nativeJobs:jobFlag==='experimental',deploymentId,origin,csrfKey,passwordBlocklistFile:process.env.DYOFFICE_PASSWORD_BLOCKLIST_FILE,closeDb:async()=>{storage.close();await Promise.all([close(),businessPool.end()]);}});
+    return await buildLocalApp({db,businessPool,...storage,nativeDocsDirectory,localShellDirectory:shellDirectory,nativeJobs:jobFlag==='experimental',deploymentId,origin,csrfKey,globalConfigKeyring,passwordBlocklistFile:process.env.DYOFFICE_PASSWORD_BLOCKLIST_FILE,closeDb:async()=>{storage.close();await Promise.all([close(),businessPool.end()]);}});
   } catch(error) { storage?.close();await Promise.allSettled([close(),businessPool?.end()]); throw error; }
 }
 
