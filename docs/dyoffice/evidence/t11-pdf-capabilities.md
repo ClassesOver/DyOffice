@@ -22,7 +22,7 @@ The file first failed because `capabilities.mjs` did not exist. After the module
 
 ## Page kind, fonts, and signatures
 
-A page with `Tj` or `TJ` is `text`. A page that draws an image XObject and has no text operators is `scanned`, and `capabilities.scanned` is `no_text_layer`. A page with neither is `blank`. A standard font such as Helvetica is reported with `embedded: false`. A signature field is `present_unverified`. `trustSignature` fails with `SIGNATURE_UNVERIFIED`. The byte range is not checked and the signature is not treated as valid or invalid.
+A page is `text` when a decoded content stream, including a Form XObject it invokes, contains a text-showing operator (`Tj`, `TJ`, `'`, or `"`). Comments, names, and string contents are not operators. A page that draws an image XObject and has no text operators is `scanned`, and `capabilities.scanned` is `no_text_layer`. A page with neither is `blank`. A signature field type or value inherited from the widget parent is still `present_unverified`. A standard font such as Helvetica is reported with `embedded: false`. A signature field is `present_unverified`. `trustSignature` fails with `SIGNATURE_UNVERIFIED`. The byte range is not checked and the signature is not treated as valid or invalid.
 
 ```sh
 node --test apps/web/test/pdf-pages.test.mjs

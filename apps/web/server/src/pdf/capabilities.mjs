@@ -30,29 +30,72 @@ function streamBytes(stream) {
   return raw
 }
 
-function contentText(page) {
-  const contents = page.node.Contents()
+function isDelim(char) {
+  return char === ' ' || char === '\n' || char === '\r' || char === '\t' || char === '\f' || char === '\0'
+    || char === '%' || char === '(' || char === ')' || char === '<' || char === '>'
+    || char === '[' || char === ']' || char === '/' || char === '{' || char === '}'
+}
+
+function skipLiteral(source, index) {
+  let depth = 0
+  while (index < source.length) {
+    const char = source[index]
+    if (char === '\\') { index += 2; continue }
+    if (char === '(') depth += 1
+    if (char === ')') {
+      depth -= 1
+      index += 1
+      if (depth === 0) return index
+      continue
+    }
+    index += 1
+  }
+  return index
+}
+
+function tokenize(source) {
+  const tokens = []
+  let index = 0
+  while (index < source.length) {
+    const char = source[index]
+    if (char === ' ' || char === '\n' || char === '\r' || char === '\t' || char === '\f' || char === '\0') { index += 1; continue }
+    if (char === '%') {
+      index += 1
+      while (index < source.length && source[index] !== '\n' && source[index] !== '\r') index += 1
+      continue
+    }
+    if (char === '(') { index = skipLiteral(source, index); continue }
+    if (char === '<') {
+      if (source[index + 1] === '<') { index += 2; continue }
+      index += 1
+      while (index < source.length && source[index] !== '>') index += 1
+      index += 1
+      continue
+    }
+    if (char === '>') { index += source[index + 1] === '>' ? 2 : 1; continue }
+    if (char === '[' || char === ']' || char === '{' || char === '}') { index += 1; continue }
+    if (char === '/') {
+      index += 1
+      const start = index
+      while (index < source.length && !isDelim(source[index])) index += 1
+      tokens.push({ kind: 'name', value: source.slice(start, index) })
+      continue
+    }
+    const start = index
+    while (index < source.length && !isDelim(source[index])) index += 1
+    const word = source.slice(start, index)
+    if (word && !/^[+-]?(?:\d+\.?\d*|\.\d+)$/.test(word)) tokens.push({ kind: 'op', value: word })
+  }
+  return tokens
+}
+
+function contentSource(context, contents) {
   if (!contents) return ''
   const items = contents instanceof PDFArray ? contents.asArray() : [contents]
   return items.map((item) => {
-    try { return streamBytes(page.node.context.lookup(item)).toString('latin1') }
+    try { return streamBytes(context.lookup(item)).toString('latin1') }
     catch { return '' }
   }).join('\n')
-}
-
-function hasTextOperators(source) {
-  return /(^|[^A-Za-z])(Tj|TJ)(?![A-Za-z])/.test(source)
-}
-
-function imageXObject(page, source) {
-  if (!/(^|[^A-Za-z])Do(?![A-Za-z])/.test(source)) return false
-  const xobjects = page.node.Resources()?.lookup(PDFName.of('XObject'))
-  if (!(xobjects instanceof PDFDict)) return false
-  return xobjects.entries().some(([, value]) => {
-    const object = xobjects.context.lookup(value)
-    const subtype = object?.dict?.get?.(PDFName.of('Subtype'))
-    return String(subtype) === '/Image'
-  })
 }
 
 function embeddedFont(dict) {
@@ -69,8 +112,8 @@ function embeddedFont(dict) {
   return false
 }
 
-function fontsOn(page) {
-  const fonts = page.node.Resources()?.lookup(PDFName.of('Font'))
+function fontsFrom(resources) {
+  const fonts = resources?.lookup?.(PDFName.of('Font'))
   if (!(fonts instanceof PDFDict)) return []
   return fonts.entries().map(([key, value]) => {
     const dict = fonts.context.lookup(value)
@@ -80,6 +123,66 @@ function fontsOn(page) {
   })
 }
 
+function uniqueFonts(fonts) {
+  const seen = new Set()
+  return fonts.filter((font) => {
+    const key = `${font.resource}:${font.baseFont}:${font.embedded}`
+    if (seen.has(key)) return false
+    seen.add(key)
+    return true
+  })
+}
+
+function xobjectNamed(resources, name) {
+  const xobjects = resources?.lookup?.(PDFName.of('XObject'))
+  if (!(xobjects instanceof PDFDict)) return undefined
+  const key = PDFName.of(name)
+  if (!xobjects.has(key)) return undefined
+  return xobjects.context.lookup(xobjects.get(key))
+}
+
+function inspectStream(context, resources, source, seen, state) {
+  state.fonts.push(...fontsFrom(resources))
+  const tokens = tokenize(source)
+  for (let index = 0; index < tokens.length; index += 1) {
+    const token = tokens[index]
+    if (token.kind !== 'op') continue
+    if (token.value === 'Tj' || token.value === 'TJ' || token.value === "'" || token.value === '"') state.text = true
+    if (token.value !== 'Do') continue
+    let name
+    for (let back = index - 1; back >= 0; back -= 1) {
+      if (tokens[back].kind === 'name') { name = tokens[back].value; break }
+      if (tokens[back].kind === 'op') break
+    }
+    const object = name ? xobjectNamed(resources, name) : undefined
+    const subtype = String(object?.dict?.get?.(PDFName.of('Subtype')) ?? '')
+    if (subtype === '/Image') state.image = true
+    if (subtype === '/Form' && object && !seen.has(object)) {
+      seen.add(object)
+      const formResources = object.dict.lookup(PDFName.of('Resources'))
+      inspectStream(
+        context,
+        formResources instanceof PDFDict ? formResources : resources,
+        streamBytes(object).toString('latin1'),
+        seen,
+        state,
+      )
+    }
+  }
+}
+
+function inherited(dict, key) {
+  const seen = new Set()
+  let current = dict
+  while (current instanceof PDFDict && !seen.has(current)) {
+    seen.add(current)
+    if (current.has(PDFName.of(key))) return current.lookup(PDFName.of(key))
+    const parent = current.lookup(PDFName.of('Parent'))
+    current = parent instanceof PDFDict ? parent : undefined
+  }
+  return undefined
+}
+
 function signaturesOn(page, pageNumber) {
   const annots = page.node.Annots()
   if (!(annots instanceof PDFArray)) return []
@@ -87,8 +190,8 @@ function signaturesOn(page, pageNumber) {
   for (const item of annots.asArray()) {
     const annot = page.node.context.lookup(item)
     if (!(annot instanceof PDFDict)) continue
-    const fieldType = String(annot.get(PDFName.of('FT')) ?? '')
-    const value = annot.lookup(PDFName.of('V'))
+    const fieldType = String(inherited(annot, 'FT') ?? '')
+    const value = inherited(annot, 'V')
     const valueType = value instanceof PDFDict ? String(value.get(PDFName.of('Type')) ?? '') : ''
     if (fieldType === '/Sig' || valueType === '/Sig') found.push({ page: pageNumber, status: 'present_unverified' })
   }
@@ -96,11 +199,10 @@ function signaturesOn(page, pageNumber) {
 }
 
 function classify(page, pageNumber) {
-  const source = contentText(page)
-  const textOperators = hasTextOperators(source)
-  const image = imageXObject(page, source)
-  const kind = textOperators ? 'text' : image ? 'scanned' : 'blank'
-  return { page: pageNumber, kind, textOperators, image, fonts: fontsOn(page) }
+  const state = { text: false, image: false, fonts: [] }
+  inspectStream(page.node.context, page.node.Resources(), contentSource(page.node.context, page.node.Contents()), new Set(), state)
+  const kind = state.text ? 'text' : state.image ? 'scanned' : 'blank'
+  return { page: pageNumber, kind, textOperators: state.text, image: state.image, fonts: uniqueFonts(state.fonts) }
 }
 
 /**
