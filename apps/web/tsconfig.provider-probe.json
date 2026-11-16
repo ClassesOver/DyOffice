@@ -1,0 +1,1 @@
+{"extends":"./tsconfig.json","include":["provider-probe/**/*.ts","../../packages/browser-host/src/**/*.ts","../../packages/web-contracts/src/**/*.ts"]}

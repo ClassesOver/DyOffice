@@ -8,6 +8,8 @@
     "start": "node --import tsx server/index.mjs",
     "test": "node --import tsx --test test/*.test.mjs",
     "build": "vite build --config vite.config.mjs",
+    "build:provider-probe": "vite build --config vite.provider-probe.config.mjs",
+    "typecheck:provider-probe": "tsc -p tsconfig.provider-probe.json",
     "test:build": "node --test test/build/*.test.mjs",
     "typecheck": "tsc -p tsconfig.json && tsc -p server/tsconfig.json",
     "test:integration": "node tools/run-web-integration.mjs",
