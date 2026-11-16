@@ -49,3 +49,4 @@ const catalog: ProviderCatalogEntry[] = [
 /** Static provider descriptions only; never desktop settings, account tokens or environment keys. */
 export const getProviderCatalog = (): ProviderCatalogEntry[] => structuredClone(catalog)
 export function findProvider(kind: GlobalSettingKind, id: string) { return catalog.find(meta => meta.id === id && meta.kinds.includes(kind)) }
+

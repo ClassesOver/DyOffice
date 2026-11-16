@@ -184,18 +184,21 @@ docs/dyoffice/               当前计划及 inventory/ evidence/ adr/
 
 **接口：** `stageUpload(principal, fileMeta)`、`finishUpload(principal,uploadId)`、`openFile()`；上传引用绑定所有者。
 
-**状态（2026-11-16）：完成。** 证据见 [t05-local-object-store.md](evidence/t05-local-object-store.md)。四格式、伪 ZIP、空文件、超额、路径穿越、跨 owner、未完成不可下载、中断不留下完成对象、服务器 SHA-256（不信任 ETag）、配额、回收站、共享 blob、过期暂存、HTTP 暂存/完成/下载/丢弃/恢复/清空、进程内 S3 替身，以及 MinIO 上的同一生命周期，都有测试。`dyoffice_files` 只在对象写入成功后插入。`/api/files` 仍是开发令牌原型目录，不是这套存储。
+**当前新栈状态（2026-11-16 复核）：部分完成，完整生命周期尚未闭环。** [t05-local-object-store.md](evidence/t05-local-object-store.md) 保留的是旧栈 `dyoffice_files` / 旧生命周期接口的历史验收，不能当作当前新栈的清空、物理删除或配额回收验收。当前新栈使用 `files`、`file_revisions`、`uploads`、`storage_accounts`，已接入受限事务与 FORCE RLS；不存在“新栈数据库 RLS 仍待 T04”的延期。
 
-**明确延期：**
+**当前已实现范围：** 不可变对象上传与服务器哈希校验、作用域元数据/下载、配额预留、回收站及恢复。最终新栈验收范围见 [T03/T04 最终验收](evidence/t03-t04-current-stack-acceptance.md)；如果该证据未覆盖某一生命周期路径，不得借历史旧栈测试补成通过。
 
-- **T04：** `dyoffice_files` 不启用 RLS。应用层 owner 过滤不是 `FORCE ROW LEVEL SECURITY`。
-- **运维：** 多节点高可用对象存储不在本仓库的适配器里。CI 的 MinIO 只证明 S3 兼容协议，不是生产集群。
+**有界实现与剩余工作：**
 
-- [x] 测试四格式类型验证、伪 ZIP、空文件、超额、路径穿越、跨用户 uploadId、未完成上传不能下载。
-- [x] 运行 files integration，确认没有元数据/对象分离保障时 RED。
-- [x] 实现 S3 adapter、不可变对象键、配额、服务器哈希、回收站与受控下载；开发本地盘 adapter 不进入企业 HA。进程内替身覆盖这些行为。数据库 RLS 仍待 T04。
-- [x] 同测试 GREEN；模拟上传中断不产生已完成文件，校验内容哈希而非 ETag。
-- [x] 提交 `feat(files): add scoped immutable object storage`。
+- 未完成上传：已写入后取消或过期的对象仍计入 `stored_bytes`，本次仅对写入完成且无引用的终态对象增加有界回收，见 [终态上传回收证据](evidence/t05-abandoned-upload-reclamation.md)。曾处于 receiving 的不确定对象可能有晚到 PUT，仍不能仅凭 TTL 删除并释放配额。
+- 回收站永久清空：新增显式逐文件 purge 候选，先提交不可恢复的引用屏障，再有界物理删除和一次性配额退款；审计身份保留为墓碑。基于目标0672c66的新迁移编号为0016/0017，不改已应用0015。完整相关真实PG/RustFS/Redis回归260/260通过，见 [永久清空证据](evidence/t05-permanent-trash-purge.md)。这是逐文件重试API，不是浏览器批量清空或后台调度，也不清理版本化桶和不确定晚到PUT。
+- 验收：真实 PostgreSQL 的跨用户、引用/恢复竞态、删除后事务回滚及进程崩溃重试，以及真实对象存储的物理删除/版本桶语义，已在上述隔离真实服务回归中验证；纯控制流或存储替身测试不替代这些门禁。
+- 运维：多节点高可用对象存储与生产集群容量不在当前适配器验收范围内。
+
+- [x] 已有作用域上传、不可变对象键、服务器哈希、配额预留、回收站与受控下载实现。
+- [x] 已完成写入且无引用的终态上传回收通过隔离 PostgreSQL / RustFS 验收；不确定 receiving 和版本化桶不回收。
+- [x] 新栈显式逐文件永久清理与引用保留策略完成设计、实现和有界竞态验收；批量UI、后台调度、版本桶及未知PUT仍不包含。
+- [ ] 完整生命周期按当前新栈重新收口，不将旧 `dyoffice_files` 结果计入。
 
 ### T06 保存事务、历史版本和单写者租约
 
@@ -303,7 +306,7 @@ docs/dyoffice/               当前计划及 inventory/ evidence/ adr/
 - [x] GREEN；DOCX 原生同一编辑在浅/深主题保存的正文 XML 完全一致，四格式原件下载字节不变；表单失败保留草稿，保存/检查防重复点击。
 - [x] 提交 `feat(settings): separate personal workspace and global admin`。
 
-2026-11-16：实现与本地验收完成，详见 [T12 验收证据](evidence/t12-settings-workspace.md)。全局检查仅验证配置与密钥可解密，不进行模型/搜索/MCP 外部连通测试；T13/T16/T18 执行接入、其他三格式原生保存和 production 不由此标记完成。本轮按用户要求不以 CI 为条件。
+2026-11-16：原 PR 在旧基线完成的验收保留为历史证据；最新 d86ae1a7 整合追加0018/0019，并修复永久清理交互及批量配置审计边界。新目标的浏览器启动被环境 Unix socket 权限阻断，不宣称本轮全量 E2E 完成。详见 [T12 验收证据](evidence/t12-settings-workspace.md)。全局检查仅验证配置与密钥可解密，不进行模型/搜索/MCP 外部连通测试；T13/T16/T18 执行接入、其他三格式原生保存和 production 不由此标记完成。本轮按用户要求不以 CI 为条件。
 
 ### T13 Provider Gateway 与原生助手流
 

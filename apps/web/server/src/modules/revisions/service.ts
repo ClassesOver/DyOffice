@@ -30,6 +30,9 @@ export function createRevisionService({ transactions, objects, files, quotaBytes
     const id = uuid(fileId), base = uuid(input.baseRevision), editor = uuid(input.editorId), epoch = leaseEpoch(input.leaseEpoch), size = input.size
     if (!Number.isSafeInteger(size) || size < 1) throw authError(400)
     if (size > MAX_OBJECT_BYTES) throw authError(413)
+    // Browser owners may reclaim their abandoned drafts; job capabilities must
+    // never gain account-wide reclamation authority.
+    if (typeof token === 'string') await files.reclaimAbandonedUploads(token)
     return run(token,'files:write',async (connection, principal) => {
       if (principal.job && (id!==principal.job.fileId || base!==principal.job.baseRevision || editor!==principal.job.id || restoredFrom)) throw authError(404)
       const account = await lockAccount(connection,principal)
@@ -71,6 +74,8 @@ export function createRevisionService({ transactions, objects, files, quotaBytes
       return run(token,'files:write',async (connection, principal) => {
         if (principal.job && (fileId!==principal.job.fileId || base!==principal.job.baseRevision || idempotencyKey!=='job_' + principal.job.id || requestedSource!==null)) throw authError(404)
         await lockAccount(connection,principal)
+        const retired = await connection.query('SELECT 1 FROM files WHERE deployment_id=$1 AND owner_id=$2 AND id=$3 AND purge_started_at IS NOT NULL',[...scope(principal),fileId])
+        if (retired.rowCount) throw authError(410)
         // A successful retry is a receipt lookup, not a new write authority.
         // It survives a later head/lease change but still requires owner auth.
         const prior = (await connection.query('SELECT c.request_hash,r.id,r.sha256,r.size FROM revision_commits c JOIN file_revisions r ON r.deployment_id=c.deployment_id AND r.owner_id=c.owner_id AND r.file_id=c.file_id AND r.id=c.revision_id WHERE c.deployment_id=$1 AND c.owner_id=$2 AND c.file_id=$3 AND c.idempotency_key=$4',[...scope(principal),fileId,idempotencyKey])).rows[0]
@@ -84,7 +89,7 @@ export function createRevisionService({ transactions, objects, files, quotaBytes
         const file = await loadFile(connection,principal,fileId,false,'UPDATE')
         await assertLiveLease(connection,principal,fileId,epoch,upload.editor_id)
         if (file.current_revision !== base) throw authError(409)
-        await objects.readVerified({ key: objectKey(principal,upload.revision_id), size: upload.expected_size, sha256: upload.sha256 })
+        await objects.verifyObject({ key: objectKey(principal,upload.revision_id), size: upload.expected_size, sha256: upload.sha256 })
         const source = upload.restored_from ? 'restore' : 'save'
         await connection.query('INSERT INTO file_revisions(id,deployment_id,owner_id,file_id,object_key,sha256,size,source,parent_revision,restored_from) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)',[upload.revision_id,...scope(principal),fileId,objectKey(principal,upload.revision_id),upload.sha256,upload.expected_size,source,base,upload.restored_from])
         const changed = await connection.query('UPDATE files SET current_revision=$4,updated_at=clock_timestamp() WHERE deployment_id=$1 AND owner_id=$2 AND id=$3 AND current_revision=$5 RETURNING id',[...scope(principal),fileId,upload.revision_id,base])

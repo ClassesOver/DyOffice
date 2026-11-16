@@ -12,6 +12,7 @@ const extensions = new Set(['.js', '.jsx', '.mjs', '.ts', '.tsx', '.mts', '.cjs'
 const builtins = new Set(builtinModules.map((name) => name.replace(/^node:/, '')))
 
 export function forbiddenSpecifier(specifier) {
+  specifier = specifier.split(/[?#]/, 1)[0]
   const clean = specifier.replace(/^node:/, '')
   if (specifier.startsWith('node:')) return true
   if (specifier === 'electron' || specifier.startsWith('electron/')) return true
@@ -22,19 +23,57 @@ export function forbiddenSpecifier(specifier) {
   return builtins.has(clean.split('/')[0])
 }
 
+function literalSpecifier(node) {
+  if (!node) return null
+  if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) return node.text
+  if (ts.isParenthesizedExpression(node)) return literalSpecifier(node.expression)
+  if (ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.PlusToken) {
+    const left = literalSpecifier(node.left), right = literalSpecifier(node.right)
+    if (left !== null && right !== null) return left + right
+  }
+  return null
+}
+
+// TypeScript/esbuild erase these wrappers before Vite sees glob calls.
+function unwrapExpression(node) {
+  while (node && (ts.isParenthesizedExpression(node) || ts.isAsExpression(node) ||
+      ts.isTypeAssertionExpression(node) || ts.isNonNullExpression(node) ||
+      ts.isSatisfiesExpression(node) || ts.isExpressionWithTypeArguments(node))) node = node.expression
+  return node
+}
+
 function imports(source, file) {
   const ast = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true)
   const found = []
   function visit(node) {
     if ((ts.isImportDeclaration(node) && node.importClause?.isTypeOnly) || (ts.isExportDeclaration(node) && node.isTypeOnly) || (ts.isImportEqualsDeclaration(node) && node.isTypeOnly)) return
+    // Glob expansion is bundler-owned (patterns, negative patterns, queries and
+    // aliases). Until this gate implements that resolution, reject it rather
+    // than silently omitting executable dependencies. Raw globs also require
+    // explicit imports; no option-shaped exception can weaken this boundary.
+    const callee = ts.isCallExpression(node) ? unwrapExpression(node.expression) : undefined
+    const receiver = callee && ts.isPropertyAccessExpression(callee) ? unwrapExpression(callee.expression) : undefined
+    if (receiver && ts.isMetaProperty(receiver) &&
+        receiver.keywordToken === ts.SyntaxKind.ImportKeyword && receiver.name.text === 'meta' &&
+        ['glob', 'globEager'].includes(callee.name.text)) {
+      found.push({ specifier: null, mode: 'glob', line: ast.getLineAndCharacterOfPosition(node.getStart(ast)).line + 1 })
+    }
     let argument
     let mode = 'import'
     if (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) argument = node.moduleSpecifier
     else if (ts.isImportEqualsDeclaration(node) && ts.isExternalModuleReference(node.moduleReference)) argument = node.moduleReference.expression
     else if (ts.isCallExpression(node) && (node.expression.kind === ts.SyntaxKind.ImportKeyword || (ts.isIdentifier(node.expression) && node.expression.text === 'require'))) argument = node.arguments[0]
-    if (argument && (ts.isStringLiteral(argument) || ts.isNoSubstitutionTemplateLiteral(argument))) {
+    else if (ts.isNewExpression(node) && ts.isIdentifier(node.expression) && ['Worker', 'SharedWorker'].includes(node.expression.text)) {
+      const value = node.arguments?.[0]
+      // Vite's statically resolved Worker(new URL(path, import.meta.url)).
+      if (value && ts.isNewExpression(value) && ts.isIdentifier(value.expression) && value.expression.text === 'URL' &&
+          value.arguments?.[1]?.getText(ast) === 'import.meta.url') argument = value.arguments[0]
+      else argument = value
+      if (!argument) found.push({specifier: null, mode, line: ast.getLineAndCharacterOfPosition(node.getStart(ast)).line + 1})
+    }
+    if (argument) {
       if (ts.isImportEqualsDeclaration(node) || (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === 'require')) mode = 'require'
-      found.push({ specifier: argument.text, mode, line: ast.getLineAndCharacterOfPosition(node.getStart(ast)).line + 1 })
+      found.push({ specifier: literalSpecifier(argument), mode, line: ast.getLineAndCharacterOfPosition(node.getStart(ast)).line + 1 })
     }
     ts.forEachChild(node, visit)
   }
@@ -43,8 +82,12 @@ function imports(source, file) {
 }
 
 export function inspectSource(source, file) {
-  return [...new Set(imports(source, file).filter(({specifier}) => forbiddenSpecifier(specifier))
-    .map(({specifier, line}) => `${file}:${line}: browser code imports forbidden module ${specifier}`))]
+  return [...new Set(imports(source, file).filter(({specifier}) => specifier === null || forbiddenSpecifier(specifier))
+    .map(({specifier, line, mode}) => mode === 'glob'
+      ? `${file}:${line}: Unsupported Vite glob dependency; use explicit literal imports`
+      : specifier === null
+      ? `${file}:${line}: Unresolved dynamic browser dependency; use a literal import or explicit literal dispatch`
+      : `${file}:${line}: browser code imports forbidden module ${specifier}`))]
 }
 
 async function entries(directory) {
@@ -106,6 +149,12 @@ async function resolveFile(path) {
 }
 
 async function localDependency(specifier, mode, importer, packages, base) {
+  // Match Vite's raw/worker regexes exactly: encoded keys and raw=1 are
+  // not raw requests; worker processing takes precedence over asset raw.
+  const raw = /(?:\?|&)raw(?:&|$)/.test(specifier)
+  const worker = /(?:\?|&)(?:worker|sharedworker)(?:&|$)/.test(specifier)
+  if (raw && !worker) return null
+  specifier = specifier.split(/[?#]/, 1)[0]
   let target
   if (specifier.startsWith('.')) target = resolve(dirname(importer), specifier)
   else {
@@ -154,7 +203,7 @@ export async function checkWebBoundaries(base = root) {
     const source = await readFile(file, 'utf8')
     violations.push(...inspectSource(source, relative(base, file)))
     for (const {specifier, mode} of imports(source, file)) {
-      if (forbiddenSpecifier(specifier)) continue
+      if (specifier === null || forbiddenSpecifier(specifier)) continue
       const dependency = await localDependency(specifier, mode, file, packages, base)
       if (dependency) await visit(dependency)
     }

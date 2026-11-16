@@ -254,3 +254,15 @@ for (const revoke of ['session','role']) test(`${revoke} revocation prevents an 
   assert.equal(actual.revision, 1)
   assert.equal(actual.catalog[0].label, 'Primary')
 })
+
+
+test('full configuration replacement audits both removed and inserted identities', async t => {
+  const f=await fixture(t)
+  const old=Array.from({length:100},(_,i)=>({...entry,id:'old-'+i}))
+  const next=Array.from({length:100},(_,i)=>({...entry,id:'new-'+i}))
+  await f.settings.saveGlobalConfig(f.adminSigned.token,0,{upserts:old})
+  const saved=await f.settings.saveGlobalConfig(f.adminSigned.token,1,{removes:old.map(e=>e.id),upserts:next})
+  assert.equal(saved.revision,2);assert.equal(saved.entries.length,100)
+  const audit=await auditRows(f)
+  assert.equal(audit.at(-1).entry_ids.length,200)
+})

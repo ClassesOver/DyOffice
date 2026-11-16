@@ -11,3 +11,4 @@ test('runtime keyring is optional but supplied values must be canonical independ
   assert.throws(()=>parseConfigKeyring(value),error=>error.message==='Invalid global configuration keyring')
  }
 })
+

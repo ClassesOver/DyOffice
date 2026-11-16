@@ -147,3 +147,4 @@ export function createGlobalSettingsClient(request: GlobalSettingsRequest) {
   }
 }
 export type GlobalSettingsClient = ReturnType<typeof createGlobalSettingsClient>
+

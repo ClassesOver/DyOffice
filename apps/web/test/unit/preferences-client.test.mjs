@@ -31,3 +31,4 @@ test('known rejected writes remain retryable and public catalog uses its separat
  await client.updatePreferences({authorName:'Draft'});assert.deepEqual(await client.getPublicSettings(),{revision:0,catalog:[],defaults:{}})
  assert.equal(paths.at(-1),'/api/v1/settings/public')
 })
+

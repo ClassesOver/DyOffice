@@ -54,3 +54,4 @@ BEGIN
     EXECUTE format('REVOKE ALL ON %I FROM PUBLIC',relation);
   END LOOP;
 END $migration$;
+

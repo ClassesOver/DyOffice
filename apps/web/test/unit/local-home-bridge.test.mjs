@@ -81,3 +81,4 @@ test('an explicit unstar cannot be swallowed by an opposite toggle already in fl
  await bridge.unstarPaths(['file-a'])
  assert.deepEqual(writes,[true,false]);assert.equal(starred,false)
 })
+

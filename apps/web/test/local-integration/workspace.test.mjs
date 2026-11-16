@@ -247,3 +247,30 @@ test('moving a file into a folder prevents a concurrent folder deletion after it
     assert.equal((await list(f, '?folderId=' + box.id)).files[0].id, id)
   } finally { release(); await Promise.allSettled([first, second].filter(Boolean)) }
 })
+
+
+test('workspace trash excludes permanent purge fences while tombstones remain', async t => {
+  let offline=true
+  const f=await fileFixture(t,{wrapObjects:store=>({...store,removeUnreferenced:async key=>{if(offline)throw Error('offline');return store.removeUnreferenced(key)}})})
+  const id=await imported(f),box=await folder(f,'Pending purge folder')
+  await mutate(f,'PATCH','/files/'+id+'/folder',{folderId:box.id})
+  await f.files.trashFile(f.alice.token,id)
+  assert.equal((await list(f,'?view=trash')).total,1)
+  assert.equal((await f.files.purgeFile(f.alice.token,id)).state,'pending')
+  assert.deepEqual(await list(f,'?view=trash'),{files:[],total:0})
+  await mutate(f,'DELETE','/folders/'+box.id,undefined,404,f.bob.token)
+  await mutate(f,'DELETE','/folders/'+box.id)
+  offline=false
+  assert.equal((await f.files.purgeFile(f.alice.token,id)).state,'purged')
+  assert.deepEqual(await list(f,'?view=trash'),{files:[],total:0})
+})
+
+test('folder can be removed after its only file is permanently purged', async t => {
+  const f=await fileFixture(t),id=await imported(f),box=await folder(f,'Purged folder')
+  await mutate(f,'PATCH','/files/'+id+'/folder',{folderId:box.id})
+  await f.files.trashFile(f.alice.token,id)
+  await mutate(f,'DELETE','/folders/'+box.id,undefined,409)
+  assert.equal((await f.files.purgeFile(f.alice.token,id)).state,'purged')
+  await mutate(f,'DELETE','/folders/'+box.id)
+  assert.equal((await own(f,c=>c.query('SELECT count(*) AS n FROM files WHERE id=$1',[id]))).rows[0].n,'1')
+})

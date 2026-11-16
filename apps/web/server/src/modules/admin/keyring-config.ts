@@ -19,3 +19,4 @@ export function parseConfigKeyring(input: string | undefined): SecretKeyring | u
     return keyring
   } catch { throw new Error('Invalid global configuration keyring') }
 }
+

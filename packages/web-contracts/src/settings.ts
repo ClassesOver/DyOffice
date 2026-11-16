@@ -24,3 +24,4 @@ export interface GlobalConfigCheck {
   revision: number; configuration: 'valid'; checkedEntries: number;
   secrets: 'readable' | 'not_required'; connection: 'not_run'
 }
+

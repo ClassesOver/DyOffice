@@ -356,3 +356,4 @@ disabled. Local-account Chromium acceptance lives in `test/local-browser`, requi
 real PostgreSQL, and fails when that service is absent. T12 native DOCX theme/save
 coverage is in `test/native-docs/theme.test.mjs`; import/download of the other three
 formats does not claim their native editors are enabled.
+

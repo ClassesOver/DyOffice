@@ -65,7 +65,7 @@ export function createWorkspaceService(transactions: PrincipalTransactions) {
             FROM files f
             JOIN file_revisions r ON r.deployment_id=f.deployment_id AND r.owner_id=f.owner_id AND r.file_id=f.id AND r.id=f.current_revision
             LEFT JOIN workspace_file_state s ON s.deployment_id=f.deployment_id AND s.owner_id=f.owner_id AND s.file_id=f.id
-            WHERE f.deployment_id=$1 AND f.owner_id=$2
+            WHERE f.deployment_id=$1 AND f.owner_id=$2 AND f.purge_started_at IS NULL
               AND (f.deleted_at IS NOT NULL)=($3::text='trash')
               AND ($3<>'recent' OR s.last_opened_at IS NOT NULL)
               AND ($3<>'starred' OR s.starred)
@@ -115,6 +115,9 @@ export function createWorkspaceService(transactions: PrincipalTransactions) {
       const id = uuid(folderId)
       await lockTree(connection, principal)
       await requireFolder(connection, principal, id)
+      // Permanent purge keeps identity tombstones, but those cannot keep a folder
+      // occupied forever. The per-user tree lock serializes membership changes.
+      await connection.query('UPDATE workspace_file_state s SET folder_id=NULL FROM files f WHERE s.deployment_id=$1 AND s.owner_id=$2 AND s.folder_id=$3 AND f.deployment_id=s.deployment_id AND f.owner_id=s.owner_id AND f.id=s.file_id AND f.purge_started_at IS NOT NULL', [...scope(principal),id])
       const occupied = await connection.query('SELECT 1 FROM workspace_folders WHERE deployment_id=$1 AND owner_id=$2 AND parent_id=$3 UNION ALL SELECT 1 FROM workspace_file_state WHERE deployment_id=$1 AND owner_id=$2 AND folder_id=$3 LIMIT 1', [...scope(principal),id])
       if (occupied.rowCount) throw authError(409)
       await connection.query('DELETE FROM workspace_folders WHERE deployment_id=$1 AND owner_id=$2 AND id=$3', [...scope(principal),id])
@@ -149,3 +152,4 @@ export function createWorkspaceService(transactions: PrincipalTransactions) {
   }
 }
 export type WorkspaceService = ReturnType<typeof createWorkspaceService>
+

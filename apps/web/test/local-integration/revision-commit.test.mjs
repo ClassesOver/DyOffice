@@ -200,8 +200,8 @@ for (const boundary of ['lease','upload']) test(`${boundary} expiry during real 
   const f = await revisionFixture(t), bytes = await edited(f.original,'expires during verification'), input = await stage(f,bytes)
   const { createRevisionService } = await import('../../server/src/modules/revisions/service.ts')
   const ready = deferred(), release = deferred()
-  const gated = createRevisionService({ transactions: f.transactions, files: f.files, objects: { ...f.objects, async readVerified(reference) {
-    const result = await f.objects.readVerified(reference)
+  const gated = createRevisionService({ transactions: f.transactions, files: f.files, objects: { ...f.objects, async verifyObject(reference) {
+    const result = await f.objects.verifyObject(reference)
     ready.resolve(); await release.promise
     return result
   } } })
@@ -280,4 +280,31 @@ test('same-size corruption of a ready save object prevents all new references an
   assert.deepEqual(await f.files.readFile(f.alice.token,f.fileId,f.initial.revision),f.original)
   assert.equal((await owned(f,connection => connection.query('SELECT * FROM revision_commits'))).rowCount,0)
   assert.equal((await owned(f,connection => connection.query('SELECT * FROM revision_outbox'))).rowCount,0)
+})
+
+test('personal revision staging reclaims cancelled completed drafts without touching history',async t=>{
+ const bytes=await docxBytes(),f=await revisionFixture(t,{filePolicy:{quotaBytes:bytes.length*2}})
+ const first=await stage(f,bytes)
+ await f.files.cancelUpload(f.alice.token,first.uploadId)
+ assert.equal((await f.files.usage(f.alice.token)).storedBytes,bytes.length*2)
+ const second=await f.revisions.stageUpload(f.alice.token,f.fileId,{size:bytes.length,baseRevision:f.initial.revision,leaseEpoch:f.lease.leaseEpoch,editorId:f.editorId})
+ assert.ok(second.uploadId)
+ const usage=await f.files.usage(f.alice.token)
+ assert.equal(usage.storedBytes,bytes.length);assert.equal(usage.reservedBytes,bytes.length)
+ assert.deepEqual(await f.files.readFile(f.alice.token,f.fileId,f.initial.revision),bytes)
+})
+
+test('finish and commit verify integrity without collecting object payloads', async t => {
+  let verified = 0
+  const f = await revisionFixture(t, { wrapObjects: base => ({ ...base,
+    readVerified() { throw new Error('unexpected full object collection') },
+    async verifyObject(reference) { await base.verifyObject(reference); verified++ },
+  }) })
+  assert.equal(verified, 1)
+  const input = await stage(f, await edited(f.original, 'bounded verification'))
+  const saved = await f.revisions.commitRevision(f.alice.token, input)
+  assert.equal(verified, 2)
+  assert.notEqual(saved.revision, f.initial.revision)
+  assert.deepEqual(await f.revisions.commitRevision(f.alice.token, input), saved)
+  assert.equal(verified, 2)
 })

@@ -306,3 +306,4 @@ test('a late move preserves a newer picker and selection, then moves the new sel
   expect(host.querySelector('.picker-modal')).toBeNull()
   expect(checkbox(second.name).checked).toBe(false)
 })
+

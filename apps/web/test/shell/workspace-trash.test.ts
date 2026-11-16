@@ -21,3 +21,4 @@ test('recycle bin retains failed restoration and prevents duplicate clicks until
  await vi.waitFor(()=>expect(writes).toBe(2));finish(undefined)
  root.unmount()
 })
+

@@ -12,7 +12,7 @@ const environment = f => ({ ...process.env, NODE_ENV: 'development', DYOFFICE_FI
 
 test('local server entry uses separate restricted credentials and serves scoped preferences', { timeout: 15_000 }, async t => {
   const f = await restrictedFixture(t)
-  const child = spawn(process.execPath, ['--experimental-strip-types', 'server/index.mjs'], { cwd, env: environment(f), stdio: ['ignore','pipe','pipe'] })
+  const child = spawn(process.execPath, ['--import','tsx', 'server/index.mjs'], { cwd, env: environment(f), stdio: ['ignore','pipe','pipe'] })
   f.cleanup.push(async () => { if (child.exitCode === null && child.signalCode === null) { child.kill('SIGTERM'); await once(child, 'exit') } })
   const exited = once(child, 'exit')
   const [output] = await Promise.race([once(child.stdout, 'data'), exited.then(([code]) => { throw new Error('Scoped entry exited before startup: ' + code) })])
@@ -26,7 +26,7 @@ test('local server entry uses separate restricted credentials and serves scoped 
 
 test('local entry refuses a migration URL instead of falling back to the owner connection', async t => {
   const f = await restrictedFixture(t)
-  await assert.rejects(promisify(execFile)(process.execPath, ['--experimental-strip-types', 'server/index.mjs'], { cwd, env: { ...environment(f), DYOFFICE_DATABASE_URL: f.urls.owner }, timeout: 2500 }), error => {
+  await assert.rejects(promisify(execFile)(process.execPath, ['--import','tsx', 'server/index.mjs'], { cwd, env: { ...environment(f), DYOFFICE_DATABASE_URL: f.urls.owner }, timeout: 2500 }), error => {
     assert.equal(error.code, 1)
     assert.equal(error.stderr.includes(f.urls.owner), false)
     return true
@@ -57,7 +57,7 @@ for (const backend of ['local-dev','s3']) test(`actual local server enables scop
     Object.assign(storage, { DYOFFICE_S3_ENDPOINT: process.env.DYOFFICE_TEST_S3_ENDPOINT, DYOFFICE_S3_REGION: 'us-east-1', DYOFFICE_S3_BUCKET: remote.bucket, DYOFFICE_S3_FORCE_PATH_STYLE: 'true', AWS_ACCESS_KEY_ID: process.env.DYOFFICE_TEST_S3_ACCESS_KEY, AWS_SECRET_ACCESS_KEY: process.env.DYOFFICE_TEST_S3_SECRET_KEY })
   }
   const env = { ...environment(f), ...storage }
-  const child = spawn(process.execPath, ['--experimental-strip-types', 'server/index.mjs'], { cwd, env, stdio: ['ignore','pipe','pipe'] })
+  const child = spawn(process.execPath, ['--import','tsx', 'server/index.mjs'], { cwd, env, stdio: ['ignore','pipe','pipe'] })
   f.cleanup.push(async () => { if (child.exitCode === null && child.signalCode === null) { child.kill('SIGTERM'); await once(child,'exit') } })
   const exited = once(child,'exit')
   const [output] = await Promise.race([once(child.stdout,'data'),exited.then(([code]) => { throw new Error('File server startup failed: ' + code) })])

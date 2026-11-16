@@ -127,3 +127,4 @@ export function createLocalHomeBridge(deps: Dependencies): HomeApi {
   } satisfies Partial<HomeApi>)
   return base
 }
+

@@ -2,7 +2,28 @@
 
 日期：2026-11-16。范围是 `DYOFFICE_AUTH_MODE=local` 的 TypeScript 本地账号运行时。本轮按用户要求不启用、不修改、不等待 CI；全部结果来自本地实际执行。
 
-## 基线与交付范围
+## 最新目标整合（2026-11-16）
+
+本轮以 `feat/dyoffice-web@d86ae1a7ecd93859328bc73e25d2357648da2301` 为目标，整合原 PR #52 `b7d7e3d268891a00946d0f6fe2c08af053b10a6e`。以下历史浏览器和原生编辑证据仍属于原基线，不替代新目标的复测。
+
+- 已应用 0001–0017 SQL 字节与目标逐个一致；仅将原 PR 尚未合入的迁移追加为 **0018_global_config / 0019_workspace**。不兼容曾私自应用旧 PR 0014/0015 的分叉 ledger，不绕过 checksum 防护。
+- 真实 PG 先红后绿复现修复三项：永久清理 fence/墓碑仍出现在 workspace trash；墓碑 folder 引用使目录永远非空；100 个旧配置替换为 100 个新配置时，200 个审计 ID 违反旧 100 上限。新审计上限为 200，保留完整审计而非截断。
+- 文件夹删除只在同一用户 tree 事务锁下解除已不可逆 purge 文件的 folder 引用，保留文件/版本墓碑；普通回收文件依旧阻止目录删除。覆盖 pending/完成以及跨用户拒绝。
+- 独立审查还发现祖先查询误加文件 purge 列，已修正并保留原文件夹移动/环路/并发测试。全局配置权限、密钥及原 T05 列级 grant 未放宽。
+- 旧启动测试使用原生 strip-types；新 Provider 元数据依赖包含无扩展名 TypeScript import。测试子进程改为仓库既有 `npm start` 的 `node --import tsx`，保留真实服务器启动、拒绝错误权限与干净退出断言。
+- Chromium `/usr/bin/chromium` 启动实测被 `socket() failed: Operation not permitted` 阻断。本轮没有运行页面断言，也未重新证明 DOCX 主题编辑；不将原截图或 shell DOM 单测替代新浏览器验收。未改系统安全设置。
+- 新目标原生 DOCX 构建尝试在 transform 阶段被环境终止（Killed），未产出 dist-docs；原生 DOCX 浏览器及 roundtrip 不登记为本轮通过。
+- 全局检查仍为配置/密钥检查，`connection: not_run`。没有新增 Provider/MCP 外部执行能力、批量清空 UI、版本桶删除或生产部署。
+
+### 新目标本地验证结果
+
+- 最终整套 `local-integration/*.test.mjs + jobs/*.test.mjs + storage/*.test.mjs`：**290/290，0失败、0跳过**。真实 PostgreSQL 17.11、RustFS 1.0.6、Redis 8.0.2；使用随机新测试数据库/角色/桶，没有清理真实用户数据。
+- 额外实际S3回收、永久清理、跨用户I/O限流及ACK重复验收：**25/25，0失败、0跳过**，包括物理删除后进程退出、回滚重试与精确一次计账。
+- Web + unit：**360通过、1个既有可选跳过、0失败**；Shell DOM：**86/86**。前端、server、shell TypeScript通过；local-shell构建通过。浏览器依赖边界609文件/0违规；兼容性输入84文件/0变化；变更renderer CSS颜色检查通过。兼容性输入检查不是原生文档往返验收。
+- 失败尝试如实保留：最初直接原生TS运行遇Provider无扩展名导入；初次共享依赖本地化期间有loader缺失；完成依赖后整套287/290，三个旧服务器启动器失败，全部对齐既有tsx启动方式后最终290/290。原生provision-runtime CLI仍保留实际发布的strip-types入口。未削弱权限、退出或数据断言。
+- Shell首次因共享依赖外部路径触发Vite Denied ID，仅把依赖复制到此独立快照后重跑86/86，没有放宽安全配置。完整native DOCX构建和新Chromium验收仍阻断，不登记为通过；没有本轮全桌面或CI绿色声明。
+
+## 原 PR 的历史验收记录（非本轮整合复测）
 
 起始目标为 `feat/dyoffice-web@6f3702a514fbfdfcecec6746c9614a2ae0784369`，完整 7097 个 blob 与目标树逐项核对。收口前先同步 `f92e4655299523c97cd9e2fc05687699855ee9cb` 的 23 个增量文件，再同步 `e2d922b1369b9e63ee73f10e7918e9936fc53448` 的 3 个独立 T19 文件，均分别验证 blob SHA。最终冻结基线树为 `9828a71a8370c70c50e0e9362bc1b71183485485`。T01/T03/T04 和 T13/T15/T19 的同期成果保留，最终运行在此基线加 T12 改动上。
 
@@ -139,3 +160,4 @@ Playwright 默认使用配套浏览器；可用 `DYOFFICE_TEST_CHROMIUM_PATH` �
 T12 配置检查没有外部 I/O，不验证 Provider/搜索/重排/MCP 连通性，不代表 T13/T16/T18/T19 执行路径通过。旧开发 Token 的 AI/数据源/MCP 入口在本地 Cookie 栈继续默认拒绝。production 启动仍关闭，本轮无生产部署、真实账号操作或历史数据转换。
 
 额外执行了完整桌面 Shell 回归，结果为 114 个文件、1235 个测试通过，另有 3 项失败：control-server Unix socket `EPERM`；window-close-guard 初始化 hook 超时并出现 Electron 下载；MCP headless generator 返回错误并出现 Electron 下载，具体生成器原因未完成定位。没有修改这些桌面基础设施，也不将该完整套件登记为通过。与本轮 Home 直接相关的既有导航、目录树、根目录、重命名、计数回归 53 项通过；最终 Web Shell 与浏览器结果单独登记。
+

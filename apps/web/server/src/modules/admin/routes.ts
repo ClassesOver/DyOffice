@@ -46,3 +46,4 @@ export function registerGlobalConfigRoutes(app: FastifyInstance, settings: Globa
     })
   })
 }
+

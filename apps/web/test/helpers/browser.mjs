@@ -5,3 +5,4 @@ import {chromium} from '@playwright/test'
 export const launchTestBrowser = () => chromium.launch({
   ...(process.env.DYOFFICE_TEST_CHROMIUM_PATH ? {executablePath: process.env.DYOFFICE_TEST_CHROMIUM_PATH} : {}),
 })
+

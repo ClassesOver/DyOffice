@@ -34,3 +34,4 @@ export interface WorkspaceFolder {
 export interface WorkspaceFolderList { folders: WorkspaceFolder[] }
 export interface CreateWorkspaceFolder { name: string; parentId: string | null }
 export interface UpdateWorkspaceFolder { name?: string; parentId?: string | null }
+

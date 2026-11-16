@@ -61,3 +61,4 @@ export function registerWorkspaceRoutes(app: FastifyInstance, workspace: Workspa
     })
   })
 }
+

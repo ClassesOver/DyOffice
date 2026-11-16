@@ -43,6 +43,8 @@ async function grantRuntimePrivileges(connection: Queryable, { authRole, busines
   await connection.query(`GRANT SELECT,INSERT,UPDATE,DELETE ON ${table(schema,'personal_preferences')} TO ${business}`)
   for (const name of ['files','uploads','storage_accounts','edit_leases']) await connection.query(`GRANT SELECT,INSERT,UPDATE ON ${table(schema,name)} TO ${business}`)
   await connection.query(`GRANT SELECT,INSERT ON ${table(schema,'file_revisions')} TO ${business}`)
+  await connection.query(`GRANT UPDATE(reclaimed_at) ON ${table(schema,'file_revisions')} TO ${business}`)
+  await connection.query(`GRANT UPDATE(retired_at,delivery_epoch,delivery_hash,delivery_until) ON ${table(schema,'revision_outbox')} TO ${business}`)
   for (const name of ['revision_commits','revision_outbox']) await connection.query(`GRANT SELECT,INSERT ON ${table(schema,name)} TO ${business}`)
   await connection.query(`GRANT SELECT,INSERT,UPDATE ON ${table(schema,'native_jobs')} TO ${business}`)
   await connection.query(`GRANT SELECT,INSERT ON ${table(schema,'job_outbox')} TO ${business}`)
@@ -92,6 +94,12 @@ export async function assertRuntimePool(pool: Pool, kind: 'auth' | 'business' | 
     if (globalTables.includes(name) && (!flags.relrowsecurity || !flags.relforcerowsecurity)) throw new Error('Global tables require FORCE RLS')
     for (const permission of ['SELECT','INSERT','UPDATE','DELETE','REFERENCES','TRIGGER','MAINTAIN']) {
       if (required[name]?.includes(permission)) continue
+      const lifecycleColumns = name === 'file_revisions' ? ['reclaimed_at'] : name === 'revision_outbox' ? ['retired_at','delivery_epoch','delivery_hash','delivery_until'] : null
+      if (kind === 'business' && permission === 'UPDATE' && lifecycleColumns) {
+        const actual = await pool.query("SELECT attname FROM pg_attribute WHERE attrelid=$1::regclass AND attnum>0 AND NOT attisdropped AND has_column_privilege(current_user,attrelid,attnum,'UPDATE') ORDER BY attname",[relation])
+        if (JSON.stringify(actual.rows.map(row => row.attname)) !== JSON.stringify([...lifecycleColumns].sort())) throw new Error('Runtime lifecycle columns violate privilege boundary')
+        continue
+      }
       const column = ['SELECT','INSERT','UPDATE','REFERENCES'].includes(permission)
       const result = (await pool.query(`SELECT has_table_privilege(current_user,$1,$2) ${column ? 'OR has_any_column_privilege(current_user,$1,$2)' : ''} AS allowed`, [relation, permission])).rows[0]
       if (result.allowed) throw new Error('Runtime role has privileges outside its boundary')

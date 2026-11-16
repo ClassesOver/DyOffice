@@ -151,3 +151,4 @@ test('native DOCX light and dark themes save the same edits without changing doc
   assert.deepEqual(saved.get('light').semantics, saved.get('dark').semantics)
   assert.deepEqual(errors, [])
 })
+

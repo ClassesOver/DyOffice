@@ -196,3 +196,4 @@ test('T12 global settings UI keeps secrets private and reconciles real revision 
   await page.screenshot({path: 'test-results/t12-global-settings-mobile.png', fullPage: true})
   assert.deepEqual(errors, [])
 })
+

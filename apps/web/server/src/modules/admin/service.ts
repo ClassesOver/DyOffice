@@ -186,3 +186,4 @@ export function createGlobalConfigService({ transactions, keyring }: { transacti
   }
 }
 export type GlobalConfigService = ReturnType<typeof createGlobalConfigService>
+

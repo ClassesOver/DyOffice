@@ -58,3 +58,4 @@ test('Web preference saves fence same-turn clicks and cannot change theme after 
  await new Promise(resolve=>setTimeout(resolve,0))
  expect(document.documentElement.dataset.theme).toBe('light')
 })
+

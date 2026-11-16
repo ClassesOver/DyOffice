@@ -80,3 +80,4 @@ test('configuration conflicts keep the draft guidance without hiding other resou
  await assert.rejects(client.request('/api/v1/workspace/folders/folder'),/非空目录/)
  await assert.rejects(client.request('/api/v1/admin/config'),/草稿已保留/)
 })
+

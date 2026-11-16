@@ -129,6 +129,10 @@ export function createUserService({ db, accounts, sessions, passwords, deploymen
         await invalidate(connection, user.id)
         await connection.query("UPDATE users SET password_hash=$1,password_changed_at=clock_timestamp(),password_reset_required=false,status='active' WHERE id=$2", [encoded, user.id])
         await appendAuthEvent(connection, deploymentId, 'password_action_consumed', { ...context, subjectUserId: user.id })
+        // Credential locks prevent reuse and revocation races, not wall-clock expiry.
+        // Recheck the captured action deadline after all writes, before COMMIT.
+        const finishedAt: Date = (await connection.query('SELECT clock_timestamp() AS now')).rows[0].now
+        if (action.expires_at <= finishedAt) throw authError(400)
       })
     },
     async changePassword(token: string, currentPassword: unknown, newPassword: unknown, context: AuthContext = {}) {

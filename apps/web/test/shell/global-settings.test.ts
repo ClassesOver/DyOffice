@@ -167,3 +167,4 @@ test('strict lifecycle cleanup waits for the authoritative read and scrubs a det
   expect(detachedInput.value).toBe('')
   expect(detachedInput.outerHTML).not.toContain('discard-on-detach')
 })
+

@@ -51,3 +51,4 @@ export function WorkspaceTrash({request, onClose, onChanged}: {request: Settings
     </div></div>
   </section></div>
 }
+

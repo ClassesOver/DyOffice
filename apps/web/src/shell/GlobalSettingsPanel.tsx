@@ -217,3 +217,4 @@ export function GlobalSettingsPanel({client, onClose}: {client: GlobalSettingsCl
       <section className="global-settings-maintenance"><div><h4>密钥维护</h4><p className="set-field-desc">服务器活动加密密钥更新后，可重新加密已保存的 API 密钥。</p></div><button className="set-btn" type="button" disabled={blocked || !saved.keyStorageAvailable} onClick={() => setConfirmation({kind: 'rotate'})}>轮换加密密钥</button></section></>}
   </section>
 }
+

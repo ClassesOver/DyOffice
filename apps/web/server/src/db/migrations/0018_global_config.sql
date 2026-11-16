@@ -35,7 +35,7 @@ CREATE TABLE global_config_audit (
   session_id uuid NOT NULL,
   action text NOT NULL CHECK (action IN ('config_saved','config_checked','key_rotated')),
   revision integer NOT NULL CHECK (revision>=0),
-  entry_ids text[] NOT NULL CHECK (cardinality(entry_ids)<=100),
+  entry_ids text[] NOT NULL CHECK (cardinality(entry_ids)<=200),
   created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
   FOREIGN KEY(deployment_id,actor_id) REFERENCES users(deployment_id,id)
 );
@@ -83,3 +83,4 @@ BEGIN
     AND session_id=NULLIF(current_setting('dyoffice.session_id',true),'')::uuid
   )$policy$,ns);
 END $migration$;
+
