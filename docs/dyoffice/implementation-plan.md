@@ -188,9 +188,9 @@ docs/dyoffice/               当前计划及 inventory/ evidence/ adr/
 
 **接口：** `mountDocsEditor(host,element,fileId)`，输出编辑器注册、序列化和选区能力。
 
-**状态（2026-11-16）：** 浏览器挂载和桌面桥的第一段已落地，见 [t07-docs-browser-mount.md](evidence/t07-docs-browser-mount.md)。`mountDocsEditor` 能编辑段落、撤销、保存并重开，表格和页眉留在包内。`createWebDesktop` 把打开/保存交给宿主，字体只报告已配置的替换，打印只调用浏览器打印且不返回假路径，未知方法和图片剪贴板抛出 `UNSUPPORTED`。功能区页面、分页度量、单元格改写和外部 Word 复开仍未完成。
+**状态（2026-11-16）：** 浏览器挂载、桌面桥、纯文本单元格和分页切片已有测试，见 [t07-docs-browser-mount.md](evidence/t07-docs-browser-mount.md)。`mountDocsEditor` 能编辑段落和单段单元格、撤销、保存并重开，复杂表格和页眉留在包内。`createWebDesktop` 把打开/保存交给宿主，字体只报告已配置的替换，打印只调用浏览器打印且不返回假路径，未知方法和图片剪贴板抛出 `UNSUPPORTED`。`computePageSlices` 把超出页高的块放到下一页。功能区页面仍未挂上。外部 Word 复开推迟到运维：本环境没有 Word 或 LibreOffice。
 
-- [ ] E2E 写入打开、段落/表格修改、保存、刷新、下载、再次打开和修订/撤销场景。段落保存、刷新重开、下载和本地撤销已测；表格单元格改写、分页和功能区撤销未做。
+- [ ] E2E 写入打开、段落/表格修改、保存、刷新、下载、再次打开和修订/撤销场景。段落保存、刷新重开、下载、本地撤销和纯文本单元格已测；功能区撤销未做。
 - [x] 浏览器测试在尚未接入时 RED，而非以空白预览页算通过。
 - [ ] 复用 Renderer/docx-engine，接入 host 字节、字体、worker、剪贴板替代和分页；保留原始未编辑部件。
 - [ ] E2E GREEN；受影响 `@genoffice/docs`、docx-engine 回归；外部 Word 兼容样本由 QA 记录证据。

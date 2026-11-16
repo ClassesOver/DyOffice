@@ -1,6 +1,6 @@
 # T07 browser DOCX mount
 
-> 2026-11-16 · First browser round trip. Not the desktop Docs ribbon, not pagination, and not an external Word reopen.
+> 2026-11-16 · Browser round trip, desktop bridge, plain table cells, and page slicing. The Docs ribbon is not mounted, and no external Word binary is available.
 
 ## Why T07
 
@@ -35,6 +35,28 @@ node --import tsx --test apps/web/test/web-desktop.test.mjs
 
 This was red while `web-desktop.ts` was missing and green after the bridge existed.
 
-## Still inside T07
+## Plain table cells
 
-The GenOffice Docs ribbon `App` is not mounted. It calls dozens of desktop methods for tabs, Zotero, CLI, model settings, and export. The bridge now rejects those instead of pretending they worked. Mounting the ribbon page still has to be wired to this bridge without importing Node font metrics into the browser bundle. Pagination is not claimed, because `@genoffice/font-metrics` reads font files with Node and metric parity is not proven. In-table text is shown and preserved; the save path does not rewrite table cells as plain text. An external Word reopen needs a machine with Word and is an operations check, not something this environment can execute.
+A table whose every cell is one plain paragraph is editable. The save patches that cell with `patchTableCellTexts` and leaves the surrounding `w:tbl` / `w:tr` / `w:tc` bytes in place. A plain-text rewrite of the whole table is still rejected. The mounted editor exposes one field per cell, undoes the cell edit, saves, and reopens the package through `parseDocx`.
+
+This was red while the projection omitted `cells` (`table.cells` was `undefined`) and green after the patch path existed.
+
+```sh
+node --import tsx --test --test-name-pattern 'plain table cell|rewrites a table cell' apps/web/test/docx-editor.test.mjs apps/web/test/docs-mount.test.mjs
+```
+
+## Pagination
+
+`computePageSlices` places measured blocks onto pages. Two 80px blocks in a 100px content height produce two pages, and the second page starts at or after the first page ends. This does not claim that Node `@genoffice/font-metrics` matches Word's line heights.
+
+```sh
+node --import tsx --test apps/web/test/pagination.test.mjs
+```
+
+The import failed before the path pointed at `apps/docs/src/renderer/pagination-slices.ts`, then the assertion passed.
+
+## Still open, and what is deferred
+
+The GenOffice Docs ribbon `App` is not mounted. `Ribbon` takes the live tiptap editor, section, watermark, ink, and Zotero callbacks, and `App` is the desktop shell around that editor. `createWebDesktop` throws `UNSUPPORTED` for those desktop-only calls instead of reporting success. Putting that shell into the scanned web bundle would also import `@genoffice/font-metrics`, which reads font files with Node. That mount is still T07 work.
+
+An external Word or LibreOffice reopen is deferred to operations. This environment has neither `soffice` nor `libreoffice`, so a Word process cannot be started here. The in-repo reopen is `parseDocx` on the saved package, which is what the cell test checks. It is not a Word compatibility sample.
