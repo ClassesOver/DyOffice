@@ -4,3 +4,6 @@
 .dyoffice-sheets-state button { margin-inline-start: 0.75rem; color: var(--text); background: var(--surface); border: 1px solid var(--border); border-radius: 0.25rem; padding: 0.15rem 0.5rem; cursor: pointer; }
 
 .dyoffice-sheets-state a { margin-inline-start: 0.75rem; color: var(--text); }
+.dyoffice-sheets-state button:disabled { opacity: 0.55; cursor: default; }
+.dyoffice-sheets-state .dyoffice-sheets-action-error { margin-inline-start: 0.75rem; color: var(--danger, #b42318); }
+.dyoffice-sheets-state .dyoffice-sheets-download { font-weight: 600; }

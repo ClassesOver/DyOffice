@@ -4,15 +4,18 @@ import { hostError, HostError } from '../../web-contracts/src/errors.ts'
 
 type Lease = { leaseEpoch: number; editorId: string; expiresAt: string }
 type Pending = { touchedEntries?: string[]; input: SaveInput; sha256: string; size: number }
-type Context = { preparing: boolean; leaseOperation: number; revision: RevisionRef; name: string; lease: Lease | null; pending: Pending | null; status: 'idle' | 'saving' | 'unknown' | 'conflict' | 'unauthorized'; staged: Map<string, { base: string; epoch: number; sha256: string; size: number }> }
+type Context = { preparing: boolean; leaseOperation: number; exclusiveLease: number | null; revision: RevisionRef; name: string; lease: Lease | null; pending: Pending | null; status: 'idle' | 'saving' | 'unknown' | 'conflict' | 'unauthorized'; staged: Map<string, { base: string; epoch: number; sha256: string; size: number }> }
 const uuid = (value: string) => { if (typeof value !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value)) throw hostError('INVALID_REVISION','identifier'); return value.toLowerCase() }
 const digest = async (bytes: Uint8Array) => Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',bytes.slice().buffer as ArrayBuffer)),value => value.toString(16).padStart(2,'0')).join('')
 function errorFor(status: number) {
   const code = status === 401 || status === 403 ? 'UNAUTHORIZED' : status === 409 || status === 410 ? 'CONFLICT' : status === 413 ? 'PAYLOAD_TOO_LARGE' : status >= 500 || status === 408 ? 'UNAVAILABLE' : 'INVALID_RESPONSE'
   return Object.assign(hostError(code,'request'),{ status })
 }
-export function createSessionFileHost({ fetchImpl = fetch, editorId = crypto.randomUUID(), onState }: { fetchImpl?: typeof fetch; editorId?: string; onState?: () => void } = {}) {
+export function createSessionFileHost({ fetchImpl = fetch, editorId = crypto.randomUUID(), onState, leaseRetryDelayMs = 150 }: { fetchImpl?: typeof fetch; editorId?: string; onState?: () => void; leaseRetryDelayMs?: number } = {}) {
   const editor = uuid(editorId), contexts = new Map<string,Context>(), references = new Map<string,RevisionRef>(), timers = new Map<string,ReturnType<typeof setInterval>>()
+  const expirations = new Map<string,ReturnType<typeof setTimeout>>()
+  const renewals = new Map<string,{context: Context; operation: number; promise: Promise<Lease>}>()
+  const retryDelay = Math.max(0,Math.min(1000,Number.isFinite(leaseRetryDelayMs) ? leaseRetryDelayMs : 150))
   const listeners = new Set<() => void>()
   let csrf: string | undefined, disposed = false
   const emit = () => { if (!disposed) { try { onState?.(); for (const listener of listeners) listener() } catch { /* UI listeners cannot change durable results. */ } } }
@@ -48,17 +51,58 @@ export function createSessionFileHost({ fetchImpl = fetch, editorId = crypto.ran
       return readJson(reply)
     }
   }
+  function clearExpiration(id: string) { clearTimeout(expirations.get(id)); expirations.delete(id) }
+  function expireLease(id: string, ctx: Context, notify = true) {
+    if (!ctx.lease || Date.parse(ctx.lease.expiresAt) > Date.now()) return
+    // Local expiry disables writes, but a renewal already accepted by the
+    // server may still arrive with a future expiry. Only explicit authority
+    // changes fence that reply; passage of time does not supersede its request.
+    ctx.lease = null; clearExpiration(id)
+    if (!ctx.pending && !ctx.preparing) ctx.status = 'conflict'
+    if (notify) emit()
+  }
+  function armExpiration(id: string, ctx: Context) {
+    clearExpiration(id)
+    if (!ctx.lease) return
+    const timer = setTimeout(() => { expirations.delete(id); if (!disposed && contexts.get(id) === ctx) { expireLease(id,ctx); if (ctx.lease) armExpiration(id,ctx) } },Math.min(2_147_483_647,Math.max(0,Date.parse(ctx.lease.expiresAt)-Date.now())))
+    ;(timer as unknown as {unref?(): void}).unref?.()
+    expirations.set(id,timer)
+  }
+  function liveContext(fileId: string, notify = true) { const id=uuid(fileId),ctx=context(id);expireLease(id,ctx,notify);return ctx }
+  function revokeLease(id: string,ctx: Context) {ctx.lease=null;ctx.leaseOperation++;clearExpiration(id)}
   function readLease(value: unknown): Lease {
     const v = value as Lease
-    if (!v || !Number.isSafeInteger(v.leaseEpoch) || v.leaseEpoch < 1 || v.editorId !== editor || typeof v.expiresAt !== 'string' || !Number.isFinite(Date.parse(v.expiresAt))) throw hostError('INVALID_RESPONSE','lease')
+    if (!v || !Number.isSafeInteger(v.leaseEpoch) || v.leaseEpoch < 1 || v.editorId !== editor || typeof v.expiresAt !== 'string' || !Number.isFinite(Date.parse(v.expiresAt)) || Date.parse(v.expiresAt) <= Date.now()) throw hostError('INVALID_RESPONSE','lease')
     return { leaseEpoch: v.leaseEpoch,editorId: editor,expiresAt: v.expiresAt }
   }
-  async function leaseOperation(fileId: string, suffix: string, body: object) {
-    const id = uuid(fileId), ctx = context(id), operation = ++ctx.leaseOperation
+  const currentOperation = (id: string,ctx: Context,operation: number) => !disposed && contexts.get(id) === ctx && ctx.leaseOperation === operation
+  async function leaseOperation(fileId: string, suffix: string, body: object, operation?: number) {
+    const id = uuid(fileId), ctx = context(id), op = operation ?? ++ctx.leaseOperation
     try {
-      const lease = readLease(await mutation(`/api/v1/files/${id}/lease${suffix}`,'POST',body))
-      if (operation === ctx.leaseOperation) { ctx.lease = lease; if (!ctx.pending) ctx.status = 'idle'; emit() }; return { ...lease }
-    } catch (error) { if (operation === ctx.leaseOperation) { ctx.lease = null; if (!ctx.pending) ctx.status = (error as HostError).code === 'UNAUTHORIZED' ? 'unauthorized' : 'conflict'; emit() }; throw error }
+      let lease: Lease | undefined
+      for (let attempt=0;attempt<3;attempt++) {
+        if (!currentOperation(id,ctx,op)) throw hostError('CONFLICT','superseded lease')
+        try { lease=readLease(await mutation(`/api/v1/files/${id}/lease${suffix}`,'POST',body));break }
+        catch(error) {
+          // A refresh may acquire before the old page's keepalive release arrives.
+          // Retry acquire only; it must never silently take over a live editor.
+          if (suffix !== '' || (error as HostError).code !== 'CONFLICT' || attempt === 2 || !currentOperation(id,ctx,op)) throw error
+          if (retryDelay) await new Promise(resolve=>setTimeout(resolve,retryDelay*(attempt+1)))
+        }
+      }
+      if (!currentOperation(id,ctx,op)) throw hostError('CONFLICT','superseded lease')
+      ctx.lease = lease!; armExpiration(id,ctx); if (!ctx.pending && !ctx.preparing) ctx.status = 'idle'; emit(); return { ...lease! }
+    } catch (error) { if (currentOperation(id,ctx,op)) { ctx.lease = null; clearExpiration(id); if (!ctx.pending && !ctx.preparing) ctx.status = (error as HostError).code === 'UNAUTHORIZED' ? 'unauthorized' : 'conflict'; emit() }; throw error }
+  }
+  function renewLease(fileId: string): Promise<Lease> {
+    const id=uuid(fileId),ctx=liveContext(id),lease=ctx.lease
+    if (!lease || ctx.exclusiveLease !== null) return Promise.reject(hostError('CONFLICT','renew'))
+    const existing=renewals.get(id)
+    if (existing?.context===ctx && existing.operation===ctx.leaseOperation) return existing.promise
+    const operation=++ctx.leaseOperation,promise=leaseOperation(id,'/renew',{editorId:editor,leaseEpoch:lease.leaseEpoch},operation)
+    const renewal={context:ctx,operation,promise};renewals.set(id,renewal)
+    void promise.finally(()=>{if(renewals.get(id)===renewal)renewals.delete(id)}).catch(()=>{})
+    return promise
   }
   function accept(fileId: string, ctx: Context, pending: Pending, value: unknown) {
     if (!isRevisionRef(value) || value.fileId !== fileId || value.sha256 !== pending.sha256 || value.size !== pending.size) throw hostError('INVALID_RESPONSE','commit')
@@ -73,7 +117,7 @@ export function createSessionFileHost({ fetchImpl = fetch, editorId = crypto.ran
       const status = (error as { status?: number }).status
       if (status && status >= 400 && status < 500 && status !== 408) {
         ctx.pending = null; ctx.status = (error as HostError).code === 'UNAUTHORIZED' ? 'unauthorized' : 'conflict'
-        if (ctx.status === 'unauthorized' || (error as HostError).code === 'CONFLICT') ctx.lease = null
+        if (ctx.status === 'unauthorized' || (error as HostError).code === 'CONFLICT') revokeLease(fileId,ctx)
       } else ctx.status = 'unknown'
       emit(); throw error
     }
@@ -86,7 +130,7 @@ export function createSessionFileHost({ fetchImpl = fetch, editorId = crypto.ran
       const result = await get(`/api/v1/files/${id}`) as OpenFileResult & { name?: string }
       if (!isRevisionRef(result?.file) || result.file.fileId !== id) throw hostError('INVALID_RESPONSE','open')
       const name = typeof result.name === 'string' && result.name.length <= 255 ? result.name : id + '.' + result.format
-      contexts.set(id,{ preparing: false,leaseOperation: 0,revision: { ...result.file },name,lease: null,pending: null,status: 'idle',staged: new Map() }); remember(result.file); emit()
+      contexts.set(id,{ preparing: false,leaseOperation: 0,exclusiveLease: null,revision: { ...result.file },name,lease: null,pending: null,status: 'idle',staged: new Map() }); remember(result.file); emit()
       return result
     },
     async readBytes(fileId, revision) {
@@ -113,7 +157,7 @@ export function createSessionFileHost({ fetchImpl = fetch, editorId = crypto.ran
       return bytes
     },
     async stageSave(bytes, fileId) {
-      const id = uuid(fileId), ctx = context(id), lease = ctx.lease
+      const id = uuid(fileId), ctx = liveContext(id), lease = ctx.lease
       if (!lease || ctx.pending || ctx.preparing) throw hostError(ctx.pending || ctx.preparing ? 'UNAVAILABLE' : 'CONFLICT','stage')
       const snapshot = bytes.slice(), sha256 = await digest(snapshot), base = ctx.revision.revision
       try {
@@ -122,7 +166,7 @@ export function createSessionFileHost({ fetchImpl = fetch, editorId = crypto.ran
         await mutation(`/api/v1/uploads/${uploadId}/content`,'PUT',snapshot,true)
         ctx.staged.set(uploadId,{ base,epoch: lease.leaseEpoch,sha256,size: snapshot.byteLength })
         return { uploadId }
-      } catch (error) { if ((error as HostError).code === 'CONFLICT' || (error as HostError).code === 'UNAUTHORIZED') { ctx.lease = null; ctx.status = (error as HostError).code === 'UNAUTHORIZED' ? 'unauthorized' : 'conflict'; emit() }; throw error }
+      } catch (error) { if ((error as HostError).code === 'CONFLICT' || (error as HostError).code === 'UNAUTHORIZED') { revokeLease(id,ctx); ctx.status = (error as HostError).code === 'UNAUTHORIZED' ? 'unauthorized' : 'conflict'; emit() }; throw error }
     },
     async commitSave(input) {
       const id = uuid(input.fileId), ctx = context(id), staged = ctx.staged.get(input.uploadId)
@@ -134,15 +178,42 @@ export function createSessionFileHost({ fetchImpl = fetch, editorId = crypto.ran
   return {
     ...host,
     subscribe(listener: () => void) { listeners.add(listener); return () => { listeners.delete(listener) } },
-    getState(fileId: string) { const ctx = context(fileId); return { revision: { ...ctx.revision },name: ctx.name,lease: ctx.lease ? { ...ctx.lease } : null,status: ctx.status } },
-    acquireLease: (fileId: string) => leaseOperation(fileId,'',{ editorId: editor }),
-    renewLease(fileId: string) { const lease = context(fileId).lease; if (!lease) return Promise.reject(hostError('CONFLICT','renew')); return leaseOperation(fileId,'/renew',{ editorId: editor,leaseEpoch: lease.leaseEpoch }) },
-    async takeoverLease(fileId: string) {
-      const state = await get(`/api/v1/files/${uuid(fileId)}/lease`)
-      if (!Number.isSafeInteger(state?.leaseEpoch) || state.leaseEpoch < 1) return leaseOperation(fileId,'',{ editorId: editor })
-      return leaseOperation(fileId,'/takeover',{ editorId: editor,expectedEpoch: state.leaseEpoch })
+    getState(fileId: string) { const ctx = liveContext(fileId,false); return { revision: { ...ctx.revision },name: ctx.name,lease: ctx.lease ? { ...ctx.lease } : null,status: ctx.status } },
+    async acquireLease(fileId: string) {
+      const id=uuid(fileId),ctx=context(id),operation=++ctx.leaseOperation
+      ctx.exclusiveLease=operation
+      try {return await leaseOperation(id,'',{editorId:editor},operation)}
+      finally {if(ctx.exclusiveLease===operation)ctx.exclusiveLease=null}
     },
-    async releaseLease(fileId: string, keepalive = false) { const id = uuid(fileId), ctx = context(id), lease = ctx.lease, operation = ++ctx.leaseOperation; if (lease) { await mutation(`/api/v1/files/${id}/lease`,'DELETE',{ editorId: editor,leaseEpoch: lease.leaseEpoch },false,keepalive); if (operation === ctx.leaseOperation) { ctx.lease = null; emit() } } },
+    renewLease,
+    async takeoverLease(fileId: string) {
+      const id=uuid(fileId),ctx=liveContext(id),operation=++ctx.leaseOperation
+      ctx.exclusiveLease=operation
+      try {
+        const state = await get(`/api/v1/files/${id}/lease`)
+        if (!currentOperation(id,ctx,operation)) throw hostError('CONFLICT','superseded takeover')
+        if (!Number.isSafeInteger(state?.leaseEpoch) || state.leaseEpoch < 1) return await leaseOperation(id,'',{ editorId: editor },operation)
+        return await leaseOperation(id,'/takeover',{ editorId: editor,expectedEpoch: state.leaseEpoch },operation)
+      } catch(error) {
+        if (currentOperation(id,ctx,operation)) {ctx.lease=null;clearExpiration(id);if(!ctx.pending && !ctx.preparing)ctx.status=(error as HostError).code==='UNAUTHORIZED'?'unauthorized':'conflict';emit()}
+        throw error
+      } finally {if(ctx.exclusiveLease===operation)ctx.exclusiveLease=null}
+    },
+    async releaseLease(fileId: string, keepalive = false) {
+      const id = uuid(fileId), ctx = liveContext(id), lease = ctx.lease
+      ++ctx.leaseOperation; ctx.lease=null; clearExpiration(id); emit()
+      if (lease) await mutation(`/api/v1/files/${id}/lease`,'DELETE',{ editorId: editor,leaseEpoch: lease.leaseEpoch },false,keepalive)
+    },
+    async refreshHead(fileId: string) {
+      const id=uuid(fileId),ctx=context(id),base=ctx.revision.revision
+      if(ctx.pending || ctx.preparing)throw hostError('UNAVAILABLE','unconfirmed save')
+      const result=await get(`/api/v1/files/${id}`) as OpenFileResult & {name?: string}
+      if(!isRevisionRef(result?.file)||result.file.fileId!==id)throw hostError('INVALID_RESPONSE','head')
+      if(context(id)!==ctx || ctx.pending || ctx.preparing || ctx.revision.revision!==base)throw hostError('CONFLICT','changed head')
+      ctx.revision={...result.file};remember(result.file)
+      if(typeof result.name==='string' && result.name.length<=255)ctx.name=result.name
+      emit();return {...result.file}
+    },
     async reconcile(fileId: string) { const id = uuid(fileId), ctx = context(id); if (!ctx.pending) return { ...ctx.revision }; return commit(id,ctx,ctx.pending) },
     async reconcileSheets(fileId: string) {
       const id=uuid(fileId),ctx=context(id),pending=ctx.pending
@@ -151,7 +222,7 @@ export function createSessionFileHost({ fetchImpl = fetch, editorId = crypto.ran
       return {...saved,touchedEntries:[...pending.touchedEntries]}
     },
     async saveSheets(fileId: string, edits: unknown) {
-      const id = uuid(fileId), ctx = context(id), lease = ctx.lease, base = ctx.revision.revision
+      const id = uuid(fileId), ctx = liveContext(id), lease = ctx.lease, base = ctx.revision.revision
       // An uncertain receipt must be reconciled before replaying edits: sheet
       // insertion and other structural commands are not idempotent operations.
       if (ctx.pending || ctx.preparing) throw hostError('UNAVAILABLE','unconfirmed save')
@@ -172,7 +243,7 @@ export function createSessionFileHost({ fetchImpl = fetch, editorId = crypto.ran
         if (!committing) {
           const code = (error as HostError).code
           ctx.status = code === 'UNAUTHORIZED' ? 'unauthorized' : code === 'CONFLICT' ? 'conflict' : 'idle'
-          if (code === 'UNAUTHORIZED' || code === 'CONFLICT') ctx.lease = null
+          if (code === 'UNAUTHORIZED' || code === 'CONFLICT') revokeLease(id,ctx)
         }
         throw error
       } finally { ctx.preparing = false; emit() }
@@ -185,10 +256,10 @@ export function createSessionFileHost({ fetchImpl = fetch, editorId = crypto.ran
     },
     startRenewal(fileId: string) {
       const id = uuid(fileId)
-      if (!timers.has(id)) timers.set(id,setInterval(() => { const ctx = contexts.get(id); if (ctx?.lease && !disposed) void leaseOperation(id,'/renew',{ editorId: editor,leaseEpoch: ctx.lease.leaseEpoch }).catch(() => {}) },15_000))
+      if (!timers.has(id)) timers.set(id,setInterval(() => { if (!disposed && contexts.has(id)) { const ctx=liveContext(id); if(ctx.lease)void renewLease(id).catch(()=>{}) } },15_000))
       return () => { clearInterval(timers.get(id)); timers.delete(id) }
     },
-    dispose() { disposed = true; for (const timer of timers.values()) clearInterval(timer); timers.clear(); listeners.clear(); contexts.clear(); references.clear(); csrf = undefined },
+    dispose() { disposed = true; for (const timer of timers.values()) clearInterval(timer); for(const timer of expirations.values())clearTimeout(timer);expirations.clear();renewals.clear(); timers.clear(); listeners.clear(); contexts.clear(); references.clear(); csrf = undefined },
   }
 }
 export type SessionFileHost = ReturnType<typeof createSessionFileHost>

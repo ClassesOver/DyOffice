@@ -29,17 +29,21 @@ export function createSheetsBridge(host: SessionFileHost, fileId: string, prefs:
     if (disposed) throw hostError('UNAVAILABLE','disposed')
     const controller = new AbortController(); controllers.add(controller)
     try {
-      if (!csrf) {
-        const response = await fetchImpl('/api/v1/auth/csrf',{credentials:'same-origin',cache:'no-store',signal:controller.signal})
-        if (!response.ok) throw hostError('UNAUTHORIZED','session')
-        const body = await response.json()
-        if (typeof body?.csrfToken !== 'string') throw hostError('INVALID_RESPONSE','csrf')
-        csrf = body.csrfToken
+      for (let attempt=0;attempt<2;attempt++) {
+        if (!csrf) {
+          const response = await fetchImpl('/api/v1/auth/csrf',{credentials:'same-origin',cache:'no-store',signal:controller.signal})
+          if (!response.ok) throw hostError('UNAUTHORIZED','session')
+          const body = await response.json()
+          if (typeof body?.csrfToken !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(body.csrfToken)) throw hostError('INVALID_RESPONSE','csrf')
+          csrf = body.csrfToken
+        }
+        const proof=csrf
+        const response = await fetchImpl(`/api/v1/files/${fileId}/sheets/${method}`,{method:'POST',credentials:'same-origin',cache:'no-store',signal:controller.signal,headers:{'content-type':'application/json','x-csrf-token':proof!},body:JSON.stringify({revision,...input})})
+        if(response.status===403 && attempt===0){if(csrf===proof)csrf=undefined;continue}
+        if (!response.ok) throw hostError(response.status === 401 || response.status === 403 ? 'UNAUTHORIZED' : response.status === 409 ? 'CONFLICT' : 'UNAVAILABLE','workbook read')
+        if (!response.headers.get('content-type')?.includes('application/json')) throw hostError('INVALID_RESPONSE','workbook read')
+        return await response.json()
       }
-      const response = await fetchImpl(`/api/v1/files/${fileId}/sheets/${method}`,{method:'POST',credentials:'same-origin',cache:'no-store',signal:controller.signal,headers:{'content-type':'application/json','x-csrf-token':csrf!},body:JSON.stringify({revision,...input})})
-      if (!response.ok) throw hostError(response.status === 401 || response.status === 403 ? 'UNAUTHORIZED' : response.status === 409 ? 'CONFLICT' : 'UNAVAILABLE','workbook read')
-      if (!response.headers.get('content-type')?.includes('application/json')) throw hostError('INVALID_RESPONSE','workbook read')
-      return await response.json()
     } finally { controllers.delete(controller) }
   }
   async function call(revision: string, method: string, input: object = {}) {
@@ -132,5 +136,35 @@ export function createSheetsBridge(host: SessionFileHost, fileId: string, prefs:
       throw error
     } finally {confirming=false;onChange()}
   }
-  return {api,confirmSave,needsConfirmation:()=>recovery!==null,isDirty:()=>pendingEdits>0,dispose(){disposed=true;recovery?.reject(hostError('UNAVAILABLE','disposed'));recovery=null;for(const controller of controllers)controller.abort();controllers.clear();sessions.clear();csrf=undefined}}
+  async function prepareDownload(editor: {saveAndWait(): Promise<boolean>; isDirty(): boolean}) {
+    if(disposed)throw hostError('UNAVAILABLE','disposed')
+    const before=host.getState(fileId)
+    if(!before.lease || before.status==='unauthorized' || before.status==='conflict')throw hostError('CONFLICT','download authority')
+    // The renderer owns the active editor and the full save/late-edit queue.
+    // Its Promise stays pending across an unknown commit receipt. Never fall
+    // back to a saved-head link on cancellation, conflict or remaining edits.
+    if(!await editor.saveAndWait())throw hostError('UNAVAILABLE','download save')
+    if(disposed)throw hostError('UNAVAILABLE','disposed')
+    const state=host.getState(fileId)
+    if(editor.isDirty() || recovery || state.status!=='idle' || !state.lease)throw hostError('CONFLICT','download not clean')
+    return {...state.revision}
+  }
+  async function takeover(editor: {reload(): Promise<boolean>; isDirty(): boolean}) {
+    if(disposed)throw hostError('UNAVAILABLE','disposed')
+    if(editor.isDirty() || pendingEdits>0 || recovery || host.getState(fileId).status==='unknown')throw hostError('CONFLICT','unsaved takeover')
+    let acquired=false
+    try {
+      await host.takeoverLease(fileId);acquired=true
+      if(disposed || editor.isDirty() || pendingEdits>0 || recovery)throw hostError('CONFLICT','unsaved takeover')
+      await host.refreshHead(fileId)
+      if(disposed || editor.isDirty() || pendingEdits>0 || recovery)throw hostError('CONFLICT','unsaved takeover')
+      if(!await editor.reload())throw hostError('UNAVAILABLE','takeover reload')
+      if(disposed || !host.getState(fileId).lease)throw hostError('CONFLICT','takeover authority')
+    } catch(error) {
+      // A failed reload must not expose a stale view as an editable new head.
+      if(acquired)await host.releaseLease(fileId).catch(()=>{})
+      throw error
+    }
+  }
+  return {api,confirmSave,prepareDownload,takeover,needsConfirmation:()=>recovery!==null,isDirty:()=>pendingEdits>0,dispose(){disposed=true;recovery?.reject(hostError('UNAVAILABLE','disposed'));recovery=null;for(const controller of controllers)controller.abort();controllers.clear();sessions.clear();csrf=undefined}}
 }
