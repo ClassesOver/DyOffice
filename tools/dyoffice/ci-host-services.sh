@@ -4,9 +4,10 @@ set -euo pipefail
 [[ ${GITHUB_ACTIONS:-} == true && $(id -u) == 0 ]] || { echo 'Disposable CI runner required' >&2; exit 1; }
 export DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=l
 curl --proto '=https' --tlsv1.2 -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc -o /usr/share/keyrings/dyoffice-pgdg.asc
+[[ $(gpg --show-keys --with-colons /usr/share/keyrings/dyoffice-pgdg.asc | awk -F: '$1=="fpr" {print $10; exit}') == B97B0AFCAA1A47F044F244A07FCC7D46ACCC4CF8 ]] || { echo 'PGDG key mismatch' >&2; exit 1; }
 printf '%s\n' 'deb [signed-by=/usr/share/keyrings/dyoffice-pgdg.asc] https://apt.postgresql.org/pub/repos/apt noble-pgdg main' > /etc/apt/sources.list.d/dyoffice-pgdg.list
 apt-get update -qq
-apt-get install -y --no-install-recommends postgresql-17 redis-server build-essential unzip
+apt-get install -y --no-install-recommends 'postgresql-17=17.12-1.pgdg24.04+1' 'postgresql-client-17=17.12-1.pgdg24.04+1' 'redis-server=5:7.0.15-1ubuntu0.24.04.5' 'redis-tools=5:7.0.15-1ubuntu0.24.04.5' build-essential unzip
 pg_createcluster 17 dyoffice --port=55432 --start
 runuser -u postgres -- psql -p 55432 -v ON_ERROR_STOP=1 <<'SQL'
 ALTER USER postgres PASSWORD 'dyoffice-ci-test-only';

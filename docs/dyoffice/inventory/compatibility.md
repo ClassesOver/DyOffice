@@ -34,7 +34,7 @@ rather than equating it with runtime acceptance, an SBOM or an image digest.
 | TypeScript | Root and Web locks 5.9.3 | Exact lock input available | Does not establish whole-repo typecheck success |
 | MCP SDK | Root lock 1.32.1; Web lock 1.32.2 | Two different installation contexts; Web server uses `apps/web` install | Do not claim protocol/client compatibility from package version or mocked handshake |
 | Web start/test scripts | `apps/web/package.json` scripts only | `dev`, `start`, and `test` load `tsx` so the server can import the DOCX engine sources. `test:web:integration` runs one named integration file | `tsx` comes from the workspace install. The boundary workflow uses `npm ci --ignore-scripts` and does not run Electron's postinstall |
-| Fastify | Web and root locks 5.12.8 | Locked for the modular API shell. `dev:web` still starts the legacy Node server | Not a production cutover, route migration, or security review of the framework |
+| Fastify | Web and root locks 5.12.8 | Locked for the modular API shell. `dev:web` invokes Fastify `buildApp` with the development legacy context | Not a production cutover, route migration, or security review of the framework |
 | Electron | Root lock 43.8.3 | Desktop dependency retained upstream | Web must not need Electron runtime; desktop version is not a server ABI guarantee |
 | Univer | `@univerjs/core` 0.25.1 | Existing spreadsheet UI dependency | Browser adapter, formula persistence and real Excel reopen pending |
 | PDF | PDFium 2.15.1, PDF.js 6.2.108, pdf-lib 1.17.1 | Parser/renderer package identities | WASM assets/workers/CSP, fonts and genuine text edit/export pending |
@@ -65,11 +65,13 @@ configuration are not covered by this bundled-input manifest. T00/T21/T23 must s
 verify license texts and generated NOTICE/SBOM in the actual deliverable, and verify
 font metric/rendering behavior in the selected browser/worker images.
 
-## What remains open before T00 is complete
+## Current closure review and remaining runtime acceptance
+
+See [the current T00 review](../evidence/t00-closeout.md) for exact-commit CI, mutable runtime/image declarations, and the distinction between source inventory and runtime acceptance. The following items are not all T00 implementation prerequisites; many belong to the named adapter/deployment tasks.
 
 - Complete the per-IPC/per-tool call inventory: every bridge member now has a
   proposed class in [host-ipc.md](host-ipc.md); signatures/error modes and the
-  agent tool live/headless split are still open.
+  agent tool placement is now explicit in [agent-tools.md](agent-tools.md), with a source/schema drift gate. Runtime availability is still unverified.
 - Build and exercise the actual browser host, not only a file-import scaffold.
 - Lock validated Node/Rust/worker image/architecture choices, including font assets,
   after native/WASM spikes; no image digest is invented in this baseline.

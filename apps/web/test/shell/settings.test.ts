@@ -12,9 +12,10 @@ test('original settings uses only Web capabilities and does not fake a failed pr
  let persisted:WebSettingsPreferences={theme:'light',language:'zh',authorName:'Real author',autoSave:undefined as unknown as boolean,showAssistant:true}
  let fail=false
  const root=createRoot(document.querySelector('#settings-test')!)
- const render=()=>root.render(h(LocaleProvider,{initial:'zh',children:h(SettingsModal,{status:null,loggingOut:false,loginWaiting:false,loginUrl:null,urlCopied:false,onOpenLoginUrl(){},onCopyLoginUrl(){},onLogin(){},onLogout(){},onClose(){},web:{account:h('p',null,'个人开发访问令牌'),load:async()=>({...persisted}),save:async patch=>{if(fail)throw new Error('write rejected');persisted={...persisted,...patch};return {...persisted}}}})}))
+ const render=()=>root.render(h(LocaleProvider,{initial:'zh',children:h(SettingsModal,{status:null,loggingOut:false,loginWaiting:false,loginUrl:null,urlCopied:false,onOpenLoginUrl(){},onCopyLoginUrl(){},onLogin(){},onLogout(){},onClose(){},web:{accountLabel:'本地账号',account:h('p',null,'个人开发访问令牌'),load:async()=>({...persisted}),save:async patch=>{if(fail)throw new Error('write rejected');persisted={...persisted,...patch};return {...persisted}}}})}))
  render()
  await vi.waitFor(()=>expect(document.querySelector('.set-dialog')).not.toBeNull())
+ expect(document.querySelector('.set-nav-account-email')?.textContent).toBe('本地账号')
  ;([...document.querySelectorAll<HTMLButtonElement>('.set-nav-item')].find(b=>b.textContent==='通用')!).click()
  await vi.waitFor(()=>expect((document.querySelector('#set-author-name') as HTMLInputElement)?.value).toBe('Real author'))
  const auto=()=>document.querySelector<HTMLButtonElement>('[role="switch"][aria-label="所有文档自动保存"]')!

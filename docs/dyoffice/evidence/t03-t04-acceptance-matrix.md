@@ -1,5 +1,7 @@
 # T03/T04 integration acceptance matrix
 
+> Scope update, 2026-11-16: Historical pre-CI inventory for the initial #21 integration. Its pending statements describe that checkpoint, not the later #38 run. See [current-stack acceptance](t03-t04-current-stack-acceptance.md): #38 passed real PG/browser gates, while the final history/host combination remains pending and must revalidate the now-fixed history-attribution regression.
+
 ## Scope and evidence rules
 
 This matrix compares `implementation-plan.md` T03/T04 and

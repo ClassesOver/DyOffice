@@ -4,12 +4,14 @@ on:
   push:
     branches: [main, feat/dyoffice-web]
     paths:
+      - 'tools/dyoffice/runtime-lock*'
       - 'apps/web/server/src/storage/**'
       - 'apps/web/test/s3-minio.test.mjs'
       - 'apps/web/test/s3-http-sign.test.mjs'
       - '.github/workflows/dyoffice-t05-s3.yml'
   pull_request:
     paths:
+      - 'tools/dyoffice/runtime-lock*'
       - 'apps/web/server/src/storage/**'
       - 'apps/web/test/s3-minio.test.mjs'
       - 'apps/web/test/s3-http-sign.test.mjs'
@@ -21,11 +23,11 @@ permissions:
 
 jobs:
   minio:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     services:
       minio:
-        image: bitnamilegacy/minio:2025.7.23-debian-12-r5
+        image: bitnamilegacy/minio:2025.7.23-debian-12-r5@sha256:6dabb4a2088c9a79908de3bc05f4586c23ad2182c8908e7e3acbf61c1467fb20
         env:
           MINIO_ROOT_USER: dyoffice
           MINIO_ROOT_PASSWORD: dyoffice-ci-only-not-production
@@ -35,7 +37,9 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: 22
+          node-version: '22.23.5'
+      - name: Verify immutable Node runtime
+        run: node tools/dyoffice/runtime-lock.mjs --runtime
       - name: Wait until MinIO answers
         run: |
           for _ in $(seq 1 40); do

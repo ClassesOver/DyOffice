@@ -124,11 +124,13 @@ docs/dyoffice/               当前计划及 inventory/ evidence/ adr/
 
 ### T03 本地账号密码、管理员用户管理与服务端会话
 
+> **范围说明（2026-11-16）：** 下列 T03 完成记录及接口/延期描述属于历史 MJS / `dyoffice_schema_migrations` 栈，不是新 TS 本地账号栈的全局完成声明。新栈 #38 已有真实 PG 141 项和可见浏览器 4 项证据；新增登录历史的归属锁竞争已取得真实 PG 红绿修复证据；最终组合尚未发布/验收。详见 [新栈验收矩阵](evidence/t03-t04-current-stack-acceptance.md)。保留历史结果，不把新旧库迁移链或测试数量混用。
+
 **依赖：** T02。**文件：** 拟建 `server/src/modules/auth/{service,routes,passwords,sessions,throttle,csrf}.ts`、`server/src/modules/admin/users/{routes,service}.ts`、`db/schema.ts`、`db/migrations/0001_identity.sql`、`tools/dyoffice/bootstrap-admin.ts`、`test/integration/{auth-session,admin-users,password-reset}.test.ts`。
 
 **接口：** `authenticate(request)` 在 `session-core.mjs`；`principalContext(session)` 与 `canReadPersonalFiles(principal, ownerUserId)` 在 `auth/principal.mjs`，供 T04 的 `withPrincipalTransaction` 使用。身份稳定键是数据库中的用户 UUID，`(deploymentId,usernameNormalized)` 唯一。不实现 RLS。专门设计见 [local-account-auth.md](local-account-auth.md)。收口证据见 [t03-closeout.md](evidence/t03-closeout.md)。
 
-**状态（2026-11-16）：T03 身份与会话完成。** 默认 `dev:web` 仍使用开发令牌，`NODE_ENV=production` 仍拒绝启动。本地账号路由只在 `buildApp({ localAuth })` 上注册。
+**历史旧栈状态（2026-11-16）：T03 身份与会话检查点完成。** 默认 `dev:web` 仍使用开发令牌，`NODE_ENV=production` 仍拒绝启动。本地账号路由只在 `buildApp({ localAuth })` 上注册。
 
 - [x] **T03a，RED：** 用户名归一化/重复、首次 Admin bootstrap 并发、无默认密码、空/弱/常见密码拒绝、Argon2id 独立盐、不存在用户与错误密码的同等哈希、账号禁用拒绝。失败先于服务存在，记录在 [t03a-account-foundation.md](evidence/t03a-account-foundation.md)。
 - [x] **T03a，GREEN：** `0001_identity.sql` 含 users/user_roles/password_action_tokens/sessions/personal workspace。Argon2id 为 m=19456、t=2、p=1。密码至少 15 个码位，允许长短语和 Unicode，无复杂度规则。一次性 CLI bootstrap，生产拒绝开发双 Token。完整离线泄露密码库和目标主机压测延期到运维，原因见收口证据。
@@ -145,6 +147,8 @@ docs/dyoffice/               当前计划及 inventory/ evidence/ adr/
 - **写租约：** `dropWriteLeasesForOwner` 清掉调用方传入的进程内账本租约。默认开发进程没有把这份账本接进 PostgreSQL 改密事务；接上是持有账本的进程的事，不改 T06 提交规则。
 
 ### T04 资源授权与 RLS
+
+> **新栈进度（2026-11-16）：** #38 已验证受限连接、业务 RLS、A/B/Admin 隔离和 12 项密码/角色/会话撤销写入竞态。以下原检查清单保留未验收状态，最终最新组合必须重跑真实数据库、浏览器、任务与旧库拒绝门禁，不能直接继承分支 PASS。详见 [新栈验收矩阵](evidence/t03-t04-current-stack-acceptance.md)。外部 Token/T19、旧数据转换与生产不在本次完成范围内。
 
 2026-11-15 接缝进展：独立受限 auth/business 连接、工作区/偏好 FORCE RLS、数据库推导身份、撤销与写入锁顺序已实现并测试，见 [T04 证据](evidence/t04-rls-checkpoint.md)。本阶段使用个人偏好验证完整业务事务；文件、后台任务、外部 Token 随 T05/T08/T19 接入，不将尚不存在的入口标记完成。
 

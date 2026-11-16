@@ -1,5 +1,7 @@
 # T03 closeout: local accounts, sessions, and admin user management
 
+> Scope update, 2026-11-16: Historical old-stack checkpoint (MJS / `dyoffice_schema_migrations`), not acceptance of the new TS local-account runtime. The body below preserves its original evidence. See [current-stack acceptance](t03-t04-current-stack-acceptance.md) for later exact branch evidence and unresolved final-combination gates.
+
 > 2026-11-16. Continues merged PRs #5 (session core) and #8 (login service), and open draft PR #10 (account lifecycle). PR #10 targeted the old login branch and numbered its migrations `0003`–`0005`, which now collide with `0003_files.sql` and `0004_revisions.sql`. This branch keeps that code, renumbers the auth migrations to `0005`–`0008`, and mounts the routes on `buildApp({ localAuth })`.
 
 No row-level security policies were added. `principalContext()` and `canReadPersonalFiles()` are the identity values T04 can pass into `withPrincipalTransaction`. XLSX, the DOCX browser, and PDF were not edited.
