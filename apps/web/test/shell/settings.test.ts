@@ -9,7 +9,7 @@ test('original settings uses only Web capabilities and does not fake a failed pr
  const forbidden:string[]=[]
  window.aiOffice=new Proxy({},{get(_t,key){forbidden.push(String(key));throw new Error('desktop method called')}}) as typeof window.aiOffice
  document.body.innerHTML='<div id="settings-test"></div>'
- let persisted:WebSettingsPreferences={theme:'light',language:'zh',authorName:'Real author',autoSave:false,showAssistant:true}
+ let persisted:WebSettingsPreferences={theme:'light',language:'zh',authorName:'Real author',autoSave:undefined as unknown as boolean,showAssistant:true}
  let fail=false
  const root=createRoot(document.querySelector('#settings-test')!)
  const render=()=>root.render(h(LocaleProvider,{initial:'zh',children:h(SettingsModal,{status:null,loggingOut:false,loginWaiting:false,loginUrl:null,urlCopied:false,onOpenLoginUrl(){},onCopyLoginUrl(){},onLogin(){},onLogout(){},onClose(){},web:{account:h('p',null,'个人开发访问令牌'),load:async()=>({...persisted}),save:async patch=>{if(fail)throw new Error('write rejected');persisted={...persisted,...patch};return {...persisted}}}})}))
@@ -19,6 +19,7 @@ test('original settings uses only Web capabilities and does not fake a failed pr
  await vi.waitFor(()=>expect((document.querySelector('#set-author-name') as HTMLInputElement)?.value).toBe('Real author'))
  const auto=()=>document.querySelector<HTMLButtonElement>('[role="switch"][aria-label="所有文档自动保存"]')!
  expect(auto()).not.toBeNull()
+ expect(auto().getAttribute('aria-checked')).toBe('false')
  auto().click()
  await vi.waitFor(()=>expect(auto().getAttribute('aria-checked')).toBe('true'))
  expect(persisted.autoSave).toBe(true)

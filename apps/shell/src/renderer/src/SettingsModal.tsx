@@ -1874,8 +1874,8 @@ export function SettingsModal({
   const applyWebPreferences = (prefs: WebSettingsPreferences) => {
     setTheme(prefs.theme)
     setAuthorName({ value: prefs.authorName || '', fallback: '' })
-    setAutoSaveOn(prefs.autoSave)
-    setAiPrefs(prev => ({ ...prev, showAiSidebar: prefs.showAssistant }))
+    setAutoSaveOn(prefs.autoSave === true)
+    setAiPrefs(prev => ({ ...prev, showAiSidebar: prefs.showAssistant !== false }))
   }
   const saveWebPreferences = async (patch: Partial<WebSettingsPreferences>) => {
     if (!web || webBusy) return

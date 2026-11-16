@@ -73,13 +73,17 @@ test('native personal settings persist preferences, reject failures and preserve
  await dialog.locator('#set-author-name').fill('Web settings browser author');
  const saved=page.waitForResponse(r=>r.url().endsWith('/api/preferences')&&r.request().method()==='PUT');
  await dialog.locator('#set-author-name').press('Enter');expect((await saved).ok()).toBe(true);
+ await dialog.locator('.set-pane').evaluate(el=>{el.scrollTop=0});
+ await expect(dialog.getByText('灰色项目尚未适配 Web。',{exact:false})).toBeVisible();
  await page.screenshot({path:'test-results/genoffice-web-settings-general.png',fullPage:true});
+ await dialog.locator('#set-author-name').scrollIntoViewIfNeeded();
+ await page.screenshot({path:'test-results/genoffice-web-settings-general-files.png',fullPage:true});
  await expect(dialog.locator('.set-nav-item:disabled')).toHaveCount(5);
  await dialog.locator('.set-close').click();
  await page.locator('.account-btn').click();await page.getByRole('button',{name:'个人设置',exact:true}).click();
  await dialog.getByRole('button',{name:'通用',exact:true}).click();
  await expect(dialog.locator('#set-author-name')).toHaveValue('Web settings browser author');
- const auto=dialog.getByRole('switch',{name:'所有文档自动保存',exact:true});const before=await auto.getAttribute('aria-checked');
+ const auto=dialog.getByRole('switch',{name:'所有文档自动保存',exact:true});await expect(auto).toHaveAttribute('aria-checked',/^(true|false)$/);const before=await auto.getAttribute('aria-checked');
  await page.route('**/api/preferences',route=>route.request().method()==='PUT'?route.fulfill({status:503,contentType:'application/json',body:JSON.stringify({error:'settings write unavailable'})}):route.continue());
  await auto.click();await expect(dialog.getByRole('alert')).toHaveText('settings write unavailable');
  await expect(auto).toHaveAttribute('aria-checked',before);
