@@ -1,6 +1,6 @@
 # T05 local immutable object store
 
-> 2026-11-16 · Includes the recycle-bin slice and HTTP download of stored objects · **Partial. Not S3, not RLS, not wired to HTTP upload.**
+> 2026-11-16 · Includes recycle bin, HTTP download, and HTTP stage/finish for the personal dev token · **Partial. Not S3, not RLS. The prototype `/api/files` upload route is unchanged.**
 
 ## Why this slice
 
@@ -52,6 +52,16 @@ node --test apps/web/test/object-download.test.mjs
 
 Before the route module existed this failed with `ERR_MODULE_NOT_FOUND`. After the route, the file passes.
 
+## HTTP upload
+
+`POST /api/v1/objects` stages bytes for `dev-personal` only. The response includes the server SHA-256 and `finished: false`. A client `X-Content-SHA256` or `ownerId` query does not change the digest or the owner. `POST /api/v1/objects/uploads/:uploadId/finish` publishes one object id and repeats that id on a second call. The object cannot be downloaded before finish. Another owner's upload id finishes as 404. Empty files, unsafe names, and a DOCX name with non-ZIP bytes return JSON 400. A second object that would exceed the owner quota returns 413 and stores nothing for that call. Admin receives 403. `POST /api/files` still writes the prototype directory.
+
+```sh
+node --test apps/web/test/object-upload.test.mjs
+```
+
+Before the routes existed both tests received 404 instead of 201. After the routes, the file passes.
+
 ## Still open
 
-S3, HTTP upload into this store, PostgreSQL file rows, and RLS. Do not check the remaining T05 boxes from this note.
+S3, PostgreSQL file rows, and RLS. Do not check the remaining T05 boxes from this note.
