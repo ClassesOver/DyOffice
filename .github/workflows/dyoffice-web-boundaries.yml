@@ -56,6 +56,13 @@ jobs:
         run: sudo --preserve-env=GITHUB_ACTIONS bash tools/dyoffice/ci-host-services.sh --objectstore
       - name: Install workspace dependencies without launching Electron
         run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Verify wrong-database rejection in isolated PostgreSQL
+        env:
+          DYOFFICE_LEGACY_GUARD_TEST_DATABASE_URL: postgresql://postgres:dyoffice-ci-test-only@127.0.0.1:55432/dyoffice_test_legacy_guard
+        run: |
+          cd apps/web
+          node --input-type=module -e 'import { Pool } from "pg"; const p = new Pool({connectionString: process.env.DYOFFICE_TEST_DATABASE_URL}); try { await p.query("CREATE DATABASE dyoffice_test_legacy_guard"); } finally { await p.end(); }'
+          node --import tsx --test test/db-safety/*.test.mjs
       - name: Install Chromium for TLS session acceptance
         run: npm exec --workspace @dyoffice/web -- playwright install chromium --with-deps
       - name: Test compatibility baseline and CI coverage
@@ -92,6 +99,10 @@ jobs:
         run: npm run typecheck:web
       - name: Build and HTTP smoke test the Web prototype
         run: npm run test:web:build
+      - name: Build the original Home and Settings local-account entry
+        run: cd apps/web && npx --no-install vite build --config vite.local-shell.config.mjs
+      - name: Verify local login Home Settings and ownership in Chromium
+        run: cd apps/web && node --import tsx --test test/local-browser/*.test.mjs
       - name: Test isolated local account and revision runtime
         run: npm run test:web:integration:local
       - name: Test durable PostgreSQL jobs and real BullMQ recovery

@@ -1,0 +1,60 @@
+import React,{useEffect,useState} from 'react'
+import {createRoot} from 'react-dom/client'
+import {SettingsModal,type WebSettingsAdapter} from '../../../shell/src/renderer/src/SettingsModal'
+import {AppFrame} from '../../../shell/src/renderer/src/AppFrame'
+import {LocaleProvider} from '../../../shell/src/renderer/src/locale'
+import type {TabSummary,TabsApi} from '../../../shell/src/shared/tabs-api'
+import {notifyFilesChanged} from '../../../shell/src/renderer/src/file-events'
+import '@genoffice/ui/tokens.css'
+import '@genoffice/ui/screentip.css'
+import '@genoffice/ui/dropdown.css'
+import '@genoffice/ui/ai-model-picker.css'
+import '@genoffice/ui/ai-usage.css'
+import '@genoffice/ui/ai-skills.css'
+import '../../../shell/src/renderer/src/home.css'
+import '../../../shell/src/renderer/src/tabbar.css'
+import './web-shell.css'
+import {installScreenTips} from '@genoffice/ui'
+import {createWebHomeBridge} from './web-home-bridge'
+import blankDocx from '../../../shell/build/shell-new/blank.docx?url'
+
+import {createLocalShellClient} from './local-client'
+import type {WebSettingsPreferences} from '../../../shell/src/renderer/src/SettingsModal'
+const client=createLocalShellClient()
+type User={id:string;username:string;displayName:string;roles:string[]}
+let user:User|null=null
+let initialLanguage:'zh'|'en'='zh'
+let notice=(message:string)=>window.alert(message)
+let capabilities:Record<string,string>={}
+const tabs:TabSummary[]=[{id:'home',kind:'home',title:'首页',active:true,closable:false}]
+async function open(id:string){
+ const result=await client.request<{format:string;file:{fileId:string}}>(`/api/v1/files/${encodeURIComponent(id)}`)
+ if(result.format!=='docx'||capabilities.docx!=='editable')throw new Error('此格式的本地编辑器尚未接入。文件仍保留在个人工作区。')
+ // Native editor forbids framing. Use its guarded top-level lifecycle, not a legacy iframe.
+ location.assign(`/native-docx/?fileId=${encodeURIComponent(result.file.fileId)}`)
+}
+let busy=false
+async function upload(file:File){if(busy)throw new Error('正在导入，请稍候');if(!/\.docx$/i.test(file.name))throw new Error('当前入口仅支持 DOCX 导入和编辑。');busy=true;try{const result=await client.upload(file);notifyFilesChanged();await open(result.file.fileId)}finally{busy=false}}
+async function browse(){if(capabilities.docx!=='editable')throw new Error('本地编辑器尚未启用');const input=document.createElement('input');input.type='file';input.accept='.docx';input.onchange=()=>{const file=input.files?.[0];if(file)void upload(file).catch(e=>notice(e.message))};input.click()}
+const unsupported=async()=>{throw new Error('此桌面操作尚未适配到本地 Web。')}
+function installBridge(){
+ window.aiOffice=createWebHomeBridge({request:client.homeRequest,open,changed:notifyFilesChanged,unsupported:m=>notice(m),browse})
+ window.aiOffice.newDoc=async()=>{if(capabilities.docx!=='editable')return unsupported();const response=await fetch(blankDocx);if(!response.ok)throw new Error('原版空白模板不可用');await upload(new File([await response.blob()],'未命名.docx'))}
+ window.aiOfficeTabs={list:async()=>tabs.map(t=>({...t})),activate:async id=>{if(id!=='home')await unsupported()},close:unsupported,onChanged:()=>()=>{},showNewMenu:browse,showAppMenu:async()=>notice('本地账号工作区；DOCX 编辑器在独立页面打开，可通过浏览器返回首页。'),showMenu:unsupported,showTabMenu:unsupported,detach:unsupported,tearOff:async()=>false,dragTornWindow:()=>{},dockTornWindow:unsupported,endTornDrag:async()=>{},onDockPreview:()=>()=>{},reportDockIndex:()=>{},reorder:unsupported,notifyChromePressed:()=>{},onChromePressed:()=>()=>{}} satisfies TabsApi
+}
+async function restore(){
+ const identity=await client.request<{user:User}>('/api/v1/auth/me')
+ const preferences=await client.request<WebSettingsPreferences>('/api/v1/preferences')
+ const catalog=await client.request<Record<string,string>>('/api/v1/capabilities')
+ user=identity.user;capabilities=catalog;initialLanguage=preferences.language==='en'?'en':'zh'
+ if(preferences.theme==='system')delete document.documentElement.dataset.theme;else document.documentElement.dataset.theme=preferences.theme
+ installBridge()
+}
+async function logout(){await client.logout();location.replace('/')}
+function Account(){const [expanded,setExpanded]=useState(false);const [settings,setSettings]=useState(false);const web:WebSettingsAdapter={load:()=>client.request('/api/v1/preferences'),save:patch=>client.request('/api/v1/preferences','PUT',patch),account:<><h3 className="set-pane-title">个人工作区</h3><p className="set-pane-desc">本地账号会话，文件和偏好按用户隔离。不是开发令牌或 Genspark 账户。</p><div className="set-field"><span className="set-field-label">账号</span><span>{user?.username}</span></div><div className="set-field"><span className="set-field-label">显示名称</span><span>{user?.displayName}</span></div><p className="set-pane-desc">账户管理、密码修改及 Admin 界面尚未接入此入口。</p><div className="set-pane-footer"><button className="set-btn danger" onClick={()=>void logout().catch(e=>notice(e.message))}>退出登录</button></div></>};return <div className="account-entry"><button className="account-btn" onClick={()=>setExpanded(!expanded)}><span className="account-avatar">{(user?.displayName||user?.username||'U').slice(0,1)}</span><span className="account-text"><span className="account-name">{user?.displayName||user?.username}</span><span className="account-sub">本地账号 · 收藏仅当前页面会话</span></span></button>{settings&&<SettingsModal web={web} status={null} loggingOut={false} loginWaiting={false} loginUrl={null} urlCopied={false} onOpenLoginUrl={()=>{}} onCopyLoginUrl={()=>{}} onClose={()=>setSettings(false)} onLogin={()=>{}} onLogout={()=>void logout().catch(e=>notice(e.message))}/>}{expanded&&<div className="web-account-menu"><button onClick={()=>{setExpanded(false);setSettings(true)}}>个人设置</button><button disabled>Admin 管理（尚未接入）</button><button onClick={()=>void logout().catch(e=>notice(e.message))}>退出登录</button></div>}</div>}
+function Shell(){const [message,setMessage]=useState('');notice=setMessage;return <><AppFrame initialOnboardingSeen={true} homeProps={{supportedFormats:['docx','xlsx','pptx','pdf'],supportedNewFormats:capabilities.docx==='editable'?['docx']:[],accountEntry:<Account/>,askEnabled:false}} editorContent={null}/>{message&&<div className="web-notice" role="alert">{message}<button onClick={()=>setMessage('')}>关闭</button></div>}</>}
+function Login({done}:{done:()=>void}){const [error,setError]=useState('');const [pending,setPending]=useState(false);const [signed,setSigned]=useState(false);return <main className="web-login"><h1>GenOffice</h1><p>本地账号登录</p><form onSubmit={async e=>{e.preventDefault();if(pending)return;setPending(true);setError('');const form=e.currentTarget;const data=new FormData(form);try{if(!signed){await client.login(String(data.get('username')||''),String(data.get('password')||''));setSigned(true);form.reset()}await restore();done()}catch(err){setError((err as Error).message)}finally{setPending(false)}}}><input aria-label="用户名" name="username" autoComplete="username" required={!signed} disabled={pending||signed}/><input aria-label="密码" name="password" type="password" autoComplete="current-password" required={!signed} disabled={pending||signed}/><button disabled={pending}>{signed?'重新加载工作区':'登录'}</button>{signed&&<button type="button" disabled={pending} onClick={()=>void logout().catch(e=>setError(e.message))}>退出登录</button>}<p role="alert">{error}</p></form></main>}
+function Root(){const [state,setState]=useState<'loading'|'login'|'ready'|'error'>('loading');const [error,setError]=useState('');useEffect(()=>{void restore().then(()=>setState('ready')).catch(e=>{if(e.status===401)setState('login');else{setError(e.message);setState('error')}})},[]);if(state==='loading')return <main className="web-login">正在加载个人工作区…</main>;if(state==='error')return <main className="web-login" role="alert"><p>{error}</p><button onClick={()=>location.reload()}>重试</button><button onClick={()=>void logout().catch(e=>setError(e.message))}>退出登录</button></main>;return state==='ready'?<LocaleProvider initial={initialLanguage} onError={error=>notice(error instanceof Error?error.message:String(error))}><Shell/></LocaleProvider>:<Login done={()=>setState('ready')}/>}
+installScreenTips()
+window.addEventListener('unhandledrejection',event=>{notice(event.reason instanceof Error?event.reason.message:String(event.reason));event.preventDefault()})
+createRoot(document.getElementById('app')!).render(<Root/>)

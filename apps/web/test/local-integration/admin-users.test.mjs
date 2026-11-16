@@ -132,7 +132,7 @@ test('administrator authority revoked before a waiting mutation is revalidated u
     let waited = false
     const deadline = Date.now() + 4000
     while (Date.now() < deadline) {
-      if ((await f.pool.query("SELECT 1 FROM pg_stat_activity WHERE application_name=$1 AND wait_event_type='Lock'", [f.pool.options.application_name])).rowCount) { waited = true; break }
+      if ((await f.observer.query("SELECT 1 FROM pg_stat_activity WHERE application_name=$1 AND wait_event_type='Lock'", [f.authPool.options.application_name])).rowCount) { waited = true; break }
       await new Promise(resolve => setImmediate(resolve))
     }
     assert.equal(waited, true)

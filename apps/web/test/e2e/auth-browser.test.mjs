@@ -9,7 +9,8 @@ import { randomBytes } from 'node:crypto'
 import { chromium } from '@playwright/test'
 import { buildLocalApp } from '../../server/src/app.ts'
 import { restrictedFixture } from '../helpers/restricted.mjs'
-import { identityFixture, password } from '../helpers/identity.mjs'
+import { password } from '../helpers/identity.mjs'
+import { restrictedIdentityFixture } from '../helpers/restricted-identity.mjs'
 
 async function tlsFixture(t, restricted = false, fileApi = false) {
   const directory = await mkdtemp(join(tmpdir(), 'dyoffice-auth-tls-'))
@@ -26,7 +27,7 @@ async function tlsFixture(t, restricted = false, fileApi = false) {
   const origin = `https://127.0.0.1:${server.address().port}`
   const { createLocalObjectStore } = await import('../../server/src/storage/local-dev.ts')
   const objectStore = fileApi ? await createLocalObjectStore({ directory: join(directory, 'objects') }) : undefined
-  const f = restricted ? await restrictedFixture(t, { origin, objectStore }) : await identityFixture(t)
+  const f = restricted ? await restrictedFixture(t, { origin, objectStore }) : await restrictedIdentityFixture(t)
   app = restricted ? f.app : await buildLocalApp({ db: f.db, passwords: f.passwords, deploymentId: f.deploymentId, origin, csrfKey: randomBytes(32).toString('hex') })
   browser = await chromium.launch({ headless: true })
   const context = await browser.newContext({ ignoreHTTPSErrors: true })

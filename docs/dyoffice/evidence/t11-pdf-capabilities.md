@@ -1,6 +1,6 @@
 # T11 PDF capability gate
 
-> 2026-11-16 · Partial. Not a browser editor, not PDFium text extraction, not a worker export.
+> 2026-11-16 · Capability gate. The browser mount and pixel reopen check are in [t11-pdf-render.md](t11-pdf-render.md).
 
 ## Why this slice
 
@@ -10,7 +10,7 @@ T07 is owned by the DOCX browser pull request. T09 is XLSX and is out of scope. 
 
 `inspectPdf` accepts a `%PDF-` buffer. A plain file returns its 1-based page order and `read: 'structure'`. Annotation, text edit, page reorder, and redaction capabilities are `unsupported`. `requestPdfOperation` allows `read` and rejects the others. `coverText` fails with `COVER_IS_NOT_DELETION`, so painting over text is not recorded as removing the original. A file whose trailer names `/Encrypt` returns `password_required` and no page order. A non-PDF buffer is `MAGIC_MISMATCH`.
 
-This does not mount `mountPdfEditor`, does not load PDFium, and does not change the DOCX editor.
+The later mount slice draws pages. This module still does not change the DOCX editor.
 
 ## Verification
 
@@ -40,6 +40,6 @@ The tests first failed because `pages` and `signatures` were missing. After the 
 | Signature present | Done as unverified. Cryptographic validation is not performed |
 | Real text-stream editing | Deferred. The gate still returns `UNSUPPORTED` because no editor write path exists |
 | Annotation writing | Deferred for the same reason |
-| Browser mount | Deferred. The web shell and DOCX mount are owned by the T07 pull requests |
-| PDFium, WASM, and CSP | Deferred. This slice uses pdf-lib structure only and does not ship a WASM binary or a content-security policy |
-| Visual re-open and export fidelity | Deferred until the PDF renderer is mounted |
+| Browser mount | PDF tabs open `/pdf.html`, which mounts PDF.js. See [t11-pdf-render.md](t11-pdf-render.md) |
+| PDFium, WASM, and CSP | PDFium WASM rasterizes pages in the server test. The viewer CSP rejects eval and inline scripts |
+| Visual re-open and export fidelity | Unchanged exported bytes keep the same PDFium pixel hash and PDF.js text |

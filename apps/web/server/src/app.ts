@@ -1,4 +1,5 @@
 import { createStaticAssets } from '../static-assets.mjs'
+import { registerLocalShell } from './local-shell.ts'
 import type { FastifyInstance, HTTPMethods } from 'fastify'
 import { buildApp as buildModularApp } from './app.mjs'
 import { createLegacyContext } from './legacy-context.mjs'
@@ -43,7 +44,7 @@ export async function buildApp(config: WebConfig): Promise<FastifyInstance> {
 
 export interface LocalWebConfig {
   db: IdentityStore; businessPool?: Pool; deploymentId: string; origin: string; csrfKey: string; passwords?: PasswordService;
-  objectStore?: ObjectStore; filePolicy?: FilePolicy; nativeDocsDirectory?: string; nativeJobs?: boolean;
+  objectStore?: ObjectStore; filePolicy?: FilePolicy; nativeDocsDirectory?: string; nativeJobs?: boolean; localShellDirectory?: string;
   passwordBlocklistFile?: string; loginLimits?: LoginLimits; idleMs?: number; absoluteMs?: number; closeDb?: () => Promise<void>
 }
 export async function buildLocalApp(config: LocalWebConfig): Promise<FastifyInstance> {
@@ -56,13 +57,15 @@ export async function buildLocalApp(config: LocalWebConfig): Promise<FastifyInst
   }
   await assertReady()
   if (config.objectStore && !config.businessPool) throw new Error('File API requires restricted business pool')
+  // Authentication is privileged even when no business routes are enabled.
+  await assertRuntimePool(config.db.pool, 'auth')
   if (config.businessPool) {
-    await assertRuntimePool(config.db.pool, 'auth')
     await assertRuntimePool(config.businessPool, 'business')
     await assertSharedDatabase(config.db.pool, config.businessPool)
   }
   if (config.nativeJobs!==undefined && typeof config.nativeJobs!=='boolean') throw new Error('Invalid native job configuration')
   if (config.nativeJobs && !config.objectStore) throw new Error('Native jobs require File API')
+  if (config.localShellDirectory && !config.objectStore) throw new Error('Local shell requires scoped File API')
   if (config.nativeDocsDirectory && !config.objectStore) throw new Error('Native DOCX requires File API')
   const nativeDocs = config.nativeDocsDirectory ? await createStaticAssets({ assetMode: 'built',assetDirectory: config.nativeDocsDirectory,pages: ['index.html'],assetInventory: '.vite/native-assets.json',cacheControl: 'private, no-store' }) : undefined
   const passwords = config.passwords ?? await createPasswordService({ blockedPasswords: await loadPasswordBlocklist(config.passwordBlocklistFile) })
@@ -71,6 +74,7 @@ export async function buildLocalApp(config: LocalWebConfig): Promise<FastifyInst
   const csrf = createCsrfService({ db: config.db, deploymentId: config.deploymentId, origin: config.origin, key: config.csrfKey })
   const throttle = createLoginThrottle(config.db, config.deploymentId, config.csrfKey, config.loginLimits)
   const app = await createApiShell()
+  if (config.localShellDirectory) await registerLocalShell(app,config.localShellDirectory)
   if (config.closeDb) app.addHook('onClose', () => config.closeDb!())
   registerHealthRoutes(app, async () => { try { await assertReady(); return true } catch { return false } })
   const users = createUserService({ db: config.db, accounts, sessions, passwords, deploymentId: config.deploymentId })

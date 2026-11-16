@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { randomBytes } from 'node:crypto'
-import { identityFixture, password } from './identity.mjs'
+import { password } from './identity.mjs'
+import { restrictedIdentityFixture } from './restricted-identity.mjs'
 import { buildLocalApp } from '../../server/src/app.ts'
 import { createSessionService } from '../../server/src/modules/auth/sessions.ts'
 import { createUserService } from '../../server/src/modules/admin/users/service.ts'
@@ -11,7 +12,7 @@ export const responseAuth = response => {
   return { cookie, token: cookie.split('=')[1], csrf: response.json().csrfToken }
 }
 export async function lifecycleFixture(t) {
-  const f = await identityFixture(t)
+  const f = await restrictedIdentityFixture(t)
   const app = await buildLocalApp({ db: f.db, passwords: f.passwords, deploymentId: f.deploymentId, origin, csrfKey: randomBytes(32).toString('hex') })
   f.cleanup.push(() => app.close())
   const sessions = createSessionService({ db: f.db, accounts: f.accounts, deploymentId: f.deploymentId })

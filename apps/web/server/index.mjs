@@ -1,4 +1,5 @@
 import { resolve } from 'node:path';
+import { localShellDirectory } from './local-shell-config.mjs';
 import { fileURLToPath } from 'node:url';
 import { Pool } from 'pg';
 import { configuredObjectStore } from './src/storage/config.ts';
@@ -7,6 +8,7 @@ import { connectIdentityStore } from './src/db/identity.ts';
 
 async function configuredApplication() {
   const mode=process.env.DYOFFICE_AUTH_MODE||'development';
+  const shellDirectory=localShellDirectory(process.env);
   const jobFlag=process.env.DYOFFICE_NATIVE_JOBS;
   if(jobFlag && (jobFlag!=='experimental'||mode!=='local')) throw new Error('Native jobs require explicit experimental local mode');
   if(mode==='development') return buildApp({
@@ -34,7 +36,7 @@ async function configuredApplication() {
     const nativeFlag=process.env.DYOFFICE_NATIVE_DOCX;
     if(nativeFlag && nativeFlag!=='experimental') throw new Error('Unknown native DOCX mode');
     const nativeDocsDirectory=nativeFlag ? resolve(process.env.DYOFFICE_NATIVE_DOCX_DIRECTORY||fileURLToPath(new URL('../dist-docs/',import.meta.url))) : undefined;
-    return await buildLocalApp({db,businessPool,...storage,nativeDocsDirectory,nativeJobs:jobFlag==='experimental',deploymentId,origin,csrfKey,passwordBlocklistFile:process.env.DYOFFICE_PASSWORD_BLOCKLIST_FILE,closeDb:async()=>{storage.close();await Promise.all([close(),businessPool.end()]);}});
+    return await buildLocalApp({db,businessPool,...storage,nativeDocsDirectory,localShellDirectory:shellDirectory,nativeJobs:jobFlag==='experimental',deploymentId,origin,csrfKey,passwordBlocklistFile:process.env.DYOFFICE_PASSWORD_BLOCKLIST_FILE,closeDb:async()=>{storage.close();await Promise.all([close(),businessPool.end()]);}});
   } catch(error) { storage?.close();await Promise.allSettled([close(),businessPool?.end()]); throw error; }
 }
 

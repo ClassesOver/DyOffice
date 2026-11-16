@@ -4,6 +4,20 @@ import { loadMigrations } from './migration-manifest.ts'
 export { getMigrationManifest } from './migration-manifest.ts'
 import * as schema from './schema.ts'
 
+// The legacy and new identity stacks have incompatible migration ledgers and
+// ownership models. Require a dedicated database, not merely a new search_path.
+// Catalog lookup also detects an old ledger hidden in a different/private schema
+// without requiring SELECT access to the legacy table or reading its contents.
+async function assertDedicatedIdentityDatabase(connection: Pick<PoolClient, 'query'>) {
+  const legacy = await connection.query(
+    "SELECT 1 FROM pg_catalog.pg_class WHERE relname=$1 AND relkind IN ('r','p','v','m','f') LIMIT 1",
+    ['dyoffice_schema_migrations'],
+  )
+  if (legacy.rows.length) {
+    throw new Error('Legacy DyOffice database detected. Use a separate database for the local identity stack; an explicit data migration is required. Do not delete or rename the legacy migration ledger.')
+  }
+}
+
 export function createIdentityStore(pool: Pool) {
   async function transaction<T>(operation: (connection: PoolClient) => Promise<T>): Promise<T> {
     const connection = await pool.connect()
@@ -24,6 +38,7 @@ export function createIdentityStore(pool: Pool) {
   return {
     pool, orm: drizzle(pool, { schema }), transaction,
     async assertCurrent() {
+      await assertDedicatedIdentityDatabase(pool)
       const rows = await pool.query('SELECT version,sha256 FROM identity_migrations ORDER BY version')
       const migrations = await loadMigrations()
       if (rows.rowCount !== migrations.length || migrations.some((m, i) => rows.rows[i].version !== m.version || rows.rows[i].sha256 !== m.digest)) throw new Error('Identity migrations are not current')
@@ -32,6 +47,7 @@ export function createIdentityStore(pool: Pool) {
       const migrations = await loadMigrations()
       await transaction(async connection => {
         await connection.query('SELECT pg_advisory_xact_lock(733920101)')
+        await assertDedicatedIdentityDatabase(connection)
         await connection.query('CREATE TABLE IF NOT EXISTS identity_migrations(version integer PRIMARY KEY, sha256 text NOT NULL)')
         const versions = await connection.query('SELECT version FROM identity_migrations')
         if (versions.rows.some(row => !migrations.some(m => m.version === row.version))) throw new Error('Unknown identity migration version')

@@ -1,15 +1,16 @@
 import { readFile, realpath, stat } from 'node:fs/promises';
 import { dirname, extname, join, relative, sep, isAbsolute } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { PDF_VIEWER_CSP } from '../src/editors/pdf-csp.ts';
 
 const webRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 const contentTypes = {
-  '.html':'text/html; charset=utf-8', '.js':'text/javascript; charset=utf-8',
+  '.html':'text/html; charset=utf-8', '.js':'text/javascript; charset=utf-8', '.mjs':'text/javascript; charset=utf-8',
   '.css':'text/css; charset=utf-8', '.png':'image/png', '.jpg':'image/jpeg',
   '.jpeg':'image/jpeg', '.svg':'image/svg+xml', '.webp':'image/webp',
   '.docx':'application/octet-stream', '.xlsx':'application/octet-stream', '.pptx':'application/octet-stream',
   '.ico':'image/x-icon', '.woff':'font/woff', '.woff2':'font/woff2',
-  '.mjs':'text/javascript; charset=utf-8', '.ttf':'font/ttf', '.wasm':'application/wasm',
+  '.ttf':'font/ttf', '.wasm':'application/wasm',
 };
 
 /** Source is the legacy default. Built mode is a local integration seam, not production auth.
@@ -28,12 +29,15 @@ export async function createStaticAssets({ assetMode = 'source', assetDirectory,
   };
   if (assetMode === 'source') {
     allowed.add('app.js'); allowed.add('style.css'); allowed.add('editor-controller.js');
+    allowed.add('pdf.html'); allowed.add('pdf.css');
   } else {
     const manifest = JSON.parse(await readFile(await resolvedFile('.vite/manifest.json'), 'utf8'));
     if (!manifest || Array.isArray(manifest) || typeof manifest !== 'object' || !Object.keys(manifest).length) throw new Error('Invalid Web build manifest');
     // Identical MPA inputs share a chunk, so Vite may omit the HTML entry from its manifest.
     // Allow only this explicit built page, still checked for existence and realpath confinement.
     try { await resolvedFile('legacy.html'); allowed.add('legacy.html'); }
+    catch (error) { if (error.code !== 'ENOENT') throw error; }
+    try { await resolvedFile('pdf.html'); allowed.add('pdf.html'); }
     catch (error) { if (error.code !== 'ENOENT') throw error; }
     const add = name => {
       if (typeof name !== 'string' || !/^assets\/[A-Za-z0-9_./-]+$/.test(name) || name.split('/').some(part => !part || part === '.' || part === '..') || !contentTypes[extname(name)]) throw new Error('Unsafe Web build asset');
@@ -63,7 +67,9 @@ export async function createStaticAssets({ assetMode = 'source', assetDirectory,
     }
     // Recheck realpath on each request: replacing an asset with an escaping symlink is not allowed.
     const data = await readFile(await resolvedFile(name));
-    response.writeHead(200, { 'Content-Type':contentTypes[extname(name)], 'Cache-Control':cacheControl, 'Content-Length':data.length });
+    const headers = { 'Content-Type':contentTypes[extname(name)], 'Cache-Control':cacheControl, 'Content-Length':data.length };
+    if (name === 'pdf.html') headers['Content-Security-Policy'] = PDF_VIEWER_CSP;
+    response.writeHead(200, headers);
     response.end(request.method === 'HEAD' ? undefined : data);
     return true;
   };

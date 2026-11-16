@@ -2,6 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { createHash, randomBytes, randomUUID } from 'node:crypto'
 import { identityFixture, password } from '../helpers/identity.mjs'
+import { restrictedIdentityFixture } from '../helpers/restricted-identity.mjs'
 import { createSessionService } from '../../server/src/modules/auth/sessions.ts'
 import { buildLocalApp } from '../../server/src/app.ts'
 
@@ -9,7 +10,7 @@ const origin = 'https://office.example'
 const sessionCookie = token => `__Host-dyoffice-session=${token}`
 const headerCookie = response => response.headers['set-cookie'].map(x => x.split(';')[0]).join('; ')
 async function fixture(t, options = {}) {
-  const f = await identityFixture(t)
+  const f = await restrictedIdentityFixture(t)
   const app = await buildLocalApp({ db: f.db, passwords: f.passwords, deploymentId: f.deploymentId, origin, csrfKey: randomBytes(32).toString('hex'), ...options })
   f.cleanup.push(() => app.close())
   const sessions = createSessionService({ db: f.db, accounts: f.accounts, deploymentId: f.deploymentId })
@@ -185,10 +186,10 @@ test('production refuses local mode until restricted runtime/RLS gates are imple
   finally { if (previous === undefined) delete process.env.NODE_ENV; else process.env.NODE_ENV = previous }
 })
 
-async function waitForAuthorityLock(pool) {
+async function waitForAuthorityLock(admin, authPool) {
   const deadline = Date.now() + 4000
   while (Date.now() < deadline) {
-    const waiting = await pool.query("SELECT 1 FROM pg_stat_activity WHERE application_name=$1 AND wait_event_type='Lock'", [pool.options.application_name])
+    const waiting = await admin.query("SELECT 1 FROM pg_stat_activity WHERE application_name=$1 AND wait_event_type='Lock'", [authPool.options.application_name])
     if (waiting.rowCount) return
     await new Promise(resolve => setImmediate(resolve))
   }
@@ -196,13 +197,13 @@ async function waitForAuthorityLock(pool) {
 }
 
 test('a disable committed during password verification prevents the waiting login from minting a session', async t => {
-  const { sessions, pool, user, deploymentId } = await fixture(t)
+  const { sessions, pool, user, deploymentId, admin, authPool } = await fixture(t)
   const blocker = await pool.connect()
   try {
     await blocker.query('BEGIN')
     await blocker.query('SELECT id FROM users WHERE id=$1 FOR UPDATE', [user.id])
     const outcome = sessions.login('owner', password).then(() => null, error => error)
-    await waitForAuthorityLock(pool)
+    await waitForAuthorityLock(admin, authPool)
     await blocker.query("UPDATE users SET status='disabled',auth_version=auth_version+1 WHERE id=$1", [user.id])
     await blocker.query('COMMIT')
     assert.equal((await outcome)?.statusCode, 401)
@@ -211,7 +212,7 @@ test('a disable committed during password verification prevents the waiting logi
 })
 
 test('a session revoke committed before a waiting lookup is rechecked after the credential lock', async t => {
-  const { sessions, pool, user } = await fixture(t)
+  const { sessions, pool, user, admin, authPool } = await fixture(t)
   const signed = await sessions.login('owner', password)
   const blocker = await pool.connect()
   try {
@@ -219,7 +220,7 @@ test('a session revoke committed before a waiting lookup is rechecked after the 
     await blocker.query('SELECT id FROM users WHERE id=$1 FOR SHARE', [user.id])
     await blocker.query('SELECT id FROM sessions WHERE id=$1 FOR UPDATE', [signed.sessionId])
     const outcome = sessions.authenticate(signed.token).then(() => null, error => error)
-    await waitForAuthorityLock(pool)
+    await waitForAuthorityLock(admin, authPool)
     await blocker.query('UPDATE sessions SET revoked_at=clock_timestamp() WHERE id=$1', [signed.sessionId])
     await blocker.query('COMMIT')
     assert.equal((await outcome)?.statusCode, 401)

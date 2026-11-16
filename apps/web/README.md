@@ -50,7 +50,7 @@ The modular `.mjs` T03 account services implement identity and sessions. The che
 
 The modular runtime implements the T05 object-storage lifecycle described here. Personal objects can be staged, finished, downloaded, trashed, restored, and purged. The server checks SHA-256, enforces quota, expires abandoned uploads, and keeps a file row only after the object exists. An in-process client covers those rules in `npm run test:web`. A MinIO job, [dyoffice-t05-s3.yml](../../.github/workflows/dyoffice-t05-s3.yml), runs the same lifecycle against S3 when `DYOFFICE_S3_ENDPOINT` is set; the test skips when it is not. Row-level security remains T04. Multi-node highly available storage remains an operations concern. The older `/api/files` directory is the development-token prototype, not this store.
 
-A PDF capability gate reports page order, text versus scanned versus blank pages, unembedded fonts, and unverified signatures. It refuses annotation, text edit, page reorder, redaction, cover-text-as-deletion, and trusting a signature. Password-marked files are not readable. Browser PDF editing, PDFium, and WASM are not mounted. See `docs/dyoffice/evidence/t11-pdf-capabilities.md`.
+A PDF capability gate reports page order, text versus scanned versus blank pages, unembedded fonts, and unverified signatures. It refuses annotation, text edit, page reorder, redaction, cover-text-as-deletion, and trusting a signature. Password-marked files are not readable. PDF tabs mount a read-only PDF.js viewer with same-origin fonts/CMaps and a strict CSP. PDFium is used only by the internal pixel-regression helper, not an exposed rendering API. This is not the original GenOffice PDF editor UI. See `docs/dyoffice/evidence/t11-pdf-capabilities.md` and `docs/dyoffice/evidence/t11-pdf-render.md`.
 
 T06 save transactions, revision history, and single-writer leases are complete for this development server. The done and deferred checklist is in `docs/dyoffice/evidence/t06-revision-commit.md`. `mountDocsEditor` now opens a DOCX, edits a paragraph, undoes that local change, and saves through the host; see `docs/dyoffice/evidence/t07-docs-browser-mount.md`. Mount the GenOffice Docs renderer (ribbon, pagination, comments, tracked changes, and selection) on this DOCX host instead of that surface. Then adapt the other formats the same way, reusing each native editor and keeping non-browser work behind authorized APIs. Model chat/tool execution, database connectors and query integration, source edit/delete/test UI, file folders/favorites/recent views, and deployment hardening are still open. Autosave uses the saved preference; the assistant preference is stored and not yet shown.
 
@@ -166,6 +166,8 @@ Admin separation and canceled dirty navigation, then uploads screenshots/traces.
 The original shell checkpoint reported a local Chromium socket restriction;
 that historical limitation is not a result from this integration. Visual
 acceptance requires the browser workflow, not an inference from jsdom or Vite.
+
+PR #24 follow-up adds a conservative plain-table-cell projection and a partial Web desktop bridge. New-document, Save As and explicit-target saves reject `UNSUPPORTED` because the bridge has no create/copy/overwrite-policy host operation. Tables containing multiple runs, paragraph identities, bookmarks, tracked changes or other unsupported paragraph structure remain read-only. Unchanged cells retain their original XML bytes. This does not mount the original Docs ribbon.
 
 ## Separate local-account experimental runtime
 
@@ -310,3 +312,17 @@ T08a 建立版本 7 的任务表；下文历史检查点记录到版本 10，当
 Worker 的原生执行、心跳、取消/失锁终止及 T06 同事务输出提交已连通。systemd 独立期限处理控制进程死亡，部署范围内的过期残留由启动与定期回收处理。revision outbox 使用 SQL 租约和确认令牌向 Redis 发布 eventId，支持重复提示和队列丢失后的重建；发布不代表搜索索引已完成。
 
 PostgreSQL、Redis 与测试对象存储采用宿主机独立服务。无 Docker 构建、隔离、任务和存储测试已运行；T08 已通过最终审查与本次全部回归；验收见 [T08 闭环证据](../../docs/dyoffice/evidence/t08-docker-free-closure.md)，production 保持关闭。
+
+### Original Home and Settings with local accounts
+
+Build with `cd apps/web && npx --no-install vite build --config vite.local-shell.config.mjs`.
+Opt in with `DYOFFICE_LOCAL_SHELL=experimental` and an explicit
+`DYOFFICE_LOCAL_SHELL_DIR=apps/web/dist-local-shell` in `DYOFFICE_AUTH_MODE=local`.
+This requires the isolated scoped File API and restricted database pools described
+above. Log in with a real local account; no development-token/JSON fallback exists.
+The original Home/Settings components use the cookie/CSRF file and preferences APIs.
+New/imported DOCX editing additionally requires the native DOCX entry. It opens as
+a top-level editor page with browser Back, not a completed multi-tab local workflow.
+Admin/account/password UI is not yet connected here; unsupported format creation is
+disabled and stars remain page-session-only. Local-account Chromium acceptance lives
+in `test/local-browser`, requires real PostgreSQL, and fails when that service is absent.

@@ -201,9 +201,9 @@ docs/dyoffice/               当前计划及 inventory/ evidence/ adr/
 
 **接口：** `mountDocsEditor(host,element,fileId)`，输出编辑器注册、序列化和选区能力。
 
-**状态（2026-11-16）：** 浏览器挂载的第一段已落地，见 [t07-docs-browser-mount.md](evidence/t07-docs-browser-mount.md)。`mountDocsEditor` 打开服务端 DOCX 投影，编辑段落，撤销本地修改，保存后重新挂载仍能看到新文本，表格和页眉留在包内。桌面 Docs 功能区仍调用 `window.desktop`，没有整页搬进浏览器。分页、字体替换、剪贴板 worker 和外部 Word 复开仍未做。
+**状态（2026-11-16）：** 浏览器挂载、桌面桥、纯文本单元格和分页切片已有测试，见 [t07-docs-browser-mount.md](evidence/t07-docs-browser-mount.md)。`mountDocsEditor` 能编辑段落和单段单元格、撤销、保存并重开，复杂表格和页眉留在包内。`createWebDesktop` 把打开/保存交给宿主，字体只报告已配置的替换，打印只调用浏览器打印且不返回假路径，未知方法和图片剪贴板抛出 `UNSUPPORTED`。`computePageSlices` 把超出页高的块放到下一页。功能区页面仍未挂上。外部 Word 复开推迟到运维：本环境没有 Word 或 LibreOffice。
 
-- [ ] E2E 写入打开、段落/表格修改、保存、刷新、下载、再次打开和修订/撤销场景。段落保存、刷新重开、下载和本地撤销已测；表格单元格改写、分页和功能区撤销未做。
+- [ ] E2E 写入打开、段落/表格修改、保存、刷新、下载、再次打开和修订/撤销场景。段落保存、刷新重开、下载、本地撤销和纯文本单元格已测；功能区撤销未做。
 - [x] 浏览器测试在尚未接入时 RED，而非以空白预览页算通过。
 - [ ] 复用 Renderer/docx-engine，接入 host 字节、字体、worker、剪贴板替代和分页；保留原始未编辑部件。
 - [ ] E2E GREEN；受影响 `@genoffice/docs`、docx-engine 回归；外部 Word 兼容样本由 QA 记录证据。
@@ -265,7 +265,7 @@ docs/dyoffice/               当前计划及 inventory/ evidence/ adr/
 
 **接口：** `mountPdfEditor()`，能力区分阅读、批注、文本修改、页操作和导出。
 
-**状态（2026-11-16）：** 能力门已区分文本页、扫描页和空白页，并报告未嵌入字体与未验证签名，见 [t11-pdf-capabilities.md](evidence/t11-pdf-capabilities.md)。批注、改字、调页、脱敏仍被拒绝；覆盖文字不是删除原文；加密文件不返回页序。浏览器挂载、PDFium/WASM、CSP、真实改字和批注写入仍延期，原因见证据页。不依赖 T07 的 DOCX 挂载，也不走 T08 worker。
+**状态（2026-11-16）：** 能力门已区分文本页、扫描页和空白页，并报告未嵌入字体与未验证签名，见 [t11-pdf-capabilities.md](evidence/t11-pdf-capabilities.md)。PDF 页签挂载 PDF.js 阅读页，CSP 不允许 eval 或内联脚本；PDFium WASM 对未改动的导出字节做像素重开校验，见 [t11-pdf-render.md](evidence/t11-pdf-render.md)。批注、改字、调页、脱敏仍被拒绝；覆盖文字不是删除原文；加密文件不栅格化。真实改字和批注写入仍延期。不依赖 T07 的 DOCX 挂载，也不走 T08 worker。
 
 - [ ] 测试真实文本流修改、批注、页序、密码文件、签名失效提示、缺字/字体、扫描页能力限制。
 - [ ] E2E RED；覆盖文字不等同于删除原文的安全性，脱敏能力单独标记。

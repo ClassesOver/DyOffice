@@ -91,6 +91,45 @@ test('mounted docs editor edits a paragraph, keeps the table, saves, and reopens
   again.destroy()
 })
 
+test('mounted docs editor rewrites a table cell and reopens the saved package', async (t) => {
+  const { mountDocsEditor } = await import('../../../packages/browser-host/src/files.ts')
+  const base = await start(t)
+  const bytes = await sampleDocx()
+  const uploaded = await fetch(base + '/api/files', { method: 'POST', headers: { Authorization: 'Bearer personal', 'X-File-Name': encodeURIComponent('表格.docx') }, body: bytes })
+  assert.equal(uploaded.status, 201)
+  const file = await uploaded.json()
+  const host = createHttpEditorHost({
+    fetchImpl: (path, init) => fetch(base + path, init),
+    getAuthHeaders: () => ({ Authorization: 'Bearer personal' }),
+  })
+  const dom = new JSDOM('<!DOCTYPE html><div id="editor"></div>')
+  const element = dom.window.document.getElementById('editor')
+  const editor = await mountDocsEditor(host, element, file.id)
+  const table = editor.getState().blocks.findIndex((block) => block.type === 'table')
+  assert.deepEqual(editor.getState().blocks[table].cells, [['CellKeep']])
+  const field = element.querySelector('textarea[data-row="0"][data-column="0"]')
+  assert.equal(field.value, 'CellKeep')
+  field.value = 'CellEdited'
+  field.dispatchEvent(new dom.window.Event('input', { bubbles: true }))
+  assert.equal(editor.undo(), true)
+  assert.deepEqual(editor.getState().blocks[table].cells, [['CellKeep']])
+  editor.updateCell(table, 0, 0, 'CellEdited')
+  const saved = await editor.save()
+  assert.equal(saved.ok, true)
+  editor.destroy()
+  const again = await mountDocsEditor(host, element, file.id)
+  assert.deepEqual(again.getState().blocks.find((block) => block.type === 'table').cells, [['CellEdited']])
+  const current = Buffer.from(await (await fetch(base + '/api/files/' + file.id, { headers: { Authorization: 'Bearer personal' } })).arrayBuffer())
+  const xml = await part(current, 'word/document.xml')
+  assert.match(xml, /<w:tbl[\s>]/)
+  assert.match(xml, /CellEdited/)
+  assert.match(xml, /Keep me/)
+  assert.equal(xml.includes('CellKeep'), false)
+  const reopened = await import('../../../packages/docx-engine/src/index.ts').then((engine) => engine.parseDocx(current))
+  assert.equal(reopened.blocks.find((block) => block.type === 'table').table.rows[0][0].paras[0], 'CellEdited')
+  again.destroy()
+})
+
 test('edits typed during a save stay dirty after the server projection returns', async () => {
   const { mountDocsEditor } = await import('../../../packages/browser-host/src/files.ts')
   let release
