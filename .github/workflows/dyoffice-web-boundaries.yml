@@ -16,6 +16,7 @@ on:
       - 'tools/audit-web-host*'
       - 'tools/dyoffice/host-ipc-classification*'
       - 'docs/dyoffice/inventory/host-ipc*'
+      - 'docs/dyoffice/inventory/agent-tools*'
       - '.github/workflows/dyoffice-web-boundaries.yml'
   pull_request:
     paths:
@@ -31,6 +32,7 @@ on:
       - 'tools/audit-web-host*'
       - 'tools/dyoffice/host-ipc-classification*'
       - 'docs/dyoffice/inventory/host-ipc*'
+      - 'docs/dyoffice/inventory/agent-tools*'
       - '.github/workflows/dyoffice-web-boundaries.yml'
   workflow_dispatch:
 
@@ -50,6 +52,8 @@ jobs:
         run: npm ci --ignore-scripts --no-audit --no-fund
       - name: Test compatibility baseline and CI coverage
         run: node --test tools/dyoffice/*.test.mjs
+      - name: Check reviewed Agent and MCP tool placements
+        run: node tools/dyoffice/agent-tool-inventory.mjs --check
       - name: Reject unreviewed dependency and font baseline drift
         run: node tools/dyoffice/compatibility-baseline.mjs --check
       - name: Test browser dependency gate

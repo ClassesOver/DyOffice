@@ -19,3 +19,8 @@ test('push and pull-request filters include standalone baseline inputs and check
     }
   }
 })
+
+test('T00 tool placements are checked and inventory-only changes trigger both events', () => {
+  assert.match(workflow, /run: node tools\/dyoffice\/agent-tool-inventory\.mjs --check/)
+  assert.equal((workflow.match(/'docs\/dyoffice\/inventory\/agent-tools\*'/g) ?? []).length, 2)
+})
