@@ -40,7 +40,7 @@ permissions:
 jobs:
   boundary-check:
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 30
     env:
       DYOFFICE_TEST_REDIS_URL: redis://127.0.0.1:16379/15
       DYOFFICE_TEST_S3_ENDPOINT: http://127.0.0.1:19000
@@ -54,10 +54,10 @@ jobs:
           node-version: 22
       - name: Provision host database Redis and object storage
         run: sudo --preserve-env=GITHUB_ACTIONS bash tools/dyoffice/ci-host-services.sh --objectstore
-      - name: Install Web gate dependencies without Electron
-        run: npm ci --prefix apps/web --workspaces=false --ignore-scripts --include=dev
+      - name: Install workspace dependencies without launching Electron
+        run: npm ci --ignore-scripts --no-audit --no-fund
       - name: Install Chromium for TLS session acceptance
-        run: apps/web/node_modules/.bin/playwright install chromium --with-deps
+        run: npm exec --workspace @dyoffice/web -- playwright install chromium --with-deps
       - name: Test compatibility baseline and CI coverage
         run: node --test tools/dyoffice/*.test.mjs
       - name: Reject unreviewed dependency and font baseline drift
@@ -72,6 +72,10 @@ jobs:
         run: node --experimental-strip-types --test apps/web/test/unit/ai-transport.test.mjs
       - name: Test HTTP BrowserHost read adapter
         run: node --experimental-strip-types --test apps/web/test/unit/http-files.test.mjs
+      - name: Test save generation guard
+        run: node --experimental-strip-types --test apps/web/test/unit/save-generation.test.mjs
+      - name: Test revision commits and leases
+        run: node --experimental-strip-types --test apps/web/test/integration/revision-commit.test.mjs
       - name: Test editor host inventory scanner
         run: node --test tools/audit-web-host.test.mjs
       # Fails on renderer calls to undeclared bridge members or unresolvable preload members.
@@ -88,8 +92,8 @@ jobs:
         run: npm run typecheck:web
       - name: Build and HTTP smoke test the Web prototype
         run: npm run test:web:build
-      - name: Test Fastify API compatibility and shutdown
-        run: npm run test:web:integration
+      - name: Test isolated local account and revision runtime
+        run: npm run test:web:integration:local
       - name: Test durable PostgreSQL jobs and real BullMQ recovery
         run: npm run test:web:jobs
       - name: Test immutable storage and bounded structural validation
@@ -98,6 +102,10 @@ jobs:
         run: npm run test:web:e2e
       - name: Test legacy Web API
         run: npm run test:web
+      - name: Test modular API compatibility shell
+        run: npm run test:web:integration -- test/integration/api-compat.test.mjs
+      - name: Test legacy routes on the Fastify shell
+        run: npm run test:web:integration -- test/integration/route-cutover.test.mjs
 
   native-docx:
     runs-on: ubuntu-24.04
@@ -132,6 +140,9 @@ jobs:
       DYOFFICE_TEST_HOST_MANIFEST: ${{ github.workspace }}/.dyoffice-native-build/host-manifest.json
       DYOFFICE_TEST_DATABASE_URL: postgresql://postgres:dyoffice-ci-test-only@127.0.0.1:55432/dyoffice_test
       DYOFFICE_TEST_REDIS_URL: redis://127.0.0.1:16379/15
+      DYOFFICE_TEST_S3_ENDPOINT: http://127.0.0.1:19000
+      DYOFFICE_TEST_S3_ACCESS_KEY: dyoffice-ci-s3-test
+      DYOFFICE_TEST_S3_SECRET_KEY: dyoffice-ci-s3-test-only-secret
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -140,7 +151,7 @@ jobs:
       - name: Install Web dependencies without Electron
         run: npm ci --prefix apps/web --workspaces=false --ignore-scripts --include=dev
       - name: Provision independent host database and Redis
-        run: sudo --preserve-env=GITHUB_ACTIONS bash tools/dyoffice/ci-host-services.sh
+        run: sudo --preserve-env=GITHUB_ACTIONS bash tools/dyoffice/ci-host-services.sh --objectstore
       - name: Install pinned Rust toolchain
         run: rustup toolchain install 1.93.0 --profile minimal
       - name: Compile original locked Rust engine and bounded native transport
@@ -150,4 +161,4 @@ jobs:
       - name: Exercise real host isolation and native XLSX bytes
         run: sudo --preserve-env=PATH,DYOFFICE_TEST_HOST_MANIFEST npm run test:web:sandbox
       - name: Test real native job output, cancellation, recovery and BullMQ redelivery
-        run: sudo --preserve-env=PATH,DYOFFICE_TEST_HOST_MANIFEST,DYOFFICE_TEST_DATABASE_URL,DYOFFICE_TEST_REDIS_URL npm run test:web:native-jobs
+        run: sudo --preserve-env=PATH,DYOFFICE_TEST_HOST_MANIFEST,DYOFFICE_TEST_DATABASE_URL,DYOFFICE_TEST_REDIS_URL,DYOFFICE_TEST_S3_ENDPOINT,DYOFFICE_TEST_S3_ACCESS_KEY,DYOFFICE_TEST_S3_SECRET_KEY npm run test:web:native-jobs

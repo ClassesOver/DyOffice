@@ -2,67 +2,125 @@
 
 This is the Web adaptation inside the cloned GenOffice repository, based on upstream `19a389b39be75f611ec21dcda4a7b91a658239d2`. UI and browser integration reference: ClassesOver/sm PR #245 (`beeb717b31e2201cc1e541c54b2f750f606d99e2`). Upstream engines and license notices remain in place.
 
-The first sections describe the original bearer-token prototype. The separate PostgreSQL local-account runtime is documented in T03–T07 below; its native DOCX entry uses Cookie sessions and does not read prototype JSON state. Neither path is enabled for production.
+The first sections describe the default development-token runtime and its modular account services. The separate PostgreSQL local-account experimental runtime is documented in T03–T08 below; its native DOCX entry uses Cookie sessions and does not read prototype JSON state. Both runtime paths reject production startup.
+
+## Runtime and database boundaries
+
+| Entry | Data and migrations | Administrator bootstrap |
+| --- | --- | --- |
+| Default `DYOFFICE_AUTH_MODE=development`: `server/src/app.mjs`, development bearer tokens | JSON workspace and single-process revision journal. Optional `buildApp({ localAuth })` services use a separate modular account database: `server/db/migrations/0001`–`0008`, `dyoffice_*` tables, `dyoffice_schema_migrations` journal. The default process does not connect to that database. | `node apps/web/tools/bootstrap-admin.mjs --deployment-id UUID --username LOGIN`, or the `apps/web` package's `bootstrap:admin` script; see the CLI section below. |
+| Explicit `DYOFFICE_AUTH_MODE=local`: `server/src/app.ts` → `buildLocalApp` | Dedicated PostgreSQL 17 database: `server/src/db/migrations/0001`–`0012`, unprefixed application tables and `identity_migrations` journal. Separate migration owner, auth, business and optional worker logins. | From the repository root: `npm run provision:runtime`, then interactive `npm run bootstrap:admin` (`tools/dyoffice/bootstrap-admin.ts`), with `DYOFFICE_DEPLOYMENT_ID` set. |
+
+Use different databases for these two account implementations. Each bootstrap command accepts a migration connection through `DYOFFICE_DATABASE_URL`, but initializes only its own schema; it does not import accounts, sessions, revisions or migration history from the other implementation. Local role provisioning revokes database-wide PUBLIC CREATE/TEMP privileges, so it must not target the modular account database or a shared business database. The local runtime's auth/business/worker connections must, in turn, refer to the same dedicated local database and schema.
+
+Keep both migration directories and their existing version numbers and checksums unchanged. Do not combine manifests, renumber applied migrations, remove journal rows, or reuse one journal as an upgrade path for the other. A deployment using an earlier divergent history requires an explicit upgrade plan; these commands do not silently translate it. Both Web entries reject `NODE_ENV=production`. Neither development tokens nor the optional modular auth services grant access to the local runtime's RLS resources.
 
 ## Run the original prototype
 
 Use Node 22.x, version 22.12 or newer. From the repository root:
 
 ```sh
-npm install --prefix apps/web --workspaces=false --ignore-scripts
+npm ci --ignore-scripts
 # Export distinct DYOFFICE_USER_TOKEN and DYOFFICE_ADMIN_TOKEN values,
 # plus a persistent DYOFFICE_ENCRYPTION_KEY (see .env.example).
+npm run build:web
 npm run dev:web
 ```
+
+DOCX editing loads `@genoffice/docx-engine` in the server process, so the Web app needs this repository install rather than an `apps/web`-only install. `npm run dev:web` starts Node with `tsx` and does not launch Electron. An `apps/web`-only install can still serve the older shell, but opening a DOCX editor will fail until the workspace packages are installed.
 
 Open `http://127.0.0.1:3080` for the personal workspace and `/admin` for administration. Use the corresponding access token. Configuration is read from environment variables; `.env.example` is a template and is not loaded automatically. Persist the data directory and encryption key together.
 
 ## Current implementation
 
-- Personal file import/download restricted to DOCX, XLSX, PPTX and PDF.
+- Personal DOCX open/edit/save. The page edits plain paragraph, heading, and list text. Saves call GenOffice `docx-engine` so unchanged paragraphs, tables, pictures, styles, and headers stay in the original OOXML package. Complex paragraphs (tabs, fields, revisions, content controls) are shown and preserved, not rewritten as plain text.
+- Document revisions: a save names the base revision, lease epoch, and idempotency key. The server writes the bytes to the local immutable object store, then commits the base revision, lease, idempotency record, and outbox entry in one in-process journal transaction. A stale base or lease returns 409 and keeps the draft. Repeating the same save returns the original revision. Restoring an older revision creates a new head. The journal is single-process and is the development stand-in for the PostgreSQL transaction in `server/db/migrations/0004_revisions.sql`. The Web process does not open PostgreSQL to commit revisions, and the journal does not enforce row-level security.
+- Personal file import/download restricted to DOCX, XLSX, PPTX and PDF. Only DOCX is editable.
 - Personal theme, language, author, autosave and assistant preferences.
 - HTTP data-source configuration with encrypted credentials.
 - Admin-only model endpoint/key configuration and enabled-model catalog.
 - Admin-only Streamable HTTP MCP configuration and real connection/tool discovery using the official MCP SDK. No stdio subprocess transport.
 - Separate personal/admin bearer tokens. The admin token manages configuration, but cannot read or modify personal files, preferences or data sources. Secrets encrypted with AES-256-GCM and omitted from read responses.
 
-The development token server refuses startup when `NODE_ENV=production`, before reading or creating its data directory. This guard is not production account authentication or multi-user resource isolation. Production will use **local username/password authentication**, Admin-managed accounts, PostgreSQL-backed server sessions and personal resource ownership. OIDC/Keycloak/SSO are explicitly out of scope. See `docs/dyoffice/local-account-auth.md`. The experimental local-account/session/file APIs are implemented in the separate runtime described below; the production release gates and full workspace UI remain unfinished.
+The development token server refuses startup when `NODE_ENV=production`, before reading or creating its data directory. Local username/password accounts, admin user management, and PostgreSQL sessions are implemented behind `buildApp({ localAuth })`. See `docs/dyoffice/evidence/t03-closeout.md`. The default process does not open that database, and file routes still use the development token until T04. OIDC/Keycloak/SSO stay out of scope. Global model and service settings stay in Admin. Personal files stay on the owning account.
 
 ## Remaining implementation
 
-The other three native browser editors, full model chat/tool execution, durable native jobs, database query integration, source-management UI, file folders/favorites/recent views, local-account login/workspace UI and deployment hardening. Experimental DOCX editing and revision commits are available through the explicitly enabled local runtime below. Preference fields for editor features are persisted now and will be applied as each editor is integrated. This is a development foundation, not a completed Office editor.
+The modular `.mjs` T03 account services implement identity and sessions. The checklist is in `docs/dyoffice/evidence/t03-closeout.md`. `buildApp({ localAuth })` serves login, logout, `me`, reauth, password change, activation/reset, personal session revoke, and admin user create/list/disable/role/reset. The default `dev:web` process still uses the development bearer tokens and still refuses `NODE_ENV=production`. Replacing those tokens on file routes waits for T04 row-level security. External API tokens wait for T19. A full breached-password corpus and host Argon2 benchmarks wait for operations.
+
+The modular runtime implements the T05 object-storage lifecycle described here. Personal objects can be staged, finished, downloaded, trashed, restored, and purged. The server checks SHA-256, enforces quota, expires abandoned uploads, and keeps a file row only after the object exists. An in-process client covers those rules in `npm run test:web`. A MinIO job, [dyoffice-t05-s3.yml](../../.github/workflows/dyoffice-t05-s3.yml), runs the same lifecycle against S3 when `DYOFFICE_S3_ENDPOINT` is set; the test skips when it is not. Row-level security remains T04. Multi-node highly available storage remains an operations concern. The older `/api/files` directory is the development-token prototype, not this store.
+
+A PDF capability gate reports page order, text versus scanned versus blank pages, unembedded fonts, and unverified signatures. It refuses annotation, text edit, page reorder, redaction, cover-text-as-deletion, and trusting a signature. Password-marked files are not readable. Browser PDF editing, PDFium, and WASM are not mounted. See `docs/dyoffice/evidence/t11-pdf-capabilities.md`.
+
+T06 save transactions, revision history, and single-writer leases are complete for this development server. The done and deferred checklist is in `docs/dyoffice/evidence/t06-revision-commit.md`. `mountDocsEditor` now opens a DOCX, edits a paragraph, undoes that local change, and saves through the host; see `docs/dyoffice/evidence/t07-docs-browser-mount.md`. Mount the GenOffice Docs renderer (ribbon, pagination, comments, tracked changes, and selection) on this DOCX host instead of that surface. Then adapt the other formats the same way, reusing each native editor and keeping non-browser work behind authorized APIs. Model chat/tool execution, database connectors and query integration, source edit/delete/test UI, file folders/favorites/recent views, and deployment hardening are still open. Autosave uses the saved preference; the assistant preference is stored and not yet shown.
 
 Run `npm run test:web` for HTTP access-boundary and persistence tests. Runtime dependencies are scoped to this app so starting the Web server does not install or launch Electron.
 
-## Web-only build baseline (T00)
+## Modular account bootstrap (T03a; CLI only)
 
-Install without the root Electron postinstall:
+The repository now includes a PostgreSQL migration runner, an Argon2id password
+hasher and a **trusted-operator-only** one-time administrator bootstrap CLI.
+This CLI initializes only the modular `.mjs` account database. The separate
+local experimental runtime uses the root TypeScript CLI described below. Browser
+login is the optional modular local-auth route set, not this command. Per-user
+file RLS remains T04 for these modular services.
+
+Use the locked Web dependencies and an already provisioned PostgreSQL 16+
+database. Supply a dedicated *migration* role through `DYOFFICE_DATABASE_URL`
+and an explicit deployment UUID. Do not use the migration role for regular app
+traffic. Run the command from the repository root:
 
 ```sh
-npm ci --prefix apps/web --workspaces=false --ignore-scripts --include=dev
+npm ci --prefix apps/web --workspaces=false --include=dev
+DYOFFICE_DATABASE_URL='postgresql://MIGRATION_USER@db-host/dbname' \
+  node apps/web/tools/bootstrap-admin.mjs \
+  --deployment-id 'REPLACE-WITH-DEPLOYMENT-UUID' \
+  --username admin.local
+```
+
+The CLI prompts for the password twice in a TTY without echoing it, runs the
+identity migrations transactionally, and creates the initial administrator,
+role and personal workspace in a single transaction. It refuses a second
+bootstrap in that deployment. For controlled non-interactive installation
+only, `--password-stdin` reads one line from a pipe; **never** supply passwords
+through argv, environment variables, shell history or logs. There is no
+HTTP bootstrap endpoint or default admin password.
+
+Run the identity tests using the dedicated [identity schema CI workflow](../../.github/workflows/dyoffice-identity-schema.yml).
+This validates the actual native Argon2id module, PostgreSQL migrations,
+concurrent initializations and CLI. Do not point the default development
+server at this account store until T04 isolates personal files.
+
+## Web-only build baseline (T00)
+
+Install the workspace dependencies needed by the original shell and DOCX engine
+without running the root Electron postinstall:
+
+```sh
+npm ci --ignore-scripts --include=dev
 npm run typecheck:web
 npm run build:web
 npm run test:web:build
 ```
 
-The pinned Vite build emits `apps/web/dist/index.html`, `admin.html`, hashed browser
+The pinned Vite build emits `apps/web/dist/index.html`, `admin.html`, `legacy.html`, hashed browser
 assets and a manifest. The smoke test builds into a disposable directory, serves
-that output through the API server over HTTP, and checks both pages, every
+that output through the API server over HTTP, and checks its pages, every
 referenced JS/CSS asset, and same-origin API authorization.
 No Electron application or native engine is built or started.
 
 This is a build baseline for the existing personal/Admin prototype, not the
-four-format editor integration. `start:web` defaults to the source `public/`
-interface. For local same-origin build/API verification, first run `build:web`,
-then start with `DYOFFICE_ASSET_MODE=built npm run start:web` and the development
-credentials described above. Built mode serves only the two HTML entries and
+four-format editor integration. `start:web` defaults to built assets. For local
+same-origin build/API verification, first run `build:web`, then run `start:web`
+with the development credentials described above. Built mode serves only the
+configured HTML entries, the retained legacy entry, and
 manifest-listed assets, fails startup if the build is absent/incomplete, and does
 not expose the manifest, source files, or arbitrary files. GET and HEAD are the
 only static methods. Source mode and built mode both retain API authorization.
 `NODE_ENV=production` still refuses startup: this seam does not make the temporary
-shared-token server production-ready. T02 API migration and T03 identity remain
-required before production deployment. Type checking currently
-covers BrowserHost, Web contracts and the new Fastify TypeScript modules, not the legacy JavaScript prototype or all
+shared-token server production-ready. T04 resource isolation remains required
+for that runtime before production deployment. Type checking covers BrowserHost,
+Web contracts and the local TypeScript server modules, not the legacy JavaScript prototype or all
 upstream renderer packages. HTTP smoke checks do not replace real browser UI or
 native document round-trip acceptance.
 
@@ -70,26 +128,56 @@ native document round-trip acceptance.
 
 Run exactly one server process/application instance per data directory. The JSON store's queue protects only that instance; starting another instance on the same directory is unsupported and can overwrite metadata, even when both uploads return success. Do not use clustered workers, multiple replicas or rolling overlap with a shared prototype directory. There is currently no inter-process ownership lock.
 
-Admin updates apply supplied sections against the latest state inside the instance queue; omitted sections and omitted keys are preserved. Concurrent updates to the same section remain last-writer-wins, not revision-checked. This is not the planned PostgreSQL CAS, document revision, lease, or idempotency implementation (T04/T06/T12). File endpoints currently import and download originals; they do not implement editing-save transactions.
+Admin updates apply supplied sections against the latest state inside the instance queue; omitted sections and omitted keys are preserved. Concurrent updates to the same section remain last-writer-wins, not revision-checked. This is not PostgreSQL CAS for settings (T12) or row-level security (T04). DOCX saves publish a revision only after the immutable object is stored and the in-process journal accepts the base revision, lease epoch, and idempotency key. That journal is local to one server process. A crash after the object write and before the journal publish leaves an unreferenced object and no new revision; retry the same idempotency key. A crash after the journal publish and before the legacy current-file copy can be repaired by repeating that same request. Do not run two processes on one data directory.
 
 ### T02 请求与错误迁移接缝
 
 每个请求由服务端生成独立 `X-Request-ID`，不信任或回显客户端同名请求头。JSON 错误响应保持原有 HTTP 状态码、`application/json` 和 `error` 文案，增量提供 `type: about:blank`、`title`、`status`、`detail`、`requestId`；成功响应正文不变。错误中不包含请求 URL、查询参数或内部异常详情，500 继续返回通用文案。
 
-Fastify 应用工厂位于 `server/src/app.ts`，`dev:web` / `start:web` 已使用该入口。独立健康模块提供 `/api/v1/health/live` 与 `/api/v1/health/ready`，就绪检查当前只验证开发存储。请求 ID 由服务端生成；按直连 IP 每分钟最多 600 个请求，健康检查豁免，不信任客户端代理头。SIGTERM/SIGINT 停止监听并等待在途请求完成。限流计数只在单进程内存中，不能用于多实例生产部署。
-
-旧接口通过兼容模块继续处理，接管发生在限流之后、正文解析之前，保留既有 JSON/50 MiB 上传限制、权限与错误契约。`createApplication()` 仍保留，供旧回归及回退使用。运行 `npm run test:web:integration` 检查真实 HTTP 的兼容行为、限流与子进程关闭；`typecheck:web` 同时检查新的 TypeScript 服务端。Node 22.12 使用脚本中的 `--experimental-strip-types` 启动 TypeScript。
-
-T02 仍需逐领域迁移旧路由与完整 `/api/v1` 契约；本地账号、服务端撤销和工作区/偏好 RLS 接缝已实现，见下文 T03/T04；完整文件隔离和 UI 仍待实现。生产启动守卫保留，不能据此宣称正式登录、生产就绪或企业验收完成。
+By default, `dev:web` and `start:web` boot Fastify through `server/src/app.mjs` → `buildApp`. Preferences, admin configuration, data sources, files, DOCX editing, and static pages are registered as modules on that shell. Health probes use static schemas. Business bodies keep the existing module validators. The process rate limit and shutdown cover one process. `NODE_ENV=production` still refuses startup. This default entry does not enable local-account login or resource isolation. Run `npm run test:web:integration -- test/integration/api-compat.test.mjs` and `npm run test:web:integration -- test/integration/route-cutover.test.mjs` for its HTTP contracts. The separate local runtime suite is `npm run test:web:integration:local`.
 
 
-### T03a 本地账号基础（尚未接入网页登录）
+## Original GenOffice shell entry
 
-`server/src/modules/auth` 与 `server/src/db` 已提供 PostgreSQL 账号/角色/工作区表、Argon2id 密码验证和并发安全的一次性 Admin 初始化。`npm run bootstrap:admin` 必须在交互终端运行；显式提供 `DYOFFICE_DATABASE_URL` 与稳定 UUID `DYOFFICE_DEPLOYMENT_ID`，密码在终端隐藏输入并确认，不能放命令参数或密码环境变量。可用 `DYOFFICE_PASSWORD_BLOCKLIST_FILE` 加载部署批准的本地密码阻断语料；内置小列表只是起步，不能代表完整泄露密码覆盖。
+Build first (`npm run build:web`), then `npm run start:web`. The start command now
+selects built assets by default. The workspace directly imports the original
+`apps/shell` AppFrame, Home, TabBar, locale, FileBadge assets, home/tabbar CSS and
+shared UI tokens. Desktop defaults are unchanged; optional Home and AppFrame slots
+provide the Web account area and DOM editor container instead of WebContentsView.
 
-账号集成测试需要 `DYOFFICE_TEST_DATABASE_URL` 指向隔离的 `dyoffice_test` 或 `dyoffice_test_*` PostgreSQL 数据库；缺少数据库会失败，不会跳过或换成内存实现。Linux/macOS 的 CLI 终端回归还需要 Python 3 标准库。`npm run test:web:integration` 运行账号、PTY、Fastify 和文件事务测试；文件用例还需下文的隔离 S3 测试环境变量。CI 提供独立 PostgreSQL 17 与固定摘要的 S3 兼容测试服务。
+This checkpoint restores the **entry shell**, not all four editor ribbons. The
+already-merged DOCX paragraph editor remains in a retained iframe; XLSX/PPTX/PDF
+native renderer migrations remain separate. Import, file listing and preferences
+use the existing authenticated Web API. New DOCX/XLSX/PPTX files use the original
+GenOffice blank templates. PDF creation and the desktop Ask entry are disabled.
+Stars are explicitly page-session-only until a persistent starred API exists.
+Unavailable desktop operations report unsupported rather than pretend to succeed.
+Admin retains a separate token and route; no Genspark account flow is invoked.
 
-这些模块还没有提供 Cookie 会话或账号登录界面，也没有接管旧 JSON 个人数据。开发 Token 启动路径及 production 拒绝保持生效；完整进度与实际证据见 `docs/dyoffice/evidence/t03a-account-bootstrap.md`。
+Switching Home/document tabs retains each iframe. Closing tabs or exiting checks
+the child editor's dirty/saving/unknown state. Legacy sidebar, return and logout
+also check it; refresh uses beforeunload. Pending auto-save timers are disposed on
+confirmed discard, and stale saves do not redraw a newer screen.
+
+Verification: `test:shell` mounts the actual components in jsdom (not visual proof),
+`typecheck:shell` checks their real sources, and the `DyOffice original shell UI`
+workflow runs Chromium against real APIs, verifies import/open/tab return/theme/
+Admin separation and canceled dirty navigation, then uploads screenshots/traces.
+The original shell checkpoint reported a local Chromium socket restriction;
+that historical limitation is not a result from this integration. Visual
+acceptance requires the browser workflow, not an inference from jsdom or Vite.
+
+## Separate local-account experimental runtime
+
+以下 T03–T08 配置仅适用于 `server/src/app.ts` 的 `buildLocalApp` 和 `DYOFFICE_AUTH_MODE=local`。阶段检查点记录当时的开放项；当前 native Worker 状态以下面的 T08 当前运行方式为准。默认开发 Token 入口不会因此连接 PostgreSQL，模块化 `.mjs` 账号库也不会自动迁移到此入口。
+
+### T03a 本地实验账号基础与初始化
+
+`server/src/modules/auth` 与 `server/src/db` 已提供 PostgreSQL 账号/角色/工作区表、Argon2id 密码验证和并发安全的一次性 Admin 初始化。在仓库根目录执行的 `npm run bootstrap:admin`（`tools/dyoffice/bootstrap-admin.ts`）必须在交互终端运行；显式提供 `DYOFFICE_DATABASE_URL` 与稳定 UUID `DYOFFICE_DEPLOYMENT_ID`，密码在终端隐藏输入并确认，不能放命令参数或密码环境变量。可用 `DYOFFICE_PASSWORD_BLOCKLIST_FILE` 加载部署批准的本地密码阻断语料；内置小列表只是起步，不能代表完整泄露密码覆盖。
+
+账号集成测试需要 `DYOFFICE_TEST_DATABASE_URL` 指向隔离的 `dyoffice_test` 或 `dyoffice_test_*` PostgreSQL 数据库；缺少数据库会失败，不会跳过或换成内存实现。Linux/macOS 的 CLI 终端回归还需要 Python 3 标准库。`npm run test:web:integration:local` 运行账号、PTY、Fastify 和文件事务测试；文件用例还需下文的隔离 S3 测试环境变量。CI 提供独立 PostgreSQL 17 与固定摘要的 S3 兼容测试服务。
+
+T03a 是历史基础检查点；当前 Cookie 会话见下文 T03b，账号登录界面尚未接入，也没有接管旧 JSON 个人数据。开发 Token 启动路径及 production 拒绝保持生效；完整进度与实际证据见 `docs/dyoffice/evidence/t03a-account-bootstrap.md`。
 
 
 ### T03b 本地会话实验入口
@@ -105,7 +193,7 @@ T02 仍需逐领域迁移旧路由与完整 `/api/v1` 契约；本地账号、�
 
 本地实验模式增加 `/api/v1/admin/users` 的查询/开户，以及指定账号的状态、角色、激活重发和密码重置操作。敏感操作需最近 15 分钟内的密码验证与 Origin/CSRF；新账号默认仅个人角色。激活/重置秘密只返回一次、15 分钟过期，POST `/api/v1/auth/password-action` 在匿名挑战后用 JSON 消费，不生成凭据 URL，也不发送邮件。重置签发立即冻结旧密码登录并撤销旧会话；过期后需管理员重发。自己的改密使用 `/api/v1/auth/change-password`，验证旧密码后替换会话 Cookie。
 
-`DYOFFICE_PASSWORD_BLOCKLIST_FILE` 现在同时作用于 CLI 和本地服务的激活/改密。使用受信任的本地 UTF-8 文件（最多 16 MiB，建议绝对路径）；不把内置小列表当完整泄露密码库。真实数据库、锁竞态、回滚与 Chromium API 流程见 `docs/dyoffice/evidence/t03c-account-lifecycle.md`。已消费/过期的密码令牌记录清理仍是已知维护项；完整 Admin UI、文件/任务隔离、外部 Token 与租约仍待后续任务，production 继续关闭。
+`DYOFFICE_PASSWORD_BLOCKLIST_FILE` 现在同时作用于 CLI 和本地服务的激活/改密。使用受信任的本地 UTF-8 文件（最多 16 MiB，建议绝对路径）；不把内置小列表当完整泄露密码库。真实数据库、锁竞态、回滚与 Chromium API 流程见 [本地实验 T03c 记录](../../docs/dyoffice/evidence/t03c-account-lifecycle.md#local-experimental-runtime)。已消费/过期的密码令牌记录清理仍是已知维护项；文件、租约与任务进度分别见下文 T05–T08，完整 Admin UI、外部 Token 与生产放行仍未完成。
 
 
 ### T04 受限数据库账号与偏好隔离
@@ -201,7 +289,7 @@ npm run dev:web
 
 ### T08a 持久任务与投递基础（内部接缝）
 
-T08a 建立版本 7 的任务表；当前迁移版本为 10，新增任务输出、租约用途与受限就绪校验见下文 T08c/T08e。更新服务前用独立非超级用户 owner 执行 `npm run provision:runtime`，安装全部不可变迁移和最小授权。已有 v6 会话、对象版本、租约、幂等回执、outbox 和配额保留；迁移没有重写前六个 SQL 文件。
+T08a 建立版本 7 的任务表；下文历史检查点记录到版本 10，当前版本为 T08 运行说明中的 12。新增任务输出、租约用途与受限就绪校验见下文 T08c/T08e。更新服务前用独立非超级用户 owner 执行 `npm run provision:runtime`，安装全部不可变迁移和最小授权。已有 v6 会话、对象版本、租约、幂等回执、outbox 和配额保留；迁移没有重写前六个 SQL 文件。
 
 内部任务服务将 `native_jobs` 和 `job_outbox` 同事务创建，按用户限制活动任务数、按键幂等重试；输入只允许本人文件的版本 UUID `artifactId`，当前基线和会话/authVersion 由服务器捕获。取消、deadline、执行次数、领取 hash/epoch 均以 PostgreSQL 为准。任务继承原认证事务的空闲超时，不授予更长的后台会话。
 
@@ -209,7 +297,7 @@ T08a 建立版本 7 的任务表；当前迁移版本为 10，新增任务输出
 
 已提供内部 BullMQ 队列/dispatcher：消息只有任务 ID 与投递 epoch。确认丢失会重新投递，已确认的 queued/过期 running 任务也会周期性重建提示，Redis 清空不会抹掉 PostgreSQL 任务。Redis 客户端连接失败有启动期限及有限请求重试，后台连接会重连。已完成 BullMQ 消息不等于业务任务成功；只有下一阶段真实原生输出与 T06 同事务完成后才能标记成功。
 
-此 checkpoint **未接入公开任务路由、调度守护循环、原生 executor、OS 沙箱或任务输出提交**，现有 Web 启动不要求 Redis，也不在启动时伪造成功任务。`docx.roundtrip` 仅为内部测试保留类型；T08 仍未完成。T06 的 revision_outbox 仍保留意图，不把当前 job dispatcher 当成文档索引事件已消费。
+此历史 checkpoint **尚未接入公开任务路由、调度守护循环、原生 executor、OS 沙箱或任务输出提交**，现有 Web 启动不要求 Redis，也不在启动时伪造成功任务。`docx.roundtrip` 仅为内部测试保留类型；T08 仍未完成。T06 的 revision_outbox 仍保留意图，不把当前 job dispatcher 当成文档索引事件已消费。
 
 `npm run test:web:jobs` 使用真实独立 PostgreSQL 与 Redis/BullMQ，另需 `DYOFFICE_TEST_REDIS_URL` 指向隔离 loopback Redis。测试仅操作随机专属队列 namespace；恢复测试清空该队列并真实断开客户端连接，不清空共享 Redis。历史 T08a fixture 使用 Redis 7.4 容器；当前测试与 CI 已切换宿主机 Redis。不得将测试连接指向业务服务。具体结果和开放项见 [T08a 证据](../../docs/dyoffice/evidence/t08a-durable-jobs.md)。
 

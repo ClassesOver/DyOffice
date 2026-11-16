@@ -118,14 +118,13 @@ DyOffice **不引入 OIDC、Keycloak、SAML、LDAP 或第三方身份提供方**
 
 本文件是**新决策的唯一认证专项设计入口**。若未来考虑多因素认证，应单独批准为本地账号的可选第二因素，不应以此自动引回 OIDC/外部身份平台。需要新增 SSO 必须经过范围变更，不属于当前需求。
 
-本轮只修改架构/任务/验收文档；**未声称已创建数据库用户表、已实现生产登录、密码存储或已通过安全测试**。现有 `apps/web` 开发 Token 服务保持不变并继续禁止 production 启动。第一项真实交付从 T03a 的测试及迁移开始。
+## 当前实现进度与两套入口（2026-11-16）
 
+- **模块化账号服务：** `apps/web/server/auth/*.mjs` 与 `server/src/app.mjs` 的 `buildApp({ localAuth })` 已提供账号、会话及管理员接口，记录见 [T03 收口](evidence/t03-closeout.md) 和 [模块化 T03c](evidence/t03c-account-lifecycle.md#modular-auth-runtime)。默认开发进程仍使用开发 Token，不连接该账号数据库；其文件/版本账本尚未切换到账号 RLS。
+- **独立 local 实验运行时：** `DYOFFICE_AUTH_MODE=local` 使用 `server/src/app.ts`、Cookie 会话及独立受限 auth/business 连接，已接入工作区/偏好、文件、版本、租约和任务权限。原生 DOCX 与宿主机 XLSX 任务需显式实验开关；见 [本地实验 T03c](evidence/t03c-account-lifecycle.md#local-experimental-runtime)、[T04](evidence/t04-rls-checkpoint.md) 和 [T08](evidence/t08-docker-free-closure.md)。完整登录/Admin/工作区 UI、外部 API Token、保留清理及企业交付仍未完成。
 
-## 当前实现进度（2026-11-15）
+两套账号实现使用不同数据库。模块化服务的迁移位于 `server/db/migrations`，版本 0001–0008，表名以 `dyoffice_` 开头，日志为 `dyoffice_schema_migrations`；从仓库根目录运行 `node apps/web/tools/bootstrap-admin.mjs --deployment-id UUID --username LOGIN` 初始化。local 实验服务的迁移位于 `server/src/db/migrations`，版本 0001–0012，日志为 `identity_migrations`；从仓库根目录运行 `npm run provision:runtime` 和交互式 `npm run bootstrap:admin`，使用 `DYOFFICE_DEPLOYMENT_ID`。两套 CLI 的 `DYOFFICE_DATABASE_URL` 必须指向各自的迁移数据库；`apps/web` 包内同名 bootstrap 脚本指向模块化 CLI，不是根脚本。
 
-T03a 账号/密码/bootstrap 与 T03b 独立本地会话 API 已有实现和真实 PostgreSQL 测试；Chromium + TLS 已验证 Cookie/登录/退出。详见 [T03a](evidence/t03a-account-bootstrap.md) 与 [T03b](evidence/t03b-local-sessions.md)。本文的完整目标接口、Admin 生命周期、受限认证查询角色、RLS、生产与工作区 UI 仍需后续任务验收，不能把实验登录等同于完整身份系统完成。
+这些编号属于各自独立的不可变历史，不构成相互升级路径。保留既有 SQL 与校验和，不重编号已应用迁移、不删除历史行绕过检查，也不自动合并账号、会话或旧 JSON 个人数据。local 授权工具会撤销数据库 PUBLIC 的 CREATE/TEMP，必须使用专用数据库。Web 运行时只接受该专用库的受限连接，迁移 owner 不交给 Web 进程。准确配置见 [Web README](../../apps/web/README.md)。
 
-
-T03c 已补充受控开户、停用/恢复、角色更新、短期一次性激活/重置、自助改密及撤销事务，见 [T03c](evidence/t03c-account-lifecycle.md)。密码阻断语料已连接本地服务入口；生产、完整 UI、RLS 和历史令牌清理仍未验收。
-
-T04 已接入独立受限认证/业务连接和个人工作区/偏好 RLS，运行配置改为两套连接；迁移 owner 连接不得传给 Web 服务。见 [配置](../../apps/web/README.md) 与 [实测证据](evidence/t04-rls-checkpoint.md)。文件/任务/外部 Token 的所有权还需各自模块接入，production 继续关闭。
+两种 Web 入口都拒绝 `NODE_ENV=production`。上述实现与历史测试记录不是本次合并的新验收结果，也不意味着生产、安全或完整企业交付已经放行。完整泄露密码库、部署资源基准与尚未实现的业务范围仍按各自记录验收。

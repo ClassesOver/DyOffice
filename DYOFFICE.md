@@ -17,9 +17,11 @@ Reference: ClassesOver/sm PR #245 `beeb717b31e2201cc1e541c54b2f750f606d99e2`.
 
 ## Development status
 
-Implemented a runnable Web service and personal/Admin interfaces in `apps/web`, HTTP bearer access boundaries, encrypted credentials, preferences, file import/download, HTTP data-source configuration and official SDK HTTP MCP handshake/tool discovery. Root scripts: `dev:web`, `start:web`, `test:web`.
+Implemented a runnable Web service and personal/Admin interfaces in `apps/web`, HTTP bearer access boundaries, encrypted credentials, preferences, file import/download, HTTP data-source configuration and official SDK HTTP MCP handshake/tool discovery. `dev:web` and `start:web` serve those routes through the Fastify shell. Root scripts: `dev:web`, `start:web`, `test:web`.
 
-The local-account experimental runtime now provides restricted PostgreSQL sessions, private file lifecycle and conflict-safe revision commits. An explicitly enabled native DOCX browser entry reuses the upstream renderer and engine for paragraph/table editing and saving. A durable PostgreSQL job/BullMQ delivery core is available internally; isolated native job execution remains unfinished. Other native formats, model-assisted editing, the full workspace UI and production release gates remain unfinished. Detailed startup instructions and remaining work are in `apps/web/README.md`.
+The default development-token runtime uses the modular Fastify shell and the original GenOffice workspace shell. Its DOCX paragraph editor saves immutable objects through a single-process revision journal; it does not use PostgreSQL for revision commits or enforce row-level security. XLSX, PPTX and PDF remain import/download only in that entry.
+
+The separate `DYOFFICE_AUTH_MODE=local` experimental runtime provides restricted PostgreSQL Cookie sessions, private file lifecycle and transactional revision commits. Explicit flags enable the native GenOffice DOCX renderer and Linux/systemd native XLSX jobs. Its dedicated database, bootstrap command and migration journal are separate from the modular account services. Both runtime paths reject `NODE_ENV=production`; full local-account UI, other native browser editors, model-assisted editing and enterprise release gates remain unfinished. See `apps/web/README.md` for the exact entry, database and bootstrap commands.
 
 ## Reuse direction
 

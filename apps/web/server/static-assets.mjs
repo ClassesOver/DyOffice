@@ -7,6 +7,7 @@ const contentTypes = {
   '.html':'text/html; charset=utf-8', '.js':'text/javascript; charset=utf-8',
   '.css':'text/css; charset=utf-8', '.png':'image/png', '.jpg':'image/jpeg',
   '.jpeg':'image/jpeg', '.svg':'image/svg+xml', '.webp':'image/webp',
+  '.docx':'application/octet-stream', '.xlsx':'application/octet-stream', '.pptx':'application/octet-stream',
   '.ico':'image/x-icon', '.woff':'font/woff', '.woff2':'font/woff2',
   '.mjs':'text/javascript; charset=utf-8', '.ttf':'font/ttf', '.wasm':'application/wasm',
 };
@@ -26,10 +27,14 @@ export async function createStaticAssets({ assetMode = 'source', assetDirectory,
     return path;
   };
   if (assetMode === 'source') {
-    allowed.add('app.js'); allowed.add('style.css');
+    allowed.add('app.js'); allowed.add('style.css'); allowed.add('editor-controller.js');
   } else {
     const manifest = JSON.parse(await readFile(await resolvedFile('.vite/manifest.json'), 'utf8'));
     if (!manifest || Array.isArray(manifest) || typeof manifest !== 'object' || !Object.keys(manifest).length) throw new Error('Invalid Web build manifest');
+    // Identical MPA inputs share a chunk, so Vite may omit the HTML entry from its manifest.
+    // Allow only this explicit built page, still checked for existence and realpath confinement.
+    try { await resolvedFile('legacy.html'); allowed.add('legacy.html'); }
+    catch (error) { if (error.code !== 'ENOENT') throw error; }
     const add = name => {
       if (typeof name !== 'string' || !/^assets\/[A-Za-z0-9_./-]+$/.test(name) || name.split('/').some(part => !part || part === '.' || part === '..') || !contentTypes[extname(name)]) throw new Error('Unsafe Web build asset');
       allowed.add(name);

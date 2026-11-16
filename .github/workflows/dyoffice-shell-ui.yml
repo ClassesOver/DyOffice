@@ -1,0 +1,33 @@
+name: DyOffice original shell UI
+on:
+  pull_request:
+    paths: ['apps/web/**', 'apps/shell/src/renderer/**', 'packages/ui/**', 'package-lock.json', '.github/workflows/dyoffice-shell-ui.yml']
+  push:
+    branches: [feat/dyoffice-web]
+    paths: ['apps/web/**', 'apps/shell/src/renderer/**', 'packages/ui/**', 'package-lock.json', '.github/workflows/dyoffice-shell-ui.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  native-shell:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 22
+      - run: npm ci --ignore-scripts
+      - run: node --experimental-strip-types --test apps/web/test/unit/shell-home.test.mjs
+      - run: npm run typecheck:shell --prefix apps/web --workspaces=false
+      - run: npm run test:shell --prefix apps/web --workspaces=false
+      - run: npm run build:web
+      - run: npx --no-install playwright install --with-deps chromium
+        working-directory: apps/web
+      - run: npx --no-install playwright test --config playwright.shell.config.mjs
+        working-directory: apps/web
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        if: always()
+        with:
+          name: genoffice-shell-browser-evidence
+          path: apps/web/test-results/

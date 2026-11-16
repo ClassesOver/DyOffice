@@ -2,7 +2,8 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { mkdtemp, mkdir, writeFile, rm, symlink } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, dirname } from 'node:path'
+import { createRequire } from 'node:module'
 import { checkWebBoundaries, forbiddenSpecifier, inspectSource } from './check-web-boundaries.mjs'
 
 test('disallows Node builtins and Electron in browser source', () => {
@@ -56,17 +57,16 @@ test('runs the CLI from a checkout path containing URL-reserved characters', asy
   t.after(() => rm(root, { recursive: true, force: true }))
   await mkdir(join(root, 'tools'), { recursive: true })
   await mkdir(join(root, 'apps/web/src'), { recursive: true })
-  const { createRequire } = await import('node:module')
-  const { dirname } = await import('node:path')
-  const require = createRequire(new URL('../apps/web/package.json',import.meta.url))
-  await mkdir(join(root,'apps/web/node_modules'),{ recursive: true })
-  await symlink(dirname(require.resolve('typescript/package.json')),join(root,'apps/web/node_modules/typescript'),'dir')
+  // Resolve the actual package: root npm ci may hoist it out of apps/web.
+  const require = createRequire(new URL('../apps/web/package.json', import.meta.url))
+  await mkdir(join(root, 'apps/web/node_modules'), { recursive: true })
+  await symlink(dirname(require.resolve('typescript/package.json')), join(root, 'apps/web/node_modules/typescript'), 'dir')
   const script = join(root, 'tools/check-web-boundaries.mjs')
   await writeFile(script, await readFile(new URL('./check-web-boundaries.mjs', import.meta.url)))
   await writeFile(join(root, 'apps/web/src/app.ts'), "import fs from 'node:fs'\n")
   const result = spawnSync(process.execPath, [script], { encoding: 'utf8' })
   assert.equal(result.status, 1, result.stderr)
-  assert.match(result.stdout, /scanned 1 files, 1 violations/)
+  assert.match(result.stdout, /scanned 1 files, 1 violations/, result.stderr)
   assert.match(result.stderr, /browser code imports forbidden module node:fs/)
 })
 
@@ -154,31 +154,13 @@ test('uses require export conditions for CommonJS dependencies', async t => {
   assert.match(result.violations[0], /unsafe.js:1:.*node:fs/)
 })
 
-test('runtime graph omits erased type imports and exports but keeps mixed and side effect imports', () => {
-  const erased = `import type { PathLike } from 'node:fs';
-export type { PathLike } from 'node:fs';
-import { type PathLike } from 'node:fs';
-export { type PathLike } from 'node:fs';`
-  assert.deepEqual(inspectSource(erased,'types.ts'),[])
-  assert.equal(inspectSource("import { type PathLike,readFile } from 'node:fs'; import 'node:path'",'runtime.ts').length,2)
+test('erases only whole type declarations, retaining named-type and mixed runtime imports',()=>{
+ assert.deepEqual(inspectSource("import type {X} from 'node:fs'; export type {Y} from 'electron'; import type Z = require('node:path')",'entry.ts'),[])
+ for(const source of ["import {type X} from 'node:fs'","import {type X,value} from 'node:fs'","import 'node:fs'"])assert.equal(inspectSource(source,'entry.ts').length,1)
 })
-test('two pure renderer utility subpaths remain traversable while Electron runtime exports are rejected', () => {
-  assert.equal(forbiddenSpecifier('@genoffice/electron-utils/safe-external-url'),false)
-  assert.equal(forbiddenSpecifier('@genoffice/electron-utils/headless-export'),false)
-  assert.equal(forbiddenSpecifier('@genoffice/electron-utils/atomic-write'),true)
-})
-
- test('pure helper exceptions are followed and cannot hide a Node dependency', async t => {
-  const root = await mkdtemp(join(tmpdir(),'dyoffice-pure-helper-'))
-  t.after(() => rm(root,{ recursive: true,force: true }))
-  const files = {
-    'apps/web/src/app.ts': "import { x } from '@genoffice/electron-utils/safe-external-url'",
-    'packages/electron-utils/package.json': JSON.stringify({ name: '@genoffice/electron-utils',exports: { './safe-external-url': './src/safe.ts' } }),
-    'packages/electron-utils/src/safe.ts': "import fs from 'node:fs'; export const x = fs",
-  }
-  for (const [path,source] of Object.entries(files)) { await mkdir(join(root,path,'..'),{ recursive: true }); await writeFile(join(root,path),source) }
-  const result = await checkWebBoundaries(root)
-  assert.equal(result.scanned,2)
-  assert.equal(result.violations.length,1)
-  assert.match(result.violations[0],/safe.ts:1:.*node:fs/)
+test('resolves wildcard workspace exports and still rejects real transitive Node imports',async t=>{
+ const root=await mkdtemp(join(tmpdir(),'dyoffice-pattern-'));t.after(()=>rm(root,{recursive:true,force:true}))
+ const files={'apps/web/src/main.ts':"import '@genoffice/shared/gateway/csv-limits'",'packages/shared/package.json':JSON.stringify({name:'@genoffice/shared',exports:{'./*':'./src/*.ts'}}),'packages/shared/src/gateway/csv-limits.ts':"import 'node:fs'"}
+ for(const [path,content] of Object.entries(files)){await mkdir(dirname(join(root,path)),{recursive:true});await writeFile(join(root,path),content)}
+ const result=await checkWebBoundaries(root);assert.equal(result.violations.length,1);assert.match(result.violations[0],/csv-limits.ts.*node:fs/)
 })

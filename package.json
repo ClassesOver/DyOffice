@@ -53,7 +53,7 @@
     "build:web": "npm run build --prefix apps/web --workspaces=false",
     "typecheck:web": "npm run typecheck --prefix apps/web --workspaces=false",
     "test:web:build": "npm run test:build --prefix apps/web --workspaces=false",
-    "test:web:integration": "npm run test:integration --prefix apps/web --workspaces=false",
+    "test:web:integration": "npm run test:integration --prefix apps/web --workspaces=false --",
     "bootstrap:admin": "node --experimental-strip-types tools/dyoffice/bootstrap-admin.ts",
     "test:web:e2e": "npm run test:e2e --prefix apps/web --workspaces=false",
     "provision:runtime": "node --experimental-strip-types tools/dyoffice/provision-runtime.ts",
@@ -67,7 +67,8 @@
     "typecheck:web:worker": "npm run typecheck:worker --prefix apps/web --workspaces=false",
     "test:web:sandbox": "npm run test:sandbox --prefix apps/web --workspaces=false",
     "test:web:native-jobs": "npm run test:native-jobs --prefix apps/web --workspaces=false",
-    "start:web:worker": "npm run start:worker --prefix apps/web --workspaces=false"
+    "start:web:worker": "npm run start:worker --prefix apps/web --workspaces=false",
+    "test:web:integration:local": "npm run test:integration:local --prefix apps/web --workspaces=false"
   },
   "dependencies": {
     "ws": "^8.21.1"

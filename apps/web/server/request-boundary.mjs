@@ -32,7 +32,8 @@ export function isPersonalResource(path) {
   return path === '/api/preferences' || path === '/api/sources' ||
     path === '/api/files' || path.startsWith('/api/files/') ||
     path === '/api/v1/capabilities' || path === '/api/v1/files' ||
-    path.startsWith('/api/v1/files/')
+    path.startsWith('/api/v1/files/') ||
+    path === '/api/v1/objects' || path.startsWith('/api/v1/objects/')
 }
 
 export function authorizeDevApi(request, credentials, path) {

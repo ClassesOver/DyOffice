@@ -14,7 +14,7 @@ async function configuredApplication() {
     userToken:process.env.DYOFFICE_USER_TOKEN,
     adminToken:process.env.DYOFFICE_ADMIN_TOKEN,
     encryptionKey:process.env.DYOFFICE_ENCRYPTION_KEY,
-    assetMode:process.env.DYOFFICE_ASSET_MODE||'source',
+    assetMode:process.env.DYOFFICE_ASSET_MODE||'built',
   });
   if(mode!=='local') throw new Error('Unknown authentication mode');
   if(process.env.NODE_ENV==='production') throw new Error('Production local runtime is not ready');

@@ -1,4 +1,5 @@
 {
   "extends": "../server/tsconfig.json",
+  "compilerOptions": { "module": "NodeNext", "moduleResolution": "NodeNext" },
   "include": ["src/sandbox/**/*.ts", "src/native/xlsx.ts", "src/jobs/**/*.ts", "src/main.ts"]
 }

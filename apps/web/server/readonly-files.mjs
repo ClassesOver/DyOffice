@@ -8,11 +8,11 @@ const FILE_PATH = new RegExp(`^/api/v1/files/(${UUID})(?:/(content))?$`, 'i')
 const CAPABILITIES = Object.freeze({ docx: 'unsupported', xlsx: 'unsupported', pptx: 'unsupported', pdf: 'unsupported' })
 
 /** Development-only read bridge. The caller MUST authenticate the personal user before invoking this function. */
-export async function serveReadOnlyFiles(req, res, { url, state, filePath }) {
+export async function serveReadOnlyFiles(req, res, { url, state, filePath, capabilities = CAPABILITIES }) {
   const path = url.pathname
   if (path === '/api/v1/capabilities') {
     if (req.method !== 'GET') json(res, 405, { error: 'Method not allowed' })
-    else json(res, 200, CAPABILITIES)
+    else json(res, 200, capabilities)
     return true
   }
   const match = FILE_PATH.exec(path)
@@ -62,7 +62,7 @@ export async function serveReadOnlyFiles(req, res, { url, state, filePath }) {
     file: { fileId: file.id, revision, sha256, size: content.length },
     format: file.format,
     downloadEndpoint: `/api/v1/files/${encodeURIComponent(file.id)}/content`,
-    capabilities: CAPABILITIES,
+    capabilities,
   })
   return true
 }

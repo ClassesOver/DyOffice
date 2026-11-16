@@ -1,10 +1,9 @@
 import { createStaticAssets } from '../static-assets.mjs'
 import type { FastifyInstance, HTTPMethods } from 'fastify'
-import { createApplicationHandler } from '../application.mjs'
-import { isStoreReady } from '../health.mjs'
+import { buildApp as buildModularApp } from './app.mjs'
+import { createLegacyContext } from './legacy-context.mjs'
 import type { WebConfig } from './config.ts'
 import { registerHealthRoutes } from './modules/health/routes.ts'
-import { registerLegacyRoutes } from './modules/legacy/routes.ts'
 import { createApiShell } from './framework.ts'
 import { registerJobRoutes } from './modules/jobs/routes.ts'
 import { createJobService } from './modules/jobs/service.ts'
@@ -29,10 +28,15 @@ import { createUserService } from './modules/admin/users/service.ts'
 import { registerUserRoutes } from './modules/admin/users/routes.ts'
 
 export async function buildApp(config: WebConfig): Promise<FastifyInstance> {
-  const { handleRequest, store } = await createApplicationHandler(config)
-  const app = await createApiShell(config.rateLimit)
-  registerHealthRoutes(app, () => isStoreReady(config.directory, store))
-  registerLegacyRoutes(app, handleRequest)
+  if (process.env.NODE_ENV === 'production') throw new Error('Development token server is not allowed in production')
+  const context = await createLegacyContext({ ...config, assetMode: config.assetMode, assetDirectory: config.assetDirectory, objectQuota: undefined })
+  const app = await buildModularApp({
+    env: 'development',
+    logger: false,
+    rateLimit: { max: config.rateLimit?.max ?? 5000, windowMs: config.rateLimit?.timeWindow ?? 60_000 },
+    readyCheck: () => context.ready(),
+    legacy: context,
+  })
   await app.ready()
   return app
 }

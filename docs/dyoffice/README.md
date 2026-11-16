@@ -115,7 +115,7 @@ WS 断线后手工编辑、HTTP 保存和普通 AI 流应继续可用；依赖�
 本轮只增加这些计划文档，不修改产品代码、不重写既有 reuse.md、不自动创建生产配置或部署资源。后续实施以 T00 开始，先建立可以证明每一步正确的工程基线。
 
 
-## 9. 当前代码实施进度（2026-11-15）
+## 9. 当前代码实施进度（2026-11-16）
 
 以下进度只代表实际提交，不等于里程碑完成或企业可用：
 
@@ -123,13 +123,16 @@ WS 断线后手工编辑、HTTP 保存和普通 AI 流应继续可用；依赖�
 | --- | --- | --- |
 | T00 浏览器依赖边界与宿主盘点 | 部分实现；完整四格式适配审计待完成 | [宿主清单](inventory/host-dependencies.md) |
 | T01 BrowserHost 和 Agent SSE 客户端契约 | 基础契约/适配器已提交；尚未接入真实编辑器 | [T01 记录](evidence/t01-browser-host-checkpoint.md) |
-| T02 版本化 HTTP / Fastify 接缝 | Fastify 启动层、兼容模块、健康检查、限流及关闭已接入；领域迁移和生产认证未完成 | [Fastify 记录](evidence/t02-fastify-checkpoint.md)、[文件读取记录](evidence/t02-file-read-checkpoint.md) |
-| T03a 本地账号存储/密码/Admin bootstrap | 基础实现与真实 PostgreSQL/终端测试已提交；HTTP 登录与 RLS 未完成 | [T03a 记录](evidence/t03a-account-bootstrap.md) |
-| T03b 本地登录与服务器会话 | 实验 API、真实数据库/浏览器测试已实施；生产与完整 UI 未开放 | [T03b 记录](evidence/t03b-local-sessions.md) |
-| T03c 账号与密码生命周期 | 实验 API、并发/回滚与浏览器验证已实施；清理策略与 UI 未完成，RLS 接缝见 T04 | [T03c 记录](evidence/t03c-account-lifecycle.md) |
-| T04 受限连接与个人偏好隔离 | 工作区/偏好 FORCE RLS、撤销写入顺序及权限检查已实施；文件/任务等待所属模块接入 | [T04 记录](evidence/t04-rls-checkpoint.md) |
-| T05 对象存储与上传 | 本地盘/S3、格式预检、配额与原件导入/下载/回收 API 已实施；编辑保存、UI 和回收清理仍待后续 | [T05a](evidence/t05a-object-storage.md)、[T05b](evidence/t05b-file-lifecycle.md) |
-| T06 保存、历史与租约 | 实验保存 CAS、幂等回执、租约 fencing、历史恢复和事务 outbox 已实施；原生 UI 与派发待后续 | [T06 记录](evidence/t06-revision-transactions.md) |
-| T07–T26 企业完整交付 | 尚未验收 | [任务列表](implementation-plan.md) 与 [验收矩阵](acceptance-matrix.md) |
+| T02 版本化 HTTP 与模块化 API | 默认开发 Token 入口已切到模块化 Fastify；独立 local 实验工厂另行挂载 Cookie/RLS API，均拒绝 production | [模块化 API](evidence/t02-modular-api.md) · [local 接缝历史](evidence/t02-fastify-checkpoint.md) |
+| T03 模块化账号、会话与管理员接口 | `.mjs` 服务及可选 `buildApp({ localAuth })` 已实现；默认开发文件入口仍用 Token，尚未接入账号 RLS | [T03 收口](evidence/t03-closeout.md) · [模块化 T03c](evidence/t03c-account-lifecycle.md#modular-auth-runtime) |
+| T03 local 实验账号与会话 | `.ts` API、真实数据库/浏览器检查点已实施；完整账号 UI 与生产未开放 | [T03a](evidence/t03a-account-bootstrap.md) · [T03b](evidence/t03b-local-sessions.md) · [local T03c](evidence/t03c-account-lifecycle.md#local-experimental-runtime) |
+| T04 local 受限连接与隔离 | 专用数据库的 auth/business 连接、工作区/偏好 FORCE RLS、撤销写入顺序及权限检查已实施；文件、版本和任务见其所属模块 | [T04](evidence/t04-rls-checkpoint.md) |
+| T05 对象存储与上传 | 默认开发入口的对象生命周期与 local 实验入口的 PostgreSQL/S3 配额和文件 API 分别实现，不共享账号或元数据 | [开发对象存储](evidence/t05-local-object-store.md) · [local T05a](evidence/t05a-object-storage.md) · [local T05b](evidence/t05b-file-lifecycle.md) |
+| T06 保存、历史与租约 | 默认入口使用单进程账本；local 实验入口使用 PostgreSQL 事务、CAS、幂等回执与租约 fencing | [开发保存](evidence/t06-revision-commit.md) · [local 保存](evidence/t06-revision-transactions.md) |
+| T07 DOCX 浏览器挂载 | 默认入口提供段落编辑器与原始工作区 shell；local 实验入口可显式启用原始 Docs 渲染器，完整四格式与外部 Word 验收未完成 | [开发挂载](evidence/t07-docs-browser-mount.md) · [local 原生 DOCX](evidence/t07-native-docx.md) |
+| T08 local 原生任务 | PostgreSQL/BullMQ、Linux/systemd 受限 XLSX 执行及事务输出已有历史验证，显式实验开关启用；不等于生产或完整四格式完成 | [T08 闭环](evidence/t08-docker-free-closure.md) |
+| T07–T26 企业完整交付 | 尚未验收；各模块实测与完整交付范围分别记录 | [任务列表](implementation-plan.md) 与 [验收矩阵](acceptance-matrix.md) |
 
-四格式浏览器编辑与版本保存仍未打通。既有单用户 Bearer + JSON 文件原型不允许用于生产；本阶段的 `sha256:` revision 只校验只读文件字节，不提供 CAS/写租约/历史版本能力。新客户端不得显示原生编辑或 AI 写入已支持。
+默认开发入口中，DOCX 已能在浏览器中编辑并保存段落文本。保存先写入不可变对象，再由单进程版本账本提交基线、租约和幂等记录；PostgreSQL 表形在迁移 `0004_revisions.sql`，当前进程不连接数据库做版本提交。这不是完整 Docs 功能。XLSX、PPTX、PDF 仍只导入下载。既有单用户 Bearer + JSON 文件原型不允许用于生产。新客户端不得把 AI 写入或四格式原生编辑显示为已支持。
+
+两套账号数据库、迁移日志和 bootstrap 命令必须区分，见 [运行配置](../../apps/web/README.md#runtime-and-database-boundaries) 和 [认证现状](local-account-auth.md)。`server/db/migrations` 与 `server/src/db/migrations` 保留各自版本与校验和，不重编号已应用迁移，也不自动导入对方数据。local 实验库必须专用；两种 Web 入口均拒绝 production。表中的证据是各提交的历史结果，不是本次合并新增的验证声明。

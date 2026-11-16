@@ -306,20 +306,20 @@
       "size": 2630
     },
     "apps/web/package-lock.json": {
-      "sha256": "7aa9765d1f29dc835f9bdfde7479a8d8eb9e12a486a2f0cc1d2f8de08dcdd0b0",
-      "size": 157313
+      "sha256": "cffec858042589c3659af705e8c78fe6bc617d82d8f30c681e0790b162245d90",
+      "size": 220435
     },
     "apps/web/package.json": {
-      "sha256": "ace2d41f2a442db12bd9618eb499d56d2ddeeb6d89b49ec8470a3d89bdf552c3",
-      "size": 1775
+      "sha256": "f6d7b6a50e292932347a87612bc10cf6825f5101c0225c68b704bbe61a6eb1a0",
+      "size": 2310
     },
     "package-lock.json": {
-      "sha256": "ef7d0f3046571ba392a46d0930129f8d0fdfbb2837eaf79905ef6810d38396c0",
-      "size": 655074
+      "sha256": "577f8a9d9953165a78531f8c1062aa43054ee22b2d411648366d8ece43724499",
+      "size": 654324
     },
     "package.json": {
-      "sha256": "185717f4a90edddd38d0d6fa7b91fd13877fa95db6aeff94819ab5ce5532d0a2",
-      "size": 7863
+      "sha256": "94d3e444c1c6276af435ac2d73e5fc6d971de05dda77dbc03ba442056dc57d4a",
+      "size": 7971
     },
     "packages/ui/src/fonts/Carlito-Bold.ttf": {
       "sha256": "ed778b78ce652f5b17647344fb9a4c4dcb2e6f8bafe75a0366300da7f8c199ac",
@@ -356,6 +356,10 @@
         "version": "43.8.3",
         "integrity": "sha512-KgvSm3bHXz96hSXzqxyRjLeli80rIdszbDQFKlRSfckmGazTPCH/CxUN31Dp9c5rFKTQSNf9gPJRWl1yWNB3pA=="
       },
+      "fastify": {
+        "version": "5.12.8",
+        "integrity": "sha512-moP8exb2sCHLUbJkwp+I6C0padhy4D8lp0SdmzY7HhSdZuqm7O/u3o2aq7u8okaQ//33QDzj3G/u+FsSdB8Qzw=="
+      },
       "pdf-lib": {
         "version": "1.17.1",
         "integrity": "sha512-V/mpyJAoTsN4cnP31vc0wfNA1+p20evqqnap0KLoRUN0Yk/p3wN52DOEsL4oBFcLdb76hlpKPtzJIgo67j/XLw=="
@@ -387,12 +391,12 @@
         "integrity": "sha512-NtdlPPWtR5U4BxX5EGJYza+UklNaoWORmkaKCMqf/nyKeXWKVwNt8KfQoRpNT7OB1DcEwmePafO4wZyW+sbfCQ=="
       },
       "@playwright/test": {
-        "version": "1.61.1",
-        "integrity": "sha512-8nKv6+0RJSL9FE4jYOEGXnPeM/Hg12qZpmqzZjRh3qM0Y7c3z1mrOTfFLids72RDQYVh9WpLEfR5WdpNX4fkig=="
+        "version": "1.62.1",
+        "integrity": "sha512-DTcUc8qii+cpHvtOwggMtBRMjKZHXYWdw8syRYu2vtzuq4Wxphqq4NfCs5Zt44L6mA8rfDfj+PHnxFc/FeK6mQ=="
       },
       "@types/node": {
-        "version": "22.20.5",
-        "integrity": "sha512-U2+DNr+wSjpsTS/wZGYHq7GcwfuSmKiKvoPvK22zwTlRhU91yOniN4qRR5KhIjvif7ysw/dz/hKmfDH0Ris4aA=="
+        "version": "24.13.3",
+        "integrity": "sha512-Dh8vAsV36ig5wa9OX4pXvMc9D3Veibfw2wix0CUwYODLD8nkj9UsLjASr49nPg+2eKzxhBV+v7L8pXvT4e639Q=="
       },
       "@types/pg": {
         "version": "8.23.1",
