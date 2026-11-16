@@ -7,12 +7,16 @@ export async function appendAuthEvent(connection: Pick<PoolClient, 'query'>, dep
   await connection.query('INSERT INTO auth_security_events(id,deployment_id,actor_id,event,request_id,account_key,session_id,subject_user_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8)', [randomUUID(), deploymentId, context.actorId ?? null, event, context.requestId ?? randomUUID(), context.accountKey ?? null, context.sessionId ?? null, context.subjectUserId ?? null])
 }
 
-// Bind an attempted account at audit-write time to its immutable ID. A row
-// SHARE lock prevents a concurrent rename/delete from changing that attribution
-// before this transaction commits. Never infer historical ownership from HMACs.
+// Attribute at this INSERT statement's MVCC snapshot, not request start or
+// password-check time. An uncommitted rename still belongs to its old UUID;
+// a committed rename is observed as the new owner (or no owner). One statement
+// removes lookup/insert gaps without an account-row lock/timing oracle.
 export async function appendLoginAttempt(connection: Pick<PoolClient, 'query'>, deploymentId: string, event: 'login_failed' | 'login_throttled', usernameInput: unknown, context: AuthContext = {}) {
   let username: string | undefined
   try { username = normalizeUsername(usernameInput) } catch { /* Unknown/invalid subjects remain unassigned. */ }
-  const subject = username === undefined ? undefined : (await connection.query<{ id: string }>('SELECT id FROM users WHERE deployment_id=$1 AND username_normalized=$2 FOR SHARE', [deploymentId, username])).rows[0]
-  await appendAuthEvent(connection, deploymentId, event, { ...context, subjectUserId: subject?.id })
+  await connection.query(`INSERT INTO auth_security_events(id,deployment_id,actor_id,event,request_id,account_key,session_id,subject_user_id)
+    SELECT $1,$2,NULL,$3,$4,$5,NULL,u.id
+    FROM (VALUES (1)) AS attempt(singleton)
+    LEFT JOIN users u ON u.deployment_id=$2 AND u.username_normalized=$6`,
+    [randomUUID(), deploymentId, event, context.requestId ?? randomUUID(), context.accountKey ?? null, username ?? null])
 }

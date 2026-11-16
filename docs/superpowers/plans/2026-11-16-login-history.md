@@ -16,9 +16,9 @@ Username rename/reuse and concurrent change; stale credentials; cross deployment
 ## Tasks
 - [x] Add HTTP route contract tests; observe all three fail 404 before route implementation.
 - [x] Add real PostgreSQL ownership, rename/reuse, throttle, legacy omission, limits, stale credentials and privileges cases. Local execution lacks PostgreSQL and is not counted as pass.
-- [x] Add immutable failure/throttle subject attribution in `modules/auth/audit.ts`, with transactional users SHARE lock; wire sessions/throttle.
+- [x] Add immutable failure/throttle subject attribution in `modules/auth/audit.ts`, using one atomic MVCC INSERT…SELECT with no account-row locks; wire sessions/throttle.
 - [x] Add `0013_login_history.sql` and manifest; extend exact runtime function allowlist only.
 - [x] Add service and HTTP projection with fixed DTO and query rejection. Focused HTTP tests pass.
 - [x] Run Web/server typecheck and full Web unit suite.
-- [ ] Independent SQL/attribution/permission review, address findings.
+- [x] Independent initial SQL/attribution/permission review. Follow-up identified a known-account lock-timeout oracle; add real-PG RED regression and replace lock-based attribution with single-statement MVCC, pending final review and CI.
 - [ ] Publish isolated draft for real PostgreSQL and combined UI CI only after review; do not merge target or bypass parent blockers.

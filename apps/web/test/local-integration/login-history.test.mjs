@@ -53,7 +53,7 @@ test('history function denies cross deployment and invalid parameters and HTTP r
 })
 test('history function and HTTP reject revoked expired reset and changed-version credentials',async t=>{
  const f=await restrictedFixture(t)
- for(const clause of ['revoked_at=clock_timestamp()',"expires_at=clock_timestamp()-interval '1 second'","last_seen_at=clock_timestamp()-interval '9 hours'",'auth_version=auth_version+1']) {
+ for(const clause of ['revoked_at=clock_timestamp()',"created_at=clock_timestamp()-interval '2 days',expires_at=clock_timestamp()-interval '1 day'","last_seen_at=clock_timestamp()-interval '9 hours'",'auth_version=auth_version+1']) {
   const s=await f.sessions.login('alice',password);await f.ownerPool.query('UPDATE sessions SET '+clause+' WHERE id=$1',[s.sessionId])
   assert.equal((await f.app.inject({method:'GET',url,headers:headers(s.token)})).statusCode,401)
   await assert.rejects(()=>f.authPool.query('SELECT * FROM read_login_history($1,$2,$3)',[f.deploymentId,tokenHash(s.token),28800000]),{code:'28000'})
@@ -73,18 +73,21 @@ test('history grants only bounded function to auth, no table SELECT, no business
  assert.equal((await f.authPool.query("SELECT has_function_privilege(current_user,'read_login_history(uuid,text,bigint)','EXECUTE WITH GRANT OPTION') AS allowed")).rows[0].allowed,false)
 })
 
-test('failure attribution waits for concurrent rename and never assigns stale username ownership',async t=>{
+test('failure attribution uses one MVCC snapshot across uncommitted rename, commit and rollback',async t=>{
  const f=await restrictedFixture(t),owner=await f.ownerPool.connect()
- let attempted
  try {
   await owner.query('BEGIN');await owner.query('UPDATE users SET username_normalized=$1 WHERE id=$2',['alice-renamed',f.alice.user.id])
-  attempted=f.sessions.login('alice','wrong password').then(()=>({unexpected:true}),error=>({error}))
-  const deadline=Date.now()+4000
-  while(!(await f.admin.query("SELECT 1 FROM pg_stat_activity WHERE datname=$1 AND application_name=$2 AND wait_event_type='Lock'",[f.database,f.authPool.options.application_name])).rowCount){if(Date.now()>deadline)throw Error('Expected audit attribution lock wait');await new Promise(resolve=>setImmediate(resolve))}
-  await owner.query('COMMIT');assert.equal((await attempted).error?.statusCode,401)
-  assert.equal((await f.ownerPool.query("SELECT subject_user_id FROM auth_security_events WHERE event='login_failed'")).rows[0].subject_user_id,null)
-  assert.equal((await history(f)).filter(e=>e.outcome==='failure').length,0)
- } finally {await owner.query('ROLLBACK');owner.release();if(attempted)await attempted}
+  await failures(f,'alice') // The uncommitted rename is not visible to this statement.
+  assert.equal((await f.ownerPool.query("SELECT subject_user_id FROM auth_security_events WHERE event='login_failed'")).rows[0].subject_user_id,f.alice.user.id)
+  await owner.query('COMMIT')
+  await failures(f,'alice') // Name is no longer owned after commit.
+  await owner.query('BEGIN');await owner.query('UPDATE users SET username_normalized=$1 WHERE id=$2',['alice-temporary',f.alice.user.id])
+  await failures(f,'alice-renamed')
+  await owner.query('ROLLBACK')
+  const rows=(await f.ownerPool.query("SELECT subject_user_id FROM auth_security_events WHERE event='login_failed' ORDER BY created_at,id")).rows
+  assert.deepEqual(rows.map(row=>row.subject_user_id),[f.alice.user.id,null,f.alice.user.id])
+  assert.equal((await history(f)).filter(e=>e.outcome==='failure').length,2)
+ } finally {await owner.query('ROLLBACK');owner.release()}
 })
 
 test('known and unknown invalid credentials have the same response despite a locked account row',async t=>{
@@ -103,6 +106,24 @@ test('known and unknown invalid credentials have the same response despite a loc
   assert.equal(unknown.statusCode,401)
   // Prior FOR SHARE attribution returns 500 on the known account's lock timeout.
   assert.equal(known.statusCode,unknown.statusCode)
-  assert.deepEqual(known.json(),unknown.json())
+  const {requestId:knownRequestId,...knownBody}=known.json(),{requestId:unknownRequestId,...unknownBody}=unknown.json()
+  for(const [id,reply] of [[knownRequestId,known],[unknownRequestId,unknown]]){assert.match(id,/^[0-9a-f-]{36}$/);assert.equal(id,reply.headers['x-request-id'])}
+  assert.deepEqual(knownBody,unknownBody)
+  const events=(await f.ownerPool.query("SELECT subject_user_id FROM auth_security_events WHERE event='login_failed'")).rows
+  assert.equal(events.length,2);assert.equal(events.filter(e=>e.subject_user_id===f.alice.user.id).length,1);assert.equal(events.filter(e=>e.subject_user_id===null).length,1)
+ }finally{await owner.query('ROLLBACK');owner.release()}
+})
+
+test('known and unknown throttled accounts retain counters and one audit each while a user row is locked',async t=>{
+ const f=await restrictedFixture(t),owner=await f.ownerPool.connect(),throttle=createLoginThrottle(f.db,f.deploymentId,f.csrfKey,{accountMax:1,ipMax:20,globalMax:100})
+ await throttle.reserve('alice','192.0.2.10');await throttle.reserve('not-a-user','192.0.2.11')
+ try {
+  await owner.query('BEGIN');await owner.query('UPDATE users SET display_name=$1 WHERE id=$2',['locked',f.alice.user.id])
+  const results=await Promise.all([['alice','192.0.2.10'],['not-a-user','192.0.2.11']].map(args=>throttle.reserve(...args).then(()=>({unexpected:true}),error=>({status:error.statusCode}))))
+  assert.deepEqual(results,[{status:429},{status:429}])
+  const counters=(await f.ownerPool.query("SELECT attempts,strikes,blocked_until IS NOT NULL AS blocked FROM login_throttles WHERE kind='account'")).rows
+  assert.equal(counters.length,2);assert.ok(counters.every(c=>c.attempts===2&&c.strikes===1&&c.blocked))
+  const events=(await f.ownerPool.query("SELECT subject_user_id FROM auth_security_events WHERE event='login_throttled'")).rows
+  assert.equal(events.length,2);assert.equal(events.filter(e=>e.subject_user_id===f.alice.user.id).length,1);assert.equal(events.filter(e=>e.subject_user_id===null).length,1)
  }finally{await owner.query('ROLLBACK');owner.release()}
 })
