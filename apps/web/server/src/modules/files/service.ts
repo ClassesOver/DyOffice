@@ -1,3 +1,4 @@
+import { purgeFile } from './purge.ts'
 import { UNSUPPORTED_CAPABILITIES, type CapabilityCatalog } from '../../../../../../packages/web-contracts/src/host.ts'
 import { randomUUID } from 'node:crypto'
 import type { PoolClient } from 'pg'
@@ -8,6 +9,7 @@ import { validateFileName, validateUpload } from './validation.ts'
 import { uuid, scope, objectKey, openResult as unsupportedOpenResult, fileDto, lockAccount, lockUpload, loadFile, releaseReservation, runFileTransaction, type FileRow } from './queries.ts'
 import { assertLiveLease } from '../leases/queries.ts'
 import { authError } from '../auth/sessions.ts'
+import { reclaimAbandonedUploads } from './reclamation.ts'
 
 export interface FilePolicy { quotaBytes?: number; maxUploads?: number; uploadTtlMs?: number }
 
@@ -22,11 +24,20 @@ export function createFileService({ transactions, objects, quotaBytes = 1024 ** 
   const openResult = (row: FileRow) => ({ ...unsupportedOpenResult(row),capabilities: catalog })
   const service = {
     capabilities: catalog,
+    async reclaimAbandonedUploads(token: FileCredential) {
+      if (!objects.removeUnreferenced) return { reclaimedBytes: 0, reclaimedUploads: 0 }
+      // Commit expiry first; physical deletion cannot roll back. The collector
+      // only locks already-terminal rows and never terminalizes new rows.
+      await personal(token, 'files:write', (connection,principal) => lockAccount(connection,principal))
+      return personal(token, 'files:write', (connection,principal) => reclaimAbandonedUploads(connection,principal,objects))
+    },
     async stageUpload(token: FileCredential, metadata: { name: string; size: number }) {
       if (!metadata || typeof metadata !== 'object' || Object.keys(metadata).some(key => !['name','size'].includes(key))) throw authError(400)
       const name = metadata.name, format = validateFileName(name), size = metadata.size
       if (!Number.isSafeInteger(size) || size < 1) throw authError(400)
       if (size > MAX_OBJECT_BYTES) throw authError(413)
+      // Separate commit: quota reclamation survives a subsequent quota rejection.
+      await service.reclaimAbandonedUploads(token)
       return personal(token, 'files:write', async (connection, principal) => {
         const account = await lockAccount(connection, principal)
         if (account.reservedBytes + account.storedBytes + size > quotaBytes) throw authError(413)
@@ -85,7 +96,12 @@ export function createFileService({ transactions, objects, quotaBytes = 1024 ** 
         if (!published) await run(token, 'files:write', async (connection, principal) => {
           await lockAccount(connection, principal)
           const row = await lockUpload(connection, principal, id)
-          if (row.state === 'receiving' && row.attempt_id === attempt) await releaseReservation(connection, principal, row, 'cancelled')
+          if (row.state === 'receiving' && row.attempt_id === attempt) {
+            await releaseReservation(connection, principal, row, 'cancelled')
+            // Validation failed before putImmutable was invoked. Persist that
+            // proof; never clear attempts after an ambiguous storage operation.
+            await connection.query('UPDATE uploads SET attempt_id=NULL WHERE deployment_id=$1 AND owner_id=$2 AND id=$3',[...scope(principal),id])
+          }
         }).catch(() => {}) // Revoked authority may not mutate cleanup state; TTL later releases it.
         throw error
       }
@@ -101,7 +117,7 @@ export function createFileService({ transactions, objects, quotaBytes = 1024 ** 
           return openResult({ ...file, current_revision: row.revision_id, sha256: row.sha256!, size: row.expected_size })
         }
         if (row.state !== 'ready' || !row.sha256) throw authError(409)
-        await objects.readVerified({ key: objectKey(principal,row.revision_id), size: row.expected_size, sha256: row.sha256 })
+        await objects.verifyObject({ key: objectKey(principal,row.revision_id), size: row.expected_size, sha256: row.sha256 })
         await connection.query('INSERT INTO files(id,deployment_id,owner_id,workspace_id,name,format,current_revision) VALUES($1,$2,$3,$4,$5,$6,$7)', [row.file_id,...scope(principal),row.workspace_id,row.name,row.format,row.revision_id])
         await connection.query('INSERT INTO file_revisions(id,deployment_id,owner_id,file_id,object_key,sha256,size) VALUES($1,$2,$3,$4,$5,$6,$7)', [row.revision_id,...scope(principal),row.file_id,objectKey(principal,row.revision_id),row.sha256,row.expected_size])
         await connection.query("UPDATE uploads SET state='committed',completed_file_id=file_id WHERE deployment_id=$1 AND owner_id=$2 AND id=$3", [...scope(principal),id])
@@ -113,6 +129,7 @@ export function createFileService({ transactions, objects, quotaBytes = 1024 ** 
         return result
       })
     },
+    purgeFile: (token: FileCredential, fileId: string) => purgeFile(transactions,objects,token,fileId),
     async cancelUpload(token: FileCredential, uploadId: string) {
       const id = uuid(uploadId)
       return run(token, 'files:write', async (connection, principal) => {
@@ -137,7 +154,7 @@ export function createFileService({ transactions, objects, quotaBytes = 1024 ** 
       if (typeof trash !== 'boolean' || !Number.isSafeInteger(limit) || limit < 1 || limit > 100) throw authError(400)
       const after = cursor === undefined ? null : uuid(cursor)
       return personal(token, 'files:read', async (connection, principal) => {
-        const result = await connection.query<FileRow>('SELECT f.*,r.size,r.sha256 FROM files f JOIN file_revisions r ON r.deployment_id=f.deployment_id AND r.owner_id=f.owner_id AND r.file_id=f.id AND r.id=f.current_revision WHERE f.deployment_id=$1 AND f.owner_id=$2 AND (f.deleted_at IS NOT NULL)=$3 AND ($4::uuid IS NULL OR f.id>$4) ORDER BY f.id LIMIT $5', [...scope(principal),trash,after,limit + 1])
+        const result = await connection.query<FileRow>('SELECT f.*,r.size,r.sha256 FROM files f JOIN file_revisions r ON r.deployment_id=f.deployment_id AND r.owner_id=f.owner_id AND r.file_id=f.id AND r.id=f.current_revision WHERE f.deployment_id=$1 AND f.owner_id=$2 AND f.purge_started_at IS NULL AND (f.deleted_at IS NOT NULL)=$3 AND ($4::uuid IS NULL OR f.id>$4) ORDER BY f.id LIMIT $5', [...scope(principal),trash,after,limit + 1])
         return { files: result.rows.slice(0,limit).map(fileDto), nextCursor: result.rows.length > limit ? result.rows[limit - 1].id : null }
       })
     },

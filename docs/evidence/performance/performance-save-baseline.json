@@ -1,0 +1,184 @@
+{
+  "timestamp": "2026-11-16T10:31:15.744Z",
+  "node": "v24.22.1",
+  "objectBytes": 8568141,
+  "method": "Single disposable PostgreSQL database and RustFS bucket, real commit and hash verification. Sequential same-file saves alternating old collect/new verify, one warmup round then three samples each; same-owner lock waiter started at object I/O. Instrumented microbenchmark, not production p95/capacity. before/after memory is not peak; payload fixture and S3/DB resource use remain outside interpretation.",
+  "samples": [
+    {
+      "round": 0,
+      "warmup": true,
+      "mode": "collect",
+      "commitMs": 155.75747899999988,
+      "sameOwnerLockWaitMs": 151.53179199999977,
+      "verifyMs": 140.63113799999974,
+      "before": {
+        "rss": 318951424,
+        "heapTotal": 180781056,
+        "heapUsed": 42628384,
+        "external": 46146896,
+        "arrayBuffers": 35064279
+      },
+      "after": {
+        "rss": 350801920,
+        "heapTotal": 180781056,
+        "heapUsed": 44239344,
+        "external": 80437754,
+        "arrayBuffers": 69289561
+      }
+    },
+    {
+      "round": 0,
+      "warmup": true,
+      "mode": "verify",
+      "commitMs": 50.58444700000018,
+      "sameOwnerLockWaitMs": 46.687746999999945,
+      "verifyMs": 40.01646900000014,
+      "before": {
+        "rss": 356880384,
+        "heapTotal": 180023296,
+        "heapUsed": 43506520,
+        "external": 64208120,
+        "arrayBuffers": 53125463
+      },
+      "after": {
+        "rss": 358322176,
+        "heapTotal": 180547584,
+        "heapUsed": 44925456,
+        "external": 81345556,
+        "arrayBuffers": 70262899
+      }
+    },
+    {
+      "round": 1,
+      "warmup": false,
+      "mode": "verify",
+      "commitMs": 77.28500000000031,
+      "sameOwnerLockWaitMs": 73.43544100000054,
+      "verifyMs": 65.12725899999987,
+      "before": {
+        "rss": 388952064,
+        "heapTotal": 180547584,
+        "heapUsed": 46350112,
+        "external": 98567337,
+        "arrayBuffers": 87484680
+      },
+      "after": {
+        "rss": 406515712,
+        "heapTotal": 180781056,
+        "heapUsed": 47787264,
+        "external": 115704720,
+        "arrayBuffers": 104622063
+      }
+    },
+    {
+      "round": 1,
+      "warmup": false,
+      "mode": "collect",
+      "commitMs": 47.30039399999987,
+      "sameOwnerLockWaitMs": 43.18170099999952,
+      "verifyMs": 35.42753999999968,
+      "before": {
+        "rss": 430075904,
+        "heapTotal": 177029120,
+        "heapUsed": 37635232,
+        "external": 46142601,
+        "arrayBuffers": 35064169
+      },
+      "after": {
+        "rss": 430075904,
+        "heapTotal": 177029120,
+        "heapUsed": 38781584,
+        "external": 80416266,
+        "arrayBuffers": 69337834
+      }
+    },
+    {
+      "round": 2,
+      "warmup": false,
+      "mode": "collect",
+      "commitMs": 45.4265749999995,
+      "sameOwnerLockWaitMs": 41.61256300000059,
+      "verifyMs": 31.48501800000031,
+      "before": {
+        "rss": 415461376,
+        "heapTotal": 175734784,
+        "heapUsed": 35385248,
+        "external": 46141397,
+        "arrayBuffers": 35064169
+      },
+      "after": {
+        "rss": 415461376,
+        "heapTotal": 175734784,
+        "heapUsed": 36505464,
+        "external": 80415062,
+        "arrayBuffers": 69337834
+      }
+    },
+    {
+      "round": 2,
+      "warmup": false,
+      "mode": "verify",
+      "commitMs": 45.291909999999916,
+      "sameOwnerLockWaitMs": 41.515768999999636,
+      "verifyMs": 24.782593999999335,
+      "before": {
+        "rss": 380100608,
+        "heapTotal": 175734784,
+        "heapUsed": 35489336,
+        "external": 46141396,
+        "arrayBuffers": 35064168
+      },
+      "after": {
+        "rss": 380100608,
+        "heapTotal": 175734784,
+        "heapUsed": 36588472,
+        "external": 63278779,
+        "arrayBuffers": 52201551
+      }
+    },
+    {
+      "round": 3,
+      "warmup": false,
+      "mode": "verify",
+      "commitMs": 38.4115840000004,
+      "sameOwnerLockWaitMs": 34.69078500000069,
+      "verifyMs": 28.963545000000522,
+      "before": {
+        "rss": 363302912,
+        "heapTotal": 175734784,
+        "heapUsed": 35481912,
+        "external": 46206933,
+        "arrayBuffers": 35129705
+      },
+      "after": {
+        "rss": 363302912,
+        "heapTotal": 175996928,
+        "heapUsed": 36588104,
+        "external": 63344316,
+        "arrayBuffers": 52267088
+      }
+    },
+    {
+      "round": 3,
+      "warmup": false,
+      "mode": "collect",
+      "commitMs": 56.48819700000058,
+      "sameOwnerLockWaitMs": 52.80211000000054,
+      "verifyMs": 44.242526,
+      "before": {
+        "rss": 380039168,
+        "heapTotal": 175996928,
+        "heapUsed": 35773632,
+        "external": 46206931,
+        "arrayBuffers": 35129703
+      },
+      "after": {
+        "rss": 397078528,
+        "heapTotal": 175996928,
+        "heapUsed": 36948848,
+        "external": 80470057,
+        "arrayBuffers": 69392829
+      }
+    }
+  ]
+}

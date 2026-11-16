@@ -1,6 +1,7 @@
 import { createSheetsSaveService, type SheetsPlanner, type SheetsSaveNative } from './modules/sheets/save.ts'
 import { createSheetsService, type SheetsNative, type SheetsPackageReader } from './modules/sheets/service.ts'
 import { registerSheetsRoutes } from './modules/sheets/routes.ts'
+import { createReadinessProbe } from './readiness.ts'
 import { createStaticAssets } from '../static-assets.mjs'
 import { registerLocalShell } from './local-shell.ts'
 import type { FastifyInstance, HTTPMethods } from 'fastify'
@@ -83,7 +84,7 @@ export async function buildLocalApp(config: LocalWebConfig): Promise<FastifyInst
   const app = await createApiShell()
   if (config.localShellDirectory) await registerLocalShell(app,config.localShellDirectory)
   if (config.closeDb) app.addHook('onClose', () => config.closeDb!())
-  registerHealthRoutes(app, async () => { try { await assertReady(); return true } catch { return false } })
+  registerHealthRoutes(app, createReadinessProbe({ identityReady: assertReady, businessPool: config.businessPool, objectStore: config.objectStore }))
   const users = createUserService({ db: config.db, accounts, sessions, passwords, deploymentId: config.deploymentId })
   registerAuthRoutes(app, { sessions, csrf, throttle, users })
   registerUserRoutes(app, users, csrf)

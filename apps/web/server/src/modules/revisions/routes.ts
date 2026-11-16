@@ -23,10 +23,10 @@ export function registerRevisionRoutes(api: FastifyInstance, { leases, revisions
     await leases.releaseLease(token(request),fileId(request),request.body as { editorId: string; leaseEpoch: number })
     return reply.code(204).send()
   })
-  api.post('/api/v1/files/:id/uploads', { bodyLimit: 4096, schema: { params, querystring, body: object({ ...base, size: { type: 'integer', minimum: 1, maximum: MAX_OBJECT_BYTES } }) } }, async (request, reply) => {
+  api.post('/api/v1/files/:id/uploads', { bodyLimit: 4096, schema: { params, querystring, body: object({ ...base, size: { type: 'integer', minimum: 1, maximum: MAX_OBJECT_BYTES } }) } }, (request, reply) => transfer(request, reply, async () => {
     const upload = await revisions.stageUpload(token(request),fileId(request),request.body as { baseRevision: string; leaseEpoch: number; editorId: string; size: number })
     return reply.code(201).send(upload)
-  })
+  }))
   api.post('/api/v1/files/:id/restoration-uploads', { bodyLimit: 4096, schema: { params, querystring, body: object({ ...base, revision: id }) } }, (request, reply) => transfer(request,reply,async () => {
     const upload = await revisions.stageRestore(token(request),fileId(request),request.body as { revision: string; baseRevision: string; leaseEpoch: number; editorId: string })
     return reply.code(201).send(upload)

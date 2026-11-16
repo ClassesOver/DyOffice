@@ -225,3 +225,36 @@ test('only exact raw without worker is a text exemption',async t=>{
   const result=await checkWebBoundaries(root);assert.equal(result.violations.length,1,query)
  }
 })
+
+test('Vite glob code cannot bypass the browser dependency boundary', async t => {
+ const root=await mkdtemp(join(tmpdir(),'boundary-glob-'));t.after(()=>rm(root,{recursive:true,force:true}))
+ await mkdir(join(root,'apps/web/src'),{recursive:true});await mkdir(join(root,'apps/desktop'),{recursive:true})
+ await writeFile(join(root,'apps/desktop/helper.ts'),"import 'node:fs'")
+ for(const options of ['', ', { eager: true }', ", { query: '?raw', import: 'default' }"]) {
+  await writeFile(join(root,'apps/web/src/main.ts'),`const modules = import.meta.glob('../../desktop/*.ts'${options})`)
+  const result=await checkWebBoundaries(root)
+  assert.equal(result.violations.length,1)
+  assert.match(result.violations[0],/Unsupported Vite glob dependency/)
+ }
+})
+
+test('glob detection is AST-based and includes generic and legacy glob calls',()=>{
+ for(const source of ["import.meta.glob<string>('./*.md', {query:'?raw'})", "import.meta.globEager('./*.ts')", "import.meta.glob(pattern)"])
+  assert.match(inspectSource(source,'entry.ts')[0],/Unsupported Vite glob dependency/)
+ assert.deepEqual(inspectSource(`// import.meta.glob('./*.ts')\nconst text="import.meta.glob('./*.ts')"; other.glob('./*.ts')`,'entry.ts'),[])
+})
+
+test('transparent TypeScript and parenthesized glob expressions fail closed',()=>{
+ for(const source of [
+  "(import.meta.glob<string>)('./*.ts')",
+  "(import.meta).glob('./*.ts')",
+  "(import.meta.glob)('./*.ts')",
+  "import.meta.glob!('./*.ts')",
+  "(import.meta as any).glob('./*.ts')",
+  "(import.meta.glob as any)('./*.ts')",
+  "(import.meta.glob satisfies Function)('./*.ts')",
+  "(<any>import.meta).glob('./*.ts')",
+  "(<any>import.meta.glob)('./*.ts')",
+  "((import.meta as any)!.glob as any)!('./*.ts')",
+ ]) assert.match(inspectSource(source,'entry.ts')[0],/Unsupported Vite glob dependency/,source)
+})

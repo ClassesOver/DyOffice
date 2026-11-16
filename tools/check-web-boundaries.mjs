@@ -34,13 +34,30 @@ function literalSpecifier(node) {
   return null
 }
 
+// TypeScript/esbuild erase these wrappers before Vite sees glob calls.
+function unwrapExpression(node) {
+  while (node && (ts.isParenthesizedExpression(node) || ts.isAsExpression(node) ||
+      ts.isTypeAssertionExpression(node) || ts.isNonNullExpression(node) ||
+      ts.isSatisfiesExpression(node) || ts.isExpressionWithTypeArguments(node))) node = node.expression
+  return node
+}
+
 function imports(source, file) {
   const ast = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true)
   const found = []
   function visit(node) {
-    if ((ts.isImportDeclaration(node) && node.importClause?.isTypeOnly) ||
-        (ts.isExportDeclaration(node) && node.isTypeOnly) ||
-        (ts.isImportEqualsDeclaration(node) && node.isTypeOnly)) return
+    if ((ts.isImportDeclaration(node) && node.importClause?.isTypeOnly) || (ts.isExportDeclaration(node) && node.isTypeOnly) || (ts.isImportEqualsDeclaration(node) && node.isTypeOnly)) return
+    // Glob expansion is bundler-owned (patterns, negative patterns, queries and
+    // aliases). Until this gate implements that resolution, reject it rather
+    // than silently omitting executable dependencies. Raw globs also require
+    // explicit imports; no option-shaped exception can weaken this boundary.
+    const callee = ts.isCallExpression(node) ? unwrapExpression(node.expression) : undefined
+    const receiver = callee && ts.isPropertyAccessExpression(callee) ? unwrapExpression(callee.expression) : undefined
+    if (receiver && ts.isMetaProperty(receiver) &&
+        receiver.keywordToken === ts.SyntaxKind.ImportKeyword && receiver.name.text === 'meta' &&
+        ['glob', 'globEager'].includes(callee.name.text)) {
+      found.push({ specifier: null, mode: 'glob', line: ast.getLineAndCharacterOfPosition(node.getStart(ast)).line + 1 })
+    }
     let argument
     let mode = 'import'
     if (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) argument = node.moduleSpecifier
@@ -66,7 +83,9 @@ function imports(source, file) {
 
 export function inspectSource(source, file) {
   return [...new Set(imports(source, file).filter(({specifier}) => specifier === null || forbiddenSpecifier(specifier))
-    .map(({specifier, line}) => specifier === null
+    .map(({specifier, line, mode}) => mode === 'glob'
+      ? `${file}:${line}: Unsupported Vite glob dependency; use explicit literal imports`
+      : specifier === null
       ? `${file}:${line}: Unresolved dynamic browser dependency; use a literal import or explicit literal dispatch`
       : `${file}:${line}: browser code imports forbidden module ${specifier}`))]
 }
