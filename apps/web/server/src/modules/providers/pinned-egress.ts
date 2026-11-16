@@ -28,12 +28,12 @@ function url(value:string):URL {
  * created here; compose ONLY behind #74's unique durable dispatch gate.
  * IPv6 and broad special IPv4 ranges intentionally fail closed.
  */
-export function createPinnedProviderTransport({profiles,timeoutMs=30_000,maxConcurrent=8,maxResponseBytes=8*1024*1024}:{
- profiles:readonly EgressProfile[];timeoutMs?:number;maxConcurrent?:number;maxResponseBytes?:number
+export function createPinnedProviderTransport({profiles,timeoutMs=30_000,maxConcurrent=8,maxResponseBytes=8*1024*1024,authorizationTimeoutMs=5000}:{
+ profiles:readonly EgressProfile[];timeoutMs?:number;maxConcurrent?:number;maxResponseBytes?:number;authorizationTimeoutMs?:number
 }) {
  let approved:Readonly<EgressProfile>[]
  try{
-  if(!Array.isArray(profiles)||profiles.length>256||![timeoutMs,maxConcurrent,maxResponseBytes].every(Number.isSafeInteger)||timeoutMs<1||timeoutMs>120_000||maxConcurrent<1||maxConcurrent>64||maxResponseBytes<1||maxResponseBytes>32*1024*1024)throw fail()
+  if(!Array.isArray(profiles)||profiles.length>256||![timeoutMs,maxConcurrent,maxResponseBytes,authorizationTimeoutMs].every(Number.isSafeInteger)||authorizationTimeoutMs<1||authorizationTimeoutMs>5000||timeoutMs<1||timeoutMs>120_000||maxConcurrent<1||maxConcurrent>64||maxResponseBytes<1||maxResponseBytes>32*1024*1024)throw fail()
   approved=profiles.map((p:EgressProfile)=>{
    if(!p||Object.keys(p).length!==8||Object.keys(p).some(k=>![...profileFields,'allowedIpv4'].includes(k as typeof profileFields[number]))||
       profileFields.some(k=>k==='revision'?!Number.isSafeInteger(p[k])||p[k]<0:typeof p[k]!=='string'||!p[k]||p[k].length>2048))throw fail()
@@ -43,10 +43,8 @@ export function createPinnedProviderTransport({profiles,timeoutMs=30_000,maxConc
   })
  }catch{throw fail()}
  let active=0
- return {
-  activeCount:()=>active,
-  async send(scope:EgressScope,body:Uint8Array,onChunk:(chunk:Uint8Array)=>void|Promise<void>):Promise<void>{
-   let credential:Buffer|undefined,wire:Buffer|undefined
+ async function sendAuthorized(scope:Omit<EgressScope,'credential'>,body:Uint8Array,authorize:(write:(credential:Uint8Array)=>Promise<void>,signal:AbortSignal)=>Promise<void>,onChunk:(chunk:Uint8Array)=>void|Promise<void>):Promise<void>{
+   let wire:Buffer|undefined
    let request:ClientRequest|undefined,response:IncomingMessage|undefined
    let deadline:ReturnType<typeof setTimeout>|undefined
    let release=false,externalSignal:AbortSignal|undefined
@@ -67,13 +65,13 @@ export function createPinnedProviderTransport({profiles,timeoutMs=30_000,maxConc
     const suppliedSignal=scope?.signal
     if(!(suppliedSignal instanceof AbortSignal))throw fail()
     externalSignal=suppliedSignal
-    if(!scope||![scope.reservationId,scope.claimId,scope.turnId].every(v=>typeof v==='string'&&/^[A-Za-z0-9_-]{1,128}$/.test(v))||!(body instanceof Uint8Array)||body.byteLength>1024*1024||!body.byteLength||typeof onChunk!=='function'||externalSignal.aborted||active>=maxConcurrent)throw fail()
+    if(!scope||![scope.reservationId,scope.claimId,scope.turnId].every(v=>typeof v==='string'&&/^[A-Za-z0-9_-]{1,128}$/.test(v))||!(body instanceof Uint8Array)||body.byteLength>1024*1024||!body.byteLength||typeof onChunk!=='function'||typeof authorize!=='function'||externalSignal.aborted||active>=maxConcurrent)throw fail()
     // Only primitives/private snapshots survive the first await.
     const matches=approved.filter(p=>profileFields.every(k=>p[k]===scope[k]))
-    if(matches.length!==1||!(scope.credential instanceof Uint8Array)||scope.credential.byteLength<1||scope.credential.byteLength>8192||!/^[a-f0-9]{64}$/.test(scope.requestDigest))throw fail()
+    if(matches.length!==1||!/^[a-f0-9]{64}$/.test(scope.requestDigest))throw fail()
     const profile=matches[0]!,target=url(profile.endpoint)
-    wire=Buffer.from(body);credential=Buffer.from(scope.credential)
-    if(credential.some(b=>b<33||b>126)||createHash('sha256').update(wire).digest('hex')!==scope.requestDigest)throw fail()
+    wire=Buffer.from(body)
+    if(createHash('sha256').update(wire).digest('hex')!==scope.requestDigest)throw fail()
     const text=new TextDecoder('utf-8',{fatal:true}).decode(wire),payload=JSON.parse(text)
     if(!payload||typeof payload!=='object'||Array.isArray(payload)||JSON.stringify(payload)!==text||payload.model!==profile.model||payload.stream!==true)throw fail()
     active++;release=true
@@ -83,10 +81,12 @@ export function createPinnedProviderTransport({profiles,timeoutMs=30_000,maxConc
     const answers=await step(()=>dns.lookup(target.hostname,{all:true,verbatim:true}))
     if(!answers.length||answers.length>64||answers.some(a=>a.family!==4||!publicIpv4(a.address)||!profile.allowedIpv4.includes(a.address)))throw fail()
     const pinned=answers[0]!.address
-    let verified=false
     response=await step(()=>new Promise<IncomingMessage>((resolve,reject)=>{
-     let finished=false,received:IncomingMessage|undefined
-     const complete=()=>{if(finished&&received)resolve(received)}
+     let finished=false,received:IncomingMessage|undefined,authorized=false
+     let resolveFlush!:()=>void,rejectFlush!:()=>void
+     const flushed=new Promise<void>((res,rej)=>{resolveFlush=res;rejectFlush=()=>rej(fail())})
+     void flushed.catch(()=>{})
+     const complete=()=>{if(finished&&received&&authorized)resolve(received)}
      const options:https.RequestOptions & {autoSelectFamily:boolean}={
       method:'POST',agent:false,family:4,autoSelectFamily:false,
       servername:target.hostname,rejectUnauthorized:true,maxHeaderSize:16*1024,
@@ -95,22 +95,45 @@ export function createPinnedProviderTransport({profiles,timeoutMs=30_000,maxConc
        if(typeof options==='object'&&options?.all)(callback as Function)(null,[{address:pinned,family:4}])
        else (callback as Function)(null,pinned,4)
       },
-      headers:{'content-type':'application/json','accept':'text/event-stream','content-length':wire!.length,'authorization':'Bearer '+credential!.toString('ascii')},
+      headers:{'content-type':'application/json','accept':'text/event-stream','content-length':wire!.length},
      }
+     let verifiedSocket:TLSSocket|undefined
+     const peerValid=()=>Boolean(verifiedSocket&&request?.socket===verifiedSocket&&!verifiedSocket.destroyed&&verifiedSocket.writable&&verifiedSocket.authorized&&verifiedSocket.remoteAddress===pinned&&verifiedSocket.remotePort===443)
      request=https.request(target,options,res=>{
-      res.on('error',()=>{}) // Destruction before iteration must not escape as an unhandled error.
-      if(control.signal.aborted||!verified){res.destroy();reject(fail());return}
+      res.on('error',()=>{})
+      if(control.signal.aborted||!verifiedSocket){res.destroy();reject(fail());return}
       response=res;received=res;complete()
      })
-     request.once('finish',()=>{finished=true;complete()})
-     request.on('error',()=>reject(fail()))
+     request.once('finish',()=>{finished=true;resolveFlush();complete()})
+     request.on('error',()=>{rejectFlush();reject(fail())})
+     request.once('close',()=>{if(!finished){rejectFlush();reject(fail())}})
      request.once('socket',socket=>{
       const tls=socket as TLSSocket
       tls.once('secureConnect',()=>{
-       if(control.signal.aborted||!tls.authorized||tls.remoteAddress!==pinned||tls.remotePort!==443){request?.destroy(fail());reject(fail());return}
-       verified=true
-       // No flushHeaders/write/end occurs before verified TLS peer.
-       request!.end(wire)
+       verifiedSocket=tls
+       if(control.signal.aborted||!peerValid()){request?.destroy(fail());reject(fail());return}
+       let activeWriter=true,used=false,written=false
+       const phaseDeadline=setTimeout(stop,authorizationTimeoutMs)
+       const write=async(value:Uint8Array):Promise<void>=>{
+        let key:Buffer|undefined
+        try{
+         if(!activeWriter||used||control.signal.aborted||!peerValid()||!(value instanceof Uint8Array)||value.byteLength<1||value.byteLength>8192)throw fail()
+         used=true;key=Buffer.from(value)
+         if(key.some(b=>b<33||b>126))throw fail()
+         request!.setHeader('authorization','Bearer '+key.toString('ascii'))
+         request!.end(wire)
+         await Promise.race([flushed,stopped])
+         if(control.signal.aborted)throw fail()
+         written=true
+        }catch{stop();throw fail()}
+        finally{key?.fill(0)}
+       }
+       // The trusted authority callback may hold a short DB transaction only
+       // across this single flush. Do not deliver early responses before commit.
+       void step(async()=>{
+        try{await authorize(write,control.signal);if(!written||control.signal.aborted)throw fail()}
+        finally{activeWriter=false;clearTimeout(phaseDeadline)}
+       }).then(()=>{authorized=true;complete()},()=>{activeWriter=false;clearTimeout(phaseDeadline);stop();reject(fail())})
       })
      })
     }))
@@ -134,11 +157,26 @@ export function createPinnedProviderTransport({profiles,timeoutMs=30_000,maxConc
     externalSignal?.removeEventListener('abort',stop)
     control.abort();control.signal.removeEventListener('abort',abort)
     request?.destroy();response?.destroy()
-    credential?.fill(0);wire?.fill(0)
+    wire?.fill(0)
     // OS DNS and trusted callback work may ignore cancellation. Retain capacity
     // until actual work settles, not merely until the caller observes timeout.
     if(release){if(pending.size)void Promise.allSettled([...pending]).then(()=>{active--});else active--}
    }
+  }
+ return {
+  activeCount:()=>active,
+  sendAuthorized,
+  /** Legacy explicit server-only entry. Pipeline must use sendAuthorized so
+   * no credential transaction spans DNS/TLS or response streaming. */
+  async send(scope:EgressScope,body:Uint8Array,onChunk:(chunk:Uint8Array)=>void|Promise<void>){
+   let key:Buffer|undefined
+   try{
+    if(!(scope?.credential instanceof Uint8Array)||scope.credential.length<1||scope.credential.length>8192)throw fail()
+    key=Buffer.from(scope.credential)
+    if(key.some(b=>b<33||b>126))throw fail()
+    await sendAuthorized(scope,body,write=>write(key!),onChunk)
+   }catch{throw fail()}
+   finally{key?.fill(0)}
   },
  }
 }

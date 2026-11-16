@@ -5,6 +5,10 @@ const MAX_SSE_EVENT_BYTES = 256 * 1024
 export interface SseTransportOptions {
   /** Origin-relative path only: no query, fragment, controls or redirects. */
   endpoint?: string
+  /** Server configuration identifier only, never a provider URL or secret. */
+  modelId?: string
+  /** Session CSRF proof from the same-origin authenticated session. */
+  getCsrfToken?: () => Promise<string>
   /** Absolute turn deadline, including headers and body. */
   timeoutMs?: number
   fetchImpl?: typeof fetch
@@ -20,6 +24,7 @@ export function createSseAgentTransport(options: SseTransportOptions = {}): Agen
   }
   const timeoutMs = options.timeoutMs ?? 120_000
   if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0 || timeoutMs > 2_147_483_647) throw new Error('Invalid AI stream timeout')
+  if (options.modelId !== undefined && !/^[A-Za-z0-9_-]{1,128}$/.test(options.modelId)) throw new Error('Invalid model identifier')
   const fetchImpl = options.fetchImpl ?? fetch
   const createTurnId = options.createTurnId ?? (() => crypto.randomUUID())
   return {
@@ -31,20 +36,24 @@ export function createSseAgentTransport(options: SseTransportOptions = {}): Agen
       let deadline: ReturnType<typeof setTimeout> | undefined
       let reader: ReadableStreamDefaultReader<Uint8Array> | undefined
       let cancellationSent = false
+      let csrfProof: string | undefined
+      let dispatched = false
       const requestCancellation = () => {
-        if (cancellationSent) return
+        if (cancellationSent || !dispatched) return
         cancellationSent = true
         // Best effort only; the server must also impose its own deadline.
         try { void fetchImpl(endpoint + '/' + encodeURIComponent(turnId) + '/cancel', {
           method: 'POST', credentials: 'same-origin', mode: 'same-origin', redirect: 'error',
+          headers: csrfProof ? { 'x-csrf-token': csrfProof } : undefined,
         }).catch(() => {}) } catch { /* cancellation remains best effort */ }
       }
       const finish = (error?: string) => {
         if (finished) return
         finished = true
         clearTimeout(deadline)
-        if (error && !cancelled) callbacks.onError(error)
-        callbacks.onDone()
+        // Observer failures cannot suppress terminal delivery or stream cleanup.
+        try { if (error && !cancelled) callbacks.onError(error) } catch { /* UI observer */ }
+        try { callbacks.onDone() } catch { /* UI observer */ }
       }
       const emit = (event: string, raw: string) => {
         if (finished) return
@@ -55,9 +64,17 @@ export function createSseAgentTransport(options: SseTransportOptions = {}): Agen
         else if (event === 'reasoning' && typeof data.text === 'string') callbacks.onReasoning?.(data.text)
         else if (event === 'tool_call') {
           if (typeof data.id !== 'string' || typeof data.name !== 'string' || !data.input || typeof data.input !== 'object' || Array.isArray(data.input)) throw new Error('Invalid complete tool call')
-          callbacks.onToolCall(data as unknown as AgentToolCall)
+          callbacks.onToolCall({ id: data.id, name: data.name, input: data.input } as AgentToolCall)
         } else if (event === 'phase' && typeof data.kind === 'string') callbacks.onPhase?.(data as unknown as Parameters<NonNullable<AgentStreamCallbacks['onPhase']>>[0])
-        else if (event === 'usage') callbacks.onUsage?.(data as AgentTokenUsage)
+        else if (event === 'usage') {
+          const usage: AgentTokenUsage = {}
+          for (const key of ['inputTokens','outputTokens','cacheReadTokens','cacheWriteTokens'] as const) {
+            const value = data[key]
+            if (value !== undefined && (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0)) throw new Error('Invalid token usage')
+            if (value !== undefined) usage[key] = value as number
+          }
+          callbacks.onUsage?.(usage)
+        }
         else if (event === 'stop_reason' && typeof data.reason === 'string') callbacks.onStopReason?.(data.reason)
         else if (event === 'error') finish(typeof data.message === 'string' ? data.message : 'AI stream failed')
         else if (event === 'done') finish()
@@ -71,11 +88,17 @@ export function createSseAgentTransport(options: SseTransportOptions = {}): Agen
       }, timeoutMs)
       void (async () => {
         try {
+          if (options.getCsrfToken) {
+            csrfProof = await options.getCsrfToken()
+            if (typeof csrfProof !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(csrfProof)) throw new Error('Invalid CSRF proof')
+          }
+          if (finished || controller.signal.aborted) return
+          dispatched = true
           const response = await fetchImpl(endpoint, {
             method: 'POST',
             credentials: 'same-origin', mode: 'same-origin', redirect: 'error',
-            headers: { Accept: 'text/event-stream', 'Content-Type': 'application/json' },
-            body: JSON.stringify({ turnId, request: { system: request.system, messages: request.messages, tools: request.tools } }),
+            headers: { Accept: 'text/event-stream', 'Content-Type': 'application/json', ...(csrfProof ? { 'x-csrf-token': csrfProof } : {}) },
+            body: JSON.stringify({ turnId, ...(options.modelId === undefined ? {} : { modelId: options.modelId }), request: { system: request.system, messages: request.messages, tools: request.tools } }),
             signal: controller.signal,
           })
           if (!response.ok) throw new Error('AI stream HTTP ' + response.status)

@@ -9,7 +9,7 @@ import {createPinnedProviderTransport} from '../../server/src/modules/providers/
 const body=Buffer.from('{"model":"synthetic","stream":true}')
 const profile={deploymentId:'dep',entryId:'entry',revision:1,providerId:'openai',model:'synthetic',baseUrl:'https://provider.example/v1',endpoint:'https://provider.example/v1/chat/completions',allowedIpv4:['8.8.8.8']}
 const scope=()=>({...profile,credential:Buffer.from('synthetic-key'),requestDigest:createHash('sha256').update(body).digest('hex'),turnId:'turn',reservationId:'reservation',claimId:'claim',signal:new AbortController().signal})
-function network(t,{addresses=[{address:'8.8.8.8',family:4}],status=200,headers={'content-type':'text/event-stream'},chunks=[Buffer.from('data: test\n\n')],peer='8.8.8.8',authorized=true,port=443,finishGate}={}){
+function network(t,{addresses=[{address:'8.8.8.8',family:4}],status=200,headers={'content-type':'text/event-stream'},chunks=[Buffer.from('data: test\n\n')],peer='8.8.8.8',authorized=true,port=443,finishGate,secureGate}={}){
  let options,written,requests=0,flushes=0;const sockets=[]
  t.mock.method(dns,'lookup',async()=>addresses)
  t.mock.method(https,'request',(url,opts,cb)=>{
@@ -17,9 +17,10 @@ function network(t,{addresses=[{address:'8.8.8.8',family:4}],status=200,headers=
   const req=new EventEmitter()
   req.destroy=e=>{queueMicrotask(()=>req.emit('error',e??Error('closed')));return req}
   req.flushHeaders=()=>{flushes++}
+  req.setHeader=(name,value)=>{options.headers[name]=value;return req}
   req.end=b=>{written=Buffer.from(b);const res=Readable.from(chunks);res.statusCode=status;res.headers=headers;queueMicrotask(()=>{if(!finishGate)req.emit('finish');cb(res)});if(finishGate)finishGate.then(()=>req.emit('finish'));return req}
-  const socket=new EventEmitter();Object.assign(socket,{authorized,remoteAddress:peer,remotePort:port});sockets.push(socket)
-  queueMicrotask(()=>{req.emit('socket',socket);socket.emit('secureConnect')})
+  const socket=new EventEmitter();Object.assign(socket,{authorized,remoteAddress:peer,remotePort:port,destroyed:false,writable:true});sockets.push(socket)
+  queueMicrotask(()=>{req.socket=socket;req.emit('socket',socket);if(secureGate)secureGate.then(()=>socket.emit('secureConnect'));else socket.emit('secureConnect')})
   return req
  })
  return {get options(){return options},get written(){return written},get requests(){return requests},get flushes(){return flushes},sockets}
@@ -114,4 +115,38 @@ for(const text of ['{"model":"other","stream":true}','{"model":"synthetic","stre
  const n=network(t),wire=Buffer.from(text),s={...scope(),requestDigest:createHash('sha256').update(wire).digest('hex')}
  await assert.rejects(createPinnedProviderTransport({profiles:[profile]}).send(s,wire,()=>{}),{message:'Provider transport unavailable'})
  assert.equal(n.requests,0)
+})
+test('authorized writer is invoked only after TLS and does not reveal a header in preconnection',async t=>{
+ const gate=deferred(),n=network(t,{secureGate:gate.promise}),tr=createPinnedProviderTransport({profiles:[profile]});let authorized=false
+ assert.equal(typeof tr.sendAuthorized,'function')
+ const work=tr.sendAuthorized(scope(),body,async write=>{authorized=true;await write(Buffer.from('synthetic-key'))},()=>{})
+ await tick();assert.equal(authorized,false);assert.equal(n.options.headers.authorization,undefined);assert.equal(n.written,undefined)
+ gate.resolve();await work;assert.equal(authorized,true);assert.equal(n.options.headers.authorization,'Bearer synthetic-key')
+})
+test('post-TLS authority failure writes no header/body and reveals no cause',async t=>{
+ const n=network(t),tr=createPinnedProviderTransport({profiles:[profile]})
+ await assert.rejects(tr.sendAuthorized(scope(),body,async()=>{throw Error('private-key')},()=>{}),{message:'Provider transport unavailable'})
+ assert.equal(n.written,undefined);assert.equal(n.options.headers.authorization,undefined)
+})
+test('early200 cannot reach chunks until final authorization succeeds',async t=>{
+ network(t);const gate=deferred(),started=deferred(),tr=createPinnedProviderTransport({profiles:[profile]});let chunks=0
+ const work=tr.sendAuthorized(scope(),body,async write=>{await write(Buffer.from('synthetic-key'));started.resolve();await gate.promise;throw Error('late-final-auth')},()=>{chunks++})
+ await started.promise;await tick();assert.equal(chunks,0);gate.resolve()
+ await assert.rejects(work);assert.equal(chunks,0)
+})
+test('writer capability expires when callback returns and cannot be invoked later',async t=>{
+ const n=network(t),tr=createPinnedProviderTransport({profiles:[profile]});let saved
+ await assert.rejects(tr.sendAuthorized(scope(),body,async write=>{saved=write},()=>{}))
+ await assert.rejects(saved(Buffer.from('synthetic-key')));assert.equal(n.written,undefined)
+})
+test('authorization timeout revokes late writer while retaining pending callback capacity',async t=>{
+ const n=network(t),tr=createPinnedProviderTransport({profiles:[profile],authorizationTimeoutMs:10}),gate=deferred(),started=deferred();let rejected=false
+ const work=tr.sendAuthorized(scope(),body,async write=>{started.resolve();await gate.promise;await assert.rejects(write(Buffer.from('synthetic-key')));rejected=true},()=>{})
+ await started.promise;await assert.rejects(work);assert.equal(tr.activeCount(),1);assert.equal(n.written,undefined)
+ gate.resolve();await tick();assert.equal(rejected,true);assert.equal(tr.activeCount(),0);assert.equal(n.written,undefined)
+})
+test('writer refuses a replaced or closed socket after authorization began',async t=>{
+ const n=network(t),tr=createPinnedProviderTransport({profiles:[profile]})
+ await assert.rejects(tr.sendAuthorized(scope(),body,async write=>{n.sockets[0].destroyed=true;await write(Buffer.from('synthetic-key'))},()=>{}))
+ assert.equal(n.written,undefined)
 })
