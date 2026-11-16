@@ -1,5 +1,5 @@
 import { openPptx, savePptx, type OpenedPptx } from '@genoffice/pptx-engine'
-import { runTxn, type Op } from '@genoffice/pptx-ops'
+import { runTxn, elementDurableId, slideDurableId, type Op } from '@genoffice/pptx-ops'
 import { buildRenderSlide, type RenderSlide } from '@genoffice/pptx-render'
 import { assertZipInflatesWithinLimits } from '@genoffice/zip-gate'
 
@@ -7,7 +7,15 @@ import { assertZipInflatesWithinLimits } from '@genoffice/zip-gate'
  * No network, filesystem paths, global session registry or persistent save acknowledgements.
  * Caller must close handles and provide isolation/quotas before any untrusted deployment.
  */
+export interface PptxSelection {
+  generation: number
+  slide: {index: number; id: string | undefined}
+  element?: {id: string; type: string}
+}
 export interface PptxSession {
+  undo(expectedGeneration: number, signal?: AbortSignal): Promise<{generation:number}>
+  redo(expectedGeneration: number, signal?: AbortSignal): Promise<{generation:number}>
+  selection(expectedGeneration: number, slide: number, elementId?: string, signal?: AbortSignal): Promise<PptxSelection>
   apply(expectedGeneration: number, ops: unknown, signal?: AbortSignal): Promise<{generation:number}>
   render(expectedGeneration: number, slide: number, signal?: AbortSignal): Promise<RenderSlide>
   exportBytes(expectedGeneration: number, signal?: AbortSignal): Promise<{generation:number;bytes:Uint8Array}>
@@ -58,6 +66,33 @@ export async function createPptxSession(bytes: Uint8Array, signal?: AbortSignal)
   aborted(signal)
   let opened: OpenedPptx | undefined=await openPptx(input)
   aborted(signal)
+  type Snapshot = {slides: OpenedPptx['deck']['slides']; size: OpenedPptx['deck']['size']; entries: Map<string, Uint8Array>; cost: number}
+  // Conservative logical retention budget, not a process/RSS memory limit.
+  const MAX_HISTORY = 8
+  const MAX_HISTORY_BYTES = 64 * 1024 * 1024
+  const past: Snapshot[] = [], future: Snapshot[] = []
+  function historyCost(state: OpenedPptx): number {
+    let cost = new TextEncoder().encode(JSON.stringify(state.deck.slides)).byteLength
+    for (const [name, bytes] of state.archive.entries) cost += bytes.byteLength + new TextEncoder().encode(name).byteLength
+    if (cost > MAX_HISTORY_BYTES) throw new Error('HISTORY_LIMIT')
+    return cost
+  }
+  function snapshot(state: OpenedPptx): Snapshot {
+    const cost=historyCost(state)
+    return {slides: structuredClone(state.deck.slides), size: {...state.deck.size}, entries: new Map(state.archive.entries), cost}
+  }
+  function retain(stack: Snapshot[], value: Snapshot) {
+    stack.push(value)
+    while (past.length + future.length > MAX_HISTORY || [...past,...future].reduce((n,s)=>n+s.cost,0)>MAX_HISTORY_BYTES) {
+      // Evict the farthest undo point first; then the farthest redo point.
+      if (past.length) past.shift(); else future.shift()
+    }
+  }
+  function restore(state: OpenedPptx, value: Snapshot) {
+    state.deck.slides=value.slides; state.deck.size=value.size
+    state.archive.entries.clear()
+    for (const [name, bytes] of value.entries) state.archive.entries.set(name,bytes)
+  }
   let generation=0
   let queue: Promise<unknown>=Promise.resolve()
   let pending=0
@@ -76,12 +111,43 @@ export async function createPptxSession(bytes: Uint8Array, signal?: AbortSignal)
     queue=result.then(()=>{pending--},()=>{pending--})
     return result
   }
+  function travel(expected: number, signal: AbortSignal | undefined, from: Snapshot[], to: Snapshot[]) {
+    return enqueue(expected,signal,state=>{
+      if (!from.length) throw new Error('HISTORY_EMPTY')
+      const current=snapshot(state)
+      const target=from.pop()!
+      restore(state,target)
+      retain(to,current)
+      generation++
+      return {generation}
+    })
+  }
   return {
+    undo(expected,signal) {return travel(expected,signal,past,future)},
+    redo(expected,signal) {return travel(expected,signal,future,past)},
+    selection(expected,slide,elementId,signal) {
+      return enqueue(expected,signal,state=>{
+        if (!Number.isSafeInteger(slide) || slide<0 || slide>=state.deck.slides.length) throw new Error('INVALID_SLIDE')
+        const selected=state.deck.slides[slide]!
+        const context: PptxSelection={generation,slide:{index:slide,id:slideDurableId(selected)}}
+        if (elementId!==undefined) {
+          if (typeof elementId!=='string' || !elementId || elementId.length>256) throw new Error('INVALID_ELEMENT')
+          const element=selected.elements.find(e=>elementDurableId(e)===elementId)
+          if (!element) throw new Error('INVALID_ELEMENT')
+          context.element={id:elementId,type:element.type}
+        }
+        return context
+      })
+    },
     async apply(expected, ops, signal) {
       const captured=captureOps(ops)
       return enqueue(expected,signal,state=>{
+        const before=snapshot(state)
         const result=runTxn(state,{isolation:'atomic',ops:captured})
         if (!result.applied) throw new Error('OP_REJECTED')
+        try { historyCost(state) } catch (error) { restore(state,before); throw error }
+        future.length=0
+        retain(past,before)
         generation++
         return {generation}
       })
@@ -101,6 +167,6 @@ export async function createPptxSession(bytes: Uint8Array, signal?: AbortSignal)
         return {generation,bytes}
       })
     },
-    close() { opened=undefined },
+    close() { opened=undefined; past.length=0; future.length=0 },
   }
 }
