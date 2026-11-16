@@ -23,5 +23,14 @@ export function decodeHostEvent(raw: string): HostEvent {
       !v.payload || typeof v.payload !== 'object' || Array.isArray(v.payload)) {
     throw new HostError('INVALID_RESPONSE', 'Host event has missing or invalid fields')
   }
-  return v as unknown as HostEvent
+  // Only the documented transport envelope crosses this boundary. Payload
+  // semantics/redaction belong to the per-event producer/consumer (T17).
+  return {
+    protocolVersion: HOST_PROTOCOL_VERSION,
+    messageId: v.messageId as string,
+    sessionId: v.sessionId as string,
+    fileId: v.fileId as string,
+    type: v.type as HostEventType,
+    payload: v.payload as Record<string, unknown>,
+  }
 }

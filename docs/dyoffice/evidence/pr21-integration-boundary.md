@@ -1,6 +1,6 @@
 # PR #21 integration boundary
 
-This candidate combines `feat/dyoffice-web` at `9410065e1cfb3be421c30b9e3a846c5477dbb606`
+This candidate combines `feat/dyoffice-web` at `26ee881ea626f5704fc2e532fd65b852117d68f6`
 with PR #21 at `bdaee1b3a5f44c1b7418cf4a9d6c12f4c3b3cca0`.
 It is not a database migration from the legacy stack and does not authorize production.
 
@@ -49,3 +49,8 @@ merge this candidate as a validated local-account editor.
 PR #29 PDF viewer is preserved. Shared static serving retains both its PDF CSP/MIME
 changes and the native-entry page/asset-inventory/cache-policy options; this is an
 explicit three-way resolution, not a whole-file replacement.
+
+T01 contract closure from PR #31 is merged without removing the native open-file name
+field. Full root tests reached html2docx after DOCX/PPTX engine suites passed, but
+its features/page-background suites could not launch Chromium because this executor
+refuses its process-singleton socket. That local full-suite run is not green.
