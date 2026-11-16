@@ -133,6 +133,7 @@ export function createHttpCommandClient({
           'applied_uncommitted',
           'committed',
           'cancelled',
+          'abandoned_uncommitted',
         ].includes(r.state)
       )
         throw Error('Invalid command response')

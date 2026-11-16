@@ -27,7 +27,7 @@ test('v19 upgrades to command journal without rewriting ACK, T05, T12 or session
   })
   const after = (await f.ownerPool.query('SELECT * FROM identity_migrations ORDER BY version')).rows
   assert.deepEqual(after.slice(0, 19), before)
-  assert.equal(after.at(-1).version, 20)
+  assert.equal(after.at(-1).version, 22)
   assert.deepEqual(await read(f.ownerPool), functions)
   await f.ownerDb.migrate()
   assert.deepEqual(
