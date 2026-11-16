@@ -1778,7 +1778,27 @@ function AiStatusPill({ status }: { status: AiStatus | null }) {
   )
 }
 
+export interface WebSettingsPreferences {
+  theme: UiTheme
+  language: 'zh' | 'en'
+  authorName: string
+  autoSave: boolean
+  showAssistant: boolean
+}
+export interface WebSettingsAdapter {
+  account: ReactNode
+  load(): Promise<WebSettingsPreferences>
+  save(patch: Partial<WebSettingsPreferences>): Promise<WebSettingsPreferences>
+}
+function SettingsFields({ web, disabled, children }: { web: boolean; disabled: boolean; children: ReactNode }) {
+  return web ? <fieldset disabled={disabled} className="set-web-fields">{children}</fieldset> : <>{children}</>
+}
+function SettingsCapability({ unavailable, children }: { unavailable: boolean; children: ReactNode }) {
+  return unavailable ? <fieldset disabled className="set-web-unavailable"><legend>此 Web 版本尚未提供</legend>{children}</fieldset> : <>{children}</>
+}
 export interface SettingsModalProps {
+  /** Optional Web-only capability adapter; desktop behavior remains the default. */
+  web?: WebSettingsAdapter
   status: AccountStatus | null
   loggingOut: boolean
   /** browser sign-in in progress (spinner shows on the account entry) */
@@ -1802,6 +1822,7 @@ export interface SettingsModalProps {
 }
 
 export function SettingsModal({
+  web,
   status,
   loggingOut,
   loginWaiting,
@@ -1818,6 +1839,9 @@ export function SettingsModal({
   target,
 }: SettingsModalProps) {
   const { lang, setLang, t } = useI18n()
+  const [webError, setWebError] = useState('')
+  const [webBusy, setWebBusy] = useState(Boolean(web))
+  const [webReady, setWebReady] = useState(!web)
   const [section, setSection] = useState<SectionId>(target?.section ?? 'account')
   const navRef = useRef<HTMLElement | null>(null)
   const navPill = useSlidingIndicator(navRef, '.set-nav-item.active', section)
@@ -1847,8 +1871,35 @@ export function SettingsModal({
   const [githubStars, setGithubStars] = useState<number | null>(null)
   const [updateState, setUpdateState] = useState<UpdateUiState | null>(null)
 
+  const applyWebPreferences = (prefs: WebSettingsPreferences) => {
+    setTheme(prefs.theme)
+    setAuthorName({ value: prefs.authorName || '', fallback: '' })
+    setAutoSaveOn(prefs.autoSave)
+    setAiPrefs(prev => ({ ...prev, showAiSidebar: prefs.showAssistant }))
+  }
+  const saveWebPreferences = async (patch: Partial<WebSettingsPreferences>) => {
+    if (!web || webBusy) return
+    setWebBusy(true)
+    setWebError('')
+    try {
+      const prefs = await web.save(patch)
+      applyWebPreferences(prefs)
+      if (patch.theme) {
+        if (prefs.theme === 'system') document.documentElement.removeAttribute('data-theme')
+        else document.documentElement.setAttribute('data-theme', prefs.theme)
+      }
+    } catch (error) {
+      setWebError(error instanceof Error ? error.message : '设置未保存')
+    } finally { setWebBusy(false) }
+  }
   useEffect(() => {
     let alive = true
+    if (web) {
+      void web.load().then(prefs => { if (alive) { applyWebPreferences(prefs); setWebReady(true) } })
+        .catch(error => { if (alive) setWebError(error instanceof Error ? error.message : '设置加载失败') })
+        .finally(() => { if (alive) setWebBusy(false) })
+      return () => { alive = false }
+    }
     void window.aiOffice.getTheme?.().then((th) => {
       if (alive) setTheme(th)
     })
@@ -1919,6 +1970,7 @@ export function SettingsModal({
 
   // live update state: the About row offers the update as soon as one is known
   useEffect(() => {
+    if (web) return
     const off = window.aiOffice.onUpdateStateChanged?.((s) => setUpdateState(s))
     return () => off?.()
   }, [])
@@ -1932,6 +1984,7 @@ export function SettingsModal({
   }, [onClose])
 
   const applyTheme = (next: UiTheme) => {
+    if (web) { void saveWebPreferences({ theme: next }); return }
     setTheme(next)
     void window.aiOffice.setTheme(next)
     if (next === 'system') document.documentElement.removeAttribute('data-theme')
@@ -1944,10 +1997,12 @@ export function SettingsModal({
   }
 
   const commitAuthorName = () => {
+    if (web) { void saveWebPreferences({ authorName: authorName.value }); return }
     void window.aiOffice.setAuthorName?.(authorName.value).then(setAuthorName)
   }
 
   const updateAiPrefs = (patch: Partial<AiPanelPrefs>) => {
+    if (web) { if (patch.showAiSidebar !== undefined) void saveWebPreferences({ showAssistant: patch.showAiSidebar }); return }
     setAiPrefs((prev) => ({ ...prev, ...patch }))
     void window.aiOffice.setAiPanelPrefs(patch).then(setAiPrefs)
   }
@@ -2025,6 +2080,8 @@ export function SettingsModal({
                 key={s.id}
                 className={`set-nav-item${section === s.id ? ' active' : ''}`}
                 aria-current={section === s.id}
+                disabled={Boolean(web && s.id !== 'general' && s.id !== 'account')}
+                title={web && s.id !== 'general' && s.id !== 'account' ? '此 Web 版本尚未提供' : undefined}
                 onClick={() => setSection(s.id)}
               >
                 <SectionIcon id={s.id} />
@@ -2045,7 +2102,7 @@ export function SettingsModal({
                   {authorName.value || authorName.fallback || t('setSecAccount')}
                 </span>
                 <span className="set-nav-account-email">
-                  {loggedIn ? email : t('setNotLoggedIn')}
+                  {web ? '个人工作区 · 开发访问' : loggedIn ? email : t('setNotLoggedIn')}
                 </span>
               </span>
             </button>
@@ -2055,7 +2112,9 @@ export function SettingsModal({
             data-section={section}
             key={section}
           >
-            {section === 'account' && (
+            {webError && <p role="alert" className="set-web-error">{webError}</p>}
+            {web && section === 'account' && web.account}
+            {!web && section === 'account' && (
               <>
                 <h3 className="set-pane-title">{t('setSecAccount')}</h3>
                 <p className="set-pane-desc">{t('setAccountSub')}</p>
@@ -2118,9 +2177,10 @@ export function SettingsModal({
               />
             )}
             {section === 'general' && (
-              <>
+              <SettingsFields web={Boolean(web)} disabled={webBusy || !webReady}>
                 <h3 className="set-pane-title">{t('setSecGeneral')}</h3>
                 <p className="set-pane-desc">{t('setGeneralSub')}</p>
+                {web && <p className="set-pane-desc">作者、自动保存与助手设置保存为个人偏好；已打开的编辑器不会热更新，助手面板尚未接入。灰色项目尚未适配 Web。</p>}
                 <h4 className="set-pane-subtitle">{t('setGrpInterface')}</h4>
                 <div className="set-field">
                   <div className="set-field-text">
@@ -2130,7 +2190,7 @@ export function SettingsModal({
                     className="set-dd"
                     value={lang}
                     ariaLabel={t('language')}
-                    options={LANG_OPTIONS.map((opt) => ({ value: opt.value, label: opt.label }))}
+                    options={LANG_OPTIONS.filter(opt => !web || opt.value === 'zh' || opt.value === 'en').map((opt) => ({ value: opt.value, label: opt.label }))}
                     onPick={(v) => setLang(v as typeof lang)}
                   />
                 </div>
@@ -2149,6 +2209,7 @@ export function SettingsModal({
                     onPick={(v) => applyTheme(v as UiTheme)}
                   />
                 </div>
+                <SettingsCapability unavailable={Boolean(web)}>
                 <div className="set-field">
                   <div className="set-field-text">
                     <label className="set-field-label">{t('documentTheme')}</label>
@@ -2225,6 +2286,7 @@ export function SettingsModal({
                     onClick={() => updateAiPrefs({ spellcheck: !aiPrefs.spellcheck })}
                   />
                 </div>
+                </SettingsCapability>
                 <div className="set-field">
                   <div className="set-field-text">
                     <div className="set-field-stack">
@@ -2240,6 +2302,7 @@ export function SettingsModal({
                     onClick={() => updateAiPrefs({ showAiSidebar: !aiPrefs.showAiSidebar })}
                   />
                 </div>
+                <SettingsCapability unavailable={Boolean(web)}>
                 <div className="set-field">
                   <div className="set-field-text">
                     <div className="set-field-stack">
@@ -2270,6 +2333,7 @@ export function SettingsModal({
                     onClick={() => updateAiPrefs({ openInNewDocs: !aiPrefs.openInNewDocs })}
                   />
                 </div>
+                </SettingsCapability>
                 <h4 className="set-pane-subtitle">{t('setGrpFiles')}</h4>
                 <div className="set-field">
                   <div className="set-field-text">
@@ -2286,7 +2350,7 @@ export function SettingsModal({
                     type="text"
                     value={authorName.value}
                     placeholder={authorName.fallback}
-                    maxLength={AUTHOR_NAME_MAX}
+                    maxLength={web ? 100 : AUTHOR_NAME_MAX}
                     spellCheck={false}
                     autoComplete="off"
                     onChange={(e) => setAuthorName((prev) => ({ ...prev, value: e.target.value }))}
@@ -2296,6 +2360,7 @@ export function SettingsModal({
                     }}
                   />
                 </div>
+                <SettingsCapability unavailable={Boolean(web)}>
                 <Field
                   label={t('saveLocation')}
                   value={saveDir || '—'}
@@ -2306,6 +2371,7 @@ export function SettingsModal({
                     </button>
                   }
                 />
+                </SettingsCapability>
                 <div className="set-field">
                   <div className="set-field-text">
                     <div className="set-field-stack">
@@ -2320,11 +2386,13 @@ export function SettingsModal({
                     aria-label={t('setAutoSave')}
                     onClick={() => {
                       const next = !autoSaveOn
+                      if (web) { void saveWebPreferences({ autoSave: next }); return }
                       setAutoSaveOn(next)
                       void window.aiOffice.setAutoSaveDefault?.(next).catch(() => {})
                     }}
                   />
                 </div>
+                <SettingsCapability unavailable={Boolean(web)}>
                 <div className="set-field">
                   <div className="set-field-text">
                     <div className="set-field-stack">
@@ -2472,7 +2540,8 @@ export function SettingsModal({
                     }}
                   />
                 </div>
-              </>
+                </SettingsCapability>
+              </SettingsFields>
             )}
             {section === 'integrations' && (
               <IntegrationsPane t={t} onStatus={(st) => onSkillUpdateDue?.(skillUpdateDue(st))} />
