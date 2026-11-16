@@ -5,14 +5,14 @@
 /// always consistent on disk — an unupdated ref would confuse Excel about
 /// which cells belong to the pivot.
 
-import { columnIndex, columnLabel } from '../domain/cell-address'
+import { columnIndex, columnLabel } from '../domain/cell-address.ts'
 import {
   PIVOT_SHOW_DATA_AS_BASE_FIELD,
   PIVOT_SHOW_DATA_AS_BASE_ITEM,
   showDataAsToOoxml,
-} from '../domain/pivot-value-modes'
-import { resolveRelTarget, type MutablePackage } from './xlsx-drawing-add'
-import { buildCacheDefinitionXml, buildPivotTableXml, type PivotAddition } from './xlsx-pivot-add'
+} from '../domain/pivot-value-modes.ts'
+import { resolveRelTarget, type MutablePackage } from './xlsx-drawing-add.ts'
+import { buildCacheDefinitionXml, buildPivotTableXml, type PivotAddition } from './xlsx-pivot-add.ts'
 
 export class PivotExpandError extends Error {}
 

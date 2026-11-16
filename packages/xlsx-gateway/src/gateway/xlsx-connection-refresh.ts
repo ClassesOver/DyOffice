@@ -14,7 +14,7 @@
 /// It deliberately does not touch the package: the caller writes the values
 /// through the app's normal grid edits, and the save path stores them.
 
-import { listWorkbookQueries, parseConnections, type PartReader } from './xlsx-connections'
+import { listWorkbookQueries, parseConnections, type PartReader } from './xlsx-connections.ts'
 
 export type { PartReader }
 

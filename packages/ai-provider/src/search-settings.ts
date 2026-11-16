@@ -3,7 +3,7 @@ import type {
   AiSearchProviderMeta,
   AiSearchSettings,
   AiSettings,
-} from './types'
+} from './types.ts'
 
 export const AI_SEARCH_PROVIDERS: AiSearchProviderMeta[] = [
   {

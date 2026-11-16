@@ -17,13 +17,13 @@ import {
   type StyleColorInput,
   type LayoutOperation,
   type StructuralOperation,
-} from './workbook-dsl'
+} from './workbook-dsl.ts'
 import {
   fillDisplayColor,
   normalizeStyleColor,
   resolveStyleColor,
   type FillSpec,
-} from './style-color'
+} from './style-color.ts'
 import {
   columnIndex,
   columnLabel,
@@ -32,7 +32,7 @@ import {
   parseRange,
   rangeAddresses,
   rangeCellCount,
-} from './cell-address'
+} from './cell-address.ts'
 import {
   applyChartStateEdit,
   buildChartVisual,
@@ -40,14 +40,14 @@ import {
   type ChartGridValue,
   type ChartStateEdit,
   type SheetVisual,
-} from './chart-visual'
+} from './chart-visual.ts'
 import {
   offsetFormulaRefs,
   shiftFormulaRefs,
   shiftIndex,
   shiftSpecForOp,
   type ShiftSpec,
-} from './formula-shift'
+} from './formula-shift.ts'
 import type {
   CellChange,
   CellFormatState,
@@ -60,7 +60,7 @@ import type {
   WorkbookAdapter,
   WorkbookSnapshot,
   WorksheetState,
-} from './workbook.types'
+} from './workbook.types.ts'
 
 export class WorkbookConflictError extends Error {
   constructor(message: string) {

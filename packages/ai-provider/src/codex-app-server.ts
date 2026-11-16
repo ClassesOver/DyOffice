@@ -5,14 +5,14 @@ import { delimiter, dirname, isAbsolute, join, resolve, sep } from 'node:path'
 import { tmpdir } from 'node:os'
 import { StringDecoder } from 'node:string_decoder'
 import type { AgentImage, AgentMessage, AgentToolCall, AgentToolDef } from '@genoffice/agent-core'
-import type { AiChatResponse, AiProviderConfig, CodexModelCatalog } from './types'
+import type { AiChatResponse, AiProviderConfig, CodexModelCatalog } from './types.ts'
 import {
   parseToolInput,
   throwIfToolCountOverBudget,
   throwIfToolJsonOverBudget,
   type StreamCallbacks,
-} from './protocols/shared'
-import { createStreamWatchdog } from './watchdog'
+} from './protocols/shared.ts'
+import { createStreamWatchdog } from './watchdog.ts'
 
 interface CodexAppServerTurn {
   text: string

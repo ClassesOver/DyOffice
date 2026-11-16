@@ -4,9 +4,9 @@
 /// validations, conditional formatting). Anything that cannot be shifted
 /// safely throws — the save must fail closed rather than corrupt references.
 
-import type { WorkbookStyleEdit } from '../shared/edit-schemas'
-import { MAX_GRID_COLUMNS, MAX_GRID_ROWS } from '../shared/grid-bounds'
-import { decodeXmlText } from './xlsx-escapes'
+import type { WorkbookStyleEdit } from '../shared/edit-schemas.ts'
+import { MAX_GRID_COLUMNS, MAX_GRID_ROWS } from '../shared/grid-bounds.ts'
+import { decodeXmlText } from './xlsx-escapes.ts'
 
 export type StructuralOp =
   | {

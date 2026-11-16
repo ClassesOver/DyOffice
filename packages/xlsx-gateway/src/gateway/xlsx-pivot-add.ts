@@ -1,9 +1,9 @@
-import { ensureRelationshipNamespace } from './xlsx-namespace'
-import { columnLabel } from '../domain/cell-address'
-import { shortDateNumFmtId } from '../shared/short-date'
-import { isValidPivotFilter, type PivotFilterDef } from '../domain/pivot-filters'
-import { formatPivotFormula, parsePivotFormula } from '../domain/pivot-formula'
-import { groupLabel, isValidGrouping, type PivotFieldGrouping } from '../domain/pivot-grouping'
+import { ensureRelationshipNamespace } from './xlsx-namespace.ts'
+import { columnLabel } from '../domain/cell-address.ts'
+import { shortDateNumFmtId } from '../shared/short-date.ts'
+import { isValidPivotFilter, type PivotFilterDef } from '../domain/pivot-filters.ts'
+import { formatPivotFormula, parsePivotFormula } from '../domain/pivot-formula.ts'
+import { groupLabel, isValidGrouping, type PivotFieldGrouping } from '../domain/pivot-grouping.ts'
 import {
   defaultDataFieldCaption,
   showDataAsIsPercent,
@@ -12,7 +12,7 @@ import {
   showDataAsToOoxml,
   type PivotAggregation,
   type PivotShowDataAs,
-} from '../domain/pivot-value-modes'
+} from '../domain/pivot-value-modes.ts'
 import {
   allocatePartPath,
   appendRelationship,
@@ -20,8 +20,8 @@ import {
   relativeTarget,
   relsPathFor,
   type MutablePackage,
-} from './xlsx-drawing-add'
-import { parseSheetElements } from './xlsx-sheets'
+} from './xlsx-drawing-add.ts'
+import { parseSheetElements } from './xlsx-sheets.ts'
 
 /// Persists pivots created in the editor as native OOXML parts: a cache
 /// definition with real sharedItems + records derived from the source range,

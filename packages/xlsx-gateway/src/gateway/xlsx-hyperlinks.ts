@@ -2,9 +2,9 @@
 /// External targets live as TargetMode="External" relationships referenced by
 /// r:id; internal anchors use the `location` attribute and need no rel.
 
-import { escapeRegExp, nextFreeRelationshipId } from './xlsx-sheets'
+import { escapeRegExp, nextFreeRelationshipId } from './xlsx-sheets.ts'
 
-export { ensureRelationshipNamespace } from './xlsx-namespace'
+export { ensureRelationshipNamespace } from './xlsx-namespace.ts'
 
 export class HyperlinkEditError extends Error {}
 

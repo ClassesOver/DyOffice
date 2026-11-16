@@ -22,3 +22,15 @@ Both route groups currently receive the same root app in `buildLocalApp`. If fut
 The initial PG fixture reused the session held by a paused read, so authentication waited on its lock and returned500 instead of reaching admission. The final fixture uses three owners to test aggregate capacity without conflating authentication locks. Authorization order was not relaxed. This does not claim a fix for same-session long-I/O authentication contention.
 
 Tests use disposable random databases/roles/buckets; no real user data removed. No CI, full monorepo, native sandbox or browser/desktop XLSX acceptance claim. Native adapters in the new admission tests are controlled stubs; object storage and authorization in the17-test repeat are real. Keep PR draft pending coordinated merge review.
+
+## Amendment (2026-11-17): bounded save wait
+
+The initial repair capped peak object streams at two, but also starved the save
+endpoint behind concurrent reads: a chart-format save could arrive while its own
+edit-triggered reads held both slots and then fail 503 instead of committing
+(reproduced 4/4 by the native-sheets chart-format E2E after merge). Saves now
+queue for a bounded wait (10s, max 4 queued) and inherit the freed slot FIFO;
+reads keep the immediate 503. Peak object streams remain capped at two, and a
+queued save that times out still answers 503 with Retry-After. Verified by two
+new mixed-admission cases (save queues and commits; overload beyond four waiters
+still rejects immediately) alongside the original ten.

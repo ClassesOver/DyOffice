@@ -6,9 +6,9 @@
 // its declarative profile (protocol, headers, timeouts, per-model switches —
 // see ./custom-profile.ts), which rides into the slot so the registry can read
 // it from the config alone.
-import { normalizeCustomProfile } from './custom-profile'
-import { isThinkingEffort } from './thinking-effort'
-import type { AiCustomEndpoint, AiProviderConfig, AiSettings } from './types'
+import { normalizeCustomProfile } from './custom-profile.ts'
+import { isThinkingEffort } from './thinking-effort.ts'
+import type { AiCustomEndpoint, AiProviderConfig, AiSettings } from './types.ts'
 
 const ID_ALPHABET = 'abcdefghijklmnopqrstuvwxyz0123456789'
 

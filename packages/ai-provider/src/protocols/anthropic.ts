@@ -1,13 +1,13 @@
 import type { AgentMessage, AgentToolCall, AgentToolDef } from '@genoffice/agent-core'
-import { aiFetch } from '../fetch'
-import { httpBodyDetail } from '../http-error'
+import { aiFetch } from '../fetch.ts'
+import { httpBodyDetail } from '../http-error.ts'
 import {
   GENSPARK_LLM_BASE_URLS,
   gensparkAttributionHeaders,
   opencodeSessionHeaders,
-} from '../providers'
-import type { AiChatResponse, AiProviderConfig, AiTokenUsage } from '../types'
-import { createStreamWatchdog, type StreamWatchdog } from '../watchdog'
+} from '../providers.ts'
+import type { AiChatResponse, AiProviderConfig, AiTokenUsage } from '../types.ts'
+import { createStreamWatchdog, type StreamWatchdog } from '../watchdog.ts'
 import {
   endpointUrl,
   jsonBodyInsteadOfSse,
@@ -20,7 +20,7 @@ import {
   throwIfToolJsonOverBudget,
   usageCount,
   type StreamCallbacks,
-} from './shared'
+} from './shared.ts'
 
 export const ANTHROPIC_BASE_URL = 'https://api.anthropic.com'
 

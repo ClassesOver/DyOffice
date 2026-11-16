@@ -9,8 +9,8 @@ import type {
   LayoutOperation,
   SortRangeOperation,
   StructuralOperation,
-} from './workbook-dsl'
-import type { SheetVisual } from './chart-visual'
+} from './workbook-dsl.ts'
+import type { SheetVisual } from './chart-visual.ts'
 
 export type CellScalar = string | number | boolean | null
 

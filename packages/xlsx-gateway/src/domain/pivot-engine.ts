@@ -4,11 +4,11 @@ import type {
   PivotFieldItem,
   PivotLayoutLine,
   PivotSharedItem,
-} from '../gateway/xlsx-pivot'
-import { allowedByValueFilter, matchesLabelFilter } from './pivot-filters'
-import { evaluatePivotFormula, parsePivotFormula, type PivotFormulaAst } from './pivot-formula'
-import { groupLabel } from './pivot-grouping'
-import { showDataAsNeedsBaseField } from './pivot-value-modes'
+} from '../gateway/xlsx-pivot.ts'
+import { allowedByValueFilter, matchesLabelFilter } from './pivot-filters.ts'
+import { evaluatePivotFormula, parsePivotFormula, type PivotFormulaAst } from './pivot-formula.ts'
+import { groupLabel } from './pivot-grouping.ts'
+import { showDataAsNeedsBaseField } from './pivot-value-modes.ts'
 
 /// Recomputes a pivot table's DATA AREA from fresh source values, keeping the
 /// file's recorded layout (rowItems/colItems). Layout drift — new or renamed

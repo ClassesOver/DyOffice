@@ -1,6 +1,6 @@
-import { columnLabel } from '../domain/cell-address'
-import { MAX_GRID_COLUMNS, MAX_GRID_ROWS } from '../shared/grid-bounds'
-import { isValidDefinedName } from './xlsx-defined-names'
+import { columnLabel } from '../domain/cell-address.ts'
+import { MAX_GRID_COLUMNS, MAX_GRID_ROWS } from '../shared/grid-bounds.ts'
+import { isValidDefinedName } from './xlsx-defined-names.ts'
 import {
   allocatePartPath,
   appendRelationship,
@@ -9,9 +9,9 @@ import {
   relsPathFor,
   resolveRelTarget,
   type MutablePackage,
-} from './xlsx-drawing-add'
-import { ensureRelationshipNamespace } from './xlsx-namespace'
-import { rootTail } from './xlsx-root-tail'
+} from './xlsx-drawing-add.ts'
+import { ensureRelationshipNamespace } from './xlsx-namespace.ts'
+import { rootTail } from './xlsx-root-tail.ts'
 
 /// Persists tables (ListObjects) created in the editor as brand-new OOXML
 /// parts: xl/tables/tableN.xml, the worksheet's <tableParts> element, the

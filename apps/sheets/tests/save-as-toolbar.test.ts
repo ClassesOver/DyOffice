@@ -18,7 +18,7 @@ describe('Save As quick-access command', () => {
   })
 
   it('is available for clean file-backed workbooks and invokes save-as mode', () => {
-    expect(appSrc).toContain('canSaveAs={workbookFile !== null}')
+    expect(appSrc).toContain("canSaveAs={mutationPhase === 'open' && !host && workbookFile !== null}")
     expect(appSrc).toContain("onSaveAs={() => void handleSave('save-as')}")
   })
 

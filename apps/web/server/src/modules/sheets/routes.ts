@@ -17,7 +17,11 @@ export function registerSheetsRoutes(app: FastifyInstance, sheets: ReturnType<ty
       csrf.originCheck(request, true)
       csrf.requireSession(request, token)
       await sessions.authenticate(token)
-      admission.admit(request, reply)
+      // The save endpoint queues for a bounded wait when the shared object-I/O
+      // budget is busy with concurrent reads: a user save must not starve
+      // behind its own edit-triggered reads (503 starved chart edits, see
+      // shared-object-admission evidence). Read routes keep the immediate 503.
+      await admission.admit(request, reply, request.routeOptions.url?.endsWith('/sheets/uploads') ? { waitMs: 10_000 } : undefined)
     })
     api.addHook('onResponse', async request => admission.close(request))
     api.addHook('onError', async request => admission.error(request))

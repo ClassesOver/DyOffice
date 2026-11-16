@@ -18,7 +18,7 @@
  * family quirk the request builders already enforce.
  */
 
-import type { AiProtocol } from './registry'
+import type { AiProtocol } from './registry.ts'
 
 export const THINKING_LEVELS = ['none', 'low', 'medium', 'high', 'xhigh', 'max'] as const
 

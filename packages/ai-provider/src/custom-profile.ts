@@ -11,14 +11,14 @@
 // An endpoint that declares nothing therefore behaves exactly as it did before
 // this existed, so a pre-profile settings file needs no migration and no
 // behavior change.
-import { modelHasFixedSampling } from './model-heuristics'
-import { appendPath, normalizeBaseUrl, stripTrailingV1 } from './url-compose'
+import { modelHasFixedSampling } from './model-heuristics.ts'
+import { appendPath, normalizeBaseUrl, stripTrailingV1 } from './url-compose.ts'
 import type {
   AiCustomCompat,
   AiCustomModelProfile,
   AiCustomProfile,
   AiCustomProtocol,
-} from './types'
+} from './types.ts'
 
 /**
  * Compose the request-time base URL for a user-hosted endpoint, per protocol.

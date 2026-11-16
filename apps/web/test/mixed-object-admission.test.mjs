@@ -61,3 +61,31 @@ test('separate application instances do not consume each other object budget',as
  const a=await fixture(),b=await fixture();const calls=[a.get(),a.get(),b.get(),b.get()]
  try{await Promise.all([a.ready,b.ready]);assert.equal(a.peak(),2);assert.equal(b.peak(),2)}finally{a.release();b.release();await Promise.all(calls);await a.app.close();await b.app.close()}
 })
+
+test('a save queues for a bounded slot instead of starving behind concurrent reads',async()=>{
+ const f=await fixture()
+ try{
+  const reads=[f.get(),f.inspect()];await f.ready
+  const save=f.save()
+  await new Promise(r=>setTimeout(r,30))
+  f.release()
+  const settled=await Promise.all([...reads,save])
+  assert.equal(settled[0].statusCode,200);assert.equal(settled[1].statusCode,200)
+  assert.equal(settled[2].statusCode,200)
+ }finally{await f.app.close()}
+})
+
+test('bounded save-waiter queue still rejects immediate overload',async()=>{
+ const f=await fixture()
+ try{
+  const reads=[f.get(),f.inspect()];await f.ready
+  const saves=[f.save(),f.save(),f.save(),f.save()]
+  await new Promise(r=>setTimeout(r,30))
+  const overflow=await f.save()
+  assert.equal(overflow.statusCode,503)
+  f.release()
+  const settled=await Promise.all([...reads,...saves])
+  assert.equal(settled[0].statusCode,200);assert.equal(settled[1].statusCode,200)
+  assert.deepEqual(settled.slice(2).map(r=>r.statusCode),[200,200,200,200])
+ }finally{await f.app.close()}
+})

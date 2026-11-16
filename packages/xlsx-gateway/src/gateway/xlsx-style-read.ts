@@ -1,6 +1,6 @@
-import type { FillSpec, PatternType, StyleColor } from '../domain/style-color'
-import { PATTERN_TYPES } from '../domain/style-color'
-import { resolvedStyleEntries } from './xlsx-style-entries'
+import type { FillSpec, PatternType, StyleColor } from '../domain/style-color.ts'
+import { PATTERN_TYPES } from '../domain/style-color.ts'
+import { resolvedStyleEntries } from './xlsx-style-entries.ts'
 
 /// Read-only view of xl/styles.xml for echoing colors back the way they are
 /// stored (theme slot + tint, pattern, gradient) — the sidecar only reports

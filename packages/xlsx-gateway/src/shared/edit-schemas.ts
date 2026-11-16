@@ -1,7 +1,7 @@
 // Zod schemas and limits shared by the xlsx gateway and the sheets app IPC surface.
 import { z } from 'zod'
 
-import { PATTERN_TYPES } from '../domain/style-color'
+import { PATTERN_TYPES } from '../domain/style-color.ts'
 
 export const richRunSchema = z
   .object({

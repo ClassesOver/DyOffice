@@ -3,7 +3,7 @@
 /// located by the sidecar's (drawingPath, drawingIndex) pair — the index
 /// counts every anchor element in document order, matching visuals.rs.
 
-import type { WorkbookVisualEdit } from '../shared/edit-schemas'
+import type { WorkbookVisualEdit } from '../shared/edit-schemas.ts'
 import {
   appendRelationship,
   outlineXml,
@@ -11,14 +11,14 @@ import {
   resolveRelTarget,
   solidFillXml,
   type MutablePackage,
-} from './xlsx-drawing-add'
+} from './xlsx-drawing-add.ts'
 import {
   parseRelationships,
   partPathForRels,
   removePartOverride,
   removeRelationshipById,
   type ParsedRelationship,
-} from './xlsx-sheets'
+} from './xlsx-sheets.ts'
 
 export class VisualEditError extends Error {}
 

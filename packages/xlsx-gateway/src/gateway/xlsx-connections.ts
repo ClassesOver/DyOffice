@@ -4,14 +4,14 @@
 /// still refresh them, and this only says what the workbook depends on and
 /// where each query's rows land.
 
-import { relsPathFor, resolveRelTarget } from './xlsx-drawing-add'
+import { relsPathFor, resolveRelTarget } from './xlsx-drawing-add.ts'
 import {
   decodeAttribute,
   parseRelationships,
   parseSheetElements,
   readAttribute,
   tableDisplayName,
-} from './xlsx-sheets'
+} from './xlsx-sheets.ts'
 
 export type WorkbookQueryKind = 'powerQuery' | 'web' | 'text' | 'database' | 'other'
 

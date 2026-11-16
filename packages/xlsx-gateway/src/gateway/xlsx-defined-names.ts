@@ -3,7 +3,7 @@
 /// built-ins, hidden names, and names it failed to install (`preserveNames`)
 /// — stay byte-verbatim.
 
-import { withFutureFunctionMarkers } from './future-functions'
+import { withFutureFunctionMarkers } from './future-functions.ts'
 
 export class DefinedNameError extends Error {}
 
