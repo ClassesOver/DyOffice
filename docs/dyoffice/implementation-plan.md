@@ -188,7 +188,7 @@ docs/dyoffice/               当前计划及 inventory/ evidence/ adr/
 
 **接口：** `mountDocsEditor(host,element,fileId)`，输出编辑器注册、序列化和选区能力。
 
-**状态（2026-11-16）：** 浏览器挂载的第一段已落地，见 [t07-docs-browser-mount.md](evidence/t07-docs-browser-mount.md)。`mountDocsEditor` 打开服务端 DOCX 投影，编辑段落，撤销本地修改，保存后重新挂载仍能看到新文本，表格和页眉留在包内。桌面 Docs 功能区仍调用 `window.desktop`，没有整页搬进浏览器。分页、字体替换、剪贴板 worker 和外部 Word 复开仍未做。
+**状态（2026-11-16）：** 浏览器挂载和桌面桥的第一段已落地，见 [t07-docs-browser-mount.md](evidence/t07-docs-browser-mount.md)。`mountDocsEditor` 能编辑段落、撤销、保存并重开，表格和页眉留在包内。`createWebDesktop` 把打开/保存交给宿主，字体只报告已配置的替换，打印只调用浏览器打印且不返回假路径，未知方法和图片剪贴板抛出 `UNSUPPORTED`。功能区页面、分页度量、单元格改写和外部 Word 复开仍未完成。
 
 - [ ] E2E 写入打开、段落/表格修改、保存、刷新、下载、再次打开和修订/撤销场景。段落保存、刷新重开、下载和本地撤销已测；表格单元格改写、分页和功能区撤销未做。
 - [x] 浏览器测试在尚未接入时 RED，而非以空白预览页算通过。
