@@ -252,3 +252,12 @@ test('late rejected token after dispose remains observed and never dispatches', 
   await tick()
   assert.equal(calls, 0)
 })
+
+ test('abandoned outcome is readable but cannot become an execution claim', async () => {
+  let calls=0
+  const c=client.createHttpCommandClient({editorId:'editor',currentGeneration:()=>1,getCsrfToken:async()=> 'p'.repeat(43),fetchImpl:async()=> { calls++; return Response.json({state:'abandoned_uncommitted',digest:'b'.repeat(64),envelope}) }})
+  assert.equal((await c.getCommandOutcome(envelope)).state,'abandoned_uncommitted')
+  await assert.rejects(c.beginExecution(envelope,'b'.repeat(64)), /execution claim/)
+  assert.equal(calls,2)
+  c.dispose()
+ })

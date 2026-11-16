@@ -7,6 +7,7 @@ export type CommandState =
   | 'applied_uncommitted'
   | 'committed'
   | 'cancelled'
+  | 'abandoned_uncommitted'
 export interface CommandRecord {
   envelope: CommandEnvelope
   digest: string

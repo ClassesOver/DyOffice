@@ -169,6 +169,39 @@ export function createCommandService({
         return { next, value: next }
       })
     },
+    /** Fence a fixed local-editor command, not undo its local effects. Authority
+     * is current and locked, but a live editor lease is deliberately unnecessary.
+     * Bound uploads/claims stay intact so T06 cannot bypass this terminal record. */
+    abandonCommand(input: CommandEnvelope, digest: string) {
+      return run(input, false, async (x, current) => {
+        if (x.envelope.payload.toolName !== 'docs.replace_text.v1')
+          throw commandError('Only the fixed local text command can be abandoned')
+        if (x.digest !== digest) throw commandError('Abandonment identity mismatch')
+        const row = existing(current, digest)
+        if (row.state === 'committed') {
+          const revision = row.revision
+          if (
+            !isRevisionRef(revision) ||
+            revision.fileId !== x.envelope.fileId ||
+            revision.revision === x.envelope.baseRevision ||
+            !x.tx.verifyCommit ||
+            (await x.tx.verifyCommit(structuredClone(row), structuredClone(revision))) !== true
+          )
+            throw commandError('Unverified committed receipt')
+          return { value: row }
+        }
+        if (row.state === 'cancelled' || row.state === 'abandoned_uncommitted')
+          return { value: row }
+        if (
+          !['pending_approval', 'approved', 'unknown_outcome', 'applied_uncommitted'].includes(
+            row.state,
+          )
+        )
+          throw commandError('Command cannot be abandoned')
+        const next: CommandRecord = { ...row, state: 'abandoned_uncommitted' }
+        return { next, value: next }
+      })
+    },
     recordCommitted(input: CommandEnvelope, revision: RevisionRef) {
       const snapshot = structuredClone(revision)
       return run(input, false, async (x, current) => {
