@@ -3,6 +3,8 @@ import { createHash } from 'node:crypto'
 export const MAX_OBJECT_BYTES = 32 * 1024 * 1024
 export interface ObjectRef { readonly key: string; readonly size: number; readonly sha256: string }
 export interface ObjectStore {
+  // Custom stores without a read-only probe remain unavailable to readiness.
+  checkReady?(): Promise<void>
   putImmutable(key: string, bytes: Buffer): Promise<ObjectRef>
   readVerified(reference: ObjectRef): Promise<Buffer>
 }

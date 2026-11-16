@@ -1,4 +1,4 @@
-import { GetObjectCommand, PutObjectCommand, type S3Client } from '@aws-sdk/client-s3'
+import { GetObjectCommand, PutObjectCommand, HeadBucketCommand, type S3Client } from '@aws-sdk/client-s3'
 import { Readable } from 'node:stream'
 import { assertObjectReference, collectVerified, objectReference, storageError, type ObjectStore } from './object-store.ts'
 
@@ -7,6 +7,10 @@ import { assertObjectReference, collectVerified, objectReference, storageError, 
 export function createS3ObjectStore({ client, bucket }: { client: S3Client; bucket: string }): ObjectStore {
   if (!/^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$/.test(bucket)) throw storageError(400)
   return {
+    async checkReady() {
+      try { await client.send(new HeadBucketCommand({ Bucket: bucket }), { abortSignal: AbortSignal.timeout(5000) }) }
+      catch { throw storageError() }
+    },
     async putImmutable(key, bytes) {
       const reference = objectReference(key, bytes)
       bytes = Buffer.from(bytes)
