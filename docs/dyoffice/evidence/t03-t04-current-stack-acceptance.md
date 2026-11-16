@@ -1,5 +1,7 @@
 # T03/T04 current-stack acceptance matrix
 
+> Owner scope update, 2026-11-16: legacy-database import/conversion is explicitly excluded from this delivery and is not an acceptance blocker. Preserve fail-closed rejection of accidentally connecting the new runtime to a legacy ledger and preserve existing data. No automatic conversion, reassignment, deletion or claim that migration was implemented.
+
 Snapshot: 2026-11-16. This document records **which code was actually tested**.
 It does not turn branch-local results into an unrun final-combination result, authorize
 a merge or deployment, or check off T19, legacy-data migration or production.

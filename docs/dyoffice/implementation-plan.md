@@ -124,6 +124,8 @@ docs/dyoffice/               当前计划及 inventory/ evidence/ adr/
 
 ### T03 本地账号密码、管理员用户管理与服务端会话
 
+> **用户范围更新（2026-11-16）：** 本次不考虑旧库数据导入/转换，不以旧库迁移作为交付阻断。仍保留误连旧库拒绝和原数据不受破坏的安全保护，不执行自动迁移、重分配或删除。
+
 > **范围说明（2026-11-16）：** 下列 T03 完成记录及接口/延期描述属于历史 MJS / `dyoffice_schema_migrations` 栈，不是新 TS 本地账号栈的全局完成声明。新栈 #38 已有真实 PG 141 项和可见浏览器 4 项证据；新增登录历史的归属锁竞争已取得真实 PG 红绿修复证据；最终组合尚未发布/验收。详见 [新栈验收矩阵](evidence/t03-t04-current-stack-acceptance.md)。保留历史结果，不把新旧库迁移链或测试数量混用。
 
 **依赖：** T02。**文件：** 拟建 `server/src/modules/auth/{service,routes,passwords,sessions,throttle,csrf}.ts`、`server/src/modules/admin/users/{routes,service}.ts`、`db/schema.ts`、`db/migrations/0001_identity.sql`、`tools/dyoffice/bootstrap-admin.ts`、`test/integration/{auth-session,admin-users,password-reset}.test.ts`。

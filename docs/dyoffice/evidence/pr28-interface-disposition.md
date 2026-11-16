@@ -1,5 +1,7 @@
 # PR #28 interface disposition and remaining authorization regressions
 
+> Owner scope update, 2026-11-16: legacy-database import/conversion is explicitly excluded from this delivery and is not an acceptance blocker. Preserve fail-closed rejection of accidentally connecting the new runtime to a legacy ledger and preserve existing data. No automatic conversion, reassignment, deletion or claim that migration was implemented.
+
 Read-only review of #28 head `a2e4a67ba4b221b45a2ad785cab666377903111d`.
 All 59 server blobs were compared to GitHub's non-truncated recursive tree and matched
 their Git blob SHA. This is a complete **server-source** check, not a claim to have

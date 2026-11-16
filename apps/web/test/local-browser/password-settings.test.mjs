@@ -17,12 +17,13 @@ test('original Settings changes password with real session rotation and revokes 
  const oldCookie=(await context.cookies()).find(c=>c.name==='__Host-dyoffice-session').value
  await page.locator('.account-btn').click();await page.getByRole('button',{name:'个人设置',exact:true}).click();const dialog=page.getByRole('dialog')
  // Real layout assertion: labels of different lengths share the original flexible label column.
- const boxes=[]
- for(const label of ['当前密码','新密码','确认新密码']){
-  const input=dialog.getByLabel(label,{exact:true});await expect(input).toBeVisible()
-  const box=await input.boundingBox();assert.ok(box);boxes.push(box)
- }
- for(const box of boxes){assert.ok(Math.abs(box.x-boxes[0].x)<1,'password inputs start at the same x');assert.ok(Math.abs(box.width-boxes[0].width)<1,'password inputs have equal widths')}
+ // Keep the original entrance motion. Sequential boundingBox reads sample different
+ // scale(.99)->scale(1) frames; await finite animations and read all rectangles atomically.
+ for(const label of ['当前密码','新密码','确认新密码'])await expect(dialog.getByLabel(label,{exact:true})).toBeVisible()
+ await dialog.evaluate(async element=>{await document.fonts.ready;await Promise.all(element.getAnimations({subtree:true}).filter(animation=>Number.isFinite(animation.effect?.getComputedTiming().endTime)).map(animation=>animation.finished.catch(()=>{})))})
+ const boxes=await dialog.locator('#local-current-password, #local-new-password, #local-confirm-password').evaluateAll(inputs=>inputs.map(input=>{const {x,width}=input.getBoundingClientRect();return {x,width}}))
+ assert.equal(boxes.length,3)
+ for(const box of boxes){assert.ok(Math.abs(box.x-boxes[0].x)<1,'password inputs start at the same x: '+JSON.stringify(boxes));assert.ok(Math.abs(box.width-boxes[0].width)<1,'password inputs have equal widths: '+JSON.stringify(boxes))}
  const fill=async current=>{await dialog.getByLabel('当前密码',{exact:true}).fill(current);await dialog.getByLabel('新密码',{exact:true}).fill(next);await dialog.getByLabel('确认新密码',{exact:true}).fill(next)}
  await fill('wrong current password');const rejected=page.waitForResponse(r=>r.url().endsWith('/auth/change-password'));await dialog.getByRole('button',{name:'修改密码',exact:true}).click();assert.equal((await rejected).status(),401);await expect(dialog.getByRole('alert')).toContainText('当前密码')
  assert.ok(await f.accounts.verifyCredentials('alice',password))

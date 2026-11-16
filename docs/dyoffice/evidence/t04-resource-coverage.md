@@ -1,5 +1,7 @@
 # T04 resource coverage: implemented resources versus disabled entrances
 
+> Owner scope update, 2026-11-16: legacy-database import/conversion is explicitly excluded from this delivery and is not an acceptance blocker. Preserve fail-closed rejection of accidentally connecting the new runtime to a legacy ledger and preserve existing data. No automatic conversion, reassignment, deletion or claim that migration was implemented.
+
 Scope: read-only inspection of coordinator's unpublished `t03-t04-closure` candidate on 2026-11-16. This is not a remote commit acceptance statement. No production source or other worker's files changed.
 
 ## Original acceptance boundary
