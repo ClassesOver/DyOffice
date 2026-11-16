@@ -236,6 +236,8 @@ docs/dyoffice/               当前计划及 inventory/ evidence/ adr/
 
 **接口：** `mountPdfEditor()`，能力区分阅读、批注、文本修改、页操作和导出。
 
+**状态（2026-11-16）：** 只落地显式能力门，见 [t11-pdf-capabilities.md](evidence/t11-pdf-capabilities.md)。普通 PDF 报告页序并允许结构读取；批注、改字、调页、脱敏被拒绝；覆盖文字明确不是删除原文；带 `/Encrypt` 的文件不返回页序。浏览器编辑器、PDFium 文本层、签名、字体和扫描页仍未做。不依赖 T07 的 DOCX 挂载，也不走 T08 worker。
+
 - [ ] 测试真实文本流修改、批注、页序、密码文件、签名失效提示、缺字/字体、扫描页能力限制。
 - [ ] E2E RED；覆盖文字不等同于删除原文的安全性，脱敏能力单独标记。
 - [ ] 复用 PDF.js/PDFium/现有写入链，验证 WASM 和 CSP；不支持操作明确拒绝。
