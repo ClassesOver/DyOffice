@@ -1,26 +1,59 @@
-# Provider turn coordinator (not mounted)
+# Provider turn coordinator and opt-in HTTP adapter (not mounted)
 
-This module is a bounded T13 server foundation, not a configured provider API.
-The local app must stay default-deny until T12 supplies authoritative configuration,
-restricted secret resolution, admission/budget policy, and real integration tests.
+This is a bounded T13 transport stage, not an enabled model service. `app.ts` does
+not register these routes. T12 must supply authoritative configuration, restricted
+secret resolution and transactional budget admission/settlement before mounting.
+No external provider, key, or customer document is sent by this stage's tests.
 
-`authorize(token, modelId)` must derive identity from the current credential, check
-AI scope and the current enabled configuration, and return
-an opaque permit. In this foundation it must not reserve budget or perform irreversible
-side effects: late completion after cancellation has no settlement hook. Transactional
-budget reservation/settlement is a required integration gate before mounting routes.
-It must not trust an owner or provider URL from request JSON.
-`revalidate(token, permit)` must fail on credential revocation or config revision changes.
-The adapter receives the permit, never client routing overrides; a T12 adapter must
-resolve secrets within a restricted callback. Identity/config state stays external.
+## Authority contract
 
-This coordinator bounds active turns, scopes cancellation to deployment/user/session,
-revalidates before model dispatch and each output, strips provider error details, and
-imposes an absolute caller deadline even when a provider ignores AbortSignal.
-Uncooperative dependencies retain their capacity slot until they settle; capacity
-exhaustion then fails closed rather than admitting more orphan work. Operational
-recovery for a permanently stuck adapter requires replacing that adapter/process.
-No route, real provider, secret store or durable usage ledger is enabled here.
+`authorize(token, modelId)` derives identity from the current credential, checks
+AI scope and enabled configuration, and returns an opaque permit. It remains a
+read-only lookup: a late completion after cancellation has no settlement hook.
+Never reserve budget in this callback until a durable settlement protocol exists.
+`revalidate(token, permit)` rejects credential revocation/config revision changes.
+`stream` receives only the permit and projected request, never client URL/key fields.
+An eventual T12 adapter must resolve secrets inside a restricted callback.
+
+## HTTP contract
+
+`registerProviderRoutes` is explicit opt-in and requires sessions, CSRF and a turn
+runner. POST `/api/v1/ai/turns` accepts only `{turnId, modelId, request}` where request
+contains `{system, messages, tools}`; cookies and CSRF are checked before parsing/
+dispatch. The identifier selects server configuration, never a provider URL.
+POST `/api/v1/ai/turns/:id/cancel` is bodyless and uses the same cookie/CSRF boundary.
+Provider errors are reduced to one generic `error` frame followed by one `done`.
+Successful responses contain one `done`; disconnected peers receive no guarantee
+of a terminal frame. The browser maps either terminal form to exactly one onDone.
+
+The coordinator limits active turns and absolute duration, revalidates every output,
+and scopes explicit cancellation by deployment/user/session. HTTP disconnect also
+aborts during authority lookup. Uncooperative dependencies keep their capacity slot
+until settlement; this avoids unbounded orphan provider work. Transport output is
+limited to 8 MiB by default, in addition to the coordinator's 256 KiB event bound.
+Backpressure is awaited during events, not beyond termination for the two fixed
+small terminal frames. No durable or billing budget is implied by these limits.
+
+## Browser / T14 boundary
+
+`createSseAgentTransport` keeps AgentTransport's stream/cancel/callback signatures.
+An integration may opt into `modelId` and `getCsrfToken`; both dispatch and cancel
+carry the proof. Cancellation before proof resolution sends no prompt. Unknown
+usage remains absent, never a fabricated zero; malformed usage is rejected.
+Complete tool events project only `{id, name, input}`. These remain untrusted
+candidates. Neither HTTP nor browser transport approves or executes document tools.
+T14 must choose a trusted command ID, bind current file/version/generation/lease,
+canonicalize argument hashes, and obtain approval before execution.
+
+## Remaining gates
+
+T12 configuration/secret adapter, durable usage reservation and settlement, model
+adapter parsing/SSRF policy, customer-authorized real-model tests, native editor UI
+wiring, and T14 command approval/execution are separate unaccepted integrations.
+The default product endpoint remains unavailable. Passing mock transport tests is
+not T13 completion and is not proof of a real model response.
+
+## Coordinator resource bounds
 
 Cancellation identity lookups have a separate configurable deadline (`cancelTimeoutMs`,
 default 10 seconds) and at most `maxActive` outstanding lookups. A stalled lookup
@@ -33,3 +66,10 @@ The coordinator also caps cumulative normalized JSON event payload bytes per tur
 that would exceed the budget is not emitted; cancellation and cleanup follow the
 normal failure path. This is a payload resource limit, not token billing, SSE wire
 framing, or a replacement for provider-side generation limits.
+
+## Explicit admin pipeline foundation
+
+The candidate includes T12-backed admin-only budget/credential composition, pinned
+transport and parser adapters from #74/#76/#78. They remain explicitly constructed
+and unmounted. Synthetic PostgreSQL tests and mock DNS/HTTPS are not real provider
+acceptance; ordinary-member entitlement and production wiring remain outside scope.

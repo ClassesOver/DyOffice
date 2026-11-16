@@ -148,3 +148,21 @@ test('cumulative limit counts UTF-8 bytes, accepts exact budget and rejects one 
 test('output budget rejects invalid configuration',()=>{
  for(const maxOutputBytes of [0,-1,NaN,Infinity,1.5,Number.MAX_SAFE_INTEGER+1]) assert.throws(()=>createProviderTurns({}, {maxOutputBytes}),/Invalid AI turn limits/)
 })
+
+test('transport disconnect cancels a turn before permit lookup settles, retaining orphan capacity',async()=>{
+ let release,entered;const started=new Promise(r=>entered=r)
+ const service=createProviderTurns({identity:async()=>owner,authorize:()=>{entered();return new Promise(r=>release=r)},revalidate:async()=>{},stream:async function*(){throw Error('must not dispatch')}},{timeoutMs:60,maxActive:1})
+ const controller=new AbortController()
+ const result=service.run({...input,signal:controller.signal},()=>{})
+ await started;controller.abort()
+ await assert.rejects(result,/cancelled/)
+ assert.equal(service.activeCount(),1)
+ release({identity:owner,revision:'1'});await new Promise(r=>setTimeout(r,0));assert.equal(service.activeCount(),0)
+})
+
+test('a pre-aborted transport rejects cleanly without dispatch or unhandled rejection',async()=>{
+ let called=false;const service=setup({identity:async()=>{called=true;return owner}})
+ const controller=new AbortController();controller.abort()
+ await assert.rejects(()=>service.run({...input,signal:controller.signal},()=>{}),/cancelled/)
+ await new Promise(r=>setTimeout(r,0));assert.equal(called,false);assert.equal(service.activeCount(),0)
+})
