@@ -13,3 +13,9 @@ Readiness is process-local single-flight, with a five-second response deadline. 
 Before the fix, five concurrent upload-finish requests entered verification; the existing download route admitted two and rejected three. After the fix, finish also admits two and returns 503 for three. A real HTTP disconnect regression confirms capacity stays reserved until object work settles.
 
 Fault-injection tests exercise business-pool failure, store failure/recovery, liveness independence, unknown store probes, and hung dependency coalescing. Built-in tests verify a removed local directory and failed S3 HeadBucket report unavailable, with no object writes. These are route/control-flow and adapter tests, not new real-PostgreSQL or live-S3 outage certification.
+
+## Follow-up real-service verification
+
+The isolated RustFS 1.0.6 storage suite, including new readiness tests, passed 24/24 with zero skips. New cases delete/recreate a disposable loopback bucket and use invalid signing credentials: readiness returns 503 without leaking details, recovers after bucket restoration, and liveness remains 200. The isolated PostgreSQL 17 readiness cases passed 2/2 with zero skips: a working connection returns ready, a closed pool returns unavailable, and the real server rejects a randomly named nonexistent database. Closing the pool is not a database-server outage simulation.
+
+The candidate was rechecked with isolated local dependencies after a shared dependency link changed: Web 234 passed / 1 existing skip, complete Web/server TypeScript checks passed. Earlier missing-S3 prerequisite failures are superseded by the real-service results above. Full monorepo testing remains incomplete: the attempted run stopped at `html2docx/tests/features.test.ts` and `pagebg-restore.test.ts` because Chromium startup was denied by the execution environment. No CI or production-readiness claim is made.
