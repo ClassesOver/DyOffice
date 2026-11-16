@@ -74,7 +74,7 @@ The file passes against the in-process client. It does not open a network socket
 
 ## File rows
 
-`0003_files.sql` creates `dyoffice_files`. The object key and SHA-256 are constrained. The table references the identity user. The migration comment says row-level security is pending T04, and the executable SQL does not enable RLS or create a policy. `createFileCatalog` inserts a row only after `finishUpload`. If that insert fails, the object can remain and no completed row points at it. Download reads an active row for the requested owner and then checks the stored bytes. Another owner and a trashed row are `NOT_FOUND`. `scope.enforcement` is `pending-t04`.
+`0003_files.sql` creates `dyoffice_files`. The object key and SHA-256 are constrained. The table references the identity user. The migration comment says row-level security is pending T04, and the executable SQL does not enable RLS or create a policy. `createFileCatalog` inserts a row only after `finishUpload`. If that insert fails, the object can remain and no completed row points at it. Download reads an active row for the requested owner and then checks the stored bytes. Another owner and a trashed row are `NOT_FOUND`. If the row is already trash and the object store update failed, `trashFile` retries the object update instead of returning `NOT_FOUND`. `scope.enforcement` is `pending-t04`.
 
 ```sh
 node --test apps/web/test/file-catalog.test.mjs apps/web/test/files-schema.test.mjs

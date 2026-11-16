@@ -23,6 +23,10 @@ const MARK_TRASH = `UPDATE dyoffice_files
   SET state = 'trash', trashed_at = now()
   WHERE deployment_id = $1 AND owner_user_id = $2 AND id = $3 AND state = 'active'`
 
+const SELECT_OWNED = `SELECT id, state
+  FROM dyoffice_files
+  WHERE deployment_id = $1 AND owner_user_id = $2 AND id = $3`
+
 /**
  * File rows point at objects that are already stored.
  * Owner filtering here is application code. Database RLS is pending T04.
@@ -74,7 +78,10 @@ export function createFileCatalog({ db, objectStore } = {}) {
       assertOwnerId(ownerId)
       if (typeof fileId !== 'string' || !UUID.test(fileId)) reject('NOT_FOUND', 404)
       const updated = await db.query(MARK_TRASH, [deploymentId, ownerId, fileId])
-      if (!updated.rowCount) reject('NOT_FOUND', 404)
+      if (!updated.rowCount) {
+        const found = await db.query(SELECT_OWNED, [deploymentId, ownerId, fileId])
+        if (found.rows?.[0]?.state !== 'trash') reject('NOT_FOUND', 404)
+      }
       await objectStore.trashObject({ ownerId, objectId: fileId })
       return { fileId, state: 'trash', scope }
     },

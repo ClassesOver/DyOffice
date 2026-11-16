@@ -29,7 +29,8 @@ function memoryDb() {
       }
       if (sql.startsWith('SELECT')) {
         const [deploymentId, ownerUserId, id] = params
-        const row = rows.find((entry) => entry.deploymentId === deploymentId && entry.ownerUserId === ownerUserId && entry.id === id && entry.state === 'active')
+        const activeOnly = sql.includes("state = 'active'")
+        const row = rows.find((entry) => entry.deploymentId === deploymentId && entry.ownerUserId === ownerUserId && entry.id === id && (!activeOnly || entry.state === 'active'))
         return { rows: row ? [row] : [], rowCount: row ? 1 : 0 }
       }
       if (sql.startsWith('UPDATE')) {
@@ -73,6 +74,26 @@ test('a database failure after the object is stored does not publish a file row'
   assert.equal(db.rows.length, 0)
   assert.equal((await client.list('objects/')).length, 1)
   assert.equal((await client.list('blobs/')).length, 1)
+})
+
+test('a trash retry finishes the object after the row is already trash', async () => {
+  const { objectStore, files } = catalog()
+  const saved = await files.saveNewFile({ deploymentId: DEPLOYMENT, ownerId: OWNER_A, name: 'notes.docx', bytes: ZIP })
+  const original = objectStore.trashObject.bind(objectStore)
+  let failed = false
+  objectStore.trashObject = async (input) => {
+    if (!failed) {
+      failed = true
+      throw Object.assign(new Error('transient'), { code: 'TRANSIENT' })
+    }
+    return original(input)
+  }
+  await assert.rejects(files.trashFile({ deploymentId: DEPLOYMENT, ownerId: OWNER_A, fileId: saved.fileId }), { code: 'TRANSIENT' })
+  assert.deepEqual((await objectStore.downloadObject({ ownerId: OWNER_A, objectId: saved.fileId })).bytes, ZIP)
+  const retried = await files.trashFile({ deploymentId: DEPLOYMENT, ownerId: OWNER_A, fileId: saved.fileId })
+  assert.equal(retried.state, 'trash')
+  await assert.rejects(objectStore.downloadObject({ ownerId: OWNER_A, objectId: saved.fileId }), { code: 'NOT_FOUND' })
+  assert.equal((await files.trashFile({ deploymentId: DEPLOYMENT, ownerId: OWNER_A, fileId: saved.fileId })).state, 'trash')
 })
 
 test('a row whose blob was removed does not download', async () => {
