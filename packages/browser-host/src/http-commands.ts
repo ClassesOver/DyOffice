@@ -10,6 +10,18 @@ export interface HttpCommandRecord {
   appliedGeneration?: number
   revision?: RevisionRef
 }
+/** Abort local waiting, without claiming a dispatched operation was rolled back. */
+function untilDisposed<T>(operation: Promise<T>, signal: AbortSignal): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const stop = () => reject(Error('Command client disposed'))
+    signal.addEventListener('abort', stop, { once: true })
+    operation.then(
+      (value) => { signal.removeEventListener('abort', stop); resolve(value) },
+      (error) => { signal.removeEventListener('abort', stop); reject(error) },
+    )
+    if (signal.aborted) stop()
+  })
+}
 /** Same-origin transport. Instantiate in trusted UI composition, not inside a
  * provider adapter. No automatic approval, dispatch or retry on network failure. */
 export function createHttpCommandClient({
@@ -39,7 +51,7 @@ export function createHttpCommandClient({
         size = 0
       for (;;) {
         if (disposed || controller.signal.aborted) throw Error('Command client disposed')
-        const chunk = await reader.read()
+        const chunk = await untilDisposed(reader.read(), controller.signal)
         if (disposed || controller.signal.aborted) throw Error('Command client disposed')
         if (chunk.done) break
         size += chunk.value.byteLength
@@ -49,7 +61,7 @@ export function createHttpCommandClient({
       return text + decoder.decode()
     } finally {
       controller.signal.removeEventListener('abort', stop)
-      await reader.cancel().catch(() => {})
+      void reader.cancel().catch(() => {})
       reader.releaseLock()
     }
   }
@@ -62,15 +74,16 @@ export function createHttpCommandClient({
     if (disposed) throw Error('Command client disposed')
     const controller = new AbortController()
     pending.add(controller)
+    let received: Response | undefined
     try {
       const snapshot = structuredClone(envelope),
         generation = currentGeneration(),
-        csrf = await getCsrfToken()
+        csrf = await untilDisposed(getCsrfToken(), controller.signal)
       if (typeof csrf !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(csrf))
         throw Error('Invalid CSRF token')
       if (disposed || controller.signal.aborted || generation !== currentGeneration())
         throw Error('Editor changed while preparing command request')
-      const response = await fetchImpl('/api/v1/commands/' + action, {
+      const response = await untilDisposed(fetchImpl('/api/v1/commands/' + action, {
         method: 'POST',
         mode: 'same-origin',
         redirect: 'error',
@@ -84,7 +97,11 @@ export function createHttpCommandClient({
           envelope: snapshot,
           ...extra,
         }),
-      })
+      }).then((response) => {
+        received = response
+        if (controller.signal.aborted) void response.body?.cancel().catch(() => {})
+        return response
+      }), controller.signal)
       if (
         disposed ||
         controller.signal.aborted ||
@@ -126,6 +143,8 @@ export function createHttpCommandClient({
         throw Error('Invalid execution claim')
       return r
     } finally {
+      if (received?.body && !received.body.locked)
+        void received.body.cancel().catch(() => {})
       pending.delete(controller)
       controller.abort()
     }

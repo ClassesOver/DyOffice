@@ -176,3 +176,79 @@ test('rejects redirected, wrong MIME and invalid UTF8 responses', async () => {
     await assert.rejects(c.proposeCommand(envelope))
   }
 })
+
+const tick = () => new Promise(r => setTimeout(r, 0))
+test('dispose settles stalled CSRF without dispatching its late token', async () => {
+  let token, calls = 0
+  const c = client.createHttpCommandClient({
+    editorId: 'editor', currentGeneration: () => 1,
+    getCsrfToken: () => new Promise(r => { token = r }),
+    fetchImpl: async () => { calls++; return Response.json({}) },
+  })
+  const outcome = c.proposeCommand(envelope).then(() => 'success', () => 'stopped')
+  c.dispose()
+  await tick()
+  assert.equal(await Promise.race([outcome, Promise.resolve('pending')]), 'stopped')
+  token('p'.repeat(43))
+  await tick()
+  assert.equal(calls, 0)
+})
+test('dispose settles stalled execution fetch and cleans late claim without replay', async () => {
+  let reply, calls = 0, cancelled = 0
+  const c = client.createHttpCommandClient({
+    editorId: 'editor', currentGeneration: () => 1,
+    getCsrfToken: async () => 'p'.repeat(43),
+    fetchImpl: () => { calls++; return new Promise(r => { reply = r }) },
+  })
+  const outcome = c.beginExecution(envelope, 'b'.repeat(64)).then(() => 'success', () => 'stopped')
+  await tick()
+  c.dispose()
+  await tick()
+  assert.equal(await Promise.race([outcome, Promise.resolve('pending')]), 'stopped')
+  reply(new Response(new ReadableStream({ cancel() { cancelled++ } })))
+  await tick()
+  assert.equal(calls, 1)
+  assert.equal(cancelled, 1)
+})
+test('dispose does not await an uncooperative stream cancel', async () => {
+  const c = client.createHttpCommandClient({
+    editorId: 'editor', currentGeneration: () => 1,
+    getCsrfToken: async () => 'p'.repeat(43),
+    fetchImpl: async () => new Response(new ReadableStream({
+      cancel() { return new Promise(() => {}) },
+    }), { headers: { 'content-type': 'application/json' } }),
+  })
+  const outcome = c.proposeCommand(envelope).then(() => 'success', () => 'stopped')
+  await tick()
+  c.dispose()
+  await tick()
+  assert.equal(await Promise.race([outcome, Promise.resolve('pending')]), 'stopped')
+})
+test('dispose in the response-arrival window releases the body', async () => {
+  let reply, cancelled = 0
+  const raw = new Promise(r => { reply = r })
+  const c = client.createHttpCommandClient({
+    editorId: 'editor', currentGeneration: () => 1,
+    getCsrfToken: async () => 'p'.repeat(43), fetchImpl: () => raw,
+  })
+  const pending = c.beginExecution(envelope, 'b'.repeat(64))
+  await tick()
+  raw.then(() => c.dispose())
+  reply(new Response(new ReadableStream({ cancel() { cancelled++ } })))
+  await assert.rejects(pending)
+  assert.equal(cancelled, 1)
+})
+test('late rejected token after dispose remains observed and never dispatches', async () => {
+  let reject, calls = 0
+  const c = client.createHttpCommandClient({
+    editorId: 'editor', currentGeneration: () => 1,
+    getCsrfToken: () => new Promise((_, r) => { reject = r }),
+    fetchImpl: async () => { calls++; return Response.json({}) },
+  })
+  const pending = c.approveCommand(envelope, 'b'.repeat(64))
+  c.dispose()
+  await assert.rejects(pending, /disposed/)
+  reject(Error('late token error'))
+  await tick()
+  assert.equal(calls, 0)
+})
