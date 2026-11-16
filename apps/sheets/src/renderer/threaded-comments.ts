@@ -88,6 +88,8 @@ export class ThreadStore {
   private author = FALLBACK_AUTHOR
   /// Called with the sheet id after every edit (journal marking).
   onChange: ((sheetId: string) => void) | null = null
+  /** Checked before editing the store, including body-portal actions. */
+  beforeChange: (() => void) | null = null
 
   subscribe = (listener: Listener): (() => void) => {
     this.listeners.add(listener)
@@ -132,6 +134,7 @@ export class ThreadStore {
   }
 
   add(sheetId: string, row: number, column: number, text: string): CellThread {
+    this.beforeChange?.()
     const thread: CellThread = {
       row,
       column,
@@ -149,6 +152,7 @@ export class ThreadStore {
   }
 
   reply(sheetId: string, row: number, column: number, text: string): void {
+    this.beforeChange?.()
     this.update(sheetId, row, column, (thread) => ({
       ...thread,
       replies: [
@@ -165,11 +169,13 @@ export class ThreadStore {
   }
 
   setDone(sheetId: string, row: number, column: number, done: boolean): void {
+    this.beforeChange?.()
     this.update(sheetId, row, column, (thread) => ({ ...thread, done }))
   }
 
   /// Edits the root (entryId = thread id) or one reply in place.
   editText(sheetId: string, row: number, column: number, entryId: string, text: string): void {
+    this.beforeChange?.()
     this.update(sheetId, row, column, (thread) =>
       entryId === thread.id
         ? { ...thread, text }
@@ -183,6 +189,7 @@ export class ThreadStore {
   }
 
   deleteReply(sheetId: string, row: number, column: number, replyId: string): void {
+    this.beforeChange?.()
     this.update(sheetId, row, column, (thread) => ({
       ...thread,
       replies: thread.replies.filter((reply) => reply.id !== replyId),
@@ -190,6 +197,7 @@ export class ThreadStore {
   }
 
   remove(sheetId: string, row: number, column: number): CellThread | null {
+    this.beforeChange?.()
     const sheet = this.threads.get(sheetId)
     const key = cellKey(row, column)
     const thread = sheet?.get(key) ?? null
@@ -202,6 +210,7 @@ export class ThreadStore {
   /// Converts a thread to a plain note: the thread leaves the store and the
   /// author is remembered for the note snapshot.
   convertToNote(sheetId: string, row: number, column: number): CellThread | null {
+    this.beforeChange?.()
     const thread = this.remove(sheetId, row, column)
     if (!thread) return null
     let sheet = this.converted.get(sheetId)

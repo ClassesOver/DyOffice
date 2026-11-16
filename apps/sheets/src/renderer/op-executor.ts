@@ -1,3 +1,4 @@
+import { mutationAdmission, type MutationLease } from './mutation-admission'
 /**
  * Applies a planned batch of workbook operations to the live Univer workbook:
  * prechecks, one undo item per batch, per-op facade calls and journal
@@ -164,6 +165,7 @@ export interface ApplyPlanOptions {
   /** Ribbon/dialog caller: gate refusals show their localized string instead
    * of the model-facing reason. */
   userFacing?: boolean
+  mutationLease?: MutationLease
 }
 
 export function richCellText(cell: unknown): string | null {
@@ -368,7 +370,13 @@ export function applyChangePlan(
   // One apply at a time: the undo batch and aiBulkUndoGate are not reentrant,
   // and the async prechecks yield — a ribbon click landing during an AI apply
   // (or a second click during a delete precheck) must wait its turn.
-  const run = applyQueue.then(() => applyChangePlanNow(plan, ctx, options))
+  const gate = mutationAdmission(ctx.state.editJournal)
+  try { gate.assertAdmitted(options.mutationLease) } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error)
+    ctx.setMessage(reason)
+    return Promise.resolve({ ok: false, reason })
+  }
+  const run = gate.run(() => applyQueue.then(() => applyChangePlanNow(plan, ctx, options)), options.mutationLease)
   applyQueue = run.then(
     () => undefined,
     () => undefined,

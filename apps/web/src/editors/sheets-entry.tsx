@@ -88,7 +88,7 @@ export async function mountSheetsEditor(host: SessionFileHost, container: HTMLEl
         <button className="dyoffice-sheets-download" disabled={!loaded || failed || !editor || !state.lease || state.status==='conflict' || state.status==='unauthorized' || downloading || takingOver} onClick={()=>{void saveAndDownload()}}>{text.saveDownload}</button>
         {historical && <a href={`/api/v1/files/${fileId}/content?revision=${state.revision.revision}`} download={state.name}>{text.downloadReadOnly}</a>}
         {!state.lease && !failed && state.status!=='unauthorized' && <button disabled={!loaded || !editor || downloading || takingOver || dirty() || state.status==='unknown' || bridge.needsConfirmation()} onClick={()=>{void takeOver()}}>{text.takeover}</button>}
-        {bridge.needsConfirmation() && <button disabled={confirming} onClick={()=>{void confirmSave()}}>{text.retry}</button>}
+        {bridge.needsConfirmation() && <button data-save-fence-allow="confirm" disabled={confirming} onClick={()=>{void confirmSave()}}>{text.retry}</button>}
         {actionError && status!==actionError && <span className="dyoffice-sheets-action-error">{actionError}</span>}
       </div>
       <App queuedWorkbookAtBoot host={{readOnly,inPlaceSave:true,assistantAvailable:false,onWorkbookOpened:()=>setLoaded(true),onOpenFailed:()=>setFailed(true),onEditorReady:handle=>{editor=handle}}} />

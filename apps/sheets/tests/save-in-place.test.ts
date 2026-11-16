@@ -285,7 +285,9 @@ describe('T09 in-place save acknowledgment', () => {
     const { ctx, journal, state, openLazyWorkbook } = setup()
     recordStructuralOp(journal, 'sheet-1', { kind: 'insert-rows', index: 0, count: 1 })
     save.mockImplementationOnce(async () => {
-      recordPageSetup(journal, 'sheet-1', { zoomScale: 150 })
+      // An untracked writer that bypasses the guarded journal API is still
+      // detected by the final safety check; never silently discard it.
+      journal.pageSetup.set('sheet-1', { zoomScale: 150 })
       return { canceled: false, file: { ...state.file, sessionId: 'new', sha256: 'new' } }
     })
     await expect(handleSave(ctx, 'save')).resolves.toMatchObject({ ok: false })

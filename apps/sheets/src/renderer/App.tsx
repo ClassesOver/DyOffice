@@ -1,3 +1,6 @@
+import { ICommandService } from '@univerjs/core'
+import { vetoUniverCommand } from './very-hidden-sheets'
+import { admitMutation, blocksSaveWrite, installMutationInputAdmission, mutationAdmission, MUTATION_SAVE_MESSAGE, type MutationLease, type MutationPhase } from './mutation-admission'
 import {installDefinedNameDependencies} from './defined-name-dependencies'
 import {installHostReadOnlyGuard} from './host-read-only'
 import { focusWorksheet } from './sheet-focus'
@@ -843,6 +846,22 @@ export function App({
   const autoSaveRef = useRef(autoSave)
   autoSaveRef.current = autoSave
   const saveGateRef = useRef(createSaveGate())
+  const [mutationPhase, setMutationPhase] = useState<MutationPhase>('open')
+  const mutationLockedRef = useRef(false)
+  function userMutationAllowed(): boolean {
+    if (hostRef.current?.readOnly) return false
+    if (mutationLockedRef.current) { setMessage(MUTATION_SAVE_MESSAGE); return false }
+    return admitMutation(lazyWorkbookRef.current?.editJournal, setMessage)
+  }
+  function runUserMutation<T>(action: () => T | Promise<T>): Promise<T> {
+    if (!userMutationAllowed()) return Promise.reject(new Error(MUTATION_SAVE_MESSAGE))
+    const journal = lazyWorkbookRef.current?.editJournal
+    return journal ? mutationAdmission(journal).run(action) : Promise.resolve().then(action)
+  }
+  // Document capture includes dialogs mounted via createPortal(document.body).
+  // This is an input admission boundary, not the write barrier: asynchronous
+  // callbacks are registered separately and all writes freeze before snapshot.
+  useEffect(() => installMutationInputAdmission(document, () => mutationLockedRef.current, setMessage), [])
   // AutoSave tick (docs/slides parity): every 30 s and on window blur, flush
   // pending edits of the open workbook. The journal is read at tick time so
   // the interval stays stable; demo mode has no backing file and is skipped.
@@ -1299,6 +1318,13 @@ export function App({
       lazyWorkbookRef,
       setMessage,
       openLazyWorkbook,
+      onMutationPhase: (phase) => {
+        mutationLockedRef.current = phase !== 'open'
+        setMutationPhase(phase)
+        if (phase !== 'open') setMessage(phase === 'draining'
+          ? 'Finishing pending workbook changes before saving…'
+          : MUTATION_SAVE_MESSAGE)
+      },
       ...(hostRef.current?.inPlaceSave ? {
         applySavedWorkbook: (file: WorkbookFile) => {
           const state = lazyWorkbookRef.current
@@ -2211,6 +2237,7 @@ export function App({
 
   /** Commit the label the reader typed. */
   function onRedactConfirm(label: string) {
+    if (!userMutationAllowed()) return
     const pending = redactDialog
     setRedactDialog(null)
     if (!pending) return
@@ -2449,6 +2476,19 @@ export function App({
     // the proxy — Univer-internal callers keep hitting the real method.
     installJournalSuppressionUndoFilter()
     installHostReadOnlyGuard(runtime,()=>hostRef.current?.readOnly === true)
+    const saveCommandService = runtime.univer.__getInjector().get(ICommandService)
+    const saveMutationGuard = saveCommandService.beforeCommandExecuted((command, options) => {
+      const journal = lazyWorkbookRef.current?.editJournal
+      if (!journal) return
+      const gate = mutationAdmission(journal)
+      // OPERATIONS include viewport/selection; commands and mutations include
+      // direct API/panel writes. Do not repeat the host's COMMAND-only guard.
+      if (blocksSaveWrite(gate.phase, command.type, journalSuppression.active, (options as { fromFormula?: boolean } | undefined)?.fromFormula === true)) {
+        if (['sheet.command.copy', 'doc.command.copy'].includes(command.id)) return
+        setMessage(MUTATION_SAVE_MESSAGE)
+        vetoUniverCommand(saveCommandService, command, MUTATION_SAVE_MESSAGE)
+      }
+    })
     // Opening a file must not re-measure row heights (Excel renders stored
     // heights verbatim), and clipped multi-line cells must show their FIRST
     // line like Excel does.
@@ -2674,6 +2714,10 @@ export function App({
       picturesAt: notePictureAt,
       onCard: setNotePopupCard,
     })
+    threadStore.beforeChange = () => {
+      const journal = lazyWorkbookRef.current?.editJournal
+      if (journal) mutationAdmission(journal).assertAdmitted()
+    }
     threadStore.onChange = (sheetId) => {
       const state = lazyWorkbookRef.current
       if (!state) return
@@ -4045,6 +4089,7 @@ export function App({
       dataValidationMarkerDisposable.dispose()
       threadedCommentDisposable.dispose()
       notePopupCardDisposable.dispose()
+      threadStore.beforeChange = null
       threadStore.onChange = null
       ruleDetailDisposable()
       lazyFindDisposable.dispose()
@@ -4062,6 +4107,7 @@ export function App({
       editDisposable.dispose()
       calcEndDisposable.dispose()
       journalDisposable.dispose()
+      saveMutationGuard.dispose()
       structuralDisposable.dispose()
       selectionDisposable.dispose()
       formatEchoDisposable.dispose()
@@ -4486,12 +4532,21 @@ export function App({
   function runUiOps(
     ops: readonly WorkbookOperation[],
     successMessage?: string | null,
+    mutationLease?: MutationLease,
   ): Promise<ApplyOutcome> {
     const runtime = univerRef.current
     const state = lazyWorkbookRef.current
     const workbook = runtime?.univerAPI.getActiveWorkbook()
     if (!runtime || !state || !workbook) {
       return Promise.resolve({ ok: false, reason: t('appNoWorkbookOpen') })
+    }
+    // A reinstall replaces the journal before the save finally releases the
+    // App fence. Only a live child lease from this workbook may finish work.
+    const validLease = mutationLease?.active === true &&
+      mutationLease.owner === mutationAdmission(state.editJournal)
+    if (mutationLockedRef.current && !validLease) {
+      setMessage(MUTATION_SAVE_MESSAGE)
+      return Promise.resolve({ ok: false, reason: MUTATION_SAVE_MESSAGE })
     }
     let plan: ChangePlan
     try {
@@ -4503,6 +4558,7 @@ export function App({
     }
     return applyChangePlan(plan, opExecutorContext(runtime, workbook, state), {
       userFacing: true,
+      ...(mutationLease ? { mutationLease } : {}),
       ...(successMessage === undefined ? {} : { successMessage }),
       // The apply queues behind in-flight applies; the file may be closed or
       // replaced meanwhile — drop the click silently rather than mutate the
@@ -4540,6 +4596,7 @@ export function App({
   }
 
   function handleUndo(steps?: number): void {
+    if (!userMutationAllowed()) return
     const count =
       typeof steps === 'number' && Number.isFinite(steps) ? Math.max(1, Math.floor(steps)) : 1
     const fromAiBatch = typeof steps === 'number'
@@ -4583,6 +4640,7 @@ export function App({
   /// QAT Redo: workbook history via Univer, same path as the app menu's ⇧⌘Z
   /// (the demo adapter has no redo, matching the menu's behavior).
   function handleRedo(): void {
+    if (!userMutationAllowed()) return
     void univerRef.current?.univerAPI.redo()
   }
 
@@ -4744,9 +4802,10 @@ export function App({
     source: PasteSpecialSource,
     options: PasteSpecialOptions,
   ): Promise<string | null> {
+    if (!userMutationAllowed()) return MUTATION_SAVE_MESSAGE
     const runtime = univerRef.current
     if (!runtime) return t('dlgPasteSpecialNothing')
-    const result = await applyPasteSpecial(runtime, source, options)
+    const result = await runUserMutation(() => applyPasteSpecial(runtime, source, options))
     if (result.ok) return null
     return t(
       result.reason === 'out-of-bounds'
@@ -4866,6 +4925,7 @@ export function App({
   }
 
   function handleRibbonCommand(command: string): void {
+    if (!userMutationAllowed()) return
     if (hostRef.current?.readOnly) return
     if (command.startsWith('query-refresh:')) {
       void refreshQueryConnection(command.slice('query-refresh:'.length))
@@ -5806,6 +5866,10 @@ export function App({
       }
     },
     applyOps: async (ops, dryRun) => {
+      if (mutationLockedRef.current && !dryRun) {
+        setMessage(MUTATION_SAVE_MESSAGE)
+        return { ok: false, reason: MUTATION_SAVE_MESSAGE }
+      }
       if (hostRef.current?.readOnly && !dryRun) return {ok:false,reason:t('appSaveFailed')}
       const runtime = univerRef.current
       const state = lazyWorkbookRef.current
@@ -6169,12 +6233,12 @@ export function App({
         onGoalSeek={(setCell, toValue, byCell) => {
           const runtime = univerRef.current
           if (!runtime) return Promise.reject(new Error(t('appWorkbookNotReady')))
-          return solveGoalSeek(runtime, { setCell, toValue, byCell })
+          return runUserMutation(() => solveGoalSeek(runtime, { setCell, toValue, byCell }))
         }}
         onDataTable={(input) => {
           const runtime = univerRef.current
           if (!runtime) return Promise.reject(new Error(t('appWorkbookNotReady')))
-          return applyDataTable(runtime, input)
+          return runUserMutation(() => applyDataTable(runtime, input))
         }}
         onGetDataTableRange={() => {
           // Excel's flow starts from the selected table region; a single-cell
@@ -6191,7 +6255,7 @@ export function App({
         }
         selectionFormat={selectionFormat}
         formatPainterActive={formatPainterActive}
-        statusMessage={openingWorkbook ? t('appOpeningWorkbook') : message}
+        statusMessage={mutationPhase !== 'open' ? (mutationPhase === 'draining' ? 'Finishing pending workbook changes before saving…' : MUTATION_SAVE_MESSAGE) : openingWorkbook ? t('appOpeningWorkbook') : message}
         emptyCsvNotice={emptyCsvNotice}
         onOpenWorkbook={() => void handleInspectWorkbook()}
         onDismissEmptyCsvNotice={() => setEmptyCsvNotice(false)}
@@ -6229,9 +6293,9 @@ export function App({
         zoomPercent={zoomPercent}
         statusBarFuncs={statusBarFuncs}
         onToggleStatusBarFunc={toggleStatusBarStat}
-        canSave={!host?.readOnly && (pendingEdits > 0 || workbookFile?.unsavedNew === true)}
+        canSave={mutationPhase === 'open' && !host?.readOnly && (pendingEdits > 0 || workbookFile?.unsavedNew === true)}
         onSave={() => void handleSave('save')}
-        canSaveAs={!host && workbookFile !== null}
+        canSaveAs={mutationPhase === 'open' && !host && workbookFile !== null}
         onSaveAs={() => void handleSave('save-as')}
         onNameWithAi={() => void nameWithAi()}
         onRedo={handleRedo}
@@ -6262,7 +6326,7 @@ export function App({
         formulaBarVisible={formulaBarVisible}
         crossHighlightVisible={crossHighlightVisible}
         onGetProtectedRanges={protectedRangesSnapshot}
-        onApplyProtectedRanges={applyProtectedRanges}
+        onApplyProtectedRanges={(ranges) => runUserMutation(() => applyProtectedRanges(ranges))}
         onGetDefinedNames={definedNameRows}
         onDefinedNameAction={handleDefinedNameAction}
         onGetPivotFields={(sourceRange) => pivotFieldOptionsImpl(pivotContext(), sourceRange)}
@@ -6514,6 +6578,7 @@ export function App({
                     })
                   },
                   apply: (report) => {
+                    if (!userMutationAllowed()) throw new Error(MUTATION_SAVE_MESSAGE)
                     const linkRuntime = univerRef.current
                     const linkState = lazyWorkbookRef.current
                     if (linkRuntime && linkState) {
@@ -6541,6 +6606,7 @@ export function App({
                   index,
                   readUsage: () => window.desktopApi.readExternalLinkUsage({ sessionId }),
                   journal: async (cells) => {
+                    if (!userMutationAllowed()) throw new Error(MUTATION_SAVE_MESSAGE)
                     const runtime = univerRef.current
                     if (!runtime) return async () => {}
                     const restore = (await journalExternalLinkLiterals(runtime, cells)).restore
@@ -6555,6 +6621,7 @@ export function App({
                     }
                   },
                   queue: (ops) => {
+                    if (!userMutationAllowed()) throw new Error(MUTATION_SAVE_MESSAGE)
                     pendingExternalLinkOpsRef.current = ops
                   },
                   clear: () => {
@@ -6576,7 +6643,7 @@ export function App({
               // a web source has no local file to point at
               if (linkStatuses.find((link) => link.index === index)?.source === null) return
               const picked = await window.desktopApi.selectExternalLinkSource()
-              if (!picked) return
+              if (!picked || !userMutationAllowed()) return
               setLinksBusy(true)
               try {
                 pendingExternalLinkOpsRef.current = {
@@ -6628,6 +6695,7 @@ export function App({
   }
 
   function handleDefinedNameAction(action: DefinedNameAction): string | null {
+    if (!userMutationAllowed()) return MUTATION_SAVE_MESSAGE
     const runtime = univerRef.current
     const workbook = runtime?.univerAPI.getActiveWorkbook()
     if (!workbook || !lazyWorkbookRef.current) {
@@ -6745,6 +6813,7 @@ export function App({
   async function applyProtectedRanges(
     ranges: readonly { name: string; sqref: string; password?: string }[],
   ): Promise<string | null> {
+    if (!userMutationAllowed()) return MUTATION_SAVE_MESSAGE
     const state = lazyWorkbookRef.current
     const sheetId = univerRef.current?.univerAPI.getActiveWorkbook()?.getActiveSheet()?.getSheetId()
     if (!state || !sheetId) return t('appProtectionNeedsFile')
@@ -6778,6 +6847,8 @@ export function App({
         return { name: range.name, sqref: range.sqref, hasPassword: false }
       }),
     )
+    if (lazyWorkbookRef.current !== state) return t('appWorkbookNotReady')
+    mutationAdmission(state.editJournal).assertWritable()
     state.sheetProtectedRanges.set(sheetId, hashed)
     recordProtectedRangesChange(state.editJournal, sheetId)
     setPendingEdits(journalSize(state.editJournal))

@@ -46,7 +46,7 @@ async function fixture(t, autoSave = false) {
   await expect.poll(() => page.evaluate(() => window.__genofficeDebug?.univerAPI.getActiveWorkbook()?.getActiveSheet()?.getRange('A2').getValue()), { timeout: 30000 }).toBe(12.5)
   await expect.poll(() => page.evaluate(() => window.__genofficeDebug.univerAPI.getActiveWorkbook().getActiveSheet().getRange('B2').getValue()), { timeout: 30000 }).toBe(25)
   await page.evaluate(() => { window.__savedWorkbookIdentity = window.__genofficeDebug.univerAPI.getActiveWorkbook().getWorkbook() })
-  return { ...f, page, original, opened, context }
+  return { ...f, page, original, opened, context, origin }
 }
 
 async function assertWorkbook(bytes, expectedA2, expectedA3 = 7.5) {
@@ -107,6 +107,68 @@ test('download waits for a blocked save receipt, then drains edits made after th
   await assertWorkbook(bytes, 40, 17)
   assert.equal(preparations, 2, 'late edits require one child revision, not replay of the first save')
   assert.equal(await f.page.evaluate(() => window.__savedWorkbookIdentity === window.__genofficeDebug.univerAPI.getActiveWorkbook().getWorkbook()), true)
+})
+
+test('structural save fences new edits until the confirmed workbook is ready, then accepts the next save', { timeout: 120000 }, async t => {
+  const f = await fixture(t)
+  const preparations = []
+  f.page.on('request', request => {
+    if (new URL(request.url()).pathname.endsWith('/sheets/uploads')) preparations.push(request.postDataJSON().request)
+  })
+  let entered, release
+  const reached = new Promise(resolve => { entered = resolve })
+  const barrier = new Promise(resolve => { release = resolve })
+  t.after(() => release())
+  await f.page.route('**/commits', async route => {
+    const response = await route.fetch()
+    assert.equal(response.status(), 200)
+    entered(); await barrier
+    await route.fulfill({ response })
+  }, { times: 1 })
+  const changed = await f.page.evaluate(async () => {
+    const debug = window.__genofficeDebug
+    const sheetId = debug.univerAPI.getActiveWorkbook().getActiveSheet().getSheetId()
+    return debug.applyOps([{ op: 'insert_rows', sheetId, row: 2, count: 1 }])
+  })
+  assert.equal(changed.ok, true)
+  const save = f.page.locator('.qa-btn').first()
+  await expect(save).toBeEnabled(); await save.click()
+  await reached
+  const rejected = await f.page.evaluate(async () => {
+    const debug = window.__genofficeDebug
+    const sheet = debug.univerAPI.getActiveWorkbook().getActiveSheet()
+    const before = sheet.getRange('A4').getValue()
+    try { await sheet.getRange('A4').setValue(999) } catch {}
+    const after = sheet.getRange('A4').getValue()
+    const result = await debug.applyOps([{ op: 'set_cell', sheetId: sheet.getSheetId(), address: 'A4', value: 999 }])
+    return { before, after, result }
+  })
+  assert.equal(rejected.after, rejected.before, 'native mutation commands must not write through a structural snapshot')
+  assert.equal(rejected.result.ok, false, 'tool writes must be fenced while structural save is frozen')
+  release()
+  await expect.poll(() => f.page.evaluate(() => window.__genofficeDebug?.univerAPI.getActiveWorkbook()?.getActiveSheet()?.getRange('A3').getValue()), { timeout: 30000 }).toBe(12.5)
+  await expect(f.page.locator('.qa-btn').first()).toBeDisabled({ timeout: 15000 })
+  await expect(f.page.locator('.status-bar .status-msg')).not.toContainText('Saving workbook structure', { timeout: 15000 })
+  await expect(f.page.locator('.status-bar .status-msg')).not.toContainText('Finishing pending workbook changes', { timeout: 15000 })
+  const next = await f.page.evaluate(async () => {
+    const debug = window.__genofficeDebug
+    return debug.applyOps([{ op: 'set_cell', sheetId: debug.univerAPI.getActiveWorkbook().getActiveSheet().getSheetId(), address: 'A4', value: 17 }])
+  })
+  assert.equal(next.ok, true)
+  const ready = f.page.waitForEvent('download')
+  await saveAndDownload(f.page).click()
+  const zip = await JSZip.loadAsync(await readFile(await (await ready).path()))
+  const xml = await zip.file('xl/worksheets/sheet1.xml').async('string')
+  assert.match(xml, /<c\b[^>]*r="A3"[^>]*>[\s\S]*?<v>12\.5<\/v>/)
+  assert.match(xml, /<c\b[^>]*r="A4"[^>]*>[\s\S]*?<v>17<\/v>/)
+  const response = await f.context.request.get(`${f.origin}/api/v1/files/${f.opened.file.fileId}/revisions`)
+  assert.equal(response.status(), 200)
+  assert.equal((await response.json()).revisions.length, 4, 'one import, two structural save phases and one follow-up commit; no structural replay')
+  assert.equal(preparations.length, 3)
+  assert.equal(preparations[0].structuralOps.length, 1)
+  assert.deepEqual(preparations[1].structuralOps, [])
+  assert.notEqual(preparations[1].definedNamesState, null, 'the second structural phase preserves shifted defined names')
+  assert.deepEqual(preparations[2].structuralOps, [])
 })
 
 test('blur autosave confirms without replacing the live workbook or moving its selection', { timeout: 120000 }, async t => {

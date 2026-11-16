@@ -1,3 +1,4 @@
+import { mutationAdmission } from './mutation-admission'
 /**
  * Chart/shape edit handlers (the chartEditRef/chartVectorRef/shapeEditRef
  * implementations) and the live chart↔data sync. Extracted from App.tsx;
@@ -358,6 +359,7 @@ export function applyChartEdit(ctx: VisualSyncContext, editKey: string, edit: Ch
   const state = ctx.lazyWorkbookRef.current
   const runtime = ctx.univerRef.current
   if (!runtime) return
+  if (state) mutationAdmission(state.editJournal).assertWritable()
   if (!state) {
     const applied = applyDemoVisualChange(ctx, editKey, (before) =>
       before.chart
@@ -442,6 +444,7 @@ export function applyShapeEdit(
   const state = ctx.lazyWorkbookRef.current
   const runtime = ctx.univerRef.current
   if (!runtime) return
+  if (state) mutationAdmission(state.editJournal).assertWritable()
   if (!state) {
     const applied = applyDemoVisualChange(ctx, visualId, (before) =>
       changes.remove
