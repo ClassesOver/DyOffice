@@ -92,6 +92,16 @@ node --test apps/web/test/object-staging-expiry.test.mjs
 
 Before the change all three tests failed (quota stayed full, the expired upload finished, the unshared blob remained). After the change the file passes.
 
+## HTTP recycle bin
+
+`POST /api/v1/objects/:objectId/trash` hides the bytes and keeps the quota. `restore` returns them. `purge` removes a trashed object and frees the quota. Admin receives 403. A blob whose bytes no longer match its SHA-256 downloads as JSON `服务暂时不可用` with no `Content-Disposition`.
+
+```sh
+node --test apps/web/test/object-lifecycle-http.test.mjs
+```
+
+Before the routes existed, trash returned 404 instead of 200. After the routes, the file passes.
+
 ## Still open
 
-Live S3 or MinIO, highly available storage, and T04 row-level security. The application owner filter is not a substitute for `FORCE ROW LEVEL SECURITY`.
+Live S3 or MinIO, and highly available storage. T04 row-level security is not part of this store: the application owner filter is not a substitute for `FORCE ROW LEVEL SECURITY`. The planned T05 checks that do not need those two are in place.
