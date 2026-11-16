@@ -27,3 +27,11 @@ test('all three host jobs run Node admission before install and service admissio
  assert.equal(jobs.length,3)
  for(const job of jobs){const guard=job.indexOf('host-runtime.mjs --node-only'),install=job.indexOf('npm ci');assert.ok(guard>=0&&install>=0);assert.ok(guard<install);assert.equal((job.match(/name: Verify actual/g)||[]).length,1);assert.match(job,/path: .dyoffice-runtime-evidence\/host-runtime.json/)}
 })
+test('artifact hashing streams more than 256 MiB without buffering stdout',async()=>{
+ const {hashCommand}=await import('./host-runtime.mjs')
+ const {createHash}=await import('node:crypto')
+ const chunk=Buffer.alloc(1024*1024,65),expected=createHash('sha256')
+ for(let i=0;i<257;i++)expected.update(chunk)
+ assert.equal(await hashCommand(process.execPath,['-e',"const b=Buffer.alloc(1024*1024,65); let n=257; function write(){while(n-- >0)if(!process.stdout.write(b)){process.stdout.once('drain',write);return}}write()"]),expected.digest('hex'))
+ await assert.rejects(hashCommand(process.execPath,['-e','process.exit(2)']))
+})

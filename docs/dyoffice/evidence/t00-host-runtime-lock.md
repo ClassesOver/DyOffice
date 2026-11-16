@@ -41,8 +41,14 @@ All existing local-account, real PG/Redis/S3, browser, native isolation and
 original editor/engine regression commands are retained. Fresh exact-SHA remote
 CI is required; unit fixtures alone are not service acceptance.
 
+Initial remote run 43806892386 installed the exact signed packages and passed
+Node/PG/Redis admission in native-docx. RustFS admission failed because buffered
+unzip output exceeded 256 MiB. Verification now streams archive/executable bytes
+with a 30-second/1-GiB bound; a real 257-MiB subprocess reproduced RED and passes
+after the fix. This failure is not reported as service acceptance.
+
 Local tests: admission drift, optional-profile failure, package/key pins, and
-three-job coverage pass; official Node binary passes early admission. Real
+three-job coverage and streaming hash pass (10/10 with existing coverage); official Node binary passes early admission. Real
 service results remain pending until this candidate's remote CI finishes.
 
 ## T00 versus T23

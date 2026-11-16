@@ -17,13 +17,14 @@ export function validateHost(value,{native=false,objectstore=false}={}){
 // This is a CI admission/observation manifest, not a reproducible OS or release image.
 import {createHash} from 'node:crypto'
 import {readFile,writeFile,mkdir} from 'node:fs/promises'
-import {execFile} from 'node:child_process'
+import {execFile,spawn} from 'node:child_process'
+import {createReadStream} from 'node:fs'
 import {promisify} from 'node:util'
 import {resolve} from 'node:path'
 import {fileURLToPath} from 'node:url'
 const exec=promisify(execFile)
 const run=async(cmd,args,options={})=>(await exec(cmd,args,{encoding:'utf8',timeout:30000,maxBuffer:1024*1024,...options})).stdout.trim()
-const hash=async path=>createHash('sha256').update(await readFile(path)).digest('hex')
+const hash=async path=>{const h=createHash('sha256');for await(const chunk of createReadStream(path))h.update(chunk);return h.digest('hex')}
 export async function collectHost({native=false,objectstore=false}={}){
  if(process.env.GITHUB_ACTIONS!=='true')throw new Error('Disposable GitHub CI only')
  const os=Object.fromEntries((await readFile('/etc/os-release','utf8')).split('\n').filter(l=>l.includes('=')).map(l=>{const i=l.indexOf('=');return[l.slice(0,i),l.slice(i+1).replace(/^"|"$/g,'')]}))
@@ -37,8 +38,7 @@ export async function collectHost({native=false,objectstore=false}={}){
  if(objectstore){
   const archiveSha256=await hash('/tmp/dyoffice-rustfs.zip')
   if(archiveSha256!=='4f0bf3fecbe861467427ff506aee22c302cfd5ac8b7dcbde71714f8e5e680dea')throw new Error('RustFS archive mismatch')
-  const {stdout:binary}=await exec('unzip',['-p','/tmp/dyoffice-rustfs.zip','rustfs'],{encoding:'buffer',maxBuffer:256*1024*1024,timeout:30000})
-  const binarySha256=createHash('sha256').update(binary).digest('hex')
+  const binarySha256=await hashCommand('unzip',['-p','/tmp/dyoffice-rustfs.zip','rustfs'])
   if(binarySha256!==await hash('/usr/local/bin/dyoffice-test-rustfs'))throw new Error('Installed RustFS differs from pinned archive')
   const response=await fetch('http://127.0.0.1:19000/health/ready',{redirect:'error',signal:AbortSignal.timeout(5000)})
   result.objectstore={version:'1.0.6',archiveSha256,binarySha256,ready:response.ok};await response.body?.cancel()
@@ -53,4 +53,15 @@ if(process.argv[1]&&resolve(process.argv[1])===fileURLToPath(import.meta.url)){
   await mkdir('.dyoffice-runtime-evidence',{recursive:true});await writeFile('.dyoffice-runtime-evidence/host-runtime.json',JSON.stringify(result,null,2)+'\n')
   console.log('Verified actual Node/PostgreSQL/Redis host runtime and wrote nonsecret manifest')
  }catch(error){console.error('Host runtime admission failed: '+error.message);process.exitCode=1}
+}
+export function hashCommand(command,args){
+ return new Promise((resolve,reject)=>{
+  const child=spawn(command,args,{stdio:['ignore','pipe','ignore']}),digest=createHash('sha256')
+  let failure,bytes=0
+  const timer=setTimeout(()=>{failure=new Error('Artifact hashing timed out');child.kill('SIGKILL')},30000)
+  child.stdout.on('data',chunk=>{bytes+=chunk.length;if(bytes>1024*1024*1024){failure=new Error('Artifact exceeds 1 GiB');child.kill('SIGKILL')}else digest.update(chunk)})
+  child.stdout.on('error',error=>{failure=error;child.kill('SIGKILL')})
+  child.on('error',error=>{clearTimeout(timer);reject(error)})
+  child.on('close',code=>{clearTimeout(timer);if(failure||code!==0)reject(failure||new Error('Artifact decompression failed'));else resolve(digest.digest('hex'))})
+ })
 }
