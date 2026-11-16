@@ -1,4 +1,4 @@
-import { mkdir, lstat, realpath, open, link, unlink } from 'node:fs/promises'
+import { mkdir, lstat, realpath, open, link, unlink, access } from 'node:fs/promises'
 import { constants } from 'node:fs'
 import { resolve, join } from 'node:path'
 import { randomUUID } from 'node:crypto'
@@ -16,6 +16,7 @@ export async function createLocalObjectStore({ directory }: { directory: string 
   await assertDirectory()
   const path = (key: string) => join(root, key.replaceAll('/', '_'))
   return {
+    async checkReady() { await assertDirectory(); await access(root, constants.R_OK | constants.W_OK | constants.X_OK) },
     async putImmutable(key, bytes) {
       const reference = objectReference(key, bytes)
       bytes = Buffer.from(bytes)
