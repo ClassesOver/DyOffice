@@ -1,0 +1,23 @@
+{
+  "schema": 1,
+  "scope": "Existing DyOffice CI only; not a production deployment image or immutable runner OS",
+  "sourceBaseline": "PR33 b43779c",
+  "node": {
+    "version": "22.23.5",
+    "platform": "linux-x64",
+    "url": "https://nodejs.org/dist/v22.23.5/node-v22.23.5-linux-x64.tar.xz",
+    "checksums": "https://nodejs.org/dist/v22.23.5/SHASUMS256.txt",
+    "archiveSha256": "cdeb8670a0c81f51b4dc4ac61919f9b1ad917b304bf8221eb939570663d240f8",
+    "binarySha256": "2f822d544601dfff107f57d945b649d15c5bf6302595735a6bd9cdc7ee9669bd"
+  },
+  "images": {
+    "postgres": "postgres:16@sha256:dd2bf3ce2dc83a81674cf7f217fcfd8a5009a4b325dda5b843bfee82a06cff6f",
+    "minio": "bitnamilegacy/minio:2025.7.23-debian-12-r5@sha256:6dabb4a2088c9a79908de3bc05f4586c23ad2182c8908e7e3acbf61c1467fb20"
+  },
+  "registryEvidence": {
+    "postgres": {"source": "https://hub.docker.com/v2/repositories/library/postgres/tags/16", "amd64Manifest": "sha256:2d5c77ae9b0e0944ffb92f8d8fc2fa2edb215cb0976da8bac34df917af417e87"},
+    "minio": {"source": "https://hub.docker.com/v2/repositories/bitnamilegacy/minio/tags/2025.7.23-debian-12-r5", "amd64Manifest": "sha256:f24044f19432b7664fb956eade7dbb55ed5f7f22f08eb7c8fce68ac0ffaceca4"},
+    "method": "2026-11-16: SHA-256 of authenticated registry-1.docker.io manifest response bytes matched Docker-Content-Digest; Node archive hash matched publisher checksum and binary hash was derived from that verified archive"
+  },
+  "workflows": ["dyoffice-identity-schema.yml", "dyoffice-native-pptx.yml", "dyoffice-password-change.yml", "dyoffice-self-sessions.yml", "dyoffice-shell-ui.yml", "dyoffice-t03b-login.yml", "dyoffice-t03b-sessions.yml", "dyoffice-t03c-accounts.yml", "dyoffice-t05-s3.yml", "dyoffice-web-boundaries.yml"]
+}
