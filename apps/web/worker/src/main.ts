@@ -19,6 +19,7 @@ import { createXlsxJobExecutor } from './jobs/xlsx.ts'
 export async function startNativeWorker(environment: NodeJS.ProcessEnv = process.env,{ signal }: { signal?: AbortSignal } = {}) {
   if (environment.NODE_ENV==='production' || environment.DYOFFICE_NATIVE_WORKER!=='experimental') throw new Error('Explicit experimental worker required')
   if (environment.DYOFFICE_DATABASE_URL || environment.DYOFFICE_AUTH_DATABASE_URL || environment.DYOFFICE_USER_TOKEN || environment.DYOFFICE_ADMIN_TOKEN) throw new Error('Worker rejects privileged or unrelated credentials')
+  if (environment.DYOFFICE_OBJECT_STORE!=='s3') throw new Error('Native worker requires S3 object storage')
   const required = (name: string) => { const value=environment[name]; if (!value) throw new Error('Worker configuration missing'); return value }
   const deploymentId=uuid(required('DYOFFICE_DEPLOYMENT_ID'))
   const workerUrl=required('DYOFFICE_WORKER_DATABASE_URL'),businessUrl=required('DYOFFICE_BUSINESS_DATABASE_URL'),redisUrl=required('DYOFFICE_REDIS_URL'),binary=required('DYOFFICE_NATIVE_BINARY'),sha256=required('DYOFFICE_NATIVE_SHA256')

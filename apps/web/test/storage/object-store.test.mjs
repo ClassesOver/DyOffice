@@ -84,6 +84,16 @@ for (const kind of ['local','s3']) test(`${kind} publication snapshots caller by
   assert.deepEqual(await store.readVerified(reference), hello)
 })
 
+test('ordinary File API configuration retains local-dev storage for one service account', async t => {
+  const { configuredObjectStore } = await import('../../server/src/storage/config.ts')
+  const directory = await mkdtemp(join(tmpdir(), 'dyoffice-local-config-'))
+  t.after(() => rm(directory, { recursive: true, force: true }))
+  const storage = await configuredObjectStore({ DYOFFICE_FILE_API: 'experimental', DYOFFICE_OBJECT_STORE: 'local-dev', DYOFFICE_OBJECT_DIRECTORY: directory })
+  t.after(() => storage.close())
+  const reference = await storage.objectStore.putImmutable(key(), hello)
+  assert.deepEqual(await storage.objectStore.readVerified(reference), hello)
+})
+
 test('file storage configuration requires explicit experimental backend and refuses unsafe endpoints', async () => {
   const { configuredObjectStore } = await import('../../server/src/storage/config.ts')
   assert.equal((await configuredObjectStore({})).objectStore,undefined)

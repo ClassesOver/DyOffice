@@ -8,6 +8,7 @@ import { spawn,execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import JSZip from 'jszip'
 import { fileFixture,importFile } from '../helpers/files.mjs'
+import { s3Fixture } from '../helpers/s3.mjs'
 import { sandboxFixture } from '../helpers/native-sandbox.mjs'
 import { createXlsxNativeWorker } from '../../worker/src/native/xlsx.ts'
 import { createCsrfService } from '../../server/src/modules/auth/csrf.ts'
@@ -19,9 +20,9 @@ import { createRevisionService } from '../../server/src/modules/revisions/servic
 import { createJobQueue,createJobDispatcher,createRevisionQueue } from '../../server/src/outbox/dispatcher.ts'
 const exec = promisify(execFile)
 const gate = () => { let resolve; const promise = new Promise(r => { resolve=r }); return { promise,resolve } }
-async function fixture(t,{ paused = false,leaseMs = 3000 } = {}) {
+async function fixture(t,{ paused = false,leaseMs = 3000,objectStore } = {}) {
   const { createXlsxJobExecutor } = await import('../../worker/src/jobs/xlsx.ts')
-  const f = await fileFixture(t,{ worker: true,nativeJobs: true })
+  const f = await fileFixture(t,{ worker: true,nativeJobs: true,objectStore })
   const original = await readFile(new URL('../../../shell/build/shell-new/blank.xlsx',import.meta.url))
   const zip = await JSZip.loadAsync(original)
   zip.file('customXml/native-job-preserve.xml','<private>Retain this exact original part</private>')
@@ -152,9 +153,9 @@ test('controller shutdown aborts native work, releases its edit lease and leaves
   await noNativeServices()
 })
 
-async function daemonEnvironment(f) {
+async function daemonEnvironment(f,bucket) {
   const manifest = JSON.parse(await readFile(process.env.DYOFFICE_TEST_HOST_MANIFEST ?? new URL('../../../../.dyoffice-native-build/host-manifest.json',import.meta.url),'utf8'))
-  return { PATH: process.env.PATH,NODE_ENV: 'test',DYOFFICE_NATIVE_WORKER: 'experimental',DYOFFICE_WORKER_DATABASE_URL: f.urls.worker,DYOFFICE_BUSINESS_DATABASE_URL: f.urls.business,DYOFFICE_DEPLOYMENT_ID: f.deploymentId,DYOFFICE_REDIS_URL: process.env.DYOFFICE_TEST_REDIS_URL,DYOFFICE_NATIVE_BINARY: manifest.nativeBinary,DYOFFICE_NATIVE_SHA256: manifest.nativeSha256,DYOFFICE_FILE_API: 'experimental',DYOFFICE_OBJECT_STORE: 'local-dev',DYOFFICE_OBJECT_DIRECTORY: f.directory,DYOFFICE_WORKER_RUNTIME_DIRECTORY: join(f.directory,'worker-control') }
+  return { PATH: process.env.PATH,NODE_ENV: 'test',DYOFFICE_NATIVE_WORKER: 'experimental',DYOFFICE_WORKER_DATABASE_URL: f.urls.worker,DYOFFICE_BUSINESS_DATABASE_URL: f.urls.business,DYOFFICE_DEPLOYMENT_ID: f.deploymentId,DYOFFICE_REDIS_URL: process.env.DYOFFICE_TEST_REDIS_URL,DYOFFICE_NATIVE_BINARY: manifest.nativeBinary,DYOFFICE_NATIVE_SHA256: manifest.nativeSha256,DYOFFICE_FILE_API: 'experimental',DYOFFICE_OBJECT_STORE: 's3',DYOFFICE_S3_ENDPOINT: process.env.DYOFFICE_TEST_S3_ENDPOINT,DYOFFICE_S3_REGION: 'us-east-1',DYOFFICE_S3_BUCKET: bucket,DYOFFICE_S3_FORCE_PATH_STYLE: 'true',AWS_ACCESS_KEY_ID: process.env.DYOFFICE_TEST_S3_ACCESS_KEY,AWS_SECRET_ACCESS_KEY: process.env.DYOFFICE_TEST_S3_SECRET_KEY,DYOFFICE_WORKER_RUNTIME_DIRECTORY: join(f.directory,'worker-control') }
 }
 function daemon(env) {
   const child = spawn(process.execPath,['--experimental-strip-types',fileURLToPath(new URL('../../worker/src/main.ts',import.meta.url))],{ env,stdio: ['ignore','pipe','pipe'] })
@@ -175,7 +176,7 @@ function daemon(env) {
   } }
 }
 test('runnable daemon starts with restricted pools, consumes real queued API jobs and shuts down cleanly',{ timeout: 35_000 },async t => {
-  const f = await fixture(t), service = daemon(await daemonEnvironment(f))
+  const remote = await s3Fixture(t), f = await fixture(t,{ objectStore: remote.store }), service = daemon(await daemonEnvironment(f,remote.bucket))
   try {
     await service.ready
     const deadline=Date.now()+12000
@@ -202,7 +203,7 @@ test('runnable daemon starts with restricted pools, consumes real queued API job
   await noNativeServices()
 })
 test('daemon refuses production, privileged credentials, unknown deployment and stale schema before claiming jobs',{ timeout: 35_000 },async t => {
-  const f = await fixture(t), env = await daemonEnvironment(f)
+  const remote = await s3Fixture(t), f = await fixture(t,{ objectStore: remote.store }), env = await daemonEnvironment(f,remote.bucket)
   const original = (await f.ownerPool.query('SELECT sha256 FROM identity_migrations WHERE version=5')).rows[0].sha256
   const cases = [{ ...env,NODE_ENV: 'production' },{ ...env,DYOFFICE_DATABASE_URL: f.urls.owner },{ ...env,DYOFFICE_AUTH_DATABASE_URL: f.urls.auth },{ ...env,DYOFFICE_DEPLOYMENT_ID: randomUUID() }]
   cases.push({ ...env,stale: true })

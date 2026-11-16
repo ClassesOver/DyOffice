@@ -35,7 +35,7 @@
 - `DYOFFICE_WORKER_DATABASE_URL`、`DYOFFICE_BUSINESS_DATABASE_URL` 与 API 相同的 `DYOFFICE_DEPLOYMENT_ID`。
 - `DYOFFICE_REDIS_URL`（loopback redis 或 TLS rediss）。
 - `DYOFFICE_NATIVE_IMAGE` 为构建 manifest 的不可变 nativeImage SHA-256 ID。
-- 与 API 一致的实验 File API/object-store 配置；local-dev 使用同一个绝对对象目录，S3 使用相同受限配置。
+- 与 API 一致的实验 File API/S3 配置。当前 root host controller 仅接受 `DYOFFICE_OBJECT_STORE=s3`，不能与非 root API 共享 `local-dev` 的 `0600` 对象；独立 API 仍可使用单服务账户本地存储。当前运行要求以 [HOST-RUNTIME.md](../../../apps/web/worker/HOST-RUNTIME.md) 为准。
 
 Worker 不接受 owner/auth 数据库 URL 或旧开发 user/admin token。启动检查受限角色、完整迁移 checksum、同一数据库锁管理器、对象存储以及真实隔离原生程序的启动/退出，再连真实 Redis 消费。启动探针不解析文档、不创建任务或伪造输出。
 
