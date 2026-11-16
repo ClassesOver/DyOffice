@@ -1,0 +1,76 @@
+name: DyOffice T03c account lifecycle
+
+on:
+  push:
+    branches: [feat/dyoffice-t03c-account-lifecycle]
+    paths:
+      - 'apps/web/server/auth/**'
+      - 'apps/web/server/db/**'
+      - 'apps/web/test/account-lifecycle.test.mjs'
+      - 'apps/web/test/integration/account-lifecycle.postgres.test.mjs'
+      - 'apps/web/test/integration/local-identity.test.mjs'
+      - 'apps/web/test/integration/local-login.postgres.test.mjs'
+      - 'apps/web/package*.json'
+      - 'package*.json'
+      - '.github/workflows/dyoffice-t03c-accounts.yml'
+  pull_request:
+    paths:
+      - 'apps/web/server/auth/**'
+      - 'apps/web/server/db/**'
+      - 'apps/web/test/account-lifecycle.test.mjs'
+      - 'apps/web/test/integration/account-lifecycle.postgres.test.mjs'
+      - 'apps/web/test/integration/local-identity.test.mjs'
+      - 'apps/web/test/integration/local-login.postgres.test.mjs'
+      - 'apps/web/package*.json'
+      - 'package*.json'
+      - '.github/workflows/dyoffice-t03c-accounts.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dyoffice-t03c-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  account-lifecycle:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: dyoffice_test
+          POSTGRES_PASSWORD: local-ci-only-not-for-production
+          POSTGRES_DB: dyoffice_accounts_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U dyoffice_test -d dyoffice_accounts_test"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 2
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 22
+      - name: Syntax and account policy tests
+        run: |
+          node --check apps/web/server/auth/account-lifecycle.mjs
+          node --check apps/web/test/account-lifecycle.test.mjs
+          node --check apps/web/test/integration/account-lifecycle.postgres.test.mjs
+          node --test apps/web/test/account-lifecycle.test.mjs
+      - name: Install workspace dependencies without launching Electron
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Install locked Web dependencies with native Argon2id
+        run: npm ci --prefix apps/web --workspaces=false --include=dev --no-audit --no-fund
+      - name: Real PostgreSQL activation, reset, revocation, races and rollback
+        env:
+          DYOFFICE_TEST_DATABASE_URL: postgresql://dyoffice_test:local-ci-only-not-for-production@localhost:5432/dyoffice_accounts_test
+        run: node --test apps/web/test/integration/account-lifecycle.postgres.test.mjs
+      - name: Existing Web API and authentication unit regressions
+        run: npm run test:web
+      - name: Whitespace checks
+        run: git diff --check HEAD^
