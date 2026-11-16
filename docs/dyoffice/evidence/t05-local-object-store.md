@@ -1,6 +1,6 @@
 # T05 local immutable object store
 
-> 2026-11-16 · Local store, HTTP stage/finish/download, in-process S3 adapter, and `dyoffice_files` rows · **RLS is pending T04. The in-process blob client is not a live S3 service and is not highly available. The prototype `/api/files` route is unchanged.**
+> 2026-11-16 · T05 complete for repository scope. RLS is deferred to T04. Multi-node HA storage is deferred to operations. The `/api/files` prototype directory is unchanged.
 
 ## Why this slice
 
@@ -102,6 +102,28 @@ node --test apps/web/test/object-lifecycle-http.test.mjs
 
 Before the routes existed, trash returned 404 instead of 200. After the routes, the file passes.
 
-## Still open
+## MinIO
 
-Live S3 or MinIO, and highly available storage. T04 row-level security is not part of this store: the application owner filter is not a substitute for `FORCE ROW LEVEL SECURITY`. The planned T05 checks that do not need those two are in place.
+`createHttpBlobClient` signs path-style S3 requests. `apps/web/test/s3-minio.test.mjs` stages, finishes, downloads, trashes, restores, purges, and checks a corrupted blob. It runs when `DYOFFICE_S3_ENDPOINT`, `DYOFFICE_S3_BUCKET`, `DYOFFICE_S3_ACCESS_KEY_ID`, and `DYOFFICE_S3_SECRET_ACCESS_KEY` are set, and skips otherwise. [dyoffice-t05-s3.yml](../../../.github/workflows/dyoffice-t05-s3.yml) starts MinIO and sets those variables. The signer is checked against Amazon's published GET example without a network call.
+
+```sh
+node --test apps/web/test/s3-http-sign.test.mjs apps/web/test/s3-minio.test.mjs
+```
+
+## T05 closeout
+
+| Item | Result |
+| --- | --- |
+| Four formats, fake ZIP, empty file, oversize, unsafe name | Done. `object-store.test.mjs` |
+| Cross-owner upload and object ids, unfinished upload not readable | Done. `object-store.test.mjs`, `object-upload.test.mjs` |
+| Upload interruption leaves no completed object | Done. `object-store.test.mjs`, `s3-object-store.test.mjs` |
+| Server SHA-256, client ETag ignored, corrupt blob rejected | Done. Store tests and `object-lifecycle-http.test.mjs` |
+| Quota, including trash still counting | Done. Store, HTTP upload, and HTTP purge tests |
+| Recycle bin: trash, restore, purge, shared blob | Done. `object-recycle.test.mjs`, `object-lifecycle-http.test.mjs` |
+| Abandoned staged uploads expire | Done. `object-staging-expiry.test.mjs` and the S3 adapter |
+| HTTP stage, finish, download | Done. `object-upload.test.mjs`, `object-download.test.mjs` |
+| File row only after the object exists | Done. `file-catalog.test.mjs`, `0003_files.sql` |
+| S3-compatible lifecycle | Done in CI against MinIO. Skipped locally without the endpoint |
+| `/api/files` prototype directory | Left as the development-token prototype. Scoped bytes use `/api/v1/objects` |
+| Row-level security | Deferred to T04. The migration does not enable RLS |
+| Multi-node highly available storage | Deferred to operations. MinIO in CI is one container, not a production cluster |

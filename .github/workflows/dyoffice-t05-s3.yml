@@ -1,0 +1,58 @@
+name: DyOffice T05 S3-compatible object store
+
+on:
+  push:
+    branches: [main, feat/dyoffice-web]
+    paths:
+      - 'apps/web/server/src/storage/**'
+      - 'apps/web/test/s3-minio.test.mjs'
+      - 'apps/web/test/s3-http-sign.test.mjs'
+      - '.github/workflows/dyoffice-t05-s3.yml'
+  pull_request:
+    paths:
+      - 'apps/web/server/src/storage/**'
+      - 'apps/web/test/s3-minio.test.mjs'
+      - 'apps/web/test/s3-http-sign.test.mjs'
+      - '.github/workflows/dyoffice-t05-s3.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  minio:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      minio:
+        image: quay.io/minio/minio:RELEASE.2024-12-18T13-15-44Z
+        env:
+          MINIO_ROOT_USER: dyoffice
+          MINIO_ROOT_PASSWORD: dyoffice-ci-only-not-production
+        ports:
+          - 9000:9000
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+      - name: Wait until MinIO answers
+        run: |
+          for _ in $(seq 1 40); do
+            if curl -fsS http://127.0.0.1:9000/minio/health/live; then
+              exit 0
+            fi
+            sleep 1
+          done
+          echo 'MinIO did not become ready' >&2
+          exit 1
+      - name: Install workspace dependencies without launching Electron
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Exercise the object store against MinIO
+        env:
+          DYOFFICE_S3_ENDPOINT: http://127.0.0.1:9000
+          DYOFFICE_S3_BUCKET: dyoffice-test
+          DYOFFICE_S3_ACCESS_KEY_ID: dyoffice
+          DYOFFICE_S3_SECRET_ACCESS_KEY: dyoffice-ci-only-not-production
+          DYOFFICE_S3_REGION: us-east-1
+        run: node --test apps/web/test/s3-minio.test.mjs apps/web/test/s3-http-sign.test.mjs
