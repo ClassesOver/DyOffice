@@ -44,7 +44,7 @@ function bridge() {
 export function createAdminProviderPipeline({transactions,keyring,profiles,timeoutMs=30_000}:{
  transactions:PrincipalTransactions;keyring:SecretKeyring;profiles:readonly AdminPipelineProfile[];timeoutMs?:number
 }) {
- let disposed=false
+ let disposed=false,cleanupFailed=false
  const active=new Set<AbortController>()
  const keys:Record<string,Uint8Array>={}
  let configured:Readonly<AdminPipelineProfile>[]
@@ -102,7 +102,15 @@ export function createAdminProviderPipeline({transactions,keyring,profiles,timeo
     const built=buildOpenAiChatRequest(request,{model:permit.profile.model,maxOutputTokens:permit.profile.maxOutputTokens})
     wire=Buffer.from(built.body);built.body.fill(0)
     binding={turnId,entryId:permit.profile.entryId,configRevision:permit.profile.revision,requestDigest:built.digest}
-    const reservation=await budget.reserve(token,binding)
+    let reservation:Awaited<ReturnType<typeof budget.reserve>>
+    try{reservation=await budget.reserve(token,binding)}
+    catch{
+     // A commit may have succeeded even when its response is lost. The budget
+     // adapter intentionally redacts errors, so no safe commit/no-commit distinction
+     // is available here. Do not guess a refund or declare a clean shutdown.
+     cleanupFailed=true
+     throw fail()
+    }
     if(reservation.state!=='reserved')throw fail()
     reserved=true
     if(control.signal.aborted)throw fail()
@@ -140,12 +148,21 @@ export function createAdminProviderPipeline({transactions,keyring,profiles,timeo
     if(reserved&&!settled&&binding){
      // DB state guards prevent cancellation from refunding a committed claim,
      // including an ambiguous transaction result whose claimId was not returned.
-     try{if(claimId)await budget.markUnknown(token,binding,claimId);else await budget.cancel(token,binding)}catch{/* hold for operator reconciliation */}
+     try{if(claimId)await budget.markUnknown(token,binding,claimId);else await budget.cancel(token,binding)}catch{cleanupFailed=true /* hold for operator reconciliation; never report a clean drain */}
     }
     consumer?.dispose();wire?.fill(0)
     signal.removeEventListener('abort',abort);active.delete(control)
    }
   },
  },{timeoutMs,maxActive:1})
- return {turns,transportActiveCount:transport.activeCount,dispose(){disposed=true;turns.dispose();for(const c of active)c.abort();for(const key of Object.values(keys))key.fill(0)}}
+ return {turns,transportActiveCount:transport.activeCount,
+ async drain({timeoutMs=35_000}:{timeoutMs?:number}={}){
+  if(!disposed||!Number.isSafeInteger(timeoutMs)||timeoutMs<1||timeoutMs>35_000)throw new Error('AI pipeline drain unavailable')
+  const deadline=performance.now()+timeoutMs
+  while(active.size||turns.pendingCount()||transport.activeCount()){
+   if(performance.now()>=deadline)throw new Error('AI pipeline drain timed out')
+   await new Promise(resolve=>setTimeout(resolve,Math.min(10,Math.max(1,deadline-performance.now()))))
+  }
+  if(cleanupFailed)throw new Error('AI pipeline drain unavailable')
+ },dispose(){disposed=true;turns.dispose();for(const c of active)c.abort();for(const key of Object.values(keys))key.fill(0)}}
 }

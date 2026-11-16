@@ -49,6 +49,7 @@ export function createProviderTurns<P extends TurnPermit>(deps: TurnDependencies
   const cancellationLookups = new Set<Promise<TurnIdentity>>()
   return {
     activeCount: () => all.size,
+    pendingCount: () => all.size + cancellationLookups.size,
     dispose() {
       disposed = true
       for (const controller of all) controller.abort(fail('AI turn unavailable'))
