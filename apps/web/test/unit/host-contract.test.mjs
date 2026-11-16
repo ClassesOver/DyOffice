@@ -131,3 +131,19 @@ test('CommandEnvelope requires version, generation, lease and arguments hash', a
     assert.equal(tools.isCommandEnvelope({...value,...patch}),false)
   }
 })
+
+test('unknown desktop methods are not exposed through the BrowserHost adapter', () => {
+  let calls = 0
+  const host = createBrowserHost({ unknownDesktopMethod: () => { calls++; return 'ok' } })
+  assert.equal(Object.hasOwn(host, 'unknownDesktopMethod'), false)
+  assert.throws(() => host.unknownDesktopMethod(), TypeError)
+  assert.equal(calls, 0)
+})
+
+test('missing protocol versions and oversized UTF-8 events fail closed', () => {
+  const event = { messageId:'m', sessionId:'s', fileId:'f', type:'editor.ready', payload:{} }
+  assert.throws(() => decodeHostEvent(JSON.stringify(event)), err => err.code === 'INVALID_RESPONSE')
+  const raw = JSON.stringify({ ...event, protocolVersion:1, payload:{ text:'界'.repeat(90000) } })
+  assert.ok(raw.length < MAX_HOST_EVENT_BYTES)
+  assert.throws(() => decodeHostEvent(raw), err => err.code === 'PAYLOAD_TOO_LARGE')
+})
