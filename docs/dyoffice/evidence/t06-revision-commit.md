@@ -8,6 +8,8 @@ T05's local object store is already on `feat/dyoffice-web`. Login and resource-i
 
 The Web process commits through `createMemoryJournal` / `createFileJournal`. That queue is the transaction: a thrown callback publishes no revision, idempotency row, or outbox event. `server/db/migrations/0004_revisions.sql` is the PostgreSQL shape of the same ledger and is applied by the existing migration runner. This process does not open a database connection to commit a revision. Row-level security remains T04.
 
+The running server uses the same local object store and `dev-personal` owner as the development object HTTP routes. Revision calls do not choose a different owner.
+
 Only the existing DOCX paragraph editor calls these interfaces. Other formats stay import/download. There is no spreadsheet save path.
 
 ## RED cases

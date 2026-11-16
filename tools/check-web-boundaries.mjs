@@ -23,6 +23,7 @@ function imports(source, file) {
   const ast = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true)
   const found = []
   function visit(node) {
+    if ((ts.isImportDeclaration(node) && node.importClause?.isTypeOnly) || (ts.isExportDeclaration(node) && node.isTypeOnly) || (ts.isImportEqualsDeclaration(node) && node.isTypeOnly)) return
     let argument
     let mode = 'import'
     if (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) argument = node.moduleSpecifier
@@ -111,11 +112,23 @@ async function localDependency(specifier, mode, importer, packages, base) {
     if (!pkg) return null // Third-party package bundles remain a build gate.
     const subpath = '.' + specifier.slice(name.length)
     let value = pkg.manifest.exports
-    if (value && typeof value === 'object' && Object.keys(value).some(key => key.startsWith('.'))) value = value[subpath]
+    let wildcard
+    if (value && typeof value === 'object' && Object.keys(value).some(key => key.startsWith('.'))) {
+      if (Object.hasOwn(value, subpath)) value = value[subpath]
+      else {
+        const pattern = Object.keys(value).filter(key => key.includes('*')).sort((a,b) => b.indexOf('*') - a.indexOf('*') || b.length-a.length).find(key => {
+          const [prefix,suffix] = key.split('*')
+          return subpath.startsWith(prefix) && subpath.endsWith(suffix) && subpath.length >= prefix.length+suffix.length
+        })
+        if (pattern) { const [prefix,suffix] = pattern.split('*'); wildcard=subpath.slice(prefix.length,subpath.length-suffix.length);value=value[pattern] }
+        else value = undefined
+      }
+    }
     else if (subpath !== '.') value = null
     let entry = exportTarget(value, mode)
     if (!pkg.manifest.exports) entry = subpath === '.' ? (pkg.manifest.module || pkg.manifest.main || './index.js') : subpath
     if (!entry) throw new Error(`Unsupported workspace export ${specifier} imported by ${relative(base, importer)}`)
+    if (wildcard !== undefined) entry = entry.replaceAll('*', wildcard)
     target = resolve(pkg.directory, entry)
   }
   const within = relative(base, target)

@@ -15,7 +15,7 @@ interface LocaleValue {
 
 const LocaleContext = createContext<LocaleValue>({ lang: 'zh', setLang: () => {} })
 
-export function LocaleProvider({ initial, children }: { initial: Lang; children: ReactNode }) {
+export function LocaleProvider({ initial, children, onError }: { initial: Lang; children: ReactNode; onError?: (error: unknown) => void }) {
   const [lang, setLangState] = useState<Lang>(initial)
   const value = useMemo<LocaleValue>(
     () => ({
@@ -29,11 +29,11 @@ export function LocaleProvider({ initial, children }: { initial: Lang; children:
             document.documentElement.lang = htmlLang(next)
             document.documentElement.dir = htmlDir(next)
           },
-          (err: unknown) => console.warn('language not saved', err),
+          (err: unknown) => onError ? onError(err) : console.warn('language not saved', err),
         )
       },
     }),
-    [lang],
+    [lang, onError],
   )
   return <LocaleContext.Provider value={value}>{children}</LocaleContext.Provider>
 }

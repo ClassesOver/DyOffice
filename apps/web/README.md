@@ -113,3 +113,33 @@ Admin updates apply supplied sections against the latest state inside the instan
 每个请求由服务端生成独立 `X-Request-ID`，不信任或回显客户端同名请求头。JSON 错误响应保持原有 HTTP 状态码、`application/json` 和 `error` 文案，增量提供 `type: about:blank`、`title`、`status`、`detail`、`requestId`；成功响应正文不变。错误中不包含请求 URL、查询参数或内部异常详情，500 继续返回通用文案。
 
 `dev:web` and `start:web` boot Fastify through `buildApp`. Preferences, admin configuration, data sources, files, DOCX editing, and static pages are registered as modules on that shell. Health probes use static schemas. Business bodies keep the existing module validators. The process rate limit and shutdown cover one process. `NODE_ENV=production` still refuses startup. This is not local-account login or resource isolation.
+
+
+## Original GenOffice shell entry
+
+Build first (`npm run build:web`), then `npm run start:web`. The start command now
+selects built assets by default. The workspace directly imports the original
+`apps/shell` AppFrame, Home, TabBar, locale, FileBadge assets, home/tabbar CSS and
+shared UI tokens. Desktop defaults are unchanged; optional Home and AppFrame slots
+provide the Web account area and DOM editor container instead of WebContentsView.
+
+This checkpoint restores the **entry shell**, not all four editor ribbons. The
+already-merged DOCX paragraph editor remains in a retained iframe; XLSX/PPTX/PDF
+native renderer migrations remain separate. Import, file listing and preferences
+use the existing authenticated Web API. New DOCX/XLSX/PPTX files use the original
+GenOffice blank templates. PDF creation and the desktop Ask entry are disabled.
+Stars are explicitly page-session-only until a persistent starred API exists.
+Unavailable desktop operations report unsupported rather than pretend to succeed.
+Admin retains a separate token and route; no Genspark account flow is invoked.
+
+Switching Home/document tabs retains each iframe. Closing tabs or exiting checks
+the child editor's dirty/saving/unknown state. Legacy sidebar, return and logout
+also check it; refresh uses beforeunload. Pending auto-save timers are disposed on
+confirmed discard, and stale saves do not redraw a newer screen.
+
+Verification: `test:shell` mounts the actual components in jsdom (not visual proof),
+`typecheck:shell` checks their real sources, and the `DyOffice original shell UI`
+workflow runs Chromium against real APIs, verifies import/open/tab return/theme/
+Admin separation and canceled dirty navigation, then uploads screenshots/traces.
+Local Chromium launch is blocked by this executor's socket restriction; visual
+acceptance must wait for that workflow, not be inferred from jsdom or Vite.

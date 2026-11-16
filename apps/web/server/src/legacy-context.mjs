@@ -2,10 +2,11 @@ import { access, constants, mkdir } from 'node:fs/promises'
 import { join } from 'node:path'
 import { createStaticAssets } from '../static-assets.mjs'
 import { createStore } from '../store.mjs'
+import { DEV_PERSONAL_OWNER, objectStoreDirectory } from './modules/objects/routes.mjs'
 import { createLocalObjectStore } from './storage/local-dev.mjs'
 import { createRevisionRuntime } from './modules/revisions/runtime.mjs'
 
-export async function createLegacyContext({ directory, userToken, adminToken, encryptionKey, assetMode, assetDirectory }) {
+export async function createLegacyContext({ directory, userToken, adminToken, encryptionKey, assetMode, assetDirectory, objectQuota }) {
   if (!userToken || !adminToken || userToken === adminToken) {
     throw new Error('Personal and admin tokens must be distinct and nonempty')
   }
@@ -13,18 +14,22 @@ export async function createLegacyContext({ directory, userToken, adminToken, en
   const store = await createStore(directory, encryptionKey)
   const filePath = join(directory, 'files')
   await mkdir(filePath, { recursive: true, mode: 0o700 })
-  const objects = await createLocalObjectStore({
-    directory: join(directory, 'objects'),
-    maxObjectBytes: 50 * 1024 * 1024,
-    maxOwnerBytes: 1024 * 1024 * 1024,
+  const maxObjectBytes = objectQuota?.maxObjectBytes ?? 50 * 1024 * 1024
+  const maxOwnerBytes = objectQuota?.maxOwnerBytes ?? 512 * 1024 * 1024
+  const objectStore = await createLocalObjectStore({
+    directory: objectStoreDirectory(directory),
+    maxObjectBytes,
+    maxOwnerBytes,
   })
-  const revisionsRuntime = await createRevisionRuntime({ directory, objects })
+  const revisionsRuntime = await createRevisionRuntime({ directory, objects: objectStore })
   return {
     directory,
     credentials: { userToken, adminToken },
     store,
     filePath,
-    objects,
+    objectStore,
+    objectOwnerId: DEV_PERSONAL_OWNER,
+    objectMaxBytes: maxObjectBytes,
     revisionsRuntime,
     serveStatic,
     async ready() {

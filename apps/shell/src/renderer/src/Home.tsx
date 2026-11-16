@@ -3,6 +3,7 @@ import type {
   DragEvent as ReactDragEvent,
   PointerEvent as ReactPointerEvent,
   ReactElement,
+  ReactNode,
 } from 'react'
 import logoLockup from './assets/genoffice-logo.svg'
 import { KbAskPanel } from './KbAskPanel'
@@ -1478,7 +1479,15 @@ function DropToOpenOverlay(): ReactElement | null {
 
 // ── Main component ──────────────────────────────────────
 
-export function Home() {
+export interface HomeProps {
+  /** Web hosts retain the native layout while exposing only supported formats. */
+  supportedFormats?: readonly string[]
+  supportedNewFormats?: readonly string[]
+  accountEntry?: ReactNode
+  askEnabled?: boolean
+}
+
+export function Home({supportedFormats, supportedNewFormats, accountEntry, askEnabled = true}:HomeProps = {}) {
   const i18n = useI18n()
   const { t, lang } = i18n
   // ── Paged list state (rows loaded for the current view + filter) ──
@@ -2267,8 +2276,8 @@ export function Home() {
   function renderQuickCards() {
     return (
       <div className="quick-cards">
-        {NEW_ITEMS.map((item) => (
-          <button key={item.ext} className="quick-card" onClick={() => void item.action()}>
+        {NEW_ITEMS.filter(item => !supportedFormats || supportedFormats.includes(item.ext)).map((item) => (
+          <button key={item.ext} className="quick-card" disabled={Boolean(supportedNewFormats && !supportedNewFormats.includes(item.ext))} title={supportedNewFormats && !supportedNewFormats.includes(item.ext) ? 'Not available in this Web build' : undefined} onClick={() => void item.action()}>
             <FileBadge ext={item.ext} size={30} />
             <span className="quick-text">
               <span className="quick-title-row">
@@ -2282,7 +2291,7 @@ export function Home() {
         <button
           className="quick-card"
           onClick={() => void window.aiOffice.browse()}
-          data-tip={OPEN_LOCAL_EXTENSIONS}
+          data-tip={supportedFormats ? supportedFormats.map(ext => `.${ext}`).join(' / ') : OPEN_LOCAL_EXTENSIONS}
         >
           <span className="quick-folder">
             <FolderIcon size={18} />
@@ -2291,7 +2300,7 @@ export function Home() {
             <span className="quick-title-row">
               <span className="quick-title">{t('openLocal')}</span>
             </span>
-            <span className="quick-sub">{OPEN_LOCAL_EXTENSIONS}</span>
+            <span className="quick-sub">{supportedFormats ? supportedFormats.map(ext => `.${ext}`).join(' / ') : OPEN_LOCAL_EXTENSIONS}</span>
           </span>
         </button>
       </div>
@@ -3188,7 +3197,7 @@ export function Home() {
               </div>
             ) : (
               <div className="filter-pills" role="tablist" aria-label={t('filterAria')}>
-                {FILTERS.map((f) => (
+                {FILTERS.filter(f => !supportedFormats || f.key === 'all' || supportedFormats.includes(f.key)).map((f) => (
                   <button
                     key={f.key}
                     className={`filter-pill${filter === f.key ? ' active' : ''}`}
@@ -3320,7 +3329,7 @@ export function Home() {
             ) : (
               <div className="toolbar-filters">
                 <div className="filter-pills" role="tablist" aria-label={t('filterAria')}>
-                  {FILTERS.map((f) => (
+                  {FILTERS.filter(f => !supportedFormats || f.key === 'all' || supportedFormats.includes(f.key)).map((f) => (
                     <button
                       key={f.key}
                       className={`filter-pill${filter === f.key ? ' active' : ''}`}
@@ -3497,6 +3506,8 @@ export function Home() {
           </button>
           <button
             className={`nav-item${activeNav === 'ask' ? ' active' : ''}`}
+            disabled={!askEnabled}
+            title={!askEnabled ? 'Not available in this Web build' : undefined}
             aria-current={activeNav === 'ask' ? 'page' : undefined}
             onClick={() => {
               setAskMode(true)
@@ -3563,11 +3574,11 @@ export function Home() {
         </nav>
         <div className="sidebar-divider" />
         {renderFolderPanel()}
-        <AccountEntry
+        {accountEntry ?? <AccountEntry
           onStatusChange={handleAccountStatus}
           onFileSearchSettingsChange={() => setRerankSettingsTick((n) => n + 1)}
           openRequest={settingsRequest}
-        />
+        />}
       </aside>
       <div className="sidebar-resizer" onPointerDown={onSidebarResizeStart} />
       {selectedFolder && rootOf(selectedFolder, roots)?.readable ? (
