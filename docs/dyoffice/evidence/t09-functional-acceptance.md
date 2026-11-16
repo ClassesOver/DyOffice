@@ -78,7 +78,7 @@ WPS 证据已冻结。无后续 XML 试验；仅更新本文件的 WPS 矩阵。
 
 ## 功能验收矩阵
 
-下表以本轮实际运行结果填写。独立原生回归日志 `/tmp/dyoffice-t09-native-regression.NBmmk0.log` 为 **8/9 通过**；图表标题保存的单项日志 `/tmp/dyoffice-t09-chart-regression.yOijai.log` 明确失败为 `SANDBOX_BUSY`。新增共享有界 native admission 后，`/tmp/dyoffice-t09-chart-regression.1EyX4F.log` 的该单项 **1/1 通过**。这是分批通过记录，不是最终提交后完整9例同轮通过；完整最新 CI 仍需执行。专项单测282/282、bridge/lease/admission合计37/37和四套TypeScript检查通过。历史参考：`t09-runtime.md`、`../t09-local-acceptance.md`、`../../superpowers/specs/2026-11-16-t09-native-sheets.md`。
+下表以本轮实际运行结果填写。独立原生回归日志 `/tmp/dyoffice-t09-native-regression.NBmmk0.log` 为 **8/9 通过**；图表标题保存的单项日志 `/tmp/dyoffice-t09-chart-regression.yOijai.log` 明确失败为 `SANDBOX_BUSY`。新增共享有界 native admission 后，`/tmp/dyoffice-t09-chart-regression.1EyX4F.log` 的该单项 **1/1 通过**；结构保存最新单项日志 `/tmp/dyoffice-t09-structural-regression.ktz0Nb.log` **1/1 通过**。这是分批通过记录，最终提交 `137e929f` 后完整同轮回归仍需执行（CI 当前被 GitHub 账单阻塞，作业未启动：run 43869649350 jobs start_time=null steps=0）。专项单测 304/304、bridge/lease/admission 合计 37/37、xlsx-gateway 518/518 和四套 TypeScript 检查通过。历史参考：`t09-runtime.md`、`../t09-local-acceptance.md`、`../../superpowers/specs/2026-11-16-t09-native-sheets.md`。
 
 | 功能 / 验收点 | 本轮状态 | 证据或所需检查 | 软件 / 边界 |
 | --- | --- | --- | --- |
@@ -100,7 +100,7 @@ WPS 证据已冻结。无后续 XML 试验；仅更新本文件的 WPS 矩阵。
 | 只读 / conflict / lost lease / clean takeover | 本轮原生接管 E2E 通过；租约 barrier 15/15 通过 | 只读命令拒绝、显式接管后首屏 range 就绪才允许编辑、晚到有效 renew 恢复权限、release/takeover fencing；不代表全部未授权矩阵已跑 | Web / T06 |
 | 丢失提交响应后的幂等和后续编辑 | 本轮原生 E2E 通过；bridge barrier 9/9 通过 | 原请求幂等回执确认，后续编辑保留；真实下载等待原 save gate 再提交 child revision | Web / T06 |
 | 原生读取与保存槽位争用 | 已复现并修复；调度13/13通过，真实图表标题单项1/1通过 | 读取与保存共用两个槽、FIFO最多8等待项、输入快照合计64 MiB；忙时仅执行前可取消有界重试，过载429/到期503含Retry-After；不改变systemd资源限制 | Native admission |
-| 结构保存期间晚到非单元格编辑 | 明确受阻，不能标为完整修复 | 已提交结构快照后保留旧运行时/草稿并阻止重复写入；无自动reconciliation/草稿导出，需人工复制修改后重载 | Web / shared renderer |
+| 结构保存期间晚到非单元格编辑 | 已修复：保存期间准入屏障+异步任务drain；结构E2E 1/1通过 | 结构保存关mutation admission→drain已登记异步写入（图表读取/FileReader/Image/note子apply/op队列）→freeze→snapshot→两阶段提交→finally释放；保存中物理UI输入（含body portal）和COMMAND/MUTATION写被拒，确认按钮放行；桌面late-cell carry保留；原生E2E验证冻结期拒绝写入、保存后恢复编辑且结构不重放（4 revisions=导入+两结构阶段+后续提交）。30s超时保留草稿不发IPC。限制：任意未登记第三方raw Map写入由late-noncell failclosed兜底，不宣称全局事务隔离 | Web / shared renderer |
 | 透视表定义刷新 | 不支持（当前 Web host） | 原保存链保留现有部件不等于可刷新 | 不推断 WPS/LO/Excel 不支持 |
 | 文件级查找、工作簿密码修改、外部链接使用分析、跨工作簿选择 | 不支持（当前 Web host） | 现有 runtime 文档明确降级；待实现代理确认变更 | 不推断桌面软件能力 |
 | WPS 打开 / 正常关闭 / 崩溃定位 | 已复现并缩小到本机旧WPS多公式关闭触发；release blocker，未修复 | fixture/下载/兼容版均正常打开，正常close/No后真实wait -11；公共纯表/图表0。XlsxWriter原生单个1+1为0，原生两个常量1+1与2+2亦-11，无名称/引用/图表；fixture单独任一公式均0，两公式改普通SUM仍-11。通用最小复现与所有PID/hash/close动作见前述索引；不删除公式、不判工作簿非法、不将第三方程序crash当产品已修 | WPS 11.2.0.9505 Snap，此隔离环境；不替代LO/Excel |
