@@ -46,7 +46,7 @@ export function createProviderTurns<P extends TurnPermit>(deps: TurnDependencies
   const active = new Map<string,AbortController>()
   return {
     activeCount: () => all.size,
-    async run(input: {token:string;modelId:string;turnId:string;request:unknown}, emit:(event:TurnEvent)=>void|Promise<void>) {
+    async run(input: {token:string;modelId:string;turnId:string;request:unknown;signal?:AbortSignal}, emit:(event:TurnEvent)=>void|Promise<void>) {
       if (!validId(input.turnId) || !validId(input.modelId) || typeof input.token !== 'string') throw fail('Invalid AI request')
       const {token,modelId,turnId} = input
       const request = snapshot(input.request)
@@ -57,6 +57,11 @@ export function createProviderTurns<P extends TurnPermit>(deps: TurnDependencies
       let key: string | undefined
       let abort!: () => void
       const stopped = new Promise<never>((_resolve,reject)=>{abort=()=>reject(controller.signal.reason);controller.signal.addEventListener('abort',abort,{once:true})})
+      // A pre-aborted caller can stop before the first Promise.race attaches.
+      void stopped.catch(()=>{})
+      const disconnect = () => controller.abort(fail('AI turn cancelled'))
+      input.signal?.addEventListener('abort',disconnect,{once:true})
+      if (input.signal?.aborted) disconnect()
       const deadline = setTimeout(()=>controller.abort(fail('AI turn timed out')),timeoutMs)
       const step = <T>(operation:()=>Promise<T>):Promise<T> => {
         if (controller.signal.aborted) return Promise.reject(controller.signal.reason)
@@ -89,6 +94,7 @@ export function createProviderTurns<P extends TurnPermit>(deps: TurnDependencies
         throw error instanceof TurnError ? error : fail('AI turn unavailable')
       } finally {
         clearTimeout(deadline)
+        input.signal?.removeEventListener('abort',disconnect)
         controller.signal.removeEventListener('abort',abort)
         controller.abort()
         if (key && active.get(key)===controller) active.delete(key)
