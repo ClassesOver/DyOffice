@@ -20,6 +20,8 @@
     "start:worker": "node --experimental-strip-types worker/src/main.ts",
     "build:sheets": "vite build --config vite.sheets.config.ts && node server/sheets/build.mjs",
     "test:native-sheets": "node --experimental-strip-types --test --test-concurrency=1 test/native-sheets/*.test.mjs",
+    "build:slides": "vite build --config vite.slides.config.ts",
+    "test:native-slides": "node --experimental-strip-types --test --test-concurrency=1 test/native-slides/*.test.mjs",
     "bootstrap:admin": "node tools/bootstrap-admin.mjs",
     "test:identity:integration": "node --test test/integration/*.test.mjs",
     "test:shell": "vitest run --config vitest.shell.config.mjs",

@@ -51,5 +51,6 @@ apps/web/.dyoffice/
 /.dyoffice-native-build/
 
 /apps/web/dist-sheets/
+/apps/web/dist-slides/
 
 /apps/web/dist-sheets-server/

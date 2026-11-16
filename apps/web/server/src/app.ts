@@ -1,6 +1,9 @@
 import { createSheetsSaveService, type SheetsPlanner, type SheetsSaveNative } from './modules/sheets/save.ts'
 import { createSheetsService, type SheetsNative, type SheetsPackageReader } from './modules/sheets/service.ts'
 import { registerSheetsRoutes } from './modules/sheets/routes.ts'
+import { createSlidesSaveService } from './modules/slides/save.ts'
+import { createSlidesService, type SlidesSessionHost } from './modules/slides/service.ts'
+import { registerSlidesRoutes } from './modules/slides/routes.ts'
 import { createReadinessProbe } from './readiness.ts'
 import { createStaticAssets } from '../static-assets.mjs'
 import { registerLocalShell } from './local-shell.ts'
@@ -53,7 +56,7 @@ export async function buildApp(config: WebConfig): Promise<FastifyInstance> {
 
 export interface LocalWebConfig {
   db: IdentityStore; businessPool?: Pool; deploymentId: string; origin: string; csrfKey: string; passwords?: PasswordService;
-  objectStore?: ObjectStore; filePolicy?: FilePolicy; nativeDocsDirectory?: string; nativeSheetsDirectory?: string; nativeJobs?: boolean; sheetsNative?: SheetsNative & Partial<SheetsSaveNative>; sheetsPlanner?: SheetsPlanner; sheetsPackageReader?: SheetsPackageReader; localShellDirectory?: string;
+  objectStore?: ObjectStore; filePolicy?: FilePolicy; nativeDocsDirectory?: string; nativeSheetsDirectory?: string; nativeSlidesDirectory?: string; slidesHost?: SlidesSessionHost; nativeJobs?: boolean; sheetsNative?: SheetsNative & Partial<SheetsSaveNative>; sheetsPlanner?: SheetsPlanner; sheetsPackageReader?: SheetsPackageReader; localShellDirectory?: string;
   globalConfigKeyring?: SecretKeyring;
   passwordBlocklistFile?: string; loginLimits?: LoginLimits; idleMs?: number; absoluteMs?: number; closeDb?: () => Promise<void>
 }
@@ -80,7 +83,10 @@ export async function buildLocalApp(config: LocalWebConfig): Promise<FastifyInst
   if (config.localShellDirectory && !config.objectStore) throw new Error('Local shell requires scoped File API')
   if (config.nativeDocsDirectory && !config.objectStore) throw new Error('Native DOCX requires File API')
   if (config.nativeSheetsDirectory && (!config.objectStore || !config.sheetsNative?.readSheet || !config.sheetsNative?.savePlan || !config.sheetsPlanner || !config.sheetsPackageReader)) throw new Error('Native Sheets requires complete native adapters')
+  if (config.nativeSlidesDirectory && !config.objectStore) throw new Error('Native slides require File API')
+  if (config.slidesHost && !config.objectStore) throw new Error('Native slides sessions require File API')
   const nativeSheets = config.nativeSheetsDirectory ? await createStaticAssets({assetMode:'built',assetDirectory:config.nativeSheetsDirectory,pages:['index.html'],assetInventory:'.vite/native-assets.json',cacheControl:'private, no-store'}) : undefined
+  const nativeSlides = config.nativeSlidesDirectory ? await createStaticAssets({assetMode:'built',assetDirectory:config.nativeSlidesDirectory,pages:['index.html'],assetInventory:'.vite/native-assets.json',cacheControl:'private, no-store'}) : undefined
   const nativeDocs = config.nativeDocsDirectory ? await createStaticAssets({ assetMode: 'built',assetDirectory: config.nativeDocsDirectory,pages: ['index.html'],assetInventory: '.vite/native-assets.json',cacheControl: 'private, no-store' }) : undefined
   const passwords = config.passwords ?? await createPasswordService({ blockedPasswords: await loadPasswordBlocklist(config.passwordBlocklistFile) })
   const accounts = createAccountService({ db: config.db, passwords, deploymentId: config.deploymentId })
@@ -100,13 +106,18 @@ export async function buildLocalApp(config: LocalWebConfig): Promise<FastifyInst
     registerWorkspaceRoutes(app, createWorkspaceService(transactions), sessions, csrf)
     registerGlobalConfigRoutes(app, createGlobalConfigService({transactions, keyring: config.globalConfigKeyring}), sessions, csrf)
     if (config.objectStore) {
-      const files = createFileService({ transactions, objects: config.objectStore, ...config.filePolicy, capabilities: nativeDocs || nativeSheets ? { docx: nativeDocs ? 'editable' : 'unsupported',xlsx: nativeSheets ? 'editable' : 'unsupported',pptx: 'unsupported',pdf: 'unsupported' } : undefined })
+      const files = createFileService({ transactions, objects: config.objectStore, ...config.filePolicy, capabilities: nativeDocs || nativeSheets || nativeSlides ? { docx: nativeDocs ? 'editable' : 'unsupported',xlsx: nativeSheets ? 'editable' : 'unsupported',pptx: nativeSlides ? 'editable' : 'unsupported',pdf: 'unsupported' } : undefined })
       const leases = createLeaseService({ transactions })
       const revisions = createRevisionService({ transactions, objects: config.objectStore, files, ...config.filePolicy })
       registerFileRoutes(app,files,sessions,csrf,{ leases, revisions })
       if (config.sheetsNative) {
         const saves = config.sheetsPlanner ? createSheetsSaveService({files,leases,revisions,native:config.sheetsNative as SheetsNative & SheetsSaveNative,plan:config.sheetsPlanner}) : undefined
         registerSheetsRoutes(app,createSheetsService({files,native:config.sheetsNative,readPackage:config.sheetsPackageReader}),sessions,csrf,saves)
+      }
+      if (config.slidesHost) {
+        const slides = createSlidesService({files,host:config.slidesHost})
+        app.addHook('onClose', () => slides.closeAll())
+        registerSlidesRoutes(app,slides,sessions,csrf,createSlidesSaveService({files,leases,revisions,sessions:slides}))
       }
       if (config.nativeJobs) registerJobRoutes(app,createJobService({ transactions,enabledTypes: ['xlsx.roundtrip'] }),sessions,csrf)
       if (nativeDocs) app.route({
@@ -125,6 +136,28 @@ export async function buildLocalApp(config: LocalWebConfig): Promise<FastifyInst
           // No source fallback and no arbitrary file paths: only verified build assets.
           const response = reply.raw
           const served = await nativeDocs(request.raw,response,path)
+          if (!served) throw authError(404)
+          reply.hijack()
+        },
+      })
+      if (nativeSlides) app.route({
+        method: ['GET','HEAD'], url: '/native-pptx/*',
+        onRequest: async (request,reply) => {
+          reply.raw.setHeader('Cache-Control','private, no-store')
+          // 'wasm-unsafe-eval' keeps harfbuzzjs font shaping working; media-src covers
+          // PPTX-embedded audio/video played through the slides renderer.
+          reply.raw.setHeader('Content-Security-Policy',"default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob:; font-src 'self' data: blob:; worker-src 'self' blob:; connect-src 'self' blob:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'")
+          await sessions.authenticate(cookies(request).session ?? '')
+        },
+        handler: async (request,reply) => {
+          const url = new URL(request.url,config.origin), path = url.pathname.slice('/native-pptx'.length)
+          if (path === '/' || path === '/index.html') {
+            const opened = await files.openFile(cookies(request).session ?? '',url.searchParams.get('fileId') ?? '')
+            if (opened.format !== 'pptx') throw authError(404)
+          }
+          // No source fallback and no arbitrary file paths: only verified build assets.
+          const response = reply.raw
+          const served = await nativeSlides(request.raw,response,path)
           if (!served) throw authError(404)
           reply.hijack()
         },
