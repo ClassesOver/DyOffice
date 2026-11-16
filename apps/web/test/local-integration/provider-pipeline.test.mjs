@@ -187,3 +187,50 @@ test('real app.close ends active synthetic provider stream and holds committed b
   }
  } finally {response?.destroy();await app.close()}
 })
+for(const failure of [false,true])test(`drain ${failure?'reports failed':'waits for delayed'} unknown settlement before resource close`,async t=>{
+ const {createProviderShutdown}=await import('../../server/src/modules/providers/shutdown.ts')
+ const held=deferred(),release=deferred(),delta=deferred();let closed=0
+ const n=network(t,()=>{const res=new Readable({read(){}});res.push(validChunks[0]);return res})
+ const f=await fixture(t,{wrapTransactions:base=>({...base,withPrincipalTransaction:(input,fn)=>base.withPrincipalTransaction(input,(client,p)=>fn(new Proxy(client,{get(target,key){
+  if(key==='query')return async(sql,params)=>{
+   if(String(sql).includes('provider_budget_action')&&params?.[0]==='unknown'){
+    held.resolve();await release.promise;if(failure)throw Error('synthetic settlement failure')
+   }
+   return target.query(sql,params)
+  }
+  const value=target[key];return typeof value==='function'?value.bind(target):value
+ }}),p))})})
+ const work=f.appPipeline.turns.run(f.input,async()=>delta.resolve());void work.catch(()=>{})
+ await bounded(delta.promise)
+ const shutdown=createProviderShutdown({pipeline:f.appPipeline,timeoutMs:1000,closeResources:async()=>{
+  assert.equal((await f.ownerPool.query('SELECT state FROM provider_budget_reservations')).rows[0].state,'unknown')
+  await f.businessPool.end();closed++
+ }})
+ const closing=shutdown();void closing.catch(()=>{})
+ try{
+  await bounded(held.promise);await assert.rejects(work)
+  assert.equal(closed,0);await assert.rejects(f.appPipeline.drain({timeoutMs:20}),/drain/)
+  await assert.rejects(f.appPipeline.turns.run({...f.input,turnId:randomUUID()},async()=>{}));assert.equal(n.writes,1)
+  release.resolve()
+  if(failure){await assert.rejects(closing,/drain/);assert.equal(closed,0);await assert.rejects(f.appPipeline.drain({timeoutMs:100}),/drain/)}
+  else{await closing;assert.equal(closed,1);await shutdown();assert.equal(closed,1)}
+ }finally{release.resolve();await closing.catch(()=>{})}
+})
+test('ambiguous committed reservation response cannot report clean drain or close resources',async t=>{
+ const {createProviderShutdown}=await import('../../server/src/modules/providers/shutdown.ts')
+ let ambiguous=true,closed=0
+ const n=network(t),f=await fixture(t,{wrapTransactions:base=>({...base,async withPrincipalTransaction(input,fn){
+  let reserve=false
+  const result=await base.withPrincipalTransaction(input,(client,p)=>fn(new Proxy(client,{get(target,key){
+   if(key==='query')return async(sql,params)=>{if(String(sql).includes('provider_budget_action')&&params?.[0]==='reserve')reserve=true;return target.query(sql,params)}
+   const value=target[key];return typeof value==='function'?value.bind(target):value
+  }}),p))
+  if(reserve&&ambiguous){ambiguous=false;throw Error('synthetic lost commit response')}
+  return result
+ }})})
+ await assert.rejects(f.appPipeline.turns.run(f.input,async()=>{}));assert.equal(n.writes,0)
+ assert.equal((await f.ownerPool.query('SELECT state FROM provider_budget_reservations')).rows[0].state,'reserved')
+ const shutdown=createProviderShutdown({pipeline:f.appPipeline,timeoutMs:100,closeResources:async()=>{closed++}})
+ await assert.rejects(shutdown(),/drain/);assert.equal(closed,0)
+ assert.equal((await f.ownerPool.query('SELECT state FROM provider_budget_reservations')).rows[0].state,'reserved')
+})
