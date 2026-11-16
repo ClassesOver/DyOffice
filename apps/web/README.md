@@ -148,3 +148,5 @@ workflow runs Chromium against real APIs, verifies import/open/tab return/theme/
 Admin separation and canceled dirty navigation, then uploads screenshots/traces.
 Local Chromium launch is blocked by this executor's socket restriction; visual
 acceptance must wait for that workflow, not be inferred from jsdom or Vite.
+
+PR #24 follow-up adds a conservative plain-table-cell projection and a partial Web desktop bridge. New-document, Save As and explicit-target saves reject `UNSUPPORTED` because the bridge has no create/copy/overwrite-policy host operation. Tables containing multiple runs, paragraph identities, bookmarks, tracked changes or other unsupported paragraph structure remain read-only. Unchanged cells retain their original XML bytes. This does not mount the original Docs ribbon.
