@@ -84,10 +84,10 @@ async function commitStaged(runtime, store, filePath, fileId, input) {
     journal: runtime.journal,
     objects: runtime.objects,
     ownerId: runtime.principal.ownerId,
+    deploymentId: runtime.principal.deploymentId,
     store,
     filePath,
     fileId,
-    saved,
   })
   return saved.ref
 }

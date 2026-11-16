@@ -8,7 +8,11 @@ import { createSaveGenerationGuard } from '../../../../packages/browser-host/src
 import { createLeaseService } from '../../server/src/modules/leases/service.mjs'
 import { createFileJournal, createMemoryJournal } from '../../server/src/modules/revisions/journal.mjs'
 import { revisionError } from '../../server/src/modules/revisions/errors.mjs'
+import { createStore } from '../../server/store.mjs'
+import { rawBody } from '../../server/src/http-helpers.mjs'
 import { projectCurrentHead } from '../../server/src/modules/revisions/projection.mjs'
+import { handleRevisionRoutes } from '../../server/src/modules/revisions/routes.mjs'
+import { createRevisionRuntime, DEV_PERSONAL_PRINCIPAL } from '../../server/src/modules/revisions/runtime.mjs'
 import { createRevisionService } from '../../server/src/modules/revisions/service.mjs'
 import { createOutboxService } from '../../server/src/outbox/service.mjs'
 import { createLocalObjectStore } from '../../server/src/storage/local-dev.mjs'
@@ -157,6 +161,60 @@ test('a missing object never becomes a revision', async (t) => {
   assert.equal(revisions.listRevisions(principal, fileId).length, 1)
 })
 
+function responseCapture() {
+  let status = 0
+  let payload = ''
+  return {
+    res: {
+      writeHead(code) { status = code },
+      end(body) { payload = body },
+      getHeader() { return undefined },
+    },
+    result() { return { status, body: JSON.parse(payload) } },
+  }
+}
+
+test('replaying an older commit through the route projects the current head', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'dyoffice-route-head-'))
+  t.after(() => rm(directory, { recursive: true, force: true }))
+  const files = join(directory, 'files')
+  await mkdir(files, { recursive: true })
+  const store = await createStore(directory, 'route-head-test')
+  const objects = await createLocalObjectStore({ directory: join(directory, 'objects'), maxObjectBytes: 1024, maxOwnerBytes: 8192 })
+  const revisionsRuntime = await createRevisionRuntime({ directory, objects })
+  const owner = DEV_PERSONAL_PRINCIPAL
+  const fileId = randomUUID()
+  await writeFile(join(files, fileId), ZIP)
+  await store.update((state) => { state.files.push({ id: fileId, name: 'notes.docx', format: 'docx', size: ZIP.length }) })
+  const ctx = { store, filePath: files, revisionsRuntime }
+  const head = await revisionsRuntime.revisions.registerHead(owner, { fileId, name: 'notes.docx', bytes: ZIP })
+  async function stageNoted(bytes, name) {
+    const staged = await objects.stageUpload({ ownerId: owner.ownerId, name, bytes })
+    await revisionsRuntime.revisions.noteUpload(owner, { fileId, uploadId: staged.uploadId })
+    return staged.uploadId
+  }
+  async function commit(uploadId, baseRevision, idempotencyKey) {
+    const captured = responseCapture()
+    const body = { fileId, uploadId, baseRevision, idempotencyKey, leaseEpoch: 1 }
+    const request = { method: 'POST', [rawBody]: Buffer.from(JSON.stringify(body)) }
+    await handleRevisionRoutes(request, captured.res, ctx, { url: new URL(`http://localhost/api/v1/files/${fileId}/commits`), state: store.read() })
+    return captured.result()
+  }
+  const firstId = await stageNoted(ZIP_B, 'a.docx')
+  const first = await commit(firstId, head.revision, 'route-replay-a')
+  assert.equal(first.status, 200)
+  const secondId = await stageNoted(ZIP_C, 'b.docx')
+  const second = await commit(secondId, first.body.revision, 'route-replay-b')
+  assert.equal(second.status, 200)
+  await writeFile(join(files, fileId), ZIP_B)
+  const replay = await commit(firstId, head.revision, 'route-replay-a')
+  assert.equal(replay.status, 200)
+  assert.equal(replay.body.revision, first.body.revision)
+  assert.notEqual(replay.body.revision, second.body.revision)
+  assert.deepEqual(await readFile(join(files, fileId)), ZIP_C)
+  assert.equal(revisionsRuntime.revisions.current(owner, fileId).revision, second.body.revision)
+})
+
 test('replaying an older commit does not replace the bytes of the current head', async (t) => {
   const { directory, revisions, objects, journal, fileId, head } = await setup(t)
   const files = join(directory, 'files')
@@ -164,8 +222,8 @@ test('replaying an older commit does not replace the bytes of the current head',
   await writeFile(join(files, fileId), ZIP)
   const meta = { files: [{ id: fileId, size: ZIP.length }] }
   const store = { update: async (fn) => { await fn(meta) } }
-  const project = (saved) => projectCurrentHead({
-    journal, objects, ownerId: principal.ownerId, store, filePath: files, fileId, saved,
+  const project = () => projectCurrentHead({
+    journal, objects, ownerId: principal.ownerId, deploymentId: principal.deploymentId, store, filePath: files, fileId,
   })
   const firstUpload = await stage(objects, ZIP_B, 'a.docx')
   await revisions.noteUpload(principal, { fileId, uploadId: firstUpload.uploadId })

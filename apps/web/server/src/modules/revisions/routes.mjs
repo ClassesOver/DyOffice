@@ -67,15 +67,15 @@ async function ensureHead(ctx, state, fileId) {
   return file
 }
 
-async function project(ctx, principal, fileId, saved) {
+async function project(ctx, principal, fileId) {
   await projectCurrentHead({
     journal: ctx.revisionsRuntime.journal,
     objects: ctx.revisionsRuntime.objects,
     ownerId: principal.ownerId,
+    deploymentId: principal.deploymentId,
     store: ctx.store,
     filePath: ctx.filePath,
     fileId,
-    saved,
   })
 }
 
@@ -118,7 +118,7 @@ export async function handleRevisionRoutes(req, res, ctx, { url, state }) {
       leaseEpoch: assertLeaseEpoch(body.leaseEpoch),
       sourceCommandId: assertSourceCommand(body.sourceCommandId),
     })
-    await project(ctx, principal, fileId, saved)
+    await project(ctx, principal, fileId)
     sendJson(res, 200, saved.ref)
     return true
   }
@@ -130,7 +130,7 @@ export async function handleRevisionRoutes(req, res, ctx, { url, state }) {
     leaseEpoch: assertLeaseEpoch(body.leaseEpoch),
     idempotencyKey: assertIdempotencyKey(body.idempotencyKey),
   })
-  await project(ctx, principal, fileId, saved)
+  await project(ctx, principal, fileId)
   sendJson(res, 200, saved.ref)
   return true
 }

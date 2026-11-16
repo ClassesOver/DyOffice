@@ -38,16 +38,16 @@ export async function projectCommittedBytes({ store, filePath, fileId, bytes }) 
 }
 
 /**
- * Publish bytes only while this revision is still the head. The check and the
- * legacy file write share the journal queue, so a newer commit cannot be
- * overwritten by an older replay.
+ * Copy the ledger's current head onto the legacy file. A replayed older
+ * revision must not be the bytes that get written. The read and the write
+ * share the journal queue, so a newer commit cannot land underneath them.
  */
-export async function projectCurrentHead({ journal, objects, ownerId, store, filePath, fileId, saved }) {
+export async function projectCurrentHead({ journal, objects, ownerId, deploymentId, store, filePath, fileId }) {
   await journal.transaction(fileId, async (snapshot) => {
     const file = snapshot.files[fileId]
-    if (!file || file.ownerId !== ownerId || file.revision !== saved.ref.revision || file.objectId !== saved.objectId) return
-    const opened = await objects.downloadObject({ ownerId, objectId: saved.objectId })
-    if (opened.sha256 !== saved.ref.sha256 || opened.sha256 !== file.sha256) throw revisionError('HASH_MISMATCH', 503)
+    if (!file || file.ownerId !== ownerId || (deploymentId !== undefined && file.deploymentId !== deploymentId)) return
+    const opened = await objects.downloadObject({ ownerId, objectId: file.objectId })
+    if (opened.sha256 !== file.sha256) throw revisionError('HASH_MISMATCH', 503)
     await projectCommittedBytes({ store, filePath, fileId, bytes: opened.bytes })
   })
 }
