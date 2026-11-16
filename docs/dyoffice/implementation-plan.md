@@ -169,11 +169,13 @@ docs/dyoffice/               当前计划及 inventory/ evidence/ adr/
 
 **接口：** `commitRevision()`、`acquireLease()/renewLease()/takeoverLease()`；文件修改基于 T01 SaveInput。
 
-- [ ] 覆盖并发同基线、旧 leaseEpoch、幂等键不同内容、对象成功 DB 失败、响应丢失、旧保存响应覆盖新编辑状态。
-- [ ] 对应 unit/integration RED。
-- [ ] 实现 staged object -> DB CAS/revision/idempotency/outbox 单事务；冲突保留草稿，接管租约 fencing；恢复历史创建新版本。
-- [ ] GREEN；两个并发请求仅一条新当前版本；重试返回原 revision；无缺失对象引用。
-- [ ] 提交 `feat(files): make commits conflict-safe and idempotent`。
+**状态（2026-11-16）：** 开发用单进程版本账本已落地，见 [t06-revision-commit.md](evidence/t06-revision-commit.md)。它先把字节写入 T05 本地对象存储，再在同一个日志事务里做基线 CAS、租约 fencing、幂等和 outbox。DOCX 段落保存走这组接口。运行中的 Web 进程还没有连接 PostgreSQL 来提交版本；`0004_revisions.sql` 是同一规则的数据库形状，不启用 RLS。没有接入表格编辑。
+
+- [x] 覆盖并发同基线、旧 leaseEpoch、幂等键不同内容、对象成功 DB 失败、响应丢失、旧保存响应覆盖新编辑状态。
+- [x] 对应 unit/integration 覆盖上述失败；客户端保存世代测试仍在 `save-generation`。
+- [x] 实现 staged object -> 账本 CAS/revision/idempotency/outbox 单事务；冲突保留草稿，接管租约 fencing；恢复历史创建新版本。开发账本代替尚未接入的 PostgreSQL 连接。
+- [x] GREEN；两个并发请求仅一条新当前版本；重试返回原 revision；无缺失对象引用。
+- [x] 提交 `feat(files): make commits conflict-safe and idempotent`。
 
 ### T07 DOCX 原生浏览器纵向闭环
 
