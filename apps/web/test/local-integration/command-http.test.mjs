@@ -115,7 +115,7 @@ for (const rejectCommit of [false, true])
           origin,
           cookie: `${SESSION_COOKIE}=${f.alice.token}`,
         },
-        payload: init.body,
+        payload: init.body instanceof Uint8Array ? Buffer.from(init.body) : init.body,
       })
       if (path.endsWith('/uploads')) stages++
       if (path.endsWith('/commits')) {
