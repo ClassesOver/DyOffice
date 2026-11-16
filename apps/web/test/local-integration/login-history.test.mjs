@@ -86,3 +86,23 @@ test('failure attribution waits for concurrent rename and never assigns stale us
   assert.equal((await history(f)).filter(e=>e.outcome==='failure').length,0)
  } finally {await owner.query('ROLLBACK');owner.release();if(attempted)await attempted}
 })
+
+test('known and unknown invalid credentials have the same response despite a locked account row',async t=>{
+ const f=await restrictedFixture(t),owner=await f.ownerPool.connect()
+ const attempt=async username=>{
+  const challenge=await f.app.inject({method:'GET',url:'/api/v1/auth/csrf',headers:{origin:'https://office.example'}})
+  const set=challenge.headers['set-cookie'],cookies=(Array.isArray(set)?set:[set]).filter(Boolean).map(v=>v.split(';')[0]).join('; ')
+  return f.app.inject({method:'POST',url:'/api/v1/auth/login',headers:{origin:'https://office.example',cookie:cookies,'x-csrf-token':challenge.json().csrfToken},payload:{username,password:'wrong password'}})
+ }
+ try {
+  await owner.query('BEGIN');await owner.query('UPDATE users SET display_name=$1 WHERE id=$2',['locked',f.alice.user.id])
+  const before=(await f.ownerPool.query('SELECT count(*) AS n FROM sessions')).rows[0].n
+  const [known,unknown]=await Promise.all([attempt('alice'),attempt('not-a-user')])
+  assert.equal((await f.ownerPool.query('SELECT count(*) AS n FROM sessions')).rows[0].n,before)
+  assert.equal(known.headers['set-cookie'],undefined);assert.equal(unknown.headers['set-cookie'],undefined)
+  assert.equal(unknown.statusCode,401)
+  // Prior FOR SHARE attribution returns 500 on the known account's lock timeout.
+  assert.equal(known.statusCode,unknown.statusCode)
+  assert.deepEqual(known.json(),unknown.json())
+ }finally{await owner.query('ROLLBACK');owner.release()}
+})
