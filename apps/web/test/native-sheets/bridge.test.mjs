@@ -60,3 +60,19 @@ const saving=bridge.api.saveWorkbookEdits(edits)
  const reopened=await bridge.api.readWorkbookRange({...request,sessionId:saved.file.sessionId,sheetId:saved.file.sheets[0].id})
  assert.equal(reopened.cells.find(c=>c.column===0).value,32)
 })
+
+
+test('unsupported workbook operations reject asynchronously instead of breaking original renderer load', async t => {
+ const dir=await mkdtemp(join(tmpdir(),'dyoffice-capabilities-'));t.after(()=>rm(dir,{recursive:true,force:true}))
+ const outfile=join(dir,'bridge.mjs')
+ await build({entryPoints:[fileURLToPath(new URL('../../src/editors/sheets-bridge.ts',import.meta.url))],bundle:true,platform:'node',format:'esm',outfile,logLevel:'silent'})
+ const {createSheetsBridge}=await import(pathToFileURL(outfile).href)
+ const bridge=createSheetsBridge({},'unused',{language:'en',theme:'light'})
+ t.after(()=>bridge.dispose())
+ for(const method of ['readPivotDefinition','findWorkbookCells','updateWorkbookPassword','readExternalLinkUsage','listWorkbookTabs']){
+  assert.equal(typeof bridge.api[method],'function',method)
+  let operation
+  assert.doesNotThrow(()=>{operation=bridge.api[method]({})},method)
+  await assert.rejects(operation,error=>error.message.length>0&&!/is not a function/.test(error.message))
+ }
+})

@@ -13,7 +13,7 @@ import '@univerjs/sheets/facade'
 import { UniverSheetsFormulaPlugin } from '@univerjs/sheets-formula'
 import '@univerjs/sheets-formula/facade'
 import { it, expect } from 'vitest'
-it.each(['direct', 'nested'])(
+it.each(['direct', 'nested', 'lowercase'])(
   'recalculates a real engine formula after its %s defined range changes',
   async (mode) => {
     installDefinedNameDependencies()
@@ -57,7 +57,8 @@ it.each(['direct', 'nested'])(
           .setRef(mode === 'nested' ? 'BaseRange' : 'Acceptance!$A$2:$A$3')
           .build(),
       )
-      sheet.getRange('F2').setFormula('=SUM(Revenue)')
+      const formula = mode === 'lowercase' ? '=SUM(revenue)' : '=SUM(Revenue)'
+      sheet.getRange('F2').setFormula(formula)
       await expect
         .poll(() => sheet.getRange('F2').getCellDatas()[0]?.[0]?.v, { timeout: 5000 })
         .toBe(20)
@@ -77,7 +78,7 @@ it.each(['direct', 'nested'])(
       await expect
         .poll(() => sheet.getRange('F2').getCellDatas()[0]?.[0]?.v, { timeout: 5000 })
         .toBe(12.5)
-      expect(sheet.getRange('F2').getFormula()).toBe('=SUM(Revenue)')
+      expect(sheet.getRange('F2').getFormula()).toBe(formula)
     } finally {
       univer.dispose()
     }

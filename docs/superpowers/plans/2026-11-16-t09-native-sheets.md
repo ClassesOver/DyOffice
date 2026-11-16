@@ -16,22 +16,22 @@ No Docker, alternate XLSX writer, exposed host paths, invented fidelity results,
 
 ## 1. Trace native lifecycle and freeze acceptance fixtures
 
-- [ ] Map preload methods used during real App mount/open/read/edit/save and gateway/native dependencies; identify reusable server modules and explicit host capability seams.
-- [ ] Add hashed fixture(s) containing formulas with stale cache, dates, percentages, units/raw values, names, charts and an unknown part.
-- [ ] Add real browser open/edit/save/reopen acceptance and observe RED before implementing the entry.
+- [x] Map preload methods used during real App mount/open/read/edit/save and gateway/native dependencies; identify reusable server modules and explicit host capability seams.
+- [x] Add hashed fixture(s) containing formulas with stale cache, dates, percentages, units/raw values, names, charts and an unknown part.
+- [x] Add real browser open/edit/save/reopen acceptance and observe RED before implementing the entry.
 
 ## 2. Authorized native workbook operations
 
-- [ ] Test owned revision capture, session scope, bounded reads/edits, lease loss, stale base, cancellation and output fencing (RED).
-- [ ] Adapt original gateway/planner and Rust protocol through T08; provide authenticated file/revision-based requests, preserve original archive and T06 commits.
-- [ ] Verify edited formula/numeric/style/name/chart output and preservation against original fixtures; regress native/gateway suites.
+- [x] Test owned revision capture, session scope, bounded reads/edits, lease loss, stale base, cancellation and output fencing (RED).
+- [x] Adapt original gateway/planner and Rust protocol through T08; provide authenticated file/revision-based requests, preserve original archive and T06 commits.
+- [x] Verify edited formula/numeric/style/name/chart output and preservation against original fixtures; regress native/gateway suites.
 
 ## 3. Mount the native Sheets editor
 
-- [ ] Implement `apps/web/src/editors/sheets-entry.tsx` exporting `mountSheetsEditor()` and the necessary explicit renderer host seam/bridge.
-- [ ] Wire open/read/save, preferences, capabilities, loading/error/lease/conflict state using existing conventions.
-- [ ] Reuse existing tool dispatch and batch undo; verify edits and undo through the actual browser editor.
-- [ ] Add browser build/static routing and scoped entry configuration without importing Node into the browser graph.
+- [x] Implement `apps/web/src/editors/sheets-entry.tsx` exporting `mountSheetsEditor()` and the necessary explicit renderer host seam/bridge.
+- [x] Wire open/read/save, preferences, capabilities, loading/error/lease/conflict state using existing conventions.
+- [x] Reuse existing tool dispatch and batch undo; verify edits and undo through the actual browser editor.
+- [x] Add browser build/static routing and scoped entry configuration without importing Node into the browser graph.
 
 ## 4. Closure
 

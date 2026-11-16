@@ -151,3 +151,38 @@ jobs:
         run: sudo --preserve-env=PATH,DYOFFICE_TEST_HOST_MANIFEST npm run test:web:sandbox
       - name: Test real native job output, cancellation, recovery and BullMQ redelivery
         run: sudo --preserve-env=PATH,DYOFFICE_TEST_HOST_MANIFEST,DYOFFICE_TEST_DATABASE_URL,DYOFFICE_TEST_REDIS_URL npm run test:web:native-jobs
+
+
+  native-sheets:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      RUSTUP_TOOLCHAIN: 1.93.0
+      PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.cache/ms-playwright
+      DYOFFICE_TEST_HOST_MANIFEST: ${{ github.workspace }}/.dyoffice-native-build/host-manifest.json
+      DYOFFICE_TEST_DATABASE_URL: postgresql://postgres:dyoffice-ci-test-only@127.0.0.1:55432/dyoffice_test
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+      - name: Install original renderer and gateway dependencies
+        run: npm ci --ignore-scripts --include=dev
+      - name: Provision host database and Redis
+        run: sudo --preserve-env=GITHUB_ACTIONS bash tools/dyoffice/ci-host-services.sh
+      - name: Install Chromium
+        run: node_modules/.bin/playwright install chromium --with-deps
+      - name: Install pinned Rust toolchain
+        run: rustup toolchain install 1.93.0 --profile minimal
+      - name: Compile original locked Rust engine and sandbox probe
+        run: npm run build:web:native -- --with-probe
+      - name: Check native Sheets host types
+        run: npx tsc -p apps/web/tsconfig.sheets.json
+      - name: Build original Sheets renderer and server gateway
+        run: npm run build:sheets --workspace=@dyoffice/web
+      - name: Test real native editor and authorized save-reopen path
+        run: sudo --preserve-env=PATH,DYOFFICE_TEST_HOST_MANIFEST,DYOFFICE_TEST_DATABASE_URL,PLAYWRIGHT_BROWSERS_PATH npm run test:native-sheets --workspace=@dyoffice/web
+      - name: Regress original XLSX gateway
+        run: npx vitest run --root packages/xlsx-gateway --maxWorkers=1
+      - name: Regress original name calculation and undo
+        run: npx vitest run --root apps/sheets --maxWorkers=1 tests/defined-name-recalculation.test.ts

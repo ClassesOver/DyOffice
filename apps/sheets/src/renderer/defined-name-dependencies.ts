@@ -32,7 +32,16 @@ export function installDefinedNameDependencies(): void {
   const originalTree = prototype.treeBuilder,
     originalCheck = prototype._simpleCheckDefinedName
   const original = prototype._handleDefinedName
-  if ([originalTree, originalCheck, original, prototype.getSequenceNode, prototype._getHasSheetNameDefinedName].some(method => typeof method !== 'function')) throw new Error('Unsupported defined name parser')
+  if (
+    [
+      originalTree,
+      originalCheck,
+      original,
+      prototype.getSequenceNode,
+      prototype._getHasSheetNameDefinedName,
+    ].some((method) => typeof method !== 'function')
+  )
+    throw new Error('Unsupported defined name parser')
   const dependencies = new WeakMap<Parser, Map<string, string[]>>()
   prototype.treeBuilder = function (formula, transform, context) {
     const node = originalTree.call(this, formula, transform, context) as {
@@ -68,7 +77,8 @@ export function installDefinedNameDependencies(): void {
         node.nodeType === 3
           ? this._getHasSheetNameDefinedName(node.token, context.unitId, context)
           : node.token
-      if (context.getValueByName(context.unitId, name)) names.add(name)
+      const definition = context.getValueByName(context.unitId, name) as { name?: string } | null
+      if (definition) names.add(typeof definition.name === 'string' ? definition.name : name)
     }
     const result = original.call(this, sequence, context)
     for (const name of result.definedNames) names.add(name)

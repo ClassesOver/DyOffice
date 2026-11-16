@@ -113,6 +113,8 @@ export function createSheetsBridge(host: SessionFileHost, fileId: string, prefs:
     },
     selectWorkbooksForMerge:unavailable,openWorkbooksForMerge:unavailable,openEncryptedWorkbook:unavailable,reopenWorkbook:unavailable,
     listExternalLinks:unavailable,refreshWorkbookConnection:unavailable,readLocalImage:unavailable,
+    readPivotDefinition:unavailable,findWorkbookCells:unavailable,updateWorkbookPassword:unavailable,
+    readExternalLinkUsage:unavailable,listWorkbookTabs:unavailable,
     writeWorkbookRecovery:unavailable,exportPdf:unavailable,printWorkbook:unavailable,exportCsv:unavailable,
     openAiModelSettings:unavailable,openSkillsSettings:unavailable,
   } satisfies Partial<DesktopApi>
