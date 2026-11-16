@@ -28,6 +28,9 @@ export async function bootstrapInitialAdmin({ pool, passwordHasher, deploymentId
   try {
     await client.query('BEGIN')
     begun = true
+    // Role identity comes only from this database's OID, never caller input.
+    // set_config(..., true) is transaction-local and enforces SET ROLE rights.
+    await client.query("SELECT pg_catalog.set_config('role', 'dyoffice_bootstrap_' || oid::text, true) FROM pg_catalog.pg_database WHERE datname = pg_catalog.current_database()")
     // This is a first-install operation only: never add an extra admin to a
     // pre-existing deployment whose bootstrap marker is missing/corrupt.
     const existing = await client.query(

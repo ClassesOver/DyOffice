@@ -5,22 +5,30 @@ on:
     branches: [feat/dyoffice-web, cursor/t04-rls-resource-auth-e34a]
     paths:
       - 'apps/web/server/db/**'
+      - 'apps/web/server/auth/bootstrap-admin.mjs'
+      - 'apps/web/test/bootstrap-rls.test.mjs'
+      - 'apps/web/test/auth-bootstrap.test.mjs'
       - 'apps/web/server/src/modules/policy/**'
       - 'apps/web/server/src/app.mjs'
       - 'apps/web/server/src/config.mjs'
       - 'apps/web/test/ownership-rls.test.mjs'
       - 'apps/web/test/rls-migration.test.mjs'
       - 'apps/web/test/principal-context.test.mjs'
+      - 'apps/web/test/auth-mode-isolation.test.mjs'
       - '.github/workflows/dyoffice-t04-rls.yml'
   pull_request:
     paths:
       - 'apps/web/server/db/**'
+      - 'apps/web/server/auth/bootstrap-admin.mjs'
+      - 'apps/web/test/bootstrap-rls.test.mjs'
+      - 'apps/web/test/auth-bootstrap.test.mjs'
       - 'apps/web/server/src/modules/policy/**'
       - 'apps/web/server/src/app.mjs'
       - 'apps/web/server/src/config.mjs'
       - 'apps/web/test/ownership-rls.test.mjs'
       - 'apps/web/test/rls-migration.test.mjs'
       - 'apps/web/test/principal-context.test.mjs'
+      - 'apps/web/test/auth-mode-isolation.test.mjs'
       - '.github/workflows/dyoffice-t04-rls.yml'
   workflow_dispatch:
 
@@ -52,7 +60,11 @@ jobs:
           node-version: 22
       - name: Install isolated Web dependencies
         run: npm ci --prefix apps/web --workspaces=false --include=dev --no-audit --no-fund
+      - name: Test forward bootstrap upgrade on fresh PostgreSQL
+        env:
+          DYOFFICE_TEST_DATABASE_URL: postgresql://dyoffice_test:local-ci-only-not-for-production@localhost:5432/dyoffice_rls_test
+        run: node --test apps/web/test/bootstrap-rls.test.mjs apps/web/test/auth-bootstrap.test.mjs
       - name: Test ownership policies against PostgreSQL
         env:
           DYOFFICE_TEST_DATABASE_URL: postgresql://dyoffice_test:local-ci-only-not-for-production@localhost:5432/dyoffice_rls_test
-        run: node --test apps/web/test/rls-migration.test.mjs apps/web/test/principal-context.test.mjs apps/web/test/ownership-rls.test.mjs
+        run: node --test apps/web/test/rls-migration.test.mjs apps/web/test/principal-context.test.mjs apps/web/test/auth-mode-isolation.test.mjs apps/web/test/ownership-rls.test.mjs

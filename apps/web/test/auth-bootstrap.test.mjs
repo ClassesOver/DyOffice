@@ -17,15 +17,18 @@ function fakePool() {
     get released() { return released },
     async connect() {
       let work
+      let bootstrapRole = false
       return {
         async query(sql, params = []) {
           seen.push({ sql, params })
           if (sql === 'BEGIN') { work = structuredClone(persisted); return { rows: [] } }
+          if (sql === "SELECT pg_catalog.set_config('role', 'dyoffice_bootstrap_' || oid::text, true) FROM pg_catalog.pg_database WHERE datname = pg_catalog.current_database()") { bootstrapRole = true; return { rows: [] } }
           if (sql === 'COMMIT') {
             for (const table of Object.keys(work)) persisted[table] = work[table]
             return { rows: [] }
           }
           if (sql === 'ROLLBACK') { work = null; return { rows: [] } }
+          if (!bootstrapRole) throw new Error('bootstrap requires dedicated RLS role')
           if (sql.startsWith('SELECT EXISTS (SELECT 1 FROM dyoffice_users')) {
             return { rows: [{ has_users: work.users.some(row => row[1] === params[0]) }] }
           }
@@ -51,6 +54,7 @@ test('bootstrap records hashed admin, role and workspace in a single transaction
   const result = await bootstrapInitialAdmin({ pool, passwordHasher:hasher, deploymentId,
     username:' Root.Admin ', displayName:' Administrator ', password })
   assert.equal(result.username, 'root.admin')
+  assert.equal(pool.seen[1].sql, "SELECT pg_catalog.set_config('role', 'dyoffice_bootstrap_' || oid::text, true) FROM pg_catalog.pg_database WHERE datname = pg_catalog.current_database()")
   assert.deepEqual(Object.values(pool.state).map(rows => rows.length), [1,1,1,1])
   assert.equal(pool.state.users[0][4], hash)
   assert.equal(pool.state.roles[0][2], 'config_admin')
@@ -79,4 +83,20 @@ test('invalid setup input is rejected before connecting to DB', async () => {
   await assert.rejects(bootstrapInitialAdmin({ ...input, deploymentId:'invalid' }), TypeError)
   await assert.rejects(bootstrapInitialAdmin({ ...input, passwordHasher:{ hashPassword:async()=> 'sha256:fake' } }), /unacceptable hash/)
   assert.equal(pool.released, 0)
+})
+
+test('missing operator role fails closed and rolls back before reading or inserting accounts', async () => {
+  const calls = []
+  let released = false
+  const pool = { async connect() { return {
+    async query(sql) {
+      calls.push(sql)
+      if (sql === "SELECT pg_catalog.set_config('role', 'dyoffice_bootstrap_' || oid::text, true) FROM pg_catalog.pg_database WHERE datname = pg_catalog.current_database()") throw new Error('permission denied')
+      return { rows: [] }
+    },
+    release() { released = true },
+  } } }
+  await assert.rejects(bootstrapInitialAdmin({ pool, passwordHasher: hasher, deploymentId, username: 'root.admin', displayName: 'Admin', password }), /setup failed/)
+  assert.deepEqual(calls, ['BEGIN', "SELECT pg_catalog.set_config('role', 'dyoffice_bootstrap_' || oid::text, true) FROM pg_catalog.pg_database WHERE datname = pg_catalog.current_database()", 'ROLLBACK'])
+  assert.equal(released, true)
 })

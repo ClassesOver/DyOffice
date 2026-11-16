@@ -51,6 +51,9 @@ export function assertModularConfig(config) {
     }
     auth = { authenticate: auth.authenticate }
   }
+  // The legacy store is deployment-global, not scoped by a session principal.
+  // Never mount it behind login by merely bypassing the dev-token dispatcher.
+  if (auth && legacy) throw new Error('Cannot combine auth and legacy workspace modes')
   return {
     env: config.env,
     logger: false,
