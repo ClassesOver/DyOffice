@@ -3,6 +3,8 @@ import { mkdir } from 'node:fs/promises'
 import { join } from 'node:path'
 import { createStaticAssets } from '../static-assets.mjs'
 import { createStore } from '../store.mjs'
+import { DEV_PERSONAL_OWNER, objectStoreDirectory } from './modules/objects/routes.mjs'
+import { createLocalObjectStore } from './storage/local-dev.mjs'
 
 export async function createLegacyContext({ directory, userToken, adminToken, encryptionKey, assetMode, assetDirectory }) {
   if (!userToken || !adminToken || userToken === adminToken) {
@@ -12,11 +14,18 @@ export async function createLegacyContext({ directory, userToken, adminToken, en
   const store = await createStore(directory, encryptionKey)
   const filePath = join(directory, 'files')
   await mkdir(filePath, { recursive: true, mode: 0o700 })
+  const objectStore = await createLocalObjectStore({
+    directory: objectStoreDirectory(directory),
+    maxObjectBytes: 50 * 1024 * 1024,
+    maxOwnerBytes: 512 * 1024 * 1024,
+  })
   return {
     directory,
     credentials: { userToken, adminToken },
     store,
     filePath,
+    objectStore,
+    objectOwnerId: DEV_PERSONAL_OWNER,
     serveStatic,
     async ready() {
       try {

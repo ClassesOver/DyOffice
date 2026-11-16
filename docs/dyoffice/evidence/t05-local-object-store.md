@@ -1,6 +1,6 @@
 # T05 local immutable object store
 
-> 2026-11-16 · Includes the recycle-bin slice on `cursor/t05-recycle-bin-afe4` · **Partial. Not S3, not RLS, not wired to HTTP upload.**
+> 2026-11-16 · Includes the recycle-bin slice and HTTP download of stored objects · **Partial. Not S3, not RLS, not wired to HTTP upload.**
 
 ## Why this slice
 
@@ -42,6 +42,16 @@ node --test apps/web/test/object-recycle.test.mjs
 
 Before the methods existed this failed because `downloadObject` and `trashObject` were not functions. After the implementation the file passes.
 
+## HTTP download
+
+`GET /api/v1/objects/:objectId` reads the local store for the personal dev token. The owner id is fixed on the server (`dev-personal`). The request cannot name another owner. Missing, unfinished, trashed, and other-owner ids return JSON `文件不存在` and do not send `Content-Disposition`. A successful response is the stored bytes, with `X-Content-SHA256` set from the verified digest and no `ETag`. Admin receives 403. `POST` receives 405. The prototype `POST /api/files` route still writes the old file directory, not this store.
+
+```sh
+node --test apps/web/test/object-download.test.mjs
+```
+
+Before the route module existed this failed with `ERR_MODULE_NOT_FOUND`. After the route, the file passes.
+
 ## Still open
 
-S3, mounting these operations on the live HTTP routes, PostgreSQL file rows, and RLS. Do not check the remaining T05 boxes from this note.
+S3, HTTP upload into this store, PostgreSQL file rows, and RLS. Do not check the remaining T05 boxes from this note.

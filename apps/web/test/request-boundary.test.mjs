@@ -22,6 +22,7 @@ test('only a single correctly formed Bearer credential is accepted', () => {
 
 test('admin does not inherit personal files or preferences and personal cannot edit admin config', () => {
   assert.deepEqual(authorizeDevApi(headers('Bearer admin-secret'), credentials, '/api/v1/files/abc'), { status: 403, error: '需要个人工作区权限' })
+  assert.deepEqual(authorizeDevApi(headers('Bearer admin-secret'), credentials, '/api/v1/objects/00000000-0000-4000-8000-000000000000'), { status: 403, error: '需要个人工作区权限' })
   assert.deepEqual(authorizeDevApi(headers('Bearer admin-secret'), credentials, '/api/v1/files'), { status: 403, error: '需要个人工作区权限' })
   assert.deepEqual(authorizeDevApi(headers('Bearer admin-secret'), credentials, '/api/preferences'), { status: 403, error: '需要个人工作区权限' })
   assert.deepEqual(authorizeDevApi(headers('Bearer personal-secret'), credentials, '/api/admin/config'), { status: 403, error: '需要管理员权限' })

@@ -178,7 +178,7 @@ export async function createLocalObjectStore({ directory, maxObjectBytes, maxOwn
       if (!record || record.ownerId !== ownerId || record.finished !== true || record.state === 'trash') reject('NOT_FOUND', 404)
       const bytes = await readFile(join(blobs, record.sha256))
       if (digest(bytes) !== record.sha256) reject('HASH_MISMATCH', 500)
-      return { bytes, sha256: record.sha256, size: record.size, format: record.format }
+      return { bytes, name: record.name, sha256: record.sha256, size: record.size, format: record.format }
     },
 
     async trashObject({ ownerId, objectId }) {

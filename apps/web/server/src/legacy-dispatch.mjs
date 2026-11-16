@@ -5,6 +5,7 @@ import { sendJson } from '../http-response.mjs'
 import { handleAdmin } from './modules/admin/routes.mjs'
 import { handleDocuments } from './modules/documents/routes.mjs'
 import { handleFiles } from './modules/files/routes.mjs'
+import { handleObjects } from './modules/objects/routes.mjs'
 import { handlePage } from './modules/pages/routes.mjs'
 import { handlePreferences } from './modules/preferences/routes.mjs'
 import { handleSources } from './modules/sources/routes.mjs'
@@ -40,6 +41,7 @@ export async function dispatchLegacy(req, res, ctx) {
     if (await handleAdmin(req, res, ctx, scoped)) return
     if (await handleSources(req, res, ctx, scoped)) return
     if (await handleFiles(req, res, ctx, scoped)) return
+    if (await handleObjects(req, res, ctx, scoped)) return
     send({ error: '接口不存在' }, 404)
   } catch (error) {
     if (res.headersSent) {
