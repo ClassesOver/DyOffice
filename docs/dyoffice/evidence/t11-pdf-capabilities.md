@@ -20,6 +20,26 @@ node --test apps/web/test/pdf-capabilities.test.mjs
 
 The file first failed because `capabilities.mjs` did not exist. After the module, the file passes.
 
+## Page kind, fonts, and signatures
+
+A page with `Tj` or `TJ` is `text`. A page that draws an image XObject and has no text operators is `scanned`, and `capabilities.scanned` is `no_text_layer`. A page with neither is `blank`. A standard font such as Helvetica is reported with `embedded: false`. A signature field is `present_unverified`. `trustSignature` fails with `SIGNATURE_UNVERIFIED`. The byte range is not checked and the signature is not treated as valid or invalid.
+
+```sh
+node --test apps/web/test/pdf-pages.test.mjs
+```
+
+The tests first failed because `pages` and `signatures` were missing. After the classifier, the file passes.
+
 ## Still open for T11
 
-Real text-stream editing, annotation writing, signature invalidation, missing fonts, scanned-page detection, WASM, CSP, and browser round-trip. Those need the PDF renderer and are not claimed here.
+| Item | Result |
+| --- | --- |
+| Page order, password file, cover text is not deletion | Done in `pdf-capabilities.test.mjs` |
+| Scanned page has no text layer | Done. Image-only pages are `scanned` |
+| Missing embedded font | Done for the font dictionary. No glyph coverage check |
+| Signature present | Done as unverified. Cryptographic validation is not performed |
+| Real text-stream editing | Deferred. The gate still returns `UNSUPPORTED` because no editor write path exists |
+| Annotation writing | Deferred for the same reason |
+| Browser mount | Deferred. The web shell and DOCX mount are owned by the T07 pull requests |
+| PDFium, WASM, and CSP | Deferred. This slice uses pdf-lib structure only and does not ship a WASM binary or a content-security policy |
+| Visual re-open and export fidelity | Deferred until the PDF renderer is mounted |
