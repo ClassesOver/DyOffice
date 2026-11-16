@@ -1,3 +1,4 @@
+import { objectTransferAdmission } from '../files/transfer-admission.ts'
 import type {RecalcInput} from '../../../../worker/src/native/xlsx.ts'
 import type { createSheetsSaveService, SheetsSaveInput } from './save.ts'
 import type { FastifyInstance } from 'fastify'
@@ -8,6 +9,7 @@ import type { createSheetsService, SheetRange } from './service.ts'
 
 const revisionBody = { revision: uuidSchema }
 export function registerSheetsRoutes(app: FastifyInstance, sheets: ReturnType<typeof createSheetsService>, sessions: SessionService, csrf: ReturnType<typeof createCsrfService>, saves?: ReturnType<typeof createSheetsSaveService>) {
+  const admission = objectTransferAdmission(app)
   app.register(async api => {
     api.addHook('onRequest', async (request, reply) => {
       reply.header('Cache-Control', 'private, no-store')
@@ -15,7 +17,10 @@ export function registerSheetsRoutes(app: FastifyInstance, sheets: ReturnType<ty
       csrf.originCheck(request, true)
       csrf.requireSession(request, token)
       await sessions.authenticate(token)
+      admission.admit(request, reply)
     })
+    api.addHook('onResponse', async request => admission.close(request))
+    api.addHook('onError', async request => admission.error(request))
     function route<T>(path: string, properties: Record<string, unknown>, operation: (token: string, fileId: string, body: T, signal: AbortSignal) => Promise<unknown>, bodyLimit = 4096) {
       api.post(path, { bodyLimit, schema: { params: fileParamsSchema, querystring: emptyQuerySchema, body: { type: 'object', additionalProperties: false, required: Object.keys(properties), properties } } }, async (request, reply) => {
         const controller = new AbortController()
@@ -25,7 +30,7 @@ export function registerSheetsRoutes(app: FastifyInstance, sheets: ReturnType<ty
         reply.raw.once('close', onClose)
         try {
           if (request.raw.aborted || reply.raw.destroyed) controller.abort()
-          return await operation(cookies(request).session ?? '', (request.params as {id: string}).id, request.body as T, controller.signal)
+          return await admission.transfer(request, reply, () => operation(cookies(request).session ?? '', (request.params as {id: string}).id, request.body as T, controller.signal))
         } finally {
           request.raw.removeListener('aborted', abort)
           reply.raw.removeListener('close', onClose)

@@ -3,6 +3,7 @@ import type { SessionService } from '../auth/sessions.ts'
 import type { createCsrfService } from '../auth/csrf.ts'
 import { cookies } from '../auth/csrf.ts'
 import { authError } from '../auth/sessions.ts'
+import { objectTransferAdmission } from './transfer-admission.ts'
 import { MAX_OBJECT_BYTES } from '../../storage/object-store.ts'
 import type { FileService } from './service.ts'
 
@@ -13,21 +14,9 @@ import type { LeaseService } from '../leases/service.ts'
 
 const token = (request: FastifyRequest) => cookies(request).session ?? ''
 export function registerFileRoutes(app: FastifyInstance, files: FileService, sessions: SessionService, csrf: ReturnType<typeof createCsrfService>, saves?: { revisions: RevisionService; leases: LeaseService }) {
+  const admission = objectTransferAdmission(app)
+  const { transfer } = admission
   app.register(async api => {
-    let activeTransfers = 0
-    const admitted = new WeakMap<FastifyRequest, { running: boolean; closed: boolean }>()
-    function release(request: FastifyRequest) { if (admitted.delete(request)) activeTransfers-- }
-    function close(request: FastifyRequest) {
-      const state = admitted.get(request)
-      if (state) { state.closed = true; if (!state.running) release(request) }
-    }
-    async function transfer<T>(request: FastifyRequest, reply: FastifyReply, operation: () => Promise<T>): Promise<T> {
-      const state = admitted.get(request)
-      if (!state || state.closed || request.raw.aborted || reply.raw.destroyed) throw authError(400)
-      state.running = true
-      try { return await operation() }
-      finally { state.running = false; if (state.closed) release(request) }
-    }
     api.addHook('onRequest', async (request, reply) => {
       reply.header('Cache-Control', 'private, no-store')
       const credential = token(request)
@@ -44,15 +33,11 @@ export function registerFileRoutes(app: FastifyInstance, files: FileService, ses
           const length = request.headers['content-length']
           if (length !== undefined && (!/^\d+$/.test(length) || Number(length) !== upload.size)) throw authError(400)
         }
-        if (request.raw.aborted || reply.raw.destroyed) throw authError(400)
-        if (activeTransfers >= 2) throw Object.assign(authError(503), { retryAfter: 1 })
-        activeTransfers++; admitted.set(request, { running: false, closed: false })
-        request.raw.once('aborted', () => close(request))
-        reply.raw.once('close', () => close(request))
+        admission.admit(request, reply)
       }
     })
-    api.addHook('onResponse', async request => close(request))
-    api.addHook('onError', async request => { if (!admitted.get(request)?.running) release(request) })
+    api.addHook('onResponse', async request => admission.close(request))
+    api.addHook('onError', async request => admission.error(request))
     if (saves) registerRevisionRoutes(api,{ ...saves, transfer })
     api.addContentTypeParser('application/octet-stream', { parseAs: 'buffer', bodyLimit: MAX_OBJECT_BYTES }, (_request, body, done) => done(null, body))
     api.get('/api/v1/capabilities', { schema: { querystring: emptyQuery } }, async () => files.capabilities)
