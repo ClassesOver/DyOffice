@@ -30,7 +30,7 @@ test('account lifecycle uses real PostgreSQL, Argon2id, sessions and CSRF', { ti
     await root.query(`CREATE SCHEMA "${schema}"`)
     pool = new pg.Pool({ connectionString, max: 8, options: `-c search_path=${schema},public`,
       connectionTimeoutMillis: 5000, statement_timeout: 20000 })
-    assert.deepEqual(await applyMigrations(pool), ['0001_identity.sql', '0002_login_rate_limits.sql', '0003_files.sql', '0004_revisions.sql', '0005_account_lifecycle_audit.sql', '0006_self_password_change.sql', '0007_session_security_events.sql'])
+    assert.deepEqual(await applyMigrations(pool), ['0001_identity.sql', '0002_login_rate_limits.sql', '0003_files.sql', '0004_revisions.sql', '0005_account_lifecycle_audit.sql', '0006_self_password_change.sql', '0007_session_security_events.sql', '0008_account_roles.sql'])
     assert.deepEqual(await applyMigrations(pool), [])
     const deploymentId = randomUUID()
     const hasher = createPasswordHasher({ maxConcurrent: 4 })
@@ -175,6 +175,20 @@ test('account lifecycle uses real PostgreSQL, Argon2id, sessions and CSRF', { ti
       } finally { await pool.query('DROP TRIGGER reject_account_event ON dyoffice_account_events') }
       await lifecycle.redeemPasswordAction(anonymous, { token: pending.activationToken, newPassword: initialPassword })
       assert.equal((await user(pending.userId)).status, 'active')
+    })
+
+    await t.test('role change and user list stay inside the account and omit file or password data', async () => {
+      const listed = await lifecycle.listUsers(operatorRequest, { limit: 50 })
+      assert.ok(listed.users.some(row => row.userId === alice.userId && row.roles.includes('user') && !row.roles.includes('config_admin')))
+      assert.equal(JSON.stringify(listed).includes('argon2'), false)
+      assert.equal(JSON.stringify(listed).includes('password'), false)
+      const prior = await sessions.issue({ deploymentId, userId: alice.userId })
+      const changed = await lifecycle.setRoles(operatorRequest, { userId: alice.userId, roles: ['auditor', 'user'], adminPassword })
+      assert.deepEqual(changed.roles, ['auditor', 'user'])
+      assert.deepEqual((await rows('SELECT role FROM dyoffice_user_roles WHERE user_id=$1 ORDER BY role', [alice.userId])).map(row => row.role), ['auditor', 'user'])
+      assert.ok((await rows("SELECT action FROM dyoffice_account_events WHERE target_user_id=$1 AND action='account.role_changed'", [alice.userId])).length >= 1)
+      assert.equal(await sessions.authenticate(req(prior), { deploymentId }), null)
+      assert.ok(await sessions.issue({ deploymentId, userId: alice.userId }))
     })
 
     await t.test('administrator version changes after Argon2 verification are rejected inside the mutation transaction', async () => {

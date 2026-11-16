@@ -1,5 +1,7 @@
 # T03d: owner-only personal session management
 
+Closeout: [t03-closeout.md](t03-closeout.md). Session routes are registered by `buildApp({ localAuth })`.
+
 Date: 2026-11-16. Branch: `feat/dyoffice-t03c-account-lifecycle`, PR #10.
 Base for this slice: `77f107744dece4427dcc4f502f9b6caa30566194`.
 

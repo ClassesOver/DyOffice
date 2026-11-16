@@ -48,14 +48,18 @@ const GRANT = `SELECT t.id, t.user_id, t.purpose, u.auth_version, u.status
  * escalation API, or document permission is introduced. All administrator
  * mutations require a live DB session, CSRF and a fresh password verification.
  */
+const ROLES = Object.freeze(['auditor', 'config_admin', 'operator', 'user'])
+
 export function createAccountLifecycle({ pool, passwordHasher, sessionService, csrfPolicy, throttle,
-  deploymentId, tokenLifetimeMs = 15 * 60 * 1000, idleTimeoutMs = 8 * 60 * 60 * 1000 } = {}) {
+  deploymentId, tokenLifetimeMs = 15 * 60 * 1000, idleTimeoutMs = 8 * 60 * 60 * 1000,
+  onCredentialsRevoked = async () => {} } = {}) {
   if (!pool || typeof pool.query !== 'function' || typeof pool.connect !== 'function' ||
       !passwordHasher || typeof passwordHasher.hashPassword !== 'function' || typeof passwordHasher.verifyPassword !== 'function' ||
       !sessionService || typeof sessionService.authenticate !== 'function' ||
       !csrfPolicy || typeof csrfPolicy.verify !== 'function' || !throttle || typeof throttle.consume !== 'function' ||
       !validId(deploymentId) || !Number.isSafeInteger(tokenLifetimeMs) || tokenLifetimeMs < 60_000 || tokenLifetimeMs > MAX_LIFETIME ||
-      !Number.isSafeInteger(idleTimeoutMs) || idleTimeoutMs < 60_000 || idleTimeoutMs > 86_400_000) {
+      !Number.isSafeInteger(idleTimeoutMs) || idleTimeoutMs < 60_000 || idleTimeoutMs > 86_400_000 ||
+      typeof onCredentialsRevoked !== 'function') {
     throw new TypeError('Account lifecycle requires validated authentication services and configuration')
   }
   deploymentId = deploymentId.toLowerCase()
@@ -87,6 +91,19 @@ export function createAccountLifecycle({ pool, passwordHasher, sessionService, c
     catch { reject('UNAVAILABLE') }
     if (verified !== true) reject('REAUTHENTICATION_REQUIRED')
     return { ...actor, params }
+  }
+  async function notify(userId) {
+    try { await onCredentialsRevoked({ deploymentId, userId }) }
+    catch (error) {
+      if (error instanceof AccountLifecycleError) throw error
+      reject('LEASE_REVOKE_FAILED')
+    }
+  }
+  function parseRoles(roles) {
+    if (!Array.isArray(roles) || roles.length === 0 || roles.length > ROLES.length) reject('INVALID_INPUT')
+    const unique = [...new Set(roles)].sort()
+    if (unique.length !== roles.length || unique.some(role => !ROLES.includes(role))) reject('INVALID_INPUT')
+    return unique
   }
   async function transaction(actor, work) {
     let client
@@ -168,7 +185,7 @@ export function createAccountLifecycle({ pool, passwordHasher, sessionService, c
       if (!validId(input.userId)) reject('INVALID_INPUT')
       const actor = await administrator(request, input.adminPassword)
       if (input.userId.toLowerCase() === actor.id.toLowerCase()) reject('SELF_ACTION_FORBIDDEN')
-      return transaction(actor, async client => {
+      const issued = await transaction(actor, async client => {
         const user = await target(client, input.userId)
         if (user.status === 'disabled') reject('ACCOUNT_DISABLED')
         // Admin reset is deliberately a suspension: old credentials may not
@@ -181,16 +198,18 @@ export function createAccountLifecycle({ pool, passwordHasher, sessionService, c
         await audit(client, actor.id, user.id, 'account.reset_issued')
         return { userId: user.id, status: 'pending', resetToken: grant.token, expiresAt: grant.expiresAt }
       })
+      await notify(issued.userId)
+      return issued
     },
     async setAccountEnabled(request, input) {
       fields(input, ['userId', 'enabled', 'adminPassword'])
       if (!validId(input.userId) || typeof input.enabled !== 'boolean') reject('INVALID_INPUT')
       const actor = await administrator(request, input.adminPassword)
       if (input.userId.toLowerCase() === actor.id.toLowerCase()) reject('SELF_ACTION_FORBIDDEN')
-      return transaction(actor, async client => {
+      const updated = await transaction(actor, async client => {
         const user = await target(client, input.userId)
         if ((input.enabled && user.status !== 'disabled') || (!input.enabled && user.status === 'disabled')) {
-          return { userId: user.id, status: user.status }
+          return { userId: user.id, status: user.status, revoked: false }
         }
         const status = input.enabled ? (user.password_hash ? 'active' : 'pending') : 'disabled'
         await client.query(`/* account:set_status */ UPDATE dyoffice_users SET status = $3::varchar,
@@ -199,8 +218,78 @@ export function createAccountLifecycle({ pool, passwordHasher, sessionService, c
         [deploymentId, user.id, status])
         await invalidate(client, user.id)
         await audit(client, actor.id, user.id, input.enabled ? 'account.enabled' : 'account.disabled')
-        return { userId: user.id, status }
+        return { userId: user.id, status, revoked: true }
       })
+      if (updated.revoked) await notify(updated.userId)
+      return { userId: updated.userId, status: updated.status }
+    },
+    async setRoles(request, input) {
+      fields(input, ['userId', 'roles', 'adminPassword'])
+      if (!validId(input.userId)) reject('INVALID_INPUT')
+      const roles = parseRoles(input.roles)
+      const actor = await administrator(request, input.adminPassword)
+      if (input.userId.toLowerCase() === actor.id.toLowerCase()) reject('SELF_ACTION_FORBIDDEN')
+      const updated = await transaction(actor, async client => {
+        const user = await target(client, input.userId)
+        if (user.status === 'disabled') reject('ACCOUNT_DISABLED')
+        await client.query(`/* account:clear_roles */ DELETE FROM dyoffice_user_roles
+          WHERE deployment_id = $1 AND user_id = $2`, [deploymentId, user.id])
+        for (const role of roles) {
+          await client.query(`/* account:assign_role */ INSERT INTO dyoffice_user_roles
+            (deployment_id, user_id, role) VALUES ($1,$2,$3)`, [deploymentId, user.id, role])
+        }
+        await client.query(`/* account:bump_roles */ UPDATE dyoffice_users
+          SET auth_version = auth_version + 1, updated_at = clock_timestamp()
+          WHERE deployment_id = $1 AND id = $2`, [deploymentId, user.id])
+        await invalidate(client, user.id)
+        await audit(client, actor.id, user.id, 'account.role_changed')
+        return { userId: user.id, roles }
+      })
+      await notify(updated.userId)
+      return updated
+    },
+    async listUsers(request, input = {}) {
+      fields(input, ['limit', 'cursor'])
+      const limit = input.limit === undefined ? 50 : input.limit
+      if (!Number.isSafeInteger(limit) || limit < 1 || limit > 50) reject('INVALID_INPUT')
+      let cursorName = null
+      let cursorId = null
+      if (input.cursor !== undefined) {
+        if (!input.cursor || typeof input.cursor !== 'object' || Array.isArray(input.cursor) ||
+            Object.keys(input.cursor).some(key => !['username', 'id'].includes(key))) reject('INVALID_INPUT')
+        try { cursorName = normalizeUsername(input.cursor.username) } catch { reject('INVALID_INPUT') }
+        if (!validId(input.cursor.id)) reject('INVALID_INPUT')
+        cursorId = input.cursor.id
+      }
+      let principal
+      try { principal = await sessionService.authenticate(request, { deploymentId }) }
+      catch { reject('UNAVAILABLE') }
+      if (!principal || principal.deploymentId !== deploymentId || !validId(principal.userId) || !validId(principal.sessionId)) reject('UNAUTHORIZED')
+      const actor = await read('/* account:list_actor */ ' + ACTOR, [deploymentId, principal.userId, principal.sessionId, idleTimeoutMs])
+      if (!actor) reject('FORBIDDEN')
+      let result
+      try {
+        result = await pool.query(`/* account:list */ SELECT u.id, u.username_normalized, u.display_name, u.status,
+          ARRAY(SELECT r.role::text FROM dyoffice_user_roles r
+            WHERE r.deployment_id = u.deployment_id AND r.user_id = u.id ORDER BY r.role) AS roles
+          FROM dyoffice_users u
+          WHERE u.deployment_id = $1
+            AND ($2::text IS NULL OR (u.username_normalized, u.id) > ($2::text, $3::uuid))
+          ORDER BY u.username_normalized, u.id
+          LIMIT $4`, [deploymentId, cursorName, cursorId, limit])
+      } catch { reject('UNAVAILABLE') }
+      const users = result.rows.map(row => ({
+        userId: row.id,
+        username: row.username_normalized,
+        displayName: row.display_name,
+        status: row.status,
+        roles: row.roles,
+      }))
+      const last = users.at(-1)
+      return {
+        users,
+        nextCursor: users.length === limit && last ? { username: last.username, id: last.userId } : null,
+      }
     },
     async redeemPasswordAction(request, input) {
       fields(input, ['token', 'newPassword'])
@@ -215,7 +304,7 @@ export function createAccountLifecycle({ pool, passwordHasher, sessionService, c
       let hash
       try { hash = await passwordHasher.hashPassword(input.newPassword) } catch { reject('UNAVAILABLE') }
       if (!inspectArgon2idHash(hash)) reject('UNAVAILABLE')
-      return transaction(null, async client => {
+      const redeemed = await transaction(null, async client => {
         const result = await client.query('/* account:token_lock */ ' + GRANT + ' FOR UPDATE OF t, u', params)
         const current = result.rows[0]
         if (result.rowCount !== 1 || !current || current.id !== before.id || current.auth_version !== before.auth_version) reject('INVALID_ACTION')
@@ -231,6 +320,8 @@ export function createAccountLifecycle({ pool, passwordHasher, sessionService, c
         await audit(client, current.user_id, current.user_id, current.purpose === 'activate' ? 'password.activated' : 'password.reset')
         return { userId: current.user_id, requiresLogin: true }
       })
+      await notify(redeemed.userId)
+      return redeemed
     },
   })
 }

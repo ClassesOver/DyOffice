@@ -21,7 +21,9 @@ function fixture() {
     target: { id: userId, status: 'active', password_hash: phc },
     principal: { sessionId, userId: actorId, deploymentId }, csrf: true, passwordValid: true,
     allowed: true, failAudit: false, failRollback: false, consumed: false,
-    calls: [], releaseErrors: [], hashes: 0, verifies: 0 }
+    calls: [], releaseErrors: [], hashes: 0, verifies: 0,
+    listed: [{ id: userId, username_normalized: 'alice.user', display_name: 'Alice', status: 'pending', roles: ['user'], password_hash: phc }],
+    revoked: [] }
   const query = async (sql, params = []) => {
     state.calls.push({ sql, params })
     const label = /\/\* account:([a-z_-]+) \*\//.exec(sql)?.[1]
@@ -35,6 +37,8 @@ function fixture() {
     if (label === 'lookup_token' || label === 'token_lock') return one(state.consumed ? null : state.grant)
     if (label === 'consume_token') { state.consumed = true; return one({ id: state.grant.id }) }
     if (label === 'audit' && state.failAudit) throw Object.assign(new Error('sensitive SQL detail'), { code: 'XX000' })
+    if (label === 'list_actor') return one(state.actor)
+    if (label === 'list') return { rowCount: state.listed.length, rows: state.listed }
     return { rowCount: 1, rows: [] }
   }
   const pool = { query: (sql, params) => query(sql, params),
@@ -47,6 +51,7 @@ function fixture() {
       async verifyPassword(hash, password) { state.verifies++; assert.equal(password, adminPassword); return state.passwordValid },
       async hashPassword(password) { state.hashes++; assert.equal(password, newPassword); return phc },
     },
+    onCredentialsRevoked: async (event) => { state.revoked.push(event) },
   }
   return { state, dependencies, service: createAccountLifecycle(dependencies) }
 }
@@ -178,4 +183,31 @@ test('uppercase deployment configuration matches the lowercase session principal
   assert.equal(created.username, 'alice.user')
   const insert = f.state.calls.find(call => call.sql.includes('account:create_user'))
   assert.equal(insert.params[1], deploymentId)
+})
+
+test('role changes replace only the target roles and do not grant admin on create', async () => {
+  const f = fixture()
+  await assert.rejects(f.service.setRoles(request, { userId, roles: ['config_admin', 'config_admin'], adminPassword }), isCode('INVALID_INPUT'))
+  await assert.rejects(f.service.setRoles(request, { userId: actorId, roles: ['user'], adminPassword }), isCode('SELF_ACTION_FORBIDDEN'))
+  assert.deepEqual(await f.service.setRoles(request, { userId, roles: ['user', 'auditor'], adminPassword }),
+    { userId, roles: ['auditor', 'user'] })
+  const assigned = f.state.calls.filter(call => call.sql.includes('account:assign_role')).map(call => call.params.at(-1))
+  assert.deepEqual(assigned, ['auditor', 'user'])
+  assert.equal(f.state.calls.some(call => call.sql.includes('account.role_changed') || call.params?.includes('account.role_changed')), true)
+  assert.deepEqual(f.state.revoked.at(-1), { deploymentId, userId })
+  assert.equal(JSON.stringify(f.state.calls).includes(adminPassword), false)
+})
+
+test('admin user list is session scoped and omits password hashes and file data', async () => {
+  const f = fixture()
+  const page = await f.service.listUsers(request, { limit: 1 })
+  assert.equal(page.users.length, 1)
+  assert.equal(page.users[0].username, 'alice.user')
+  assert.equal(Object.hasOwn(page.users[0], 'password_hash'), false)
+  assert.equal(JSON.stringify(page).includes(phc), false)
+  assert.equal(JSON.stringify(page).includes('file'), false)
+  assert.deepEqual(page.nextCursor, { username: 'alice.user', id: userId })
+  f.state.principal = null
+  await assert.rejects(f.service.listUsers(request, {}), isCode('UNAUTHORIZED'))
+  assert.equal(f.state.calls.some(call => call.sql.includes('account:list ')), true)
 })

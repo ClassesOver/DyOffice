@@ -2,7 +2,7 @@ name: DyOffice personal session management
 
 on:
   push:
-    branches: [feat/dyoffice-t03c-account-lifecycle]
+    branches: [feat/dyoffice-web]
     paths:
       - 'apps/web/server/auth/self-session-management*'
       - 'apps/web/server/db/migrations/0007_session_security_events.sql'

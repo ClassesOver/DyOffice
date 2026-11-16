@@ -1,5 +1,5 @@
 const ENVIRONMENTS = new Set(['development', 'test'])
-const CONFIG_KEYS = new Set(['env', 'logger', 'rateLimit', 'readyCheck', 'legacy'])
+const CONFIG_KEYS = new Set(['env', 'logger', 'rateLimit', 'readyCheck', 'legacy', 'localAuth'])
 
 /**
  * Rejects production and any field the shell does not understand.
@@ -31,6 +31,17 @@ export function assertModularConfig(config) {
     throw new Error('Modular API rateLimit window is invalid')
   }
   if (typeof config.readyCheck !== 'function') throw new Error('Modular API readyCheck must be a function')
+  let localAuth
+  if (config.localAuth !== undefined) {
+    localAuth = config.localAuth
+    if (!localAuth || typeof localAuth !== 'object' || Array.isArray(localAuth)) {
+      throw new Error('Unsupported modular API config: localAuth')
+    }
+    const required = ['deploymentId', 'trustedOrigin', 'loginService', 'sessionService', 'csrfPolicy',
+      'accounts', 'passwordChange', 'sessions', 'reauth']
+    const missing = required.filter(key => localAuth[key] == null)
+    if (missing.length > 0) throw new Error(`Unsupported modular API config: localAuth.${missing.join(',')}`)
+  }
   let legacy
   if (config.legacy !== undefined) {
     legacy = config.legacy
@@ -44,5 +55,6 @@ export function assertModularConfig(config) {
     rateLimit: { max: limit.max, windowMs: limit.windowMs },
     readyCheck: config.readyCheck,
     legacy,
+    localAuth,
   }
 }

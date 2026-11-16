@@ -20,13 +20,14 @@ const SELF = `SELECT u.id, u.username_normalized, u.password_hash, u.auth_versio
 
 /** Self-only credential change. Not mounted into the shared Web/Fastify app. */
 export function createPasswordChangeService({ pool, passwordHasher, sessionService, csrfPolicy, throttle,
-  deploymentId, idleTimeoutMs = 8 * 60 * 60 * 1000, absoluteTimeoutMs = 24 * 60 * 60 * 1000 } = {}) {
+  deploymentId, idleTimeoutMs = 8 * 60 * 60 * 1000, absoluteTimeoutMs = 24 * 60 * 60 * 1000,
+  onCredentialsRevoked = async () => {} } = {}) {
   if (!pool || typeof pool.query !== 'function' || typeof pool.connect !== 'function' ||
       !passwordHasher || typeof passwordHasher.verifyPassword !== 'function' || typeof passwordHasher.hashPassword !== 'function' ||
       !sessionService || typeof sessionService.authenticate !== 'function' ||
       !csrfPolicy || typeof csrfPolicy.verify !== 'function' || !throttle || typeof throttle.consume !== 'function' ||
       !validId(deploymentId) || ![idleTimeoutMs, absoluteTimeoutMs].every(n => Number.isSafeInteger(n) && n >= 60_000 && n <= 86_400_000) ||
-      idleTimeoutMs > absoluteTimeoutMs) throw new TypeError('Validated password-change dependencies and configuration required')
+      idleTimeoutMs > absoluteTimeoutMs || typeof onCredentialsRevoked !== 'function') throw new TypeError('Validated password-change dependencies and configuration required')
   deploymentId = deploymentId.toLowerCase()
 
   return Object.freeze({
@@ -94,6 +95,8 @@ export function createPasswordChangeService({ pool, passwordHasher, sessionServi
         })
         if (!replacement) deny('UNAVAILABLE')
         await client.query('COMMIT'); begun = false
+        try { await onCredentialsRevoked({ deploymentId, userId: current.id }) }
+        catch { deny('LEASE_REVOKE_FAILED') }
         return replacement
       } catch (error) {
         if (begun) { try { await client.query('ROLLBACK') } catch (e) { releaseError = e } }

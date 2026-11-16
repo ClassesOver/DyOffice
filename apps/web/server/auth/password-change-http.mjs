@@ -3,7 +3,7 @@ import { PasswordChangeError } from './password-change.mjs'
 const PATH = '/api/v1/auth/change-password'
 const MAX_BODY = 8192
 const STATUS = Object.freeze({ INVALID_INPUT: 400, UNAUTHORIZED: 401, INVALID_CREDENTIALS: 401,
-  FORBIDDEN: 403, RATE_LIMITED: 429, AUTHENTICATION_CHANGED: 409, UNAVAILABLE: 503 })
+  FORBIDDEN: 403, RATE_LIMITED: 429, AUTHENTICATION_CHANGED: 409, LEASE_REVOKE_FAILED: 503, UNAVAILABLE: 503 })
 
 function singleHeader(request, name) {
   const value = request.headers?.[name]

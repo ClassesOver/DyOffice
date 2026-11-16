@@ -2,7 +2,7 @@ name: DyOffice T03c account lifecycle
 
 on:
   push:
-    branches: [feat/dyoffice-t03c-account-lifecycle]
+    branches: [feat/dyoffice-web]
     paths:
       - 'apps/web/server/auth/**'
       - 'apps/web/server/db/**'
