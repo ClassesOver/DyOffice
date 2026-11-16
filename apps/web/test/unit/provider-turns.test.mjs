@@ -166,3 +166,15 @@ test('a pre-aborted transport rejects cleanly without dispatch or unhandled reje
  await assert.rejects(()=>service.run({...input,signal:controller.signal},()=>{}),/cancelled/)
  await new Promise(r=>setTimeout(r,0));assert.equal(called,false);assert.equal(service.activeCount(),0)
 })
+test('dispose rejects pending lookups and future calls while retaining orphan capacity',async()=>{
+ let resolve,entered;const gate=new Promise(r=>resolve=r),started=new Promise(r=>entered=r)
+ const service=setup({identity:async()=>{entered();await gate;return owner}})
+ const run=service.run(input,()=>{});await started
+ const cancel=service.cancel('a','turn');await new Promise(r=>setImmediate(r))
+ service.dispose();service.dispose()
+ await assert.rejects(run,/unavailable/);await assert.rejects(cancel,/unavailable/)
+ assert.equal(service.activeCount(),1)
+ await assert.rejects(service.run({...input,turnId:'new'},()=>{}),/unavailable/)
+ await assert.rejects(service.cancel('a','turn'),/unavailable/)
+ resolve();await new Promise(r=>setImmediate(r));assert.equal(service.activeCount(),0)
+})

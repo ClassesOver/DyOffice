@@ -8,6 +8,7 @@ import https from 'node:https'
 import {restrictedFixture,waitForDatabaseLock} from '../helpers/restricted.mjs'
 import {createGlobalConfigService} from '../../server/src/modules/admin/service.ts'
 import {createProviderBudgetService,grantProviderBudgetRuntime} from '../../server/src/modules/providers/budget.ts'
+import {registerAdminProviderAssembly} from '../../server/src/modules/providers/assembly.ts'
 import {registerProviderRoutes} from '../../server/src/modules/providers/routes.ts'
 import {tokenHash} from '../../server/src/modules/auth/sessions.ts'
 import {createCsrfService} from '../../server/src/modules/auth/csrf.ts'
@@ -46,7 +47,7 @@ async function fixture(t,{wrapTransactions,timeoutMs=5000}={}){
  const budget=createProviderBudgetService({transactions:f.transactions}),turnId=randomUUID()
  const binding=wire=>({turnId,entryId:'primary',configRevision:1,requestDigest:createHash('sha256').update(wire).digest('hex')})
  const input={token:f.adminSigned.token,turnId,modelId:'primary',request}
- return {...f,appPipeline,budget,turnId,binding,input}
+ return {...f,appPipeline,budget,turnId,binding,input,profile}
 }
 async function idle(f){const until=Date.now()+4000;while(f.appPipeline.turns.activeCount()){if(Date.now()>until)throw Error('Pipeline did not release');await new Promise(r=>setTimeout(r,5))}}
 test('single-connection real PG + scoped secret + mock pinned HTTPS + SSE parser settles exact wire digest once',async t=>{
@@ -161,4 +162,28 @@ test('upstream secret-bearing error produces one generic SSE error/done and no c
  assert.ok(audit.length);assert.equal(JSON.stringify(audit).includes(syntheticKey),false)
  await idle(f);assert.equal(n.writes,1)
  assert.equal((await f.budget.status(f.adminSigned.token,f.binding(n.wire))).state,'unknown')
+})
+
+test('real app.close ends active synthetic provider stream and holds committed budget unknown',async t=>{
+ let response
+ const n=network(t,()=>{response=new Readable({read(){}});response.push(validChunks[0]);return response})
+ const f=await fixture(t), app=await createApiShell()
+ registerAdminProviderAssembly(app,{enabled:true,transactions:f.transactions,keyring,profiles:[f.profile],timeoutMs:5000,
+  sessions:{authenticate:async()=>{}},csrf:{requireSession(){}}})
+ const result=app.inject({method:'POST',url:'/api/v1/ai/turns',headers:{cookie:'__Host-dyoffice-session='+f.adminSigned.token},payload:{turnId:f.turnId,modelId:'primary',request}}).then(r=>r)
+ await bounded(n.sent)
+ try {
+  await bounded(Promise.all([app.close(),result]),1000)
+  const r=await result
+  assert.equal((r.body.match(/event: done/g)||[]).length,1)
+  assert.equal(n.writes,1)
+  assert.equal(response.destroyed,true)
+  // Cleanup settlement is asynchronous after downstream ends. Wait explicitly,
+  // without implying that app.close cancelled or rolled back the DB transaction.
+  const until=Date.now()+2000
+  while((await f.ownerPool.query('SELECT state FROM provider_budget_reservations')).rows[0]?.state!=='unknown'){
+   if(Date.now()>until)throw Error('Unknown settlement not observed')
+   await new Promise(r=>setTimeout(r,5))
+  }
+ } finally {response?.destroy();await app.close()}
 })
