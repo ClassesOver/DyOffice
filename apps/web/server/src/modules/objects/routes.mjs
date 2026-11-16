@@ -10,6 +10,9 @@ export function objectStoreDirectory(dataDirectory) {
 
 const OBJECT_PATH = /^\/api\/v1\/objects\/([0-9a-f-]{36})$/i
 const FINISH_PATH = /^\/api\/v1\/objects\/uploads\/([0-9a-f-]{36})\/finish$/i
+const TRASH_PATH = /^\/api\/v1\/objects\/([0-9a-f-]{36})\/trash$/i
+const RESTORE_PATH = /^\/api\/v1\/objects\/([0-9a-f-]{36})\/restore$/i
+const PURGE_PATH = /^\/api\/v1\/objects\/([0-9a-f-]{36})\/purge$/i
 
 const STORE_ERRORS = {
   UNSAFE_NAME: ['文件名无效', 400],
@@ -68,6 +71,22 @@ export async function handleObjects(req, res, ctx, { path, send }) {
       rejectStore(error)
     }
     send({ objectId: completed.objectId, sha256: completed.sha256, size: completed.size, format: completed.format }, 200)
+    return true
+  }
+  const lifecycle = [
+    [TRASH_PATH, (objectId) => ctx.objectStore.trashObject({ ownerId: ctx.objectOwnerId, objectId })],
+    [RESTORE_PATH, (objectId) => ctx.objectStore.restoreObject({ ownerId: ctx.objectOwnerId, objectId })],
+    [PURGE_PATH, (objectId) => ctx.objectStore.purgeObject({ ownerId: ctx.objectOwnerId, objectId })],
+  ]
+  for (const [pattern, action] of lifecycle) {
+    const hit = pattern.exec(path)
+    if (!hit) continue
+    if (req.method !== 'POST') fail('方法不允许', 405)
+    try {
+      send(await action(hit[1]))
+    } catch (error) {
+      rejectStore(error)
+    }
     return true
   }
   const match = OBJECT_PATH.exec(path)
