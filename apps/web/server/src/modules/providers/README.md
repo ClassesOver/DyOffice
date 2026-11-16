@@ -21,3 +21,9 @@ Uncooperative dependencies retain their capacity slot until they settle; capacit
 exhaustion then fails closed rather than admitting more orphan work. Operational
 recovery for a permanently stuck adapter requires replacing that adapter/process.
 No route, real provider, secret store or durable usage ledger is enabled here.
+
+Cancellation identity lookups have a separate configurable deadline (`cancelTimeoutMs`,
+default 10 seconds) and at most `maxActive` outstanding lookups. A stalled lookup
+retains its slot until settlement, even after its caller times out; late identities
+cannot cancel turns. Identity adapter errors are redacted. These are local process
+limits, not distributed rate limiting or a substitute for route authentication.
