@@ -18,13 +18,18 @@ not T03 completion and not the legacy development-token Admin page.
   last-admin preservation, status/token validity and session revocation are NOT reimplemented
   or waived by client-side visibility.
 
-The entry wiring is deliberately separate from this PR to avoid overwriting the concurrent
-personal-password settings work. In local-main only: show the Admin button for config_admin,
-mount LocalAdminPanel with currentUserId and onClose; pass the main client's
-invalidateCsrf as onSessionRotated. That callback executes even if reauthentication has an
-uncertain network outcome, because its cookie may already have rotated. Mount PasswordActionForm
-only on the signed-out screen via an explicit activation/reset button. Neither form reads a
-token from the browser URL. Do not mount local account components on the legacy dev-token page.
+## Combined follow-up
+
+The candidate now incorporates personal-password PR #34, original-settings entry wiring,
+and explicit replacement of the four server-defined roles. Personal is always retained.
+Self-role changes warn about forced re-login; successful self-change returns to the login
+entry. The server's last-admin constraint remains authoritative. No arbitrary role names
+are accepted by the client.
+
+The original Account menu exposes User Management only for config_admin; the original
+Settings dialog contains the panel. The signed-out screen explicitly opens activation/reset.
+Both shared-client CSRF caches and forms are invalidated appropriately around reauthentication.
+This is wiring, not evidence that the real browser acceptance has already passed.
 
 ## Safety/verification boundaries
 
@@ -41,15 +46,16 @@ password mismatch, secret clearing and no false success. These use jsdom/mock tr
 are not real PostgreSQL/Chromium acceptance. The source API guard semantics belong to #32's
 separately tested server. A real signed-in browser flow must be added/run after entry wiring.
 
-Remaining T03 work: role editing and its last-admin/self-demotion UX, full settings/Admin
-entry integration, real browser create→secure code handoff→activate→login→reset→re-login,
-multi-admin stale-state/revocation coverage, and all original T03 acceptance criteria.
+Remaining T03 evidence: real browser create→secure code handoff→activate→login→reset→re-login,
+role replacement, last-admin rejection and self-demotion acceptance. The new
+test/local-browser/admin-users.test.mjs exercises actual APIs/PG/Chromium, without mocked
+routes, on CI's disposable database. It is included by the existing local-browser glob.
+Local invocation fails explicitly because DYOFFICE_TEST_DATABASE_URL is absent; this
+environment failure is NOT a product RED or a skipped success. No untrusted PG is installed.
+Native local-shell build and strict shell types passed. Runtime installation was reused locally;
+CI must reproduce installation. Full T03 including session management and other original
+acceptance is not declared complete by this component slice.
+
 No role-grant, account creation or credential action has been performed on real users.
-
-Local verification: 8 focused client/component tests passed; malformed 2xx regression
-was observed failing before DTO guards, then passed. Strict shell TypeScript passed.
-A first full-shell run was blocked by Vite resolving a PDF worker through an external
-node_modules symlink; copying the existing dependencies locally removed that fixture
-path issue. This is dependency reuse, not proof of a new npm installation.
-
-Full original shell test suite: 16 passed, 0 failed (including 8 new tests).
+Browser fixture credentials and codes stay within the disposable fixture. Screenshot is taken
+only after issued action codes are hidden; no trace or token values are intentionally logged.

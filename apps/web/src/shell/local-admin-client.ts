@@ -29,6 +29,7 @@ export function createLocalAdminClient(send:typeof fetch=fetch){
   async create(username:string,displayName:string){const result=await request<{user:unknown;action:unknown}>('/api/v1/admin/users',{username,displayName});return {user:user(result?.user),action:action(result?.action,'activate')}},
   async issue(userId:string,purpose:'activate'|'reset'){if(!['activate','reset'].includes(purpose))throw new Error('无效用途');const result=await request<{action:unknown}>(`/api/v1/admin/users/${id(userId)}/${purpose==='activate'?'activation':'password-reset'}`,{});return {action:action(result?.action,purpose)}},
   async setStatus(userId:string,status:'active'|'disabled'){if(!['active','disabled'].includes(status))throw new Error('无效状态');const result=await request<{user:unknown}>(`/api/v1/admin/users/${id(userId)}`,{status},'PATCH');return {user:user(result?.user)}},
+  async setRoles(userId:string,roles:string[]){if(!roles.length||roles.length>4||new Set(roles).size!==roles.length||roles.some(r=>!['personal','config_admin','operator','auditor'].includes(r)))throw new Error('无效角色');const result=await request<{user:unknown}>(`/api/v1/admin/users/${id(userId)}`,{roles},'PATCH');return {user:user(result?.user)}},
   async redeem(token:string,purpose:'activate'|'reset',password:string){if(!/^[A-Za-z0-9_-]{43}$/.test(token)||!['activate','reset'].includes(purpose))throw new Error('无效一次性码');await request('/api/v1/auth/password-action',{token,purpose,password},'POST',true)},
  }
 }

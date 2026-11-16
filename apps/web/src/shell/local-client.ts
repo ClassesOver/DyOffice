@@ -2,6 +2,7 @@ import type {WebFile} from './web-home-bridge'
 /** Local mode only: HttpOnly session cookies, ephemeral CSRF, no bearer/JSON fallback. */
 export function createLocalShellClient(send:typeof fetch=fetch) {
  let csrf:string|undefined
+ let passwordAction:'idle'|'pending'|'unknown'='idle'
  async function request<T=unknown>(path:string,method='GET',body?:unknown):Promise<T>{
   if(!path.startsWith('/api/v1/')||path.includes('\\')||path.includes('#'))throw new Error('Expected same-origin local API path')
   const write=!['GET','HEAD'].includes(method)
@@ -14,6 +15,21 @@ export function createLocalShellClient(send:typeof fetch=fetch) {
  }
  return {
   request,
+  invalidateCsrf(){csrf=undefined},
+  async changePassword(currentPassword:string,newPassword:string){
+   if(passwordAction!=='idle')throw new Error(passwordAction==='pending'?'密码修改正在进行中。':'无法确认上次密码修改结果，请重新加载。')
+   passwordAction='pending'
+   try{
+    const result=await request<{csrfToken:string}>('/api/v1/auth/change-password','POST',{currentPassword,newPassword})
+    if(!result||typeof result.csrfToken!=='string'||!/^[A-Za-z0-9_-]{43}$/.test(result.csrfToken))throw new Error('无法确认密码修改结果。')
+    csrf=result.csrfToken;passwordAction='idle'
+   }catch(error){
+    csrf=undefined
+    const status=(error as {status?:number})?.status
+    passwordAction=status!==undefined&&status>=400&&status<500?'idle':'unknown'
+    throw error
+   }
+  },
   async login(username:string,password:string){csrf=undefined;try{const result=await request<{user:{id:string;username:string;displayName:string;roles:string[]};csrfToken:string}>('/api/v1/auth/login','POST',{username,password});csrf=result.csrfToken;return result.user}finally{csrf=undefined}},
   async logout(){await request('/api/v1/auth/logout','POST');csrf=undefined},
   async homeRequest(path:string,method='GET',body?:unknown):Promise<unknown>{

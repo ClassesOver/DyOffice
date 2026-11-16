@@ -98,3 +98,21 @@ test('successful redemption shows return-to-login result without retaining the c
  await vi.waitFor(()=>expect(document.querySelector('[role="status"]')?.textContent).toContain('不会自动登录'))
  expect(document.querySelector('form')).toBeNull();expect(redeem).toHaveBeenCalledOnce();root.unmount()
 })
+test('role replacement accepts only explicit known nonduplicate roles',async()=>{
+ const send=vi.fn(async()=>new Response('{}'))
+ const client=createLocalAdminClient(send)
+ await expect(client.setRoles('01234567-89ab-4def-8abc-0123456789ab',['root'])).rejects.toThrow()
+ await expect(client.setRoles('01234567-89ab-4def-8abc-0123456789ab',['personal','personal'])).rejects.toThrow()
+ expect(send).not.toHaveBeenCalled()
+})
+test('self role replacement is explicit, preserves personal and requires a fresh login on success',async()=>{
+ const client={list:vi.fn(async()=>({users:[{id:'me',username:'owner',displayName:'',status:'active',roles:['personal','config_admin'],requiresPasswordReset:false}],nextCursor:null})),reauthenticate:vi.fn(async()=>{}),setRoles:vi.fn(async()=>({user:{id:'me'}}))} as unknown as LocalAdminClient
+ const changed=vi.fn(),root=mount(h(LocalAdminPanel,{currentUserId:'me',onClose:()=>{},onSessionRotated:()=>{},onOwnAuthorityChanged:changed,client}))
+ await vi.waitFor(()=>expect([...document.querySelectorAll('button')].some(b=>b.textContent==='编辑角色')).toBe(true))
+ ;([...document.querySelectorAll('button')].find(b=>b.textContent==='编辑角色')!).click()
+ await vi.waitFor(()=>expect(document.querySelector('fieldset')?.textContent).toContain('必须重新登录'))
+ document.querySelector<HTMLInputElement>('[name="role"][value="config_admin"]')!.checked=false
+ const form=document.querySelector('form[aria-label]')!;form.querySelector<HTMLInputElement>('[name="password"]')!.value='secret';form.dispatchEvent(new Event('submit',{bubbles:true,cancelable:true}))
+ await vi.waitFor(()=>expect(changed).toHaveBeenCalledOnce())
+ expect(client.setRoles).toHaveBeenCalledWith('me',['personal']);root.unmount()
+})
