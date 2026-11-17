@@ -226,3 +226,14 @@
 - 远端4405d766账号CI失败日志为npm下载ECONNRESET（基础单元13项已过、集成未执行），已只重跑失败任务；不改业务代码。远端native-docx与其他长任务尚待最终状态。完整UI、复杂文档交互与跨刷新未知结果恢复目标仍进行中。
 - 证据：/tmp/dyoffice-skill-menu-red.log、/tmp/dyoffice-skill-menu-escape-red.log、/tmp/dyoffice-skill-menu-retry-focus-red.log、/tmp/dyoffice-round11-ui-final.log、/tmp/dyoffice-round11-shell.log、/tmp/dyoffice-round11-docs-tests.log；/tmp/dyoffice-ui-audit/native-skills-menu-error/报告及截图；/tmp/dyoffice-ui-audit/management-small-error/旧证据与management-small-error-postfix/最终报告及截图。最终native-docs完整端到端另行记录。
 - 最终本地native-docs全套9项中8通过/1按既有外部Provider条件跳过/0失败，67.64秒；真实编辑commit/refresh/保留原parts、延迟保存较新草稿、takeover、未知保存receipt、私有技能Provider Gateway发送等通过，日志/tmp/dyoffice-native-docs-final-suite.log。账号CI网络失败重跑已success，4fbcb680的native-docx也已success；当前4405d766的长任务仍在运行，不将旧提交结果冒充本批新CI。
+
+## 文档内配置入口与 PDF 小屏横滚
+
+- 原共享editor assistant的openSkillsSettings/openAiModelSettings调用当前iframe的location.assign('/')；组件回归初始3项未调用host/未解释standalone，宿主入口初始4项未安装能力，均先红。现用Web专用同源parent能力请求宿主AntD配置弹窗：技能直接选个人技能，模型仅管理员可打开全局配置；限定已挂载文档frame身份，同步会话失效及恢复态拒绝，卸载清理入口。已打开其他配置的dirty/pending closeGuard拒绝时保留原弹窗；同一个人设置切技能不重挂，偏好草稿和技能guard均保留。独立原生/缺宿主/跨源入口显示友好提示，不导航。
+- 个人设置受控页签DOM回归确认默认账户页、修改作者后切技能仍同一input节点/值且关闭保护有效；正常从头像重开保持账户页默认。8项真实入口源码绑定/恢复测试通过，API/受控Tabs等专项13项通过。红测摘录/tmp/dyoffice-ui-audit/editor-settings-red/evidence.md注明为已捕获工具输出摘录，不冒充完整初始stdout。
+- 320px PDF原始canvas595px使整个预览section横滚；键盘连续ArrowRight可令下载按钮移至x=-181..-93，标题/提示也移走。将PDF宿主限制在卡片内容宽度内独立横滚，新增可聚焦的“PDF 页面”region；新回归先红，7项预览生命周期/重试相关通过，保留abort/destroy清理和下载地址。
+- 最终PDF2组与Office4组真实宿主mock浏览器通过：320 PDF从下载Tab到region，ArrowRight仅region left413、外section left0及scrollWidth/clientWidth320；标题/下载不再横向移走。Tab聚焦高region会引起原生纵向显露滚动，横移测试仅重置纵scrollTop，未声称标题吸顶。1440 PDF无需横滚；XLSX两尺寸表内键盘滚动、PPTX两尺寸错误Enter重试通过。0业务写、0pageerror。mock原URL下载均canceled而Blob同字节下载成功，作为模拟链限制单列，不判定产品下载故障。
+- 最终Shell45文件427项通过，Web388项中387通过/1既有条件跳过，shell/前后端/Docs类型、shell及DOCX构建、边界1335文件0违规、兼容84/工具157/IPC538通过。构建仍有既有chunk提示，DOM仍有CSS解析日志。共享assistant涉及XLSX，另补Sheets最终构建及重启。
+- 远端280b0ee7的boundary-check失败发生在login-history浏览器第三次登录按钮点击前，无第三次业务请求；扫描本身0违规，现有日志不能证明认证服务错误，保留待查。PPTX文件菜单另有SaveAs/PDF/Print/图片导出可达性源码候选，尚未经真实菜单复现，不当作已确认修复。完整入口穷举仍在进行。
+- 证据：/tmp/dyoffice-round12-shell.log、/tmp/dyoffice-round12-web.log、/tmp/dyoffice-round12-bindings.log、/tmp/dyoffice-pdf-scroll-red.log；/tmp/dyoffice-ui-audit/document-preview-layout/初始报告、document-preview-layout-pdf-isolation/反例、document-preview-layout-pdf-postfix/与document-preview-layout-office-postfix/最终报告；/tmp/dyoffice-ui-audit/native-menu-readonly-notes.md。
+- 最终隔离PG真实Shell+DOCX组合浏览器1/1（3组）通过，pageerror0：可见label关闭自动保存后，三次管理技能均打开父个人技能页，iframe/contentWindow标记与未保存文字不变；每次操作核对服务器revision仍为导入原值、iframe beforeunload仍阻止离站。偏好dirty取消关闭保留设置及文档草稿，普通用户模型兼容入口显示权限提示而不导航。管理员模型弹窗仅入口绑定测试覆盖，不声称真实管理员浏览器流程。报告/tmp/dyoffice-ui-audit/native-shell-assistant-settings/report.md及JSON、final.png；日志/tmp/dyoffice-native-shell-assistant-settings.log。仅隔离fixture写入并清理，无用户部署数据变更。脚本准备时两次个人文件定位/隐藏checkbox点击错误均已定因为测试选择器，不作产品失败。Sheets最终构建及主服务重启HTTP200通过。

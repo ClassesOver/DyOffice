@@ -9,8 +9,9 @@ import {LoginHistoryPanel} from './LoginHistoryPanel'
 import type {ReactNode} from 'react'
 import {SafetyCertificateOutlined,SlidersOutlined,AppstoreOutlined,UserOutlined,LockOutlined,DesktopOutlined,HistoryOutlined} from '@ant-design/icons'
 const {Paragraph}=Typography
-export function WorkspaceSettings({user,load,save,security,skills,onLogout,onClose,onCloseGuardChange,sessionsClient,historyClient}:{
+export function WorkspaceSettings({user,load,save,security,skills,onLogout,onClose,onCloseGuardChange,sessionsClient,historyClient,activeTab,onTabChange}:{
  user:{username:string;displayName:string;roles:string[]};load:()=>Promise<WebSettingsPreferences>;save:(patch:Partial<WebSettingsPreferences>)=>Promise<WebSettingsPreferences>
+ activeTab?:string;onTabChange?:(tab:string)=>void
  sessionsClient?:LocalSessionsClient;historyClient?:LoginHistoryClient
  security:{changePassword:(current:string,next:string)=>Promise<void>;onCurrentRevoked:()=>void};skills:ReactNode|((registerGuard:(guard:(()=>boolean)|null)=>void)=>ReactNode);onLogout:()=>void;onClose:()=>void;onCloseGuardChange:(guard:(()=>boolean)|null)=>void
 }){
@@ -49,6 +50,6 @@ export function WorkspaceSettings({user,load,save,security,skills,onLogout,onClo
  </Card>
  return <section className="workspace-settings-page"><header className="workspace-page-heading"><Paragraph type="secondary">管理你的账号安全、显示偏好与个人技能。</Paragraph></header>
  {error&&<Alert type="error" showIcon title={error} style={{marginBottom:16}}/>}{saved&&<Alert type="success" showIcon title="个人偏好已保存" style={{marginBottom:16}}/>}
- <Tabs className="personal-settings-tabs" items={[{key:'account',icon:<SafetyCertificateOutlined aria-hidden="true"/>,label:'账户与安全',children:account},{key:'general',icon:<SlidersOutlined aria-hidden="true"/>,label:'通用偏好',children:general},{key:'skills',icon:<AppstoreOutlined aria-hidden="true"/>,label:'个人技能',children:<div className="personal-settings-skills">{typeof skills==='function'?skills(skillsGuard):skills}</div>}]} destroyOnHidden={false}/>
+ <Tabs activeKey={activeTab} onChange={onTabChange} className="personal-settings-tabs" items={[{key:'account',icon:<SafetyCertificateOutlined aria-hidden="true"/>,label:'账户与安全',children:account},{key:'general',icon:<SlidersOutlined aria-hidden="true"/>,label:'通用偏好',children:general},{key:'skills',icon:<AppstoreOutlined aria-hidden="true"/>,label:'个人技能',children:<div className="personal-settings-skills">{typeof skills==='function'?skills(skillsGuard):skills}</div>}]} destroyOnHidden={false}/>
  </section>
 }

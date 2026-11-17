@@ -15,6 +15,14 @@ export async function createEditorAssistant(channelOptions?:{fileId:string;edito
   const assistant = await createAssistantClient({request: bound.request, csrfToken: bound.proof,onDelivery:(hint,agent)=>deliveries.observe(hint,agent)})
   const channel=assistant.catalog.assistantChannels&&channelOptions?createAssistantChannelClient({...channelOptions,request:bound.request}):undefined
   const skills = createUserSkillsClient(bound.request)
+  async function openSettings(target:'skills'|'models') {
+    try {
+      const host=window.parent as Window & {dyofficeOpenEditorSettings?:(target:'skills'|'models',source:Window)=>void}
+      if(host===window||host.location.origin!==window.location.origin||!host.dyofficeOpenEditorSettings)throw Error('请从工作区打开文档，再管理个人技能或模型配置。')
+      host.dyofficeOpenEditorSettings(target,window)
+    } catch {window.alert('配置入口不可用，请从工作区打开文档后再试。')}
+  }
+
   function ModelPicker() {
     const [selected, setSelected] = useState(assistant.selected() ?? '')
     return <label className="ai-model-chip" title="切换模型后，下一条消息会开启新的模型上下文。">模型<select aria-label="助手模型" value={selected} onChange={e => {assistant.select(e.target.value); setSelected(e.target.value)}}>
@@ -38,8 +46,8 @@ export async function createEditorAssistant(channelOptions?:{fileId:string;edito
       skillsList: skills.listSkills, skillText: skills.skillText,
       pickAttachments: async () => ({attachments: [], rejected: []}),
       getPathForFile: () => '',
-      openSkillsSettings: async () => {location.assign('/')},
-      openAiModelSettings: async () => {location.assign('/')},
+      openSkillsSettings: () => openSettings('skills'),
+      openAiModelSettings: () => openSettings('models'),
     },
     dispose() {documents.dispose();deliveries.dispose();channel?.dispose();assistant.dispose(); client.invalidateSession()},
   }

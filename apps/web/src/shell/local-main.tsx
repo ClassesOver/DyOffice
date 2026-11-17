@@ -101,7 +101,7 @@ async function logout(){
  }
  await client.logout();location.replace('/')
 }
-function WorkspacePageContent({page,onClose,onCloseGuardChange}:{page:WorkspacePage;onClose:()=>void;onCloseGuardChange:(guard:(()=>boolean)|null)=>void}){
+function WorkspacePageContent({page,onClose,onCloseGuardChange,settingsTab,onSettingsTabChange}:{settingsTab?:string;onSettingsTabChange?:(tab:string)=>void;page:WorkspacePage;onClose:()=>void;onCloseGuardChange:(guard:(()=>boolean)|null)=>void}){
  const [sessionVersion,setSessionVersion]=useState(0)
  const registerGuard=onCloseGuardChange
  async function updateSession(proof:string){
@@ -112,7 +112,7 @@ function WorkspacePageContent({page,onClose,onCloseGuardChange}:{page:WorkspaceP
   userSkills=createUserSkillsClient(bound.request);sourceWorkspace=workspace
   setSessionVersion(version=>version+1)
  }
- if(page==='settings'&&user)return <WorkspaceSettings sessionsClient={sessionsClient} historyClient={historyClient} user={user} load={preferences.getPreferences} save={preferences.updatePreferences} security={{changePassword:async(current,next)=>{const proof=await client.changePassword(current,next);await updateSession(proof).catch(()=>client.endSession('expired'))},onCurrentRevoked:()=>client.endSession('expired')}} skills={registerSkillsGuard=>userSkills&&<UserSkillsPanel key={sessionVersion} client={userSkills} onCloseGuardChange={registerSkillsGuard}/>} onLogout={()=>void logout().catch(e=>notice(e.message))} onClose={onClose} onCloseGuardChange={registerGuard}/>
+ if(page==='settings'&&user)return <WorkspaceSettings activeTab={settingsTab} onTabChange={onSettingsTabChange} sessionsClient={sessionsClient} historyClient={historyClient} user={user} load={preferences.getPreferences} save={preferences.updatePreferences} security={{changePassword:async(current,next)=>{const proof=await client.changePassword(current,next);await updateSession(proof).catch(()=>client.endSession('expired'))},onCurrentRevoked:()=>client.endSession('expired')}} skills={registerSkillsGuard=>userSkills&&<UserSkillsPanel key={sessionVersion} client={userSkills} onCloseGuardChange={registerSkillsGuard}/>} onLogout={()=>void logout().catch(e=>notice(e.message))} onClose={onClose} onCloseGuardChange={registerGuard}/>
  if(page==='users'&&user?.roles.includes('config_admin'))return <section className="workspace-panel"><LocalAdminPanel client={adminClient} presentation="page" currentUserId={user.id} onSessionRotated={proof=>{client.invalidateCsrf();if(proof)void updateSession(proof).catch(e=>notice(e.message))}} onOwnAuthorityChanged={()=>client.endSession('expired')} onClose={onClose} onCloseGuardChange={registerGuard}/></section>
  if(page==='global'&&user?.roles.includes('config_admin'))return <GlobalSettingsPanel client={globalSettings} onClose={onClose} presentation="page" onCloseGuardChange={registerGuard}/>
  if(page==='sources'&&sourceWorkspace)return <SourcesPanel key={sessionVersion} client={sourceWorkspace.sources} resultsClient={sourceWorkspace.results} onClose={onClose} presentation="page" onCloseGuardChange={registerGuard}/>
@@ -121,7 +121,7 @@ function WorkspacePageContent({page,onClose,onCloseGuardChange}:{page:WorkspaceP
 }
 function Account({onOpen}:{onOpen:(page:WorkspacePage)=>void}){return <div className="account-entry">{user&&<AccountMenu user={user} onSettings={()=>onOpen('settings')} onTrash={()=>onOpen('trash')} onSources={()=>onOpen('sources')} onGlobalSettings={()=>onOpen('global')} onUsers={()=>onOpen('users')} onLogout={()=>void logout().catch(e=>notice(e.message))}/>}</div>}
 
-function Shell(){
+function Shell({recovery=false}:{recovery?:boolean}){
  const [message,setMessage]=useState(''),[page,setPage]=useState<WorkspacePage|null>(null)
  const [tabs,setTabs]=useState(documentTabs.list())
  const [uploadFiles,setUploadFiles]=useState<File[]|null>(null)
@@ -137,12 +137,32 @@ function Shell(){
  },[])
  const closeGuard=useRef<(()=>boolean)|null>(null)
  const registerGuard=useCallback((guard:(()=>boolean)|null)=>{closeGuard.current=guard},[])
+ const [settingsTab,setSettingsTab]=useState('account')
+ useEffect(()=>{if(page!=='settings')setSettingsTab('account')},[page])
+ const activePage=useRef(page),recoveryBlocked=useRef(recovery)
+ activePage.current=page;recoveryBlocked.current=recovery
+ useEffect(()=>client.onSessionEnded(()=>{recoveryBlocked.current=true}),[])
+ useEffect(()=>{
+  const host=window as Window & {dyofficeOpenEditorSettings?:(target:'skills'|'models',source:Window)=>void}
+  const openSettings=(target:'skills'|'models',source:Window)=>{
+   if(recoveryBlocked.current)return
+   if(!['skills','models'].includes(target)||![...document.querySelectorAll<HTMLIFrameElement>('.workspace-document-frame')].some(frame=>frame.contentWindow===source))return
+   try{if(source.location.origin!==window.location.origin)return}catch{return}
+   if(target==='models'&&!user?.roles.includes('config_admin')){notice('模型配置仅配置管理员可管理。');return}
+   const next=target==='skills'?'settings':'global'
+   if(activePage.current&&activePage.current!==next){if(closeGuard.current?.()===false){notice('请先完成或保存当前配置操作，再切换设置。');return}closeGuard.current=null}
+   if(target==='skills')setSettingsTab('skills')
+   activePage.current=next;setPage(next)
+  }
+  host.dyofficeOpenEditorSettings=openSettings
+  return()=>{if(host.dyofficeOpenEditorSettings===openSettings)delete host.dyofficeOpenEditorSettings}
+ },[])
  const close=()=>{if(closeGuard.current?.()===false)return;setPage(null)}
  notice=setMessage;showTrash=()=>setPage('trash')
  return <>
   <AppFrame hideAppMenu hideSingleTabList initialOnboardingSeen={true} homeProps={{capabilities:{localFolders:false,copyPath:false,duplicateFile:false,starredGroups:false,cloudProjects:false,semanticRanking:false},supportedFormats:['docx','xlsx','pptx','pdf'],supportedNewFormats:capabilities.docx==='editable'?['docx']:[],accountEntry:<Account onOpen={setPage}/>,folderDeleteDescription:name=>`仅可删除空文件夹「${name}」。请先移出文件和子文件夹；回收站中仍属于此目录的文件需先恢复并移出。`}} editorContent={<>{documentTabs.documents().map(file=><div key={file.id} className="workspace-document" hidden={!tabs.find(tab=>tab.id===file.id)?.active}>{file.src.startsWith('/native-')?<DocumentFrame file={file} registerGuard={documentTabs.setGuard}/>:<DocumentPreview fileId={file.id} name={file.name} format={file.format} request={client.request}/>}</div>)}</>}/>
   <Modal open={page!==null} title={page?workspacePages[page]:undefined} onCancel={close} footer={null} width={1120} centered destroyOnHidden maskClosable={false} className="workspace-config-modal">
-   {page&&<WorkspacePageContent key={page} page={page} onClose={()=>setPage(null)} onCloseGuardChange={registerGuard}/>}
+   {page&&<WorkspacePageContent key={page} page={page} settingsTab={settingsTab} onSettingsTabChange={setSettingsTab} onClose={()=>setPage(null)} onCloseGuardChange={registerGuard}/>}
   </Modal>
   {uploadFiles!==null&&<WorkspaceUploadDialog open initialFiles={uploadFiles} upload={upload} onClose={()=>setUploadFiles(null)}/>}
   {chromeMenu&&<Dropdown open trigger={['click']} onOpenChange={open=>{if(!open)setChromeMenu(null)}} menu={{items:chromeMenu.kind==='tabs'?tabs.map(tab=>({key:tab.id,label:tab.title})):chromeMenu.kind==='tab'?[{key:'close',label:'关闭文档',danger:true}]:chromeMenu.kind==='new'?[...(capabilities.docx==='editable'?[{key:'word',label:'新建 Word 文档'}]:[]),{key:'import',label:'打开文件…'}]:[{key:'home',label:'首页'},{key:'import',label:'打开文件…'},{key:'settings',label:'个人设置'}],onClick:({key})=>{const target=chromeMenu;setChromeMenu(null);if(target.kind==='tabs')documentTabs.activate(key);else if(key==='close'&&target.id)void documentTabs.close(target.id).catch(e=>notice(e.message));else if(key==='word')void window.aiOffice.newDoc().catch(e=>notice(e.message));else if(key==='import')void browse().catch(e=>notice(e.message));else if(key==='home')documentTabs.activate('home');else if(key==='settings')setPage('settings')}}}><span style={{position:'fixed',left:Math.min(chromeMenu.x,window.innerWidth-200),top:chromeMenu.y,width:1,height:1}}/></Dropdown>}
@@ -172,7 +192,7 @@ function Root(){
  if(state==='loading')return <main className="web-login">正在加载个人工作区…</main>
  if(state==='error')return <main className="web-login" role="alert"><p>{error}</p><button onClick={()=>location.reload()}>重试</button><button onClick={()=>void logout().catch(e=>setError(e.message))}>退出登录</button></main>
  return state==='ready'?<LocaleProvider initial={initialLanguage} onError={error=>notice(error instanceof Error?error.message:String(error))}>
-  <div inert={recovery?true:undefined} style={{display:recovery?'none':'contents'}}><Shell/></div>
+  <div inert={recovery?true:undefined} style={{display:recovery?'none':'contents'}}><Shell recovery={!!recovery}/></div>
   {recovery&&<main className="dy-login account-session-recovery" role="alertdialog" aria-modal="true" aria-label="登录状态需要核对" onKeyDown={event=>{if(event.key==='Tab'){event.preventDefault();event.currentTarget.querySelector<HTMLButtonElement>('button')?.focus()}}} style={{position:'fixed',inset:0,zIndex:2000}}><Card className="dy-login-card"><Typography.Title level={4}>{recovery==='expired'?'会话已过期':'退出结果尚未确认'}</Typography.Title><Typography.Paragraph type="secondary">{recovery==='expired'?'请重新加载并核对登录状态，再继续使用工作区。':'退出请求未能确认，请重新加载并核对当前登录状态，不要重复提交。'}已打开的文档仍保留在当前页面；重新加载前请确认未保存的更改。</Typography.Paragraph><Button autoFocus type="primary" block onClick={()=>location.reload()}>重新加载并核对登录状态</Button></Card></main>}
  </LocaleProvider>:<Login done={()=>setState('ready')}/>
 }

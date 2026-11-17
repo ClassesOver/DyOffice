@@ -92,6 +92,6 @@ export function DocumentPreview({fileId,name,format,request}:{fileId:string;name
  return <section style={{height:'100%',overflow:'auto',padding:24}}><Card title={name} extra={url&&<Button href={url} download={name}>下载原件</Button>}>
  <Alert type="info" showIcon title="只读预览" description={format==='pdf'?'仅显示原始 PDF 页面，不提供编辑。':'仅提取文本与缓存数值，不执行公式或外部连接，不保证原始排版。每张工作表最多显示 200 行、200 列。'}/>
  {busy&&<Spin tip="正在读取文档"/>}{error&&<Alert type="error" title={error} action={<Button disabled={busy} onClick={retry}>重新加载预览</Button>}/>}
- <div ref={host}/>{pages.map((page,index)=><Card key={index} title={page.name} style={{marginTop:16}}><div style={{overflow:'auto'}}><table><tbody>{page.rows.map((row,i)=><tr key={i}>{row.map((value,j)=><td key={j} style={{border:'1px solid var(--border)',padding:'6px 10px',whiteSpace:'pre-wrap'}}>{value}</td>)}</tr>)}</tbody></table></div></Card>)}
+ <div ref={host} role={format==='pdf'?'region':undefined} aria-label={format==='pdf'?'PDF 页面':undefined} tabIndex={format==='pdf'?0:undefined} style={{maxWidth:'100%',overflowX:'auto'}}/>{pages.map((page,index)=><Card key={index} title={page.name} style={{marginTop:16}}><div style={{overflow:'auto'}}><table><tbody>{page.rows.map((row,i)=><tr key={i}>{row.map((value,j)=><td key={j} style={{border:'1px solid var(--border)',padding:'6px 10px',whiteSpace:'pre-wrap'}}>{value}</td>)}</tr>)}</tbody></table></div></Card>)}
  </Card></section>
 }
