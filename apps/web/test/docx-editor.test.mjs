@@ -86,146 +86,45 @@ async function start(t) {
   return `http://127.0.0.1:${server.address().port}`
 }
 
-test('HTTP docx editing commits one revision and preserves history, leases and idempotency', async t => {
-  const base = await start(t)
-  const { bytes, styles, header } = await sampleDocx()
-  const headers = { Authorization: 'Bearer personal' }
-  const uploaded = await fetch(base + '/api/files', { method: 'POST', headers: { ...headers, 'X-File-Name': encodeURIComponent('笔记.docx') }, body: bytes })
-  assert.equal(uploaded.status, 201)
-  const file = await uploaded.json()
-  assert.equal((await fetch(base + '/api/v1/capabilities', { headers })).status, 200)
-  assert.equal((await (await fetch(base + '/api/v1/capabilities', { headers })).json()).docx, 'editable')
-  assert.equal((await fetch(base + `/api/v1/files/${file.id}/docx`, { headers: { Authorization: 'Bearer admin' } })).status, 403)
-  const opened = await (await fetch(base + `/api/v1/files/${file.id}/docx`, { headers })).json()
-  assert.equal(opened.blocks.find(block => block.text === 'Hello').editable, true)
-  const lease = await (await fetch(base + `/api/v1/files/${file.id}/lease`, { method: 'POST', headers })).json()
-  assert.equal(lease.leaseEpoch, 2)
-  const payload = JSON.stringify({
-    baseRevision: opened.file.revision,
-    leaseEpoch: lease.leaseEpoch,
-    idempotencyKey: 'docx-save-001',
-    blocks: opened.blocks.map(block => block.text === 'Hello' ? { docxIndex: block.docxIndex, text: 'Hello there' } : { docxIndex: block.docxIndex }),
-  })
-  const save = async body => fetch(base + `/api/v1/files/${file.id}/docx`, { method: 'POST', headers: { ...headers, 'Content-Type': 'application/json' }, body })
-  const saved = await save(payload)
-  assert.equal(saved.status, 200)
-  const revision = await saved.json()
-  assert.notEqual(revision.revision, opened.file.revision)
-  const replay = await save(payload)
-  assert.equal(replay.status, 200)
-  assert.equal((await replay.json()).revision, revision.revision)
-  const conflict = await save(payload.replace('Hello there', 'Hello twice'))
-  assert.equal(conflict.status, 409)
-  assert.equal((await conflict.json()).code, 'IDEMPOTENCY_CONFLICT')
-  const stale = await save(JSON.stringify({ baseRevision: opened.file.revision, leaseEpoch: 2, idempotencyKey: 'docx-save-002', blocks: opened.blocks.map(block => ({ docxIndex: block.docxIndex })) }))
-  assert.equal(stale.status, 409)
-  assert.equal((await stale.json()).code, 'REVISION_CONFLICT')
-  const oldLease = await fetch(base + `/api/v1/files/${file.id}/docx`, { method: 'POST', headers: { ...headers, 'Content-Type': 'application/json' }, body: JSON.stringify({ baseRevision: revision.revision, leaseEpoch: 1, idempotencyKey: 'docx-save-003', blocks: opened.blocks.map(block => ({ docxIndex: block.docxIndex, ...(block.text === 'Hello' ? { text: 'Hello there' } : {}) })) }) })
-  assert.equal(oldLease.status, 409)
-  assert.equal((await oldLease.json()).code, 'LEASE_CONFLICT')
-  const current = Buffer.from(await (await fetch(base + '/api/files/' + file.id, { headers })).arrayBuffer())
-  assert.equal(await part(current, 'word/styles.xml'), styles)
-  assert.equal(await part(current, 'word/header1.xml'), header)
-  assert.equal((await part(current, 'word/document.xml')).includes('Hello there'), true)
-  const archived = await fetch(base + `/api/v1/files/${file.id}/content?revision=${encodeURIComponent(opened.file.revision)}`, { headers })
-  assert.equal(archived.status, 200)
-  assert.equal(Buffer.from(await archived.arrayBuffer()).compare(bytes), 0)
-  const pdf = await fetch(base + '/api/files', { method: 'POST', headers: { ...headers, 'X-File-Name': 'note.pdf' }, body: '%PDF-1.7 sample' })
-  const pdfId = (await pdf.json()).id
-  assert.equal((await fetch(base + `/api/v1/files/${pdfId}/docx`, { headers })).status, 400)
-})
-
-test('HTTP lease renewal, takeover, and restore publish one new current revision', async (t) => {
-  const base = await start(t)
-  const { bytes } = await sampleDocx()
-  const headers = { Authorization: 'Bearer personal', 'Content-Type': 'application/json' }
-  const uploaded = await fetch(base + '/api/files', { method: 'POST', headers: { Authorization: 'Bearer personal', 'X-File-Name': encodeURIComponent('笔记.docx') }, body: bytes })
-  const file = await uploaded.json()
-  assert.equal((await fetch(base + `/api/v1/files/${file.id}/leases/acquire`, { method: 'POST', headers: { Authorization: 'Bearer admin' }, body: '{}' })).status, 403)
-  const opened = await (await fetch(base + `/api/v1/files/${file.id}/docx`, { headers })).json()
-  const acquired = await (await fetch(base + `/api/v1/files/${file.id}/leases/acquire`, { method: 'POST', headers, body: '{}' })).json()
-  assert.equal(acquired.leaseEpoch, 1)
-  await new Promise((resolve) => setTimeout(resolve, 20))
-  const renewed = await (await fetch(base + `/api/v1/files/${file.id}/leases/renew`, { method: 'POST', headers, body: JSON.stringify({ leaseEpoch: acquired.leaseEpoch }) })).json()
-  assert.equal(renewed.leaseEpoch, 1)
-  assert.ok(renewed.expiresAt > acquired.expiresAt)
-  const save = await fetch(base + `/api/v1/files/${file.id}/docx`, { method: 'POST', headers, body: JSON.stringify({
-    baseRevision: opened.file.revision,
-    leaseEpoch: renewed.leaseEpoch,
-    idempotencyKey: 'docx-lease-001',
-    blocks: opened.blocks.map((block) => block.text === 'Hello' ? { docxIndex: block.docxIndex, text: 'Hello there' } : { docxIndex: block.docxIndex }),
-  }) })
-  assert.equal(save.status, 200)
-  const revision = await save.json()
-  const taken = await (await fetch(base + `/api/v1/files/${file.id}/leases/takeover`, { method: 'POST', headers, body: '{}' })).json()
-  assert.equal(taken.leaseEpoch, 2)
-  const stale = await fetch(base + `/api/v1/files/${file.id}/docx`, { method: 'POST', headers, body: JSON.stringify({
-    baseRevision: revision.revision,
-    leaseEpoch: 1,
-    idempotencyKey: 'docx-lease-002',
-    blocks: opened.blocks.map((block) => ({ docxIndex: block.docxIndex })),
-  }) })
-  assert.equal(stale.status, 409)
-  assert.equal((await stale.json()).code, 'LEASE_CONFLICT')
-  const restored = await fetch(base + `/api/v1/files/${file.id}/restore`, { method: 'POST', headers, body: JSON.stringify({
-    sourceRevision: opened.file.revision,
-    baseRevision: revision.revision,
-    leaseEpoch: taken.leaseEpoch,
-    idempotencyKey: 'docx-restore-1',
-  }) })
-  assert.equal(restored.status, 200)
-  const restoredRef = await restored.json()
-  assert.notEqual(restoredRef.revision, opened.file.revision)
-  assert.equal(restoredRef.sha256, opened.file.sha256)
-  const replay = await fetch(base + `/api/v1/files/${file.id}/restore`, { method: 'POST', headers, body: JSON.stringify({
-    sourceRevision: opened.file.revision,
-    baseRevision: revision.revision,
-    leaseEpoch: 1,
-    idempotencyKey: 'docx-restore-1',
-  }) })
-  assert.equal(replay.status, 200)
-  assert.equal((await replay.json()).revision, restoredRef.revision)
-  const current = Buffer.from(await (await fetch(base + '/api/files/' + file.id, { headers })).arrayBuffer())
-  assert.equal(current.compare(bytes), 0)
-  const rejected = await fetch(base + `/api/v1/files/${file.id}/commits`, { method: 'POST', headers, body: JSON.stringify({ ownerId: 'someone-else', fileId: file.id, uploadId: file.id, baseRevision: restoredRef.revision, idempotencyKey: 'docx-commit-01', leaseEpoch: taken.leaseEpoch }) })
-  assert.equal(rejected.status, 400)
-})
-
-test('a lost structural DOCX save retries from its base and a later edit stays current', async (t) => {
-  const base = await start(t)
-  const { bytes } = await sampleDocx()
-  const headers = { Authorization: 'Bearer personal', 'Content-Type': 'application/json' }
-  const uploaded = await fetch(base + '/api/files', { method: 'POST', headers: { Authorization: 'Bearer personal', 'X-File-Name': encodeURIComponent('笔记.docx') }, body: bytes })
-  const file = await uploaded.json()
-  const opened = await (await fetch(base + `/api/v1/files/${file.id}/docx`, { headers })).json()
-  const lease = await (await fetch(base + `/api/v1/files/${file.id}/lease`, { method: 'POST', headers })).json()
-  const inserted = {
-    baseRevision: opened.file.revision,
-    leaseEpoch: lease.leaseEpoch,
-    idempotencyKey: 'docx-insert-01',
-    blocks: [...opened.blocks.map((block) => ({ docxIndex: block.docxIndex })), { text: 'Added line' }],
+test('legacy DOCX parser routes fail closed after authentication and leave original bytes unchanged', async t => {
+  const base=await start(t),{bytes}=await sampleDocx(),headers={Authorization:'Bearer personal'}
+  const upload=await fetch(base+'/api/files',{method:'POST',headers:{...headers,'X-File-Name':'retired.docx'},body:bytes})
+  assert.equal(upload.status,201);const file=await upload.json()
+  assert.equal((await (await fetch(base+'/api/v1/capabilities',{headers})).json()).docx,'unsupported')
+  const info=await (await fetch(base+`/api/v1/files/${file.id}`,{headers})).json()
+  assert.equal(info.capabilities.docx,'unsupported')
+  for(const [method,action,body] of [['GET','docx',undefined],['POST','docx','{}'],['POST','uploads',Buffer.from('PK malicious')]]) {
+    const url=base+`/api/v1/files/${file.id}/${action}`
+    assert.equal((await fetch(url,{method,body})).status,401)
+    assert.equal((await fetch(url,{method,headers:{Authorization:'Bearer admin'},body})).status,403)
+    const denied=await fetch(url,{method,headers,body});assert.equal(denied.status,501)
+    assert.equal((await denied.json()).code,'DOCUMENT_ISOLATION_UNAVAILABLE')
   }
-  const save = (body) => fetch(base + `/api/v1/files/${file.id}/docx`, { method: 'POST', headers, body: JSON.stringify(body) })
-  const first = await save(inserted)
-  assert.equal(first.status, 200)
-  const revision = await first.json()
-  const retry = await save(inserted)
-  assert.equal(retry.status, 200)
-  assert.equal((await retry.json()).revision, revision.revision)
-  const reread = await (await fetch(base + `/api/v1/files/${file.id}/docx`, { headers })).json()
-  assert.equal(reread.blocks.some((block) => block.text === 'Added line'), true)
-  const later = await save({
-    baseRevision: reread.file.revision,
-    leaseEpoch: lease.leaseEpoch,
-    idempotencyKey: 'docx-insert-02',
-    blocks: reread.blocks.map((block) => block.text === 'Added line' ? { docxIndex: block.docxIndex, text: 'Added line kept' } : { docxIndex: block.docxIndex }),
-  })
-  assert.equal(later.status, 200)
-  const staleRetry = await save(inserted)
-  assert.equal(staleRetry.status, 200)
-  assert.equal((await staleRetry.json()).revision, revision.revision)
-  const current = await part(Buffer.from(await (await fetch(base + '/api/files/' + file.id, { headers })).arrayBuffer()), 'word/document.xml')
-  assert.match(current, /Added line kept/)
+  for(const [method,action] of [['DELETE','docx'],['GET','uploads'],['PUT','uploads']])assert.equal((await fetch(base+`/api/v1/files/${file.id}/${action}`,{method,headers})).status,405)
+  const current=await fetch(base+'/api/files/'+file.id,{headers});assert.equal(current.status,200);assert.deepEqual(Buffer.from(await current.arrayBuffer()),bytes)
+  const original=await fetch(base+info.downloadEndpoint+'?revision='+encodeURIComponent(info.file.revision),{headers});assert.equal(original.status,200);assert.deepEqual(Buffer.from(await original.arrayBuffer()),bytes)
+})
+
+test('retiring DOCX parser routes preserves independent lease and restore routes', async t => {
+  const base=await start(t),{bytes}=await sampleDocx(),headers={Authorization:'Bearer personal','Content-Type':'application/json'}
+  const uploaded=await fetch(base+'/api/files',{method:'POST',headers:{Authorization:'Bearer personal','X-File-Name':'leases.docx'},body:bytes});const file=await uploaded.json()
+  const opened=await (await fetch(base+`/api/v1/files/${file.id}`,{headers})).json()
+  const acquire=await fetch(base+`/api/v1/files/${file.id}/leases/acquire`,{method:'POST',headers,body:'{}'});assert.equal(acquire.status,200);const first=await acquire.json()
+  await new Promise(resolve=>setTimeout(resolve,20))
+  const renew=await fetch(base+`/api/v1/files/${file.id}/leases/renew`,{method:'POST',headers,body:JSON.stringify({leaseEpoch:first.leaseEpoch})});assert.equal(renew.status,200);assert.ok((await renew.json()).expiresAt>first.expiresAt)
+  const takeover=await fetch(base+`/api/v1/files/${file.id}/leases/takeover`,{method:'POST',headers,body:'{}'});assert.equal(takeover.status,200);const second=await takeover.json();assert.equal(second.leaseEpoch,first.leaseEpoch+1)
+  const input={sourceRevision:opened.file.revision,baseRevision:opened.file.revision,leaseEpoch:second.leaseEpoch,idempotencyKey:'retired-restore-1'}
+  const restore=()=>fetch(base+`/api/v1/files/${file.id}/restore`,{method:'POST',headers,body:JSON.stringify(input)})
+  const saved=await restore();assert.equal(saved.status,200);const ref=await saved.json();assert.notEqual(ref.revision,opened.file.revision)
+  const replay=await restore();assert.equal(replay.status,200);assert.equal((await replay.json()).revision,ref.revision)
+  const original=await fetch(base+`/api/v1/files/${file.id}/content?revision=`+encodeURIComponent(opened.file.revision),{headers});assert.equal(original.status,200);assert.deepEqual(Buffer.from(await original.arrayBuffer()),bytes)
+  const badCommit=await fetch(base+`/api/v1/files/${file.id}/commits`,{method:'POST',headers,body:JSON.stringify({ownerId:'other'})});assert.equal(badCommit.status,400)
+})
+
+test('retired parser path matching does not capture unrelated uploads or malformed IDs', async t => {
+  const base=await start(t),headers={Authorization:'Bearer personal'},id='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
+  for(const path of [`/api/v1/files/${id}/uploads/child`,`/api/v1/files/${id}/docx/child`,'/api/v1/files/not-a-uuid/docx'])assert.equal((await fetch(base+path,{headers})).status,404)
+  const staged=await fetch(base+'/api/v1/objects',{method:'POST',headers:{...headers,'X-File-Name':'original.pdf'},body:Buffer.from('%PDF-1.7 opaque')});assert.equal(staged.status,201);assert.ok((await staged.json()).uploadId)
 })
 
 test('edited and inserted text never writes characters that are illegal in XML 1.0', async () => {

@@ -7,13 +7,13 @@ import { createPasswordService } from '../../server/src/modules/auth/passwords.t
 import { createAccountService } from '../../server/src/modules/auth/service.ts'
 import { createSessionService } from '../../server/src/modules/auth/sessions.ts'
 import { createUserService } from '../../server/src/modules/admin/users/service.ts'
-import { buildLocalApp } from '../../server/src/app.ts'
 import { createPrincipalTransactions } from '../../server/src/db/context.ts'
 import { createPreferenceService } from '../../server/src/modules/preferences/service.ts'
 import { password } from './identity.mjs'
 export const restrictedOrigin = 'https://office.example'
 
-export async function restrictedFixture(t, { origin = restrictedOrigin, objectStore, filePolicy, nativeDocsDirectory, nativeSheetsDirectory, nativeSlidesDirectory, slidesHost, nativeJobs = false, sheetsNative, sheetsPlanner, sheetsWorkbookPlanner, sheetsPackageReader, worker = false, beforeMigrate, businessMax = 1, seedAccounts = true, sourcesCredentialKeys, sourcesEgressTargets } = {}) {
+export async function restrictedFixture(t, { origin = restrictedOrigin, objectStore, filePolicy, nativeDocsDirectory, nativeSheetsDirectory, nativeSlidesDirectory, slidesHost, nativeJobs = false, sheetsNative, sheetsPlanner, sheetsWorkbookPlanner, sheetsPackageReader, worker = false, beforeMigrate, businessMax = 1, seedAccounts = true, sourcesCredentialKeys, sourcesEgressTargets, buildApp = true } = {}) {
+  if (typeof buildApp !== 'boolean') throw new Error('buildApp must be boolean')
   const source = process.env.DYOFFICE_TEST_DATABASE_URL
   assert.ok(source, 'Disposable PostgreSQL admin connection required')
   assert.match(new URL(source).pathname, /^\/dyoffice_test(?:_[a-z0-9_]+)?$/)
@@ -76,8 +76,8 @@ export async function restrictedFixture(t, { origin = restrictedOrigin, objectSt
   const alice = seedAccounts ? await signUser('alice') : undefined, bob = seedAccounts ? await signUser('bob') : undefined
   const workerPool = worker ? makePool('worker') : undefined
   const csrfKey = randomBytes(32).toString('hex')
-  const app = await buildLocalApp({ db, businessPool, passwords, deploymentId, origin, csrfKey, objectStore, filePolicy, nativeDocsDirectory, nativeSheetsDirectory, nativeSlidesDirectory, slidesHost, nativeJobs, sheetsNative, sheetsPlanner, sheetsWorkbookPlanner, sheetsPackageReader, sourcesCredentialKeys, sourcesEgressTargets })
-  cleanup.push(() => app.close())
+  const app = buildApp ? await (await import('../../server/src/app.ts')).buildLocalApp({ db, businessPool, passwords, deploymentId, origin, csrfKey, objectStore, filePolicy, nativeDocsDirectory, nativeSheetsDirectory, nativeSlidesDirectory, slidesHost, nativeJobs, sheetsNative, sheetsPlanner, sheetsWorkbookPlanner, sheetsPackageReader, sourcesCredentialKeys, sourcesEgressTargets }) : undefined
+  if (app) cleanup.push(() => app.close())
   const transactions = createPrincipalTransactions({ pool: businessPool, deploymentId })
   const preferences = createPreferenceService(transactions)
   return { db, ownerDb, ownerPool, authPool, businessPool, workerPool, passwords, deploymentId, accounts, sessions, users, adminSigned, alice, bob, app, transactions, preferences, cleanup, admin, database, names, urls, initial, csrfKey }
