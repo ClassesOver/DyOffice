@@ -197,7 +197,7 @@ export async function importSimpleDocx(input: Uint8Array): Promise<SimpleDocx> {
     types.children.length !== 4
   )
     fail()
-  for (const el of types.children) {
+  for (const el of Array.from(types.children)) {
     const key =
       el.localName === 'Default'
         ? el.getAttribute('Extension')
@@ -219,7 +219,7 @@ export async function importSimpleDocx(input: Uint8Array): Promise<SimpleDocx> {
   if (
     root.tagName !== 'w:document' ||
     root.namespaceURI !== W ||
-    [...root.attributes].some((a) => a.namespaceURI !== 'http://www.w3.org/2000/xmlns/')
+    Array.from(root.attributes).some((a) => a.namespaceURI !== 'http://www.w3.org/2000/xmlns/')
   )
     fail()
   // Exact lexical grammar rules out alternate namespace bindings, hidden fields,
