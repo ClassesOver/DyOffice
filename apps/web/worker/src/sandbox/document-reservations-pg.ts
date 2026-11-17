@@ -1,5 +1,5 @@
 import {decodeBrokerAssertion,verifyBrokerAssertion,type BrokerAssertion} from './document-broker-assertion.ts'
-import {randomBytes,randomUUID,createHash} from 'node:crypto'
+import {randomBytes,createHash} from 'node:crypto'
 import type {Pool,PoolClient} from 'pg'
 import {validateDocumentExecutionRequest,type DocumentExecutionRequest} from './document-contract.ts'
 import {validateExecutionHandle,validateStopObservation,type ExecutionHandle,type StopObservation} from './document-control.ts'
@@ -59,16 +59,10 @@ export function createTestPostgresDocumentReservations(pool:Pool,options:{schema
   if(Object.keys(d).sort().join(',')!=='brokerBootId,brokerId'||!['brokerId','brokerBootId'].every(k=>'value' in d[k]&&uuid(d[k].value)))fail('INVALID_DISPATCH_BROKER')
   return Object.freeze({brokerId:d.brokerId.value as string,brokerBootId:d.brokerBootId.value as string})
  }
- // Validated request is a flat exact-key primitive record. Domain + sorted keys
- // fix the stored identity; this is not a credential or runtime certification.
- const requestDigest=(request:DocumentExecutionRequest)=>createHash('sha256').update('dyoffice.dispatch.request.v1\0').update(JSON.stringify(Object.fromEntries(Object.entries(request).sort(([a],[b])=>a<b?-1:a>b?1:0)))).digest('hex')
- const dispatchRow=async(c:PoolClient,r:Reservation)=>(await c.query(`SELECT * FROM ${table('document_dispatches')} WHERE reservation_id=$1 AND deployment_id=$2`,[r.reservationId,deployment])).rows[0]
- const dispatchLive=async(c:PoolClient,v:any,r:Reservation)=>{
-  const fence=(await c.query(`SELECT epoch FROM ${table('document_job_fences')} WHERE deployment_id=$1 AND job_id=$2`,[deployment,r.jobId])).rows[0]
-  if(!v.request||Number(fence?.epoch)!==r.jobEpoch)fail('DOCUMENT_DISPATCH_FENCED')
-  if(!(await c.query('SELECT clock_timestamp() < $1::timestamptz AS live',[v.request.deadlineAt])).rows[0].live)fail('DOCUMENT_DISPATCH_EXPIRED')
+ const dispatchCall=async(c:PoolClient,args:unknown[])=>{
+  try{return (await c.query(`SELECT ${table('document_dispatch_core')}($1,$2,$3,$4,$5,$6,$7) value`,args)).rows[0].value}
+  catch(e){if(e instanceof Error&&/^(DOCUMENT_|INVALID_DISPATCH)/.test(e.message))fail(e.message);throw e}
  }
- const dispatchView=(d:any,classification:string)=>Object.freeze({classification,dispatchId:d.dispatch_id,reservationId:d.reservation_id,reservationVersion:Number(d.reservation_version),requestDigest:d.request_digest,brokerId:d.broker_id,brokerBootId:d.broker_boot_id,expiresAt:d.expires_at.toISOString(),consumed:d.challenge_id!==null})
  return Object.freeze({
   async reserve(raw:Reservation,input:DocumentExecutionRequest):Promise<ReservationGrant>{
    const r=snapshot(raw),owner=ownerFor(r),request=validateDocumentExecutionRequest(input,new Date())
@@ -84,38 +78,15 @@ export function createTestPostgresDocumentReservations(pool:Pool,options:{schema
    })
   },
   async prepareDispatch(raw:Reservation,rawBroker:{brokerId:string;brokerBootId:string}){
-   const r=snapshot(raw),owner=ownerFor(r),broker=brokerSnapshot(rawBroker),dispatchId=randomUUID()
-   return tx(async c=>{
-    const v=await owned(c,r,owner);await dispatchLive(c,v,r)
-    if(v.state!=='reserved'||v.launch_evidence!=='not_started'||v.handle||await dispatchRow(c,r))fail('DOCUMENT_DISPATCH_STATE')
-    const digest=requestDigest(validateDocumentExecutionRequest(v.request,new Date()))
-    await c.query(`UPDATE ${table('document_reservations')} SET launch_evidence='may_started' WHERE reservation_id=$1`,[r.reservationId])
-    await update(c,r,'start_intent',null,null)
-    const current=await owned(c,r,owner)
-    await c.query(`INSERT INTO ${table('document_dispatches')}(reservation_id,dispatch_id,deployment_id,reservation_version,owner_token,job_id,attempt,job_epoch,broker_id,broker_boot_id,request_digest,expires_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,[r.reservationId,dispatchId,deployment,current.version,owner,r.jobId,r.attempt,r.jobEpoch,broker.brokerId,broker.brokerBootId,digest,v.request.deadlineAt])
-    const d=await dispatchRow(c,r);await dispatchLive(c,current,r)
-    return dispatchView(d,'prepared_dispatch_observation')
-   })
+   const r=snapshot(raw),owner=ownerFor(r),broker=brokerSnapshot(rawBroker)
+   return tx(c=>dispatchCall(c,[r.reservationId,owner,broker.brokerId,broker.brokerBootId,null,null,'prepare']))
   },
   async consumeDispatch(raw:Reservation,dispatchId:string,rawBroker:{brokerId:string;brokerBootId:string},challengeId:string){
    const r=snapshot(raw),owner=ownerFor(r),broker=brokerSnapshot(rawBroker)
    if(!uuid(dispatchId)||!uuid(challengeId))fail('INVALID_DISPATCH_ID')
-   return tx(async c=>{
-    const v=await owned(c,r,owner);await dispatchLive(c,v,r)
-    const d=await dispatchRow(c,r)
-    if(!d||d.dispatch_id!==dispatchId||d.owner_token!==owner||Number(d.reservation_version)!==Number(v.version)||v.state!=='start_intent'||v.launch_evidence!=='may_started'||v.handle||d.job_id!==r.jobId||Number(d.attempt)!==r.attempt||Number(d.job_epoch)!==r.jobEpoch||d.broker_id!==broker.brokerId||d.broker_boot_id!==broker.brokerBootId||d.request_digest!==requestDigest(validateDocumentExecutionRequest(v.request,new Date()))||d.expires_at.toISOString()!==v.request.deadlineAt)fail('DOCUMENT_DISPATCH_BINDING')
-    if(d.challenge_id!==null&&d.challenge_id!==challengeId)fail('DOCUMENT_DISPATCH_CONSUMED')
-    const classification=d.challenge_id===null?'first_consumed_observation':'already_consumed'
-    if(d.challenge_id===null)await c.query(`UPDATE ${table('document_dispatches')} SET challenge_id=$2,consumed_at=clock_timestamp() WHERE reservation_id=$1`,[r.reservationId,challengeId])
-    const result=await dispatchRow(c,r);await dispatchLive(c,v,r)
-    return dispatchView(result,classification)
-   })
+   return tx(c=>dispatchCall(c,[r.reservationId,owner,broker.brokerId,broker.brokerBootId,dispatchId,challengeId,'consume']))
   },
-  async observeDispatch(raw:Reservation){
-   const r=snapshot(raw)
-   // Historical lookup only: no owner capability is returned or restored.
-   return tx(async c=>{const d=await dispatchRow(c,r);return d?dispatchView(d,'historical_dispatch_observation'):null})
-  },
+  async observeDispatch(raw:Reservation){const r=snapshot(raw);return tx(c=>dispatchCall(c,[r.reservationId,null,null,null,null,null,'history']))},
   async startIntent(raw:Reservation):Promise<void>{const r=snapshot(raw),owner=ownerFor(r);await tx(async c=>{const v=await owned(c,r,owner);const q=await c.query(`SELECT epoch FROM ${table('document_job_fences')} WHERE deployment_id=$1 AND job_id=$2`,[deployment,r.jobId]);if(!v.request || !(await c.query('SELECT clock_timestamp() < $1::timestamptz AS live',[v.request.deadlineAt])).rows[0].live)fail('DOCUMENT_RESERVATION_EXPIRED');if(v.state!=='reserved'||Number(q.rows[0]?.epoch)!==r.jobEpoch)fail('DOCUMENT_START_FENCED');await c.query(`UPDATE ${table('document_reservations')} SET launch_evidence='may_started' WHERE reservation_id=$1`,[r.reservationId]);await update(c,r,'start_intent',null,null)})},
   async bind(raw:Reservation,rawHandle:ExecutionHandle):Promise<void>{const r=snapshot(raw),owner=ownerFor(r),h=validateExecutionHandle(rawHandle);await tx(async c=>{const v=await owned(c,r,owner);if(v.state!=='start_intent'||v.launch_evidence!=='may_started')fail('DOCUMENT_BIND_STATE');const fence=await c.query(`SELECT epoch FROM ${table('document_job_fences')} WHERE deployment_id=$1 AND job_id=$2`,[deployment,r.jobId]);if(Number(fence.rows[0]?.epoch)!==r.jobEpoch)fail('DOCUMENT_EPOCH_FENCED');if(h.deploymentId!==deployment||h.jobId!==r.jobId||h.attempt!==r.attempt||h.jobEpoch!==r.jobEpoch||h.runtimeDigest!==v.request.runtimeDigest||h.profileId!==v.request.profileId)fail('DOCUMENT_RESERVATION_IDENTITY');await update(c,r,'bound',h,null)})},
   async retain(raw:Reservation,reason:string):Promise<void>{const r=snapshot(raw),owner=ownerFor(r);if(typeof reason!=='string'||reason.length>128)fail('INVALID_RETAIN_REASON');await tx(async c=>{const v=await row(c,r);if(v){if(v.state==='released')return;if(v.owner_token!==owner)fail('DOCUMENT_RESERVATION_OWNER');await update(c,r,'quarantined',v.handle,reason)}else await c.query(`INSERT INTO ${table('document_reservations')}(reservation_id,deployment_id,job_id,attempt,epoch,owner_token,state,reason) VALUES($1,$2,$3,$4,$5,$6,'quarantined',$7)`,[r.reservationId,deployment,r.jobId,r.attempt,r.jobEpoch,owner,reason]);await task(c,r,'pending');await c.query(`INSERT INTO ${table('document_job_fences')} AS fences VALUES($1,$2,$3) ON CONFLICT(deployment_id,job_id) DO UPDATE SET epoch=GREATEST(fences.epoch,EXCLUDED.epoch)`,[deployment,r.jobId,r.jobEpoch])})},
