@@ -368,3 +368,10 @@
 - 两个父组件仅接入既有useModalKeys，不改Dropdown自身事件层级和插入/添加来源逻辑。新增4项组件回归先红后绿，和插入弹窗/trap/题注正则回归共23/23通过；Web docs类型、生产构建、边界1337文件0违规通过。独立只读review无阻塞，取消路径不触发正文或源写入。
 - 最终构建1440/390各两个入口通过，覆盖初始焦点、两向边界、父Escape、两次Escape先下拉后父、展开下拉正反Tab留在父弹窗。取消后正文归一化文本不变、0页面异常；全部业务写mock/blocked。证据：`/tmp/dyoffice-ui-audit/word-reference-modal-green-{1440,390}/report.json`、`/tmp/dyoffice-references-modals-{red,green,type,build}.log`。默认空草稿未单独验证有效title取消，不将静态路径检查冒充该浏览器场景。
 - 发布前保留远端14778d99、8cb04614的剪贴板读取/Blob解码保护，以及79f2e4ad的拖图读取/解码保护，均精确对象校验后rebase；没有覆盖远端产品改动。合入前述剪贴板保护后的两尺寸浏览器仍全部通过，证据`/tmp/dyoffice-ui-audit/word-reference-modal-merged-{1440,390}/report.json`。最终含拖图保护的相关10文件91项通过；日志`/tmp/dyoffice-references-final-integrated-tests.log`。上述保护不视为已穷举所有剪贴板或拖放竞态。
+
+## 密码与页码格式弹窗键盘
+
+- 受保护DOCX fixture触发修改密码提示，及“插入→页码→设置页码格式”真实入口，均先复现两向Tab逃到背景、Escape不关闭；页码初始焦点还停在背景。红证据：`/tmp/dyoffice-ui-audit/word-password-keyboard-1440/report.json`、`/tmp/dyoffice-ui-audit/word-page-number-modal-red/report.json`。
+- 两处接入既有useModalKeys；页码仅将原内联UI提取为受控组件，保留原状态和应用逻辑。初始焦点跳过禁用控件，使密码忙碌状态仍可聚焦取消按钮。新增4项组件回归先红后绿，Escape沿既有取消动作，不提交密码或页码。保留远端9ebbdaaa图片粘贴/只读异步保护后，相关6文件41项通过；Web docs类型、生产构建、边界1338文件0违规及git diff --check通过。构建保留既有chunk大小提示。
+- 最终合并构建Chromium：密码1440/390两流程通过，Escape后按既有逻辑只读打开；页码1440/320两流程通过，内部下拉第一次Escape仅关下拉、第二次关父，展开下拉正反Tab留在弹窗，取消后正文未变。四流程均0页面异常；文档/lease均mock，其余业务写阻止，无真实密码或配置变更。证据：`/tmp/dyoffice-ui-audit/word-password-keyboard-green-{1440,390}/report.json`、`/tmp/dyoffice-ui-audit/word-page-number-modal-postfix-{1440,320}/report.json`、`/tmp/dyoffice-password-page-final-{tests,type,build}.log`。
+- 此次仅上述弹窗专项，不代表全量UI、复杂文档或多端/读屏验收完成。

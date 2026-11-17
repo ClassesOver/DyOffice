@@ -25,7 +25,6 @@ import { handleDocsControl, type ControlRequest } from './control'
 import { DOMParser as PmDOMParser, type Mark as PmMark, Slice as PmSlice } from '@tiptap/pm/model'
 import { NodeSelection, TextSelection, type Command, type Transaction } from '@tiptap/pm/state'
 import {
-  Dropdown,
   ImageViewer,
   aiPanelInitiallyOpen,
   rememberAiPanelOpen,
@@ -426,6 +425,7 @@ import { PreferencesDialog } from './components/PreferencesDialog'
 import { applyCase, nextCaseMode, selectionText } from './editor/case-transform'
 import { stepHangingIndent, stepParagraphIndent } from './editor/indent'
 import { PasswordDialog } from './components/PasswordDialog'
+import { PageNumberFormatDialog } from './components/PageNumberFormatDialog'
 import { ProtectDialog, type ProtectDialogResult } from './components/ProtectDialog'
 import { t, useI18n } from './i18n/locale'
 import {
@@ -9387,53 +9387,14 @@ export function App({ host }: { host?: { desktopActionsAvailable?: boolean; read
         />
       )}
       {pgNumModal && (
-        <div
-          className="modal-backdrop"
-          onMouseDown={(e) => e.target === e.currentTarget && setPgNumModal(null)}
-        >
-          <div className="modal">
-            <h2>{t('appPageNumFormatTitle')}</h2>
-            <label className="pgnum-row">
-              {t('appNumberFormat')}
-              <Dropdown
-                value={pgNumModal.fmt}
-                ariaLabel={t('appNumberFormat')}
-                options={[
-                  { value: 'decimal', label: '1, 2, 3, …' },
-                  { value: 'numberInDash', label: '- 1 -, - 2 -, - 3 -, …' },
-                  { value: 'lowerLetter', label: 'a, b, c, …' },
-                  { value: 'upperLetter', label: 'A, B, C, …' },
-                  { value: 'lowerRoman', label: 'i, ii, iii, …' },
-                  { value: 'upperRoman', label: 'I, II, III, …' },
-                  { value: 'chineseCounting', label: '一, 二, 三, …' },
-                ]}
-                onPick={(v) => setPgNumModal({ ...pgNumModal, fmt: v })}
-              />
-            </label>
-            <label className="pgnum-row">
-              {t('appStartAt')}
-              <input
-                type="number"
-                min={0}
-                placeholder={t('appContinueFromPrev')}
-                value={pgNumModal.start}
-                onChange={(e) => setPgNumModal({ ...pgNumModal, start: e.target.value })}
-              />
-            </label>
-            <p className="pgnum-hint">
-              {t('appPgNumHintBlank')}
-              {sections.length > 1
-                ? t('appPgNumAppliesTo', { n: Math.min(activeSection, sections.length - 1) + 1 })
-                : ''}
-            </p>
-            <div className="modal-actions">
-              <button onClick={() => setPgNumModal(null)}>{t('appCancel')}</button>
-              <button className="btn-primary" onClick={applyPgNumFormat}>
-                {t('appOk')}
-              </button>
-            </div>
-          </div>
-        </div>
+        <PageNumberFormatDialog
+          value={pgNumModal}
+          sectionCount={sections.length}
+          activeSection={activeSection}
+          onChange={setPgNumModal}
+          onApply={applyPgNumFormat}
+          onClose={() => setPgNumModal(null)}
+        />
       )}
     </div>
   )

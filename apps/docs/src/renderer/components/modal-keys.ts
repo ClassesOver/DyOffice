@@ -25,7 +25,8 @@ export function useModalKeys(onClose: () => void) {
   useEffect(() => {
     const el = ref.current
     if (!el || el.contains(document.activeElement)) return
-    const first = el.querySelector<HTMLElement>('input, textarea, select, button')
+    const first = [...el.querySelectorAll<HTMLElement>('input, textarea, select, button')]
+      .find(control => !control.matches(':disabled') && control.tabIndex >= 0)
     ;(first ?? el).focus()
   }, [])
 

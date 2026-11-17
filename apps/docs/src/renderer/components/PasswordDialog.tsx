@@ -9,6 +9,7 @@
  * Value / error / busy state live in App's retry loop.
  */
 import { FieldError, PasswordInput } from './PasswordInput'
+import { useModalKeys } from './modal-keys'
 
 export function PasswordDialog({
   title,
@@ -42,8 +43,9 @@ export function PasswordDialog({
   onSubmit: () => void
   onCancel: () => void
 }) {
+  const modalKeys = useModalKeys(onCancel)
   return (
-    <div className="modal-backdrop">
+    <div {...modalKeys} className="modal-backdrop">
       <div className="modal gs-form pwd-dialog" role="dialog" aria-modal="true">
         <h2>{title}</h2>
         <p className="modal-desc">{body}</p>
