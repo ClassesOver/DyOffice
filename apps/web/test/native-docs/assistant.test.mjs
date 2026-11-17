@@ -66,13 +66,19 @@ test('native DOCX assistant delivers selected private Skill through the personal
     } finally { clearTimeout(timer) }
   }
   const origin = 'http://localhost:4213', f = await fileFixture(t, {origin})
-  async function waitForSettlement(name, count) {
+  async function waitForSettlement(name, count, response, previousTurnIds = []) {
+    const {turnId} = response.request().postDataJSON()
+    assert.match(turnId, /^[A-Za-z0-9_-]{1,128}$/)
+    assert.ok(!previousTurnIds.includes(turnId), 'Each request must have a distinct turn ID')
+    const turnIds = [...previousTurnIds, turnId].sort()
+    assert.equal(turnIds.length, count)
     phase = name
     await expect(page.locator('.ai-panel .ai-stop-btn')).toHaveCount(0, {timeout: 20_000})
     await expect.poll(async () => {
-      const {rows} = await f.ownerPool.query('SELECT owner_id,state FROM provider_budget_reservations')
-      return {count: rows.length, allOwned: rows.every(row => row.owner_id === f.alice.user.id), allSettled: rows.every(row => row.state === 'settled')}
-    }, {timeout: 20_000}).toEqual({count, allOwned: true, allSettled: true})
+      const {rows} = await f.ownerPool.query('SELECT turn_id,owner_id,state FROM provider_budget_reservations WHERE deployment_id=$1', [f.deploymentId])
+      return {turnIds: rows.map(row => row.turn_id).sort(), count: rows.length, allOwned: rows.every(row => row.owner_id === f.alice.user.id), allSettled: rows.every(row => row.state === 'settled')}
+    }, {timeout: 20_000}).toEqual({turnIds, count, allOwned: true, allSettled: true})
+    return turnId
   }
   const keyring = {activeKeyId: 'test', keys: {test: new Uint8Array(32).fill(25)}}
   const profile = {deploymentId: f.deploymentId, entryId: 'primary', revision: 1, providerId: 'openai', model: 'synthetic', baseUrl: 'https://provider.example/v1', endpoint: 'https://provider.example/v1/chat/completions', allowedIpv4: ['8.8.8.8'], maxOutputTokens: 128}
@@ -157,7 +163,7 @@ test('native DOCX assistant delivers selected private Skill through the personal
   await expect(page.getByText('Verified assistant reply', {exact: true})).toBeVisible({timeout: 20_000})
   const firstResponse = await atPhase('first-response-headers', () => firstTurn)
   assert.equal(firstResponse.status(), 200)
-  await waitForSettlement('first-settlement', 1)
+  const firstTurnId = await waitForSettlement('first-settlement', 1, firstResponse)
   const wire = JSON.parse(net.wire)
   assert.equal(wire.model, profile.model)
   assert.equal(wire.max_tokens, 128)
@@ -171,7 +177,7 @@ test('native DOCX assistant delivers selected private Skill through the personal
   await expect(page.getByText('Verified assistant reply', {exact: true})).toHaveCount(2)
   const secondResponse = await atPhase('second-response-headers', () => secondTurn)
   assert.equal(secondResponse.status(), 200)
-  await waitForSettlement('second-settlement', 2)
+  await waitForSettlement('second-settlement', 2, secondResponse, [firstTurnId])
   assert.equal(net.writes, 2)
   assert.doesNotMatch(net.wire.toString(), /Alice private instructions|Bob private instructions/)
   phase = 'budget-read'
@@ -182,3 +188,4 @@ test('native DOCX assistant delivers selected private Skill through the personal
   assert.deepEqual(errors, [])
   phase = 'cleanup'
 })
+
