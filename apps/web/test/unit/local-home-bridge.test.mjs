@@ -240,6 +240,29 @@ test('recent page and count stay one bounded server query regardless of workspac
  assert.deepEqual(await bridge.recents({offset:50,limit:0,ext:'xlsx'}),{entries:[],total:100000,totalAll:200000})
  const url=new URL(calls[0],'https://local');assert.equal(url.searchParams.get('offset'),'50');assert.equal(url.searchParams.get('limit'),'0');assert.equal(url.searchParams.get('ext'),'xlsx')
 })
+for(const view of ['recents','starred'])test(`${view} refreshes more than 100 loaded rows using valid bounded API pages`,async()=>{
+ const calls=[],items=Array.from({length:175},(_,i)=>({...item,id:`file-${i}`,name:`file-${i}.docx`}))
+ const bridge=createLocalHomeBridge(deps(async path=>{
+  const url=new URL(path,'http://local'),limit=Number(url.searchParams.get('limit')),offset=Number(url.searchParams.get('offset'))
+  calls.push({limit,offset,ext:url.searchParams.get('ext')});if(limit>100)throw Object.assign(Error('invalid limit'),{status:400})
+  return {files:items.slice(offset,offset+limit),total:175,totalAll:200}
+ }))
+ const page=await bridge[view]({offset:10,limit:150,ext:'docx'})
+ assert.equal(page.entries.length,150);assert.equal(new Set(page.entries.map(file=>file.path)).size,150)
+ assert.deepEqual(page.entries.map(file=>file.path),items.slice(10,160).map(file=>file.id))
+ assert.deepEqual(calls,[{limit:100,offset:10,ext:'docx'},{limit:50,offset:110,ext:'docx'}])
+ assert.equal(page.total,175);assert.equal(page.totalAll,200)
+})
+for(const changed of ['total','overlap','empty'])test(`a multi-page refresh rejects ${changed} changes without publishing a partial list`,async()=>{
+ let reads=0
+ const bridge=createLocalHomeBridge(deps(async()=>{
+  reads++
+  const files=Array.from({length:reads===1?100:changed==='empty'?0:50},(_,i)=>({...item,id:`file-${reads===1||changed==='overlap'?i:100+i}`}))
+  return {files,total:reads>1&&changed==='total'?151:150,totalAll:200}
+ }))
+ await assert.rejects(bridge.recents({limit:150}),/列表已变化/)
+ assert.equal(reads,2)
+})
 test('search delegates literal query and page to server without enumeration',async()=>{
  const calls=[];const bridge=createLocalHomeBridge(deps(async path=>{calls.push(path);if(calls.length>1)throw new Error('unbounded scan');return {files:[item],total:100000,totalAll:200000}}))
  const page=await bridge.searchFiles({q:'%_报告',offset:20,limit:10,ext:'docx'})
@@ -325,4 +348,15 @@ test('missing or cyclic folder ancestry is explicitly unavailable rather than ro
   assert.equal((await bridge.recents()).entries[0].locationLabel,'位置不可用')
   assert.equal((await bridge.searchFiles({q:'one'})).hits[0].locationLabel,'位置不可用')
  }
+})
+
+test('successful rename notifies the host once; rejected rename never changes an open title',async()=>{
+ const renamed=[];let finish,fail=false
+ const gate=new Promise(resolve=>{finish=resolve})
+ const bridge=createLocalHomeBridge({...deps(async()=>{await gate;if(fail)throw Error('rename rejected')}),renamed:(id,name)=>renamed.push({id,name})})
+ const first=bridge.renameFile('file-a','new.docx'),duplicate=bridge.renameFile('file-a','new.docx')
+ assert.deepEqual(renamed,[]);finish();await Promise.all([first,duplicate])
+ assert.deepEqual(renamed,[{id:'file-a',name:'new.docx'}])
+ fail=true;await assert.rejects(bridge.renameFile('file-a','rejected.docx'),/rename rejected/)
+ assert.deepEqual(renamed,[{id:'file-a',name:'new.docx'}])
 })

@@ -1604,7 +1604,6 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
   const [listTotal, setListTotal] = useState(0)
   /** sidebar Recent / Starred counts under the active type filter */
   const [navCounts, setNavCounts] = useState({ recent: 0, starred: 0 })
-  const [loadingMore, setLoadingMore] = useState(false)
   const [sidebarWidth, setSidebarWidth] = useState(readSidebarWidth)
   const sidebarRef = useRef<HTMLElement>(null)
   const [view, setView] = useState<'recent' | 'starred'>('recent')
@@ -1794,12 +1793,17 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
   // ── Paged loading ──
   // stale responses are dropped via a request sequence number (when views/filters switch quickly)
   const requestSeq = useRef(0)
+  const [readyPageSeq, setReadyPageSeq] = useState(0)
+  const moreRequest = useRef<number | null>(null)
+  const firstPageRequest = useRef<number | null>(null)
   const entriesLen = useRef(0)
   entriesLen.current = entries.length
 
   /** reload the list; keepCount keeps the loaded row count (refresh), otherwise back to page one */
   const reload = (keepCount: boolean) => {
     const seq = ++requestSeq.current
+    moreRequest.current = null
+    firstPageRequest.current = seq
     const ext = filter === 'all' ? undefined : filter
     // the group pills only scope the Starred view's own list; the sidebar
     // counters and the other view stay group-agnostic
@@ -1811,12 +1815,14 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
       if (seq !== requestSeq.current) return
       setEntries(page.entries)
       setListTotal(page.total)
+      setReadyPageSeq(seq)
       setNavCounts((prev) =>
         view === 'recent'
           ? { ...prev, recent: visiblePageCount(page) }
           : { ...prev, starred: visiblePageCount(page) },
       )
     }).catch((cause) => {if (seq === requestSeq.current) reportError(cause)})
+      .finally(() => {if(firstPageRequest.current === seq) firstPageRequest.current = null})
     // The other view fetches only its count under the same active filter.
     void secondary({ offset: 0, limit: 0, ext }).then((page) => {
       if (seq !== requestSeq.current) return
@@ -1953,17 +1959,20 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
   })
 
   const loadMore = () => {
-    if (loadingMore || !hasMore) return
-    setLoadingMore(true)
     const seq = requestSeq.current
+    if (readyPageSeq !== seq || moreRequest.current === seq || firstPageRequest.current === seq || !hasMore) return
+    moreRequest.current = seq
     const ext = filter === 'all' ? undefined : filter
+    const group = view === 'starred' && groupFilter ? groupFilter : undefined
     const api = view === 'recent' ? window.aiOffice.recents : window.aiOffice.starred
-    void api({ offset: entriesLen.current, limit: PAGE_SIZE, ext }).then((page) => {
-      setLoadingMore(false)
+    const offset = entriesLen.current, known = new Set(entries.map(entry => entry.path))
+    void api({ offset, limit: PAGE_SIZE, ext, group }).then((page) => {
       if (seq !== requestSeq.current) return
+      if(page.total !== listTotal || !page.entries.length || page.entries.some(entry => known.has(entry.path)) || new Set(page.entries.map(entry => entry.path)).size !== page.entries.length){reloadRef.current(false);return}
       setEntries((prev) => [...prev, ...page.entries])
       setListTotal(page.total)
-    }).catch((cause) => {setLoadingMore(false); if (seq === requestSeq.current) reportError(cause)})
+    }).catch((cause) => {if (seq === requestSeq.current) reportError(cause)})
+      .finally(() => {if(moreRequest.current === seq)moreRequest.current = null})
   }
   const loadMoreRef = useRef(loadMore)
   loadMoreRef.current = loadMore
@@ -1972,7 +1981,7 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
   // keep pulling until the list is complete (backend caps recents at 100)
   useEffect(() => {
     if (fileSort === 'oldest' && hasMore) loadMoreRef.current()
-  }, [fileSort, hasMore, entries.length])
+  }, [fileSort, hasMore, entries.length, readyPageSeq])
 
   // Load the next page once the bottom sentinel enters the viewport (240px early);
   // depending on entries.length rebuilds the observer after each page — observe fires an immediate
@@ -1989,7 +1998,7 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
     )
     observer.observe(el)
     return () => observer.disconnect()
-  }, [hasMore, entries.length])
+  }, [hasMore, entries.length, readyPageSeq])
 
   // unified dismissal: outside press, window blur, chrome press (tab strip / window drag)
   useDismissablePopover(rowMenu !== null, () => setRowMenu(null), {

@@ -64,20 +64,21 @@ let capabilities:Record<string,string>={}
 let showChromeMenu=(kind:'app'|'new'|'tabs'|'tab',x:number,y:number,id?:string)=>{}
 const documentTabs=createDocumentTabs()
 async function open(id:string){
+ const token=documentTabs.reserveOpen(id)
  const result=await client.request<{name:string;format:string;file:{fileId:string;revision:string};downloadEndpoint:string}>(`/api/v1/files/${encodeURIComponent(id)}`)
  if(result.file.fileId!==id)throw new Error('文件标识不匹配。')
  await client.request(`/api/v1/workspace/files/${encodeURIComponent(id)}/open`,'POST')
  notifyFilesChanged()
  if(!['docx','xlsx','pptx','pdf'].includes(result.format)||typeof result.file.revision!=='string'||!result.file.revision||result.downloadEndpoint!==`/api/v1/files/${encodeURIComponent(id)}/content?revision=${encodeURIComponent(result.file.revision)}`)throw new Error('文件格式或下载地址无效。')
  const native=result.format!=='pdf'&&capabilities[result.format]==='editable'
- documentTabs.open({id,name:result.name,format:result.format as DocumentFormat,src:native?`/native-${result.format}/?fileId=${encodeURIComponent(id)}`:result.downloadEndpoint})
+ documentTabs.open({id,name:result.name,format:result.format as DocumentFormat,src:native?`/native-${result.format}/?fileId=${encodeURIComponent(id)}`:result.downloadEndpoint},token)
 }
 let busy=false
 async function upload(file:File){if(busy)throw new Error('正在导入，请稍候');if(!/\.(docx|xlsx|pptx|pdf)$/i.test(file.name))throw new Error('请选择 DOCX、XLSX、PPTX 或 PDF 文件。');busy=true;try{const result=await client.upload(file);try{await open(result.file.fileId)}catch{notifyFilesChanged();throw new Error('文件已上传，但打开失败。请从最近文件中打开，不要重复上传。')}}finally{busy=false}}
 async function browse(){showUpload()}
 const unsupported=async()=>{throw new Error('此桌面操作尚未适配到本地 Web。')}
 function installBridge(){
- window.aiOffice=createLocalHomeBridge({request:client.request,preferences,open,openTrash:()=>showTrash(),changed:notifyFilesChanged,unsupported:m=>notice(m),browse})
+ window.aiOffice=createLocalHomeBridge({request:client.request,preferences,open,openTrash:()=>showTrash(),changed:notifyFilesChanged,renamed:documentTabs.rename,unsupported:m=>notice(m),browse})
  window.aiOffice.newDoc=async()=>{if(capabilities.docx!=='editable')return unsupported();const response=await fetch(blankDocx);if(!response.ok)throw new Error('原版空白模板不可用');await upload(new File([await response.blob()],'未命名.docx'))}
  window.aiOfficeTabs={list:async()=>documentTabs.list(),activate:async id=>documentTabs.activate(id),close:async id=>{await documentTabs.close(id)},onChanged:documentTabs.subscribe,showNewMenu:async(x,y)=>showChromeMenu('new',x,y),showAppMenu:async(x,y)=>showChromeMenu('app',x,y),showMenu:async(x,y)=>showChromeMenu('tabs',x,y),showTabMenu:async(id,x,y)=>showChromeMenu('tab',x,y,id),detach:unsupported,tearOff:async()=>false,dragTornWindow:()=>{},dockTornWindow:unsupported,endTornDrag:async()=>{},onDockPreview:()=>()=>{},reportDockIndex:()=>{},reorder:async(id,index)=>documentTabs.reorder(id,index),notifyChromePressed:()=>{},onChromePressed:()=>()=>{}} satisfies TabsApi
 }

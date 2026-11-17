@@ -578,6 +578,80 @@ test('page-scroll sentinel loads the next real page once and stops after exhaust
  expect(disconnect).toHaveBeenCalled()
 })
 
+function pagingObserver(){let notify:IntersectionObserverCallback=()=>{};vi.stubGlobal('IntersectionObserver',class{constructor(callback:IntersectionObserverCallback){notify=callback}observe(){}disconnect(){}});return()=>notify([{isIntersecting:true} as IntersectionObserverEntry],{} as IntersectionObserver)}
+test('same-tick sentinel callbacks share one pending page and never append duplicate rows',async()=>{
+ const intersect=pagingObserver(),next={...file,path:'next-file',name:'Next.docx'},pending=deferred<{entries:RecentEntry[];total:number;totalAll:number}>()
+ const recents=vi.fn(async(query?:{offset?:number})=>query?.offset?pending.promise:{entries:[file],total:2,totalAll:2});api.recents=recents
+ await act(async()=>window.dispatchEvent(new Event('focus')))
+ await act(async()=>{intersect();intersect()})
+ expect(recents.mock.calls.filter(([query])=>query?.offset)).toHaveLength(1)
+ await act(async()=>pending.resolve({entries:[next],total:2,totalAll:2}))
+ expect([...host.querySelectorAll('.recent-name')].map(node=>node.textContent)).toEqual([file.name,next.name])
+})
+test('late paging from an old view cannot clear the new view paging lock',async()=>{
+ const intersect=pagingObserver(),old=deferred<{entries:RecentEntry[];total:number;totalAll:number}>(),current=deferred<{entries:RecentEntry[];total:number;totalAll:number}>()
+ api.recents=async query=>query?.offset?old.promise:{entries:[file],total:2,totalAll:2}
+ const star={...file,path:'star-first',name:'Star first.docx'},next={...file,path:'star-next',name:'Star next.docx'}
+ const starred=vi.fn(async(query?:{offset?:number;limit?:number})=>query?.limit===0?{entries:[],total:2,totalAll:2}:query?.offset?current.promise:{entries:[star],total:2,totalAll:2});api.starred=starred
+ await act(async()=>window.dispatchEvent(new Event('focus')));await act(async()=>intersect())
+ await click([...host.querySelectorAll<HTMLButtonElement>('.sidebar-nav button')].find(node=>node.querySelector('.nav-label')?.textContent==='Starred')!)
+ await act(async()=>intersect());expect(starred.mock.calls.filter(([query])=>query?.offset)).toHaveLength(1)
+ await act(async()=>old.resolve({entries:[{...file,path:'old-next',name:'Old next.docx'}],total:2,totalAll:2}))
+ await act(async()=>intersect());expect(starred.mock.calls.filter(([query])=>query?.offset)).toHaveLength(1)
+ await act(async()=>current.resolve({entries:[next],total:2,totalAll:2}))
+ expect([...host.querySelectorAll('.recent-name')].map(node=>node.textContent)).toEqual([star.name,next.name])
+})
+test.each(['total','overlap','empty'])('paging %s changes reload the first page instead of appending a shifted page',async mode=>{
+ const intersect=pagingObserver(),fresh={...file,path:'fresh-file',name:'Fresh.docx'};let initial=true
+ const recents=vi.fn(async(query?:{offset?:number})=>{if(query?.offset)return {entries:mode==='empty'?[]:mode==='overlap'?[file]:[fresh],total:mode==='total'?3:2,totalAll:mode==='total'?3:2};const entries=initial?[file]:[fresh];initial=false;return {entries,total:2,totalAll:2}});api.recents=recents
+ await act(async()=>window.dispatchEvent(new Event('focus')));await act(async()=>intersect())
+ expect(recents.mock.calls.map(([query])=>query?.offset??0)).toEqual([0,1,0])
+ expect([...host.querySelectorAll('.recent-name')].map(node=>node.textContent)).toEqual([fresh.name])
+})
+test('a pending first page prevents fetching the previous view offset',async()=>{
+ const intersect=pagingObserver(),pending=deferred<{entries:RecentEntry[];total:number;totalAll:number}>()
+ api.recents=async()=>({entries:[file],total:2,totalAll:2})
+ await act(async()=>window.dispatchEvent(new Event('focus')))
+ const starred=vi.fn(async(query?:{offset?:number;limit?:number})=>query?.limit===0?{entries:[],total:2,totalAll:2}:pending.promise);api.starred=starred
+ await click([...host.querySelectorAll<HTMLButtonElement>('.sidebar-nav button')].find(node=>node.querySelector('.nav-label')?.textContent==='Starred')!)
+ await act(async()=>intersect());expect(starred.mock.calls.filter(([query])=>query?.offset)).toHaveLength(0)
+ await act(async()=>pending.resolve({entries:[{...file,path:'new-view',name:'New view.docx'}],total:2,totalAll:2}))
+})
+test('a new view with unchanged row count rearms its visible sentinel after the first page settles',async()=>{
+ const callbacks:IntersectionObserverCallback[]=[]
+ vi.stubGlobal('IntersectionObserver',class{constructor(callback:IntersectionObserverCallback){callbacks.push(callback)}observe(){}disconnect(){}})
+ api.recents=async()=>({entries:[file],total:2,totalAll:2})
+ await act(async()=>window.dispatchEvent(new Event('focus')))
+ const pending=deferred<{entries:RecentEntry[];total:number;totalAll:number}>(),next={...file,path:'next-star',name:'Next star.docx'}
+ const starred=vi.fn(async(query?:{offset?:number;limit?:number})=>query?.limit===0?{entries:[],total:2,totalAll:2}:query?.offset?{entries:[next],total:2,totalAll:2}:pending.promise);api.starred=starred
+ const count=callbacks.length
+ await click([...host.querySelectorAll<HTMLButtonElement>('.sidebar-nav button')].find(node=>node.querySelector('.nav-label')?.textContent==='Starred')!)
+ await act(async()=>callbacks.at(-1)!([{isIntersecting:true} as IntersectionObserverEntry],{} as IntersectionObserver))
+ await act(async()=>pending.resolve({entries:[{...file,path:'first-star',name:'First star.docx'}],total:2,totalAll:2}))
+ expect(callbacks.length).toBeGreaterThan(count)
+ await act(async()=>callbacks.at(-1)!([{isIntersecting:true} as IntersectionObserverEntry],{} as IntersectionObserver))
+ expect(starred.mock.calls.filter(([query])=>query?.offset)).toHaveLength(1)
+})
+test('a failed new-view first page blocks old-offset paging until a successful focus refresh',async()=>{
+ const intersect=pagingObserver();api.recents=async()=>({entries:[file],total:2,totalAll:2})
+ await act(async()=>window.dispatchEvent(new Event('focus')))
+ let fail=true
+ const first={...file,path:'star-first',name:'Star first.docx'},next={...file,path:'star-next',name:'Star next.docx'}
+ const starred=vi.fn(async(query?:{offset?:number;limit?:number})=>{
+  if(query?.limit===0)return {entries:[],total:2,totalAll:2}
+  if(query?.offset)return {entries:[next],total:2,totalAll:2}
+  if(fail)throw Error('Starred first page unavailable')
+  return {entries:[first],total:2,totalAll:2}
+ });api.starred=starred
+ await click([...host.querySelectorAll<HTMLButtonElement>('.sidebar-nav button')].find(node=>node.querySelector('.nav-label')?.textContent==='Starred')!)
+ expect(host.querySelector('[role="alert"]')?.textContent).toContain('Starred first page unavailable')
+ await act(async()=>intersect());expect(starred.mock.calls.filter(([query])=>query?.offset)).toHaveLength(0)
+ expect([...host.querySelectorAll('.recent-name')].map(node=>node.textContent)).toEqual([file.name])
+ fail=false;await act(async()=>window.dispatchEvent(new Event('focus')));await act(async()=>intersect())
+ expect(starred.mock.calls.filter(([query])=>query?.offset)).toHaveLength(1)
+ expect([...host.querySelectorAll('.recent-name')].map(node=>node.textContent)).toEqual([first.name,next.name])
+})
+
 test('Web file-menu portal closes when the restored content scrollport moves', async () => {
  await act(async () => root.render(h(LocaleProvider, {initial: 'en', children: h(Home, {accountEntry: h('div', null, 'Account'), supportedNewFormats: [], supportedFormats: ['docx']})})))
  const content = host.querySelector<HTMLElement>('.content')!

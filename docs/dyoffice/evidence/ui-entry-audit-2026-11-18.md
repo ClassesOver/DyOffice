@@ -143,3 +143,13 @@
 - 技能同名导入原先直接覆盖。现在预检后展示替换确认，取消保留原文，明确确认才写；未知结果保留替换草稿并禁止重复提交，刷新仅核对列表。预检读取失败明确尚未提交，不误锁为未知写。Panel/client25项通过。最终构建模拟浏览器4组通过，只有2条mock PUT（成功及503），无真实技能写入。预检仍为GET后无条件PUT，不能保证两请求间并发新建同名时不覆盖；本轮不声称服务端条件写保护。
 - 最终Web shell38文件338项、桥接35项、shell及前后端类型、构建、边界与兼容清单通过；独立复查无剩余确定阻塞。构建有既有chunk大小提示，DOM环境有既有CSS解析日志。目录键盘浏览器4项通过，0页面异常，仅1条mock移动写入。
 - 证据：`/tmp/dyoffice-ui-round3-shell.log`、`/tmp/dyoffice-ui-round3-final-build.log`及`/tmp/dyoffice-ui-audit/`下`folder-picker-keyboard`、`upload-state-audit`、`upload-keyboard-postfix`、`source-identity-postfix`、`skills-replacement-mock`报告。早期Sources脚本误尝试关闭未知状态弹窗、Skills关闭按钮定位双匹配均已更正，不将脚本错误算产品缺陷。完整UI、复杂文档写入与跨编辑器竞态仍未穷举。
+
+## 大列表刷新与页签改名补查
+
+- 最近/收藏加载超过100条后，Home刷新请求limit=已加载条数，但Web API最多接受100，实际150条浏览器模拟复现400。桥接层现按100及剩余数量分批读取，保留offset/格式/总数，合并完成才交付UI；总数变化、重叠、空后续页明确拒绝，避免发布不完整结果。5条新增回归基线全失败、修复后通过。
+- 首页续页增加同步请求锁，防同一tick重复observer追加；旧请求不能清新视图的锁，首屏处理中/失败时不使用旧视图offset，只有当前首屏成功才重新启用滚动续页。分页总数变化、重叠或空页重读首屏，收藏分组续页保留过滤条件。Home最终58项通过，含8项本轮新增回归。
+- 首页改名成功后原先已开页签及iframe title仍旧，重开也不更新。现成功PATCH同步标题，重复打开同ID刷新名称但保留原src/format/关闭guard。独立复查发现迟到open可能回退刚确认的新名，增加按文件的改名版本与打开请求序号，覆盖先旧后新/先新后旧及首次打开前改名，标签13项通过。不替换已挂载编辑器。
+- 全局配置/偏好追加只读浏览器10项及既有30测试通过，覆盖多项草稿、筛选切换、删除取消、400保存/500读取失败、迟到读取及停用默认项；未复现新问题。所有配置业务读写为mock，无真实配置修改。
+- 合并远端`18dc611c`保留其收藏unknown保护、诊断和其他领域提交后，桥接51项、前后端类型、shell/Word Web构建及Docs流式输入18项通过。整合前最终Web shell38文件352项通过；源码整合对本批UI仅追加远端收藏保护一行及10个bridge回归。最初Docs命令使用错误root上下文而未找到setup，改用docs工作目录的npm test后18项通过，不算产品失败。
+- 最终构建重启后的模拟浏览器：150条分页/刷新、首屏503不混页与显式刷新恢复4项；页签改名/重开/保留iframe草稿与guard4项。所有文件业务接口mock，Word iframe为stub，仅证明宿主生命周期，不冒充真实Word正文/保存验收。0页面异常，无真实业务写入。
+- 证据：`/tmp/dyoffice-recent-browser-red.log`、`/tmp/dyoffice-round4-final-shell.log`、`/tmp/dyoffice-round4-integrated-bridge.log`、`/tmp/dyoffice-round4-integrated-docs.log`，以及`/tmp/dyoffice-ui-audit/`下`recent-refresh`、`document-rename-postfix`、`settings-deep`、`rename-open-order-check.json`报告。完整UI、跨刷新状态恢复及复杂文档交互仍继续验收。

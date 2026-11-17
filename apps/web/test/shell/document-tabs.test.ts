@@ -67,3 +67,56 @@ test('read-only previews can close without an editor lifecycle guard regardless 
  const tabs=createDocumentTabs();tabs.open({...b,src:'/api/v1/files/file-b/content?revision=r1'})
  expect(await tabs.close(b.id)).toBe(true)
 })
+
+test('rename refreshes a background title once while preserving its active editor and close guard',async()=>{
+ const tabs=createDocumentTabs(),changed=vi.fn(),guard=vi.fn(()=>false)
+ tabs.open(a);tabs.setGuard(a.id,guard);tabs.activate('home');tabs.subscribe(changed)
+ tabs.rename(a.id,'新合同.docx')
+ expect(tabs.list()[1].title).toBe('新合同.docx')
+ expect(tabs.documents()[0]).toEqual({...a,name:'新合同.docx'})
+ expect(tabs.list()[0].active).toBe(true)
+ expect(changed).toHaveBeenCalledTimes(1)
+ tabs.rename(a.id,'新合同.docx');tabs.rename('missing','ignored');tabs.rename('home','ignored')
+ expect(changed).toHaveBeenCalledTimes(1)
+ expect(await tabs.close(a.id)).toBe(false);expect(guard).toHaveBeenCalledOnce()
+})
+
+test('reopening refreshes the name in one notification without replacing source format or guard',async()=>{
+ const tabs=createDocumentTabs(),changed=vi.fn(),guard=vi.fn(()=>false)
+ tabs.open(a);tabs.setGuard(a.id,guard);tabs.activate('home');tabs.subscribe(changed)
+ tabs.open({...a,name:'重命名.docx',src:'/must-not-reload',format:'pdf'})
+ expect(tabs.documents()).toEqual([{...a,name:'重命名.docx'}])
+ expect(tabs.list()[1]).toMatchObject({title:'重命名.docx',kind:'docs',active:true})
+ expect(changed).toHaveBeenCalledTimes(1)
+ tabs.open({...a,name:'重命名.docx',src:'/still-must-not-reload'})
+ expect(changed).toHaveBeenCalledTimes(1)
+ expect(await tabs.close(a.id)).toBe(false);expect(guard).toHaveBeenCalledOnce()
+})
+
+test('a late open cannot roll back a newer confirmed rename',()=>{
+ const tabs=createDocumentTabs();tabs.open(a)
+ const token=tabs.reserveOpen(a.id)
+ tabs.rename(a.id,'confirmed.docx');tabs.activate('home')
+ tabs.open(a,token)
+ expect(tabs.documents()[0].name).toBe('confirmed.docx')
+ expect(tabs.list()[1].active).toBe(true)
+})
+
+for(const order of ['old-first','new-first'])test(`concurrent opens retain the later request metadata when responses arrive ${order}`,()=>{
+ const tabs=createDocumentTabs();tabs.open(a)
+ const old=tabs.reserveOpen(a.id),fresh=tabs.reserveOpen(a.id)
+ const oldResponse=()=>tabs.open({...a,name:'old.docx'},old)
+ const newResponse=()=>tabs.open({...a,name:'new.docx'},fresh)
+ if(order==='old-first'){oldResponse();newResponse()}else{newResponse();oldResponse()}
+ expect(tabs.documents()[0].name).toBe('new.docx')
+})
+
+test('rename while the first open is pending supplies the confirmed name without activating a tab',()=>{
+ const tabs=createDocumentTabs(),changed=vi.fn();tabs.subscribe(changed)
+ const token=tabs.reserveOpen(a.id)
+ tabs.rename(a.id,'confirmed before open.docx')
+ expect(tabs.documents()).toEqual([]);expect(changed).not.toHaveBeenCalled()
+ tabs.open(a,token)
+ expect(tabs.documents()).toEqual([{...a,name:'confirmed before open.docx'}])
+ expect(changed).toHaveBeenCalledOnce()
+})

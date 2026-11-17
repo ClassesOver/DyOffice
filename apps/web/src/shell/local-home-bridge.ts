@@ -11,6 +11,7 @@ interface Dependencies {
   browse(): Promise<void>
   openTrash(): void
   changed(): void
+  renamed?(id: string, name: string): void
   unsupported(message: string): void
 }
 const rootPath = '/workspace'
@@ -88,8 +89,16 @@ export function createLocalHomeBridge(deps: Dependencies): HomeApi {
     return result
   }
   async function page(view: WorkspaceView, query: RecentQuery = {}) {
-    const page = await queryFiles(view, {offset: query.offset, limit: query.limit, ext: query.ext})
-    return {entries: await fileEntries(page.files), total: page.total, totalAll: page.totalAll}
+    const limit = query.limit ?? 50, offset = query.offset ?? 0
+    const page = await queryFiles(view, {offset, limit: Math.min(limit, 100), ext: query.ext})
+    const items = [...page.files], seen = new Set(items.map(file => file.id))
+    // Home refreshes the number of rows already loaded; the API caps each request at 100.
+    while (items.length < limit && offset + items.length < page.total) {
+      const next = await queryFiles(view, {offset: offset + items.length, limit: Math.min(limit - items.length, 100), ext: query.ext})
+      if (next.total !== page.total || next.totalAll !== page.totalAll || !next.files.length || next.files.some(file => seen.has(file.id))) throw new Error('文件列表已变化，请刷新后重试。')
+      for (const file of next.files) {seen.add(file.id); items.push(file)}
+    }
+    return {entries: await fileEntries(items), total: page.total, totalAll: page.totalAll}
   }
   function confirmItem(batch:Batch,id:string){
     batch.confirmed.add(id)
@@ -190,7 +199,7 @@ export function createLocalHomeBridge(deps: Dependencies): HomeApi {
       return fileEntries(result)
     },
     renameFile: (id: string, name: string) => once(JSON.stringify(['rename', id]), async () => {
-      await deps.request(`/api/v1/files/${encodeURIComponent(id)}`, 'PATCH', {name}); changed(); return {ok: true, path: id}
+      await deps.request(`/api/v1/files/${encodeURIComponent(id)}`, 'PATCH', {name}); deps.renamed?.(id, name); changed(); return {ok: true, path: id}
     },name),
     folderRoots: async () => [{path: rootPath, name: (await deps.preferences.getPreferences()).language === 'en' ? 'My files' : '个人文件', usable: true, readable: true, removable: false}],
     listFolder: async (dir: string) => {
