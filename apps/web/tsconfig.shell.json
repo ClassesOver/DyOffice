@@ -178,9 +178,6 @@
       "@genoffice/electron-utils/disk-watch": [
         "../../packages/electron-utils/src/disk-watch.ts"
       ],
-      "@genoffice/electron-utils/drop-open": [
-        "../../packages/electron-utils/src/drop-open.ts"
-      ],
       "@genoffice/electron-utils/font-catalog": [
         "../../packages/electron-utils/src/font-catalog.ts"
       ],
@@ -213,12 +210,6 @@
       ],
       "@genoffice/electron-utils/remote-table": [
         "../../packages/electron-utils/src/remote-table.ts"
-      ],
-      "@genoffice/electron-utils/renderer-protocol": [
-        "../../packages/electron-utils/src/renderer-protocol.ts"
-      ],
-      "@genoffice/electron-utils/renderer-scheme": [
-        "../../packages/electron-utils/src/renderer-scheme.ts"
       ],
       "@genoffice/electron-utils/safe-external-url": [
         "../../packages/electron-utils/src/safe-external-url.ts"

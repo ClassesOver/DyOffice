@@ -12,6 +12,7 @@ export interface AgentReceipt {messageId:string;taskId?:string}
 export interface ChannelTask {
  taskId:string;conversationId:string;parentTaskId:string|null;rootTaskId:string;state:TaskState
  from:string;to:string;instruction:string;claimId:string|null;connectionEpoch:number|null
+ continuation?:{parentTaskId:string;untrusted:true;children:{taskId:string;state:TaskState;summary:string|null;outcome:string|null;summaryTruncated:boolean}[]}
  deadlineAt:string;summary:string|null;outcome?:string|null;dataInputs?:HarnessDataInputs
 }
 const invalid=()=>Object.assign(Error('Invalid assistant channel request'),{statusCode:400})

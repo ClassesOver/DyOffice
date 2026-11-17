@@ -37,3 +37,23 @@ Installed Codex/offline Python acceptance, complete editor E2E, independent real
 The product target is SaaS. Web harness transport, contracts and server-side coding/data APIs do not import Electron or require a desktop process. Shared editor/engine modules remain reusable; existing dependency-free IPC adapter types are not an Electron runtime requirement. Removing the legacy desktop shell/build/release surface is tracked separately and is not expanded by this checkpoint.
 
 The optional built-in coding harness requires a server-side Codex CLI, and offline analysis requires its locked server-side Python runtime. These are worker capabilities, not desktop applications. Lazy registration does not launch either runtime. Runtime acceptance remains open; disabling coding or channels keeps the SaaS Office editing path available.
+
+## SaaS/T16 and task recovery integration follow-up
+
+This follow-up removes the standalone home question-answer entry (T16), not Office assistants or shared analysis/model capabilities. Default product commands now target SaaS. Desktop launch/package entrypoints and desktop-only utility APIs are removed from the active build/dependency graph; legacy desktop source directories still exist and are not claimed fully deleted. The lock was regenerated and checked against workspace manifests, including the shared Markdown renderer and explicit XML validation dependency.
+
+The task-scoped `data receipt <commandId>` command and restarted external-process recovery checks are integrated. Office parent ledger routes, bounded continuation claims and separately reviewed token-correlated Docs/Sheets native lifecycle wiring are integrated. Scoped cancellation stops only the related native run; user work queued between continuations cannot settle a different parent. This is deterministic AgentLoop/HTTP/PG evidence, not browser E2E or third-party model acceptance.
+
+The default SaaS `npm run build` completed all four browser bundles successfully without an installed Electron runtime. The composed candidate passed Web unit **553** (3 installed-runtime skips), Web HTTP **353** (1 S3 skip), shell **113**, data client/receipt **14**, and standard Web/server/Docs/Sheets/Slides/shell/CLI typechecks. Real PostgreSQL combined regressions passed **73** with **1** installed-builtin-runtime skip, including sources, quotas, realtime sessions, parent tasks and external-process receipt recovery. An initial concurrent verification attempt reported a ledger-test failure and did not finish; that test then passed independently, and the complete sequential PostgreSQL rerun passed. The initial attempt is not counted as a passing run.
+
+The installed Codex path and historical full CLI suite were not retried after their initialization/external-network paths were blocked. No sandbox, socket permission or proxy setting was relaxed. These limitations remain distinct from the local synthetic process/HTTP/PG evidence above.
+
+## Final native-wiring / latest-target verification
+
+The integration also preserves all ten nonoverlapping files from target `66a11683` (#136) byte-for-byte. After the reviewed native-parent cancellation fix was included, the final Web suite passed **560** tests (3 runtime skips), shell **113**, and the native-parent/channel HTTP/PostgreSQL combination **20** without skips. Web/server, Docs, Sheets and shell standard typechecks were rerun successfully. All four default SaaS builds were rerun successfully. The earlier 73-test PostgreSQL run above overlaps these channel tests; counts must not be added as unique coverage.
+
+The target's reservation/dispatch PostgreSQL regression passed **59** tests and the worker typecheck passed. These are candidate-ledger checks, not live systemd/OCI runtime acceptance.
+
+A separate empty install directory with the exact final Web manifest/lock passed the CI command `npm ci --prefix apps/web --workspaces=false --include=dev --no-audit --no-fund` (412 packages). Only npm's cache location was changed to a writable workspace directory after the environment's default cache path was unavailable. Installed `mysql2` is 3.24.6 and `node-sql-parser` is 5.4.0; Electron cannot resolve. The Web lock checksum was unchanged by installation.
+
+Legacy desktop source directories and historical desktop-oriented CI/e2e entries are not claimed removed in their entirety. No user files, stored conversations, source data, model configuration or artifact history were deleted by the T16/desktop entrypoint removal.

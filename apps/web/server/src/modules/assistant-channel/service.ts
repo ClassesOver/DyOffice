@@ -346,6 +346,27 @@ export function createAssistantChannelService({transactions,credentialKey}:{tran
     return receipt
    })
   },
+  /** Opt-in ledger entry for an Office run that is about to delegate. Native
+   * chat remains independent of this service; no model work starts here. */
+  async beginOfficeTask(token:string,conversationId:string,input:{requestId:string;connectionId:string;connectionEpoch:number;instruction:string}) {
+   const requestId=uuid(input.requestId),connectionId=uuid(input.connectionId),instruction=text(input.instruction)
+   const paramsHash=hash(JSON.stringify({operation:'begin-office',connectionId,connectionEpoch:input.connectionEpoch,instruction}))
+   return run({kind:'owner',token},conversationId,async(c,p,ch)=>{
+    await expire(c,p,conversationId)
+    if(ch.paused||ch.office_connection_id!==connectionId||ch.office_epoch!==input.connectionEpoch)throw fail(409)
+    const prior=(await c.query("SELECT * FROM assistant_requests WHERE deployment_id=$1 AND owner_id=$2 AND conversation_id=$3 AND actor='office' AND request_id=$4",[...scope(p),conversationId,requestId])).rows[0]
+    if(prior){if(prior.params_hash!==paramsHash)throw fail(409);return taskDto(await task(c,p,conversationId,prior.receipt.taskId))}
+    const busy=(await c.query("SELECT 1 FROM assistant_tasks WHERE deployment_id=$1 AND owner_id=$2 AND conversation_id=$3 AND recipient='office' AND state IN ('running','cancel_requested')",[...scope(p),conversationId])).rowCount
+    if(busy)throw fail(409)
+    const active=(await c.query("SELECT count(*) FROM assistant_tasks WHERE deployment_id=$1 AND owner_id=$2 AND conversation_id=$3 AND state IN ('queued','running','waiting_peer','cancel_requested','unknown_outcome')",[...scope(p),conversationId])).rows[0].count
+    if(Number(active)>=32)throw fail(429)
+    const taskId=randomUUID(),claimId=randomUUID()
+    const row=(await c.query("INSERT INTO assistant_tasks(task_id,deployment_id,owner_id,conversation_id,root_task_id,depth,sender,recipient,instruction,state,claim_id,connection_id,connection_epoch,deadline_at) VALUES($1,$2,$3,$4,$1,0,'office','office',$5,'running',$6,$7,$8,clock_timestamp()+interval '10 minutes') RETURNING *",[taskId,...scope(p),conversationId,instruction,claimId,connectionId,input.connectionEpoch])).rows[0]
+    const messageId=await event(c,p,conversationId,'task',taskDto(row),'office',taskId)
+    await c.query("INSERT INTO assistant_requests(deployment_id,owner_id,conversation_id,actor,request_id,params_hash,receipt) VALUES($1,$2,$3,'office',$4,$5,$6)",[...scope(p),conversationId,requestId,paramsHash,JSON.stringify({messageId,taskId})])
+    return taskDto(row)
+   })
+  },
   async claim(credential:ChannelCredential,conversationId:string,input:{taskId:string;connectionId:string;connectionEpoch:number}) {
    const connectionId=uuid(input.connectionId)
    return run(credential,conversationId,async(c,p,ch,actor)=>{
@@ -360,7 +381,17 @@ export function createAssistantChannelService({transactions,credentialKey}:{tran
     const claimId=randomUUID()
     const claimed=(await c.query("UPDATE assistant_tasks SET state='running',claim_id=$4,connection_id=$5,connection_epoch=$6 WHERE deployment_id=$1 AND owner_id=$2 AND task_id=$3 RETURNING *",[...scope(p),row.task_id,claimId,connectionId,epoch])).rows[0]
     await event(c,p,conversationId,'task',taskDto(claimed),actor.id,row.task_id)
-    return taskDto(claimed)
+    const result=taskDto(claimed)
+    const ids=claimed.child_task_ids as string[]
+    if(ids.length){
+     const children=(await c.query('SELECT * FROM assistant_tasks WHERE deployment_id=$1 AND owner_id=$2 AND conversation_id=$3 AND parent_task_id=$4 AND task_id=ANY($5::uuid[])',[...scope(p),conversationId,claimed.task_id,ids])).rows
+     if(children.length!==ids.length||children.some(child=>!terminal(child.state)))throw fail(409)
+     result.continuation={parentTaskId:claimed.task_id,untrusted:true,children:ids.map(id=>{
+      const child=children.find(row=>row.task_id===id)!,preview=taskPreview(child)
+      return {taskId:id,state:child.state,summary:preview.summary,outcome:child.outcome??null,summaryTruncated:preview.summary!==child.summary}
+     })}
+    }
+    return result
    })
   },
   async yieldTask(credential:ChannelCredential,conversationId:string,input:{taskId:string;claimId:string;connectionEpoch:number;childTaskIds:string[]}) {
@@ -369,7 +400,13 @@ export function createAssistantChannelService({transactions,credentialKey}:{tran
    return run(credential,conversationId,async(c,p,ch,actor)=>{
     await expire(c,p,conversationId)
     const row=await task(c,p,conversationId,input.taskId),epoch=actor.member?actor.member.connection_epoch:ch.office_epoch
-    if(row.recipient!==actor.id||row.claim_id!==uuid(input.claimId)||row.connection_epoch!==input.connectionEpoch||epoch!==input.connectionEpoch||row.state!=='running')throw fail(409)
+    const connection=actor.member?actor.member.connection_id:ch.office_connection_id
+    if(row.recipient!==actor.id||row.claim_id!==uuid(input.claimId)||row.connection_epoch!==input.connectionEpoch||epoch!==input.connectionEpoch||!connection||row.connection_id!==connection)throw fail(409)
+    if(row.state!=='running'){
+     const saved=row.child_task_ids as string[]
+     if(!['waiting_peer','queued'].includes(row.state)||saved.length!==children.length||children.some(id=>!saved.includes(id)))throw fail(409)
+     return taskDto(row)
+    }
     const rows=(await c.query('SELECT * FROM assistant_tasks WHERE deployment_id=$1 AND owner_id=$2 AND conversation_id=$3 AND parent_task_id=$4 AND task_id=ANY($5::uuid[])',[...scope(p),conversationId,row.task_id,children])).rows
     if(rows.length!==children.length)throw fail(409)
     await c.query('UPDATE assistant_tasks SET child_task_ids=$4 WHERE deployment_id=$1 AND owner_id=$2 AND task_id=$3',[...scope(p),row.task_id,JSON.stringify(children)])

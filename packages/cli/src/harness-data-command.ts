@@ -9,7 +9,7 @@ import {flagString,type ParsedArgs} from './args'
 import {createHarnessDataClient,harnessDataRequestLimit} from './harness-data'
 import {CliError,EXIT,type CommandResult} from './result'
 
-export const HARNESS_DATA_USAGE='data execute <operation> [--args <json> | --args-file <file>] | data manifest <resultId> | data download <resultId> --out <file>'
+export const HARNESS_DATA_USAGE='data execute <operation> [--args <json> | --args-file <file>] | data receipt <commandId> | data manifest <resultId> | data download <resultId> --out <file>'
 
 /** 仅切换本地传输，HTTP 路径、任务凭据、响应与完整性校验完全复用。
  * socket 地址来自可信启动配置，不接受模型通过操作参数指定。 */
@@ -103,7 +103,7 @@ export async function runHarnessDataCommand(args:ParsedArgs,options:{cwd:string;
   }
   const action=args.positionals[0],identifier=args.positionals[1]
   const usage=()=>new CliError(EXIT.usage,HARNESS_DATA_USAGE,undefined,{reason:'invalid_argument'})
-  if(!['execute','manifest','download'].includes(action??'')||!identifier||args.positionals.length!==2)throw usage()
+  if(!['execute','manifest','download','receipt'].includes(action??'')||!identifier||args.positionals.length!==2)throw usage()
   const allowed=new Set(['json',...(action==='execute'?['args','args-file']:action==='download'?['out']:[])])
   if(Object.keys(args.flags).some(key=>!allowed.has(key)))throw usage()
   if(!env.OFFICE_HARNESS_DATA_URL||!env.OFFICE_HARNESS_TASK_ID||!env.OFFICE_HARNESS_DATA_CREDENTIAL)
@@ -117,6 +117,7 @@ export async function runHarnessDataCommand(args:ParsedArgs,options:{cwd:string;
       const result=await client.download(identifier,resolve(options.cwd,output),options.signal)
       return {summary:'Frozen result downloaded and verified',outputPath:result.destination,detail:{...result}}
     }
+    if(action==='receipt')return {summary:'Committed analysis receipt recovered',detail:await client.receipt<Record<string,unknown>>(identifier,options.signal)}
     if(action==='manifest')return {summary:'Frozen result manifest',detail:await client.manifest<Record<string,unknown>>(identifier,options.signal)}
     const inputFile=flagString(args,'args-file')
     if(args.flags['args-file']!==undefined&&!inputFile||inputFile&&args.flags.args!==undefined)throw usage()

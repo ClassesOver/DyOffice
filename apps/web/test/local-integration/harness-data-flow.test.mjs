@@ -151,15 +151,53 @@ console.log(JSON.stringify({total,resultId:query.artifact.resultId,commandId:rec
   const receipt=await data.delivery(grant.taskId,grant.credential)
   assert.equal(receipt.commandId,outcome.commandId);assert.equal(receipt.summary,'Total 60 CNY across 3 rows.')
   assert.equal(receipt.artifacts.length,3);assert.equal(receipt.inputs[0].resultId,outcome.resultId)
+  // A separate restarted harness process recovers the committed receipt after
+  // the input expires. This exercises the real HTTP client/route and PG/RLS,
+  // not only direct access-service calls; it must never requery or recommit.
+  const recoveryScript=join(scratch,'recover.mts'),commandModule=pathToFileURL(join(root,'packages/cli/src/harness-data-command.ts')).href,argsModule=pathToFileURL(join(root,'packages/cli/src/args.ts')).href
+  await writeFile(recoveryScript,`
+import assert from 'node:assert/strict'
+import {createHarnessDataClient} from ${JSON.stringify(clientModule)}
+const client=createHarnessDataClient({baseUrl:process.env.HARNESS_BASE_URL,taskId:process.env.HARNESS_TASK_ID,credential:process.env.HARNESS_TASK_TOKEN})
+import {runHarnessDataCommand} from ${JSON.stringify(commandModule)}
+import {parseArgs} from ${JSON.stringify(argsModule)}
+const recover=async()=>(await runHarnessDataCommand(parseArgs(['receipt',process.env.HARNESS_COMMAND_ID]),{cwd:process.cwd(),env:{OFFICE_HARNESS_DATA_URL:process.env.HARNESS_BASE_URL,OFFICE_HARNESS_TASK_ID:process.env.HARNESS_TASK_ID,OFFICE_HARNESS_DATA_CREDENTIAL:process.env.HARNESS_TASK_TOKEN}})).detail
+if(process.env.HARNESS_EXPECT_DENIED==='1') {
+ await assert.rejects(recover)
+ console.log(JSON.stringify({denied:true}))
+} else {
+ const receipt=await recover()
+ await assert.rejects(()=>client.manifest(process.env.HARNESS_RESULT_ID))
+ console.log(JSON.stringify({commandId:receipt.commandId,summary:receipt.summary,artifactIds:receipt.artifacts.map(item=>item.artifactId)}))
+}
+`)
+  const owner=await f.ownerPool.connect()
+  try {
+    await owner.query('BEGIN')
+    await owner.query("SELECT set_config('dyoffice.deployment_id',$1,true),set_config('dyoffice.user_id',$2,true)",[f.deploymentId,f.alice.user.id])
+    const changed=await owner.query("UPDATE workspace_source_results SET expires_at=now()-interval '1 second' WHERE result_id=$1",[outcome.resultId])
+    assert.equal(changed.rowCount,1)
+    await owner.query('COMMIT')
+  } catch(error) {await owner.query('ROLLBACK');throw error} finally {owner.release()}
+  const recoverWith=(task,denied=false)=>runHarness(recoveryScript,{HARNESS_BASE_URL:baseUrl,HARNESS_TASK_ID:task.taskId,HARNESS_TASK_TOKEN:task.credential,HARNESS_COMMAND_ID:outcome.commandId,HARNESS_RESULT_ID:outcome.resultId,HARNESS_EXPECT_DENIED:denied?'1':'0'},scratch)
+  const recovered=await recoverWith(grant)
+  assert.equal(recovered.commandId,receipt.commandId)
+  assert.equal(recovered.summary,receipt.summary)
+  assert.deepEqual(recovered.artifactIds,receipt.artifacts.map(item=>item.artifactId))
+  assert.equal(queries,1,'Restarted receipt recovery must not rerun the source')
+  const deliveryCount=await f.transactions.withPrincipalTransaction({kind:'session',token:f.alice.token},async c=>c.query('SELECT count(*)::int AS count FROM harness_analysis_deliveries'))
+  assert.equal(deliveryCount.rows[0].count,1,'Restarted receipt recovery must not duplicate commit')
   const forged=await fetch(baseUrl+'/tasks/'+bob.taskId+'/data/execute',{method:'POST',headers:{authorization:'Bearer '+grant.credential,'content-type':'application/json'},body:JSON.stringify({operation:'sources.list',arguments:{}})})
   assert.equal(forged.status,403)
   const otherTask=await data.issue({token:f.alice.token,agentId:'same-owner-peer',inputs:{sourceIds:[],resultIds:[]},signal:new AbortController().signal})
   for(const peer of [bob,otherTask]) {
+    assert.deepEqual(await recoverWith(peer,true),{denied:true},'Recovery denies cross-owner and same-owner other task')
     const guessed=await fetch(baseUrl+'/tasks/'+peer.taskId+'/data/results/'+outcome.resultId+'/content',{headers:{authorization:'Bearer '+peer.credential}})
     assert.equal(guessed.status,403,'Result IDs grant neither cross-owner nor same-owner cross-task access')
   }
   await assert.rejects(artifacts.receipt(f.bob.token,outcome.commandId))
   data.revoke(grant.taskId)
+  assert.deepEqual(await recoverWith(grant,true),{denied:true},'Revoked task cannot recover even a committed receipt')
   const revoked=await fetch(baseUrl+'/tasks/'+grant.taskId+'/data/results/'+outcome.resultId+'/content',{headers:{authorization:'Bearer '+grant.credential}})
   assert.equal(revoked.status,403)
   await rm(scratch,{recursive:true,force:true})

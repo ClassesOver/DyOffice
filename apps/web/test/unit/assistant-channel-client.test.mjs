@@ -6,12 +6,12 @@ const tick=()=>new Promise(resolve=>setImmediate(resolve))
 const deferred=()=>{let resolve,reject;const promise=new Promise((done,fail)=>{resolve=done;reject=fail});return {promise,resolve,reject}}
 const task=(id,state='queued')=>({taskId:id,conversationId:'channel-1',from:'peer-1',to:'office',instruction:'Read the document',state,claimId:'claim-'+id,connectionEpoch:1})
 function fixture(t){
- const intervals=[],calls=[],executions=[],yieldRequests=[],continuations=[]
+ const intervals=[],calls=[],executions=[],yieldRequests=[],continuations=[],continuationTokens=[],cancellations=[]
  const originalSetInterval=globalThis.setInterval,originalClearInterval=globalThis.clearInterval
  globalThis.setInterval=(callback)=>{intervals.push(callback);return intervals.length}
  globalThis.clearInterval=()=>{}
  t.after(()=>{globalThis.setInterval=originalSetInterval;globalThis.clearInterval=originalClearInterval})
- let claimGate,createGate,actionGate,connectGate,refreshGate
+ let claimGate,createGate,actionGate,connectGate,refreshGate,yieldGate,cancelGate
  let next={conversationId:'channel-1',fileId:'file-1',paused:false,sequence:1,members:[],applications:[],tasks:[]}
  const request=async(path,method,body)=>{
   calls.push({path,method,body})
@@ -19,10 +19,13 @@ function fixture(t){
   if(path.endsWith('/channels')&&method==='POST')return {conversationId:next.conversationId,fileId:'file-1',paused:false}
   if(path.endsWith('/connect')&&connectGate)return connectGate.promise
   if(path.endsWith('/connect'))return {connectionEpoch:1}
+  if(path.endsWith('/yield')&&yieldGate)return yieldGate.promise
+  if(path.endsWith('/office-task')){const parent={...task('native-parent','running'),from:'office',instruction:body.instruction};next={...next,tasks:[...next.tasks,parent]};return parent}
   if(path.endsWith('/claim')&&claimGate)return claimGate.promise
-  if(path.endsWith('/claim')){const claimed=next.tasks.find(value=>value.taskId===body.taskId);return {...claimed,state:'running'}}
+  if(path.endsWith('/claim')){const claimed=next.tasks.find(value=>value.taskId===body.taskId);next={...next,tasks:next.tasks.map(value=>value.taskId===body.taskId?{...value,state:'running'}:value)};return {...claimed,state:'running'}}
   if(path.endsWith('/actions')){
    const action=body.action
+   if(action.kind==='cancel'&&cancelGate)return cancelGate.promise
    if(action.kind==='delegate'&&actionGate)return actionGate.promise
    if(action.kind==='delegate'){const taskId='outgoing-'+calls.length;next={...next,tasks:[...next.tasks,{taskId,conversationId:body.conversationId,from:'office',to:body.to,instruction:action.instruction,state:'queued'}]};return {messageId:'message-'+calls.length,taskId}}
    if(action.kind==='result')next={...next,tasks:next.tasks.map(value=>value.taskId===action.taskId?{...value,state:action.outcome}:value)}
@@ -33,8 +36,8 @@ function fixture(t){
  }
  const client=createAssistantChannelClient({request,fileId:'file-1',editorId:'editor-1',generation:()=>1})
  t.after(()=>client.dispose())
- return {client,calls,intervals,executions,yieldRequests,continuations,holdRefresh(){refreshGate=deferred();return refreshGate},holdConnect(){connectGate=deferred();return connectGate},holdAction(){actionGate=deferred();return actionGate},holdClaim(){claimGate=deferred();return claimGate},holdCreate(){createGate=deferred();return createGate},setSnapshot(value){next={...next,...value}},register(execute=async()=>({text:'Findings',cancelled:false})){
-  return client.control.register({isBusy:()=>false,requestYield(taskIds){yieldRequests.push([...taskIds])},continue(instruction){continuations.push(instruction);return true},execute(instruction,signal){executions.push({instruction,signal});return execute(instruction,signal)}})
+ return {client,calls,intervals,executions,yieldRequests,continuations,continuationTokens,cancellations,holdCancel(){cancelGate=deferred();return cancelGate},holdYield(){yieldGate=deferred();return yieldGate},holdRefresh(){refreshGate=deferred();return refreshGate},holdConnect(){connectGate=deferred();return connectGate},holdAction(){actionGate=deferred();return actionGate},holdClaim(){claimGate=deferred();return claimGate},holdCreate(){createGate=deferred();return createGate},setSnapshot(value){next={...next,...value}},register(execute=async()=>({text:'Findings',cancelled:false})){
+  return client.control.register({isBusy:()=>false,cancelRun(token){cancellations.push(token)},requestYield(taskIds){yieldRequests.push([...taskIds])},continue(instruction,token){continuations.push(instruction);continuationTokens.push(token);return true},execute(instruction,signal){executions.push({instruction,signal});return execute(instruction,signal)}})
  }}
 }
 
@@ -285,4 +288,91 @@ test('settling old refresh cannot release the new generation refresh latch',asyn
  assert.equal(f.calls.filter(call=>call.path.endsWith('/channels/channel-2')&&call.method===undefined).length,1)
  newGate.resolve({conversationId:'channel-2',fileId:'file-1',paused:false,sequence:8,members:[],applications:[],tasks:[]})
  await starting;await also;assert.equal(f.client.snapshot().sequence,8)
+})
+
+test('native run tokens attach delegation to a durable parent and settle only the matching run',async t=>{
+ const f=fixture(t),agentId='peer-1'
+ f.setSnapshot({members:[{membershipId:agentId,revoked:false}]});await f.client.start();f.register()
+ const token=f.client.control.beginRun('Original native goal')
+ const receipt=await f.client.skill.executeTool({name:'delegate_channel_task',input:{agentId,instruction:'Delegate detail'}})
+ assert.notEqual(receipt.isError,true)
+ const parent=f.calls.find(c=>c.path.endsWith('/office-task'))
+ assert.equal(parent.body.instruction,'Original native goal')
+ const delegation=f.calls.find(c=>c.path.endsWith('/actions')&&c.body.action.kind==='delegate')
+ assert.equal(delegation.body.action.parentTaskId,'native-parent')
+ f.client.control.endRun('wrong-token',{text:'Wrong task',cancelled:false})
+ assert.equal(f.calls.some(c=>c.body?.action?.kind==='result'),false)
+ f.client.control.endRun(token,{text:'',cancelled:false,yielded:{taskIds:[JSON.parse(receipt.output).taskId]}})
+ await tick();await tick()
+ assert.equal(f.calls.find(c=>c.path.endsWith('/yield')).body.taskId,'native-parent')
+})
+
+
+test('parent continuation token survives interleaved native run without completing the wrong task',async t=>{
+ const f=fixture(t);f.register();await f.client.start()
+ const parent={...task('parent'),from:'office',parentTaskId:null,continuation:{parentTaskId:'parent',untrusted:true,children:[]}}
+ f.setSnapshot({tasks:[parent]});await f.client.refresh();await tick()
+ assert.equal(f.executions.length,0)
+ assert.equal(f.continuationTokens.length,1)
+ const userToken=f.client.control.beginRun('Unrelated native question')
+ f.client.control.endRun(f.continuationTokens[0],{text:'Wrong token',cancelled:false})
+ assert.equal(f.client.control.beginRun('Try to replace active user run'),undefined)
+ f.client.control.endRun(userToken,{text:'Native answer',cancelled:false});await tick()
+ assert.equal(f.calls.some(c=>c.body?.action?.kind==='result'),false)
+ const token=f.client.control.beginRun(f.continuations[0],f.continuationTokens[0])
+ assert.ok(token)
+ f.client.control.endRun(token,{text:'Parent final answer',cancelled:false});await tick();await tick()
+ const result=f.calls.find(c=>c.body?.action?.kind==='result')
+ assert.equal(result.body.action.taskId,'parent');assert.equal(result.body.action.summary,'Parent final answer')
+})
+
+test('paused or reset continuation token cannot launch another model run',async t=>{
+ const f=fixture(t);f.register();await f.client.start()
+ f.setSnapshot({tasks:[{...task('parent'),from:'office',parentTaskId:null,continuation:{parentTaskId:'parent',untrusted:true,children:[]}}]})
+ await f.client.refresh();await tick()
+ const token=f.continuationTokens[0]
+ f.setSnapshot({paused:true,tasks:[]});await f.client.refresh()
+ assert.equal(f.client.control.beginRun('Do not run',token),undefined)
+ f.client.control.resetConversation()
+ assert.equal(f.client.control.beginRun('Do not reuse',token),undefined)
+})
+
+
+test('reverse Office reads wait until parent yield receipt releases the durable run slot',async t=>{
+ const f=fixture(t),agentId='peer-1';f.register()
+ f.setSnapshot({members:[{membershipId:agentId,revoked:false}]});await f.client.start()
+ const token=f.client.control.beginRun('Goal')
+ const receipt=await f.client.skill.executeTool({name:'delegate_channel_task',input:{agentId,instruction:'Delegate'}})
+ const gate=f.holdYield()
+ f.client.control.endRun(token,{text:'',cancelled:false,yielded:{taskIds:[JSON.parse(receipt.output).taskId]}})
+ await tick();f.setSnapshot({tasks:[task('reverse')]});await f.client.refresh();await tick()
+ assert.equal(f.calls.some(c=>c.path.endsWith('/claim')),false)
+ gate.resolve({state:'waiting_peer'});await tick();await tick()
+ assert.equal(f.executions.length,1)
+})
+
+
+test('reset during parent cancellation never posts its completion into a replacement channel',async t=>{
+ const f=fixture(t),agentId='peer-1';f.register();f.setSnapshot({members:[{membershipId:agentId,revoked:false}]});await f.client.start()
+ const token=f.client.control.beginRun('Old goal')
+ await f.client.skill.executeTool({name:'delegate_channel_task',input:{agentId,instruction:'Delegate'}})
+ const gate=f.holdCancel();f.client.control.endRun(token,{text:'Stopped',cancelled:true});await tick()
+ f.client.control.resetConversation();f.setSnapshot({conversationId:'channel-2',tasks:[]});await f.client.start()
+ gate.resolve({messageId:'cancel-receipt'});await tick();await tick()
+ assert.equal(f.calls.some(c=>c.body?.action?.kind==='result'),false)
+})
+
+
+for(const failure of ['cancel_requested','unauthorized'])test(`related parent native run is cancelled on ${failure} without stopping unrelated native work`,async t=>{
+ const f=fixture(t);f.register();await f.client.start()
+ f.setSnapshot({tasks:[{...task('parent'),from:'office',parentTaskId:null,continuation:{parentTaskId:'parent',untrusted:true,children:[]}}]})
+ await f.client.refresh();await tick()
+ const token=f.client.control.beginRun(f.continuations[0],f.continuationTokens[0]);assert.ok(token)
+ if(failure==='cancel_requested'){f.setSnapshot({tasks:[{...task('parent','cancel_requested'),from:'office'}]});await f.client.refresh()}
+ else {const gate=f.holdRefresh(),refresh=f.client.refresh();gate.reject(Error('Session revoked'));await refresh}
+ assert.deepEqual(f.cancellations,[token])
+ f.client.control.endRun(token,{text:'Stopped',cancelled:true});await tick();await tick()
+ const unrelated=f.client.control.beginRun('Unrelated user work');assert.ok(unrelated)
+ const gate=f.holdRefresh(),refresh=f.client.refresh();gate.reject(Error('Channel unavailable'));await refresh
+ assert.deepEqual(f.cancellations,[token])
 })

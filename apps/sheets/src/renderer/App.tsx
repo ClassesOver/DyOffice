@@ -1765,7 +1765,8 @@ export function App({
   const runLastTextRef = useRef('')
   /** true once any tool of the run mutated the workbook */
   const runMutatedRef = useRef(false)
-  const pendingContinuationsRef = useRef<string[]>([])
+  const pendingContinuationsRef = useRef<{instruction: string; continuationToken?: string | undefined}[]>([])
+  const assistantRunTokenRef = useRef<string | undefined>(undefined)
 
   const agentLoopRef = useRef<AgentLoop | null>(null)
   if (!agentLoopRef.current) {
@@ -1855,7 +1856,10 @@ export function App({
           patchLastAssistant((entry) => ({ ...entry, usage: runUsageRef.current }))
         },
         onDone: ({ text, cancelled, turnLimit, truncated, yielded }) => {
-          if (yielded) host?.assistant?.control?.reportYield(yielded.taskIds)
+          const runToken = assistantRunTokenRef.current
+          assistantRunTokenRef.current = undefined
+          if (runToken) host?.assistant?.control?.endRun?.(runToken, {text, cancelled, failed: turnLimit || !!truncated, ...(yielded ? {yielded} : {})})
+          else if (yielded) host?.assistant?.control?.reportYield(yielded.taskIds)
           // Prefer tool summaries when the model finished via tools with no prose
           // (agent-core fills history with COMPLETED_VIA_TOOLS_TEXT so follow-ups
           // stay provider-safe; the UI can show the real work that ran).
@@ -1910,11 +1914,14 @@ export function App({
             setAiBusy(false)
             if (!cancelled && !yielded) {
               const instruction = pendingContinuationsRef.current.shift()
-              if (instruction) queueMicrotask(() => runContinuation(instruction))
+              if (instruction) queueMicrotask(() => runContinuation(instruction.instruction, instruction.continuationToken))
             }
           })
         },
         onError: (error) => {
+          const runToken = assistantRunTokenRef.current
+          assistantRunTokenRef.current = undefined
+          if (runToken) host?.assistant?.control?.endRun?.(runToken, {text: error, cancelled: false, failed: true})
           setMessage(error)
           setChat((previous) => {
             const next = [...previous]
@@ -1969,13 +1976,14 @@ export function App({
     if (!assistantControl) return
     return assistantControl.register({
       isBusy: () => !agentLoopRef.current || agentLoopRef.current.busy || !!runStartingRef.current,
+      cancelRun(token) { if (assistantRunTokenRef.current === token) agentLoopRef.current?.cancel() },
       requestYield(taskIds) { agentLoopRef.current?.requestYield(taskIds) },
-      continue(instruction) {
+      continue(instruction, continuationToken) {
         if (agentLoopRef.current?.busy || runStartingRef.current) {
-          pendingContinuationsRef.current.push(instruction)
+          pendingContinuationsRef.current.push({instruction, continuationToken})
           return true
         }
-        runContinuation(instruction)
+        runContinuation(instruction, continuationToken)
         return true
       },
       async execute(instruction, signal) {
@@ -2050,6 +2058,7 @@ export function App({
     instruction: string,
     sentAttachments: readonly AttachmentMeta[],
     sentSkills: readonly string[] = [],
+    continuationToken?: string,
   ): void {
     const loop = agentLoopRef.current
     if (!instruction.trim() || !loop || loop.busy || runStartingRef.current) return
@@ -2072,14 +2081,22 @@ export function App({
         const modelInstruction = await withSkillBodies(instruction, sentSkills).catch(() => instruction)
         if (runStartingRef.current !== pending) return
         runStartingRef.current = null
+        const runToken = assistantControl?.beginRun?.(instruction, continuationToken)
+        if (assistantControl?.beginRun && !runToken) {
+          setAiBusy(false)
+          setAiRunScope(undefined)
+          patchLastAssistant(entry => ({...entry, streaming: false}))
+          return
+        }
+        assistantRunTokenRef.current = runToken
         loop.run(modelInstruction, images, modelInstruction !== instruction && host?.assistant ? instruction : undefined)
       })
   }
 
-  function runContinuation(instruction: string): void {
+  function runContinuation(instruction: string, continuationToken?: string): void {
     appendChat({ role: 'user', text: instruction, tools: [] })
     persistChatMessage('user', instruction)
-    runAgent(instruction, [])
+    runAgent(instruction, [], [], continuationToken)
   }
 
   const mergeAttachments = (result: AttachmentAddResult | null): void => {
@@ -2136,6 +2153,7 @@ export function App({
 
   function handleNewChat(): void {
     assistantControl?.resetConversation?.()
+    assistantRunTokenRef.current = undefined
     pendingContinuationsRef.current = []
     runStartingRef.current = null
     agentLoopRef.current?.reset()

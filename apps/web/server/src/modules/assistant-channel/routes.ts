@@ -40,6 +40,10 @@ export function registerAssistantChannelRoutes(app:FastifyInstance,service:Retur
    const value=body(request,['connectionId','editorId','editorGeneration'])
    return service.connect({kind:'owner',token:owner(request)},uuid(request.params.id),{connectionId:uuid(value.connectionId),editorId:uuid(value.editorId),editorGeneration:value.editorGeneration as number})
   })
+  api.post<{Params:{id:string}}>(base+'/channels/:id/office-task',{bodyLimit:65536},request=>{
+   const value=body(request,['requestId','connectionId','connectionEpoch','instruction'])
+   return service.beginOfficeTask(owner(request),uuid(request.params.id),{requestId:uuid(value.requestId),connectionId:uuid(value.connectionId),connectionEpoch:value.connectionEpoch as number,instruction:value.instruction as string})
+  })
   api.post<{Params:{id:string}}>(base+'/channels/:id/claim',request=>{
    const value=body(request,['taskId','connectionId','connectionEpoch'])
    return service.claim({kind:'owner',token:owner(request)},uuid(request.params.id),{taskId:uuid(value.taskId),connectionId:uuid(value.connectionId),connectionEpoch:value.connectionEpoch as number})

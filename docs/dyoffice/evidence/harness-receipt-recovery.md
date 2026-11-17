@@ -21,4 +21,20 @@ A missing receipt is an error, not permission to change the command ID or automa
 - `npm run typecheck:web` passed for this verification snapshot (frontend and server TypeScript).
 - No external source, real model endpoint, customer data or credential transmission was used.
 
+### Historical pre-integration snapshot (superseded)
+
+The following records the earlier, unintegrated attempt, not the current branch result. These runner/fixture failures were subsequently resolved during integration; the integrated Web suite passed 553 tests with 3 runtime-dependent skips, as recorded in `harness-integration-134.md`.
+
 The working verification snapshot combines exact PR #134 data/DB files with the existing local target snapshot for unchanged test dependencies. It is not a fully reconciled PR #134 merge candidate. The attempted broad `npm run test:web:unit` run had 486 passed and 12 failed: nine authority-fixture tests, bridge schema/assembly tests and a Node native TypeScript-strip failure in source-wire-budget. These are not reported as passing or as proven unrelated. Full integrated branch typecheck, regression and editor E2E remain required after synchronization.
+
+## CLI and restarted external-process checkpoint
+
+The shared client and CLI/helper now expose `data receipt <commandId>` (the low-level `execute artifacts.get_receipt --args ...` remains the same protocol). The command uses the existing task grant; it cannot recover another task's receipt and is not a new owner-wide recovery endpoint. The coding-task instructions direct a lost commit response to receipt lookup rather than another source query or commit.
+
+A real PostgreSQL/RLS + local HTTP + independently restarted Node fixture exercises this command after the frozen input expires. It checks identical committed artifact IDs, one original source query, one delivery row, rejected cross-owner/same-owner-other-task/revoked access, and continued owner access to durable artifacts after the task directory is removed. The process is a deterministic external fixture, not a third-party agent/model compatibility claim.
+
+New command tests cover authenticated read-only dispatch, identifier validation, cancellation before transport, rejection of unrelated flags, and denied reads without retry or upstream diagnostic disclosure. Tests first failed with the previous CLI/client (four failures), then passed with the implementation.
+
+Installed Codex was not accepted in this environment: its startup encountered a sandbox helper initialization error, and the installed runtime's attempted external initialization is outside this local-fixture-only test scope. Testing stopped without changing sandbox/network settings. No locked offline Python runtime is present in this checkpoint; previous historical runtime evidence is not a current-environment pass. The full Unix-socket CLI suite remains subject to the separately recorded environment limitation.
+
+SaaS scope is unchanged: the command is a server/worker data capability. It does not add an Electron dependency or revive the removed T16 home question-answer entry.

@@ -34,7 +34,7 @@ beforeEach(async () => {
   } as unknown as HomeApi
   window.aiOffice = api
   host = document.createElement('div'); document.body.append(host); root = createRoot(host)
-  await act(async () => root.render(h(LocaleProvider, {initial: 'en', children: h(Home, {accountEntry: h('div', null, 'Account'), askEnabled: false, supportedNewFormats: []})})))
+  await act(async () => root.render(h(LocaleProvider, {initial: 'en', children: h(Home, {accountEntry: h('div', null, 'Account'), supportedNewFormats: []})})))
 })
 afterEach(async () => {await act(async () => root.unmount()); host.remove(); vi.unstubAllGlobals()})
 const button = (label: string, scope: ParentNode = host) => {
@@ -133,7 +133,7 @@ test('folder creation inside the move picker handles rejection and retains its d
 })
 
 test('a host can describe empty-only folder deletion without changing desktop defaults', async () => {
-  await act(async () => root.render(h(LocaleProvider, {initial: 'en', children: h(Home, {accountEntry: h('div', null, 'Account'), askEnabled: false, supportedNewFormats: [], folderDeleteDescription: name => `Delete the empty folder ${name}; move its contents first.`})})))
+  await act(async () => root.render(h(LocaleProvider, {initial: 'en', children: h(Home, {accountEntry: h('div', null, 'Account'), supportedNewFormats: [], folderDeleteDescription: name => `Delete the empty folder ${name}; move its contents first.`})})))
   await folderAction('Delete folder…')
   expect(host.querySelector('[role="dialog"]')?.textContent).toContain('Delete the empty folder Projects; move its contents first.')
   expect(host.querySelector('[role="dialog"]')?.textContent).not.toContain('everything inside')
@@ -307,3 +307,14 @@ test('a late move preserves a newer picker and selection, then moves the new sel
   expect(checkbox(second.name).checked).toBe(false)
 })
 
+
+test('SaaS home removes the standalone Ask entry without removing workspace navigation', async () => {
+  const labels = [...host.querySelectorAll('.sidebar-nav .nav-label')].map(node => node.textContent)
+  expect(labels).not.toContain('Ask AI')
+  expect(host.querySelector('.kb-ask')).toBeNull()
+  expect(labels).toContain('Recent')
+  await click([...host.querySelectorAll<HTMLButtonElement>('.sidebar-nav button')].find(node => node.querySelector('.nav-label')?.textContent === 'Starred')!)
+  expect(host.querySelector('[aria-current="page"]')?.textContent).toContain('Starred')
+  await click([...host.querySelectorAll<HTMLButtonElement>('.sidebar-nav button')].find(node => node.querySelector('.nav-label')?.textContent === 'Recent')!)
+  expect(host.querySelector('[aria-current="page"]')?.textContent).toContain('Recent')
+})

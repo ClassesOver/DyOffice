@@ -146,6 +146,7 @@ export function createHarnessDataClient(options:HarnessDataClientOptions) {
   }
   return {
     execute,
+    async receipt<T=unknown>(commandId:string,signal?:AbortSignal){return execute<T>('artifacts.get_receipt',{commandId:identifier(commandId)},signal)},
     async manifest<T=unknown>(resultId:string,signal?:AbortSignal){return execute<T>('results.get_manifest',{resultId:identifier(resultId)},signal)},
     async download(resultId:string,destination:string,signal?:AbortSignal):Promise<HarnessDataDownload> {
       checkAbort(signal);identifier(resultId)

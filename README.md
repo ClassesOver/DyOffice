@@ -1,3 +1,17 @@
+# DyOffice SaaS
+
+This fork targets SaaS only. The default `npm run dev`, `npm start`, and
+`npm run build` use the Web application, not Electron. See
+[Web setup](apps/web/README.md) and the
+[SaaS decoupling status](docs/dyoffice/saas-only-decoupling.md) for the explicit
+installation limitations and remaining shared-source extraction.
+
+The upstream README below is retained for project attribution and historical
+reference; its desktop downloads, installers and product launch instructions
+are **not supported DyOffice product entrypoints**.
+
+---
+
 <p align="center">
   <a href="https://genoffice.ai/">
     <picture>

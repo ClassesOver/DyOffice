@@ -384,17 +384,19 @@ export function AiPanel({
   const isRtl = lang === 'ar' || lang === 'he'
   const [input, setInput] = useState('')
   const [busy, setBusy] = useState(false)
+  const assistantRunTokenRef = useRef<string | undefined>(undefined)
   /** messages queued while a reply runs; the pump re-runs them through runWith on settle */
   const msgQueue = useChatRunQueue<{
     attachments: AttachmentMeta[]
     scope: AiScopeQuoteData | null
     preserveComposer?: boolean
+    continuationToken?: string | undefined
   }>({
     busy,
     submit: (text, meta) => {
       const loop = loopRef.current
       if (!loop || loop.busy || pendingSendRef.current) return false
-      runWith(text, text, meta.attachments, meta.scope, false, meta.preserveComposer)
+      runWith(text, text, meta.attachments, meta.scope, false, meta.preserveComposer, meta.continuationToken)
       return true
     },
   })
@@ -928,7 +930,10 @@ export function AiPanel({
           patchLastAssistant({ usage: runUsageRef.current })
         },
         onDone: ({ text, cancelled, turnLimit, truncated, yielded }) => {
-          if (yielded) assistantControl?.reportYield(yielded.taskIds)
+          const runToken = assistantRunTokenRef.current
+          assistantRunTokenRef.current = undefined
+          if (runToken) assistantControl?.endRun?.(runToken, {text, cancelled, failed: turnLimit || !!truncated, ...(yielded ? {yielded} : {})})
+          else if (yielded) assistantControl?.reportYield(yielded.taskIds)
           // module-level t: the loop instance is created only once; the component's t goes stale with the first-render closure
           const baseText = turnLimit
             ? [text, tModule('aiTurnLimit')].filter(Boolean).join('\n\n')
@@ -955,6 +960,9 @@ export function AiPanel({
           }
         },
         onError: (error) => {
+          const runToken = assistantRunTokenRef.current
+          assistantRunTokenRef.current = undefined
+          if (runToken) assistantControl?.endRun?.(runToken, {text: error, cancelled: false, failed: true})
           setChat((prev) => {
             const next = [...prev]
             const last = next.at(-1)
@@ -1119,9 +1127,10 @@ export function AiPanel({
     if (!assistantControl) return
     return assistantControl.register({
       isBusy: () => !loopRef.current || loopRef.current.busy || !!pendingSendRef.current,
+      cancelRun(token) { if (assistantRunTokenRef.current === token) loopRef.current?.cancel() },
       requestYield(taskIds) { loopRef.current?.requestYield(taskIds) },
-      continue(instruction) {
-        msgQueue.enqueue(instruction, { attachments: [], scope: null, preserveComposer: true })
+      continue(instruction, continuationToken) {
+        msgQueue.enqueue(instruction, { attachments: [], scope: null, preserveComposer: true, continuationToken })
         return true
       },
       async execute(instruction, signal) {
@@ -1146,6 +1155,7 @@ export function AiPanel({
     /** only the composer's own send takes the attached skills along */
     attachSkills = false,
     preserveComposer = false,
+    continuationToken?: string,
   ) => {
     const loop = loopRef.current
     if (!instruction || !loop || loop.busy || pendingSendRef.current) return
@@ -1228,6 +1238,13 @@ export function AiPanel({
           setBusy(false)
           return
         }
+        const runToken = assistantControl?.beginRun?.(instruction, continuationToken)
+        if (assistantControl?.beginRun && !runToken) {
+          patchLastAssistant({streaming: false})
+          setBusy(false)
+          return
+        }
+        assistantRunTokenRef.current = runToken
         return loop.run(modelInstruction, images, modelInstruction !== instruction && transport ? instruction : undefined)
       })
   }
@@ -1311,6 +1328,7 @@ export function AiPanel({
 
   const newChat = () => {
     assistantControl?.resetConversation?.()
+    assistantRunTokenRef.current = undefined
     msgQueue.clear()
     if (pendingSendRef.current) {
       pendingSendRef.current.aborted = true

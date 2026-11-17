@@ -71,7 +71,7 @@ test('data tasks expose only their grant and runtime hash, never collect raw sna
  const settings=args.find(x=>x.startsWith('shell_environment_policy.set='));
  if(args.some(x=>x.includes('secret-in-env'))||!settings.includes('OFFICE_HARNESS_DATA_CREDENTIAL_FILE')||fs.readFileSync('.office-data-credential','utf8')!=='secret-in-env')process.exit(4);
  let prompt='';process.stdin.on('data',x=>prompt+=x);process.stdin.on('end',()=>{
- if(!prompt.includes('Allowed inputs:')||prompt.includes('secret-in-env'))process.exit(5);
+ if(!prompt.includes('Allowed inputs:')||!prompt.includes('receipt <commandId>')||!prompt.includes('do not requery or repeat artifacts.commit')||prompt.includes('secret-in-env'))process.exit(5);
  fs.writeFileSync('snapshot.json','{"rows":[{"secret":"raw-data-must-stay-local"}]}');
  fs.writeFileSync('stage.json','{"bytesBase64":"private-upload-payload"}');
  console.log(JSON.stringify({type:'item.completed',item:{type:'agent_message',text:'Analysis completed with committed artifacts.'}}));console.log(JSON.stringify({type:'turn.completed'}));});`)
