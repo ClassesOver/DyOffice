@@ -11,3 +11,12 @@ test('session recovery hides and disables custom Home and AntD portals without r
  for(const portal of portals){expect(portal.style.visibility).toBe('');expect(portal.inert).not.toBe(true)}
  expect(portals[0].style.display).toBe('block');expect(portals[1].style.display).toBe('')
 })
+test('hiding an active account modal transfers keyboard focus to the recovery action after portals are disabled',()=>{
+ document.body.innerHTML='<div class="ant-modal-root"><input aria-label="旧密码表单" /></div><main class="account-session-recovery" role="alertdialog"><button>重新加载并核对登录状态</button></main>'
+ const password=document.querySelector<HTMLInputElement>('input')!,recovery=document.querySelector<HTMLButtonElement>('.account-session-recovery button')!,portal=document.querySelector<HTMLElement>('.ant-modal-root')!
+ password.focus();expect(document.activeElement).toBe(password)
+ let hiddenAtFocus=false
+ recovery.addEventListener('focus',()=>{hiddenAtFocus=portal.inert&&portal.style.display==='none'})
+ const cleanup=hideAccountRecoveryPortals()
+ try{expect(document.activeElement).toBe(recovery);expect(hiddenAtFocus).toBe(true)}finally{cleanup()}
+})

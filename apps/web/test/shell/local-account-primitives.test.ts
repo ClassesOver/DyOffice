@@ -49,7 +49,7 @@ test('sessions label the actual current session and require confirmation before 
  expect(document.body.textContent).toContain('当前浏览器会话')
  const revoke=[...document.querySelectorAll('button')].find(button=>button.textContent==='撤销当前会话')!
  revoke.click()
- await vi.waitFor(()=>expect(document.querySelector('[aria-label="确认撤销会话"]')?.textContent).toContain('退出登录'))
+ await vi.waitFor(()=>expect(document.querySelector('[aria-label="确认撤销会话"]')?.textContent).toContain('重新加载并核对登录状态'))
  expect(document.querySelector('[data-session-id="self"]')).not.toBeNull()
  }finally{root.unmount()}
 })

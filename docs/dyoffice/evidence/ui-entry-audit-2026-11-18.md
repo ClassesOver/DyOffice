@@ -177,3 +177,16 @@
 - 最终技能模拟浏览器10项通过：预检空后另一写者创建同名，条件PUT返回409，原说明/正文保留且显示替换确认；取消零覆盖，明确确认后才一次成功更新。证据/tmp/dyoffice-ui-audit/skills-atomic-browser-audit/report.json及race-conflict-confirmation.png。
 - 上传只读补查通过：24个文件含256字长名在390×844与320×568下无横溢，名称省略/title保全名、列表独立滚动；处理中Escape/关闭/取消/重复开始/选择器均有保护，beforeunload阻止。释放后每文件一次mock stage/content400，无finish或真实文件，最终错误与提示可滚动访问、键盘可完成关闭。证据/tmp/dyoffice-ui-audit/upload-long-list-audit/report.json及四张截图。未发现新的确定性上传问题。
 - 搜索结果键盘最终浏览器通过（390×640）：Space与Enter各精确1次mock metadata GET及open POST；按住重复不额外打开，window.scrollY与内容滚动位置不变。PDF预览准备阶段的额外读取单列，未混入按键计数。证据/tmp/dyoffice-ui-audit/home-search-keyboard-postfix/report.json及search-focused.png。
+
+## 页签关闭竞态与账号操作恢复补查
+
+- 真实浏览器复现：已打开A→再次打开A请求暂停→关闭A→释放旧响应，A会复活且新建编辑器iframe。另慢A/快B依次打开时，A迟到会抢走B焦点；用户已切回Home也会被旧响应抢回。成功关闭现在记录该文件已有打开请求的序号界限，仅作废关闭前/关闭确认中的旧请求；取消或拒绝关闭不作废。打开请求和显式导航共用顺序，旧请求仍可后台挂载但不抢后来的选择；关闭活动页签的邻居选择也保留。21项页签测试通过，新增竞态先红后绿，含后台关闭不阻其他文件、确认中请求与确认后新打开。
+- 用户管理reauth或创建确定拒绝时原先丢失非敏感的新建字段；现在回填username/displayName供修正重试，密码始终清空。create500未知后确认关闭、重开首读500原先丢失保护并可再次POST；稳定管理员client现保留unknown/pending，写端同步拒绝重复，只有明确有效读取核对后释放。读取开始的未知快照与写版本阻止旧GET清除新的未知写。CSRF预读取失败与reauth失败尚未提交业务写，不误锁为unknown。14项新回归先红后绿，Admin新旧共32项通过。保护限当前client实例，不声称跨浏览器刷新持久化。
+- 撤销当前会话成功原先立即location.replace，却被自身busy beforeunload拦截，取消离站后仍保留旧撤销按钮。成功后现先释放自身处理锁、清行并显示已撤销终态/禁重复；current revoke与修改自身角色的入口回调统一进入Root登录失效恢复层，保留Shell/编辑器直到用户显式reload，不自动导航，也不解除编辑器未存内容的beforeunload。19项账号组件与2项执行真实入口绑定回归通过；后者最初ownAuthority确实触发旧自动导航，修复后通过。
+- 最终Shell41文件394项通过、Web API382项中381通过/1跳过；shell与前后端类型、构建、边界/兼容清单通过。首轮全suite有一处旧文案断言仍期待自动退出，已改为新的重新加载核对语义后全suite通过；不削弱会话确认与当前会话行保留断言。构建chunk提示及DOM CSS解析日志仍存在。
+- 最终构建管理员mock浏览器3场景通过（reauth400保草稿/0业务POST，create400保草稿，create500重挂读500仍锁且成功refresh不重发）；页签三竞态修复通过，重复关闭只调用一次guard、切换不关错页、guard拒绝有可见提示也通过。所有业务请求mock，编辑器iframe为stub，不冒充真实正文保存/租约验证。独立只读复查未见本批明确遗漏。
+- 新确认尚未修复：native编辑器入口直接返回错误JSON时，无生命周期API，关闭一直被当作加载中，同ID重开也不重新请求iframe，缺恢复入口。实际服务application/json Problem envelope与兼容application/problem+json两种MIME均浏览器采证：同源native URL、scripts0、无脚本/租约请求、pre可解析type/title/status503/detail/requestId；仅证明首次入口未启动场景，不推广到已有编辑器/租约的runtime失败。另密码修改同时撤销其他会话期间，旧会话面板重挂会清局部pending保护，已记录，真实密码轮换本身已撤销旧会话，尚未声称完整解决。完整UI目标仍进行中。
+- 证据：/tmp/dyoffice-tab-close-red.log、/tmp/dyoffice-tab-focus-red.log、/tmp/dyoffice-tab-final.log、/tmp/dyoffice-round7-final-shell.log、/tmp/dyoffice-round7-web.log、/tmp/dyoffice-round7-build.log，以及/tmp/dyoffice-ui-audit/下document-close-race、document-close-race-postfix、native-entry-problem、admin-deep、admin-recovery-postfix报告与截图。
+- 最终账号恢复浏览器先确认两处附带遗漏并追加修复：隐藏旧AntD Modal后恢复按钮autoFocus被失焦，helper现在先禁用/隐藏旧portal再显式聚焦恢复按钮；管理员自身角色修改成功时旧operation未清，导致保留的隐藏面板仍拦显式reload，现在成功分支先清operation。相应DOM回归均先红后绿，继续保留独立编辑器beforeunload，不将“释放自身锁”当成绕过未保存内容。
+- 补修后重新构建/重启、全Shell重跑41文件396项通过，类型通过；最终current revoke/ownAuthority模拟浏览器两完整路径通过：无自动导航、旧portal hidden/inert、stub编辑器实例/正文保留且dispose0、恢复按钮初始焦点/Tab/Escape正常；显式reload触发编辑器beforeunload并可取消，移除编辑器stub guard后无账号/admin自身拦截。current精确1条mock DELETE，ownRoles精确1次reauth/1条mock PATCH，无真实账号变更。证据/tmp/dyoffice-ui-audit/account-security-recovery-final/report.json、report.md与截图，/tmp/dyoffice-account-recovery-final.log；最终构建与全suite日志/tmp/dyoffice-round7-verified-build.log、/tmp/dyoffice-round7-verified-shell.log。
+- 发布前核对上一提交0667efa1的GitHub CI：10项工作流检查全部pass，CodeRabbit skipping；此结果不代表本批待提交代码的新CI已通过。

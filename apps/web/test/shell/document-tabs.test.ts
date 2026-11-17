@@ -99,7 +99,7 @@ test('a late open cannot roll back a newer confirmed rename',()=>{
  tabs.rename(a.id,'confirmed.docx');tabs.activate('home')
  tabs.open(a,token)
  expect(tabs.documents()[0].name).toBe('confirmed.docx')
- expect(tabs.list()[1].active).toBe(true)
+ expect(tabs.list()[0].active).toBe(true)
 })
 
 for(const order of ['old-first','new-first'])test(`concurrent opens retain the later request metadata when responses arrive ${order}`,()=>{
@@ -119,4 +119,63 @@ test('rename while the first open is pending supplies the confirmed name without
  tabs.open(a,token)
  expect(tabs.documents()).toEqual([{...a,name:'confirmed before open.docx'}])
  expect(changed).toHaveBeenCalledOnce()
+})
+
+test.each(['docx','pdf'] as const)('a delayed %s open cannot resurrect a successfully closed tab',async format=>{
+ const tabs=createDocumentTabs(),document={...a,format,src:format==='docx'?a.src:'/api/v1/files/file-a/content?revision=r1'}
+ tabs.open(document);tabs.setGuard(a.id,()=>true)
+ const delayed=tabs.reserveOpen(a.id)
+ expect(await tabs.close(a.id)).toBe(true)
+ tabs.open(document,delayed)
+ expect(tabs.documents()).toEqual([])
+ expect(tabs.list().find(tab=>tab.active)?.id).toBe('home')
+ const fresh=tabs.reserveOpen(a.id);tabs.open({...document,name:'Fresh open'},fresh)
+ tabs.open({...document,name:'Old response'},delayed)
+ expect(tabs.documents()).toEqual([{...document,name:'Fresh open'}])
+})
+
+test('a cancelled close keeps pending opens valid',async()=>{
+ const tabs=createDocumentTabs();tabs.open(a);tabs.setGuard(a.id,()=>false)
+ const pending=tabs.reserveOpen(a.id)
+ expect(await tabs.close(a.id)).toBe(false)
+ tabs.open({...a,name:'Updated name'},pending)
+ expect(tabs.documents()[0].name).toBe('Updated name')
+})
+
+test('a slower open creates a background tab without overriding the later selected document',()=>{
+ const tabs=createDocumentTabs(),old=tabs.reserveOpen(a.id),latest=tabs.reserveOpen(b.id)
+ tabs.open(b,latest);tabs.open(a,old)
+ expect(tabs.list().find(tab=>tab.active)?.id).toBe(b.id)
+ expect(tabs.documents()).toHaveLength(2)
+})
+test('explicitly selecting Home while an open is pending keeps Home selected',()=>{
+ const tabs=createDocumentTabs(),pending=tabs.reserveOpen(a.id)
+ tabs.activate('home');tabs.open(a,pending)
+ expect(tabs.list().find(tab=>tab.active)?.id).toBe('home')
+ expect(tabs.documents()).toEqual([a])
+})
+test('closing the selected tab keeps its neighbor selected when another pending open finishes',async()=>{
+ const tabs=createDocumentTabs();tabs.open(a);tabs.open(b);tabs.setGuard(b.id,()=>true)
+ const pending=tabs.reserveOpen('c')
+ expect(await tabs.close(b.id)).toBe(true)
+ tabs.open({id:'c',format:'pdf',name:'c.pdf',src:'/pdf/c'},pending)
+ expect(tabs.list().find(tab=>tab.active)?.id).toBe(a.id)
+})
+
+test('closing a background tab preserves the latest pending open selection',async()=>{
+ const tabs=createDocumentTabs();tabs.open(a);tabs.open(b);tabs.setGuard(a.id,()=>true)
+ const pending=tabs.reserveOpen('c')
+ expect(await tabs.close(a.id)).toBe(true)
+ tabs.open({id:'c',format:'pdf',name:'c.pdf',src:'/pdf/c'},pending)
+ expect(tabs.list().find(tab=>tab.active)?.id).toBe('c')
+})
+test('requests reserved during a confirmed close stay cancelled but a later explicit open works',async()=>{
+ const tabs=createDocumentTabs();tabs.open(a)
+ let allow!:(value:boolean)=>void
+ tabs.setGuard(a.id,()=>new Promise<boolean>(resolve=>{allow=resolve}))
+ const closing=tabs.close(a.id);await Promise.resolve()
+ const pending=tabs.reserveOpen(a.id)
+ allow(true);expect(await closing).toBe(true)
+ tabs.open(a,pending);expect(tabs.documents()).toHaveLength(0)
+ tabs.open(a,tabs.reserveOpen(a.id));expect(tabs.documents()).toEqual([a])
 })
