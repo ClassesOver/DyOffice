@@ -867,3 +867,62 @@ test('search result buttons support Space and Enter without page scrolling or ke
   expect(api.openPath).toHaveBeenLastCalledWith(file.path)
  }finally{vi.useRealTimers()}
 })
+
+for (const kind of ['file', 'folder', 'missing'] as const) test(`${kind} confirmation keeps Tab inside and Escape restores its opener`, async () => {
+  let opener: HTMLElement
+  if (kind === 'folder') {
+    opener = tree('Projects').querySelector<HTMLButtonElement>('.folder-more-btn')!
+    await folderAction('Delete folder…')
+  } else if (kind === 'missing') {
+    api.recents = async () => ({entries: [{...file, missing: true}], total: 1, totalAll: 1})
+    await act(async () => window.dispatchEvent(new Event('focus')))
+    opener = host.querySelector<HTMLElement>('.recent-item')!
+    opener.focus(); await click(opener)
+  } else {
+    opener = host.querySelector<HTMLButtonElement>('.recent-actions .more-btn')!
+    await chooseFileAction('Delete files')
+  }
+  const dialog = host.querySelector<HTMLElement>('[role="dialog"]')!
+  const controls = [...dialog.querySelectorAll<HTMLButtonElement>('button')]
+  const key = async (node: HTMLElement, value: string, shiftKey = false) => {
+    const event = new KeyboardEvent('keydown', {key: value, shiftKey, bubbles: true, cancelable: true})
+    await act(async () => node.dispatchEvent(event)); return event
+  }
+  controls.at(-1)!.focus()
+  expect((await key(controls.at(-1)!, 'Tab')).defaultPrevented).toBe(true)
+  expect(document.activeElement).toBe(controls[0])
+  expect((await key(controls[0], 'Tab', true)).defaultPrevented).toBe(true)
+  expect(document.activeElement).toBe(controls.at(-1))
+  await key(controls.at(-1)!, 'Escape')
+  expect(host.querySelector('[role="dialog"]')).toBeNull()
+  expect(document.activeElement).toBe(opener)
+})
+
+test('canceling the move picker restores the persistent file menu trigger', async () => {
+  const opener = host.querySelector<HTMLButtonElement>('.recent-actions .more-btn')!
+  await chooseFileAction('Move to folder…')
+  const search = host.querySelector<HTMLInputElement>('.picker-search')!
+  await act(async () => search.dispatchEvent(new KeyboardEvent('keydown', {key: 'Escape', bubbles: true, cancelable: true})))
+  expect(host.querySelector('[role="dialog"]')).toBeNull()
+  expect(document.activeElement).toBe(opener)
+})
+
+test('pending deletion keeps keyboard traversal inside after the disabled submit loses focus', async () => {
+  const pending = deferred<void>()
+  api.deleteFiles = () => pending.promise
+  await chooseFileAction('Delete files')
+  const dialog = host.querySelector<HTMLElement>('[role="dialog"]')!
+  const confirm = button('Delete', dialog), cancel = button('Cancel', dialog)
+  confirm.focus(); await click(confirm)
+  expect(confirm.disabled).toBe(true)
+  // Chromium 会将新禁用的提交按钮焦点移到 body。
+  document.body.setAttribute('tabindex', '-1')
+  document.body.focus()
+  document.body.removeAttribute('tabindex')
+  expect(document.activeElement).toBe(document.body)
+  const event = new KeyboardEvent('keydown', {key: 'Tab', bubbles: true, cancelable: true})
+  await act(async () => document.body.dispatchEvent(event))
+  expect(event.defaultPrevented).toBe(true)
+  expect(document.activeElement).toBe(cancel)
+  await act(async () => pending.resolve())
+})

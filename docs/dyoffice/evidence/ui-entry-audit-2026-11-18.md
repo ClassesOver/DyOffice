@@ -252,3 +252,11 @@
 - HTTP 408 原先被当作确定拒绝，允许立即重提；保存前发起的旧读取迟到返回，也会解除后续保存结果未知的保护。客户端现在将 408 保持为结果未知，并以写入代次限制读取解锁；失败或畸形读取仍不能解锁。未修改主页或真实用户配置。
 - 新增回归最初 7 项中 2 项失败，修复后本轮重跑 7/7 通过；覆盖 408/503、失败及畸形读取、有效读取恢复和旧读取竞态。Web 测试 388 项中 387 通过、1 项既有条件跳过，工作区类型检查通过，边界扫描 1335 文件 0 违规，git diff --check 通过。证据：/tmp/dyoffice-preferences-fence-red.log、/tmp/dyoffice-preferences-fence-green.log、/tmp/dyoffice-commit-preferences-web.log、/tmp/dyoffice-commit-preferences-type.log。本批未补做浏览器端到端验收。
 - 并行只读审计仍有待处理问题：小屏排序入口被隐藏；文件/文件夹删除确认可 Tab 到背景，关闭后焦点未恢复；移动选择器焦点循环正常但关闭后焦点未恢复。缺失文件确认存在同类问题，但该入口仅由模拟标志覆盖。证据：/tmp/dyoffice-ui-audit/home-toolbar/coverage.md、/tmp/dyoffice-ui-audit/home-dialog-focus/report.json。搜索、清除、五种格式筛选和批量按钮三尺寸可操作，0 真实业务写入。以上未修复项不计入本次修复范围，完整 UI 穷举未完成。
+
+## 首页文件弹窗键盘焦点保护
+
+- 文件/文件夹删除确认和缺失文件确认原先没有 Tab 循环，真实浏览器可进入背景控件；这三种确认与移动选择器关闭后均未恢复入口焦点。现复用共享 trapTab，确认弹窗激活期间在 window capture 接收 Tab；打开前记录持久的行/文件夹菜单按钮、批量按钮或缺失文件行，关闭后恢复焦点，主页布局不变。
+- 初版仅在弹窗节点处理 Tab，静态四场景已通过，但补充 pending 浏览器发现确认按钮禁用后焦点落到 body，事件不再经过弹窗；320/1440 两组均可进入背景。最终改为仅在确认激活期间监听并在关闭/卸载清理，焦点在外时返回首/尾可用按钮。DOM 显式模拟 Chromium 的 body 焦点；jsdom 对已禁用按钮 blur 不模拟此行为，曾据诊断修正测试模拟，未把该 harness 差异当作另一个产品问题。
+- 新增最初四条回归全部先失败后通过，补充 pending 回归也先红后绿。最终 Shell 46 文件 436 项、工作区类型、构建、边界检查通过；独立只读复核无阻塞。构建仍有既有 chunk 提示，DOM 仍有既有 CSS 解析日志。证据：/tmp/dyoffice-home-dialog-red.log、/tmp/dyoffice-home-dialog-pending-body-red.log、/tmp/dyoffice-home-dialog-pending-body-green.log、/tmp/dyoffice-dialog-final-shell.log、/tmp/dyoffice-dialog-final-type.log、/tmp/dyoffice-dialog-final-build.log、/tmp/dyoffice-dialog-final-boundary.log。
+- 最终构建重启 HTTP200 后真实 Chromium 4+2 组通过：文件/文件夹删除、移动、模拟缺失文件确认的双向 Tab 与立即/循环后 Escape 均保持或恢复焦点；320/1440 批量删除取消和遮罩关闭恢复原按钮，pending Tab 保持弹窗内。四普通场景 0 业务写，pending 两组各 1 条 held mock DELETE 后返回 409，无真实删除、无页面异常。缺失文件标志仅由 mock 投影，不声称真实 API 当前产生此入口。证据：/tmp/dyoffice-ui-audit/home-dialog-focus-postfix/report.json、home-dialog-focus-pending/report.json；最终日志 /tmp/dyoffice-dialog-final-browser.log、/tmp/dyoffice-dialog-final-pending.log。
+- 并行更多菜单审计三尺寸通过：重复开关、方向键循环、Escape 焦点恢复及五入口键盘激活；重命名 Escape 后虽然 activeElement 为 body，下一 Tab/Shift+Tab 仍在同一文件行，未据此扩大修复。0 真实业务写、0 页面异常。证据：/tmp/dyoffice-ui-audit/home-more-menu/coverage.md、home-more-menu-rename-focus/report.json。小屏排序入口仍待修复，完整 UI 穷举目标保持进行中。

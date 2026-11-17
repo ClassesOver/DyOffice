@@ -27,7 +27,7 @@ import type {
 } from '../../shared/home-api'
 import type { IntegrationsApi } from '../../shared/integrations-api'
 import { markText } from '../../shared/text-marks'
-import { useDismissablePopover, useEscapeToClose } from '@genoffice/ui'
+import { trapTab, useDismissablePopover, useEscapeToClose } from '@genoffice/ui'
 import { fileCountLabel, visiblePageCount } from './counts'
 import { useI18n } from './locale'
 import type { I18n, StringKey } from './locale'
@@ -1740,6 +1740,35 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
   const movePickerRef = useRef(movePicker)
   movePickerRef.current = movePicker
   const [conflict, setConflict] = useState<{ paths: string[]; targetDir: string } | null>(null)
+  const confirmationRef = useRef<HTMLDivElement>(null)
+  const dialogOpener = useRef<HTMLElement | null>(null)
+  const rememberDialogOpener = (element?: HTMLElement) => {
+    if (element) dialogOpener.current = element
+    else if (rowMenu) dialogOpener.current = rowMenuTrigger.current
+    else if (folderMenu) dialogOpener.current = folderMenuTrigger.current
+    else dialogOpener.current = document.activeElement instanceof HTMLElement ? document.activeElement : null
+  }
+  const fileDialogOpen = !!(confirmDelete || confirmMissing || confirmDeleteFolder || movePicker || conflict)
+  useLayoutEffect(() => {
+    if (!fileDialogOpen) return
+    const opener = dialogOpener.current
+    return () => {if (opener?.isConnected) opener.focus({preventScroll: true})}
+  }, [fileDialogOpen])
+  const confirmationOpen = !!(confirmDelete || confirmMissing || confirmDeleteFolder)
+  useEffect(() => {
+    if (!confirmationOpen) return
+    const onKey = (event: KeyboardEvent) => {
+      const dialog = confirmationRef.current
+      if (event.key !== 'Tab' || !dialog) return
+      if (!dialog.contains(document.activeElement)) {
+        const controls = [...dialog.querySelectorAll<HTMLButtonElement>('button:not(:disabled)')]
+        event.preventDefault()
+        ;(event.shiftKey ? controls.at(-1) : controls[0])?.focus()
+      } else trapTab(dialog, event)
+    }
+    window.addEventListener('keydown', onKey, true)
+    return () => window.removeEventListener('keydown', onKey, true)
+  }, [confirmationOpen])
   // folder row currently hovered by a drag (sidebar or table)
   const [dropTarget, setDropTarget] = useState<string | null>(null)
   const dragExpandTimer = useRef<number | null>(null)
@@ -2270,6 +2299,7 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
   }
 
   const deleteFiles = (paths: string[]) => {
+    rememberDialogOpener()
     setActionError('')
     setRowMenu(null)
     setConfirmDelete(paths)
@@ -2401,6 +2431,7 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
   }
 
   const startMove = (paths: string[]) => {
+    rememberDialogOpener()
     setActionError('')
     setRowMenu(null)
     setFolderMenu(null)
@@ -2677,6 +2708,7 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
                 className="danger"
                 onClick={() => {
                   setFolderMenu(null)
+                  rememberDialogOpener()
                   setConfirmDeleteFolder({path: entry.path})
                 }}
               >
@@ -2916,14 +2948,14 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
           tabIndex={0}
           draggable={!isRenaming && !entry.missing}
           onDragStart={(e) => onRowDragStart(e, dragPathsFor(entry.path, context))}
-          onClick={() => {
+          onClick={(event) => {
             if (isRenaming) return
-            if (entry.missing) setConfirmMissing(entry)
+            if (entry.missing) {rememberDialogOpener(event.currentTarget); setConfirmMissing(entry)}
             else void window.aiOffice.openPath(entry.path).catch(reportError)
           }}
           onKeyDown={(event) => {
             if (event.key === 'Enter' && event.target === event.currentTarget) {
-              if (entry.missing) setConfirmMissing(entry)
+              if (entry.missing) {rememberDialogOpener(event.currentTarget); setConfirmMissing(entry)}
               else void window.aiOffice.openPath(entry.path).catch(reportError)
             }
           }}
@@ -3256,6 +3288,7 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
                       className="danger"
                       onClick={() => {
                         setFolderMenu(null)
+                        rememberDialogOpener()
                         setConfirmDeleteFolder({path: entry.path})
                       }}
                     >
@@ -3885,6 +3918,7 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
             role="dialog"
             aria-modal="true"
             aria-label={t('deleteModalTitle')}
+            ref={confirmationRef}
             onClick={(event) => event.stopPropagation()}
           >
             <h3>{t('deleteModalTitle')}</h3>
@@ -3927,6 +3961,7 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
             role="dialog"
             aria-modal="true"
             aria-label={t('deleteFolderTitle')}
+            ref={confirmationRef}
             onClick={(event) => event.stopPropagation()}
           >
             <h3>{t('deleteFolderTitle')}</h3>
@@ -3955,6 +3990,7 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
             role="dialog"
             aria-modal="true"
             aria-label={t('missingFileTitle')}
+            ref={confirmationRef}
             onClick={(event) => event.stopPropagation()}
           >
             <h3>{t('missingFileTitle')}</h3>
