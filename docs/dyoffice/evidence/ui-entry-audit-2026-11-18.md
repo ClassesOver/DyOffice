@@ -375,3 +375,11 @@
 - 两处接入既有useModalKeys；页码仅将原内联UI提取为受控组件，保留原状态和应用逻辑。初始焦点跳过禁用控件，使密码忙碌状态仍可聚焦取消按钮。新增4项组件回归先红后绿，Escape沿既有取消动作，不提交密码或页码。保留远端9ebbdaaa图片粘贴/只读异步保护后，相关6文件41项通过；Web docs类型、生产构建、边界1338文件0违规及git diff --check通过。构建保留既有chunk大小提示。
 - 最终合并构建Chromium：密码1440/390两流程通过，Escape后按既有逻辑只读打开；页码1440/320两流程通过，内部下拉第一次Escape仅关下拉、第二次关父，展开下拉正反Tab留在弹窗，取消后正文未变。四流程均0页面异常；文档/lease均mock，其余业务写阻止，无真实密码或配置变更。证据：`/tmp/dyoffice-ui-audit/word-password-keyboard-green-{1440,390}/report.json`、`/tmp/dyoffice-ui-audit/word-page-number-modal-postfix-{1440,320}/report.json`、`/tmp/dyoffice-password-page-final-{tests,type,build}.log`。
 - 此次仅上述弹窗专项，不代表全量UI、复杂文档或多端/读屏验收完成。
+
+## 图片裁剪取消键盘与选择性粘贴补查
+
+- 正式Word入口“插入→图片→图片格式→裁剪”复现：调整裁剪框后聚焦取消并按Enter，仍提交裁剪并改变图片src。原因是CropDialog的window级Enter监听抢占按钮默认动作；移除该监听，保留按钮原生Enter/Space及既有Escape/Tab处理。22种语言的裁剪提示和工具提示同步去除无条件Enter应用说明。没有调整裁剪算法或图片写入逻辑。
+- 新增3项组件回归全部先红，修后与预览尺寸/trap/密码/页码共5文件19项通过。独立只读复核无阻塞，Web docs类型、最终生产构建、边界1338文件0违规及git diff --check通过；保留既有chunk大小提示。证据：`/tmp/dyoffice-crop-keys-red.log`、`/tmp/dyoffice-crop-{keys-green,final-tests,type,build}.log`。
+- 最终构建Chromium1440/390各4场景通过：调整裁剪框到约66.7%宽度后Enter取消、Space取消、Escape取消均保持原图片src；Enter应用确实改变图片src。8场景0页面异常，文件/lease均mock，业务写阻止。红证据：`/tmp/dyoffice-ui-audit/word-crop-cancel-red-1440/report.json`；绿证据：`/tmp/dyoffice-ui-audit/word-crop-keyboard-green-{1440,390}/report.json`。首次未调整裁剪框时重编码结果相同，不能用作取消正确的证据；最终硬断言均先实际修改裁剪范围。
+- 选择性粘贴只读审计无新bug：实际入口异步clipboard.read暂挂时仅取消可用、双向Tab在内；Escape关闭重开后旧读取不污染新弹窗，释放新读取后正常显示格式；取消正文未变，显式确定粘贴marker后可撤销。Web邮件入口disabled并提供桌面版说明，未绕过。证据：`/tmp/dyoffice-ui-audit/word-paste-mail-audit/{coverage.md,report.json}`。此次只覆盖该异步读取及粘贴取消流程，不替代全部剪贴板格式组合。
+- 全量UI穷举仍在进行，本专项不视为全部Ribbon、复杂文档、实体移动端或读屏器验收完成。

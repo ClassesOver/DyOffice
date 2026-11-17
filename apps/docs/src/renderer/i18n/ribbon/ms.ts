@@ -53,9 +53,9 @@ export const ms = {
   ribbonRotateLeft: 'Putar Kiri 90°',
   ribbonFlipH: 'Balikkan Melintang',
   ribbonFlipV: 'Balikkan Menegak',
-  ribbonCropTip: 'Pangkas gambar (seret pemegang, Enter untuk mengesahkan)',
+  ribbonCropTip: 'Pangkas gambar (seret pemegang)',
   ribbonCropHint:
-    'Seret pemegang atau alihkan kotak untuk memilih kawasan yang hendak dikekalkan; Enter untuk menggunakan, Esc untuk membatalkan',
+    'Seret pemegang atau alihkan kotak untuk memilih kawasan yang hendak dikekalkan; Esc untuk membatalkan',
   ribbonReplacePicture: 'Ganti Gambar',
   ribbonReplacePictureTip: 'Ganti gambar sambil mengekalkan saiz dan lilitan semasa',
   ribbonResetSize: 'Set Semula Saiz',

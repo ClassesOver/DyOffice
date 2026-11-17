@@ -52,9 +52,9 @@ export const ar = {
   ribbonRotateLeft: 'تدوير لليسار 90 درجة',
   ribbonFlipH: 'انعكاس أفقي',
   ribbonFlipV: 'انعكاس رأسي',
-  ribbonCropTip: 'اقتصاص الصورة (اسحب المقابض، Enter للتأكيد)',
+  ribbonCropTip: 'اقتصاص الصورة (اسحب المقابض)',
   ribbonCropHint:
-    'اسحب المقابض أو حرّك الإطار لاختيار المنطقة المراد الاحتفاظ بها؛ Enter للتطبيق وEsc للإلغاء',
+    'اسحب المقابض أو حرّك الإطار لاختيار المنطقة المراد الاحتفاظ بها؛ Esc للإلغاء',
   ribbonReplacePicture: 'استبدال الصورة',
   ribbonReplacePictureTip: 'استبدال الصورة مع الاحتفاظ بالحجم والتفاف النص الحاليين',
   ribbonResetSize: 'إعادة تعيين الحجم',

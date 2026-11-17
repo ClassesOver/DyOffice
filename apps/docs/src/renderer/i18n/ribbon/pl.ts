@@ -53,9 +53,9 @@ export const pl = {
   ribbonRotateLeft: 'Obróć w lewo o 90°',
   ribbonFlipH: 'Odbij w poziomie',
   ribbonFlipV: 'Odbij w pionie',
-  ribbonCropTip: 'Przytnij obraz (przeciągnij uchwyty, Enter, aby potwierdzić)',
+  ribbonCropTip: 'Przytnij obraz (przeciągnij uchwyty)',
   ribbonCropHint:
-    'Przeciągnij uchwyty lub przesuń ramkę, aby wybrać obszar do zachowania; Enter, aby zastosować, Esc, aby anulować',
+    'Przeciągnij uchwyty lub przesuń ramkę, aby wybrać obszar do zachowania; Esc, aby anulować',
   ribbonReplacePicture: 'Zamień obraz',
   ribbonReplacePictureTip: 'Zamień obraz, zachowując bieżący rozmiar i zawijanie',
   ribbonResetSize: 'Resetuj rozmiar',

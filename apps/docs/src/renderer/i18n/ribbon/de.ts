@@ -53,9 +53,9 @@ export const de = {
   ribbonRotateLeft: '90° nach links drehen',
   ribbonFlipH: 'Horizontal spiegeln',
   ribbonFlipV: 'Vertikal spiegeln',
-  ribbonCropTip: 'Bild zuschneiden (Ziehpunkte ziehen, Eingabetaste zum Bestätigen)',
+  ribbonCropTip: 'Bild zuschneiden (Ziehpunkte ziehen)',
   ribbonCropHint:
-    'Ziehpunkte ziehen oder Rahmen verschieben, um den zu behaltenden Bereich zu wählen; Eingabetaste zum Anwenden, Esc zum Abbrechen',
+    'Ziehpunkte ziehen oder Rahmen verschieben, um den zu behaltenden Bereich zu wählen; Esc zum Abbrechen',
   ribbonReplacePicture: 'Bild ersetzen',
   ribbonReplacePictureTip: 'Bild ersetzen; aktuelle Größe und Textumbruch bleiben erhalten',
   ribbonResetSize: 'Größe zurücksetzen',

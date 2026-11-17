@@ -339,18 +339,6 @@ export function CropDialog({ dataUrl, onApply, onCancel }: CropProps) {
     }
   }, [crop, dataUrl, onApply])
 
-  // Enter applies (Esc/Tab/focus come from useModalKeys on the backdrop).
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Enter' && loaded && !error) {
-        e.preventDefault()
-        apply()
-      }
-    }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [apply, loaded, error])
-
   const modalKeys = useModalKeys(onCancel)
 
   const startDrag = (handle: CropHandle) => (e: React.MouseEvent) => {

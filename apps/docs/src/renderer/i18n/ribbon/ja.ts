@@ -53,9 +53,9 @@ export const ja = {
   ribbonRotateLeft: '左へ90°回転',
   ribbonFlipH: '左右反転',
   ribbonFlipV: '上下反転',
-  ribbonCropTip: '画像をトリミング（ハンドルをドラッグ、Enter で確定）',
+  ribbonCropTip: '画像をトリミング（ハンドルをドラッグ）',
   ribbonCropHint:
-    'ハンドルをドラッグするか枠内を移動して残す範囲を選択。Enter で適用、Esc でキャンセル',
+    'ハンドルをドラッグするか枠内を移動して残す範囲を選択。Esc でキャンセル',
   ribbonReplacePicture: '図の変更',
   ribbonReplacePictureTip: '画像を差し替え（現在のサイズと折り返しを維持）',
   ribbonResetSize: 'サイズのリセット',

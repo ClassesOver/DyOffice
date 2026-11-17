@@ -53,9 +53,9 @@ export const nl = {
   ribbonRotateLeft: '90° linksom draaien',
   ribbonFlipH: 'Horizontaal spiegelen',
   ribbonFlipV: 'Verticaal spiegelen',
-  ribbonCropTip: 'De afbeelding bijsnijden (sleep de grepen, Enter om te bevestigen)',
+  ribbonCropTip: 'De afbeelding bijsnijden (sleep de grepen)',
   ribbonCropHint:
-    'Sleep de grepen of verplaats het kader om het te behouden gebied te kiezen; Enter om toe te passen, Esc om te annuleren',
+    'Sleep de grepen of verplaats het kader om het te behouden gebied te kiezen; Esc om te annuleren',
   ribbonReplacePicture: 'Afbeelding vervangen',
   ribbonReplacePictureTip:
     'De afbeelding vervangen met behoud van de huidige grootte en tekstterugloop',

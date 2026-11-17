@@ -52,9 +52,9 @@ export const tr = {
   ribbonRotateLeft: 'Sola 90° Döndür',
   ribbonFlipH: 'Yatay Çevir',
   ribbonFlipV: 'Dikey Çevir',
-  ribbonCropTip: 'Resmi kırp (tutamaçları sürükleyin, onaylamak için Enter)',
+  ribbonCropTip: 'Resmi kırp (tutamaçları sürükleyin)',
   ribbonCropHint:
-    'Korunacak alanı seçmek için tutamaçları sürükleyin veya kutuyu taşıyın; uygulamak için Enter, iptal için Esc',
+    'Korunacak alanı seçmek için tutamaçları sürükleyin veya kutuyu taşıyın; iptal için Esc',
   ribbonReplacePicture: 'Resmi Değiştir',
   ribbonReplacePictureTip: 'Resmi geçerli boyutunu ve kaydırmasını koruyarak değiştir',
   ribbonResetSize: 'Boyutu Sıfırla',
