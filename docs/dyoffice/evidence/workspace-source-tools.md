@@ -48,7 +48,7 @@ An initial tools test tried to SELECT the append-only audit table using the busi
 
 ## Customer StarRocks gate
 
-The user-authorized customer endpoint was attempted on 2026-11-17. Connection timed out before database authentication; a separate TCP check also timed out after five seconds. The active route used the existing VPN interface. No route, firewall, account, grants or customer data were modified; no SQL ran and no credential verdict is inferred from this timeout. Credentials were excluded from repository files and this evidence. Customer StarRocks protocol/TLS/read-only grant acceptance remains network-blocked.
+The initial user-authorized customer attempt timed out before authentication over the existing VPN route. A later recheck on 2026-11-17 succeeded after the host route changed independently: StarRocks 3.5.7, database rj, bounded metadata and a one-row customer read were verified. No route/firewall/account/grant changes were executed. The supplied login inherits root and is now correctly refused by the repaired native grant decoder with 403 READONLY_ROLE_REQUIRED; the server also does not support TLS negotiation. Successful product access with a dedicated least-privilege account and secure transport remains open. See [customer recheck evidence](starrocks-customer-acceptance.md).
 
 ## Remaining boundaries
 
