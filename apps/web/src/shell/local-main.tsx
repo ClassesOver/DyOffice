@@ -18,7 +18,7 @@ import '../../../shell/src/renderer/src/tabbar.css'
 import './web-shell.css'
 import {installScreenTips} from '@genoffice/ui'
 import {createLocalHomeBridge} from './local-home-bridge'
-import {createPreferencesClient} from '../../../../packages/browser-host/src/preferences'
+import {createLocalPreferencesSession} from './local-preferences-session'
 import {createGlobalSettingsClient} from './global-settings-client'
 import {GlobalSettingsPanel} from './GlobalSettingsPanel'
 import {WorkspaceTrash} from './WorkspaceTrash'
@@ -50,7 +50,8 @@ const client=createLocalShellClient()
 const adminClient=createLocalAdminClient(fetch,()=>client.endSession('expired'))
 const sessionsClient=createLocalSessionsClient(fetch,()=>client.endSession('expired'))
 const historyClient=createLoginHistoryClient(fetch,()=>client.endSession('expired'))
-const preferences=createPreferencesClient(client.request)
+const preferenceSession=createLocalPreferencesSession(client)
+const preferences=preferenceSession.preferences
 const globalSettings=createGlobalSettingsClient(client.request)
 let userSkills: ReturnType<typeof createUserSkillsClient> | undefined
 let sourceWorkspace: Awaited<ReturnType<typeof createSourceWorkspaceSession>> | undefined
@@ -86,7 +87,8 @@ async function restore(){
  const workspace=await createSourceWorkspaceSession(client)
  const bound=workspace.bound
  const identity=await bound.request<{user:User}>('/api/v1/auth/me')
- const personal=await createPreferencesClient(bound.request).getPreferences()
+ preferenceSession.bind(bound)
+ const personal=await preferences.getPreferences()
  const catalog=await bound.request<Record<string,string>>('/api/v1/capabilities')
  user=identity.user;capabilities=catalog;initialLanguage=personal.language==='en'?'en':'zh';userSkills=createUserSkillsClient(bound.request);sourceWorkspace=workspace
  if(personal.theme==='system')delete document.documentElement.dataset.theme;else document.documentElement.dataset.theme=personal.theme
@@ -109,6 +111,7 @@ function WorkspacePageContent({page,onClose,onCloseGuardChange,settingsTab,onSet
   const bound=workspace.bound
   const identity=await bound.request<{user:User}>('/api/v1/auth/me')
   if(identity.user.id!==user?.id)throw new Error('登录状态已改变，请重新加载当前工作区。')
+  preferenceSession.bind(bound)
   userSkills=createUserSkillsClient(bound.request);sourceWorkspace=workspace
   setSessionVersion(version=>version+1)
  }
