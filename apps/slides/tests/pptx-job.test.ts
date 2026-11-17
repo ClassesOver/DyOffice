@@ -4,6 +4,7 @@ import JSZip from 'jszip'
 import {createHash} from 'node:crypto'
 import {addElement,createBlankPptx,openPptx,savePptx} from '@genoffice/pptx-engine'
 import {elementDurableId} from '@genoffice/pptx-ops'
+import {createPptxSession} from '../../web/worker/src/native/pptx-session'
 import {createPptxJobProcessor} from '../../web/worker/src/native/pptx-job'
 async function fixture(){
  const p=await openPptx(await createBlankPptx())
@@ -66,6 +67,42 @@ describe('private one-shot PPTX job protocol',()=>{
   const {bytes}=await fixture(), job=createPptxJobProcessor()
   await expect(job.execute(bytes,JSON.stringify({version:1,action:'setText',ops:[{op:'deleteSlide',target:{slide:0}}]}))).rejects.toMatchObject({code:'INVALID_OPERATION'})
   await expect(job.execute(bytes,'{"version":1,"action":"roundtrip"}')).resolves.toHaveProperty('sha256')
+ })
+ it.each([
+  {op:'addBlankSlide',target:{slide:0}},
+  {op:'setNotes',target:{slide:0},text:'unauthorized notes'},
+ ])('setText envelope rejects other supported session operations: $op',async op=>{
+  const {bytes}=await fixture(),job=createPptxJobProcessor()
+  await expect(job.execute(bytes,JSON.stringify({version:1,action:'setText',ops:[op]}))).rejects.toMatchObject({code:'INVALID_OPERATION'})
+  await expect(job.execute(bytes,'{"version":1,"action":"roundtrip"}')).resolves.toHaveProperty('sha256')
+ })
+ it('rejects an entire mixed batch before parsing document bytes',async()=>{
+  const raw=JSON.stringify({version:1,action:'setText',ops:[
+   {op:'setText',target:{slide:0,el:'e_test'},paragraphs:[{runs:[{text:'allowed'}]}]},
+   {op:'addBlankSlide',target:{slide:0}},
+  ]})
+  await expect(createPptxJobProcessor().execute(new Uint8Array([1]),raw)).rejects.toMatchObject({code:'INVALID_OPERATION'})
+ })
+ it('setText cannot delete a valid slide from a real two-page deck',async()=>{
+  const {bytes,id}=await fixture(),session=await createPptxSession(bytes)
+  let multi:Uint8Array
+  try{
+   await session.apply(0,[{op:'addBlankSlide',target:{slide:0}}])
+   multi=(await session.exportBytes(1)).bytes
+  }finally{session.close()}
+  expect((await openPptx(multi)).deck.slides).toHaveLength(2)
+  // Establish that the underlying session really supports this operation; the
+  // one-shot rejection must come from its narrower command contract.
+  const control=await createPptxSession(multi)
+  try{
+   await control.apply(0,[{op:'deleteSlide',target:{slide:1}}])
+   expect((await control.outline(1)).count).toBe(1)
+  }finally{control.close()}
+  const job=createPptxJobProcessor()
+  await expect(job.execute(multi,JSON.stringify({version:1,action:'setText',ops:[{op:'deleteSlide',target:{slide:1}}]}))).rejects.toMatchObject({code:'INVALID_OPERATION'})
+  const edited=await job.execute(multi,request(id)),opened=await openPptx(edited.bytes)
+  expect(opened.deck.slides).toHaveLength(2)
+  expect(JSON.stringify(opened.deck.slides[0])).toContain('after')
  })
  it('cancels before and during work without emitting output; capacity recovers',async()=>{
   const {bytes}=await fixture(), job=createPptxJobProcessor(),controller=new AbortController()
