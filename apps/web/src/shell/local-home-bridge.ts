@@ -20,6 +20,9 @@ const folderId = (path: string) => path === rootPath ? null : path.split('/').at
 export function createLocalHomeBridge(deps: Dependencies): HomeApi {
   const pending = new Map<string, {promise: Promise<unknown>; intent: string}>()
   const unknownStars = new Map<string, boolean>()
+  type Batch={key:string;intent:string;ids:string[];confirmed:Set<string>}
+  const batches=new Map<string,Batch>()
+  const unknownMutations=new Map<string,{action:string;id:string;batch:Batch}>()
   const folderListeners = new Set<(paths: string[]) => void>()
   const knownFolders = new Set([rootPath])
   function changed() { deps.changed(); for (const listener of folderListeners) listener([...knownFolders]) }
@@ -88,19 +91,58 @@ export function createLocalHomeBridge(deps: Dependencies): HomeApi {
     const page = await queryFiles(view, {offset: query.offset, limit: query.limit, ext: query.ext})
     return {entries: await fileEntries(page.files), total: page.total, totalAll: page.totalAll}
   }
-  async function mutateFiles(ids: string[], action: string, method: string, body?: unknown) {
-    for (const id of new Set(ids)) {
-      if(action==='star'&&unknownStars.has(id)){
-        if(unknownStars.get(id)!==(body as {starred:boolean}).starred)throw new Error('收藏结果尚未确认，再次点击将核对收藏，请先核对后再更改目标。')
-        await toggleStar(id);continue
-      }
-      await once(`${action}:${id}`, async () => {
-        await deps.request(`/api/v1/${action === 'trash' ? 'files/' + encodeURIComponent(id) : 'workspace/files/' + encodeURIComponent(id) + '/' + action}`, method, body)
-        changed()
-      }, JSON.stringify([action, method, body]))
+  function confirmItem(batch:Batch,id:string){
+    batch.confirmed.add(id)
+    for(const candidate of batches.values())if(candidate.intent===batch.intent&&candidate.ids.includes(id)){
+      candidate.confirmed.add(id);if(candidate.confirmed.size===candidate.ids.length)batches.delete(candidate.key)
     }
   }
+  const awaitingReview=()=>new Error('部分操作结果待核对，请再次执行原操作核对；未确认前不会重复提交或继续处理后续文件。')
+  async function mutationAchieved(action:string,id:string){
+    const view=action==='trash'?'trash':action==='recent'?'recent':'all'
+    const result=await queryFiles(view,{id,limit:1}),file=result.files.find(file=>file.id===id)
+    return action==='trash'?!!file:action==='recent'?!file:file?.starred===false
+  }
+  async function reconcileMutation(key:string){
+    const entry=unknownMutations.get(key)
+    if(!entry)return
+    try{
+      if(!await mutationAchieved(entry.action,entry.id))throw awaitingReview()
+    }catch{throw awaitingReview()}
+    unknownMutations.delete(key);confirmItem(entry.batch,entry.id);changed()
+  }
+  async function mutateFiles(ids: string[], action: string, method: string, body?: unknown) {
+    const normalized=[...new Set(ids)].sort(),key=JSON.stringify([action,normalized,body]),intent=JSON.stringify([action,method,body])
+    return once('batch:'+key,async()=>{
+    const batch=batches.get(key)??{key,intent,ids:normalized,confirmed:new Set<string>()};batches.set(key,batch)
+    const previouslyConfirmed=[...batch.confirmed]
+    // Reconcile every uncertain resource before starting any new write, even if the selection changed.
+    for(const id of normalized)if(unknownMutations.has(`${action}:${id}`)){await once(`${action}:${id}`,()=>reconcileMutation(`${action}:${id}`),intent);confirmItem(batch,id)}
+    // A restore, reopen or star change may have reversed a confirmed item since the batch stopped.
+    for(const id of previouslyConfirmed){
+      let achieved:boolean
+      try{achieved=await mutationAchieved(action,id)}catch{throw new Error('已完成项目的当前状态待核对，读取失败；请重新执行原操作核对，暂不继续提交。')}
+      if(!achieved)batch.confirmed.delete(id)
+    }
+    for (const id of normalized) {
+      if(batch.confirmed.has(id))continue
+      if(action==='star'&&unknownStars.has(id)){
+        if(unknownStars.get(id)!==(body as {starred:boolean}).starred)throw new Error('收藏结果尚未确认，再次点击将核对收藏，请先核对后再更改目标。')
+        await toggleStar(id);confirmItem(batch,id);continue
+      }
+      await once(`${action}:${id}`, async () => {
+        if(unknownMutations.has(`${action}:${id}`)){await reconcileMutation(`${action}:${id}`);return}
+        try{await deps.request(`/api/v1/${action === 'trash' ? 'files/' + encodeURIComponent(id) : 'workspace/files/' + encodeURIComponent(id) + '/' + action}`, method, body)}
+        catch(error){const status=(error as {status?:number})?.status;if(status===undefined||status===408||status>=500){unknownMutations.set(`${action}:${id}`,{action,id,batch});throw awaitingReview()}throw error}
+        changed()
+      },intent)
+      confirmItem(batch,id)
+    }
+    batches.delete(key)
+    })
+  }
   function toggleStar(id:string):Promise<void>{return once('star:'+id,async()=>{
+    if(unknownMutations.has('star:'+id)){await reconcileMutation('star:'+id);return}
     const reconciling=unknownStars.has(id)
     try{
       const file=(await queryFiles('all',{id,limit:1})).files.find(file=>file.id===id)
