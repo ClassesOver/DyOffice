@@ -45,7 +45,7 @@ export function createSourcesClient(request: Request) {
     publish(sourceId: string, expectedVersion: number) { return run(true, () => request<PublishedSourceVersion>(path(sourceId) + '/publish', 'POST', { expectedVersion })) },
     test(sourceId: string) { return run(false, () => request<SourceConnectionCheck>(path(sourceId) + '/test', 'POST', {})) },
     query(sourceId: string, input: SourceQueryRequest) { const body = structuredClone(input); return run(false, () => request<QuerySnapshot>(path(sourceId) + '/query', 'POST', body)) },
-    remove(sourceId: string) { return run(true, () => request<void>(path(sourceId), 'DELETE')) },
+    remove(sourceId: string, expectedVersion: number) { return run(true, () => request<void>(path(sourceId), 'DELETE', { expectedVersion })) },
   }
 }
 export type SourcesClient = ReturnType<typeof createSourcesClient>

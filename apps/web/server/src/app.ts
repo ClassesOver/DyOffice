@@ -50,6 +50,9 @@ import { registerGlobalConfigRoutes } from './modules/admin/routes.ts'
 import type { SecretKeyring } from './modules/admin/secrets.ts'
 import { createSourceService } from './modules/sources/service.ts'
 import { registerSourceRoutes } from './modules/sources/routes.ts'
+import { createWorkspaceSourceResults } from './modules/sources/results.ts'
+import { createWorkspaceSourceTools, type WorkspaceSourceTools } from './modules/sources/tools.ts'
+import { registerWorkspaceSourceToolRoutes } from './modules/sources/tool-routes.ts'
 import type { SourceEgressTarget } from './security/egress.ts'
 
 export async function buildApp(config: WebConfig): Promise<FastifyInstance> {
@@ -72,6 +75,8 @@ export interface LocalWebConfig {
   globalConfigKeyring?: SecretKeyring;
   sourcesCredentialKeys?: string;
   sourcesEgressTargets?: readonly SourceEgressTarget[];
+  /** Trusted assistant composition; never model-supplied credentials or scope. */
+  onSourceToolsReady?: (tools: WorkspaceSourceTools) => void;
   adminAiSyntheticProbe?: boolean;
   // Explicit network-capable fixed probe, NOT the offline diagnostic. No automatic run.
   adminProviderProbeDirectory?: string;
@@ -153,7 +158,12 @@ export async function buildLocalApp(config: LocalWebConfig): Promise<FastifyInst
       try{const probe=registerFixedProviderProbe(app,{deploymentId:config.deploymentId,transactions,sessions,csrf,keyring:config.globalConfigKeyring!,profiles:config.adminProviderProbe.profiles});ownedProbes.push(probe);if(probeAssets)registerProbeAssets(app,probeAssets,probe.authorize)}
       catch(error){await app.close();throw error}
     }
-    registerSourceRoutes(app, createSourceService({ transactions, credentialKeys: config.sourcesCredentialKeys, egressTargets: config.sourcesEgressTargets }), sessions, csrf)
+    const sources = createSourceService({ transactions, credentialKeys: config.sourcesCredentialKeys, egressTargets: config.sourcesEgressTargets })
+    const sourceResults = createWorkspaceSourceResults({ transactions })
+    const sourceTools = createWorkspaceSourceTools({ sources, results: sourceResults })
+    registerSourceRoutes(app, sources, sessions, csrf)
+    registerWorkspaceSourceToolRoutes(app, { tools: sourceTools, results: sourceResults, sessions, csrf })
+    config.onSourceToolsReady?.(sourceTools)
     registerPreferenceRoutes(app, createPreferenceService(transactions), sessions, csrf)
     registerWorkspaceRoutes(app, createWorkspaceService(transactions), sessions, csrf)
     registerGlobalConfigRoutes(app, createGlobalConfigService({transactions, keyring: config.globalConfigKeyring}), sessions, csrf)

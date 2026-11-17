@@ -3,6 +3,7 @@ import { act, createElement as h } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { SourcesPanel } from '../../src/shell/SourcesPanel'
 import { createSourcesClient } from '../../src/shell/sources-client'
+import { createSourceResultsClient } from '../../src/shell/source-results-client'
 import type { SourceDetail, SaveSourceRequest } from '../../../../packages/web-contracts/src/sources'
 
 ;(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -81,4 +82,48 @@ test('query result shows frozen provenance units timezone and truncation without
  expect(document.body.textContent).toContain('amount（元）')
  expect(document.body.textContent).toContain('结果已截断')
  expect(document.body.textContent).toContain('b'.repeat(64))
+})
+
+
+test('a lost delete response is reconciled by a confirmed 404 without replaying deletion', async()=>{
+ let removed=false,deletes=0
+ const {client}=await mount(async(path,method='GET')=>{
+   if(method==='DELETE'){removed=true;deletes++;throw Error('lost response')}
+   if(removed&&!path.includes('?'))throw Object.assign(Error('missing'),{status:404})
+   return path.includes('?')?{items:removed?[]:[initial().source],nextCursor:null}:initial()
+ })
+ await act(async()=>{const check=[...document.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')].find(input=>input.parentElement?.textContent?.includes('确认删除'))!;check.click()})
+ await click('删除数据源')
+ expect(client.getState().unknownWrite).toBe(true)
+ await click('读取最新版本并核对')
+ expect(document.body.textContent).toContain('服务器确认此数据源已不存在')
+ expect(client.getState().unknownWrite).toBe(true)
+ await click('确认不存在并开始新建')
+ expect(client.getState().unknownWrite).toBe(false)
+ expect(deletes).toBe(1)
+})
+
+
+test('saving a frozen result retries the same receipt intent without rerunning its source query', async()=>{
+ const calls: {name:string;arguments:Record<string,unknown>}[]=[]
+ const artifact={resultId:'11111111-1111-4111-8111-111111111111',sourceId:'revenue',sourceVersion:1,rowCount:1,truncated:true,sha256:'b'.repeat(64),state:'pending'}
+ const resultRequest=async(_path:string,_method?:string,raw?:unknown)=>{
+   const call=raw as {name:string;arguments:Record<string,unknown>};calls.push(structuredClone(call))
+   if(call.name==='sources.query')return {artifact,schema:[{name:'amount',type:'number',unit:'元'}],timezone:'UTC',preview:[{amount:42}],totalRows:1,sourceTruncated:true,sha256:artifact.sha256,nextOffset:null,notice:'bounded'}
+   if(calls.filter(c=>c.name==='sources.save_result').length===1)throw Error('lost response')
+   return {...artifact,state:'saved',name:'冻结收入'}
+ }
+ const client=createSourcesClient((async(path:string)=>read(path)) as Request)
+ const resultsClient=createSourceResultsClient(resultRequest as Parameters<typeof createSourceResultsClient>[0])
+ const host=document.createElement('div');document.body.append(host);const root=createRoot(host);roots.push(root)
+ await act(async()=>root.render(h(SourcesPanel,{client,resultsClient,onClose(){}})))
+ await act(async()=>[...host.querySelectorAll('button')].find(b=>b.textContent?.includes('营业收入'))!.click())
+ await click('执行已发布查询');await change('工作区结果名称','冻结收入');await click('保存结果到工作区')
+ expect(host.textContent).toContain('保存结果未确认')
+ await click('确认保存结果')
+ const saves=calls.filter(c=>c.name==='sources.save_result')
+ expect(saves).toHaveLength(2);expect(saves[0].arguments).toEqual(saves[1].arguments)
+ expect(calls.filter(c=>c.name==='sources.query')).toHaveLength(1)
+ expect(host.textContent).toContain('已保存到工作区')
+ expect(host.textContent).toContain('原查询已截断')
 })

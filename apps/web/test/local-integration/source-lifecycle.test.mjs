@@ -65,7 +65,7 @@ test('draft test, explicit clear, retain, disable, idempotent publish and concur
 test('in-flight HTTP result is withheld after source disable or session revocation', async t => {
   let respond, entered
   const started = () => new Promise(r => { entered = r })
-  const url = await start(t, (_q, r) => { respond = () => r.writeHead(200, { 'content-type': 'application/json' }).end('{"rows":[{"v":42}]}'); entered?.() })
+  const url = await start(t, (_q, r) => { respond = () => r.writeHead(200, { 'content-type': 'application/json' }).end('{"rows":[{"v":"private-revoked-query-value"}]}'); entered?.() })
   const f = await fixture(t, url)
   await f.call('POST', '/a/publish', { expectedVersion: 1 })
   let gate = started(), pending = f.request('POST', '/a/query', {})
@@ -80,7 +80,7 @@ test('in-flight HTTP result is withheld after source disable or session revocati
   respond()
   const denied = await pending
   assert.equal(denied.statusCode, 401)
-  assert.equal(denied.body.includes('42'), false)
+  assert.equal(denied.body.includes('private-revoked-query-value'), false)
 })
 
 test('DELETE validates CAS and preserves the newer publication before permanently reserving the source ID', async t => {

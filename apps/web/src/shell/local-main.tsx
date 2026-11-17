@@ -21,6 +21,8 @@ import {createGlobalSettingsClient} from './global-settings-client'
 import {GlobalSettingsPanel} from './GlobalSettingsPanel'
 import {WorkspaceTrash} from './WorkspaceTrash'
 import {SourcesPanel} from './SourcesPanel'
+import {WorkspaceDataResults} from './WorkspaceDataResults'
+import {createSourceResultsClient} from './source-results-client'
 import {createSourcesClient} from './sources-client'
 import blankDocx from '../../../shell/build/shell-new/blank.docx?url'
 
@@ -34,6 +36,7 @@ const client=createLocalShellClient()
 const preferences=createPreferencesClient(client.request)
 const globalSettings=createGlobalSettingsClient(client.request)
 const sourcesClient=createSourcesClient(client.request)
+const sourceResultsClient=createSourceResultsClient(client.request)
 type User={id:string;username:string;displayName:string;roles:string[]}
 let user:User|null=null
 let initialLanguage:'zh'|'en'='zh'
@@ -77,6 +80,7 @@ function Account(){
  const [admin,setAdmin]=useState(false)
  const [global,setGlobal]=useState(false)
  const [sources,setSources]=useState(false)
+ const [dataResults,setDataResults]=useState(false)
  const [sessionVersion,setSessionVersion]=useState(0)
  const web:WebSettingsAdapter={
   accountLabel:'本地账号',load:preferences.getPreferences,save:preferences.updatePreferences,
@@ -96,11 +100,13 @@ function Account(){
   {settings&&<SettingsModal web={web} status={null} loggingOut={false} loginWaiting={false} loginUrl={null} urlCopied={false} onOpenLoginUrl={()=>{}} onCopyLoginUrl={()=>{}} onClose={()=>setSettings(false)} onLogin={()=>{}} onLogout={()=>void logout().catch(e=>notice(e.message))}/>}
   {admin&&user?.roles.includes('config_admin')&&<div className="set-overlay"><div className="set-dialog" role="dialog" aria-modal="true" aria-label="用户管理"><div className="set-header"><h2 className="set-title">用户管理</h2></div><div className="set-body"><LocalAdminPanel currentUserId={user.id} onSessionRotated={client.invalidateCsrf} onOwnAuthorityChanged={()=>{client.invalidateSession();location.replace('/')}} onClose={()=>setAdmin(false)}/></div></div></div>}
   {global&&user?.roles.includes('config_admin')&&<div className="set-overlay"><section className="set-dialog" role="dialog" aria-modal="true" aria-label="全局配置"><GlobalSettingsPanel client={globalSettings} onClose={()=>setGlobal(false)}/></section></div>}
-  {sources&&<SourcesPanel client={sourcesClient} onClose={()=>setSources(false)}/>}
+  {sources&&<SourcesPanel client={sourcesClient} resultsClient={sourceResultsClient} onClose={()=>setSources(false)}/>}
+  {dataResults&&<WorkspaceDataResults client={sourceResultsClient} onClose={()=>setDataResults(false)}/>}
   {expanded&&<div className="web-account-menu">
    <button onClick={()=>{setExpanded(false);setSettings(true)}}>个人设置</button>
    <button onClick={()=>{setExpanded(false);showTrash()}}>回收站</button>
    <button onClick={()=>{setExpanded(false);setSources(true)}}>数据源管理</button>
+   <button onClick={()=>{setExpanded(false);setDataResults(true)}}>工作区数据结果</button>
    {user?.roles.includes('config_admin')&&<><button onClick={()=>{setExpanded(false);setSettings(false);setGlobal(true)}}>全局配置</button><button onClick={()=>{setExpanded(false);setSettings(false);setAdmin(true)}}>用户管理</button></>}
    <button onClick={()=>void logout().catch(e=>notice(e.message))}>退出登录</button>
   </div>}

@@ -178,6 +178,16 @@ test('read-only SQL channel: AST guard, real PG denial, row cap, timeout, units'
   await call(f, 'POST', '', { sourceId: 'metrics', name: 'Metrics', kind: 'postgres', config: { timezone: 'UTC', maxRows: 3, statementTimeoutMs: 1000, units: { i: 'items' } }, secret: targets.readerDsn }, undefined, 201)
   await call(f, 'POST', '/metrics/publish', { expectedVersion: 1 }, undefined, 200)
 
+  // Assistant metadata uses the same published source, egress and role boundary.
+  const described = await f.app.inject({ method: 'POST', url: '/api/v1/workspace/source-tools/execute',
+    headers: { origin: restrictedOrigin, cookie: '__Host-dyoffice-session=' + f.alice.token,
+      'x-csrf-token': createCsrfService({ db: f.db, deploymentId: f.deploymentId, origin: restrictedOrigin, key: f.csrfKey }).sessionToken(f.alice.token) },
+    payload: { name: 'sources.describe', arguments: { sourceId: 'metrics', table: targets.probeTable } } })
+  assert.equal(described.statusCode, 200, described.body)
+  assert.equal(described.json().sourceVersion, 1)
+  assert.ok(described.json().metadata.rows.some(row => row.column_name === 'i' && row.data_type === 'integer'))
+  assert.equal(described.body.includes(targets.readerDsn), false)
+
   // Bounded rows with truncation and a verifiable evidence hash.
   const snapshot = (await call(f, 'POST', '/metrics/query', { sql: `SELECT i,label,ratio,active,note FROM ${targets.probeTable} ORDER BY i` }, undefined, 200)).json()
   assert.equal(snapshot.sourceId, 'metrics'); assert.equal(snapshot.sourceVersion, 1)

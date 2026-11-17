@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import type { PoolClient } from 'pg'
 import type { BusinessPrincipal, PrincipalTransactions } from '../../db/context.ts'
 import type { SourceConfig, SourceDescriptor, SourceDetail, SourceExecution, SourceKind, SourceList, PublishedSourceVersion, QuerySnapshot, QueryColumn, QueryCell } from '../../../../../../packages/web-contracts/src/sources.ts'
-import { createSourceEgressPolicy, type SourceEgressTarget } from '../../security/egress.ts'
+import { createSourceEgressPolicy, parseSourceDsn, type SourceEgressTarget } from '../../security/egress.ts'
 import { createCredentialVault } from './vault.ts'
 import { contentHash, executionFor, object, positiveVersion, secretHash, sourceConfig, sourceError, sourceId, sourceName, validateSourceSecret } from './config.ts'
 import { queryHttpSource } from './http.ts'
@@ -153,6 +153,35 @@ export function createSourceService({ transactions, credentialKeys = '', egressT
         if (!current.enabled || current.version !== prepared.row.version) throw sourceError(409)
         await audit(c, p, id, 'source_tested', { ok, version: current.version })
         return { ok, kind: prepared.row.kind as SourceKind, ...(ok ? {} : { code }) }
+      })
+    },
+    async describe(token: string, input: unknown, payload: unknown = {}) {
+      const id = sourceId(input), request = object(payload, ['table'])
+      if (request.table !== undefined && (typeof request.table !== 'string' || !/^[A-Za-z_][A-Za-z0-9_$]{0,127}$/.test(request.table))) throw sourceError()
+      const prepared = await access(token, async (c, p) => {
+        const source = await get(c, p, id)
+        if (!source.enabled || source.published_revision === null) throw sourceError(409)
+        const row = (await c.query('SELECT * FROM data_source_versions WHERE deployment_id=$1 AND owner_id=$2 AND source_id=$3 AND revision=$4', [...scope(p, id), source.published_revision])).rows[0]
+        if (!row) throw sourceError(404)
+        return { row, secret: await readCredential(c, p, id, row) }
+      })
+      let metadata: QuerySnapshot | null = null
+      if (prepared.row.kind !== 'http') {
+        // Identifiers are selected from a fixed information_schema projection;
+        // the only optional caller value is a strictly validated table name.
+        const database = prepared.row.kind === 'postgres' ? 'public' : parseSourceDsn(prepared.row.kind, prepared.secret).database
+        const schema = database.replaceAll("'", "''")
+        const sql = request.table === undefined
+          ? `SELECT table_name, table_type FROM information_schema.tables WHERE table_schema = '${schema}' ORDER BY table_name`
+          : `SELECT column_name, data_type, is_nullable FROM information_schema.columns WHERE table_schema = '${schema}' AND table_name = '${request.table}' ORDER BY ordinal_position`
+        const row = { ...prepared.row, config: { ...prepared.row.config, units: {} }, execution: { ...prepared.row.execution, maxRows: 1000 } }
+        const result = await execute(row, prepared.secret, { sql })
+        metadata = snapshotFor(row, result.execution, result.sql, result.rows)
+      }
+      return access(token, async (c, p) => {
+        const current = await get(c, p, id, true)
+        if (!current.enabled) throw sourceError(409)
+        return { sourceId: id, sourceVersion: prepared.row.revision as number, kind: prepared.row.kind as SourceKind, config: prepared.row.config as SourceConfig, metadata }
       })
     },
     async querySource(token: string, input: unknown, payload: unknown = {}): Promise<QuerySnapshot> {
