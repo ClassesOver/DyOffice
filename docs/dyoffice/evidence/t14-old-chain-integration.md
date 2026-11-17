@@ -1,6 +1,6 @@
 # T14 old-chain integration boundary
 
-Target inspected initially: `feat/dyoffice-web@d6ab6e4a6dc37234e48acfe9979e8514cf88d8aa`. Publication rebased onto `bf38ebadeda8c9e06b30bb439137a79fc22567dc7`; #79 changed workspace/settings without overlap with these 45 new files. Its updated contracts, preferences and workspace server sources were refreshed for the final targeted check.
+Target inspected initially: `feat/dyoffice-web@d6ab6e4a6dc37234e48acfe9979e8514cf88d8aa`. Publication rebased onto `bf38ebadeda8c9e06b30bb439137a79fc22567dc`; #79 changed workspace/settings without overlap with these 45 new files. Its updated contracts, preferences and workspace server sources were refreshed for the final targeted check.
 This is selective integration of useful experiments, not a merge of the old stacked branches and not production activation.
 
 ## Disposition
