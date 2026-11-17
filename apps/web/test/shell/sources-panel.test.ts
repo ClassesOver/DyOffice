@@ -127,3 +127,11 @@ test('saving a frozen result retries the same receipt intent without rerunning i
  expect(host.textContent).toContain('已保存到工作区')
  expect(host.textContent).toContain('原查询已截断')
 })
+
+
+test('overprivileged source account is identified without echoing a target grant or secret', async()=>{
+ await mount(async(path,method='GET')=>path.endsWith('/test')?{ok:false,kind:'starrocks',code:'READONLY_ROLE_REQUIRED'}:read(path))
+ await click('测试已保存草稿')
+ expect(document.body.textContent).toContain('账号未通过最小只读权限核验')
+ expect(document.body.textContent).toContain('不能使用 root 或管理角色')
+})

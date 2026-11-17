@@ -145,7 +145,7 @@ export function createSourceService({ transactions, credentialKeys = '', egressT
         try { return { row, secret: await readCredential(c, p, id, row) } } catch { return { row, secret: null } }
       })
       let ok = false, code = 'SOURCE_UNAVAILABLE'
-      if (prepared.secret) try { await execute(prepared.row, prepared.secret, prepared.row.kind === 'http' ? {} : { sql: 'SELECT 1 AS connection_ok' }); ok = true } catch (error) { code = (error as { statusCode?: number }).statusCode === 400 ? 'TARGET_NOT_APPROVED' : 'SOURCE_UNAVAILABLE' }
+      if (prepared.secret) try { await execute(prepared.row, prepared.secret, prepared.row.kind === 'http' ? {} : { sql: 'SELECT 1 AS connection_ok' }); ok = true } catch (error) { const status = (error as { statusCode?: number }).statusCode; code = status === 400 ? 'TARGET_NOT_APPROVED' : status === 403 ? 'READONLY_ROLE_REQUIRED' : status === 504 ? 'SOURCE_TIMEOUT' : 'SOURCE_UNAVAILABLE' }
       return access(token, async (c, p) => {
         // Lock the permanent root through the final authorization/audit commit.
         // A deleted scoped ID cannot be recreated, so this is the same instance.
