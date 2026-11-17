@@ -11,6 +11,7 @@ import {
 } from '@genoffice/docx-engine'
 import { Dropdown } from '@genoffice/ui'
 import { PromptModal } from './PromptModal'
+import { useModalKeys } from './modal-keys'
 import {
   collectTocEntriesWithPages,
   tocFieldNodes,
@@ -58,6 +59,7 @@ function CaptionModal({
   onClose: () => void
 }) {
   const { t } = useI18n()
+  const modalKeys = useModalKeys(onClose)
   const CAPTION_LABELS = CAPTION_LABEL_KEYS.map((k) => t(k))
   const [label, setLabel] = useState<string>(() => t(CAPTION_LABEL_KEYS[0]))
   const [text, setText] = useState('')
@@ -94,7 +96,7 @@ function CaptionModal({
   }
 
   return (
-    <div className="modal-backdrop" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
+    <div {...modalKeys} className="modal-backdrop" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
       <div className="modal">
         <h2>{t('ribbonCaptionInsertTitle')}</h2>
         <label>
@@ -147,6 +149,7 @@ function SourceModal({
   onClose: () => void
 }) {
   const { t } = useI18n()
+  const modalKeys = useModalKeys(onClose)
   const [type, setType] = useState('Book')
   const [author, setAuthor] = useState('')
   const [title, setTitle] = useState('')
@@ -174,7 +177,7 @@ function SourceModal({
   }
 
   return (
-    <div className="modal-backdrop" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
+    <div {...modalKeys} className="modal-backdrop" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
       <div className="modal">
         <h2>{t('ribbonSourceCreateTitle')}</h2>
         <label>

@@ -361,3 +361,10 @@
 - PrintDialog的Ctrl+P候选在当前Web页面未进入应用弹窗，不作为可达缺陷修复；保护文档既有Web禁用未绕过。其余引用/密码等弹窗仍有覆盖缺口，不宣称完整Ribbon或全部UI验收。
 - 期间磁盘空间耗尽，清理可再生成的npm下载缓存后恢复，保留依赖安装、用户配置、业务数据和既有审计证据。此次环境问题不记为产品UI缺陷。
 - 发布时远端推进到2325d939，新增图片选择/远程粘贴的pending document guard与解码竞态回归；已精确校验对象后rebase保留，未覆盖。合并后六文件46项通过，Web docs类型/生产构建通过，新增helper使边界扫描变为1337文件0违规。最终合并构建1440/390六个弹窗入口再次通过，正文图片三类失败与正常插图四场景也通过；0页面异常。证据：`/tmp/dyoffice-insert-modals-merged-{tests,type,build}.log`、`/tmp/dyoffice-ui-audit/word-insert-modal-merged-{1440,390}/report.json`、`/tmp/dyoffice-image-picker-browser-merged.log`。不以普通图片流程通过代替全部真实异步竞态验收。
+
+## 题注与创建引用源弹窗键盘
+
+- 正式native renderer/mock文档与lease，独立浏览器确认两个可达入口初始焦点在背景、首尾Tab逃出、Escape不关。内部Dropdown第一次Escape正确只关下拉；第二次父Escape仍失效。展开下拉后正Tab关下拉并进入输入，反Tab会逃背景。原始证据：`/tmp/dyoffice-ui-audit/word-reference-modal-red/{coverage.md,report.json}`。
+- 两个父组件仅接入既有useModalKeys，不改Dropdown自身事件层级和插入/添加来源逻辑。新增4项组件回归先红后绿，和插入弹窗/trap/题注正则回归共23/23通过；Web docs类型、生产构建、边界1337文件0违规通过。独立只读review无阻塞，取消路径不触发正文或源写入。
+- 最终构建1440/390各两个入口通过，覆盖初始焦点、两向边界、父Escape、两次Escape先下拉后父、展开下拉正反Tab留在父弹窗。取消后正文归一化文本不变、0页面异常；全部业务写mock/blocked。证据：`/tmp/dyoffice-ui-audit/word-reference-modal-green-{1440,390}/report.json`、`/tmp/dyoffice-references-modals-{red,green,type,build}.log`。默认空草稿未单独验证有效title取消，不将静态路径检查冒充该浏览器场景。
+- 发布前保留远端14778d99、8cb04614的剪贴板读取/Blob解码保护，以及79f2e4ad的拖图读取/解码保护，均精确对象校验后rebase；没有覆盖远端产品改动。合入前述剪贴板保护后的两尺寸浏览器仍全部通过，证据`/tmp/dyoffice-ui-audit/word-reference-modal-merged-{1440,390}/report.json`。最终含拖图保护的相关10文件91项通过；日志`/tmp/dyoffice-references-final-integrated-tests.log`。上述保护不视为已穷举所有剪贴板或拖放竞态。
