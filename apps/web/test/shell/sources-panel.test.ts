@@ -207,3 +207,33 @@ test('legacy HTTP connections remain visible and queryable but cannot be edited 
  expect(query).toEqual({})
  expect(mutations).toBe(0)
 })
+
+test('refreshing a source list preserves credentials that have not been submitted',async()=>{
+ await mount(async path=>read(path))
+ await change('凭据操作','replace');await change('连接凭据','UNSUBMITTED-MOCK')
+ await click('刷新列表')
+ expect(input('连接凭据').value).toBe('UNSUBMITTED-MOCK')
+})
+test('an unconfirmed frozen-result save cannot be bypassed by a new query or another source selection',async()=>{
+ let queries=0;const saves:unknown[]=[]
+ const artifact={resultId:'11111111-1111-4111-8111-111111111111',sourceId:'revenue',sourceVersion:1,rowCount:1,truncated:false,sha256:'b'.repeat(64),state:'pending'}
+ const resultsClient=createSourceResultsClient((async(_path:string,_method?:string,body:unknown)=>{const call=body as {name:string;arguments:unknown};if(call.name==='sources.query'){queries++;return {artifact,schema:[{name:'amount',type:'number'}],timezone:'UTC',preview:[{amount:42}],totalRows:1,sourceTruncated:false,sha256:artifact.sha256,nextOffset:null}}saves.push(call.arguments);throw Error('lost response')}) as Parameters<typeof createSourceResultsClient>[0])
+ const client=createSourcesClient((async(path:string)=>read(path)) as Request)
+ const host=document.createElement('div');document.body.append(host);const root=createRoot(host);roots.push(root)
+ await act(async()=>root.render(h(SourcesPanel,{client,resultsClient,onClose(){}})))
+ const source=[...host.querySelectorAll('button')].find(b=>b.textContent?.includes('营业收入'))!
+ await act(async()=>source.click());await click('执行已发布查询');await click('保存结果到工作区')
+ expect(button('执行已发布查询').disabled).toBe(true)
+ expect(source.disabled).toBe(true)
+ expect(button('保存草稿').disabled).toBe(true)
+ await click('确认保存结果')
+ expect(queries).toBe(1);expect(saves).toHaveLength(2);expect(saves[0]).toEqual(saves[1])
+})
+test('dirty source drafts block browser unload without opening a second confirmation',async()=>{
+ await mount(async path=>read(path));await change('连接名称','未保存')
+ const event=new Event('beforeunload',{cancelable:true});window.dispatchEvent(event)
+ expect(event.defaultPrevented).toBe(true)
+ await change('连接名称','营业收入')
+ const clean=new Event('beforeunload',{cancelable:true});window.dispatchEvent(clean)
+ expect(clean.defaultPrevented).toBe(false)
+})

@@ -16,6 +16,15 @@ const deferred = <T,>() => {let resolve!: (value: T) => void; let reject!: (reas
 const roots: Root[] = []
 const requestFrom = (run: (path: string, method?: string, body?: unknown) => Promise<unknown>): GlobalSettingsRequest => run as GlobalSettingsRequest
 async function mount(client: GlobalSettingsClient, onClose = () => {}) {const host = document.createElement('div'); document.body.append(host); const root = createRoot(host); roots.push(root); await act(async () => root.render(h(GlobalSettingsPanel, {client, onClose}))); return {root, host}}
+test('browser navigation warns for unsaved global configuration and releases the guard on unmount',async()=>{
+ const {root}=await mount(createGlobalSettingsClient(requestFrom(async()=>initial())))
+ const unload=()=>{const event=new Event('beforeunload',{cancelable:true});window.dispatchEvent(event);return event.defaultPrevented}
+ expect(unload()).toBe(false)
+ await change('配置名称','Unsaved change')
+ expect(unload()).toBe(true)
+ await act(async()=>root.unmount());roots.splice(roots.indexOf(root),1)
+ expect(unload()).toBe(false)
+})
 function button(text: string, host: ParentNode = document) {const found = [...host.querySelectorAll<HTMLButtonElement>('button')].find(node => node.textContent === text); expect(found, text).toBeDefined(); return found!}
 function input(label: string) {const found = document.querySelector<HTMLInputElement>(`input[aria-label="${label}"]`); expect(found, label).not.toBeNull(); return found!}
 async function click(text: string) {await act(async () => button(text).click())}

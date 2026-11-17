@@ -19,12 +19,27 @@ export async function parseOfficePreview(bytes:Uint8Array,format:'xlsx'|'pptx'):
  for(const entry of entries){const declared=(entry as unknown as {_data?:{uncompressedSize?:number}})._data?.uncompressedSize??0;size+=declared;if(declared>8*1024*1024||size>32*1024*1024)throw Error('文档解压大小超过预览限制。')}
  async function xml(path:string){const file=zip.file(path);if(!file)return null;const content=await file.async('uint8array');if(content.byteLength>8*1024*1024)throw Error('文档内容超过预览限制。');const source=new TextDecoder().decode(content);if(/<!DOCTYPE|<!ENTITY/i.test(source))throw Error('文档 XML 不支持。');const document=new DOMParser().parseFromString(source,'application/xml');if(document.getElementsByTagName('parsererror').length)throw Error('文档 XML 无效。');return document}
  const pages:PreviewPage[]=[]
- const paths=entries.filter(entry=>!entry.dir&&(format==='xlsx'?/^xl\/worksheets\/sheet\d+\.xml$/:/^ppt\/slides\/slide\d+\.xml$/).test(entry.name)).sort((a,b)=>Number(a.name.match(/\d+/)?.[0])-Number(b.name.match(/\d+/)?.[0]))
+ let paths=entries.filter(entry=>!entry.dir&&(format==='xlsx'?/^xl\/worksheets\/sheet\d+\.xml$/:/^ppt\/slides\/slide\d+\.xml$/).test(entry.name)).sort((a,b)=>Number(a.name.match(/\d+/)?.[0])-Number(b.name.match(/\d+/)?.[0])).map(entry=>({path:entry.name,name:''}))
+ const base=format==='xlsx'?'xl':'ppt',indexPath=format==='xlsx'?'workbook':'presentation'
+ const index=await xml(`${base}/${indexPath}.xml`),relationships=await xml(`${base}/_rels/${indexPath}.xml.rels`)
+ if(index){
+  if(!relationships)throw Error('文档页索引缺失，请下载原件。')
+  const nodes=format==='xlsx'?[...index.getElementsByTagName('sheet')]:[...index.getElementsByTagNameNS('*','sldId')]
+  paths=nodes.map(node=>{
+   const id=node.getAttributeNS('http://schemas.openxmlformats.org/officeDocument/2006/relationships','id')??node.getAttribute('r:id')
+   const relationship=[...relationships.getElementsByTagName('Relationship')].find(item=>item.getAttribute('Id')===id)
+   const target=relationship?.getAttribute('Target')??''
+   const path=target.startsWith(`/${base}/`)?target.slice(1):`${base}/${target.replace(/^\.\//,'')}`
+   const allowed=format==='xlsx'?/^xl\/worksheets\/[^/]+\.xml$/:/^ppt\/slides\/[^/]+\.xml$/
+   if(relationship?.getAttribute('TargetMode')==='External'||!allowed.test(path)||!zip.file(path))throw Error('文档页索引无效，请下载原件。')
+   return {path,name:format==='xlsx'?node.getAttribute('name')??'':''}
+  })
+ }
  if(paths.length>100)throw Error('文档页数超过预览限制。')
  const strings=format==='xlsx'?await xml('xl/sharedStrings.xml'):null
  const shared=strings?[...strings.getElementsByTagName('si')].map(node=>node.textContent??''):[]
  let cells=0
- for(const path of paths){const doc=await xml(path.name);if(!doc)continue
+ for(const path of paths){const doc=await xml(path.path);if(!doc)continue
   const rows:string[][]=[]
   if(format==='xlsx')for(const row of [...doc.getElementsByTagName('row')].slice(0,200)){
    const values:string[]=[]
@@ -32,7 +47,7 @@ export async function parseOfficePreview(bytes:Uint8Array,format:'xlsx'|'pptx'):
    rows.push(values)
   }
   else for(const text of doc.getElementsByTagNameNS('*','t')){if(++cells>20000)throw Error('文本数量超过预览限制。');rows.push([text.textContent??''])}
-  pages.push({name:format==='xlsx'?`工作表 ${pages.length+1}`:`幻灯片 ${pages.length+1}`,rows})
+  pages.push({name:path.name||(format==='xlsx'?`工作表 ${pages.length+1}`:`幻灯片 ${pages.length+1}`),rows})
  }
  if(!pages.length)throw Error('此文档没有可预览的内容，请下载原件。')
  return pages

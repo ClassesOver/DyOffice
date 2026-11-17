@@ -10,6 +10,7 @@ export function LocalSessionsPanel({client=localSessionsClient,onCurrentRevoked,
  const canClose=useCallback(()=>{if(revoking.current)return false;if(closeState.current.unknown)return window.confirm('会话撤销结果尚未确认，请先刷新核对。仍要关闭？');return !closeState.current.confirm||window.confirm('会话撤销尚未确认，是否取消操作并关闭？')},[])
  useEffect(()=>{onCloseGuardChange?.(canClose);return()=>onCloseGuardChange?.(null)},[canClose,onCloseGuardChange])
  const busy=useRef(false),alive=useRef(true)
+ useEffect(()=>{const prevent=(event:BeforeUnloadEvent)=>{if(busy.current||closeState.current.unknown){event.preventDefault();event.returnValue=''}};window.addEventListener('beforeunload',prevent);return()=>window.removeEventListener('beforeunload',prevent)},[])
  async function refresh(){if(busy.current)return;busy.current=true;setPending(true);setError('');setMessage('');setConfirm(null);try{const result=await client.list();if(alive.current){setRows(result);setUnknown(false)}}catch{if(alive.current)setError('无法读取登录会话，请重新加载并确认登录状态。')}finally{busy.current=false;if(alive.current)setPending(false)}}
  useEffect(()=>{alive.current=true;void refresh();return()=>{alive.current=false}},[client])
  async function revoke(){if(busy.current||!confirm)return;const target=confirm;busy.current=true;revoking.current=true;setPending(true);setError('');setMessage('');setConfirm(null)

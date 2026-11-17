@@ -207,3 +207,68 @@ test('password action selects reset explicitly and clears typed credentials befo
   await act(async()=>finish())
  }finally{await act(async()=>root.unmount());environment.IS_REACT_ACT_ENVIRONMENT=previous}
 })
+
+test('switching from a dirty new-user form preserves the draft unless discard is confirmed and clears the close guard after discard',async()=>{
+ const client={list:vi.fn(async()=>({users:[{id:'target',username:'alice',displayName:'Alice',status:'active',roles:['personal'],requiresPasswordReset:false}],nextCursor:null}))} as unknown as LocalAdminClient
+ let guard:(()=>boolean)|null=null
+ const root=await mount(h(LocalAdminPanel,{currentUserId:'me',onClose:()=>{},onSessionRotated:()=>{},onCloseGuardChange:value=>{guard=value},client}))
+ const confirm=vi.spyOn(window,'confirm').mockReturnValue(false)
+ const button=(label:string)=>[...document.querySelectorAll('button')].find(element=>element.textContent===label)!
+ try{
+  button('新建用户').click()
+  await vi.waitFor(()=>expect(document.querySelector('input[name=username]')).not.toBeNull())
+  const username=document.querySelector<HTMLInputElement>('input[name=username]')!
+  Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value')!.set!.call(username,'unsaved-member');username.dispatchEvent(new Event('input',{bubbles:true}))
+  await vi.waitFor(()=>expect(guard?.()).toBe(false));confirm.mockClear()
+  button('编辑角色').click()
+  await vi.waitFor(()=>expect(confirm).toHaveBeenCalledOnce())
+  expect(document.querySelector<HTMLInputElement>('input[name=username]')?.value).toBe('unsaved-member')
+  expect(document.querySelector('form[aria-label="确认用户操作"]')).toBeNull()
+  confirm.mockReturnValue(true);button('编辑角色').click()
+  await vi.waitFor(()=>expect(document.querySelector('form[aria-label="确认用户操作"]')).not.toBeNull())
+  button('取消').click()
+  await vi.waitFor(()=>expect(document.querySelector('form')).toBeNull())
+  confirm.mockClear();expect(guard?.()).toBe(true);expect(confirm).not.toHaveBeenCalled()
+ }finally{confirm.mockRestore();root.unmount()}
+})
+
+test('changing operations keeps the one-time code until the administrator confirms it was recorded',async()=>{
+ const client={list:vi.fn(async()=>({users:[{id:'target',username:'alice',displayName:'Alice',status:'active',roles:['personal'],requiresPasswordReset:false}],nextCursor:null})),reauthenticate:vi.fn(async()=>{}),issue:vi.fn(async()=>({action:{token:'a'.repeat(43),purpose:'reset',expiresAt:'later'}}))} as unknown as LocalAdminClient
+ const root=await mount(h(LocalAdminPanel,{currentUserId:'me',onClose:()=>{},onSessionRotated:()=>{},client}))
+ const confirm=vi.spyOn(window,'confirm').mockReturnValue(false)
+ const button=(label:string)=>[...document.querySelectorAll('button')].find(element=>element.textContent===label)!
+ try{
+  button('重置密码').click();await vi.waitFor(()=>expect(document.querySelector('form[aria-label]')).not.toBeNull())
+  document.querySelector('form[aria-label]')!.dispatchEvent(new Event('submit',{bubbles:true,cancelable:true}))
+  await vi.waitFor(()=>expect(document.querySelector('[aria-label="一次性码"]')).not.toBeNull())
+  const reload=new Event('beforeunload',{cancelable:true});window.dispatchEvent(reload);expect(reload.defaultPrevented).toBe(true);expect(confirm).not.toHaveBeenCalled()
+  button('编辑角色').click();await vi.waitFor(()=>expect(confirm).toHaveBeenCalledOnce())
+  expect(document.querySelector<HTMLInputElement>('[aria-label="一次性码"]')?.value).toBe('a'.repeat(43))
+  expect(document.querySelector('form[aria-label]')).toBeNull()
+  confirm.mockReturnValue(true);button('编辑角色').click();await vi.waitFor(()=>expect(document.querySelector('form[aria-label]')).not.toBeNull())
+  expect(document.querySelector('[aria-label="一次性码"]')).toBeNull()
+ }finally{confirm.mockRestore();root.unmount()}
+})
+
+test('HTTP 408 fences admin writes and browser reload until a successful explicit refresh',async()=>{
+ let fail!:(reason:unknown)=>void
+ const client={list:vi.fn(async()=>({users:[],nextCursor:null})),reauthenticate:vi.fn(async()=>{}),create:vi.fn(()=>new Promise((_resolve,reject)=>{fail=reject}))} as unknown as LocalAdminClient
+ const root=await mount(h(LocalAdminPanel,{currentUserId:'me',onClose:()=>{},onSessionRotated:()=>{},client}))
+ const confirm=vi.spyOn(window,'confirm')
+ const button=(label:string)=>[...document.querySelectorAll('button')].find(element=>element.textContent===label)!
+ const protectedReload=()=>{const event=new Event('beforeunload',{cancelable:true});window.dispatchEvent(event);return event.defaultPrevented}
+ try{
+  button('新建用户').click();await vi.waitFor(()=>expect(document.querySelector('input[name=username]')).not.toBeNull())
+  const username=document.querySelector<HTMLInputElement>('input[name=username]')!;Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value')!.set!.call(username,'new-member');username.dispatchEvent(new Event('input',{bubbles:true}))
+  await vi.waitFor(()=>expect(protectedReload()).toBe(true))
+  document.querySelector('form')!.dispatchEvent(new Event('submit',{bubbles:true,cancelable:true}));await vi.waitFor(()=>expect(document.querySelector('form[aria-label]')).not.toBeNull())
+  document.querySelector('form[aria-label]')!.dispatchEvent(new Event('submit',{bubbles:true,cancelable:true}));await vi.waitFor(()=>expect(client.create).toHaveBeenCalledOnce())
+  expect(protectedReload()).toBe(true)
+  fail(Object.assign(new Error('timeout'),{status:408}))
+  await vi.waitFor(()=>expect(document.body.textContent).toContain('上次操作结果未确认'))
+  expect(button('新建用户').disabled).toBe(true)
+  expect(protectedReload()).toBe(true);expect(client.create).toHaveBeenCalledOnce();expect(confirm).not.toHaveBeenCalled()
+  button('刷新列表').click();await vi.waitFor(()=>expect(button('新建用户').disabled).toBe(false))
+  expect(protectedReload()).toBe(false)
+ }finally{confirm.mockRestore();root.unmount()}
+})

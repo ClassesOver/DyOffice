@@ -414,3 +414,47 @@ test('the next-page sentinel stays inside the independently scrolling recent lis
   const sentinel = host.querySelector('.recent-list > .load-more')
   expect(sentinel?.tagName).toBe('LI')
 })
+
+test.each(['Enter', ' '])('Web row menu supports %s opening, arrow navigation, Escape and normal Tab dismissal', async key => {
+  await act(async () => root.render(h(LocaleProvider, {initial: 'en', children: h(Home, {accountEntry: h('div', null, 'Account'), supportedNewFormats: [], supportedFormats: ['docx']})})))
+  const trigger = host.querySelector<HTMLButtonElement>('.recent-item .more-btn')!
+  trigger.focus()
+  await act(async () => trigger.dispatchEvent(new KeyboardEvent('keydown', {key, bubbles: true, cancelable: true})))
+  const menu = document.body.querySelector<HTMLElement>('.row-menu')!
+  expect(menu).not.toBeNull()
+  const items = [...menu.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')]
+  expect(document.activeElement).toBe(items[0])
+  await act(async () => items[0].dispatchEvent(new KeyboardEvent('keydown', {key: 'ArrowDown', bubbles: true, cancelable: true})))
+  expect(document.activeElement).toBe(items[1])
+  await act(async () => items[1].dispatchEvent(new KeyboardEvent('keydown', {key: 'ArrowUp', bubbles: true, cancelable: true})))
+  expect(document.activeElement).toBe(items[0])
+  await act(async () => items[0].dispatchEvent(new KeyboardEvent('keydown', {key: 'Escape', bubbles: true, cancelable: true})))
+  expect(document.body.querySelector('.row-menu')).toBeNull()
+  expect(document.activeElement).toBe(trigger)
+  await act(async () => trigger.dispatchEvent(new KeyboardEvent('keydown', {key, bubbles: true, cancelable: true})))
+  const first = document.body.querySelector<HTMLElement>('.row-menu [role="menuitem"]')!
+  const tab = new KeyboardEvent('keydown', {key: 'Tab', bubbles: true, cancelable: true})
+  await act(async () => first.dispatchEvent(tab))
+  expect(document.body.querySelector('.row-menu')).toBeNull()
+  expect(tab.defaultPrevented).toBe(false)
+})
+
+test('desktop row menu keeps its existing native button keyboard handling', async () => {
+  const trigger = host.querySelector<HTMLButtonElement>('.recent-item .more-btn')!
+  await act(async () => trigger.dispatchEvent(new KeyboardEvent('keydown', {key: 'Enter', bubbles: true, cancelable: true})))
+  expect(host.querySelector('.row-menu')).toBeNull()
+  await click(trigger)
+  expect(host.querySelector('.row-menu')).not.toBeNull()
+})
+
+test('Web row menu ignores delayed pre-opening scroll events but closes when its list moves', async () => {
+  await act(async () => root.render(h(LocaleProvider, {initial: 'en', children: h(Home, {accountEntry: h('div', null, 'Account'), supportedNewFormats: [], supportedFormats: ['docx']})})))
+  const list = host.querySelector<HTMLElement>('.recent-list')!
+  list.scrollLeft = 99; list.scrollTop = 452
+  await click(host.querySelector<HTMLButtonElement>('.recent-item .more-btn')!)
+  await act(async () => list.dispatchEvent(new Event('scroll')))
+  expect(document.body.querySelector('.row-menu')).not.toBeNull()
+  list.scrollLeft = 100
+  await act(async () => list.dispatchEvent(new Event('scroll')))
+  expect(document.body.querySelector('.row-menu')).toBeNull()
+})

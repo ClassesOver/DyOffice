@@ -62,6 +62,12 @@ export function GlobalSettingsPanel({client, onClose, presentation = 'dialog', o
   const patch = draftPatch(saved, drafts, removed, defaults, keys.current, clearKeys)
   const dirty = !!(patch.upserts?.length || patch.removes?.length || Object.keys(patch.defaults ?? {}).length)
   const busy = clientState.pending !== null, blocked = busy || clientState.unknownWrite || needsReload || !saved
+  useEffect(() => {
+    if (!dirty && !clientState.unknownWrite && (!busy || clientState.pending === 'load')) return
+    const prevent = (event: BeforeUnloadEvent) => {event.preventDefault(); event.returnValue = ''}
+    window.addEventListener('beforeunload', prevent)
+    return () => window.removeEventListener('beforeunload', prevent)
+  }, [dirty, clientState.unknownWrite, busy, clientState.pending])
 
   const clearSecrets = useCallback(() => {
     keys.current.clear()

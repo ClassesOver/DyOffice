@@ -10,6 +10,7 @@ export function LocalPasswordForm({changePassword,reload,onCloseGuardChange}:{on
  closeState.current.unknown=state==='unknown'
  const canClose=useCallback(()=>{if(closeState.current.unknown)return window.confirm('密码修改结果尚未确认。关闭后请重新加载并核对登录状态，不要重复提交。是否关闭？');if(locked.current)return false;return !closeState.current.dirty||window.confirm('密码表单尚未提交，是否清空并关闭？')},[])
  useEffect(()=>{onCloseGuardChange?.(canClose);return()=>onCloseGuardChange?.(null)},[canClose,onCloseGuardChange])
+ useEffect(()=>{const prevent=(event:BeforeUnloadEvent)=>{if(locked.current||closeState.current.dirty||closeState.current.unknown){event.preventDefault();event.returnValue=''}};window.addEventListener('beforeunload',prevent);return()=>window.removeEventListener('beforeunload',prevent)},[])
  async function submit(event:React.FormEvent<HTMLFormElement>){
   event.preventDefault();if(locked.current)return
   const form=event.currentTarget,data=new FormData(form)

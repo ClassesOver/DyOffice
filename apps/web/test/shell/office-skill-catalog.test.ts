@@ -16,6 +16,7 @@ test('migrates every eligible DyOffice recommended task with its original identi
  }
 })
 test('excludes Markdown, HTML and desktop CLI task resources from the installation catalog',()=>{
+ expect(classifyOfficeSkill('word-help','Word document task','Read this SKILL.md before editing Word.').relevant).toBe(true)
  for(const format of ['.md','MD','Markdown','.html','HTML'])expect(classifyOfficeSkill('word-export',`Word report with ${format} output`).relevant).toBe(false)
  for(const name of ['brand-copy','email-drafter','interview-coach','seo-content','social-media','genoffice'])expect(WEB_OFFICE_SKILL_CATALOG.some(item=>item.key===name)).toBe(false)
  expect(WEB_OFFICE_SKILL_CATALOG.some(item=>item.key.startsWith('web-'))).toBe(false)

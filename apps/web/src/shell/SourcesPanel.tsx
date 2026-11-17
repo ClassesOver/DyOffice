@@ -43,17 +43,23 @@ export function SourcesPanel({ client, resultsClient, onClose, presentation = 'd
     onCloseGuardChange?.(busy || unknown || dirty || unresolvedResult ? canClose : null)
     return () => onCloseGuardChange?.(null)
   }, [onCloseGuardChange, busy, unknown, dirty, unresolvedResult])
+  useEffect(() => {
+    if (!busy && !unknown && !dirty && !unresolvedResult) return
+    const prevent = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = '' }
+    window.addEventListener('beforeunload', prevent)
+    return () => window.removeEventListener('beforeunload', prevent)
+  }, [busy, unknown, dirty, unresolvedResult])
   const patch = (value: Partial<Draft>) => { setDraft(current => ({ ...current, ...value })); setLatest(null); setConfirmDelete(false) }
   let publicConfig: Record<string, unknown> | null = null
   try { const value = JSON.parse(draft.config); if (value && typeof value === 'object' && !Array.isArray(value)) publicConfig = value } catch { /* Advanced JSON validation is reported on save. */ }
   function patchConfig(key: string, value: string | number) {
     if (publicConfig) patch({config: JSON.stringify({...publicConfig, [key]: value}, null, 2)})
   }
-  async function operation(action: () => Promise<void>) {
+  async function operation(action: () => Promise<void>, clearSubmittedSecret = false) {
     if (busy) return
     setError(''); setMessage('')
     try { await action() } catch (e) { if (alive.current) setError((e as Error).message) }
-    finally { if (alive.current) { setDraft(current => ({ ...current, secret: '' })); if (inputRef.current) inputRef.current.input && (inputRef.current.input.value = '') } }
+    finally { if (alive.current && clearSubmittedSecret) { setDraft(current => ({ ...current, secret: '' })); if (inputRef.current) inputRef.current.input && (inputRef.current.input.value = '') } }
   }
   async function reloadList(append = false) {
     const page = await client.list(append ? cursor ?? undefined : undefined)
@@ -85,7 +91,7 @@ export function SourcesPanel({ client, resultsClient, onClose, presentation = 'd
     <div className={presentation === 'page' ? 'workspace-panel-body source-body' : 'set-body source-body'}>
       <aside className="source-list" aria-label="连接列表">
         <Button autoInsertSpace={false} disabled={busy || dirty || unknown || unresolvedResult} onClick={() => { setDetail(null); setDraft(empty()); setLatest(null); setResult(null); setConfirmDelete(false) }}>新建数据连接</Button>
-        {items.map(item => <Button autoInsertSpace={false} className="source-item" key={item.sourceId} disabled={busy || dirty} onClick={() => void operation(() => select(item.sourceId))}>
+        {items.map(item => <Button autoInsertSpace={false} className="source-item" key={item.sourceId} disabled={busy || dirty || unresolvedResult} onClick={() => { if (!unresolvedResult) void operation(() => select(item.sourceId)) }}>
           <strong>{item.name}</strong><span>{item.kind} · 草稿 v{item.version} · {item.publishedRevision ? `已发布 r${item.publishedRevision}` : '未发布'}</span><span>{item.enabled ? '已启用' : '已禁用'}{item.hasUnpublishedChanges ? ' · 有未发布修改' : ''}</span>
         </Button>)}
         {cursor && <Button autoInsertSpace={false} disabled={busy} onClick={() => void operation(() => reloadList(true))}>加载更多</Button>}
@@ -107,15 +113,15 @@ export function SourcesPanel({ client, resultsClient, onClose, presentation = 'd
           {detail && !legacyHttp && <label className="set-field">凭据操作<Select aria-label="凭据操作" value={draft.credentialMode} disabled={busy || unknown} onChange={value => patch({credentialMode:value as Draft['credentialMode'],secret:''})} options={[{value:'retain',label:`保留现有凭据${detail.source.hasCredential ? '（已配置）' : '（未配置）'}`},{value:'replace',label:'替换凭据'},{value:'clear',label:'清空草稿凭据'}]}/></label>}
           {!legacyHttp && (!detail || draft.credentialMode === 'replace') && <label className="set-field">{draft.kind === 'http' ? 'HTTP JSON 端点 URL' : '数据库只读 DSN'}<Input ref={inputRef} aria-label="连接凭据" type="password" autoComplete="new-password" value={draft.secret} onChange={e => patch({ secret: e.target.value })} /></label>}
           <label className="set-field"><Checkbox disabled={busy || unknown || legacyHttp} checked={draft.enabled} onChange={e => patch({ enabled: e.target.checked })}>启用数据连接</Checkbox></label>
-          <Button autoInsertSpace={false} type="primary" disabled={busy || unknown || legacyHttp} onClick={() => void operation(save)}>保存草稿</Button>
+          <Button autoInsertSpace={false} type="primary" disabled={busy || unknown || legacyHttp || unresolvedResult} onClick={() => { if (!unresolvedResult) void operation(save, true) }}>保存草稿</Button>
         </fieldset>
         <div className="source-actions">
           {(detail || unknown && draft.sourceId) && <Button autoInsertSpace={false} disabled={busy} onClick={() => void operation(async () => { setMissing(false); try { const current = await client.detail(detail?.source.sourceId ?? draft.sourceId); if (alive.current) { setLatest(current); setMessage('最新版本已读取，当前草稿仍保留。') } } catch (error) { if ((error as {status?: number}).status !== 404) throw error; if (alive.current) { setLatest(null); setMissing(true) } } })}>读取最新版本并核对</Button>}
           {detail && <>
             <Button autoInsertSpace={false} disabled={busy || dirty || unknown || legacyHttp} onClick={() => void operation(async () => { const checked = await client.test(detail.source.sourceId); if (alive.current) setMessage(checked.ok ? '连接测试通过。' : checked.code === 'READONLY_ROLE_REQUIRED' ? '连接账号未通过最小只读权限核验。请使用仅获批准库 SELECT 权限的专用账号，不能使用 root 或管理角色。' : checked.code === 'SOURCE_TIMEOUT' ? '连接或查询超时，请检查目标网络与查询时限。' : '连接测试未通过，请检查目标只读权限与部署网络策略。') })}>测试已保存草稿</Button>
-            <Button autoInsertSpace={false} disabled={busy || dirty || unknown || legacyHttp || !detail.source.hasCredential} onClick={() => void operation(async () => { await client.publish(detail.source.sourceId, detail.source.version); if (!alive.current) return; await select(detail.source.sourceId); await reloadList(); if (alive.current) setMessage('连接版本已发布。') })}>发布草稿</Button>
+            <Button autoInsertSpace={false} disabled={busy || dirty || unknown || legacyHttp || unresolvedResult || !detail.source.hasCredential} onClick={() => void operation(async () => { await client.publish(detail.source.sourceId, detail.source.version); if (!alive.current) return; await select(detail.source.sourceId); await reloadList(); if (alive.current) setMessage('连接版本已发布。') })}>发布草稿</Button>
             <label><Checkbox aria-label="确认删除此连接" checked={confirmDelete} disabled={busy || unknown || legacyHttp} onChange={e => setConfirmDelete(e.target.checked)}>确认删除此连接（保留不可复用的标识墓碑）</Checkbox></label>
-            <Button autoInsertSpace={false} danger disabled={busy || unknown || legacyHttp || !confirmDelete} onClick={() => void operation(async () => { await client.remove(detail.source.sourceId, detail.source.version); if (!alive.current) return; setDetail(null); setDraft(empty()); await reloadList() })}>删除连接</Button>
+            <Button autoInsertSpace={false} danger disabled={busy || unknown || legacyHttp || unresolvedResult || !confirmDelete} onClick={() => void operation(async () => { await client.remove(detail.source.sourceId, detail.source.version); if (!alive.current) return; setDetail(null); setDraft(empty()); await reloadList() })}>删除连接</Button>
           </>}
           {dirty && <Button autoInsertSpace={false} disabled={busy || unknown} onClick={() => { setDraft(detail ? fromDetail(detail) : empty()); setLatest(null) }}>放弃本地草稿</Button>}
         </div>
@@ -123,7 +129,8 @@ export function SourcesPanel({ client, resultsClient, onClose, presentation = 'd
         {latest && <div role="status"><p>服务器最新草稿 v{latest.source.version}；本地编辑基于 v{detail?.source.version}。</p><Button autoInsertSpace={false} onClick={() => { client.acknowledgeLatest(); setDetail(latest); setDraft(fromDetail(latest)); setLatest(null) }}>采用服务器版本并放弃当前草稿</Button></div>}
         {detail?.published && <section><h3>查询已发布版本 r{detail.published.revision}</h3>
           {draft.kind !== 'http' && <label className="set-field">只读 SQL<Input.TextArea aria-label="只读 SQL" rows={4} spellCheck={false} value={sql} onChange={e => setSql(e.target.value)} /></label>}
-          <Button autoInsertSpace={false} disabled={busy || unknown || !detail.source.enabled} onClick={() => void operation(async () => {
+          <Button autoInsertSpace={false} disabled={busy || unknown || unresolvedResult || !detail.source.enabled} onClick={() => void operation(async () => {
+            if (unresolvedResult) return
             setResultBusy(true)
             try {
               const query = draft.kind === 'http' ? {} : { sql }

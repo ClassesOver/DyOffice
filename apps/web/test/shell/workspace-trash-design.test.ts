@@ -40,3 +40,46 @@ test('unknown purge preserves the row and blocks repeat writes and close until r
  await act(async()=>button('重新加载').click());expect(guard).toBeNull()
  expect(button('永久删除').disabled).toBe(false);expect(writes).toBe(1)
 })
+
+for(const action of ['restore','purge'] as const)test(`successful ${action} of the only file on page two returns to an existing page`,async()=>{
+ const rows=Array.from({length:11},(_,index)=>({...row,id:`file-${index}`,name:`report-${index}.docx`}))
+ let current=rows;const offsets:number[]=[],writes:string[]=[]
+ await mount(async(path:string,method?:string)=>{if(method==='POST'){writes.push(path);current=current.filter(file=>file.id!=='file-10');return action==='purge'?{state:'purged'}:undefined}const offset=Number(new URL(path,'http://local').searchParams.get('offset'));offsets.push(offset);return {files:current.slice(offset,offset+10),total:current.length}})
+ await act(async()=>document.querySelector<HTMLElement>('.ant-pagination-item-2 a')!.click())
+ expect(document.querySelector('[data-row-key="file-10"]')).not.toBeNull()
+ if(action==='purge')await act(async()=>button('永久删除').click())
+ await act(async()=>button(action==='restore'?'恢复':'确认永久删除').click())
+ expect(writes).toEqual([`/api/v1/files/file-10/${action}`])
+ expect(offsets).toEqual([0,10,0])
+ expect(document.querySelectorAll('.ant-table-body [data-row-key]').length).toBe(10)
+ expect(document.querySelector('.ant-pagination-item-active')?.textContent).toBe('1')
+ expect(document.body.textContent).not.toContain('回收站为空。')
+ await act(async()=>button('重新加载').click());expect(offsets.at(-1)).toBe(0)
+})
+test('an empty server page with a positive total loads a valid page instead of showing an empty recycle bin',async()=>{
+ const offsets:number[]=[]
+ await mount(async(path:string)=>{const offset=Number(new URL(path,'http://local').searchParams.get('offset'));offsets.push(offset);return offset===0?{files:[row],total:11}:{files:[],total:10}})
+ await act(async()=>document.querySelector<HTMLElement>('.ant-pagination-item-2 a')!.click())
+ expect(offsets).toEqual([0,10,0])
+ expect(document.querySelector('[data-row-key="file-a"]')).not.toBeNull()
+ expect(document.querySelector('.ant-pagination-item-active')?.textContent).toBe('1')
+ expect(document.body.textContent).not.toContain('回收站为空。')
+})
+
+test('a confirmed restore followed by a page read failure stays confirmed and can be explicitly refreshed',async()=>{
+ let written=false,readFails=true,writes=0
+ await mount(async(path:string,method?:string)=>{if(method==='POST'){written=true;writes++;return undefined}if(written&&readFails)throw Error('read failed');const offset=Number(new URL(path,'http://local').searchParams.get('offset'));return {files:offset?[{...row,id:'last-file'}]:[row],total:written?10:11}})
+ await act(async()=>document.querySelector<HTMLElement>('.ant-pagination-item-2 a')!.click())
+ await act(async()=>button('恢复').click())
+ expect(document.body.textContent).toContain('已恢复')
+ expect(document.body.textContent).toContain('操作已成功，但列表刷新失败')
+ expect(document.body.textContent).not.toContain('无法确认恢复结果')
+ readFails=false;await act(async()=>button('重新加载').click())
+ expect(document.querySelector('[data-row-key="file-a"]')).not.toBeNull();expect(button('恢复').disabled).toBe(false);expect(writes).toBe(1)
+})
+test('a contradictory empty first page with a positive total reports a read error without looping',async()=>{
+ const request=vi.fn(async()=>({files:[],total:1}));await mount(request)
+ expect(request).toHaveBeenCalledOnce()
+ expect(document.body.textContent).toContain('回收站列表已变化，请重新加载核对。')
+ expect(document.body.textContent).not.toContain('回收站为空。')
+})

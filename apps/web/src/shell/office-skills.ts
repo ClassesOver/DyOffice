@@ -1,7 +1,7 @@
 /** Deliberately narrower than the desktop classifier: HTML, Markdown and business
  * domain keywords alone do not enable personal skills in the Web assistant. */
 export function classifyOfficeSkill(name: string, description: string, body = '') {
-  const text = `${name}\n${description}\n${body}`
+  const text = `${name}\n${description}\n${body}`.replace(/\bSKILL\.md\b/gi, 'skill instructions')
   if (/(?:^|[^a-z0-9])(?:html?|markdown|md)(?=$|[^a-z0-9])/i.test(text)) return {relevant: false, matched: [] as string[]}
   const matched = [
     {id: 'docx', pattern: /(?:^|[^a-z0-9])(?:docx|word)(?=$|[^a-z0-9])|文字处理/i},

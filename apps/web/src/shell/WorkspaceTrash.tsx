@@ -12,15 +12,21 @@ export function WorkspaceTrash({request,onClose,onChanged,presentation='dialog',
  const [busy,setBusy]=useState(true),[uncertain,setUncertain]=useState(false),[error,setError]=useState(''),[message,setMessage]=useState(''),[search,setSearch]=useState('')
  const [purging,setPurging]=useState<WorkspaceFile|null>(null)
  const mounted=useRef(true),pending=useRef(false)
+ useEffect(()=>{const prevent=(event:BeforeUnloadEvent)=>{if(pending.current||uncertain){event.preventDefault();event.returnValue=''}};window.addEventListener('beforeunload',prevent);return()=>window.removeEventListener('beforeunload',prevent)},[uncertain])
  function canClose(){if(pending.current||busy){setError('回收站操作处理中，请完成后再关闭。');return false}if(uncertain){setError('操作结果尚未确认，请重新加载回收站核对后再关闭。');return false}return true}
  useEffect(()=>{onCloseGuardChange?.(busy||uncertain?canClose:null);return()=>onCloseGuardChange?.(null)},[onCloseGuardChange,busy,uncertain])
+ async function readPage(nextPage:number):Promise<WorkspaceFileList&{page:number}>{
+  const result=await request<WorkspaceFileList>(`/api/v1/workspace/files?view=trash&limit=${pageSize}&offset=${(nextPage-1)*pageSize}`)
+  if(!result||!Array.isArray(result.files)||!Number.isSafeInteger(result.total)||result.total<0)throw Error('回收站响应无效。')
+  if(!result.files.length&&result.total>0){if(nextPage>1)return readPage(nextPage>Math.ceil(result.total/pageSize)?Math.ceil(result.total/pageSize):1);throw Error('回收站列表已变化，请重新加载核对。')}
+  return {...result,page:result.total===0?1:nextPage}
+ }
  async function load(nextPage=page){
   if(pending.current)return
   pending.current=true;setBusy(true);setError('');setMessage('');setPurging(null)
   try{
-   const result=await request<WorkspaceFileList>(`/api/v1/workspace/files?view=trash&limit=${pageSize}&offset=${(nextPage-1)*pageSize}`)
-   if(!result||!Array.isArray(result.files)||!Number.isSafeInteger(result.total)||result.total<0)throw Error('回收站响应无效。')
-   if(mounted.current){setFiles(result.files);setTotal(result.total);setPage(nextPage);setSearch('');setUncertain(false)}
+   const result=await readPage(nextPage)
+   if(mounted.current){setFiles(result.files);setTotal(result.total);setPage(result.page);setSearch('');setUncertain(false)}
   }catch(failure){if(mounted.current)setError(failure instanceof Error?failure.message:'回收站加载失败，请重新加载。')}
   finally{pending.current=false;if(mounted.current)setBusy(false)}
  }
@@ -31,7 +37,12 @@ export function WorkspaceTrash({request,onClose,onChanged,presentation='dialog',
   try{
    const result=await request<{state:'purged'|'pending'}|undefined>(`/api/v1/files/${encodeURIComponent(file.id)}/${action}`,'POST')
    if(action==='purge'&&result?.state!=='purged'&&result?.state!=='pending')throw Error('删除结果无效。')
-   if(mounted.current){setFiles(current=>current.filter(item=>item.id!==file.id));setTotal(value=>Math.max(0,value-1));onChanged();setMessage(action==='restore'?`已恢复「${file.name}」，原始内容、收藏和文件夹归属保持不变。`:result?.state==='pending'?`「${file.name}」已不可恢复，存储空间正在后台回收。`:`已永久删除「${file.name}」。`)}
+   if(mounted.current){setFiles(current=>current.filter(item=>item.id!==file.id));setTotal(value=>Math.max(0,value-1));if(total===1)setPage(1);onChanged();setMessage(action==='restore'?`已恢复「${file.name}」，原始内容、收藏和文件夹归属保持不变。`:result?.state==='pending'?`「${file.name}」已不可恢复，存储空间正在后台回收。`:`已永久删除「${file.name}」。`)}
+   if(mounted.current&&files.length===1&&total>1){
+    const nextPage=Math.min(page,Math.ceil((total-1)/pageSize));setPage(nextPage)
+    try{const refreshed=await readPage(nextPage);if(mounted.current){setFiles(refreshed.files);setTotal(refreshed.total);setPage(refreshed.page);setSearch('')}}
+    catch{if(mounted.current)setError('操作已成功，但列表刷新失败。请重新加载列表，不要重复提交。')}
+   }
   }catch(failure){if(mounted.current){const status=(failure as {status?:number})?.status;const unknown=status===undefined||status>=500||status===408;setUncertain(unknown);setError(unknown?`无法确认${action==='restore'?'恢复':'永久删除'}结果，请重新加载回收站核对，不要重复提交。`:failure instanceof Error?failure.message:'操作失败。')}}
   finally{pending.current=false;if(mounted.current)setBusy(false)}
  }

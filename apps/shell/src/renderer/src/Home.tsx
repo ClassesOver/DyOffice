@@ -1603,6 +1603,7 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
   const rowMenuWrapRef = useRef<HTMLSpanElement>(null)
   const rowMenuPopRef = useRef<HTMLDivElement>(null)
   const rowMenuAnchor = useRef<DOMRect | null>(null)
+  const rowMenuTrigger = useRef<HTMLButtonElement | null>(null)
   const renderMenu = (menu: ReactElement) => supportedFormats ? createPortal(menu, document.body) : menu
   const [selected, setSelected] = useState<ReadonlySet<string>>(new Set())
   const [renaming, setRenaming] = useState<{ path: string; value: string } | null>(null)
@@ -1937,11 +1938,22 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
       {width: fixedViewportWidth(), height: document.documentElement.clientHeight},
     )
     el.style.left = `${left}px`; el.style.top = `${top}px`
+    el.querySelector<HTMLButtonElement>('[role="menuitem"]:not(:disabled)')?.focus({preventScroll: true})
   }, [rowMenu, supportedFormats])
   useEffect(() => {
     if (!supportedFormats || !rowMenu) return
+    // Revealing an offscreen trigger can queue a scroll event before the menu opens.
+    // Only dismiss for a position change after opening, not that delayed event.
+    const positions = new Map<Element, {top: number; left: number}>()
+    for (let element: Element | null = rowMenuTrigger.current; element; element = element.parentElement) {
+      positions.set(element, {top: element.scrollTop, left: element.scrollLeft})
+    }
     const close = (event: Event) => {
       if (event.target instanceof Node && rowMenuPopRef.current?.contains(event.target)) return
+      if (event.type === 'scroll' && event.target instanceof Element) {
+        const previous = positions.get(event.target)
+        if (previous && previous.top === event.target.scrollTop && previous.left === event.target.scrollLeft) return
+      }
       setRowMenu(null)
     }
     window.addEventListener('scroll', close, true); window.addEventListener('resize', close)
@@ -2866,7 +2878,15 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
               className="more-btn"
               aria-label={t('moreActions')}
               aria-expanded={rowMenu === entry.path}
+              onKeyDown={supportedFormats ? event => {
+                if (event.key !== 'Enter' && event.key !== ' ') return
+                event.preventDefault(); event.stopPropagation()
+                rowMenuTrigger.current = event.currentTarget
+                rowMenuAnchor.current = event.currentTarget.getBoundingClientRect()
+                setRowMenu(entry.path)
+              } : undefined}
               onClick={(event) => {
+                rowMenuTrigger.current = event.currentTarget
                 rowMenuAnchor.current = event.currentTarget.getBoundingClientRect()
                 setRowMenu(rowMenu === entry.path ? null : entry.path)
               }}
@@ -2878,7 +2898,19 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
               </svg>
             </button>
             {rowMenu === entry.path && renderMenu(
-              <div className="row-menu" role="menu" ref={rowMenuPopRef} style={supportedFormats ? {position: 'fixed', right: 'auto', bottom: 'auto', zIndex: 1200} : undefined}>
+              <div className="row-menu" role="menu" onKeyDown={supportedFormats ? event => {
+                if (event.key === 'Escape' || event.key === 'Tab') {
+                  if (event.key === 'Escape') event.preventDefault()
+                  event.stopPropagation()
+                  rowMenuTrigger.current?.focus({preventScroll: true})
+                  setRowMenu(null)
+                } else if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+                  event.preventDefault(); event.stopPropagation()
+                  const items = [...event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="menuitem"]:not(:disabled)')]
+                  const index = items.indexOf(document.activeElement as HTMLButtonElement)
+                  items[(index + (event.key === 'ArrowDown' ? 1 : items.length - 1)) % items.length]?.focus({preventScroll: true})
+                }
+              } : undefined} ref={rowMenuPopRef} style={supportedFormats ? {position: 'fixed', right: 'auto', bottom: 'auto', zIndex: 1200} : undefined}>
                 <button
                   role="menuitem"
                   onClick={() => {

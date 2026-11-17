@@ -16,6 +16,7 @@ export function UserSkillsPanel({client,onCloseGuardChange}: {client: ReturnType
   const [view, setView] = useState<{name: string; body: string} | null>(null)
   const [removing, setRemoving] = useState<FoundSkill | null>(null)
   const input = useRef<HTMLInputElement>(null), pending = useRef(false), generation = useRef(0)
+  useEffect(()=>{const prevent=(event:BeforeUnloadEvent)=>{if(pending.current||uncertain){event.preventDefault();event.returnValue=''}};window.addEventListener('beforeunload',prevent);return()=>window.removeEventListener('beforeunload',prevent)},[uncertain])
   function canClose() {
     if (pending.current) { setError('Skills 操作处理中，请完成后再关闭。'); return false }
     if (uncertain) { setError('Skills 操作结果未确认，请刷新列表核对后再关闭。'); return false }
