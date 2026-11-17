@@ -10,6 +10,43 @@ import {createGlobalConfigService} from '../../server/src/modules/admin/service.
 import {createSkillService} from '../../server/src/modules/skills/service.ts'
 import {password} from '../helpers/identity.mjs'
 
+// Failure-only diagnostics contain counters and fixed UI states, never request
+// bodies, headers, cookies, Skill text, or arbitrary URLs/error messages.
+function observeSkillRequests(page, origin) {
+  const counters = Object.fromEntries(['catalog', 'body', 'sessionProof'].map(key => [key, {requests: 0, failed: 0, statuses: {}}]))
+  const kind = value => {
+    try {
+      const url = new URL(value)
+      if (url.origin !== origin) return undefined
+      return {'/api/v1/skills': 'catalog', '/api/v1/skills/alice-report': 'body', '/api/v1/auth/session-proof': 'sessionProof'}[url.pathname]
+    } catch { return undefined }
+  }
+  page.on('request', request => {const key = kind(request.url()); if (key) counters[key].requests++})
+  page.on('requestfailed', request => {const key = kind(request.url()); if (key) counters[key].failed++})
+  page.on('response', response => {const key = kind(response.url()); if (key) {const status = response.status(); if (!Number.isInteger(status) || status < 100 || status > 599) return; counters[key].statuses[status] = (counters[key].statuses[status] ?? 0) + 1}})
+  return counters
+}
+async function captureSkillMenuState(page) {
+  try {
+    return await page.evaluate(() => {
+      const plus = document.querySelector('.ai-plus-btn'), menu = document.querySelector('.ai-plus-pop[role="menu"]')
+      const expanded = plus?.getAttribute('aria-expanded')
+      return {
+        language: ['zh', 'en'].includes(document.documentElement.lang) ? document.documentElement.lang : 'other',
+        hidden: document.hidden, focused: document.hasFocus(),
+        plusCount: document.querySelectorAll('.ai-plus-btn').length,
+        expanded: expanded === 'true' || expanded === 'false' ? expanded : 'missing',
+        menuCount: document.querySelectorAll('.ai-plus-pop[role="menu"]').length,
+        searchCount: menu?.querySelectorAll('.ai-plus-search').length ?? 0,
+        checkboxCount: menu?.querySelectorAll('[role="menuitemcheckbox"]').length ?? 0,
+        emptyCount: menu?.querySelectorAll('.ai-plus-empty').length ?? 0,
+        dockCount: document.querySelectorAll('.ai-dock').length,
+        railCount: document.querySelectorAll('.ai-rail').length,
+      }
+    })
+  } catch { return {unavailable: true} }
+}
+
 test('native DOCX assistant delivers selected private Skill through the personal Provider Gateway', {timeout: 120_000}, async t => {
   const origin = 'http://localhost:4213', f = await fileFixture(t, {origin})
   const keyring = {activeKeyId: 'test', keys: {test: new Uint8Array(32).fill(25)}}
@@ -26,6 +63,7 @@ test('native DOCX assistant delivers selected private Skill through the personal
   const browser = await launchTestBrowser(); t.after(() => browser.close())
   const page = await browser.newPage(), errors = []
   page.on('pageerror', error => errors.push(error.message))
+  const skillRequests = observeSkillRequests(page, origin)
   const auth = await page.request.get(origin + '/api/v1/auth/csrf')
   const {csrfToken} = await auth.json()
   assert.equal((await page.request.post(origin + '/api/v1/auth/login', {headers: {origin, 'x-csrf-token': csrfToken}, data: {username: 'alice', password}})).status(), 200)
@@ -40,14 +78,21 @@ test('native DOCX assistant delivers selected private Skill through the personal
   assert.deepEqual(errors, [])
   if (await page.locator('.ai-rail').isVisible()) await page.locator('.ai-rail').click()
   await expect(page.getByLabel('助手模型')).toHaveValue('primary')
+  let attachAttempt = 0
   const attachSkill = async () => {
-    await page.locator('.ai-plus-btn').click()
-    const details = page.getByRole('menuitem', {name: '技能', exact: true})
-    if (await details.isVisible()) await details.click()
-    const option = page.getByRole('menuitemcheckbox', {name: /alice-report/})
-    await option.click()
-    await expect(option).toHaveAttribute('aria-checked', 'true')
-    await expect(page.getByText('Bob report skill', {exact: true})).toHaveCount(0)
+    attachAttempt++
+    try {
+      await page.locator('.ai-plus-btn').click()
+      const details = page.getByRole('menuitem', {name: '技能', exact: true})
+      if (await details.isVisible()) await details.click()
+      const option = page.getByRole('menuitemcheckbox', {name: /alice-report/})
+      await option.click()
+      await expect(option).toHaveAttribute('aria-checked', 'true')
+      await expect(page.getByText('Bob report skill', {exact: true})).toHaveCount(0)
+    } catch (error) {
+      t.diagnostic(JSON.stringify({stage: 'attachSkill', attempt: attachAttempt, pageerrorCount: errors.length, requests: skillRequests, menu: await captureSkillMenuState(page)}))
+      throw error
+    }
   }
   const composer = page.locator('.ai-panel textarea')
   // Body-only Office classification reads the Skill while populating the menu.
