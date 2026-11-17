@@ -1709,6 +1709,20 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
     folderMenu?.where === where && folderMenu.path === path
   const folderMenuWrapRef = useRef<HTMLDivElement>(null)
   const folderMenuPopRef = useRef<HTMLDivElement>(null)
+  const folderMenuTrigger = useRef<HTMLElement | null>(null)
+  const folderMenuKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+    event.stopPropagation()
+    if (event.key === 'Escape' || event.key === 'Tab') {
+      if (event.key === 'Escape') event.preventDefault()
+      folderMenuTrigger.current?.focus({preventScroll: true})
+      setFolderMenu(null)
+    } else if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+      event.preventDefault()
+      const items = [...event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="menuitem"]:not(:disabled)')]
+      const index = items.indexOf(document.activeElement as HTMLButtonElement)
+      items[(index + (event.key === 'ArrowDown' ? 1 : items.length - 1)) % items.length]?.focus({preventScroll: true})
+    }
+  }
   const [folderRenaming, setFolderRenaming] = useState<{
     path: string
     where: 'tree' | 'table'
@@ -1794,6 +1808,8 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
   // stale responses are dropped via a request sequence number (when views/filters switch quickly)
   const requestSeq = useRef(0)
   const [readyPageSeq, setReadyPageSeq] = useState(0)
+  const [listLoading, setListLoading] = useState(true)
+  const [listError, setListError] = useState('')
   const moreRequest = useRef<number | null>(null)
   const firstPageRequest = useRef<number | null>(null)
   const entriesLen = useRef(0)
@@ -1804,6 +1820,12 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
     const seq = ++requestSeq.current
     moreRequest.current = null
     firstPageRequest.current = seq
+    setListLoading(true)
+    setListError('')
+    if (!keepCount) {
+      setEntries([])
+      setListTotal(0)
+    }
     const ext = filter === 'all' ? undefined : filter
     // the group pills only scope the Starred view's own list; the sidebar
     // counters and the other view stay group-agnostic
@@ -1814,6 +1836,7 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
     void primary({ offset: 0, limit, ext, group }).then((page) => {
       if (seq !== requestSeq.current) return
       setEntries(page.entries)
+      setListLoading(false)
       setListTotal(page.total)
       setReadyPageSeq(seq)
       setNavCounts((prev) =>
@@ -1821,7 +1844,12 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
           ? { ...prev, recent: visiblePageCount(page) }
           : { ...prev, starred: visiblePageCount(page) },
       )
-    }).catch((cause) => {if (seq === requestSeq.current) reportError(cause)})
+    }).catch((cause) => {
+      if (seq !== requestSeq.current) return
+      setListLoading(false)
+      setListError(operationError(cause, errorFallback.current))
+      if (keepCount && entriesLen.current > 0) reportError(cause)
+    })
       .finally(() => {if(firstPageRequest.current === seq) firstPageRequest.current = null})
     // The other view fetches only its count under the same active filter.
     void secondary({ offset: 0, limit: 0, ext }).then((page) => {
@@ -2058,7 +2086,8 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
     )
     el.style.left = `${left}px`
     el.style.top = `${top}px`
-  }, [folderMenu])
+    if (supportedFormats) el.querySelector<HTMLButtonElement>('[role="menuitem"]:not(:disabled)')?.focus({preventScroll: true})
+  }, [folderMenu, supportedFormats])
 
   // Escape closes the row menu and the confirm dialogs
   useEscapeToClose(
@@ -2591,6 +2620,7 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
         aria-expanded={menuOpenAt('tree', entry.path)}
         onClick={(e) => {
           e.stopPropagation()
+          folderMenuTrigger.current = e.currentTarget
           if (menuOpenAt('tree', entry.path)) {
             setFolderMenu(null)
             return
@@ -2609,7 +2639,7 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
         <MoreDots />
       </button>
       {folderMenu && menuOpenAt('tree', entry.path) && renderMenu(
-        <div className="folder-menu" role="menu" ref={folderMenuPopRef}>
+        <div className="folder-menu" role="menu" ref={folderMenuPopRef} onKeyDown={supportedFormats ? folderMenuKeyDown : undefined}>
           {editableAt(entry.path) && (
             <button role="menuitem" onClick={() => startCreateFolder(entry.path)}>
               {t('newSubfolder')}
@@ -2721,12 +2751,14 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
             if (!unavailable) selectFolder(entry.path)
           }}
           onKeyDown={(e) => {
+            if (e.target !== e.currentTarget) return
             if (e.key === 'Enter' && !unavailable) selectFolder(entry.path)
             if (e.key === 'ArrowRight' && !isOpen) toggleExpanded(entry.path)
             if (e.key === 'ArrowLeft' && isOpen) toggleExpanded(entry.path)
           }}
           onContextMenu={(e) => {
             e.preventDefault()
+            folderMenuTrigger.current = e.currentTarget
             setFolderMenu({
               path: entry.path,
               where: 'tree',
@@ -3112,6 +3144,7 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
           }}
           onContextMenu={(e) => {
             e.preventDefault()
+            folderMenuTrigger.current = e.currentTarget
             setFolderMenu({
               path: entry.path,
               where: 'table',
@@ -3163,6 +3196,7 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
               aria-label={t('folderMoreActions', { name: entry.name })}
               aria-expanded={menuOpenAt('table', entry.path)}
               onClick={(e) => {
+                folderMenuTrigger.current = e.currentTarget
                 if (menuOpenAt('table', entry.path)) {
                   setFolderMenu(null)
                   return
@@ -3181,7 +3215,7 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
               <MoreDots />
             </button>
             {folderMenu && menuOpenAt('table', entry.path) && renderMenu(
-              <div className="folder-menu" role="menu" ref={folderMenuPopRef}>
+              <div className="folder-menu" role="menu" ref={folderMenuPopRef} onKeyDown={supportedFormats ? folderMenuKeyDown : undefined}>
                 <button
                   role="menuitem"
                   onClick={() => {
@@ -3649,6 +3683,15 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
 
           {searchActive ? (
             renderSearchResults()
+          ) : entries.length === 0 && listLoading ? (
+            <div className="load-more" role="status" aria-busy="true" aria-label={t('cloudRefresh')}>
+              <span className="load-more-spinner" />
+            </div>
+          ) : entries.length === 0 && listError ? (
+            <div className="empty">
+              <span className="empty-hint" role="alert">{listError}</span>
+              <button className="btn btn-secondary" onClick={() => reloadRef.current(false)}>{t('cloudRetry')}</button>
+            </div>
           ) : entries.length === 0 ? (
             renderEmpty(
               view === 'starred'

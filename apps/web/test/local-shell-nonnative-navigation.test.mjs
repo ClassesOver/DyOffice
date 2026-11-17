@@ -14,7 +14,7 @@ function fixture({format='xlsx',capability='editable',missingCapability=false,fa
  const result={format,name:'book.'+format,file:{fileId:'file',revision:'rev'},downloadEndpoint:download}
  const client={async request(path,method){calls.push([path,method]);if(fail&&(fail==='read'||method==='POST'))throw new Error('Forbidden');return result},async upload(file){calls.push(['upload',file.name]);return result}}
  const opened=[]
- const context={documentTabs:{open:x=>opened.push(x)},client,capabilities:{docx:'editable',...(missingCapability?{}:{xlsx:capability})},notifyFilesChanged(){calls.push(['changed'])},notice:x=>notices.push(x),location:{assign:x=>navigated.push(x)},document:{createElement(){return {click(){downloads.push([this.href,this.download])}}}},encodeURIComponent}
+ const context={documentTabs:{reserveOpen:()=>({renameVersion:0,sequence:1}),open:x=>opened.push(x)},client,capabilities:{docx:'editable',...(missingCapability?{}:{xlsx:capability})},notifyFilesChanged(){calls.push(['changed'])},notice:x=>notices.push(x),location:{assign:x=>navigated.push(x)},document:{createElement(){return {click(){downloads.push([this.href,this.download])}}}},encodeURIComponent}
  const api=runInNewContext(code+'\n({open,upload})',context)
  return {api,calls,navigated,downloads,notices,opened}
 }

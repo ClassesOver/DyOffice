@@ -614,6 +614,8 @@ test('a pending first page prevents fetching the previous view offset',async()=>
  await act(async()=>window.dispatchEvent(new Event('focus')))
  const starred=vi.fn(async(query?:{offset?:number;limit?:number})=>query?.limit===0?{entries:[],total:2,totalAll:2}:pending.promise);api.starred=starred
  await click([...host.querySelectorAll<HTMLButtonElement>('.sidebar-nav button')].find(node=>node.querySelector('.nav-label')?.textContent==='Starred')!)
+ expect(host.querySelector('.recent-item')).toBeNull()
+ expect(host.querySelector('[role="status"][aria-busy="true"]')).not.toBeNull()
  await act(async()=>intersect());expect(starred.mock.calls.filter(([query])=>query?.offset)).toHaveLength(0)
  await act(async()=>pending.resolve({entries:[{...file,path:'new-view',name:'New view.docx'}],total:2,totalAll:2}))
 })
@@ -646,7 +648,8 @@ test('a failed new-view first page blocks old-offset paging until a successful f
  await click([...host.querySelectorAll<HTMLButtonElement>('.sidebar-nav button')].find(node=>node.querySelector('.nav-label')?.textContent==='Starred')!)
  expect(host.querySelector('[role="alert"]')?.textContent).toContain('Starred first page unavailable')
  await act(async()=>intersect());expect(starred.mock.calls.filter(([query])=>query?.offset)).toHaveLength(0)
- expect([...host.querySelectorAll('.recent-name')].map(node=>node.textContent)).toEqual([file.name])
+ expect(host.querySelector('.recent-item')).toBeNull()
+ expect(button('Retry')).toBeTruthy()
  fail=false;await act(async()=>window.dispatchEvent(new Event('focus')));await act(async()=>intersect())
  expect(starred.mock.calls.filter(([query])=>query?.offset)).toHaveLength(1)
  expect([...host.querySelectorAll('.recent-name')].map(node=>node.textContent)).toEqual([first.name,next.name])
@@ -747,4 +750,35 @@ test('a changed search listing refreshes its first page instead of looping at a 
   expect(host.querySelector('.search-row')?.textContent).toContain('new-match.docx')
   await click(button('Load more results'));expect(host.querySelectorAll('.search-row')).toHaveLength(106);expect(host.querySelector('.search-more')).toBeNull()
  }finally{vi.useRealTimers()}
+})
+
+ test('a type filter clears previous rows while loading and retries its own failed query',async()=>{
+ const pending=deferred<Awaited<ReturnType<HomeApi['recents']>>>()
+ let fail=true
+ api.recents=vi.fn(async(query)=>{if(query?.ext==='pdf' && query.limit!==0){if(fail){await pending.promise;throw Error('PDF unavailable')}return {entries:[{...file,path:'pdf-file',name:'Result.pdf',ext:'pdf'}],total:1,totalAll:1}}return {entries:[file],total:1,totalAll:1}})
+ await click(button('PDF'))
+ expect(host.querySelector('.recent-item')).toBeNull()
+ expect(host.querySelector('[role="status"][aria-busy="true"]')).not.toBeNull()
+ await act(async()=>pending.resolve({entries:[],total:0,totalAll:0}))
+ expect(host.querySelector('.recent-item')).toBeNull()
+ fail=false;await click(button('Retry'))
+ expect(host.querySelector('.recent-name')?.textContent).toBe('Result.pdf')
+ expect(api.recents).toHaveBeenLastCalledWith(expect.objectContaining({ext:'pdf',offset:0}))
+ })
+ test('a failed same-view refresh preserves the currently matching rows',async()=>{
+ api.recents=async()=>{throw Error('Refresh unavailable')}
+ await act(async()=>window.dispatchEvent(new Event('focus')))
+ expect(host.querySelector('.recent-name')?.textContent).toBe(file.name)
+ expect(host.querySelector('[role="alert"]')?.textContent).toContain('Refresh unavailable')
+ })
+
+test('a late failed view request cannot replace a newer successful view with an error',async()=>{
+ const pending=deferred<Awaited<ReturnType<HomeApi['starred']>>>()
+ api.starred=async query=>query?.limit===0?{entries:[],total:0,totalAll:0}:pending.promise.then(()=>{throw Error('Old starred failure')})
+ const nav=(label:string)=>[...host.querySelectorAll<HTMLButtonElement>('.sidebar-nav button')].find(node=>node.querySelector('.nav-label')?.textContent===label)!
+ await click(nav('Starred'));await click(nav('Recent'))
+ await act(async()=>pending.resolve({entries:[],total:0,totalAll:0}))
+ expect(host.querySelector('.recent-name')?.textContent).toBe(file.name)
+ expect(host.querySelector('[role="alert"]')).toBeNull()
+ expect(host.querySelector('[role="status"][aria-busy="true"]')).toBeNull()
 })

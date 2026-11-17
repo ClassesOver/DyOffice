@@ -153,3 +153,13 @@
 - 合并远端`18dc611c`保留其收藏unknown保护、诊断和其他领域提交后，桥接51项、前后端类型、shell/Word Web构建及Docs流式输入18项通过。整合前最终Web shell38文件352项通过；源码整合对本批UI仅追加远端收藏保护一行及10个bridge回归。最初Docs命令使用错误root上下文而未找到setup，改用docs工作目录的npm test后18项通过，不算产品失败。
 - 最终构建重启后的模拟浏览器：150条分页/刷新、首屏503不混页与显式刷新恢复4项；页签改名/重开/保留iframe草稿与guard4项。所有文件业务接口mock，Word iframe为stub，仅证明宿主生命周期，不冒充真实Word正文/保存验收。0页面异常，无真实业务写入。
 - 证据：`/tmp/dyoffice-recent-browser-red.log`、`/tmp/dyoffice-round4-final-shell.log`、`/tmp/dyoffice-round4-integrated-bridge.log`、`/tmp/dyoffice-round4-integrated-docs.log`，以及`/tmp/dyoffice-ui-audit/`下`recent-refresh`、`document-rename-postfix`、`settings-deep`、`rename-open-order-check.json`报告。完整UI、跨刷新状态恢复及复杂文档交互仍继续验收。
+
+## 视图切换与文件夹菜单键盘补查
+
+- 真实浏览器模拟确认：从最近切到收藏，首屏等待或503时仍显示最近的旧文件，可勾选并打开删除确认（未确认删除）。切换视图/类型/分组时现清除旧列表与总数，空列表按实际状态显示加载或错误重试；同视图刷新失败保留仍匹配的文件。首屏成功才恢复续页，迟到的成功/失败均受当前请求序号隔离。DOM回归先失败后通过，主页布局不变。
+- 侧栏文件夹菜单的Enter事件原先冒泡到目录行，菜单项默认点击前就被卸载，无法重命名。目录行现在忽略子元素键盘事件；Web文件夹菜单增加首项焦点、上下键导航、Escape恢复触发器焦点和Tab退出。独立4项回归先红后绿，正式浏览器8项通过，包含真实按Enter进入改名再Escape取消、侧栏与表格菜单。
+- PR三项CI失败均来自两个导航测试夹具遗漏新增的reserveOpen接口，合计24项失败；仅补齐夹具后定向38项通过，完整Web API测试380项中379通过、1跳过、0失败。未修改产品页签接口来迁就旧夹具。
+- 整合远端bd2de112的诊断测试提交后，最终Web shell39文件359项通过；shell及前后端类型、shell构建通过。构建仍有既有chunk大小提示，DOM测试仍有既有CSS解析日志。首轮全suite恰在并行agent的红测试阶段读取新文件而失败1项，修复完成后重跑上述全suite全部通过。
+- 正式构建重启后列表浏览器5场景通过：pending/503无旧行、失败后Retry恢复、快速往返后晚成功及晚失败不覆盖当前视图。独立只读源码审查未发现新的确定性问题。全部文件业务API为mock，0页面异常、0真实业务写入，不冒充真实文档保存验收。
+- 发布前远端又新增b1378167导航fixture修复；保留其原样token身份断言，去掉本批对同一fixture的重复修复，仅补齐另一个nonnative fixture；整合后重新运行完整Web API回归，日志/tmp/dyoffice-round5-integrated-web.log。随后保留d74523ac登录失败诊断提交，其新增4项回归通过（/tmp/dyoffice-round5-login-diagnostics.log）。
+- 证据：/tmp/dyoffice-round5-final-shell.log、/tmp/dyoffice-round5-final-build.log、/tmp/dyoffice-ci-test-web-fixed.log，以及/tmp/dyoffice-ui-audit/下home-view-transition、home-view-transition-postfix、home-view-transition-recovery、folder-interaction、folder-menu-postfix报告与截图。完整UI穷举仍未完成，复杂文档交互与跨刷新恢复继续验收。
