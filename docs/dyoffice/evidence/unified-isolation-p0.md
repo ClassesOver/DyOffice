@@ -460,3 +460,40 @@ intended PDF/PPTX changes. `tsc -p apps/web/server/tsconfig.json --noEmit` passe
 The earlier partial-tree check lacked the unchanged PPTX host type dependency;
 that limitation was resolved by materializing and hashing the exact remote file,
 not by weakening types or claiming a full-repository check.
+
+## Real XLSX job output and persistent PDF command binding
+
+The existing XLSX durable-job executor now snapshots its native-owned output,
+uses T06's existing 32 MiB limit and matches actual receive uploadId/hash/size
+before committing. The real job credential, lease, heartbeat and atomic job/T06
+completion remain authoritative. Six new failures were reproduced first; final
+independent PG/RustFS regression passed 13/13 (eight job/output cases plus five
+existing edit/save cases). Its native port uses the actual XLSX gateway on
+trusted generated fixtures, not the Rust engine or an isolated runtime. Failure
+keeps existing lease/job cleanup and abandoned-upload recovery; it does not add
+immediate upload cancellation or promise instant quota release.
+
+The PDF candidate queue now binds a canonical, validated operation command and
+digest to a real native_jobs row in the same authenticated transaction as job
+and outbox insertion. A shared private enqueue primitive retains generic
+quota/lock/owner/hash behavior. The original generic source blob was independently
+checked before extraction. A separate test-only entry checks its gate on calls;
+its candidate FORCE-RLS table is installed only in disposable tests, with
+business SELECT/INSERT privileges and no production registration.
+
+Final independent real-PG regression passed 35/35: seven new command cases,
+thirteen existing durable-job cases, eleven output-commit cases and four route
+cases. It covers one job/outbox/command under concurrent replay, operation
+conflicts, atomic rollback, revoked/cross-owner access, quotas, missing schema,
+missing/tampered records and a fresh Node-process PG read. This read yields
+metadata, not a tenant grant, native lease, runtime handle or execution ticket.
+Existing live-editor command_journal is not silently reused: it has no registered
+PDF descriptor and different generation/lease/receipt semantics.
+
+The final shared-job candidate was used for both the 35-case queue run and the
+13-case XLSX run. Server TypeScript, targeted strict XLSX TypeScript and 68
+protocol tests also passed. Test PG/RustFS stopped. A separate standard npm-test
+attempt in the partial workspace had three file-loading failures because two
+unchanged legacy server modules were absent; it is not reported as a full-suite
+pass. No production runtime, PDF worker route or migration was enabled, no Redis
+dispatch test or real Ubuntu/openEuler isolation acceptance is claimed.

@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto'
+import { MAX_OBJECT_BYTES } from '../../../server/src/storage/object-store.ts'
 import type { JobClaim,JobWorkerStore } from '../../../server/src/modules/jobs/worker-store.ts'
 import type { FileService } from '../../../server/src/modules/files/service.ts'
 import type { LeaseService } from '../../../server/src/modules/leases/service.ts'
@@ -64,10 +66,17 @@ export function createXlsxJobExecutor({ store,files,leases,revisions,native,hear
         // No principal transaction remains open across untrusted native work.
         const output = await native.roundtrip(bytes,controller.signal)
         check()
-        const upload = await revisions.stageUpload(auth,claim.fileId,{ size: output.bytes.length,baseRevision: claim.baseRevision,leaseEpoch: lease.leaseEpoch,editorId: claim.jobId })
+        // Snapshot native-owned bytes before any storage await. This binds output
+        // identity, not runtime provenance or a proof of OS isolation.
+        if (!Buffer.isBuffer(output?.bytes) || output.bytes.length===0) throw new JobExecutionError('NATIVE_FAILED')
+        if (output.bytes.length>MAX_OBJECT_BYTES) throw new JobExecutionError('RESOURCE_LIMIT')
+        const outputBytes = Buffer.from(output.bytes)
+        const outputHash = createHash('sha256').update(outputBytes).digest('hex')
+        const upload = await revisions.stageUpload(auth,claim.fileId,{ size: outputBytes.length,baseRevision: claim.baseRevision,leaseEpoch: lease.leaseEpoch,editorId: claim.jobId })
         check()
-        await files.receiveUpload(auth,upload.uploadId,output.bytes)
+        const received = await files.receiveUpload(auth,upload.uploadId,outputBytes)
         check()
+        if (received.uploadId!==upload.uploadId || received.size!==outputBytes.length || received.sha256!==outputHash) throw new JobExecutionError('NATIVE_FAILED')
         // This call owns the authoritative commit, including job success and
         // edit-lease release. A late heartbeat seeing terminal state must not
         // reinterpret a committed result as a failed operation.
