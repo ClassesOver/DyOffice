@@ -59,3 +59,12 @@ test('network-free mailbox forwards the same task API and removes its transport 
  } finally {await mailbox.close()}
  await assert.rejects(access(mailbox.directory))
 })
+
+test('artifact download rejects any supplied stale or empty session proof before storage access',async t=>{
+ const app=Fastify();t.after(()=>app.close());let downloads=0
+ registerAnalysisDeliveryRoutes(app,{async download(){downloads++;return {artifact:{name:'report.txt',sha256:'a'.repeat(64)},bytes:Buffer.from('x')}}},{originCheck(){},requireSessionRead(req){if(req.headers['x-csrf-token']!=='original-proof')throw Object.assign(Error('denied'),{statusCode:403})}})
+ for(const proof of ['', 'replacement-session-proof'])assert.equal((await app.inject({url:'/api/v1/agents/artifacts/id/content',headers:{'x-csrf-token':proof}})).statusCode,403)
+ assert.equal(downloads,0)
+ assert.equal((await app.inject({url:'/api/v1/agents/artifacts/id/content',headers:{'x-csrf-token':'original-proof'}})).statusCode,200)
+ assert.equal(downloads,1)
+})

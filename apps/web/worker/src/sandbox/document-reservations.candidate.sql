@@ -132,3 +132,45 @@ CREATE TRIGGER document_dispatch_truncate_guard BEFORE TRUNCATE ON document_disp
  FOR EACH STATEMENT EXECUTE FUNCTION guard_document_dispatch();
 REVOKE ALL ON document_dispatches FROM PUBLIC;
 REVOKE ALL ON FUNCTION guard_document_dispatch() FROM PUBLIC;
+DO $candidate$
+DECLARE ns text:=current_schema();
+BEGIN
+EXECUTE replace($ddl$
+CREATE FUNCTION __SCHEMA__.document_dispatch_json(d __SCHEMA__.document_dispatches,c text) RETURNS jsonb LANGUAGE sql SET search_path=pg_catalog AS $fn$
+ SELECT jsonb_build_object('classification',c,'dispatchId',d.dispatch_id,'reservationId',d.reservation_id,'reservationVersion',d.reservation_version,'requestDigest',d.request_digest,'brokerId',d.broker_id,'brokerBootId',d.broker_boot_id,'expiresAt',to_char(d.expires_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),'consumed',d.challenge_id IS NOT NULL)
+$fn$;
+CREATE FUNCTION __SCHEMA__.document_dispatch_digest(q jsonb) RETURNS text LANGUAGE sql IMMUTABLE SET search_path=pg_catalog AS $fn$
+ SELECT encode(sha256(convert_to('dyoffice.dispatch.request.v1','UTF8')||decode('00','hex')||convert_to('{'||(SELECT string_agg(to_json(key)::text||':'||value::text,',' ORDER BY key COLLATE "C") FROM jsonb_each(q))||'}','UTF8')),'hex')
+$fn$;
+CREATE FUNCTION __SCHEMA__.document_dispatch_core(p_id text,p_owner text,p_broker uuid,p_boot uuid,p_dispatch uuid,p_challenge uuid,p_mode text) RETURNS jsonb LANGUAGE plpgsql SET search_path=pg_catalog AS $fn$
+DECLARE v __SCHEMA__.document_reservations; d __SCHEMA__.document_dispatches; fence bigint; result text;
+BEGIN
+ SELECT * INTO v FROM __SCHEMA__.document_reservations WHERE reservation_id=p_id;
+ IF v.reservation_id IS NULL THEN RAISE EXCEPTION 'DOCUMENT_RESERVATION_OWNER'; END IF;
+ PERFORM 1 FROM __SCHEMA__.document_capacity WHERE deployment_id=v.deployment_id FOR UPDATE;
+ SELECT * INTO v FROM __SCHEMA__.document_reservations WHERE reservation_id=p_id;
+ SELECT * INTO d FROM __SCHEMA__.document_dispatches WHERE reservation_id=p_id;
+ IF p_mode='history' THEN RETURN CASE WHEN d.reservation_id IS NULL THEN NULL ELSE __SCHEMA__.document_dispatch_json(d,'historical_dispatch_observation') END; END IF;
+ IF v.owner_token IS DISTINCT FROM p_owner THEN RAISE EXCEPTION 'DOCUMENT_RESERVATION_OWNER'; END IF;
+ SELECT epoch INTO fence FROM __SCHEMA__.document_job_fences WHERE deployment_id=v.deployment_id AND job_id=v.job_id;
+ IF v.request IS NULL OR fence IS DISTINCT FROM v.epoch THEN RAISE EXCEPTION 'DOCUMENT_DISPATCH_FENCED'; END IF;
+ IF (v.request->>'deadlineAt')::timestamptz<=clock_timestamp() THEN RAISE EXCEPTION 'DOCUMENT_DISPATCH_EXPIRED'; END IF;
+ IF p_mode='prepare' THEN
+  IF v.state<>'reserved' OR v.launch_evidence<>'not_started' OR v.handle IS NOT NULL OR d.reservation_id IS NOT NULL THEN RAISE EXCEPTION 'DOCUMENT_DISPATCH_STATE'; END IF;
+  IF p_broker IS NULL OR p_boot IS NULL THEN RAISE EXCEPTION 'INVALID_DISPATCH_BROKER'; END IF;
+  UPDATE __SCHEMA__.document_reservations SET state='start_intent',launch_evidence='may_started',version=version+1,updated_at=clock_timestamp() WHERE reservation_id=p_id RETURNING * INTO v;
+  INSERT INTO __SCHEMA__.document_reconcile_tasks(reservation_id,state) VALUES(p_id,'pending') ON CONFLICT(reservation_id) DO UPDATE SET state='pending',claim_id=NULL,updated_at=clock_timestamp();
+  INSERT INTO __SCHEMA__.document_dispatches(reservation_id,dispatch_id,deployment_id,reservation_version,owner_token,job_id,attempt,job_epoch,broker_id,broker_boot_id,request_digest,expires_at) VALUES(p_id,gen_random_uuid(),v.deployment_id,v.version,p_owner,v.job_id,v.attempt,v.epoch,p_broker,p_boot,__SCHEMA__.document_dispatch_digest(v.request),(v.request->>'deadlineAt')::timestamptz) RETURNING * INTO d;
+  result:='prepared_dispatch_observation';
+ ELSIF p_mode='consume' THEN
+  IF d.dispatch_id IS DISTINCT FROM p_dispatch OR d.owner_token IS DISTINCT FROM p_owner OR d.reservation_version<>v.version OR v.state<>'start_intent' OR v.launch_evidence<>'may_started' OR v.handle IS NOT NULL OR d.job_id<>v.job_id OR d.attempt<>v.attempt OR d.job_epoch<>v.epoch OR d.broker_id IS DISTINCT FROM p_broker OR d.broker_boot_id IS DISTINCT FROM p_boot OR d.request_digest<>__SCHEMA__.document_dispatch_digest(v.request) OR d.expires_at IS DISTINCT FROM (v.request->>'deadlineAt')::timestamptz OR p_challenge IS NULL THEN RAISE EXCEPTION 'DOCUMENT_DISPATCH_BINDING'; END IF;
+  IF d.challenge_id IS NOT NULL AND d.challenge_id<>p_challenge THEN RAISE EXCEPTION 'DOCUMENT_DISPATCH_CONSUMED'; END IF;
+  result:=CASE WHEN d.challenge_id IS NULL THEN 'first_consumed_observation' ELSE 'already_consumed' END;
+  IF d.challenge_id IS NULL THEN UPDATE __SCHEMA__.document_dispatches SET challenge_id=p_challenge,consumed_at=clock_timestamp() WHERE reservation_id=p_id RETURNING * INTO d; END IF;
+ ELSE RAISE EXCEPTION 'INVALID_DISPATCH_MODE'; END IF;
+ IF d.expires_at<=clock_timestamp() THEN RAISE EXCEPTION 'DOCUMENT_DISPATCH_EXPIRED'; END IF;
+ RETURN __SCHEMA__.document_dispatch_json(d,result);
+END $fn$;
+REVOKE ALL ON FUNCTION __SCHEMA__.document_dispatch_json(__SCHEMA__.document_dispatches,text),__SCHEMA__.document_dispatch_digest(jsonb),__SCHEMA__.document_dispatch_core(text,text,uuid,uuid,uuid,uuid,text) FROM PUBLIC;
+$ddl$,'__SCHEMA__',quote_ident(ns));
+END $candidate$;

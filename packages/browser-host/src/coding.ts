@@ -2,7 +2,7 @@ import {createCodingSkill,type HarnessDescriptor,type CodingTask,type CodingResu
 import {createSseAgentTransport} from './ai-transport.ts'
 
 /** Reuses the bounded SSE transport. No process starts until Office invokes the tool. */
-export function createCodingClient(options:{agents:readonly HarnessDescriptor[];defaultId:string;csrfToken:string;getModelId:()=>string|null;dataCatalog?:(input:{sourcesAfter?:string;resultsAfter?:string})=>Promise<unknown>;fetchImpl?:typeof fetch}) {
+export function createCodingClient(options:{agents:readonly HarnessDescriptor[];defaultId:string;csrfToken:string;getModelId:()=>string|null;dataCatalog?:(input:{sourcesAfter?:string;resultsAfter?:string})=>Promise<unknown>;fetchImpl?:typeof fetch;onDelivery?:(hint:unknown,agent:{id:string;name:string;origin:'builtin'|'external'})=>void|Promise<void>}) {
   let disposed=false
   const active=new Set<{cancel():void}>()
   const agents=options.agents.map(a=>({...a,capabilities:[...a.capabilities]}))
@@ -26,6 +26,7 @@ export function createCodingClient(options:{agents:readonly HarnessDescriptor[];
               const value=JSON.parse(text)
               if(!value||typeof value.summary!=='string'||typeof value.output!=='string')throw Error('Invalid coding result')
               const descriptor=agents.find(agent=>agent.id===id)!
+              if(!disposed&&!signal?.aborted&&value.delivery&&options.onDelivery)try{void Promise.resolve(options.onDelivery(value.delivery,{id:descriptor.id,name:descriptor.name,origin:descriptor.origin})).catch(()=>{})}catch{}
               resolve({agent:{id:descriptor.id,name:descriptor.name,origin:descriptor.origin},summary:value.summary,output:value.output,...(value.delivery?{delivery:value.delivery}:{})})
             } catch {reject(Error('Cannot confirm coding result'))}
           }

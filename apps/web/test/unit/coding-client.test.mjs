@@ -84,3 +84,11 @@ test('Office discovers only metadata and passes explicit data scope to either pe
  assert.deepEqual(sent.map(x=>x.dataInputs),[{sourceIds:['sales'],resultIds:[resultId]},{sourceIds:['sales'],resultIds:[resultId]}])
  client.dispose()
 })
+
+test('delivery observation receives only a server result hint and does not break successful Office work',async()=>{
+ const seen=[]
+ const delivery={commandId:'00000000-0000-4000-8000-000000000003',taskId:'00000000-0000-4000-8000-000000000001'}
+ const client=await createAssistantClient({request:async()=>catalog,csrfToken:'c'.repeat(43),onDelivery:(hint,agent)=>{seen.push({hint,agent});throw Error('presentation unavailable')},fetchImpl:async()=>response('delta',{text:JSON.stringify({summary:'Done',output:'',delivery})})})
+ const result=await client.extraSkills[0].executeTool({id:'run',name:'delegate_agent_task',input:{instruction:'analyze'}})
+ assert.equal(result.isError,undefined);assert.equal(seen.length,1);assert.deepEqual(seen[0].hint,delivery);assert.equal(seen[0].agent.id,'codex');client.dispose()
+})

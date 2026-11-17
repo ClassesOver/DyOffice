@@ -39,6 +39,9 @@ export function registerAnalysisDeliveryRoutes(app:FastifyInstance,artifacts:Ret
   })
   app.get<{Params:{artifactId:string}}>('/api/v1/agents/artifacts/:artifactId/content',async(request,reply)=>{
     csrf.originCheck(request,false)
+    // Bound renderer downloads send the original proof; absent headers retain
+    // the existing owner-authenticated attachment navigation behavior.
+    if(request.headers['x-csrf-token']!==undefined)csrf.requireSessionRead(request,cookies(request).session??'')
     const result=await artifacts.download(cookies(request).session??'',request.params.artifactId)
     return reply.header('Cache-Control','private, no-store').header('Content-Type','application/octet-stream')
       .header('Content-Disposition',"attachment; filename*=UTF-8''"+encodeURIComponent(result.artifact.name).replace(/[!'()*]/g,char=>'%'+char.charCodeAt(0).toString(16).toUpperCase()))
