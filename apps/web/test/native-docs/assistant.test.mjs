@@ -66,6 +66,14 @@ test('native DOCX assistant delivers selected private Skill through the personal
     } finally { clearTimeout(timer) }
   }
   const origin = 'http://localhost:4213', f = await fileFixture(t, {origin})
+  async function waitForSettlement(name, count) {
+    phase = name
+    await expect(page.locator('.ai-panel .ai-stop-btn')).toHaveCount(0, {timeout: 20_000})
+    await expect.poll(async () => {
+      const {rows} = await f.ownerPool.query('SELECT owner_id,state FROM provider_budget_reservations')
+      return {count: rows.length, allOwned: rows.every(row => row.owner_id === f.alice.user.id), allSettled: rows.every(row => row.state === 'settled')}
+    }, {timeout: 20_000}).toEqual({count, allOwned: true, allSettled: true})
+  }
   const keyring = {activeKeyId: 'test', keys: {test: new Uint8Array(32).fill(25)}}
   const profile = {deploymentId: f.deploymentId, entryId: 'primary', revision: 1, providerId: 'openai', model: 'synthetic', baseUrl: 'https://provider.example/v1', endpoint: 'https://provider.example/v1/chat/completions', allowedIpv4: ['8.8.8.8'], maxOutputTokens: 128}
   const settings = createGlobalConfigService({transactions: f.transactions, keyring})
@@ -140,8 +148,8 @@ test('native DOCX assistant delivers selected private Skill through the personal
   await expect(page.locator('.ai-panel .ai-stop-btn')).toHaveCount(0)
   assert.equal(net.writes, 0)
   await attachSkill()
-  // Text arrives before durable settlement. Bind each response before sending,
-  // then wait for its stream to finish before another turn or accounting reads.
+  // The transport cancels its reader after the SSE terminal event. Require
+  // terminal UI and exact durable settlement, rather than network EOF.
   const firstTurn = page.waitForResponse(r => r.url() === origin + '/api/v1/ai/turns' && r.request().method() === 'POST')
   await composer.fill('Summarize this document')
   phase = 'send-turn'
@@ -149,8 +157,7 @@ test('native DOCX assistant delivers selected private Skill through the personal
   await expect(page.getByText('Verified assistant reply', {exact: true})).toBeVisible({timeout: 20_000})
   const firstResponse = await atPhase('first-response-headers', () => firstTurn)
   assert.equal(firstResponse.status(), 200)
-  assert.equal(await atPhase('first-response-finished', () => firstResponse.finished()), null)
-  await expect(page.locator('.ai-panel .ai-stop-btn')).toHaveCount(0)
+  await waitForSettlement('first-settlement', 1)
   const wire = JSON.parse(net.wire)
   assert.equal(wire.model, profile.model)
   assert.equal(wire.max_tokens, 128)
@@ -164,8 +171,7 @@ test('native DOCX assistant delivers selected private Skill through the personal
   await expect(page.getByText('Verified assistant reply', {exact: true})).toHaveCount(2)
   const secondResponse = await atPhase('second-response-headers', () => secondTurn)
   assert.equal(secondResponse.status(), 200)
-  assert.equal(await atPhase('second-response-finished', () => secondResponse.finished()), null)
-  await expect(page.locator('.ai-panel .ai-stop-btn')).toHaveCount(0)
+  await waitForSettlement('second-settlement', 2)
   assert.equal(net.writes, 2)
   assert.doesNotMatch(net.wire.toString(), /Alice private instructions|Bob private instructions/)
   phase = 'budget-read'

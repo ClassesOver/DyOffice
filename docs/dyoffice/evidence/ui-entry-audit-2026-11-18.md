@@ -319,3 +319,9 @@
 - Space选择器恰好一次、DataTransfer drop及Enter均通过；0真实写、0页面异常，预期网络错误明确记录。未发现新确认问题。证据：`/tmp/dyoffice-ui-audit/upload-recovery-expanded/{coverage.md,report.json}`。
 
 本批最终验证：Shell47文件451项、bridge57项、DOCX全量534文件6567项通过（另4文件20项既有条件跳过），shell/Web DOCX类型、shell/native DOCX构建、边界1336文件0违规、兼容84文件0变更通过。仍有DOM CSS/canvas及构建chunk日志。远端新增6fd21129只包含Provider结算时序测试，已fast-forward保留，隔离PG pipeline21/21通过。其native-docx助手测试远端与本地均120秒超时，不能据当前结果声称原生全套通过；本地roundtrip其他场景仍在运行，助手等待阶段正在补有界诊断，原owner/settled/私人技能/原件断言均保留。
+
+## Native DOCX 助手结算等待修复
+
+- 远端6fd的response.finished新增等待在CI120秒整体超时，本地同样复现；固定阶段诊断将其缩小到first-response-finished。20秒后快照确认stopButtons=0、reservationCount=1、allOwned=true、allSettled=true，网络finished仍pending，未以文本出现当完成。浏览器transport收到SSE done便结束回调并cancel reader，网络EOF不是此客户端的可靠结算屏障。
+- 远端随后新增5dede6ec诊断已合入保留，放弃本地重复helper改动；仅把两处finished改为有界终态UI和精确预算数量/owner/state核对，首轮1条、次轮2条；最终原有两条精确settled记录、私有Skill不串账号、模型wire和原件字节断言保持。没有重试或放宽120秒总时限。与远端诊断合并后隔离PG/Chromium单suite1/1通过，8.15秒；此前同一最终产品构建的roundtrip6/6通过。
+- 证据：`/tmp/dyoffice-assistant-phase-finished-pending-red.log`、`/tmp/dyoffice-assistant-phase-isolated.log`、`/tmp/dyoffice-navigation-native-docs-suite.log`。这修复测试错误屏障，不宣称新增用户可见能力；本批native-docx CI需以新提交重跑结果为准。
