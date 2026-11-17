@@ -4599,6 +4599,7 @@ function RibbonInner({
           <ViewTab
             hasDoc={hasDoc}
             filePath={filePath}
+            newTabUnavailableReason={typeof window.desktop.openNewTab === 'function' ? undefined : lang === 'en' ? 'Opening the same document in multiple tabs is not supported in the Web app.' : 'Web 版暂不支持同一文档在多个标签中打开。'}
             zoom={zoom}
             onZoom={onZoom}
             onZoomFit={onZoomFit}

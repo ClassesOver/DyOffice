@@ -1369,6 +1369,7 @@ interface ViewTabProps {
   hasDoc: boolean
   /** current document path, so New Window can open the same file */
   filePath: string | null
+  newTabUnavailableReason?: string
   zoom: number
   onZoom: (zoom: number) => void
   onZoomFit: (mode: 'width' | 'page' | 'multi') => void
@@ -1393,6 +1394,7 @@ interface ViewTabProps {
 export function ViewTab({
   hasDoc,
   filePath,
+  newTabUnavailableReason,
   zoom,
   onZoom,
   onZoomFit,
@@ -1416,18 +1418,43 @@ export function ViewTab({
   const { t } = useI18n()
   const [winMenuOpen, setWinMenuOpen] = useState(false)
   const [windows, setWindows] = useState<DocsTabInfo[]>([])
+  const [winError, setWinError] = useState('')
   /** wrap holding both the switch-tabs trigger and its menu */
   const winMenuRef = useRef<HTMLDivElement>(null)
+  const winMenuRequest = useRef(0)
+  const closeWinMenu = () => {
+    winMenuRequest.current += 1
+    setWinMenuOpen(false)
+  }
 
   const toggleWinMenu = async () => {
-    if (!winMenuOpen) setWindows(await window.desktop.listDocsTabs())
-    setWinMenuOpen((v) => !v)
+    if (winMenuOpen) { closeWinMenu(); return }
+    const request = ++winMenuRequest.current
+    setWinError('')
+    setWindows([])
+    setWinMenuOpen(true)
+    try {
+      const tabs = await window.desktop.listDocsTabs()
+      if (request === winMenuRequest.current) setWindows(tabs)
+    } catch (error) {
+      if (request === winMenuRequest.current) {
+        closeWinMenu()
+        setWinError(String(error instanceof Error ? error.message : error))
+      }
+    }
+  }
+  const focusWin = async (id: string) => {
+    closeWinMenu()
+    setWinError('')
+    try { await window.desktop.focusDocsTab(id) }
+    catch (error) { setWinError(String(error instanceof Error ? error.message : error)) }
   }
 
   // presses inside the wrap (trigger + menu) are handled by their own onClick;
   // anything else — including window blur / shell chrome presses — closes it
-  useDismissablePopover(winMenuOpen, () => setWinMenuOpen(false), {
+  useDismissablePopover(winMenuOpen, closeWinMenu, {
     inside: () => [winMenuRef.current],
+    escape: true,
   })
 
   return (
@@ -1657,7 +1684,9 @@ export function ViewTab({
         <div className="ribbon-group-items">
           <button
             className="rb-big"
-            data-tip={t('ribbonNewTabTip')}
+            disabled={!!newTabUnavailableReason}
+            title={newTabUnavailableReason}
+            data-tip={newTabUnavailableReason || t('ribbonNewTabTip')}
             onClick={() => void window.desktop.openNewTab(filePath)}
           >
             <span className="rb-big-icon">
@@ -1693,10 +1722,7 @@ export function ViewTab({
                 {windows.map((w) => (
                   <button
                     key={w.id}
-                    onClick={() => {
-                      void window.desktop.focusDocsTab(w.id)
-                      setWinMenuOpen(false)
-                    }}
+                    onClick={() => void focusWin(w.id)}
                   >
                     {w.focused ? '✓ ' : ''}
                     {w.title || 'DyOffice Docs'}
@@ -1706,6 +1732,7 @@ export function ViewTab({
             )}
           </div>
         </div>
+        {winError && <div role="alert">{winError}</div>}
         <div className="ribbon-group-label">{t('ribbonGroupWindow')}</div>
       </div>
     </>

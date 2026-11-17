@@ -66,6 +66,16 @@ export function createDocsBridge(host: SessionFileHost, fileId: string, prefs: A
     onLanguageChanged: noEvent,onThemeChanged: noEvent,onDocumentThemeChanged: noEvent,onAuthorNameChanged: noEvent,onAutoSaveDefaultChanged: noEvent,
     onOpenDocx: noEvent,onRenamedDocx: noEvent,onMenuCommand: noEvent,onTeardown: noEvent,onViewImage: noEvent,onContextMenuRequest: noEvent,onCloseCheck: noEvent,onCloseSaveRequest: noEvent,
     getRecentFiles: async () => [],
+    async listDocsTabs() {
+      const tabs = window.parent.aiOfficeTabs
+      if (!tabs) throw new Error(text.unavailable)
+      return (await tabs.list()).filter(tab => tab.kind === 'docs').map(tab => ({id:tab.id,title:tab.title,focused:tab.active}))
+    },
+    async focusDocsTab(id:string) {
+      const tabs = window.parent.aiOfficeTabs
+      if (!tabs || !(await tabs.list()).some(tab => tab.id === id && tab.kind === 'docs')) throw new Error(text.unavailable)
+      await tabs.activate(id)
+    },
     fontMetrics: async () => null,
     fontAliases: async () => ({}),
     consumeNewBlankDoc: async () => false,

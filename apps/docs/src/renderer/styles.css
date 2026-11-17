@@ -475,6 +475,19 @@ html.genoffice-popover-open .ribbon-tabs {
   padding-right: 150px; /* room for windows caption buttons overlay */
 }
 
+/* The Web editor has no window caption buttons. Wrap its narrow tab row
+   instead of clipping the tabs or their dropdown panels. */
+@media (max-width: 700px) {
+  .dyoffice-native-docs .ribbon-tabs {
+    flex-wrap: wrap;
+    padding-right: 10px;
+  }
+
+  .dyoffice-native-docs .ribbon-tabs > * {
+    flex-shrink: 0;
+  }
+}
+
 .ribbon-file {
   max-width: 30%;
   font-size: 12px;

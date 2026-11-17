@@ -16,3 +16,22 @@ test('AI panel preferences are updated and emitted in the current mounted editor
  const api=fixture().api,changed=vi.fn(),stop=api.onAiPanelPrefsChanged(changed)
  await api.setAiPanelPrefs({side:'right'});expect((await api.getAiPanelPrefs()).side).toBe('right');expect(changed).toHaveBeenCalledOnce();stop()
 })
+test('Word switch-tabs lists live Word application tabs and activates through the parent shell',async()=>{
+ const previous=window.aiOfficeTabs,activate=vi.fn().mockResolvedValue(undefined)
+ window.aiOfficeTabs={list:async()=>[
+  {id:'home',kind:'home',title:'首页',active:false},
+  {id:'word-a',kind:'docs',title:'甲.docx',active:true},
+  {id:'sheet',kind:'sheets',title:'表.xlsx',active:false},
+  {id:'word-b',kind:'docs',title:'乙.docx',active:false},
+ ],activate} as never
+ try{
+  const api=fixture().api
+  expect(await api.listDocsTabs()).toEqual([{id:'word-a',title:'甲.docx',focused:true},{id:'word-b',title:'乙.docx',focused:false}])
+  await api.focusDocsTab('word-b');expect(activate).toHaveBeenCalledWith('word-b')
+  await expect(api.focusDocsTab('sheet')).rejects.toThrow();expect(activate).toHaveBeenCalledOnce()
+ }finally{window.aiOfficeTabs=previous}
+})
+test('Word switch-tabs fails explicitly when the parent application bridge is unavailable',async()=>{
+ const previous=window.aiOfficeTabs;window.aiOfficeTabs=undefined as never
+ try{const api=fixture().api;await expect(api.listDocsTabs()).rejects.toThrow('当前')}finally{window.aiOfficeTabs=previous}
+})
