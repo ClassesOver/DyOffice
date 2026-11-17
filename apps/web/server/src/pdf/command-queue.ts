@@ -5,7 +5,7 @@ import {uuid,scope,loadFile,runFileTransaction} from '../modules/files/queries.t
 import {enqueueTestBoundNativeJob} from '../modules/jobs/service.ts'
 import {validatePdfRotationOperations} from '../../../worker/src/sandbox/pdf-rotation-schema.ts'
 const sha=(text:string)=>createHash('sha256').update(text).digest('hex')
-function commandSnapshot(raw:unknown){
+export function snapshotPdfQueueCommand(raw:unknown){
  if(!raw||typeof raw!=='object'||![Object.prototype,null].includes(Object.getPrototypeOf(raw))||Reflect.ownKeys(raw).length!==3)throw authError(400)
  const data:Record<string,unknown>={}
  for(const key of ['version','action','operations']){const d=Object.getOwnPropertyDescriptor(raw,key);if(!d||!('value'in d)||!d.enumerable)throw authError(400);data[key]=d.value}
@@ -19,8 +19,8 @@ function commandSnapshot(raw:unknown){
  */
 export function createTestPdfCommandQueue({transactions,unsafeTestOnly}:{transactions:PrincipalTransactions;unsafeTestOnly:true}){
  const gate=()=>{if(process.env.NODE_ENV!=='test'||unsafeTestOnly!==true)throw authError(403)};gate()
- function stored(row:{command_json:string;command_digest:string},expected?:ReturnType<typeof commandSnapshot>){
-  try{const normalized=commandSnapshot(JSON.parse(row.command_json));if(normalized.json!==row.command_json||normalized.digest!==row.command_digest||(expected&&expected.json!==normalized.json))throw authError(409);return normalized}
+ function stored(row:{command_json:string;command_digest:string},expected?:ReturnType<typeof snapshotPdfQueueCommand>){
+  try{const normalized=snapshotPdfQueueCommand(JSON.parse(row.command_json));if(normalized.json!==row.command_json||normalized.digest!==row.command_digest||(expected&&expected.json!==normalized.json))throw authError(409);return normalized}
   catch{throw authError(409)}
  }
  return Object.freeze({async enqueue(token:string,input:{artifactId:string;command:unknown},idempotencyKey:string){
@@ -28,7 +28,7 @@ export function createTestPdfCommandQueue({transactions,unsafeTestOnly}:{transac
   if(!input||typeof input!=='object'||![Object.prototype,null].includes(Object.getPrototypeOf(input))||Reflect.ownKeys(input).length!==2)throw authError(400)
   const artifact=Object.getOwnPropertyDescriptor(input,'artifactId'),raw=Object.getOwnPropertyDescriptor(input,'command')
   if(!artifact||!raw||!('value'in artifact)||!('value'in raw)||!artifact.enumerable||!raw.enumerable)throw authError(400)
-  const artifactId=uuid(artifact.value),snapshot=commandSnapshot(raw.value)
+  const artifactId=uuid(artifact.value),snapshot=snapshotPdfQueueCommand(raw.value)
   if(typeof idempotencyKey!=='string'||!/^[A-Za-z0-9_-]{8,128}$/.test(idempotencyKey))throw authError(400)
   const hash=sha(JSON.stringify({type:'pdf.rotate',artifactId,commandDigest:snapshot.digest}))
   return enqueueTestBoundNativeJob({transactions,token,type:'pdf.rotate',artifactId,idempotencyKey,hash,binding:async(c,p,job,created)=>{
