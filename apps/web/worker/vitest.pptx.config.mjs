@@ -6,7 +6,7 @@ const require = createRequire(import.meta.url)
 const root = fileURLToPath(new URL('../../../', import.meta.url))
 const dependencies = ['jszip', 'fast-xml-parser', 'utif2', 'opentype.js', 'bidi-js']
 
-const suites = ['apps/slides/tests/pptx-session.test.ts', 'apps/slides/tests/web-worker-roundtrip.test.ts', 'packages/pptx-ops/tests/settext-paragraph-structure.test.ts']
+const suites = ['apps/slides/tests/pptx-job.test.ts', 'apps/slides/tests/pptx-session.test.ts', 'apps/slides/tests/web-worker-roundtrip.test.ts', 'packages/pptx-ops/tests/settext-paragraph-structure.test.ts']
 for (const suite of suites) {
   if (!statSync(resolve(root, suite)).isFile()) throw new Error('Missing PPTX suite: ' + suite)
 }
