@@ -49,9 +49,8 @@ fn report(
 #[test]
 fn exact_fixture_match_is_configuration_only_never_admission() {
     let p = build_policy(br#"{"profileId":"pptx-edit-v1","policyVersion":1}"#).unwrap();
-    for arch in ["x86_64", "aarch64"] {
-        let mut r = report(&p);
-        r["architecture"] = arch.into();
+    {
+        let r = report(&p);
         let matched = verify_fixture_capabilities(&p, &serde_json::to_vec(&r).unwrap()).unwrap();
         assert!(!matched.execution_available());
         assert_eq!(
@@ -67,6 +66,7 @@ fn unknown_versions_missing_features_and_forged_certification_fail_closed() {
         ("managerVersion", serde_json::json!("257")),
         ("setterSchema", serde_json::json!("systemd-v255")),
         ("architecture", serde_json::json!("riscv64")),
+        ("architecture", serde_json::json!("aarch64")),
         ("cgroupVersion", serde_json::json!(1)),
         ("selinux", serde_json::json!("permissive")),
         ("namespaceProbe", serde_json::json!(false)),

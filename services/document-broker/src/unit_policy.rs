@@ -144,7 +144,7 @@ pub fn verify_fixture_capabilities(
     if report.report_scope != "test-fixture"
         || report.setter_schema != "systemd-v256"
         || report.manager_version != "256"
-        || !matches!(report.architecture.as_str(), "x86_64" | "aarch64")
+        || report.architecture != "x86_64"
         || report.profile_id != policy.profile_id()
         || report.policy_version != 1
         || report.cgroup_version != 2

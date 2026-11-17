@@ -1,5 +1,7 @@
 # 四格式统一安全隔离设计（待实施）
 
+范围更新（2026-11-17，按用户最新要求）：本轮仅支持和验收 openEuler x86_64；ARM64 暂不考虑。这是目标范围，不代表 x86_64 已通过实机验收。
+
 状态：设计草稿；仅文档，不启用生产能力。核对日期：2026-11-17。
 代码基线：`feat/dyoffice-web@1a4a4ebb9e8e0009708ab567c1bf99117bbabfdd`。
 配套：[详细实施计划](../plans/2026-11-17-unified-document-isolation.md)。
@@ -78,7 +80,7 @@ PG 是权威账本，现有 Redis/BullMQ 只负责可重投通知。使用短事
 
 ## 5. 运行时与资源策略
 
-不可变 runtime manifest 覆盖 interpreter/native binary、动态库、字体、locale、CA（如确需）、脚本、配置及 rootfs 文件清单；每架构独立 digest/SBOM。构建时解析依赖，执行时不再信任宿主 `ldd` 结果。禁止下载任意运行时或自动更新运行中的 profile。
+不可变 runtime manifest 覆盖 interpreter/native binary、动态库、字体、locale、CA（如确需）、脚本、配置及 rootfs 文件清单；当前仅构建 x86_64 的 digest/SBOM。构建时解析依赖，执行时不再信任宿主 `ldd` 结果。禁止下载任意运行时或自动更新运行中的 profile。
 
 默认无网络、只读根、独立工作目录、最少设备、去 capabilities、NoNewPrivileges、namespace、seccomp、cgroup CPU/memory/PID、墙钟 deadline、协议/日志/输入/输出/临时空间上限。临时空间必须可计量（限额 tmpfs 或受配额卷），不能只限制最终输出。SELinux Enforcing 下验证标签和访问拒绝；DynamicUser 不自动替代 SELinux 或 user namespace 策略。
 
@@ -104,7 +106,7 @@ AI、数据源、MCP、供应商凭证留在现有授权控制面，不放进沙
 
 ## 8. openEuler 与验收门槛
 
-建议验证基线为受支持的 openEuler 24.03 LTS SP，具体 SP/补丁在环境清单中锁定。分别验证 x86_64、aarch64，记录实际内核、systemd、cgroup v2 controllers/delegation、SELinux policy/enforcing、seccomp、user namespace、runtime digest。没有实机结果不能写“支持已完成”；也不假定所有 openEuler 默认 crun 或 cgroup v2。
+建议验证基线为受支持的 openEuler 24.03 LTS SP，具体 SP/补丁在环境清单中锁定。当前仅验证 x86_64；ARM64 不在本轮支持范围，也不作为验收门槛。记录实际内核、systemd、cgroup v2 controllers/delegation、SELinux policy/enforcing、seccomp、user namespace、runtime digest。没有实机结果不能写“支持已完成”；也不假定所有 openEuler 默认 crun 或 cgroup v2。
 
 证据等级：A 静态/单元与 mock；B 真 PG/对象存储事务；C 真实 OS 隔离/故障注入；D 四格式打开→修改→导出→保存→重开及交互/桌面对比。生产开启至少需对应能力 A+B+C，用户可见编辑还需 D 中相关链路。CI 是否运行不代替证据；当前 systemd 不可用只表示 C 未通过。
 

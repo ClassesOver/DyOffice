@@ -9,9 +9,10 @@ verified openEuler hosts. No host policy was changed to bypass these restriction
 
 ## Dedicated hosts and approval boundary
 
-Use disposable full VMs for **both x86_64 and aarch64**, with a pinned openEuler
+Current scope is **openEuler x86_64 only**. ARM64 is excluded from current support
+and acceptance gates at the user’s direction. Use a disposable full x86_64 VM, with a pinned openEuler
 24.03 LTS SP/patch baseline. Record actual installed versions rather than inferring
-systemd/cgroup behavior from the release name. Each must have systemd PID 1,
+systemd/cgroup behavior from the release name. The VM must have systemd PID 1,
 system D-Bus, SELinux Enforcing, cgroup v2 with required memory/pids/cpu controllers,
 and the namespace/seccomp capabilities of the fixed profile. Cross-compilation is
 not runtime evidence. A starting lab budget of 2 vCPU, 4 GiB RAM and 20 GiB disk per
@@ -23,7 +24,7 @@ separate reviewed authorization. Do not disable SELinux, weaken seccomp, change
 host permissions or fall back to ordinary processes to make a test pass. Reboot
 and destructive fault injection belong only in the dedicated VM test scope.
 
-## Matrix (repeat on each architecture)
+## Matrix (repeat on x86_64)
 
 | Area | Required checks and acceptance |
 | --- | --- |

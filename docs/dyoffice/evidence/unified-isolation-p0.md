@@ -186,3 +186,11 @@ socket invisibility and inherited/passed-FD and socket-activation checks. Neithe
 PrivateNetwork nor address-family filtering substitutes for those boundaries.
 Real setter acceptance and actual namespace/seccomp/SELinux/cgroup enforcement
 remain unverified on both target architectures. See [unit-policy stage details](../inventory/document-unit-policy-stage.md).
+
+
+## Current architecture scope correction
+
+Per the user’s latest instruction, this work targets **openEuler x86_64 only**.
+Earlier dual-architecture acceptance references describe the superseded plan.
+ARM64 is not a current supported target or acceptance gate; the candidate matcher
+rejects it. This scope correction does not claim real x86_64 host acceptance.

@@ -1,5 +1,7 @@
 # 四格式统一安全隔离 Implementation Plan
 
+范围更新（2026-11-17，按用户最新要求）：本轮仅支持和验收 openEuler x86_64；ARM64 暂不考虑。这是目标范围，不代表 x86_64 已通过实机验收。
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** 在现有 DyOffice 上建立可证明、可恢复、fail-closed 的 XLSX/PPTX/DOCX/PDF 统一执行边界。
@@ -15,7 +17,7 @@
 - 基于 `feat/dyoffice-web@1a4a4ebb9e8e0009708ab567c1bf99117bbabfdd`；开始每个实现 PR 前重新核对目标。
 - 成熟库优先；不重写 TS 业务；PG/T06 是授权、租约、版本及回执权威。
 - production 默认关闭；不降级普通 fork、worker thread、API 内解析，不兼容旧 gateway 配置。
-- openEuler x86_64/aarch64、SELinux Enforcing、实际 cgroup v2/seccomp/systemd 能力逐项验证。
+- openEuler x86_64、SELinux Enforcing、实际 cgroup v2/seccomp/systemd 能力逐项验证。
 - CI、当前 systemd 不可用、浏览器/桌面验收暂不阻止关闭态代码合并；不豁免对应生产发布安全门槛。
 - 本文 `新增` 路径和接口是拟定实现契约，不是仓内已有能力；迁移编号实施时分配，不修改历史 SQL checksum。
 
@@ -37,7 +39,7 @@
 | P3-X/P/D/F | Task 4/5 四格式适配，各一 PR | P1+P2 | 分格式关闭态验收 |
 | P4 | Task 6 T06统一出口 | P2+至少一适配器 | 真实 PG+RustFS |
 | P5 | Task 7 渲染边界 | P0；发布依赖P4 | 前端策略/集成 |
-| P6 | Task 8 平台/攻击/性能证据 | P1–P5相应切片 | 两架构分别出报告 |
+| P6 | Task 8 平台/攻击/性能证据 | P1–P5相应切片 | 仅 x86_64 出报告 |
 | P7 | Task 9 迁移/上线门禁/运维 | P4+P6 | 单格式小流量开启另行审批 |
 
 P1/P2 与前端 P5 可并行，四格式 adapter 可在协议冻结后并行。schema 编号/manifest、协议、生产装配与特性门禁由一个集成人串行合并，禁止各 PR 独立放开 production。任何合并不等于发布。独立审查须逐个核对信任边界及真实执行日志；不以 mock 数量替代实机。
@@ -175,7 +177,7 @@ P1/P2 与前端 P5 可并行，四格式 adapter 可在协议冻结后并行。s
 - 修改：`apps/web/test/host-native/{process,recovery,gateway,parts}.test.mjs` 接统一 backend，不删除原失败案例。
 
 - [ ] 先为缺属性/未知 runtime/错误 SELinux 状态写拒绝探针用例，执行并记录 RED；实现只读 probe，不自动改 boot 参数/SELinux/网络设置。
-- [ ] 在目标 openEuler SP 的 x86_64 和 aarch64 真机运行 `npm run test:sandbox --workspace @dyoffice/web` 及新增 unified-isolation 文件。保留 OS/内核/unit有效属性、AVC、退出状态、cgroup、runtime digest 和命令日志。
+- [ ] 在目标 openEuler SP 的 x86_64 真机运行 `npm run test:sandbox --workspace @dyoffice/web` 及新增 unified-isolation 文件。保留 OS/内核/unit有效属性、AVC、退出状态、cgroup、runtime digest 和命令日志。
 - [ ] 攻击矩阵逐项：跨租户读写、宿主敏感文件、网络/DNS/元数据、Unix sockets、fork/PID、OOM、CPU busy、输出/日志洪泛、临时盘耗尽、子孙进程逃逸、timeout/abort、broker/worker/host 重启、DB断线、D-Bus断线。每项指定预期错误与配额/实例最终状态。
 - [ ] 真实浏览器验收单列 `docs/dyoffice/evidence/unified-isolation/browser-origin.md`：跨 origin Cookie 不可见、CSP/iframe禁止能力、伪造source/旧nonce/重复sequence、超量postMessage、弹窗与下载授权；记录浏览器版本、两origin部署与实际响应头。当前可 deferred，不阻关闭态合并；在开放对应用户功能前补齐。
 - [ ] 与 P1 相同 workload 评估 Podman/crun 候选：cgroup delegation/userns/SELinux/无 socket/无网络/镜像锁定/清理等同契约。结果不足就不启用；禁止回退绕过。不同后端不共享未校验能力证书。
@@ -201,7 +203,7 @@ P1/P2 与前端 P5 可并行，四格式 adapter 可在协议冻结后并行。s
 执行完成报告必须按格式列：代码合并、单元、PG+对象存储、真实 OS、保存往返、浏览器/桌面、生产开关，七列分别给 passed/failed/blocked/deferred。所有格式“用了统一接口”不等于全部可上线。
 
 仍需实施期决策及证据：
-1. 实际 openEuler SP、内核/补丁与两架构机器清单：Task 8 产出环境指纹；未具备的架构不上线。
+1. 实际 openEuler SP、内核/补丁与 x86_64 机器清单：Task 8 产出环境指纹；当前不考虑 ARM64，不作为支持范围或验收门槛。
 2. broker 权限/SELinux policy：Task 2 提出最小配置，安全评审通过再安装；本计划不授权修改宿主安全设置。
 3. 每格式生产资源/SLA：Task 8 测量后锁定；现值仅实验起点，超限暂拒绝而非绕过。
 4. 文档功能保真范围：Task 1/5 逐能力列清单，未知/不支持项不宣传全功能；桌面验收延后不代表免验。

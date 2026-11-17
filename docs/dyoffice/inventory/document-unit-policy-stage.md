@@ -38,7 +38,7 @@ not the extended timestamp-bearing getter form. No caller supplies those values.
 ## Capability matching is not admission
 
 The bounded fixture report requires exact schema systemd-v256 and Manager string
-256, known x86_64/aarch64, cgroup v2 CPU/memory/PID controllers, SELinux Enforcing,
+256, x86_64 only, cgroup v2 CPU/memory/PID controllers, SELinux Enforcing,
 and namespace/seccomp fixture assertions. Every required property must have the
 exact signature/value, once only. Missing/extra/tampered properties fail. Unknown
 versions, vendor-suffixed strings and release-name-based inference are unsupported;
@@ -75,3 +75,7 @@ selection injection, unknown versions/features, malformed reports, and property
 signature/value/duplicate/extra/missing rejection, plus real typed P2P exchange.
 Normal binary exit 78 and disabled production factories are unchanged. No PG,
 network, host permissions, SELinux or systemd settings are modified by this stage.
+
+Per the current requested scope, ARM/aarch64 is excluded and explicitly rejected
+by capability matching. ARM testing is not a current support or acceptance
+requirement. x86_64 remains an unverified target, not an approved environment.
