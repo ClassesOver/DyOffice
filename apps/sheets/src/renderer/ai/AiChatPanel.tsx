@@ -103,6 +103,7 @@ const MODEL_BRIDGE: AiModelPickerBridge = {
 }
 
 export function AiChatPanel({
+  modelPicker,
   isOpen,
   hideRail = false,
   hasContent,
@@ -135,6 +136,7 @@ export function AiChatPanel({
   onCollapse,
 }: {
   readonly isOpen: boolean
+  readonly modelPicker?: React.ReactNode
   /** true suppresses even the collapsed rail (the "show the AI sidebar" setting is off) */
   readonly hideRail?: boolean
   /** the workbook has cells with content — empty workbooks get "build me a sheet" copy instead */
@@ -450,10 +452,10 @@ export function AiChatPanel({
           Genspark
         </span>
         <div className="ai-panel-header-actions">
-          <AiPanelSideButton
+          {!modelPicker && <AiPanelSideButton
             lang={lang}
             onMove={(side) => window.desktopApi.setAiPanelPrefs({ side })}
-          />
+          />}
           {(chat.length > 0 || historicChat.length > 0) && (
             <button
               className="ai-header-btn"
@@ -777,14 +779,14 @@ export function AiChatPanel({
           stopIcon={<img src={sendStop} alt="" aria-hidden />}
           footerStart={
             <>
-              <AiModelPicker bridge={MODEL_BRIDGE} lang={lang} />
+              {modelPicker ?? <AiModelPicker bridge={MODEL_BRIDGE} lang={lang} />}
               {sessionUsage && <AiUsageChip usage={sessionUsage} session lang={lang} />}
               <AiSkillsMenu
                 lang={lang}
                 listSkills={listSkillsForMenu}
                 selected={attachedSkills}
                 onToggle={onToggleSkill}
-                onAddFile={onPickAttachments}
+                onAddFile={modelPicker ? undefined : onPickAttachments}
                 onManage={() => void window.desktopApi.openSkillsSettings?.().catch(() => {})}
               />
             </>
@@ -796,7 +798,7 @@ export function AiChatPanel({
             msgQueue.hold()
             onStop()
           }}
-          onPasteFiles={onPasteFiles}
+          onPasteFiles={modelPicker ? undefined : onPasteFiles}
         />
       </div>
     </aside>

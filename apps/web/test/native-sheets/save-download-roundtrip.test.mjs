@@ -13,23 +13,40 @@ import { password } from '../helpers/identity.mjs'
 import { sheetsGateway } from '../helpers/sheets-gateway.mjs'
 import { sandboxFixture } from '../helpers/native-sandbox.mjs'
 import { createXlsxNativeWorker } from '../../worker/src/native/xlsx.ts'
+import { buildLocalApp } from '../../server/src/app.ts'
+import { createGlobalConfigService } from '../../server/src/modules/admin/service.ts'
+import { createSkillService } from '../../server/src/modules/skills/service.ts'
+import { mockProviderNetwork } from '../helpers/provider-network.mjs'
 
-async function fixture(t, autoSave = false) {
+async function fixture(t, autoSave = false, enableAssistant = false) {
   const directory = await mkdtemp(join(tmpdir(), 'dyoffice-sheets-download-'))
-  let f, browser, server
+  let f, app, browser, server
   t.after(async () => {
     await browser?.close()
     if (server) { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)) }
-    await f?.app.close()
+    await app?.close()
     await rm(directory, { recursive: true, force: true })
   })
   execFileSync('openssl', ['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-keyout', join(directory, 'key.pem'), '-out', join(directory, 'cert.pem'), '-days', '1', '-subj', '/CN=localhost'], { stdio: 'pipe' })
-  server = createServer({ key: await readFile(join(directory, 'key.pem')), cert: await readFile(join(directory, 'cert.pem')) }, (req, res) => f.app.routing(req, res))
+  server = createServer({ key: await readFile(join(directory, 'key.pem')), cert: await readFile(join(directory, 'cert.pem')) }, (req, res) => app.routing(req, res))
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
   const origin = `https://127.0.0.1:${server.address().port}`
   const gateway = await sheetsGateway(t)
-  f = await fileFixture(t, { origin, nativeSheetsDirectory: process.env.DYOFFICE_TEST_SHEETS_DIRECTORY ?? fileURLToPath(new URL('../../dist-sheets/', import.meta.url)), sheetsNative: createXlsxNativeWorker(await sandboxFixture('native')), sheetsPlanner: gateway.planWorkbookSave, sheetsPackageReader: gateway.readWorkbookPackage })
-  await f.preferences.update(f.alice.token, { language: 'en', autoSave, showAssistant: false })
+  const sheets = { nativeSheetsDirectory: process.env.DYOFFICE_TEST_SHEETS_DIRECTORY ?? fileURLToPath(new URL('../../dist-sheets/', import.meta.url)), sheetsNative: createXlsxNativeWorker(await sandboxFixture('native')), sheetsPlanner: gateway.planWorkbookSave, sheetsPackageReader: gateway.readWorkbookPackage }
+  f = await fileFixture(t, { origin, ...sheets })
+  app = f.app
+  if (enableAssistant) {
+    const keyring = {activeKeyId: 'test', keys: {test: new Uint8Array(32).fill(25)}}
+    const profile = {deploymentId: f.deploymentId, entryId: 'primary', revision: 1, providerId: 'openai', model: 'synthetic', baseUrl: 'https://provider.example/v1', endpoint: 'https://provider.example/v1/chat/completions', allowedIpv4: ['8.8.8.8'], maxOutputTokens: 128}
+    const settings = createGlobalConfigService({transactions: f.transactions, keyring})
+    await settings.saveGlobalConfig(f.adminSigned.token, 0, {upserts: [{id: profile.entryId, kind: 'chat', providerId: profile.providerId, label: 'Company Chat', model: profile.model, baseUrl: profile.baseUrl, enabled: true, apiKey: 'synthetic-private-key'}]})
+    await f.ownerPool.query('INSERT INTO provider_budget_accounts(deployment_id,owner_id,entry_id,config_revision,available_units,per_call_units) VALUES($1,$2,$3,1,10,10)', [f.deploymentId, f.alice.user.id, profile.entryId])
+    const skills = createSkillService(f.transactions)
+    await skills.save(f.alice.token, 'alice-workbook', {description: '', body: 'Alice workbook instructions.'})
+    await skills.save(f.bob.token, 'bob-workbook', {description: '', body: 'Bob workbook instructions.'})
+    app = await buildLocalApp({db: f.db, businessPool: f.businessPool, passwords: f.passwords, deploymentId: f.deploymentId, origin, csrfKey: f.csrfKey, objectStore: f.objects, globalConfigKeyring: keyring, providerGateway: {profiles: [profile]}, ...sheets})
+  }
+  await f.preferences.update(f.alice.token, { language: 'en', autoSave, showAssistant: enableAssistant })
   const original = await readFile(new URL('../fixtures/sheets/acceptance.xlsx', import.meta.url))
   const opened = await importFile(f, f.alice.token, original, 'independent-download.xlsx')
   browser = await chromium.launch({ headless: true })
@@ -63,6 +80,30 @@ async function assertWorkbook(bytes, expectedA2, expectedA3 = 7.5) {
 }
 
 const saveAndDownload = page => page.getByRole('button', { name: 'Save and download', exact: true })
+
+test('native XLSX assistant streams with the selected personal Skill and leaves the workbook unchanged', {timeout: 120_000}, async t => {
+  const {page, opened, files, original, alice, ownerPool} = await fixture(t, false, true)
+  const net = mockProviderNetwork(t, [Buffer.from('data: {"choices":[{"delta":{"content":"Verified workbook reply"},"finish_reason":"stop"}]}\n\n'), Buffer.from('data: [DONE]\n\n')])
+  const model = page.getByLabel('助手模型')
+  await expect(model).toHaveValue('primary')
+  await page.locator('.ai-plus-btn').click()
+  const skills = page.getByRole('menuitem', {name: 'Skills', exact: true})
+  if (await skills.isVisible()) await skills.click()
+  await page.getByText('alice-workbook', {exact: true}).click()
+  await expect(page.getByText('bob-workbook', {exact: true})).toHaveCount(0)
+  const composer = page.locator('.copilot textarea')
+  await composer.fill('Summarize this workbook')
+  await composer.press('Enter')
+  await expect(page.getByText('Verified workbook reply', {exact: true})).toBeVisible({timeout: 20_000})
+  const request = JSON.parse(net.wire)
+  assert.match(JSON.stringify(request.messages), /Alice workbook instructions/)
+  assert.doesNotMatch(JSON.stringify(request), /Bob workbook instructions|synthetic-private-key/)
+  assert.ok(request.tools.length > 0)
+  assert.ok(!request.tools.some(tool => tool.function.name === 'apply_ops'))
+  const {rows} = await ownerPool.query('SELECT owner_id,state FROM provider_budget_reservations')
+  assert.deepEqual(rows, [{owner_id: alice.user.id, state: 'settled'}])
+  assert.deepEqual(await files.readFile(alice.token, opened.file.fileId, opened.file.revision), original)
+})
 
 test('dirty download submits the latest editor snapshot and downloads those exact native bytes', { timeout: 120000 }, async t => {
   const f = await fixture(t)

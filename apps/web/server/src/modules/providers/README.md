@@ -1,9 +1,19 @@
-# Provider turn coordinator and opt-in HTTP adapter (not mounted)
+# Provider turn coordinator and opt-in HTTP adapter
 
-This is a bounded T13 transport stage, not an enabled model service. `app.ts` does
-not register these routes. T12 must supply authoritative configuration, restricted
-secret resolution and transactional budget admission/settlement before mounting.
-No external provider, key, or customer document is sent by this stage's tests.
+The local account runtime mounts personal assistant routes only when explicitly
+given a trusted profile list. The synthetic and fixed administrator probes remain
+separate. Tests use synthetic credentials and a simulated upstream.
+
+For local operation, apply migrations and reprovision the restricted runtime
+roles. Set `DYOFFICE_PROVIDER_GATEWAY_PROFILES` to a trusted JSON file containing
+an array of profiles with `deploymentId`, `entryId`, `revision`, `providerId`,
+`model`, `baseUrl`, `endpoint`, `allowedIpv4`, and `maxOutputTokens`. The profile
+pins an OpenAI-compatible chat endpoint and its allowed IPv4 addresses. The key
+lives in the administrator's global configuration and requires the existing
+global configuration keyring. Provision `provider_budget_accounts` separately
+for each user and model configuration revision using the migration owner. The
+gateway does not grant default credit. Changing global configuration invalidates
+old profiles and requires matching current profiles and budget accounts.
 
 ## Authority contract
 
@@ -47,11 +57,12 @@ canonicalize argument hashes, and obtain approval before execution.
 
 ## Remaining gates
 
-T12 configuration/secret adapter, durable usage reservation and settlement, model
-adapter parsing/SSRF policy, customer-authorized real-model tests, native editor UI
-wiring, and T14 command approval/execution are separate unaccepted integrations.
-The default product endpoint remains unavailable. Passing mock transport tests is
-not T13 completion and is not proof of a real model response.
+The local DOCX and XLSX assistants reuse AgentLoop and the existing editor skills.
+Personal SKILL.md files are resolved from the original session and explicitly
+attached to a turn by the user. Only read tools are exposed in the local assistant;
+document edits remain subject to T14 approval. PPTX and PDF do not yet have a
+supported local assistant host. Customer-authorized real-model testing and
+production rollout remain outstanding; the default turn endpoint is unavailable.
 
 ## Coordinator resource bounds
 
@@ -69,7 +80,8 @@ framing, or a replacement for provider-side generation limits.
 
 ## Explicit admin pipeline foundation
 
-The candidate includes T12-backed admin-only budget/credential composition, pinned
-transport and parser adapters from #74/#76/#78. They remain explicitly constructed
-and unmounted. Synthetic PostgreSQL tests and mock DNS/HTTPS are not real provider
-acceptance; ordinary-member entitlement and production wiring remain outside scope.
+The T12-backed administrator budget/credential composition from #74/#76/#78
+continues to default to admin-only. Personal consumption uses separate SQL entry
+points tied to the live session, current enabled revision, owner budget, and a
+one-use dispatch credential. Ordinary sessions receive no general access to the
+secret table. No monetary or real-provider guarantee follows from simulated tests.

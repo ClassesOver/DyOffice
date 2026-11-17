@@ -22,6 +22,13 @@ test('projects matched complete tool history and preserves error results explici
  assert.deepEqual(p.messages[3],{role:'tool',tool_call_id:'call_1',content:'{"output":"not found","isError":true}'})
  assert.deepEqual(p.tools[0],{type:'function',function:{name:'read_doc',description:'Read document',parameters:{properties:{a:{type:'string'},b:{type:'number'}},type:'object'}}})
 })
+test('personal final reply accepts paired approved history without offering new tools',()=>{
+ const request={system:'',tools:[],messages:[{role:'assistant',text:'',toolCalls:[{id:'c',name:'read_doc',input:{}}]},{role:'tool',results:[{id:'c',name:'read_doc',output:'ok'}]}]}
+ assert.throws(()=>build(request))
+ const wire=JSON.parse(m.buildOpenAiChatRequest(request,profile,new Set(['read_doc'])).body)
+ assert.equal(wire.tools,undefined)
+ assert.equal(wire.messages[2].tool_call_id,'c')
+})
 test('unsupported modalities/vendor metadata and routing/secret overrides fail closed',()=>{
  for(const change of [r=>r.model='evil',r=>r.baseURL='https://evil',r=>r.apiKey='secret',r=>r.headers={},r=>r.messages[0].images=[],r=>r.messages[0].role='system',r=>r.messages=[{role:'assistant',text:'ok',reasoning:''}],r=>r.tools=[{...tool,provider:'other'}]]){
   const r=base();change(r);assert.throws(()=>build(r),{message:'Invalid provider request'})

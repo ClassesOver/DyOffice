@@ -28,7 +28,7 @@ test('original Settings changes password with real session rotation and revokes 
  const fill=async current=>{await dialog.getByLabel('当前密码',{exact:true}).fill(current);await dialog.getByLabel('新密码',{exact:true}).fill(next);await dialog.getByLabel('确认新密码',{exact:true}).fill(next)}
  await fill('wrong current password');const rejected=page.waitForResponse(r=>r.url().endsWith('/auth/change-password'));await dialog.getByRole('button',{name:'修改密码',exact:true}).click();assert.equal((await rejected).status(),401);await expect(dialog.getByRole('alert')).toContainText('当前密码')
  assert.ok(await f.accounts.verifyCredentials('alice',password))
- await fill(password);const changed=page.waitForResponse(r=>r.url().endsWith('/auth/change-password'));await dialog.getByRole('button',{name:'修改密码',exact:true}).click();assert.equal((await changed).status(),200);await expect(dialog.getByRole('status')).toContainText('当前会话已更新')
+ await fill(password);const changed=page.waitForResponse(r=>r.url().endsWith('/auth/change-password'));await dialog.getByRole('button',{name:'修改密码',exact:true}).click();assert.equal((await changed).status(),200);await expect(dialog.getByRole('status').filter({hasText:'当前会话已更新'})).toBeVisible()
  for(const label of ['当前密码','新密码','确认新密码'])await expect(dialog.getByLabel(label,{exact:true})).toHaveValue('')
  const replacement=(await context.cookies()).find(c=>c.name==='__Host-dyoffice-session').value;assert.notEqual(replacement,oldCookie)
  const me=token=>app.inject({url:'/api/v1/auth/me',headers:{cookie:'__Host-dyoffice-session='+token}})

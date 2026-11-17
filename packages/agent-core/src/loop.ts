@@ -535,6 +535,7 @@ export class AgentLoop<TSnapshot = unknown> {
   private verifyRetryUsed = false
   /** user message of the in-flight run; a failed run rolls it (and everything after) back out of history */
   private runUserMsg: AgentMessage | null = null
+  private transientInstruction: { message: AgentMessage; text: string } | null = null
   /** earlier runs' user messages that still carry a skill-context snapshot, each with the bare instruction to rebuild it without */
   private staleContexts: Array<{ msg: AgentMessage; instruction: string }> = []
   /** when the last model request went out (0 = never): the prompt cache is warm for CACHE_WARM_MS after it */
@@ -625,7 +626,7 @@ export class AgentLoop<TSnapshot = unknown> {
   }
 
   /** images: inline attachments for this user turn (vision input; see AgentImage) */
-  run(instruction: string, images?: AgentImage[]): void {
+  run(instruction: string, images?: AgentImage[], historyInstruction?: string): void {
     if (this.running || !instruction) return
     this.running = true
     this.cancelled = false
@@ -651,6 +652,17 @@ export class AgentLoop<TSnapshot = unknown> {
     // mid-transition is enough to wedge the panel. The user message was never
     // pushed, so the rollback in failRun() is a no-op and only the report matters.
     try {
+      if (this.options.transport.beginRun?.()) {
+        this.history = []
+        this.staleContexts = []
+        this.lastRequestAt = 0
+      }
+      const prior = this.transientInstruction
+      this.transientInstruction = null
+      const priorIndex = prior ? this.history.indexOf(prior.message) : -1
+      if (prior && priorIndex >= 0 && prior.message.role === 'user') {
+        this.history[priorIndex] = {...prior.message, text: sanitizeAgentPayload(prior.text)}
+      }
       const fresh = this.options.skill.buildContext?.() ?? ''
       // no fresh snapshot to supersede the old ones: they must not stay in view
       this.foldStaleContexts(!fresh)
@@ -662,7 +674,7 @@ export class AgentLoop<TSnapshot = unknown> {
         text: this.formatUser(instruction, context),
         ...(images?.length ? { images } : {}),
       }
-      void this.beginRun(userMsg, context ? instruction : null)
+      void this.beginRun(userMsg, context ? (historyInstruction ?? instruction) : null, historyInstruction)
     } catch (err) {
       this.failRun(err instanceof Error ? err.message : String(err))
     }
@@ -709,7 +721,7 @@ export class AgentLoop<TSnapshot = unknown> {
   }
 
   /** Compact (if needed), push the user message, then start the turn. Compaction failure doesn't block the run. */
-  private async beginRun(userMsg: AgentMessage, instruction: string | null): Promise<void> {
+  private async beginRun(userMsg: AgentMessage, instruction: string | null, historyInstruction?: string): Promise<void> {
     const generation = this.generation
     // reset before compaction so the summary turn's billing folds into this run
     this.runUsage = null
@@ -737,6 +749,7 @@ export class AgentLoop<TSnapshot = unknown> {
       userMsg = { ...userMsg, text: sanitizeAgentPayload(userMsg.text) }
     }
     this.runUserMsg = userMsg
+    if (historyInstruction !== undefined) this.transientInstruction = {message: userMsg, text: historyInstruction}
     if (instruction !== null) this.staleContexts.push({ msg: userMsg, instruction })
     this.history.push(userMsg)
     this.startTurn()
@@ -954,6 +967,7 @@ export class AgentLoop<TSnapshot = unknown> {
     this.cancelled = false
     this.history = []
     this.runUserMsg = null
+    this.transientInstruction = null
     this.staleContexts = []
     this.lastRequestAt = 0
   }

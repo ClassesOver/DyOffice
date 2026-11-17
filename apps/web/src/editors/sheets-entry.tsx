@@ -25,9 +25,11 @@ import '@univerjs/preset-sheets-core/lib/index.css'
 import '../../../sheets/src/renderer/styles.css'
 
 import './sheets.css'
+import {createEditorAssistant} from './assistant.tsx'
 
 export async function mountSheetsEditor(host: SessionFileHost, container: HTMLElement, fileId: string) {
   container.textContent = messages.zh.opening
+  const assistant = await createEditorAssistant().catch(() => undefined)
   const opened = await host.open(fileId)
   if (opened.format !== 'xlsx') throw new Error(messages.zh.failed)
   const prefs = await host.getPreferences(), locale = prefs.language === 'en' ? 'en' : 'zh', text = messages[locale]
@@ -37,8 +39,10 @@ export async function mountSheetsEditor(host: SessionFileHost, container: HTMLEl
   let changed = () => {}, editor: SheetsEditorHandle | null = null, disposed = false
   let downloading = false, takingOver = false, confirming = false, actionError = ''
   const bridge = createSheetsBridge(host,fileId,prefs,{onChange:()=>changed()})
-  Object.defineProperty(window,'desktopApi',{value:bridge.api as unknown as DesktopApi,configurable:true})
-  applyAiPanelPrefs(await bridge.api.getAiPanelPrefs()); installScreenTips(); installCanvasFontFallback()
+  const assistantAvailable = Boolean(assistant?.available && prefs.showAssistant !== false)
+  const panelPrefs = {...await bridge.api.getAiPanelPrefs(), showAiSidebar: assistantAvailable}
+  Object.defineProperty(window,'desktopApi',{value:{...bridge.api,...assistant?.api,getAiPanelPrefs:async()=>panelPrefs} as unknown as DesktopApi,configurable:true})
+  applyAiPanelPrefs(panelPrefs); installScreenTips(); installCanvasFontFallback()
   const loads: Promise<unknown>[] = [registerTextDingbatsFace()]
   for (const variant of ['', 'bold ', 'italic ', 'italic bold ']) for (const family of ['Calibri','Aptos',"'Aptos Narrow'",'Carlito']) loads.push(document.fonts.load(`${variant}16px ${family}`).catch(()=>{}))
   await untilCellFontsLoaded(Promise.all(loads))
@@ -91,14 +95,14 @@ export async function mountSheetsEditor(host: SessionFileHost, container: HTMLEl
         {bridge.needsConfirmation() && <button data-save-fence-allow="confirm" disabled={confirming} onClick={()=>{void confirmSave()}}>{text.retry}</button>}
         {actionError && status!==actionError && <span className="dyoffice-sheets-action-error">{actionError}</span>}
       </div>
-      <App queuedWorkbookAtBoot host={{readOnly,inPlaceSave:true,assistantAvailable:false,onWorkbookOpened:()=>setLoaded(true),onOpenFailed:()=>setFailed(true),onEditorReady:handle=>{editor=handle}}} />
+      <App queuedWorkbookAtBoot host={{readOnly,inPlaceSave:true,assistantAvailable,...(assistant?{assistant}:{}),onWorkbookOpened:()=>setLoaded(true),onOpenFailed:()=>setFailed(true),onEditorReady:handle=>{editor=handle}}} />
     </div>
   }
   const root = ReactDOM.createRoot(container)
   root.render(<LocaleProvider initial={locale}><NativeWorkbook /></LocaleProvider>)
   const beforeUnload = (event: BeforeUnloadEvent) => { if (editor?.isDirty() || host.getState(fileId).status === 'unknown') { event.preventDefault(); event.returnValue='' } }
   window.addEventListener('beforeunload',beforeUnload)
-  return {save:()=>editor?.saveAndWait() ?? Promise.resolve(false),dispose(){disposed=true;changed=()=>{};window.removeEventListener('beforeunload',beforeUnload);stop();unsubscribe();root.unmount();bridge.dispose()}}
+  return {save:()=>editor?.saveAndWait() ?? Promise.resolve(false),dispose(){disposed=true;assistant?.dispose();changed=()=>{};window.removeEventListener('beforeunload',beforeUnload);stop();unsubscribe();root.unmount();bridge.dispose()}}
 }
 async function bootstrap() {
   const host=createSessionFileHost(),fileId=new URL(location.href).searchParams.get('fileId') ?? ''

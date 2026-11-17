@@ -13,21 +13,21 @@ export function createLocalShellClient(send:typeof fetch=fetch) {
   for(const controller of pending)controller.abort()
   pending.clear()
  }
- async function perform<T=unknown>(path:string,method='GET',body?:unknown,stamp=generation):Promise<T>{
+ async function perform<T=unknown>(path:string,method='GET',body?:unknown,stamp=generation,sessionProof?:string):Promise<T>{
   if(!path.startsWith('/api/v1/')||path.includes('\\')||path.includes('#'))throw new Error('Expected same-origin local API path')
   assertCurrent(stamp)
   const write=!['GET','HEAD'].includes(method)
-  if(write&&!csrf){const result=await perform<{csrfToken:string}>('/api/v1/auth/csrf','GET',undefined,stamp);assertCurrent(stamp);csrf=result.csrfToken}
+  if(write&&!csrf&&!sessionProof){const result=await perform<{csrfToken:string}>('/api/v1/auth/csrf','GET',undefined,stamp);assertCurrent(stamp);csrf=result.csrfToken}
   assertCurrent(stamp)
   const binary=body instanceof Blob
   const controller=new AbortController();pending.add(controller)
   try{
-   const response=await send(path,{method,credentials:'same-origin',cache:'no-store',signal:controller.signal,headers:{...(write?{'X-CSRF-Token':csrf!}:{}),...(body!==undefined?{'Content-Type':binary?'application/octet-stream':'application/json'}:{})},body:body===undefined?undefined:binary?body:JSON.stringify(body)})
+   const response=await send(path,{method,credentials:'same-origin',cache:'no-store',signal:controller.signal,headers:{...(write||sessionProof?{'X-CSRF-Token':sessionProof??csrf!}:{}),...(body!==undefined?{'Content-Type':binary?'application/octet-stream':'application/json'}:{})},...(body===undefined?{}:{body:binary?body:JSON.stringify(body)})})
    assertCurrent(stamp)
    const value=response.status===204?undefined:await response.json()
    assertCurrent(stamp)
    if(!response.ok){
-    if(response.status===401&&path!=='/api/v1/auth/login')invalidateSession()
+    if(response.status===401&&path!=='/api/v1/auth/login'&&path!=='/api/v1/auth/change-password')invalidateSession()
     else if(response.status===403)csrf=undefined
     const message=response.status===409&&path.startsWith('/api/v1/admin/config')?'配置版本冲突，请核对最新版本；当前草稿已保留。'
      :response.status===409&&path.startsWith('/api/v1/workspace/folders')?'文件夹操作冲突：请检查重名、非空目录或移动目标，再刷新重试。'
@@ -45,6 +45,22 @@ export function createLocalShellClient(send:typeof fetch=fetch) {
  }
  return {
   request,
+  async bindSession(expectedProof?:string){
+   const stamp=generation
+   const {csrfToken}=await request<{csrfToken:string}>('/api/v1/auth/session-proof')
+   assertCurrent(stamp)
+   if(!/^[A-Za-z0-9_-]{43}$/.test(csrfToken)||(expectedProof!==undefined&&expectedProof!==csrfToken))throw stale()
+   return {
+    proof:csrfToken,
+    async request<T=unknown>(path:string,method='GET',body?:unknown){
+     const result=await perform<T>(path,method,body,stamp,csrfToken)
+     // A rotated cookie can arrive in another tab before its page navigates.
+     const current=await perform<{csrfToken:string}>('/api/v1/auth/session-proof','GET',undefined,stamp)
+     if(current.csrfToken!==csrfToken)throw stale()
+     return result
+    },
+   }
+  },
   invalidateSession,
   invalidateCsrf(){csrf=undefined},
   async changePassword(currentPassword:string,newPassword:string){
@@ -53,7 +69,7 @@ export function createLocalShellClient(send:typeof fetch=fetch) {
    try{
     const result=await request<{csrfToken:string}>('/api/v1/auth/change-password','POST',{currentPassword,newPassword})
     if(!result||typeof result.csrfToken!=='string'||!/^[A-Za-z0-9_-]{43}$/.test(result.csrfToken))throw new Error('无法确认密码修改结果。')
-    csrf=result.csrfToken;passwordAction='idle'
+    csrf=result.csrfToken;passwordAction='idle';return result.csrfToken
    }catch(error){
     csrf=undefined
     const status=(error as {status?:number})?.status
