@@ -38,3 +38,6 @@ mod dispatch_ledger;
 
 #[cfg(test)]
 mod container_probe;
+
+#[allow(dead_code)]
+mod unit_binding;

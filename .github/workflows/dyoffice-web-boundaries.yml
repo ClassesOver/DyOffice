@@ -20,6 +20,7 @@ on:
       - 'docs/dyoffice/inventory/host-ipc*'
       - 'docs/dyoffice/inventory/agent-tools*'
       - '.github/workflows/dyoffice-web-boundaries.yml'
+      - '.github/workflows/dyoffice-ubuntu-docker-audit.yml'
   pull_request:
     paths:
       - 'tools/dyoffice/runtime-lock*'
@@ -38,6 +39,7 @@ on:
       - 'docs/dyoffice/inventory/host-ipc*'
       - 'docs/dyoffice/inventory/agent-tools*'
       - '.github/workflows/dyoffice-web-boundaries.yml'
+      - '.github/workflows/dyoffice-ubuntu-docker-audit.yml'
   workflow_dispatch:
 
 permissions:
@@ -283,4 +285,3 @@ jobs:
         run: npx vitest run --root packages/xlsx-gateway --maxWorkers=1
       - name: Regress original name calculation and undo
         run: npx vitest run --root apps/sheets --maxWorkers=1 tests/defined-name-recalculation.test.ts
-

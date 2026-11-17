@@ -11,6 +11,7 @@ import JSZip from 'jszip'
 import { fileFixture, docxBytes, importFile } from '../helpers/files.mjs'
 import { password } from '../helpers/identity.mjs'
 import { phaseDiagnostics } from '../helpers/phase-diagnostics.mjs'
+import { withInputDiagnostics } from '../helpers/input-diagnostics.mjs'
 
 const docsDirectory = fileURLToPath(new URL('../../dist-docs/',import.meta.url))
 async function fixture(t) {
@@ -142,13 +143,14 @@ test('editing during a delayed native save keeps the newer draft dirty and saves
   await editor.waitFor({ timeout: 45_000 })
   diagnostic.stage('type-first')
   await editor.click(); await f.page.keyboard.press('Control+End'); await f.page.keyboard.press('Enter'); await f.page.keyboard.type('Captured snapshot')
-  let reached, release, first = true
+  let reached, release, firstRequest, first = true
   const started = new Promise(resolve => { reached = resolve }), wait = new Promise(resolve => { release = resolve })
   t.after(() => release())
   diagnostic.stage('route-install')
   await f.page.route('**/commits',async route => {
     if (!first) return route.continue()
     first = false
+    firstRequest = route.request()
     diagnostic.count('route-entered')
     try {
       diagnostic.count('fetch-started')
@@ -166,13 +168,19 @@ test('editing during a delayed native save keeps the newer draft dirty and saves
   const firstRef = await f.files.openFile(f.alice.token,f.opened.file.fileId)
   const firstZip = await JSZip.loadAsync(await f.files.readFile(f.alice.token,firstRef.file.fileId,firstRef.file.revision))
   assert.ok(!(await firstZip.file('word/document.xml').async('string')).includes('Newer unsaved draft'))
+  // The dirty label is already empty while the first commit response is held.
+  // Wait for that exact response and native settlement before observing save two.
+  const firstResponse = f.page.waitForResponse(reply => reply.request() === firstRequest && reply.status() === 200)
   diagnostic.stage('release')
   release()
+  assert.equal(await (await firstResponse).finished(),null)
+  await expect(f.page.locator('.dyoffice-docs-persistence-state')).toHaveAttribute('data-native-save','incomplete')
+  await expect(f.page.locator('.dyoffice-docs-persistence-state')).toHaveAttribute('data-dirty','true')
   diagnostic.stage('dirty-assert')
   await expect(f.page.locator('.dyoffice-docs-persistence-state')).toHaveText('',{ timeout: 15_000 })
   await expect(editor).toContainText('Newer unsaved draft')
   diagnostic.stage('second-save-wait')
-  const next = f.page.waitForResponse(reply => reply.url().endsWith('/commits') && reply.status() === 200)
+  const next = f.page.waitForResponse(reply => reply.url().endsWith('/commits') && reply.request().method() === 'POST' && reply.request() !== firstRequest && reply.status() === 200)
   await f.page.keyboard.press('Control+s'); await next
   diagnostic.stage('read-final')
   const current = await f.files.openFile(f.alice.token,f.opened.file.fileId)
@@ -203,6 +211,7 @@ test('native editor preserves unsaved text and becomes read only after another t
 
 test('native lost-response warning keeps the draft until the original commit receipt is confirmed', { timeout: 120_000 },async t => {
   const f = await fixture(t)
+  await withInputDiagnostics(f.page, async () => {
   await f.page.goto(f.origin + '/native-docx/?fileId=' + f.opened.file.fileId)
   const editor = f.page.locator('.tiptap.doc-page[contenteditable="true"]')
   await editor.waitFor({ timeout: 45_000 })
@@ -223,6 +232,7 @@ test('native lost-response warning keeps the draft until the original commit rec
   await expect(f.page.getByRole('button',{ name: 'Confirm save outcome' })).toHaveCount(0)
   assert.deepEqual(commits[1],commits[0])
   assert.equal((await f.files.openFile(f.alice.token,f.opened.file.fileId)).file.revision,current.file.revision)
+  })
 })
 
 test('actual server entry enables only the explicit native build and refuses missing File API or an unknown mode', { timeout: 30_000 },async t => {

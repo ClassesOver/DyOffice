@@ -1,5 +1,6 @@
 import { Extension } from '@tiptap/core'
-import { Plugin, type Transaction } from '@tiptap/pm/state'
+import { Plugin, PluginKey, TextSelection, type Transaction } from '@tiptap/pm/state'
+import { Mapping } from '@tiptap/pm/transform'
 import type { EditorView } from '@tiptap/pm/view'
 import { PHASED_CONTENT_SETTLED_EVENT, isPhasedContentPending } from '../phased-content'
 
@@ -64,20 +65,32 @@ export const StreamingTailGuardExtension = Extension.create({
   name: 'streamingTailGuard',
   addProseMirrorPlugins() {
     // per editor: held text belongs to one document, never to two
+    const guardKey = new PluginKey()
     let held: HeldText | null = null
-    const insertHeld = (view: EditorView): void => {
+    let replayMapping: Mapping | null = null
+    const insertHeld = (view: EditorView): Mapping | null => {
       const pending = held
       held = null
-      if (!pending || view.isDestroyed) return
+      if (!pending || view.isDestroyed) return null
       // the stream only ever added blocks after this point, so the recorded
       // position still addresses the same text; clamp for a short document
       const at = Math.min(pending.at, view.state.doc.content.size)
-      view.dispatch(view.state.tr.insertText(pending.text, at))
+      const tr = view.state.tr.insertText(pending.text, at)
+      const mapping = new Mapping()
+      replayMapping = mapping
+      try {
+        view.dispatch(tr)
+      } finally {
+        replayMapping = null
+      }
+      return mapping
     }
     return [
       new Plugin({
+        key: guardKey,
         filterTransaction: (tr) => !isPhasedContentPending() || !touchesStreamingTail(tr),
         appendTransaction: (trs) => {
+          if (replayMapping) for (const tr of trs) replayMapping.appendMapping(tr.mapping)
           if (!held) return null
           for (const tr of trs) {
             if (!tr.docChanged) continue
@@ -93,12 +106,47 @@ export const StreamingTailGuardExtension = Extension.create({
           return null
         },
         props: {
-          handleTextInput: (view, from, to, text) => {
+          handleTextInput: function handleTextInput(view, from, to, text, deflt) {
             if (!isPhasedContentPending()) {
               // a cancelled stream never announces itself, so release what it
               // held the next time the user types in this editor
-              insertHeld(view)
-              return false
+              if (!held) return false
+              // Capture the DOM input before replay changes its coordinate space.
+              const original = deflt()
+              const released = insertHeld(view)!
+              const start = released.map(from),
+                end = released.map(to)
+              const mappedDefault = () => {
+                const tr = view.state.tr.setTime(original.time)
+                let mapping = released
+                for (const step of original.steps) {
+                  const mapped = step.map(mapping)
+                  if (mapped) tr.step(mapped)
+                  const next = new Mapping([step.getMap().invert()])
+                  next.appendMapping(mapping)
+                  if (mapped) next.appendMap(mapped.getMap(), 0)
+                  mapping = next
+                }
+                tr.setSelection(original.selection.map(tr.doc, mapping))
+                if (original.storedMarksSet) tr.setStoredMarks(original.storedMarks)
+                // ProseMirror's DOM-input default sets composition and scroll.
+                const composition = original.getMeta('composition')
+                if (composition !== undefined) tr.setMeta('composition', composition)
+                if (original.scrolledIntoView) tr.scrollIntoView()
+                return tr
+              }
+              // Continue only the handlers after this guard. Restarting the full
+              // chain would run higher-priority handlers twice for one input.
+              let afterGuard = false
+              const handled = view.someProp('handleTextInput', (handler) => {
+                if (handler === guardKey.get(view.state)?.props.handleTextInput) {
+                  afterGuard = true
+                  return false
+                }
+                return afterGuard ? handler(view, start, end, text, mappedDefault) : false
+              })
+              if (!handled) view.dispatch(mappedDefault())
+              return true
             }
             // a keystroke the guard would allow takes the normal path
             if (!touchesStreamingTail(view.state.tr.insertText(text, from, to))) return false
@@ -107,11 +155,20 @@ export const StreamingTailGuardExtension = Extension.create({
             if (from !== to) return false
             // consecutive characters share a position, so they read as one word
             held = held?.at === from ? { at: from, text: held.text + text } : { at: from, text }
+            // DOM-diff input may arrive before selectionchange updates PM.
+            // The default transaction would accept that input's caret too;
+            // buffering its text must not leave subsequent keys at the old
+            // selection. This selection-only transaction is not an edit.
+            if (view.state.selection.from !== from || !view.state.selection.empty) {
+              view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, from)))
+            }
             return true
           },
         },
         view: (view) => {
-          const onSettled = (): void => insertHeld(view)
+          const onSettled = (): void => {
+            insertHeld(view)
+          }
           document.addEventListener(PHASED_CONTENT_SETTLED_EVENT, onSettled)
           return {
             destroy: () => document.removeEventListener(PHASED_CONTENT_SETTLED_EVENT, onSettled),
