@@ -43,6 +43,9 @@ import { registerUserRoutes } from './modules/admin/users/routes.ts'
 import { createGlobalConfigService } from './modules/admin/service.ts'
 import { registerGlobalConfigRoutes } from './modules/admin/routes.ts'
 import type { SecretKeyring } from './modules/admin/secrets.ts'
+import { createSourceService } from './modules/sources/service.ts'
+import { registerSourceRoutes } from './modules/sources/routes.ts'
+import type { SourceEgressTarget } from './security/egress.ts'
 
 export async function buildApp(config: WebConfig): Promise<FastifyInstance> {
   if (process.env.NODE_ENV === 'production') throw new Error('Development token server is not allowed in production')
@@ -62,6 +65,8 @@ export interface LocalWebConfig {
   db: IdentityStore; businessPool?: Pool; deploymentId: string; origin: string; csrfKey: string; passwords?: PasswordService;
   objectStore?: ObjectStore; filePolicy?: FilePolicy; nativeDocsDirectory?: string; nativeSheetsDirectory?: string; nativeSlidesDirectory?: string; slidesHost?: SlidesSessionHost; nativeJobs?: boolean; sheetsNative?: SheetsNative & Partial<SheetsSaveNative>; sheetsPlanner?: SheetsPlanner; sheetsPackageReader?: SheetsPackageReader; localShellDirectory?: string;
   globalConfigKeyring?: SecretKeyring;
+  sourcesCredentialKeys?: string;
+  sourcesEgressTargets?: readonly SourceEgressTarget[];
   adminAiSyntheticProbe?: boolean;
   // Explicit network-capable fixed probe, NOT the offline diagnostic. No automatic run.
   adminProviderProbeDirectory?: string;
@@ -133,6 +138,7 @@ export async function buildLocalApp(config: LocalWebConfig): Promise<FastifyInst
       try{const probe=registerFixedProviderProbe(app,{deploymentId:config.deploymentId,transactions,sessions,csrf,keyring:config.globalConfigKeyring!,profiles:config.adminProviderProbe.profiles});ownedProbes.push(probe);if(probeAssets)registerProbeAssets(app,probeAssets,probe.authorize)}
       catch(error){await app.close();throw error}
     }
+    registerSourceRoutes(app, createSourceService({ transactions, credentialKeys: config.sourcesCredentialKeys, egressTargets: config.sourcesEgressTargets }), sessions, csrf)
     registerPreferenceRoutes(app, createPreferenceService(transactions), sessions, csrf)
     registerWorkspaceRoutes(app, createWorkspaceService(transactions), sessions, csrf)
     registerGlobalConfigRoutes(app, createGlobalConfigService({transactions, keyring: config.globalConfigKeyring}), sessions, csrf)

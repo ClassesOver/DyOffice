@@ -32,6 +32,8 @@ async function configuredApplication() {
   const origin=process.env.DYOFFICE_ORIGIN;
   const csrfKey=process.env.DYOFFICE_CSRF_KEY;
   const globalConfigKeyring=parseConfigKeyring(process.env.DYOFFICE_CONFIG_KEYRING);
+  const sourcesCredentialKeys=process.env.DYOFFICE_SOURCES_CREDENTIAL_KEYS||'';
+  const sourcesEgressTargets=JSON.parse(process.env.DYOFFICE_SOURCES_EGRESS_TARGETS||'[]');
   if(!connectionString||!businessConnectionString||!deploymentId||!origin||!csrfKey) throw new Error('Local account configuration missing');
   const {db,close}=connectIdentityStore(connectionString);
   let businessPool,storage,sheets;
@@ -43,7 +45,7 @@ async function configuredApplication() {
     const nativeDocsDirectory=nativeFlag ? resolve(process.env.DYOFFICE_NATIVE_DOCX_DIRECTORY||fileURLToPath(new URL('../dist-docs/',import.meta.url))) : undefined;
     sheets=await configuredSheetsRuntime(process.env);
     const {close:closeSheets,...sheetsConfig}=sheets ?? {};
-    return await buildLocalApp({db,businessPool,...storage,...sheetsConfig,nativeDocsDirectory,localShellDirectory:shellDirectory,nativeJobs:jobFlag==='experimental',deploymentId,origin,csrfKey,globalConfigKeyring,passwordBlocklistFile:process.env.DYOFFICE_PASSWORD_BLOCKLIST_FILE,closeDb:async()=>{await closeSheets?.();storage.close();await Promise.all([close(),businessPool.end()]);}});
+    return await buildLocalApp({db,businessPool,...storage,...sheetsConfig,nativeDocsDirectory,localShellDirectory:shellDirectory,nativeJobs:jobFlag==='experimental',deploymentId,origin,csrfKey,globalConfigKeyring,sourcesCredentialKeys,sourcesEgressTargets,passwordBlocklistFile:process.env.DYOFFICE_PASSWORD_BLOCKLIST_FILE,closeDb:async()=>{await closeSheets?.();storage.close();await Promise.all([close(),businessPool.end()]);}});
   } catch(error) { await sheets?.close();storage?.close();await Promise.allSettled([close(),businessPool?.end()]); throw error; }
 }
 
