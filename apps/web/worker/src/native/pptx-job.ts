@@ -16,7 +16,13 @@ function capture(raw:string):{action:'roundtrip'|'setText';ops?:unknown}{
   try{value=JSON.parse(raw)}catch{throw new PptxJobError('INVALID_REQUEST')}
   if(!value||typeof value!=='object'||Array.isArray(value)||value.version!==1)throw new PptxJobError('INVALID_REQUEST')
   if(value.action==='roundtrip'&&Object.keys(value).length===2)return {action:'roundtrip'}
-  if(value.action==='setText'&&Object.keys(value).length===3&&Array.isArray(value.ops)&&value.ops.length>0&&value.ops.length<=100)return {action:'setText',ops:value.ops}
+  if(value.action==='setText'&&Object.keys(value).length===3&&Array.isArray(value.ops)&&value.ops.length>0&&value.ops.length<=100){
+    // The session supports a broader editing vocabulary. A setText request must
+    // never inherit that authority, even when its payload is otherwise valid.
+    // Reject the entire batch before parsing the package or applying any edit.
+    if(value.ops.some((op:unknown)=>!op||typeof op!=='object'||Array.isArray(op)||(op as {op?:unknown}).op!=='setText'))throw new PptxJobError('INVALID_OPERATION')
+    return {action:'setText',ops:value.ops}
+  }
   throw new PptxJobError('INVALID_REQUEST')
 }
 /** Private child-side byte processor, NOT an OS sandbox, HTTP handler or durable save.
