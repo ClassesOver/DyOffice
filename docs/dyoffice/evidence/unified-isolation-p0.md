@@ -99,3 +99,34 @@ works. No registered remote/openEuler host was available. The
 [openEuler acceptance matrix](../inventory/document-openeuler-acceptance.md) records
 the two-architecture real-host prerequisites, tests and evidence still needed.
 These simulated results do not certify real systemd or document isolation.
+
+
+## Persistent recovery ledger and proven-no-start reclamation
+
+The real PostgreSQL candidate now persists launch evidence (`unknown`,
+`not_started`, `may_started`), recovery tasks and claim-bound observations.
+Reservation admission/retain enqueue and terminal release update tasks in the same
+transaction. Recovery claims rotate owner capabilities under reservation-version
+CAS, fencing previous coordinators; observations are content-fixed, idempotent and
+bounded to 64 per reservation. Launch evidence cannot be downgraded.
+
+The test-only runner connects the coordinator's existing uncertain-cleanup retain
+path to that durable ledger. It exposes **no broker port**. Only a locked current
+claim with an existing original request, `not_started` evidence and no handle can
+release capacity. Tombstones and possible-start instances remain quarantined and
+charged; a missing or uncertified broker cannot be bypassed. This is not a
+production scheduler or completed live-instance reconciliation.
+
+Verification: **51/51 real PostgreSQL tests**, **68/68 TS protocol tests**, and
+strict checking of **12 sandbox TS modules** passed. Tests cover competing claims,
+stale writers, both controlled start-intent/recovery orderings, coordinator unknown
+stop followed by adapter recreation, history limits, and transaction rollback when
+observation/task writes fail. An actual successful COMMIT followed by an injected
+client exception verifies claim and completion confirmation-loss recovery. This
+is not real network packet loss, database-server crash or OS-process crash testing.
+Three fault-test mutation checks failed as intended in an isolated source copy and
+passed with the unchanged implementation restored; they found no new code defect.
+
+Candidate SQL is for fresh isolated schemas only, with no unsafe default backfill
+of existing rows. It remains unregistered; production factory stays disabled.
+See [recovery stage details](../inventory/document-reconcile-stage.md).
