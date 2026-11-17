@@ -35,6 +35,12 @@ export function registerAuthRoutes(app: FastifyInstance, { sessions, csrf, throt
     const principal = await sessions.authenticate(cookies(request).session ?? '')
     return { user: { id: principal.userId, username: principal.username, displayName: principal.displayName, roles: principal.roles } }
   })
+  app.get('/api/v1/auth/session-proof', async request => {
+    csrf.originCheck(request, false)
+    const token = cookies(request).session ?? ''
+    await sessions.authenticate(token)
+    return {csrfToken: csrf.sessionToken(token)}
+  })
   app.post('/api/v1/auth/logout', async (request, reply) => {
     const auth = cookies(request)
     if (auth.session) {

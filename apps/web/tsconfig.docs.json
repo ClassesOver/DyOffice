@@ -1,5 +1,5 @@
 {
   "extends": "../docs/tsconfig.json",
   "compilerOptions": { "allowImportingTsExtensions": true, "noEmit": true },
-  "include": ["src/editors/**/*.ts", "src/editors/**/*.tsx", "../docs/src/renderer/*.d.ts", "../sheets/src/renderer/env.d.ts"]
+  "include": ["src/editors/native-docs-entry.tsx", "../docs/src/renderer/*.d.ts"]
 }

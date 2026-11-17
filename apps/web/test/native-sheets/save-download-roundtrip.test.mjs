@@ -4,6 +4,7 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { execFileSync } from 'node:child_process'
+import { createHash, randomBytes } from 'node:crypto'
 import { createServer } from 'node:https'
 import { fileURLToPath } from 'node:url'
 import { chromium, expect } from '@playwright/test'
@@ -13,24 +14,56 @@ import { password } from '../helpers/identity.mjs'
 import { sheetsGateway } from '../helpers/sheets-gateway.mjs'
 import { sandboxFixture } from '../helpers/native-sandbox.mjs'
 import { createXlsxNativeWorker } from '../../worker/src/native/xlsx.ts'
+import { buildLocalApp } from '../../server/src/app.ts'
+import { createGlobalConfigService } from '../../server/src/modules/admin/service.ts'
+import { createSkillService } from '../../server/src/modules/skills/service.ts'
+import { mockProviderNetwork } from '../helpers/provider-network.mjs'
 
-async function fixture(t, autoSave = false) {
+async function fixture(t, autoSave = false, enableAssistant = false, replay = undefined, live = undefined) {
   const directory = await mkdtemp(join(tmpdir(), 'dyoffice-sheets-download-'))
-  let f, browser, server
+  let f, app, browser, server
   t.after(async () => {
     await browser?.close()
     if (server) { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)) }
-    await f?.app.close()
+    await app?.close()
     await rm(directory, { recursive: true, force: true })
   })
   execFileSync('openssl', ['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-keyout', join(directory, 'key.pem'), '-out', join(directory, 'cert.pem'), '-days', '1', '-subj', '/CN=localhost'], { stdio: 'pipe' })
-  server = createServer({ key: await readFile(join(directory, 'key.pem')), cert: await readFile(join(directory, 'cert.pem')) }, (req, res) => f.app.routing(req, res))
+  server = createServer({ key: await readFile(join(directory, 'key.pem')), cert: await readFile(join(directory, 'cert.pem')) }, (req, res) => app.routing(req, res))
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
   const origin = `https://127.0.0.1:${server.address().port}`
   const gateway = await sheetsGateway(t)
-  f = await fileFixture(t, { origin, nativeSheetsDirectory: process.env.DYOFFICE_TEST_SHEETS_DIRECTORY ?? fileURLToPath(new URL('../../dist-sheets/', import.meta.url)), sheetsNative: createXlsxNativeWorker(await sandboxFixture('native')), sheetsPlanner: gateway.planWorkbookSave, sheetsPackageReader: gateway.readWorkbookPackage })
-  await f.preferences.update(f.alice.token, { language: 'en', autoSave, showAssistant: false })
   const original = await readFile(new URL('../fixtures/sheets/acceptance.xlsx', import.meta.url))
+  // Test-only replay accepts only the checked-in synthetic fixture. The separate
+  // native test below still requires the original systemd sandbox.
+  const bound = result => async input => {assert.deepEqual(Buffer.from(input), original); return result}
+  if (replay) assert.equal(createHash('sha256').update(original).digest('hex'), replay.fixtureSha256)
+  const native = replay ? {
+    inspect: bound({...replay.meta, visuals: []}),
+    readRange: async (input, _name, range) => {
+      const result = await bound(replay.range)(input)
+      return {...result, cells: result.cells.filter(({row, column}) => range.startRow <= row && row <= range.endRow && range.startColumn <= column && column <= range.endColumn)}
+    },
+    readSheet: async (input, _name, kind) => bound(kind === 'formulas' ? replay.formulas : replay.outline)(input),
+    savePlan: async () => assert.fail('The assistant must not save the workbook'),
+  } : createXlsxNativeWorker(await sandboxFixture('native'))
+  const sheets = { nativeSheetsDirectory: process.env.DYOFFICE_TEST_SHEETS_DIRECTORY ?? fileURLToPath(new URL('../../dist-sheets/', import.meta.url)), sheetsNative: native, sheetsPlanner: gateway.planWorkbookSave, sheetsPackageReader: gateway.readWorkbookPackage }
+  f = await fileFixture(t, { origin, ...sheets })
+  app = f.app
+  if (enableAssistant) {
+    const keyring = {activeKeyId: 'test', keys: {test: randomBytes(32)}}
+    const baseUrl = live?.baseUrl ?? 'https://provider.example/v1'
+    const profile = {deploymentId: f.deploymentId, entryId: 'primary', revision: 1, providerId: 'openai', model: live?.model ?? 'synthetic', baseUrl, endpoint: baseUrl + '/chat/completions', allowedIpv4: live?.allowedIpv4 ?? ['8.8.8.8'], maxOutputTokens: 128}
+    const apiKey = live ? (await readFile(live.keyFile, 'utf8')).trim() : 'synthetic-private-key'
+    const settings = createGlobalConfigService({transactions: f.transactions, keyring})
+    await settings.saveGlobalConfig(f.adminSigned.token, 0, {upserts: [{id: profile.entryId, kind: 'chat', providerId: profile.providerId, label: 'Company Chat', model: profile.model, baseUrl: profile.baseUrl, enabled: true, apiKey}]})
+    await f.ownerPool.query('INSERT INTO provider_budget_accounts(deployment_id,owner_id,entry_id,config_revision,available_units,per_call_units) VALUES($1,$2,$3,1,$4,10)', [f.deploymentId, f.alice.user.id, profile.entryId, live ? 30 : 10])
+    const skills = createSkillService(f.transactions)
+    await skills.save(f.alice.token, 'alice-workbook', {description: '', body: 'Alice workbook instructions.'})
+    await skills.save(f.bob.token, 'bob-workbook', {description: '', body: 'Bob workbook instructions.'})
+    app = await buildLocalApp({db: f.db, businessPool: f.businessPool, passwords: f.passwords, deploymentId: f.deploymentId, origin, csrfKey: f.csrfKey, objectStore: f.objects, globalConfigKeyring: keyring, providerGateway: {profiles: [profile]}, ...sheets})
+  }
+  await f.preferences.update(f.alice.token, { language: 'en', autoSave, showAssistant: enableAssistant })
   const opened = await importFile(f, f.alice.token, original, 'independent-download.xlsx')
   browser = await chromium.launch({ headless: true })
   const context = await browser.newContext({ ignoreHTTPSErrors: true, viewport: { width: 1440, height: 1100 } })
@@ -63,6 +96,46 @@ async function assertWorkbook(bytes, expectedA2, expectedA3 = 7.5) {
 }
 
 const saveAndDownload = page => page.getByRole('button', { name: 'Save and download', exact: true })
+
+async function verifyAssistant(t, replay, live) {
+  const {page, opened, files, original, alice, ownerPool} = await fixture(t, false, true, replay, live)
+  const net = live ? undefined : mockProviderNetwork(t, [Buffer.from('data: {"choices":[{"delta":{"content":"Verified workbook reply"},"finish_reason":"stop"}]}\n\n'), Buffer.from('data: [DONE]\n\n')])
+  const model = page.getByLabel('助手模型')
+  if (await page.locator('.expand-copilot').isVisible()) await page.locator('.expand-copilot').click()
+  await expect(model).toHaveValue('primary')
+  await page.locator('.ai-plus-btn').click()
+  const skills = page.getByRole('menuitem', {name: 'Skills', exact: true})
+  if (await skills.isVisible()) await skills.click()
+  await page.getByRole('menuitemcheckbox', {name: /alice-workbook/}).click()
+  await expect(page.getByText('bob-workbook', {exact: true})).toHaveCount(0)
+  const composer = page.locator('.copilot textarea')
+  await composer.fill(live ? 'What is the value of cell A2 on the Acceptance sheet? Return only the number.' : 'Summarize this workbook')
+  await composer.press('Enter')
+  await expect(page.locator('.copilot').getByText(live ? '12.5' : 'Verified workbook reply', {exact: true})).toBeVisible({timeout: 65_000})
+  if (net) {
+    const request = JSON.parse(net.wire)
+    assert.match(JSON.stringify(request.messages), /Alice workbook instructions/)
+    assert.doesNotMatch(JSON.stringify(request), /Bob workbook instructions|synthetic-private-key/)
+    assert.ok(request.tools.length > 0)
+    assert.ok(!request.tools.some(tool => tool.function.name === 'apply_ops'))
+  }
+  // Text can render before the terminal frame and durable settlement.
+  await expect.poll(async () => {
+    const {rows} = await ownerPool.query('SELECT owner_id,state FROM provider_budget_reservations')
+    return rows.length >= 1 && rows.length <= (live ? 3 : 1) && rows.every(row => row.owner_id === alice.user.id && row.state === 'settled')
+  }).toBe(true)
+  assert.deepEqual(await files.readFile(alice.token, opened.file.fileId, opened.file.revision), original)
+}
+test('native XLSX assistant streams with the selected personal Skill and leaves the workbook unchanged', {timeout: 120_000}, t => verifyAssistant(t))
+
+const readReplay = async () => JSON.parse(await readFile(new URL('../fixtures/sheets/assistant-replay.json', import.meta.url), 'utf8'))
+test('XLSX assistant browser flow with recorded synthetic workbook data', {timeout: 120_000}, async t => {
+  await verifyAssistant(t, await readReplay())
+})
+const liveConfig = process.env.DYOFFICE_LIVE_ASSISTANT_TEST_CONFIG
+test('XLSX assistant reads recorded synthetic cells through a real provider', {timeout: 120_000, skip: !liveConfig}, async t => {
+  await verifyAssistant(t, await readReplay(), JSON.parse(await readFile(liveConfig, 'utf8')))
+})
 
 test('dirty download submits the latest editor snapshot and downloads those exact native bytes', { timeout: 120000 }, async t => {
   const f = await fixture(t)

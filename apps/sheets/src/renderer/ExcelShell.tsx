@@ -240,6 +240,7 @@ function ToolSymbol({ symbol }: { readonly symbol: string }): React.JSX.Element 
 }
 
 interface ExcelShellProps {
+  readonly modelPicker?: React.ReactNode
   readonly assistantAvailable?: boolean
   readonly openingWorkbook: boolean
   readonly prompt: string
@@ -484,6 +485,7 @@ const PIVOT_MODEL_ERRORS: Record<PivotModelError, StringKey> = {
 }
 
 export function ExcelShell({
+  modelPicker,
   assistantAvailable = true,
   prompt,
   preview,
@@ -1035,6 +1037,7 @@ export function ExcelShell({
       {/* AI panel docks on the left, full height under the ribbon (unified with docs) */}
       <div className="sheet-body">
         {assistantAvailable && <AiChatPanel
+          modelPicker={modelPicker}
           isOpen={isCopilotOpen}
           hideRail={!aiSidebarEnabled}
           hasContent={sheetHasContent}

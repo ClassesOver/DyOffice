@@ -2,7 +2,7 @@ import React,{useEffect,useRef,useState} from 'react'
 import {createLocalAdminClient,type LocalAdminClient,type LocalManagedUser,type PasswordAction} from './local-admin-client'
 type Operation={kind:'create';username:string;displayName:string}|{kind:'activate'|'reset'|'disable'|'enable'|'roles';user:LocalManagedUser}
 const labels={activate:'重新发放激活码',reset:'重置密码',disable:'禁用账号',enable:'启用账号',create:'创建账号',roles:'替换角色'}
-export function LocalAdminPanel({currentUserId,onSessionRotated,onClose,onOwnAuthorityChanged=()=>location.reload(),client=createLocalAdminClient()}:{currentUserId:string;onSessionRotated:()=>void;onClose:()=>void;onOwnAuthorityChanged?:()=>void;client?:LocalAdminClient}){
+export function LocalAdminPanel({currentUserId,onSessionRotated,onClose,onOwnAuthorityChanged=()=>location.reload(),client=createLocalAdminClient()}:{currentUserId:string;onSessionRotated:(proof?:string)=>void;onClose:()=>void;onOwnAuthorityChanged?:()=>void;client?:LocalAdminClient}){
  const api=useRef(client).current
  const [users,setUsers]=useState<LocalManagedUser[]>([]),[cursor,setCursor]=useState<string|null>(null),[error,setError]=useState(''),[busy,setBusy]=useState(false),[operation,setOperation]=useState<Operation|null>(null),[action,setAction]=useState<PasswordAction|null>(null)
  const locked=useRef(false),alive=useRef(true)
@@ -17,7 +17,7 @@ export function LocalAdminPanel({currentUserId,onSessionRotated,onClose,onOwnAut
  {!operation&&<form onSubmit={e=>{e.preventDefault();const data=new FormData(e.currentTarget);choose({kind:'create',username:String(data.get('username')||''),displayName:String(data.get('displayName')||'')});e.currentTarget.reset()}}><div><label className="set-field">新用户名<input className="set-input" name="username" maxLength={256} required disabled={busy}/></label><label className="set-field">显示名称<input className="set-input" name="displayName" maxLength={200} disabled={busy}/></label><button className="set-btn primary" disabled={busy}>创建账号</button></div></form>}
  {operation&&<form aria-label="确认用户操作" onSubmit={async e=>{
   e.preventDefault();if(locked.current)return;const form=e.currentTarget;const data=new FormData(form);const password=String(data.get('password')||'');const selectedRoles=['personal',...data.getAll('role').map(String)];form.reset();locked.current=true;setBusy(true);setError('');setAction(null)
-  try{try{await api.reauthenticate(password)}finally{onSessionRotated()}
+  try{let proof:string|undefined;try{proof=await api.reauthenticate(password)}finally{onSessionRotated(proof)}
    const result=operation.kind==='create'?await api.create(operation.username,operation.displayName):operation.kind==='activate'||operation.kind==='reset'?await api.issue(operation.user.id,operation.kind):operation.kind==='roles'?await api.setRoles(operation.user.id,selectedRoles):await api.setStatus(operation.user.id,operation.kind==='disable'?'disabled':'active')
    if(!alive.current)return
    if('action' in result)setAction(result.action)

@@ -27,7 +27,7 @@ test('v21 upgrades to abandonment without rewriting prior ledger ACK T05 T12 T13
   })
   const after = (await f.ownerPool.query('SELECT * FROM identity_migrations ORDER BY version')).rows
   assert.deepEqual(after.slice(0, 21), before)
-  assert.equal(after.at(-1).version, 22)
+  assert.deepEqual(after.slice(21).map(row => row.version), migrations.slice(21).map(m => m.version))
   assert.deepEqual(await read(f.ownerPool), functions)
   await f.ownerDb.migrate()
   assert.deepEqual(

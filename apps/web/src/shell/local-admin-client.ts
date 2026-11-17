@@ -25,7 +25,7 @@ export function createLocalAdminClient(send:typeof fetch=fetch){
  const id=(value:string)=>{if(!uuid.test(value))throw new Error('无效用户标识');return value}
  return {
   async list(after?:string){const page=await request<{users:unknown[];nextCursor:string|null}>('/api/v1/admin/users?limit=20'+(after?'&after='+id(after):''));if(!page||!Array.isArray(page.users)||(page.nextCursor!==null&&(typeof page.nextCursor!=='string'||!uuid.test(page.nextCursor))))throw invalid();return {users:page.users.map(user),nextCursor:page.nextCursor}},
-  async reauthenticate(password:string){const result=await request<{csrfToken:string}>('/api/v1/auth/reauth',{password});if(typeof result?.csrfToken!=='string'||!result.csrfToken)throw invalid()},
+  async reauthenticate(password:string){const result=await request<{csrfToken:string}>('/api/v1/auth/reauth',{password});if(typeof result?.csrfToken!=='string'||!result.csrfToken)throw invalid();return result.csrfToken},
   async create(username:string,displayName:string){const result=await request<{user:unknown;action:unknown}>('/api/v1/admin/users',{username,displayName});return {user:user(result?.user),action:action(result?.action,'activate')}},
   async issue(userId:string,purpose:'activate'|'reset'){if(!['activate','reset'].includes(purpose))throw new Error('无效用途');const result=await request<{action:unknown}>(`/api/v1/admin/users/${id(userId)}/${purpose==='activate'?'activation':'password-reset'}`,{});return {action:action(result?.action,purpose)}},
   async setStatus(userId:string,status:'active'|'disabled'){if(!['active','disabled'].includes(status))throw new Error('无效状态');const result=await request<{user:unknown}>(`/api/v1/admin/users/${id(userId)}`,{status},'PATCH');return {user:user(result?.user)}},
