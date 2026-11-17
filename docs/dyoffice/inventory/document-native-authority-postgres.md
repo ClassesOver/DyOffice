@@ -7,7 +7,7 @@ This stage verifies **instantaneous native-job facts**, not a full unified
 not registered in the migration manifest and no existing runtime role is altered.
 No `tenantId`, interactive generation, runtime certification or session-binding
 mapping is inferred from owner IDs or public editor IDs. Those remain blocking
-requirements for any complete unified authority bridge.
+requirements for production adoption. The later [explicit test-only context bridge](document-unified-authority-postgres.md) supplies a deliberately narrow immutable-job mapping without claiming a production tenant policy or certified runtime.
 
 `document_native_authority(jsonb,text)` reuses the existing schema-qualified
 `lock_job_principal(..., false)` at both entry and exit. It never permits the

@@ -48,12 +48,14 @@ export function createTestDocumentExecutionBoundary(ports:DocumentExecutionPorts
   const work=<T>(task:()=>Promise<T>)=>{check();return bounded(()=>{check();return task()},Math.max(1,Math.min(authorityDeadlineMono,businessDeadline)-performance.now()),controller.signal)}
   const verify=async(phase:'pre'|'before_start'|'post'|'return')=>{
    check()
+   const verifyStarted=performance.now()
    const proof=await work(()=>ports.authority.verify(request,phase,controller.signal))
    const confirmed=validateDocumentExecutionRequest(proof.request,new Date())
    for(const key of Object.keys(request) as (keyof DocumentExecutionRequest)[])if(confirmed[key]!==request[key])throw failure('DOCUMENT_AUTHORITY_CHANGED')
+   if(!Number.isFinite(proof.validForMs)||proof.validForMs<=0)throw failure('DOCUMENT_AUTHORITY_EXPIRED')
    const expiry=Date.parse(proof.validUntil)
    if(!Number.isFinite(expiry)||new Date(expiry).toISOString()!==proof.validUntil||expiry<=Date.now())throw failure('DOCUMENT_AUTHORITY_EXPIRED')
-   authorityUntil=Math.min(expiry,Date.parse(request.deadlineAt));authorityDeadlineMono=Math.min(authorityDeadlineMono,performance.now()+Math.max(0,authorityUntil-Date.now()));check()
+   authorityUntil=Math.min(expiry,Date.parse(request.deadlineAt));authorityDeadlineMono=Math.min(authorityDeadlineMono,verifyStarted+proof.validForMs,performance.now()+Math.max(0,authorityUntil-Date.now()));check()
   }
   let cleanupDeadline=Infinity
   const clean=<T>(task:()=>Promise<T>)=>bounded(task,Math.max(1,cleanupDeadline-performance.now()))

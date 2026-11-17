@@ -3,7 +3,7 @@ import type {ExecutionHandle,ProfileCommand,ResultContext,StopObservation} from 
 /** These ports are TRUSTED control-plane adapters, not document-provided callbacks.
  * None has a production implementation in this change. No PG token crosses backend.
  */
-export interface AuthoritySnapshot {request:DocumentExecutionRequest;validUntil:string}
+export interface AuthoritySnapshot {request:DocumentExecutionRequest;validUntil:string;validForMs:number}
 export interface Reservation {reservationId:string;jobId:string;attempt:number;jobEpoch:number}
 export interface ReservationGrant {readonly reservationId:string;readonly granted:true}
 export interface DocumentExecutionPorts {
