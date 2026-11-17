@@ -3,6 +3,7 @@ import {useState} from 'react'
 import {createSessionFileHost, type SessionFileHost} from '../../../../packages/browser-host/src/files.ts'
 import {createSlidesBridge} from './slides-bridge.ts'
 import {messages} from './messages.ts'
+import {mountEditorRealtime} from './editor-realtime.ts'
 import {App, type SlidesAppHost, type SlidesEditorHandle} from '../../../slides/src/renderer/App'
 import {LocaleProvider, setModuleLang} from '../../../slides/src/renderer/i18n/locale'
 import {installCanvasKerning} from '../../../slides/src/renderer/canvas-kerning'
@@ -47,6 +48,7 @@ export async function mountSlidesEditor(host: SessionFileHost, container: HTMLEl
   try { await host.acquireLease(fileId) } catch { initialLease = false }
   let editorMounted = initialLease
   const stop = host.startRenewal(fileId), unsubscribe = host.subscribe(() => changed())
+  const realtime = mountEditorRealtime(host, fileId, () => changed())
   const dirty = () => (editor?.isDirty() ?? false) || bridge.needsConfirmation()
   async function saveAndDownload() {
     if (!editor || downloading || takingOver || disposed) return
@@ -105,6 +107,7 @@ export async function mountSlidesEditor(host: SessionFileHost, container: HTMLEl
     const hostProps: SlidesAppHost = {readOnly, inPlaceSave: true, assistantAvailable: false, onDeckOpened: () => setLoaded(true), onOpenFailed: () => setFailed(true), onEditorReady: handle => { editor = handle }}
     return <div className="dyoffice-native-slides">
       <div className="dyoffice-slides-state" role="status"><span>{status}</span>
+        {realtime.notice(locale) && <span>{realtime.notice(locale)}</span>}
         <button className="dyoffice-slides-download" disabled={!loaded || failed || !editor || !state.lease || state.status === 'conflict' || state.status === 'unauthorized' || downloading || takingOver} onClick={() => { void saveAndDownload() }}>{text.saveDownload}</button>
         {historical && <a href={`/api/v1/files/${fileId}/content?revision=${state.revision.revision}`} download={state.name}>{text.downloadReadOnly}</a>}
         {!state.lease && (!editorMounted || !failed) && state.status !== 'unauthorized' && <button className="dyoffice-slides-takeover" disabled={(editorMounted && (!loaded || !editor)) || downloading || takingOver || dirty() || state.status === 'unknown' || bridge.needsConfirmation()} onClick={() => { void takeOver() }}>{text.takeover}</button>}
@@ -134,7 +137,7 @@ export async function mountSlidesEditor(host: SessionFileHost, container: HTMLEl
       disposed = true; changed = () => {}
       stage.removeEventListener('beforeunload', beforeUnload)
       stage.removeEventListener('keydown', onKeyDown)
-      stop(); unsubscribe(); root.unmount(); bridge.dispose()
+      realtime.dispose(); stop(); unsubscribe(); root.unmount(); bridge.dispose()
     },
   }
 }

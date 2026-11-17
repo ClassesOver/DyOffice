@@ -3,6 +3,7 @@ import {useState} from 'react'
 import {createSessionFileHost, type SessionFileHost} from '../../../../packages/browser-host/src/files.ts'
 import {createSheetsBridge} from './sheets-bridge.ts'
 import {messages} from './messages.ts'
+import {mountEditorRealtime} from './editor-realtime.ts'
 import type {SheetsEditorHandle} from '../../../sheets/src/renderer/App'
 import {App} from '../../../sheets/src/renderer/App'
 import {LocaleProvider,setModuleLang} from '../../../sheets/src/renderer/i18n/locale'
@@ -49,6 +50,7 @@ export async function mountSheetsEditor(host: SessionFileHost, container: HTMLEl
   let initialLease = true
   try { await host.acquireLease(fileId) } catch { initialLease = false }
   const stop = host.startRenewal(fileId), unsubscribe = host.subscribe(()=>changed())
+  const realtime = mountEditorRealtime(host, fileId, () => changed())
   const dirty = () => (editor?.isDirty() ?? false) || bridge.isDirty()
   async function saveAndDownload() {
     if(!editor || downloading || takingOver || disposed)return
@@ -89,6 +91,7 @@ export async function mountSheetsEditor(host: SessionFileHost, container: HTMLEl
     const historical = loaded && !failed && !state.lease && !dirty() && state.status !== 'unknown' && state.status !== 'unauthorized' && !bridge.needsConfirmation() && !takingOver
     return <div className="dyoffice-native-sheets">
       <div className="dyoffice-sheets-state" role="status"><span>{status}</span>
+        {realtime.notice(locale) && <span>{realtime.notice(locale)}</span>}
         <button className="dyoffice-sheets-download" disabled={!loaded || failed || !editor || !state.lease || state.status==='conflict' || state.status==='unauthorized' || downloading || takingOver} onClick={()=>{void saveAndDownload()}}>{text.saveDownload}</button>
         {historical && <a href={`/api/v1/files/${fileId}/content?revision=${state.revision.revision}`} download={state.name}>{text.downloadReadOnly}</a>}
         {!state.lease && !failed && state.status!=='unauthorized' && <button disabled={!loaded || !editor || downloading || takingOver || dirty() || state.status==='unknown' || bridge.needsConfirmation()} onClick={()=>{void takeOver()}}>{text.takeover}</button>}
@@ -102,7 +105,7 @@ export async function mountSheetsEditor(host: SessionFileHost, container: HTMLEl
   root.render(<LocaleProvider initial={locale}><NativeWorkbook /></LocaleProvider>)
   const beforeUnload = (event: BeforeUnloadEvent) => { if (editor?.isDirty() || host.getState(fileId).status === 'unknown') { event.preventDefault(); event.returnValue='' } }
   window.addEventListener('beforeunload',beforeUnload)
-  return {save:()=>editor?.saveAndWait() ?? Promise.resolve(false),dispose(){disposed=true;assistant?.dispose();changed=()=>{};window.removeEventListener('beforeunload',beforeUnload);stop();unsubscribe();root.unmount();bridge.dispose()}}
+  return {save:()=>editor?.saveAndWait() ?? Promise.resolve(false),dispose(){disposed=true;assistant?.dispose();realtime.dispose();changed=()=>{};window.removeEventListener('beforeunload',beforeUnload);stop();unsubscribe();root.unmount();bridge.dispose()}}
 }
 async function bootstrap() {
   const host=createSessionFileHost(),fileId=new URL(location.href).searchParams.get('fileId') ?? ''

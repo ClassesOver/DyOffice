@@ -23,6 +23,11 @@ import { createApiShell } from './framework.ts'
 import { registerJobRoutes } from './modules/jobs/routes.ts'
 import { createJobService } from './modules/jobs/service.ts'
 import { createLeaseService } from './modules/leases/service.ts'
+import { registerRealtimeRoutes, type RealtimeServer } from './modules/realtime/routes.ts'
+import type { RealtimeCommandPolicy } from './modules/realtime/commands.ts'
+import { registerCommandRoutes } from './modules/commands/routes.ts'
+import { createCommandRequestFactory } from './modules/commands/http-service.ts'
+import type { RealtimeOptions } from './modules/realtime/gateway.ts'
 import { createRevisionService } from './modules/revisions/service.ts'
 import { createFileService, type FilePolicy } from './modules/files/service.ts'
 import { registerFileRoutes } from './modules/files/routes.ts'
@@ -71,6 +76,11 @@ export interface LocalWebConfig {
   adminProviderProbe?: { profiles: readonly AdminPipelineProfile[] };
   providerGateway?: { profiles: readonly AdminPipelineProfile[] };
   providerShutdownTimeoutMs?: number;
+  /** Notification polling/heartbeat timing; saves remain on the HTTP file API. */
+  realtime?: RealtimeOptions;
+  /** Explicit trusted composition; no HTTP route can supply policy or dispatch. */
+  realtimeCommands?: RealtimeCommandPolicy;
+  onRealtimeReady?: (server: RealtimeServer) => void;
   passwordBlocklistFile?: string; loginLimits?: LoginLimits; idleMs?: number; absoluteMs?: number; closeDb?: () => Promise<void>
 }
 export async function buildLocalApp(config: LocalWebConfig): Promise<FastifyInstance> {
@@ -115,6 +125,11 @@ export async function buildLocalApp(config: LocalWebConfig): Promise<FastifyInst
   const accounts = createAccountService({ db: config.db, passwords, deploymentId: config.deploymentId })
   const sessions = createSessionService({ db: config.db, accounts, deploymentId: config.deploymentId, idleMs: config.idleMs, absoluteMs: config.absoluteMs })
   const csrf = createCsrfService({ db: config.db, deploymentId: config.deploymentId, origin: config.origin, key: config.csrfKey })
+  // Explicit same-origin WS source is required by browsers that do not include
+  // wss in connect-src 'self'. Never grant the unrestricted wss: scheme.
+  const realtimeSource = new URL(config.origin)
+  realtimeSource.protocol = realtimeSource.protocol === 'https:' ? 'wss:' : 'ws:'
+  const nativeConnectSources = `'self' blob: ${realtimeSource.origin}`
   const throttle = createLoginThrottle(config.db, config.deploymentId, config.csrfKey, config.loginLimits)
   const app = await createApiShell()
   try {
@@ -149,6 +164,12 @@ export async function buildLocalApp(config: LocalWebConfig): Promise<FastifyInst
       const leases = createLeaseService({ transactions })
       const revisions = createRevisionService({ transactions, objects: config.objectStore, files, ...config.filePolicy })
       registerFileRoutes(app,files,sessions,csrf,{ leases, revisions })
+      // T17 notification/reconciliation only; preClose terminates upgraded
+      // sockets before HTTP shutdown waits on their lifetime.
+      const realtime = registerRealtimeRoutes(app,{ transactions,sessions,csrf,origin: config.origin,options: config.realtime,commandPolicy: config.realtimeCommands })
+      config.onRealtimeReady?.(realtime)
+      if (config.realtimeCommands) registerCommandRoutes(app, { sessions,csrf,
+        createRequestCommands: createCommandRequestFactory(transactions, config.realtimeCommands.lookupTool) })
       if (config.sheetsNative) {
         const saves = config.sheetsPlanner ? createSheetsSaveService({files,leases,revisions,native:config.sheetsNative as SheetsNative & SheetsSaveNative,plan:config.sheetsPlanner}) : undefined
         registerSheetsRoutes(app,createSheetsService({files,native:config.sheetsNative,readPackage:config.sheetsPackageReader}),sessions,csrf,saves)
@@ -163,7 +184,7 @@ export async function buildLocalApp(config: LocalWebConfig): Promise<FastifyInst
         method: ['GET','HEAD'], url: '/native-docx/*',
         onRequest: async (request,reply) => {
           reply.raw.setHeader('Cache-Control','private, no-store')
-          reply.raw.setHeader('Content-Security-Policy',"default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data: blob:; worker-src 'self' blob:; connect-src 'self' blob:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'")
+          reply.raw.setHeader('Content-Security-Policy',`default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data: blob:; worker-src 'self' blob:; connect-src ${nativeConnectSources}; object-src 'none'; base-uri 'none'; frame-ancestors 'none'`)
           await sessions.authenticate(cookies(request).session ?? '')
         },
         handler: async (request,reply) => {
@@ -185,7 +206,7 @@ export async function buildLocalApp(config: LocalWebConfig): Promise<FastifyInst
           reply.raw.setHeader('Cache-Control','private, no-store')
           // 'wasm-unsafe-eval' keeps harfbuzzjs font shaping working; media-src covers
           // PPTX-embedded audio/video played through the slides renderer.
-          reply.raw.setHeader('Content-Security-Policy',"default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob:; font-src 'self' data: blob:; worker-src 'self' blob:; connect-src 'self' blob:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'")
+          reply.raw.setHeader('Content-Security-Policy',`default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob:; font-src 'self' data: blob:; worker-src 'self' blob:; connect-src ${nativeConnectSources}; object-src 'none'; base-uri 'none'; frame-ancestors 'none'`)
           await sessions.authenticate(cookies(request).session ?? '')
         },
         handler: async (request,reply) => {
@@ -205,7 +226,7 @@ export async function buildLocalApp(config: LocalWebConfig): Promise<FastifyInst
         method: ['GET','HEAD'], url: '/native-xlsx/*',
         onRequest: async (request,reply) => {
           reply.raw.setHeader('Cache-Control','private, no-store')
-          reply.raw.setHeader('Content-Security-Policy',"default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data: blob:; worker-src 'self' blob:; connect-src 'self' blob:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'")
+          reply.raw.setHeader('Content-Security-Policy',`default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data: blob:; worker-src 'self' blob:; connect-src ${nativeConnectSources}; object-src 'none'; base-uri 'none'; frame-ancestors 'none'`)
           await sessions.authenticate(cookies(request).session ?? '')
         },
         handler: async (request,reply) => {
