@@ -33,6 +33,7 @@ export async function mountDocsEditor(host: SessionFileHost,element: HTMLElement
   element.textContent = messages.zh.opening
   if (!/^[0-9a-f-]{36}$/i.test(fileId)) throw new Error(messages.zh.failed)
   let changed = () => {}
+  let disposed = false, downloading = false, actionError = ''
   let editorHandle: DocsEditorHandle | null = null
   const registerEditor = (handle: DocsEditorHandle | null) => { editorHandle = handle }
   const unsubscribe = host.subscribe(() => changed())
@@ -57,6 +58,22 @@ export async function mountDocsEditor(host: SessionFileHost,element: HTMLElement
   try { await host.acquireLease(fileId) } catch { initialLease = false }
   const stop = host.startRenewal(fileId)
   const realtime = mountEditorRealtime(host, fileId, () => changed(),channels=>assistant?.channel?.observe(channels))
+  async function saveAndDownload() {
+    const editor = editorHandle
+    if (!editor || disposed || downloading) return
+    downloading = true; actionError = ''; changed()
+    try {
+      const receipt = await bridge.prepareDownload(editor)
+      if (disposed || editorHandle !== editor) return
+      const current = host.getState(fileId), local = bridge.getState()
+      if (editor.isDirty() || local.dirty || local.status !== 'idle' || local.nativeSaveOutcome !== 'accepted' || current.status !== 'idle' || !current.lease || current.revision.fileId !== receipt.fileId || current.revision.revision !== receipt.revision || current.revision.sha256 !== receipt.sha256 || current.revision.size !== receipt.size) throw new Error(text.saveFailed)
+      const anchor = document.createElement('a')
+      anchor.href = `/api/v1/files/${fileId}/content?revision=${receipt.revision}`
+      anchor.download = host.getState(fileId).name
+      anchor.hidden = true; element.append(anchor); anchor.click(); anchor.remove()
+    } catch { if (!disposed) actionError = text.saveFailed }
+    finally { downloading = false; if (!disposed) changed() }
+  }
   function NativeDocument() {
     const [,tick] = useState(0), [loaded,setLoaded] = useState(false), [failed,setFailed] = useState(false)
     const state = host.getState(fileId)
@@ -66,10 +83,12 @@ export async function mountDocsEditor(host: SessionFileHost,element: HTMLElement
       window.addEventListener('focus',focus)
       return () => window.removeEventListener('focus',focus)
     },[])
-    const status = failed ? text.failed : state.status === 'unknown' ? text.unknown : state.status === 'unauthorized' ? text.unauthorized : !state.lease ? (initialLease ? text.conflict : text.readOnly) : bridge.getState().dirty ? '' : text.ready
+    const status = failed ? text.failed : state.status === 'unknown' ? text.unknown : state.status === 'unauthorized' ? text.unauthorized : !state.lease ? (initialLease ? text.conflict : text.readOnly) : downloading ? text.downloadSaving : actionError || (bridge.getState().dirty ? '' : text.ready)
     return <div className="dyoffice-native-docs">
       <div className="dyoffice-docs-state" role="status"><span className="dyoffice-docs-persistence-state" data-native-save={bridge.getState().nativeSaveOutcome} data-incomplete-reasons={bridge.getState().nativeSaveReasons.join(',')} data-dirty={String(bridge.getState().dirty)}>{status}</span>
         {realtime.notice(locale) && <span className="dyoffice-docs-notification-state">{realtime.notice(locale)}</span>}
+        <button className="dyoffice-docs-save-download" title={text.saveDownloadVersionHint} disabled={!loaded || failed || !editorHandle || !state.lease || state.status !== 'idle' || downloading} onClick={() => { void saveAndDownload() }}>{text.saveDownload}</button>
+        <span className="dyoffice-docs-save-download-hint">{text.saveDownloadVersionHint}</span>
         <a href={`/api/v1/files/${fileId}/content?revision=${state.revision.revision}`} download>{text.download}</a>
         {!state.lease && !failed && <button onClick={() => { void host.takeoverLease(fileId).then(() => { initialLease = true }).catch(() => {}) }}>{text.takeover}</button>}
         {state.status === 'unknown' && <button onClick={() => { void host.reconcile(fileId).then(() => changed()).catch(() => {}) }}>{text.retry}</button>}
@@ -87,6 +106,6 @@ export async function mountDocsEditor(host: SessionFileHost,element: HTMLElement
     getSelection: () => editorHandle?.getSelection() ?? null,
     serialize: () => editorHandle ? editorHandle.serialize() : Promise.reject(new Error(text.opening)),
     save: () => editorHandle ? editorHandle.save() : Promise.resolve(false),
-    dispose() { unregisterAnalysis?.();analysisTarget.dispose(); window.removeEventListener('beforeunload',beforeUnload); assistant?.dispose();realtime.dispose(); stop(); unsubscribe(); root.unmount(); bridge.dispose() },
+    dispose() { disposed = true; unregisterAnalysis?.();analysisTarget.dispose(); window.removeEventListener('beforeunload',beforeUnload); assistant?.dispose();realtime.dispose(); stop(); unsubscribe(); root.unmount(); bridge.dispose() },
   }
 }

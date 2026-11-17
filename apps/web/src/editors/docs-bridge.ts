@@ -1,3 +1,4 @@
+import { hostError } from '../../../../packages/web-contracts/src/errors.ts'
 import type { DesktopApi } from '../../../docs/src/shared/ipc'
 import type { SessionFileHost } from '../../../../packages/browser-host/src/files.ts'
 import { createSaveGenerationGuard, type SaveTicket } from '../../../../packages/browser-host/src/save-generation.ts'
@@ -8,6 +9,7 @@ import { messages } from './messages.ts'
 export function createDocsBridge(host: SessionFileHost, fileId: string, prefs: Awaited<ReturnType<SessionFileHost['getPreferences']>>, onChange: () => void) {
   const locale = prefs.language === 'en' ? 'en' : 'zh', text = messages[locale], state = host.getState(fileId)
   const alias = `/files/${fileId}/${state.name}`, guard = createSaveGenerationGuard(), urls = new Set<string>()
+  let disposed = false, downloading = false
   let saveFence:(()=>boolean)|null=null
   async function guardedSave(check:()=>boolean,action:()=>Promise<boolean>){
     if(saveFence||!check())return false
@@ -24,6 +26,9 @@ export function createDocsBridge(host: SessionFileHost, fileId: string, prefs: A
     documentOpened() { guard.reset(); ticket = null; nativeSaveOutcome = 'none'; nativeSaveReasons = []; onChange() },
     edited() { guard.markEdited(); onChange() },
     async beforeSave() {
+      // The native queue may have waited after the download preflight. Do not
+      // turn this action into implicit confirmation of an intervening save.
+      if (downloading && (disposed || host.getState(fileId).status !== 'idle' || guard.getState().status === 'unknown')) throw hostError('UNAVAILABLE','download not ready')
       nativeSaveOutcome = 'pending'; nativeSaveReasons = []
       if (guard.getState().status === 'unknown') {
         await host.reconcile(fileId,saveFence??(()=>true))
@@ -95,5 +100,21 @@ export function createDocsBridge(host: SessionFileHost, fileId: string, prefs: A
     pickImage: unavailable,fetchImage: unavailable,saveImageAs: unavailable,
     openAiModelSettings: unavailable,openSkillsSettings: unavailable,
   } satisfies Partial<DesktopApi>
-  return { api,lifecycle,guardedSave,getReceipt:()=>committed,getState: () => ({...guard.getState(), nativeSaveOutcome, nativeSaveReasons}),dispose() { for (const url of urls) URL.revokeObjectURL(url); urls.clear() } }
+  async function prepareDownload(editor: {save(): Promise<boolean>; isDirty(): boolean}) {
+    const before = host.getState(fileId)
+    if (disposed || downloading || before.status !== 'idle' || !before.lease || guard.getState().status !== 'idle' || nativeSaveOutcome === 'pending') throw hostError('UNAVAILABLE','download not ready')
+    downloading = true
+    try {
+      // Only the native save flushes pending table input and awaits its complete
+      // serialization/acknowledgement. isDirty alone cannot replace that flush.
+      // Never enter reconciliation implicitly from an unknown host state.
+      if (!await editor.save()) throw hostError('UNAVAILABLE','download save')
+      if (disposed) throw hostError('UNAVAILABLE','disposed')
+      const current = host.getState(fileId), local = guard.getState(), receipt = committed
+      if (editor.isDirty() || local.dirty || local.status !== 'idle' || nativeSaveOutcome !== 'accepted' || current.status !== 'idle' || !current.lease || !receipt ||
+          receipt.fileId !== current.revision.fileId || receipt.revision !== current.revision.revision || receipt.sha256 !== current.revision.sha256 || receipt.size !== current.revision.size) throw hostError('CONFLICT','download not confirmed')
+      return {...receipt}
+    } finally { downloading = false }
+  }
+  return { api,lifecycle,guardedSave,prepareDownload,getReceipt:()=>committed,getState: () => ({...guard.getState(), nativeSaveOutcome, nativeSaveReasons}),dispose() { disposed = true; for (const url of urls) URL.revokeObjectURL(url); urls.clear() } }
 }
