@@ -29,6 +29,11 @@ enum Behaviour {
     ChangedInvocation,
     SlowUnitRead,
     ChangedCgroup,
+    WrongResource(u8),
+    WrongResourceType,
+    MissingResource,
+    SlowResource,
+    ChangedResource,
     WrongSecurity(u8),
     MissingSecurity,
     SlowSecurity,
@@ -222,12 +227,91 @@ impl FakeUnit {
 }
 
 struct FakeService {
+    resource_reads: AtomicUsize,
     security_reads: AtomicUsize,
     reads: AtomicUsize,
     behaviour: Behaviour,
 }
 #[zbus::interface(name = "org.freedesktop.systemd1.Service")]
 impl FakeService {
+    #[zbus(property)]
+    async fn memory_max(&self) -> zbus::fdo::Result<OwnedValue> {
+        if matches!(self.behaviour, Behaviour::WrongResourceType) {
+            return Ok((512 * 1024 * 1024u32).into());
+        }
+        if matches!(self.behaviour, Behaviour::MissingResource) {
+            return Err(zbus::fdo::Error::UnknownProperty("absent".into()));
+        }
+        if matches!(self.behaviour, Behaviour::SlowResource) {
+            tokio::time::sleep(Duration::from_secs(1)).await;
+        }
+        let n = self.resource_reads.fetch_add(1, Ordering::SeqCst);
+        Ok((if matches!(self.behaviour, Behaviour::WrongResource(0))
+            || (matches!(self.behaviour, Behaviour::ChangedResource) && n > 0)
+        {
+            u64::MAX
+        } else {
+            512 * 1024 * 1024
+        })
+        .into())
+    }
+    #[zbus(property, name = "MemorySwapMax")]
+    fn memory_swap_max(&self) -> u64 {
+        if matches!(self.behaviour, Behaviour::WrongResource(1)) {
+            u64::MAX
+        } else {
+            0
+        }
+    }
+    #[zbus(property, name = "TasksMax")]
+    fn tasks_max(&self) -> u64 {
+        if matches!(self.behaviour, Behaviour::WrongResource(2)) {
+            u64::MAX
+        } else {
+            64
+        }
+    }
+    #[zbus(property, name = "CPUQuotaPerSecUSec")]
+    fn cpu_quota_per_sec_usec(&self) -> u64 {
+        if matches!(self.behaviour, Behaviour::WrongResource(3)) {
+            u64::MAX
+        } else {
+            1_000_000
+        }
+    }
+    #[zbus(property, name = "RuntimeMaxUSec")]
+    fn runtime_max_usec(&self) -> u64 {
+        if matches!(self.behaviour, Behaviour::WrongResource(4)) {
+            u64::MAX
+        } else {
+            30_000_000
+        }
+    }
+    #[zbus(property, name = "TimeoutStopUSec")]
+    fn timeout_stop_usec(&self) -> u64 {
+        if matches!(self.behaviour, Behaviour::WrongResource(5)) {
+            u64::MAX
+        } else {
+            5_000_000
+        }
+    }
+    #[zbus(property, name = "UMask")]
+    fn umask(&self) -> u32 {
+        if matches!(self.behaviour, Behaviour::WrongResource(6)) {
+            0
+        } else {
+            63
+        }
+    }
+    #[zbus(property)]
+    fn kill_mode(&self) -> &str {
+        if matches!(self.behaviour, Behaviour::WrongResource(7)) {
+            "process"
+        } else {
+            "control-group"
+        }
+    }
+
     #[zbus(property)]
     async fn no_new_privileges(&self) -> zbus::fdo::Result<bool> {
         if matches!(self.behaviour, Behaviour::MissingSecurity) {
@@ -346,6 +430,7 @@ impl Fixture {
                 "/org/freedesktop/systemd1/unit/fixture_returned_not_derived",
                 FakeService {
                     security_reads: AtomicUsize::new(0),
+                    resource_reads: AtomicUsize::new(0),
                     behaviour,
                     reads: AtomicUsize::new(0),
                 },
@@ -980,6 +1065,69 @@ async fn owner_loss_during_security_readback_quarantines() {
 #[tokio::test]
 async fn cancellation_during_security_readback_quarantines() {
     let f = Fixture::new(1, Behaviour::SlowSecurity).await;
+    let mut a = Attempt::new(1);
+    let (tx, rx) = tokio::sync::watch::channel(false);
+    let cancel = tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        tx.send(true).unwrap();
+    });
+    let result = a.run_with_cancel(&f, Duration::from_millis(500), rx).await;
+    cancel.await.unwrap();
+    assert_eq!(result, Phase::Quarantined);
+    assert!(a.unit_binding.is_none());
+    assert_eq!(f.starts.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn resource_readback_rejects_each_mismatch_missing_changed_and_slow_property() {
+    let mut cases: Vec<_> = (0..8).map(Behaviour::WrongResource).collect();
+    cases.extend([
+        Behaviour::WrongResourceType,
+        Behaviour::MissingResource,
+        Behaviour::ChangedResource,
+        Behaviour::SlowResource,
+    ]);
+    for behaviour in cases {
+        let f = Fixture::new(1, behaviour).await;
+        let mut a = Attempt::new(1);
+        assert_eq!(
+            a.run(&f, Duration::from_millis(120)).await,
+            Phase::Quarantined
+        );
+        assert!(a.unit_binding.is_none());
+        assert_eq!(f.starts.load(Ordering::SeqCst), 1);
+        a.reconnect(2).unwrap();
+        assert_eq!(
+            a.run(&f, Duration::from_millis(120)).await,
+            Phase::Quarantined
+        );
+        assert_eq!(f.starts.load(Ordering::SeqCst), 1);
+    }
+}
+
+#[tokio::test]
+async fn owner_loss_during_resource_readback_quarantines() {
+    let f = Fixture::new(1, Behaviour::SlowResource).await;
+    let mut a = Attempt::new(1);
+    let (_tx, rx) = tokio::sync::watch::channel(false);
+    let result = a
+        .submit_on(
+            &f.client,
+            "org.freedesktop.systemd1",
+            &LaunchSpec::fixture(),
+            Duration::from_millis(500),
+            rx,
+            async { tokio::time::sleep(Duration::from_millis(50)).await },
+            false,
+        )
+        .await;
+    assert_eq!(result, Phase::Quarantined);
+    assert!(a.unit_binding.is_none());
+    assert_eq!(f.starts.load(Ordering::SeqCst), 1);
+}
+#[tokio::test]
+async fn cancellation_during_resource_readback_quarantines() {
+    let f = Fixture::new(1, Behaviour::SlowResource).await;
     let mut a = Attempt::new(1);
     let (tx, rx) = tokio::sync::watch::channel(false);
     let cancel = tokio::spawn(async move {

@@ -380,7 +380,7 @@ impl Attempt {
                         // A successful job is not enough to bind a unit incarnation.
                         let binding = tokio::select! { biased;
                             _ = owner_lost.as_mut() => return Err(()),
-                            result = crate::unit_binding::read(connection, destination, spec.unit()) => result?,
+                            result = crate::unit_binding::read(connection, destination, spec) => result?,
                         };
                         self.unit_binding = Some(binding);
                     }
