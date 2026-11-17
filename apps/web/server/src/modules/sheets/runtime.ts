@@ -47,7 +47,7 @@ export async function configuredSheetsRuntime(environment: NodeJS.ProcessEnv = p
   })
   const gateway=createGatewayAdapter(tracked(gatewaySandbox))
   return {
-    sheetsNative:createXlsxNativeWorker(tracked(sandbox)),sheetsPlanner:gateway.planWorkbookSave as SheetsPlanner,sheetsPackageReader:gateway.readWorkbookPackage as SheetsPackageReader,
+    sheetsNative:createXlsxNativeWorker(tracked(sandbox)),sheetsPlanner:gateway.planWorkbookSave as SheetsPlanner,sheetsWorkbookPlanner:gateway.planFromWorkbook,sheetsPackageReader:gateway.readWorkbookPackage as SheetsPackageReader,
     nativeSheetsDirectory:resolve(environment.DYOFFICE_NATIVE_XLSX_DIRECTORY ?? fileURLToPath(new URL('../../../../dist-sheets/',import.meta.url))),
     async close(){controller.abort();await Promise.allSettled([...active])},
   }

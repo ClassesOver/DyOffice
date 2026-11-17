@@ -8,6 +8,8 @@ import {buildSheetsGateway} from '../../server/sheets/build.mjs'
 import {createHostProcess} from '../../worker/src/sandbox/host-process.ts'
 import {createGatewayAdapter} from '../../worker/src/native/gateway.ts'
 import {sheetsSaveRequest} from '../helpers/sheets-request.mjs'
+import {sandboxFixture} from '../helpers/native-sandbox.mjs'
+import {createXlsxNativeWorker} from '../../worker/src/native/xlsx.ts'
 
 const hash=async path=>createHash('sha256').update(await readFile(path)).digest('hex')
 async function host(script,deploymentId=randomUUID()) {
@@ -23,6 +25,26 @@ test('real Node gateway parses and plans inside the existing host sandbox', {tim
   assert.match(plan.replaced.get('xl/worksheets/sheet1.xml'),/<v>23<\/v>/)
   assert.equal(plan.replaced.has('customXml/t09-preserve.xml'),false)
   await assert.rejects(()=>gateway.planWorkbookSave(input,[{id:'other',name:'Acceptance'}],sheetsSaveRequest('1',[{row:1,column:0,writeValue:true,value:23}])),{statusCode:400})
+})
+test('isolated workbook planner derives native sheet IDs from the same bytes for cell and structural saves', {timeout:60000},async t=>{
+  const directory=await mkdtemp(join(tmpdir(),'dyoffice-workbook-plan-'));t.after(()=>rm(directory,{recursive:true,force:true}))
+  const module=await buildSheetsGateway(join(directory,'gateway.mjs'))
+  let starts=0
+  const backend=await host(join(dirname(module),'gateway-process.mjs'))
+  const gateway=createGatewayAdapter({async run(...args){starts++;return backend.run(...args)}})
+  const input=await readFile(new URL('../fixtures/sheets/acceptance.xlsx',import.meta.url))
+  const request=sheetsSaveRequest('sheet-1',[{row:1,column:0,writeValue:true,value:24}])
+  const plan=await gateway.planFromWorkbook(input,request)
+  assert.equal(starts,1);assert.match(plan.replaced.get('xl/worksheets/sheet1.xml'),/<v>24<\/v>/)
+  const renamed=await gateway.planFromWorkbook(input,{...request,sheetOps:[{kind:'rename-sheet',sheetId:'sheet-1',newName:'Renamed'}]})
+  assert.match(renamed.replaced.get('xl/workbook.xml'),/name="Renamed"/)
+  const native=createXlsxNativeWorker(await sandboxFixture('native'))
+  const saved=await native.savePlan(input,renamed)
+  const reopened=await native.inspect(saved.bytes)
+  assert.deepEqual(reopened.sheets.map(({id,name})=>({id,name})),[{id:'sheet-1',name:'Renamed'}])
+  const next=await gateway.planFromWorkbook(saved.bytes,sheetsSaveRequest('sheet-1',[{row:2,column:0,writeValue:true,value:25}]))
+  assert.match(next.replaced.get('xl/worksheets/sheet1.xml'),/<v>25<\/v>/)
+  await assert.rejects(()=>gateway.planFromWorkbook(input,sheetsSaveRequest('forged-id',[{row:1,column:0,writeValue:true,value:1}])),{statusCode:400})
 })
 test('cancelling an active Node sandbox terminates it and removes its own preparation root', {timeout:20000},async t=>{
   const directory=await mkdtemp(join(tmpdir(),'dyoffice-gateway-cancel-'));t.after(()=>rm(directory,{recursive:true,force:true}))

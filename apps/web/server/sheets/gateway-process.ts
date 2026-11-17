@@ -1,6 +1,6 @@
 import {open,writeFile} from 'node:fs/promises'
 import {constants} from 'node:fs'
-import {planWorkbookSave,readWorkbookPackage} from './gateway.ts'
+import {planWorkbookSave,planFromWorkbook,readWorkbookPackage} from './gateway.ts'
 import {encodeGatewayPlan} from '../../worker/src/native/gateway.ts'
 
 // This entry is bundled and executed only inside the host sandbox. It receives
@@ -30,13 +30,19 @@ async function execute(packet:Record<string,unknown>) {
     if(Object.keys(request).length)throw invalidInput()
     result=await readWorkbookPackage(bytes)
   }else{
-    if(Object.keys(request).sort().join(',')!=='request,sheets'||!Array.isArray(request.sheets)||request.sheets.length>256)throw invalidInput()
-    const ids=new Set<string>(),names=new Set<string>()
-    const sheets=request.sheets.map(sheet=>{
-      if(!record(sheet)||Object.keys(sheet).sort().join(',')!=='id,name'||typeof sheet.id!=='string'||!sheet.id.length||sheet.id.length>512||typeof sheet.name!=='string'||!sheet.name.length||sheet.name.length>255||ids.has(sheet.id)||names.has(sheet.name))throw invalidInput()
-      ids.add(sheet.id);names.add(sheet.name);return {id:sheet.id,name:sheet.name}
-    })
-    result=encodeGatewayPlan(await planWorkbookSave(bytes,sheets,request.request))
+    // Absence of sheets selects the workbook-derived contract. Extra keys,
+    // including a caller mapping beside it, never enter that mode.
+    if(Object.keys(request).join(',')==='request') {
+      result=encodeGatewayPlan(await planFromWorkbook(bytes,request.request))
+    }else{
+      if(Object.keys(request).sort().join(',')!=='request,sheets'||!Array.isArray(request.sheets)||request.sheets.length>256)throw invalidInput()
+      const ids=new Set<string>(),names=new Set<string>()
+      const sheets=request.sheets.map(sheet=>{
+        if(!record(sheet)||Object.keys(sheet).sort().join(',')!=='id,name'||typeof sheet.id!=='string'||!sheet.id.length||sheet.id.length>512||typeof sheet.name!=='string'||!sheet.name.length||sheet.name.length>255||ids.has(sheet.id)||names.has(sheet.name))throw invalidInput()
+        ids.add(sheet.id);names.add(sheet.name);return {id:sheet.id,name:sheet.name}
+      })
+      result=encodeGatewayPlan(await planWorkbookSave(bytes,sheets,request.request))
+    }
   }
   const output=Buffer.from(JSON.stringify(result))
   if(output.length<1||output.length>MAX)throw new Error('INVALID_INPUT')

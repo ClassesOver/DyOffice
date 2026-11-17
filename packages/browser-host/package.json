@@ -5,7 +5,8 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
-    "./ai-transport": "./src/ai-transport.ts"
+    "./ai-transport": "./src/ai-transport.ts",
+    "./source-skill": "./src/source-skill.ts"
   },
   "dependencies": {
     "@dyoffice/web-contracts": "*",
