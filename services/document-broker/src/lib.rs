@@ -35,3 +35,6 @@ mod systemd_driver;
 // Private restricted database observations, not runtime admission.
 #[allow(dead_code)]
 mod dispatch_ledger;
+
+#[cfg(test)]
+mod container_probe;
