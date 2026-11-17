@@ -6,7 +6,7 @@ const retained = ['ai-panel-side.spec.ts', 'docs-header-markup-layout.spec.ts', 
 test('root e2e suite retains shared browser checks and no desktop launcher', () => {
   assert.deepEqual(readdirSync(new URL('e2e/', root)).filter(x => x.endsWith('.spec.ts')).sort(), retained)
   assert.equal(existsSync(new URL('e2e/helpers.ts', root)), false)
-  for (const name of retained) assert.doesNotMatch(readFileSync(new URL('e2e/' + name, root), 'utf8'), /_electron|launchShell|from ['"]\.\/helpers['"]/) 
+  for (const name of retained) assert.doesNotMatch(readFileSync(new URL('e2e/' + name, root), 'utf8'), /_electron|launchShell|from ['"]\.\/helpers['"]/)
 })
 test('CI no longer downloads or launches the retired desktop product or weakens host settings', () => {
   const ci = readFileSync(new URL('.github/workflows/ci.yml', root), 'utf8')

@@ -17,4 +17,3 @@ export interface AnalysisDelivery {
   taskId:string;claimId:string;connectionEpoch:number;commandId:string;summary:string;inputs:unknown[];artifacts:AnalysisArtifactRef[]
   runtimeManifestSha256:string;limitations:string[];createdAt:string
 }
-
