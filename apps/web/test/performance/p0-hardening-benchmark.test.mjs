@@ -7,10 +7,35 @@ import { s3Fixture } from '../helpers/s3.mjs'
 import { createLeaseService } from '../../server/src/modules/leases/service.ts'
 import { createRevisionService } from '../../server/src/modules/revisions/service.ts'
 
+import { restrictedIdentityFixture } from '../helpers/restricted-identity.mjs'
+import { password } from '../helpers/identity.mjs'
+import { createSessionService } from '../../server/src/modules/auth/sessions.ts'
+
 const summary = values => {
   const sorted = [...values].sort((a,b) => a-b)
   return { samples: sorted.length, medianMs: sorted[Math.floor(sorted.length/2)], p95Ms: sorted[Math.ceil(sorted.length*0.95)-1] }
 }
+
+test('P0 identity authority timings retain every request and transaction query', { skip: process.env.DYOFFICE_RUN_P0_AUTH_BENCHMARK !== 'synthetic-local-only',timeout: 60_000 }, async t => {
+  const f = await restrictedIdentityFixture(t)
+  let counting=false,queries=0
+  const db = { ...f.db,pool: new Proxy(f.db.pool,{ get(target,property) {
+    if (property !== 'query') return Reflect.get(target,property)
+    return (...args) => { if(counting)queries++;return target.query(...args) }
+  } }),transaction: operation => f.db.transaction(connection => operation(new Proxy(connection,{ get(target,property) {
+    if (property !== 'query') return Reflect.get(target,property)
+    return (...args) => { if(counting)queries++;return target.query(...args) }
+  } }))) }
+  const sessions=createSessionService({ db,accounts: f.accounts,deploymentId: f.deploymentId })
+  const signed=await sessions.login('owner',password),samples=[],counts=[]
+  for(let i=0;i<120;i++) {
+    queries=0;counting=true;const start=performance.now()
+    assert.equal((await sessions.authenticate(signed.token)).userId,f.user.id)
+    const elapsed=performance.now()-start;counting=false
+    if(i>=20){samples.push(elapsed);counts.push(queries)}
+  }
+  t.diagnostic('P0_AUTH_MEASUREMENTS '+JSON.stringify({ label: process.env.DYOFFICE_P0_LABEL ?? 'unspecified',method: 'One disposable PostgreSQL identity fixture, 20 warmup then 100 sequential authenticate calls, unchanged pools; counted queries exclude BEGIN/SET/COMMIT, fixed on both sides. Local observation, not production p95.',...summary(samples),queryCounts: [...new Set(counts)],raw: samples }))
+})
 
 test('P0 authenticated request, immutable publication and real PG/S3 commit timings', { skip: process.env.DYOFFICE_RUN_P0_BENCHMARK !== 'synthetic-local-only', timeout: 120_000 }, async t => {
   const { store } = await s3Fixture(t)
