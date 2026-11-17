@@ -1,3 +1,4 @@
+import {assertDisposableSourceDatabase} from '../helpers/disposable-source-database.mjs'
 // Real disposable PostgreSQL + pinned local HTTP integration for personal source tools.
 // Only the query tool may contact the connector; all later reads use frozen JSONB.
 import test from 'node:test'
@@ -8,7 +9,6 @@ import { restrictedFixture, restrictedOrigin } from '../helpers/restricted.mjs'
 import { password } from '../helpers/identity.mjs'
 import { createCsrfService } from '../../server/src/modules/auth/csrf.ts'
 
-const databaseUrl = 'postgresql://postgres:dyoffice-ci-test-only@127.0.0.1:55433/dyoffice_test'
 const workspacePath = '/api/v1/workspace'
 const toolNames = ['sources.list', 'sources.describe', 'sources.query', 'sources.save_result', 'sources.read_result']
 const timezone = 'Asia/Shanghai'
@@ -28,7 +28,7 @@ const rows = (count, label = 'Alice') => Array.from({ length: count }, (_, i) =>
 }))
 
 async function fixture(t, datasets = { alice: rows(1203) }) {
-  assert.equal(process.env.DYOFFICE_TEST_DATABASE_URL, databaseUrl, 'Use only the designated disposable test PostgreSQL')
+  assertDisposableSourceDatabase(process.env.DYOFFICE_TEST_DATABASE_URL)
   const bodies = new Map(Object.entries(datasets).map(([name, data]) => [name, JSON.stringify({ payload: { rows: data } })]))
   const requests = []
   const server = createServer((request, response) => {
