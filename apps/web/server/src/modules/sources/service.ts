@@ -57,6 +57,21 @@ export function createSourceService({ transactions, credentialKeys = '', egressT
     return { sql: await querySqlSource(policy, row.kind, secret, query.sql, execution), execution }
   }
   return Object.freeze({
+    /** AI metadata projection: never read draft names, credentials or configs. */
+    async listPublishedMetadata(token: string, input: unknown = {}) {
+      const query = object(input, ['after'])
+      const after = query.after === undefined ? '' : sourceId(query.after)
+      return access(token, async (c, p) => {
+        const rows = (await c.query(`SELECT s.source_id,v.name,v.kind,v.revision
+          FROM data_sources s JOIN data_source_versions v
+          ON v.deployment_id=s.deployment_id AND v.owner_id=s.owner_id
+            AND v.source_id=s.source_id AND v.revision=s.published_revision
+          WHERE s.deployment_id=$1 AND s.owner_id=$2 AND s.source_id>$3
+            AND s.deleted_at IS NULL AND s.enabled=true
+          ORDER BY s.source_id LIMIT 51`, [p.deploymentId,p.userId,after])).rows
+        return {items: rows.slice(0,50).map(row => ({sourceId: row.source_id as string, name: row.name as string, kind: row.kind as SourceKind, sourceVersion: row.revision as number})), nextCursor: rows.length > 50 ? rows[49].source_id as string : null}
+      })
+    },
     async list(token: string, input: unknown = {}): Promise<SourceList> {
       const query = object(input, ['limit','after'])
       const limit = query.limit === undefined ? 50 : Number(query.limit)
@@ -145,7 +160,7 @@ export function createSourceService({ transactions, credentialKeys = '', egressT
         try { return { row, secret: await readCredential(c, p, id, row) } } catch { return { row, secret: null } }
       })
       let ok = false, code = 'SOURCE_UNAVAILABLE'
-      if (prepared.secret) try { await execute(prepared.row, prepared.secret, prepared.row.kind === 'http' ? {} : { sql: 'SELECT 1 AS connection_ok' }); ok = true } catch (error) { code = (error as { statusCode?: number }).statusCode === 400 ? 'TARGET_NOT_APPROVED' : 'SOURCE_UNAVAILABLE' }
+      if (prepared.secret) try { await execute(prepared.row, prepared.secret, prepared.row.kind === 'http' ? {} : { sql: 'SELECT 1 AS connection_ok' }); ok = true } catch (error) { const status = (error as { statusCode?: number }).statusCode; code = status === 400 ? 'TARGET_NOT_APPROVED' : status === 403 ? 'READONLY_ROLE_REQUIRED' : status === 504 ? 'SOURCE_TIMEOUT' : 'SOURCE_UNAVAILABLE' }
       return access(token, async (c, p) => {
         // Lock the permanent root through the final authorization/audit commit.
         // A deleted scoped ID cannot be recreated, so this is the same instance.

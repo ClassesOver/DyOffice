@@ -21,8 +21,8 @@ async function fixture(t){
 }
 test('native edited output stages a T06 upload and commits exactly once without changing original bytes',async t=>{
  const f=await fixture(t),native=createXlsxNativeWorker(await sandboxFixture('native'))
- const {planWorkbookSave}=await sheetsGateway(t)
- const service=createSheetsSaveService({files:f.files,leases:f.leases,revisions:f.revisions,native,plan:planWorkbookSave})
+ const {planWorkbookSave,planFromWorkbook}=await sheetsGateway(t)
+ const service=createSheetsSaveService({files:f.files,leases:f.leases,revisions:f.revisions,native,plan:planWorkbookSave,planFromWorkbook})
  const metadata=await native.inspect(f.bytes)
  const request=sheetsSaveRequest(metadata.sheets[0].id,[{row:1,column:0,writeValue:true,value:21.25}])
  const draft=await service.prepare(f.alice.token,f.initial.fileId,{...f.input,request})
@@ -37,6 +37,37 @@ test('native edited output stages a T06 upload and commits exactly once without 
  assert.match(await after.file('xl/worksheets/sheet1.xml').async('string'),/<v>21\.25<\/v>/)
  assert.deepEqual(await before.file('customXml/t09-preserve.xml').async('nodebuffer'),await after.file('customXml/t09-preserve.xml').async('nodebuffer'))
  await assert.rejects(()=>service.prepare(f.alice.token,f.initial.fileId,{...f.input,request}),{statusCode:409})
+})
+for(const boundary of ['lease','head','revocation','tombstone'])test(`optimized save retains real ${boundary} fencing after planning`,async t=>{
+ const f=await fixture(t),{planFromWorkbook}=await sheetsGateway(t)
+ let entered,release,calls=0
+ const started=new Promise(resolve=>{entered=resolve}),gate=new Promise(resolve=>{release=resolve})
+ const native={async inspect(){assert.fail('optimized path must not inspect source')},async savePlan(){calls++;entered();await gate;return {bytes:f.bytes}}}
+ const service=createSheetsSaveService({files:f.files,leases:f.leases,revisions:f.revisions,native,plan:async()=>assert.fail('no fallback'),planFromWorkbook})
+ const input={...f.input,request:sheetsSaveRequest('sheet-1',[{row:1,column:0,writeValue:true,value:23}])}
+ for(const token of [f.bob.token,f.adminSigned.token])await assert.rejects(()=>service.prepare(token,f.initial.fileId,input),{statusCode:404})
+ assert.equal(calls,0)
+ const pending=service.prepare(f.alice.token,f.initial.fileId,input).then(value=>({value}),error=>({error}))
+ await started
+ let expected=f.initial.revision
+ try{
+   if(boundary==='lease')await f.leases.takeoverLease(f.alice.token,f.initial.fileId,{editorId:randomUUID(),expectedEpoch:f.input.leaseEpoch})
+   if(boundary==='revocation')await f.sessions.revoke(f.alice.token,f.alice.sessionId)
+   if(boundary==='tombstone')await f.files.trashFile(f.alice.token,f.initial.fileId)
+   if(boundary==='head'){
+     const upload=await f.revisions.stageUpload(f.alice.token,f.initial.fileId,{...f.input,size:f.bytes.length})
+     await f.files.receiveUpload(f.alice.token,upload.uploadId,f.bytes)
+     expected=(await f.revisions.commitRevision(f.alice.token,{fileId:f.initial.fileId,uploadId:upload.uploadId,baseRevision:f.input.baseRevision,leaseEpoch:f.input.leaseEpoch,idempotencyKey:randomUUID()})).revision
+   }
+ }finally{release()}
+ const result=await pending
+ assert.equal(result.error?.statusCode,boundary==='revocation'?401:boundary==='tombstone'?404:409)
+ const uploads=await f.ownerDb.transaction(async connection=>{
+   await connection.query("SELECT set_config('dyoffice.deployment_id',$1,true),set_config('dyoffice.user_id',$2,true)",[f.deploymentId,f.alice.user.id])
+   return connection.query("SELECT count(*)::integer AS count FROM uploads WHERE file_id=$1 AND state IN ('staged','receiving','ready')",[f.initial.fileId])
+ })
+ assert.equal(uploads.rows[0].count,0)
+ if(!['revocation','tombstone'].includes(boundary))assert.equal((await f.files.openFile(f.alice.token,f.initial.fileId)).file.revision,expected)
 })
 test('lease takeover while native save runs fences the output before staging',async t=>{
  const f=await fixture(t)

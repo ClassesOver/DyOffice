@@ -8,18 +8,18 @@ import type {PrincipalTransactions} from '../../db/context.ts'
 import type {SecretKeyring} from '../admin/secrets.ts'
 import {CODING_MODEL_TOOLS} from '../coding/model-bridge.ts'
 import type {HarnessRegistry} from '../coding/registry.ts'
-import {ASSISTANT_READ_TOOLS, ASSISTANT_DELEGATION_TOOLS} from '../../../../../../packages/web-contracts/src/assistant.ts'
+import {assistantReadTools, ASSISTANT_DELEGATION_TOOLS} from '../../../../../../packages/web-contracts/src/assistant.ts'
 
 /** Trusted bootstrap profiles pin egress; HTTP never accepts destinations/keys. */
 export function registerPersonalProviderGateway(app: FastifyInstance, options: {
   transactions: PrincipalTransactions; sessions: SessionService; csrf: ReturnType<typeof createCsrfService>
-  assistantChannels?:boolean;harnesses?: HarnessRegistry; keyring: SecretKeyring; profiles: readonly AdminPipelineProfile[]; deploymentId: string
+  sourceCatalog?:boolean;assistantChannels?:boolean;harnesses?: HarnessRegistry; keyring: SecretKeyring; profiles: readonly AdminPipelineProfile[]; deploymentId: string
 }) {
   if (!options.profiles.length || options.profiles.length > 128 || options.profiles.some(p => !p || p.deploymentId !== options.deploymentId)
     || options.profiles.some(p => typeof p.entryId !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9_-]{0,99}$/.test(p.entryId))
     || new Set(options.profiles.map(p => p.entryId)).size !== options.profiles.length) throw new Error('Invalid provider gateway profiles')
   const profiles = options.profiles.map(p => ({...p, allowedIpv4: [...p.allowedIpv4]}))
-  const personalTools = new Set([...ASSISTANT_READ_TOOLS, ...((options.harnesses||options.assistantChannels) ? ASSISTANT_DELEGATION_TOOLS : [])])
+  const personalTools = new Set([...assistantReadTools(options.sourceCatalog===true), ...((options.harnesses||options.assistantChannels) ? ASSISTANT_DELEGATION_TOOLS : [])])
   const pipeline = createAdminProviderPipeline({...options, profiles, audience: 'personal', personalTools})
   const codingPipeline = options.harnesses ? createAdminProviderPipeline({...options, profiles, audience: 'personal', personalTools: CODING_MODEL_TOOLS}) : undefined
   app.addHook('preClose', async () => {pipeline.dispose();codingPipeline?.dispose()})
@@ -27,7 +27,7 @@ export function registerPersonalProviderGateway(app: FastifyInstance, options: {
     cancel: pipeline.turns.cancel,
     async run(input, emit) {
       const request = input.request as {system: string; messages: unknown[]; tools: {name: string}[]}
-      const tools = request.tools.filter(t => t && (ASSISTANT_READ_TOOLS.has(t.name) || ((options.harnesses||options.assistantChannels) && ASSISTANT_DELEGATION_TOOLS.has(t.name))))
+      const tools = request.tools.filter(t => t && personalTools.has(t.name))
       await pipeline.turns.run({...input, request: {...request, tools}}, async event => {
         if (event.type === 'tool_call' && !tools.some(t => t.name === event.name)) throw new Error('Unapproved assistant tool')
         await emit(event)
@@ -43,7 +43,7 @@ export function registerPersonalProviderGateway(app: FastifyInstance, options: {
       await c.query("SELECT set_config('dyoffice.global_session_hash',$1,true),set_config('dyoffice.global_idle_ms',$2,true)", [tokenHash(token), String(options.transactions.sessionIdleMs)])
       const {rows} = await c.query('SELECT * FROM personal_provider_catalog()')
       const available = rows.filter(e => profiles.some(p => p.entryId === e.id && p.revision === e.revision && p.providerId === e.provider_id && p.model === e.model && p.baseUrl === e.base_url))
-      return {...(options.assistantChannels?{assistantChannels:true}:{}),...(options.harnesses && available.length ? {agents: options.harnesses.list(), defaultAgentId: options.harnesses.defaultId} : {}), entries: available.map(({id, label, model}) => ({id, label, model})), defaultId: available.find(e => e.preferred)?.id ?? available[0]?.id ?? null}
+      return {...(options.sourceCatalog===true && available.length?{sourceCatalog:true}:{}),...(options.assistantChannels?{assistantChannels:true}:{}),...(options.harnesses && available.length ? {agents: options.harnesses.list(), defaultAgentId: options.harnesses.defaultId} : {}), entries: available.map(({id, label, model}) => ({id, label, model})), defaultId: available.find(e => e.preferred)?.id ?? available[0]?.id ?? null}
     })
   })
   return {...pipeline,codingTurns:codingPipeline?.turns,dispose(){pipeline.dispose();codingPipeline?.dispose()},async drain(options?:{timeoutMs?:number}){await Promise.all([pipeline.drain(options),codingPipeline?.drain(options)])}}

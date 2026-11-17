@@ -46,7 +46,7 @@ export function createHarnessDataAccess(options:{
   tools:Pick<WorkspaceSourceTools,'execute'>
   results:Pick<WorkspaceSourceResults,'read'|'download'>
   sessions:Pick<SessionService,'authenticate'>
-  artifacts?:Pick<ReturnType<typeof createHarnessArtifacts>,'stage'|'commit'> & Partial<Pick<ReturnType<typeof createHarnessArtifacts>,'cancel'>>
+  artifacts?:Pick<ReturnType<typeof createHarnessArtifacts>,'stage'|'commit'> & Partial<Pick<ReturnType<typeof createHarnessArtifacts>,'cancel'|'receipt'>>
 }) {
   let disposed=false
   const entries=new Map<string,Entry>()
@@ -171,6 +171,19 @@ export function createHarnessDataAccess(options:{
           const input=object(args,['resultId'])
           return options.results.download(entry.token,resultId(entry,input.resultId))
         }
+        if(operation==='artifacts.get_receipt') {
+          if(!options.artifacts?.receipt)throw unavailable()
+          const input=object(args,['commandId']),commandId=uuid(input.commandId)
+          // Recovery reads the durable owner receipt, never expires/requeries
+          // input snapshots or repeats a storage write. Owner scope alone is
+          // insufficient: the current task, claim and epoch must also match.
+          const receipt=await options.artifacts.receipt(entry.token,commandId)
+          if(receipt.commandId!==commandId||receipt.taskId!==entry.taskId||
+            receipt.claimId!==entry.claimId||receipt.connectionEpoch!==1)throw unavailable()
+          await validate(entry)
+          entry.delivery=structuredClone(receipt)
+          return structuredClone(receipt)
+        }
         if(operation==='artifacts.stage') {
           if(!options.artifacts)throw unavailable()
           const input=object(args,['name','mediaType','role','inputResultIds','sha256','bytesBase64'])
@@ -216,3 +229,4 @@ export function createHarnessDataAccess(options:{
     dispose(){disposed=true;for(const taskId of entries.keys())revoke(taskId)},
   }
 }
+

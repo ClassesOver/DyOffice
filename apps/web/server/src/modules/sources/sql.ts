@@ -5,7 +5,8 @@ import { createBoundedSourceSocket } from './wire-budget.ts'
 import { checkServerIdentity } from 'node:tls'
 import type { SourceExecution } from '../../../../../../packages/web-contracts/src/sources.ts'
 import type { SourceEgressPolicy, SqlSourceKind } from '../../security/egress.ts'
-import { validateReadOnlySql, validateReadOnlyGrants } from './sql-policy.ts'
+import { validateReadOnlySql } from './sql-policy.ts'
+import { sourceGrantQuery, validateSourceGrantRows } from './grants.ts'
 import { sourceError } from './config.ts'
 
 export interface SqlRows { names: string[]; rows: unknown[][]; types: ('string' | 'number' | 'boolean')[] }
@@ -64,8 +65,8 @@ export async function querySqlSource(policy: SourceEgressPolicy, kind: SqlSource
     // accounts or grants on a customer target. Only the configured database's
     // explicit SELECT (plus USAGE) is accepted.
     await connection.query("SET time_zone = '+00:00'")
-    const [grants] = await connection.query<RowDataPacket[]>('SHOW GRANTS FOR CURRENT_USER()')
-    validateReadOnlyGrants((grants as unknown as unknown[][]).map(row => row[0] as string), target.database)
+    const [grants, grantFields] = await connection.query<RowDataPacket[]>(sourceGrantQuery(kind))
+    validateSourceGrantRows(kind, grants, grantFields, target.database)
     if (kind === 'starrocks') {
       await connection.query(`SET query_timeout = ${Math.max(1, Math.ceil(timeout / 1000))}`)
       await connection.query(`SET sql_select_limit = ${maxRows + 1}`)

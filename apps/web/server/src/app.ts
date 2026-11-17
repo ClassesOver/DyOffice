@@ -1,3 +1,4 @@
+import {registerAssistantSourceCatalog} from './modules/sources/assistant-catalog.ts'
 import {createCodingModelBridge} from './modules/coding/model-bridge.ts'
 import {createCodingHarness} from './modules/coding/harness.ts'
 import {createHarnessRegistry, type HarnessAdapter} from './modules/coding/registry.ts'
@@ -9,7 +10,7 @@ import {registerPersonalProviderGateway} from './modules/providers/gateway.ts'
 import { registerFixedProviderProbe } from './modules/providers/fixed-probe.ts'
 import type { AdminPipelineProfile } from './modules/providers/admin-pipeline.ts'
 import { registerAdminSyntheticProbe } from './modules/providers/synthetic-probe.ts'
-import { createSheetsSaveService, type SheetsPlanner, type SheetsSaveNative } from './modules/sheets/save.ts'
+import { createSheetsSaveService, type SheetsPlanner, type SheetsWorkbookPlanner, type SheetsSaveNative } from './modules/sheets/save.ts'
 import { createSheetsService, type SheetsNative, type SheetsPackageReader } from './modules/sheets/service.ts'
 import { registerSheetsRoutes } from './modules/sheets/routes.ts'
 import { createSlidesSaveService } from './modules/slides/save.ts'
@@ -84,11 +85,12 @@ export async function buildApp(config: WebConfig): Promise<FastifyInstance> {
 
 export interface LocalWebConfig {
   db: IdentityStore; businessPool?: Pool; deploymentId: string; origin: string; csrfKey: string; passwords?: PasswordService;
-  objectStore?: ObjectStore; filePolicy?: FilePolicy; nativeDocsDirectory?: string; nativeSheetsDirectory?: string; nativeSlidesDirectory?: string; slidesHost?: SlidesSessionHost; nativeJobs?: boolean; sheetsNative?: SheetsNative & Partial<SheetsSaveNative>; sheetsPlanner?: SheetsPlanner; sheetsPackageReader?: SheetsPackageReader; localShellDirectory?: string;
+  objectStore?: ObjectStore; filePolicy?: FilePolicy; nativeDocsDirectory?: string; nativeSheetsDirectory?: string; nativeSlidesDirectory?: string; slidesHost?: SlidesSessionHost; nativeJobs?: boolean; sheetsNative?: SheetsNative & Partial<SheetsSaveNative>; sheetsPlanner?: SheetsPlanner; sheetsWorkbookPlanner?: SheetsWorkbookPlanner; sheetsPackageReader?: SheetsPackageReader; localShellDirectory?: string;
   globalConfigKeyring?: SecretKeyring;
   sourcesCredentialKeys?: string;
   sourcesEgressTargets?: readonly SourceEgressTarget[];
   /** Trusted assistant composition; never model-supplied credentials or scope. */
+  assistantSourceCatalog?: boolean;
   onSourceToolsReady?: (tools: WorkspaceSourceTools) => void;
   adminAiSyntheticProbe?: boolean;
   // Explicit network-capable fixed probe, NOT the offline diagnostic. No automatic run.
@@ -116,6 +118,7 @@ export async function buildLocalApp(config: LocalWebConfig): Promise<FastifyInst
   if (config.providerShutdownTimeoutMs !== undefined && (!Number.isSafeInteger(config.providerShutdownTimeoutMs) || config.providerShutdownTimeoutMs < 1 || config.providerShutdownTimeoutMs > 35_000)) throw new Error('Invalid provider shutdown timeout')
   if (config.adminProviderProbe !== undefined && (!config.adminProviderProbe || Object.keys(config.adminProviderProbe).join() !== 'profiles' || !Array.isArray(config.adminProviderProbe.profiles) || !config.adminProviderProbe.profiles.length || !config.businessPool || !config.globalConfigKeyring || config.adminProviderProbe.profiles.some(p=>!p || p.deploymentId!==config.deploymentId))) throw new Error('Invalid provider probe configuration')
   if(config.adminProviderProbeDirectory!==undefined && (!config.adminProviderProbe || typeof config.adminProviderProbeDirectory!=='string' || !config.adminProviderProbeDirectory))throw new Error('Probe assets require explicit local probe')
+  if(config.assistantSourceCatalog!==undefined && (typeof config.assistantSourceCatalog!=='boolean' || config.assistantSourceCatalog && !config.providerGateway)) throw new Error('Assistant source catalog requires provider gateway')
   if(config.assistantChannels!==undefined&&typeof config.assistantChannels!=='boolean')throw Error('Invalid assistant channel configuration')
   if(config.providerGateway!==undefined && (!config.providerGateway || Object.keys(config.providerGateway).join()!=='profiles' || !Array.isArray(config.providerGateway.profiles) || !config.businessPool || !config.globalConfigKeyring))throw new Error('Provider gateway requires profiles, restricted pool and keyring')
   const probeAssets=config.adminProviderProbeDirectory?await createStaticAssets({assetMode:'built',assetDirectory:config.adminProviderProbeDirectory,pages:['index.html'],cacheControl:'private, no-store'}):undefined
@@ -207,7 +210,7 @@ export async function buildLocalApp(config: LocalWebConfig): Promise<FastifyInst
           return {...bridge,modelId}
         }})
     }
-    if(config.providerGateway)ownedProbes.push(officeGateway=registerPersonalProviderGateway(app,{transactions,sessions,csrf,deploymentId:config.deploymentId,keyring:config.globalConfigKeyring!,profiles:config.providerGateway.profiles,harnesses,assistantChannels:config.assistantChannels}))
+    if(config.providerGateway)ownedProbes.push(officeGateway=registerPersonalProviderGateway(app,{transactions,sessions,csrf,deploymentId:config.deploymentId,keyring:config.globalConfigKeyring!,profiles:config.providerGateway.profiles,harnesses,sourceCatalog:config.assistantSourceCatalog===true,assistantChannels:config.assistantChannels}))
     else app.get('/api/v1/ai/catalog',async(request,reply)=>{reply.header('Cache-Control','private, no-store');await sessions.authenticate(cookies(request).session??'');return {entries:[],defaultId:null}})
     if (config.adminAiSyntheticProbe === true) ownedProbes.push(registerAdminSyntheticProbe(app, { transactions, sessions, csrf }))
     if(config.adminProviderProbe){
@@ -217,6 +220,7 @@ export async function buildLocalApp(config: LocalWebConfig): Promise<FastifyInst
     registerSourceRoutes(app, sources, sessions, csrf)
     registerWorkspaceSourceToolRoutes(app, { tools: sourceTools, results: sourceResults, sessions, csrf })
     config.onSourceToolsReady?.(sourceTools)
+    if (config.assistantSourceCatalog === true && config.providerGateway) registerAssistantSourceCatalog(app, {sessions,csrf,sources})
     registerPreferenceRoutes(app, createPreferenceService(transactions), sessions, csrf)
     registerSkillRoutes(app, createSkillService(transactions), sessions, csrf)
     registerWorkspaceRoutes(app, createWorkspaceService(transactions), sessions, csrf)
@@ -233,7 +237,7 @@ export async function buildLocalApp(config: LocalWebConfig): Promise<FastifyInst
       if (config.realtimeCommands) registerCommandRoutes(app, { sessions,csrf,
         createRequestCommands: createCommandRequestFactory(transactions, config.realtimeCommands.lookupTool) })
       if (config.sheetsNative) {
-        const saves = config.sheetsPlanner ? createSheetsSaveService({files,leases,revisions,native:config.sheetsNative as SheetsNative & SheetsSaveNative,plan:config.sheetsPlanner}) : undefined
+        const saves = config.sheetsPlanner ? createSheetsSaveService({files,leases,revisions,native:config.sheetsNative as SheetsNative & SheetsSaveNative,plan:config.sheetsPlanner,planFromWorkbook:config.sheetsWorkbookPlanner}) : undefined
         registerSheetsRoutes(app,createSheetsService({files,native:config.sheetsNative,readPackage:config.sheetsPackageReader}),sessions,csrf,saves)
       }
       if (config.slidesHost) {

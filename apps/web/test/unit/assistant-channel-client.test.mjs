@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import {createAssistantChannelClient} from '../../../../packages/browser-host/src/assistant-channel.ts'
 
 const tick=()=>new Promise(resolve=>setImmediate(resolve))
-const deferred=()=>{let resolve;const promise=new Promise(done=>{resolve=done});return {promise,resolve}}
+const deferred=()=>{let resolve,reject;const promise=new Promise((done,fail)=>{resolve=done;reject=fail});return {promise,resolve,reject}}
 const task=(id,state='queued')=>({taskId:id,conversationId:'channel-1',from:'peer-1',to:'office',instruction:'Read the document',state,claimId:'claim-'+id,connectionEpoch:1})
 function fixture(t){
  const intervals=[],calls=[],executions=[],yieldRequests=[],continuations=[]
@@ -11,26 +11,29 @@ function fixture(t){
  globalThis.setInterval=(callback)=>{intervals.push(callback);return intervals.length}
  globalThis.clearInterval=()=>{}
  t.after(()=>{globalThis.setInterval=originalSetInterval;globalThis.clearInterval=originalClearInterval})
- let claimGate,createGate
+ let claimGate,createGate,actionGate,connectGate,refreshGate
  let next={conversationId:'channel-1',fileId:'file-1',paused:false,sequence:1,members:[],applications:[],tasks:[]}
  const request=async(path,method,body)=>{
   calls.push({path,method,body})
   if(path.endsWith('/channels')&&method==='POST'&&createGate)return createGate.promise
-  if(path.endsWith('/channels')&&method==='POST')return {conversationId:'channel-1',fileId:'file-1',paused:false}
+  if(path.endsWith('/channels')&&method==='POST')return {conversationId:next.conversationId,fileId:'file-1',paused:false}
+  if(path.endsWith('/connect')&&connectGate)return connectGate.promise
   if(path.endsWith('/connect'))return {connectionEpoch:1}
   if(path.endsWith('/claim')&&claimGate)return claimGate.promise
   if(path.endsWith('/claim')){const claimed=next.tasks.find(value=>value.taskId===body.taskId);return {...claimed,state:'running'}}
   if(path.endsWith('/actions')){
    const action=body.action
+   if(action.kind==='delegate'&&actionGate)return actionGate.promise
    if(action.kind==='delegate'){const taskId='outgoing-'+calls.length;next={...next,tasks:[...next.tasks,{taskId,conversationId:body.conversationId,from:'office',to:body.to,instruction:action.instruction,state:'queued'}]};return {messageId:'message-'+calls.length,taskId}}
    if(action.kind==='result')next={...next,tasks:next.tasks.map(value=>value.taskId===action.taskId?{...value,state:action.outcome}:value)}
    return {messageId:'message-1',taskId:action.taskId}
   }
+  if(method===undefined&&refreshGate){const gate=refreshGate;refreshGate=undefined;return gate.promise}
   return structuredClone(next)
  }
  const client=createAssistantChannelClient({request,fileId:'file-1',editorId:'editor-1',generation:()=>1})
  t.after(()=>client.dispose())
- return {client,calls,intervals,executions,yieldRequests,continuations,holdClaim(){claimGate=deferred();return claimGate},holdCreate(){createGate=deferred();return createGate},setSnapshot(value){next={...next,...value}},register(execute=async()=>({text:'Findings',cancelled:false})){
+ return {client,calls,intervals,executions,yieldRequests,continuations,holdRefresh(){refreshGate=deferred();return refreshGate},holdConnect(){connectGate=deferred();return connectGate},holdAction(){actionGate=deferred();return actionGate},holdClaim(){claimGate=deferred();return claimGate},holdCreate(){createGate=deferred();return createGate},setSnapshot(value){next={...next,...value}},register(execute=async()=>({text:'Findings',cancelled:false})){
   return client.control.register({isBusy:()=>false,requestYield(taskIds){yieldRequests.push([...taskIds])},continue(instruction){continuations.push(instruction);return true},execute(instruction,signal){executions.push({instruction,signal});return execute(instruction,signal)}})
  }}
 }
@@ -188,4 +191,98 @@ test('a yielded Office run resumes once with terminal peer output',async t=>{
  assert.equal(f.continuations.length,1)
  assert.match(f.continuations[0],/Analyze sales/)
  assert.match(f.continuations[0],/Revenue rose 12%/)
+})
+
+
+test('paused collaboration holds completed continuations until resumed',async t=>{
+ const f=fixture(t),agentId='peer-1'
+ f.setSnapshot({members:[{membershipId:agentId,revoked:false}]});await f.client.start();f.register()
+ const receipt=await f.client.skill.executeTool({name:'delegate_channel_task',input:{agentId,instruction:'Analyze'}})
+ const taskId=JSON.parse(receipt.output).taskId
+ f.setSnapshot({paused:true,tasks:[{taskId,state:'succeeded',instruction:'Analyze',summary:'Done'}]})
+ await f.client.refresh();f.client.control.reportYield([taskId])
+ assert.equal(f.continuations.length,0)
+ f.setSnapshot({paused:false});await f.client.refresh()
+ assert.equal(f.continuations.length,1)
+})
+
+test('new chat invalidates pending channel creation',async t=>{
+ const f=fixture(t),creation=f.holdCreate(),starting=f.client.start()
+ f.client.control.resetConversation()
+ creation.resolve({conversationId:'channel-1',fileId:'file-1',paused:false})
+ await assert.rejects(starting,/changed/)
+ assert.equal(f.client.snapshot(),null)
+ assert.equal(f.calls.some(call=>call.path.endsWith('/connect')),false)
+})
+
+
+test('late delegation acknowledgement cannot yield the new chat executor',async t=>{
+ const f=fixture(t),agentId='peer-1'
+ f.setSnapshot({members:[{membershipId:agentId,revoked:false}]});await f.client.start();f.register()
+ const action=f.holdAction()
+ const pending=f.client.skill.executeTool({name:'delegate_channel_task',input:{agentId,instruction:'Old request'}})
+ f.client.control.resetConversation();f.register()
+ action.resolve({messageId:'message-1',taskId:'old-child'})
+ const result=await pending
+ assert.equal(result.isError,true)
+ assert.deepEqual(f.yieldRequests,[])
+})
+
+
+test('new chat invalidates pending connection without starting a scheduler',async t=>{
+ const f=fixture(t),connection=f.holdConnect(),starting=f.client.start()
+ await tick()
+ f.client.control.resetConversation()
+ connection.resolve({connectionEpoch:1})
+ await assert.rejects(starting,/changed/)
+ assert.equal(f.client.snapshot(),null)
+ assert.equal(f.intervals.length,0)
+ const connected=f.calls.find(call=>call.path.endsWith('/connect'))
+ assert.ok(f.calls.some(call=>call.path.endsWith('/disconnect')&&call.body.connectionId===connected.body.connectionId))
+})
+
+
+for(const outcome of ['success','failure'])test(`old refresh ${outcome} cannot block or poison new chat`,async t=>{
+ const f=fixture(t);await f.client.start()
+ const gate=f.holdRefresh(),old=f.client.refresh()
+ f.client.control.resetConversation();f.setSnapshot({conversationId:'channel-2',sequence:8})
+ const starting=f.client.start();await tick()
+ assert.ok(f.calls.some(call=>call.path.endsWith('/channels/channel-2')&&call.method===undefined))
+ if(outcome==='failure')gate.reject(Error('old failure'));else gate.resolve({conversationId:'channel-1',fileId:'file-1',sequence:1})
+ await old;await starting
+ assert.equal(f.client.snapshot().sequence,8);assert.equal(f.client.error(),'')
+})
+
+test('concurrent and repeated start share one connection',async t=>{
+ const f=fixture(t);await Promise.all([f.client.start(),f.client.start()]);await f.client.start()
+ assert.equal(f.calls.filter(call=>call.path.endsWith('/channels')&&call.method==='POST').length,1)
+ assert.equal(f.calls.filter(call=>call.path.endsWith('/connect')).length,1)
+ f.client.dispose()
+ assert.equal(f.calls.filter(call=>call.path.endsWith('/disconnect')).length,1)
+})
+
+test('old execution ignoring abort cannot block or clear a new conversation run',async t=>{
+ const f=fixture(t),old=deferred(),newRun=deferred()
+ f.setSnapshot({tasks:[task('old')]});f.register(()=>old.promise);await f.client.start();await tick()
+ f.client.control.resetConversation()
+ f.setSnapshot({conversationId:'channel-2',tasks:[{...task('new'),conversationId:'channel-2'}]})
+ f.register(()=>newRun.promise);await f.client.start();await tick()
+ assert.equal(f.executions.length,2)
+ old.resolve({text:'Old',cancelled:false});await tick();await tick()
+ f.setSnapshot({tasks:[{...task('new','cancel_requested'),conversationId:'channel-2'}]});await f.client.refresh()
+ assert.equal(f.executions[1].signal.aborted,true)
+ assert.equal(f.calls.some(call=>call.path.endsWith('/actions')&&call.body.action.taskId==='old'),false)
+ newRun.resolve({text:'New',cancelled:true});await tick();await tick()
+})
+
+test('settling old refresh cannot release the new generation refresh latch',async t=>{
+ const f=fixture(t);await f.client.start()
+ const oldGate=f.holdRefresh(),old=f.client.refresh()
+ f.client.control.resetConversation();f.setSnapshot({conversationId:'channel-2',sequence:8})
+ const newGate=f.holdRefresh(),starting=f.client.start();await tick()
+ oldGate.resolve({conversationId:'channel-1',fileId:'file-1',sequence:1});await old
+ const also=f.client.refresh();await tick()
+ assert.equal(f.calls.filter(call=>call.path.endsWith('/channels/channel-2')&&call.method===undefined).length,1)
+ newGate.resolve({conversationId:'channel-2',fileId:'file-1',paused:false,sequence:8,members:[],applications:[],tasks:[]})
+ await starting;await also;assert.equal(f.client.snapshot().sequence,8)
 })

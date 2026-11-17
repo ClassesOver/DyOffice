@@ -193,3 +193,42 @@ test('finished channel claims release bounded grant slots before the next task i
  await assert.rejects(f.access.authorize(first.taskId,first.credential));await assert.rejects(f.access.authorize(second.taskId,second.credential))
  assert.ok(await f.access.authorize(next.taskId,next.credential))
 })
+
+
+test('committed receipt recovery does not reread expired inputs or repeat commit',async t=>{
+ let stored,commits=0,reads=0
+ const f=fixture(t,{async commit(_token,input){commits++;stored={...input,connectionEpoch:input.epoch};return stored},async receipt(token,id){reads++;assert.equal(token,f.alice);assert.equal(id,stored.commandId);return structuredClone(stored)}})
+ const g=await f.issue({sourceIds:[],resultIds:[f.resultId]})
+ const artifact=f.records.get(f.resultId).artifact
+ const input=Object.fromEntries(['resultId','sha256','sourceId','sourceVersion','queryHash','rowCount','truncated'].map(key=>[key,artifact[key]]))
+ const commandId=randomUUID()
+ await f.access.execute(g.taskId,g.credential,'artifacts.commit',{commandId,summary:'Done',artifactIds:[randomUUID()],inputs:[input],runtimeManifestSha256:'c'.repeat(64),limitations:[]})
+ f.records.delete(f.resultId);f.calls.length=0
+ const receipt=await f.access.execute(g.taskId,g.credential,'artifacts.get_receipt',{commandId})
+ assert.equal(receipt.commandId,commandId);assert.equal(commits,1);assert.equal(reads,1)
+ assert.equal(f.calls.some(call=>call[0]==='read'||call[0]==='tool'),false)
+ receipt.summary='Mutated'
+ assert.equal((await f.access.delivery(g.taskId,g.credential)).summary,'Done')
+})
+
+test('receipt recovery rejects another task, claim, epoch and unknown arguments',async t=>{
+ let receipt
+ const f=fixture(t,{async receipt(){return receipt}}),g=await f.issue({sourceIds:[],resultIds:[]})
+ const commandId=randomUUID(),valid={taskId:g.taskId,claimId:g.claimId,connectionEpoch:1,commandId}
+ for(const change of [{taskId:randomUUID()},{claimId:randomUUID()},{connectionEpoch:2},{commandId:randomUUID()}]) {
+  receipt={...valid,...change}
+  await assert.rejects(f.access.execute(g.taskId,g.credential,'artifacts.get_receipt',{commandId}),/Harness data unavailable/)
+ }
+ receipt=valid
+ await assert.rejects(f.access.execute(g.taskId,g.credential,'artifacts.get_receipt',{commandId,ownerId:'bob'}))
+ await assert.rejects(f.access.execute(g.taskId,g.credential,'artifacts.get_receipt',{commandId:'invalid'}))
+})
+
+test('receipt recovery rechecks live claim after storage read',async t=>{
+ let active=true,release,started
+ const ready=new Promise(resolve=>{started=resolve})
+ const f=fixture(t,{async receipt(){started();await new Promise(resolve=>{release=resolve});return {taskId:g.taskId,claimId:g.claimId,connectionEpoch:1,commandId}}})
+ const g=await f.issue({sourceIds:[],resultIds:[]},{authorize:async()=>{if(!active)throw Error('revoked')}}),commandId=randomUUID()
+ const pending=f.access.execute(g.taskId,g.credential,'artifacts.get_receipt',{commandId})
+ await ready;active=false;release();await assert.rejects(pending)
+})

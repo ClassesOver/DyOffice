@@ -2,18 +2,16 @@ import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { sendJson } from './http-response.mjs'
 import { rawBody } from './src/http-helpers.mjs'
-import { applyDocxTextEdits, projectDocx } from './docx-session.mjs'
 import { assertRevisionId } from './src/modules/revisions/errors.mjs'
 import { projectCurrentHead } from './src/modules/revisions/projection.mjs'
 
 const UUID = '[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}'
 const ROUTE = new RegExp(`^/api/v1/files/(${UUID})(?:/(uploads|revisions|lease|docx|content))?$`, 'i')
-const MAX_UPLOAD = 50 * 1024 * 1024
 const MAX_JSON = 2 * 1024 * 1024
 
-/** Host catalog: only DOCX has a native edit path. Other formats stay downloadable and unsupported for editing. */
+/** Retired prototype parser surface: original downloads remain, no in-process editing capability. */
 export const EDITING_CAPABILITIES = Object.freeze({
-  docx: 'editable',
+  docx: 'unsupported',
   xlsx: 'unsupported',
   pptx: 'unsupported',
   pdf: 'unsupported',
@@ -92,20 +90,6 @@ async function commitStaged(runtime, store, filePath, fileId, input) {
   return saved.ref
 }
 
-async function bytesForRevision(runtime, fileId, revision) {
-  const row = runtime.revisions.readRevision(runtime.principal, fileId, revision)
-  if (!row) fail('版本冲突，文档已被更新', 409, 'REVISION_CONFLICT')
-  let opened
-  try {
-    opened = await runtime.objects.downloadObject({ ownerId: runtime.principal.ownerId, objectId: row.objectId })
-  } catch (error) {
-    if (error?.code === 'NOT_FOUND') fail('存储的文件不可用', 503)
-    throw error
-  }
-  if (opened.sha256 !== row.sha256) fail('存储的文件不可用', 503)
-  return opened.bytes
-}
-
 async function serveHistorical(req, res, { url, state, fileId, runtime }) {
   if (req.method !== 'GET' && req.method !== 'HEAD') return false
   let requested
@@ -138,13 +122,19 @@ function assertDocx(file) {
   if (file.format !== 'docx') fail('仅 DOCX 可以编辑', 400, 'UNSUPPORTED_FORMAT')
 }
 
-/** Personal DOCX editing routes. Returns false when another handler owns the request. */
+/** Legacy metadata/revision bridge only. Parser routes are permanently unavailable. */
 export async function serveDocumentEditing(req, res, { url, state, store, filePath, runtime }) {
   const match = ROUTE.exec(url.pathname)
   if (!match || !match[2]) return false
-  const ledger = runtimeOf(runtime)
   const fileId = match[1].toLowerCase()
   const action = match[2].toLowerCase()
+  // Do not load a parser, read a body or touch revision state for retired entrypoints.
+  // The authenticated dispatcher owns authorization; no config can revive these paths.
+  if (action === 'docx' || action === 'uploads') {
+    if (action === 'docx' ? !['GET', 'POST'].includes(req.method) : req.method !== 'POST') fail('Method not allowed', 405)
+    fail('文档解析入口已停用，等待安全隔离后端', 501, 'DOCUMENT_ISOLATION_UNAVAILABLE')
+  }
+  const ledger = runtimeOf(runtime)
   if (action === 'content') return serveHistorical(req, res, { url, state, fileId, runtime: ledger })
   const file = findFile(state, fileId)
   if (action === 'lease') {
@@ -156,17 +146,6 @@ export async function serveDocumentEditing(req, res, { url, state, store, filePa
     return true
   }
   assertDocx(file)
-  if (action === 'uploads') {
-    if (req.method !== 'POST') fail('Method not allowed', 405)
-    const bytes = await readBody(req, MAX_UPLOAD)
-    if (bytes.length < 2 || bytes[0] !== 0x50 || bytes[1] !== 0x4b) fail('文件内容与格式不匹配')
-    await projectDocx(bytes)
-    await registerCurrent(ledger, file, filePath, fileId)
-    const staged = await ledger.objects.stageUpload({ ownerId: ledger.principal.ownerId, name: file.name, bytes })
-    await ledger.revisions.noteUpload(ledger.principal, { fileId, uploadId: staged.uploadId })
-    sendJson(res, 201, { uploadId: staged.uploadId })
-    return true
-  }
   if (action === 'revisions') {
     if (req.method !== 'POST') fail('Method not allowed', 405)
     const raw = await readBody(req, MAX_JSON)
@@ -190,38 +169,6 @@ export async function serveDocumentEditing(req, res, { url, state, store, filePa
     sendJson(res, 200, revision)
     return true
   }
-  if (action === 'docx') {
-    if (req.method === 'GET') {
-      const bytes = await registerCurrent(ledger, file, filePath, fileId)
-      const blocks = await projectDocx(bytes)
-      const head = ledger.revisions.current(ledger.principal, fileId)
-      const lease = ledger.leases.currentLease(ledger.principal, fileId)
-      sendJson(res, 200, { file: head, leaseEpoch: lease.leaseEpoch, blocks })
-      return true
-    }
-    if (req.method !== 'POST') fail('Method not allowed', 405)
-    const raw = await readBody(req, MAX_JSON)
-    let body
-    try { body = JSON.parse(raw.toString()) }
-    catch { fail('JSON 格式无效') }
-    if (!body || typeof body !== 'object' || Array.isArray(body)) fail('JSON 格式无效')
-    if (Object.keys(body).some((key) => !['baseRevision', 'leaseEpoch', 'idempotencyKey', 'blocks', 'sourceCommandId'].includes(key))) fail('请求包含不支持的字段')
-    await registerCurrent(ledger, file, filePath, fileId)
-    const baseRevision = requireBase(body.baseRevision)
-    const previous = await bytesForRevision(ledger, fileId, baseRevision)
-    const nextBytes = Buffer.from(await applyDocxTextEdits(previous, body.blocks))
-    const staged = await ledger.objects.stageUpload({ ownerId: ledger.principal.ownerId, name: file.name, bytes: nextBytes })
-    await ledger.revisions.noteUpload(ledger.principal, { fileId, uploadId: staged.uploadId })
-    const revision = await commitStaged(ledger, store, filePath, fileId, {
-      fileId,
-      uploadId: staged.uploadId,
-      baseRevision,
-      leaseEpoch: requireLease(body.leaseEpoch),
-      idempotencyKey: requireKey(body.idempotencyKey),
-      sourceCommandId: body.sourceCommandId,
-    })
-    sendJson(res, 200, revision)
-    return true
-  }
+
   return false
 }

@@ -30,7 +30,7 @@ There is no background full-result export or whole-dataset spooling. The later p
 - Integrated Web regression: 345 passed, 0 failed, 1 existing optional skip.
 - Shell/server type checks and local-shell bundle build passed.
 
-Tests are in `apps/web/test/local-integration/{data-sources,source-lifecycle}.test.mjs`, `test/unit/source-*.test.mjs`, `test/unit/pinned-json.test.mjs` and `test/shell/sources-panel.test.ts`. They use disposable databases/roles and loopback test endpoints. Automated regressions use only disposable test credentials. A separate user-authorized customer StarRocks connection diagnostic later timed out before authentication; no query ran (see the workspace source tool evidence).
+Tests are in `apps/web/test/local-integration/{data-sources,source-lifecycle}.test.mjs`, `test/unit/source-*.test.mjs`, `test/unit/pinned-json.test.mjs` and `test/shell/sources-panel.test.ts`. They use disposable databases/roles and loopback test endpoints. Automated regressions use only disposable test credentials. A later customer recheck succeeded for login and explicitly authorized bounded reads, identified StarRocks 3.5.7, and confirmed the supplied root-role login must be refused; no write/grant was executed. Dedicated read-only account and TLS acceptance remain open (see starrocks-customer-acceptance.md).
 
 ## Remaining acceptance
 

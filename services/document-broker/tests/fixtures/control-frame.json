@@ -1,0 +1,31 @@
+{
+  "protocolVersion": 1,
+  "requestId": "cccccccc-cccc-cccc-cccc-cccccccccccc",
+  "brokerBootId": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+  "context": {
+    "id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+    "version": 1
+  },
+  "operation": "probe",
+  "request": {
+    "protocolVersion": 1,
+    "deploymentId": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+    "tenantId": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+    "actorId": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+    "sessionBindingDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "fileId": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+    "editorId": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+    "leaseEpoch": 1,
+    "baseRevision": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+    "generation": 0,
+    "jobId": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+    "attempt": 1,
+    "jobEpoch": 1,
+    "inputSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "inputSize": 3,
+    "profileId": "pptx-edit-v1",
+    "runtimeDigest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "policyVersion": 1,
+    "deadlineAt": "2030-01-01T00:00:20.000Z"
+  }
+}

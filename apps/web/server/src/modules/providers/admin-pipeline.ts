@@ -7,7 +7,7 @@ import {createBudgetedAdminCredentialConsumer} from './budgeted-credential.ts'
 import {createPinnedProviderTransport,type EgressProfile} from './pinned-egress.ts'
 import {parseOpenAiChatStream} from './openai-stream.ts'
 import {buildOpenAiChatRequest} from './openai-request.ts'
-import {ASSISTANT_READ_TOOLS} from '../../../../../../packages/web-contracts/src/assistant.ts'
+import {assistantReadTools} from '../../../../../../packages/web-contracts/src/assistant.ts'
 
 export interface AdminPipelineProfile extends EgressProfile {maxOutputTokens:number}
 interface Permit extends TurnPermit {profile:Readonly<AdminPipelineProfile>}
@@ -42,8 +42,8 @@ function bridge() {
 /** Explicit, unmounted, admin-only composition. No real provider is enabled by
  * constructing this factory. Profiles and budget grants are trusted deployment
  * provisioning, not HTTP input. One active turn per factory, total <=30 seconds. */
-export function createAdminProviderPipeline({transactions,keyring,profiles,timeoutMs=30_000,audience='admin',personalTools=ASSISTANT_READ_TOOLS}:{
- transactions:PrincipalTransactions;keyring:SecretKeyring;profiles:readonly AdminPipelineProfile[];timeoutMs?:number;audience?:'admin'|'personal';personalTools?:ReadonlySet<string>
+export function createAdminProviderPipeline({transactions,keyring,profiles,timeoutMs=30_000,audience='admin',personalSourceCatalog=false,personalTools=assistantReadTools(personalSourceCatalog)}:{
+ transactions:PrincipalTransactions;keyring:SecretKeyring;profiles:readonly AdminPipelineProfile[];timeoutMs?:number;audience?:'admin'|'personal';personalSourceCatalog?:boolean;personalTools?:ReadonlySet<string>
 }) {
  let disposed=false,cleanupFailed=false
  const active=new Set<AbortController>()

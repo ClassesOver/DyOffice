@@ -5,7 +5,7 @@ export interface HarnessDataGrant {
   agentId:string;expiresAt:string;inputs:HarnessDataInputs
 }
 export type HarnessDataOperation = 'sources.list'|'sources.describe'|'sources.query'|
-  'results.get_manifest'|'results.download'|'artifacts.stage'|'artifacts.commit'
+  'results.get_manifest'|'results.download'|'artifacts.stage'|'artifacts.commit'|'artifacts.get_receipt'
 export interface AnalysisInputRef {
   resultId:string;sha256:string;sourceId:string;sourceVersion:number;queryHash:string;rowCount:number;truncated:boolean
 }
@@ -17,3 +17,4 @@ export interface AnalysisDelivery {
   taskId:string;claimId:string;connectionEpoch:number;commandId:string;summary:string;inputs:unknown[];artifacts:AnalysisArtifactRef[]
   runtimeManifestSha256:string;limitations:string[];createdAt:string
 }
+

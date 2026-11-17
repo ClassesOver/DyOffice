@@ -1,0 +1,74 @@
+{
+  "schemaVersion": 1,
+  "status": "experimental-not-certified",
+  "profiles": [
+    {
+      "id": "xlsx-edit-v1",
+      "format": "xlsx",
+      "policyVersion": 1,
+      "productionEnabled": false,
+      "network": "deny",
+      "inputBytes": 33554432,
+      "outputBytes": 33554432,
+      "wallMs": 30000,
+      "operations": [
+        "parse",
+        "edit",
+        "export",
+        "validate"
+      ],
+      "activeContent": "never-execute"
+    },
+    {
+      "id": "pptx-edit-v1",
+      "format": "pptx",
+      "policyVersion": 1,
+      "productionEnabled": false,
+      "network": "deny",
+      "inputBytes": 33554432,
+      "outputBytes": 33554432,
+      "wallMs": 30000,
+      "operations": [
+        "parse",
+        "edit",
+        "export",
+        "validate"
+      ],
+      "activeContent": "never-execute"
+    },
+    {
+      "id": "docx-edit-v1",
+      "format": "docx",
+      "policyVersion": 1,
+      "productionEnabled": false,
+      "network": "deny",
+      "inputBytes": 33554432,
+      "outputBytes": 33554432,
+      "wallMs": 30000,
+      "operations": [
+        "parse",
+        "edit",
+        "export",
+        "validate"
+      ],
+      "activeContent": "never-execute"
+    },
+    {
+      "id": "pdf-edit-v1",
+      "format": "pdf",
+      "policyVersion": 1,
+      "productionEnabled": false,
+      "network": "deny",
+      "inputBytes": 33554432,
+      "outputBytes": 33554432,
+      "wallMs": 30000,
+      "operations": [
+        "parse",
+        "edit",
+        "export",
+        "validate"
+      ],
+      "activeContent": "never-execute"
+    }
+  ]
+}

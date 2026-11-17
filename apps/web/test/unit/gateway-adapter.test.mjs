@@ -16,6 +16,17 @@ test('gateway planner uses bounded part protocol and restores text/binary Maps',
   assert.deepEqual([...result.replaced],[['xl/workbook.xml','<workbook/>']]);assert.deepEqual([...result.addedBinary],[['xl/media/a.png',Buffer.from([1,2,3])]])
   assert.deepEqual(result.removedEntries,['xl/old.xml'])
 })
+test('workbook planner sends no caller sheet mapping and retains bounded plan validation',async()=>{
+  const f=fixture(),input=Buffer.from('xlsx'),request={mode:'save'},signal=new AbortController().signal
+  const result=await f.adapter.planFromWorkbook(input,request,signal)
+  assert.deepEqual(f.calls.slice(1),[['part',{request}],['request','gateway_plan',{path:part}]])
+  assert.equal(result.replaced.get('xl/workbook.xml'),'<workbook/>')
+  await assert.rejects(()=>fixture({...wire(),replaced:[['../escape','xml']]}).adapter.planFromWorkbook(input,request),{code:'INVALID_OUTPUT'})
+})
+test('legacy gateway projects native metadata to exact id/name wire contract',async()=>{
+  const f=fixture();await f.adapter.planWorkbookSave(Buffer.from('xlsx'),[{id:'sheet-1',name:'Sheet1',rowCount:10}],{})
+  assert.deepEqual(f.calls[1],['part',{sheets:[{id:'sheet-1',name:'Sheet1'}],request:{}}])
+})
 test('gateway package uses separate command and returns package metadata',async()=>{
   const metadata={redactions:[],slicers:[],connections:{connections:[]},queries:[]},f=fixture(metadata)
   assert.deepEqual(await f.adapter.readWorkbookPackage(Buffer.from('xlsx')),metadata)

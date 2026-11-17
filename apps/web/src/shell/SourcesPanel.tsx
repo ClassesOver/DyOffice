@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import {offerSourceResultDownload} from './source-result-download'
 import type { SourceDetail, SourceDescriptor, SourceConfig, SourceKind, QuerySnapshot } from '../../../../packages/web-contracts/src/sources.ts'
 import type { SourcesClient } from './sources-client'
 import type { SourceResultsClient } from './source-results-client'
@@ -91,7 +92,7 @@ export function SourcesPanel({ client, resultsClient, onClose }: { client: Sourc
         <div className="source-actions">
           {(detail || unknown && draft.sourceId) && <button className="set-btn" disabled={busy} onClick={() => void operation(async () => { setMissing(false); try { const current = await client.detail(detail?.source.sourceId ?? draft.sourceId); if (alive.current) { setLatest(current); setMessage('最新版本已读取，当前草稿仍保留。') } } catch (error) { if ((error as {status?: number}).status !== 404) throw error; if (alive.current) { setLatest(null); setMissing(true) } } })}>读取最新版本并核对</button>}
           {detail && <>
-            <button className="set-btn" disabled={busy || dirty || unknown} onClick={() => void operation(async () => { const checked = await client.test(detail.source.sourceId); if (alive.current) setMessage(checked.ok ? '连接测试通过。' : '连接测试未通过，请检查目标只读权限与部署网络策略。') })}>测试已保存草稿</button>
+            <button className="set-btn" disabled={busy || dirty || unknown} onClick={() => void operation(async () => { const checked = await client.test(detail.source.sourceId); if (alive.current) setMessage(checked.ok ? '连接测试通过。' : checked.code === 'READONLY_ROLE_REQUIRED' ? '连接账号未通过最小只读权限核验。请使用仅获批准库 SELECT 权限的专用账号，不能使用 root 或管理角色。' : checked.code === 'SOURCE_TIMEOUT' ? '连接或查询超时，请检查目标网络与查询时限。' : '连接测试未通过，请检查目标只读权限与部署网络策略。') })}>测试已保存草稿</button>
             <button className="set-btn" disabled={busy || dirty || unknown || !detail.source.hasCredential} onClick={() => void operation(async () => { await client.publish(detail.source.sourceId, detail.source.version); if (!alive.current) return; await select(detail.source.sourceId); await reloadList(); if (alive.current) setMessage('数据源版本已发布。') })}>发布草稿</button>
             <label><input type="checkbox" checked={confirmDelete} disabled={busy || unknown} onChange={e => setConfirmDelete(e.target.checked)} />确认删除此数据源（保留不可复用的标识墓碑）</label>
             <button className="set-btn danger" disabled={busy || unknown || !confirmDelete} onClick={() => void operation(async () => { await client.remove(detail.source.sourceId, detail.source.version); if (!alive.current) return; setDetail(null); setDraft(empty()); setDirty(false); await reloadList() })}>删除数据源</button>
@@ -123,7 +124,7 @@ export function SourcesPanel({ client, resultsClient, onClose }: { client: Sourc
               catch { throw Error('保存结果未确认，可使用同一保存操作重试，系统不会重新查询。') }
               finally { if (alive.current) setResultBusy(false) }
             })}>{savedResult ? '已保存到工作区' : saveIntent.current ? '确认保存结果' : '保存结果到工作区'}</button>
-            {savedResult && <a href={resultsClient.downloadPath(savedResult.resultId)} download>下载冻结结果 JSON</a>}
+            {savedResult && <button className="set-btn" disabled={busy} onClick={() => void operation(async () => { const json = await resultsClient.download(savedResult.resultId); if (alive.current) offerSourceResultDownload(json, savedResult.resultId) })}>下载冻结结果 JSON</button>}
             <span>默认每批读取 1,000 行；当前预览最多 100 行。{capture.sourceTruncated ? '原查询已截断，保存不会补回未查询行。' : ''}</span>
           </div>}
           <div className="source-results"><table><thead><tr>{result.schema.map(column => <th key={column.name}>{column.name}{column.unit ? `（${column.unit}）` : ''}</th>)}</tr></thead><tbody>{result.rows.slice(0,100).map((row,index) => <tr key={index}>{result.schema.map(column => <td key={column.name}>{row[column.name] === null ? '—' : String(row[column.name] ?? '')}</td>)}</tr>)}</tbody></table></div>

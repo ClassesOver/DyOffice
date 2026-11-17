@@ -9,7 +9,7 @@ import {createPdfRotationJob} from '../../server/src/pdf/rotation-job.mjs'
 import {createPdfSavePreparation} from '../../server/src/pdf/save-preparation.mjs'
 const request=JSON.stringify({version:1,action:'rotatePages',operations:[{page:1,degrees:90}]})
 async function fixture(t){
-  const f=await fileFixture(t),doc=await PDFDocument.create();doc.addPage([200,100])
+  const f=await fileFixture(t,{buildApp:false}),doc=await PDFDocument.create();doc.addPage([200,100])
   const initial=(await importFile(f,f.alice.token,Buffer.from(await doc.save()),'sample.pdf')).file
   const leases=createLeaseService({transactions:f.transactions}),revisions=createRevisionService({transactions:f.transactions,objects:f.objects,files:f.files})
   const editorId=randomUUID(),lease=await leases.acquireLease(f.alice.token,initial.fileId,{editorId})

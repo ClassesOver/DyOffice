@@ -1,6 +1,8 @@
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import {getGlobalDispatcher,setGlobalDispatcher} from 'undici'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import * as resources from '../src/resources'
 import * as aiSearch from '@genoffice/ai-search'
 import { run, tempDir } from './helpers'
 
@@ -27,6 +29,31 @@ function settingsFile(dir: string, settings: Record<string, unknown>): string {
 }
 
 describe('genoffice capabilities', () => {
+  it('keeps packaged GSK discovery without initializing network transports',async()=>{
+    const dir=tempDir(),entry=join(dir,'gsk','node_modules','@genspark','cli','dist','index.js')
+    mkdirSync(join(entry,'..'),{recursive:true});writeFileSync(entry,'// packaged fixture')
+    vi.spyOn(resources,'packagedResourcesDir').mockReturnValue(dir)
+    const previous=process.env.GSK_CLI_PATH,before=getGlobalDispatcher()
+    delete process.env.GSK_CLI_PATH
+    try {
+      const env={...process.env,HTTPS_PROXY:'http://127.0.0.1:9',GENOFFICE_AI_SETTINGS:join(dir,'missing.json')}
+      const r=await run(['capabilities','--json'],{env})
+      expect(r.code).toBe(0);expect(process.env.GSK_CLI_PATH).toBe(entry)
+      expect(getGlobalDispatcher()).toBe(before)
+    } finally {if(previous===undefined)delete process.env.GSK_CLI_PATH;else process.env.GSK_CLI_PATH=previous}
+  })
+  it('read-only capability discovery leaves the process HTTP dispatcher unchanged',async()=>{
+    const before=getGlobalDispatcher()
+    try {
+      const r=await run(['capabilities','--json'],{env:{...process.env,HTTPS_PROXY:'http://127.0.0.1:9',GENOFFICE_AI_SETTINGS:join(tempDir(),'missing.json')}})
+      expect(r.code).toBe(0)
+      expect(getGlobalDispatcher()).toBe(before)
+    } finally {
+      const after=getGlobalDispatcher()
+      if(after!==before){setGlobalDispatcher(before);await after.close()}
+    }
+  })
+
   it('reports nothing configured when signed out with default settings', async () => {
     const dir = tempDir()
     const r = await run(['capabilities', '--json'], {

@@ -1,5 +1,7 @@
 # 四格式统一安全隔离设计（待实施）
 
+范围更新（2026-11-17，按用户最新要求）：本轮支持目标为 openEuler x86_64 和 Ubuntu x86_64；ARM64 暂不考虑。两发行版须分别锁定实际 SP/LTS、补丁和 systemd 能力并独立实机验收，不能互相继承结果；当前均未认证。
+
 状态：设计草稿；仅文档，不启用生产能力。核对日期：2026-11-17。
 代码基线：`feat/dyoffice-web@1a4a4ebb9e8e0009708ab567c1bf99117bbabfdd`。
 配套：[详细实施计划](../plans/2026-11-17-unified-document-isolation.md)。
@@ -78,7 +80,7 @@ PG 是权威账本，现有 Redis/BullMQ 只负责可重投通知。使用短事
 
 ## 5. 运行时与资源策略
 
-不可变 runtime manifest 覆盖 interpreter/native binary、动态库、字体、locale、CA（如确需）、脚本、配置及 rootfs 文件清单；每架构独立 digest/SBOM。构建时解析依赖，执行时不再信任宿主 `ldd` 结果。禁止下载任意运行时或自动更新运行中的 profile。
+不可变 runtime manifest 覆盖 interpreter/native binary、动态库、字体、locale、CA（如确需）、脚本、配置及 rootfs 文件清单；当前仅构建 x86_64 的 digest/SBOM。构建时解析依赖，执行时不再信任宿主 `ldd` 结果。禁止下载任意运行时或自动更新运行中的 profile。
 
 默认无网络、只读根、独立工作目录、最少设备、去 capabilities、NoNewPrivileges、namespace、seccomp、cgroup CPU/memory/PID、墙钟 deadline、协议/日志/输入/输出/临时空间上限。临时空间必须可计量（限额 tmpfs 或受配额卷），不能只限制最终输出。SELinux Enforcing 下验证标签和访问拒绝；DynamicUser 不自动替代 SELinux 或 user namespace 策略。
 
@@ -104,7 +106,7 @@ AI、数据源、MCP、供应商凭证留在现有授权控制面，不放进沙
 
 ## 8. openEuler 与验收门槛
 
-建议验证基线为受支持的 openEuler 24.03 LTS SP，具体 SP/补丁在环境清单中锁定。分别验证 x86_64、aarch64，记录实际内核、systemd、cgroup v2 controllers/delegation、SELinux policy/enforcing、seccomp、user namespace、runtime digest。没有实机结果不能写“支持已完成”；也不假定所有 openEuler 默认 crun 或 cgroup v2。
+建议验证基线为受支持的 openEuler 24.03 LTS SP，具体 SP/补丁在环境清单中锁定。当前仅验证 x86_64；ARM64 不在本轮支持范围，也不作为验收门槛。记录实际内核、systemd、cgroup v2 controllers/delegation、SELinux policy/enforcing、seccomp、user namespace、runtime digest。没有实机结果不能写“支持已完成”；也不假定所有 openEuler 默认 crun 或 cgroup v2。
 
 证据等级：A 静态/单元与 mock；B 真 PG/对象存储事务；C 真实 OS 隔离/故障注入；D 四格式打开→修改→导出→保存→重开及交互/桌面对比。生产开启至少需对应能力 A+B+C，用户可见编辑还需 D 中相关链路。CI 是否运行不代替证据；当前 systemd 不可用只表示 C 未通过。
 
@@ -120,3 +122,7 @@ AI、数据源、MCP、供应商凭证留在现有授权控制面，不放进沙
 - [gVisor FAQ](https://gvisor.dev/docs/user_guide/faq/)：SELinux 标签限制需专门评估；不允许以关闭 enforcing 或标签保护偷偷过验收。
 
 本项目无需因统一隔离立即引入 Casbin/OPA、Temporal、Argo 或第二套队列；先复用现有授权与 PG 契约。只有实测发现能力缺口才提出独立 ADR。许可按实际依赖及分发方式审查，不把 MPL/GPL 一概称为“传染”；不以 Docker 名称直接判断安全优劣。
+
+## 双发行版范围补充
+
+当前目标同时包含 openEuler x86_64 与 Ubuntu x86_64，ARM 排除。具体 openEuler SP、Ubuntu LTS 和补丁版本在实机清单中单独锁定；未选择或认证任何 Ubuntu 版本。预检仅识别发行版并记录版本，始终 BLOCKED / productionEligible=false。Rust fixture 显式限制 distribution 为 openEuler 或 ubuntu，systemd-v256 只是 setter 参考 schema，不是发行版能力保证。现有 SELinux Enforcing 要求不因 Ubuntu 默认配置而放宽，AppArmor 不自动替代；缺项应记录阻断，不修改主机设置。

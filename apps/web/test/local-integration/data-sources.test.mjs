@@ -245,6 +245,9 @@ test('read-only SQL channel: AST guard, real PG denial, row cap, timeout, units'
   const readerName = decodeURIComponent(new URL(targets.readerDsn).username)
   await targets.admin.query(`GRANT INSERT ON ${targets.probeTable} TO "${readerName}"`)
   await call(f, 'POST', '/metrics/query', { sql: 'SELECT 1' }, undefined, 403)
+  const overprivilegedCheck = (await call(f, 'POST', '/metrics/test', {}, undefined, 200)).json()
+  assert.equal(overprivilegedCheck.ok, false)
+  assert.equal(overprivilegedCheck.code, 'READONLY_ROLE_REQUIRED')
   await targets.admin.query(`REVOKE INSERT ON ${targets.probeTable} FROM "${readerName}"`)
 
   // statement_timeout enforced server-side with a genuinely slow real query.
