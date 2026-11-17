@@ -1,8 +1,13 @@
 import { hostError } from '../../../../packages/web-contracts/src/errors.ts'
 import type { DesktopApi } from '../../../docs/src/shared/ipc'
+import type { TabsApi } from '../../../shell/src/shared/tabs-api'
 import type { SessionFileHost } from '../../../../packages/browser-host/src/files.ts'
 import { createSaveGenerationGuard, type SaveTicket } from '../../../../packages/browser-host/src/save-generation.ts'
 import { messages } from './messages.ts'
+
+// The native DOCX entry does not import the shell TabBar's global declaration.
+// Only these optional, same-origin parent capabilities are used by this bridge.
+type ParentTabsWindow = Window & {aiOfficeTabs?: Pick<TabsApi, 'list' | 'activate'>}
 
 /** A narrow compatibility bridge for the existing renderer. Opaque paths are
  * aliases only; they never become filesystem paths or server authorization. */
@@ -67,12 +72,12 @@ export function createDocsBridge(host: SessionFileHost, fileId: string, prefs: A
     onOpenDocx: noEvent,onRenamedDocx: noEvent,onMenuCommand: noEvent,onTeardown: noEvent,onViewImage: noEvent,onContextMenuRequest: noEvent,onCloseCheck: noEvent,onCloseSaveRequest: noEvent,
     getRecentFiles: async () => [],
     async listDocsTabs() {
-      const tabs = window.parent.aiOfficeTabs
+      const tabs = (window.parent as ParentTabsWindow).aiOfficeTabs
       if (!tabs) throw new Error(text.unavailable)
       return (await tabs.list()).filter(tab => tab.kind === 'docs').map(tab => ({id:tab.id,title:tab.title,focused:tab.active}))
     },
     async focusDocsTab(id:string) {
-      const tabs = window.parent.aiOfficeTabs
+      const tabs = (window.parent as ParentTabsWindow).aiOfficeTabs
       if (!tabs || !(await tabs.list()).some(tab => tab.id === id && tab.kind === 'docs')) throw new Error(text.unavailable)
       await tabs.activate(id)
     },

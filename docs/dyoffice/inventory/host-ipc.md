@@ -181,7 +181,7 @@ renderer call sites resolved by symbol, including shared workspace packages.
 | `desktop.kbSearch` | request | invoke `kb:search` | 1 | `server-api` | `knowledge-base` |
 | `desktop.kbRead` | request | invoke `kb:read` | 1 | `server-api` | `knowledge-base` |
 | `desktop.getPathForFile` | local | webUtils.getPathForFile | 2 | `desktop-only` | `os-paths` |
-| `desktop.openNewTab` | request | invoke `win:new` | 1 | `desktop-only` | `shell-chrome` |
+| `desktop.openNewTab` | request | invoke `win:new` | 2 | `desktop-only` | `shell-chrome` |
 | `desktop.openSourcePath` | request | invoke `home:open-path` | 1 | `desktop-only` | `os-paths` |
 | `desktop.listDocsTabs` | request | invoke `win:list` | 1 | `desktop-only` | `shell-chrome` |
 | `desktop.focusDocsTab` | request | invoke `win:focus` | 1 | `desktop-only` | `shell-chrome` |
