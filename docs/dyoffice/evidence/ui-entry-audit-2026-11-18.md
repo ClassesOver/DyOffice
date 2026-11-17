@@ -106,3 +106,13 @@
 - Word 桌面与390px共29个真实交互记录：查找前后跳转、单次/全部替换、页码定位、导航标题/结果/页面、缩放应用/取消、边距及纸张取消、字数统计关闭；0页面异常，最后保存200，QA文件删除及purge成功。系统打印与取消在headless下未验证，不计通过。证据 `/tmp/dyoffice-ui-audit/word-dialog-flows/coverage.md`。
 - 预览超限Content-Length和HTTP错误分支原先未取消未读响应流；两条DOM/ReadableStream回归先失败后通过，现拒绝时取消响应body。Web shell37文件312项、类型与构建通过。上传格式/大小拒绝、mock503重开、网络错误重开、快速切换及迟到响应保持当前内容已通过浏览器检查，均明确为mock业务接口，无真实业务写入。
 - 构建重启后的预览/上传模拟浏览器复验7组通过，包括确认超限响应流cancel回调执行；0页面异常、0真实业务写入，所有mock标签关闭。证据 `/tmp/dyoffice-ui-audit/upload-preview-edge-postfix/report.json`。
+
+## 上传完成证明与永久删除保护
+
+- 隔离PG复现：存储PUT已返回有效的key/size/hash，但写ready前文档被移入回收站/租约失效，记录原先遗留receiving且无hash，永久删除一直409；新增回归先失败，原因是状态仍receiving。
+- 仅存储返回完全匹配的完成receipt时，失败清理用原凭据重新核对owner/job/auth/session/attempt，原子记录终态hash及reserved→stored计费。expired不重复计费，ready/committed/已有hash不覆盖。没有发布新revision。存储结果未知、权限失效、不同attempt和清理事务失败仍保持原保护。
+- 14项真实PG专项通过，包含未知PUT、迟到PUT结束前409、完成后回收、配额只退一次、凭据撤销、不同attempt、receipt不匹配、证明事务回滚、ready提交成功但响应丢失。
+- 文件/回收/永久删除39项真实PG集成回归通过（含真实S3）；首次运行缺少S3测试环境未通过，补齐已有本地RustFS环境后完整重跑通过。Web shell314项、前后端及shell类型检查、构建通过；独立只读审查未发现阻塞问题。
+- 回收站purge409明确说明可能有关联任务或未确认上传，并提示核对/联系管理员；不改变unknown保护或写入重试。构建后模拟浏览器2项通过，0页面异常，0真实业务写入。
+- 不把成功PUT后的本次修复当作历史证据恢复：进程退出、响应丢失或凭据撤销时仍无充分证明。旧QA文件1c2f6ebb-3a02-43e6-a985-cf1a4ef9f8e7仍在回收站，历史未知草稿保持保护，未伪造hash或声称清理成功。
+- 证据 `/tmp/dyoffice-postpublication-full.log`、`/tmp/dyoffice-postpublication-regressions-s3.log`、`/tmp/dyoffice-ui-audit/trash-conflict-postfix/report.json`。

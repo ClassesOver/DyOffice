@@ -43,7 +43,7 @@ export function WorkspaceTrash({request,onClose,onChanged,presentation='dialog',
     try{const refreshed=await readPage(nextPage);if(mounted.current){setFiles(refreshed.files);setTotal(refreshed.total);setPage(refreshed.page);setSearch('')}}
     catch{if(mounted.current)setError('操作已成功，但列表刷新失败。请重新加载列表，不要重复提交。')}
    }
-  }catch(failure){if(mounted.current){const status=(failure as {status?:number})?.status;const unknown=status===undefined||status>=500||status===408;setUncertain(unknown);setError(unknown?`无法确认${action==='restore'?'恢复':'永久删除'}结果，请重新加载回收站核对，不要重复提交。`:failure instanceof Error?failure.message:'操作失败。')}}
+  }catch(failure){if(mounted.current){const status=(failure as {status?:number})?.status;const unknown=status===undefined||status>=500||status===408;setUncertain(unknown);setError(unknown?`无法确认${action==='restore'?'恢复':'永久删除'}结果，请重新加载回收站核对，不要重复提交。`:action==='purge'&&status===409?'暂时无法永久删除：此文件可能有关联的进行中任务或未确认的上传。请核对相关任务和上传状态，再重新加载回收站核对；若仍无法删除，请联系管理员。':failure instanceof Error?failure.message:'操作失败。')}}
   finally{pending.current=false;if(mounted.current)setBusy(false)}
  }
  const filtered=files.filter(file=>file.name.toLocaleLowerCase().includes(search.trim().toLocaleLowerCase()))

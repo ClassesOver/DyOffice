@@ -106,7 +106,7 @@ test('cleanup transaction failure rolls back both terminal proof and quota credi
   assert.equal((await f.files.usage(f.alice.token)).storedBytes,8)
 })
 
-test('a genuinely late PUT remains fenced after expiry sweep and attempted purge',async t=>{
+test('a late PUT remains fenced until its verified completion receipt is committed',async t=>{
   const { importFile }=await import('../helpers/files.mjs')
   const { createLeaseService }=await import('../../server/src/modules/leases/service.ts')
   const { createRevisionService }=await import('../../server/src/modules/revisions/service.ts')
@@ -133,11 +133,85 @@ test('a genuinely late PUT remains fenced after expiry sweep and attempted purge
     assert.ok(published,'the delayed PUT really reached the local object store')
     assert.deepEqual(await f.objects.readVerified(published),bytes)
     const row=await state(f,draft.uploadId)
-    assert.equal(row.state,'expired');assert.ok(row.attempt_id);assert.equal(row.sha256,null)
-    assert.deepEqual(await f.files.reclaimAbandonedUploads(f.alice.token),{reclaimedBytes:0,reclaimedUploads:0})
-    await assert.rejects(()=>f.files.purgeFile(f.alice.token,initial.fileId),{statusCode:409})
-    assert.equal((await f.files.usage(f.alice.token)).storedBytes,bytes.length*2)
+    assert.equal(row.state,'expired');assert.ok(row.attempt_id);assert.equal(row.sha256,published.sha256)
+    assert.deepEqual(await f.files.reclaimAbandonedUploads(f.alice.token),{reclaimedBytes:bytes.length,reclaimedUploads:1})
+    assert.equal((await f.files.usage(f.alice.token)).storedBytes,bytes.length)
     await f.files.restoreFile(f.alice.token,initial.fileId)
     assert.deepEqual(await f.files.readFile(f.alice.token,initial.fileId,initial.revision),bytes)
   }finally{release();await receiving}
+})
+
+test('completed storage PUT remains reclaimable when its revision lease ends before readiness',async t=>{
+  const {importFile}=await import('../helpers/files.mjs')
+  const {createLeaseService}=await import('../../server/src/modules/leases/service.ts')
+  const {createRevisionService}=await import('../../server/src/modules/revisions/service.ts')
+  let entered,release,delay=false
+  const reached=new Promise(resolve=>{entered=resolve}),hold=new Promise(resolve=>{release=resolve})
+  const f=await fileFixture(t,{wrapObjects:store=>({...store,async putImmutable(...args){const ref=await store.putImmutable(...args);if(delay){entered();await hold}return ref}})})
+  const bytes=await docxBytes(),initial=(await importFile(f,f.alice.token,bytes)).file
+  const editorId=randomUUID(),leases=createLeaseService({transactions:f.transactions}),lease=await leases.acquireLease(f.alice.token,initial.fileId,{editorId})
+  const revisions=createRevisionService({transactions:f.transactions,objects:f.objects,files:f.files})
+  const draft=await revisions.stageUpload(f.alice.token,initial.fileId,{size:bytes.length,baseRevision:initial.revision,leaseEpoch:lease.leaseEpoch,editorId})
+  delay=true
+  const received=f.files.receiveUpload(f.alice.token,draft.uploadId,bytes).then(value=>({value}),error=>({error}))
+  try{
+    await Promise.race([reached,received.then(()=>{throw Error('PUT barrier not reached')})])
+    await f.files.trashFile(f.alice.token,initial.fileId)
+    await assert.rejects(()=>f.files.purgeFile(f.alice.token,initial.fileId),{statusCode:409})
+    release();assert.ok((await received).error)
+    const row=await state(f,draft.uploadId)
+    assert.equal(row.state,'cancelled');assert.match(row.sha256,/^[a-f0-9]{64}$/)
+    assert.equal((await f.files.usage(f.alice.token)).reservedBytes,0)
+    assert.equal((await f.files.usage(f.alice.token)).storedBytes,bytes.length*2)
+    assert.deepEqual(await f.files.reclaimAbandonedUploads(f.alice.token),{reclaimedBytes:bytes.length,reclaimedUploads:1})
+    assert.deepEqual(await f.files.reclaimAbandonedUploads(f.alice.token),{reclaimedBytes:0,reclaimedUploads:0})
+    assert.deepEqual(await f.files.purgeFile(f.alice.token,initial.fileId),{state:'purged'})
+    assert.equal((await f.files.usage(f.alice.token)).storedBytes,0)
+  }finally{release();await received}
+})
+
+for(const failure of ['mismatched-receipt','different-attempt','revoked-session','proof-rollback','ready-response-lost'])test(`post-PUT cleanup retains authority and uncertainty boundaries: ${failure}`,async t=>{
+  let f,id,proofWrites=0
+  const replacement=randomUUID()
+  f=await fileFixture(t,{wrapObjects:store=>({...store,async putImmutable(...args){
+    const ref=await store.putImmutable(...args)
+    if(failure==='mismatched-receipt')return {...ref,sha256:'0'.repeat(64)}
+    if(failure==='revoked-session')await f.sessions.logout(f.alice.token)
+    if(failure==='different-attempt'){await expire(f,id);await inspect(f,'UPDATE uploads SET attempt_id=$2 WHERE id=$1',[id,replacement])}
+    if(failure==='proof-rollback')await expire(f,id)
+    return ref
+  }})})
+  const bytes=await docxBytes(),draft=await f.files.stageUpload(f.alice.token,{name:'boundary.docx',size:bytes.length});id=draft.uploadId
+  const transactions={withPrincipalTransaction:(input,fn)=>f.transactions.withPrincipalTransaction(input,async(c,p)=>{
+    const result=await fn(new Proxy(c,{get(target,key){
+      if(key==='query')return async(...args)=>{
+        const result=await target.query(...args)
+        if(typeof args[0]==='string'&&args[0].startsWith('UPDATE uploads SET state=CASE')){proofWrites++;if(failure==='proof-rollback')throw Error('proof rollback')}
+        return result
+      }
+      const value=Reflect.get(target,key);return typeof value==='function'?value.bind(target):value
+    }}),p)
+    return result
+  }).then(result=>{
+    if(failure==='ready-response-lost'&&result?.uploadId&&result.sha256)throw Error('ready response lost')
+    return result
+  })}
+  const service=createFileService({transactions,objects:f.objects})
+  await assert.rejects(()=>service.receiveUpload(f.alice.token,id,bytes))
+  const row=await state(f,id)
+  assert.equal(proofWrites,failure==='proof-rollback'?1:0)
+  if(failure==='ready-response-lost'){
+    assert.equal(row.state,'ready');assert.match(row.sha256,/^[a-f0-9]{64}$/)
+    const finished=await f.files.finishUpload(f.alice.token,id)
+    assert.deepEqual(await f.files.readFile(f.alice.token,finished.file.fileId,finished.file.revision),bytes)
+  }else{
+    assert.equal(row.sha256,null)
+    if(failure==='different-attempt')assert.equal(row.attempt_id,replacement)
+    else assert.ok(row.attempt_id)
+    if(failure!=='revoked-session'){
+      const usage=await f.files.usage(f.alice.token)
+      assert.equal(usage.reservedBytes+usage.storedBytes,bytes.length)
+      assert.deepEqual(await f.files.reclaimAbandonedUploads(f.alice.token),{reclaimedBytes:0,reclaimedUploads:0})
+    }
+  }
 })

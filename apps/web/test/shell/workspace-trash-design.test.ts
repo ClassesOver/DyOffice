@@ -40,6 +40,26 @@ test('unknown purge preserves the row and blocks repeat writes and close until r
  await act(async()=>button('重新加载').click());expect(guard).toBeNull()
  expect(button('永久删除').disabled).toBe(false);expect(writes).toBe(1)
 })
+test('purge 409 explains unfinished work while retaining the row and existing retry semantics',async()=>{
+ let writes=0
+ await mount(async(_path:string,method?:string)=>{if(method==='POST'){writes++;throw Object.assign(Error('请求无效'),{status:409})}return {files:[row],total:1}})
+ await act(async()=>button('永久删除').click());await act(async()=>button('确认永久删除').click())
+ const alert=document.querySelector('[role="alert"]')?.textContent??''
+ expect(alert).toContain('进行中任务或未确认的上传')
+ expect(alert).toContain('重新加载回收站核对')
+ expect(alert).toContain('联系管理员')
+ expect(alert).not.toContain('稍后重试')
+ expect(alert).not.toContain('无法确认永久删除结果')
+ expect(document.querySelector('[data-row-key="file-a"]')).not.toBeNull()
+ expect(button('永久删除').disabled).toBe(false);expect(writes).toBe(1)
+ await act(async()=>button('永久删除').click());expect(writes).toBe(1)
+})
+test('restore 409 retains the server explanation without a purge-specific upload diagnosis',async()=>{
+ await mount(async(_path:string,method?:string)=>{if(method==='POST')throw Object.assign(Error('恢复位置冲突'),{status:409});return {files:[row],total:1}})
+ await act(async()=>button('恢复').click())
+ expect(document.querySelector('[role="alert"]')?.textContent).toContain('恢复位置冲突')
+ expect(document.body.textContent).not.toContain('未确认的上传')
+})
 
 for(const action of ['restore','purge'] as const)test(`successful ${action} of the only file on page two returns to an existing page`,async()=>{
  const rows=Array.from({length:11},(_,index)=>({...row,id:`file-${index}`,name:`report-${index}.docx`}))
