@@ -18,7 +18,7 @@ Registry changes automatically increment versions, including false→true or val
 
 ## Permissions
 
-All candidate functions use SECURITY DEFINER with fixed pg_catalog search_path and schema-qualified relations under a non-superuser, non-BYPASSRLS migration owner. Both tables use FORCE RLS with explicit owner-only policy. PUBLIC gets no table/function rights. A separate restricted LOGIN issuer receives issue/revoke EXECUTE only, not registry registration. Worker receives verify only, not issue/revoke, direct tables or private authority helper. Business role gets no new rights. Production migration/route/runtime registries are unchanged.
+All candidate functions use SECURITY DEFINER with fixed pg_catalog search_path and schema-qualified relations under a non-superuser, non-BYPASSRLS migration owner. Both tables use FORCE RLS with explicit owner-only policy. PUBLIC gets no table/function rights. A separate restricted LOGIN issuer receives issue/revoke EXECUTE only, not registry registration. The only additional worker privilege in this stage is prepared-context verify; its existing PDF claim-reader and native-authority EXECUTE privileges remain. Worker receives no issue/revoke, direct table or private prepared-authority helper privileges. Business role gets no new rights. Production migration/route/runtime registries are unchanged.
 
 ## Verification scope
 
