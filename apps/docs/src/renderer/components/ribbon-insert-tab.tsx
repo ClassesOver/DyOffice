@@ -143,6 +143,7 @@ function bookmarkTargetAtCursor(editor: Editor): { pos: number; typeName: string
 /** Word's Bookmark dialog: list + add (cursor's paragraph) / go to / delete */
 export function BookmarkModal({ editor, onClose }: { editor: Editor; onClose: () => void }) {
   const { t } = useI18n()
+  const modalKeys = useModalKeys(onClose)
   const [name, setName] = useState('')
   const [error, setError] = useState('')
   const [, forceRender] = useState(0)
@@ -196,7 +197,7 @@ export function BookmarkModal({ editor, onClose }: { editor: Editor; onClose: ()
   }
 
   return (
-    <div className="modal-backdrop" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
+    <div {...modalKeys} className="modal-backdrop" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
       <div className="modal">
         <h2>{t('ribbonBookmark')}</h2>
         <div className="modal-row">
@@ -247,6 +248,7 @@ export function BookmarkModal({ editor, onClose }: { editor: Editor; onClose: ()
 /** Word's Cross-reference dialog: pick a bookmark, insert a REF field at the cursor (displays the bookmark paragraph's text) */
 export function CrossRefModal({ editor, onClose }: { editor: Editor; onClose: () => void }) {
   const { t } = useI18n()
+  const modalKeys = useModalKeys(onClose)
   const bookmarks = collectBookmarks(editor)
   const insertRef = (b: { name: string; preview: string }) => {
     editor
@@ -261,7 +263,7 @@ export function CrossRefModal({ editor, onClose }: { editor: Editor; onClose: ()
     onClose()
   }
   return (
-    <div className="modal-backdrop" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
+    <div {...modalKeys} className="modal-backdrop" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
       <div className="modal">
         <h2>{t('ribbonCrossRef')}</h2>
         {bookmarks.length === 0 ? (
@@ -289,6 +291,7 @@ export function CrossRefModal({ editor, onClose }: { editor: Editor; onClose: ()
 /** Word's Insert Chart: pick a type + data grid; after inserting, the data table below the chart is still editable in place */
 export function ChartInsertModal({ editor, onClose }: { editor: Editor; onClose: () => void }) {
   const { t } = useI18n()
+  const modalKeys = useModalKeys(onClose)
   const [kind, setKind] = useState<NewChart['kind']>('bar')
   const [title, setTitle] = useState(() => t('ribbonChartTitlePh'))
   const [categories, setCategories] = useState(() =>
@@ -353,7 +356,7 @@ export function ChartInsertModal({ editor, onClose }: { editor: Editor; onClose:
   }
 
   return (
-    <div className="modal-backdrop" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
+    <div {...modalKeys} className="modal-backdrop" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
       <div className="modal modal-chart">
         <h2>{t('ribbonChartInsertTitle')}</h2>
         <div className="modal-row">

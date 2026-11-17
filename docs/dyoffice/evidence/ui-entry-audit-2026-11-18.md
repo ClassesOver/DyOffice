@@ -352,3 +352,12 @@
 - 新增四项回归，其中选择拒绝和解码失败先红；取消与正常插图为正对照。最终图片选择、图片粘贴/拖放、页眉编辑/图片五文件34项通过，Web docs类型/生产构建通过，边界1336文件0违规，git diff --check通过；保留既有canvas和chunk提示。证据：`/tmp/dyoffice-insert-image-dialog-red.log`、`/tmp/dyoffice-insert-image-final-{tests,type,build,boundaries}.log`。
 - 最终构建正文/页眉各四场景通过：超限PNG、损坏PNG、WebP均显示错误，正文文本及图片数保持，随后正常PNG成功插入，0页面异常。文档/lease为mock，realtime ticket被阻止，无真实业务写。页眉成功检查限定doc-inline-img并核对准确data URL，排除ProseMirror separator辅助img；最初泛img计数误报不记录为产品缺陷。正文分页的纯空白变化以归一化文本比较处理。证据：`/tmp/dyoffice-ui-audit/word-{,hf-}picture-picker-postfix/report.json`。
 - 本轮仅覆盖上述图片入口失败恢复；不把它当作完整Ribbon、复杂文档或多端验收。页脚共用分支已修，未单独将页脚浏览器操作计入通过数量。
+
+## 插入书签、交叉引用与图表弹窗键盘
+
+- 当前正式native renderer/mock文档与lease，三个真实可达入口均复现：末控件Tab逃到背景正文，首控件Shift+Tab逃到背景公式按钮，Escape不关闭；交叉引用和图表初始焦点还停在BODY。根代理再次用旧构建独立复现并保留硬断言失败，非仅源码推断。证据：`/tmp/dyoffice-insert-modal-browser-red.log`及`/tmp/dyoffice-ui-audit/word-insert-modal-red-1440/report.json`。子agent首轮原始报告曾被失败补测覆盖，其恢复报告明确标记来源，不将失败补测当新结论；根代理独立红报告不依赖恢复文件。
+- 最小修复仅三组件各增加既有useModalKeys调用并绑定backdrop；未修改书签/引用/图表插入和共享dropdown状态。新增每组件两项回归共6项先红后绿，覆盖初始焦点、两向边界、Escape一次关闭且文档JSON不变，以及BODY焦点两向恢复。与共享trap回归共16/16通过。独立只读review未发现与表格/公式或兄弟/嵌套modal栈冲突。
+- Web docs类型/生产构建、边界1336文件0违规及git diff --check通过。最终构建1440/390共6个入口场景均硬断言通过：初始及两向Tab焦点在内、Escape关闭、正文归一化文本不变、0页面异常。文档/lease均mock，realtime ticket被阻止，无真实业务写。证据：`/tmp/dyoffice-ui-audit/word-insert-modal-green-{1440,390}/report.json`、`/tmp/dyoffice-insert-modals-{keys-green,type,build,boundaries}.log`。
+- PrintDialog的Ctrl+P候选在当前Web页面未进入应用弹窗，不作为可达缺陷修复；保护文档既有Web禁用未绕过。其余引用/密码等弹窗仍有覆盖缺口，不宣称完整Ribbon或全部UI验收。
+- 期间磁盘空间耗尽，清理可再生成的npm下载缓存后恢复，保留依赖安装、用户配置、业务数据和既有审计证据。此次环境问题不记为产品UI缺陷。
+- 发布时远端推进到2325d939，新增图片选择/远程粘贴的pending document guard与解码竞态回归；已精确校验对象后rebase保留，未覆盖。合并后六文件46项通过，Web docs类型/生产构建通过，新增helper使边界扫描变为1337文件0违规。最终合并构建1440/390六个弹窗入口再次通过，正文图片三类失败与正常插图四场景也通过；0页面异常。证据：`/tmp/dyoffice-insert-modals-merged-{tests,type,build}.log`、`/tmp/dyoffice-ui-audit/word-insert-modal-merged-{1440,390}/report.json`、`/tmp/dyoffice-image-picker-browser-merged.log`。不以普通图片流程通过代替全部真实异步竞态验收。
