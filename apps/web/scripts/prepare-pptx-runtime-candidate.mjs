@@ -118,16 +118,8 @@ export async function preparePptxCandidate({sourceRoot,outputParent}){
  }catch(error){await rm(directory,{recursive:true,force:true});throw error}
 }
 
-/** Expected identity must be held outside the replaceable artifact directory. */
-export async function verifyPptxCandidate(directory,expectedContentDigest){
- if(typeof expectedContentDigest!=='string'||!/^[0-9a-f]{64}$/.test(expectedContentDigest))fail()
- directory=await safeRoot(directory)
- if((await readdir(directory)).sort().join(',')!=='manifest.json,session.cjs')fail()
- const stored=await bytesOf(join(directory,'manifest.json'),1024*1024)
- if(stored.mode!==0o644)fail()
- const text=new TextDecoder('utf-8',{fatal:true}).decode(stored.bytes)
- const manifest=JSON.parse(text)
- if(canonical(manifest)!==text||digest(manifest)!==expectedContentDigest)fail()
+/** Structural validation only: not bytes, provenance or authorization. */
+export function validatePptxCandidateManifest(manifest){
  if(!exact(manifest,['schema','kind','profileId','policyVersion','architecture','targetDistributions','productionEnabled','runtimeApproved','rootfsComplete','sourceAuthentication','dependencyAuthentication','toolchain','recipe','inputs','externals','files']))fail()
  if(canonical(manifest.recipe)!==canonical(fixedRecipe())||canonical(manifest.targetDistributions)!==canonical(['openEuler','ubuntu'])||manifest.sourceAuthentication!=='unverified-build-snapshots'||manifest.dependencyAuthentication!=='unverified')fail()
  const tool=manifest.toolchain
@@ -146,6 +138,20 @@ export async function verifyPptxCandidate(directory,expectedContentDigest){
  const item=manifest.files[0]
  if(!exact(item,['path','mode','size','sha256']))fail()
  if(item.path!=='session.cjs'||item.mode!==0o644||!Number.isSafeInteger(item.size)||item.size<1||item.size>MAX_FILE||!/^[0-9a-f]{64}$/.test(item.sha256))fail()
+}
+
+/** Expected identity must be held outside the replaceable artifact directory. */
+export async function verifyPptxCandidate(directory,expectedContentDigest){
+ if(typeof expectedContentDigest!=='string'||!/^[0-9a-f]{64}$/.test(expectedContentDigest))fail()
+ directory=await safeRoot(directory)
+ if((await readdir(directory)).sort().join(',')!=='manifest.json,session.cjs')fail()
+ const stored=await bytesOf(join(directory,'manifest.json'),1024*1024)
+ if(stored.mode!==0o644)fail()
+ const text=new TextDecoder('utf-8',{fatal:true}).decode(stored.bytes)
+ const manifest=JSON.parse(text)
+ if(canonical(manifest)!==text||digest(manifest)!==expectedContentDigest)fail()
+ validatePptxCandidateManifest(manifest)
+ const item=manifest.files[0]
  const actual=await bytesOf(join(directory,'session.cjs'))
  if(actual.mode!==item.mode||actual.bytes.length!==item.size||sha(actual.bytes)!==item.sha256)fail()
  // Returned identity describes these read snapshots, never a future exec-by-path.

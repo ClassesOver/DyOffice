@@ -377,3 +377,27 @@ without reviving the old session. Original head/revision and processor/upload
 counts are checked. Unknown commit remains unknown; tests do not authorize a
 retry to regenerate content. No new production PDF functionality, authority type,
 OS runtime, route or UI was enabled.
+
+## Nonlaunchable Node/PPTX runtime subset
+
+The next offline stage prepares real bounded Node and PPTX byte snapshots, not
+just a scan: fixed current Node 24 on Linux x86_64, the independently identified
+PPTX candidate, and canonical upstream/subset manifests. Files are 0644 data;
+that mode does not provide NOEXEC or sandboxing. The independently retained
+subset digest binds actual file bytes and the upstream identity. Fixed readelf
+inspects the copied Node with minimal environment and bounded time/output;
+no copied binary, loader or document module is executed. See
+`../inventory/document-pptx-runtime-subset.md` for exact CLI and limits.
+
+Current observed Node is dynamically linked; the loader and seven declared
+libraries are not collected or certified. Current session rendering defaults
+to heuristic metrics without a system font file, not desktop font fidelity.
+Ubuntu/openEuler provenance, recursive library/dynamic-resource closure, fixed
+wire entry, licenses and real isolation acceptance remain outstanding. No
+runtime resolver, PG approval, production flag or T06 positive path is enabled.
+
+Final direct and independent artifact regression each passed 3/3 aggregate
+cases, including existing module identity and new subset checks; protocol
+regression passed 68/68. These are offline preparation/validation tests, not
+real-rootfs execution or a fresh whole-repository regression. Generated binary
+snapshots and logs are not committed.
