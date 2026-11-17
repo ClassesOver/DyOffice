@@ -77,3 +77,20 @@ The next acceptance then tests broker SIGKILL and descendant cleanup, actual
 resource exhaustion and filesystem/network denial. Only after that can separately
 verified runtime images and four-format document processing be considered. No
 positive container or document evidence is inferred from this read-only audit.
+
+## CI inventory admission
+
+The workflow remains in the complete runtime-lock inventory. It is a manual
+Python host observation, not a Node workload: only its exact filename has a
+dedicated SHA-256 admission check of the complete workflow bytes. No wildcard or
+configurable workflow-name exemption exists. Any change, including whitespace,
+triggers explicit review and fails until the reviewed digest is updated. Existing
+Node workflows retain all original setup/version/executable guard requirements.
+This digest fixes workflow syntax, not the hosted runner's Python/OS executable
+bytes; it must not be described as an immutable host runtime or isolation proof.
+Regression mutations cover permissions, trigger, runner, ref guard, privilege
+insertion, missing/incorrect digest, unlisted workflows and cross-file borrowing.
+The existing boundary CI includes the exact audit workflow path in both push and
+pull_request path filters, so a workflow-only edit triggers the runtime-lock
+check. Regression tests independently remove each event's path and require
+failure; the diagnostic workflow itself remains manual-only.

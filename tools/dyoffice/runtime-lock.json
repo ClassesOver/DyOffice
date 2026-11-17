@@ -19,5 +19,7 @@
     "minio": {"source": "https://hub.docker.com/v2/repositories/bitnamilegacy/minio/tags/2025.7.23-debian-12-r5", "amd64Manifest": "sha256:f24044f19432b7664fb956eade7dbb55ed5f7f22f08eb7c8fce68ac0ffaceca4"},
     "method": "2026-11-16: SHA-256 of authenticated registry-1.docker.io manifest response bytes matched Docker-Content-Digest; Node archive hash matched publisher checksum and binary hash was derived from that verified archive"
   },
-  "workflows": ["dyoffice-identity-schema.yml", "dyoffice-native-pptx.yml", "dyoffice-password-change.yml", "dyoffice-self-sessions.yml", "dyoffice-shell-ui.yml", "dyoffice-t03b-login.yml", "dyoffice-t03b-sessions.yml", "dyoffice-t03c-accounts.yml", "dyoffice-t05-s3.yml", "dyoffice-web-boundaries.yml"]
+  "manualHostAuditSha256": "2a72d3737304f8195362e1bcfa837e32b9268c30faef5fb43846e32001a9033c",
+  "workflows": ["dyoffice-identity-schema.yml", "dyoffice-native-pptx.yml", "dyoffice-password-change.yml", "dyoffice-self-sessions.yml", "dyoffice-shell-ui.yml", "dyoffice-t03b-login.yml", "dyoffice-t03b-sessions.yml", "dyoffice-t03c-accounts.yml", "dyoffice-t05-s3.yml", "dyoffice-web-boundaries.yml", "dyoffice-ubuntu-docker-audit.yml"]
 }
+
