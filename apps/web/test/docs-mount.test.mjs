@@ -54,80 +54,30 @@ async function start(t) {
   return `http://127.0.0.1:${server.address().port}`
 }
 
-test('mounted docs editor edits a paragraph, keeps the table, saves, and reopens', async (t) => {
-  const { mountDocsEditor } = await import('../../../packages/browser-host/src/files.ts')
-  const base = await start(t)
-  const bytes = await sampleDocx()
-  const uploaded = await fetch(base + '/api/files', { method: 'POST', headers: { Authorization: 'Bearer personal', 'X-File-Name': encodeURIComponent('笔记.docx') }, body: bytes })
-  assert.equal(uploaded.status, 201)
-  const file = await uploaded.json()
-  const host = createHttpEditorHost({
-    fetchImpl: (path, init) => fetch(base + path, init),
-    getAuthHeaders: () => ({ Authorization: 'Bearer personal' }),
-  })
-  const dom = new JSDOM('<!DOCTYPE html><div id="editor"></div>')
-  const element = dom.window.document.getElementById('editor')
-  const editor = await mountDocsEditor(host, element, file.id)
-  assert.equal(element.querySelector('[data-docs-editor="mounted"]') !== null, true)
-  assert.equal(editor.getState().blocks.some((block) => block.text === 'Hello' && block.editable), true)
-  assert.equal(element.querySelector('[data-preserved="table"]')?.textContent, 'CellKeep')
-  assert.equal(element.querySelector('textarea[data-preserved]') , null)
-  const hello = editor.getState().blocks.findIndex((block) => block.text === 'Hello')
-  editor.updateText(hello, 'Hello there')
-  assert.equal(editor.undo(), true)
-  assert.equal(editor.getState().blocks[hello].text, 'Hello')
-  editor.updateText(hello, 'Hello there')
-  const saved = await editor.save()
-  assert.equal(saved.ok, true)
-  editor.destroy()
-  const again = await mountDocsEditor(host, element, file.id)
-  assert.equal(again.getState().blocks.some((block) => block.text === 'Hello there'), true)
-  assert.equal(element.querySelector('[data-preserved="table"]')?.textContent, 'CellKeep')
-  const current = Buffer.from(await (await fetch(base + '/api/files/' + file.id, { headers: { Authorization: 'Bearer personal' } })).arrayBuffer())
-  const xml = await part(current, 'word/document.xml')
-  assert.match(xml, /Hello there/)
-  assert.match(xml, /CellKeep/)
-  assert.match(await part(current, 'word/header1.xml'), /SECRET-HEADER/)
-  again.destroy()
+test('legacy HTTP DOCX editor cannot mount a retired parser route or replace original bytes', async t => {
+  const {mountDocsEditor}=await import('../../../packages/browser-host/src/files.ts')
+  const base=await start(t),bytes=await sampleDocx(),headers={Authorization:'Bearer personal'}
+  const upload=await fetch(base+'/api/files',{method:'POST',headers:{...headers,'X-File-Name':'retired.docx'},body:bytes})
+  assert.equal(upload.status,201);const file=await upload.json()
+  const host=createHttpEditorHost({fetchImpl:(path,init)=>fetch(base+path,init),getAuthHeaders:()=>headers})
+  const dom=new JSDOM('<!DOCTYPE html><div id="editor"></div>'),element=dom.window.document.getElementById('editor')
+  await assert.rejects(mountDocsEditor(host,element,file.id),error=>error.code==='UNAVAILABLE')
+  assert.equal(element.querySelector('[data-docs-editor="mounted"]'),null)
+  assert.equal(element.querySelector('textarea'),null)
+  const download=await fetch(base+'/api/files/'+file.id,{headers})
+  assert.equal(download.status,200);assert.deepEqual(Buffer.from(await download.arrayBuffer()),bytes)
 })
 
-test('mounted docs editor rewrites a table cell and reopens the saved package', async (t) => {
-  const { mountDocsEditor } = await import('../../../packages/browser-host/src/files.ts')
-  const base = await start(t)
-  const bytes = await sampleDocx()
-  const uploaded = await fetch(base + '/api/files', { method: 'POST', headers: { Authorization: 'Bearer personal', 'X-File-Name': encodeURIComponent('表格.docx') }, body: bytes })
-  assert.equal(uploaded.status, 201)
-  const file = await uploaded.json()
-  const host = createHttpEditorHost({
-    fetchImpl: (path, init) => fetch(base + path, init),
-    getAuthHeaders: () => ({ Authorization: 'Bearer personal' }),
-  })
-  const dom = new JSDOM('<!DOCTYPE html><div id="editor"></div>')
-  const element = dom.window.document.getElementById('editor')
-  const editor = await mountDocsEditor(host, element, file.id)
-  const table = editor.getState().blocks.findIndex((block) => block.type === 'table')
-  assert.deepEqual(editor.getState().blocks[table].cells, [['CellKeep']])
-  const field = element.querySelector('textarea[data-row="0"][data-column="0"]')
-  assert.equal(field.value, 'CellKeep')
-  field.value = 'CellEdited'
-  field.dispatchEvent(new dom.window.Event('input', { bubbles: true }))
-  assert.equal(editor.undo(), true)
-  assert.deepEqual(editor.getState().blocks[table].cells, [['CellKeep']])
-  editor.updateCell(table, 0, 0, 'CellEdited')
-  const saved = await editor.save()
-  assert.equal(saved.ok, true)
-  editor.destroy()
-  const again = await mountDocsEditor(host, element, file.id)
-  assert.deepEqual(again.getState().blocks.find((block) => block.type === 'table').cells, [['CellEdited']])
-  const current = Buffer.from(await (await fetch(base + '/api/files/' + file.id, { headers: { Authorization: 'Bearer personal' } })).arrayBuffer())
-  const xml = await part(current, 'word/document.xml')
-  assert.match(xml, /<w:tbl[\s>]/)
-  assert.match(xml, /CellEdited/)
-  assert.match(xml, /Keep me/)
-  assert.equal(xml.includes('CellKeep'), false)
-  const reopened = await import('../../../packages/docx-engine/src/index.ts').then((engine) => engine.parseDocx(current))
-  assert.equal(reopened.blocks.find((block) => block.type === 'table').table.rows[0][0].paras[0], 'CellEdited')
-  again.destroy()
+test('legacy HTTP editor host refuses direct read and commit instead of falling back locally', async t => {
+  const base=await start(t),bytes=await sampleDocx(),headers={Authorization:'Bearer personal'}
+  const upload=await fetch(base+'/api/files',{method:'POST',headers:{...headers,'X-File-Name':'table.docx'},body:bytes})
+  const file=await upload.json()
+  const host=createHttpEditorHost({fetchImpl:(path,init)=>fetch(base+path,init),getAuthHeaders:()=>headers})
+  const info=await (await fetch(base+`/api/v1/files/${file.id}`,{headers})).json()
+  await assert.rejects(host.readDocx(file.id),error=>error.code==='UNAVAILABLE')
+  await assert.rejects(host.commitDocx(file.id,{baseRevision:info.file.revision,leaseEpoch:1,idempotencyKey:'retired-save-01',blocks:[]}),error=>error.code==='UNAVAILABLE')
+  const download=await fetch(base+'/api/files/'+file.id,{headers})
+  assert.deepEqual(Buffer.from(await download.arrayBuffer()),bytes)
 })
 
 test('edits typed during a save stay dirty after the server projection returns', async () => {

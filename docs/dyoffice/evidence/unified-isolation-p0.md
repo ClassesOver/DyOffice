@@ -194,3 +194,36 @@ Per the user’s latest instruction, this work targets **openEuler x86_64 only**
 Earlier dual-architecture acceptance references describe the superseded plan.
 ARM64 is not a current supported target or acceptance gate; the candidate matcher
 rejects it. This scope correction does not claim real x86_64 host acceptance.
+
+## Parallel integration: real PDF/T06, entry retirement and host preparation
+
+Existing PDF save preparation now has additional real PostgreSQL/RustFS integration
+coverage: generated PDF bytes are rotated, staged/received, explicitly committed
+through T06, read back and reopened. The original commitInput recovers an uncertain
+successful commit; corrupted objects, revoked leases/sessions and receipt failures
+cannot advance the head. A real successful S3 write followed by injected lost
+acknowledgement stays receiving with quota reserved. No new job type, production
+adapter or parser implementation was invented. The only fixture change allows
+service-only setup with buildApp:false; default HTTP setup remains true.
+
+The legacy development-token DOCX GET/POST and draft-upload POST parsing branches
+are now retired with precise 501 responses and unsupported capability metadata.
+The application no longer imports docx-session through that editing route. Original
+uploads/downloads, immutable content/history, leases and restore remain available;
+standalone engine tests remain, without implying an enabled editor. No generic
+upload path, T06 service, ZIP parser or host isolation setting was changed here.
+
+A fixed read-only x86_64 preflight collector reports prerequisite observations.
+It never connects to D-Bus, creates sockets or starts units, and always reports
+BLOCKED, productionEligible=false and liveAcceptance=NOT_RUN. Static prerequisites
+cannot become an isolation certificate.
+
+Verification: real PG/RustFS **82/82** (68 existing plus 14 PDF cases); protocol
+**68/68**; preflight **16/16**. Entry-focused HTTP/engine/controller/import tests
+**14/14**, independently checked; standard Web suite **347 passed, 0 failed,
+1 existing skip** (the opt-in MinIO case lacked DYOFFICE_S3_ENDPOINT) in the
+source-complete entry workspace with required tsx loader.
+This is not all repository suites, browser/desktop acceptance, four-format parity
+or real OS isolation. Independent PDF rerun covered 14/14. Local services stopped.
+See [PDF/T06 scope](../inventory/document-pdf-t06-stage.md) and
+[preflight usage](../../../tools/document-runtime/preflight-x86_64.md).
