@@ -62,6 +62,7 @@ export function CutoutDialog({ dataUrl, onApply, onCancel }: CutoutProps) {
   /** Background representative colors (from original-resolution border sampling, shared by preview/apply for consistency) */
   const bgColorsRef = useRef<RGB[]>([])
   const rafRef = useRef<number | null>(null)
+  const applyTimerRef = useRef<number | null>(null)
 
   const renderPreview = useCallback((tol: number) => {
     const pv = previewRef.current
@@ -115,6 +116,10 @@ export function CutoutDialog({ dataUrl, onApply, onCancel }: CutoutProps) {
     img.src = dataUrl
     return () => {
       cancelled = true
+      if (applyTimerRef.current != null) {
+        window.clearTimeout(applyTimerRef.current)
+        applyTimerRef.current = null
+      }
     }
   }, [dataUrl, renderPreview])
 
@@ -141,7 +146,8 @@ export function CutoutDialog({ dataUrl, onApply, onCancel }: CutoutProps) {
     if (!full || applying) return
     setApplying(true)
     // let the "processing…" state render before the heavy recompute
-    window.setTimeout(() => {
+    applyTimerRef.current = window.setTimeout(() => {
+      applyTimerRef.current = null
       try {
         const result = removeBackground(full, tolerance, bgColorsRef.current)
         const c = document.createElement('canvas')

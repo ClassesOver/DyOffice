@@ -383,3 +383,9 @@
 - 最终构建Chromium1440/390各4场景通过：调整裁剪框到约66.7%宽度后Enter取消、Space取消、Escape取消均保持原图片src；Enter应用确实改变图片src。8场景0页面异常，文件/lease均mock，业务写阻止。红证据：`/tmp/dyoffice-ui-audit/word-crop-cancel-red-1440/report.json`；绿证据：`/tmp/dyoffice-ui-audit/word-crop-keyboard-green-{1440,390}/report.json`。首次未调整裁剪框时重编码结果相同，不能用作取消正确的证据；最终硬断言均先实际修改裁剪范围。
 - 选择性粘贴只读审计无新bug：实际入口异步clipboard.read暂挂时仅取消可用、双向Tab在内；Escape关闭重开后旧读取不污染新弹窗，释放新读取后正常显示格式；取消正文未变，显式确定粘贴marker后可撤销。Web邮件入口disabled并提供桌面版说明，未绕过。证据：`/tmp/dyoffice-ui-audit/word-paste-mail-audit/{coverage.md,report.json}`。此次只覆盖该异步读取及粘贴取消流程，不替代全部剪贴板格式组合。
 - 全量UI穷举仍在进行，本专项不视为全部Ribbon、复杂文档、实体移动端或读屏器验收完成。
+
+## 去除背景取消后的延迟任务
+
+- 正式Word入口插入120×80蓝边红心PNG→图片格式→去除背景→应用，在30ms处理任务开始前Escape关闭；原图片当时未变，但释放旧任务后仍被替换为透明PNG。浏览器仅控制delay=30的任务调度，不替代图片处理或业务实现；其余业务写mock/blocked。红证据：`/tmp/dyoffice-ui-audit/word-cutout-cancel-red-1440/{coverage.md,report.json}`。首次按钮中文误定位不算产品失败，正确入口为“去除背景”。
+- CutoutDialog保存应用任务的timeout句柄，沿既有图片effect清理在关闭/卸载时取消任务；回调开始先清句柄。没有改变图片算法、应用按钮或Escape取消语义。3项生命周期回归中Escape关闭及文档卸载两项先红，正常应用正对照保持通过；修后与crop/size/trap共4文件18项通过。独立只读复核无阻塞。Web docs类型、生产构建、边界1338文件0违规及git diff --check通过，保留既有chunk提示。日志：`/tmp/dyoffice-cutout-lifecycle-{red,green}.log`、`/tmp/dyoffice-cutout-{type,build}.log`。
+- 最终构建Chromium1440/390各3场景通过：Escape及点击遮罩取消后，待执行任务确实移除；重开弹窗再释放调度不改图片、不关闭新弹窗。正常应用释放后确实修改图片。6场景0页面异常，业务写mock/blocked。最终调度器同时尊重clearTimeout，原生处理算法未mock。证据：`/tmp/dyoffice-ui-audit/word-cutout-cancel-green-{1440,390}/report.json`。不将此项视为全部图片替换解码/跨文档竞态或全量UI验收。
