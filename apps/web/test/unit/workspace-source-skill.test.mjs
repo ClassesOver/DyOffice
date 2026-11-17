@@ -1,0 +1,44 @@
+import test from 'node:test'
+import assert from 'node:assert/strict'
+import { createWorkspaceSourceSkill } from '../../../../packages/browser-host/src/source-skill.ts'
+
+test('personal source skill exposes provider-compatible public tools and delegates through a session-bound request', async () => {
+  const calls = []
+  const skill = createWorkspaceSourceSkill(async (path, method, body) => { calls.push({ path, method, body }); return { items: [] } })
+  assert.ok(skill.tools.every(tool => /^[a-zA-Z0-9_-]+$/.test(tool.name)))
+  assert.ok(skill.systemPrompt.includes('sourceTruncated'))
+  const result = await skill.executeTool({ id: 'call-1', name: 'sources_list', input: {} })
+  assert.equal(result.isError, false)
+  assert.deepEqual(calls, [{ path: '/api/v1/workspace/source-tools/execute', method: 'POST', body: { name: 'sources.list', arguments: {} } }])
+  assert.equal(JSON.stringify(skill.tools).includes('password'), false)
+})
+
+test('model-provided owner, credential or path arguments never reach the server', async () => {
+  let calls = 0
+  const skill = createWorkspaceSourceSkill(async () => { calls++; return {} })
+  for (const field of ['ownerId','userId','workspaceId','token','secret','dsn','url','path']) {
+    const result = await skill.executeTool({ id: 'x', name: 'sources_query', input: { sourceId: 'assigned', [field]: 'injected' } })
+    assert.equal(result.isError, true)
+  }
+  assert.equal(calls, 0)
+})
+
+test('uncertain save reports ambiguity and never repeats a write automatically', async () => {
+  let calls = 0
+  const skill = createWorkspaceSourceSkill(async () => { calls++; throw Error('sensitive internal database URI') })
+  const result = await skill.executeTool({ id: 'x', name: 'sources_save_result', input: { resultId: 'r', commandId: 'c', name: 'frozen' } })
+  assert.equal(calls, 1)
+  assert.equal(result.isError, true)
+  assert.ok(result.output.includes('not confirmed'))
+  assert.equal(result.output.includes('sensitive'), false)
+})
+
+test('aborted or malformed model calls cannot start a source operation', async () => {
+  let calls = 0
+  const skill = createWorkspaceSourceSkill(async () => { calls++; return {} })
+  const controller = new AbortController(); controller.abort()
+  await skill.executeTool({ id: 'x', name: 'sources_query', input: {} }, controller.signal)
+  await skill.executeTool({ id: 'x', name: 'sources_query', input: {}, truncated: true })
+  await skill.executeTool({ id: 'x', name: 'sources_query', input: {}, inputError: 'bad' })
+  assert.equal(calls, 0)
+})

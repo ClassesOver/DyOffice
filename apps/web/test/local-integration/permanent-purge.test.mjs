@@ -59,6 +59,27 @@ test('purge retires held outbox delivery, fences receipts and preserves immutabl
  await assert.rejects(()=>owned(f,c=>c.query('UPDATE files SET purge_started_at=NULL,deleted_at=NULL')),{code:'23514'})
  assert.equal((await f.files.usage(f.alice.token)).storedBytes,0)
 })
+test('receipt replay waits behind concurrent durable purge and rejects its tombstone', {timeout:20000}, async t=>{
+ let enter,release
+ const entered=new Promise(resolve=>{enter=resolve}),hold=new Promise(resolve=>{release=resolve})
+ const f=await savedFixture(t,{wrapObjects:store=>({...store,async removeUnreferenced(key){enter();await hold;return store.removeUnreferenced(key)}})})
+ await f.files.trashFile(f.alice.token,f.initial.fileId)
+ const purging=f.files.purgeFile(f.alice.token,f.initial.fileId).then(value=>({value}),error=>({error}))
+ let replay
+ try{
+  await Promise.race([entered,purging.then(()=>{throw Error('Purge ended before delete barrier')})])
+  replay=f.revisions.commitRevision(f.alice.token,f.input).then(value=>({value}),error=>({error}))
+  const {waitForDatabaseLock}=await import('../helpers/restricted.mjs')
+  await waitForDatabaseLock(f,'business')
+  release()
+  assert.equal((await purging).value?.state,'pending','purge reclaims one of the two revisions per call')
+  assert.equal((await replay).error?.statusCode,410)
+  assert.equal((await f.files.purgeFile(f.alice.token,f.initial.fileId)).state,'purged')
+  assert.equal((await f.files.usage(f.alice.token)).storedBytes,0)
+  assert.equal((await owned(f,c=>c.query('SELECT * FROM revision_commits'))).rowCount,1)
+ }finally{release();await purging;if(replay)await replay}
+})
+
 test('purge refuses active jobs and stale enqueue receipts cannot advertise a purged artifact',async t=>{
  const f=await jobFixture(t),key=randomUUID(),job=await f.jobs.enqueueJob(f.alice.token,'docx.roundtrip',f.input,key)
  await f.files.trashFile(f.alice.token,f.fileId)

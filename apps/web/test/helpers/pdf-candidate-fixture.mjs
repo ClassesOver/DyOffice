@@ -12,7 +12,8 @@ export async function runGeneratedPdfCandidateFixture(options){
  const bytes=Buffer.from(options.bytes),command=commandSnapshot(options.command),ids=identity(options.binding)
  const directory=options.directory,contentDigest=options.contentDigest,signal=options.signal,fault=options.fault
  if(fault!==undefined&&!['stall','parent-timeout','wrong-binding','wrong-hash','truncated','trailing','stderr-flood','early-exit'].includes(fault))throw Error('PDF_FIXTURE_PROTOCOL')
- const binding=tuple({requestId:randomUUID(),...ids,inputSha256:sha(bytes),inputSize:bytes.length,commandDigest:command.digest})
+ const requestedId=options.requestId
+ const binding=tuple({requestId:requestedId===undefined?randomUUID():requestedId,...ids,inputSha256:sha(bytes),inputSize:bytes.length,commandDigest:command.digest})
  const request=requestHeader({version:1,kind:'pdf-fixture-request',binding,command:command.command})
  if(signal?.aborted)throw Error('PDF_FIXTURE_ABORTED')
  await verifyPdfCandidate(directory,contentDigest);gate()

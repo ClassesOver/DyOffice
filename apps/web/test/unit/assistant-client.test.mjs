@@ -42,3 +42,31 @@ test('changing the picker only switches endpoints when the next agent run begins
   await stream()
   assert.deepEqual(models, ['first', 'first', 'second'])
 })
+
+test('disposing an editor assistant cancels its live turn and rejects later sends', async () => {
+  const requests = [], events = []
+  let started
+  const dispatched = new Promise(resolve => { started = resolve })
+  const client = await createAssistantClient({
+    request: async () => ({entries: [{id: 'chat', label: 'Chat', model: 'synthetic'}], defaultId: 'chat'}),
+    csrfToken: 'c'.repeat(43),
+    fetchImpl: async (url, init) => {
+      requests.push({url, init})
+      if (url.endsWith('/cancel')) return new Response(null, {status: 204})
+      started()
+      return new Response(new ReadableStream({start() {}}), {headers: {'content-type': 'text/event-stream'}})
+    },
+  })
+  const input = {system: '', messages: [{role: 'user', text: 'hello'}], tools: []}
+  const done = new Promise(resolve => client.transport.stream(input, {onDelta() {}, onToolCall() {}, onError: assert.fail, onDone: resolve}))
+  await dispatched
+  client.dispose()
+  await done
+  assert.equal(requests[0].init.signal.aborted, true)
+  assert.equal(requests.filter(r => r.url.endsWith('/cancel')).length, 1)
+  assert.equal(requests[1].init.headers['x-csrf-token'], 'c'.repeat(43))
+  client.transport.stream(input, {onDelta() {}, onToolCall() {}, onError: value => events.push(value), onDone: () => events.push('done')})
+  assert.deepEqual(events, ['助手当前不可用。', 'done'])
+  assert.equal(requests.length, 2, 'disposed editor must not dispatch another turn')
+  assert.throws(() => client.select('chat'))
+})

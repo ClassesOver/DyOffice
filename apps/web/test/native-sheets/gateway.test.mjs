@@ -11,7 +11,7 @@ test('web gateway uses the desktop save mapping for cells, names, styles and she
  const dir=await mkdtemp(join(tmpdir(),'dyoffice-plan-'));t.after(()=>rm(dir,{recursive:true,force:true}))
  const output=join(dir,'gateway.mjs')
  await build({entryPoints:[fileURLToPath(new URL('../../server/sheets/gateway.ts',import.meta.url))],bundle:true,platform:'node',format:'esm',outfile:output,banner:{js:"import {createRequire} from 'node:module';const require=createRequire(import.meta.url);"},logLevel:'silent'})
- const {planWorkbookSave,readWorkbookPackage}=await import(pathToFileURL(output).href)
+ const {planWorkbookSave,planFromWorkbook,readWorkbookPackage}=await import(pathToFileURL(output).href)
  const bytes=await readFile(new URL('../fixtures/sheets/acceptance.xlsx',import.meta.url))
  const metadata=await readWorkbookPackage(bytes)
  assert.deepEqual(metadata.redactions,{status:'absent'})
@@ -32,4 +32,26 @@ test('web gateway uses the desktop save mapping for cells, names, styles and she
  assert.equal(plan.replaced.has('customXml/t09-preserve.xml'),false)
  await assert.rejects(()=>planWorkbookSave(bytes,[{id:'other',name:'Acceptance'}],request),{statusCode:400})
  await assert.rejects(()=>planWorkbookSave(bytes,[{id:'1',name:'Acceptance'}],{...request,targetPath:'/tmp/escape.xlsx'}))
+ const nativeRequest=sheetsSaveRequest('sheet-1',[{row:1,column:0,writeValue:true,value:23}])
+ assert.match((await planFromWorkbook(bytes,nativeRequest)).replaced.get('xl/worksheets/sheet1.xml'),/<v>23<\/v>/)
+ // Byte-derived identity must agree with the same existing parsers used by
+ // native opens and mutation planning, including entity/prefix normalization.
+ const workbook=await (await JSZip.loadAsync(bytes)).file('xl/workbook.xml').async('string')
+ for(const xml of [workbook.replace('name="Acceptance"','name="A &amp; B &gt; C"'),workbook.replace('name="Acceptance"','name="&#x4e2d;&#25991;"')]){
+   const zip=await JSZip.loadAsync(bytes);zip.file('xl/workbook.xml',xml)
+   assert.match((await planFromWorkbook(await zip.generateAsync({type:'nodebuffer'}),nativeRequest)).replaced.get('xl/worksheets/sheet1.xml'),/<v>23<\/v>/)
+ }
+ for(const patch of [
+   xml=>xml.replace('</sheets>','<sheet name="Duplicate" sheetId="1" r:id="rId1"/></sheets>'),
+   xml=>xml.replace('sheetId="1"',''),
+   xml=>xml.replace('r:id="rId1"','r:id="missing"'),
+   xml=>xml.replace('sheetId="1"',"sheetId='1'"),
+   xml=>xml.replace('<sheet name=', '<sheet custom=\' name="Forged" sheetId="2"\' name='),
+   xml=>xml.replace('<sheets>','<sheets><!--<sheet name="Forged" sheetId="2" r:id="rId1"/>-->'),
+ ]){
+   const zip=await JSZip.loadAsync(bytes);zip.file('xl/workbook.xml',patch(workbook))
+   await assert.rejects(async()=>planFromWorkbook(await zip.generateAsync({type:'nodebuffer'}),nativeRequest),{statusCode:400})
+ }
+ await assert.rejects(()=>planFromWorkbook(bytes,sheetsSaveRequest('forged-id',[{row:1,column:0,writeValue:true,value:1}])),{statusCode:400})
+ await assert.rejects(()=>planFromWorkbook(bytes,{...nativeRequest,targetPath:'/tmp/escape.xlsx'}),{statusCode:400})
 })

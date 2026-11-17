@@ -193,3 +193,20 @@ test('head refresh preserves lease',async t=>{
  assert.equal(f.host.getState(f.fileId).revision.revision,f.revision.revision)
  assert.deepEqual(f.host.getState(f.fileId).lease,lease)
 })
+
+
+test('realtime notices fence a superseded editor without adopting the remote head or granting a lease', async t => {
+ const f=fixture(t)
+ await f.host.open(f.fileId);await f.host.acquireLease(f.fileId)
+ const original=f.host.getState(f.fileId).revision
+ const self=f.host.getEditorId()
+ f.host.observeRealtime(f.fileId,{lease:{leaseEpoch:0,editorId:null,heldByCurrentSession:false,active:false,expiresAt:null}})
+ assert.ok(f.host.getState(f.fileId).lease,'an older lease observation cannot revoke a newer lease')
+ f.host.observeRealtime(f.fileId,{lease:{leaseEpoch:2,editorId:randomUUID(),heldByCurrentSession:true,active:true,expiresAt:new Date(Date.now()+60000).toISOString()}})
+ assert.equal(f.host.getState(f.fileId).lease,null,'a different editor in the same login is still fenced')
+ assert.deepEqual(f.host.getState(f.fileId).revision,original)
+ f.host.observeRealtime(f.fileId,{lease:{leaseEpoch:3,editorId:self,heldByCurrentSession:true,active:true,expiresAt:new Date(Date.now()+60000).toISOString()}})
+ assert.equal(f.host.getState(f.fileId).lease,null,'only an HTTP lease grant can restore write authority')
+ f.host.observeRealtime(f.fileId,null)
+ assert.equal(f.host.getState(f.fileId).status,'unauthorized')
+})

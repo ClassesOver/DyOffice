@@ -4,5 +4,8 @@ export const ASSISTANT_READ_TOOLS = new Set([
   'get_workbook_context','read_range','aggregate_range','load_guide','read_formats',
   'read_sheet_features','read_cells','find_cells','trace_precedents','trace_dependents',
 ])
+export function assistantReadTools(sourceCatalog = false): ReadonlySet<string> {
+  return new Set([...ASSISTANT_READ_TOOLS, ...(sourceCatalog ? ['sources_list'] : [])])
+}
 export interface AssistantModel {id: string; label: string; model: string}
-export interface AssistantCatalog {entries: AssistantModel[]; defaultId: string | null}
+export interface AssistantCatalog {entries: AssistantModel[]; defaultId: string | null; sourceCatalog?: boolean}

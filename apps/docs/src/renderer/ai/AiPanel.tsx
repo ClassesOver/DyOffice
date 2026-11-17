@@ -231,6 +231,7 @@ const PASTE_MIME_EXT: Record<string, string> = {
 export { aiRevisionAuthor }
 
 interface AiPanelProps {
+  sourceSkill?: import('@genoffice/agent-core').AgentSkill
   transport?: import('@genoffice/agent-core').AgentTransport
   modelPicker?: React.ReactNode
   editor: Editor
@@ -333,6 +334,7 @@ const MODEL_BRIDGE: AiModelPickerBridge = {
 }
 
 export function AiPanel({
+  sourceSkill,
   transport,
   modelPicker,
   editor,
@@ -845,6 +847,7 @@ export function AiPanel({
           () => mediaAnalysisAvailable(settingsRef.current, gskLoggedInRef.current),
         ),
         ...(!transport ? [createFilesSkill(availableAttachments), createSkillsSkill()] : []),
+        ...(sourceSkill ? [sourceSkill] : []),
       ]),
       captureSnapshot: () => editorRef.current.getJSON() as PmNode,
       events: {

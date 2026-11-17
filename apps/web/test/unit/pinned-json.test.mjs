@@ -39,8 +39,14 @@ test('real TLS connection pins approved address and bounds responses', async t =
  assert.deepEqual(await client.get('ok'),{value:12.5,unit:'元'})
  const viaDns=createPinnedJsonClient({ok:{...target('/ok'),url:`https://localhost:${port}/ok`,addresses:['127.0.0.1','::1']}})
  assert.deepEqual(await viaDns.get('ok'),{value:12.5,unit:'元'})
- const viaV6=createPinnedJsonClient({ok:{...target('/ok'),url:`https://[::1]:${port}/ok`,addresses:['0:0:0:0:0:0:0:1']}})
- assert.deepEqual(await viaV6.get('ok'),{value:12.5,unit:'元'})
+ await t.test('real IPv6 socket when loopback routing is available',async v6=>{
+  const {createConnection}=await import('node:net')
+  const reachable=await new Promise(resolve=>{const socket=createConnection({host:'::1',port});socket.once('connect',()=>{socket.destroy();resolve(true)});socket.once('error',error=>resolve(error.code==='ENETUNREACH'||error.code==='EADDRNOTAVAIL'?false:error));socket.setTimeout(1000,()=>{socket.destroy();resolve(new Error('IPv6 probe timeout'))})})
+  if(reachable===false){v6.skip('Environment has no ::1 route (ENETUNREACH/EADDRNOTAVAIL)');return}
+  if(reachable!==true)throw reachable
+  const viaV6=createPinnedJsonClient({ok:{...target('/ok'),url:`https://[::1]:${port}/ok`,addresses:['0:0:0:0:0:0:0:1']}})
+  assert.deepEqual(await viaV6.get('ok'),{value:12.5,unit:'元'})
+ })
  const controller=new AbortController(); const pending=client.get('hang',controller.signal);setTimeout(()=>controller.abort(),20);await assert.rejects(pending,/Source request failed/)
  const altered=target('/ok');const frozenClient=createPinnedJsonClient({ok:altered});altered.url='https://169.254.169.254';altered.addresses[0]='169.254.169.254';assert.deepEqual(await frozenClient.get('ok'),{value:12.5,unit:'元'})
  const before=calls; await assert.rejects(client.get('redirect'),/Source request failed/); assert.equal(calls,before+1)

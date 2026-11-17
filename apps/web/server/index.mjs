@@ -14,6 +14,9 @@ async function configuredApplication() {
   const shellDirectory=localShellDirectory(process.env);
   const profilesFile=process.env.DYOFFICE_PROVIDER_GATEWAY_PROFILES;
   if(profilesFile && mode!=='local') throw new Error('Provider Gateway requires local mode');
+  const assistantSourceFlag=process.env.DYOFFICE_ASSISTANT_SOURCE_CATALOG;
+  if(assistantSourceFlag && (mode!=='local'||assistantSourceFlag!=='metadata-only'||!profilesFile)) throw new Error('Assistant source catalog requires explicit metadata-only local mode and provider gateway');
+  const assistantSourceCatalog=assistantSourceFlag==='metadata-only';
   const sheetsFlag=process.env.DYOFFICE_NATIVE_XLSX;
   if(sheetsFlag && (sheetsFlag!=='experimental'||mode!=='local')) throw new Error('Native Sheets requires explicit experimental local mode');
   const jobFlag=process.env.DYOFFICE_NATIVE_JOBS;
@@ -36,6 +39,8 @@ async function configuredApplication() {
   const csrfKey=process.env.DYOFFICE_CSRF_KEY;
   const globalConfigKeyring=parseConfigKeyring(process.env.DYOFFICE_CONFIG_KEYRING);
   const providerGateway=profilesFile ? {profiles:JSON.parse(await readFile(resolve(profilesFile),'utf8'))} : undefined;
+  const sourcesCredentialKeys=process.env.DYOFFICE_SOURCES_CREDENTIAL_KEYS||'';
+  const sourcesEgressTargets=JSON.parse(process.env.DYOFFICE_SOURCES_EGRESS_TARGETS||'[]');
   if(!connectionString||!businessConnectionString||!deploymentId||!origin||!csrfKey) throw new Error('Local account configuration missing');
   const {db,close}=connectIdentityStore(connectionString);
   let businessPool,storage,sheets;
@@ -47,7 +52,7 @@ async function configuredApplication() {
     const nativeDocsDirectory=nativeFlag ? resolve(process.env.DYOFFICE_NATIVE_DOCX_DIRECTORY||fileURLToPath(new URL('../dist-docs/',import.meta.url))) : undefined;
     sheets=await configuredSheetsRuntime(process.env);
     const {close:closeSheets,...sheetsConfig}=sheets ?? {};
-    return await buildLocalApp({db,businessPool,...storage,...sheetsConfig,nativeDocsDirectory,localShellDirectory:shellDirectory,nativeJobs:jobFlag==='experimental',deploymentId,origin,csrfKey,globalConfigKeyring,providerGateway,passwordBlocklistFile:process.env.DYOFFICE_PASSWORD_BLOCKLIST_FILE,closeDb:async()=>{await closeSheets?.();storage.close();await Promise.all([close(),businessPool.end()]);}});
+    return await buildLocalApp({db,businessPool,...storage,...sheetsConfig,nativeDocsDirectory,localShellDirectory:shellDirectory,nativeJobs:jobFlag==='experimental',deploymentId,origin,csrfKey,globalConfigKeyring,providerGateway,assistantSourceCatalog,sourcesCredentialKeys,sourcesEgressTargets,passwordBlocklistFile:process.env.DYOFFICE_PASSWORD_BLOCKLIST_FILE,closeDb:async()=>{await closeSheets?.();storage.close();await Promise.all([close(),businessPool.end()]);}});
   } catch(error) { await sheets?.close();storage?.close();await Promise.allSettled([close(),businessPool?.end()]); throw error; }
 }
 

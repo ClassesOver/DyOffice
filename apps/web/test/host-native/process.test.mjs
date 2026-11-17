@@ -1,6 +1,8 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { readFile,rm } from 'node:fs/promises'
+import { readFile,rm,mkdtemp,writeFile,stat,utimes,readdir } from 'node:fs/promises'
+import { join } from 'node:path'
+import { tmpdir } from 'node:os'
 import { randomUUID } from 'node:crypto'
 import { execFile,spawn } from 'node:child_process'
 import { promisify } from 'node:util'
@@ -37,6 +39,36 @@ test('host output is a bounded regular file and original Rust opens and saves ac
   const result=await createXlsxNativeWorker(native.runner).roundtrip(input)
   assert.equal(result.sheetCount,1); assert.ok(result.bytes.length>0); await empty(native.deploymentId)
 })
+test('live native snapshot and libraries keep independent inodes after host mutation', {timeout:20_000}, async t=>{
+  const directory=await mkdtemp(join(tmpdir(),'host-live-snapshot-'))
+  t.after(()=>rm(directory,{recursive:true,force:true}))
+  const meta=JSON.parse(await readFile(process.env.DYOFFICE_TEST_HOST_MANIFEST,'utf8'))
+  const bytes=await readFile(meta.probeBinary),binary=join(directory,'probe')
+  await writeFile(binary,bytes,{mode:0o755})
+  const stamp=new Date('2026-01-01T00:00:00.000Z');await utimes(binary,stamp,stamp)
+  const {createHostProcess}=await import('../../worker/src/sandbox/host-process.ts')
+  const deploymentId=randomUUID(),runner=createHostProcess({binary,sha256:meta.probeSha256,deploymentId,allowedCommands:['probe']})
+  await runner.run(Buffer.from('input'),async session=>{
+    const roots=(await readdir('/var/tmp')).filter(name=>name.startsWith('dyoffice-'+deploymentId+'-'))
+    assert.equal(roots.length,1)
+    const root=join('/var/tmp',roots[0],'root'),snapshot=join(root,'bin/native')
+    const host=await stat(binary),isolated=await stat(snapshot)
+    assert.ok(host.dev!==isolated.dev||host.ino!==isolated.ino)
+    assert.equal(isolated.nlink,1)
+    const dependencies=(await exec('/usr/bin/ldd',[snapshot])).stdout
+    for(const library of new Set(dependencies.match(/\/[^\s()]+/g)??[])){
+      const source=await stat(library),copy=await stat(join(root,library))
+      assert.ok(source.dev!==copy.dev||source.ino!==copy.ino,'library shares host inode: '+library)
+    }
+    const changed=Buffer.from(bytes);changed[changed.length-1]^=1
+    await writeFile(binary,changed);await utimes(binary,stamp,stamp)
+    assert.deepEqual(await readFile(snapshot),bytes,'host modification cannot affect an active executable snapshot')
+    assert.ok((await session.request('probe',{})).uid>0)
+  })
+  await assert.rejects(()=>runner.run(Buffer.from('input'),session=>session.request('probe',{})),{code:'UNTRUSTED_BINARY'})
+  await empty(deploymentId)
+})
+
 test('host process network and process-count isolation are kernel enforced',{ timeout: 20_000 },async()=>{
   const f=await fixture('probe',{pids:16})
   await f.runner.run(Buffer.from('input'),async session=>{
