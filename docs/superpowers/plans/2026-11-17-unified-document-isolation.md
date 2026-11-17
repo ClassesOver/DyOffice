@@ -104,7 +104,7 @@ P1/P2 与前端 P5 可并行，四格式 adapter 可在协议冻结后并行。s
 - [ ] **RED**：真实 PG 双控制器同时 reserve 不超 2/1024MiB 基准；过期 epoch 不能改状态；事务回滚无幽灵配额；broker 启动后 bind 前崩溃能认领同一 attempt。
 - [ ] 运行 `node --experimental-strip-types --test apps/web/test/jobs/sandbox-recovery.test.mjs`，用现有测试夹具的独立数据库/受限角色，记录失败，禁止使用生产库。
 - [ ] 实现短事务/CAS、DB-time 租约、先 reserve 后启动；实例身份由不可伪造的 broker 管理记录绑定。停止未知→quarantined，不能以任务失败释放容量。
-- [ ] 补恢复测试：控制器双重恢复、broker 重启、宿主重启、孤儿活进程、重复名字不同 invocation、DB/DBus 单边不可用、worker停止心跳后由broker watchdog杀停。新增 `adopt(reservation: Reservation, expectedInvocationId: string): Promise<ExecutionHandle>`：broker 核对持久管理记录、PG epoch和实际unit/cgroup/invocation，换发当前 brokerBootId 的句柄并原子登记；旧boot句柄失效，不能重复 start。无法一致确认则隔离并保留容量。重启后账本与存活实例对账完成前不开放准入。
+- [ ] 补恢复测试：控制器双重恢复、broker 重启、宿主重启、孤儿活进程、重复名字不同 invocation、DB/DBus 单边不可用、worker停止心跳后由broker watchdog杀停。新增 `adopt(reservation: Reservation, expectedInvocationId: string): Promise<ExecutionHandle>`：worker 在 PG 复核 epoch 后经认证 IPC 提交；broker 核对该 epoch、持久管理记录和实际unit/cgroup/invocation（不直连 PG），换发当前 brokerBootId 的句柄并原子登记；旧boot句柄失效，不能重复 start。无法一致确认则隔离并保留容量。重启后账本与存活实例对账完成前不开放准入。
 - [ ] GREEN：真实 PG 测试与 `npm run test:jobs --workspace @dyoffice/web` 通过；保留 failed/quarantined 指标和人工安全处置说明。commit `feat(jobs): persist sandbox reservations and recovery fences`。
 
 ## Task 4 / P3-X、P3-P：XLSX 与 PPTX 接统一后端
