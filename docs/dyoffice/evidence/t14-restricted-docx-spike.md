@@ -1,0 +1,85 @@
+# T14 restricted DOCX mode: feasibility spike, not mounted
+
+> Historical experiment retained from #77/#80. Current integration status and rerun evidence: [old-chain integration](../evidence/t14-old-chain-integration.md). Historical counts below are not new acceptance results. No production activation or full App protection is claimed.
+
+## Product boundary
+
+This is not the native Docs App, a replacement for it, or full T14 acceptance.
+The proposed opt-in entry would explicitly say "受控文本修改（仅简单 DOCX）" and
+would explain that this is text editing, not a layout/formatting preview.
+No such entry is implemented or enabled. Unsupported input returns an error
+before editing or staging; the existing native editor remains unchanged.
+
+Only five known package files and three optional directory entries are accepted.
+Each top-level paragraph is a single plain run/text element; paragraph/run
+format properties, tables, fields, tracked changes, comments, images, external
+relationships and unknown parts are rejected. The integrated profile now admits only one fixed, reviewed styles.xml table:
+Normal has no inherited formatting and the other named styles cannot be selected
+by the accepted attribute-free paragraph/run grammar. Hidden/default/inherited
+style changes are rejected, and accepted styles are preserved byte-for-byte. This intentionally
+rejects many ordinary DOCX files, including common metadata-rich packages.
+
+## Preservation invariant
+
+Actual docx-engine parseDocx/saveDocx must return identical bytes for an unchanged
+save. Modified output is returned only when every logical package file is
+byte-identical to the source except word/document.xml, which must equal the exact
+expected replacement of its original text nodes. Container compression and
+omitted directory entries do not count as document content changes. No output
+is repaired after export to conceal engine changes.
+
+Input bytes and text arrays are isolated snapshots. Buffer view ownership and
+accessor/iterator time-of-check/time-of-use defects found in independent review
+were reproduced before correction. Invalid XML text and unsafe ZIP profiles fail
+closed. The ordinary T06 coordinator also now copies serialize() output into an
+owned Uint8Array, including when it receives a pooled Buffer view.
+
+## Real save experiment
+
+The local-integration/simple-command-save.test.mjs experiment uses a real
+Tiptap/ProseMirror editor, authenticated command HTTP routes, PostgreSQL journal,
+SessionFileHost and actual T06 upload/bind/commit. It proves execution is rejected
+before explicit approval, applies Hello -> Welcome to actual document content,
+exports the new DOCX, commits it, downloads the persisted revision and compares
+all returned bytes to the verified engine output. Reimport confirms Welcome.
+A second case loses the commit response and reconciles the same upload/idempotency
+tuple without restaging. Storage in this experiment is the real local object-store
+implementation, not RustFS. No externally hosted provider or real browser is used.
+
+## Remaining gates
+
+This spike is not production assembly. There is no visible entry, lease lifecycle
+UI, reload/close UX, ordinary editing policy, browser accessibility/interaction
+verification, WPS/LibreOffice visual comparison, installed-package export contract,
+or broad compatibility guarantee. Real normal-edit/approval/save races must be
+verified in the final host. Unknown outcomes must retain pending state and never
+reapply automatically. The legacy native App still has unconverted metadata
+mutation paths and must not be mounted behind this prototype's fence.
+
+## Verified local results (2026-11-16)
+
+- Strict engine profile: 16/16 tests after two independently discovered defects
+  were reproduced RED and corrected; focused strict TypeScript passed.
+- Real PostgreSQL + PM + HTTP + T06: 4/4, zero skips. Alongside normal and lost
+  response cases, post-approval user editing and lease takeover both reject
+  execution, stage no upload, and leave the durable base revision unchanged.
+- Coordinator Buffer snapshot regression plus existing save tests: 9/9;
+  focused strict TypeScript passed. This is a change to the #75 coordinator,
+  not a change already published on that PR.
+- No shared service was used. The isolated PostgreSQL instance was stopped.
+
+Independent review after both fixes found no remaining definite blocker for this
+experiment only. The reviewer independently reran the nine coordinator tests;
+the four PostgreSQL tests were run by the implementer and inspected by the reviewer.
+
+## Standard Word package expansion investigation
+
+The five-part rule is a conservative capability allowlist, not a DOCX or engine
+requirement. Standard-looking Word packages often contain core/app properties,
+settings, font tables and themes. Merely allowing those names is insufficient:
+current saveDocx intentionally rewrites core modified/revision on a content save.
+An experimental explicit preserveCoreProperties option is being evaluated. It
+must leave normal saves unchanged and must not disable privacy scrubbing,
+resource cleanup or any output-part comparison. Until separately verified,
+the import allowlist remains unchanged. Presence of "Microsoft Word" metadata
+alone is not proof that a fixture was generated by Word.

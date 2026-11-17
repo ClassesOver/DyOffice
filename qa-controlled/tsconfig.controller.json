@@ -1,0 +1,5 @@
+{
+ "extends":"../apps/docs/tsconfig.json",
+ "include":["../apps/docs/src/renderer/editor/controlled-text-controller.ts","../apps/docs/src/renderer/editor/controlled-text-model.ts","../apps/docs/src/renderer/env.d.ts"],
+ "compilerOptions":{"noEmit":true}
+}
