@@ -98,3 +98,37 @@ CREATE TABLE document_broker_receipts (
 );
 REVOKE ALL ON document_broker_keys,document_broker_challenges,document_broker_receipts FROM PUBLIC;
 REVOKE ALL ON FUNCTION guard_document_broker_key() FROM PUBLIC;
+
+-- Durable dispatch observations only: no runtime approval or executable grant.
+CREATE TABLE document_dispatches (
+ reservation_id text PRIMARY KEY REFERENCES document_reservations,
+ dispatch_id uuid NOT NULL UNIQUE,
+ deployment_id uuid NOT NULL REFERENCES document_capacity,
+ reservation_version bigint NOT NULL CHECK(reservation_version BETWEEN 1 AND 9007199254740991),
+ owner_token text NOT NULL CHECK(owner_token ~ '^[0-9a-f]{64}$'),
+ job_id uuid NOT NULL,
+ attempt bigint NOT NULL CHECK(attempt BETWEEN 1 AND 9007199254740991),
+ job_epoch bigint NOT NULL CHECK(job_epoch BETWEEN 1 AND 9007199254740991),
+ broker_id uuid NOT NULL,
+ broker_boot_id uuid NOT NULL,
+ request_digest text NOT NULL CHECK(request_digest ~ '^[0-9a-f]{64}$'),
+ expires_at timestamptz NOT NULL,
+ challenge_id uuid,
+ consumed_at timestamptz,
+ CHECK((challenge_id IS NULL)=(consumed_at IS NULL))
+);
+CREATE FUNCTION guard_document_dispatch() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+ IF TG_OP IN ('DELETE','TRUNCATE') THEN RAISE EXCEPTION 'dispatch identity cannot be reused'; END IF;
+ IF (to_jsonb(NEW)-'challenge_id'-'consumed_at') IS DISTINCT FROM (to_jsonb(OLD)-'challenge_id'-'consumed_at')
+    OR OLD.challenge_id IS NOT NULL OR NEW.challenge_id IS NULL OR NEW.consumed_at IS NULL THEN
+  RAISE EXCEPTION 'dispatch identity is immutable and consumption is once only';
+ END IF;
+ RETURN NEW;
+END $$;
+CREATE TRIGGER document_dispatch_guard BEFORE UPDATE OR DELETE ON document_dispatches
+ FOR EACH ROW EXECUTE FUNCTION guard_document_dispatch();
+CREATE TRIGGER document_dispatch_truncate_guard BEFORE TRUNCATE ON document_dispatches
+ FOR EACH STATEMENT EXECUTE FUNCTION guard_document_dispatch();
+REVOKE ALL ON document_dispatches FROM PUBLIC;
+REVOKE ALL ON FUNCTION guard_document_dispatch() FROM PUBLIC;
