@@ -4,6 +4,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react
 import type {
   DragEvent as ReactDragEvent,
   PointerEvent as ReactPointerEvent,
+  KeyboardEvent as ReactKeyboardEvent,
   ReactElement,
   ReactNode,
 } from 'react'
@@ -431,6 +432,7 @@ function FolderPicker({
     () => new Set(roots.map((r) => r.path)),
   )
   const [picked, setPicked] = useState<string | null>(null)
+  const [focusedPath, setFocusedPath] = useState(roots[0]?.path ?? '')
   const pickedGeneration = useRef(0)
   const [query, setQuery] = useState('')
   const [creatingIn, setCreatingIn] = useState<string | null>(null)
@@ -450,6 +452,29 @@ function FolderPicker({
     currentDirs.has(dir) ||
     movingDirs.some((m) => isUnder(m, dir)) ||
     rootOf(dir, roots)?.usable === false
+
+  function pickerKeyDown(event: ReactKeyboardEvent<HTMLDivElement>, path: string) {
+    if (event.nativeEvent.isComposing) return
+    const row = event.currentTarget
+    const rows = [...row.closest('.picker-tree')!.querySelectorAll<HTMLElement>('[role="treeitem"]')]
+    const index = rows.indexOf(row)
+    let next: HTMLElement | undefined
+    if (event.key === 'Enter' || event.key === ' ') {
+      if (!disabledDir(path)) {pickedGeneration.current++; setPicked(path)}
+    } else if (event.key === 'ArrowDown') next = rows[Math.min(rows.length - 1, index + 1)]
+    else if (event.key === 'ArrowUp') next = rows[Math.max(0, index - 1)]
+    else if (event.key === 'Home') next = rows[0]
+    else if (event.key === 'End') next = rows.at(-1)
+    else if (!query.trim() && event.key === 'ArrowRight') {
+      if (!expanded.has(path)) {
+        if (!listings.has(path) || listings.get(path)!.folders.length) setExpanded(previous => new Set([...previous, path]))
+      } else next = row.parentElement?.querySelector<HTMLElement>(':scope > ul > li > [role="treeitem"]') ?? undefined
+    } else if (!query.trim() && event.key === 'ArrowLeft') {
+      if (expanded.has(path)) setExpanded(previous => {const next = new Set(previous); next.delete(path); return next})
+      else next = row.closest('[role="group"]')?.parentElement?.querySelector<HTMLElement>(':scope > [role="treeitem"]') ?? undefined
+    } else return
+    event.preventDefault(); event.stopPropagation(); next?.focus()
+  }
 
   // Enter or blur commits, Escape cancels; the blur an unmount may fire reads
   // the edit from a ref mirrored during render, so a finished edit is a no-op
@@ -483,7 +508,7 @@ function FolderPicker({
   // name search flattens the tree to every loaded folder whose name matches;
   // folders not yet expanded are loaded on the fly one level at a time
   const needle = query.trim().toLowerCase()
-  const renderNode = (entry: { path: string; name: string }, depth: number): ReactElement => {
+  const renderNode = (entry: { path: string; name: string; hasSubfolders?: boolean }, depth: number): ReactElement => {
     const listing = listings.get(entry.path)
     const isOpen = expanded.has(entry.path)
     const children = listing?.folders ?? []
@@ -495,8 +520,12 @@ function FolderPicker({
           className={`picker-row${picked === entry.path ? ' active' : ''}${disabled ? ' disabled' : ''}`}
           style={{ paddingLeft: 8 + depth * 16 }}
           role="treeitem"
+          tabIndex={focusedPath === entry.path ? 0 : -1}
+          onFocus={() => setFocusedPath(entry.path)}
+          onKeyDown={event => pickerKeyDown(event, entry.path)}
+          aria-disabled={disabled}
           aria-selected={picked === entry.path}
-          aria-expanded={children.length > 0 ? isOpen : undefined}
+          aria-expanded={children.length > 0 || (!listing && entry.hasSubfolders) ? isOpen : undefined}
           onClick={() => {
             if (!disabled) {pickedGeneration.current++; setPicked(entry.path)}
           }}
@@ -511,6 +540,8 @@ function FolderPicker({
             style={{ visibility: listing && children.length === 0 ? 'hidden' : undefined }}
             onClick={(e) => {
               e.stopPropagation()
+              setFocusedPath(entry.path)
+              e.currentTarget.parentElement?.focus()
               setExpanded((prev) => {
                 const next = new Set(prev)
                 if (next.has(entry.path)) next.delete(entry.path)
@@ -576,13 +607,17 @@ function FolderPicker({
     if (hits.length === 0) return <p className="picker-empty">{t('noMatchingFolders')}</p>
     return (
       <ul role="tree">
-        {hits.map((h) => {
+        {hits.map((h, index) => {
           const disabled = disabledDir(h.path)
           return (
             <li key={h.path}>
               <div
                 className={`picker-row${picked === h.path ? ' active' : ''}${disabled ? ' disabled' : ''}`}
                 role="treeitem"
+                tabIndex={focusedPath === h.path || (!hits.some(hit => hit.path === focusedPath) && index === 0) ? 0 : -1}
+                onFocus={() => setFocusedPath(h.path)}
+                onKeyDown={event => pickerKeyDown(event, h.path)}
+                aria-disabled={disabled}
                 aria-selected={picked === h.path}
                 onClick={() => {
                   if (!disabled) {pickedGeneration.current++; setPicked(h.path)}
@@ -611,15 +646,23 @@ function FolderPicker({
         aria-modal="true"
         aria-label={t('moveToFolderTitle')}
         onClick={(e) => e.stopPropagation()}
+        onKeyDown={(event) => {
+          if (event.key !== 'Tab') return
+          const controls = [...event.currentTarget.querySelectorAll<HTMLElement>('*')].filter(control => control.tabIndex >= 0 && !control.matches(':disabled'))
+          const first = controls[0], last = controls.at(-1)
+          if (event.shiftKey && document.activeElement === first) {event.preventDefault(); last?.focus()}
+          else if (!event.shiftKey && document.activeElement === last) {event.preventDefault(); first?.focus()}
+        }}
       >
         <h3>{t('moveToFolderTitle')}</h3>
         {(error || operationFailure) && <p className="home-action-error" role="alert">{error || operationFailure}</p>}
         <input
           className="picker-search"
+          autoFocus
           type="search"
           placeholder={t('searchFolders')}
           value={query}
-          onChange={(e) => setQuery(e.target.value)}
+          onChange={(e) => {setQuery(e.target.value); setFocusedPath(roots[0]?.path ?? '')}}
         />
         <div className="picker-tree">
           {needle ? (

@@ -79,3 +79,22 @@ test('browser reload warns while uploading and releases the guard after completi
  await act(async()=>root.unmount())
  expect(reloadProtected()).toBe(false)
 })
+
+test('the picker supports Space without scrolling and preserves single Enter and click activation',async()=>{
+ await mount([],async()=>{})
+ const target=document.querySelector<HTMLElement>('.ant-upload-btn[role="button"]')!
+ const input=document.querySelector<HTMLInputElement>('input[type=file]')!
+ const picker=vi.spyOn(input,'click').mockImplementation(()=>{})
+ target.focus()
+ const space=new KeyboardEvent('keydown',{key:' ',bubbles:true,cancelable:true})
+ await act(async()=>target.dispatchEvent(space))
+ expect(space.defaultPrevented).toBe(true)
+ expect(picker).toHaveBeenCalledTimes(1)
+ await act(async()=>target.dispatchEvent(new KeyboardEvent('keydown',{key:' ',repeat:true,bubbles:true,cancelable:true})))
+ expect(picker).toHaveBeenCalledTimes(1)
+ await act(async()=>target.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true,cancelable:true})))
+ expect(picker).toHaveBeenCalledTimes(2)
+ await act(async()=>target.click())
+ expect(picker).toHaveBeenCalledTimes(3)
+ picker.mockRestore()
+})

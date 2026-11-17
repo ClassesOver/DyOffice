@@ -83,6 +83,59 @@ test('move search displays human folder ancestry instead of opaque folder IDs', 
   expect(host.querySelector('[role="dialog"]')?.textContent).not.toContain('bb000000')
 })
 
+test('move destinations can be reached, expanded and selected with the keyboard', async () => {
+  const moves: string[] = []; api.movePaths = async (_paths, target) => {moves.push(target); return {moved: [], conflicts: [], failed: []}}
+  await chooseFileAction('Move to folder…')
+  const dialog = host.querySelector<HTMLElement>('.picker-modal')!
+  const search = dialog.querySelector<HTMLInputElement>('.picker-search')!
+  expect(document.activeElement).toBe(search)
+  const rows = () => [...dialog.querySelectorAll<HTMLElement>('[role="treeitem"]')]
+  const key = async (node: HTMLElement, value: string) => {await act(async () => node.dispatchEvent(new KeyboardEvent('keydown', {key: value, bubbles: true, cancelable: true})))}
+  const rootRow = rows()[0]
+  expect(rootRow.tabIndex).toBe(0)
+  await act(async () => rootRow.focus())
+  await key(rootRow, 'ArrowDown')
+  const projects = rows().find(row => row.querySelector('.picker-name')?.textContent === 'Projects')!
+  expect(document.activeElement).toBe(projects)
+  expect(projects.getAttribute('aria-expanded')).toBe('false')
+  await key(projects, 'ArrowRight')
+  await key(projects, 'ArrowRight')
+  const contractsRow = rows().find(row => row.querySelector('.picker-name')?.textContent === 'Contracts')!
+  expect(document.activeElement).toBe(contractsRow)
+  await key(contractsRow, ' ')
+  expect(contractsRow.getAttribute('aria-selected')).toBe('true')
+  await click(button('Move 1', dialog))
+  expect(moves).toEqual([contracts])
+})
+
+test('move search results allow keyboard selection and a disabled current folder cannot be picked', async () => {
+  await chooseFileAction('Move to folder…')
+  const search = host.querySelector<HTMLInputElement>('.picker-search')!
+  await fill(search, 'Contracts'); await act(async () => {})
+  const match = host.querySelector<HTMLElement>('.picker-row[role="treeitem"]')!
+  expect(match.tabIndex).toBe(0)
+  await act(async () => {match.focus(); match.dispatchEvent(new KeyboardEvent('keydown', {key:'Enter',bubbles:true,cancelable:true}))})
+  expect(match.getAttribute('aria-selected')).toBe('true')
+  await fill(search, '')
+  expect(host.querySelector('.picker-row[tabindex="0"] .picker-name')?.textContent).toBe('My files')
+  await click(button('Cancel', host.querySelector('.picker-modal')!))
+  await folderAction('Move to folder…')
+  const current = [...host.querySelectorAll<HTMLElement>('.picker-row')].find(row => row.querySelector('.picker-name')?.textContent === 'My files')!
+  expect(current.getAttribute('aria-disabled')).toBe('true')
+  await act(async () => current.dispatchEvent(new KeyboardEvent('keydown', {key:'Enter',bubbles:true,cancelable:true})))
+  expect(current.getAttribute('aria-selected')).toBe('false')
+})
+
+test('Tab stays inside the move picker instead of reaching background file actions', async () => {
+  await chooseFileAction('Move to folder…')
+  const dialog = host.querySelector('.picker-modal')!
+  const search = dialog.querySelector<HTMLInputElement>('.picker-search')!, cancel = button('Cancel', dialog)
+  await act(async () => search.dispatchEvent(new KeyboardEvent('keydown', {key:'Tab',shiftKey:true,bubbles:true,cancelable:true})))
+  expect(document.activeElement).toBe(cancel)
+  await act(async () => cancel.dispatchEvent(new KeyboardEvent('keydown', {key:'Tab',bubbles:true,cancelable:true})))
+  expect(document.activeElement).toBe(search)
+})
+
 test('failed folder creation leaves a visible error and the draft can be corrected without an automatic retry', async () => {
   const names: string[] = []; api.createFolder = async (_parent, name) => {names.push(name); if (names.length === 1) throw new Error('Invalid folder name'); return {ok: true, path: '/workspace/new-id'}}
   await click(host.querySelector<HTMLButtonElement>('.folder-new-btn')!)

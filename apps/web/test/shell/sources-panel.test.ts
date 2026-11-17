@@ -274,3 +274,28 @@ test.each(['stale_session','previous_unknown'])('a %s result preserves the origi
  await click('确认保存结果')
  expect(calls.at(-1)).toEqual(calls[0])
 })
+
+test('an unknown publish on A survives browsing and adopting B until A is read and adopted',async()=>{
+ const a=initial(),b={...initial(),source:{...initial().source,sourceId:'other',name:'另一连接'}}
+ let publishes=0
+ const {client}=await mount(async(path,method='GET')=>{if(method==='POST'&&path.endsWith('/publish')){publishes++;throw Error('lost response')}if(path.includes('?'))return {items:[a.source,b.source],nextCursor:null};return path.endsWith('/other')?b:a})
+ await click('发布草稿');expect(client.getState().unknownWrite).toBe(true)
+ await act(async()=>{[...document.querySelectorAll<HTMLButtonElement>('.source-item')].find(node=>node.textContent?.includes('另一连接'))!.click()})
+ expect(input('连接名称').value).toBe('另一连接')
+ await click('读取最新版本并核对');await click('采用服务器版本并放弃当前草稿')
+ expect(client.getState().unknownWrite).toBe(true)
+ expect(button('发布草稿').disabled).toBe(true)
+ await act(async()=>{[...document.querySelectorAll<HTMLButtonElement>('.source-item')].find(node=>node.textContent?.includes('营业收入'))!.click()})
+ await click('读取最新版本并核对');await click('采用服务器版本并放弃当前草稿')
+ expect(client.getState().unknownWrite).toBe(false);expect(button('发布草稿').disabled).toBe(false);expect(publishes).toBe(1)
+})
+
+test('the affected identity remains directly reconcilable after browsing B and refreshing away deleted A',async()=>{
+ const a=initial(),b={...initial(),source:{...initial().source,sourceId:'other',name:'另一连接'}};let deleted=false
+ const {client}=await mount(async(path,method='GET')=>{if(method==='DELETE'){deleted=true;throw Error('lost')}if(path.includes('?'))return {items:deleted?[b.source]:[a.source,b.source],nextCursor:null};if(deleted&&path.endsWith('/revenue'))throw Object.assign(Error('missing'),{status:404});return path.endsWith('/other')?b:a})
+ await act(async()=>document.querySelector<HTMLInputElement>('[aria-label="确认删除此连接"]')!.click());await click('删除连接')
+ await act(async()=>{[...document.querySelectorAll<HTMLButtonElement>('.source-item')].find(node=>node.textContent?.includes('另一连接'))!.click()});await click('刷新列表')
+ expect(document.querySelectorAll('.source-item').length).toBe(1)
+ await click('读取待核对连接（revenue）');await click('确认不存在并开始新建')
+ expect(client.getState().unknownWrite).toBe(false)
+})

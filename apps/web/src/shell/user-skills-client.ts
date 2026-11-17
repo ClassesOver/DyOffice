@@ -35,7 +35,9 @@ export function createUserSkillsClient(request: SettingsRequest) {
       if (!skill || !skill.body.trim()) throw new Error('SKILL.md 需要 name、description 和正文。')
       if (!classifyOfficeSkill(skill.name, skill.description, skill.body).relevant) throw new Error(OFFICE_SKILL_REQUIRED)
       if (options.overwrite === false) {
-        const existing = await request<SkillMetadata[]>('/api/v1/skills')
+        let existing:SkillMetadata[]
+        try{existing=await request<SkillMetadata[]>('/api/v1/skills')}
+        catch(failure){throw Object.assign(new Error(failure instanceof Error?failure.message:'无法读取技能列表。'),{mutationStarted:false})}
         if (existing.some(item => item.name === skill.name)) throw Object.assign(new Error('同名技能已存在，未覆盖。'), {status:409})
       }
       const saved = await request<SkillMetadata>(path(skill.name), 'PUT', {description: skill.description, body: skill.body})

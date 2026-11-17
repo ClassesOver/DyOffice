@@ -11,6 +11,40 @@ afterEach(async()=>{await act(async()=>{for(const root of roots.splice(0))root.u
 async function mount(request:Parameters<typeof createUserSkillsClient>[0],onCloseGuardChange?: (guard:(()=>boolean)|null)=>void){const host=document.createElement('div');document.body.append(host);const root=createRoot(host);roots.push(root);await act(async()=>root.render(h(UserSkillsPanel,{client:createUserSkillsClient(request),onCloseGuardChange})));return host}
 const button=(label:string)=>[...document.querySelectorAll('button')].find(b=>b.textContent===label)!
 async function upload(file:File){await act(async()=>{const input=document.querySelector<HTMLInputElement>('input[type="file"]')!;Object.defineProperty(input,'files',{configurable:true,value:[file]});input.dispatchEvent(new Event('change',{bubbles:true}))})}
+const replacementFile=()=>{const file=new File(['x'],'SKILL.md');Object.defineProperty(file,'text',{value:async()=>'---\nname: report\ndescription: Word replacement\n---\nnew Word instructions'});return file}
+test('same-name file import preserves existing content until explicit replacement confirmation',async()=>{
+ let body='existing Word instructions',writes=0,guard:(()=>boolean)|null=null
+ await mount(async(_path,method,value)=>{if(method==='PUT'){writes++;body=(value as {body:string}).body;return {name:'report',description:'Word replacement'} as never}return [{name:'report',description:'Word report'}] as never},value=>{guard=value})
+ await upload(replacementFile())
+ expect(writes).toBe(0);expect(body).toBe('existing Word instructions')
+ expect(document.querySelector('[role="dialog"]')?.textContent).toContain('替换同名 Skill')
+ await act(async()=>expect(guard!()).toBe(false))
+ const reload=new Event('beforeunload',{cancelable:true});window.dispatchEvent(reload);expect(reload.defaultPrevented).toBe(true)
+ await act(async()=>button('取消替换').click());expect(writes).toBe(0);expect(guard).toBeNull()
+ await upload(replacementFile());await act(async()=>button('确认替换').click())
+ expect(writes).toBe(1);expect(body).toBe('new Word instructions');expect(guard).toBeNull()
+ const after=new Event('beforeunload',{cancelable:true});window.dispatchEvent(after);expect(after.defaultPrevented).toBe(false)
+})
+test('unknown replacement retains its source and close guard without automatic resubmission',async()=>{
+ let writes=0,guard:(()=>boolean)|null=null
+ await mount(async(_path,method)=>{if(method==='PUT'){writes++;throw Error('lost response')}return [{name:'report',description:'Word report'}] as never},value=>{guard=value})
+ await upload(replacementFile());await act(async()=>button('确认替换').click())
+ expect(writes).toBe(1);expect(button('确认替换').disabled).toBe(true);expect(button('取消替换').disabled).toBe(true)
+ await act(async()=>expect(guard!()).toBe(false))
+ await act(async()=>button('刷新列表核对').click());expect(writes).toBe(1)
+ expect(document.querySelector('[role="dialog"]')?.textContent).toContain('report')
+ expect(button('确认替换').disabled).toBe(false)
+ await act(async()=>button('取消替换').click());expect(guard).toBeNull();expect(writes).toBe(1)
+})
+test.each(['file','catalog'])('%s duplicate preflight read failure remains safely retryable without an unknown-write fence',async entry=>{
+ let reads=0,writes=0,guard:(()=>boolean)|null=null
+ await mount(async(_path,method)=>{if(method==='PUT'){writes++;return {} as never}if(++reads>1)throw Error('list offline');return [] as never},value=>{guard=value})
+ if(entry==='file')await upload(replacementFile());else await act(async()=>button('安装').click())
+ expect(writes).toBe(0);expect(guard).toBeNull()
+ expect(button('导入 SKILL.md').disabled).toBe(false)
+ expect(document.querySelector('[role="alert"]')?.textContent).toContain('尚未提交')
+ expect(document.querySelector('[role="alert"]')?.textContent).not.toContain('结果未确认')
+})
 
 test('imports markdown through the real client and reads skill body only when viewing',async()=>{
  let imported=false;const calls:{path:string;method?:string;body?:unknown}[]=[]

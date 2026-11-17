@@ -89,3 +89,11 @@ test('catalog installation checks all account names and never overwrites a hidde
  await expect(client.importText('---\nname: weekly-report\ndescription: Word report\n---\nUse document tools',{overwrite:false})).rejects.toMatchObject({status:409})
  expect(calls).toEqual([{path:'/api/v1/skills',method:undefined}])
 })
+test('duplicate preflight failures are explicitly pre-write while PUT failures retain unknown-write semantics',async()=>{
+ const source='---\nname: report\ndescription: Word report\n---\nUse document tools'
+ const preflight=createUserSkillsClient(async()=>{throw Error('offline')})
+ await expect(preflight.importText(source,{overwrite:false})).rejects.toMatchObject({mutationStarted:false})
+ const write=createUserSkillsClient(async(_path,method)=>{if(method==='PUT')throw Error('lost response');return [] as never})
+ const error=await write.importText(source,{overwrite:false}).catch(error=>error)
+ expect(error.message).toBe('lost response');expect(error.mutationStarted).not.toBe(false)
+})

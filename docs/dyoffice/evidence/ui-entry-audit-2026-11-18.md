@@ -134,3 +134,12 @@
 - 最终Web shell37文件320项、桥接测试35项、shell类型、前后端类型、构建及边界/兼容清单检查通过。桥接回归覆盖三个入口、读取失败、不同选集、反向操作和批次生命周期。
 - 构建重启后的Chromium模拟浏览器2场景通过：A成功、B已提交但503后重试只提交C；B未确认时连续两次重试只读核对、不再提交B/C。0页面异常；全部文件业务读写为mock，无真实文件创建或删除。mock的204响应记录有ERR_ABORTED，未将其声明为全程无请求失败。
 - 证据：`/tmp/dyoffice-final-bridge.log`、`/tmp/dyoffice-final-build.log`、`/tmp/dyoffice-ui-audit/home-bulk-delete-retry/report.json`。批次进度与未知保护仍限当前桥接实例，不声称跨刷新持久化；完整UI穷举仍未完成。
+
+## 键盘入口与管理状态隔离补查
+
+- 移动目录弹窗原先目录行无法键盘聚焦或选择。新增初始搜索焦点、单一目录Tab入口、方向键展开/父子导航、Home/End、Enter/Space选择，以及Tab首尾循环和可见焦点样式；禁用目录仍不可选。搜索后清空恢复可见目录焦点入口。三条DOM回归先失败后通过，保持主页布局。
+- 上传拖拽区域底层组件仅响应Enter，Space不打开选择器。局部补Space激活并阻止页面滚动及按住重复，不改依赖；DOM回归先失败后通过。最终构建浏览器1440/390px各Space、Enter、点击均恰好一个filechooser，共6项通过、0页面异常、0业务写。
+- 数据连接A写结果未知后，读取并采用B版本原先会解除A保护。持久客户端记录待核对sourceId及实际读取身份，只允许核对原连接；B仍可只读浏览。删除A后列表已无A时保留直接读取A入口，精确404也可明确确认。34项专项通过；最终构建浏览器6项通过，覆盖发布/删除500、B不解锁、关闭保护及删除A消失后的恢复。均为mock业务API，不声称浏览器重挂验收。
+- 技能同名导入原先直接覆盖。现在预检后展示替换确认，取消保留原文，明确确认才写；未知结果保留替换草稿并禁止重复提交，刷新仅核对列表。预检读取失败明确尚未提交，不误锁为未知写。Panel/client25项通过。最终构建模拟浏览器4组通过，只有2条mock PUT（成功及503），无真实技能写入。预检仍为GET后无条件PUT，不能保证两请求间并发新建同名时不覆盖；本轮不声称服务端条件写保护。
+- 最终Web shell38文件338项、桥接35项、shell及前后端类型、构建、边界与兼容清单通过；独立复查无剩余确定阻塞。构建有既有chunk大小提示，DOM环境有既有CSS解析日志。目录键盘浏览器4项通过，0页面异常，仅1条mock移动写入。
+- 证据：`/tmp/dyoffice-ui-round3-shell.log`、`/tmp/dyoffice-ui-round3-final-build.log`及`/tmp/dyoffice-ui-audit/`下`folder-picker-keyboard`、`upload-state-audit`、`upload-keyboard-postfix`、`source-identity-postfix`、`skills-replacement-mock`报告。早期Sources脚本误尝试关闭未知状态弹窗、Skills关闭按钮定位双匹配均已更正，不将脚本错误算产品缺陷。完整UI、复杂文档写入与跨编辑器竞态仍未穷举。

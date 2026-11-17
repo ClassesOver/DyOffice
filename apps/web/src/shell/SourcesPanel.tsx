@@ -16,7 +16,7 @@ const fromDetail = (detail: SourceDetail): Draft => ({ sourceId: detail.source.s
 export function SourcesPanel({ client, resultsClient, onClose, presentation = 'dialog', onCloseGuardChange }: { client: SourcesClient; resultsClient?: SourceResultsClient; onClose: () => void; presentation?: 'dialog' | 'page'; onCloseGuardChange?: (guard: (() => boolean) | null) => void }) {
   const [items, setItems] = useState<SourceDescriptor[]>([]), [cursor, setCursor] = useState<string | null>(null)
   const [detail, setDetail] = useState<SourceDetail | null>(null), [latest, setLatest] = useState<SourceDetail | null>(null)
-  const [missing, setMissing] = useState(false)
+  const [missing, setMissing] = useState<string|null>(null)
   const [draft, setDraft] = useState<Draft>(empty), [confirmDelete, setConfirmDelete] = useState(false)
   const [queryFailed, setQueryFailed] = useState(false)
   const [result, setResult] = useState<QuerySnapshot | null>(null), [sql, setSql] = useState('SELECT 1 AS value')
@@ -68,7 +68,12 @@ export function SourcesPanel({ client, resultsClient, onClose, presentation = 'd
   }
   async function select(sourceId: string) {
     const value = await client.detail(sourceId)
-    if (alive.current) { setDetail(value); setDraft(fromDetail(value)); setLatest(null); setResult(null); setQueryFailed(false); setCapture(null); setSavedResult(null); saveIntent.current = null; setConfirmDelete(false) }
+    if (alive.current) { setDetail(value); setDraft(fromDetail(value)); setLatest(null); setMissing(null); setResult(null); setQueryFailed(false); setCapture(null); setSavedResult(null); saveIntent.current = null; setConfirmDelete(false) }
+  }
+  async function readLatest(sourceId:string){
+    setMissing(null)
+    try{const current=await client.detail(sourceId);if(alive.current){setLatest(current);setMessage('最新版本已读取，当前草稿仍保留。')}}
+    catch(error){if((error as {status?:number}).status!==404)throw error;if(alive.current){setLatest(null);setMissing(sourceId)}}
   }
   async function save() {
     if (legacyHttp || draft.kind === 'http') throw Error('已有 HTTP 连接仅支持只读查看，请新建数据库连接。')
@@ -103,7 +108,7 @@ export function SourcesPanel({ client, resultsClient, onClose, presentation = 'd
         <p className="set-pane-desc">连接地址与凭据加密保存且不回显。先保存草稿、测试连接，再发布；查询只使用已发布版本。目标数据库账号须由管理员授予最小只读权限。</p>
         {legacyHttp && <Alert type="info" showIcon title="已有 HTTP 连接仅支持只读查看与执行已发布查询。新建连接仅支持 PostgreSQL、MySQL 和 StarRocks。"/>}
         {dirty && <p role="status">当前有未保存草稿，切换连接前请保存或明确放弃。</p>}
-        {unknown && <p role="alert">上次写入结果未确认，已停止后续写入。读取最新版本并核对后再操作。</p>}
+        {unknown && <p role="alert">上次写入结果未确认，已停止后续写入。请读取「{client.getState().unknownSourceId}」的最新版本并核对后再操作。</p>}
         <fieldset disabled={busy || unknown || legacyHttp} className="source-fields">
           <label className="set-field">标识<Input aria-label="连接标识" value={draft.sourceId} disabled={!!detail || busy || unknown || legacyHttp} maxLength={64} onChange={e => patch({ sourceId: e.target.value })} /></label>
           <label className="set-field">名称<Input aria-label="连接名称" disabled={busy || unknown || legacyHttp} value={draft.name} maxLength={200} onChange={e => patch({ name: e.target.value })} /></label>
@@ -117,7 +122,8 @@ export function SourcesPanel({ client, resultsClient, onClose, presentation = 'd
           <Button autoInsertSpace={false} type="primary" disabled={busy || unknown || legacyHttp || unresolvedResult} onClick={() => { if (!unresolvedResult) void operation(save, true) }}>保存草稿</Button>
         </fieldset>
         <div className="source-actions">
-          {(detail || unknown && draft.sourceId) && <Button autoInsertSpace={false} disabled={busy} onClick={() => void operation(async () => { setMissing(false); try { const current = await client.detail(detail?.source.sourceId ?? draft.sourceId); if (alive.current) { setLatest(current); setMessage('最新版本已读取，当前草稿仍保留。') } } catch (error) { if ((error as {status?: number}).status !== 404) throw error; if (alive.current) { setLatest(null); setMissing(true) } } })}>读取最新版本并核对</Button>}
+          {unknown&&client.getState().unknownSourceId&&client.getState().unknownSourceId!==(detail?.source.sourceId??draft.sourceId)&&<Button autoInsertSpace={false} disabled={busy} onClick={()=>void operation(()=>readLatest(client.getState().unknownSourceId!))}>读取待核对连接（{client.getState().unknownSourceId}）</Button>}
+          {(detail || unknown && draft.sourceId) && <Button autoInsertSpace={false} disabled={busy} onClick={() => void operation(() => readLatest(detail?.source.sourceId ?? draft.sourceId))}>读取最新版本并核对</Button>}
           {detail && <>
             <Button autoInsertSpace={false} disabled={busy || dirty || unknown || legacyHttp} onClick={() => void operation(async () => { const checked = await client.test(detail.source.sourceId); if (alive.current) setMessage(checked.ok ? '连接测试通过。' : checked.code === 'READONLY_ROLE_REQUIRED' ? '连接账号未通过最小只读权限核验。请使用仅获批准库 SELECT 权限的专用账号，不能使用 root 或管理角色。' : checked.code === 'SOURCE_TIMEOUT' ? '连接或查询超时，请检查目标网络与查询时限。' : '连接测试未通过，请检查目标只读权限与部署网络策略。') })}>测试已保存草稿</Button>
             <Button autoInsertSpace={false} disabled={busy || dirty || unknown || legacyHttp || unresolvedResult || !detail.source.hasCredential} onClick={() => void operation(async () => { await client.publish(detail.source.sourceId, detail.source.version); if (!alive.current) return; await select(detail.source.sourceId); await reloadList(); if (alive.current) setMessage('连接版本已发布。') })}>发布草稿</Button>
@@ -126,8 +132,8 @@ export function SourcesPanel({ client, resultsClient, onClose, presentation = 'd
           </>}
           {dirty && <Button autoInsertSpace={false} disabled={busy || unknown} onClick={() => { setDraft(detail ? fromDetail(detail) : empty()); setLatest(null) }}>放弃本地草稿</Button>}
         </div>
-        {missing && <div role="status"><p>服务器确认此连接已不存在。当前本地草稿仍保留。</p><Button autoInsertSpace={false} disabled={busy} onClick={() => { client.acknowledgeLatest(); setDetail(null); setDraft(empty()); setMissing(false); void operation(() => reloadList()) }}>确认不存在并开始新建</Button></div>}
-        {latest && <div role="status"><p>服务器最新草稿 v{latest.source.version}；本地编辑基于 v{detail?.source.version}。</p><Button autoInsertSpace={false} onClick={() => { client.acknowledgeLatest(); setDetail(latest); setDraft(fromDetail(latest)); setLatest(null) }}>采用服务器版本并放弃当前草稿</Button></div>}
+        {missing && <div role="status"><p>服务器确认此连接已不存在。当前本地草稿仍保留。</p><Button autoInsertSpace={false} disabled={busy} onClick={() => { client.acknowledgeLatest(missing); setDetail(null); setDraft(empty()); setMissing(null); void operation(() => reloadList()) }}>确认不存在并开始新建</Button></div>}
+        {latest && <div role="status"><p>服务器最新草稿 v{latest.source.version}；本地编辑基于 v{detail?.source.version}。</p><Button autoInsertSpace={false} onClick={() => { client.acknowledgeLatest(latest.source.sourceId); setDetail(latest); setDraft(fromDetail(latest)); setLatest(null) }}>采用服务器版本并放弃当前草稿</Button></div>}
         {detail?.published && <section><h3>查询已发布版本 r{detail.published.revision}</h3>
           {draft.kind !== 'http' && <label className="set-field">只读 SQL<Input.TextArea aria-label="只读 SQL" rows={4} spellCheck={false} value={sql} onChange={e => setSql(e.target.value)} /></label>}
           <Button autoInsertSpace={false} disabled={busy || unknown || unresolvedResult || !detail.source.enabled} onClick={() => void operation(async () => {
