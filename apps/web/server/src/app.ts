@@ -1,3 +1,4 @@
+import {registerAssistantSourceCatalog} from './modules/sources/assistant-catalog.ts'
 import {registerProbeAssets} from './modules/providers/probe-assets.ts'
 import {createSkillService} from './modules/skills/service.ts'
 import {registerSkillRoutes} from './modules/skills/routes.ts'
@@ -79,6 +80,7 @@ export interface LocalWebConfig {
   sourcesCredentialKeys?: string;
   sourcesEgressTargets?: readonly SourceEgressTarget[];
   /** Trusted assistant composition; never model-supplied credentials or scope. */
+  assistantSourceCatalog?: boolean;
   onSourceToolsReady?: (tools: WorkspaceSourceTools) => void;
   adminAiSyntheticProbe?: boolean;
   // Explicit network-capable fixed probe, NOT the offline diagnostic. No automatic run.
@@ -103,6 +105,7 @@ export async function buildLocalApp(config: LocalWebConfig): Promise<FastifyInst
   if (config.providerShutdownTimeoutMs !== undefined && (!Number.isSafeInteger(config.providerShutdownTimeoutMs) || config.providerShutdownTimeoutMs < 1 || config.providerShutdownTimeoutMs > 35_000)) throw new Error('Invalid provider shutdown timeout')
   if (config.adminProviderProbe !== undefined && (!config.adminProviderProbe || Object.keys(config.adminProviderProbe).join() !== 'profiles' || !Array.isArray(config.adminProviderProbe.profiles) || !config.adminProviderProbe.profiles.length || !config.businessPool || !config.globalConfigKeyring || config.adminProviderProbe.profiles.some(p=>!p || p.deploymentId!==config.deploymentId))) throw new Error('Invalid provider probe configuration')
   if(config.adminProviderProbeDirectory!==undefined && (!config.adminProviderProbe || typeof config.adminProviderProbeDirectory!=='string' || !config.adminProviderProbeDirectory))throw new Error('Probe assets require explicit local probe')
+  if(config.assistantSourceCatalog!==undefined && (typeof config.assistantSourceCatalog!=='boolean' || config.assistantSourceCatalog && !config.providerGateway)) throw new Error('Assistant source catalog requires provider gateway')
   if(config.providerGateway!==undefined && (!config.providerGateway || Object.keys(config.providerGateway).join()!=='profiles' || !Array.isArray(config.providerGateway.profiles) || !config.businessPool || !config.globalConfigKeyring))throw new Error('Provider gateway requires profiles, restricted pool and keyring')
   const probeAssets=config.adminProviderProbeDirectory?await createStaticAssets({assetMode:'built',assetDirectory:config.adminProviderProbeDirectory,pages:['index.html'],cacheControl:'private, no-store'}):undefined
   if ('userToken' in config || 'adminToken' in config) throw new Error('Local mode rejects development tokens')
@@ -158,7 +161,7 @@ export async function buildLocalApp(config: LocalWebConfig): Promise<FastifyInst
   registerUserRoutes(app, users, csrf)
   if (config.businessPool) {
     const transactions = createPrincipalTransactions({ pool: config.businessPool, deploymentId: config.deploymentId, idleMs: config.idleMs })
-    if(config.providerGateway)ownedProbes.push(registerPersonalProviderGateway(app,{transactions,sessions,csrf,deploymentId:config.deploymentId,keyring:config.globalConfigKeyring!,profiles:config.providerGateway.profiles}))
+    if(config.providerGateway)ownedProbes.push(registerPersonalProviderGateway(app,{transactions,sessions,csrf,deploymentId:config.deploymentId,keyring:config.globalConfigKeyring!,profiles:config.providerGateway.profiles,sourceCatalog:config.assistantSourceCatalog === true}))
     else app.get('/api/v1/ai/catalog',async(request,reply)=>{reply.header('Cache-Control','private, no-store');await sessions.authenticate(cookies(request).session??'');return {entries:[],defaultId:null}})
     if (config.adminAiSyntheticProbe === true) ownedProbes.push(registerAdminSyntheticProbe(app, { transactions, sessions, csrf }))
     if(config.adminProviderProbe){
@@ -171,6 +174,7 @@ export async function buildLocalApp(config: LocalWebConfig): Promise<FastifyInst
     registerSourceRoutes(app, sources, sessions, csrf)
     registerWorkspaceSourceToolRoutes(app, { tools: sourceTools, results: sourceResults, sessions, csrf })
     config.onSourceToolsReady?.(sourceTools)
+    if (config.assistantSourceCatalog === true && config.providerGateway) registerAssistantSourceCatalog(app, {sessions,csrf,sources})
     registerPreferenceRoutes(app, createPreferenceService(transactions), sessions, csrf)
     registerSkillRoutes(app, createSkillService(transactions), sessions, csrf)
     registerWorkspaceRoutes(app, createWorkspaceService(transactions), sessions, csrf)

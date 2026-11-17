@@ -636,7 +636,7 @@ export interface SheetsEditorHandle {
   isDirty(): boolean
 }
 export interface SheetsEditorHost {
-  assistant?: {transport: import('@genoffice/agent-core').AgentTransport; modelPicker: React.ReactNode}
+  assistant?: {sourceSkill?: import('@genoffice/agent-core').AgentSkill; transport: import('@genoffice/agent-core').AgentTransport; modelPicker: React.ReactNode}
   /** Opt in only when the host returns stable sheet/drawing IDs after saving. */
   inPlaceSave?: boolean
   readOnly: boolean
@@ -1770,6 +1770,7 @@ export function App({
       transport: host?.assistant?.transport ?? createElectronTransport(() => aiSettingsRef.current!),
       systemSuffix: aiLangDirective,
       skill: composeSkills('sheets+files', '', [
+        ...(host?.assistant?.sourceSkill ? [host.assistant.sourceSkill] : []),
         createWorkbookSkill(sheetsSkillDeps()),
         createFilesSkill(availableAttachments),
         createMergeSkill({
