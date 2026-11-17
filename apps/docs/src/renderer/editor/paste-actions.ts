@@ -4,6 +4,7 @@
  * pipeline with a synthesized clipboard event, so App's handlePaste lanes and
  * the paste-mode handshake behave exactly as on a native Ctrl+V.
  */
+import { pendingDocumentOperation } from './pending-document-operation'
 import type { Editor } from '@tiptap/core'
 import { insertImageFromDataUrl } from '../components/ribbon-tabs'
 import {
@@ -28,39 +29,45 @@ export async function pasteRemoteImages(
   text: string,
   onFailure: () => void,
 ): Promise<void> {
-  let expectedDoc = editor.state.doc
-  const unchanged = () => !editor.isDestroyed && editor.state.doc === expectedDoc
-  let inserted = false
-  let failed = false
-  for (const src of sources.slice(0, 10)) {
-    if (!unchanged()) return
-    try {
-      const fetched = await window.desktop.fetchImage(src)
-      if (!unchanged()) return
-      if (fetched) {
-        const success = await insertImageFromDataUrl(
-          editor,
-          `data:${fetched.mime};base64,${fetched.base64}`,
-          'Image (pasted)',
-        )
-        inserted ||= success
-        failed ||= !success
-        expectedDoc = editor.state.doc
-      } else {
+  const { current, dispose } = pendingDocumentOperation(editor)
+  try {
+    let inserted = false
+    let failed = false
+    for (const src of sources.slice(0, 10)) {
+      if (!current()) return
+      try {
+        const fetched = await window.desktop.fetchImage(src)
+        if (!current()) return
+        if (fetched) {
+          const success = await insertImageFromDataUrl(
+            editor,
+            `data:${fetched.mime};base64,${fetched.base64}`,
+            'Image (pasted)',
+            current,
+          )
+          // Cancellation is not an image failure: never adopt a replacement
+          // document or write the plain-text fallback into it.
+          if (!current()) return
+          inserted ||= success
+          failed ||= !success
+        } else {
+          failed = true
+        }
+      } catch {
         failed = true
       }
-    } catch {
-      failed = true
     }
-  }
-  if (!unchanged()) return
-  if (failed) {
-    if (!inserted && text.trim()) {
-      const view = editor.view
-      const slice = pasteTextSlice(text, view.state.selection.$from, view)
-      view.dispatch(view.state.tr.replaceSelection(slice).scrollIntoView())
+    if (!current()) return
+    if (failed) {
+      if (!inserted && text.trim()) {
+        const view = editor.view
+        const slice = pasteTextSlice(text, view.state.selection.$from, view)
+        view.dispatch(view.state.tr.replaceSelection(slice).scrollIntoView())
+      }
+      onFailure()
     }
-    onFailure()
+  } finally {
+    dispose()
   }
 }
 

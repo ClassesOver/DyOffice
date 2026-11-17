@@ -1,3 +1,4 @@
+import { pendingDocumentOperation } from '../editor/pending-document-operation'
 import { useRef, useState } from 'react'
 import type { Editor, JSONContent } from '@tiptap/core'
 import type { Node as PmNode } from '@tiptap/pm/model'
@@ -402,6 +403,7 @@ export async function insertImageFromDataUrl(
   editor: Editor,
   dataUrl: string,
   label = t('ribbonPicture'),
+  canInsert: () => boolean = () => !editor.isDestroyed,
 ): Promise<boolean> {
   const m = /^data:([^;]+);base64,(.*)$/s.exec(dataUrl)
   if (!m) return false
@@ -409,6 +411,7 @@ export async function insertImageFromDataUrl(
   if (!/^image\/(png|jpeg|gif)$/.test(mime)) return false
   try {
     const natural = await imageSizeOf(dataUrl)
+    if (editor.isDestroyed || !canInsert()) return false
     const scale = Math.min(1, MAX_IMAGE_WIDTH_PX / natural.width)
     insertPictureAtSelection(editor, {
       dataUrl,
@@ -443,17 +446,21 @@ export async function insertImageFromDataUrl(
 }
 
 export async function insertImageViaDialog(editor: Editor): Promise<void> {
+  const { current, dispose } = pendingDocumentOperation(editor)
   try {
     const picked = await window.desktop.pickImage()
-    if (!picked) return
+    if (!picked || !current()) return
     const inserted = await insertImageFromDataUrl(
       editor,
       `data:${picked.mime};base64,${picked.base64}`,
       t('ribbonPictureLabel', { name: picked.name }),
+      current,
     )
-    if (!inserted) showToast(t('ribbonImageLoadFail'), 'error')
+    if (current() && !inserted) showToast(t('ribbonImageLoadFail'), 'error')
   } catch {
-    showToast(t('ribbonImageLoadFail'), 'error')
+    if (current()) showToast(t('ribbonImageLoadFail'), 'error')
+  } finally {
+    dispose()
   }
 }
 

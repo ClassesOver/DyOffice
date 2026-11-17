@@ -44,16 +44,29 @@ describe('remote image paste', () => {
   it('preserves successful desktop image insertion without inserting its URL', async () => {
     fetchImage.mockResolvedValue({ mime: 'image/png', base64: 'aGVsbG8=' })
     await pasteRemoteImages(editor, [url], url, failed)
-    expect(insertImage).toHaveBeenCalledWith(editor, 'data:image/png;base64,aGVsbG8=', 'Image (pasted)')
+    expect(insertImage).toHaveBeenCalledWith(
+      editor,
+      'data:image/png;base64,aGVsbG8=',
+      'Image (pasted)',
+      expect.any(Function),
+    )
     expect(editor.getText()).toBe('')
     expect(failed).not.toHaveBeenCalled()
   })
 
   it('does not write a delayed fallback into a replaced document', async () => {
     let reject!: (error: Error) => void
-    fetchImage.mockImplementation(() => new Promise((_resolve, rejectPromise) => { reject = rejectPromise }))
+    fetchImage.mockImplementation(
+      () =>
+        new Promise((_resolve, rejectPromise) => {
+          reject = rejectPromise
+        }),
+    )
     const pending = pasteRemoteImages(editor, [url], url, failed)
-    editor.commands.setContent({ type: 'doc', content: [{ type: 'docParagraph', content: [{ type: 'text', text: 'Other document' }] }] })
+    editor.commands.setContent({
+      type: 'doc',
+      content: [{ type: 'docParagraph', content: [{ type: 'text', text: 'Other document' }] }],
+    })
     reject(new Error('unavailable'))
     await pending
     expect(editor.getText()).toBe('Other document')
