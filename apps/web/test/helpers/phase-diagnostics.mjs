@@ -1,5 +1,5 @@
 // Failure-only, synchronous snapshots. Never serialize browser objects or errors.
-const stages = new Set(['fixture','open','editor-ready','type-first','route-install','first-save-key','first-commit-wait','edit-newer','read-first','release','dirty-assert','second-save-wait','read-final','login-fill','login-click','login-response','complete'])
+const stages = new Set(['fixture','open','editor-ready','type-first','route-install','first-save-key','first-commit-wait','edit-newer','read-first','release','first-response-wait','first-response-finished','native-incomplete','native-dirty','dirty-assert','second-save-wait','read-final','login-fill','login-click','login-response','complete'])
 const counters = new Set(['attempt','request','response','failed','pageerror','route-entered','fetch-started','fetch-resolved','fulfilled','route-error'])
 export function phaseDiagnostics(signal, emit = line => console.error(line)) {
   let stage = 'fixture', printed = false

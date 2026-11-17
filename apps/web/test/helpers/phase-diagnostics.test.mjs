@@ -40,3 +40,13 @@ test('immediate observer does not swallow the original response rejection',async
  await assert.rejects(response,actual=>actual===error)
  assert.equal(lines.length,1)
 })
+
+test('each post-release wait has a distinct synchronous timeout marker',()=>{
+ for(const stage of ['first-response-wait','first-response-finished','native-incomplete','native-dirty']){
+  const controller=new AbortController(),lines=[]
+  const d=phaseDiagnostics(controller.signal,line=>lines.push(line))
+  d.stage('release');d.stage(stage);controller.abort()
+  assert.equal(lines.length,1)
+  assert.equal(JSON.parse(lines[0].slice('browser-phase '.length)).stage,stage)
+ }
+})
