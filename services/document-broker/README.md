@@ -232,3 +232,21 @@ matches the initial value. This is observation through the checked reply, not a
 promise that the owner cannot change after the function returns. The regression
 uses the same submit-and-finalize control flow with an actual P2P submission,
 then injects owner loss during the final query; it asserts quarantine and no retry.
+
+## Private sealed-input binding (not runtime admission)
+
+`BoundInput` joins the bounded control-frame parser with the real sealed-FD
+receiver. It requires Start and exact equality with a trusted expected frame,
+then checks actual immutable bytes against input size and SHA-256. The entire
+frame is retained privately; reads for any different frame fail. This binds
+content to the supplied request identity; it does not establish that the supplied
+expected frame is authorized, live, or from an authenticated dispatcher.
+
+The 64 KiB prototype cap remains. Reads use positional offsets, bounded forward
+progress and reject interrupted, short-to-EOF or failed reads without returning
+partial content. A consumed receiver closes on failure, including queued FDs.
+Seals are checked by the receiver before metadata/content reads. This adds no
+listener, D-Bus FD passing, launch permission or production dispatcher wiring.
+Deadline/lease validation, authorization, replay prevention and authenticated
+handoff remain separate prerequisites. Production still exits 78. Tests use real
+local memfd/seqpacket transport, not a Docker isolation acceptance environment.

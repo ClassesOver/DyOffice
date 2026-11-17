@@ -8,6 +8,7 @@ default-run = "dyoffice-document-broker"
 license = "Apache-2.0"
 
 [dependencies]
+sha2 = "=0.11.1"
 rustix = { version = "=1.1.6", features = ["fs", "net"] }
 serde = { version = "=1.0.229", features = ["derive"] }
 serde_json = "=1.0.154"

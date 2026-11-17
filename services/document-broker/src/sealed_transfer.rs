@@ -128,11 +128,29 @@ impl SealedReceiver {
         })
     }
 }
+// Bounded forward progress. Do not retry Interrupted or expose partial bytes.
+// Only used with the already-sealed, size-checked regular anonymous file.
+fn read_bounded(
+    len: usize,
+    mut read: impl FnMut(&mut [u8], u64) -> io::Result<usize>,
+) -> io::Result<Vec<u8>> {
+    if len == 0 || len > MAX_SEALED_BYTES {
+        return Err(invalid());
+    }
+    let mut bytes = vec![0; len];
+    let mut offset = 0;
+    while offset < len {
+        let n = read(&mut bytes[offset..], offset as u64)?;
+        if n == 0 || n > len - offset {
+            return Err(invalid());
+        }
+        offset += n;
+    }
+    Ok(bytes)
+}
 impl ReceivedSealedBytes {
     pub fn read_bytes(&self) -> io::Result<Vec<u8>> {
-        let mut bytes = vec![0; self.len];
-        self.file.read_exact_at(&mut bytes, 0)?;
-        Ok(bytes)
+        read_bounded(self.len, |buffer, offset| self.file.read_at(buffer, offset))
     }
 }
 impl AsFd for SealedSender {
@@ -148,5 +166,43 @@ impl AsFd for SealedReceiver {
 impl AsFd for ReceivedSealedBytes {
     fn as_fd(&self) -> BorrowedFd<'_> {
         self.file.as_fd()
+    }
+}
+
+#[cfg(test)]
+mod bounded_read_tests {
+    use super::*;
+    #[test]
+    fn incomplete_interrupted_and_failed_reads_never_return_content() {
+        for kind in [
+            io::ErrorKind::Interrupted,
+            io::ErrorKind::UnexpectedEof,
+            io::ErrorKind::Other,
+        ] {
+            let mut calls = 0;
+            let result = read_bounded(3, |buffer, offset| {
+                calls += 1;
+                if offset == 0 {
+                    buffer[0] = b'a';
+                    Ok(1)
+                } else {
+                    Err(io::Error::from(kind))
+                }
+            });
+            assert_eq!(result.unwrap_err().kind(), kind);
+            assert_eq!(calls, 2);
+        }
+        assert!(read_bounded(3, |_, _| Ok(0)).is_err());
+        assert!(read_bounded(3, |_, _| Ok(4)).is_err());
+        assert!(read_bounded(0, |_, _| panic!("no read")).is_err());
+        assert!(read_bounded(MAX_SEALED_BYTES + 1, |_, _| panic!("no read")).is_err());
+        assert_eq!(
+            read_bounded(3, |buffer, offset| {
+                buffer[0] = b"abc"[offset as usize];
+                Ok(1)
+            })
+            .unwrap(),
+            b"abc"
+        );
     }
 }
