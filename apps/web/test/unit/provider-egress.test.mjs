@@ -34,7 +34,17 @@ test('pins lookup and authenticated TLS peer before exact hashed body is sent',a
  const lookup=await new Promise((resolve,reject)=>n.options.lookup('provider.example',{},(e,a,f)=>e?reject(e):resolve([a,f])))
  assert.deepEqual(lookup,['8.8.8.8',4]);assert.equal(tr.activeCount(),0)
 })
-for(const address of ['127.0.0.1','169.254.169.254','100.100.100.200','192.0.2.1','198.18.0.1','203.0.113.1','224.1.1.1','::ffff:8.8.8.8','2001:4860:4860::8888'])test('rejects unsafe DNS address '+address,async t=>{
+test('pins public IPv4 addresses in 172/8 and asks the resolver only for IPv4',async t=>{
+ const address='172.67.156.25',p={...profile,allowedIpv4:[address]}
+ const n=network(t,{peer:address})
+ t.mock.method(dns,'lookup',async(_name,options)=>{
+  assert.equal(options.family,4)
+  return [{address,family:4}]
+ })
+ await createPinnedProviderTransport({profiles:[p]}).send({...scope(),...p},body,()=>{})
+ assert.deepEqual(n.written,body)
+})
+for(const address of ['127.0.0.1','169.254.169.254','100.100.100.200','172.16.0.1','172.31.255.254','192.0.2.1','198.18.0.1','203.0.113.1','224.1.1.1','::ffff:8.8.8.8','2001:4860:4860::8888'])test('rejects unsafe DNS address '+address,async t=>{
  const n=network(t,{addresses:[{address,family:address.includes(':')?6:4}]})
  await assert.rejects(createPinnedProviderTransport({profiles:[profile]}).send(scope(),body,()=>{}),{message:'Provider transport unavailable'});assert.equal(n.requests,0)
 })

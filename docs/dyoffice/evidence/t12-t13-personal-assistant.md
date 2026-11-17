@@ -9,8 +9,12 @@ T12 复用已合入的工作区、个人偏好与全局配置。T13 在本地账
 | T12 个人 Skills | 单个 `SKILL.md` 导入、查看和删除；相同名称按部署和账号分开。密码更新后，当前页面仍可查看自己的 Skills，旧会话证明失效；切换账号后原页面也无法读取新账号数据。配置管理员自己的会话读不到他人的 Skills。PostgreSQL 在有效会话之外或会话所有者不匹配时拒绝访问。复用现有账号恢复机制：拥有有效重置码并恢复登录后，仍是同一账号。 |
 | T13 网关 | POST SSE 复用原有传输和 AgentLoop；目录只列出启用、匹配固定配置、有密钥且当前用户有额度的模型。按用户、配置版本和会话检查与记账。浏览器端不接收密钥。额度缺失、禁用、撤销或越权时服务端拒绝。助手工具限于明确列出的读取操作，写入仍由 T14 审批处理。 |
 | T13 DOCX | 已在 Chromium + Fastify + PostgreSQL 和原生 DOCX 页面接通；使用模拟 DNS/TLS/HTTPS 上游验证流式回复、个人额度和选择的个人 Skill，并确认原 DOCX 字节不变。读取 Skill 时停止可阻止请求；第二条不附加 Skill 的请求不重发上一条的 Skill 正文。运行内固定模型；切换模型时下一次运行不共享旧模型的上下文。 |
-| T13 XLSX | 浏览器入口已构建，类型检查通过。原生浏览器测试在创建 XLSX 宿主时返回 `HOST_BACKEND_UNAVAILABLE`，未开始用户流程。需要支持原生沙箱的测试宿主复验。 |
-| T13 PPTX / PDF | 当前本地入口没有可用的助手宿主。 |
-| T13 真实模型 | **阻塞。** 未配置受授权的测试模型及凭据，也未向任何真实模型发送请求。需指定模型、凭据位置和允许发送的测试内容。 |
+| T13 XLSX | Chromium + Fastify + PostgreSQL：真实 Univer 界面读取由 Rust 针对仓库样例生成的固定回放数据。模拟上游验证个人 Skill 正文与只读工具清单；真实 `gpt-5.6-luna` 正确读出样例表格的 A2 值 `12.5`。两次均核对个人额度结算与原件字节。完整原生用例仍需有权限启动 systemd 沙箱的测试宿主；本机的授权脚本固定在旧工作树，启动时有 Node 模块解析错误。 |
+| T13 PPTX / PDF | PPTX 的隔离门禁和 PDF 浏览能力测试共 21 项通过。当前 Web 服务拒绝启动缺少 OS 隔离的 PPTX 宿主；PDF 有独立预览能力，但未接入本地账户助手。两种格式的助手验收均未开始。 |
+| T13 真实模型 | **DOCX 和 XLSX 回放用例通过。** 用户授权的 OpenAI-compatible 供应商，模型 `gpt-5.6-luna`。DOCX 通过真实 HTTPS 接收 SSE 文本和唯一终态，模型读出自建文档中的随机测试码；XLSX 见上。仅发送了自建样例。 |
 
 Skills 正文在用户主动附加时会发送给所选模型。浏览器不把原文存入本地聊天记录；模型答复有可能引用选中的内容。账号内的旧编辑器在会话被替换后需要重新打开才能发送。
+
+真实模型验收为显式启用：在临时配置文件中填写 `baseUrl`、`model`、`allowedIpv4` 和 `keyFile`（密钥文件路径），设置 `DYOFFICE_LIVE_ASSISTANT_TEST_CONFIG` 与隔离数据库的 `DYOFFICE_TEST_DATABASE_URL`。DOCX 用例为 `node --import tsx --test apps/web/test/native-docs/assistant-live.test.mjs`；XLSX 回放用例为 `node --import tsx --test --test-name-pattern='recorded synthetic' apps/web/test/native-sheets/save-download-roundtrip.test.mjs`。未设置真实配置时真实用例跳过，不会向外发送请求。使用新构建的对应编辑器入口。
+
+真实配置验证暴露出网关把整个 `172/8` 视为私网，以及双栈 DNS 查询包含 IPv6 的问题。修正后只查询 IPv4，继续拒绝 `172.16.0.0/12` 和不在白名单内的地址，连接仍校验 TLS 和固定对端。
