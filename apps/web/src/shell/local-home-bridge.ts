@@ -150,7 +150,7 @@ export function createLocalHomeBridge(deps: Dependencies): HomeApi {
       const target=reconciling?unknownStars.get(id)!:!file.starred
       if(reconciling&&file.starred===target){unknownStars.delete(id);changed();return}
       try{await deps.request(`/api/v1/workspace/files/${encodeURIComponent(id)}/star`,'PUT',{starred:target})}
-      catch(error){const status=(error as {status?:number})?.status;if(status===undefined||status===408||status>=500)unknownStars.set(id,target);else unknownStars.delete(id);throw error}
+      catch(error){const status=(error as {status?:number})?.status;if(reconciling||status===undefined||status===408||status>=500)unknownStars.set(id,target);else unknownStars.delete(id);throw error}
       unknownStars.delete(id);changed()
     }catch(error){
       if(unknownStars.has(id))throw new Error(`${error instanceof Error?error.message:'收藏操作失败。'} 收藏结果尚未确认，再次点击将核对收藏，请勿更改为相反操作。`)

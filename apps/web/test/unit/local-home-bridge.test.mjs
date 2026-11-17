@@ -104,6 +104,28 @@ test('uncommitted unknown star retries only its original absolute target and rej
  await bridge.toggleStar(item.id)
  assert.deepEqual(writes,[true,true]);assert.equal(starred,true)
 })
+for(const status of [400,403,404,409,429])for(const lateCommit of [false,true])test(`reconciliation rejection (${status}, late commit ${lateCommit}) preserves an earlier unknown star target`,async()=>{
+ let starred=false,changed=0;const writes=[]
+ const bridge=createLocalHomeBridge({...deps(async(_path,method,body)=>{
+  if(method==='PUT'){
+   writes.push(body.starred)
+   if(writes.length===1)throw Object.assign(Error('original response timeout'),{status:408})
+   if(writes.length===2){if(lateCommit)starred=true;throw Object.assign(Error('retry rejected'),{status})}
+   starred=body.starred;return
+  }
+  return {files:[{...item,starred}],total:1,totalAll:1}
+ }),changed:()=>changed++})
+ await assert.rejects(bridge.toggleStar(item.id),/再次点击将核对收藏/)
+ await assert.rejects(bridge.toggleStar(item.id),/retry rejected/)
+ assert.equal(changed,0)
+ await bridge.toggleStar(item.id)
+ assert.deepEqual(writes,lateCommit?[true,true]:[true,true,true])
+ assert.equal(starred,true);assert.equal(changed,1)
+ // Only an authoritative matching read or successful absolute write clears uncertainty.
+ await bridge.toggleStar(item.id)
+ assert.deepEqual(writes,lateCommit?[true,true,false]:[true,true,true,false])
+ assert.equal(starred,false);assert.equal(changed,2)
+})
 test('definite rejected star releases its target so a later click follows the latest server state',async()=>{
  let starred=false,fail=true;const writes=[]
  const bridge=createLocalHomeBridge(deps(async(_path,method,body)=>{

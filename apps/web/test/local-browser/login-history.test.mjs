@@ -5,6 +5,7 @@ import {randomUUID} from 'node:crypto'
 import {mkdir} from 'node:fs/promises'
 import {expect} from '@playwright/test'
 import {launchTestBrowser} from '../helpers/browser.mjs'
+import {phaseDiagnostics} from '../helpers/phase-diagnostics.mjs'
 import {accountAction} from '../helpers/workspace-ui.mjs'
 import {fileFixture} from '../helpers/files.mjs'
 import {password} from '../helpers/identity.mjs'
@@ -18,10 +19,26 @@ test('original account login history displays only its private bounded projectio
  assert.equal((await app.inject('/api/v1/auth/login-history')).statusCode,401)
  const browser=await launchTestBrowser();t.after(()=>browser.close());const context=await browser.newContext({viewport:{width:1440,height:1100}});const page=await context.newPage()
  await page.goto(origin)
- const sign=async(username,value)=>{await page.getByLabel('用户名',{exact:true}).fill(username);await page.getByLabel('密码',{exact:true}).fill(value);const response=page.waitForResponse(r=>r.url().endsWith('/auth/login')&&r.request().method()==='POST');await page.getByRole('button',{name:'登录',exact:true}).click();return response}
+ const diagnostic=phaseDiagnostics(t.signal);t.after(()=>diagnostic.dispose())
+ page.on('request',r=>{if(r.url()===origin+'/api/v1/auth/login'&&r.method()==='POST')diagnostic.count('request')})
+ page.on('response',r=>{if(r.url()===origin+'/api/v1/auth/login'&&r.request().method()==='POST'){diagnostic.count('response');diagnostic.status(r.status())}})
+ page.on('requestfailed',r=>{if(r.url()===origin+'/api/v1/auth/login'&&r.method()==='POST')diagnostic.count('failed')})
+ page.on('pageerror',()=>diagnostic.count('pageerror'))
+ const sign=async(username,value)=>{
+  diagnostic.count('attempt');diagnostic.stage('login-fill')
+  try {
+   await page.getByLabel('用户名',{exact:true}).fill(username);await page.getByLabel('密码',{exact:true}).fill(value)
+   const response=page.waitForResponse(r=>r.url().endsWith('/auth/login')&&r.request().method()==='POST')
+   // Attach a rejection observer immediately: preserve the same rejecting promise,
+   // but do not leave it unobserved while Playwright waits for click actionability.
+   void response.catch(()=>diagnostic.report())
+   diagnostic.stage('login-click');await page.getByRole('button',{name:'登录',exact:true}).click()
+   diagnostic.stage('login-response');return await response
+  } catch(error) {diagnostic.report();throw error}
+ }
  assert.equal((await sign('alice','wrong password phrase')).status(),401)
  assert.equal((await sign('bob','another wrong password phrase')).status(),401)
- assert.equal((await sign('alice',password)).status(),200);await expect(page.locator('.home')).toBeVisible()
+ assert.equal((await sign('alice',password)).status(),200);diagnostic.stage('complete');await expect(page.locator('.home')).toBeVisible()
  const token=(await context.cookies()).find(c=>c.name==='__Host-dyoffice-session').value
  const response=await app.inject({url:'/api/v1/auth/login-history',headers:{cookie:'__Host-dyoffice-session='+token}});assert.equal(response.statusCode,200)
  const events=response.json().events;assert.ok(events.length<=20);assert.ok(events.some(e=>e.outcome==='failure'));assert.ok(events.some(e=>e.occurredAt===aliceTime));assert.ok(events.every(e=>e.occurredAt!==bobTime));for(const event of events)assert.deepEqual(Object.keys(event).sort(),['occurredAt','outcome'])

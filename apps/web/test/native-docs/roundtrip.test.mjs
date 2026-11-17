@@ -10,6 +10,7 @@ import { chromium, expect } from '@playwright/test'
 import JSZip from 'jszip'
 import { fileFixture, docxBytes, importFile } from '../helpers/files.mjs'
 import { password } from '../helpers/identity.mjs'
+import { phaseDiagnostics } from '../helpers/phase-diagnostics.mjs'
 
 const docsDirectory = fileURLToPath(new URL('../../dist-docs/',import.meta.url))
 async function fixture(t) {
@@ -129,34 +130,57 @@ test('native DyOffice DOCX renders, edits, commits, refreshes and preserves unre
 })
 
 test('editing during a delayed native save keeps the newer draft dirty and saves a later child revision', { timeout: 120_000 },async t => {
+  const diagnostic = phaseDiagnostics(t.signal)
+  t.after(() => diagnostic.dispose())
+  try {
   const f = await fixture(t)
+  f.page.on('pageerror', () => diagnostic.count('pageerror'))
+  diagnostic.stage('open')
   await f.page.goto(f.origin + '/native-docx/?fileId=' + f.opened.file.fileId)
   const editor = f.page.locator('.tiptap.doc-page[contenteditable="true"]')
+  diagnostic.stage('editor-ready')
   await editor.waitFor({ timeout: 45_000 })
+  diagnostic.stage('type-first')
   await editor.click(); await f.page.keyboard.press('Control+End'); await f.page.keyboard.press('Enter'); await f.page.keyboard.type('Captured snapshot')
   let reached, release, first = true
   const started = new Promise(resolve => { reached = resolve }), wait = new Promise(resolve => { release = resolve })
   t.after(() => release())
+  diagnostic.stage('route-install')
   await f.page.route('**/commits',async route => {
     if (!first) return route.continue()
     first = false
-    const response = await route.fetch()
-    reached(); await wait; await route.fulfill({ response })
+    diagnostic.count('route-entered')
+    try {
+      diagnostic.count('fetch-started')
+      const response = await route.fetch()
+      diagnostic.count('fetch-resolved'); diagnostic.status(response.status())
+      reached(); await wait; await route.fulfill({ response })
+      diagnostic.count('fulfilled')
+    } catch (error) { diagnostic.count('route-error'); throw error }
   })
-  await f.page.keyboard.press('Control+s'); await started
+  diagnostic.stage('first-save-key')
+  await f.page.keyboard.press('Control+s'); diagnostic.stage('first-commit-wait'); await started
+  diagnostic.stage('edit-newer')
   await editor.click(); await f.page.keyboard.press('Control+End'); await f.page.keyboard.press('Enter'); await f.page.keyboard.type('Newer unsaved draft')
+  diagnostic.stage('read-first')
   const firstRef = await f.files.openFile(f.alice.token,f.opened.file.fileId)
   const firstZip = await JSZip.loadAsync(await f.files.readFile(f.alice.token,firstRef.file.fileId,firstRef.file.revision))
   assert.ok(!(await firstZip.file('word/document.xml').async('string')).includes('Newer unsaved draft'))
+  diagnostic.stage('release')
   release()
+  diagnostic.stage('dirty-assert')
   await expect(f.page.locator('.dyoffice-docs-persistence-state')).toHaveText('',{ timeout: 15_000 })
   await expect(editor).toContainText('Newer unsaved draft')
+  diagnostic.stage('second-save-wait')
   const next = f.page.waitForResponse(reply => reply.url().endsWith('/commits') && reply.status() === 200)
   await f.page.keyboard.press('Control+s'); await next
+  diagnostic.stage('read-final')
   const current = await f.files.openFile(f.alice.token,f.opened.file.fileId)
   assert.notEqual(current.file.revision,firstRef.file.revision)
   const currentZip = await JSZip.loadAsync(await f.files.readFile(f.alice.token,current.file.fileId,current.file.revision))
   assert.ok((await currentZip.file('word/document.xml').async('string')).includes('Newer unsaved draft'))
+  diagnostic.stage('complete')
+  } catch (error) { diagnostic.report(); throw error }
 })
 
 test('native editor preserves unsaved text and becomes read only after another tab takes over', { timeout: 120_000 },async t => {
