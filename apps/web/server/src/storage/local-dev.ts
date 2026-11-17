@@ -2,7 +2,7 @@ import { mkdir, lstat, realpath, open, link, unlink, access } from 'node:fs/prom
 import { constants } from 'node:fs'
 import { resolve, join } from 'node:path'
 import { randomUUID } from 'node:crypto'
-import { assertObjectKey, assertObjectReference, collectVerified, verifyStream, objectReference, storageError, type ObjectRef, type ObjectStore } from './object-store.ts'
+import { assertObjectKey, assertObjectReference, collectVerified, verifyStream, snapshotObject, storageError, type ObjectRef, type ObjectStore } from './object-store.ts'
 
 // Development only: one dedicated directory owned by the service account.
 // Never share this adapter across replicas or with another local writer.
@@ -30,8 +30,9 @@ export async function createLocalObjectStore({ directory }: { directory: string 
   return {
     async checkReady() { await assertDirectory(); await access(root, constants.R_OK | constants.W_OK | constants.X_OK) },
     async putImmutable(key, bytes, expected) {
-      const reference = expected ? (assertObjectReference({ key, ...expected }), Object.freeze({ key, size: expected.size, sha256: expected.sha256 })) : objectReference(key, bytes)
-      bytes = Buffer.from(bytes)
+      const snapshot = snapshotObject(key, bytes, expected)
+      const reference = snapshot.reference
+      bytes = snapshot.bytes
       await assertDirectory()
       const temporary = join(root, '.staging-' + randomUUID())
       let handle

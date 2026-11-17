@@ -59,6 +59,60 @@ test('saving commits one immutable revision, current pointer, receipt, quota and
   assert.equal(JSON.stringify(counts.events).includes('/objects/'),false)
 })
 
+for (const preflight of ['missing','unready','changed-reference']) test(`commit cannot publish an unverified object after ${preflight} upload preflight`, async t => {
+  const f = await revisionFixture(t), input = await stage(f,await edited(f.original,'verify this exact draft'))
+  const { createRevisionService } = await import('../../server/src/modules/revisions/service.ts')
+  let reads = 0, verified = 0
+  const transactions = { withPrincipalTransaction: (credential, operation) => f.transactions.withPrincipalTransaction(credential,(connection,principal) => operation(new Proxy(connection,{ get(target, property) {
+    if (property !== 'query') return Reflect.get(target,property)
+    return async (sql, params) => {
+      const result = await target.query(sql,params)
+      if (typeof sql === 'string' && /^SELECT .* FROM uploads WHERE/.test(sql) && !sql.includes('FOR UPDATE') && params?.[2] === input.uploadId) {
+        reads++
+        if (preflight === 'missing') return { ...result, rows: [], rowCount: 0 }
+        return { ...result, rows: result.rows.map(row => preflight === 'unready' ? { ...row, state: 'receiving' } : { ...row, revision_id: randomUUID() }) }
+      }
+      return result
+    }
+  } }),principal)) }
+  const revisions = createRevisionService({ transactions,files: f.files,objects: { ...f.objects, async verifyObject(ref) { verified++; return f.objects.verifyObject(ref) } } })
+  const result = await revisions.commitRevision(f.alice.token,input).then(value => ({ value }),error => ({ error }))
+  if (result.value) {
+    assert.ok(verified>0,'every new committed reference must have passed full object verification')
+    assert.equal((await f.files.openFile(f.alice.token,f.fileId)).file.revision,result.value.revision)
+  } else {
+    assert.equal((await f.files.openFile(f.alice.token,f.fileId)).file.revision,f.initial.revision)
+    assert.equal((await owned(f,c => c.query('SELECT * FROM revision_commits'))).rowCount,0)
+  }
+  assert.equal(reads,1,'exercise the optimistic upload read before account/upload locks')
+})
+
+test('verified preflight is bound to the exact reference locked for publication', async t => {
+  const f = await revisionFixture(t), input = await stage(f,await edited(f.original,'locked reference'))
+  const { createRevisionService } = await import('../../server/src/modules/revisions/service.ts')
+  const alternate = await owned(f,async connection => (await connection.query('SELECT revision_id,expected_size,sha256 FROM uploads WHERE id=$1',[input.uploadId])).rows[0])
+  const other = { ...alternate,revision_id: randomUUID() }
+  const ref = { key: `${f.deploymentId}/${f.alice.user.id}/objects/${other.revision_id}`,size: other.expected_size,sha256: other.sha256 }
+  await f.objects.putImmutable(ref.key,await f.objects.readVerified({ ...ref,key: `${f.deploymentId}/${f.alice.user.id}/objects/${alternate.revision_id}` }))
+  let verified = []
+  const revisions = createRevisionService({ transactions: f.transactions,files: f.files,objects: { ...f.objects,async verifyObject(reference) {
+    await f.objects.verifyObject(reference); verified.push(reference.key)
+    // A privileged fault injection changes the row after verification. The
+    // production transaction must compare its locked upload with that proof.
+    await f.ownerDb.transaction(async connection => {
+      await connection.query("SELECT set_config('dyoffice.deployment_id',$1,true),set_config('dyoffice.user_id',$2,true)",[f.deploymentId,f.alice.user.id])
+      assert.equal((await connection.query('UPDATE uploads SET revision_id=$1 WHERE id=$2 RETURNING revision_id',[other.revision_id,input.uploadId])).rows[0]?.revision_id,other.revision_id,'fault injection must actually replace the stored reference under RLS')
+    })
+  } } })
+  const result = await revisions.commitRevision(f.alice.token,input).then(value => ({ value }),error => ({ error }))
+  if (result.value) assert.ok(verified.includes(ref.key),'the published object, not just a previous upload reference, must have been verified')
+  else {
+    assert.equal(result.error.statusCode,409)
+    assert.equal((await owned(f,c => c.query('SELECT * FROM revision_commits'))).rowCount,0)
+    assert.equal((await f.files.openFile(f.alice.token,f.fileId)).file.revision,f.initial.revision)
+  }
+})
+
 test('two staged drafts on one base have one CAS winner and retain the losing draft', async t => {
   const f = await revisionFixture(t)
   const a = await stage(f,await edited(f.original,'draft one')), b = await stage(f,await edited(f.original,'draft two'))
@@ -79,6 +133,38 @@ test('lost-response retries return the original receipt after lease takeover and
   await assert.rejects(() => f.revisions.commitRevision(f.alice.token,{ ...input, uploadId: randomUUID() }), { statusCode: 409 })
   const events = await owned(f,connection => connection.query('SELECT * FROM revision_outbox'))
   assert.equal(events.rowCount,1)
+})
+
+test('real PG overlapping same-key commits verify before account/file locks and return one receipt', { timeout: 20_000 }, async t => {
+  const f = await revisionFixture(t), input = await stage(f,await edited(f.original,'overlapping same key'))
+  const { createRevisionService } = await import('../../server/src/modules/revisions/service.ts')
+  const ready = deferred(), firstGate = deferred(), secondGate = deferred()
+  let verified = 0
+  const revisions = createRevisionService({ transactions: f.transactions,files: f.files,objects: { ...f.objects,async verifyObject(reference) {
+    await f.objects.verifyObject(reference)
+    const index = ++verified
+    if (index === 2) ready.resolve()
+    await (index === 1 ? firstGate.promise : secondGate.promise)
+  } } })
+  const first = revisions.commitRevision(f.alice.token,input).then(value => ({ value }),error => ({ error }))
+  const second = revisions.commitRevision(f.alice.token,input).then(value => ({ value }),error => ({ error }))
+  try {
+    await Promise.race([ready.promise,first.then(() => { throw new Error('First save ended before overlap') }),second.then(() => { throw new Error('Second save ended before overlap') })])
+    // Check actual PostgreSQL locks, not SQL text or a mocked lockAccount.
+    await f.ownerDb.transaction(async connection => {
+      await connection.query("SELECT set_config('dyoffice.deployment_id',$1,true),set_config('dyoffice.user_id',$2,true)",[f.deploymentId,f.alice.user.id])
+      assert.equal((await connection.query('SELECT 1 FROM storage_accounts WHERE deployment_id=$1 AND owner_id=$2 FOR UPDATE NOWAIT',[f.deploymentId,f.alice.user.id])).rowCount,1)
+      assert.equal((await connection.query('SELECT 1 FROM files WHERE id=$1 FOR UPDATE NOWAIT',[f.fileId])).rowCount,1)
+    })
+    await assert.rejects(() => f.ownerPool.query('SELECT 1 FROM sessions WHERE id=$1 FOR UPDATE NOWAIT',[f.alice.sessionId]),{ code: '55P03' })
+    firstGate.resolve();const one = await first
+    assert.ok(one.value,one.error?.message)
+    secondGate.resolve();assert.deepEqual((await second).value,one.value)
+    assert.equal(verified,2)
+    const state = await owned(f,async c => ({ receipts: (await c.query('SELECT * FROM revision_commits')).rowCount,events: (await c.query('SELECT * FROM revision_outbox')).rowCount }))
+    assert.deepEqual(state,{ receipts: 1,events: 1 })
+    assert.equal((await f.files.usage(f.alice.token)).reservedBytes,0)
+  } finally { firstGate.resolve();secondGate.resolve();await Promise.all([first,second]) }
 })
 
 test('an outbox write failure rolls back pointer, revision, upload consumption, quota and receipt while preserving the object', async t => {

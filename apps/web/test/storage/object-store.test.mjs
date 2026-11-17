@@ -61,6 +61,28 @@ for (const kind of ['local','s3']) {
     await assert.rejects(() => store.verifyObject(ref), { statusCode: 503 })
     await assert.rejects(() => store.verifyObject({ ...ref, key: key() }), { statusCode: 503 })
   })
+  test(`${kind} expected metadata never bypasses byte integrity or size limits`, async t => {
+    const { store } = await fixture(t, kind)
+    const { MAX_OBJECT_BYTES } = await import('../../server/src/storage/object-store.ts')
+    const cases = [
+      { bytes: hello, expected: { size: hello.length, sha256: '0'.repeat(64) } },
+      { bytes: hello, expected: { size: hello.length - 1, sha256: hash } },
+      { bytes: hello, expected: { size: hello.length + 1, sha256: hash } },
+      { bytes: Buffer.alloc(0), expected: { size: hello.length, sha256: hash } },
+      { bytes: Buffer.alloc(MAX_OBJECT_BYTES + 1), expected: { size: hello.length, sha256: hash } },
+      { bytes: new Uint8Array(hello), expected: { size: hello.length, sha256: hash } },
+    ]
+    for (const { bytes, expected } of cases) {
+      const objectKey = key()
+      await assert.rejects(() => store.putImmutable(objectKey, bytes, expected), { statusCode: 400 })
+      // Invalid input must fail before publication, not poison this immutable key.
+      const ref = await store.putImmutable(objectKey, hello, { size: hello.length, sha256: hash })
+      assert.deepEqual(await store.readVerified(ref), hello)
+    }
+    const input = Buffer.from(hello), pending = store.putImmutable(key(), input, { size: input.length, sha256: hash })
+    input.fill(0)
+    assert.deepEqual(await store.readVerified(await pending), hello)
+  })
   test(`${kind} object names and sizes cannot escape the trusted namespace or allocation bound`, async t => {
     const { store } = await fixture(t, kind)
     for (const unsafe of ['../outside','/etc/passwd',key() + '/../outside','objects/' + randomUUID(),key().replace('/objects/', '/%2e%2e/')]) {

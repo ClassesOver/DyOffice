@@ -1,6 +1,6 @@
 import { spawn,execFile } from 'node:child_process'
 import { promisify } from 'node:util'
-import { mkdir,readFile,writeFile,copyFile,chmod,link,open,realpath,rm,lstat } from 'node:fs/promises'
+import { mkdir,readFile,writeFile,copyFile,chmod,open,rm } from 'node:fs/promises'
 import type { FileHandle } from 'node:fs/promises'
 import { constants } from 'node:fs'
 import { createHash,randomUUID } from 'node:crypto'
@@ -11,20 +11,14 @@ const UUID=/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/
 const commands=new Set(['open','close','save_archive','read_range','read_formula_cells','read_row_outline','read_media','recalc_cells','probe','network','pids','sleep','busy','allocate','flood','output','symlink','park','gateway_package','gateway_plan'])
 const environment={ PATH: '/usr/bin:/bin',LANG: 'C.UTF-8',SYSTEMD_COLORS: '0',SYSTEMD_PAGER: 'cat' }
 let active=0,memory=0
-// Cold-start cost caches keyed by binary path+sha: the binary is read and
-// sha256-verified once per on-disk (size,mtimeMs) state, ldd output is reused
-// while the binary is unchanged, and prepared files publish via hardlink
-// (read-only inside the unit; an in-place host mutation changes mtimeMs and
-// forces re-verification for every later unit).
-const verifiedBinaries=new Map<string,{size:number,mtimeMs:number}>()
-const lddCache=new Map<string,{mtimeMs:number,libraries:string[]}>()
+// Only dependency discovery is cached, after this run's binary snapshot has
+// passed SHA-256 verification. Never cache a byte-integrity decision by metadata.
+const lddCache=new Map<string,readonly string[]>()
 async function placeRegularFile(source: string,dest: string,mode: number) {
-  // link() does not dereference symlinks and system libraries are usually
-  // symlinks (libc.so.6, the ELF interpreter); resolve first or the unit's
-  // interpreter chain breaks with exec status 203.
-  const target=await realpath(source)
-  try { await link(target,dest); return } catch(error) { if((error as NodeJS.ErrnoException).code!=='EXDEV') throw error }
-  await copyFile(target,dest); await chmod(dest,mode)
+  // Reflink when supported, ordinary copy otherwise. Both create an independent
+  // inode; read-only mounts do not protect hardlinks from host-side mutations.
+  await copyFile(source,dest,constants.COPYFILE_EXCL|constants.COPYFILE_FICLONE)
+  await chmod(dest,mode)
 }
 
 async function bounded(file: FileHandle,size: number) {
@@ -66,22 +60,19 @@ export function createHostProcess({ binary,sha256,deploymentId,allowedCommands,l
       signal?.addEventListener('abort',abort,{ once:true })
       const timer=setTimeout(()=>fail(new SandboxError('SANDBOX_TIMEOUT')),p.wallMs)
       const initializing=(async()=>{
-        const nativeStat=await lstat(binary)
         // A trusted Node interpreter is larger than the Rust engine. This does
         // not enlarge the 32 MiB untrusted workbook/part/output limits.
         const binaryLimit=script?160*1024*1024:64*1024*1024
-        if(!nativeStat.isFile()||nativeStat.size<1||nativeStat.size>binaryLimit) throw new SandboxError('UNTRUSTED_BINARY')
-        const cacheKey=binary+'\0'+sha256, cached=verifiedBinaries.get(cacheKey)
-        if(!cached || cached.size!==nativeStat.size || cached.mtimeMs!==nativeStat.mtimeMs) {
-          const native=await open(binary,constants.O_RDONLY|constants.O_NOFOLLOW|constants.O_NONBLOCK)
-          let source: Buffer
-          try { const stat=await native.stat(); if(!stat.isFile()||stat.size<1||stat.size>binaryLimit)throw new SandboxError('UNTRUSTED_BINARY'); source=await bounded(native,stat.size) } finally { await native.close() }
-          if ( source.length>binaryLimit || createHash('sha256').update(source).digest('hex')!==sha256) throw new SandboxError('UNTRUSTED_BINARY')
-          verifiedBinaries.set(cacheKey,{size:nativeStat.size,mtimeMs:nativeStat.mtimeMs})
-        }
+        const native=await open(binary,constants.O_RDONLY|constants.O_NOFOLLOW|constants.O_NONBLOCK)
+        let source: Buffer
+        try { const stat=await native.stat(); if(!stat.isFile()||stat.size<1||stat.size>binaryLimit)throw new SandboxError('UNTRUSTED_BINARY'); source=await bounded(native,stat.size) } finally { await native.close() }
+        if(createHash('sha256').update(source).digest('hex')!==sha256) throw new SandboxError('UNTRUSTED_BINARY')
+        const cacheKey=binary+'\0'+sha256
         await mkdir(base,{ mode: 0o700 }); check()
         for(const directory of ['bin','work','tmp','var/tmp','proc','sys','dev']) await mkdir(join(root,directory),{ recursive:true,mode: 0o755 })
-        await placeRegularFile(binary,join(root,'bin/native'),0o555)
+        // Publish exactly the verified FD snapshot, never reopen `binary` after
+        // verification. Each unit owns its executable inode and bytes.
+        await writeFile(join(root,'bin/native'),source,{mode:0o555,flag:'wx'})
         if(script){
           const file=await open(script.path,constants.O_RDONLY|constants.O_NOFOLLOW|constants.O_NONBLOCK)
           let bundle:Buffer
@@ -89,14 +80,16 @@ export function createHostProcess({ binary,sha256,deploymentId,allowedCommands,l
           if(createHash('sha256').update(bundle).digest('hex')!==script.sha256)throw new SandboxError('UNTRUSTED_BINARY')
           await writeFile(join(root,'bin/gateway.mjs'),bundle,{mode:0o444})
         }
-        let libraries=lddCache.get(cacheKey)?.mtimeMs===nativeStat.mtimeMs ? lddCache.get(cacheKey)!.libraries : undefined
+        let libraries=lddCache.get(cacheKey)
         if(!libraries) {
           const deps=(await exec('/usr/bin/ldd',[join(root,'bin/native')],{ env:environment,timeout:5000,maxBuffer:65536 })).stdout
           if(deps.includes('not found')) throw new SandboxError('MISSING_NATIVE_DEPENDENCY')
           libraries=[...new Set(deps.match(/\/[^\s()]+/g) ?? [])]
-          lddCache.set(cacheKey,{mtimeMs:nativeStat.mtimeMs,libraries})
+          if(lddCache.size>=16)lddCache.clear()
+          lddCache.set(cacheKey,libraries)
         }
-        for(const path of libraries) { if(!isAbsolute(path)) throw new SandboxError('MISSING_NATIVE_DEPENDENCY'); const dest=join(root,path); await mkdir(join(dest,'..'),{recursive:true}); await placeRegularFile(path,dest,0o555) }        check()
+        for(const path of libraries) { if(!isAbsolute(path)) throw new SandboxError('MISSING_NATIVE_DEPENDENCY'); const dest=join(root,path); await mkdir(join(dest,'..'),{recursive:true}); await placeRegularFile(path,dest,0o555) }
+        check()
         const properties=['DynamicUser=yes','User=dyjob'+id.replaceAll('-','').slice(0,24),'RootDirectory='+root,'WorkingDirectory=/work','MountAPIVFS=yes','ProtectSystem=strict','ProtectHome=yes','TemporaryFileSystem=/work:rw,nosuid,nodev,noexec,size=128M,mode=0711 /tmp:rw,nosuid,nodev,noexec,size=16M,mode=1777','ReadWritePaths=/work /tmp','PrivateNetwork=yes','PrivateDevices=yes','ProtectProc=invisible','ProcSubset=pid','ProtectControlGroups=yes','ProtectKernelTunables=yes','NoNewPrivileges=yes','CapabilityBoundingSet=','RestrictAddressFamilies=AF_UNIX','SystemCallFilter=@system-service','UMask=0077','KillMode=control-group','TimeoutStopSec=2','MemoryMax='+p.memoryMiB+'M','MemorySwapMax=0','OOMPolicy=kill','TasksMax='+p.pids,'CPUQuota='+Math.round(p.cpus*100)+'%','LimitCPU='+p.cpuSeconds+':'+(p.cpuSeconds+1),'LimitCORE=0','LimitFSIZE='+MAX,'LimitNOFILE=64','RuntimeMaxSec='+p.wallMs+'ms','Environment=LANG=C.UTF-8 TMPDIR=/work PATH=/bin']
         terminationConfirmed=false
         child=spawn('/usr/bin/systemd-run',['--quiet','--pipe','--wait','--service-type=exec','--unit='+stem,...properties.flatMap(value=>['--property='+value]),'/bin/native',...(script?['/bin/gateway.mjs']:[])],{env:environment,stdio:['pipe','pipe','pipe']})

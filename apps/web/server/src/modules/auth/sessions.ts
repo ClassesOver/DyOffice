@@ -70,10 +70,9 @@ export function createSessionService({ db, accounts, deploymentId, idleMs = 8 * 
       const principal: SessionPrincipal = { deploymentId, userId: user.id, sessionId: session.id, authVersion: user.auth_version, scopes: [], roles: await roles(connection, user.id), username: user.username_normalized, displayName: user.display_name }
       if (options.requireAdmin && !principal.roles.includes('config_admin')) throw authError(403)
       if (options.requireRecent && now.getTime() - (session.reauthenticated_at ?? session.created_at).getTime() > 15 * 60_000) throw authError(403)
-      // Throttle the per-request last_seen write: refreshing at most every
-      // 30s keeps idle accounting (deadline uses `now`, above) while cutting a
-      // row rewrite + WAL record from every authenticated request.
-      await connection.query("UPDATE sessions SET last_seen_at=$1 WHERE id=$2 AND last_seen_at + interval '30 seconds' < $1", [now, session.id])
+      // Every successful request extends the persisted idle deadline. A write
+      // throttle would make a later request expire before its true idle limit.
+      await connection.query('UPDATE sessions SET last_seen_at=$1 WHERE id=$2', [now, session.id])
       // Capture immutable deadlines before callbacks rotate/revoke credentials
       // (password changes and self-revocation intentionally invalidate the token).
       // Row locks serialize revocation, but do not stop wall-clock expiry.
