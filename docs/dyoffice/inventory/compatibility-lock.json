@@ -10,8 +10,8 @@
       "size": 2489
     },
     "apps/docs/package.json": {
-      "sha256": "1a8d51b03d83c26348204736273f8fef4eaaef5c907c76ddf57713eb3c7b51d2",
-      "size": 2662
+      "sha256": "94e4e777909e16c66af341c5c9eeffb2ff0897a49d5c5fa4d4c78b6a3af1acc0",
+      "size": 1389
     },
     "apps/docs/src/renderer/fonts/AptosGO-Bold.ttf": {
       "sha256": "5b4a666c9df686840ced68062df3c8cf8b8e490a778732e89b4dc9e3fbcbea9d",
@@ -270,8 +270,8 @@
       "size": 19881
     },
     "apps/pdf/package.json": {
-      "sha256": "643543bc55b872f58ce71f870240e6acbe9cc9a6dcb35c526692b25f4d376ec8",
-      "size": 1293
+      "sha256": "dc5718ea07e1f4e385372c8d996c0ee0a165e705cdbd42e6206e5f67641e19e0",
+      "size": 1102
     },
     "apps/sheets/native/win-clipboard-helper/.cargo/config.toml": {
       "sha256": "4feafc9c9445638ae783f4e3d24320b0949f159e926bea8ce63a23439d800ef7",
@@ -298,28 +298,28 @@
       "size": 664
     },
     "apps/sheets/package.json": {
-      "sha256": "d6d6b83f70b555bc399c7c7ebf2f5d1d951ece49b30472efca07789fbb483ba0",
-      "size": 3141
+      "sha256": "f3d3ad96788345d8747538ca766ed16f520cc64358451b01f68d45f7f1744e85",
+      "size": 2923
     },
     "apps/slides/package.json": {
-      "sha256": "efbf943f786be3251bf9fa91ea1a3ad2ff89d2d232556486b3b41af87ca280d2",
-      "size": 2630
+      "sha256": "23ecc2178126917b4f4a9d746ad5688be1cd4f1575869821a0c691aa55a35d71",
+      "size": 1446
     },
     "apps/web/package-lock.json": {
-      "sha256": "cffec858042589c3659af705e8c78fe6bc617d82d8f30c681e0790b162245d90",
-      "size": 220435
+      "sha256": "26721bb4568fc2398262e7473f883a7e253c8a8b2a66bb9ee142c6cea4b7301c",
+      "size": 235180
     },
     "apps/web/package.json": {
-      "sha256": "e847f34dbe7022100fa4f2f22156862ff07a825cfa5cd3443d0e8fe260749bb6",
-      "size": 2526
+      "sha256": "8a95b1c5f48c2be7e14bf33dedb33b67d336d366675eacbd48a58d0148eb631f",
+      "size": 3129
     },
     "package-lock.json": {
-      "sha256": "577f8a9d9953165a78531f8c1062aa43054ee22b2d411648366d8ece43724499",
-      "size": 654324
+      "sha256": "9252a41031282abe55375e9a188ae406a861c1b5dddeb38efa8da0fe9f53aaad",
+      "size": 532611
     },
     "package.json": {
-      "sha256": "967cd35aa9db5cc84200aebc7b14327255727b07be274debd9366bd55b639fc2",
-      "size": 8023
+      "sha256": "e65d4910b7f86a75c2f3bdeb5ed669ed8ba1bef393920a0f91a914f854bae515",
+      "size": 7730
     },
     "packages/ui/src/fonts/Carlito-Bold.ttf": {
       "sha256": "ed778b78ce652f5b17647344fb9a4c4dcb2e6f8bafe75a0366300da7f8c199ac",
@@ -351,10 +351,6 @@
       "@univerjs/core": {
         "version": "0.25.1",
         "integrity": "sha512-0FQjuL1HdPtl8NsU5muT8HNtuA4yMEvbBLgewyqUVQmT5oks89a3jdqxi5/dvHYDRvW7wssVjZitfbL79el3Jg=="
-      },
-      "electron": {
-        "version": "43.8.3",
-        "integrity": "sha512-KgvSm3bHXz96hSXzqxyRjLeli80rIdszbDQFKlRSfckmGazTPCH/CxUN31Dp9c5rFKTQSNf9gPJRWl1yWNB3pA=="
       },
       "fastify": {
         "version": "5.12.8",

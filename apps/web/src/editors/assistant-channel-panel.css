@@ -1,0 +1,15 @@
+.assistant-channel-panel { display: flex; flex-direction: column; gap: 10px; padding: 10px; color: var(--text); background: var(--surface); border: 1px solid var(--border); border-radius: 8px; font-size: 12px; max-height: 420px; overflow-y: auto; }
+.assistant-channel-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.assistant-channel-toolbar strong { flex: 1; }
+.assistant-channel-item { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-block: 6px; overflow-wrap: anywhere; }
+.assistant-channel-item > span:not(.assistant-avatar) { flex: 1; min-width: 80px; }
+.assistant-channel-panel small { color: var(--text-muted); overflow-wrap: anywhere; }
+.assistant-channel-panel button, .assistant-channel-add { color: var(--text); background: var(--surface); border: 1px solid var(--border); border-radius: 4px; padding: 4px 7px; cursor: pointer; }
+.assistant-channel-panel button:hover, .assistant-channel-add:hover { background: var(--hover); }
+.assistant-channel-panel button:disabled, .assistant-channel-add:disabled { opacity: .5; cursor: default; }
+.assistant-channel-panel form, .assistant-channel-panel label, .assistant-channel-invitation { display: flex; flex-direction: column; gap: 6px; }
+.assistant-channel-panel textarea, .assistant-channel-panel select { color: var(--text); background: var(--surface); border: 1px solid var(--border); border-radius: 4px; padding: 6px; }
+.assistant-channel-panel textarea { min-height: 60px; resize: vertical; }
+.assistant-channel-invitation code { overflow-wrap: anywhere; user-select: all; }
+
+.assistant-channel-result { flex-basis: 100%; min-width: 0; margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }

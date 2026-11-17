@@ -24,10 +24,16 @@ test('local server entry uses separate restricted credentials and serves scoped 
   child.kill('SIGTERM'); assert.deepEqual(await exited, [0, null])
 })
 
-test('local entry refuses a migration URL instead of falling back to the owner connection', async t => {
+test('local entry refuses a migration URL instead of falling back to the owner connection', { timeout: 20_000 }, async t => {
   const f = await restrictedFixture(t)
-  await assert.rejects(promisify(execFile)(process.execPath, ['--import','tsx', 'server/index.mjs'], { cwd, env: { ...environment(f), DYOFFICE_DATABASE_URL: f.urls.owner }, timeout: 2500 }), error => {
+  await assert.rejects(promisify(execFile)(process.execPath, ['--import','tsx', 'server/index.mjs'], { cwd, env: { ...environment(f), DYOFFICE_DATABASE_URL: f.urls.owner }, timeout: 15_000 }), error => {
+    // Match the positive startup budget: TS/module loading competes with the
+    // full integration suite. A watchdog kill is never proof of safe rejection.
+    assert.equal(error.killed, false)
+    assert.equal(error.signal, null)
     assert.equal(error.code, 1)
+    assert.equal(error.stdout, '')
+    assert.match(error.stderr, /dyoffice: startup failed/)
     assert.equal(error.stderr.includes(f.urls.owner), false)
     return true
   })

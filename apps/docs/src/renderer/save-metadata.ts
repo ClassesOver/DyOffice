@@ -1,4 +1,5 @@
 import type { FileActionContext } from "./file-actions";
+import { hfSaveOptions } from "./hf-sections";
 
 /** All non-PM inputs to native serialization, including their write-intent flags.
  * React replaces these state values rather than mutating them in place. Capture
@@ -66,11 +67,24 @@ export const saveMetadataKeys = [
 ] as const satisfies readonly (keyof FileActionContext)[];
 
 export function captureSaveMetadata(ctx: FileActionContext) {
-  const values = saveMetadataKeys.map((key) => ctx[key]);
+  // pageCount is an asynchronous layout result, not an editing intent. The
+  // serializer consumes it only while regenerating header/footer field caches.
+  // Use the same section plan as buildDocBytes; an unlink alone does not write
+  // NUMPAGES. All header/footer intents remain fenced by their own state keys.
+  const hf = hfSaveOptions({ sections: ctx.sections, edits: ctx.sectionHfEdits, links: ctx.hfLinks });
+  const writesHeaderFooter = hf.sectionHf?.length ||
+    [hf.header, hf.footer, hf.headerFirst, hf.footerFirst, hf.headerEven, hf.footerEven]
+      .some((part) => part !== undefined);
+  const keys = saveMetadataKeys.filter((key) => key !== "pageCount" || writesHeaderFooter);
+  const values = keys.map((key) => ctx[key]);
   const color = ctx.getPageColorSaveState?.();
   const margins = ctx.getMirrorMarginsSaveState?.();
   const evenOddHf = ctx.getEvenOddHfSaveState?.();
   return {
+    // Field names only; never return document/user values in diagnostics.
+    changedFields(current: FileActionContext) {
+      return keys.filter((key, index) => !Object.is(values[index], current[key]));
+    },
     changed(current: FileActionContext): boolean {
       const latestColor = current.getPageColorSaveState?.();
       if (color && (!color.ready || !latestColor?.ready || color.token !== latestColor.token)) return true;
@@ -78,7 +92,7 @@ export function captureSaveMetadata(ctx: FileActionContext) {
       if (margins && (!margins.ready || !latestMargins?.ready || margins.token !== latestMargins.token)) return true;
       const latestEvenOddHf = current.getEvenOddHfSaveState?.();
       if (evenOddHf && (!evenOddHf.ready || !latestEvenOddHf?.ready || evenOddHf.token !== latestEvenOddHf.token)) return true;
-      return saveMetadataKeys.some(
+      return keys.some(
         (key, index) => !Object.is(values[index], current[key]),
       );
     },

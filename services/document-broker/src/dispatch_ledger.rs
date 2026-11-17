@@ -368,13 +368,25 @@ mod integration {
                         let mut result = attempt.consume(session, deadline, rx.clone()).await;
                         if v["mode"] == "same-attempt" {
                             assert!(result.is_ok());
-                            let second = Session::fixture(
-                                saved_config,
-                                v["schema"].as_str().unwrap().into(),
-                                deadline,
-                            )
-                            .await
+                            let mut second = if let Some(ca) = v["ca"].as_str() {
+                                Session::tls(
+                                    Deployment {
+                                        config: saved_config,
+                                        ca_pem: std::fs::read(ca).unwrap(),
+                                    },
+                                    deadline,
+                                )
+                                .await
+                            } else {
+                                Session::fixture(
+                                    saved_config,
+                                    v["schema"].as_str().unwrap().into(),
+                                    deadline,
+                                )
+                                .await
+                            }
                             .unwrap();
+                            second.schema = v["schema"].as_str().unwrap().into();
                             result = attempt.consume(second, deadline, rx).await;
                         }
                         drop(tx);

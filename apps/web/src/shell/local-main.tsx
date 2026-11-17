@@ -128,7 +128,7 @@ function Shell(){
  const [message,setMessage]=useState(''),[trash,setTrash]=useState(false)
  notice=setMessage;showTrash=()=>setTrash(true)
  return <>
-  <AppFrame initialOnboardingSeen={true} homeProps={{supportedFormats:['docx','xlsx','pptx','pdf'],supportedNewFormats:capabilities.docx==='editable'?['docx']:[],accountEntry:<Account/>,askEnabled:false,folderDeleteDescription:name=>`仅可删除空文件夹「${name}」。请先移出文件和子文件夹；回收站中仍属于此目录的文件需先恢复并移出。`}} editorContent={null}/>
+  <AppFrame initialOnboardingSeen={true} homeProps={{supportedFormats:['docx','xlsx','pptx','pdf'],supportedNewFormats:capabilities.docx==='editable'?['docx']:[],accountEntry:<Account/>,folderDeleteDescription:name=>`仅可删除空文件夹「${name}」。请先移出文件和子文件夹；回收站中仍属于此目录的文件需先恢复并移出。`}} editorContent={null}/>
   {trash&&<WorkspaceTrash request={client.request} onChanged={notifyFilesChanged} onClose={()=>setTrash(false)}/>}
   {message&&<div className="web-notice" role="alert">{message}<button onClick={()=>setMessage('')}>关闭</button></div>}
  </>

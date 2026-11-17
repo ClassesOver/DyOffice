@@ -1,3 +1,7 @@
+import {createAnalysisSaveConsent} from '../../../../packages/browser-host/src/analysis-save-consent'
+import {captureSheetAnalysis} from './analysis-insert'
+import {journalFingerprint} from './edit-journal'
+import { delegatedAgentResult, compactDelegatedTranscript } from '@genoffice/ui'
 import { ICommandService } from '@univerjs/core'
 import { vetoUniverCommand } from './very-hidden-sheets'
 import { admitMutation, blocksSaveWrite, installMutationInputAdmission, mutationAdmission, MUTATION_SAVE_MESSAGE, type MutationLease, type MutationPhase } from './mutation-admission'
@@ -625,6 +629,7 @@ function dateTextKind(value: string): 'date-like' | 'text' {
 }
 
 export interface SheetsEditorHandle {
+  analysis?: import('../../../../packages/web-contracts/src/analysis-document').NativeAnalysisEditor
   save(): Promise<boolean>
   /** Commit the editor and await formula/chart work without writing the file. */
   flush(): Promise<boolean>
@@ -636,7 +641,7 @@ export interface SheetsEditorHandle {
   isDirty(): boolean
 }
 export interface SheetsEditorHost {
-  assistant?: {sourceSkill?: import('@genoffice/agent-core').AgentSkill; transport: import('@genoffice/agent-core').AgentTransport; modelPicker: React.ReactNode}
+  assistant?: {sourceSkill?: import('@genoffice/agent-core').AgentSkill; transport: import('@genoffice/agent-core').AgentTransport; modelPicker: React.ReactNode; extraSkills?: readonly import('@genoffice/agent-core').AgentSkill[]; agents?: readonly import('@genoffice/ui').AssistantParticipant[]; onManageAgents?: () => void; control?: import('@genoffice/ui').AssistantControl | undefined}
   /** Opt in only when the host returns stable sheet/drawing IDs after saving. */
   inPlaceSave?: boolean
   readOnly: boolean
@@ -705,6 +710,10 @@ export function App({
   const [notePopupCard, setNotePopupCard] = useState<NotePopupCard | null>(null)
   const getRuntime = useCallback(() => univerRef.current, [])
   /// True while Univer's in-cell editor is open (AutoSave must not save-reload then).
+  const analysisSaveConsent = useRef(createAnalysisSaveConsent())
+  const analysisEpochRef = useRef(0)
+  const analysisReadOnlyRef = useRef(!!host?.readOnly)
+  analysisReadOnlyRef.current = !!host?.readOnly
   const editingCellRef = useRef(false)
   const visualDisposablesRef = useRef<{ dispose(): void }[]>([])
   const traceArrowsRef = useRef<{ disposables: { dispose(): void }[]; nextId: number }>({
@@ -746,6 +755,7 @@ export function App({
   const [workbookFile, setWorkbookFile] = useState<WorkbookFile | null>(null)
   useEffect(() => {
     host?.onEditorReady?.({
+      analysis: {captureAnalysis},
       save: async () => (await handleSave('save')).ok,
       flush: () => saveGateRef.current.run(flushEditor),
       saveAndWait,
@@ -1657,6 +1667,7 @@ export function App({
             tools:
               m.tools?.map((t) => ({
                 summary: t.summary,
+                delegation: delegatedAgentResult(t.name, t.output),
                 isError: !!t.isError,
                 ...(t.name ? { name: t.name } : {}),
                 ...(t.output ? { output: t.output.slice(0, 2000) } : {}),
@@ -1763,13 +1774,17 @@ export function App({
   const runLastTextRef = useRef('')
   /** true once any tool of the run mutated the workbook */
   const runMutatedRef = useRef(false)
+  const pendingContinuationsRef = useRef<{instruction: string; continuationToken?: string | undefined}[]>([])
+  const assistantRunTokenRef = useRef<string | undefined>(undefined)
 
   const agentLoopRef = useRef<AgentLoop | null>(null)
   if (!agentLoopRef.current) {
     agentLoopRef.current = new AgentLoop({
       transport: host?.assistant?.transport ?? createElectronTransport(() => aiSettingsRef.current!),
+      allowDelegationYield: !!host?.assistant?.control,
       systemSuffix: aiLangDirective,
       skill: composeSkills('sheets+files', '', [
+        ...(host?.assistant?.extraSkills ?? []),
         ...(host?.assistant?.sourceSkill ? [host.assistant.sourceSkill] : []),
         createWorkbookSkill(sheetsSkillDeps()),
         createFilesSkill(availableAttachments),
@@ -1816,7 +1831,7 @@ export function App({
           if (execution.mutated) runMutatedRef.current = true
           const input = safeJsonInput(call.input)
           const output = execution.output
-            ? execution.output.slice(0, PERSIST_TOOL_FIELD_MAX)
+            ? compactDelegatedTranscript(call.name, execution.output, PERSIST_TOOL_FIELD_MAX)
             : undefined
           runToolsRef.current.push({
             name: call.name,
@@ -1835,6 +1850,7 @@ export function App({
                 ...tools,
                 {
                   summary: execution.summary,
+                  delegation: delegatedAgentResult(call.name, execution.output),
                   isError: !!execution.isError,
                   name: call.name,
                   ...(execution.output ? { output: execution.output.slice(0, 2000) } : {}),
@@ -1848,7 +1864,11 @@ export function App({
           setSessionUsage((prev) => addTokenUsage(prev, usage))
           patchLastAssistant((entry) => ({ ...entry, usage: runUsageRef.current }))
         },
-        onDone: ({ text, cancelled, turnLimit, truncated }) => {
+        onDone: ({ text, cancelled, turnLimit, truncated, yielded }) => {
+          const runToken = assistantRunTokenRef.current
+          assistantRunTokenRef.current = undefined
+          if (runToken) host?.assistant?.control?.endRun?.(runToken, {text, cancelled, failed: turnLimit || !!truncated, ...(yielded ? {yielded} : {})})
+          else if (yielded) host?.assistant?.control?.reportYield(yielded.taskIds)
           // Prefer tool summaries when the model finished via tools with no prose
           // (agent-core fills history with COMPLETED_VIA_TOOLS_TEXT so follow-ups
           // stay provider-safe; the UI can show the real work that ran).
@@ -1899,9 +1919,18 @@ export function App({
             persistChatMessage('assistant', finalText, runToolsRef.current)
           }
           setAiRunScope(undefined)
-          void autoSaveCompletedAiRun().finally(() => setAiBusy(false))
+          void autoSaveCompletedAiRun().finally(() => {
+            setAiBusy(false)
+            if (!cancelled && !yielded) {
+              const instruction = pendingContinuationsRef.current.shift()
+              if (instruction) queueMicrotask(() => runContinuation(instruction.instruction, instruction.continuationToken))
+            }
+          })
         },
         onError: (error) => {
+          const runToken = assistantRunTokenRef.current
+          assistantRunTokenRef.current = undefined
+          if (runToken) host?.assistant?.control?.endRun?.(runToken, {text: error, cancelled: false, failed: true})
           setMessage(error)
           setChat((previous) => {
             const next = [...previous]
@@ -1950,6 +1979,34 @@ export function App({
       },
     })
   }
+
+  const assistantControl = host?.assistant?.control
+  useEffect(() => {
+    if (!assistantControl) return
+    return assistantControl.register({
+      isBusy: () => !agentLoopRef.current || agentLoopRef.current.busy || !!runStartingRef.current,
+      cancelRun(token) { if (assistantRunTokenRef.current === token) agentLoopRef.current?.cancel() },
+      requestYield(taskIds) { agentLoopRef.current?.requestYield(taskIds) },
+      continue(instruction, continuationToken) {
+        if (agentLoopRef.current?.busy || runStartingRef.current) {
+          pendingContinuationsRef.current.push({instruction, continuationToken})
+          return true
+        }
+        runContinuation(instruction, continuationToken)
+        return true
+      },
+      async execute(instruction, signal) {
+        const loop = agentLoopRef.current
+        if (!loop || loop.busy || runStartingRef.current) throw new Error('Office assistant is busy')
+        setAiBusy(true)
+        try {
+          return await loop.runScoped(instruction, { signal, allowedTools: assistantControl.allowedTools })
+        } finally {
+          setAiBusy(false)
+        }
+      },
+    })
+  }, [assistantControl])
 
   function isAgentConfigured(): boolean {
     if (hostRef.current?.assistant) return true
@@ -2010,6 +2067,7 @@ export function App({
     instruction: string,
     sentAttachments: readonly AttachmentMeta[],
     sentSkills: readonly string[] = [],
+    continuationToken?: string,
   ): void {
     const loop = agentLoopRef.current
     if (!instruction.trim() || !loop || loop.busy || runStartingRef.current) return
@@ -2032,8 +2090,22 @@ export function App({
         const modelInstruction = await withSkillBodies(instruction, sentSkills).catch(() => instruction)
         if (runStartingRef.current !== pending) return
         runStartingRef.current = null
+        const runToken = assistantControl?.beginRun?.(instruction, continuationToken)
+        if (assistantControl?.beginRun && !runToken) {
+          setAiBusy(false)
+          setAiRunScope(undefined)
+          patchLastAssistant(entry => ({...entry, streaming: false}))
+          return
+        }
+        assistantRunTokenRef.current = runToken
         loop.run(modelInstruction, images, modelInstruction !== instruction && host?.assistant ? instruction : undefined)
       })
+  }
+
+  function runContinuation(instruction: string, continuationToken?: string): void {
+    appendChat({ role: 'user', text: instruction, tools: [] })
+    persistChatMessage('user', instruction)
+    runAgent(instruction, [], [], continuationToken)
   }
 
   const mergeAttachments = (result: AttachmentAddResult | null): void => {
@@ -2089,6 +2161,9 @@ export function App({
   }
 
   function handleNewChat(): void {
+    assistantControl?.resetConversation?.()
+    assistantRunTokenRef.current = undefined
+    pendingContinuationsRef.current = []
     runStartingRef.current = null
     agentLoopRef.current?.reset()
     setAiRunScope(undefined)
@@ -2155,6 +2230,7 @@ export function App({
     const api = univerRef.current?.univerAPI
     if (!api) return
     api.onCommandExecuted((command: { id?: string }) => {
+      analysisEpochRef.current++
       if (!command?.id || !STRUCTURAL_EDIT_COMMAND_PATTERN.test(command.id)) return
       rebuildRedactionIndex()
     })
@@ -4536,11 +4612,24 @@ export function App({
     return outcome
   }
 
+  function captureAnalysis(): ReturnType<import('../../../../packages/web-contracts/src/analysis-document').NativeAnalysisEditor['captureAnalysis']> {
+    return captureSheetAnalysis({current:(forSave=false)=>{
+      const runtime=univerRef.current,state=lazyWorkbookRef.current
+      const workbook=runtime?.univerAPI.getActiveWorkbook(),sheet=workbook?.getActiveSheet()
+      const range=workbook?.getActiveRange()?.getRange()
+      if(!runtime||!state||!workbook||!sheet||!range||(!forSave&&analysisReadOnlyRef.current)||editingCellRef.current||(!forSave&&(mutationLockedRef.current||saveGateRef.current.busy)))return null
+      return {identity:state,runtime,workbookId:workbook.getId(),sheetId:sheet.getSheetId(),
+        row:range.startRow,column:range.startColumn,selection:JSON.stringify(range),
+        epoch:analysisEpochRef.current,fingerprint:journalFingerprint(state.editJournal)}
+    },hold:()=>analysisSaveConsent.current.hold(),run:async(ops,check)=>(await runUiOps(ops,null,undefined,check)).ok})
+  }
+
   /** Ribbon/dialog edits run the same executor as AI proposals (op-executor.ts). */
   function runUiOps(
     ops: readonly WorkbookOperation[],
     successMessage?: string | null,
     mutationLease?: MutationLease,
+    analysisAuthorized?: () => boolean,
   ): Promise<ApplyOutcome> {
     const runtime = univerRef.current
     const state = lazyWorkbookRef.current
@@ -4566,12 +4655,14 @@ export function App({
     }
     return applyChangePlan(plan, opExecutorContext(runtime, workbook, state), {
       userFacing: true,
+      ...(analysisAuthorized ? {literalStrings:true} : {}),
       ...(mutationLease ? { mutationLease } : {}),
       ...(successMessage === undefined ? {} : { successMessage }),
       // The apply queues behind in-flight applies; the file may be closed or
       // replaced meanwhile — drop the click silently rather than mutate the
       // wrong workbook.
       verifyBeforeApply: () =>
+        (analysisAuthorized && !analysisAuthorized()) ||
         lazyWorkbookRef.current !== state ||
         univerRef.current !== runtime ||
         runtime.univerAPI.getActiveWorkbook()?.getId() !== workbook.getId()
@@ -5685,7 +5776,7 @@ export function App({
         if (!(await flushEditor())) return false
         const saved = await handleSaveImpl(saveContext(), 'save', true)
         if (!saved.ok && saved.reason !== 'no-edits') return false
-        if (!editorIsDirty()) return true
+        if (!editorIsDirty()) {analysisSaveConsent.current.confirmClean();return true}
       }
       return false
     })
@@ -5697,14 +5788,17 @@ export function App({
     explicitTarget?: { path: string; overwrite: boolean },
     defaultName?: string,
   ): Promise<SaveOutcome> {
-    if (hostRef.current?.readOnly) return {ok:false}
+    if (hostRef.current?.readOnly || !analysisSaveConsent.current.allowed(quiet)) return {ok:false}
     // Manual and AI saves take the same gate as the timers: a recovery copy
     // written beside a real save would outlive it as a phantom Restore prompt.
     const gate = saveGateRef.current
     if (mode === 'recovery' && gate.busy) return { ok: false }
     return gate.run(async () => {
       if (!(await commitActiveEditor())) return { ok: false }
-      return handleSaveImpl(saveContext(), mode, quiet, explicitTarget, defaultName)
+      if(!analysisSaveConsent.current.allowed(quiet))return {ok:false}
+      const result=await handleSaveImpl(saveContext(), mode, quiet, explicitTarget, defaultName)
+      if(result.ok&&!editorIsDirty())analysisSaveConsent.current.confirmClean()
+      return result
     })
   }
   async function updateWorkbookPassword(newPassword: string): Promise<string | null> {
@@ -6228,6 +6322,8 @@ export function App({
       )}
       <ExcelShell
         modelPicker={host?.assistant?.modelPicker}
+        assistantAgents={host?.assistant?.agents}
+        onManageAgents={host?.assistant?.onManageAgents}
         assistantAvailable={host?.assistantAvailable ?? true}
         openingWorkbook={openingWorkbook}
         prompt={prompt}

@@ -17,11 +17,12 @@ import { createXlsxNativeWorker } from '../../worker/src/native/xlsx.ts'
 import { buildLocalApp } from '../../server/src/app.ts'
 import { createGlobalConfigService } from '../../server/src/modules/admin/service.ts'
 import { createSkillService } from '../../server/src/modules/skills/service.ts'
+import { syntheticAnalysisAdapter,syntheticAnalysisFrames } from '../helpers/analysis-delivery.mjs'
 import { mockProviderNetwork } from '../helpers/provider-network.mjs'
 
-async function fixture(t, autoSave = false, enableAssistant = false, replay = undefined, live = undefined) {
+async function fixture(t, autoSave = false, enableAssistant = false, replay = undefined, live = undefined, analysis = false) {
   const directory = await mkdtemp(join(tmpdir(), 'dyoffice-sheets-download-'))
-  let f, app, browser, server
+  let f, app, browser, server, analysisAdapter
   t.after(async () => {
     await browser?.close()
     if (server) { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)) }
@@ -57,11 +58,12 @@ async function fixture(t, autoSave = false, enableAssistant = false, replay = un
     const apiKey = live ? (await readFile(live.keyFile, 'utf8')).trim() : 'synthetic-private-key'
     const settings = createGlobalConfigService({transactions: f.transactions, keyring})
     await settings.saveGlobalConfig(f.adminSigned.token, 0, {upserts: [{id: profile.entryId, kind: 'chat', providerId: profile.providerId, label: 'Company Chat', model: profile.model, baseUrl: profile.baseUrl, enabled: true, apiKey}]})
-    await f.ownerPool.query('INSERT INTO provider_budget_accounts(deployment_id,owner_id,entry_id,config_revision,available_units,per_call_units) VALUES($1,$2,$3,1,$4,10)', [f.deploymentId, f.alice.user.id, profile.entryId, live ? 30 : 10])
+    await f.ownerPool.query('INSERT INTO provider_budget_accounts(deployment_id,owner_id,entry_id,config_revision,available_units,per_call_units) VALUES($1,$2,$3,1,$4,10)', [f.deploymentId, f.alice.user.id, profile.entryId, live ? 30 : analysis ? 20 : 10])
     const skills = createSkillService(f.transactions)
     await skills.save(f.alice.token, 'alice-workbook', {description: '', body: 'Alice workbook instructions.'})
     await skills.save(f.bob.token, 'bob-workbook', {description: '', body: 'Bob workbook instructions.'})
-    app = await buildLocalApp({db: f.db, businessPool: f.businessPool, passwords: f.passwords, deploymentId: f.deploymentId, origin, csrfKey: f.csrfKey, objectStore: f.objects, globalConfigKeyring: keyring, providerGateway: {profiles: [profile]}, ...sheets})
+    if(analysis)analysisAdapter=syntheticAnalysisAdapter(()=>app,{text:'=1+1,literal <script>cell</script>\n0012,TRUE',name:'analysis.csv',mediaType:'text/csv',role:'table'})
+    app = await buildLocalApp({db: f.db, businessPool: f.businessPool, passwords: f.passwords, deploymentId: f.deploymentId, origin, csrfKey: f.csrfKey, objectStore: f.objects, globalConfigKeyring: keyring, providerGateway: {profiles: [profile]}, ...(analysisAdapter?{codingHarnesses:{adapters:[analysisAdapter],defaultId:analysisAdapter.descriptor.id}}:{}), ...sheets})
   }
   await f.preferences.update(f.alice.token, { language: 'en', autoSave, showAssistant: enableAssistant })
   const opened = await importFile(f, f.alice.token, original, 'independent-download.xlsx')
@@ -79,7 +81,7 @@ async function fixture(t, autoSave = false, enableAssistant = false, replay = un
   await expect.poll(() => page.evaluate(() => window.__genofficeDebug?.univerAPI.getActiveWorkbook()?.getActiveSheet()?.getRange('A2').getValue()), { timeout: 30000 }).toBe(12.5)
   await expect.poll(() => page.evaluate(() => window.__genofficeDebug.univerAPI.getActiveWorkbook().getActiveSheet().getRange('B2').getValue()), { timeout: 30000 }).toBe(25)
   await page.evaluate(() => { window.__savedWorkbookIdentity = window.__genofficeDebug.univerAPI.getActiveWorkbook().getWorkbook() })
-  return { ...f, page, original, opened, context, origin }
+  return { ...f, page, original, opened, context, origin, analysisAdapter }
 }
 
 async function assertWorkbook(bytes, expectedA2, expectedA3 = 7.5) {
@@ -264,4 +266,41 @@ test('blur autosave confirms without replacing the live workbook or moving its s
   assert.deepEqual(await f.page.locator('#univer-container').boundingBox(), bounds)
   const head = (await f.files.openFile(f.alice.token, f.opened.file.fileId)).file
   await assertWorkbook(await f.files.readFile(f.alice.token, head.fileId, head.revision), 31)
+})
+
+
+test('native XLSX explicitly writes literal analysis cells and independently saves a real revision', {timeout:120_000},async t=>{
+ const f=await fixture(t,true,true,undefined,undefined,true),{page,opened,files,alice}=f
+ const net=mockProviderNetwork(t,syntheticAnalysisFrames())
+ if(await page.locator('.expand-copilot').isVisible())await page.locator('.expand-copilot').click()
+ const composer=page.locator('.copilot textarea')
+ await composer.fill('Create the local synthetic analysis table');await composer.press('Enter')
+ const panel=page.locator('.analysis-deliveries')
+ await expect(panel.locator('summary')).toContainText('(1)',{timeout:30_000});await panel.locator('summary').click()
+ // The delivery can arrive before the provider's second reply. Wait for that
+ // reply's text before checking the exact two-turn request count; this does
+ // not assert that the SSE stream or durable budget settlement has finished.
+ await expect(page.locator('.copilot').getByText('Synthetic artifact ready. Insert and save are separate user actions.',{exact:true})).toBeVisible({timeout:30_000})
+ assert.equal(f.analysisAdapter.runs,1);assert.equal(net.writes,2)
+ // Explicitly select a free area using the existing test-only native editor hook.
+ await page.evaluate(()=>window.__genofficeDebug.univerAPI.getActiveWorkbook().getActiveSheet().getRange('J10').activate())
+ await expect(panel).toContainText('overwrite')
+ await panel.getByRole('button',{name:'Write to selection',exact:true}).click()
+ await expect(panel).toContainText('Applied, not saved')
+ await expect.poll(()=>page.evaluate(()=>window.__genofficeDebug.univerAPI.getActiveWorkbook().getActiveSheet().getRange('J10').getValue())).toBe('=1+1')
+ await expect.poll(()=>page.evaluate(()=>window.__genofficeDebug.univerAPI.getActiveWorkbook().getActiveSheet().getRange('J11').getValue())).toBe('0012')
+ await expect.poll(()=>page.evaluate(()=>window.__genofficeDebug.univerAPI.getActiveWorkbook().getActiveSheet().getRange('K11').getValue())).toBe('TRUE')
+ await composer.focus();await page.evaluate(()=>window.dispatchEvent(new Event('blur')));await page.waitForTimeout(1100)
+ assert.equal((await files.openFile(alice.token,opened.file.fileId)).file.revision,opened.file.revision)
+ await panel.getByRole('button',{name:'Save document',exact:true}).click()
+ await expect(panel).toContainText('Saved revision',{timeout:30_000})
+ const saved=await files.openFile(alice.token,opened.file.fileId);assert.notEqual(saved.file.revision,opened.file.revision)
+ await expect(panel).toContainText(saved.file.revision)
+ const zip=await JSZip.loadAsync(await files.readFile(alice.token,saved.file.fileId,saved.file.revision))
+ const xml=await zip.file('xl/worksheets/sheet1.xml').async('string')
+ const cell=/<c\b[^>]*\br="J10"[^>]*>([\s\S]*?)<\/c>/.exec(xml)?.[1]
+ assert.ok(cell,'Saved J10 must exist');assert.doesNotMatch(cell,/<f(?:>|\s)/,'Formula-looking analysis text must not become a formula')
+ await page.reload()
+ await expect.poll(()=>page.evaluate(()=>window.__genofficeDebug?.univerAPI.getActiveWorkbook()?.getActiveSheet()?.getRange('J10').getValue()),{timeout:30_000}).toBe('=1+1')
+ await expect.poll(()=>page.evaluate(()=>window.__genofficeDebug.univerAPI.getActiveWorkbook().getActiveSheet().getRange('J11').getValue())).toBe('0012')
 })

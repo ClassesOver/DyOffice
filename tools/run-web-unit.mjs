@@ -10,7 +10,7 @@ if (!available.length || selectors.some(name => !available.includes(name))) {
   process.exit(1)
 }
 const files = selectors.length ? [...new Set(selectors)] : available
-const child = spawnSync(process.execPath, ['--experimental-strip-types', '--experimental-test-module-mocks', '--test', ...files], { cwd: directory, stdio: 'inherit' })
+const child = spawnSync(process.execPath, ['--experimental-transform-types', '--experimental-test-module-mocks', '--test', ...files], { cwd: directory, stdio: 'inherit' })
 if (child.error) console.error(child.error.message)
 process.exit(child.status ?? 1)
 

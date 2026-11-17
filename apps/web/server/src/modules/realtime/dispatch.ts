@@ -5,7 +5,8 @@ import type { RealtimeState, RealtimeSnapshot } from './state.ts'
 import type { RealtimeCommands, TrustedEditorDispatch, EditorDispatchResult } from './commands.ts'
 export type { TrustedEditorDispatch, EditorDispatchResult } from './commands.ts'
 export type DispatchOutcome = { status: 'ok' } | { status: 'unauthorized' }
-export function createRealtimeDispatcher({ registry, state, commands: writers }: { registry: RealtimeRegistry; state: RealtimeState; commands?: RealtimeCommands }) {
+export function createRealtimeDispatcher({ registry, state, commands: writers,channelNotifications }: { registry: RealtimeRegistry; state: RealtimeState; commands?: RealtimeCommands;channelNotifications?:(token:string,fileId:string)=>Promise<{conversationId:string;sequence:number}[]> }) {
+  const channelKeys=new WeakMap<RealtimeConnection,string>()
   const snapshotKey = (snapshot: RealtimeSnapshot) => JSON.stringify(snapshot)
   async function authorized(connection: RealtimeConnection, effect: Parameters<RealtimeState['withSnapshot']>[1], ids: readonly string[] = []): Promise<DispatchOutcome> {
     try {
@@ -22,9 +23,16 @@ export function createRealtimeDispatcher({ registry, state, commands: writers }:
   }
   return {
     initialize: (connection: RealtimeConnection) => authorized(connection, snapshot => { registry.sendSnapshot(connection, snapshot, 'state') }),
-    poll: (connection: RealtimeConnection) => authorized(connection, snapshot => {
-      if (connection.snapshot && snapshotKey(connection.snapshot) !== snapshotKey(snapshot)) registry.sendSnapshot(connection, snapshot, 'file-event')
-    }),
+    async poll(connection:RealtimeConnection):Promise<DispatchOutcome> {
+      let channels:{conversationId:string;sequence:number}[]|undefined
+      try{channels=await channelNotifications?.(connection.token,connection.fileId)}catch{/* Collaboration failure does not interrupt file/lease notifications. */}
+      return authorized(connection,snapshot=>{
+        if(connection.snapshot&&snapshotKey(connection.snapshot)!==snapshotKey(snapshot))registry.sendSnapshot(connection,snapshot,'file-event')
+        if(channels&&JSON.stringify(channels)!==channelKeys.get(connection)){
+          registry.send(connection,{type:'assistant-channels',channels});channelKeys.set(connection,JSON.stringify(channels))
+        }
+      })
+    },
     async receive(connection: RealtimeConnection, message: RealtimeClientMessage | undefined): Promise<DispatchOutcome> {
       if (message?.type === 'register' || message?.type === 'ack') {
         const initial = await authorized(connection, () => {})

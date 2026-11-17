@@ -20,11 +20,23 @@ import {tmpdir} from 'node:os'
 import {join} from 'node:path'
 import {execFile} from 'node:child_process'
 import {promisify} from 'node:util'
+import {commitCutProxy} from '../helpers/pg-commit-cut-proxy.mjs'
 const exec=promisify(execFile)
 const dbUrl=new URL(process.env.DYOFFICE_TEST_DATABASE_URL);assert.equal(dbUrl.hostname,'127.0.0.1');assert.equal(dbUrl.password,'','fixture requires isolated local trust authentication')
-async function child(f,d,options={}){const dir=await mkdtemp(join(tmpdir(),'rust-pg-'));try{const input=join(dir,'input.json'),output=join(dir,'output.json');await writeFile(input,JSON.stringify({host:'127.0.0.1',port:Number(dbUrl.port||5432),user:f.consumer,database:dbUrl.pathname.slice(1),schema,expected:d,challenge:options.challenge??randomUUID(),mode:'consume',output,...options}),{mode:0o600});await exec(process.env.RUST_PG_TEST_BINARY,['--exact','dispatch_ledger::integration::child','--ignored','--nocapture'],{env:{PATH:process.env.PATH,DOCUMENT_PG_FIXTURE_FILE:input},timeout:15000,maxBuffer:8192});return JSON.parse(await readFile(output,'utf8'))}finally{await rm(dir,{recursive:true,force:true})}}
+async function child(f,d,options={}){const dir=await mkdtemp(join(tmpdir(),'rust-pg-'));try{const input=join(dir,'input.json'),output=join(dir,'output.json');await writeFile(input,JSON.stringify({host:'127.0.0.1',port:Number(dbUrl.port||5432),user:f.consumer,database:dbUrl.pathname.slice(1),schema,expected:d,challenge:options.challenge??randomUUID(),mode:'consume',output,...(process.env.RUST_PG_TEST_CA?{host:'localhost',ca:process.env.RUST_PG_TEST_CA}:{}),...options}),{mode:0o600});await exec(process.env.RUST_PG_TEST_BINARY,['--exact','dispatch_ledger::integration::child','--ignored','--nocapture'],{env:{PATH:process.env.PATH,DOCUMENT_PG_FIXTURE_FILE:input},timeout:15000,maxBuffer:8192});return JSON.parse(await readFile(output,'utf8'))}finally{await rm(dir,{recursive:true,force:true})}}
 test('real Rust LOGIN consumes and new process only observes or exact replays',async()=>{const f=await prepared(),d=(await f.issue()).rows[0].value,challenge=randomUUID();assert.equal((await child(f,d,{challenge})).classification,'native_verified_first_consumed_observation');assert.equal((await child(f,d,{mode:'history'})).classification,'historical_dispatch_observation');assert.equal((await child(f,d,{challenge})).classification,'already_consumed');assert.equal((await child(f,d)).error,'OutcomeUnknown')})
 test('actual COMMIT confirmation loss remains unknown and new process history sees consumed',async()=>{const f=await prepared(),d=(await f.issue()).rows[0].value,challenge=randomUUID();assert.equal((await child(f,d,{mode:'lost',challenge})).error,'OutcomeUnknown');assert.deepEqual(await child(f,d,{mode:'history'}),{classification:'historical_dispatch_observation',consumed:true});assert.equal((await child(f,d,{challenge})).classification,'already_consumed')})
+test('TLS transport loss after backend COMMIT confirmation stays unknown; new TLS history and exact replay cannot reauthorize', {skip: !process.env.RUST_PG_TEST_CA}, async t => {
+ const proxy = await commitCutProxy({port: Number(dbUrl.port), ca: await readFile(process.env.RUST_PG_TEST_CA), cert: await readFile(process.env.RUST_PG_TEST_CA), key: await readFile(process.env.RUST_PG_TEST_KEY)})
+ t.after(() => proxy.close())
+ const f = await prepared(), d = (await f.issue()).rows[0].value, challenge = randomUUID()
+ assert.equal((await child(f, d, {port: proxy.port, challenge})).error, 'OutcomeUnknown')
+ assert.deepEqual(proxy.observed, {connections: 1, upstreamTls: 1, commitCommands: 1, cutConfirmations: 1})
+ assert.deepEqual(proxy.errors, [])
+ assert.deepEqual(await child(f, d, {mode: 'history'}), {classification: 'historical_dispatch_observation', consumed: true})
+ assert.equal((await child(f, d, {challenge})).classification, 'already_consumed')
+ assert.equal((await child(f, d)).error, 'OutcomeUnknown')
+})
 test('wrong expected binding rolls back before COMMIT',async()=>{const f=await prepared(),d=(await f.issue()).rows[0].value;assert.equal((await child(f,{...d,brokerBootId:randomUUID()})).error,'OutcomeUnknown');assert.equal((await child(f,d,{mode:'history'})).consumed,false)})
 test('concurrent Rust consumers have exactly one first observation',async()=>{const f=await prepared(),d=(await f.issue()).rows[0].value,challenge=randomUUID();assert.deepEqual((await Promise.all([child(f,d,{challenge}),child(f,d,{challenge})])).map(x=>x.classification).sort(),['already_consumed','native_verified_first_consumed_observation'])})
 test('revoked consumer and foreign LOGIN do not consume',async()=>{const f=await prepared(),d=(await f.issue()).rows[0].value;assert.equal((await child(f,d,{user:outside})).error,'OutcomeUnknown');await as(owner,c=>c.query('UPDATE document_dispatch_roles SET active=false WHERE id=$1',[f.consumerId]));assert.equal((await child(f,d)).error,'OutcomeUnknown')})

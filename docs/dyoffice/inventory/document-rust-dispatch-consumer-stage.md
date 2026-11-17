@@ -60,9 +60,23 @@ No test key, cluster data or generated compiler artifact is distributable output
 Real database tests cover first consume, exact replay, new-process history,
 concurrency, wrong expected boot rollback, foreign/revoked LOGIN, same-object
 reuse, recovery/epoch fencing, pre-cancel and blocked timeout/cancel cleanup.
-COMMIT confirmation-loss test injects a client-side error after actual COMMIT;
-it is not a simulated network packet loss or actual process crash. A new Rust
-process then reads consumed history and cannot recreate a first result.
+The original COMMIT confirmation-loss test injects a client-side error after
+actual COMMIT; it is retained and is not represented as a transport failure.
+The TLS recipe now also runs every restricted-ledger transaction test using the
+production TLS connection method, including new-process history, exact replay,
+binding rollback, revoked/foreign identities, bounded cancellation and reuse.
+
+An additional TLS-only test uses a disposable loopback PostgreSQL protocol relay.
+Both its client and upstream legs negotiate verified TLS with the temporary CA.
+It parses PostgreSQL's actual backend `CommandComplete(COMMIT)` message, suppresses
+that message and any following `ReadyForQuery`, then closes the real connection.
+The Rust client returns `OutcomeUnknown`; a separate direct TLS Rust process
+observes consumed history, and exact replay returns only `already_consumed`.
+The relay asserts one connection, one upstream TLS handshake and exactly one
+suppressed COMMIT confirmation. It does not use a sleep as evidence of commit.
+Disabling the cut makes the test fail because the client receives success, proving
+the fault assertion is exercised. This is acknowledgement loss at a test TLS
+relay, not an actual database/process crash or a production network acceptance.
 
 Real TLS tests use the same production connection method against temporary PG:
 trustedCA/localhost succeeds, wrongCA and wronghostname fail, and a plaintext-only
@@ -84,6 +98,9 @@ PG_BIN=/path/to/postgresql/bin \
 The ledger fixture requires the existing isolated local trust-authentication setup
 (no password in the URL). The TLS recipe creates fresh temporary clusters with
 trust authentication, TLS_TEST_PORT(default55448)/TLS_PLAIN_PORT(default55449),
-then stops them and removes certificates/keys/data. Existing cluster settings are
-not changed. Requirements: existing PostgreSQL binaries, OpenSSL, Node, Cargo and
-repository Node dependencies. TLS tests authenticate the server certificate only.
+then runs the four certificate/handshake tests and all nine restricted-ledger
+tests over TLS before stopping them and removing certificates/keys/data. Without
+TLS configuration the ledger recipe runs the original eight tests and explicitly
+skips only the TLS relay test. Existing cluster settings are not changed.
+Requirements: existing PostgreSQL binaries, OpenSSL, Node, Cargo and repository
+Node dependencies. TLS tests authenticate the server certificate only.

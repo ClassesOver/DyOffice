@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { mkdtemp, mkdir, writeFile, readFile, rm } from 'node:fs/promises'
 import { join, dirname } from 'node:path'
 import { tmpdir } from 'node:os'
-import { buildBaseline, compareBaseline } from './compatibility-baseline.mjs'
+import { buildBaseline, compareBaseline, configuration } from './compatibility-baseline.mjs'
 
 async function fixture(t) {
   const root = await mkdtemp(join(tmpdir(), 'dyoffice-compat-'))
@@ -69,4 +69,19 @@ test('allows non-font documentation subdirectories but rejects an empty font roo
   assert.deepEqual(await buildBaseline(root,config),baseline)
   await rm(join(root,'fonts/Example.ttf'))
   await assert.rejects(buildBaseline(root,config),/No font assets found in fonts/)
+})
+
+test('SaaS baseline excludes retired Electron but preserves all other locked dependencies',()=>{
+ assert.deepEqual(configuration.npm['package-lock.json'],['typescript','@modelcontextprotocol/sdk','@embedpdf/pdfium','pdfjs-dist','pdf-lib','@univerjs/core','fastify']);
+ assert.deepEqual(configuration.fonts,['apps/docs/src/renderer/fonts','packages/ui/src/fonts']);
+ assert.equal(configuration.cargo.length,2);
+})
+test('missing integrity and lock format remain fatal after Electron retirement',async t=>{
+ const {root,config}=await fixture(t);
+ const lock=JSON.parse(await readFile(join(root,'package-lock.json'),'utf8'));
+ delete lock.packages['node_modules/typescript'].integrity;
+ await writeFile(join(root,'package-lock.json'),JSON.stringify(lock));
+ await assert.rejects(buildBaseline(root,config),/Missing locked version\/integrity for typescript/);
+ lock.lockfileVersion=2;await writeFile(join(root,'package-lock.json'),JSON.stringify(lock));
+ await assert.rejects(buildBaseline(root,config),/Unsupported npm lockfile version/);
 })

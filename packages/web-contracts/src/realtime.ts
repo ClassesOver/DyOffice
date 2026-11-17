@@ -82,6 +82,7 @@ export type RealtimeServerMessage =
   | (Readonly<{ type: 'state' }> & RealtimeFileEvent)
   | Readonly<{ type: 'file-event'; fileEvent: RealtimeFileEvent }>
   | Readonly<{ type: 'pong' }>
+  | Readonly<{ type: 'assistant-channels'; channels: readonly {conversationId:string;sequence:number}[] }>
   | RealtimeRegistered
   | RealtimeCommandDelivery
   | Readonly<{ type: 'command-state'; requestId: string; commands: readonly RealtimeCommandStatus[] }>
@@ -161,6 +162,11 @@ export function decodeRealtimeServerMessage(raw: string): RealtimeServerMessage 
     const envelope = decodeEnvelope(data.envelope)
     return envelope ? { type: 'command', connectionId: data.connectionId, epoch: data.epoch, editorId: data.editorId, deliveryId: data.deliveryId,
       claimId: data.claimId, digest: data.digest, envelope } : undefined
+  }
+  if(data.type==='assistant-channels'&&hasKeys(data,['type','channels'])&&Array.isArray(data.channels)&&data.channels.length<=32) {
+    const channels:{conversationId:string;sequence:number}[]=[]
+    for(const item of data.channels){if(!isObject(item)||!hasKeys(item,['conversationId','sequence'])||!uuid(item.conversationId)||!safeInt(item.sequence,0))return undefined;channels.push({conversationId:item.conversationId,sequence:item.sequence})}
+    return {type:'assistant-channels',channels}
   }
   if (data.type === 'state') {
     const state = decodeSnapshot(data, true)

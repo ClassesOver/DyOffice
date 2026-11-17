@@ -11,6 +11,7 @@ function fixture({ttl=1000,idleMs=1000,recentAge=0}={}) {
  const connection={query:async sql=>{
   if(sql.includes('SELECT * FROM users'))return {rows:[user]};
   if(sql.includes('SELECT * FROM sessions'))return {rows:[session]};
+  if(sql.startsWith('SELECT clock_timestamp() AS now,ARRAY('))return {rows:[{now:new Date(now),roles:['config_admin','personal']}]};
   if(sql==='SELECT clock_timestamp() AS now')return {rows:[{now:new Date(now)}]};
   if(sql.includes('SELECT role FROM user_roles'))return {rows:[{role:'config_admin'},{role:'personal'}]};
   if(sql.includes('UPDATE sessions SET last_seen_at'))return {rows:[]};

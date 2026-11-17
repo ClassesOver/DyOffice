@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url'
 const require = createRequire(new URL('../../apps/web/package.json', import.meta.url))
 const ts = require('typescript')
 const root = fileURLToPath(new URL('../../', import.meta.url))
-export const ROOTS = ['apps/docs/src/renderer/ai', 'apps/sheets/src/renderer/ai', 'apps/slides/src/renderer/ai', 'apps/pdf/src/renderer/ai', 'packages/agent-core/src', 'apps/shell/src/main/mcp/tools']
+export const ROOTS = ['apps/docs/src/renderer/ai', 'apps/sheets/src/renderer/ai', 'apps/slides/src/renderer/ai', 'apps/pdf/src/renderer/ai', 'packages/agent-core/src', 'packages/browser-host/src', 'apps/shell/src/main/mcp/tools']
 const REGISTRY='docs/dyoffice/inventory/agent-tools.json'
 const DOCUMENT='docs/dyoffice/inventory/agent-tools.md'
 const hash = value => createHash('sha256').update(value).digest('hex')
@@ -83,7 +83,7 @@ const cell=value=>String(value).replaceAll('|','\\|').replaceAll('\n',' ').repla
 export function renderInventory(rows) {
   const lines=['# T00 tool execution-placement inventory','',
     'This is a reviewed **proposed execution placement**, not a Web capability registry or proof that a tool works. All rows still require their listed task acceptance. `live` needs an authorized active editor; `headless` needs an authorized service/isolated worker; `unsupported` must fail explicitly rather than expose a desktop-only facility.', '',
-    'Scope: explicit `name` + `inputSchema` tool-definition objects in all four renderer AI directories, shared agent-core and desktop MCP tool modules. Only unshadowed, unassigned top-level literal const bindings are resolved; shorthand schemas remain inventoried. Unknown names, spreads in definitions, syntax errors, missing or stale classifications fail closed. This inventories declarations, not dynamic registration, schema dependencies, runtime calls, tool availability or approval policy. Keep the separate host IPC inventory for call sites/lifecycle.', '',
+    'Scope: explicit `name` + `inputSchema` tool-definition objects in all four renderer AI directories, shared agent-core, browser-host and desktop MCP tool modules. Only unshadowed, unassigned top-level literal const bindings are resolved; shorthand schemas remain inventoried. Unknown names, spreads in definitions, syntax errors, missing or stale classifications fail closed. This inventories declarations, not dynamic registration, schema dependencies, runtime calls, tool availability or approval policy. Keep the separate host IPC inventory for call sites/lifecycle.', '',
     'Reproduce: `node tools/dyoffice/agent-tool-inventory.mjs --check`. Intentionally refresh source/schema fingerprints with `--write` only after review. A new or removed tool requires an explicit JSON classification edit.', '',
     `Definitions: ${rows.length}; live: ${rows.filter(r=>r.placement==='live').length}; headless: ${rows.filter(r=>r.placement==='headless').length}; unsupported: ${rows.filter(r=>r.placement==='unsupported').length}.`, '',
     '| Definition / source line | Placement | Web execution seam | Verify in | Schema SHA-256 / source SHA-256 | Reason |','| --- | --- | --- | --- | --- | --- |']

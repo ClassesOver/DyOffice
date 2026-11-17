@@ -32,6 +32,8 @@ export interface AgentRunResult {
   truncated?: boolean
   /** tokens billed across all turns of the run; absent when the provider never reported usage */
   usage?: AgentTokenUsage
+  /** Delegated work accepted by another agent; the current run stopped at this safe tool boundary. */
+  yielded?: { taskIds: string[] }
 }
 
 export interface AgentLoopEvents<TSnapshot> {
@@ -64,6 +66,8 @@ export interface AgentLoopOptions<TSnapshot = unknown> {
   events?: AgentLoopEvents<TSnapshot>
   /** hard cap on model round-trips per run (default DEFAULT_MAX_TURNS) */
   maxTurns?: number
+  /** Allow explicitly delegated runs to stop after their tool results are recorded. Defaults to false. */
+  allowDelegationYield?: boolean
   /** history cap in messages, trimmed at user-turn boundaries (default 200) */
   maxHistory?: number
   /** Context compaction; false disables it (enabled by default with default thresholds) */
@@ -504,7 +508,9 @@ function mechanicalDigest(dropped: readonly AgentMessage[]): string {
  * plain text. History persists across runs, so follow-up questions work.
  */
 export class AgentLoop<TSnapshot = unknown> {
-  private readonly options: AgentLoopOptions<TSnapshot>
+  private options: AgentLoopOptions<TSnapshot>
+  private scopedReset: (() => void) | undefined
+  private nativeModelResetPending = false
   private history: AgentMessage[] = []
   private handle: AgentStreamHandle | null = null
   private running = false
@@ -548,6 +554,7 @@ export class AgentLoop<TSnapshot = unknown> {
   private generation = 0
   /** per-run abort: aborted on cancel(); long tools (e.g. generate_deck) use it to break internal loops */
   private abortController: AbortController | null = null
+  private pendingYield: string[] | null = null
 
   constructor(options: AgentLoopOptions<TSnapshot>) {
     this.options = options
@@ -559,6 +566,58 @@ export class AgentLoop<TSnapshot = unknown> {
 
   get messages(): readonly AgentMessage[] {
     return this.history
+  }
+
+  /** Stop an enabled run after its current tool batch, once the tool results are paired in history. */
+  requestYield(taskIds: readonly string[]): void {
+    if (!this.options.allowDelegationYield || !this.running) {
+      throw new Error('Delegation yield is unavailable')
+    }
+    if (
+      !taskIds.length ||
+      taskIds.some((id) => typeof id !== 'string' || !id.trim()) ||
+      taskIds.length + (this.pendingYield?.length ?? 0) > 16
+    ) {
+      throw new Error('Delegation task IDs are invalid')
+    }
+    this.pendingYield = [...new Set([...(this.pendingYield ?? []), ...taskIds])]
+  }
+
+  /** Execute an explicitly authorized peer read without exposing chat history,
+   * draft context, attached skills or the native panel's event callbacks. */
+  async runScoped(instruction:string,input:{signal?:AbortSignal;allowedTools:readonly string[]}):Promise<AgentRunResult> {
+    if(this.running||this.scopedReset)throw new Error('Office assistant is busy')
+    if(!instruction.trim()||input.signal?.aborted)throw new Error('Office task cancelled')
+    const original=this.options,history=this.history,contexts=this.staleContexts,transient=this.transientInstruction,lastRequest=this.lastRequestAt
+    const allowed=new Set(input.allowedTools),skill=original.skill
+    let invalidated=false
+    const abort=()=>this.cancel()
+    try {
+      this.history=[];this.staleContexts=[];this.transientInstruction=null;this.lastRequestAt=0
+      return await new Promise<AgentRunResult>((resolve,reject)=>{
+        this.scopedReset=()=>{invalidated=true;this.options=original;reject(new Error('Office task editor changed'))}
+        this.options={...original,compaction:false,skill:{
+          id:'peer-read',systemPrompt:'You are the Office assistant handling a delegated read-only task for this document. Use only the offered read tools. Do not modify or save the document, run code, delegate further, access unrelated files, or claim such actions. Return only the requested findings and limitations.',
+          tools:skill.tools.filter(tool=>allowed.has(tool.name)),
+          executeTool(call,signal){
+            if(!allowed.has(call.name))throw new Error('Office task tool unavailable')
+            return skill.executeScopedTool ? skill.executeScopedTool(call,signal) : skill.executeTool(call,signal)
+          },
+        },events:{onDone:resolve,onError:message=>reject(new Error(message))}}
+        delete this.options.captureSnapshot
+        delete this.options.formatUserMessage
+        input.signal?.addEventListener('abort',abort,{once:true})
+        this.run(instruction)
+        if(input.signal?.aborted)abort()
+      })
+    } finally {
+      input.signal?.removeEventListener('abort',abort)
+      this.scopedReset=undefined;this.options=original
+      if(!invalidated) {
+        this.history=history;this.staleContexts=contexts
+        this.transientInstruction=transient;this.lastRequestAt=lastRequest
+      }
+    }
   }
 
   /**
@@ -630,6 +689,7 @@ export class AgentLoop<TSnapshot = unknown> {
     if (this.running || !instruction) return
     this.running = true
     this.cancelled = false
+    this.pendingYield = null
     this.turns = 0
     this.finalizing = false
     this.mutationSeen = false
@@ -652,7 +712,10 @@ export class AgentLoop<TSnapshot = unknown> {
     // mid-transition is enough to wedge the panel. The user message was never
     // pushed, so the rollback in failRun() is a no-op and only the report matters.
     try {
-      if (this.options.transport.beginRun?.()) {
+      const modelChanged = this.options.transport.beginRun?.()
+      if (modelChanged && this.scopedReset) this.nativeModelResetPending = true
+      if (modelChanged || (!this.scopedReset && this.nativeModelResetPending)) {
+        if (!this.scopedReset) this.nativeModelResetPending = false
         this.history = []
         this.staleContexts = []
         this.lastRequestAt = 0
@@ -732,10 +795,12 @@ export class AgentLoop<TSnapshot = unknown> {
     }
     if (generation !== this.generation) return // reset during compaction
     if (this.cancelled) {
+      this.pendingYield = null
       this.running = false
       this.options.events?.onDone?.({ text: '', cancelled: true, turnLimit: false })
       return
     }
+
     // Leftover unanswered user message (a previous run failed before replying):
     // drop it so the model never sees two adjacent user turns as one combined instruction
     while (this.history.at(-1)?.role === 'user') this.history.pop()
@@ -958,6 +1023,7 @@ export class AgentLoop<TSnapshot = unknown> {
 
   /** drop the conversation (e.g. when a different document is opened) */
   reset(): void {
+    this.scopedReset?.()
     this.generation++
     this.clearRetryTimer()
     this.abortController?.abort()
@@ -965,6 +1031,7 @@ export class AgentLoop<TSnapshot = unknown> {
     this.handle = null
     this.running = false
     this.cancelled = false
+    this.pendingYield = null
     this.history = []
     this.runUserMsg = null
     this.transientInstruction = null
@@ -1381,6 +1448,25 @@ export class AgentLoop<TSnapshot = unknown> {
       this.runUserMsg = null
       events?.onDone?.({ text: this.turnText, cancelled: true, turnLimit: false })
       return
+    }
+
+    if (this.pendingYield) {
+      const taskIds = this.pendingYield
+      this.pendingYield = null
+      if (!results.some(result => result.isError)) {
+        this.history.push({ role: 'assistant', text: this.turnText || COMPLETED_VIA_TOOLS_TEXT })
+        this.running = false
+        this.runUserMsg = null
+        this.mergeRunUsage()
+        events?.onDone?.({
+          text: this.turnText,
+          cancelled: false,
+          turnLimit: false,
+          yielded: { taskIds },
+          ...(this.runUsage ? { usage: this.runUsage } : {}),
+        })
+        return
+      }
     }
 
     // Bad-input retries hit the cap: abort instead of burning more turns

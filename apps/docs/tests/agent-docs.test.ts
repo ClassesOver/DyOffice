@@ -888,3 +888,19 @@ describe('partial selection: table cells and code blocks', () => {
     expect(context).toContain('Selected text (7 characters): "b = <2>"')
   })
 })
+
+
+it('scoped document context omits frozen and live user selection while native reads retain it', async () => {
+  const editor = new Editor({ extensions: editorExtensions, content: { type: 'doc', content: [para('Authorized document text')] } })
+  liveEditors.push(editor)
+  editor.commands.setTextSelection({ from: 1, to: 6 })
+  const skill = createDocsSkill(() => editor, () => ({ bullet: null, ordered: null }))
+  skill.buildContext?.()
+  const call = { id: 'context', name: 'get_document_context', input: {} }
+  const scoped = await skill.executeScopedTool!(call)
+  const native = await skill.executeTool(call)
+  expect(scoped.output).toContain('Authorized document text')
+  expect(scoped.output).not.toContain('Current selection:')
+  expect(scoped.output).not.toContain('cursor is in block')
+  expect(native.output).toContain('Current selection:')
+})

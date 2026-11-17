@@ -1301,3 +1301,14 @@ describe('executeWorkbookTool: unknown tool', () => {
     expect(result.isError).toBe(true)
   })
 })
+
+
+it('scoped workbook reads omit selection while native context retains it', async () => {
+  const { createWorkbookSkill } = await import('../src/renderer/ai/workbook-skill')
+  const skill = createWorkbookSkill(fakeDeps())
+  const native = await skill.executeTool(call('get_workbook_context', {}))
+  const scoped = await skill.executeScopedTool!(call('get_workbook_context', {}))
+  expect(native.output).toContain('Current selection: B2:C4')
+  expect(scoped.output).not.toContain('Current selection:')
+  expect(scoped.output).toContain('Sheet1')
+})

@@ -1,15 +1,11 @@
 {
   "name": "@genoffice/pdf",
-  "productName": "GenOffice PDF",
   "version": "0.1.0",
   "license": "Apache-2.0",
   "private": true,
   "description": "PDF viewer module: PDF.js render + text layer + thumbnails, hosted by shell tabs",
-  "main": "out/main/index.js",
   "scripts": {
-    "dev": "electron-vite dev",
     "dev:renderer": "vite --config vite.renderer.config.ts",
-    "build": "electron-vite build",
     "test": "vitest run",
     "typecheck": "tsc --noEmit"
   },
@@ -26,8 +22,6 @@
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^5.0.4",
-    "electron": "^43.8.3",
-    "electron-vite": "^5.0.0",
     "harfbuzzjs": "^0.10.3",
     "jsdom": "^28.0.0",
     "node-forge": "^1.4.3",

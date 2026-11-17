@@ -1,22 +1,21 @@
 import { defineConfig } from '@playwright/test'
 
-/**
- * E2E config for the GenOffice Electron shell.
- *
- * Tests launch the real built app (electron.launch), so they run serially —
- * parallel Electron instances fight over the GPU cache and dock on macOS.
- * Run with: `npm run test:e2e` (after `npm run build:all`).
- */
+/** Shared renderer layout checks. No desktop product or Electron launcher. */
 export default defineConfig({
   testDir: '.',
+  testMatch: [
+    'ai-panel-side.spec.ts',
+    'docs-header-markup-layout.spec.ts',
+    'home-row-menu-layout.spec.ts',
+    'pdf-outline-layout.spec.ts',
+    'slides-selection-image.spec.ts',
+  ],
   outputDir: './test-results',
   timeout: 90_000,
   fullyParallel: false,
   workers: 1,
   retries: 0,
-  // flat, platform-suffix-free names: baselines are Linux-CI-only (the visual
-  // suite skips elsewhere), and {arg} already carries the corpus doc name
-  snapshotPathTemplate: '{testDir}/visual-baselines/{arg}{ext}',
   expect: { timeout: 15_000 },
+  use: { browserName: 'chromium' },
   reporter: [['list'], ['html', { outputFolder: './playwright-report', open: 'never' }]],
 })

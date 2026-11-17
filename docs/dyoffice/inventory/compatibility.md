@@ -25,6 +25,15 @@ including on root-lock, license, font, checker and baseline changes. This is sti
 only a T00 input-consistency gate; later deployment work should consume the manifest
 rather than equating it with runtime acceptance, an SBOM or an image digest.
 
+## SaaS baseline refresh
+
+The PR 134 SaaS-only refresh removes only Electron from the required selected npm
+package list and regenerates the snapshot from the reviewed manifests and locks.
+All other selected package version/integrity requirements, complete input-file
+hashes, both Cargo inventories and all font byte hashes remain enforced. Existing
+Windows clipboard source inputs remain recorded for drift, not enabled for SaaS.
+No manifests, locks, font files or runtime capabilities are changed by this refresh.
+
 ## Inspected versions and execution boundaries
 
 | Input | Resolved/declaration | What is actually established | Remaining verification |
@@ -35,7 +44,7 @@ rather than equating it with runtime acceptance, an SBOM or an image digest.
 | MCP SDK | Root lock 1.32.1; Web lock 1.32.2 | Two different installation contexts; Web server uses `apps/web` install | Do not claim protocol/client compatibility from package version or mocked handshake |
 | Web start/test scripts | `apps/web/package.json` scripts only | `dev`, `start`, and `test` load `tsx` so the server can import the DOCX engine sources. `test:web:integration` runs one named integration file | `tsx` comes from the workspace install. The boundary workflow uses `npm ci --ignore-scripts` and does not run Electron's postinstall |
 | Fastify | Web and root locks 5.12.8 | Locked for the modular API shell. `dev:web` invokes Fastify `buildApp` with the development legacy context | Not a production cutover, route migration, or security review of the framework |
-| Electron | Root lock 43.8.3 | Desktop dependency retained upstream | Web must not need Electron runtime; desktop version is not a server ABI guarantee |
+| Electron | Retired from the SaaS workspace and root lock | No longer a required compatibility-baseline package; no Electron dependency is restored | Runtime absence is checked separately by the SaaS entrypoint boundary tests, not by this input hash baseline |
 | Univer | `@univerjs/core` 0.25.1 | Existing spreadsheet UI dependency | Browser adapter, formula persistence and real Excel reopen pending |
 | PDF | PDFium 2.15.1, PDF.js 6.2.108, pdf-lib 1.17.1 | Parser/renderer package identities | WASM assets/workers/CSP, fonts and genuine text edit/export pending |
 | XLSX sidecar | Rust edition 2024; calamine 0.37.0, ironcalc 0.9.1, zip 9.1.0 | Cargo lock and explicit build config exist | Compiler toolchain, target/ABI, worker sandbox and native roundtrip pending |

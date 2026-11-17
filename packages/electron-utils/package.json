@@ -4,12 +4,11 @@
   "license": "Apache-2.0",
   "private": true,
   "type": "module",
-  "description": "Shared helpers for the Electron main processes (no Electron dependency, pure TS)",
+  "description": "Shared browser and server Office helpers; no Electron runtime dependency",
   "exports": {
     ".": "./src/index.ts",
     "./atomic-write": "./src/atomic-write.ts",
     "./disk-watch": "./src/disk-watch.ts",
-    "./drop-open": "./src/drop-open.ts",
     "./font-catalog": "./src/font-catalog.ts",
     "./font-store": "./src/font-store.ts",
     "./generated-images": "./src/generated-images.ts",
@@ -21,8 +20,6 @@
     "./print-window": "./src/print-window.ts",
     "./remote-image": "./src/remote-image.ts",
     "./remote-table": "./src/remote-table.ts",
-    "./renderer-protocol": "./src/renderer-protocol.ts",
-    "./renderer-scheme": "./src/renderer-scheme.ts",
     "./safe-external-url": "./src/safe-external-url.ts",
     "./safe-remote-url": "./src/safe-remote-url.ts"
   },

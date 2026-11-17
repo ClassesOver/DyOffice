@@ -1,6 +1,7 @@
+import {readFile} from 'node:fs/promises'
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { inspectTools, classifyTools, checkInventory } from './agent-tool-inventory.mjs'
+import { inspectTools, classifyTools, checkInventory, inventory } from './agent-tool-inventory.mjs'
 
 test('AST discovers literal and local constant tool names, excluding comments and unrelated names', () => {
   const rows = inspectTools(`// {name:'fake', inputSchema:{}}
@@ -30,7 +31,7 @@ test('schema changes are visible in the inventory fingerprint', () => {
   assert.notEqual(before[0].schemaSha256,after[0].schemaSha256)
 })
 test('repository tool definitions and reviewed generated inventory remain in sync', async () => {
-  assert.equal((await checkInventory()).count,151)
+  assert.equal((await checkInventory()).count,157)
 })
 
 test('shadowed or mutable tool-name bindings fail closed and shorthand schemas are inventoried', () => {
@@ -50,4 +51,19 @@ test('static computed tool properties are inventoried', () => {
   assert.throws(()=>inspectTools("const t={name:'a',[schemaKey]:{}}",'fixture.ts'))
   assert.throws(()=>inspectTools("const NAME='outer'; import * as NAME from 'x'; const t={name:NAME,inputSchema:{}}",'fixture.ts'))
   assert.equal(inspectTools("const t={['name']:'a',['inputSchema']:{}}",'fixture.ts')[0]?.name,'a')
+})
+
+ test('browser harness and metadata tools are inventoried with explicit boundaries',async()=>{
+ const rows=await inventory();
+ for(const id of ['packages/browser-host/src/assistant-channel.ts#list_channel_agents','packages/browser-host/src/assistant-channel.ts#delegate_channel_task','packages/browser-host/src/source-catalog-skill.ts#sources_list']) assert.ok(rows.some(row=>row.id===id),id)
+ })
+
+test('harness classifications distinguish live channel bindings from authorized service work',async()=>{
+ const spec=JSON.parse(await readFile(new URL('../../docs/dyoffice/inventory/agent-tools.json',import.meta.url),'utf8'));
+ const rows=classifyTools(await inventory(),spec);
+ for(const name of ['list_channel_agents','delegate_channel_task'])assert.equal(rows.find(r=>r.id==='packages/browser-host/src/assistant-channel.ts#'+name)?.placement,'live');
+ for(const name of ['delegate_agent_task','list_agent_data','list_agents'])assert.equal(rows.find(r=>r.id==='packages/agent-core/src/coding-skill.ts#'+name)?.placement,'headless');
+ assert.equal(rows.find(r=>r.id==='packages/browser-host/src/source-catalog-skill.ts#sources_list')?.placement,'headless');
+ assert.match(rows.find(r=>r.name==='delegate_agent_task').rationale,/task-scoped authorization/);
+ assert.match(rows.find(r=>r.name==='delegate_channel_task').rationale,/acknowledgement is not success/);
 })

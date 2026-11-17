@@ -10,12 +10,17 @@ const require=createRequire(import.meta.url)
 const initialCompilerOverride=process.env.ESBUILD_BINARY_PATH
 
 const PINNED_ESBUILD='0.25.12'
+// Nonlaunchable fixture build toolchain, aligned with tools/dyoffice/runtime-lock.json.
+const PINNED_NODE='v22.23.5'
+const NODE_TARGET='node22'
+// Preserve the existing local Node24 fixture range; only CI's exact Node22 is added.
+const supportedBuildNode=version=>version===PINNED_NODE||(typeof version==='string'&&/^v24\.\d+\.\d+$/.test(version))
 const ENTRY='apps/web/test/helpers/pdf-candidate-entry.mjs'
 const MAX_FILE=16*1024*1024, MAX_TOTAL=64*1024*1024, MAX_INPUTS=1024
 const sha=bytes=>createHash('sha256').update(bytes).digest('hex')
 const exact=(value,keys)=>value&&typeof value==='object'&&!Array.isArray(value)&&Object.keys(value).sort().join(',')===[...keys].sort().join(',')
 const hex=value=>typeof value==='string'&&/^[0-9a-f]{64}$/.test(value)
-const fixedRecipe=()=>({entry:ENTRY,platform:'node',format:'cjs',target:'node24',minify:true,legalComments:'eof',markdownLoader:'text',tsconfig:{target:'ES2022',useDefineForClassFields:true},esbuildVersion:PINNED_ESBUILD})
+const fixedRecipe=()=>({entry:ENTRY,platform:'node',format:'cjs',target:NODE_TARGET,minify:true,legalComments:'eof',markdownLoader:'text',tsconfig:{target:'ES2022',useDefineForClassFields:true},esbuildVersion:PINNED_ESBUILD})
 function fail(){throw new Error('RUNTIME_CANDIDATE_INVALID')}
 function canonical(value){
  if(Array.isArray(value))return '['+value.map(canonical).join(',')+']'
@@ -61,7 +66,7 @@ async function safeRoot(path){
 
 /** sourceRoot/outputParent are trusted offline operator configuration, not requests. */
 export async function preparePdfCandidate({sourceRoot,outputParent}){
- if(esbuildVersion!==PINNED_ESBUILD)fail()
+ if(esbuildVersion!==PINNED_ESBUILD||!supportedBuildNode(process.version))fail()
  if(initialCompilerOverride!==undefined||process.env.ESBUILD_BINARY_PATH!==undefined||process.platform!=='linux'||process.arch!=='x64')fail()
  const wrapper=await bytesOf(require.resolve('esbuild'),MAX_FILE,true)
  const compilerRequire=createRequire(require.resolve('esbuild'))
@@ -71,7 +76,7 @@ export async function preparePdfCandidate({sourceRoot,outputParent}){
  const inputs=new Map();let total=0
  const result=await build({
   absWorkingDir:sourceRoot,entryPoints:[ENTRY],outfile:'session.cjs',
-  bundle:true,platform:'node',format:'cjs',target:'node24',
+  bundle:true,platform:'node',format:'cjs',target:NODE_TARGET,
   tsconfigRaw:{compilerOptions:{target:'ES2022',useDefineForClassFields:true}},minify:true,legalComments:'eof',sourcemap:false,write:false,metafile:true,logLevel:'silent',
   plugins:[{name:'snapshot-inputs',setup(api){api.onLoad({filter:/.*/},async args=>{
    if(args.namespace!=='file')fail()
@@ -123,7 +128,7 @@ export function validatePdfCandidateManifest(manifest){
  if(!exact(manifest,['schema','kind','profileId','policyVersion','architecture','targetDistributions','productionEnabled','runtimeApproved','rootfsComplete','sourceAuthentication','dependencyAuthentication','toolchain','recipe','inputs','externals','files']))fail()
  if(canonical(manifest.recipe)!==canonical(fixedRecipe())||canonical(manifest.targetDistributions)!==canonical(['openEuler','ubuntu'])||manifest.sourceAuthentication!=='unverified-build-snapshots'||manifest.dependencyAuthentication!=='unverified')fail()
  const tool=manifest.toolchain
- if(!exact(tool,['esbuildVersion','wrapperSha256','nativeBinarySha256','nativeBinaryMode','nodeVersion','identityCertified'])||tool.esbuildVersion!==PINNED_ESBUILD||tool.identityCertified!==false||!hex(tool.wrapperSha256)||!hex(tool.nativeBinarySha256)||!Number.isInteger(tool.nativeBinaryMode)||tool.nativeBinaryMode<0||tool.nativeBinaryMode>0o777||typeof tool.nodeVersion!=='string'||!/^v24\.\d+\.\d+$/.test(tool.nodeVersion))fail()
+ if(!exact(tool,['esbuildVersion','wrapperSha256','nativeBinarySha256','nativeBinaryMode','nodeVersion','identityCertified'])||tool.esbuildVersion!==PINNED_ESBUILD||tool.identityCertified!==false||!hex(tool.wrapperSha256)||!hex(tool.nativeBinarySha256)||!Number.isInteger(tool.nativeBinaryMode)||tool.nativeBinaryMode<0||tool.nativeBinaryMode>0o777||!supportedBuildNode(tool.nodeVersion))fail()
  if(!Array.isArray(manifest.inputs)||!manifest.inputs.length||manifest.inputs.length>MAX_INPUTS)fail()
  let previous='',total=0
  for(const input of manifest.inputs){

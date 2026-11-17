@@ -1,0 +1,8 @@
+.analysis-deliveries { max-width: min(34rem, 100%); font-size: 12px; white-space: normal; }
+.analysis-deliveries summary { cursor: pointer; }
+.analysis-deliveries p { margin: .4rem 0; overflow-wrap: anywhere; }
+.analysis-deliveries ul { padding-inline-start: 1.2rem; }
+.analysis-deliveries code { overflow-wrap: anywhere; font-size: 11px; }
+.analysis-delivery { border-top: 1px solid currentColor; padding-block: .5rem; }
+.analysis-delivery button { margin-inline-start: .5rem; }
+.analysis-untrusted, .analysis-truncated { font-weight: 600; }

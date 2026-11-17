@@ -37,4 +37,7 @@ else
  "$PG_BIN/pg_ctl" -D "$TMP/plain" -l "$TMP/plain.log" -o "-h 127.0.0.1 -p $TLS_PLAIN_PORT -c unix_socket_directories=''" start
  export TLS_TEST_CA="$TMP/server.crt" TLS_TEST_WRONG_CA="$TMP/wrong.crt"
  node --test "$ROOT/apps/web/test/sandbox-pg/rust-tls.test.mjs"
+ export RUST_PG_TEST_CA="$TMP/server.crt" RUST_PG_TEST_KEY="$TMP/server.key"
+ export DYOFFICE_TEST_DATABASE_URL="postgresql://testadmin@127.0.0.1:$TLS_TEST_PORT/postgres"
+ node --experimental-transform-types --test --test-concurrency=1 "$ROOT/apps/web/test/sandbox-pg/rust-consumer.test.mjs"
 fi

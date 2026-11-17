@@ -1,16 +1,23 @@
 /// Render a standalone HTML document to PDF bytes in a hidden window —
 /// shared by the AI create_document flows (docs / pdf chat creating a new
 /// PDF file). The caller supplies the window so this package keeps its
-/// type-only Electron dependency; use a sandboxed, scripting-disabled
+/// host-neutral print contract; use a sandboxed, scripting-disabled
 /// window (`{ show: false, webPreferences: { sandbox: true, javascript: false } }`).
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import type { BrowserWindow } from 'electron'
 import { parseFragment, serialize } from 'parse5'
 
-export type PrintWindow = Pick<BrowserWindow, 'loadFile' | 'destroy'> & {
-  webContents: Pick<BrowserWindow['webContents'], 'printToPDF'>
+export interface PrintWindow {
+  loadFile(path: string): Promise<unknown>
+  destroy(): void
+  webContents: {
+    printToPDF(options: {
+      pageSize: string
+      printBackground: boolean
+      margins: { top: number; bottom: number; left: number; right: number }
+    }): Promise<Buffer>
+  }
 }
 
 declare const printableHtmlBrand: unique symbol

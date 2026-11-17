@@ -11,6 +11,7 @@
     "isolatedModules": true,
     "forceConsistentCasingInFileNames": true,
     "noUnusedLocals": false,
-    "noEmit": true
+    "noEmit": true,
+    "allowImportingTsExtensions": true
   }
 }

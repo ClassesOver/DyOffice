@@ -1,7 +1,7 @@
 /**
  * BrowserDriver over playwright-core driving a locally installed Chrome. Used
- * by the tests and the CLI; the app uses the Electron driver instead. Not
- * re-exported from the package index so app bundles never pull in Playwright.
+ * by server-side callers, tests and the CLI. Not re-exported from the
+ * package index so browser editor bundles never pull in Playwright.
  */
 import { existsSync } from 'node:fs'
 import { chromium } from 'playwright-core'

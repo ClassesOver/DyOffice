@@ -228,3 +228,17 @@ echo '[{"op":"insert_content","afterBlockIndex":0,"html":"<p>Executive summary.<
 - Conversions to PDF run inside the GenOffice app (hidden, a few seconds each); they need GenOffice installed, or `GENOFFICE_APP_BIN` pointing at it; the same holds for `docx→html` and `html→docx`.
 - `add_pivot` writes the pivot's cells at `targetCell` (no values or formulas there, on a sheet that already exists in the file) plus a native pivot Excel refreshes, source formulas are evaluated from the file so set them in an earlier batch; `add_sparkline` writes one in-cell sparkline per data row (at most 200 rows per op); `convert_to_values` replaces formulas with the values the workbook engine computes from the file (error results keep their formula; cell edits go in an earlier batch); `set_page_setup` also takes `printTitles`, `header`/`footer` and `rowBreaks`/`colBreaks`. Excel ops that still need the live editor (`refresh_pivot`, edits to session-created tables and shapes) are refused with the reason. `add_conditional_format` and `set_data_validation` add to the rules a sheet already has (`set_data_validation` on a range that has one replaces it, `null` removes it); `clear_conditional_formats` starts over.
 - Formulas are evaluated with the workbook engine after writing, so `sheet read` and cached-value readers see numbers.
+
+## Optional assistant channel connector
+
+`genoffice agent` uses HTTP and an explicitly configured stdio adapter, without MCP.
+Use `genoffice agent join --origin https://office.example --invite-file ./invite.txt --state-file ./channel.json --name MyHarness --kind custom`, then `status`, `redeem` after Office approval, and `connect` with the same `--state-file`.
+Credentials may also come from `GENOFFICE_AGENT_STATE_FILE`, `GENOFFICE_AGENT_ORIGIN`, and `GENOFFICE_AGENT_INVITE_TOKEN`; never put tokens in arguments or print the private 0600 state.
+Inspect `genoffice agent tasks`, or `genoffice agent task --task TASK_ID`.
+Send a scoped action with `genoffice agent send --action-file ./message.json`; the file contains `{to,action,requestId?}`.
+Run one explicitly selected task with `genoffice agent run --task TASK_ID --adapter-file ./adapter.json`.
+The adapter file is `{command:absoluteExecutable,args:string[]}`. It receives JSON `{task,claim,connectionEpoch}` on stdin and emits JSON `{summary,outcome:'succeeded'|'failed'}` on stdout. Only PATH is inherited. No named harness compatibility is implied; the adapter must implement this protocol. Do not retry an uncertain execution automatically.
+
+`genoffice data execute <operation> --args '{}'` or `--args-file ./operation.json` uses only task-authorized data credentials from the environment. `genoffice data manifest RESULT_ID` inspects a frozen result; `genoffice data download RESULT_ID --out ./snapshot.json` verifies and downloads it to a new file. Operation names and argument schemas come from the authorized task contract.
+
+On Linux, `genoffice agent watch --state-file ./channel.json --adapter-file ./adapter.json` explicitly runs a foreground worker with one-second authorized task polling and process-group cancellation. It claims queued work once, disconnects on shutdown, and never replays running/unknown tasks or uncertain results. Reverse actions use separate `agent send` and `agent task` commands. No named harness compatibility is implied.

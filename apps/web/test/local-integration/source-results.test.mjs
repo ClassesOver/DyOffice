@@ -1,3 +1,4 @@
+import {assertDisposableSourceDatabase} from '../helpers/disposable-source-database.mjs'
 // Real disposable PG tests for bounded, JSONB-materialized personal workspace results.
 // Never invokes a source connector while saving, paging, or downloading a result.
 import { test } from 'node:test'
@@ -23,7 +24,7 @@ function snapshot({ sourceId = 'metrics', sourceVersion = 1, count = 1203, text 
 }
 
 async function fixture(t, limits = {}) {
-  assert.equal(process.env.DYOFFICE_TEST_DATABASE_URL, 'postgresql://postgres:dyoffice-ci-test-only@127.0.0.1:55433/dyoffice_test', 'Use only the designated disposable test PG')
+  assertDisposableSourceDatabase(process.env.DYOFFICE_TEST_DATABASE_URL)
   const f = await restrictedFixture(t, { businessMax: 8, sourcesCredentialKeys: 'k1:' + randomBytes(32).toString('base64') })
   f.sources = createSourceService({ transactions: f.transactions, credentialKeys: 'k2:' + randomBytes(32).toString('base64') })
   f.results = createWorkspaceSourceResults({ transactions: f.transactions, ...limits })

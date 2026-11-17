@@ -57,6 +57,20 @@ test('realtime server decoder rejects fabricated numeric heads, invalid sequence
   }
 })
 
+test('channel notifications reuse the editor connection and failure leaves file notifications working',async t=>{
+ const f=fixture(t),head=snapshot(),conversationId=randomUUID()
+ let fail=false
+ const dispatcher=createRealtimeDispatcher({registry:f.registry,state:{async withSnapshot(connection,effect){await effect(head,[])}},async channelNotifications(token,fileId){assert.equal(token,f.connection.token);assert.equal(fileId,f.connection.fileId);if(fail)throw Error('peer service unavailable');return [{conversationId,sequence:2}]}})
+ await dispatcher.initialize(f.connection)
+ await dispatcher.poll(f.connection);await dispatcher.poll(f.connection)
+ assert.equal(f.socket.sent.filter(message=>message.type==='assistant-channels').length,1)
+ assert.deepEqual(decodeRealtimeServerMessage(JSON.stringify(f.socket.sent.at(-1))),{type:'assistant-channels',channels:[{conversationId,sequence:2}]})
+ assert.equal(decodeRealtimeServerMessage(JSON.stringify({type:'assistant-channels',channels:[{conversationId,sequence:-1}]})),undefined)
+ fail=true
+ assert.equal((await dispatcher.poll(f.connection)).status,'ok')
+ assert.equal(f.socket.terminated,false)
+})
+
 test('registry admits exactly 64 total and at most 8 per owner, with idempotent release', t => {
   const registry = createRealtimeRegistry(); t.after(() => registry.close())
   const reservations = [], users = Array.from({ length: 8 }, randomUUID)
