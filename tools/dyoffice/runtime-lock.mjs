@@ -65,4 +65,3 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
     else fail('expected --check or --runtime')
   } catch (error) { console.error(error.message); process.exitCode=1 }
 }
-
