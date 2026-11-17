@@ -30,6 +30,7 @@ import { isStraightLineKind } from '../editor/shape-svg'
 import { HIGHLIGHTER_ALPHA, isPenKind, type InkPenKind, type InkTool } from '../editor/ink'
 import { colorsFor, newInkPreset, widthsFor, type InkPreset } from '../editor/ink-presets'
 import { t, useI18n, type StringKey } from '../i18n/locale'
+import { showToast } from './toast-bus'
 import iconEditor from '../assets/icon-editor.png'
 import iconTranslate from '../assets/icon-translate.png'
 import type { BalloonMode, RevisionDisplayMode } from '../editor/revision-view'
@@ -442,13 +443,18 @@ export async function insertImageFromDataUrl(
 }
 
 export async function insertImageViaDialog(editor: Editor): Promise<void> {
-  const picked = await window.desktop.pickImage()
-  if (!picked) return
-  await insertImageFromDataUrl(
-    editor,
-    `data:${picked.mime};base64,${picked.base64}`,
-    t('ribbonPictureLabel', { name: picked.name }),
-  )
+  try {
+    const picked = await window.desktop.pickImage()
+    if (!picked) return
+    const inserted = await insertImageFromDataUrl(
+      editor,
+      `data:${picked.mime};base64,${picked.base64}`,
+      t('ribbonPictureLabel', { name: picked.name }),
+    )
+    if (!inserted) showToast(t('ribbonImageLoadFail'), 'error')
+  } catch {
+    showToast(t('ribbonImageLoadFail'), 'error')
+  }
 }
 
 /** 5 cm × 3 cm default textbox size in EMU (1 cm = 360000 EMU) */

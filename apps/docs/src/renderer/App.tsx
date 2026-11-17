@@ -7130,7 +7130,7 @@ export function App({ host }: { host?: { desktopActionsAvailable?: boolean; read
             const dataUrl = `data:${picked.mime};base64,${picked.base64}`
             const natural = await imageSizeOf(dataUrl)
             insertHfPicture(sub, { dataUrl, widthPx: natural.width, heightPx: natural.height })
-          })()
+          })().catch(() => showToast(t('ribbonImageLoadFail'), 'error'))
         }
         break
       case 'linkToPrevious':

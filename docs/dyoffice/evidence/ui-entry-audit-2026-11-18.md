@@ -344,3 +344,11 @@
 - 保留远端e6b2ce19精确turn ID助手结算断言和transport回归，transport23/23通过；另移除该远端测试末尾多余空行，修复CI的git diff --check失败。未因此宣称原生助手完整新CI通过。
 
 完整UI穷举仍在进行，本轮专项通过不代表全部控件、复杂文档、多端或读屏组合验收完成。
+
+## Word 本地图片选择失败反馈
+
+- 正式native renderer/mock文档与lease复现：正文“插入→图片”选择超过16 MiB的PNG会产生未处理的“此功能当前不可用”且无可见提示；损坏PNG则静默失败。页眉编辑中的图片入口还会直接泄漏解码异常“Failed to read image”。浏览器红证据：`/tmp/dyoffice-ui-audit/word-picture-picker-red/report.json`、`word-hf-picture-picker-red/report.json`。
+- 正文共享insertImageViaDialog捕获选择器拒绝，并检查现有插图函数返回值；页眉/页脚共用图片分支捕获选择/解码拒绝。均复用既有本地化“图片加载失败”toast，不改变可选格式/大小边界。取消继续静默，正常插图继续保留。没有调整主页或新增组件抽象。
+- 新增四项回归，其中选择拒绝和解码失败先红；取消与正常插图为正对照。最终图片选择、图片粘贴/拖放、页眉编辑/图片五文件34项通过，Web docs类型/生产构建通过，边界1336文件0违规，git diff --check通过；保留既有canvas和chunk提示。证据：`/tmp/dyoffice-insert-image-dialog-red.log`、`/tmp/dyoffice-insert-image-final-{tests,type,build,boundaries}.log`。
+- 最终构建正文/页眉各四场景通过：超限PNG、损坏PNG、WebP均显示错误，正文文本及图片数保持，随后正常PNG成功插入，0页面异常。文档/lease为mock，realtime ticket被阻止，无真实业务写。页眉成功检查限定doc-inline-img并核对准确data URL，排除ProseMirror separator辅助img；最初泛img计数误报不记录为产品缺陷。正文分页的纯空白变化以归一化文本比较处理。证据：`/tmp/dyoffice-ui-audit/word-{,hf-}picture-picker-postfix/report.json`。
+- 本轮仅覆盖上述图片入口失败恢复；不把它当作完整Ribbon、复杂文档或多端验收。页脚共用分支已修，未单独将页脚浏览器操作计入通过数量。
