@@ -295,3 +295,9 @@
 
 - 五个Form.Item标签原无htmlFor，对应label.control均为null；点击后只聚焦页签容器。控件已有aria-label，不属于空可访问名称。新增实际关联和开关标签点击回归先红后绿，useId隔离实例，分别配对htmlFor/id，未改变偏好读写和dirty逻辑。设置组件6/6通过，包含标签切换只改变草稿而不自动保存。
 - 最终构建390/1440浏览器共10个标签均关联且点击聚焦正确控件，两开关实际切换；关闭dirty弹窗拒绝确认后仍保留。0业务写、0页面异常，已目视390偏好截图。测试脚本首次在作者输入后无条件Escape关闭了整个配置弹窗，已改为仅展开Select时Escape并完整重跑，不将该脚本错误记为产品缺陷。证据：`/tmp/dyoffice-ui-audit/settings-label-postfix/report.json`、`/tmp/dyoffice-settings-label-browser.log`，组件红测见本轮工具输出（未另存完整stdout），最终组件结果包含于`/tmp/dyoffice-paging-label-final-shell.log`。
+
+## 共享 Cookie 双页偏好恢复补证
+
+- 同一Chromium context两页、全部API mock，三场景通过：普通权限403两次确定拒绝保留草稿且不误开恢复；A可见密码表单触发mock HttpOnly Cookie轮换，B晚到PUT被拒绝；跨账号Cookie后B晚到GET被拒绝。session-proof依据每次请求实际携带的合成Cookie，未用仅共享变量代替跨页Cookie传播。
+- 两轮换场景恢复层阻止后续写网络请求，保留dirty、同一DOCX生命周期stub及0 dispose，Tab/Escape与beforeunload保护保持。0页面异常、0未拦截API，未真实登录/改密/写业务。不将此证明为真实原生编辑器或真实认证服务验收；同页verified rebind的unknown fence另由组件/路由测试覆盖。合成首页列表存在无关读取alert，断言限定设置入口，未据此修改产品。证据：`/tmp/dyoffice-ui-audit/shared-cookie-preferences/{report.md,report.json}`。
+- e1508d8c修复发布后补跑Web397项，396通过/1既有条件跳过/0失败，日志`/tmp/dyoffice-paging-label-final-web.log`。此补证不代表完整UI穷举完成，原生PPTX当前不可部署、复杂原生文档和实体移动/读屏组合等证据缺口仍保留。
