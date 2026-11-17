@@ -34,13 +34,25 @@ let capabilities:Record<string,string>={}
 const tabs:TabSummary[]=[{id:'home',kind:'home',title:'首页',active:true,closable:false}]
 async function open(id:string){
  const result=await client.request<{format:string;file:{fileId:string}}>(`/api/v1/files/${encodeURIComponent(id)}`)
- if(result.format!=='docx'||capabilities.docx!=='editable')throw new Error('此格式的本地编辑器尚未接入。文件仍保留在个人工作区。')
+ if(!['docx','xlsx'].includes(result.format)||capabilities[result.format]!=='editable')throw new Error('此格式的本地编辑器尚未接入。文件仍保留在个人工作区。')
  // Native editor forbids framing. Use its guarded top-level lifecycle, not a legacy iframe.
- location.assign(`/native-docx/?fileId=${encodeURIComponent(result.file.fileId)}`)
+ location.assign(`/native-${result.format}/?fileId=${encodeURIComponent(result.file.fileId)}`)
 }
 let busy=false
-async function upload(file:File){if(busy)throw new Error('正在导入，请稍候');if(!/\.docx$/i.test(file.name))throw new Error('当前入口仅支持 DOCX 导入和编辑。');busy=true;try{const result=await client.upload(file);notifyFilesChanged();await open(result.file.fileId)}finally{busy=false}}
-async function browse(){if(capabilities.docx!=='editable')throw new Error('本地编辑器尚未启用');const input=document.createElement('input');input.type='file';input.accept='.docx';input.onchange=()=>{const file=input.files?.[0];if(file)void upload(file).catch(e=>notice(e.message))};input.click()}
+async function upload(file:File){
+ if(busy)throw new Error('正在导入，请稍候')
+ const format=/\.(docx|xlsx)$/i.exec(file.name)?.[1].toLowerCase()
+ if(!format)throw new Error('请选择 DOCX 或 XLSX 文件。')
+ if(capabilities[format]!=='editable')throw new Error('此格式的本地编辑器尚未启用。')
+ busy=true
+ try{const result=await client.upload(file);notifyFilesChanged();await open(result.file.fileId)}finally{busy=false}
+}
+async function browse(){
+ const formats=['docx','xlsx'].filter(format=>capabilities[format]==='editable')
+ if(!formats.length)throw new Error('本地编辑器尚未启用')
+ const input=document.createElement('input');input.type='file';input.accept=formats.map(format=>'.'+format).join(',')
+ input.onchange=()=>{const file=input.files?.[0];if(file)void upload(file).catch(e=>notice(e.message))};input.click()
+}
 const unsupported=async()=>{throw new Error('此桌面操作尚未适配到本地 Web。')}
 function installBridge(){
  window.aiOffice=createWebHomeBridge({request:client.homeRequest,open,changed:notifyFilesChanged,unsupported:m=>notice(m),browse})
