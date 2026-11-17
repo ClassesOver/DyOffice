@@ -5,6 +5,7 @@ import {mkdir, readFile} from 'node:fs/promises'
 import {randomBytes} from 'node:crypto'
 import {expect} from '@playwright/test'
 import {launchTestBrowser} from '../helpers/browser.mjs'
+import {accountAction, settingsTab, closeWorkspaceDialog, selectOption} from '../helpers/workspace-ui.mjs'
 import {fileFixture, docxBytes, importFile} from '../helpers/files.mjs'
 import {password} from '../helpers/identity.mjs'
 import {buildLocalApp} from '../../server/src/app.ts'
@@ -15,10 +16,7 @@ const login = async (page, username) => {
   await page.getByRole('button', {name: '登录', exact: true}).click()
   await expect(page.locator('.home')).toBeVisible()
 }
-const account = async (page, name) => {
-  await page.locator('.account-btn').click()
-  await page.getByRole('button', {name, exact: true}).click()
-}
+const account = accountAction
 const row = (page, name) => page.locator('.recent-row').filter({has: page.locator('.recent-name').filter({hasText: new RegExp('^' + name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '$')})})
 const panel = page => page.getByRole('dialog', {name: '全局配置', exact: true})
 async function serve(t, port, keyring) {
@@ -50,13 +48,21 @@ test('T12 original Home persists folders stars recents and trash while themes pr
   for (const [path, name] of fixtures) {
     t.diagnostic('Importing ' + name + ' through the original Home picker')
     const bytes = await readFile(new URL('../../../../' + path, import.meta.url)); originals.set(name, bytes)
-    const chooser = page.waitForEvent('filechooser')
     await page.getByRole('button', {name: /^打开本地文件/}).click()
-    const finished = page.waitForResponse(response => response.url().endsWith('/finish'))
+    const upload = page.getByRole('dialog', {name:'上传文件', exact:true})
+    await expect(upload).toBeVisible()
+    const chooser = page.waitForEvent('filechooser')
+    await upload.locator('.ant-upload-drag').click()
     await (await chooser).setFiles({name, mimeType: 'application/octet-stream', buffer: bytes})
+    await expect(upload.getByText(name,{exact:true})).toBeVisible()
+    const finished = page.waitForResponse(response => response.url().endsWith('/finish'))
+    await upload.getByRole('button',{name:/^开始上传/}).click()
     assert.equal((await finished).status(), 200)
+    await expect(upload).toContainText('已上传并打开')
+    await upload.getByRole('button',{name:'完成',exact:true}).click()
+    await expect(upload).not.toBeVisible()
+    await page.locator('.tab-home').click()
     await expect(row(page, name)).toBeVisible()
-    await page.locator('.web-notice').getByRole('button', {name: '关闭', exact: true}).click()
   }
   const files = (await f.files.listFiles(f.alice.token)).files
   assert.equal(files.length, 4)
@@ -87,26 +93,30 @@ test('T12 original Home persists folders stars recents and trash while themes pr
   await expect(trash).toContainText('workspace.docx')
   await trash.getByRole('button', {name: '恢复', exact: true}).click()
   await expect(trash).toContainText('回收站为空')
-  await trash.getByRole('button', {name: '关闭', exact: true}).click()
+  await closeWorkspaceDialog(trash)
   await expect(row(page, 'workspace.docx').getByRole('button', {name: '取消收藏', exact: true})).toBeVisible()
   for (const [theme, title] of [['light', '浅色'], ['dark', '深色']]) {
     await account(page, '个人设置')
     const settings = page.getByRole('dialog')
-    await settings.getByRole('button', {name: '通用', exact: true}).click()
-    await settings.locator('#set-author-name').fill('T12 '+theme+' author')
+    await settingsTab(settings,'通用偏好')
+    await settings.getByLabel('文档作者',{exact:true}).fill('T12 '+theme+' author')
     await settings.getByLabel('主题', {exact: true}).click()
     const saved = page.waitForResponse(response => response.url().endsWith('/preferences') && response.request().method() === 'PUT')
     await page.getByRole('option', {name: title, exact: true}).click()
     await settings.getByRole('button', {name: '保存个人偏好', exact: true}).click(); assert.equal((await saved).status(), 200)
     await expect(page.locator('html')).toHaveAttribute('data-theme', theme)
-    await settings.locator('.set-close').click()
+    await closeWorkspaceDialog(settings)
     for (const [name, bytes] of originals) {
-      const downloading = page.waitForEvent('download')
       await row(page, name).locator('.recent-item').click()
+      const downloadLink = page.getByRole('link',{name:'下载原件',exact:true}).filter({visible:true})
+      await expect(downloadLink).toBeVisible()
+      const downloading = page.waitForEvent('download')
+      await downloadLink.click()
       const download = await downloading, chunks = []
       assert.equal(download.suggestedFilename(), name)
       for await (const chunk of await download.createReadStream()) chunks.push(chunk)
       assert.deepEqual(Buffer.concat(chunks), bytes)
+      await page.locator('.tab-home').click()
     }
     await mkdir('test-results', {recursive: true})
     await page.screenshot({path: `test-results/t12-workspace-${theme}.png`, fullPage: true})
@@ -116,7 +126,7 @@ test('T12 original Home persists folders stars recents and trash while themes pr
   await login(page, 'bob')
   await expect(page.locator('.recent-name')).toHaveCount(0)
   await expect(page.locator('.tree-name').filter({hasText: /^T12 Projects$/})).toHaveCount(0)
-  await page.locator('.account-btn').click(); await expect(page.getByRole('button', {name: '全局配置', exact: true})).toHaveCount(0)
+  await page.locator('.account-btn').click(); await expect(page.getByRole('menuitem', {name: '全局配置', exact: true})).toHaveCount(0)
   assert.equal((await context.request.get(origin + '/api/v1/admin/config')).status(), 403)
   assert.equal((await context.request.get(origin + '/api/v1/files/' + files[0].id)).status(), 404)
   await page.locator('.account-btn').click()
@@ -139,7 +149,7 @@ test('T12 global settings UI keeps secrets private and reconciles real revision 
     const form = panel(target)
     await form.getByRole('button', {name: '添加配置', exact: true}).click()
     await form.getByLabel('配置名称', {exact: true}).fill(name)
-    await form.getByLabel('服务商', {exact: true}).selectOption('openai')
+    await selectOption(target,form,'服务商','OpenAI')
     await form.getByLabel('模型标识', {exact: true}).fill('gpt-6-luna')
     await form.getByLabel('服务地址', {exact: true}).fill('https://provider.example/v1')
     await form.getByLabel('启用配置', {exact: true}).check()
@@ -152,7 +162,7 @@ test('T12 global settings UI keeps secrets private and reconciles real revision 
   }
   await add(page, 'Primary T12', sentinel)
   assert.ok((await panel(page).locator('.global-settings-editor').boundingBox()).width > 400, 'desktop editor must use the available dialog width')
-  await panel(page).getByLabel('默认对话配置', {exact: true}).selectOption({label: 'Primary T12'})
+  await selectOption(page,panel(page),'默认对话配置','Primary T12')
   const v1 = await save(page); assert.equal(v1.revision, 1); assert.equal(v1.entries[0].hasKey, true)
   await expect(panel(page).getByLabel('API 密钥', {exact: true})).toHaveValue('')
   await add(second, 'Retained draft T12')
@@ -198,7 +208,7 @@ test('T12 global settings UI keeps secrets private and reconciles real revision 
   await page.screenshot({path: 'test-results/t12-global-settings-mobile.png', fullPage: true})
   await page.setViewportSize({width: 1440, height: 1100})
   for (const [kind, name] of [['image_generation', 'Image media'], ['web_search', 'Web search'], ['rerank', 'Rerank']]) {
-    await panel(page).getByLabel('配置类型筛选', {exact: true}).selectOption(kind)
+    await selectOption(page,panel(page),'配置类型筛选',({image_generation:'图像生成',web_search:'网页搜索',rerank:'重排'})[kind])
     await panel(page).getByRole('button', {name: '添加配置', exact: true}).click()
     await panel(page).getByLabel('配置名称', {exact: true}).fill(name)
     await panel(page).getByLabel('模型标识', {exact: true}).fill('synthetic')
@@ -216,29 +226,31 @@ test('personal Settings imports and reads a private SKILL.md and an old tab cann
   await login(page, 'alice')
   const openSkills = async target => {
     await account(target, '个人设置')
-    await target.getByRole('button', {name: '技能', exact: true}).click()
+    await settingsTab(target.getByRole('dialog',{name:'个人设置',exact:true}),'个人技能')
   }
   const listing = page.waitForResponse(r => r.url().endsWith('/api/v1/skills'))
   await openSkills(page)
   const oldProof = (await listing).request().headers()['x-csrf-token']
   const picker = page.waitForEvent('filechooser')
   await page.getByRole('button', {name: '导入 SKILL.md'}).click()
-  await (await picker).setFiles({name: 'SKILL.md', mimeType: 'text/markdown', buffer: Buffer.from('---\nname: personal-report\ndescription: Alice skill\n---\nAlice private instruction')})
-  const card = page.locator('.set-skill-card').filter({hasText: 'Alice skill'})
+  await (await picker).setFiles({name: 'SKILL.md', mimeType: 'text/markdown', buffer: Buffer.from('---\nname: personal-report\ndescription: Alice skill\n---\nAlice private instruction for DOCX documents')})
+  const card = page.locator('tr[data-row-key="personal-report"]')
   await expect(card).toBeVisible()
-  await card.locator('summary').click()
-  await expect(card.locator('code')).toHaveText('Alice private instruction')
-  await card.locator('summary').click()
-  const settings = page.getByRole('dialog')
-  await settings.locator('.set-nav-account').click()
+  await card.getByRole('button',{name:'查看',exact:true}).click()
+  const skillDialog=page.getByRole('dialog',{name:'Skill：personal-report',exact:true})
+  await expect(skillDialog.getByLabel('Skill 内容',{exact:true})).toHaveValue('Alice private instruction for DOCX documents')
+  await skillDialog.getByRole('button',{name:'关闭',exact:true}).click()
+  await expect(skillDialog).not.toBeVisible()
+  const settings = page.getByRole('dialog',{name:'个人设置',exact:true})
+  await settingsTab(settings,'账户与安全')
   await settings.getByLabel('当前密码', {exact: true}).fill(password)
   await settings.getByLabel('新密码', {exact: true}).fill('amber forest river lanterns 9372')
   await settings.getByLabel('确认新密码', {exact: true}).fill('amber forest river lanterns 9372')
+  const renewedList = page.waitForResponse(r => r.url().endsWith('/api/v1/skills'))
   await settings.getByRole('button', {name: '修改密码', exact: true}).click()
   await expect(settings.getByRole('status').filter({hasText: '当前会话已更新'})).toBeVisible()
   assert.equal((await context.request.get(origin + '/api/v1/skills', {headers: {'x-csrf-token': oldProof}})).status(), 403)
-  const renewedList = page.waitForResponse(r => r.url().endsWith('/api/v1/skills'))
-  await settings.getByRole('button', {name: '技能', exact: true}).click()
+  await settingsTab(settings,'个人技能')
   await expect(card).toBeVisible()
   const renewedProof = (await renewedList).request().headers()['x-csrf-token']
   assert.notEqual(renewedProof, oldProof)
@@ -249,7 +261,7 @@ test('personal Settings imports and reads a private SKILL.md and an old tab cann
   await login(second, 'bob')
   await openSkills(second)
   await expect(second.getByRole('button', {name: '导入 SKILL.md'})).toBeVisible()
-  await expect(second.locator('.set-skill-card')).toHaveCount(0)
+  await expect(second.getByText('尚未导入办公技能',{exact:true})).toBeVisible(); await expect(second.locator('tr[data-row-key="personal-report"]')).toHaveCount(0)
   const currentProof = await (await context.request.get(origin + '/api/v1/auth/session-proof')).json()
   assert.equal((await context.request.get(origin + '/api/v1/skills', {headers: {'x-csrf-token': renewedProof}})).status(), 403)
   assert.equal((await context.request.get(origin + '/api/v1/skills/personal-report', {headers: {'x-csrf-token': currentProof.csrfToken}})).status(), 404)

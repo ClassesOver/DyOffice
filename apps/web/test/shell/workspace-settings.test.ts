@@ -23,3 +23,27 @@ test('preferences remain drafts until explicit save and pending save prevents ta
  await vi.waitFor(()=>expect(document.body.textContent).toContain('个人偏好已保存'));expect(guard?.()).toBe(true)
  }finally{root.unmount()}
 })
+
+test('successful password rotation reloads current sessions without losing the password success message',async()=>{
+ const {act}=await import('react')
+ const {localSessionsClient}=await import('../../src/shell/local-sessions-client')
+ const {loginHistoryClient}=await import('../../src/shell/local-login-history-client')
+ ;(globalThis as typeof globalThis & {IS_REACT_ACT_ENVIRONMENT:boolean}).IS_REACT_ACT_ENVIRONMENT=true
+ let rotated=false
+ const session=(id:string)=>({id,current:true,createdAt:'2026-01-01T00:00:00Z',lastSeenAt:'2026-01-01T00:00:00Z',expiresAt:'2027-01-01T00:00:00Z'})
+ const list=vi.spyOn(localSessionsClient,'list').mockImplementation(async()=>[session(rotated?'replacement-session':'old-session')])
+ const history=vi.spyOn(loginHistoryClient,'list').mockResolvedValue([])
+ document.body.innerHTML='<div id="rotation-test"></div>'
+ const root=createRoot(document.getElementById('rotation-test')!)
+ try{
+  await act(async()=>root.render(h(WorkspaceSettings,{user:{username:'alice',displayName:'Alice',roles:['personal']},load:async()=>initial,save:async()=>initial,security:{changePassword:async()=>{rotated=true},onCurrentRevoked:()=>{}},skills:h('p',null,'skills'),onClose:()=>{},onLogout:()=>{},onCloseGuardChange:()=>{}})))
+  expect(document.querySelector('[data-session-id="old-session"]')).not.toBeNull()
+  const current=document.querySelector<HTMLInputElement>('#local-current-password')!,next=document.querySelector<HTMLInputElement>('#local-new-password')!,confirm=document.querySelector<HTMLInputElement>('#local-confirm-password')!
+  current.value='existing long password';next.value=confirm.value='new long password phrase'
+  await act(async()=>current.form!.dispatchEvent(new Event('submit',{bubbles:true,cancelable:true})))
+  expect(list).toHaveBeenCalledTimes(2)
+  expect(document.querySelector('[data-session-id="replacement-session"]')).not.toBeNull()
+  expect(document.querySelector('[data-session-id="old-session"]')).toBeNull()
+  expect(document.querySelector('.personal-account-password [role="status"]')?.textContent).toContain('当前会话已更新')
+ }finally{await act(async()=>root.unmount());list.mockRestore();history.mockRestore();document.body.innerHTML=''}
+})

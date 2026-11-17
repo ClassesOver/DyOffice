@@ -4,6 +4,7 @@ import {fileURLToPath} from 'node:url'
 import {mkdir} from 'node:fs/promises'
 import {expect} from '@playwright/test'
 import {launchTestBrowser} from '../helpers/browser.mjs'
+import {accountAction, settingsTab} from '../helpers/workspace-ui.mjs'
 import {fileFixture,docxBytes,importFile} from '../helpers/files.mjs'
 import {password} from '../helpers/identity.mjs'
 import {buildLocalApp} from '../../server/src/app.ts'
@@ -21,14 +22,14 @@ test('local original shell logs in, saves personal settings, isolates accounts a
  await page.goto(origin);await login('alice');await page.locator('.tree-name').filter({hasText:/^个人文件$/}).click();await expect(page.getByText('alice-private.docx',{exact:true})).toBeVisible()
  const newButtons=page.locator('.quick-card[disabled]');assert.ok(await newButtons.count()>=4,'unwired editor creation must be disabled')
  await mkdir('test-results',{recursive:true});await page.screenshot({path:'test-results/local-shell-home.png',fullPage:true})
- await page.locator('.account-btn').click();await page.getByRole('button',{name:'个人设置',exact:true}).click()
- const dialog=page.getByRole('dialog');await expect(dialog).toContainText('个人工作区');await expect(dialog).toContainText('alice')
+ await accountAction(page,'个人设置')
+ const dialog=page.getByRole('dialog');await expect(dialog.getByRole('tab',{name:'账户与安全',exact:true})).toHaveAttribute('aria-selected','true');await expect(dialog).toContainText('alice')
  await page.screenshot({path:'test-results/local-shell-account.png',fullPage:true})
- await dialog.getByRole('button',{name:'通用',exact:true}).click();await expect(dialog.locator('#set-author-name')).toBeEnabled();await dialog.locator('#set-author-name').fill('Alice browser author')
- const saved=page.waitForResponse(r=>r.url().endsWith('/api/v1/preferences')&&r.request().method()==='PUT');await dialog.locator('#set-author-name').press('Enter');assert.equal((await saved).status(),200)
+ await settingsTab(dialog, '通用偏好');await expect(dialog.getByLabel('文档作者', {exact:true})).toBeEnabled();await dialog.getByLabel('文档作者', {exact:true}).fill('Alice browser author')
+ const saved=page.waitForResponse(r=>r.url().endsWith('/api/v1/preferences')&&r.request().method()==='PUT');await dialog.getByRole('button',{name:'保存个人偏好',exact:true}).click();assert.equal((await saved).status(),200)
  assert.equal((await f.preferences.get(f.alice.token)).authorName,'Alice browser author');assert.equal((await f.preferences.get(f.bob.token)).authorName,'')
- await dialog.locator('.set-pane').evaluate(el=>{el.scrollTop=0});await page.screenshot({path:'test-results/local-shell-general.png',fullPage:true})
- await page.reload();await expect(page.locator('.home')).toBeVisible();await page.locator('.account-btn').click();await page.getByRole('button',{name:'退出登录',exact:true}).click();await expect(page.getByLabel('用户名',{exact:true})).toBeVisible()
+ await dialog.getByRole('tab',{name:'通用偏好',exact:true}).scrollIntoViewIfNeeded();await page.screenshot({path:'test-results/local-shell-general.png',fullPage:true})
+ await page.reload();await expect(page.locator('.home')).toBeVisible();await accountAction(page,'退出登录');await expect(page.getByLabel('用户名',{exact:true})).toBeVisible()
  await login('bob');await expect(page.getByText('alice-private.docx',{exact:true})).toHaveCount(0)
  assert.deepEqual(await page.evaluate(()=>[...Object.keys(localStorage),...Object.keys(sessionStorage)].filter(key=>/token|password|session/i.test(key))),[]);assert.deepEqual(errors,[])
 })

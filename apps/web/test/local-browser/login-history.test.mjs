@@ -5,6 +5,7 @@ import {randomUUID} from 'node:crypto'
 import {mkdir} from 'node:fs/promises'
 import {expect} from '@playwright/test'
 import {launchTestBrowser} from '../helpers/browser.mjs'
+import {accountAction} from '../helpers/workspace-ui.mjs'
 import {fileFixture} from '../helpers/files.mjs'
 import {password} from '../helpers/identity.mjs'
 import {buildLocalApp} from '../../server/src/app.ts'
@@ -26,7 +27,7 @@ test('original account login history displays only its private bounded projectio
  const events=response.json().events;assert.ok(events.length<=20);assert.ok(events.some(e=>e.outcome==='failure'));assert.ok(events.some(e=>e.occurredAt===aliceTime));assert.ok(events.every(e=>e.occurredAt!==bobTime));for(const event of events)assert.deepEqual(Object.keys(event).sort(),['occurredAt','outcome'])
  const bob=(await app.inject({url:'/api/v1/auth/login-history',headers:{cookie:'__Host-dyoffice-session='+f.bob.token}})).json().events;assert.ok(bob.some(e=>e.occurredAt===bobTime));assert.ok(bob.every(e=>e.occurredAt!==aliceTime))
  assert.equal((await app.inject({url:'/api/v1/auth/login-history?owner='+f.bob.user.id,headers:{cookie:'__Host-dyoffice-session='+token}})).statusCode,400)
- await page.locator('.account-btn').click();await page.getByRole('button',{name:'个人设置',exact:true}).click();const panel=page.getByRole('region',{name:'登录历史摘要'})
+ await accountAction(page,'个人设置');const panel=page.getByRole('region',{name:'登录历史摘要'})
  await expect(panel.locator('[data-history-event]')).toHaveCount(events.length);await expect(panel.locator(`time[datetime="${aliceTime}"]`)).toBeVisible();await expect(panel.locator(`time[datetime="${bobTime}"]`)).toHaveCount(0);await expect(panel).toContainText('早期失败记录可能不包含')
  const text=await panel.textContent();for(const secret of [password,token,f.alice.user.id,f.bob.user.id])assert.equal(text.includes(secret),false)
  await panel.scrollIntoViewIfNeeded();await mkdir('test-results',{recursive:true});await page.screenshot({path:'test-results/local-shell-login-history.png',fullPage:true})

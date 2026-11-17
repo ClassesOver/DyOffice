@@ -12,6 +12,7 @@ export function WorkspaceSettings({user,load,save,security,skills,onLogout,onClo
  security:{changePassword:(current:string,next:string)=>Promise<void>;onCurrentRevoked:()=>void};skills:ReactNode|((registerGuard:(guard:(()=>boolean)|null)=>void)=>ReactNode);onLogout:()=>void;onClose:()=>void;onCloseGuardChange:(guard:(()=>boolean)|null)=>void
 }){
  const [baseline,setBaseline]=useState<WebSettingsPreferences|null>(null),[draft,setDraft]=useState<WebSettingsPreferences|null>(null)
+ const [sessionsGeneration,setSessionsGeneration]=useState(0)
  const [busy,setBusy]=useState(false),[error,setError]=useState(''),[saved,setSaved]=useState(false)
  const lock=useRef(false),alive=useRef(true)
  const securityGuards=useRef<{password:(()=>boolean)|null;sessions:(()=>boolean)|null;skills:(()=>boolean)|null}>({password:null,sessions:null,skills:null})
@@ -28,8 +29,8 @@ export function WorkspaceSettings({user,load,save,security,skills,onLogout,onClo
  useEffect(()=>{if(!dirty)return;const prevent=(e:BeforeUnloadEvent)=>{e.preventDefault();e.returnValue=''};window.addEventListener('beforeunload',prevent);return()=>window.removeEventListener('beforeunload',prevent)},[dirty])
  const account=<Space className="personal-settings-account" orientation="vertical" size={20} style={{width:'100%'}}>
   <Card className="personal-settings-profile" title={<Space size={8}><UserOutlined aria-hidden="true"/>个人资料</Space>}><Descriptions layout="vertical" column={{xs:1,sm:3}} items={[{key:'username',label:'用户名',children:user.username},{key:'name',label:'显示名称',children:user.displayName||user.username},{key:'roles',label:'账号角色',children:user.roles.map(role=>({personal:'个人用户',config_admin:'配置管理员',operator:'运维人员',auditor:'审计人员'}[role]||role)).join(' · ')}]}/></Card>
-  <Card className="personal-settings-password" title={<Space size={8}><LockOutlined aria-hidden="true"/>密码与安全</Space>}><LocalPasswordForm onCloseGuardChange={passwordGuard} changePassword={security.changePassword} reload={()=>location.reload()}/></Card>
-  <Card className="personal-settings-sessions" title={<Space size={8}><DesktopOutlined aria-hidden="true"/>登录会话</Space>}><LocalSessionsPanel onCloseGuardChange={sessionsGuard} onCurrentRevoked={security.onCurrentRevoked}/></Card>
+  <Card className="personal-settings-password" title={<Space size={8}><LockOutlined aria-hidden="true"/>密码与安全</Space>}><LocalPasswordForm onCloseGuardChange={passwordGuard} changePassword={async(current,next)=>{await security.changePassword(current,next);setSessionsGeneration(value=>value+1)}} reload={()=>location.reload()}/></Card>
+  <Card className="personal-settings-sessions" title={<Space size={8}><DesktopOutlined aria-hidden="true"/>登录会话</Space>}><LocalSessionsPanel key={sessionsGeneration} onCloseGuardChange={sessionsGuard} onCurrentRevoked={security.onCurrentRevoked}/></Card>
   <Card className="personal-settings-history" title={<Space size={8}><HistoryOutlined aria-hidden="true"/>登录记录</Space>}><LoginHistoryPanel/></Card>
   <Card className="personal-settings-logout"><Space style={{width:'100%',justifyContent:'space-between'}} wrap><div><Typography.Text strong>退出当前账号</Typography.Text><Paragraph type="secondary" style={{marginBottom:0}}>仅退出此浏览器，其他会话保持有效。</Paragraph></div><Button danger onClick={()=>{if(guard())onLogout()}}>退出登录</Button></Space></Card>
  </Space>
