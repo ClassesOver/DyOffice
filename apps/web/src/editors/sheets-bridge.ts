@@ -118,6 +118,9 @@ export function createSheetsBridge(host: SessionFileHost, fileId: string, prefs:
         committed=saved
         return {canceled:false as const,file:await open(),touchedEntries:saved.touchedEntries}
       } catch(error) {
+        // Teardown cannot undo a dispatched commit. Leave its durable/unknown
+        // state in the host, but never recreate recovery for an unmounted view.
+        if (disposed) throw hostError('UNAVAILABLE','disposed')
         if (!saved && host.getState(fileId).status !== 'unknown') throw error
         // Keep save-actions' original Promise, journal snapshot and view alive.
         // Confirmation resumes that exact save, including its late-edit carry.
@@ -138,6 +141,7 @@ export function createSheetsBridge(host: SessionFileHost, fileId: string, prefs:
     confirming=true
     try {
       pending.saved ??= await host.reconcileSheets(fileId,saveFence??(()=>true))
+      if (disposed) throw hostError('UNAVAILABLE','disposed')
       committed=pending.saved
       const file=await open()
       recovery=null
@@ -145,7 +149,7 @@ export function createSheetsBridge(host: SessionFileHost, fileId: string, prefs:
     } catch(error) {
       if (!pending.saved && host.getState(fileId).status !== 'unknown') {recovery=null;pending.reject(error)}
       throw error
-    } finally {confirming=false;onChange()}
+    } finally {confirming=false;if(!disposed)onChange()}
   }
   async function prepareDownload(editor: {saveAndWait(): Promise<boolean>; isDirty(): boolean}) {
     if(disposed)throw hostError('UNAVAILABLE','disposed')
