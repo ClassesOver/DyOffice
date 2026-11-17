@@ -57,3 +57,6 @@ apps/web/.dyoffice/
 
 # Offline analysis wheelhouse and installed Python runtime
 /.dyoffice-analysis-build/
+
+# Incomplete local notices inventories are not release artifacts.
+/artifacts/notices/

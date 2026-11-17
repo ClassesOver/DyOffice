@@ -11,6 +11,7 @@ function fixture(t){
  globalThis.setInterval=(callback)=>{intervals.push(callback);return intervals.length}
  globalThis.clearInterval=()=>{}
  t.after(()=>{globalThis.setInterval=originalSetInterval;globalThis.clearInterval=originalClearInterval})
+ let claimFailures=[]
  let claimGate,createGate,actionGate,connectGate,refreshGate,yieldGate,cancelGate
  let next={conversationId:'channel-1',fileId:'file-1',paused:false,sequence:1,members:[],applications:[],tasks:[]}
  const request=async(path,method,body)=>{
@@ -21,6 +22,7 @@ function fixture(t){
   if(path.endsWith('/connect'))return {connectionEpoch:1}
   if(path.endsWith('/yield')&&yieldGate)return yieldGate.promise
   if(path.endsWith('/office-task')){const parent={...task('native-parent','running'),from:'office',instruction:body.instruction};next={...next,tasks:[...next.tasks,parent]};return parent}
+  if(path.endsWith('/claim')&&claimFailures.length)throw claimFailures.shift()
   if(path.endsWith('/claim')&&claimGate)return claimGate.promise
   if(path.endsWith('/claim')){const claimed=next.tasks.find(value=>value.taskId===body.taskId);next={...next,tasks:next.tasks.map(value=>value.taskId===body.taskId?{...value,state:'running'}:value)};return {...claimed,state:'running'}}
   if(path.endsWith('/actions')){
@@ -36,7 +38,7 @@ function fixture(t){
  }
  const client=createAssistantChannelClient({request,fileId:'file-1',editorId:'editor-1',generation:()=>1})
  t.after(()=>client.dispose())
- return {client,calls,intervals,executions,yieldRequests,continuations,continuationTokens,cancellations,holdCancel(){cancelGate=deferred();return cancelGate},holdYield(){yieldGate=deferred();return yieldGate},holdRefresh(){refreshGate=deferred();return refreshGate},holdConnect(){connectGate=deferred();return connectGate},holdAction(){actionGate=deferred();return actionGate},holdClaim(){claimGate=deferred();return claimGate},holdCreate(){createGate=deferred();return createGate},setSnapshot(value){next={...next,...value}},register(execute=async()=>({text:'Findings',cancelled:false})){
+ return {client,calls,intervals,executions,yieldRequests,continuations,continuationTokens,cancellations,failClaims(...errors){claimFailures=errors},holdCancel(){cancelGate=deferred();return cancelGate},holdYield(){yieldGate=deferred();return yieldGate},holdRefresh(){refreshGate=deferred();return refreshGate},holdConnect(){connectGate=deferred();return connectGate},holdAction(){actionGate=deferred();return actionGate},holdClaim(){claimGate=deferred();return claimGate},holdCreate(){createGate=deferred();return createGate},setSnapshot(value){next={...next,...value}},register(execute=async()=>({text:'Findings',cancelled:false})){
   return client.control.register({isBusy:()=>false,cancelRun(token){cancellations.push(token)},requestYield(taskIds){yieldRequests.push([...taskIds])},continue(instruction,token){continuations.push(instruction);continuationTokens.push(token);return true},execute(instruction,signal){executions.push({instruction,signal});return execute(instruction,signal)}})
  }}
 }
@@ -375,4 +377,52 @@ for(const failure of ['cancel_requested','unauthorized'])test(`related parent na
  const unrelated=f.client.control.beginRun('Unrelated user work');assert.ok(unrelated)
  const gate=f.holdRefresh(),refresh=f.client.refresh();gate.reject(Error('Channel unavailable'));await refresh
  assert.deepEqual(f.cancellations,[token])
+})
+
+
+test('lost claim acknowledgement retries once with the same key and executes only once',async t=>{
+ const f=fixture(t);f.failClaims(new TypeError('Connection lost'));f.setSnapshot({tasks:[task('read')]});f.register()
+ await f.client.start();await tick();await tick()
+ const claims=f.calls.filter(c=>c.path.endsWith('/claim'))
+ assert.equal(claims.length,2);assert.equal(typeof claims[0].body.requestId,'string');assert.equal(claims[0].body.requestId,claims[1].body.requestId)
+ assert.equal(f.executions.length,1)
+ await f.client.refresh();await tick();assert.equal(f.executions.length,1)
+})
+
+test('two lost claim replies leave an uncertain task unexecuted rather than replaying it',async t=>{
+ const f=fixture(t);f.failClaims(new TypeError('Lost'),new TypeError('Still lost'));f.setSnapshot({tasks:[task('read')]});f.register()
+ await f.client.start();await tick();await f.client.refresh();await tick()
+ assert.equal(f.calls.filter(c=>c.path.endsWith('/claim')).length,2);assert.equal(f.executions.length,0)
+})
+
+for(const failure of [Object.assign(Error('Denied'),{statusCode:403}),Object.assign(Error('Conflict'),{status:409}),new SyntaxError('Malformed JSON'),Error('Session binding changed')])test(`claim failure ${failure.message} is not retried`,async t=>{
+ const f=fixture(t);f.failClaims(failure);f.setSnapshot({tasks:[task('read')]});f.register()
+ await f.client.start();await tick();assert.equal(f.calls.filter(c=>c.path.endsWith('/claim')).length,1);assert.equal(f.executions.length,0)
+})
+
+test('reset while a claim response is failing prevents retry into the next generation',async t=>{
+ const f=fixture(t),gate=f.holdClaim();f.setSnapshot({tasks:[task('old')]});f.register()
+ await f.client.start();await tick();f.client.control.resetConversation();gate.reject(new TypeError('Response lost'));await tick()
+ assert.equal(f.calls.filter(c=>c.path.endsWith('/claim')).length,1);assert.equal(f.executions.length,0)
+})
+
+test('paused collaboration blocks acknowledgement retry while preserving native work',async t=>{
+ const f=fixture(t),gate=f.holdClaim();f.setSnapshot({tasks:[task('waiting')]});f.register()
+ await f.client.start();await tick();f.setSnapshot({paused:true});await f.client.refresh()
+ gate.reject(new TypeError('Response lost'));await tick()
+ assert.equal(f.calls.filter(c=>c.path.endsWith('/claim')).length,1);assert.equal(f.executions.length,0)
+ assert.equal(f.cancellations.length,0)
+})
+
+test('a definitive invalid claim reply is never retried or executed',async t=>{
+ const f=fixture(t),gate=f.holdClaim();f.setSnapshot({tasks:[task('expected')]});f.register()
+ await f.client.start();await tick();gate.resolve(task('wrong-task','running'));await tick();await tick()
+ assert.equal(f.calls.filter(c=>c.path.endsWith('/claim')).length,1);assert.equal(f.executions.length,0)
+})
+
+
+test('explicit HTTP 503 claim failure recovers with one same-key attempt',async t=>{
+ const f=fixture(t);f.failClaims(Object.assign(Error('Service unavailable'),{status:503}));f.setSnapshot({tasks:[task('read')]});f.register()
+ await f.client.start();await tick();await tick()
+ const claims=f.calls.filter(c=>c.path.endsWith('/claim'));assert.equal(claims.length,2);assert.equal(claims[0].body.requestId,claims[1].body.requestId);assert.equal(f.executions.length,1)
 })

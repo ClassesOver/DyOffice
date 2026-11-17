@@ -124,6 +124,19 @@ export function createAssistantChannelService({transactions,credentialKey}:{tran
   const rows=(await c.query('SELECT state FROM assistant_tasks WHERE deployment_id=$1 AND owner_id=$2 AND conversation_id=$3 AND task_id=ANY($4::uuid[])',[...scope(p),id,children])).rows
   if(rows.length===children.length&&rows.every(r=>terminal(r.state)))await state(c,p,id,parent,'queued')
  }
+ async function claimDto(c:PoolClient,p:BusinessPrincipal,conversationId:string,row:Record<string,any>):Promise<ChannelTask> {
+  const result=taskDto(row)
+    const ids=row.child_task_ids as string[]
+    if(ids.length){
+     const children=(await c.query('SELECT * FROM assistant_tasks WHERE deployment_id=$1 AND owner_id=$2 AND conversation_id=$3 AND parent_task_id=$4 AND task_id=ANY($5::uuid[])',[...scope(p),conversationId,row.task_id,ids])).rows
+     if(children.length!==ids.length||children.some(child=>!terminal(child.state)))throw fail(409)
+     result.continuation={parentTaskId:row.task_id,untrusted:true,children:ids.map(id=>{
+      const child=children.find(row=>row.task_id===id)!,preview=taskPreview(child)
+      return {taskId:id,state:child.state,summary:preview.summary,outcome:child.outcome??null,summaryTruncated:preview.summary!==child.summary}
+     })}
+    }
+    return result
+ }
  const service={
   async createConversation(token:string,input:{fileId:string;conversationId?:string}) {
    const fileId=uuid(input.fileId),conversationId=input.conversationId?uuid(input.conversationId):randomUUID()
@@ -367,31 +380,29 @@ export function createAssistantChannelService({transactions,credentialKey}:{tran
     return taskDto(row)
    })
   },
-  async claim(credential:ChannelCredential,conversationId:string,input:{taskId:string;connectionId:string;connectionEpoch:number}) {
-   const connectionId=uuid(input.connectionId)
+  async claim(credential:ChannelCredential,conversationId:string,input:{taskId:string;connectionId:string;connectionEpoch:number;requestId?:string}) {
+   const connectionId=uuid(input.connectionId),taskId=uuid(input.taskId),requestId=input.requestId===undefined?undefined:uuid(input.requestId)
+   const paramsHash=hash(JSON.stringify({operation:'claim',taskId,connectionId,connectionEpoch:input.connectionEpoch}))
    return run(credential,conversationId,async(c,p,ch,actor)=>{
     await expire(c,p,conversationId)
     if(ch.paused)throw fail(409)
     const epoch=actor.member?actor.member.connection_epoch:ch.office_epoch,current=actor.member?actor.member.connection_id:ch.office_connection_id
     if(current!==connectionId||epoch!==input.connectionEpoch)throw fail(409)
-    const row=await task(c,p,conversationId,input.taskId)
+    const prior=requestId?(await c.query('SELECT * FROM assistant_requests WHERE deployment_id=$1 AND owner_id=$2 AND conversation_id=$3 AND actor=$4 AND request_id=$5',[...scope(p),conversationId,actor.id,requestId])).rows[0]:undefined
+    if(prior&&prior.params_hash!==paramsHash)throw fail(409)
+    const row=await task(c,p,conversationId,taskId)
+    if(prior){
+     if(row.recipient!==actor.id||row.state!=='running'||row.claim_id!==prior.receipt.claimId||row.connection_id!==connectionId||row.connection_epoch!==epoch||prior.receipt.taskId!==taskId||prior.receipt.connectionEpoch!==epoch)throw fail(409)
+     return claimDto(c,p,conversationId,row)
+    }
     if(row.recipient!==actor.id||row.state!=='queued')throw fail(409)
     const busy=(await c.query("SELECT 1 FROM assistant_tasks WHERE deployment_id=$1 AND owner_id=$2 AND conversation_id=$3 AND recipient=$4 AND state IN ('running','cancel_requested')",[...scope(p),conversationId,actor.id])).rowCount
     if(busy)throw fail(409)
     const claimId=randomUUID()
     const claimed=(await c.query("UPDATE assistant_tasks SET state='running',claim_id=$4,connection_id=$5,connection_epoch=$6 WHERE deployment_id=$1 AND owner_id=$2 AND task_id=$3 RETURNING *",[...scope(p),row.task_id,claimId,connectionId,epoch])).rows[0]
     await event(c,p,conversationId,'task',taskDto(claimed),actor.id,row.task_id)
-    const result=taskDto(claimed)
-    const ids=claimed.child_task_ids as string[]
-    if(ids.length){
-     const children=(await c.query('SELECT * FROM assistant_tasks WHERE deployment_id=$1 AND owner_id=$2 AND conversation_id=$3 AND parent_task_id=$4 AND task_id=ANY($5::uuid[])',[...scope(p),conversationId,claimed.task_id,ids])).rows
-     if(children.length!==ids.length||children.some(child=>!terminal(child.state)))throw fail(409)
-     result.continuation={parentTaskId:claimed.task_id,untrusted:true,children:ids.map(id=>{
-      const child=children.find(row=>row.task_id===id)!,preview=taskPreview(child)
-      return {taskId:id,state:child.state,summary:preview.summary,outcome:child.outcome??null,summaryTruncated:preview.summary!==child.summary}
-     })}
-    }
-    return result
+    if(requestId)await c.query('INSERT INTO assistant_requests(deployment_id,owner_id,conversation_id,actor,request_id,params_hash,receipt) VALUES($1,$2,$3,$4,$5,$6,$7)',[...scope(p),conversationId,actor.id,requestId,paramsHash,JSON.stringify({taskId:row.task_id,claimId,connectionEpoch:epoch})])
+    return claimDto(c,p,conversationId,claimed)
    })
   },
   async yieldTask(credential:ChannelCredential,conversationId:string,input:{taskId:string;claimId:string;connectionEpoch:number;childTaskIds:string[]}) {

@@ -38,7 +38,7 @@
     "check:help-langs": "node tools/check-help-langs.mjs",
     "lint": "eslint .",
     "fixtures": "npm run fixtures -w @genoffice/docx-engine",
-    "test": "npm run test:saas:entrypoints && npm run test:desktop-retirement && npm run test:shared && npm run test:web && npm run test:web:unit",
+    "test": "npm run test:saas:entrypoints && npm run test:desktop-retirement && npm run test:desktop-packaging && npm run test:notices-inventory && npm run test:shared && npm run test:web && npm run test:web:unit",
     "typecheck": "npm run typecheck:shared && npm run typecheck:web && npm run typecheck:web:docs && npm run typecheck:web:sheets && npm run typecheck:web:slides && npm run typecheck:web:shell",
     "dev": "npm run dev:web",
     "build": "npm run build:saas",
@@ -81,7 +81,9 @@
     "typecheck:web:sheets": "tsc -p apps/web/tsconfig.sheets.json",
     "typecheck:web:slides": "tsc -p apps/web/tsconfig.slides.json",
     "typecheck:web:shell": "tsc -p apps/web/tsconfig.shell.json",
-    "test:desktop-retirement": "node --test tools/test/desktop-retirement.test.mjs"
+    "test:desktop-retirement": "node --test tools/test/desktop-retirement.test.mjs",
+    "test:desktop-packaging": "node --test tools/test/desktop-packaging-retirement.test.mjs",
+    "test:notices-inventory": "node --test tools/test/notices-inventory.test.mjs"
   },
   "dependencies": {
     "ws": "^8.21.1"

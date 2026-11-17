@@ -16,10 +16,16 @@ test('real native AgentLoop yields durable Office parent, handles reverse read, 
  const service=createAssistantChannelService({transactions:f.transactions,credentialKey:f.csrfKey})
  const csrf=createCsrfService({db:f.db,deploymentId:f.deploymentId,origin:restrictedOrigin,key:f.csrfKey})
  const api=Fastify();registerAssistantChannelRoutes(api,service,csrf);t.after(()=>api.close())
+ let parentClaimLost=false;const recoveredParentKeys=[]
  const request=async(url,method='GET',payload)=>{
   const reply=await api.inject({url,method,payload,headers:{origin:restrictedOrigin,cookie:'__Host-dyoffice-session='+f.alice.token,'x-csrf-token':csrf.sessionToken(f.alice.token)}})
   if(reply.statusCode!==200)throw Object.assign(Error('HTTP '+reply.statusCode),{statusCode:reply.statusCode})
-  return reply.json()
+  const value=reply.json()
+  if(url.endsWith('/claim')&&value.from==='office'&&value.continuation){
+   if(recoveredParentKeys.length<2)recoveredParentKeys.push({requestId:payload.requestId,claimId:value.claimId})
+   if(!parentClaimLost){parentClaimLost=true;throw new TypeError('Parent claim response lost after commit')}
+  }
+  return value
  }
  const browser=createAssistantChannelClient({request,fileId:file.fileId,editorId:randomUUID(),generation:()=>1});t.after(()=>browser.dispose())
  await browser.start();const id=browser.snapshot().conversationId,owner={kind:'owner',token:f.alice.token}
@@ -71,5 +77,6 @@ test('real native AgentLoop yields durable Office parent, handles reverse read, 
  await browser.refresh()
  await wait(()=>service.snapshot(f.alice.token,id),s=>s.tasks.some(t=>t.taskId===cancelParent.taskId&&t.state==='cancelled'))
  assert.equal(nativeCancellations,1);assert.equal(loop.busy,false)
+ assert.equal(parentClaimLost,true);assert.deepEqual(recoveredParentKeys[0],recoveredParentKeys[1])
 
 })

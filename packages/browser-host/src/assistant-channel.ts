@@ -66,7 +66,19 @@ export function createAssistantChannelClient(options:{request:SettingsRequest;fi
   try {
    attempted.add(task.taskId)
    const target=executor,channelId=snapshot.conversationId,runConnection=connection
-   const claim=await request<ChannelTask>(base+'/channels/'+snapshot.conversationId+'/claim','POST',{taskId:task.taskId,connectionId:connection.id,connectionEpoch:connection.epoch})
+   const claimInput={requestId:crypto.randomUUID(),taskId:task.taskId,connectionId:runConnection.id,connectionEpoch:runConnection.epoch}
+   const claimPath=base+'/channels/'+channelId+'/claim'
+   let claim:ChannelTask
+   try {claim=await request<ChannelTask>(claimPath,'POST',claimInput)}
+   catch(failure){
+    const status=typeof failure==='object'&&failure!==null?((failure as {statusCode?:unknown;status?:unknown}).statusCode??(failure as {status?:unknown}).status):undefined
+    // Only acknowledgement recovery before any execution. Validation errors,
+    // authorization failures and stale generations never trigger a retry.
+    const transportFailure=failure instanceof TypeError||(failure instanceof DOMException&&['NetworkError','TimeoutError'].includes(failure.name))
+    const recoverable=status===undefined?transportFailure:typeof status==='number'&&Number.isInteger(status)&&status>=500&&status<=599
+    if(!recoverable||disposed||localGeneration!==taskGeneration||executor!==target||!snapshot||snapshot.paused||snapshot.conversationId!==channelId||connection!==runConnection)throw failure
+    claim=await request<ChannelTask>(claimPath,'POST',claimInput)
+   }
    if(disposed||localGeneration!==taskGeneration||executor!==target||!snapshot||snapshot.paused||connection!==runConnection)return
    if(claim.taskId!==task.taskId||claim.conversationId!==channelId||claim.to!=='office'||claim.from!==task.from||claim.state!=='running'||claim.connectionEpoch!==runConnection.epoch||!claim.claimId)throw Error('Office task claim changed')
    const current=snapshot.tasks.find(item=>item.taskId===task.taskId)

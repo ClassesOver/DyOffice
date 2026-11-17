@@ -7,7 +7,6 @@
   },
   "include": [
     "src",
-    "electron.vite.config.ts",
     "vite.renderer.config.ts",
     "../../packages/html2docx/src/raw.d.ts"
   ]

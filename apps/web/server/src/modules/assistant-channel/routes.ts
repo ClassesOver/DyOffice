@@ -45,8 +45,8 @@ export function registerAssistantChannelRoutes(app:FastifyInstance,service:Retur
    return service.beginOfficeTask(owner(request),uuid(request.params.id),{requestId:uuid(value.requestId),connectionId:uuid(value.connectionId),connectionEpoch:value.connectionEpoch as number,instruction:value.instruction as string})
   })
   api.post<{Params:{id:string}}>(base+'/channels/:id/claim',request=>{
-   const value=body(request,['taskId','connectionId','connectionEpoch'])
-   return service.claim({kind:'owner',token:owner(request)},uuid(request.params.id),{taskId:uuid(value.taskId),connectionId:uuid(value.connectionId),connectionEpoch:value.connectionEpoch as number})
+   const value=body(request,['taskId','connectionId','connectionEpoch','requestId'])
+   return service.claim({kind:'owner',token:owner(request)},uuid(request.params.id),{taskId:uuid(value.taskId),connectionId:uuid(value.connectionId),connectionEpoch:value.connectionEpoch as number,...(value.requestId===undefined?{}:{requestId:uuid(value.requestId)})})
   })
   for(const operation of ['disconnect','yield','reconcile'] as const)api.post<{Params:{id:string}}>(base+'/channels/:id/'+operation,request=>{
    const keys=operation==='disconnect'?['connectionId','connectionEpoch']:operation==='yield'?['taskId','claimId','connectionEpoch','childTaskIds']:['taskId','claimId','connectionEpoch','outcome','summary']
@@ -89,8 +89,8 @@ export function registerAssistantChannelRoutes(app:FastifyInstance,service:Retur
    return service.connect(credential,snapshot.conversationId,{connectionId:uuid(value.connectionId)})
   })
   api.post<{Params:{id:string}}>(base+'/members/:id/claim',async request=>{
-   const value=body(request,['taskId','connectionId','connectionEpoch']),{snapshot,credential}=await member(request,request.params.id)
-   return service.claim(credential,snapshot.conversationId,{taskId:uuid(value.taskId),connectionId:uuid(value.connectionId),connectionEpoch:value.connectionEpoch as number})
+   const value=body(request,['taskId','connectionId','connectionEpoch','requestId']),{snapshot,credential}=await member(request,request.params.id)
+   return service.claim(credential,snapshot.conversationId,{taskId:uuid(value.taskId),connectionId:uuid(value.connectionId),connectionEpoch:value.connectionEpoch as number,...(value.requestId===undefined?{}:{requestId:uuid(value.requestId)})})
   })
   for(const operation of ['disconnect','yield','reconcile'] as const)api.post<{Params:{id:string}}>(base+'/members/:id/'+operation,async request=>{
    const keys=operation==='disconnect'?['connectionId','connectionEpoch']:operation==='yield'?['taskId','claimId','connectionEpoch','childTaskIds']:['taskId','claimId','connectionEpoch','outcome','summary']
