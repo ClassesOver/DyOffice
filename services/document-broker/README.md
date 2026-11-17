@@ -161,3 +161,39 @@ Received descriptors must have the full seals, regular inode type, matching
 bounded size and CLOEXEC. Truncated/malformed/extra-descriptor packets fail
 closed with RAII cleanup. This same-process channel is **not** source
 authentication and is not connected to the production control protocol or T06.
+
+## Explicit fixed system-manager diagnostic
+
+`cargo run --locked --offline --bin manager-preflight` is a read-only diagnostic,
+not a broker listener. It accepts no arguments and ignores `DBUS_SYSTEM_BUS_ADDRESS`:
+the endpoint is always `unix:path=/run/dbus/system_bus_socket`. Under a single
+2-second monotonic deadline (including connection/authentication), it obtains the
+systemd1 unique owner, requires bus-reported UID 0 and PID 1, reads Manager Version
+from that pinned owner, and checks the well-known owner has not changed. Forwarded
+or differently namespaced system buses that cannot satisfy PID 1 are unsupported.
+Errors produce a bounded reason and exit 2; invalid arguments exit 64. A successful
+observation exits 0 but **always** reports `execution_available: false`.
+
+This adds live bus-owner/manager observations to the Node preflight's socket-presence
+and client-version checks. It does not authenticate a hostile root-controlled host,
+prove SELinux/seccomp/namespace/cgroup effectiveness, validate an engine/rootfs,
+reserve resources, start/stop units, or produce an execution grant. Version's
+128-byte bound applies after zbus decoding, not to all transport allocations.
+The daemon and fixed endpoint's host ownership remain trust prerequisites. No
+caller endpoint, arbitrary connection or environment rerouting is supported.
+
+Local verification on the current Debian/codex environment produces Unavailable:
+there is no usable real system bus. Positive owner/metadata behavior has **not**
+been accepted on Ubuntu/openEuler x86_64. Pure identity/metadata/deadline tests are
+not live-host acceptance; no fake Manager is presented as a trusted host.
+`cargo run --bin dyoffice-document-broker` (also the default-run target) remains
+unchanged and exits 78. Real systemd startup still requires an authorized target
+host, restricted broker deployment and verified runtime/rootfs material.
+
+The Manager proxy explicitly disables property caching (`CacheProperties::No`),
+so Version uses only `Properties.Get`, not a `GetAll` fetch or a property-change
+subscription. An actual private socketpair protocol regression showed the original
+lazy cache invoked an unrelated fixture Environment getter; it now asserts that
+getter is never called. This is a narrow call-surface regression, not positive
+systemd-host acceptance. The existing older `systemd_probe` remains a separate
+prototype; this fixed-endpoint diagnostic does not call it.

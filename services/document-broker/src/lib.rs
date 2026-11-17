@@ -15,3 +15,5 @@ pub mod sealed_bytes;
 
 #[cfg(target_os = "linux")]
 pub mod sealed_transfer;
+
+pub mod manager_diagnostic;
