@@ -10,6 +10,7 @@ import { createUserService } from '../../server/src/modules/admin/users/service.
 import { createPrincipalTransactions } from '../../server/src/db/context.ts'
 import { createPreferenceService } from '../../server/src/modules/preferences/service.ts'
 import { password } from './identity.mjs'
+import { databaseCleanupError } from './database-cleanup-diagnostics.mjs'
 export const restrictedOrigin = 'https://office.example'
 
 export async function restrictedFixture(t, { origin = restrictedOrigin, assistantChannels, objectStore, filePolicy, nativeDocsDirectory, nativeSheetsDirectory, nativeSlidesDirectory, slidesHost, nativeJobs = false, sheetsNative, sheetsPlanner, sheetsWorkbookPlanner, sheetsPackageReader, worker = false, beforeMigrate, businessMax = 1, seedAccounts = true, sourcesCredentialKeys, sourcesEgressTargets, buildApp = true } = {}) {
@@ -32,7 +33,7 @@ export async function restrictedFixture(t, { origin = restrictedOrigin, assistan
         if (madeDatabase) {
           const deadline = Date.now() + 4000
           while ((await admin.query('SELECT 1 FROM pg_stat_activity WHERE datname=$1', [database])).rowCount) {
-            if (Date.now() >= deadline) throw new Error('Test database still has open connections after pool shutdown')
+            if (Date.now() >= deadline) throw await databaseCleanupError(admin, database)
             await new Promise(resolve => setImmediate(resolve))
           }
           await admin.query('DROP DATABASE ' + database)

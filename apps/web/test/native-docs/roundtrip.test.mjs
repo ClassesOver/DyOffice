@@ -134,12 +134,13 @@ test('editing during a delayed native save keeps the newer draft dirty and saves
   const editor = f.page.locator('.tiptap.doc-page[contenteditable="true"]')
   await editor.waitFor({ timeout: 45_000 })
   await editor.click(); await f.page.keyboard.press('Control+End'); await f.page.keyboard.press('Enter'); await f.page.keyboard.type('Captured snapshot')
-  let reached, release, first = true
+  let reached, release, firstRequest, first = true
   const started = new Promise(resolve => { reached = resolve }), wait = new Promise(resolve => { release = resolve })
   t.after(() => release())
   await f.page.route('**/commits',async route => {
     if (!first) return route.continue()
     first = false
+    firstRequest = route.request()
     const response = await route.fetch()
     reached(); await wait; await route.fulfill({ response })
   })
@@ -148,10 +149,16 @@ test('editing during a delayed native save keeps the newer draft dirty and saves
   const firstRef = await f.files.openFile(f.alice.token,f.opened.file.fileId)
   const firstZip = await JSZip.loadAsync(await f.files.readFile(f.alice.token,firstRef.file.fileId,firstRef.file.revision))
   assert.ok(!(await firstZip.file('word/document.xml').async('string')).includes('Newer unsaved draft'))
+  // The dirty label is already empty while the first commit response is held.
+  // Wait for that exact response and native settlement before observing save two.
+  const firstResponse = f.page.waitForResponse(reply => reply.request() === firstRequest && reply.status() === 200)
   release()
+  assert.equal(await (await firstResponse).finished(),null)
+  await expect(f.page.locator('.dyoffice-docs-persistence-state')).toHaveAttribute('data-native-save','incomplete')
+  await expect(f.page.locator('.dyoffice-docs-persistence-state')).toHaveAttribute('data-dirty','true')
   await expect(f.page.locator('.dyoffice-docs-persistence-state')).toHaveText('',{ timeout: 15_000 })
   await expect(editor).toContainText('Newer unsaved draft')
-  const next = f.page.waitForResponse(reply => reply.url().endsWith('/commits') && reply.status() === 200)
+  const next = f.page.waitForResponse(reply => reply.url().endsWith('/commits') && reply.request().method() === 'POST' && reply.request() !== firstRequest && reply.status() === 200)
   await f.page.keyboard.press('Control+s'); await next
   const current = await f.files.openFile(f.alice.token,f.opened.file.fileId)
   assert.notEqual(current.file.revision,firstRef.file.revision)
