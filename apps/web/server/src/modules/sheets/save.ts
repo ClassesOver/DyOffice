@@ -6,6 +6,7 @@ import { authError } from '../auth/sessions.ts'
 import type { XlsxMutationPlan } from '../../../../worker/src/native/xlsx.ts'
 
 export type SheetsPlanner = (bytes: Buffer, sheets: readonly { id: string; name: string }[], request: unknown, signal?: AbortSignal) => Promise<XlsxMutationPlan>
+export type SheetsWorkbookPlanner = (bytes: Buffer, request: unknown, signal?: AbortSignal) => Promise<XlsxMutationPlan>
 export interface SheetsSaveNative {
   inspect(input: Uint8Array, signal?: AbortSignal): Promise<unknown>
   savePlan(input: Uint8Array, plan: XlsxMutationPlan, signal?: AbortSignal): Promise<{ bytes: Buffer }>
@@ -14,8 +15,8 @@ export interface SheetsSaveInput { baseRevision: string; leaseEpoch: number; edi
 
 /** Prepare the normal T06 upload. The browser then commits it using the same
  * idempotent receipt/reconciliation protocol used by the other editors. */
-export function createSheetsSaveService({ files, leases, revisions, native, plan, maxConcurrent = 2 }: {
-  files: FileService; leases: LeaseService; revisions: RevisionService; native: SheetsSaveNative; plan: SheetsPlanner; maxConcurrent?: number
+export function createSheetsSaveService({ files, leases, revisions, native, plan, planFromWorkbook, maxConcurrent = 2 }: {
+  files: FileService; leases: LeaseService; revisions: RevisionService; native: SheetsSaveNative; plan: SheetsPlanner; planFromWorkbook?: SheetsWorkbookPlanner; maxConcurrent?: number
 }) {
   if (!Number.isSafeInteger(maxConcurrent) || maxConcurrent < 1 || maxConcurrent > 8) throw new Error('Invalid sheets concurrency')
   let active = 0
@@ -32,9 +33,17 @@ export function createSheetsSaveService({ files, leases, revisions, native, plan
         if (head.file.revision !== input.baseRevision) throw authError(409)
         const bytes = await files.readFile(token, fileId, input.baseRevision)
         signal?.throwIfAborted()
-        const metadata = await native.inspect(bytes, signal) as { sheets: {id: string; name: string}[] }
-        if (!metadata || !Array.isArray(metadata.sheets) || metadata.sheets.some(sheet => typeof sheet?.id !== 'string' || typeof sheet.name !== 'string')) throw new Error('Invalid workbook metadata')
-        const mutation = await plan(bytes, metadata.sheets, input.request, signal)
+        let mutation: XlsxMutationPlan
+        if (planFromWorkbook) {
+          // Configured only for the isolated gateway. It derives the sheet map
+          // and mutation from this same authorized revision's bytes in one ZIP
+          // source. Never fall back after failure or trust a browser sheet map.
+          mutation = await planFromWorkbook(bytes, input.request, signal)
+        } else {
+          const metadata = await native.inspect(bytes, signal) as { sheets: {id: string; name: string}[] }
+          if (!metadata || !Array.isArray(metadata.sheets) || metadata.sheets.some(sheet => typeof sheet?.id !== 'string' || typeof sheet.name !== 'string')) throw new Error('Invalid workbook metadata')
+          mutation = await plan(bytes, metadata.sheets, input.request, signal)
+        }
         signal?.throwIfAborted()
         const saved = await native.savePlan(bytes, mutation, signal)
         signal?.throwIfAborted()

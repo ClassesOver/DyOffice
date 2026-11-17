@@ -64,7 +64,8 @@ export function createGatewayAdapter(process:NativeProcess) {
     return result
   }
   return {
-    planWorkbookSave:(bytes:Buffer,sheets:readonly {id:string;name:string}[],request:unknown,signal?:AbortSignal)=>run(bytes,'gateway_plan',{sheets,request},signal) as Promise<XlsxMutationPlan>,
+    planWorkbookSave:(bytes:Buffer,sheets:readonly {id:string;name:string}[],request:unknown,signal?:AbortSignal)=>run(bytes,'gateway_plan',{sheets:sheets.map(({id,name})=>({id,name})),request},signal) as Promise<XlsxMutationPlan>,
+    planFromWorkbook:(bytes:Buffer,request:unknown,signal?:AbortSignal)=>run(bytes,'gateway_plan',{request},signal) as Promise<XlsxMutationPlan>,
     readWorkbookPackage:(bytes:Buffer,signal?:AbortSignal)=>run(bytes,'gateway_package',{},signal),
   }
 }

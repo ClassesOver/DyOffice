@@ -2,7 +2,7 @@ import {registerProbeAssets} from './modules/providers/probe-assets.ts'
 import { registerFixedProviderProbe } from './modules/providers/fixed-probe.ts'
 import type { AdminPipelineProfile } from './modules/providers/admin-pipeline.ts'
 import { registerAdminSyntheticProbe } from './modules/providers/synthetic-probe.ts'
-import { createSheetsSaveService, type SheetsPlanner, type SheetsSaveNative } from './modules/sheets/save.ts'
+import { createSheetsSaveService, type SheetsPlanner, type SheetsWorkbookPlanner, type SheetsSaveNative } from './modules/sheets/save.ts'
 import { createSheetsService, type SheetsNative, type SheetsPackageReader } from './modules/sheets/service.ts'
 import { registerSheetsRoutes } from './modules/sheets/routes.ts'
 import { createSlidesSaveService } from './modules/slides/save.ts'
@@ -71,7 +71,7 @@ export async function buildApp(config: WebConfig): Promise<FastifyInstance> {
 
 export interface LocalWebConfig {
   db: IdentityStore; businessPool?: Pool; deploymentId: string; origin: string; csrfKey: string; passwords?: PasswordService;
-  objectStore?: ObjectStore; filePolicy?: FilePolicy; nativeDocsDirectory?: string; nativeSheetsDirectory?: string; nativeSlidesDirectory?: string; slidesHost?: SlidesSessionHost; nativeJobs?: boolean; sheetsNative?: SheetsNative & Partial<SheetsSaveNative>; sheetsPlanner?: SheetsPlanner; sheetsPackageReader?: SheetsPackageReader; localShellDirectory?: string;
+  objectStore?: ObjectStore; filePolicy?: FilePolicy; nativeDocsDirectory?: string; nativeSheetsDirectory?: string; nativeSlidesDirectory?: string; slidesHost?: SlidesSessionHost; nativeJobs?: boolean; sheetsNative?: SheetsNative & Partial<SheetsSaveNative>; sheetsPlanner?: SheetsPlanner; sheetsWorkbookPlanner?: SheetsWorkbookPlanner; sheetsPackageReader?: SheetsPackageReader; localShellDirectory?: string;
   globalConfigKeyring?: SecretKeyring;
   sourcesCredentialKeys?: string;
   sourcesEgressTargets?: readonly SourceEgressTarget[];
@@ -179,7 +179,7 @@ export async function buildLocalApp(config: LocalWebConfig): Promise<FastifyInst
       if (config.realtimeCommands) registerCommandRoutes(app, { sessions,csrf,
         createRequestCommands: createCommandRequestFactory(transactions, config.realtimeCommands.lookupTool) })
       if (config.sheetsNative) {
-        const saves = config.sheetsPlanner ? createSheetsSaveService({files,leases,revisions,native:config.sheetsNative as SheetsNative & SheetsSaveNative,plan:config.sheetsPlanner}) : undefined
+        const saves = config.sheetsPlanner ? createSheetsSaveService({files,leases,revisions,native:config.sheetsNative as SheetsNative & SheetsSaveNative,plan:config.sheetsPlanner,planFromWorkbook:config.sheetsWorkbookPlanner}) : undefined
         registerSheetsRoutes(app,createSheetsService({files,native:config.sheetsNative,readPackage:config.sheetsPackageReader}),sessions,csrf,saves)
       }
       if (config.slidesHost) {
