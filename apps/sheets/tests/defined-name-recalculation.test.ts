@@ -1,3 +1,5 @@
+import { settleFormulas } from '../src/renderer/formula-settle'
+import type { UniverRuntime } from '../src/renderer/univer-state'
 import { installDefinedNameDependencies } from '../src/renderer/defined-name-dependencies'
 import {
   IUniverInstanceService,
@@ -14,7 +16,7 @@ import { UniverSheetsFormulaPlugin } from '@univerjs/sheets-formula'
 import '@univerjs/sheets-formula/facade'
 import { it, expect } from 'vitest'
 it.each(['direct', 'nested', 'lowercase'])(
-  'recalculates a real engine formula after its %s defined range changes',
+  'settles the save cache immediately after its %s defined range changes',
   async (mode) => {
     installDefinedNameDependencies()
     const univer = new Univer({
@@ -66,9 +68,9 @@ it.each(['direct', 'nested', 'lowercase'])(
         .getDefinedNames()
         .find((n) => n.getName() === (mode === 'nested' ? 'BaseRange' : 'Revenue'))!
         .setRef('Acceptance!$A$2')
-      await expect
-        .poll(() => sheet.getRange('F2').getCellDatas()[0]?.[0]?.v, { timeout: 5000 })
-        .toBe(12.5)
+      // Same-turn name edit: do not poll/sleep before the production save barrier.
+      await settleFormulas({ univer, univerAPI: api } as UniverRuntime)
+      expect(sheet.getRange('F2').getCellDatas()[0]?.[0]?.v).toBe(12.5)
       univer.__getInjector().get(IUniverInstanceService).focusUnit(workbook.getId())
       expect(await api.undo()).toBe(true)
       await expect
@@ -85,3 +87,4 @@ it.each(['direct', 'nested', 'lowercase'])(
   },
   15000,
 )
+
