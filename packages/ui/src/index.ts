@@ -170,3 +170,6 @@ export { useRedactLabelField } from './use-redact-label'
 export type { RedactLabelField } from './use-redact-label'
 export { useScrollWindow } from './scroll-window'
 export { createImeEnterGuard, useImeEnterGuard, type ImeEnterGuard } from './ime-enter'
+
+export { AssistantParticipants, AssistantAvatar, DelegatedAgentResultCard, delegatedAgentResult, compactDelegatedTranscript, type AssistantParticipant, type DelegatedAgentResult } from './assistant-participants'
+export type { AssistantControl } from './assistant-control'

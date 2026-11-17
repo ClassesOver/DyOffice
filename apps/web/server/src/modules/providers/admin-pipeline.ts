@@ -42,8 +42,8 @@ function bridge() {
 /** Explicit, unmounted, admin-only composition. No real provider is enabled by
  * constructing this factory. Profiles and budget grants are trusted deployment
  * provisioning, not HTTP input. One active turn per factory, total <=30 seconds. */
-export function createAdminProviderPipeline({transactions,keyring,profiles,timeoutMs=30_000,audience='admin',personalSourceCatalog=false}:{
- transactions:PrincipalTransactions;keyring:SecretKeyring;profiles:readonly AdminPipelineProfile[];timeoutMs?:number;audience?:'admin'|'personal';personalSourceCatalog?:boolean
+export function createAdminProviderPipeline({transactions,keyring,profiles,timeoutMs=30_000,audience='admin',personalSourceCatalog=false,personalTools=assistantReadTools(personalSourceCatalog)}:{
+ transactions:PrincipalTransactions;keyring:SecretKeyring;profiles:readonly AdminPipelineProfile[];timeoutMs?:number;audience?:'admin'|'personal';personalSourceCatalog?:boolean;personalTools?:ReadonlySet<string>
 }) {
  let disposed=false,cleanupFailed=false
  const active=new Set<AbortController>()
@@ -100,7 +100,7 @@ export function createAdminProviderPipeline({transactions,keyring,profiles,timeo
    let consumer:ReturnType<typeof createBudgetedAdminCredentialConsumer>|undefined
    try{
     if(disposed||control.signal.aborted)throw fail()
-    const built=buildOpenAiChatRequest(request,{model:permit.profile.model,maxOutputTokens:permit.profile.maxOutputTokens},audience==='personal'?assistantReadTools(personalSourceCatalog):undefined)
+    const built=buildOpenAiChatRequest(request,{model:permit.profile.model,maxOutputTokens:permit.profile.maxOutputTokens},audience==='personal'?personalTools:undefined)
     wire=Buffer.from(built.body);built.body.fill(0)
     binding={turnId,entryId:permit.profile.entryId,configRevision:permit.profile.revision,requestDigest:built.digest}
     let reservation:Awaited<ReturnType<typeof budget.reserve>>

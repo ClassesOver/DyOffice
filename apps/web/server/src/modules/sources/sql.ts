@@ -12,10 +12,13 @@ import { sourceError } from './config.ts'
 export interface SqlRows { names: string[]; rows: unknown[][]; types: ('string' | 'number' | 'boolean')[] }
 const pgType = (oid: number): 'string' | 'number' | 'boolean' => oid === 16 ? 'boolean' : [20,21,23,26,700,701,1700].includes(oid) ? 'number' : 'string'
 const mysqlType = (id: number): 'string' | 'number' | 'boolean' => [0,1,2,3,4,5,8,9,13,246].includes(id) ? 'number' : 'string'
-function safeFailure(error: unknown): never {
+export function safeFailure(error: unknown, kind: SqlSourceKind): never {
   const code = (error as { code?: string }).code
   if (code === '42501' || code === '25006' || ['ER_TABLEACCESS_DENIED_ERROR','ER_DBACCESS_DENIED_ERROR','ER_SPECIFIC_ACCESS_DENIED_ERROR'].includes(code ?? '')) throw sourceError(403)
   if (code === '57014' || ['PROTOCOL_SEQUENCE_TIMEOUT','ER_QUERY_TIMEOUT','ETIMEDOUT'].includes(code ?? '')) throw sourceError(504)
+  // pg emits this exact local driver error without a SQLSTATE when its
+  // query deadline fires before the server cancellation response arrives.
+  if (kind === 'postgres' && error instanceof Error && code === undefined && error.message === 'Query read timeout') throw sourceError(504)
   if ((error as { statusCode?: number }).statusCode) throw error
   throw sourceError(502)
 }
@@ -47,7 +50,7 @@ export async function querySqlSource(policy: SourceEgressPolicy, kind: SqlSource
       const result = await client.query({ text: `FETCH FORWARD ${maxRows + 1} FROM dyoffice_source_result`, rowMode: 'array', types: { getTypeParser: (oid: number) => [20,21,23,26,700,701,1700].includes(oid) ? (value: string) => value : pgTypes.getTypeParser(oid) } })
       await client.query('ROLLBACK')
       return { names: result.fields.map(f => f.name), types: result.fields.map(f => pgType(f.dataTypeID)), rows: result.rows }
-    } catch (error) { if (expired) throw sourceError(504); return safeFailure(error) } finally {
+    } catch (error) { if (expired) throw sourceError(504); return safeFailure(error, kind) } finally {
       clearTimeout(deadline)
       if (connected) await client.end().catch(() => {})
       else await client.end().catch(() => {})
@@ -78,7 +81,7 @@ export async function querySqlSource(policy: SourceEgressPolicy, kind: SqlSource
     const [rows, fields] = await connection.query<RowDataPacket[]>({ sql: `SELECT * FROM (${normalized}) AS dyoffice_source_result LIMIT ${maxRows + 1}`, timeout })
     if (kind === 'mysql') await connection.query('ROLLBACK')
     return { names: fields.map((f: FieldPacket) => f.name), types: fields.map((f: FieldPacket) => mysqlType(f.columnType ?? -1)), rows: rows as unknown as unknown[][] }
-  } catch (error) { if (expired) throw sourceError(504); return safeFailure(error) } finally {
+  } catch (error) { if (expired) throw sourceError(504); return safeFailure(error, kind) } finally {
     clearTimeout(deadline); connection?.destroy(); socket.destroy()
   }
 }

@@ -16,6 +16,13 @@ type SaveResult = {canceled: false; file: WorkbookFile; touchedEntries: string[]
 type Recovery = {saved?: Awaited<ReturnType<SessionFileHost['saveSheets']>>; resolve(value: SaveResult): void; reject(error: unknown): void}
 type Session = {revision: string; file: WorkbookFile; extras?: Promise<Record<string,unknown>>}
 export function createSheetsBridge(host: SessionFileHost, fileId: string, prefs: Preferences, {fetchImpl = fetch, onChange = () => {}}: {fetchImpl?: typeof fetch; onChange?: () => void} = {}) {
+  let saveFence:(()=>boolean)|null=null
+  async function guardedSave(check:()=>boolean,action:()=>Promise<boolean>){
+    if(saveFence||!check())return false
+    saveFence=check
+    try{return await action()}finally{saveFence=null}
+  }
+  let committed: import('../../../../packages/web-contracts/src/api').RevisionRef | null = null
   const sessions = new Map<string,Session>(), controllers = new Set<AbortController>()
   const text = messages[prefs.language === 'en' ? 'en' : 'zh']
   let recovery: Recovery | null = null, confirming = false
@@ -102,11 +109,13 @@ export function createSheetsBridge(host: SessionFileHost, fileId: string, prefs:
     async listWorkbookConnections({sessionId}){return workbookConnectionsResultSchema.parse((await extras(sessionId)).connections)},
     async readWorkbookQueries({sessionId}){return workbookQueriesResultSchema.parse((await extras(sessionId)).queries)},
     async saveWorkbookEdits(input){
+      if(saveFence&&!saveFence())throw hostError('UNAVAILABLE','save authorization changed')
       const request=workbookSaveRequestSchema.parse(input),current=session(request.sessionId)
       if (host.getState(fileId).revision.revision!==current.revision) throw hostError('CONFLICT','workbook base')
       let saved: Awaited<ReturnType<SessionFileHost['saveSheets']>> | undefined
       try {
-        saved=await host.saveSheets(fileId,request)
+        saved=await host.saveSheets(fileId,request,saveFence??(()=>true))
+        committed=saved
         return {canceled:false as const,file:await open(),touchedEntries:saved.touchedEntries}
       } catch(error) {
         if (!saved && host.getState(fileId).status !== 'unknown') throw error
@@ -125,9 +134,11 @@ export function createSheetsBridge(host: SessionFileHost, fileId: string, prefs:
   async function confirmSave() {
     const pending=recovery
     if (!pending || confirming) return
+    if(!pending.saved&&saveFence&&!saveFence())throw hostError('UNAVAILABLE','save authorization changed')
     confirming=true
     try {
-      pending.saved ??= await host.reconcileSheets(fileId)
+      pending.saved ??= await host.reconcileSheets(fileId,saveFence??(()=>true))
+      committed=pending.saved
       const file=await open()
       recovery=null
       pending.resolve({canceled:false,file,touchedEntries:pending.saved.touchedEntries})
@@ -166,5 +177,5 @@ export function createSheetsBridge(host: SessionFileHost, fileId: string, prefs:
       throw error
     }
   }
-  return {api,confirmSave,prepareDownload,takeover,needsConfirmation:()=>recovery!==null,isDirty:()=>pendingEdits>0,dispose(){disposed=true;recovery?.reject(hostError('UNAVAILABLE','disposed'));recovery=null;for(const controller of controllers)controller.abort();controllers.clear();sessions.clear();csrf=undefined}}
+  return {api,guardedSave,getReceipt:()=>committed,confirmSave,prepareDownload,takeover,needsConfirmation:()=>recovery!==null,isDirty:()=>pendingEdits>0,dispose(){disposed=true;recovery?.reject(hostError('UNAVAILABLE','disposed'));recovery=null;for(const controller of controllers)controller.abort();controllers.clear();sessions.clear();csrf=undefined}}
 }

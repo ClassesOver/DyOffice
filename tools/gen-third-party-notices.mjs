@@ -1,294 +1,135 @@
-/**
- * Aggregates licenses of third-party components shipped with the installer
- * into apps/shell/build/THIRD-PARTY-NOTICES.txt.
- *
- * The shipped set is derived from what the source actually imports, then closed
- * over the dependency graph — not from `dependencies` vs `devDependencies`,
- * which in this repo says nothing about what ships: electron-vite bundles the
- * renderer/main graph into out/ and no node_modules directory is packaged, so
- * several genuinely-bundled libraries are declared as devDependencies.
- *
- * The Chromium part is too large (18MB); electron-builder extraResources ships
- * LICENSES.chromium.html separately, referenced from the body text.
+/** SaaS dependency inventory, not a certification of the final distributed artifacts.
+ * Intentionally includes installed build/test packages: lock-path enumeration is a
+ * conservative superset, unlike a source regex or package-name dependency closure.
  */
 import { readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync } from 'node:fs'
-import { join, dirname, relative } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { join, dirname, resolve } from 'node:path'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { execFileSync } from 'node:child_process'
-import { builtinModules, createRequire } from 'node:module'
 import { licenseText } from './license-text.mjs'
 
-const require = createRequire(import.meta.url)
-
-const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
-const BUILTIN = new Set(builtinModules)
-
-/**
- * Source trees whose imports end up in a shipped bundle. Deliberately only
- * `src/` — vite configs and scripts pull in the whole build toolchain, which
- * is not distributed.
- */
-const SRC_GLOBS = [
-  'apps/docs/src',
-  'apps/html/src',
-  'apps/markdown/src',
-  'apps/pdf/src',
-  'apps/sheets/src',
-  'apps/shell/src',
-  'apps/slides/src',
-  ...readdirSync(join(ROOT, 'packages'), { withFileTypes: true })
-    .filter((e) => e.isDirectory())
-    .map((e) => `packages/${e.name}/src`),
-]
-const CODE_EXT = /\.(ts|tsx|js|jsx|mjs|cjs)$/
-const SKIP_DIR = /^(node_modules|out|dist|release|tests|__tests__|target)$/
-
-/** Runtime that is always present but never imported by specifier */
-const IMPLICIT = ['electron']
-
-/**
- * Packages copied into the installer verbatim by electron-builder rather than
- * bundled — the gsk CLI and its runtime deps are spawned, never imported, so
- * they are invisible to the import scan.
- */
-function extraResourceSeeds() {
-  // the electron-builder config lives in its own cjs module (not package.json
-  // "build") so the publish URL can be injected from the environment
-  const build = require(join(ROOT, 'apps/shell/electron-builder.cjs'))
-  const entries = [build.extraResources, build.mac?.extraResources, build.win?.extraResources]
-  const names = []
-  for (const e of entries.flat()) {
-    const m = e?.from && /node_modules\/((?:@[^/]+\/)?[^/]+)$/.exec(e.from)
-    if (m) names.push(m[1])
-  }
-  return names
-}
-
-/** license text is not published to npm; supply the notice by hand */
+const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
+const EXTRA_NOTICE = { '@rhwp/core': 'tools/notices/rhwp-core.txt' }
 const NOTE = {
   '@fluentui/react-icons':
     'Copyright (c) Microsoft Corporation. Licensed under the MIT License.\nhttps://github.com/microsoft/fluentui-system-icons',
   '@genspark/cli':
     'Copyright (c) Genspark. Licensed under the MIT License.\nhttps://www.npmjs.com/package/@genspark/cli',
 }
-
-/**
- * Notices a package's own files leave out: rhwp publishes only its MIT
- * license, while its WebAssembly build carries Rust crates and a BSD-3-Clause
- * port that its repository documents separately.
- */
-const EXTRA_NOTICE = {
-  '@rhwp/core': 'tools/notices/rhwp-core.txt',
-}
-
-/** SPDX strings that need a word on which side of a dual license we take */
-const SPDX_NOTE = {
-  jszip: 'MIT (dual MIT/GPL-3.0-or-later, used under MIT)',
-  'r-efi': 'MIT (tri-licensed MIT/Apache-2.0/LGPL-2.1-or-later, used under MIT)',
-}
-
-const walk = (dir, out = []) => {
-  if (!existsSync(dir)) return out
-  for (const e of readdirSync(dir, { withFileTypes: true })) {
-    if (e.isDirectory()) {
-      if (!SKIP_DIR.test(e.name)) walk(join(dir, e.name), out)
-    } else if (CODE_EXT.test(e.name)) out.push(join(dir, e.name))
-  }
-  return out
-}
-
-// the lookbehind keeps Array.from('x') / obj.import out of the results
-const SPECIFIER = /(?<![.\w])(?:from|import|require)\s*\(?\s*['"]([^'"\n]+)['"]/g
-
-const IN_NODE_MODULES = /node_modules\/((?:@[^/]+\/)?[^/?]+)/
-
-/** 'foo/bar' -> 'foo'; '@a/b/c' -> '@a/b'; relative/builtin/workspace -> null */
-function bareName(spec) {
-  if (!spec || spec.startsWith('node:')) return null
-  // a few deep imports reach into node_modules by relative path (harfbuzzjs wasm)
-  const viaPath = IN_NODE_MODULES.exec(spec)
-  if (viaPath) return viaPath[1]
-  if (spec.startsWith('.') || spec.startsWith('/')) return null
-  const parts = spec.split('/')
-  const name = spec.startsWith('@') ? parts.slice(0, 2).join('/') : parts[0]
-  if (BUILTIN.has(name) || name.startsWith('@genoffice/')) return null
-  // the specifier regex also fires on prose inside string concatenations
-  return NPM_NAME.test(name) ? name : null
-}
-
-const NPM_NAME = /^(@[a-z0-9-~][a-z0-9-._~]*\/)?[a-z0-9-~][a-z0-9-._~]*$/
-
-function importedNames() {
-  const names = new Set([...IMPLICIT, ...extraResourceSeeds()])
-  for (const g of SRC_GLOBS) {
-    for (const file of walk(join(ROOT, g))) {
-      const text = readFileSync(file, 'utf8')
-      for (const m of text.matchAll(SPECIFIER)) {
-        const n = bareName(m[1])
-        if (n) names.add(n)
-      }
-    }
-  }
-  return names
-}
-
-const WORKSPACE_MODULES = SRC_GLOBS.map((g) => join(ROOT, g.replace(/\/src$/, ''), 'node_modules'))
-
-/** installed package names, unscoped first so existing resolutions keep winning */
-function topLevelPackages() {
-  const dirs = (at) => readdirSync(at, { withFileTypes: true }).filter((e) => e.isDirectory())
-  const top = dirs(join(ROOT, 'node_modules')).map((e) => e.name)
-  const scoped = top.filter((n) => n.startsWith('@'))
-  return [
-    ...top.filter((n) => !n.startsWith('@')),
-    ...scoped.flatMap((s) => dirs(join(ROOT, 'node_modules', s)).map((e) => `${s}/${e.name}`)),
-  ]
-}
-
-/** npm hoists, so the root copy is the usual answer; fall back to a nested one */
-function pkgDir(name) {
-  const root = join(ROOT, 'node_modules', name)
-  if (existsSync(join(root, 'package.json'))) return root
-  for (const owner of topLevelPackages()) {
-    const nested = join(ROOT, 'node_modules', owner, 'node_modules', name)
-    if (existsSync(join(nested, 'package.json'))) return nested
-  }
-  for (const modules of WORKSPACE_MODULES) {
-    const own = join(modules, name)
-    if (existsSync(join(own, 'package.json'))) return own
-  }
-  return null
-}
-
-const manifest = (dir) => JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8'))
-
-/** transitive closure over runtime deps (build-only devDependencies of a dep never ship) */
-function closure(seed) {
-  const seen = new Map()
-  const queue = [...seed].map((name) => ({ name, optional: false }))
-  const missing = new Set()
-  while (queue.length > 0) {
-    const { name, optional } = queue.shift()
-    if (seen.has(name)) continue
-    const dir = pkgDir(name)
-    if (dir === null) {
-      // an uninstalled optional dep is a platform variant for another host, not a gap
-      if (!optional) missing.add(name)
-      seen.set(name, null)
+const packageName = (path) => path.slice(path.lastIndexOf('node_modules/') + 13)
+export function inventoryInstalledPackages(root, lock) {
+  if (![2, 3].includes(lock.lockfileVersion) || !lock.packages)
+    throw new Error('An npm v2/v3 package lock is required')
+  const packages = [],
+    errors = [],
+    omittedOptional = []
+  for (const [path, entry] of Object.entries(lock.packages).sort(([a], [b]) =>
+    a.localeCompare(b),
+  )) {
+    if (!path.includes('node_modules/') || entry.link || entry.extraneous) continue
+    if (path.split('/').some((x) => x === '..') || path.startsWith('/'))
+      throw new Error('Unsafe lock package path')
+    const dir = join(root, path),
+      manifest = join(dir, 'package.json')
+    if (!existsSync(manifest)) {
+      if (entry.optional) omittedOptional.push(path)
+      else errors.push(`Required package is not installed: ${path}@${entry.version}`)
       continue
     }
-    const pkg = manifest(dir)
-    seen.set(name, { dir, pkg })
-    for (const dep of Object.keys(pkg.dependencies ?? {})) {
-      if (!seen.has(dep)) queue.push({ name: dep, optional: false })
+    const pkg = JSON.parse(readFileSync(manifest, 'utf8'))
+    // npm aliases may intentionally have a different manifest name.
+    if (pkg.version !== entry.version) {
+      errors.push(
+        `Installed version differs from lock: ${path} (${pkg.version} != ${entry.version})`,
+      )
+      continue
     }
-    for (const dep of Object.keys(pkg.optionalDependencies ?? {})) {
-      if (!seen.has(dep)) queue.push({ name: dep, optional: true })
+    const name = pkg.name || packageName(path)
+    let text
+    try {
+      text = licenseText(name, dir)
+      // Preserve published variants not recognized by the shared dot-only matcher.
+      const extra = readdirSync(dir, { withFileTypes: true })
+        .filter((file) => file.isFile() && /^(LICENSE|LICENCE|COPYING)[_-]/i.test(file.name))
+        .sort((a, b) => a.name.localeCompare(b.name))
+        .map((file) => readFileSync(join(dir, file.name), 'utf8').trim())
+        .filter(Boolean)
+      text = [...new Set([text, ...extra].filter(Boolean))].join('\n\n') || null
+    } catch (error) {
+      errors.push(`Unreadable license text: ${path}: ${error.message}`)
     }
+    const supplemental = NOTE[name]
+    // A copyright/SPDX summary is supplementary, not a replacement license.
+    if (!text) errors.push(`Missing license text: ${path}@${pkg.version}`)
+    const notices = []
+    for (const file of ['NOTICE', 'NOTICE.txt', 'NOTICE.md']) {
+      if (existsSync(join(dir, file))) {
+        notices.push(readFileSync(join(dir, file), 'utf8').trim())
+        break
+      }
+    }
+    if (EXTRA_NOTICE[name]) {
+      const file = join(root, EXTRA_NOTICE[name])
+      if (existsSync(file)) notices.push(readFileSync(file, 'utf8').trim())
+      else errors.push(`Missing supplemental notice: ${EXTRA_NOTICE[name]}`)
+    }
+    packages.push({
+      path,
+      name,
+      version: pkg.version,
+      license: pkg.license ?? null,
+      text: text ?? null,
+      supplemental,
+      notices,
+    })
   }
-  return { resolved: [...seen].filter(([, v]) => v !== null), missing }
+  return { packages, errors, omittedOptional }
 }
 
-function noticeText(name, dir) {
-  const parts = []
-  for (const f of ['NOTICE', 'NOTICE.txt', 'NOTICE.md']) {
-    if (existsSync(join(dir, f))) {
-      parts.push(readFileSync(join(dir, f), 'utf8').trim())
-      break
-    }
-  }
-  if (EXTRA_NOTICE[name]) parts.push(readFileSync(join(ROOT, EXTRA_NOTICE[name]), 'utf8').trim())
-  return parts.length > 0 ? parts.join('\n\n') : null
-}
-
-function spdxOf(name, pkg) {
-  if (SPDX_NOTE[name]) return SPDX_NOTE[name]
-  const raw = typeof pkg.license === 'string' ? pkg.license : pkg.license?.type
-  if (raw) return raw
-  // some packages ship the file but omit the field (e.g. @univerjs/telemetry)
-  return 'see license text below'
-}
-
-function repoOf(pkg) {
-  const r = pkg.repository
-  const url = typeof r === 'string' ? r : r?.url
-  return url ? url.replace(/^git\+/, '').replace(/\.git$/, '') : null
-}
-
-/** Rust crates statically linked into xlsx-sidecar */
-function rustCrates() {
-  const target = join(ROOT, 'apps/sheets/native/xlsx-engine/Cargo.toml')
+export function rustInventory(root, run = execFileSync) {
   try {
-    const raw = execFileSync(
+    const raw = run(
       'cargo',
-      ['metadata', '--format-version', '1', '--manifest-path', target],
-      { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, stdio: ['ignore', 'pipe', 'ignore'] },
+      [
+        'metadata',
+        '--offline',
+        '--locked',
+        '--format-version',
+        '1',
+        '--manifest-path',
+        join(root, 'apps/sheets/native/xlsx-engine/Cargo.toml'),
+      ],
+      {
+        encoding: 'utf8',
+        maxBuffer: 64 * 1024 * 1024,
+        timeout: 120000,
+        stdio: ['ignore', 'pipe', 'pipe'],
+      },
     )
-    return JSON.parse(raw)
-      .packages.filter((p) => p.name !== 'xlsx-sidecar')
-      .map((p) => ({
-        name: p.name,
-        version: p.version,
-        spdx: SPDX_NOTE[p.name] ?? p.license ?? 'see repository',
-        url: p.repository ?? `https://crates.io/crates/${p.name}`,
-        dir: p.manifest_path ? dirname(p.manifest_path) : null,
-      }))
-      .sort((a, b) => a.name.localeCompare(b.name))
-  } catch {
-    return null
+    const metadata = JSON.parse(raw),
+      packages = [],
+      errors = []
+    for (const pkg of metadata.packages.filter((p) => p.source)) {
+      const text = licenseText(pkg.name, dirname(pkg.manifest_path))
+      if (!text) errors.push(`Missing native license text: ${pkg.name}@${pkg.version}`)
+      packages.push({
+        name: pkg.name,
+        version: pkg.version,
+        source: pkg.source,
+        license: pkg.license,
+        text,
+      })
+    }
+    return { status: errors.length ? 'incomplete' : 'metadata-only', packages, errors }
+  } catch (error) {
+    return {
+      status: 'incomplete',
+      packages: [],
+      errors: [`Offline locked Cargo metadata unavailable: ${error.message}`],
+    }
   }
 }
-
 const hr = (title) => `\n${'='.repeat(72)}\n${title}\n${'='.repeat(72)}\n`
-const sub = (title) => `\n${'-'.repeat(72)}\n${title}\n${'-'.repeat(72)}\n`
-
-const seed = importedNames()
-const { resolved, missing } = closure(seed)
-resolved.sort(([a], [b]) => a.localeCompare(b))
-
-let out = `GenOffice — Third-Party Software Notices
-
-This application includes third-party software components under the licenses
-reproduced below.
-
-Chromium (bundled via Electron) is licensed under BSD-style and other
-licenses — see LICENSES.chromium.html next to this file.
-`
-
-out += hr(`1. npm packages (${resolved.length})`)
-const noText = []
-for (const [name, { dir, pkg }] of resolved) {
-  out += sub(`${name} v${pkg.version} — ${spdxOf(name, pkg)}`)
-  const text = licenseText(name, dir) ?? NOTE[name]
-  if (text) {
-    out += text + '\n'
-  } else {
-    noText.push(name)
-    const repo = repoOf(pkg)
-    out += `Licensed under ${spdxOf(name, pkg)}.${repo ? `\n${repo}` : ''}\n`
-  }
-  const notice = noticeText(name, dir)
-  if (notice) out += `\nNOTICE:\n${notice}\n`
-}
-
-const crates = rustCrates()
-out += hr(`2. Rust crates (xlsx-sidecar native component, statically linked)`)
-if (crates === null) {
-  out += '\ncargo metadata unavailable at generation time; see'
-  out += ' apps/sheets/native/xlsx-engine/Cargo.lock for the full crate list.\n'
-} else {
-  out += `\n${crates.length} crates, all under permissive terms:\n\n`
-  for (const c of crates) out += `  ${c.name} ${c.version}  —  ${c.spdx}\n    ${c.url}\n`
-  const texts = new Map()
-  for (const c of crates) {
-    if (!c.dir) continue
-    const text = licenseText(c.name, c.dir)
-    if (text && !texts.has(text)) texts.set(text, c.name)
-  }
-  out += sub('Crate license texts (deduplicated)')
-  for (const [text, first] of texts) out += `\n[first seen in ${first}]\n${text}\n`
-}
-
 const GOTHIC_KR_COPYRIGHT = [
   'Copyright (c) 2010, NHN Corporation (http://www.nhncorp.com),',
   'with Reserved Font Name Nanum, Naver Nanum, NanumGothic, Naver ',
@@ -382,34 +223,76 @@ const FONTS = [
   ],
 ]
 
-out += hr('3. Bundled fonts')
-for (const [name, spdx, copyright] of FONTS) out += sub(`${name} — ${spdx}`) + copyright + '\n'
-out += sub('SIL Open Font License 1.1 — full text')
-out +=
-  readFileSync(join(ROOT, 'apps/docs/src/renderer/fonts/LICENSE-OFL.txt'), 'utf8').trim() + '\n'
-
-out += hr('4. Unicode Character Database data')
-out += `
-apps/pdf/src/shared/radicals.ts contains a generated mapping derived from
-Unicode Character Database 17.0.0, EquivalentUnifiedIdeograph.txt
-(2025-08-01):
-https://www.unicode.org/Public/17.0.0/ucd/EquivalentUnifiedIdeograph.txt
-
-`
-out += readFileSync(join(ROOT, 'LICENSE-UNICODE.txt'), 'utf8').trim() + '\n'
-
-for (const term of ['@embedpdf/pdfium', 'Copyright 2014 PDFium Authors', 'Apache License']) {
-  if (!out.includes(term)) {
-    throw new Error(`generated third-party notice is missing PDFium term: ${term}`)
+export function generate(root = ROOT) {
+  const inventory = inventoryInstalledPackages(
+    root,
+    JSON.parse(readFileSync(join(root, 'package-lock.json'), 'utf8')),
+  )
+  const native = rustInventory(root)
+  let out = `DyOffice SaaS — Third-Party Inventory Notices\n\nNOT A FINAL DISTRIBUTION COMPLIANCE ATTESTATION.\nThis is a conservative installed-lock inventory including build/test dependencies.\nNative binary linkage, runtime image/OS notices and final artifact coverage remain unverified.\nNo Electron or installer configuration is used to generate this inventory.\n`
+  for (const pkg of inventory.packages) {
+    out += hr(`${pkg.name} ${pkg.version} [${pkg.path}]`)
+    out += `${pkg.text ?? 'INCOMPLETE: LICENSE TEXT NOT AVAILABLE'}\n`
+    if (pkg.supplemental) out += `\n${pkg.supplemental}\n`
+    for (const notice of pkg.notices) out += `\nNOTICE:\n${notice}\n`
   }
+  out += hr('Bundled fonts — retained source inventory')
+  for (const [name, spdx, copyright] of FONTS) out += hr(`${name} — ${spdx}`) + copyright + '\n'
+  out += readFileSync(join(root, 'apps/docs/src/renderer/fonts/LICENSE-OFL.txt'), 'utf8')
+  out += hr('Apache-2.0 full license (including Caladea terms)')
+  out += readFileSync(join(root, 'LICENSE'), 'utf8')
+  out += hr('Unicode Character Database data')
+  out +=
+    'Retained attribution for Unicode 17.0.0 EquivalentUnifiedIdeograph.txt (2025-08-01), including historical generated radical mappings.\n'
+  out += readFileSync(join(root, 'LICENSE-UNICODE.txt'), 'utf8')
+  out += hr('XLSX Rust crates — offline locked metadata inventory')
+  out += `Status: ${native.status}. This is not a verified native binary linkage inventory.\n`
+  for (const pkg of native.packages)
+    out +=
+      hr(`${pkg.name} ${pkg.version} — ${pkg.license}`) +
+      (pkg.text ?? 'INCOMPLETE: LICENSE TEXT NOT AVAILABLE') +
+      '\n'
+  const errors = [...inventory.errors]
+  for (const term of ['@embedpdf/pdfium', 'Copyright 2014 PDFium Authors', 'Apache License']) {
+    if (!out.includes(term)) errors.push(`Required PDFium notice term missing: ${term}`)
+  }
+  const report = {
+    schemaVersion: 1,
+    scope: 'installed-lock-superset',
+    distributionReady: false,
+    javascriptStatus: errors.length ? 'incomplete' : 'inventoried',
+    packages: inventory.packages.map(({ text, notices, supplemental, ...pkg }) => pkg),
+    omittedOptional: inventory.omittedOptional,
+    errors,
+    native: { ...native, packages: native.packages.map(({ text, ...pkg }) => pkg) },
+    outstanding: [
+      'Map final shipped JavaScript/font/PDF assets to this inventory',
+      'Verify all native binaries, Rust/WASM dependencies, runtime image and OS license notices',
+    ],
+  }
+  const dest = join(root, 'artifacts/notices')
+  mkdirSync(dest, { recursive: true })
+  writeFileSync(join(dest, 'THIRD-PARTY-INVENTORY.txt'), out)
+  writeFileSync(join(dest, 'inventory-status.json'), JSON.stringify(report, null, 2) + '\n')
+  console.log(
+    `SaaS inventory written to artifacts/notices; JS=${report.javascriptStatus}; native=${native.status}; distributionReady=false`,
+  )
+  for (const error of errors) console.error(error)
+  if (native.status === 'incomplete')
+    console.warn(
+      'Native inventory incomplete; see inventory-status.json. No final distribution approval is implied.',
+    )
+  return report
+}
+export function inventoryExitCode(report) {
+  return report.errors.length || report.native.status === 'incomplete' ? 1 : 0
 }
 
-const dest = join(ROOT, 'apps/shell/build/THIRD-PARTY-NOTICES.txt')
-mkdirSync(dirname(dest), { recursive: true })
-writeFileSync(dest, out)
-console.log(
-  `written: ${relative(ROOT, dest)} (${(out.length / 1024).toFixed(0)} KB) — ` +
-    `${resolved.length} npm packages, ${crates?.length ?? 0} crates`,
-)
-if (noText.length > 0) console.warn(`no license file published: ${noText.join(', ')}`)
-if (missing.size > 0) console.warn(`not installed, skipped: ${[...missing].join(', ')}`)
+if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
+  try {
+    process.exitCode = inventoryExitCode(generate())
+  } catch (error) {
+    console.error(error.message)
+    process.exitCode = 1
+  }
+}

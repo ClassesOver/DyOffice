@@ -41,6 +41,11 @@ export async function prepareCloud(env: NodeJS.ProcessEnv): Promise<void> {
     const { ProxyAgent, setGlobalDispatcher } = await import('undici')
     setGlobalDispatcher(new ProxyAgent(proxy))
   }
+  prepareCloudResources(env)
+}
+
+/** Local packaged CLI discovery only; safe for capability inspection. */
+export function prepareCloudResources(env: NodeJS.ProcessEnv): void {
   const packaged = packagedResourcesDir()
   if (packaged && !env.GSK_CLI_PATH) {
     const entry = join(packaged, 'gsk', 'node_modules', '@genspark', 'cli', 'dist', 'index.js')

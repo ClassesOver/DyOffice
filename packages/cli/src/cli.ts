@@ -6,6 +6,8 @@ import { appendAudit } from './audit'
 import { capabilitiesCommand } from './commands/capabilities'
 import { convertCommand } from './commands/convert'
 import { docsCommand } from './commands/docs'
+import {agentCommand} from './commands/agent'
+import { dataCommand } from './commands/data'
 import { createCommand } from './commands/create'
 import { guideCommand } from './commands/guide'
 import { imageCommand } from './commands/image'
@@ -58,6 +60,8 @@ export function defaultRegistry(): CommandRegistry {
     .register(slidesCommand)
     .register(sheetCommand)
     .register(docsCommand)
+    .register(dataCommand)
+    .register(agentCommand)
     .register(mergeCommand)
     .register(pdfCommand)
     .register(renderCommand)

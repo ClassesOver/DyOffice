@@ -11,6 +11,8 @@
     "./tools": "./src/tools.ts",
     "./sources": "./src/sources.ts",
     "./source-tools": "./src/source-tools.ts",
+    "./assistant-channel": "./src/assistant-channel.ts",
+    "./harness-data": "./src/harness-data.ts",
     "./source-results": "./src/source-results.ts"
   }
 }

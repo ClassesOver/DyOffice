@@ -13,8 +13,10 @@ const id = {type:'string',pattern:'^[A-Za-z0-9_-]{1,128}$'}
 /** Opt-in adapter only. app.ts does not mount it until T12 authority/secret/budget integration is verified. */
 export function registerProviderRoutes(app: FastifyInstance, options: {
   turns: TurnRunner; sessions: Pick<SessionService,'authenticate'>;
-  csrf: Pick<ReturnType<typeof createCsrfService>,'requireSession'>; maxOutputBytes?: number
+  csrf: Pick<ReturnType<typeof createCsrfService>,'requireSession'>; maxOutputBytes?: number; endpoint?: string; errorMessage?: string
 }) {
+  const endpoint = options.endpoint ?? '/api/v1/ai/turns'
+  if (!['/api/v1/ai/turns','/api/v1/agents/tasks'].includes(endpoint)) throw new Error('Invalid turn endpoint')
   const maxOutputBytes = options.maxOutputBytes ?? 8 * 1024 * 1024
   if (!Number.isSafeInteger(maxOutputBytes) || maxOutputBytes < 128 || maxOutputBytes > 32 * 1024 * 1024) throw new Error('Invalid AI output limit')
   app.register(async api => {
@@ -25,7 +27,7 @@ export function registerProviderRoutes(app: FastifyInstance, options: {
       options.csrf.requireSession(request,token)
       await options.sessions.authenticate(token)
     })
-    api.post('/api/v1/ai/turns',{bodyLimit:1024*1024,schema:{querystring:object({}),body:object({turnId:id,modelId:id,request:object({system:{type:'string'},messages:{type:'array'},tools:{type:'array'}})})}},async (request,reply) => {
+    api.post(endpoint,{bodyLimit:1024*1024,schema:{querystring:object({}),body:object({turnId:id,modelId:id,request:object({system:{type:'string'},messages:{type:'array'},tools:{type:'array'}})})}},async (request,reply) => {
       const body=request.body as {turnId:string;modelId:string;request:unknown}
       const controller=new AbortController(), response=reply.raw
       let bytes=0
@@ -56,13 +58,13 @@ export function registerProviderRoutes(app: FastifyInstance, options: {
           const {type,...data}=event;await write(type,data)
         })
       } catch {
-        if(!response.destroyed && !controller.signal.aborted) await write('error',{message:'AI stream unavailable'},true).catch(()=>{})
+        if(!response.destroyed && !controller.signal.aborted) await write('error',{message:options.errorMessage ?? 'AI stream unavailable'},true).catch(()=>{})
       } finally {
         if(!response.destroyed && !controller.signal.aborted) await write('done',{},true).catch(()=>{})
         response.end();response.off('close',disconnect)
       }
     })
-    api.post('/api/v1/ai/turns/:id/cancel',{bodyLimit:1024,schema:{params:object({id}),querystring:object({})}},async(request,reply)=>{
+    api.post(endpoint+'/:id/cancel',{bodyLimit:1024,schema:{params:object({id}),querystring:object({})}},async(request,reply)=>{
       if(request.body!==undefined)throw authError(400)
       await options.turns.cancel(cookies(request).session!,(request.params as {id:string}).id)
       return reply.code(204).send()

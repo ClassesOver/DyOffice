@@ -3,6 +3,9 @@
     "target": "ES2022",
     "module": "ESNext",
     "moduleResolution": "Bundler",
+    // Vite emits bundled JavaScript; typechecking also consumes Node-loadable .ts sources.
+    "noEmit": true,
+    "allowImportingTsExtensions": true,
     "jsx": "react-jsx",
     "strict": true,
     "noUncheckedIndexedAccess": true,
@@ -20,11 +23,13 @@
       // resolve workspace types from this checkout's sources: in a git worktree
       // node_modules is a symlink into the main checkout, so bare specifiers
       // would typecheck against the other checkout's (possibly stale) types
+      "@genoffice/ui": ["../../packages/ui/src/index.ts"],
+      "@genoffice/agent-core": ["../../packages/agent-core/src/index.ts"],
+      "@genoffice/ai-provider": ["../../packages/ai-provider/src/index.ts"],
       "@genoffice/electron-utils": ["../../packages/electron-utils/src/index.ts"]
     }
   },
   "include": [
-    "electron.vite.config.ts",
     "src/**/*.ts",
     "src/**/*.tsx",
     "scripts/**/*.ts",

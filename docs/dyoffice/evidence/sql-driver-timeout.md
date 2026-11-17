@@ -1,0 +1,9 @@
+# PostgreSQL driver timeout classification
+
+Base: #134 `79187ad1`. Actual CI `133993756736` reached the full local integration suite and observed HTTP 502 instead of expected 504 for a deliberately expensive read-only PostgreSQL SELECT. The public response deliberately hides driver error details, so this log alone cannot prove which internal timeout won.
+
+Inspection found that pg's installed client emits an `Error('Query read timeout')` without SQLSTATE when its own query deadline expires. The existing classifier recognized server `57014` and other coded timeouts but converted this uncoded timeout to 502. A real pg client talking to a controlled loopback protocol peer reproduced that error and the wrong 502 mapping before the fix. This is a verified independent defect, not an assertion that all possible CI causes have been eliminated.
+
+Only PostgreSQL's exact uncoded Error is now mapped to 504. Permission denials remain 403; unrelated errors, lookalike objects, extended messages and the same text from MySQL/StarRocks remain 502. No query text, target, credentials or database error is returned. Existing query/statement deadlines, wire/row budgets, read-only grants, pinned network destinations and finally-close behavior are unchanged. No retry is added.
+
+Verification: real installed pg loopback test RED then GREEN; targeted three-test classifier suite passed on both current Node 24 and immutable-lock Node 22.23.5. The latter binary/archive were verified against the repository lock by the PDF worker. Real PostgreSQL data-sources integration 7/7 passed on Node 22.23.5, including the original slow-query 504 assertion and grant/row limits; server typecheck passed. The temporary cluster was stopped. Exact-head full CI remains required. No external source, model, Chromium or blocked CLI path was invoked.

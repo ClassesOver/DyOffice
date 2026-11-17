@@ -1,3 +1,4 @@
+import { AssistantParticipants, DelegatedAgentResultCard, delegatedAgentResult, compactDelegatedTranscript, type AssistantParticipant, type DelegatedAgentResult } from '@genoffice/ui'
 import { showToast } from '../components/toast-bus'
 import {
   aiPanelWidthAtPointer,
@@ -96,6 +97,7 @@ import sendStop from '../assets/send-stop.png'
 import { IconNewChat, IconSidebarCollapse } from '../components/icons'
 
 interface ToolActivity {
+  delegation?: DelegatedAgentResult
   name: string
   summary: string
   /** still executing: rendered as a spinner chip, replaced in place when the tool finishes */
@@ -233,7 +235,11 @@ export { aiRevisionAuthor }
 interface AiPanelProps {
   sourceSkill?: import('@genoffice/agent-core').AgentSkill
   transport?: import('@genoffice/agent-core').AgentTransport
+  extraSkills?: readonly import('@genoffice/agent-core').AgentSkill[]
   modelPicker?: React.ReactNode
+  assistantControl?: import('@genoffice/ui').AssistantControl
+  assistantAgents?: readonly AssistantParticipant[]
+  onManageAgents?: () => void
   editor: Editor
   blocks: Block[]
   settings: AiSettings
@@ -337,6 +343,10 @@ export function AiPanel({
   sourceSkill,
   transport,
   modelPicker,
+  assistantControl,
+  assistantAgents,
+  onManageAgents,
+  extraSkills,
   editor,
   blocks,
   settings,
@@ -374,16 +384,19 @@ export function AiPanel({
   const isRtl = lang === 'ar' || lang === 'he'
   const [input, setInput] = useState('')
   const [busy, setBusy] = useState(false)
+  const assistantRunTokenRef = useRef<string | undefined>(undefined)
   /** messages queued while a reply runs; the pump re-runs them through runWith on settle */
   const msgQueue = useChatRunQueue<{
     attachments: AttachmentMeta[]
     scope: AiScopeQuoteData | null
+    preserveComposer?: boolean
+    continuationToken?: string | undefined
   }>({
     busy,
     submit: (text, meta) => {
       const loop = loopRef.current
       if (!loop || loop.busy || pendingSendRef.current) return false
-      runWith(text, text, meta.attachments, meta.scope)
+      runWith(text, text, meta.attachments, meta.scope, false, meta.preserveComposer, meta.continuationToken)
       return true
     },
   })
@@ -639,6 +652,7 @@ export function AiPanel({
             tools: m.tools?.map((t) => ({
               name: t.name,
               summary: t.summary,
+              delegation: delegatedAgentResult(t.name, t.output),
               isError: t.isError,
               output: t.output ? t.output.slice(0, TOOL_OUTPUT_MAX_CHARS) : undefined,
             })),
@@ -816,8 +830,10 @@ export function AiPanel({
     })
     loopRef.current = new AgentLoop<PmNode>({
       transport: transportRef.current,
+      allowDelegationYield: !!assistantControl,
       systemSuffix: aiLangDirective,
       skill: composeSkills('docs+files+skills', '', [
+        ...(extraSkills ?? []),
         // the reader's starred files; empty while the user stars nothing —
         // buildContext then returns '' and the skill stays out of the way.
         // Mounted only when the bridge carries the kb channel at all: a test
@@ -878,7 +894,7 @@ export function AiPanel({
             isError: execution.isError,
             input: safeJsonInput(call.input),
             output: execution.output
-              ? execution.output.slice(0, PERSIST_TOOL_FIELD_MAX)
+              ? compactDelegatedTranscript(call.name, execution.output, PERSIST_TOOL_FIELD_MAX)
               : undefined,
           })
           patchLastAssistant((last) => {
@@ -891,6 +907,7 @@ export function AiPanel({
                 {
                   name: call.name,
                   summary: execution.summary,
+                  delegation: delegatedAgentResult(call.name, execution.output),
                   isError: execution.isError,
                   output: execution.output
                     ? execution.output.slice(0, TOOL_OUTPUT_MAX_CHARS)
@@ -912,7 +929,11 @@ export function AiPanel({
           setSessionUsage((prev) => addTokenUsage(prev, usage))
           patchLastAssistant({ usage: runUsageRef.current })
         },
-        onDone: ({ text, cancelled, turnLimit, truncated }) => {
+        onDone: ({ text, cancelled, turnLimit, truncated, yielded }) => {
+          const runToken = assistantRunTokenRef.current
+          assistantRunTokenRef.current = undefined
+          if (runToken) assistantControl?.endRun?.(runToken, {text, cancelled, failed: turnLimit || !!truncated, ...(yielded ? {yielded} : {})})
+          else if (yielded) assistantControl?.reportYield(yielded.taskIds)
           // module-level t: the loop instance is created only once; the component's t goes stale with the first-render closure
           const baseText = turnLimit
             ? [text, tModule('aiTurnLimit')].filter(Boolean).join('\n\n')
@@ -939,6 +960,9 @@ export function AiPanel({
           }
         },
         onError: (error) => {
+          const runToken = assistantRunTokenRef.current
+          assistantRunTokenRef.current = undefined
+          if (runToken) assistantControl?.endRun?.(runToken, {text: error, cancelled: false, failed: true})
           setChat((prev) => {
             const next = [...prev]
             const last = next.at(-1)
@@ -1099,6 +1123,29 @@ export function AiPanel({
     return images
   }
 
+  useEffect(() => {
+    if (!assistantControl) return
+    return assistantControl.register({
+      isBusy: () => !loopRef.current || loopRef.current.busy || !!pendingSendRef.current,
+      cancelRun(token) { if (assistantRunTokenRef.current === token) loopRef.current?.cancel() },
+      requestYield(taskIds) { loopRef.current?.requestYield(taskIds) },
+      continue(instruction, continuationToken) {
+        msgQueue.enqueue(instruction, { attachments: [], scope: null, preserveComposer: true, continuationToken })
+        return true
+      },
+      async execute(instruction, signal) {
+        const loop = loopRef.current
+        if (!loop || loop.busy || pendingSendRef.current) throw new Error('Office assistant is busy')
+        setBusy(true)
+        try {
+          return await loop.runScoped(instruction, { signal, allowedTools: assistantControl.allowedTools })
+        } finally {
+          setBusy(false)
+        }
+      },
+    })
+  }, [assistantControl])
+
   const runWith = (
     instruction: string,
     displayInstruction = instruction,
@@ -1107,10 +1154,12 @@ export function AiPanel({
     retryScope?: AiScopeQuoteData | null,
     /** only the composer's own send takes the attached skills along */
     attachSkills = false,
+    preserveComposer = false,
+    continuationToken?: string,
   ) => {
     const loop = loopRef.current
     if (!instruction || !loop || loop.busy || pendingSendRef.current) return
-    setInput('')
+    if (!preserveComposer) setInput('')
     // The message consumes the composer attachments: they ride along (echoed on the
     // bubble, images multimodal, files via the files skill) and the composer clears.
     const sentAtts = attachmentsOverride ?? attachmentsRef.current
@@ -1189,6 +1238,13 @@ export function AiPanel({
           setBusy(false)
           return
         }
+        const runToken = assistantControl?.beginRun?.(instruction, continuationToken)
+        if (assistantControl?.beginRun && !runToken) {
+          patchLastAssistant({streaming: false})
+          setBusy(false)
+          return
+        }
+        assistantRunTokenRef.current = runToken
         return loop.run(modelInstruction, images, modelInstruction !== instruction && transport ? instruction : undefined)
       })
   }
@@ -1271,6 +1327,8 @@ export function AiPanel({
   }
 
   const newChat = () => {
+    assistantControl?.resetConversation?.()
+    assistantRunTokenRef.current = undefined
     msgQueue.clear()
     if (pendingSendRef.current) {
       pendingSendRef.current.aborted = true
@@ -1472,6 +1530,8 @@ export function AiPanel({
           )}
         </div>
       </div>
+
+      {assistantAgents && <AssistantParticipants agents={assistantAgents} lang={lang} onManageAgents={onManageAgents} />}
 
       <div ref={logRef} className="ai-chat" onScroll={onLogScroll}>
         {/* past conversation (read-only transcript, not fed to the model), shown continuously with the current turn */}
@@ -2052,7 +2112,7 @@ function RollbackButton({ disabled, onClick }: { disabled: boolean; onClick: () 
  *  that auto-opens while tools run, auto-collapses into "Worked · N steps" when they finish,
  *  and a manual toggle that always wins. Rows inside are step rows with 1px connectors. */
 function ToolChipList({ tools }: { tools: ToolActivity[] }) {
-  const { t: tr } = useI18n()
+  const { t: tr, lang } = useI18n()
   const [expanded, setExpanded] = useState<Set<number>>(new Set())
   const [userOpen, setUserOpen] = useState<boolean | null>(null)
 
@@ -2095,6 +2155,7 @@ function ToolChipList({ tools }: { tools: ToolActivity[] }) {
                   <StepIcon status={stepStatus} />
                 </span>
                 <div className="ai-step-content">
+                  {tool.delegation && <DelegatedAgentResultCard result={tool.delegation} lang={lang} />}
                   {hasOutput ? (
                     <button
                       type="button"

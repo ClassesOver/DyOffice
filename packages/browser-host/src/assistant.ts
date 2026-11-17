@@ -1,17 +1,25 @@
 import type {AgentTransport} from '@genoffice/agent-core'
 import {createSseAgentTransport} from './ai-transport.ts'
 import type {SettingsRequest} from './preferences.ts'
-import {assistantReadTools, type AssistantCatalog} from '../../web-contracts/src/assistant.ts'
-
 import {createSourceCatalogSkill} from './source-catalog-skill.ts'
+import {createCodingClient} from './coding.ts'
+import {assistantReadTools, ASSISTANT_DELEGATION_TOOLS, type AssistantCatalog} from '../../web-contracts/src/assistant.ts'
 
-export async function createAssistantClient({request, fetchImpl, csrfToken}: {request: SettingsRequest; fetchImpl?: typeof fetch; csrfToken?: string}) {
+export async function createAssistantClient({request, fetchImpl, csrfToken, onDelivery}: {request: SettingsRequest; fetchImpl?: typeof fetch; csrfToken?: string;onDelivery?:(hint:unknown,agent:{id:string;name:string;origin:'builtin'|'external'})=>void|Promise<void>}) {
   const catalog = await request<AssistantCatalog>('/api/v1/ai/catalog')
   let selected = catalog.defaultId, runModel = selected, disposed = false
   // Keep the original session proof. A replacement login in another tab cannot
   // dispatch this document/chat using the new account's cookie.
   const csrf = csrfToken ?? (catalog.entries.length ? (await request<{csrfToken: string}>('/api/v1/auth/csrf')).csrfToken : '')
   const allowedTools = assistantReadTools(catalog.sourceCatalog === true)
+  const coding = catalog.agents?.length && catalog.defaultAgentId
+    ? createCodingClient({agents: catalog.agents, defaultId: catalog.defaultAgentId, csrfToken: csrf, getModelId: () => runModel, ...(onDelivery ? {onDelivery} : {}), dataCatalog:async input=>{
+      const [sources,results]=await Promise.all([
+        request('/api/v1/workspace/source-tools/execute','POST',{name:'sources.list',arguments:input.sourcesAfter?{after:input.sourcesAfter}:{}}),
+        request('/api/v1/workspace/data-results'+(input.resultsAfter?'?after='+encodeURIComponent(input.resultsAfter):'')),
+      ])
+      return {sources,results}
+    }, ...(fetchImpl ? {fetchImpl} : {})}) : undefined
   const encoder = new TextEncoder()
   const active = new Set<{cancel(): void}>()
   const transport: AgentTransport = {
@@ -24,7 +32,7 @@ export async function createAssistantClient({request, fetchImpl, csrfToken}: {re
       if (disposed || !catalog.entries.some(e => e.id === runModel)) {
         callbacks.onError('助手当前不可用。'); callbacks.onDone(); return {cancel() {}}
       }
-      const tools = input.tools.filter(t => allowedTools.has(t.name))
+      const tools = input.tools.filter(t => (allowedTools.has(t.name) || ((coding||input.tools.some(tool=>tool.name==='list_channel_agents')) && ASSISTANT_DELEGATION_TOOLS.has(t.name))))
       const messages = input.messages.map(message => message.role === 'assistant'
         ? {role: message.role, text: message.text, toolCalls: message.toolCalls}
         : message)
@@ -35,7 +43,7 @@ export async function createAssistantClient({request, fetchImpl, csrfToken}: {re
       }
       let handle: {cancel(): void}
       handle = createSseAgentTransport({modelId: runModel!, getCsrfToken: async () => csrf, ...(fetchImpl ? {fetchImpl} : {})}).stream({
-        ...input, messages, tools, system: input.system + '\nThis assistant can read and explain. Document mutation and CLI execution are unavailable.',
+        ...input, messages, tools, system: input.system + (coding ? '\nThis assistant can read and explain. Document mutation and direct CLI execution are unavailable. You may delegate coding using the offered agent tools.' : '\nThis assistant can read and explain. Document mutation and CLI execution are unavailable.'),
       }, {...callbacks, onToolCall(call) {
         if (!tools.some(t => t.name === call.name)) throw new Error('助手返回了未授权的工具。')
         callbacks.onToolCall(call)
@@ -45,11 +53,11 @@ export async function createAssistantClient({request, fetchImpl, csrfToken}: {re
     },
   }
   return {
-    catalog, transport,
+    catalog, transport, extraSkills: coding ? [coding.skill] : [],
     ...(catalog.sourceCatalog === true ? {sourceSkill: createSourceCatalogSkill(request, () => disposed)} : {}),
     selected: () => selected,
     select(id: string) {if (disposed || !catalog.entries.some(e => e.id === id)) throw new Error('模型不可用。'); selected = id},
     available: catalog.entries.length > 0,
-    dispose() {disposed = true; for (const handle of active) handle.cancel(); active.clear()},
+    dispose() {coding?.dispose(); disposed = true; for (const handle of active) handle.cancel(); active.clear()},
   }
 }

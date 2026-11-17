@@ -308,3 +308,54 @@ test('dispose in the JSON-to-caller microtask gap cannot reopen context or accep
     }
   }
 })
+
+
+test('guard revoked during DOCX byte upload prevents commit submission',async t=>{
+ let authorized=true
+ const f=fixture(t,(path,init)=>{if(path.endsWith('/content')&&init.method==='PUT')authorized=false})
+ await f.host.open(f.fileId);await f.host.acquireLease(f.fileId)
+ await assert.rejects(f.host.save(f.fileId,f.bytes,()=>authorized))
+ assert.equal(f.calls.filter(call=>call.path.endsWith('/commits')).length,0)
+})
+test('trusted guard is checked after saving-state listeners before the commit fetch',async t=>{
+ let authorized=true
+ const f=fixture(t)
+ await f.host.open(f.fileId);await f.host.acquireLease(f.fileId)
+ f.host.subscribe(()=>{if(f.host.getState(f.fileId).status==='saving')authorized=false})
+ await assert.rejects(f.host.save(f.fileId,f.bytes,()=>authorized))
+ assert.equal(f.calls.filter(call=>call.path.endsWith('/commits')).length,0)
+})
+test('revocation after a refused commit prevents CSRF retry from submitting it again',async t=>{
+ let authorized=true
+ const f=fixture(t,path=>{if(path.endsWith('/commits')){authorized=false;return json({},403)}})
+ await f.host.open(f.fileId);await f.host.acquireLease(f.fileId)
+ await assert.rejects(f.host.save(f.fileId,f.bytes,()=>authorized))
+ assert.equal(f.calls.filter(call=>call.path.endsWith('/commits')).length,1)
+})
+test('blocking a recovery preserves a genuinely submitted unknown receipt',async t=>{
+ let lose=true
+ const f=fixture(t,path=>{if(path.endsWith('/commits')&&lose){lose=false;throw new TypeError('lost response')}})
+ await f.host.open(f.fileId);await f.host.acquireLease(f.fileId)
+ await assert.rejects(f.host.save(f.fileId,f.bytes))
+ assert.equal(f.host.getState(f.fileId).status,'unknown')
+ await assert.rejects(f.host.reconcile(f.fileId,()=>false))
+ assert.equal(f.host.getState(f.fileId).status,'unknown')
+ assert.equal(f.calls.filter(call=>call.path.endsWith('/commits')).length,1)
+ await f.host.reconcile(f.fileId,()=>true)
+ assert.equal(f.calls.filter(call=>call.path.endsWith('/commits')).length,2)
+ assert.equal(f.host.getState(f.fileId).status,'idle')
+})
+test('a genuine unknown keeps its originating fence across default reconcile and next save',async t=>{
+ let allowed=true,lose=true
+ const f=fixture(t,path=>{if(path.endsWith('/commits')&&lose){lose=false;throw new TypeError('lost response')}})
+ await f.host.open(f.fileId);await f.host.acquireLease(f.fileId)
+ await assert.rejects(f.host.save(f.fileId,f.bytes,()=>allowed))
+ allowed=false
+ await assert.rejects(f.host.reconcile(f.fileId))
+ await assert.rejects(f.host.save(f.fileId,f.bytes))
+ assert.equal(f.calls.filter(call=>call.path.endsWith('/commits')).length,1)
+ assert.equal(f.host.getState(f.fileId).status,'unknown')
+ allowed=true
+ await f.host.reconcile(f.fileId)
+ assert.equal(f.calls.filter(call=>call.path.endsWith('/commits')).length,2)
+})

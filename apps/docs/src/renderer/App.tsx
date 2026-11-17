@@ -1,3 +1,5 @@
+import {createAnalysisSaveConsent} from '../../../../packages/browser-host/src/analysis-save-consent'
+import {docsAnalysisEditor} from './analysis-insert'
 import { usePageColorState } from './page-color-state'
 import { useMirrorMarginsState } from './mirror-margins-state'
 import { useEvenOddHfState } from './even-odd-hf-state'
@@ -803,7 +805,7 @@ function shadowPlanDiff(
   return diffs
 }
 
-export function App({ host }: { host?: { readOnly: boolean; assistantAvailable: boolean; assistant?: {sourceSkill?: import('@genoffice/agent-core').AgentSkill; transport: import('@genoffice/agent-core').AgentTransport; modelPicker: React.ReactNode}; preferenceScope: string; onEditorReady?(handle: import('./file-actions').DocsEditorHandle | null): void; lifecycle: import('./file-actions').DocsHostLifecycle; onDocumentEdited(): void; onOpenFailed(): void } } = {}) {
+export function App({ host }: { host?: { readOnly: boolean; assistantAvailable: boolean; assistant?: {sourceSkill?: import('@genoffice/agent-core').AgentSkill; transport: import('@genoffice/agent-core').AgentTransport; modelPicker: React.ReactNode; extraSkills?: readonly import('@genoffice/agent-core').AgentSkill[]; agents?: readonly import('@genoffice/ui').AssistantParticipant[]; onManageAgents?: () => void; control?: import('@genoffice/ui').AssistantControl | undefined}; preferenceScope: string; onEditorReady?(handle: import('./file-actions').DocsEditorHandle | null): void; lifecycle: import('./file-actions').DocsHostLifecycle; onDocumentEdited(): void; onOpenFailed(): void } } = {}) {
   // subscribe to language switches for re-render; strings all go through module-level t, so memoized callbacks never capture stale closures
   const { lang } = useI18n()
   const [doc, setDoc] = useState<DocState | null>(null)
@@ -1298,6 +1300,7 @@ export function App({ host }: { host?: { readOnly: boolean; assistantAvailable: 
       )
     : 624
   const [, forceRender] = useReducer((x: number) => x + 1, 0)
+  const analysisSaveConsent = useRef(createAnalysisSaveConsent())
   const dirtyRef = useRef(false)
   // serializes save(): overlapping saves (Cmd+S vs autosave timer vs blur) would
   // otherwise race on the write + reparse + setContent sequence
@@ -2596,7 +2599,9 @@ export function App({ host }: { host?: { readOnly: boolean; assistantAvailable: 
   }
 
   const save = useCallback(
-    (saveAs: boolean, auto = false) => saveImpl(fileCtxRef.current, saveAs, auto),
+    (saveAs: boolean, auto = false) => analysisSaveConsent.current.run(auto,
+      () => saveImpl(fileCtxRef.current, saveAs, auto),
+      ok => ok && !isDocDirty(fileCtxRef.current),false),
     [],
   )
 
@@ -6184,6 +6189,7 @@ export function App({ host }: { host?: { readOnly: boolean; assistantAvailable: 
   useEffect(() => {
     if (!host?.onEditorReady || !editor || !doc || tornDown) return
     host.onEditorReady({
+      analysis: docsAnalysisEditor(editor,()=>fileCtxRef.current,()=>!!host.readOnly,()=>{analysisSaveConsent.current.hold()}),
       getSelection() {
         const current = editorRef.current
         if (!current || current.isDestroyed) return null
@@ -8468,6 +8474,10 @@ export function App({ host }: { host?: { readOnly: boolean; assistantAvailable: 
               transport={host?.assistant?.transport}
               modelPicker={host?.assistant?.modelPicker}
               sourceSkill={host?.assistant?.sourceSkill}
+              assistantAgents={host?.assistant?.agents}
+              onManageAgents={host?.assistant?.onManageAgents}
+              assistantControl={host?.assistant?.control}
+              extraSkills={host?.assistant?.extraSkills}
               key={aiPanelKey}
               editor={editor}
               blocks={doc.parsed.blocks}

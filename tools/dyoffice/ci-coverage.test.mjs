@@ -40,7 +40,7 @@ test('durable job gate uses real host Redis and runs PostgreSQL/BullMQ recovery 
  test('native sandbox gate builds the locked Rust engine and verifies real kernel resource limits', () => {
   const job = workflow.split('\n  native-worker:')[1]
   assert.ok(job,'native worker job required')
-  for (const command of ['npm ci --prefix apps/web --workspaces=false --ignore-scripts --include=dev','npm run build:web:native -- --with-probe','npm run typecheck:web:worker','sudo --preserve-env=PATH,DYOFFICE_TEST_HOST_MANIFEST npm run test:web:sandbox','sudo --preserve-env=PATH,DYOFFICE_TEST_HOST_MANIFEST,DYOFFICE_TEST_DATABASE_URL,DYOFFICE_TEST_REDIS_URL,DYOFFICE_TEST_S3_ENDPOINT,DYOFFICE_TEST_S3_ACCESS_KEY,DYOFFICE_TEST_S3_SECRET_KEY npm run test:web:native-jobs']) assert.ok(job.includes('run: ' + command),command)
+  for (const command of ['npm ci --ignore-scripts --include=dev','npm run build:web:native -- --with-probe','npm run typecheck:web:worker','sudo --preserve-env=PATH,DYOFFICE_TEST_HOST_MANIFEST npm run test:web:sandbox','sudo --preserve-env=PATH,DYOFFICE_TEST_HOST_MANIFEST,DYOFFICE_TEST_DATABASE_URL,DYOFFICE_TEST_REDIS_URL,DYOFFICE_TEST_S3_ENDPOINT,DYOFFICE_TEST_S3_ACCESS_KEY,DYOFFICE_TEST_S3_SECRET_KEY npm run test:web:native-jobs']) assert.ok(job.includes('run: ' + command),command)
   assert.match(job,/node-version: '22\.23\.5'/)
   assert.doesNotMatch(job,/services:|image:|docker/i)
   assert.match(job,/sudo --preserve-env=GITHUB_ACTIONS bash tools\/dyoffice\/ci-host-services.sh/)
@@ -53,7 +53,7 @@ test('native Sheets gate builds original renderer and Rust and runs real edit-sa
  const job=workflow.split('\n  native-sheets:')[1]
  assert.ok(job,'native Sheets job required')
  for(const command of ['npm ci --ignore-scripts --include=dev','npm run build:web:native -- --with-probe','npm run build:sheets --workspace=@dyoffice/web','npx tsc -p apps/web/tsconfig.sheets.json','sudo --preserve-env=PATH,DYOFFICE_TEST_HOST_MANIFEST,DYOFFICE_TEST_DATABASE_URL,PLAYWRIGHT_BROWSERS_PATH npm run test:native-sheets --workspace=@dyoffice/web','npx vitest run --root packages/xlsx-gateway --maxWorkers=1','npx vitest run --root apps/sheets --maxWorkers=1 tests/defined-name-recalculation.test.ts']) assert.ok(job.includes('run: '+command),command)
- assert.match(job,/node-version: 22/)
+ assert.match(job,/node-version: '22\.23\.5'/)
  assert.match(job,/playwright install chromium --with-deps/)
  assert.match(job,/PLAYWRIGHT_BROWSERS_PATH:.*github.workspace/)
  assert.match(job,/sudo --preserve-env=PATH,DYOFFICE_TEST_HOST_MANIFEST,DYOFFICE_TEST_DATABASE_URL,PLAYWRIGHT_BROWSERS_PATH/)

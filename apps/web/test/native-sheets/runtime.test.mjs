@@ -31,7 +31,7 @@ test('actual server entry enables owned Sheets API and shuts down cleanly',{time
  const file=(await importFile(f,f.alice.token,bytes,'acceptance.xlsx')).file
  const manifest=JSON.parse(await readFile(new URL('../../../../.dyoffice-native-build/host-manifest.json',import.meta.url)))
  const env={...process.env,NODE_ENV:'development',DYOFFICE_AUTH_MODE:'local',DYOFFICE_NATIVE_XLSX:'experimental',DYOFFICE_NATIVE_JOBS:'',DYOFFICE_NATIVE_DOCX:'',DYOFFICE_DATABASE_URL:'',DYOFFICE_USER_TOKEN:'',DYOFFICE_ADMIN_TOKEN:'',DYOFFICE_AUTH_DATABASE_URL:f.urls.auth,DYOFFICE_BUSINESS_DATABASE_URL:f.urls.business,DYOFFICE_DEPLOYMENT_ID:f.deploymentId,DYOFFICE_ORIGIN:origin,DYOFFICE_CSRF_KEY:f.csrfKey,DYOFFICE_NATIVE_BINARY:manifest.nativeBinary,DYOFFICE_NATIVE_SHA256:manifest.nativeSha256,DYOFFICE_FILE_API:'experimental',DYOFFICE_OBJECT_STORE:'local-dev',DYOFFICE_OBJECT_DIRECTORY:f.directory,PORT:'0',HOST:'127.0.0.1'}
- const child=spawn(process.execPath,['--experimental-strip-types','server/index.mjs'],{cwd:fileURLToPath(new URL('../../',import.meta.url)),env,stdio:['ignore','pipe','pipe']})
+ const child=spawn(process.execPath,['--experimental-transform-types','server/index.mjs'],{cwd:fileURLToPath(new URL('../../',import.meta.url)),env,stdio:['ignore','pipe','pipe']})
  f.cleanup.push(async()=>{if(child.exitCode===null&&child.signalCode===null){child.kill('SIGTERM');await once(child,'exit')}})
  const exited=once(child,'exit')
  const [output]=await Promise.race([once(child.stdout,'data'),exited.then(()=>{throw new Error('Sheets entry failed to start')})])

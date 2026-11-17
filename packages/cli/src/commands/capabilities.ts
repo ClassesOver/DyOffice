@@ -6,7 +6,7 @@ import {
   mediaAnalysisAvailable,
 } from '@genoffice/ai-provider'
 import { hasGskAuth, readAiSettingsFile } from '@genoffice/ai-search'
-import { aiSettingsPath, prepareCloud } from '../cloud'
+import { aiSettingsPath, prepareCloudResources } from '../cloud'
 import type { CommandDef } from '../registry'
 import { appLaunch } from '../resources'
 
@@ -23,7 +23,9 @@ export const capabilitiesCommand: CommandDef = {
     'Report which cloud features (search, image search, image generation, media analysis) are configured in GenOffice, and whether the app is installed.',
   usage: 'capabilities',
   async run(_args, ctx) {
-    await prepareCloud(ctx.env)
+    // Discovery reads settings only. Preparing cloud transports here would
+    // mutate the shared HTTP dispatcher used by concurrent MCP/data clients.
+    prepareCloudResources(ctx.env)
     const settings = readAiSettingsFile(aiSettingsPath(ctx.env))
     const gsk = hasGskAuth() && cloudToolsEnabled(settings)
     const searchProvider = activeSearchProvider(settings)
