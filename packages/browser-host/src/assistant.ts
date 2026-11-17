@@ -1,7 +1,9 @@
 import type {AgentTransport} from '@genoffice/agent-core'
 import {createSseAgentTransport} from './ai-transport.ts'
 import type {SettingsRequest} from './preferences.ts'
-import {ASSISTANT_READ_TOOLS, type AssistantCatalog} from '../../web-contracts/src/assistant.ts'
+import {assistantReadTools, type AssistantCatalog} from '../../web-contracts/src/assistant.ts'
+
+import {createSourceCatalogSkill} from './source-catalog-skill.ts'
 
 export async function createAssistantClient({request, fetchImpl, csrfToken}: {request: SettingsRequest; fetchImpl?: typeof fetch; csrfToken?: string}) {
   const catalog = await request<AssistantCatalog>('/api/v1/ai/catalog')
@@ -9,6 +11,7 @@ export async function createAssistantClient({request, fetchImpl, csrfToken}: {re
   // Keep the original session proof. A replacement login in another tab cannot
   // dispatch this document/chat using the new account's cookie.
   const csrf = csrfToken ?? (catalog.entries.length ? (await request<{csrfToken: string}>('/api/v1/auth/csrf')).csrfToken : '')
+  const allowedTools = assistantReadTools(catalog.sourceCatalog === true)
   const encoder = new TextEncoder()
   const active = new Set<{cancel(): void}>()
   const transport: AgentTransport = {
@@ -21,7 +24,7 @@ export async function createAssistantClient({request, fetchImpl, csrfToken}: {re
       if (disposed || !catalog.entries.some(e => e.id === runModel)) {
         callbacks.onError('助手当前不可用。'); callbacks.onDone(); return {cancel() {}}
       }
-      const tools = input.tools.filter(t => ASSISTANT_READ_TOOLS.has(t.name))
+      const tools = input.tools.filter(t => allowedTools.has(t.name))
       const messages = input.messages.map(message => message.role === 'assistant'
         ? {role: message.role, text: message.text, toolCalls: message.toolCalls}
         : message)
@@ -43,6 +46,7 @@ export async function createAssistantClient({request, fetchImpl, csrfToken}: {re
   }
   return {
     catalog, transport,
+    ...(catalog.sourceCatalog === true ? {sourceSkill: createSourceCatalogSkill(request, () => disposed)} : {}),
     selected: () => selected,
     select(id: string) {if (disposed || !catalog.entries.some(e => e.id === id)) throw new Error('模型不可用。'); selected = id},
     available: catalog.entries.length > 0,

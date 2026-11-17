@@ -803,7 +803,7 @@ function shadowPlanDiff(
   return diffs
 }
 
-export function App({ host }: { host?: { readOnly: boolean; assistantAvailable: boolean; assistant?: {transport: import('@genoffice/agent-core').AgentTransport; modelPicker: React.ReactNode}; preferenceScope: string; onEditorReady?(handle: import('./file-actions').DocsEditorHandle | null): void; lifecycle: import('./file-actions').DocsHostLifecycle; onDocumentEdited(): void; onOpenFailed(): void } } = {}) {
+export function App({ host }: { host?: { readOnly: boolean; assistantAvailable: boolean; assistant?: {sourceSkill?: import('@genoffice/agent-core').AgentSkill; transport: import('@genoffice/agent-core').AgentTransport; modelPicker: React.ReactNode}; preferenceScope: string; onEditorReady?(handle: import('./file-actions').DocsEditorHandle | null): void; lifecycle: import('./file-actions').DocsHostLifecycle; onDocumentEdited(): void; onOpenFailed(): void } } = {}) {
   // subscribe to language switches for re-render; strings all go through module-level t, so memoized callbacks never capture stale closures
   const { lang } = useI18n()
   const [doc, setDoc] = useState<DocState | null>(null)
@@ -8467,6 +8467,7 @@ export function App({ host }: { host?: { readOnly: boolean; assistantAvailable: 
             <AiPanel
               transport={host?.assistant?.transport}
               modelPicker={host?.assistant?.modelPicker}
+              sourceSkill={host?.assistant?.sourceSkill}
               key={aiPanelKey}
               editor={editor}
               blocks={doc.parsed.blocks}
