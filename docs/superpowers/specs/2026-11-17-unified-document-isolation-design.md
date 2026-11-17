@@ -72,7 +72,7 @@ broker 不持有用户 Cookie、PG/S3/AI 密钥，不解析 Office/PDF 内容，
 
 `ExecutionHandle` 绑定 deployment/job/attempt/jobEpoch、brokerBootId、backendInstanceId、invocationId、runtimeDigest。重复启动同一 attempt 返回同一状态或冲突，不能隐式启动第二实例。长会话仍有绝对 deadline 与可续租的短有效期；编辑 lease 和执行 job lease 分离，任一失效禁止提交并停止实例。worker 只有在 PG 成功续租后才可向 broker renew；broker 有独立单调时钟 watchdog，不依赖 worker 主动发 stop。读/编辑返回有界结构回复，export 才返回封存 artifact；artifact 读取/释放也绑定实例身份。首期不跨租户复用运行中的进程或可写文件系统；仅允许预热不可变镜像/页缓存。
 
-持久状态：`reserved → starting → running → output_ready → stopped → released`；异常进入 `stop_pending` 或 `quarantined`，并保留资源占用。业务任务成功与物理资源释放分开记录。不得因为 PG lease 过期、D-Bus 断线或 MainPID=0 就断言整棵进程树退出。重启先对账已知 unit/cgroup 与完整实例身份，再准入新任务；缺失/不一致状态隔离并报警，不按名字杀其他服务。broker 重启后核对持久记录、PG epoch及实际 invocation，原子 adopt并换发当前 bootId 句柄，旧句柄失效，不重复启动。
+持久状态：`reserved → starting → running → output_ready → stopped → released`；异常进入 `stop_pending` 或 `quarantined`，并保留资源占用。业务任务成功与物理资源释放分开记录。不得因为 PG lease 过期、D-Bus 断线或 MainPID=0 就断言整棵进程树退出。重启先对账已知 unit/cgroup 与完整实例身份，再准入新任务；缺失/不一致状态隔离并报警，不按名字杀其他服务。broker 重启时，worker 在 PG 复核 epoch 后经认证 IPC 提交；broker 核对该 epoch、持久管理记录及实际 invocation，原子 adopt并换发当前 bootId 句柄，旧句柄失效，不重复启动。
 
 PG 是权威账本，现有 Redis/BullMQ 只负责可重投通知。使用短事务领取、单调 epoch、数据库时间和 CAS；SKIP LOCKED 不是跨事务租约。多个控制器必须锁定同一容量行，单主内存计数不可作为多进程总配额。
 
