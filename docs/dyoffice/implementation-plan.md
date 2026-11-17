@@ -339,17 +339,21 @@ docs/dyoffice/               当前计划及 inventory/ evidence/ adr/
 
 ### T15 HTTP 数据源与只读 SQL 集成
 
-**依赖：** T04/T08/T12。**文件：** `modules/sources/{routes,service,http,sql,provenance}.ts`、`security/egress.ts`、`test/integration/data-sources.test.ts`。
+**依赖：** T04/T08/T12。**文件：** `modules/sources/{routes,service,http,sql,provenance}.ts`、`security/egress.ts`、`test/local-integration/{data-sources,source-lifecycle}.test.mjs`。
 
 **接口：** `querySource(principal,sourceId,query): Promise<QuerySnapshot>`；QuerySnapshot 类型在本任务新增到 web-contracts，包含 schema/单位/时区/截断/hash。
 
-- [ ] 测试 sourceId 越权、只读角色、恶意多语句/函数、超时/行限、单位丢失、HTTP 重定向私网/元数据地址。
-- [ ] integration RED；必须包含真实测试数据库的权限拒绝，不仅 mock AST。
+- [x] 测试 sourceId 越权、只读角色、恶意多语句/函数、超时/行限、单位丢失、HTTP 重定向私网/元数据地址。
+- [x] integration RED；必须包含真实测试数据库的权限拒绝，不仅 mock AST。
 - [ ] 实现 HTTP JSON 和首个客户连接器；精确 allowlist 支持批准的企业私网；管理凭据保留/更新/测试/删除。
 - [ ] 测试 GREEN，错误不泄漏连接密码/SQL 敏感参数；记录真实源权限映射。
-- [ ] 提交 `feat(sources): add scoped read-only queries with provenance`。
+- [x] 提交 `feat(sources): add scoped read-only queries with provenance`。
 
-### T16 附件问答、检索引用与报告闭环
+**当前验收（2026-11-17）：** HTTP JSON/PostgreSQL、凭据版本管理、草稿/发布与管理界面已实现并通过本地专项；MySQL/StarRocks 适配器仍缺客户实库与 SQL TLS 验收，可见浏览器亦受宿主权限阻塞，故整体 T15 不勾满。大结果仅返回有界快照，不自动归档到工作区。见 [当前证据](evidence/t15-source-management.md)。
+
+### T16 附件问答、检索引用与报告闭环（已取消）
+
+**用户范围决定（2026-11-17）：T16 不做。** 以下保留原计划供追溯，不作为当前交付项，也不把取消标成实现通过。后续里程碑中涉及 T16 的附件检索/报告闭环相应排除，T15 查询来源元数据仍保留。
 
 **依赖：** T08/T09/T10/T11/T13/T15。**文件：** `modules/search/{index,retrieve,citations}.ts`、`worker/src/jobs/index-file.ts`、`test/e2e/grounded-report.spec.ts`。
 

@@ -82,8 +82,8 @@ export function SourcesPanel({ client, onClose }: { client: SourcesClient; onClo
           <button className="set-btn primary" onClick={() => void operation(save)}>保存草稿</button>
         </fieldset>
         <div className="source-actions">
+          {(detail || unknown && draft.sourceId) && <button className="set-btn" disabled={busy} onClick={() => void operation(async () => { const current = await client.detail(detail?.source.sourceId ?? draft.sourceId); if (alive.current) { setLatest(current); setMessage('最新版本已读取，当前草稿仍保留。') } })}>读取最新版本并核对</button>}
           {detail && <>
-            <button className="set-btn" disabled={busy} onClick={() => void operation(async () => { const current = await client.detail(detail.source.sourceId); if (alive.current) { setLatest(current); setMessage('最新版本已读取，当前草稿仍保留。') } })}>读取最新版本并核对</button>
             <button className="set-btn" disabled={busy || dirty || unknown} onClick={() => void operation(async () => { const checked = await client.test(detail.source.sourceId); if (alive.current) setMessage(checked.ok ? '连接测试通过。' : '连接测试未通过，请检查目标只读权限与部署网络策略。') })}>测试已保存草稿</button>
             <button className="set-btn" disabled={busy || dirty || unknown || !detail.source.hasCredential} onClick={() => void operation(async () => { await client.publish(detail.source.sourceId, detail.source.version); if (!alive.current) return; await select(detail.source.sourceId); await reloadList(); if (alive.current) setMessage('数据源版本已发布。') })}>发布草稿</button>
             <label><input type="checkbox" checked={confirmDelete} disabled={busy || unknown} onChange={e => setConfirmDelete(e.target.checked)} />确认删除此数据源与其版本记录</label>
