@@ -67,8 +67,10 @@ export async function parseOfficePreview(bytes:Uint8Array,format:'xlsx'|'pptx'):
 }
 export function DocumentPreview({fileId,name,format,request}:{fileId:string;name:string;format:'docx'|'xlsx'|'pptx'|'pdf';request:SettingsRequest}){
  const [pages,setPages]=useState<PreviewPage[]>([]),[url,setUrl]=useState(''),[error,setError]=useState(''),[busy,setBusy]=useState(true)
- const host=useRef<HTMLDivElement>(null)
- useEffect(()=>{let alive=true;const abort=new AbortController();const target=host.current;setPages([]);setUrl('');setError('');setBusy(true)
+ const host=useRef<HTMLDivElement>(null),loading=useRef(true)
+ const [attempt,setAttempt]=useState(0)
+ function retry(){if(loading.current)return;loading.current=true;setBusy(true);setAttempt(value=>value+1)}
+ useEffect(()=>{let alive=true;const abort=new AbortController();const target=host.current;loading.current=true;setPages([]);setUrl('');setError('');setBusy(true)
  void(async()=>{try{
   const metadata=await request<Metadata>(`/api/v1/files/${encodeURIComponent(fileId)}`)
   const endpoint=resolvePreviewContentUrl(fileId,metadata);if(!alive)return;setUrl(endpoint)
@@ -84,12 +86,12 @@ export function DocumentPreview({fileId,name,format,request}:{fileId:string;name
   if(!alive)return
   if(format==='pdf'){const {mountPdfEditor}=await import('../editors/pdf-viewer');if(alive&&target)await mountPdfEditor(target,bytes,abort.signal)}
   else {const result=await parseOfficePreview(bytes,format);if(alive)setPages(result)}
- }catch{if(alive)setError('无法生成只读预览，可下载原件查看。')}finally{if(alive)setBusy(false)}})()
+ }catch{if(alive)setError('无法生成只读预览，可下载原件查看。')}finally{if(alive){loading.current=false;setBusy(false)}}})()
  return()=>{alive=false;abort.abort();target?.replaceChildren()}
- },[fileId,format,request])
+ },[fileId,format,request,attempt])
  return <section style={{height:'100%',overflow:'auto',padding:24}}><Card title={name} extra={url&&<Button href={url} download={name}>下载原件</Button>}>
  <Alert type="info" showIcon title="只读预览" description={format==='pdf'?'仅显示原始 PDF 页面，不提供编辑。':'仅提取文本与缓存数值，不执行公式或外部连接，不保证原始排版。每张工作表最多显示 200 行、200 列。'}/>
- {busy&&<Spin tip="正在读取文档"/>}{error&&<Alert type="error" title={error}/>}
+ {busy&&<Spin tip="正在读取文档"/>}{error&&<Alert type="error" title={error} action={<Button disabled={busy} onClick={retry}>重新加载预览</Button>}/>}
  <div ref={host}/>{pages.map((page,index)=><Card key={index} title={page.name} style={{marginTop:16}}><div style={{overflow:'auto'}}><table><tbody>{page.rows.map((row,i)=><tr key={i}>{row.map((value,j)=><td key={j} style={{border:'1px solid var(--border)',padding:'6px 10px',whiteSpace:'pre-wrap'}}>{value}</td>)}</tr>)}</tbody></table></div></Card>)}
  </Card></section>
 }

@@ -111,7 +111,7 @@ export function createGlobalSettingsClient(request: GlobalSettingsRequest) {
       return result
     } catch (cause) {
       const error = safeError(cause)
-      const rejected = error.status !== undefined && ((error.status >= 400 && error.status < 500) || error.status === 503)
+      const rejected = error.status !== undefined && error.status >= 400 && error.status < 500 && error.status !== 408
       if ((kind === 'save' || kind === 'rotate') && !rejected) {
         unknownWrite = true
         throw error.code === 'stale_session' ? error : fail('write_unknown', error.status)

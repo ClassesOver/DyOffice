@@ -199,3 +199,13 @@
 - 本修复仅识别首次入口未启动的错误响应，未把HTML运行时崩溃、已获取租约后的未知状态、网络错误页面或跨源页面强制当成可关闭；这些状态仍保持原生命周期保护。完整UI与复杂文档交互目标继续进行。
 - 源码和测试证据：/tmp/dyoffice-frame-red.log、/tmp/dyoffice-frame-lifecycle-red.log、/tmp/dyoffice-frame-final.log、/tmp/dyoffice-round8-final-shell.log、/tmp/dyoffice-round8-final-build.log、/tmp/dyoffice-round8-types.log、/tmp/dyoffice-round8-general-types.log。
 - 最终构建真实宿主浏览器首轮6/6通过：两种JSON MIME各首503→Retry200新iframe且恢复拒绝关闭保护、各首503→页签X可关闭；首HTML或已有生命周期后再变JSON均不解锁。全部业务接口/编辑器为mock、无lease请求/意外业务写/页面异常，不声称真实正文保存验收。补查前4项确认错误iframe确实隐藏、提示可见，后两项登录限流而未执行业务，单列而不冒充本次全6重跑；首轮报告从已捕获工具stdout恢复，并记录来源。证据/tmp/dyoffice-ui-audit/native-entry-recovery-postfix/report.json、coverage.md、hidden-supplement-report.json及截图。兼容基线84文件、工具157、IPC538检查通过。
+
+## 只读预览重试与全局配置超时保护
+
+- PDF/XLSX真实宿主模拟浏览器各metadata503/content503共4项确认：原先只有错误提示，无Retry；同ID从首页重开只执行宿主open而不重建预览组件，错误保持。现增加“重新加载预览”，重新读取最新revision元数据，清除旧页/下载地址/错误，复用effect清理来中止旧内容请求与PDF渲染并清空容器。同步loading ref防同tick重复Retry，alive检查拒绝切换后的迟到元数据。4条DOM回归先全失败后通过，覆盖两种失败、最新revision与下载、重复点击、切B后旧A不污染。
+- 全局配置原先将HTTP408/503视为确定拒绝，保存按钮仍可提交；实际UI mock408复现两次同expectedRevision PUT。现保存/删除/密钥轮换均将408及5xx保留为unknown，禁止重复写，普通读取/失败或畸形核对不解锁，只有有效显式核对恢复。服务端自产503在事务中回滚，但通用客户端只凭status无法证明它来自源站还是网关，故同样核对；不放宽原CAS保护，也不声称旧bug已证明真实重复提交成功。Global35项通过，新增408/503回归先红后绿。
+- 最终全Shell43文件415项、shell与前后端类型、shell构建、边界/兼容清单通过。整合远端bfbf78a7的账号恢复测试辅助与两浏览器流程修改，保留全部远端提交；本批未改主页布局。构建仍有既有chunk提示、DOM仍有既有CSS解析日志。
+- 最终Global模拟浏览器11组通过：408保存/删除/轮换、503保存/轮换均unknown禁重提，程序submit不发第二次请求，失败读取不解锁，有效显式核对才恢复且无自动重发；类型/Provider/默认项/dirty/重挂等6组也通过。Sources新增只读5组通过：追加失败保列表/游标、A/B草稿隔离、查询失败旧结果明确标记、发布unknown关闭保护、键盘无背景控件获焦；浏览器边界BODY过渡单列，不误报为焦点逃逸。所有业务请求mock，无真实配置写入。
+- 构建覆盖旧静态hash而服务尚未重启的间隙曾使审计登录前拿不到脚本；最终统一build后立即重启HTTP200再复验，未把构建窗口或脚本恢复算成产品失败。完整UI与复杂文档仍在继续验收。
+- 证据：/tmp/dyoffice-preview-retry-red.log、/tmp/dyoffice-preview-retry-final.log、/tmp/dyoffice-round9-final-shell.log、/tmp/dyoffice-round9-final-build.log，以及/tmp/dyoffice-ui-audit/下document-preview-recovery、global-config-boundary、global-config-write-fence-final、sources-state报告与截图。
+- 预览最终模拟浏览器4/4通过：PDF/XLSX各metadata/content503，Retry再失败后成功；pending重复点击不增请求，切B后释放A不污染B，返回A渲染实际fixture PDF canvas/XLSX文本。成功重试元数据明确更换revision，实际content URL与下载href均为新revision…0099，避免旧版本假恢复。全部文件业务mock，单次登录复用，无页面异常/意外业务写。证据/tmp/dyoffice-ui-audit/document-preview-recovery-postfix/report.json、coverage.md及失败/恢复截图。独立只读源码审查与24项相关回归通过。

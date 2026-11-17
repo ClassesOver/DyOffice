@@ -218,3 +218,20 @@ test('page presentation delegates its heading and close button while preserving 
     expect(guard?.()).toBe(true)
   } finally {confirm.mockRestore()}
 })
+
+test.each([408,503])('HTTP %i shows unknown protection, keeps drafts, and requires successful explicit reconciliation before resubmission',async status=>{
+ let writes=0,readFails=false,timeout=true
+ await mount(createGlobalSettingsClient(requestFrom(async(_path,method='GET')=>{
+  if(method!=='GET'){writes++;if(timeout)throw Object.assign(new Error('timeout'),{status});return {...initial(),revision:4}}
+  if(readFails)throw Object.assign(new Error('read failed'),{status:500})
+  return initial()
+ })))
+ await change('配置名称','Timeout draft');await change('API 密钥','submitted-once');await submit()
+ expect(button('保存配置').disabled).toBe(true);expect(document.body.textContent).toContain('写入结果待核对')
+ expect(input('配置名称').value).toBe('Timeout draft');expect(input('API 密钥').value).toBe('')
+ await submit();expect(writes).toBe(1)
+ readFails=true;await click('读取最新配置');expect(button('保存配置').disabled).toBe(true)
+ await submit();expect(writes).toBe(1)
+ readFails=false;await click('读取最新配置');expect(button('保存配置').disabled).toBe(false);expect(writes).toBe(1)
+ timeout=false;await submit();expect(writes).toBe(2)
+})
