@@ -1,4 +1,4 @@
-# Isolated localhost HTTP test only; Secure cookies remain unchanged.
+# Isolated HTTP development; loopback and Secure-cookie mode remain the defaults.
 name: dyoffice-lab
 x-app:
   image: dyoffice-lab:local
@@ -80,7 +80,8 @@ services:
       PORT: '3080'
       DYOFFICE_AUTH_MODE: local
       DYOFFICE_DEPLOYMENT_ID: ${DYOFFICE_DEPLOYMENT_ID:?Run generate-secrets.py}
-      DYOFFICE_ORIGIN: http://localhost:3080
+      DYOFFICE_ORIGIN: ${DYOFFICE_ORIGIN:-http://localhost:3080}
+      DYOFFICE_INSECURE_HTTP_DEV: ${DYOFFICE_INSECURE_HTTP_DEV:-0}
       DYOFFICE_FILE_API: experimental
       DYOFFICE_OBJECT_STORE: local-dev
       DYOFFICE_OBJECT_DIRECTORY: /data/objects
@@ -99,7 +100,7 @@ services:
         condition: service_healthy
     restart: unless-stopped
     ports:
-    - 127.0.0.1:3080:3080
+    - ${BIND_IP:-127.0.0.1}:${HTTP_PORT:-3080}:3080
 networks:
   backend: {}
 volumes:

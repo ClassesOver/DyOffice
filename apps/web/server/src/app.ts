@@ -48,7 +48,7 @@ import type { IdentityStore } from './db/identity.ts'
 import { createPasswordService, loadPasswordBlocklist, type PasswordService } from './modules/auth/passwords.ts'
 import { createAccountService } from './modules/auth/service.ts'
 import { createSessionService, authError } from './modules/auth/sessions.ts'
-import { createCsrfService, cookies } from './modules/auth/csrf.ts'
+import { createCsrfService, cookies, assertHttpDevelopmentMode } from './modules/auth/csrf.ts'
 import { createLoginThrottle, type LoginLimits } from './modules/auth/throttle.ts'
 import { registerAuthRoutes } from './modules/auth/routes.ts'
 import { createUserService } from './modules/admin/users/service.ts'
@@ -84,7 +84,7 @@ export async function buildApp(config: WebConfig): Promise<FastifyInstance> {
 }
 
 export interface LocalWebConfig {
-  db: IdentityStore; businessPool?: Pool; deploymentId: string; origin: string; csrfKey: string; passwords?: PasswordService;
+  db: IdentityStore; businessPool?: Pool; deploymentId: string; origin: string; csrfKey: string; insecureHttpDev?: boolean; passwords?: PasswordService;
   objectStore?: ObjectStore; filePolicy?: FilePolicy; nativeDocsDirectory?: string; nativeSheetsDirectory?: string; nativeSlidesDirectory?: string; slidesHost?: SlidesSessionHost; nativeJobs?: boolean; sheetsNative?: SheetsNative & Partial<SheetsSaveNative>; sheetsPlanner?: SheetsPlanner; sheetsWorkbookPlanner?: SheetsWorkbookPlanner; sheetsPackageReader?: SheetsPackageReader; localShellDirectory?: string;
   globalConfigKeyring?: SecretKeyring;
   sourcesCredentialKeys?: string;
@@ -112,6 +112,7 @@ export async function buildLocalApp(config: LocalWebConfig): Promise<FastifyInst
   // No supported OS-isolated PPTX runtime exists yet. Test forks cannot be wired
   // into an HTTP deployment through configuration, in any NODE_ENV.
   if(config.slidesHost || config.nativeSlidesDirectory) throw new Error('PPTX_OS_ISOLATION_UNAVAILABLE')
+  assertHttpDevelopmentMode(config.insecureHttpDev, config.origin)
   if (process.env.NODE_ENV === 'production') throw new Error('Local runtime is not allowed in production before enterprise release gates')
   if (config.adminAiSyntheticProbe !== undefined && typeof config.adminAiSyntheticProbe !== 'boolean') throw new Error('Invalid synthetic probe configuration')
   if (config.adminAiSyntheticProbe && !config.businessPool) throw new Error('Synthetic probe requires restricted business pool')
@@ -150,8 +151,8 @@ export async function buildLocalApp(config: LocalWebConfig): Promise<FastifyInst
   const nativeDocs = config.nativeDocsDirectory ? await createStaticAssets({ assetMode: 'built',assetDirectory: config.nativeDocsDirectory,pages: ['index.html'],assetInventory: '.vite/native-assets.json',cacheControl: 'private, no-store' }) : undefined
   const passwords = config.passwords ?? await createPasswordService({ blockedPasswords: await loadPasswordBlocklist(config.passwordBlocklistFile) })
   const accounts = createAccountService({ db: config.db, passwords, deploymentId: config.deploymentId })
-  const sessions = createSessionService({ db: config.db, accounts, deploymentId: config.deploymentId, idleMs: config.idleMs, absoluteMs: config.absoluteMs })
-  const csrf = createCsrfService({ db: config.db, deploymentId: config.deploymentId, origin: config.origin, key: config.csrfKey })
+  const csrf = createCsrfService({ db: config.db, deploymentId: config.deploymentId, origin: config.origin, key: config.csrfKey, insecureHttpDev: config.insecureHttpDev })
+  const sessions = createSessionService({ db: config.db, accounts, deploymentId: config.deploymentId, idleMs: config.idleMs, absoluteMs: config.absoluteMs, credentials: csrf.sessionCredentials })
   // Explicit same-origin WS source is required by browsers that do not include
   // wss in connect-src 'self'. Never grant the unrestricted wss: scheme.
   const realtimeSource = new URL(config.origin)
@@ -160,6 +161,7 @@ export async function buildLocalApp(config: LocalWebConfig): Promise<FastifyInst
   const throttle = createLoginThrottle(config.db, config.deploymentId, config.csrfKey, config.loginLimits)
   const app = await createApiShell()
   try {
+  app.addHook('onRequest', async request => { csrf.bindRequest(request) })
   if (config.localShellDirectory) await registerLocalShell(app,config.localShellDirectory)
   const ownedProbes: {dispose():void;drain(options?:{timeoutMs?:number}):Promise<void>}[]=[]
   app.addHook('preClose',async()=>{for(const probe of ownedProbes)probe.dispose()})
@@ -174,7 +176,7 @@ export async function buildLocalApp(config: LocalWebConfig): Promise<FastifyInst
   registerAuthRoutes(app, { sessions, csrf, throttle, users })
   registerUserRoutes(app, users, csrf)
   if (config.businessPool) {
-    const transactions = createPrincipalTransactions({ pool: config.businessPool, deploymentId: config.deploymentId, idleMs: config.idleMs })
+    const transactions = createPrincipalTransactions({ pool: config.businessPool, deploymentId: config.deploymentId, idleMs: config.idleMs, sessionCredentials: csrf.sessionCredentials })
     const sources = createSourceService({ transactions, credentialKeys: config.sourcesCredentialKeys, egressTargets: config.sourcesEgressTargets })
     const sourceResults = createWorkspaceSourceResults({ transactions })
     const sourceTools = createWorkspaceSourceTools({ sources, results: sourceResults })

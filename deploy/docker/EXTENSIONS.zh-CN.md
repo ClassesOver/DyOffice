@@ -1,6 +1,6 @@
 # V2：可选 AI 与宿主原生依赖模板
 
-本扩展不修改应用准入规则，不支持生产，不启用 PPTX/PDF 编辑，不宣称全功能已经跑通。原基础步骤见 README。**两套架构不要混启动**：Docker Web 基线是 localhost HTTP 登录待浏览器验收的 DOCX/文件测试入口；原生 XLSX 必须改用符合要求的宿主 API 和 worker，不能把 root/systemd 塞进 privileged 容器。
+本扩展不修改应用准入规则，不支持生产，不启用 PPTX/PDF 编辑，不宣称全功能已经跑通。原基础步骤见 README。**两套架构不要混启动**：Docker Web 基线是默认 loopback、可显式开启局域网 HTTP 开发模式的 DOCX/文件测试入口；原生 XLSX 必须改用符合要求的宿主 API 和 worker，不能把 root/systemd 塞进 privileged 容器。
 
 ## A. 可选 AI（Docker Web 架构）
 
@@ -59,7 +59,7 @@ npm run build:web:native -- --with-probe
 
 `host/dyoffice-api.service` / `dyoffice-worker.service` 是**未安装的模板**。两个 controller 目前均需 root；真实文档解析由原应用创建 dynamic nonroot、私有网络、资源限额 systemd 单元执行。不要新增绕过隔离的 fallback。`/usr/local/bin/node`、`/opt/dyoffice` 是明确安装路径，按实际位置审核调整。
 
-将 `api.env.example` / `worker.env.example` 的所有 REPLACE 项改为真实值，保存到 `/etc/dyoffice/api.env` 和 `worker.env`，目录 0700、文件 root:root 0600；禁止将这些实际 env 文件放入构建上下文。systemd EnvironmentFile 不是 shell，不使用 `$(...)` 展开。API 使用 auth+business，worker 仅 worker+business；二者共用 S3 bucket 与部署 UUID。API 仅监听 loopback，暂使用 http://localhost:3080。会话仍为 Secure/__Host cookie，只能在支持 localhost 安全上下文特例的浏览器中尝试；未完成真实登录验收，不声称可用。远程 HTTP 不支持，不降低 cookie/CSRF 安全。将来远程部署需要另行配置 HTTPS 和 WebSocket 反代，本包不创建 HTTPS 服务。
+将 `api.env.example` / `worker.env.example` 的所有 REPLACE 项改为真实值，保存到 `/etc/dyoffice/api.env` 和 `worker.env`，目录 0700、文件 root:root 0600；禁止将这些实际 env 文件放入构建上下文。systemd EnvironmentFile 不是 shell，不使用 `$(...)` 展开。API 使用 auth+business，worker 仅 worker+business；二者共用 S3 bucket 与部署 UUID。API 默认监听 loopback，使用 http://localhost:3080；如需局域网 HTTP，须按 README 同时设置真实 HOST、精确 origin 与显式 DYOFFICE_INSECURE_HTTP_DEV=1，承担所列明文风险。默认仍为 Secure/__Host cookie；新模式仅隔离开发可用，未完成真实浏览器登录验收。将来远程部署需要另行配置 HTTPS 和 WebSocket 反代，本包不创建 HTTPS 服务。
 
 先 `systemd-analyze verify` 核对调整后的 unit，再依据仓库 HOST-RUNTIME.md 执行真实 sandbox、gateway、native-jobs 测试。所有必需 PG/Redis/S3 测试使用一次性资源；不得指向业务数据。实际 host gate 成功后再安装/启动服务，不提供一键启动来跳过准入。
 

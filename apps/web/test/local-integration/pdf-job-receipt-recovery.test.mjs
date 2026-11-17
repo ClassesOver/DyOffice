@@ -2,6 +2,8 @@ import {test} from 'node:test'
 import assert from 'node:assert/strict'
 import {readFile} from 'node:fs/promises'
 import {randomUUID} from 'node:crypto'
+import {execFile} from 'node:child_process'
+import {promisify} from 'node:util'
 import {PDFDocument,degrees} from 'pdf-lib'
 import {fileFixture,importFile} from '../helpers/files.mjs'
 import {password} from '../helpers/identity.mjs'
@@ -136,4 +138,53 @@ test('a real trash committed while lookup waits on the file prevents receipt dis
   lookup=assert.rejects(f.recovery().lookup(f.file.fileId,f.job.id),{statusCode:404})
   await waitBusinessLock(f);release.resolve();await Promise.all([trash,lookup])
  }finally{release.resolve();await Promise.allSettled([trash,lookup].filter(Boolean))}
+})
+
+async function freshReceipt(f,token){
+ const env={NODE_ENV:'test',PDF_RECEIPT_FIXTURE:JSON.stringify({database:f.urls.business,deploymentId:f.deploymentId,token,fileId:f.file.fileId,jobId:f.job.id})}
+ for(const name of ['PATH','HOME','TMPDIR','TEMP','TMP','NODE_OPTIONS','LD_LIBRARY_PATH','LANG','LC_ALL','TZ'])if(process.env[name]!==undefined)env[name]=process.env[name]
+ assert.equal('DYOFFICE_TEST_DATABASE_URL' in env,false)
+ const owner=process.env.DYOFFICE_TEST_DATABASE_URL
+ if(owner)assert.equal(Object.values(env).some(value=>value.includes(owner)),false)
+ let output,failed=false
+ try{output=await promisify(execFile)(process.execPath,['--experimental-transform-types',new URL('../helpers/pdf-receipt-reader.mjs',import.meta.url).pathname],{env,timeout:15000,maxBuffer:16384})}
+ catch(error){failed=true;output={stdout:String(error.stdout??''),stderr:String(error.stderr??'')}}
+ const {stdout,stderr}=output
+ for(const secret of [token,f.auth.token,f.urls.business,f.input.uploadId,f.input.idempotencyKey]){
+  assert.equal(stdout.includes(secret),false);assert.equal(stderr.includes(secret),false)
+ }
+ assert.equal(failed,false,'fresh receipt process failed, timed out or exceeded output limit')
+ return JSON.parse(stdout)
+}
+test('fresh restricted process reconciles a lost real COMMIT acknowledgement without replay, including after a later revision',async t=>{
+ const f=await fixture(t);let committed=false
+ const tx=transactionProxy(f,async(c,...a)=>{const result=await c.query(...a);if(a[0]==='COMMIT'){committed=true;throw Error('lost receipt acknowledgement')}return result})
+ await assert.rejects(createRevisionService({transactions:tx,objects:f.objects,files:f.files}).commitRevision(f.auth,f.input),/lost receipt acknowledgement/)
+ assert.equal(committed,true)
+ await f.sessions.logout(f.alice.token)
+ const fresh=await f.sessions.login('alice',password),before=await f.snapshot(fresh.token)
+ assert.equal((await freshReceipt(f,f.alice.token)).state,'denied')
+ for(const token of [f.bob.token,f.adminSigned.token])assert.equal((await freshReceipt(f,token)).state,'denied')
+ const result=await freshReceipt(f,fresh.token)
+ assert.equal(result.state,'committed');assert.equal(result.revision.revision,before.head)
+ assert.deepEqual(await f.snapshot(fresh.token),before)
+ const editorId=randomUUID(),lease=await f.leases.acquireLease(fresh.token,f.file.fileId,{editorId})
+ const upload=await f.revisions.stageUpload(fresh.token,f.file.fileId,{size:f.source.length,baseRevision:result.revision.revision,leaseEpoch:lease.leaseEpoch,editorId})
+ await f.files.receiveUpload(fresh.token,upload.uploadId,f.source)
+ await f.revisions.commitRevision(fresh.token,{fileId:f.file.fileId,uploadId:upload.uploadId,baseRevision:result.revision.revision,leaseEpoch:lease.leaseEpoch,idempotencyKey:randomUUID()})
+ const later=await f.snapshot(fresh.token)
+ assert.notEqual(later.head,result.revision.revision)
+ assert.deepEqual(await freshReceipt(f,fresh.token),result)
+ assert.deepEqual(await f.snapshot(fresh.token),later)
+})
+test('fresh restricted process reports unresolved after actual rollback and cancellation, never retry permission',async t=>{
+ const f=await fixture(t),before=await f.snapshot()
+ const tx=transactionProxy(f,async(c,...a)=>{if(a[0]==='COMMIT')throw Error('before receipt commit');return c.query(...a)})
+ await assert.rejects(createRevisionService({transactions:tx,objects:f.objects,files:f.files}).commitRevision(f.auth,f.input),/before receipt commit/)
+ assert.deepEqual(await freshReceipt(f,f.alice.token),{state:'unresolved'})
+ assert.deepEqual(await f.snapshot(),before)
+ await createJobService({transactions:f.transactions}).cancelJob(f.alice.token,f.job.id)
+ const cancelled=await f.snapshot()
+ assert.deepEqual(await freshReceipt(f,f.alice.token),{state:'unresolved'})
+ assert.deepEqual(await f.snapshot(),cancelled)
 })

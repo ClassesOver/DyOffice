@@ -1,12 +1,27 @@
 # Docker 本地开发部署（华为源默认）
 
-此目录内置于仓库，提供**隔离测试模板，不是生产发布**。暂不使用 HTTPS；固定发布 `127.0.0.1:3080`，浏览器只能用 `http://localhost:3080`，不能改成服务器 IP、局域网域名或公网地址。容器内的 `0.0.0.0` 仅用于接收 Docker 转发。
+此目录内置于仓库，提供**隔离测试模板，不是生产发布**。暂不使用 HTTPS；网络绑定、端口和对外 origin 可配置，默认仍是 `127.0.0.1:3080` 与 `http://localhost:3080`。
 
-## HTTP 登录的重要限制
+## HTTP 模式与明确风险
 
-应用接受 loopback HTTP origin，但会话始终使用 `__Host-*; HttpOnly; Secure; SameSite=Lax`。本方案**没有删除 Secure、修改 cookie 名称或放宽 CSRF**，production 启动禁令保留。localhost 安全上下文特例取决于浏览器；代码允许 origin 不代表浏览器实际接受 cookie。
+默认 `DYOFFICE_INSECURE_HTTP_DEV=0`：会话仍使用 `__Host-*; HttpOnly; Secure; SameSite=Lax`。localhost 安全上下文特例取决于浏览器；没有真实浏览器验收，不保证默认 HTTP 登录成功。
 
-**本次没有真实浏览器登录验证，不保证 HTTP 登录成功。** 若浏览器拒收 Secure cookie，当前无 HTTPS 模式被阻断，不提供不安全 fallback。必须在目标浏览器完成登录、刷新保持会话和退出验证后，才能称本地登录可用。不要用 curl 手工带 cookie 作为浏览器成功证据。远程使用可经 SSH 将目标 127.0.0.1:3080 转发到本机 3080，再访问同一 localhost origin，不公开监听。
+需要其他设备访问时，在 `.env` 显式设置，例如（IP 必须替换为服务器真实、受控局域网 IP）：
+
+```dotenv
+BIND_IP=192.168.1.50
+HTTP_PORT=3080
+DYOFFICE_ORIGIN=http://192.168.1.50:3080
+DYOFFICE_INSECURE_HTTP_DEV=1
+```
+
+此开关**默认关闭**，仅 `NODE_ENV=development` 且本地账号模式允许；production/test/未指定开发环境会拒绝开启。不开启时非 loopback HTTP origin 仍被拒绝。`BIND_IP=0.0.0.0` 可监听全部接口，但不推荐，必须自行限制防火墙和访问设备；不要将开发服务暴露公网。origin 必须是浏览器实际访问的精确协议/主机/端口，不得带路径或尾部斜杠。
+
+开启后使用独立 `dyoffice-dev-session` / `dyoffice-dev-login` cookie（无 Secure/__Host），仍保留 HttpOnly、SameSite=Lax、Path=/、无 Domain；严格检查 Host 与 Origin，CSRF 和 WS 同源检查不放宽。不接受其他模式的 cookie，也不信任 Forwarded/X-Forwarded-* 来开启或改变模式。HTTPS 和默认安全 cookie 不会被该开关暗中降级。
+
+**明文风险：局域网监听者/中间人可读取或篡改密码、会话和文档。HttpOnly/CSRF 不能解决链路窃听。仅用隔离网络、独立测试部署 UUID/数据库/账号和虚假数据，不能复用生产密码。** 切换模式后清除浏览器旧 cookie；停用后应撤销全部开发会话，销毁隔离测试库或凭据，不将该库直接升级为生产。dev 凭证有独立 `dev1.` 格式和绑定部署/origin/用途的 MAC，数据库散列完整凭证；改名、去前缀不能重放到安全模式。关闭后拒绝旧 dev 凭证，既有43字符安全凭证保持兼容；这仍不等于删除数据库内的测试会话。
+
+本次未证明浏览器登录可用：Chromium 实测尝试被执行环境 `socket() Operation not permitted` 阻断。API 注入测试通过不能替代目标浏览器的登录、刷新、退出验收。应用不会在失败时自动放宽安全选项。
 
 ## 实际支持和依赖
 
@@ -43,7 +58,7 @@ docker compose up -d web
 docker compose logs --tail=100 web
 ```
 
-管理员 CLI 必须在交互 TTY 内输入用户名和密码（至少 15 字符），不要把管理员密码放环境或命令行。执行 provision/bootstrap 成功后再启动 Web，访问 `http://localhost:3080`，遵循上述浏览器验收门槛。原生/AI 并不随以上命令启动。
+管理员 CLI 必须在交互 TTY 内输入用户名和密码（至少 15 字符），不要把管理员密码放环境或命令行。执行 provision/bootstrap 成功后再启动 Web，访问配置的 `DYOFFICE_ORIGIN`（默认 `http://localhost:3080`），遵循上述浏览器验收门槛。原生/AI 并不随以上命令启动。
 
 ## 数据和安全
 
@@ -58,4 +73,4 @@ docker compose logs --tail=100 web
 
 执行静态合约：仓库根目录 `node --test deploy/docker/test/contracts.test.mjs`。
 
-本次仅验证 YAML 解析、Shell/Python 语法及部署安全合约、lockfile 重写不变式。没有 Docker Engine，未进行 `docker compose config`、镜像构建、容器启动、数据库初始化或浏览器登录。宿主原生服务和 AI 实调用也未验证。不要把静态通过等同功能可用或生产准入。
+本次通过部署合约 5/5、HTTP开发模式与既有CSRF测试 11/11、server TypeScript、YAML结构及Shell/Python语法。完整 unit 以 `--experimental-test-module-mocks --import tsx` 运行：635 项中632通过、3跳过、0失败（执行环境Node 24.22.1，不代替镜像Node 22.23.5验收）。新增浏览器协议测试使用真实auth路由但模拟DB/session，不是PostgreSQL全链路；实际启动尝试因socket限制失败。没有 Docker Engine，未进行 `docker compose config`、镜像构建、容器启动、数据库初始化或浏览器登录。宿主原生服务和 AI 实调用也未验证。不要把静态通过等同功能可用或生产准入。

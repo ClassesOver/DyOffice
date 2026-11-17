@@ -2,11 +2,6 @@
 set -eu
 case "${1:-web}" in
   web)
-    # No remote HTTP or silent cookie-security downgrade is supported.
-    if [ "${DYOFFICE_ORIGIN:-}" != 'http://localhost:3080' ]; then
-      echo 'Docker HTTP test mode requires exact origin http://localhost:3080' >&2
-      exit 2
-    fi
     if [ -f /run/secrets/config_keyring ]; then
       export DYOFFICE_CONFIG_KEYRING="$(cat /run/secrets/config_keyring)"
     fi

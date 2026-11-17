@@ -7,10 +7,10 @@ import {tmpdir} from 'node:os'
 import {spawnSync} from 'node:child_process'
 const here=fileURLToPath(new URL('../',import.meta.url)),root=resolve(here,'../..')
 const read=name=>readFileSync(join(here,name),'utf8')
-test('HTTP is loopback only and does not change application session security',()=>{
+test('HTTP defaults to loopback and retains default secure session policy',()=>{
  const compose=read('compose.yaml')
- assert.match(compose,/127\.0\.0\.1:3080:3080/)
- assert.match(compose,/DYOFFICE_ORIGIN: http:\/\/localhost:3080/)
+ assert.ok(compose.includes('${BIND_IP:-127.0.0.1}:${HTTP_PORT:-3080}:3080'))
+ assert.ok(compose.includes('DYOFFICE_ORIGIN: ${DYOFFICE_ORIGIN:-http://localhost:3080}'))
  assert.doesNotMatch(compose,/NGINX_IMAGE|443:|privileged:/)
  const csrf=readFileSync(join(root,'apps/web/server/src/modules/auth/csrf.ts'),'utf8')
  assert.match(csrf,/__Host-dyoffice-session/)
@@ -18,13 +18,9 @@ test('HTTP is loopback only and does not change application session security',()
  const startup=readFileSync(join(root,'apps/web/server/index.mjs'),'utf8')
  assert.match(startup,/NODE_ENV\s*===\s*'production'/)
 })
-test('entrypoint rejects remote HTTP and alternate origins before reading credentials',()=>{
- for(const origin of ['http://example.com:3080','http://127.0.0.1:3080','https://localhost:3080','']){
-  const result=spawnSync('sh',[join(here,'entrypoint.sh'),'web'],{env:{PATH:process.env.PATH,DYOFFICE_ORIGIN:origin},encoding:'utf8'})
-  assert.equal(result.status,2)
-  assert.match(result.stderr,/requires exact origin/)
-  assert.doesNotMatch(result.stderr,/\/run\/secrets/)
- }
+test('insecure development mode is explicit and off by default',()=>{
+ assert.ok(read('compose.yaml').includes('DYOFFICE_INSECURE_HTTP_DEV: ${DYOFFICE_INSECURE_HTTP_DEV:-0}'))
+ assert.match(read('.env.example'),/^DYOFFICE_INSECURE_HTTP_DEV=0$/m)
 })
 test('lock rewriting preserves all versions and integrity and uses configured HTTPS mirror',()=>{
  const temp=mkdtempSync(join(tmpdir(),'dyoffice-lock-'))
