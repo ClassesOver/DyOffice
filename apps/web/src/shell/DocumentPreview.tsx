@@ -74,9 +74,9 @@ export function DocumentPreview({fileId,name,format,request}:{fileId:string;name
   const endpoint=resolvePreviewContentUrl(fileId,metadata);if(!alive)return;setUrl(endpoint)
   if(format==='docx')throw Error('当前 Word 编辑器未启用，请下载原件。')
   const response=await fetch(endpoint,{credentials:'same-origin',signal:abort.signal,redirect:'error'})
-  if(!response.ok)throw Error('文件读取失败。')
+  if(!response.ok){await response.body?.cancel();throw Error('文件读取失败。')}
   const limit=format==='pdf'?64*1024*1024:16*1024*1024
-  if(Number(response.headers.get('content-length'))>limit)throw Error('文件超过预览大小限制。')
+  if(Number(response.headers.get('content-length'))>limit){await response.body?.cancel();throw Error('文件超过预览大小限制。')}
   const reader=response.body?.getReader();if(!reader)throw Error('文件内容不可读取。')
   const chunks:Uint8Array[]=[];let size=0
   while(true){const {done,value}=await reader.read();if(done)break;size+=value.byteLength;if(size>limit){await reader.cancel();throw Error('文件超过预览大小限制。')}chunks.push(value)}

@@ -98,3 +98,11 @@
 - 构建重启后的真实浏览器 11 项通过：开始/插入/布局/设计/引用/审阅及文件菜单 Escape、切换标签 Escape、实际激活另一 Word、同文档多实例入口禁用、390px 所有顶层入口可见且根宽度 390。0 页面异常，两个本轮测试文件已清理。截图已人工查看。
 - 嵌套文件夹真实隔离 PostgreSQL/HTTP/Chromium 测试通过：创建父子目录、重名 409 保留草稿、改名保持父子身份、非空删除 409 保留状态、先删子再删父 204，最终目录为空且无页面异常。此前失败均为测试定位/响应状态假设，已更正，未改产品逻辑。
 - 证据：`/tmp/dyoffice-ui-audit/word-followup-verified/report.json`、`mobile-390.png`、`/tmp/dyoffice-folder-conflicts-root-current.log`。此前记录的两个 Word 待修项已在本节关闭；全量控件实际写入、触屏/读屏器与跨编辑器并发仍未穷举。
+
+## 文档写入与异常流补查
+
+- 真实 Word 输入段落、插入超链接和 2×2 表格，原生保存确认后关闭并重开；文字、链接地址、单元格内容均保留，5项通过、0页面异常，QA文件已清理。证据 `/tmp/dyoffice-ui-audit/word-edit-persistence/report.json`。
+- 两个 Word 编辑器各自输入不同内容，切换保存并关闭重开，4项检查通过，未串稿。清理其中一份成功；另一份因强制关闭页面中断后台 PUT，产生 receiving/attempt已设但hash未设的草稿，移入回收站成功、purge409。仅该QA草稿的到期时间被提前以核对正常过期清理，过期后仍因未知上传保护拒绝purge，**未彻底清理**，不绕过服务端保护。该边界继续调查。证据 `/tmp/dyoffice-ui-audit/word-two-editors/report.json`。
+- Word 桌面与390px共29个真实交互记录：查找前后跳转、单次/全部替换、页码定位、导航标题/结果/页面、缩放应用/取消、边距及纸张取消、字数统计关闭；0页面异常，最后保存200，QA文件删除及purge成功。系统打印与取消在headless下未验证，不计通过。证据 `/tmp/dyoffice-ui-audit/word-dialog-flows/coverage.md`。
+- 预览超限Content-Length和HTTP错误分支原先未取消未读响应流；两条DOM/ReadableStream回归先失败后通过，现拒绝时取消响应body。Web shell37文件312项、类型与构建通过。上传格式/大小拒绝、mock503重开、网络错误重开、快速切换及迟到响应保持当前内容已通过浏览器检查，均明确为mock业务接口，无真实业务写入。
+- 构建重启后的预览/上传模拟浏览器复验7组通过，包括确认超限响应流cancel回调执行；0页面异常、0真实业务写入，所有mock标签关闭。证据 `/tmp/dyoffice-ui-audit/upload-preview-edge-postfix/report.json`。
