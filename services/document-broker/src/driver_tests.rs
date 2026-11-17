@@ -29,6 +29,10 @@ enum Behaviour {
     ChangedInvocation,
     SlowUnitRead,
     ChangedCgroup,
+    WrongSecurity(u8),
+    MissingSecurity,
+    SlowSecurity,
+    ChangedSecurity,
     ChangedUnitPath,
 }
 struct FakeManager {
@@ -218,11 +222,80 @@ impl FakeUnit {
 }
 
 struct FakeService {
+    security_reads: AtomicUsize,
     reads: AtomicUsize,
     behaviour: Behaviour,
 }
 #[zbus::interface(name = "org.freedesktop.systemd1.Service")]
 impl FakeService {
+    #[zbus(property)]
+    async fn no_new_privileges(&self) -> zbus::fdo::Result<bool> {
+        if matches!(self.behaviour, Behaviour::MissingSecurity) {
+            return Err(zbus::fdo::Error::UnknownProperty("absent".into()));
+        }
+        if matches!(self.behaviour, Behaviour::SlowSecurity) {
+            tokio::time::sleep(Duration::from_secs(1)).await;
+        }
+        let n = self.security_reads.fetch_add(1, Ordering::SeqCst);
+        Ok(!matches!(self.behaviour, Behaviour::WrongSecurity(0))
+            && !(matches!(self.behaviour, Behaviour::ChangedSecurity) && n > 0))
+    }
+    #[zbus(property)]
+    fn private_network(&self) -> bool {
+        if matches!(self.behaviour, Behaviour::WrongSecurity(1)) {
+            false
+        } else {
+            true
+        }
+    }
+    #[zbus(property)]
+    fn private_devices(&self) -> bool {
+        if matches!(self.behaviour, Behaviour::WrongSecurity(2)) {
+            false
+        } else {
+            true
+        }
+    }
+    #[zbus(property, name = "RestrictSUIDSGID")]
+    fn restrict_suid_sgid(&self) -> bool {
+        if matches!(self.behaviour, Behaviour::WrongSecurity(3)) {
+            false
+        } else {
+            true
+        }
+    }
+    #[zbus(property)]
+    fn lock_personality(&self) -> bool {
+        if matches!(self.behaviour, Behaviour::WrongSecurity(4)) {
+            false
+        } else {
+            true
+        }
+    }
+    #[zbus(property)]
+    fn protect_system(&self) -> &str {
+        if matches!(self.behaviour, Behaviour::WrongSecurity(5)) {
+            "full"
+        } else {
+            "strict"
+        }
+    }
+    #[zbus(property)]
+    fn protect_home(&self) -> &str {
+        if matches!(self.behaviour, Behaviour::WrongSecurity(6)) {
+            "read-only"
+        } else {
+            "yes"
+        }
+    }
+    #[zbus(property)]
+    fn capability_bounding_set(&self) -> u64 {
+        if matches!(self.behaviour, Behaviour::WrongSecurity(7)) {
+            1
+        } else {
+            0
+        }
+    }
     #[zbus(property)]
     fn control_group(&self) -> &str {
         if self.reads.fetch_add(1, Ordering::SeqCst) > 0
@@ -272,6 +345,7 @@ impl Fixture {
             .serve_at(
                 "/org/freedesktop/systemd1/unit/fixture_returned_not_derived",
                 FakeService {
+                    security_reads: AtomicUsize::new(0),
                     behaviour,
                     reads: AtomicUsize::new(0),
                 },
@@ -813,6 +887,107 @@ async fn final_owner_aba_clears_binding_even_when_query_returns_original_owner()
             },
         )
         .await;
+    assert_eq!(result, Phase::Quarantined);
+    assert!(a.unit_binding.is_none());
+    assert_eq!(f.starts.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn security_readback_rejects_each_mismatch_missing_changed_and_slow_property() {
+    let mut cases: Vec<_> = (0..8).map(Behaviour::WrongSecurity).collect();
+    cases.extend([
+        Behaviour::MissingSecurity,
+        Behaviour::ChangedSecurity,
+        Behaviour::SlowSecurity,
+    ]);
+    for behaviour in cases {
+        let f = Fixture::new(1, behaviour).await;
+        let mut a = Attempt::new(1);
+        assert_eq!(
+            a.run(&f, Duration::from_millis(120)).await,
+            Phase::Quarantined
+        );
+        assert!(a.unit_binding.is_none());
+        assert_eq!(f.starts.load(Ordering::SeqCst), 1);
+        a.reconnect(2).unwrap();
+        assert_eq!(
+            a.run(&f, Duration::from_millis(120)).await,
+            Phase::Quarantined
+        );
+        assert_eq!(f.starts.load(Ordering::SeqCst), 1);
+    }
+}
+
+struct WrongSecurityType;
+#[zbus::interface(name = "org.freedesktop.systemd1.Service")]
+impl WrongSecurityType {
+    #[zbus(property)]
+    fn control_group(&self) -> &str {
+        "/delegated.slice/non-derived.service"
+    }
+    #[zbus(property)]
+    fn no_new_privileges(&self) -> &str {
+        "true"
+    }
+}
+#[tokio::test]
+async fn security_property_wrong_wire_type_is_not_coerced() {
+    let f = Fixture::new(1, Behaviour::Fast).await;
+    let path = "/org/freedesktop/systemd1/unit/fixture_returned_not_derived";
+    // Removing Service retains the Unit interface/object (returns false).
+    assert!(
+        !f.server
+            .object_server()
+            .remove::<FakeService, _>(path)
+            .await
+            .unwrap()
+    );
+    assert!(
+        f.server
+            .object_server()
+            .at(path, WrongSecurityType)
+            .await
+            .unwrap()
+    );
+    let mut a = Attempt::new(1);
+    assert_eq!(
+        a.run(&f, Duration::from_millis(500)).await,
+        Phase::Quarantined
+    );
+    assert!(a.unit_binding.is_none());
+    assert_eq!(f.starts.load(Ordering::SeqCst), 1);
+}
+#[tokio::test]
+async fn owner_loss_during_security_readback_quarantines() {
+    let f = Fixture::new(1, Behaviour::SlowSecurity).await;
+    let mut a = Attempt::new(1);
+    let (_tx, rx) = tokio::sync::watch::channel(false);
+    let result = a
+        .submit_on(
+            &f.client,
+            "org.freedesktop.systemd1",
+            &LaunchSpec::fixture(),
+            Duration::from_millis(500),
+            rx,
+            async { tokio::time::sleep(Duration::from_millis(50)).await },
+            false,
+        )
+        .await;
+    assert_eq!(result, Phase::Quarantined);
+    assert!(a.unit_binding.is_none());
+    assert_eq!(f.starts.load(Ordering::SeqCst), 1);
+}
+#[tokio::test]
+async fn cancellation_during_security_readback_quarantines() {
+    let f = Fixture::new(1, Behaviour::SlowSecurity).await;
+    let mut a = Attempt::new(1);
+    let (tx, rx) = tokio::sync::watch::channel(false);
+    let cancel = tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        tx.send(true).unwrap();
+    });
+    let result = a.run_with_cancel(&f, Duration::from_millis(500), rx).await;
+    cancel.await.unwrap();
     assert_eq!(result, Phase::Quarantined);
     assert!(a.unit_binding.is_none());
     assert_eq!(f.starts.load(Ordering::SeqCst), 1);
