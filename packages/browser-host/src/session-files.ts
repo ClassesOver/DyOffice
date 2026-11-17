@@ -223,6 +223,16 @@ export function createSessionFileHost({ fetchImpl = fetch, editorId = crypto.ran
     ...host,
     subscribe(listener: () => void) { listeners.add(listener); return () => { listeners.delete(listener) } },
     getState(fileId: string) { const ctx = liveContext(fileId,false); return { revision: { ...ctx.revision },name: ctx.name,lease: ctx.lease ? { ...ctx.lease } : null,status: ctx.status } },
+    getEditorId: () => editor,
+    observeRealtime(fileId: string, remote: { lease: { leaseEpoch: number; editorId: string | null; heldByCurrentSession: boolean; active: boolean; expiresAt: string | null } } | null) {
+      const id = uuid(fileId), ctx = liveContext(id, false), lease = ctx.lease
+      // A notification may revoke authority; only the HTTP lease endpoint can
+      // grant it. Ignore older polls and never adopt a notified document head.
+      if (remote && (!lease || remote.lease.leaseEpoch < lease.leaseEpoch || (remote.lease.leaseEpoch === lease.leaseEpoch && remote.lease.editorId === editor && remote.lease.heldByCurrentSession && (remote.lease.active || (remote.lease.expiresAt !== null && Date.parse(remote.lease.expiresAt) < Date.parse(lease.expiresAt)))))) return
+      revokeLease(id, ctx)
+      if (!ctx.pending && !ctx.preparing) ctx.status = remote ? 'conflict' : 'unauthorized'
+      emit()
+    },
     async acquireLease(fileId: string) {
       const id=uuid(fileId),ctx=context(id),operation=++ctx.leaseOperation
       ctx.exclusiveLease=operation
