@@ -118,6 +118,10 @@ pub(super) async fn read(
         validate(path, expected, &id, invocation, &cgroup)
     }
     let first = snapshot(&unit, &service, path.as_str(), expected).await?;
+    // Identity snapshots bracket both uncached configuration reads. This only
+    // observes the manager's declared settings, never kernel enforcement.
+    read_fixed_security(&service).await?;
+    read_fixed_security(&service).await?;
     let second = snapshot(&unit, &service, path.as_str(), expected).await?;
     let final_path: OwnedObjectPath = manager
         .call("GetUnit", &(expected,))
@@ -127,6 +131,38 @@ pub(super) async fn read(
         return Err(());
     }
     Ok(first)
+}
+
+// systemd v255 Service interface / dbus-execute.c exec-context vtable.
+// The canonical enum strings are protect_*_table in core/namespace.c.
+// Deliberately a fixed subset, not a complete launch-policy certificate.
+async fn read_fixed_security(service: &zbus::Proxy<'_>) -> Result<(), ()> {
+    for name in [
+        "NoNewPrivileges",
+        "PrivateNetwork",
+        "PrivateDevices",
+        "RestrictSUIDSGID",
+        "LockPersonality",
+    ] {
+        let enabled: bool = service.get_property(name).await.map_err(|_| ())?;
+        if !enabled {
+            return Err(());
+        }
+    }
+    for (name, expected) in [("ProtectSystem", "strict"), ("ProtectHome", "yes")] {
+        let actual: String = service.get_property(name).await.map_err(|_| ())?;
+        if actual != expected {
+            return Err(());
+        }
+    }
+    let caps: u64 = service
+        .get_property("CapabilityBoundingSet")
+        .await
+        .map_err(|_| ())?;
+    if caps != 0 {
+        return Err(());
+    }
+    Ok(())
 }
 
 #[cfg(test)]
