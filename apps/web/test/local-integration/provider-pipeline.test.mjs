@@ -289,3 +289,31 @@ test('actual app rejects malformed provider admission and shutdown deadline',asy
  await assert.rejects(buildLocalApp({...base,globalConfigKeyring:undefined,adminProviderProbe:{profiles:[f.profile]}}),/probe/)
  for(const value of [0,35001,'50',NaN])await assert.rejects(buildLocalApp({...base,providerShutdownTimeoutMs:value}),/timeout/)
 })
+
+// A visible delta is not a settlement barrier: the real pipeline deliberately
+// streams text while the terminal event waits for the durable budget commit.
+test('visible delta precedes delayed settlement but turn completion follows it', async t => {
+ const held=deferred(),release=deferred(),events=[]
+ const n=network(t),f=await fixture(t,{wrapTransactions:base=>({...base,withPrincipalTransaction:(input,fn)=>base.withPrincipalTransaction(input,(client,p)=>fn(new Proxy(client,{get(target,key){
+  if(key==='query')return async(sql,params)=>{
+   if(String(sql).includes('provider_budget_action')&&params?.[0]==='settle'){held.resolve();await release.promise}
+   return target.query(sql,params)
+  }
+  const value=target[key];return typeof value==='function'?value.bind(target):value
+ }}),p))})})
+ let completed=false
+ const work=f.appPipeline.turns.run(f.input,async e=>events.push(e)).then(()=>{completed=true})
+ void work.catch(()=>{})
+ try {
+  await bounded(held.promise)
+  assert.deepEqual(events.map(e=>e.type),['delta'])
+  assert.equal(completed,false)
+  const before=(await f.ownerPool.query('SELECT owner_id,state FROM provider_budget_reservations')).rows
+  assert.deepEqual(before,[{owner_id:f.initial.id,state:'unknown'}])
+  release.resolve()
+  await work
+  assert.deepEqual((await f.ownerPool.query('SELECT owner_id,state FROM provider_budget_reservations')).rows,[{owner_id:f.initial.id,state:'settled'}])
+  assert.deepEqual(events.map(e=>e.type),['delta','tool_call','usage'])
+  assert.equal(n.writes,1)
+ } finally {release.resolve();await work.catch(()=>{})}
+})
