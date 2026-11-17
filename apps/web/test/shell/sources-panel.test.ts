@@ -299,3 +299,19 @@ test('the affected identity remains directly reconcilable after browsing B and r
  await click('读取待核对连接（revenue）');await click('确认不存在并开始新建')
  expect(client.getState().unknownWrite).toBe(false)
 })
+
+test.each(['dialog','page'] as const)('a failed initial source list is announced before the %s controls and can be refreshed',async presentation=>{
+ let failed=true,writes=0
+ const client=createSourcesClient((async(_path:string,method='GET')=>{if(method!=='GET')writes++;if(failed)throw Object.assign(Error('private backend failure'),{status:503});return {items:[initial().source],nextCursor:null}}) as Request)
+ const host=document.createElement('div');document.body.append(host);const root=createRoot(host);roots.push(root)
+ await act(async()=>root.render(h(SourcesPanel,{client,presentation,onClose(){}})))
+ const error=host.querySelector('.ant-alert-error')!
+ expect(error.textContent).toContain('暂不可用')
+ expect(error.textContent).not.toContain('private backend failure')
+ expect(error.compareDocumentPosition(host.querySelector('.source-list')!)&Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+ expect(error.compareDocumentPosition(host.querySelector('.source-fields')!)&Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+ failed=false;await click('刷新列表')
+ expect(host.querySelector('.ant-alert-error')).toBeNull()
+ expect(host.querySelector('.source-item')?.textContent).toContain('营业收入')
+ expect(writes).toBe(0)
+})

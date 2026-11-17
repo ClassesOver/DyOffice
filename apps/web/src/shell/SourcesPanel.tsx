@@ -94,6 +94,7 @@ export function SourcesPanel({ client, resultsClient, onClose, presentation = 'd
   }
   return <div className={presentation === 'page' ? 'workspace-panel-host' : 'set-overlay'}><section className={presentation === 'page' ? 'workspace-panel workspace-sources-panel' : 'set-dialog source-dialog'} role={presentation === 'page' ? undefined : 'dialog'} aria-modal={presentation === 'page' ? undefined : true} aria-label="数据连接">
     {presentation==='dialog'&&<div className="set-header"><h2 className="set-title">数据连接</h2><Button autoInsertSpace={false} disabled={busy} onClick={() => { if (canClose()) onClose() }}>关闭</Button></div>}
+    {error && <Alert type="error" showIcon title={error}/> }
     <div className={presentation === 'page' ? 'workspace-panel-body source-body' : 'set-body source-body'}>
       <aside className="source-list" aria-label="连接列表">
         <Button autoInsertSpace={false} disabled={busy || dirty || unknown || unresolvedResult} onClick={() => { setDetail(null); setDraft(empty()); setLatest(null); setResult(null); setConfirmDelete(false) }}>新建数据连接</Button>
@@ -173,7 +174,7 @@ export function SourcesPanel({ client, resultsClient, onClose, presentation = 'd
           <div className="source-results"><Table size="small" pagination={false} scroll={{x:'max-content'}} rowKey="__rowKey" dataSource={result.rows.slice(0,100).map((row,index)=>({values:row,__rowKey:String(index)}))} columns={result.schema.map(column=>({title:column.name+(column.unit ? `（${column.unit}）` : ''),key:column.name,render:(_value:unknown,record:{values:Record<string,unknown>})=>record.values[column.name]===null?'—':String(record.values[column.name]??'')}))}/></div>
           {result.rows.length > 100 && <p>界面仅显示前 100 行，完整受限结果共 {result.rows.length} 行。</p>}
         </section>}
-        {message && <Alert type="success" showIcon title={message} role="status"/>}{error && <Alert type="error" showIcon title={error}/> }
+        {message && <Alert type="success" showIcon title={message} role="status"/>}
       </main>
     </div>
   </section></div>

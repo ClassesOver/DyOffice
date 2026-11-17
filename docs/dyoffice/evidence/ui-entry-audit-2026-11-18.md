@@ -216,3 +216,13 @@
 - 新增成功、unknown且核对读取失败、当前会话撤销三条回归；原有密码成功后刷新当前会话及保留成功提示仍通过。最终Shell43文件418项、shell类型检查、构建、边界1335文件0违规通过；独立只读复核与相关14项通过。构建chunk大小提示和DOM CSS解析日志仍存在。
 - 最终构建真实浏览器3组通过：pending期间Escape/关闭及beforeunload均有保护、没有提前GET或重复DELETE；成功后一次读取；unknown后失败读取不解锁，显式成功读取才恢复；当前会话终态进入恢复层且不读取复活。所有密码修改/撤销业务请求mock，无真实密码修改、撤销及配置写入。证据/tmp/dyoffice-rotation-red.log、/tmp/dyoffice-round10-shell.log、/tmp/dyoffice-round10-build.log、/tmp/dyoffice-refresh-version-review.log，以及/tmp/dyoffice-ui-audit/password-session-concurrency/report.json与截图。
 - 上一提交9c2f3cd7的远端native-docx检查出现失败，正在独立核查；不以本地Shell通过代替DOCX端到端通过。完整UI与复杂文档交互目标继续，未宣称穷举完成。
+
+## 技能菜单读取恢复与管理弹窗小屏错误可见性
+
+- 独立动态诊断确认：共享AI技能菜单原先把listSkills拒绝显示为“还没有安装技能”，没有加载提示或原位重试。关闭后重开，旧请求迟到失败也会清空新列表。新增回归先红后绿：分离加载/失败/空列表，使用固定多语言错误文案和重试，读取代次隔离旧成功/失败，不反射上游详情。菜单任意控件Escape关闭并恢复添加按钮焦点，重试时焦点转回搜索框，避免移除重试按钮后丢失键盘位置；这两处焦点回归也先红后绿。
+- 真实native DOCX及助手桥接的隔离PG浏览器5组通过：GET503区别于空账号、Enter原位重试且pending重复Enter不加GET、成功可选、旧成功及旧失败迟到各自不污染重开结果、错误按钮Escape焦点恢复。全部使用测试fixture并自动清理，无用户部署写入。旧CI首次alice-report菜单超时在旧单项及旧完整native-docs套件未复现，尚无证据将它归因于本次吞错问题；保留远端4405d766的有界状态诊断提交，不放宽断言或超时。
+- 320×568真实宿主mock只读审计确认数据连接首次/再次列表503错误原位于长表单末尾y1078..1119。共用错误Alert移到source-body之前，保留原成功提示与unknown/身份核对逻辑；page/dialog两条顺序与刷新恢复回归先红后绿。最终小屏3弹窗复验均通过：数据连接两次失败提示y119.66..160.5首屏可见，无横溢，24步Tab无背景可操作或屏外控件，Escape关闭并回账号入口；用户管理/回收站错误仍可见。业务写入0、pageerror0；浏览器边界BODY焦点过渡未当作背景控件逃逸。
+- 最终Shell43文件420项、共享UI26文件214项、Docs534文件6561项通过（另4文件20项按原条件跳过），共享UI/shell/Docs类型检查通过。shell、DOCX、PPTX渲染构建通过；XLSX渲染构建通过但gateway阶段被旧root所有的生成文件阻止，保留该文件为ignored备份后单独gateway构建通过，统一重启HTTP200。无业务源码权限改动。构建仍有既有chunk/Rollup注释提示，DOM仍有CSS解析及canvas未实现日志。边界1335文件0违规、兼容84、工具157、IPC538检查通过。
+- 远端4405d766账号CI失败日志为npm下载ECONNRESET（基础单元13项已过、集成未执行），已只重跑失败任务；不改业务代码。远端native-docx与其他长任务尚待最终状态。完整UI、复杂文档交互与跨刷新未知结果恢复目标仍进行中。
+- 证据：/tmp/dyoffice-skill-menu-red.log、/tmp/dyoffice-skill-menu-escape-red.log、/tmp/dyoffice-skill-menu-retry-focus-red.log、/tmp/dyoffice-round11-ui-final.log、/tmp/dyoffice-round11-shell.log、/tmp/dyoffice-round11-docs-tests.log；/tmp/dyoffice-ui-audit/native-skills-menu-error/报告及截图；/tmp/dyoffice-ui-audit/management-small-error/旧证据与management-small-error-postfix/最终报告及截图。最终native-docs完整端到端另行记录。
+- 最终本地native-docs全套9项中8通过/1按既有外部Provider条件跳过/0失败，67.64秒；真实编辑commit/refresh/保留原parts、延迟保存较新草稿、takeover、未知保存receipt、私有技能Provider Gateway发送等通过，日志/tmp/dyoffice-native-docs-final-suite.log。账号CI网络失败重跑已success，4fbcb680的native-docx也已success；当前4405d766的长任务仍在运行，不将旧提交结果冒充本批新CI。

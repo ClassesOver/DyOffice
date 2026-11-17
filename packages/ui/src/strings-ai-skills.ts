@@ -11,6 +11,9 @@ export interface AiSkillsLabels {
   noSkills: string
   /** list body when the search matches nothing */
   noMatch: string
+  loading: string
+  loadFailed: string
+  retry: string
   /** bottom row: jump to Settings › Integrations */
   manage: string
   back: string
@@ -21,6 +24,9 @@ export interface AiSkillsLabels {
 
 export const AI_SKILLS_LABELS: Record<Lang, AiSkillsLabels> = {
   zh: {
+    loading: '正在读取技能…',
+    loadFailed: '无法读取技能列表。',
+    retry: '重试',
     addTitle: '添加',
     addFile: '添加文件',
     skills: '技能',
@@ -33,6 +39,9 @@ export const AI_SKILLS_LABELS: Record<Lang, AiSkillsLabels> = {
     attachedTitle: '本条消息附带的技能',
   },
   en: {
+    loading: 'Loading skills…',
+    loadFailed: 'Unable to load skills.',
+    retry: 'Retry',
     addTitle: 'Add',
     addFile: 'Add file',
     skills: 'Skills',
@@ -45,6 +54,9 @@ export const AI_SKILLS_LABELS: Record<Lang, AiSkillsLabels> = {
     attachedTitle: 'Skills attached to this message',
   },
   ja: {
+    loading: 'スキルを読み込み中…',
+    loadFailed: 'スキルを読み込めません。',
+    retry: '再試行',
     addTitle: '追加',
     addFile: 'ファイルを追加',
     skills: 'スキル',
@@ -57,6 +69,9 @@ export const AI_SKILLS_LABELS: Record<Lang, AiSkillsLabels> = {
     attachedTitle: 'このメッセージに添付したスキル',
   },
   ko: {
+    loading: '스킬을 불러오는 중…',
+    loadFailed: '스킬을 불러올 수 없습니다.',
+    retry: '다시 시도',
     addTitle: '추가',
     addFile: '파일 추가',
     skills: '스킬',
@@ -69,6 +84,9 @@ export const AI_SKILLS_LABELS: Record<Lang, AiSkillsLabels> = {
     attachedTitle: '이 메시지에 첨부된 스킬',
   },
   fr: {
+    loading: 'Chargement des compétences…',
+    loadFailed: 'Impossible de charger les compétences.',
+    retry: 'Réessayer',
     addTitle: 'Ajouter',
     addFile: 'Ajouter un fichier',
     skills: 'Compétences',
@@ -81,6 +99,9 @@ export const AI_SKILLS_LABELS: Record<Lang, AiSkillsLabels> = {
     attachedTitle: 'Compétences jointes à ce message',
   },
   de: {
+    loading: 'Skills werden geladen…',
+    loadFailed: 'Skills konnten nicht geladen werden.',
+    retry: 'Erneut versuchen',
     addTitle: 'Hinzufügen',
     addFile: 'Datei hinzufügen',
     skills: 'Skills',
@@ -93,6 +114,9 @@ export const AI_SKILLS_LABELS: Record<Lang, AiSkillsLabels> = {
     attachedTitle: 'An diese Nachricht angehängte Skills',
   },
   es: {
+    loading: 'Cargando habilidades…',
+    loadFailed: 'No se pudieron cargar las habilidades.',
+    retry: 'Reintentar',
     addTitle: 'Añadir',
     addFile: 'Añadir archivo',
     skills: 'Habilidades',
@@ -105,6 +129,9 @@ export const AI_SKILLS_LABELS: Record<Lang, AiSkillsLabels> = {
     attachedTitle: 'Habilidades adjuntas a este mensaje',
   },
   th: {
+    loading: 'กำลังโหลดทักษะ…',
+    loadFailed: 'ไม่สามารถโหลดทักษะได้',
+    retry: 'ลองอีกครั้ง',
     addTitle: 'เพิ่ม',
     addFile: 'เพิ่มไฟล์',
     skills: 'ทักษะ',
@@ -117,6 +144,9 @@ export const AI_SKILLS_LABELS: Record<Lang, AiSkillsLabels> = {
     attachedTitle: 'ทักษะที่แนบกับข้อความนี้',
   },
   id: {
+    loading: 'Memuat keterampilan…',
+    loadFailed: 'Tidak dapat memuat keterampilan.',
+    retry: 'Coba lagi',
     addTitle: 'Tambah',
     addFile: 'Tambah berkas',
     skills: 'Keterampilan',
@@ -129,6 +159,9 @@ export const AI_SKILLS_LABELS: Record<Lang, AiSkillsLabels> = {
     attachedTitle: 'Keterampilan yang dilampirkan pada pesan ini',
   },
   ru: {
+    loading: 'Загрузка навыков…',
+    loadFailed: 'Не удалось загрузить навыки.',
+    retry: 'Повторить',
     addTitle: 'Добавить',
     addFile: 'Добавить файл',
     skills: 'Навыки',
@@ -141,6 +174,9 @@ export const AI_SKILLS_LABELS: Record<Lang, AiSkillsLabels> = {
     attachedTitle: 'Навыки, приложенные к этому сообщению',
   },
   ar: {
+    loading: 'جارٍ تحميل المهارات…',
+    loadFailed: 'تعذّر تحميل المهارات.',
+    retry: 'إعادة المحاولة',
     addTitle: 'إضافة',
     addFile: 'إضافة ملف',
     skills: 'المهارات',
@@ -153,6 +189,9 @@ export const AI_SKILLS_LABELS: Record<Lang, AiSkillsLabels> = {
     attachedTitle: 'المهارات المرفقة بهذه الرسالة',
   },
   pt: {
+    loading: 'Carregando habilidades…',
+    loadFailed: 'Não foi possível carregar as habilidades.',
+    retry: 'Tentar novamente',
     addTitle: 'Adicionar',
     addFile: 'Adicionar arquivo',
     skills: 'Habilidades',
@@ -165,6 +204,9 @@ export const AI_SKILLS_LABELS: Record<Lang, AiSkillsLabels> = {
     attachedTitle: 'Habilidades anexadas a esta mensagem',
   },
   it: {
+    loading: 'Caricamento competenze…',
+    loadFailed: 'Impossibile caricare le competenze.',
+    retry: 'Riprova',
     addTitle: 'Aggiungi',
     addFile: 'Aggiungi file',
     skills: 'Competenze',
@@ -177,6 +219,9 @@ export const AI_SKILLS_LABELS: Record<Lang, AiSkillsLabels> = {
     attachedTitle: 'Competenze allegate a questo messaggio',
   },
   pl: {
+    loading: 'Wczytywanie umiejętności…',
+    loadFailed: 'Nie można wczytać umiejętności.',
+    retry: 'Spróbuj ponownie',
     addTitle: 'Dodaj',
     addFile: 'Dodaj plik',
     skills: 'Umiejętności',
@@ -189,6 +234,9 @@ export const AI_SKILLS_LABELS: Record<Lang, AiSkillsLabels> = {
     attachedTitle: 'Umiejętności dołączone do tej wiadomości',
   },
   cs: {
+    loading: 'Načítání dovedností…',
+    loadFailed: 'Dovednosti se nepodařilo načíst.',
+    retry: 'Zkusit znovu',
     addTitle: 'Přidat',
     addFile: 'Přidat soubor',
     skills: 'Dovednosti',
@@ -201,6 +249,9 @@ export const AI_SKILLS_LABELS: Record<Lang, AiSkillsLabels> = {
     attachedTitle: 'Dovednosti připojené k této zprávě',
   },
   nl: {
+    loading: 'Vaardigheden laden…',
+    loadFailed: 'Vaardigheden konden niet worden geladen.',
+    retry: 'Opnieuw proberen',
     addTitle: 'Toevoegen',
     addFile: 'Bestand toevoegen',
     skills: 'Vaardigheden',
@@ -213,6 +264,9 @@ export const AI_SKILLS_LABELS: Record<Lang, AiSkillsLabels> = {
     attachedTitle: 'Vaardigheden bij dit bericht',
   },
   ms: {
+    loading: 'Memuatkan kemahiran…',
+    loadFailed: 'Tidak dapat memuatkan kemahiran.',
+    retry: 'Cuba lagi',
     addTitle: 'Tambah',
     addFile: 'Tambah fail',
     skills: 'Kemahiran',
@@ -225,6 +279,9 @@ export const AI_SKILLS_LABELS: Record<Lang, AiSkillsLabels> = {
     attachedTitle: 'Kemahiran yang dilampirkan pada mesej ini',
   },
   he: {
+    loading: 'טעינת מיומנויות…',
+    loadFailed: 'לא ניתן לטעון מיומנויות.',
+    retry: 'ניסיון חוזר',
     addTitle: 'הוספה',
     addFile: 'הוספת קובץ',
     skills: 'מיומנויות',
@@ -237,6 +294,9 @@ export const AI_SKILLS_LABELS: Record<Lang, AiSkillsLabels> = {
     attachedTitle: 'מיומנויות שצורפו להודעה זו',
   },
   hi: {
+    loading: 'कौशल लोड हो रहे हैं…',
+    loadFailed: 'कौशल लोड नहीं हो सके।',
+    retry: 'फिर से कोशिश करें',
     addTitle: 'जोड़ें',
     addFile: 'फ़ाइल जोड़ें',
     skills: 'कौशल',
@@ -249,6 +309,9 @@ export const AI_SKILLS_LABELS: Record<Lang, AiSkillsLabels> = {
     attachedTitle: 'इस संदेश के साथ जुड़े कौशल',
   },
   'zh-TW': {
+    loading: '正在讀取技能…',
+    loadFailed: '無法讀取技能清單。',
+    retry: '重試',
     addTitle: '新增',
     addFile: '新增檔案',
     skills: '技能',
@@ -261,6 +324,9 @@ export const AI_SKILLS_LABELS: Record<Lang, AiSkillsLabels> = {
     attachedTitle: '此訊息附帶的技能',
   },
   vi: {
+    loading: 'Đang tải kỹ năng…',
+    loadFailed: 'Không thể tải kỹ năng.',
+    retry: 'Thử lại',
     addTitle: 'Thêm',
     addFile: 'Thêm tệp',
     skills: 'Kỹ năng',
@@ -273,6 +339,9 @@ export const AI_SKILLS_LABELS: Record<Lang, AiSkillsLabels> = {
     attachedTitle: 'Kỹ năng đính kèm tin nhắn này',
   },
   tr: {
+    loading: 'Beceriler yükleniyor…',
+    loadFailed: 'Beceriler yüklenemedi.',
+    retry: 'Yeniden dene',
     addTitle: 'Ekle',
     addFile: 'Dosya ekle',
     skills: 'Beceriler',

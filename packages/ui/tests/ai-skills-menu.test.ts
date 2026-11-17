@@ -114,6 +114,57 @@ describe('AiSkillsMenu', () => {
     await settle()
     expect(host.querySelector('.ai-plus-empty')?.textContent).toBe('No skills installed yet')
   })
+
+  it('distinguishes loading and failure from an empty account and retries without closing', async () => {
+    let finish!: (skills: typeof SKILLS) => void
+    let fail!: (error: Error) => void
+    const listSkills = vi.fn(() => new Promise<typeof SKILLS>((resolve, reject) => { finish = resolve; fail = reject }))
+    const { onToggle } = mount({ listSkills })
+    click(host.querySelector('.ai-plus-btn'))
+    expect(host.querySelector('[role="status"]')?.textContent).toBe('Loading skills…')
+    await act(async () => fail(new Error('private upstream detail')))
+    expect(host.querySelector('[role="alert"]')?.textContent).toContain('Unable to load skills.')
+    expect(host.textContent).not.toContain('No skills installed yet')
+    expect(host.textContent).not.toContain('private upstream detail')
+    host.querySelector<HTMLButtonElement>('.ai-plus-retry')!.focus()
+    click(host.querySelector('.ai-plus-retry'))
+    expect(document.activeElement).toBe(host.querySelector('.ai-plus-search'))
+    expect(host.querySelector('[role="status"]')?.textContent).toBe('Loading skills…')
+    expect(host.querySelector('.ai-plus-retry')).toBeNull()
+    await act(async () => finish(SKILLS))
+    expect(host.querySelector('[role="alert"]')).toBeNull()
+    expect(host.querySelector('.ai-plus-pop')).not.toBeNull()
+    click(host.querySelector('.ai-plus-skill'))
+    expect(onToggle).toHaveBeenCalledWith('tables')
+    expect(listSkills).toHaveBeenCalledTimes(2)
+  })
+
+  it('ignores an older menu read after closing and reopening', async () => {
+    let fail!: (error: Error) => void
+    const listSkills = vi.fn()
+      .mockImplementationOnce(() => new Promise((_, reject) => { fail = reject }))
+      .mockResolvedValueOnce(SKILLS)
+    mount({ listSkills })
+    click(host.querySelector('.ai-plus-btn'))
+    click(host.querySelector('.ai-plus-btn'))
+    click(host.querySelector('.ai-plus-btn'))
+    await settle()
+    expect(host.querySelectorAll('.ai-plus-skill')).toHaveLength(2)
+    await act(async () => fail(new Error('old request failed')))
+    expect(host.querySelectorAll('.ai-plus-skill')).toHaveLength(2)
+    expect(host.querySelector('[role="alert"]')).toBeNull()
+  })
+
+  it('closes with Escape from the error retry and restores focus to the trigger', async () => {
+    mount({ listSkills: async () => { throw new Error('unavailable') } })
+    click(host.querySelector('.ai-plus-btn'))
+    await settle()
+    const retry = host.querySelector<HTMLButtonElement>('.ai-plus-retry')!
+    retry.focus()
+    act(() => retry.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })))
+    expect(host.querySelector('.ai-plus-pop')).toBeNull()
+    expect(document.activeElement).toBe(host.querySelector('.ai-plus-btn'))
+  })
 })
 
 describe('AiSkillChips', () => {
