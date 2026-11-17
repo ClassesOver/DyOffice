@@ -19,3 +19,8 @@ test('SaaS shared renderer and workbook adapter are preserved', () => {
     assert.ok(existsSync(new URL(file, root)), file)
   }
 })
+
+test('Docs SaaS suite retires only OS dialog/updater tests and retains native save safety', () => {
+  for (const file of ['apps/docs/tests/save-as-default-dir.test.ts','apps/docs/tests/updater.test.ts']) assert.equal(existsSync(new URL(file,root)),false,file)
+  for (const file of ['apps/docs/tests/save-metadata-race.test.ts','apps/docs/tests/web-bridge-save-state.test.ts','apps/web/test/pr24-safety.test.mjs','apps/web/test/native-docs/roundtrip.test.mjs']) assert.ok(existsSync(new URL(file,root)),file)
+})

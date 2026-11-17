@@ -8,9 +8,9 @@ import {fileFixture} from '../helpers/files.mjs'
 import {password} from '../helpers/identity.mjs'
 import {buildLocalApp} from '../../server/src/app.ts'
 test('original Settings lists only own sessions and confirms CSRF-protected per-session revocation',{timeout:120_000},async t=>{
- const origin='http://localhost:4201',f=await fileFixture(t,{origin})
+ const origin='http://localhost:4202',f=await fileFixture(t,{origin})
  const app=await buildLocalApp({db:f.db,businessPool:f.businessPool,passwords:f.passwords,deploymentId:f.deploymentId,origin,csrfKey:f.csrfKey,objectStore:f.objects,localShellDirectory:fileURLToPath(new URL('../../dist-local-shell',import.meta.url))})
- f.cleanup.push(()=>app.close());await app.listen({port:4201,host:'127.0.0.1'})
+ f.cleanup.push(()=>app.close());await app.listen({port:4202,host:'127.0.0.1'})
  const browser=await launchTestBrowser();t.after(()=>browser.close());const context=await browser.newContext({viewport:{width:1440,height:1100}});const page=await context.newPage()
  await page.goto(origin);await page.getByLabel('用户名',{exact:true}).fill('alice');await page.getByLabel('密码',{exact:true}).fill(password);await page.getByRole('button',{name:'登录',exact:true}).click();await expect(page.locator('.home')).toBeVisible()
  let token=(await context.cookies()).find(c=>c.name==='__Host-dyoffice-session').value

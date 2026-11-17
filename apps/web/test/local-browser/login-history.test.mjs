@@ -9,11 +9,11 @@ import {fileFixture} from '../helpers/files.mjs'
 import {password} from '../helpers/identity.mjs'
 import {buildLocalApp} from '../../server/src/app.ts'
 test('original account login history displays only its private bounded projection',{timeout:120_000},async t=>{
- const origin='http://localhost:4204',f=await fileFixture(t,{origin})
+ const origin='http://localhost:4203',f=await fileFixture(t,{origin})
  const aliceTime=new Date(Date.now()-120123).toISOString(),bobTime=new Date(Date.now()-180456).toISOString()
  for(const [user,time] of [[f.alice.user,aliceTime],[f.bob.user,bobTime]])await f.ownerPool.query('INSERT INTO auth_security_events(id,deployment_id,actor_id,event,request_id,created_at) VALUES($1,$2,$3,$4,$5,$6)',[randomUUID(),f.deploymentId,user.id,'login_succeeded',randomUUID(),time])
  const app=await buildLocalApp({db:f.db,businessPool:f.businessPool,passwords:f.passwords,deploymentId:f.deploymentId,origin,csrfKey:f.csrfKey,objectStore:f.objects,localShellDirectory:fileURLToPath(new URL('../../dist-local-shell',import.meta.url))})
- f.cleanup.push(()=>app.close());await app.listen({port:4204,host:'127.0.0.1'})
+ f.cleanup.push(()=>app.close());await app.listen({port:4203,host:'127.0.0.1'})
  assert.equal((await app.inject('/api/v1/auth/login-history')).statusCode,401)
  const browser=await launchTestBrowser();t.after(()=>browser.close());const context=await browser.newContext({viewport:{width:1440,height:1100}});const page=await context.newPage()
  await page.goto(origin)
