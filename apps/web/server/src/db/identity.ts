@@ -66,6 +66,6 @@ export function createIdentityStore(pool: Pool) {
 }
 export type IdentityStore = ReturnType<typeof createIdentityStore>
 export function connectIdentityStore(connectionString: string) {
-  const pool = new Pool({ connectionString, max: 4, connectionTimeoutMillis: 5000 })
+  const pool = new Pool({ connectionString, max: 12, connectionTimeoutMillis: 5000 })
   return { db: createIdentityStore(pool), close: () => pool.end() }
 }

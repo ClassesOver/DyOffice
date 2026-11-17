@@ -73,23 +73,38 @@ export function createRevisionService({ transactions, objects, files, quotaBytes
       const requestHash = createHash('sha256').update(JSON.stringify({ fileId, uploadId, baseRevision: base, leaseEpoch: epoch, sourceCommandId: requestedSource })).digest('hex')
       return run(token,'files:write',async (connection, principal) => {
         if (principal.job && (fileId!==principal.job.fileId || base!==principal.job.baseRevision || idempotencyKey!=='job_' + principal.job.id || requestedSource!==null)) throw authError(404)
-        await lockAccount(connection,principal)
-        const retired = await connection.query('SELECT 1 FROM files WHERE deployment_id=$1 AND owner_id=$2 AND id=$3 AND purge_started_at IS NOT NULL',[...scope(principal),fileId])
-        if (retired.rowCount) throw authError(410)
-        // A successful retry is a receipt lookup, not a new write authority.
-        // It survives a later head/lease change but still requires owner auth.
+        // Receipt lookup and object verification run before any row locks: a
+        // retry must not re-hash the object, and the full read+sha256 of the
+        // immutable, content-addressed object (already double-hashed by
+        // receiveUpload) must not extend the files/account write-lock window.
+        // The locked section below re-validates upload state after the verify.
         const prior = (await connection.query('SELECT c.request_hash,r.id,r.sha256,r.size FROM revision_commits c JOIN file_revisions r ON r.deployment_id=c.deployment_id AND r.owner_id=c.owner_id AND r.file_id=c.file_id AND r.id=c.revision_id WHERE c.deployment_id=$1 AND c.owner_id=$2 AND c.file_id=$3 AND c.idempotency_key=$4',[...scope(principal),fileId,idempotencyKey])).rows[0]
         if (prior) {
           if (principal.job) throw authError(409)
           if (prior.request_hash !== requestHash) throw authError(409)
           return revisionRef(fileId,prior)
         }
+        const staged = (await connection.query("SELECT revision_id,expected_size,sha256,state,kind,file_id,base_revision,lease_epoch,editor_id FROM uploads WHERE deployment_id=$1 AND owner_id=$2 AND id=$3 AND session_id=$4",[...scope(principal),uploadId,principal.sessionId])).rows[0]
+        if (staged?.kind==='revision' && staged.state==='ready' && staged.file_id===fileId && staged.base_revision===base && Number(staged.lease_epoch)===epoch && staged.editor_id && staged.sha256) {
+          await objects.verifyObject({ key: objectKey(principal,staged.revision_id), size: staged.expected_size, sha256: staged.sha256 })
+        }
+        await lockAccount(connection,principal)
+        const retired = await connection.query('SELECT 1 FROM files WHERE deployment_id=$1 AND owner_id=$2 AND id=$3 AND purge_started_at IS NOT NULL',[...scope(principal),fileId])
+        if (retired.rowCount) throw authError(410)
+        // The account lock serializes same-owner commits: a concurrent winner
+        // that committed while this transaction was verifying the object
+        // off-lock is discovered here, so the retry returns its receipt
+        // instead of tripping the consumed-upload state check below.
+        const priorLocked = prior ? undefined : (await connection.query('SELECT c.request_hash,r.id,r.sha256,r.size FROM revision_commits c JOIN file_revisions r ON r.deployment_id=c.deployment_id AND r.owner_id=c.owner_id AND r.file_id=c.file_id AND r.id=c.revision_id WHERE c.deployment_id=$1 AND c.owner_id=$2 AND c.file_id=$3 AND c.idempotency_key=$4',[...scope(principal),fileId,idempotencyKey])).rows[0]
+        if (priorLocked) {
+          if (priorLocked.request_hash !== requestHash) throw authError(409)
+          return revisionRef(fileId,priorLocked)
+        }
         const upload = await lockUpload(connection,principal,uploadId)
         if (upload.kind !== 'revision' || upload.file_id !== fileId || upload.state !== 'ready' || !upload.sha256 || upload.base_revision !== base || Number(upload.lease_epoch) !== epoch || !upload.editor_id) throw authError(409)
         const file = await loadFile(connection,principal,fileId,false,'UPDATE')
         await assertLiveLease(connection,principal,fileId,epoch,upload.editor_id)
         if (file.current_revision !== base) throw authError(409)
-        await objects.verifyObject({ key: objectKey(principal,upload.revision_id), size: upload.expected_size, sha256: upload.sha256 })
         const source = upload.restored_from ? 'restore' : 'save'
         await connection.query('INSERT INTO file_revisions(id,deployment_id,owner_id,file_id,object_key,sha256,size,source,parent_revision,restored_from) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)',[upload.revision_id,...scope(principal),fileId,objectKey(principal,upload.revision_id),upload.sha256,upload.expected_size,source,base,upload.restored_from])
         const changed = await connection.query('UPDATE files SET current_revision=$4,updated_at=clock_timestamp() WHERE deployment_id=$1 AND owner_id=$2 AND id=$3 AND current_revision=$5 RETURNING id',[...scope(principal),fileId,upload.revision_id,base])

@@ -24,8 +24,8 @@ export function createS3ObjectStore({ client, bucket }: { client: S3Client; buck
       try { await client.send(new HeadBucketCommand({ Bucket: bucket }), { abortSignal: AbortSignal.timeout(5000) }) }
       catch { throw storageError() }
     },
-    async putImmutable(key, bytes) {
-      const reference = objectReference(key, bytes)
+    async putImmutable(key, bytes, expected) {
+      const reference = expected ? (assertObjectReference({ key, ...expected }), Object.freeze({ key, size: expected.size, sha256: expected.sha256 })) : objectReference(key, bytes)
       bytes = Buffer.from(bytes)
       try {
         await client.send(new PutObjectCommand({ Bucket: bucket, Key: key, Body: bytes, ContentLength: reference.size,

@@ -5,7 +5,9 @@ export interface ObjectRef { readonly key: string; readonly size: number; readon
 export interface ObjectStore {
   // Custom stores without a read-only probe remain unavailable to readiness.
   checkReady?(): Promise<void>
-  putImmutable(key: string, bytes: Buffer): Promise<ObjectRef>
+  /** `expected` lets a caller that already hashed the bytes (upload validation)
+   *  skip the second full sha256 pass; storage still enforces immutability. */
+  putImmutable(key: string, bytes: Buffer, expected?: { size: number; sha256: string }): Promise<ObjectRef>
   readVerified(reference: ObjectRef): Promise<Buffer>
   // Internal only: caller must prove terminal publication and no live references.
   // Missing objects succeed; adapters unable to physically reclaim must reject.

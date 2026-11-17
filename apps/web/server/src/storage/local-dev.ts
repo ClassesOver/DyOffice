@@ -29,8 +29,8 @@ export async function createLocalObjectStore({ directory }: { directory: string 
   }
   return {
     async checkReady() { await assertDirectory(); await access(root, constants.R_OK | constants.W_OK | constants.X_OK) },
-    async putImmutable(key, bytes) {
-      const reference = objectReference(key, bytes)
+    async putImmutable(key, bytes, expected) {
+      const reference = expected ? (assertObjectReference({ key, ...expected }), Object.freeze({ key, size: expected.size, sha256: expected.sha256 })) : objectReference(key, bytes)
       bytes = Buffer.from(bytes)
       await assertDirectory()
       const temporary = join(root, '.staging-' + randomUUID())

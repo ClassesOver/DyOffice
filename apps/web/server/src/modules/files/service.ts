@@ -79,7 +79,9 @@ export function createFileService({ transactions, objects, quotaBytes = 1024 ** 
         // Once publication starts, an error may mean an object exists. Retain
         // the reservation/row until expiry; never delete an ambiguous object.
         published = true
-        const reference = await objects.putImmutable(claimed.key, bytes)
+        // Pass the validator's digest through: putImmutable needs no second
+        // full sha256 of the same bytes (commit re-verifies from storage).
+        const reference = await objects.putImmutable(claimed.key, bytes, { size: validated.size, sha256: validated.sha256 })
         if (reference.key !== claimed.key || reference.size !== validated.size || reference.sha256 !== validated.sha256) throw authError(503)
         return await run(token, 'files:write', async (connection, principal) => {
           await lockAccount(connection, principal)
