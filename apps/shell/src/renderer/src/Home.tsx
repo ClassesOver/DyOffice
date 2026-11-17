@@ -1593,6 +1593,9 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
   // IME composition: wait for the committed text instead of searching each keystroke
   const composingRef = useRef(false)
   const searchSeq = useRef(0)
+  const searchMoreRequest = useRef<number | null>(null)
+  const [searchMoreBusy, setSearchMoreBusy] = useState(false)
+  const [searchRefresh, setSearchRefresh] = useState(0)
   const searchActive = searchQuery.trim().length > 0
   // modified-column sort (WPS-style header popover), shared by the global and folder tables
   const [fileSort, setFileSort] = useState<'recent' | 'oldest'>('recent')
@@ -1807,6 +1810,9 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
 
   const q = searchQuery.trim()
   useEffect(() => {
+    setSearchPage(null)
+    searchMoreRequest.current = null; setSearchMoreBusy(false)
+    if (q) setSelected(new Set())
     if (!q) {
       searchSeq.current++
       setSearchPage(null)
@@ -1828,8 +1834,31 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
       }).catch((cause) => {if (seq === searchSeq.current) reportError(cause)})
     }
     timer = window.setTimeout(run, 150)
-    return () => window.clearTimeout(timer)
-  }, [q, filter, reportError])
+    return () => {
+      window.clearTimeout(timer)
+      searchMoreRequest.current = null
+      searchSeq.current++
+    }
+  }, [q, filter, reportError, searchRefresh])
+
+  async function loadMoreSearch() {
+    if (!searchPage || searchPage.index.pending > 0 || searchPage.index.scanning || searchPage.hits.length >= searchPage.total) return
+    const seq = searchSeq.current
+    if (searchMoreRequest.current === seq) return
+    searchMoreRequest.current = seq; setSearchMoreBusy(true)
+    const offset = searchPage.hits.length
+    try {
+      const page = await window.aiOffice.searchFiles({q, ext: filter === 'all' ? undefined : filter, offset, limit: 100})
+      if (seq !== searchSeq.current) return
+      const known = new Set(searchPage.hits.map(hit => hit.path))
+      // Inserts/deletions can shift offset pages. Re-read the first page when
+      // totals or overlap expose that change instead of looping on duplicate hits.
+      if (page.total !== searchPage.total || !page.hits.length || page.hits.some(hit => known.has(hit.path))) {
+        setSearchRefresh(value => value + 1)
+      } else setSearchPage(current => current ? {...page, hits: [...current.hits, ...page.hits]} : current)
+    } catch (cause) { if (seq === searchSeq.current) reportError(cause) }
+    finally { if (searchMoreRequest.current === seq) { searchMoreRequest.current = null; setSearchMoreBusy(false) } }
+  }
 
   // Jev judges the top local hits once they settle; the main process answers null when reranking is off.
   // The key changes only with the query, filter or candidate set, so index polls do not restart the timer.
@@ -3305,7 +3334,10 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
         {page && page.hits.length === 0 && !busy
           ? renderEmpty(t('searchNoResults', { q }))
           : page && (
-              <ul className="search-list">{orderedSearchHits(page.hits).map(renderSearchRow)}</ul>
+              <>
+                <ul className="search-list">{orderedSearchHits(page.hits).map(renderSearchRow)}</ul>
+                {!busy && page.hits.length < page.total && <button className="btn btn-secondary search-more" disabled={searchMoreBusy} aria-busy={searchMoreBusy} onClick={() => void loadMoreSearch()}>{t('searchMore')}</button>}
+              </>
             )}
       </div>
     )

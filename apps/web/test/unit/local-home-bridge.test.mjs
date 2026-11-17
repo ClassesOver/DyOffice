@@ -82,6 +82,61 @@ test('an explicit unstar cannot be swallowed by an opposite toggle already in fl
  assert.deepEqual(writes,[true,false]);assert.equal(starred,false)
 })
 
+for(const status of [undefined,408,503])test(`unknown star (${status}) reconciles its original target instead of reversing a committed write`,async()=>{
+ let starred=false,changed=0;const writes=[]
+ const bridge=createLocalHomeBridge({...deps(async(_path,method,body)=>{
+  if(method==='PUT'){starred=body.starred;writes.push(body.starred);throw Object.assign(Error('response lost'),{status})}
+  return {files:[{...item,starred}],total:1,totalAll:1}
+ }),changed:()=>changed++})
+ await assert.rejects(bridge.toggleStar(item.id),/再次点击将核对收藏/)
+ assert.equal(changed,0)
+ await bridge.toggleStar(item.id)
+ assert.deepEqual(writes,[true]);assert.equal(starred,true);assert.equal(changed,1)
+})
+test('uncommitted unknown star retries only its original absolute target and rejects an opposite explicit intent',async()=>{
+ let starred=false,fail=true;const writes=[]
+ const bridge=createLocalHomeBridge(deps(async(_path,method,body)=>{
+  if(method==='PUT'){writes.push(body.starred);if(fail){fail=false;throw Error('lost before commit')}starred=body.starred;return}
+  return {files:[{...item,starred}],total:1,totalAll:1}
+ }))
+ await assert.rejects(bridge.toggleStar(item.id),/再次点击将核对收藏/)
+ await assert.rejects(bridge.unstarPaths([item.id]),/核对收藏/)
+ await bridge.toggleStar(item.id)
+ assert.deepEqual(writes,[true,true]);assert.equal(starred,true)
+})
+test('definite rejected star releases its target so a later click follows the latest server state',async()=>{
+ let starred=false,fail=true;const writes=[]
+ const bridge=createLocalHomeBridge(deps(async(_path,method,body)=>{
+  if(method==='PUT'){writes.push(body.starred);if(fail){fail=false;throw Object.assign(Error('forbidden'),{status:403})}starred=body.starred;return}
+  return {files:[{...item,starred}],total:1,totalAll:1}
+ }))
+ await assert.rejects(bridge.toggleStar(item.id),/forbidden/);starred=true
+ await bridge.toggleStar(item.id);assert.deepEqual(writes,[true,false])
+})
+test('unknown unstar target survives a reconciliation read failure without reporting success or reversing',async()=>{
+ let starred=true,readFails=false,changed=0;const writes=[]
+ const bridge=createLocalHomeBridge({...deps(async(_path,method,body)=>{
+  if(method==='PUT'){starred=body.starred;writes.push(body.starred);throw Error('lost after commit')}
+  if(readFails)throw Object.assign(Error('read unavailable'),{status:503})
+  return {files:[{...item,starred}],total:1,totalAll:1}
+ }),changed:()=>changed++})
+ await assert.rejects(bridge.toggleStar(item.id),/再次点击将核对收藏/)
+ readFails=true;await assert.rejects(bridge.toggleStar(item.id),/再次点击将核对收藏/);assert.equal(changed,0)
+ readFails=false;await bridge.toggleStar(item.id);assert.equal(changed,1);assert.deepEqual(writes,[false]);assert.equal(starred,false)
+})
+for(const action of ['rename','move'])test(`different ${action} intents for the same file are rejected while the first is pending`,async()=>{
+ let finish;const gate=new Promise(resolve=>finish=resolve),writes=[]
+ const bridge=createLocalHomeBridge(deps(async(_path,_method,body)=>{writes.push(body);await gate}))
+ const first=action==='rename'?bridge.renameFile(item.id,'First.docx'):bridge.movePaths([item.id],'/workspace/first','ask')
+ await new Promise(resolve=>setImmediate(resolve))
+ const second=(action==='rename'?bridge.renameFile(item.id,'Second.docx'):bridge.movePaths([item.id],'/workspace/second','ask')).then(value=>({value}),error=>({error}))
+ await new Promise(resolve=>setImmediate(resolve));finish();await first
+ const outcome=await second
+ if(action==='rename')assert.match(outcome.error?.message??'',/进行中/)
+ else assert.match(outcome.value.failed[0]?.error??'',/进行中/)
+ assert.equal(writes.length,1)
+})
+
 
 test('recent page and count stay one bounded server query regardless of workspace size',async()=>{
  const calls=[];const bridge=createLocalHomeBridge(deps(async path=>{calls.push(path);if(calls.length>1)throw new Error('unbounded scan');return {files:[],total:100000,totalAll:200000}}))

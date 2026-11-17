@@ -539,3 +539,85 @@ test('Web file-menu portal closes when the restored content scrollport moves', a
  await act(async () => content.dispatchEvent(new Event('scroll')))
  expect(document.body.querySelector('.row-menu')).toBeNull()
 })
+
+test('a changed search immediately hides old hits and rejects their late response during debounce', async () => {
+  vi.useFakeTimers()
+  try {
+    const late = deferred<Awaited<ReturnType<HomeApi['searchFiles']>>>()
+    api.searchFiles = vi.fn(async ({q}) => q === 'old' ? late.promise : ({hits: [], total: 0, index: {indexed: 0, pending: 0, scanning: false}}))
+    const search = host.querySelector<HTMLInputElement>('input[type="search"]')!
+    await fill(search, 'old')
+    await act(async () => {await vi.advanceTimersByTimeAsync(150)})
+    expect(api.searchFiles).toHaveBeenCalledTimes(1)
+    await fill(search, 'new')
+    await act(async () => late.resolve({hits: [{...file, snippet: null, needles: ['old']}], total: 1, index: {indexed: 1, pending: 0, scanning: false}}))
+    expect(host.querySelector('.search-row')).toBeNull()
+    await act(async () => {await vi.advanceTimersByTimeAsync(150)})
+    expect(host.querySelector('.search-row')).toBeNull()
+    await fill(search, 'old')
+    await act(async () => {await vi.advanceTimersByTimeAsync(150)})
+    expect(host.querySelector('.search-row')).not.toBeNull()
+    await fill(search, 'another')
+    expect(host.querySelector('.search-row')).toBeNull()
+  } finally {vi.useRealTimers()}
+})
+
+test('searching clears hidden file selections before any bulk action can target them', async () => {
+  api.searchFiles = async () => ({hits: [], total: 0, index: {indexed: 0, pending: 0, scanning: false}})
+  await click(host.querySelector<HTMLInputElement>('.row-check')!)
+  expect(host.querySelector('.selection-count')?.textContent).toContain('1')
+  await fill(host.querySelector<HTMLInputElement>('input[type="search"]')!, 'unrelated')
+  expect(host.querySelector('.selection-bar')).toBeNull()
+  await fill(host.querySelector<HTMLInputElement>('input[type="search"]')!, '')
+  expect(host.querySelector<HTMLInputElement>('.row-check')?.checked).toBe(false)
+})
+
+test('search results beyond the first hundred remain reachable without duplicate requests',async()=>{
+ vi.useFakeTimers()
+ try{
+  const hits=Array.from({length:105},(_,i)=>({...file,path:`search-${i}`,name:`match-${i}.docx`,snippet:null,needles:['match']}))
+  const next=deferred<Awaited<ReturnType<HomeApi['searchFiles']>>>()
+  api.searchFiles=vi.fn(async({offset=0})=>offset?next.promise:{hits:hits.slice(0,100),total:105,index:{indexed:105,pending:0,scanning:false}})
+  await fill(host.querySelector<HTMLInputElement>('input[type="search"]')!,'match');await act(async()=>{await vi.advanceTimersByTimeAsync(150)})
+  expect(host.querySelectorAll('.search-row')).toHaveLength(100)
+  const more=button('Load more results');await click(more);await click(more)
+  expect(api.searchFiles).toHaveBeenCalledTimes(2);expect(api.searchFiles).toHaveBeenLastCalledWith({q:'match',ext:undefined,offset:100,limit:100})
+  await act(async()=>next.resolve({hits:hits.slice(100),total:105,index:{indexed:105,pending:0,scanning:false}}))
+  expect(host.querySelectorAll('.search-row')).toHaveLength(105);expect(host.querySelector('.search-more')).toBeNull()
+ }finally{vi.useRealTimers()}
+})
+test('late additional search results cannot replace a changed query',async()=>{
+ vi.useFakeTimers()
+ try{
+  const next=deferred<Awaited<ReturnType<HomeApi['searchFiles']>>>(),hit={...file,snippet:null,needles:['old']}
+  api.searchFiles=vi.fn(async({q,offset=0})=>offset?next.promise:{hits:q==='old'?[hit]:[],total:q==='old'?2:0,index:{indexed:2,pending:0,scanning:false}})
+  const search=host.querySelector<HTMLInputElement>('input[type="search"]')!;await fill(search,'old');await act(async()=>{await vi.advanceTimersByTimeAsync(150)})
+  await click(button('Load more results'));await fill(search,'new')
+  await act(async()=>next.resolve({hits:[{...hit,path:'late'}],total:2,index:{indexed:2,pending:0,scanning:false}}))
+  expect(host.querySelector('.search-row')).toBeNull();await act(async()=>{await vi.advanceTimersByTimeAsync(150)});expect(host.querySelector('.search-row')).toBeNull()
+ }finally{vi.useRealTimers()}
+})
+test('a failed additional search retains existing rows and permits an explicit retry',async()=>{
+ vi.useFakeTimers()
+ try{
+  let attempt=0;const hit={...file,snippet:null,needles:['match']}
+  api.searchFiles=async({offset=0})=>{if(offset&&attempt++===0)throw Error('Search page unavailable');return {hits:[{...hit,path:offset?'second':'first'}],total:2,index:{indexed:2,pending:0,scanning:false}}}
+  await fill(host.querySelector<HTMLInputElement>('input[type="search"]')!,'match');await act(async()=>{await vi.advanceTimersByTimeAsync(150)})
+  await click(button('Load more results'));expect(host.querySelectorAll('.search-row')).toHaveLength(1);expect(host.querySelector('[role="alert"]')?.textContent).toContain('Search page unavailable')
+  await click(button('Load more results'));expect(host.querySelectorAll('.search-row')).toHaveLength(2)
+ }finally{vi.useRealTimers()}
+})
+
+test('a changed search listing refreshes its first page instead of looping at a duplicate offset',async()=>{
+ vi.useFakeTimers()
+ try{
+  const hits=Array.from({length:105},(_,i)=>({...file,path:`search-${i}`,name:`match-${i}.docx`,snippet:null,needles:['match']}));let live=hits
+  api.searchFiles=vi.fn(async({offset=0})=>({hits:live.slice(offset,offset+100),total:live.length,index:{indexed:live.length,pending:0,scanning:false}}))
+  await fill(host.querySelector<HTMLInputElement>('input[type="search"]')!,'match');await act(async()=>{await vi.advanceTimersByTimeAsync(150)})
+  live=[{...hits[0],path:'inserted',name:'new-match.docx'},...hits]
+  await click(button('Load more results'));await act(async()=>{await vi.advanceTimersByTimeAsync(150)})
+  expect(api.searchFiles).toHaveBeenCalledTimes(3);expect(api.searchFiles).toHaveBeenLastCalledWith({q:'match',ext:undefined,limit:100})
+  expect(host.querySelector('.search-row')?.textContent).toContain('new-match.docx')
+  await click(button('Load more results'));expect(host.querySelectorAll('.search-row')).toHaveLength(106);expect(host.querySelector('.search-more')).toBeNull()
+ }finally{vi.useRealTimers()}
+})

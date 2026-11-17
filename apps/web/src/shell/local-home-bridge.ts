@@ -19,6 +19,7 @@ const folderId = (path: string) => path === rootPath ? null : path.split('/').at
 /** The original Home UI keeps its contract; every personal mutation uses the scoped API. */
 export function createLocalHomeBridge(deps: Dependencies): HomeApi {
   const pending = new Map<string, {promise: Promise<unknown>; intent: string}>()
+  const unknownStars = new Map<string, boolean>()
   const folderListeners = new Set<(paths: string[]) => void>()
   const knownFolders = new Set([rootPath])
   function changed() { deps.changed(); for (const listener of folderListeners) listener([...knownFolders]) }
@@ -89,12 +90,31 @@ export function createLocalHomeBridge(deps: Dependencies): HomeApi {
   }
   async function mutateFiles(ids: string[], action: string, method: string, body?: unknown) {
     for (const id of new Set(ids)) {
+      if(action==='star'&&unknownStars.has(id)){
+        if(unknownStars.get(id)!==(body as {starred:boolean}).starred)throw new Error('收藏结果尚未确认，再次点击将核对收藏，请先核对后再更改目标。')
+        await toggleStar(id);continue
+      }
       await once(`${action}:${id}`, async () => {
         await deps.request(`/api/v1/${action === 'trash' ? 'files/' + encodeURIComponent(id) : 'workspace/files/' + encodeURIComponent(id) + '/' + action}`, method, body)
         changed()
       }, JSON.stringify([action, method, body]))
     }
   }
+  function toggleStar(id:string):Promise<void>{return once('star:'+id,async()=>{
+    const reconciling=unknownStars.has(id)
+    try{
+      const file=(await queryFiles('all',{id,limit:1})).files.find(file=>file.id===id)
+      if(!file)throw Object.assign(new Error('文件不存在或已移入回收站。'),{status:404})
+      const target=reconciling?unknownStars.get(id)!:!file.starred
+      if(reconciling&&file.starred===target){unknownStars.delete(id);changed();return}
+      try{await deps.request(`/api/v1/workspace/files/${encodeURIComponent(id)}/star`,'PUT',{starred:target})}
+      catch(error){const status=(error as {status?:number})?.status;if(status===undefined||status===408||status>=500)unknownStars.set(id,target);else unknownStars.delete(id);throw error}
+      unknownStars.delete(id);changed()
+    }catch(error){
+      if(unknownStars.has(id))throw new Error(`${error instanceof Error?error.message:'收藏操作失败。'} 收藏结果尚未确认，再次点击将核对收藏，请勿更改为相反操作。`)
+      throw error
+    }
+  })}
   const base = createWebHomeBridge({request: path => path === '/preferences' ? deps.preferences.getPreferences() : files('all'), open: deps.open, changed, unsupported: deps.unsupported, browse: deps.browse})
   Object.assign(base, {
     revealPath: async (path: string) => {
@@ -117,11 +137,7 @@ export function createLocalHomeBridge(deps: Dependencies): HomeApi {
     recents: (query?: RecentQuery) => page('recent', query),
     starred: (query?: RecentQuery) => page('starred', query),
     starredGroups: async () => [],
-    toggleStar: (id: string) => once('star:' + id, async () => {
-      const file = (await queryFiles('all', {id, limit: 1})).files.find(file => file.id === id)
-      if (!file) throw new Error('文件不存在或已移入回收站。')
-      await deps.request(`/api/v1/workspace/files/${encodeURIComponent(id)}/star`, 'PUT', {starred: !file.starred}); changed()
-    }),
+    toggleStar,
     unstarPaths: (ids: string[]) => mutateFiles(ids, 'star', 'PUT', {starred: false}),
     removeRecent: (ids: string[]) => mutateFiles(ids, 'recent', 'DELETE'),
     deleteFiles: (ids: string[]) => mutateFiles(ids, 'trash', 'DELETE'),
@@ -131,9 +147,9 @@ export function createLocalHomeBridge(deps: Dependencies): HomeApi {
       for (const id of new Set(ids)) result.push(...(await queryFiles('all', {id, limit: 1})).files.filter(file => file.id === id))
       return fileEntries(result)
     },
-    renameFile: (id: string, name: string) => once(JSON.stringify(['rename', id, name]), async () => {
+    renameFile: (id: string, name: string) => once(JSON.stringify(['rename', id]), async () => {
       await deps.request(`/api/v1/files/${encodeURIComponent(id)}`, 'PATCH', {name}); changed(); return {ok: true, path: id}
-    }),
+    },name),
     folderRoots: async () => [{path: rootPath, name: (await deps.preferences.getPreferences()).language === 'en' ? 'My files' : '个人文件', usable: true, readable: true, removable: false}],
     listFolder: async (dir: string) => {
       const all = await folders(), mapping = paths(all), id = folderId(dir)
@@ -154,11 +170,11 @@ export function createLocalHomeBridge(deps: Dependencies): HomeApi {
       const result: MoveResult = {moved: [], conflicts: [], failed: []}
       for (const path of new Set(items)) {
         try {
-          const moved = await once(JSON.stringify(['move', path, target]), async () => {
+          const moved = await once(JSON.stringify(['move', path]), async () => {
             const folder = path.startsWith(rootPath + '/'), id = folder ? folderId(path)! : path
             await deps.request(`/api/v1/workspace/${folder ? 'folders/' + encodeURIComponent(id) : 'files/' + encodeURIComponent(id) + '/folder'}`, 'PATCH', folder ? {parentId: folderId(target)} : {folderId: folderId(target)})
             changed(); return {from: path, to: folder ? target + '/' + id : path}
-          })
+          },target)
           result.moved.push(moved)
         } catch (error) { result.failed.push({path, error: error instanceof Error ? error.message : '移动失败'}) }
       }

@@ -1,6 +1,7 @@
 /** home-screen dictionary; zh defines the key set, en must match (type-checked) */
 export const strings = {
   zh: {
+    searchMore: '加载更多结果',
     addFolderRoot: '添加文件夹…',
     removeFolderRoot: '从列表移除',
     rootUnavailable: '不可用',
@@ -546,6 +547,7 @@ export const strings = {
     setAiEndpointModelsBad: '模型声明格式无效：必须是 JSON 数组，例如 [{ "id": "m" }]。',
   },
   en: {
+    searchMore: 'Load more results',
     addFolderRoot: 'Add folder…',
     removeFolderRoot: 'Remove from list',
     rootUnavailable: 'Not available',
@@ -1105,6 +1107,7 @@ export const strings = {
       'Invalid model declarations: must be a JSON array, e.g. [{ "id": "m" }].',
   },
   vi: {
+    searchMore: 'Tải thêm kết quả',
     addFolderRoot: 'Thêm thư mục…',
     removeFolderRoot: 'Xóa khỏi danh sách',
     rootUnavailable: 'Không khả dụng',
@@ -1668,6 +1671,7 @@ export const strings = {
       'Khai báo mô hình không hợp lệ: phải là mảng JSON, ví dụ [{ "id": "m" }].',
   },
   tr: {
+    searchMore: 'Daha fazla sonuç yükle',
     addFolderRoot: 'Klasör ekle…',
     removeFolderRoot: 'Listeden kaldır',
     rootUnavailable: 'Kullanılamıyor',
@@ -2235,6 +2239,7 @@ export const strings = {
       'Geçersiz model bildirimleri: bir JSON dizisi olmalıdır, örn. [{ "id": "m" }].',
   },
   ja: {
+    searchMore: '検索結果をさらに読み込む',
     addFolderRoot: 'フォルダーを追加…',
     removeFolderRoot: 'リストから削除',
     rootUnavailable: '利用不可',
@@ -2810,6 +2815,7 @@ export const strings = {
       'モデル宣言が不正です。JSON 配列（例: [{ "id": "m" }]）にしてください。',
   },
   ko: {
+    searchMore: '검색 결과 더 보기',
     addFolderRoot: '폴더 추가…',
     removeFolderRoot: '목록에서 제거',
     rootUnavailable: '사용할 수 없음',
@@ -3375,6 +3381,7 @@ export const strings = {
       '모델 선언이 잘못되었습니다. JSON 배열이어야 합니다(예: [{ "id": "m" }]).',
   },
   fr: {
+    searchMore: 'Charger plus de résultats',
     addFolderRoot: 'Ajouter un dossier…',
     removeFolderRoot: 'Retirer de la liste',
     rootUnavailable: 'Indisponible',
@@ -3962,6 +3969,7 @@ export const strings = {
       'Déclarations de modèle invalides : doit être un tableau JSON, ex. [{ "id": "m" }].',
   },
   de: {
+    searchMore: 'Weitere Ergebnisse laden',
     addFolderRoot: 'Ordner hinzufügen…',
     removeFolderRoot: 'Aus der Liste entfernen',
     rootUnavailable: 'Nicht verfügbar',
@@ -4545,6 +4553,7 @@ export const strings = {
       'Ungültige Modell-Deklarationen: muss ein JSON-Array sein, z. B. [{ "id": "m" }].',
   },
   es: {
+    searchMore: 'Cargar más resultados',
     addFolderRoot: 'Añadir carpeta…',
     removeFolderRoot: 'Quitar de la lista',
     rootUnavailable: 'No disponible',
@@ -5127,6 +5136,7 @@ export const strings = {
       'Declaraciones de modelo no válidas: debe ser un array JSON, p. ej. [{ "id": "m" }].',
   },
   th: {
+    searchMore: 'โหลดผลลัพธ์เพิ่มเติม',
     addFolderRoot: 'เพิ่มโฟลเดอร์…',
     removeFolderRoot: 'นำออกจากรายการ',
     rootUnavailable: 'ไม่พร้อมใช้งาน',
@@ -5686,6 +5696,7 @@ export const strings = {
     setAiEndpointModelsBad: 'การประกาศโมเดลไม่ถูกต้อง: ต้องเป็นอาร์เรย์ JSON เช่น [{ "id": "m" }]',
   },
   id: {
+    searchMore: 'Muat hasil lainnya',
     addFolderRoot: 'Tambah folder…',
     removeFolderRoot: 'Hapus dari daftar',
     rootUnavailable: 'Tidak tersedia',
@@ -6259,6 +6270,7 @@ export const strings = {
       'Deklarasi model tidak valid: harus berupa array JSON, mis. [{ "id": "m" }].',
   },
   ru: {
+    searchMore: 'Загрузить ещё результаты',
     addFolderRoot: 'Добавить папку…',
     removeFolderRoot: 'Убрать из списка',
     rootUnavailable: 'Недоступно',
@@ -6833,6 +6845,7 @@ export const strings = {
       'Неверные объявления моделей: нужен массив JSON, напр. [{ "id": "m" }].',
   },
   ar: {
+    searchMore: 'تحميل المزيد من النتائج',
     addFolderRoot: 'إضافة مجلد…',
     removeFolderRoot: 'إزالة من القائمة',
     rootUnavailable: 'غير متاح',
@@ -7397,6 +7410,7 @@ export const strings = {
       'إعلانات نماذج غير صالحة: يجب أن تكون مصفوفة JSON، مثل [{ "id": "m" }].',
   },
   pt: {
+    searchMore: 'Carregar mais resultados',
     addFolderRoot: 'Adicionar pasta…',
     removeFolderRoot: 'Remover da lista',
     rootUnavailable: 'Indisponível',
@@ -7967,6 +7981,7 @@ export const strings = {
       'Declarações de modelo inválidas: deve ser um array JSON, ex. [{ "id": "m" }].',
   },
   it: {
+    searchMore: 'Carica altri risultati',
     addFolderRoot: 'Aggiungi cartella…',
     removeFolderRoot: "Rimuovi dall'elenco",
     rootUnavailable: 'Non disponibile',
@@ -8538,6 +8553,7 @@ export const strings = {
       'Dichiarazioni di modello non valide: deve essere un array JSON, es. [{ "id": "m" }].',
   },
   pl: {
+    searchMore: 'Wczytaj więcej wyników',
     addFolderRoot: 'Dodaj folder…',
     removeFolderRoot: 'Usuń z listy',
     rootUnavailable: 'Niedostępny',
@@ -9104,6 +9120,7 @@ export const strings = {
       'Nieprawidłowe deklaracje modeli: musi być tablicą JSON, np. [{ "id": "m" }].',
   },
   cs: {
+    searchMore: 'Načíst další výsledky',
     addFolderRoot: 'Přidat složku…',
     removeFolderRoot: 'Odebrat ze seznamu',
     rootUnavailable: 'Nedostupné',
@@ -9666,6 +9683,7 @@ export const strings = {
     setAiEndpointModelsBad: 'Neplatné deklarace modelů: musí být pole JSON, např. [{ "id": "m" }].',
   },
   nl: {
+    searchMore: 'Meer resultaten laden',
     addFolderRoot: 'Map toevoegen…',
     removeFolderRoot: 'Uit lijst verwijderen',
     rootUnavailable: 'Niet beschikbaar',
@@ -10231,6 +10249,7 @@ export const strings = {
       'Ongeldige modelverklaringen: moet een JSON-array zijn, bijv. [{ "id": "m" }].',
   },
   ms: {
+    searchMore: 'Muat lebih banyak hasil',
     addFolderRoot: 'Tambah folder…',
     removeFolderRoot: 'Buang daripada senarai',
     rootUnavailable: 'Tidak tersedia',
@@ -10799,6 +10818,7 @@ export const strings = {
       'Pengisytiharan model tidak sah: mesti tatasusunan JSON, cth. [{ "id": "m" }].',
   },
   he: {
+    searchMore: 'טעינת תוצאות נוספות',
     addFolderRoot: 'הוספת תיקייה…',
     removeFolderRoot: 'הסרה מהרשימה',
     rootUnavailable: 'לא זמין',
@@ -11348,6 +11368,7 @@ export const strings = {
     setAiEndpointModelsBad: 'הצהרות מודל לא חוקיות: חייב להיות מערך JSON, למשל [{ "id": "m" }].',
   },
   hi: {
+    searchMore: 'और परिणाम लोड करें',
     addFolderRoot: 'फ़ोल्डर जोड़ें…',
     removeFolderRoot: 'सूची से हटाएँ',
     rootUnavailable: 'उपलब्ध नहीं',
@@ -11910,6 +11931,7 @@ export const strings = {
     setAiEndpointModelsBad: 'अमान्य मॉडल घोषणाएँ: JSON सरणी होनी चाहिए, उदाहरण [{ "id": "m" }]।',
   },
   'zh-TW': {
+    searchMore: '載入更多結果',
     addFolderRoot: '加入資料夾…',
     removeFolderRoot: '從清單移除',
     rootUnavailable: '無法使用',
