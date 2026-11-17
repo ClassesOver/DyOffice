@@ -9,10 +9,10 @@
  * tools go through the gsk CLI in @genoffice/ai-search.
  */
 
-import { aiFetch } from './fetch'
-import { endpointUrl } from './protocols/shared'
-import { httpBodyDetail } from './http-error'
-import { openAiContentText, readCappedResponseText } from './protocols/shared'
+import { aiFetch } from './fetch.ts'
+import { endpointUrl } from './protocols/shared.ts'
+import { httpBodyDetail } from './http-error.ts'
+import { openAiContentText, readCappedResponseText } from './protocols/shared.ts'
 import {
   DASHSCOPE_BASE_URL,
   GEMINI_MEDIA_BASE_URL,
@@ -21,8 +21,8 @@ import {
   getMediaProviderMeta,
   STABILITY_BASE_URL,
   BFL_BASE_URL,
-} from './media'
-import type { AiMediaProviderConfig, AiMediaProviderId, AiMediaProviderMeta } from './types'
+} from './media.ts'
+import type { AiMediaProviderConfig, AiMediaProviderId, AiMediaProviderMeta } from './types.ts'
 
 export interface MediaBlob {
   bytes: Uint8Array

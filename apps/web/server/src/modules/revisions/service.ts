@@ -19,7 +19,7 @@ const historyDto = (row: History) => ({ revision: row.id, parentRevision: row.pa
 
 export function createRevisionService({ transactions, objects, files, quotaBytes = 1024 ** 3, maxUploads = 16, uploadTtlMs = 15 * 60_000 }: { transactions: PrincipalTransactions; objects: ObjectStore; files: FileService } & FilePolicy) {
   if (![quotaBytes,maxUploads,uploadTtlMs].every(value => Number.isSafeInteger(value) && value > 0) || quotaBytes > Number.MAX_SAFE_INTEGER / 2 || maxUploads > 1000 || uploadTtlMs > 24 * 3600_000) throw new Error('Invalid file policy')
-  const run = <T>(token: FileCredential, action: 'files:read' | 'files:write', operation: (connection: PoolClient, principal: BusinessPrincipal) => Promise<T>) => runFileTransaction(transactions,token,action,operation)
+  const run = <T>(token: FileCredential, action: 'files:read' | 'files:write', operation: (connection: PoolClient, principal: BusinessPrincipal) => Promise<T>) => runFileTransaction(transactions,token,action,operation).catch(error => { if (error?.code==='23514' && error?.constraint==='command_revision_guard') throw authError(409); throw error })
   async function historyRow(connection: PoolClient, principal: BusinessPrincipal, fileId: string, revision: string): Promise<History> {
     if (principal.job) throw authError(404)
     const row = (await connection.query<History>('SELECT * FROM file_revisions WHERE deployment_id=$1 AND owner_id=$2 AND file_id=$3 AND id=$4', [...scope(principal),fileId,revision])).rows[0]
@@ -105,6 +105,24 @@ export function createRevisionService({ transactions, objects, files, quotaBytes
           await connection.query('SELECT complete_native_job($1::uuid,$2::uuid,$3::bigint,$4::text,$5::uuid)',[principal.deploymentId,principal.job.id,principal.job.epoch,tokenHash(token.token),upload.revision_id])
         }
         return { fileId, revision: upload.revision_id, sha256: upload.sha256, size: upload.expected_size }
+      })
+    },
+    /** Internal PPTX draft adoption proof. Not a browser route: the upload ID
+     * was retained by the server that staged the export, never supplied by UI. */
+    async verifyUploadCommit(token: FileCredential, fileId: string, input: { uploadId: string; revision: string; baseRevision: string }) {
+      const id = uuid(fileId), uploadId = uuid(input.uploadId), revision = uuid(input.revision), base = uuid(input.baseRevision)
+      return run(token, 'files:read', async (connection, principal) => {
+        if (principal.job) throw authError(409)
+        const file = await loadFile(connection, principal, id)
+        if (file.current_revision !== revision) throw authError(409)
+        const result = await connection.query(
+          `SELECT 1 FROM uploads u JOIN revision_commits c
+           ON c.deployment_id=u.deployment_id AND c.owner_id=u.owner_id AND c.upload_id=u.id
+           WHERE u.deployment_id=$1 AND u.owner_id=$2 AND u.file_id=$3 AND u.id=$4
+           AND u.revision_id=$5 AND u.base_revision=$6 AND u.session_id=$7
+           AND u.state='committed' AND c.revision_id=u.revision_id AND c.base_revision=u.base_revision`,
+          [...scope(principal), id, uploadId, revision, base, principal.sessionId])
+        if (result.rowCount !== 1) throw authError(409)
       })
     },
     async getRevision(token: FileCredential, fileId: string, revision: string) {

@@ -34,7 +34,7 @@ async function imported(f, name = 'report.docx', token = f.alice.token) {
 
 test('workspace lists persisted files with bounded pagination without inventing recent opens', async t => {
   const f = await fileFixture(t)
-  assert.deepEqual(await list(f), { files: [], total: 0 })
+  assert.deepEqual(await list(f), { files: [], total: 0, totalAll: 0 })
   const first = await imported(f, 'first.docx'), second = await imported(f, 'second.docx')
   const listing = await list(f)
   assert.equal(listing.total, 2)
@@ -44,12 +44,12 @@ test('workspace lists persisted files with bounded pagination without inventing 
     assert.equal(file.starred, false); assert.equal(file.folderId, null); assert.equal(file.lastOpenedAt, null)
     assert.ok(file.size > 0); assert.equal(file.format, 'docx'); assert.ok(Number.isFinite(Date.parse(file.updatedAt)))
   }
-  assert.deepEqual(await list(f, '?view=recent'), { files: [], total: 0 })
-  assert.deepEqual(await list(f, '?view=starred'), { files: [], total: 0 })
+  assert.deepEqual(await list(f, '?view=recent'), { files: [], total: 0, totalAll: 0 })
+  assert.deepEqual(await list(f, '?view=starred'), { files: [], total: 0, totalAll: 0 })
   const page = await list(f, '?limit=1&offset=1')
   assert.equal(page.total, 2); assert.equal(page.files.length, 1)
   assert.equal(page.files[0].id, listing.files[1].id)
-  assert.deepEqual(await list(f, '?limit=1&offset=2'), { files: [], total: 2 })
+  assert.deepEqual(await list(f, '?limit=1&offset=2'), { files: [], total: 2, totalAll: 2 })
   assert.match((await request(f, 'GET', '/files')).headers['cache-control'], /no-store/)
 })
 
@@ -81,12 +81,12 @@ test('file moves persist membership and root filtering while nonempty folders ca
   const f = await fileFixture(t), id = await imported(f), box = await folder(f, 'Invoices')
   await mutate(f, 'PATCH', '/files/' + id + '/folder', { folderId: box.id })
   assert.equal((await list(f)).files[0].folderId, box.id)
-  assert.deepEqual(await list(f, '?folderId=root'), { files: [], total: 0 })
+  assert.deepEqual(await list(f, '?folderId=root'), { files: [], total: 0, totalAll: 0 })
   assert.equal((await list(f, '?folderId=' + box.id)).files[0].id, id)
   await mutate(f, 'DELETE', '/folders/' + box.id, undefined, 409)
   await mutate(f, 'PATCH', '/files/' + id + '/folder', { folderId: null })
   assert.equal((await list(f, '?folderId=root')).files[0].folderId, null)
-  assert.deepEqual(await list(f, '?folderId=' + box.id), { files: [], total: 0 })
+  assert.deepEqual(await list(f, '?folderId=' + box.id), { files: [], total: 0, totalAll: 0 })
   await mutate(f, 'DELETE', '/folders/' + box.id)
 })
 
@@ -133,7 +133,7 @@ test('trash hides workspace activity but restore retains folder stars and openin
   await mutate(f, 'POST', '/files/' + id + '/open')
   const saved = (await list(f)).files[0]
   await f.files.trashFile(f.alice.token, id)
-  for (const view of ['all','recent','starred']) assert.deepEqual(await list(f, '?view=' + view), { files: [], total: 0 })
+  for (const view of ['all','recent','starred']) assert.deepEqual(await list(f, '?view=' + view), { files: [], total: 0, totalAll: 0 })
   const trashed = (await list(f, '?view=trash')).files[0]
   assert.equal(trashed.folderId, box.id); assert.equal(trashed.starred, true); assert.equal(trashed.lastOpenedAt, saved.lastOpenedAt)
   for (const [method, path, body] of [['PUT','/star',{ starred: false }],['POST','/open'],['DELETE','/recent'],['PATCH','/folder',{ folderId: null }]]) await mutate(f, method, '/files/' + id + path, body, 404)
@@ -149,7 +149,7 @@ test('A B and config administrators cannot read or mutate one another workspace 
   await mutate(f, 'PUT', '/files/' + id + '/star', { starred: true })
   await mutate(f, 'POST', '/files/' + id + '/open')
   for (const token of [f.bob.token, f.adminSigned.token]) {
-    for (const view of ['all','recent','starred','trash']) assert.deepEqual(await list(f, '?view=' + view, token), { files: [], total: 0 })
+    for (const view of ['all','recent','starred','trash']) assert.deepEqual(await list(f, '?view=' + view, token), { files: [], total: 0, totalAll: 0 })
     assert.deepEqual((await request(f, 'GET', '/folders', undefined, token)).json(), { folders: [] })
     assert.equal((await request(f, 'GET', '/files?folderId=' + box.id, undefined, token)).statusCode, 404)
     for (const [method, path, body] of [['PUT','/files/' + id + '/star',{ starred: false }],['POST','/files/' + id + '/open'],['DELETE','/files/' + id + '/recent'],['PATCH','/files/' + id + '/folder',{ folderId: null }],['POST','/folders',{ name: 'Intrusion', parentId: box.id }],['PATCH','/folders/' + box.id,{ name: 'Intrusion' }],['DELETE','/folders/' + box.id]]) await mutate(f, method, path, body, 404, token)
@@ -162,7 +162,7 @@ test('A B and config administrators cannot read or mutate one another workspace 
 
 test('workspace rejects authority injection malformed inputs and unsafe folder names', async t => {
   const f = await fileFixture(t), id = await imported(f), box = await folder(f, 'Valid')
-  for (const query of ['view=unknown','view=all&view=trash','folderId=null','folderId=root%27%20OR%201=1--','folderId=../root','limit=0','limit=101','offset=-1','offset=1.5','ownerId=' + f.bob.user.id,'deploymentId=' + randomUUID()]) assert.equal((await request(f, 'GET', '/files?' + query)).statusCode, 400, query)
+  for (const query of ['view=unknown','view=all&view=trash','folderId=null','folderId=root%27%20OR%201=1--','folderId=../root','limit=101','offset=-1','offset=1.5','ownerId=' + f.bob.user.id,'deploymentId=' + randomUUID()]) assert.equal((await request(f, 'GET', '/files?' + query)).statusCode, 400, query)
   assert.equal((await request(f, 'GET', '/files?folderId=' + randomUUID())).statusCode, 404)
   assert.equal((await request(f, 'GET', '/folders?ownerId=' + f.bob.user.id)).statusCode, 400)
   for (const name of ['', ' ', '.', '..', 'a/b', 'a\\b', 'a\u0000b', 'a\nb', 'x'.repeat(101)]) await mutate(f, 'POST', '/folders', { name, parentId: null }, 400)
@@ -257,12 +257,12 @@ test('workspace trash excludes permanent purge fences while tombstones remain', 
   await f.files.trashFile(f.alice.token,id)
   assert.equal((await list(f,'?view=trash')).total,1)
   assert.equal((await f.files.purgeFile(f.alice.token,id)).state,'pending')
-  assert.deepEqual(await list(f,'?view=trash'),{files:[],total:0})
+  assert.deepEqual(await list(f,'?view=trash'),{files:[],total:0,totalAll:0})
   await mutate(f,'DELETE','/folders/'+box.id,undefined,404,f.bob.token)
   await mutate(f,'DELETE','/folders/'+box.id)
   offline=false
   assert.equal((await f.files.purgeFile(f.alice.token,id)).state,'purged')
-  assert.deepEqual(await list(f,'?view=trash'),{files:[],total:0})
+  assert.deepEqual(await list(f,'?view=trash'),{files:[],total:0,totalAll:0})
 })
 
 test('folder can be removed after its only file is permanently purged', async t => {

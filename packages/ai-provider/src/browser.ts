@@ -10,7 +10,7 @@ export type {
   AiProviderMeta,
   AiSettings,
   CodexModelCatalog,
-} from './types'
+} from './types.ts'
 export {
   AI_PROVIDERS,
   activeProvider,
@@ -19,7 +19,7 @@ export {
   MAX_MAX_OUTPUT_TOKENS,
   MIN_MAX_OUTPUT_TOKENS,
   clampMaxOutputTokens,
-} from './providers'
+} from './providers.ts'
 export {
   activeCustomEndpoint,
   customEndpointLabel,
@@ -28,15 +28,15 @@ export {
   resolveCustomEndpoints,
   selectCustomEndpoint,
   upsertCustomEndpoint,
-} from './custom-endpoints'
+} from './custom-endpoints.ts'
 export {
   AI_CUSTOM_PROTOCOLS,
   declaredModelProfile,
   normalizeCustomProfile,
   resolveCustomProfile,
-} from './custom-profile'
-export type { ResolvedCustomProfile } from './custom-profile'
-export { endpointSupportsVision, getProviderAdapter, modelLacksVision } from './registry'
-export { thinkingShapeFor, type ThinkingEffort, type ThinkingShape } from './thinking-effort'
-export { AI_MEDIA_PROVIDERS, imageGenerationAvailable, mediaAnalysisAvailable } from './media'
-export { AI_SEARCH_PROVIDERS } from './search-settings'
+} from './custom-profile.ts'
+export type { ResolvedCustomProfile } from './custom-profile.ts'
+export { endpointSupportsVision, getProviderAdapter, modelLacksVision } from './registry.ts'
+export { thinkingShapeFor, type ThinkingEffort, type ThinkingShape } from './thinking-effort.ts'
+export { AI_MEDIA_PROVIDERS, imageGenerationAvailable, mediaAnalysisAvailable } from './media.ts'
+export { AI_SEARCH_PROVIDERS } from './search-settings.ts'

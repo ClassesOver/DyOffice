@@ -30,7 +30,10 @@ export function repoRoot(): string | null {
     const pkg = join(dir, 'package.json')
     if (existsSync(pkg)) {
       try {
-        if (JSON.parse(readFileSync(pkg, 'utf-8')).name === 'genoffice') {
+        // The web split renamed the root package to "dyoffice"; accept both so
+        // the dev checkout keeps resolving jsdom/pdfium/sidecar for the CLI.
+        const name = JSON.parse(readFileSync(pkg, 'utf-8')).name
+        if (name === 'genoffice' || name === 'dyoffice') {
           cachedRepo = dir
           return dir
         }

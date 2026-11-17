@@ -32,3 +32,41 @@ This is a scoped UI phase, not full T12 end-to-end closure. Keep #52's native en
 ## Exact-stage browser smoke
 
 The freshly built stage was served directly by the original Fastify app against disposable PostgreSQL and local temporary objects, without the preceding fault-injection wrapper. Chromium login, author edit followed by autoSave switch, explicit save, browser reload and reopened preferences all passed (author `Scoped UI stage`, autoSave true). Home XLSX opening downloaded4009bytes identical to the original SHA256 `d94493ae46e91d925edaa569fcddd45199e36753f30a8d49fcecfe001db550fb`; URL remained the Home page, not a native editor. This smoke is exact-stage evidence; it does not repeat the entire predecessor GUI matrix. Services stopped normally.
+
+## Current-target integration (supersedes old navigation exclusions)
+
+Integrated against target `d6ab6e4a6dc37234e48acfe9979e8514cf88d8aa`.
+The current capability-gated DOCX/XLSX top-level routes from #125 are retained.
+PPTX/PDF and noneditable formats only download an authorized original; the
+endpoint must exactly bind the requested file ID and returned revision. No new
+native capability, provider execution, or production isolation is enabled.
+
+Home recent/starred/search requests now use server pagination and literal query
+filtering. Counts use limit=0; toggle/stat use a single selected file identity.
+The workspace query remains authenticated, parameterized and RLS-scoped, with
+bounded input. totalAll counts the same view/folder before ext/q filters; direct
+ID lookup scopes both rows and counts to that ID before materialization.
+Search/count operations can still scan matching user data; offset pagination
+under concurrent changes does not provide a multi-request snapshot.
+FolderListing is still an unpaged contract: directory enumeration is bounded to
+10,000 and fails visibly above that limit. Directory refresh fan-out and database
+count-query cost are not claimed solved.
+
+Local validation on the integrated candidate:
+- Navigation/client/preferences/Home focused suite: 64/64.
+- Web default test command: 345 passed, 1 skipped, 0 failed.
+- Shell component suite: 90/90.
+- Real disposable PostgreSQL workspace/filter/permissions/concurrency: 16/16.
+  Includes same-database cross-deployment ID rejection, same-timestamp stable
+  ID ordering, and 200/201-codepoint Unicode query boundaries. Actual EXPLAIN
+  ANALYZE used Index Scan with deployment/owner/id predicates and one returned
+  row, without forcing planner flags. This is fixture evidence, not a load benchmark.
+- Shell, Web and server TypeScript checks and Shell production build are recorded
+  separately in the PR completion report.
+- Independent frontend review: 46 navigation/Home tests passed, no blocking finding.
+
+Initial linked pdfjs worker dependency produced a Vite denied-path failure;
+copying the same dependency into this isolated snapshot resolved it without
+changing any security setting. Initial build command path/config mistakes were
+corrected, not reported as passes. Browser/desktop/CI and production sandbox
+acceptance were not rerun and remain outside this local validation claim.

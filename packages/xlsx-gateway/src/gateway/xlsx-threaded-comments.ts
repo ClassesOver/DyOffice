@@ -3,9 +3,9 @@
 /// the legacy comments part only mirrors it behind a "[Threaded comment]"
 /// notice. Rewriting the mirror alone leaves Excel showing the stale thread.
 
-import { decodeXlsxEscapes } from './xlsx-escapes'
-import { resolveRelTarget } from './xlsx-drawing-add'
-import { nextFreeRelationshipId } from './xlsx-sheets'
+import { decodeXlsxEscapes } from './xlsx-escapes.ts'
+import { resolveRelTarget } from './xlsx-drawing-add.ts'
+import { nextFreeRelationshipId } from './xlsx-sheets.ts'
 
 export const THREADED_COMMENTS_REL_TYPE =
   'http://schemas.microsoft.com/office/2017/10/relationships/threadedComment'

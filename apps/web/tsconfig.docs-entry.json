@@ -1,0 +1,1 @@
+{"extends":"./tsconfig.docs.json","include":["src/editors/native-docs-entry.tsx","src/editors/docs-entry.tsx","../docs/src/renderer/*.d.ts"]}

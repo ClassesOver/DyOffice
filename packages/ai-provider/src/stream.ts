@@ -1,26 +1,26 @@
 import type { AgentMessage, AgentToolDef } from '@genoffice/agent-core'
-import { withOutputCapFallback } from './output-cap'
-import { streamAnthropic } from './protocols/anthropic'
-import { streamGemini } from './protocols/gemini'
-import { streamOpenAiCompatible } from './protocols/openai-compatible'
-import { streamOpenAiResponses } from './protocols/openai-responses'
-import { streamCodexAppServer } from './codex-app-server'
-import type { StreamCallbacks } from './protocols/shared'
-import { getProviderAdapter, type AiProtocol } from './registry'
+import { withOutputCapFallback } from './output-cap.ts'
+import { streamAnthropic } from './protocols/anthropic.ts'
+import { streamGemini } from './protocols/gemini.ts'
+import { streamOpenAiCompatible } from './protocols/openai-compatible.ts'
+import { streamOpenAiResponses } from './protocols/openai-responses.ts'
+import { streamCodexAppServer } from './codex-app-server.ts'
+import type { StreamCallbacks } from './protocols/shared.ts'
+import { getProviderAdapter, type AiProtocol } from './registry.ts'
 import {
   anthropicThinkingFields,
   geminiThinkingLevelFor,
   openAiEffortFor,
   toggleThinkingBodyFor,
-} from './thinking-effort'
-import type { AiProviderConfig, AiProviderId } from './types'
+} from './thinking-effort.ts'
+import type { AiProviderConfig, AiProviderId } from './types.ts'
 
-export { streamAnthropic } from './protocols/anthropic'
-export { streamGemini } from './protocols/gemini'
-export { streamOpenAiCompatible } from './protocols/openai-compatible'
-export { streamOpenAiResponses } from './protocols/openai-responses'
-export { AiCreditsError, sseLines } from './protocols/shared'
-export type { StreamCallbacks } from './protocols/shared'
+export { streamAnthropic } from './protocols/anthropic.ts'
+export { streamGemini } from './protocols/gemini.ts'
+export { streamOpenAiCompatible } from './protocols/openai-compatible.ts'
+export { streamOpenAiResponses } from './protocols/openai-responses.ts'
+export { AiCreditsError, sseLines } from './protocols/shared.ts'
+export type { StreamCallbacks } from './protocols/shared.ts'
 
 /** route a streaming, tool-calling-capable turn by provider id */
 export async function streamForProvider(

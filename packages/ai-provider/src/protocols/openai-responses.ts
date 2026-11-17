@@ -1,8 +1,8 @@
 import type { AgentMessage, AgentToolCall, AgentToolDef } from '@genoffice/agent-core'
-import { aiFetch } from '../fetch'
-import { httpBodyDetail } from '../http-error'
-import type { AiChatResponse, AiProviderConfig, AiTokenUsage } from '../types'
-import { createStreamWatchdog, type StreamWatchdog } from '../watchdog'
+import { aiFetch } from '../fetch.ts'
+import { httpBodyDetail } from '../http-error.ts'
+import type { AiChatResponse, AiProviderConfig, AiTokenUsage } from '../types.ts'
+import { createStreamWatchdog, type StreamWatchdog } from '../watchdog.ts'
 import {
   endpointUrl,
   jsonBodyInsteadOfSse,
@@ -15,7 +15,7 @@ import {
   throwIfToolJsonOverBudget,
   openAiUsage,
   type StreamCallbacks,
-} from './shared'
+} from './shared.ts'
 
 /**
  * OpenAI Responses API (`POST /v1/responses`). GPT-5.4+ and GPT-6 call tools

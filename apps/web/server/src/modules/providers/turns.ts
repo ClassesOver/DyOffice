@@ -11,7 +11,7 @@ export interface TurnDependencies<P extends TurnPermit> {
   /** Read-only permit lookup. No budget reservation: settlement is a future wiring gate. */
   authorize(token: string, modelId: string): Promise<P>
   revalidate(token: string, permit: P): Promise<void>
-  stream(permit: P, request: TurnRequest, signal: AbortSignal): AsyncIterable<TurnEvent>
+  stream(permit: P, request: TurnRequest, signal: AbortSignal, context: {token:string;turnId:string}): AsyncIterable<TurnEvent>
 }
 class TurnError extends Error {}
 const fail = (message: string) => new TurnError(message)
@@ -40,13 +40,23 @@ function normalize(event: TurnEvent): TurnEvent {
   if (new TextEncoder().encode(json).length > 256 * 1024) throw fail('AI turn unavailable')
   return JSON.parse(json) as TurnEvent
 }
-export function createProviderTurns<P extends TurnPermit>(deps: TurnDependencies<P>, {timeoutMs = 120_000,maxActive = 16}: {timeoutMs?: number;maxActive?: number} = {}) {
-  if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 2_147_483_647 || !Number.isSafeInteger(maxActive) || maxActive < 1) throw new Error('Invalid AI turn limits')
+export function createProviderTurns<P extends TurnPermit>(deps: TurnDependencies<P>, {timeoutMs = 120_000,maxActive = 16,cancelTimeoutMs = 10_000,maxOutputBytes = 4 * 1024 * 1024}: {timeoutMs?: number;maxActive?: number;cancelTimeoutMs?: number;maxOutputBytes?: number} = {}) {
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 2_147_483_647 || !Number.isSafeInteger(maxActive) || maxActive < 1 || !Number.isSafeInteger(cancelTimeoutMs) || cancelTimeoutMs < 1 || cancelTimeoutMs > 2_147_483_647 || !Number.isSafeInteger(maxOutputBytes) || maxOutputBytes < 1) throw new Error('Invalid AI turn limits')
+  let disposed = false
+  const cancellationStops = new Set<() => void>()
   const all = new Set<AbortController>()
   const active = new Map<string,AbortController>()
+  const cancellationLookups = new Set<Promise<TurnIdentity>>()
   return {
     activeCount: () => all.size,
-    async run(input: {token:string;modelId:string;turnId:string;request:unknown}, emit:(event:TurnEvent)=>void|Promise<void>) {
+    pendingCount: () => all.size + cancellationLookups.size,
+    dispose() {
+      disposed = true
+      for (const controller of all) controller.abort(fail('AI turn unavailable'))
+      for (const stop of cancellationStops) stop()
+    },
+    async run(input: {token:string;modelId:string;turnId:string;request:unknown;signal?:AbortSignal}, emit:(event:TurnEvent)=>void|Promise<void>) {
+      if (disposed) throw fail('AI turn unavailable')
       if (!validId(input.turnId) || !validId(input.modelId) || typeof input.token !== 'string') throw fail('Invalid AI request')
       const {token,modelId,turnId} = input
       const request = snapshot(input.request)
@@ -57,6 +67,11 @@ export function createProviderTurns<P extends TurnPermit>(deps: TurnDependencies
       let key: string | undefined
       let abort!: () => void
       const stopped = new Promise<never>((_resolve,reject)=>{abort=()=>reject(controller.signal.reason);controller.signal.addEventListener('abort',abort,{once:true})})
+      // A pre-aborted caller can stop before the first Promise.race attaches.
+      void stopped.catch(()=>{})
+      const disconnect = () => controller.abort(fail('AI turn cancelled'))
+      input.signal?.addEventListener('abort',disconnect,{once:true})
+      if (input.signal?.aborted) disconnect()
       const deadline = setTimeout(()=>controller.abort(fail('AI turn timed out')),timeoutMs)
       const step = <T>(operation:()=>Promise<T>):Promise<T> => {
         if (controller.signal.aborted) return Promise.reject(controller.signal.reason)
@@ -69,6 +84,7 @@ export function createProviderTurns<P extends TurnPermit>(deps: TurnDependencies
         return Promise.race([work,stopped])
       }
       let iterator: AsyncIterator<TurnEvent> | undefined
+      let outputBytes = 0
       try {
         const identity = await step(()=>deps.identity(token))
         key = identityKey(identity) + ':' + turnId
@@ -77,11 +93,15 @@ export function createProviderTurns<P extends TurnPermit>(deps: TurnDependencies
         const permit = await step(()=>deps.authorize(token,modelId))
         if (identityKey(permit.identity) !== identityKey(identity) || !permit.revision) throw fail('AI turn unavailable')
         await step(()=>deps.revalidate(token,permit))
-        iterator = deps.stream(permit,request,controller.signal)[Symbol.asyncIterator]()
+        iterator = deps.stream(permit,request,controller.signal,{token,turnId})[Symbol.asyncIterator]()
         for (;;) {
           const result = await step(()=>iterator!.next())
           if (result.done) break
           const event = normalize(result.value)
+          // Budget normalized JSON payload bytes, not UTF-16 code units.
+          const eventBytes = new TextEncoder().encode(JSON.stringify(event)).byteLength
+          if (eventBytes > maxOutputBytes - outputBytes) throw fail('AI turn output limit exceeded')
+          outputBytes += eventBytes
           await step(()=>deps.revalidate(token,permit))
           await step(async()=>{await emit(event)})
         }
@@ -89,6 +109,7 @@ export function createProviderTurns<P extends TurnPermit>(deps: TurnDependencies
         throw error instanceof TurnError ? error : fail('AI turn unavailable')
       } finally {
         clearTimeout(deadline)
+        input.signal?.removeEventListener('abort',disconnect)
         controller.signal.removeEventListener('abort',abort)
         controller.abort()
         if (key && active.get(key)===controller) active.delete(key)
@@ -104,12 +125,30 @@ export function createProviderTurns<P extends TurnPermit>(deps: TurnDependencies
       }
     },
     async cancel(token:string,turnId:string) {
+      if (disposed) throw fail('AI turn unavailable')
       if (!validId(turnId)) return false
-      const identity = await deps.identity(token)
-      const controller = active.get(identityKey(identity)+':'+turnId)
-      if (!controller) return false
-      controller.abort(fail('AI turn cancelled'))
-      return true
+      if (typeof token !== 'string') throw fail('AI turn unavailable')
+      if (cancellationLookups.size >= maxActive) throw fail('AI cancellation capacity reached')
+      const lookup = Promise.resolve().then(()=>{if(disposed)throw fail('AI turn unavailable');return deps.identity(token)})
+      cancellationLookups.add(lookup)
+      // A timed-out lookup still owns its slot until the dependency actually settles.
+      void lookup.then(()=>cancellationLookups.delete(lookup),()=>cancellationLookups.delete(lookup))
+      let deadline: ReturnType<typeof setTimeout> | undefined
+      let stop!: () => void
+      const shutdown = new Promise<never>((_,reject)=>{stop=()=>reject(fail('AI turn unavailable'));cancellationStops.add(stop)})
+      const expired = new Promise<never>((_resolve,reject)=>{
+        deadline = setTimeout(()=>reject(fail('AI cancellation timed out')),cancelTimeoutMs)
+      })
+      try {
+        const identity = await Promise.race([lookup,expired,shutdown])
+        if (disposed) throw fail('AI turn unavailable')
+        const controller = active.get(identityKey(identity)+':'+turnId)
+        if (!controller) return false
+        controller.abort(fail('AI turn cancelled'))
+        return true
+      } catch (error) {
+        throw error instanceof TurnError ? error : fail('AI turn unavailable')
+      } finally { clearTimeout(deadline); cancellationStops.delete(stop) }
     },
   }
 }

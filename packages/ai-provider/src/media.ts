@@ -4,7 +4,7 @@ import type {
   AiMediaProviderMeta,
   AiMediaSettings,
   AiSettings,
-} from './types'
+} from './types.ts'
 
 export const OPENAI_IMAGES_BASE_URL = 'https://api.openai.com/v1'
 export const GEMINI_MEDIA_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta'

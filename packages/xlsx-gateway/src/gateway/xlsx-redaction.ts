@@ -1,4 +1,4 @@
-import { shiftCellArea, type StructuralOp } from './xlsx-structure'
+import { shiftCellArea, type StructuralOp } from './xlsx-structure.ts'
 
 /// Withholding cell values from the model: the marks live in a custom package
 /// part, `xl/gxRedactions.json`.
@@ -34,8 +34,8 @@ import { shiftCellArea, type StructuralOp } from './xlsx-structure'
 /// entry it was not told to replace byte-for-byte (`archive.rs:209`), and
 /// `readArchiveEntryText` reads any entry back, so no engine API was needed.
 
-import { nextFreeRelationshipId } from './xlsx-sheets'
-import { appendDefinedNames, escapeXmlText, unescapeXml } from './xlsx-defined-names'
+import { nextFreeRelationshipId } from './xlsx-sheets.ts'
+import { appendDefinedNames, escapeXmlText, unescapeXml } from './xlsx-defined-names.ts'
 
 export class RedactionError extends Error {}
 /** One withheld rectangle, in zero-based screen coordinates. */

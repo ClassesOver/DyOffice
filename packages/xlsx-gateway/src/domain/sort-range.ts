@@ -1,5 +1,5 @@
-import { columnIndex, formatAddress, parseRange } from './cell-address'
-import type { CellScalar, CellState } from './workbook.types'
+import { columnIndex, formatAddress, parseRange } from './cell-address.ts'
+import type { CellScalar, CellState } from './workbook.types.ts'
 
 /**
  * Computes the cell rewrites a sort produces, so sorting rides the existing

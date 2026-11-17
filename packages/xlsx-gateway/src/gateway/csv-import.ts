@@ -5,7 +5,7 @@
 /// free of node APIs: the half that writes the xlsx archive lives in
 /// csv-import-xlsx, which only the desktop path loads.
 
-import { encodeXlsxEscapes } from './xlsx-escapes'
+import { encodeXlsxEscapes } from './xlsx-escapes.ts'
 
 const DELIMITERS = [',', ';', '\t'] as const
 

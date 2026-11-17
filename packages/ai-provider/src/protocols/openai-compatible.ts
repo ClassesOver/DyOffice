@@ -1,10 +1,10 @@
 import type { AgentMessage, AgentToolCall, AgentToolDef } from '@genoffice/agent-core'
-import { aiFetch } from '../fetch'
-import { httpBodyDetail } from '../http-error'
-import { gensparkAttributionHeaders, opencodeSessionHeaders } from '../providers'
-import { modelEchoesReasoning } from '../registry'
-import type { AiChatResponse, AiProviderConfig } from '../types'
-import { createStreamWatchdog, type StreamWatchdog } from '../watchdog'
+import { aiFetch } from '../fetch.ts'
+import { httpBodyDetail } from '../http-error.ts'
+import { gensparkAttributionHeaders, opencodeSessionHeaders } from '../providers.ts'
+import { modelEchoesReasoning } from '../registry.ts'
+import type { AiChatResponse, AiProviderConfig } from '../types.ts'
+import { createStreamWatchdog, type StreamWatchdog } from '../watchdog.ts'
 import {
   endpointUrl,
   jsonBodyInsteadOfSse,
@@ -18,8 +18,8 @@ import {
   throwIfToolJsonOverBudget,
   openAiUsage,
   type StreamCallbacks,
-} from './shared'
-import type { AiTokenUsage } from '../types'
+} from './shared.ts'
+import type { AiTokenUsage } from '../types.ts'
 
 interface ChatUsage {
   prompt_tokens?: unknown

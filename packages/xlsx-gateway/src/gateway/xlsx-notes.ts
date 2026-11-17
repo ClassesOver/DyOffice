@@ -4,7 +4,7 @@
 /// [Content_Types].xml entries. Non-note VML shapes (checkboxes, buttons)
 /// survive a rewrite untouched.
 
-import { encodeXlsxEscapes } from './xlsx-escapes'
+import { encodeXlsxEscapes } from './xlsx-escapes.ts'
 import {
   allocatePartPath,
   appendRelationship,
@@ -12,18 +12,18 @@ import {
   relativeTarget,
   relsPathFor,
   resolveRelTarget,
-} from './xlsx-drawing-add'
-import { ensureRelationshipNamespace } from './xlsx-namespace'
-import { nextFreeRelationshipId } from './xlsx-sheets'
+} from './xlsx-drawing-add.ts'
+import { ensureRelationshipNamespace } from './xlsx-namespace.ts'
+import { nextFreeRelationshipId } from './xlsx-sheets.ts'
 import {
   parseLegacyComments,
   syncThreadedComments,
   THREADED_COMMENTS_REL_TYPE,
   type LegacyCommentEntry,
   type SheetThread,
-} from './xlsx-threaded-comments'
+} from './xlsx-threaded-comments.ts'
 
-export type { SheetThread, SheetThreadReply } from './xlsx-threaded-comments'
+export type { SheetThread, SheetThreadReply } from './xlsx-threaded-comments.ts'
 
 export class NoteEditError extends Error {}
 

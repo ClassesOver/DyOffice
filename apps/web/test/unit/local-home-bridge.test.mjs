@@ -9,7 +9,7 @@ test('local Home stars come from persistence across bridge instances and repeate
  let star=false,writes=0,release
  const request=async(path,method,body)=>{
   if(method==='PUT'){writes++;await new Promise(resolve=>{release=resolve});star=body.starred;return}
-  return {files:[{...item,starred:star}],total:1}
+  return {files:[{...item,starred:star}],total:1,totalAll:1}
  }
  const bridge=createLocalHomeBridge(deps(request));const a=bridge.toggleStar('file-a');const b=bridge.toggleStar('file-a')
  await new Promise(resolve=>setImmediate(resolve));assert.equal(writes,1);release();await Promise.all([a,b])
@@ -19,7 +19,7 @@ test('recent removal uses its isolated operation and preserves file identity and
  const calls=[];let recent=true
  const bridge=createLocalHomeBridge(deps(async(path,method)=>{
   calls.push({path,method});if(method==='DELETE'){recent=false;return}
-  const files=path.includes('view=recent')&&!recent?[]:[item];return {files,total:files.length}
+  const all=path.includes('view=recent')&&!recent?[]:[item];const files=path.includes('limit=0')?[]:all;return {files,total:all.length,totalAll:all.length}
  }))
  assert.equal((await bridge.recents({limit:0})).total,1)
  await bridge.removeRecent(['file-a']);assert.equal((await bridge.recents()).total,0)
@@ -30,7 +30,7 @@ test('original folder UI maps server identities to stable nested virtual paths',
  const calls=[];const folders=[{id:'parent',name:'Projects',parentId:null,updatedAt:'2026-01-01'}, {id:'child',name:'Reports',parentId:'parent',updatedAt:'2026-01-01'}]
  const bridge=createLocalHomeBridge(deps(async(path,method,body)=>{
   calls.push({path,method,body});if(method==='PATCH')return {...folders[1],parentId:null}
-  return path.endsWith('/folders')?{folders}:{files:[item],total:1}
+  return path.endsWith('/folders')?{folders}:{files:[item],total:1,totalAll:1}
  }))
  assert.equal((await bridge.folderRoots())[0].path,'/workspace')
  const root=await bridge.listFolder('/workspace');assert.equal(root.folders[0].path,'/workspace/parent')
@@ -39,7 +39,7 @@ test('original folder UI maps server identities to stable nested virtual paths',
  assert.deepEqual(calls.find(c=>c.method==='PATCH').body,{parentId:null})
 })
 test('failed star write cannot manufacture success or change the next server projection',async()=>{
- let changed=0;const bridge=createLocalHomeBridge({...deps(async(_path,method)=>{if(method==='PUT')throw new Error('rejected');return {files:[item],total:1}}),changed:()=>changed++})
+ let changed=0;const bridge=createLocalHomeBridge({...deps(async(_path,method)=>{if(method==='PUT')throw new Error('rejected');return {files:[item],total:1,totalAll:1}}),changed:()=>changed++})
  await assert.rejects(bridge.toggleStar('file-a'),/rejected/)
  assert.equal((await bridge.recents()).entries[0].starred,false)
  assert.equal(changed,0)
@@ -71,7 +71,7 @@ test('an explicit unstar cannot be swallowed by an opposite toggle already in fl
  let finish,starred=false;const writes=[]
  const bridge=createLocalHomeBridge(deps(async(_path,method,body)=>{
   if(method==='PUT'){writes.push(body.starred);if(body.starred)await new Promise(resolve=>{finish=resolve});starred=body.starred;return}
-  return {files:[{...item,starred}],total:1}
+  return {files:[{...item,starred}],total:1,totalAll:1}
  }))
  const pending=bridge.toggleStar('file-a')
  await new Promise(resolve=>setImmediate(resolve))
@@ -82,3 +82,21 @@ test('an explicit unstar cannot be swallowed by an opposite toggle already in fl
  assert.deepEqual(writes,[true,false]);assert.equal(starred,false)
 })
 
+
+test('recent page and count stay one bounded server query regardless of workspace size',async()=>{
+ const calls=[];const bridge=createLocalHomeBridge(deps(async path=>{calls.push(path);if(calls.length>1)throw new Error('unbounded scan');return {files:[],total:100000,totalAll:200000}}))
+ assert.deepEqual(await bridge.recents({offset:50,limit:0,ext:'xlsx'}),{entries:[],total:100000,totalAll:200000})
+ const url=new URL(calls[0],'https://local');assert.equal(url.searchParams.get('offset'),'50');assert.equal(url.searchParams.get('limit'),'0');assert.equal(url.searchParams.get('ext'),'xlsx')
+})
+test('search delegates literal query and page to server without enumeration',async()=>{
+ const calls=[];const bridge=createLocalHomeBridge(deps(async path=>{calls.push(path);if(calls.length>1)throw new Error('unbounded scan');return {files:[item],total:100000,totalAll:200000}}))
+ const page=await bridge.searchFiles({q:'%_报告',offset:20,limit:10,ext:'docx'})
+ assert.equal(page.total,100000);assert.equal(page.hits.length,1)
+ const url=new URL(calls[0],'https://local');assert.equal(url.searchParams.get('q'),'%_报告');assert.equal(url.searchParams.get('offset'),'20');assert.equal(url.searchParams.get('limit'),'10')
+})
+test('toggle and stat query only specified file identities',async()=>{
+ const calls=[];const bridge=createLocalHomeBridge(deps(async(path,method)=>{calls.push([path,method]);return {files:[item],total:1,totalAll:100000}}))
+ await bridge.toggleStar(item.id);await bridge.statPaths([item.id,item.id])
+ const reads=calls.filter(([,m])=>!m);assert.equal(reads.length,2)
+ for(const [path] of reads){const url=new URL(path,'https://local');assert.equal(url.searchParams.get('id'),item.id);assert.equal(url.searchParams.get('limit'),'1')}
+})

@@ -18,24 +18,59 @@ export function createSessionFileHost({ fetchImpl = fetch, editorId = crypto.ran
   const retryDelay = Math.max(0,Math.min(1000,Number.isFinite(leaseRetryDelayMs) ? leaseRetryDelayMs : 150))
   const listeners = new Set<() => void>()
   let csrf: string | undefined, disposed = false
+  // JSON metadata/preferences are bounded independently of 32MiB document bytes.
+  // 1MiB leaves room for ordinary file/capability lists without unbounded json().
+  const maxJsonBytes = 1024 * 1024
+  const requests = new Map<AbortController, boolean>()
+  const readers = new Set<ReadableStreamDefaultReader<Uint8Array>>()
+  const assertActive = () => { if (disposed) throw hostError('UNAVAILABLE','disposed') }
+  const discard = (reply: Response) => { void reply.body?.cancel().catch(() => {}) }
   const emit = () => { if (!disposed) { try { onState?.(); for (const listener of listeners) listener() } catch { /* UI listeners cannot change durable results. */ } } }
   const context = (fileId: string) => { const value = contexts.get(uuid(fileId)); if (!value || disposed) throw hostError('INVALID_REVISION','context'); return value }
   function remember(ref: RevisionRef) { references.set(ref.fileId + ':' + ref.revision,{ ...ref }); if (references.size > 256) references.delete(references.keys().next().value!) }
   async function request(path: string, init: RequestInit = {}): Promise<Response> {
-    if (disposed) throw hostError('UNAVAILABLE','disposed')
-    try { return await fetchImpl(path,{ ...init,credentials: 'same-origin',cache: 'no-store' }) }
-    catch (error) { if (error instanceof HostError) throw error; throw hostError('UNAVAILABLE','network') }
+    assertActive()
+    if (!/^\/api\/[^\s\u0000-\u001f\u007f\\#]*$/.test(path)) throw hostError('INVALID_RESPONSE','request path')
+    const controller = new AbortController(), keepalive = init.keepalive === true
+    requests.set(controller,keepalive)
+    try {
+      const reply = await fetchImpl(path,{ ...init,credentials: 'same-origin',mode: 'same-origin',redirect: 'error',cache: 'no-store',signal: controller.signal })
+      if (reply.redirected || (disposed && !keepalive)) { discard(reply); throw hostError('UNAVAILABLE','request unconfirmed') }
+      return reply
+    } catch (error) { controller.abort(); if (error instanceof HostError) throw error; throw hostError('UNAVAILABLE','network') }
+    finally { requests.delete(controller) }
   }
   async function readJson(reply: Response) {
-    if (!reply.ok) throw errorFor(reply.status)
-    if (reply.status === 204) return undefined
-    if (!reply.headers.get('content-type')?.includes('application/json')) throw hostError('INVALID_RESPONSE','JSON')
-    try { return await reply.json() } catch { throw hostError('INVALID_RESPONSE','JSON') }
+    if (disposed) { discard(reply); throw hostError('UNAVAILABLE','disposed') }
+    if (!reply.ok) { discard(reply); throw errorFor(reply.status) }
+    if (reply.status === 204) { discard(reply); return undefined }
+    if (reply.headers.get('content-type')?.split(';',1)[0].trim().toLowerCase() !== 'application/json') { discard(reply); throw hostError('INVALID_RESPONSE','JSON') }
+    const reader = reply.body?.getReader()
+    if (!reader) throw hostError('INVALID_RESPONSE','JSON body')
+    readers.add(reader)
+    try {
+      const decoder = new TextDecoder('utf-8',{fatal:true})
+      let text = '', size = 0
+      for (;;) {
+        assertActive()
+        const chunk = await reader.read()
+        assertActive()
+        if (chunk.done) break
+        size += chunk.value.byteLength
+        if (size > maxJsonBytes) throw hostError('INVALID_RESPONSE','JSON response limit')
+        text += decoder.decode(chunk.value,{stream:true})
+      }
+      text += decoder.decode()
+      assertActive()
+      return JSON.parse(text)
+    } catch (error) { if (error instanceof HostError) throw error; throw hostError('INVALID_RESPONSE','JSON') }
+    finally { readers.delete(reader); void reader.cancel().catch(() => {}); reader.releaseLock() }
   }
   const get = async (path: string) => readJson(await request(path))
   async function csrfToken() {
     if (!csrf) {
       const result = await get('/api/v1/auth/csrf')
+      assertActive()
       if (typeof result?.csrfToken !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(result.csrfToken)) throw hostError('INVALID_RESPONSE','csrf')
       csrf = result.csrfToken
     }
@@ -47,7 +82,10 @@ export function createSessionFileHost({ fetchImpl = fetch, editorId = crypto.ran
       // before disposal clears private browser state.
       const proof = csrf ?? await csrfToken()
       const reply = await request(path,{ method,keepalive,headers: { 'x-csrf-token': proof,...(body === undefined ? {} : { 'content-type': binary ? 'application/octet-stream' : 'application/json' }) },...(body === undefined ? {} : { body: binary ? body as BodyInit : JSON.stringify(body) }) })
-      if (reply.status === 403 && attempt === 0) { csrf = undefined; continue }
+      // A pagehide release may already be sent before disposal. Do not abort or
+      // replay it, and do not treat its late response as live UI authority.
+      if (disposed && keepalive) { discard(reply); if (!reply.ok) throw errorFor(reply.status); return undefined }
+      if (reply.status === 403 && attempt === 0) { discard(reply); csrf = undefined; continue }
       return readJson(reply)
     }
   }
@@ -105,6 +143,7 @@ export function createSessionFileHost({ fetchImpl = fetch, editorId = crypto.ran
     return promise
   }
   function accept(fileId: string, ctx: Context, pending: Pending, value: unknown) {
+    assertActive()
     if (!isRevisionRef(value) || value.fileId !== fileId || value.sha256 !== pending.sha256 || value.size !== pending.size) throw hostError('INVALID_RESPONSE','commit')
     const ref = { ...value }
     ctx.revision = ref; ctx.pending = null; ctx.status = 'idle'; ctx.staged.delete(pending.input.uploadId); remember(ref); emit()
@@ -128,6 +167,7 @@ export function createSessionFileHost({ fetchImpl = fetch, editorId = crypto.ran
       const id = uuid(fileId)
       if (contexts.get(id)?.pending || contexts.get(id)?.preparing) throw hostError('UNAVAILABLE','unconfirmed commit')
       const result = await get(`/api/v1/files/${id}`) as OpenFileResult & { name?: string }
+      assertActive()
       if (!isRevisionRef(result?.file) || result.file.fileId !== id) throw hostError('INVALID_RESPONSE','open')
       const name = typeof result.name === 'string' && result.name.length <= 255 ? result.name : id + '.' + result.format
       contexts.set(id,{ preparing: false,leaseOperation: 0,exclusiveLease: null,revision: { ...result.file },name,lease: null,pending: null,status: 'idle',staged: new Map() }); remember(result.file); emit()
@@ -138,22 +178,25 @@ export function createSessionFileHost({ fetchImpl = fetch, editorId = crypto.ran
       let ref = references.get(id + ':' + rev)
       if (!ref) {
         const fetched = await get(`/api/v1/files/${id}/revisions/${rev}`)
+        assertActive()
         if (!isRevisionRef(fetched) || fetched.fileId !== id || fetched.revision !== rev) throw hostError('INVALID_RESPONSE','revision metadata')
         ref = fetched; remember(ref)
       }
       if (ref.size < 1 || ref.size > 32 * 1024 * 1024) throw hostError('PAYLOAD_TOO_LARGE','read')
       const reply = await request(`/api/v1/files/${id}/content?revision=${rev}`)
-      if (!reply.ok) throw errorFor(reply.status)
-      if (!reply.headers.get('content-type')?.startsWith('application/octet-stream') || !reply.body) throw hostError('INVALID_RESPONSE','bytes')
+      if (!reply.ok) { discard(reply); throw errorFor(reply.status) }
+      if (!reply.headers.get('content-type')?.startsWith('application/octet-stream') || !reply.body) { discard(reply); throw hostError('INVALID_RESPONSE','bytes') }
       const reader = reply.body.getReader(), chunks: Uint8Array[] = []
       let size = 0
+      readers.add(reader)
       try {
-        for (;;) { const { value,done } = await reader.read(); if (done) break; size += value.byteLength; if (size > ref.size) throw hostError('INVALID_RESPONSE','length'); chunks.push(value) }
-      } catch (error) { await reader.cancel().catch(() => {}); throw error }
-      finally { reader.releaseLock() }
+        for (;;) { assertActive(); const { value,done } = await reader.read(); assertActive(); if (done) break; size += value.byteLength; if (size > ref.size) throw hostError('INVALID_RESPONSE','length'); chunks.push(value) }
+      } catch (error) { void reader.cancel().catch(() => {}); throw error }
+      finally { readers.delete(reader); reader.releaseLock() }
       const bytes = new Uint8Array(size); let offset = 0
       for (const chunk of chunks) { bytes.set(chunk,offset); offset += chunk.byteLength }
       if (size !== ref.size || await digest(bytes) !== ref.sha256) throw hostError('INVALID_RESPONSE','integrity')
+      assertActive()
       return bytes
     },
     async stageSave(bytes, fileId) {
@@ -164,6 +207,7 @@ export function createSessionFileHost({ fetchImpl = fetch, editorId = crypto.ran
         const result = await mutation(`/api/v1/files/${id}/uploads`,'POST',{ size: snapshot.byteLength,baseRevision: base,leaseEpoch: lease.leaseEpoch,editorId: editor })
         const uploadId = uuid(result?.uploadId)
         await mutation(`/api/v1/uploads/${uploadId}/content`,'PUT',snapshot,true)
+        assertActive()
         ctx.staged.set(uploadId,{ base,epoch: lease.leaseEpoch,sha256,size: snapshot.byteLength })
         return { uploadId }
       } catch (error) { if ((error as HostError).code === 'CONFLICT' || (error as HostError).code === 'UNAUTHORIZED') { revokeLease(id,ctx); ctx.status = (error as HostError).code === 'UNAUTHORIZED' ? 'unauthorized' : 'conflict'; emit() }; throw error }
@@ -248,6 +292,44 @@ export function createSessionFileHost({ fetchImpl = fetch, editorId = crypto.ran
         throw error
       } finally { ctx.preparing = false; emit() }
     },
+    // Slides save: the server exports the generation-pinned pptx session and
+    // stages it through the same T06 upload/receipt protocol as sheets. The
+    // request is the renderer session pointer {revision, generation}; the
+    // server resolves it against its in-process session and returns the
+    // prepared draft receipt. Never replays while a receipt is unconfirmed.
+    async saveSlides(fileId: string, request: unknown) {
+      const id = uuid(fileId), ctx = liveContext(id), lease = ctx.lease, base = ctx.revision.revision
+      if (ctx.pending || ctx.preparing) throw hostError('UNAVAILABLE','unconfirmed save')
+      if (!lease) throw hostError('CONFLICT','lease')
+      ctx.preparing = true; ctx.status = 'saving'; emit()
+      let committing = false
+      try {
+        const snapshot = structuredClone(request)
+        const draft = await mutation(`/api/v1/files/${id}/slides/uploads`,'POST',{ baseRevision: base,leaseEpoch: lease.leaseEpoch,editorId: editor,request: snapshot })
+        const uploadId = uuid(draft?.uploadId)
+        if (draft.baseRevision !== base || draft.leaseEpoch !== lease.leaseEpoch || typeof draft.sha256 !== 'string' || !/^[a-f0-9]{64}$/.test(draft.sha256) || !Number.isSafeInteger(draft.size) || draft.size < 1 || draft.size > 32 * 1024 * 1024) throw hostError('INVALID_RESPONSE','prepared deck')
+        if (context(id) !== ctx || ctx.revision.revision !== base || ctx.lease?.leaseEpoch !== lease.leaseEpoch) throw hostError('CONFLICT','changed save authority')
+        // Changed zip parts are optional (the slides save service does not diff them yet);
+        // the receipt itself stays the T06 idempotent commit.
+        const touchedEntries = Array.isArray(draft.touchedEntries) && draft.touchedEntries.length <= 256 && draft.touchedEntries.every((name: unknown) => typeof name === 'string' && name.length <= 1024) ? [...draft.touchedEntries as string[]] : []
+        committing = true
+        const saved = await commit(id,ctx,{ touchedEntries, input: Object.freeze({fileId: id,uploadId,baseRevision: base,leaseEpoch: lease.leaseEpoch,idempotencyKey: crypto.randomUUID()}),sha256: draft.sha256,size: draft.size })
+        return {...saved,touchedEntries}
+      } catch (error) {
+        if (!committing) {
+          const code = (error as HostError).code
+          ctx.status = code === 'UNAUTHORIZED' ? 'unauthorized' : code === 'CONFLICT' ? 'conflict' : 'idle'
+          if (code === 'UNAUTHORIZED' || code === 'CONFLICT') revokeLease(id,ctx)
+        }
+        throw error
+      } finally { ctx.preparing = false; emit() }
+    },
+    async reconcileSlides(fileId: string) {
+      const id = uuid(fileId), ctx = context(id), pending = ctx.pending
+      if (!pending) throw hostError('INVALID_REVISION','slides receipt')
+      const saved = await commit(id,ctx,pending)
+      return {...saved,touchedEntries:[...(pending.touchedEntries ?? [])]}
+    },
     async save(fileId: string, bytes: Uint8Array) {
       const id = uuid(fileId), ctx = context(id)
       if (ctx.pending) { const prior = ctx.pending; const recovered = await commit(id,ctx,prior); if (await digest(bytes) === prior.sha256) return recovered }
@@ -259,7 +341,7 @@ export function createSessionFileHost({ fetchImpl = fetch, editorId = crypto.ran
       if (!timers.has(id)) timers.set(id,setInterval(() => { if (!disposed && contexts.has(id)) { const ctx=liveContext(id); if(ctx.lease)void renewLease(id).catch(()=>{}) } },15_000))
       return () => { clearInterval(timers.get(id)); timers.delete(id) }
     },
-    dispose() { disposed = true; for (const timer of timers.values()) clearInterval(timer); for(const timer of expirations.values())clearTimeout(timer);expirations.clear();renewals.clear(); timers.clear(); listeners.clear(); contexts.clear(); references.clear(); csrf = undefined },
+    dispose() { disposed = true; for (const [controller,keepalive] of requests) if (!keepalive) controller.abort(); for (const reader of readers) void reader.cancel().catch(() => {}); for (const timer of timers.values()) clearInterval(timer); for(const timer of expirations.values())clearTimeout(timer);expirations.clear();renewals.clear(); timers.clear(); listeners.clear(); contexts.clear(); references.clear(); csrf = undefined },
   }
 }
 export type SessionFileHost = ReturnType<typeof createSessionFileHost>

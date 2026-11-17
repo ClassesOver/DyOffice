@@ -50,31 +50,38 @@ export function createWorkspaceService(transactions: PrincipalTransactions) {
   }
   return {
     async listFiles(token: string, options: WorkspaceFileQuery = {}): Promise<WorkspaceFileList> {
-      const input = record(options, ['view','folderId','limit','offset'])
+      const input = record(options, ['view','folderId','limit','offset','ext','q','id'])
       const view = input.view ?? 'all', limit = input.limit ?? 50, offset = input.offset ?? 0
-      if (!['all','recent','starred','trash'].includes(view as string) || !Number.isSafeInteger(limit) || (limit as number) < 1 || (limit as number) > 100 || !Number.isSafeInteger(offset) || (offset as number) < 0 || (offset as number) > 1_000_000) throw authError(400)
+      if (!['all','recent','starred','trash'].includes(view as string) || !Number.isSafeInteger(limit) || (limit as number) < 0 || (limit as number) > 100 || !Number.isSafeInteger(offset) || (offset as number) < 0 || (offset as number) > 1_000_000) throw authError(400)
+      if (input.ext !== undefined && !['docx','xlsx','pptx','pdf'].includes(input.ext as string)) throw authError(400)
+      if (input.q !== undefined && (typeof input.q !== 'string' || [...input.q].length > 200 || /[\u0000-\u001f\u007f]/u.test(input.q))) throw authError(400)
+      const selectedId = input.id === undefined ? null : uuid(input.id as string)
       const filtered = input.folderId !== undefined, folderId = !filtered || input.folderId === 'root' ? null : uuid(input.folderId as string)
       return access(token, 'files:read', async (connection, principal) => {
         if (folderId !== null) await requireFolder(connection, principal, folderId)
         const order = view === 'recent' ? 'last_opened_at DESC,id' : 'updated_at DESC,id'
         // Count and page share one MVCC snapshot, including an empty final page.
-        const result = (await connection.query<{ total: string; files: FileRow[] }>(`
-          WITH matching AS MATERIALIZED (
+        const result = (await connection.query<{ total: string; total_all: string; files: FileRow[] }>(`
+          WITH scoped AS MATERIALIZED (
             SELECT f.id,f.name,f.format,r.size,f.updated_at,
               COALESCE(s.starred,false) AS starred,s.folder_id,s.last_opened_at
             FROM files f
             JOIN file_revisions r ON r.deployment_id=f.deployment_id AND r.owner_id=f.owner_id AND r.file_id=f.id AND r.id=f.current_revision
             LEFT JOIN workspace_file_state s ON s.deployment_id=f.deployment_id AND s.owner_id=f.owner_id AND s.file_id=f.id
             WHERE f.deployment_id=$1 AND f.owner_id=$2 AND f.purge_started_at IS NULL
+              ${selectedId === null ? 'AND $10::uuid IS NULL' : 'AND f.id=$10::uuid'}
               AND (f.deleted_at IS NOT NULL)=($3::text='trash')
               AND ($3<>'recent' OR s.last_opened_at IS NOT NULL)
               AND ($3<>'starred' OR s.starred)
               AND (NOT $4::boolean OR s.folder_id IS NOT DISTINCT FROM $5::uuid)
+          ), matching AS MATERIALIZED (
+            SELECT * FROM scoped WHERE ($8::text IS NULL OR format=$8)
+              AND ($9::text IS NULL OR strpos(lower(name),lower($9)) > 0)
           )
-          SELECT (SELECT count(*) FROM matching) AS total,COALESCE(json_agg(page),'[]'::json) AS files
+          SELECT (SELECT count(*) FROM scoped) AS total_all,(SELECT count(*) FROM matching) AS total,COALESCE(json_agg(page),'[]'::json) AS files
           FROM (SELECT * FROM matching ORDER BY ${order} LIMIT $6 OFFSET $7) page
-        `, [...scope(principal),view,filtered,folderId,limit,offset])).rows[0]
-        return { files: result.files.map(fileDto), total: Number(result.total) }
+        `, [...scope(principal),view,filtered,folderId,limit,offset,input.ext ?? null,input.q ?? null,selectedId])).rows[0]
+        return { files: result.files.map(fileDto), total: Number(result.total), totalAll: Number(result.total_all) }
       })
     },
     listFolders: (token: string): Promise<WorkspaceFolderList> => access(token, 'workspace:read', async (connection, principal) => {

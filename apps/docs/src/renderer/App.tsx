@@ -1,3 +1,6 @@
+import { usePageColorState } from './page-color-state'
+import { useMirrorMarginsState } from './mirror-margins-state'
+import { useEvenOddHfState } from './even-odd-hf-state'
 import { FloatWatch } from './editor/float-watch'
 import { scriptFontHtml } from './editor/script-fonts'
 import { carryDocSeen } from './ai/tools'
@@ -888,8 +891,7 @@ export function App({ host }: { host?: { readOnly: boolean; assistantAvailable: 
   const [sectionsDirty, setSectionsDirty] = useState<number[]>([])
   /** Start type pending write to the trailing sectPr after inserting a continuous section break */
   const [trailingStartType, setTrailingStartType] = useState<SectionInfo['startType'] | null>(null)
-  const [pageColor, setPageColor] = useState<string | null>(null)
-  const [pageColorDirty, setPageColorDirty] = useState(false)
+  const { pageColor, setPageColor, pageColorDirty, setPageColorDirty, getPageColorSaveState } = usePageColorState()
   const [header, setHeader] = useState<HeaderFooter | null>(null)
   const [headerDirty, setHeaderDirty] = useState(false)
   const [footer, setFooter] = useState<HeaderFooter | null>(null)
@@ -898,10 +900,8 @@ export function App({ host }: { host?: { readOnly: boolean; assistantAvailable: 
   const [hfVariantsDirty, setHfVariantsDirty] = useState<HfVariantKey[]>([])
   const [titlePg, setTitlePg] = useState(false)
   const [titlePgDirty, setTitlePgDirty] = useState(false)
-  const [evenOddHf, setEvenOddHf] = useState(false)
-  const [evenOddHfDirty, setEvenOddHfDirty] = useState(false)
-  const [mirrorMargins, setMirrorMargins] = useState(false)
-  const [mirrorMarginsDirty, setMirrorMarginsDirty] = useState(false)
+  const { evenOddHf, setEvenOddHf, evenOddHfDirty, setEvenOddHfDirty, getEvenOddHfSaveState } = useEvenOddHfState()
+  const { mirrorMargins, setMirrorMargins, mirrorMarginsDirty, setMirrorMarginsDirty, getMirrorMarginsSaveState } = useMirrorMarginsState()
   const [pageInfo, setPageInfo] = useState({ current: 1, total: 1 })
   // last page's number for the document-end footer: text for the page marker, num for
   // even/odd parity (section restarts / pageNumberFmt make both differ from the physical count)
@@ -2259,6 +2259,10 @@ export function App({ host }: { host?: { readOnly: boolean; assistantAvailable: 
     null,
   )
   fileCtxRef.current = {
+    getCurrentSaveContext: () => fileCtxRef.current,
+    getPageColorSaveState,
+    getMirrorMarginsSaveState,
+    getEvenOddHfSaveState,
     hostLifecycle: host?.lifecycle,
     editor,
     doc,

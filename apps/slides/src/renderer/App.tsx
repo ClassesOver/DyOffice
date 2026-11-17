@@ -360,7 +360,37 @@ function thumbBox(slide: RenderSlide, width: number) {
   return { width, height: (slide.heightPx * width) / slide.widthPx }
 }
 
-export function App() {
+/** Save/dirty/reopen cycle the Web host entry drives (T10) — mirrors the sheets editor handle. */
+export interface SlidesEditorHandle {
+  /** Run the renderer's full save flow (flush the edit overlay + notes, then save in place). */
+  saveAndWait(): Promise<boolean>
+  /** Session-authoritative dirty flag, updated from every slidesApi round trip. */
+  isDirty(): boolean
+  /** Re-fetch the deck from the session (takeover/refresh path); false when the session is unreachable. */
+  reload(): Promise<boolean>
+}
+
+/** Optional host seam: everything keeps desktop-IPC behavior when absent. */
+export interface SlidesAppHost {
+  /** Another editor holds the document: block text-edit entry and mutating chords (the API layer fences everything else). */
+  readOnly?: boolean
+  /** Saves commit in place without dialogs (the Web workspace). */
+  inPlaceSave?: boolean
+  /** false hides the AI dock and rail entirely. */
+  assistantAvailable?: boolean
+  /** The pending-open deck was applied. */
+  onDeckOpened?: () => void
+  /** The pending-open failed and no blank-deck fallback ran. */
+  onOpenFailed?: () => void
+  /** The editor handle is ready (mount-once). */
+  onEditorReady?: (handle: SlidesEditorHandle) => void
+}
+
+export function App({ host }: { host?: SlidesAppHost } = {}) {
+  const hostRef = useRef(host)
+  hostRef.current = host
+  const hostReadOnly = host?.readOnly === true
+  const aiAvailable = host?.assistantAvailable !== false
   const { lang } = useI18n()
   const [slides, setSlides] = useState<RenderSlide[]>([])
   // Layouts may reference Office-private fonts (resolved in main); register them as FontFaces
@@ -949,11 +979,37 @@ export function App() {
   editingActiveRef.current = !!editing || !!editingCell
   /** Set while the AI annotation popover is open (assigned below, next to askState) */
   const askOpenRef = useRef(false)
+  const dirtyRef = useRef(false)
+  dirtyRef.current = dirty
 
   const save = useCallback(
     (quiet = false): Promise<boolean> => fileActions.save(() => ctxRef.current, quiet),
     [],
   )
+
+  // Web host seam (T10): hand the entry the save/dirty/reopen cycle. Latest state
+  // is read through refs so the mount-once registration never goes stale.
+  const applyOpenRef = useRef(applyOpen)
+  applyOpenRef.current = applyOpen
+  const saveRef = useRef(save)
+  saveRef.current = save
+  useEffect(() => {
+    host?.onEditorReady?.({
+      saveAndWait: () => saveRef.current(true),
+      isDirty: () => dirtyRef.current,
+      reload: async () => {
+        try {
+          const r = await window.slidesApi.openPptx(FIT_WIDTH)
+          if (!r) return false
+          applyOpenRef.current(r)
+          return true
+        } catch {
+          return false
+        }
+      },
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   // Close guard (closing tab/window) chose "Save": run the full save flow and report the result
   useEffect(() => {
@@ -1131,7 +1187,12 @@ export function App() {
 
   // Global shortcuts (keyboard-actions.ts): the handler reads the latest state via ctxRef, so attach once
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => handleGlobalKeydown(ctxRef.current, e)
+    const onKey = (e: KeyboardEvent) => {
+      // Read-only host: swallow the mutating chords (new slide, delete) before the
+      // shared handler; navigation and server-fenced ops pass through harmlessly.
+      if (hostReadOnly && (e.key === 'Delete' || e.key === 'Backspace' || ((e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey && (e.key === 'm' || e.key === 'M')))) return
+      handleGlobalKeydown(ctxRef.current, e)
+    }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [])
@@ -1287,14 +1348,20 @@ export function App() {
       .then((r) => {
         if (bootHandledRef.current) return
         bootHandledRef.current = true
-        if (r) applyOpen(r)
+        if (r) {
+          applyOpen(r)
+          hostRef.current?.onDeckOpened?.()
+        }
+        // A host-driven mount has no untitled-blank fallback: a failed open surfaces as a failure.
+        else if (hostRef.current) hostRef.current.onOpenFailed?.()
         else void bootBlank()
       })
       // Open failures (corrupt file etc.) also land on a blank deck, or it stays at "Opening…" forever
       .catch(() => {
         if (bootHandledRef.current) return
         bootHandledRef.current = true
-        void bootBlank()
+        if (hostRef.current) hostRef.current.onOpenFailed?.()
+        else void bootBlank()
       })
     return off
   }, [applyOpen, newBlank])
@@ -2474,6 +2541,7 @@ export function App() {
   const startEdit = useCallback(
     (sourceId: string, caret?: EditCaret) => {
       if (brushMode) return // the click already applied the format brush
+      if (hostRef.current?.readOnly) return // read-only host: the API layer fences mutations anyway
       const isChild = enteredGroupNode?.children.some((c) => c.sourceId === sourceId)
       setEditing({ sourceId, caret, ...(isChild ? { groupId: enteredGroupNode!.sourceId } : {}) })
     },
@@ -3630,7 +3698,7 @@ export function App() {
       />
 
       <div className="app-main">
-        {slide && viewMode !== 'reading' && viewMode !== 'sorter' && (
+        {slide && viewMode !== 'reading' && viewMode !== 'sorter' && aiAvailable && (
           <div
             className={`ai-dock${showAi && aiSettings ? '' : ' collapsed'}${
               !aiSidebarEnabled && !showAi ? ' ai-dock-off' : ''
@@ -4019,17 +4087,19 @@ export function App() {
                       >
                         <div className="stage-ai-bar">
                           <div className="stage-ai-group">
-                            <button
-                              className={`stage-ai-btn${showAi ? ' active' : ''}`}
-                              data-tip={t('aiOpenAssistant')}
-                              onClick={toggleAi}
-                            >
-                              <GensparkMark size={14} />
-                              <span>Genspark AI</span>
-                            </button>
+                            {aiAvailable && (
+                              <button
+                                className={`stage-ai-btn${showAi ? ' active' : ''}`}
+                                data-tip={t('aiOpenAssistant')}
+                                onClick={toggleAi}
+                              >
+                                <GensparkMark size={14} />
+                                <span>Genspark AI</span>
+                              </button>
+                            )}
                             {/* Same one-click presets as the Home tab; hidden instead of
                         disabled while the deck has no real content */}
-                            {!deckEmpty && (
+                            {aiAvailable && !deckEmpty && (
                               <>
                                 <span className="stage-ai-divider" aria-hidden="true" />
                                 <button

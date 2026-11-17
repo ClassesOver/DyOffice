@@ -8,7 +8,7 @@
  * stack. Renderers never inject one (their fetch already is Chromium's).
  */
 
-import { nativeAdmission } from './native-admission'
+import { nativeAdmission } from './native-admission.ts'
 
 type FetchLike = (url: string, init?: RequestInit) => Promise<Response>
 

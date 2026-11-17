@@ -1,18 +1,18 @@
-import { chatAnthropic } from './protocols/anthropic'
-import { chatGemini } from './protocols/gemini'
-import { chatOpenAiCompatible } from './protocols/openai-compatible'
-import { chatOpenAiResponses } from './protocols/openai-responses'
-import { ResponseBodyTooLargeError } from './protocols/shared'
-import { chatCodexAppServer } from './codex-app-server'
-import { getProviderAdapter, type ResolvedEndpoint } from './registry'
+import { chatAnthropic } from './protocols/anthropic.ts'
+import { chatGemini } from './protocols/gemini.ts'
+import { chatOpenAiCompatible } from './protocols/openai-compatible.ts'
+import { chatOpenAiResponses } from './protocols/openai-responses.ts'
+import { ResponseBodyTooLargeError } from './protocols/shared.ts'
+import { chatCodexAppServer } from './codex-app-server.ts'
+import { getProviderAdapter, type ResolvedEndpoint } from './registry.ts'
 import {
   anthropicThinkingFields,
   geminiThinkingLevelFor,
   openAiEffortFor,
   toggleThinkingBodyFor,
-} from './thinking-effort'
-import type { AiChatResponse, AiProviderConfig, AiProviderId } from './types'
-import { AI_CHAT_RESPONSE_TIMEOUT_MS, createStreamWatchdog } from './watchdog'
+} from './thinking-effort.ts'
+import type { AiChatResponse, AiProviderConfig, AiProviderId } from './types.ts'
+import { AI_CHAT_RESPONSE_TIMEOUT_MS, createStreamWatchdog } from './watchdog.ts'
 
 /** route a one-shot (non-streaming, non-tool-calling) chat call by provider id */
 export async function chatForProvider(

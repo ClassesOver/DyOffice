@@ -1,5 +1,5 @@
 import type { AgentToolCall } from '@genoffice/agent-core'
-import type { AiTokenUsage } from '../types'
+import type { AiTokenUsage } from '../types.ts'
 
 // ---- endpoint URL composition ----
 
@@ -29,11 +29,12 @@ export const MAX_SSE_LINE_BYTES = 4 * 1024 * 1024
 export const MAX_RESPONSE_BODY_BYTES = MAX_SSE_LINE_BYTES
 
 export class ResponseBodyTooLargeError extends Error {
-  constructor(
-    readonly receivedBytes: number,
-    readonly capBytes: number,
-  ) {
+  readonly receivedBytes: number
+  readonly capBytes: number
+  constructor(receivedBytes: number, capBytes: number) {
     super(`Response body exceeded the ${capBytes}-byte limit (${receivedBytes} bytes)`)
+    this.receivedBytes = receivedBytes
+    this.capBytes = capBytes
     this.name = 'ResponseBodyTooLargeError'
   }
 }

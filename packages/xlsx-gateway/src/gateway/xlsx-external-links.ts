@@ -11,8 +11,8 @@
 //! whole break is refused explicitly rather than silently leaving a dangling
 //! [n] behind.
 
-import { removePartOverride, removeRelationshipById } from './xlsx-sheets'
-import type { EntrySource, MutationPlan } from './xlsx-gateway'
+import { removePartOverride, removeRelationshipById } from './xlsx-sheets.ts'
+import type { EntrySource, MutationPlan } from './xlsx-gateway.ts'
 
 /// A stored formula body references the link [n]: the quoted spelling
 /// '[1]Sheet Name'!A1 (quotes doubled inside) or the bare [1]Sheet1!A1

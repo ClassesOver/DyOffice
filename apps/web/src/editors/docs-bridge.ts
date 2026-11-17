@@ -26,6 +26,9 @@ export function createDocsBridge(host: SessionFileHost, fileId: string, prefs: A
     afterSave(accepted: boolean) {
       if (ticket && guard.getState().status !== 'unknown') { guard.settleSave(ticket,'failed'); ticket = null }
       if (accepted && host.getState(fileId).status === 'idle') guard.reset()
+      // Native metadata edits do not emit a ProseMirror update. An incomplete
+      // native save must not make the Web status claim that those edits landed.
+      if (!accepted && host.getState(fileId).status === 'idle' && !guard.getState().dirty) guard.markEdited()
       onChange()
     },
   }

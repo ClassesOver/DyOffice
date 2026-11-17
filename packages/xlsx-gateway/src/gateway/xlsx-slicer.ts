@@ -45,9 +45,9 @@ import {
   relativeTarget,
   resolveRelTarget,
   type MutablePackage,
-} from './xlsx-drawing-add'
-import { insertRootExt } from './xlsx-root-tail'
-import { parseRelationships, removePartOverride, removeRelationshipById } from './xlsx-sheets'
+} from './xlsx-drawing-add.ts'
+import { insertRootExt } from './xlsx-root-tail.ts'
+import { parseRelationships, removePartOverride, removeRelationshipById } from './xlsx-sheets.ts'
 
 export class SlicerAddError extends Error {}
 

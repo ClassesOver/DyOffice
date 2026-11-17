@@ -29,15 +29,24 @@ export function createLocalHomeBridge(deps: Dependencies): HomeApi {
     pending.set(key, {promise: result, intent})
     return result
   }
+  async function queryFiles(view: WorkspaceView, query: {folderId?: string; limit?: number; offset?: number; ext?: string; q?: string; id?: string} = {}): Promise<WorkspaceFileList> {
+    const params = new URLSearchParams({view, limit: String(query.limit ?? 50), offset: String(query.offset ?? 0)})
+    for (const key of ['folderId','ext','q','id'] as const) if (query[key] !== undefined) params.set(key, query[key]!)
+    const page = await deps.request<WorkspaceFileList>(`/api/v1/workspace/files?${params}`)
+    if (!page || !Array.isArray(page.files) || !Number.isSafeInteger(page.total) || page.total < 0 || !Number.isSafeInteger(page.totalAll) || page.totalAll < page.total || page.files.length > (query.limit ?? 50)) throw new Error('无法读取个人文件列表。')
+    return page
+  }
+  // FolderListing has no paging contract. Fail visibly above a bounded size rather than silently omit files.
   async function files(view: WorkspaceView, folder?: string): Promise<WorkspaceFile[]> {
     const result: WorkspaceFile[] = []
-    for (let offset = 0;;) {
-      const page = await deps.request<WorkspaceFileList>(`/api/v1/workspace/files?view=${view}&limit=100&offset=${offset}${folder === undefined ? '' : '&folderId=' + encodeURIComponent(folder)}`)
-      if (!page || !Array.isArray(page.files) || !Number.isSafeInteger(page.total) || page.total < 0) throw new Error('无法读取个人文件列表。')
+    for (let offset = 0; offset < 10000;) {
+      const page = await queryFiles(view, {folderId: folder, limit: 100, offset})
+      if (page.total > 10000) throw new Error('目录文件过多，请使用分页文件列表或搜索。')
       result.push(...page.files); offset += page.files.length
       if (offset >= page.total) return result
       if (!page.files.length) throw new Error('文件列表已变化，请刷新后重试。')
     }
+    throw new Error('目录文件过多，请使用分页文件列表或搜索。')
   }
   async function folders() { return (await deps.request<WorkspaceFolderList>('/api/v1/workspace/folders')).folders }
   function paths(items: WorkspaceFolder[]) {
@@ -56,8 +65,8 @@ export function createLocalHomeBridge(deps: Dependencies): HomeApi {
     return result
   }
   async function page(view: WorkspaceView, query: RecentQuery = {}) {
-    const all = (await files(view)).map(fileEntry), filtered = all.filter(file => !query.ext || file.ext === query.ext)
-    return {entries: filtered.slice(query.offset ?? 0, (query.offset ?? 0) + (query.limit ?? 50)), total: filtered.length, totalAll: all.length}
+    const page = await queryFiles(view, {offset: query.offset, limit: query.limit, ext: query.ext})
+    return {entries: page.files.map(fileEntry), total: page.total, totalAll: page.totalAll}
   }
   async function mutateFiles(ids: string[], action: string, method: string, body?: unknown) {
     for (const id of new Set(ids)) {
@@ -73,7 +82,7 @@ export function createLocalHomeBridge(deps: Dependencies): HomeApi {
     starred: (query?: RecentQuery) => page('starred', query),
     starredGroups: async () => [],
     toggleStar: (id: string) => once('star:' + id, async () => {
-      const file = (await files('all')).find(file => file.id === id)
+      const file = (await queryFiles('all', {id, limit: 1})).files.find(file => file.id === id)
       if (!file) throw new Error('文件不存在或已移入回收站。')
       await deps.request(`/api/v1/workspace/files/${encodeURIComponent(id)}/star`, 'PUT', {starred: !file.starred}); changed()
     }),
@@ -81,7 +90,11 @@ export function createLocalHomeBridge(deps: Dependencies): HomeApi {
     removeRecent: (ids: string[]) => mutateFiles(ids, 'recent', 'DELETE'),
     deleteFiles: (ids: string[]) => mutateFiles(ids, 'trash', 'DELETE'),
     openTrash: async () => deps.openTrash(),
-    statPaths: async (ids: string[]) => (await files('all')).filter(file => ids.includes(file.id)).map(fileEntry),
+    statPaths: async (ids: string[]) => {
+      const result: RecentEntry[] = []
+      for (const id of new Set(ids)) result.push(...(await queryFiles('all', {id, limit: 1})).files.filter(file => file.id === id).map(fileEntry))
+      return result
+    },
     renameFile: (id: string, name: string) => once(JSON.stringify(['rename', id, name]), async () => {
       await deps.request(`/api/v1/files/${encodeURIComponent(id)}`, 'PATCH', {name}); changed(); return {ok: true, path: id}
     }),
@@ -121,8 +134,8 @@ export function createLocalHomeBridge(deps: Dependencies): HomeApi {
     getTheme: async () => (await deps.preferences.getPreferences()).theme,
     setTheme: async (theme: 'system' | 'light' | 'dark') => { await deps.preferences.updatePreferences({theme}) },
     searchFiles: async (query: {q: string; ext?: string; offset?: number; limit?: number}) => {
-      const matches = (await files('all')).filter(file => (!query.ext || file.format === query.ext) && file.name.toLocaleLowerCase().includes(query.q.toLocaleLowerCase()))
-      return {hits: matches.slice(query.offset ?? 0, (query.offset ?? 0) + (query.limit ?? 50)).map(file => ({...fileEntry(file), snippet: null, needles: [query.q]})), total: matches.length, index: {indexed: matches.length, pending: 0, scanning: false}}
+      const page = await queryFiles('all', {q: query.q, ext: query.ext, offset: query.offset, limit: query.limit})
+      return {hits: page.files.map(file => ({...fileEntry(file), snippet: null, needles: [query.q]})), total: page.total, index: {indexed: page.total, pending: 0, scanning: false}}
     },
   } satisfies Partial<HomeApi>)
   return base

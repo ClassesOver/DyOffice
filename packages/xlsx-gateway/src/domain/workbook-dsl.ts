@@ -2,14 +2,14 @@ import { z } from 'zod'
 import {
   SHEET_PROTECTION_PERMISSIONS,
   type SheetProtectionPermission,
-} from '../gateway/xlsx-protection'
-import { MAX_GRID_COLUMNS, MAX_GRID_ROWS } from '../shared/grid-bounds'
+} from '../gateway/xlsx-protection.ts'
+import { MAX_GRID_COLUMNS, MAX_GRID_ROWS } from '../shared/grid-bounds.ts'
 import {
   normalizePivotPageFields,
   PIVOT_AGGREGATIONS,
   PIVOT_SHOW_DATA_AS,
-} from './pivot-value-modes'
-import { ADDABLE_SHAPE_TYPES } from '../shared/shape-types'
+} from './pivot-value-modes.ts'
+import { ADDABLE_SHAPE_TYPES } from '../shared/shape-types.ts'
 import {
   columnIndex,
   columnLabel,
@@ -17,15 +17,15 @@ import {
   parseAddress,
   parseRange,
   rangeCellCount,
-} from './cell-address'
-import { computeSortChanges } from './sort-range'
+} from './cell-address.ts'
+import { computeSortChanges } from './sort-range.ts'
 import {
   describeStyleColor,
   normalizeStyleColor,
   PATTERN_TYPES,
   THEME_SHORTHAND_PATTERN,
   THEME_SLOT_NAMES,
-} from './style-color'
+} from './style-color.ts'
 
 /// An address past the last grid row or column names no cell that can exist in
 /// the file: the write is accepted here and the value is gone on reopen.

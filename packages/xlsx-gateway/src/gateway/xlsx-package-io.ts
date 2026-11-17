@@ -6,12 +6,12 @@ import { basename, dirname, extname, join } from 'node:path'
 
 import { z } from 'zod'
 
-import { MAX_PATCH_ENTRY_BYTES } from '../shared/edit-schemas'
-import type { WorkbookChartEdit, WorkbookVisualEdit } from '../shared/edit-schemas'
-import type { SheetFilterState } from './xlsx-filter'
-import type { DefinedNamesState } from './xlsx-defined-names'
-import type { SheetPageSetupState } from './xlsx-page-setup'
-import type { SheetRedactionState } from './xlsx-redaction'
+import { MAX_PATCH_ENTRY_BYTES } from '../shared/edit-schemas.ts'
+import type { WorkbookChartEdit, WorkbookVisualEdit } from '../shared/edit-schemas.ts'
+import type { SheetFilterState } from './xlsx-filter.ts'
+import type { DefinedNamesState } from './xlsx-defined-names.ts'
+import type { SheetPageSetupState } from './xlsx-page-setup.ts'
+import type { SheetRedactionState } from './xlsx-redaction.ts'
 import type {
   CellEdit,
   BulkConstantFill,
@@ -35,11 +35,11 @@ import type {
   SheetFormulaValues,
   SheetCellImageAddition,
   ExternalLinkOps,
-} from './xlsx-gateway'
-import { planCellEditsToXlsx, syncFileBestEffort } from './xlsx-gateway'
-import { normalizeOoxmlPartPrefix } from './xlsx-namespace'
-import type { WorkbookThemeState } from './xlsx-theme'
-import type { SheetEditPlan } from './xlsx-sheets'
+} from './xlsx-gateway.ts'
+import { planCellEditsToXlsx, syncFileBestEffort } from './xlsx-gateway.ts'
+import { normalizeOoxmlPartPrefix } from './xlsx-namespace.ts'
+import type { WorkbookThemeState } from './xlsx-theme.ts'
+import type { SheetEditPlan } from './xlsx-sheets.ts'
 
 const archiveEntrySchema = z.object({
   name: z.string(),

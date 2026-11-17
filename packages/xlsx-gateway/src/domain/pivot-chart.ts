@@ -14,8 +14,8 @@
 ///    renderer binds via the visual's pivotTablePath; this module only shapes
 ///    the plotted data, which Excel's own PivotCharts also cache as plain c:ser.
 
-import { columnLabel } from './cell-address'
-import type { PivotDefinition, PivotLayoutLine } from '../gateway/xlsx-pivot'
+import { columnLabel } from './cell-address.ts'
+import type { PivotDefinition, PivotLayoutLine } from '../gateway/xlsx-pivot.ts'
 
 /// Chart point cap: oversized pivots are truncated to the first N data rows/cols
 /// (neither the literal cache nor rendering can handle tens of thousands of

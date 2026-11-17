@@ -19,10 +19,10 @@ import {
   worksheetXmlChunks,
   type CsvGridShape,
   type CsvImportOptions,
-} from './csv-import'
-import { DEFAULT_THEME_XML } from './xlsx-default-theme'
-import { MINIMAL_STYLESHEET_XML } from './xlsx-default-styles'
-import { validateSheetName } from './xlsx-sheets'
+} from './csv-import.ts'
+import { DEFAULT_THEME_XML } from './xlsx-default-theme.ts'
+import { MINIMAL_STYLESHEET_XML } from './xlsx-default-styles.ts'
+import { validateSheetName } from './xlsx-sheets.ts'
 
 export async function csvToXlsxBuffer(
   csvText: string,

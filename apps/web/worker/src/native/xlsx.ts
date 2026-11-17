@@ -47,6 +47,8 @@ export function createXlsxNativeWorker(process: NativeProcess) {
         count+=(a.endRow-a.startRow+1)*(a.endColumn-a.startColumn+1)
         return count>20000
       })) return Promise.reject(new SandboxError('INPUT_LIMIT'))
+      // Snapshot caller-owned containers before native admission can queue.
+      request = {edits: request.edits.map(e=>({...e})), reads: request.reads.map(r=>({...r,range:{...r.range}}))}
       return native.run(input,async io=>{
         const source=opened(await io.request('open',{path:'/work/input.xlsx',locale:'en'}))
         try {
@@ -79,6 +81,7 @@ export function createXlsxNativeWorker(process: NativeProcess) {
     },
     readRange(input:Uint8Array,sheetName:string,range:{startRow:number;endRow:number;startColumn:number;endColumn:number},signal?:AbortSignal){
       if(!range||Object.keys(range).sort().join(',')!=='endColumn,endRow,startColumn,startRow'||Object.values(range).some(value=>!Number.isInteger(value)||value<0)||range.endRow<range.startRow||range.endColumn<range.startColumn||range.endRow>=1048576||range.endColumn>=16384||(range.endRow-range.startRow+1)*(range.endColumn-range.startColumn+1)>20000)return Promise.reject(new SandboxError('INPUT_LIMIT'))
+      range={...range}
       return native.run(input,async io=>{
         const source=opened(await io.request('open',{path:'/work/input.xlsx',locale:'en'}))
         try{

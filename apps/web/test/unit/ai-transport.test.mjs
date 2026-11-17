@@ -223,3 +223,35 @@ test('successful stream without usage does not invent zero usage',async()=>{
   await new Promise(resolve=>transport.stream({system:'',messages:[],tools:[]},{...callbacks,onDone(){callbacks.onDone();resolve()}}))
   assert.deepEqual(calls.map(x=>x[0]),['delta','done'])
 })
+
+test('opt-in model selection and CSRF proof cover stream and cancellation requests',async()=>{
+ const requests=[],proof='p'.repeat(43);let started;const ready=new Promise(r=>started=r)
+ const transport=createSseAgentTransport({modelId:'enabled-model',getCsrfToken:async()=>proof,fetchImpl:async(url,init)=>{
+  requests.push({url,init});if(url.endsWith('/cancel'))return new Response(null,{status:204});started();return new Promise(()=>{})
+ }})
+ const {callbacks}=callbackRecorder();const handle=transport.stream({system:'',messages:[],tools:[]},callbacks)
+ await ready;handle.cancel();await delay()
+ assert.equal(JSON.parse(requests[0].init.body).modelId,'enabled-model');assert.equal(requests.length,2)
+ for(const {init} of requests)assert.equal(new Headers(init.headers).get('x-csrf-token'),proof)
+})
+test('malformed usage is rejected and complete tool calls project only candidate fields',async()=>{
+ for(const usage of [{inputTokens:-1},{outputTokens:1.5},{inputTokens:'4'}]){
+  const {calls,callbacks}=callbackRecorder();const transport=createSseAgentTransport({fetchImpl:async()=>stream(event('usage',usage)+event('done',{}))})
+  await new Promise(resolve=>transport.stream({system:'',messages:[],tools:[]},{...callbacks,onDone(){callbacks.onDone();resolve()}}));assert.deepEqual(calls.map(x=>x[0]),['error','done'])
+ }
+ const {calls,callbacks}=callbackRecorder();const transport=createSseAgentTransport({fetchImpl:async()=>stream(event('tool_call',{id:'t',name:'read',input:{a:1},approved:true,apiKey:'private'})+event('done',{}))})
+ await new Promise(resolve=>transport.stream({system:'',messages:[],tools:[]},{...callbacks,onDone(){callbacks.onDone();resolve()}}));assert.deepEqual(calls[0],['tool_call',{id:'t',name:'read',input:{a:1}}])
+})
+
+test('an error observer cannot suppress the exactly-once done callback',async()=>{
+ let done=0
+ const transport=createSseAgentTransport({fetchImpl:async()=>new Response(null,{status:503})})
+ transport.stream({system:'',messages:[],tools:[]},{onDelta(){},onToolCall(){},onError(){throw Error('UI callback failed')},onDone(){done++}})
+ await delay();assert.equal(done,1)
+})
+test('cancelling while CSRF proof is pending never sends a prompt afterwards',async()=>{
+ let proof;const requests=[];const transport=createSseAgentTransport({modelId:'model',getCsrfToken:()=>new Promise(r=>proof=r),fetchImpl:async url=>{requests.push(url);return stream(event('done',{}))}})
+ const {calls,callbacks}=callbackRecorder();const handle=transport.stream({system:'private',messages:[],tools:[]},callbacks)
+ handle.cancel();proof('p'.repeat(43));await delay()
+ assert.deepEqual(requests,[]);assert.deepEqual(calls,[['done']])
+})

@@ -8,7 +8,7 @@
 import { appendFileSync, mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import type { AgentMessage, AgentToolCall, AgentToolDef } from '@genoffice/agent-core'
-import type { AiTokenUsage } from './types'
+import type { AiTokenUsage } from './types.ts'
 
 export interface AiTraceRequest {
   requestId: string

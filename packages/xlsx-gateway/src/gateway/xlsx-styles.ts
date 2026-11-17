@@ -1,7 +1,7 @@
-import type { WorkbookStyleEdit } from '../shared/edit-schemas'
-import { isGradientFill, type FillSpec, type StyleColor } from '../domain/style-color'
-import { shortDateNumFmtId } from '../shared/short-date'
-import { resolveStyleEntry, styleEntrySlots } from './xlsx-style-entries'
+import type { WorkbookStyleEdit } from '../shared/edit-schemas.ts'
+import { isGradientFill, type FillSpec, type StyleColor } from '../domain/style-color.ts'
+import { shortDateNumFmtId } from '../shared/short-date.ts'
+import { resolveStyleEntry, styleEntrySlots } from './xlsx-style-entries.ts'
 
 /// Copy-on-write editor for xl/styles.xml. Existing entries are never
 /// modified — every changed cell gets a new cellXfs entry (deduped) derived

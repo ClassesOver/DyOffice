@@ -4,8 +4,8 @@
 // or shared while the key lives in the environment the app was launched with.
 // The inline apiKey always wins, so enabling this never changes the behavior
 // of a settings file that was written without it.
-import { normalizeCustomProfile } from './custom-profile'
-import type { AiProviderConfig } from './types'
+import { normalizeCustomProfile } from './custom-profile.ts'
+import type { AiProviderConfig } from './types.ts'
 
 /** Environment lookup seam, so tests and alternative credential stores can substitute. */
 export type EnvLookup = (name: string) => string | undefined
