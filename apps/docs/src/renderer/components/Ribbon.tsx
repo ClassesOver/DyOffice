@@ -13,6 +13,7 @@ import type {
 import type { ChainedCommands, Editor } from '@tiptap/core'
 import { NodeSelection, type Command } from '@tiptap/pm/state'
 import { pendingDocumentOperation } from '../editor/pending-document-operation'
+import { showToast } from './toast-bus'
 import type { Mark, Node as PMNode } from '@tiptap/pm/model'
 import {
   addColumnAfter,
@@ -1264,6 +1265,8 @@ function RibbonInner({
       const picked = await window.desktop.pickImage()
       if (!picked || !operation.current()) return
       await applyPictureBytes(`data:${picked.mime};base64,${picked.base64}`)
+    } catch {
+      if (operation.current()) showToast(t('ribbonImageLoadFail'), 'error')
     } finally {
       operation.dispose()
     }

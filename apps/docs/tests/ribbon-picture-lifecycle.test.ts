@@ -5,6 +5,8 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { editorExtensions } from '../src/renderer/editor/extensions'
 import { pendingDocumentOperation } from '../src/renderer/editor/pending-document-operation'
 import { applyPictureBytes as replacePictureBytes } from '../src/renderer/editor/apply-picture-bytes'
+import { setToastEmitter, showToast } from '../src/renderer/components/toast-bus'
+import { t } from '../src/renderer/i18n/locale'
 import { imageSizeOf } from '../src/renderer/components/ribbon-tabs'
 
 // Run Ribbon's actual image replacement handlers with a real Editor. Control only
@@ -13,18 +15,19 @@ const source = readFileSync('src/renderer/components/Ribbon.tsx', 'utf8')
 const start = source.indexOf('  const pendingPictureOperation = ')
 const end = source.indexOf('  const rotatePicture = ', start)
 if (start < 0 || end < 0) throw Error('Ribbon picture handlers not found')
-const handlers = new Function('editor', 'canEdit', 'imageSizeOf', 'pendingDocumentOperation', 'replacePictureBytes',
+const handlers = new Function('editor', 'canEdit', 'imageSizeOf', 'pendingDocumentOperation', 'replacePictureBytes', 'showToast', 't',
   ts.transpileModule(source.slice(start, end), { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText + ';return { applyPictureBytes, replacePicture }')
 let editor: Editor
 let decode: () => void
-const pickImage = vi.fn()
+const pickImage = vi.fn(), notify = vi.fn()
 const picture = (id: string) => ({ type: 'docProtected', attrs: {
   blockType: 'image', imageDataUrl: `data:image/png;base64,${id}`, imageWidthPx: 120, imageHeightPx: 60,
   genImage: { base64: id, mime: 'image/png', widthPx: 120, heightPx: 60 },
 } })
 const content = () => ({ type: 'doc', content: [picture('first'), picture('second')] })
-const api = () => handlers(editor, true, imageSizeOf, pendingDocumentOperation, replacePictureBytes)
+const api = () => handlers(editor, true, imageSizeOf, pendingDocumentOperation, replacePictureBytes, showToast, t)
 beforeEach(() => {
+  notify.mockReset(); setToastEmitter(notify)
   pickImage.mockReset(); decode = () => {}
   editor = new Editor({ element: document.createElement('div'), extensions: editorExtensions, content: content() })
   editor.commands.setNodeSelection(0)
@@ -35,7 +38,7 @@ beforeEach(() => {
     set src(_value: string) { decode = () => this.onload?.() }
   })
 })
-afterEach(() => { editor.destroy(); vi.unstubAllGlobals() })
+afterEach(() => { editor.destroy(); setToastEmitter(null); vi.unstubAllGlobals() })
 it('does not apply decoded bytes to a different selected picture', async () => {
   const pending = api().applyPictureBytes('data:image/png;base64,new')
   editor.commands.setNodeSelection(editor.state.doc.child(0).nodeSize)
@@ -129,4 +132,26 @@ it('reset size checks the actual inline-picture subeditor target', async () => {
     decode(); await pending
     expect(resize).not.toHaveBeenCalled()
   } finally { subeditor.destroy() }
+})
+
+it('reports rejected picture selection and keeps the original without an unhandled rejection', async () => {
+  pickImage.mockRejectedValue(new Error('unsupported or oversized image'))
+  const before = editor.getJSON()
+  await expect(api().replacePicture()).resolves.toBeUndefined()
+  expect(editor.getJSON()).toEqual(before)
+  expect(notify).toHaveBeenCalledExactlyOnceWith({ text: t('ribbonImageLoadFail'), kind: 'error' })
+})
+it('consumes an obsolete picker rejection without showing a stale error', async () => {
+  let reject!: (error: Error) => void
+  pickImage.mockReturnValue(new Promise((_resolve, r) => { reject = r }))
+  const pending = api().replacePicture()
+  editor.commands.setNodeSelection(editor.state.doc.firstChild!.nodeSize)
+  reject(new Error('late read failure'))
+  await expect(pending).resolves.toBeUndefined()
+  expect(notify).not.toHaveBeenCalled()
+})
+it('keeps picker cancellation silent', async () => {
+  pickImage.mockResolvedValue(null)
+  await api().replacePicture()
+  expect(notify).not.toHaveBeenCalled()
 })

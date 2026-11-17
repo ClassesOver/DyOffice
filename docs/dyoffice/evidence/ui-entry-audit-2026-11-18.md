@@ -397,3 +397,10 @@
 - 最初实际Ribbon处理器与真实Editor的6项回归5红/正常正对照1绿；reset切目标新增回归另1红；复核发现子编辑器目标后双Editor回归再先红。最终保留远端回归，相关6文件44项通过，含正常直接应用/文件选择/重置、两类emitUpdate同内容替换、只读/销毁、目标更新及子编辑器。测试执行实际Ribbon源码片段（TS转译）和远端真实helper，不复制产品实现。Web docs类型、最终合并生产构建、边界1339文件0违规及git diff --check通过；既有chunk提示保留。日志：`/tmp/dyoffice-ribbon-picture-red.log`、`/tmp/dyoffice-ribbon-reset-red.log`、`/tmp/dyoffice-ribbon-subeditor-red.log`、`/tmp/dyoffice-ribbon-picture-merged-{tests,type,build}.log`。
 - 最终合并构建1440/390各3个目标流程通过：裁剪解码时切图两张src均不变；重置大小时切图第二张尺寸不变；文件选择期间切图旧结果被丢弃，随后稳定目标正常替换。均0页面异常、业务API mock/blocked。证据：`/tmp/dyoffice-ui-audit/word-picture-target-race-green-{1440,390}/report.json`、`word-picture-reset-race-green-{1440,390}/report.json`、`word-replace-picker-target-green-{1440,390}/report.json`。最终构建另复验两尺寸裁剪取消/应用8场景及去除背景取消重开/应用6场景，均通过，沿用对应green报告。子编辑器为真实双Editor组件证据，未计作真实页眉浏览器流程。
 - 本专项不证明全部复杂图形、页眉/文本框浏览器组合或全部UI已穷举；图片选择器拒绝反馈等其他入口仍需继续按真实触发检查。
+
+## 替换图片失败反馈
+
+- 正式Word“图片格式→替换图片”复现：超16MiB PNG及不支持WebP引发未处理页面错误“此功能当前不可用”，损坏PNG静默失败；三项均保留原图但无可见图片失败提示，随后正常PNG可替换。红报告的checked表示脚本流程走完，三项问题以逐项messages/pageerrors为准，不将其误记为产品通过。证据：`/tmp/dyoffice-ui-audit/word-replace-picture-feedback-red/{coverage.md,report.json}`。
+- Ribbon捕获选择器拒绝；apply-picture-bytes在解码失败时复用既有本地化图片失败toast。成功/失败共用原目标有效性检查，过期操作不弹旧错误，取消选择保持静默。解码拒绝在helper内消费，不再被外层重复提示；保留原图和所有成功保存字段。新增5项反馈回归中3项先红（当前解码失败无提示、当前/过期picker拒绝外泄），其余为静默正对照；最终相关5文件47项通过，独立只读复核无阻塞。证据：`/tmp/dyoffice-picture-feedback-{red,green}.log`。
+- Web docs类型、生产构建、边界1339文件0违规及git diff --check通过，保留既有chunk大小提示。最终构建Chromium1440/390各4场景通过：三类失败均显示新图片失败toast，等待每次提示消失后再触发下一次，排除残留提示假阳性；原src不变、0页面异常；正常PNG仍成功替换。文件/lease均mock，其余业务写阻止，无真实文件变更。证据：`/tmp/dyoffice-ui-audit/word-replace-picture-feedback-green-{1440,390}/report.json`、`/tmp/dyoffice-picture-feedback-{type,build}.log`。
+- 此项不代表全部格式、复杂图形、跨文档/读屏组合或完整UI验收；过期失败静默由实际处理器/真实Editor回归验证，未计作额外浏览器场景。

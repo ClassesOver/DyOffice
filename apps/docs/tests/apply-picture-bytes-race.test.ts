@@ -1,8 +1,11 @@
 import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 import { Editor } from '@tiptap/core'
 import { editorExtensions } from '../src/renderer/editor/extensions'
+import { setToastEmitter } from '../src/renderer/components/toast-bus'
+import { t } from '../src/renderer/i18n/locale'
 import { applyPictureBytes } from '../src/renderer/editor/apply-picture-bytes'
 
+const notify = vi.fn()
 let editor: Editor
 let images: PendingImage[]
 class PendingImage {
@@ -28,6 +31,7 @@ const picture = (index: number) => ({
   },
 })
 beforeEach(() => {
+  notify.mockReset(); setToastEmitter(notify)
   images = []
   editor = new Editor({
     element: document.createElement('div'),
@@ -39,6 +43,7 @@ beforeEach(() => {
 })
 afterEach(() => {
   editor.destroy()
+  setToastEmitter(null)
   vi.unstubAllGlobals()
 })
 for (const change of ['document', 'readonly', 'selection', 'destroy'] as const) {
@@ -112,4 +117,18 @@ test('readonly at entry does not start decoding even with stale canEdit', async 
   editor.setEditable(false)
   await applyPictureBytes(editor, replacement, true)
   expect(images).toHaveLength(0)
+})
+
+test('decode failure reports an error while keeping the original picture', async () => {
+  const before = editor.getJSON()
+  const pending = applyPictureBytes(editor, replacement)
+  images[0].onerror(); await pending
+  expect(editor.getJSON()).toEqual(before)
+  expect(notify).toHaveBeenCalledExactlyOnceWith({ text: t('ribbonImageLoadFail'), kind: 'error' })
+})
+test('obsolete decode failure stays silent after selecting another picture', async () => {
+  const pending = applyPictureBytes(editor, replacement)
+  editor.commands.setNodeSelection(editor.state.doc.firstChild!.nodeSize)
+  images[0].onerror(); await pending
+  expect(notify).not.toHaveBeenCalled()
 })

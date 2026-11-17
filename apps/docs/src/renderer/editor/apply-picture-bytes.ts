@@ -2,6 +2,8 @@ import type { Editor } from '@tiptap/core'
 import { NodeSelection } from '@tiptap/pm/state'
 import { pendingDocumentOperation } from './pending-document-operation'
 import { imageSizeOf } from '../components/ribbon-tabs'
+import { showToast } from '../components/toast-bus'
+import { t } from '../i18n/locale'
 
 export async function applyPictureBytes(
   editor: Editor,
@@ -17,17 +19,16 @@ export async function applyPictureBytes(
   const attrs = target.attrs
   if (attrs?.blockType !== 'image') return
   const operation = pendingDocumentOperation(editor)
+  const currentTarget = () => {
+    if (!operation.current()) return false
+    const currentSelection = editor.state.selection
+    return currentSelection instanceof NodeSelection && currentSelection.node === target
+  }
   try {
     const natural = await imageSizeOf(dataUrl)
     // Never apply decoded bytes to another document or another selected picture.
     // Node identity survives unrelated typing/position mapping but not target edits.
-    const currentSelection = editor.state.selection
-    if (
-      !operation.current() ||
-      !(currentSelection instanceof NodeSelection) ||
-      currentSelection.node !== target
-    )
-      return
+    if (!currentTarget()) return
     const currentW = Number(attrs.imageWidthPx) || Math.min(natural.width, 620)
     const w = Math.max(1, Math.round(currentW))
     const h = Math.max(1, Math.round((currentW * natural.height) / natural.width))
@@ -50,7 +51,7 @@ export async function applyPictureBytes(
       })
       .run()
   } catch {
-    /* image decode failed: keep the original untouched */
+    if (currentTarget()) showToast(t('ribbonImageLoadFail'), 'error')
   } finally {
     operation.dispose()
   }
