@@ -252,3 +252,76 @@ through its hidden `--headless-export` mode: genoffice spawns it (Dock hidden, n
 window), reads the JSON envelope it prints and maps its exit code. Set
 `GENOFFICE_APP_BIN` to point at a specific executable; in a checkout the dev Electron
 plus `apps/shell` is used, so `npm run build:all` first.
+
+## Optional external assistant channels (HTTP, no MCP)
+
+A generic harness joins only after an Office invitation and explicit user approval.
+Credentials are read from files or environment and saved in a private 0600 state file;
+never pass invitation or membership secrets as command arguments.
+
+```sh
+genoffice agent join --origin https://office.example --invite-file ./invite.txt --state-file ./channel.json --name MyHarness --kind custom
+genoffice agent status --state-file ./channel.json
+genoffice agent redeem --state-file ./channel.json
+genoffice agent connect --state-file ./channel.json
+genoffice agent tasks --state-file ./channel.json
+genoffice agent task --state-file ./channel.json --task TASK_ID
+genoffice agent send --state-file ./channel.json --action-file ./message.json
+genoffice agent run --state-file ./channel.json --task TASK_ID --adapter-file ./adapter.json
+```
+
+`message.json` contains `{ "to": "office", "action": { "kind": "message", "content": "Hello" } }`.
+`adapter.json` contains an explicit absolute executable and fixed argument array,
+for example `{ "command": "/usr/local/bin/my-harness", "args": ["--channel-stdio"] }`.
+The adapter reads one JSON object containing `task`, `claim` and `connectionEpoch`
+on stdin, then emits one JSON object `{ "summary": "...", "outcome": "succeeded" }`
+on stdout (`failed` is also supported). This protocol must be implemented by the
+selected adapter; compatibility with any named harness is not implied. A run
+claims one explicit task, executes once and submits its result, without retries.
+Only PATH is inherited; configure any harness credentials outside this command.
+`GENOFFICE_AGENT_STATE_FILE`, `GENOFFICE_AGENT_ORIGIN` and
+`GENOFFICE_AGENT_INVITE_TOKEN` provide the corresponding environment inputs.
+
+## Authorized harness data
+
+Task credentials come from the task environment; data operations cannot widen their grants.
+
+```sh
+genoffice data execute sources.list --args '{}'
+genoffice data execute sources.query --args-file ./query.json
+genoffice data manifest RESULT_ID
+genoffice data download RESULT_ID --out ./snapshot.json
+```
+
+Use the operation names and argument schema supplied by the authorized task data contract.
+
+On Linux, `genoffice agent watch --state-file ./channel.json --adapter-file ./adapter.json`
+explicitly starts a foreground worker that polls authorized task metadata once per
+second. It claims each queued task once, watches cancellation/revocation, and
+stops the adapter process group with TERM followed by KILL. SIGINT/SIGTERM
+requests disconnect. Interrupted or unconfirmed work remains subject to outcome
+review; running or unknown tasks are never automatically reclaimed. The worker
+supports the same final-summary stdio protocol; reverse requests use a separate
+`agent send` / `agent task` invocation. Windows watch is not supported.
+
+### Data in a channel adapter
+
+Office can attach `dataInputs: {sourceIds: [...], resultIds: [...]}` to a delegated
+channel task. Joining alone grants no data access. Members cannot attach or inherit
+these scopes. After a successful claim, `agent run` and `agent watch` exchange that
+claim for a task capability and include an optional `data: {baseUrl, grant}` in the
+adapter's stdin object. The connector retains the member credential; the adapter
+receives only the short-lived data grant, never the Office session or source secret.
+
+Use the existing `createHarnessDataClient({baseUrl: data.baseUrl,
+taskId: data.grant.taskId, credential: data.grant.credential})` to read metadata,
+download frozen results, and stage/commit artifacts. The data grant ID is distinct
+from the durable channel task ID and is bound to its current claim on the server.
+The grant cannot widen the task's inputs. Source query permissions and model budget
+remain independent. Compute in the harness, return conclusions and committed report
+references through the final summary, and keep raw rows out of Office context.
+
+Every data operation checks the live claim before and after execution. Cancellation,
+pause, expiry, disconnection, replacement epoch, session revocation or member removal
+prevents further use. A stopped grant is not revived by reconnecting. Interrupted
+work still requires outcome review; issuing a new grant never reruns a channel task.

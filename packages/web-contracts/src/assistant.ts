@@ -5,4 +5,10 @@ export const ASSISTANT_READ_TOOLS = new Set([
   'read_sheet_features','read_cells','find_cells','trace_precedents','trace_dependents',
 ])
 export interface AssistantModel {id: string; label: string; model: string}
-export interface AssistantCatalog {entries: AssistantModel[]; defaultId: string | null}
+export const ASSISTANT_DELEGATION_TOOLS = new Set(['list_agents', 'list_agent_data', 'delegate_agent_task','list_channel_agents','delegate_channel_task'])
+export interface AssistantCatalog {
+  entries: AssistantModel[]; defaultId: string | null
+  agents?: {id: string; name: string; origin: 'builtin' | 'external'; capabilities: readonly string[]}[]
+  defaultAgentId?: string
+  assistantChannels?:boolean
+}

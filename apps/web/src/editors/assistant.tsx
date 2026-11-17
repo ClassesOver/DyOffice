@@ -1,11 +1,14 @@
 import {useState} from 'react'
+import {createAssistantChannelClient} from '../../../../packages/browser-host/src/assistant-channel.ts'
+import {AssistantChannelPanel} from './assistant-channel-panel.tsx'
 import {createAssistantClient} from '../../../../packages/browser-host/src/assistant.ts'
 import {createLocalShellClient} from '../shell/local-client'
 import {createUserSkillsClient} from '../shell/user-skills-client'
 
-export async function createEditorAssistant() {
+export async function createEditorAssistant(channelOptions?:{fileId:string;editorId:string;generation:()=>number}) {
   const client = createLocalShellClient(), bound = await client.bindSession()
   const assistant = await createAssistantClient({request: bound.request, csrfToken: bound.proof})
+  const channel=assistant.catalog.assistantChannels&&channelOptions?createAssistantChannelClient({...channelOptions,request:bound.request}):undefined
   const skills = createUserSkillsClient(bound.request)
   function ModelPicker() {
     const [selected, setSelected] = useState(assistant.selected() ?? '')
@@ -13,9 +16,11 @@ export async function createEditorAssistant() {
       {assistant.catalog.entries.map(e => <option key={e.id} value={e.id}>{e.label}</option>)}
     </select></label>
   }
+  function ChannelManager(){return <AssistantChannelPanel client={channel!} lang={document.documentElement.lang==='en'?'en':'zh'}/>}
   const noEvent = () => () => {}
   return {
-    ...assistant, modelPicker: <ModelPicker/>,
+    ...assistant,agents:assistant.catalog.agents??[],modelPicker:<><ModelPicker/>{channel&&<ChannelManager/>}</>,
+    channel,control:channel?.control,extraSkills:[...assistant.extraSkills,...(channel?[channel.skill]:[])],
     api: {
       // Local compatibility projection only. Full desktop settings and global
       // credentials never travel over HTTP or enter this renderer.
@@ -29,6 +34,6 @@ export async function createEditorAssistant() {
       openSkillsSettings: async () => {location.assign('/')},
       openAiModelSettings: async () => {location.assign('/')},
     },
-    dispose() {assistant.dispose(); client.invalidateSession()},
+    dispose() {channel?.dispose();assistant.dispose(); client.invalidateSession()},
   }
 }

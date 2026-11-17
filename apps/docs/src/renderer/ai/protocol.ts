@@ -659,6 +659,7 @@ export function buildDocumentContext(
   editor: Editor,
   scope?: SelectionScope,
   hf?: AiHfState,
+  includeSelection = true,
 ): string {
   const entries: ContextEntry[] = []
   let index = 0
@@ -772,7 +773,7 @@ export function buildDocumentContext(
         ]
       : []),
     ...(hf ? hfContextLines(hf) : []),
-    selLine,
+    ...(includeSelection ? [selLine] : []),
   ].join('\n')
 }
 

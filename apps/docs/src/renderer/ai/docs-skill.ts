@@ -5,6 +5,7 @@ import type { AgentSkill } from '@genoffice/agent-core'
 import {
   AGENT_SYSTEM_PROMPT,
   buildDocContext,
+  buildDocumentContext,
   getSelectionScope,
   type AiTrack,
   type NumIds,
@@ -93,6 +94,17 @@ export function createDocsSkill(
         getComments?.()?.list(),
         getHf?.()?.read(),
         getPageSetup?.()?.list(),
+      )
+    },
+    executeScopedTool: (call, signal) => {
+      if (call.name === 'get_document_context') return {
+        output: buildDocumentContext(getEditor(), undefined, getHf?.()?.read(), false),
+        summary: 'Document context',
+        mutated: false,
+      }
+      return executeTool(
+        getEditor(), call, getNumIds(), undefined, signal, null,
+        getComments?.(), getHf?.(), undefined, getPageSetup?.(), getExtras?.(), getNotes?.(),
       )
     },
     executeTool: (call, signal) =>

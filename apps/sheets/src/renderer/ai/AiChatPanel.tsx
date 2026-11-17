@@ -1,3 +1,4 @@
+import { AssistantParticipants, DelegatedAgentResultCard, type AssistantParticipant, type DelegatedAgentResult } from '@genoffice/ui'
 import {
   aiPanelWidthAtPointer,
   AiPanelSideButton,
@@ -60,6 +61,7 @@ const PASTE_MIME_EXT: Record<string, string> = {
 const PANEL_WIDTH_KEY = 'sheets-ai-panel-width'
 
 export interface AiToolChip {
+  readonly delegation?: DelegatedAgentResult | undefined
   readonly summary: string
   readonly isError: boolean
   /** still executing: rendered as a spinner chip, replaced in place when the tool finishes */
@@ -104,6 +106,8 @@ const MODEL_BRIDGE: AiModelPickerBridge = {
 
 export function AiChatPanel({
   modelPicker,
+  assistantAgents,
+  onManageAgents,
   isOpen,
   hideRail = false,
   hasContent,
@@ -137,6 +141,8 @@ export function AiChatPanel({
 }: {
   readonly isOpen: boolean
   readonly modelPicker?: React.ReactNode
+  readonly assistantAgents?: readonly AssistantParticipant[] | undefined
+  readonly onManageAgents?: (() => void) | undefined
   /** true suppresses even the collapsed rail (the "show the AI sidebar" setting is off) */
   readonly hideRail?: boolean
   /** the workbook has cells with content — empty workbooks get "build me a sheet" copy instead */
@@ -479,6 +485,8 @@ export function AiChatPanel({
           </button>
         </div>
       </header>
+
+      {assistantAgents && <AssistantParticipants agents={assistantAgents} lang={lang} onManageAgents={onManageAgents} />}
 
       <div className="ai-chat" ref={chatRef} onScroll={onChatScroll}>
         {/* Past conversation (read-only transcript), shown continuously with the current turn */}
@@ -917,7 +925,7 @@ function StepIcon({ status }: { status: 'running' | 'done' | 'error' }) {
  *  that auto-opens while tools run, auto-collapses into "Worked · N steps" when they finish,
  *  and a manual toggle that always wins. Rows inside are step rows with 1px connectors. */
 function ToolChipList({ tools }: { tools: readonly AiToolChip[] }): React.JSX.Element {
-  const { t: tr } = useI18n()
+  const { t: tr, lang } = useI18n()
   const [expanded, setExpanded] = useState<Set<number>>(new Set())
   const [userOpen, setUserOpen] = useState<boolean | null>(null)
 
@@ -960,6 +968,7 @@ function ToolChipList({ tools }: { tools: readonly AiToolChip[] }): React.JSX.El
                   <StepIcon status={stepStatus} />
                 </span>
                 <div className="ai-step-content">
+                  {tool.delegation && <DelegatedAgentResultCard result={tool.delegation} lang={lang} />}
                   {hasOutput ? (
                     <button
                       type="button"

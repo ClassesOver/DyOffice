@@ -12,14 +12,14 @@ import { createRealtimeGateway, type RealtimeGateway, type RealtimeOptions } fro
 
 type RealtimeDeps = {
   transactions: PrincipalTransactions; sessions: SessionService
-  csrf: ReturnType<typeof createCsrfService>; origin: string; options?: RealtimeOptions; commandPolicy?: RealtimeCommandPolicy
+  csrf: ReturnType<typeof createCsrfService>; origin: string; options?: RealtimeOptions; commandPolicy?: RealtimeCommandPolicy;channelNotifications?:(token:string,fileId:string)=>Promise<{conversationId:string;sequence:number}[]>
 }
-export function registerRealtimeRoutes(app: FastifyInstance, { transactions, sessions, csrf, origin, options = {}, commandPolicy }: RealtimeDeps) {
+export function registerRealtimeRoutes(app: FastifyInstance, { transactions, sessions, csrf, origin, options = {}, commandPolicy,channelNotifications }: RealtimeDeps) {
   const tickets = createTicketService({ transactions, ttlMs: options.ticketTtlMs })
   const state = createRealtimeState({ transactions })
   const registry = createRealtimeRegistry({ heartbeatIntervalMs: options.heartbeatIntervalMs })
   const commands = createRealtimeCommands({ transactions, registry, state, policy: commandPolicy, ackTimeoutMs: options.ackTimeoutMs })
-  const dispatcher = createRealtimeDispatcher({ registry, state, commands })
+  const dispatcher = createRealtimeDispatcher({ registry, state, commands,channelNotifications })
   let gateway: RealtimeGateway
   try { gateway = createRealtimeGateway({ server: app.server, origin, sessions, csrf, tickets, registry, dispatcher, pollIntervalMs: options.pollIntervalMs }) }
   catch (error) { registry.close(); throw error }

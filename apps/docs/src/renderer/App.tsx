@@ -803,7 +803,7 @@ function shadowPlanDiff(
   return diffs
 }
 
-export function App({ host }: { host?: { readOnly: boolean; assistantAvailable: boolean; assistant?: {transport: import('@genoffice/agent-core').AgentTransport; modelPicker: React.ReactNode}; preferenceScope: string; onEditorReady?(handle: import('./file-actions').DocsEditorHandle | null): void; lifecycle: import('./file-actions').DocsHostLifecycle; onDocumentEdited(): void; onOpenFailed(): void } } = {}) {
+export function App({ host }: { host?: { readOnly: boolean; assistantAvailable: boolean; assistant?: {transport: import('@genoffice/agent-core').AgentTransport; modelPicker: React.ReactNode; extraSkills?: readonly import('@genoffice/agent-core').AgentSkill[]; agents?: readonly import('@genoffice/ui').AssistantParticipant[]; onManageAgents?: () => void; control?: import('@genoffice/ui').AssistantControl | undefined}; preferenceScope: string; onEditorReady?(handle: import('./file-actions').DocsEditorHandle | null): void; lifecycle: import('./file-actions').DocsHostLifecycle; onDocumentEdited(): void; onOpenFailed(): void } } = {}) {
   // subscribe to language switches for re-render; strings all go through module-level t, so memoized callbacks never capture stale closures
   const { lang } = useI18n()
   const [doc, setDoc] = useState<DocState | null>(null)
@@ -8467,6 +8467,10 @@ export function App({ host }: { host?: { readOnly: boolean; assistantAvailable: 
             <AiPanel
               transport={host?.assistant?.transport}
               modelPicker={host?.assistant?.modelPicker}
+              assistantAgents={host?.assistant?.agents}
+              onManageAgents={host?.assistant?.onManageAgents}
+              assistantControl={host?.assistant?.control}
+              extraSkills={host?.assistant?.extraSkills}
               key={aiPanelKey}
               editor={editor}
               blocks={doc.parsed.blocks}

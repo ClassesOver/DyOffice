@@ -1,3 +1,4 @@
+import { delegatedAgentResult, compactDelegatedTranscript } from '@genoffice/ui'
 import { ICommandService } from '@univerjs/core'
 import { vetoUniverCommand } from './very-hidden-sheets'
 import { admitMutation, blocksSaveWrite, installMutationInputAdmission, mutationAdmission, MUTATION_SAVE_MESSAGE, type MutationLease, type MutationPhase } from './mutation-admission'
@@ -636,7 +637,7 @@ export interface SheetsEditorHandle {
   isDirty(): boolean
 }
 export interface SheetsEditorHost {
-  assistant?: {transport: import('@genoffice/agent-core').AgentTransport; modelPicker: React.ReactNode}
+  assistant?: {transport: import('@genoffice/agent-core').AgentTransport; modelPicker: React.ReactNode; extraSkills?: readonly import('@genoffice/agent-core').AgentSkill[]; agents?: readonly import('@genoffice/ui').AssistantParticipant[]; onManageAgents?: () => void; control?: import('@genoffice/ui').AssistantControl | undefined}
   /** Opt in only when the host returns stable sheet/drawing IDs after saving. */
   inPlaceSave?: boolean
   readOnly: boolean
@@ -1657,6 +1658,7 @@ export function App({
             tools:
               m.tools?.map((t) => ({
                 summary: t.summary,
+                delegation: delegatedAgentResult(t.name, t.output),
                 isError: !!t.isError,
                 ...(t.name ? { name: t.name } : {}),
                 ...(t.output ? { output: t.output.slice(0, 2000) } : {}),
@@ -1763,13 +1765,16 @@ export function App({
   const runLastTextRef = useRef('')
   /** true once any tool of the run mutated the workbook */
   const runMutatedRef = useRef(false)
+  const pendingContinuationsRef = useRef<string[]>([])
 
   const agentLoopRef = useRef<AgentLoop | null>(null)
   if (!agentLoopRef.current) {
     agentLoopRef.current = new AgentLoop({
       transport: host?.assistant?.transport ?? createElectronTransport(() => aiSettingsRef.current!),
+      allowDelegationYield: !!host?.assistant?.control,
       systemSuffix: aiLangDirective,
       skill: composeSkills('sheets+files', '', [
+        ...(host?.assistant?.extraSkills ?? []),
         createWorkbookSkill(sheetsSkillDeps()),
         createFilesSkill(availableAttachments),
         createMergeSkill({
@@ -1815,7 +1820,7 @@ export function App({
           if (execution.mutated) runMutatedRef.current = true
           const input = safeJsonInput(call.input)
           const output = execution.output
-            ? execution.output.slice(0, PERSIST_TOOL_FIELD_MAX)
+            ? compactDelegatedTranscript(call.name, execution.output, PERSIST_TOOL_FIELD_MAX)
             : undefined
           runToolsRef.current.push({
             name: call.name,
@@ -1834,6 +1839,7 @@ export function App({
                 ...tools,
                 {
                   summary: execution.summary,
+                  delegation: delegatedAgentResult(call.name, execution.output),
                   isError: !!execution.isError,
                   name: call.name,
                   ...(execution.output ? { output: execution.output.slice(0, 2000) } : {}),
@@ -1847,7 +1853,8 @@ export function App({
           setSessionUsage((prev) => addTokenUsage(prev, usage))
           patchLastAssistant((entry) => ({ ...entry, usage: runUsageRef.current }))
         },
-        onDone: ({ text, cancelled, turnLimit, truncated }) => {
+        onDone: ({ text, cancelled, turnLimit, truncated, yielded }) => {
+          if (yielded) host?.assistant?.control?.reportYield(yielded.taskIds)
           // Prefer tool summaries when the model finished via tools with no prose
           // (agent-core fills history with COMPLETED_VIA_TOOLS_TEXT so follow-ups
           // stay provider-safe; the UI can show the real work that ran).
@@ -1898,7 +1905,13 @@ export function App({
             persistChatMessage('assistant', finalText, runToolsRef.current)
           }
           setAiRunScope(undefined)
-          void autoSaveCompletedAiRun().finally(() => setAiBusy(false))
+          void autoSaveCompletedAiRun().finally(() => {
+            setAiBusy(false)
+            if (!cancelled && !yielded) {
+              const instruction = pendingContinuationsRef.current.shift()
+              if (instruction) queueMicrotask(() => runContinuation(instruction))
+            }
+          })
         },
         onError: (error) => {
           setMessage(error)
@@ -1949,6 +1962,33 @@ export function App({
       },
     })
   }
+
+  const assistantControl = host?.assistant?.control
+  useEffect(() => {
+    if (!assistantControl) return
+    return assistantControl.register({
+      isBusy: () => !agentLoopRef.current || agentLoopRef.current.busy || !!runStartingRef.current,
+      requestYield(taskIds) { agentLoopRef.current?.requestYield(taskIds) },
+      continue(instruction) {
+        if (agentLoopRef.current?.busy || runStartingRef.current) {
+          pendingContinuationsRef.current.push(instruction)
+          return true
+        }
+        runContinuation(instruction)
+        return true
+      },
+      async execute(instruction, signal) {
+        const loop = agentLoopRef.current
+        if (!loop || loop.busy || runStartingRef.current) throw new Error('Office assistant is busy')
+        setAiBusy(true)
+        try {
+          return await loop.runScoped(instruction, { signal, allowedTools: assistantControl.allowedTools })
+        } finally {
+          setAiBusy(false)
+        }
+      },
+    })
+  }, [assistantControl])
 
   function isAgentConfigured(): boolean {
     if (hostRef.current?.assistant) return true
@@ -2035,6 +2075,12 @@ export function App({
       })
   }
 
+  function runContinuation(instruction: string): void {
+    appendChat({ role: 'user', text: instruction, tools: [] })
+    persistChatMessage('user', instruction)
+    runAgent(instruction, [])
+  }
+
   const mergeAttachments = (result: AttachmentAddResult | null): void => {
     if (!result) return
     if (result.accepted.length > 0) {
@@ -2088,6 +2134,8 @@ export function App({
   }
 
   function handleNewChat(): void {
+    assistantControl?.resetConversation?.()
+    pendingContinuationsRef.current = []
     runStartingRef.current = null
     agentLoopRef.current?.reset()
     setAiRunScope(undefined)
@@ -6227,6 +6275,8 @@ export function App({
       )}
       <ExcelShell
         modelPicker={host?.assistant?.modelPicker}
+        assistantAgents={host?.assistant?.agents}
+        onManageAgents={host?.assistant?.onManageAgents}
         assistantAvailable={host?.assistantAvailable ?? true}
         openingWorkbook={openingWorkbook}
         prompt={prompt}

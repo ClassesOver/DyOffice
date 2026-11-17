@@ -38,6 +38,13 @@ export function createWorkbookSkill(deps: SheetsSkillDeps): AgentSkill {
     tools: WORKBOOK_TOOLS,
     buildContext: () => buildWorkbookContext(deps),
     executeTool: (call) => executeWorkbookTool(call, deps),
+    executeScopedTool: (call) => executeWorkbookTool(call, {
+      ...deps,
+      getActiveSheetInfo() {
+        const { selection, selectionFrozen, selectionColumns, ...info } = deps.getActiveSheetInfo()
+        return info
+      },
+    }),
     verifyResponse: verifySheetsResponse,
   }
 }

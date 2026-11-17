@@ -28,6 +28,8 @@ export interface AgentSkill {
    * their loops and stop promptly.
    */
   executeTool(call: AgentToolCall, signal?: AbortSignal): ToolExecution | Promise<ToolExecution>
+  /** Read-only peer execution can omit native selection and draft context. */
+  executeScopedTool?(call: AgentToolCall, signal?: AbortSignal): ToolExecution | Promise<ToolExecution>
   /**
    * Claimed-action guard: inspect the run's final assistant text against the
    * tools that actually executed during the run. Return a corrective
@@ -75,6 +77,11 @@ export function composeSkills(id: string, intro: string, skills: AgentSkill[]): 
         return { output: `Unknown tool: ${call.name}`, isError: true, summary: call.name }
       }
       return skill.executeTool(call, signal)
+    },
+    executeScopedTool: (call, signal) => {
+      const skill = ownerOf(call.name)
+      if (!skill) return { output: `Unknown tool: ${call.name}`, isError: true, summary: call.name }
+      return skill.executeScopedTool ? skill.executeScopedTool(call, signal) : skill.executeTool(call, signal)
     },
     verifyResponse: (finalText, executed) => {
       for (const skill of skills) {

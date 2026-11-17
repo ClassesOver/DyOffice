@@ -30,7 +30,7 @@ import {createEditorAssistant} from './assistant.tsx'
 
 export async function mountSheetsEditor(host: SessionFileHost, container: HTMLElement, fileId: string) {
   container.textContent = messages.zh.opening
-  const assistant = await createEditorAssistant().catch(() => undefined)
+  const assistant = await createEditorAssistant({fileId,editorId:host.getEditorId()!,generation:()=>1}).catch(() => undefined)
   const opened = await host.open(fileId)
   if (opened.format !== 'xlsx') throw new Error(messages.zh.failed)
   const prefs = await host.getPreferences(), locale = prefs.language === 'en' ? 'en' : 'zh', text = messages[locale]
@@ -50,7 +50,7 @@ export async function mountSheetsEditor(host: SessionFileHost, container: HTMLEl
   let initialLease = true
   try { await host.acquireLease(fileId) } catch { initialLease = false }
   const stop = host.startRenewal(fileId), unsubscribe = host.subscribe(()=>changed())
-  const realtime = mountEditorRealtime(host, fileId, () => changed())
+  const realtime = mountEditorRealtime(host, fileId, () => changed(),channels=>assistant?.channel?.observe(channels))
   const dirty = () => (editor?.isDirty() ?? false) || bridge.isDirty()
   async function saveAndDownload() {
     if(!editor || downloading || takingOver || disposed)return

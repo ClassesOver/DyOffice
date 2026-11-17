@@ -49,7 +49,7 @@ async function configuredApplication() {
     const nativeDocsDirectory=nativeFlag ? resolve(process.env.DYOFFICE_NATIVE_DOCX_DIRECTORY||fileURLToPath(new URL('../dist-docs/',import.meta.url))) : undefined;
     sheets=await configuredSheetsRuntime(process.env);
     const {close:closeSheets,...sheetsConfig}=sheets ?? {};
-    return await buildLocalApp({db,businessPool,...storage,...sheetsConfig,nativeDocsDirectory,localShellDirectory:shellDirectory,nativeJobs:jobFlag==='experimental',deploymentId,origin,csrfKey,globalConfigKeyring,providerGateway,sourcesCredentialKeys,sourcesEgressTargets,passwordBlocklistFile:process.env.DYOFFICE_PASSWORD_BLOCKLIST_FILE,closeDb:async()=>{await closeSheets?.();storage.close();await Promise.all([close(),businessPool.end()]);}});
+    return await buildLocalApp({db,businessPool,...storage,...sheetsConfig,nativeDocsDirectory,localShellDirectory:shellDirectory,nativeJobs:jobFlag==='experimental',deploymentId,origin,csrfKey,globalConfigKeyring,providerGateway,assistantChannels:process.env.DYOFFICE_ASSISTANT_CHANNELS==='on',codingHarnesses:process.env.DYOFFICE_CODING_AGENT==='off'?false:{cliPath:process.env.DYOFFICE_CODEX_PATH,analysisPython:process.env.DYOFFICE_ANALYSIS_PYTHON},sourcesCredentialKeys,sourcesEgressTargets,passwordBlocklistFile:process.env.DYOFFICE_PASSWORD_BLOCKLIST_FILE,closeDb:async()=>{await closeSheets?.();storage.close();await Promise.all([close(),businessPool.end()]);}});
   } catch(error) { await sheets?.close();storage?.close();await Promise.allSettled([close(),businessPool?.end()]); throw error; }
 }
 

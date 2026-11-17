@@ -35,7 +35,7 @@ export async function mountDocsEditor(host: SessionFileHost,element: HTMLElement
   let editorHandle: DocsEditorHandle | null = null
   const registerEditor = (handle: DocsEditorHandle | null) => { editorHandle = handle }
   const unsubscribe = host.subscribe(() => changed())
-  const assistant = await createEditorAssistant().catch(() => undefined)
+  const assistant = await createEditorAssistant({fileId,editorId:host.getEditorId()!,generation:()=>1}).catch(() => undefined)
   const opened = await host.open(fileId)
   if (opened.format !== 'docx') throw new Error(messages.zh.failed)
   const prefs = await host.getPreferences(), locale = prefs.language === 'en' ? 'en' : 'zh', text = messages[locale]
@@ -51,7 +51,7 @@ export async function mountDocsEditor(host: SessionFileHost,element: HTMLElement
   let initialLease = true
   try { await host.acquireLease(fileId) } catch { initialLease = false }
   const stop = host.startRenewal(fileId)
-  const realtime = mountEditorRealtime(host, fileId, () => changed())
+  const realtime = mountEditorRealtime(host, fileId, () => changed(),channels=>assistant?.channel?.observe(channels))
   function NativeDocument() {
     const [,tick] = useState(0), [loaded,setLoaded] = useState(false), [failed,setFailed] = useState(false)
     const state = host.getState(fileId)

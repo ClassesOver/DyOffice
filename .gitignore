@@ -54,3 +54,6 @@ apps/web/.dyoffice/
 /apps/web/dist-slides/
 
 /apps/web/dist-sheets-server/
+
+# Offline analysis wheelhouse and installed Python runtime
+/.dyoffice-analysis-build/

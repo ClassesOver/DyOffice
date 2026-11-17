@@ -3,7 +3,7 @@ import type { SessionFileHost } from '../../../../packages/browser-host/src/file
 
 /** Notifications describe the persisted head. They do not rebase the editor or
  * clear a draft; adopting another head remains an explicit HTTP operation. */
-export function mountEditorRealtime(host: SessionFileHost, fileId: string, onChange: () => void) {
+export function mountEditorRealtime(host: SessionFileHost, fileId: string, onChange: () => void,onChannels?:(channels:readonly {conversationId:string;sequence:number}[])=>void) {
   let remoteHead: string | null = null, status: EditorBridgeStatus = 'connecting'
   // Legacy/mocked hosts and non-browser mounts retain the HTTP-only path.
   if (typeof globalThis.WebSocket !== 'function' || typeof host.getEditorId !== 'function') return { notice: (_locale: 'en' | 'zh') => '', dispose() {} }
@@ -15,6 +15,7 @@ export function mountEditorRealtime(host: SessionFileHost, fileId: string, onCha
       onChange()
     },
     onEvent(event) {
+      if(event.type==='assistant-channels'){onChannels?.(event.channels);return}
       if (event.type !== 'state' && event.type !== 'file-event') return
       const state = event.type === 'state' ? event : event.fileEvent
       remoteHead = state.headRevision
