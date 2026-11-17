@@ -114,13 +114,24 @@ function htmlText(html: string): string {
 }
 
 function insertBlobImage(editor: Editor, blob: Blob): void {
+  const { current, dispose } = pendingDocumentOperation(editor)
   const reader = new FileReader()
-  reader.onload = () => {
-    if (typeof reader.result === 'string') {
-      void insertImageFromDataUrl(editor, reader.result, 'Image (pasted)')
+  reader.onerror = reader.onabort = () => dispose()
+  reader.onload = async () => {
+    try {
+      if (current() && typeof reader.result === 'string') {
+        await insertImageFromDataUrl(editor, reader.result, 'Image (pasted)', current)
+      }
+    } finally {
+      dispose()
     }
   }
-  reader.readAsDataURL(blob)
+  try {
+    reader.readAsDataURL(blob)
+  } catch (error) {
+    dispose()
+    throw error
+  }
 }
 
 /**
