@@ -271,3 +271,50 @@ it is not mounted and has no replay/polling/storage behavior. Protocol 68/68,
 strict 13 modules, Rust 37/37 with locked/offline fmt/clippy/build, and preflight
 17/17 passed. The binary still exits 78. This is a focused merged-candidate check,
 not a latest full-repository, CI, browser, desktop or target-OS acceptance claim.
+
+## Real local-application PDF path
+
+`pdf-local-app.test.mjs` exercises the existing `buildLocalApp` over real loopback
+HTTP with PostgreSQL restricted roles and local object storage, not the optional
+recovery-only composition. Two cases passed and were independently rerun. The
+source-complete Web/server/helper test tree was compared with head `08166257`:
+251 files matched. Coverage includes CSRF-authenticated original upload/finish,
+metadata, exact-revision byte/hash download, attachment/CSP/no-store headers,
+cross-owner/admin and same-owner wrong-file revision denial, trash and logout.
+
+PDF editing remains unsupported; the optional recovery endpoint remains unmounted
+and the authenticated application API catchall returns 501. The workspace-open
+204 assertion is not proof of durable tracking state. UI routing was inspected in
+source, not exercised in a browser. There is no trusted application recovery-ticket
+source or rotation/save controller yet, so no recovery button or in-process parser
+was exposed as a safe production editing path.
+
+## Actual deny-only broker to PG negative composition
+
+The restricted native-job authority and reservation coordinator now call a fixed
+Rust test artifact through a bounded Node driver. The artifact executes the
+existing ProbeBroker on a real same-UID Unix socketpair. This proves a cross-language
+denial path, not an authenticated deployed broker or an engine/OS certificate.
+Default production factories still reject and the normal binary still exits 78.
+
+After durable start intent, a correlated disabled response, exit 78, timeout,
+stdout/stderr overflow, partial response or early close all retain uncertain
+capacity. Reconstructing the PG adapter and reconciling leaves blocked_uncertified.
+Authenticated snapshots with a nonzero original revision verify unchanged T06
+tables and head; **no T06 writer is called**, so this is not positive output-save
+integration. The original authority fixture was extracted without relaxing roles.
+
+Independent tests passed: broker 10/10 and authority plus negative PG 29/29.
+The fixed test-only fault modes dynamically exercise timeout, both stream caps,
+partial/empty replies and cancellation. Removing the timer and stream limits
+caused three actual failing tests before restoration. Callers cannot supply
+commands, paths, arbitrary arguments or an environment map. Neither killing this
+test process nor its exit code becomes document-unit/cgroup stop evidence.
+See [negative-chain scope and commands](../inventory/document-broker-negative-chain.md).
+
+Final combined regression after fixture extraction and fault additions: **110/110**
+focused cases, zero skips (previous 103 plus seven real-Rust/PG negative cases).
+The two real local-application PDF cases passed separately. Pure protocol remains
+68/68 without a Rust build dependency; broker suite 10/10, strict 14 modules and
+Rust 37/37 with feature-gated build/fmt/clippy passed. These remain the explicitly
+bounded test scopes above, not full-repository or target-OS acceptance.
