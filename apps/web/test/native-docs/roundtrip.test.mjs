@@ -53,6 +53,7 @@ async function expectCleanPersistence(page) {
     // Bounded state-only diagnostics: no document text, identities, URLs or tokens.
     console.error('native-save-state',JSON.stringify({
       outcome:await status.getAttribute('data-native-save'),
+      reasons:await status.getAttribute('data-incomplete-reasons'),
       dirty:await status.getAttribute('data-dirty'),
       notification:await page.locator('.dyoffice-docs-notification-state').count()>0,
     }))

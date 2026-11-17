@@ -10,13 +10,14 @@ export function createDocsBridge(host: SessionFileHost, fileId: string, prefs: A
   const alias = `/files/${fileId}/${state.name}`, guard = createSaveGenerationGuard(), urls = new Set<string>()
   let consumed = false, ticket: SaveTicket | null = null
   let nativeSaveOutcome: 'none' | 'pending' | 'accepted' | 'incomplete' = 'none'
+  let nativeSaveReasons: readonly string[] = []
   const unavailable = async () => { throw new Error(text.unavailable) }
   const noEvent = () => () => {}
   const lifecycle = {
-    documentOpened() { guard.reset(); ticket = null; nativeSaveOutcome = 'none'; onChange() },
+    documentOpened() { guard.reset(); ticket = null; nativeSaveOutcome = 'none'; nativeSaveReasons = []; onChange() },
     edited() { guard.markEdited(); onChange() },
     async beforeSave() {
-      nativeSaveOutcome = 'pending'
+      nativeSaveOutcome = 'pending'; nativeSaveReasons = []
       if (guard.getState().status === 'unknown') {
         await host.reconcile(fileId)
         if (ticket) guard.settleSave(ticket,'committed')
@@ -25,8 +26,9 @@ export function createDocsBridge(host: SessionFileHost, fileId: string, prefs: A
       ticket = guard.beginSave()
       onChange()
     },
-    afterSave(accepted: boolean) {
+    afterSave(accepted: boolean, incompleteReasons: readonly string[] = []) {
       nativeSaveOutcome = accepted ? 'accepted' : 'incomplete'
+      nativeSaveReasons = [...incompleteReasons]
       if (ticket && guard.getState().status !== 'unknown') { guard.settleSave(ticket,'failed'); ticket = null }
       if (accepted && host.getState(fileId).status === 'idle') guard.reset()
       // Native metadata edits do not emit a ProseMirror update. An incomplete
@@ -86,5 +88,5 @@ export function createDocsBridge(host: SessionFileHost, fileId: string, prefs: A
     pickImage: unavailable,fetchImage: unavailable,saveImageAs: unavailable,
     openAiModelSettings: unavailable,openSkillsSettings: unavailable,
   } satisfies Partial<DesktopApi>
-  return { api,lifecycle,getState: () => ({...guard.getState(), nativeSaveOutcome}),dispose() { for (const url of urls) URL.revokeObjectURL(url); urls.clear() } }
+  return { api,lifecycle,getState: () => ({...guard.getState(), nativeSaveOutcome, nativeSaveReasons}),dispose() { for (const url of urls) URL.revokeObjectURL(url); urls.clear() } }
 }

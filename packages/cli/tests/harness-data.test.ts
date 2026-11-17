@@ -131,3 +131,40 @@ describe('内外部 harness 统一数据客户端',()=>{
     expect((await readdir(root)).sort()).toEqual(['input.json','race.json'])
   })
 })
+
+it('cancels a late response body even when abort preceded body-reader acquisition',async()=>{
+ const root=await directory(),controller=new AbortController(),cancel=vi.fn(async()=>{throw Error('private stream cleanup failure')})
+ await writeFile(join(root,'committed.json'),'existing committed bytes')
+ const client=createHarnessDataClient({...options,fetchImpl:async()=>{
+  const response=new Response(new ReadableStream({cancel}),{headers:{'content-type':'application/json'}})
+  controller.abort();return response
+ }})
+ await expect(client.download('result_1',join(root,'new.json'),controller.signal)).rejects.toMatchObject({name:'AbortError'})
+ expect(cancel).toHaveBeenCalledTimes(1)
+ expect(await readdir(root)).toEqual(['committed.json']);expect(await readFile(join(root,'committed.json'),'utf8')).toBe('existing committed bytes')
+})
+
+it('late localhost HTTP body is closed on cancellation without touching committed files',async()=>{
+ const {createServer}=await import('node:http')
+ const root=await directory(),controller=new AbortController()
+ await writeFile(join(root,'committed.json'),'committed bytes')
+ let disconnected!:()=>void
+ const closed=new Promise<void>(resolve=>{disconnected=resolve})
+ const server=createServer((request,response)=>{
+  expect(request.headers.authorization).toBe('Bearer task-scoped-secret')
+  response.on('close',disconnected)
+  response.writeHead(200,{'content-type':'application/json'});response.write('{')
+ })
+ await new Promise<void>((resolve,reject)=>{server.once('error',reject);server.listen(0,'127.0.0.1',resolve)})
+ const address=server.address();if(!address||typeof address==='string')throw Error('No test listener')
+ let timer:ReturnType<typeof setTimeout>|undefined
+ try {
+  const client=createHarnessDataClient({...options,baseUrl:`http://127.0.0.1:${address.port}/api/v1/harness`,fetchImpl:async(input,init)=>{
+   // Reproduce a response already delivered by the transport when cancel wins.
+   const response=await fetch(input,{...init,signal:null});controller.abort();return response
+  }})
+  await expect(client.download('result_1',join(root,'new.json'),controller.signal)).rejects.toMatchObject({name:'AbortError'})
+  await Promise.race([closed,new Promise<never>((_,reject)=>{timer=setTimeout(()=>reject(Error('Cancelled HTTP response remained open')),2000)})])
+  expect(await readdir(root)).toEqual(['committed.json']);expect(await readFile(join(root,'committed.json'),'utf8')).toBe('committed bytes')
+ }finally{clearTimeout(timer);server.closeAllConnections();await new Promise<void>(resolve=>server.close(()=>resolve()))}
+})

@@ -30,11 +30,19 @@ test('original Settings lists only own sessions and confirms CSRF-protected per-
  assert.equal((await context.cookies()).find(c=>c.name==='__Host-dyoffice-session').value,token)
  await sessions.scrollIntoViewIfNeeded();await mkdir('test-results',{recursive:true});await page.screenshot({path:'test-results/local-shell-sessions.png',fullPage:true})
  // Password rotation changes the current session ID: the account pane must reload the list.
+ const beforeRotation=token,ownerBefore=(await me(token)).json().user.id
  const dialog=page.getByRole('dialog'),next='session rotation river lanterns 7038'
  await dialog.getByLabel('当前密码',{exact:true}).fill(password);await dialog.getByLabel('新密码',{exact:true}).fill(next);await dialog.getByLabel('确认新密码',{exact:true}).fill(next)
- await dialog.getByRole('button',{name:'修改密码',exact:true}).click();await expect(dialog.getByRole('status')).toContainText('当前会话已更新')
+ const passwordRegion=dialog.getByRole('region',{name:'修改密码',exact:true})
+ await passwordRegion.getByRole('button',{name:'修改密码',exact:true}).click();await expect(passwordRegion.getByRole('status')).toHaveText('密码已修改。当前会话已更新，其他旧会话已失效。')
  token=(await context.cookies()).find(c=>c.name==='__Host-dyoffice-session').value
+ assert.notEqual(token,beforeRotation);assert.equal((await me(beforeRotation)).statusCode,401)
+ const current=await me(token);assert.equal(current.statusCode,200);assert.equal(current.json().user.id,ownerBefore)
  const active=(await app.inject({url:'/api/v1/auth/sessions',headers:{cookie:'__Host-dyoffice-session='+token}})).json().sessions.find(row=>row.current)
+ await expect(sessions.locator(`[data-session-id="${active.id}"]`)).toBeVisible();await expect(sessions.locator('[data-session-id]')).toHaveCount(1)
+ // Reload must retain the replacement owner session and render its current row.
+ await page.reload();await expect(page.locator('.home')).toBeVisible();await page.locator('.account-btn').click();await page.getByRole('button',{name:'个人设置',exact:true}).click()
+ assert.equal((await context.cookies()).find(c=>c.name==='__Host-dyoffice-session').value,token);assert.equal((await me(token)).json().user.id,ownerBefore)
  await expect(sessions.locator(`[data-session-id="${active.id}"]`)).toBeVisible();await expect(sessions.locator('[data-session-id]')).toHaveCount(1)
  await sessions.getByRole('button',{name:'撤销当前会话',exact:true}).click();await sessions.getByRole('button',{name:'确认撤销',exact:true}).click();await expect(page.getByLabel('用户名',{exact:true})).toBeVisible();assert.equal((await me(token)).statusCode,401)
 })

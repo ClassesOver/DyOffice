@@ -71,6 +71,10 @@ export function captureSaveMetadata(ctx: FileActionContext) {
   const margins = ctx.getMirrorMarginsSaveState?.();
   const evenOddHf = ctx.getEvenOddHfSaveState?.();
   return {
+    // Field names only; never return document/user values in diagnostics.
+    changedFields(current: FileActionContext) {
+      return saveMetadataKeys.filter((key, index) => !Object.is(values[index], current[key]));
+    },
     changed(current: FileActionContext): boolean {
       const latestColor = current.getPageColorSaveState?.();
       if (color && (!color.ready || !latestColor?.ready || color.token !== latestColor.token)) return true;

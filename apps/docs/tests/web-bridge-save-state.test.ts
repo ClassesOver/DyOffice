@@ -103,3 +103,24 @@ it('native serializer and Web bridge stay clean after acknowledgement, then pres
  expect(bridge.getState().dirty).toBe(true)
  expect(await zip.file('word/document.xml')!.async('string')).not.toContain('Newer draft')
 })
+
+it.each(['document','metadata'] as const)('records content-free %s reasons without consuming a racing edit', async (kind) => {
+ const {editor,ctx,path}=await fixture(false)
+ const outcomes:unknown[]=[]
+ ctx.pageCount=1
+ const host={getState:()=>({name:'a.docx',status:'idle'}),save:async (_id:string,data:Uint8Array)=>{await writeFile(path,data);if(kind==='document')editor.commands.insertContent('Newer racing draft');else ctx.pageCount=2}}
+ const bridge=createDocsBridge(host as never,'file',{language:'en'} as never,()=>{})
+ ctx.doc!.filePath='/files/file/a.docx'
+ ctx.hostLifecycle={...bridge.lifecycle,afterSave(accepted,reasons){outcomes.push({accepted,reasons});bridge.lifecycle.afterSave(accepted,reasons)}}
+ window.desktop={saveDocx:bridge.api.saveDocx} as never
+ editor.on('update',()=>{ctx.dirtyRef.current=true;bridge.lifecycle.edited()})
+ editor.commands.insertContent('Saved marker')
+ expect(await save(ctx,false,false)).toBe(true)
+ const reasons=kind==='document'?['document']:['metadata','metadata:pageCount']
+ expect(outcomes).toEqual([{accepted:false,reasons}])
+ expect(bridge.getState().dirty).toBe(true)
+ expect(bridge.getState().nativeSaveReasons).toEqual(reasons)
+ const zip=await JSZip.loadAsync(await readFile(path))
+ expect(await zip.file('word/document.xml')!.async('string')).toContain('Saved marker')
+ expect(await zip.file('word/document.xml')!.async('string')).not.toContain('Newer racing draft')
+})

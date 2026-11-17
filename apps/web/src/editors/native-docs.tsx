@@ -63,7 +63,7 @@ export async function mountDocsEditor(host: SessionFileHost,element: HTMLElement
     },[])
     const status = failed ? text.failed : state.status === 'unknown' ? text.unknown : state.status === 'unauthorized' ? text.unauthorized : !state.lease ? (initialLease ? text.conflict : text.readOnly) : bridge.getState().dirty ? '' : text.ready
     return <div className="dyoffice-native-docs">
-      <div className="dyoffice-docs-state" role="status"><span className="dyoffice-docs-persistence-state" data-native-save={bridge.getState().nativeSaveOutcome} data-dirty={String(bridge.getState().dirty)}>{status}</span>
+      <div className="dyoffice-docs-state" role="status"><span className="dyoffice-docs-persistence-state" data-native-save={bridge.getState().nativeSaveOutcome} data-incomplete-reasons={bridge.getState().nativeSaveReasons.join(',')} data-dirty={String(bridge.getState().dirty)}>{status}</span>
         {realtime.notice(locale) && <span className="dyoffice-docs-notification-state">{realtime.notice(locale)}</span>}
         <a href={`/api/v1/files/${fileId}/content?revision=${state.revision.revision}`} download>{text.download}</a>
         {!state.lease && !failed && <button onClick={() => { void host.takeoverLease(fileId).then(() => { initialLease = true }).catch(() => {}) }}>{text.takeover}</button>}

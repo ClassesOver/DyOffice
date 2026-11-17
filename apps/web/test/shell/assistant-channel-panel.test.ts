@@ -37,3 +37,32 @@ test('completed tasks show the executing agent avatar and escaped result summary
  expect(html).toContain('assistant-channel-result');expect(html.match(/assistant-avatar-external/g)?.length).toBe(2)
  expect(html).not.toContain('<script>')
 })
+
+const stateLabels = {queued:'排队中',running:'执行中',waiting_peer:'等待协作方',cancel_requested:'正在取消',succeeded:'已完成',failed:'失败',cancelled:'已取消',unknown_outcome:'结果待核对'} as const
+for (const [state,label] of Object.entries(stateLabels)) test(`task card exposes ${state} without fabricating a retry or cancellation`,()=>{
+ const snapshot={conversationId:'channel',fileId:'file',paused:false,sequence:1,members:[],applications:[],tasks:[{taskId:'task',state,instruction:'task instruction',from:'office',to:'peer'}]}
+ const html=renderToStaticMarkup(h(AssistantChannelPanel,{client:client(snapshot) as never,lang:'zh'}))
+ expect(html).toContain(label)
+ expect(html.includes('取消任务')).toBe(['queued','running','waiting_peer'].includes(state))
+ expect(html).not.toContain('重新执行')
+ expect(html).not.toContain('已停止')
+ if(state!=='cancelled')expect(html).not.toContain('已取消')
+ if(state!=='succeeded')expect(html).not.toContain('已完成')
+})
+
+test('cancel acknowledgement shows stopping until the authoritative terminal snapshot arrives',async()=>{
+ const {act}=await import('react');const {createRoot}=await import('react-dom/client')
+ ;(globalThis as typeof globalThis & {IS_REACT_ACT_ENVIRONMENT:boolean}).IS_REACT_ACT_ENVIRONMENT=true
+ let snapshot={conversationId:'channel',fileId:'file',paused:false,sequence:1,members:[],applications:[],tasks:[{taskId:'task',state:'running',instruction:'task instruction',from:'office',to:'peer'}]}
+ let notify=()=>{},cancels=0
+ const fake={...client(snapshot),snapshot:()=>snapshot,subscribe:(listener:()=>void)=>{notify=listener;return()=>{notify=()=>{}}},cancel:async()=>{cancels++;snapshot={...snapshot,sequence:2,tasks:[{...snapshot.tasks[0],state:'cancel_requested'}]}}}
+ const host=document.createElement('div');document.body.append(host);const root=createRoot(host)
+ try{
+  await act(async()=>root.render(h(AssistantChannelPanel,{client:fake as never,lang:'zh'})))
+  await act(async()=>[...host.querySelectorAll('button')].find(button=>button.textContent==='取消任务')!.click())
+  expect(cancels).toBe(1);expect(host.textContent).toContain('正在取消');expect(host.textContent).not.toContain('已取消')
+  expect([...host.querySelectorAll('button')].some(button=>button.textContent==='取消任务')).toBe(false)
+  await act(async()=>{snapshot={...snapshot,sequence:3,tasks:[{...snapshot.tasks[0],state:'cancelled'}]};notify()})
+  expect(host.textContent).toContain('已取消');expect(host.textContent).not.toContain('正在取消');expect(cancels).toBe(1)
+ }finally{await act(async()=>root.unmount());host.remove()}
+})

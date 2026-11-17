@@ -128,7 +128,7 @@ export interface DocsEditorHandle {
   save(): Promise<boolean>
   isDirty(): boolean
 }
-export interface DocsHostLifecycle { documentOpened(): void; beforeSave(): Promise<void>; afterSave(accepted: boolean): void }
+export interface DocsHostLifecycle { documentOpened(): void; beforeSave(): Promise<void>; afterSave(accepted: boolean, incompleteReasons?: readonly string[]): void }
 export interface FileActionContext {
   hostLifecycle?: DocsHostLifecycle
   /** Read the latest React state after asynchronous native serialization/write. */
@@ -1217,6 +1217,7 @@ async function saveOnce(
   ctx.saveInFlightRef.current = true
   ctx.saveIncompleteRef.current = false
   let nativeSaved = false
+  let incompleteReasons: string[] = []
   const generation = docGeneration
   try {
     // a mid-stream save would serialize (and write) a truncated document
@@ -1326,12 +1327,17 @@ async function saveOnce(
     // parse before the identity check: a document opened during this await must not be rewritten
     const reparsed = await parseDocxOffThread(fullBytes ?? bytes)
     if (docGeneration !== generation) return false
-    if (
-      editor.state.doc !== docSnapshot ||
-      metadataSnapshot.changed(ctx.getCurrentSaveContext?.() ?? ctx) ||
-      passwordIntentPending ||
-      ctx.fontSettingsVersionRef?.current !== fontSettingsVersion
-    ) {
+    const currentSaveContext = ctx.getCurrentSaveContext?.() ?? ctx
+    const documentChanged = editor.state.doc !== docSnapshot
+    const metadataChanged = metadataSnapshot.changed(currentSaveContext)
+    const fontsChanged = ctx.fontSettingsVersionRef?.current !== fontSettingsVersion
+    if (documentChanged || metadataChanged || passwordIntentPending || fontsChanged) {
+      incompleteReasons = [
+        ...(documentChanged ? ['document'] : []),
+        ...(metadataChanged ? ['metadata', ...metadataSnapshot.changedFields(currentSaveContext).map(key => `metadata:${key}`)] : []),
+        ...(passwordIntentPending ? ['password-pending'] : []),
+        ...(fontsChanged ? ['font-settings'] : []),
+      ]
       // The user kept editing, opened another document or chose another
       // password after the main process captured this save. Keep the live state
       // dirty; replacing it with the saved snapshot or marking it clean would
@@ -1480,7 +1486,7 @@ async function saveOnce(
     return false
   } finally {
     ctx.saveInFlightRef.current = false
-    if (docGeneration === generation) ctx.hostLifecycle?.afterSave(nativeSaved && !ctx.saveIncompleteRef.current)
+    if (docGeneration === generation) ctx.hostLifecycle?.afterSave(nativeSaved && !ctx.saveIncompleteRef.current, incompleteReasons)
   }
 }
 

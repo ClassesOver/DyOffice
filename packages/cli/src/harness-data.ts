@@ -34,7 +34,9 @@ function baseAddress(value:string):string {
 }
 
 async function boundedBody(response:Response,limit:number,signal?:AbortSignal):Promise<Buffer> {
-  checkAbort(signal)
+  // A transport can deliver headers after cancellation. No reader exists yet,
+  // so release that late body explicitly without replacing AbortError.
+  if(signal?.aborted){void response.body?.cancel().catch(()=>{});throw aborted()}
   const length=response.headers.get('content-length')
   if(length!==null&&(!/^\d+$/.test(length)||Number(length)>limit)) {
     void response.body?.cancel().catch(()=>{})
