@@ -48,6 +48,23 @@ async function captureSkillMenuState(page) {
 }
 
 test('native DOCX assistant delivers selected private Skill through the personal Provider Gateway', {timeout: 120_000}, async t => {
+  let phase = 'fixture'
+  const turns = {headers: 0, finished: 0, failed: 0}
+  const onAbort = () => t.diagnostic(JSON.stringify({stage: 'assistant-abort', phase, turns}))
+  t.signal.addEventListener('abort', onAbort, {once: true})
+  t.after(() => t.signal.removeEventListener('abort', onAbort))
+  const atPhase = async (name, operation) => {
+    phase = name
+    let timer
+    try {
+      return await Promise.race([operation(), new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error('Assistant phase timeout: ' + name)), 20_000)
+      })])
+    } catch (error) {
+      t.diagnostic(JSON.stringify({stage: 'assistant-wait', phase, turns}))
+      throw error
+    } finally { clearTimeout(timer) }
+  }
   const origin = 'http://localhost:4213', f = await fileFixture(t, {origin})
   const keyring = {activeKeyId: 'test', keys: {test: new Uint8Array(32).fill(25)}}
   const profile = {deploymentId: f.deploymentId, entryId: 'primary', revision: 1, providerId: 'openai', model: 'synthetic', baseUrl: 'https://provider.example/v1', endpoint: 'https://provider.example/v1/chat/completions', allowedIpv4: ['8.8.8.8'], maxOutputTokens: 128}
@@ -60,9 +77,14 @@ test('native DOCX assistant delivers selected private Skill through the personal
   const original = await docxBytes(), opened = await importFile(f, f.alice.token, original)
   const app = await buildLocalApp({db: f.db, businessPool: f.businessPool, passwords: f.passwords, deploymentId: f.deploymentId, origin, csrfKey: f.csrfKey, objectStore: f.objects, globalConfigKeyring: keyring, providerGateway: {profiles: [profile]}, nativeDocsDirectory: fileURLToPath(new URL('../../dist-docs', import.meta.url))})
   f.cleanup.push(() => app.close()); await app.listen({host: '127.0.0.1', port: 4213})
+  phase = 'browser-launch'
   const browser = await launchTestBrowser(); t.after(() => browser.close())
   const page = await browser.newPage(), errors = []
   page.on('pageerror', error => errors.push(error.message))
+  const isTurn = request => request.url() === origin + '/api/v1/ai/turns' && request.method() === 'POST'
+  page.on('response', response => {if (isTurn(response.request())) turns.headers++})
+  page.on('requestfinished', request => {if (isTurn(request)) turns.finished++})
+  page.on('requestfailed', request => {if (isTurn(request)) turns.failed++})
   const skillRequests = observeSkillRequests(page, origin)
   const auth = await page.request.get(origin + '/api/v1/auth/csrf')
   const {csrfToken} = await auth.json()
@@ -81,6 +103,7 @@ test('native DOCX assistant delivers selected private Skill through the personal
   let attachAttempt = 0
   const attachSkill = async () => {
     attachAttempt++
+    phase = 'attach-skill-' + attachAttempt
     try {
       await page.locator('.ai-plus-btn').click()
       const details = page.getByRole('menuitem', {name: '技能', exact: true})
@@ -109,7 +132,7 @@ test('native DOCX assistant delivers selected private Skill through the personal
   try {
     await composer.fill('Cancel while reading the Skill')
     await composer.press('Enter')
-    await reached.promise
+    await atPhase('cancel-skill-read-reached', () => reached.promise)
     await page.locator('.ai-panel .ai-stop-btn').click()
   } finally {
     resume.resolve()
@@ -121,11 +144,12 @@ test('native DOCX assistant delivers selected private Skill through the personal
   // then wait for its stream to finish before another turn or accounting reads.
   const firstTurn = page.waitForResponse(r => r.url() === origin + '/api/v1/ai/turns' && r.request().method() === 'POST')
   await composer.fill('Summarize this document')
+  phase = 'send-turn'
   await composer.press('Enter')
   await expect(page.getByText('Verified assistant reply', {exact: true})).toBeVisible({timeout: 20_000})
-  const firstResponse = await firstTurn
+  const firstResponse = await atPhase('first-response-headers', () => firstTurn)
   assert.equal(firstResponse.status(), 200)
-  assert.equal(await firstResponse.finished(), null)
+  assert.equal(await atPhase('first-response-finished', () => firstResponse.finished()), null)
   await expect(page.locator('.ai-panel .ai-stop-btn')).toHaveCount(0)
   const wire = JSON.parse(net.wire)
   assert.equal(wire.model, profile.model)
@@ -135,16 +159,20 @@ test('native DOCX assistant delivers selected private Skill through the personal
   assert.ok(!wire.tools.some(tool => tool.function.name === 'apply_ops'))
   const secondTurn = page.waitForResponse(r => r.url() === origin + '/api/v1/ai/turns' && r.request().method() === 'POST')
   await composer.fill('Follow-up without a Skill')
+  phase = 'send-turn'
   await composer.press('Enter')
   await expect(page.getByText('Verified assistant reply', {exact: true})).toHaveCount(2)
-  const secondResponse = await secondTurn
+  const secondResponse = await atPhase('second-response-headers', () => secondTurn)
   assert.equal(secondResponse.status(), 200)
-  assert.equal(await secondResponse.finished(), null)
+  assert.equal(await atPhase('second-response-finished', () => secondResponse.finished()), null)
   await expect(page.locator('.ai-panel .ai-stop-btn')).toHaveCount(0)
   assert.equal(net.writes, 2)
   assert.doesNotMatch(net.wire.toString(), /Alice private instructions|Bob private instructions/)
+  phase = 'budget-read'
   const {rows: budgets} = await f.ownerPool.query('SELECT owner_id,state FROM provider_budget_reservations')
   assert.deepEqual(budgets, Array(2).fill({owner_id: f.alice.user.id, state: 'settled'}))
+  phase = 'file-read'
   assert.deepEqual(await f.files.readFile(f.alice.token, opened.file.fileId, opened.file.revision), original)
   assert.deepEqual(errors, [])
+  phase = 'cleanup'
 })
