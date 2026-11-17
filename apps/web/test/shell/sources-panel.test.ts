@@ -35,6 +35,18 @@ async function change(label: string, value: string) {
 afterEach(async () => { await act(async () => { for (const root of roots.splice(0)) root.unmount() }); document.body.innerHTML = '' })
 function read(path: string) { return path.includes('?') ? { items: [initial().source], nextCursor: null } : initial() }
 
+test.each(['READONLY_ROLE_REQUIRED', 'SOURCE_TIMEOUT', 'SOURCE_UNAVAILABLE'])('failed connection test %s is presented as an error and a later success clears it', async code => {
+ let ok = false
+ const {host} = await mount(async (path, method = 'GET') => method === 'POST' ? {ok, code, kind: 'postgres'} : read(path))
+ await click('测试已保存草稿')
+ expect(host.querySelector('.ant-alert-success')).toBeNull()
+ expect(host.querySelector('.ant-alert-error')?.textContent).toMatch(/未通过|超时/)
+ ok = true
+ await click('测试已保存草稿')
+ expect(host.querySelector('.ant-alert-error')).toBeNull()
+ expect(host.querySelector('.ant-alert-success')?.textContent).toContain('连接测试通过')
+})
+
 test('source management never reads back a DSN and an unchanged secret is omitted from save', async () => {
  let body: SaveSourceRequest | undefined
  await mount(async (path, method = 'GET', value) => { if (method === 'PUT') { body = value as SaveSourceRequest; return initial().source } return read(path) })

@@ -1,6 +1,7 @@
 import type { zh } from './zh'
 
 export const pl = {
+  appPasteRemoteImageFailed: 'Nie można wkleić zdalnego obrazu. Skopiuj obraz ponownie lub wstaw lokalny plik obrazu.',
   appScTitle: 'Skróty klawiaturowe',
   appScFilter: 'Szukaj skrótu',
   appScNone: 'Brak pasujących skrótów',

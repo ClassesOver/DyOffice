@@ -14,11 +14,55 @@ import {
   type PasteMode,
 } from './paste-options'
 import { isForeignPasteHtml } from './paste-web-html'
+import { pasteTextSlice } from './paste-text'
 
 export type ClipboardPayload = { html: string; text: string; image: Blob | null }
 
 /** A paste-special choice: one of the paste modes, or the bitmap flavor. */
 export type PasteChoice = PasteMode | 'picture'
+
+/** Remote clipboard images use the desktop bridge; Web can retain their plain text. */
+export async function pasteRemoteImages(
+  editor: Editor,
+  sources: string[],
+  text: string,
+  onFailure: () => void,
+): Promise<void> {
+  let expectedDoc = editor.state.doc
+  const unchanged = () => !editor.isDestroyed && editor.state.doc === expectedDoc
+  let inserted = false
+  let failed = false
+  for (const src of sources.slice(0, 10)) {
+    if (!unchanged()) return
+    try {
+      const fetched = await window.desktop.fetchImage(src)
+      if (!unchanged()) return
+      if (fetched) {
+        const success = await insertImageFromDataUrl(
+          editor,
+          `data:${fetched.mime};base64,${fetched.base64}`,
+          'Image (pasted)',
+        )
+        inserted ||= success
+        failed ||= !success
+        expectedDoc = editor.state.doc
+      } else {
+        failed = true
+      }
+    } catch {
+      failed = true
+    }
+  }
+  if (!unchanged()) return
+  if (failed) {
+    if (!inserted && text.trim()) {
+      const view = editor.view
+      const slice = pasteTextSlice(text, view.state.selection.$from, view)
+      view.dispatch(view.state.tr.replaceSelection(slice).scrollIntoView())
+    }
+    onFailure()
+  }
+}
 
 export async function readClipboardPayload(): Promise<ClipboardPayload> {
   const payload: ClipboardPayload = { html: '', text: '', image: null }

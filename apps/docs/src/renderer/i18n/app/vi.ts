@@ -1,6 +1,7 @@
 import type { zh } from './zh'
 
 export const vi = {
+  appPasteRemoteImageFailed: 'Không thể dán ảnh từ xa. Hãy sao chép lại ảnh hoặc chèn tệp ảnh cục bộ.',
   appScTitle: 'Phím tắt bàn phím',
   appScFilter: 'Tìm kiếm phím tắt',
   appScNone: 'Không có phím tắt phù hợp',

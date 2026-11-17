@@ -1593,6 +1593,13 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
   const pendingReveal = useRef<AbortController | null>(null)
   const cancelReveal = useCallback(() => {pendingReveal.current?.abort(); pendingReveal.current = null}, [])
   useEffect(() => cancelReveal, [cancelReveal])
+  const webReveal = supportedFormats !== undefined
+  useEffect(() => {
+    if (!webReveal) return
+    return window.aiOfficeTabs?.onChanged(tabs => {
+      if (tabs.some(tab => tab.active && tab.id !== 'home')) cancelReveal()
+    })
+  }, [webReveal, cancelReveal])
   const revealPath = async (path: string) => {
     if (!supportedFormats) {void window.aiOffice.revealPath(path).catch(reportError); return}
     cancelReveal()

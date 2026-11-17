@@ -40,6 +40,7 @@ import { linkTarget } from './editor/link-actions'
 import { FieldDialog } from './components/FieldDialog'
 import { markdownPasteHtml } from './editor/markdown-paste'
 import { pasteTextSlice, singleCellPasteText } from './editor/paste-text'
+import { pasteRemoteImages } from './editor/paste-actions'
 import {
   imageFilesFromDataTransfer,
   insertImageFilesAtCoords,
@@ -1499,20 +1500,12 @@ export function App({ host }: { host?: { desktopActionsAvailable?: boolean; read
         // bitmap-less web image copy: fetch the referenced image(s) through the
         // hardened main-process fetcher (SSRF-guarded, CDN headers) and insert
         if (!imageFile && imageOnlyHtml) {
-          void (async () => {
-            for (const src of htmlImgSrcs.slice(0, 10)) {
-              const ed = editorRef.current
-              if (!ed) return
-              const fetched = await window.desktop.fetchImage(src)
-              if (fetched) {
-                await insertImageFromDataUrl(
-                  ed,
-                  `data:${fetched.mime};base64,${fetched.base64}`,
-                  'Image (pasted)',
-                )
-              }
-            }
-          })()
+          const ed = editorRef.current
+          if (ed) {
+            void pasteRemoteImages(ed, htmlImgSrcs, text, () => {
+              showToast(t('appPasteRemoteImageFailed'), 'error')
+            })
+          }
           return true
         }
         // text/plain-only Markdown (code blocks, terminals, .md files, LLM

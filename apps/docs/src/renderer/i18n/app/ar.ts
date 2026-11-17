@@ -1,6 +1,7 @@
 import type { zh } from './zh'
 
 export const ar = {
+  appPasteRemoteImageFailed: 'تعذر لصق الصورة البعيدة. انسخ الصورة مجددًا أو أدرج ملف صورة محليًا.',
   appScTitle: 'اختصارات لوحة المفاتيح',
   appScFilter: 'البحث عن اختصار',
   appScNone: 'لا توجد اختصارات مطابقة',

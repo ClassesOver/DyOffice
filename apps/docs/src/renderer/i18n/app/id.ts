@@ -1,6 +1,7 @@
 import type { zh } from './zh'
 
 export const id = {
+  appPasteRemoteImageFailed: 'Gagal menempel gambar jarak jauh. Salin gambar lagi atau sisipkan berkas gambar lokal.',
   appScTitle: 'Pintasan Papan Ketik',
   appScFilter: 'Cari pintasan',
   appScNone: 'Tidak ada pintasan yang cocok',

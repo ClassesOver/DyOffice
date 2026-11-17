@@ -325,3 +325,22 @@
 - 远端6fd的response.finished新增等待在CI120秒整体超时，本地同样复现；固定阶段诊断将其缩小到first-response-finished。20秒后快照确认stopButtons=0、reservationCount=1、allOwned=true、allSettled=true，网络finished仍pending，未以文本出现当完成。浏览器transport收到SSE done便结束回调并cancel reader，网络EOF不是此客户端的可靠结算屏障。
 - 远端随后新增5dede6ec诊断已合入保留，放弃本地重复helper改动；仅把两处finished改为有界终态UI和精确预算数量/owner/state核对，首轮1条、次轮2条；最终原有两条精确settled记录、私有Skill不串账号、模型wire和原件字节断言保持。没有重试或放宽120秒总时限。与远端诊断合并后隔离PG/Chromium单suite1/1通过，8.15秒；此前同一最终产品构建的roundtrip6/6通过。
 - 证据：`/tmp/dyoffice-assistant-phase-finished-pending-red.log`、`/tmp/dyoffice-assistant-phase-isolated.log`、`/tmp/dyoffice-navigation-native-docs-suite.log`。这修复测试错误屏障，不宣称新增用户可见能力；本批native-docx CI需以新提交重跑结果为准。
+
+## 切换文档取消位置导航与连接测试状态
+
+- 真实 Chromium/mock API 先复现：Home 的位置读取暂挂期间选择已打开的文档页签，旧成功会抢回 Home，旧失败会在回到 Home 后显示过期错误。现仅 Web 订阅活动页签变化并复用 cancelReveal；后台重命名且 Home 仍活动时不取消，PC 不新增订阅，卸载退订。新增三组回归，Home 86/86通过；最终构建旧成功/失败两组均保留文档页签、无旧错误、无页面异常。DOCX 为生命周期 stub，不代替真实编辑验收。证据：`/tmp/dyoffice-ui-audit/home-location-cross-tab{,-postfix}/report.json`。
+- 数据连接测试返回 ok:false 原先显示绿色 success；现按既有 code 显示 error。三类 code 回归先红后绿，之后成功清除错误；Sources32/32通过。最终构建390/1440各三种失败及随后成功通过，0页面异常、0未拦截写请求。全部连接业务 mock，不探测真实数据库。证据：`/tmp/dyoffice-ui-audit/source-test-status-{red,green}/report.json`。
+- 独立只读复核 Home、Sources 及 identity fence 共125项通过，无阻塞。最终全 Shell47文件457项、shell类型/构建、Web边界1336文件0违规、兼容输入84文件0变更通过。既有CSS解析及chunk提示保留。
+
+## PDF 多页异步补查
+
+- PDF.js真实worker、三页fixture及业务mock，两组通过：第二页GetPage延迟时切XLSX并从1440缩到320，放行不抢页签；返回PDF可滚到第三页。关闭pending PDF后旧回调不复活，重开三页正常。0页面异常、0真实写。证据：`/tmp/dyoffice-ui-audit/preview-multipage/{coverage.md,report.json}`。不代替任意复杂PDF或实体移动设备验收。
+
+## Word 远程图片粘贴失败恢复
+
+- 正式native renderer/mock文档及lease确认：只有远程img HTML而无bitmap的粘贴，在Web fetchImage拒绝时吞掉URL且产生未处理异常，没有可见提示。现捕获失败并显示本地化恢复说明；无图片插入成功且有纯文本时沿原文本管线保留URL，无文本则明确失败。桌面成功插图路径保留，远程读取期间正文已替换或editor已销毁则不写入。没有增加任意远程抓取能力。
+- 定向回归先红后绿；最终paste-remote-images、paste-actions、paste-text-marks三文件19项通过，Web docs类型与生产构建通过。既有canvas及chunk日志保留。证据：`/tmp/dyoffice-ui-audit/word-remote-paste-fix/{red.log,green.log,typecheck.log}`、`/tmp/dyoffice-current-commit-docs-tests.log`。
+- 最终构建Chromium硬断言通过：URL保留且错误提示可见；首提示消失后再粘贴无文本HTML，出现新失败提示且正文不变；0页面异常。文档、lease均mock，realtime ticket写请求被阻止，无真实业务写。证据：`/tmp/dyoffice-ui-audit/word-remote-paste-postfix/report.json`。
+- 保留远端e6b2ce19精确turn ID助手结算断言和transport回归，transport23/23通过；另移除该远端测试末尾多余空行，修复CI的git diff --check失败。未因此宣称原生助手完整新CI通过。
+
+完整UI穷举仍在进行，本轮专项通过不代表全部控件、复杂文档、多端或读屏组合验收完成。

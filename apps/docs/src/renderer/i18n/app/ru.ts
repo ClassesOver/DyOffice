@@ -1,6 +1,7 @@
 import type { zh } from './zh'
 
 export const ru = {
+  appPasteRemoteImageFailed: 'Не удалось вставить удалённое изображение. Скопируйте его снова или вставьте локальный файл изображения.',
   appScTitle: 'Сочетания клавиш',
   appScFilter: 'Поиск сочетания',
   appScNone: 'Совпадений не найдено',

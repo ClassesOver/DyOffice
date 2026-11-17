@@ -1,6 +1,7 @@
 import type { zh } from './zh'
 
 export const ko = {
+  appPasteRemoteImageFailed: '원격 이미지를 붙여넣을 수 없습니다. 이미지를 다시 복사하거나 로컬 이미지 파일을 삽입하세요.',
   appScTitle: '키보드 바로 가기',
   appScFilter: '바로 가기 검색',
   appScNone: '일치하는 바로 가기가 없습니다',

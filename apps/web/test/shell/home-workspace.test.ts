@@ -1052,3 +1052,67 @@ test('Web Home 卸载会作废位置导航，桌面位置调用仍只有路径�
   expect(signal?.aborted).toBe(true)
   await act(async () => pending.resolve())
 })
+
+function mockRevealTabs() {
+  const handlers = new Set<(tabs: import('../../../shell/src/shared/tabs-api').TabSummary[]) => void>()
+  const unsubscribe = vi.fn()
+  const onChanged = vi.fn((handler: (tabs: import('../../../shell/src/shared/tabs-api').TabSummary[]) => void) => {
+    handlers.add(handler)
+    return () => {handlers.delete(handler); unsubscribe()}
+  })
+  vi.stubGlobal('aiOfficeTabs', {onChanged})
+  const emit = (documentActive: boolean, title: string) => {
+    for (const handler of handlers) handler([
+      {id: 'home', kind: 'home', title: 'Home', closable: false, active: !documentActive},
+      {id: fileId, kind: 'docs', title, closable: true, active: documentActive},
+    ])
+  }
+  return {emit, handlers, unsubscribe, onChanged}
+}
+
+test('Web 首页仍活动时后台文档重命名不会取消位置请求', async () => {
+  const tabs = mockRevealTabs(), pending = deferred<void>()
+  let signal: AbortSignal | undefined
+  const {notifyRevealWorkspaceFolder} = await import('../../../shell/src/renderer/src/file-events')
+  api.revealPath = async (_path, current) => {
+    signal = current; await pending.promise
+    if (!current?.aborted) notifyRevealWorkspaceFolder({dir: project, fileId})
+  }
+  await renderWebReveal(); await revealFile()
+  expect(tabs.onChanged).toHaveBeenCalledTimes(1)
+  await act(async () => tabs.emit(false, 'Renamed in background.docx'))
+  expect(signal?.aborted).toBe(false)
+  await act(async () => pending.resolve())
+  expect(host.querySelector('.tree-row.active .tree-name')?.textContent).toBe('Projects')
+  expect(host.querySelector('[role="alert"]')).toBeNull()
+})
+
+test('Web 切到活动文档会取消位置请求及其旧错误，回首页不会恢复旧请求', async () => {
+  const tabs = mockRevealTabs(), pending = deferred<void>()
+  let signal: AbortSignal | undefined
+  api.revealPath = async (_path, current) => {signal = current; await pending.promise; throw new Error('obsolete location after tab switch')}
+  await renderWebReveal(); await revealFile()
+  await act(async () => tabs.emit(true, 'Active document.docx'))
+  expect(signal?.aborted).toBe(true)
+  await act(async () => tabs.emit(false, 'Renamed after returning Home.docx'))
+  expect(signal?.aborted).toBe(true)
+  await act(async () => pending.resolve())
+  expect(host.querySelector('[role="alert"]')).toBeNull()
+  expect(host.querySelector('.tree-row.active')).toBeNull()
+})
+
+test('位置页签监听仅用于 Web，卸载会取消订阅和未结算位置操作', async () => {
+  const tabs = mockRevealTabs(), pending = deferred<void>()
+  let signal: AbortSignal | undefined
+  api.revealPath = async (_path, current) => {signal = current; await pending.promise}
+  // 桌面 Home 已由 beforeEach 挂载，重渲染仍不应订阅 Web 页签事件。
+  await act(async () => root.render(h(LocaleProvider, {initial: 'en', children: h(Home, {supportedNewFormats: []})})))
+  expect(tabs.onChanged).not.toHaveBeenCalled()
+  await renderWebReveal(); await revealFile()
+  expect(tabs.handlers.size).toBe(1)
+  await act(async () => root.render(h('div', null, 'other page')))
+  expect(tabs.unsubscribe).toHaveBeenCalledTimes(1)
+  expect(tabs.handlers.size).toBe(0)
+  expect(signal?.aborted).toBe(true)
+  await act(async () => pending.resolve())
+})

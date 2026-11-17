@@ -1,6 +1,7 @@
 import type { zh } from './zh'
 
 export const zhTW = {
+  appPasteRemoteImageFailed: '無法貼上遠端圖片。請重新複製圖片，或插入本機圖片檔案。',
   appScTitle: '鍵盤快速鍵',
   appScFilter: '搜尋快速鍵',
   appScNone: '沒有相符的快速鍵',

@@ -1,6 +1,7 @@
 import type { zh } from './zh'
 
 export const he = {
+  appPasteRemoteImageFailed: 'לא ניתן להדביק את התמונה המרוחקת. יש להעתיק את התמונה שוב או להוסיף קובץ תמונה מקומי.',
   appScTitle: 'קיצורי מקלדת',
   appScFilter: 'חיפוש קיצור',
   appScNone: 'לא נמצאו קיצורים מתאימים',

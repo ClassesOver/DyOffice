@@ -1,6 +1,7 @@
 import type { zh } from './zh'
 
 export const hi = {
+  appPasteRemoteImageFailed: 'दूरस्थ चित्र चिपकाया नहीं जा सका। चित्र दोबारा कॉपी करें या स्थानीय चित्र फ़ाइल डालें।',
   appScTitle: 'कीबोर्ड शॉर्टकट',
   appScFilter: 'शॉर्टकट खोजें',
   appScNone: 'कोई मेल खाता शॉर्टकट नहीं',

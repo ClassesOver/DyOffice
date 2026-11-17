@@ -1,6 +1,7 @@
 import type { zh } from './zh'
 
 export const fr = {
+  appPasteRemoteImageFailed: 'Impossible de coller l’image distante. Copiez à nouveau l’image ou insérez un fichier image local.',
   appScTitle: 'Raccourcis clavier',
   appScFilter: 'Rechercher un raccourci',
   appScNone: 'Aucun raccourci correspondant',
