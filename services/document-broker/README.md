@@ -3,7 +3,9 @@
 This is a **deny-only test prototype**, not a working isolated document runtime.
 The binary always exits 78 with `DOCUMENT_BROKER_DISABLED`, including when passed
 an enabling environment variable or argument. It opens no listener, connects to no
-system bus, launches no document process, and implements no systemd start/stop call.
+system bus, launches no document process, and exposes no systemd start/stop call.
+Mutating D-Bus calls exist only in a private, compile-time test module against its
+own simulated Manager; that module is absent from normal library/binary builds.
 
 ## What actually runs
 
@@ -36,6 +38,31 @@ ExecStart, unit properties, host paths, bus addresses or PG credentials are acce
 The six fixed hardening values are encoding candidates, not a complete/accepted
 systemd sandbox policy. There is deliberately no executable/unit name in them.
 
+## Private Manager sequence model
+
+The private `#[cfg(test)]` module constructs its own socketpair and fake Manager;
+it cannot be supplied an external connection and is not compiled into normal
+builds. It installs the JobRemoved stream, awaits Subscribe, then issues exactly
+one fixed StartTransientUnit request. Introspection tests check the official
+method argument shapes `s,s,a(sv),a(sa(sv)) -> o` and signal `u,o,s,s`.
+The fixture has no ExecStart and is never submitted to a real manager.
+
+Thirteen model tests cover signal-before-reply and reply-before-signal, identity
+mismatch, duplicate queued completion, malformed signal signatures, bounded noise,
+Subscribe failure/timeout, lost replies, cancellation, disconnect and reconnect.
+One total monotonic timeout bounds each sequence. Early event storage is limited
+to 16 events and 4,096 decoded field bytes, with per-field limits; these are
+post-decode application bounds, not a D-Bus decoder memory limit.
+
+Once a start call is attempted, every result retains the reservation. A correlated
+JobRemoved result is metadata only, including `done`, not a successful document
+result or proof of unit/cgroup termination. Ambiguity yields quarantine. A used
+attempt cannot start again after reconnection, and old-generation fixtures cannot
+advance it. This is in-memory test state, not durable cross-process fencing.
+Already queued duplicate events are rejected; later events require a future
+continuous reconciler. There is no StopUnit, adoption, real manager restart
+recovery, execution handle, or capacity-release path in this model.
+
 ## Authentication and resource limitations
 
 Peer UID comparison is not tenant authorization. The tests use same-user socketpair
@@ -60,8 +87,9 @@ version string. The custom 64 KiB control framing is separate from D-Bus framing
 
 Checked in the development environment: UID 1000; PID 1 is not systemd; there is no
 system-bus or systemd-private socket. `systemd-run`/`dbus-daemon` binaries being
-installed does not provide a running manager. Unix socketpair succeeds; filesystem
-Unix socket bind returns EPERM. No workaround, root elevation, network change,
+installed does not provide a running manager. Unix socketpair succeeds;
+Unix filesystem-listener construction currently fails with EPERM at socket creation
+(before bind). No workaround, root elevation, network change,
 policy change or ordinary-process document execution was attempted.
 
 Real listener deployment, systemd transient units, runtime manifest/FD sealing,
@@ -74,13 +102,14 @@ future target-version acceptance requirements, not outcomes of the fake Manager.
 The official systemd D-Bus reference is
 <https://www.freedesktop.org/software/systemd/man/256/org.freedesktop.systemd1.html>.
 Applying its subscribe/job-correlation pattern to StartTransientUnit requires real
-systemd-version tests. This prototype does not implement that sequence.
+systemd-version tests. The private test model exercises the sequence over real
+zbus P2P transport only. See the [target acceptance matrix](../../docs/dyoffice/inventory/document-openeuler-acceptance.md).
 
 ## Reproducing
 
 Toolchain: Rust 1.93.0. Direct crates are exactly pinned with transitive checksums in
 Cargo.lock: serde 1.0.229, serde_json 1.0.154, Tokio 1.54.1, zbus 5.19.0 and time
-0.3.55. zbus is MIT; serde/json/time are MIT OR Apache-2.0; Tokio is MIT. This crate
+0.3.55; the test-only futures-util dependency is pinned to 0.3.34. zbus is MIT; serde/json/time are MIT OR Apache-2.0; Tokio is MIT. This crate
 uses the repository's **Apache-2.0** license, is publish=false and does not inherit a
 dependency's license as its own. Full transitive vulnerability/license review is
 still required before production use; successful compilation is not that review.

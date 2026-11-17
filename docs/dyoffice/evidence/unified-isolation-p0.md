@@ -69,3 +69,33 @@ The independent `services/document-broker` crate now actually compiles and exerc
 Verification: **15/15 Rust tests**, locked/offline replay, `cargo fmt --check`, clippy with warnings denied, **68/68 TypeScript protocol tests**, **38/38 real PG tests**, and strict checking of the 11 sandbox TS modules passed. Independent review reran the Rust checks and TypeScript suite. Cargo.lock and Rust 1.93.0 are pinned; build caches are excluded. The crate follows the repository's Apache-2.0 license.
 
 Environment limits were observed, not assumed away: no running systemd manager/system bus, and filesystem socket bind returns EPERM; socketpair works. No other connected execution environment was available. This prototype does not prove listener deployment, cross-UID isolation, PG-to-broker authentication, D-Bus security policy, runtime manifests/FD transfer, real start/stop/cgroup cleanup, openEuler compatibility or production isolation. The detailed limitations and future fast-exit/JobRemoved/bus-reconnect acceptance are in [the broker README](../../../services/document-broker/README.md).
+
+
+## Private Manager lifecycle model follow-up
+
+The broker now has a private `#[cfg(test)]` module with typed Manager
+Subscribe/StartTransientUnit/JobRemoved signatures and actual zbus P2P transport to
+a simulated peer. The module is absent from normal library/binary builds and has
+no externally supplied bus connection. It installs the signal stream before
+Subscribe, waits for subscription before start, and matches returned job path/ID
+and unit against bounded early events under one total deadline.
+
+Tests cover event-before-reply and reply-before-event, subscription failure/timeout,
+wrong identities/signatures, early duplicate events, noise limits, method errors,
+cancellation, submitted-but-disconnected outcomes and reconnect without replay.
+JobObserved is only metadata: no execution handle or stop proof is produced, and
+all attempted starts retain capacity. Connection generation is an in-memory test
+model, not durable broker reconciliation. Later events, real bus reconnection,
+InvocationID/cgroup reconciliation and database coupling remain future work.
+
+Stage verification: **28/28 Rust tests** (13 new lifecycle cases plus 15 existing),
+locked/offline replay, fmt and clippy passed. Normal build succeeds and binary
+still exits 78 disabled. **68/68 TS**, **38/38 real PG**, and strict checking of
+11 TS modules passed. No production entrypoint or host security setting changed.
+
+The 2026-11-17 environment recheck is more precise than the prior bind wording:
+filesystem-listener socket creation itself returns EPERM before bind; socketpair
+works. No registered remote/openEuler host was available. The
+[openEuler acceptance matrix](../inventory/document-openeuler-acceptance.md) records
+the two-architecture real-host prerequisites, tests and evidence still needed.
+These simulated results do not certify real systemd or document isolation.
