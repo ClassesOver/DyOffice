@@ -1786,6 +1786,7 @@ export interface WebSettingsPreferences {
   showAssistant: boolean
 }
 export interface WebSettingsAdapter {
+  skills?: ReactNode
   accountLabel?: string
   account: ReactNode
   load(): Promise<WebSettingsPreferences>
@@ -2143,8 +2144,8 @@ export function SettingsModal({
                 key={s.id}
                 className={`set-nav-item${section === s.id ? ' active' : ''}`}
                 aria-current={section === s.id}
-                disabled={Boolean(web && s.id !== 'general' && s.id !== 'account')}
-                title={web && s.id !== 'general' && s.id !== 'account' ? '此 Web 版本尚未提供' : undefined}
+                disabled={Boolean(web && s.id !== 'general' && s.id !== 'account' && !(s.id === 'skills' && web.skills))}
+                title={web && s.id !== 'general' && s.id !== 'account' && !(s.id === 'skills' && web.skills) ? '此 Web 版本尚未提供' : undefined}
                 onClick={() => setSection(s.id)}
               >
                 <SectionIcon id={s.id} />
@@ -2614,7 +2615,7 @@ export function SettingsModal({
             {section === 'integrations' && (
               <IntegrationsPane t={t} onStatus={(st) => onSkillUpdateDue?.(skillUpdateDue(st))} />
             )}
-            {section === 'skills' && <FoundSkills t={t} />}
+            {section === 'skills' && (web?.skills ?? <FoundSkills t={t} />)}
             {section === 'about' && (
               <>
                 <h3 className="set-pane-title">{t('setSecAbout')}</h3>

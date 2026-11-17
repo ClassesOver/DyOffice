@@ -3,6 +3,7 @@ import type { CSSProperties } from 'react'
 import { useSlidingIndicator } from './settings-fx'
 import type { StringKey, TFunc } from './locale'
 import type { FoundSkill, RecommendedSkill } from '../../shared/found-skill'
+import type { IntegrationsApi } from '../../shared/integrations-api'
 
 /**
  * The skills the user installed into GenOffice.
@@ -12,11 +13,10 @@ import type { FoundSkill, RecommendedSkill } from '../../shared/found-skill'
  * anything.
  */
 
-const api = () => window.aiOfficeIntegrations
-
 type Notice = { kind: 'done' | 'removed'; name: string } | { kind: 'failed'; reason: string }
 
-export function FoundSkills({ t }: { t: TFunc }) {
+export function FoundSkills({ t, adapter, markdownOnly = false }: { t: TFunc; adapter?: Partial<IntegrationsApi>; markdownOnly?: boolean }) {
+  const api = () => adapter ?? window.aiOfficeIntegrations
   const [skills, setSkills] = useState<FoundSkill[] | null>(null)
   const [recommended, setRecommended] = useState<RecommendedSkill[]>([])
   const [busy, setBusy] = useState(false)
@@ -129,9 +129,9 @@ export function FoundSkills({ t }: { t: TFunc }) {
               )
             }
           >
-            {t('intgSkillsImportZip')}
+            {markdownOnly ? '导入 SKILL.md' : t('intgSkillsImportZip')}
           </button>
-          <button
+          {!markdownOnly && <button
             className="set-btn"
             disabled={busy}
             onClick={() =>
@@ -143,7 +143,7 @@ export function FoundSkills({ t }: { t: TFunc }) {
             }
           >
             {t('intgSkillsImportFolder')}
-          </button>
+          </button>}
         </div>
       </div>
 
@@ -173,6 +173,7 @@ export function FoundSkills({ t }: { t: TFunc }) {
             <SkillRow
               key={skill.path}
               index={i}
+              readBody={adapter?.skillBody}
               t={t}
               skill={skill}
               action={
@@ -213,6 +214,7 @@ export function FoundSkills({ t }: { t: TFunc }) {
               <SkillRow
                 key={skill.path}
                 index={i}
+                readBody={adapter?.skillBody}
                 t={t}
                 skill={skill}
                 action={
@@ -275,11 +277,13 @@ function SkillRow({
   skill,
   action,
   index = 0,
+  readBody,
 }: {
   t: TFunc
   skill: FoundSkill
   action?: React.ReactNode
   index?: number
+  readBody?: (path: string) => Promise<string>
 }) {
   const [body, setBody] = useState<string | null>(null)
   const [reading, setReading] = useState(false)
@@ -288,7 +292,7 @@ function SkillRow({
     if (body !== null || reading) return
     setReading(true)
     try {
-      setBody((await api()?.skillBody?.(skill.path)) ?? '')
+      setBody((await (readBody ?? window.aiOfficeIntegrations?.skillBody)?.(skill.path)) ?? '')
     } catch {
       setBody('')
     } finally {

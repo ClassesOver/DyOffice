@@ -2,11 +2,12 @@ import type {PrincipalTransactions} from '../../db/context.ts'
 import {tokenHash} from '../auth/sessions.ts'
 import type {SecretKeyring} from '../admin/secrets.ts'
 import {createProviderTurns,type TurnEvent,type TurnPermit} from './turns.ts'
-import {createProviderBudgetService,type BudgetBinding} from './budget.ts'
+import {createProviderBudgetService,isDefinitiveBudgetDenial,type BudgetBinding} from './budget.ts'
 import {createBudgetedAdminCredentialConsumer} from './budgeted-credential.ts'
 import {createPinnedProviderTransport,type EgressProfile} from './pinned-egress.ts'
 import {parseOpenAiChatStream} from './openai-stream.ts'
 import {buildOpenAiChatRequest} from './openai-request.ts'
+import {ASSISTANT_READ_TOOLS} from '../../../../../../packages/web-contracts/src/assistant.ts'
 
 export interface AdminPipelineProfile extends EgressProfile {maxOutputTokens:number}
 interface Permit extends TurnPermit {profile:Readonly<AdminPipelineProfile>}
@@ -41,15 +42,15 @@ function bridge() {
 /** Explicit, unmounted, admin-only composition. No real provider is enabled by
  * constructing this factory. Profiles and budget grants are trusted deployment
  * provisioning, not HTTP input. One active turn per factory, total <=30 seconds. */
-export function createAdminProviderPipeline({transactions,keyring,profiles,timeoutMs=30_000}:{
- transactions:PrincipalTransactions;keyring:SecretKeyring;profiles:readonly AdminPipelineProfile[];timeoutMs?:number
+export function createAdminProviderPipeline({transactions,keyring,profiles,timeoutMs=30_000,audience='admin'}:{
+ transactions:PrincipalTransactions;keyring:SecretKeyring;profiles:readonly AdminPipelineProfile[];timeoutMs?:number;audience?:'admin'|'personal'
 }) {
  let disposed=false,cleanupFailed=false
  const active=new Set<AbortController>()
  const keys:Record<string,Uint8Array>={}
  let configured:Readonly<AdminPipelineProfile>[]
  try{
-  if(!Number.isSafeInteger(timeoutMs)||timeoutMs<1||timeoutMs>30_000||!keyring||!keyring.keys||!Array.isArray(profiles))throw fail()
+  if(!['admin','personal'].includes(audience)||!Number.isSafeInteger(timeoutMs)||timeoutMs<1||timeoutMs>30_000||!keyring||!keyring.keys||!Array.isArray(profiles))throw fail()
   for(const [id,value] of Object.entries(keyring.keys)){
    if(!/^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/.test(id)||!(value instanceof Uint8Array)||value.length!==32)throw fail()
    keys[id]=Buffer.from(value)
@@ -65,15 +66,15 @@ export function createAdminProviderPipeline({transactions,keyring,profiles,timeo
  let transport:ReturnType<typeof createPinnedProviderTransport>
  try{transport=createPinnedProviderTransport({profiles:egressProfiles,timeoutMs,maxConcurrent:1,authorizationTimeoutMs:Math.min(timeoutMs,5000)})}
  catch{for(const key of Object.values(keys))key.fill(0);throw fail()}
- const budget=createProviderBudgetService({transactions})
+ const budget=createProviderBudgetService({transactions,audience})
  async function lookup(token:string,modelId:string):Promise<Permit>{
   if(disposed)throw fail()
   return transactions.withPrincipalTransaction({kind:'session',token},async(c,p)=>{
-   if(disposed||!p.roles.includes('config_admin'))throw fail()
+   if(disposed||!p.roles.includes(audience==='personal'?'personal':'config_admin'))throw fail()
    const identity={deploymentId:p.deploymentId,userId:p.userId,sessionId:p.sessionId}
    await c.query("SELECT set_config('dyoffice.global_session_hash',$1,true),set_config('dyoffice.global_idle_ms',$2,true)",[tokenHash(token),String(transactions.sessionIdleMs)])
    await c.query('SELECT pg_advisory_xact_lock_shared(hashtextextended($1,0))',['dyoffice:global-config:'+p.deploymentId])
-   if(!(await c.query('SELECT global_config_authorized($1,true) AS authorized',[p.deploymentId])).rows[0]?.authorized)throw fail()
+   if(!(await c.query('SELECT global_config_authorized($1,$2) AS authorized',[p.deploymentId,audience==='admin'])).rows[0]?.authorized)throw fail()
    const row=(await c.query('SELECT c.revision,e.kind,e.provider_id,e.model,e.base_url,e.enabled FROM global_configs c JOIN global_config_entries e ON e.deployment_id=c.deployment_id WHERE c.deployment_id=$1 AND e.id=$2',[p.deploymentId,modelId])).rows[0]
    const found=configured.filter(x=>x.deploymentId===p.deploymentId&&x.entryId===modelId&&x.revision===row?.revision)
    if(disposed||found.length!==1||!row||row.kind!=='chat'||!row.enabled||row.provider_id!==found[0]!.providerId||row.model!==found[0]!.model||row.base_url!==found[0]!.baseUrl)throw fail()
@@ -86,7 +87,7 @@ export function createAdminProviderPipeline({transactions,keyring,profiles,timeo
  }
  const turns=createProviderTurns<Permit>({
   identity:async token=>transactions.withPrincipalTransaction({kind:'session',token},async(_c,p)=>{
-   if(disposed||!p.roles.includes('config_admin'))throw fail()
+   if(disposed||!p.roles.includes(audience==='personal'?'personal':'config_admin'))throw fail()
    return {deploymentId:p.deploymentId,userId:p.userId,sessionId:p.sessionId}
   }),
   authorize:(token,model)=>lookup(token,model),
@@ -99,16 +100,16 @@ export function createAdminProviderPipeline({transactions,keyring,profiles,timeo
    let consumer:ReturnType<typeof createBudgetedAdminCredentialConsumer>|undefined
    try{
     if(disposed||control.signal.aborted)throw fail()
-    const built=buildOpenAiChatRequest(request,{model:permit.profile.model,maxOutputTokens:permit.profile.maxOutputTokens})
+    const built=buildOpenAiChatRequest(request,{model:permit.profile.model,maxOutputTokens:permit.profile.maxOutputTokens},audience==='personal'?ASSISTANT_READ_TOOLS:undefined)
     wire=Buffer.from(built.body);built.body.fill(0)
     binding={turnId,entryId:permit.profile.entryId,configRevision:permit.profile.revision,requestDigest:built.digest}
     let reservation:Awaited<ReturnType<typeof budget.reserve>>
     try{reservation=await budget.reserve(token,binding)}
-    catch{
+    catch(error){
      // A commit may have succeeded even when its response is lost. The budget
      // adapter intentionally redacts errors, so no safe commit/no-commit distinction
      // is available here. Do not guess a refund or declare a clean shutdown.
-     cleanupFailed=true
+     if(!isDefinitiveBudgetDenial(error))cleanupFailed=true
      throw fail()
     }
     if(reservation.state!=='reserved')throw fail()
@@ -122,7 +123,7 @@ export function createAdminProviderPipeline({transactions,keyring,profiles,timeo
     const {maxOutputTokens,allowedIpv4,...credentialProfile}=permit.profile
     const scope={...credentialProfile,reservationId:claim.id,claimId,requestDigest:built.digest,turnId,signal:control.signal}
     producer=transport.sendAuthorized(scope,wire,async(write,dispatchSignal)=>{
-     consumer=createBudgetedAdminCredentialConsumer({budget,transactions,keyring:secretKeyring,profiles:[credentialProfile],
+     consumer=createBudgetedAdminCredentialConsumer({budget,transactions,keyring:secretKeyring,profiles:[credentialProfile],audience,
       consume:async credential=>{await write(credential.credential)}})
      try{await consumer.run(token,{...binding!,reservationId:claim.id,claimId:claimId!,signal:dispatchSignal})}
      finally{consumer.dispose();consumer=undefined}

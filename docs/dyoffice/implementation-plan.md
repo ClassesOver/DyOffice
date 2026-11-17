@@ -307,6 +307,8 @@ docs/dyoffice/               当前计划及 inventory/ evidence/ adr/
 
 **接口：** `getPublicSettings()`、`saveGlobalConfig(expectedRevision, patch)`、`updatePreferences()`。
 
+**当前验收：** [工作区、设置和个人 Skills](evidence/t12-t13-personal-assistant.md)。
+
 - [ ] 测试模型/媒体/搜索/重排目录、保留省略的 Key、显式清空、版本冲突、退出后旧响应、个人字段注入全局配置。
 - [ ] unit/integration/E2E RED。
 - [ ] 复用 GenOffice settings/provider 元数据和 UI；加入文件夹、最近、收藏、回收站；密钥加密和轮换，不发送完整 AiSettings 到前端。
@@ -318,6 +320,8 @@ docs/dyoffice/               当前计划及 inventory/ evidence/ adr/
 **依赖：** T07/T12。**文件：** `modules/providers/{routes,stream,policy}.ts`、`packages/browser-host/src/ai-transport.ts`、`test/unit/ai-transport.test.ts`、`test/integration/provider-stream.test.ts`；适配各编辑器 `ai/transport.ts`。
 
 **接口：** 兼容原有 `AgentTransport.stream()`，取消句柄与 callbacks 不改语义。
+
+**当前验收：** [个人额度、原生助手和剩余阻塞](evidence/t12-t13-personal-assistant.md)。
 
 - [ ] 测试 delta/tool-call/usage、截断参数、取消终态只一次、超时、断流、禁用模型、客户端注入 baseUrl/Key、usage 缺失为 unknown。
 - [ ] 运行对应 unit/integration RED。

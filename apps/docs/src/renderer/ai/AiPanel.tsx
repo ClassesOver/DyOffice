@@ -231,6 +231,8 @@ const PASTE_MIME_EXT: Record<string, string> = {
 export { aiRevisionAuthor }
 
 interface AiPanelProps {
+  transport?: import('@genoffice/agent-core').AgentTransport
+  modelPicker?: React.ReactNode
   editor: Editor
   blocks: Block[]
   settings: AiSettings
@@ -331,6 +333,8 @@ const MODEL_BRIDGE: AiModelPickerBridge = {
 }
 
 export function AiPanel({
+  transport,
+  modelPicker,
   editor,
   blocks,
   settings,
@@ -727,7 +731,7 @@ export function AiPanel({
 
   const transportRef = useRef<ReturnType<typeof createElectronTransport> | null>(null)
   if (!transportRef.current)
-    transportRef.current = createElectronTransport(() => settingsRef.current)
+    transportRef.current = transport ?? createElectronTransport(() => settingsRef.current)
 
   /**
    * Long-form writing: one tool-less request whose reply is the fragment, streamed
@@ -840,8 +844,7 @@ export function AiPanel({
           () => notesAccessRef.current,
           () => mediaAnalysisAvailable(settingsRef.current, gskLoggedInRef.current),
         ),
-        createFilesSkill(availableAttachments),
-        createSkillsSkill(),
+        ...(!transport ? [createFilesSkill(availableAttachments), createSkillsSkill()] : []),
       ]),
       captureSnapshot: () => editorRef.current.getJSON() as PmNode,
       events: {
@@ -1166,6 +1169,9 @@ export function AiPanel({
       // a phased open still streaming its tail: the context must describe the whole document
       .then(async (images) => {
         await Promise.all([waitForFullContent(), refreshKbFiles()])
+        const modelInstruction = !pending.aborted && pendingSendRef.current === pending
+          ? await withSkillBodies(instruction, sentSkills)
+          : instruction
         // a newer send (after New chat) owns the panel now: leave its state alone
         if (pendingSendRef.current !== pending) return
         pendingSendRef.current = null
@@ -1180,7 +1186,7 @@ export function AiPanel({
           setBusy(false)
           return
         }
-        return loop.run(await withSkillBodies(instruction, sentSkills), images)
+        return loop.run(modelInstruction, images, modelInstruction !== instruction && transport ? instruction : undefined)
       })
   }
 
@@ -1412,7 +1418,7 @@ export function AiPanel({
       style={{ width: '100%' }}
       dir={isRtl ? 'rtl' : undefined}
       className={`ai-panel${dragOver ? ' ai-panel-dragover' : ''}${resizing ? ' ai-panel-resizing' : ''}`}
-      onDragOver={(e) => {
+      onDragOver={transport ? undefined : (e) => {
         if (e.dataTransfer.types.includes('Files')) {
           e.preventDefault()
           e.stopPropagation()
@@ -1422,7 +1428,7 @@ export function AiPanel({
       onDragLeave={(e) => {
         if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDragOver(false)
       }}
-      onDrop={onDrop}
+      onDrop={transport ? undefined : onDrop}
     >
       <div
         className="ai-panel-resizer"
@@ -1437,10 +1443,10 @@ export function AiPanel({
           {t('aiPanelTitle')}
         </span>
         <div className="ai-panel-header-actions">
-          <AiPanelSideButton
+          {!transport && <AiPanelSideButton
             lang={lang}
             onMove={(side) => window.desktop.setAiPanelPrefs({ side })}
-          />
+          />}
           {(chat.length > 0 || historicChat.length > 0) && (
             <button
               className="ai-header-btn"
@@ -1926,17 +1932,17 @@ export function AiPanel({
           onChange={setInput}
           onSend={run}
           onStop={cancel}
-          onPasteFiles={(files) => void onPasteFiles(files)}
+          onPasteFiles={transport ? undefined : (files) => void onPasteFiles(files)}
           footerStart={
             <>
-              <AiModelPicker bridge={MODEL_BRIDGE} lang={lang} />
+              {modelPicker ?? <AiModelPicker bridge={MODEL_BRIDGE} lang={lang} />}
               {sessionUsage && <AiUsageChip usage={sessionUsage} session lang={lang} />}
               <AiSkillsMenu
                 lang={lang}
                 listSkills={listSkillsForMenu}
                 selected={attachedSkills}
                 onToggle={toggleSkill}
-                onAddFile={() => void pickAttachments()}
+                onAddFile={transport ? undefined : () => void pickAttachments()}
                 onManage={() => void window.desktop.openSkillsSettings?.()}
               />
               <button

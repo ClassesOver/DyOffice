@@ -636,6 +636,7 @@ export interface SheetsEditorHandle {
   isDirty(): boolean
 }
 export interface SheetsEditorHost {
+  assistant?: {transport: import('@genoffice/agent-core').AgentTransport; modelPicker: React.ReactNode}
   /** Opt in only when the host returns stable sheet/drawing IDs after saving. */
   inPlaceSave?: boolean
   readOnly: boolean
@@ -1493,7 +1494,7 @@ export function App({
   }
   /** Synchronous re-entrancy guard between runAgent trigger and loop.run
    * (loop.busy is still false while attachment images load asynchronously) */
-  const runStartingRef = useRef(false)
+  const runStartingRef = useRef<object | null>(null)
   /** The shell can repeat its queued-open nudge while the renderer starts.
    * Only one picker/open request may own the workbook session at a time. */
   const workbookOpeningRef = useRef(false)
@@ -1766,7 +1767,7 @@ export function App({
   const agentLoopRef = useRef<AgentLoop | null>(null)
   if (!agentLoopRef.current) {
     agentLoopRef.current = new AgentLoop({
-      transport: createElectronTransport(() => aiSettingsRef.current!),
+      transport: host?.assistant?.transport ?? createElectronTransport(() => aiSettingsRef.current!),
       systemSuffix: aiLangDirective,
       skill: composeSkills('sheets+files', '', [
         createWorkbookSkill(sheetsSkillDeps()),
@@ -1950,6 +1951,7 @@ export function App({
   }
 
   function isAgentConfigured(): boolean {
+    if (hostRef.current?.assistant) return true
     const settings = aiSettingsRef.current
     if (!settings) return false
     const config = settings.providers[settings.provider]
@@ -2010,7 +2012,8 @@ export function App({
   ): void {
     const loop = agentLoopRef.current
     if (!instruction.trim() || !loop || loop.busy || runStartingRef.current) return
-    runStartingRef.current = true
+    const pending = {}
+    runStartingRef.current = pending
     // Freeze the selection scope for the whole run: users go on clicking around
     // while the AI works, so a live read would retarget "this column" mid-run.
     // Released in onDone/onError, which own the rest of the run teardown.
@@ -2022,18 +2025,13 @@ export function App({
     setMessage(t('appAiThinking'))
     appendChat({ role: 'assistant', text: '', tools: [], streaming: true })
     void collectImageAttachments(sentAttachments)
+      .catch((): AgentImage[] => [])
       .then(async (images) => {
-        const modelInstruction = await withSkillBodies(instruction, sentSkills)
-        runStartingRef.current = false
-        loop.run(modelInstruction, images)
-      })
-      .catch(async () => {
-        // an unreadable image must not strand the run, nor drop the skills the user attached
-        const modelInstruction = await withSkillBodies(instruction, sentSkills).catch(
-          () => instruction,
-        )
-        runStartingRef.current = false
-        loop.run(modelInstruction)
+        if (runStartingRef.current !== pending) return
+        const modelInstruction = await withSkillBodies(instruction, sentSkills).catch(() => instruction)
+        if (runStartingRef.current !== pending) return
+        runStartingRef.current = null
+        loop.run(modelInstruction, images, modelInstruction !== instruction && host?.assistant ? instruction : undefined)
       })
   }
 
@@ -2069,6 +2067,14 @@ export function App({
   }
 
   function handleStopAgent(): void {
+    if (runStartingRef.current) {
+      runStartingRef.current = null
+      setAiRunScope(undefined)
+      setAiBusy(false)
+      setMessage(t('appAiStopped'))
+      setChat((prev) => prev.filter((entry, index) =>
+        !(index === prev.length - 1 && entry.role === 'assistant' && entry.streaming)))
+    }
     agentLoopRef.current?.cancel()
   }
 
@@ -2082,6 +2088,7 @@ export function App({
   }
 
   function handleNewChat(): void {
+    runStartingRef.current = null
     agentLoopRef.current?.reset()
     setAiRunScope(undefined)
     setAiBusy(false)
@@ -6219,6 +6226,7 @@ export function App({
         />
       )}
       <ExcelShell
+        modelPicker={host?.assistant?.modelPicker}
         assistantAvailable={host?.assistantAvailable ?? true}
         openingWorkbook={openingWorkbook}
         prompt={prompt}
