@@ -22,9 +22,11 @@ export async function createEditorAssistant(channelOptions?:{fileId:string;edito
     </select></label>
   }
   function ChannelManager(){return <AssistantChannelPanel client={channel!} lang={document.documentElement.lang==='en'?'en':'zh'}/>}
+  // Native hosts load preferences after binding the assistant, before rendering.
+  function DeliveryManager(){return <AnalysisDeliveryPanel client={deliveries} documents={documents} lang={document.documentElement.lang==='en'?'en':'zh'}/>}
   const noEvent = () => () => {}
   return {
-    ...assistant,agents:assistant.catalog.agents??[],modelPicker:<><ModelPicker/>{channel&&<ChannelManager/>}{!!assistant.catalog.agents?.length&&<AnalysisDeliveryPanel client={deliveries} documents={documents} lang={document.documentElement.lang==='en'?'en':'zh'}/>}</>,
+    ...assistant,agents:assistant.catalog.agents??[],modelPicker:<><ModelPicker/>{channel&&<ChannelManager/>}{!!assistant.catalog.agents?.length&&<DeliveryManager/>}</>,
     documents,channel,control:channel?.control,extraSkills:[...assistant.extraSkills,...(channel?[channel.skill]:[])],
     api: {
       // Local compatibility projection only. Full desktop settings and global

@@ -58,7 +58,7 @@ async function fixture(t, autoSave = false, enableAssistant = false, replay = un
     const apiKey = live ? (await readFile(live.keyFile, 'utf8')).trim() : 'synthetic-private-key'
     const settings = createGlobalConfigService({transactions: f.transactions, keyring})
     await settings.saveGlobalConfig(f.adminSigned.token, 0, {upserts: [{id: profile.entryId, kind: 'chat', providerId: profile.providerId, label: 'Company Chat', model: profile.model, baseUrl: profile.baseUrl, enabled: true, apiKey}]})
-    await f.ownerPool.query('INSERT INTO provider_budget_accounts(deployment_id,owner_id,entry_id,config_revision,available_units,per_call_units) VALUES($1,$2,$3,1,$4,10)', [f.deploymentId, f.alice.user.id, profile.entryId, live ? 30 : 10])
+    await f.ownerPool.query('INSERT INTO provider_budget_accounts(deployment_id,owner_id,entry_id,config_revision,available_units,per_call_units) VALUES($1,$2,$3,1,$4,10)', [f.deploymentId, f.alice.user.id, profile.entryId, live ? 30 : analysis ? 20 : 10])
     const skills = createSkillService(f.transactions)
     await skills.save(f.alice.token, 'alice-workbook', {description: '', body: 'Alice workbook instructions.'})
     await skills.save(f.bob.token, 'bob-workbook', {description: '', body: 'Bob workbook instructions.'})
@@ -277,6 +277,10 @@ test('native XLSX explicitly writes literal analysis cells and independently sav
  await composer.fill('Create the local synthetic analysis table');await composer.press('Enter')
  const panel=page.locator('.analysis-deliveries')
  await expect(panel.locator('summary')).toContainText('(1)',{timeout:30_000});await panel.locator('summary').click()
+ // The delivery can arrive before the provider's second reply. Wait for that
+ // reply's text before checking the exact two-turn request count; this does
+ // not assert that the SSE stream or durable budget settlement has finished.
+ await expect(page.locator('.copilot').getByText('Synthetic artifact ready. Insert and save are separate user actions.',{exact:true})).toBeVisible({timeout:30_000})
  assert.equal(f.analysisAdapter.runs,1);assert.equal(net.writes,2)
  // Explicitly select a free area using the existing test-only native editor hook.
  await page.evaluate(()=>window.__genofficeDebug.univerAPI.getActiveWorkbook().getActiveSheet().getRange('J10').activate())
