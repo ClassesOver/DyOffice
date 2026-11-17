@@ -149,7 +149,7 @@ test('draft lifecycle enforces optimistic CAS, publish history, and credential h
   const audit = (await f.inspect('SELECT action FROM data_source_audit WHERE source_id=$1 ORDER BY created_at', ['sales-db'])).rows.map(row => row.action)
   assert.ok(audit.includes('source_created') && audit.includes('source_published'))
 
-  await call(f, 'DELETE', '/sales-db', undefined, undefined, 204)
+  await call(f, 'DELETE', '/sales-db', { expectedVersion: 3 }, undefined, 204)
   await call(f, 'GET', '/sales-db', undefined, undefined, 404)
 })
 
@@ -163,7 +163,7 @@ test('cross-tenant source access is invisible and unmodifiable (RLS)', async t =
   await call(f, 'PUT', '/private-db', { expectedVersion: 1, name: 'Hijack' }, f.bob.token, 404)
   await call(f, 'POST', '/private-db/publish', { expectedVersion: 1 }, f.bob.token, 404)
   await call(f, 'POST', '/private-db/query', { sql: 'SELECT 1' }, f.bob.token, 404)
-  await call(f, 'DELETE', '/private-db', undefined, f.bob.token, 404)
+  await call(f, 'DELETE', '/private-db', { expectedVersion: 1 }, f.bob.token, 404)
   const bobList = (await call(f, 'GET', '', undefined, f.bob.token, 200)).json()
   assert.deepEqual(bobList, { items: [], nextCursor: null })
   const rows = (await f.inspect('SELECT count(*) AS n FROM data_source_versions v JOIN data_sources s ON s.deployment_id=v.deployment_id AND s.owner_id=v.owner_id AND s.source_id=v.source_id AND s.published_revision IS NOT NULL WHERE v.deployment_id=$1 AND v.owner_id=$2', [f.deploymentId, f.alice.user.id])).rows

@@ -57,7 +57,7 @@ test('draft test, explicit clear, retain, disable, idempotent publish and concur
   assert.equal((await f.call('GET', '/a')).source.enabled, false)
   await f.call('PUT', '/a', { expectedVersion: 5, enabled: true })
   assert.equal((await f.call('POST', '/a/query', {})).rows[0].v, 1)
-  const del = await f.request('DELETE', '/a')
+  const del = await f.request('DELETE', '/a', { expectedVersion: 6 })
   assert.equal(del.statusCode, 204)
   await f.call('GET', '/a', undefined, 404)
 })
@@ -81,6 +81,54 @@ test('in-flight HTTP result is withheld after source disable or session revocati
   const denied = await pending
   assert.equal(denied.statusCode, 401)
   assert.equal(denied.body.includes('42'), false)
+})
+
+test('DELETE validates CAS and preserves the newer publication before permanently reserving the source ID', async t => {
+  const url = await start(t, (_q, r) => r.writeHead(200, { 'content-type': 'application/json' }).end('{"rows":[{"v":7}]}'))
+  const f = await fixture(t, url)
+  await f.call('POST', '/a/publish', { expectedVersion: 1 })
+  await f.call('PUT', '/a', { expectedVersion: 1, name: 'New publication' })
+  const publication = await f.call('POST', '/a/publish', { expectedVersion: 2 })
+  assert.equal(publication.revision, 2)
+  for (const payload of [undefined, {}, { expectedVersion: 0 }, { expectedVersion: '2' }, { expectedVersion: 2, force: true }]) {
+    assert.equal((await f.request('DELETE', '/a', payload)).statusCode, 400)
+  }
+  assert.equal((await f.request('DELETE', '/a', { expectedVersion: 1 })).statusCode, 409)
+  const intact = await f.call('GET', '/a')
+  assert.equal(intact.source.version, 2)
+  assert.deepEqual(intact.published, publication)
+  assert.equal((await f.call('POST', '/a/query', {})).sourceVersion, 2)
+  assert.equal((await f.request('DELETE', '/a', { expectedVersion: 2 })).statusCode, 204)
+  assert.deepEqual(await f.call('GET', ''), { items: [], nextCursor: null })
+  await f.call('GET', '/a', undefined, 404)
+  await f.call('POST', '', { sourceId: 'a', name: 'Replacement', kind: 'http', config: {}, secret: url }, 409)
+  await f.call('PUT', '/a', { expectedVersion: 1, name: 'Old writer' }, 404)
+  await f.call('POST', '/a/publish', { expectedVersion: 1 }, 404)
+  await f.call('POST', '/a/test', {}, 404)
+  await f.call('POST', '/a/query', {}, 404)
+  assert.equal((await f.request('DELETE', '/a', { expectedVersion: 2 })).statusCode, 404)
+  const tombstone = await f.transactions.withPrincipalTransaction({ kind: 'session', token: f.alice.token }, async (c, principal) => (await c.query('SELECT deleted_at,enabled FROM data_sources WHERE deployment_id=$1 AND owner_id=$2 AND source_id=$3', [principal.deploymentId, principal.userId, 'a'])).rows)
+  assert.equal(tombstone.length, 1)
+  assert.ok(tombstone[0].deleted_at)
+  assert.equal(tombstone[0].enabled, false)
+  await assert.rejects(f.businessPool.query("DELETE FROM data_sources WHERE source_id='a'"), { code: '42501' })
+})
+
+for (const operation of ['test','query']) test(`in-flight ${operation} refuses an HTTP result after deletion and same-ID recreation attempt`, async t => {
+  let release, entered
+  const received = new Promise(resolve => { entered = resolve })
+  const url = await start(t, (_q, r) => { release = () => r.writeHead(200, { 'content-type': 'application/json' }).end('{"rows":[{"v":"old-instance-data"}]}'); entered() })
+  const f = await fixture(t, url)
+  await f.call('POST', '/a/publish', { expectedVersion: 1 })
+  const pending = f.request('POST', '/a/' + operation, {})
+  await received
+  assert.equal((await f.request('DELETE', '/a', { expectedVersion: 1 })).statusCode, 204)
+  await f.call('POST', '', { sourceId: 'a', name: 'Replacement', kind: 'http', config: {}, secret: url }, 409)
+  release()
+  const denied = await pending
+  assert.equal(denied.statusCode, 404)
+  assert.equal(denied.body.includes('old-instance-data'), false)
+  assert.equal(denied.body.includes('"ok":true'), false)
 })
 
 test('RLS and least privileges independently isolate drafts, publications and vault', async t => {

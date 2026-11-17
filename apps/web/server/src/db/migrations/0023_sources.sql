@@ -3,6 +3,9 @@ CREATE TABLE data_sources (
   owner_id uuid NOT NULL,
   source_id text NOT NULL CHECK (source_id ~ '^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$'),
   enabled boolean NOT NULL DEFAULT true,
+  -- Keep the scoped primary key reserved after deletion: versions never restart
+  -- on a replacement instance under an old page or an in-flight request.
+  deleted_at timestamptz,
   draft_version integer NOT NULL DEFAULT 1 CHECK (draft_version>=1),
   published_revision integer CHECK (published_revision IS NULL OR published_revision>=1),
   created_at timestamptz NOT NULL DEFAULT clock_timestamp(),

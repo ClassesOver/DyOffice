@@ -27,7 +27,7 @@ export function createSourceService({ transactions, credentialKeys = '', egressT
     await c.query('INSERT INTO data_source_audit(id,deployment_id,owner_id,source_id,actor_id,session_id,action,detail) VALUES($1,$2,$3,$4,$3,$5,$6,$7::jsonb)', [randomUUID(), ...scope(p, id), p.sessionId, action, JSON.stringify(detail)])
   }
   async function get(c: PoolClient, p: BusinessPrincipal, id: string, lock = false): Promise<Row> {
-    const row = (await c.query(joined + ' WHERE s.deployment_id=$1 AND s.owner_id=$2 AND s.source_id=$3' + (lock ? ' FOR UPDATE OF s,d' : ''), scope(p, id))).rows[0]
+    const row = (await c.query(joined + ' WHERE s.deployment_id=$1 AND s.owner_id=$2 AND s.source_id=$3 AND s.deleted_at IS NULL' + (lock ? ' FOR UPDATE OF s,d' : ''), scope(p, id))).rows[0]
     if (!row) throw sourceError(404)
     return row
   }
@@ -63,7 +63,7 @@ export function createSourceService({ transactions, credentialKeys = '', egressT
       if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100 || query.after !== undefined && typeof query.after !== 'string') throw sourceError()
       const after = query.after === undefined ? '' : sourceId(query.after)
       return access(token, async (c, p) => {
-        const rows = (await c.query(joined + ' WHERE s.deployment_id=$1 AND s.owner_id=$2 AND s.source_id>$3 ORDER BY s.source_id LIMIT $4', [p.deploymentId, p.userId, after, limit + 1])).rows
+        const rows = (await c.query(joined + ' WHERE s.deployment_id=$1 AND s.owner_id=$2 AND s.source_id>$3 AND s.deleted_at IS NULL ORDER BY s.source_id LIMIT $4', [p.deploymentId, p.userId, after, limit + 1])).rows
         return { items: rows.slice(0, limit).map(descriptor), nextCursor: rows.length > limit ? rows[limit - 1].source_id : null }
       })
     },
@@ -128,9 +128,14 @@ export function createSourceService({ transactions, credentialKeys = '', egressT
         return published(version)
       })
     },
-    async remove(token: string, input: unknown): Promise<void> {
-      const id = sourceId(input)
-      await access(token, async (c, p) => { await get(c, p, id, true); await audit(c, p, id, 'source_deleted'); await c.query('DELETE FROM data_sources WHERE deployment_id=$1 AND owner_id=$2 AND source_id=$3', scope(p, id)) })
+    async remove(token: string, input: unknown, payload: unknown): Promise<void> {
+      const id = sourceId(input), value = object(payload, ['expectedVersion']), expected = positiveVersion(value.expectedVersion)
+      await access(token, async (c, p) => {
+        const row = await get(c, p, id, true)
+        if (row.version !== expected) throw sourceError(409)
+        await c.query('UPDATE data_sources SET deleted_at=clock_timestamp(),enabled=false,updated_at=clock_timestamp() WHERE deployment_id=$1 AND owner_id=$2 AND source_id=$3', scope(p, id))
+        await audit(c, p, id, 'source_deleted', { version: expected })
+      })
     },
     async test(token: string, input: unknown) {
       const id = sourceId(input)
@@ -142,7 +147,9 @@ export function createSourceService({ transactions, credentialKeys = '', egressT
       let ok = false, code = 'SOURCE_UNAVAILABLE'
       if (prepared.secret) try { await execute(prepared.row, prepared.secret, prepared.row.kind === 'http' ? {} : { sql: 'SELECT 1 AS connection_ok' }); ok = true } catch (error) { code = (error as { statusCode?: number }).statusCode === 400 ? 'TARGET_NOT_APPROVED' : 'SOURCE_UNAVAILABLE' }
       return access(token, async (c, p) => {
-        const current = await get(c, p, id)
+        // Lock the permanent root through the final authorization/audit commit.
+        // A deleted scoped ID cannot be recreated, so this is the same instance.
+        const current = await get(c, p, id, true)
         if (!current.enabled || current.version !== prepared.row.version) throw sourceError(409)
         await audit(c, p, id, 'source_tested', { ok, version: current.version })
         return { ok, kind: prepared.row.kind as SourceKind, ...(ok ? {} : { code }) }
@@ -165,7 +172,9 @@ export function createSourceService({ transactions, credentialKeys = '', egressT
       // No identity transaction is held over network I/O. Recheck revocation and
       // source state before releasing any data or writing a success audit.
       return access(token, async (c, p) => {
-        const current = await get(c, p, id)
+        // Lock the permanent root through the final authorization/audit commit.
+        // A deleted scoped ID cannot be recreated, so this is the same instance.
+        const current = await get(c, p, id, true)
         if (!current.enabled) throw sourceError(409)
         await audit(c, p, id, 'source_queried', { revision: prepared.row.revision, rows: snapshot.rows.length, truncated: snapshot.truncated, sha256: snapshot.sha256 })
         return snapshot

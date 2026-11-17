@@ -26,7 +26,7 @@ export function registerSourceRoutes(app: FastifyInstance, sources: SourceServic
           if (id) { object(request.query, []); return sources.detail(token, id) }
           return sources.list(token, request.query)
         }
-        if (method === 'DELETE') { if (request.body !== undefined) throw sourceError(); await sources.remove(token, id); return reply.code(204).send() }
+        if (method === 'DELETE') { await sources.remove(token, id, request.body); return reply.code(204).send() }
         if (method === 'PUT') return sources.save(token, id, request.body)
         if (url === base) return reply.code(201).send(await sources.create(token, request.body))
         if (url.endsWith('/publish')) return sources.publish(token, id, request.body)
