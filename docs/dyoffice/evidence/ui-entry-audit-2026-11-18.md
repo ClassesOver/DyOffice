@@ -190,3 +190,12 @@
 - 最终账号恢复浏览器先确认两处附带遗漏并追加修复：隐藏旧AntD Modal后恢复按钮autoFocus被失焦，helper现在先禁用/隐藏旧portal再显式聚焦恢复按钮；管理员自身角色修改成功时旧operation未清，导致保留的隐藏面板仍拦显式reload，现在成功分支先清operation。相应DOM回归均先红后绿，继续保留独立编辑器beforeunload，不将“释放自身锁”当成绕过未保存内容。
 - 补修后重新构建/重启、全Shell重跑41文件396项通过，类型通过；最终current revoke/ownAuthority模拟浏览器两完整路径通过：无自动导航、旧portal hidden/inert、stub编辑器实例/正文保留且dispose0、恢复按钮初始焦点/Tab/Escape正常；显式reload触发编辑器beforeunload并可取消，移除编辑器stub guard后无账号/admin自身拦截。current精确1条mock DELETE，ownRoles精确1次reauth/1条mock PATCH，无真实账号变更。证据/tmp/dyoffice-ui-audit/account-security-recovery-final/report.json、report.md与截图，/tmp/dyoffice-account-recovery-final.log；最终构建与全suite日志/tmp/dyoffice-round7-verified-build.log、/tmp/dyoffice-round7-verified-shell.log。
 - 发布前核对上一提交0667efa1的GitHub CI：10项工作流检查全部pass，CodeRabbit skipping；此结果不代表本批待提交代码的新CI已通过。
+
+## 编辑器首次入口失败恢复
+
+- 继续处理前轮确认的native入口首次返回错误JSON后无法关闭/重试：DocumentFrame在load时核对同源精确入口URL、application/json或application/problem+json、无脚本、无生命周期API，以及服务端Problem type/title/4xx或5xx结构。只有这个尚未启动编辑器的失败状态显示“重新加载编辑器”，可重新挂载iframe或通过原页签关闭按钮关闭；不显示原始服务端详细信息。
+- 首次已收到HTML/脚本或生命周期API后，started永久保留，后续错误JSON不解除保存/关闭保护。独立审查及新增红回归发现，失败后晚出现生命周期时旧失败快照会绕过close/retry，现两入口使用前均重读当前状态；任一生命周期API出现即不允许直接重试，仍要求完整guard。旧load读取当前frame，重复重试同步清entryFailed防重复挂载。iframe失败时显式display:none，避免既有display:block覆盖hidden属性。
+- 8项专项通过，最初首次恢复两项先失败，晚出现生命周期回归也先失败后修复；最终全Shell42文件404项、shell及前后端类型、shell构建与边界检查通过。独立只读复核与8项重跑通过。一次中间全suite包含并行添加的late lifecycle红测而失败，完成修复后全suite重跑404项通过；构建chunk提示及DOM CSS解析日志仍存在。
+- 本修复仅识别首次入口未启动的错误响应，未把HTML运行时崩溃、已获取租约后的未知状态、网络错误页面或跨源页面强制当成可关闭；这些状态仍保持原生命周期保护。完整UI与复杂文档交互目标继续进行。
+- 源码和测试证据：/tmp/dyoffice-frame-red.log、/tmp/dyoffice-frame-lifecycle-red.log、/tmp/dyoffice-frame-final.log、/tmp/dyoffice-round8-final-shell.log、/tmp/dyoffice-round8-final-build.log、/tmp/dyoffice-round8-types.log、/tmp/dyoffice-round8-general-types.log。
+- 最终构建真实宿主浏览器首轮6/6通过：两种JSON MIME各首503→Retry200新iframe且恢复拒绝关闭保护、各首503→页签X可关闭；首HTML或已有生命周期后再变JSON均不解锁。全部业务接口/编辑器为mock、无lease请求/意外业务写/页面异常，不声称真实正文保存验收。补查前4项确认错误iframe确实隐藏、提示可见，后两项登录限流而未执行业务，单列而不冒充本次全6重跑；首轮报告从已捕获工具stdout恢复，并记录来源。证据/tmp/dyoffice-ui-audit/native-entry-recovery-postfix/report.json、coverage.md、hidden-supplement-report.json及截图。兼容基线84文件、工具157、IPC538检查通过。
