@@ -12,6 +12,7 @@ import type {
 } from 'react'
 import type { ChainedCommands, Editor } from '@tiptap/core'
 import { NodeSelection, type Command } from '@tiptap/pm/state'
+import { pendingDocumentOperation } from '../editor/pending-document-operation'
 import type { Mark, Node as PMNode } from '@tiptap/pm/model'
 import {
   addColumnAfter,
@@ -1235,6 +1236,18 @@ function RibbonInner({
     align: sub ? fs.align : fs.shapeTextAlign,
   }
 
+  const pendingPictureOperation = (targetEditor: Editor = editor) => {
+    const selection = targetEditor.state.selection
+    const node = targetEditor.state.doc.nodeAt(selection.from)
+    const operation = pendingDocumentOperation(targetEditor)
+    return {
+      current: () => operation.current()
+        && targetEditor.state.selection.eq(selection)
+        && targetEditor.state.doc.nodeAt(selection.from) === node,
+      dispose: operation.dispose,
+    }
+  }
+
   /**
    * Replace the selected image's bytes (shared by Replace Picture / remove background / crop).
    * Original images (docxIndex set) swap bytes in place via the imageReplace patch: the
@@ -1245,9 +1258,15 @@ function RibbonInner({
   const applyPictureBytes = (dataUrl: string) => replacePictureBytes(editor, dataUrl, canEdit)
 
   const replacePicture = async () => {
-    const picked = await window.desktop.pickImage()
-    if (!picked) return
-    await applyPictureBytes(`data:${picked.mime};base64,${picked.base64}`)
+    if (!canEdit) return
+    const operation = pendingPictureOperation()
+    try {
+      const picked = await window.desktop.pickImage()
+      if (!picked || !operation.current()) return
+      await applyPictureBytes(`data:${picked.mime};base64,${picked.base64}`)
+    } finally {
+      operation.dispose()
+    }
   }
 
   const rotatePicture = (deltaDeg: number) => {
@@ -1332,8 +1351,10 @@ function RibbonInner({
     if (!canEdit) return
     const url = fs.imageDataUrl
     if (!inImage || !url) return
+    const operation = pendingPictureOperation(ed)
     try {
       const natural = await imageSizeOf(url)
+      if (!operation.current()) return
       const scale = Math.min(1, inlinePictureHostWidthPx() / natural.width)
       setPicturePx(
         Math.max(1, Math.round(natural.width * scale)),
@@ -1341,6 +1362,8 @@ function RibbonInner({
       )
     } catch {
       /* decode failed: leave as is */
+    } finally {
+      operation.dispose()
     }
   }
 

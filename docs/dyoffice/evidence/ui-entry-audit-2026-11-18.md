@@ -389,3 +389,11 @@
 - 正式Word入口插入120×80蓝边红心PNG→图片格式→去除背景→应用，在30ms处理任务开始前Escape关闭；原图片当时未变，但释放旧任务后仍被替换为透明PNG。浏览器仅控制delay=30的任务调度，不替代图片处理或业务实现；其余业务写mock/blocked。红证据：`/tmp/dyoffice-ui-audit/word-cutout-cancel-red-1440/{coverage.md,report.json}`。首次按钮中文误定位不算产品失败，正确入口为“去除背景”。
 - CutoutDialog保存应用任务的timeout句柄，沿既有图片effect清理在关闭/卸载时取消任务；回调开始先清句柄。没有改变图片算法、应用按钮或Escape取消语义。3项生命周期回归中Escape关闭及文档卸载两项先红，正常应用正对照保持通过；修后与crop/size/trap共4文件18项通过。独立只读复核无阻塞。Web docs类型、生产构建、边界1338文件0违规及git diff --check通过，保留既有chunk提示。日志：`/tmp/dyoffice-cutout-lifecycle-{red,green}.log`、`/tmp/dyoffice-cutout-{type,build}.log`。
 - 最终构建Chromium1440/390各3场景通过：Escape及点击遮罩取消后，待执行任务确实移除；重开弹窗再释放调度不改图片、不关闭新弹窗。正常应用释放后确实修改图片。6场景0页面异常，业务写mock/blocked。最终调度器同时尊重clearTimeout，原生处理算法未mock。证据：`/tmp/dyoffice-ui-audit/word-cutout-cancel-green-{1440,390}/report.json`。不将此项视为全部图片替换解码/跨文档竞态或全量UI验收。
+
+## 图片异步处理的目标绑定
+
+- 正式Word两张可辨图片复现：第一张裁剪应用的尺寸解码暂挂时选第二张，释放旧解码后第一张不变、第二张被裁剪结果替换；重置第一张大小的解码暂挂时选第二张，则第二张由180×120错误变为120×80。浏览器仅控制new Image的onload调度，真实点击与图片处理保留。红证据：`/tmp/dyoffice-ui-audit/word-picture-target-race-red-1440/{coverage.md,report.json}`、`/tmp/dyoffice-ui-audit/word-picture-reset-race-red-1440/{coverage.md,report.json}`。
+- 发布期间远端3dad0424增加apply-picture-bytes解码目标保护，已精确导入并保留，移除本地重复实现。最终本地增量仅为Replace Picture的文件选择等待、Reset Size的解码等待绑定发起时选择及节点身份，复用pendingDocumentOperation处理同内容setContent、只读及销毁边界；全部结束路径finally退订。重置大小传实际目标Editor，避免子编辑器选图变化只核对主编辑器。用户切换目标后过期结果丢弃，不写新选中的图片；切回同一未变目标仍可完成。未改图片尺寸/保存payload语义。
+- 最初实际Ribbon处理器与真实Editor的6项回归5红/正常正对照1绿；reset切目标新增回归另1红；复核发现子编辑器目标后双Editor回归再先红。最终保留远端回归，相关6文件44项通过，含正常直接应用/文件选择/重置、两类emitUpdate同内容替换、只读/销毁、目标更新及子编辑器。测试执行实际Ribbon源码片段（TS转译）和远端真实helper，不复制产品实现。Web docs类型、最终合并生产构建、边界1339文件0违规及git diff --check通过；既有chunk提示保留。日志：`/tmp/dyoffice-ribbon-picture-red.log`、`/tmp/dyoffice-ribbon-reset-red.log`、`/tmp/dyoffice-ribbon-subeditor-red.log`、`/tmp/dyoffice-ribbon-picture-merged-{tests,type,build}.log`。
+- 最终合并构建1440/390各3个目标流程通过：裁剪解码时切图两张src均不变；重置大小时切图第二张尺寸不变；文件选择期间切图旧结果被丢弃，随后稳定目标正常替换。均0页面异常、业务API mock/blocked。证据：`/tmp/dyoffice-ui-audit/word-picture-target-race-green-{1440,390}/report.json`、`word-picture-reset-race-green-{1440,390}/report.json`、`word-replace-picker-target-green-{1440,390}/report.json`。最终构建另复验两尺寸裁剪取消/应用8场景及去除背景取消重开/应用6场景，均通过，沿用对应green报告。子编辑器为真实双Editor组件证据，未计作真实页眉浏览器流程。
+- 本专项不证明全部复杂图形、页眉/文本框浏览器组合或全部UI已穷举；图片选择器拒绝反馈等其他入口仍需继续按真实触发检查。
