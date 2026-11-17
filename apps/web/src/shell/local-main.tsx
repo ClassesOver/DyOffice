@@ -177,7 +177,7 @@ function Login({done}:{done:()=>void}){
  {error&&<Alert type="error" showIcon title={error} style={{marginBottom:20}}/>}
  <Form layout="vertical" onFinish={async(values:{username:string;password:string})=>{if(pending)return;setPending(true);setError('');try{if(!signed){await client.login(values.username,values.password);setSigned(true)}await restore();done()}catch(err){const status=(err as {status?:number}).status;setError(status===401?'用户名或密码不正确，请核对后重试。':status===403?'登录请求被拒绝，请确认使用 http://localhost:3080 并刷新重试。':status===429?'登录尝试过于频繁，请稍后再试。':(err as Error).message)}finally{setPending(false)}}}>
  {!signed&&<><Form.Item label="用户名" name="username" rules={[{required:true,message:'请输入用户名'}]}><Input aria-label="用户名" autoComplete="username" placeholder="请输入用户名" disabled={pending}/></Form.Item><Form.Item label="密码" name="password" rules={[{required:true,message:'请输入密码'}]}><Input.Password aria-label="密码" autoComplete="current-password" placeholder="请输入密码" disabled={pending}/></Form.Item></>}
- <Button type="primary" htmlType="submit" block loading={pending}>{signed?'重新加载工作区':'登录'}</Button>
+ <Button type="primary" htmlType="submit" block loading={pending} aria-label={signed?'重新加载工作区':'登录'} aria-busy={pending}>{signed?'重新加载工作区':'登录'}</Button>
  </Form>
  <Button type="link" block onClick={()=>setAction(true)} disabled={pending}>激活或重置密码</Button>
  <Typography.Paragraph type="secondary" className="dy-login-footer">你的文档与数据，仅在授权范围内访问。</Typography.Paragraph>
