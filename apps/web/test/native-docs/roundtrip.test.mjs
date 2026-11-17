@@ -22,6 +22,8 @@ async function fixture(t) {
     await rm(directory,{ recursive: true,force: true })
   })
   execFileSync('openssl',['req','-x509','-newkey','rsa:2048','-nodes','-keyout',join(directory,'key.pem'),'-out',join(directory,'cert.pem'),'-days','1','-subj','/CN=localhost'],{ stdio: 'pipe' })
+  // HTTP-only persistence fixture: no WebSocket upgrade is attached. A reconnect
+  // notice is expected and must not replace the independent save-state assertions.
   server = createServer({ key: await readFile(join(directory,'key.pem')),cert: await readFile(join(directory,'cert.pem')) },(req,res) => f.app.routing(req,res))
   await new Promise(resolve => server.listen(0,'127.0.0.1',resolve))
   const origin = `https://127.0.0.1:${server.address().port}`
@@ -39,6 +41,23 @@ async function fixture(t) {
   },password)
   assert.equal(status,200)
   return { ...f, original, opened, browser, context, page, origin }
+}
+
+// Do not treat a reconnect banner or an HTTP commit as proof of a clean native model.
+async function expectCleanPersistence(page) {
+  const status=page.locator('.dyoffice-docs-persistence-state')
+  try {
+    await expect(status).toHaveText('Editing')
+    await expect(status).toHaveAttribute('data-dirty','false')
+  } catch (error) {
+    // Bounded state-only diagnostics: no document text, identities, URLs or tokens.
+    console.error('native-save-state',JSON.stringify({
+      outcome:await status.getAttribute('data-native-save'),
+      dirty:await status.getAttribute('data-dirty'),
+      notification:await page.locator('.dyoffice-docs-notification-state').count()>0,
+    }))
+    throw error
+  }
 }
 
 test('native GenOffice DOCX renders, edits, commits, refreshes and preserves unrelated original parts', { timeout: 120_000 }, async t => {
@@ -91,7 +110,7 @@ test('native GenOffice DOCX renders, edits, commits, refreshes and preserves unr
   assert.ok((await archive.file('word/document.xml').async('string')).includes('Native table cell'))
   assert.ok((await archive.file('word/document.xml').async('string')).includes('浏览器剪贴板'))
   assert.equal(await archive.file('customXml/dyoffice-preserve.xml').async('string'),'<probe>Untouched custom part</probe>')
-  await expect(f.page.locator('.dyoffice-docs-state')).toHaveText('EditingDownload saved version')
+  await expectCleanPersistence(f.page)
   const pendingDownload = f.page.waitForEvent('download')
   await f.page.getByRole('link',{ name: 'Download saved version' }).click()
   const download = await pendingDownload
@@ -100,7 +119,7 @@ test('native GenOffice DOCX renders, edits, commits, refreshes and preserves unr
   const history = await f.context.request.get(`${f.origin}/api/v1/files/${opened.file.fileId}/revisions`)
   assert.equal(history.status(),200)
   assert.equal((await history.json()).revisions.length,2)
-  await expect(f.page.locator('.dyoffice-docs-state')).toHaveText('EditingDownload saved version')
+  await expectCleanPersistence(f.page)
   await f.page.reload()
   await f.page.locator('.tiptap.doc-page').waitFor({ timeout: 45_000 })
   await expect(f.page.locator('.tiptap.doc-page')).toContainText(marker,{ timeout: 45_000 })
@@ -129,7 +148,7 @@ test('editing during a delayed native save keeps the newer draft dirty and saves
   const firstZip = await JSZip.loadAsync(await f.files.readFile(f.alice.token,firstRef.file.fileId,firstRef.file.revision))
   assert.ok(!(await firstZip.file('word/document.xml').async('string')).includes('Newer unsaved draft'))
   release()
-  await expect(f.page.locator('.dyoffice-docs-state')).toHaveText('Download saved version',{ timeout: 15_000 })
+  await expect(f.page.locator('.dyoffice-docs-persistence-state')).toHaveText('',{ timeout: 15_000 })
   await expect(editor).toContainText('Newer unsaved draft')
   const next = f.page.waitForResponse(reply => reply.url().endsWith('/commits') && reply.status() === 200)
   await f.page.keyboard.press('Control+s'); await next
@@ -225,11 +244,11 @@ test('page-color edits during a delayed native commit remain dirty and persist o
   await f.page.getByRole('button',{ name: 'Page Color',exact: true }).click()
   await f.page.getByRole('gridcell',{ name: 'Red',exact: true }).click()
   release()
-  await expect(f.page.locator('.dyoffice-docs-state')).toHaveText('Download saved version')
+  await expect(f.page.locator('.dyoffice-docs-persistence-state')).toHaveText('')
   await expect(f.page.locator('.doc-zoom').first()).toHaveCSS('--page-bg','#FF0000')
   const next = f.page.waitForResponse(reply => reply.url().endsWith('/commits') && reply.status() === 200)
   await f.page.keyboard.press('Control+s'); await next
-  await expect(f.page.locator('.dyoffice-docs-state')).toHaveText('EditingDownload saved version')
+  await expectCleanPersistence(f.page)
   const current = await f.files.openFile(f.alice.token,f.opened.file.fileId)
   const zip = await JSZip.loadAsync(await f.files.readFile(f.alice.token,current.file.fileId,current.file.revision))
   assert.match(await zip.file('word/document.xml').async('string'),/w:background[^>]*w:color="FF0000"/)

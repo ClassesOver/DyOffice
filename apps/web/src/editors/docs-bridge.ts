@@ -9,12 +9,14 @@ export function createDocsBridge(host: SessionFileHost, fileId: string, prefs: A
   const locale = prefs.language === 'en' ? 'en' : 'zh', text = messages[locale], state = host.getState(fileId)
   const alias = `/files/${fileId}/${state.name}`, guard = createSaveGenerationGuard(), urls = new Set<string>()
   let consumed = false, ticket: SaveTicket | null = null
+  let nativeSaveOutcome: 'none' | 'pending' | 'accepted' | 'incomplete' = 'none'
   const unavailable = async () => { throw new Error(text.unavailable) }
   const noEvent = () => () => {}
   const lifecycle = {
-    documentOpened() { guard.reset(); ticket = null; onChange() },
+    documentOpened() { guard.reset(); ticket = null; nativeSaveOutcome = 'none'; onChange() },
     edited() { guard.markEdited(); onChange() },
     async beforeSave() {
+      nativeSaveOutcome = 'pending'
       if (guard.getState().status === 'unknown') {
         await host.reconcile(fileId)
         if (ticket) guard.settleSave(ticket,'committed')
@@ -24,6 +26,7 @@ export function createDocsBridge(host: SessionFileHost, fileId: string, prefs: A
       onChange()
     },
     afterSave(accepted: boolean) {
+      nativeSaveOutcome = accepted ? 'accepted' : 'incomplete'
       if (ticket && guard.getState().status !== 'unknown') { guard.settleSave(ticket,'failed'); ticket = null }
       if (accepted && host.getState(fileId).status === 'idle') guard.reset()
       // Native metadata edits do not emit a ProseMirror update. An incomplete
@@ -83,5 +86,5 @@ export function createDocsBridge(host: SessionFileHost, fileId: string, prefs: A
     pickImage: unavailable,fetchImage: unavailable,saveImageAs: unavailable,
     openAiModelSettings: unavailable,openSkillsSettings: unavailable,
   } satisfies Partial<DesktopApi>
-  return { api,lifecycle,getState: () => guard.getState(),dispose() { for (const url of urls) URL.revokeObjectURL(url); urls.clear() } }
+  return { api,lifecycle,getState: () => ({...guard.getState(), nativeSaveOutcome}),dispose() { for (const url of urls) URL.revokeObjectURL(url); urls.clear() } }
 }
