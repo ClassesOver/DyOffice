@@ -3,6 +3,26 @@ import {createElement as h} from 'react'
 import {createRoot} from 'react-dom/client'
 import {WorkspaceSettings} from '../../src/shell/WorkspaceSettings'
 const initial={theme:'light' as const,language:'zh' as const,authorName:'Original',autoSave:false,showAssistant:true}
+test('preference labels associate with their controls and switch labels toggle only the draft',async()=>{
+ const {act}=await import('react')
+ ;(globalThis as typeof globalThis & {IS_REACT_ACT_ENVIRONMENT:boolean}).IS_REACT_ACT_ENVIRONMENT=true
+ document.body.innerHTML='<div id="labels-test"></div>'
+ const root=createRoot(document.getElementById('labels-test')!),save=vi.fn(async()=>initial)
+ try{
+  await act(async()=>root.render(h(WorkspaceSettings,{user:{username:'alice',displayName:'Alice',roles:['personal']},load:async()=>initial,save,sessionsClient:{list:async()=>[],revoke:async()=>{},revokeOthers:async()=>{}},historyClient:{list:async()=>[]},security:{changePassword:async()=>{},onCurrentRevoked:()=>{}},skills:h('p',null,'skills'),onClose:()=>{},onLogout:()=>{},onCloseGuardChange:()=>{},activeTab:'general'})))
+  const pane=document.querySelector('.personal-settings-general')!
+  const label=(name:string)=>[...pane.querySelectorAll<HTMLLabelElement>('label')].find(element=>element.textContent===name)!
+  for(const name of ['语言','主题','文档作者','自动保存','显示 AI 助手']){
+   const control=pane.querySelector<HTMLElement>(`[aria-label="${name}"]`)!
+   expect(label(name).control,name).toBe(control)
+  }
+  for(const [name,checked] of [['自动保存','true'],['显示 AI 助手','false']]){
+   await act(async()=>label(name).click())
+   expect(label(name).control?.getAttribute('aria-checked')).toBe(checked)
+  }
+  expect(save).not.toHaveBeenCalled()
+ }finally{await act(async()=>root.unmount());document.body.innerHTML=''}
+})
 test('preferences remain drafts until explicit save and pending save prevents tab closure',async()=>{
  document.body.innerHTML='<div id="test"></div>'
  const root=createRoot(document.getElementById('test')!)

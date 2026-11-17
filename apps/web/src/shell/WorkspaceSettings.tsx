@@ -1,4 +1,4 @@
-import {useCallback,useEffect,useRef,useState} from 'react'
+import {useCallback,useEffect,useId,useRef,useState} from 'react'
 import {Alert,Button,Card,Descriptions,Form,Input,Select,Space,Switch,Tabs,Typography} from 'antd'
 import type {WebSettingsPreferences} from '../../../shell/src/renderer/src/SettingsModal'
 import {LocalPasswordForm} from './LocalPasswordForm'
@@ -15,6 +15,7 @@ export function WorkspaceSettings({user,load,save,security,skills,onLogout,onClo
  sessionsClient?:LocalSessionsClient;historyClient?:LoginHistoryClient
  security:{changePassword:(current:string,next:string)=>Promise<void>;onCurrentRevoked:()=>void};skills:ReactNode|((registerGuard:(guard:(()=>boolean)|null)=>void)=>ReactNode);onLogout:()=>void;onClose:()=>void;onCloseGuardChange:(guard:(()=>boolean)|null)=>void
 }){
+ const preferenceId=useId()
  const [baseline,setBaseline]=useState<WebSettingsPreferences|null>(null),[draft,setDraft]=useState<WebSettingsPreferences|null>(null)
  const [sessionVersion,setSessionVersion]=useState(0)
  const [busy,setBusy]=useState(false),[error,setError]=useState(''),[saved,setSaved]=useState(false)
@@ -40,11 +41,11 @@ export function WorkspaceSettings({user,load,save,security,skills,onLogout,onClo
  </Space>
  const general=<Card className="personal-settings-general" title="显示与文档偏好" extra={<Space><Button disabled={busy} onClick={()=>void refresh()}>重新读取</Button><Button type="primary" loading={busy} disabled={!dirty} onClick={()=>void commit()}>保存个人偏好</Button></Space>}>
   <Form layout="vertical" style={{maxWidth:540}} disabled={busy||!draft}>
-   <Form.Item label="语言"><Select aria-label="语言" value={draft?.language} options={[{value:'zh',label:'简体中文'},{value:'en',label:'English'}]} onChange={language=>edit({language})}/></Form.Item>
-   <Form.Item label="主题"><Select aria-label="主题" value={draft?.theme} options={[{value:'system',label:'跟随系统'},{value:'light',label:'浅色'},{value:'dark',label:'深色'}]} onChange={theme=>edit({theme})}/></Form.Item>
-   <Form.Item label="文档作者" extra="作为文档批注与修订的作者名称。"><Input aria-label="文档作者" value={draft?.authorName} maxLength={100} onChange={e=>edit({authorName:e.target.value})}/></Form.Item>
-   <Form.Item label="自动保存"><Switch aria-label="自动保存" checked={draft?.autoSave} onChange={autoSave=>edit({autoSave})}/></Form.Item>
-   <Form.Item label="显示 AI 助手"><Switch aria-label="显示 AI 助手" checked={draft?.showAssistant} onChange={showAssistant=>edit({showAssistant})}/></Form.Item>
+   <Form.Item label="语言" htmlFor={`${preferenceId}-language`}><Select id={`${preferenceId}-language`} aria-label="语言" value={draft?.language} options={[{value:'zh',label:'简体中文'},{value:'en',label:'English'}]} onChange={language=>edit({language})}/></Form.Item>
+   <Form.Item label="主题" htmlFor={`${preferenceId}-theme`}><Select id={`${preferenceId}-theme`} aria-label="主题" value={draft?.theme} options={[{value:'system',label:'跟随系统'},{value:'light',label:'浅色'},{value:'dark',label:'深色'}]} onChange={theme=>edit({theme})}/></Form.Item>
+   <Form.Item label="文档作者" htmlFor={`${preferenceId}-author`} extra="作为文档批注与修订的作者名称。"><Input id={`${preferenceId}-author`} aria-label="文档作者" value={draft?.authorName} maxLength={100} onChange={e=>edit({authorName:e.target.value})}/></Form.Item>
+   <Form.Item label="自动保存" htmlFor={`${preferenceId}-autosave`}><Switch id={`${preferenceId}-autosave`} aria-label="自动保存" checked={draft?.autoSave} onChange={autoSave=>edit({autoSave})}/></Form.Item>
+   <Form.Item label="显示 AI 助手" htmlFor={`${preferenceId}-assistant`}><Switch id={`${preferenceId}-assistant`} aria-label="显示 AI 助手" checked={draft?.showAssistant} onChange={showAssistant=>edit({showAssistant})}/></Form.Item>
   </Form>
   <Typography.Text type="secondary">语言与编辑器偏好保存后，在刷新页面或重新打开文档时生效。</Typography.Text>
  </Card>

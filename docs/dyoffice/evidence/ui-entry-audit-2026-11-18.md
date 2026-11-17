@@ -277,3 +277,21 @@
 - 浏览器首轮排序逻辑通过但暴露菜单Escape完全不关闭；未将trigger再次点击替代Escape当成验收。新增DOM回归先红后绿，现纳入Home已有Escape关闭逻辑，关闭后聚焦sort trigger。最终构建重启HTTP200后，320/1440真实Chromium均硬断言Escape关闭且焦点返回，再完整重跑默认recent、显式asc首50无拉全、旧asc尾页hold切desc/迟到隔离、新desc尾页锁释放、asc/desc完整55、Starred分页及目录排序，全部通过。0真实业务写、0页面异常，无新增登录。报告/tmp/dyoffice-ui-audit/home-server-sort-postfix/report.json、coverage.md及截图；红绿/tmp/dyoffice-sort-escape-red.log、/tmp/dyoffice-sort-escape-green.log。
 - 扩大全量unit首次发现两处既有测试入口失败：Node原生transform runner不能解析bridge无扩展名file-events导入；端口guard误把仅setContent+addScriptTag且不启动服务器的Login组件测试当作服务fixture。前者补明确.ts扩展，原生runner53项通过；后者新增正/反case先红后绿4/4，仅纯内联且没有listen/goto/serve/buildLocalApp的fixture可无端口，有实际端口的碰撞/无效值/监听与安全origin不一致检查保留。未改登录断言或排除整个检查。证据/tmp/dyoffice-sort-final-unit.log（初次失败）、/tmp/dyoffice-sort-bridge-native-node.log、/tmp/dyoffice-local-browser-ports-red.log、/tmp/dyoffice-local-browser-ports-green.log。
 - 最终Shell46文件440项通过、全unit706项中702通过/4条件跳过、Web388项中387通过/1既有跳过，前后端及shell类型、最终shell构建、边界1335文件0违规、兼容84/工具157/IPC538通过。独立完整diff及Escape增量只读复核无阻塞；既有CSS解析与chunk提示保留。日志/tmp/dyoffice-sort-final-shell.log、/tmp/dyoffice-sort-final-unit-green.log、/tmp/dyoffice-sort-final-web.log、/tmp/dyoffice-sort-shell-final-type.log、/tmp/dyoffice-sort-web-final-type.log、/tmp/dyoffice-sort-final-build.log、/tmp/dyoffice-sort-final-boundary.log。本批证明排序相关流程，未将其等同完整UI穷举，复杂文档及触屏/读屏组合等仍需继续审计。
+
+## 冻结结果下载、触屏与页签并发补查
+
+- 冻结结果 JSON 下载在390/1440各成功、503重试、关闭后迟到三组，共6/6通过。真实接收浏览器下载，UUID.json文件名、373字节与冻结snapshot逐字节一致，中文/emoji/数字及等号开头字符串保持JSON原值。重试只重读同一结果，不重新查询或保存；关闭后释放暂挂读取没有迟到下载。来源/查询/保存/content均mock，0真实业务写、0页面异常，无新增工作区结果入口。证据：`/tmp/dyoffice-ui-audit/source-result-download/{report.json,coverage.md}`、`/tmp/dyoffice-source-result-download.log`。
+- 320/390移动touch context的五配置弹窗主轮10/10及Admin/Trash表格纵滑补证4/4通过。真实tap、横/纵touch手势可达Tabs、Select、取消确认和屏外保存入口；四类dirty外点不关闭、X确认拒绝保留值。表格纵滚不移动footer，来源保存入口触滑后可见但未提交。0真实业务写、0页面异常。原生confirm由Playwright响应，不冒充实体手机物理点击。证据：`/tmp/dyoffice-ui-audit/config-touch/coverage.md`及report、`config-touch-table-scroll/report.json`。
+- 当前可达DOCX/PDF/XLSX/PPTX混合页签并发6组通过：鼠标/键盘菜单操作后台目标，重复关闭共享guard且拒绝保留正确页签，失败重试加载保护，晚到打开/预览读取不抢焦点或复活已关闭页签，内嵌设置开关后实例与guard保留。PDF/XLSX/PPTX使用真实预览组件，DOCX为生命周期stub，不能证明真实编辑保存/租约；未测试当前不可达原生PPTX菜单。0意外写、0页面异常。证据：`/tmp/dyoffice-ui-audit/tabs-concurrency-current/report.md`及report.json。
+- 可访问名称读取覆盖Home、五管理弹窗、个人三子页及全局新草稿/用户创建和角色/连接高级区域，未发现可见交互入口空名；账户安全重复会话未逐一键盘遍历。实际点击确认五个通用偏好label未关联对应控件，另行修复并验证，不能由aria-label正确推断标签可点击。初始证据：`/tmp/dyoffice-ui-audit/accessibility-names/findings.md`及`labels-drafts.json`。
+
+## 用户管理翻页失败保留已加载成员
+
+- 新增组件回归先红：成功读取Alice及下一页cursor，后页读取失败后Alice与下一页入口均消失。390/1440真实Chromium mock重复确认两尺寸相同问题，pageerror/业务写均0。根因为refresh(after)的catch把append失败也按首次加载失败清空users/cursor。
+- 最小修复仅在没有after的首列表失败时清空；后页失败保留旧rows/cursor，错误照常显示，pending/unknown锁和首列表/写成功后刷新失败行为保持。组件完整19/19通过，独立只读复核无阻塞。最终构建浏览器两尺寸直接点击原下一页重试成功，Alice+Bob均可见、错误消失、末页入口消失，实际请求序列为首列表/同cursor失败/同cursor重试，无重复首列表读取。证据：`/tmp/dyoffice-admin-paging-{red,green}.log`、`/tmp/dyoffice-admin-paging-browser-{red,green}.log`及`/tmp/dyoffice-ui-audit/admin-pagination-{red,green}/report.json`。
+- 期间发现远端新增34dabefa会话绑定偏好修复，已精确对象校验后fast-forward保留；没有覆盖远端改动。合入后本地最终Shell47文件443项、偏好会话路由/生命周期9项、shell类型、构建及边界1336文件0违规通过。仍有既有DOM CSS解析及构建chunk提示。完整UI穷举目标保持进行中。
+
+## 个人偏好标签关联控件
+
+- 五个Form.Item标签原无htmlFor，对应label.control均为null；点击后只聚焦页签容器。控件已有aria-label，不属于空可访问名称。新增实际关联和开关标签点击回归先红后绿，useId隔离实例，分别配对htmlFor/id，未改变偏好读写和dirty逻辑。设置组件6/6通过，包含标签切换只改变草稿而不自动保存。
+- 最终构建390/1440浏览器共10个标签均关联且点击聚焦正确控件，两开关实际切换；关闭dirty弹窗拒绝确认后仍保留。0业务写、0页面异常，已目视390偏好截图。测试脚本首次在作者输入后无条件Escape关闭了整个配置弹窗，已改为仅展开Select时Escape并完整重跑，不将该脚本错误记为产品缺陷。证据：`/tmp/dyoffice-ui-audit/settings-label-postfix/report.json`、`/tmp/dyoffice-settings-label-browser.log`，组件红测见本轮工具输出（未另存完整stdout），最终组件结果包含于`/tmp/dyoffice-paging-label-final-shell.log`。

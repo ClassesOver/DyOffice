@@ -37,6 +37,27 @@ import {LocalAdminPanel} from '../../src/shell/LocalAdminPanel'
 import {PasswordActionForm} from '../../src/shell/PasswordActionForm'
 import type {LocalAdminClient} from '../../src/shell/local-admin-client'
 async function mount(node:ReturnType<typeof h>){document.body.innerHTML='<div id="test"></div>';const root=createRoot(document.getElementById('test')!);const environment=globalThis as typeof globalThis & {IS_REACT_ACT_ENVIRONMENT?:boolean};const previous=environment.IS_REACT_ACT_ENVIRONMENT;environment.IS_REACT_ACT_ENVIRONMENT=true;try{await act(async()=>root.render(node))}finally{environment.IS_REACT_ACT_ENVIRONMENT=previous}return root}
+test('failed next member page retains loaded rows and cursor for an explicit retry',async()=>{
+ const alice={id:'alice',username:'alice',displayName:'Alice',status:'active',roles:['personal'],requiresPasswordReset:false}
+ const bob={...alice,id:'bob',username:'bob',displayName:'Bob'}
+ const list=vi.fn().mockResolvedValueOnce({users:[alice],nextCursor:'alice'}).mockRejectedValueOnce(new Error('next page unavailable')).mockResolvedValueOnce({users:[bob],nextCursor:null})
+ const root=await mount(h(LocalAdminPanel,{currentUserId:'me',onClose:()=>{},onSessionRotated:()=>{},client:{list} as unknown as LocalAdminClient}))
+ const next=()=>[...document.querySelectorAll('button')].find(b=>b.textContent==='下一页')!
+ try{
+  await vi.waitFor(()=>expect(document.body.textContent).toContain('Alice'))
+  next().click()
+  await vi.waitFor(()=>expect(document.body.textContent).toContain('next page unavailable'))
+  expect(document.body.textContent).toContain('Alice')
+  expect(next()).toBeDefined()
+  expect(next().disabled).toBe(false)
+  next().click()
+  await vi.waitFor(()=>expect(document.body.textContent).toContain('Bob'))
+  expect(document.body.textContent).toContain('Alice')
+  expect(document.body.textContent).not.toContain('next page unavailable')
+  expect(next()).toBeUndefined()
+  expect(list.mock.calls).toEqual([[undefined],['alice'],['alice']])
+ }finally{root.unmount()}
+})
 test('admin confirms target and reauth before mutation; duplicate clicks cannot issue twice',async()=>{
  let finish!:()=>void
  const wait=new Promise<void>(r=>{finish=r})
