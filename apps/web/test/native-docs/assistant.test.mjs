@@ -18,8 +18,8 @@ test('native DOCX assistant delivers selected private Skill through the personal
   await settings.saveGlobalConfig(f.adminSigned.token, 0, {upserts: [{id: profile.entryId, kind: 'chat', providerId: profile.providerId, label: 'Company Chat', model: profile.model, baseUrl: profile.baseUrl, enabled: true, apiKey: 'synthetic-private-key'}]})
   await f.ownerPool.query('INSERT INTO provider_budget_accounts(deployment_id,owner_id,entry_id,config_revision,available_units,per_call_units) VALUES($1,$2,$3,1,20,10)', [f.deploymentId, f.alice.user.id, profile.entryId])
   const skill = createSkillService(f.transactions)
-  await skill.save(f.alice.token, 'alice-report', {description: 'Alice report skill', body: 'Use Alice private instructions.'})
-  await skill.save(f.bob.token, 'bob-report', {description: 'Bob report skill', body: 'Use Bob private instructions.'})
+  await skill.save(f.alice.token, 'alice-report', {description: 'Alice report skill', body: 'Use Alice private instructions to summarize a DOCX document.'})
+  await skill.save(f.bob.token, 'bob-report', {description: 'Bob report skill', body: 'Use Bob private instructions to summarize a DOCX document.'})
   const original = await docxBytes(), opened = await importFile(f, f.alice.token, original)
   const app = await buildLocalApp({db: f.db, businessPool: f.businessPool, passwords: f.passwords, deploymentId: f.deploymentId, origin, csrfKey: f.csrfKey, objectStore: f.objects, globalConfigKeyring: keyring, providerGateway: {profiles: [profile]}, nativeDocsDirectory: fileURLToPath(new URL('../../dist-docs', import.meta.url))})
   f.cleanup.push(() => app.close()); await app.listen({host: '127.0.0.1', port: 4213})
@@ -44,12 +44,16 @@ test('native DOCX assistant delivers selected private Skill through the personal
     await page.locator('.ai-plus-btn').click()
     const details = page.getByRole('menuitem', {name: '技能', exact: true})
     if (await details.isVisible()) await details.click()
-    await expect(page.getByText('Bob report skill', {exact: true})).toHaveCount(0)
     const option = page.getByRole('menuitemcheckbox', {name: /alice-report/})
     await option.click()
     await expect(option).toHaveAttribute('aria-checked', 'true')
+    await expect(page.getByText('Bob report skill', {exact: true})).toHaveCount(0)
   }
   const composer = page.locator('.ai-panel textarea')
+  // Body-only Office classification reads the Skill while populating the menu.
+  // Finish that prefetch before pausing the separate send-time read below.
+  await attachSkill()
+  assert.equal(net.writes, 0)
   const skillUrl = '**/api/v1/skills/alice-report'
   const reached = Promise.withResolvers(), resume = Promise.withResolvers()
   await page.route(skillUrl, async route => {
@@ -58,7 +62,6 @@ test('native DOCX assistant delivers selected private Skill through the personal
     await route.continue()
   }, {times: 1})
   try {
-    await attachSkill()
     await composer.fill('Cancel while reading the Skill')
     await composer.press('Enter')
     await reached.promise
