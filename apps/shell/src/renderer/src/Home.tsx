@@ -2386,19 +2386,19 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
     {
       ext: 'docx',
       title: t('newDoc'),
-      sub: supportedFormats ? '文字文档 · .docx' : '.docx',
+      sub: '.docx',
       action: () => window.aiOffice.newDoc(newFileOpts),
     },
     {
       ext: 'xlsx',
       title: t('newSheet'),
-      sub: supportedFormats ? '电子表格 · .xlsx' : '.xlsx',
+      sub: '.xlsx',
       action: () => window.aiOffice.newSheet(newFileOpts),
     },
     {
       ext: 'pptx',
       title: t('newSlide'),
-      sub: supportedFormats ? '演示文稿 · .pptx' : '.pptx',
+      sub: '.pptx',
       action: () => window.aiOffice.newSlide(newFileOpts),
     },
     {
@@ -2416,7 +2416,7 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
     {
       ext: 'pdf',
       title: t('newPdf'),
-      sub: supportedFormats ? 'PDF 文档 · .pdf' : '.pdf',
+      sub: '.pdf',
       action: () => window.aiOffice.newPdf(newFileOpts),
     },
   ]

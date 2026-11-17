@@ -1,9 +1,14 @@
 import {afterEach, beforeEach, expect, test, vi} from 'vitest'
 import {act, createElement as h} from 'react'
 import {createRoot, type Root} from 'react-dom/client'
+import {readFileSync} from 'node:fs'
+import {resolve} from 'node:path'
 import {Home} from '../../../shell/src/renderer/src/Home'
 import {LocaleProvider} from '../../../shell/src/renderer/src/locale'
 import type {FolderListing, HomeApi, RecentEntry} from '../../../shell/src/shared/home-api'
+
+const homeStyles = readFileSync(resolve(import.meta.dirname, '../../../shell/src/renderer/src/home.css'), 'utf8')
+const workspaceStyles = readFileSync(resolve(import.meta.dirname, '../../src/shell/workspace-shell.css'), 'utf8')
 
 const fileId = 'aa000000-0000-4000-8000-000000000001'
 const project = '/workspace/bb000000-0000-4000-8000-000000000002'
@@ -407,7 +412,7 @@ test('Web file and folder menus render outside the scrolling list and retain rea
   expect(host.querySelector('.folder-rename-input')).not.toBeNull()
 })
 
-test('the next-page sentinel stays inside the independently scrolling recent list', async () => {
+test('the next-page sentinel stays inside the recent list within the page scrollport', async () => {
   vi.stubGlobal('IntersectionObserver', class {observe() {} disconnect() {}})
   api.recents = async () => ({entries: [file], total: 100, totalAll: 100})
   await act(async () => window.dispatchEvent(new Event('focus')))
@@ -457,4 +462,80 @@ test('Web row menu ignores delayed pre-opening scroll events but closes when its
   list.scrollLeft = 100
   await act(async () => list.dispatchEvent(new Event('scroll')))
   expect(document.body.querySelector('.row-menu')).toBeNull()
+})
+
+
+test('Web home inherits the original page scrollport, spacing and wrapping card grid', async () => {
+ await act(async () => root.render(h(LocaleProvider, {initial: 'en', children: h(Home, {accountEntry: h('div', null, 'Account'), supportedNewFormats: [], supportedFormats: ['docx', 'xlsx', 'pptx', 'pdf']})})))
+ const style = document.createElement('style')
+ style.textContent = homeStyles + '\n' + workspaceStyles
+ document.head.append(style)
+ try {
+  const content = getComputedStyle(host.querySelector('.content')!)
+  expect(content.overflowY).toBe('auto')
+  expect(content.overflow).not.toBe('hidden')
+  expect(content.padding).toBe('28px 36px 40px')
+  expect(getComputedStyle(host.querySelector('.home-hero')!).margin).toBe('28px 0px 20px')
+  expect(getComputedStyle(host.querySelector('.hero-title')!).fontSize).toBe('28px')
+  const cards = getComputedStyle(host.querySelector('.quick-cards')!)
+  expect(cards.display).toBe('grid')
+  expect(cards.gridTemplateColumns).toBe('repeat(auto-fill, minmax(148px, 1fr))')
+  // CSSOM covers nested viewport rules too; jsdom does not perform responsive layout.
+  // The original stylesheet alone owns home geometry at narrow/short viewports.
+  const selectors = (rules: CSSRuleList): string[] => [...rules].flatMap(rule => {
+   if ('selectorText' in rule) return [(rule as CSSStyleRule).selectorText]
+   if ('cssRules' in rule) return selectors((rule as CSSGroupingRule).cssRules)
+   return []
+  })
+  expect(selectors(style.sheet!.cssRules).filter(selector => selector.includes('.home-web'))).toEqual([])
+ } finally {style.remove()}
+})
+
+test('Web quick cards keep original extension captions and unavailable-creation explanations', async () => {
+ await act(async () => root.render(h(LocaleProvider, {initial: 'en', children: h(Home, {accountEntry: h('div', null, 'Account'), supportedNewFormats: [], supportedFormats: ['docx', 'xlsx', 'pptx', 'pdf']})})))
+ const cards = [...host.querySelectorAll<HTMLButtonElement>('.quick-card')].filter(card => card.disabled)
+ expect(cards.map(card => card.querySelector('.quick-sub')?.textContent)).toEqual(['.docx', '.xlsx', '.pptx', '.pdf'])
+ expect(cards.every(card => card.title.includes('暂不支持新建'))).toBe(true)
+ expect(host.querySelectorAll('.quick-card')).toHaveLength(5)
+ expect((host.querySelectorAll<HTMLButtonElement>('.quick-card')[4]).disabled).toBe(false)
+})
+
+test('page-scroll sentinel loads the next real page once and stops after exhaustion', async () => {
+ let intersect: IntersectionObserverCallback = () => {}
+ const observe = vi.fn(), disconnect = vi.fn(), options: (IntersectionObserverInit | undefined)[] = []
+ vi.stubGlobal('IntersectionObserver', class {
+  constructor(callback: IntersectionObserverCallback, init?: IntersectionObserverInit) {intersect = callback; options.push(init)}
+  observe = observe
+  disconnect = disconnect
+ })
+ const next = {...file, path: 'aa000000-0000-4000-8000-000000000002', name: 'Next report.docx'}
+ const recents = vi.fn(async (request?: {offset?: number}) => ({entries: request?.offset ? [next] : [file], total: 2, totalAll: 2}))
+ api.recents = recents
+ await act(async () => window.dispatchEvent(new Event('focus')))
+ const sentinel = host.querySelector('.recent-list > .load-more')!
+ expect(host.querySelector('.content')?.contains(sentinel)).toBe(true)
+ expect(observe).toHaveBeenCalledWith(sentinel)
+ expect(options.at(-1)).toEqual({rootMargin: '240px'})
+ await act(async () => intersect([{isIntersecting: true} as IntersectionObserverEntry], {} as IntersectionObserver))
+ expect(recents.mock.calls.map(([request]) => request?.offset ?? 0)).toEqual([0, 1])
+ expect([...host.querySelectorAll('.recent-name')].map(node => node.textContent)).toEqual(['Quarterly report.docx', 'Next report.docx'])
+ expect(host.querySelector('.recent-list > .load-more')).toBeNull()
+ await act(async () => intersect([{isIntersecting: true} as IntersectionObserverEntry], {} as IntersectionObserver))
+ expect(recents).toHaveBeenCalledTimes(2)
+ expect(disconnect).toHaveBeenCalled()
+})
+
+test('Web file-menu portal closes when the restored content scrollport moves', async () => {
+ await act(async () => root.render(h(LocaleProvider, {initial: 'en', children: h(Home, {accountEntry: h('div', null, 'Account'), supportedNewFormats: [], supportedFormats: ['docx']})})))
+ const content = host.querySelector<HTMLElement>('.content')!
+ content.scrollTop = 120
+ await click(host.querySelector<HTMLButtonElement>('.recent-item .more-btn')!)
+ const menu = document.body.querySelector('.row-menu')!
+ expect(menu).not.toBeNull()
+ expect(content.contains(menu)).toBe(false)
+ await act(async () => content.dispatchEvent(new Event('scroll')))
+ expect(document.body.querySelector('.row-menu')).not.toBeNull()
+ content.scrollTop = 121
+ await act(async () => content.dispatchEvent(new Event('scroll')))
+ expect(document.body.querySelector('.row-menu')).toBeNull()
 })
