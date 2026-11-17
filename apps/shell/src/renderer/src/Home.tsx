@@ -2142,6 +2142,7 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
     <div className="cloud-col-sort" ref={fileSortRef}>
       <button
         className="cloud-col-sort-btn"
+        title={t('colModified')}
         aria-haspopup="menu"
         aria-expanded={fileSortMenuOpen}
         onClick={() => setFileSortMenuOpen((o) => !o)}
