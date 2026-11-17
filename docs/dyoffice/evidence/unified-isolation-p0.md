@@ -343,3 +343,37 @@ engine execution, global resource quotas or OS isolation. The same-process
 channel is not connected to the production control protocol or positive T06.
 Unsupported syscalls fail without filesystem fallback or changed host settings.
 See [sealed-byte/FD scope](../inventory/document-sealed-bytes-stage.md).
+
+## Actual PPTX module content-identity preparation
+
+The offline tool now builds the existing PPTX session entry using pinned esbuild
+0.25.12 and records the exact onLoad buffers compiled. Node's SHA-256 binds fixed
+profile/policy/architecture, recipe, observed compiler identity, sorted input
+snapshots and the generated module's path/mode/size/bytes in a domain-separated
+manifest digest. Verification requires an independently held expected digest;
+replacing both the artifact and its manifest cannot silently replace that anchor.
+
+One aggregate test with multiple assertions passed independently and directly:
+actual repeated builds, joint replacement and fixed-metadata mutations, malformed
+manifests, links/nonregular files, size/mode changes, and the offline CLI. An actual
+non-hoisted compiler-layout failure was corrected by resolving the native package
+relative to esbuild's wrapper, not by searching PATH. A separate temporary source
+layout produced the same digest. The observed 97 workspace inputs matched the
+`e0d5be42` remote blobs; 111 dependency inputs were hashed but not authenticated.
+
+No generated module is executed in these tests. The roughly 898 KB minified module
+is not a bootable rootfs: Node/loader/OS libraries/fonts and supply-chain/license
+validation remain missing, and dynamic imports/resources are not proven closed.
+Ordinary candidate directories remain mutable; snapshot hash verification cannot
+authorize later exec-by-path. `runtimeApproved`, `rootfsComplete` and
+`productionEnabled` stay false. No launch resolver or PG runtime approval changed.
+See [PPTX runtime candidate scope](../inventory/document-pptx-runtime-candidate.md).
+
+PDF existing-service expiry coverage was also extended, without introducing a
+controller or recovery ticket: three real PostgreSQL/local-object tests passed
+and were independently rerun. They cover natural lease expiry before preparation,
+expiry after preparation with explicit commit retry, and account disable/re-enable
+without reviving the old session. Original head/revision and processor/upload
+counts are checked. Unknown commit remains unknown; tests do not authorize a
+retry to regenerate content. No new production PDF functionality, authority type,
+OS runtime, route or UI was enabled.
