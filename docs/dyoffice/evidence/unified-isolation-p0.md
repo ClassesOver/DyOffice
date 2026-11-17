@@ -401,3 +401,26 @@ cases, including existing module identity and new subset checks; protocol
 regression passed 68/68. These are offline preparation/validation tests, not
 real-rootfs execution or a fresh whole-repository regression. Generated binary
 snapshots and logs are not committed.
+
+## Actual minified-candidate IPC functionality
+
+The exact fixed-recipe PPTX module now runs against a freshly generated trusted
+PPTX using its existing Node advanced IPC dispatcher, not a new stdio protocol.
+The fixed test entry/launcher verifies the independent candidate identity and
+exercises open, source-schema-validated outline and an actual close reply.
+Separate test children reject wrong generation/binding. Missing/replaced
+candidate files fail before launch; no alternative engine is used.
+
+Direct and independent final artifact tests passed 4/4, with protocol regression
+68/68. The launcher is explicitly test-only, not a sandbox or broker: the old
+dispatcher retains broader capabilities, IPC size validation happens after
+Node deserialization, and ordinary-path verify/load TOCTOU remains. Process
+cleanup is not unit/cgroup stop proof. Production and positive T06 remain closed.
+See `../inventory/document-pptx-candidate-ipc.md` for boundaries and commands.
+
+Target material inventory confirmed a substantive blocker: no verified
+Ubuntu/openEuler image/package closure or corresponding official Node signature
+and complete license provenance is available here. Debian package material and
+host-library observations are not substitutes. The subset inventory now defines
+required independent signing anchors, package/license mapping, reachable native
+addon dependencies, actual loader resolution and per-target acceptance.

@@ -116,3 +116,53 @@ each tag occurrence must correspond to a parsed value, so malformed declarations
 cannot silently disappear from the incomplete-dependency report. Snapshot
 cleanup uses nested finally blocks so a destination-close failure still closes
 the input descriptor.
+
+## Target-distribution material gate
+
+A subsequent target rootfs cannot be produced from the files currently available.
+A bounded workspace inventory found no Ubuntu/openEuler official image, RPM
+package set, signatures or target SBOM. Existing Debian trixie package material
+is not a substitute. The current Node byte snapshot lacks its corresponding
+verified official release signature and complete redistribution-license material.
+This is a material/provenance blocker, not a failed isolation test.
+
+Before constructing a target runtime, pin and obtain:
+
+1. Exact distribution release/patch, x86_64, repository snapshot or image digest.
+2. Ubuntu image and signed checksums, or openEuler repository metadata and the
+   complete RPM dependency set, verified using independently confirmed official
+   signing-key fingerprints. A key supplied alongside the download is not by
+   itself a trust anchor.
+3. Exact Node linux-x64 release and signed checksums, verified with independently
+   confirmed release keys; record the original artifact and verification result.
+4. Recursive interpreter/shared-library package closure, symbol-version
+   compatibility and fixed runtime paths. DT_NEEDED alone misses dlopen, NSS,
+   locales and other dynamic resources; host search paths are not an approved
+   package resolver.
+5. File-to-source-package/version/hash mapping, licenses and required NOTICEs;
+   selected fonts/resources need their own provenance and licensing review.
+6. Separate Ubuntu/openEuler actual execution and isolation acceptance. A valid
+   package signature cannot certify runtime behavior or kernel isolation.
+
+Official verification references:
+- [Ubuntu image verification](https://documentation.ubuntu.com/security/software-integrity/image-verification/)
+- [openEuler repository configuration](https://docs.openeuler.org/en/docs/25.09/server/administration/administrator/configuring_the_repo_server.html)
+- [Node release keys](https://github.com/nodejs/release-keys)
+
+These links identify verification procedures, not a selected/approved target
+version. The openEuler documentation version is not a deployment decision.
+No package or image was downloaded, no host library was collected, and no
+signing key was enrolled by this inventory step. Production remains disabled.
+
+Target-platform acceptance must also enumerate reachable native addons and their
+shared-library dependencies. Node can load addons after initial startup, so
+initial DT_NEEDED does not prove the complete execution closure. Verify actual
+resolution with the intended cleared environment, fixed paths and target loader
+configuration/cache, and require rejection when a pinned artifact is missing or
+replaced. This is a planned acceptance requirement, not evidence of an observed
+vulnerability or a completed target-platform test.
+
+References: [Node process.dlopen](https://nodejs.org/docs/latest-v24.x/api/process.html#processdlopenmodule-filename-flags)
+and [Linux dynamic-loader behavior](https://man7.org/linux/man-pages/man8/ld.so.8.html).
+The Node 24 documentation describes the mechanism, not certification of the
+specific Node bytes or their reachable addon dependency closure.
