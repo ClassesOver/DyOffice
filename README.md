@@ -10,6 +10,12 @@ The upstream README below is retained for project attribution and historical
 reference; its desktop downloads, installers and product launch instructions
 are **not supported DyOffice product entrypoints**.
 
+For Web data handling, see [Privacy scope](PRIVACY.md). Web uploads and supported
+saves send document data to the workspace service. The historical README below,
+including its offline/local-only statements and feature coverage, is not a
+DyOffice Web privacy promise or a statement that all desktop capabilities are
+available in the Web product.
+
 ---
 
 <p align="center">

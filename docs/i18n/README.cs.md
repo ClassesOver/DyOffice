@@ -1,3 +1,7 @@
+> **Rozsah: historická dokumentace desktopové verze.** Tento repozitář je určen pro DyOffice Web se serverovým zázemím. Níže uvedené popisy stahování, místních úprav, práce offline a funkcí nejsou příslibem pro webovou verzi. Nahrávání a podporované ukládání odesílá data dokumentů službě pracovního prostoru.
+>
+> [DyOffice Web README](../../README.md) · [Web setup](../../apps/web/README.md) · [Web privacy scope](../../PRIVACY.md)
+
 <p align="center">
   <a href="https://genoffice.ai/">
     <picture>

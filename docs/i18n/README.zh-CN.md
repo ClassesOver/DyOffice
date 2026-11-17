@@ -1,3 +1,7 @@
+> **适用范围：历史桌面版说明。** 本仓库面向服务端支撑的 DyOffice Web；下文的桌面下载、本地编辑、离线能力及功能描述不代表 Web 版承诺。Web 上传和受支持的保存操作会向工作区服务传输文档数据。
+>
+> [DyOffice Web README](../../README.md) · [Web setup](../../apps/web/README.md) · [Web privacy scope](../../PRIVACY.md)
+
 <p align="center">
   <a href="https://genoffice.ai/">
     <picture>

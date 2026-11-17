@@ -1,3 +1,7 @@
+> **Portée : documentation historique de la version de bureau.** Ce dépôt vise DyOffice Web, adossé à un serveur. Les descriptions ci-dessous des téléchargements, de l’édition locale, du fonctionnement hors ligne et des fonctionnalités ne constituent pas des engagements pour la version Web. Les téléversements et les enregistrements pris en charge envoient les données des documents au service de l’espace de travail.
+>
+> [DyOffice Web README](../../README.md) · [Web setup](../../apps/web/README.md) · [Web privacy scope](../../PRIVACY.md)
+
 <p align="center">
   <a href="https://genoffice.ai/">
     <picture>

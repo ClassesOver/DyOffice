@@ -1,3 +1,7 @@
+> **적용 범위: 데스크톱 버전의 과거 문서입니다.** 이 저장소는 서버 기반 DyOffice Web을 대상으로 합니다. 아래의 다운로드, 로컬 편집, 오프라인 사용 및 기능 설명은 웹 버전에 대한 약속이 아닙니다. 업로드 및 지원되는 저장 작업은 문서 데이터를 워크스페이스 서비스로 전송합니다.
+>
+> [DyOffice Web README](../../README.md) · [Web setup](../../apps/web/README.md) · [Web privacy scope](../../PRIVACY.md)
+
 <p align="center">
   <a href="https://genoffice.ai/">
     <picture>

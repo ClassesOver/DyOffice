@@ -1,3 +1,7 @@
+> **Cakupan: dokumentasi historis versi desktop.** Repositori ini ditujukan untuk DyOffice Web yang didukung server. Uraian unduhan, penyuntingan lokal, penggunaan luring, dan fitur di bawah bukan janji untuk versi Web. Unggahan dan operasi penyimpanan yang didukung mengirimkan data dokumen ke layanan ruang kerja.
+>
+> [DyOffice Web README](../../README.md) · [Web setup](../../apps/web/README.md) · [Web privacy scope](../../PRIVACY.md)
+
 <p align="center">
   <a href="https://genoffice.ai/">
     <picture>

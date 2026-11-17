@@ -1,3 +1,7 @@
+> **תחולה: תיעוד היסטורי של גרסת שולחן העבודה.** מאגר זה מיועד ל־DyOffice Web המבוסס על שרת. התיאורים להלן של הורדות, עריכה מקומית, עבודה לא מקוונת ותכונות אינם התחייבויות לגרסת הווב. העלאות ופעולות שמירה נתמכות שולחות נתוני מסמכים לשירות סביבת העבודה.
+>
+> [DyOffice Web README](../../README.md) · [Web setup](../../apps/web/README.md) · [Web privacy scope](../../PRIVACY.md)
+
 <p align="center">
   <a href="https://genoffice.ai/">
     <picture>

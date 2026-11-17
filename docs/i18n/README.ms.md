@@ -1,3 +1,7 @@
+> **Skop: dokumentasi sejarah versi desktop.** Repositori ini menyasarkan DyOffice Web yang disokong pelayan. Penerangan muat turun, penyuntingan setempat, penggunaan luar talian dan ciri di bawah bukan jaminan untuk versi Web. Muat naik dan operasi simpan yang disokong menghantar data dokumen kepada perkhidmatan ruang kerja.
+>
+> [DyOffice Web README](../../README.md) · [Web setup](../../apps/web/README.md) · [Web privacy scope](../../PRIVACY.md)
+
 <p align="center">
   <a href="https://genoffice.ai/">
     <picture>

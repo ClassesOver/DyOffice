@@ -1,3 +1,7 @@
+> **Escopo: documentação histórica da versão desktop.** Este repositório se destina ao DyOffice Web com suporte de servidor. As descrições abaixo sobre downloads, edição local, uso offline e recursos não são promessas para a versão Web. Uploads e operações de salvamento compatíveis enviam dados dos documentos ao serviço do espaço de trabalho.
+>
+> [DyOffice Web README](../../README.md) · [Web setup](../../apps/web/README.md) · [Web privacy scope](../../PRIVACY.md)
+
 <p align="center">
   <a href="https://genoffice.ai/">
     <picture>

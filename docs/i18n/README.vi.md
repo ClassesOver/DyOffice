@@ -1,3 +1,7 @@
+> **Phạm vi: tài liệu lịch sử của phiên bản máy tính.** Kho mã này hướng đến DyOffice Web có máy chủ hỗ trợ. Các mô tả dưới đây về tải xuống, chỉnh sửa cục bộ, sử dụng ngoại tuyến và tính năng không phải là cam kết cho phiên bản Web. Việc tải tệp lên và các thao tác lưu được hỗ trợ gửi dữ liệu tài liệu đến dịch vụ không gian làm việc.
+>
+> [DyOffice Web README](../../README.md) · [Web setup](../../apps/web/README.md) · [Web privacy scope](../../PRIVACY.md)
+
 <p align="center">
   <a href="https://genoffice.ai/">
     <picture>

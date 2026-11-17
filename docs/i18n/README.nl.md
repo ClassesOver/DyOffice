@@ -1,3 +1,7 @@
+> **Reikwijdte: historische documentatie van de desktopversie.** Deze repository is gericht op DyOffice Web met een server. De onderstaande beschrijvingen van downloads, lokaal bewerken, offlinegebruik en functies zijn geen toezeggingen voor de webversie. Uploads en ondersteunde opslagacties sturen documentgegevens naar de werkruimteservice.
+>
+> [DyOffice Web README](../../README.md) · [Web setup](../../apps/web/README.md) · [Web privacy scope](../../PRIVACY.md)
+
 <p align="center">
   <a href="https://genoffice.ai/">
     <picture>

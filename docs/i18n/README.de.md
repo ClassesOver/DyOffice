@@ -1,3 +1,7 @@
+> **Geltungsbereich: historische Desktop-Dokumentation.** Dieses Repository ist für das servergestützte DyOffice Web bestimmt. Die folgenden Angaben zu Downloads, lokaler Bearbeitung, Offline-Nutzung und Funktionen sind keine Zusagen für die Webversion. Uploads und unterstützte Speichervorgänge senden Dokumentdaten an den Workspace-Dienst.
+>
+> [DyOffice Web README](../../README.md) · [Web setup](../../apps/web/README.md) · [Web privacy scope](../../PRIVACY.md)
+
 <p align="center">
   <a href="https://genoffice.ai/">
     <picture>

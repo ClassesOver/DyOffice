@@ -1,3 +1,7 @@
+> **Kapsam: masaüstü sürümünün tarihsel belgeleri.** Bu depo, sunucu destekli DyOffice Web'i hedefler. Aşağıdaki indirme, yerel düzenleme, çevrimdışı kullanım ve özellik açıklamaları Web sürümü için taahhüt değildir. Yüklemeler ve desteklenen kaydetme işlemleri belge verilerini çalışma alanı hizmetine gönderir.
+>
+> [DyOffice Web README](../../README.md) · [Web setup](../../apps/web/README.md) · [Web privacy scope](../../PRIVACY.md)
+
 <p align="center">
   <a href="https://genoffice.ai/">
     <picture>

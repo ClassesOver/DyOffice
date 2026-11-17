@@ -1,3 +1,7 @@
+> **適用範圍：歷史桌面版說明。** 本儲存庫面向由伺服器支援的 DyOffice Web；下文的桌面下載、本機編輯、離線能力及功能描述不代表 Web 版承諾。Web 上傳和支援的儲存操作會向工作區服務傳輸文件資料。
+>
+> [DyOffice Web README](../../README.md) · [Web setup](../../apps/web/README.md) · [Web privacy scope](../../PRIVACY.md)
+
 <p align="center">
   <a href="https://genoffice.ai/">
     <picture>

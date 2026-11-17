@@ -1,3 +1,7 @@
+> **適用範囲：デスクトップ版の過去の説明です。** このリポジトリはサーバーを利用する DyOffice Web を対象としています。以下のダウンロード、ローカル編集、オフライン利用、機能の説明は Web 版の保証ではありません。アップロードおよび対応する保存操作では、文書データがワークスペースのサービスに送信されます。
+>
+> [DyOffice Web README](../../README.md) · [Web setup](../../apps/web/README.md) · [Web privacy scope](../../PRIVACY.md)
+
 <p align="center">
   <a href="https://genoffice.ai/">
     <picture>
