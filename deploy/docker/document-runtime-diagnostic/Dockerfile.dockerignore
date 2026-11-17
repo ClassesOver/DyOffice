@@ -1,0 +1,14 @@
+**
+!services/
+!services/document-broker/
+!services/document-broker/**
+services/document-broker/target
+!deploy/
+!deploy/docker/
+!deploy/docker/document-runtime-diagnostic/
+!deploy/docker/document-runtime-diagnostic/**
+**/.env
+**/.env.*
+**/secrets
+**/target
+**/audit*.json
