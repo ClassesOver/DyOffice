@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { Editor } from '@tiptap/core'
 import { editorExtensions } from '../src/renderer/editor/extensions'
-import { pastePayload } from '../src/renderer/editor/paste-actions'
+import { pastePayload, pasteFromClipboard } from '../src/renderer/editor/paste-actions'
 
 let editor: Editor
 let reader: ControlledReader
@@ -78,4 +78,49 @@ it.each(['error', 'abort', 'success', 'decodeError', 'replacement'])('releases t
     await pending
   }
   expect(off).toHaveBeenCalledWith('transaction', callback)
+})
+
+it('does not paste clipboard read result into replacement document', async () => {
+  let resolve!: (items: unknown[]) => void
+  Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { read: () => new Promise(r => { resolve = r }) } })
+  const previousReader = reader
+  const pending = pasteFromClipboard(editor)
+  editor.commands.setContent(doc('replacement')); const before = editor.getJSON()
+  resolve([{ types: ['image/png'], getType: async () => new Blob(['private']) }])
+  await pending
+  if (reader !== previousReader) { const decoding = reader.finish(); await tick(); finishDecode(); await decoding; await tick() }
+  expect(editor.getJSON()).toEqual(before)
+})
+
+it('keeps clipboard read valid through ordinary editing', async () => {
+  let resolve!: (items: unknown[]) => void
+  Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { read: () => new Promise(r => { resolve = r }) } })
+  const pending = pasteFromClipboard(editor); editor.commands.insertContent('edit')
+  resolve([{ types: ['image/png'], getType: async () => new Blob(['private']) }])
+  expect(await pending).toBe(true)
+  const decoding = reader.finish(); await tick(); finishDecode(); await decoding
+  expect(images()).toHaveLength(1); expect(editor.getText()).toContain('edit')
+})
+it('cancels a clipboard read after destroy', async () => {
+  let resolve!: (items: unknown[]) => void
+  Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { read: () => new Promise(r => { resolve = r }) } })
+  const pending = pasteFromClipboard(editor); editor.destroy()
+  resolve([{ types: ['image/png'], getType: async () => new Blob(['private']) }])
+  expect(await pending).toBe(false)
+})
+it.each([true, false])('cancels same-content replacement during clipboard getType (emitUpdate %s)', async emitUpdate => {
+  let resolve!: (blob: Blob) => void
+  Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { read: async () => [{ types: ['image/png'], getType: () => new Promise(r => { resolve = r }) }] } })
+  const pending = pasteFromClipboard(editor); await tick()
+  editor.commands.setContent(editor.getJSON(), { emitUpdate })
+  resolve(new Blob(['private'])); expect(await pending).toBe(false)
+})
+it('cancels late fallback clipboard text and releases guard', async () => {
+  let resolve!: (text: string) => void
+  Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { read: async () => { throw Error('denied') }, readText: () => new Promise(r => { resolve = r }) } })
+  const on = vi.spyOn(editor, 'on'); const off = vi.spyOn(editor, 'off')
+  const pending = pasteFromClipboard(editor); await tick()
+  editor.commands.setContent(doc('replacement')); const before = editor.getJSON()
+  resolve('private'); expect(await pending).toBe(false); expect(editor.getJSON()).toEqual(before)
+  expect(off).toHaveBeenCalledWith('transaction', on.mock.calls.find(([name]) => name === 'transaction')?.[1])
 })

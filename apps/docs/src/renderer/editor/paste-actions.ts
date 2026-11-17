@@ -195,5 +195,11 @@ export function pastePayload(
 }
 
 export async function pasteFromClipboard(editor: Editor, mode?: PasteMode): Promise<boolean> {
-  return pastePayload(editor, await readClipboardPayload(), mode)
+  const { current, dispose } = pendingDocumentOperation(editor)
+  try {
+    const payload = await readClipboardPayload()
+    return current() ? pastePayload(editor, payload, mode) : false
+  } finally {
+    dispose()
+  }
 }
