@@ -124,3 +124,15 @@ node --experimental-strip-types --test apps/web/test/sandbox/broker-golden-contr
 
 `target/` is ignored and not publication content. This slice does not wire the
 broker into the web worker or change existing experimental host-process behavior.
+
+## Fixed unit-policy candidates
+
+The public unit_policy module validates strict profile selection and creates only
+NonLaunchableUnitPolicy; resolve_launch always rejects because no trusted runtime
+manifest exists. It does not expose executable/path/environment setters or a
+conversion to launch properties. A private cfg(test) fictional manifest checks
+actual typed P2P encoding without calling StartTransientUnit. Capability matching
+accepts only exact v256 test metadata and never grants execution. See the
+[unit-policy stage](../../docs/dyoffice/inventory/document-unit-policy-stage.md).
+PrivateNetwork alone does not isolate accessible filesystem Unix sockets or
+inherited FDs; real rootfs/FD/SELinux/kernel enforcement remains unverified.

@@ -7,3 +7,5 @@ pub use protocol::{decode_frame, validate_frame};
 // Mutating Manager calls exist ONLY in a private test model, never production builds.
 #[cfg(test)]
 mod manager_model;
+
+pub mod unit_policy;

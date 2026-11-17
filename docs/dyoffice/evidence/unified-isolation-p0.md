@@ -160,3 +160,29 @@ last transaction check. It is not a guarantee of validity at COMMIT/client recei
 a TTL authorization, real broker provisioning, or evidence of cgroup emptiness.
 Real host acceptance and least-privilege ledger admission remain outstanding;
 production stays disabled. See [assertion stage details](../inventory/document-broker-assertion-stage.md).
+
+## Fixed non-launchable unit policies
+
+The Rust broker now constructs fixed candidate metadata for all four profile IDs.
+The public NonLaunchableUnitPolicy has private fields, no conversion to launch
+properties, and accepts only exact profile/policy selection. Every launch resolver
+call still returns UnsupportedRuntimeManifest. No missing engine/rootfs artifact
+is invented, and callers cannot supply paths, commands, argv, environment or units.
+
+The capability matcher compares bounded caller-supplied test metadata against the
+explicit systemd-v256 setter reference and exact property values. A match always
+reports execution unavailable; it is not a host probe or certification. Only a
+private cfg(test) fictional manifest can encode ExecStart/root/user/work-directory
+values. Genuine P2P transport uses a custom InspectPolicy receiver to verify setter
+types and values, never StartTransientUnit. Production binary remains disabled.
+
+Verification: **36/36 Rust tests**, locked/offline, fmt, clippy and normal build
+passed; independent review also ran **68/68 TS** and observed binary exit 78.
+PG/TypeScript implementation is unchanged from the preceding **68/68 real PG**
+and strict **13-module TS** stage. No dependency or host settings changed.
+
+The openEuler matrix now explicitly requires host system-bus/container-runtime
+socket invisibility and inherited/passed-FD and socket-activation checks. Neither
+PrivateNetwork nor address-family filtering substitutes for those boundaries.
+Real setter acceptance and actual namespace/seccomp/SELinux/cgroup enforcement
+remain unverified on both target architectures. See [unit-policy stage details](../inventory/document-unit-policy-stage.md).

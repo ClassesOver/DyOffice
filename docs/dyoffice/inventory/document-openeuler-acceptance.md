@@ -37,6 +37,7 @@ and destructive fault injection belong only in the dedicated VM test scope.
 | Stop proof | Main process exits while child survives, ignored TERM, stop timeout. Release only after correct instance's entire cgroup has no live processes |
 | Recovery | Broker/worker restart, temporary DB loss, crash before stop acknowledgement. Unknown state retains reservation; no new admission before reconciliation |
 | Isolation | Cross-instance files/processes, host secrets, network, devices, capabilities and read-only-root writes denied; retain AVC/probe evidence |
+| Host sockets and inherited FDs | Verify the sandbox cannot see/access host system-bus and container-runtime sockets through mounts. Enumerate inherited/passed FDs and socket-activation variables against an explicit allowlist; test denied access using both newly created and inherited Unix sockets/socketpairs |
 | Limits | Exercise memory, PID, CPU, wall time, temporary disk, protocol and output bounds; observe actual enforcement and cleanup, not only configuration |
 | Certification invalidation | Changed architecture/systemd/runtime/policy/environment fingerprint invalidates old approval; missing evidence keeps execution disabled |
 
@@ -49,6 +50,12 @@ The documented Subscribe/job-correlation pattern is being modeled using private
 simulated interfaces. Applying it to StartTransientUnit on a target systemd version
 requires the real tests above. Private P2P tests do not establish system-bus routing,
 polkit/SELinux admission, actual unit-property enforcement or process isolation.
+
+PrivateNetwork does not deny filesystem Unix sockets that remain visible and
+accessible. RestrictAddressFamilies does not constrain inherited/passed sockets or
+socketpairs. Rootfs/mount visibility and FD ownership/closure therefore require
+separate probes; property readback alone is insufficient. These are acceptance
+requirements, not a claim of an observed vulnerability in the disabled candidate.
 
 ## Evidence and result format
 
@@ -66,3 +73,6 @@ credentials or document contents in shared diagnostic artifacts.
 - [Linux cgroup v2](https://www.kernel.org/doc/html/latest/admin-guide/cgroup-v2.html)
 - [openEuler cgroup v2 configuration](https://docs.openeuler.org/en/docs/24.03_LTS/docs/Container/iSulad_support_for_cgroup_v2.html)
 - [openEuler SELinux configuration](https://docs.openeuler.org/en/docs/24.03_LTS/docs/SecHarden/selinux-configuration.html)
+
+- [systemd 256 execution sandbox semantics](https://www.freedesktop.org/software/systemd/man/256/systemd.exec.html)
+- [systemd 257 inherited socket restrictions](https://www.freedesktop.org/software/systemd/man/257/systemd.exec.html)
