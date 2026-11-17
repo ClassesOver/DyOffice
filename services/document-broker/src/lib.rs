@@ -31,3 +31,7 @@ pub mod manager_diagnostic;
 mod launch_spec;
 #[allow(dead_code)]
 mod systemd_driver;
+
+// Private restricted database observations, not runtime admission.
+#[allow(dead_code)]
+mod dispatch_ledger;
