@@ -45,3 +45,32 @@ test('Skills API derives ownership from cookie, rejects injected principals, and
   assert.match(result.headers['cache-control'], /no-store/)
   assert.equal((await f.app.inject({method: 'DELETE', url: path, headers})).statusCode, 204)
 })
+
+test('concurrent create-only Skills admit one writer without overwriting its description or body',async t=>{
+ const f=await restrictedFixture(t,{businessMax:4}),skills=createSkillService(f.transactions)
+ const drafts=[{description:'Word first',body:'First original Word steps',overwrite:false},{description:'Word second',body:'Second original Word steps',overwrite:false}]
+ const results=await Promise.allSettled(drafts.map(draft=>skills.save(f.alice.token,'atomic-report',draft)))
+ assert.equal(results.filter(result=>result.status==='fulfilled').length,1)
+ assert.equal(results.find(result=>result.status==='rejected').reason.statusCode,409)
+ const winner=drafts[results.findIndex(result=>result.status==='fulfilled')]
+ assert.deepEqual(await skills.read(f.alice.token,'atomic-report'),{name:'atomic-report',description:winner.description,body:winner.body})
+ await assert.rejects(skills.save(f.alice.token,'atomic-report',{description:'Word intruder',body:'Overwrite attempt',overwrite:false}),{statusCode:409})
+ assert.equal((await skills.read(f.alice.token,'atomic-report')).body,winner.body)
+ await skills.save(f.alice.token,'atomic-report',{description:'Word explicit replacement',body:'Explicit new steps',overwrite:true})
+ assert.equal((await skills.read(f.alice.token,'atomic-report')).body,'Explicit new steps')
+ await skills.save(f.alice.token,'atomic-report',{description:'Word legacy update',body:'Legacy compatible steps'})
+ assert.equal((await skills.read(f.alice.token,'atomic-report')).body,'Legacy compatible steps')
+ for(const overwrite of ['false',0,null,{}])await assert.rejects(skills.save(f.alice.token,'invalid-flag',{description:'Word draft',body:'Draft',overwrite}),{statusCode:400})
+})
+
+test('Skills HTTP create-only requests conflict atomically and reject nonboolean overwrite flags',async t=>{
+ const f=await restrictedFixture(t),cookie='__Host-dyoffice-session='+f.alice.token,headers={cookie,origin:'https://office.example'}
+ headers['x-csrf-token']=(await f.app.inject({url:'/api/v1/auth/csrf',headers})).json().csrfToken
+ const url='/api/v1/skills/http-atomic',draft={description:'Word first',body:'Keep original',overwrite:false}
+ assert.equal((await f.app.inject({method:'PUT',url,headers,payload:draft})).statusCode,200)
+ assert.equal((await f.app.inject({method:'PUT',url,headers,payload:{...draft,body:'Should not replace'}})).statusCode,409)
+ assert.equal((await f.app.inject({url,headers})).json().body,'Keep original')
+ for(const overwrite of ['false',1,null,{}])assert.equal((await f.app.inject({method:'PUT',url,headers,payload:{...draft,overwrite}})).statusCode,400)
+ assert.equal((await f.app.inject({method:'PUT',url,headers,payload:{...draft,overwrite:true,body:'Explicit replacement'}})).statusCode,200)
+ assert.equal((await f.app.inject({url,headers})).json().body,'Explicit replacement')
+})

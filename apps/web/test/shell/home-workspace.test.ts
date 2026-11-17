@@ -782,3 +782,88 @@ test('a late failed view request cannot replace a newer successful view with an 
  expect(host.querySelector('[role="alert"]')).toBeNull()
  expect(host.querySelector('[role="status"][aria-busy="true"]')).toBeNull()
 })
+
+test('search distinguishes a pending first page from failure and retries the unchanged query',async()=>{
+ vi.useFakeTimers()
+ try{
+  const pending=deferred<Awaited<ReturnType<HomeApi['searchFiles']>>>()
+  let fail=true
+  api.searchFiles=vi.fn(async()=>{if(fail){await pending.promise;throw Error('Search unavailable')}return {hits:[{...file,snippet:null,needles:['report']}],total:1,index:{indexed:1,pending:0,scanning:false}}})
+  await fill(host.querySelector<HTMLInputElement>('input[type="search"]')!,'report')
+  expect(host.querySelector('.search-results [role="status"][aria-busy="true"]')).not.toBeNull()
+  await act(async()=>{await vi.advanceTimersByTimeAsync(150)})
+  await act(async()=>pending.resolve({hits:[],total:0,index:{indexed:0,pending:0,scanning:false}}))
+  expect(host.querySelector('.search-results [role="alert"]')?.textContent).toContain('Search unavailable')
+  expect(host.querySelector('.search-results [aria-busy="true"]')).toBeNull()
+  fail=false;await click(button('Retry',host.querySelector('.search-results')!))
+  await act(async()=>{await vi.advanceTimersByTimeAsync(150)})
+  expect(host.querySelector('.search-row')?.textContent).toContain(file.name)
+  expect(host.querySelector('.search-results [role="alert"]')).toBeNull()
+  expect(api.searchFiles).toHaveBeenLastCalledWith(expect.objectContaining({q:'report'}))
+ }finally{vi.useRealTimers()}
+})
+test('an indexing poll failure stops the indexing indicator, retains matching hits and offers retry',async()=>{
+ vi.useFakeTimers()
+ try{
+  let count=0
+  api.searchFiles=vi.fn(async()=>{if(++count>1)throw Error('Index poll failed');return {hits:[{...file,snippet:null,needles:['report']}],total:1,index:{indexed:1,pending:1,scanning:true}}})
+  await fill(host.querySelector<HTMLInputElement>('input[type="search"]')!,'report')
+  await act(async()=>{await vi.advanceTimersByTimeAsync(150)})
+  expect(host.querySelector('.search-status')).not.toBeNull()
+  await act(async()=>{await vi.advanceTimersByTimeAsync(1500)})
+  expect(host.querySelector('.search-status')).toBeNull()
+  expect(host.querySelector('.search-row')?.textContent).toContain(file.name)
+  expect(host.querySelector('.search-results [role="alert"]')?.textContent).toContain('Index poll failed')
+  expect(button('Retry',host.querySelector('.search-results')!)).toBeTruthy()
+ }finally{vi.useRealTimers()}
+})
+
+test('late failure from a previous search does not replace newer results or leave a retry banner',async()=>{
+ vi.useFakeTimers()
+ try{
+  const late=deferred<void>()
+  api.searchFiles=vi.fn(async({q})=>{if(q==='old'){await late.promise;throw Error('Late old failure')}return {hits:[{...file,snippet:null,needles:['report']}],total:1,index:{indexed:1,pending:0,scanning:false}}})
+  const input=host.querySelector<HTMLInputElement>('input[type="search"]')!
+  await fill(input,'old');await act(async()=>{await vi.advanceTimersByTimeAsync(150)})
+  await fill(input,'report');await act(async()=>{await vi.advanceTimersByTimeAsync(150)})
+  await act(async()=>late.resolve())
+  expect(host.querySelector('.search-row')?.textContent).toContain(file.name)
+  expect(host.querySelector('[role="alert"]')).toBeNull()
+  await fill(input,'')
+  expect(host.querySelector('.search-results')).toBeNull()
+ }finally{vi.useRealTimers()}
+})
+
+test('failed polling of an empty partial index does not claim zero final search results',async()=>{
+ vi.useFakeTimers()
+ try{
+  let count=0
+  api.searchFiles=async()=>{if(++count>1)throw Error('Partial index unavailable');return {hits:[],total:0,index:{indexed:0,pending:1,scanning:true}}}
+  await fill(host.querySelector<HTMLInputElement>('input[type="search"]')!,'report')
+  await act(async()=>{await vi.advanceTimersByTimeAsync(1650)})
+  expect(host.querySelector('.search-results [role="alert"]')?.textContent).toContain('Partial index unavailable')
+  expect(host.querySelector('.recents-heading .file-count')).toBeNull()
+  expect(host.querySelector('.search-status')).toBeNull()
+  expect(host.querySelector('.search-results')?.textContent).not.toContain('No files')
+ }finally{vi.useRealTimers()}
+})
+
+test('search result buttons support Space and Enter without page scrolling or key-repeat opens',async()=>{
+ vi.useFakeTimers()
+ try{
+  api.openPath=vi.fn(async()=>{})
+  api.searchFiles=async()=>({hits:[{...file,snippet:null,needles:['report']}],total:1,index:{indexed:1,pending:0,scanning:false}})
+  await fill(host.querySelector<HTMLInputElement>('input[type="search"]')!,'report')
+  await act(async()=>{await vi.advanceTimersByTimeAsync(150)})
+  const row=host.querySelector<HTMLElement>('.search-row')!
+  row.focus()
+  for(const key of [' ','Enter']){
+   const event=new KeyboardEvent('keydown',{key,bubbles:true,cancelable:true})
+   await act(async()=>row.dispatchEvent(event))
+   expect(event.defaultPrevented).toBe(true)
+  }
+  await act(async()=>row.dispatchEvent(new KeyboardEvent('keydown',{key:' ',repeat:true,bubbles:true,cancelable:true})))
+  expect(api.openPath).toHaveBeenCalledTimes(2)
+  expect(api.openPath).toHaveBeenLastCalledWith(file.path)
+ }finally{vi.useRealTimers()}
+})

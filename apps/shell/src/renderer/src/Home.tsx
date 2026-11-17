@@ -1620,6 +1620,7 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
   // ── File search (names + indexed content); active while the box has text ──
   const [searchQuery, setSearchQuery] = useState('')
   const [searchPage, setSearchPage] = useState<FileSearchPage | null>(null)
+  const [searchError, setSearchError] = useState('')
   const [rerank, setRerank] = useState<{ key: string; result: FileSearchRerank } | null>(null)
   // bumped when the Jev settings change so the current results are judged again (or the order dropped)
   const [rerankSettingsTick, setRerankSettingsTick] = useState(0)
@@ -1888,6 +1889,7 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
   const q = searchQuery.trim()
   useEffect(() => {
     setSearchPage(null)
+    setSearchError('')
     searchMoreRequest.current = null; setSearchMoreBusy(false)
     if (q) setSelected(new Set())
     if (!q) {
@@ -1906,9 +1908,10 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
       void window.aiOffice.searchFiles({ q, ext, limit: 100 }).then((page) => {
         if (seq !== searchSeq.current) return
         setSearchPage(page)
+        setSearchError('')
         // results grow while the background index catches up
         if (page.index.pending > 0 || page.index.scanning) timer = window.setTimeout(run, 1500)
-      }).catch((cause) => {if (seq === searchSeq.current) reportError(cause)})
+      }).catch((cause) => {if (seq === searchSeq.current) setSearchError(operationError(cause, errorFallback.current))})
     }
     timer = window.setTimeout(run, 150)
     return () => {
@@ -3375,7 +3378,10 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
       tabIndex={0}
       onClick={() => void window.aiOffice.openPath(hit.path).catch(reportError)}
       onKeyDown={(e) => {
-        if (e.key === 'Enter') void window.aiOffice.openPath(hit.path).catch(reportError)
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault()
+          if (!e.repeat) void window.aiOffice.openPath(hit.path).catch(reportError)
+        }
       }}
     >
       <span className="recent-icon">
@@ -3408,21 +3414,23 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
 
   const renderSearchResults = () => {
     const page = searchPage
-    const busy = !!page && (page.index.pending > 0 || page.index.scanning)
+    const busy = !searchError && !!page && (page.index.pending > 0 || page.index.scanning)
     return (
       <div className="search-results" aria-live="polite">
+        {!page && !searchError && <div className="load-more" role="status" aria-busy="true" aria-label={t('cloudRefresh')}><span className="load-more-spinner" /></div>}
+        {searchError && <div className="empty"><span className="empty-hint" role="alert">{searchError}</span><button className="btn btn-secondary" onClick={() => setSearchRefresh(value => value + 1)}>{t('cloudRetry')}</button></div>}
         {busy && (
           <div className="search-status">
             <span className="load-more-spinner" />
             {t('searchIndexing', { n: page.index.pending })}
           </div>
         )}
-        {page && page.hits.length === 0 && !busy
+        {page && page.hits.length === 0 && !busy && !searchError
           ? renderEmpty(t('searchNoResults', { q }))
           : page && (
               <>
                 <ul className="search-list">{orderedSearchHits(page.hits).map(renderSearchRow)}</ul>
-                {!busy && page.hits.length < page.total && <button className="btn btn-secondary search-more" disabled={searchMoreBusy} aria-busy={searchMoreBusy} onClick={() => void loadMoreSearch()}>{t('searchMore')}</button>}
+                {!busy && !searchError && page.hits.length < page.total && <button className="btn btn-secondary search-more" disabled={searchMoreBusy} aria-busy={searchMoreBusy} onClick={() => void loadMoreSearch()}>{t('searchMore')}</button>}
               </>
             )}
       </div>
@@ -3447,9 +3455,9 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
             Jev
           </span>
         )}
-        <span className="file-count">
+        {searchPage && !searchError && <span className="file-count">
           {t(total === 1 ? 'searchResultCountOne' : 'searchResultCount', { n: total })}
-        </span>
+        </span>}
       </div>
     )
   }

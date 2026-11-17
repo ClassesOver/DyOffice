@@ -97,3 +97,10 @@ test('duplicate preflight failures are explicitly pre-write while PUT failures r
  const error=await write.importText(source,{overwrite:false}).catch(error=>error)
  expect(error.message).toBe('lost response');expect(error.mutationStarted).not.toBe(false)
 })
+test('create-only imports carry the atomic server condition and explicit replacement retains update semantics',async()=>{
+ const writes:unknown[]=[]
+ const client=createUserSkillsClient(async(_path,method,body)=>{if(method==='PUT'){writes.push(body);return {name:'report',description:'Word report'} as never}return [] as never})
+ const source='---\nname: report\ndescription: Word report\n---\nWord instructions'
+ await client.importText(source,{overwrite:false});await client.importText(source,{overwrite:true})
+ expect(writes).toEqual([{description:'Word report',body:'Word instructions',overwrite:false},{description:'Word report',body:'Word instructions'}])
+})

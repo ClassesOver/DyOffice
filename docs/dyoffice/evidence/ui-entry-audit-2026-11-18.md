@@ -163,3 +163,17 @@
 - 正式构建重启后列表浏览器5场景通过：pending/503无旧行、失败后Retry恢复、快速往返后晚成功及晚失败不覆盖当前视图。独立只读源码审查未发现新的确定性问题。全部文件业务API为mock，0页面异常、0真实业务写入，不冒充真实文档保存验收。
 - 发布前远端又新增b1378167导航fixture修复；保留其原样token身份断言，去掉本批对同一fixture的重复修复，仅补齐另一个nonnative fixture；整合后重新运行完整Web API回归，日志/tmp/dyoffice-round5-integrated-web.log。随后保留d74523ac登录失败诊断提交，其新增4项回归通过（/tmp/dyoffice-round5-login-diagnostics.log）。
 - 证据：/tmp/dyoffice-round5-final-shell.log、/tmp/dyoffice-round5-final-build.log、/tmp/dyoffice-ci-test-web-fixed.log，以及/tmp/dyoffice-ui-audit/下home-view-transition、home-view-transition-postfix、home-view-transition-recovery、folder-interaction、folder-menu-postfix报告与截图。完整UI穷举仍未完成，复杂文档交互与跨刷新恢复继续验收。
+
+## 搜索恢复、回收站补页与技能原子防覆盖
+
+- 搜索首屏等待原先空白无加载状态；首屏503后无原查询重试入口，Enter或窗口focus也不重搜。索引轮询失败后仍永久显示索引中。现分别显示加载/明确失败与Retry，保留同查询已加载命中，失败时停止索引提示并隐藏未确认的结果总数；Retry重跑当前查询，查询切换拒绝迟到失败。搜索结果role=button补齐Space/Enter激活、阻止滚动和按住重复打开。5条新增DOM回归先红后绿，Home66项通过，保持主页布局。
+- 最终构建搜索浏览器4场景通过：pending加载指示、首屏503后同查询Retry、有命中与空partial索引轮询失败后Retry。每次恢复均等待真实新mock GET，不用残留旧行充当恢复证明。索引场景通过Home桥接合约注入pending/scanning（本地bridge自身返回扫描已结束），其余请求使用浏览器路由mock。空partial失败不显示错误的0结果或NoResults。
+- 回收站11条时，第一页恢复/永久删除一条后原第11条未补入，而总数变10导致第二页消失。确认成功后现补读有效页，复用并发缩页归一化与补读失败提示；确认写成功后重加载不重复写。新增restore/purge各3条DOM回归先红后绿，Trash17项通过；最终构建浏览器6场景通过，包含10行补齐、第11条可见、补读500仍提示已成功、页2并发缩至5归一页1。另7组失败/unknown/取消审计通过。
+- 关闭前轮明确记录的技能GET→PUT同名并发窗口：客户端在非替换导入/安装中传overwrite:false，服务端在原owner事务/配额锁内INSERT ON CONFLICT DO NOTHING，冲突409保留已有description/body；只有明确确认替换或旧调用省略参数仍走原更新行为。无数据库迁移，保留前置GET用于早期提示。隔离真实PostgreSQL4项通过，涵盖并发仅一成功、原文保持、HTTP及service参数校验、显式替换和旧调用兼容；客户端/面板26项通过。这里的服务端原子保护证据来自PG回归，不把mockUI当成原子性证明。
+- 最终Web shell40文件371项通过，Web API380项中379通过/1跳过；shell与前后端类型、shell构建、边界及兼容清单通过。独立搜索/技能3文件92项及源码复核通过。构建仍有既有chunk大小提示，DOM仍有既有CSS解析日志。一次新增测试清理试图清除全局stub，导致共享setup的ResizeObserver被删除；移除该多余清理后回收站回归重新通过，非产品失败。
+- 本批业务浏览器均mock，无真实业务写入；隔离PG测试使用自动清理的测试数据库。完整UI穷举、复杂文档保存与跨刷新unknown恢复仍未完成。
+- 证据：/tmp/dyoffice-search-state-red.log、/tmp/dyoffice-search-partial-red.log、/tmp/dyoffice-search-keyboard-red.log、/tmp/dyoffice-round6-shell.log、/tmp/dyoffice-round6-web.log、/tmp/dyoffice-round6-final-build.log、/tmp/dyoffice-skills-atomic-green.log，以及/tmp/dyoffice-ui-audit/下home-search-recovery、home-search-recovery-postfix、trash-deep、trash-failure、trash-page-postfix、skills-independent-audit的报告与截图。
+
+- 最终技能模拟浏览器10项通过：预检空后另一写者创建同名，条件PUT返回409，原说明/正文保留且显示替换确认；取消零覆盖，明确确认后才一次成功更新。证据/tmp/dyoffice-ui-audit/skills-atomic-browser-audit/report.json及race-conflict-confirmation.png。
+- 上传只读补查通过：24个文件含256字长名在390×844与320×568下无横溢，名称省略/title保全名、列表独立滚动；处理中Escape/关闭/取消/重复开始/选择器均有保护，beforeunload阻止。释放后每文件一次mock stage/content400，无finish或真实文件，最终错误与提示可滚动访问、键盘可完成关闭。证据/tmp/dyoffice-ui-audit/upload-long-list-audit/report.json及四张截图。未发现新的确定性上传问题。
+- 搜索结果键盘最终浏览器通过（390×640）：Space与Enter各精确1次mock metadata GET及open POST；按住重复不额外打开，window.scrollY与内容滚动位置不变。PDF预览准备阶段的额外读取单列，未混入按键计数。证据/tmp/dyoffice-ui-audit/home-search-keyboard-postfix/report.json及search-focused.png。

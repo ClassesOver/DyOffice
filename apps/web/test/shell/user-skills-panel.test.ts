@@ -52,7 +52,7 @@ test('imports markdown through the real client and reads skill body only when vi
  expect(button('导入 SKILL.md')).toBeDefined()
  const file=new File(['ignored'],'SKILL.md',{type:'text/markdown'});Object.defineProperty(file,'text',{value:async()=>'---\nname: report\ndescription: Word 报告\n---\nprivate skill body'})
  await upload(file)
- expect(calls.find(call=>call.method==='PUT')?.body).toEqual({description:'Word 报告',body:'private skill body'})
+ expect(calls.find(call=>call.method==='PUT')?.body).toEqual({description:'Word 报告',body:'private skill body',overwrite:false})
  expect(document.body.textContent).not.toContain('private skill body')
  await act(async()=>button('查看').click())
  expect(document.querySelector<HTMLTextAreaElement>('textarea[aria-label="Skill 内容"]')?.value).toBe('private skill body')

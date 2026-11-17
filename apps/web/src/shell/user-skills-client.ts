@@ -40,7 +40,7 @@ export function createUserSkillsClient(request: SettingsRequest) {
         catch(failure){throw Object.assign(new Error(failure instanceof Error?failure.message:'无法读取技能列表。'),{mutationStarted:false})}
         if (existing.some(item => item.name === skill.name)) throw Object.assign(new Error('同名技能已存在，未覆盖。'), {status:409})
       }
-      const saved = await request<SkillMetadata>(path(skill.name), 'PUT', {description: skill.description, body: skill.body})
+      const saved = await request<SkillMetadata>(path(skill.name), 'PUT', {description: skill.description, body: skill.body,...(options.overwrite===false?{overwrite:false}:{})})
       return entry(saved, skill.body)
     },
     async removeSkill(name: string) { await request(path(name), 'DELETE') },

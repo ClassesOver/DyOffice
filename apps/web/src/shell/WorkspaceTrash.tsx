@@ -38,7 +38,7 @@ export function WorkspaceTrash({request,onClose,onChanged,presentation='dialog',
    const result=await request<{state:'purged'|'pending'}|undefined>(`/api/v1/files/${encodeURIComponent(file.id)}/${action}`,'POST')
    if(action==='purge'&&result?.state!=='purged'&&result?.state!=='pending')throw Error('删除结果无效。')
    if(mounted.current){setFiles(current=>current.filter(item=>item.id!==file.id));setTotal(value=>Math.max(0,value-1));if(total===1)setPage(1);onChanged();setMessage(action==='restore'?`已恢复「${file.name}」，原始内容、收藏和文件夹归属保持不变。`:result?.state==='pending'?`「${file.name}」已不可恢复，存储空间正在后台回收。`:`已永久删除「${file.name}」。`)}
-   if(mounted.current&&files.length===1&&total>1){
+   if(mounted.current&&total>1){
     const nextPage=Math.min(page,Math.ceil((total-1)/pageSize));setPage(nextPage)
     try{const refreshed=await readPage(nextPage);if(mounted.current){setFiles(refreshed.files);setTotal(refreshed.total);setPage(refreshed.page);setSearch('')}}
     catch{if(mounted.current)setError('操作已成功，但列表刷新失败。请重新加载列表，不要重复提交。')}
