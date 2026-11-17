@@ -3,6 +3,19 @@ import {Alert,Button,Card,Spin} from 'antd'
 import JSZip from 'jszip'
 import type {SettingsRequest} from '../../../../packages/browser-host/src/preferences'
 
+// XML prefixes are aliases. Accept the two OOXML namespace families, never a
+// same-local-name element or relationship attribute from an unrelated namespace.
+const previewNamespaces = {
+ spreadsheet: ['http://schemas.openxmlformats.org/spreadsheetml/2006/main', 'http://purl.oclc.org/ooxml/spreadsheetml/main'],
+ presentation: ['http://schemas.openxmlformats.org/presentationml/2006/main', 'http://purl.oclc.org/ooxml/presentationml/main'],
+ drawing: ['http://schemas.openxmlformats.org/drawingml/2006/main', 'http://purl.oclc.org/ooxml/drawingml/main'],
+ relationships: ['http://schemas.openxmlformats.org/package/2006/relationships'],
+ relationshipIds: ['http://schemas.openxmlformats.org/officeDocument/2006/relationships', 'http://purl.oclc.org/ooxml/officeDocument/relationships'],
+}
+function previewElements(node: Document | Element, family: keyof typeof previewNamespaces, localName: string) {
+ return [...node.getElementsByTagNameNS('*', localName)].filter(element => previewNamespaces[family].includes(element.namespaceURI ?? ''))
+}
+
 type PreviewPage={name:string;rows:string[][]}
 type Metadata={file:{fileId:string;revision:string};downloadEndpoint:string}
 export function resolvePreviewContentUrl(fileId:string,metadata:Metadata){
@@ -24,10 +37,10 @@ export async function parseOfficePreview(bytes:Uint8Array,format:'xlsx'|'pptx'):
  const index=await xml(`${base}/${indexPath}.xml`),relationships=await xml(`${base}/_rels/${indexPath}.xml.rels`)
  if(index){
   if(!relationships)throw Error('文档页索引缺失，请下载原件。')
-  const nodes=format==='xlsx'?[...index.getElementsByTagName('sheet')]:[...index.getElementsByTagNameNS('*','sldId')]
+  const nodes=format==='xlsx'?previewElements(index,'spreadsheet','sheet'):previewElements(index,'presentation','sldId')
   paths=nodes.map(node=>{
-   const id=node.getAttributeNS('http://schemas.openxmlformats.org/officeDocument/2006/relationships','id')??node.getAttribute('r:id')
-   const relationship=[...relationships.getElementsByTagName('Relationship')].find(item=>item.getAttribute('Id')===id)
+   const id=previewNamespaces.relationshipIds.map(namespace=>node.getAttributeNS(namespace,'id')).find(value=>value!==null)
+   const relationship=previewElements(relationships,'relationships','Relationship').find(item=>item.getAttribute('Id')===id)
    const target=relationship?.getAttribute('Target')??''
    const path=target.startsWith(`/${base}/`)?target.slice(1):`${base}/${target.replace(/^\.\//,'')}`
    const allowed=format==='xlsx'?/^xl\/worksheets\/[^/]+\.xml$/:/^ppt\/slides\/[^/]+\.xml$/
@@ -37,16 +50,16 @@ export async function parseOfficePreview(bytes:Uint8Array,format:'xlsx'|'pptx'):
  }
  if(paths.length>100)throw Error('文档页数超过预览限制。')
  const strings=format==='xlsx'?await xml('xl/sharedStrings.xml'):null
- const shared=strings?[...strings.getElementsByTagName('si')].map(node=>node.textContent??''):[]
+ const shared=strings?previewElements(strings,'spreadsheet','si').map(node=>node.textContent??''):[]
  let cells=0
  for(const path of paths){const doc=await xml(path.path);if(!doc)continue
   const rows:string[][]=[]
-  if(format==='xlsx')for(const row of [...doc.getElementsByTagName('row')].slice(0,200)){
+  if(format==='xlsx')for(const row of previewElements(doc,'spreadsheet','row').slice(0,200)){
    const values:string[]=[]
-   for(const cell of [...row.getElementsByTagName('c')]){if(++cells>20000)throw Error('单元格数量超过预览限制。');const ref=cell.getAttribute('r')?.match(/^[A-Z]+/)?.[0];const index=ref?[...ref].reduce((n,c)=>n*26+c.charCodeAt(0)-64,0)-1:values.length;if(index>199)continue;while(values.length<index)values.push('');const value=cell.getElementsByTagName('v')[0]?.textContent??'';values[index]=cell.getAttribute('t')==='s'?shared[Number(value)]??'':cell.getAttribute('t')==='inlineStr'?cell.getElementsByTagName('is')[0]?.textContent??'':value}
+   for(const cell of previewElements(row,'spreadsheet','c')){if(++cells>20000)throw Error('单元格数量超过预览限制。');const ref=cell.getAttribute('r')?.match(/^[A-Z]+/)?.[0];const index=ref?[...ref].reduce((n,c)=>n*26+c.charCodeAt(0)-64,0)-1:values.length;if(index>199)continue;while(values.length<index)values.push('');const value=previewElements(cell,'spreadsheet','v')[0]?.textContent??'';values[index]=cell.getAttribute('t')==='s'?shared[Number(value)]??'':cell.getAttribute('t')==='inlineStr'?previewElements(cell,'spreadsheet','is')[0]?.textContent??'':value}
    rows.push(values)
   }
-  else for(const text of doc.getElementsByTagNameNS('*','t')){if(++cells>20000)throw Error('文本数量超过预览限制。');rows.push([text.textContent??''])}
+  else for(const text of previewElements(doc,'drawing','t')){if(++cells>20000)throw Error('文本数量超过预览限制。');rows.push([text.textContent??''])}
   pages.push({name:path.name||(format==='xlsx'?`工作表 ${pages.length+1}`:`幻灯片 ${pages.length+1}`),rows})
  }
  if(!pages.length)throw Error('此文档没有可预览的内容，请下载原件。')
