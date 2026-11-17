@@ -307,6 +307,8 @@ docs/dyoffice/               当前计划及 inventory/ evidence/ adr/
 
 **接口：** `getPublicSettings()`、`saveGlobalConfig(expectedRevision, patch)`、`updatePreferences()`。
 
+**当前验收：** [工作区、设置和个人 Skills](evidence/t12-t13-personal-assistant.md)。
+
 - [ ] 测试模型/媒体/搜索/重排目录、保留省略的 Key、显式清空、版本冲突、退出后旧响应、个人字段注入全局配置。
 - [ ] unit/integration/E2E RED。
 - [ ] 复用 GenOffice settings/provider 元数据和 UI；加入文件夹、最近、收藏、回收站；密钥加密和轮换，不发送完整 AiSettings 到前端。
@@ -319,10 +321,12 @@ docs/dyoffice/               当前计划及 inventory/ evidence/ adr/
 
 **接口：** 兼容原有 `AgentTransport.stream()`，取消句柄与 callbacks 不改语义。
 
+**当前验收：** [个人额度、原生助手和剩余阻塞](evidence/t12-t13-personal-assistant.md)。
+
 - [ ] 测试 delta/tool-call/usage、截断参数、取消终态只一次、超时、断流、禁用模型、客户端注入 baseUrl/Key、usage 缺失为 unknown。
 - [ ] 运行对应 unit/integration RED。
 - [ ] 用 POST fetch SSE 适配 Provider；服务端解析权威配置并限额；前端继续使用既有 AgentLoop/Skills。
-- [ ] Mock 契约 GREEN 后执行客户允许的真实模型用例；无真实凭据标 blocked，不编造成功。
+- [x] Mock 契约 GREEN 后执行客户允许的真实模型用例；DOCX 和 XLSX 回放真实验收见证据链接。
 - [ ] 提交 `feat(ai): bridge existing agent transport through server providers`。
 
 ### T14 文档工具策略、审批与修改日志

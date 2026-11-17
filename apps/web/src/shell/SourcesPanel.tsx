@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import {offerSourceResultDownload} from './source-result-download'
 import type { SourceDetail, SourceDescriptor, SourceConfig, SourceKind, QuerySnapshot } from '../../../../packages/web-contracts/src/sources.ts'
 import type { SourcesClient } from './sources-client'
 import type { SourceResultsClient } from './source-results-client'
@@ -123,7 +124,7 @@ export function SourcesPanel({ client, resultsClient, onClose }: { client: Sourc
               catch { throw Error('保存结果未确认，可使用同一保存操作重试，系统不会重新查询。') }
               finally { if (alive.current) setResultBusy(false) }
             })}>{savedResult ? '已保存到工作区' : saveIntent.current ? '确认保存结果' : '保存结果到工作区'}</button>
-            {savedResult && <a href={resultsClient.downloadPath(savedResult.resultId)} download>下载冻结结果 JSON</a>}
+            {savedResult && <button className="set-btn" disabled={busy} onClick={() => void operation(async () => { const json = await resultsClient.download(savedResult.resultId); if (alive.current) offerSourceResultDownload(json, savedResult.resultId) })}>下载冻结结果 JSON</button>}
             <span>默认每批读取 1,000 行；当前预览最多 100 行。{capture.sourceTruncated ? '原查询已截断，保存不会补回未查询行。' : ''}</span>
           </div>}
           <div className="source-results"><table><thead><tr>{result.schema.map(column => <th key={column.name}>{column.name}{column.unit ? `（${column.unit}）` : ''}</th>)}</tr></thead><tbody>{result.rows.slice(0,100).map((row,index) => <tr key={index}>{result.schema.map(column => <td key={column.name}>{row[column.name] === null ? '—' : String(row[column.name] ?? '')}</td>)}</tr>)}</tbody></table></div>

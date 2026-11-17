@@ -1,4 +1,7 @@
 import {registerProbeAssets} from './modules/providers/probe-assets.ts'
+import {createSkillService} from './modules/skills/service.ts'
+import {registerSkillRoutes} from './modules/skills/routes.ts'
+import {registerPersonalProviderGateway} from './modules/providers/gateway.ts'
 import { registerFixedProviderProbe } from './modules/providers/fixed-probe.ts'
 import type { AdminPipelineProfile } from './modules/providers/admin-pipeline.ts'
 import { registerAdminSyntheticProbe } from './modules/providers/synthetic-probe.ts'
@@ -81,6 +84,7 @@ export interface LocalWebConfig {
   // Explicit network-capable fixed probe, NOT the offline diagnostic. No automatic run.
   adminProviderProbeDirectory?: string;
   adminProviderProbe?: { profiles: readonly AdminPipelineProfile[] };
+  providerGateway?: { profiles: readonly AdminPipelineProfile[] };
   providerShutdownTimeoutMs?: number;
   /** Notification polling/heartbeat timing; saves remain on the HTTP file API. */
   realtime?: RealtimeOptions;
@@ -99,6 +103,7 @@ export async function buildLocalApp(config: LocalWebConfig): Promise<FastifyInst
   if (config.providerShutdownTimeoutMs !== undefined && (!Number.isSafeInteger(config.providerShutdownTimeoutMs) || config.providerShutdownTimeoutMs < 1 || config.providerShutdownTimeoutMs > 35_000)) throw new Error('Invalid provider shutdown timeout')
   if (config.adminProviderProbe !== undefined && (!config.adminProviderProbe || Object.keys(config.adminProviderProbe).join() !== 'profiles' || !Array.isArray(config.adminProviderProbe.profiles) || !config.adminProviderProbe.profiles.length || !config.businessPool || !config.globalConfigKeyring || config.adminProviderProbe.profiles.some(p=>!p || p.deploymentId!==config.deploymentId))) throw new Error('Invalid provider probe configuration')
   if(config.adminProviderProbeDirectory!==undefined && (!config.adminProviderProbe || typeof config.adminProviderProbeDirectory!=='string' || !config.adminProviderProbeDirectory))throw new Error('Probe assets require explicit local probe')
+  if(config.providerGateway!==undefined && (!config.providerGateway || Object.keys(config.providerGateway).join()!=='profiles' || !Array.isArray(config.providerGateway.profiles) || !config.businessPool || !config.globalConfigKeyring))throw new Error('Provider gateway requires profiles, restricted pool and keyring')
   const probeAssets=config.adminProviderProbeDirectory?await createStaticAssets({assetMode:'built',assetDirectory:config.adminProviderProbeDirectory,pages:['index.html'],cacheControl:'private, no-store'}):undefined
   if ('userToken' in config || 'adminToken' in config) throw new Error('Local mode rejects development tokens')
   async function assertReady() {
@@ -153,6 +158,8 @@ export async function buildLocalApp(config: LocalWebConfig): Promise<FastifyInst
   registerUserRoutes(app, users, csrf)
   if (config.businessPool) {
     const transactions = createPrincipalTransactions({ pool: config.businessPool, deploymentId: config.deploymentId, idleMs: config.idleMs })
+    if(config.providerGateway)ownedProbes.push(registerPersonalProviderGateway(app,{transactions,sessions,csrf,deploymentId:config.deploymentId,keyring:config.globalConfigKeyring!,profiles:config.providerGateway.profiles}))
+    else app.get('/api/v1/ai/catalog',async(request,reply)=>{reply.header('Cache-Control','private, no-store');await sessions.authenticate(cookies(request).session??'');return {entries:[],defaultId:null}})
     if (config.adminAiSyntheticProbe === true) ownedProbes.push(registerAdminSyntheticProbe(app, { transactions, sessions, csrf }))
     if(config.adminProviderProbe){
       try{const probe=registerFixedProviderProbe(app,{deploymentId:config.deploymentId,transactions,sessions,csrf,keyring:config.globalConfigKeyring!,profiles:config.adminProviderProbe.profiles});ownedProbes.push(probe);if(probeAssets)registerProbeAssets(app,probeAssets,probe.authorize)}
@@ -165,6 +172,7 @@ export async function buildLocalApp(config: LocalWebConfig): Promise<FastifyInst
     registerWorkspaceSourceToolRoutes(app, { tools: sourceTools, results: sourceResults, sessions, csrf })
     config.onSourceToolsReady?.(sourceTools)
     registerPreferenceRoutes(app, createPreferenceService(transactions), sessions, csrf)
+    registerSkillRoutes(app, createSkillService(transactions), sessions, csrf)
     registerWorkspaceRoutes(app, createWorkspaceService(transactions), sessions, csrf)
     registerGlobalConfigRoutes(app, createGlobalConfigService({transactions, keyring: config.globalConfigKeyring}), sessions, csrf)
     if (config.objectStore) {

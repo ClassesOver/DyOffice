@@ -44,7 +44,7 @@ export function createSessionFileHost({ fetchImpl = fetch, editorId = crypto.ran
     if (disposed) { discard(reply); throw hostError('UNAVAILABLE','disposed') }
     if (!reply.ok) { discard(reply); throw errorFor(reply.status) }
     if (reply.status === 204) { discard(reply); return undefined }
-    if (reply.headers.get('content-type')?.split(';',1)[0].trim().toLowerCase() !== 'application/json') { discard(reply); throw hostError('INVALID_RESPONSE','JSON') }
+    if (reply.headers.get('content-type')?.split(';',1)[0]?.trim().toLowerCase() !== 'application/json') { discard(reply); throw hostError('INVALID_RESPONSE','JSON') }
     const reader = reply.body?.getReader()
     if (!reader) throw hostError('INVALID_RESPONSE','JSON body')
     readers.add(reader)

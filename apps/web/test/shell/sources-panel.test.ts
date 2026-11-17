@@ -135,3 +135,16 @@ test('overprivileged source account is identified without echoing a target grant
  expect(document.body.textContent).toContain('账号未通过最小只读权限核验')
  expect(document.body.textContent).toContain('不能使用 root 或管理角色')
 })
+
+test('new session key discards old pending list and never repopulates its source draft', async () => {
+ let resolveOld!: (value: unknown) => void
+ const oldList = new Promise(resolve=>{resolveOld=resolve})
+ const oldClient=createSourcesClient((async()=>oldList) as Request)
+ const nextClient=createSourcesClient((async()=>({items:[],nextCursor:null})) as Request)
+ const host=document.createElement('div');document.body.append(host);const root=createRoot(host);roots.push(root)
+ await act(async()=>root.render(h(SourcesPanel,{key:'alice',client:oldClient,onClose(){}})))
+ await act(async()=>root.render(h(SourcesPanel,{key:'bob',client:nextClient,onClose(){}})))
+ await act(async()=>resolveOld({items:[initial().source],nextCursor:null}))
+ expect(host.textContent).not.toContain('营业收入')
+ expect((host.querySelector('[aria-label="连接凭据"]') as HTMLInputElement).value).toBe('')
+})

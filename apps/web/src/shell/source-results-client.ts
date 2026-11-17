@@ -9,9 +9,10 @@ export function createSourceResultsClient(request: Request) {
     save(resultId: string, name: string, commandId: string) { return tool<WorkspaceSourceResultArtifact>('sources.save_result', { resultId, name, commandId }) },
     read(resultId: string, offset = 0) { return tool<WorkspaceSourceResultPage>('sources.read_result', { resultId, offset, limit: 1000 }) },
     list(after?: string) { return request<WorkspaceSourceResultList>('/api/v1/workspace/data-results' + (after ? '?after=' + encodeURIComponent(after) : '')) },
-    downloadPath(resultId: string) {
+    async download(resultId: string) {
       if (!/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(resultId)) throw Error('结果标识无效。')
-      return '/api/v1/workspace/data-results/' + resultId + '/content'
+      const snapshot = await request<unknown>('/api/v1/workspace/data-results/' + resultId + '/content')
+      return JSON.stringify(snapshot)
     },
   }
 }

@@ -1,0 +1,8 @@
+/** T13 reads only; document mutation waits for the T14 approval boundary. */
+export const ASSISTANT_READ_TOOLS = new Set([
+  'get_document_context','read_blocks','read_revisions','read_comments','read_notes',
+  'get_workbook_context','read_range','aggregate_range','load_guide','read_formats',
+  'read_sheet_features','read_cells','find_cells','trace_precedents','trace_dependents',
+])
+export interface AssistantModel {id: string; label: string; model: string}
+export interface AssistantCatalog {entries: AssistantModel[]; defaultId: string | null}

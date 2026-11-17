@@ -20,10 +20,11 @@ import {createPreferencesClient} from '../../../../packages/browser-host/src/pre
 import {createGlobalSettingsClient} from './global-settings-client'
 import {GlobalSettingsPanel} from './GlobalSettingsPanel'
 import {WorkspaceTrash} from './WorkspaceTrash'
+import {createUserSkillsClient} from './user-skills-client'
+import {UserSkillsPanel} from './UserSkillsPanel'
 import {SourcesPanel} from './SourcesPanel'
 import {WorkspaceDataResults} from './WorkspaceDataResults'
-import {createSourceResultsClient} from './source-results-client'
-import {createSourcesClient} from './sources-client'
+import {createSourceWorkspaceSession} from './source-workspace-session'
 import blankDocx from '../../../shell/build/shell-new/blank.docx?url'
 
 import {createLocalShellClient} from './local-client'
@@ -35,8 +36,8 @@ import {PasswordActionForm} from './PasswordActionForm'
 const client=createLocalShellClient()
 const preferences=createPreferencesClient(client.request)
 const globalSettings=createGlobalSettingsClient(client.request)
-const sourcesClient=createSourcesClient(client.request)
-const sourceResultsClient=createSourceResultsClient(client.request)
+let userSkills: ReturnType<typeof createUserSkillsClient> | undefined
+let sourceWorkspace: Awaited<ReturnType<typeof createSourceWorkspaceSession>> | undefined
 type User={id:string;username:string;displayName:string;roles:string[]}
 let user:User|null=null
 let initialLanguage:'zh'|'en'='zh'
@@ -66,10 +67,12 @@ function installBridge(){
  window.aiOfficeTabs={list:async()=>tabs.map(t=>({...t})),activate:async id=>{if(id!=='home')await unsupported()},close:unsupported,onChanged:()=>()=>{},showNewMenu:browse,showAppMenu:async()=>notice('本地账号工作区；DOCX 编辑器在独立页面打开，可通过浏览器返回首页。'),showMenu:unsupported,showTabMenu:unsupported,detach:unsupported,tearOff:async()=>false,dragTornWindow:()=>{},dockTornWindow:unsupported,endTornDrag:async()=>{},onDockPreview:()=>()=>{},reportDockIndex:()=>{},reorder:unsupported,notifyChromePressed:()=>{},onChromePressed:()=>()=>{}} satisfies TabsApi
 }
 async function restore(){
- const identity=await client.request<{user:User}>('/api/v1/auth/me')
- const personal=await preferences.getPreferences()
- const catalog=await client.request<Record<string,string>>('/api/v1/capabilities')
- user=identity.user;capabilities=catalog;initialLanguage=personal.language==='en'?'en':'zh'
+ const workspace=await createSourceWorkspaceSession(client)
+ const bound=workspace.bound
+ const identity=await bound.request<{user:User}>('/api/v1/auth/me')
+ const personal=await createPreferencesClient(bound.request).getPreferences()
+ const catalog=await bound.request<Record<string,string>>('/api/v1/capabilities')
+ user=identity.user;capabilities=catalog;initialLanguage=personal.language==='en'?'en':'zh';userSkills=createUserSkillsClient(bound.request);sourceWorkspace=workspace
  if(personal.theme==='system')delete document.documentElement.dataset.theme;else document.documentElement.dataset.theme=personal.theme
  installBridge()
 }
@@ -82,14 +85,23 @@ function Account(){
  const [sources,setSources]=useState(false)
  const [dataResults,setDataResults]=useState(false)
  const [sessionVersion,setSessionVersion]=useState(0)
+ async function updateSession(proof:string){
+  const workspace=await createSourceWorkspaceSession(client,proof)
+  const bound=workspace.bound
+  const identity=await bound.request<{user:User}>('/api/v1/auth/me')
+  if(identity.user.id!==user?.id)throw new Error('登录状态已改变，请重新加载当前工作区。')
+  userSkills=createUserSkillsClient(bound.request);sourceWorkspace=workspace
+  setSessionVersion(version=>version+1)
+ }
  const web:WebSettingsAdapter={
   accountLabel:'本地账号',load:preferences.getPreferences,save:preferences.updatePreferences,
+  skills:userSkills&&<UserSkillsPanel key={sessionVersion} client={userSkills}/>,
   account:<>
    <h3 className="set-pane-title">个人工作区</h3>
    <p className="set-pane-desc">管理个人显示偏好、账户安全与文件。</p>
    <div className="set-field"><span className="set-field-label">账号</span><span>{user?.username}</span></div>
    <div className="set-field"><span className="set-field-label">显示名称</span><span>{user?.displayName}</span></div>
-   <LocalPasswordForm changePassword={async(current,next)=>{await client.changePassword(current,next);setSessionVersion(version=>version+1)}} reload={()=>location.reload()}/>
+   <LocalPasswordForm changePassword={async(current,next)=>{const proof=await client.changePassword(current,next);await updateSession(proof).catch(()=>location.reload())}} reload={()=>location.reload()}/>
    <LocalSessionsPanel key={sessionVersion} onCurrentRevoked={()=>{client.invalidateSession();location.replace('/')}}/>
    <LoginHistoryPanel/>
    <div className="set-pane-footer"><button className="set-btn danger" onClick={()=>void logout().catch(e=>notice(e.message))}>退出登录</button></div>
@@ -98,10 +110,10 @@ function Account(){
  return <div className="account-entry">
   <button className="account-btn" onClick={()=>setExpanded(!expanded)}><span className="account-avatar">{(user?.displayName||user?.username||'U').slice(0,1)}</span><span className="account-text"><span className="account-name">{user?.displayName||user?.username}</span><span className="account-sub">个人工作区</span></span></button>
   {settings&&<SettingsModal web={web} status={null} loggingOut={false} loginWaiting={false} loginUrl={null} urlCopied={false} onOpenLoginUrl={()=>{}} onCopyLoginUrl={()=>{}} onClose={()=>setSettings(false)} onLogin={()=>{}} onLogout={()=>void logout().catch(e=>notice(e.message))}/>}
-  {admin&&user?.roles.includes('config_admin')&&<div className="set-overlay"><div className="set-dialog" role="dialog" aria-modal="true" aria-label="用户管理"><div className="set-header"><h2 className="set-title">用户管理</h2></div><div className="set-body"><LocalAdminPanel currentUserId={user.id} onSessionRotated={client.invalidateCsrf} onOwnAuthorityChanged={()=>{client.invalidateSession();location.replace('/')}} onClose={()=>setAdmin(false)}/></div></div></div>}
+  {admin&&user?.roles.includes('config_admin')&&<div className="set-overlay"><div className="set-dialog" role="dialog" aria-modal="true" aria-label="用户管理"><div className="set-header"><h2 className="set-title">用户管理</h2></div><div className="set-body"><LocalAdminPanel currentUserId={user.id} onSessionRotated={proof=>{client.invalidateCsrf();if(proof)void updateSession(proof).catch(e=>notice(e.message))}} onOwnAuthorityChanged={()=>{client.invalidateSession();location.replace('/')}} onClose={()=>setAdmin(false)}/></div></div></div>}
   {global&&user?.roles.includes('config_admin')&&<div className="set-overlay"><section className="set-dialog" role="dialog" aria-modal="true" aria-label="全局配置"><GlobalSettingsPanel client={globalSettings} onClose={()=>setGlobal(false)}/></section></div>}
-  {sources&&<SourcesPanel client={sourcesClient} resultsClient={sourceResultsClient} onClose={()=>setSources(false)}/>}
-  {dataResults&&<WorkspaceDataResults client={sourceResultsClient} onClose={()=>setDataResults(false)}/>}
+  {sources&&sourceWorkspace&&<SourcesPanel key={sessionVersion} client={sourceWorkspace.sources} resultsClient={sourceWorkspace.results} onClose={()=>setSources(false)}/>}
+  {dataResults&&sourceWorkspace&&<WorkspaceDataResults key={sessionVersion} client={sourceWorkspace.results} onClose={()=>setDataResults(false)}/>}
   {expanded&&<div className="web-account-menu">
    <button onClick={()=>{setExpanded(false);setSettings(true)}}>个人设置</button>
    <button onClick={()=>{setExpanded(false);showTrash()}}>回收站</button>

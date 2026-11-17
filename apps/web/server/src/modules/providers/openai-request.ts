@@ -11,7 +11,7 @@ const unsafeKeys=new Set(['__proto__','prototype','constructor'])
  * The returned metadata is frozen; callers must retain a private body snapshot.
  * Transport must independently copy and verify its SHA256 before sending.
  */
-export function buildOpenAiChatRequest(request:unknown,profile:unknown):Readonly<OpenAiBody> {
+export function buildOpenAiChatRequest(request:unknown,profile:unknown,historicalTools?:ReadonlySet<string>):Readonly<OpenAiBody> {
  try {
   let stringBytes=0,nodes=0
   function text(value:unknown,max=MAX_TEXT):string {
@@ -88,7 +88,7 @@ export function buildOpenAiChatRequest(request:unknown,profile:unknown):Readonly
     let calls:Record<string,unknown>[]|undefined
     if(Object.hasOwn(m,'toolCalls'))calls=array(m.toolCalls,64,1).map(raw=>{
      const c=object(raw,['id','name','input'],['id','name','input']),id=name(c.id,128),n=name(c.name)
-     if(seen.has(id)||!declared.has(n))throw invalid();seen.add(id);pending.set(id,n)
+     if(seen.has(id)||(!declared.has(n)&&!historicalTools?.has(n)))throw invalid();seen.add(id);pending.set(id,n)
      return {id,type:'function',function:{name:n,arguments:JSON.stringify(jsonObject(c.input))}}
     })
     if(!content.length&&!calls)throw invalid()

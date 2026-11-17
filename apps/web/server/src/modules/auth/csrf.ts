@@ -44,8 +44,8 @@ export function createCsrfService({ db, deploymentId, origin, key }: { db: Ident
     const site = uniqueHeader(request, 'sec-fetch-site')
     if ((write && supplied !== origin) || (supplied !== undefined && supplied !== origin) || (site !== undefined && site !== 'same-origin' && site !== 'none')) throw authError(403)
   }
-  function check(request: FastifyRequest, kind: string, token?: string) {
-    originCheck(request)
+  function check(request: FastifyRequest, kind: string, token?: string, write = true) {
+    originCheck(request, write)
     const supplied = uniqueHeader(request, 'x-csrf-token')
     if (!token || !supplied || !/^[A-Za-z0-9_-]{43}$/.test(supplied) || !timingSafeEqual(Buffer.from(supplied), Buffer.from(derive(kind, token)))) throw authError(403)
   }
@@ -53,6 +53,7 @@ export function createCsrfService({ db, deploymentId, origin, key }: { db: Ident
     originCheck,
     sessionToken: (token: string) => derive('session', token),
     requireSession: (request: FastifyRequest, token?: string) => check(request, 'session', token),
+    requireSessionRead: (request: FastifyRequest, token?: string) => check(request, 'session', token, false),
     async issueLogin() {
       const token = randomBytes(32).toString('base64url')
       await db.pool.query('DELETE FROM login_challenges WHERE deployment_id=$1 AND expires_at<clock_timestamp()', [deploymentId])

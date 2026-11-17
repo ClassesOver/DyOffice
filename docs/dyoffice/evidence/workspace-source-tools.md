@@ -53,3 +53,31 @@ The initial user-authorized customer attempt timed out before authentication ove
 ## Remaining boundaries
 
 Official visible browser control is blocked by the host workspace ownership check; component/protocol tests do not replace that gate. The repository local runtime remains non-production. Exact numeric values unsupported by the current number-based snapshot DTO are rejected instead of silently rounded; a wider decimal/bigint schema is not claimed. PandasAI, autonomous model analysis, T16 retrieval/report generation and a Rust-first multi-database query engine are not added by this increment.
+
+## Target-branch integration and session fencing
+
+This integration preserves the target branch's migrations 1–24 byte-for-byte
+(including user skills and personal provider budgets). Source, connector-kind,
+realtime and workspace-result additions are appended as 25–28. Existing databases
+with #132's earlier divergent 23–26 history are **not automatically upgradeable**:
+the migration runner rejects the checksum mismatch without editing the ledger.
+Inspect the actual deployment history before rollout; no deployed upgrade is
+certified by fresh-database tests, and operators must not rewrite migration digests.
+
+Sources and frozen-result clients are created from the same session-bound request
+as workspace identity. Cookie replacement in another tab cannot refresh their
+CSRF proof into the new account. Session rotation remounts both panels, and stale
+responses cannot repopulate the replacement panel. JSON downloads pass through
+the bound request and a mounted-view check before creating a short-lived blob URL;
+no direct cookie-only download link remains. Canonical server JSON round-trips
+without changing its serialized bytes in the recorded integration test.
+
+The heartbeat integration test now registers its ping observer before awaiting
+the first database-backed state frame. Its assertions still require exactly two
+pings and actual disconnection; this fixes a test observer race, not the protocol.
+
+The customer StarRocks acceptance gap remains: the recorded login inherited root
+and was correctly denied; the endpoint rejected TLS. A dedicated least-privilege
+identity and an approved transport configuration are still required. These changes
+and repository integration do not establish successful customer end-to-end use,
+production capacity, browser/desktop acceptance, or real target-host isolation.

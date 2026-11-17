@@ -81,12 +81,14 @@ function track(ws) {
     },
   }
 }
-async function open(f, { token = f.alice.token, fileId = f.aliceFile.fileId, editorId = null, ticket, origin = restrictedOrigin, autoPong = true } = {}) {
+async function open(f, { token = f.alice.token, fileId = f.aliceFile.fileId, editorId = null, ticket, origin = restrictedOrigin, autoPong = true, onPing = () => {} } = {}) {
   if (!ticket) { const issued = await ticketFor(f, token, fileId, editorId); assert.equal(issued.status, 201); ticket = issued.body.ticket }
   const ws = new WebSocket('ws://' + new URL(f.address).host + '/realtime?ticket=' + encodeURIComponent(ticket), {
     headers: { Origin: origin, Cookie: '__Host-dyoffice-session=' + token }, autoPong,
   })
   f.sockets.add(ws)
+  // Capture control frames before awaiting the initial database-backed state.
+  ws.on('ping', onPing)
   const state = track(ws)
   // Listener attached immediately, never after awaiting a helper or state frame.
   const opened = new Promise((resolve, reject) => {
@@ -662,8 +664,8 @@ test('pending upgrades are capped at eight and each handshake times out after fi
 })
 
 test('two missed WebSocket pong opportunities terminate an idle peer', { timeout: 20_000 }, async t => {
-  const f = await fixture(t, { heartbeatIntervalMs: 80 }), connection = await open(f, { autoPong: false })
-  let pings = 0; connection.ws.on('ping', () => pings++)
+  let pings = 0
+  const f = await fixture(t, { heartbeatIntervalMs: 80 }), connection = await open(f, { autoPong: false, onPing: () => pings++ })
   await deadline(connection.closed)
   assert.equal(pings, 2)
 })

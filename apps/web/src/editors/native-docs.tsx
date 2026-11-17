@@ -9,6 +9,7 @@ import { createDocsBridge } from './docs-bridge.ts'
 import type { DocsEditorHandle } from '../../../docs/src/renderer/file-actions'
 import type { DesktopApi } from '../../../docs/src/shared/ipc'
 import { messages } from './messages.ts'
+import {createEditorAssistant} from './assistant.tsx'
 import { mountEditorRealtime } from './editor-realtime.ts'
 import '@genoffice/ui/tokens.css'
 import '@genoffice/ui/screentip.css'
@@ -34,6 +35,7 @@ export async function mountDocsEditor(host: SessionFileHost,element: HTMLElement
   let editorHandle: DocsEditorHandle | null = null
   const registerEditor = (handle: DocsEditorHandle | null) => { editorHandle = handle }
   const unsubscribe = host.subscribe(() => changed())
+  const assistant = await createEditorAssistant().catch(() => undefined)
   const opened = await host.open(fileId)
   if (opened.format !== 'docx') throw new Error(messages.zh.failed)
   const prefs = await host.getPreferences(), locale = prefs.language === 'en' ? 'en' : 'zh', text = messages[locale]
@@ -42,8 +44,10 @@ export async function mountDocsEditor(host: SessionFileHost,element: HTMLElement
   else document.documentElement.dataset.theme = prefs.theme
   setAuthorName(prefs.authorName ?? '')
   const bridge = createDocsBridge(host,fileId,prefs,() => changed())
-  window.desktop = bridge.api as unknown as DesktopApi
-  applyAiPanelPrefs(await bridge.api.getAiPanelPrefs()); installScreenTips()
+  const assistantAvailable = Boolean(assistant?.available && prefs.showAssistant !== false)
+  const panelPrefs = {...await bridge.api.getAiPanelPrefs(), showAiSidebar: assistantAvailable}
+  window.desktop = {...bridge.api,...assistant?.api, getAiPanelPrefs: async () => panelPrefs} as unknown as DesktopApi
+  applyAiPanelPrefs(panelPrefs); installScreenTips()
   let initialLease = true
   try { await host.acquireLease(fileId) } catch { initialLease = false }
   const stop = host.startRenewal(fileId)
@@ -65,7 +69,7 @@ export async function mountDocsEditor(host: SessionFileHost,element: HTMLElement
         {!state.lease && !failed && <button onClick={() => { void host.takeoverLease(fileId).then(() => { initialLease = true }).catch(() => {}) }}>{text.takeover}</button>}
         {state.status === 'unknown' && <button onClick={() => { void host.reconcile(fileId).then(() => changed()).catch(() => {}) }}>{text.retry}</button>}
       </div>
-      <App host={{ readOnly: !loaded || failed || !state.lease,assistantAvailable: false,preferenceScope: fileId,onEditorReady: registerEditor,lifecycle: { ...bridge.lifecycle,documentOpened() { bridge.lifecycle.documentOpened(); setLoaded(true) } },onDocumentEdited: bridge.lifecycle.edited,onOpenFailed: () => setFailed(true) }} />
+      <App host={{ readOnly: !loaded || failed || !state.lease,assistantAvailable,assistant,preferenceScope: fileId,onEditorReady: registerEditor,lifecycle: { ...bridge.lifecycle,documentOpened() { bridge.lifecycle.documentOpened(); setLoaded(true) } },onDocumentEdited: bridge.lifecycle.edited,onOpenFailed: () => setFailed(true) }} />
     </div>
   }
   const root = createRoot(element)
@@ -78,6 +82,6 @@ export async function mountDocsEditor(host: SessionFileHost,element: HTMLElement
     getSelection: () => editorHandle?.getSelection() ?? null,
     serialize: () => editorHandle ? editorHandle.serialize() : Promise.reject(new Error(text.opening)),
     save: () => editorHandle ? editorHandle.save() : Promise.resolve(false),
-    dispose() { window.removeEventListener('beforeunload',beforeUnload); realtime.dispose(); stop(); unsubscribe(); root.unmount(); bridge.dispose() },
+    dispose() { window.removeEventListener('beforeunload',beforeUnload); assistant?.dispose();realtime.dispose(); stop(); unsubscribe(); root.unmount(); bridge.dispose() },
   }
 }
