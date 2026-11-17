@@ -400,6 +400,10 @@ export type SaveBlock = (
 export interface SaveOptions {
   /** save timestamp (ISO), written to docProps/core.xml dcterms:modified; default = now */
   savedAt?: string
+  /** Suppress only automatic core modified/revision updates for verified text-only
+   * preservation workflows. Does not disable privacy scrubbing, explicit property
+   * changes, resource cleanup, or any other save transformation. Default false. */
+  preserveCoreProperties?: boolean
   /**
    * Block-level content controls (w:sdt) for the saved body. `wrap` puts the
    * listed body blocks into one new control (the blocks stay individually
@@ -2268,9 +2272,10 @@ export async function saveDocx(
   }
 
   const coreEntry = zip.file(CORE_PROPS_PATH)
-  const coreXmlOut = coreEntry
-    ? patchCoreProps(await coreEntry.async('string'), options.savedAt)
-    : null
+  const coreXmlOut =
+    coreEntry && !options.preserveCoreProperties
+      ? patchCoreProps(await coreEntry.async('string'), options.savedAt)
+      : null
 
   const out = new JSZip()
   for (const [name, entry] of Object.entries(zip.files)) {
