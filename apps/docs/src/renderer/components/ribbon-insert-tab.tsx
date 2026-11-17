@@ -2,7 +2,7 @@ import { useState } from 'react'
 import type { CSSProperties } from 'react'
 import { getMarkRange } from '@tiptap/core'
 import type { Editor } from '@tiptap/core'
-import { ShapePreview, WORDART_PRESETS, wordArtStrokePx } from '@genoffice/ui'
+import { ShapePreview, WORDART_PRESETS, wordArtStrokePx, useImeEnterGuard } from '@genoffice/ui'
 import type { ChartDisplay, NewChart } from '@genoffice/docx-engine'
 import { hfHasPageField, hfPageNumberOnly, hfWithoutPageMarks } from '../editor/hf-dom'
 import { EquationGallery, EquationModal } from './EquationModal'
@@ -144,6 +144,7 @@ function bookmarkTargetAtCursor(editor: Editor): { pos: number; typeName: string
 export function BookmarkModal({ editor, onClose }: { editor: Editor; onClose: () => void }) {
   const { t } = useI18n()
   const modalKeys = useModalKeys(onClose)
+  const ime = useImeEnterGuard()
   const [name, setName] = useState('')
   const [error, setError] = useState('')
   const [, forceRender] = useState(0)
@@ -209,7 +210,9 @@ export function BookmarkModal({ editor, onClose }: { editor: Editor; onClose: ()
               setName(e.target.value)
               setError('')
             }}
-            onKeyDown={(e) => e.key === 'Enter' && addBookmark()}
+            onCompositionStart={ime.handleCompositionStart}
+            onCompositionEnd={ime.handleCompositionEnd}
+            onKeyDown={(e) => e.key === 'Enter' && !ime.isImeConfirm(e.nativeEvent) && addBookmark()}
           />
           <button className="btn-primary" onClick={addBookmark}>
             {t('ribbonAdd')}
@@ -442,6 +445,7 @@ export function TableInsertModal({
 }) {
   const { t } = useI18n()
   const modalKeys = useModalKeys(onClose)
+  const ime = useImeEnterGuard()
   const [cols, setCols] = useState(5)
   const [rows, setRows] = useState(2)
 
@@ -464,7 +468,9 @@ export function TableInsertModal({
           const v = Math.round(Number(e.target.value))
           set(Number.isFinite(v) ? Math.min(max, Math.max(1, v)) : 1)
         }}
-        onKeyDown={(e) => e.key === 'Enter' && insert()}
+        onCompositionStart={ime.handleCompositionStart}
+        onCompositionEnd={ime.handleCompositionEnd}
+        onKeyDown={(e) => e.key === 'Enter' && !ime.isImeConfirm(e.nativeEvent) && insert()}
       />
     </label>
   )
@@ -499,6 +505,7 @@ export function TableInsertModal({
 export function LinkInsertModal({ editor, onClose }: { editor: Editor; onClose: () => void }) {
   const { t } = useI18n()
   const modalKeys = useModalKeys(onClose)
+  const ime = useImeEnterGuard()
   // Word parity: with the caret on an existing hyperlink the dialog EDITS it
   // — text and address pre-filled, plus Remove Link. Imported links carry the
   // same mark as in-app ones, but there was no way to view, change, or
@@ -623,7 +630,9 @@ export function LinkInsertModal({ editor, onClose }: { editor: Editor; onClose: 
             value={linkUrl}
             onChange={(e) => setLinkUrl(e.target.value)}
             placeholder="https://…"
-            onKeyDown={(e) => e.key === 'Enter' && insertLink()}
+            onCompositionStart={ime.handleCompositionStart}
+            onCompositionEnd={ime.handleCompositionEnd}
+            onKeyDown={(e) => e.key === 'Enter' && !ime.isImeConfirm(e.nativeEvent) && insertLink()}
           />
         </label>
         <div className="modal-actions">

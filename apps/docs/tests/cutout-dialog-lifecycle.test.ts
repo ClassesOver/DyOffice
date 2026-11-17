@@ -16,6 +16,7 @@ function Harness() {
 beforeEach(() => {
   vi.useFakeTimers(); apply.mockReset(); images = []
   vi.stubGlobal('Image', class {
+    onload?: () => void
     naturalWidth = 4; naturalHeight = 4
     constructor() { images.push(this) }
   })

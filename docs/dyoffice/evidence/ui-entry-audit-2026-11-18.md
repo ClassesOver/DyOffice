@@ -404,3 +404,11 @@
 - Ribbon捕获选择器拒绝；apply-picture-bytes在解码失败时复用既有本地化图片失败toast。成功/失败共用原目标有效性检查，过期操作不弹旧错误，取消选择保持静默。解码拒绝在helper内消费，不再被外层重复提示；保留原图和所有成功保存字段。新增5项反馈回归中3项先红（当前解码失败无提示、当前/过期picker拒绝外泄），其余为静默正对照；最终相关5文件47项通过，独立只读复核无阻塞。证据：`/tmp/dyoffice-picture-feedback-{red,green}.log`。
 - Web docs类型、生产构建、边界1339文件0违规及git diff --check通过，保留既有chunk大小提示。最终构建Chromium1440/390各4场景通过：三类失败均显示新图片失败toast，等待每次提示消失后再触发下一次，排除残留提示假阳性；原src不变、0页面异常；正常PNG仍成功替换。文件/lease均mock，其余业务写阻止，无真实文件变更。证据：`/tmp/dyoffice-ui-audit/word-replace-picture-feedback-green-{1440,390}/report.json`、`/tmp/dyoffice-picture-feedback-{type,build}.log`。
 - 此项不代表全部格式、复杂图形、跨文档/读屏组合或完整UI验收；过期失败静默由实际处理器/真实Editor回归验证，未计作额外浏览器场景。
+
+## 弹窗输入法确认 Enter 保护
+
+- 题注与书签入口的合成 compositionstart/isComposing Enter 已复现误提交：前者关闭弹窗并修改正文，后者清空草稿并新增书签。红证据：`/tmp/dyoffice-ui-audit/word-ime-dialog-red/`。该验证使用合成事件，不代替实体中文输入法验证。
+- 书签、超链接、表格、题注，以及域、提示、文字水印、公式、样式、密码弹窗复用现有 useImeEnterGuard；仅在输入法确认时跳过业务提交，不阻止输入法默认行为。保留普通 Enter 与多行提示 Ctrl/Meta+Enter 原路径，未改主页或全局 modal-keys。PasswordInput 的 composition 事件由外围 label 接收。
+- 新增48项回归先红后绿，覆盖原生 isComposing、229键码、组合活动及组合结束同tick；验证草稿与文档保持、下一次普通 Enter 可正常提交。提交前重新运行相关8文件76项全部通过，日志 `/tmp/dyoffice-dialog-ime-commit-tests.log`；既有 canvas 提示仍在。cutout 测试仅补 stub 的可选 onload 类型声明。
+- Web docs 类型与生产构建通过（构建保留既有 chunk 提示），Web边界1339文件0违规，git diff --check通过。全量Electron类型检查存在依赖环境错误，未宣称仓库全量类型通过。独立只读复核未发现阻塞问题。保留远端 f4f7a39b 的账号绑定登录历史分页；其客户端2项回归此前通过，未重跑真实PG集成。
+- 最终1440/390浏览器复验未完成：构建后本地服务启动失败，两尺寸均在等待编辑器时超时，未执行到IME断言；不计为通过，不将此环境阻塞归为已确认的产品缺陷。失败记录 `/tmp/dyoffice-ui-audit/word-ime-dialog-postfix-{1440,390}/report.json`。未为恢复环境修改真实账号、数据库或运行配置。实体输入法、多端及全量UI穷举仍未完成。

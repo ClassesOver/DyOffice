@@ -9,7 +9,7 @@ import {
   type Block,
   type SourceInfo,
 } from '@genoffice/docx-engine'
-import { Dropdown } from '@genoffice/ui'
+import { Dropdown, useImeEnterGuard } from '@genoffice/ui'
 import { PromptModal } from './PromptModal'
 import { useModalKeys } from './modal-keys'
 import {
@@ -60,6 +60,7 @@ function CaptionModal({
 }) {
   const { t } = useI18n()
   const modalKeys = useModalKeys(onClose)
+  const ime = useImeEnterGuard()
   const CAPTION_LABELS = CAPTION_LABEL_KEYS.map((k) => t(k))
   const [label, setLabel] = useState<string>(() => t(CAPTION_LABEL_KEYS[0]))
   const [text, setText] = useState('')
@@ -114,7 +115,9 @@ function CaptionModal({
             value={text}
             onChange={(e) => setText(e.target.value)}
             placeholder={t('ribbonCaptionPh', { label, n: nextNumber(label) })}
-            onKeyDown={(e) => e.key === 'Enter' && insert()}
+            onCompositionStart={ime.handleCompositionStart}
+            onCompositionEnd={ime.handleCompositionEnd}
+            onKeyDown={(e) => e.key === 'Enter' && !ime.isImeConfirm(e.nativeEvent) && insert()}
           />
         </label>
         <div className="modal-actions">
