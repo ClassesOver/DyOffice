@@ -334,6 +334,7 @@
   "include": [
     "src/shell/**/*.ts",
     "src/shell/**/*.tsx",
-    "src/editors/**/*.ts"
+    "src/editors/**/*.ts",
+    "../../packages/pptx-render/src/bidi-js.d.ts"
   ]
 }
