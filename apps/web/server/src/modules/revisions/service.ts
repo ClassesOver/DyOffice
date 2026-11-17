@@ -73,35 +73,31 @@ export function createRevisionService({ transactions, objects, files, quotaBytes
       const requestHash = createHash('sha256').update(JSON.stringify({ fileId, uploadId, baseRevision: base, leaseEpoch: epoch, sourceCommandId: requestedSource })).digest('hex')
       return run(token,'files:write',async (connection, principal) => {
         if (principal.job && (fileId!==principal.job.fileId || base!==principal.job.baseRevision || idempotencyKey!=='job_' + principal.job.id || requestedSource!==null)) throw authError(404)
-        // Receipt lookup and object verification run before any row locks: a
-        // retry must not re-hash the object, and the full read+sha256 of the
-        // immutable, content-addressed object (already double-hashed by
-        // receiveUpload) must not extend the files/account write-lock window.
-        // The locked section below re-validates upload state after the verify.
-        const prior = (await connection.query('SELECT c.request_hash,r.id,r.sha256,r.size FROM revision_commits c JOIN file_revisions r ON r.deployment_id=c.deployment_id AND r.owner_id=c.owner_id AND r.file_id=c.file_id AND r.id=c.revision_id WHERE c.deployment_id=$1 AND c.owner_id=$2 AND c.file_id=$3 AND c.idempotency_key=$4',[...scope(principal),fileId,idempotencyKey])).rows[0]
-        if (prior) {
-          if (principal.job) throw authError(409)
-          if (prior.request_hash !== requestHash) throw authError(409)
-          return revisionRef(fileId,prior)
-        }
-        const staged = (await connection.query("SELECT revision_id,expected_size,sha256,state,kind,file_id,base_revision,lease_epoch,editor_id FROM uploads WHERE deployment_id=$1 AND owner_id=$2 AND id=$3 AND session_id=$4",[...scope(principal),uploadId,principal.sessionId])).rows[0]
+        // Authority locks from run() remain held. Verify before the account,
+        // upload and file write locks, but never return an optimistic receipt:
+        // purge and a concurrent same-key winner must be checked under account.
+        const prior = (await connection.query('SELECT 1 FROM revision_commits WHERE deployment_id=$1 AND owner_id=$2 AND file_id=$3 AND idempotency_key=$4',[...scope(principal),fileId,idempotencyKey])).rows[0]
+        const staged = prior ? undefined : (await connection.query("SELECT revision_id,expected_size,sha256,state,kind,file_id,base_revision,lease_epoch,editor_id FROM uploads WHERE deployment_id=$1 AND owner_id=$2 AND id=$3 AND session_id=$4",[...scope(principal),uploadId,principal.sessionId])).rows[0]
+        let verified: { key: string; size: number; sha256: string } | undefined
         if (staged?.kind==='revision' && staged.state==='ready' && staged.file_id===fileId && staged.base_revision===base && Number(staged.lease_epoch)===epoch && staged.editor_id && staged.sha256) {
-          await objects.verifyObject({ key: objectKey(principal,staged.revision_id), size: staged.expected_size, sha256: staged.sha256 })
+          const reference = Object.freeze({ key: objectKey(principal,staged.revision_id), size: staged.expected_size, sha256: staged.sha256 })
+          await objects.verifyObject(reference)
+          verified = reference
         }
         await lockAccount(connection,principal)
-        const retired = await connection.query('SELECT 1 FROM files WHERE deployment_id=$1 AND owner_id=$2 AND id=$3 AND purge_started_at IS NOT NULL',[...scope(principal),fileId])
-        if (retired.rowCount) throw authError(410)
-        // The account lock serializes same-owner commits: a concurrent winner
-        // that committed while this transaction was verifying the object
-        // off-lock is discovered here, so the retry returns its receipt
-        // instead of tripping the consumed-upload state check below.
-        const priorLocked = prior ? undefined : (await connection.query('SELECT c.request_hash,r.id,r.sha256,r.size FROM revision_commits c JOIN file_revisions r ON r.deployment_id=c.deployment_id AND r.owner_id=c.owner_id AND r.file_id=c.file_id AND r.id=c.revision_id WHERE c.deployment_id=$1 AND c.owner_id=$2 AND c.file_id=$3 AND c.idempotency_key=$4',[...scope(principal),fileId,idempotencyKey])).rows[0]
-        if (priorLocked) {
-          if (priorLocked.request_hash !== requestHash) throw authError(409)
-          return revisionRef(fileId,priorLocked)
+        // One locked-state query checks retirement and the receipt together.
+        // Purge also takes the account lock before making retirement durable.
+        const current = (await connection.query('SELECT f.purge_started_at,c.request_hash,r.id,r.sha256,r.size FROM files f LEFT JOIN revision_commits c ON c.deployment_id=f.deployment_id AND c.owner_id=f.owner_id AND c.file_id=f.id AND c.idempotency_key=$4 LEFT JOIN file_revisions r ON r.deployment_id=c.deployment_id AND r.owner_id=c.owner_id AND r.file_id=c.file_id AND r.id=c.revision_id WHERE f.deployment_id=$1 AND f.owner_id=$2 AND f.id=$3',[...scope(principal),fileId,idempotencyKey])).rows[0]
+        if (current?.purge_started_at) throw authError(410)
+        if (current?.id) {
+          if (principal.job || current.request_hash !== requestHash) throw authError(409)
+          return revisionRef(fileId,current)
         }
         const upload = await lockUpload(connection,principal,uploadId)
         if (upload.kind !== 'revision' || upload.file_id !== fileId || upload.state !== 'ready' || !upload.sha256 || upload.base_revision !== base || Number(upload.lease_epoch) !== epoch || !upload.editor_id) throw authError(409)
+        // A missing/changed optimistic row is not verification. Bind proof to
+        // every byte descriptor of the exact locked object about to be published.
+        if (!verified || verified.key !== objectKey(principal,upload.revision_id) || verified.size !== upload.expected_size || verified.sha256 !== upload.sha256) throw authError(409)
         const file = await loadFile(connection,principal,fileId,false,'UPDATE')
         await assertLiveLease(connection,principal,fileId,epoch,upload.editor_id)
         if (file.current_revision !== base) throw authError(409)

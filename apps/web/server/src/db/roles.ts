@@ -7,7 +7,7 @@ const identifier = (value: string) => { if (!/^[a-z][a-z0-9_]{2,62}$/.test(value
 const quoted = (value: string) => '"' + value.replaceAll('"', '""') + '"'
 const table = (schema: string, name: string) => quoted(schema) + '.' + quoted(name)
 const authTables = ['users','user_roles','sessions','password_action_tokens','login_challenges','login_throttles','auth_security_events','auth_audit_events','deployments','identity_migrations']
-const personalTables = ['user_skills','workspaces','personal_preferences','files','file_revisions','uploads','storage_accounts','edit_leases','revision_commits','revision_outbox','native_jobs','job_outbox','workspace_folders','workspace_file_state','command_journal','command_upload_bindings','realtime_tickets','realtime_command_deliveries']
+const personalTables = ['workspaces','personal_preferences','user_skills','files','file_revisions','uploads','storage_accounts','edit_leases','revision_commits','revision_outbox','native_jobs','job_outbox','workspace_folders','workspace_file_state','command_journal','command_upload_bindings','data_sources','data_source_drafts','data_source_versions','data_source_credentials','data_source_audit','realtime_tickets','realtime_command_deliveries','workspace_source_results']
 const globalTables = ['global_configs','global_config_entries','global_config_secrets','global_config_audit']
 const jobFunctions = ['take_revision_delivery(uuid,text,integer)','ack_revision_delivery(uuid,uuid,bigint,text,integer)','take_job_delivery(uuid,text,integer)','ack_job_delivery(uuid,uuid,bigint,text,integer)','claim_native_job(uuid,uuid,text,integer)','renew_native_job(uuid,uuid,bigint,text,integer)','fail_native_job(uuid,uuid,bigint,text,text,boolean)']
 const businessJobFunctions = ['lock_job_principal(uuid,uuid,bigint,text,boolean)','complete_native_job(uuid,uuid,bigint,text,uuid)']
@@ -56,8 +56,21 @@ async function grantRuntimePrivileges(connection: Queryable, { authRole, busines
   await connection.query(`GRANT SELECT,INSERT,UPDATE ON ${table(schema,'workspace_file_state')} TO ${business}`)
   await connection.query(`GRANT SELECT,INSERT,UPDATE ON ${table(schema,'command_journal')} TO ${business}`)
   await connection.query(`GRANT SELECT,INSERT ON ${table(schema,'command_upload_bindings')} TO ${business}`)
+
+  // Vault/history rows are append-only for the business role: SELECT ciphertext
+  // for authorized execution, never UPDATE/DELETE (rotation appends).
+  // Roots are permanent tombstones after logical deletion; runtime cannot remove the reserved key.
+  await connection.query(`GRANT SELECT,INSERT,UPDATE ON ${table(schema,'data_sources')} TO ${business}`)
+  await connection.query(`GRANT SELECT,INSERT,UPDATE ON ${table(schema,'data_source_drafts')} TO ${business}`)
+  await connection.query(`GRANT SELECT,INSERT ON ${table(schema,'data_source_versions')} TO ${business}`)
+  await connection.query(`GRANT SELECT,INSERT ON ${table(schema,'data_source_credentials')} TO ${business}`)
+  await connection.query(`GRANT INSERT ON ${table(schema,'data_source_audit')} TO ${business}`)
   await connection.query(`GRANT SELECT,INSERT,UPDATE,DELETE ON ${table(schema,'realtime_tickets')} TO ${business}`)
   await connection.query(`GRANT SELECT,INSERT ON ${table(schema,'realtime_command_deliveries')} TO ${business}`)
+  // Materialized data is independent of files/object accounting. Only pending
+  // rows are reclaimed by the service; saved evidence/receipts are permanent.
+  await connection.query(`GRANT SELECT,INSERT,DELETE ON ${table(schema,'workspace_source_results')} TO ${business}`)
+  await connection.query(`GRANT UPDATE(state,session_id,name,save_command_id,save_params_hash,expires_at,saved_at) ON ${table(schema,'workspace_source_results')} TO ${business}`)
   await connection.query(`REVOKE ALL ON FUNCTION ${table(schema,'lock_business_session')}(uuid,text,bigint) FROM ${runtime}`)
   for (const signature of [...jobFunctions,...businessJobFunctions,...schemaFunctions,...deploymentFunctions,...privateJobFunctions,...authFunctions,...globalFunctions]) await connection.query(`REVOKE ALL ON FUNCTION ${functionName(schema,signature)} FROM ${runtime}`)
   for (const signature of authFunctions) await connection.query(`GRANT EXECUTE ON FUNCTION ${functionName(schema,signature)} TO ${auth}`)
@@ -89,7 +102,7 @@ export async function assertRuntimePool(pool: Pool, kind: 'auth' | 'business' | 
   const privileges = (await pool.query("SELECT has_schema_privilege(current_user,$1,'CREATE') AS create_schema,has_database_privilege(current_user,current_database(),'CREATE,TEMPORARY') AS create_database_objects", [role.schema])).rows[0]
   if (privileges.create_schema || privileges.create_database_objects) throw new Error('Runtime role must not create schema objects')
   const required: Record<string, string[]> = kind === 'business'
-    ? { realtime_tickets: ['SELECT','INSERT','UPDATE','DELETE'], realtime_command_deliveries: ['SELECT','INSERT'], user_skills: ['SELECT','INSERT','UPDATE','DELETE'], command_journal: ['SELECT','INSERT','UPDATE'], command_upload_bindings: ['SELECT','INSERT'], workspace_folders: ['SELECT','INSERT','UPDATE','DELETE'], workspace_file_state: ['SELECT','INSERT','UPDATE'], global_configs: ['SELECT','INSERT','UPDATE'], global_config_entries: ['SELECT','INSERT','UPDATE','DELETE'], global_config_secrets: ['SELECT','INSERT','UPDATE','DELETE'], global_config_audit: ['INSERT'], native_jobs: ['SELECT','INSERT','UPDATE'], job_outbox: ['SELECT','INSERT'], edit_leases: ['SELECT','INSERT','UPDATE'], revision_commits: ['SELECT','INSERT'], revision_outbox: ['SELECT','INSERT'], files: ['SELECT','INSERT','UPDATE'], uploads: ['SELECT','INSERT','UPDATE'], storage_accounts: ['SELECT','INSERT','UPDATE'], file_revisions: ['SELECT','INSERT'], workspaces: ['SELECT'], personal_preferences: ['SELECT','INSERT','UPDATE','DELETE'] }
+    ? { user_skills: ['SELECT','INSERT','UPDATE','DELETE'], command_journal: ['SELECT','INSERT','UPDATE'], command_upload_bindings: ['SELECT','INSERT'], realtime_tickets: ['SELECT','INSERT','UPDATE','DELETE'], realtime_command_deliveries: ['SELECT','INSERT'], workspace_folders: ['SELECT','INSERT','UPDATE','DELETE'], workspace_file_state: ['SELECT','INSERT','UPDATE'], global_configs: ['SELECT','INSERT','UPDATE'], global_config_entries: ['SELECT','INSERT','UPDATE','DELETE'], global_config_secrets: ['SELECT','INSERT','UPDATE','DELETE'], global_config_audit: ['INSERT'], native_jobs: ['SELECT','INSERT','UPDATE'], job_outbox: ['SELECT','INSERT'], edit_leases: ['SELECT','INSERT','UPDATE'], revision_commits: ['SELECT','INSERT'], revision_outbox: ['SELECT','INSERT'], files: ['SELECT','INSERT','UPDATE'], uploads: ['SELECT','INSERT','UPDATE'], storage_accounts: ['SELECT','INSERT','UPDATE'], file_revisions: ['SELECT','INSERT'], workspaces: ['SELECT'], personal_preferences: ['SELECT','INSERT','UPDATE','DELETE'], data_sources: ['SELECT','INSERT','UPDATE'], data_source_drafts: ['SELECT','INSERT','UPDATE'], data_source_versions: ['SELECT','INSERT'], data_source_credentials: ['SELECT','INSERT'], data_source_audit: ['INSERT'], workspace_source_results: ['SELECT','INSERT','DELETE'] }
     : kind === 'worker' ? {} : { users: ['SELECT','INSERT','UPDATE'], user_roles: ['SELECT','INSERT','DELETE'], sessions: ['SELECT','INSERT','UPDATE'], password_action_tokens: ['SELECT','INSERT','UPDATE'], login_challenges: ['SELECT','INSERT','UPDATE','DELETE'], login_throttles: ['SELECT','INSERT','UPDATE','DELETE'], auth_security_events: ['INSERT'], identity_migrations: ['SELECT'], deployments: ['SELECT'], workspaces: ['INSERT'] }
   for (const name of [...authTables,...personalTables,...globalTables]) {
     const relation = table(role.schema, name)
@@ -99,7 +112,7 @@ export async function assertRuntimePool(pool: Pool, kind: 'auth' | 'business' | 
     if (globalTables.includes(name) && (!flags.relrowsecurity || !flags.relforcerowsecurity)) throw new Error('Global tables require FORCE RLS')
     for (const permission of ['SELECT','INSERT','UPDATE','DELETE','REFERENCES','TRIGGER','MAINTAIN']) {
       if (required[name]?.includes(permission)) continue
-      const lifecycleColumns = name === 'file_revisions' ? ['reclaimed_at'] : name === 'revision_outbox' ? ['retired_at','delivery_epoch','delivery_hash','delivery_until'] : null
+      const lifecycleColumns = name === 'file_revisions' ? ['reclaimed_at'] : name === 'revision_outbox' ? ['retired_at','delivery_epoch','delivery_hash','delivery_until'] : name === 'workspace_source_results' ? ['state','session_id','name','save_command_id','save_params_hash','expires_at','saved_at'] : null
       if (kind === 'business' && permission === 'UPDATE' && lifecycleColumns) {
         const actual = await pool.query("SELECT attname FROM pg_attribute WHERE attrelid=$1::regclass AND attnum>0 AND NOT attisdropped AND has_column_privilege(current_user,attrelid,attnum,'UPDATE') ORDER BY attname",[relation])
         if (JSON.stringify(actual.rows.map(row => row.attname)) !== JSON.stringify([...lifecycleColumns].sort())) throw new Error('Runtime lifecycle columns violate privilege boundary')

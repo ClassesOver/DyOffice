@@ -1,6 +1,6 @@
 import { DeleteObjectCommand, GetBucketVersioningCommand, GetObjectCommand, PutObjectCommand, HeadBucketCommand, type S3Client } from '@aws-sdk/client-s3'
 import { Readable } from 'node:stream'
-import { assertObjectKey, assertObjectReference, collectVerified, verifyStream, objectReference, storageError, type ObjectRef, type ObjectStore } from './object-store.ts'
+import { assertObjectKey, assertObjectReference, collectVerified, verifyStream, snapshotObject, storageError, type ObjectRef, type ObjectStore } from './object-store.ts'
 
 // The caller owns client lifecycle and credentials. The bucket must be private,
 // precreated and dedicated; no public or presigned download URL is issued here.
@@ -25,8 +25,9 @@ export function createS3ObjectStore({ client, bucket }: { client: S3Client; buck
       catch { throw storageError() }
     },
     async putImmutable(key, bytes, expected) {
-      const reference = expected ? (assertObjectReference({ key, ...expected }), Object.freeze({ key, size: expected.size, sha256: expected.sha256 })) : objectReference(key, bytes)
-      bytes = Buffer.from(bytes)
+      const snapshot = snapshotObject(key, bytes, expected)
+      const reference = snapshot.reference
+      bytes = snapshot.bytes
       try {
         await client.send(new PutObjectCommand({ Bucket: bucket, Key: key, Body: bytes, ContentLength: reference.size,
           ContentType: 'application/octet-stream', IfNoneMatch: '*', ChecksumSHA256: Buffer.from(reference.sha256, 'hex').toString('base64'),

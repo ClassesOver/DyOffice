@@ -5,8 +5,8 @@ export interface ObjectRef { readonly key: string; readonly size: number; readon
 export interface ObjectStore {
   // Custom stores without a read-only probe remain unavailable to readiness.
   checkReady?(): Promise<void>
-  /** `expected` lets a caller that already hashed the bytes (upload validation)
-   *  skip the second full sha256 pass; storage still enforces immutability. */
+  /** Optional metadata is an assertion, never a trusted substitute for hashing
+   *  and bounding the actual private byte snapshot before publication. */
   putImmutable(key: string, bytes: Buffer, expected?: { size: number; sha256: string }): Promise<ObjectRef>
   readVerified(reference: ObjectRef): Promise<Buffer>
   // Internal only: caller must prove terminal publication and no live references.
@@ -22,10 +22,23 @@ const namespace = new RegExp(`^${uuid}/${uuid}/objects/${uuid}$`)
 export function assertObjectKey(key: string) {
   if (typeof key !== 'string' || !namespace.test(key)) throw storageError(400)
 }
-export function objectReference(key: string, bytes: Buffer): ObjectRef {
+function assertObjectBytes(key: string, bytes: Buffer) {
   assertObjectKey(key)
   if (!Buffer.isBuffer(bytes) || bytes.length < 1 || bytes.length > MAX_OBJECT_BYTES) throw storageError(400)
+}
+export function objectReference(key: string, bytes: Buffer): ObjectRef {
+  assertObjectBytes(key, bytes)
   return Object.freeze({ key, size: bytes.length, sha256: createHash('sha256').update(bytes).digest('hex') })
+}
+export function snapshotObject(key: string, input: Buffer, expected?: { size: number; sha256: string }) {
+  // Bound before allocating and hash the same owned bytes handed to storage.
+  assertObjectBytes(key, input)
+  const bytes = Buffer.from(input), reference = objectReference(key, bytes)
+  if (expected !== undefined) {
+    assertObjectReference({ key, size: expected?.size, sha256: expected?.sha256 })
+    if (expected.size !== reference.size || expected.sha256 !== reference.sha256) throw storageError(400)
+  }
+  return { bytes, reference }
 }
 export function assertObjectReference(ref: ObjectRef) {
   if (!ref || typeof ref !== 'object') throw storageError(400)

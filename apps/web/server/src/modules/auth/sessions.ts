@@ -65,15 +65,17 @@ export function createSessionService({ db, accounts, deploymentId, idleMs = 8 * 
         ? await connection.query<AuthoritySession>('SELECT * FROM sessions WHERE deployment_id=$1 AND user_id=ANY($2::uuid[]) ORDER BY id FOR UPDATE', [deploymentId, subjects])
         : await connection.query<AuthoritySession>('SELECT * FROM sessions WHERE deployment_id=$1 AND user_id=$2 AND id=ANY($3::uuid[]) ORDER BY id FOR UPDATE', [deploymentId, identity.user_id, [identity.id, ...(options.sessionIds ?? [])]])
       const session = locked.rows.find(row => row.id === identity.id)
-      const now: Date = (await connection.query('SELECT clock_timestamp() AS now')).rows[0].now
+      // Roles and the authority clock belong to this same locked request. Read
+      // them together; never reuse a principal or deadline across requests.
+      const authority = (await connection.query<{ now: Date; roles: string[] }>("SELECT clock_timestamp() AS now,ARRAY(SELECT role FROM user_roles WHERE deployment_id=$1 AND user_id=$2 ORDER BY role) AS roles", [deploymentId, identity.user_id])).rows[0]
+      const now = authority.now
       if (!user || user.status !== 'active' || user.password_reset_required || !session || session.token_hash !== tokenHash(token) || session.revoked_at || session.auth_version !== user.auth_version || session.expires_at <= now || session.last_seen_at.getTime() + idleMs <= now.getTime()) throw authError()
-      const principal: SessionPrincipal = { deploymentId, userId: user.id, sessionId: session.id, authVersion: user.auth_version, scopes: [], roles: await roles(connection, user.id), username: user.username_normalized, displayName: user.display_name }
+      const principal: SessionPrincipal = { deploymentId, userId: user.id, sessionId: session.id, authVersion: user.auth_version, scopes: [], roles: authority.roles, username: user.username_normalized, displayName: user.display_name }
       if (options.requireAdmin && !principal.roles.includes('config_admin')) throw authError(403)
       if (options.requireRecent && now.getTime() - (session.reauthenticated_at ?? session.created_at).getTime() > 15 * 60_000) throw authError(403)
-      // Throttle the per-request last_seen write: refreshing at most every
-      // 30s keeps idle accounting (deadline uses `now`, above) while cutting a
-      // row rewrite + WAL record from every authenticated request.
-      await connection.query("UPDATE sessions SET last_seen_at=$1 WHERE id=$2 AND last_seen_at + interval '30 seconds' < $1", [now, session.id])
+      // Every successful request extends the persisted idle deadline. A write
+      // throttle would make a later request expire before its true idle limit.
+      await connection.query('UPDATE sessions SET last_seen_at=$1 WHERE id=$2', [now, session.id])
       // Capture immutable deadlines before callbacks rotate/revoke credentials
       // (password changes and self-revocation intentionally invalidate the token).
       // Row locks serialize revocation, but do not stop wall-clock expiry.
