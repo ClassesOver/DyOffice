@@ -247,3 +247,8 @@
 - 最终无CSS注入、已构建产品浏览器320/390/1440×长短名6/6通过：名称鼠标点击、行Enter、勾选取消、更多/Escape、Space模拟收藏再取消。320名称36px、390名称74.5px，仍受原侧栏空间约束而省略但可点击；行无横溢，更多可见。1440名称618px且原图标/时间可见，几何不变。内容区工具栏仍可能横滚，未声称整个首页已无横溢。0真实业务写/0pageerror，复用storageState无新增登录。
 - 证据：/tmp/dyoffice-login-accessibility-red.log、/tmp/dyoffice-login-accessibility-green.log、/tmp/dyoffice-login-history-timing.log、/tmp/dyoffice-login-final-dist.log、/tmp/dyoffice-login-final-evidence/build-evidence.json；/tmp/dyoffice-ui-audit/home-file-entry/原始反例、home-file-entry-css-preserve-star/对照、home-file-entry-postfix/最终报告及三尺寸截图。完整UI穷举仍进行中。
 - 整合远端诊断后最终Shell46文件431项、shell类型、登录诊断helper5项、边界及三类清单通过，最终shell构建重启HTTP200通过；仍有既有chunk/CSS解析提示。远端bbbeeb93的boundary-check日志进一步捕获相同状态：第2次login-click前仅1次401请求完成，loadingIcons1、loadingSubmits0、disabled0、hidden/inert0、submitHasBox/submitCenterHit均true、explicitLoginLabelfalse；与实际“loading 登录”时序一致。本批显式名称使图标不再改变按钮可访问名，但不解释动效为何在CI持久残留。日志/tmp/dyoffice-round13-remote-boundary.log、/tmp/dyoffice-round13-final-shell.log、/tmp/dyoffice-round13-diagnostics.log。
+## 个人偏好保存结果保护补查
+
+- HTTP 408 原先被当作确定拒绝，允许立即重提；保存前发起的旧读取迟到返回，也会解除后续保存结果未知的保护。客户端现在将 408 保持为结果未知，并以写入代次限制读取解锁；失败或畸形读取仍不能解锁。未修改主页或真实用户配置。
+- 新增回归最初 7 项中 2 项失败，修复后本轮重跑 7/7 通过；覆盖 408/503、失败及畸形读取、有效读取恢复和旧读取竞态。Web 测试 388 项中 387 通过、1 项既有条件跳过，工作区类型检查通过，边界扫描 1335 文件 0 违规，git diff --check 通过。证据：/tmp/dyoffice-preferences-fence-red.log、/tmp/dyoffice-preferences-fence-green.log、/tmp/dyoffice-commit-preferences-web.log、/tmp/dyoffice-commit-preferences-type.log。本批未补做浏览器端到端验收。
+- 并行只读审计仍有待处理问题：小屏排序入口被隐藏；文件/文件夹删除确认可 Tab 到背景，关闭后焦点未恢复；移动选择器焦点循环正常但关闭后焦点未恢复。缺失文件确认存在同类问题，但该入口仅由模拟标志覆盖。证据：/tmp/dyoffice-ui-audit/home-toolbar/coverage.md、/tmp/dyoffice-ui-audit/home-dialog-focus/report.json。搜索、清除、五种格式筛选和批量按钮三尺寸可操作，0 真实业务写入。以上未修复项不计入本次修复范围，完整 UI 穷举未完成。

@@ -32,3 +32,31 @@ test('known rejected writes remain retryable and public catalog uses its separat
  assert.equal(paths.at(-1),'/api/v1/settings/public')
 })
 
+for(const status of [408,503])test(`preference HTTP ${status} requires a valid read before resubmission`,async()=>{
+ let writes=0,read='failure'
+ const client=createPreferencesClient(async(_path,method)=>{
+  if(method==='PUT'){writes++;throw Object.assign(Error('response uncertain'),{status})}
+  if(read==='failure')throw Error('read failed')
+  return read==='malformed'?{}:initial
+ })
+ await assert.rejects(client.updatePreferences({authorName:'Draft'}),/uncertain/)
+ await assert.rejects(client.updatePreferences({authorName:'Draft'}),/尚未确认/);assert.equal(writes,1)
+ await assert.rejects(client.getPreferences(),/read failed/)
+ await assert.rejects(client.updatePreferences({authorName:'Draft'}),/尚未确认/)
+ read='malformed';await assert.rejects(client.getPreferences(),/无法确认/)
+ await assert.rejects(client.updatePreferences({authorName:'Draft'}),/尚未确认/)
+ read='valid';await client.getPreferences()
+ await assert.rejects(client.updatePreferences({authorName:'Draft'}),/uncertain/);assert.equal(writes,2)
+})
+test('a preference read started before a later uncertain save cannot unlock another write',async()=>{
+ let finish,writes=0
+ const client=createPreferencesClient(async(_path,method)=>{
+  if(method==='PUT'){writes++;throw Error('response lost')}
+  return new Promise(resolve=>{finish=resolve})
+ })
+ const oldRead=client.getPreferences()
+ await assert.rejects(client.updatePreferences({theme:'dark'}),/response lost/)
+ finish(initial);await oldRead
+ await assert.rejects(client.updatePreferences({theme:'dark'}),/尚未确认/)
+ assert.equal(writes,1)
+})
