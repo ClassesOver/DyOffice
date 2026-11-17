@@ -1,3 +1,4 @@
+import {decodeBrokerAssertion,verifyBrokerAssertion,type BrokerAssertion} from './document-broker-assertion.ts'
 import {randomBytes,createHash} from 'node:crypto'
 import type {Pool,PoolClient} from 'pg'
 import {validateDocumentExecutionRequest,type DocumentExecutionRequest} from './document-contract.ts'
@@ -35,6 +36,22 @@ export function createTestPostgresDocumentReservations(pool:Pool,options:{schema
  }
  const update=async(c:PoolClient,r:Reservation,state:string,handle:ExecutionHandle|null,reason:string|null)=>{await c.query(`UPDATE ${table('document_reservations')} SET state=$2,handle=$3,reason=$4,version=version+1,updated_at=clock_timestamp() WHERE reservation_id=$1`,[r.reservationId,state,handle,reason]);await task(c,r,state==='released'?'completed':'pending')}
  const view=(v:any)=>Object.freeze({reservationId:v.reservation_id,state:v.state,launchEvidence:v.launch_evidence,version:Number(v.version),handle:v.handle,jobId:v.job_id,attempt:Number(v.attempt),jobEpoch:Number(v.epoch)})
+ const recoveryClaim=async(c:PoolClient,claim:{reservationId:string;claimId:string;version:number},owner:string)=>{
+  const o=(await c.query(`SELECT * FROM ${table('document_reconcile_observations')} WHERE claim_id=$1`,[claim.claimId])).rows[0]
+  const v=(await c.query(`SELECT * FROM ${table('document_reservations')} WHERE reservation_id=$1 AND deployment_id=$2`,[claim.reservationId,deployment])).rows[0]
+  if(!o||!v||o.reservation_id!==claim.reservationId||o.owner_token!==owner||v.owner_token!==owner||Number(o.claimed_version)!==claim.version||v.state!=='quarantined'||!v.handle||v.launch_evidence!=='may_started'||Number(v.version)!==claim.version+1||o.outcome!=='blocked_uncertified')fail('DOCUMENT_RECOVERY_CONFLICT')
+  return {observation:o,reservation:v}
+ }
+ const copyClaim=(raw:{reservationId:string;claimId:string;version:number})=>{
+  gate();const claim=Object.freeze({reservationId:raw.reservationId,claimId:raw.claimId,version:raw.version}),owner=recoveryOwners.get(claim.claimId)
+  if(!owner||!Number.isSafeInteger(claim.version)||claim.version<1)fail('DOCUMENT_RECOVERY_OWNER')
+  return {claim,owner:owner!}
+ }
+ const bodyFor=(challenge:any,claim:{reservationId:string;claimId:string;version:number},reportedState:'stopped'|'unknown'):BrokerAssertion=>Object.freeze({
+  protocolVersion:1,kind:'test-only-broker-assertion',challengeId:challenge.challenge_id,nonce:challenge.nonce,
+  keyId:challenge.key_id,keyVersion:Number(challenge.key_version),claimId:claim.claimId,reservationId:claim.reservationId,
+  reservationVersion:claim.version,expiresAt:challenge.expires_at.toISOString(),handle:validateExecutionHandle(challenge.handle),reportedState
+ })
  return Object.freeze({
   async reserve(raw:Reservation,input:DocumentExecutionRequest):Promise<ReservationGrant>{
    const r=snapshot(raw),owner=ownerFor(r),request=validateDocumentExecutionRequest(input,new Date())
@@ -53,6 +70,47 @@ export function createTestPostgresDocumentReservations(pool:Pool,options:{schema
   async bind(raw:Reservation,rawHandle:ExecutionHandle):Promise<void>{const r=snapshot(raw),owner=ownerFor(r),h=validateExecutionHandle(rawHandle);await tx(async c=>{const v=await owned(c,r,owner);if(v.state!=='start_intent'||v.launch_evidence!=='may_started')fail('DOCUMENT_BIND_STATE');const fence=await c.query(`SELECT epoch FROM ${table('document_job_fences')} WHERE deployment_id=$1 AND job_id=$2`,[deployment,r.jobId]);if(Number(fence.rows[0]?.epoch)!==r.jobEpoch)fail('DOCUMENT_EPOCH_FENCED');if(h.deploymentId!==deployment||h.jobId!==r.jobId||h.attempt!==r.attempt||h.jobEpoch!==r.jobEpoch||h.runtimeDigest!==v.request.runtimeDigest||h.profileId!==v.request.profileId)fail('DOCUMENT_RESERVATION_IDENTITY');await update(c,r,'bound',h,null)})},
   async retain(raw:Reservation,reason:string):Promise<void>{const r=snapshot(raw),owner=ownerFor(r);if(typeof reason!=='string'||reason.length>128)fail('INVALID_RETAIN_REASON');await tx(async c=>{const v=await row(c,r);if(v){if(v.state==='released')return;if(v.owner_token!==owner)fail('DOCUMENT_RESERVATION_OWNER');await update(c,r,'quarantined',v.handle,reason)}else await c.query(`INSERT INTO ${table('document_reservations')}(reservation_id,deployment_id,job_id,attempt,epoch,owner_token,state,reason) VALUES($1,$2,$3,$4,$5,$6,'quarantined',$7)`,[r.reservationId,deployment,r.jobId,r.attempt,r.jobEpoch,owner,reason]);await task(c,r,'pending');await c.query(`INSERT INTO ${table('document_job_fences')} AS fences VALUES($1,$2,$3) ON CONFLICT(deployment_id,job_id) DO UPDATE SET epoch=GREATEST(fences.epoch,EXCLUDED.epoch)`,[deployment,r.jobId,r.jobEpoch])})},
   async release(raw:Reservation,evidence:{notStarted:true}|{stop:StopObservation}):Promise<void>{const r=snapshot(raw),owner=ownerFor(r);const proof:{stop:StopObservation}|{notStarted:boolean}='stop' in evidence?{stop:validateStopObservation(evidence.stop,evidence.stop.handle)}:{notStarted:evidence.notStarted};await tx(async c=>{const v=await owned(c,r,owner);if('stop' in proof){if(!v.handle||!proof.stop.confirmed)fail('DOCUMENT_STOP_UNKNOWN');validateStopObservation(proof.stop,v.handle);if(!['bound','quarantined','released'].includes(v.state))fail('DOCUMENT_RELEASE_STATE')}else if(proof.notStarted!==true||!['reserved','released'].includes(v.state)||v.handle||!v.request||v.launch_evidence!=='not_started')fail('DOCUMENT_START_MAY_HAVE_OCCURRED');if(v.state!=='released')await update(c,r,'released',v.handle,null)})},
+  async issueBrokerChallenge(raw:{reservationId:string;claimId:string;version:number},keyId:string){
+   const {claim,owner}=copyClaim(raw)
+   if(typeof keyId!=='string'||!/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(keyId))fail('DOCUMENT_BROKER_KEY_DENIED')
+   return tx(async c=>{
+    const {reservation:v}=await recoveryClaim(c,claim,owner)
+    const key=(await c.query(`SELECT * FROM ${table('document_broker_keys')} WHERE key_id=$1 FOR SHARE`,[keyId])).rows[0]
+    if(!key||!key.active||key.deployment_id!==deployment||key.broker_boot_id!==v.handle.brokerBootId||key.scope!=='test-only'||key.os_stop_certified)fail('DOCUMENT_BROKER_KEY_DENIED')
+    const live=(await c.query('SELECT clock_timestamp() < $1::timestamptz AS live',[key.not_after])).rows[0].live
+    if(!live)fail('DOCUMENT_BROKER_KEY_DENIED')
+    let challenge=(await c.query(`SELECT * FROM ${table('document_broker_challenges')} WHERE claim_id=$1`,[claim.claimId])).rows[0]
+    if(challenge){if(challenge.key_id!==keyId||Number(challenge.key_version)!==Number(key.version))fail('DOCUMENT_BROKER_CHALLENGE_CONFLICT')}
+    else challenge=(await c.query(`INSERT INTO ${table('document_broker_challenges')}(claim_id,key_id,key_version,expires_at,handle) VALUES($1,$2,$3,date_trunc('milliseconds',LEAST(clock_timestamp()+interval '500 milliseconds',$4::timestamptz)),$5) RETURNING *`,[claim.claimId,keyId,key.version,key.not_after,v.handle])).rows[0]
+    return bodyFor(challenge,claim,'unknown')
+   })
+  },
+  async acceptBrokerAssertion(raw:{reservationId:string;claimId:string;version:number},frame:Uint8Array){
+   const {claim,owner}=copyClaim(raw),decoded=decodeBrokerAssertion(frame)
+   return tx(async c=>{
+    const {reservation:v}=await recoveryClaim(c,claim,owner)
+    const body=decoded.body
+    const challenge=(await c.query(`SELECT * FROM ${table('document_broker_challenges')} WHERE challenge_id=$1 AND claim_id=$2`,[body.challengeId,claim.claimId])).rows[0]
+    if(!challenge)fail('DOCUMENT_BROKER_CHALLENGE_DENIED')
+    const key=(await c.query(`SELECT * FROM ${table('document_broker_keys')} WHERE key_id=$1 FOR SHARE`,[challenge.key_id])).rows[0]
+    if(!key||!key.active||key.scope!=='test-only'||key.os_stop_certified||key.deployment_id!==deployment||key.broker_boot_id!==v.handle.brokerBootId||Number(key.version)!==Number(challenge.key_version))fail('DOCUMENT_BROKER_KEY_DENIED')
+    const expected=bodyFor(challenge,claim,body.reportedState)
+    if(JSON.stringify(body)!==JSON.stringify(expected)||JSON.stringify(validateExecutionHandle(v.handle))!==JSON.stringify(expected.handle))fail('DOCUMENT_BROKER_ASSERTION_DENIED')
+    verifyBrokerAssertion(key.public_key,body,decoded.signature)
+    const receipt=(await c.query(`SELECT * FROM ${table('document_broker_receipts')} WHERE challenge_id=$1`,[challenge.challenge_id])).rows[0]
+    const live=(await c.query('SELECT clock_timestamp() < $1::timestamptz AS key_live,clock_timestamp() < $2::timestamptz AS challenge_live',[key.not_after,challenge.expires_at])).rows[0]
+    if(!live.key_live)fail('DOCUMENT_BROKER_KEY_DENIED')
+    if(!live.challenge_live)fail('DOCUMENT_BROKER_CHALLENGE_EXPIRED')
+    if(receipt){if(receipt.receipt_sha256!==decoded.digest)fail('DOCUMENT_BROKER_NONCE_CONSUMED')}
+    else {
+     await c.query(`INSERT INTO ${table('document_broker_receipts')}(challenge_id,receipt_sha256,reported_state,classification) VALUES($1,$2,$3,'authenticated_assertion_os_unverified')`,[challenge.challenge_id,decoded.digest,body.reportedState])
+    }
+    const finalLive=(await c.query('SELECT clock_timestamp() < $1::timestamptz AND clock_timestamp() < $2::timestamptz AS live',[key.not_after,challenge.expires_at])).rows[0].live
+    if(!finalLive)fail('DOCUMENT_BROKER_CHALLENGE_EXPIRED')
+    // Signed provenance is NOT OS stop evidence. No reservation or task is released.
+    return Object.freeze({challengeId:challenge.challenge_id,classification:'authenticated_assertion_os_unverified' as const,reportedState:body.reportedState})
+   })
+  },
   async claimReconcile(raw:Reservation,version:number,claimId:string){
    const r=snapshot(raw)
    if(!Number.isSafeInteger(version)||version<1||typeof claimId!=='string'||!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(claimId))fail('INVALID_RECOVERY_CLAIM')

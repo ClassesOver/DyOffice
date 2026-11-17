@@ -130,3 +130,33 @@ passed with the unchanged implementation restored; they found no new code defect
 Candidate SQL is for fresh isolated schemas only, with no unsafe default backfill
 of existing rows. It remains unregistered; production factory stays disabled.
 See [recovery stage details](../inventory/document-reconcile-stage.md).
+
+## Authenticated broker assertions, not OS stop proof
+
+The test-only PG adapter now issues one server-derived challenge per current
+blocked recovery claim with a full persisted handle. A trusted test owner pins
+Ed25519 public keys to deployment/broker boot/version; the schema only permits
+`test-only` scope and `os_stop_certified=false`. Private keys are generated only
+in test memory. There is no worker self-registration or production trust setup.
+
+Node's built-in Ed25519 verifies a fixed domain-separated canonical frame, bounded
+to 4 KiB before parsing, with exact SPKI and signature lengths. Signed fields bind
+challenge/nonce, key and claim versions, expiry and every instance-handle field.
+Within the PG transaction, current owner, key status/version, identity and DB time
+are rechecked. Nonce consumption is atomic and exact replays require current
+validity. Receipts cannot update reservation/task state, produce StopObservation,
+or release capacity, including when the signed report says `stopped`.
+
+Verification: **68/68 real PG plus crypto tests**, **68/68 TS protocol tests**, and
+strict checking of **13 sandbox TS modules** passed. Coverage includes incorrect
+keys/domains/fields, bounded canonical parsing, concurrent consumption, key
+revocation/rotation, stale claims, lock-wait expiry, receipt rollback and committed
+client-confirmation-loss replay. Three defects were demonstrated RED and fixed:
+expired receipt replay, key identity reset via TRUNCATE, and receipt INSERT delay
+crossing expiry. The final check rolls back expired writes.
+
+The fixed result `authenticated_assertion_os_unverified` records provenance at the
+last transaction check. It is not a guarantee of validity at COMMIT/client receipt,
+a TTL authorization, real broker provisioning, or evidence of cgroup emptiness.
+Real host acceptance and least-privilege ledger admission remain outstanding;
+production stays disabled. See [assertion stage details](../inventory/document-broker-assertion-stage.md).
