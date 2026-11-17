@@ -46,6 +46,12 @@ export async function lockUpload(connection: PoolClient, principal: BusinessPrin
 }
 export async function loadFile(connection: PoolClient, principal: BusinessPrincipal, id: string, includeTrash = false, lock = 'SHARE') {
   if (principal.job && (id!==principal.job.fileId || includeTrash)) throw authError(404)
+  // Lock the owner-scoped file before joining its head revision. A single
+  // locking join can follow a concurrently updated file via EvalPlanQual while
+  // its statement snapshot cannot see that transaction's newly inserted revision.
+  // A fresh statement after the lock sees the matching committed revision.
+  const locked = await connection.query(`SELECT id FROM files WHERE deployment_id=$1 AND owner_id=$2 AND id=$3 AND purge_started_at IS NULL ${includeTrash ? '' : 'AND deleted_at IS NULL'} FOR ${lock}`, [...scope(principal),id])
+  if (!locked.rowCount) throw authError(404)
   const row = (await connection.query<FileRow>(`SELECT f.*,r.object_key,r.sha256,r.size FROM files f JOIN file_revisions r ON r.deployment_id=f.deployment_id AND r.owner_id=f.owner_id AND r.file_id=f.id AND r.id=f.current_revision WHERE f.deployment_id=$1 AND f.owner_id=$2 AND f.id=$3 AND f.purge_started_at IS NULL ${includeTrash ? '' : 'AND f.deleted_at IS NULL'} FOR ${lock} OF f`, [...scope(principal),id])).rows[0]
   if (!row) throw authError(404)
   return row
