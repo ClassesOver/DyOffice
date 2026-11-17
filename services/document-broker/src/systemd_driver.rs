@@ -418,3 +418,42 @@ where
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod container_diagnostic {
+    use super::*;
+    #[tokio::test]
+    #[ignore = "requires operator-audited Ubuntu Docker systemd container; benign sleep only"]
+    async fn fixed_sleep_unit_times_out() {
+        crate::container_probe::preflight()
+            .expect("container preflight refused; do not relax host security");
+        tokio::time::timeout(Duration::from_secs(20), async {
+        crate::manager_diagnostic::inspect_system_manager().await.expect("private manager unavailable");
+        let connection=Builder::address("unix:path=/run/dbus/system_bus_socket").unwrap().build().await.unwrap();
+        let bus=zbus::fdo::DBusProxy::new(&connection).await.unwrap();
+        let owner=bus.get_name_owner("org.freedesktop.systemd1".try_into().unwrap()).await.unwrap();
+        let (_tx,rx)=tokio::sync::watch::channel(false);
+        let spec=LaunchSpec::container_probe();
+        let phase=Attempt::new(1).submit_system(&spec,rx).await;
+        assert!(matches!(phase,Phase::JobObserved{ref result,..} if result=="done"),"unconfirmed submit: {phase:?}; never retry blindly");
+        assert_eq!(bus.get_name_owner("org.freedesktop.systemd1".try_into().unwrap()).await.unwrap(),owner);
+        tokio::time::timeout(Duration::from_secs(10),async {
+            let manager=zbus::Proxy::new(&connection,owner.as_str(),"/org/freedesktop/systemd1","org.freedesktop.systemd1.Manager").await.unwrap();
+            let path:OwnedObjectPath=manager.call("GetUnit",&(spec.unit(),)).await.unwrap();
+            let service=zbus::Proxy::new(&connection,owner.as_str(),path.as_str(),"org.freedesktop.systemd1.Service").await.unwrap();
+            assert_eq!(service.get_property::<u64>("RuntimeMaxUSec").await.unwrap(),2_000_000);
+            assert_eq!(service.get_property::<u64>("MemoryMax").await.unwrap(),64_000_000);
+            assert_eq!(service.get_property::<u64>("TasksMax").await.unwrap(),8);
+            assert!(service.get_property::<bool>("DynamicUser").await.unwrap());
+            loop {
+                let result=service.get_property::<String>("Result").await.unwrap();
+                let pid=service.get_property::<u32>("MainPID").await.unwrap();
+                if result=="timeout" && pid==0 {break}
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+            assert_eq!(bus.get_name_owner("org.freedesktop.systemd1".try_into().unwrap()).await.unwrap(),owner);
+        }).await.expect("unit stop unconfirmed; operator must inspect fixed probe unit");
+        println!("{{\"scope\":\"benign-container-manager-diagnostic\",\"fixed_sleep_timeout_observed\":true,\"execution_available\":false,\"isolation_certified\":false}}");
+        }).await.expect("diagnostic deadline exceeded; inspect probe unit, do not retry blindly");
+    }
+}
