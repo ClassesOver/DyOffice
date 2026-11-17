@@ -412,3 +412,12 @@
 - 新增48项回归先红后绿，覆盖原生 isComposing、229键码、组合活动及组合结束同tick；验证草稿与文档保持、下一次普通 Enter 可正常提交。提交前重新运行相关8文件76项全部通过，日志 `/tmp/dyoffice-dialog-ime-commit-tests.log`；既有 canvas 提示仍在。cutout 测试仅补 stub 的可选 onload 类型声明。
 - Web docs 类型与生产构建通过（构建保留既有 chunk 提示），Web边界1339文件0违规，git diff --check通过。全量Electron类型检查存在依赖环境错误，未宣称仓库全量类型通过。独立只读复核未发现阻塞问题。保留远端 f4f7a39b 的账号绑定登录历史分页；其客户端2项回归此前通过，未重跑真实PG集成。
 - 最终1440/390浏览器复验未完成：构建后本地服务启动失败，两尺寸均在等待编辑器时超时，未执行到IME断言；不计为通过，不将此环境阻塞归为已确认的产品缺陷。失败记录 `/tmp/dyoffice-ui-audit/word-ime-dialog-postfix-{1440,390}/report.json`。未为恢复环境修改真实账号、数据库或运行配置。实体输入法、多端及全量UI穷举仍未完成。
+
+## 浏览器环境恢复与批注输入法保护
+
+- 只读检查确认启动失败为 identity_migrations 仅应用1–31，代码已要求32。使用现有 local-owner 配置执行仓库 provision-runtime 脚本，补齐迁移和受限运行角色权限；脚本报告没有创建或修改登录密码，未修改配置文件。随后本地服务恢复HTTP200。此项是本地环境恢复，不算产品UI修复。
+- 上轮题注/书签最终1440/390浏览器四流程现已全部通过：合成组合确认Enter保留弹窗/草稿/正文，下一普通Enter正常提交，0页面异常。业务写mock/blocked；证据 `/tmp/dyoffice-ui-audit/word-ime-dialog-postfix-{1440,390}/report.json`。仍不等于实体中文输入法验收。
+- 正式Word“插入→批注”新建输入框复现合成组合期间Ctrl+Enter发布草稿。红证据 `/tmp/dyoffice-ui-audit/word-comment-ime-1440/report.json`。新增20项回归原实现19红1绿（原生isComposing回复原本有保护），覆盖新建/编辑Ctrl与Meta快捷键、回复Enter及4种IME信号。
+- 首版面板级guard经只读复核发现卸载后组合状态残留及回复框互相影响；补4项测试在该版4红。最终通过局部WeakMap按实际输入DOM持有现有createImeEnterGuard，保持输入框彼此隔离，卸载后不污染重建节点。不改批注保存/图片处理/Escape或主页布局。
+- 最终相关4文件44项通过，Web docs类型/生产构建通过（保留既有chunk提示），Web边界1339文件0违规及git diff --check通过。独立只读复核无阻塞。日志 `/tmp/dyoffice-comment-ime-{red,lifecycle-red,final-tests,final-type,final-build}.log`。实体IME、FindPanel、输入法Escape及其他尚未覆盖入口继续待查；不宣称UI穷举完成。
+- 最终构建Chromium1440/390各4流程通过：新建Ctrl+Enter、编辑Ctrl+Enter及Meta+Enter、回复Enter，合成composition期间均保留草稿和现有批注，结束后的普通快捷键正常写入mock文档内批注，0页面异常。证据 `/tmp/dyoffice-ui-audit/word-comment-ime-green-{1440,390}/report.json`。业务写mock/blocked；未将组件卸载/跨线程测试冒充对应浏览器端测，也未将本轮新建Meta组件验证算作浏览器覆盖。

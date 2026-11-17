@@ -7,6 +7,7 @@ import {
   type KeyboardEvent,
   type ReactNode,
 } from 'react'
+import { createImeEnterGuard, type ImeEnterGuard } from '@genoffice/ui'
 import type { Node as PmNode } from '@tiptap/pm/model'
 import type { CommentImage, CommentInfo } from '@genoffice/docx-engine'
 import { useI18n } from '../i18n/locale'
@@ -112,6 +113,16 @@ export const CommentsPanel = memo(function CommentsPanel({
   focus?: { id: string; nonce: number; reply?: boolean } | null
 }) {
   const { t } = useI18n()
+  // 组合输入中途可能卸载输入框，保护状态按实际节点隔离。
+  const imeGuards = useRef(new WeakMap<HTMLElement, ImeEnterGuard>())
+  const imeFor = (input: HTMLElement) => {
+    let guard = imeGuards.current.get(input)
+    if (!guard) {
+      guard = createImeEnterGuard()
+      imeGuards.current.set(input, guard)
+    }
+    return guard
+  }
   const paneRef = useRef<HTMLElement>(null)
   const [activeId, setActiveId] = useState<string | null>(null)
   const [draft, setDraft] = useState('')
@@ -227,8 +238,14 @@ export const CommentsPanel = memo(function CommentsPanel({
         autoFocus
         value={editDraft}
         onChange={(e) => setEditDraft(e.target.value)}
+        onCompositionStart={(e) => imeFor(e.currentTarget).handleCompositionStart()}
+        onCompositionEnd={(e) => imeFor(e.currentTarget).handleCompositionEnd()}
         onKeyDown={(e) => {
-          if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) submitEdit()
+          if (
+            e.key === 'Enter' &&
+            (e.metaKey || e.ctrlKey) &&
+            !imeFor(e.currentTarget).isImeConfirm(e.nativeEvent)
+          ) submitEdit()
           if (e.key === 'Escape') setEditingId(null)
         }}
       />
@@ -375,8 +392,10 @@ export const CommentsPanel = memo(function CommentsPanel({
             aria-label={t('appReply')}
             value={replyDrafts[c.id] ?? ''}
             onChange={(e) => setReplyDrafts((d) => ({ ...d, [c.id]: e.target.value }))}
+            onCompositionStart={(e) => imeFor(e.currentTarget).handleCompositionStart()}
+            onCompositionEnd={(e) => imeFor(e.currentTarget).handleCompositionEnd()}
             onKeyDown={(e) => {
-              if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
+              if (e.key === 'Enter' && !e.shiftKey && !imeFor(e.currentTarget).isImeConfirm(e.nativeEvent)) {
                 e.preventDefault()
                 submitReply(c.id)
               }
@@ -410,8 +429,14 @@ export const CommentsPanel = memo(function CommentsPanel({
             placeholder={t('appCommentPlaceholder')}
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
+            onCompositionStart={(e) => imeFor(e.currentTarget).handleCompositionStart()}
+            onCompositionEnd={(e) => imeFor(e.currentTarget).handleCompositionEnd()}
             onKeyDown={(e) => {
-              if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) submit()
+              if (
+                e.key === 'Enter' &&
+                (e.metaKey || e.ctrlKey) &&
+                !imeFor(e.currentTarget).isImeConfirm(e.nativeEvent)
+              ) submit()
               if (e.key === 'Escape') onCancelNew()
             }}
             onPaste={(e) => {
