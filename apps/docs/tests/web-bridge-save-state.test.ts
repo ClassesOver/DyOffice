@@ -108,6 +108,7 @@ it.each(['document','metadata'] as const)('records content-free %s reasons witho
  const {editor,ctx,path}=await fixture(false)
  const outcomes:unknown[]=[]
  ctx.pageCount=1
+ if(kind==='metadata') ctx.sectionHfEdits={[`${ctx.sections.at(-1)!.lastBlockIndex}:footer`]:{text:'Total \uE000',pageNumber:false}} as never
  const host={getState:()=>({name:'a.docx',status:'idle'}),save:async (_id:string,data:Uint8Array)=>{await writeFile(path,data);if(kind==='document')editor.commands.insertContent('Newer racing draft');else ctx.pageCount=2}}
  const bridge=createDocsBridge(host as never,'file',{language:'en'} as never,()=>{})
  ctx.doc!.filePath='/files/file/a.docx'
@@ -123,4 +124,55 @@ it.each(['document','metadata'] as const)('records content-free %s reasons witho
  const zip=await JSZip.loadAsync(await readFile(path))
  expect(await zip.file('word/document.xml')!.async('string')).toContain('Saved marker')
  expect(await zip.file('word/document.xml')!.async('string')).not.toContain('Newer racing draft')
+ if(kind==='metadata') {
+   const footer=await zip.file('word/footer1.xml')!.async('string')
+   expect(footer).toContain(' NUMPAGES ')
+   expect(footer).toContain('<w:t>1</w:t>')
+   expect(footer).not.toContain('<w:t>2</w:t>')
+ }
+})
+
+ it('layout-only pageCount changes do not invalidate a body-only save', async () => {
+ const {editor,ctx,path}=await fixture(false)
+ ctx.pageCount=1
+ const host={getState:()=>({name:'a.docx',status:'idle'}),save:async (_id:string,data:Uint8Array)=>{await writeFile(path,data);ctx.pageCount=2}}
+ const bridge=createDocsBridge(host as never,'file',{language:'en'} as never,()=>{})
+ ctx.doc!.filePath='/files/file/a.docx'
+ ctx.hostLifecycle=bridge.lifecycle
+ window.desktop={saveDocx:bridge.api.saveDocx} as never
+ editor.on('update',()=>{ctx.dirtyRef.current=true;bridge.lifecycle.edited()})
+ editor.commands.insertContent('Saved body marker')
+ expect(await save(ctx,false,false)).toBe(true)
+ expect(ctx.saveIncompleteRef.current).toBe(false)
+ expect(bridge.getState().dirty).toBe(false)
+ const zip=await JSZip.loadAsync(await readFile(path))
+ expect(await zip.file('word/document.xml')!.async('string')).toContain('Saved body marker')
+ editor.commands.insertContent('Newer body draft')
+ expect(bridge.getState().dirty).toBe(true)
+ expect(await zip.file('word/document.xml')!.async('string')).not.toContain('Newer body draft')
+ })
+
+it('retains the pageCount fence for a non-final section header', async () => {
+ const {ctx}=await fixture(false)
+ const {captureSaveMetadata}=await import('../src/renderer/save-metadata')
+ ctx.pageCount=1
+ ctx.sectionHfEdits={'-1:header:first':{text:'Total \uE000',pageNumber:false}} as never
+ const snapshot=captureSaveMetadata(ctx)
+ ctx.pageCount=2
+ expect(snapshot.changed(ctx)).toBe(true)
+ expect(snapshot.changedFields(ctx)).toEqual(['pageCount'])
+})
+
+it('unlink-only layout changes are not serialization changes, but new header intents still fence', async () => {
+ const {ctx}=await fixture(false)
+ const {captureSaveMetadata}=await import('../src/renderer/save-metadata')
+ ctx.pageCount=1
+ ctx.sectionHfEdits={'-1:header':{text:'Total \uE000',pageNumber:false}} as never
+ ctx.hfLinks={'-1:header':true} as never
+ const snapshot=captureSaveMetadata(ctx)
+ ctx.pageCount=2
+ expect(snapshot.changed(ctx)).toBe(false)
+ ctx.hfLinks={}
+ expect(snapshot.changed(ctx)).toBe(true)
+ expect(snapshot.changedFields(ctx)).toEqual(['hfLinks'])
 })
