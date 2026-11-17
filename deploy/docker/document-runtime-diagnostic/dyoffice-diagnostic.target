@@ -1,0 +1,5 @@
+[Unit]
+Description=Diagnostic-only container target; no application services
+Requires=basic.target dyoffice-probe.service
+After=basic.target dyoffice-probe.service
+AllowIsolate=yes
