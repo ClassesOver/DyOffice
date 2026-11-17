@@ -918,6 +918,7 @@ function RibbonInner({
   // trigger counts as "inside" and falls through to the trigger's onClick
   // toggle (closing it) instead of being treated as an outside press.
   useDismissablePopover(dropdown != null, () => setDropdown(null), {
+    escape: true,
     inside: () =>
       Array.from(document.querySelectorAll('[data-rb-panel]')).flatMap((panel) => [
         panel,

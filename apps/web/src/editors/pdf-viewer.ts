@@ -17,9 +17,12 @@ function pdfjs(): Promise<Pdfjs> {
 }
 
 /** Draw each page into the host. Annotation, text edit, reorder, and redaction are not offered. */
-export async function mountPdfEditor(host: HTMLElement, bytes: Uint8Array) {
+export async function mountPdfEditor(host: HTMLElement, bytes: Uint8Array, signal?: AbortSignal) {
   if (bytes.byteLength > 64 * 1024 * 1024) throw new Error('PDF_RENDER_LIMIT')
+  const check = () => { if (signal?.aborted) throw new DOMException('PDF rendering cancelled', 'AbortError') }
+  check()
   const lib = await pdfjs()
+  check()
   const task = lib.getDocument({
     data: bytes.slice(),
     ...PDF_OPEN_OPTIONS,
@@ -27,14 +30,21 @@ export async function mountPdfEditor(host: HTMLElement, bytes: Uint8Array) {
     cMapPacked: true,
     standardFontDataUrl: new URL('/pdfjs/standard_fonts/', location.origin).href,
   })
+  let destruction: Promise<void> | undefined
+  const destroy = () => destruction ??= Promise.resolve(task.destroy())
+  const cancel = () => { void destroy().catch(() => {}) }
+  signal?.addEventListener('abort', cancel, {once: true})
   host.replaceChildren()
   const pages: { page: number, width: number, height: number, text: string }[] = []
   try {
     const doc = await task.promise
+    check()
     if (doc.numPages > 100) throw new Error('PDF_RENDER_LIMIT')
     let totalPixels = 0
     for (let number = 1; number <= doc.numPages; number += 1) {
+      check()
       const page = await doc.getPage(number)
+      check()
       const viewport = page.getViewport({ scale: 1 })
       const pixels = Math.ceil(viewport.width) * Math.ceil(viewport.height)
       totalPixels += pixels
@@ -44,7 +54,9 @@ export async function mountPdfEditor(host: HTMLElement, bytes: Uint8Array) {
       canvas.width = Math.floor(viewport.width)
       canvas.height = Math.floor(viewport.height)
       await page.render({ canvas, viewport }).promise
+      check()
       const content = await page.getTextContent()
+      check()
       const text = content.items.map((item) => ('str' in item ? item.str : '')).join('')
       const caption = document.createElement('p')
       caption.className = 'pdf-text'
@@ -55,10 +67,11 @@ export async function mountPdfEditor(host: HTMLElement, bytes: Uint8Array) {
       pages.push({ page: number, width: viewport.width, height: viewport.height, text })
     }
   } catch (error) {
-    host.replaceChildren()
+    if (!signal?.aborted) host.replaceChildren()
     throw error
   } finally {
-    await task.destroy()
+    signal?.removeEventListener('abort', cancel)
+    await destroy()
   }
   return { pages }
 }

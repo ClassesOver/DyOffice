@@ -68,7 +68,7 @@ export async function parseOfficePreview(bytes:Uint8Array,format:'xlsx'|'pptx'):
 export function DocumentPreview({fileId,name,format,request}:{fileId:string;name:string;format:'docx'|'xlsx'|'pptx'|'pdf';request:SettingsRequest}){
  const [pages,setPages]=useState<PreviewPage[]>([]),[url,setUrl]=useState(''),[error,setError]=useState(''),[busy,setBusy]=useState(true)
  const host=useRef<HTMLDivElement>(null)
- useEffect(()=>{let alive=true;const abort=new AbortController();setPages([]);setUrl('');setError('');setBusy(true)
+ useEffect(()=>{let alive=true;const abort=new AbortController();const target=host.current;setPages([]);setUrl('');setError('');setBusy(true)
  void(async()=>{try{
   const metadata=await request<Metadata>(`/api/v1/files/${encodeURIComponent(fileId)}`)
   const endpoint=resolvePreviewContentUrl(fileId,metadata);if(!alive)return;setUrl(endpoint)
@@ -82,10 +82,10 @@ export function DocumentPreview({fileId,name,format,request}:{fileId:string;name
   while(true){const {done,value}=await reader.read();if(done)break;size+=value.byteLength;if(size>limit){await reader.cancel();throw Error('文件超过预览大小限制。')}chunks.push(value)}
   const bytes=new Uint8Array(size);let offset=0;for(const chunk of chunks){bytes.set(chunk,offset);offset+=chunk.byteLength}
   if(!alive)return
-  if(format==='pdf'){const {mountPdfEditor}=await import('../editors/pdf-viewer');if(alive&&host.current)await mountPdfEditor(host.current,bytes)}
+  if(format==='pdf'){const {mountPdfEditor}=await import('../editors/pdf-viewer');if(alive&&target)await mountPdfEditor(target,bytes,abort.signal)}
   else {const result=await parseOfficePreview(bytes,format);if(alive)setPages(result)}
  }catch{if(alive)setError('无法生成只读预览，可下载原件查看。')}finally{if(alive)setBusy(false)}})()
- return()=>{alive=false;abort.abort();host.current?.replaceChildren()}
+ return()=>{alive=false;abort.abort();target?.replaceChildren()}
  },[fileId,format,request])
  return <section style={{height:'100%',overflow:'auto',padding:24}}><Card title={name} extra={url&&<Button href={url} download={name}>下载原件</Button>}>
  <Alert type="info" showIcon title="只读预览" description={format==='pdf'?'仅显示原始 PDF 页面，不提供编辑。':'仅提取文本与缓存数值，不执行公式或外部连接，不保证原始排版。每张工作表最多显示 200 行、200 列。'}/>

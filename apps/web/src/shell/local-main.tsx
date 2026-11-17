@@ -28,6 +28,7 @@ import {SourcesPanel} from './SourcesPanel'
 import {createSourceWorkspaceSession} from './source-workspace-session'
 import blankDocx from '../../../shell/build/shell-new/blank.docx?url'
 
+import {hideAccountRecoveryPortals} from './account-recovery-portals'
 import {createLocalShellClient,type SessionEndReason} from './local-client'
 import {createLocalAdminClient} from './local-admin-client'
 import {createLocalSessionsClient} from './local-sessions-client'
@@ -165,7 +166,7 @@ function Login({done}:{done:()=>void}){
 function Root(){
  const [state,setState]=useState<'loading'|'login'|'ready'|'error'>('loading'),[error,setError]=useState(''),[recovery,setRecovery]=useState<SessionEndReason|null>(null)
  useEffect(()=>client.onSessionEnded(reason=>{if(user)setRecovery(current=>current??reason)}),[])
- useEffect(()=>{if(!recovery)return;const portals=[...document.querySelectorAll<HTMLElement>('.ant-modal-root,.ant-dropdown')].map(node=>({node,inert:node.inert,visibility:node.style.visibility,display:node.style.display}));for(const {node} of portals){node.inert=true;node.style.visibility='hidden';node.style.display='none'}return()=>{for(const {node,inert,visibility,display} of portals){node.inert=inert;node.style.visibility=visibility;node.style.display=display}}},[recovery])
+ useEffect(()=>{if(recovery)return hideAccountRecoveryPortals()},[recovery])
  useEffect(()=>{void restore().then(()=>setState('ready')).catch(e=>{if(e.status===401)setState('login');else{setError(e.message);setState('error')}})},[])
  if(state==='loading')return <main className="web-login">正在加载个人工作区…</main>
  if(state==='error')return <main className="web-login" role="alert"><p>{error}</p><button onClick={()=>location.reload()}>重试</button><button onClick={()=>void logout().catch(e=>setError(e.message))}>退出登录</button></main>
