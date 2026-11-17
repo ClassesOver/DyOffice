@@ -40,7 +40,7 @@ import { linkTarget } from './editor/link-actions'
 import { FieldDialog } from './components/FieldDialog'
 import { markdownPasteHtml } from './editor/markdown-paste'
 import { pasteTextSlice, singleCellPasteText } from './editor/paste-text'
-import { pasteRemoteImages } from './editor/paste-actions'
+import { insertBlobImage, pasteRemoteImages } from './editor/paste-actions'
 import {
   imageFilesFromDataTransfer,
   insertImageFilesAtCoords,
@@ -1487,14 +1487,8 @@ export function App({ host }: { host?: { desktopActionsAvailable?: boolean; read
         // image-only copies keep the bitmap even when text/plain carries the
         // source URL (browser "Copy image" does that) — Word pastes the picture
         if (imageFile && (!text.trim() || imageOnlyHtml)) {
-          const reader = new FileReader()
-          reader.onload = () => {
-            const ed = editorRef.current
-            if (ed && typeof reader.result === 'string') {
-              void insertImageFromDataUrl(ed, reader.result, 'Image (pasted)')
-            }
-          }
-          reader.readAsDataURL(imageFile)
+          const ed = editorRef.current
+          if (ed) insertBlobImage(ed, imageFile)
           return true
         }
         // bitmap-less web image copy: fetch the referenced image(s) through the

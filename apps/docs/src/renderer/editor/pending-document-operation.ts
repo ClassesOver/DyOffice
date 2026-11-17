@@ -13,7 +13,7 @@ export function pendingDocumentOperation(editor: Editor) {
   }) => {
     if (transaction.getMeta('preventUpdate') !== undefined) replaced = true
   }
-  const current = () => !replaced && !editor.isDestroyed
+  const current = () => !replaced && !editor.isDestroyed && editor.isEditable
   editor.on('transaction', onTransaction)
   return { current, dispose: () => editor.off('transaction', onTransaction) }
 }

@@ -113,7 +113,7 @@ function htmlText(html: string): string {
   }
 }
 
-function insertBlobImage(editor: Editor, blob: Blob): void {
+export function insertBlobImage(editor: Editor, blob: Blob): void {
   const { current, dispose } = pendingDocumentOperation(editor)
   const reader = new FileReader()
   reader.onerror = reader.onabort = () => dispose()

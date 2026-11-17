@@ -405,13 +405,14 @@ export async function insertImageFromDataUrl(
   label = t('ribbonPicture'),
   canInsert: () => boolean = () => !editor.isDestroyed,
 ): Promise<boolean> {
+  if (editor.isDestroyed || !editor.isEditable || !canInsert()) return false
   const m = /^data:([^;]+);base64,(.*)$/s.exec(dataUrl)
   if (!m) return false
   const mime = m[1]
   if (!/^image\/(png|jpeg|gif)$/.test(mime)) return false
   try {
     const natural = await imageSizeOf(dataUrl)
-    if (editor.isDestroyed || !canInsert()) return false
+    if (editor.isDestroyed || !editor.isEditable || !canInsert()) return false
     const scale = Math.min(1, MAX_IMAGE_WIDTH_PX / natural.width)
     insertPictureAtSelection(editor, {
       dataUrl,
