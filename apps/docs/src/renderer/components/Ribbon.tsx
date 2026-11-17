@@ -1,3 +1,4 @@
+import { applyPictureBytes as replacePictureBytes } from '../editor/apply-picture-bytes'
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import type { Lang } from '@genoffice/i18n'
@@ -1241,39 +1242,7 @@ function RibbonInner({
    * keep working. Images not yet saved (genImage) just update their pending payload.
    * Display size keeps the current width; height adapts to the new image's aspect ratio.
    */
-  const applyPictureBytes = async (dataUrl: string) => {
-    if (!canEdit) return
-    const m = /^data:(image\/(?:png|jpeg|gif));base64,(.*)$/s.exec(dataUrl)
-    if (!m) return
-    const attrs = editor.getAttributes('docProtected')
-    if (attrs?.blockType !== 'image') return
-    try {
-      const natural = await imageSizeOf(dataUrl)
-      const currentW = Number(attrs.imageWidthPx) || Math.min(natural.width, 620)
-      const w = Math.max(1, Math.round(currentW))
-      const h = Math.max(1, Math.round((currentW * natural.height) / natural.width))
-      const isOriginal = attrs.docxIndex !== null && attrs.docxIndex !== undefined
-      editor
-        .chain()
-        .focus()
-        .updateAttributes('docProtected', {
-          imageDataUrl: dataUrl,
-          imageWidthPx: w,
-          imageHeightPx: h,
-          // The new bytes are the full picture (crop/cutout bake destructively) and
-          // the replace pipeline strips a:srcRect on save — drop a Word-authored
-          // crop/fill window or it would keep clipping the new image until reload
-          imageCrop: null,
-          imageFillRect: null,
-          ...(isOriginal
-            ? { imageReplace: { base64: m[2], mime: m[1] } }
-            : { genImage: { base64: m[2], mime: m[1], widthPx: w, heightPx: h } }),
-        })
-        .run()
-    } catch {
-      /* image decode failed: keep the original untouched */
-    }
-  }
+  const applyPictureBytes = (dataUrl: string) => replacePictureBytes(editor, dataUrl, canEdit)
 
   const replacePicture = async () => {
     const picked = await window.desktop.pickImage()
