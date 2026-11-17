@@ -140,7 +140,8 @@ export function createEditorBridge({ fetchImpl = fetch, origin, fileId, editorId
   }
   async function receiveCommand(ws: Socket, attempt: number, message: RealtimeCommandDelivery) {
     const registered = registration, signal = commandAbort.signal
-    if (!commandTarget || !registered || commandPending || delivered.has(message.envelope.commandId) || delivered.size >= 64 ||
+    if (delivered.size >= 64) { if (socket === ws) { epoch++; stopSocket(); reconnect() }; return }
+    if (!commandTarget || !registered || commandPending || delivered.has(message.envelope.commandId) ||
       message.connectionId !== registered.connectionId || message.epoch !== registered.epoch || message.editorId !== editorId ||
       message.envelope.fileId !== fileId || message.envelope.baseRevision !== headRevision || message.envelope.baseRevision !== registered.baseRevision ||
       message.envelope.editorGeneration !== registered.editorGeneration || message.envelope.leaseEpoch !== registered.leaseEpoch ||

@@ -154,3 +154,21 @@ test('disconnect during command acceptance aborts the handler signal and suppres
  resolve(true);await new Promise(r=>setTimeout(r,10))
  assert.equal(socket.sent.some(m=>m.type==='ack'),false)
 })
+
+
+test('the bounded delivery-id cache reconnects instead of silently rejecting all later commands', async t=>{
+ const f=fixture({commandTarget:{registration:()=>({baseRevision:revision,editorGeneration:0,leaseEpoch:1,capabilities:['docx.append']}),onCommand:async()=>true}})
+ t.after(()=>f.bridge.dispose())
+ await waitFor(()=>f.sockets.length)
+ const socket=f.sockets[0];socket.open();socket.message({type:'state',headRevision:revision,generation:1,lease})
+ await waitFor(()=>socket.sent.some(message=>message.type==='register'))
+ const registration=socket.sent.find(message=>message.type==='register'),connectionId='66666666-6666-4666-8666-666666666666',epoch='77777777-7777-4777-8777-777777777777'
+ socket.message({...registration,type:'registered',connectionId,epoch})
+ const command=()=>({type:'command',connectionId,epoch,editorId,deliveryId:crypto.randomUUID(),claimId:crypto.randomUUID(),digest:'d'.repeat(64),envelope:{commandId:crypto.randomUUID(),fileId,baseRevision:revision,editorGeneration:0,leaseEpoch:1,argsHash:'a'.repeat(64),payload:{toolName:'docx.append',arguments:{}}}})
+ for(let i=0;i<64;i++){socket.message(command());await Promise.resolve();await Promise.resolve()}
+ assert.equal(socket.sent.filter(message=>message.type==='ack').length,64)
+ socket.message(command())
+ await waitFor(()=>f.sockets.length===2)
+ assert.equal(socket.readyState,3)
+ assert.equal(f.sockets[1].sent.length,0,'no command is automatically replayed on a new connection')
+})

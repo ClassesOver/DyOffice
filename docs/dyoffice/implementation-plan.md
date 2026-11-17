@@ -351,6 +351,8 @@ docs/dyoffice/               当前计划及 inventory/ evidence/ adr/
 
 **当前验收（2026-11-17）：** HTTP JSON/PostgreSQL、凭据版本管理、草稿/发布与管理界面已实现并通过本地专项；MySQL/StarRocks 适配器仍缺客户实库与 SQL TLS 验收，可见浏览器亦受宿主权限阻塞，故整体 T15 不勾满。大结果仅返回有界快照，不自动归档到工作区。见 [当前证据](evidence/t15-source-management.md)。
 
+**个人工作区数据源工具（2026-11-17）：** 已提供仅按当前工作区授权的 list/describe/query/save_result/read_result、冻结结果引用、幂等保存、JSON 下载及 Home 数据结果入口；默认每批读 1,000 行，保存不重跑查询。只覆盖受限小结果，并非全量导出/Rust 引擎或 T16。见 [工具与隔离验收](evidence/workspace-source-tools.md)。
+
 ### T16 附件问答、检索引用与报告闭环（已取消）
 
 **用户范围决定（2026-11-17）：T16 不做。** 以下保留原计划供追溯，不作为当前交付项，也不把取消标成实现通过。后续里程碑中涉及 T16 的附件检索/报告闭环相应排除，T15 查询来源元数据仍保留。
@@ -367,15 +369,17 @@ docs/dyoffice/               当前计划及 inventory/ evidence/ adr/
 
 ### T17 WS 编辑器桥与重连
 
-**依赖：** T06/T14。**文件：** `modules/realtime/{gateway,sessions,dispatch}.ts`、`packages/browser-host/src/editor-bridge.ts`、`test/integration/realtime.test.ts`、`test/e2e/reconnect.spec.ts`。
+**依赖：** T06/T14。**文件：** `modules/realtime/{gateway,sessions,dispatch}.ts`、`packages/browser-host/src/editor-bridge.ts`、`test/local-integration/{realtime,realtime-tls}.test.mjs`、`test/unit/editor-bridge-reconnect.test.mjs`。
 
 **接口：** `registerEditor()`、`dispatchToEditor(principal,command)`；消息 schema 使用 T01，不复制新状态机。
 
-- [ ] 测试跨用户订阅、错误 Origin、票据重用、撤销会话、缓冲超限、旧 generation、断线重连重复命令、两页争抢租约。
-- [ ] 对应测试 RED。
-- [ ] 实现同源 WSS、单次票据、逐消息授权、心跳/缓冲限额；断线后查 journal 再协调，不盲重放写入。
+- [x] 测试跨用户订阅、错误 Origin、票据重用、撤销会话、缓冲超限、旧 generation、断线重连重复命令、两页争抢租约。
+- [x] 对应测试 RED。
+- [x] 实现同源 WSS、单次票据、逐消息授权、心跳/缓冲限额；断线后查 journal 再协调，不盲重放写入。
 - [ ] GREEN；关闭 WS 后 HTTP 保存和内置模型流仍工作；依赖桥接的能力明确降级。
-- [ ] 提交 `feat(realtime): add scoped editor command bridge`。
+- [x] 提交 `feat(realtime): add scoped editor command bridge`。
+
+**当前验收（2026-11-17）：** 受控 T14 durable claim 派发与精确传输确认、HTTP applied/bind/T06 回执、真实 TLS/WSS、离线 HTTP 保存与重连专项已通过。默认三编辑器只接通知，不自动开放工具写入；可见浏览器验收受宿主 ownership 拒绝，外部真实模型调用亦未测，故不把整项企业上线验收勾满。见 [当前证据](evidence/t17-realtime-bridge.md)。
 
 ### T18 出站 HTTP MCP 与全局集成控制
 
