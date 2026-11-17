@@ -65,6 +65,7 @@ export function createTestDocumentExecutionBoundary(ports:DocumentExecutionPorts
    if(!grant||typeof grant!=='object'||Object.keys(grant).sort().join(',')!=='granted,reservationId'||grant.granted!==true||grant.reservationId!==attemptKey)throw failure('DOCUMENT_RESERVATION_DENIED')
    reserved=true
    await verify('before_start');check();startAttempted=true
+   ack(await work(()=>ports.reservations.startIntent(reservation)))
    const candidate=validateExecutionHandle(await work(()=>ports.backend.start(request,bytes,controller.signal)))
    for(const key of ['deploymentId','jobId','attempt','jobEpoch','runtimeDigest','profileId'] as const)if(candidate[key]!==request[key])throw failure('DOCUMENT_INSTANCE_MISMATCH')
    // Never call stop with an untrusted/mismatched candidate.

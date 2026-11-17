@@ -14,6 +14,8 @@ export interface DocumentExecutionPorts {
   */
  reservations:{
   reserve(reservation:Reservation,request:DocumentExecutionRequest):Promise<ReservationGrant>
+  /** Durable CAS before backend launch; unknown outcome must retain, never notStarted release. */
+  startIntent(reservation:Reservation):Promise<void>
   bind(reservation:Reservation,handle:ExecutionHandle):Promise<void>
   retain(reservation:Reservation,reason:string):Promise<void>
   release(reservation:Reservation,evidence:{notStarted:true}|{stop:StopObservation}):Promise<void>
