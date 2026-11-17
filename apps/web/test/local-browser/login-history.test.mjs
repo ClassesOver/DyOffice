@@ -5,6 +5,7 @@ import {randomUUID} from 'node:crypto'
 import {mkdir} from 'node:fs/promises'
 import {expect} from '@playwright/test'
 import {launchTestBrowser} from '../helpers/browser.mjs'
+import {reportLoginDom} from '../helpers/login-dom-diagnostics.mjs'
 import {phaseDiagnostics} from '../helpers/phase-diagnostics.mjs'
 import {accountAction} from '../helpers/workspace-ui.mjs'
 import {fileFixture} from '../helpers/files.mjs'
@@ -34,7 +35,7 @@ test('original account login history displays only its private bounded projectio
    void response.catch(()=>diagnostic.report())
    diagnostic.stage('login-click');await page.getByRole('button',{name:'登录',exact:true}).click()
    diagnostic.stage('login-response');return await response
-  } catch(error) {diagnostic.report();throw error}
+  } catch(error) {await reportLoginDom(page);diagnostic.report();throw error}
  }
  assert.equal((await sign('alice','wrong password phrase')).status(),401)
  assert.equal((await sign('bob','another wrong password phrase')).status(),401)
