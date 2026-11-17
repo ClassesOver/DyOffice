@@ -1,0 +1,14 @@
+[Unit]
+Description=Fixed benign zbus container diagnostic; never document execution
+Requires=dbus.service
+After=dbus.service
+[Service]
+Type=oneshot
+ExecStart=/bin/sh /opt/dyoffice-diagnostic/run-probe.sh
+TimeoutStartSec=40
+KillMode=control-group
+RemainAfterExit=yes
+Restart=no
+StandardOutput=journal+console
+StandardError=journal+console
+UMask=0077
