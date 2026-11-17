@@ -1,0 +1,15 @@
+**/node_modules
+**/.git
+**/.env
+**/.env.*
+**/secrets
+**/tls
+**/target
+**/dist
+**/dist-docs
+**/dist-sheets
+**/dist-slides
+**/test-results
+**/playwright-report
+
+**/*.env

@@ -1,0 +1,8 @@
+secrets/
+tls/
+.env
+ai/provider-profiles.json
+host/*.env
+
+# Required non-secret template must survive a clean clone.
+!.env.example

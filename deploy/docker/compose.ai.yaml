@@ -1,0 +1,12 @@
+# Optional overlay; configure real provider entries before enabling.
+services:
+  web:
+    environment:
+      DYOFFICE_PROVIDER_GATEWAY_PROFILES: /run/config/provider-profiles.json
+    secrets:
+      - config_keyring
+    volumes:
+      - ./ai/provider-profiles.json:/run/config/provider-profiles.json:ro
+secrets:
+  config_keyring:
+    file: ./secrets/config_keyring

@@ -1,0 +1,15 @@
+# Host architecture ONLY: do not start compose web/https for native Sheets.
+services:
+  db:
+    ports: ['127.0.0.1:5432:5432']
+  redis:
+    image: ${REDIS_IMAGE:?Set your own mirrored official Redis 7.4 image}
+    command: [redis-server, --appendonly, 'yes', --protected-mode, 'no']
+    # This dependency is for a trusted, single-user test host ONLY.
+    # It is not published on external interfaces; unrelated local processes can access it.
+    ports: ['127.0.0.1:6379:6379']
+    volumes: [redis:/data]
+    networks: [backend]
+    restart: unless-stopped
+volumes:
+  redis: {}
