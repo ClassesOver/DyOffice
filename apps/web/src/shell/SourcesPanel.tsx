@@ -18,10 +18,11 @@ export function SourcesPanel({ client, resultsClient, onClose, presentation = 'd
   const [detail, setDetail] = useState<SourceDetail | null>(null), [latest, setLatest] = useState<SourceDetail | null>(null)
   const [missing, setMissing] = useState(false)
   const [draft, setDraft] = useState<Draft>(empty), [confirmDelete, setConfirmDelete] = useState(false)
+  const [queryFailed, setQueryFailed] = useState(false)
   const [result, setResult] = useState<QuerySnapshot | null>(null), [sql, setSql] = useState('SELECT 1 AS value')
   const [capture, setCapture] = useState<SourceToolQueryOutcome | null>(null), [savedResult, setSavedResult] = useState<WorkspaceSourceResultArtifact | null>(null)
   const [resultName, setResultName] = useState('查询结果'), [resultBusy, setResultBusy] = useState(false)
-  const saveIntent = useRef<{ resultId: string; commandId: string; name: string } | null>(null)
+  const saveIntent = useRef<{ resultId: string; commandId: string; name: string; unknown: boolean } | null>(null)
   const [message, setMessage] = useState(''), [error, setError] = useState(''), [, tick] = useState(0)
   const alive = useRef(true), busy = client.getState().pending || resultBusy, unknown = client.getState().unknownWrite
   const inputRef = useRef<InputRef>(null)
@@ -67,7 +68,7 @@ export function SourcesPanel({ client, resultsClient, onClose, presentation = 'd
   }
   async function select(sourceId: string) {
     const value = await client.detail(sourceId)
-    if (alive.current) { setDetail(value); setDraft(fromDetail(value)); setLatest(null); setResult(null); setCapture(null); setSavedResult(null); saveIntent.current = null; setConfirmDelete(false) }
+    if (alive.current) { setDetail(value); setDraft(fromDetail(value)); setLatest(null); setResult(null); setQueryFailed(false); setCapture(null); setSavedResult(null); saveIntent.current = null; setConfirmDelete(false) }
   }
   async function save() {
     if (legacyHttp || draft.kind === 'http') throw Error('已有 HTTP 连接仅支持只读查看，请新建数据库连接。')
@@ -131,24 +132,33 @@ export function SourcesPanel({ client, resultsClient, onClose, presentation = 'd
           {draft.kind !== 'http' && <label className="set-field">只读 SQL<Input.TextArea aria-label="只读 SQL" rows={4} spellCheck={false} value={sql} onChange={e => setSql(e.target.value)} /></label>}
           <Button autoInsertSpace={false} disabled={busy || unknown || unresolvedResult || !detail.source.enabled} onClick={() => void operation(async () => {
             if (unresolvedResult) return
-            setResultBusy(true)
+            setResultBusy(true); setQueryFailed(false)
             try {
               const query = draft.kind === 'http' ? {} : { sql }
               if (resultsClient) {
                 const captured = await resultsClient.query(detail.source.sourceId, query)
                 if (alive.current) { setCapture(captured); setSavedResult(null); saveIntent.current = null; setResultName(detail.source.name + '查询结果'); setResult({ version: 1, sourceId: captured.artifact.sourceId, sourceVersion: captured.artifact.sourceVersion, schema: captured.schema, timezone: captured.timezone, rows: captured.preview, truncated: captured.sourceTruncated, sha256: captured.sha256 }) }
               } else { const snapshot = await client.query(detail.source.sourceId, query); if (alive.current) { setResult(snapshot); setCapture(null) } }
-            } catch { throw Error('查询未完成，请检查当前工作区的连接授权与连接状态。') }
+            } catch { if (alive.current) setQueryFailed(true); throw Error('查询未完成，请检查当前工作区的连接授权与连接状态。') }
             finally { if (alive.current) setResultBusy(false) }
           })}>执行已发布查询</Button>
         </section>}
-        {result && <section aria-label="查询结果"><p>来源 {result.sourceId} r{result.sourceVersion} · 时区 {result.timezone} · {capture?.totalRows ?? result.rows.length} 行{result.truncated ? '（结果已截断）' : ''}</p><p className="source-hash">SHA-256 {result.sha256}</p>
+        {result && <section aria-label="查询结果">{queryFailed && <Alert type="warning" showIcon title="本次查询未完成，以下为上一次成功查询的结果；保存或下载仍对应该旧结果。"/>}<p>来源 {result.sourceId} r{result.sourceVersion} · 时区 {result.timezone} · {capture?.totalRows ?? result.rows.length} 行{result.truncated ? '（结果已截断）' : ''}</p><p className="source-hash">SHA-256 {result.sha256}</p>
           {capture && resultsClient && <div className="source-actions"><label>工作区结果名称<Input aria-label="工作区结果名称" value={resultName} disabled={resultBusy || !!saveIntent.current || !!savedResult} maxLength={200} onChange={event => setResultName(event.target.value)} /></label>
             <Button autoInsertSpace={false} disabled={busy || !!savedResult} onClick={() => void operation(async () => {
-              const intent = saveIntent.current ?? { resultId: capture.artifact.resultId, name: resultName, commandId: crypto.randomUUID() }
+              const intent = saveIntent.current ?? { resultId: capture.artifact.resultId, name: resultName, commandId: crypto.randomUUID(), unknown: false }
               saveIntent.current = intent; setResultBusy(true)
               try { const artifact = await resultsClient.save(intent.resultId, intent.name, intent.commandId); if (alive.current) { setSavedResult(artifact); setMessage('冻结结果已保存到当前个人工作区，未重新执行查询。') } }
-              catch { throw Error('保存结果未确认，可使用同一保存操作重试，系统不会重新查询。') }
+              catch (failure) {
+                const status = (failure as {status?: number})?.status
+                const stale = (failure as {code?: string})?.code === 'stale_session'
+                if (!intent.unknown && !stale && status !== undefined && status >= 400 && status < 500 && status !== 408) {
+                  saveIntent.current = null
+                  throw Error(status === 404 || status === 410 ? '冻结结果已失效或不可用，请重新执行查询后再保存。' : status === 413 ? '结果超过保存限制，请缩小查询范围后重新执行。' : status === 401 || status === 403 ? '当前会话无权保存此结果，请核对登录状态和授权。' : '保存请求被拒绝，请核对结果名称和查询范围后重试。')
+                }
+                intent.unknown = true
+                throw Error('保存结果未确认，可使用同一保存操作重试，系统不会重新查询。')
+              }
               finally { if (alive.current) setResultBusy(false) }
             })}>{savedResult ? '已保存到工作区' : saveIntent.current ? '确认保存结果' : '保存结果到工作区'}</Button>
             {savedResult && <Button autoInsertSpace={false} disabled={busy} onClick={() => void operation(async () => { const json = await resultsClient.download(savedResult.resultId); if (alive.current) offerSourceResultDownload(json, savedResult.resultId) })}>下载冻结结果 JSON</Button>}

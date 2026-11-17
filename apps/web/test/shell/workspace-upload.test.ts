@@ -66,3 +66,16 @@ test('the multi-file picker appends queued files and rejects oversized files bef
  await click('开始上传（3）')
  expect(upload.mock.calls.map(([file])=>file.name)).toEqual(['initial.docx','added.xlsx','added.pptx'])
 })
+
+test('browser reload warns while uploading and releases the guard after completion or unmount',async()=>{
+ let finish!:()=>void
+ const reloadProtected=()=>{const event=new Event('beforeunload',{cancelable:true});window.dispatchEvent(event);return event.defaultPrevented}
+ await mount([new File(['x'],'pending.pdf')],()=>new Promise<void>(resolve=>{finish=resolve}))
+ expect(reloadProtected()).toBe(false)
+ await click('开始上传（1）')
+ expect(reloadProtected()).toBe(true)
+ await act(async()=>finish())
+ expect(reloadProtected()).toBe(false)
+ await act(async()=>root.unmount())
+ expect(reloadProtected()).toBe(false)
+})

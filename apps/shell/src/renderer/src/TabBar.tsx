@@ -475,6 +475,8 @@ export function TabBar({hideSingleTabList=false,hideAppMenu=false}:{hideSingleTa
       )}
       <div
         className={`tab-strip ${dragVisual ? 'dragging' : ''} ${dockX !== null ? 'dock-target' : ''}`}
+        role="tablist"
+        aria-label={t('tabList')}
         ref={stripRef}
         // the strip, not the grabbed tab, owns the pointer capture: a torn-off
         // tab's element unmounts mid-gesture, and the moves must keep coming
@@ -502,6 +504,22 @@ export function TabBar({hideSingleTabList=false,hideAppMenu=false}:{hideSingleTa
           return (
             <div
               key={tab.id}
+              role="tab"
+              aria-label={tab.title}
+              aria-selected={tab.active}
+              tabIndex={tab.active ? 0 : -1}
+              onKeyDown={(event) => {
+                if (event.target !== event.currentTarget || event.altKey || event.ctrlKey || event.metaKey) return
+                let target = index
+                if (event.key === 'ArrowRight') target = (index + 1) % tabs.length
+                else if (event.key === 'ArrowLeft') target = (index + tabs.length - 1) % tabs.length
+                else if (event.key === 'Home') target = 0
+                else if (event.key === 'End') target = tabs.length - 1
+                else if (event.key !== 'Enter' && event.key !== ' ') return
+                event.preventDefault(); event.stopPropagation()
+                void window.aiOfficeTabs.activate(tabs[target].id)
+                stripRef.current?.querySelectorAll<HTMLElement>('.tab-item')[target]?.focus({preventScroll: true})
+              }}
               className={`tab-item ${tab.kind === 'home' ? 'tab-home' : ''} ${tab.active ? 'active' : ''} ${tab.dormant ? 'tab-dormant' : ''} ${dragVisual?.id === tab.id ? 'drag-source' : ''}`}
               // long file names ellipsize in the strip — hover reveals the
               // full title and where the file is (the close button's own tooltip still wins there)

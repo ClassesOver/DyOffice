@@ -1,7 +1,7 @@
 /** Local account API only. Never persists passwords, one-time codes or CSRF. */
 export type LocalManagedUser={id:string;username:string;displayName:string;status:string;roles:string[];requiresPasswordReset:boolean}
 export type PasswordAction={token:string;purpose:'activate'|'reset';expiresAt:string}
-export function createLocalAdminClient(send:typeof fetch=fetch){
+export function createLocalAdminClient(send:typeof fetch=fetch,onSessionExpired?:()=>void){
  const uuid=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
  const invalid=()=>new Error('服务器响应无法确认，请刷新状态；不要重复提交不确定的操作')
  function user(value:unknown):LocalManagedUser{
@@ -18,6 +18,10 @@ export function createLocalAdminClient(send:typeof fetch=fetch){
   let csrf:string|undefined
   if(method!=='GET'){const result=await request<{csrfToken:string}>('/api/v1/auth/csrf');csrf=result.csrfToken;if(typeof csrf!=='string'||!csrf)throw new Error('安全校验不可用，请重新登录')}
   const response=await send(path,{method,credentials:'same-origin',redirect:'error',cache:'no-store',headers:body===undefined?{}:{'Content-Type':'application/json','X-CSRF-Token':csrf!},body:body===undefined?undefined:JSON.stringify(body)})
+  if(response.status===401&&onSessionExpired){
+   if(path==='/api/v1/auth/reauth'){try{const identity=await send('/api/v1/auth/me',{credentials:'same-origin',cache:'no-store',redirect:'error'});if(identity.status===401)onSessionExpired()}catch{}}
+   else onSessionExpired()
+  }
   if(!response.ok)throw Object.assign(new Error(response.status===401?'会话已过期，请重新登录':response.status===403?'无权限或需要重新验证管理员密码':response.status===409?'操作冲突，请刷新用户状态后确认':response.status===429?'请求过于频繁，请稍后再试':'操作未完成，请检查输入；不要重复提交不确定的操作'),{status:response.status})
   if(noContent&&response.status!==204)throw invalid()
   return (response.status===204?undefined:await response.json()) as T

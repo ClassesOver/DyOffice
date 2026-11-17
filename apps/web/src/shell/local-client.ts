@@ -1,4 +1,5 @@
 import type {WebFile} from './web-home-bridge'
+export type SessionEndReason='expired'|'logout_failed'
 /** Local mode only: HttpOnly session cookies, ephemeral CSRF, no bearer/JSON fallback. */
 export function createLocalShellClient(send:typeof fetch=fetch) {
  let csrf:string|undefined
@@ -6,6 +7,8 @@ export function createLocalShellClient(send:typeof fetch=fetch) {
  let generation=0
  let authTransition=false
  const pending=new Set<AbortController>()
+ const sessionListeners=new Set<(reason:SessionEndReason)=>void>()
+ function endSession(reason:SessionEndReason){invalidateSession();for(const listener of sessionListeners)listener(reason)}
  const stale=()=>Object.assign(new Error('登录状态已改变，请重新加载当前工作区。'),{code:'stale_session'})
  function assertCurrent(stamp:number){if(stamp!==generation)throw stale()}
  function invalidateSession(){
@@ -24,10 +27,10 @@ export function createLocalShellClient(send:typeof fetch=fetch) {
   try{
    const response=await send(path,{method,credentials:'same-origin',cache:'no-store',signal:controller.signal,headers:{...(write||sessionProof?{'X-CSRF-Token':sessionProof??csrf!}:{}),...(body!==undefined?{'Content-Type':binary?'application/octet-stream':'application/json'}:{})},...(body===undefined?{}:{body:binary?body:JSON.stringify(body)})})
    assertCurrent(stamp)
-   const value=response.status===204?undefined:await response.json()
+   const value=response.status===204?undefined:await response.json().catch(error=>{if(response.ok)throw error;return undefined})
    assertCurrent(stamp)
    if(!response.ok){
-    if(response.status===401&&path!=='/api/v1/auth/login'&&path!=='/api/v1/auth/change-password')invalidateSession()
+    if(response.status===401&&path!=='/api/v1/auth/login'&&path!=='/api/v1/auth/change-password')endSession('expired')
     else if(response.status===403)csrf=undefined
     const message=response.status===409&&path.startsWith('/api/v1/admin/config')?'配置版本冲突，请核对最新版本；当前草稿已保留。'
      :response.status===409&&path.startsWith('/api/v1/workspace/folders')?'文件夹操作冲突：请检查重名、非空目录或移动目标，再刷新重试。'
@@ -45,6 +48,8 @@ export function createLocalShellClient(send:typeof fetch=fetch) {
  }
  return {
   request,
+  endSession,
+  onSessionEnded(listener:(reason:SessionEndReason)=>void){sessionListeners.add(listener);return()=>{sessionListeners.delete(listener)}},
   async bindSession(expectedProof?:string){
    const stamp=generation
    const {csrfToken}=await request<{csrfToken:string}>('/api/v1/auth/session-proof')
@@ -55,8 +60,7 @@ export function createLocalShellClient(send:typeof fetch=fetch) {
     async request<T=unknown>(path:string,method='GET',body?:unknown){
      const result=await perform<T>(path,method,body,stamp,csrfToken)
      // A rotated cookie can arrive in another tab before its page navigates.
-     const current=await perform<{csrfToken:string}>('/api/v1/auth/session-proof','GET',undefined,stamp)
-     if(current.csrfToken!==csrfToken)throw stale()
+     try{const current=await perform<{csrfToken:string}>('/api/v1/auth/session-proof','GET',undefined,stamp);if(current.csrfToken!==csrfToken)throw stale()}catch(cause){throw Object.assign(stale(),{cause})}
      return result
     },
    }
@@ -73,7 +77,8 @@ export function createLocalShellClient(send:typeof fetch=fetch) {
    }catch(error){
     csrf=undefined
     const status=(error as {status?:number})?.status
-    passwordAction=status!==undefined&&status>=400&&status<500?'idle':'unknown'
+    if(status===401){try{await request('/api/v1/auth/me')}catch{}}
+    passwordAction=status!==undefined&&status>=400&&status<500&&status!==408?'idle':'unknown'
     throw error
    }
   },
@@ -87,6 +92,7 @@ export function createLocalShellClient(send:typeof fetch=fetch) {
    if(authTransition)throw new Error('登录状态正在更新。')
    authTransition=true;invalidateSession()
    try{await perform('/api/v1/auth/logout','POST')}
+   catch(error){endSession('logout_failed');throw error}
    finally{csrf=undefined;authTransition=false}
   },
   async homeRequest(path:string,method='GET',body?:unknown):Promise<unknown>{

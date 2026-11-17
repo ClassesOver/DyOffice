@@ -23,7 +23,7 @@ export function LocalPasswordForm({changePassword,reload,onCloseGuardChange}:{on
   try{await changePassword(current,next);setState('success');locked.current=false}
   catch(cause){
    const status=(cause as {status?:number})?.status
-   if(status!==undefined&&status>=400&&status<500){setState('error');locked.current=false;setError(status===401?'当前密码不正确或会话已失效，请核对后重试。':status===429?'请求过于频繁，请稍后再试。':status===400?'新密码不符合服务器策略，请使用未泄露的长短语。':'请求被拒绝，请重新加载并确认登录状态。')}
+   if(status!==undefined&&status>=400&&status<500&&status!==408){setState('error');locked.current=false;setError(status===401?'当前密码不正确或会话已失效，请核对后重试。':status===429?'请求过于频繁，请稍后再试。':status===400?'新密码不符合服务器策略，请使用未泄露的长短语。':'请求被拒绝，请重新加载并确认登录状态。')}
    else{setState('unknown');setError('无法确认密码是否已修改。请重新加载并检查登录状态；不要重复提交。')}
   }
  }

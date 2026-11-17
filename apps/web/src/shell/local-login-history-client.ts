@@ -1,7 +1,8 @@
 export type LoginHistoryEvent={occurredAt:string;outcome:'success'|'failure'|'throttled'}
-export function createLoginHistoryClient(send:typeof fetch=fetch){return {
+export function createLoginHistoryClient(send:typeof fetch=fetch,onSessionExpired?:()=>void){return {
  async list():Promise<LoginHistoryEvent[]>{
   const response=await send('/api/v1/auth/login-history',{credentials:'same-origin',cache:'no-store',redirect:'error'})
+  if(response.status===401)onSessionExpired?.()
   if(!response.ok)throw new Error(response.status===401?'会话已失效，请重新登录。':'登录历史暂不可用，请稍后刷新。')
   const data=await response.json()
   const invalid=()=>new Error('无法确认登录历史响应，请稍后刷新。')

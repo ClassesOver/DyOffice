@@ -148,3 +148,12 @@ test('namespace-aware preview retains input and expanded-entry byte limits', asy
  const bytes = await fixture.zip.generateAsync({type: 'uint8array', compression: 'DEFLATE'})
  await expect(parseOfficePreview(bytes, 'xlsx')).rejects.toThrow('文档解压大小超过')
 })
+
+test('spreadsheet preview accepts namespace prefixes for indexes, relationships and cell text',async()=>{
+ const zip=new JSZip(),spreadsheet='http://schemas.openxmlformats.org/spreadsheetml/2006/main'
+ zip.file('xl/workbook.xml',`<x:workbook xmlns:x="${spreadsheet}" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><x:sheets><x:sheet name="带前缀表" r:id="rId1"/></x:sheets></x:workbook>`)
+ zip.file('xl/_rels/workbook.xml.rels','<p:Relationships xmlns:p="http://schemas.openxmlformats.org/package/2006/relationships"><p:Relationship Id="rId1" Target="worksheets/sheet1.xml"/></p:Relationships>')
+ zip.file('xl/sharedStrings.xml',`<x:sst xmlns:x="${spreadsheet}"><x:si><x:t>共享文本</x:t></x:si></x:sst>`)
+ zip.file('xl/worksheets/sheet1.xml',`<x:worksheet xmlns:x="${spreadsheet}"><x:sheetData><x:row><x:c r="A1" t="s"><x:v>0</x:v></x:c><x:c r="B1" t="inlineStr"><x:is><x:t>行内文本</x:t></x:is></x:c><x:c r="C1"><x:f>1+1</x:f><x:v>2</x:v></x:c></x:row></x:sheetData></x:worksheet>`)
+ expect(await parseOfficePreview(await zip.generateAsync({type:'uint8array'}),'xlsx')).toEqual([{name:'带前缀表',rows:[['共享文本','行内文本','2']]}])
+})

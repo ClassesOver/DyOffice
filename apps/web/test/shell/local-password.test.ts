@@ -65,3 +65,15 @@ test('password close guard prevents leaving a pending write and confirms an unkn
   expect(confirm.mock.calls.flat().join('')).not.toContain('violet')
  }finally{f.root.unmount();confirm.mockRestore()}
 })
+
+test('HTTP 408 password result stays unknown and the form cannot resend',async()=>{
+ const change=vi.fn(async()=>{throw Object.assign(Error('timeout'),{status:408})}),f=await fixture(change)
+ try{f.fill();f.submit();await vi.waitFor(()=>expect(document.querySelector('[role=alert]')?.textContent).toContain('无法确认'));expect(f.form.querySelector('fieldset')?.disabled).toBe(true);f.submit();expect(change).toHaveBeenCalledOnce()}finally{f.root.unmount()}
+})
+test('HTTP 408 password write remains fenced across callers until the page reloads',async()=>{
+ const {createLocalShellClient}=await import('../../src/shell/local-client')
+ let writes=0
+ const client=createLocalShellClient(async path=>{if(String(path).endsWith('/csrf'))return new Response(JSON.stringify({csrfToken:'p'.repeat(43)}));writes++;return new Response('{}',{status:408})})
+ await expect(client.changePassword('old password','new long password')).rejects.toMatchObject({status:408})
+ await expect(client.changePassword('old password','new long password')).rejects.toThrow('无法确认');expect(writes).toBe(1)
+})

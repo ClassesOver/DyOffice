@@ -1,10 +1,10 @@
 export type LocalSession={id:string;current:boolean;createdAt:string;lastSeenAt:string;expiresAt:string}
 /** No cookies/tokens in JavaScript storage; read reconciliation precedes uncertain retry. */
-export function createLocalSessionsClient(send:typeof fetch=fetch){
+export function createLocalSessionsClient(send:typeof fetch=fetch,onSessionExpired?:()=>void){
  const states=new Map<string,'pending'|'unknown'>()
  const uuid=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
  const invalid=()=>new Error('无法确认会话操作结果，请刷新列表后核对。')
- async function request(path:string,options:RequestInit={}){const response=await send(path,{...options,credentials:'same-origin',cache:'no-store',redirect:'error'});if(!response.ok)throw Object.assign(new Error(response.status===401?'会话已失效，请重新登录。':response.status===403?'请求被拒绝，请刷新登录状态。':'请求未完成，请刷新列表核对。'),{status:response.status});return response}
+ async function request(path:string,options:RequestInit={}){const response=await send(path,{...options,credentials:'same-origin',cache:'no-store',redirect:'error'});if(response.status===401)onSessionExpired?.();if(!response.ok)throw Object.assign(new Error(response.status===401?'会话已失效，请重新登录。':response.status===403?'请求被拒绝，请刷新登录状态。':'请求未完成，请刷新列表核对。'),{status:response.status});return response}
  async function mutate(key:string,path:string,method:string){
   if(states.has(key)||states.has('others')||(key==='others'&&states.size>0))throw new Error('操作进行中或结果未知，请刷新列表后核对。')
   states.set(key,'pending')
@@ -14,7 +14,7 @@ export function createLocalSessionsClient(send:typeof fetch=fetch){
    const response=await request(path,{method,headers:{'X-CSRF-Token':csrfToken}})
    if(response.status!==204)throw invalid()
    states.delete(key)
-  }catch(error){const status=(error as {status?:number})?.status;if(status!==undefined&&status>=400&&status<500)states.delete(key);else states.set(key,'unknown');throw error}
+  }catch(error){const status=(error as {status?:number})?.status;if(status!==undefined&&status>=400&&status<500&&status!==408)states.delete(key);else states.set(key,'unknown');throw error}
  }
  return {
   async list():Promise<LocalSession[]>{

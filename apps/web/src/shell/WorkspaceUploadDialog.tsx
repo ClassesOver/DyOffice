@@ -1,6 +1,6 @@
 import {Alert,Button,Modal,Space,Tag,Typography,Upload} from 'antd'
 import {CheckCircleFilled,CloseCircleFilled,CloudUploadOutlined,DeleteOutlined,FileExcelOutlined,FileOutlined,FilePdfOutlined,FilePptOutlined,FileWordOutlined,LoadingOutlined} from '@ant-design/icons'
-import {useRef,useState} from 'react'
+import {useEffect,useRef,useState} from 'react'
 import './workspace-upload.css'
 type UploadItem={id:number;file:File;state:'queued'|'processing'|'success'|'error'|'rejected';error?:string}
 type WorkspaceUploadDialogProps={open:boolean;initialFiles?:File[];upload:(file:File)=>Promise<void>;onClose:()=>void}
@@ -10,6 +10,7 @@ const sizeLabel=(size:number)=>size<1024?`${size} B`:size<1024*1024?`${(size/102
 const formatIcons={docx:FileWordOutlined,xlsx:FileExcelOutlined,pptx:FilePptOutlined,pdf:FilePdfOutlined}
 export function WorkspaceUploadDialog({open,initialFiles=[],upload,onClose}:WorkspaceUploadDialogProps){
  const sequence=useRef(0),locked=useRef(false)
+ useEffect(()=>{const prevent=(event:BeforeUnloadEvent)=>{if(locked.current){event.preventDefault();event.returnValue=''}};window.addEventListener('beforeunload',prevent);return()=>window.removeEventListener('beforeunload',prevent)},[])
  function item(file:File):UploadItem{const error=!supported.test(file.name)?'不支持此格式':file.size>maxFileSize?'文件超过 32 MiB 限制':undefined;return {id:sequence.current++,file,state:error?'rejected':'queued',error}}
  const [items,setItems]=useState<UploadItem[]>(()=>initialFiles.map(item)),[busy,setBusy]=useState(false)
  const queued=items.filter(entry=>entry.state==='queued'),completed=items.filter(entry=>entry.state==='success').length,failed=items.filter(entry=>entry.state==='error').length

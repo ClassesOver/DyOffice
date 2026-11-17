@@ -28,7 +28,10 @@ import {SourcesPanel} from './SourcesPanel'
 import {createSourceWorkspaceSession} from './source-workspace-session'
 import blankDocx from '../../../shell/build/shell-new/blank.docx?url'
 
-import {createLocalShellClient} from './local-client'
+import {createLocalShellClient,type SessionEndReason} from './local-client'
+import {createLocalAdminClient} from './local-admin-client'
+import {createLocalSessionsClient} from './local-sessions-client'
+import {createLoginHistoryClient} from './local-login-history-client'
 import {ConfigProvider,theme as antdTheme,Dropdown,Modal,Button,Alert,Form,Input,Card,Typography} from 'antd'
 import logo from '../../../shell/src/renderer/src/assets/dyoffice-logo.svg'
 import zhCN from 'antd/locale/zh_CN'
@@ -43,6 +46,9 @@ import {LocalAdminPanel} from './LocalAdminPanel'
 import {PasswordActionForm} from './PasswordActionForm'
 import './config-polish.css'
 const client=createLocalShellClient()
+const adminClient=createLocalAdminClient(fetch,()=>client.endSession('expired'))
+const sessionsClient=createLocalSessionsClient(fetch,()=>client.endSession('expired'))
+const historyClient=createLoginHistoryClient(fetch,()=>client.endSession('expired'))
 const preferences=createPreferencesClient(client.request)
 const globalSettings=createGlobalSettingsClient(client.request)
 let userSkills: ReturnType<typeof createUserSkillsClient> | undefined
@@ -104,8 +110,8 @@ function WorkspacePageContent({page,onClose,onCloseGuardChange}:{page:WorkspaceP
   userSkills=createUserSkillsClient(bound.request);sourceWorkspace=workspace
   setSessionVersion(version=>version+1)
  }
- if(page==='settings'&&user)return <WorkspaceSettings user={user} load={preferences.getPreferences} save={preferences.updatePreferences} security={{changePassword:async(current,next)=>{const proof=await client.changePassword(current,next);await updateSession(proof).catch(()=>location.reload())},onCurrentRevoked:()=>{client.invalidateSession();location.replace('/')}}} skills={registerSkillsGuard=>userSkills&&<UserSkillsPanel key={sessionVersion} client={userSkills} onCloseGuardChange={registerSkillsGuard}/>} onLogout={()=>void logout().catch(e=>notice(e.message))} onClose={onClose} onCloseGuardChange={registerGuard}/>
- if(page==='users'&&user?.roles.includes('config_admin'))return <section className="workspace-panel"><LocalAdminPanel presentation="page" currentUserId={user.id} onSessionRotated={proof=>{client.invalidateCsrf();if(proof)void updateSession(proof).catch(e=>notice(e.message))}} onOwnAuthorityChanged={()=>{client.invalidateSession();location.replace('/')}} onClose={onClose} onCloseGuardChange={registerGuard}/></section>
+ if(page==='settings'&&user)return <WorkspaceSettings sessionsClient={sessionsClient} historyClient={historyClient} user={user} load={preferences.getPreferences} save={preferences.updatePreferences} security={{changePassword:async(current,next)=>{const proof=await client.changePassword(current,next);await updateSession(proof).catch(()=>client.endSession('expired'))},onCurrentRevoked:()=>{client.invalidateSession();location.replace('/')}}} skills={registerSkillsGuard=>userSkills&&<UserSkillsPanel key={sessionVersion} client={userSkills} onCloseGuardChange={registerSkillsGuard}/>} onLogout={()=>void logout().catch(e=>notice(e.message))} onClose={onClose} onCloseGuardChange={registerGuard}/>
+ if(page==='users'&&user?.roles.includes('config_admin'))return <section className="workspace-panel"><LocalAdminPanel client={adminClient} presentation="page" currentUserId={user.id} onSessionRotated={proof=>{client.invalidateCsrf();if(proof)void updateSession(proof).catch(e=>notice(e.message))}} onOwnAuthorityChanged={()=>{client.invalidateSession();location.replace('/')}} onClose={onClose} onCloseGuardChange={registerGuard}/></section>
  if(page==='global'&&user?.roles.includes('config_admin'))return <GlobalSettingsPanel client={globalSettings} onClose={onClose} presentation="page" onCloseGuardChange={registerGuard}/>
  if(page==='sources'&&sourceWorkspace)return <SourcesPanel key={sessionVersion} client={sourceWorkspace.sources} resultsClient={sourceWorkspace.results} onClose={onClose} presentation="page" onCloseGuardChange={registerGuard}/>
  if(page==='trash')return <WorkspaceTrash request={client.request} onChanged={notifyFilesChanged} onClose={onClose} presentation="page" onCloseGuardChange={registerGuard}/>
@@ -156,7 +162,19 @@ function Login({done}:{done:()=>void}){
  </Card></main>
 }
 
-function Root(){const [state,setState]=useState<'loading'|'login'|'ready'|'error'>('loading');const [error,setError]=useState('');useEffect(()=>{void restore().then(()=>setState('ready')).catch(e=>{if(e.status===401)setState('login');else{setError(e.message);setState('error')}})},[]);if(state==='loading')return <main className="web-login">正在加载个人工作区…</main>;if(state==='error')return <main className="web-login" role="alert"><p>{error}</p><button onClick={()=>location.reload()}>重试</button><button onClick={()=>void logout().catch(e=>setError(e.message))}>退出登录</button></main>;return state==='ready'?<LocaleProvider initial={initialLanguage} onError={error=>notice(error instanceof Error?error.message:String(error))}><Shell/></LocaleProvider>:<Login done={()=>setState('ready')}/>}
+function Root(){
+ const [state,setState]=useState<'loading'|'login'|'ready'|'error'>('loading'),[error,setError]=useState(''),[recovery,setRecovery]=useState<SessionEndReason|null>(null)
+ useEffect(()=>client.onSessionEnded(reason=>{if(user)setRecovery(current=>current??reason)}),[])
+ useEffect(()=>{if(!recovery)return;const portals=[...document.querySelectorAll<HTMLElement>('.ant-modal-root,.ant-dropdown')].map(node=>({node,inert:node.inert,visibility:node.style.visibility,display:node.style.display}));for(const {node} of portals){node.inert=true;node.style.visibility='hidden';node.style.display='none'}return()=>{for(const {node,inert,visibility,display} of portals){node.inert=inert;node.style.visibility=visibility;node.style.display=display}}},[recovery])
+ useEffect(()=>{void restore().then(()=>setState('ready')).catch(e=>{if(e.status===401)setState('login');else{setError(e.message);setState('error')}})},[])
+ if(state==='loading')return <main className="web-login">正在加载个人工作区…</main>
+ if(state==='error')return <main className="web-login" role="alert"><p>{error}</p><button onClick={()=>location.reload()}>重试</button><button onClick={()=>void logout().catch(e=>setError(e.message))}>退出登录</button></main>
+ return state==='ready'?<LocaleProvider initial={initialLanguage} onError={error=>notice(error instanceof Error?error.message:String(error))}>
+  <div inert={recovery?true:undefined} style={{display:recovery?'none':'contents'}}><Shell/></div>
+  {recovery&&<main className="dy-login account-session-recovery" role="alertdialog" aria-modal="true" aria-label="登录状态需要核对" onKeyDown={event=>{if(event.key==='Tab'){event.preventDefault();event.currentTarget.querySelector<HTMLButtonElement>('button')?.focus()}}} style={{position:'fixed',inset:0,zIndex:2000}}><Card className="dy-login-card"><Typography.Title level={4}>{recovery==='expired'?'会话已过期':'退出结果尚未确认'}</Typography.Title><Typography.Paragraph type="secondary">{recovery==='expired'?'请重新加载并核对登录状态，再继续使用工作区。':'退出请求未能确认，请重新加载并核对当前登录状态，不要重复提交。'}已打开的文档仍保留在当前页面；重新加载前请确认未保存的更改。</Typography.Paragraph><Button autoFocus type="primary" block onClick={()=>location.reload()}>重新加载并核对登录状态</Button></Card></main>}
+ </LocaleProvider>:<Login done={()=>setState('ready')}/>
+}
+
 installScreenTips()
 window.addEventListener('unhandledrejection',event=>{notice(event.reason instanceof Error?event.reason.message:String(event.reason));event.preventDefault()})
 function WebTheme({children}:{children:React.ReactNode}){

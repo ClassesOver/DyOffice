@@ -237,3 +237,40 @@ test('dirty source drafts block browser unload without opening a second confirma
  const clean=new Event('beforeunload',{cancelable:true});window.dispatchEvent(clean)
  expect(clean.defaultPrevented).toBe(false)
 })
+
+test.each([400,403,404,413,422])('a known frozen-result save rejection HTTP %i releases the intent so the user can correct or rerun',async status=>{
+ const artifact={resultId:'11111111-1111-4111-8111-111111111111',sourceId:'revenue',sourceVersion:1,rowCount:1,truncated:false,sha256:'b'.repeat(64),state:'pending'}
+ const resultsClient=createSourceResultsClient((async(_path:string,_method?:string,body:unknown)=>{const call=body as {name:string};if(call.name==='sources.query')return {artifact,schema:[],timezone:'UTC',preview:[],totalRows:0,sourceTruncated:false,sha256:artifact.sha256,nextOffset:null};throw Object.assign(Error('private backend detail'),{status})}) as Parameters<typeof createSourceResultsClient>[0])
+ const client=createSourcesClient((async(path:string)=>read(path)) as Request),host=document.createElement('div');document.body.append(host);const root=createRoot(host);roots.push(root)
+ await act(async()=>root.render(h(SourcesPanel,{client,resultsClient,onClose(){}})))
+ await act(async()=>[...host.querySelectorAll('button')].find(b=>b.textContent?.includes('营业收入'))!.click())
+ await click('执行已发布查询');await click('保存结果到工作区')
+ expect(input('工作区结果名称').disabled).toBe(false)
+ expect(button('执行已发布查询').disabled).toBe(false)
+ expect(host.textContent).not.toContain('保存结果未确认')
+ expect(host.textContent).not.toContain('private backend detail')
+})
+
+test('a failed new query labels the retained previous result so it cannot be mistaken for the latest SQL',async()=>{
+ let fail=false
+ await mount(async(path)=>{if(path.endsWith('/query')){if(fail)throw Object.assign(Error('bad query'),{status:400});return {version:1,sourceId:'revenue',sourceVersion:1,timezone:'UTC',schema:[{name:'amount',type:'number'}],rows:[{amount:42}],truncated:false,sha256:'b'.repeat(64)}}return read(path)})
+ await click('执行已发布查询');fail=true;await click('执行已发布查询')
+ expect(document.querySelector('[aria-label="查询结果"]')?.textContent).toContain('上一次成功查询的结果')
+ expect(document.querySelector('[aria-label="查询结果"]')?.textContent).toContain('42')
+})
+
+test.each(['stale_session','previous_unknown'])('a %s result preserves the original frozen-save command even if a later error has HTTP 403',async mode=>{
+ const calls:unknown[]=[]
+ const artifact={resultId:'11111111-1111-4111-8111-111111111111',sourceId:'revenue',sourceVersion:1,rowCount:1,truncated:false,sha256:'b'.repeat(64),state:'pending'}
+ const resultsClient=createSourceResultsClient((async(_path:string,_method?:string,body:unknown)=>{const call=body as {name:string;arguments:unknown};if(call.name==='sources.query')return {artifact,schema:[],timezone:'UTC',preview:[],totalRows:0,sourceTruncated:false,sha256:artifact.sha256,nextOffset:null};calls.push(call.arguments);if(mode==='previous_unknown'&&calls.length===1)throw Error('lost response');throw Object.assign(Error('unconfirmed'),{status:403,...(mode==='stale_session'?{code:'stale_session'}:{})})}) as Parameters<typeof createSourceResultsClient>[0])
+ const client=createSourcesClient((async(path:string)=>read(path)) as Request),host=document.createElement('div');document.body.append(host);const root=createRoot(host);roots.push(root)
+ await act(async()=>root.render(h(SourcesPanel,{client,resultsClient,onClose(){}})))
+ await act(async()=>[...host.querySelectorAll('button')].find(b=>b.textContent?.includes('营业收入'))!.click())
+ await click('执行已发布查询');await click('保存结果到工作区')
+ if(mode==='previous_unknown')await click('确认保存结果')
+ expect(input('工作区结果名称').disabled).toBe(true)
+ expect(button('执行已发布查询').disabled).toBe(true)
+ expect(host.textContent).toContain('保存结果未确认')
+ await click('确认保存结果')
+ expect(calls.at(-1)).toEqual(calls[0])
+})
