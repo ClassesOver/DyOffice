@@ -7,6 +7,7 @@ import {launchTestBrowser} from '../helpers/browser.mjs'
 import {accountAction} from '../helpers/workspace-ui.mjs'
 import {fileFixture} from '../helpers/files.mjs'
 import {password} from '../helpers/identity.mjs'
+import {captureRecoveryState,expectRecoveryThenReload} from '../helpers/account-recovery.mjs'
 import {buildLocalApp} from '../../server/src/app.ts'
 test('original Settings lists only own sessions and confirms CSRF-protected per-session revocation',{timeout:120_000},async t=>{
  const origin='http://localhost:4202',f=await fileFixture(t,{origin})
@@ -42,8 +43,13 @@ test('original Settings lists only own sessions and confirms CSRF-protected per-
  const active=(await app.inject({url:'/api/v1/auth/sessions',headers:{cookie:'__Host-dyoffice-session='+token}})).json().sessions.find(row=>row.current)
  await expect(sessions.locator(`[data-session-id="${active.id}"]`)).toBeVisible();await expect(sessions.locator('[data-session-id]')).toHaveCount(1)
  // Reload must retain the replacement owner session and render its current row.
- await page.reload();await expect(page.locator('.home')).toBeVisible();await accountAction(page,'个人设置')
+ await page.reload();await expect(page.locator('.home')).toBeVisible();await page.locator('.home input[type="search"]').fill('retained session search');await accountAction(page,'个人设置')
  assert.equal((await context.cookies()).find(c=>c.name==='__Host-dyoffice-session').value,token);assert.equal((await me(token)).json().user.id,ownerBefore)
  await expect(sessions.locator(`[data-session-id="${active.id}"]`)).toBeVisible();await expect(sessions.locator('[data-session-id]')).toHaveCount(1)
- await sessions.getByRole('button',{name:'撤销当前会话',exact:true}).click();await sessions.getByRole('button',{name:'确认撤销',exact:true}).click();await expect(page.getByLabel('用户名',{exact:true})).toBeVisible();assert.equal((await me(token)).statusCode,401)
+ const recoveryState=await captureRecoveryState(page)
+ await sessions.getByRole('button',{name:'撤销当前会话',exact:true}).click();await sessions.getByRole('button',{name:'确认撤销',exact:true}).click();await expect(page.getByRole('alertdialog',{name:'登录状态需要核对',exact:true})).toBeVisible();assert.equal((await me(token)).statusCode,401);assert.equal((await me(f.bob.token)).statusCode,200)
+ await expectRecoveryThenReload(page,recoveryState)
+ await page.getByLabel('用户名',{exact:true}).fill('alice');await page.getByLabel('密码',{exact:true}).fill(next);await page.getByRole('button',{name:'登录',exact:true}).click();await expect(page.locator('.home')).toBeVisible()
+ const renewed=(await context.cookies()).find(c=>c.name==='__Host-dyoffice-session').value
+ assert.notEqual(renewed,token);assert.equal((await me(renewed)).json().user.id,ownerBefore);assert.equal((await me(token)).statusCode,401)
 })

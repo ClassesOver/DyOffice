@@ -7,6 +7,7 @@ import {launchTestBrowser} from '../helpers/browser.mjs'
 import {accountAction, selectOption} from '../helpers/workspace-ui.mjs'
 import {fileFixture} from '../helpers/files.mjs'
 import {password} from '../helpers/identity.mjs'
+import {captureRecoveryState,expectRecoveryThenReload} from '../helpers/account-recovery.mjs'
 import {buildLocalApp} from '../../server/src/app.ts'
 // Disposable real PG + actual Chromium. Never route/mock requests or log action codes.
 test('administrator UI creates activates resets and manages roles with authoritative session revocation',{timeout:240_000},async t=>{
@@ -26,7 +27,7 @@ test('administrator UI creates activates resets and manages roles with authorita
   const form=panel(p).getByRole('form',{name:'确认用户操作'})
   await form.getByLabel('管理员当前密码',{exact:true}).fill(secret)
   const response=p.waitForResponse(r=>r.url().includes(path)&&['POST','PATCH'].includes(r.request().method()))
-  await form.getByRole('button',{name:'验证并确认',exact:true}).click();assert.equal((await response).status(),expected)
+  await form.getByRole('button',{name:'验证并确认',exact:true}).click();const result=await response;assert.equal(result.status(),expected);return result
  }
  const redeem=async(p,token,purpose,secret)=>{
   await p.goto(origin);await p.getByRole('button',{name:'激活或重置密码',exact:true}).click()
@@ -40,7 +41,7 @@ test('administrator UI creates activates resets and manages roles with authorita
  }
  const readAction=async p=>{const field=panel(p).getByLabel('一次性码',{exact:true});await expect(field).toBeVisible();const code=await field.inputValue();assert.equal(code.length,43);await panel(p).getByRole('button',{name:'已记录，隐藏',exact:true}).click();await expect(field).toHaveCount(0);return code}
  const me=token=>app.inject({url:'/api/v1/auth/me',headers:{cookie:'__Host-dyoffice-session='+token}})
- await owner.goto(origin);await login(owner,'owner');await openAdmin(owner)
+ await owner.goto(origin);await login(owner,'owner');await owner.locator('.home input[type="search"]').fill('retained administrator search');await openAdmin(owner)
  // Last admin removal must be visibly rejected, not a successful local state change.
  await row(owner,'owner').getByRole('button',{name:'编辑角色',exact:true}).click()
  await panel(owner).getByLabel('配置管理员',{exact:true}).uncheck()
@@ -65,11 +66,15 @@ test('administrator UI creates activates resets and manages roles with authorita
  await confirm(owner,'/api/v1/admin/users/')
  assert.equal((await me(carolCookie)).statusCode,401)
  await user.reload();await login(user,'carol');await openAdmin(user)
- // With another available admin, self-demotion succeeds and forces a new login.
+ // Self-demotion invalidates authority immediately, but preserves the renderer until explicit reload.
+ const ownerState=await captureRecoveryState(owner)
  await row(owner,'owner').getByRole('button',{name:'编辑角色',exact:true}).click()
  await panel(owner).getByLabel('配置管理员',{exact:true}).uncheck()
- await confirm(owner,'/api/v1/admin/users/')
- await expect(owner.getByLabel('用户名',{exact:true})).toBeVisible()
+ const ownRoleResponse=await confirm(owner,'/api/v1/admin/users/')
+ const cookie=(await ownRoleResponse.request().allHeaders()).cookie??''
+ const revokedOwnerToken=cookie.split(';').map(value=>value.trim()).find(value=>value.startsWith('__Host-dyoffice-session='))?.slice('__Host-dyoffice-session='.length)
+ assert.ok(revokedOwnerToken);assert.equal((await me(revokedOwnerToken)).statusCode,401)
+ await expectRecoveryThenReload(owner,ownerState)
  await login(owner,'owner');await owner.locator('.account-btn').click();await expect(owner.getByRole('menuitem',{name:'用户管理',exact:true})).toHaveCount(0)
  // Reset immediately invalidates the target's old session/password, then redeem/re-login.
  await row(user,'alice').getByRole('button',{name:'重置密码',exact:true}).click()
