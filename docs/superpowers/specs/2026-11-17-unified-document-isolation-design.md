@@ -1,6 +1,6 @@
 # 四格式统一安全隔离设计（待实施）
 
-范围更新（2026-11-17，按用户最新要求）：本轮仅支持和验收 openEuler x86_64；ARM64 暂不考虑。这是目标范围，不代表 x86_64 已通过实机验收。
+范围更新（2026-11-17，按用户最新要求）：本轮支持目标为 openEuler x86_64 和 Ubuntu x86_64；ARM64 暂不考虑。两发行版须分别锁定实际 SP/LTS、补丁和 systemd 能力并独立实机验收，不能互相继承结果；当前均未认证。
 
 状态：设计草稿；仅文档，不启用生产能力。核对日期：2026-11-17。
 代码基线：`feat/dyoffice-web@1a4a4ebb9e8e0009708ab567c1bf99117bbabfdd`。
@@ -122,3 +122,7 @@ AI、数据源、MCP、供应商凭证留在现有授权控制面，不放进沙
 - [gVisor FAQ](https://gvisor.dev/docs/user_guide/faq/)：SELinux 标签限制需专门评估；不允许以关闭 enforcing 或标签保护偷偷过验收。
 
 本项目无需因统一隔离立即引入 Casbin/OPA、Temporal、Argo 或第二套队列；先复用现有授权与 PG 契约。只有实测发现能力缺口才提出独立 ADR。许可按实际依赖及分发方式审查，不把 MPL/GPL 一概称为“传染”；不以 Docker 名称直接判断安全优劣。
+
+## 双发行版范围补充
+
+当前目标同时包含 openEuler x86_64 与 Ubuntu x86_64，ARM 排除。具体 openEuler SP、Ubuntu LTS 和补丁版本在实机清单中单独锁定；未选择或认证任何 Ubuntu 版本。预检仅识别发行版并记录版本，始终 BLOCKED / productionEligible=false。Rust fixture 显式限制 distribution 为 openEuler 或 ubuntu，systemd-v256 只是 setter 参考 schema，不是发行版能力保证。现有 SELinux Enforcing 要求不因 Ubuntu 默认配置而放宽，AppArmor 不自动替代；缺项应记录阻断，不修改主机设置。

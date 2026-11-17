@@ -190,7 +190,8 @@ remain unverified on both target architectures. See [unit-policy stage details](
 
 ## Current architecture scope correction
 
-Per the user’s latest instruction, this work targets **openEuler x86_64 only**.
+At that stage the user narrowed this work to **openEuler x86_64 only**;
+the subsequent scope below adds Ubuntu x86_64 without restoring ARM support.
 Earlier dual-architecture acceptance references describe the superseded plan.
 ARM64 is not a current supported target or acceptance gate; the candidate matcher
 rejects it. This scope correction does not claim real x86_64 host acceptance.
@@ -227,3 +228,46 @@ This is not all repository suites, browser/desktop acceptance, four-format parit
 or real OS isolation. Independent PDF rerun covered 14/14. Local services stopped.
 See [PDF/T06 scope](../inventory/document-pdf-t06-stage.md) and
 [preflight usage](../../../tools/document-runtime/preflight-x86_64.md).
+
+## Consolidated four-format and distribution follow-up
+
+Current deployment targets are **openEuler x86_64 and Ubuntu x86_64**. ARM is
+excluded. These are intended targets, not certified deployments. Explicit distro
+matching, read-only preflight and the non-launchable policy fixture distinguish
+the two. Ubuntu AppArmor is not treated as equivalent to the candidate SELinux
+Enforcing requirement. Both distributions need separate version, kernel, security
+policy and real-host acceptance. The available test host is Debian 13 x86_64.
+
+The additional trusted-fixture tests exercise actual DOCX parsing/editing/export,
+XLSX cell/formula XML/style editing and PPTX session/slide editing through existing
+T06 services and RustFS. They do not certify formula recalculation, Office desktop
+parity, arbitrary document support or a production-isolated native host. The
+PPTX test uses the dependency's CJS export via createRequire so both tsx and native
+strip-types test loaders work without patching production code or dependencies.
+
+An optional PDF recovery HTTP composition is deliberately not registered in the
+production application. Its only operation reads an existing receipt using the
+current session, CSRF and owner authority. It does not rotate, save, upload, commit
+or automatically retry; unresolved is not proof of failure. The route projects
+only receipt fields and returns no-store responses. HTTP boundary tests with stub
+adapters are distinct from the real HTTP/PostgreSQL/local-object tests.
+
+See [XLSX scope](../inventory/document-xlsx-t06-stage.md) and
+[PPTX scope](../inventory/document-pptx-t06-stage.md). Earlier sections record
+historical stage results; they are not assertions about the latest merged target.
+
+Latest-target verification against `b8712ed27ef3b21b4289cbc405c67e138ef42b89`:
+all 24 migrations and affected test dependencies were matched to remote blobs.
+The focused aggregate passed **103/103**, zero skips: ledger/crypto 68, PDF 14,
+XLSX 5, PPTX 6, DOCX 3, recovery HTTP 4 and HTTP boundary 3. One DOCX case is
+engine-only; the last three HTTP cases use stub adapters. Thus 103 is not a count
+of exclusively database tests. Three-format tests were independently rerun 14/14.
+Recovery HTTP counters were corrected to use authenticated transactions with
+nonzero fixture assertions, rather than relying on ownerPool visibility under
+FORCE RLS. Four real HTTP cases use local objects, not RustFS.
+
+The optional client has 6/6 deterministic transport tests and a targeted TS check;
+it is not mounted and has no replay/polling/storage behavior. Protocol 68/68,
+strict 13 modules, Rust 37/37 with locked/offline fmt/clippy/build, and preflight
+17/17 passed. The binary still exits 78. This is a focused merged-candidate check,
+not a latest full-repository, CI, browser, desktop or target-OS acceptance claim.

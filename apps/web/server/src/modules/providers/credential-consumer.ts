@@ -29,15 +29,16 @@ function decode(value:unknown,length?:number):Buffer {
  * takeForDispatch MUST commit the unique dispatching->unknown transition before
  * returning. This factory is not a replacement for that durable budget gate.
  */
-export function createScopedAdminCredentialConsumer({transactions,keyring,profiles,consume,takeForDispatch}:{
+export function createScopedAdminCredentialConsumer({transactions,keyring,profiles,consume,takeForDispatch,audience='admin'}:{
   transactions:PrincipalTransactions;keyring:SecretKeyring;profiles:readonly CredentialProfile[];
+ audience?:'admin'|'personal';
   consume:(scope:Readonly<CredentialScope>)=>Promise<void>;
   takeForDispatch:(token:string,request:DispatchRequest)=>Promise<DispatchGrant>;
 }) {
   const keys=new Map<string,Buffer>()
   let disposed=false
   try {
-    if(!keyring||!valid(keyring.activeKeyId)||!keyring.keys||typeof consume!=='function'||typeof takeForDispatch!=='function'||!Array.isArray(profiles))throw unavailable()
+    if(!['admin','personal'].includes(audience)||!keyring||!valid(keyring.activeKeyId)||!keyring.keys||typeof consume!=='function'||typeof takeForDispatch!=='function'||!Array.isArray(profiles))throw unavailable()
     for(const [id,key] of Object.entries(keyring.keys)){
       if(!valid(id)||!(key instanceof Uint8Array)||key.length!==32)throw unavailable()
       keys.set(id,Buffer.from(key))
@@ -79,13 +80,13 @@ export function createScopedAdminCredentialConsumer({transactions,keyring,profil
         const grant=await takeForDispatch(token,request)
         if(fields.some(k=>grant[k as keyof DispatchRequest]!==request[k as keyof DispatchRequest])||disposed||signal.aborted)throw unavailable()
         await transactions.withPrincipalTransaction({kind:'session',token},async(connection,principal)=>{
-          if(!principal.roles.includes('config_admin')||['deploymentId','userId','sessionId'].some(k=>principal[k as 'deploymentId']!==grant[k as 'deploymentId']))throw unavailable()
+          if(!principal.roles.includes(audience==='personal'?'personal':'config_admin')||['deploymentId','userId','sessionId'].some(k=>principal[k as 'deploymentId']!==grant[k as 'deploymentId']))throw unavailable()
           await connection.query("SELECT set_config('dyoffice.global_session_hash',$1,true),set_config('dyoffice.global_idle_ms',$2,true)",[tokenHash(token),String(transactions.sessionIdleMs)])
           await connection.query('SELECT pg_catalog.pg_advisory_xact_lock_shared(pg_catalog.hashtextextended($1,0))',['dyoffice:global-config:'+principal.deploymentId])
           // Recheck authorization after waiting on the config lock (not just the
           // principal snapshot), including clock-based expiry and token binding.
-          if(!(await connection.query('SELECT global_config_authorized($1,true) AS authorized',[principal.deploymentId])).rows[0]?.authorized)throw unavailable()
-          const row=(await connection.query(
+          if(!(await connection.query('SELECT global_config_authorized($1,$2) AS authorized',[principal.deploymentId,audience==='admin'])).rows[0]?.authorized)throw unavailable()
+          const row=audience==='personal'?(await connection.query('SELECT * FROM personal_provider_secret($1,$2,$3,$4,$5,$6)',[request.turnId,request.entryId,request.configRevision,request.requestDigest,request.claimId,request.reservationId])).rows[0]:(await connection.query(
             'SELECT c.revision,e.id,e.kind,e.provider_id,e.model,e.base_url,e.enabled,s.envelope FROM global_configs c JOIN global_config_entries e ON e.deployment_id=c.deployment_id JOIN global_config_secrets s ON s.deployment_id=e.deployment_id AND s.entry_id=e.id AND s.kind=e.kind AND s.provider_id=e.provider_id WHERE c.deployment_id=$1 AND e.id=$2',
             [principal.deploymentId,request.entryId])).rows[0]
           const matches=approved.filter(p=>p.deploymentId===principal.deploymentId&&p.entryId===request.entryId&&p.revision===request.configRevision)

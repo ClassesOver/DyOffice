@@ -110,6 +110,7 @@ pub fn resolve_launch(_policy: &NonLaunchableUnitPolicy) -> Result<(), PolicyErr
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct FixtureReport {
+    distribution: String,
     report_scope: String,
     setter_schema: String,
     manager_version: String,
@@ -141,7 +142,8 @@ pub fn verify_fixture_capabilities(
         return Err(denied);
     }
     let report: FixtureReport = serde_json::from_slice(bytes).map_err(|_| denied)?;
-    if report.report_scope != "test-fixture"
+    if !matches!(report.distribution.as_str(), "openEuler" | "ubuntu")
+        || report.report_scope != "test-fixture"
         || report.setter_schema != "systemd-v256"
         || report.manager_version != "256"
         || report.architecture != "x86_64"

@@ -167,7 +167,7 @@ function metadataShape(source: string, baseline: string) {
     ['TotalTime', /^\d{1,9}$/],
     ['AppVersion', /^\d{1,3}\.\d{1,4}$/],
   ] as const) {
-    for (const el of doc.getElementsByTagName(tag)) if (!pattern.test(el.textContent ?? '')) fail()
+    for (const el of Array.from(doc.getElementsByTagName(tag))) if (!pattern.test(el.textContent ?? '')) fail()
   }
   // Only direct leaf element text may vary; exact root/namespaces/elements and
   // attributes/order remain fixed. No inserted markup, processing instructions,

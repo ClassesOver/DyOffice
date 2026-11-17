@@ -161,5 +161,7 @@ export interface AgentStreamHandle {
 }
 
 export interface AgentTransport {
+  /** Pin the endpoint for this run. Return true if prior history must stay on the previous endpoint. */
+  beginRun?(): boolean
   stream(request: AgentStreamRequest, callbacks: AgentStreamCallbacks): AgentStreamHandle
 }

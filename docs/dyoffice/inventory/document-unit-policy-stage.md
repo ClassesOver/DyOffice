@@ -38,7 +38,7 @@ not the extended timestamp-bearing getter form. No caller supplies those values.
 ## Capability matching is not admission
 
 The bounded fixture report requires exact schema systemd-v256 and Manager string
-256, x86_64 only, cgroup v2 CPU/memory/PID controllers, SELinux Enforcing,
+256, explicit distribution openEuler or ubuntu, x86_64 only, cgroup v2 CPU/memory/PID controllers, SELinux Enforcing,
 and namespace/seccomp fixture assertions. Every required property must have the
 exact signature/value, once only. Missing/extra/tampered properties fail. Unknown
 versions, vendor-suffixed strings and release-name-based inference are unsupported;
@@ -78,4 +78,8 @@ network, host permissions, SELinux or systemd settings are modified by this stag
 
 Per the current requested scope, ARM/aarch64 is excluded and explicitly rejected
 by capability matching. ARM testing is not a current support or acceptance
-requirement. x86_64 remains an unverified target, not an approved environment.
+requirement. Both openEuler x86_64 and Ubuntu x86_64 remain unverified targets, not approved environments.
+The fixture’s v256 setter schema is not an assertion that either distro installs v256.
+No result transfers between distributions; pin actual SP/LTS, patches and manager
+capabilities independently. Existing SELinux requirements are not silently relaxed
+for Ubuntu or replaced by AppArmor.

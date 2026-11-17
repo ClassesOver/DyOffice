@@ -44,7 +44,7 @@ fn caller_cannot_supply_unit_paths_commands_environment_or_versions() {
 fn report(
     policy: &dyoffice_document_broker::unit_policy::NonLaunchableUnitPolicy,
 ) -> serde_json::Value {
-    serde_json::json!({"reportScope":"test-fixture","setterSchema":"systemd-v256","managerVersion":"256","architecture":"x86_64","profileId":policy.profile_id(),"policyVersion":1,"cgroupVersion":2,"requiredControllers":["cpu","memory","pids"],"selinux":"enforcing","namespaceProbe":true,"seccompProbe":true,"properties":policy.requirements()})
+    serde_json::json!({"distribution":"openEuler","reportScope":"test-fixture","setterSchema":"systemd-v256","managerVersion":"256","architecture":"x86_64","profileId":policy.profile_id(),"policyVersion":1,"cgroupVersion":2,"requiredControllers":["cpu","memory","pids"],"selinux":"enforcing","namespaceProbe":true,"seccompProbe":true,"properties":policy.requirements()})
 }
 #[test]
 fn exact_fixture_match_is_configuration_only_never_admission() {
@@ -135,4 +135,29 @@ fn malformed_report_shapes_and_oversized_metadata_are_not_capabilities() {
         1,
     );
     assert!(verify_fixture_capabilities(&p, duplicate.as_bytes()).is_err());
+}
+
+#[test]
+fn explicit_distribution_scope_never_certifies_either_target() {
+    let p = build_policy(br#"{"profileId":"pptx-edit-v1","policyVersion":1}"#).unwrap();
+    for distro in ["openEuler", "ubuntu"] {
+        let mut r = report(&p);
+        r["distribution"] = distro.into();
+        let m = verify_fixture_capabilities(&p, &serde_json::to_vec(&r).unwrap()).unwrap();
+        assert!(!m.execution_available());
+        assert_eq!(
+            resolve_launch(&p),
+            Err(PolicyError::UnsupportedRuntimeManifest)
+        );
+        r["architecture"] = "aarch64".into();
+        assert!(verify_fixture_capabilities(&p, &serde_json::to_vec(&r).unwrap()).is_err());
+    }
+    for distro in ["debian", "Ubuntu", "", "fedora"] {
+        let mut r = report(&p);
+        r["distribution"] = distro.into();
+        assert!(verify_fixture_capabilities(&p, &serde_json::to_vec(&r).unwrap()).is_err());
+    }
+    let mut missing = report(&p);
+    missing.as_object_mut().unwrap().remove("distribution");
+    assert!(verify_fixture_capabilities(&p, &serde_json::to_vec(&missing).unwrap()).is_err());
 }

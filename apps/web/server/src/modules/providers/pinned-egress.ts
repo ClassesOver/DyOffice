@@ -15,8 +15,9 @@ const fail=()=>new Error('Provider transport unavailable')
 const profileFields=['deploymentId','entryId','revision','providerId','model','baseUrl','endpoint'] as const
 function publicIpv4(address:string):boolean {
  if(isIP(address)!==4)return false
- const first=Number(address.split('.')[0])
- return first>0&&first<224&&![10,100,127,169,172,192,198,203].includes(first)
+ const [first=0,second=0]=address.split('.').map(Number)
+ return first>0&&first<224&&![10,100,127,169,192,198,203].includes(first)
+   && !(first===172&&second>=16&&second<=31)
 }
 function url(value:string):URL {
  const u=new URL(value)
@@ -26,7 +27,7 @@ function url(value:string):URL {
 /**
  * Unmounted admin transport preparation. No credential authority or budget is
  * created here; compose ONLY behind #74's unique durable dispatch gate.
- * IPv6 and broad special IPv4 ranges intentionally fail closed.
+ * Look up IPv4 only; never connect to IPv6 or an unlisted IPv4 address.
  */
 export function createPinnedProviderTransport({profiles,timeoutMs=30_000,maxConcurrent=8,maxResponseBytes=8*1024*1024,authorizationTimeoutMs=5000}:{
  profiles:readonly EgressProfile[];timeoutMs?:number;maxConcurrent?:number;maxResponseBytes?:number;authorizationTimeoutMs?:number
@@ -78,7 +79,7 @@ export function createPinnedProviderTransport({profiles,timeoutMs=30_000,maxConc
     externalSignal.addEventListener('abort',stop,{once:true})
     deadline=setTimeout(stop,timeoutMs)
     if(externalSignal.aborted)stop()
-    const answers=await step(()=>dns.lookup(target.hostname,{all:true,verbatim:true}))
+    const answers=await step(()=>dns.lookup(target.hostname,{family:4,all:true,verbatim:true}))
     if(!answers.length||answers.length>64||answers.some(a=>a.family!==4||!publicIpv4(a.address)||!profile.allowedIpv4.includes(a.address)))throw fail()
     const pinned=answers[0]!.address
     response=await step(()=>new Promise<IncomingMessage>((resolve,reject)=>{

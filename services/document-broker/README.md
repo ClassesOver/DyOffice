@@ -93,7 +93,7 @@ Unix filesystem-listener construction currently fails with EPERM at socket creat
 policy change or ordinary-process document execution was attempted.
 
 Real listener deployment, systemd transient units, runtime manifest/FD sealing,
-SELinux/cgroup limits, openEuler x86_64, and actual document execution remain
+SELinux/cgroup limits, openEuler / Ubuntu x86_64, and actual document execution remain
 **unverified/not implemented**. The future real backend must subscribe before
 starting, correlate returned job identity, handle rapid exit and bus reconnect,
 and distinguish job completion from confirmed unit/cgroup termination. These are
@@ -137,6 +137,9 @@ accepts only exact v256 test metadata and never grants execution. See the
 PrivateNetwork alone does not isolate accessible filesystem Unix sockets or
 inherited FDs; real rootfs/FD/SELinux/kernel enforcement remains unverified.
 
-Current architecture scope is x86_64 only. ARM/aarch64 is rejected by the
+Current distribution scope is openEuler and Ubuntu, both x86_64 only. ARM/aarch64 is rejected by the
 candidate capability matcher and is not a current acceptance gate. This scope
-choice does not mean x86_64 runtime isolation has been verified.
+choice does not mean either distribution has passed runtime isolation acceptance.
+Fixture metadata must explicitly name distribution openEuler or ubuntu. The systemd-v256
+setter schema is a reference fixture, not a claim about either distribution’s installed
+manager. Each target needs independent live acceptance on pinned SP/LTS and patches.

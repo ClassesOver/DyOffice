@@ -44,7 +44,7 @@ export function createSseAgentTransport(options: SseTransportOptions = {}): Agen
         // Best effort only; the server must also impose its own deadline.
         try { void fetchImpl(endpoint + '/' + encodeURIComponent(turnId) + '/cancel', {
           method: 'POST', credentials: 'same-origin', mode: 'same-origin', redirect: 'error',
-          headers: csrfProof ? { 'x-csrf-token': csrfProof } : undefined,
+          ...(csrfProof ? {headers: { 'x-csrf-token': csrfProof }} : {}),
         }).catch(() => {}) } catch { /* cancellation remains best effort */ }
       }
       const finish = (error?: string) => {

@@ -1,4 +1,4 @@
-# openEuler broker acceptance plan (not executed)
+# openEuler / Ubuntu x86_64 broker acceptance plan (not executed)
 
 This is a target-host acceptance plan, not certification. Checked 2026-11-17 UTC:
 the current cloud has
@@ -9,10 +9,11 @@ verified openEuler hosts. No host policy was changed to bypass these restriction
 
 ## Dedicated hosts and approval boundary
 
-Current scope is **openEuler x86_64 only**. ARM64 is excluded from current support
-and acceptance gates at the user’s direction. Use a disposable full x86_64 VM, with a pinned openEuler
-24.03 LTS SP/patch baseline. Record actual installed versions rather than inferring
-systemd/cgroup behavior from the release name. The VM must have systemd PID 1,
+Current scope is **openEuler x86_64 and Ubuntu x86_64**. ARM64 is excluded from current support
+and acceptance gates at the user’s direction. Use separate disposable full x86_64 VMs, with a pinned openEuler SP/patch
+baseline and a separately pinned Ubuntu LTS/patch baseline. No Ubuntu release
+is presumed certified. Record actual installed versions rather than inferring
+systemd/cgroup behavior from the release name. Each VM must have systemd PID 1,
 system D-Bus, SELinux Enforcing, cgroup v2 with required memory/pids/cpu controllers,
 and the namespace/seccomp capabilities of the fixed profile. Cross-compilation is
 not runtime evidence. A starting lab budget of 2 vCPU, 4 GiB RAM and 20 GiB disk per
@@ -24,11 +25,11 @@ separate reviewed authorization. Do not disable SELinux, weaken seccomp, change
 host permissions or fall back to ordinary processes to make a test pass. Reboot
 and destructive fault injection belong only in the dedicated VM test scope.
 
-## Matrix (repeat on x86_64)
+## Matrix (repeat independently on each distribution, x86_64)
 
 | Area | Required checks and acceptance |
 | --- | --- |
-| Environment fingerprint | OS/SP, kernel, architecture, systemd RPM and Manager Version, D-Bus implementation, SELinux policy, cgroup controllers, runtime/policy digest and source SHA |
+| Environment fingerprint | OS/SP or LTS and package patch baseline, kernel, architecture, systemd package and Manager Version, D-Bus implementation, SELinux policy, cgroup controllers, runtime/policy digest and source SHA |
 | Typed property support | Match actual introspection and target-version documentation; unknown properties, absent controllers or failed hardening reject execution rather than downgrade |
 | Listener identity | Real filesystem socket; correct and wrong UID, same-UID untrusted client, permissions and labels. Peer UID alone is not task authority |
 | Subscription order | Install signal receiver and finish Subscribe before start; correlate returned job path, ID and unit, ignoring unrelated jobs |
@@ -66,7 +67,7 @@ ordering, unit/job/InvocationID/cgroup identity, and redacted logs. Verify no li
 instances remain at test end; unresolved instances stay quarantined. Never include
 credentials or document contents in shared diagnostic artifacts.
 
-**Current result: no real openEuler or systemd-unit acceptance has been run.**
+**Current result: no real openEuler, Ubuntu or systemd-unit acceptance has been run.**
 
 ## Primary references
 
@@ -77,3 +78,9 @@ credentials or document contents in shared diagnostic artifacts.
 
 - [systemd 256 execution sandbox semantics](https://www.freedesktop.org/software/systemd/man/256/systemd.exec.html)
 - [systemd 257 inherited socket restrictions](https://www.freedesktop.org/software/systemd/man/257/systemd.exec.html)
+
+Distribution scope is not certification. Do not reuse openEuler evidence for Ubuntu
+or the reverse. The existing SELinux Enforcing candidate requirement is unchanged;
+Ubuntu defaults or AppArmor do not establish equivalence. Record unmet requirements
+as BLOCKED rather than modifying host security policy. The systemd-v256 reference
+setter fixture does not select or certify an installed distro manager version.
