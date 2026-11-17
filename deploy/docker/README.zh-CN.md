@@ -1,4 +1,6 @@
-# Docker 本地开发部署（华为源默认）
+# Docker Web/DOCX 开发基线（完整容器架构尚未完成）
+
+> 用户目标是整个项目由 Compose 部署，文档处理在容器内部通过 zbus 调用私有 systemd D-Bus。当前文件尚不满足该目标，不能以本 PR 合并代表四格式完成。宿主 API/worker 安装模板仅为历史参考，不是本方案的部署步骤；不要安装它们来绕过容器隔离缺口。见 [完整容器架构与预检](CONTAINER-READINESS.zh-CN.md)。
 
 此目录内置于仓库，提供**隔离测试模板，不是生产发布**。暂不使用 HTTPS；网络绑定、端口和对外 origin 可配置，默认仍是 `127.0.0.1:3080` 与 `http://localhost:3080`。
 
@@ -29,7 +31,7 @@ DYOFFICE_INSECURE_HTTP_DEV=1
 |---|---|
 | Docker Web 基线 | Node 22.23.5 bookworm-slim、root npm lockfile 全 workspace/dev/optional 依赖、PostgreSQL 17、迁移与受限账号、本地对象卷、工作区和 DOCX 前端 |
 | AI 可选 overlay | 现有 provider gateway、keyring、匹配真实 DB 配置的 profiles、供应商凭据/预算；见 EXTENSIONS |
-| 原生 XLSX / jobs | 需要宿主 API **和** worker 的 root/systemd 255+/cgroup v2 隔离、Rust/C 工具链、Node gateway、PG worker 角色、Redis、S3；不能 Docker-only，见宿主模板 |
+| 原生 XLSX / jobs | 现有实现依赖宿主 API/worker；与全容器目标不符，当前 Compose 不提供此能力。须完成容器内受限 broker/runtime 后再接线，不安装宿主模板补齐 |
 | PPTX/PDF | PPTX 无受支持隔离 runtime，代码拒绝；PDF 本地 capability 为 unsupported；不假装可启用 |
 
 普通 Web 不需要 Redis；本地对象卷不需要 MinIO。只有原生路径需要 Redis 和 S3，所以不默认堆砌无消费者服务。代码执行器关闭，不安装/启用外部 agent CLI。原生解析隔离不通过 privileged 容器绕过。
