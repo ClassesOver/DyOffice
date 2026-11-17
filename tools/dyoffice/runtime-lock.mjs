@@ -13,6 +13,22 @@ export async function checkWorkflows(supplied) {
   if (JSON.stringify([...names].sort()) !== JSON.stringify([...lock.workflows].sort())) fail('workflow inventory changed; review runtime coverage')
   for (const name of names) {
     const source = supplied ? supplied[name] : await readFile(new URL(name, workflowRoot), 'utf8')
+    // Exactly one reviewed, manual Python host audit is not a Node workload.
+    // Its entire workflow (trigger, ref guard, actions, permissions and commands)
+    // is byte-locked. No prefix, pattern or configurable filename exemption.
+    if (name === 'dyoffice-ubuntu-docker-audit.yml') {
+      if (!/^[a-f0-9]{64}$/.test(lock.manualHostAuditSha256 ?? '') ||
+          createHash('sha256').update(source).digest('hex') !== lock.manualHostAuditSha256)
+        fail(name + ' manual host audit workflow digest changed; explicit review required')
+      continue
+    }
+    if (name === 'dyoffice-web-boundaries.yml') {
+      for (const event of ['push', 'pull_request']) {
+        const block = source.match(new RegExp('^  ' + event + ':\\s*\\n([\\s\\S]*?)(?=^  [A-Za-z_]+:|^[^ \\n]|(?![\\s\\S]))', 'm'))?.[1]
+        if (!block || !/^      - '\.github\/workflows\/dyoffice-ubuntu-docker-audit\.yml'$/m.test(block))
+          fail(name + '/' + event + ' must trigger runtime-lock for audit workflow changes')
+      }
+    }
     // Fail closed for the reviewed workflows' literal YAML layout. This is not
     // a general YAML interpreter: new jobs/layouts require explicit review.
     const body=source.split(/^jobs:\s*$/m)[1]
