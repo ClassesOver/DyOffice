@@ -9,3 +9,9 @@ pub use protocol::{decode_frame, validate_frame};
 mod manager_model;
 
 pub mod unit_policy;
+
+#[cfg(target_os = "linux")]
+pub mod sealed_bytes;
+
+#[cfg(target_os = "linux")]
+pub mod sealed_transfer;

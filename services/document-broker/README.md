@@ -143,3 +143,21 @@ choice does not mean either distribution has passed runtime isolation acceptance
 Fixture metadata must explicitly name distribution openEuler or ubuntu. The systemd-v256
 setter schema is a reference fixture, not a claim about either distribution’s installed
 manager. Each target needs independent live acceptance on pinned SP/LTS and patches.
+
+## Sealed bytes primitive
+
+Linux-only `sealed_bytes::SealedBytes` uses pinned rustix 1.1.6 to copy
+1–65,536 bytes into a CLOEXEC memfd and seal WRITE/GROW/SHRINK/SEAL before
+exposing a descriptor. This experimental cap is not a document upload limit.
+Real kernel tests check positional reads and modification rejection through
+duplicate descriptors. The primitive adds no hashing, engine execution or T06 integration; the
+separate restricted SCM_RIGHTS experiment is described below. CLOEXEC does **not** assert NOEXEC, and immutable bytes
+are not source authentication or OS isolation evidence.
+See [stage boundary](../../docs/dyoffice/inventory/document-sealed-bytes-stage.md).
+
+The Linux `sealed_transfer` experiment adds a separate nonblocking SEQPACKET
+socketpair with a fixed 12-byte packet and exactly one SCM_RIGHTS descriptor.
+Received descriptors must have the full seals, regular inode type, matching
+bounded size and CLOEXEC. Truncated/malformed/extra-descriptor packets fail
+closed with RAII cleanup. This same-process channel is **not** source
+authentication and is not connected to the production control protocol or T06.

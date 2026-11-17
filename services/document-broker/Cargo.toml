@@ -7,6 +7,7 @@ publish = false
 license = "Apache-2.0"
 
 [dependencies]
+rustix = { version = "=1.1.6", features = ["fs", "net"] }
 serde = { version = "=1.0.229", features = ["derive"] }
 serde_json = "=1.0.154"
 tokio = { version = "=1.54.1", features = ["rt-multi-thread", "macros", "net", "io-util", "time", "sync"] }

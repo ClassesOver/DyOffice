@@ -318,3 +318,28 @@ The two real local-application PDF cases passed separately. Pure protocol remain
 68/68 without a Rust build dependency; broker suite 10/10, strict 14 modules and
 Rust 37/37 with feature-gated build/fmt/clippy passed. These remain the explicitly
 bounded test scopes above, not full-repository or target-OS acceptance.
+
+## Sealed byte and descriptor primitives
+
+Pinned rustix 1.1.6 now supplies two separate Linux experiments. `SealedBytes`
+copies 1–65,536 bytes into a fixed-name CLOEXEC memfd and verifies
+WRITE/GROW/SHRINK/SEAL before exposing its descriptor. `sealed_transfer` uses a
+nonblocking local SEQPACKET socketpair and a fixed 12-byte packet with exactly one
+SCM_RIGHTS descriptor. Receive rejects truncation, extra/missing descriptors,
+unreadable handles, nonregular or wrongly sized inodes, and missing seals. Full
+seals are checked before fstat to avoid mutable-size observation before sealing.
+
+Real-kernel tests cover attempted writes/truncation, shared-offset-independent
+reads, received CLOEXEC, sender/original-handle closure, malformed packets and
+descriptor-count restoration on failure. The write-only descriptor rejection
+was added after an actual failing test. Omitted-seal mutations also failed and
+were restored. Independent full Rust regression passed **42/42**, including four
+sealed-byte tests and one sequential multi-assertion FD-transfer test, plus fmt
+and clippy with warnings denied.
+
+The 64 KiB experimental cap is not full Office-output support. These primitives
+prove neither hashing/provenance nor tenant/peer authentication, NOEXEC, trusted
+engine execution, global resource quotas or OS isolation. The same-process
+channel is not connected to the production control protocol or positive T06.
+Unsupported syscalls fail without filesystem fallback or changed host settings.
+See [sealed-byte/FD scope](../inventory/document-sealed-bytes-stage.md).
