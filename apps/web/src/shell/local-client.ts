@@ -3,18 +3,49 @@ import type {WebFile} from './web-home-bridge'
 export function createLocalShellClient(send:typeof fetch=fetch) {
  let csrf:string|undefined
  let passwordAction:'idle'|'pending'|'unknown'='idle'
- async function request<T=unknown>(path:string,method='GET',body?:unknown):Promise<T>{
+ let generation=0
+ let authTransition=false
+ const pending=new Set<AbortController>()
+ const stale=()=>Object.assign(new Error('登录状态已改变，请重新加载当前工作区。'),{code:'stale_session'})
+ function assertCurrent(stamp:number){if(stamp!==generation)throw stale()}
+ function invalidateSession(){
+  generation++;csrf=undefined
+  for(const controller of pending)controller.abort()
+  pending.clear()
+ }
+ async function perform<T=unknown>(path:string,method='GET',body?:unknown,stamp=generation):Promise<T>{
   if(!path.startsWith('/api/v1/')||path.includes('\\')||path.includes('#'))throw new Error('Expected same-origin local API path')
+  assertCurrent(stamp)
   const write=!['GET','HEAD'].includes(method)
-  if(write&&!csrf){const result=await request<{csrfToken:string}>('/api/v1/auth/csrf');csrf=result.csrfToken}
+  if(write&&!csrf){const result=await perform<{csrfToken:string}>('/api/v1/auth/csrf','GET',undefined,stamp);assertCurrent(stamp);csrf=result.csrfToken}
+  assertCurrent(stamp)
   const binary=body instanceof Blob
-  const response=await send(path,{method,credentials:'same-origin',cache:'no-store',headers:{...(write?{'X-CSRF-Token':csrf!}:{}),...(body!==undefined?{'Content-Type':binary?'application/octet-stream':'application/json'}:{})},body:body===undefined?undefined:binary?body:JSON.stringify(body)})
-  const value=response.status===204?undefined:await response.json()
-  if(!response.ok){if(response.status===401||response.status===403)csrf=undefined;throw Object.assign(new Error(value?.message||value?.title||'请求失败'),{status:response.status})}
-  return value as T
+  const controller=new AbortController();pending.add(controller)
+  try{
+   const response=await send(path,{method,credentials:'same-origin',cache:'no-store',signal:controller.signal,headers:{...(write?{'X-CSRF-Token':csrf!}:{}),...(body!==undefined?{'Content-Type':binary?'application/octet-stream':'application/json'}:{})},body:body===undefined?undefined:binary?body:JSON.stringify(body)})
+   assertCurrent(stamp)
+   const value=response.status===204?undefined:await response.json()
+   assertCurrent(stamp)
+   if(!response.ok){
+    if(response.status===401&&path!=='/api/v1/auth/login')invalidateSession()
+    else if(response.status===403)csrf=undefined
+    const message=response.status===409&&path.startsWith('/api/v1/admin/config')?'配置版本冲突，请核对最新版本；当前草稿已保留。'
+     :response.status===409&&path.startsWith('/api/v1/workspace/folders')?'文件夹操作冲突：请检查重名、非空目录或移动目标，再刷新重试。'
+     :response.status===400&&path.startsWith('/api/v1/workspace/folders')?'文件夹名称或移动目标无效，请检查名称长度、路径符号及目标目录。'
+     :value?.message||value?.title||value?.error||'请求失败'
+    throw Object.assign(new Error(message),{status:response.status})
+   }
+   return value as T
+  }catch(error){if((error as {status?:number})?.status!==401)assertCurrent(stamp);throw error}
+  finally{pending.delete(controller)}
+ }
+ async function request<T=unknown>(path:string,method='GET',body?:unknown):Promise<T>{
+  if(authTransition)throw stale()
+  return perform<T>(path,method,body)
  }
  return {
   request,
+  invalidateSession,
   invalidateCsrf(){csrf=undefined},
   async changePassword(currentPassword:string,newPassword:string){
    if(passwordAction!=='idle')throw new Error(passwordAction==='pending'?'密码修改正在进行中。':'无法确认上次密码修改结果，请重新加载。')
@@ -30,8 +61,18 @@ export function createLocalShellClient(send:typeof fetch=fetch) {
     throw error
    }
   },
-  async login(username:string,password:string){csrf=undefined;try{const result=await request<{user:{id:string;username:string;displayName:string;roles:string[]};csrfToken:string}>('/api/v1/auth/login','POST',{username,password});csrf=result.csrfToken;return result.user}finally{csrf=undefined}},
-  async logout(){await request('/api/v1/auth/logout','POST');csrf=undefined},
+  async login(username:string,password:string){
+   if(authTransition)throw new Error('登录状态正在更新。')
+   authTransition=true;invalidateSession();passwordAction='idle'
+   try{const result=await perform<{user:{id:string;username:string;displayName:string;roles:string[]};csrfToken:string}>('/api/v1/auth/login','POST',{username,password});return result.user}
+   finally{csrf=undefined;authTransition=false}
+  },
+  async logout(){
+   if(authTransition)throw new Error('登录状态正在更新。')
+   authTransition=true;invalidateSession()
+   try{await perform('/api/v1/auth/logout','POST')}
+   finally{csrf=undefined;authTransition=false}
+  },
   async homeRequest(path:string,method='GET',body?:unknown):Promise<unknown>{
    if(path==='/preferences')return request('/api/v1/preferences',method,body)
    if(path!=='/files'||method!=='GET')throw new Error('Unsupported local Home operation')

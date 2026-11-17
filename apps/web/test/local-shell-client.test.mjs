@@ -35,3 +35,49 @@ test('password action lock survives UI replacement and ambiguous success payload
  const pending=client.changePassword('old','new');await new Promise(r=>setImmediate(r));await assert.rejects(client.changePassword('old','new'),/进行中/);assert.equal(calls,1)
  finish(json({}));await assert.rejects(pending,/无法确认/);await assert.rejects(client.changePassword('old','new'),/无法确认/);assert.equal(calls,1)
 })
+
+test('logout fences a delayed prior-user response even when the transport ignores cancellation',async()=>{
+ let finish,oldSignal
+ const client=createLocalShellClient(async(path,init)=>{
+  if(path.endsWith('/csrf'))return json({csrfToken:'c'.repeat(43)})
+  if(path.endsWith('/logout'))return new Response(null,{status:204})
+  oldSignal=init.signal;return new Promise(resolve=>{finish=resolve})
+ })
+ const pending=client.request('/api/v1/admin/config').then(value=>({value}),error=>({error}))
+ await new Promise(resolve=>setImmediate(resolve))
+ await client.logout()
+ finish(json({entries:[{label:'Alice private administration'}]}))
+ const outcome=await pending
+ assert.equal(outcome.error?.code,'stale_session')
+ assert.equal(oldSignal?.aborted,true)
+})
+
+test('old CSRF response cannot dispatch a write after logout',async()=>{
+ let firstCsrf,reads=0;const writes=[]
+ const client=createLocalShellClient(async(path,init)=>{
+  if(path.endsWith('/csrf')){reads++;return reads===1?new Promise(resolve=>{firstCsrf=resolve}):json({csrfToken:'new-session'})}
+  writes.push(path);return new Response(null,{status:204})
+ })
+ const pending=client.request('/api/v1/preferences','PUT',{theme:'dark'}).then(value=>({value}),error=>({error}))
+ await new Promise(resolve=>setImmediate(resolve))
+ await client.logout();firstCsrf(json({csrfToken:'old-session'}))
+ assert.equal((await pending).error?.code,'stale_session')
+ assert.deepEqual(writes,['/api/v1/auth/logout'])
+})
+
+test('an observed expired session invalidates other in-flight data responses',async()=>{
+ let finish
+ const client=createLocalShellClient(async path=>path.endsWith('/me')?json({error:'Unauthorized'},401):new Promise(resolve=>{finish=resolve}))
+ const pending=client.request('/api/v1/admin/config').then(value=>({value}),error=>({error}))
+ await new Promise(resolve=>setImmediate(resolve))
+ await assert.rejects(client.request('/api/v1/auth/me'),error=>error.status===401)
+ finish(json({revision:7,entries:[]}))
+ assert.equal((await pending).error?.code,'stale_session')
+})
+
+test('configuration conflicts keep the draft guidance without hiding other resource conflicts',async()=>{
+ const client=createLocalShellClient(async()=>json({message:'文件夹非空，无法删除。'},409))
+ await assert.rejects(client.request('/api/v1/workspace/folders/folder'),/非空目录/)
+ await assert.rejects(client.request('/api/v1/admin/config'),/草稿已保留/)
+})
+

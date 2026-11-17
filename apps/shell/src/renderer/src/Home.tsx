@@ -185,6 +185,28 @@ function fileName(path: string): string {
   return path.split(/[\\/]/).pop() ?? path
 }
 
+/** Web identities may be opaque: display names come from the loaded directory metadata. */
+function loadedName(path: string, roots: readonly FolderRoot[], listings?: ReadonlyMap<string, FolderListing>): string {
+  const root = roots.find((entry) => entry.path === path)
+  if (root) return root.name
+  for (const listing of listings?.values() ?? []) {
+    const entry = listing.folders.find((item) => item.path === path) ?? listing.files.find((item) => item.path === path)
+    if (entry) return entry.name
+  }
+  return fileName(path)
+}
+
+function loadedParent(path: string, listings?: ReadonlyMap<string, FolderListing>): string {
+  for (const listing of listings?.values() ?? []) {
+    if (listing.files.some((entry) => entry.path === path)) return listing.dir
+  }
+  return dirOf(path)
+}
+
+function operationError(error: unknown, fallback: string): string {
+  return error instanceof Error && error.message ? error.message : fallback
+}
+
 function baseName(entry: RecentEntry): string {
   return entry.ext ? entry.name.slice(0, -(entry.ext.length + 1)) : entry.name
 }
@@ -199,25 +221,25 @@ function rootOf(path: string, roots: readonly FolderRoot[]): FolderRoot | null {
 }
 
 /** "Clients / Contracts" for a file under a root; the parent folder name elsewhere */
-function locationLabel(path: string, roots: readonly FolderRoot[]): string {
-  const dir = dirOf(path)
+function locationLabel(path: string, roots: readonly FolderRoot[], listings?: ReadonlyMap<string, FolderListing>): string {
+  const dir = loadedParent(path, listings)
   const root = rootOf(dir, roots)
   if (root) {
     if (dir === root.path) return root.name
-    return splitPath(dir.slice(root.path.length)).join(' / ')
+    return crumbsOf(root, dir, listings).slice(1).map((entry) => entry.name).join(' / ')
   }
   return parentDir(path)
 }
 
 /** the folders between root and `dir` (inclusive) */
-function crumbsOf(root: FolderRoot, dir: string): Array<{ path: string; name: string }> {
+function crumbsOf(root: FolderRoot, dir: string, listings?: ReadonlyMap<string, FolderListing>): Array<{ path: string; name: string }> {
   const crumbs = [{ path: root.path, name: root.name }]
   if (dir === root.path) return crumbs
   const sep = dir.includes('\\') && !dir.includes('/') ? '\\' : '/'
   let acc = root.path
   for (const part of splitPath(dir.slice(root.path.length))) {
     acc = `${acc}${sep}${part}`
-    crumbs.push({ path: acc, name: part })
+    crumbs.push({ path: acc, name: loadedName(acc, [root], listings) })
   }
   return crumbs
 }
@@ -320,7 +342,7 @@ function writeTreeState(state: TreeState): void {
  * already cached is a no-op; `invalidate` drops entries so the next render
  * refetches them (the main process reports changed directories via watch).
  */
-function useFolderListings() {
+function useFolderListings(onError: (error: unknown) => void) {
   const [listings, setListings] = useState<ReadonlyMap<string, FolderListing>>(new Map())
   // dir → whether a reload was requested while its request was in flight (the
   // in-flight answer may predate the change, so it is fetched once more)
@@ -341,12 +363,13 @@ function useFolderListings() {
           return next
         })
       })
+      .catch(onError)
       .finally(() => {
         const again = inflight.current.get(dir)
         inflight.current.delete(dir)
         if (again) load(dir, true)
       })
-  }, [])
+  }, [onError])
 
   const invalidate = useCallback(
     (dirs: readonly string[]) => {
@@ -385,6 +408,7 @@ interface FolderPickerProps {
   count: number
   onCancel: () => void
   onPick: (dir: string) => void
+  operationFailure?: string
 }
 
 function FolderPicker({
@@ -394,16 +418,26 @@ function FolderPicker({
   count,
   onCancel,
   onPick,
+  operationFailure,
 }: FolderPickerProps) {
   const { t } = useI18n()
-  const { listings, load } = useFolderListings()
+  const [error, setError] = useState('')
+  const fallback = useRef(t('askArtifactFailed'))
+  fallback.current = t('askArtifactFailed')
+  const reportError = useCallback((cause: unknown) => setError(operationError(cause, fallback.current)), [])
+  const { listings, load } = useFolderListings(reportError)
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(
     () => new Set(roots.map((r) => r.path)),
   )
   const [picked, setPicked] = useState<string | null>(null)
+  const pickedGeneration = useRef(0)
   const [query, setQuery] = useState('')
   const [creatingIn, setCreatingIn] = useState<string | null>(null)
   const [newName, setNewName] = useState('')
+  const [creatingBusy, setCreatingBusy] = useState(false)
+  const createPending = useRef(false)
+  const attemptedCreate = useRef('')
+  const createGeneration = useRef(0)
 
   useEffect(() => {
     for (const dir of expanded) load(dir)
@@ -420,22 +454,29 @@ function FolderPicker({
   // the edit from a ref mirrored during render, so a finished edit is a no-op
   const creatingRef = useRef<{ parent: string; name: string } | null>(null)
   creatingRef.current = creatingIn ? { parent: creatingIn, name: newName } : null
-  const commitCreate = async () => {
+  const commitCreate = async (explicit = true) => {
+    if (createPending.current) return
     const pending = creatingRef.current
-    creatingRef.current = null
-    setCreatingIn(null)
-    setNewName('')
     const parent = pending?.parent
     const name = pending?.name.trim()
-    if (!parent || !name) return
-    const result = await window.aiOffice.createFolder(parent, name)
-    if (!result.ok) {
-      window.alert(result.error ?? t('renameFailed'))
-      return
-    }
-    load(parent, true)
-    setExpanded((prev) => new Set([...prev, parent]))
-    if (result.path) setPicked(result.path)
+    if (!parent || !name) {creatingRef.current = null; setCreatingIn(null); return}
+    const generation = createGeneration.current
+    const selectionGeneration = pickedGeneration.current
+    const attempt = JSON.stringify([parent, name])
+    if (!explicit && attemptedCreate.current === attempt) return
+    attemptedCreate.current = attempt
+    createPending.current = true; setCreatingBusy(true); setError('')
+    try {
+      const result = await window.aiOffice.createFolder(parent, name)
+      if (!result.ok) throw new Error(result.error ?? t('renameFailed'))
+      if (generation === createGeneration.current) {
+        creatingRef.current = null; setCreatingIn(null); setNewName('')
+        if (result.path && selectionGeneration === pickedGeneration.current) setPicked(result.path)
+      }
+      load(parent, true)
+      setExpanded((prev) => new Set([...prev, parent]))
+    } catch (cause) {reportError(cause)}
+    finally {createPending.current = false; setCreatingBusy(false)}
   }
 
   // name search flattens the tree to every loaded folder whose name matches;
@@ -456,7 +497,7 @@ function FolderPicker({
           aria-selected={picked === entry.path}
           aria-expanded={children.length > 0 ? isOpen : undefined}
           onClick={() => {
-            if (!disabled) setPicked(entry.path)
+            if (!disabled) {pickedGeneration.current++; setPicked(entry.path)}
           }}
           onDoubleClick={() => {
             if (!disabled) onPick(entry.path)
@@ -496,13 +537,16 @@ function FolderPicker({
                     autoFocus
                     placeholder={t('untitledFolder')}
                     value={newName}
-                    onChange={(e) => setNewName(e.target.value)}
-                    onBlur={() => void commitCreate()}
+                    disabled={creatingBusy}
+                    onChange={(e) => {createGeneration.current++; setNewName(e.target.value)}}
+                    onBlur={() => void commitCreate(false)}
                     onKeyDown={(e) => {
                       e.stopPropagation()
                       if (e.nativeEvent.isComposing) return
                       if (e.key === 'Enter') void commitCreate()
                       if (e.key === 'Escape') {
+                        createGeneration.current++
+                        creatingRef.current = null
                         setCreatingIn(null)
                         setNewName('')
                       }
@@ -522,7 +566,7 @@ function FolderPicker({
     for (const listing of listings.values()) {
       for (const f of listing.folders) {
         if (f.name.toLowerCase().includes(needle)) {
-          hits.push({ path: f.path, name: f.name, rel: locationLabel(f.path + '/x', roots) })
+          hits.push({ path: f.path, name: f.name, rel: locationLabel(f.path + '/x', roots, listings) })
         }
         if (!listings.has(f.path)) load(f.path)
       }
@@ -540,7 +584,7 @@ function FolderPicker({
                 role="treeitem"
                 aria-selected={picked === h.path}
                 onClick={() => {
-                  if (!disabled) setPicked(h.path)
+                  if (!disabled) {pickedGeneration.current++; setPicked(h.path)}
                 }}
                 onDoubleClick={() => {
                   if (!disabled) onPick(h.path)
@@ -568,6 +612,7 @@ function FolderPicker({
         onClick={(e) => e.stopPropagation()}
       >
         <h3>{t('moveToFolderTitle')}</h3>
+        {(error || operationFailure) && <p className="home-action-error" role="alert">{error || operationFailure}</p>}
         <input
           className="picker-search"
           type="search"
@@ -585,9 +630,12 @@ function FolderPicker({
         <div className="modal-buttons picker-buttons">
           <button
             className="btn btn-secondary picker-new"
+            disabled={creatingBusy}
             onClick={() => {
               const parent = picked ?? roots.find((r) => r.usable)?.path
               if (!parent) return
+              createGeneration.current++
+              attemptedCreate.current = ''
               setExpanded((prev) => new Set([...prev, parent]))
               setCreatingIn(parent)
               setNewName('')
@@ -1485,11 +1533,26 @@ export interface HomeProps {
   supportedNewFormats?: readonly string[]
   accountEntry?: ReactNode
   askEnabled?: boolean
+  /** A host with empty-only directory deletion supplies its own accurate description. */
+  folderDeleteDescription?: (name: string) => string
 }
 
-export function Home({supportedFormats, supportedNewFormats, accountEntry, askEnabled = true}:HomeProps = {}) {
+export function Home({supportedFormats, supportedNewFormats, accountEntry, askEnabled = true, folderDeleteDescription}:HomeProps = {}) {
   const i18n = useI18n()
   const { t, lang } = i18n
+  const [actionError, setActionError] = useState('')
+  const errorFallback = useRef(t('askArtifactFailed'))
+  errorFallback.current = t('askArtifactFailed')
+  const reportError = useCallback((cause: unknown) => setActionError(operationError(cause, errorFallback.current)), [])
+  const activeActions = useRef(new Set<string>())
+  const attemptedDrafts = useRef(new Map<string, string>())
+  const [pendingActions, setPendingActions] = useState<ReadonlySet<string>>(new Set())
+  const runAction = async <T,>(key: string, work: () => Promise<T>, success: (result: T) => void) => {
+    if (activeActions.current.has(key)) return
+    activeActions.current.add(key); setPendingActions(new Set(activeActions.current)); setActionError('')
+    try {success(await work())} catch (cause) {reportError(cause)}
+    finally {activeActions.current.delete(key); setPendingActions(new Set(activeActions.current))}
+  }
   // ── Paged list state (rows loaded for the current view + filter) ──
   const [entries, setEntries] = useState<RecentEntry[]>([])
   /** total count under the current view + filter (not just the loaded rows) */
@@ -1540,6 +1603,9 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, askEn
   const rowMenuWrapRef = useRef<HTMLSpanElement>(null)
   const [selected, setSelected] = useState<ReadonlySet<string>>(new Set())
   const [renaming, setRenaming] = useState<{ path: string; value: string } | null>(null)
+  const renameGeneration = useRef(0)
+  const renamingRef = useRef(renaming)
+  renamingRef.current = renaming
   const [confirmDelete, setConfirmDelete] = useState<string[] | null>(null)
   // unavailable recent entry (missing flag) the user clicked — offer list removal
   const [confirmMissing, setConfirmMissing] = useState<RecentEntry | null>(null)
@@ -1578,7 +1644,8 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, askEn
     invalidate: invalidateFolders,
     reset: resetFolders,
     tracked: trackedFolder,
-  } = useFolderListings()
+  } = useFolderListings(reportError)
+  const displayName = (path: string) => entries.find((entry) => entry.path === path)?.name ?? searchPage?.hits.find((entry) => entry.path === path)?.name ?? loadedName(path, roots, listings)
   // open folder menu: path + fixed-position anchor (viewport coords), so the
   // popup can escape the scrollable tree without the tree losing overflow-y
   const [folderMenu, setFolderMenu] = useState<{
@@ -1598,12 +1665,16 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, askEn
     where: 'tree' | 'table'
     value: string
   } | null>(null)
+  const folderRenameGeneration = useRef(0)
   // inline "new folder" input in the tree, under this parent
   const [creating, setCreating] = useState<{ parent: string } | null>(null)
   const [newFolderName, setNewFolderName] = useState('')
-  const [confirmDeleteFolder, setConfirmDeleteFolder] = useState<string | null>(null)
+  const folderCreateGeneration = useRef(0)
+  const [confirmDeleteFolder, setConfirmDeleteFolder] = useState<{path: string} | null>(null)
   // move-to-folder picker for these paths; then the conflict prompt for the ones that collided
   const [movePicker, setMovePicker] = useState<string[] | null>(null)
+  const movePickerRef = useRef(movePicker)
+  movePickerRef.current = movePicker
   const [conflict, setConflict] = useState<{ paths: string[]; targetDir: string } | null>(null)
   // folder row currently hovered by a drag (sidebar or table)
   const [dropTarget, setDropTarget] = useState<string | null>(null)
@@ -1625,8 +1696,8 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, askEn
         }
         return next
       })
-    })
-  }, [resetFolders])
+    }).catch(reportError)
+  }, [resetFolders, reportError])
 
   useEffect(loadRoot, [loadRoot])
 
@@ -1695,7 +1766,7 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, askEn
           ? { ...prev, recent: visiblePageCount(page) }
           : { ...prev, starred: visiblePageCount(page) },
       )
-    })
+    }).catch((cause) => {if (seq === requestSeq.current) reportError(cause)})
     // The other view fetches only its count under the same active filter.
     void secondary({ offset: 0, limit: 0, ext }).then((page) => {
       if (seq !== requestSeq.current) return
@@ -1704,7 +1775,7 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, askEn
           ? { ...prev, starred: visiblePageCount(page) }
           : { ...prev, recent: visiblePageCount(page) },
       )
-    })
+    }).catch((cause) => {if (seq === requestSeq.current) reportError(cause)})
     // the group pills live on the renderer, so their list rides along with
     // every reload; a vanished group (last file unstarred/ungrouped) clears
     // the filter instead of showing a silently empty list
@@ -1712,7 +1783,7 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, askEn
       if (seq !== requestSeq.current) return
       setStarredGroups(groups)
       setGroupFilter((cur) => (cur && !groups.includes(cur) ? null : cur))
-    })
+    }).catch((cause) => {if (seq === requestSeq.current) reportError(cause)})
   }
   const reloadRef = useRef(reload)
   reloadRef.current = reload
@@ -1750,11 +1821,11 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, askEn
         setSearchPage(page)
         // results grow while the background index catches up
         if (page.index.pending > 0 || page.index.scanning) timer = window.setTimeout(run, 1500)
-      })
+      }).catch((cause) => {if (seq === searchSeq.current) reportError(cause)})
     }
     timer = window.setTimeout(run, 150)
     return () => window.clearTimeout(timer)
-  }, [q, filter])
+  }, [q, filter, reportError])
 
   // Jev judges the top local hits once they settle; the main process answers null when reranking is off.
   // The key changes only with the query, filter or candidate set, so index polls do not restart the timer.
@@ -1770,10 +1841,10 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, askEn
       void window.aiOffice.rerankSearch({ q, paths }).then((result) => {
         if (result) setRerank({ key, result })
         else setRerank((cur) => (cur && cur.key === key ? null : cur))
-      })
+      }).catch(reportError)
     }, 600)
     return () => window.clearTimeout(timer)
-  }, [q, filter, rerankKey, rerankSettingsTick])
+  }, [q, filter, rerankKey, rerankSettingsTick, reportError])
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -1816,7 +1887,7 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, askEn
       if (seq !== requestSeq.current) return
       setEntries((prev) => [...prev, ...page.entries])
       setListTotal(page.total)
-    })
+    }).catch((cause) => {setLoadingMore(false); if (seq === requestSeq.current) reportError(cause)})
   }
   const loadMoreRef = useRef(loadMore)
   loadMoreRef.current = loadMore
@@ -2016,59 +2087,71 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, askEn
   }
 
   const toggleStar = (path: string) => {
-    void window.aiOffice.toggleStar(path).then(refresh)
+    void runAction(`star:${path}`, () => window.aiOffice.toggleStar(path), refresh)
   }
 
   const removeRecent = (paths: string[]) => {
     setRowMenu(null)
-    setSelected(new Set())
-    void window.aiOffice.removeRecent(paths).then(refresh)
+    void runAction(`recent:${paths.join('\n')}`, () => window.aiOffice.removeRecent(paths), () => {setSelected((current) => current === selected ? new Set() : current); refresh()})
   }
 
   /** the Starred view's bulk action: drop the stars, keep the recents entries */
   const unstarSelected = (paths: string[]) => {
     setRowMenu(null)
-    setSelected(new Set())
-    void window.aiOffice.unstarPaths(paths).then(refresh)
+    void runAction(`unstar:${paths.join('\n')}`, () => window.aiOffice.unstarPaths(paths), () => {setSelected((current) => current === selected ? new Set() : current); refresh()})
   }
 
   /** put rows into a group (null = out of their group); the pills list and
    *  the filtered list come back with the refresh */
   const assignGroup = (paths: string[], group: string | null) => {
-    setGroupPicker(null)
     setRowMenu(null)
-    void window.aiOffice.setStarredGroup(paths, group).then(refresh)
+    void runAction(`group:${paths.join('\n')}`, () => window.aiOffice.setStarredGroup(paths, group), () => {setGroupPicker(null); refresh()})
   }
 
   const deleteFiles = (paths: string[]) => {
+    setActionError('')
     setRowMenu(null)
     setConfirmDelete(paths)
   }
 
   const confirmDeleteNow = () => {
     const paths = confirmDelete ?? []
-    setConfirmDelete(null)
-    setSelected(new Set())
-    void window.aiOffice.deleteFiles(paths).then(refresh)
+    if (!paths.length) return
+    void runAction(`delete:${paths.join('\n')}`, () => window.aiOffice.deleteFiles(paths), () => {
+      setConfirmDelete((current) => current === paths ? null : current)
+      setSelected((current) => current === selected ? new Set() : current)
+      refresh()
+    })
   }
 
   const duplicateFile = (path: string) => {
     setRowMenu(null)
-    void window.aiOffice.duplicateFile(path).then(refresh)
+    void runAction(`duplicate:${path}`, () => window.aiOffice.duplicateFile(path), refresh)
   }
 
   const startRename = (entry: RecentEntry) => {
+    renameGeneration.current++
     setRowMenu(null)
+    setActionError('')
+    attemptedDrafts.current.delete(`rename:${entry.path}`)
     setRenaming({ path: entry.path, value: baseName(entry) })
   }
 
-  const commitRename = (entry: RecentEntry) => {
-    const value = renaming?.value.trim() ?? ''
-    setRenaming(null)
-    if (!value || value === baseName(entry)) return
+  const commitRename = (entry: RecentEntry, explicit = true) => {
+    const pending = renamingRef.current
+    if (!pending || pending.path !== entry.path) return
+    const value = pending.value.trim()
+    if (!value || value === baseName(entry)) {renamingRef.current = null; setRenaming(null); return}
+    const generation = renameGeneration.current
+    const key = `rename:${entry.path}`
+    if (!explicit && attemptedDrafts.current.get(key) === value) return
+    attemptedDrafts.current.set(key, value)
     const newName = entry.ext ? `${value}.${entry.ext}` : value
-    void window.aiOffice.renameFile(entry.path, newName).then((result) => {
-      if (!result.ok) window.alert(result.error ?? t('renameFailed'))
+    void runAction(`rename:${entry.path}`, async () => {
+      const result = await window.aiOffice.renameFile(entry.path, newName)
+      if (!result.ok) throw new Error(result.error ?? t('renameFailed'))
+    }, () => {
+      if (generation === renameGeneration.current) {renamingRef.current = null; setRenaming(null)}
       refresh()
     })
   }
@@ -2076,6 +2159,9 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, askEn
   // ── Folder actions ──
 
   const startCreateFolder = (parent: string) => {
+    folderCreateGeneration.current++
+    setActionError('')
+    attemptedDrafts.current.delete(`create:${parent}`)
     setFolderMenu(null)
     expandTo(parent)
     setCreating({ parent })
@@ -2090,83 +2176,97 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, askEn
   const folderRenamingRef = useRef(folderRenaming)
   folderRenamingRef.current = folderRenaming
 
-  const commitCreateFolder = async () => {
+  const commitCreateFolder = async (explicit = true) => {
     const pending = creatingFolderRef.current
-    creatingFolderRef.current = null
     const name = pending?.name.trim()
-    setCreating(null)
-    setNewFolderName('')
-    if (!pending || !name) return
-    const result = await window.aiOffice.createFolder(pending.parent, name)
-    if (!result.ok) {
-      window.alert(result.error ?? t('renameFailed'))
-      return
-    }
-    invalidateFolders([pending.parent])
+    if (!pending || !name) {creatingFolderRef.current = null; setCreating(null); return}
+    const generation = folderCreateGeneration.current
+    const key = `create:${pending.parent}`
+    if (!explicit && attemptedDrafts.current.get(key) === name) return
+    attemptedDrafts.current.set(key, name)
+    await runAction(`create:${pending.parent}`, async () => {
+      const result = await window.aiOffice.createFolder(pending.parent, name)
+      if (!result.ok) throw new Error(result.error ?? t('renameFailed'))
+    }, () => {
+      if (generation === folderCreateGeneration.current) {creatingFolderRef.current = null; setCreating(null); setNewFolderName('')}
+      invalidateFolders([pending.parent])
+    })
   }
 
   const startRenameFolder = (entry: { path: string; name: string }, where: 'tree' | 'table') => {
+    folderRenameGeneration.current++
+    setActionError('')
+    attemptedDrafts.current.delete(`rename:${entry.path}`)
     setFolderMenu(null)
     setRowMenu(null)
     setFolderRenaming({ path: entry.path, where, value: entry.name })
   }
 
-  const commitRenameFolder = async () => {
+  const commitRenameFolder = async (explicit = true) => {
     const pending = folderRenamingRef.current
-    folderRenamingRef.current = null
-    setFolderRenaming(null)
     if (!pending) return
     const value = pending.value.trim()
-    if (!value || value === fileName(pending.path)) return
-    const result = await window.aiOffice.renameFolder(pending.path, value)
-    if (!result.ok) {
-      window.alert(result.error ?? t('renameFailed'))
-      return
-    }
-    if (result.path) {
-      const renamed = result.path
-      // selection / expansion follow the renamed folder (and anything inside it)
-      const rebase = (p: string) =>
-        p === pending.path || isUnder(pending.path, p) ? renamed + p.slice(pending.path.length) : p
-      setExpanded((prev) => new Set([...prev].map(rebase)))
-      if (selectedFolder) setSelectedFolder(rebase(selectedFolder))
-    }
-    refresh()
+    if (!value || value === displayName(pending.path)) {folderRenamingRef.current = null; setFolderRenaming(null); return}
+    const generation = folderRenameGeneration.current
+    const key = `rename:${pending.path}`
+    if (!explicit && attemptedDrafts.current.get(key) === value) return
+    attemptedDrafts.current.set(key, value)
+    await runAction(`rename:${pending.path}`, async () => {
+      const result = await window.aiOffice.renameFolder(pending.path, value)
+      if (!result.ok) throw new Error(result.error ?? t('renameFailed'))
+      return result
+    }, (result) => {
+      if (generation === folderRenameGeneration.current) {folderRenamingRef.current = null; setFolderRenaming(null)}
+      if (result.path) {
+        const renamed = result.path
+        // Desktop paths rebase; a Web rename intentionally retains its stable identity.
+        const rebase = (p: string) => p === pending.path || isUnder(pending.path, p) ? renamed + p.slice(pending.path.length) : p
+        setExpanded((prev) => new Set([...prev].map(rebase)))
+        setSelectedFolder((current) => current ? rebase(current) : current)
+      }
+      refresh()
+    })
   }
 
   const confirmDeleteFolderNow = async () => {
-    const dir = confirmDeleteFolder
-    setConfirmDeleteFolder(null)
-    if (!dir) return
-    await window.aiOffice.deleteFolder(dir)
-    if (selectedFolder && (selectedFolder === dir || isUnder(dir, selectedFolder))) {
-      setSelectedFolder(dirOf(dir))
-    }
-    refresh()
+    const confirmation = confirmDeleteFolder
+    if (!confirmation) return
+    const dir = confirmation.path
+    await runAction(`delete-folder:${dir}`, () => window.aiOffice.deleteFolder(dir), () => {
+      setConfirmDeleteFolder((current) => current === confirmation ? null : current)
+      setSelectedFolder((current) => current && (current === dir || isUnder(dir, current)) ? dirOf(dir) : current)
+      refresh()
+    })
   }
 
   const startMove = (paths: string[]) => {
+    setActionError('')
     setRowMenu(null)
     setFolderMenu(null)
     if (paths.length > 0) setMovePicker(paths)
   }
 
   const doMove = async (paths: string[], targetDir: string, policy: MoveConflictPolicy) => {
-    setMovePicker(null)
-    setConflict(null)
-    setSelected(new Set())
-    const result = await window.aiOffice.movePaths(paths, targetDir, policy)
-    if (result.moved.length > 0 && selectedFolder) {
-      // a moved folder that held the selection drags the selection along
-      for (const { from, to } of result.moved) {
-        if (selectedFolder === from || isUnder(from, selectedFolder)) {
-          setSelectedFolder(to + selectedFolder.slice(from.length))
-        }
+    await runAction(`move:${paths.join('\n')}`, () => window.aiOffice.movePaths(paths, targetDir, policy), (result) => {
+      if (result.moved.length > 0) {
+        setSelectedFolder((current) => {
+          if (!current) return current
+          const moved = result.moved.find(({from}) => current === from || isUnder(from, current))
+          return moved ? moved.to + current.slice(moved.from.length) : current
+        })
       }
-    }
-    refresh()
-    if (result.failed.length > 0) window.alert(result.failed[0].error)
-    if (result.conflicts.length > 0) setConflict({ paths: result.conflicts, targetDir })
+      refresh()
+      const ownsPicker = movePickerRef.current === movePicker
+      const failedPaths = result.failed.map((entry) => entry.path)
+      const nextPicker = failedPaths.length > 0 ? failedPaths : null
+      const nextConflict = result.conflicts.length > 0 ? {paths: result.conflicts, targetDir} : null
+      if (result.failed.length > 0) {
+        setActionError(result.failed[0].error)
+      }
+      setMovePicker((current) => current === movePicker ? nextPicker : current)
+      setSelected((current) => current === selected ? new Set(failedPaths) : current)
+      if (ownsPicker) setConflict((current) => current === conflict ? nextConflict : current)
+    })
   }
 
   // ── Drag & drop (rows → folder rows) ──
@@ -2277,7 +2377,7 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, askEn
     return (
       <div className="quick-cards">
         {NEW_ITEMS.filter(item => !supportedFormats || supportedFormats.includes(item.ext)).map((item) => (
-          <button key={item.ext} className="quick-card" disabled={Boolean(supportedNewFormats && !supportedNewFormats.includes(item.ext))} title={supportedNewFormats && !supportedNewFormats.includes(item.ext) ? 'Not available in this Web build' : undefined} onClick={() => void item.action()}>
+          <button key={item.ext} className="quick-card" disabled={Boolean(supportedNewFormats && !supportedNewFormats.includes(item.ext))} title={supportedNewFormats && !supportedNewFormats.includes(item.ext) ? 'Not available in this Web build' : undefined} onClick={() => void item.action().catch(reportError)}>
             <FileBadge ext={item.ext} size={30} />
             <span className="quick-text">
               <span className="quick-title-row">
@@ -2290,7 +2390,7 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, askEn
         ))}
         <button
           className="quick-card"
-          onClick={() => void window.aiOffice.browse()}
+          onClick={() => void window.aiOffice.browse().catch(reportError)}
           data-tip={supportedFormats ? supportedFormats.map(ext => `.${ext}`).join(' / ') : OPEN_LOCAL_EXTENSIONS}
         >
           <span className="quick-folder">
@@ -2312,15 +2412,17 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, askEn
   const addFolderRoot = () => {
     void window.aiOffice.addFolderRoot().then((added) => {
       if (added) loadRoot()
-    })
+    }).catch(reportError)
   }
 
   /** the folder leaves the list only; whatever it held on disk stays where it is */
   const removeFolderRoot = (path: string) => {
     setFolderMenu(null)
-    if (selectedFolder && isUnder(path, selectedFolder)) setSelectedFolder(null)
-    setExpanded((prev) => new Set([...prev].filter((dir) => !isUnder(path, dir))))
-    void window.aiOffice.removeFolderRoot(path).then(loadRoot)
+    void runAction(`remove-root:${path}`, () => window.aiOffice.removeFolderRoot(path), () => {
+      setSelectedFolder((current) => current && isUnder(path, current) ? null : current)
+      setExpanded((prev) => new Set([...prev].filter((dir) => !isUnder(path, dir))))
+      loadRoot()
+    })
   }
 
   // folders dragged in from the OS join the tree in place; documents open as they do anywhere else
@@ -2345,7 +2447,7 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, askEn
       if (paths.length === 0) return
       void window.aiOffice.dropFolderRoots(paths).then((added) => {
         if (added.length > 0) loadRoot()
-      })
+      }).catch(reportError)
     },
   }
 
@@ -2399,7 +2501,7 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, askEn
               role="menuitem"
               onClick={() => {
                 setFolderMenu(null)
-                void window.aiOffice.revealPath(entry.path)
+                void window.aiOffice.revealPath(entry.path).catch(reportError)
               }}
             >
               {t('revealInFolder')}
@@ -2413,7 +2515,7 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, askEn
                 className="danger"
                 onClick={() => {
                   setFolderMenu(null)
-                  setConfirmDeleteFolder(entry.path)
+                  setConfirmDeleteFolder({path: entry.path})
                 }}
               >
                 {t('deleteFolder')}
@@ -2445,13 +2547,16 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, askEn
           autoFocus
           placeholder={t('untitledFolder')}
           value={newFolderName}
-          onChange={(e) => setNewFolderName(e.target.value)}
-          onBlur={() => void commitCreateFolder()}
+          disabled={!!creating && pendingActions.has(`create:${creating.parent}`)}
+          onChange={(e) => {folderCreateGeneration.current++; setNewFolderName(e.target.value)}}
+          onBlur={() => void commitCreateFolder(false)}
           onKeyDown={(e) => {
             e.stopPropagation()
             if (e.nativeEvent.isComposing) return
             if (e.key === 'Enter') void commitCreateFolder()
             if (e.key === 'Escape') {
+              folderCreateGeneration.current++
+              creatingFolderRef.current = null
               setCreating(null)
               setNewFolderName('')
             }
@@ -2525,18 +2630,20 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, askEn
             <input
               className="folder-rename-input inline"
               value={folderRenaming.value}
+              disabled={pendingActions.has(`rename:${entry.path}`)}
               autoFocus
               onFocus={(e) => e.target.select()}
               onClick={(e) => e.stopPropagation()}
-              onChange={(e) =>
+              onChange={(e) => {
+                folderRenameGeneration.current++
                 setFolderRenaming({ path: entry.path, where: 'tree', value: e.target.value })
-              }
-              onBlur={() => void commitRenameFolder()}
+              }}
+              onBlur={() => void commitRenameFolder(false)}
               onKeyDown={(e) => {
                 e.stopPropagation()
                 if (e.nativeEvent.isComposing) return
                 if (e.key === 'Enter') void commitRenameFolder()
-                if (e.key === 'Escape') setFolderRenaming(null)
+                if (e.key === 'Escape') {folderRenameGeneration.current++; folderRenamingRef.current = null; setFolderRenaming(null)}
               }}
             />
           ) : (
@@ -2612,7 +2719,7 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, askEn
               <p>{t('rootUnusable')}</p>
               <button
                 className="btn btn-secondary"
-                onClick={() => void window.aiOffice.pickDefaultSaveDir().then(() => loadRoot())}
+                onClick={() => void window.aiOffice.pickDefaultSaveDir().then(() => loadRoot()).catch(reportError)}
               >
                 {t('pickSaveDir')}
               </button>
@@ -2648,12 +2755,12 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, askEn
           onClick={() => {
             if (isRenaming) return
             if (entry.missing) setConfirmMissing(entry)
-            else void window.aiOffice.openPath(entry.path)
+            else void window.aiOffice.openPath(entry.path).catch(reportError)
           }}
           onKeyDown={(event) => {
             if (event.key === 'Enter' && event.target === event.currentTarget) {
               if (entry.missing) setConfirmMissing(entry)
-              else void window.aiOffice.openPath(entry.path)
+              else void window.aiOffice.openPath(entry.path).catch(reportError)
             }
           }}
         >
@@ -2673,23 +2780,24 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, askEn
             <input
               className="rename-input"
               value={renaming.value}
+              disabled={pendingActions.has(`rename:${entry.path}`)}
               autoFocus
               onFocus={(event) => event.target.select()}
               onClick={(event) => event.stopPropagation()}
-              onChange={(event) => setRenaming({ path: entry.path, value: event.target.value })}
-              onBlur={() => commitRename(entry)}
+              onChange={(event) => {renameGeneration.current++; setRenaming({ path: entry.path, value: event.target.value })}}
+              onBlur={() => commitRename(entry, false)}
               onKeyDown={(event) => {
                 event.stopPropagation()
                 if (event.nativeEvent.isComposing) return
                 if (event.key === 'Enter') commitRename(entry)
-                if (event.key === 'Escape') setRenaming(null)
+                if (event.key === 'Escape') {renameGeneration.current++; renamingRef.current = null; setRenaming(null)}
               }}
             />
           ) : (
             <span className="recent-name">{entry.name}</span>
           )}
-          <span className="recent-path" title={dirOf(entry.path)}>
-            {locationLabel(entry.path, roots)}
+          <span className="recent-path" title={locationLabel(entry.path, roots, listings) || undefined}>
+            {locationLabel(entry.path, roots, listings)}
           </span>
           <span className="recent-time">
             {entry.missing ? '—' : formatModified(entry.mtimeMs, i18n)}
@@ -2736,7 +2844,7 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, askEn
                   role="menuitem"
                   onClick={() => {
                     setRowMenu(null)
-                    void window.aiOffice.openPath(entry.path)
+                    void window.aiOffice.openPath(entry.path).catch(reportError)
                   }}
                 >
                   {t('open')}
@@ -2745,7 +2853,7 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, askEn
                   role="menuitem"
                   onClick={() => {
                     setRowMenu(null)
-                    void window.aiOffice.revealPath(entry.path)
+                    void window.aiOffice.revealPath(entry.path).catch(reportError)
                   }}
                 >
                   {t('revealInFolder')}
@@ -2870,18 +2978,20 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, askEn
             <input
               className="rename-input"
               value={folderRenaming.value}
+              disabled={pendingActions.has(`rename:${entry.path}`)}
               autoFocus
               onFocus={(event) => event.target.select()}
               onClick={(event) => event.stopPropagation()}
-              onChange={(event) =>
+              onChange={(event) => {
+                folderRenameGeneration.current++
                 setFolderRenaming({ path: entry.path, where: 'table', value: event.target.value })
-              }
-              onBlur={() => void commitRenameFolder()}
+              }}
+              onBlur={() => void commitRenameFolder(false)}
               onKeyDown={(event) => {
                 event.stopPropagation()
                 if (event.nativeEvent.isComposing) return
                 if (event.key === 'Enter') void commitRenameFolder()
-                if (event.key === 'Escape') setFolderRenaming(null)
+                if (event.key === 'Escape') {folderRenameGeneration.current++; folderRenamingRef.current = null; setFolderRenaming(null)}
               }}
             />
           ) : (
@@ -2944,7 +3054,7 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, askEn
                   role="menuitem"
                   onClick={() => {
                     setFolderMenu(null)
-                    void window.aiOffice.revealPath(entry.path)
+                    void window.aiOffice.revealPath(entry.path).catch(reportError)
                   }}
                 >
                   {t('revealInFolder')}
@@ -2957,7 +3067,7 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, askEn
                       className="danger"
                       onClick={() => {
                         setFolderMenu(null)
-                        setConfirmDeleteFolder(entry.path)
+                        setConfirmDeleteFolder({path: entry.path})
                       }}
                     >
                       {t('deleteFolder')}
@@ -3077,9 +3187,9 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, askEn
       className="search-row"
       role="button"
       tabIndex={0}
-      onClick={() => void window.aiOffice.openPath(hit.path)}
+      onClick={() => void window.aiOffice.openPath(hit.path).catch(reportError)}
       onKeyDown={(e) => {
-        if (e.key === 'Enter') void window.aiOffice.openPath(hit.path)
+        if (e.key === 'Enter') void window.aiOffice.openPath(hit.path).catch(reportError)
       }}
     >
       <span className="recent-icon">
@@ -3088,8 +3198,8 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, askEn
       <div className="search-main">
         <div className="search-head">
           <span className="search-name">{highlightText(hit.name, hit.needles)}</span>
-          <span className="search-path" title={dirOf(hit.path)}>
-            {highlightText(locationLabel(hit.path, roots), hit.needles)}
+          <span className="search-path" title={locationLabel(hit.path, roots, listings) || undefined}>
+            {highlightText(locationLabel(hit.path, roots, listings), hit.needles)}
           </span>
         </div>
         {hit.snippet && (
@@ -3155,12 +3265,15 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, askEn
     )
   }
 
+  const renderActionError = () => actionError && <div className="home-action-error" role="alert"><span>{actionError}</span><button className="btn btn-secondary" onClick={() => setActionError('')}>{t('cancel')}</button></div>
+
   function renderFolderContent() {
     if (roots.length === 0) return null
     const total = folderSubfolders.length + folderFiles.length
     const sortedFiles = fileSort === 'oldest' ? [...folderFiles].reverse() : folderFiles
     return (
       <main className="content">
+        {!confirmDelete && !confirmDeleteFolder && !movePicker && renderActionError()}
         <section className="quick-start" aria-label={t('secQuickStart')}>
           <div className="section-head">
             <span className="section-label">{t('secQuickStart')}</span>
@@ -3276,6 +3389,7 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, askEn
     const greeting = `${t(greetKey)}${accountName ? (cjk ? '，' : ', ') + accountName : ''}${cjk ? '。' : '. '}`
     return (
       <main className="content">
+        {!confirmDelete && !confirmDeleteFolder && !movePicker && renderActionError()}
         <section className="quick-start" aria-label={t('secQuickStart')}>
           <div className="home-hero">
             <h1 className="hero-title">
@@ -3585,7 +3699,7 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, askEn
         renderFolderContent()
       ) : askMode ? (
         <KbAskPanel
-          onOpenPath={(path) => void window.aiOffice.openPath(path)}
+          onOpenPath={(path) => void window.aiOffice.openPath(path).catch(reportError)}
           onGoToRecents={() => changeView('recent')}
           onOpenModelSettings={() => setSettingsRequest({ section: 'aiModel' })}
         />
@@ -3606,19 +3720,20 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, askEn
             <h3>{t('deleteModalTitle')}</h3>
             <p>
               {confirmDelete.length === 1
-                ? t('deleteConfirmOne', { name: fileName(confirmDelete[0]) })
+                ? t('deleteConfirmOne', { name: displayName(confirmDelete[0]) })
                 : t('deleteConfirmMany', { n: confirmDelete.length })}
             </p>
             {confirmDelete.length > 1 && (
               <ul className="modal-file-list">
                 {confirmDelete.slice(0, 6).map((p) => (
-                  <li key={p}>{fileName(p)}</li>
+                  <li key={p}>{displayName(p)}</li>
                 ))}
                 {confirmDelete.length > 6 && (
                   <li>{t('deleteMoreCount', { n: confirmDelete.length })}</li>
                 )}
               </ul>
             )}
+            {renderActionError()}
             <div className="modal-buttons">
               <button
                 className="btn btn-secondary"
@@ -3627,7 +3742,7 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, askEn
               >
                 {t('cancel')}
               </button>
-              <button className="btn btn-danger" onClick={confirmDeleteNow}>
+              <button className="btn btn-danger" disabled={pendingActions.has(`delete:${confirmDelete.join('\n')}`)} onClick={confirmDeleteNow}>
                 {t('delete')}
               </button>
             </div>
@@ -3645,7 +3760,8 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, askEn
             onClick={(event) => event.stopPropagation()}
           >
             <h3>{t('deleteFolderTitle')}</h3>
-            <p>{t('deleteFolderConfirm', { name: fileName(confirmDeleteFolder) })}</p>
+            <p>{folderDeleteDescription?.(displayName(confirmDeleteFolder.path)) ?? t('deleteFolderConfirm', { name: displayName(confirmDeleteFolder.path) })}</p>
+            {renderActionError()}
             <div className="modal-buttons">
               <button
                 className="btn btn-secondary"
@@ -3654,7 +3770,7 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, askEn
               >
                 {t('cancel')}
               </button>
-              <button className="btn btn-danger" onClick={() => void confirmDeleteFolderNow()}>
+              <button className="btn btn-danger" disabled={pendingActions.has(`delete-folder:${confirmDeleteFolder.path}`)} onClick={() => void confirmDeleteFolderNow()}>
                 {t('delete')}
               </button>
             </div>
@@ -3699,11 +3815,12 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, askEn
       {movePicker && canMove && (
         <FolderPicker
           roots={roots}
-          currentDirs={new Set(movePicker.map(dirOf))}
+          currentDirs={new Set(movePicker.map((path) => loadedParent(path, listings)))}
           movingDirs={movingDirs(movePicker)}
           count={movePicker.length}
           onCancel={() => setMovePicker(null)}
           onPick={(dir) => void doMove(movePicker, dir, 'ask')}
+          operationFailure={actionError}
         />
       )}
 
@@ -3720,7 +3837,7 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, askEn
 
       {conflict && (
         <ConflictPrompt
-          names={conflict.paths.map(fileName)}
+          names={conflict.paths.map(displayName)}
           onChoose={(policy) => {
             if (policy === 'skip') setConflict(null)
             else void doMove(conflict.paths, conflict.targetDir, policy)

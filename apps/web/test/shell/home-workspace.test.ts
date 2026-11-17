@@ -1,0 +1,309 @@
+import {afterEach, beforeEach, expect, test, vi} from 'vitest'
+import {act, createElement as h} from 'react'
+import {createRoot, type Root} from 'react-dom/client'
+import {Home} from '../../../shell/src/renderer/src/Home'
+import {LocaleProvider} from '../../../shell/src/renderer/src/locale'
+import type {FolderListing, HomeApi, RecentEntry} from '../../../shell/src/shared/home-api'
+
+const fileId = 'aa000000-0000-4000-8000-000000000001'
+const project = '/workspace/bb000000-0000-4000-8000-000000000002'
+const contracts = `${project}/cc000000-0000-4000-8000-000000000003`
+const file: RecentEntry = {path: fileId, name: 'Quarterly report.docx', ext: 'docx', mtimeMs: 1, sizeBytes: 50, starred: true}
+let root: Root, host: HTMLDivElement
+let api: HomeApi
+const listings = (): Record<string, FolderListing> => ({
+  '/workspace': {dir: '/workspace', folders: [{path: project, name: 'Projects', mtimeMs: 1, hasSubfolders: true}], files: []},
+  [project]: {dir: project, folders: [{path: contracts, name: 'Contracts', mtimeMs: 1, hasSubfolders: false}], files: [file]},
+  [contracts]: {dir: contracts, folders: [], files: []},
+})
+beforeEach(async () => {
+  vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
+  HTMLElement.prototype.scrollIntoView = vi.fn()
+  HTMLElement.prototype.scrollTo = vi.fn()
+  localStorage.clear()
+  api = {
+    folderRoots: async () => [{path: '/workspace', name: 'My files', usable: true, readable: true, removable: false}],
+    listFolder: async path => listings()[path] ?? {dir: path, folders: [], files: []},
+    onFolderChanged: () => () => {}, onOpenSettings: () => () => {},
+    recents: async () => ({entries: [file], total: 1, totalAll: 1}),
+    starred: async () => ({entries: [file], total: 1, totalAll: 1}), starredGroups: async () => [],
+    toggleStar: async () => {}, unstarPaths: async () => {}, removeRecent: async () => {}, deleteFiles: async () => {},
+    createFolder: async (parent, name) => ({ok: true, path: parent + '/new-folder-id', name}),
+    renameFolder: async path => ({ok: true, path}), renameFile: async path => ({ok: true, path}),
+    deleteFolder: async () => {}, movePaths: async paths => ({moved: paths.map(path => ({from: path, to: path})), conflicts: [], failed: []}),
+  } as unknown as HomeApi
+  window.aiOffice = api
+  host = document.createElement('div'); document.body.append(host); root = createRoot(host)
+  await act(async () => root.render(h(LocaleProvider, {initial: 'en', children: h(Home, {accountEntry: h('div', null, 'Account'), askEnabled: false, supportedNewFormats: []})})))
+})
+afterEach(async () => {await act(async () => root.unmount()); host.remove(); vi.unstubAllGlobals()})
+const button = (label: string, scope: ParentNode = host) => {
+  const result = [...scope.querySelectorAll<HTMLButtonElement>('button')].find(node => node.textContent === label)
+  expect(result, label).toBeDefined(); return result!
+}
+async function click(node: HTMLElement) {expect(node).toBeTruthy(); await act(async () => node.click())}
+async function chooseFileAction(label: string) {await click(host.querySelector<HTMLButtonElement>('.recent-item:not(.folder-item) .recent-actions .more-btn')!); await click(button(label, host.querySelector('[role="menu"]')!))}
+const tree = (name: string) => [...host.querySelectorAll<HTMLElement>('.tree-row')].find(node => node.querySelector('.tree-name')?.textContent === name)!
+async function folderAction(label: string) {await click(tree('Projects').querySelector<HTMLButtonElement>('.folder-more-btn')!); await click(button(label, host.querySelector('[role="menu"]')!))}
+async function fill(node: HTMLInputElement, value: string) {expect(node).toBeTruthy(); await act(async () => {Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(node, value); node.dispatchEvent(new Event('input', {bubbles: true}))})}
+async function enter(node: HTMLInputElement) {await act(async () => node.dispatchEvent(new KeyboardEvent('keydown', {key: 'Enter', bubbles: true})))}
+const deferred = <T,>() => {let resolve!: (value: T) => void; const promise = new Promise<T>(yes => {resolve = yes}); return {promise, resolve}}
+
+test('file deletion shows the loaded name while retaining its opaque identity in the operation', async () => {
+  const deleted: string[][] = []; api.deleteFiles = async paths => {deleted.push(paths)}
+  await chooseFileAction('Delete files')
+  const dialog = host.querySelector('[role="dialog"]')!
+  expect(dialog.textContent).toContain('Quarterly report.docx')
+  expect(dialog.textContent).not.toContain(fileId)
+  await click(button('Delete', dialog))
+  expect(deleted).toEqual([[fileId]])
+})
+
+test('folder deletion resolves its name and retains the confirmation when the non-empty directory is rejected', async () => {
+  api.deleteFolder = async () => {throw new Error('The folder is not empty')}
+  await folderAction('Delete folder…')
+  expect(host.querySelector('[role="dialog"]')?.textContent).toContain('Projects')
+  expect(host.querySelector('[role="dialog"]')?.textContent).not.toContain('bb000000')
+  await click(button('Delete', host.querySelector('[role="dialog"]')!))
+  expect(host.querySelector('[role="alert"]')?.textContent).toContain('The folder is not empty')
+  expect(host.querySelector('[role="dialog"]')).not.toBeNull()
+  expect(tree('Projects')).toBeTruthy()
+})
+
+test('move search displays human folder ancestry instead of opaque folder IDs', async () => {
+  await chooseFileAction('Move to folder…')
+  await fill(host.querySelector<HTMLInputElement>('.picker-search')!, 'Contracts')
+  await act(async () => {})
+  expect(host.querySelector('.picker-rel')?.textContent).toBe('Projects / Contracts')
+  expect(host.querySelector('[role="dialog"]')?.textContent).not.toContain('bb000000')
+})
+
+test('failed folder creation leaves a visible error and the draft can be corrected without an automatic retry', async () => {
+  const names: string[] = []; api.createFolder = async (_parent, name) => {names.push(name); if (names.length === 1) throw new Error('Invalid folder name'); return {ok: true, path: '/workspace/new-id'}}
+  await click(host.querySelector<HTMLButtonElement>('.folder-new-btn')!)
+  await fill(host.querySelector<HTMLInputElement>('.folder-rename-input')!, 'bad/name')
+  await enter(host.querySelector<HTMLInputElement>('.folder-rename-input')!)
+  expect(host.querySelector('[role="alert"]')?.textContent).toContain('Invalid folder name')
+  expect(host.querySelector<HTMLInputElement>('.folder-rename-input')?.value).toBe('bad/name')
+  expect(names).toEqual(['bad/name'])
+  await fill(host.querySelector<HTMLInputElement>('.folder-rename-input')!, 'Good folder')
+  await enter(host.querySelector<HTMLInputElement>('.folder-rename-input')!)
+  expect(names).toEqual(['bad/name', 'Good folder'])
+  expect(host.querySelector('.folder-rename-input')).toBeNull()
+})
+
+test.each(['file', 'folder'])('a rejected %s rename preserves the typed name and reports its failure', async kind => {
+  api.renameFile = api.renameFolder = async () => {throw new Error('That name already exists')}
+  if (kind === 'file') await chooseFileAction('Rename')
+  else await folderAction('Rename')
+  const selector = kind === 'file' ? '.rename-input' : '.folder-rename-input'
+  await fill(host.querySelector<HTMLInputElement>(selector)!, 'New name')
+  await enter(host.querySelector<HTMLInputElement>(selector)!)
+  expect(host.querySelector('[role="alert"]')?.textContent).toContain('That name already exists')
+  expect(host.querySelector<HTMLInputElement>(selector)?.value).toBe('New name')
+})
+
+test.each(['star', 'recent', 'unstar', 'delete'])('a rejected %s operation is handled visibly and keeps the file on screen', async action => {
+  const failure = async () => {throw new Error('Workspace request failed')}
+  api.toggleStar = api.removeRecent = api.unstarPaths = api.deleteFiles = failure
+  if (action === 'star') await click(host.querySelector<HTMLButtonElement>('.star-btn')!)
+  if (action === 'recent') await chooseFileAction('Remove from list')
+  if (action === 'unstar') {await click([...host.querySelectorAll<HTMLButtonElement>('.sidebar-nav button')].find(node => node.querySelector('.nav-label')?.textContent === 'Starred')!); await chooseFileAction('Unstar')}
+  if (action === 'delete') {await chooseFileAction('Delete files'); await click(button('Delete', host.querySelector('[role="dialog"]')!))}
+  expect(host.querySelector('[role="alert"]')?.textContent).toContain('Workspace request failed')
+  expect(host.querySelector('.recent-name')?.textContent).toBe('Quarterly report.docx')
+})
+
+test('a rejected move preserves its target picker and reports the failure', async () => {
+  api.movePaths = async () => {throw new Error('Invalid move destination')}
+  await chooseFileAction('Move to folder…')
+  const target = [...host.querySelectorAll<HTMLElement>('.picker-row')].find(row => row.querySelector('.picker-name')?.textContent === 'Projects')!
+  await click(target); await click(button('Move 1'))
+  expect(host.querySelector('[role="alert"]')?.textContent).toContain('Invalid move destination')
+  expect(host.querySelector('.picker-modal')).not.toBeNull()
+})
+
+test('folder creation inside the move picker handles rejection and retains its draft', async () => {
+  api.createFolder = async () => {throw new Error('Invalid folder name')}
+  await chooseFileAction('Move to folder…'); await click(button('New folder', host.querySelector('.picker-modal')!))
+  await fill(host.querySelector<HTMLInputElement>('.picker-modal .folder-rename-input')!, 'bad/name')
+  await enter(host.querySelector<HTMLInputElement>('.picker-modal .folder-rename-input')!)
+  expect(host.querySelector('.picker-modal [role="alert"]')?.textContent).toContain('Invalid folder name')
+  expect(host.querySelector<HTMLInputElement>('.picker-modal .folder-rename-input')?.value).toBe('bad/name')
+})
+
+test('a host can describe empty-only folder deletion without changing desktop defaults', async () => {
+  await act(async () => root.render(h(LocaleProvider, {initial: 'en', children: h(Home, {accountEntry: h('div', null, 'Account'), askEnabled: false, supportedNewFormats: [], folderDeleteDescription: name => `Delete the empty folder ${name}; move its contents first.`})})))
+  await folderAction('Delete folder…')
+  expect(host.querySelector('[role="dialog"]')?.textContent).toContain('Delete the empty folder Projects; move its contents first.')
+  expect(host.querySelector('[role="dialog"]')?.textContent).not.toContain('everything inside')
+})
+
+test('unsupported add-root is shown as an actionable error instead of an unhandled rejection', async () => {
+  api.addFolderRoot = async () => {throw new Error('Adding local folders is not available here')}
+  await click(host.querySelector<HTMLButtonElement>('.folder-add-root-btn')!)
+  expect(host.querySelector('[role="alert"]')?.textContent).toContain('Adding local folders is not available here')
+})
+
+test('blurring an unchanged rejected draft does not automatically submit it again', async () => {
+  let calls = 0
+  api.createFolder = async () => {calls++; throw new Error('Invalid folder name')}
+  await click(host.querySelector<HTMLButtonElement>('.folder-new-btn')!)
+  await fill(host.querySelector<HTMLInputElement>('.folder-rename-input')!, 'bad/name')
+  await enter(host.querySelector<HTMLInputElement>('.folder-rename-input')!)
+  await act(async () => host.querySelector<HTMLInputElement>('.folder-rename-input')!.dispatchEvent(new FocusEvent('focusout', {bubbles: true})))
+  expect(calls).toBe(1)
+  await fill(host.querySelector<HTMLInputElement>('.folder-rename-input')!, 'edited/name')
+  await act(async () => host.querySelector<HTMLInputElement>('.folder-rename-input')!.dispatchEvent(new FocusEvent('focusout', {bubbles: true})))
+  expect(calls).toBe(2)
+})
+
+test('a late folder creation preserves a newer draft under another parent', async () => {
+  const pending = deferred<{ok: boolean; path: string}>()
+  api.createFolder = async () => pending.promise
+  await click(host.querySelector<HTMLButtonElement>('.folder-new-btn')!)
+  await fill(host.querySelector<HTMLInputElement>('.folder-rename-input')!, 'First')
+  await enter(host.querySelector<HTMLInputElement>('.folder-rename-input')!)
+  await click(tree('Projects')); await click(host.querySelector<HTMLButtonElement>('.folder-new-btn')!)
+  await fill(host.querySelector<HTMLInputElement>('.folder-rename-input')!, 'Second draft')
+  await act(async () => pending.resolve({ok: true, path: '/workspace/first-created'}))
+  expect(host.querySelector<HTMLInputElement>('.folder-rename-input')?.value).toBe('Second draft')
+})
+
+test('a late file rename preserves the newer file rename draft', async () => {
+  const second = {...file, path: 'aa000000-0000-4000-8000-000000000009', name: 'Second report.docx'}
+  api.recents = async () => ({entries: [file, second], total: 2, totalAll: 2})
+  await act(async () => window.dispatchEvent(new Event('focus')))
+  const pending = deferred<{ok: boolean; path: string}>()
+  api.renameFile = async () => pending.promise
+  await chooseFileAction('Rename')
+  await fill(host.querySelector<HTMLInputElement>('.rename-input')!, 'First rename')
+  await enter(host.querySelector<HTMLInputElement>('.rename-input')!)
+  const secondRow = [...host.querySelectorAll<HTMLElement>('.recent-item')].find(row => row.querySelector('.recent-name')?.textContent === 'Second report.docx')!
+  await click(secondRow.querySelector<HTMLButtonElement>('.more-btn')!); await click(button('Rename', host.querySelector('[role="menu"]')!))
+  await fill(host.querySelector<HTMLInputElement>('.rename-input')!, 'Second rename draft')
+  await act(async () => pending.resolve({ok: true, path: fileId}))
+  expect(host.querySelector<HTMLInputElement>('.rename-input')?.value).toBe('Second rename draft')
+})
+
+test('a late folder rename preserves a newer folder rename draft', async () => {
+  await click(tree('Projects'))
+  const pending = deferred<{ok: boolean; path: string}>()
+  api.renameFolder = async () => pending.promise
+  await folderAction('Rename')
+  await fill(host.querySelector<HTMLInputElement>('.folder-rename-input')!, 'First rename')
+  await enter(host.querySelector<HTMLInputElement>('.folder-rename-input')!)
+  await click(host.querySelector<HTMLButtonElement>('.folder-item .more-btn')!)
+  await click(button('Rename', host.querySelector('[role="menu"]')!))
+  await fill(host.querySelector<HTMLInputElement>('.folder-item .rename-input')!, 'Second folder draft')
+  await act(async () => pending.resolve({ok: true, path: project}))
+  expect(host.querySelector<HTMLInputElement>('.folder-item .rename-input')?.value).toBe('Second folder draft')
+})
+
+test('a late picker creation preserves the destination selected while it was pending', async () => {
+  const pending = deferred<{ok: boolean; path: string}>()
+  api.createFolder = async () => pending.promise
+  await chooseFileAction('Move to folder…'); await click(button('New folder', host.querySelector('.picker-modal')!))
+  await fill(host.querySelector<HTMLInputElement>('.picker-modal .folder-rename-input')!, 'First')
+  await enter(host.querySelector<HTMLInputElement>('.picker-modal .folder-rename-input')!)
+  await click([...host.querySelectorAll<HTMLElement>('.picker-row')].find(row => row.querySelector('.picker-name')?.textContent === 'Projects')!)
+  await act(async () => pending.resolve({ok: true, path: '/workspace/first-created'}))
+  expect([...host.querySelectorAll<HTMLElement>('.picker-row')].find(row => row.getAttribute('aria-selected') === 'true')?.textContent).toBe('Projects')
+})
+
+test.each(['rename', 'delete'])('a late folder %s does not navigate back after the user returns to Recent', async action => {
+  await click(tree('Projects'))
+  const pending = deferred<{ok: boolean; path: string}>()
+  if (action === 'rename') {
+    api.renameFolder = async () => pending.promise
+    await folderAction('Rename'); await fill(host.querySelector<HTMLInputElement>('.folder-rename-input')!, 'Renamed')
+    await enter(host.querySelector<HTMLInputElement>('.folder-rename-input')!)
+  } else {
+    api.deleteFolder = async () => {await pending.promise}
+    await folderAction('Delete folder…'); await click(button('Delete', host.querySelector('[role="dialog"]')!))
+    await click(button('Cancel', host.querySelector('[role="dialog"]')!))
+  }
+  await click([...host.querySelectorAll<HTMLButtonElement>('.sidebar-nav button')].find(node => node.querySelector('.nav-label')?.textContent === 'Recent')!)
+  await act(async () => pending.resolve({ok: true, path: project}))
+  expect(host.querySelector('.tree-row.active')).toBeNull()
+  expect(host.querySelector('.sidebar-nav [aria-current="page"] .nav-label')?.textContent).toBe('Recent')
+})
+
+test('a late folder move does not navigate back after the user returns to Recent', async () => {
+  api.folderRoots = async () => [
+    {path: '/workspace', name: 'My files', usable: true, readable: true, removable: false},
+    {path: '/archive', name: 'Archive', usable: true, readable: true, removable: true},
+  ]
+  await act(async () => window.dispatchEvent(new Event('focus')))
+  await click(tree('Projects'))
+  const pending = deferred<void>()
+  api.movePaths = async () => {await pending.promise; return {moved: [{from: project, to: '/archive/projects'}], conflicts: [], failed: []}}
+  await folderAction('Move to folder…')
+  await click([...host.querySelectorAll<HTMLElement>('.picker-row')].find(row => row.querySelector('.picker-name')?.textContent === 'Archive')!)
+  await click(button('Move 1')); await click(button('Cancel', host.querySelector('.picker-modal')!))
+  await click([...host.querySelectorAll<HTMLButtonElement>('.sidebar-nav button')].find(node => node.querySelector('.nav-label')?.textContent === 'Recent')!)
+  await act(async () => pending.resolve())
+  expect(host.querySelector('.sidebar-nav [aria-current="page"] .nav-label')?.textContent).toBe('Recent')
+})
+
+test('a late root removal preserves the folder selected in another root', async () => {
+  let removed = false
+  api.folderRoots = async () => [
+    {path: '/workspace', name: 'My files', usable: true, readable: true, removable: false},
+    ...removed ? [] : [{path: '/archive', name: 'Archive', usable: true, readable: true, removable: true}],
+  ]
+  await act(async () => window.dispatchEvent(new Event('focus')))
+  await click(tree('Archive'))
+  const pending = deferred<void>()
+  api.removeFolderRoot = async () => {await pending.promise; removed = true}
+  await click(tree('Archive').querySelector<HTMLButtonElement>('.folder-more-btn')!)
+  await click(button('Remove from list', host.querySelector('[role="menu"]')!))
+  await click(tree('Projects'))
+  await act(async () => pending.resolve())
+  expect(host.querySelector('.tree-row.active .tree-name')?.textContent).toBe('Projects')
+})
+
+test('a late delete preserves a newer confirmation and selection, then deletes the new confirmed target', async () => {
+  const second = {...file, path: 'aa000000-0000-4000-8000-000000000009', name: 'Second report.docx'}
+  api.recents = async () => ({entries: [file, second], total: 2, totalAll: 2})
+  await act(async () => window.dispatchEvent(new Event('focus')))
+  const checkbox = (name: string) => host.querySelector<HTMLInputElement>(`input[aria-label="Select ${name}"]`)!
+  const pending = deferred<void>(), deleted: string[][] = []
+  api.deleteFiles = async paths => {deleted.push(paths); if (deleted.length === 1) await pending.promise}
+  await click(checkbox(file.name)); await click(button('Delete files', host.querySelector('.selection-bar')!))
+  await click(button('Delete', host.querySelector('[role="dialog"]')!)); await click(button('Cancel', host.querySelector('[role="dialog"]')!))
+  await click(checkbox(file.name)); await click(checkbox(second.name))
+  await click(button('Delete files', host.querySelector('.selection-bar')!))
+  expect(host.querySelector('[role="dialog"]')?.textContent).toContain(second.name)
+  await act(async () => pending.resolve())
+  expect(host.querySelector('[role="dialog"]')?.textContent).toContain(second.name)
+  expect(checkbox(second.name).checked).toBe(true)
+  await click(button('Delete', host.querySelector('[role="dialog"]')!))
+  expect(deleted).toEqual([[fileId], [second.path]])
+  expect(host.querySelector('[role="dialog"]')).toBeNull()
+  expect(checkbox(second.name).checked).toBe(false)
+})
+
+test('a late move preserves a newer picker and selection, then moves the new selected target', async () => {
+  const second = {...file, path: 'aa000000-0000-4000-8000-000000000009', name: 'Second report.docx'}
+  api.recents = async () => ({entries: [file, second], total: 2, totalAll: 2})
+  await act(async () => window.dispatchEvent(new Event('focus')))
+  const checkbox = (name: string) => host.querySelector<HTMLInputElement>(`input[aria-label="Select ${name}"]`)!
+  const destination = (name: string) => [...host.querySelectorAll<HTMLElement>('.picker-row')].find(row => row.querySelector('.picker-name')?.textContent === name)!
+  const pending = deferred<void>(), moves: Array<{paths: string[]; target: string}> = []
+  api.movePaths = async (paths, target) => {moves.push({paths, target}); if (moves.length === 1) await pending.promise; return {moved: paths.map(path => ({from: path, to: path})), conflicts: [], failed: []}}
+  await click(checkbox(file.name)); await click(button('Move to folder…', host.querySelector('.selection-bar')!))
+  await click(destination('Projects')); await click(button('Move 1'))
+  await click(button('Cancel', host.querySelector('.picker-modal')!))
+  await click(checkbox(file.name)); await click(checkbox(second.name))
+  await click(button('Move to folder…', host.querySelector('.selection-bar')!)); await click(destination('My files'))
+  await act(async () => pending.resolve())
+  expect(host.querySelector('.picker-modal')).not.toBeNull()
+  expect(destination('My files').getAttribute('aria-selected')).toBe('true')
+  expect(checkbox(second.name).checked).toBe(true)
+  await click(button('Move 1'))
+  expect(moves).toEqual([{paths: [fileId], target: project}, {paths: [second.path], target: '/workspace'}])
+  expect(host.querySelector('.picker-modal')).toBeNull()
+  expect(checkbox(second.name).checked).toBe(false)
+})
+

@@ -366,3 +366,9 @@ its existing native strip-types contract.
 See [backend-only validation](../../docs/dyoffice/evidence/t12-backend.md) for exact
 coverage and limits. Backend API tests do not stand in for current browser, UI
 session-switch/save-failure, or native DOCX theme/roundtrip acceptance.
+
+## T12 non-native UI stage
+
+This stage wires the original Home to per-user workspace folders, favorites and recoverable Trash, and exposes personal settings and administrator global-configuration controls. Web personal preferences use an explicit draft/save flow; unsupported desktop controls remain disabled.
+
+Existing DOCX navigation is retained. XLSX retains #52’s original-download/import-notification implementation even if a native capability is advertised (the target previously rejected non-DOCX opening): the new unverified XLSX Home jump stays in draft #52. No migrations, native runtime adapters, isolation settings or provider execution paths change here. See [scoped evidence](../../docs/dyoffice/evidence/t12-nonnative-ui.md).
