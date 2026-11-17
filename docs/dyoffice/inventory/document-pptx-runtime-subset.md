@@ -166,3 +166,40 @@ References: [Node process.dlopen](https://nodejs.org/docs/latest-v24.x/api/proce
 and [Linux dynamic-loader behavior](https://man7.org/linux/man-pages/man8/ld.so.8.html).
 The Node 24 documentation describes the mechanism, not certification of the
 specific Node bytes or their reachable addon dependency closure.
+
+### Located official inputs, not acquired or approved
+
+A follow-up read-only metadata search located these concrete preparation
+candidates. They are not production-version approvals or verified downloads:
+
+- Ubuntu 24.04 amd64 snapshot:
+  https://cloud-images.ubuntu.com/releases/noble/release-20261017/
+  Obtain `ubuntu-24.04-server-cloudimg-amd64-root.tar.xz`, its `root.manifest`,
+  `SHA256SUMS` and `SHA256SUMS.gpg`. The browsed checksum table lists
+  `ec6972af8ea2bd05c55299d204e5ae3f91769b84cfaec7395639d236a39f9a03`
+  for the root tar. This transcribed digest is not an independently verified
+  signing anchor; verify the signed table before trusting it.
+- openEuler 24.03 LTS SP1 x86_64:
+  https://repo.openeuler.org/openEuler-24.03-LTS-SP1/ISO/x86_64/
+  Directory entries include the DVD ISO, `.iso.sha256sum`, `.rpmlist` and
+  `baseos_bin_2_src.csv`. Official repository key location:
+  https://repo.openeuler.org/openEuler-24.03-LTS-SP1/OS/x86_64/RPM-GPG-KEY-openEuler
+  The available web reader could not read the octet-stream key/checksum files;
+  no key fingerprint, ISO hash or signed ISO chain was established. A checksum
+  file alone is not a signature. Verify independently anchored package signatures
+  and preserve the exact repository/package source mapping.
+- Node fixed candidate v24.22.3:
+  https://nodejs.org/download/release/v24.22.3/
+  Obtain `node-v24.22.3-linux-x64.tar.xz`, `SHASUMS256.txt` and its `.asc` or
+  `.sig`, plus the complete version-matched LICENSE:
+  https://github.com/nodejs/node/blob/v24.22.3/LICENSE
+  The fixed-version checksum could not be read by the available web channel;
+  no download hash or release signature has been verified.
+
+The current execution environment's allowed domains do not include these
+three binary-download hosts. No proxy, mirror rehosting or network-setting
+change was attempted. Browsable metadata cannot supply original binary/signature
+bytes for local verification. An authorized material-transfer channel and
+independently established trust anchors are still needed. Preserve each selected
+package's copyright, license, NOTICE and applicable source obligations; a
+website footer license or a generic MIT label does not cover the runtime tree.

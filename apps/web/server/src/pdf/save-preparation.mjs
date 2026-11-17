@@ -31,6 +31,16 @@ export function createPdfSavePreparation({files,leases,revisions,processor}){
     if(source.format!=='pdf')fail('PDF_FORMAT_REQUIRED')
     const inputSha256=hash(source.bytes)
     if(inputSha256!==current.file.sha256)fail('PDF_OUTPUT_BINDING')
+    // Object I/O may outlive the original session/lease/head snapshot. Recheck
+    // before exposing bytes to the processor, not only when staging its output.
+    // These short transactions deliberately finish before external processing:
+    // this narrows the race but is NOT an atomic execution grant or OS isolation.
+    const fresh=await files.openFile(token,fileId);check(signal)
+    if(fresh.format!=='pdf')fail('PDF_FORMAT_REQUIRED')
+    if(fresh.file.revision!==baseRevision)throw authError(409)
+    if(fresh.file.sha256!==inputSha256)fail('PDF_OUTPUT_BINDING')
+    const freshLease=await leases.getLease(token,fileId);check(signal)
+    if(!freshLease.active||!freshLease.heldByCurrentSession||freshLease.editorId!==editorId||freshLease.leaseEpoch!==leaseEpoch)throw authError(409)
     const result=await processor.execute(source.bytes,request,signal);check(signal)
     if(!Buffer.isBuffer(result?.bytes)||result.bytes.length<1||result.bytes.length>64*1024*1024)fail('PDF_OUTPUT_BINDING')
     const output=Buffer.from(result.bytes),sha256=hash(output)

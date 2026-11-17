@@ -424,3 +424,39 @@ and complete license provenance is available here. Debian package material and
 host-library observations are not substitutes. The subset inventory now defines
 required independent signing anchors, package/license mapping, reachable native
 addon dependencies, actual loader resolution and per-target acceptance.
+
+## Actual PDF authority and PPTX output-identity fixes
+
+PDF preparation now rechecks the current session/head/hash and writer lease
+following object download and before handing bytes to the processor. Three
+real-PG regressions first failed because the processor was reached after
+session revocation, lease takeover or head advancement during download; the
+fix rejects before processing or staging. This only narrows that I/O window:
+separate checks are not an atomic execution grant, and final T06 checks remain.
+Independent PDF preparation/attempt/expiry regression passed 15/15.
+
+PPTX preparation now snapshots request identity before its first await, checks
+returned export generation, copies exported bytes before staging and computes
+one hash/size identity. The actual receive receipt must match upload ID, hash
+and size before session binding. Mismatch cancels the known upload and rejects;
+cleanup failure never becomes a successful preparation. The size limit reuses
+T06's existing 32 MiB constant, not a new smaller runtime policy.
+
+Six actual PG/RustFS regressions first failed on caller-input mutation, original
+export-buffer mutation, wrong export generation and three receipt-field faults.
+All six plus the existing six PPTX cases then passed. Final independent combined
+PDF/PPTX regression passed 32/32 with real PostgreSQL and local/RustFS object
+stores (mixed scopes, not all tests use RustFS). One earlier combined attempt
+had 29 passes and one file-load failure because this partial checkout lacked
+an unchanged PDF save-attempt module; its exact remote blob was materialized,
+then all 32 ran successfully. No production dependency was modified to hide it.
+Temporary PG/RustFS services stopped. Independent source review found no
+blocking issues; no runtime enablement, OS isolation certification or full
+four-format production/T06 closure is claimed.
+
+The complete server TypeScript configuration was then checked in a materialized
+201-file server tree: every server blob matches the remote head except these two
+intended PDF/PPTX changes. `tsc -p apps/web/server/tsconfig.json --noEmit` passed.
+The earlier partial-tree check lacked the unchanged PPTX host type dependency;
+that limitation was resolved by materializing and hashing the exact remote file,
+not by weakening types or claiming a full-repository check.
