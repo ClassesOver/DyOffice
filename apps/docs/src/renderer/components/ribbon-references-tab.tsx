@@ -234,6 +234,7 @@ function SourceModal({
 }
 
 interface ReferencesTabProps extends TabProps {
+  desktopActionsAvailable?: boolean
   blocks: Block[]
   onInsertNote: (kind: 'footnote' | 'endnote') => void
   sources: SourceInfo[]
@@ -245,6 +246,7 @@ interface ReferencesTabProps extends TabProps {
 }
 
 export function ReferencesTab({
+  desktopActionsAvailable = true,
   editor,
   hasDoc,
   blocks,
@@ -392,7 +394,8 @@ export function ReferencesTab({
         <div className="ribbon-group-items">
           <button
             className="rb-big"
-            disabled={!hasDoc || zoteroBusy !== null}
+            disabled={!hasDoc || !desktopActionsAvailable || zoteroBusy !== null}
+            title={!desktopActionsAvailable ? 'Zotero 连接仅桌面版可用。' : undefined}
             data-tip={t('zoteroCitationTip')}
             onClick={() => void runZotero('addEditCitation')}
           >
@@ -403,7 +406,8 @@ export function ReferencesTab({
           </button>
           <button
             className="rb-big"
-            disabled={!hasDoc || zoteroBusy !== null}
+            disabled={!hasDoc || !desktopActionsAvailable || zoteroBusy !== null}
+            title={!desktopActionsAvailable ? 'Zotero 连接仅桌面版可用。' : undefined}
             data-tip={t('zoteroBibliographyTip')}
             onClick={() => void runZotero('addEditBibliography')}
           >
@@ -414,7 +418,8 @@ export function ReferencesTab({
           </button>
           <button
             className="rb-big"
-            disabled={!hasDoc || zoteroBusy !== null}
+            disabled={!hasDoc || !desktopActionsAvailable || zoteroBusy !== null}
+            title={!desktopActionsAvailable ? 'Zotero 连接仅桌面版可用。' : undefined}
             data-tip={t('zoteroRefreshTip')}
             onClick={() => void runZotero('refresh')}
           >
@@ -426,7 +431,8 @@ export function ReferencesTab({
           <div className="rb-split-wrap">
             <button
               className="rb-big"
-              disabled={!hasDoc || zoteroBusy !== null}
+              disabled={!hasDoc || !desktopActionsAvailable || zoteroBusy !== null}
+            title={!desktopActionsAvailable ? 'Zotero 连接仅桌面版可用。' : undefined}
               data-tip={t('zoteroDocumentSettingsTip')}
               onClick={() => toggleDropdown(setDropdown, 'zotero-settings')}
             >

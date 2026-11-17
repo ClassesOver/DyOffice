@@ -1,6 +1,6 @@
 # dyoffice Web
 
-This is the Web adaptation inside the cloned GenOffice repository, based on upstream `19a389b39be75f611ec21dcda4a7b91a658239d2`. UI and browser integration reference: ClassesOver/sm PR #245 (`beeb717b31e2201cc1e541c54b2f750f606d99e2`). Upstream engines and license notices remain in place.
+This is the Web adaptation inside the cloned DyOffice repository, based on upstream `19a389b39be75f611ec21dcda4a7b91a658239d2`. UI and browser integration reference: ClassesOver/sm PR #245 (`beeb717b31e2201cc1e541c54b2f750f606d99e2`). Upstream engines and license notices remain in place.
 
 The first sections describe the default development-token runtime and its modular account services. The separate PostgreSQL local-account experimental runtime is documented in T03–T08 below; its native DOCX entry uses Cookie sessions and does not read prototype JSON state. Both runtime paths reject production startup.
 
@@ -33,7 +33,7 @@ Open `http://127.0.0.1:3080` for the personal workspace and `/admin` for adminis
 
 ## Current implementation
 
-- Personal DOCX open/edit/save. The page edits plain paragraph, heading, and list text. Saves call GenOffice `docx-engine` so unchanged paragraphs, tables, pictures, styles, and headers stay in the original OOXML package. Complex paragraphs (tabs, fields, revisions, content controls) are shown and preserved, not rewritten as plain text.
+- Personal DOCX open/edit/save. The page edits plain paragraph, heading, and list text. Saves call DyOffice `docx-engine` so unchanged paragraphs, tables, pictures, styles, and headers stay in the original OOXML package. Complex paragraphs (tabs, fields, revisions, content controls) are shown and preserved, not rewritten as plain text.
 - Document revisions: a save names the base revision, lease epoch, and idempotency key. The server writes the bytes to the local immutable object store, then commits the base revision, lease, idempotency record, and outbox entry in one in-process journal transaction. A stale base or lease returns 409 and keeps the draft. Repeating the same save returns the original revision. Restoring an older revision creates a new head. The journal is single-process and is the development stand-in for the PostgreSQL transaction in `server/db/migrations/0004_revisions.sql`. The Web process does not open PostgreSQL to commit revisions, and the journal does not enforce row-level security.
 - Personal file import/download restricted to DOCX, XLSX, PPTX and PDF. Only DOCX is editable.
 - Personal theme, language, author, autosave and assistant preferences.
@@ -50,9 +50,9 @@ The modular `.mjs` T03 account services implement identity and sessions. The che
 
 The modular runtime implements the T05 object-storage lifecycle described here. Personal objects can be staged, finished, downloaded, trashed, restored, and purged. The server checks SHA-256, enforces quota, expires abandoned uploads, and keeps a file row only after the object exists. An in-process client covers those rules in `npm run test:web`. A MinIO job, [dyoffice-t05-s3.yml](../../.github/workflows/dyoffice-t05-s3.yml), runs the same lifecycle against S3 when `DYOFFICE_S3_ENDPOINT` is set; the test skips when it is not. Row-level security remains T04. Multi-node highly available storage remains an operations concern. The older `/api/files` directory is the development-token prototype, not this store.
 
-A PDF capability gate reports page order, text versus scanned versus blank pages, unembedded fonts, and unverified signatures. It refuses annotation, text edit, page reorder, redaction, cover-text-as-deletion, and trusting a signature. Password-marked files are not readable. PDF tabs mount a read-only PDF.js viewer with same-origin fonts/CMaps and a strict CSP. PDFium is used only by the internal pixel-regression helper, not an exposed rendering API. This is not the original GenOffice PDF editor UI. See `docs/dyoffice/evidence/t11-pdf-capabilities.md` and `docs/dyoffice/evidence/t11-pdf-render.md`.
+A PDF capability gate reports page order, text versus scanned versus blank pages, unembedded fonts, and unverified signatures. It refuses annotation, text edit, page reorder, redaction, cover-text-as-deletion, and trusting a signature. Password-marked files are not readable. PDF tabs mount a read-only PDF.js viewer with same-origin fonts/CMaps and a strict CSP. PDFium is used only by the internal pixel-regression helper, not an exposed rendering API. This is not the original DyOffice PDF editor UI. See `docs/dyoffice/evidence/t11-pdf-capabilities.md` and `docs/dyoffice/evidence/t11-pdf-render.md`.
 
-T06 save transactions, revision history, and single-writer leases are complete for this development server. The done and deferred checklist is in `docs/dyoffice/evidence/t06-revision-commit.md`. `mountDocsEditor` now opens a DOCX, edits a paragraph, undoes that local change, and saves through the host; see `docs/dyoffice/evidence/t07-docs-browser-mount.md`. Mount the GenOffice Docs renderer (ribbon, pagination, comments, tracked changes, and selection) on this DOCX host instead of that surface. Then adapt the other formats the same way, reusing each native editor and keeping non-browser work behind authorized APIs. Model chat/tool execution, database connectors and query integration, source edit/delete/test UI, file folders/favorites/recent views, and deployment hardening are still open. Autosave uses the saved preference; the assistant preference is stored and not yet shown.
+T06 save transactions, revision history, and single-writer leases are complete for this development server. The done and deferred checklist is in `docs/dyoffice/evidence/t06-revision-commit.md`. `mountDocsEditor` now opens a DOCX, edits a paragraph, undoes that local change, and saves through the host; see `docs/dyoffice/evidence/t07-docs-browser-mount.md`. Mount the DyOffice Docs renderer (ribbon, pagination, comments, tracked changes, and selection) on this DOCX host instead of that surface. Then adapt the other formats the same way, reusing each native editor and keeping non-browser work behind authorized APIs. Model chat/tool execution, database connectors and query integration, source edit/delete/test UI, file folders/favorites/recent views, and deployment hardening are still open. Autosave uses the saved preference; the assistant preference is stored and not yet shown.
 
 Run `npm run test:web` for HTTP access-boundary and persistence tests. Runtime dependencies are scoped to this app so starting the Web server does not install or launch Electron.
 
@@ -137,7 +137,7 @@ Admin updates apply supplied sections against the latest state inside the instan
 By default, `dev:web` and `start:web` boot Fastify through `server/src/app.mjs` → `buildApp`. Preferences, admin configuration, data sources, files, DOCX editing, and static pages are registered as modules on that shell. Health probes use static schemas. Business bodies keep the existing module validators. The process rate limit and shutdown cover one process. `NODE_ENV=production` still refuses startup. This default entry does not enable local-account login or resource isolation. Run `npm run test:web:integration -- test/integration/api-compat.test.mjs` and `npm run test:web:integration -- test/integration/route-cutover.test.mjs` for its HTTP contracts. The separate local runtime suite is `npm run test:web:integration:local`.
 
 
-## Original GenOffice shell entry
+## Original DyOffice shell entry
 
 Build first (`npm run build:web`), then `npm run start:web`. The start command now
 selects built assets by default. The workspace directly imports the original
@@ -149,7 +149,7 @@ This checkpoint restores the **entry shell**, not all four editor ribbons. The
 already-merged DOCX paragraph editor remains in a retained iframe; XLSX/PPTX/PDF
 native renderer migrations remain separate. Import, file listing and preferences
 use the existing authenticated Web API. New DOCX/XLSX/PPTX files use the original
-GenOffice blank templates. PDF creation and the desktop Ask entry are disabled.
+DyOffice blank templates. PDF creation and the desktop Ask entry are disabled.
 Stars are explicitly page-session-only until a persistent starred API exists.
 Unavailable desktop operations report unsupported rather than pretend to succeed.
 Admin retains a separate token and route; no Genspark account flow is invoked.
@@ -285,7 +285,7 @@ npm run dev:web
 
 默认只读取 `apps/web/dist-docs` 的构建清单；可用受信任的服务配置 `DYOFFICE_NATIVE_DOCX_DIRECTORY` 指向同类完整输出目录。缺少文件 API 或构建资源会拒绝启动，不回退到源文件服务。通过登录 API 建立 Secure Cookie 后，导入 DOCX，再访问 `/native-docx/?fileId=<文件 UUID>`。该路径要求本人拥有未删除的 DOCX；静态资源也需要有效会话。开启该入口后，能力目录和打开结果只将 DOCX 标记为 editable，其他三格式仍 unsupported。
 
-页面复用 GenOffice 的 Tiptap 渲染器、DOCX parser/writer、分页和字体，通过会话 BrowserHost 保存；Ctrl+S 提交新版本。使用租约续期、显式接管、捕获基线 CAS 与幂等回执。失去租约后只读，未知保存结果保留草稿并先确认原请求；保存期间的新输入不会被旧响应清空。版本下载使用既有 content API，单个历史版本元数据新增 `GET /api/v1/files/:id/revisions/:revision`。
+页面复用 DyOffice 的 Tiptap 渲染器、DOCX parser/writer、分页和字体，通过会话 BrowserHost 保存；Ctrl+S 提交新版本。使用租约续期、显式接管、捕获基线 CAS 与幂等回执。失去租约后只读，未知保存结果保留草稿并先确认原请求；保存期间的新输入不会被旧响应清空。版本下载使用既有 content API，单个历史版本元数据新增 `GET /api/v1/files/:id/revisions/:revision`。
 
 这仍是纵向开发接缝：登录/文件列表 UI、AI、完整桌面功能替代、崩溃草稿恢复与外部 Word QA 尚待后续验收，production 拒绝保持生效。浏览器不能调用桌面文件路径或通用 IPC。测试使用真正的 Chromium + TLS + 独立 PostgreSQL：`npm run test:web:docs` 会先重新构建，需预先安装 Chromium 并配置隔离的 `DYOFFICE_TEST_DATABASE_URL`。类型检查为 `npm run typecheck:web:docs`；现有 Docs 与 docx-engine 测试必须使用 Node 22。
 

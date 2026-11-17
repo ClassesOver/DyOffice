@@ -1,0 +1,67 @@
+import {useEffect,useRef,useState} from 'react'
+import {Alert,Button,Card,Spin} from 'antd'
+import JSZip from 'jszip'
+import type {SettingsRequest} from '../../../../packages/browser-host/src/preferences'
+
+type PreviewPage={name:string;rows:string[][]}
+type Metadata={file:{fileId:string;revision:string};downloadEndpoint:string}
+export function resolvePreviewContentUrl(fileId:string,metadata:Metadata){
+ const revision=metadata?.file?.revision
+ const expected=`/api/v1/files/${encodeURIComponent(fileId)}/content?revision=${encodeURIComponent(revision)}`
+ if(metadata?.file?.fileId!==fileId||typeof revision!=='string'||!revision||metadata.downloadEndpoint!==expected)throw Error('文件版本地址无效。')
+ return expected
+}
+export async function parseOfficePreview(bytes:Uint8Array,format:'xlsx'|'pptx'):Promise<PreviewPage[]>{
+ if(bytes.byteLength>16*1024*1024)throw Error('预览文件超过限制，请下载原件。')
+ const zip=await JSZip.loadAsync(bytes),entries=Object.values(zip.files)
+ if(entries.length>512)throw Error('文档条目过多，请下载原件。')
+ let size=0
+ for(const entry of entries){const declared=(entry as unknown as {_data?:{uncompressedSize?:number}})._data?.uncompressedSize??0;size+=declared;if(declared>8*1024*1024||size>32*1024*1024)throw Error('文档解压大小超过预览限制。')}
+ async function xml(path:string){const file=zip.file(path);if(!file)return null;const content=await file.async('uint8array');if(content.byteLength>8*1024*1024)throw Error('文档内容超过预览限制。');const source=new TextDecoder().decode(content);if(/<!DOCTYPE|<!ENTITY/i.test(source))throw Error('文档 XML 不支持。');const document=new DOMParser().parseFromString(source,'application/xml');if(document.getElementsByTagName('parsererror').length)throw Error('文档 XML 无效。');return document}
+ const pages:PreviewPage[]=[]
+ const paths=entries.filter(entry=>!entry.dir&&(format==='xlsx'?/^xl\/worksheets\/sheet\d+\.xml$/:/^ppt\/slides\/slide\d+\.xml$/).test(entry.name)).sort((a,b)=>Number(a.name.match(/\d+/)?.[0])-Number(b.name.match(/\d+/)?.[0]))
+ if(paths.length>100)throw Error('文档页数超过预览限制。')
+ const strings=format==='xlsx'?await xml('xl/sharedStrings.xml'):null
+ const shared=strings?[...strings.getElementsByTagName('si')].map(node=>node.textContent??''):[]
+ let cells=0
+ for(const path of paths){const doc=await xml(path.name);if(!doc)continue
+  const rows:string[][]=[]
+  if(format==='xlsx')for(const row of [...doc.getElementsByTagName('row')].slice(0,200)){
+   const values:string[]=[]
+   for(const cell of [...row.getElementsByTagName('c')]){if(++cells>20000)throw Error('单元格数量超过预览限制。');const ref=cell.getAttribute('r')?.match(/^[A-Z]+/)?.[0];const index=ref?[...ref].reduce((n,c)=>n*26+c.charCodeAt(0)-64,0)-1:values.length;if(index>199)continue;while(values.length<index)values.push('');const value=cell.getElementsByTagName('v')[0]?.textContent??'';values[index]=cell.getAttribute('t')==='s'?shared[Number(value)]??'':cell.getAttribute('t')==='inlineStr'?cell.getElementsByTagName('is')[0]?.textContent??'':value}
+   rows.push(values)
+  }
+  else for(const text of doc.getElementsByTagNameNS('*','t')){if(++cells>20000)throw Error('文本数量超过预览限制。');rows.push([text.textContent??''])}
+  pages.push({name:format==='xlsx'?`工作表 ${pages.length+1}`:`幻灯片 ${pages.length+1}`,rows})
+ }
+ if(!pages.length)throw Error('此文档没有可预览的内容，请下载原件。')
+ return pages
+}
+export function DocumentPreview({fileId,name,format,request}:{fileId:string;name:string;format:'docx'|'xlsx'|'pptx'|'pdf';request:SettingsRequest}){
+ const [pages,setPages]=useState<PreviewPage[]>([]),[url,setUrl]=useState(''),[error,setError]=useState(''),[busy,setBusy]=useState(true)
+ const host=useRef<HTMLDivElement>(null)
+ useEffect(()=>{let alive=true;const abort=new AbortController();setPages([]);setUrl('');setError('');setBusy(true)
+ void(async()=>{try{
+  const metadata=await request<Metadata>(`/api/v1/files/${encodeURIComponent(fileId)}`)
+  const endpoint=resolvePreviewContentUrl(fileId,metadata);if(!alive)return;setUrl(endpoint)
+  if(format==='docx')throw Error('当前 Word 编辑器未启用，请下载原件。')
+  const response=await fetch(endpoint,{credentials:'same-origin',signal:abort.signal,redirect:'error'})
+  if(!response.ok)throw Error('文件读取失败。')
+  const limit=format==='pdf'?64*1024*1024:16*1024*1024
+  if(Number(response.headers.get('content-length'))>limit)throw Error('文件超过预览大小限制。')
+  const reader=response.body?.getReader();if(!reader)throw Error('文件内容不可读取。')
+  const chunks:Uint8Array[]=[];let size=0
+  while(true){const {done,value}=await reader.read();if(done)break;size+=value.byteLength;if(size>limit){await reader.cancel();throw Error('文件超过预览大小限制。')}chunks.push(value)}
+  const bytes=new Uint8Array(size);let offset=0;for(const chunk of chunks){bytes.set(chunk,offset);offset+=chunk.byteLength}
+  if(!alive)return
+  if(format==='pdf'){const {mountPdfEditor}=await import('../editors/pdf-viewer');if(alive&&host.current)await mountPdfEditor(host.current,bytes)}
+  else {const result=await parseOfficePreview(bytes,format);if(alive)setPages(result)}
+ }catch{if(alive)setError('无法生成只读预览，可下载原件查看。')}finally{if(alive)setBusy(false)}})()
+ return()=>{alive=false;abort.abort();host.current?.replaceChildren()}
+ },[fileId,format,request])
+ return <section style={{height:'100%',overflow:'auto',padding:24}}><Card title={name} extra={url&&<Button href={url} download={name}>下载原件</Button>}>
+ <Alert type="info" showIcon title="只读预览" description={format==='pdf'?'仅显示原始 PDF 页面，不提供编辑。':'仅提取文本与缓存数值，不执行公式或外部连接，不保证原始排版。每张工作表最多显示 200 行、200 列。'}/>
+ {busy&&<Spin tip="正在读取文档"/>}{error&&<Alert type="error" title={error}/>}
+ <div ref={host}/>{pages.map((page,index)=><Card key={index} title={page.name} style={{marginTop:16}}><div style={{overflow:'auto'}}><table><tbody>{page.rows.map((row,i)=><tr key={i}>{row.map((value,j)=><td key={j} style={{border:'1px solid var(--border)',padding:'6px 10px',whiteSpace:'pre-wrap'}}>{value}</td>)}</tr>)}</tbody></table></div></Card>)}
+ </Card></section>
+}

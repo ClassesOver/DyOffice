@@ -1,6 +1,7 @@
 import type {HomeApi, RecentEntry, RecentQuery, MoveResult} from '../../../shell/src/shared/home-api'
 import type {WorkspaceFile, WorkspaceFileList, WorkspaceFolder, WorkspaceFolderList, WorkspaceView} from '../../../../packages/web-contracts/src/workspace.ts'
 import type {createPreferencesClient, SettingsRequest} from '../../../../packages/browser-host/src/preferences.ts'
+import {notifyRevealWorkspaceFolder} from '../../../shell/src/renderer/src/file-events'
 import {createWebHomeBridge} from './web-home-bridge.ts'
 
 interface Dependencies {
@@ -14,7 +15,6 @@ interface Dependencies {
 }
 const rootPath = '/workspace'
 const folderId = (path: string) => path === rootPath ? null : path.split('/').at(-1)!
-const fileEntry = (file: WorkspaceFile): RecentEntry => ({path: file.id, name: file.name, ext: file.format, mtimeMs: Date.parse(file.updatedAt), sizeBytes: file.size, starred: file.starred})
 
 /** The original Home UI keeps its contract; every personal mutation uses the scoped API. */
 export function createLocalHomeBridge(deps: Dependencies): HomeApi {
@@ -49,6 +49,25 @@ export function createLocalHomeBridge(deps: Dependencies): HomeApi {
     throw new Error('目录文件过多，请使用分页文件列表或搜索。')
   }
   async function folders() { return (await deps.request<WorkspaceFolderList>('/api/v1/workspace/folders')).folders }
+  async function fileEntries(items: WorkspaceFile[], knownFolders?: WorkspaceFolder[]): Promise<RecentEntry[]> {
+    if (!items.length) return []
+    const language = (await deps.preferences.getPreferences()).language
+    const rootLabel = language === 'en' ? 'My files' : '个人文件'
+    const unavailable = language === 'en' ? 'Location unavailable' : '位置不可用'
+    const byId = new Map((items.some(file => file.folderId !== null) ? knownFolders ?? await folders() : []).map(folder => [folder.id, folder]))
+    function location(file: WorkspaceFile): string {
+      if (file.folderId === null) return rootLabel
+      const names: string[] = [], seen = new Set<string>()
+      let id: string | null = file.folderId
+      while (id !== null) {
+        const folder = byId.get(id)
+        if (!folder || seen.has(id)) return unavailable
+        seen.add(id); names.unshift(folder.name); id = folder.parentId
+      }
+      return names.join(' / ') || unavailable
+    }
+    return items.map(file => ({path: file.id, name: file.name, ext: file.format, mtimeMs: Date.parse(file.updatedAt), sizeBytes: file.size, starred: file.starred, locationLabel: location(file)}))
+  }
   function paths(items: WorkspaceFolder[]) {
     const byId = new Map(items.map(folder => [folder.id, folder]))
     const result = new Map<string, string>()
@@ -66,7 +85,7 @@ export function createLocalHomeBridge(deps: Dependencies): HomeApi {
   }
   async function page(view: WorkspaceView, query: RecentQuery = {}) {
     const page = await queryFiles(view, {offset: query.offset, limit: query.limit, ext: query.ext})
-    return {entries: page.files.map(fileEntry), total: page.total, totalAll: page.totalAll}
+    return {entries: await fileEntries(page.files), total: page.total, totalAll: page.totalAll}
   }
   async function mutateFiles(ids: string[], action: string, method: string, body?: unknown) {
     for (const id of new Set(ids)) {
@@ -78,6 +97,23 @@ export function createLocalHomeBridge(deps: Dependencies): HomeApi {
   }
   const base = createWebHomeBridge({request: path => path === '/preferences' ? deps.preferences.getPreferences() : files('all'), open: deps.open, changed, unsupported: deps.unsupported, browse: deps.browse})
   Object.assign(base, {
+    revealPath: async (path: string) => {
+      const mapping = paths(await folders())
+      let dir: string, fileId: string | undefined
+      if (path === rootPath || path.startsWith(rootPath + '/')) {
+        if (path !== rootPath && mapping.get(folderId(path)!) !== path) throw new Error('文件夹不存在，请刷新后重试。')
+        dir = path
+      } else {
+        const file = (await queryFiles('all', {id: path, limit: 1})).files.find(file => file.id === path)
+        if (!file) throw new Error('文件不存在或已移入回收站。')
+        dir = file.folderId === null ? rootPath : mapping.get(file.folderId) ?? ''
+        if (!dir) throw new Error('文件所在文件夹不存在，请刷新后重试。')
+        fileId = file.id
+      }
+      if (typeof window !== 'undefined') await window.aiOfficeTabs?.activate('home')
+      changed()
+      notifyRevealWorkspaceFolder({dir, ...(fileId ? {fileId} : {})})
+    },
     recents: (query?: RecentQuery) => page('recent', query),
     starred: (query?: RecentQuery) => page('starred', query),
     starredGroups: async () => [],
@@ -91,9 +127,9 @@ export function createLocalHomeBridge(deps: Dependencies): HomeApi {
     deleteFiles: (ids: string[]) => mutateFiles(ids, 'trash', 'DELETE'),
     openTrash: async () => deps.openTrash(),
     statPaths: async (ids: string[]) => {
-      const result: RecentEntry[] = []
-      for (const id of new Set(ids)) result.push(...(await queryFiles('all', {id, limit: 1})).files.filter(file => file.id === id).map(fileEntry))
-      return result
+      const result: WorkspaceFile[] = []
+      for (const id of new Set(ids)) result.push(...(await queryFiles('all', {id, limit: 1})).files.filter(file => file.id === id))
+      return fileEntries(result)
     },
     renameFile: (id: string, name: string) => once(JSON.stringify(['rename', id, name]), async () => {
       await deps.request(`/api/v1/files/${encodeURIComponent(id)}`, 'PATCH', {name}); changed(); return {ok: true, path: id}
@@ -102,7 +138,7 @@ export function createLocalHomeBridge(deps: Dependencies): HomeApi {
     listFolder: async (dir: string) => {
       const all = await folders(), mapping = paths(all), id = folderId(dir)
       if (id && mapping.get(id) !== dir) return {dir, folders: [], files: [], missing: true}
-      return {dir, folders: all.filter(folder => folder.parentId === id).map(folder => ({path: mapping.get(folder.id)!, name: folder.name, mtimeMs: Date.parse(folder.updatedAt), hasSubfolders: all.some(child => child.parentId === folder.id)})), files: (await files('all', id ?? 'root')).map(fileEntry)}
+      return {dir, folders: all.filter(folder => folder.parentId === id).map(folder => ({path: mapping.get(folder.id)!, name: folder.name, mtimeMs: Date.parse(folder.updatedAt), hasSubfolders: all.some(child => child.parentId === folder.id)})), files: await fileEntries(await files('all', id ?? 'root'), all)}
     },
     createFolder: (parent: string, name: string) => once(JSON.stringify(['folder-create', parent, name]), async () => {
       const folder = await deps.request<WorkspaceFolder>('/api/v1/workspace/folders', 'POST', {name, parentId: folderId(parent)})
@@ -135,7 +171,7 @@ export function createLocalHomeBridge(deps: Dependencies): HomeApi {
     setTheme: async (theme: 'system' | 'light' | 'dark') => { await deps.preferences.updatePreferences({theme}) },
     searchFiles: async (query: {q: string; ext?: string; offset?: number; limit?: number}) => {
       const page = await queryFiles('all', {q: query.q, ext: query.ext, offset: query.offset, limit: query.limit})
-      return {hits: page.files.map(file => ({...fileEntry(file), snippet: null, needles: [query.q]})), total: page.total, index: {indexed: page.total, pending: 0, scanning: false}}
+      return {hits: (await fileEntries(page.files)).map(file => ({...file, snippet: null, needles: [query.q]})), total: page.total, index: {indexed: page.total, pending: 0, scanning: false}}
     },
   } satisfies Partial<HomeApi>)
   return base

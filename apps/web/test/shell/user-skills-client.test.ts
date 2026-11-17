@@ -35,3 +35,57 @@ test('a reply from a previous account is discarded when a different tab changes 
   const bound = await local.bindSession()
   await expect(createUserSkillsClient(bound.request).listSkills()).rejects.toMatchObject({code: 'stale_session'})
 })
+
+test('only four Office families reach the shared menu, including body-only classifications', async () => {
+  const items = [{name:'html-clean',description:'HTML Markdown finance'}, {name:'word-template',description:'Word template'}, {name:'generic',description:'Team workflow'}, {name:'doctor',description:'command documentation'}]
+  const client = createUserSkillsClient(async path => {
+    if (path === '/api/v1/skills') return items as never
+    const item = items.find(item => path.endsWith('/'+item.name))!
+    return {...item,body:item.name === 'generic' ? 'Edit .xlsx workbooks' : 'Unrelated instructions'} as never
+  })
+  expect((await client.listSkills()).map(item=>item.name)).toEqual(['word-template','generic'])
+  await expect(client.skillText('html-clean')).rejects.toThrow('Word')
+  expect(await client.skillText('generic')).toBe('Edit .xlsx workbooks')
+})
+
+test('unrelated imports never write and similarly spelled names do not match', async () => {
+  const calls: string[]=[]
+  const client=createUserSkillsClient(async path=>{calls.push(path);return {} as never})
+  for (const name of ['html','markdown','finance','doctor','cmd']) {
+    await expect(client.importText(`---\nname: ${name}\ndescription: generic helper\n---\nUse HTML and Markdown for finance.`)).rejects.toThrow('Word')
+  }
+  expect(calls).toEqual([])
+})
+
+test('all four supported formats can be imported and remain classified from their body',async()=>{
+ const client=createUserSkillsClient(async path=>({name:path.split('/').pop(),description:'Team workflow'}) as never)
+ for (const format of ['docx','xlsx','pptx','pdf']) {
+   const imported=await client.importText(`---\nname: team-${format}\ndescription: Team workflow\n---\nEdit a .${format} file`)
+   expect(imported.relevance).toEqual({relevant:true,matched:[format]})
+ }
+})
+
+test('HTML and Markdown task skills are excluded even when they mention Office formats',async()=>{
+ const writes:unknown[]=[]
+ const client=createUserSkillsClient(async(path,method,body)=>{if(method==='PUT')writes.push(body);if(path==='/api/v1/skills')return [{name:'word-html',description:'Convert Word to HTML'},{name:'markdown-pdf',description:'Markdown to PDF'}] as never;return {body:'Use DOCX and PDF'} as never})
+ expect(await client.listSkills()).toEqual([])
+ for(const name of ['word-html','markdown-pdf'])await expect(client.importText(`---\nname: ${name}\ndescription: Office conversion\n---\nUse Word and PDF tools.`)).rejects.toThrow('Word')
+ expect(writes).toEqual([])
+})
+
+
+test('personal lists do not inject defaults or reserve earlier experimental names',async()=>{
+ const calls:{path:string;method?:string}[]=[]
+ const client=createUserSkillsClient(async(path,method)=>{calls.push({path,method});if(method==='PUT')return {name:'web-weekly-report',description:'Word report'} as never;return [] as never})
+ expect(await client.listSkills()).toEqual([])
+ await client.importText('---\nname: web-weekly-report\ndescription: Word report\n---\nUse document tools')
+ await client.removeSkill('web-weekly-report')
+ expect(calls.map(call=>call.method)).toEqual([undefined,'PUT','DELETE'])
+})
+
+test('catalog installation checks all account names and never overwrites a hidden unrelated record',async()=>{
+ const calls:{path:string;method?:string}[]=[]
+ const client=createUserSkillsClient(async(path,method)=>{calls.push({path,method});return [{name:'weekly-report',description:'Unrelated old record'}] as never})
+ await expect(client.importText('---\nname: weekly-report\ndescription: Word report\n---\nUse document tools',{overwrite:false})).rejects.toMatchObject({status:409})
+ expect(calls).toEqual([{path:'/api/v1/skills',method:undefined}])
+})

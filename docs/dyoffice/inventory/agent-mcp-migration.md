@@ -2,7 +2,7 @@
 
 ## Scope and evidence
 
-This T00 inventory covers reuse of GenOffice's agent loop, editor tools and MCP surfaces. It is not implementation of T13–T19 or acceptance of their security/runtime behavior.
+This T00 inventory covers reuse of DyOffice's agent loop, editor tools and MCP surfaces. It is not implementation of T13–T19 or acceptance of their security/runtime behavior.
 
 - Initial code inspection: `27a14f53931dd45879a7b1c632ce4a99a7738129`.
 - Rechecked through development head `c1bc834c3efb74e85baee6edf3a1b54b529de5d0`. Parallel work added a browser SSE adapter (`packages/browser-host/src/ai-transport.ts`) and mock-stream tests using the public AgentTransport type. This is an implementation seam, not evidence of editor wiring, a working Provider Gateway, or end-to-end cancellation. Other inspected desktop/agent-core sources are unchanged.

@@ -33,7 +33,7 @@ The above was an **isolated** test of the new module, not the entire repository.
 - File contents are still stored in local files and JSON metadata. SHA-based reads do not implement staging/CAS/leaseEpoch/revision history. No browser edit/save UI is enabled.
 - This is an incremental compatibility seam, **not** Fastify migration or completion of T02. T02 still requires Fastify module boundaries, error DTOs, deployment readiness and full Web CI.
 - T03/T04 must introduce real identities and resource authorization; T05/T06 must introduce S3 revisions and atomic save transactions. Once that lands, replace these legacy-only paths with the authoritative database-backed read service.
-- T07 must connect the actual GenOffice DOCX renderer and demonstrate open -> edit -> save -> download -> reopen. Until then, editor capabilities must remain `unsupported`.
+- T07 must connect the actual DyOffice DOCX renderer and demonstrate open -> edit -> save -> download -> reopen. Until then, editor capabilities must remain `unsupported`.
 - Independent review needed: malicious OOXML/PDF upload scanning, DNS/SSRF policy and storage recovery remain untouched.
 
 ## Next suggested work

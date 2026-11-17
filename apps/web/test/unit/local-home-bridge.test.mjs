@@ -100,3 +100,77 @@ test('toggle and stat query only specified file identities',async()=>{
  const reads=calls.filter(([,m])=>!m);assert.equal(reads.length,2)
  for(const [path] of reads){const url=new URL(path,'https://local');assert.equal(url.searchParams.get('id'),item.id);assert.equal(url.searchParams.get('limit'),'1')}
 })
+
+test('reveal resolves a file parent inside the workspace and never invokes a native operation',async()=>{
+ const {onRevealWorkspaceFolder}=await import('../../../../apps/shell/src/renderer/src/file-events.ts')
+ const events=[],calls=[]
+ const stop=onRevealWorkspaceFolder(target=>events.push(target))
+ const bridge=createLocalHomeBridge({...deps(async path=>{calls.push(path);return path.endsWith('/folders')?{folders:[{id:'parent',parentId:null,name:'Projects'},{id:'child',parentId:'parent',name:'Reports'}]}:{files:[{...item,folderId:'child'}],total:1,totalAll:1}}),unsupported:()=>assert.fail('native fallback must not run')})
+ try{await bridge.revealPath(item.id);assert.deepEqual(events,[{dir:'/workspace/parent/child',fileId:item.id}]);assert.equal(calls.length,2)}finally{stop()}
+})
+
+test('reveal supports a root file and an existing virtual folder but rejects missing targets without navigation',async()=>{
+ const {onRevealWorkspaceFolder}=await import('../../../../apps/shell/src/renderer/src/file-events.ts')
+ const events=[];const stop=onRevealWorkspaceFolder(target=>events.push(target))
+ const bridge=createLocalHomeBridge(deps(async path=>path.endsWith('/folders')?{folders:[{id:'parent',parentId:null,name:'Projects'}]}:{files:path.includes('id=missing')?[]:[item],total:path.includes('id=missing')?0:1,totalAll:1}))
+ try{
+  await bridge.revealPath(item.id);await bridge.revealPath('/workspace/parent');await bridge.revealPath('/workspace')
+  assert.deepEqual(events,[{dir:'/workspace',fileId:item.id},{dir:'/workspace/parent'},{dir:'/workspace'}])
+  await assert.rejects(bridge.revealPath('missing'),/不存在/)
+  await assert.rejects(bridge.revealPath('/workspace/removed'),/不存在/)
+  assert.equal(events.length,3)
+ }finally{stop()}
+})
+
+test('reveal switches back to Home before dispatching navigation and rejects an orphaned file parent',async()=>{
+ const {onRevealWorkspaceFolder}=await import('../../../../apps/shell/src/renderer/src/file-events.ts')
+ const order=[];const stop=onRevealWorkspaceFolder(()=>order.push('reveal'))
+ const previous=globalThis.window
+ globalThis.window={aiOfficeTabs:{activate:async id=>order.push(id)}}
+ let parent=null
+ const bridge=createLocalHomeBridge(deps(async path=>path.endsWith('/folders')?{folders:[]}:{files:[{...item,folderId:parent}],total:1,totalAll:1}))
+ try{await bridge.revealPath(item.id);assert.deepEqual(order,['home','reveal']);parent='removed';await assert.rejects(bridge.revealPath(item.id),/文件夹不存在/);assert.equal(order.length,2)}finally{stop();if(previous===undefined)delete globalThis.window;else globalThis.window=previous}
+})
+
+test('root locations are localized and require no folder enumeration',async()=>{
+ for(const [language,label] of [['zh','个人文件'],['en','My files']]){
+  const calls=[]
+  const bridge=createLocalHomeBridge({...deps(async path=>{calls.push(path);return {files:[item],total:1,totalAll:1}}),preferences:{...prefs,getPreferences:async()=>({language})}})
+  assert.equal((await bridge.recents()).entries[0].locationLabel,label)
+  assert.equal(calls.length,1)
+ }
+})
+test('all file projections resolve unopened folder ancestry by names without changing file identity',async()=>{
+ const folders=[{id:'parent-id',name:'Parent',parentId:null},{id:'child-id',name:'Child',parentId:'parent-id'}]
+ const nested={...item,folderId:'child-id'}
+ const bridge=createLocalHomeBridge(deps(async path=>path.endsWith('/folders')?{folders}:{files:[nested],total:1,totalAll:1}))
+ const entries=[(await bridge.recents()).entries[0],(await bridge.starred()).entries[0],(await bridge.statPaths([item.id]))[0],(await bridge.searchFiles({q:'one'})).hits[0],(await bridge.listFolder('/workspace/parent-id/child-id')).files[0]]
+ for(const entry of entries){assert.equal(entry.locationLabel,'Parent / Child');assert.equal(entry.path,item.id);assert.ok(!entry.locationLabel.includes('-id'))}
+})
+test('fresh queries resolve renamed and moved folders and moved files without stale location caches',async()=>{
+ const folders=[{id:'parent',name:'Parent',parentId:null},{id:'child',name:'Child',parentId:'parent'}]
+ const nested={...item,folderId:'child'}
+ const bridge=createLocalHomeBridge(deps(async(path,method,body)=>{
+  if(method==='PATCH'){
+   if(path.endsWith('/folders/parent'))folders[0].name=body.name
+   else if(path.endsWith('/folders/child'))folders[1].parentId=body.parentId
+   else if(path.endsWith('/folder'))nested.folderId=body.folderId
+   return {}
+  }
+  return path.endsWith('/folders')?{folders}:{files:[nested],total:1,totalAll:1}
+ }))
+ assert.equal((await bridge.recents()).entries[0].locationLabel,'Parent / Child')
+ await bridge.renameFolder('/workspace/parent','Renamed')
+ assert.equal((await bridge.recents()).entries[0].locationLabel,'Renamed / Child')
+ await bridge.movePaths(['/workspace/parent/child'],'/workspace','ask')
+ assert.equal((await bridge.searchFiles({q:'one'})).hits[0].locationLabel,'Child')
+ await bridge.movePaths([item.id],'/workspace','ask')
+ assert.equal((await bridge.recents()).entries[0].locationLabel,'个人文件')
+})
+test('missing or cyclic folder ancestry is explicitly unavailable rather than root or opaque IDs',async()=>{
+ for(const folders of [[],[{id:'child',name:'Child',parentId:'missing'}],[{id:'child',name:'Child',parentId:'child'}]]){
+  const bridge=createLocalHomeBridge(deps(async path=>path.endsWith('/folders')?{folders}:{files:[{...item,folderId:'child'}],total:1,totalAll:1}))
+  assert.equal((await bridge.recents()).entries[0].locationLabel,'位置不可用')
+  assert.equal((await bridge.searchFiles({q:'one'})).hits[0].locationLabel,'位置不可用')
+ }
+})

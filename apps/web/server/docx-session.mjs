@@ -1,5 +1,5 @@
 /**
- * DOCX text edits go through GenOffice's docx-engine (parseDocx / saveDocx).
+ * DOCX text edits go through DyOffice's docx-engine (parseDocx / saveDocx).
  * Untouched blocks are passed through as original OOXML slices. This module
  * does not reimplement the package format. The process must be started with
  * `node --import tsx` so the engine's TypeScript sources can load.

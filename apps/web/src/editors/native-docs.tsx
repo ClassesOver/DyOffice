@@ -1,3 +1,4 @@
+import {createEditorCloseLifecycle} from './editor-close-lifecycle'
 import {createAnalysisDocumentTarget} from '../../../../packages/browser-host/src/analysis-document-target.ts'
 import { useEffect, useState } from 'react'
 import { createRoot } from 'react-dom/client'
@@ -32,6 +33,7 @@ import './docs.css'
 export async function mountDocsEditor(host: SessionFileHost,element: HTMLElement,fileId: string) {
   element.textContent = messages.zh.opening
   if (!/^[0-9a-f-]{36}$/i.test(fileId)) throw new Error(messages.zh.failed)
+  let closing=false
   let changed = () => {}
   let disposed = false, downloading = false, actionError = ''
   let editorHandle: DocsEditorHandle | null = null
@@ -52,7 +54,7 @@ export async function mountDocsEditor(host: SessionFileHost,element: HTMLElement
   const unregisterAnalysis=assistant?.documents.register(analysisTarget)
   const assistantAvailable = Boolean(assistant?.available && prefs.showAssistant !== false)
   const panelPrefs = {...await bridge.api.getAiPanelPrefs(), showAiSidebar: assistantAvailable}
-  window.desktop = {...bridge.api,...assistant?.api, getAiPanelPrefs: async () => panelPrefs} as unknown as DesktopApi
+  window.desktop = {...bridge.api,...assistant?.api, getAiPanelPrefs: async () => ({...await bridge.api.getAiPanelPrefs(),showAiSidebar:assistantAvailable})} as unknown as DesktopApi
   applyAiPanelPrefs(panelPrefs); installScreenTips()
   let initialLease = true
   try { await host.acquireLease(fileId) } catch { initialLease = false }
@@ -77,7 +79,7 @@ export async function mountDocsEditor(host: SessionFileHost,element: HTMLElement
   function NativeDocument() {
     const [,tick] = useState(0), [loaded,setLoaded] = useState(false), [failed,setFailed] = useState(false)
     const state = host.getState(fileId)
-    changed = () => tick(value => value + 1)
+    changed = () => {if(!closing)tick(value => value + 1)}
     useEffect(() => {
       const focus = () => { if (host.getState(fileId).lease) void host.renewLease(fileId).catch(() => {}) }
       window.addEventListener('focus',focus)
@@ -93,19 +95,24 @@ export async function mountDocsEditor(host: SessionFileHost,element: HTMLElement
         {!state.lease && !failed && <button onClick={() => { void host.takeoverLease(fileId).then(() => { initialLease = true }).catch(() => {}) }}>{text.takeover}</button>}
         {state.status === 'unknown' && <button onClick={() => { void host.reconcile(fileId).then(() => changed()).catch(() => {}) }}>{text.retry}</button>}
       </div>
-      <App host={{ readOnly: !loaded || failed || !state.lease,assistantAvailable,assistant,preferenceScope: fileId,onEditorReady: registerEditor,lifecycle: { ...bridge.lifecycle,documentOpened() { bridge.lifecycle.documentOpened(); setLoaded(true) } },onDocumentEdited: bridge.lifecycle.edited,onOpenFailed: () => setFailed(true) }} />
+      <App host={{ desktopActionsAvailable:false,readOnly: !loaded || failed || !state.lease,assistantAvailable,assistant,preferenceScope: fileId,onEditorReady: registerEditor,lifecycle: { ...bridge.lifecycle,documentOpened() { bridge.lifecycle.documentOpened(); setLoaded(true) } },onDocumentEdited: bridge.lifecycle.edited,onOpenFailed: () => setFailed(true) }} />
     </div>
   }
   const root = createRoot(element)
   root.render(<LocaleProvider initial={locale}><NativeDocument /></LocaleProvider>)
+  const closeState=()=>({dirty:!!editorHandle?.isDirty()||bridge.getState().dirty,blocked:downloading||['unknown','saving'].includes(host.getState(fileId).status)||bridge.getState().nativeSaveOutcome==='pending'})
   const beforeUnload = (event: BeforeUnloadEvent) => {
-    if (editorHandle?.isDirty() || host.getState(fileId).status === 'unknown') { event.preventDefault(); event.returnValue = '' }
+    if (closeState().dirty || closeState().blocked) { event.preventDefault(); event.returnValue = '' }
   }
   window.addEventListener('beforeunload',beforeUnload)
+  const cleanup=()=>{if(disposed)return;disposed=true;unregisterAnalysis?.();analysisTarget.dispose();window.removeEventListener('beforeunload',beforeUnload);assistant?.dispose();realtime.dispose();stop();unsubscribe();root.unmount();bridge.dispose()}
+  const lifecycle=createEditorCloseLifecycle({state:closeState,save:()=>editorHandle?.save()??Promise.resolve(false),release:()=>host.releaseLease(fileId),cleanup,setClosing:value=>{closing=value;element.inert=value;if(!value)changed()},confirm:()=>window.confirm('文档有未保存的更改，是否保存后关闭？取消将保留当前页签。'),notify:()=>window.alert('保存仍在进行或结果待确认，请先在文档中核对后再关闭。')})
   return {
+    canClose:lifecycle.canClose,
+    dispose:lifecycle.dispose,
+    unload(){void host.releaseLease(fileId,true).catch(()=>{});cleanup()},
     getSelection: () => editorHandle?.getSelection() ?? null,
     serialize: () => editorHandle ? editorHandle.serialize() : Promise.reject(new Error(text.opening)),
     save: () => editorHandle ? editorHandle.save() : Promise.resolve(false),
-    dispose() { disposed = true; unregisterAnalysis?.();analysisTarget.dispose(); window.removeEventListener('beforeunload',beforeUnload); assistant?.dispose();realtime.dispose(); stop(); unsubscribe(); root.unmount(); bridge.dispose() },
   }
 }

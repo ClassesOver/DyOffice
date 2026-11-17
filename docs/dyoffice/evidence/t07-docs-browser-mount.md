@@ -57,7 +57,7 @@ The import failed before the path pointed at `apps/docs/src/renderer/pagination-
 
 ## Still open, and what is deferred
 
-The GenOffice Docs ribbon `App` is not mounted. `Ribbon` takes the live tiptap editor, section, watermark, ink, and Zotero callbacks, and `App` is the desktop shell around that editor. `createWebDesktop` throws `UNSUPPORTED` for those desktop-only calls instead of reporting success. Putting that shell into the scanned web bundle would also import `@genoffice/font-metrics`, which reads font files with Node. That mount is still T07 work.
+The DyOffice Docs ribbon `App` is not mounted. `Ribbon` takes the live tiptap editor, section, watermark, ink, and Zotero callbacks, and `App` is the desktop shell around that editor. `createWebDesktop` throws `UNSUPPORTED` for those desktop-only calls instead of reporting success. Putting that shell into the scanned web bundle would also import `@genoffice/font-metrics`, which reads font files with Node. That mount is still T07 work.
 
 An external Word or LibreOffice reopen is deferred to operations. This environment has neither `soffice` nor `libreoffice`, so a Word process cannot be started here. The in-repo reopen is `parseDocx` on the saved package, which is what the cell test checks. It is not a Word compatibility sample.
 

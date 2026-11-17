@@ -61,7 +61,7 @@ async function expectCleanPersistence(page) {
   }
 }
 
-test('native GenOffice DOCX renders, edits, commits, refreshes and preserves unrelated original parts', { timeout: 120_000 }, async t => {
+test('native DyOffice DOCX renders, edits, commits, refreshes and preserves unrelated original parts', { timeout: 120_000 }, async t => {
   const f = await fixture(t), errors = []
   const filePath = '/native-docx/?fileId=' + f.opened.file.fileId
   const cookie = token => ({ cookie: '__Host-dyoffice-session=' + token })

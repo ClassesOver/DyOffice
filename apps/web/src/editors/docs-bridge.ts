@@ -49,6 +49,10 @@ export function createDocsBridge(host: SessionFileHost, fileId: string, prefs: A
       onChange()
     },
   }
+  let panelPrefs = {side:'left' as 'left'|'right',fontSize:'default' as 'default'|'xlarge'|'large'|'custom',customFontSize:14,spellcheck:true,openInNewDocs:false,showAiSidebar:false,showAiAskTrigger:false}
+  const panelListeners = new Set<(value:typeof panelPrefs)=>void>()
+  function download(blob:Blob,name:string){const url=URL.createObjectURL(blob);try{const link=document.createElement('a');link.href=url;link.download=name;link.click()}finally{setTimeout(()=>URL.revokeObjectURL(url),0)}}
+  async function imageBlob(src:string){if(!src.startsWith('data:image/')&&!src.startsWith('blob:'))throw Error(text.unavailable);const response=await fetch(src);if(!response.ok)throw Error(text.unavailable);const blob=await response.blob();if(!['image/png','image/jpeg','image/gif'].includes(blob.type)||blob.size>16*1024*1024)throw Error(text.unavailable);return blob}
   const api = {
     getLanguage: async () => locale,
     getSystemLocale: async () => navigator.language,
@@ -56,8 +60,10 @@ export function createDocsBridge(host: SessionFileHost, fileId: string, prefs: A
     getDocumentTheme: async () => 'follow' as const,
     getAuthorName: async () => prefs.authorName ?? '',
     getAutoSaveDefault: async () => ({ on: prefs.autoSave ?? true,updatedAt: 1 }),
-    getAiPanelPrefs: async () => ({ side: 'left' as const,fontSize: 'default' as const,customFontSize: 14,spellcheck: true,openInNewDocs: false,showAiSidebar: false,showAiAskTrigger: false }),
-    onLanguageChanged: noEvent,onThemeChanged: noEvent,onDocumentThemeChanged: noEvent,onAuthorNameChanged: noEvent,onAutoSaveDefaultChanged: noEvent,onAiPanelPrefsChanged: noEvent,
+    getAiPanelPrefs: async () => ({...panelPrefs}),
+    setAiPanelPrefs: async (patch: Partial<typeof panelPrefs>) => {panelPrefs={...panelPrefs,...patch};for(const listener of panelListeners)listener({...panelPrefs});return {...panelPrefs}},
+    onAiPanelPrefsChanged: (listener:(value:typeof panelPrefs)=>void) => {panelListeners.add(listener);return()=>{panelListeners.delete(listener)}},
+    onLanguageChanged: noEvent,onThemeChanged: noEvent,onDocumentThemeChanged: noEvent,onAuthorNameChanged: noEvent,onAutoSaveDefaultChanged: noEvent,
     onOpenDocx: noEvent,onRenamedDocx: noEvent,onMenuCommand: noEvent,onTeardown: noEvent,onViewImage: noEvent,onContextMenuRequest: noEvent,onCloseCheck: noEvent,onCloseSaveRequest: noEvent,
     getRecentFiles: async () => [],
     fontMetrics: async () => null,
@@ -97,7 +103,17 @@ export function createDocsBridge(host: SessionFileHost, fileId: string, prefs: A
     openDocx: unavailable,openDocxPath: unavailable,openDocxDecrypt: unavailable,
     saveDocxAs: unavailable,saveDocxNew: unavailable,saveDocxTo: unavailable,
     setDocPassword: unavailable,writeRecoveryCopy: unavailable,
-    pickImage: unavailable,fetchImage: unavailable,saveImageAs: unavailable,
+    async pickImage(){return new Promise<import('../../../docs/src/shared/ipc').PickImageResult|null>((resolve,reject)=>{const input=document.createElement('input');input.type='file';input.accept='image/png,image/jpeg,image/gif';input.hidden=true;const cleanup=()=>input.remove();input.oncancel=()=>{cleanup();resolve(null)};input.onchange=()=>{const file=input.files?.[0];if(!file){cleanup();resolve(null);return}if(!['image/png','image/jpeg','image/gif'].includes(file.type)||file.size>16*1024*1024){cleanup();reject(Error(text.unavailable));return}const reader=new FileReader();reader.onerror=()=>{cleanup();reject(Error(text.unavailable))};reader.onload=()=>{cleanup();resolve({name:file.name,mime:file.type as 'image/png'|'image/jpeg'|'image/gif',base64:String(reader.result).split(',')[1]})};reader.readAsDataURL(file)};document.body.append(input);input.click()})},
+    fetchImage: unavailable,
+    async saveImageAs(src:string){try{const blob=await imageBlob(src);download(blob,`image.${blob.type==='image/jpeg'?'jpg':blob.type.split('/')[1]}`);return {ok:true}}catch{return {ok:false,error:text.unavailable}}},
+    async copyImageToClipboard(src:string){if(!navigator.clipboard?.write||typeof ClipboardItem==='undefined')throw Error('浏览器未允许图片剪贴板访问，请使用系统复制快捷键。');const blob=await imageBlob(src);if(blob.type!=='image/png')throw Error('当前浏览器仅支持复制 PNG 图片。');await navigator.clipboard.write([new ClipboardItem({'image/png':blob})]);return true},
+    listPrinters: async () => [],
+    async print(){try{window.print();return {ok:true}}catch{return {ok:false,error:'浏览器打印不可用。'}}},
+    async exportHtml(name:string,html:string){download(new Blob([html],{type:'text/html;charset=utf-8'}),name.replace(/\.docx$/i,'')+'.html');return {ok:true}},
+    exportPdf: unavailable,exportMarkdown: unavailable,pickExportImagesTarget: unavailable,printPdfBuffer: unavailable,
+    pickMergeDataSource: unavailable,writeMergeOutput: unavailable,zoteroCommand: unavailable,
+    onZoteroRequest:noEvent,
+
     openAiModelSettings: unavailable,openSkillsSettings: unavailable,
   } satisfies Partial<DesktopApi>
   async function prepareDownload(editor: {save(): Promise<boolean>; isDirty(): boolean}) {
@@ -116,5 +132,5 @@ export function createDocsBridge(host: SessionFileHost, fileId: string, prefs: A
       return {...receipt}
     } finally { downloading = false }
   }
-  return { api,lifecycle,guardedSave,prepareDownload,getReceipt:()=>committed,getState: () => ({...guard.getState(), nativeSaveOutcome, nativeSaveReasons}),dispose() { disposed = true; for (const url of urls) URL.revokeObjectURL(url); urls.clear() } }
+  return { api,lifecycle,guardedSave,prepareDownload,getReceipt:()=>committed,getState: () => ({...guard.getState(), nativeSaveOutcome, nativeSaveReasons}),dispose() { disposed = true; panelListeners.clear(); for (const url of urls) URL.revokeObjectURL(url); urls.clear() } }
 }

@@ -31,17 +31,17 @@ test('password action puts one-time token only in POST body and fetches fresh ch
  expect(JSON.parse(String(init.body))).toEqual({token,purpose:'activate',password:'new password'})
 })
 
-import {createElement as h} from 'react'
+import {act,createElement as h} from 'react'
 import {createRoot} from 'react-dom/client'
 import {LocalAdminPanel} from '../../src/shell/LocalAdminPanel'
 import {PasswordActionForm} from '../../src/shell/PasswordActionForm'
 import type {LocalAdminClient} from '../../src/shell/local-admin-client'
-function mount(node:ReturnType<typeof h>){document.body.innerHTML='<div id="test"></div>';const root=createRoot(document.getElementById('test')!);root.render(node);return root}
+async function mount(node:ReturnType<typeof h>){document.body.innerHTML='<div id="test"></div>';const root=createRoot(document.getElementById('test')!);const environment=globalThis as typeof globalThis & {IS_REACT_ACT_ENVIRONMENT?:boolean};const previous=environment.IS_REACT_ACT_ENVIRONMENT;environment.IS_REACT_ACT_ENVIRONMENT=true;try{await act(async()=>root.render(node))}finally{environment.IS_REACT_ACT_ENVIRONMENT=previous}return root}
 test('admin confirms target and reauth before mutation; duplicate clicks cannot issue twice',async()=>{
  let finish!:()=>void
  const wait=new Promise<void>(r=>{finish=r})
  const client={list:vi.fn(async()=>({users:[{id:'target',username:'alice',displayName:'Alice',status:'active',roles:['personal'],requiresPasswordReset:false}],nextCursor:null})),reauthenticate:vi.fn(async()=>wait),issue:vi.fn(async()=>({action:{token:'a'.repeat(43),purpose:'reset',expiresAt:'later'}}))} as unknown as LocalAdminClient
- const rotated=vi.fn(),root=mount(h(LocalAdminPanel,{currentUserId:'me',onClose:()=>{},onSessionRotated:rotated,client}))
+ const rotated=vi.fn(),root=await mount(h(LocalAdminPanel,{currentUserId:'me',onClose:()=>{},onSessionRotated:rotated,client}))
  await vi.waitFor(()=>expect(document.body.textContent).toContain('Alice'))
  ;([...document.querySelectorAll('button')].find(b=>b.textContent==='重置密码')!).click()
  await vi.waitFor(()=>expect(document.querySelector('form[aria-label]')).not.toBeNull())
@@ -55,7 +55,7 @@ test('admin confirms target and reauth before mutation; duplicate clicks cannot 
  root.unmount();expect(document.body.textContent).not.toContain('a'.repeat(43))
 })
 test('password mismatch sends nothing; failure clears secrets and does not claim success',async()=>{
- const redeem=vi.fn(async()=>{throw new Error('rejected')}),root=mount(h(PasswordActionForm,{onClose:()=>{},client:{redeem} as unknown as LocalAdminClient}))
+ const redeem=vi.fn(async()=>{throw new Error('rejected')}),root=await mount(h(PasswordActionForm,{onClose:()=>{},client:{redeem} as unknown as LocalAdminClient}))
  await vi.waitFor(()=>expect(document.querySelector('form')).not.toBeNull())
  const form=document.querySelector('form')!
  const set=(name:string,value:string)=>{form.querySelector<HTMLInputElement>(`[name="${name}"]`)!.value=value}
@@ -79,7 +79,9 @@ test('malformed 2xx DTOs never report successful actions',async()=>{
 })
 test('reauth network failure clears shared CSRF and never starts the admin mutation',async()=>{
  const client={list:vi.fn(async()=>({users:[],nextCursor:null})),reauthenticate:vi.fn(async()=>{throw new Error('network outcome unknown')}),create:vi.fn()} as unknown as LocalAdminClient
- const rotated=vi.fn(),root=mount(h(LocalAdminPanel,{currentUserId:'me',onClose:()=>{},onSessionRotated:rotated,client}))
+ const rotated=vi.fn(),root=await mount(h(LocalAdminPanel,{currentUserId:'me',onClose:()=>{},onSessionRotated:rotated,client}))
+ expect(document.querySelector('input[name="username"]')).toBeNull()
+ ;[...document.querySelectorAll('button')].find(button=>button.textContent==='新建用户')!.click()
  await vi.waitFor(()=>expect(document.querySelector<HTMLInputElement>('input[name="username"]')?.disabled).toBe(false))
  const createForm=document.querySelector('form')!;createForm.querySelector<HTMLInputElement>('[name="username"]')!.value='new'
  createForm.dispatchEvent(new Event('submit',{bubbles:true,cancelable:true}))
@@ -90,7 +92,7 @@ test('reauth network failure clears shared CSRF and never starts the admin mutat
  root.unmount()
 })
 test('successful redemption shows return-to-login result without retaining the code',async()=>{
- const redeem=vi.fn(async()=>{}),root=mount(h(PasswordActionForm,{onClose:()=>{},client:{redeem} as unknown as LocalAdminClient}))
+ const redeem=vi.fn(async()=>{}),root=await mount(h(PasswordActionForm,{onClose:()=>{},client:{redeem} as unknown as LocalAdminClient}))
  await vi.waitFor(()=>expect(document.querySelector('form')).not.toBeNull())
  const form=document.querySelector('form')!
  for(const [name,value] of [['token','a'.repeat(43)],['password','same'],['confirm','same']])form.querySelector<HTMLInputElement>(`[name="${name}"]`)!.value=value
@@ -107,7 +109,7 @@ test('role replacement accepts only explicit known nonduplicate roles',async()=>
 })
 test('self role replacement is explicit, preserves personal and requires a fresh login on success',async()=>{
  const client={list:vi.fn(async()=>({users:[{id:'me',username:'owner',displayName:'',status:'active',roles:['personal','config_admin'],requiresPasswordReset:false}],nextCursor:null})),reauthenticate:vi.fn(async()=>{}),setRoles:vi.fn(async()=>({user:{id:'me'}}))} as unknown as LocalAdminClient
- const changed=vi.fn(),root=mount(h(LocalAdminPanel,{currentUserId:'me',onClose:()=>{},onSessionRotated:()=>{},onOwnAuthorityChanged:changed,client}))
+ const changed=vi.fn(),root=await mount(h(LocalAdminPanel,{currentUserId:'me',onClose:()=>{},onSessionRotated:()=>{},onOwnAuthorityChanged:changed,client}))
  await vi.waitFor(()=>expect([...document.querySelectorAll('button')].some(b=>b.textContent==='编辑角色')).toBe(true))
  ;([...document.querySelectorAll('button')].find(b=>b.textContent==='编辑角色')!).click()
  await vi.waitFor(()=>expect(document.querySelector('fieldset')?.textContent).toContain('必须重新登录'))
@@ -117,8 +119,91 @@ test('self role replacement is explicit, preserves personal and requires a fresh
  expect(client.setRoles).toHaveBeenCalledWith('me',['personal']);root.unmount()
 })
 test('password action purpose has an explicit stable accessible label',async()=>{
- const root=mount(h(PasswordActionForm,{onClose:()=>{}}))
- await vi.waitFor(()=>expect(document.querySelector('select')).not.toBeNull())
- expect(document.querySelector('select')?.getAttribute('aria-label')).toBe('用途')
+ const root=await mount(h(PasswordActionForm,{onClose:()=>{}}))
+ await vi.waitFor(()=>expect(document.querySelector('[role=combobox]')).not.toBeNull())
+ expect(document.querySelector('[role=combobox]')?.getAttribute('aria-label')).toBe('用途')
  root.unmount()
+})
+
+test('user management labels roles and status in Chinese and protects an unfinished operation from tab closure',async()=>{
+ let guard:(()=>boolean)|null=null
+ const client={list:vi.fn(async()=>({users:[{id:'target',username:'alice',displayName:'Alice',status:'pending',roles:['personal','operator'],requiresPasswordReset:false}],nextCursor:null}))} as unknown as LocalAdminClient
+ const confirm=vi.spyOn(window,'confirm').mockReturnValue(false)
+ const root=await mount(h(LocalAdminPanel,{currentUserId:'me',onClose:()=>{},onSessionRotated:()=>{},client,onCloseGuardChange(next:(()=>boolean)|null){guard=next}}))
+ try{
+  await vi.waitFor(()=>expect(document.body.textContent).toContain('Alice'))
+  expect(document.body.textContent).toContain('待激活')
+  expect(document.body.textContent).toContain('运维人员')
+  expect(guard?.()).toBe(true)
+  ;([...document.querySelectorAll('button')].find(b=>b.textContent==='编辑角色')!).click()
+  await vi.waitFor(()=>expect(document.querySelector('form[aria-label]')).not.toBeNull())
+  expect(guard?.()).toBe(false)
+  expect(confirm).toHaveBeenCalledOnce()
+ }finally{root.unmount();confirm.mockRestore()}
+})
+
+test('a pending or unconfirmed admin write blocks duplicate operations until a successful refresh',async()=>{
+ let guard:(()=>boolean)|null=null,fail!:(error:Error)=>void
+ const client={list:vi.fn(async()=>({users:[{id:'target',username:'alice',displayName:'Alice',status:'active',roles:['personal'],requiresPasswordReset:false}],nextCursor:null})),reauthenticate:vi.fn(async()=>{}),setStatus:vi.fn(()=>new Promise((_resolve,reject)=>{fail=reject}))} as unknown as LocalAdminClient
+ const confirm=vi.spyOn(window,'confirm').mockReturnValue(false)
+ const root=await mount(h(LocalAdminPanel,{currentUserId:'me',onClose:()=>{},onSessionRotated:()=>{},client,onCloseGuardChange(next:(()=>boolean)|null){guard=next}}))
+ const button=(label:string)=>[...document.querySelectorAll<HTMLButtonElement>('button')].find(node=>node.textContent===label)!
+ try{
+  await vi.waitFor(()=>expect(document.body.textContent).toContain('Alice'))
+  button('禁用账号').click();await vi.waitFor(()=>expect(document.querySelector('form[aria-label]')).not.toBeNull())
+  const form=document.querySelector('form[aria-label]')!;form.querySelector<HTMLInputElement>('[aria-label="管理员当前密码"]')!.value='test-only'
+  form.dispatchEvent(new Event('submit',{bubbles:true,cancelable:true}))
+  expect(guard?.()).toBe(false)
+  expect(confirm).not.toHaveBeenCalled()
+  await vi.waitFor(()=>expect(fail).toBeTypeOf('function'))
+  fail(new TypeError('network result unknown'))
+  await vi.waitFor(()=>expect(document.body.textContent).toContain('上次操作结果未确认'))
+  expect(button('禁用账号').disabled).toBe(true)
+  expect(guard?.()).toBe(false)
+  expect(confirm).toHaveBeenCalledOnce()
+  button('刷新列表').click()
+  await vi.waitFor(()=>expect(button('禁用账号').disabled).toBe(false))
+  expect(guard?.()).toBe(true)
+ }finally{root.unmount();confirm.mockRestore()}
+})
+
+test('reauthentication clears actual typed administrator passwords while waiting for the server',async()=>{
+ const {act}=await import('react')
+ let finish!:()=>void
+ const client={list:vi.fn(async()=>({users:[{id:'target',username:'alice',displayName:'Alice',status:'active',roles:['personal'],requiresPasswordReset:false}],nextCursor:null})),reauthenticate:vi.fn(()=>new Promise<void>(resolve=>{finish=resolve})),setStatus:vi.fn(async()=>({user:{id:'target'}}))} as unknown as LocalAdminClient
+ const root=await mount(h(LocalAdminPanel,{currentUserId:'me',onClose:()=>{},onSessionRotated:()=>{},client}))
+ await vi.waitFor(()=>expect(document.body.textContent).toContain('Alice'))
+ const environment=globalThis as typeof globalThis & {IS_REACT_ACT_ENVIRONMENT?:boolean}
+ const previous=environment.IS_REACT_ACT_ENVIRONMENT;environment.IS_REACT_ACT_ENVIRONMENT=true
+ try{
+  await act(async()=>{([...document.querySelectorAll('button')].find(button=>button.textContent==='禁用账号')!).click()})
+  const form=document.querySelector('form[aria-label]')!
+  await act(async()=>{const input=form.querySelector<HTMLInputElement>('[aria-label="管理员当前密码"]')!;Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value')!.set!.call(input,'administrator test passphrase');input.dispatchEvent(new Event('input',{bubbles:true}))})
+  await act(async()=>{form.dispatchEvent(new Event('submit',{bubbles:true,cancelable:true}))})
+  expect(client.reauthenticate).toHaveBeenCalledOnce()
+  expect(form.querySelector<HTMLInputElement>('[aria-label="管理员当前密码"]')?.value).toBe('')
+  await act(async()=>finish())
+ }finally{await act(async()=>root.unmount());environment.IS_REACT_ACT_ENVIRONMENT=previous}
+})
+
+test('password action selects reset explicitly and clears typed credentials before the pending request completes',async()=>{
+ const {act}=await import('react')
+ let finish!:()=>void
+ const redeem=vi.fn(()=>new Promise<void>(resolve=>{finish=resolve}))
+ const root=await mount(h(PasswordActionForm,{onClose:()=>{},client:{redeem} as unknown as LocalAdminClient}))
+ await vi.waitFor(()=>expect(document.querySelector('form')).not.toBeNull())
+ const environment=globalThis as typeof globalThis & {IS_REACT_ACT_ENVIRONMENT?:boolean}
+ const previous=environment.IS_REACT_ACT_ENVIRONMENT;environment.IS_REACT_ACT_ENVIRONMENT=true
+ try{
+  const purpose=document.querySelector<HTMLInputElement>('[role="combobox"][aria-label="用途"]')!
+  expect(purpose).not.toBeNull()
+  await act(async()=>purpose.dispatchEvent(new MouseEvent('mousedown',{bubbles:true})))
+  await act(async()=>{([...document.querySelectorAll<HTMLElement>('.ant-select-item-option')].find(option=>option.textContent==='重置密码')!).click()})
+  const form=document.querySelector('form')!
+  await act(async()=>{for(const [name,value] of [['token','x'.repeat(43)],['password','new reset test passphrase'],['confirm','new reset test passphrase']]){const input=form.querySelector<HTMLInputElement>(`[name="${name}"]`)!;Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value')!.set!.call(input,value);input.dispatchEvent(new Event('input',{bubbles:true}))}})
+  await act(async()=>{form.dispatchEvent(new Event('submit',{bubbles:true,cancelable:true}))})
+  expect(redeem).toHaveBeenCalledWith('x'.repeat(43),'reset','new reset test passphrase')
+  expect([...form.querySelectorAll<HTMLInputElement>('input:not([name=purpose])')].filter(input=>input.name).every(input=>input.value==='')).toBe(true)
+  await act(async()=>finish())
+ }finally{await act(async()=>root.unmount());environment.IS_REACT_ACT_ENVIRONMENT=previous}
 })

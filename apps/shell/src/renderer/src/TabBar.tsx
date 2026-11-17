@@ -174,7 +174,7 @@ export function renamedFileName(currentPath: string, typedName: string): string 
   return ext ? `${typedName}.${ext}` : typedName
 }
 
-export function TabBar() {
+export function TabBar({hideSingleTabList=false,hideAppMenu=false}:{hideSingleTabList?:boolean;hideAppMenu?:boolean}={}) {
   const { t } = useI18n()
   const [tabs, setTabs] = useState<TabSummary[]>([])
   const stripRef = useRef<HTMLDivElement>(null)
@@ -453,7 +453,7 @@ export function TabBar() {
   return (
     <div className="tab-bar">
       <div className="tab-bar-drag-spacer" />
-      {!IS_MAC && (
+      {!IS_MAC && !hideAppMenu && (
         <button
           className="tab-app-menu-btn"
           title={t('appMenu')}
@@ -638,7 +638,7 @@ export function TabBar() {
           </svg>
         </button>
       </div>
-      <button
+      {(!hideSingleTabList||tabs.length>1)&&<button
         className="tab-overflow-btn"
         title={t('tabList')}
         aria-label={t('tabList')}
@@ -664,7 +664,7 @@ export function TabBar() {
             strokeLinejoin="round"
           />
         </svg>
-      </button>
+      </button>}
       <div className="tab-bar-caption-spacer" />
     </div>
   )

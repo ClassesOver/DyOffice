@@ -7,7 +7,7 @@
 
 ## 背景
 
-DyOffice 由 GenOffice Web 改造而来，需提供多用户的独立个人工作区，企业内部可自部署。既有开发原型采用共享的个人/Admin Bearer Token，这不是生产用户身份；旧计划提出外部 OIDC/IdP 对接，但用户明确要求不引入 OIDC，改为账号密码管理。
+DyOffice 由 DyOffice Web 改造而来，需提供多用户的独立个人工作区，企业内部可自部署。既有开发原型采用共享的个人/Admin Bearer Token，这不是生产用户身份；旧计划提出外部 OIDC/IdP 对接，但用户明确要求不引入 OIDC，改为账号密码管理。
 
 ## 决定
 

@@ -15,13 +15,13 @@
 | [implementation-plan.md](implementation-plan.md) | T00–T26 共 27 个任务；代码路径、依赖、接口、失败测试、验证、提交与里程碑 | 开发、Codex/其他开发 Agent、QA |
 | [enterprise-delivery.md](enterprise-delivery.md) | 页面与业务场景、客户调研、私有部署、本地账号管理、安全、迁移、备份、灰度、运营和商业交付 | 产品、实施、客户、SRE |
 | [acceptance-matrix.md](acceptance-matrix.md) | 四格式/身份/AI/MCP/数据源/恢复的验收场景、性能目标、发布门槛和证据模板 | QA、安全、业务验收人 |
-| [reuse.md](reuse.md) | 既定的 GenOffice 最大复用方向及全局 Admin 范围 | 所有参与者 |
+| [reuse.md](reuse.md) | 既定的 DyOffice 最大复用方向及全局 Admin 范围 | 所有参与者 |
 
 建议先读本页，再读架构；实施时同时打开任务与验收矩阵；企业交付负责人从第一阶段就参与，不等开发完再补安全和运维。
 
 ## 2. 产品目标与不可改变的范围
 
-DyOffice 是基于 GenOffice 的网页版原生 Office 工作区：用户能编辑真实 DOCX、XLSX、PPTX、PDF；AI 能理解文档、提出或执行受控修改；文件可以保存、下载、回滚、追溯；外部 Harness 可以通过用户授权的 HTTP MCP 使用同一套能力。
+DyOffice 是基于 DyOffice 的网页版原生 Office 工作区：用户能编辑真实 DOCX、XLSX、PPTX、PDF；AI 能理解文档、提出或执行受控修改；文件可以保存、下载、回滚、追溯；外部 Harness 可以通过用户授权的 HTTP MCP 使用同一套能力。
 
 延续 `../../DYOFFICE.md` 和 reuse.md 的已确认要求：
 
@@ -36,7 +36,7 @@ DyOffice 是基于 GenOffice 的网页版原生 Office 工作区：用户能编�
 
 ### 3.1 后端：模块化单体，不先微服务化
 
-Node.js/TypeScript + Fastify，PostgreSQL 管理权威数据，S3 接口管理文件，按需引入 Redis/BullMQ 和隔离 Worker。保持 GenOffice 的 TypeScript 技术资产；不另建 Python/Agno 主后端，不为“企业版”直接增加 Kubernetes、向量数据库和一套自研 AI 循环。
+Node.js/TypeScript + Fastify，PostgreSQL 管理权威数据，S3 接口管理文件，按需引入 Redis/BullMQ 和隔离 Worker。保持 DyOffice 的 TypeScript 技术资产；不另建 Python/Agno 主后端，不为“企业版”直接增加 Kubernetes、向量数据库和一套自研 AI 循环。
 
 企业优先独立部署，S3 实现可用客户现有服务。MinIO 是候选实现，不是必须使用的产品。资源规格和并发能力用基准压测验证。
 

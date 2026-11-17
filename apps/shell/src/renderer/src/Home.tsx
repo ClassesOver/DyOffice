@@ -1,3 +1,5 @@
+import {onRevealWorkspaceFolder} from './file-events'
+import {createPortal} from 'react-dom'
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type {
   DragEvent as ReactDragEvent,
@@ -5,7 +7,7 @@ import type {
   ReactElement,
   ReactNode,
 } from 'react'
-import logoLockup from './assets/genoffice-logo.svg'
+import logoLockup from './assets/dyoffice-logo.svg'
 import { FileBadge } from './file-badge'
 import { placeFolderMenu } from './folder-menu-position'
 import type {
@@ -1531,11 +1533,13 @@ export interface HomeProps {
   supportedFormats?: readonly string[]
   supportedNewFormats?: readonly string[]
   accountEntry?: ReactNode
+  /** Omitted flags preserve desktop actions; Web hosts disable unavailable capabilities. */
+  capabilities?: {localFolders?: boolean; copyPath?: boolean; duplicateFile?: boolean; starredGroups?: boolean; cloudProjects?: boolean; semanticRanking?: boolean}
   /** A host with empty-only directory deletion supplies its own accurate description. */
   folderDeleteDescription?: (name: string) => string
 }
 
-export function Home({supportedFormats, supportedNewFormats, accountEntry, folderDeleteDescription}:HomeProps = {}) {
+export function Home({supportedFormats, supportedNewFormats, accountEntry, folderDeleteDescription, capabilities}:HomeProps = {}) {
   const i18n = useI18n()
   const { t, lang } = i18n
   const [actionError, setActionError] = useState('')
@@ -1597,6 +1601,9 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
   const [rowMenu, setRowMenu] = useState<string | null>(null)
   // actions cell (… button + menu) of the row whose menu is open — the dismissal guard root
   const rowMenuWrapRef = useRef<HTMLSpanElement>(null)
+  const rowMenuPopRef = useRef<HTMLDivElement>(null)
+  const rowMenuAnchor = useRef<DOMRect | null>(null)
+  const renderMenu = (menu: ReactElement) => supportedFormats ? createPortal(menu, document.body) : menu
   const [selected, setSelected] = useState<ReadonlySet<string>>(new Set())
   const [renaming, setRenaming] = useState<{ path: string; value: string } | null>(null)
   const renameGeneration = useRef(0)
@@ -1775,7 +1782,7 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
     // the group pills live on the renderer, so their list rides along with
     // every reload; a vanished group (last file unstarred/ungrouped) clears
     // the filter instead of showing a silently empty list
-    void window.aiOffice.starredGroups().then((groups) => {
+    if (capabilities?.starredGroups !== false) void window.aiOffice.starredGroups().then((groups) => {
       if (seq !== requestSeq.current) return
       setStarredGroups(groups)
       setGroupFilter((cur) => (cur && !groups.includes(cur) ? null : cur))
@@ -1830,7 +1837,7 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
       ? [q, filter, ...searchPage.hits.slice(0, 20).map((h) => h.path)].join('\n')
       : ''
   useEffect(() => {
-    if (!rerankKey) return
+    if (capabilities?.semanticRanking === false || !rerankKey) return
     const key = rerankKey
     const paths = key.split('\n').slice(2)
     const timer = window.setTimeout(() => {
@@ -1840,7 +1847,7 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
       }).catch(reportError)
     }, 600)
     return () => window.clearTimeout(timer)
-  }, [q, filter, rerankKey, rerankSettingsTick, reportError])
+  }, [q, filter, rerankKey, rerankSettingsTick, reportError, capabilities?.semanticRanking])
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -1897,7 +1904,7 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
   // Load the next page once the bottom sentinel enters the viewport (240px early);
   // depending on entries.length rebuilds the observer after each page — observe fires an immediate
   // callback, so while the sentinel stays in view we keep loading until full or exhausted
-  const sentinelRef = useRef<HTMLDivElement>(null)
+  const sentinelRef = useRef<HTMLLIElement>(null)
   useEffect(() => {
     const el = sentinelRef.current
     if (!el) return
@@ -1913,11 +1920,33 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
 
   // unified dismissal: outside press, window blur, chrome press (tab strip / window drag)
   useDismissablePopover(rowMenu !== null, () => setRowMenu(null), {
-    inside: () => [rowMenuWrapRef.current],
+    inside: () => [rowMenuWrapRef.current, rowMenuPopRef.current],
   })
   useDismissablePopover(folderMenu !== null, () => setFolderMenu(null), {
-    inside: () => [folderMenuWrapRef.current],
+    inside: () => [folderMenuWrapRef.current, folderMenuPopRef.current],
   })
+  useLayoutEffect(() => {
+    const el = rowMenuPopRef.current, anchor = rowMenuAnchor.current
+    if (!supportedFormats || !rowMenu || !el || !anchor) return
+    el.style.setProperty('position-anchor', 'none')
+    el.style.setProperty('position-visibility', 'always')
+    el.style.setProperty('position-try-fallbacks', 'none')
+    const {left, top} = placeFolderMenu(
+      {x: anchor.right, y: anchor.bottom + 4, above: anchor.top - 4, align: 'end'},
+      {width: el.offsetWidth, height: el.offsetHeight},
+      {width: fixedViewportWidth(), height: document.documentElement.clientHeight},
+    )
+    el.style.left = `${left}px`; el.style.top = `${top}px`
+  }, [rowMenu, supportedFormats])
+  useEffect(() => {
+    if (!supportedFormats || !rowMenu) return
+    const close = (event: Event) => {
+      if (event.target instanceof Node && rowMenuPopRef.current?.contains(event.target)) return
+      setRowMenu(null)
+    }
+    window.addEventListener('scroll', close, true); window.addEventListener('resize', close)
+    return () => {window.removeEventListener('scroll', close, true); window.removeEventListener('resize', close)}
+  }, [rowMenu, supportedFormats])
   // the fixed-position folder menu would detach from its row while the tree scrolls
   useEffect(() => {
     if (!folderMenu) return
@@ -2062,6 +2091,19 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
       return next
     })
   }
+
+  useEffect(() => onRevealWorkspaceFolder(({dir, fileId}) => {
+    const owner = rootOf(dir, roots)
+    if (!owner?.readable) return
+    setExpanded(previous => new Set([...previous, ...crumbsOf(owner, dir).map(crumb => crumb.path)]))
+    setSelectedFolder(dir)
+    setCloudMode(false)
+    setSearchQuery('')
+    setFilter('all')
+    setSelected(new Set(fileId ? [fileId] : []))
+    setRowMenu(null)
+    setFolderMenu(null)
+  }), [roots])
 
   const toggleSelect = (path: string, on: boolean) => {
     setSelected((prev) => {
@@ -2332,19 +2374,19 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
     {
       ext: 'docx',
       title: t('newDoc'),
-      sub: '.docx',
+      sub: supportedFormats ? '文字文档 · .docx' : '.docx',
       action: () => window.aiOffice.newDoc(newFileOpts),
     },
     {
       ext: 'xlsx',
       title: t('newSheet'),
-      sub: '.xlsx',
+      sub: supportedFormats ? '电子表格 · .xlsx' : '.xlsx',
       action: () => window.aiOffice.newSheet(newFileOpts),
     },
     {
       ext: 'pptx',
       title: t('newSlide'),
-      sub: '.pptx',
+      sub: supportedFormats ? '演示文稿 · .pptx' : '.pptx',
       action: () => window.aiOffice.newSlide(newFileOpts),
     },
     {
@@ -2362,7 +2404,7 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
     {
       ext: 'pdf',
       title: t('newPdf'),
-      sub: '.pdf',
+      sub: supportedFormats ? 'PDF 文档 · .pdf' : '.pdf',
       action: () => window.aiOffice.newPdf(newFileOpts),
     },
   ]
@@ -2371,7 +2413,7 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
     return (
       <div className="quick-cards">
         {NEW_ITEMS.filter(item => !supportedFormats || supportedFormats.includes(item.ext)).map((item) => (
-          <button key={item.ext} className="quick-card" disabled={Boolean(supportedNewFormats && !supportedNewFormats.includes(item.ext))} title={supportedNewFormats && !supportedNewFormats.includes(item.ext) ? 'Not available in this Web build' : undefined} onClick={() => void item.action().catch(reportError)}>
+          <button key={item.ext} className="quick-card" disabled={Boolean(supportedNewFormats && !supportedNewFormats.includes(item.ext))} title={supportedNewFormats && !supportedNewFormats.includes(item.ext) ? '暂不支持新建此格式，可通过打开文件导入现有文档。' : undefined} onClick={() => void item.action().catch(reportError)}>
             <FileBadge ext={item.ext} size={30} />
             <span className="quick-text">
               <span className="quick-title-row">
@@ -2420,7 +2462,7 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
   }
 
   // folders dragged in from the OS join the tree in place; documents open as they do anywhere else
-  const panelDropProps = {
+  const panelDropProps = capabilities?.localFolders === false ? {} : {
     onDragOver: (event: ReactDragEvent) => {
       if (!event.dataTransfer.types.includes('Files')) return
       event.preventDefault()
@@ -2473,7 +2515,7 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
       >
         <MoreDots />
       </button>
-      {folderMenu && menuOpenAt('tree', entry.path) && (
+      {folderMenu && menuOpenAt('tree', entry.path) && renderMenu(
         <div className="folder-menu" role="menu" ref={folderMenuPopRef}>
           {editableAt(entry.path) && (
             <button role="menuitem" onClick={() => startCreateFolder(entry.path)}>
@@ -2516,7 +2558,7 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
               </button>
             </>
           )}
-          {rootEntry?.removable && (
+          {capabilities?.localFolders !== false && rootEntry?.removable && (
             <>
               <div className="row-menu-divider" />
               <button role="menuitem" onClick={() => removeFolderRoot(entry.path)}>
@@ -2664,7 +2706,7 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
         <div className="folder-panel-head">
           <span className="folder-panel-title">{t('folders')}</span>
           <div className="folder-panel-actions">
-            {roots.length > 0 && (
+            {capabilities?.localFolders !== false && roots.length > 0 && (
               <button
                 className="folder-add-btn folder-add-root-btn"
                 data-tip={t('addFolderRoot')}
@@ -2711,12 +2753,12 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
           {root && !root.usable ? (
             <li className="folder-unusable">
               <p>{t('rootUnusable')}</p>
-              <button
+              {capabilities?.localFolders !== false && <button
                 className="btn btn-secondary"
                 onClick={() => void window.aiOffice.pickDefaultSaveDir().then(() => loadRoot()).catch(reportError)}
               >
                 {t('pickSaveDir')}
-              </button>
+              </button>}
             </li>
           ) : (
             root && renderTreeNode({ path: root.path, name: root.name, hasSubfolders: true }, 0)
@@ -2790,8 +2832,8 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
           ) : (
             <span className="recent-name">{entry.name}</span>
           )}
-          <span className="recent-path" title={locationLabel(entry.path, roots, listings) || undefined}>
-            {locationLabel(entry.path, roots, listings)}
+          <span className="recent-path" title={(entry.locationLabel ?? locationLabel(entry.path, roots, listings)) || undefined}>
+            {(entry.locationLabel ?? locationLabel(entry.path, roots, listings))}
           </span>
           <span className="recent-time">
             {entry.missing ? '—' : formatModified(entry.mtimeMs, i18n)}
@@ -2824,7 +2866,10 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
               className="more-btn"
               aria-label={t('moreActions')}
               aria-expanded={rowMenu === entry.path}
-              onClick={() => setRowMenu(rowMenu === entry.path ? null : entry.path)}
+              onClick={(event) => {
+                rowMenuAnchor.current = event.currentTarget.getBoundingClientRect()
+                setRowMenu(rowMenu === entry.path ? null : entry.path)
+              }}
             >
               <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
                 <circle cx="3.2" cy="8" r="1.4" fill="currentColor" />
@@ -2832,8 +2877,8 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
                 <circle cx="12.8" cy="8" r="1.4" fill="currentColor" />
               </svg>
             </button>
-            {rowMenu === entry.path && (
-              <div className="row-menu" role="menu">
+            {rowMenu === entry.path && renderMenu(
+              <div className="row-menu" role="menu" ref={rowMenuPopRef} style={supportedFormats ? {position: 'fixed', right: 'auto', bottom: 'auto', zIndex: 1200} : undefined}>
                 <button
                   role="menuitem"
                   onClick={() => {
@@ -2852,15 +2897,15 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
                 >
                   {t('revealInFolder')}
                 </button>
-                <button
+                {capabilities?.copyPath !== false && <button
                   role="menuitem"
                   onClick={() => {
                     setRowMenu(null)
-                    void navigator.clipboard.writeText(entry.path)
+                    void navigator.clipboard.writeText(entry.path).catch(reportError)
                   }}
                 >
                   {t('copyPath')}
-                </button>
+                </button>}
                 {canMove && editable && !entry.missing && (
                   <>
                     <div className="row-menu-divider" />
@@ -2875,12 +2920,12 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
                     <button role="menuitem" onClick={() => startRename(entry)}>
                       {t('rename')}
                     </button>
-                    <button role="menuitem" onClick={() => duplicateFile(entry.path)}>
+                    {capabilities?.duplicateFile !== false && <button role="menuitem" onClick={() => duplicateFile(entry.path)}>
                       {t('duplicate')}
-                    </button>
+                    </button>}
                   </>
                 )}
-                {entry.starred && (
+                {capabilities?.starredGroups !== false && entry.starred && (
                   <>
                     <div className="row-menu-divider" />
                     <button
@@ -3022,7 +3067,7 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
             >
               <MoreDots />
             </button>
-            {folderMenu && menuOpenAt('table', entry.path) && (
+            {folderMenu && menuOpenAt('table', entry.path) && renderMenu(
               <div className="folder-menu" role="menu" ref={folderMenuPopRef}>
                 <button
                   role="menuitem"
@@ -3108,7 +3153,7 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
     searchInputRef.current?.focus()
   }
 
-  const renderSearchSettingsButton = () => (
+  const renderSearchSettingsButton = () => capabilities?.semanticRanking === false ? null : (
     <button
       className="file-search-settings"
       title={t('searchJevSettings')}
@@ -3192,8 +3237,8 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
       <div className="search-main">
         <div className="search-head">
           <span className="search-name">{highlightText(hit.name, hit.needles)}</span>
-          <span className="search-path" title={locationLabel(hit.path, roots, listings) || undefined}>
-            {highlightText(locationLabel(hit.path, roots, listings), hit.needles)}
+          <span className="search-path" title={(hit.locationLabel ?? locationLabel(hit.path, roots, listings)) || undefined}>
+            {highlightText((hit.locationLabel ?? locationLabel(hit.path, roots, listings)), hit.needles)}
           </span>
         </div>
         {hit.snippet && (
@@ -3447,7 +3492,7 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
                     </button>
                   ))}
                 </div>
-                {view === 'starred' && starredGroups.length > 0 && (
+                {capabilities?.starredGroups !== false && view === 'starred' && starredGroups.length > 0 && (
                   // the group pills refine the Starred view further; the type
                   // pills above them keep working on the group-scoped list
                   <div className="filter-pills" role="tablist" aria-label={t('groupFilterAria')}>
@@ -3518,12 +3563,12 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
                 {(fileSort === 'oldest' ? [...entries].reverse() : entries).map((entry) =>
                   renderFileRow(entry, 'global'),
                 )}
+                {hasMore && (
+                  <li ref={sentinelRef} className="load-more" aria-hidden="true">
+                    <span className="load-more-spinner" />
+                  </li>
+                )}
               </ul>
-              {hasMore && (
-                <div ref={sentinelRef} className="load-more" aria-hidden="true">
-                  <span className="load-more-spinner" />
-                </div>
-              )}
             </div>
           )}
         </section>
@@ -3569,14 +3614,14 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
   }
 
   return (
-    <div className="home">
+    <div className={supportedFormats ? 'home home-web' : 'home'}>
       <aside
         className="sidebar"
         ref={sidebarRef}
         style={sidebarWidth === null ? undefined : { width: sidebarWidth }}
       >
         <div className="sidebar-logo">
-          <img className="logo-lockup" src={logoLockup} alt="GenOffice" />
+          <img className="logo-lockup" src={logoLockup} alt="DyOffice" />
         </div>
         <nav className="sidebar-nav">
           <button
@@ -3612,7 +3657,7 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
             <span className="nav-label">{t('navStarred')}</span>
             <span className="nav-count">{navCounts.starred}</span>
           </button>
-          {loggedIn && (
+          {capabilities?.cloudProjects !== false && loggedIn && (
             <button
               className={`nav-item${cloudMode && !selectedFolder ? ' active' : ''}`}
               onClick={() => {
@@ -3782,7 +3827,7 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
         />
       )}
 
-      {groupPicker && (
+      {capabilities?.starredGroups !== false && groupPicker && (
         <GroupPicker
           groups={starredGroups}
           count={groupPicker.length}

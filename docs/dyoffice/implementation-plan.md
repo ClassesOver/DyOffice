@@ -2,11 +2,11 @@
 
 > **面向实施者：** 按 `superpowers:executing-plans` 或 `superpowers:subagent-driven-development` 逐任务执行；所有复选框初始均未完成。先阅读关联架构，不把本计划当成已经实现的功能清单。
 
-**Goal:** 在克隆的 GenOffice 仓库内，完成四格式原生 Web 编辑、AI、个人隔离、HTTP MCP、数据源及企业可部署交付。
+**Goal:** 在克隆的 DyOffice 仓库内，完成四格式原生 Web 编辑、AI、个人隔离、HTTP MCP、数据源及企业可部署交付。
 
-**Architecture:** Fastify 模块化单体复用 GenOffice Agent Core/Provider/引擎；浏览器保留活跃编辑工具；HTTP/SSE 服务业务和模型流，WS 桥接远程编辑；PostgreSQL 保存权威状态，S3 保存不可变文档，隔离 Worker 执行重任务。
+**Architecture:** Fastify 模块化单体复用 DyOffice Agent Core/Provider/引擎；浏览器保留活跃编辑工具；HTTP/SSE 服务业务和模型流，WS 桥接远程编辑；PostgreSQL 保存权威状态，S3 保存不可变文档，隔离 Worker 执行重任务。
 
-**Tech Stack:** TypeScript、React/Vite、Fastify、PostgreSQL/Drizzle、S3、Redis/BullMQ（任务阶段引入）、现有 GenOffice 包及官方 MCP SDK；具体版本由 T00 锁定。
+**Tech Stack:** TypeScript、React/Vite、Fastify、PostgreSQL/Drizzle、S3、Redis/BullMQ（任务阶段引入）、现有 DyOffice 包及官方 MCP SDK；具体版本由 T00 锁定。
 
 **Spec:** [architecture.md](architecture.md)、[local-account-auth.md](local-account-auth.md)、[enterprise-delivery.md](enterprise-delivery.md)、[acceptance-matrix.md](acceptance-matrix.md)。原有约束见 `reuse.md`、`../../DYOFFICE.md`。
 
@@ -311,7 +311,7 @@ docs/dyoffice/               当前计划及 inventory/ evidence/ adr/
 
 - [ ] 测试模型/媒体/搜索/重排目录、保留省略的 Key、显式清空、版本冲突、退出后旧响应、个人字段注入全局配置。
 - [ ] unit/integration/E2E RED。
-- [ ] 复用 GenOffice settings/provider 元数据和 UI；加入文件夹、最近、收藏、回收站；密钥加密和轮换，不发送完整 AiSettings 到前端。
+- [ ] 复用 DyOffice settings/provider 元数据和 UI；加入文件夹、最近、收藏、回收站；密钥加密和轮换，不发送完整 AiSettings 到前端。
 - [ ] GREEN；暗色主题不改变文档输出；表单失败保留草稿，保存/测试防重复点击。
 - [ ] 提交 `feat(settings): separate personal workspace and global admin`。
 

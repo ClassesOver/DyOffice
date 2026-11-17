@@ -1,3 +1,4 @@
+import {createEditorCloseLifecycle,installEditorCloseLifecycle} from './editor-close-lifecycle'
 import {createAnalysisDocumentTarget} from '../../../../packages/browser-host/src/analysis-document-target.ts'
 import ReactDOM from 'react-dom/client'
 import {useState} from 'react'
@@ -38,7 +39,7 @@ export async function mountSheetsEditor(host: SessionFileHost, container: HTMLEl
   setModuleLang(locale); document.documentElement.lang = locale
   if (prefs.theme === 'system') delete document.documentElement.dataset.theme
   else document.documentElement.dataset.theme = prefs.theme
-  let changed = () => {}, editor: SheetsEditorHandle | null = null, disposed = false
+  let changed = () => {}, editor: SheetsEditorHandle | null = null, disposed = false, closing=false
   let downloading = false, takingOver = false, confirming = false, actionError = ''
   const bridge = createSheetsBridge(host,fileId,prefs,{onChange:()=>changed()})
   const assistantAvailable = Boolean(assistant?.available && prefs.showAssistant !== false)
@@ -89,7 +90,7 @@ export async function mountSheetsEditor(host: SessionFileHost, container: HTMLEl
   }
   function NativeWorkbook() {
     const [,tick] = useState(0), [loaded,setLoaded] = useState(false), [failed,setFailed] = useState(false)
-    changed = () => tick(value=>value+1)
+    changed = () => {if(!closing)tick(value=>value+1)}
     const state = host.getState(fileId)
     const readOnly = failed || takingOver || !state.lease || state.status === 'conflict' || state.status === 'unknown' || bridge.needsConfirmation() || state.status === 'unauthorized'
     const status = failed ? text.failed : !loaded ? text.opening : (state.status === 'unknown' || bridge.needsConfirmation()) ? text.unknown : state.status === 'unauthorized' ? text.unauthorized : takingOver ? text.takingOver : !state.lease || state.status==='conflict' ? (dirty() ? text.takeoverDirty : initialLease ? text.conflict : text.readOnly) : downloading ? text.downloadSaving : actionError || (bridge.isDirty() ? '' : text.ready)
@@ -108,15 +109,20 @@ export async function mountSheetsEditor(host: SessionFileHost, container: HTMLEl
   }
   const root = ReactDOM.createRoot(container)
   root.render(<LocaleProvider initial={locale}><NativeWorkbook /></LocaleProvider>)
-  const beforeUnload = (event: BeforeUnloadEvent) => { if (editor?.isDirty() || host.getState(fileId).status === 'unknown') { event.preventDefault(); event.returnValue='' } }
+  const closeState=()=>({dirty:dirty(),blocked:downloading||takingOver||confirming||bridge.needsConfirmation()||['unknown','saving'].includes(host.getState(fileId).status)})
+  const beforeUnload = (event: BeforeUnloadEvent) => { if (closeState().dirty||closeState().blocked) { event.preventDefault(); event.returnValue='' } }
   window.addEventListener('beforeunload',beforeUnload)
-  return {save:()=>editor?.saveAndWait() ?? Promise.resolve(false),dispose(){unregisterAnalysis?.();analysisTarget.dispose();disposed=true;assistant?.dispose();realtime.dispose();changed=()=>{};window.removeEventListener('beforeunload',beforeUnload);stop();unsubscribe();root.unmount();bridge.dispose()}}
+  const cleanup=()=>{if(disposed)return;unregisterAnalysis?.();analysisTarget.dispose();disposed=true;assistant?.dispose();realtime.dispose();changed=()=>{};window.removeEventListener('beforeunload',beforeUnload);stop();unsubscribe();root.unmount();bridge.dispose()}
+  const lifecycle=createEditorCloseLifecycle({state:closeState,save:()=>editor?.saveAndWait()??Promise.resolve(false),release:()=>host.releaseLease(fileId),cleanup,setClosing:value=>{closing=value;container.inert=value;if(!value)changed()},confirm:()=>window.confirm('工作簿有未保存的更改，是否保存后关闭？取消将保留当前页签。'),notify:()=>window.alert('保存仍在进行或结果待确认，请先在工作簿中核对后再关闭。')})
+  return {save:()=>editor?.saveAndWait()??Promise.resolve(false),canClose:lifecycle.canClose,dispose:lifecycle.dispose,unload(){void host.releaseLease(fileId,true).catch(()=>{});cleanup()}}
 }
 async function bootstrap() {
   const host=createSessionFileHost(),fileId=new URL(location.href).searchParams.get('fileId') ?? ''
+  installEditorCloseLifecycle(window,{canClose:async()=>false,dispose:async()=>false})
   try {
     const mounted=await mountSheetsEditor(host,document.getElementById('root')!,fileId)
-    window.addEventListener('pagehide',()=>{void host.releaseLease(fileId,true).catch(()=>{});mounted.dispose();host.dispose()},{once:true})
-  } catch(error){host.dispose();throw error}
+    installEditorCloseLifecycle(window,{canClose:mounted.canClose,dispose:async()=>{const closed=await mounted.dispose();if(closed)host.dispose();return closed}})
+    window.addEventListener('pagehide',()=>{mounted.unload();host.dispose()},{once:true})
+  } catch(error){await host.releaseLease(fileId).catch(()=>{});host.dispose();installEditorCloseLifecycle(window,{canClose:async()=>true,dispose:async()=>true});throw error}
 }
 void bootstrap().catch(()=>{document.getElementById('root')!.textContent=messages.zh.failed})

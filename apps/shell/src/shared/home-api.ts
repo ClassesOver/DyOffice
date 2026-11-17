@@ -130,6 +130,8 @@ export interface McpStatus {
 
 /** a recent file entry shown on the home screen; type derives from the extension */
 export interface RecentEntry {
+  /** Human-readable location supplied by hosts whose file identity is not a filesystem path. */
+  locationLabel?: string
   path: string
   name: string
   /** lowercased extension without the dot ('docx' | 'xlsx' | 'pptx') */
@@ -291,7 +293,7 @@ export interface HomeApi {
   // ---- knowledge-base ask panel: the reader's starred corpus, askable ----
   /** the starred corpus as the AI's knowledge base */
   kbList(): Promise<KbFileInfo[]>
-  /** the skills the user installed into GenOffice */
+  /** the skills the user installed into DyOffice */
   skillsList(): Promise<UserSkillEntry[]>
   /** one installed skill's body, by name */
   skillText(name: string): Promise<string>
@@ -474,7 +476,7 @@ export interface HomeApi {
   getAiPanelPrefs(): Promise<AiPanelPrefs>
   /** merge + persist; broadcasts 'app:ai-panel-prefs-changed' to all web contents */
   setAiPanelPrefs(patch: Partial<AiPanelPrefs>): Promise<AiPanelPrefs>
-  /** effective default save folder for new/untitled files (configured in userData/app-settings.json, falls back to <Documents>/GenOffice) */
+  /** effective default save folder for new/untitled files (configured in userData/app-settings.json, falls back to <Documents>/DyOffice) */
   getDefaultSaveDir(): Promise<string>
   /** directory picker to change the default save folder; resolves to the new folder, or null when canceled or the pick was unusable */
   pickDefaultSaveDir(): Promise<string | null>

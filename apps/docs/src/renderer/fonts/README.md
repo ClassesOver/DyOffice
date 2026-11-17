@@ -136,11 +136,11 @@ Reserved Font Names include "Nanum" and "NanumGothic"; subsetting is a
 modification). The exact NHN copyright/Reserved Font Name notice and the full
 OFL 1.1 text are in `LICENSE-OFL.txt`.
 
-### GenOffice UI Kana JP
+### DyOffice UI Kana JP
 
 | Font                                      | Role                                                |
 | ----------------------------------------- | --------------------------------------------------- |
-| GenOffice UI Kana JP (Regular/Bold woff2) | Meiryo UI-advance kana/JP punctuation for the alias |
+| DyOffice UI Kana JP (Regular/Bold woff2) | Meiryo UI-advance kana/JP punctuation for the alias |
 
 Source: Noto Sans JP variable font from [notofonts/noto-cjk](https://github.com/notofonts/noto-cjk)
 (SIL OFL 1.1), instanced at wght 400/700. Word for Mac renders Meiryo UI with

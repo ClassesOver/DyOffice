@@ -40,14 +40,14 @@ async function fixture(t,{outcome='success',gate}={}){
  const fileId='11111111-1111-4111-8111-111111111111',before={fileId,revision:'22222222-2222-4222-8222-222222222222',sha256:'a'.repeat(64),size:1},after={...before,revision:'33333333-3333-4333-8333-333333333333',sha256:'b'.repeat(64),size:2}
  let state={name:'a.docx',status:outcome==='unknown-before'?'unknown':'idle',revision:before,lease:{leaseEpoch:1}},saves=0,reconciles=0,dirty=true
  const downloads=[];dom.window.HTMLAnchorElement.prototype.click=function(){downloads.push(this.href)}
- const host={getEditorId:()=>fileId,subscribe:()=>()=>{},open:async()=>({format:'docx'}),getPreferences:async()=>({language:'en',theme:'light',showAssistant:false}),getState:()=>state,acquireLease:async()=>({leaseEpoch:1}),startRenewal:()=>()=>{},save:async()=>{saves++;await gate?.promise;if(outcome==='unknown-after'){state.status='unknown';throw Error('lost acknowledgement')}state.revision=after;return {...after}},reconcile:async()=>{reconciles++;throw Error('unexpected reconcile')}}
+ const host={releaseLease:async()=>{},getEditorId:()=>fileId,subscribe:()=>()=>{},open:async()=>({format:'docx'}),getPreferences:async()=>({language:'en',theme:'light',showAssistant:false}),getState:()=>state,acquireLease:async()=>({leaseEpoch:1}),startRenewal:()=>()=>{},save:async()=>{saves++;await gate?.promise;if(outcome==='unknown-after'){state.status='unknown';throw Error('lost acknowledgement')}state.revision=after;return {...after}},reconcile:async()=>{reconciles++;throw Error('unexpected reconcile')}}
  const control={editor:{getSelection:()=>null,serialize:async()=>null,isDirty:()=>dirty,async save(){await control.lifecycle.beforeSave();const result=await dom.window.desktop.saveDocx(`/files/${fileId}/a.docx`,new ArrayBuffer(2));dirty=outcome==='late-edit'||!result.ok;control.lifecycle.afterSave(result.ok&&outcome!=='late-edit');return result.ok}}}
  globalThis.__docsDownloadTest=control
  let mounted;await act(async()=>{mounted=await mountDocsEditor(host,dom.window.document.getElementById('editor'),fileId)})
  let disposed=false
- const dispose=async()=>{if(!disposed){disposed=true;await act(async()=>mounted.dispose())}}
+ const dispose=async()=>{if(!disposed){disposed=true;await act(async()=>mounted.unload())}}
  t.after(async()=>{await dispose();dom.window.close();delete globalThis.__docsDownloadTest;for(const key of Object.keys(old)){if(old[key])Object.defineProperty(globalThis,key,old[key]);else delete globalThis[key]}})
- return {button:dom.window.document.querySelector('.dyoffice-docs-save-download'),element:dom.window.document.getElementById('editor'),downloads,before,after,dispose,counts:()=>({saves,reconciles}),state:()=>state}
+ return {button:dom.window.document.querySelector('.dyoffice-docs-save-download'),element:dom.window.document.getElementById('editor'),downloads,before,after,dispose,tryClose:()=>mounted.dispose(),counts:()=>({saves,reconciles}),state:()=>state}
 }
 for(const outcome of ['success','late-edit','unknown-before','unknown-after'])test(`actual Word host download entry: ${outcome}`,async t=>{
  const f=await fixture(t,{outcome})
@@ -63,7 +63,7 @@ for(const dispose of [false,true])test(`Word host blocks duplicate download clic
  let release;const gate={promise:new Promise(r=>{release=r})},f=await fixture(t,{gate})
  await act(async()=>{f.button.click();f.button.click()})
  assert.equal(f.counts().saves,1);assert.equal(f.downloads.length,0)
- if(dispose)await f.dispose()
+ if(dispose){assert.equal(await f.tryClose(),false);await f.dispose()}
  await act(async()=>{release();await gate.promise})
  assert.equal(f.downloads.length,dispose?0:1)
 })

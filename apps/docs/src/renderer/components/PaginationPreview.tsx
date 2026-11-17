@@ -402,7 +402,7 @@ export function PaginationPreview({
   revisionView?: EditorView | null
   /** revision balloon kinds of the current Show Markup → Balloons mode */
   balloonKinds?: ReadonlySet<RevSpot['kind']>
-  onExportPdf: () => void
+  onExportPdf?: () => void
   onClose: () => void
   /** While true (e.g. the print dialog is stacked on top), Escape must not close the preview */
   suppressEscape?: boolean
@@ -991,7 +991,7 @@ export function PaginationPreview({
         <span className="pv-title">{t('appPaginationPreview')}</span>
         <span className="pv-count">{t('appTotalPagesN', { n: slices.length })}</span>
         <span className="pv-hint">{t('appPvHint')}</span>
-        <button className="pv-close" data-tip={t('appPvExportTip')} onClick={onExportPdf}>
+        <button className="pv-close" disabled={!onExportPdf} title={!onExportPdf ? 'Web 暂不支持 PDF 导出，请使用浏览器打印。' : undefined} data-tip={t('appPvExportTip')} onClick={onExportPdf}>
           {t('appExportPdf')}
         </button>
         <button className="pv-close" onClick={onClose}>

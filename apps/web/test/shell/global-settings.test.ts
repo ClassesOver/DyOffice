@@ -19,7 +19,15 @@ async function mount(client: GlobalSettingsClient, onClose = () => {}) {const ho
 function button(text: string, host: ParentNode = document) {const found = [...host.querySelectorAll<HTMLButtonElement>('button')].find(node => node.textContent === text); expect(found, text).toBeDefined(); return found!}
 function input(label: string) {const found = document.querySelector<HTMLInputElement>(`input[aria-label="${label}"]`); expect(found, label).not.toBeNull(); return found!}
 async function click(text: string) {await act(async () => button(text).click())}
-async function change(label: string, value: string) {await act(async () => {const node = document.querySelector<HTMLInputElement | HTMLSelectElement>(`[aria-label="${label}"]`)!; expect(node, label).not.toBeNull(); const prototype = node instanceof HTMLSelectElement ? HTMLSelectElement.prototype : HTMLInputElement.prototype; Object.getOwnPropertyDescriptor(prototype, 'value')!.set!.call(node, value); node.dispatchEvent(new Event(node instanceof HTMLSelectElement ? 'change' : 'input', {bubbles: true}))})}
+async function choose(label: string, text: string) {
+  const node = document.querySelector<HTMLInputElement>(`[role="combobox"][aria-label="${label}"]`)!
+  expect(node, label).not.toBeNull()
+  await act(async () => node.dispatchEvent(new MouseEvent('mousedown', {bubbles: true})))
+  const option = [...document.querySelectorAll<HTMLElement>('.ant-select-item-option')].find(item => item.textContent === text)
+  expect(option, text).toBeDefined()
+  await act(async () => option!.click())
+}
+async function change(label: string, value: string) {await act(async () => {const node = input(label); Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(node, value); node.dispatchEvent(new Event('input', {bubbles: true}))})}
 async function submit() {await act(async () => document.querySelector('form[aria-label="全局配置表单"]')!.dispatchEvent(new Event('submit', {bubbles: true, cancelable: true})))}
 afterEach(async () => {await act(async () => {for (const root of roots.splice(0)) root.unmount()}); document.body.innerHTML = ''; localStorage.clear(); sessionStorage.clear()})
 
@@ -29,7 +37,9 @@ test('shows saved key presence without returning credentials and obtains provide
   expect(input('API 密钥').type).toBe('password')
   expect(input('API 密钥').value).toBe('')
   expect(document.body.textContent).toContain('已保存密钥')
-  expect(document.querySelector<HTMLOptionElement>('option[value="codex"]')?.disabled).toBe(true)
+  await choose('服务商', 'Codex CLI（当前 Web 不可用）')
+  expect(input('模型标识').value).toBe('model-a')
+  expect(document.querySelector('[role="combobox"][aria-label="服务商"]')?.closest('.ant-select')?.textContent).toContain('OpenAI')
   expect(document.querySelector('datalist')?.textContent).toContain('model-b')
 })
 
@@ -122,13 +132,13 @@ test('saved configuration checks never claim connectivity and omit unsaved API k
 test('adding an image configuration, enabling it, and selecting its default produce one coherent save', async () => {
   let submitted: SaveGlobalConfigRequest | undefined
   await mount(createGlobalSettingsClient(requestFrom(async (_path, method = 'GET', body) => {if (method === 'GET') return initial(); submitted = body as SaveGlobalConfigRequest; return {...initial(), revision: 4}})))
-  await click('添加配置'); await change('配置类型', 'image_generation'); await change('配置名称', 'Images')
+  await click('添加配置'); await choose('配置类型', '图像生成'); await change('配置名称', 'Images')
   expect(input('模型标识').value).toBe('image-model')
   expect(input('服务地址').value).toBe('https://images.test/v1')
   await act(async () => document.querySelector<HTMLInputElement>('[aria-label="启用配置"]')!.click())
-  const choices = [...document.querySelectorAll<HTMLOptionElement>('[aria-label="默认图像生成配置"] option')]
-  const createdId = choices.find(option => option.textContent === 'Images')!.value
-  await change('默认图像生成配置', createdId); await submit()
+  await choose('默认图像生成配置', 'Images'); await submit()
+  const createdId = submitted?.patch.upserts?.[0].id
+  expect(createdId).toBeTruthy()
   expect(submitted?.patch.defaults).toMatchObject({image_generation: createdId})
   expect(submitted?.patch.upserts?.[0]).toMatchObject({id: createdId, kind: 'image_generation', providerId: 'image', label: 'Images', enabled: true})
 })
@@ -138,8 +148,7 @@ test('changing the type of a draft default cancels its now-invalid default refer
   await mount(createGlobalSettingsClient(requestFrom(async (_path, method = 'GET', body) => {if (method === 'GET') return initial(); submitted = body as SaveGlobalConfigRequest; return {...initial(), revision: 4}})))
   await click('添加配置'); await change('配置名称', 'Moving default')
   await act(async () => document.querySelector<HTMLInputElement>('[aria-label="启用配置"]')!.click())
-  const id = [...document.querySelectorAll<HTMLOptionElement>('[aria-label="默认对话配置"] option')].find(option => option.textContent === 'Moving default')!.value
-  await change('默认对话配置', id); await change('配置类型', 'image_generation'); await submit()
+  await choose('默认对话配置', 'Moving default'); await choose('配置类型', '图像生成'); await submit()
   expect(submitted?.patch.defaults).toEqual({chat: null})
 })
 
@@ -168,3 +177,35 @@ test('strict lifecycle cleanup waits for the authoritative read and scrubs a det
   expect(detachedInput.outerHTML).not.toContain('discard-on-detach')
 })
 
+
+test('page presentation delegates its heading and close button while preserving draft status and close guards', async () => {
+  let guard: (() => boolean) | null = null
+  const pending = deferred<AdminGlobalConfig>()
+  const client = createGlobalSettingsClient(requestFrom(async (_path, method = 'GET') => method === 'PUT' ? pending.promise : initial()))
+  const host = document.createElement('div'); document.body.append(host)
+  const root = createRoot(host); roots.push(root)
+  const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false)
+  try {
+    await act(async () => root.render(h(GlobalSettingsPanel, {client, presentation: 'page', onClose() {}, onCloseGuardChange(next: (() => boolean) | null) {guard = next}})))
+    expect(host.querySelector('h3')).toBeNull()
+    expect(host.querySelector('[aria-label="关闭全局配置"]')).toBeNull()
+    expect(host.querySelector('[aria-label="配置状态摘要"]')?.textContent).toContain('已保存版本 3')
+    expect(host.querySelector('[aria-label="配置状态摘要"]')?.textContent).toContain('服务配置1')
+    expect(host.querySelector('[aria-label="配置状态摘要"]')?.textContent).toContain('已启用1')
+    expect(host.querySelector('.global-settings-page')).not.toBeNull()
+    expect(guard?.()).toBe(true)
+    expect(confirm).not.toHaveBeenCalled()
+    await change('配置名称', 'Unsaved page')
+    expect(host.querySelector('[aria-label="配置状态摘要"]')?.textContent).toContain('有未保存更改')
+    expect(guard?.()).toBe(false)
+    expect(confirm).toHaveBeenCalledOnce()
+    await submit()
+    expect(guard?.()).toBe(false)
+    expect(confirm).toHaveBeenCalledOnce()
+    await act(async () => pending.reject(new TypeError('network lost')))
+    expect(guard?.()).toBe(false)
+    expect(confirm).toHaveBeenCalledTimes(2)
+    confirm.mockReturnValue(true)
+    expect(guard?.()).toBe(true)
+  } finally {confirm.mockRestore()}
+})

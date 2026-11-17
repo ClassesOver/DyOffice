@@ -805,7 +805,7 @@ function shadowPlanDiff(
   return diffs
 }
 
-export function App({ host }: { host?: { readOnly: boolean; assistantAvailable: boolean; assistant?: {sourceSkill?: import('@genoffice/agent-core').AgentSkill; transport: import('@genoffice/agent-core').AgentTransport; modelPicker: React.ReactNode; extraSkills?: readonly import('@genoffice/agent-core').AgentSkill[]; agents?: readonly import('@genoffice/ui').AssistantParticipant[]; onManageAgents?: () => void; control?: import('@genoffice/ui').AssistantControl | undefined}; preferenceScope: string; onEditorReady?(handle: import('./file-actions').DocsEditorHandle | null): void; lifecycle: import('./file-actions').DocsHostLifecycle; onDocumentEdited(): void; onOpenFailed(): void } } = {}) {
+export function App({ host }: { host?: { desktopActionsAvailable?: boolean; readOnly: boolean; assistantAvailable: boolean; assistant?: {sourceSkill?: import('@genoffice/agent-core').AgentSkill; transport: import('@genoffice/agent-core').AgentTransport; modelPicker: React.ReactNode; extraSkills?: readonly import('@genoffice/agent-core').AgentSkill[]; agents?: readonly import('@genoffice/ui').AssistantParticipant[]; onManageAgents?: () => void; control?: import('@genoffice/ui').AssistantControl | undefined}; preferenceScope: string; onEditorReady?(handle: import('./file-actions').DocsEditorHandle | null): void; lifecycle: import('./file-actions').DocsHostLifecycle; onDocumentEdited(): void; onOpenFailed(): void } } = {}) {
   // subscribe to language switches for re-render; strings all go through module-level t, so memoized callbacks never capture stale closures
   const { lang } = useI18n()
   const [doc, setDoc] = useState<DocState | null>(null)
@@ -2166,7 +2166,7 @@ export function App({ host }: { host?: { readOnly: boolean; assistantAvailable: 
 
   // window title follows the document, so the OS window list and Switch Window show file names
   useEffect(() => {
-    document.title = doc ? doc.fileName : 'GenOffice Docs'
+    document.title = doc ? doc.fileName : 'DyOffice Docs'
   }, [doc])
 
   useEffect(() => window.desktop.onTeardown?.(() => setTornDown(true)), [])
@@ -2492,14 +2492,13 @@ export function App({ host }: { host?: { readOnly: boolean; assistantAvailable: 
   }, [commitOpenedFile, editor, loadFile, resetFile])
 
   const openFile = useCallback(
-    () =>
-      runGuardedCandidate(
+    () => { if(host?.desktopActionsAvailable===false){setStatus('请在工作区打开其他文件。');return Promise.resolve(false)} return runGuardedCandidate(
         () => window.desktop.confirmDocumentReplace(),
         () => window.desktop.openDocx(),
         commitOpenedFile,
         replacesDocument,
-      ),
-    [commitOpenedFile],
+      )},
+    [commitOpenedFile,host?.desktopActionsAvailable],
   )
 
   /** new document from the built-in blank template (AI can then generate into it) */
@@ -2599,10 +2598,10 @@ export function App({ host }: { host?: { readOnly: boolean; assistantAvailable: 
   }
 
   const save = useCallback(
-    (saveAs: boolean, auto = false) => analysisSaveConsent.current.run(auto,
+    (saveAs: boolean, auto = false) => {if(saveAs&&host?.desktopActionsAvailable===false){setStatus('Web 暂不支持另存为，请下载原件。');return Promise.resolve(false)}return analysisSaveConsent.current.run(auto,
       () => saveImpl(fileCtxRef.current, saveAs, auto),
-      ok => ok && !isDocDirty(fileCtxRef.current),false),
-    [],
+      ok => ok && !isDocDirty(fileCtxRef.current),false)},
+    [host?.desktopActionsAvailable],
   )
 
   // ---- Mailings: the data source and the merge ----
@@ -3059,7 +3058,7 @@ export function App({ host }: { host?: { readOnly: boolean; assistantAvailable: 
       host ? undefined : window.desktop.onZoteroRequest(async (request) => {
         try {
           const activeEditor = editorRef.current
-          if (!activeEditor) throw new Error('No active GenOffice document')
+          if (!activeEditor) throw new Error('No active DyOffice document')
           const controller =
             zoteroControllerRef.current ??
             new ZoteroDocumentController(activeEditor, {
@@ -8376,6 +8375,7 @@ export function App({ host }: { host?: { readOnly: boolean; assistantAvailable: 
 .editor-scroll .doc-page.measuring-columns { column-count: auto; width: ${colFlow.colWidthPx + twipsToPx(canvasSection?.marginLeft ?? section?.marginLeft ?? 0) + twipsToPx(canvasSection?.marginRight ?? section?.marginRight ?? 0)}px; }`}</style>
       )}
       <Ribbon
+        desktopActionsAvailable={host?.desktopActionsAvailable}
         actionsRef={ribbonActionsRef}
         quickActions={quickActions}
         mergeSource={mergeSource}
@@ -9340,7 +9340,7 @@ export function App({ host }: { host?: { readOnly: boolean; assistantAvailable: 
               clearFloatShifts(wrap as HTMLElement)
             }
           }}
-          onExportPdf={() => void exportPdf()}
+          onExportPdf={host?.desktopActionsAvailable === false ? undefined : () => void exportPdf()}
           onClose={() => {
             if (!exportLocksPreview) setShowPagePreview(false)
           }}
@@ -9349,7 +9349,7 @@ export function App({ host }: { host?: { readOnly: boolean; assistantAvailable: 
         />
       )}
 
-      {doc && showPrintDialog && <PrintDialog onClose={closePrintDialog} setStatus={setStatus} />}
+      {doc && showPrintDialog && <PrintDialog browserOnly={host?.desktopActionsAvailable === false} onClose={closePrintDialog} setStatus={setStatus} />}
 
       {stats && <WordCountDialog stats={stats} onClose={() => setStats(null)} />}
 

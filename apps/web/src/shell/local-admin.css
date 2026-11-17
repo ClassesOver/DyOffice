@@ -1,0 +1,7 @@
+.local-admin-panel{box-sizing:border-box;display:flex;flex:1;height:100%;min-height:0;min-width:0;padding:20px 24px;overflow:hidden}
+.local-admin-panel label.set-field{display:flex;flex-direction:column;align-items:stretch;gap:8px;max-width:520px}
+.local-admin-panel fieldset{padding:12px;border:1px solid var(--border);border-radius:8px}
+.local-admin-panel form>.ant-btn+.ant-btn{margin-left:8px}
+.admin-create form>div{display:flex;align-items:flex-end;gap:12px;flex-wrap:wrap}
+.admin-create label.set-field{flex:1;min-width:180px;margin:0}
+@media(max-width:680px){.local-admin-panel{padding:16px}.admin-create form>div{flex-direction:column;align-items:stretch}}

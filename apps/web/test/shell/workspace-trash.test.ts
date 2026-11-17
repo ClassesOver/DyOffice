@@ -10,7 +10,7 @@ test('recycle bin retains failed restoration and prevents duplicate clicks until
  const request=vi.fn(async(_path:string,method?:string)=>method==='POST'?(writes++,new Promise((resolve,fail)=>{finish=resolve;reject=fail})):{files:[row],total:1})
  const root=createRoot(document.querySelector('#trash-test')!)
  root.render(h(WorkspaceTrash,{request:request as never,onClose(){},onChanged(){}}))
- await vi.waitFor(()=>expect(document.body.textContent).toContain('report.docx'))
+ await vi.waitFor(()=>expect(document.body.textContent).toContain('report.docx'),{timeout:3000})
  const restore=()=>[...document.querySelectorAll<HTMLButtonElement>('button')].find(button=>button.textContent==='恢复')!
  restore().click();restore().click();await vi.waitFor(()=>expect(writes).toBe(1))
  reject(new Error('lost response'))

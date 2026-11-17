@@ -1,3 +1,4 @@
+import {createEditorCloseLifecycle,installEditorCloseLifecycle} from './editor-close-lifecycle'
 import ReactDOM from 'react-dom/client'
 import {useState} from 'react'
 import {createSessionFileHost, type SessionFileHost} from '../../../../packages/browser-host/src/files.ts'
@@ -36,7 +37,7 @@ export async function mountSlidesEditor(host: SessionFileHost, container: HTMLEl
   setModuleLang(locale); document.documentElement.lang = locale
   if (prefs.theme === 'system') delete document.documentElement.dataset.theme
   else document.documentElement.dataset.theme = prefs.theme
-  let changed = () => {}, editor: SlidesEditorHandle | null = null, disposed = false
+  let changed = () => {}, editor: SlidesEditorHandle | null = null, disposed = false, closing=false
   let downloading = false, takingOver = false, confirming = false, actionError = ''
   const bridge = createSlidesBridge(host, fileId, prefs, {onChange: () => changed()})
   Object.defineProperty(window, 'slidesApi', {value: bridge.api as unknown as SlidesApi, configurable: true})
@@ -99,7 +100,7 @@ export async function mountSlidesEditor(host: SessionFileHost, container: HTMLEl
   }
   function NativeSlides() {
     const [, tick] = useState(0), [loaded, setLoaded] = useState(false), [failed, setFailed] = useState(false)
-    changed = () => tick(value => value + 1)
+    changed = () => {if(!closing)tick(value => value + 1)}
     const state = host.getState(fileId)
     const readOnly = failed || takingOver || !state.lease || state.status === 'conflict' || state.status === 'unknown' || bridge.needsConfirmation() || state.status === 'unauthorized'
     const status = !editorMounted ? (takingOver ? text.takingOver : actionError || text.readOnly) : failed ? text.failed : !loaded ? text.opening : (state.status === 'unknown' || bridge.needsConfirmation()) ? text.unknown : state.status === 'unauthorized' ? text.unauthorized : takingOver ? text.takingOver : !state.lease || state.status === 'conflict' ? (dirty() ? text.takeoverDirty : initialLease ? text.conflict : text.readOnly) : downloading ? text.downloadSaving : actionError || (bridge.isDirty() ? '' : text.ready)
@@ -119,7 +120,8 @@ export async function mountSlidesEditor(host: SessionFileHost, container: HTMLEl
   }
   const root = ReactDOM.createRoot(container)
   root.render(<LocaleProvider initial={locale}><NativeSlides /></LocaleProvider>)
-  const beforeUnload = (event: BeforeUnloadEvent) => { if (editor?.isDirty() || host.getState(fileId).status === 'unknown') { event.preventDefault(); event.returnValue = '' } }
+  const closeState=()=>({dirty:dirty()||bridge.isDirty(),blocked:downloading||takingOver||confirming||bridge.needsConfirmation()||['unknown','saving'].includes(host.getState(fileId).status)})
+  const beforeUnload = (event: BeforeUnloadEvent) => { if (closeState().dirty||closeState().blocked) { event.preventDefault(); event.returnValue = '' } }
   stage.addEventListener('beforeunload', beforeUnload)
   // Ctrl/Cmd+S saves in place through the renderer's own save flow (no download).
   // A read-only session is never dirty, so the save is naturally a no-op there.
@@ -131,21 +133,22 @@ export async function mountSlidesEditor(host: SessionFileHost, container: HTMLEl
     void editor.saveAndWait().catch(() => {})
   }
   window.addEventListener('keydown', onKeyDown)
-  return {
-    save: () => editor?.saveAndWait() ?? Promise.resolve(false),
-    dispose() {
-      disposed = true; changed = () => {}
-      stage.removeEventListener('beforeunload', beforeUnload)
-      stage.removeEventListener('keydown', onKeyDown)
-      realtime.dispose(); stop(); unsubscribe(); root.unmount(); bridge.dispose()
-    },
+  const cleanup=()=>{
+    if(disposed)return
+    disposed=true;changed=()=>{}
+    stage.removeEventListener('beforeunload',beforeUnload);stage.removeEventListener('keydown',onKeyDown)
+    realtime.dispose();stop();unsubscribe();root.unmount();bridge.dispose()
   }
+  const lifecycle=createEditorCloseLifecycle({state:closeState,save:()=>editor?.saveAndWait()??Promise.resolve(false),release:()=>host.releaseLease(fileId),cleanup,setClosing:value=>{closing=value;container.inert=value;if(!value)changed()},confirm:()=>stage.confirm('演示文稿有未保存的更改，是否保存后关闭？取消将保留当前页签。'),notify:()=>stage.alert('保存仍在进行或结果待确认，请先在演示文稿中核对后再关闭。')})
+  return {save:()=>editor?.saveAndWait()??Promise.resolve(false),canClose:lifecycle.canClose,dispose:lifecycle.dispose,unload(){void host.releaseLease(fileId,true).catch(()=>{});cleanup()}}
 }
 async function bootstrap() {
   const host = createSessionFileHost(), fileId = new URL(location.href).searchParams.get('fileId') ?? ''
+  installEditorCloseLifecycle(window,{canClose:async()=>false,dispose:async()=>false})
   try {
     const mounted = await mountSlidesEditor(host, document.getElementById('root')!, fileId)
-    window.addEventListener('pagehide', () => { void host.releaseLease(fileId, true).catch(() => {}); mounted.dispose(); host.dispose() }, {once: true})
-  } catch (error) { host.dispose(); throw error }
+    installEditorCloseLifecycle(window,{canClose:mounted.canClose,dispose:async()=>{const closed=await mounted.dispose();if(closed)host.dispose();return closed}})
+    window.addEventListener('pagehide',()=>{mounted.unload();host.dispose()},{once:true})
+  } catch (error) { await host.releaseLease(fileId).catch(()=>{});host.dispose();installEditorCloseLifecycle(window,{canClose:async()=>true,dispose:async()=>true});throw error }
 }
 void bootstrap().catch(() => { document.getElementById('root')!.textContent = messages.zh.failed })

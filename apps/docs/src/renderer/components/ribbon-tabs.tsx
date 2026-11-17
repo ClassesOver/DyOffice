@@ -773,6 +773,7 @@ export const AI_REWRITE_ACK_KEY = 'docs-ai-rewrite-ack'
 export type { BalloonMode, RevisionDisplayMode }
 
 interface ReviewTabProps extends TabProps {
+  desktopActionsAvailable?: boolean
   onAiPreset: (instruction: string) => void
   commentCount: number
   /** unresolved root comments; 0 disables the AI resolve-comments action */
@@ -823,6 +824,7 @@ interface ReviewTabProps extends TabProps {
 }
 
 export function ReviewTab({
+  desktopActionsAvailable = true,
   editor,
   hasDoc,
   dropdown,
@@ -1322,7 +1324,8 @@ export function ReviewTab({
         <div className="ribbon-group-items">
           <button
             className="rb-big"
-            disabled={!hasDoc}
+            disabled={!hasDoc || !desktopActionsAvailable}
+            title={!desktopActionsAvailable ? '文档比较仅桌面版可用。' : undefined}
             data-tip={t('ribbonCompareTip')}
             onClick={onCompare}
           >
@@ -1341,8 +1344,8 @@ export function ReviewTab({
         <div className="ribbon-group-items">
           <button
             className={`rb-big ${protectActive ? 'active' : ''}`}
-            disabled={!hasDoc}
-            title={t('ribbonProtectDocTip')}
+            disabled={!hasDoc || !desktopActionsAvailable}
+            title={!desktopActionsAvailable ? '文档密码与保护仅桌面版可用。' : t('ribbonProtectDocTip')}
             onClick={onProtectDoc}
           >
             <span className="rb-big-icon">
@@ -1696,7 +1699,7 @@ export function ViewTab({
                     }}
                   >
                     {w.focused ? '✓ ' : ''}
-                    {w.title || 'GenOffice Docs'}
+                    {w.title || 'DyOffice Docs'}
                   </button>
                 ))}
               </div>

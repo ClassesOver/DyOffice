@@ -98,7 +98,7 @@ export interface AppLaunch {
   args: string[]
 }
 
-/** How to start the GenOffice GUI: the app binary that hosts this CLI, an installed app, or the dev checkout. */
+/** How to start the DyOffice GUI: the app binary that hosts this CLI, an installed app, or the dev checkout. */
 export function appLaunch(env: NodeJS.ProcessEnv = process.env): AppLaunch | null {
   if (env.GENOFFICE_APP_BIN) return { command: env.GENOFFICE_APP_BIN, args: [] }
   if (packagedResourcesDir() && process.versions.electron) {
@@ -125,24 +125,24 @@ function installedAppBinaries(
     case 'darwin':
       return [
         ...(shipped ? [shipped] : []),
-        '/Applications/GenOffice.app/Contents/MacOS/GenOffice',
-        join(homedir(), 'Applications/GenOffice.app/Contents/MacOS/GenOffice'),
+        '/Applications/DyOffice.app/Contents/MacOS/DyOffice',
+        join(homedir(), 'Applications/DyOffice.app/Contents/MacOS/DyOffice'),
       ]
     case 'win32':
       return [
         ...(shipped ? [shipped] : []),
-        env.LOCALAPPDATA ? join(env.LOCALAPPDATA, 'Programs', 'GenOffice', 'GenOffice.exe') : '',
-        env.ProgramFiles ? join(env.ProgramFiles, 'GenOffice', 'GenOffice.exe') : '',
+        env.LOCALAPPDATA ? join(env.LOCALAPPDATA, 'Programs', 'DyOffice', 'DyOffice.exe') : '',
+        env.ProgramFiles ? join(env.ProgramFiles, 'DyOffice', 'DyOffice.exe') : '',
       ].filter(Boolean)
     default:
-      return [...(shipped ? [shipped] : []), '/opt/GenOffice/genoffice', '/usr/bin/genoffice']
+      return [...(shipped ? [shipped] : []), '/opt/DyOffice/genoffice', '/usr/bin/genoffice']
   }
 }
 
 export function appBinaryForResources(resources: string, platform: NodeJS.Platform): string {
   const install = dirname(resources)
-  if (platform === 'darwin') return join(install, 'MacOS', 'GenOffice')
-  if (platform === 'win32') return join(install, 'GenOffice.exe')
+  if (platform === 'darwin') return join(install, 'MacOS', 'DyOffice')
+  if (platform === 'win32') return join(install, 'DyOffice.exe')
   return join(install, 'genoffice')
 }
 

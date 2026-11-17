@@ -318,3 +318,99 @@ test('SaaS home removes the standalone Ask entry without removing workspace navi
   await click([...host.querySelectorAll<HTMLButtonElement>('.sidebar-nav button')].find(node => node.querySelector('.nav-label')?.textContent === 'Recent')!)
   expect(host.querySelector('[aria-current="page"]')?.textContent).toContain('Recent')
 })
+
+test('workspace reveal clears a search, opens nested ancestors and selects the located file',async()=>{
+ const {notifyRevealWorkspaceFolder}=await import('../../../shell/src/renderer/src/file-events')
+ const search=host.querySelector<HTMLInputElement>('input[type="search"]')!
+ await fill(search,'no match')
+ await act(async()=>notifyRevealWorkspaceFolder({dir:project,fileId}))
+ await vi.waitFor(()=>expect(host.querySelector('.recent-item:not(.folder-item) .recent-name')?.textContent).toBe(file.name))
+ expect(search.value).toBe('')
+ expect(tree('Projects')?.getAttribute('aria-selected')).toBe('true')
+ expect(host.querySelector<HTMLInputElement>('.recent-item:not(.folder-item) input[type=checkbox]')?.checked).toBe(true)
+ expect(tree('Contracts')).toBeTruthy()
+})
+
+test('Web capabilities hide OS folder actions and preserve workspace folder creation', async () => {
+  const added = vi.fn(), dropped = vi.fn()
+  api.addFolderRoot = added; api.dropFolderRoots = dropped
+  await act(async () => root.render(h(LocaleProvider, {initial: 'en', children: h(Home, {accountEntry: h('div', null, 'Account'), supportedNewFormats: [], capabilities: {localFolders: false}})})))
+  expect(host.querySelector('.folder-add-root-btn')).toBeNull()
+  const drop = new Event('drop', {bubbles: true, cancelable: true})
+  Object.defineProperty(drop, 'dataTransfer', {value: {types: ['Files'], files: [new File([''], 'folder')]}})
+  await act(async () => host.querySelector('.folder-panel')!.dispatchEvent(drop))
+  expect(added).not.toHaveBeenCalled(); expect(dropped).not.toHaveBeenCalled()
+  await click(host.querySelector<HTMLButtonElement>('.folder-new-btn')!)
+  expect(host.querySelector('.folder-rename-input')).not.toBeNull()
+})
+
+test('Web capabilities remove unsupported file actions while retaining supported actions', async () => {
+  const groups = vi.fn(async () => ['Team'])
+  api.starredGroups = groups
+  await act(async () => root.render(h(LocaleProvider, {initial: 'en', children: h(Home, {accountEntry: h('div', null, 'Account'), supportedNewFormats: [], capabilities: {copyPath: false, duplicateFile: false, starredGroups: false}})})))
+  await act(async () => window.dispatchEvent(new Event('focus')))
+  await click(host.querySelector<HTMLButtonElement>('.recent-item .more-btn')!)
+  const menu = host.querySelector('[role="menu"]')!
+  expect(menu.textContent).not.toContain('Copy path')
+  expect(menu.textContent).not.toContain('Duplicate')
+  expect(menu.textContent).not.toContain('Move to group')
+  expect(menu.textContent).toContain('Rename')
+  expect(menu.textContent).toContain('Move to folder')
+  expect(groups).not.toHaveBeenCalled()
+})
+
+test('Web hides unavailable semantic ranking and never calls its bridge', async()=>{
+ const rerank=vi.fn(async()=>null);api.rerankSearch=rerank
+ api.searchFiles=async()=>({hits:[file,{...file,path:'second-id',name:'Second report.docx'}].map(entry=>({...entry,snippet:null,needles:['report']})),total:2,index:{indexed:2,pending:0,scanning:false}})
+ await act(async()=>root.render(h(LocaleProvider,{initial:'en',children:h(Home,{accountEntry:h('div',null,'Account'),supportedNewFormats:[],capabilities:{semanticRanking:false}})})))
+ expect(host.querySelector('.file-search-settings')).toBeNull()
+ const input=host.querySelector<HTMLInputElement>('input[type="search"]')!
+ await act(async()=>{Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value')!.set!.call(input,'report');input.dispatchEvent(new Event('input',{bubbles:true}))})
+ await act(async()=>{await new Promise(resolve=>setTimeout(resolve,350))})
+ await act(async()=>{await new Promise(resolve=>setTimeout(resolve,650))})
+ expect(rerank).not.toHaveBeenCalled();expect(host.querySelector('.search-rerank-badge')).toBeNull()
+})
+
+test('recent and search rows display host locations for opaque identities before folders are opened', async () => {
+  const located = {...file, locationLabel: 'Parent / Child'}
+  api.recents = async () => ({entries: [located], total: 1, totalAll: 1})
+  api.searchFiles = async () => ({hits: [{...located, snippet: null, needles: ['report']}], total: 1, index: {indexed: 1, pending: 0, scanning: false}})
+  await act(async () => window.dispatchEvent(new Event('focus')))
+  expect(host.querySelector('.recent-path')?.textContent).toBe('Parent / Child')
+  expect(host.querySelector('.recent-path')?.getAttribute('title')).toBe('Parent / Child')
+  await fill(host.querySelector<HTMLInputElement>('.file-search input')!, 'report')
+  await act(async () => new Promise(resolve => setTimeout(resolve, 200)))
+  expect(host.querySelector('.search-path')?.textContent).toBe('Parent / Child')
+  expect(host.querySelector('.search-path')?.getAttribute('title')).toBe('Parent / Child')
+  expect(host.querySelector('.search-path')?.textContent).not.toContain(fileId)
+})
+
+test('Web file and folder menus render outside the scrolling list and retain real actions', async () => {
+  const renamed: string[] = []
+  api.renameFile = async (_path, name) => {renamed.push(name); return {ok: true, path: fileId}}
+  await act(async () => root.render(h(LocaleProvider, {initial: 'en', children: h(Home, {accountEntry: h('div', null, 'Account'), supportedNewFormats: [], supportedFormats: ['docx']})})))
+  await click(host.querySelector<HTMLButtonElement>('.recent-item .more-btn')!)
+  const menu = document.body.querySelector<HTMLElement>('.row-menu')!
+  expect(menu).not.toBeNull(); expect(host.contains(menu)).toBe(false)
+  expect(menu.style.position).toBe('fixed')
+  const rename = button('Rename', menu)
+  await act(async () => rename.dispatchEvent(new MouseEvent('pointerdown', {bubbles: true})))
+  expect(document.body.querySelector('.row-menu')).not.toBeNull()
+  await click(rename)
+  await fill(host.querySelector<HTMLInputElement>('.rename-input')!, 'Renamed')
+  await enter(host.querySelector<HTMLInputElement>('.rename-input')!)
+  expect(renamed).toEqual(['Renamed.docx'])
+  await click(tree('Projects').querySelector<HTMLButtonElement>('.folder-more-btn')!)
+  const folderMenu = document.body.querySelector('.folder-menu')!
+  expect(host.contains(folderMenu)).toBe(false)
+  await click(button('Rename', folderMenu))
+  expect(host.querySelector('.folder-rename-input')).not.toBeNull()
+})
+
+test('the next-page sentinel stays inside the independently scrolling recent list', async () => {
+  vi.stubGlobal('IntersectionObserver', class {observe() {} disconnect() {}})
+  api.recents = async () => ({entries: [file], total: 100, totalAll: 100})
+  await act(async () => window.dispatchEvent(new Event('focus')))
+  const sentinel = host.querySelector('.recent-list > .load-more')
+  expect(sentinel?.tagName).toBe('LI')
+})
