@@ -26,14 +26,14 @@
 
 | 页面 | 已覆盖动作/状态 | 仍需补查 |
 |---|---|---|
-| 首页/文件树 | 搜索/清除/空结果、格式筛选、排序、行与全选、批量删除取消、重命名取消、移动取消、树选择、新建文件夹取消、工作区位置导航 | 更多层级冲突、触屏、完整读屏器顺序 |
-| 页签 | 新建菜单、页签列表、首页与 Word 切换、右键关闭、保存状态/租约释放；真实 Word 编辑保存 | 16 个 PDF 模拟页签已验证溢出、拖动和关闭；仍需跨编辑器组合竞态 |
-| 上传 | 桌面/小屏、拖拽/多选/移除/取消、不支持格式、32 MiB 限制、串行处理、处理中防重入与关闭、真实 PDF 上传后应用内打开 | 真实断网/配额耗尽、重复文件名策略、所有损坏文件格式 |
+| 首页/文件树 | 搜索/清除/空结果、格式筛选、排序、行与全选、批量删除取消、重命名取消、移动取消、树选择、新建文件夹取消、工作区位置导航 | 位置祖先读取失败/迟到已补查；仍缺实体触屏、完整读屏器顺序及跨窗口导航 |
+| 页签 | 新建菜单、页签列表、首页与 Word 切换、右键关闭、保存状态/租约释放；真实 Word 编辑保存 | 16个PDF溢出及混合四格式竞态已有mock证据；真实多编辑器复杂内容/保存组合仍待补查 |
+| 上传 | 桌面/小屏、拖拽/多选/移除/取消、不支持格式、32 MiB 限制、串行处理、处理中防重入与关闭、真实 PDF 上传后应用内打开 | 同名/混合413/415/连接中断已有mock证据；真实配额耗尽与全部损坏文件格式仍待查 |
 | 个人设置 | dirty 拒绝关闭、跨 tab guard、偏好读取保存、密码/会话 pending/unknown 组件保护 | 真实改密轮换/会话撤销完整流程已通过隔离 PG/浏览器；仍需多端复杂并发 |
 | 技能 | 37 项目录与分页、中英文搜索/格式筛选、正文预览、真实安装刷新保留/防覆盖、导入分类、unknown 后核对/失败 | 全部技能正文与真实模型工具执行；不将任务说明当能力证明 |
 | 用户管理 | 搜索/状态、创建/权限操作组件、dirty 与一次性码切换、408/unknown 保护、小屏滚动 | 隔离 PG 真实管理员创建/激活/重置/禁用/自降权已通过；复杂并发仍待查 |
 | 回收站 | 搜索/状态、确认取消、恢复/永久删除组件、unknown fence、内部滚动 | 页码归一化已组件及浏览器模拟验证；真实测试文件删除/恢复/永久删除已通过，原文件夹和收藏保留，测试文件与空目录已清理 |
-| 数据连接 | 仅三类数据库、草稿 JSON/友好字段、凭据 retain/replace/clear、保存冲突/unknown、测试/发布组件、结果意图、离开保护 | 实际外部数据库连通/只读授权、浏览器结果下载 |
+| 数据连接 | 仅三类数据库、草稿 JSON/友好字段、凭据 retain/replace/clear、保存冲突/unknown、测试/发布组件、结果意图、离开保护 | 浏览器JSON下载已实际接收核对；仍缺外部数据库连通/只读授权的独立真实集成 |
 | 全局配置 | 类型/服务商/默认值、不可用项禁选、添加/删除确认、密钥清空、保存冲突/unknown、显式核对、配置检查不冒充连通 | 真实轮换密钥/计费模型/搜索/图片/HTTP MCP，不修改真实服务设置 |
 | 文档预览 | 真实四格式应用内打开；Word 编辑保存；只读提示；XLSX 缓存值/文本与真实表顺序；PPT 顺序；PDF 页面渲染 | 全部 Ribbon 子菜单及弹窗、复杂公式/图形、超大或加密文档 |
 
@@ -301,3 +301,21 @@
 - 同一Chromium context两页、全部API mock，三场景通过：普通权限403两次确定拒绝保留草稿且不误开恢复；A可见密码表单触发mock HttpOnly Cookie轮换，B晚到PUT被拒绝；跨账号Cookie后B晚到GET被拒绝。session-proof依据每次请求实际携带的合成Cookie，未用仅共享变量代替跨页Cookie传播。
 - 两轮换场景恢复层阻止后续写网络请求，保留dirty、同一DOCX生命周期stub及0 dispose，Tab/Escape与beforeunload保护保持。0页面异常、0未拦截API，未真实登录/改密/写业务。不将此证明为真实原生编辑器或真实认证服务验收；同页verified rebind的unknown fence另由组件/路由测试覆盖。合成首页列表存在无关读取alert，断言限定设置入口，未据此修改产品。证据：`/tmp/dyoffice-ui-audit/shared-cookie-preferences/{report.md,report.json}`。
 - e1508d8c修复发布后补跑Web397项，396通过/1既有条件跳过/0失败，日志`/tmp/dyoffice-paging-label-final-web.log`。此补证不代表完整UI穷举完成，原生PPTX当前不可部署、复杂原生文档和实体移动/读屏组合等证据缺口仍保留。
+
+## 位置导航意图取消
+
+- 浏览器确认同一竞态的成功/失败两例：最近文件点击“打开所在文件夹”，暂挂祖先目录读取后用户切树B，释放旧请求会从B回跳A/C；旧503则在B显示旧错误。普通父读取失败后重试可定位，为正常对照。新Home8组与bridge3组先红，再最小加入Web专用AbortController；显式切目录/最近/收藏/筛选/搜索/打开其他文件、新reveal及卸载时同步取消，旧catch不报错。桥接初始和每个await后检查signal，取消后不继续读取、激活Home或派发reveal。桌面调用仍单一路径参数，不把AbortSignal送入IPC。
+- Home83/83、bridge57/57、桌面退役边界4/4、shell类型通过。最终shell构建重启HTTP200，三组真实浏览器全部通过：正常重试定位并选中文件；旧成功和旧失败放行后仍选中B、只显示B文件、无旧错误。API全部mock且均GET，0页面异常、0未拦截请求。证据：`/tmp/dyoffice-reveal-{home-green,bridge-green,typecheck,desktop}.log`、`/tmp/dyoffice-reveal-browser-green.log`、`/tmp/dyoffice-ui-audit/home-location-concurrency-postfix/report.json`；初始红观察详见同名无postfix目录report.md，JSON已被最终运行更新。
+
+## 原生 Word 弹窗键盘与 AI 命名能力
+
+- 真实隔离PostgreSQL/HTTP/native DOCX fixture，390/1440打开缩放弹窗点击h2→焦点BODY→Shift+Tab均逃到背景，Tab正向恰好由浏览器顺序进入。新增外焦点正反Tab组件两条先红后绿，现窗口fallback在焦点外时接回trap；独立复核又确认多个同层hook的初版会互抢中间Tab。追加三控件同层红测，稳定挂载顺序且父backdrop位于子层之前，仅最上层处理键盘；补卸载恢复lower与嵌套子effect先挂载回归。相关7文件45项通过；独立DOM复核中间Tab不prevent/抢焦点，嵌套循环正确。
+- 最终native构建的隔离fixture四场景全部通过，正反Tab均留弹窗，Escape正常关闭，0页面异常；测试临时数据库/角色/对象目录随fixture清理，没有用户部署数据写入。证据：`/tmp/dyoffice-native-dialog-keyboard-{red,green}.log`、`/tmp/dyoffice-ui-audit/native-dialog-keyboard-{red,green}/report.json`、`/tmp/dyoffice-docs-modal-{keys,stack}-{red,green}.log`、`/tmp/dyoffice-docs-dialogs-final.log`。既有trapTab隐藏/inert控件过滤局限另有诊断，未在本次实际缩放弹窗确认，不据helper探针扩大成实际入口bug。
+- DOCX文件菜单“以AI命名…”原先在Web可点击，但缺aiNamingApi时返回空名称并静默退出；后续另存为也无Web实现。正式renderer/mock DOCX及lease复现无命名请求/反馈，0真实业务写。现遵循desktopActionsAvailable禁用Web入口并给中英文说明，PC既有命名行为保留。两语言菜单行为先红后绿，命名/转换9项及Web docs-entry类型通过；最终构建浏览器确认disabled/title/菜单保留，0页面异常。证据：`/tmp/dyoffice-ui-audit/word-capability-readonly/findings.md`、`word-capability-fix/{red.log,green.log,web-docs-typecheck.log}`、`word-capability-postfix/report.json`。全桌面docs类型检查仍因缺少Electron依赖及桌面导出诊断失败，不声称全桌面类型通过。
+
+## 上传异常扩展
+
+- 三组mock浏览器通过：相同文件名按不同队列ID/大小独立处理，413/415及content连接中断只终止当前项、继续尾项；手动重新添加只提交新项，不重发旧成功/失败项。finish已提交但response中断后，在个人文件夹重新GET可核对文件，未打开文件不应出现在recent；无自动重传。关闭上传后旧preview迟到不污染新队列，边界为preview有ERR_ABORTED，不声称正常关闭允许upload finish迟到。
+- Space选择器恰好一次、DataTransfer drop及Enter均通过；0真实写、0页面异常，预期网络错误明确记录。未发现新确认问题。证据：`/tmp/dyoffice-ui-audit/upload-recovery-expanded/{coverage.md,report.json}`。
+
+本批最终验证：Shell47文件451项、bridge57项、DOCX全量534文件6567项通过（另4文件20项既有条件跳过），shell/Web DOCX类型、shell/native DOCX构建、边界1336文件0违规、兼容84文件0变更通过。仍有DOM CSS/canvas及构建chunk日志。远端新增6fd21129只包含Provider结算时序测试，已fast-forward保留，隔离PG pipeline21/21通过。其native-docx助手测试远端与本地均120秒超时，不能据当前结果声称原生全套通过；本地roundtrip其他场景仍在运行，助手等待阶段正在补有界诊断，原owner/settled/私人技能/原件断言均保留。

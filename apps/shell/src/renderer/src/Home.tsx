@@ -1589,6 +1589,24 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
   const errorFallback = useRef(t('askArtifactFailed'))
   errorFallback.current = t('askArtifactFailed')
   const reportError = useCallback((cause: unknown) => setActionError(operationError(cause, errorFallback.current)), [])
+  // 仅 Web 位置导航携带取消信号；桌面调用仍只传路径，避免把信号传入 IPC。
+  const pendingReveal = useRef<AbortController | null>(null)
+  const cancelReveal = useCallback(() => {pendingReveal.current?.abort(); pendingReveal.current = null}, [])
+  useEffect(() => cancelReveal, [cancelReveal])
+  const revealPath = async (path: string) => {
+    if (!supportedFormats) {void window.aiOffice.revealPath(path).catch(reportError); return}
+    cancelReveal()
+    const controller = new AbortController()
+    pendingReveal.current = controller
+    setActionError('')
+    try {await window.aiOffice.revealPath(path, controller.signal)}
+    catch (cause) {if (!controller.signal.aborted) reportError(cause)}
+    finally {if (pendingReveal.current === controller) pendingReveal.current = null}
+  }
+  const openPath = (path: string) => {
+    cancelReveal()
+    void window.aiOffice.openPath(path).catch(reportError)
+  }
   const activeActions = useRef(new Set<string>())
   const attemptedDrafts = useRef(new Map<string, string>())
   const [pendingActions, setPendingActions] = useState<ReadonlySet<string>>(new Set())
@@ -2205,6 +2223,7 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
     folderFiles.length > 0 && folderSelectedPaths.length === folderFiles.length
 
   const changeView = (next: 'recent' | 'starred') => {
+    cancelReveal()
     setView(next)
     setSelectedFolder(null)
     setCloudMode(false)
@@ -2214,18 +2233,21 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
   }
 
   const changeFilter = (key: string) => {
+    cancelReveal()
     setFilter(key)
     setSelected(new Set())
     setRowMenu(null)
   }
 
   const changeGroupFilter = (group: string | null) => {
+    cancelReveal()
     setGroupFilter(group)
     setSelected(new Set())
     setRowMenu(null)
   }
 
   const selectFolder = (dir: string) => {
+    cancelReveal()
     setSelectedFolder(dir)
     setCloudMode(false)
     setSelected(new Set())
@@ -2700,7 +2722,7 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
               role="menuitem"
               onClick={() => {
                 setFolderMenu(null)
-                void window.aiOffice.revealPath(entry.path).catch(reportError)
+                void revealPath(entry.path)
               }}
             >
               {t('revealInFolder')}
@@ -2957,12 +2979,12 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
           onClick={(event) => {
             if (isRenaming) return
             if (entry.missing) {rememberDialogOpener(event.currentTarget); setConfirmMissing(entry)}
-            else void window.aiOffice.openPath(entry.path).catch(reportError)
+            else openPath(entry.path)
           }}
           onKeyDown={(event) => {
             if (event.key === 'Enter' && event.target === event.currentTarget) {
               if (entry.missing) {rememberDialogOpener(event.currentTarget); setConfirmMissing(entry)}
-              else void window.aiOffice.openPath(entry.path).catch(reportError)
+              else openPath(entry.path)
             }
           }}
         >
@@ -3069,7 +3091,7 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
                   role="menuitem"
                   onClick={() => {
                     setRowMenu(null)
-                    void window.aiOffice.openPath(entry.path).catch(reportError)
+                    openPath(entry.path)
                   }}
                 >
                   {t('open')}
@@ -3078,7 +3100,7 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
                   role="menuitem"
                   onClick={() => {
                     setRowMenu(null)
-                    void window.aiOffice.revealPath(entry.path).catch(reportError)
+                    void revealPath(entry.path)
                   }}
                 >
                   {t('revealInFolder')}
@@ -3281,7 +3303,7 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
                   role="menuitem"
                   onClick={() => {
                     setFolderMenu(null)
-                    void window.aiOffice.revealPath(entry.path).catch(reportError)
+                    void revealPath(entry.path)
                   }}
                 >
                   {t('revealInFolder')}
@@ -3338,6 +3360,7 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
   // ── Folder view ────────────────────────────────────────
 
   const clearSearch = () => {
+    cancelReveal()
     setSearchQuery('')
     searchInputRef.current?.focus()
   }
@@ -3379,11 +3402,13 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
         placeholder={t('searchFilesPlaceholder')}
         aria-label={t('searchFilesPlaceholder')}
         spellCheck={false}
-        onChange={(e) => setSearchQuery(e.target.value)}
+        onChange={(e) => {cancelReveal(); setSearchQuery(e.target.value)}}
         onCompositionStart={() => {
+          cancelReveal()
           composingRef.current = true
         }}
         onCompositionEnd={(e) => {
+          cancelReveal()
           composingRef.current = false
           setSearchQuery(e.currentTarget.value)
         }}
@@ -3415,11 +3440,11 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
       className="search-row"
       role="button"
       tabIndex={0}
-      onClick={() => void window.aiOffice.openPath(hit.path).catch(reportError)}
+      onClick={() => openPath(hit.path)}
       onKeyDown={(e) => {
         if (e.key === 'Enter' || e.key === ' ') {
           e.preventDefault()
-          if (!e.repeat) void window.aiOffice.openPath(hit.path).catch(reportError)
+          if (!e.repeat) openPath(hit.path)
         }
       }}
     >
@@ -3869,6 +3894,7 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
             <button
               className={`nav-item${cloudMode && !selectedFolder ? ' active' : ''}`}
               onClick={() => {
+                cancelReveal()
                 setCloudMode(true)
                 setSelectedFolder(null)
                 setSelected(new Set())

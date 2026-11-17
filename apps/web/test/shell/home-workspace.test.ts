@@ -1000,3 +1000,55 @@ test('modified sort menu closes on Escape and returns focus from an option to it
   expect(host.querySelector('[role="menu"]')).toBeNull()
   expect(document.activeElement).toBe(trigger)
 })
+
+async function renderWebReveal() {
+  await act(async () => root.render(h(LocaleProvider, {initial: 'en', children: h(Home, {supportedFormats: ['docx'], supportedNewFormats: []})})))
+}
+async function revealFile() {
+  await click(host.querySelector<HTMLButtonElement>('.recent-item:not(.folder-item) .more-btn')!)
+  await click(button('Reveal in folder', document.body.querySelector('.row-menu')!))
+}
+
+for (const navigation of ['folder', 'recent', 'starred', 'filter', 'search', 'open'] as const) {
+  test(`Web 位置导航等待期间显式 ${navigation} 会同步作废旧请求及旧错误`, async () => {
+    const pending = deferred<void>()
+    let signal: AbortSignal | undefined
+    api.revealPath = async (_path, current) => {signal = current; await pending.promise; throw new Error('obsolete location failure')}
+    api.openPath = vi.fn(async () => {})
+    await renderWebReveal(); await revealFile()
+    if (navigation === 'folder') await click(tree('Projects'))
+    else if (navigation === 'recent' || navigation === 'starred') await click([...host.querySelectorAll<HTMLElement>('.sidebar-nav .nav-item')].find(node => node.querySelector('.nav-label')?.textContent === (navigation === 'recent' ? 'Recent' : 'Starred'))!)
+    else if (navigation === 'filter') await click(button('Docs'))
+    else if (navigation === 'search') await fill(host.querySelector<HTMLInputElement>('.file-search input')!, 'new intent')
+    else await click(host.querySelector<HTMLElement>('.recent-item:not(.folder-item)')!)
+    expect(signal?.aborted).toBe(true)
+    await act(async () => pending.resolve())
+    expect(host.querySelector('[role="alert"]')).toBeNull()
+    if (navigation === 'folder') expect(host.querySelector('.tree-row.active .tree-name')?.textContent).toBe('Projects')
+    if (navigation === 'open') expect(api.openPath).toHaveBeenCalledWith(fileId)
+  })
+}
+
+test('Web 第二次位置导航作废旧操作，保留新操作并允许失败后重试', async () => {
+  const old = deferred<void>(), signals: (AbortSignal | undefined)[] = []
+  api.revealPath = async (_path, signal) => {signals.push(signal); if (signals.length === 1) {await old.promise; throw new Error('obsolete failure')} if (signals.length === 2) throw new Error('current parent failure')}
+  await renderWebReveal(); await revealFile(); await revealFile()
+  expect(signals[0]?.aborted).toBe(true); expect(signals[1]?.aborted).toBe(false)
+  expect(host.querySelector('[role="alert"]')?.textContent).toContain('current parent failure')
+  await act(async () => old.resolve())
+  expect(host.querySelector('[role="alert"]')?.textContent).not.toContain('obsolete failure')
+  await revealFile(); expect(signals).toHaveLength(3)
+  expect(host.querySelector('[role="alert"]')).toBeNull()
+})
+
+test('Web Home 卸载会作废位置导航，桌面位置调用仍只有路径参数', async () => {
+  api.revealPath = vi.fn(async () => {})
+  await chooseFileAction('Reveal in folder')
+  expect(api.revealPath).toHaveBeenLastCalledWith(fileId)
+  const pending = deferred<void>(); let signal: AbortSignal | undefined
+  api.revealPath = async (_path, current) => {signal = current; await pending.promise}
+  await renderWebReveal(); await revealFile()
+  await act(async () => root.render(h('div', null, 'other page')))
+  expect(signal?.aborted).toBe(true)
+  await act(async () => pending.resolve())
+})

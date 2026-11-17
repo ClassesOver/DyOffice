@@ -356,7 +356,7 @@ export interface HomeApi {
   /** unstar files in bulk (Starred view selection bar); the recents list and the files are untouched */
   unstarPaths(paths: string[]): Promise<void>
   /** reveal the file in Finder / Explorer */
-  revealPath(path: string): Promise<void>
+  revealPath(path: string, signal?: AbortSignal): Promise<void>
   /** rename the file on disk (same directory) and update the recent list */
   renameFile(path: string, newName: string): Promise<RenameResult>
   /** copy the file next to itself (localized "copy" suffix before .ext) and record it as recent */

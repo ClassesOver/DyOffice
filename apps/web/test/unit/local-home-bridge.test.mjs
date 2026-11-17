@@ -373,3 +373,34 @@ for(const view of ['recents','starred'])test(`${view} forwards explicit modified
  assert.deepEqual(calls.map(q=>({sort:q.get('sort'),offset:q.get('offset'),limit:q.get('limit'),ext:q.get('ext')})),[{sort:'modified-asc',offset:'10',limit:'100',ext:'docx'},{sort:'modified-asc',offset:'110',limit:'50',ext:'docx'}])
  calls.length=0;await bridge[view]({limit:1});assert.equal(calls[0].has('sort'),false)
 })
+
+for(const stage of ['folders','file','activate'])test(`已取消的位置导航在 ${stage} 等待结束后不继续查询或通知`,async()=>{
+ const {onRevealWorkspaceFolder}=await import('../../../../apps/shell/src/renderer/src/file-events.ts')
+ const gate=Promise.withResolvers(),started=Promise.withResolvers(),controller=new AbortController(),calls=[],events=[]
+ let changed=0
+ const previous=globalThis.window
+ globalThis.window={aiOfficeTabs:{activate:async()=>{calls.push('activate');if(stage==='activate'){started.resolve();await gate.promise}}}}
+ const stop=onRevealWorkspaceFolder(event=>events.push(event))
+ const bridge=createLocalHomeBridge({...deps(async path=>{
+  const phase=path.endsWith('/folders')?'folders':'file';calls.push(phase)
+  if(stage===phase){started.resolve();await gate.promise}
+  return phase==='folders'?{folders:[]}:{files:[item],total:1,totalAll:1}
+ }),changed:()=>changed++})
+ try{
+  const pending=bridge.revealPath(item.id,controller.signal);await started.promise;controller.abort();gate.resolve()
+  await assert.rejects(pending,{name:'AbortError'})
+  assert.deepEqual(calls,stage==='folders'?['folders']:stage==='file'?['folders','file']:['folders','file','activate'])
+  assert.equal(changed,0);assert.deepEqual(events,[])
+ }finally{gate.resolve();stop();if(previous===undefined)delete globalThis.window;else globalThis.window=previous}
+})
+
+test('位置父读取失败后可原位重试，未取消操作仍会报告失败',async()=>{
+ const {onRevealWorkspaceFolder}=await import('../../../../apps/shell/src/renderer/src/file-events.ts')
+ const events=[];let fail=true
+ const stop=onRevealWorkspaceFolder(event=>events.push(event))
+ const bridge=createLocalHomeBridge(deps(async path=>{
+  if(path.endsWith('/folders')){if(fail){fail=false;throw new Error('parent unavailable')}return {folders:[]}}
+  return {files:[item],total:1,totalAll:1}
+ }))
+ try{await assert.rejects(bridge.revealPath(item.id),/parent unavailable/);assert.deepEqual(events,[]);await bridge.revealPath(item.id);assert.deepEqual(events,[{dir:'/workspace',fileId:item.id}])}finally{stop()}
+})

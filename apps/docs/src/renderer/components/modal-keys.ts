@@ -1,6 +1,8 @@
 import { useEffect, useRef } from 'react'
 import type { KeyboardEvent as ReactKeyboardEvent } from 'react'
 
+const openModals: HTMLDivElement[] = []
+
 /**
  * Shared modal keyboard behavior: Esc closes (stopped so it never reaches
  * global listeners like "exit read mode"), Tab cycles inside the modal, and
@@ -13,23 +15,36 @@ export function useModalKeys(onClose: () => void) {
 
   useEffect(() => {
     const el = ref.current
+    if (!el) return
+    // Child effects mount first; a containing backdrop belongs below its child.
+    const child = openModals.findIndex(other => el.contains(other))
+    openModals.splice(child < 0 ? openModals.length : child, 0, el)
+    return () => {openModals.splice(openModals.indexOf(el), 1)}
+  }, [])
+
+  useEffect(() => {
+    const el = ref.current
     if (!el || el.contains(document.activeElement)) return
     const first = el.querySelector<HTMLElement>('input, textarea, select, button')
     ;(first ?? el).focus()
   }, [])
 
-  // Clicking a canvas/img inside the modal blurs to body, where the React handler never sees Esc.
+  // A click on non-focusable content can leave focus on body, outside React's handler.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape' || !focusOutsideModal(ref.current)) return
-      e.preventDefault()
-      onClose()
+      if (openModals.at(-1) !== ref.current || !focusOutsideModal(ref.current)) return
+      if (e.key === 'Tab') trapTab(ref.current, e)
+      else if (e.key === 'Escape') {
+        e.preventDefault()
+        onClose()
+      }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [onClose])
 
   const onKeyDown = (e: ReactKeyboardEvent) => {
+    if (openModals.at(-1) !== ref.current) return
     if (e.key === 'Escape') {
       e.preventDefault()
       e.stopPropagation()
@@ -69,7 +84,7 @@ export function trapTab(
   if (e.shiftKey && (active === first || !container.contains(active))) {
     e.preventDefault()
     last.focus()
-  } else if (!e.shiftKey && active === last) {
+  } else if (!e.shiftKey && (active === last || !container.contains(active))) {
     e.preventDefault()
     first.focus()
   }

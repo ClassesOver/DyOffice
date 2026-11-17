@@ -168,20 +168,24 @@ export function createLocalHomeBridge(deps: Dependencies): HomeApi {
   })}
   const base = createWebHomeBridge({request: path => path === '/preferences' ? deps.preferences.getPreferences() : files('all'), open: deps.open, changed, unsupported: deps.unsupported, browse: deps.browse})
   Object.assign(base, {
-    revealPath: async (path: string) => {
+    revealPath: async (path: string, signal?: AbortSignal) => {
+      signal?.throwIfAborted()
       const mapping = paths(await folders())
+      signal?.throwIfAborted()
       let dir: string, fileId: string | undefined
       if (path === rootPath || path.startsWith(rootPath + '/')) {
         if (path !== rootPath && mapping.get(folderId(path)!) !== path) throw new Error('文件夹不存在，请刷新后重试。')
         dir = path
       } else {
         const file = (await queryFiles('all', {id: path, limit: 1})).files.find(file => file.id === path)
+        signal?.throwIfAborted()
         if (!file) throw new Error('文件不存在或已移入回收站。')
         dir = file.folderId === null ? rootPath : mapping.get(file.folderId) ?? ''
         if (!dir) throw new Error('文件所在文件夹不存在，请刷新后重试。')
         fileId = file.id
       }
       if (typeof window !== 'undefined') await window.aiOfficeTabs?.activate('home')
+      signal?.throwIfAborted()
       changed()
       notifyRevealWorkspaceFolder({dir, ...(fileId ? {fileId} : {})})
     },

@@ -2262,7 +2262,8 @@ function RibbonInner({
                 </button>
                 <button
                   className="qa-name-with-ai"
-                  disabled={!hasDoc}
+                  disabled={!hasDoc || !desktopActionsAvailable}
+                  title={!desktopActionsAvailable ? lang === 'en' ? 'AI file naming is only available in the desktop app.' : 'AI 命名仅桌面版可用。' : undefined}
                   onClick={() => {
                     setDropdown(null)
                     onNameWithAi()
