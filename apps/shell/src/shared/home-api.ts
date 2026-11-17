@@ -152,6 +152,8 @@ export interface RecentEntry {
 
 /** paged query for the home file lists */
 export interface RecentQuery {
+  /** Web 显式选择修改时间排序；省略时保留最近打开顺序。 */
+  sort?: 'modified-asc' | 'modified-desc'
   /** number of entries to skip (default 0) */
   offset?: number
   /** page size; 0 returns no entries but still reports totals (default 50) */

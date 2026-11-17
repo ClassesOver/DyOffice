@@ -360,3 +360,16 @@ test('successful rename notifies the host once; rejected rename never changes an
  fail=true;await assert.rejects(bridge.renameFile('file-a','rejected.docx'),/rename rejected/)
  assert.deepEqual(renamed,[{id:'file-a',name:'new.docx'}])
 })
+
+for(const view of ['recents','starred'])test(`${view} forwards explicit modified sort across bounded refresh pages and preserves server order`,async()=>{
+ const calls=[],items=Array.from({length:170},(_,i)=>({...item,id:`sort-${String(i).padStart(3,'0')}`,name:`${i}.docx`}))
+ const bridge=createLocalHomeBridge(deps(async path=>{
+  const query=new URL(path,'http://localhost').searchParams;calls.push(query)
+  const ordered=query.get('sort')==='modified-asc'?[...items].reverse():items
+  return {files:ordered.slice(Number(query.get('offset')),Number(query.get('offset'))+Number(query.get('limit'))),total:170,totalAll:170}
+ }))
+ const page=await bridge[view]({offset:10,limit:150,ext:'docx',sort:'modified-asc'})
+ assert.deepEqual(page.entries.map(entry=>entry.path),[...items].reverse().slice(10,160).map(item=>item.id))
+ assert.deepEqual(calls.map(q=>({sort:q.get('sort'),offset:q.get('offset'),limit:q.get('limit'),ext:q.get('ext')})),[{sort:'modified-asc',offset:'10',limit:'100',ext:'docx'},{sort:'modified-asc',offset:'110',limit:'50',ext:'docx'}])
+ calls.length=0;await bridge[view]({limit:1});assert.equal(calls[0].has('sort'),false)
+})

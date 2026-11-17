@@ -50,16 +50,17 @@ export function createWorkspaceService(transactions: PrincipalTransactions) {
   }
   return {
     async listFiles(token: string, options: WorkspaceFileQuery = {}): Promise<WorkspaceFileList> {
-      const input = record(options, ['view','folderId','limit','offset','ext','q','id'])
+      const input = record(options, ['view','sort','folderId','limit','offset','ext','q','id'])
       const view = input.view ?? 'all', limit = input.limit ?? 50, offset = input.offset ?? 0
       if (!['all','recent','starred','trash'].includes(view as string) || !Number.isSafeInteger(limit) || (limit as number) < 0 || (limit as number) > 100 || !Number.isSafeInteger(offset) || (offset as number) < 0 || (offset as number) > 1_000_000) throw authError(400)
       if (input.ext !== undefined && !['docx','xlsx','pptx','pdf'].includes(input.ext as string)) throw authError(400)
+      if (input.sort !== undefined && !['modified-asc','modified-desc'].includes(input.sort as string)) throw authError(400)
       if (input.q !== undefined && (typeof input.q !== 'string' || [...input.q].length > 200 || /[\u0000-\u001f\u007f]/u.test(input.q))) throw authError(400)
       const selectedId = input.id === undefined ? null : uuid(input.id as string)
       const filtered = input.folderId !== undefined, folderId = !filtered || input.folderId === 'root' ? null : uuid(input.folderId as string)
       return access(token, 'files:read', async (connection, principal) => {
         if (folderId !== null) await requireFolder(connection, principal, folderId)
-        const order = view === 'recent' ? 'last_opened_at DESC,id' : 'updated_at DESC,id'
+        const order = input.sort === 'modified-asc' ? 'updated_at ASC,id' : input.sort === 'modified-desc' ? 'updated_at DESC,id' : view === 'recent' ? 'last_opened_at DESC,id' : 'updated_at DESC,id'
         // Count and page share one MVCC snapshot, including an empty final page.
         const result = (await connection.query<{ total: string; total_all: string; files: FileRow[] }>(`
           WITH scoped AS MATERIALIZED (

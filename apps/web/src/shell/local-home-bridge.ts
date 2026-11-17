@@ -1,7 +1,7 @@
 import type {HomeApi, RecentEntry, RecentQuery, MoveResult} from '../../../shell/src/shared/home-api'
 import type {WorkspaceFile, WorkspaceFileList, WorkspaceFolder, WorkspaceFolderList, WorkspaceView} from '../../../../packages/web-contracts/src/workspace.ts'
 import type {createPreferencesClient, SettingsRequest} from '../../../../packages/browser-host/src/preferences.ts'
-import {notifyRevealWorkspaceFolder} from '../../../shell/src/renderer/src/file-events'
+import {notifyRevealWorkspaceFolder} from '../../../shell/src/renderer/src/file-events.ts'
 import {createWebHomeBridge} from './web-home-bridge.ts'
 
 interface Dependencies {
@@ -34,9 +34,9 @@ export function createLocalHomeBridge(deps: Dependencies): HomeApi {
     pending.set(key, {promise: result, intent})
     return result
   }
-  async function queryFiles(view: WorkspaceView, query: {folderId?: string; limit?: number; offset?: number; ext?: string; q?: string; id?: string} = {}): Promise<WorkspaceFileList> {
+  async function queryFiles(view: WorkspaceView, query: {folderId?: string; limit?: number; offset?: number; ext?: string; q?: string; id?: string; sort?: RecentQuery['sort']} = {}): Promise<WorkspaceFileList> {
     const params = new URLSearchParams({view, limit: String(query.limit ?? 50), offset: String(query.offset ?? 0)})
-    for (const key of ['folderId','ext','q','id'] as const) if (query[key] !== undefined) params.set(key, query[key]!)
+    for (const key of ['folderId','ext','q','id','sort'] as const) if (query[key] !== undefined) params.set(key, query[key]!)
     const page = await deps.request<WorkspaceFileList>(`/api/v1/workspace/files?${params}`)
     if (!page || !Array.isArray(page.files) || !Number.isSafeInteger(page.total) || page.total < 0 || !Number.isSafeInteger(page.totalAll) || page.totalAll < page.total || page.files.length > (query.limit ?? 50)) throw new Error('无法读取个人文件列表。')
     return page
@@ -90,11 +90,11 @@ export function createLocalHomeBridge(deps: Dependencies): HomeApi {
   }
   async function page(view: WorkspaceView, query: RecentQuery = {}) {
     const limit = query.limit ?? 50, offset = query.offset ?? 0
-    const page = await queryFiles(view, {offset, limit: Math.min(limit, 100), ext: query.ext})
+    const page = await queryFiles(view, {offset, limit: Math.min(limit, 100), ext: query.ext, sort: query.sort})
     const items = [...page.files], seen = new Set(items.map(file => file.id))
     // Home refreshes the number of rows already loaded; the API caps each request at 100.
     while (items.length < limit && offset + items.length < page.total) {
-      const next = await queryFiles(view, {offset: offset + items.length, limit: Math.min(limit - items.length, 100), ext: query.ext})
+      const next = await queryFiles(view, {offset: offset + items.length, limit: Math.min(limit - items.length, 100), ext: query.ext, sort: query.sort})
       if (next.total !== page.total || next.totalAll !== page.totalAll || !next.files.length || next.files.some(file => seen.has(file.id))) throw new Error('文件列表已变化，请刷新后重试。')
       for (const file of next.files) {seen.add(file.id); items.push(file)}
     }

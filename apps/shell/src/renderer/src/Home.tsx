@@ -1577,7 +1577,7 @@ export interface HomeProps {
   supportedNewFormats?: readonly string[]
   accountEntry?: ReactNode
   /** Omitted flags preserve desktop actions; Web hosts disable unavailable capabilities. */
-  capabilities?: {localFolders?: boolean; copyPath?: boolean; duplicateFile?: boolean; starredGroups?: boolean; cloudProjects?: boolean; semanticRanking?: boolean}
+  capabilities?: {localFolders?: boolean; copyPath?: boolean; duplicateFile?: boolean; starredGroups?: boolean; cloudProjects?: boolean; semanticRanking?: boolean; serverFileSort?: boolean}
   /** A host with empty-only directory deletion supplies its own accurate description. */
   folderDeleteDescription?: (name: string) => string
 }
@@ -1641,7 +1641,8 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
   const [searchRefresh, setSearchRefresh] = useState(0)
   const searchActive = searchQuery.trim().length > 0
   // modified-column sort (WPS-style header popover), shared by the global and folder tables
-  const [fileSort, setFileSort] = useState<'recent' | 'oldest'>('recent')
+  const [fileSort, setFileSort] = useState<'recent' | 'oldest' | undefined>(capabilities?.serverFileSort ? undefined : 'recent')
+  const serverSort = capabilities?.serverFileSort && fileSort ? fileSort === 'oldest' ? 'modified-asc' : 'modified-desc' : undefined
   const [fileSortMenuOpen, setFileSortMenuOpen] = useState(false)
   const fileSortRef = useRef<HTMLDivElement>(null)
   const [rowMenu, setRowMenu] = useState<string | null>(null)
@@ -1863,7 +1864,7 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
     const limit = keepCount ? Math.max(entriesLen.current, PAGE_SIZE) : PAGE_SIZE
     const primary = view === 'recent' ? window.aiOffice.recents : window.aiOffice.starred
     const secondary = view === 'recent' ? window.aiOffice.starred : window.aiOffice.recents
-    void primary({ offset: 0, limit, ext, group }).then((page) => {
+    void primary({ offset: 0, limit, ext, group, ...(serverSort ? {sort: serverSort} : {}) }).then((page) => {
       if (seq !== requestSeq.current) return
       setEntries(page.entries)
       setListLoading(false)
@@ -1913,7 +1914,7 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
 
   useEffect(() => {
     reloadRef.current(false)
-  }, [view, filter, groupFilter])
+  }, [view, filter, groupFilter, serverSort])
 
   const q = searchQuery.trim()
   useEffect(() => {
@@ -2026,7 +2027,7 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
     const group = view === 'starred' && groupFilter ? groupFilter : undefined
     const api = view === 'recent' ? window.aiOffice.recents : window.aiOffice.starred
     const offset = entriesLen.current, known = new Set(entries.map(entry => entry.path))
-    void api({ offset, limit: PAGE_SIZE, ext, group }).then((page) => {
+    void api({ offset, limit: PAGE_SIZE, ext, group, ...(serverSort ? {sort: serverSort} : {}) }).then((page) => {
       if (seq !== requestSeq.current) return
       if(page.total !== listTotal || !page.entries.length || page.entries.some(entry => known.has(entry.path)) || new Set(page.entries.map(entry => entry.path)).size !== page.entries.length){reloadRef.current(false);return}
       setEntries((prev) => [...prev, ...page.entries])
@@ -2037,11 +2038,10 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
   const loadMoreRef = useRef(loadMore)
   loadMoreRef.current = loadMore
 
-  // oldest-first over a partially loaded list would miss the tail pages —
-  // keep pulling until the list is complete (backend caps recents at 100)
+  // 本地反转需要先补齐列表；Web 采用服务端分页排序，不主动拉全。
   useEffect(() => {
-    if (fileSort === 'oldest' && hasMore) loadMoreRef.current()
-  }, [fileSort, hasMore, entries.length, readyPageSeq])
+    if (!capabilities?.serverFileSort && fileSort === 'oldest' && hasMore) loadMoreRef.current()
+  }, [fileSort, hasMore, entries.length, readyPageSeq, capabilities?.serverFileSort])
 
   // Load the next page once the bottom sentinel enters the viewport (240px early);
   // depending on entries.length rebuilds the observer after each page — observe fires an immediate
@@ -2121,14 +2121,19 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
     if (supportedFormats) el.querySelector<HTMLButtonElement>('[role="menuitem"]:not(:disabled)')?.focus({preventScroll: true})
   }, [folderMenu, supportedFormats])
 
-  // Escape closes the row menu and the confirm dialogs
+  // Escape 关闭排序、行菜单和确认弹窗。
   useEscapeToClose(
-    rowMenu !== null ||
+    fileSortMenuOpen ||
+      rowMenu !== null ||
       folderMenu !== null ||
       confirmDelete !== null ||
       confirmMissing !== null ||
       confirmDeleteFolder !== null,
     () => {
+      if (fileSortMenuOpen) {
+        setFileSortMenuOpen(false)
+        fileSortRef.current?.querySelector<HTMLButtonElement>('.cloud-col-sort-btn')?.focus({preventScroll: true})
+      }
       setRowMenu(null)
       setFolderMenu(null)
       setConfirmDelete(null)
@@ -3501,7 +3506,9 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
   function renderFolderContent() {
     if (roots.length === 0) return null
     const total = folderSubfolders.length + folderFiles.length
-    const sortedFiles = fileSort === 'oldest' ? [...folderFiles].reverse() : folderFiles
+    const sortedFiles = capabilities?.serverFileSort && fileSort
+      ? [...folderFiles].sort((a, b) => (fileSort === 'oldest' ? a.mtimeMs - b.mtimeMs : b.mtimeMs - a.mtimeMs) || a.path.localeCompare(b.path))
+      : fileSort === 'oldest' ? [...folderFiles].reverse() : folderFiles
     return (
       <main className="content">
         {!confirmDelete && !confirmDeleteFolder && !movePicker && renderActionError()}
@@ -3761,7 +3768,7 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
                 <span />
               </div>
               <ul className="recent-list">
-                {(fileSort === 'oldest' ? [...entries].reverse() : entries).map((entry) =>
+                {(!capabilities?.serverFileSort && fileSort === 'oldest' ? [...entries].reverse() : entries).map((entry) =>
                   renderFileRow(entry, 'global'),
                 )}
                 {hasMore && (

@@ -926,3 +926,77 @@ test('pending deletion keeps keyboard traversal inside after the disabled submit
   expect(document.activeElement).toBe(cancel)
   await act(async () => pending.resolve())
 })
+
+async function mountServerSortedHome() {
+  await act(async () => root.render(null))
+  await act(async () => root.render(h(LocaleProvider, {initial:'en', children:h(Home, {accountEntry:h('div',null,'Account'), supportedNewFormats:[], capabilities:{serverFileSort:true}})})))
+}
+async function chooseModifiedSort(label: string) {
+  await click(host.querySelector<HTMLButtonElement>('.cloud-col-sort-btn')!)
+  await click(button(label, host.querySelector('[role="menu"]')!))
+}
+const sortingFiles = () => Array.from({length:55},(_,i)=>({...file,path:`sorted-${String(i).padStart(3,'0')}`,name:`Sort ${i}.docx`,mtimeMs:i+1}))
+
+test('Web explicit modified sort resets the first page and keeps server order without eager tail reads', async()=>{
+  const intersect=pagingObserver(),items=sortingFiles()
+  const recents=vi.fn(async(query?:{offset?:number;limit?:number;sort?:string})=>{
+    const ordered=query?.sort==='modified-desc'?[...items].reverse():items
+    return {entries:ordered.slice(query?.offset??0,(query?.offset??0)+(query?.limit??50)),total:55,totalAll:55}
+  });api.recents=recents
+  await mountServerSortedHome()
+  expect(recents).toHaveBeenCalledTimes(1);expect(recents.mock.calls[0][0]).not.toHaveProperty('sort')
+  await click(host.querySelector<HTMLButtonElement>('.cloud-col-sort-btn')!)
+  expect([...host.querySelectorAll('[role="menuitemradio"]')].map(n=>n.getAttribute('aria-checked'))).toEqual(['false','false'])
+  await click(button('Oldest',host.querySelector('[role="menu"]')!))
+  expect(recents).toHaveBeenLastCalledWith(expect.objectContaining({offset:0,sort:'modified-asc'}))
+  expect(recents.mock.calls.filter(([query])=>query?.offset)).toHaveLength(0)
+  expect(host.querySelectorAll('.recent-name')).toHaveLength(50)
+  expect(host.querySelector('.recent-name')?.textContent).toBe(items[0].name)
+  await act(async()=>intersect())
+  expect(recents).toHaveBeenLastCalledWith(expect.objectContaining({offset:50,sort:'modified-asc'}))
+  expect([...host.querySelectorAll('.recent-name')].map(n=>n.textContent)).toEqual(items.map(n=>n.name))
+  await chooseModifiedSort('Recent')
+  expect(recents).toHaveBeenLastCalledWith(expect.objectContaining({offset:0,sort:'modified-desc'}))
+  expect(host.querySelectorAll('.recent-name')).toHaveLength(50)
+  expect(host.querySelector('.recent-name')?.textContent).toBe(items[54].name)
+})
+
+test('switching modified sort isolates the old tail response and the new tail lock',async()=>{
+  const intersect=pagingObserver(),items=sortingFiles(),old=deferred<{entries:RecentEntry[];total:number;totalAll:number}>(),current=deferred<{entries:RecentEntry[];total:number;totalAll:number}>()
+  const recents=vi.fn(async(query?:{offset?:number;sort?:string})=>query?.offset?(query.sort?current.promise:old.promise):{entries:query?.sort?[...items].reverse().slice(0,50):items.slice(0,50),total:55,totalAll:55});api.recents=recents
+  await mountServerSortedHome();await act(async()=>intersect())
+  await chooseModifiedSort('Recent');await act(async()=>intersect())
+  await act(async()=>old.resolve({entries:items.slice(50),total:55,totalAll:55}))
+  await act(async()=>intersect())
+  expect(recents.mock.calls.filter(([query])=>query?.offset&&query.sort==='modified-desc')).toHaveLength(1)
+  expect([...host.querySelectorAll('.recent-name')].map(n=>n.textContent)).toEqual([...items].reverse().slice(0,50).map(n=>n.name))
+  await act(async()=>current.resolve({entries:[...items].reverse().slice(50),total:55,totalAll:55}))
+  expect([...host.querySelectorAll('.recent-name')].map(n=>n.textContent)).toEqual([...items].reverse().map(n=>n.name))
+})
+
+test('Web folder modified sort uses actual timestamps while desktop keeps its existing query contract',async()=>{
+  const items=[{...file,path:'new',name:'New.docx',mtimeMs:3},{...file,path:'old',name:'Old.docx',mtimeMs:1},{...file,path:'middle',name:'Middle.docx',mtimeMs:2}]
+  const original=api.listFolder;api.listFolder=async path=>({...await original(path),files:items})
+  await mountServerSortedHome();await click(tree('Projects'))
+  await chooseModifiedSort('Oldest')
+  expect([...host.querySelectorAll('.recent-item:not(.folder-item) .recent-name')].map(n=>n.textContent)).toEqual(['Old.docx','Middle.docx','New.docx'])
+  await chooseModifiedSort('Recent')
+  expect([...host.querySelectorAll('.recent-item:not(.folder-item) .recent-name')].map(n=>n.textContent)).toEqual(['New.docx','Middle.docx','Old.docx'])
+  await act(async()=>root.render(null))
+  const recents=vi.fn(async(_query?:{sort?:string})=>({entries:items,total:3,totalAll:3}));api.recents=recents
+  await act(async()=>root.render(h(LocaleProvider,{initial:'en',children:h(Home,{accountEntry:h('div',null,'Account'),supportedNewFormats:[]})})))
+  await chooseModifiedSort('Oldest')
+  expect([...host.querySelectorAll('.recent-item:not(.folder-item) .recent-name')].map(n=>n.textContent)).toEqual([...items].reverse().map(n=>n.name))
+  expect(recents.mock.calls.every(args=>!('sort' in (args[0]??{})))).toBe(true)
+})
+
+test('modified sort menu closes on Escape and returns focus from an option to its trigger',async()=>{
+  await mountServerSortedHome()
+  const trigger=host.querySelector<HTMLButtonElement>('.cloud-col-sort-btn')!
+  await click(trigger)
+  const option=host.querySelector<HTMLButtonElement>('[role="menuitemradio"]')!
+  option.focus()
+  await act(async()=>option.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true,cancelable:true})))
+  expect(host.querySelector('[role="menu"]')).toBeNull()
+  expect(document.activeElement).toBe(trigger)
+})
