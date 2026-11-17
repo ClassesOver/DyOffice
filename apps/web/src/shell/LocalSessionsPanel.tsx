@@ -2,7 +2,7 @@ import {Alert, Button} from 'antd'
 import React,{useCallback,useEffect,useRef,useState} from 'react'
 import {localSessionsClient,type LocalSessionsClient,type LocalSession} from './local-sessions-client'
 /** Actual server sessions, not guessed device identities. No credential values are displayed. */
-export function LocalSessionsPanel({client=localSessionsClient,onCurrentRevoked,onCloseGuardChange}:{client?:LocalSessionsClient;onCurrentRevoked:()=>void;onCloseGuardChange?:(guard:(()=>boolean)|null)=>void}){
+export function LocalSessionsPanel({client=localSessionsClient,refreshVersion=0,onCurrentRevoked,onCloseGuardChange}:{client?:LocalSessionsClient;refreshVersion?:number;onCurrentRevoked:()=>void;onCloseGuardChange?:(guard:(()=>boolean)|null)=>void}){
  const [rows,setRows]=useState<LocalSession[]>([]),[pending,setPending]=useState(false),[error,setError]=useState(''),[message,setMessage]=useState(''),[confirm,setConfirm]=useState<LocalSession|'others'|null>(null)
  const [unknown,setUnknown]=useState(false),[revoked,setRevoked]=useState(false)
  const ended=useRef(false)
@@ -14,6 +14,9 @@ export function LocalSessionsPanel({client=localSessionsClient,onCurrentRevoked,
  useEffect(()=>{const prevent=(event:BeforeUnloadEvent)=>{if(busy.current||closeState.current.unknown){event.preventDefault();event.returnValue=''}};window.addEventListener('beforeunload',prevent);return()=>window.removeEventListener('beforeunload',prevent)},[])
  async function refresh(){if(busy.current||ended.current)return;busy.current=true;setPending(true);setError('');setMessage('');setConfirm(null);try{const result=await client.list();if(alive.current){setRows(result);setUnknown(false)}}catch{if(alive.current)setError('无法读取登录会话，请重新加载并确认登录状态。')}finally{busy.current=false;if(alive.current)setPending(false)}}
  useEffect(()=>{alive.current=true;void refresh();return()=>{alive.current=false}},[client])
+ const refreshedVersion=useRef(refreshVersion)
+ // Password rotation must refresh sessions without discarding a pending revocation or its close guard.
+ useEffect(()=>{if(refreshedVersion.current===refreshVersion||busy.current||ended.current)return;refreshedVersion.current=refreshVersion;void refresh()},[refreshVersion,pending])
  async function revoke(){if(busy.current||ended.current||!confirm)return;const target=confirm;busy.current=true;revoking.current=true;setPending(true);setError('');setMessage('');setConfirm(null)
   try{if(target==='others')await client.revokeOthers();else await client.revoke(target.id);if(target!=='others'&&target.current){ended.current=true;busy.current=false;revoking.current=false;if(alive.current){setRevoked(true);setRows([]);setMessage('当前会话已撤销。请重新加载并核对登录状态。')}onCurrentRevoked();return}if(alive.current){setRows(old=>old.filter(row=>target==='others'?row.current:row.id!==target.id));setMessage(target==='others'?'其他会话已撤销，当前会话保持登录。':'所选会话已撤销。')}}catch{if(alive.current){setUnknown(true);setError('撤销结果未确认。请先刷新会话列表核对，不要重复提交。')}}finally{revoking.current=false;busy.current=false;if(alive.current)setPending(false)}
  }

@@ -209,3 +209,10 @@
 - 构建覆盖旧静态hash而服务尚未重启的间隙曾使审计登录前拿不到脚本；最终统一build后立即重启HTTP200再复验，未把构建窗口或脚本恢复算成产品失败。完整UI与复杂文档仍在继续验收。
 - 证据：/tmp/dyoffice-preview-retry-red.log、/tmp/dyoffice-preview-retry-final.log、/tmp/dyoffice-round9-final-shell.log、/tmp/dyoffice-round9-final-build.log，以及/tmp/dyoffice-ui-audit/下document-preview-recovery、global-config-boundary、global-config-write-fence-final、sources-state报告与截图。
 - 预览最终模拟浏览器4/4通过：PDF/XLSX各metadata/content503，Retry再失败后成功；pending重复点击不增请求，切B后释放A不污染B，返回A渲染实际fixture PDF canvas/XLSX文本。成功重试元数据明确更换revision，实际content URL与下载href均为新revision…0099，避免旧版本假恢复。全部文件业务mock，单次登录复用，无页面异常/意外业务写。证据/tmp/dyoffice-ui-audit/document-preview-recovery-postfix/report.json、coverage.md及失败/恢复截图。独立只读源码审查与24项相关回归通过。
+
+## 密码轮换与会话撤销并发保护
+
+- 两条新增回归先红：暂停撤销其他会话请求→修改密码成功→原key重挂卸载会话面板，设置关闭guard错误返回true。改为保持面板实例，用refreshVersion标记读取需求；busy期间不消费版本，原请求结束后读取一次，不丢失revoking/unknown及beforeunload。当前会话撤销成功的ended终态不触发排队刷新。
+- 新增成功、unknown且核对读取失败、当前会话撤销三条回归；原有密码成功后刷新当前会话及保留成功提示仍通过。最终Shell43文件418项、shell类型检查、构建、边界1335文件0违规通过；独立只读复核与相关14项通过。构建chunk大小提示和DOM CSS解析日志仍存在。
+- 最终构建真实浏览器3组通过：pending期间Escape/关闭及beforeunload均有保护、没有提前GET或重复DELETE；成功后一次读取；unknown后失败读取不解锁，显式成功读取才恢复；当前会话终态进入恢复层且不读取复活。所有密码修改/撤销业务请求mock，无真实密码修改、撤销及配置写入。证据/tmp/dyoffice-rotation-red.log、/tmp/dyoffice-round10-shell.log、/tmp/dyoffice-round10-build.log、/tmp/dyoffice-refresh-version-review.log，以及/tmp/dyoffice-ui-audit/password-session-concurrency/report.json与截图。
+- 上一提交9c2f3cd7的远端native-docx检查出现失败，正在独立核查；不以本地Shell通过代替DOCX端到端通过。完整UI与复杂文档交互目标继续，未宣称穷举完成。

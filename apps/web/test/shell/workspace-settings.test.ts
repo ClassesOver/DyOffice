@@ -47,3 +47,49 @@ test('successful password rotation reloads current sessions without losing the p
   expect(document.querySelector('.personal-account-password [role="status"]')?.textContent).toContain('当前会话已更新')
  }finally{await act(async()=>root.unmount());list.mockRestore();history.mockRestore();document.body.innerHTML=''}
 })
+
+for(const outcome of ['success','unknown','current'] as const)test(`password rotation preserves a pending session revocation and reconciles afterwards (${outcome})`,async()=>{
+ const {act}=await import('react')
+ ;(globalThis as typeof globalThis & {IS_REACT_ACT_ENVIRONMENT:boolean}).IS_REACT_ACT_ENVIRONMENT=true
+ const session=(id:string,current:boolean)=>({id,current,createdAt:'2026-01-01T00:00:00Z',lastSeenAt:'2026-01-01T00:00:00Z',expiresAt:'2027-01-01T00:00:00Z'})
+ let finish:()=>void=()=>{},fail:(error:Error)=>void=()=>{},guard:(()=>boolean)|null=null
+ const revoke=vi.fn(()=>new Promise<void>((resolve,reject)=>{finish=resolve;fail=reject}))
+ const list=vi.fn().mockResolvedValueOnce([session('current',true),session('other',false)])
+ if(outcome==='success')list.mockResolvedValue([session('replacement',true)])
+ else list.mockRejectedValue(new Error('read unavailable'))
+ const client={list,revoke,revokeOthers:vi.fn()},onCurrentRevoked=vi.fn()
+ document.body.innerHTML='<div id="pending-rotation-test"></div>'
+ const root=createRoot(document.getElementById('pending-rotation-test')!)
+ const button=(text:string)=>[...document.querySelectorAll<HTMLButtonElement>('button')].find(b=>b.textContent===text)!
+ try{
+  await act(async()=>root.render(h(WorkspaceSettings,{user:{username:'alice',displayName:'Alice',roles:['personal']},load:async()=>initial,save:async()=>initial,sessionsClient:client,historyClient:{list:async()=>[]},security:{changePassword:async()=>{},onCurrentRevoked},skills:h('p',null,'skills'),onClose:()=>{},onLogout:()=>{},onCloseGuardChange:g=>{guard=g}})))
+  await act(async()=>button(outcome==='current'?'撤销当前会话':'撤销此会话').click())
+  await act(async()=>button('确认撤销').click())
+  expect(revoke).toHaveBeenCalledOnce()
+  expect(guard?.()).toBe(false)
+  const current=document.querySelector<HTMLInputElement>('#local-current-password')!,next=document.querySelector<HTMLInputElement>('#local-new-password')!,confirm=document.querySelector<HTMLInputElement>('#local-confirm-password')!
+  current.value='existing long password';next.value=confirm.value='new long password phrase'
+  await act(async()=>current.form!.dispatchEvent(new Event('submit',{bubbles:true,cancelable:true})))
+  expect(document.querySelector('.personal-account-password [role="status"]')?.textContent).toContain('当前会话已更新')
+  expect(guard?.()).toBe(false)
+  expect(button('刷新会话列表').disabled).toBe(true)
+  expect(list).toHaveBeenCalledTimes(1)
+  const unload=new Event('beforeunload',{cancelable:true});window.dispatchEvent(unload);expect(unload.defaultPrevented).toBe(true)
+  await act(async()=>{if(outcome!=='unknown')finish();else fail(new Error('response lost'))})
+  expect(list).toHaveBeenCalledTimes(outcome==='current'?1:2)
+  if(outcome==='current'){
+   expect(onCurrentRevoked).toHaveBeenCalledOnce()
+   expect(document.querySelector('[data-session-id]')).toBeNull()
+   expect(button('刷新会话列表').disabled).toBe(true)
+   expect(guard?.()).toBe(true)
+  }else if(outcome==='success'){
+   expect(document.querySelector('[data-session-id="replacement"]')).not.toBeNull()
+   expect(guard?.()).toBe(true)
+  }else{
+   expect(document.body.textContent).toContain('无法读取登录会话')
+   expect(button('撤销此会话').disabled).toBe(true)
+   const confirm=vi.spyOn(window,'confirm').mockReturnValue(false)
+   try{expect(guard?.()).toBe(false)}finally{confirm.mockRestore()}
+  }
+ }finally{await act(async()=>root.unmount());document.body.innerHTML=''}
+})
