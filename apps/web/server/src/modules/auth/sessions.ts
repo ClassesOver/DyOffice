@@ -119,6 +119,14 @@ export function createSessionService({ db, accounts, deploymentId, idleMs = 8 * 
       const result = await connection.query<{ occurred_at: Date; outcome: 'success' | 'failure' | 'throttled' }>('SELECT * FROM read_login_history($1,$2,$3)', [deploymentId, tokenHash(token), idleMs])
       return result.rows.map(row => ({ occurredAt: row.occurred_at.toISOString(), outcome: row.outcome }))
     }),
+    loginHistoryPage: (token: string, { limit = 20, after }: {limit?: number; after?: string} = {}) => withSession(token, [], async connection => {
+      if (!Number.isInteger(limit) || limit < 1 || limit > 20 || (after !== undefined && !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(after))) throw authError(400)
+      try {
+        const result = await connection.query<{event_id: string; occurred_at: Date; outcome: 'success'|'failure'|'throttled'}>('SELECT * FROM read_login_history_page($1,$2,$3,$4,$5)', [deploymentId, tokenHash(token), idleMs, limit, after ?? null])
+        const rows = result.rows.slice(0, limit)
+        return {events: rows.map(row => ({occurredAt: row.occurred_at.toISOString(), outcome: row.outcome})), nextCursor: result.rows.length > limit ? rows.at(-1)!.event_id : null}
+      } catch (error) { if ((error as {code?: string}).code === '22023') throw authError(400); throw error }
+    }),
     list: (token: string) => withSession(token, [], async (connection, principal, _session, now) => {
       const result = await connection.query('SELECT id,created_at,last_seen_at,expires_at FROM sessions WHERE deployment_id=$1 AND user_id=$2 AND auth_version=$3 AND revoked_at IS NULL AND expires_at>$4 AND last_seen_at>$4-$5*interval \'1 millisecond\' ORDER BY created_at,id', [deploymentId, principal.userId, principal.authVersion, now, idleMs])
       return result.rows.map(row => ({ id: row.id, createdAt: row.created_at.toISOString(), lastSeenAt: row.last_seen_at.toISOString(), expiresAt: row.expires_at.toISOString(), current: row.id === principal.sessionId }))
