@@ -1,3 +1,4 @@
+import {createAnalysisDocumentTarget} from '../../../../packages/browser-host/src/analysis-document-target.ts'
 import { useEffect, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import { App } from '../../../docs/src/renderer/App'
@@ -44,6 +45,10 @@ export async function mountDocsEditor(host: SessionFileHost,element: HTMLElement
   else document.documentElement.dataset.theme = prefs.theme
   setAuthorName(prefs.authorName ?? '')
   const bridge = createDocsBridge(host,fileId,prefs,() => changed())
+  const analysisTarget=createAnalysisDocumentTarget({fileId,format:'docx',state:()=>host.getState(fileId),verifyAuthority:async()=>{await host.renewLease(fileId)},
+    editor:()=>editorHandle?.analysis??null,receipt:()=>bridge.getReceipt(),
+    save:check=>bridge.guardedSave(check,async()=>!!editorHandle&&await editorHandle.save()&&!editorHandle.isDirty()&&bridge.getState().nativeSaveOutcome==='accepted')})
+  const unregisterAnalysis=assistant?.documents.register(analysisTarget)
   const assistantAvailable = Boolean(assistant?.available && prefs.showAssistant !== false)
   const panelPrefs = {...await bridge.api.getAiPanelPrefs(), showAiSidebar: assistantAvailable}
   window.desktop = {...bridge.api,...assistant?.api, getAiPanelPrefs: async () => panelPrefs} as unknown as DesktopApi
@@ -82,6 +87,6 @@ export async function mountDocsEditor(host: SessionFileHost,element: HTMLElement
     getSelection: () => editorHandle?.getSelection() ?? null,
     serialize: () => editorHandle ? editorHandle.serialize() : Promise.reject(new Error(text.opening)),
     save: () => editorHandle ? editorHandle.save() : Promise.resolve(false),
-    dispose() { window.removeEventListener('beforeunload',beforeUnload); assistant?.dispose();realtime.dispose(); stop(); unsubscribe(); root.unmount(); bridge.dispose() },
+    dispose() { unregisterAnalysis?.();analysisTarget.dispose(); window.removeEventListener('beforeunload',beforeUnload); assistant?.dispose();realtime.dispose(); stop(); unsubscribe(); root.unmount(); bridge.dispose() },
   }
 }

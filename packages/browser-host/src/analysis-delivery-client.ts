@@ -1,6 +1,6 @@
 import type {SettingsRequest} from './preferences.ts'
 
-export interface AnalysisInput {resultId:string;sourceId:string;sourceVersion:number;queryHash:string;sha256:string;rowCount:number;truncated:boolean}
+export interface AnalysisInput {resultId:string;sourceId:string;sourceVersion:number;queryHash:string;sha256:string;rowCount:number;truncated:boolean;timezone?:string;schema?:{name:string;type:'string'|'number'|'boolean';unit?:string}[]}
 export interface AnalysisFile {artifactId:string;taskId:string;name:string;mediaType:string;role:string;sizeBytes:number;sha256:string;inputResultIds:string[]}
 export interface AnalysisReceipt {taskId:string;claimId:string;connectionEpoch:number;commandId:string;summary:string;artifacts:AnalysisFile[];inputs:AnalysisInput[];runtimeManifestSha256:string;limitations:string[];createdAt:string}
 export interface AnalysisAgent {id:string;name:string;origin:'builtin'|'external'}
@@ -16,8 +16,19 @@ function list<T>(v:unknown,max:number,read:(item:unknown)=>T):T[]{if(!Array.isAr
 function receipt(value:unknown,taskId:string,commandId:string):AnalysisReceipt {
  if(!record(value)||uuid(value.taskId)!==taskId||uuid(value.commandId)!==commandId)throw unavailable()
  const inputs=list(value.inputs,32,item=>{
-  if(!record(item)||Object.keys(item).some(k=>!['resultId','sourceId','sourceVersion','queryHash','sha256','rowCount','truncated'].includes(k))||typeof item.truncated!=='boolean')throw unavailable()
-  return {resultId:uuid(item.resultId),sourceId:text(item.sourceId,200),sourceVersion:integer(item.sourceVersion,Number.MAX_SAFE_INTEGER,1),queryHash:hash(item.queryHash),sha256:hash(item.sha256),rowCount:integer(item.rowCount,10000),truncated:item.truncated}
+  if(!record(item)||Object.keys(item).some(k=>!['resultId','sourceId','sourceVersion','queryHash','sha256','rowCount','truncated','timezone','schema'].includes(k))||typeof item.truncated!=='boolean')throw unavailable()
+  let metadata:Pick<AnalysisInput,'timezone'|'schema'>={}
+  if(item.timezone!==undefined||item.schema!==undefined){
+   const timezone=text(item.timezone,400);try{new Intl.DateTimeFormat('en',{timeZone:timezone})}catch{throw unavailable()}
+   const schema=list(item.schema,256,column=>{
+    if(!record(column)||Object.keys(column).some(k=>!['name','type','unit'].includes(k))||!['string','number','boolean'].includes(column.type as string))throw unavailable()
+    const name=text(column.name,800);if(!name)throw unavailable()
+    return {name,type:column.type as 'string'|'number'|'boolean',...(column.unit===undefined?{}:{unit:text(column.unit,400)})}
+   })
+   if(!schema.length||new Set(schema.map(column=>column.name)).size!==schema.length)throw unavailable()
+   metadata={timezone,schema}
+  }
+  return {...metadata,resultId:uuid(item.resultId),sourceId:text(item.sourceId,200),sourceVersion:integer(item.sourceVersion,Number.MAX_SAFE_INTEGER,1),queryHash:hash(item.queryHash),sha256:hash(item.sha256),rowCount:integer(item.rowCount,10000),truncated:item.truncated}
  })
  const inputIds=new Set(inputs.map(x=>x.resultId));if(inputIds.size!==inputs.length)throw unavailable()
  const artifacts=list(value.artifacts,12,item=>{
@@ -74,6 +85,17 @@ export function createAnalysisDeliveryClient(options:{request:SettingsRequest;cs
    }catch{if(current(stamp))fail()}
    finally{refreshing=false}
   },
+  async authorize(commandId:string,artifactId:string) {
+   const stamp=generation
+   try {
+    check(stamp);uuid(commandId);uuid(artifactId)
+    const displayed=items.get(commandId);if(!displayed)throw unavailable()
+    const fresh=await load(displayed.receipt.taskId,commandId,stamp);check(stamp)
+    if(JSON.stringify(fresh)!==JSON.stringify(displayed.receipt))throw unavailable()
+    const artifact=fresh.artifacts.find(file=>file.artifactId===artifactId);if(!artifact)throw unavailable()
+    return {artifact:structuredClone(artifact),receipt:structuredClone(fresh),current:()=>current(stamp)}
+   }catch{if(current(stamp))fail();throw unavailable()}
+  },
   async download(commandId:string,artifactId:string) {
    const stamp=generation,controller=new AbortController();downloads.add(controller)
    try {
@@ -97,7 +119,7 @@ export function createAnalysisDeliveryClient(options:{request:SettingsRequest;cs
     if([...digest].map(v=>v.toString(16).padStart(2,'0')).join('')!==artifact.sha256)throw unavailable()
     const final=await load(fresh.taskId,commandId,stamp);check(stamp)
     if(JSON.stringify(final)!==JSON.stringify(fresh))throw unavailable()
-    return {name:artifact.name,bytes,current:()=>current(stamp)}
+    return {name:artifact.name,artifact:structuredClone(artifact),receipt:structuredClone(final),bytes,current:()=>current(stamp)}
    }catch{if(current(stamp))fail();throw unavailable()}
    finally{controller.abort();downloads.delete(controller)}
   },

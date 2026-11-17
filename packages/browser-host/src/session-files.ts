@@ -3,7 +3,7 @@ import { isRevisionRef, type OpenFileResult, type RevisionRef, type SaveInput } 
 import { hostError, HostError } from '../../web-contracts/src/errors.ts'
 
 type Lease = { leaseEpoch: number; editorId: string; expiresAt: string }
-type Pending = { touchedEntries?: string[]; input: SaveInput; sha256: string; size: number }
+type Pending = { authorized?:()=>boolean; touchedEntries?: string[]; input: SaveInput; sha256: string; size: number }
 type Context = { preparing: boolean; leaseOperation: number; exclusiveLease: number | null; revision: RevisionRef; name: string; lease: Lease | null; pending: Pending | null; status: 'idle' | 'saving' | 'unknown' | 'conflict' | 'unauthorized'; staged: Map<string, { base: string; epoch: number; sha256: string; size: number }> }
 const uuid = (value: string) => { if (typeof value !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value)) throw hostError('INVALID_REVISION','identifier'); return value.toLowerCase() }
 const digest = async (bytes: Uint8Array) => Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',bytes.slice().buffer as ArrayBuffer)),value => value.toString(16).padStart(2,'0')).join('')
@@ -76,11 +76,13 @@ export function createSessionFileHost({ fetchImpl = fetch, editorId = crypto.ran
     }
     return csrf!
   }
-  async function mutation(path: string, method: string, body?: unknown, binary = false, keepalive = false) {
+  async function mutation(path: string, method: string, body?: unknown, binary = false, keepalive = false, authorized:()=>boolean = ()=>true) {
     for (let attempt = 0; attempt < 2; attempt++) {
       // Cached proof permits a pagehide keepalive request to start synchronously
       // before disposal clears private browser state.
       const proof = csrf ?? await csrfToken()
+      let permitted=false;try{permitted=authorized()}catch{}
+      if(!permitted)throw Object.assign(hostError('UNAVAILABLE','save authorization changed'),{saveNotSubmitted:true})
       const reply = await request(path,{ method,keepalive,headers: { 'x-csrf-token': proof,...(body === undefined ? {} : { 'content-type': binary ? 'application/octet-stream' : 'application/json' }) },...(body === undefined ? {} : { body: binary ? body as BodyInit : JSON.stringify(body) }) })
       // A pagehide release may already be sent before disposal. Do not abort or
       // replay it, and do not treat its late response as live UI authority.
@@ -149,17 +151,30 @@ export function createSessionFileHost({ fetchImpl = fetch, editorId = crypto.ran
     ctx.revision = ref; ctx.pending = null; ctx.status = 'idle'; ctx.staged.delete(pending.input.uploadId); remember(ref); emit()
     return ref
   }
-  async function commit(fileId: string, ctx: Context, pending: Pending) {
+  async function commit(fileId: string, ctx: Context, pending: Pending, authorized:()=>boolean = ()=>true) {
+    const recovering = ctx.pending === pending
+    pending.authorized ??= authorized
+    const permitted=()=>pending.authorized!()&&authorized()
     ctx.pending = pending; ctx.status = 'saving'; emit()
-    try { return accept(fileId,ctx,pending,await mutation(`/api/v1/files/${fileId}/commits`,'POST',pending.input)) }
+    try { return accept(fileId,ctx,pending,await mutation(`/api/v1/files/${fileId}/commits`,'POST',pending.input,false,false,permitted)) }
     catch (error) {
       const status = (error as { status?: number }).status
+      if((error as {saveNotSubmitted?:boolean}).saveNotSubmitted){
+        // A first attempt stopped before fetch is known-not-sent. A blocked
+        // retry cannot erase uncertainty about an earlier submitted request.
+        ctx.pending=recovering?pending:null;ctx.status=recovering?'unknown':'idle';emit();throw error
+      }
       if (status && status >= 400 && status < 500 && status !== 408) {
         ctx.pending = null; ctx.status = (error as HostError).code === 'UNAUTHORIZED' ? 'unauthorized' : 'conflict'
         if (ctx.status === 'unauthorized' || (error as HostError).code === 'CONFLICT') revokeLease(fileId,ctx)
       } else ctx.status = 'unknown'
       emit(); throw error
     }
+  }
+  function commitStaged(input:SaveInput,authorized:()=>boolean = ()=>true){
+    const id=uuid(input.fileId),ctx=context(id),staged=ctx.staged.get(input.uploadId)
+    if(!staged||staged.base!==input.baseRevision||staged.epoch!==input.leaseEpoch||ctx.pending||ctx.preparing)throw hostError('INVALID_REVISION','snapshot')
+    return commit(id,ctx,{input:Object.freeze({...input}),sha256:staged.sha256,size:staged.size},authorized)
   }
   const host = createBrowserHost({
     getCapabilities: () => get('/api/v1/capabilities'),
@@ -213,9 +228,7 @@ export function createSessionFileHost({ fetchImpl = fetch, editorId = crypto.ran
       } catch (error) { if ((error as HostError).code === 'CONFLICT' || (error as HostError).code === 'UNAUTHORIZED') { revokeLease(id,ctx); ctx.status = (error as HostError).code === 'UNAUTHORIZED' ? 'unauthorized' : 'conflict'; emit() }; throw error }
     },
     async commitSave(input) {
-      const id = uuid(input.fileId), ctx = context(id), staged = ctx.staged.get(input.uploadId)
-      if (!staged || staged.base !== input.baseRevision || staged.epoch !== input.leaseEpoch || ctx.pending || ctx.preparing) throw hostError('INVALID_REVISION','snapshot')
-      return commit(id,ctx,{ input: Object.freeze({ ...input }),sha256: staged.sha256,size: staged.size })
+      return commitStaged(input)
     },
     getPreferences: () => get('/api/preferences'),
   })
@@ -268,14 +281,15 @@ export function createSessionFileHost({ fetchImpl = fetch, editorId = crypto.ran
       if(typeof result.name==='string' && result.name.length<=255)ctx.name=result.name
       emit();return {...result.file}
     },
-    async reconcile(fileId: string) { const id = uuid(fileId), ctx = context(id); if (!ctx.pending) return { ...ctx.revision }; return commit(id,ctx,ctx.pending) },
-    async reconcileSheets(fileId: string) {
+    async reconcile(fileId: string, authorized:()=>boolean = ()=>true) { const id = uuid(fileId), ctx = context(id); if (!ctx.pending) return { ...ctx.revision }; return commit(id,ctx,ctx.pending,authorized) },
+    async reconcileSheets(fileId: string, authorized:()=>boolean = ()=>true) {
       const id=uuid(fileId),ctx=context(id),pending=ctx.pending
       if (!pending?.touchedEntries) throw hostError('INVALID_REVISION','sheet receipt')
-      const saved=await commit(id,ctx,pending)
+      const saved=await commit(id,ctx,pending,authorized)
       return {...saved,touchedEntries:[...pending.touchedEntries]}
     },
-    async saveSheets(fileId: string, edits: unknown) {
+    async saveSheets(fileId: string, edits: unknown, authorized:()=>boolean = ()=>true) {
+      if(!authorized())throw hostError('UNAVAILABLE','save authorization changed')
       const id = uuid(fileId), ctx = liveContext(id), lease = ctx.lease, base = ctx.revision.revision
       // An uncertain receipt must be reconciled before replaying edits: sheet
       // insertion and other structural commands are not idempotent operations.
@@ -290,8 +304,9 @@ export function createSessionFileHost({ fetchImpl = fetch, editorId = crypto.ran
         if (draft.baseRevision !== base || draft.leaseEpoch !== lease.leaseEpoch || typeof draft.sha256 !== 'string' || !/^[a-f0-9]{64}$/.test(draft.sha256) || !Number.isSafeInteger(draft.size) || draft.size < 1 || draft.size > 32 * 1024 * 1024) throw hostError('INVALID_RESPONSE','prepared workbook')
         if (context(id) !== ctx || ctx.revision.revision !== base || ctx.lease?.leaseEpoch !== lease.leaseEpoch) throw hostError('CONFLICT','changed save authority')
         if (!Array.isArray(draft.touchedEntries) || draft.touchedEntries.length > 256 || draft.touchedEntries.some((name: unknown) => typeof name !== 'string' || name.length > 1024)) throw hostError('INVALID_RESPONSE','changed parts')
+        if(!authorized())throw hostError('UNAVAILABLE','save authorization changed')
         committing = true
-        const saved = await commit(id,ctx,{ touchedEntries: [...draft.touchedEntries], input: Object.freeze({fileId: id,uploadId,baseRevision: base,leaseEpoch: lease.leaseEpoch,idempotencyKey: crypto.randomUUID()}),sha256: draft.sha256,size: draft.size })
+        const saved = await commit(id,ctx,{ touchedEntries: [...draft.touchedEntries], input: Object.freeze({fileId: id,uploadId,baseRevision: base,leaseEpoch: lease.leaseEpoch,idempotencyKey: crypto.randomUUID()}),sha256: draft.sha256,size: draft.size },authorized)
         return {...saved,touchedEntries: draft.touchedEntries as string[]}
       } catch (error) {
         if (!committing) {
@@ -340,11 +355,13 @@ export function createSessionFileHost({ fetchImpl = fetch, editorId = crypto.ran
       const saved = await commit(id,ctx,pending)
       return {...saved,touchedEntries:[...(pending.touchedEntries ?? [])]}
     },
-    async save(fileId: string, bytes: Uint8Array) {
+    async save(fileId: string, bytes: Uint8Array, authorized:()=>boolean = ()=>true) {
+      if(!authorized())throw hostError('UNAVAILABLE','save authorization changed')
       const id = uuid(fileId), ctx = context(id)
-      if (ctx.pending) { const prior = ctx.pending; const recovered = await commit(id,ctx,prior); if (await digest(bytes) === prior.sha256) return recovered }
+      if (ctx.pending) { const prior = ctx.pending; const recovered = await commit(id,ctx,prior,authorized); if (await digest(bytes) === prior.sha256) return recovered }
       const { uploadId } = await host.stageSave(bytes,id), staged = ctx.staged.get(uploadId)!
-      return host.commitSave({ fileId: id,uploadId,baseRevision: staged.base,leaseEpoch: staged.epoch,idempotencyKey: crypto.randomUUID() })
+      if(!authorized())throw hostError('UNAVAILABLE','save authorization changed')
+      return commitStaged({fileId:id,uploadId,baseRevision:staged.base,leaseEpoch:staged.epoch,idempotencyKey:crypto.randomUUID()},authorized)
     },
     startRenewal(fileId: string) {
       const id = uuid(fileId)

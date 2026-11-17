@@ -123,6 +123,7 @@ export type PendingPdfExport = {
 
 /** The App state the file actions need; built fresh per call. */
 export interface DocsEditorHandle {
+  analysis?: import('../../../../packages/web-contracts/src/analysis-document').NativeAnalysisEditor
   getSelection(): { from: number; to: number; text: string } | null
   serialize(): Promise<Uint8Array | null>
   save(): Promise<boolean>

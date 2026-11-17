@@ -8,6 +8,13 @@ import { messages } from './messages.ts'
 export function createDocsBridge(host: SessionFileHost, fileId: string, prefs: Awaited<ReturnType<SessionFileHost['getPreferences']>>, onChange: () => void) {
   const locale = prefs.language === 'en' ? 'en' : 'zh', text = messages[locale], state = host.getState(fileId)
   const alias = `/files/${fileId}/${state.name}`, guard = createSaveGenerationGuard(), urls = new Set<string>()
+  let saveFence:(()=>boolean)|null=null
+  async function guardedSave(check:()=>boolean,action:()=>Promise<boolean>){
+    if(saveFence||!check())return false
+    saveFence=check
+    try{return await action()}finally{saveFence=null}
+  }
+  let committed: import('../../../../packages/web-contracts/src/api').RevisionRef | null = null
   let consumed = false, ticket: SaveTicket | null = null
   let nativeSaveOutcome: 'none' | 'pending' | 'accepted' | 'incomplete' = 'none'
   let nativeSaveReasons: readonly string[] = []
@@ -19,7 +26,7 @@ export function createDocsBridge(host: SessionFileHost, fileId: string, prefs: A
     async beforeSave() {
       nativeSaveOutcome = 'pending'; nativeSaveReasons = []
       if (guard.getState().status === 'unknown') {
-        await host.reconcile(fileId)
+        await host.reconcile(fileId,saveFence??(()=>true))
         if (ticket) guard.settleSave(ticket,'committed')
         ticket = null
       }
@@ -67,9 +74,9 @@ export function createDocsBridge(host: SessionFileHost, fileId: string, prefs: A
       return { path: alias,name: state.name,dataUrl,hash: ref.sha256 }
     },
     async saveDocx(path: string, data: ArrayBuffer) {
-      if (path !== alias) return { ok: false,error: text.saveFailed }
+      if (path !== alias || (saveFence && !saveFence())) return { ok: false,error: text.saveFailed }
       try {
-        await host.save(fileId,new Uint8Array(data))
+        committed = await host.save(fileId,new Uint8Array(data),saveFence??(()=>true))
         if (ticket) guard.settleSave(ticket,'committed')
         ticket = null; onChange()
         return { ok: true }
@@ -88,5 +95,5 @@ export function createDocsBridge(host: SessionFileHost, fileId: string, prefs: A
     pickImage: unavailable,fetchImage: unavailable,saveImageAs: unavailable,
     openAiModelSettings: unavailable,openSkillsSettings: unavailable,
   } satisfies Partial<DesktopApi>
-  return { api,lifecycle,getState: () => ({...guard.getState(), nativeSaveOutcome, nativeSaveReasons}),dispose() { for (const url of urls) URL.revokeObjectURL(url); urls.clear() } }
+  return { api,lifecycle,guardedSave,getReceipt:()=>committed,getState: () => ({...guard.getState(), nativeSaveOutcome, nativeSaveReasons}),dispose() { for (const url of urls) URL.revokeObjectURL(url); urls.clear() } }
 }

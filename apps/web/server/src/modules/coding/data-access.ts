@@ -199,13 +199,17 @@ export function createHarnessDataAccess(options:{
           if(!options.artifacts)throw unavailable()
           const input=object(args,['commandId','summary','artifactIds','inputs','runtimeManifestSha256','limitations'])
           if(!Array.isArray(input.inputs)||input.inputs.length>32)throw unavailable(400)
+          const verifiedInputs:unknown[]=[]
           for(const raw of input.inputs) {
             const ref=object(raw,['resultId','sha256','sourceId','sourceVersion','queryHash','rowCount','truncated']),id=resultId(entry,ref.resultId)
             const page=await options.results.read(entry.token,{resultId:id,limit:1})
             current(entry)
             for(const key of ['resultId','sha256','sourceId','sourceVersion','queryHash','rowCount','truncated'] as const)if(ref[key]!==page.artifact[key])throw unavailable()
+            // These fields come only from the authorized frozen snapshot, never
+            // from the harness submission, live source metadata or preview rows.
+            verifiedInputs.push({...ref,schema:page.schema.map(column=>({name:column.name,type:column.type,...(column.unit===undefined?{}:{unit:column.unit})})),timezone:page.timezone})
           }
-          const receipt=await options.artifacts.commit(entry.token,{...binding(entry),commandId:input.commandId as string,summary:input.summary as string,artifactIds:input.artifactIds as string[],inputs:input.inputs,runtimeManifestSha256:input.runtimeManifestSha256 as string,limitations:input.limitations as string[]})
+          const receipt=await options.artifacts.commit(entry.token,{...binding(entry),commandId:input.commandId as string,summary:input.summary as string,artifactIds:input.artifactIds as string[],inputs:verifiedInputs,runtimeManifestSha256:input.runtimeManifestSha256 as string,limitations:input.limitations as string[]})
           await validate(entry)
           entry.delivery=structuredClone(receipt)
           return receipt

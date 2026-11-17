@@ -20,11 +20,11 @@ function fixture(t,artifacts) {
     if(input.name==='sources.describe')return {sourceId:'sales',schema:[{name:'revenue'}]}
     if(input.name==='sources.query') {
       const id=randomUUID(),entry={token,artifact:artifact(id,'alice')};records.set(id,entry)
-      return {artifact:entry.artifact,schema:[{name:'revenue'}],timezone:'UTC',preview:[{revenue:42}],rows:[{revenue:42}],totalRows:1,sourceTruncated:false,sha256:entry.artifact.sha256,nextOffset:null,notice:'Frozen'}
+      return {artifact:entry.artifact,schema:[{name:'revenue',type:'number',unit:'CNY'}],timezone:'Asia/Shanghai',preview:[{revenue:42}],rows:[{revenue:42}],totalRows:1,sourceTruncated:false,sha256:entry.artifact.sha256,nextOffset:null,notice:'Frozen'}
     }
     throw Error('unsupported')
   }}
-  const results={async read(token,{resultId:id}){calls.push(['read',token,id]);const r=records.get(id);if(!r||r.token!==token)throw Error('foreign result');return {artifact:r.artifact,schema:[{name:'revenue'}],timezone:'UTC',rows:[{revenue:42}],offset:0,nextOffset:null,totalRows:1,sourceTruncated:false,sha256:r.artifact.sha256}},async download(token,id){calls.push(['download',token,id]);const r=records.get(id);if(!r||r.token!==token)throw Error('foreign result');return {name:'result.json',bytes:Buffer.from('{"revenue":42}'),sha256:r.artifact.sha256}}}
+  const results={async read(token,{resultId:id}){calls.push(['read',token,id]);const r=records.get(id);if(!r||r.token!==token)throw Error('foreign result');return {artifact:r.artifact,schema:[{name:'revenue',type:'number',unit:'CNY'}],timezone:'Asia/Shanghai',rows:[{revenue:42}],offset:0,nextOffset:null,totalRows:1,sourceTruncated:false,sha256:r.artifact.sha256}},async download(token,id){calls.push(['download',token,id]);const r=records.get(id);if(!r||r.token!==token)throw Error('foreign result');return {name:'result.json',bytes:Buffer.from('{"revenue":42}'),sha256:r.artifact.sha256}}}
   const access=createHarnessDataAccess({sessions,tools,results,...(artifacts?{artifacts}:{})});t.after(()=>access.dispose())
   const issue=(inputs={sourceIds:['sales'],resultIds:[]},extras={})=>access.issue({token:alice,agentId:'codex',inputs,signal:new AbortController().signal,...extras})
   return {access,alice,bob,resultId,foreignId,records,calls,revoked,identities,sessions,tools,results,issue}
@@ -162,7 +162,15 @@ test('artifact operations privately bind owner and claim and enforce scoped, ver
   const commit={commandId:randomUUID(),summary:'Done',artifactIds:[staged.artifactId],inputs:[ref],runtimeManifestSha256:'c'.repeat(64),limitations:[]}
   await assert.rejects(f.access.execute(g.taskId,g.credential,'artifacts.commit',{...commit,inputs:[{...ref,sha256:'d'.repeat(64)}]}))
   await assert.rejects(f.access.execute(g.taskId,g.credential,'artifacts.commit',{...commit,inputs:[{...ref,resultId:f.foreignId}]}))
+  for(const spoof of [{timezone:'UTC'},{schema:[{name:'fake',type:'string'}]},{rows:[{secret:'hidden'}]}])await assert.rejects(f.access.execute(g.taskId,g.credential,'artifacts.commit',{...commit,inputs:[{...ref,...spoof}]}))
+  const readSnapshot=f.results.read
+  f.results.read=async(...args)=>{const page=await readSnapshot(...args);return {...page,schema:page.schema.map(column=>({...column,credentials:'do-not-copy'})),query:'do-not-copy'}}
   const committed=await f.access.execute(g.taskId,g.credential,'artifacts.commit',commit)
+  assert.deepEqual(committed.inputs,[{...ref,schema:[{name:'revenue',type:'number',unit:'CNY'}],timezone:'Asia/Shanghai'}])
+  assert.equal(calls[1][2].inputs[0].timezone,'Asia/Shanghai')
+  assert.deepEqual(calls[1][2].inputs[0].schema,[{name:'revenue',type:'number',unit:'CNY'}])
+  assert.equal('rows' in calls[1][2].inputs[0],false)
+  assert.doesNotMatch(JSON.stringify(calls[1][2].inputs),/credentials|do-not-copy|\"query\":/)
   assert.equal(calls.length,2);assert.equal(calls[1][2].taskId,g.taskId);assert.equal(calls[1][2].claimId,g.claimId)
   committed.summary='Forged by caller'
   const delivery=await f.access.delivery(g.taskId,g.credential)
@@ -231,4 +239,22 @@ test('receipt recovery rechecks live claim after storage read',async t=>{
  const g=await f.issue({sourceIds:[],resultIds:[]},{authorize:async()=>{if(!active)throw Error('revoked')}}),commandId=randomUUID()
  const pending=f.access.execute(g.taskId,g.credential,'artifacts.get_receipt',{commandId})
  await ready;active=false;release();await assert.rejects(pending)
+})
+
+test('expired frozen inputs never requery; a separate source query still needs an explicit source-scoped current grant',async t=>{
+ const f=fixture(t),onlyResult=await f.issue({sourceIds:[],resultIds:[f.resultId]})
+ f.results.read=async()=>{throw Object.assign(Error('expired'),{statusCode:410})}
+ f.results.download=async()=>{throw Object.assign(Error('expired'),{statusCode:410})}
+ f.calls.length=0
+ await assert.rejects(f.access.execute(onlyResult.taskId,onlyResult.credential,'results.get_manifest',{resultId:f.resultId}))
+ await assert.rejects(f.access.download(onlyResult.taskId,onlyResult.credential,f.resultId))
+ await assert.rejects(f.access.execute(onlyResult.taskId,onlyResult.credential,'sources.query',{sourceId:'sales',sql:'SELECT 1'}))
+ assert.equal(f.calls.some(call=>call[0]==='tool'),false,'failure must not query or expand a result-only grant')
+ const source=await f.issue({sourceIds:['sales'],resultIds:[]})
+ const outcome=await f.access.execute(source.taskId,source.credential,'sources.query',{sourceId:'sales',sourceVersion:1,sql:'SELECT 1'})
+ assert.notEqual(outcome.artifact.resultId,f.resultId)
+ assert.equal(f.calls.filter(call=>call[0]==='tool'&&call[2].name==='sources.query').length,1)
+ f.revoked.add(f.alice)
+ await assert.rejects(f.access.execute(source.taskId,source.credential,'sources.query',{sourceId:'sales',sql:'SELECT 1'}))
+ assert.equal(f.calls.filter(call=>call[0]==='tool'&&call[2].name==='sources.query').length,1,'revoked source query never reaches connector')
 })

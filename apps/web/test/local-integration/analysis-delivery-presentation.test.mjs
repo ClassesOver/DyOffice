@@ -27,13 +27,14 @@ test('trusted presentation and attachment download fence real session changes, o
  const sources=createSourceService({transactions:f.transactions,credentialKeys:'test:'+randomBytes(32).toString('base64')}),results=createWorkspaceSourceResults({transactions:f.transactions}),tools=createWorkspaceSourceTools({sources,results})
  await sources.create(f.alice.token,{sourceId:'metrics',name:'Metrics',kind:'http',config:{timezone:'UTC'},secret:'https://fixture.invalid/never-contacted'})
  await sources.publish(f.alice.token,'metrics',{expectedVersion:1})
- const frozen=await results.capture(f.alice.token,createQuerySnapshot({sourceId:'metrics',sourceVersion:1,timezone:'UTC',schema:[{name:'n',type:'number'}],rows:[{n:1}],sourceTruncated:true}),hash('query'))
+ const frozen=await results.capture(f.alice.token,createQuerySnapshot({sourceId:'metrics',sourceVersion:1,timezone:'Asia/Shanghai',schema:[{name:'n',type:'number',unit:'CNY'}],rows:[{n:1}],sourceTruncated:true}),hash('query'))
  const access=createHarnessDataAccess({tools,results,sessions:f.sessions,artifacts});t.after(()=>access.dispose())
  const grant=await access.issue({token:f.alice.token,agentId:'fixture',inputs:{sourceIds:[],resultIds:[frozen.resultId]},signal:new AbortController().signal})
  const execute=(op,args)=>access.execute(grant.taskId,grant.credential,op,args),bytes=Buffer.from('<svg onload="alert(1)">untrusted</svg>')
  const file=await execute('artifacts.stage',{name:'report.svg',mediaType:'image/svg+xml',role:'report',inputResultIds:[frozen.resultId],sha256:hash(bytes),bytesBase64:bytes.toString('base64')})
  const input=Object.fromEntries(['resultId','sha256','sourceId','sourceVersion','queryHash','rowCount','truncated'].map(k=>[k,frozen[k]]))
  const receipt=await execute('artifacts.commit',{commandId:randomUUID(),summary:'Untrusted conclusion',artifactIds:[file.artifactId],inputs:[input],runtimeManifestSha256:hash('runtime fixture'),limitations:['Truncated fixture']})
+ assert.equal(receipt.inputs[0].timezone,'Asia/Shanghai');assert.deepEqual(receipt.inputs[0].schema,[{name:'n',type:'number',unit:'CNY'}])
  const app=Fastify();t.after(()=>app.close());const origin='https://office.example',csrf=createCsrfService({db:f.db,deploymentId:f.deploymentId,origin,key:f.csrfKey})
  registerAnalysisDeliveryRoutes(app,artifacts,csrf)
  app.get('/api/v1/auth/session-proof',async req=>{csrf.originCheck(req,false);const token=cookies(req).session;await f.sessions.authenticate(token);return {csrfToken:csrf.sessionToken(token)}})
@@ -42,6 +43,7 @@ test('trusted presentation and attachment download fence real session changes, o
  const shell=createLocalShellClient(send),bound=await shell.bindSession(),client=createAnalysisDeliveryClient({request:bound.request,csrfToken:bound.proof,fetchImpl:send});t.after(()=>{client.dispose();shell.invalidateSession()})
  const hint={taskId:receipt.taskId,commandId:receipt.commandId,summary:'adapter lies'},agent={id:'fixture',name:'External fixture',origin:'external'}
  await client.observe(hint,agent);assert.equal(client.snapshot()[0].receipt.summary,'Untrusted conclusion');assert.equal(client.snapshot()[0].receipt.inputs[0].truncated,true)
+ assert.equal(client.snapshot()[0].receipt.inputs[0].timezone,'Asia/Shanghai');assert.equal(client.snapshot()[0].receipt.inputs[0].schema[0].unit,'CNY')
  const downloaded=await client.download(receipt.commandId,file.artifactId);assert.deepEqual(Buffer.from(downloaded.bytes),bytes)
  token=f.bob.token;await assert.rejects(client.download(receipt.commandId,file.artifactId));assert.equal(client.snapshot().length,0)
  const sameOwner=await f.sessions.login('alice',password);token=sameOwner.token

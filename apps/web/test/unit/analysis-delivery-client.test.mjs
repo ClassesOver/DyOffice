@@ -54,3 +54,32 @@ test('presentation revalidation clears text when current owner authorization is 
  let allowed=true;const f=make({request:async()=>{if(!allowed)throw Error('revoked');return receipt()}})
  await f.client.observe(hint,agent);assert.equal(f.client.snapshot().length,1);allowed=false;await f.client.refresh();assert.deepEqual(f.client.snapshot(),[]);f.client.dispose()
 })
+
+test('explicit save authorization rechecks original receipt and returns detached artifact identity',async()=>{
+ const f=make();await f.client.observe(hint,agent)
+ const auth=await f.client.authorize(id(3),id(4));assert.equal(auth.current(),true)
+ assert.equal(auth.artifact.sha256,hash);auth.artifact.name='mutated';assert.equal(f.client.snapshot()[0].receipt.artifacts[0].name,'report.html')
+ assert.equal(f.calls.filter(x=>typeof x==='object').length,0)
+ f.client.dispose();assert.equal(auth.current(),false)
+})
+test('save authorization refuses revoked, substituted and late disposed receipts',async()=>{
+ for(const mode of ['revoked','substituted','disposed']) {
+  let n=0,release;const f=make({request:async()=>{if(++n===1)return receipt();if(mode==='revoked')throw Error('revoked');if(mode==='substituted'){const r=receipt();r.artifacts[0].sha256='f'.repeat(64);return r}return new Promise(r=>release=r)}})
+  await f.client.observe(hint,agent);const pending=f.client.authorize(id(3),id(4));if(mode==='disposed'){f.client.dispose();release(receipt())}
+  await assert.rejects(pending);assert.deepEqual(f.client.snapshot(),[])
+ }
+})
+test('download includes only the server-verified detached artifact metadata for content preparation',async()=>{
+ const f=make();await f.client.observe(hint,agent);const file=await f.client.download(id(3),id(4))
+ assert.equal(file.artifact.artifactId,id(4));assert.equal(file.artifact.role,'report');assert.equal(file.artifact.mediaType,'text/html');assert.equal(file.artifact.sha256,hash)
+ file.artifact.name='tampered';assert.equal(f.client.snapshot()[0].receipt.artifacts[0].name,'report.html');f.client.dispose()
+})
+test('receipt preserves server-projected frozen units/timezone but rejects partial or extra metadata',async()=>{
+ const f=make();Object.assign(f.value.inputs[0],{timezone:'Asia/Shanghai',schema:[{name:'revenue',type:'number',unit:'CNY'},{name:'label',type:'string'}]})
+ await f.client.observe(hint,agent);const file=await f.client.download(id(3),id(4))
+ assert.equal(file.receipt.inputs[0].timezone,'Asia/Shanghai');assert.equal(file.receipt.inputs[0].schema[0].unit,'CNY')
+ file.receipt.inputs[0].schema[0].unit='forged';assert.equal(f.client.snapshot()[0].receipt.inputs[0].schema[0].unit,'CNY');f.client.dispose()
+ for(const metadata of [{timezone:'UTC'},{timezone:'not-a-timezone',schema:[]},{timezone:'UTC',schema:[{name:'a',type:'number',secret:'no'}]},{timezone:'UTC',schema:[{name:'a',type:'number'},{name:'a',type:'string'}]}]){
+  const bad=make();Object.assign(bad.value.inputs[0],metadata);await bad.client.observe(hint,agent);assert.deepEqual(bad.client.snapshot(),[]);bad.client.dispose()
+ }
+})

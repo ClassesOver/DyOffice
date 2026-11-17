@@ -191,14 +191,16 @@ const PROGRESS_INTERVAL = 256 * 1024
  * extent count the rows and drop them; the conversion streams them.
  *
  * `onOffset` receives the character offset reached (for progress) and
- * `signal` aborts the scan.
+ * `signal` aborts the scan. Opt-in `strict` rejects malformed quotes, preserves
+ * trailing empty records and treats sep= lines as data (no dialect sniffing).
+ * Default import behavior is unchanged.
  */
 export function* csvRows(
   input: string,
   delimiter: string,
-  options?: { readonly onOffset?: (chars: number) => void; readonly signal?: AbortSignal },
+  options?: { readonly onOffset?: (chars: number) => void; readonly signal?: AbortSignal; readonly strict?: boolean },
 ): Generator<string[]> {
-  const stripped = splitSepDeclaration(input).text
+  const stripped = options?.strict ? input : splitSepDeclaration(input).text
   const text = stripped.startsWith('﻿') ? stripped.slice(1) : stripped
   // An abort that arrived before the work started must not be ignored: the
   // scan would otherwise run to the end for a file small enough never to
@@ -219,6 +221,8 @@ export function* csvRows(
     field = ''
   }
   let quoted = false
+  let afterQuote = false
+  let recordStarted = false
   let nextReport = PROGRESS_INTERVAL
   for (let index = 0; index < text.length; index += 1) {
     if (index >= nextReport) {
@@ -227,6 +231,8 @@ export function* csvRows(
       nextReport = index + PROGRESS_INTERVAL
     }
     const character = text[index]
+    if (options?.strict && afterQuote && character !== delimiter && character !== '\n' && character !== '\r') fail('characters after closing quote')
+    if (character !== '\r' && character !== '\n') recordStarted = true
     if (quoted) {
       if (character === '"') {
         if (text[index + 1] === '"') {
@@ -234,6 +240,7 @@ export function* csvRows(
           index += 1
         } else {
           quoted = false
+          afterQuote = true
         }
       } else if (character === '\r') {
         if (text[index + 1] === '\n') index += 1
@@ -247,6 +254,7 @@ export function* csvRows(
       quoted = true
     } else if (character === delimiter) {
       pushField()
+      afterQuote = false
     } else if (character === '\n' || character === '\r') {
       if (character === '\r' && text[index + 1] === '\n') index += 1
       pushField()
@@ -254,6 +262,9 @@ export function* csvRows(
       if (rows > MAX_CSV_ROWS) fail(`too many rows (cap ${MAX_CSV_ROWS})`)
       const finished = row
       row = []
+      afterQuote = false
+      recordStarted = false
+      if (options?.strict) {yield finished; continue}
       if (finished.every((cell) => cell === '')) {
         held.push(finished)
         continue
@@ -262,16 +273,18 @@ export function* csvRows(
       held = []
       yield finished
     } else {
+      if (options?.strict && character === '"') fail('quote inside unquoted field')
       field += character
     }
   }
-  if (field !== '' || row.length > 0) {
+  if (options?.strict && quoted) fail('unterminated quoted field')
+  if ((options?.strict && recordStarted) || field !== '' || row.length > 0) {
     pushField()
     rows += 1
     if (rows > MAX_CSV_ROWS) fail(`too many rows (cap ${MAX_CSV_ROWS})`)
     const finished = row
     // trailing empty rows are dropped: the held ones and this one
-    if (!finished.every((cell) => cell === '')) {
+    if (options?.strict || !finished.every((cell) => cell === '')) {
       for (const pending of held) yield pending
       yield finished
     }

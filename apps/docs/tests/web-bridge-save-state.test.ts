@@ -176,3 +176,75 @@ it('unlink-only layout changes are not serialization changes, but new header int
  expect(snapshot.changed(ctx)).toBe(true)
  expect(snapshot.changedFields(ctx)).toEqual(['hfLinks'])
 })
+
+
+it('explicit analysis insert uses native tool, keeps hostile text literal and remains unsaved', async () => {
+ const {editor,ctx,path}=await fixture(false)
+ const {docsAnalysisEditor}=await import('../src/renderer/analysis-insert')
+ let blocked=false,writes=0
+ window.desktop.saveDocx=async()=>{writes++;return {ok:true}}
+ const native=docsAnalysisEditor(editor,()=>ctx,()=>false,()=>{blocked=true})
+ const capture=native.captureAnalysis()
+ expect(await capture.apply({kind:'text',text:'<script>alert(1)</script>\n=HYPERLINK("https://example.invalid")'},()=>true)).toBe(true)
+ expect(blocked).toBe(true)
+ expect(writes).toBe(0)
+ expect(editor.getText()).toContain('<script>alert(1)</script>')
+ expect(editor.getHTML()).not.toContain('<script>')
+ expect((await JSZip.loadAsync(await readFile(path))).file('word/document.xml')).not.toBeNull()
+ expect(capture.matches()).toBe(false)
+})
+
+it('analysis capture refuses a later selection or revoked UI authority', async () => {
+ const {editor,ctx}=await fixture(false)
+ const {docsAnalysisEditor}=await import('../src/renderer/analysis-insert')
+ const native=docsAnalysisEditor(editor,()=>ctx,()=>false,()=>{})
+ const capture=native.captureAnalysis(),before=editor.state.doc
+ expect(await capture.apply({kind:'text',text:'denied'},()=>false)).toBe(false)
+ expect(editor.state.doc).toBe(before)
+ editor.commands.setTextSelection(3)
+ expect(await capture.apply({kind:'table',rows:[['=1+1','<img src=x>']]},()=>true)).toBe(false)
+ expect(editor.state.doc).toBe(before)
+})
+
+it('analysis insertion and explicit native save return distinct verified byte receipts', async () => {
+ const {editor,ctx,path}=await fixture(false)
+ const {docsAnalysisEditor}=await import('../src/renderer/analysis-insert')
+ const {createAnalysisDocumentTarget}=await import('../../../packages/browser-host/src/analysis-document-target')
+ let revision={fileId:'file',revision:'r1',sha256:'a'.repeat(64),size:1},writes=0
+ const host={getState:()=>({name:'a.docx',status:'idle',revision,lease:{leaseEpoch:1}}),save:async (_id:string,data:Uint8Array)=>{writes++;await writeFile(path,data);revision={...revision,revision:'r2',size:data.length,sha256:'b'.repeat(64)};return revision}}
+ const bridge=createDocsBridge(host as never,'file',{language:'en'} as never,()=>{})
+ ctx.doc!.filePath='/files/file/a.docx';ctx.hostLifecycle=bridge.lifecycle
+ window.desktop={saveDocx:bridge.api.saveDocx} as never
+ editor.on('update',()=>{ctx.dirtyRef.current=true;bridge.lifecycle.edited()})
+ const native=docsAnalysisEditor(editor,()=>ctx,()=>false,()=>{})
+ const target=createAnalysisDocumentTarget({fileId:'file',format:'docx',verifyAuthority:async()=>{},state:()=>host.getState(),editor:()=>native,receipt:()=>bridge.getReceipt(),save:async()=>await save(ctx,false,false)&&bridge.getState().nativeSaveOutcome==='accepted'})
+ const applied=await target.apply(target.capture(),{kind:'table',rows:[['=1+1','<script>literal</script>']]},{artifactId:'artifact',sha256:'c'.repeat(64)},()=>true)
+ expect(applied.status).toBe('applied_uncommitted');expect(writes).toBe(0)
+ const receipt=await target.save(applied.applicationId,()=>true)
+ expect(receipt.status).toBe('saved');expect(writes).toBe(1)
+ expect(receipt.status==='saved'&&receipt.receipt.revision).toBe('r2')
+ const zip=await JSZip.loadAsync(await readFile(path)),xml=await zip.file('word/document.xml')!.async('string')
+ expect(xml).toContain('=1+1');expect(xml).toContain('&lt;script&gt;literal&lt;/script&gt;')
+ expect(bridge.getState().dirty).toBe(false)
+})
+
+it('a queued explicit analysis save cannot write after a newer native edit',async()=>{
+ const {editor,ctx,path}=await fixture(false)
+ const {docsAnalysisEditor}=await import('../src/renderer/analysis-insert')
+ const {createAnalysisDocumentTarget}=await import('../../../packages/browser-host/src/analysis-document-target')
+ let writes=0,revision={fileId:'file',revision:'r1',sha256:'a'.repeat(64),size:1}
+ const host={getState:()=>({name:'a.docx',status:'idle',revision,lease:{leaseEpoch:1}}),save:async()=>{writes++;return {...revision,revision:'r2'}}}
+ const bridge=createDocsBridge(host as never,'file',{language:'en'} as never,()=>{})
+ ctx.doc!.filePath='/files/file/a.docx';ctx.hostLifecycle=bridge.lifecycle;window.desktop={saveDocx:bridge.api.saveDocx} as never
+ const native=docsAnalysisEditor(editor,()=>ctx,()=>false,()=>{})
+ const target=createAnalysisDocumentTarget({fileId:'file',format:'docx',state:()=>host.getState(),verifyAuthority:async()=>{},editor:()=>native,receipt:()=>bridge.getReceipt(),save:check=>bridge.guardedSave(check,async()=>{
+  await Promise.resolve();editor.commands.insertContent('Newer edit while queued')
+  return save(ctx,false,false)
+ })})
+ const applied=await target.apply(target.capture(),{kind:'text',text:'Analysis report'},{artifactId:'a',sha256:'c'.repeat(64)},()=>true)
+ expect((await target.save(applied.applicationId,()=>true)).status).toBe('not_confirmed')
+ expect(writes).toBe(0)
+ const xml=await (await JSZip.loadAsync(await readFile(path))).file('word/document.xml')!.async('string')
+ expect(xml).not.toContain('Analysis report')
+ expect(editor.getText()).toContain('Newer edit while queued')
+})

@@ -5,7 +5,7 @@ import { mutationAdmission, type MutationLease } from './mutation-admission'
  * records. Extracted from App.tsx so ribbon actions can run the same ops the
  * AI proposes; every function receives its App-scope context explicitly.
  */
-import { IUndoRedoService } from '@univerjs/core'
+import { IUndoRedoService, CellValueType } from '@univerjs/core'
 import type { CellBounds } from '@genoffice/xlsx-gateway/domain/chart-visual'
 import {
   columnIndex,
@@ -157,6 +157,8 @@ interface OpRun {
 }
 
 export interface ApplyPlanOptions {
+  /** Explicit analysis insertion only: suppress numeric/date/formula coercion. */
+  literalStrings?: boolean
   /** Runs after the async prechecks and right before the first mutation; a
    * non-null outcome aborts with that outcome untouched. */
   verifyBeforeApply?: () => ApplyOutcome | null
@@ -362,6 +364,11 @@ function planTargetSheets(plan: ChangePlan): Set<string> {
  */
 let applyQueue: Promise<void> = Promise.resolve()
 
+export function plannedCellValue(value:string|number|boolean,literalStrings=false,wasRich=false){
+  return {v:value,f:null,si:null,...(wasRich?{p:null}:{}),
+    ...(literalStrings&&typeof value==='string'?{t:CellValueType.STRING}:{})}
+}
+
 export function applyChangePlan(
   plan: ChangePlan,
   ctx: OpExecutorContext,
@@ -495,11 +502,7 @@ async function applyChangePlanNow(
         // A rich-text target also needs p cleared, or setValues merges and
         // the old document keeps rendering over the new value.
         const wasRich = range.getCellDatas()[0]?.[0]?.p != null
-        range.setValues([
-          wasRich
-            ? [{ v: change.after.value, f: null, si: null, p: null }]
-            : [{ v: change.after.value, f: null, si: null }],
-        ])
+        range.setValues([[plannedCellValue(change.after.value,options.literalStrings,wasRich)]])
       }
       run.markApplied()
     }

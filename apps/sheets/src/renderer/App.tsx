@@ -1,3 +1,6 @@
+import {createAnalysisSaveConsent} from '../../../../packages/browser-host/src/analysis-save-consent'
+import {captureSheetAnalysis} from './analysis-insert'
+import {journalFingerprint} from './edit-journal'
 import { delegatedAgentResult, compactDelegatedTranscript } from '@genoffice/ui'
 import { ICommandService } from '@univerjs/core'
 import { vetoUniverCommand } from './very-hidden-sheets'
@@ -626,6 +629,7 @@ function dateTextKind(value: string): 'date-like' | 'text' {
 }
 
 export interface SheetsEditorHandle {
+  analysis?: import('../../../../packages/web-contracts/src/analysis-document').NativeAnalysisEditor
   save(): Promise<boolean>
   /** Commit the editor and await formula/chart work without writing the file. */
   flush(): Promise<boolean>
@@ -706,6 +710,10 @@ export function App({
   const [notePopupCard, setNotePopupCard] = useState<NotePopupCard | null>(null)
   const getRuntime = useCallback(() => univerRef.current, [])
   /// True while Univer's in-cell editor is open (AutoSave must not save-reload then).
+  const analysisSaveConsent = useRef(createAnalysisSaveConsent())
+  const analysisEpochRef = useRef(0)
+  const analysisReadOnlyRef = useRef(!!host?.readOnly)
+  analysisReadOnlyRef.current = !!host?.readOnly
   const editingCellRef = useRef(false)
   const visualDisposablesRef = useRef<{ dispose(): void }[]>([])
   const traceArrowsRef = useRef<{ disposables: { dispose(): void }[]; nextId: number }>({
@@ -747,6 +755,7 @@ export function App({
   const [workbookFile, setWorkbookFile] = useState<WorkbookFile | null>(null)
   useEffect(() => {
     host?.onEditorReady?.({
+      analysis: {captureAnalysis},
       save: async () => (await handleSave('save')).ok,
       flush: () => saveGateRef.current.run(flushEditor),
       saveAndWait,
@@ -2221,6 +2230,7 @@ export function App({
     const api = univerRef.current?.univerAPI
     if (!api) return
     api.onCommandExecuted((command: { id?: string }) => {
+      analysisEpochRef.current++
       if (!command?.id || !STRUCTURAL_EDIT_COMMAND_PATTERN.test(command.id)) return
       rebuildRedactionIndex()
     })
@@ -4602,11 +4612,24 @@ export function App({
     return outcome
   }
 
+  function captureAnalysis(): ReturnType<import('../../../../packages/web-contracts/src/analysis-document').NativeAnalysisEditor['captureAnalysis']> {
+    return captureSheetAnalysis({current:(forSave=false)=>{
+      const runtime=univerRef.current,state=lazyWorkbookRef.current
+      const workbook=runtime?.univerAPI.getActiveWorkbook(),sheet=workbook?.getActiveSheet()
+      const range=workbook?.getActiveRange()?.getRange()
+      if(!runtime||!state||!workbook||!sheet||!range||(!forSave&&analysisReadOnlyRef.current)||editingCellRef.current||(!forSave&&(mutationLockedRef.current||saveGateRef.current.busy)))return null
+      return {identity:state,runtime,workbookId:workbook.getId(),sheetId:sheet.getSheetId(),
+        row:range.startRow,column:range.startColumn,selection:JSON.stringify(range),
+        epoch:analysisEpochRef.current,fingerprint:journalFingerprint(state.editJournal)}
+    },hold:()=>analysisSaveConsent.current.hold(),run:async(ops,check)=>(await runUiOps(ops,null,undefined,check)).ok})
+  }
+
   /** Ribbon/dialog edits run the same executor as AI proposals (op-executor.ts). */
   function runUiOps(
     ops: readonly WorkbookOperation[],
     successMessage?: string | null,
     mutationLease?: MutationLease,
+    analysisAuthorized?: () => boolean,
   ): Promise<ApplyOutcome> {
     const runtime = univerRef.current
     const state = lazyWorkbookRef.current
@@ -4632,12 +4655,14 @@ export function App({
     }
     return applyChangePlan(plan, opExecutorContext(runtime, workbook, state), {
       userFacing: true,
+      ...(analysisAuthorized ? {literalStrings:true} : {}),
       ...(mutationLease ? { mutationLease } : {}),
       ...(successMessage === undefined ? {} : { successMessage }),
       // The apply queues behind in-flight applies; the file may be closed or
       // replaced meanwhile — drop the click silently rather than mutate the
       // wrong workbook.
       verifyBeforeApply: () =>
+        (analysisAuthorized && !analysisAuthorized()) ||
         lazyWorkbookRef.current !== state ||
         univerRef.current !== runtime ||
         runtime.univerAPI.getActiveWorkbook()?.getId() !== workbook.getId()
@@ -5751,7 +5776,7 @@ export function App({
         if (!(await flushEditor())) return false
         const saved = await handleSaveImpl(saveContext(), 'save', true)
         if (!saved.ok && saved.reason !== 'no-edits') return false
-        if (!editorIsDirty()) return true
+        if (!editorIsDirty()) {analysisSaveConsent.current.confirmClean();return true}
       }
       return false
     })
@@ -5763,14 +5788,17 @@ export function App({
     explicitTarget?: { path: string; overwrite: boolean },
     defaultName?: string,
   ): Promise<SaveOutcome> {
-    if (hostRef.current?.readOnly) return {ok:false}
+    if (hostRef.current?.readOnly || !analysisSaveConsent.current.allowed(quiet)) return {ok:false}
     // Manual and AI saves take the same gate as the timers: a recovery copy
     // written beside a real save would outlive it as a phantom Restore prompt.
     const gate = saveGateRef.current
     if (mode === 'recovery' && gate.busy) return { ok: false }
     return gate.run(async () => {
       if (!(await commitActiveEditor())) return { ok: false }
-      return handleSaveImpl(saveContext(), mode, quiet, explicitTarget, defaultName)
+      if(!analysisSaveConsent.current.allowed(quiet))return {ok:false}
+      const result=await handleSaveImpl(saveContext(), mode, quiet, explicitTarget, defaultName)
+      if(result.ok&&!editorIsDirty())analysisSaveConsent.current.confirmClean()
+      return result
     })
   }
   async function updateWorkbookPassword(newPassword: string): Promise<string | null> {

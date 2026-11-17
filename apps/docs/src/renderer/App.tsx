@@ -1,3 +1,5 @@
+import {createAnalysisSaveConsent} from '../../../../packages/browser-host/src/analysis-save-consent'
+import {docsAnalysisEditor} from './analysis-insert'
 import { usePageColorState } from './page-color-state'
 import { useMirrorMarginsState } from './mirror-margins-state'
 import { useEvenOddHfState } from './even-odd-hf-state'
@@ -1298,6 +1300,7 @@ export function App({ host }: { host?: { readOnly: boolean; assistantAvailable: 
       )
     : 624
   const [, forceRender] = useReducer((x: number) => x + 1, 0)
+  const analysisSaveConsent = useRef(createAnalysisSaveConsent())
   const dirtyRef = useRef(false)
   // serializes save(): overlapping saves (Cmd+S vs autosave timer vs blur) would
   // otherwise race on the write + reparse + setContent sequence
@@ -2596,7 +2599,9 @@ export function App({ host }: { host?: { readOnly: boolean; assistantAvailable: 
   }
 
   const save = useCallback(
-    (saveAs: boolean, auto = false) => saveImpl(fileCtxRef.current, saveAs, auto),
+    (saveAs: boolean, auto = false) => analysisSaveConsent.current.run(auto,
+      () => saveImpl(fileCtxRef.current, saveAs, auto),
+      ok => ok && !isDocDirty(fileCtxRef.current),false),
     [],
   )
 
@@ -6184,6 +6189,7 @@ export function App({ host }: { host?: { readOnly: boolean; assistantAvailable: 
   useEffect(() => {
     if (!host?.onEditorReady || !editor || !doc || tornDown) return
     host.onEditorReady({
+      analysis: docsAnalysisEditor(editor,()=>fileCtxRef.current,()=>!!host.readOnly,()=>{analysisSaveConsent.current.hold()}),
       getSelection() {
         const current = editorRef.current
         if (!current || current.isDestroyed) return null

@@ -1,3 +1,4 @@
+import {createAnalysisDocumentTarget} from '../../../../packages/browser-host/src/analysis-document-target.ts'
 import ReactDOM from 'react-dom/client'
 import {useState} from 'react'
 import {createSessionFileHost, type SessionFileHost} from '../../../../packages/browser-host/src/files.ts'
@@ -51,6 +52,10 @@ export async function mountSheetsEditor(host: SessionFileHost, container: HTMLEl
   try { await host.acquireLease(fileId) } catch { initialLease = false }
   const stop = host.startRenewal(fileId), unsubscribe = host.subscribe(()=>changed())
   const realtime = mountEditorRealtime(host, fileId, () => changed(),channels=>assistant?.channel?.observe(channels))
+  const analysisTarget=createAnalysisDocumentTarget({fileId,format:'xlsx',state:()=>host.getState(fileId),verifyAuthority:async()=>{await host.renewLease(fileId)},
+    editor:()=>editor?.analysis??null,receipt:()=>bridge.getReceipt(),
+    save:check=>bridge.guardedSave(check,async()=>!!editor&&await editor.saveAndWait()&&!editor.isDirty()&&!bridge.needsConfirmation())})
+  const unregisterAnalysis=assistant?.documents.register(analysisTarget)
   const dirty = () => (editor?.isDirty() ?? false) || bridge.isDirty()
   async function saveAndDownload() {
     if(!editor || downloading || takingOver || disposed)return
@@ -105,7 +110,7 @@ export async function mountSheetsEditor(host: SessionFileHost, container: HTMLEl
   root.render(<LocaleProvider initial={locale}><NativeWorkbook /></LocaleProvider>)
   const beforeUnload = (event: BeforeUnloadEvent) => { if (editor?.isDirty() || host.getState(fileId).status === 'unknown') { event.preventDefault(); event.returnValue='' } }
   window.addEventListener('beforeunload',beforeUnload)
-  return {save:()=>editor?.saveAndWait() ?? Promise.resolve(false),dispose(){disposed=true;assistant?.dispose();realtime.dispose();changed=()=>{};window.removeEventListener('beforeunload',beforeUnload);stop();unsubscribe();root.unmount();bridge.dispose()}}
+  return {save:()=>editor?.saveAndWait() ?? Promise.resolve(false),dispose(){unregisterAnalysis?.();analysisTarget.dispose();disposed=true;assistant?.dispose();realtime.dispose();changed=()=>{};window.removeEventListener('beforeunload',beforeUnload);stop();unsubscribe();root.unmount();bridge.dispose()}}
 }
 async function bootstrap() {
   const host=createSessionFileHost(),fileId=new URL(location.href).searchParams.get('fileId') ?? ''

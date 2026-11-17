@@ -145,3 +145,20 @@ test('bridge refreshes an expired CSRF proof once and retries the pinned revisio
  await f.bridge.api.selectWorkbook()
  assert.equal(inspects,2);assert.equal(csrf,3)
 })
+
+
+test('guard revoked in native save queue or prepared upload never submits workbook commit',async t=>{
+ for(const stage of ['queue','upload']){
+  let authorized=true
+  const f=await fixture(t,path=>{if(stage==='upload'&&path.endsWith('/sheets/uploads'))authorized=false})
+  const file=await f.bridge.api.selectWorkbook()
+  const saving=f.bridge.guardedSave(()=>authorized,async()=>{
+   await Promise.resolve();if(stage==='queue')authorized=false
+   await f.bridge.api.saveWorkbookEdits({...sheetsSaveRequest(file.sheets[0].id,[{row:0,column:0,writeValue:true,value:'=1+1'}]),sessionId:file.sessionId})
+   return true
+  })
+  await assert.rejects(saving)
+  assert.equal(f.counts().commits,0)
+  if(stage==='queue')assert.equal(f.counts().preparations,0)
+ }
+})
