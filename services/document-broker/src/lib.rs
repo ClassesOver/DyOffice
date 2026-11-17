@@ -1,10 +1,19 @@
 //! Experimental IPC boundary. All real execution remains unavailable.
+//!
+//! No external launch configuration or driver connection API:
+//! ```compile_fail
+//! use dyoffice_document_broker::launch_spec::LaunchSpec;
+//! ```
+//! ```compile_fail
+//! use dyoffice_document_broker::systemd_driver::Attempt;
+//! ```
 pub mod protocol;
 pub mod systemd_probe;
 pub mod transport;
 pub use protocol::{decode_frame, validate_frame};
 
-// Mutating Manager calls exist ONLY in a private test model, never production builds.
+// Historical offline model. The private production-compiled driver below remains
+// unreachable without an approved runtime; no public launch API is exposed.
 #[cfg(test)]
 mod manager_model;
 
@@ -17,3 +26,8 @@ pub mod sealed_bytes;
 pub mod sealed_transfer;
 
 pub mod manager_diagnostic;
+
+#[allow(dead_code)]
+mod launch_spec;
+#[allow(dead_code)]
+mod systemd_driver;

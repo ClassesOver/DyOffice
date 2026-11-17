@@ -4,8 +4,9 @@ This is a **deny-only test prototype**, not a working isolated document runtime.
 The binary always exits 78 with `DOCUMENT_BROKER_DISABLED`, including when passed
 an enabling environment variable or argument. It opens no listener, connects to no
 system bus, launches no document process, and exposes no systemd start/stop call.
-Mutating D-Bus calls exist only in a private, compile-time test module against its
-own simulated Manager; that module is absent from normal library/binary builds.
+The private typed submission driver compiles in normal builds but is unreachable
+without an approved runtime, which currently cannot be constructed. The historical
+simulated Manager model remains test-only; neither is exposed by the binary.
 
 ## What actually runs
 
@@ -109,7 +110,7 @@ zbus P2P transport only. See the [target acceptance matrix](../../docs/dyoffice/
 
 Toolchain: Rust 1.93.0. Direct crates are exactly pinned with transitive checksums in
 Cargo.lock: serde 1.0.229, serde_json 1.0.154, Tokio 1.54.1, zbus 5.19.0 and time
-0.3.55; the test-only futures-util dependency is pinned to 0.3.34. zbus is MIT; serde/json/time are MIT OR Apache-2.0; Tokio is MIT. This crate
+0.3.55; futures-util is pinned to 0.3.34 and is now a normal dependency of the private driver. zbus is MIT; serde/json/time are MIT OR Apache-2.0; Tokio is MIT. This crate
 uses the repository's **Apache-2.0** license, is publish=false and does not inherit a
 dependency's license as its own. Full transitive vulnerability/license review is
 still required before production use; successful compilation is not that review.
@@ -197,3 +198,37 @@ lazy cache invoked an unrelated fixture Environment getter; it now asserts that
 getter is never called. This is a narrow call-surface regression, not positive
 systemd-host acceptance. The existing older `systemd_probe` remains a separate
 prototype; this fixed-endpoint diagnostic does not call it.
+
+## Private typed submission driver (not enabled)
+
+`systemd_driver` now compiles in normal builds, but is private and has no public
+connection or launch API. `ApprovedRuntime` is uninhabited: neither normal builds
+nor the `unsafe-test-harness` feature can construct a launch specification. The
+only fixture constructor is `cfg(test)`. The original binary still exits 78.
+
+The implementation pins the fixed system-bus manager unique owner (bus-reported
+UID 0/PID 1), prepares owner/job streams, subscribes, and sends typed transient
+unit properties only to that unique owner. A single monotonic deadline covers
+connection, identity queries, subscription, submission and final observation.
+No arbitrary caller executable/rootfs/argv/env/unit fields are accepted. Test
+paths are deliberately nonexistent fixture paths and are not production manifests.
+
+A consumed attempt cannot be replayed or retried on reconnect. Lost responses,
+owner changes, cancellation and disconnect after submission quarantine it. A job
+completion is only metadata: it never proves a stopped unit/cgroup and never
+releases a reservation. The local attempt object is not persistent cross-process
+fencing; PG start-intent and a durable broker identity registry are still needed.
+
+Private P2P tests run the same typed sending/association implementation, including
+real D-Bus signature/value checks, but do not validate systemd/kernel isolation.
+Decoded signal count/byte limits do not bound zbus parser allocation. Real runtime
+provenance/rootfs, safe user/FD/socket layout, LSM/kernel capability acceptance,
+and actual unit lifecycle/reconciliation remain prerequisites. This driver is
+not registered in an execution dispatcher or T06 save path.
+
+The owner watcher remains alive through the final GetNameOwner roundtrip; a
+queued release/reacquire transition is rejected even if its returned unique owner
+matches the initial value. This is observation through the checked reply, not a
+promise that the owner cannot change after the function returns. The regression
+uses the same submit-and-finalize control flow with an actual P2P submission,
+then injects owner loss during the final query; it asserts quarantine and no retry.
