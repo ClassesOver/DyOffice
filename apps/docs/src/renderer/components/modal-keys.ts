@@ -1,8 +1,20 @@
 import { useCallback, useEffect, useRef } from 'react'
-import type { KeyboardEvent as ReactKeyboardEvent } from 'react'
+import type { KeyboardEvent as ReactKeyboardEvent, RefObject } from 'react'
 import { createImeEnterGuard, type ImeEnterGuard } from '@genoffice/ui'
 
 const openModals: HTMLDivElement[] = []
+const modalParents = new Map<HTMLDivElement, RefObject<HTMLDivElement | null>>()
+
+function belongsBelow(modal: HTMLDivElement, ancestor: HTMLDivElement): boolean {
+  const visited = new Set<HTMLDivElement>()
+  let current: HTMLDivElement | null = modal
+  while (current && !visited.has(current)) {
+    if (ancestor.contains(current)) return true
+    visited.add(current)
+    current = modalParents.get(current)?.current ?? null
+  }
+  return false
+}
 
 /**
  * Shared modal keyboard behavior: Esc closes (stopped so it never reaches
@@ -11,7 +23,13 @@ const openModals: HTMLDivElement[] = []
  * already focused (autoFocus). Spread the returned ref/onKeyDown onto the
  * modal backdrop element.
  */
-export function useModalKeys(onClose: () => void) {
+export function useModalKeys(
+  onClose: () => void,
+  options?: { parentRef?: RefObject<HTMLDivElement | null> },
+) {
+  // Portal children must explicitly identify their modal parent. DOM nesting
+  // remains supported without options; no React-private ancestry is inspected.
+  const parentRef = options?.parentRef
   const ref = useRef<HTMLDivElement>(null)
   const imeGuards = useRef(new WeakMap<EventTarget, ImeEnterGuard>())
   const imeFor = useCallback((target: EventTarget) => {
@@ -41,14 +59,19 @@ export function useModalKeys(onClose: () => void) {
     const el = ref.current
     if (!el) return
     // Child effects mount first; a containing backdrop belongs below its child.
-    const child = openModals.findIndex(other => el.contains(other))
+    if (parentRef) modalParents.set(el, parentRef)
+    const child = openModals.findIndex(other => belongsBelow(other, el))
     openModals.splice(child < 0 ? openModals.length : child, 0, el)
-    return () => {openModals.splice(openModals.indexOf(el), 1)}
-  }, [])
+    return () => {
+      const index = openModals.indexOf(el)
+      if (index >= 0) openModals.splice(index, 1)
+      modalParents.delete(el)
+    }
+  }, [parentRef])
 
   useEffect(() => {
     const el = ref.current
-    if (!el || el.contains(document.activeElement)) return
+    if (!el || openModals.at(-1) !== el || el.contains(document.activeElement)) return
     const first = [...el.querySelectorAll<HTMLElement>('input, textarea, select, button')]
       .find(control => !control.matches(':disabled') && control.tabIndex >= 0)
     ;(first ?? el).focus()
