@@ -235,3 +235,27 @@ test.each([408,503])('HTTP %i shows unknown protection, keeps drafts, and requir
  readFails=false;await click('读取最新配置');expect(button('保存配置').disabled).toBe(false);expect(writes).toBe(1)
  timeout=false;await submit();expect(writes).toBe(2)
 })
+
+test('saved server configuration uses independent bounded pages and clamps after a shorter refresh without discarding drafts', async () => {
+  let config = initial()
+  config.entries = Array.from({length: 23}, (_, index) => ({...initial().entries[0], id: `server-${index}`, label: `Server ${index}`}))
+  config.defaults = {}
+  await mount(createGlobalSettingsClient(requestFrom(async () => structuredClone(config))))
+  const snapshot = () => document.querySelector<HTMLElement>('.global-settings-latest')!
+  const labels = () => [...snapshot().querySelectorAll('li strong')].map(node => node.textContent)
+  expect(labels()).toEqual(Array.from({length: 10}, (_, index) => `Server ${index}`))
+  await change('配置名称', 'Unsaved local draft')
+  const next = () => snapshot().querySelector<HTMLButtonElement>('[aria-label="下一页服务器当前配置"]')!
+  await act(async () => next().click())
+  expect(labels()).toEqual(Array.from({length: 10}, (_, index) => `Server ${index + 10}`))
+  expect(input('配置名称').value).toBe('Unsaved local draft')
+  await act(async () => next().click())
+  expect(labels()).toEqual(['Server 20', 'Server 21', 'Server 22'])
+  expect(next().disabled).toBe(true)
+  config = {...config, revision: 4, entries: config.entries.slice(0, 2)}
+  await click('读取最新配置')
+  expect(labels()).toEqual(['Server 0', 'Server 1'])
+  expect(snapshot().textContent).toContain('1–2 / 2')
+  expect(input('配置名称').value).toBe('Unsaved local draft')
+  expect(next().disabled).toBe(true)
+})

@@ -40,6 +40,10 @@ function draftPatch(saved: AdminGlobalConfig | null, drafts: Record<string, Entr
 export function GlobalSettingsPanel({client, onClose, presentation = 'dialog', onCloseGuardChange}: {client: GlobalSettingsClient; onClose: () => void; presentation?: 'dialog' | 'page'; onCloseGuardChange?: (guard: (() => boolean) | null) => void}) {
   const api = useRef(client).current, formId = useId(), modelsId = useId()
   const [saved, setSaved] = useState<AdminGlobalConfig | null>(null)
+  const [serverPage, setServerPage] = useState(0)
+  const serverLastPage = Math.max(0, Math.ceil((saved?.entries.length ?? 0) / 10) - 1)
+  const currentServerPage = Math.min(serverPage, serverLastPage)
+  useEffect(() => {setServerPage(page => Math.min(page, serverLastPage))}, [serverLastPage])
   const [drafts, setDrafts] = useState<Record<string, EntryDraft>>({}), [removed, setRemoved] = useState<string[]>([])
   const [defaults, setDefaults] = useState<DefaultDraft>({}), [clearKeys, setClearKeys] = useState<string[]>([])
   const [selected, setSelected] = useState(''), [filter, setFilter] = useState<GlobalSettingKind | ''>('')
@@ -247,7 +251,7 @@ export function GlobalSettingsPanel({client, onClose, presentation = 'dialog', o
         return <label className="global-settings-field" key={kind}><span>{kindLabels[kind]}</span><Select aria-label={`默认${kindLabels[kind]}配置`} value={value} disabled={busy} onChange={value => setDefaults(previous => ({...previous, [kind]: value || null}))} options={[{value: '', label: '未指定默认'}, ...available.map(entry => ({value: entry.id, label: entry.label}))]}/></label>
       })}</div></section>
     </form>}
-    {saved && <><details className="global-settings-latest"><summary>查看服务器当前配置（版本 {saved.revision}）</summary><ul>{saved.entries.map(entry => <li key={entry.id}><strong>{entry.label}</strong> · {kindLabels[entry.kind]} · {entry.providerId} · {entry.model || '未指定模型'} · {entry.enabled ? '已启用' : '已停用'} · {entry.hasKey ? '已保存密钥' : '未保存密钥'}<span>{entry.baseUrl}</span></li>)}</ul>{!saved.entries.length && <p>尚无已保存配置。</p>}</details>
+    {saved && <><details className="global-settings-latest"><summary>查看服务器当前配置（版本 {saved.revision}）</summary><ul>{saved.entries.slice(currentServerPage * 10, (currentServerPage + 1) * 10).map(entry => <li key={entry.id}><strong>{entry.label}</strong> · {kindLabels[entry.kind]} · {entry.providerId} · {entry.model || '未指定模型'} · {entry.enabled ? '已启用' : '已停用'} · {entry.hasKey ? '已保存密钥' : '未保存密钥'}<span>{entry.baseUrl}</span></li>)}</ul><SettingsListPager page={currentServerPage} pageSize={10} total={saved.entries.length} onPageChange={setServerPage} label="服务器当前配置" disabled={busy}/>{!saved.entries.length && <p>尚无已保存配置。</p>}</details>
       <section className="global-settings-maintenance" aria-label="密钥维护"><div><h4>密钥维护 <Tag color="warning">管理员操作</Tag></h4><p className="set-field-desc">服务器活动加密密钥更新后，可重新加密已保存的 API 密钥。操作不会保存当前草稿。</p></div><Button autoInsertSpace={false}  htmlType="button" disabled={blocked || !saved.keyStorageAvailable} onClick={() => setConfirmation({kind: 'rotate'})}>轮换加密密钥</Button></section></>}
   </section>
 }
