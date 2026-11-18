@@ -1,3 +1,4 @@
+import {assistantDiagnostics} from '../helpers/assistant-diagnostics.mjs'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import {fileURLToPath} from 'node:url'
@@ -48,6 +49,10 @@ async function captureSkillMenuState(page) {
 }
 
 test('native DOCX assistant delivers selected private Skill through the personal Provider Gateway', {timeout: 120_000}, async t => {
+  const diagnostic=assistantDiagnostics(t.signal)
+  t.after(()=>diagnostic.dispose())
+  try {
+  diagnostic.stage('fixture')
   let phase = 'fixture'
   const turns = {headers: 0, finished: 0, failed: 0}
   const onAbort = () => t.diagnostic(JSON.stringify({stage: 'assistant-abort', phase, turns}))
@@ -83,32 +88,43 @@ test('native DOCX assistant delivers selected private Skill through the personal
   const keyring = {activeKeyId: 'test', keys: {test: new Uint8Array(32).fill(25)}}
   const profile = {deploymentId: f.deploymentId, entryId: 'primary', revision: 1, providerId: 'openai', model: 'synthetic', baseUrl: 'https://provider.example/v1', endpoint: 'https://provider.example/v1/chat/completions', allowedIpv4: ['8.8.8.8'], maxOutputTokens: 128}
   const settings = createGlobalConfigService({transactions: f.transactions, keyring})
+  diagnostic.stage('settings')
   await settings.saveGlobalConfig(f.adminSigned.token, 0, {upserts: [{id: profile.entryId, kind: 'chat', providerId: profile.providerId, label: 'Company Chat', model: profile.model, baseUrl: profile.baseUrl, enabled: true, apiKey: 'synthetic-private-key'}]})
+  diagnostic.stage('budget-setup')
   await f.ownerPool.query('INSERT INTO provider_budget_accounts(deployment_id,owner_id,entry_id,config_revision,available_units,per_call_units) VALUES($1,$2,$3,1,20,10)', [f.deploymentId, f.alice.user.id, profile.entryId])
+  diagnostic.stage('skills')
   const skill = createSkillService(f.transactions)
   await skill.save(f.alice.token, 'alice-report', {description: 'Alice report skill', body: 'Use Alice private instructions to summarize a DOCX document.'})
   await skill.save(f.bob.token, 'bob-report', {description: 'Bob report skill', body: 'Use Bob private instructions to summarize a DOCX document.'})
+  diagnostic.stage('import')
   const original = await docxBytes(), opened = await importFile(f, f.alice.token, original)
+  diagnostic.stage('app')
   const app = await buildLocalApp({db: f.db, businessPool: f.businessPool, passwords: f.passwords, deploymentId: f.deploymentId, origin, csrfKey: f.csrfKey, objectStore: f.objects, globalConfigKeyring: keyring, providerGateway: {profiles: [profile]}, nativeDocsDirectory: fileURLToPath(new URL('../../dist-docs', import.meta.url))})
+  diagnostic.stage('listen')
   f.cleanup.push(() => app.close()); await app.listen({host: '127.0.0.1', port: 4213})
+  diagnostic.stage('browser')
   phase = 'browser-launch'
   const browser = await launchTestBrowser(); t.after(() => browser.close())
   const page = await browser.newPage(), errors = []
+  diagnostic.observe(page)
   page.on('pageerror', error => errors.push(error.message))
   const isTurn = request => request.url() === origin + '/api/v1/ai/turns' && request.method() === 'POST'
   page.on('response', response => {if (isTurn(response.request())) turns.headers++})
   page.on('requestfinished', request => {if (isTurn(request)) turns.finished++})
   page.on('requestfailed', request => {if (isTurn(request)) turns.failed++})
   const skillRequests = observeSkillRequests(page, origin)
+  diagnostic.stage('auth')
   const auth = await page.request.get(origin + '/api/v1/auth/csrf')
   const {csrfToken} = await auth.json()
   assert.equal((await page.request.post(origin + '/api/v1/auth/login', {headers: {origin, 'x-csrf-token': csrfToken}, data: {username: 'alice', password}})).status(), 200)
   const net = mockProviderNetwork(t, [Buffer.from('data: {"choices":[{"delta":{"content":"Verified assistant reply"},"finish_reason":"stop"}]}\n\n'), Buffer.from('data: [DONE]\n\n')])
+  diagnostic.stage('catalog')
   const catalog = page.waitForResponse(r => r.url().endsWith('/api/v1/ai/catalog'))
   await page.goto(origin + '/native-docx/?fileId=' + opened.file.fileId)
   const response = await catalog
   assert.equal(response.status(), 200)
   assert.equal((await response.json()).defaultId, 'primary')
+  diagnostic.stage('editor')
   await expect(page.locator('.tiptap.doc-page').first()).toBeVisible({timeout: 45_000})
   await expect(page.locator('.ai-dock')).toBeAttached()
   assert.deepEqual(errors, [])
@@ -131,6 +147,7 @@ test('native DOCX assistant delivers selected private Skill through the personal
       throw error
     }
   }
+  diagnostic.stage('skill-cancel')
   const composer = page.locator('.ai-panel textarea')
   // Body-only Office classification reads the Skill while populating the menu.
   // Finish that prefetch before pausing the separate send-time read below.
@@ -146,45 +163,61 @@ test('native DOCX assistant delivers selected private Skill through the personal
   try {
     await composer.fill('Cancel while reading the Skill')
     await composer.press('Enter')
+    diagnostic.stage('skill-gate')
     await atPhase('cancel-skill-read-reached', () => reached.promise)
+    diagnostic.stage('cancel-stop')
     await page.locator('.ai-panel .ai-stop-btn').click()
   } finally {
     resume.resolve()
   }
+  diagnostic.stage('cancel-settled')
   await expect(page.locator('.ai-panel .ai-stop-btn')).toHaveCount(0)
   assert.equal(net.writes, 0)
   await attachSkill()
   // The transport cancels its reader after the SSE terminal event. Require
   // terminal UI and exact durable settlement, rather than network EOF.
+  diagnostic.stage('first-send');diagnostic.arm('first')
   const firstTurn = page.waitForResponse(r => r.url() === origin + '/api/v1/ai/turns' && r.request().method() === 'POST')
   await composer.fill('Summarize this document')
   phase = 'send-turn'
   await composer.press('Enter')
+  diagnostic.stage('first-visible')
   await expect(page.getByText('Verified assistant reply', {exact: true})).toBeVisible({timeout: 20_000})
+  diagnostic.stage('first-response')
   const firstResponse = await atPhase('first-response-headers', () => firstTurn)
   assert.equal(firstResponse.status(), 200)
+  diagnostic.stage('first-ui-settled')
   const firstTurnId = await waitForSettlement('first-settlement', 1, firstResponse)
+  diagnostic.stage('wire')
   const wire = JSON.parse(net.wire)
   assert.equal(wire.model, profile.model)
   assert.equal(wire.max_tokens, 128)
   assert.match(JSON.stringify(wire.messages), /Alice private instructions/)
   assert.doesNotMatch(JSON.stringify(wire), /Bob private instructions|synthetic-private-key/)
   assert.ok(!wire.tools.some(tool => tool.function.name === 'apply_ops'))
+  diagnostic.stage('second-send');diagnostic.arm('second')
   const secondTurn = page.waitForResponse(r => r.url() === origin + '/api/v1/ai/turns' && r.request().method() === 'POST')
   await composer.fill('Follow-up without a Skill')
   phase = 'send-turn'
   await composer.press('Enter')
+  diagnostic.stage('second-visible')
   await expect(page.getByText('Verified assistant reply', {exact: true})).toHaveCount(2)
+  diagnostic.stage('second-response')
   const secondResponse = await atPhase('second-response-headers', () => secondTurn)
   assert.equal(secondResponse.status(), 200)
+  diagnostic.stage('second-ui-settled')
   await waitForSettlement('second-settlement', 2, secondResponse, [firstTurnId])
   assert.equal(net.writes, 2)
   assert.doesNotMatch(net.wire.toString(), /Alice private instructions|Bob private instructions/)
+  diagnostic.stage('ledger')
   phase = 'budget-read'
   const {rows: budgets} = await f.ownerPool.query('SELECT owner_id,state FROM provider_budget_reservations')
   assert.deepEqual(budgets, Array(2).fill({owner_id: f.alice.user.id, state: 'settled'}))
+  diagnostic.stage('original-bytes')
   phase = 'file-read'
   assert.deepEqual(await f.files.readFile(f.alice.token, opened.file.fileId, opened.file.revision), original)
   assert.deepEqual(errors, [])
   phase = 'cleanup'
+  diagnostic.stage('complete')
+  } catch(error) {diagnostic.report();throw error}
 })

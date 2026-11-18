@@ -147,7 +147,7 @@ export function createUserService({ db, accounts, sessions, passwords, deploymen
         if (candidate.authVersion !== principal.authVersion) throw authError()
         const version = await invalidate(connection, principal.userId)
         await connection.query('UPDATE users SET password_hash=$1,password_changed_at=clock_timestamp(),password_reset_required=false WHERE id=$2', [encoded, principal.userId])
-        const replacement = randomBytes(32).toString('base64url'), sessionId = randomUUID()
+        const replacement = sessions.issueToken(), sessionId = randomUUID()
         await connection.query("INSERT INTO sessions(id,deployment_id,user_id,token_hash,auth_version,expires_at,reauthenticated_at) VALUES($1,$2,$3,$4,$5,clock_timestamp()+$6*interval '1 millisecond',clock_timestamp())", [sessionId, deploymentId, principal.userId, tokenHash(replacement), version, sessions.absoluteMs])
         await appendAuthEvent(connection, deploymentId, 'password_changed', { ...context, actorId: principal.userId, sessionId, subjectUserId: principal.userId })
         return replacement

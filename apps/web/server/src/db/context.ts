@@ -8,7 +8,7 @@ export type FileCredential = string | JobCredential
 export type BusinessCredential = SessionCredential | JobCredential
 export type BusinessPrincipal = Principal & { roles: readonly string[]; authVersion: number; job?: Readonly<{ id: string; epoch: number; fileId: string; baseRevision: string }> }
 export interface SessionCredential { kind: 'session'; token: string }
-export function createPrincipalTransactions({ pool, deploymentId, idleMs = 8 * 3600_000 }: { pool: Pool; deploymentId: string; idleMs?: number }) {
+export function createPrincipalTransactions({ pool, deploymentId, idleMs = 8 * 3600_000, sessionCredentials }: { pool: Pool; deploymentId: string; idleMs?: number; sessionCredentials?: { verify: (token: string) => void } }) {
   if (!Number.isSafeInteger(idleMs) || idleMs < 1 || idleMs > 2592000000) throw new Error('Invalid session idle lifetime')
   deploymentId = deploymentId.toLowerCase()
   let admitted: ReturnType<typeof assertRuntimePool> | undefined
@@ -19,7 +19,9 @@ export function createPrincipalTransactions({ pool, deploymentId, idleMs = 8 * 3
       // between initial authorization and the final commit recheck.
       const credential = Object.freeze({ ...input })
       await (admitted ??= assertRuntimePool(pool, 'business'))
-      if (!credential || !['session','job'].includes(credential.kind) || typeof credential.token !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(credential.token)) throw authError()
+      if (!credential || !['session','job'].includes(credential.kind) || typeof credential.token !== 'string') throw authError()
+      if (credential.kind==='session' && sessionCredentials) sessionCredentials.verify(credential.token)
+      else if (!/^[A-Za-z0-9_-]{43}$/.test(credential.token)) throw authError()
       if (credential.kind==='job' && (Object.keys(credential).some(key => !['kind','jobId','epoch','token'].includes(key)) || typeof credential.jobId!=='string' || !/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(credential.jobId) || !Number.isSafeInteger(credential.epoch) || credential.epoch<1)) throw authError()
       const connection = await pool.connect()
       let discard: Error | undefined
