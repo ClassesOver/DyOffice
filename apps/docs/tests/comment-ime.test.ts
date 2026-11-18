@@ -8,13 +8,15 @@ import { CommentsPanel } from '../src/renderer/components/CommentsPanel'
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 let root: Root, host: HTMLDivElement, editor: Editor
 const submit = vi.fn(), reply = vi.fn(), edit = vi.fn()
+const globalKey = vi.fn()
 beforeEach(() => {
+  globalKey.mockReset(); window.addEventListener('keydown', globalKey)
   submit.mockReset(); reply.mockReset(); edit.mockReset()
   editor = new Editor({ element: document.createElement('div'), extensions: editorExtensions,
     content: { type: 'doc', content: [{ type: 'docParagraph' }] } })
   host = document.createElement('div'); document.body.append(host); root = createRoot(host)
 })
-afterEach(() => { act(() => root.unmount()); host.remove(); editor.destroy() })
+afterEach(() => { window.removeEventListener('keydown', globalKey); act(() => root.unmount()); host.remove(); editor.destroy() })
 function composition(input: HTMLElement, type: string) {
   act(() => { input.dispatchEvent(new CompositionEvent(type, { bubbles: true })) })
 }
@@ -104,3 +106,38 @@ it('reply composition is scoped to its own thread input', () => {
   act(() => inputs[1]!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })))
   expect(reply).toHaveBeenCalledExactlyOnceWith('c2', 'Other thread')
 })
+
+for (const kind of ['new', 'edit', 'reply'] as const) {
+  it.each(['native', 'legacy', 'active', 'just-ended'] as const)(`${kind} preserves draft and focus on IME Escape (%s)`, async signal => {
+    const cancel = vi.fn()
+    act(() => root.render(createElement(CommentsPanel, {
+      comments: [{ id: 'c1', author: 'A', text: 'Original', done: false }], docNode: editor.state.doc,
+      composing: kind === 'new', onSubmitNew: submit, onReply: reply, onEdit: edit,
+      onResolve: vi.fn(), onCancelNew: cancel, onDelete: vi.fn(), onClose: vi.fn(),
+    })))
+    if (kind === 'edit') {
+      act(() => host.querySelector<HTMLButtonElement>('.comment-more')!.click())
+      act(() => host.querySelector<HTMLButtonElement>('.comment-card-edit')!.click())
+    }
+    const input = host.querySelector<HTMLInputElement | HTMLTextAreaElement>(kind === 'reply' ? '.comment-reply-input' : kind === 'new' ? '.comment-compose textarea' : '.comment-reply-compose textarea')!
+    act(() => {
+      Object.getOwnPropertyDescriptor(kind === 'reply' ? HTMLInputElement.prototype : HTMLTextAreaElement.prototype, 'value')!.set!.call(input, 'Escape draft')
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    input.focus()
+    if (signal === 'active' || signal === 'just-ended') composition(input, 'compositionstart')
+    if (signal === 'just-ended') composition(input, 'compositionend')
+    const event = new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true,
+      ...(signal === 'native' ? { isComposing: true } : signal === 'legacy' ? { keyCode: 229 } : {}) })
+    act(() => { input.dispatchEvent(event) })
+    expect(cancel).not.toHaveBeenCalled(); expect(input.isConnected).toBe(true)
+    expect(document.activeElement).toBe(input); expect(input.value).toBe('Escape draft'); expect(event.defaultPrevented).toBe(false); expect(globalKey).not.toHaveBeenCalled()
+    expect(submit).not.toHaveBeenCalled(); expect(reply).not.toHaveBeenCalled(); expect(edit).not.toHaveBeenCalled()
+    if (signal === 'active') composition(input, 'compositionend')
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 5)) })
+    act(() => { input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })) })
+    if (kind === 'new') expect(cancel).toHaveBeenCalledOnce()
+    else if (kind === 'edit') expect(input.isConnected).toBe(false)
+    else expect(document.activeElement).not.toBe(input)
+  })
+}

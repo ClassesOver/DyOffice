@@ -241,6 +241,10 @@ export const CommentsPanel = memo(function CommentsPanel({
         onCompositionStart={(e) => imeFor(e.currentTarget).handleCompositionStart()}
         onCompositionEnd={(e) => imeFor(e.currentTarget).handleCompositionEnd()}
         onKeyDown={(e) => {
+          if (e.key === 'Escape' && imeFor(e.currentTarget).isImeConfirm(e.nativeEvent)) {
+            e.stopPropagation()
+            return
+          }
           if (
             e.key === 'Enter' &&
             (e.metaKey || e.ctrlKey) &&
@@ -395,6 +399,10 @@ export const CommentsPanel = memo(function CommentsPanel({
             onCompositionStart={(e) => imeFor(e.currentTarget).handleCompositionStart()}
             onCompositionEnd={(e) => imeFor(e.currentTarget).handleCompositionEnd()}
             onKeyDown={(e) => {
+              if (e.key === 'Escape' && imeFor(e.currentTarget).isImeConfirm(e.nativeEvent)) {
+                e.stopPropagation()
+                return
+              }
               if (e.key === 'Enter' && !e.shiftKey && !imeFor(e.currentTarget).isImeConfirm(e.nativeEvent)) {
                 e.preventDefault()
                 submitReply(c.id)
@@ -432,6 +440,10 @@ export const CommentsPanel = memo(function CommentsPanel({
             onCompositionStart={(e) => imeFor(e.currentTarget).handleCompositionStart()}
             onCompositionEnd={(e) => imeFor(e.currentTarget).handleCompositionEnd()}
             onKeyDown={(e) => {
+              if (e.key === 'Escape' && imeFor(e.currentTarget).isImeConfirm(e.nativeEvent)) {
+                e.stopPropagation()
+                return
+              }
               if (
                 e.key === 'Enter' &&
                 (e.metaKey || e.ctrlKey) &&

@@ -538,6 +538,10 @@ export function FindPanel({
               onCompositionStart={(e) => imeFor(e.currentTarget).handleCompositionStart()}
               onCompositionEnd={(e) => imeFor(e.currentTarget).handleCompositionEnd()}
               onKeyDown={(e) => {
+                if (e.key === 'Escape' && imeFor(e.currentTarget).isImeConfirm(e.nativeEvent)) {
+                  e.stopPropagation()
+                  return
+                }
                 if (e.key === 'Enter' && !imeFor(e.currentTarget).isImeConfirm(e.nativeEvent)) step(e.shiftKey ? -1 : 1)
                 if (e.key === 'Escape') close()
               }}
@@ -605,6 +609,10 @@ export function FindPanel({
                 onCompositionStart={(e) => imeFor(e.currentTarget).handleCompositionStart()}
                 onCompositionEnd={(e) => imeFor(e.currentTarget).handleCompositionEnd()}
                 onKeyDown={(e) => {
+                  if (e.key === 'Escape' && imeFor(e.currentTarget).isImeConfirm(e.nativeEvent)) {
+                    e.stopPropagation()
+                    return
+                  }
                   if (e.key === 'Enter' && !imeFor(e.currentTarget).isImeConfirm(e.nativeEvent)) replaceOne()
                   if (e.key === 'Escape') close()
                 }}
@@ -692,6 +700,10 @@ export function FindPanel({
                 onCompositionStart={(e) => imeFor(e.currentTarget).handleCompositionStart()}
                 onCompositionEnd={(e) => imeFor(e.currentTarget).handleCompositionEnd()}
                 onKeyDown={(e) => {
+                  if (e.key === 'Escape' && imeFor(e.currentTarget).isImeConfirm(e.nativeEvent)) {
+                    e.stopPropagation()
+                    return
+                  }
                   if (e.key === 'Enter' && !imeFor(e.currentTarget).isImeConfirm(e.nativeEvent)) runGoTo(1, true)
                   if (e.key === 'Escape') close()
                 }}
@@ -717,6 +729,10 @@ export function FindPanel({
                 onCompositionStart={(e) => imeFor(e.currentTarget).handleCompositionStart()}
                 onCompositionEnd={(e) => imeFor(e.currentTarget).handleCompositionEnd()}
                 onKeyDown={(e) => {
+                  if (e.key === 'Escape' && imeFor(e.currentTarget).isImeConfirm(e.nativeEvent)) {
+                    e.stopPropagation()
+                    return
+                  }
                   if (e.key === 'Enter' && !imeFor(e.currentTarget).isImeConfirm(e.nativeEvent)) runGoTo(e.shiftKey ? -1 : 1, true)
                   if (e.key === 'Escape') close()
                 }}

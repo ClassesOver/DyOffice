@@ -8,6 +8,7 @@ import { FindPanel } from '../src/renderer/components/FindPanel'
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 let root: Root, host: HTMLDivElement, editor: Editor
 const close = vi.fn()
+const globalKey = vi.fn()
 const scrollDescriptor = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'scrollIntoView')
 beforeAll(() => Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', { configurable: true, value() {} }))
 afterAll(() => {
@@ -15,6 +16,7 @@ afterAll(() => {
   else delete (HTMLElement.prototype as Partial<HTMLElement>).scrollIntoView
 })
 beforeEach(() => {
+  globalKey.mockReset(); window.addEventListener('keydown', globalKey)
   close.mockReset()
   vi.stubGlobal('requestAnimationFrame', (fn: FrameRequestCallback) => setTimeout(() => fn(0), 0))
   // JSDOM has no scrolling/layout implementation; preserve real editor transactions.
@@ -26,7 +28,7 @@ beforeEach(() => {
   editor.commands.setTextSelection(1)
   host = document.createElement('div'); document.body.append(host); root = createRoot(host)
 })
-afterEach(() => { act(() => root.unmount()); host.remove(); editor.destroy(); vi.restoreAllMocks(); vi.unstubAllGlobals() })
+afterEach(() => { window.removeEventListener('keydown', globalKey); act(() => root.unmount()); host.remove(); editor.destroy(); vi.restoreAllMocks(); vi.unstubAllGlobals() })
 function change(input: HTMLInputElement | HTMLSelectElement, value: string) {
   act(() => {
     Object.getOwnPropertyDescriptor(input instanceof HTMLInputElement ? HTMLInputElement.prototype : HTMLSelectElement.prototype, 'value')!.set!.call(input, value)
@@ -114,3 +116,25 @@ it('ordinary Shift+Enter still navigates search results backwards', async () => 
   act(() => input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })))
   expect(host.querySelector('.find-count')?.textContent).toBe('1/3')
 })
+
+for (const field of ['find', 'replace', 'goto-number', 'goto-bookmark'] as const) {
+  it.each(['native', 'legacy', 'active', 'just-ended'] as const)(`${field} keeps its panel on IME Escape (%s)`, async signal => {
+    act(() => root.render(createElement(FindPanel, { editor, onClose: close,
+      focusReplaceNonce: field === 'replace' ? 1 : undefined,
+      focusGoToNonce: field.startsWith('goto') ? 1 : undefined })))
+    if (field === 'goto-bookmark') change(host.querySelector<HTMLSelectElement>('.find-select')!, 'bookmark')
+    const input = field.startsWith('goto') ? host.querySelector<HTMLElement>('.find-goto-input')!
+      : host.querySelectorAll<HTMLInputElement>('.find-input')[field === 'replace' ? 1 : 0]!
+    input.focus()
+    if (signal === 'active' || signal === 'just-ended') composition(input, 'compositionstart')
+    if (signal === 'just-ended') composition(input, 'compositionend')
+    const event = new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true,
+      ...(signal === 'native' ? { isComposing: true } : signal === 'legacy' ? { keyCode: 229 } : {}) })
+    act(() => { input.dispatchEvent(event) })
+    expect(close).not.toHaveBeenCalled(); expect(event.defaultPrevented).toBe(false); expect(globalKey).not.toHaveBeenCalled()
+    if (signal === 'active') composition(input, 'compositionend')
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 5)) })
+    act(() => { input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })) })
+    expect(close).toHaveBeenCalledOnce()
+  })
+}

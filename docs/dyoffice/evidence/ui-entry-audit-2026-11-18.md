@@ -439,3 +439,14 @@
 - 新增6项均先红后绿：内部原生/229/活动组合/结束同tick，外部原生/229；另1项验证组合中输入DOM移除重建后普通Escape可关闭。最终含弹窗Enter与键盘相关6文件75项通过，既有canvas提示保留；Web docs类型/生产构建通过（既有chunk提示），边界1340文件0违规、git diff --check通过。日志 `/tmp/dyoffice-modal-ime-escape-{red,final-tests,type,build}.log`。独立只读复核未发现阻塞；未将源码嵌套归属推断冒充嵌套IME专项端测。
 - 最终1440/390书签真实入口各依次验证原生isComposing、229、活动composition、compositionend同tick Escape：弹窗与草稿保留，未preventDefault，下一普通Escape关闭；两流程0页面异常。证据 `/tmp/dyoffice-ui-audit/word-modal-ime-escape-green-{1440,390}/report.json`。文档/lease mock，其余业务写阻止。
 - 发布前保留远端c05dea18会话分页提交，非重叠文件精确导入ff合入；客户端8项通过，未重跑其真实PG集成。用仓库provision-runtime补齐本地0033迁移/权限后服务HTTP200，没有创建/修改登录密码；合入后两尺寸上述浏览器再次通过。全量UI、独立面板Escape及实体输入法仍未验收完毕。
+
+## 独立查找与批注面板的 IME Escape
+
+- 正式Ctrl+H替换输入框派发isComposing Escape复现面板关闭，证据 `/tmp/dyoffice-ui-audit/word-panel-ime-escape-red-1440/report.json`；28项新增回归全部先红，覆盖查找/替换/数字定位/书签定位及批注新建/编辑/回复×四类组合信号。批注测试还验证焦点/草稿保留、无发布或编辑，以及普通Escape原取消/blur行为。
+- 复用各输入框已有按DOM隔离的IME guard。首版仅跳过局部动作仍会冒泡触发阅读模式window Escape；新增传播断言后28项再次先红，最终仅对IME Escape stopPropagation并return，保留默认候选取消动作。普通Escape及Enter保持原逻辑。明确不保证更早的document/window capture监听受保护，评论菜单/浮层等独立capture入口仍待查。
+- 最终相关6文件115项通过，Web docs类型/生产构建（既有chunk提示）、边界1340文件0违规和git diff --check通过；独立只读复核无阻塞。日志 `/tmp/dyoffice-panel-escape-{red,propagation-red,final-tests,final-type,final-build}.log`。浏览器脚本最初重复点击已激活“插入”会折叠Ribbon而找不到批注，属于harness问题，改为仅在批注入口不可见时展开；没有改变产品交互或放宽断言。
+- 最终构建1440/390各6入口流程通过（查找、替换、数字定位、新批注、编辑批注、回复），每入口4类IME信号均保留输入与焦点，普通Escape分别关闭/取消/blur；编辑取消保留原批注，回复未发送，0页面异常。共12流程，业务写mock/blocked；书签定位仅组件验证。证据 `/tmp/dyoffice-ui-audit/word-panel-ime-escape-green-{1440,390}/report.json`。
+- 发布前保留远端40702555的设置B视觉与管理分页改动，非重叠文件精确对象导入ff合入；本轮Word产品构建不受Shell源码改动影响，设置B浏览器视觉验收未计入本轮Word专项。
+- 合入设置B后定向5文件18项通过（设置导航、配置分页、个人列表、会话cursor、用户分页），保留既有CSS解析日志；`/tmp/dyoffice-settings-b-merged-tests.log`。没有将此组件验证替代新设置页的最终浏览器视觉验收。
+- 发布前再保留远端82df8e3f的Portal显式父级ref修复，精确导入后rebase，无冲突。合并后输入法/查找/批注/共享modal与Portal父级共8文件136项通过；日志 `/tmp/dyoffice-panel-escape-merged-tests.log`。没有用该组件覆盖替代所有真实Portal页面浏览器验收。
+- 含Portal父级修复的最终构建Web docs类型/生产构建通过，边界1341文件0违规；两尺寸12入口流程再次全部通过，0页面异常，报告沿用上述green路径，最终日志 `/tmp/dyoffice-panel-escape-merged-browser-{1440,390}.log`。
