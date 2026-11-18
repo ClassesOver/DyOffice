@@ -359,3 +359,27 @@ test('a genuine unknown keeps its originating fence across default reconcile and
  await f.host.reconcile(f.fileId)
  assert.equal(f.calls.filter(call=>call.path.endsWith('/commits')).length,2)
 })
+
+test('an in-flight commit cannot be reconciled concurrently and erase a later save', async t => {
+  let entered, release
+  const started = new Promise(resolve => { entered = resolve })
+  const held = new Promise(resolve => { release = resolve })
+  let attempts = 0
+  const f = fixture(t, async path => {
+    if (!path.endsWith('/commits')) return
+    attempts++
+    if (attempts === 1) { entered(); await held }
+    return json({ ...f.ref, revision: committed })
+  })
+  const committed = randomUUID()
+  await f.host.open(f.fileId); await f.host.acquireLease(f.fileId)
+  const saving = f.host.save(f.fileId, f.bytes)
+  await started
+  try {
+    await assert.rejects(f.host.reconcile(f.fileId), { code: 'UNAVAILABLE' })
+    assert.equal(attempts, 1)
+    assert.equal(f.host.getState(f.fileId).status, 'saving')
+  } finally { release(); await saving }
+  assert.equal(f.host.getState(f.fileId).revision.revision, committed)
+  assert.equal(f.host.getState(f.fileId).status, 'idle')
+})
