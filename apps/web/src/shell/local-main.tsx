@@ -117,7 +117,14 @@ async function restore(){
  }
  installBridge()
 }
+let logoutPending=false
 async function logout(){
+ if(logoutPending)return
+ logoutPending=true
+ const resumeEntries=documentTabs.suspendEntries(),app=document.getElementById('app'),wasInert=app?.inert??false
+ let leaving=false
+ if(app)app.inert=true
+ try{
  const editors=[...document.querySelectorAll<HTMLIFrameElement>('.workspace-document-frame')].map(frame=>({id:frame.dataset.documentId!,api:frame.contentWindow as unknown as {dyofficeEditorCanClose?:()=>Promise<boolean>;dyofficeEditorDispose?:()=>Promise<boolean>}|null}))
  for(const editor of editors)if(!editor.api?.dyofficeEditorCanClose||!await editor.api.dyofficeEditorCanClose())return
  // Avoid activating a dormant neighbor while disposing for logout.
@@ -126,7 +133,11 @@ async function logout(){
   if(!editor.api?.dyofficeEditorDispose||!await editor.api.dyofficeEditorDispose())return
   await documentTabs.close(editor.id)
  }
- await client.logout();entryRecovery?.clear();location.replace('/')
+ await client.logout();entryRecovery?.clear();location.replace('/');leaving=true
+ }finally{
+  // Keep admission closed until navigation after successful session invalidation.
+  if(!leaving){resumeEntries();if(app)app.inert=wasInert;logoutPending=false}
+ }
 }
 function WorkspacePageContent({page,onClose,onCloseGuardChange,settingsTab,onSettingsTabChange}:{settingsTab?:string;onSettingsTabChange?:(tab:string)=>void;page:WorkspacePage;onClose:()=>void;onCloseGuardChange:(guard:(()=>boolean)|null)=>void}){
  const [sessionVersion,setSessionVersion]=useState(0)
