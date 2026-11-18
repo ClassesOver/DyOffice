@@ -28,7 +28,10 @@ export function registerJobRoutes(app: FastifyInstance,jobs: ReturnType<typeof c
       const job = await jobs.enqueueJob(cookies(request).session!,body.type,body.input,body.idempotencyKey)
       return reply.code(202).header('Location','/api/v1/jobs/' + job.id).send(job)
     })
-    api.get('/api/v1/jobs',{ schema: { querystring,response: { 200: object({ jobs: { type: 'array',maxItems: 100,items: jobSchema } }) } } },request => jobs.listJobs(cookies(request).session!))
+    api.get('/api/v1/jobs',{ schema: { querystring: object({limit: {type: 'string',pattern: '^(?:[1-9][0-9]?|100)$'},after: id},[]),response: { 200: object({ jobs: { type: 'array',maxItems: 100,items: jobSchema }, nextCursor: nullable(id) },['jobs']) } } },request => {
+      const query = request.query as {limit?: string; after?: string}, token = cookies(request).session!
+      return Object.keys(query).length ? jobs.listJobPage(token,{limit: query.limit === undefined ? undefined : Number(query.limit),after: query.after}) : jobs.listJobs(token)
+    })
     api.get('/api/v1/jobs/:id',{ schema: { params,querystring,response: { 200: jobSchema } } },request => jobs.getJob(cookies(request).session!,(request.params as { id: string }).id))
     api.post('/api/v1/jobs/:id/cancel',{ bodyLimit: 1024,schema: { params,querystring,response: { 200: jobSchema } } },request => {
       if (request.body!==undefined) throw authError(400)
