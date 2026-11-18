@@ -17,9 +17,9 @@ export function createDocsBridge(host: SessionFileHost, fileId: string, prefs: A
   let disposed = false, downloading = false
   let saveFence:(()=>boolean)|null=null
   async function guardedSave(check:()=>boolean,action:()=>Promise<boolean>){
-    if(saveFence||!check())return false
+    if(disposed||saveFence||!check())return false
     saveFence=check
-    try{return await action()}finally{saveFence=null}
+    try{const accepted=await action();return !disposed&&accepted}finally{saveFence=null}
   }
   let committed: import('../../../../packages/web-contracts/src/api').RevisionRef | null = null
   let consumed = false, ticket: SaveTicket | null = null
@@ -28,15 +28,17 @@ export function createDocsBridge(host: SessionFileHost, fileId: string, prefs: A
   const unavailable = async () => { throw new Error(text.unavailable) }
   const noEvent = () => () => {}
   const lifecycle = {
-    documentOpened() { guard.reset(); ticket = null; nativeSaveOutcome = 'none'; nativeSaveReasons = []; onChange() },
-    edited() { guard.markEdited(); onChange() },
+    documentOpened() { if(disposed)return; guard.reset(); ticket = null; nativeSaveOutcome = 'none'; nativeSaveReasons = []; onChange() },
+    edited() { if(disposed)return; guard.markEdited(); onChange() },
     async beforeSave() {
+      if(disposed)throw hostError('UNAVAILABLE','disposed')
       // The native queue may have waited after the download preflight. Do not
       // turn this action into implicit confirmation of an intervening save.
       if (downloading && (disposed || host.getState(fileId).status !== 'idle' || guard.getState().status === 'unknown')) throw hostError('UNAVAILABLE','download not ready')
       nativeSaveOutcome = 'pending'; nativeSaveReasons = []
       if (guard.getState().status === 'unknown') {
         await host.reconcile(fileId,saveFence??(()=>true))
+        if(disposed)throw hostError('UNAVAILABLE','disposed')
         if (ticket) guard.settleSave(ticket,'committed')
         ticket = null
       }
@@ -44,6 +46,7 @@ export function createDocsBridge(host: SessionFileHost, fileId: string, prefs: A
       onChange()
     },
     afterSave(accepted: boolean, incompleteReasons: readonly string[] = []) {
+      if(disposed)return
       nativeSaveOutcome = accepted ? 'accepted' : 'incomplete'
       nativeSaveReasons = [...incompleteReasons]
       if (ticket && guard.getState().status !== 'unknown') { guard.settleSave(ticket,'failed'); ticket = null }
@@ -100,13 +103,18 @@ export function createDocsBridge(host: SessionFileHost, fileId: string, prefs: A
       return { path: alias,name: state.name,dataUrl,hash: ref.sha256 }
     },
     async saveDocx(path: string, data: ArrayBuffer) {
-      if (path !== alias || (saveFence && !saveFence())) return { ok: false,error: text.saveFailed }
+      if (disposed || path !== alias || (saveFence && !saveFence())) return { ok: false,error: text.saveFailed }
       try {
-        committed = await host.save(fileId,new Uint8Array(data),saveFence??(()=>true))
+        const saved = await host.save(fileId,new Uint8Array(data),saveFence??(()=>true))
+        // A dispatched commit may still land. Preserve its host state, but never
+        // acknowledge it into an editor that has already been torn down.
+        if(disposed)return {ok:false,error:text.saveFailed}
+        committed = saved
         if (ticket) guard.settleSave(ticket,'committed')
         ticket = null; onChange()
         return { ok: true }
       } catch {
+        if(disposed)return {ok:false,error:text.saveFailed}
         const unknown = host.getState(fileId).status === 'unknown'
         if (ticket) guard.settleSave(ticket,unknown ? 'unknown' : 'failed')
         if (!unknown) ticket = null
