@@ -1,7 +1,9 @@
 import {codingHarnessConfig} from './coding-config.mjs';
 import {assertDocumentBackendPolicy} from '../worker/src/sandbox/document-backend-policy.ts';
+import { openIsolatedPptxSession } from '../worker/src/native/pptx-session-host.ts';
 import { configuredSheetsRuntime } from './src/modules/sheets/runtime.ts';
-import { resolve } from 'node:path';
+import { resolve, join } from 'node:path';
+import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { localShellDirectory } from './local-shell-config.mjs';
 import { fileURLToPath } from 'node:url';
@@ -13,15 +15,15 @@ import { parseConfigKeyring } from './src/modules/admin/keyring-config.ts';
 
 async function configuredApplication() {
   assertDocumentBackendPolicy(process.env);
-  const mode=process.env.DYOFFICE_AUTH_MODE||'development';
-  const shellDirectory=localShellDirectory(process.env);
+  const mode=process.env.DYOFFICE_AUTH_MODE||(process.env.DYOFFICE_AUTH_DATABASE_URL?'local':'development');
+  const shellDirectory=localShellDirectory({...process.env,DYOFFICE_AUTH_MODE:mode});
   const profilesFile=process.env.DYOFFICE_PROVIDER_GATEWAY_PROFILES;
   if(profilesFile && mode!=='local') throw new Error('Provider Gateway requires local mode');
   const assistantSourceFlag=process.env.DYOFFICE_ASSISTANT_SOURCE_CATALOG;
   if(assistantSourceFlag && (mode!=='local'||assistantSourceFlag!=='metadata-only'||(!profilesFile&&!process.env.DYOFFICE_CONFIG_KEYRING))) throw new Error('Assistant source catalog requires explicit metadata-only local mode and provider gateway');
   const assistantSourceCatalog=assistantSourceFlag==='metadata-only';
   const sheetsFlag=process.env.DYOFFICE_NATIVE_XLSX;
-  if(sheetsFlag && (sheetsFlag!=='experimental'||mode!=='local')) throw new Error('Native Sheets requires explicit experimental local mode');
+  if(sheetsFlag && sheetsFlag!=='off' && (sheetsFlag!=='experimental'||mode!=='local')) throw new Error('Native Sheets requires explicit experimental local mode');
   const jobFlag=process.env.DYOFFICE_NATIVE_JOBS;
   if(jobFlag && (jobFlag!=='experimental'||mode!=='local')) throw new Error('Native jobs require explicit experimental local mode');
   if(mode==='development') return buildApp({
@@ -49,13 +51,34 @@ async function configuredApplication() {
   let businessPool,storage,sheets;
   try {
     businessPool=new Pool({connectionString:businessConnectionString,max:4,connectionTimeoutMillis:5000});
-    storage=await configuredObjectStore(process.env);
+    const defaultShellDir=fileURLToPath(new URL('../dist-local-shell/',import.meta.url));
+    const hasBuiltShell=existsSync(join(defaultShellDir,'.vite/manifest.json'));
+    const storageEnv=process.env.DYOFFICE_FILE_API===undefined && process.env.DYOFFICE_OBJECT_STORE===undefined && (process.env.DYOFFICE_OBJECT_DIRECTORY || (process.env.NODE_ENV!=='test' && hasBuiltShell))
+      ? {...process.env,DYOFFICE_FILE_API:'experimental',DYOFFICE_OBJECT_STORE:'local-dev',DYOFFICE_OBJECT_DIRECTORY:resolve(process.env.DYOFFICE_OBJECT_DIRECTORY||'.dyoffice/objects')}
+      : process.env;
+    storage=await configuredObjectStore(storageEnv);
     const nativeFlag=process.env.DYOFFICE_NATIVE_DOCX;
-    if(nativeFlag && nativeFlag!=='experimental') throw new Error('Unknown native DOCX mode');
-    const nativeDocsDirectory=nativeFlag ? resolve(process.env.DYOFFICE_NATIVE_DOCX_DIRECTORY||fileURLToPath(new URL('../dist-docs/',import.meta.url))) : undefined;
-    sheets=await configuredSheetsRuntime(process.env);
+    if(nativeFlag && nativeFlag!=='experimental' && nativeFlag!=='off') throw new Error('Unknown native DOCX mode');
+    const defaultDocsDir=resolve(process.env.DYOFFICE_NATIVE_DOCX_DIRECTORY||fileURLToPath(new URL('../dist-docs/',import.meta.url)));
+    const nativeDocsDirectory=nativeFlag==='experimental' ? defaultDocsDir : (nativeFlag===undefined && storage.objectStore && existsSync(join(defaultDocsDir,'.vite/manifest.json')) ? defaultDocsDir : undefined);
+    const slidesFlag=process.env.DYOFFICE_NATIVE_PPTX;
+    if(slidesFlag && slidesFlag!=='experimental' && slidesFlag!=='off') throw new Error('Unknown native PPTX mode');
+    const defaultSlidesDir=resolve(process.env.DYOFFICE_NATIVE_PPTX_DIRECTORY||fileURLToPath(new URL('../dist-slides/',import.meta.url)));
+    const nativeSlidesDirectory=slidesFlag==='experimental' ? defaultSlidesDir : (slidesFlag===undefined && storage.objectStore && existsSync(join(defaultSlidesDir,'.vite/manifest.json')) ? defaultSlidesDir : undefined);
+    const slidesHost=nativeSlidesDirectory ? {openSession:(input)=>openIsolatedPptxSession({fileId:input.fileId,revision:input.revision,bytes:input.bytes},{timeoutMs:60000,experimental:true})} : undefined;
+    const legacyDistDir=resolve(fileURLToPath(new URL('../dist/',import.meta.url)));
+    const effectiveShellDirectory=(shellDirectory && shellDirectory!==legacyDistDir) ? shellDirectory : (storage.objectStore && hasBuiltShell ? defaultShellDir : shellDirectory);
+    const defaultSheetsDir=resolve(process.env.DYOFFICE_NATIVE_XLSX_DIRECTORY||fileURLToPath(new URL('../dist-sheets/',import.meta.url)));
+    const defaultGatewayPath=resolve(process.env.DYOFFICE_XLSX_GATEWAY_RUNNER||fileURLToPath(new URL('../dist-sheets-server/gateway-process.mjs',import.meta.url)));
+    const defaultNodeEnginePath=resolve(fileURLToPath(new URL('../dist-sheets-server/xlsx-node-engine.mjs',import.meta.url)));
+    let sheetsEnv={...process.env,DYOFFICE_AUTH_MODE:mode};
+    if(sheetsFlag===undefined && storage.objectStore && existsSync(join(defaultSheetsDir,'.vite/manifest.json')) && existsSync(defaultGatewayPath) && (process.env.DYOFFICE_NATIVE_BINARY || existsSync(defaultNodeEnginePath))){
+      sheetsEnv={...sheetsEnv,DYOFFICE_NATIVE_XLSX:'experimental',...(process.env.DYOFFICE_NATIVE_BINARY ? {} : {DYOFFICE_XLSX_NODE_ENGINE:defaultNodeEnginePath})};
+    }
+    sheets=sheetsFlag==='off' ? undefined : await configuredSheetsRuntime(sheetsEnv);
     const {close:closeSheets,...sheetsConfig}=sheets ?? {};
-    return await buildLocalApp({db,businessPool,...storage,...sheetsConfig,nativeDocsDirectory,localShellDirectory:shellDirectory,nativeJobs:jobFlag==='experimental',deploymentId,origin,csrfKey,globalConfigKeyring,providerGateway,assistantSourceCatalog,assistantChannels:process.env.DYOFFICE_ASSISTANT_CHANNELS==='on',codingHarnesses:codingHarnessConfig(process.env),sourcesCredentialKeys,sourcesEgressTargets,passwordBlocklistFile:process.env.DYOFFICE_PASSWORD_BLOCKLIST_FILE,closeDb:async()=>{await closeSheets?.();storage.close();await Promise.all([close(),businessPool.end()]);}});
+    const nativePdf=process.env.DYOFFICE_NATIVE_PDF!=='off' && Boolean(storage.objectStore) && (Boolean(nativeDocsDirectory) || Boolean(nativeSlidesDirectory) || Boolean(sheets));
+    return await buildLocalApp({db,businessPool,...storage,...sheetsConfig,nativeDocsDirectory,nativeSlidesDirectory,slidesHost,nativePdf,localShellDirectory:effectiveShellDirectory,nativeJobs:jobFlag==='experimental',deploymentId,origin,csrfKey,globalConfigKeyring,providerGateway,assistantSourceCatalog,assistantChannels:process.env.DYOFFICE_ASSISTANT_CHANNELS==='on',codingHarnesses:codingHarnessConfig(process.env),sourcesCredentialKeys,sourcesEgressTargets,passwordBlocklistFile:process.env.DYOFFICE_PASSWORD_BLOCKLIST_FILE,closeDb:async()=>{await closeSheets?.();storage.close();await Promise.all([close(),businessPool.end()]);}});
   } catch(error) { await sheets?.close();storage?.close();await Promise.allSettled([close(),businessPool?.end()]); throw error; }
 }
 

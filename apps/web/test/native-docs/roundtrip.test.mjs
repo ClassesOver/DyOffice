@@ -14,10 +14,11 @@ import { phaseDiagnostics, observeFirstRequest } from '../helpers/phase-diagnost
 import { withInputDiagnostics } from '../helpers/input-diagnostics.mjs'
 
 const docsDirectory = fileURLToPath(new URL('../../dist-docs/',import.meta.url))
-async function fixture(t) {
+async function fixture(t, {beforeCleanup = () => {}} = {}) {
   const directory = await mkdtemp(join(tmpdir(),'dyoffice-native-docs-'))
   let f, browser, server
   t.after(async () => {
+    beforeCleanup()
     await browser?.close()
     if (server) { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)) }
     await f?.app.close()
@@ -138,9 +139,10 @@ test('editing during a delayed native save keeps the newer draft dirty and saves
   const diagnostic = phaseDiagnostics(t.signal)
   t.after(() => diagnostic.dispose())
   try {
-  const f = await fixture(t)
+  let requestDiagnostic
+  const f = await fixture(t, {beforeCleanup: () => requestDiagnostic?.beginCleanup()})
   f.page.on('pageerror', () => diagnostic.count('pageerror'))
-  const requestDiagnostic = observeFirstRequest(f.page, diagnostic)
+  requestDiagnostic = observeFirstRequest(f.page, diagnostic, {signal: t.signal})
   t.after(() => requestDiagnostic.dispose())
   diagnostic.stage('open')
   await f.page.goto(f.origin + '/native-docx/?fileId=' + f.opened.file.fileId)
@@ -183,7 +185,7 @@ test('editing during a delayed native save keeps the newer draft dirty and saves
   diagnostic.stage('first-response-wait')
   const releasedResponse = await firstResponse
   diagnostic.stage('first-response-finished')
-  assert.equal(await releasedResponse.finished(),null)
+  assert.equal(await requestDiagnostic.finished(releasedResponse),null)
   diagnostic.stage('native-incomplete')
   await expect(f.page.locator('.dyoffice-docs-persistence-state')).toHaveAttribute('data-native-save','incomplete')
   diagnostic.stage('native-dirty')
@@ -215,7 +217,17 @@ test('native editor preserves unsaved text and becomes read only after another t
   await second.goto(path)
   await expect(second.getByRole('button',{ name: 'Take over editing' })).toBeVisible({ timeout: 45_000 })
   await expect(second.locator('.tiptap.doc-page')).toHaveAttribute('contenteditable','false')
+  try {
   await second.getByRole('button',{ name: 'Take over editing' }).click()
+  } catch(error) {
+    const state=await second.evaluate(()=>{
+      const button=document.querySelector('[data-takeover-blockers]')
+      const allowed=new Set(['loading','no-handle','taking-over','downloading','dirty','local-busy','host-unknown','host-saving'])
+      return {present:!!button,disabled:button instanceof HTMLButtonElement?button.disabled:null,blockers:(button?.getAttribute('data-takeover-blockers')??'').split(',').filter(value=>allowed.has(value))}
+    }).catch(()=>({unavailable:true}))
+    console.error('takeover-state',JSON.stringify(state))
+    throw error
+  }
   await expect(second.locator('.tiptap.doc-page')).toHaveAttribute('contenteditable','true')
   await f.page.bringToFront()
   await expect(f.page.locator('.tiptap.doc-page')).toHaveAttribute('contenteditable','false',{ timeout: 25_000 })

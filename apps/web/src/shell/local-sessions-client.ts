@@ -48,4 +48,4 @@ export function createLocalSessionsClient(send:typeof fetch=fetch,onSessionExpir
 }
 export type LocalSessionsClient=ReturnType<typeof createLocalSessionsClient>
 // Survives Settings panel unmount/remount; holds no authentication secrets.
-export const localSessionsClient=createLocalSessionsClient()
+export const localSessionsClient=createLocalSessionsClient(async()=>{throw Object.assign(new Error('登录状态未核验，请重新加载当前工作区。'),{code:'stale_session'})})

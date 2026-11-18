@@ -1,3 +1,5 @@
+import {LocalDraftCopy} from './local-draft-copy'
+import type {DraftCopyAuthority} from './draft-copy-authority'
 import {DocumentNotifications} from './document-notifications'
 import {createEditorCloseLifecycle} from './editor-close-lifecycle'
 import {createAnalysisDocumentTarget} from '../../../../packages/browser-host/src/analysis-document-target.ts'
@@ -31,14 +33,23 @@ import '../../../docs/src/renderer/styles.css'
 import '../../../docs/src/renderer/fonts/fonts.css'
 import './docs.css'
 
-export async function mountDocsEditor(host: SessionFileHost,element: HTMLElement,fileId: string) {
+export async function mountDocsEditor(host: SessionFileHost,element: HTMLElement,fileId: string,draftAuthority:DraftCopyAuthority={current:()=>false,verify:async()=>false}) {
   element.textContent = messages.zh.opening
   if (!/^[0-9a-f-]{36}$/i.test(fileId)) throw new Error(messages.zh.failed)
   let closing=false
   let changed = () => {}
   let disposed = false, downloading = false, actionError = ''
   let editorHandle: DocsEditorHandle | null = null
-  const registerEditor = (handle: DocsEditorHandle | null) => { editorHandle = handle }
+  const registerEditor = (handle: DocsEditorHandle | null) => {
+    if (disposed) return
+    const readinessChanged = !!editorHandle !== !!handle
+    editorHandle = handle
+    if (readinessChanged) changed()
+  }
+  // Every registration gets a fresh local-copy identity, including detach/rebind
+  // of the same renderer handle. Keep the readiness callback semantics unchanged.
+  let draftEditor:Pick<DocsEditorHandle,'serialize'>|null=null
+  const registerDraftEditor=(handle:DocsEditorHandle|null)=>{draftEditor=handle?{serialize:()=>handle.serialize()}:null;registerEditor(handle)}
   const unsubscribe = host.subscribe(() => changed())
   const assistantResult = await loadEditorAssistant({fileId,editorId:host.getEditorId()!,generation:()=>1})
   const assistant = assistantResult.assistant
@@ -79,6 +90,13 @@ export async function mountDocsEditor(host: SessionFileHost,element: HTMLElement
     } catch { if (!disposed) actionError = text.saveFailed }
     finally { downloading = false; if (!disposed) changed() }
   }
+  async function takeOver(){
+    if(!editorHandle||disposed||bridge.getState().takingOver)return
+    const wasInert=element.inert;actionError='';element.inert=true
+    try{await bridge.takeover(editorHandle);initialLease=true}
+    catch(error){if(!disposed)actionError=error instanceof Error&&(error.message===text.takeoverDirty||error.message===text.takeoverStale)?error.message:text.takeoverFailed}
+    finally{if(!disposed){element.inert=wasInert;changed()}}
+  }
   function NativeDocument() {
     const [,tick] = useState(0), [loaded,setLoaded] = useState(false), [failed,setFailed] = useState(false)
     const state = host.getState(fileId)
@@ -89,7 +107,7 @@ export async function mountDocsEditor(host: SessionFileHost,element: HTMLElement
       return () => window.removeEventListener('focus',focus)
     },[])
     const local = bridge.getState()
-    const warning = failed ? text.failed : state.status === 'unknown' ? text.unknown : state.status === 'unauthorized' ? text.unauthorized : !state.lease && loaded ? (initialLease ? text.conflict : text.readOnly) : actionError
+    const warning = failed ? text.failed : state.status === 'unknown' ? text.unknown : state.status === 'unauthorized' ? text.unauthorized : !state.lease && loaded ? (actionError || (initialLease ? text.conflict : text.readOnly)) : actionError
     const notice = realtime.notice(locale)
     const status = !loaded ? text.opening : downloading ? text.downloadSaving : state.status === 'saving' || local.status === 'saving' ? (locale === 'zh' ? '正在保存…' : 'Saving…') : local.dirty ? (locale === 'zh' ? '未保存' : 'Unsaved') : text.ready
     const saveStatus = <>
@@ -98,23 +116,24 @@ export async function mountDocsEditor(host: SessionFileHost,element: HTMLElement
     const fileActions = <>
       <div className="file-menu-sep" />
       <button className="dyoffice-docs-save-download" title={text.saveDownloadVersionHint} disabled={!loaded || failed || !editorHandle || !state.lease || state.status !== 'idle' || downloading} onClick={() => { void saveAndDownload() }}>{text.saveDownload}</button>
+      <LocalDraftCopy name={state.name} locale={locale} authority={draftAuthority} getEditor={()=>!disposed&&!closing&&loaded&&!failed&&host.getState(fileId).status!=='unauthorized'?draftEditor:null}/>
       <a className="dyoffice-docs-download" href={`/api/v1/files/${fileId}/content?revision=${state.revision.revision}`} download>{text.download}</a>
     </>
     return <div className="dyoffice-native-docs">
       <DocumentNotifications locale={locale} items={[
         ...(assistantNotice ? [{id:'assistant',level:prefs.showAssistant === false ? 'info' as const : 'warning' as const,title:locale === 'zh' ? 'AI 助手' : 'AI Assistant',message:assistantNotice}] : []),
         ...(warning ? [{id:'document-state',level:'error' as const,title:locale === 'zh' ? '文档需要处理' : 'Document needs attention',message:warning,actions:<>
-        {!state.lease && !failed && state.status !== 'unauthorized' && <button onClick={() => { void host.takeoverLease(fileId).then(() => { initialLease = true }).catch(() => { actionError = text.takeoverFailed; changed() }) }}>{text.takeover}</button>}
+        {!state.lease && !failed && state.status !== 'unauthorized' && <button data-takeover-blockers={[!loaded && 'loading', !editorHandle && 'no-handle', local.takingOver && 'taking-over', downloading && 'downloading', local.dirty && 'dirty', local.status !== 'idle' && 'local-busy', state.status === 'unknown' && 'host-unknown', state.status === 'saving' && 'host-saving'].filter(Boolean).join(',')} disabled={!loaded || !editorHandle || local.takingOver || downloading || local.dirty || local.status !== 'idle' || state.status === 'unknown' || state.status === 'saving'} onClick={() => { void takeOver() }}>{text.takeover}</button>}
         {state.status === 'unknown' && <button onClick={() => { void host.reconcile(fileId).then(() => changed()).catch(() => {}) }}>{text.retry}</button>}
       </>}] : []),
         ...(notice ? [{id:'version',level:'info' as const,title:locale === 'zh' ? '版本同步' : 'Version updates',message:notice}] : []),
       ]} />
-      <App host={{ fileActions,saveStatus,desktopActionsAvailable:false,readOnly: !loaded || failed || !state.lease,assistantAvailable,assistant,preferenceScope: fileId,onEditorReady: registerEditor,lifecycle: { ...bridge.lifecycle,documentOpened() { bridge.lifecycle.documentOpened(); setLoaded(true) } },onDocumentEdited: bridge.lifecycle.edited,onOpenFailed: () => setFailed(true) }} />
+      <App host={{ fileActions,saveStatus,desktopActionsAvailable:false,readOnly: !loaded || failed || !state.lease || local.takingOver,assistantAvailable,assistant,preferenceScope: fileId,onEditorReady: registerDraftEditor,lifecycle: { ...bridge.lifecycle,documentOpened() { bridge.lifecycle.documentOpened(); setLoaded(true) } },onDocumentEdited: bridge.lifecycle.edited,onOpenFailed: () => setFailed(true) }} />
     </div>
   }
   const root = createRoot(element)
   root.render(<LocaleProvider initial={locale}><NativeDocument /></LocaleProvider>)
-  const closeState=()=>({dirty:!!editorHandle?.isDirty()||bridge.getState().dirty,blocked:downloading||['unknown','saving'].includes(host.getState(fileId).status)||bridge.getState().nativeSaveOutcome==='pending'})
+  const closeState=()=>({dirty:!!editorHandle?.isDirty()||bridge.getState().dirty,blocked:downloading||bridge.getState().takingOver||['unknown','saving'].includes(host.getState(fileId).status)||bridge.getState().nativeSaveOutcome==='pending'})
   const beforeUnload = (event: BeforeUnloadEvent) => {
     if (closeState().dirty || closeState().blocked) { event.preventDefault(); event.returnValue = '' }
   }

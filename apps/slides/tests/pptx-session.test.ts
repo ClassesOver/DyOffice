@@ -432,3 +432,18 @@ it('rejects a canonical ID colliding with another element alias before any batch
   await expect(s.apply(0,[op('e_87654321','unique')])).resolves.toMatchObject({generation:1})
   s.close()
 })
+
+it('supports shape geometry, table creation/editing, and slide visibility operations', async () => {
+  const {bytes}=await fixture();const s=await createPptxSession(bytes)
+  const addedShape=await s.apply(0,[{op:'addElement',target:{slide:0},kind:'rect',offset:{x:914400,y:914400,cx:1828800,cy:914400}}])
+  const shapeId=addedShape.created[0]!.id
+  await expect(s.apply(1,[{op:'setShapeGeometry',target:{slide:0,el:shapeId},prst:'roundRect'}])).resolves.toMatchObject({generation:2})
+  await expect(s.apply(2,[{op:'flipElements',target:{slide:0},els:[shapeId],axis:'h'}])).resolves.toMatchObject({generation:3})
+  const addedTable=await s.apply(3,[{op:'addTable',target:{slide:0},offset:{x:914400,y:2743200,cx:3657600,cy:1828800},rows:2,cols:2}])
+  const tableId=addedTable.created[0]!.id
+  await expect(s.apply(4,[{op:'setTableCell',target:{slide:0,el:tableId},row:0,col:0,paragraphs:[{runs:[{text:'Cell A1'}]}]}])).resolves.toMatchObject({generation:5})
+  await expect(s.apply(5,[{op:'setHidden',target:{slide:0},hidden:true}])).resolves.toMatchObject({generation:6})
+  const render=await s.render(6,0)
+  expect(JSON.stringify(render)).toContain('Cell A1')
+  s.close()
+})

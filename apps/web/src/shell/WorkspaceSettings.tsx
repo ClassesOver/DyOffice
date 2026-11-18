@@ -20,6 +20,8 @@ export function WorkspaceSettings({user,load,save,security,skills,onLogout,onClo
  const preferenceId=useId()
  const [localTab,setLocalTab]=useState('account')
  const selectedTab=activeTab??localTab
+ const visitedTabs=useRef(new Set<string>())
+ visitedTabs.current.add(selectedTab)
  const tabTitles:Record<string,[string,string]>={account:['账户与安全','管理个人资料、密码与登录活动。'],general:['通用偏好','让工作区更贴合你的习惯。'],skills:['个人技能','管理和扩展你的个人办公技能。']}
  const [baseline,setBaseline]=useState<WebSettingsPreferences|null>(null),[draft,setDraft]=useState<WebSettingsPreferences|null>(null)
  const [sessionVersion,setSessionVersion]=useState(0)
@@ -58,11 +60,11 @@ export function WorkspaceSettings({user,load,save,security,skills,onLogout,onClo
   <Typography.Text type="secondary">语言与编辑器偏好保存后，在刷新页面或重新打开文档时生效。</Typography.Text>
   </Form>
  </div>
- const activeContent=selectedTab==='account'?account:selectedTab==='general'?general:<div className="personal-settings-skills">{typeof skills==='function'?skills(skillsGuard):skills}</div>
+ const content={account,general,skills:<div className="personal-settings-skills">{typeof skills==='function'?skills(skillsGuard):skills}</div>}
  const operationStatus=operation==='load'?'正在读取个人偏好…':operation==='save'?'正在保存…':!draft?'个人偏好读取失败，请重新读取':dirty?'有未保存的更改':saved?'个人偏好已保存':'所有更改已保存'
  return <section className="personal-settings-b">
  <SettingsWorkbench ariaLabel="个人设置" caption="个人设置" footer={<><SafetyCertificateOutlined/><span>个人工作区配置<br/>仅对当前账号生效</span></>} navigation={[{key:'account',label:'账户与安全',icon:<SafetyCertificateOutlined/>},{key:'general',label:'通用偏好',icon:<SlidersOutlined/>},{key:'skills',label:'个人技能',icon:<AppstoreOutlined/>}]} activeKey={selectedTab} onNavigationChange={tab=>{setLocalTab(tab);onTabChange?.(tab)}} title={tabTitles[selectedTab][0]} description={tabTitles[selectedTab][1]} status={<span className={`personal-settings-save-state${dirty?' is-dirty':''}`} role="status" aria-live="polite">{operationStatus}</span>} actions={<><Button disabled={busy} onClick={()=>void refresh()}>重新读取</Button><Button disabled={busy||!dirty} onClick={revert}>撤销更改</Button><Button type="primary" loading={operation==='save'} disabled={busy||!dirty} onClick={()=>void commit()}>保存个人偏好</Button></>}>
-   {error&&<Alert type="error" showIcon role="alert" title={error}/>}{saved&&<Alert type="success" showIcon role="status" title="个人偏好已保存"/>}{activeContent}
+   {error&&<Alert type="error" showIcon role="alert" title={error}/>}{saved&&<Alert type="success" showIcon role="status" title="个人偏好已保存"/>}{(['account','general','skills'] as const).filter(tab=>visitedTabs.current.has(tab)).map(tab=><div key={tab} hidden={selectedTab!==tab}>{content[tab]}</div>)}
  </SettingsWorkbench>
  </section>
 }

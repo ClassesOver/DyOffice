@@ -7,19 +7,22 @@ import { messages } from './messages.ts'
 
 // The native DOCX entry does not import the shell TabBar's global declaration.
 // Only these optional, same-origin parent capabilities are used by this bridge.
-type ParentTabsWindow = Window & {aiOfficeTabs?: Pick<TabsApi, 'list' | 'activate'>}
+type ParentTabsWindow = Window & {
+  aiOfficeTabs?: Pick<TabsApi, 'list' | 'activate'>
+  dyofficeOpenEditorSettings?: (target: 'models' | 'skills', caller: Window) => void
+}
 
 /** A narrow compatibility bridge for the existing renderer. Opaque paths are
  * aliases only; they never become filesystem paths or server authorization. */
 export function createDocsBridge(host: SessionFileHost, fileId: string, prefs: Awaited<ReturnType<SessionFileHost['getPreferences']>>, onChange: () => void) {
   const locale = prefs.language === 'en' ? 'en' : 'zh', text = messages[locale], state = host.getState(fileId)
   const alias = `/files/${fileId}/${state.name}`, guard = createSaveGenerationGuard(), urls = new Set<string>()
-  let disposed = false, downloading = false
+  let disposed = false, downloading = false, takingOver = false
   let saveFence:(()=>boolean)|null=null
   async function guardedSave(check:()=>boolean,action:()=>Promise<boolean>){
-    if(saveFence||!check())return false
+    if(disposed||takingOver||saveFence||!check())return false
     saveFence=check
-    try{return await action()}finally{saveFence=null}
+    try{const accepted=await action();return !disposed&&accepted}finally{saveFence=null}
   }
   let committed: import('../../../../packages/web-contracts/src/api').RevisionRef | null = null
   let consumed = false, ticket: SaveTicket | null = null
@@ -28,15 +31,17 @@ export function createDocsBridge(host: SessionFileHost, fileId: string, prefs: A
   const unavailable = async () => { throw new Error(text.unavailable) }
   const noEvent = () => () => {}
   const lifecycle = {
-    documentOpened() { guard.reset(); ticket = null; nativeSaveOutcome = 'none'; nativeSaveReasons = []; onChange() },
-    edited() { guard.markEdited(); onChange() },
+    documentOpened() { if(disposed)return; guard.reset(); ticket = null; nativeSaveOutcome = 'none'; nativeSaveReasons = []; onChange() },
+    edited() { if(disposed)return; guard.markEdited(); onChange() },
     async beforeSave() {
+      if(disposed||takingOver)throw hostError('UNAVAILABLE','disposed or taking over')
       // The native queue may have waited after the download preflight. Do not
       // turn this action into implicit confirmation of an intervening save.
       if (downloading && (disposed || host.getState(fileId).status !== 'idle' || guard.getState().status === 'unknown')) throw hostError('UNAVAILABLE','download not ready')
       nativeSaveOutcome = 'pending'; nativeSaveReasons = []
       if (guard.getState().status === 'unknown') {
         await host.reconcile(fileId,saveFence??(()=>true))
+        if(disposed)throw hostError('UNAVAILABLE','disposed')
         if (ticket) guard.settleSave(ticket,'committed')
         ticket = null
       }
@@ -44,6 +49,7 @@ export function createDocsBridge(host: SessionFileHost, fileId: string, prefs: A
       onChange()
     },
     afterSave(accepted: boolean, incompleteReasons: readonly string[] = []) {
+      if(disposed)return
       nativeSaveOutcome = accepted ? 'accepted' : 'incomplete'
       nativeSaveReasons = [...incompleteReasons]
       if (ticket && guard.getState().status !== 'unknown') { guard.settleSave(ticket,'failed'); ticket = null }
@@ -100,13 +106,18 @@ export function createDocsBridge(host: SessionFileHost, fileId: string, prefs: A
       return { path: alias,name: state.name,dataUrl,hash: ref.sha256 }
     },
     async saveDocx(path: string, data: ArrayBuffer) {
-      if (path !== alias || (saveFence && !saveFence())) return { ok: false,error: text.saveFailed }
+      if (disposed || takingOver || path !== alias || (saveFence && !saveFence())) return { ok: false,error: text.saveFailed }
       try {
-        committed = await host.save(fileId,new Uint8Array(data),saveFence??(()=>true))
+        const saved = await host.save(fileId,new Uint8Array(data),saveFence??(()=>true))
+        // A dispatched commit may still land. Preserve its host state, but never
+        // acknowledge it into an editor that has already been torn down.
+        if(disposed)return {ok:false,error:text.saveFailed}
+        committed = saved
         if (ticket) guard.settleSave(ticket,'committed')
         ticket = null; onChange()
         return { ok: true }
       } catch {
+        if(disposed)return {ok:false,error:text.saveFailed}
         const unknown = host.getState(fileId).status === 'unknown'
         if (ticket) guard.settleSave(ticket,unknown ? 'unknown' : 'failed')
         if (!unknown) ticket = null
@@ -116,7 +127,12 @@ export function createDocsBridge(host: SessionFileHost, fileId: string, prefs: A
     },
     confirmDocumentReplace: async () => window.confirm(text.conflict),
     openDocx: unavailable,openDocxPath: unavailable,openDocxDecrypt: unavailable,
-    saveDocxAs: unavailable,saveDocxNew: unavailable,saveDocxTo: unavailable,
+    async saveDocxAs(_currentPath: string | null, data: ArrayBuffer) {
+      const name = host.getState(fileId).name
+      download(new Blob([data],{type:'application/vnd.openxmlformats-officedocument.wordprocessingml.document'}),name)
+      return {ok:true as const,path:alias,name}
+    },
+    saveDocxNew: unavailable,saveDocxTo: unavailable,
     setDocPassword: unavailable,writeRecoveryCopy: unavailable,
     async pickImage(){return new Promise<import('../../../docs/src/shared/ipc').PickImageResult|null>((resolve,reject)=>{const input=document.createElement('input');input.type='file';input.accept='image/png,image/jpeg,image/gif';input.hidden=true;const cleanup=()=>input.remove();input.oncancel=()=>{cleanup();resolve(null)};input.onchange=()=>{const file=input.files?.[0];if(!file){cleanup();resolve(null);return}if(!['image/png','image/jpeg','image/gif'].includes(file.type)||file.size>16*1024*1024){cleanup();reject(Error(text.unavailable));return}const reader=new FileReader();reader.onerror=()=>{cleanup();reject(Error(text.unavailable))};reader.onload=()=>{cleanup();resolve({name:file.name,mime:file.type as 'image/png'|'image/jpeg'|'image/gif',base64:String(reader.result).split(',')[1]})};reader.readAsDataURL(file)};document.body.append(input);input.click()})},
     fetchImage: unavailable,
@@ -125,11 +141,14 @@ export function createDocsBridge(host: SessionFileHost, fileId: string, prefs: A
     listPrinters: async () => [],
     async print(){try{window.print();return {ok:true}}catch{return {ok:false,error:'浏览器打印不可用。'}}},
     async exportHtml(name:string,html:string){download(new Blob([html],{type:'text/html;charset=utf-8'}),name.replace(/\.docx$/i,'')+'.html');return {ok:true}},
-    exportPdf: unavailable,exportMarkdown: unavailable,pickExportImagesTarget: unavailable,printPdfBuffer: unavailable,
+    exportPdf: unavailable,
+    async exportMarkdown(name:string,md:string){download(new Blob([md],{type:'text/markdown;charset=utf-8'}),name.replace(/\.docx$/i,'')+'.md');return {ok:true}},
+    pickExportImagesTarget: unavailable,printPdfBuffer: unavailable,
     pickMergeDataSource: unavailable,writeMergeOutput: unavailable,zoteroCommand: unavailable,
     onZoteroRequest:noEvent,
 
-    openAiModelSettings: unavailable,openSkillsSettings: unavailable,
+    async openAiModelSettings(){const open=(window.parent as ParentTabsWindow).dyofficeOpenEditorSettings;if(!open)throw new Error(text.unavailable);open('models',window)},
+    async openSkillsSettings(){const open=(window.parent as ParentTabsWindow).dyofficeOpenEditorSettings;if(!open)throw new Error(text.unavailable);open('skills',window)},
   } satisfies Partial<DesktopApi>
   async function prepareDownload(editor: {save(): Promise<boolean>; isDirty(): boolean}) {
     const before = host.getState(fileId)
@@ -147,5 +166,24 @@ export function createDocsBridge(host: SessionFileHost, fileId: string, prefs: A
       return {...receipt}
     } finally { downloading = false }
   }
-  return { api,lifecycle,guardedSave,prepareDownload,getReceipt:()=>committed,getState: () => ({...guard.getState(), nativeSaveOutcome, nativeSaveReasons}),dispose() { disposed = true; panelListeners.clear(); for (const url of urls) URL.revokeObjectURL(url); urls.clear() } }
+  async function takeover(editor:{isDirty():boolean}) {
+    if(disposed||takingOver||downloading||saveFence)throw hostError('UNAVAILABLE','takeover unavailable')
+    const assertClean=()=>{
+      if(disposed)throw hostError('UNAVAILABLE','disposed')
+      const local=guard.getState(),state=host.getState(fileId)
+      if(editor.isDirty()||local.dirty||local.status!=='idle'||nativeSaveOutcome==='pending'||['unknown','saving'].includes(state.status))throw new Error(text.takeoverDirty)
+    }
+    assertClean();takingOver=true;onChange()
+    let acquired=false
+    try{
+      if(!await host.isCurrentRevision(fileId))throw new Error(text.takeoverStale)
+      assertClean()
+      await host.takeoverLease(fileId);acquired=true
+      assertClean()
+      if(!await host.isCurrentRevision(fileId))throw new Error(text.takeoverStale)
+      assertClean()
+    }catch(error){if(acquired)await host.releaseLease(fileId).catch(()=>{});throw error}
+    finally{takingOver=false;if(!disposed)onChange()}
+  }
+  return { api,lifecycle,guardedSave,takeover,prepareDownload,getReceipt:()=>committed,getState: () => ({...guard.getState(), nativeSaveOutcome, nativeSaveReasons, takingOver}),dispose() { disposed = true; panelListeners.clear(); for (const url of urls) URL.revokeObjectURL(url); urls.clear() } }
 }

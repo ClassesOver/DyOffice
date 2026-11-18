@@ -68,13 +68,14 @@ export async function parseOfficePreview(bytes:Uint8Array,format:'xlsx'|'pptx'):
 }
 export function DocumentPreview({fileId,name,format,request}:{fileId:string;name:string;format:'docx'|'xlsx'|'pptx'|'pdf';request:SettingsRequest}){
  const [pages,setPages]=useState<PreviewPage[]>([]),[url,setUrl]=useState(''),[error,setError]=useState(''),[busy,setBusy]=useState(true)
- const host=useRef<HTMLDivElement>(null),loading=useRef(true)
+ const [revision,setRevision]=useState(''),[pdfPageCount,setPdfPageCount]=useState(0),[targetPage,setTargetPage]=useState(1),[rotations,setRotations]=useState<Record<number,number>>({}),[savingPdf,setSavingPdf]=useState(false),[pdfMessage,setPdfMessage]=useState('')
+ const host=useRef<HTMLDivElement>(null),loading=useRef(true),pdfBytesRef=useRef<Uint8Array|null>(null)
  const [attempt,setAttempt]=useState(0)
  function retry(){if(loading.current)return;loading.current=true;setBusy(true);setAttempt(value=>value+1)}
- useEffect(()=>{let alive=true;const abort=new AbortController();const target=host.current;loading.current=true;setPages([]);setUrl('');setError('');setBusy(true)
+ useEffect(()=>{let alive=true;const abort=new AbortController();const target=host.current;loading.current=true;setPages([]);setUrl('');setError('');setBusy(true);setPdfPageCount(0);setRotations({});setPdfMessage('');pdfBytesRef.current=null
  void(async()=>{try{
   const metadata=await request<Metadata>(`/api/v1/files/${encodeURIComponent(fileId)}`)
-  const endpoint=resolvePreviewContentUrl(fileId,metadata);if(!alive)return;setUrl(endpoint)
+  const endpoint=resolvePreviewContentUrl(fileId,metadata);if(!alive)return;setUrl(endpoint);setRevision(metadata.file.revision)
   if(format==='docx')throw Error('当前 Word 编辑器未启用，请下载原件。')
   const response=await fetch(endpoint,{credentials:'same-origin',signal:abort.signal,redirect:'error'})
   if(!response.ok){await response.body?.cancel();throw Error('文件读取失败。')}
@@ -85,14 +86,51 @@ export function DocumentPreview({fileId,name,format,request}:{fileId:string;name
   while(true){const {done,value}=await reader.read();if(done)break;size+=value.byteLength;if(size>limit){await reader.cancel();throw Error('文件超过预览大小限制。')}chunks.push(value)}
   const bytes=new Uint8Array(size);let offset=0;for(const chunk of chunks){bytes.set(chunk,offset);offset+=chunk.byteLength}
   if(!alive)return
-  if(format==='pdf'){const {mountPdfEditor}=await import('../editors/pdf-viewer');if(alive&&target)await mountPdfEditor(target,bytes,abort.signal)}
+  if(format==='pdf'){const {mountPdfEditor}=await import('../editors/pdf-viewer');if(alive&&target){const mounted=await mountPdfEditor(target,bytes,abort.signal);if(alive){pdfBytesRef.current=bytes;setPdfPageCount(mounted.pages.length);setTargetPage(1)}}}
   else {const result=await parseOfficePreview(bytes,format);if(alive)setPages(result)}
  }catch{if(alive)setError('无法生成只读预览，可下载原件查看。')}finally{if(alive){loading.current=false;setBusy(false)}}})()
  return()=>{alive=false;abort.abort();target?.replaceChildren()}
  },[fileId,format,request,attempt])
- return <section style={{height:'100%',overflow:'auto',padding:24}}><Card title={name} extra={url&&<Button href={url} download={name}>下载原件</Button>}>
+ async function rotatePage(delta:number){
+  const bytes=pdfBytesRef.current,target=host.current
+  if(!bytes||!target||savingPdf||pdfPageCount<1)return
+  const next={...rotations}
+  const indices=targetPage===0?Array.from({length:pdfPageCount},(_,i)=>i+1):[targetPage]
+  for(const page of indices){
+   const angle=((next[page]??0)+delta)%360
+   if(angle===0)delete next[page];else next[page]=(angle+360)%360
+  }
+  setRotations(next);setPdfMessage('')
+  const {mountPdfEditor}=await import('../editors/pdf-viewer')
+  await mountPdfEditor(target,bytes,undefined,next)
+ }
+ async function saveRotatedPdf(){
+  const entries=Object.entries(rotations).map(([page,degrees])=>({page:Number(page),degrees})).filter(op=>op.degrees%360!==0)
+  if(!entries.length||savingPdf||!revision)return
+  setSavingPdf(true);setPdfMessage('')
+  const editorId=crypto.randomUUID()
+  let leaseEpoch:number|undefined
+  try{
+   const lease=await request<{leaseEpoch:number}>(`/api/v1/files/${encodeURIComponent(fileId)}/lease`,'POST',{editorId})
+   leaseEpoch=lease.leaseEpoch
+   const saved=await request<{fileId:string;revision:string}>(`/api/v1/files/${encodeURIComponent(fileId)}/pdf/rotate`,'POST',{baseRevision:revision,editorId,leaseEpoch,idempotencyKey:crypto.randomUUID(),operations:entries})
+   setRevision(saved.revision)
+   setUrl(`/api/v1/files/${encodeURIComponent(fileId)}/content?revision=${encodeURIComponent(saved.revision)}`)
+   setRotations({})
+   setPdfMessage('PDF 页面旋转已保存为新版本。')
+   retry()
+  }catch{
+   setPdfMessage('PDF 保存失败（加密、含数字签名或被其他会话占用）。')
+  }finally{
+   if(leaseEpoch!==undefined)await request(`/api/v1/files/${encodeURIComponent(fileId)}/lease`,'DELETE',{editorId,leaseEpoch}).catch(()=>{})
+   setSavingPdf(false)
+  }
+ }
+ const hasPendingRotations=Object.values(rotations).some(deg=>deg%360!==0)
+ return <section style={{height:'100%',overflow:'auto',padding:24}}><Card title={name} extra={<>{url&&<Button href={url} download={name}>下载原件</Button>}{format==='pdf'&&pdfPageCount>0&&<span className="dyoffice-pdf-toolbar" style={{display:'inline-flex',gap:8,marginLeft:8,alignItems:'center'}}><select aria-label="选择旋转页码" value={targetPage} onChange={e=>setTargetPage(Number(e.target.value))} disabled={savingPdf} style={{height:32,borderRadius:6,padding:'0 8px'}}><option value={0}>全部页面 ({pdfPageCount} 页)</option>{Array.from({length:pdfPageCount},(_,i)=><option key={i+1} value={i+1}>第 {i+1} 页</option>)}</select><Button disabled={savingPdf} onClick={()=>{void rotatePage(-90)}}>向左旋转 90°</Button><Button disabled={savingPdf} onClick={()=>{void rotatePage(90)}}>向右旋转 90°</Button><Button type="primary" loading={savingPdf} disabled={!hasPendingRotations||savingPdf} onClick={()=>{void saveRotatedPdf()}}>保存新版本</Button></span>}</>}>
  <DocumentNotifications key={fileId} items={[
- {id:'preview-mode',level:'info',title:'只读预览',message:format==='pdf'?'仅显示原始 PDF 页面，不提供编辑。':'仅提取文本与缓存数值，不执行公式或外部连接，不保证原始排版。每张工作表最多显示 200 行、200 列。'},
+ {id:'preview-mode',level:'info',title:format==='pdf'?'PDF 视图与页面旋转':'只读预览',message:format==='pdf'?'支持按页或整份文档旋转页面并保存为新版本（加密或含数字签名的 PDF 拒绝修改）。':'仅提取文本与缓存数值，不执行公式或外部连接，不保证原始排版。每张工作表最多显示 200 行、200 列。'},
+ ...(pdfMessage?[{id:'pdf-save-state',level:(pdfMessage.includes('失败')?'error':'info') as 'error'|'info',title:'PDF 保存状态',message:pdfMessage}]:[]),
  ...(error?[{id:'preview-error',level:'error' as const,title:'预览未完成',message:error,actions:<Button disabled={busy} onClick={retry}>重新加载预览</Button>}]:[]),
  ]}/>
  {busy&&<Spin tip="正在读取文档"/>}

@@ -56,3 +56,14 @@ test('retry cannot replace an editor that started after its initial error respon
  expect(host.querySelector('[role="alert"]')).toBeNull()
  expect(await guard()).toBe(false)
 })
+
+test('draft-copy capability reads current Shell recovery state and expires on unmount',async()=>{
+ let active=true
+ host=document.createElement('div');document.body.append(host);root=createRoot(host)
+ await act(async()=>root.render(h(DocumentFrame,{file,registerGuard:()=>{},sessionActive:()=>active})))
+ const frame=host.querySelector('iframe')! as HTMLIFrameElement&{dyofficeDraftCopySessionActive:()=>boolean}
+ expect(frame.dyofficeDraftCopySessionActive()).toBe(true)
+ active=false;expect(frame.dyofficeDraftCopySessionActive()).toBe(false)
+ active=true;await act(async()=>root.render(null))
+ expect(frame.dyofficeDraftCopySessionActive()).toBe(false)
+})

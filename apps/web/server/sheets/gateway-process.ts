@@ -6,10 +6,12 @@ import {encodeGatewayPlan} from '../../worker/src/native/gateway.ts'
 // This entry is bundled and executed only inside the host sandbox. It receives
 // no SQL/S3/session credentials and never accepts input/output workbook paths.
 const MAX=32*1024*1024,REQUEST_MAX=4*1024*1024
+const workDir=process.env.DYOFFICE_WORK_DIR || '/work'
+const resolveWorkPath=(logicalPath:string)=>workDir==='/work'?logicalPath:`${workDir}/${logicalPath.slice('/work/'.length)}`
 const invalidInput=()=>Object.assign(new Error('INVALID_INPUT'),{statusCode:400})
 const record=(v:unknown):v is Record<string,unknown>=>!!v&&typeof v==='object'&&!Array.isArray(v)
 async function readBounded(path:string,max:number) {
-  const file=await open(path,constants.O_RDONLY|constants.O_NOFOLLOW|constants.O_NONBLOCK)
+  const file=await open(path,constants.O_RDONLY|(constants.O_NOFOLLOW??0)|(constants.O_NONBLOCK??0))
   try {
     const stat=await file.stat()
     if(!stat.isFile()||stat.size<1||stat.size>max)throw invalidInput()
@@ -21,10 +23,10 @@ async function readBounded(path:string,max:number) {
 }
 async function execute(packet:Record<string,unknown>) {
   if(Object.keys(packet).sort().join(',')!=='command,path,requestId,version'||packet.version!==1||!['gateway_package','gateway_plan'].includes(packet.command as string)||typeof packet.path!=='string'||!/^\/work\/part-[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(packet.path))throw new Error('INVALID_INPUT')
-  const requestBytes=await readBounded(packet.path,REQUEST_MAX)
+  const requestBytes=await readBounded(resolveWorkPath(packet.path),REQUEST_MAX)
   let request:unknown;try{request=JSON.parse(requestBytes.toString('utf8'))}catch{throw invalidInput()}
   if(!record(request))throw invalidInput()
-  const bytes=await readBounded('/work/input.xlsx',MAX)
+  const bytes=await readBounded(resolveWorkPath('/work/input.xlsx'),MAX)
   let result:unknown
   if(packet.command==='gateway_package') {
     if(Object.keys(request).length)throw invalidInput()
@@ -46,7 +48,7 @@ async function execute(packet:Record<string,unknown>) {
   }
   const output=Buffer.from(JSON.stringify(result))
   if(output.length<1||output.length>MAX)throw new Error('INVALID_INPUT')
-  await writeFile('/work/output.xlsx',output,{flag:'wx',mode:0o600})
+  await writeFile(resolveWorkPath('/work/output.xlsx'),output,{flag:'wx',mode:0o600})
   return {written:true}
 }
 let pending=Buffer.alloc(0),total=0,handled=false

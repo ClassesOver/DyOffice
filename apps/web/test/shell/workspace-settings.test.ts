@@ -30,8 +30,8 @@ test('preferences remain drafts until explicit save and pending save prevents ta
  const save=vi.fn(()=>new Promise<typeof initial>(resolve=>{finish=resolve}))
  root.render(h(WorkspaceSettings,{user:{username:'admin',displayName:'Admin',roles:['personal']},load:async()=>initial,save,security:{changePassword:async()=>{},onCurrentRevoked:()=>{}},skills:h('p',null,'skills'),onClose:()=>{},onLogout:()=>{},onCloseGuardChange:g=>{guard=g}}))
  try{
- await vi.waitFor(()=>expect([...document.querySelectorAll('[role=tab]')].some(t=>t.textContent==='通用偏好')).toBe(true))
- ;([...document.querySelectorAll<HTMLElement>('[role=tab]')].find(t=>t.textContent==='通用偏好')!).click()
+ await vi.waitFor(()=>expect([...document.querySelectorAll('.settings-workbench-nav-item')].some(t=>t.textContent==='通用偏好')).toBe(true))
+ ;([...document.querySelectorAll<HTMLElement>('.settings-workbench-nav-item')].find(t=>t.textContent==='通用偏好')!).click()
  await vi.waitFor(()=>expect(document.querySelector('[aria-label="自动保存"]')).not.toBeNull())
  ;(document.querySelector('[aria-label="自动保存"]') as HTMLButtonElement).click()
  await vi.waitFor(()=>expect((document.querySelector('[aria-label="自动保存"]') as HTMLElement).getAttribute('aria-checked')).toBe('true'))

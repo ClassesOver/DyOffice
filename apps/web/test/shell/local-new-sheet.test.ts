@@ -1,6 +1,6 @@
 import {describe,it,expect,vi} from 'vitest'
 import {createLocalShellClient} from '../../src/shell/local-client'
-import {createLocalNewSheet,localNewFormats} from '../../src/shell/local-new-sheet'
+import {createLocalNewSheet,createLocalNewSlide,localNewFormats} from '../../src/shell/local-new-sheet'
 function setup() {
  const request=vi.fn(async(path:string)=>{
   if(path==='/api/v1/capabilities')return {xlsx:'editable'}
@@ -10,10 +10,22 @@ function setup() {
  const deps={getSessionProof:()=> 'A'.repeat(43),bindSession:vi.fn(async()=>({request})),fetchTemplate:vi.fn(async()=>new Response('xlsx')),open:vi.fn(async()=>{}),changed:vi.fn()}
  return {deps,request,create:createLocalNewSheet(deps as any)}
 }
-describe('capability-gated XLSX creation',()=>{
- it('keeps PPTX/PDF disabled even when a caller supplies editable; fails closed without XLSX',()=>{
-  expect(localNewFormats({docx:'editable',xlsx:'editable',pptx:'editable',pdf:'editable'})).toEqual(['docx','xlsx'])
-  expect(localNewFormats({xlsx:'unsupported'})).toEqual([])
+describe('capability-gated XLSX and PPTX creation',()=>{
+ it('keeps PDF disabled even when a caller supplies editable; enables DOCX/XLSX/PPTX when editable',()=>{
+  expect(localNewFormats({docx:'editable',xlsx:'editable',pptx:'editable',pdf:'editable'})).toEqual(['docx','xlsx','pptx'])
+  expect(localNewFormats({xlsx:'unsupported',pptx:'unsupported'})).toEqual([])
+ })
+ it('uploads the blank PPTX template through bound requests then opens that presentation',async()=>{
+  const request=vi.fn(async(path:string)=>{
+   if(path==='/api/v1/capabilities')return {pptx:'editable'}
+   if(path==='/api/v1/files/uploads')return {uploadId:'upload'}
+   if(path.endsWith('/finish'))return {file:{fileId:'created-deck'}}
+  })
+  const deps={getSessionProof:()=> 'A'.repeat(43),bindSession:vi.fn(async()=>({request})),fetchTemplate:vi.fn(async()=>new Response('pptx')),open:vi.fn(async()=>{}),changed:vi.fn()}
+  const createSlide=createLocalNewSlide(deps as any)
+  await createSlide()
+  expect(request).toHaveBeenCalledWith('/api/v1/files/uploads','POST',{name:'未命名.pptx',size:4})
+  expect(deps.open).toHaveBeenCalledWith('created-deck',request)
  })
  it('uploads the blank template through bound requests then opens exactly that file',async()=>{
   const {deps,request,create}=setup();await create()

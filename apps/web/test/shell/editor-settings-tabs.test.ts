@@ -13,13 +13,13 @@ test('host-requested skills tab preserves existing personal preference drafts an
  const confirm=vi.spyOn(window,'confirm').mockReturnValue(false)
  try{
   await act(async()=>root.render(h(WorkspaceSettings,props)))
-  expect(host.querySelector('[role="tab"][aria-selected="true"]')?.textContent).toContain('账户与安全')
+  expect(host.querySelector('[aria-current="page"]')?.textContent).toContain('账户与安全')
   await act(async()=>root.render(h(WorkspaceSettings,{...props,activeTab:'general'})))
   const author=host.querySelector<HTMLInputElement>('[aria-label="文档作者"]')!
   await act(async()=>{Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value')!.set!.call(author,'Unsaved author');author.dispatchEvent(new Event('input',{bubbles:true}))})
   expect(guard?.()).toBe(false)
   await act(async()=>root.render(h(WorkspaceSettings,{...props,activeTab:'skills'})))
-  expect(host.querySelector('[role="tab"][aria-selected="true"]')?.textContent).toContain('个人技能')
+  expect(host.querySelector('[aria-current="page"]')?.textContent).toContain('个人技能')
   expect(host.querySelector<HTMLInputElement>('[aria-label="文档作者"]')?.value).toBe('Unsaved author')
   expect(host.querySelector('[aria-label="文档作者"]')).toBe(author)
   expect(guard?.()).toBe(false)

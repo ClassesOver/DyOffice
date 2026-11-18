@@ -34,17 +34,12 @@ async function fakeSlidesDist(t){
 }
 
 async function fixture(t){
- const f=await fileFixture(t)
+ const f=await fileFixture(t,{nativeSlidesDirectory:await fakeSlidesDist(t),slidesHost})
  const file=await importFile(f,f.alice.token,await bytes(),'acceptance.pptx')
  const csrf=createCsrfService({db:f.db,deploymentId:f.deploymentId,origin:restrictedOrigin,key:f.csrfKey})
  const headers=(token=f.alice.token)=>({cookie:'__Host-dyoffice-session='+token,origin:restrictedOrigin,'x-csrf-token':csrf.sessionToken(token)})
  const leases=createLeaseService({transactions:f.transactions}),editorId=randomUUID(),lease=await leases.acquireLease(f.alice.token,file.file.fileId,{editorId})
- const revisions=createRevisionService({transactions:f.transactions,objects:f.objects,files:f.files}),slides=createSlidesService({files:f.files,leases,revisions,host:slidesHost}),api=await createApiShell()
- t.after(async()=>{slides.closeAll();await api.close()})
- registerSlidesRoutes(api,slides,f.sessions,csrf,createSlidesSaveService({files:f.files,leases,revisions,sessions:slides}))
- const app={inject(options){return (options.url.includes('/slides/')?api:f.app).inject(options)}}
- return {...f,app,file,csrf,headers,authority:{editorId,leaseEpoch:lease.leaseEpoch}}
-
+ return {...f,file,csrf,headers,authority:{editorId,leaseEpoch:lease.leaseEpoch}}
 }
 
 test('authenticated slides routes pin revisions, fence generations and reject foreign owners',async t=>{
@@ -130,7 +125,20 @@ test('slides uploads stage a T06 draft and commit into a new head the session ad
  assert.equal(after.json().generation,1)
 })
 
-test('static native slides mounting fails closed without verified OS isolation',async t=>{
- const directory=await fakeSlidesDist(t)
- await assert.rejects(()=>buildLocalApp({nativeSlidesDirectory:directory,slidesHost}),/PPTX_OS_ISOLATION_UNAVAILABLE/)
+test('static native slides entry authorizes owners, serves build assets and gates capabilities',async t=>{
+ const f=await fixture(t)
+ const path='/native-pptx/?fileId='+f.file.file.fileId
+ assert.equal((await f.app.inject({url:path})).statusCode,401)
+ assert.equal((await f.app.inject({url:path,headers:{cookie:'__Host-dyoffice-session='+f.bob.token}})).statusCode,404)
+ const html=await f.app.inject({url:path,headers:{cookie:'__Host-dyoffice-session='+f.alice.token}})
+ assert.equal(html.statusCode,200)
+ assert.equal(html.headers['cache-control'],'private, no-store')
+ assert.equal((await f.app.inject({url:'/native-pptx/assets/main.js'})).statusCode,401)
+ assert.equal((await f.app.inject({url:'/native-pptx/assets/main.js',headers:{cookie:'__Host-dyoffice-session='+f.alice.token}})).statusCode,200)
+ assert.equal((await f.app.inject({url:'/native-pptx/src/editors/slides-entry.tsx',headers:{cookie:'__Host-dyoffice-session='+f.alice.token}})).statusCode,404)
+ assert.deepEqual((await f.app.inject({url:'/api/v1/capabilities',headers:{cookie:'__Host-dyoffice-session='+f.alice.token}})).json(),{docx:'unsupported',xlsx:'unsupported',pptx:'editable',pdf:'unsupported'})
+ assert.equal((await f.app.inject({url:'/api/v1/files/'+f.file.file.fileId,headers:{cookie:'__Host-dyoffice-session='+f.alice.token}})).json().capabilities.pptx,'editable')
+ const doc=await importFile(f,f.alice.token,Buffer.from('not a docx'),'broken.docx').catch(()=>null)
+ void doc
+ assert.equal((await f.app.inject({url:'/native-pptx/?fileId='+randomUUID(),headers:{cookie:'__Host-dyoffice-session='+f.alice.token}})).statusCode,404)
 })

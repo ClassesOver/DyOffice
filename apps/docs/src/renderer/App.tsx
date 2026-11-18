@@ -1,3 +1,4 @@
+import { PHASED_APPEND } from './editor/streaming-tail-guard'
 import {createAnalysisSaveConsent} from '../../../../packages/browser-host/src/analysis-save-consent'
 import {docsAnalysisEditor} from './analysis-insert'
 import { usePageColorState } from './page-color-state'
@@ -1550,9 +1551,13 @@ export function App({ host }: { host?: { fileActions?: React.ReactNode; saveStat
     onSelectionUpdate: () => forceRender(),
     // typing in the main document takes ribbon routing back from any textbox
     onFocus: () => setActiveSubEditor(null),
-    onUpdate: () => {
-      host?.onDocumentEdited()
-      dirtyRef.current = true
+    onUpdate: ({ transaction }) => {
+      // Only marked document-load transactions are not user edits. Genuine
+      // edits remain dirty even while the rest of a phased open is pending.
+      if (!transaction.getMeta(PHASED_APPEND)) {
+        host?.onDocumentEdited()
+        dirtyRef.current = true
+      }
       forceRender()
     },
   })
@@ -2112,7 +2117,8 @@ export function App({ host }: { host?: { fileActions?: React.ReactNode; saveStat
   // StreamingTailGuardExtension; saves wait for the full content).
   useEffect(() => {
     if (!editor) return
-    editor.setEditable(!readMode && !isProtected)
+    // Permission and view-mode changes are not document edits.
+    editor.setEditable(!readMode && !isProtected, false)
     if (!readMode) return
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') setReadMode(false)

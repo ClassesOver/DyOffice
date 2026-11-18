@@ -69,6 +69,8 @@ import {createHarnessDataMailbox} from './modules/coding/data-mailbox.ts'
 import {createHarnessArtifacts} from './modules/coding/artifacts.ts'
 import { registerWorkspaceSourceToolRoutes } from './modules/sources/tool-routes.ts'
 import type { SourceEgressTarget } from './security/egress.ts'
+import { createPdfService } from './modules/pdf/service.ts'
+import { registerPdfRoutes } from './modules/pdf/routes.ts'
 
 export async function buildApp(config: WebConfig): Promise<FastifyInstance> {
   if (process.env.NODE_ENV === 'production') throw new Error('Development token server is not allowed in production')
@@ -86,7 +88,7 @@ export async function buildApp(config: WebConfig): Promise<FastifyInstance> {
 
 export interface LocalWebConfig {
   db: IdentityStore; businessPool?: Pool; deploymentId: string; origin: string; csrfKey: string; passwords?: PasswordService;
-  objectStore?: ObjectStore; filePolicy?: FilePolicy; nativeDocsDirectory?: string; nativeSheetsDirectory?: string; nativeSlidesDirectory?: string; slidesHost?: SlidesSessionHost; nativeJobs?: boolean; sheetsNative?: SheetsNative & Partial<SheetsSaveNative>; sheetsPlanner?: SheetsPlanner; sheetsWorkbookPlanner?: SheetsWorkbookPlanner; sheetsPackageReader?: SheetsPackageReader; localShellDirectory?: string;
+  objectStore?: ObjectStore; filePolicy?: FilePolicy; nativeDocsDirectory?: string; nativeSheetsDirectory?: string; nativeSlidesDirectory?: string; slidesHost?: SlidesSessionHost; nativePdf?: boolean; nativeJobs?: boolean; sheetsNative?: SheetsNative & Partial<SheetsSaveNative>; sheetsPlanner?: SheetsPlanner; sheetsWorkbookPlanner?: SheetsWorkbookPlanner; sheetsPackageReader?: SheetsPackageReader; localShellDirectory?: string;
   globalConfigKeyring?: SecretKeyring;
   sourcesCredentialKeys?: string;
   sourcesEgressTargets?: readonly SourceEgressTarget[];
@@ -110,9 +112,6 @@ export interface LocalWebConfig {
   passwordBlocklistFile?: string; loginLimits?: LoginLimits; idleMs?: number; absoluteMs?: number; closeDb?: () => Promise<void>
 }
 export async function buildLocalApp(config: LocalWebConfig): Promise<FastifyInstance> {
-  // No supported OS-isolated PPTX runtime exists yet. Test forks cannot be wired
-  // into an HTTP deployment through configuration, in any NODE_ENV.
-  if(config.slidesHost || config.nativeSlidesDirectory) throw new Error('PPTX_OS_ISOLATION_UNAVAILABLE')
   if (process.env.NODE_ENV === 'production') throw new Error('Local runtime is not allowed in production before enterprise release gates')
   if (config.adminAiSyntheticProbe !== undefined && typeof config.adminAiSyntheticProbe !== 'boolean') throw new Error('Invalid synthetic probe configuration')
   if (config.adminAiSyntheticProbe && !config.businessPool) throw new Error('Synthetic probe requires restricted business pool')
@@ -228,10 +227,11 @@ export async function buildLocalApp(config: LocalWebConfig): Promise<FastifyInst
     registerWorkspaceRoutes(app, createWorkspaceService(transactions), sessions, csrf)
     registerGlobalConfigRoutes(app, createGlobalConfigService({transactions, keyring: config.globalConfigKeyring}), sessions, csrf)
     if (config.objectStore) {
-      const files = createFileService({ transactions, objects: config.objectStore, ...config.filePolicy, capabilities: nativeDocs || nativeSheets || nativeSlides ? { docx: nativeDocs ? 'editable' : 'unsupported',xlsx: nativeSheets ? 'editable' : 'unsupported',pptx: nativeSlides ? 'editable' : 'unsupported',pdf: 'unsupported' } : undefined })
+      const files = createFileService({ transactions, objects: config.objectStore, ...config.filePolicy, capabilities: nativeDocs || nativeSheets || nativeSlides || config.nativePdf ? { docx: nativeDocs ? 'editable' : 'unsupported',xlsx: nativeSheets ? 'editable' : 'unsupported',pptx: nativeSlides ? 'editable' : 'unsupported',pdf: config.nativePdf ? 'editable' : 'unsupported' } : undefined })
       const leases = createLeaseService({ transactions })
       const revisions = createRevisionService({ transactions, objects: config.objectStore, files, ...config.filePolicy })
       registerFileRoutes(app,files,sessions,csrf,{ leases, revisions })
+      registerPdfRoutes(app,createPdfService({ files, leases, revisions }),sessions,csrf)
       // T17 notification/reconciliation only; preClose terminates upgraded
       // sockets before HTTP shutdown waits on their lifetime.
       const realtime = registerRealtimeRoutes(app,{ transactions,sessions,csrf,origin: config.origin,options: config.realtime,commandPolicy: config.realtimeCommands,channelNotifications:assistantChannels?(token,fileId)=>assistantChannels.notifications(token,fileId):undefined })

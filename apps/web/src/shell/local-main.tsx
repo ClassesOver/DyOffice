@@ -19,7 +19,7 @@ import './web-shell.css'
 import {installScreenTips} from '@genoffice/ui'
 import {createLocalHomeBridge} from './local-home-bridge'
 import {createLocalPreferencesSession} from './local-preferences-session'
-import {createGlobalSettingsClient} from './global-settings-client'
+import {createLocalGlobalSettingsSession} from './local-global-settings-session'
 import {GlobalSettingsPanel} from './GlobalSettingsPanel'
 import {WorkspaceTrash} from './WorkspaceTrash'
 import {createUserSkillsClient} from './user-skills-client'
@@ -28,12 +28,14 @@ import {SourcesPanel} from './SourcesPanel'
 import {createSourceWorkspaceSession} from './source-workspace-session'
 import blankDocx from '../../../shell/build/shell-new/blank.docx?url'
 import blankXlsx from '../../../shell/build/shell-new/blank.xlsx?url'
-import {createLocalNewSheet,localNewFormats,openCreatedDocument} from './local-new-sheet'
+import blankPptx from '../../../shell/build/shell-new/blank.pptx?url'
+import {createLocalNewSheet,createLocalNewSlide,localNewFormats,openCreatedDocument} from './local-new-sheet'
 
 import {hideAccountRecoveryPortals} from './account-recovery-portals'
 import {createLocalShellClient,type SessionEndReason} from './local-client'
 import {createLocalAdminClient} from './local-admin-client'
 import {createLocalSessionsClient} from './local-sessions-client'
+import {createLocalWorkspaceSession} from './local-workspace-session'
 import {createLoginHistoryClient} from './local-login-history-client'
 import {ConfigProvider,theme as antdTheme,Dropdown,Modal,Button,Alert,Form,Input,Card,Typography} from 'antd'
 import logo from '../../../shell/src/renderer/src/assets/dyoffice-logo.svg'
@@ -54,11 +56,13 @@ import {PasswordActionForm} from './PasswordActionForm'
 import './config-polish.css'
 const client=createLocalShellClient()
 const adminClient=createLocalAdminClient(fetch,()=>client.endSession('expired'))
-const sessionsClient=createLocalSessionsClient(fetch,()=>client.endSession('expired'))
+const workspaceSession=createLocalWorkspaceSession(client)
+const sessionsClient=createLocalSessionsClient(workspaceSession.sessionFetch,()=>client.endSession('expired'))
 const historyClient=createLoginHistoryClient(fetch,()=>client.endSession('expired'))
 const preferenceSession=createLocalPreferencesSession(client)
 const preferences=preferenceSession.preferences
-const globalSettings=createGlobalSettingsClient(client.request)
+const globalSettingsSession=createLocalGlobalSettingsSession(client)
+const globalSettings=globalSettingsSession.settings
 let userSkills: ReturnType<typeof createUserSkillsClient> | undefined
 let sourceWorkspace: Awaited<ReturnType<typeof createSourceWorkspaceSession>> | undefined
 type User={id:string;username:string;displayName:string;roles:string[]}
@@ -90,9 +94,10 @@ async function upload(file:File,expectedProof=sourceWorkspace?.bound.proof){if(b
 async function browse(){showUpload()}
 const unsupported=async()=>{throw new Error('此桌面操作尚未适配到本地 Web。')}
 function installBridge(){
- window.aiOffice=createLocalHomeBridge({request:client.request,preferences,open,openTrash:()=>showTrash(),changed:notifyFilesChanged,renamed:documentTabs.rename,unsupported:m=>notice(m),browse})
+ window.aiOffice=createLocalHomeBridge({request:workspaceSession.request,preferences,open,openTrash:()=>showTrash(),changed:notifyFilesChanged,renamed:documentTabs.rename,unsupported:m=>notice(m),browse})
  window.aiOffice.newDoc=async()=>{const proof=sourceWorkspace?.bound.proof;if(!proof)throw new Error('登录状态未核验，请重新加载当前工作区。');if(capabilities.docx!=='editable')return unsupported();const response=await fetch(blankDocx);if(!response.ok)throw new Error('原版空白模板不可用');await upload(new File([await response.blob()],'未命名.docx'),proof)}
  window.aiOffice.newSheet=createLocalNewSheet({getSessionProof:()=>sourceWorkspace?.bound.proof,bindSession:proof=>client.bindSession(proof),fetchTemplate:()=>fetch(blankXlsx),open:(id,request)=>openCreatedDocument(documentTabs,capabilities,id,request),changed:notifyFilesChanged})
+ window.aiOffice.newSlide=createLocalNewSlide({getSessionProof:()=>sourceWorkspace?.bound.proof,bindSession:proof=>client.bindSession(proof),fetchTemplate:()=>fetch(blankPptx),open:(id,request)=>openCreatedDocument(documentTabs,capabilities,id,request),changed:notifyFilesChanged})
  window.aiOfficeTabs={list:async()=>documentTabs.list(),activate:async id=>documentTabs.activate(id),close:async id=>{await documentTabs.close(id)},onChanged:documentTabs.subscribe,showNewMenu:async(x,y)=>showChromeMenu('new',x,y),showAppMenu:async(x,y)=>showChromeMenu('app',x,y),showMenu:async(x,y)=>showChromeMenu('tabs',x,y),showTabMenu:async(id,x,y)=>showChromeMenu('tab',x,y,id),detach:unsupported,tearOff:async()=>false,dragTornWindow:()=>{},dockTornWindow:unsupported,endTornDrag:async()=>{},onDockPreview:()=>()=>{},reportDockIndex:()=>{},reorder:async(id,index)=>documentTabs.reorder(id,index),notifyChromePressed:()=>{},onChromePressed:()=>()=>{}} satisfies TabsApi
 }
 async function restore(){
@@ -100,9 +105,10 @@ async function restore(){
  const bound=workspace.bound
  const identity=await bound.request<{user:User;deploymentId?:string}>('/api/v1/auth/me')
  preferenceSession.bind(bound)
+  globalSettingsSession.bind(bound)
  const personal=await preferences.getPreferences()
  const catalog=await bound.request<Record<string,string>>('/api/v1/capabilities')
- user=identity.user;capabilities=catalog;initialLanguage=personal.language==='en'?'en':'zh';userSkills=createUserSkillsClient(bound.request);sourceWorkspace=workspace
+ user=identity.user;capabilities=catalog;initialLanguage=personal.language==='en'?'en':'zh';userSkills=createUserSkillsClient(bound.request);sourceWorkspace=workspace;workspaceSession.bind(bound)
  if(personal.theme==='system')delete document.documentElement.dataset.theme;else document.documentElement.dataset.theme=personal.theme
  // Only authenticated identity may select a storage namespace. Legacy servers
  // without a deployment identity safely skip entry restoration.
@@ -116,7 +122,14 @@ async function restore(){
  }
  installBridge()
 }
+let logoutPending=false
 async function logout(){
+ if(logoutPending)return
+ logoutPending=true
+ const resumeEntries=documentTabs.suspendEntries(),app=document.getElementById('app'),wasInert=app?.inert??false
+ let leaving=false
+ if(app)app.inert=true
+ try{
  const editors=[...document.querySelectorAll<HTMLIFrameElement>('.workspace-document-frame')].map(frame=>({id:frame.dataset.documentId!,api:frame.contentWindow as unknown as {dyofficeEditorCanClose?:()=>Promise<boolean>;dyofficeEditorDispose?:()=>Promise<boolean>}|null}))
  for(const editor of editors)if(!editor.api?.dyofficeEditorCanClose||!await editor.api.dyofficeEditorCanClose())return
  // Avoid activating a dormant neighbor while disposing for logout.
@@ -125,7 +138,11 @@ async function logout(){
   if(!editor.api?.dyofficeEditorDispose||!await editor.api.dyofficeEditorDispose())return
   await documentTabs.close(editor.id)
  }
- await client.logout();entryRecovery?.clear();location.replace('/')
+ await client.logout();entryRecovery?.clear();location.replace('/');leaving=true
+ }finally{
+  // Keep admission closed until navigation after successful session invalidation.
+  if(!leaving){resumeEntries();if(app)app.inert=wasInert;logoutPending=false}
+ }
 }
 function WorkspacePageContent({page,onClose,onCloseGuardChange,settingsTab,onSettingsTabChange}:{settingsTab?:string;onSettingsTabChange?:(tab:string)=>void;page:WorkspacePage;onClose:()=>void;onCloseGuardChange:(guard:(()=>boolean)|null)=>void}){
  const [sessionVersion,setSessionVersion]=useState(0)
@@ -136,14 +153,15 @@ function WorkspacePageContent({page,onClose,onCloseGuardChange,settingsTab,onSet
   const identity=await bound.request<{user:User}>('/api/v1/auth/me')
   if(identity.user.id!==user?.id)throw new Error('登录状态已改变，请重新加载当前工作区。')
   preferenceSession.bind(bound)
-  userSkills=createUserSkillsClient(bound.request);sourceWorkspace=workspace
+  globalSettingsSession.bind(bound)
+  userSkills=createUserSkillsClient(bound.request);sourceWorkspace=workspace;workspaceSession.bind(bound)
   setSessionVersion(version=>version+1)
  }
  if(page==='settings'&&user)return <WorkspaceSettings activeTab={settingsTab} onTabChange={onSettingsTabChange} sessionsClient={sessionsClient} historyClient={historyClient} user={user} load={preferences.getPreferences} save={preferences.updatePreferences} security={{changePassword:async(current,next)=>{const proof=await client.changePassword(current,next);await updateSession(proof).catch(()=>client.endSession('expired'))},onCurrentRevoked:()=>client.endSession('expired')}} skills={registerSkillsGuard=>userSkills&&<UserSkillsPanel key={sessionVersion} client={userSkills} onCloseGuardChange={registerSkillsGuard}/>} onLogout={()=>void logout().catch(e=>notice(e.message))} onClose={onClose} onCloseGuardChange={registerGuard}/>
  if(page==='users'&&user?.roles.includes('config_admin'))return <section className="workspace-panel"><LocalAdminPanel client={adminClient} presentation="page" currentUserId={user.id} onSessionRotated={proof=>{client.invalidateCsrf();if(proof)void updateSession(proof).catch(e=>notice(e.message))}} onOwnAuthorityChanged={()=>client.endSession('expired')} onClose={onClose} onCloseGuardChange={registerGuard}/></section>
  if(page==='global'&&user?.roles.includes('config_admin'))return <GlobalSettingsPanel client={globalSettings} onClose={onClose} presentation="page" onCloseGuardChange={registerGuard}/>
  if(page==='sources'&&sourceWorkspace)return <SourcesPanel key={sessionVersion} client={sourceWorkspace.sources} resultsClient={sourceWorkspace.results} onClose={onClose} presentation="page" onCloseGuardChange={registerGuard}/>
- if(page==='trash')return <WorkspaceTrash request={client.request} onChanged={notifyFilesChanged} onClose={onClose} presentation="page" onCloseGuardChange={registerGuard}/>
+ if(page==='trash'&&sourceWorkspace)return <WorkspaceTrash request={sourceWorkspace.bound.request} onChanged={notifyFilesChanged} onClose={onClose} presentation="page" onCloseGuardChange={registerGuard}/>
  return null
 }
 function Account({onOpen}:{onOpen:(page:WorkspacePage)=>void}){return <div className="account-entry">{user&&<AccountMenu user={user} onSettings={()=>onOpen('settings')} onTrash={()=>onOpen('trash')} onSources={()=>onOpen('sources')} onGlobalSettings={()=>onOpen('global')} onUsers={()=>onOpen('users')} onLogout={()=>void logout().catch(e=>notice(e.message))}/>}</div>}
@@ -207,12 +225,12 @@ function Shell({recovery=false}:{recovery?:boolean}){
  const close=()=>{if(closeGuard.current?.()===false)return;setPage(null)}
  notice=setMessage;showTrash=()=>setPage('trash')
  return <>
-  <AppFrame hideAppMenu hideSingleTabList initialOnboardingSeen={true} homeProps={{capabilities:{localFolders:false,copyPath:false,duplicateFile:false,starredGroups:false,cloudProjects:false,semanticRanking:false,serverFileSort:true},supportedFormats:['docx','xlsx','pptx','pdf'],supportedNewFormats:localNewFormats(capabilities),accountEntry:<Account onOpen={setPage}/>,folderDeleteDescription:name=>`仅可删除空文件夹「${name}」。请先移出文件和子文件夹；回收站中仍属于此目录的文件需先恢复并移出。`}} editorContent={<>{documentTabs.renderedDocuments().map(file=><div key={file.id} className="workspace-document" hidden={!tabs.find(tab=>tab.id===file.id)?.active}>{file.src.startsWith('/native-')?<DocumentFrame file={file} registerGuard={documentTabs.setGuard}/>:<DocumentPreview fileId={file.id} name={file.name} format={file.format} request={client.request}/>}</div>)}</>}/>
+  <AppFrame hideAppMenu hideSingleTabList initialOnboardingSeen={true} homeProps={{capabilities:{localFolders:false,copyPath:false,duplicateFile:false,starredGroups:false,cloudProjects:false,semanticRanking:false,serverFileSort:true},supportedFormats:['docx','xlsx','pptx','pdf'],supportedNewFormats:localNewFormats(capabilities),accountEntry:<Account onOpen={setPage}/>,folderDeleteDescription:name=>`仅可删除空文件夹「${name}」。请先移出文件和子文件夹；回收站中仍属于此目录的文件需先恢复并移出。`}} editorContent={<>{documentTabs.renderedDocuments().map(file=><div key={file.id} className="workspace-document" hidden={!tabs.find(tab=>tab.id===file.id)?.active}>{file.src.startsWith('/native-')?<DocumentFrame file={file} registerGuard={documentTabs.setGuard} sessionActive={()=>!recoveryBlocked.current}/>:<DocumentPreview fileId={file.id} name={file.name} format={file.format} request={client.request}/>}</div>)}</>}/>
   <Modal open={page!==null} title={page?workspacePages[page]:undefined} onCancel={close} footer={null} width={1120} centered destroyOnHidden maskClosable={false} className="workspace-config-modal">
    {page&&<WorkspacePageContent key={page} page={page} settingsTab={settingsTab} onSettingsTabChange={setSettingsTab} onClose={()=>setPage(null)} onCloseGuardChange={registerGuard}/>}
   </Modal>
   {uploadFiles!==null&&<WorkspaceUploadDialog open initialFiles={uploadFiles} upload={upload} onClose={()=>setUploadFiles(null)}/>}
-  {chromeMenu&&<Dropdown open trigger={['click']} onOpenChange={open=>{if(!open)setChromeMenu(null)}} menu={{items:chromeMenu.kind==='tabs'?tabs.map(tab=>({key:tab.id,label:tab.title})):chromeMenu.kind==='tab'?[{key:'close',label:'关闭文档',danger:true}]:chromeMenu.kind==='new'?[...(capabilities.docx==='editable'?[{key:'word',label:'新建 Word 文档'}]:[]),...(capabilities.xlsx==='editable'?[{key:'sheet',label:'新建 Excel 表格'}]:[]),{key:'import',label:'打开文件…'}]:[{key:'home',label:'首页'},{key:'import',label:'打开文件…'},{key:'settings',label:'个人设置'}],onClick:({key})=>{const target=chromeMenu;setChromeMenu(null);if(target.kind==='tabs')documentTabs.activate(key);else if(key==='close'&&target.id)void documentTabs.close(target.id).catch(e=>notice(e.message));else if(key==='word')void window.aiOffice.newDoc().catch(e=>notice(e.message));else if(key==='sheet')void window.aiOffice.newSheet().catch(e=>notice(e.message));else if(key==='import')void browse().catch(e=>notice(e.message));else if(key==='home')documentTabs.activate('home');else if(key==='settings')setPage('settings')}}}><span style={{position:'fixed',left:Math.min(chromeMenu.x,window.innerWidth-200),top:chromeMenu.y,width:1,height:1}}/></Dropdown>}
+  {chromeMenu&&<Dropdown open trigger={['click']} onOpenChange={open=>{if(!open)setChromeMenu(null)}} menu={{items:chromeMenu.kind==='tabs'?tabs.map(tab=>({key:tab.id,label:tab.title})):chromeMenu.kind==='tab'?[{key:'close',label:'关闭文档',danger:true}]:chromeMenu.kind==='new'?[...(capabilities.docx==='editable'?[{key:'word',label:'新建 Word 文档'}]:[]),...(capabilities.xlsx==='editable'?[{key:'sheet',label:'新建 Excel 表格'}]:[]),...(capabilities.pptx==='editable'?[{key:'slide',label:'新建 PPT 演示文稿'}]:[]),{key:'import',label:'打开文件…'}]:[{key:'home',label:'首页'},{key:'import',label:'打开文件…'},{key:'settings',label:'个人设置'}],onClick:({key})=>{const target=chromeMenu;setChromeMenu(null);if(target.kind==='tabs')documentTabs.activate(key);else if(key==='close'&&target.id)void documentTabs.close(target.id).catch(e=>notice(e.message));else if(key==='word')void window.aiOffice.newDoc().catch(e=>notice(e.message));else if(key==='sheet')void window.aiOffice.newSheet().catch(e=>notice(e.message));else if(key==='slide')void window.aiOffice.newSlide().catch(e=>notice(e.message));else if(key==='import')void browse().catch(e=>notice(e.message));else if(key==='home')documentTabs.activate('home');else if(key==='settings')setPage('settings')}}}><span style={{position:'fixed',left:Math.min(chromeMenu.x,window.innerWidth-200),top:chromeMenu.y,width:1,height:1}}/></Dropdown>}
   {message&&<div className="web-notice" role="alert">{message}<button onClick={()=>setMessage('')}>关闭</button></div>}
  </>
 }

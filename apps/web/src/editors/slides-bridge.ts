@@ -375,11 +375,15 @@ export function createSlidesBridge(host: SessionFileHost, fileId: string, prefs:
       try {
         saved = await host.saveSlides(fileId, {revision: current.revision, generation: current.generation})
       } catch (error) {
+        // A dispatched commit can outlive this view. Keep its outcome in the
+        // host, but never resurrect recovery for an already disposed renderer.
+        if (disposed) throw hostError('UNAVAILABLE', 'disposed')
         if (!saved && host.getState(fileId).status !== 'unknown') return {ok: false as const, error: text.saveFailed}
         // The receipt is unknown: the renderer's save promise stays pending and
         // its exact journal survives until the entry's Confirm save outcome resolves it.
         return new Promise<SaveResult>((resolve, reject) => { recovery = {resolve, reject}; onChange() })
       }
+      if (disposed) throw hostError('UNAVAILABLE', 'disposed')
       // Adopt the committed head: the pinned revision moved, the generation continues.
       current.revision = saved.revision
       current.dirty = false
@@ -406,27 +410,151 @@ export function createSlidesBridge(host: SessionFileHost, fileId: string, prefs:
     skillsList: async () => <Array<{name: string; description: string; relevant: boolean}>>[],
     gskStatus: async () => ({available: false as const}),
     audienceReady: async () => null, audienceNav() {}, presenterSync() {}, presenterInk() {},
-    // Format edits and structural selections beyond the T10 server whitelist stay explicit no-ops.
-    editFill: graceful, editStroke: graceful, editBackground: graceful, editImageFill: graceful,
-    editPictureSrcRect: graceful, editPictureOpacity: graceful, changeShape: graceful,
-    setShapeAdjust: graceful, setShapeGeometry: graceful, setTextAnchor: graceful,
-    setTextBodyProps: graceful, setEffects: graceful, editConnectorEndpoints: graceful,
+    // Format edits, shape styles, and table operations mapped to the server op whitelist.
+    async editFill(input) {
+      const fill = typeof input.fill === 'string'
+        ? input.fill
+        : {stops: input.fill.gradient.stops ?? [{pos: 0, color: input.fill.gradient.from}, {pos: 1, color: input.fill.gradient.to}], ...(input.fill.gradient.angleDeg !== undefined ? {angle: input.fill.gradient.angleDeg} : {})}
+      const raw = await applyOps([op('setFill', {target: {slide: input.slideIndex, el: input.sourceId}, fill, ...(input.groupId ? {group: input.groupId} : {})})])
+      if (!raw?.changed?.length) return null
+      return await fetchSlide(raw.changed[0]!)
+    },
+    async editStroke(input) {
+      const stroke = input.stroke === null
+        ? null
+        : {color: input.stroke.color, widthEmu: Math.max(1, Math.round(input.stroke.widthPt * 12700)), ...(input.stroke.gradient ? {gradient: {stops: input.stroke.gradient.stops, angle: input.stroke.gradient.angleDeg}} : {})}
+      const raw = await applyOps([op('setStroke', {target: {slide: input.slideIndex, el: input.sourceId}, stroke, ...(input.groupId ? {group: input.groupId} : {})})])
+      if (!raw?.changed?.length) return null
+      return await fetchSlide(raw.changed[0]!)
+    },
+    editBackground: graceful, editImageFill: graceful,
+    editPictureSrcRect: graceful, editPictureOpacity: graceful,
+    async changeShape(input) {
+      const raw = await applyOps([op('setShapeGeometry', {target: {slide: input.slideIndex, el: input.sourceId}, prst: input.prst, ...(input.groupId ? {group: input.groupId} : {})})])
+      if (!raw?.changed?.length) return null
+      return await fetchSlide(raw.changed[0]!)
+    },
+    async setShapeAdjust(input) {
+      if (input.preview) return null
+      const raw = await applyOps([op('setShapeAdjust', {target: {slide: input.slideIndex, el: input.sourceId}, adjust: input.adjust, ...(input.groupId ? {group: input.groupId} : {})})])
+      if (!raw?.changed?.length) return null
+      return await fetchSlide(raw.changed[0]!)
+    },
+    setShapeGeometry: graceful,
+    async setTextAnchor(input) {
+      const raw = await applyOps([op('setTextAnchor', {target: {slide: input.slideIndex, el: input.sourceId}, anchor: input.anchor})])
+      if (!raw?.changed?.length) return null
+      return await fetchSlide(raw.changed[0]!)
+    },
+    async setTextBodyProps(input) {
+      const raw = await applyOps([op('setTextBodyProps', {target: {slide: input.slideIndex, el: input.sourceId}, props: input.props})])
+      if (!raw?.changed?.length) return null
+      return await fetchSlide(raw.changed[0]!)
+    },
+    async setEffects(input) {
+      const raw = await applyOps([op('setEffects', {target: {slide: input.slideIndex, el: input.sourceId}, effects: input.effects})])
+      if (!raw?.changed?.length) return null
+      return await fetchSlide(raw.changed[0]!)
+    },
+    editConnectorEndpoints: graceful,
     cancelTransformPreview: graceful, setSlideSize: graceful, setAnimations: gracefulFalse,
     setAdvanceTimes: gracefulFalse, saveRecording: graceful, clearNarration: graceful,
-    setLink: graceful, addTable: graceful, addChart: graceful, addSmartArt: graceful,
+    setLink: graceful,
+    async addTable(input) {
+      const current = requireSession()
+      const box = emuBox(current, input.fitWidthPx, input.xPx, input.yPx, input.wPx, input.hPx)
+      const offset = input.rowHeightEmu ? {...box, cy: input.rows * input.rowHeightEmu} : box
+      const raw = await applyOps([op('addTable', {target: {slide: input.slideIndex}, offset, rows: input.rows, cols: input.cols})])
+      if (!raw?.changed?.length) return null
+      return {slide: await fetchSlide(raw.changed[0]!), sourceId: raw.created?.[0] ?? ''}
+    },
+    addChart: graceful, addSmartArt: graceful,
     addInk: graceful, addImageBytes: graceful, replacePictureBytes: graceful,
-    editTableCell: graceful, tableStructure: graceful, tableMerge: graceful,
-    setTableColWidth: graceful, setTableRowHeight: graceful, setTableCellAnchor: graceful,
-    editTableStyle: graceful, editChart: graceful, addComment: graceful, deleteComment: graceful,
-    setSlidesHidden: graceful, deleteSlides: graceful, duplicateSlides: graceful, moveSlides: graceful,
+    async editTableCell(input) {
+      const raw = await applyOps([op('setTableCell', {target: {slide: input.slideIndex, el: input.sourceId}, row: input.row, col: input.col, paragraphs: input.paragraphs})])
+      if (!raw?.changed?.length) return null
+      return await fetchSlide(raw.changed[0]!)
+    },
+    async tableStructure(input) {
+      const raw = await applyOps([op('tableStructure', {target: {slide: input.slideIndex, el: input.sourceId}, kind: input.kind, index: input.index, ...(input.before !== undefined ? {before: input.before} : {})})])
+      if (!raw?.changed?.length) return null
+      return {slide: await fetchSlide(raw.changed[0]!), sourceId: raw.created?.[0] ?? input.sourceId}
+    },
+    async tableMerge(input) {
+      const raw = await applyOps([op('tableMerge', {target: {slide: input.slideIndex, el: input.sourceId}, kind: input.kind, row: input.row, col: input.col})])
+      if (!raw?.changed?.length) return null
+      return {slide: await fetchSlide(raw.changed[0]!), sourceId: raw.created?.[0] ?? input.sourceId}
+    },
+    async setTableColWidth(input) {
+      const current = requireSession()
+      const wEmu = Math.round(input.wPx * (current.size.cx / Math.max(1, input.fitWidthPx)))
+      const raw = await applyOps([op('setTableColWidth', {target: {slide: input.slideIndex, el: input.sourceId}, col: input.col, wEmu})])
+      if (!raw?.changed?.length) return null
+      return await fetchSlide(raw.changed[0]!)
+    },
+    async setTableRowHeight(input) {
+      const current = requireSession()
+      const hEmu = Math.round(input.hPx * (current.size.cx / Math.max(1, input.fitWidthPx)))
+      const raw = await applyOps([op('setTableRowHeight', {target: {slide: input.slideIndex, el: input.sourceId}, row: input.row, hEmu})])
+      if (!raw?.changed?.length) return null
+      return await fetchSlide(raw.changed[0]!)
+    },
+    async setTableCellAnchor(input) {
+      const raw = await applyOps([op('setTableCellAnchor', {target: {slide: input.slideIndex, el: input.sourceId}, row: input.row, col: input.col, anchor: input.anchor})])
+      if (!raw?.changed?.length) return null
+      return await fetchSlide(raw.changed[0]!)
+    },
+    async editTableStyle(input) {
+      const {slideIndex, sourceId, ...styleFields} = input
+      const raw = await applyOps([op('setTableStyle', {target: {slide: slideIndex, el: sourceId}, ...styleFields})])
+      if (!raw?.changed?.length) return null
+      return {slide: await fetchSlide(raw.changed[0]!), sourceId: raw.created?.[0] ?? sourceId}
+    },
+    editChart: graceful, addComment: graceful, deleteComment: graceful,
+    async setSlidesHidden(input) {
+      const ops = input.slideIndexes.map((slide: number) => op('setHidden', {target: {slide}, hidden: input.hidden}))
+      const raw = await applyOps(ops)
+      if (!raw?.changed?.length) return null
+      const slides = await Promise.all(raw.changed.map(index => fetchSlide(index)))
+      return {order: raw.order ?? [], slides}
+    },
+    async deleteSlides(input) {
+      const ops = [...input.slideIndexes].sort((a, b) => b - a).map((slide: number) => op('deleteSlide', {target: {slide}}))
+      const raw = await applyOps(ops)
+      if (!raw?.order) return null
+      const deck = await fetchDeck()
+      return {...slideUpdateFrom(raw.order, deck), sections: raw.sections ?? []}
+    },
+    async duplicateSlides(input) {
+      const sorted = [...input.slideIndexes].sort((a, b) => a - b)
+      const ops = sorted.map((slide: number, idx: number) => op('duplicateSlide', {target: {slide: slide + idx}}))
+      const raw = await applyOps(ops)
+      if (!raw?.order) return null
+      const deck = await fetchDeck()
+      return {...slideUpdateFrom(raw.order, deck), index: (sorted[0] ?? 0) + 1, sections: raw.sections ?? []}
+    },
+    moveSlides: graceful,
     insertImageUrl: graceful, replacePictureUrl: graceful, applyTheme: graceful,
-    flipElements: graceful,
+    async flipElements(input) {
+      const raw = await applyOps([op('flipElements', {target: {slide: input.slideIndex}, els: input.sourceIds, axis: input.axis, ...(input.groupId ? {group: input.groupId} : {})})])
+      if (!raw?.changed?.length) return null
+      return await fetchSlide(raw.changed[0]!)
+    },
     masterEnter: unavailable, masterOpen: unavailable, masterClose: unavailable,
     masterEditText: unavailable, masterEditTransform: unavailable, masterEditFill: unavailable,
     masterEditStroke: unavailable, masterDeleteElement: unavailable, masterAddElement: unavailable,
     presenterStart: unavailable, presenterSwap: unavailable, presenterEnd: unavailable,
     onShowSync: noEvent, onShowInk: noEvent, onAudienceNav: noEvent,
-    openAiModelSettings: unavailable, openSkillsSettings: unavailable,
+    async openAiModelSettings() {
+      const open = (window.parent as Window & {dyofficeOpenEditorSettings?: (target: 'models' | 'skills', caller: Window) => void}).dyofficeOpenEditorSettings
+      if (!open) throw new Error(text.unavailable)
+      open('models', window)
+    },
+    async openSkillsSettings() {
+      const open = (window.parent as Window & {dyofficeOpenEditorSettings?: (target: 'models' | 'skills', caller: Window) => void}).dyofficeOpenEditorSettings
+      if (!open) throw new Error(text.unavailable)
+      open('skills', window)
+    },
     skillText: unavailable, aiStream: unavailable, aiStreamCancel: async () => {},
     aiGskStatus: unavailable, aiGskLogin: unavailable, aiLogRunFailure: async () => {},
     webSearch: unavailable, imageSearch: unavailable, analyzeMedia: unavailable, generateImage: unavailable,
@@ -439,6 +567,7 @@ export function createSlidesBridge(host: SessionFileHost, fileId: string, prefs:
     confirming = true
     try {
       const saved = await host.reconcileSlides(fileId)
+      if (disposed) throw hostError('UNAVAILABLE', 'disposed')
       // Adopt the confirmed head and clear the tracked dirty flag: the parked
       // receipt fenced mutations, so nothing was edited between the export and
       // this confirmation; edits made afterwards take the normal path.
@@ -446,9 +575,10 @@ export function createSlidesBridge(host: SessionFileHost, fileId: string, prefs:
       recovery = null
       pending.resolve({ok: true, path: host.getState(fileId).name})
     } catch (error) {
+      if (disposed) throw hostError('UNAVAILABLE', 'disposed')
       if (host.getState(fileId).status !== 'unknown') { recovery = null; pending.resolve({ok: false, error: text.saveFailed}) }
       throw error
-    } finally { confirming = false; onChange() }
+    } finally { confirming = false; if (!disposed) onChange() }
   }
   async function prepareDownload(editor: {saveAndWait(): Promise<boolean>; isDirty(): boolean}) {
     if (disposed) throw hostError('UNAVAILABLE', 'disposed')

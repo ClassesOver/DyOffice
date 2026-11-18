@@ -2,9 +2,10 @@ import {assertDocumentBackendPolicy} from '../../../../worker/src/sandbox/docume
 import {resolve} from 'node:path'
 import {fileURLToPath} from 'node:url'
 import {open} from 'node:fs/promises'
-import {constants} from 'node:fs'
+import {constants,existsSync} from 'node:fs'
 import {createHash} from 'node:crypto'
 import {createHostProcess} from '../../../../worker/src/sandbox/host-process.ts'
+import {createCrossPlatformProcess} from '../../../../worker/src/sandbox/cross-platform-process.ts'
 import {recoverHostProcesses} from '../../../../worker/src/sandbox/host-recovery.ts'
 import {createXlsxNativeWorker} from '../../../../worker/src/native/xlsx.ts'
 import {createGatewayAdapter} from '../../../../worker/src/native/gateway.ts'
@@ -13,7 +14,7 @@ import type {SheetsPlanner} from './save.ts'
 import type {SheetsPackageReader} from './service.ts'
 
 async function executableHash(path:string,max:number){
-  const file=await open(path,constants.O_RDONLY|constants.O_NOFOLLOW|constants.O_NONBLOCK)
+  const file=await open(path,constants.O_RDONLY|(constants.O_NOFOLLOW??0)|(constants.O_NONBLOCK??0))
   try{
     const stat=await file.stat()
     if(!stat.isFile()||stat.size<1||stat.size>max)throw new Error('Invalid gateway executable')
@@ -29,13 +30,20 @@ export async function configuredSheetsRuntime(environment: NodeJS.ProcessEnv = p
   const flag=environment.DYOFFICE_NATIVE_XLSX
   if (!flag) return undefined
   if (flag!=='experimental' || environment.DYOFFICE_AUTH_MODE!=='local' || environment.NODE_ENV==='production') throw new Error('Native Sheets requires experimental local mode')
+  const nodeEngine=environment.DYOFFICE_XLSX_NODE_ENGINE
   const binary=environment.DYOFFICE_NATIVE_BINARY,sha256=environment.DYOFFICE_NATIVE_SHA256,deploymentId=environment.DYOFFICE_DEPLOYMENT_ID
-  if (!binary || !sha256 || !deploymentId) throw new Error('Native Sheets configuration missing')
-  const sandbox=createHostProcess({binary,sha256,deploymentId,allowedCommands:['open','close','read_range','read_formula_cells','read_row_outline','read_media','recalc_cells','save_archive']})
+  if (((!binary || !sha256) && !nodeEngine) || !deploymentId) throw new Error('Native Sheets configuration missing')
+  const useSystemd=!nodeEngine && process.platform==='linux' && process.getuid?.()===0 && existsSync('/usr/bin/systemd-run') && environment.DYOFFICE_SANDBOX_MODE!=='subprocess'
+  const createProcess=useSystemd ? createHostProcess : createCrossPlatformProcess
+  const execSha=await executableHash(process.execPath,160*1024*1024)
+  const allowedEngineCommands=['open','close','read_range','read_formula_cells','read_row_outline','read_media','recalc_cells','save_archive'] as const
+  const sandbox=nodeEngine
+    ? createProcess({binary:process.execPath,sha256:execSha,deploymentId,script:{path:resolve(nodeEngine),sha256:await executableHash(resolve(nodeEngine),32*1024*1024)},allowedCommands:allowedEngineCommands})
+    : createProcess({binary:binary!,sha256:sha256!,deploymentId,allowedCommands:allowedEngineCommands})
   if(environment.DYOFFICE_XLSX_GATEWAY_MODULE)throw new Error('In-process gateway configuration is not supported; build the isolated gateway runner')
   const gatewayPath=resolve(environment.DYOFFICE_XLSX_GATEWAY_RUNNER ?? fileURLToPath(new URL('../../../../dist-sheets-server/gateway-process.mjs',import.meta.url)))
-  const gatewaySandbox=createHostProcess({binary:process.execPath,sha256:await executableHash(process.execPath,160*1024*1024),deploymentId,script:{path:gatewayPath,sha256:await executableHash(gatewayPath,32*1024*1024)},allowedCommands:['gateway_package','gateway_plan']})
-  await recoverHostProcesses(deploymentId)
+  const gatewaySandbox=createProcess({binary:process.execPath,sha256:execSha,deploymentId,script:{path:gatewayPath,sha256:await executableHash(gatewayPath,32*1024*1024)},allowedCommands:['gateway_package','gateway_plan']})
+  if (useSystemd) await recoverHostProcesses(deploymentId)
   // Starting the actual binary verifies hash, execution and sandbox readiness.
   await sandbox.run(Buffer.from('sheets-startup'),async()=>{})
   await gatewaySandbox.run(Buffer.from('gateway-startup'),async()=>{})
