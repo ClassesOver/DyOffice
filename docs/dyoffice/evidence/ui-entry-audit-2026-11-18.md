@@ -450,3 +450,10 @@
 - 合入设置B后定向5文件18项通过（设置导航、配置分页、个人列表、会话cursor、用户分页），保留既有CSS解析日志；`/tmp/dyoffice-settings-b-merged-tests.log`。没有将此组件验证替代新设置页的最终浏览器视觉验收。
 - 发布前再保留远端82df8e3f的Portal显式父级ref修复，精确导入后rebase，无冲突。合并后输入法/查找/批注/共享modal与Portal父级共8文件136项通过；日志 `/tmp/dyoffice-panel-escape-merged-tests.log`。没有用该组件覆盖替代所有真实Portal页面浏览器验收。
 - 含Portal父级修复的最终构建Web docs类型/生产构建通过，边界1341文件0违规；两尺寸12入口流程再次全部通过，0页面异常，报告沿用上述green路径，最终日志 `/tmp/dyoffice-panel-escape-merged-browser-{1440,390}.log`。
+
+## 批注操作菜单 capture Escape
+
+- 真实Word新建批注后打开其操作菜单，将焦点移到回复输入框，派发isComposing Escape；菜单document capture监听先于输入框执行，菜单被误关。红证据 `/tmp/dyoffice-ui-audit/word-comment-menu-escape-red-1440/report.json`。输入框使用focus/fill而非点击来隔离键盘路径，原pointerdown点击外部关菜单语义未改。
+- 菜单监听先检查原生isComposing/229，再读取既有按target隔离guard的active/just-ended状态；不创建额外guard、不阻止默认事件、不改普通Escape或pointerdown关闭。App正文批注浮层的独立capture仍待查，未以本轮菜单修复声称全部capture监听已覆盖。
+- 新增4项原生/229/活动/结束同tick全部先红后绿，验证菜单、焦点、默认行为保留及随后普通Escape可关闭；相关4文件58项通过。Web docs类型/生产构建（既有chunk提示）、边界1341文件0违规与git diff --check通过，独立只读复核无阻塞。日志 `/tmp/dyoffice-comment-menu-{escape-red,escape-green,type,build}.log`。合成信号仍不替代实体输入法验证。
+- 最终构建1440/390各1流程，四类IME信号均保留菜单/回复草稿/焦点，随后普通Escape关闭菜单并回复失焦，0页面异常；证据 `/tmp/dyoffice-ui-audit/word-comment-menu-escape-green-{1440,390}/report.json`。全部业务写mock/blocked。保留远端5595eb71的设置主题radio浏览器测试调整，非产品代码，无需重建Word；未宣称运行其完整设置浏览器验收。

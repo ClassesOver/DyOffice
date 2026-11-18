@@ -99,3 +99,24 @@ describe('comment card menu', () => {
     act(() => root.unmount())
   })
 })
+
+it.each(['native', 'legacy', 'active', 'just-ended'] as const)('IME Escape keeps the open comment menu (%s)', async signal => {
+  const { root, container } = mount()
+  try {
+    click(container.querySelector<HTMLElement>('.comment-card .comment-more')!)
+    const input = container.querySelector<HTMLInputElement>('.comment-reply-input')!
+    input.focus()
+    const compose = (type: string) => act(() => { input.dispatchEvent(new CompositionEvent(type, { bubbles: true })) })
+    if (signal === 'active' || signal === 'just-ended') compose('compositionstart')
+    if (signal === 'just-ended') compose('compositionend')
+    const event = new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true,
+      ...(signal === 'native' ? { isComposing: true } : signal === 'legacy' ? { keyCode: 229 } : {}) })
+    act(() => { input.dispatchEvent(event) })
+    expect(container.querySelector('.comment-menu')).not.toBeNull()
+    expect(document.activeElement).toBe(input); expect(event.defaultPrevented).toBe(false)
+    if (signal === 'active') compose('compositionend')
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 5)) })
+    press(input, 'Escape')
+    expect(container.querySelector('.comment-menu')).toBeNull()
+  } finally { act(() => root.unmount()); container.remove() }
+})

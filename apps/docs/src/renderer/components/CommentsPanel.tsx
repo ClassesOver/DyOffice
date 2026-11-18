@@ -191,7 +191,11 @@ export const CommentsPanel = memo(function CommentsPanel({
       else if (!(e.target as Element).closest('.comment-menu, .comment-more')) setMenuId(null)
     }
     const onKey = (e: globalThis.KeyboardEvent) => {
-      if (e.key === 'Escape') setMenuId(null)
+      if (e.key !== 'Escape') return
+      // 捕获监听先于输入框处理，必须先让输入法取消候选。
+      if (e.isComposing || e.keyCode === 229) return
+      if (e.target instanceof HTMLElement && imeGuards.current.get(e.target)?.isImeConfirm(e)) return
+      setMenuId(null)
     }
     document.addEventListener('pointerdown', close, true)
     document.addEventListener('keydown', onKey, true)
