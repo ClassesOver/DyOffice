@@ -38,7 +38,8 @@ export async function nextPlaceholder(
       slideIndex: current,
       sourceId: editing.sourceId,
     })
-    if (updated) ctx.applySlide(current, updated)
+    if (!updated) return
+    ctx.applySlide(current, updated)
   } else if (paragraphs) {
     const updated = await window.slidesApi.editText({
       slideIndex: current,
@@ -46,7 +47,8 @@ export async function nextPlaceholder(
       paragraphs,
       ...(editing.groupId ? { groupId: editing.groupId } : {}),
     })
-    if (updated) ctx.applySlide(current, updated)
+    if (!updated) return
+    ctx.applySlide(current, updated)
   }
   const next = nextPlaceholderId(slide.nodes, editing.groupId ?? editing.sourceId)
   if (next) {
