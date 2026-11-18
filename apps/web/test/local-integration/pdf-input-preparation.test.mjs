@@ -60,9 +60,29 @@ test('revoked job and pre-aborted input preparation perform no object reads',asy
  await assert.rejects(build(f).prepare(f.cred(claim)),{code:'PDF_INPUT_DENIED'});assert.equal(reads,before)
 })
 test('actual object I/O crossing claim expiry cannot yield a snapshot',async t=>{
- let slow=false,slowReads=0;const f=await fixture(t,store=>({...store,readVerified:async ref=>{const bytes=await store.readVerified(ref);if(slow){slowReads++;await new Promise(r=>setTimeout(r,750))}return bytes}})),job=await f.enqueue(),claim=await f.worker.claim(job.id)
- await f.mutate("UPDATE native_jobs SET lease_until=clock_timestamp()+interval '600 milliseconds' WHERE id=$1",[job.id]);slow=true
+ let slow=false,slowReads=0,enteredLive=false,expiredDuringRead=false
+ const remaining=()=>f.transactions.withPrincipalTransaction({kind:'session',token:f.alice.token},async c=>{
+  const {rows}=await c.query('SELECT extract(epoch FROM (lease_until-clock_timestamp()))*1000 AS ms FROM native_jobs WHERE id=$1',[job.id])
+  assert.equal(rows.length,1)
+  return Number(rows[0].ms)
+ })
+ const f=await fixture(t,store=>({...store,readVerified:async ref=>{
+  if(!slow)return store.readVerified(ref)
+  // Start with the normal claim lifetime. Do not spend a 600ms deadline on
+  // controller startup and then mistake pre-I/O denial for an I/O expiry test.
+  enteredLive=await remaining()>0
+  assert.equal(enteredLive,true,'the real object read must begin with a live claim')
+  const bytes=await store.readVerified(ref);slowReads++
+  // Let the actual database deadline pass while this verified read is pending.
+  // Another transaction cannot shorten the locked job here without deadlocking.
+  let ms=await remaining()
+  while(ms>0){await new Promise(r=>setTimeout(r,Math.ceil(ms)+1));ms=await remaining()}
+  expiredDuringRead=true
+  return bytes
+ }})),job=await f.enqueue(),claim=await f.worker.claim(job.id)
+ slow=true
  await assert.rejects(build(f).prepare(f.cred(claim)),{code:'PDF_INPUT_DENIED'})
+ assert.equal(enteredLive,true);assert.equal(expiredDuringRead,true)
  assert.equal(slowReads,1,'expiry must cross actual verified object I/O');assert.deepEqual(await counts(f),{uploads:1,revisions:1,commits:0})
 })
 test('object corruption, cancellation during I/O, and post-download revocation reject without output',async t=>{
