@@ -17,7 +17,12 @@ function pdfjs(): Promise<Pdfjs> {
 }
 
 /** Draw each page into the host. Annotation, text edit, reorder, and redaction are not offered. */
-export async function mountPdfEditor(host: HTMLElement, bytes: Uint8Array, signal?: AbortSignal) {
+export async function mountPdfEditor(
+  host: HTMLElement,
+  bytes: Uint8Array,
+  signal?: AbortSignal,
+  rotations?: Readonly<Record<number, number>>,
+) {
   if (bytes.byteLength > 64 * 1024 * 1024) throw new Error('PDF_RENDER_LIMIT')
   const check = () => { if (signal?.aborted) throw new DOMException('PDF rendering cancelled', 'AbortError') }
   check()
@@ -45,7 +50,10 @@ export async function mountPdfEditor(host: HTMLElement, bytes: Uint8Array, signa
       check()
       const page = await doc.getPage(number)
       check()
-      const viewport = page.getViewport({ scale: 1 })
+      const delta = rotations?.[number] ?? 0
+      const viewport = delta
+        ? page.getViewport({ scale: 1, rotation: (((page.rotate ?? 0) + delta) % 360 + 360) % 360 })
+        : page.getViewport({ scale: 1 })
       const pixels = Math.ceil(viewport.width) * Math.ceil(viewport.height)
       totalPixels += pixels
       if (!Number.isFinite(pixels) || viewport.width <= 0 || viewport.height <= 0 || pixels > 16_000_000 || totalPixels > 64_000_000) throw new Error('PDF_RENDER_LIMIT')
@@ -62,6 +70,7 @@ export async function mountPdfEditor(host: HTMLElement, bytes: Uint8Array, signa
       caption.className = 'pdf-text'
       caption.textContent = text
       const figure = document.createElement('figure')
+      figure.dataset.pdfPage = String(number)
       figure.append(canvas, caption)
       host.append(figure)
       pages.push({ page: number, width: viewport.width, height: viewport.height, text })

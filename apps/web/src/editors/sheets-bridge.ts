@@ -136,7 +136,16 @@ export function createSheetsBridge(host: SessionFileHost, fileId: string, prefs:
     readPivotDefinition:unavailable,findWorkbookCells:unavailable,updateWorkbookPassword:unavailable,
     readExternalLinkUsage:unavailable,listWorkbookTabs:unavailable,
     writeWorkbookRecovery:unavailable,exportPdf:unavailable,printWorkbook:unavailable,exportCsv:unavailable,
-    openAiModelSettings:unavailable,openSkillsSettings:unavailable,
+    openAiModelSettings:async()=>{
+      const parent=typeof window!=='undefined'?(window.parent as unknown as {dyofficeOpenEditorSettings?:(tab:'models'|'skills',source:Window)=>Promise<void>}):undefined
+      if(parent&&typeof parent.dyofficeOpenEditorSettings==='function')return parent.dyofficeOpenEditorSettings('models',window)
+      return unavailable()
+    },
+    openSkillsSettings:async()=>{
+      const parent=typeof window!=='undefined'?(window.parent as unknown as {dyofficeOpenEditorSettings?:(tab:'models'|'skills',source:Window)=>Promise<void>}):undefined
+      if(parent&&typeof parent.dyofficeOpenEditorSettings==='function')return parent.dyofficeOpenEditorSettings('skills',window)
+      return unavailable()
+    },
   } satisfies Partial<DesktopApi>
   async function confirmSave() {
     const pending=recovery

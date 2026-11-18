@@ -22,7 +22,7 @@ async function configuredApplication() {
   if(assistantSourceFlag && (mode!=='local'||assistantSourceFlag!=='metadata-only'||!profilesFile)) throw new Error('Assistant source catalog requires explicit metadata-only local mode and provider gateway');
   const assistantSourceCatalog=assistantSourceFlag==='metadata-only';
   const sheetsFlag=process.env.DYOFFICE_NATIVE_XLSX;
-  if(sheetsFlag && (sheetsFlag!=='experimental'||mode!=='local')) throw new Error('Native Sheets requires explicit experimental local mode');
+  if(sheetsFlag && sheetsFlag!=='off' && (sheetsFlag!=='experimental'||mode!=='local')) throw new Error('Native Sheets requires explicit experimental local mode');
   const jobFlag=process.env.DYOFFICE_NATIVE_JOBS;
   if(jobFlag && (jobFlag!=='experimental'||mode!=='local')) throw new Error('Native jobs require explicit experimental local mode');
   if(mode==='development') return buildApp({
@@ -67,9 +67,17 @@ async function configuredApplication() {
     const slidesHost=nativeSlidesDirectory ? {openSession:(input)=>openIsolatedPptxSession({fileId:input.fileId,revision:input.revision,bytes:input.bytes},{timeoutMs:60000,experimental:true})} : undefined;
     const legacyDistDir=resolve(fileURLToPath(new URL('../dist/',import.meta.url)));
     const effectiveShellDirectory=(shellDirectory && shellDirectory!==legacyDistDir) ? shellDirectory : (storage.objectStore && hasBuiltShell ? defaultShellDir : shellDirectory);
-    sheets=await configuredSheetsRuntime(process.env);
+    const defaultSheetsDir=resolve(process.env.DYOFFICE_NATIVE_XLSX_DIRECTORY||fileURLToPath(new URL('../dist-sheets/',import.meta.url)));
+    const defaultGatewayPath=resolve(process.env.DYOFFICE_XLSX_GATEWAY_RUNNER||fileURLToPath(new URL('../dist-sheets-server/gateway-process.mjs',import.meta.url)));
+    const defaultNodeEnginePath=resolve(fileURLToPath(new URL('../dist-sheets-server/xlsx-node-engine.mjs',import.meta.url)));
+    let sheetsEnv={...process.env,DYOFFICE_AUTH_MODE:mode};
+    if(sheetsFlag===undefined && storage.objectStore && existsSync(join(defaultSheetsDir,'.vite/manifest.json')) && existsSync(defaultGatewayPath) && (process.env.DYOFFICE_NATIVE_BINARY || existsSync(defaultNodeEnginePath))){
+      sheetsEnv={...sheetsEnv,DYOFFICE_NATIVE_XLSX:'experimental',...(process.env.DYOFFICE_NATIVE_BINARY ? {} : {DYOFFICE_XLSX_NODE_ENGINE:defaultNodeEnginePath})};
+    }
+    sheets=sheetsFlag==='off' ? undefined : await configuredSheetsRuntime(sheetsEnv);
     const {close:closeSheets,...sheetsConfig}=sheets ?? {};
-    return await buildLocalApp({db,businessPool,...storage,...sheetsConfig,nativeDocsDirectory,nativeSlidesDirectory,slidesHost,localShellDirectory:effectiveShellDirectory,nativeJobs:jobFlag==='experimental',deploymentId,origin,csrfKey,globalConfigKeyring,providerGateway,assistantSourceCatalog,assistantChannels:process.env.DYOFFICE_ASSISTANT_CHANNELS==='on',codingHarnesses:process.env.DYOFFICE_CODING_AGENT==='off'?false:{cliPath:process.env.DYOFFICE_CODEX_PATH,analysisPython:process.env.DYOFFICE_ANALYSIS_PYTHON},sourcesCredentialKeys,sourcesEgressTargets,passwordBlocklistFile:process.env.DYOFFICE_PASSWORD_BLOCKLIST_FILE,closeDb:async()=>{await closeSheets?.();storage.close();await Promise.all([close(),businessPool.end()]);}});
+    const nativePdf=process.env.DYOFFICE_NATIVE_PDF!=='off' && Boolean(storage.objectStore) && (Boolean(nativeDocsDirectory) || Boolean(nativeSlidesDirectory) || Boolean(sheets));
+    return await buildLocalApp({db,businessPool,...storage,...sheetsConfig,nativeDocsDirectory,nativeSlidesDirectory,slidesHost,nativePdf,localShellDirectory:effectiveShellDirectory,nativeJobs:jobFlag==='experimental',deploymentId,origin,csrfKey,globalConfigKeyring,providerGateway,assistantSourceCatalog,assistantChannels:process.env.DYOFFICE_ASSISTANT_CHANNELS==='on',codingHarnesses:process.env.DYOFFICE_CODING_AGENT==='off'?false:{cliPath:process.env.DYOFFICE_CODEX_PATH,analysisPython:process.env.DYOFFICE_ANALYSIS_PYTHON},sourcesCredentialKeys,sourcesEgressTargets,passwordBlocklistFile:process.env.DYOFFICE_PASSWORD_BLOCKLIST_FILE,closeDb:async()=>{await closeSheets?.();storage.close();await Promise.all([close(),businessPool.end()]);}});
   } catch(error) { await sheets?.close();storage?.close();await Promise.allSettled([close(),businessPool?.end()]); throw error; }
 }
 

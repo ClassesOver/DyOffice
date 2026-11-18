@@ -7,7 +7,10 @@ import { messages } from './messages.ts'
 
 // The native DOCX entry does not import the shell TabBar's global declaration.
 // Only these optional, same-origin parent capabilities are used by this bridge.
-type ParentTabsWindow = Window & {aiOfficeTabs?: Pick<TabsApi, 'list' | 'activate'>}
+type ParentTabsWindow = Window & {
+  aiOfficeTabs?: Pick<TabsApi, 'list' | 'activate'>
+  dyofficeOpenEditorSettings?: (target: 'models' | 'skills', caller: Window) => void
+}
 
 /** A narrow compatibility bridge for the existing renderer. Opaque paths are
  * aliases only; they never become filesystem paths or server authorization. */
@@ -124,7 +127,12 @@ export function createDocsBridge(host: SessionFileHost, fileId: string, prefs: A
     },
     confirmDocumentReplace: async () => window.confirm(text.conflict),
     openDocx: unavailable,openDocxPath: unavailable,openDocxDecrypt: unavailable,
-    saveDocxAs: unavailable,saveDocxNew: unavailable,saveDocxTo: unavailable,
+    async saveDocxAs(_currentPath: string | null, data: ArrayBuffer) {
+      const name = host.getState(fileId).name
+      download(new Blob([data],{type:'application/vnd.openxmlformats-officedocument.wordprocessingml.document'}),name)
+      return {ok:true as const,path:alias,name}
+    },
+    saveDocxNew: unavailable,saveDocxTo: unavailable,
     setDocPassword: unavailable,writeRecoveryCopy: unavailable,
     async pickImage(){return new Promise<import('../../../docs/src/shared/ipc').PickImageResult|null>((resolve,reject)=>{const input=document.createElement('input');input.type='file';input.accept='image/png,image/jpeg,image/gif';input.hidden=true;const cleanup=()=>input.remove();input.oncancel=()=>{cleanup();resolve(null)};input.onchange=()=>{const file=input.files?.[0];if(!file){cleanup();resolve(null);return}if(!['image/png','image/jpeg','image/gif'].includes(file.type)||file.size>16*1024*1024){cleanup();reject(Error(text.unavailable));return}const reader=new FileReader();reader.onerror=()=>{cleanup();reject(Error(text.unavailable))};reader.onload=()=>{cleanup();resolve({name:file.name,mime:file.type as 'image/png'|'image/jpeg'|'image/gif',base64:String(reader.result).split(',')[1]})};reader.readAsDataURL(file)};document.body.append(input);input.click()})},
     fetchImage: unavailable,
@@ -133,11 +141,14 @@ export function createDocsBridge(host: SessionFileHost, fileId: string, prefs: A
     listPrinters: async () => [],
     async print(){try{window.print();return {ok:true}}catch{return {ok:false,error:'浏览器打印不可用。'}}},
     async exportHtml(name:string,html:string){download(new Blob([html],{type:'text/html;charset=utf-8'}),name.replace(/\.docx$/i,'')+'.html');return {ok:true}},
-    exportPdf: unavailable,exportMarkdown: unavailable,pickExportImagesTarget: unavailable,printPdfBuffer: unavailable,
+    exportPdf: unavailable,
+    async exportMarkdown(name:string,md:string){download(new Blob([md],{type:'text/markdown;charset=utf-8'}),name.replace(/\.docx$/i,'')+'.md');return {ok:true}},
+    pickExportImagesTarget: unavailable,printPdfBuffer: unavailable,
     pickMergeDataSource: unavailable,writeMergeOutput: unavailable,zoteroCommand: unavailable,
     onZoteroRequest:noEvent,
 
-    openAiModelSettings: unavailable,openSkillsSettings: unavailable,
+    async openAiModelSettings(){const open=(window.parent as ParentTabsWindow).dyofficeOpenEditorSettings;if(!open)throw new Error(text.unavailable);open('models',window)},
+    async openSkillsSettings(){const open=(window.parent as ParentTabsWindow).dyofficeOpenEditorSettings;if(!open)throw new Error(text.unavailable);open('skills',window)},
   } satisfies Partial<DesktopApi>
   async function prepareDownload(editor: {save(): Promise<boolean>; isDirty(): boolean}) {
     const before = host.getState(fileId)
