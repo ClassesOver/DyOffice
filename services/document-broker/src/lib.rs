@@ -46,3 +46,8 @@ mod unit_binding;
 #[cfg(target_os = "linux")]
 #[allow(dead_code)]
 mod bound_input;
+
+// Content observations cannot construct runtime admission.
+#[cfg(target_os = "linux")]
+#[allow(dead_code)]
+mod runtime_artifact;
