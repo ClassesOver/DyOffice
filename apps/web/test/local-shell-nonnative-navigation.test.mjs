@@ -10,12 +10,12 @@ const source=await readFile(new URL('../src/shell/local-main.tsx',import.meta.ur
 const slice=source.slice(source.indexOf('async function resolveOpenDocument(id:'),source.indexOf('async function browse()'))
 assert.ok(slice.includes('async function upload('))
 const {code}=await transform(slice,{loader:'ts',target:'es2022'})
-function fixture({format='xlsx',capability='editable',missingCapability=false,fail,download='/api/v1/files/file/content?revision=rev'}={}){
+function fixture({verified=true,format='xlsx',capability='editable',missingCapability=false,fail,download='/api/v1/files/file/content?revision=rev'}={}){
  const calls=[],navigated=[],downloads=[],notices=[]
  const result={format,name:'book.'+format,file:{fileId:'file',revision:'rev'},downloadEndpoint:download}
- const client={async request(path,method){calls.push([path,method]);if(fail&&(fail==='read'||method==='POST'))throw new Error('Forbidden');return result},async upload(file){calls.push(['upload',file.name]);return result}}
+ const client={async request(path,method){calls.push([path,method]);if(fail&&(fail==='read'||method==='POST'))throw new Error('Forbidden');return result},async upload(file,proof){assert.equal(proof,'a'.repeat(43));calls.push(['upload',file.name]);return result}}
  const opened=[]
- const context={documentTabs:{reserveOpen:()=>({renameVersion:0,sequence:1}),open:x=>opened.push(x)},client,sourceWorkspace:{bound:{request:client.request}},readOpenDocument,capabilities:{docx:'editable',...(missingCapability?{}:{xlsx:capability})},notifyFilesChanged(){calls.push(['changed'])},notice:x=>notices.push(x),location:{assign:x=>navigated.push(x)},document:{createElement(){return {click(){downloads.push([this.href,this.download])}}}},encodeURIComponent}
+ const context={documentTabs:{reserveOpen:()=>({renameVersion:0,sequence:1}),open:x=>opened.push(x)},client,sourceWorkspace:{bound:{request:client.request,...(verified?{proof:'a'.repeat(43)}:{})}},readOpenDocument,capabilities:{docx:'editable',...(missingCapability?{}:{xlsx:capability})},notifyFilesChanged(){calls.push(['changed'])},notice:x=>notices.push(x),location:{assign:x=>navigated.push(x)},document:{createElement(){return {click(){downloads.push([this.href,this.download])}}}},encodeURIComponent}
  const api=runInNewContext(code+'\n({open,upload})',context)
  return {api,calls,navigated,downloads,notices,opened}
 }
@@ -46,3 +46,7 @@ test('failed upload opening releases busy without blindly retrying',async()=>{
 })
 
 for(const download of ['/api/v1/files/other/content?revision=rev','/api/v1/files/file/content?revision=other','/api/v1/files/file/content?revision=rev#x','/api/v1/files/../admin/config','/api/v1/files/file/content?revision=rev&redirect=https://evil.example'])test(`rejects unbound download ${download}`,async()=>{const f=fixture({capability:'unsupported',download});await assert.rejects(f.api.open('file'));assert.equal(f.downloads.length,0)})
+
+test('unverified workspace cannot upload or open a file',async()=>{
+ const f=fixture({verified:false});await assert.rejects(f.api.upload({name:'a.xlsx'}),/登录状态未核验/);assert.deepEqual(f.calls,[]);assert.equal(f.opened.length,0);assert.equal(f.navigated.length,0);assert.equal(f.downloads.length,0)
+})
