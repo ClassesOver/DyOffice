@@ -87,12 +87,12 @@ async function open(id:string){
  documentTabs.open(await resolveOpenDocument(id),token)
 }
 let busy=false
-async function upload(file:File){if(busy)throw new Error('正在导入，请稍候');if(!/\.(docx|xlsx|pptx|pdf)$/i.test(file.name))throw new Error('请选择 DOCX、XLSX、PPTX 或 PDF 文件。');busy=true;try{const result=await client.upload(file);try{await open(result.file.fileId)}catch{notifyFilesChanged();throw new Error('文件已上传，但打开失败。请从最近文件中打开，不要重复上传。')}}finally{busy=false}}
+async function upload(file:File,expectedProof=sourceWorkspace?.bound.proof){if(busy)throw new Error('正在导入，请稍候');if(!/\.(docx|xlsx|pptx|pdf)$/i.test(file.name))throw new Error('请选择 DOCX、XLSX、PPTX 或 PDF 文件。');busy=true;try{if(!expectedProof)throw new Error('登录状态未核验，请重新加载当前工作区。');const result=await client.upload(file,expectedProof);try{await open(result.file.fileId)}catch{notifyFilesChanged();throw new Error('文件已上传，但打开失败。请从最近文件中打开，不要重复上传。')}}finally{busy=false}}
 async function browse(){showUpload()}
 const unsupported=async()=>{throw new Error('此桌面操作尚未适配到本地 Web。')}
 function installBridge(){
  window.aiOffice=createLocalHomeBridge({request:client.request,preferences,open,openTrash:()=>showTrash(),changed:notifyFilesChanged,renamed:documentTabs.rename,unsupported:m=>notice(m),browse})
- window.aiOffice.newDoc=async()=>{if(capabilities.docx!=='editable')return unsupported();const response=await fetch(blankDocx);if(!response.ok)throw new Error('原版空白模板不可用');await upload(new File([await response.blob()],'未命名.docx'))}
+ window.aiOffice.newDoc=async()=>{const proof=sourceWorkspace?.bound.proof;if(!proof)throw new Error('登录状态未核验，请重新加载当前工作区。');if(capabilities.docx!=='editable')return unsupported();const response=await fetch(blankDocx);if(!response.ok)throw new Error('原版空白模板不可用');await upload(new File([await response.blob()],'未命名.docx'),proof)}
  window.aiOffice.newSheet=createLocalNewSheet({getSessionProof:()=>sourceWorkspace?.bound.proof,bindSession:proof=>client.bindSession(proof),fetchTemplate:()=>fetch(blankXlsx),open:(id,request)=>openCreatedDocument(documentTabs,capabilities,id,request),changed:notifyFilesChanged})
  window.aiOfficeTabs={list:async()=>documentTabs.list(),activate:async id=>documentTabs.activate(id),close:async id=>{await documentTabs.close(id)},onChanged:documentTabs.subscribe,showNewMenu:async(x,y)=>showChromeMenu('new',x,y),showAppMenu:async(x,y)=>showChromeMenu('app',x,y),showMenu:async(x,y)=>showChromeMenu('tabs',x,y),showTabMenu:async(id,x,y)=>showChromeMenu('tab',x,y,id),detach:unsupported,tearOff:async()=>false,dragTornWindow:()=>{},dockTornWindow:unsupported,endTornDrag:async()=>{},onDockPreview:()=>()=>{},reportDockIndex:()=>{},reorder:async(id,index)=>documentTabs.reorder(id,index),notifyChromePressed:()=>{},onChromePressed:()=>()=>{}} satisfies TabsApi
 }

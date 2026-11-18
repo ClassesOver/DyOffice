@@ -46,11 +46,7 @@ export function createLocalShellClient(send:typeof fetch=fetch) {
   if(authTransition)throw stale()
   return perform<T>(path,method,body)
  }
- return {
-  request,
-  endSession,
-  onSessionEnded(listener:(reason:SessionEndReason)=>void){sessionListeners.add(listener);return()=>{sessionListeners.delete(listener)}},
-  async bindSession(expectedProof?:string){
+ async function bindSession(expectedProof?:string){
    const stamp=generation
    const {csrfToken}=await request<{csrfToken:string}>('/api/v1/auth/session-proof')
    assertCurrent(stamp)
@@ -64,7 +60,12 @@ export function createLocalShellClient(send:typeof fetch=fetch) {
      return result
     },
    }
-  },
+  }
+ return {
+  request,
+  endSession,
+  onSessionEnded(listener:(reason:SessionEndReason)=>void){sessionListeners.add(listener);return()=>{sessionListeners.delete(listener)}},
+  bindSession,
   invalidateSession,
   invalidateCsrf(){csrf=undefined},
   async changePassword(currentPassword:string,newPassword:string){
@@ -102,12 +103,14 @@ export function createLocalShellClient(send:typeof fetch=fetch) {
    do{const page:{files:WebFile[];nextCursor:string|null}=await request<{files:WebFile[];nextCursor:string|null}>(`/api/v1/files?limit=100${cursor?'&cursor='+encodeURIComponent(cursor):''}`);files.push(...page.files);cursor=page.nextCursor;if(cursor){if(seen.has(cursor))throw new Error('Invalid file pagination');seen.add(cursor)}}while(cursor)
    return files
   },
-  async upload(file:File){
+  async upload(file:File,expectedProof:string){
+   if(!expectedProof)throw stale()
    if(file.size>32*1024*1024)throw new Error('文件超过 32 MiB 限制')
-   const stage=await request<{uploadId:string}>('/api/v1/files/uploads','POST',{name:file.name,size:file.size})
-   await request(`/api/v1/uploads/${encodeURIComponent(stage.uploadId)}/content`,'PUT',file)
+   const bound=await bindSession(expectedProof)
+   const stage=await bound.request<{uploadId:string}>('/api/v1/files/uploads','POST',{name:file.name,size:file.size})
+   await bound.request(`/api/v1/uploads/${encodeURIComponent(stage.uploadId)}/content`,'PUT',file)
    // A failed finish may have committed: never retry or cancel it automatically.
-   return request<{file:{fileId:string};format:string}>(`/api/v1/uploads/${encodeURIComponent(stage.uploadId)}/finish`,'POST')
+   return bound.request<{file:{fileId:string};format:string}>(`/api/v1/uploads/${encodeURIComponent(stage.uploadId)}/finish`,'POST')
   },
  }
 }
