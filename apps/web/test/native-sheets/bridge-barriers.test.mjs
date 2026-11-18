@@ -7,15 +7,19 @@ import {pathToFileURL,fileURLToPath} from 'node:url'
 import {randomUUID} from 'node:crypto'
 import {build} from 'esbuild'
 import {createSessionFileHost} from '../../../../packages/browser-host/src/session-files.ts'
-import {stageEditsForSave} from '../../../sheets/src/renderer/save-edits-staging.ts'
 import {sheetsSaveRequest} from '../helpers/sheets-request.mjs'
 
-let directory,createSheetsBridge
+let directory,createSheetsBridge,stageEditsForSave
 before(async()=>{
  directory=await mkdtemp(join(tmpdir(),'dyoffice-sheet-barriers-'))
  const outfile=join(directory,'bridge.mjs')
  await build({entryPoints:[fileURLToPath(new URL('../../src/editors/sheets-bridge.ts',import.meta.url))],bundle:true,platform:'node',format:'esm',outfile,logLevel:'silent'})
  ;({createSheetsBridge}=await import(pathToFileURL(outfile).href))
+ // Renderer sources use bundler resolution, unlike Node's native TS loader.
+ // Bundle the real staging implementation just like the bridge, without mocks.
+ const stagingFile=join(directory,'staging.mjs')
+ await build({entryPoints:[fileURLToPath(new URL('../../../sheets/src/renderer/save-edits-staging.ts',import.meta.url))],bundle:true,platform:'node',format:'esm',outfile:stagingFile,logLevel:'silent'})
+ ;({stageEditsForSave}=await import(pathToFileURL(stagingFile).href))
 })
 after(()=>rm(directory,{recursive:true,force:true}))
 const json=(value,status=200)=>new Response(JSON.stringify(value),{status,headers:{'content-type':'application/json'}})
