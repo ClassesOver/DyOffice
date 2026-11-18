@@ -7,6 +7,7 @@ use zbus::object_server::SignalEmitter;
 #[derive(Clone, Copy)]
 enum Behaviour {
     Fast,
+    WallClockStall,
     WrongId,
     WrongUnit,
     WrongPath,
@@ -73,6 +74,10 @@ impl FakeManager {
     ) -> zbus::fdo::Result<()> {
         assert_eq!(header.signature().to_string(), "");
         self.trace.lock().unwrap().push("subscribe".into());
+        if matches!(self.behaviour, Behaviour::WallClockStall) {
+            // Test-only real scheduler delay, longer than the unchanged 200ms budget.
+            std::thread::sleep(Duration::from_millis(250));
+        }
         if matches!(self.behaviour, Behaviour::SubscribeSlow) {
             tokio::time::sleep(Duration::from_secs(1)).await;
         }
@@ -196,6 +201,7 @@ impl FakeManager {
     ) -> zbus::Result<()>;
 }
 struct FakeUnit {
+    slow_read_entered: Arc<tokio::sync::Notify>,
     behaviour: Behaviour,
     reads: AtomicUsize,
 }
@@ -212,6 +218,7 @@ impl FakeUnit {
     #[zbus(property, name = "InvocationID")]
     async fn invocation_id(&self) -> Vec<u8> {
         if matches!(self.behaviour, Behaviour::SlowUnitRead) {
+            self.slow_read_entered.notify_one();
             tokio::time::sleep(Duration::from_secs(1)).await;
         }
         let read = self.reads.fetch_add(1, Ordering::SeqCst);
@@ -395,6 +402,7 @@ impl FakeService {
     }
 }
 pub(super) struct Fixture {
+    slow_read_entered: Arc<tokio::sync::Notify>,
     pub(super) generation: u64,
     pub(super) client: zbus::Connection,
     server: zbus::Connection,
@@ -406,6 +414,7 @@ impl Fixture {
         let (s, c) = tokio::net::UnixStream::pair().unwrap();
         let starts = Arc::new(AtomicUsize::new(0));
         let trace = Arc::new(Mutex::new(Vec::new()));
+        let slow_read_entered = Arc::new(tokio::sync::Notify::new());
         let manager = FakeManager {
             unit_queries: AtomicUsize::new(0),
             behaviour,
@@ -421,6 +430,7 @@ impl Fixture {
             .serve_at(
                 "/org/freedesktop/systemd1/unit/fixture_returned_not_derived",
                 FakeUnit {
+                    slow_read_entered: slow_read_entered.clone(),
                     behaviour,
                     reads: AtomicUsize::new(0),
                 },
@@ -440,6 +450,7 @@ impl Fixture {
         let client = Builder::unix_stream(c).p2p().build();
         let (server, client) = tokio::try_join!(server, client).unwrap();
         Self {
+            slow_read_entered,
             generation,
             client,
             server,
@@ -448,8 +459,9 @@ impl Fixture {
         }
     }
 }
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn fast_job_signal_is_correlated_but_never_proves_stopped() {
+    let clock = ManualClock::start().await;
     let f = Fixture::new(1, Behaviour::Fast).await;
     let mut a = Attempt::new(1);
     assert_eq!(
@@ -462,6 +474,7 @@ async fn fast_job_signal_is_correlated_but_never_proves_stopped() {
     assert!(a.must_retain());
     assert_eq!(*f.trace.lock().unwrap(), ["subscribe", "start"]);
     assert_eq!(f.starts.load(Ordering::SeqCst), 1);
+    clock.assert_healthy();
 }
 #[tokio::test]
 async fn wrong_job_identity_and_bounded_noise_cannot_advance() {
@@ -590,8 +603,9 @@ async fn duplicate_early_completion_is_ambiguous_not_a_stop_proof() {
     );
     assert!(a.must_retain())
 }
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn wrong_generation_and_second_use_never_send_another_start() {
+    let clock = ManualClock::start().await;
     let f = Fixture::new(2, Behaviour::Fast).await;
     let mut a = Attempt::new(1);
     assert_eq!(
@@ -608,7 +622,8 @@ async fn wrong_generation_and_second_use_never_send_another_start() {
         a.run(&f, Duration::from_millis(100)).await,
         Phase::Quarantined
     );
-    assert_eq!(f.starts.load(Ordering::SeqCst), 1)
+    assert_eq!(f.starts.load(Ordering::SeqCst), 1);
+    clock.assert_healthy();
 }
 #[tokio::test]
 async fn subscribe_timeout_does_not_start_and_uses_total_budget() {
@@ -833,8 +848,9 @@ async fn done_job_binds_manager_returned_unit_path_and_cgroup_without_derivation
     );
     assert!(a.must_retain()); // This observation is not stopped/clean/admitted proof.
 }
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn unit_readback_failures_quarantine_and_cannot_replay() {
+    let clock = ManualClock::start().await;
     for behaviour in [
         Behaviour::UnitMissing,
         Behaviour::WrongUnitIdentity,
@@ -846,10 +862,18 @@ async fn unit_readback_failures_quarantine_and_cannot_replay() {
     ] {
         let f = Fixture::new(1, behaviour).await;
         let mut a = Attempt::new(1);
-        assert_eq!(
-            a.run(&f, Duration::from_millis(100)).await,
-            Phase::Quarantined
-        );
+        let observe = a.run(&f, Duration::from_millis(100));
+        let drive = async {
+            if matches!(behaviour, Behaviour::SlowUnitRead) {
+                tokio::time::timeout(Duration::from_millis(100), f.slow_read_entered.notified())
+                    .await
+                    .expect("slow-read stage was not reached");
+                assert_eq!(f.starts.load(Ordering::SeqCst), 1);
+                tokio::time::advance(Duration::from_millis(100)).await;
+            }
+        };
+        let (phase, ()) = tokio::join!(observe, drive);
+        assert_eq!(phase, Phase::Quarantined);
         assert!(a.unit_binding.is_none());
         assert!(a.must_retain());
         a.reconnect(2).unwrap();
@@ -859,6 +883,7 @@ async fn unit_readback_failures_quarantine_and_cannot_replay() {
         );
         assert_eq!(f.starts.load(Ordering::SeqCst), 1);
     }
+    clock.assert_healthy();
 }
 
 #[tokio::test]
@@ -1139,4 +1164,89 @@ async fn cancellation_during_resource_readback_quarantines() {
     assert_eq!(result, Phase::Quarantined);
     assert!(a.unit_binding.is_none());
     assert_eq!(f.starts.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test(start_paused = true)]
+async fn real_io_wall_stall_does_not_spend_logical_success_budget() {
+    let clock = ManualClock::start().await;
+    let f = Fixture::new(1, Behaviour::WallClockStall).await;
+    let mut a = Attempt::new(1);
+    assert_eq!(
+        a.run(&f, Duration::from_millis(200)).await,
+        Phase::JobObserved {
+            job_id: 7,
+            result: "done".into()
+        }
+    );
+    assert!(a.must_retain());
+    assert_eq!(f.starts.load(Ordering::SeqCst), 1);
+    clock.assert_healthy();
+}
+
+// Tokio 1.54 documents that a running spawn_blocking task inhibits paused-clock
+// auto-advance. Real zbus I/O can finish without consuming logical budget. The
+// separate 30s wall watchdog releases the latch to allow auto-advance on a stuck
+// timed await; it is not a whole-process hang bound or production deadline.
+// Successful tests assert it never fired. The runner also needs an outer timeout.
+struct ManualClock {
+    release: Option<std::sync::mpsc::Sender<()>>,
+    watchdog: Arc<std::sync::atomic::AtomicBool>,
+}
+impl ManualClock {
+    async fn start() -> Self {
+        let (release, wait) = std::sync::mpsc::channel();
+        let (ready, started) = tokio::sync::oneshot::channel();
+        let watchdog = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let flag = watchdog.clone();
+        tokio::task::spawn_blocking(move || {
+            let _ = ready.send(());
+            if matches!(
+                wait.recv_timeout(Duration::from_secs(30)),
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+            ) {
+                flag.store(true, Ordering::SeqCst);
+            }
+        });
+        started.await.unwrap();
+        Self {
+            release: Some(release),
+            watchdog,
+        }
+    }
+    fn assert_healthy(&self) {
+        assert!(
+            !self.watchdog.load(Ordering::SeqCst),
+            "real test watchdog expired"
+        );
+    }
+}
+impl Drop for ManualClock {
+    fn drop(&mut self) {
+        if let Some(release) = self.release.take() {
+            let _ = release.send(());
+        }
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn wrong_generation_replay_checks_survive_wall_scheduler_stall() {
+    let clock = ManualClock::start().await;
+    let f = Fixture::new(2, Behaviour::WallClockStall).await;
+    let mut a = Attempt::new(1);
+    assert_eq!(
+        a.run(&f, Duration::from_millis(100)).await,
+        Phase::NotSubmitted
+    );
+    assert_eq!(f.starts.load(Ordering::SeqCst), 0);
+    let mut a = Attempt::new(2);
+    assert!(matches!(
+        a.run(&f, Duration::from_millis(100)).await,
+        Phase::JobObserved { .. }
+    ));
+    assert_eq!(
+        a.run(&f, Duration::from_millis(100)).await,
+        Phase::Quarantined
+    );
+    assert_eq!(f.starts.load(Ordering::SeqCst), 1);
+    clock.assert_healthy();
 }
