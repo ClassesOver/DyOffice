@@ -641,7 +641,7 @@ export interface SheetsEditorHandle {
   isDirty(): boolean
 }
 export interface SheetsEditorHost {
-  assistant?: {sourceSkill?: import('@genoffice/agent-core').AgentSkill; transport: import('@genoffice/agent-core').AgentTransport; modelPicker: React.ReactNode; extraSkills?: readonly import('@genoffice/agent-core').AgentSkill[]; agents?: readonly import('@genoffice/ui').AssistantParticipant[]; onManageAgents?: () => void; control?: import('@genoffice/ui').AssistantControl | undefined}
+  assistant?: {sourceSkill?: import('@genoffice/agent-core').AgentSkill; transport: import('@genoffice/agent-core').AgentTransport; modelPicker: React.ReactNode; workspace?: import('@genoffice/ui').AssistantWorkspace; extraSkills?: readonly import('@genoffice/agent-core').AgentSkill[]; agents?: readonly import('@genoffice/ui').AssistantParticipant[]; onManageAgents?: () => void; control?: import('@genoffice/ui').AssistantControl | undefined}
   /** Opt in only when the host returns stable sheet/drawing IDs after saving. */
   inPlaceSave?: boolean
   readOnly: boolean
@@ -6322,6 +6322,7 @@ export function App({
       )}
       <ExcelShell
         modelPicker={host?.assistant?.modelPicker}
+              assistantWorkspace={host?.assistant?.workspace}
         assistantAgents={host?.assistant?.agents}
         onManageAgents={host?.assistant?.onManageAgents}
         assistantAvailable={host?.assistantAvailable ?? true}

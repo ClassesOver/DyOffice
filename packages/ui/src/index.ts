@@ -173,3 +173,6 @@ export { createImeEnterGuard, useImeEnterGuard, type ImeEnterGuard } from './ime
 
 export { AssistantParticipants, AssistantAvatar, DelegatedAgentResultCard, delegatedAgentResult, compactDelegatedTranscript, type AssistantParticipant, type DelegatedAgentResult } from './assistant-participants'
 export type { AssistantControl } from './assistant-control'
+export type { AssistantWorkspace } from './assistant-workspace'
+
+export { AssistantConversation } from './assistant-workspace'

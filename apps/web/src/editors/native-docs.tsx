@@ -94,7 +94,6 @@ export async function mountDocsEditor(host: SessionFileHost,element: HTMLElement
     const status = !loaded ? text.opening : downloading ? text.downloadSaving : state.status === 'saving' || local.status === 'saving' ? (locale === 'zh' ? '正在保存…' : 'Saving…') : local.dirty ? (locale === 'zh' ? '未保存' : 'Unsaved') : text.ready
     const saveStatus = <>
       <span className="dyoffice-docs-persistence-state" role="status" data-attention={Boolean(warning || notice)} data-native-save={local.nativeSaveOutcome} data-incomplete-reasons={local.nativeSaveReasons.join(',')} data-dirty={String(local.dirty)} title={warning || [status, notice].filter(Boolean).join(' · ')}>{warning ? (locale === 'zh' ? '需要处理' : 'Needs attention') : status}</span>
-      {assistantNotice && <span className="dyoffice-editor-assistant-status">{assistantNotice}</span>}
     </>
     const fileActions = <>
       <div className="file-menu-sep" />
@@ -103,6 +102,7 @@ export async function mountDocsEditor(host: SessionFileHost,element: HTMLElement
     </>
     return <div className="dyoffice-native-docs">
       <DocumentNotifications locale={locale} items={[
+        ...(assistantNotice ? [{id:'assistant',level:prefs.showAssistant === false ? 'info' as const : 'warning' as const,title:locale === 'zh' ? 'AI 助手' : 'AI Assistant',message:assistantNotice}] : []),
         ...(warning ? [{id:'document-state',level:'error' as const,title:locale === 'zh' ? '文档需要处理' : 'Document needs attention',message:warning,actions:<>
         {!state.lease && !failed && state.status !== 'unauthorized' && <button onClick={() => { void host.takeoverLease(fileId).then(() => { initialLease = true }).catch(() => { actionError = text.takeoverFailed; changed() }) }}>{text.takeover}</button>}
         {state.status === 'unknown' && <button onClick={() => { void host.reconcile(fileId).then(() => changed()).catch(() => {}) }}>{text.retry}</button>}

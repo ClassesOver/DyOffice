@@ -1,19 +1,24 @@
-import {useState} from 'react'
+import {useEffect,useState,type ReactNode,type KeyboardEvent} from 'react'
 import {createAnalysisDocumentRegistry} from '../../../../packages/browser-host/src/analysis-document-registry.ts'
 import {createAnalysisDeliveryClient} from '../../../../packages/browser-host/src/analysis-delivery-client.ts'
 import {AnalysisDeliveryPanel} from './analysis-delivery-panel.tsx'
 import {createAssistantChannelClient} from '../../../../packages/browser-host/src/assistant-channel.ts'
 import {AssistantChannelPanel} from './assistant-channel-panel.tsx'
+import {createAssistantWorkspace} from '../../../../packages/browser-host/src/assistant-workspace.ts'
+import {AssistantWorkspacePanel,AssistantRecipient,AssistantTeamConversation,handleTeamMentionKey} from './assistant-workspace-panel.tsx'
 import {createAssistantClient} from '../../../../packages/browser-host/src/assistant.ts'
 import {createLocalShellClient} from '../shell/local-client'
 import {createUserSkillsClient} from '../shell/user-skills-client'
+import {AiModelPicker} from '@genoffice/ui'
 
 export async function createEditorAssistant(channelOptions?:{fileId:string;editorId:string;generation:()=>number}) {
   const client = createLocalShellClient(), bound = await client.bindSession()
   const documents=createAnalysisDocumentRegistry()
   const deliveries=createAnalysisDeliveryClient({request:bound.request,csrfToken:bound.proof})
-  const assistant = await createAssistantClient({request: bound.request, csrfToken: bound.proof,onDelivery:(hint,agent)=>deliveries.observe(hint,agent)})
+  const assistant = await createAssistantClient({nativeDocumentEditing:true,request: bound.request, csrfToken: bound.proof,onDelivery:(hint,agent)=>deliveries.observe(hint,agent)})
   const channel=assistant.catalog.assistantChannels&&channelOptions?createAssistantChannelClient({...channelOptions,request:bound.request}):undefined
+  const workspace=createAssistantWorkspace({agents:assistant.catalog.agents??[],coding:assistant.coding?{...assistant.coding,run:(input,signal)=>assistant.coding!.run(input,signal,assistant.selected(),'user')}:undefined,channel})
+  const lang=()=>document.documentElement.lang.startsWith('en')?'en' as const:'zh' as const
   const skills = createUserSkillsClient(bound.request)
   async function openSettings(target:'skills'|'models') {
     try {
@@ -25,16 +30,25 @@ export async function createEditorAssistant(channelOptions?:{fileId:string;edito
 
   function ModelPicker() {
     const [selected, setSelected] = useState(assistant.selected() ?? '')
-    return <label className="ai-model-chip" title="切换模型后，下一条消息会开启新的模型上下文。">模型<select aria-label="助手模型" value={selected} onChange={e => {assistant.select(e.target.value); setSelected(e.target.value)}}>
-      {assistant.catalog.entries.map(e => <option key={e.id} value={e.id}>{e.label}</option>)}
-    </select></label>
+    const [,update]=useState(0)
+    useEffect(()=>workspace.subscribe(()=>update(value=>value+1)),[])
+    if(workspace.snapshot().selected.kind==='channel')return <span className="editor-model-external">{lang()==='en'?'Model managed externally':'模型由外接助手管理'}</span>
+    return <AiModelPicker
+      bridge={{getSettings: async () => {throw new Error('server-managed model catalog')}, setSettings: async () => {}, openModelSettings: () => openSettings('models')}}
+      lang={lang()}
+      catalogEntries={assistant.catalog.entries}
+      selectedId={selected}
+      onCatalogSelect={id => {assistant.select(id); setSelected(id)}}
+    />
   }
-  function ChannelManager(){return <AssistantChannelPanel client={channel!} lang={document.documentElement.lang==='en'?'en':'zh'}/>}
+  function ChannelMembers(){return <AssistantChannelPanel client={channel!} lang={lang()} mode="members"/>}
+  function ChannelTasks(){return <AssistantChannelPanel client={channel!} lang={lang()} mode="tasks"/>}
   // Native hosts load preferences after binding the assistant, before rendering.
   function DeliveryManager(){return <AnalysisDeliveryPanel client={deliveries} documents={documents} lang={document.documentElement.lang==='en'?'en':'zh'}/>}
   const noEvent = () => () => {}
   return {
-    ...assistant,agents:assistant.catalog.agents??[],modelPicker:<><ModelPicker/>{channel&&<ChannelManager/>}{!!assistant.catalog.agents?.length&&<DeliveryManager/>}</>,
+    ...assistant,agents:assistant.catalog.agents??[],modelPicker:<ModelPicker/>,
+    workspace:{conversation:(children:ReactNode)=><AssistantTeamConversation client={workspace} lang={lang()}>{children}</AssistantTeamConversation>,renderRecipient:(draft:string,onDraftChange:(value:string)=>void)=><AssistantRecipient client={workspace} lang={lang()} draft={draft} onDraftChange={onDraftChange}/>,handleComposerKeyDown:(event:KeyboardEvent,draft:string,onChange:(value:string)=>void)=>handleTeamMentionKey(workspace,event,draft,onChange),isOffice:workspace.isOffice,submit:workspace.submit,panel:<AssistantWorkspacePanel client={workspace} lang={lang()} channelMembers={channel&&<ChannelMembers/>} channelTasks={channel&&<ChannelTasks/>} deliveries={(!!assistant.catalog.agents?.length||channel)&&<DeliveryManager/>}/>,recipient:<AssistantRecipient client={workspace} lang={lang()}/>},
     documents,channel,control:channel?.control,extraSkills:[...assistant.extraSkills,...(channel?[channel.skill]:[])],
     api: {
       // Local compatibility projection only. Full desktop settings and global
@@ -49,6 +63,6 @@ export async function createEditorAssistant(channelOptions?:{fileId:string;edito
       openSkillsSettings: () => openSettings('skills'),
       openAiModelSettings: () => openSettings('models'),
     },
-    dispose() {documents.dispose();deliveries.dispose();channel?.dispose();assistant.dispose(); client.invalidateSession()},
+    dispose() {workspace.dispose();documents.dispose();deliveries.dispose();channel?.dispose();assistant.dispose(); client.invalidateSession()},
   }
 }

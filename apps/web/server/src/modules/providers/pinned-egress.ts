@@ -13,7 +13,7 @@ export interface EgressScope extends Omit<EgressProfile,'allowedIpv4'> {
 }
 const fail=()=>new Error('Provider transport unavailable')
 const profileFields=['deploymentId','entryId','revision','providerId','model','baseUrl','endpoint'] as const
-function publicIpv4(address:string):boolean {
+export function publicIpv4(address:string):boolean {
  if(isIP(address)!==4)return false
  const [first=0,second=0]=address.split('.').map(Number)
  return first>0&&first<224&&![10,100,127,169,192,198,203].includes(first)

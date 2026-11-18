@@ -9,7 +9,7 @@ const labels={
 } as const
 
 /** Optional controls own only their own draft; the document assistant input is untouched. */
-export function AssistantChannelPanel({client,lang}: {client:AssistantChannelClient;lang?:'zh'|'en'}) {
+export function AssistantChannelPanel({client,lang,mode='all'}: {client:AssistantChannelClient;lang?:'zh'|'en';mode?:'all'|'members'|'tasks'}) {
  const text=labels[lang ?? (typeof document!=='undefined' && document.documentElement.lang.startsWith('en')?'en':'zh')]
  const [snapshot,setSnapshot]=useState(()=>client.snapshot()),[open,setOpen]=useState(()=>!!client.snapshot())
  const [busy,setBusy]=useState(false),[failed,setFailed]=useState(false),[invitation,setInvitation]=useState<{inviteToken:string;expiresAt:string}|null>(null)
@@ -19,6 +19,8 @@ export function AssistantChannelPanel({client,lang}: {client:AssistantChannelCli
  const perform=async(action:()=>Promise<unknown>)=>{if(busy)return;setBusy(true);setFailed(false);try{await action();setSnapshot(client.snapshot())}catch{setFailed(true)}finally{setBusy(false)}}
  const active=snapshot?.members.filter(member=>!member.revoked) ?? []
  const selected=active.some(member=>member.membershipId===recipient)?recipient:active[0]?.membershipId ?? ''
+ const taskList=<div><strong>{text.tasks}</strong>{snapshot?.tasks.length?snapshot.tasks.map(task=><div className="assistant-channel-item" key={task.taskId}><AssistantAvatar name={task.to==='office'?text.office:snapshot.members.find(member=>member.membershipId===task.to)?.displayName??'Agent'} origin={task.to==='office'?'office':'external'}/><span dir="auto">{task.instruction}</span><small>{text.states[task.state]}</small>{['queued','running','waiting_peer'].includes(task.state)&&<button type="button" disabled={busy} onClick={()=>void perform(()=>client.cancel(task.taskId))}>{text.cancel}</button>}{task.summary&&<p className="assistant-channel-result" dir="auto">{task.summary}</p>}</div>):<p>{text.noTasks}</p>}</div>
+ if(mode==='tasks')return <section className="assistant-channel-panel" aria-label={text.tasks}>{(failed||client.error())&&<p role="alert">{text.error}</p>}<button type="button" disabled={busy} onClick={()=>void perform(()=>client.refresh())}>{text.refresh}</button>{taskList}</section>
  if(!open)return <div><button className="assistant-channel-add" type="button" disabled={busy} onClick={()=>void perform(async()=>{await client.start();setOpen(true)})}>{text.add}</button>{(failed||client.error())&&<p role="alert">{text.error}</p>}</div>
  return <section className="assistant-channel-panel" aria-label={text.title}>
   <div className="assistant-channel-toolbar"><strong>{text.title}</strong><button type="button" onClick={()=>{setInvitation(null);setOpen(false)}}>{text.close}</button></div>
@@ -31,11 +33,11 @@ export function AssistantChannelPanel({client,lang}: {client:AssistantChannelCli
   {invitation&&<div className="assistant-channel-invitation"><code>{invitation.inviteToken}</code><small>{text.expires} {new Date(invitation.expiresAt).toLocaleTimeString()}</small><button type="button" onClick={()=>void perform(async()=>{await navigator.clipboard.writeText(invitation.inviteToken);setCopied(true)})}>{copied?text.copied:text.copy}</button><button type="button" onClick={()=>setInvitation(null)}>{text.hide}</button></div>}
   {!!snapshot?.applications.length&&<div><strong>{text.approval}</strong>{snapshot.applications.map(application=><div className="assistant-channel-item" key={application.applicationId}><span dir="auto">{application.displayName} · {application.kind}</span><small>{application.applicationId}</small><button type="button" disabled={busy} onClick={()=>void perform(()=>client.approve(application.applicationId,true))}>{text.approve}</button><button type="button" disabled={busy} onClick={()=>void perform(()=>client.approve(application.applicationId,false))}>{text.reject}</button></div>)}</div>}
   <div><strong>{text.members}</strong>{active.length?active.map(member=><div className="assistant-channel-item" key={member.membershipId}><AssistantAvatar name={member.displayName} origin="external"/><span dir="auto">{member.displayName} · {member.kind}</span><small>{member.online?text.online:text.offline}</small><button type="button" disabled={busy} onClick={()=>void perform(()=>client.remove(member.membershipId))}>{text.remove}</button></div>):<p>{text.noMembers}</p>}</div>
-  {!!active.length&&<form onSubmit={event=>{event.preventDefault();if(selected&&instruction.trim())void perform(async()=>{await client.send(selected,instruction);setInstruction('')})}}>
+  {mode==='all'&&!!active.length&&<form onSubmit={event=>{event.preventDefault();if(selected&&instruction.trim())void perform(async()=>{await client.send(selected,instruction);setInstruction('')})}}>
    <label>{text.recipient}<select value={selected} disabled={busy} onChange={event=>setRecipient(event.target.value)}>{active.map(member=><option key={member.membershipId} value={member.membershipId}>{member.displayName}</option>)}</select></label>
    <label>{text.instruction}<textarea value={instruction} maxLength={16000} disabled={busy} onChange={event=>setInstruction(event.target.value)}/></label>
    <button type="submit" disabled={busy||!!snapshot?.paused||!instruction.trim()}>{text.send}</button>
   </form>}
-  <div><strong>{text.tasks}</strong>{snapshot?.tasks.length?snapshot.tasks.map(task=><div className="assistant-channel-item" key={task.taskId}><AssistantAvatar name={task.to==='office'?text.office:snapshot.members.find(member=>member.membershipId===task.to)?.displayName??'Agent'} origin={task.to==='office'?'office':'external'}/><span dir="auto">{task.instruction}</span><small>{text.states[task.state]}</small>{['queued','running','waiting_peer'].includes(task.state)&&<button type="button" disabled={busy} onClick={()=>void perform(()=>client.cancel(task.taskId))}>{text.cancel}</button>}{task.summary&&<p className="assistant-channel-result" dir="auto">{task.summary}</p>}</div>):<p>{text.noTasks}</p>}</div>
+  {mode==='all'&&taskList}
  </section>
 }

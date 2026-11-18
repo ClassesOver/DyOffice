@@ -32,7 +32,7 @@ export function createLocalShellClient(send:typeof fetch=fetch) {
    if(!response.ok){
     if(response.status===401&&path!=='/api/v1/auth/login'&&path!=='/api/v1/auth/change-password')endSession('expired')
     else if(response.status===403)csrf=undefined
-    const message=response.status===409&&path.startsWith('/api/v1/admin/config')?'配置版本冲突，请核对最新版本；当前草稿已保留。'
+    const message=response.status===409&&path.startsWith('/api/v1/admin/config')?'配置已被更新，请读取最新配置并核对；当前草稿已保留。'
      :response.status===409&&path.startsWith('/api/v1/workspace/folders')?'文件夹操作冲突：请检查重名、非空目录或移动目标，再刷新重试。'
      :response.status===400&&path.startsWith('/api/v1/workspace/folders')?'文件夹名称或移动目标无效，请检查名称长度、路径符号及目标目录。'
      :value?.message||value?.title||value?.error||'请求失败'

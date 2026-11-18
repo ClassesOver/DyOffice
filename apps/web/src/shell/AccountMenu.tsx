@@ -22,9 +22,9 @@ export function AccountMenu(props:AccountMenuProps){
   {type:'group',key:'personal',label:'个人工作区',children:[
    {key:'settings',label:'个人设置',icon:<SettingOutlined aria-hidden="true"/>},
    {key:'trash',label:'回收站',icon:<DeleteOutlined aria-hidden="true"/>},
-   {key:'sources',label:'数据连接',icon:<DatabaseOutlined aria-hidden="true"/>},
   ]},
   ...(admin?[{type:'divider' as const},{type:'group' as const,key:'administration',label:'组织管理',children:[
+   {key:'sources',label:'数据连接',icon:<DatabaseOutlined aria-hidden="true"/>},
    {key:'global',label:'全局配置',icon:<SlidersOutlined aria-hidden="true"/>},
    {key:'users',label:'用户管理',icon:<TeamOutlined aria-hidden="true"/>},
   ]}]:[]),

@@ -1,8 +1,10 @@
+import type {CodingProgress} from '../../../../../../packages/agent-core/src/coding-skill.ts'
 /** Not mounted: production wiring requires T12 authority, secrets and budget admission. */
 export interface TurnIdentity { deploymentId: string; userId: string; sessionId: string }
 export interface TurnPermit { identity: TurnIdentity; revision: string }
 export interface TurnRequest { system: string; messages: unknown[]; tools: unknown[] }
-export type TurnEvent = { type: 'delta' | 'reasoning'; text: string }
+export type TurnEvent = ({type:'progress'} & CodingProgress)
+  | { type: 'delta' | 'reasoning'; text: string }
   | { type: 'tool_call'; id: string; name: string; input: Record<string, unknown> }
   | { type: 'usage'; inputTokens?: number; outputTokens?: number }
   | { type: 'stop_reason'; reason: string }
@@ -32,6 +34,7 @@ function normalize(event: TurnEvent): TurnEvent {
   if (!event || typeof event !== 'object') throw fail('AI turn unavailable')
   let clean: TurnEvent
   if ((event.type === 'delta' || event.type === 'reasoning') && typeof event.text === 'string') clean = {type:event.type,text:event.text}
+  else if(event.type==='progress' && ['status','output'].includes(event.kind) && typeof event.text==='string') clean={type:'progress',kind:event.kind,text:event.text}
   else if (event.type === 'tool_call' && validId(event.id) && validId(event.name) && event.input && typeof event.input === 'object' && !Array.isArray(event.input)) clean = {type:event.type,id:event.id,name:event.name,input:event.input}
   else if (event.type === 'stop_reason' && typeof event.reason === 'string') clean = {type:event.type,reason:event.reason}
   else if (event.type === 'usage' && [event.inputTokens,event.outputTokens].every(n=>n===undefined || Number.isSafeInteger(n) && n>=0)) clean = {type:'usage',...(event.inputTokens===undefined?{}:{inputTokens:event.inputTokens}),...(event.outputTokens===undefined?{}:{outputTokens:event.outputTokens})}

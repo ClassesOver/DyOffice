@@ -88,3 +88,20 @@ test('task cancellation aborts the active model round and closes its HTTP respon
   assert.equal(aborted,true)
  }finally{await bridge.close()}
 })
+
+test('live assistant text is reported before model settlement without exposing tool arguments or reasoning',async()=>{
+ let release,started
+ const gate=new Promise(resolve=>{release=resolve}),ready=new Promise(resolve=>{started=resolve}),progress=[]
+ const bridge=await createCodingModelBridge({token:'session',modelId:'selected',signal:new AbortController().signal,onProgress:event=>progress.push(event),turns:{async run(input,emit){
+  await emit({type:'reasoning',text:'private reasoning'})
+  await emit({type:'delta',text:'Checking '});await emit({type:'delta',text:'the calculation'})
+  await emit({type:'tool_call',id:'call1',name:'exec_command',input:{cmd:'private command'}})
+  started();await gate
+ }}})
+ const pending=fetch(bridge.baseUrl+'/responses',{method:'POST',body:JSON.stringify(task),headers:{authorization:'Bearer '+bridge.apiKey}}).then(response=>response.text())
+ try{
+  await ready
+  assert.equal(progress.filter(event=>event.kind==='output').map(event=>event.text).join(''),'Checking the calculation')
+  assert.doesNotMatch(JSON.stringify(progress),/private command|private reasoning/)
+ }finally{release();await pending;await bridge.close()}
+})

@@ -1,6 +1,16 @@
 /* B: personal settings only. Keep workspace, editors and admin routes untouched. */
-.workspace-config-modal .personal-settings-b{padding:0;max-width:none}
+.workspace-config-modal .personal-settings-b{height:100%;margin:0;padding:0;max-width:none}
+.workspace-config-modal .ant-modal-body:has(.personal-settings-b){padding:0}
 .workspace-config-modal .personal-settings-b>.ant-alert{margin:16px 24px!important}
+.workspace-config-modal .personal-settings-b>.settings-workbench{height:100%;min-height:0}
+.workspace-config-modal .personal-settings-b .settings-workbench-brand .personal-settings-brand{padding:0 4px 12px;gap:8px}
+.workspace-config-modal .personal-settings-b .settings-workbench-brand .personal-settings-brand>span{font-size:26px}
+.workspace-config-modal .personal-settings-b .settings-workbench-brand .personal-settings-brand strong{font-size:16px}
+.workspace-config-modal .personal-settings-b .settings-workbench-brand .personal-settings-brand small{flex-basis:100%;margin:4px 0 0 34px;font-size:12px}
+.workspace-config-modal .personal-settings-b .settings-workbench-content{padding-top:24px}
+.workspace-config-modal .personal-settings-b .personal-settings-heading{margin-bottom:24px}
+.workspace-config-modal .personal-settings-heading h2{margin:0 0 8px;color:var(--text);font-size:20px;font-weight:600;line-height:1.4}
+.workspace-config-modal .personal-settings-heading p{margin:0;font-size:13px;line-height:1.6}
 .workspace-config-modal .personal-settings-b .personal-settings-tabs{min-height:540px}
 .workspace-config-modal .personal-settings-b .personal-settings-tabs>.ant-tabs-nav{width:208px;flex-shrink:0;margin:0;padding:24px 12px;background:var(--accent-soft);border:0}
 .workspace-config-modal .personal-settings-b .personal-settings-tabs>.ant-tabs-nav .ant-tabs-tab{margin:4px 0;padding:14px 16px;border-radius:8px;text-align:start;color:var(--text-secondary)}
@@ -25,6 +35,8 @@
 .workspace-config-modal .personal-settings-actions{display:flex;justify-content:flex-end;gap:12px;flex-wrap:wrap;margin-top:28px;padding-top:20px;border-top:1px solid var(--border-subtle)}
 .workspace-config-modal .personal-settings-b :is(button,input,[role=tab],[role=combobox]):focus-visible{outline:2px solid var(--accent);outline-offset:3px}
 @media(max-width:680px){
+ .workspace-config-modal .personal-settings-b>.settings-workbench{height:auto;min-height:0}
+ .workspace-config-modal .personal-settings-b .settings-workbench-content{padding-top:18px}
  .workspace-config-modal .personal-settings-b .personal-settings-tabs{display:block;min-height:0}
  .workspace-config-modal .personal-settings-b .personal-settings-tabs>.ant-tabs-nav{width:auto;padding:8px 12px}
  .workspace-config-modal .personal-settings-b .personal-settings-tabs>.ant-tabs-nav .ant-tabs-tab{margin:2px 0;padding:9px 12px}
@@ -73,3 +85,10 @@
 }
 .workspace-config-modal .personal-settings-history .settings-list-scroll-region{height:260px}
 @media(max-width:680px){.workspace-config-modal .personal-settings-history .settings-list-scroll-region{height:240px}}
+.workspace-config-modal .personal-settings-actions{align-items:center;justify-content:space-between;background:var(--surface)}
+.workspace-config-modal .personal-settings-save-state{font-size:13px;line-height:1.6;color:var(--text-secondary)}
+.workspace-config-modal .personal-settings-save-state{display:inline-flex;align-items:center;gap:7px}
+.workspace-config-modal .personal-settings-save-state::before{content:'';width:6px;height:6px;border-radius:50%;background:var(--success,#38976a)}
+@media(max-width:680px){
+ .workspace-config-modal .personal-settings-actions>.ant-space{width:100%;justify-content:flex-end}
+}

@@ -1,3 +1,4 @@
+import { ASSISTANT_DOCUMENT_TOOLS } from '../../../../../packages/web-contracts/src/assistant'
 import { placeholderInstruction } from './redact'
 import { redactLabelsOf } from './redact-view'
 import type { Editor } from '@tiptap/core'
@@ -82,6 +83,7 @@ export function createDocsSkill(
     },
     get tools() {
       const hidden = mediaToolsOff()
+      if(!getEditor().isEditable) for(const name of ASSISTANT_DOCUMENT_TOOLS) hidden.add(name)
       return hidden.size === 0 ? AGENT_TOOLS : AGENT_TOOLS.filter((t) => !hidden.has(t.name))
     },
     buildContext: () => {

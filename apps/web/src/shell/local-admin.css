@@ -16,3 +16,30 @@ section.local-admin-panel .admin-create {
 section.local-admin-panel .admin-create .ant-card-head {
   border-bottom: 0;
 }
+
+.local-admin-panel .admin-progress{padding:10px 12px;margin-bottom:10px;border-radius:8px;background:var(--accent-soft);color:var(--accent);font-size:13px;line-height:1.6}
+.local-admin-panel .admin-filter-empty{display:flex;flex-direction:column;align-items:center;gap:8px;padding:16px}
+.local-admin-panel .admin-field-hint{font-size:12px;line-height:1.6;font-weight:400}
+.local-admin-panel .admin-create form>div{align-items:flex-start;gap:16px}
+.local-admin-panel .admin-create label.set-field{min-width:220px}
+.local-admin-panel .admin-create form>div>.ant-btn{margin-top:28px}
+.local-admin-panel .admin-confirm{padding:16px;border:1px solid var(--border-subtle);border-radius:10px;background:var(--surface-subtle)}
+.local-admin-panel .admin-confirm h4{font-size:15px;line-height:1.6;overflow-wrap:anywhere}
+.local-admin-panel .admin-confirm fieldset{margin:12px 0;background:var(--surface)}
+.local-admin-panel .admin-confirm legend{padding:0 6px;font-size:13px;font-weight:500}
+.local-admin-panel .admin-confirm label.set-field{margin:14px 0}
+.local-admin-panel .admin-secret{padding:14px 16px;border:1px solid var(--border-subtle);border-radius:10px;background:var(--surface-subtle)}
+.local-admin-panel .admin-secret p{margin:0 0 10px;font-size:13px;line-height:1.7;color:var(--text-secondary)}
+.local-admin-panel .admin-secret label.set-field{margin:10px 0}
+.local-admin-panel .admin-secret input{font-family:monospace;letter-spacing:.04em}
+.local-admin-panel .management-list-panel{overscroll-behavior:contain}
+.local-admin-panel .management-list-summary{min-height:44px;align-items:center}
+.local-admin-panel .management-list-toolbar{padding-block:10px 12px;border-bottom:1px solid var(--border-subtle)}
+.local-admin-panel .management-list-table-region{min-height:220px}
+.local-admin-panel .management-list-footer{gap:12px;align-items:center}
+@media(max-width:680px){
+ .local-admin-panel .admin-create label.set-field{min-width:0;width:100%}
+ .local-admin-panel .admin-create form>div>.ant-btn{margin-top:0;width:100%}
+ .local-admin-panel .admin-confirm,.local-admin-panel .admin-secret{padding:12px}
+ .local-admin-panel .admin-confirm fieldset .ant-checkbox-wrapper{display:flex;margin:8px 0}
+}

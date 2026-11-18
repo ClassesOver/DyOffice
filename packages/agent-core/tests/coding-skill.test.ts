@@ -1,7 +1,7 @@
 import {describe, expect, it} from 'vitest'
 import {createCodingSkill} from '../src/coding-skill'
 
-describe('optional coding delegation', () => {
+describe('Office team delegation', () => {
   it('delegates only when invoked and returns errors as tool results', async () => {
     let calls = 0
     const skill = createCodingSkill({run: async input => {calls++; expect(input).toEqual({instruction:'write parser',context:'CSV columns'}); return {summary:'Parser tested',output:'parse.ts'}}})

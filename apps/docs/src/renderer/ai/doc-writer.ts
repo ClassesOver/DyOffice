@@ -184,7 +184,7 @@ export class DraftLanding {
 
   private flush(): void {
     this.timer = null
-    if (this.closed || this.pending === null || this.editor.isDestroyed) return
+    if (this.closed || this.pending === null || this.editor.isDestroyed || !this.editor.isEditable) return
     const html = this.pending
     this.pending = null
     let next: ProseMirrorNode[]

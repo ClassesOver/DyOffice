@@ -1,3 +1,4 @@
+import { AssistantConversation } from '@genoffice/ui'
 import { AssistantParticipants, DelegatedAgentResultCard, type AssistantParticipant, type DelegatedAgentResult } from '@genoffice/ui'
 import {
   aiPanelWidthAtPointer,
@@ -106,6 +107,7 @@ const MODEL_BRIDGE: AiModelPickerBridge = {
 
 export function AiChatPanel({
   modelPicker,
+  assistantWorkspace,
   assistantAgents,
   onManageAgents,
   isOpen,
@@ -140,6 +142,7 @@ export function AiChatPanel({
   onCollapse,
 }: {
   readonly isOpen: boolean
+  readonly assistantWorkspace?: import('@genoffice/ui').AssistantWorkspace | undefined
   readonly modelPicker?: React.ReactNode
   readonly assistantAgents?: readonly AssistantParticipant[] | undefined
   readonly onManageAgents?: (() => void) | undefined
@@ -385,7 +388,15 @@ export function AiChatPanel({
   const listSkillsForMenu = async () =>
     (await window.desktopApi.skillsList()).map(({ name, description }) => ({ name, description }))
 
-  const send = (): void => {
+  const promptRef = useRef(prompt)
+  promptRef.current = prompt
+  const send = async (): Promise<void> => {
+    if (assistantWorkspace && !assistantWorkspace.isOffice()) {
+      const draft = prompt
+      const result = await assistantWorkspace.submit(draft.trim(), scopeRange !== null || attachments.length > 0 || attachedSkills.length > 0)
+      if (result === 'sent' && promptRef.current === draft) onPromptChange('')
+      return
+    }
     if (!canSend) return
     stickToBottomRef.current = true
     onSend()
@@ -393,6 +404,7 @@ export function AiChatPanel({
 
   /** Enter while a reply runs: the draft joins the queue above the composer */
   const enqueueDraft = (): void => {
+    if (assistantWorkspace && !assistantWorkspace.isOffice()) { void send(); return }
     const text = prompt.trim()
     if (!text) return
     // the queued message owns the composer attachments; the pump hands them to onSend
@@ -455,7 +467,7 @@ export function AiChatPanel({
       <header className="ai-panel-header">
         <span className="ai-panel-title">
           <GensparkMark size={22} />
-          Genspark
+          AI 助手
         </span>
         <div className="ai-panel-header-actions">
           {!modelPicker && <AiPanelSideButton
@@ -486,9 +498,11 @@ export function AiChatPanel({
         </div>
       </header>
 
-      {assistantAgents && <AssistantParticipants agents={assistantAgents} lang={lang} onManageAgents={onManageAgents} />}
+      {assistantWorkspace?.panel}
+      {!assistantWorkspace && assistantAgents && <AssistantParticipants agents={assistantAgents} lang={lang} onManageAgents={onManageAgents} />}
 
       <div className="ai-chat" ref={chatRef} onScroll={onChatScroll}>
+        <AssistantConversation workspace={assistantWorkspace}>
         {/* Past conversation (read-only transcript), shown continuously with the current turn */}
         {historicChat.length > 0 && (
           <>
@@ -649,10 +663,12 @@ export function AiChatPanel({
             ))}
           </section>
         )}
+        </AssistantConversation>
       </div>
 
-      <div className="ai-composer">
+      <div className="ai-composer" onKeyDownCapture={event=>assistantWorkspace?.handleComposerKeyDown?.(event,prompt,onPromptChange)} >
         {attachNotice && <div className="ai-attach-notice">{attachNotice}</div>}
+        {assistantWorkspace?.renderRecipient?.(prompt,onPromptChange) ?? assistantWorkspace?.recipient}
         <AiComposer
           queueStrip={
             <AiQueueStrip

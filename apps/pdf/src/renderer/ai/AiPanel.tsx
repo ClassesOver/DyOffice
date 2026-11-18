@@ -720,7 +720,7 @@ export function AiPanel({
       <header className="ai-panel-header">
         <span className="ai-panel-title">
           <GensparkMark size={22} />
-          Genspark
+          AI 助手
         </span>
         <div className="ai-panel-header-actions">
           <AiPanelSideButton

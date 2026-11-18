@@ -293,3 +293,59 @@ describe('write_document tool', () => {
     expect(texts(editor)).toEqual([''])
   })
 })
+
+it('browser Office tool calls stream a document into the native Word editor and continue after writing',async()=>{
+  const {createAssistantClient}=await import('../../../packages/browser-host/src/assistant')
+  const {AgentLoop,streamText}=await import('@genoffice/agent-core')
+  const {createDocsSkill}=await import('../src/renderer/ai/docs-skill')
+  const editor=await createBlankEditor()
+  const requests:{tools:{name:string}[];messages:unknown[]}[]=[]
+  const client=await createAssistantClient({nativeDocumentEditing:true,csrfToken:'c'.repeat(43),request:async()=>({entries:[{id:'office',label:'Office',model:'test'}],defaultId:'office'}) as never,fetchImpl:async(_url,init)=>{
+    const {request}=JSON.parse(init!.body as string);requests.push(request)
+    const event=(name:string,data:unknown)=>`event: ${name}\ndata: ${JSON.stringify(data)}\n\n`
+    const content=request.tools.length
+      ?requests.length===1?event('tool_call',{id:'write1',name:'write_document',input:{plan:'A title and one paragraph'}}):event('delta',{text:'Written into the document.'})
+      :event('delta',{text:'<h1>Office report</h1>'})+event('delta',{text:'<p>The report was written into Word.</p>'})
+    return new Response(content+event('done',{}),{headers:{'content-type':'text/event-stream'}})
+  }})
+  const writer:AiDocWriter={async write(spec,onProgress,signal){
+    const {system,user}=buildDocWriterRequest(spec,'')
+    const result=await streamText({transport:client.transport,system,user,signal,maxChars:200000,extract:raw=>({text:extractFragment(raw)}),onProgress})
+    return result.status==='complete'?{ok:true,html:result.text}:{ok:false,error:'Writer failed'}
+  }}
+  try{
+    const skill=createDocsSkill(()=>editor,()=>NUM_IDS,undefined,undefined,undefined,()=>false,()=>writer)
+    await new Promise<void>((resolve,reject)=>{
+      const loop=new AgentLoop({transport:client.transport,skill,events:{onDone:()=>resolve(),onError:message=>reject(Error(message))}})
+      loop.run('Write a report into this document.')
+    })
+    expect(requests[0]!.tools.some(tool=>tool.name==='write_document')).toBe(true)
+    expect(requests[1]!.tools).toEqual([])
+    expect(requests).toHaveLength(3)
+    expect(editor.getText()).toContain('Office report')
+    expect(editor.getText()).toContain('written into Word')
+  }finally{client.dispose()}
+})
+
+
+it('hides and rejects native writes when Word is read-only and stops a running writer after edit access is lost',async()=>{
+ const {createDocsSkill}=await import('../src/renderer/ai/docs-skill')
+ const editor=await createBlankEditor()
+ editor.setEditable(false)
+ const skill=createDocsSkill(()=>editor,()=>NUM_IDS)
+ expect(skill.tools.some(tool=>tool.name==='write_document')).toBe(false)
+ const before=editor.state.doc
+ const rejected=await skill.executeTool({id:'ro',name:'insert_content',input:{html:'<p>forbidden</p>'}})
+ expect(rejected.isError).toBe(true);expect(editor.state.doc.eq(before)).toBe(true)
+ editor.setEditable(true)
+ const writer:AiDocWriter={async write(_spec,onProgress){
+  onProgress('<p>queued draft</p>')
+  editor.setEditable(false)
+  await tick()
+  expect(editor.state.doc.eq(before)).toBe(true)
+  return {ok:true,html:'<p>must not land</p>'}
+ }}
+ const result=await executeTool(editor,{id:'loss',name:'write_document',input:{plan:'Report'}},NUM_IDS,undefined,undefined,undefined,undefined,undefined,writer)
+ expect(result.isError).toBe(true)
+ expect(editor.state.doc.eq(before)).toBe(true)
+})

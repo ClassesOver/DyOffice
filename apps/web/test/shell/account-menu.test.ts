@@ -22,10 +22,12 @@ test('opens a portal menu with personal actions and only shows administration fo
  const ordinary=await mount();expect(ordinary.trigger).not.toBeNull();await open(ordinary.trigger)
  expect(ordinary.trigger.getAttribute('aria-expanded')).toBe('true')
  expect(document.querySelector('.ant-dropdown-menu[role="menu"]')).not.toBeNull();expect(ordinary.host.querySelector('[role="menu"]')).toBeNull()
- expect(items().map(x=>x.textContent)).toEqual(['个人设置','回收站','数据连接','退出登录'])
+ expect(items().map(x=>x.textContent)).toEqual(['个人设置','回收站','退出登录'])
+ expect([...document.querySelectorAll('.ant-dropdown-menu-item-group-title')].map(node=>node.textContent)).toEqual(['个人工作区'])
  await open(ordinary.trigger)
  const admin=await mount(['config_admin']);await open(admin.trigger)
  expect(items().map(x=>x.textContent)).toEqual(['个人设置','回收站','数据连接','全局配置','用户管理','退出登录'])
+ expect([...document.querySelectorAll('.ant-dropdown-menu-item-group-title')].map(node=>node.textContent)).toEqual(['个人工作区','组织管理'])
 })
 test('keyboard navigation wraps, Escape closes and returns focus to the trigger',async()=>{
  const {trigger}=await mount();await open(trigger);expect(document.activeElement).toBe(items()[0])

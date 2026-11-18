@@ -1,3 +1,4 @@
+import { AssistantConversation } from '@genoffice/ui'
 import { AssistantParticipants, DelegatedAgentResultCard, delegatedAgentResult, compactDelegatedTranscript, type AssistantParticipant, type DelegatedAgentResult } from '@genoffice/ui'
 import { showToast } from '../components/toast-bus'
 import {
@@ -236,6 +237,7 @@ interface AiPanelProps {
   sourceSkill?: import('@genoffice/agent-core').AgentSkill
   transport?: import('@genoffice/agent-core').AgentTransport
   extraSkills?: readonly import('@genoffice/agent-core').AgentSkill[]
+  assistantWorkspace?: import('@genoffice/ui').AssistantWorkspace | undefined
   modelPicker?: React.ReactNode
   assistantControl?: import('@genoffice/ui').AssistantControl
   assistantAgents?: readonly AssistantParticipant[]
@@ -343,6 +345,7 @@ export function AiPanel({
   sourceSkill,
   transport,
   modelPicker,
+  assistantWorkspace,
   assistantControl,
   assistantAgents,
   onManageAgents,
@@ -1097,7 +1100,15 @@ export function AiPanel({
     stickToBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 48
   }
 
-  const run = () => runWith(input.trim(), input.trim(), undefined, undefined, true)
+  const run = async () => {
+    if (assistantWorkspace && !assistantWorkspace.isOffice()) {
+      const draft = input
+      const result = await assistantWorkspace.submit(draft.trim(), hasScopeSelection || attachmentsRef.current.length > 0 || attachedSkillsRef.current.length > 0)
+      if (result === 'sent') setInput(current => current === draft ? '' : current)
+      return
+    }
+    runWith(input.trim(), input.trim(), undefined, undefined, true)
+  }
 
   /** Image attachments are read as base64 and go multimodal with this user message (≤5MB per image, max 20) */
   const MAX_IMAGES_PER_MESSAGE = 20
@@ -1309,6 +1320,7 @@ export function AiPanel({
 
   /** Enter while a reply runs: the draft joins the queue above the composer */
   const enqueueDraft = () => {
+    if (assistantWorkspace && !assistantWorkspace.isOffice()) { void run(); return }
     const text = input.trim()
     if (!text) return
     // snapshot + consume the composer attachments exactly like a send does: the
@@ -1531,9 +1543,11 @@ export function AiPanel({
         </div>
       </div>
 
-      {assistantAgents && <AssistantParticipants agents={assistantAgents} lang={lang} onManageAgents={onManageAgents} />}
+      {assistantWorkspace?.panel}
+      {!assistantWorkspace && assistantAgents && <AssistantParticipants agents={assistantAgents} lang={lang} onManageAgents={onManageAgents} />}
 
       <div ref={logRef} className="ai-chat" onScroll={onLogScroll}>
+        <AssistantConversation workspace={assistantWorkspace}>
         {/* past conversation (read-only transcript, not fed to the model), shown continuously with the current turn */}
         {historicChat.length > 0 && (
           <>
@@ -1739,9 +1753,10 @@ export function AiPanel({
             </div>
           )
         })}
+        </AssistantConversation>
       </div>
 
-      <div className="ai-composer">
+      <div className="ai-composer" onKeyDownCapture={event=>assistantWorkspace?.handleComposerKeyDown?.(event,input,setInput)} >
         {attachNotice && <div className="ai-attach-notice">{attachNotice}</div>}
         {activePartial && (
           <div className="ai-queue ai-partial-card" role="group" aria-label={t('aiPartialTitle')}>
@@ -1860,6 +1875,7 @@ export function AiPanel({
           onSend={sendQueue}
           onFocus={(qid) => onQueueFocus?.(qid)}
         />
+        {assistantWorkspace?.renderRecipient?.(input,setInput) ?? assistantWorkspace?.recipient}
         <AiComposer
           queueStrip={
             <AiQueueStrip

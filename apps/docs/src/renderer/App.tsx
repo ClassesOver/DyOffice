@@ -809,7 +809,7 @@ function shadowPlanDiff(
   return diffs
 }
 
-export function App({ host }: { host?: { fileActions?: React.ReactNode; saveStatus?: React.ReactNode; desktopActionsAvailable?: boolean; readOnly: boolean; assistantAvailable: boolean; assistant?: {sourceSkill?: import('@genoffice/agent-core').AgentSkill; transport: import('@genoffice/agent-core').AgentTransport; modelPicker: React.ReactNode; extraSkills?: readonly import('@genoffice/agent-core').AgentSkill[]; agents?: readonly import('@genoffice/ui').AssistantParticipant[]; onManageAgents?: () => void; control?: import('@genoffice/ui').AssistantControl | undefined}; preferenceScope: string; onEditorReady?(handle: import('./file-actions').DocsEditorHandle | null): void; lifecycle: import('./file-actions').DocsHostLifecycle; onDocumentEdited(): void; onOpenFailed(): void } } = {}) {
+export function App({ host }: { host?: { fileActions?: React.ReactNode; saveStatus?: React.ReactNode; desktopActionsAvailable?: boolean; readOnly: boolean; assistantAvailable: boolean; assistant?: {sourceSkill?: import('@genoffice/agent-core').AgentSkill; transport: import('@genoffice/agent-core').AgentTransport; modelPicker: React.ReactNode; workspace?: import('@genoffice/ui').AssistantWorkspace; extraSkills?: readonly import('@genoffice/agent-core').AgentSkill[]; agents?: readonly import('@genoffice/ui').AssistantParticipant[]; onManageAgents?: () => void; control?: import('@genoffice/ui').AssistantControl | undefined}; preferenceScope: string; onEditorReady?(handle: import('./file-actions').DocsEditorHandle | null): void; lifecycle: import('./file-actions').DocsHostLifecycle; onDocumentEdited(): void; onOpenFailed(): void } } = {}) {
   // subscribe to language switches for re-render; strings all go through module-level t, so memoized callbacks never capture stale closures
   const { lang } = useI18n()
   const [doc, setDoc] = useState<DocState | null>(null)
@@ -8472,6 +8472,7 @@ export function App({ host }: { host?: { fileActions?: React.ReactNode; saveStat
             <AiPanel
               transport={host?.assistant?.transport}
               modelPicker={host?.assistant?.modelPicker}
+              assistantWorkspace={host?.assistant?.workspace}
               sourceSkill={host?.assistant?.sourceSkill}
               assistantAgents={host?.assistant?.agents}
               onManageAgents={host?.assistant?.onManageAgents}

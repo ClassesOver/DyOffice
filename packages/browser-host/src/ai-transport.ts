@@ -1,3 +1,4 @@
+import type {CodingProgress} from '../../agent-core/src/coding-skill.ts'
 import type { AgentTransport, AgentStreamRequest, AgentStreamCallbacks, AgentToolCall, AgentTokenUsage } from '@genoffice/agent-core'
 
 const MAX_SSE_EVENT_BYTES = 256 * 1024
@@ -11,6 +12,7 @@ export interface SseTransportOptions {
   getCsrfToken?: () => Promise<string>
   /** Absolute turn deadline, including headers and body. */
   timeoutMs?: number
+  onProgress?:(event:CodingProgress)=>void
   fetchImpl?: typeof fetch
   createTurnId?: () => string
 }
@@ -61,6 +63,7 @@ export function createSseAgentTransport(options: SseTransportOptions = {}): Agen
         const value = raw.length ? JSON.parse(raw) as unknown : {}
         const data = value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {}
         if (event === 'delta' && typeof data.text === 'string') callbacks.onDelta(data.text)
+        else if(event==='progress' && (data.kind==='status'||data.kind==='output') && typeof data.text==='string') options.onProgress?.({kind:data.kind,text:data.text})
         else if (event === 'reasoning' && typeof data.text === 'string') callbacks.onReasoning?.(data.text)
         else if (event === 'tool_call') {
           if (typeof data.id !== 'string' || typeof data.name !== 'string' || !data.input || typeof data.input !== 'object' || Array.isArray(data.input)) throw new Error('Invalid complete tool call')

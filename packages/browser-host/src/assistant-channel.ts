@@ -225,7 +225,7 @@ export function createAssistantChannelClient(options:{request:SettingsRequest;fi
   async approve(id:string,approved:boolean){await request(base+'/channels/'+snapshot!.conversationId+'/applications/'+encodeURIComponent(id)+'/approve','POST',{approved});await refresh()},
   async remove(id:string){await request(base+'/channels/'+snapshot!.conversationId+'/members/'+encodeURIComponent(id)+'/revoke','POST',{});await refresh()},
   async pause(paused:boolean){await request(base+'/channels/'+snapshot!.conversationId+'/pause','POST',{paused});await refresh()},
-  async send(to:string,instruction:string){const receipt=await sendAction(to,{kind:'delegate',instruction});await refresh();return receipt},
+  async send(to:string,instruction:string){const receipt=await sendAction(to,{kind:'delegate',instruction}) as AgentReceipt;await refresh();return receipt},
   async cancel(taskId:string){await sendAction('office',{kind:'cancel',taskId});await refresh()},
   dispose(){if(disposed)return;cancelParentRun();disposed=true;running?.controller.abort();if(schedule)clearInterval(schedule);
    if(snapshot&&connection)void request(base+'/channels/'+snapshot.conversationId+'/disconnect','POST',{connectionId:connection.id,connectionEpoch:connection.epoch}).catch(()=>{})

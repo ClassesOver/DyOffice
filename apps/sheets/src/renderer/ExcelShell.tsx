@@ -240,6 +240,7 @@ function ToolSymbol({ symbol }: { readonly symbol: string }): React.JSX.Element 
 }
 
 interface ExcelShellProps {
+  readonly assistantWorkspace?: import('@genoffice/ui').AssistantWorkspace | undefined
   readonly modelPicker?: React.ReactNode
   readonly assistantAgents?: readonly import('@genoffice/ui').AssistantParticipant[] | undefined
   readonly onManageAgents?: (() => void) | undefined
@@ -487,6 +488,7 @@ const PIVOT_MODEL_ERRORS: Record<PivotModelError, StringKey> = {
 }
 
 export function ExcelShell({
+  assistantWorkspace,
   modelPicker,
   assistantAgents,
   onManageAgents,
@@ -1041,6 +1043,7 @@ export function ExcelShell({
       {/* AI panel docks on the left, full height under the ribbon (unified with docs) */}
       <div className="sheet-body">
         {assistantAvailable && <AiChatPanel
+          assistantWorkspace={assistantWorkspace}
           modelPicker={modelPicker}
           assistantAgents={assistantAgents}
           onManageAgents={onManageAgents}
@@ -3556,7 +3559,7 @@ function Ribbon({
             <GensparkMark size={26} />
           </span>
           <span>
-            <strong>Genspark AI</strong>
+            <strong>AI 助手</strong>
           </span>
         </button>
         <button

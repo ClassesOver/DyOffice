@@ -7,7 +7,7 @@ export type GlobalSettingsState = {pending: null | 'load' | 'save' | 'check' | '
 const messages = {
   busy: '配置操作正在进行中，请等待完成。',
   write_unknown: '无法确认上次写入结果。请先读取最新配置并核对，系统不会自动重复提交。',
-  invalid_request: '配置输入无效，请检查名称、服务地址、版本和密钥操作。非密钥草稿已保留。',
+  invalid_request: '配置输入无效，请检查名称、服务地址和密钥操作。非密钥草稿已保留。',
   invalid_response: '无法确认服务器返回的配置，请读取最新配置后核对。',
   conflict: '配置已被其他管理员更新。当前非密钥草稿已保留，请读取最新配置后核对。',
   unavailable: '配置服务或密钥存储暂不可用。非密钥草稿已保留，请检查服务器配置后重试。',
@@ -141,6 +141,14 @@ export function createGlobalSettingsClient(request: GlobalSettingsRequest) {
     async rotate(expectedRevision: number): Promise<AdminGlobalConfig> {
       revision(expectedRevision)
       return run('rotate', async () => snapshot(await request('/api/v1/admin/config/rotate-key', 'POST', {expectedRevision}), expectedRevision + 1))
+    },
+    async testConnection(entryId: string): Promise<boolean> {
+      if (!validId(entryId)) throw fail('invalid_request')
+      return run('check', async () => {
+        const value = await request<unknown>('/api/v1/admin/config/test-model', 'POST', {entryId})
+        if (!record(value) || typeof value.ok !== 'boolean') throw fail('invalid_response')
+        return value.ok
+      })
     },
     getState: (): GlobalSettingsState => ({pending, unknownWrite}),
     subscribe(listener: () => void) {listeners.add(listener); return () => {listeners.delete(listener)}},

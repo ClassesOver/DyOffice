@@ -70,3 +70,16 @@ test('disposing an editor assistant cancels its live turn and rejects later send
   assert.equal(requests.length, 2, 'disposed editor must not dispatch another turn')
   assert.throws(() => client.select('chat'))
 })
+
+test('native editor retains writing tools and accepts their calls while excluding shell execution',async()=>{
+ const sent=[],calls=[]
+ const client=await createAssistantClient({nativeDocumentEditing:true,request:async()=>({entries:[{id:'office',label:'Office'}],defaultId:'office'}),csrfToken:'c'.repeat(43),fetchImpl:async(_url,init)=>{
+  sent.push(JSON.parse(init.body))
+  return new Response('event: tool_call\ndata: {"id":"write1","name":"write_document","input":{"plan":"Write a short report"}}\n\nevent: done\ndata: {}\n\n',{headers:{'content-type':'text/event-stream'}})
+ }})
+ await new Promise(resolve=>client.transport.stream({system:'Write into the open document.',messages:[{role:'user',text:'Write a document'}],tools:['write_document','insert_content','replace_blocks','replace_selection','apply_ops','delete_blocks','exec_command'].map(name=>({name,description:name,inputSchema:{}}))},{onDelta(){},onToolCall:call=>calls.push(call),onError:assert.fail,onDone:resolve}))
+ assert.deepEqual(sent[0].request.tools.map(tool=>tool.name),['write_document','insert_content','replace_blocks','replace_selection','apply_ops','delete_blocks'])
+ assert.doesNotMatch(sent[0].request.system,/Document mutation.*unavailable/)
+ assert.equal(calls[0].name,'write_document')
+ client.dispose()
+})

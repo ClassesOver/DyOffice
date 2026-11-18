@@ -10,6 +10,14 @@ section.sources-panel-b .source-item[aria-pressed='true'] strong { color: var(--
 section.sources-panel-b .source-item strong,
 section.global-settings-b .global-settings-entry strong { overflow-wrap: anywhere; }
 section.sources-panel-b .source-item span { white-space: normal; font-size: 12px; line-height: 1.6; color: var(--text-secondary); }
+section.sources-panel-b .source-list-summary { display: grid; grid-template-columns: minmax(0,1fr) auto; align-items: center; gap: 3px 8px; padding: 2px 2px 6px; }
+section.sources-panel-b .source-list-summary strong { font-size: 14px; color: var(--text-primary); }
+section.sources-panel-b .source-list-summary > span { grid-column: 1; }
+section.sources-panel-b .source-list-summary .ant-tag { grid-column: 2; grid-row: 1 / span 2; margin: 0; }
+section.sources-panel-b .source-list-empty { display: grid; justify-items: center; gap: 4px; margin: 8px 0; padding: 18px 10px; border: 1px dashed var(--border-subtle); border-radius: 8px; color: var(--text-secondary); font-size: 12px; text-align: center; }
+section.sources-panel-b .source-list-footer { margin-top: auto; padding-top: 8px; }
+section.sources-panel-b .source-list-footer .ant-space-item:first-child { margin-inline-end: auto; }
+section.sources-panel-b .source-workbench-heading .ant-tag { margin: 0; }
 section.sources-panel-b .source-workbench-heading h3 { font-size: 18px; line-height: 1.5; letter-spacing: -.2px; }
 section.sources-panel-b .source-version-badge {
   color: var(--accent);

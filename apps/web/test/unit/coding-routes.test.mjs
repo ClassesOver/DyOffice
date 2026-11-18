@@ -44,3 +44,41 @@ test('delegation passes task credentials without Office cookies and returns only
  const result=await app.inject({method:'POST',url:'/api/v1/agents/tasks',headers,payload:{turnId:'data',modelId:'remote',request:{system:'',messages:[{role:'user',text:JSON.stringify({instruction:'Analyze',officeModelId:'office',dataInputs:grant.inputs})}],tools:[]}}})
  assert.match(result.body,/verified server receipt/);assert.doesNotMatch(result.body,/forged receipt|task-secret/);assert.equal(revoked,true)
 })
+
+test('forwards progress while a harness is still running, then emits a separate final result',async t=>{
+ const app=Fastify();t.after(()=>app.close())
+ let finish,started
+ const ready=new Promise(resolve=>{started=resolve})
+ const gate=new Promise(resolve=>{finish=resolve})
+ const registry=createHarnessRegistry([{descriptor:{id:'codex',name:'Codex',origin:'builtin',capabilities:['coding']},async run(input,signal,context){
+  context.onProgress({kind:'status',text:'Executing command'})
+  context.onProgress({kind:'output',text:'Calculating'})
+  started();await gate
+  return {summary:'Done',output:'42'}
+ }}],'codex')
+ const turns=registerCodingRoutes(app,{registry,sessions:{async authenticate(){return {deploymentId:'d',userId:'u',sessionId:'s',roles:['personal']}}},csrf:{requireSession(){},requireSessionRead(){}}})
+ const events=[]
+ const pending=turns.run({token,turnId:'streaming',modelId:'codex',request:{system:'',messages:[{role:'user',text:JSON.stringify({instruction:'Compute',officeModelId:'office'})}],tools:[]}},event=>{events.push(event)})
+ try{
+  await ready
+  for(let i=0;i<20&&!events.some(event=>event.kind==='output');i++)await new Promise(resolve=>setTimeout(resolve,0))
+  assert.ok(events.some(event=>event.type==='progress'&&event.text==='Calculating'))
+  assert.equal(events.some(event=>event.type==='delta'),false)
+ }finally{finish();await pending}
+ assert.deepEqual(JSON.parse(events.find(event=>event.type==='delta').text),{summary:'Done',output:'42'})
+})
+
+test('small progress chunks cannot consume the final result budget',async t=>{
+ const app=Fastify();t.after(()=>app.close())
+ const registry=createHarnessRegistry([{descriptor:{id:'codex',name:'Codex',origin:'builtin',capabilities:['coding']},async run(input,signal,context){
+  for(let i=0;i<7000;i++){
+   context.onProgress({kind:'output',text:'x'})
+   await new Promise(resolve=>setImmediate(resolve))
+  }
+  return {summary:'Done',output:'a'.repeat(200000)}
+ }}],'codex')
+ const turns=registerCodingRoutes(app,{registry,sessions:{async authenticate(){return {deploymentId:'d',userId:'u',sessionId:'s',roles:['personal']}}},csrf:{requireSession(){},requireSessionRead(){}}})
+ let final
+ await turns.run({token,turnId:'many_chunks',modelId:'codex',request:{system:'',messages:[{role:'user',text:JSON.stringify({instruction:'Compute',officeModelId:'office'})}],tools:[]}},event=>{if(event.type==='delta')final=JSON.parse(event.text)})
+ assert.equal(final.output.length,200000)
+})

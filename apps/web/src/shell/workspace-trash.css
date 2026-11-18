@@ -2,4 +2,8 @@
 .workspace-trash-panel{height:100%}.workspace-trash-panel .workspace-panel-body{padding:20px 24px}.trash-content{height:100%;width:100%}
 .trash-file{display:flex;align-items:center;gap:10px;min-width:0}.trash-file .ant-typography{overflow-wrap:anywhere}.trash-file-icon{display:grid;place-items:center;width:32px;height:36px;flex-shrink:0;border-radius:6px;background:var(--accent-soft);color:var(--accent);font-size:18px}.trash-file .ant-tag{margin-top:4px;font-size:10px;line-height:17px}
 .trash-processing{display:block;font-size:12px;color:var(--text-secondary)}.trash-footnote{margin-right:auto;font-size:12px}.trash-dialog{width:min(1100px,96vw);height:min(84dvh,840px)}.trash-dialog-body{padding:0 24px 24px}
+.workspace-trash-panel .management-list-summary,.trash-dialog .management-list-summary{min-height:40px;align-items:center}
+.workspace-trash-panel .management-list-toolbar,.trash-dialog .management-list-toolbar{padding:10px 0 12px;border-bottom:1px solid var(--border-subtle)}
+.workspace-trash-panel .management-list-table-region,.trash-dialog .management-list-table-region{min-height:180px}
+.workspace-trash-panel .management-list-footer,.trash-dialog .management-list-footer{gap:12px;align-items:center}
 @media(max-width:680px){.workspace-trash-panel .workspace-panel-body{padding:16px}.trash-dialog-body{padding:0 16px 16px}}

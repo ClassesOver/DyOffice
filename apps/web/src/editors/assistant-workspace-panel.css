@@ -1,0 +1,600 @@
+.assistant-workspace {
+  flex: 0 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  color: var(--text);
+  font-size: 13px;
+}
+.assistant-workspace-tabs {
+  display: flex;
+  gap: 18px;
+  padding-inline: 16px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.assistant-workspace-tabs button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 10px 0;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  cursor: pointer;
+}
+.assistant-workspace-tabs button[aria-selected='true'] {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
+.assistant-workspace-tabs button span,
+.assistant-source {
+  background: var(--hover);
+  color: var(--text-secondary);
+  padding: 1px 5px;
+  border-radius: 5px;
+  font-size: 11px;
+  white-space: nowrap;
+}
+.assistant-workspace[data-view='team'],
+.assistant-workspace[data-view='tasks'] {
+  flex: 1 1 0;
+}
+.ai-panel:has(> .assistant-workspace:not([data-view='chat'])) > .ai-chat,
+.copilot:has(> .assistant-workspace:not([data-view='chat'])) > .ai-chat {
+  display: none;
+}
+.assistant-workspace-content {
+  min-height: 0;
+  overflow: auto;
+  padding: 14px;
+}
+.assistant-workspace [hidden] {
+  display: none;
+}
+.assistant-member {
+  padding: 12px 0;
+  border-bottom: 1px solid var(--border);
+}
+.assistant-member:first-child {
+  padding-top: 0;
+}
+.assistant-member-heading {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.assistant-member-heading strong {
+  font-weight: 500;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.assistant-member-heading button {
+  margin-inline-start: auto;
+}
+.assistant-member p {
+  margin: 7px 0 3px;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+.assistant-member small {
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+.assistant-workspace h4 {
+  margin: 18px 0 6px;
+  font-size: 13px;
+  font-weight: 500;
+}
+.assistant-workspace button:not([role='tab']) {
+  color: var(--accent);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  min-height: 30px;
+  padding: 4px 8px;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.assistant-workspace button:hover {
+  background: var(--hover);
+}
+.assistant-workspace button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.assistant-workspace button:focus-visible,
+.assistant-workspace summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.assistant-workspace-muted {
+  color: var(--text-secondary);
+  font-size: 12px;
+  margin: 8px 0;
+}
+.assistant-task {
+  border: 1px solid var(--border);
+  padding: 12px;
+  border-radius: 12px;
+  margin-bottom: 12px;
+  overflow-wrap: anywhere;
+}
+.assistant-task p {
+  margin: 8px 0;
+}
+.assistant-task-state {
+  margin-inline-start: auto;
+  color: var(--accent);
+  font-size: 12px;
+}
+.assistant-task-state[data-state='failed'],
+.assistant-task-state[data-state='unknown_outcome'] {
+  color: var(--text-secondary);
+}
+.assistant-task details {
+  margin-block: 8px;
+  font-size: 12px;
+}
+.assistant-task summary {
+  cursor: pointer;
+  color: var(--text-secondary);
+}
+.assistant-task pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 12px;
+  max-height: 240px;
+  overflow: auto;
+  background: var(--hover);
+  border-radius: 7px;
+  padding: 8px;
+}
+.assistant-recipient {
+  color: var(--text-secondary);
+  padding: 0 2px 8px;
+  font-size: 12px;
+}
+.assistant-recipient label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.assistant-recipient label > span {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+.assistant-recipient select {
+  min-width: 0;
+  max-width: 100%;
+  flex: 1;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--surface);
+  color: var(--text);
+  padding: 5px 8px;
+  font: inherit;
+  text-overflow: ellipsis;
+}
+.assistant-recipient select:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.assistant-recipient small {
+  display: block;
+  margin-top: 6px;
+  font-size: 11px;
+}
+.assistant-recipient p {
+  margin: 6px 0 0;
+  overflow-wrap: anywhere;
+}
+.assistant-recipient [role='alert'] {
+  color: var(--text);
+}
+.editor-model-external {
+  color: var(--text-secondary);
+  font-size: 11px;
+  min-width: 0;
+}
+
+.assistant-section-eyebrow {
+  color: var(--text-secondary);
+  font-size: 11px;
+  margin: 0 0 8px;
+}
+.assistant-member {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 12px;
+  margin-bottom: 10px;
+}
+.assistant-member:first-child {
+  padding-top: 12px;
+}
+.assistant-member-lead {
+  background: var(--hover);
+}
+.assistant-member-status {
+  display: flex;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 6px;
+  color: var(--text-secondary);
+  font-size: 11px;
+  margin-top: 10px;
+}
+.assistant-team-connect {
+  margin-top: 16px;
+}
+.assistant-team-connect > summary {
+  cursor: pointer;
+  color: var(--accent);
+  font-size: 12px;
+}
+.assistant-task-filters {
+  display: flex;
+  gap: 5px;
+  flex-wrap: wrap;
+  margin-bottom: 14px;
+}
+.assistant-workspace .assistant-task-filters button {
+  border-radius: 16px;
+  color: var(--text-secondary);
+  display: flex;
+  gap: 5px;
+  align-items: center;
+}
+.assistant-task-filters button[aria-pressed='true'] {
+  color: var(--accent);
+  background: var(--hover);
+  border-color: var(--accent);
+}
+.assistant-task-filters span {
+  font-size: 10px;
+}
+.assistant-team-empty {
+  padding: 30px 12px;
+  text-align: center;
+  color: var(--text-secondary);
+}
+.assistant-team-empty strong {
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 500;
+}
+.assistant-team-empty p {
+  font-size: 12px;
+  line-height: 1.7;
+}
+.assistant-team-feed {
+  min-width: 0;
+}
+.assistant-team-entry {
+  min-width: 0;
+}
+.assistant-team-author {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text);
+  font-size: 12px;
+  margin-bottom: 9px;
+}
+.assistant-team-author strong {
+  font-weight: 600;
+}
+.assistant-team-author > span {
+  color: var(--text-secondary);
+  font-size: 10px;
+}
+.assistant-team-author .assistant-avatar {
+  width: 23px;
+  height: 23px;
+}
+.assistant-team-message {
+  background: var(--surface);
+  margin: 12px 0;
+  border-inline-start: 1px solid var(--border);
+  font-size: 13px;
+  line-height: 1.6;
+}
+.assistant-team-handoff {
+  color: var(--text-secondary);
+  font-size: 11px;
+  margin: 7px 0;
+}
+.assistant-task-instruction {
+  white-space: pre-wrap;
+}
+.assistant-task-result {
+  border-top: 1px solid var(--border);
+  padding-top: 9px;
+  white-space: pre-wrap;
+}
+.assistant-task-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 10px;
+}
+.assistant-task-actions button {
+  background: transparent;
+  color: var(--accent);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  font: inherit;
+  font-size: 11px;
+  padding: 5px 8px;
+  cursor: pointer;
+}
+.assistant-task:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.assistant-team-recipient {
+  position: relative;
+}
+.assistant-team-composer-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.assistant-team-scope {
+  color: var(--text-secondary);
+  font-size: 10px;
+  flex-shrink: 0;
+}
+.assistant-mention-menu {
+  position: absolute;
+  bottom: 100%;
+  inset-inline: 0;
+  z-index: 30;
+  max-height: 280px;
+  overflow-y: auto;
+  padding: 5px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: 0 8px 28px #0002;
+}
+.assistant-mention-menu button {
+  display: flex;
+  width: 100%;
+  text-align: start;
+  align-items: center;
+  gap: 8px;
+  padding: 9px;
+  color: var(--text);
+  background: transparent;
+  border: 0;
+  border-radius: 8px;
+  font: inherit;
+  cursor: pointer;
+}
+.assistant-mention-menu button:hover,
+.assistant-mention-menu button[aria-selected='true'] {
+  background: var(--hover);
+}
+.assistant-mention-menu button > span:nth-child(2) {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.assistant-mention-menu strong {
+  font-size: 12px;
+  font-weight: 500;
+}
+.assistant-mention-menu small {
+  margin-top: 3px;
+  line-height: 1.5;
+}
+.assistant-mention-menu button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.assistant-mention-menu button:focus-visible,
+.assistant-task-actions button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.assistant-task-progress {
+  border-top: 1px solid var(--border);
+  padding-top: 8px;
+}
+.assistant-task-progress > summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.assistant-task-pulse {
+  width: 6px;
+  height: 6px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: var(--text-secondary);
+}
+.assistant-task-pulse[data-active='true'] {
+  background: var(--accent);
+  animation: assistant-task-pulse 1.6s ease-in-out infinite;
+}
+.assistant-task .assistant-task-activity {
+  color: var(--text-secondary);
+  font-size: 11px;
+  margin: 7px 0;
+}
+.assistant-task-progress pre {
+  line-height: 1.65;
+}
+@keyframes assistant-task-pulse {
+  50% {
+    opacity: 0.35;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .assistant-task-pulse[data-active='true'] {
+    animation: none;
+  }
+}
+
+/* Team chat: portraits live outside the message, leaving clear left/right lanes. */
+.assistant-team-feed {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  padding-block: 4px 12px;
+}
+.assistant-chat-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  min-width: 0;
+}
+.assistant-chat-row > .assistant-avatar,
+.assistant-user-avatar {
+  flex: 0 0 28px;
+  width: 28px;
+  height: 28px;
+  margin-top: 1px;
+}
+.assistant-chat-message {
+  flex: 1;
+  min-width: 0;
+  max-width: calc(100% - 36px);
+}
+.assistant-team-author {
+  height: 22px;
+  margin: 0 0 5px;
+  font-size: 11px;
+  gap: 5px;
+}
+.assistant-team-author strong {
+  font-weight: 500;
+}
+.assistant-team-author > span {
+  font-size: 10px;
+}
+.assistant-chat-row-user {
+  flex-direction: row-reverse;
+  padding-inline-start: 28px;
+}
+.assistant-chat-row-user .assistant-chat-message {
+  flex: 0 1 auto;
+}
+.assistant-chat-row-user .assistant-team-author {
+  justify-content: flex-end;
+}
+.assistant-user-avatar {
+  display: grid;
+  place-items: center;
+  color: var(--text-secondary);
+  border: 1px solid var(--border);
+  background: var(--hover);
+  border-radius: 50%;
+  box-sizing: border-box;
+}
+.assistant-user-avatar svg {
+  width: 19px;
+  height: 19px;
+}
+.assistant-team-feed .ai-msg-user {
+  max-width: 100%;
+  padding: 9px 12px;
+  border-radius: 12px 3px 12px 12px;
+  background: color-mix(in srgb, var(--accent) 9%, var(--surface));
+  border: 1px solid color-mix(in srgb, var(--accent) 16%, var(--border));
+  font-size: 13px;
+}
+.assistant-team-feed .ai-msg-assistant {
+  font-size: 13px;
+  line-height: 1.75;
+}
+.assistant-team-feed .ai-msg-toolbar {
+  margin-top: 8px;
+}
+.assistant-task {
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+  width: 100%;
+  height: 280px;
+  min-height: 280px;
+  padding: 0;
+  overflow: hidden;
+  background: var(--surface);
+}
+.assistant-team-feed .assistant-team-message {
+  margin: 0;
+  width: calc(100% - 36px);
+  margin-inline-start: 36px;
+}
+.assistant-task > .assistant-member-heading {
+  flex: 0 0 auto;
+  padding: 10px 12px;
+  gap: 5px;
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in srgb, var(--hover) 45%, var(--surface));
+}
+.assistant-task > .assistant-member-heading strong {
+  font-size: 12px;
+}
+.assistant-task > .assistant-member-heading .assistant-avatar {
+  flex-basis: 23px;
+  width: 23px;
+  height: 23px;
+}
+.assistant-task-state {
+  font-size: 10px;
+}
+.assistant-task-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 9px 12px;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+}
+.assistant-task .assistant-team-handoff {
+  margin: 0 0 6px;
+  font-size: 10px;
+}
+.assistant-task .assistant-task-instruction {
+  margin: 0 0 9px;
+  font-size: 12px;
+  line-height: 1.6;
+}
+.assistant-task-progress {
+  padding-top: 7px;
+}
+.assistant-task-progress > summary {
+  font-size: 11px;
+}
+.assistant-task pre {
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 11px;
+  line-height: 1.6;
+  max-height: 140px;
+  margin: 8px 0 0;
+}
+.assistant-task > .assistant-task-actions {
+  flex: 0 0 auto;
+  padding: 8px 12px;
+  margin: 0;
+  border-top: 1px solid var(--border);
+  background: var(--surface);
+}
+.assistant-task-actions button {
+  border: 0;
+  padding: 4px 0;
+  font-size: 11px;
+}
+.assistant-task-actions button + button {
+  margin-inline-start: auto;
+  color: var(--text-secondary);
+}

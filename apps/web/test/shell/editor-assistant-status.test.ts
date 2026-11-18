@@ -23,6 +23,6 @@ test('available assistant remains available; hidden preference is explained with
 })
 test('only DOCX and XLSX use the safe loader and render its notice',async()=>{
  const {readFileSync}=await import('node:fs')
- for(const file of ['native-docs.tsx','sheets-entry.tsx']){const source=readFileSync('src/editors/'+file,'utf8');expect(source).toContain('await loadEditorAssistant(');expect(source).toContain('editorAssistantNotice(assistantResult,prefs.showAssistant,locale)');expect(source).toContain('{assistantNotice && <span');expect(source).toContain('Boolean(assistant?.available && prefs.showAssistant !== false)');expect(source).not.toContain('.catch(() => undefined)')}
+ for(const file of ['native-docs.tsx','sheets-entry.tsx']){const source=readFileSync('src/editors/'+file,'utf8');expect(source).toContain('await loadEditorAssistant(');expect(source).toContain('editorAssistantNotice(assistantResult,prefs.showAssistant,locale)');expect(source).toContain("id:'assistant'");expect(source).not.toContain('{assistantNotice && <span');expect(source).toContain('Boolean(assistant?.available && prefs.showAssistant !== false)');expect(source).not.toContain('.catch(() => undefined)')}
  expect(readFileSync('src/editors/slides-entry.tsx','utf8')).toMatch(/assistantAvailable:\s*false/)
 })

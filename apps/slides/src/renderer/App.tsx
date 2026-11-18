@@ -4096,7 +4096,7 @@ export function App({ host }: { host?: SlidesAppHost } = {}) {
                                 onClick={toggleAi}
                               >
                                 <GensparkMark size={14} />
-                                <span>Genspark AI</span>
+                                <span>AI 助手</span>
                               </button>
                             )}
                             {/* Same one-click presets as the Home tab; hidden instead of

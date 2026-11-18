@@ -1,3 +1,4 @@
+import type {CodingProgress} from '../../../../../../packages/agent-core/src/coding-skill.ts'
 import {createServer} from 'node:http'
 import {randomBytes,randomUUID} from 'node:crypto'
 import type {AgentMessage,AgentToolDef} from '../../../../../../packages/agent-core/src/types.ts'
@@ -66,7 +67,7 @@ function convert(body:Record<string,any>) {
   return {request:{system:system.filter(Boolean).join('\n\n'),messages,tools},custom}
 }
 
-export async function createCodingModelBridge(options:{turns:CodingModelTurns;token:string;modelId:string;signal:AbortSignal}) {
+export async function createCodingModelBridge(options:{turns:CodingModelTurns;token:string;modelId:string;signal:AbortSignal;onProgress?:(event:CodingProgress)=>void}) {
   if(options.signal.aborted)throw Error('Coding task cancelled')
   const apiKey=randomBytes(32).toString('hex'),active=new Set<AbortController>()
   const server=createServer(async(req,res)=>{
@@ -90,15 +91,17 @@ export async function createCodingModelBridge(options:{turns:CodingModelTurns;to
       event('response.created',{response:{...base,status:'in_progress'}})
       const calls:Extract<TurnEvent,{type:'tool_call'}>[]=[],usage:Record<string,number>={}
       let outputText='',bytes=0
+      options.onProgress?.({kind:'status',text:'Generating response'})
       await options.turns.run({token:options.token,modelId:options.modelId,turnId:randomUUID(),request,signal:control.signal},value=>{
         bytes+=Buffer.byteLength(JSON.stringify(value));if(bytes>2*1024*1024)throw invalid()
-        if(value.type==='delta')outputText+=value.text
+        if(value.type==='delta'){outputText+=value.text;options.onProgress?.({kind:'output',text:value.text})}
         else if(value.type==='tool_call')calls.push(value)
         else if(value.type==='usage') {
           if(value.inputTokens!==undefined)usage.input_tokens=value.inputTokens
           if(value.outputTokens!==undefined)usage.output_tokens=value.outputTokens
         } else if(value.type==='stop_reason')throw Error('Coding model output truncated')
       })
+      if(outputText)options.onProgress?.({kind:'output',text:'\n\n'})
       // Expose executable candidates only after the gateway has settled this round.
       const output:Record<string,unknown>[]=[]
       for(const call of calls) {

@@ -20,7 +20,9 @@ describe('assistant participants', () => {
   it('gives Office, built-in Codex and external harnesses separate local avatars and names', () => {
     act(() => root.render(createElement(AssistantParticipants, { agents, lang: 'en' })))
     expect([...host.querySelectorAll('.assistant-participant-name')].map(n => n.textContent)).toEqual(['Office assistant', 'Codex', 'Custom <Agent>'])
-    expect([...host.querySelectorAll('.assistant-avatar')].map(n => n.textContent)).toEqual(['O', 'C', 'C'])
+    expect(host.querySelectorAll('.assistant-avatar svg')).toHaveLength(3)
+    expect(host.querySelector('.assistant-avatar-office svg')!.innerHTML).not.toBe(host.querySelector('.assistant-avatar-builtin svg')!.innerHTML)
+    expect(host.querySelector('.assistant-avatar-builtin svg')!.innerHTML).not.toBe(host.querySelector('.assistant-avatar-external svg')!.innerHTML)
     expect(host.querySelectorAll('img').length).toBe(0)
     expect(host.querySelector('button')).toBeNull()
     expect(host.textContent).not.toContain('Online')

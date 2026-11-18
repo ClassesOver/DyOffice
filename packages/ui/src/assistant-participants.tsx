@@ -9,9 +9,26 @@ export interface AssistantParticipant {
   origin: 'office' | 'builtin' | 'external'
 }
 
+/** Small, code-native team portraits; role remains readable beside the icon. */
 export function AssistantAvatar({ name, origin }: Pick<AssistantParticipant, 'name' | 'origin'>) {
-  return <span className={`assistant-avatar assistant-avatar-${origin}`} aria-hidden="true">
-    {origin === 'office' ? 'O' : Array.from(name.trim())[0]?.toLocaleUpperCase() || '?'}
+  return <span className={`assistant-avatar assistant-avatar-${origin}`} aria-hidden="true" title={name}>
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.65" strokeLinecap="round" strokeLinejoin="round" focusable="false">
+      {origin === 'office' ? <>
+        <path d="M13.5 3.5H6.8A1.8 1.8 0 0 0 5 5.3v13.4a1.8 1.8 0 0 0 1.8 1.8h10.4a1.8 1.8 0 0 0 1.8-1.8V9z" fill="currentColor" fillOpacity=".08"/>
+        <path d="M13.5 3.5V9H19M8.5 16.5h4"/>
+        <path d="m10 9 .9 2.6 2.6.9-2.6.9L10 16l-.9-2.6-2.6-.9 2.6-.9z" fill="currentColor" stroke="none"/>
+      </> : origin === 'builtin' ? <>
+        <rect x="3" y="4.5" width="18" height="15" rx="4" fill="currentColor" fillOpacity=".08"/>
+        <path d="m7.5 9 3 3-3 3M13.5 15h3.5M7 4.5v-1M17 4.5v-1"/>
+        <circle cx="17" cy="8" r=".8" fill="currentColor" stroke="none"/>
+      </> : <>
+        <path d="m12 3 8 4.5v9L12 21l-8-4.5v-9z" fill="currentColor" fillOpacity=".08"/>
+        <path d="m8 9 4 3 4-3M12 12v5"/>
+        <circle cx="8" cy="9" r="1.3" fill="currentColor" stroke="none"/>
+        <circle cx="16" cy="9" r="1.3" fill="currentColor" stroke="none"/>
+        <circle cx="12" cy="17" r="1.3" fill="currentColor" stroke="none"/>
+      </>}
+    </svg>
   </span>
 }
 

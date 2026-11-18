@@ -1,4 +1,4 @@
-import {Button, Input, Checkbox, Alert, Table, Select, type InputRef} from 'antd'
+import {Button, Input, Checkbox, Alert, Table, Select, Tag, Space, type InputRef} from 'antd'
 import { useEffect, useRef, useState } from 'react'
 import './workspace-panels.css'
 import './connection-config-b.css'
@@ -26,6 +26,7 @@ export function SourcesPanel({ client, resultsClient, onClose, presentation = 'd
   const [result, setResult] = useState<QuerySnapshot | null>(null), [sql, setSql] = useState('SELECT 1 AS value')
   const [capture, setCapture] = useState<SourceToolQueryOutcome | null>(null), [savedResult, setSavedResult] = useState<WorkspaceSourceResultArtifact | null>(null)
   const [resultName, setResultName] = useState('查询结果'), [resultBusy, setResultBusy] = useState(false)
+  const [filter, setFilter] = useState('')
   const saveIntent = useRef<{ resultId: string; commandId: string; name: string; unknown: boolean } | null>(null)
   const [message, setMessage] = useState(''), [error, setError] = useState(''), [, tick] = useState(0)
   const alive = useRef(true), busy = client.getState().pending || resultBusy, unknown = client.getState().unknownWrite
@@ -37,6 +38,7 @@ export function SourcesPanel({ client, resultsClient, onClose, presentation = 'd
     return () => { alive.current = false; unsubscribe(); if (inputRef.current) inputRef.current.input && (inputRef.current.input.value = '') }
   }, [client])
   const legacyHttp = detail?.source.kind === 'http'
+  const visibleItems = items.filter(item => `${item.name} ${item.sourceId} ${item.kind}`.toLocaleLowerCase().includes(filter.trim().toLocaleLowerCase()))
   const dirty = JSON.stringify(draft) !== JSON.stringify(detail ? fromDetail(detail) : empty())
   const unresolvedResult = !!saveIntent.current && !savedResult
   function canClose() {
@@ -106,15 +108,18 @@ export function SourcesPanel({ client, resultsClient, onClose, presentation = 'd
     {error && <Alert type="error" showIcon title={error}/> }
     <div className={presentation === 'page' ? 'workspace-panel-body source-body' : 'set-body source-body'}>
       <aside className="source-list" aria-label="连接列表">
-        <Button autoInsertSpace={false} disabled={busy || dirty || unknown || unresolvedResult} onClick={() => { setDetail(null); setDraft(empty()); setLatest(null); setResult(null); setConfirmDelete(false) }}>新建数据连接</Button>
-        {items.map(item => <Button autoInsertSpace={false} className="source-item" aria-pressed={detail?.source.sourceId === item.sourceId} key={item.sourceId} disabled={busy || dirty || unresolvedResult} onClick={() => { if (!unresolvedResult) void operation(() => select(item.sourceId)) }}>
+        <div className="source-list-summary"><strong>数据连接</strong><span>当前页 {items.length} 个连接</span><Tag color={items.filter(item => item.enabled).length ? 'green' : 'default'}>{items.filter(item => item.enabled).length} 个已启用</Tag></div>
+        <Input.Search aria-label="搜索数据连接" placeholder="搜索当前页名称或标识" allowClear value={filter} disabled={busy} onChange={event => setFilter(event.target.value)}/>
+        <Button autoInsertSpace={false} type="primary" disabled={busy || dirty || unknown || unresolvedResult} onClick={() => { setDetail(null); setDraft(empty()); setLatest(null); setResult(null); setConfirmDelete(false) }}>新建数据连接</Button>
+        {visibleItems.map(item => <Button autoInsertSpace={false} className="source-item" aria-pressed={detail?.source.sourceId === item.sourceId} key={item.sourceId} disabled={busy || dirty || unresolvedResult} onClick={() => { if (!unresolvedResult) void operation(() => select(item.sourceId)) }}>
           <strong>{item.name}</strong><span>{item.kind} · 草稿 v{item.version} · {item.publishedRevision ? `已发布 r${item.publishedRevision}` : '未发布'}</span><span>{item.enabled ? '已启用' : '已禁用'}{item.hasUnpublishedChanges ? ' · 有未发布修改' : ''}</span>
         </Button>)}
+        {!visibleItems.length && <div className="source-list-empty"><span>{filter ? '没有匹配的连接' : '尚未配置数据连接'}</span>{filter && <Button autoInsertSpace={false} type="link" onClick={() => setFilter('')}>清除筛选</Button>}</div>}
         <SettingsListPager page={listPage} pageSize={50} hasPrevious={listPage>0} hasNext={!!cursor} label="数据连接" onPageChange={changeListPage} disabled={busy||dirty||unknown||unresolvedResult}/>
-        <Button autoInsertSpace={false} disabled={busy} onClick={() => void operation(() => reloadList())}>刷新列表</Button>
+        <Space className="source-list-footer" wrap><Button autoInsertSpace={false} disabled={busy} onClick={() => void operation(() => reloadList())}>刷新列表</Button>{filter && <Button autoInsertSpace={false} type="link" onClick={() => setFilter('')}>清除筛选</Button>}</Space>
       </aside>
       <main className="source-editor">
-        <div className="source-workbench-heading"><div><h3>{detail ? detail.source.name : '新建数据连接'}</h3><p>{detail ? `${detail.source.sourceId} · 草稿 v${detail.source.version}` : '配置连接与查询范围，保存后测试并发布。'}</p></div>{detail && <span className="source-version-badge">{detail.source.publishedRevision ? `生效版本 r${detail.source.publishedRevision}` : '尚未发布'}</span>}</div>
+        <div className="source-workbench-heading"><div><h3>{detail ? detail.source.name : '新建数据连接'}</h3><p>{detail ? `${detail.source.sourceId} · 草稿 v${detail.source.version}` : '配置连接与查询范围，保存后测试并发布。'}</p></div><Space wrap>{detail && <Tag color={detail.source.enabled ? 'green' : 'default'}>{detail.source.enabled ? '已启用' : '已停用'}</Tag>}{detail && <span className="source-version-badge">{detail.source.publishedRevision ? `生效版本 r${detail.source.publishedRevision}` : '尚未发布'}</span>}</Space></div>
         <p className="set-pane-desc">连接地址与凭据加密保存且不回显。先保存草稿、测试连接，再发布；查询只使用已发布版本。目标数据库账号须由管理员授予最小只读权限。</p>
         {legacyHttp && <Alert type="info" showIcon title="已有 HTTP 连接仅支持只读查看与执行已发布查询。新建连接仅支持 PostgreSQL、MySQL 和 StarRocks。"/>}
         {dirty && <p role="status">当前有未保存草稿，切换连接前请保存或明确放弃。</p>}

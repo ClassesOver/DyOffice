@@ -6,6 +6,7 @@ import {registerCodingRoutes} from './modules/coding/routes.ts'
 import {registerProbeAssets} from './modules/providers/probe-assets.ts'
 import {createSkillService} from './modules/skills/service.ts'
 import {registerSkillRoutes} from './modules/skills/routes.ts'
+import {registerSharedProviderGateway} from './modules/providers/shared-gateway.ts'
 import {registerPersonalProviderGateway} from './modules/providers/gateway.ts'
 import { registerFixedProviderProbe } from './modules/providers/fixed-probe.ts'
 import type { AdminPipelineProfile } from './modules/providers/admin-pipeline.ts'
@@ -96,7 +97,7 @@ export interface LocalWebConfig {
   // Explicit network-capable fixed probe, NOT the offline diagnostic. No automatic run.
   adminProviderProbeDirectory?: string;
   adminProviderProbe?: { profiles: readonly AdminPipelineProfile[] };
-  providerGateway?: { profiles: readonly AdminPipelineProfile[] };
+  providerGateway?: { profiles: readonly AdminPipelineProfile[] } | {mode:'shared'};
   /** Optional peer adapters are trusted server composition, never browser supplied. */
   assistantChannels?: boolean;
   codingHarnesses?: false | {adapters?: readonly HarnessAdapter[]; defaultId?: string; cliPath?: string; analysisPython?: string};
@@ -120,7 +121,7 @@ export async function buildLocalApp(config: LocalWebConfig): Promise<FastifyInst
   if(config.adminProviderProbeDirectory!==undefined && (!config.adminProviderProbe || typeof config.adminProviderProbeDirectory!=='string' || !config.adminProviderProbeDirectory))throw new Error('Probe assets require explicit local probe')
   if(config.assistantSourceCatalog!==undefined && (typeof config.assistantSourceCatalog!=='boolean' || config.assistantSourceCatalog && !config.providerGateway)) throw new Error('Assistant source catalog requires provider gateway')
   if(config.assistantChannels!==undefined&&typeof config.assistantChannels!=='boolean')throw Error('Invalid assistant channel configuration')
-  if(config.providerGateway!==undefined && (!config.providerGateway || Object.keys(config.providerGateway).join()!=='profiles' || !Array.isArray(config.providerGateway.profiles) || !config.businessPool || !config.globalConfigKeyring))throw new Error('Provider gateway requires profiles, restricted pool and keyring')
+  if(config.providerGateway!==undefined && (!config.providerGateway || !config.businessPool || !config.globalConfigKeyring || ('mode' in config.providerGateway ? config.providerGateway.mode!=='shared'||Object.keys(config.providerGateway).join()!=='mode' : Object.keys(config.providerGateway).join()!=='profiles'||!Array.isArray(config.providerGateway.profiles))))throw new Error('Provider gateway requires restricted pool and keyring')
   const probeAssets=config.adminProviderProbeDirectory?await createStaticAssets({assetMode:'built',assetDirectory:config.adminProviderProbeDirectory,pages:['index.html'],cacheControl:'private, no-store'}):undefined
   if ('userToken' in config || 'adminToken' in config) throw new Error('Local mode rejects development tokens')
   async function assertReady() {
@@ -183,7 +184,7 @@ export async function buildLocalApp(config: LocalWebConfig): Promise<FastifyInst
     const harnessData=createHarnessDataAccess({tools:sourceTools,results:sourceResults,sessions,artifacts})
     // Lazy runtime: registering Codex neither resolves its executable nor starts a process.
     const codingConfig = config.codingHarnesses === false ? undefined : config.codingHarnesses ?? {}
-    let officeGateway: ReturnType<typeof registerPersonalProviderGateway> | undefined
+    let officeGateway: ReturnType<typeof registerPersonalProviderGateway> | ReturnType<typeof registerSharedProviderGateway> | undefined
     const codingRuntime=createCodingHarness({cliPath:codingConfig?.cliPath,analysisPython:codingConfig?.analysisPython})
     const harnesses = config.providerGateway && codingConfig ? createHarnessRegistry([
       {descriptor: {id: 'codex', name: 'Codex', origin: 'builtin', capabilities: ['coding']},async run(input,signal,context){
@@ -192,7 +193,7 @@ export async function buildLocalApp(config: LocalWebConfig): Promise<FastifyInst
         let mailbox:Awaited<ReturnType<typeof createHarnessDataMailbox>>|undefined
         try{
           mailbox=context.data?await createHarnessDataMailbox(app,context.data.grant.taskId):undefined
-          return await codingRuntime.run(input,signal,bridge,context.data?{...context.data,mailboxDirectory:mailbox!.directory}:undefined)
+          return await codingRuntime.run(input,signal,bridge,context.data?{...context.data,mailboxDirectory:mailbox!.directory}:undefined,context.onProgress)
         } finally{try{await mailbox?.close()}finally{await bridge.close()}}
       }},
       ...(codingConfig.adapters ?? []),
@@ -204,13 +205,14 @@ export async function buildLocalApp(config: LocalWebConfig): Promise<FastifyInst
     }
     if(harnesses){
       registerCodingRoutes(app,{registry:harnesses,sessions,csrf,data:harnessData,dataBaseUrl:config.origin+'/api/v1/agents',
-        async openModel(token,modelId,signal){
+        async openModel(token,modelId,signal,onProgress){
           if(!officeGateway?.codingTurns)throw Error('Office model unavailable')
-          const bridge=await createCodingModelBridge({token,modelId,signal,turns:officeGateway.codingTurns})
+          const bridge=await createCodingModelBridge({token,modelId,signal,turns:officeGateway.codingTurns,...(onProgress?{onProgress}:{})})
           return {...bridge,modelId}
         }})
     }
-    if(config.providerGateway)ownedProbes.push(officeGateway=registerPersonalProviderGateway(app,{transactions,sessions,csrf,deploymentId:config.deploymentId,keyring:config.globalConfigKeyring!,profiles:config.providerGateway.profiles,harnesses,sourceCatalog:config.assistantSourceCatalog===true,assistantChannels:config.assistantChannels}))
+    if(config.providerGateway && 'mode' in config.providerGateway)ownedProbes.push(officeGateway=registerSharedProviderGateway(app,{transactions,sessions,csrf,keyring:config.globalConfigKeyring!,harnesses,sourceCatalog:config.assistantSourceCatalog===true,assistantChannels:config.assistantChannels}))
+    else if(config.providerGateway)ownedProbes.push(officeGateway=registerPersonalProviderGateway(app,{transactions,sessions,csrf,deploymentId:config.deploymentId,keyring:config.globalConfigKeyring!,profiles:config.providerGateway.profiles,harnesses,sourceCatalog:config.assistantSourceCatalog===true,assistantChannels:config.assistantChannels}))
     else app.get('/api/v1/ai/catalog',async(request,reply)=>{reply.header('Cache-Control','private, no-store');await sessions.authenticate(cookies(request).session??'');return {entries:[],defaultId:null}})
     if (config.adminAiSyntheticProbe === true) ownedProbes.push(registerAdminSyntheticProbe(app, { transactions, sessions, csrf }))
     if(config.adminProviderProbe){

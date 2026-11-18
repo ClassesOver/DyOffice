@@ -57,6 +57,18 @@ test('source management never reads back a DSN and an unchanged secret is omitte
  expect(body).not.toHaveProperty('secret')
 })
 
+test('connection navigation filters the current page and offers a one-click reset without changing the selected draft',async()=>{
+ const second={...initial().source,sourceId:'expense',name:'费用分析'}
+ const {host}=await mount(async path=>path.includes('?')?{items:[initial().source,second],nextCursor:null}:initial())
+ await change('连接名称','保留中的草稿')
+ await change('搜索数据连接','no matching connection')
+ expect(host.querySelectorAll('.source-item')).toHaveLength(0)
+ expect(host.textContent).toContain('没有匹配的连接')
+ await click('清除筛选')
+ expect(host.querySelectorAll('.source-item')).toHaveLength(2)
+ expect(input('连接名称').value).toBe('保留中的草稿')
+})
+
 test.each([409, 503])('HTTP %i preserves edited fields, clears entered credentials and never displays raw errors', async status => {
  await mount(async (path, method = 'GET') => { if (method === 'PUT') throw Object.assign(Error('postgres://private:secret@host/db'), { status }); return read(path) })
  await change('连接名称', '保留的草稿'); await change('凭据操作', 'replace'); await change('连接凭据', 'postgres://one-use')

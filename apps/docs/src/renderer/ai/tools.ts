@@ -1,3 +1,4 @@
+import { ASSISTANT_DOCUMENT_TOOLS } from '../../../../../packages/web-contracts/src/assistant'
 import type { Editor } from '@tiptap/core'
 import type { Mark, Node as ProseMirrorNode } from '@tiptap/pm/model'
 import type { ChartDisplay, CommentInfo, NewChart, NoteInfo } from '@genoffice/docx-engine'
@@ -1225,6 +1226,7 @@ export function executeTool(
   extras?: AiDocExtras,
   notes?: AiNotesAccess,
 ): ToolExecution | Promise<ToolExecution> {
+  if(ASSISTANT_DOCUMENT_TOOLS.has(call.name)&&!editor.isEditable) return fail(call.name,'The document is read-only. No changes were made.')
   const scope = frozen && frozen.doc === editor.state.doc ? frozen.scope : null
   const staleSummary = staleSummaryOf(call)
   if (staleSummary && editedExternally(editor)) return fail(staleSummary(), STALE_DOC_ERROR)
@@ -1303,6 +1305,7 @@ async function writeDocument(
     rendered = draft.finish()
   }
   if (editor.isDestroyed) return fail(summary, 'the document was closed')
+  if (!editor.isEditable) return fail(summary,'The document became read-only; writing stopped.')
   if (!result.ok || !result.html) {
     return fail(
       t('aiSumWriteDocumentFailed'),

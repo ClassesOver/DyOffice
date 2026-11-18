@@ -80,3 +80,16 @@ test('data tasks expose only their grant and runtime hash, never collect raw sna
  const result=await createCodingHarness({cliPath:f.cli,workspaceRoot:f.root,dataHelper:helper}).run({instruction:'analyze',dataInputs:data.grant.inputs},new AbortController().signal,model,data)
  assert.equal(result.output,'');assert.match(result.summary,/committed artifacts/)
 })
+
+test('reports command lifecycle without streaming raw command output',async t=>{
+ const f=await fixture(t,`process.stdin.resume();process.stdin.on('end',()=>{
+ console.log(JSON.stringify({type:'item.started',item:{type:'command_execution',command:'private command',aggregated_output:'private data'}}));
+ console.log(JSON.stringify({type:'item.completed',item:{type:'command_execution',aggregated_output:'private data'}}));
+ console.log(JSON.stringify({type:'item.completed',item:{type:'agent_message',text:'Done'}}));
+ console.log(JSON.stringify({type:'turn.completed'}));});`)
+ const events=[]
+ await createCodingHarness({cliPath:f.cli,workspaceRoot:f.root}).run({instruction:'Test'},new AbortController().signal,model,undefined,event=>events.push(event))
+ assert.ok(events.some(event=>event.text==='Executing command'))
+ assert.ok(events.some(event=>event.text==='Collecting task results'))
+ assert.doesNotMatch(JSON.stringify(events),/private command|private data/)
+})

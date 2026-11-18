@@ -3,15 +3,15 @@ import {createSseAgentTransport} from './ai-transport.ts'
 import type {SettingsRequest} from './preferences.ts'
 import {createSourceCatalogSkill} from './source-catalog-skill.ts'
 import {createCodingClient} from './coding.ts'
-import {assistantReadTools, ASSISTANT_DELEGATION_TOOLS, type AssistantCatalog} from '../../web-contracts/src/assistant.ts'
+import {assistantReadTools, ASSISTANT_DOCUMENT_TOOLS, ASSISTANT_DELEGATION_TOOLS, type AssistantCatalog} from '../../web-contracts/src/assistant.ts'
 
-export async function createAssistantClient({request, fetchImpl, csrfToken, onDelivery}: {request: SettingsRequest; fetchImpl?: typeof fetch; csrfToken?: string;onDelivery?:(hint:unknown,agent:{id:string;name:string;origin:'builtin'|'external'})=>void|Promise<void>}) {
+export async function createAssistantClient({request, fetchImpl, csrfToken, onDelivery,nativeDocumentEditing=false}: {request: SettingsRequest; fetchImpl?: typeof fetch; csrfToken?: string;nativeDocumentEditing?:boolean;onDelivery?:(hint:unknown,agent:{id:string;name:string;origin:'builtin'|'external'})=>void|Promise<void>}) {
   const catalog = await request<AssistantCatalog>('/api/v1/ai/catalog')
   let selected = catalog.defaultId, runModel = selected, disposed = false
   // Keep the original session proof. A replacement login in another tab cannot
   // dispatch this document/chat using the new account's cookie.
   const csrf = csrfToken ?? (catalog.entries.length ? (await request<{csrfToken: string}>('/api/v1/auth/csrf')).csrfToken : '')
-  const allowedTools = assistantReadTools(catalog.sourceCatalog === true)
+  const allowedTools = new Set([...assistantReadTools(catalog.sourceCatalog === true),...(nativeDocumentEditing?ASSISTANT_DOCUMENT_TOOLS:[])])
   const coding = catalog.agents?.length && catalog.defaultAgentId
     ? createCodingClient({agents: catalog.agents, defaultId: catalog.defaultAgentId, csrfToken: csrf, getModelId: () => runModel, ...(onDelivery ? {onDelivery} : {}), dataCatalog:async input=>{
       const [sources,results]=await Promise.all([
@@ -43,7 +43,7 @@ export async function createAssistantClient({request, fetchImpl, csrfToken, onDe
       }
       let handle: {cancel(): void}
       handle = createSseAgentTransport({modelId: runModel!, getCsrfToken: async () => csrf, ...(fetchImpl ? {fetchImpl} : {})}).stream({
-        ...input, messages, tools, system: input.system + (coding ? '\nThis assistant can read and explain. Document mutation and direct CLI execution are unavailable. You may delegate coding using the offered agent tools.' : '\nThis assistant can read and explain. Document mutation and CLI execution are unavailable.'),
+        ...input, messages, tools, system: input.system + (nativeDocumentEditing ? '\nUse the offered native document tools for writing and editing the open document. Use write_document for long-form writing; it streams into Word. Delegate programming and computation to harnesses, then apply requested document changes using native tools. Direct CLI execution is unavailable.' : coding ? '\nThis assistant can read and explain. Document mutation and direct CLI execution are unavailable. You may delegate coding using the offered agent tools.' : '\nThis assistant can read and explain. Document mutation and CLI execution are unavailable.'),
       }, {...callbacks, onToolCall(call) {
         if (!tools.some(t => t.name === call.name)) throw new Error('助手返回了未授权的工具。')
         callbacks.onToolCall(call)
@@ -53,7 +53,7 @@ export async function createAssistantClient({request, fetchImpl, csrfToken, onDe
     },
   }
   return {
-    catalog, transport, extraSkills: coding ? [coding.skill] : [],
+    catalog, transport, coding, extraSkills: coding ? [coding.skill] : [],
     ...(catalog.sourceCatalog === true ? {sourceSkill: createSourceCatalogSkill(request, () => disposed)} : {}),
     selected: () => selected,
     select(id: string) {if (disposed || !catalog.entries.some(e => e.id === id)) throw new Error('模型不可用。'); selected = id},

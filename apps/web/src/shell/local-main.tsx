@@ -40,7 +40,6 @@ import logo from '../../../shell/src/renderer/src/assets/dyoffice-logo.svg'
 import zhCN from 'antd/locale/zh_CN'
 const workspacePages={settings:'个人设置',trash:'回收站',sources:'数据连接',global:'全局配置',users:'用户管理'} as const
 type WorkspacePage=keyof typeof workspacePages
-import {HomeAssistant} from './HomeAssistant'
 import {AccountMenu} from './AccountMenu'
 import {createDocumentTabs,type DocumentFormat} from './document-tabs'
 import {resolvedDocument,readOpenDocument} from './document-entry-reader'
@@ -147,8 +146,7 @@ function WorkspacePageContent({page,onClose,onCloseGuardChange,settingsTab,onSet
  if(page==='trash')return <WorkspaceTrash request={client.request} onChanged={notifyFilesChanged} onClose={onClose} presentation="page" onCloseGuardChange={registerGuard}/>
  return null
 }
-async function bindHomeAssistant(){if(!sourceWorkspace)throw new Error('登录状态未就绪。');return client.bindSession(sourceWorkspace.bound.proof)}
-function Account({onOpen,recovery}:{onOpen:(page:WorkspacePage)=>void;recovery:boolean}){return <div className="account-entry">{user&&<HomeAssistant key={user.id} bind={bindHomeAssistant} recovery={recovery}/>} {user&&<AccountMenu user={user} onSettings={()=>onOpen('settings')} onTrash={()=>onOpen('trash')} onSources={()=>onOpen('sources')} onGlobalSettings={()=>onOpen('global')} onUsers={()=>onOpen('users')} onLogout={()=>void logout().catch(e=>notice(e.message))}/>}</div>}
+function Account({onOpen}:{onOpen:(page:WorkspacePage)=>void}){return <div className="account-entry">{user&&<AccountMenu user={user} onSettings={()=>onOpen('settings')} onTrash={()=>onOpen('trash')} onSources={()=>onOpen('sources')} onGlobalSettings={()=>onOpen('global')} onUsers={()=>onOpen('users')} onLogout={()=>void logout().catch(e=>notice(e.message))}/>}</div>}
 
 function Shell({recovery=false}:{recovery?:boolean}){
  const [message,setMessage]=useState(entryRecoveryNotice),[page,setPage]=useState<WorkspacePage|null>(null)
@@ -209,7 +207,7 @@ function Shell({recovery=false}:{recovery?:boolean}){
  const close=()=>{if(closeGuard.current?.()===false)return;setPage(null)}
  notice=setMessage;showTrash=()=>setPage('trash')
  return <>
-  <AppFrame hideAppMenu hideSingleTabList initialOnboardingSeen={true} homeProps={{capabilities:{localFolders:false,copyPath:false,duplicateFile:false,starredGroups:false,cloudProjects:false,semanticRanking:false,serverFileSort:true},supportedFormats:['docx','xlsx','pptx','pdf'],supportedNewFormats:localNewFormats(capabilities),accountEntry:<Account onOpen={setPage} recovery={recovery}/>,folderDeleteDescription:name=>`仅可删除空文件夹「${name}」。请先移出文件和子文件夹；回收站中仍属于此目录的文件需先恢复并移出。`}} editorContent={<>{documentTabs.renderedDocuments().map(file=><div key={file.id} className="workspace-document" hidden={!tabs.find(tab=>tab.id===file.id)?.active}>{file.src.startsWith('/native-')?<DocumentFrame file={file} registerGuard={documentTabs.setGuard}/>:<DocumentPreview fileId={file.id} name={file.name} format={file.format} request={client.request}/>}</div>)}</>}/>
+  <AppFrame hideAppMenu hideSingleTabList initialOnboardingSeen={true} homeProps={{capabilities:{localFolders:false,copyPath:false,duplicateFile:false,starredGroups:false,cloudProjects:false,semanticRanking:false,serverFileSort:true},supportedFormats:['docx','xlsx','pptx','pdf'],supportedNewFormats:localNewFormats(capabilities),accountEntry:<Account onOpen={setPage}/>,folderDeleteDescription:name=>`仅可删除空文件夹「${name}」。请先移出文件和子文件夹；回收站中仍属于此目录的文件需先恢复并移出。`}} editorContent={<>{documentTabs.renderedDocuments().map(file=><div key={file.id} className="workspace-document" hidden={!tabs.find(tab=>tab.id===file.id)?.active}>{file.src.startsWith('/native-')?<DocumentFrame file={file} registerGuard={documentTabs.setGuard}/>:<DocumentPreview fileId={file.id} name={file.name} format={file.format} request={client.request}/>}</div>)}</>}/>
   <Modal open={page!==null} title={page?workspacePages[page]:undefined} onCancel={close} footer={null} width={1120} centered destroyOnHidden maskClosable={false} className="workspace-config-modal">
    {page&&<WorkspacePageContent key={page} page={page} settingsTab={settingsTab} onSettingsTabChange={setSettingsTab} onClose={()=>setPage(null)} onCloseGuardChange={registerGuard}/>}
   </Modal>

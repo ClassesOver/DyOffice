@@ -1,44 +1,75 @@
-import {createCodingSkill,type HarnessDescriptor,type CodingTask,type CodingResult} from '../../agent-core/src/coding-skill.ts'
+import {createCodingSkill,type HarnessDescriptor,type CodingTask,type CodingResult,type CodingProgress} from '../../agent-core/src/coding-skill.ts'
 import {createSseAgentTransport} from './ai-transport.ts'
+
+export interface CodingTaskView {id:string;agent:HarnessDescriptor;instruction:string;initiator:'office'|'user';state:'running'|'cancel_requested'|'succeeded'|'failed'|'unknown_outcome';summary?:string;output?:string;progress?:string;activity?:string}
 
 /** Reuses the bounded SSE transport. No process starts until Office invokes the tool. */
 export function createCodingClient(options:{agents:readonly HarnessDescriptor[];defaultId:string;csrfToken:string;getModelId:()=>string|null;dataCatalog?:(input:{sourcesAfter?:string;resultsAfter?:string})=>Promise<unknown>;fetchImpl?:typeof fetch;onDelivery?:(hint:unknown,agent:{id:string;name:string;origin:'builtin'|'external'})=>void|Promise<void>}) {
   let disposed=false
   const active=new Set<{cancel():void}>()
   const agents=options.agents.map(a=>({...a,capabilities:[...a.capabilities]}))
-  return {
-    skill:createCodingSkill({
+  const tasks:CodingTaskView[]=[],listeners=new Set<()=>void>(),controllers=new Map<string,AbortController>()
+  const notify=()=>{for(const listener of listeners)listener()}
+  const deps={
       list:()=>disposed?[]:agents,
       ...(options.dataCatalog?{dataCatalog:options.dataCatalog}:{}),
-      run(input:CodingTask,signal?:AbortSignal):Promise<CodingResult> {
+      run(input:CodingTask,signal?:AbortSignal,modelId=options.getModelId(),onProgress?:(event:CodingProgress)=>void):Promise<CodingResult> {
         if(disposed||signal?.aborted)return Promise.reject(Error('Coding task cancelled'))
         const id=input.agentId??options.defaultId
         if(!agents.some(a=>a.id===id&&a.capabilities.includes('coding')))return Promise.reject(Error('Coding agent unavailable'))
         return new Promise((resolve,reject)=>{
           let text='',error='',settled=false
-          const transport=createSseAgentTransport({endpoint:'/api/v1/agents/tasks',modelId:id,getCsrfToken:async()=>options.csrfToken,timeoutMs:615000,...(options.fetchImpl ? {fetchImpl:options.fetchImpl} : {})})
+          const transport=createSseAgentTransport({endpoint:'/api/v1/agents/tasks',modelId:id,getCsrfToken:async()=>options.csrfToken,timeoutMs:615000,...(onProgress?{onProgress}:{}),...(options.fetchImpl ? {fetchImpl:options.fetchImpl} : {})})
           let handle:{cancel():void}|undefined
           const finish=()=>{
             if(settled)return
             settled=true;signal?.removeEventListener('abort',cancel);if(handle)active.delete(handle)
-            if(error){reject(Error(error));return}
+            if(error){reject(Object.assign(Error(error),{unknownOutcome:!/^AI stream HTTP [45]\d\d$|^Invalid CSRF proof$/.test(error)}));return}
             try {
               const value=JSON.parse(text)
               if(!value||typeof value.summary!=='string'||typeof value.output!=='string')throw Error('Invalid coding result')
               const descriptor=agents.find(agent=>agent.id===id)!
               if(!disposed&&!signal?.aborted&&value.delivery&&options.onDelivery)try{void Promise.resolve(options.onDelivery(value.delivery,{id:descriptor.id,name:descriptor.name,origin:descriptor.origin})).catch(()=>{})}catch{}
               resolve({agent:{id:descriptor.id,name:descriptor.name,origin:descriptor.origin},summary:value.summary,output:value.output,...(value.delivery?{delivery:value.delivery}:{})})
-            } catch {reject(Error('Cannot confirm coding result'))}
+            } catch {reject(Object.assign(Error('Cannot confirm coding result'),{unknownOutcome:true}))}
           }
           const cancel=()=>{error='Coding task cancelled';handle?.cancel();finish()}
-          handle=transport.stream({system:'',messages:[{role:'user',text:JSON.stringify({officeModelId:options.getModelId(),instruction:input.instruction,...(input.context===undefined?{}:{context:input.context}),...(input.dataInputs===undefined?{}:{dataInputs:input.dataInputs})})}],tools:[]},
+          handle=transport.stream({system:'',messages:[{role:'user',text:JSON.stringify({officeModelId:modelId,instruction:input.instruction,...(input.context===undefined?{}:{context:input.context}),...(input.dataInputs===undefined?{}:{dataInputs:input.dataInputs})})}],tools:[]},
             {onDelta:delta=>{text+=delta},onToolCall:()=>{error='Unexpected coding tool';handle?.cancel();finish()},onError:message=>{error=message},onDone:finish})
           if(!settled)active.add(handle)
           if(!settled)signal?.addEventListener('abort',cancel,{once:true})
           if(signal?.aborted)cancel()
         })
       },
-    }),
-    dispose(){disposed=true;for(const handle of active)handle.cancel();active.clear()},
+  }
+  async function run(input:CodingTask,signal?:AbortSignal,modelId=options.getModelId(),initiator:'office'|'user'='office'):Promise<CodingResult> {
+    if(disposed||signal?.aborted)throw Error('Coding task cancelled')
+    const agent=agents.find(a=>a.id===(input.agentId??options.defaultId)&&a.capabilities.includes('coding'))
+    if(!agent)throw Error('Coding agent unavailable')
+    const task:CodingTaskView={id:crypto.randomUUID(),agent,instruction:input.instruction,initiator,state:'running'}
+    const controller=new AbortController(),cancel=()=>controller.abort()
+    signal?.addEventListener('abort',cancel,{once:true})
+    controllers.set(task.id,controller);tasks.unshift(task);notify()
+    try {
+      const result=await deps.run(input,controller.signal,modelId,event=>{
+        if(disposed||controller.signal.aborted)return
+        if(event.kind==='status')task.activity=event.text.slice(0,200)
+        else task.progress=((task.progress??'')+event.text).slice(-32000)
+        notify()
+      })
+      Object.assign(task,{state:'succeeded',summary:result.summary,output:result.output})
+      return result
+    } catch(error) {
+      task.state=controller.signal.aborted||(error as {unknownOutcome?:boolean})?.unknownOutcome===true?'unknown_outcome':'failed'
+      task.summary=task.state==='unknown_outcome'?'Execution outcome not confirmed; verify before retrying.':'The harness task did not complete.'
+      throw error
+    } finally {signal?.removeEventListener('abort',cancel);controllers.delete(task.id);notify()}
+  }
+  return {
+    skill:createCodingSkill({...deps,run}),run,
+    snapshot:()=>tasks.map(task=>({...task})),
+    subscribe(listener:()=>void){listeners.add(listener);return()=>{listeners.delete(listener)}},
+    cancel(id:string){const task=tasks.find(task=>task.id===id);if(task?.state==='running'){task.state='cancel_requested';notify();controllers.get(id)?.abort()}},
+    dispose(){disposed=true;for(const controller of controllers.values())controller.abort();for(const handle of active)handle.cancel();active.clear();listeners.clear()},
   }
 }

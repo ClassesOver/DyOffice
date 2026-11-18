@@ -198,9 +198,9 @@ test('page presentation delegates its heading and close button while preserving 
     await act(async () => root.render(h(GlobalSettingsPanel, {client, presentation: 'page', onClose() {}, onCloseGuardChange(next: (() => boolean) | null) {guard = next}})))
     expect(host.querySelector('h3')).toBeNull()
     expect(host.querySelector('[aria-label="关闭全局配置"]')).toBeNull()
-    expect(host.querySelector('[aria-label="配置状态摘要"]')?.textContent).toContain('已保存版本 3')
-    expect(host.querySelector('[aria-label="配置状态摘要"]')?.textContent).toContain('服务配置1')
-    expect(host.querySelector('[aria-label="配置状态摘要"]')?.textContent).toContain('已启用1')
+    expect(host.querySelector('[aria-label="配置状态摘要"]')?.textContent).toContain('已保存配置')
+    expect(host.querySelector('[aria-label="配置状态摘要"]')?.textContent).toContain('服务配置 1')
+    expect(host.querySelector('[aria-label="配置状态摘要"]')?.textContent).toContain('已启用 1')
     expect(host.querySelector('.global-settings-page')).not.toBeNull()
     expect(guard?.()).toBe(true)
     expect(confirm).not.toHaveBeenCalled()
@@ -260,11 +260,105 @@ test('saved server configuration uses independent bounded pages and clamps after
   expect(next().disabled).toBe(true)
 })
 
-test('B global settings keeps selected configuration and default/key controls accessible', async () => {
+test('refined settings keep the configuration selector, defaults and credential controls accessible', async () => {
  const {host} = await mount(createGlobalSettingsClient(requestFrom(async () => initial())))
- expect(host.querySelector('.global-settings-b')).not.toBeNull()
- expect(host.querySelector('.global-settings-entry[aria-pressed="true"]')?.textContent).toContain('Original')
+ expect(host.querySelector('.global-settings-refined')).not.toBeNull()
+ expect(host.querySelector('.global-settings-config-select')?.textContent).toContain('Original')
  expect(input('API 密钥').type).toBe('password')
  expect(button('保存配置').disabled).toBe(true)
  expect(host.querySelector('[aria-label="默认配置"]')).not.toBeNull()
+})
+
+test('shared model connection test uses the saved entry and waits for unsaved edits to be saved',async()=>{
+ const calls:Array<{path:string;body:unknown}>=[]
+ await mount(createGlobalSettingsClient(requestFrom(async(path,method='GET',body)=>{
+  if(method==='GET')return initial()
+  calls.push({path,body});return {ok:true}
+ })))
+ expect(button('测试连接').disabled).toBe(false)
+ await click('测试连接')
+ expect(calls).toEqual([{path:'/api/v1/admin/config/test-model',body:{entryId:'primary'}}])
+ expect(document.body.textContent).toContain('模型连接成功')
+ expect(document.body.textContent).not.toMatch(/版本\s*\d/)
+ await change('模型标识','unsaved-model')
+ expect(button('测试连接').disabled).toBe(true)
+ expect(document.body.textContent).toContain('请先保存，再测试连接')
+})
+
+test('AI and media groups preserve drafts and credentials across navigation and save together', async () => {
+  let submitted: SaveGlobalConfigRequest | undefined
+  const config = initial()
+  config.entries.push({id: 'picture', kind: 'image_generation', providerId: 'image', label: 'Team images', model: 'image-model', baseUrl: 'https://images.test/v1', enabled: true, hasKey: false})
+  await mount(createGlobalSettingsClient(requestFrom(async (_path, method = 'GET', body) => {
+    if (method === 'GET') return config
+    submitted = body as SaveGlobalConfigRequest
+    return {...config, revision: 4}
+  })))
+  await change('配置名称', 'Shared chat draft')
+  await change('API 密钥', 'chat-draft-key')
+  const switchGroup = async (name: string) => {await act(async () => {
+    const tab = [...document.querySelectorAll<HTMLElement>('[role="tab"]')].find(node => node.textContent === name)
+    expect(tab).toBeDefined(); tab!.click()
+  })}
+  await switchGroup('生图、媒体与搜索')
+  expect(input('配置名称').value).toBe('Team images')
+  expect(input('API 密钥').value).toBe('')
+  expect(document.querySelector('[aria-label="默认对话配置"]')).toBeNull()
+  await change('API 密钥', 'image-draft-key')
+  await switchGroup('AI 模型')
+  expect(input('配置名称').value).toBe('Shared chat draft')
+  expect(input('API 密钥').value).toBe('chat-draft-key')
+  expect(document.querySelector('[aria-label="默认图像生成配置"]')).toBeNull()
+  await submit()
+  expect(submitted?.patch.upserts).toEqual(expect.arrayContaining([
+    expect.objectContaining({id: 'primary', label: 'Shared chat draft', apiKey: 'chat-draft-key'}),
+    expect.objectContaining({id: 'picture', apiKey: 'image-draft-key'}),
+  ]))
+  expect(document.body.textContent).not.toContain('Jev')
+})
+
+test('an empty media group offers each purpose and creates the selected service without changing chat', async () => {
+  let submitted: SaveGlobalConfigRequest | undefined
+  await mount(createGlobalSettingsClient(requestFrom(async (_path, method = 'GET', body) => {
+    if (method === 'GET') return initial()
+    submitted = body as SaveGlobalConfigRequest
+    return {...initial(), revision: 4}
+  })))
+  await act(async () => [...document.querySelectorAll<HTMLElement>('[role="tab"]')].find(node => node.textContent === '生图、媒体与搜索')!.click())
+  for (const purpose of ['图像生成', '图像分析', '视频分析', '网页搜索', '图片搜索']) expect(button(`配置${purpose}`)).toBeDefined()
+  await click('配置图像生成')
+  expect(input('模型标识').value).toBe('image-model')
+  expect(input('服务地址').value).toBe('https://images.test/v1')
+  await submit()
+  expect(submitted?.patch.upserts).toHaveLength(1)
+  expect(submitted?.patch.upserts?.[0]).toMatchObject({kind: 'image_generation', providerId: 'image'})
+  expect(submitted?.patch.removes).toBeUndefined()
+})
+
+test('failed initial configuration load offers an immediate retry', async () => {
+  let reads = 0
+  await mount(createGlobalSettingsClient(requestFrom(async () => {if (++reads === 1) throw Object.assign(new Error('offline'), {status: 503}); return initial()})))
+  expect(document.querySelector('form')).toBeNull()
+  await click('重新读取')
+  expect(reads).toBe(2)
+  expect(input('配置名称').value).toBe('Original')
+  expect(document.querySelector('[aria-label="当前配置状态"]')?.textContent).toContain('密钥已保存')
+})
+
+test('toolbar discard requires confirmation and reloads without submitting a draft', async () => {
+  let reads = 0; let writes = 0
+  await mount(createGlobalSettingsClient(requestFrom(async (_path, method = 'GET') => {if (method !== 'GET') writes++; else reads++; return initial()})))
+  await change('配置名称', 'Unwanted draft')
+  await change('API 密钥', 'draft-only-key')
+  expect(document.querySelector('[aria-label="当前配置状态"]')?.textContent).toContain('新密钥待保存')
+  await click('放弃更改')
+  expect(reads).toBe(1)
+  expect(document.querySelector('[role="alertdialog"]')?.textContent).toContain('放弃未保存草稿')
+  await click('取消')
+  expect(input('配置名称').value).toBe('Unwanted draft')
+  await click('放弃更改'); await click('确认放弃草稿')
+  expect(reads).toBe(2)
+  expect(writes).toBe(0)
+  expect(input('配置名称').value).toBe('Original')
+  expect(input('API 密钥').value).toBe('')
 })

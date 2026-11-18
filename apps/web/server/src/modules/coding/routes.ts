@@ -5,11 +5,11 @@ import {registerProviderRoutes} from '../providers/routes.ts'
 import {createProviderTurns} from '../providers/turns.ts'
 import type {HarnessRunContext,HarnessRegistry} from './registry.ts'
 import type {createHarnessDataAccess} from './data-access.ts'
-import type {CodingTask} from '../../../../../../packages/agent-core/src/coding-skill.ts'
+import type {CodingTask,CodingProgress,CodingResult} from '../../../../../../packages/agent-core/src/coding-skill.ts'
 
 export function registerCodingRoutes(app:FastifyInstance,options:{
   data?:ReturnType<typeof createHarnessDataAccess>;dataBaseUrl?:string
-  openModel?:(token:string,modelId:string,signal:AbortSignal)=>ReturnType<NonNullable<HarnessRunContext['openModel']>>
+  openModel?:(token:string,modelId:string,signal:AbortSignal,onProgress?:(event:CodingProgress)=>void)=>ReturnType<NonNullable<HarnessRunContext['openModel']>>
   registry:HarnessRegistry;sessions:Pick<SessionService,'authenticate'>;
   csrf:Pick<ReturnType<typeof createCsrfService>,'requireSession'|'requireSessionRead'>
 }) {
@@ -40,15 +40,41 @@ export function registerCodingRoutes(app:FastifyInstance,options:{
       if(task.dataInputs!==undefined&&!options.data)throw Error('Harness data unavailable')
       const grant=options.data&&task.dataInputs!==undefined?await options.data.issue({token,agentId:permit.revision,inputs:task.dataInputs??{sourceIds:[],resultIds:[]},signal}):undefined
       try {
-        const result=await options.registry.run(permit.identity.deploymentId+':'+permit.identity.userId,{...task,agentId:permit.revision},signal,{
-          modelId:officeModelId,...(options.openModel?{openModel:()=>options.openModel!(token,officeModelId,signal)}:{}),
+        // Only bounded public progress crosses SSE; command stdout and reasoning stay local.
+        const queue:CodingProgress[]=[]
+        let wake:(()=>void)|undefined,finished=false,progressBytes=0
+        const onProgress=(event:CodingProgress)=>{
+          if(signal.aborted||finished)return
+          const progress={kind:event.kind,text:event.text.slice(0,4000)}
+          const bytes=Buffer.byteLength(JSON.stringify({type:'progress',...progress}))
+          if(queue.length>=64||progressBytes+bytes>64*1024)return
+          progressBytes+=bytes
+          queue.push(progress);wake?.();wake=undefined
+        }
+        onProgress({kind:'status',text:'Starting harness'})
+        const pending=options.registry.run(permit.identity.deploymentId+':'+permit.identity.userId,{...task,agentId:permit.revision},signal,{
+          modelId:officeModelId,onProgress,...(options.openModel?{openModel:()=>options.openModel!(token,officeModelId,signal,onProgress)}:{}),
           ...(grant?{data:{baseUrl:options.dataBaseUrl!,grant}}:{})})
+        let result:CodingResult|undefined,failure:unknown
+        void pending.then(value=>{result=value},error=>{failure=error}).finally(()=>{finished=true;wake?.();wake=undefined})
+        const abort=()=>{wake?.();wake=undefined}
+        signal.addEventListener('abort',abort,{once:true})
+        try {
+          while(!finished||queue.length){
+            if(signal.aborted)throw Error('Coding task cancelled')
+            const progress=queue.shift()
+            if(progress)yield {type:'progress' as const,...progress}
+            else await new Promise<void>(resolve=>{wake=resolve})
+          }
+        } finally {signal.removeEventListener('abort',abort)}
+        if(failure)throw failure
+        if(!result)throw Error('Coding result unavailable')
         const delivery=grant?await options.data!.delivery(grant.taskId,grant.credential):undefined
         const {delivery:ignored,...output}=result
         yield {type:'delta' as const,text:JSON.stringify({...output,...(delivery?{delivery}:{})})}
       } finally {if(grant)options.data!.revoke(grant.taskId)}
     },
-  },{timeoutMs:610000,maxActive:4,maxOutputBytes:256*1024})
+  },{timeoutMs:610000,maxActive:4,maxOutputBytes:384*1024})
   registerProviderRoutes(app,{...options,turns,endpoint:'/api/v1/agents/tasks',errorMessage:'Coding agent unavailable'})
   app.get('/api/v1/agents/catalog',async(request,reply)=>{
     reply.header('Cache-Control','private, no-store')

@@ -60,3 +60,12 @@ test('pause affects collaboration only and invitations disappear on collapse',as
  expect(host.textContent).not.toContain('private-invite')
  expect(host.querySelector<HTMLTextAreaElement>('[aria-label="Native draft"]')!.value).toBe('Unsent native draft')
 })
+
+test('the tasks view exposes failed cancellation and a refresh action',async()=>{
+ const f=fixture();f.client.cancel.mockRejectedValueOnce(Error('private details'))
+ await act(async()=>root.render(h(AssistantChannelPanel,{client:f.client as never,lang:'en',mode:'tasks'})))
+ await act(async()=>button('Cancel task').click())
+ expect(host.querySelector('[role="alert"]')?.textContent).toContain('did not finish')
+ expect(host.textContent).not.toContain('private details')
+ await act(async()=>button('Refresh').click());expect(f.client.refresh).toHaveBeenCalledOnce()
+})
