@@ -35,15 +35,16 @@ before(async()=>{
  ;({mountDocsEditor,act}=await import(pathToFileURL(join(directory,'entry.mjs')).href))
 })
 after(()=>rm(directory,{recursive:true,force:true}))
-async function fixture(t,{outcome='success',gate}={}){
+async function fixture(t,{outcome='success',gate,readOnly=false,initialDirty=true,currentHead=true}={}){
  const dom=new JSDOM('<div id="editor"></div>',{url:'https://office.example/'})
+ dom.window.document.getElementById('editor').inert=false
  const old={};for(const [key,value] of Object.entries({window:dom.window,document:dom.window.document,navigator:dom.window.navigator,IS_REACT_ACT_ENVIRONMENT:true})){
   old[key]=Object.getOwnPropertyDescriptor(globalThis,key);Object.defineProperty(globalThis,key,{configurable:true,writable:true,value})
  }
  const fileId='11111111-1111-4111-8111-111111111111',before={fileId,revision:'22222222-2222-4222-8222-222222222222',sha256:'a'.repeat(64),size:1},after={...before,revision:'33333333-3333-4333-8333-333333333333',sha256:'b'.repeat(64),size:2}
- let state={name:'a.docx',status:outcome==='unknown-before'?'unknown':'idle',revision:before,lease:{leaseEpoch:1}},saves=0,reconciles=0,dirty=true
+ let state={name:'a.docx',status:outcome==='unknown-before'?'unknown':'idle',revision:before,lease:readOnly?null:{leaseEpoch:1}},saves=0,reconciles=0,dirty=initialDirty
  const downloads=[];dom.window.HTMLAnchorElement.prototype.click=function(){downloads.push(this.href)}
- const host={releaseLease:async()=>{},getEditorId:()=>fileId,subscribe:()=>()=>{},open:async()=>({format:'docx'}),getPreferences:async()=>({language:'en',theme:'light',showAssistant:false}),getState:()=>state,acquireLease:async()=>({leaseEpoch:1}),startRenewal:()=>()=>{},save:async()=>{saves++;await gate?.promise;if(outcome==='unknown-after'){state.status='unknown';throw Error('lost acknowledgement')}state.revision=after;return {...after}},reconcile:async()=>{reconciles++;throw Error('unexpected reconcile')}}
+ const host={isCurrentRevision:async()=>currentHead,takeoverLease:async()=>{state.lease={leaseEpoch:2};state.status='idle'},releaseLease:async()=>{state.lease=null},getEditorId:()=>fileId,subscribe:()=>()=>{},open:async()=>({format:'docx'}),getPreferences:async()=>({language:'en',theme:'light',showAssistant:false}),getState:()=>state,acquireLease:async()=>{if(readOnly)throw Error('held elsewhere');return {leaseEpoch:1}},startRenewal:()=>()=>{},save:async()=>{saves++;await gate?.promise;if(outcome==='unknown-after'){state.status='unknown';throw Error('lost acknowledgement')}state.revision=after;return {...after}},reconcile:async()=>{reconciles++;throw Error('unexpected reconcile')}}
  const control={editor:{getSelection:()=>null,serialize:async()=>null,isDirty:()=>dirty,async save(){await control.lifecycle.beforeSave();const result=await dom.window.desktop.saveDocx(`/files/${fileId}/a.docx`,new ArrayBuffer(2));dirty=outcome==='late-edit'||!result.ok;control.lifecycle.afterSave(result.ok&&outcome!=='late-edit');return result.ok}}}
  globalThis.__docsDownloadTest=control
  let mounted;await act(async()=>{mounted=await mountDocsEditor(host,dom.window.document.getElementById('editor'),fileId)})
@@ -73,4 +74,14 @@ for(const dispose of [false,true])test(`Word host blocks duplicate download clic
  if(dispose){assert.equal(await f.tryClose(),false);await f.dispose()}
  await act(async()=>{release();await gate.promise})
  assert.equal(f.downloads.length,dispose?0:1)
+})
+
+for(const scenario of ['stale','dirty','clean'])test(`actual Word takeover entry: ${scenario}`,async t=>{
+ const f=await fixture(t,{readOnly:true,initialDirty:scenario==='dirty',currentHead:scenario!=='stale'})
+ const takeover=[...f.element.querySelectorAll('button')].find(b=>b.textContent==='Take over editing');assert.ok(takeover)
+ await act(async()=>{takeover.click()})
+ assert.equal(f.element.inert,false)
+ if(scenario==='clean'){assert.equal(f.state().lease.leaseEpoch,2);assert.equal(f.element.querySelector('[role=alert]'),null)}
+ else{assert.equal(f.state().lease,null);assert.match(f.element.querySelector('[role=alert]').textContent,scenario==='stale'?/newer version.*close and reopen/:/Unsaved changes are preserved/);assert.equal(f.state().revision.revision,f.before.revision)}
+ assert.deepEqual(f.counts(),{saves:0,reconciles:0})
 })

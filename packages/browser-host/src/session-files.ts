@@ -277,6 +277,14 @@ export function createSessionFileHost({ fetchImpl = fetch, editorId = crypto.ran
       ++ctx.leaseOperation; ctx.lease=null; clearExpiration(id); emit()
       if (lease) await mutation(`/api/v1/files/${id}/lease`,'DELETE',{ editorId: editor,leaseEpoch: lease.leaseEpoch },false,keepalive)
     },
+    // Read-only comparison: never bind an old editor model to a newer base.
+    async isCurrentRevision(fileId: string) {
+      const id=uuid(fileId),ctx=context(id),base={...ctx.revision}
+      const result=await get(`/api/v1/files/${id}`) as OpenFileResult
+      if(!isRevisionRef(result?.file)||result.file.fileId!==id)throw hostError('INVALID_RESPONSE','head')
+      if(context(id)!==ctx || ctx.revision.revision!==base.revision)throw hostError('CONFLICT','changed head')
+      return result.file.revision===base.revision && result.file.sha256===base.sha256 && result.file.size===base.size
+    },
     async refreshHead(fileId: string) {
       const id=uuid(fileId),ctx=context(id),base=ctx.revision.revision
       if(ctx.pending || ctx.preparing)throw hostError('UNAVAILABLE','unconfirmed save')
