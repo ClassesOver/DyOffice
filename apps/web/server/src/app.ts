@@ -109,9 +109,6 @@ export interface LocalWebConfig {
   passwordBlocklistFile?: string; loginLimits?: LoginLimits; idleMs?: number; absoluteMs?: number; closeDb?: () => Promise<void>
 }
 export async function buildLocalApp(config: LocalWebConfig): Promise<FastifyInstance> {
-  // No supported OS-isolated PPTX runtime exists yet. Test forks cannot be wired
-  // into an HTTP deployment through configuration, in any NODE_ENV.
-  if(config.slidesHost || config.nativeSlidesDirectory) throw new Error('PPTX_OS_ISOLATION_UNAVAILABLE')
   if (process.env.NODE_ENV === 'production') throw new Error('Local runtime is not allowed in production before enterprise release gates')
   if (config.adminAiSyntheticProbe !== undefined && typeof config.adminAiSyntheticProbe !== 'boolean') throw new Error('Invalid synthetic probe configuration')
   if (config.adminAiSyntheticProbe && !config.businessPool) throw new Error('Synthetic probe requires restricted business pool')

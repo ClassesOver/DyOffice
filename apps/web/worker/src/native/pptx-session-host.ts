@@ -32,14 +32,14 @@ export interface PptxChildSession {
   close(): void
 }
 interface ChildMessage { id: number; m: string; expected?: number; ops?: unknown; slide?: number; width?: number; bytes?: Uint8Array; binding?: PptxChildBinding }
-export interface IsolatedPptxSessionOptions { unsafeTestOnly?: boolean; timeoutMs?: number; childModule?: URL; tsxModule?: URL; mdHooks?: URL }
+export interface IsolatedPptxSessionOptions { unsafeTestOnly?: boolean; experimental?: boolean; timeoutMs?: number; childModule?: URL; tsxModule?: URL; mdHooks?: URL }
 /** Mirrors the in-process session gate: no oversized package is ever handed to a child. */
 const MAX_INPUT_BYTES = 32 * 1024 * 1024
-/** Fork one test-only Node child, hand it fixture bytes, and return a generation-fenced
- * proxy. TEST-ONLY fork, NOT OS isolation: the child never shares the API heap, a
+/** Fork one isolated Node child, hand it fixture/uploaded bytes, and return a generation-fenced
+ * proxy. Experimental/test fork: the child never shares the API heap, a
  * crash only fails its own session, and every call is bounded by timeoutMs. */
 export async function openIsolatedPptxSession(input: {fileId: string; revision: string; bytes: Uint8Array}, options: IsolatedPptxSessionOptions = {}): Promise<PptxChildSession & {binding: PptxChildBinding}> {
-  if(process.env.NODE_ENV!=='test'||options.unsafeTestOnly!==true)throw new Error('PPTX_OS_ISOLATION_UNAVAILABLE')
+  if(process.env.NODE_ENV==='production'||(options.experimental!==true&&(process.env.NODE_ENV!=='test'||options.unsafeTestOnly!==true)))throw new Error('PPTX_OS_ISOLATION_UNAVAILABLE')
   if (!Number.isSafeInteger(input.bytes.byteLength) || input.bytes.byteLength===0 || input.bytes.byteLength>MAX_INPUT_BYTES) throw new Error('INPUT_LIMIT')
   const timeoutMs=options.timeoutMs ?? 30_000
   if (!Number.isSafeInteger(timeoutMs) || timeoutMs<1000 || timeoutMs>120_000) throw new Error('INVALID_TIMEOUT')
@@ -49,7 +49,7 @@ export async function openIsolatedPptxSession(input: {fileId: string; revision: 
   const binding={fileId:input.fileId,revision:input.revision}
   // tsx transforms the TypeScript child; the raw-import hook runs ahead of its load chain so
   // pptx-ops' `*.md?raw` op guides resolve as text modules inside the child.
-  const child=fork(fileURLToPath(childModule),[],{serialization:'advanced',env:{PATH:process.env.PATH??'',NODE_ENV:'test'},stdio:['ignore','ignore','ignore','ipc'],execArgv:['--import',fileURLToPath(tsxModule),'--import',fileURLToPath(mdHooks)]})
+  const child=fork(fileURLToPath(childModule),[],{serialization:'advanced',env:{PATH:process.env.PATH??'',NODE_ENV:process.env.NODE_ENV==='test'?'test':'development'},stdio:['ignore','ignore','ignore','ipc'],execArgv:['--import',fileURLToPath(tsxModule),'--import',fileURLToPath(mdHooks)]})
   let nextId=1
   const pending=new Map<number,{resolve:(value:unknown)=>void;reject:(error:Error)=>void;timer:NodeJS.Timeout}>()
   let closed=false
