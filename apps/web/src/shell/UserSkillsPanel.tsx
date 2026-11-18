@@ -1,3 +1,4 @@
+import './settings-select-b.css'
 import './settings-dialog-b.css'
 import './personal-skills-b.css'
 import {SettingsListPager} from './SettingsListPager'
@@ -112,7 +113,7 @@ export function UserSkillsPanel({client,onCloseGuardChange}: {client: ReturnType
     <p>导入说明用于指导已有工具，不会安装程序或开通额外能力；实际可用操作以当前编辑器和账号配置为准。</p>
     <h4>可安装的办公技能</h4>
     <p>从 DyOffice 推荐任务中选择，点击安装后才保存到当前账号；已有同名技能不会覆盖。</p>
-    <Space className="personal-skills-filters" wrap><Input.Search aria-label="搜索可安装技能" placeholder="搜索技能名称或说明" value={catalogSearch} allowClear onChange={event => {setCatalogSearch(event.target.value); setCatalogPage(1)}}/><Select aria-label="筛选技能格式" value={catalogFormat} onChange={value => {setCatalogFormat(value); setCatalogPage(1)}} options={[{value:'all',label:'全部格式'},...['docx','xlsx','pptx','pdf'].map(value => ({value,label:value.toUpperCase()}))]}/></Space>
+    <Space className="personal-skills-filters" wrap><Input.Search aria-label="搜索可安装技能" placeholder="搜索技能名称或说明" value={catalogSearch} allowClear onChange={event => {setCatalogSearch(event.target.value); setCatalogPage(1)}}/><Select classNames={{popup:{root:'settings-select-b'}}} aria-label="筛选技能格式" value={catalogFormat} onChange={value => {setCatalogFormat(value); setCatalogPage(1)}} options={[{value:'all',label:'全部格式'},...['docx','xlsx','pptx','pdf'].map(value => ({value,label:value.toUpperCase()}))]}/></Space>
     <Table className="personal-skills-catalog" rowKey="key" dataSource={catalog.slice((catalogPage-1)*6,catalogPage*6)} pagination={false} locale={{emptyText:'没有匹配的办公技能'}} columns={[
       {title:'技能',key:'skill',render:(_value,skill) => <><strong>{skill.name}</strong><p>{skill.description}</p><Space wrap>{skill.formats.map(format => <Tag key={format}>{format.toUpperCase()}</Tag>)}</Space></>},
       {title:'操作',key:'actions',render:(_value,skill) => <Space><Button autoInsertSpace={false} onClick={() => setView({name:skill.name,body:parseSkillFrontmatter(skill.source)?.body ?? skill.source})}>查看正文</Button><Button autoInsertSpace={false} disabled={!listed || busy || uncertain || skills.some(item => item.name === skill.key)} onClick={() => void install(skill)}>{skills.some(item => item.name === skill.key) ? '已添加' : '安装'}</Button></Space>},
