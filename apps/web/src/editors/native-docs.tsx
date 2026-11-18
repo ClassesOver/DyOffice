@@ -38,7 +38,12 @@ export async function mountDocsEditor(host: SessionFileHost,element: HTMLElement
   let changed = () => {}
   let disposed = false, downloading = false, actionError = ''
   let editorHandle: DocsEditorHandle | null = null
-  const registerEditor = (handle: DocsEditorHandle | null) => { editorHandle = handle }
+  const registerEditor = (handle: DocsEditorHandle | null) => {
+    if (disposed) return
+    const readinessChanged = !!editorHandle !== !!handle
+    editorHandle = handle
+    if (readinessChanged) changed()
+  }
   const unsubscribe = host.subscribe(() => changed())
   const assistantResult = await loadEditorAssistant({fileId,editorId:host.getEditorId()!,generation:()=>1})
   const assistant = assistantResult.assistant
