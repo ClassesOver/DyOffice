@@ -102,7 +102,7 @@ test('native DOCX assistant delivers selected private Skill through the personal
   const firstResponse = await firstTurn
   assert.equal(firstResponse.status(),200)
   diagnostic.stage('first-finished')
-  assert.equal(await firstResponse.finished(),null)
+  assert.equal(await diagnostic.finished(firstResponse),null)
   diagnostic.stage('first-ui-settled')
   await expect(page.locator('.ai-panel .ai-stop-btn')).toHaveCount(0)
   diagnostic.stage('wire')
@@ -123,7 +123,7 @@ test('native DOCX assistant delivers selected private Skill through the personal
   const secondResponse = await secondTurn
   assert.equal(secondResponse.status(),200)
   diagnostic.stage('second-finished')
-  assert.equal(await secondResponse.finished(),null)
+  assert.equal(await diagnostic.finished(secondResponse),null)
   diagnostic.stage('second-ui-settled')
   await expect(page.locator('.ai-panel .ai-stop-btn')).toHaveCount(0)
   assert.equal(net.writes, 2)
