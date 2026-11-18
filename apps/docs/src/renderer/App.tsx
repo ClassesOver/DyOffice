@@ -19,7 +19,8 @@ import {
   useState,
 } from 'react'
 import type { CSSProperties, MouseEvent as ReactMouseEvent, SetStateAction } from 'react'
-import { EditorContent, useEditor } from '@tiptap/react'
+import { EditorContent } from '@tiptap/react'
+import { useWordEditor } from './editor/use-word-editor'
 import type { Editor } from '@tiptap/core'
 import { handleDocsControl, type ControlRequest } from './control'
 import { DOMParser as PmDOMParser, type Mark as PmMark, Slice as PmSlice } from '@tiptap/pm/model'
@@ -808,7 +809,7 @@ function shadowPlanDiff(
   return diffs
 }
 
-export function App({ host }: { host?: { desktopActionsAvailable?: boolean; readOnly: boolean; assistantAvailable: boolean; assistant?: {sourceSkill?: import('@genoffice/agent-core').AgentSkill; transport: import('@genoffice/agent-core').AgentTransport; modelPicker: React.ReactNode; extraSkills?: readonly import('@genoffice/agent-core').AgentSkill[]; agents?: readonly import('@genoffice/ui').AssistantParticipant[]; onManageAgents?: () => void; control?: import('@genoffice/ui').AssistantControl | undefined}; preferenceScope: string; onEditorReady?(handle: import('./file-actions').DocsEditorHandle | null): void; lifecycle: import('./file-actions').DocsHostLifecycle; onDocumentEdited(): void; onOpenFailed(): void } } = {}) {
+export function App({ host }: { host?: { fileActions?: React.ReactNode; saveStatus?: React.ReactNode; desktopActionsAvailable?: boolean; readOnly: boolean; assistantAvailable: boolean; assistant?: {sourceSkill?: import('@genoffice/agent-core').AgentSkill; transport: import('@genoffice/agent-core').AgentTransport; modelPicker: React.ReactNode; extraSkills?: readonly import('@genoffice/agent-core').AgentSkill[]; agents?: readonly import('@genoffice/ui').AssistantParticipant[]; onManageAgents?: () => void; control?: import('@genoffice/ui').AssistantControl | undefined}; preferenceScope: string; onEditorReady?(handle: import('./file-actions').DocsEditorHandle | null): void; lifecycle: import('./file-actions').DocsHostLifecycle; onDocumentEdited(): void; onOpenFailed(): void } } = {}) {
   // subscribe to language switches for re-render; strings all go through module-level t, so memoized callbacks never capture stale closures
   const { lang } = useI18n()
   const [doc, setDoc] = useState<DocState | null>(null)
@@ -1315,7 +1316,7 @@ export function App({ host }: { host?: { desktopActionsAvailable?: boolean; read
 
   const editorRef = useRef<Editor | null>(null)
   const zoteroControllerRef = useRef<ZoteroDocumentController | null>(null)
-  const editor = useEditor({
+  const editor = useWordEditor({
     extensions: editorExtensions,
     content: { type: 'doc', content: [{ type: 'docParagraph' }] },
     editorProps: {
@@ -1848,6 +1849,7 @@ export function App({ host }: { host?: { desktopActionsAvailable?: boolean; read
   useEffect(() => {
     let cancelRespellKick = () => {}
     localStorage.setItem(SPELLCHECK_KEY, spellcheck ? '1' : '0')
+    if (!editor) return
     spellDiag(
       `toggle spellcheck=${spellcheckActive} platform=${navigator.platform} composing=${editor.view.composing}`,
     )
@@ -2096,6 +2098,7 @@ export function App({ host }: { host?: { desktopActionsAvailable?: boolean; read
     editRestriction === 'comments'
   /** comments restriction: body read-only but adding comments stays allowed */
   const commentsAllowed = !writeLocked && editRestriction === 'comments'
+  const canComment = !readMode && (!isProtected || commentsAllowed)
   /** trackedChanges restriction: editing allowed, revision recording forced on */
   const trackChangesForced = !writeLocked && editRestriction === 'trackedChanges'
 
@@ -3270,7 +3273,7 @@ export function App({ host }: { host?: { desktopActionsAvailable?: boolean; read
   /** App state bundle for the extracted review actions (review-actions.ts); refreshed every render. */
   const reviewCtxRef = useRef<ReviewContext>(null as unknown as ReviewContext)
   reviewCtxRef.current = {
-    canComment: !readMode && (!isProtected || commentsAllowed),
+    canComment,
     editor,
     doc,
     dirtyRef,
@@ -4101,7 +4104,7 @@ export function App({ host }: { host?: { desktopActionsAvailable?: boolean; read
 
   // status-bar page number: real page slicing (same algorithm as the pagination preview). Edits remeasure with debounce; scrolling only relocates
   useEffect(() => {
-    if (!doc || !section) {
+    if (!editor || !doc || !section) {
       setPageInfo({ current: 1, total: 1 })
       setLastPageNo(null)
       setEdgeSectionPages(null)
@@ -7207,7 +7210,7 @@ export function App({ host }: { host?: { desktopActionsAvailable?: boolean; read
   useEffect(() => {
     const parsed = doc?.parsed
     const upserts = Object.values(styleUpserts)
-    if (!parsed || upserts.length === 0) {
+    if (!editor || !parsed || upserts.length === 0) {
       liveStylesRef.current = null
       setLiveStyles(null)
       return
@@ -7256,6 +7259,7 @@ export function App({ host }: { host?: { desktopActionsAvailable?: boolean; read
     [],
   )
   const queueAdd = (instruction: string): void => {
+    if (!editor) return
     const { from, to, empty } = editor.state.selection
     if (empty || editQueueRef.current.length >= EDIT_QUEUE_MAX) return
     const qid = `q${++queueSeqRef.current}`
@@ -7270,19 +7274,23 @@ export function App({ host }: { host?: { desktopActionsAvailable?: boolean; read
   const queueUpdate = (qid: string, instruction: string): void =>
     setEditQueue((queue) => queue.map((i) => (i.qid === qid ? { ...i, instruction } : i)))
   const queueRemove = (qid: string): void => {
+    if (!editor) return
     removeQueueAnchors(editor, [qid])
     setEditQueue((queue) => queue.filter((i) => i.qid !== qid))
   }
   const queueClear = (): void => {
+    if (!editor) return
     clearQueueAnchors(editor)
     setEditQueue([])
   }
   /** a submission hands its items to the run and drops them from the queue */
   const queueConsume = (qids: string[]): void => {
+    if (!editor) return
     removeQueueAnchors(editor, qids)
     setEditQueue((queue) => queue.filter((i) => !qids.includes(i.qid)))
   }
   const queueFocus = (qid: string): void => {
+    if (!editor) return
     const selection = selectionForAnchor(editor, qid)
     if (!selection) return
     editor.view.dispatch(editor.state.tr.setSelection(selection).scrollIntoView())
@@ -7843,7 +7851,7 @@ export function App({ host }: { host?: { desktopActionsAvailable?: boolean; read
     setCommentPopup(null)
   }, [commentsUi.cards, commentsUi.panel])
 
-  // selection / popup changes only restyle the margin layer: redraw it without a pagination pass
+  // 选择、浮层或批注权限变化仅重绘页边层，无需重新分页。
   useEffect(() => {
     if (!editor || !doc) return
     const pm = document.querySelector('.editor-scroll .ProseMirror') as HTMLElement | null
@@ -7858,14 +7866,15 @@ export function App({ host }: { host?: { desktopActionsAvailable?: boolean; read
       editor.view,
       marginHandlersRef.current,
     )
-    // only the flags on the root matter here; the pagination pass owns every other input
+    // 其余布局输入由分页流程处理。
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [commentFocus?.id, commentPopup])
+  }, [commentFocus?.id, commentPopup, canComment])
 
   // Simple Markup overlay callbacks (the overlay is rebuilt per pagination
   // frame; a stable object keeps the DOM listeners on the current editor)
   const marginHandlersRef = useRef<MarginHandlers>({})
   marginHandlersRef.current = {
+    canComment,
     onChangeBar: (pos) => {
       setRevisionDisplay('all')
       if (!editor) return
@@ -8364,6 +8373,8 @@ export function App({ host }: { host?: { desktopActionsAvailable?: boolean; read
       )}
       <Ribbon
         desktopActionsAvailable={host?.desktopActionsAvailable}
+        fileActions={host?.fileActions}
+        trailingActions={host?.saveStatus}
         actionsRef={ribbonActionsRef}
         quickActions={quickActions}
         mergeSource={mergeSource}
@@ -8825,7 +8836,7 @@ export function App({ host }: { host?: { desktopActionsAvailable?: boolean; read
             )}
             {doc && commentsUi.panel && (
               <CommentsPanel
-                canComment={!readMode && (!isProtected || commentsAllowed)}
+                canComment={canComment}
                 comments={comments}
                 docNode={editor.state.doc}
                 composing={commentComposing}

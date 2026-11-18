@@ -102,6 +102,8 @@ export function mergeChangeLines(segs: ChangeLine[]): ChangeLine[] {
 }
 
 export interface MarginHandlers {
+  /** 正文只读时仍可能允许批注，不能由 editor.isEditable 推断。 */
+  canComment?: boolean
   onChangeBar?: (pos: number) => void
   /** anchor icon clicked */
   onCommentBalloon?: (id: string) => void
@@ -116,7 +118,7 @@ export interface MarginHandlers {
 
 type BubbleHandlers = Pick<
   MarginHandlers,
-  'onCommentReply' | 'onCommentResolve' | 'onCommentEdit' | 'onCommentDelete'
+  'canComment' | 'onCommentReply' | 'onCommentResolve' | 'onCommentEdit' | 'onCommentDelete'
 >
 
 function makeBalloonIcon(c: CommentInfo, on: boolean, onJump: () => void): HTMLElement {
@@ -224,6 +226,7 @@ function makeCardActions(
   startEdit: () => void,
   flushEdits: () => void,
 ): HTMLElement | null {
+  if (h.canComment === false) return null
   const actions = document.createElement('span')
   actions.className = 'comment-card-actions'
   actions.addEventListener('click', (e) => e.stopPropagation())
@@ -413,7 +416,7 @@ function makeBubble(
   }
   addEntry(root, true)
   for (const r of replies) addEntry(r, false)
-  const onReply = h.onCommentReply
+  const onReply = h.canComment === false ? undefined : h.onCommentReply
   if (onReply) {
     // Word's margin card: the Reply box is part of the selected card (.active, CSS), posts on Enter
     const input = document.createElement('input')
@@ -883,6 +886,7 @@ export function syncMarginAnnotations(
   const placed: Placed[] = []
   const icons: Placed[] = []
   const bubbleHandlers: BubbleHandlers = {
+    canComment: handlers?.canComment,
     onCommentReply: handlers?.onCommentReply,
     onCommentResolve: handlers?.onCommentResolve,
     onCommentEdit: handlers?.onCommentEdit,

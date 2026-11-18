@@ -1,3 +1,4 @@
+import {DocumentNotifications} from './document-notifications'
 import {createEditorCloseLifecycle,installEditorCloseLifecycle} from './editor-close-lifecycle'
 import ReactDOM from 'react-dom/client'
 import {useState} from 'react'
@@ -104,17 +105,19 @@ export async function mountSlidesEditor(host: SessionFileHost, container: HTMLEl
     const state = host.getState(fileId)
     const readOnly = failed || takingOver || !state.lease || state.status === 'conflict' || state.status === 'unknown' || bridge.needsConfirmation() || state.status === 'unauthorized'
     const status = !editorMounted ? (takingOver ? text.takingOver : actionError || text.readOnly) : failed ? text.failed : !loaded ? text.opening : (state.status === 'unknown' || bridge.needsConfirmation()) ? text.unknown : state.status === 'unauthorized' ? text.unauthorized : takingOver ? text.takingOver : !state.lease || state.status === 'conflict' ? (dirty() ? text.takeoverDirty : initialLease ? text.conflict : text.readOnly) : downloading ? text.downloadSaving : actionError || (bridge.isDirty() ? '' : text.ready)
+    const notice = realtime.notice(locale)
+    const warning = failed || state.status === 'unknown' || bridge.needsConfirmation() || state.status === 'unauthorized' || (!state.lease && (loaded || !editorMounted) && !takingOver) || state.status === 'conflict' ? status : actionError
     const historical = (!editorMounted || loaded) && !failed && !state.lease && !dirty() && state.status !== 'unknown' && state.status !== 'unauthorized' && !bridge.needsConfirmation() && !takingOver
     const hostProps: SlidesAppHost = {readOnly, inPlaceSave: true, assistantAvailable: false, onDeckOpened: () => setLoaded(true), onOpenFailed: () => setFailed(true), onEditorReady: handle => { editor = handle }}
     return <div className="dyoffice-native-slides">
-      <div className="dyoffice-slides-state" role="status"><span>{status}</span>
-        {realtime.notice(locale) && <span>{realtime.notice(locale)}</span>}
+      <div className="dyoffice-slides-state" role="status"><span title={warning || status}>{warning ? (locale === 'zh' ? '需要处理' : 'Needs attention') : status}</span>
         <button className="dyoffice-slides-download" disabled={!loaded || failed || !editor || !state.lease || state.status === 'conflict' || state.status === 'unauthorized' || downloading || takingOver} onClick={() => { void saveAndDownload() }}>{text.saveDownload}</button>
         {historical && <a href={`/api/v1/files/${fileId}/content?revision=${state.revision.revision}`} download={state.name}>{text.downloadReadOnly}</a>}
-        {!state.lease && (!editorMounted || !failed) && state.status !== 'unauthorized' && <button className="dyoffice-slides-takeover" disabled={(editorMounted && (!loaded || !editor)) || downloading || takingOver || dirty() || state.status === 'unknown' || bridge.needsConfirmation()} onClick={() => { void takeOver() }}>{text.takeover}</button>}
-        {bridge.needsConfirmation() && <button data-save-fence-allow="confirm" disabled={confirming} onClick={() => { void confirmSave() }}>{text.retry}</button>}
-        {actionError && status !== actionError && <span className="dyoffice-slides-action-error">{actionError}</span>}
       </div>
+      <DocumentNotifications locale={locale} items={[
+        ...(warning ? [{id:'document-state',level:'error' as const,title:locale === 'zh' ? '文档需要处理' : 'Document needs attention',message:warning,actions:<>{!state.lease && (!editorMounted || !failed) && state.status !== 'unauthorized' && <button className="dyoffice-slides-takeover" disabled={(editorMounted && (!loaded || !editor)) || downloading || takingOver || dirty() || state.status === 'unknown' || bridge.needsConfirmation()} onClick={() => { void takeOver() }}>{text.takeover}</button>}{bridge.needsConfirmation() && <button data-save-fence-allow="confirm" disabled={confirming} onClick={() => { void confirmSave() }}>{text.retry}</button>}</>}] : []),
+        ...(notice ? [{id:'version',level:'info' as const,title:locale === 'zh' ? '版本同步' : 'Version updates',message:notice}] : []),
+      ]} />
       {editorMounted && <App host={hostProps} />}
     </div>
   }

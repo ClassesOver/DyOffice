@@ -7,3 +7,8 @@
 .dyoffice-sheets-state button:disabled { opacity: 0.55; cursor: default; }
 .dyoffice-sheets-state .dyoffice-sheets-action-error { margin-inline-start: 0.75rem; color: var(--danger, #b42318); }
 .dyoffice-sheets-state .dyoffice-sheets-download { font-weight: 600; }
+
+/* Saving and permission changes update content without resizing the editor. */
+.dyoffice-sheets-state { display: flex; align-items: center; gap: 12px; height: 36px; min-height: 36px; box-sizing: border-box; white-space: nowrap; overflow-x: auto; }
+.dyoffice-sheets-state > span:first-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.dyoffice-sheets-state button, .dyoffice-sheets-state a { flex: none; margin-inline-start: 0; }

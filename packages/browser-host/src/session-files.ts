@@ -35,7 +35,8 @@ export function createSessionFileHost({ fetchImpl = fetch, editorId = crypto.ran
     const controller = new AbortController(), keepalive = init.keepalive === true
     requests.set(controller,keepalive)
     try {
-      const reply = await fetchImpl(path,{ ...init,credentials: 'same-origin',mode: 'same-origin',redirect: 'error',cache: 'no-store',signal: controller.signal })
+      // Firefox otherwise sends Origin: null for writes under the page's no-referrer policy.
+      const reply = await fetchImpl(path,{ ...init,credentials: 'same-origin',mode: 'same-origin', referrerPolicy: 'same-origin',redirect: 'error',cache: 'no-store',signal: controller.signal })
       if (reply.redirected || (disposed && !keepalive)) { discard(reply); throw hostError('UNAVAILABLE','request unconfirmed') }
       return reply
     } catch (error) { controller.abort(); if (error instanceof HostError) throw error; throw hostError('UNAVAILABLE','network') }

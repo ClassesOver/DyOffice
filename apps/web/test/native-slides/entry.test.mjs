@@ -119,7 +119,7 @@ async function until(condition, label, timeoutMs = 8000) {
   }
 }
 
-const statusText = container => container.querySelector('.dyoffice-slides-state')?.textContent ?? ''
+const statusText = container => [...container.querySelectorAll('.dyoffice-slides-state,.document-notification')].map(node=>node.textContent).join(' ')
 // The entry's bridge is private; recovery state is observable through the status bar.
 const bridgeProbe = () => 'n/a'
 

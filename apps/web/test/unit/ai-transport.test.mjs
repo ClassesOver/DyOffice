@@ -92,6 +92,7 @@ test('stream and cancellation requests disallow redirects', async () => {
     assert.equal(init.credentials,'same-origin')
     assert.equal(init.redirect,'error')
     assert.equal(init.mode,'same-origin')
+    assert.equal(init.referrerPolicy, 'same-origin')
   }
 })
 

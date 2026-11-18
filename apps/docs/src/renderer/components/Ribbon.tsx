@@ -259,6 +259,7 @@ import {
   IconComments,
 } from './icons'
 interface RibbonProps {
+  fileActions?: React.ReactNode
   desktopActionsAvailable?: boolean
   /** App keyboard shortcuts reuse ribbon closures through here (font-size stepping keeps its coalescing) */
   actionsRef?: React.MutableRefObject<{
@@ -720,6 +721,7 @@ function RibbonInner({
   actionsRef,
   quickActions,
   desktopActionsAvailable = true,
+  fileActions,
   trailingActions,
   editor,
   formatState: fs,
@@ -2209,7 +2211,7 @@ function RibbonInner({
         className={`ribbon-tabs ${IN_TAB ? '' : IS_MAC ? 'ribbon-tabs-mac' : 'ribbon-tabs-win'}`}
         onDoubleClick={collapse.onTabsDoubleClick}
       >
-        {!IS_MAC && (
+        {(!IS_MAC || !desktopActionsAvailable) && (
           <div className="file-tab-wrap">
             <button
               className={`ribbon-tab ribbon-tab-file ${dropdown === 'file' ? 'open' : ''}`}
@@ -2259,6 +2261,7 @@ function RibbonInner({
                 >
                   {t('ribbonNameWithAi')}
                 </button>
+                {fileActions && <div onClick={() => setDropdown(null)}>{fileActions}</div>}
                 <div className="file-menu-sep" />
                 {convertItems}
               </div>

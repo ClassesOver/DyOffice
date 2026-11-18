@@ -7,3 +7,8 @@
 .dyoffice-slides-state button:disabled { opacity: 0.55; cursor: default; }
 .dyoffice-slides-state .dyoffice-slides-action-error { margin-inline-start: 0.75rem; color: var(--danger, #b42318); }
 .dyoffice-slides-state .dyoffice-slides-download { font-weight: 600; }
+
+/* Saving and permission changes update content without resizing the editor. */
+.dyoffice-slides-state { display: flex; align-items: center; gap: 12px; height: 36px; min-height: 36px; box-sizing: border-box; white-space: nowrap; overflow-x: auto; }
+.dyoffice-slides-state > span:first-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.dyoffice-slides-state button, .dyoffice-slides-state a { flex: none; margin-inline-start: 0; }

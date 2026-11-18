@@ -63,6 +63,7 @@ test('all session requests fix origin, forbid redirects, including CSRF bytes PU
   for (const { path, init } of f.calls) {
     assert.match(path, /^\/api\//)
     assert.equal(init.mode, 'same-origin')
+    assert.equal(init.referrerPolicy, 'same-origin')
     assert.equal(init.redirect, 'error')
     assert.equal(init.credentials, 'same-origin')
     assert.equal(init.cache, 'no-store')

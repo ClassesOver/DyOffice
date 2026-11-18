@@ -1,3 +1,4 @@
+import {DocumentNotifications} from './document-notifications'
 import {createEditorCloseLifecycle,installEditorCloseLifecycle} from './editor-close-lifecycle'
 import {createAnalysisDocumentTarget} from '../../../../packages/browser-host/src/analysis-document-target.ts'
 import ReactDOM from 'react-dom/client'
@@ -94,16 +95,18 @@ export async function mountSheetsEditor(host: SessionFileHost, container: HTMLEl
     const state = host.getState(fileId)
     const readOnly = failed || takingOver || !state.lease || state.status === 'conflict' || state.status === 'unknown' || bridge.needsConfirmation() || state.status === 'unauthorized'
     const status = failed ? text.failed : !loaded ? text.opening : (state.status === 'unknown' || bridge.needsConfirmation()) ? text.unknown : state.status === 'unauthorized' ? text.unauthorized : takingOver ? text.takingOver : !state.lease || state.status==='conflict' ? (dirty() ? text.takeoverDirty : initialLease ? text.conflict : text.readOnly) : downloading ? text.downloadSaving : actionError || (bridge.isDirty() ? '' : text.ready)
+    const notice = realtime.notice(locale)
+    const warning = failed || state.status === 'unknown' || bridge.needsConfirmation() || state.status === 'unauthorized' || (!state.lease && loaded && !takingOver) || state.status === 'conflict' ? status : actionError
     const historical = loaded && !failed && !state.lease && !dirty() && state.status !== 'unknown' && state.status !== 'unauthorized' && !bridge.needsConfirmation() && !takingOver
     return <div className="dyoffice-native-sheets">
-      <div className="dyoffice-sheets-state" role="status"><span>{status}</span>
-        {realtime.notice(locale) && <span>{realtime.notice(locale)}</span>}
+      <div className="dyoffice-sheets-state" role="status"><span title={warning || status}>{warning ? (locale === 'zh' ? '需要处理' : 'Needs attention') : status}</span>
         <button className="dyoffice-sheets-download" disabled={!loaded || failed || !editor || !state.lease || state.status==='conflict' || state.status==='unauthorized' || downloading || takingOver} onClick={()=>{void saveAndDownload()}}>{text.saveDownload}</button>
         {historical && <a href={`/api/v1/files/${fileId}/content?revision=${state.revision.revision}`} download={state.name}>{text.downloadReadOnly}</a>}
-        {!state.lease && !failed && state.status!=='unauthorized' && <button disabled={!loaded || !editor || downloading || takingOver || dirty() || state.status==='unknown' || bridge.needsConfirmation()} onClick={()=>{void takeOver()}}>{text.takeover}</button>}
-        {bridge.needsConfirmation() && <button data-save-fence-allow="confirm" disabled={confirming} onClick={()=>{void confirmSave()}}>{text.retry}</button>}
-        {actionError && status!==actionError && <span className="dyoffice-sheets-action-error">{actionError}</span>}
       </div>
+      <DocumentNotifications locale={locale} items={[
+        ...(warning ? [{id:'document-state',level:'error' as const,title:locale === 'zh' ? '文档需要处理' : 'Document needs attention',message:warning,actions:<>{!state.lease && !failed && state.status!=='unauthorized' && <button disabled={!loaded || !editor || downloading || takingOver || dirty() || state.status==='unknown' || bridge.needsConfirmation()} onClick={()=>{void takeOver()}}>{text.takeover}</button>}{bridge.needsConfirmation() && <button data-save-fence-allow="confirm" disabled={confirming} onClick={()=>{void confirmSave()}}>{text.retry}</button>}</>}] : []),
+        ...(notice ? [{id:'version',level:'info' as const,title:locale === 'zh' ? '版本同步' : 'Version updates',message:notice}] : []),
+      ]} />
       <App queuedWorkbookAtBoot host={{readOnly,inPlaceSave:true,assistantAvailable,...(assistant?{assistant}:{}),onWorkbookOpened:()=>setLoaded(true),onOpenFailed:()=>setFailed(true),onEditorReady:handle=>{editor=handle}}} />
     </div>
   }

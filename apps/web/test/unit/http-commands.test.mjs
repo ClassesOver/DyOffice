@@ -109,6 +109,7 @@ test('requests forbid cross-origin mode and redirects', async () => {
   })
   await c.proposeCommand(envelope)
   assert.equal(opts.mode, 'same-origin')
+    assert.equal(opts.referrerPolicy, 'same-origin')
   assert.equal(opts.redirect, 'error')
   assert.ok(opts.signal instanceof AbortSignal)
 })

@@ -485,3 +485,45 @@
 - 保留远端e30a0225主题测试与7fb44478只读批注/历史权限修复，精确导入并rebase，无覆盖。最终相关8文件101项通过，Web docs类型/生产构建通过（既有chunk提示），边界1342文件0违规、git diff --check通过；日志 `/tmp/dyoffice-margin-menu-{red,redraw-red,sibling-red,merged-tests,merged-type,merged-build,merged-boundary}.log`。独立只读复核无阻塞，不宣称权限修复的完整真实保存集成已重跑。
 - 最终构建1440/390各9组菜单检查通过：焦点和导航、原生/229 IME Escape、菜单/浮层两级Escape、双向Tab、Enter激活编辑、外部与同排赞点击关闭。通过合成字体loadingdone触发真实分页重测并确认旧菜单节点已断开，重建菜单仍保留当前项目焦点。证据 `/tmp/dyoffice-ui-audit/word-margin-menu-final-{1440,390}/report.json`。
 - 最终构建同时复验两尺寸回复/Ctrl编辑/Meta编辑的四类IME Escape共24次：草稿、浮层保留，普通Escape正常关闭，0页面异常。证据 `/tmp/dyoffice-ui-audit/word-margin-ime-escape-menu-final-{1440,390}/report.json`。全部文档/lease写mock，其他业务写blocked；合成信号不代替实体输入法。全量UI穷举仍在进行。
+
+
+## 正文页边批注的只读权限入口
+
+- 正式Word创建批注后切换“查看”模式，正文已contenteditable=false，但正文批注浮层仍提供更多、解决、赞、回复4个可变更入口；浏览器红证据 `/tmp/dyoffice-ui-audit/word-margin-readonly-red-1440/report.json`。最初脚本用仅匹配contenteditable=true的定位器等待false属于harness错误，已校准后才计上述产品红。
+- 复用App已有的canComment表达式，供reviewCtx、CommentsPanel及marginHandlers共同使用；权限变化主动重绘页边层，false隐藏主批注/回复的操作与输入框，同时保留批注内容及正文锚点导航。显式权限独立于editor.isEditable，允许“正文只读但可批注”的保护模式；未放松业务动作的当前权限校验。
+- 新增3项原实现2红1绿：只读保留内容/导航并移除控件、正文不可编辑时仍允许显式授权的批注回复、编辑中降权不发布草稿且恢复后不重开旧编辑。相关6文件108项通过；类型/生产构建通过（既有chunk提示），边界1342文件0违规、git diff --check通过。日志 `/tmp/dyoffice-margin-readonly-{red,green,final-tests,type,build,boundary}.log`。独立只读复核未发现阻塞。
+- 最终构建1440/390各3场景全部通过：“查看”保留内容/导航并隐藏变更控件；退出查看恢复操作并正常回复；通过mock租约renew 409模拟host.readOnly动态降权，已有编辑框立即移除、未提交草稿未发布，保存按钮禁用，正文及已有两条批注保留。证据 `/tmp/dyoffice-ui-audit/word-margin-readonly-green-{1440,390}/report.json`，0页面异常，文档/lease写mock，其他业务写blocked，不计为真实多端租约及保存验收。
+- 暂停后恢复任务时保留远端0225adda的主页B样式与测试提交，精确导入ff合入；Word运行源码未受该提交影响，合入后相关6文件108项及边界检查再次通过，日志 `/tmp/dyoffice-margin-readonly-merged-tests.log`。没有将本轮Word专项视为主页B浏览器验收或全量UI穷举完成。
+
+
+## Firefox Word 启动 trackChanges 存储被清空
+
+- 用户报告合并并构建后Firefox打开Word报 `trackMoves ... storage.trackChanges is undefined`。用现有正式native-docx入口harness、Firefox1543复现完全相同pageerror，编辑器60秒未出现；证据 `/tmp/dyoffice-ui-audit/word-firefox-startup-red-1440/report.json`。Chromium同流程及CPU限速未复现，未据此否认Firefox问题。
+- Tiptap useEditor默认在render阶段创建实例，其初始清理计时器可在React passive effects前执行，销毁实例并清空extensionStorage；当前render的后续effect仍捕获旧editor。新增真实useEditor/React时序回归，以layout effect推进清理计时器，原实现拿到undefined修订存储，先红。通过useWordEditor统一immediatelyRender:false，组件提交后再创建；补齐原来默认非空假设下的拼写/分页/样式预览与AI队列初始化空值边界，未给trackChanges伪造存储或禁用修订功能。
+- 最终5文件60项通过，Web docs类型/生产构建通过（既有chunk提示）、git diff --check通过。日志 `/tmp/dyoffice-word-startup-{test-red,green,final-tests,type,build}.log`。
+- 最终构建Firefox和Chromium桌面均正常打开、正文输入、新建批注/回复、查看/恢复及mock lease冲突降权，0页面异常。证据 `/tmp/dyoffice-ui-audit/word-firefox-startup-green-1440/report.json` 与 `/tmp/dyoffice-ui-audit/word-margin-readonly-startup-fixed-1440/report.json`。文档/lease mock，其他业务写blocked，不替代真实保存验收。服务已重启HTTP200。
+
+### Firefox 功能区因 Origin 被置空而整体只读
+
+- 真实登录会话下 `/auth/me`、CSRF、文档读取均 200，但 Firefox 的编辑租约和 realtime ticket 返回 403；页面误显示登录失效并禁用编辑。
+- 对照实验：页面 `Referrer-Policy: no-referrer` 与 fetch `mode: same-origin` 组合使 Firefox 写请求携带 `Origin: null`；仅将请求 `referrerPolicy` 改为 `same-origin`，ticket 从 403 恢复 201。没有放宽服务器 Origin、CSRF、会话或文件授权检查。
+- 文件传输、实时票据、HTTP 命令、恢复操作、AI 请求/取消显式使用同源 referrer 策略；继续禁止跨域请求及重定向。
+- 5 个相关测试文件新增请求策略断言，修改前分别失败，修改后 80 项通过。Web/Word 类型检查、构建通过，边界扫描 1343 文件、0 违规。
+- 真实 Firefox、Chromium 打开现有 Word：租约 200、ticket 201、收到 WebSocket state、正文 contenteditable=true、加粗及保存下载按钮可用，无 pageerror、无 401/403。测试不提交正文改动，测试编辑器租约均释放 204。
+- 本地复测脚本 `.dyoffice/word-origin-check.mjs`；结果 `/tmp/dyoffice-word-origin-browser.json`。另存为、邮件合并等已有 Web 能力限制不包含在本次修复中。
+
+### Word Web 保存状态栏收敛
+
+- 正常编辑时移除独立横栏，在功能区右侧显示紧凑状态；下载前说明保留为菜单提示，不再常驻挤占正文空间。
+- “保存并下载”和“下载已保存版本”并入现有“文件”菜单，复用原保存确认和版本校验逻辑；Web 在 macOS 上也保留该菜单入口。
+- 只读、登录失效、保存失败及版本通知按需显示提示条；未认证时不显示无效的接管按钮，接管失败提供可见反馈。
+- Word 类型检查、构建及边界检查通过。真实 Firefox/Chromium 验证正常横栏不存在、状态可见、文件菜单两项下载可访问；不提交真实正文写入，测试租约均释放。
+- Firefox mock 文档回归覆盖查看/编辑切换、批注权限及租约失效；失效提示条可见且菜单中的保存下载禁用。截图 `/tmp/dyoffice-word-status-firefox.png`、`/tmp/dyoffice-word-file-menu-firefox.png`、`/tmp/dyoffice-word-status-readonly.png`。
+
+### 四类文档统一消息通知
+
+- 新增共用文档通知组件，覆盖 Word、XLSX、PPTX 原生编辑器及 XLSX/PPTX/PDF 只读预览；通知由独立固定层承载，不改变编辑器内容区域尺寸。
+- 信息消息可自动收起并从“消息通知”入口重新查看；错误消息保留到关闭或操作成功。权限接管、保存结果确认和预览重试作为通知卡片内的可操作按钮。
+- 同步提示改为“正在恢复版本同步，文档仍可编辑和保存”，去掉面向用户的 HTTP 术语。保存状态保持在各编辑器既有状态区。
+- 通知组件行为与 PDF/XLSX/PPTX 预览重试相关测试 6 项通过；PPTX 原生入口 7 项通过；四入口类型检查、Web/Word/Sheets/Slides/local-shell 构建通过。
+- Firefox Word 桌面及窄屏验证通知关闭/重新打开时编辑区位置和高度不变。Chromium PDF、XLSX、PPTX 在 390px 与 1440px 下验证错误通知重试清除、信息通知重开、无脚本错误且入口未溢出视口。

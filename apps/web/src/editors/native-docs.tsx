@@ -1,3 +1,4 @@
+import {DocumentNotifications} from './document-notifications'
 import {createEditorCloseLifecycle} from './editor-close-lifecycle'
 import {createAnalysisDocumentTarget} from '../../../../packages/browser-host/src/analysis-document-target.ts'
 import { useEffect, useState } from 'react'
@@ -85,17 +86,25 @@ export async function mountDocsEditor(host: SessionFileHost,element: HTMLElement
       window.addEventListener('focus',focus)
       return () => window.removeEventListener('focus',focus)
     },[])
-    const status = failed ? text.failed : state.status === 'unknown' ? text.unknown : state.status === 'unauthorized' ? text.unauthorized : !state.lease ? (initialLease ? text.conflict : text.readOnly) : downloading ? text.downloadSaving : actionError || (bridge.getState().dirty ? '' : text.ready)
+    const local = bridge.getState()
+    const warning = failed ? text.failed : state.status === 'unknown' ? text.unknown : state.status === 'unauthorized' ? text.unauthorized : !state.lease && loaded ? (initialLease ? text.conflict : text.readOnly) : actionError
+    const notice = realtime.notice(locale)
+    const status = !loaded ? text.opening : downloading ? text.downloadSaving : state.status === 'saving' || local.status === 'saving' ? (locale === 'zh' ? '正在保存…' : 'Saving…') : local.dirty ? (locale === 'zh' ? '未保存' : 'Unsaved') : text.ready
+    const saveStatus = <span className="dyoffice-docs-persistence-state" role="status" data-attention={Boolean(warning || notice)} data-native-save={local.nativeSaveOutcome} data-incomplete-reasons={local.nativeSaveReasons.join(',')} data-dirty={String(local.dirty)} title={warning || [status, notice].filter(Boolean).join(' · ')}>{warning ? (locale === 'zh' ? '需要处理' : 'Needs attention') : status}</span>
+    const fileActions = <>
+      <div className="file-menu-sep" />
+      <button className="dyoffice-docs-save-download" title={text.saveDownloadVersionHint} disabled={!loaded || failed || !editorHandle || !state.lease || state.status !== 'idle' || downloading} onClick={() => { void saveAndDownload() }}>{text.saveDownload}</button>
+      <a className="dyoffice-docs-download" href={`/api/v1/files/${fileId}/content?revision=${state.revision.revision}`} download>{text.download}</a>
+    </>
     return <div className="dyoffice-native-docs">
-      <div className="dyoffice-docs-state" role="status"><span className="dyoffice-docs-persistence-state" data-native-save={bridge.getState().nativeSaveOutcome} data-incomplete-reasons={bridge.getState().nativeSaveReasons.join(',')} data-dirty={String(bridge.getState().dirty)}>{status}</span>
-        {realtime.notice(locale) && <span className="dyoffice-docs-notification-state">{realtime.notice(locale)}</span>}
-        <button className="dyoffice-docs-save-download" title={text.saveDownloadVersionHint} disabled={!loaded || failed || !editorHandle || !state.lease || state.status !== 'idle' || downloading} onClick={() => { void saveAndDownload() }}>{text.saveDownload}</button>
-        <span className="dyoffice-docs-save-download-hint">{text.saveDownloadVersionHint}</span>
-        <a href={`/api/v1/files/${fileId}/content?revision=${state.revision.revision}`} download>{text.download}</a>
-        {!state.lease && !failed && <button onClick={() => { void host.takeoverLease(fileId).then(() => { initialLease = true }).catch(() => {}) }}>{text.takeover}</button>}
+      <DocumentNotifications locale={locale} items={[
+        ...(warning ? [{id:'document-state',level:'error' as const,title:locale === 'zh' ? '文档需要处理' : 'Document needs attention',message:warning,actions:<>
+        {!state.lease && !failed && state.status !== 'unauthorized' && <button onClick={() => { void host.takeoverLease(fileId).then(() => { initialLease = true }).catch(() => { actionError = text.takeoverFailed; changed() }) }}>{text.takeover}</button>}
         {state.status === 'unknown' && <button onClick={() => { void host.reconcile(fileId).then(() => changed()).catch(() => {}) }}>{text.retry}</button>}
-      </div>
-      <App host={{ desktopActionsAvailable:false,readOnly: !loaded || failed || !state.lease,assistantAvailable,assistant,preferenceScope: fileId,onEditorReady: registerEditor,lifecycle: { ...bridge.lifecycle,documentOpened() { bridge.lifecycle.documentOpened(); setLoaded(true) } },onDocumentEdited: bridge.lifecycle.edited,onOpenFailed: () => setFailed(true) }} />
+      </>}] : []),
+        ...(notice ? [{id:'version',level:'info' as const,title:locale === 'zh' ? '版本同步' : 'Version updates',message:notice}] : []),
+      ]} />
+      <App host={{ fileActions,saveStatus,desktopActionsAvailable:false,readOnly: !loaded || failed || !state.lease,assistantAvailable,assistant,preferenceScope: fileId,onEditorReady: registerEditor,lifecycle: { ...bridge.lifecycle,documentOpened() { bridge.lifecycle.documentOpened(); setLoaded(true) } },onDocumentEdited: bridge.lifecycle.edited,onOpenFailed: () => setFailed(true) }} />
     </div>
   }
   const root = createRoot(element)
