@@ -112,3 +112,14 @@ describe('same-process Web inline save staging',()=>{
   await expect(stageEditsForSave(api,SESSION,edits(1))).rejects.toThrow(/Invalid Web save limit/)
  })
 })
+
+
+it('explicitly undefined native preload hint preserves the original chunked save path',async()=>{
+ const {api,begins,chunks}=recordingApi()
+ api.saveEditsInlineMaxBytes=undefined
+ const staged=await stageEditsForSave(api,SESSION,edits(10001))
+ expect(staged.edits).toEqual([])
+ expect(staged.editsTransferId).toBe(begins[0]?.transferId)
+ expect(begins).toHaveLength(1)
+ expect(chunks.reduce((sum,chunk)=>sum+chunk.count,0)).toBe(10001)
+})

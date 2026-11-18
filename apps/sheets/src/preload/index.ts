@@ -82,6 +82,8 @@ import {
 import { installDropOpenBridge } from '@genoffice/electron-utils/drop-open'
 
 const desktopApi: DesktopApi = {
+  // Native saves retain IPC chunking; only the same-process Web bridge opts in.
+  saveEditsInlineMaxBytes: undefined,
   getLanguage: () => ipcRenderer.invoke('app:get-language'),
   openSourcePath: (path: string) => ipcRenderer.invoke('home:open-path', path),
   onLanguageChanged(handler) {

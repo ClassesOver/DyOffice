@@ -8,7 +8,7 @@ import {
 
 /// The slice of desktopApi the staging step needs (injectable for tests).
 export interface SaveEditsTransferApi {
-  saveEditsInlineMaxBytes?: number
+  saveEditsInlineMaxBytes?: number | undefined
   beginSaveEditsTransfer(request: {
     sessionId: string
     transferId: string
