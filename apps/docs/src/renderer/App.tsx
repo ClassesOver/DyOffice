@@ -3269,6 +3269,7 @@ export function App({ host }: { host?: { desktopActionsAvailable?: boolean; read
   /** App state bundle for the extracted review actions (review-actions.ts); refreshed every render. */
   const reviewCtxRef = useRef<ReviewContext>(null as unknown as ReviewContext)
   reviewCtxRef.current = {
+    canComment: !readMode && (!isProtected || commentsAllowed),
     editor,
     doc,
     dirtyRef,
@@ -7300,8 +7301,7 @@ export function App({ host }: { host?: { desktopActionsAvailable?: boolean; read
       resolve: (id) => {
         const ctx = reviewCtxRef.current
         if (!ctx.comments.some((c) => c.id === id)) return false
-        resolveCommentImpl(ctx, id, true)
-        return true
+        return resolveCommentImpl(ctx, id, true)
       },
       add: (range, text, meta) =>
         addCommentAtImpl(
@@ -7314,8 +7314,7 @@ export function App({ host }: { host?: { desktopActionsAvailable?: boolean; read
       remove: (id) => {
         const ctx = reviewCtxRef.current
         if (!ctx.comments.some((c) => c.id === id)) return false
-        deleteCommentImpl(ctx, id)
-        return true
+        return deleteCommentImpl(ctx, id)
       },
     }),
     [],
@@ -7940,7 +7939,7 @@ export function App({ host }: { host?: { desktopActionsAvailable?: boolean; read
           className="qa-btn"
           data-tip={t('appUndo')}
           aria-label={t('appUndo')}
-          disabled={!hasDoc || !histState.canUndo}
+          disabled={!hasDoc || readMode || isProtected || !histState.canUndo}
           onClick={() => editor?.chain().focus().undo().run()}
         >
           <IconUndo size={16} />
@@ -7949,7 +7948,7 @@ export function App({ host }: { host?: { desktopActionsAvailable?: boolean; read
           className="qa-btn"
           data-tip={t('appRedo')}
           aria-label={t('appRedo')}
-          disabled={!hasDoc || !histState.canRedo}
+          disabled={!hasDoc || readMode || isProtected || !histState.canRedo}
           onClick={() => editor?.chain().focus().redo().run()}
         >
           <IconRedo size={16} />
@@ -7967,7 +7966,7 @@ export function App({ host }: { host?: { desktopActionsAvailable?: boolean; read
       </>
     ),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [hasDoc, hasUnsavedChanges, autoSave, editor, save, lang, histState],
+    [hasDoc, hasUnsavedChanges, autoSave, editor, save, lang, histState, readMode, isProtected],
   )
 
   // ---- Multiple Pages: the grid is a function of zoom × pane width ----
@@ -8825,6 +8824,7 @@ export function App({ host }: { host?: { desktopActionsAvailable?: boolean; read
             )}
             {doc && commentsUi.panel && (
               <CommentsPanel
+                canComment={!readMode && (!isProtected || commentsAllowed)}
                 comments={comments}
                 docNode={editor.state.doc}
                 composing={commentComposing}

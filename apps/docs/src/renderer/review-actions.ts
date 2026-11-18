@@ -63,6 +63,8 @@ export interface NotePrompt {
 
 /** The App state the review actions need; built fresh per call. */
 export interface ReviewContext {
+  /** Explicit comment permission: comment-only protection can keep the body noneditable. */
+  canComment: boolean
   editor: Editor | null
   doc: DocState | null
   dirtyRef: { current: boolean }
@@ -173,6 +175,7 @@ export function cancelNewComment(ctx: ReviewContext): void {
 
 /** New comment: open the pane with the composer; the mark is applied on submit */
 export function startNewComment(ctx: ReviewContext): void {
+  if (!ctx.canComment) return
   const editor = ctx.editor
   if (!editor) return
   if (editor.state.selection.empty) {
@@ -191,6 +194,7 @@ export function startNewComment(ctx: ReviewContext): void {
 }
 
 export function submitNewComment(ctx: ReviewContext, text: string, image?: CommentImage): void {
+  if (!ctx.canComment) return
   if (!ctx.editor) return
   setPendingCommentRange(ctx, null)
   const id = nextCommentId(ctx.comments)
@@ -218,6 +222,7 @@ export function addCommentAt(
   author: string,
   initials?: string,
 ): string | null {
+  if (!ctx.canComment) return null
   if (!ctx.editor) return null
   const id = nextCommentId(ctx.comments)
   if (!addCommentToRange(ctx.editor, range.from, range.to, id)) return null
@@ -239,6 +244,7 @@ export function replyToComment(
   text: string,
   author = authorName(),
 ): boolean {
+  if (!ctx.canComment) return false
   if (!ctx.editor) return false
   const id = nextCommentId(ctx.comments)
   if (!addReplyToCommentRange(ctx.editor, parentId, id)) {
@@ -255,6 +261,7 @@ export function replyToComment(
 
 /** Word: comment text edits in place; the author, date and anchor stay */
 export function editComment(ctx: ReviewContext, id: string, text: string): void {
+  if (!ctx.canComment) return
   ctx.setComments((prev) => prev.map((c) => (c.id === id ? { ...c, text } : c)))
   ctx.setCommentsDirty(true)
   ctx.dirtyRef.current = true
@@ -262,23 +269,26 @@ export function editComment(ctx: ReviewContext, id: string, text: string): void 
 }
 
 /** Resolve/reopen: the whole thread (parent + replies) gets done set together */
-export function resolveComment(ctx: ReviewContext, id: string, done: boolean): void {
+export function resolveComment(ctx: ReviewContext, id: string, done: boolean): boolean {
+  if (!ctx.canComment || !ctx.comments.some((c) => c.id === id)) return false
   ctx.setComments((prev) =>
     prev.map((c) => (c.id === id || c.parentId === id ? { ...c, done } : c)),
   )
   ctx.setCommentsDirty(true)
   ctx.dirtyRef.current = true
   ctx.setStatus(done ? t('appCommentResolvedMsg') : t('appCommentReopenedMsg'))
+  return true
 }
 
-export function deleteComment(ctx: ReviewContext, id: string): void {
-  if (!ctx.editor) return
+export function deleteComment(ctx: ReviewContext, id: string): boolean {
+  if (!ctx.canComment || !ctx.editor || !ctx.comments.some((c) => c.id === id)) return false
   // cascade: deleting a parent comment also deletes its replies (including their anchor marks)
   const victims = [id, ...ctx.comments.filter((c) => c.parentId === id).map((c) => c.id)]
   for (const v of victims) removeCommentFromDoc(ctx.editor, v)
   ctx.setComments((prev) => prev.filter((c) => !victims.includes(c.id)))
   ctx.setCommentsDirty(true)
   ctx.dirtyRef.current = true
+  return true
 }
 
 /** the thread under the caret (a reply resolves to its parent) */
@@ -299,6 +309,7 @@ export function deleteCommentAtCaret(ctx: ReviewContext): void {
 
 /** Delete All Comments in Document / Delete All Resolved Comments */
 export function deleteAllComments(ctx: ReviewContext, resolvedOnly: boolean): void {
+  if (!ctx.canComment) return
   if (!ctx.editor) return
   // replies never carry done themselves: a resolved thread goes with all of its replies
   const doneThreads = new Set(ctx.comments.filter((c) => c.done && !c.parentId).map((c) => c.id))

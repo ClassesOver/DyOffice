@@ -18,7 +18,8 @@ import { selectBoxAt, selectedBoxPlugin } from './selected-box'
 import { StreamingTailGuardExtension } from './streaming-tail-guard'
 import { wrapGroupCss, type WrapPicture } from './wrap-group'
 import type { ChainedCommands, RawCommands } from '@tiptap/core'
-import { Gapcursor, UndoRedo } from '@tiptap/extensions'
+import { Gapcursor } from '@tiptap/extensions'
+import { PermissionAwareUndoRedo } from './permission-aware-history'
 import { DOMSerializer } from '@tiptap/pm/model'
 import type { DOMOutputSpec, Node as PmNode } from '@tiptap/pm/model'
 import {
@@ -7647,7 +7648,7 @@ export const textboxSubExtensions = [
   InsMark,
   DelMark,
   TextboxListRenumber,
-  UndoRedo,
+  PermissionAwareUndoRedo,
 ]
 
 // ---- find & replace highlighting ----
@@ -7742,7 +7743,7 @@ export const editorExtensions = [
   CommentMark,
   InsMark,
   DelMark,
-  UndoRedo,
+  PermissionAwareUndoRedo,
   MultiSelect,
   SearchHighlightExtension,
   FormattingMarksExtension,

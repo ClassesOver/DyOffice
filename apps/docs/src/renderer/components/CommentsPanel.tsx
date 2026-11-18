@@ -82,6 +82,7 @@ function CommentHead({
  */
 export const CommentsPanel = memo(function CommentsPanel({
   comments,
+  canComment = true,
   docNode,
   composing,
   onSubmitNew,
@@ -94,6 +95,7 @@ export const CommentsPanel = memo(function CommentsPanel({
   focus,
 }: {
   comments: CommentInfo[]
+  canComment?: boolean
   /** current PM doc, used only as the anchor-scan cache key (doc unchanged ⇒ anchors unchanged) */
   docNode: PmNode
   /** show the new-comment composer (selection captured by the caller) */
@@ -135,6 +137,16 @@ export const CommentsPanel = memo(function CommentsPanel({
   // Word: resolved comments are collapsed/hidden by default
   const [showResolved, setShowResolved] = useState(false)
 
+  useEffect(() => {
+    if (canComment) return
+    setEditingId(null)
+    setMenuId(null)
+    setEditDraft('')
+    setDraft('')
+    setDraftImage(null)
+    setReplyDrafts({})
+  }, [canComment])
+
   const anchorTexts = useMemo(collectAnchorTexts, [docNode, comments])
 
   const topLevel = comments.filter((c) => !c.parentId)
@@ -143,6 +155,7 @@ export const CommentsPanel = memo(function CommentsPanel({
   const repliesOf = (id: string) => comments.filter((c) => c.parentId === id)
 
   const submitReply = (id: string) => {
+    if (!canComment) return
     const text = (replyDrafts[id] ?? '').trim()
     if (!text) return
     onReply(id, text)
@@ -160,6 +173,7 @@ export const CommentsPanel = memo(function CommentsPanel({
   }
 
   const submitEdit = () => {
+    if (!canComment) return
     const text = editDraft.trim()
     if (!text || !editingId) return
     onEdit(editingId, text)
@@ -168,6 +182,7 @@ export const CommentsPanel = memo(function CommentsPanel({
 
   /** an open edit belongs to this thread (parent or reply) — commit it before the thread collapses away */
   const flushEditIn = (threadId: string) => {
+    if (!canComment) return
     if (!editingId) return
     if (editingId !== threadId && !repliesOf(threadId).some((r) => r.id === editingId)) return
     const text = editDraft.trim()
@@ -221,6 +236,7 @@ export const CommentsPanel = memo(function CommentsPanel({
   }, [focus])
 
   const submit = () => {
+    if (!canComment) return
     const text = draft.trim()
     if (!text) return
     onSubmitNew(text, draftImage ?? undefined)
@@ -267,6 +283,7 @@ export const CommentsPanel = memo(function CommentsPanel({
   )
 
   const headActions = (c: CommentInfo, root: boolean, replies: CommentInfo[]) => {
+    if (!canComment) return null
     const deleteIds = [c.id, ...replies.map((r) => r.id)]
     const deleteLabel = root
       ? replies.length > 0
@@ -346,7 +363,7 @@ export const CommentsPanel = memo(function CommentsPanel({
   const renderThread = (c: CommentInfo) => {
     const anchor = anchorTexts.get(c.id) ?? ''
     const replies = repliesOf(c.id)
-    const editing = editingId === c.id
+    const editing = canComment && editingId === c.id
     const unknown = t('appUnknownAuthor')
     return (
       <div
@@ -382,7 +399,7 @@ export const CommentsPanel = memo(function CommentsPanel({
         {replies.map((r) => (
           <div key={r.id} className="comment-reply">
             <CommentHead c={r} unknownAuthor={unknown} actions={headActions(r, false, [])} />
-            {editingId === r.id ? (
+            {canComment && editingId === r.id ? (
               editBox
             ) : (
               <>
@@ -392,7 +409,7 @@ export const CommentsPanel = memo(function CommentsPanel({
             )}
           </div>
         ))}
-        {!c.done && (
+        {canComment && !c.done && (
           <input
             className="comment-reply-input"
             type="text"
@@ -434,7 +451,7 @@ export const CommentsPanel = memo(function CommentsPanel({
           ✕
         </button>
       </div>
-      {composing && (
+      {canComment && composing && (
         <div className="comment-compose">
           <textarea
             ref={draftRef}
