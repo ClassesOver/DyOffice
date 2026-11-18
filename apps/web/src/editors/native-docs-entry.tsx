@@ -1,3 +1,4 @@
+import {createDraftCopyAuthority,draftCopyParentActive} from './draft-copy-authority'
 import { createSessionFileHost } from '../../../../packages/browser-host/src/files.ts'
 import { mountDocsEditor } from './native-docs.tsx'
 import {installEditorCloseLifecycle} from './editor-close-lifecycle'
@@ -7,7 +8,8 @@ async function bootstrap() {
   const host = createSessionFileHost(), fileId = new URL(location.href).searchParams.get('fileId') ?? ''
   installEditorCloseLifecycle(window,{canClose:async()=>false,dispose:async()=>false})
   try {
-    const mounted = await mountDocsEditor(host,document.getElementById('root')!,fileId)
+    const draftAuthority=await createDraftCopyAuthority(()=>draftCopyParentActive(window))
+    const mounted = await mountDocsEditor(host,document.getElementById('root')!,fileId,draftAuthority)
     installEditorCloseLifecycle(window,{canClose:mounted.canClose,dispose:async()=>{const closed=await mounted.dispose();if(closed)host.dispose();return closed}})
     window.addEventListener('pagehide',()=>{mounted.unload();host.dispose()},{once:true})
   } catch (error) { await host.releaseLease(fileId).catch(()=>{});host.dispose();installEditorCloseLifecycle(window,{canClose:async()=>true,dispose:async()=>true});throw error }

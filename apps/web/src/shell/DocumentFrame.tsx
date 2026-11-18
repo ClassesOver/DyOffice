@@ -1,10 +1,15 @@
+import type {DraftCopyFrame} from '../editors/draft-copy-authority'
 import {Alert,Button} from 'antd'
 import {useEffect,useRef,useState} from 'react'
 import type {DocumentTab,DocumentCloseGuard} from './document-tabs'
 
 type EditorWindow=Omit<Window,'dyofficeEditorCanClose'>&{dyofficeEditorCanClose?:()=>boolean|Promise<boolean>;dyofficeEditorDispose?:()=>boolean|Promise<boolean>}
-export function DocumentFrame({file,registerGuard}:{file:DocumentTab;registerGuard:(id:string,guard:DocumentCloseGuard|null)=>void}){
+export function DocumentFrame({file,registerGuard,sessionActive=()=>false}:{file:DocumentTab;registerGuard:(id:string,guard:DocumentCloseGuard|null)=>void;sessionActive?:()=>boolean}){
  const frame=useRef<HTMLIFrameElement>(null)
+ const session=useRef(sessionActive),live=useRef(true)
+ session.current=sessionActive
+ useEffect(()=>{live.current=true;return()=>{live.current=false}},[])
+ const bindFrame=(element:HTMLIFrameElement|null)=>{frame.current=element;if(element)(element as DraftCopyFrame).dyofficeDraftCopySessionActive=()=>live.current&&session.current()}
  const started=useRef(false),entryFailed=useRef(false)
  const [failed,setFailed]=useState(false),[attempt,setAttempt]=useState(0)
  function failedEntry(){
@@ -36,5 +41,5 @@ export function DocumentFrame({file,registerGuard}:{file:DocumentTab;registerGua
   })
   return()=>registerGuard(file.id,null)
  },[file.id,registerGuard])
- return <>{failed&&<Alert role="alert" type="error" title="编辑器加载失败" description="请重新加载编辑器，或关闭此文档页签后再打开。" action={<Button onClick={retry}>重新加载编辑器</Button>}/>}<iframe key={attempt} ref={frame} data-document-id={file.id} src={file.src} title={file.name} onLoad={loaded} className="workspace-document-frame" hidden={failed} style={failed?{display:'none'}:undefined}/></>
+ return <>{failed&&<Alert role="alert" type="error" title="编辑器加载失败" description="请重新加载编辑器，或关闭此文档页签后再打开。" action={<Button onClick={retry}>重新加载编辑器</Button>}/>}<iframe key={attempt} ref={bindFrame} data-document-id={file.id} src={file.src} title={file.name} onLoad={loaded} className="workspace-document-frame" hidden={failed} style={failed?{display:'none'}:undefined}/></>
 }

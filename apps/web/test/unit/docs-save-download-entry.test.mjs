@@ -35,7 +35,7 @@ before(async()=>{
  ;({mountDocsEditor,act}=await import(pathToFileURL(join(directory,'entry.mjs')).href))
 })
 after(()=>rm(directory,{recursive:true,force:true}))
-async function fixture(t,{outcome='success',gate,readOnly=false,initialDirty=true,currentHead=true,deferReady=false}={}){
+async function fixture(t,{outcome='success',gate,readOnly=false,initialDirty=true,currentHead=true,deferReady=false,draftAuthority,serialize=async()=>null}={}){
  const dom=new JSDOM('<div id="editor"></div>',{url:'https://office.example/'})
  dom.window.document.getElementById('editor').inert=false
  const old={};for(const [key,value] of Object.entries({window:dom.window,document:dom.window.document,navigator:dom.window.navigator,IS_REACT_ACT_ENVIRONMENT:true})){
@@ -45,9 +45,9 @@ async function fixture(t,{outcome='success',gate,readOnly=false,initialDirty=tru
  let state={name:'a.docx',status:outcome==='unknown-before'?'unknown':'idle',revision:before,lease:readOnly?null:{leaseEpoch:1}},saves=0,reconciles=0,dirty=initialDirty
  const downloads=[];dom.window.HTMLAnchorElement.prototype.click=function(){downloads.push(this.href)}
  const host={isCurrentRevision:async()=>currentHead,takeoverLease:async()=>{state.lease={leaseEpoch:2};state.status='idle'},releaseLease:async()=>{state.lease=null},getEditorId:()=>fileId,subscribe:()=>()=>{},open:async()=>({format:'docx'}),getPreferences:async()=>({language:'en',theme:'light',showAssistant:false}),getState:()=>state,acquireLease:async()=>{if(readOnly)throw Error('held elsewhere');return {leaseEpoch:1}},startRenewal:()=>()=>{},save:async()=>{saves++;await gate?.promise;if(outcome==='unknown-after'){state.status='unknown';throw Error('lost acknowledgement')}state.revision=after;return {...after}},reconcile:async()=>{reconciles++;throw Error('unexpected reconcile')}}
- const control={deferReady,editor:{getSelection:()=>null,serialize:async()=>null,isDirty:()=>dirty,async save(){await control.lifecycle.beforeSave();const result=await dom.window.desktop.saveDocx(`/files/${fileId}/a.docx`,new ArrayBuffer(2));dirty=outcome==='late-edit'||!result.ok;control.lifecycle.afterSave(result.ok&&outcome!=='late-edit');return result.ok}}}
+ const control={deferReady,editor:{getSelection:()=>null,serialize,isDirty:()=>dirty,async save(){await control.lifecycle.beforeSave();const result=await dom.window.desktop.saveDocx(`/files/${fileId}/a.docx`,new ArrayBuffer(2));dirty=outcome==='late-edit'||!result.ok;control.lifecycle.afterSave(result.ok&&outcome!=='late-edit');return result.ok}}}
  globalThis.__docsDownloadTest=control
- let mounted;await act(async()=>{mounted=await mountDocsEditor(host,dom.window.document.getElementById('editor'),fileId)})
+ let mounted;await act(async()=>{mounted=await mountDocsEditor(host,dom.window.document.getElementById('editor'),fileId,draftAuthority)})
  assert.equal(dom.window.document.querySelector('.dyoffice-docs-save-download'),null,'host actions are hidden until the File slot is opened')
  await act(async()=>{dom.window.document.querySelector('[data-test-file-menu]').click()})
  assert.ok(dom.window.document.querySelector('.dyoffice-docs-save-download'),'renderer must expose the real host action')
@@ -112,4 +112,40 @@ test('Word renderer unregister and repeated registration preserve takeover readi
  await f.dispose()
  await act(async()=>ready());assert.equal(f.element.childElementCount,0)
  assert.equal(f.state().lease,null);assert.deepEqual(f.counts(),{saves:0,reconciles:0})
+})
+
+test('real File menu exposes explicit draft copy while dirty/unknown; no server save or recovery',async t=>{
+ const f=await fixture(t,{outcome:'unknown-before',draftAuthority:{current:()=>true,verify:async()=>true},serialize:async()=>new Uint8Array([80,75,1])})
+ const button=f.element.querySelector('.dyoffice-docs-draft-copy')
+ assert.ok(button);assert.equal(button.disabled,false);assert.deepEqual(f.downloads,[])
+ await act(async()=>button.click())
+ assert.equal(f.downloads.length,1);assert.ok(f.downloads[0].startsWith('blob:'))
+ assert.equal(f.state().status,'unknown');assert.deepEqual(f.counts(),{saves:0,reconciles:0})
+ assert.equal(await f.tryClose(),false)
+})
+test('real File menu denies draft copy without a bound session capability',async t=>{
+ const f=await fixture(t)
+ const button=f.element.querySelector('.dyoffice-docs-draft-copy')
+ assert.equal(button.disabled,true);await act(async()=>button.click());assert.deepEqual(f.downloads,[])
+})
+test('real File menu suppresses late draft when session ends during serialize',async t=>{
+ let resolve,active=true,started=false
+ const wait=new Promise(r=>resolve=r)
+ const f=await fixture(t,{draftAuthority:{current:()=>active,verify:async()=>active},serialize:async()=>{started=true;await wait;return new Uint8Array([80,75])}})
+ await act(async()=>f.element.querySelector('.dyoffice-docs-draft-copy').click())
+ assert.equal(started,true);active=false
+ await act(async()=>resolve())
+ assert.deepEqual(f.downloads,[]);assert.deepEqual(f.counts(),{saves:0,reconciles:0})
+})
+
+test('real File menu drops pending snapshot across detach/rebind of the same editor',async t=>{
+ let resolve
+ const wait=new Promise(r=>resolve=r)
+ const f=await fixture(t,{deferReady:true,draftAuthority:{current:()=>true,verify:async()=>true},serialize:async()=>{await wait;return new Uint8Array([80,75])}})
+ const control=globalThis.__docsDownloadTest
+ await act(async()=>control.ready())
+ await act(async()=>f.element.querySelector('.dyoffice-docs-draft-copy').click())
+ await act(async()=>{control.ready(null);control.ready()})
+ await act(async()=>resolve())
+ assert.deepEqual(f.downloads,[]);assert.deepEqual(f.counts(),{saves:0,reconciles:0})
 })
