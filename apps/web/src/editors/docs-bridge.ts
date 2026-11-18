@@ -14,10 +14,10 @@ type ParentTabsWindow = Window & {aiOfficeTabs?: Pick<TabsApi, 'list' | 'activat
 export function createDocsBridge(host: SessionFileHost, fileId: string, prefs: Awaited<ReturnType<SessionFileHost['getPreferences']>>, onChange: () => void) {
   const locale = prefs.language === 'en' ? 'en' : 'zh', text = messages[locale], state = host.getState(fileId)
   const alias = `/files/${fileId}/${state.name}`, guard = createSaveGenerationGuard(), urls = new Set<string>()
-  let disposed = false, downloading = false
+  let disposed = false, downloading = false, takingOver = false
   let saveFence:(()=>boolean)|null=null
   async function guardedSave(check:()=>boolean,action:()=>Promise<boolean>){
-    if(disposed||saveFence||!check())return false
+    if(disposed||takingOver||saveFence||!check())return false
     saveFence=check
     try{const accepted=await action();return !disposed&&accepted}finally{saveFence=null}
   }
@@ -31,7 +31,7 @@ export function createDocsBridge(host: SessionFileHost, fileId: string, prefs: A
     documentOpened() { if(disposed)return; guard.reset(); ticket = null; nativeSaveOutcome = 'none'; nativeSaveReasons = []; onChange() },
     edited() { if(disposed)return; guard.markEdited(); onChange() },
     async beforeSave() {
-      if(disposed)throw hostError('UNAVAILABLE','disposed')
+      if(disposed||takingOver)throw hostError('UNAVAILABLE','disposed or taking over')
       // The native queue may have waited after the download preflight. Do not
       // turn this action into implicit confirmation of an intervening save.
       if (downloading && (disposed || host.getState(fileId).status !== 'idle' || guard.getState().status === 'unknown')) throw hostError('UNAVAILABLE','download not ready')
@@ -103,7 +103,7 @@ export function createDocsBridge(host: SessionFileHost, fileId: string, prefs: A
       return { path: alias,name: state.name,dataUrl,hash: ref.sha256 }
     },
     async saveDocx(path: string, data: ArrayBuffer) {
-      if (disposed || path !== alias || (saveFence && !saveFence())) return { ok: false,error: text.saveFailed }
+      if (disposed || takingOver || path !== alias || (saveFence && !saveFence())) return { ok: false,error: text.saveFailed }
       try {
         const saved = await host.save(fileId,new Uint8Array(data),saveFence??(()=>true))
         // A dispatched commit may still land. Preserve its host state, but never
@@ -155,5 +155,24 @@ export function createDocsBridge(host: SessionFileHost, fileId: string, prefs: A
       return {...receipt}
     } finally { downloading = false }
   }
-  return { api,lifecycle,guardedSave,prepareDownload,getReceipt:()=>committed,getState: () => ({...guard.getState(), nativeSaveOutcome, nativeSaveReasons}),dispose() { disposed = true; panelListeners.clear(); for (const url of urls) URL.revokeObjectURL(url); urls.clear() } }
+  async function takeover(editor:{isDirty():boolean}) {
+    if(disposed||takingOver||downloading||saveFence)throw hostError('UNAVAILABLE','takeover unavailable')
+    const assertClean=()=>{
+      if(disposed)throw hostError('UNAVAILABLE','disposed')
+      const local=guard.getState(),state=host.getState(fileId)
+      if(editor.isDirty()||local.dirty||local.status!=='idle'||nativeSaveOutcome==='pending'||['unknown','saving'].includes(state.status))throw new Error(text.takeoverDirty)
+    }
+    assertClean();takingOver=true;onChange()
+    let acquired=false
+    try{
+      if(!await host.isCurrentRevision(fileId))throw new Error(text.takeoverStale)
+      assertClean()
+      await host.takeoverLease(fileId);acquired=true
+      assertClean()
+      if(!await host.isCurrentRevision(fileId))throw new Error(text.takeoverStale)
+      assertClean()
+    }catch(error){if(acquired)await host.releaseLease(fileId).catch(()=>{});throw error}
+    finally{takingOver=false;if(!disposed)onChange()}
+  }
+  return { api,lifecycle,guardedSave,takeover,prepareDownload,getReceipt:()=>committed,getState: () => ({...guard.getState(), nativeSaveOutcome, nativeSaveReasons, takingOver}),dispose() { disposed = true; panelListeners.clear(); for (const url of urls) URL.revokeObjectURL(url); urls.clear() } }
 }
