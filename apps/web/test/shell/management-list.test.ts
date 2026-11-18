@@ -18,3 +18,18 @@ test('management list resizes only its table viewport and keeps toolbar and pagi
  await act(async()=>{for(const callback of callbacks)callback([{target:region,contentRect:{height:200}}] as never,{} as ResizeObserver)})
  expect(document.querySelector<HTMLElement>('.ant-table-body')?.style.maxHeight).toBe('140px')
 })
+
+test('B management heading labels its data region without moving toolbar or pagination into it',async()=>{
+ vi.stubGlobal('ResizeObserver',class{observe(){}unobserve(){}disconnect(){}})
+ document.body.innerHTML='<div id="list"></div>';root=createRoot(document.getElementById('list')!)
+ await act(async()=>root.render(h(ManagementList<{id:string}>,{heading:'成员与权限',description:'管理当前部署的成员与访问权限。',rowKey:'id',summary:'当前页 2 位成员',toolbar:h('button',null,'刷新'),dataSource:[{id:'alice'}],columns:[{title:'名称',dataIndex:'id'}],pagination:{current:1,pageSize:10,total:20}})))
+ const title=document.querySelector<HTMLHeadingElement>('.management-list-heading h3')!
+ expect(title?.textContent).toBe('成员与权限')
+ expect(document.querySelector('.management-list-description')?.textContent).toBe('管理当前部署的成员与访问权限。')
+ const region=document.querySelector('.management-list-table-region')!
+ expect(region.getAttribute('aria-labelledby')).toBe(title.id)
+ expect(region.getAttribute('role')).toBe('region')
+ expect(region.contains(title)).toBe(false)
+ expect(region.contains(document.querySelector('.management-list-toolbar'))).toBe(false)
+ expect(region.contains(document.querySelector('.ant-pagination'))).toBe(false)
+})

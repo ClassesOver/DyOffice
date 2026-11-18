@@ -50,6 +50,7 @@ export function WorkspaceTrash({request,onClose,onChanged,presentation='dialog',
  const filtered=files.filter(file=>file.name.toLocaleLowerCase().includes(search.trim().toLocaleLowerCase()))
  const content=<div className="trash-content">
   <ManagementList<WorkspaceFile>
+   heading="已删除文件" description="找回误删文件，或确认后永久清理不再需要的内容。"
    summary={<><span>回收站 <strong>{total}</strong> 个文件</span><span>当前页 {sizeLabel(files.reduce((sum,file)=>sum+file.size,0))}</span></>}
    toolbar={<><Input.Search aria-label="搜索当前页文件" placeholder="搜索当前页文件名" value={search} allowClear disabled={busy} onChange={e=>setSearch(e.target.value)}/><Button autoInsertSpace={false} icon={<ReloadOutlined/>} disabled={busy} onClick={()=>void load()}>重新加载</Button></>}
    panel={(error||message||busy)?<>{error&&<Alert type="error" showIcon title={error}/>}{message&&<Alert type="success" showIcon role="status" title={message}/>} {busy&&<span role="status" className="trash-processing">正在处理…</span>}</>:undefined}

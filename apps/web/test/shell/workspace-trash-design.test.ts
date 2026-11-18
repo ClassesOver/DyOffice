@@ -11,6 +11,7 @@ const button=(text:string)=>[...document.querySelectorAll<HTMLButtonElement>('bu
 test('trash page renders one server page, honest metadata and local search without duplicate modal header',async()=>{
  const paths:string[]=[];await mount(async(path:string)=>{paths.push(path);return {files:[row],total:21}})
  expect(paths).toEqual(['/api/v1/workspace/files?view=trash&limit=10&offset=0'])
+ expect(document.querySelector('.management-list-heading h3')?.textContent).toBe('已删除文件')
  expect(document.querySelector('.workspace-panel-header')).toBeNull()
  expect(document.body.textContent).toContain('最后修改')
  expect(document.body.textContent).not.toContain('删除时间')

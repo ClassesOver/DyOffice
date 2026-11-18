@@ -45,6 +45,7 @@ test('failed next member page retains loaded rows and cursor for an explicit ret
  const next=()=>[...document.querySelectorAll('button')].find(b=>b.textContent==='下一页')!
  try{
   await vi.waitFor(()=>expect(document.body.textContent).toContain('Alice'))
+  expect(document.querySelector('.management-list-heading h3')?.textContent).toBe('成员与权限')
   next().click()
   await vi.waitFor(()=>expect(document.body.textContent).toContain('next page unavailable'))
   expect(document.body.textContent).toContain('Alice')
