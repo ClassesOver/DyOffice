@@ -17,22 +17,27 @@ export function createDocumentTabs() {
   let openSequence = 0
   let selectionSequence = 0
   let active = 'home'
+  let entryLocks = 0
+  const assertEntriesAllowed = () => {if(entryLocks)throw new Error('正在退出，请稍候再打开文档。')}
   function list(): TabSummary[] {
     return [{id:'home',kind:'home',title:'首页',closable:false,active:active==='home'},
       ...documents.map(document => ({id:document.id,kind:kinds[document.format],title:document.name,closable:true,active:active===document.id}))]
   }
   function emit() { for (const listener of listeners) listener(list()) }
   function activate(id: string) {
+    if(id !== 'home')assertEntriesAllowed()
     if (id !== 'home' && !documents.some(document => document.id === id)) return
     selectionSequence = ++openSequence
     if (id === active) return
     active = id; if(id !== 'home')mounted.add(id); emit()
   }
   function reserveOpen(id: string): DocumentOpenToken {
+    assertEntriesAllowed()
     selectionSequence = ++openSequence
     return {renameVersion: names.get(id)?.renameVersion ?? 0, sequence: openSequence}
   }
   function open(document: DocumentTab, token?: DocumentOpenToken) {
+    assertEntriesAllowed()
     if (document.id === 'home') throw new Error('文档标识不能使用 home。')
     if (token && token.sequence <= (closedAt.get(document.id) ?? 0)) return
     const select = !token || token.sequence === selectionSequence
@@ -74,7 +79,7 @@ export function createDocumentTabs() {
       documents.splice(index, 1); guards.delete(id); mounted.delete(id)
       if (active === id) {
         selectionSequence = ++openSequence
-        active = documents[Math.min(index, documents.length - 1)]?.id ?? 'home'
+        active = entryLocks ? 'home' : documents[Math.min(index, documents.length - 1)]?.id ?? 'home'
         if(active !== 'home')mounted.add(active)
       }
       emit(); return true
@@ -93,8 +98,11 @@ export function createDocumentTabs() {
   }
   return {
     list,
+    // Covers both fresh requests and completions that reserved a token earlier.
+    suspendEntries(){entryLocks++;let released=false;return ()=>{if(!released){released=true;entryLocks--}}},
     // Startup only, after authenticated metadata resolution. Never replaces live drafts.
     restoreEntries(entries:DocumentTab[],selected:string){
+      assertEntriesAllowed()
       if(documents.length||openSequence)throw new Error('Cannot restore over a live workspace')
       for(const entry of entries){if(entry.id==='home'||documents.some(doc=>doc.id===entry.id))continue;documents.push({...entry})}
       active=documents.some(doc=>doc.id===selected)?selected:'home'
