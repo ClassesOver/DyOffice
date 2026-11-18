@@ -14,8 +14,8 @@ import { parseConfigKeyring } from './src/modules/admin/keyring-config.ts';
 
 async function configuredApplication() {
   assertDocumentBackendPolicy(process.env);
-  const mode=process.env.DYOFFICE_AUTH_MODE||'development';
-  const shellDirectory=localShellDirectory(process.env);
+  const mode=process.env.DYOFFICE_AUTH_MODE||(process.env.DYOFFICE_AUTH_DATABASE_URL?'local':'development');
+  const shellDirectory=localShellDirectory({...process.env,DYOFFICE_AUTH_MODE:mode});
   const profilesFile=process.env.DYOFFICE_PROVIDER_GATEWAY_PROFILES;
   if(profilesFile && mode!=='local') throw new Error('Provider Gateway requires local mode');
   const assistantSourceFlag=process.env.DYOFFICE_ASSISTANT_SOURCE_CATALOG;
@@ -50,7 +50,12 @@ async function configuredApplication() {
   let businessPool,storage,sheets;
   try {
     businessPool=new Pool({connectionString:businessConnectionString,max:4,connectionTimeoutMillis:5000});
-    storage=await configuredObjectStore(process.env);
+    const defaultShellDir=fileURLToPath(new URL('../dist-local-shell/',import.meta.url));
+    const hasBuiltShell=existsSync(join(defaultShellDir,'.vite/manifest.json'));
+    const storageEnv=process.env.DYOFFICE_FILE_API===undefined && process.env.DYOFFICE_OBJECT_STORE===undefined && (process.env.DYOFFICE_OBJECT_DIRECTORY || (process.env.NODE_ENV!=='test' && hasBuiltShell))
+      ? {...process.env,DYOFFICE_FILE_API:'experimental',DYOFFICE_OBJECT_STORE:'local-dev',DYOFFICE_OBJECT_DIRECTORY:resolve(process.env.DYOFFICE_OBJECT_DIRECTORY||'.dyoffice/objects')}
+      : process.env;
+    storage=await configuredObjectStore(storageEnv);
     const nativeFlag=process.env.DYOFFICE_NATIVE_DOCX;
     if(nativeFlag && nativeFlag!=='experimental' && nativeFlag!=='off') throw new Error('Unknown native DOCX mode');
     const defaultDocsDir=resolve(process.env.DYOFFICE_NATIVE_DOCX_DIRECTORY||fileURLToPath(new URL('../dist-docs/',import.meta.url)));
@@ -60,8 +65,8 @@ async function configuredApplication() {
     const defaultSlidesDir=resolve(process.env.DYOFFICE_NATIVE_PPTX_DIRECTORY||fileURLToPath(new URL('../dist-slides/',import.meta.url)));
     const nativeSlidesDirectory=slidesFlag==='experimental' ? defaultSlidesDir : (slidesFlag===undefined && storage.objectStore && existsSync(join(defaultSlidesDir,'.vite/manifest.json')) ? defaultSlidesDir : undefined);
     const slidesHost=nativeSlidesDirectory ? {openSession:(input)=>openIsolatedPptxSession({fileId:input.fileId,revision:input.revision,bytes:input.bytes},{timeoutMs:60000,experimental:true})} : undefined;
-    const defaultShellDir=fileURLToPath(new URL('../dist-local-shell/',import.meta.url));
-    const effectiveShellDirectory=shellDirectory ?? (storage.objectStore && existsSync(join(defaultShellDir,'.vite/manifest.json')) ? defaultShellDir : undefined);
+    const legacyDistDir=resolve(fileURLToPath(new URL('../dist/',import.meta.url)));
+    const effectiveShellDirectory=(shellDirectory && shellDirectory!==legacyDistDir) ? shellDirectory : (storage.objectStore && hasBuiltShell ? defaultShellDir : shellDirectory);
     sheets=await configuredSheetsRuntime(process.env);
     const {close:closeSheets,...sheetsConfig}=sheets ?? {};
     return await buildLocalApp({db,businessPool,...storage,...sheetsConfig,nativeDocsDirectory,nativeSlidesDirectory,slidesHost,localShellDirectory:effectiveShellDirectory,nativeJobs:jobFlag==='experimental',deploymentId,origin,csrfKey,globalConfigKeyring,providerGateway,assistantSourceCatalog,assistantChannels:process.env.DYOFFICE_ASSISTANT_CHANNELS==='on',codingHarnesses:process.env.DYOFFICE_CODING_AGENT==='off'?false:{cliPath:process.env.DYOFFICE_CODEX_PATH,analysisPython:process.env.DYOFFICE_ANALYSIS_PYTHON},sourcesCredentialKeys,sourcesEgressTargets,passwordBlocklistFile:process.env.DYOFFICE_PASSWORD_BLOCKLIST_FILE,closeDb:async()=>{await closeSheets?.();storage.close();await Promise.all([close(),businessPool.end()]);}});
