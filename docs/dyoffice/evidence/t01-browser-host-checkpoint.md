@@ -39,13 +39,13 @@ The GitHub remote was checked after writing the files; the remote head then was 
 - [ ] Integrate the new interfaces with four real editor renderer entrypoints and map all preloads/IPC calls; current adapter contains no actual document reading/writing implementation.
 - [ ] Add browser-capability tests for supported operations, unknown desktop method calls, and all credential-bearing payloads; the current tests cover only a minimal happy/error subset.
 - [ ] Add a Web-specific TypeScript build configuration and project-wide typecheck job, then rerun the checks in a full checkout with the actual lockfile.
-- [ ] Run `npm run test:web`, the Web CI job, and all affected GenOffice upstream suites in a full checkout.
+- [ ] Run `npm run test:web`, the Web CI job, and all affected DyOffice upstream suites in a full checkout.
 - [ ] Validate the file revision/lease/CAS contract server-side before enabling document saves. The current runtime guard does not implement access control or version transactions.
 - [ ] Complete T00's four-format IPC/native component inventory. T00 and T01 are **not** marked complete.
 
 ## Decision
 
-Proceed with the existing GenOffice Agent Core and editor-local tools. Keep provider keys and access policy on the server. Do not enable a format merely because its `CapabilityState` type can express `editable`; only a real adapter with successful native-file roundtrip tests may advertise that value.
+Proceed with the existing DyOffice Agent Core and editor-local tools. Keep provider keys and access policy on the server. Do not enable a format merely because its `CapabilityState` type can express `editable`; only a real adapter with successful native-file roundtrip tests may advertise that value.
 
 
 ## Continued work (2026-11-15)

@@ -1,3 +1,4 @@
+import { useImeEnterGuard } from '@genoffice/ui'
 import { useEffect, useRef, useState } from 'react'
 import { useI18n } from '../i18n/locale'
 import { useModalKeys } from './modal-keys'
@@ -29,6 +30,7 @@ export function PromptModal({
   const inputRef = useRef<HTMLInputElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const modalKeys = useModalKeys(onClose)
+  const ime = useImeEnterGuard()
 
   useEffect(() => {
     const el = multiline ? textareaRef.current : inputRef.current
@@ -60,8 +62,15 @@ export function PromptModal({
               value={value}
               placeholder={placeholder}
               onChange={(e) => setValue(e.target.value)}
+              onCompositionStart={ime.handleCompositionStart}
+              onCompositionEnd={ime.handleCompositionEnd}
               onKeyDown={(e) => {
-                if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) submit()
+                if (
+                  e.key === 'Enter' &&
+                  (e.metaKey || e.ctrlKey) &&
+                  !ime.isImeConfirm(e.nativeEvent)
+                )
+                  submit()
               }}
             />
           ) : (
@@ -70,8 +79,10 @@ export function PromptModal({
               value={value}
               placeholder={placeholder}
               onChange={(e) => setValue(e.target.value)}
+              onCompositionStart={ime.handleCompositionStart}
+              onCompositionEnd={ime.handleCompositionEnd}
               onKeyDown={(e) => {
-                if (e.key === 'Enter') submit()
+                if (e.key === 'Enter' && !ime.isImeConfirm(e.nativeEvent)) submit()
               }}
             />
           )}

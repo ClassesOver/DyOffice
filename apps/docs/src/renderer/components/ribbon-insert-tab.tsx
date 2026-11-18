@@ -2,7 +2,7 @@ import { useState } from 'react'
 import type { CSSProperties } from 'react'
 import { getMarkRange } from '@tiptap/core'
 import type { Editor } from '@tiptap/core'
-import { ShapePreview, WORDART_PRESETS, wordArtStrokePx } from '@genoffice/ui'
+import { ShapePreview, WORDART_PRESETS, wordArtStrokePx, useImeEnterGuard } from '@genoffice/ui'
 import type { ChartDisplay, NewChart } from '@genoffice/docx-engine'
 import { hfHasPageField, hfPageNumberOnly, hfWithoutPageMarks } from '../editor/hf-dom'
 import { EquationGallery, EquationModal } from './EquationModal'
@@ -143,6 +143,8 @@ function bookmarkTargetAtCursor(editor: Editor): { pos: number; typeName: string
 /** Word's Bookmark dialog: list + add (cursor's paragraph) / go to / delete */
 export function BookmarkModal({ editor, onClose }: { editor: Editor; onClose: () => void }) {
   const { t } = useI18n()
+  const modalKeys = useModalKeys(onClose)
+  const ime = useImeEnterGuard()
   const [name, setName] = useState('')
   const [error, setError] = useState('')
   const [, forceRender] = useState(0)
@@ -196,7 +198,7 @@ export function BookmarkModal({ editor, onClose }: { editor: Editor; onClose: ()
   }
 
   return (
-    <div className="modal-backdrop" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
+    <div {...modalKeys} className="modal-backdrop" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
       <div className="modal">
         <h2>{t('ribbonBookmark')}</h2>
         <div className="modal-row">
@@ -208,7 +210,9 @@ export function BookmarkModal({ editor, onClose }: { editor: Editor; onClose: ()
               setName(e.target.value)
               setError('')
             }}
-            onKeyDown={(e) => e.key === 'Enter' && addBookmark()}
+            onCompositionStart={ime.handleCompositionStart}
+            onCompositionEnd={ime.handleCompositionEnd}
+            onKeyDown={(e) => e.key === 'Enter' && !ime.isImeConfirm(e.nativeEvent) && addBookmark()}
           />
           <button className="btn-primary" onClick={addBookmark}>
             {t('ribbonAdd')}
@@ -247,6 +251,7 @@ export function BookmarkModal({ editor, onClose }: { editor: Editor; onClose: ()
 /** Word's Cross-reference dialog: pick a bookmark, insert a REF field at the cursor (displays the bookmark paragraph's text) */
 export function CrossRefModal({ editor, onClose }: { editor: Editor; onClose: () => void }) {
   const { t } = useI18n()
+  const modalKeys = useModalKeys(onClose)
   const bookmarks = collectBookmarks(editor)
   const insertRef = (b: { name: string; preview: string }) => {
     editor
@@ -261,7 +266,7 @@ export function CrossRefModal({ editor, onClose }: { editor: Editor; onClose: ()
     onClose()
   }
   return (
-    <div className="modal-backdrop" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
+    <div {...modalKeys} className="modal-backdrop" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
       <div className="modal">
         <h2>{t('ribbonCrossRef')}</h2>
         {bookmarks.length === 0 ? (
@@ -289,6 +294,7 @@ export function CrossRefModal({ editor, onClose }: { editor: Editor; onClose: ()
 /** Word's Insert Chart: pick a type + data grid; after inserting, the data table below the chart is still editable in place */
 export function ChartInsertModal({ editor, onClose }: { editor: Editor; onClose: () => void }) {
   const { t } = useI18n()
+  const modalKeys = useModalKeys(onClose)
   const [kind, setKind] = useState<NewChart['kind']>('bar')
   const [title, setTitle] = useState(() => t('ribbonChartTitlePh'))
   const [categories, setCategories] = useState(() =>
@@ -353,7 +359,7 @@ export function ChartInsertModal({ editor, onClose }: { editor: Editor; onClose:
   }
 
   return (
-    <div className="modal-backdrop" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
+    <div {...modalKeys} className="modal-backdrop" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
       <div className="modal modal-chart">
         <h2>{t('ribbonChartInsertTitle')}</h2>
         <div className="modal-row">
@@ -439,6 +445,7 @@ export function TableInsertModal({
 }) {
   const { t } = useI18n()
   const modalKeys = useModalKeys(onClose)
+  const ime = useImeEnterGuard()
   const [cols, setCols] = useState(5)
   const [rows, setRows] = useState(2)
 
@@ -461,7 +468,9 @@ export function TableInsertModal({
           const v = Math.round(Number(e.target.value))
           set(Number.isFinite(v) ? Math.min(max, Math.max(1, v)) : 1)
         }}
-        onKeyDown={(e) => e.key === 'Enter' && insert()}
+        onCompositionStart={ime.handleCompositionStart}
+        onCompositionEnd={ime.handleCompositionEnd}
+        onKeyDown={(e) => e.key === 'Enter' && !ime.isImeConfirm(e.nativeEvent) && insert()}
       />
     </label>
   )
@@ -496,6 +505,7 @@ export function TableInsertModal({
 export function LinkInsertModal({ editor, onClose }: { editor: Editor; onClose: () => void }) {
   const { t } = useI18n()
   const modalKeys = useModalKeys(onClose)
+  const ime = useImeEnterGuard()
   // Word parity: with the caret on an existing hyperlink the dialog EDITS it
   // — text and address pre-filled, plus Remove Link. Imported links carry the
   // same mark as in-app ones, but there was no way to view, change, or
@@ -620,7 +630,9 @@ export function LinkInsertModal({ editor, onClose }: { editor: Editor; onClose: 
             value={linkUrl}
             onChange={(e) => setLinkUrl(e.target.value)}
             placeholder="https://…"
-            onKeyDown={(e) => e.key === 'Enter' && insertLink()}
+            onCompositionStart={ime.handleCompositionStart}
+            onCompositionEnd={ime.handleCompositionEnd}
+            onKeyDown={(e) => e.key === 'Enter' && !ime.isImeConfirm(e.nativeEvent) && insertLink()}
           />
         </label>
         <div className="modal-actions">

@@ -44,6 +44,6 @@ These are allocation guards, not a parser sandbox or CPU deadline. The internal
 PDFium regression helper is not an HTTP API and must not be exposed to arbitrary
 uploads without independent worker/resource isolation.
 
-This is a new read-only PDF.js surface, not reuse of the complete native GenOffice
+This is a new read-only PDF.js surface, not reuse of the complete native DyOffice
 PDF editor/ribbon. Unchanged-byte comparison is not edited-document roundtrip
 acceptance. CJK extraction does not prove glyph coverage or visual font parity.

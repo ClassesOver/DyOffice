@@ -1,11 +1,22 @@
 import test,{before,after} from 'node:test'
 import assert from 'node:assert/strict'
 import {readFile} from 'node:fs/promises'
-const old=process.env.NODE_ENV
-before(()=>{process.env.NODE_ENV='test'})
-after(()=>{if(old===undefined)delete process.env.NODE_ENV;else process.env.NODE_ENV=old})
+import {fileURLToPath} from 'node:url'
+import {requireRunnableBrokerFixture} from '../helpers/broker-fixture-preflight.mjs'
 const golden=JSON.parse(await readFile(new URL('../../../../services/document-broker/tests/fixtures/control-frame.json',import.meta.url),'utf8'))
 const options=()=>({unsafeTestOnly:true,context:golden.context,brokerBootId:golden.brokerBootId})
+const old=process.env.NODE_ENV
+before(async()=>{
+ process.env.NODE_ENV='test'
+ for(const artifact of ['dyoffice-document-broker','examples/admission-fixture']) {
+  requireRunnableBrokerFixture(fileURLToPath(new URL(`../../../../services/document-broker/target/debug/${artifact}`,import.meta.url)))
+ }
+ // Prove the socketpair fixture really runs before any fault expectation can
+ // mistake spawn/loader/socket failure for the intended injected fault.
+ const {createTestBrokerAdmissionBackend}=await import('../../worker/src/sandbox/document-broker-admission.ts')
+ await assert.rejects(()=>createTestBrokerAdmissionBackend(options()).start({...golden.request,deadlineAt:new Date(Date.now()+5000).toISOString()},new Uint8Array(),new AbortController().signal),{code:'DOCUMENT_BROKER_DISABLED'})
+})
+after(()=>{if(old===undefined)delete process.env.NODE_ENV;else process.env.NODE_ENV=old})
 test('actual Rust socketpair admission returns a bound denial, never a start handle',async()=>{
  const {createTestBrokerAdmissionBackend}=await import('../../worker/src/sandbox/document-broker-admission.ts')
  const backend=createTestBrokerAdmissionBackend(options())

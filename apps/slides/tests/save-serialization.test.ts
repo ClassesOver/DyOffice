@@ -158,3 +158,68 @@ describe('slides save serialization', () => {
     vi.unstubAllGlobals()
   })
 })
+
+it('save waits for a blurred text commit even after focus moved to the save button', async () => {
+  vi.useFakeTimers()
+  const context = ctx(); context.editingActiveRef.current = true
+  const write = vi.fn(async () => ({ok: true}))
+  vi.stubGlobal('window', {slidesApi: {save: write}})
+  const saving = save(() => context, true)
+  try {
+    await vi.advanceTimersByTimeAsync(100)
+    expect(write).not.toHaveBeenCalled()
+    context.editingActiveRef.current = false
+    await vi.advanceTimersByTimeAsync(50)
+    expect(await saving).toBe(true)
+    expect(write).toHaveBeenCalledOnce()
+  } finally {
+    context.editingActiveRef.current = false
+    await vi.runAllTimersAsync(); await saving
+    vi.useRealTimers(); vi.unstubAllGlobals()
+  }
+})
+
+it('save fails closed instead of writing while an edit remains pending after the wait bound', async () => {
+  vi.useFakeTimers()
+  const context = ctx(); context.editingActiveRef.current = true
+  const write = vi.fn(async () => ({ok: true})), dirty = vi.fn(), status = vi.fn()
+  context.setDirty = dirty; context.setStatus = status
+  vi.stubGlobal('window', {slidesApi: {save: write}})
+  try {
+    const saving = save(() => context, true)
+    await vi.advanceTimersByTimeAsync(2100)
+    expect(await saving).toBe(false)
+    expect(write).not.toHaveBeenCalled(); expect(dirty).not.toHaveBeenCalled()
+    expect(status).toHaveBeenCalledWith('appEditCommitPending')
+  } finally {vi.useRealTimers(); vi.unstubAllGlobals()}
+})
+
+it('save refuses the explicit two-second contenteditable flush timeout', async () => {
+  vi.useFakeTimers()
+  const context = ctx(); context.editingActiveRef.current = true
+  const write = vi.fn(async () => ({ok: true})), blur = vi.fn()
+  vi.stubGlobal('window', {slidesApi: {save: write}})
+  vi.stubGlobal('document', {activeElement: {isContentEditable: true, blur}})
+  try {
+    const saving = save(() => context, true)
+    await vi.advanceTimersByTimeAsync(2100)
+    expect(blur).toHaveBeenCalledOnce()
+    expect(await saving).toBe(false)
+    expect(write).not.toHaveBeenCalled()
+  } finally {vi.useRealTimers(); vi.unstubAllGlobals()}
+})
+
+it('timed-out Save As writes nothing and releases the save queue for a later retry', async () => {
+  vi.useFakeTimers()
+  const context = ctx(); context.editingActiveRef.current = true
+  const write = vi.fn(async () => ({ok: true})), writeAs = vi.fn(async () => ({ok: true}))
+  vi.stubGlobal('window', {slidesApi: {save: write, saveAs: writeAs}})
+  try {
+    const pending = saveAs(() => context)
+    await vi.advanceTimersByTimeAsync(2100); await pending
+    expect(writeAs).not.toHaveBeenCalled()
+    context.editingActiveRef.current = false
+    expect(await save(() => context, true)).toBe(true)
+    expect(write).toHaveBeenCalledOnce()
+  } finally {vi.useRealTimers();vi.unstubAllGlobals()}
+})

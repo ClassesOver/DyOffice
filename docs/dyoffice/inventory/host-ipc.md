@@ -21,10 +21,10 @@
 | App | `browser-native` | `server-api` | `isolated-worker` | `unsupported` | `desktop-only` | Total |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
 | docs | 22 | 49 | 8 | 15 | 23 | 117 |
-| sheets | 17 | 42 | 23 | 21 | 11 | 114 |
+| sheets | 18 | 42 | 23 | 21 | 11 | 115 |
 | slides | 155 | 46 | 1 | 7 | 12 | 221 |
 | pdf | 10 | 32 | 26 | 10 | 8 | 86 |
-| **all** | 204 | 169 | 58 | 53 | 54 | 538 |
+| **all** | 205 | 169 | 58 | 53 | 54 | 539 |
 
 Lifecycle is derived from the IPC operations the preload member performs:
 `request` (invoke/sendSync), `subscription` (main→renderer events, returns an
@@ -35,6 +35,7 @@ renderer call sites resolved by symbol, including shared workspace packages.
 
 | Rule | Class | Members | Verify in | Web seam | Rationale |
 | --- | --- | ---: | --- | --- | --- |
+| `xlsx-inline-save-hint` | `browser-native` | 1 | T09 | Local same-process inline-save byte hint; final authenticated HTTP envelope remains bounded | Native preload explicitly leaves this hint undefined to preserve IPC chunking. Only the Web bridge supplies a bounded value; the hint grants no file or worker authority. |
 | `shell-chrome` | `desktop-only` | 18 | T07 | Web shell routes, tabs and in-page menus | Menu, tab, context-menu and window events originate in Electron's main process; a Web page owns its own menus and tabs. |
 | `shell-close-handshake` | `desktop-only` | 14 | T07 | beforeunload guard plus in-page save/print commands | Window-close and menu-driven save/print handshakes exist because the desktop main process owns the window; Web has no equivalent channel. |
 | `os-paths` | `desktop-only` | 10 | T05 | File ids and uploads (T05); no host paths | These take or return local filesystem paths. Web identifies documents by server file id and must not accept client paths (path traversal / authorization). |
@@ -181,7 +182,7 @@ renderer call sites resolved by symbol, including shared workspace packages.
 | `desktop.kbSearch` | request | invoke `kb:search` | 1 | `server-api` | `knowledge-base` |
 | `desktop.kbRead` | request | invoke `kb:read` | 1 | `server-api` | `knowledge-base` |
 | `desktop.getPathForFile` | local | webUtils.getPathForFile | 2 | `desktop-only` | `os-paths` |
-| `desktop.openNewTab` | request | invoke `win:new` | 1 | `desktop-only` | `shell-chrome` |
+| `desktop.openNewTab` | request | invoke `win:new` | 2 | `desktop-only` | `shell-chrome` |
 | `desktop.openSourcePath` | request | invoke `home:open-path` | 1 | `desktop-only` | `os-paths` |
 | `desktop.listDocsTabs` | request | invoke `win:list` | 1 | `desktop-only` | `shell-chrome` |
 | `desktop.focusDocsTab` | request | invoke `win:focus` | 1 | `desktop-only` | `shell-chrome` |
@@ -204,6 +205,7 @@ renderer call sites resolved by symbol, including shared workspace packages.
 
 | Member | Lifecycle | IPC | Calls | Class | Rule |
 | --- | --- | --- | ---: | --- | --- |
+| `desktopApi.saveEditsInlineMaxBytes` | local | — | 2 | `browser-native` | `xlsx-inline-save-hint` |
 | `desktopApi.getLanguage` | request | invoke `app:get-language` | 1 | `browser-native` | `ui-locale-theme` |
 | `desktopApi.openSourcePath` | request | invoke `home:open-path` | 1 | `desktop-only` | `os-paths` |
 | `desktopApi.onLanguageChanged` | subscription | on `app:language-changed` | 2 | `browser-native` | `ui-locale-theme` |

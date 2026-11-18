@@ -2,13 +2,13 @@
 
 > **For agentic workers:** Use superpowers:executing-plans for this isolated implementation.
 
-**Goal:** Reuse the actual GenOffice settings dialog in the Web account entry, not a lookalike preferences page.
+**Goal:** Reuse the actual DyOffice settings dialog in the Web account entry, not a lookalike preferences page.
 
 **Architecture:** Add an optional Web capability configuration to the original SettingsModal. The original desktop branch remains the default. Web account identity is explicitly personal development-token access, not Genspark login. Web preferences use the authenticated existing API and unsupported desktop capabilities stay disabled.
 
 **Tech Stack:** Existing React/TypeScript, original SettingsModal/CSS, Fastify preferences API, Vitest and Playwright.
 
-**Spec:** User's explicit request to preserve GenOffice UI, including personal settings; parent assignment to implement and provide real browser screenshots.
+**Spec:** User's explicit request to preserve DyOffice UI, including personal settings; parent assignment to implement and provide real browser screenshots.
 
 ## Global Constraints
 - Never expose API keys or represent development tokens as full account login.

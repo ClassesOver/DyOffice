@@ -16,6 +16,7 @@ export const ms = {
   appPhPromptBody: 'Klik untuk menambah teks',
   appStatusOpened: '{name} dibuka ({count} slaid)',
   appStatusNewBlank: 'Persembahan kosong telah dibuat',
+  appEditCommitPending: "Suntingan masih sedang digunakan. Cuba lagi sebentar lagi.",
   appStatusSaved: 'Disimpan',
   appStatusSaveFailed: 'Gagal menyimpan: {error}',
   appErrorCanceled: 'Dibatalkan',

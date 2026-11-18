@@ -77,6 +77,7 @@ export function createSheetsBridge(host: SessionFileHost, fileId: string, prefs:
     return current.extras ??= call(current.revision,'package').catch(error => { delete current.extras; throw error })
   }
   const api = {
+    saveEditsInlineMaxBytes: 4 * 1024 * 1024,
     getLanguage: async () => prefs.language === 'en' ? 'en' as const : 'zh' as const,
     getTheme: async () => prefs.theme,
     getDocumentTheme: async () => 'follow' as const,
@@ -118,7 +119,13 @@ export function createSheetsBridge(host: SessionFileHost, fileId: string, prefs:
         committed=saved
         return {canceled:false as const,file:await open(),touchedEntries:saved.touchedEntries}
       } catch(error) {
-        if (!saved && host.getState(fileId).status !== 'unknown') throw error
+        // Teardown cannot undo a dispatched commit. Leave its durable/unknown
+        // state in the host, but never recreate recovery for an unmounted view.
+        if (disposed) throw hostError('UNAVAILABLE','disposed')
+        if (!saved && host.getState(fileId).status !== 'unknown') {
+          if ((error as {code?:string}).code === 'PAYLOAD_TOO_LARGE') throw new Error(prefs.language === 'en' ? 'Web save exceeds the 4 MiB request limit. Your edits are still unsaved; keep this page open.' : '本次保存超过 Web 请求的 4 MiB 限制。更改仍未保存，请保留当前页面，不要关闭或刷新。')
+          throw error
+        }
         // Keep save-actions' original Promise, journal snapshot and view alive.
         // Confirmation resumes that exact save, including its late-edit carry.
         return new Promise<SaveResult>((resolve,reject)=>{recovery={...(saved ? {saved} : {}),resolve,reject};onChange()})
@@ -138,6 +145,7 @@ export function createSheetsBridge(host: SessionFileHost, fileId: string, prefs:
     confirming=true
     try {
       pending.saved ??= await host.reconcileSheets(fileId,saveFence??(()=>true))
+      if (disposed) throw hostError('UNAVAILABLE','disposed')
       committed=pending.saved
       const file=await open()
       recovery=null
@@ -145,7 +153,7 @@ export function createSheetsBridge(host: SessionFileHost, fileId: string, prefs:
     } catch(error) {
       if (!pending.saved && host.getState(fileId).status !== 'unknown') {recovery=null;pending.reject(error)}
       throw error
-    } finally {confirming=false;onChange()}
+    } finally {confirming=false;if(!disposed)onChange()}
   }
   async function prepareDownload(editor: {saveAndWait(): Promise<boolean>; isDirty(): boolean}) {
     if(disposed)throw hostError('UNAVAILABLE','disposed')

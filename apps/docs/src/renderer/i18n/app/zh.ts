@@ -1,5 +1,6 @@
 /** app strings, zh: defines the key set every other locale shard must match. */
 export const zh = {
+  appPasteRemoteImageFailed: '无法粘贴远程图片。请重新复制图片，或插入本地图片文件。',
   appScTitle: '键盘快捷键',
   appScFilter: '搜索快捷键',
   appScNone: '没有匹配的快捷键',

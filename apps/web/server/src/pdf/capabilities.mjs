@@ -1,5 +1,5 @@
 import { inflateSync } from 'node:zlib'
-import { EncryptedPDFError, PDFArray, PDFDict, PDFDocument, PDFName } from 'pdf-lib'
+import { PDFArray, PDFDict, PDFDocument, PDFName } from 'pdf-lib'
 
 function reject(code, status = 400) {
   throw Object.assign(new Error(code), { code, status })
@@ -22,12 +22,28 @@ function locked() {
   }
 }
 
-function streamBytes(stream) {
-  if (!stream || typeof stream.getContents !== 'function') return Buffer.alloc(0)
-  const raw = Buffer.from(stream.getContents())
+// Scanner-local limits, not a PDF parser or process isolation boundary.
+const STREAM_BYTES = 1024 * 1024
+const DOCUMENT_BYTES = 8 * STREAM_BYTES
+
+function streamBytes(stream, budget) {
+  if (!stream || typeof stream.getContents !== 'function') reject('UNREADABLE')
+  const raw = stream.getContents()
   const filter = stream.dict?.get?.(PDFName.of('Filter'))
-  if (String(filter).includes('FlateDecode')) return inflateSync(raw)
-  return raw
+  const limit = Math.min(STREAM_BYTES, budget.remaining)
+  if (limit < 0) reject('UNREADABLE')
+  // Bound native decompression before allocation; checking length afterwards
+  // cannot contain a highly compressed content stream. At zero remaining,
+  // zlib requires a positive limit: allow only a one-byte probe, then reject
+  // any nonempty result below. An empty Flate stream consumes no budget.
+  const compressed = String(filter).includes('FlateDecode')
+  if (!compressed && raw.length > limit) reject('UNREADABLE')
+  const bytes = compressed
+    ? inflateSync(raw, { maxOutputLength: Math.max(1, limit) })
+    : Buffer.from(raw)
+  if (bytes.length > limit) reject('UNREADABLE')
+  budget.remaining -= bytes.length
+  return bytes
 }
 
 function isDelim(char) {
@@ -92,13 +108,12 @@ function tokenize(source) {
   return tokens
 }
 
-function contentSource(context, contents) {
+function contentSource(context, contents, budget) {
   if (!contents) return ''
   const items = contents instanceof PDFArray ? contents.asArray() : [contents]
-  return items.map((item) => {
-    try { return streamBytes(context.lookup(item)).toString('latin1') }
-    catch { return '' }
-  }).join('\n')
+  // Decode failures must not turn a damaged/over-budget page into a successful
+  // blank-page report. Let inspectPdf apply the common fail-closed error.
+  return items.map((item) => streamBytes(context.lookup(item), budget).toString('latin1')).join('\n')
 }
 
 function embeddedFont(dict) {
@@ -144,7 +159,7 @@ function xobjectNamed(resources, name) {
   return xobjects.context.lookup(xobjects.get(key))
 }
 
-function inspectStream(context, resources, source, seen, state) {
+function inspectStream(context, resources, source, seen, state, budget) {
   state.fonts.push(...fontsFrom(resources))
   const tokens = tokenize(source)
   for (let index = 0; index < tokens.length; index += 1) {
@@ -166,9 +181,10 @@ function inspectStream(context, resources, source, seen, state) {
       inspectStream(
         context,
         formResources instanceof PDFDict ? formResources : resources,
-        streamBytes(object).toString('latin1'),
+        streamBytes(object, budget).toString('latin1'),
         seen,
         state,
+        budget,
       )
     }
   }
@@ -201,9 +217,9 @@ function signaturesOn(page, pageNumber) {
   return found
 }
 
-function classify(page, pageNumber) {
+function classify(page, pageNumber, budget) {
   const state = { text: false, image: false, fonts: [] }
-  inspectStream(page.node.context, page.node.Resources(), contentSource(page.node.context, page.node.Contents()), new Set(), state)
+  inspectStream(page.node.context, page.node.Resources(), contentSource(page.node.context, page.node.Contents(), budget), new Set(), state, budget)
   const kind = state.text ? 'text' : state.image ? 'scanned' : 'blank'
   return { page: pageNumber, kind, textOperators: state.text, image: state.image, fonts: uniqueFonts(state.fonts) }
 }
@@ -219,10 +235,19 @@ export async function inspectPdf(bytes) {
   if (!Buffer.isBuffer(bytes) || bytes.length < 5 || !bytes.subarray(0, 5).equals(Buffer.from('%PDF-'))) {
     reject('MAGIC_MISMATCH')
   }
+  let doc
   try {
-    const doc = await PDFDocument.load(bytes, { updateMetadata: false })
-    if (doc.isEncrypted) return locked()
-    const pages = doc.getPages().map((page, index) => classify(page, index + 1))
+    doc = await PDFDocument.load(bytes, { updateMetadata: false, ignoreEncryption: true })
+  } catch {
+    reject('UNREADABLE')
+  }
+  // Only the parsed trailer establishes encryption, never arbitrary /Encrypt
+  // bytes. ignoreEncryption permits this metadata check, not scanning/rendering:
+  // encrypted documents return immediately, before getPages or stream decoding.
+  if (doc.isEncrypted) return locked()
+  try {
+    const budget = { remaining: DOCUMENT_BYTES }
+    const pages = doc.getPages().map((page, index) => classify(page, index + 1, budget))
     const signatures = pages.flatMap((page, index) => signaturesOn(doc.getPages()[index], page.page))
     const capabilities = { ...OPEN_CAPABILITIES }
     if (pages.some((page) => page.kind === 'text')) capabilities.read = 'text_layer'
@@ -235,8 +260,9 @@ export async function inspectPdf(bytes) {
       signatures,
       capabilities,
     }
-  } catch (error) {
-    if (error instanceof EncryptedPDFError || bytes.includes(Buffer.from('/Encrypt'))) return locked()
+  } catch {
+    // The document already loaded as unencrypted: scan/decode/budget failures
+    // must remain errors, never a successful password-required report.
     reject('UNREADABLE')
   }
 }

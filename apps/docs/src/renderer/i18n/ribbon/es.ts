@@ -53,9 +53,9 @@ export const es = {
   ribbonRotateLeft: 'Girar 90° a la izquierda',
   ribbonFlipH: 'Voltear horizontalmente',
   ribbonFlipV: 'Voltear verticalmente',
-  ribbonCropTip: 'Recortar la imagen (arrastre los controladores, Entrar para confirmar)',
+  ribbonCropTip: 'Recortar la imagen (arrastre los controladores)',
   ribbonCropHint:
-    'Arrastre los controladores o mueva el cuadro para elegir el área que desea conservar; Entrar para aplicar, Esc para cancelar',
+    'Arrastre los controladores o mueva el cuadro para elegir el área que desea conservar; Esc para cancelar',
   ribbonReplacePicture: 'Reemplazar imagen',
   ribbonReplacePictureTip: 'Reemplazar la imagen conservando su tamaño y ajuste de texto actuales',
   ribbonResetSize: 'Restablecer tamaño',

@@ -9,12 +9,14 @@ import { TabBar } from './TabBar'
 interface AppFrameProps {
   /** resolved before first paint (main.tsx) so home never flashes under the overlay */
   initialOnboardingSeen: boolean
+  hideSingleTabList?: boolean
+  hideAppMenu?: boolean
   homeProps?:HomeProps
   renderEditor?:(tab:TabSummary)=>ReactNode
   editorContent?:ReactNode
 }
 
-export function AppFrame({ initialOnboardingSeen, homeProps, renderEditor, editorContent }: AppFrameProps) {
+export function AppFrame({ initialOnboardingSeen, homeProps, renderEditor, editorContent, hideSingleTabList, hideAppMenu }: AppFrameProps) {
   const [activeTab,setActiveTab] = useState<TabSummary | undefined>()
   const [homeActive, setHomeActive] = useState(true)
   const [showOnboarding, setShowOnboarding] = useState(!initialOnboardingSeen)
@@ -57,7 +59,7 @@ export function AppFrame({ initialOnboardingSeen, homeProps, renderEditor, edito
 
   return (
     <div className="app-frame">
-      <TabBar />
+      <TabBar hideSingleTabList={hideSingleTabList} hideAppMenu={hideAppMenu}/>
       {/* docs/sheets tabs render as WebContentsView children of this window, positioned
        * by the main process to cover this area — only Home paints its own content here. */}
       <div className="app-frame-content" style={{ visibility: homeActive ? 'visible' : 'hidden' }}>

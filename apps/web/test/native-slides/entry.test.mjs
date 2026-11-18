@@ -41,7 +41,10 @@ export function App({host} = {}) {
       setCount(result.slides.length)
     }).catch(() => { host?.onOpenFailed?.() })
   }, [])
-  if (window.__slidesEntryProbe) window.__slidesEntryProbe.readOnly = host?.readOnly === true
+  if (window.__slidesEntryProbe) {
+    if(window.__slidesEntryProbe.markReadOnlyDirty && host?.readOnly && !window.__slidesEntryProbe.readOnly)window.__slidesEntryProbe.dirty=true
+    window.__slidesEntryProbe.readOnly = host?.readOnly === true
+  }
   return <div className="app-shell" data-slides-app="mounted">{count === null ? 'opening' : count + ' slides'}</div>
 }
 `
@@ -91,6 +94,8 @@ function installDom(t) {
     Object.defineProperty(globalThis, key, {value, configurable: true, writable: true})
   }
   assign('window', dom.window)
+  assign('location', dom.window.location)
+  assign('WebSocket', undefined)
   for (const key of ['document', 'navigator', 'HTMLElement', 'HTMLAnchorElement', 'HTMLInputElement', 'Event', 'KeyboardEvent', 'MouseEvent', 'CustomEvent', 'MutationObserver']) assign(key, dom.window[key])
   assign('getComputedStyle', dom.window.getComputedStyle.bind(dom.window))
   // Restore only globals Node owned before (navigator); the DOM globals stay
@@ -114,7 +119,7 @@ async function until(condition, label, timeoutMs = 8000) {
   }
 }
 
-const statusText = container => container.querySelector('.dyoffice-slides-state')?.textContent ?? ''
+const statusText = container => [...container.querySelectorAll('.dyoffice-slides-state,.document-notification')].map(node=>node.textContent).join(' ')
 // The entry's bridge is private; recovery state is observable through the status bar.
 const bridgeProbe = () => 'n/a'
 
@@ -131,7 +136,7 @@ test('slides entry mounts the renderer, saves and downloads through the confirme
   const container = dom.window.document.getElementById('mount')
   const {mountSlidesEditor} = await bundleEntry(t)
   const mounted = await mountSlidesEditor(host, container, server.file().fileId)
-  t.after(() => mounted.dispose())
+  t.after(() => mounted.unload())
 
   await until(() => container.querySelector('[data-slides-app]')?.textContent === '2 slides', 'renderer App boot')
   await until(() => statusText(container).includes('Editing'), 'editing status')
@@ -176,7 +181,7 @@ test('slides entry surfaces an unknown commit receipt and confirms it without re
   const container = dom.window.document.getElementById('mount')
   const {mountSlidesEditor} = await bundleEntry(t)
   const mounted = await mountSlidesEditor(host, container, server.file().fileId)
-  t.after(() => mounted.dispose())
+  t.after(() => mounted.unload())
   await until(() => container.querySelector('[data-slides-app]')?.textContent === '1 slides', 'renderer App boot')
 
   await globalThis.window.__slidesEntryProbe.api.editText({slideIndex: 0, sourceId: 'e1-title', paragraphs: [{runs: [{text: 'unknown receipt'}]}]})
@@ -205,7 +210,7 @@ test('slides entry is read only without the lease and takes over editing explici
   // Another editor already holds the document: the entry mounts without a lease.
   server.grantLeaseTo('first-editor')
   const mounted = await mountSlidesEditor(host, container, fileId)
-  t.after(() => mounted.dispose())
+  t.after(() => mounted.unload())
   await until(() => statusText(container).includes('Read only'), 'read-only status')
   assert.equal(container.querySelector('[data-slides-app]') === null, true, 'no parser session may open without a server lease')
   const takeover = () => container.querySelector('.dyoffice-slides-takeover')
@@ -229,7 +234,7 @@ test('lease loss after mount preserves dirty renderer and blocks takeover and sa
  globalThis.fetch=server.fetchImpl
  const host=createSessionFileHost({fetchImpl:server.fetchImpl});t.after(()=>host.dispose())
  const container=dom.window.document.getElementById('mount'),{mountSlidesEditor}=await bundleEntry(t),id=server.file().fileId
- const mounted=await mountSlidesEditor(host,container,id);t.after(()=>mounted.dispose())
+ const mounted=await mountSlidesEditor(host,container,id);t.after(()=>mounted.unload())
  await until(()=>container.querySelector('[data-slides-app]')?.textContent==='2 slides','authorized initial mount')
  window.__slidesEntryProbe.dirty=true
  const original=container.querySelector('[data-slides-app]')
@@ -240,4 +245,48 @@ test('lease loss after mount preserves dirty renderer and blocks takeover and sa
  assert.equal(container.querySelector('.dyoffice-slides-download').disabled,true)
  assert.equal(container.querySelector('.dyoffice-slides-takeover').disabled,true)
  assert.equal(window.__slidesEntryProbe.dirty,true)
+})
+
+test('tab close refuses dirty discard and releases its lease before clean disposal',async t=>{
+ const server=createSlidesMockServer({slideCount:2}),dom=installDom(t)
+ globalThis.fetch=server.fetchImpl
+ const host=createSessionFileHost({fetchImpl:server.fetchImpl})
+ const container=dom.window.document.getElementById('mount'),{mountSlidesEditor}=await bundleEntry(t),id=server.file().fileId
+ const mounted=await mountSlidesEditor(host,container,id)
+ t.after(()=>{mounted.unload();host.dispose()})
+ await until(()=>container.querySelector('[data-slides-app]')?.textContent==='2 slides','mounted')
+ window.__slidesEntryProbe.dirty=true
+ dom.window.confirm=()=>false
+ assert.equal(await mounted.canClose(),false)
+ assert.equal(await mounted.dispose(),false)
+ assert.ok(container.querySelector('[data-slides-app]'))
+ assert.ok(host.getState(id).lease)
+ window.__slidesEntryProbe.dirty=false
+ assert.equal(await mounted.canClose(),true)
+ assert.equal(await mounted.dispose(),true)
+ assert.equal(host.getState(id).lease,null)
+ assert.equal(container.querySelector('[data-slides-app]'),null)
+})
+test('failed editor bootstrap remains closable instead of trapping the failed tab',async t=>{
+ const dom=installDom(t)
+ await bundleEntry(t)
+ await until(()=>dom.window.document.getElementById('root')?.textContent.includes('无法')||dom.window.document.getElementById('root')?.textContent.includes('Unable'),'failed bootstrap')
+ assert.equal(await dom.window.dyofficeEditorCanClose(),true)
+ assert.equal(await dom.window.dyofficeEditorDispose(),true)
+})
+
+test('lease release during clean disposal does not push an artificial read-only edit into the renderer',async t=>{
+ const server=createSlidesMockServer({slideCount:2}),dom=installDom(t)
+ globalThis.fetch=server.fetchImpl
+ const host=createSessionFileHost({fetchImpl:server.fetchImpl})
+ const release=host.releaseLease
+ host.releaseLease=async(...args)=>{await release(...args);await settle()}
+ const container=dom.window.document.getElementById('mount'),{mountSlidesEditor}=await bundleEntry(t),id=server.file().fileId
+ const mounted=await mountSlidesEditor(host,container,id)
+ t.after(()=>{mounted.unload();host.dispose()})
+ await until(()=>container.querySelector('[data-slides-app]')?.textContent==='2 slides','mounted')
+ window.__slidesEntryProbe.markReadOnlyDirty=true
+ assert.equal(await mounted.canClose(),true)
+ assert.equal(await mounted.dispose(),true)
+ assert.equal(container.querySelector('[data-slides-app]'),null)
 })

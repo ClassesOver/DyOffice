@@ -97,12 +97,13 @@ export function createEditorBridge({ fetchImpl = fetch, origin, fileId, editorId
     if (!response.ok) throw new Error('Connection unavailable')
   }
   async function requestTicket(signal: AbortSignal) {
-    const csrfReply = await fetchImpl(origin + '/api/v1/auth/csrf', { credentials: 'same-origin', mode: 'same-origin', redirect: 'error', cache: 'no-store', signal })
+    const csrfReply = await fetchImpl(origin + '/api/v1/auth/csrf', { credentials: 'same-origin', mode: 'same-origin', referrerPolicy: 'same-origin', redirect: 'error', cache: 'no-store', signal })
     checkResponse(csrfReply)
     const csrf = await csrfReply.json() as { csrfToken?: string }
     if (typeof csrf.csrfToken !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(csrf.csrfToken)) throw new Error('Invalid CSRF response')
+    // Keep Firefox's write Origin intact without allowing cross-origin requests or referrers.
     const reply = await fetchImpl(origin + '/api/v1/realtime/ticket', {
-      method: 'POST', credentials: 'same-origin', mode: 'same-origin', redirect: 'error', cache: 'no-store', signal,
+      method: 'POST', credentials: 'same-origin', mode: 'same-origin', referrerPolicy: 'same-origin', redirect: 'error', cache: 'no-store', signal,
       headers: { 'content-type': 'application/json', 'x-csrf-token': csrf.csrfToken }, body: JSON.stringify({ fileId, editorId }),
     })
     checkResponse(reply)

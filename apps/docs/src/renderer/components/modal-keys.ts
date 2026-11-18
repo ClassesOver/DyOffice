@@ -1,5 +1,20 @@
-import { useEffect, useRef } from 'react'
-import type { KeyboardEvent as ReactKeyboardEvent } from 'react'
+import { useCallback, useEffect, useRef } from 'react'
+import type { KeyboardEvent as ReactKeyboardEvent, RefObject } from 'react'
+import { createImeEnterGuard, type ImeEnterGuard } from '@genoffice/ui'
+
+const openModals: HTMLDivElement[] = []
+const modalParents = new Map<HTMLDivElement, RefObject<HTMLDivElement | null>>()
+
+function belongsBelow(modal: HTMLDivElement, ancestor: HTMLDivElement): boolean {
+  const visited = new Set<HTMLDivElement>()
+  let current: HTMLDivElement | null = modal
+  while (current && !visited.has(current)) {
+    if (ancestor.contains(current)) return true
+    visited.add(current)
+    current = modalParents.get(current)?.current ?? null
+  }
+  return false
+}
 
 /**
  * Shared modal keyboard behavior: Esc closes (stopped so it never reaches
@@ -8,31 +23,81 @@ import type { KeyboardEvent as ReactKeyboardEvent } from 'react'
  * already focused (autoFocus). Spread the returned ref/onKeyDown onto the
  * modal backdrop element.
  */
-export function useModalKeys(onClose: () => void) {
+export function useModalKeys(
+  onClose: () => void,
+  options?: { parentRef?: RefObject<HTMLDivElement | null> },
+) {
+  // Portal children must explicitly identify their modal parent. DOM nesting
+  // remains supported without options; no React-private ancestry is inspected.
+  const parentRef = options?.parentRef
   const ref = useRef<HTMLDivElement>(null)
+  const imeGuards = useRef(new WeakMap<EventTarget, ImeEnterGuard>())
+  const imeFor = useCallback((target: EventTarget) => {
+    let guard = imeGuards.current.get(target)
+    if (!guard) {
+      guard = createImeEnterGuard()
+      imeGuards.current.set(target, guard)
+    }
+    return guard
+  }, [])
 
   useEffect(() => {
     const el = ref.current
-    if (!el || el.contains(document.activeElement)) return
-    const first = el.querySelector<HTMLElement>('input, textarea, select, button')
+    if (!el) return
+    // 直接监听组合事件，兼容只接收 ref/onKeyDown 的现有弹窗。
+    const start = (e: Event) => { if (e.target) imeFor(e.target).handleCompositionStart() }
+    const end = (e: Event) => { if (e.target) imeFor(e.target).handleCompositionEnd() }
+    el.addEventListener('compositionstart', start, true)
+    el.addEventListener('compositionend', end, true)
+    return () => {
+      el.removeEventListener('compositionstart', start, true)
+      el.removeEventListener('compositionend', end, true)
+    }
+  }, [imeFor])
+
+  useEffect(() => {
+    const el = ref.current
+    if (!el) return
+    // Child effects mount first; a containing backdrop belongs below its child.
+    if (parentRef) modalParents.set(el, parentRef)
+    const child = openModals.findIndex(other => belongsBelow(other, el))
+    openModals.splice(child < 0 ? openModals.length : child, 0, el)
+    return () => {
+      const index = openModals.indexOf(el)
+      if (index >= 0) openModals.splice(index, 1)
+      modalParents.delete(el)
+    }
+  }, [parentRef])
+
+  useEffect(() => {
+    const el = ref.current
+    if (!el || openModals.at(-1) !== el || el.contains(document.activeElement)) return
+    const first = [...el.querySelectorAll<HTMLElement>('input, textarea, select, button')]
+      .find(control => !control.matches(':disabled') && control.tabIndex >= 0)
     ;(first ?? el).focus()
   }, [])
 
-  // Clicking a canvas/img inside the modal blurs to body, where the React handler never sees Esc.
+  // A click on non-focusable content can leave focus on body, outside React's handler.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape' || !focusOutsideModal(ref.current)) return
-      e.preventDefault()
-      onClose()
+      if (openModals.at(-1) !== ref.current || !focusOutsideModal(ref.current)) return
+      if (e.key === 'Tab') trapTab(ref.current, e)
+      else if (e.key === 'Escape') {
+        if (imeFor(e.target ?? window).isImeConfirm(e)) return
+        e.preventDefault()
+        onClose()
+      }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [onClose])
+  }, [onClose, imeFor])
 
   const onKeyDown = (e: ReactKeyboardEvent) => {
+    if (openModals.at(-1) !== ref.current) return
     if (e.key === 'Escape') {
-      e.preventDefault()
       e.stopPropagation()
+      if (imeFor(e.target).isImeConfirm(e.nativeEvent)) return
+      e.preventDefault()
       onClose()
       return
     }
@@ -69,7 +134,7 @@ export function trapTab(
   if (e.shiftKey && (active === first || !container.contains(active))) {
     e.preventDefault()
     last.focus()
-  } else if (!e.shiftKey && active === last) {
+  } else if (!e.shiftKey && (active === last || !container.contains(active))) {
     e.preventDefault()
     first.focus()
   }

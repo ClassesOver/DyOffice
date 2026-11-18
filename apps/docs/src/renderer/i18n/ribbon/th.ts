@@ -52,9 +52,9 @@ export const th = {
   ribbonRotateLeft: 'หมุนซ้าย 90°',
   ribbonFlipH: 'พลิกแนวนอน',
   ribbonFlipV: 'พลิกแนวตั้ง',
-  ribbonCropTip: 'ครอบตัดรูปภาพ (ลากจุดจับ กด Enter เพื่อยืนยัน)',
+  ribbonCropTip: 'ครอบตัดรูปภาพ (ลากจุดจับ)',
   ribbonCropHint:
-    'ลากจุดจับหรือย้ายกรอบเพื่อเลือกพื้นที่ที่จะเก็บไว้ กด Enter เพื่อนำไปใช้ Esc เพื่อยกเลิก',
+    'ลากจุดจับหรือย้ายกรอบเพื่อเลือกพื้นที่ที่จะเก็บไว้ Esc เพื่อยกเลิก',
   ribbonReplacePicture: 'แทนที่รูปภาพ',
   ribbonReplacePictureTip: 'แทนที่รูปภาพโดยคงขนาดและการตัดคำปัจจุบัน',
   ribbonResetSize: 'รีเซ็ตขนาด',

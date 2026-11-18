@@ -1,9 +1,53 @@
-# GenOffice Privacy
+# DyOffice Web data handling
+
+Last updated: November 17, 2026
+
+## Scope
+
+This repository targets a server-backed Web workspace. The desktop-only
+statements in the historical notice below do **not** describe DyOffice Web.
+In particular, Web document uploads and saves are not local-only operations.
+
+## Web workspace
+
+When you upload a file, the browser sends its name and size, followed by its
+contents, to the workspace server. The server validates the upload and uses
+the deployment's configured object store; file and revision records and
+storage accounting are maintained server-side. Opening and downloading a
+workspace file retrieves data from that service. Supported save operations
+also send document data to the service. Rendering an editor or preview in
+the browser does not mean the workspace file stays only on your device.
+
+When an AI capability is enabled and invoked, its request can include prompts,
+conversation messages, selected document context and tool results. Requests
+are handled through the workspace's configured AI service/provider path.
+The provider request builder supports user, assistant and tool content.
+Do not assume a model request stays on the user's device merely because a
+desktop notice mentions a local endpoint.
+
+This source-level description is not a complete deployment privacy policy.
+Before operating a service, the operator must disclose the actual hosting,
+storage and provider recipients, retention and deletion rules, backups,
+access controls, logging and any analytics in that deployment. This document
+does not promise that deletion immediately removes all copies, that no
+telemetry exists, or that a provider does not retain or use submitted data.
+Users should consult the privacy notice of the specific service they use.
+
+## Historical desktop notice (not a DyOffice Web policy)
+
+The text below is retained as historical desktop documentation. Its references
+to local editing/search, desktop settings, official packaged builds and
+analytics describe that desktop context, not the behavior or configuration of
+a DyOffice Web deployment.
+
+---
+
+# DyOffice Privacy
 
 Last updated: November 12, 2026
 
-GenOffice opens, edits, and saves documents locally. Document editing does not
-upload files to GenOffice. AI features require a network connection and send
+DyOffice opens, edits, and saves documents locally. Document editing does not
+upload files to DyOffice. AI features require a network connection and send
 requests only when you use them.
 
 ## Search reranking (off by default)
@@ -73,12 +117,12 @@ email address.
 Events are sent to Google Analytics 4 using the Measurement Protocol over
 HTTPS. As the HTTPS recipient, Google necessarily sees the connection's public
 IP address and transport metadata, and may use them for coarse geolocation and
-security or spam-abuse processing. GenOffice does not add an IP address to the
+security or spam-abuse processing. DyOffice does not add an IP address to the
 event payload.
 
 ## Data not collected by analytics
 
-GenOffice analytics never sends:
+DyOffice analytics never sends:
 
 - document content
 - file names

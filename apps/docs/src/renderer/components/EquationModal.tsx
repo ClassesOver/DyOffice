@@ -1,3 +1,4 @@
+import { useImeEnterGuard } from '@genoffice/ui'
 import { useMemo, useState } from 'react'
 import type { Editor } from '@tiptap/core'
 import { latexToOmml, ommlToMathML } from '@genoffice/docx-engine'
@@ -86,6 +87,7 @@ export function EquationModal({
 }) {
   const { t } = useI18n()
   const modalKeys = useModalKeys(onClose)
+  const ime = useImeEnterGuard()
   const [latex, setLatex] = useState(editTarget?.latex ?? '')
   const [inline, setInline] = useState(editTarget?.kind === 'inline')
   const preview = useMemo(() => previewOf(latex), [latex])
@@ -129,7 +131,9 @@ export function EquationModal({
             value={latex}
             onChange={(e) => setLatex(e.target.value)}
             placeholder={t('appLatexPlaceholder')}
-            onKeyDown={(e) => e.key === 'Enter' && insert()}
+            onCompositionStart={ime.handleCompositionStart}
+            onCompositionEnd={ime.handleCompositionEnd}
+            onKeyDown={(e) => e.key === 'Enter' && !ime.isImeConfirm(e.nativeEvent) && insert()}
             autoFocus
           />
         </label>

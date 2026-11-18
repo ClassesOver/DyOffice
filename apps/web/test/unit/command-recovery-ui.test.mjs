@@ -251,6 +251,7 @@ test('lookup and mutation fetch refuse redirects and cross-origin mode', async (
   await client.abandon(fileId, commandId, digest)
   for (const options of calls) {
     assert.equal(options.mode, 'same-origin')
+    assert.equal(options.referrerPolicy, 'same-origin')
     assert.equal(options.redirect, 'error')
   }
 })

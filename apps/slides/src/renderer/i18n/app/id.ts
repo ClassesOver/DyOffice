@@ -16,6 +16,7 @@ export const id = {
   appPhPromptBody: 'Klik untuk menambahkan teks',
   appStatusOpened: 'Membuka {name} ({count} slide)',
   appStatusNewBlank: 'Presentasi kosong telah dibuat',
+  appEditCommitPending: "Perubahan masih diterapkan. Coba lagi sebentar lagi.",
   appStatusSaved: 'Disimpan',
   appStatusSaveFailed: 'Gagal menyimpan: {error}',
   appErrorCanceled: 'Dibatalkan',

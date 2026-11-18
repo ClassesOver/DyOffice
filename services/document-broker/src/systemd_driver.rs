@@ -46,6 +46,7 @@ struct Attempt {
     attempted: bool,
     used: bool,
     phase: Phase,
+    unit_binding: Option<crate::unit_binding::UnitBinding>,
 }
 impl Attempt {
     fn new(generation: u64) -> Self {
@@ -54,6 +55,7 @@ impl Attempt {
             attempted: false,
             used: false,
             phase: Phase::NotSubmitted,
+            unit_binding: None,
         }
     }
     #[allow(clippy::too_many_arguments)] // private pinned transport and attempt context
@@ -68,6 +70,7 @@ impl Attempt {
         check_sender: bool,
     ) -> Phase {
         if self.used || budget.is_zero() || budget > Duration::from_secs(2) {
+            self.unit_binding = None;
             return if self.attempted {
                 Phase::Quarantined
             } else {
@@ -94,6 +97,9 @@ impl Attempt {
         } else {
             Phase::NotSubmitted
         });
+        if matches!(self.phase, Phase::Quarantined | Phase::NotSubmitted) {
+            self.unit_binding = None;
+        }
         self.phase.clone()
     }
     #[allow(clippy::too_many_arguments)] // shared production/test control flow; no external API
@@ -140,6 +146,9 @@ impl Attempt {
         } else {
             Phase::NotSubmitted
         };
+        if matches!(self.phase, Phase::Quarantined | Phase::NotSubmitted) {
+            self.unit_binding = None;
+        }
         self.phase.clone()
     }
     async fn submit_system(
@@ -148,6 +157,7 @@ impl Attempt {
         cancel: tokio::sync::watch::Receiver<bool>,
     ) -> Phase {
         if self.used {
+            self.unit_binding = None;
             return if self.attempted {
                 Phase::Quarantined
             } else {
@@ -228,6 +238,9 @@ impl Attempt {
                 } else {
                     Phase::NotSubmitted
                 };
+                if matches!(self.phase, Phase::Quarantined | Phase::NotSubmitted) {
+                    self.unit_binding = None;
+                }
                 self.phase.clone()
             }
         }
@@ -245,6 +258,7 @@ impl Attempt {
         cancel: tokio::sync::watch::Receiver<bool>,
     ) -> Phase {
         if fixture.generation != self.generation {
+            self.unit_binding = None;
             return if self.attempted {
                 Phase::Quarantined
             } else {
@@ -361,6 +375,15 @@ impl Attempt {
                     return Err(());
                 }
                 if let Some(event) = matching.first() {
+                    if event.3 == "done" {
+                        // Keep the same deadline/cancel/owner window as submission.
+                        // A successful job is not enough to bind a unit incarnation.
+                        let binding = tokio::select! { biased;
+                            _ = owner_lost.as_mut() => return Err(()),
+                            result = crate::unit_binding::read(connection, destination, spec) => result?,
+                        };
+                        self.unit_binding = Some(binding);
+                    }
                     return Ok(Phase::JobObserved {
                         job_id: *id,
                         result: event.3.clone(),
@@ -374,6 +397,7 @@ impl Attempt {
             return Err(());
         }
         self.generation = generation;
+        self.unit_binding = None;
         if self.attempted {
             self.phase = Phase::Quarantined
         }
@@ -417,4 +441,43 @@ where
         return Err(());
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod container_diagnostic {
+    use super::*;
+    #[tokio::test]
+    #[ignore = "requires operator-audited Ubuntu Docker systemd container; benign sleep only"]
+    async fn fixed_sleep_unit_times_out() {
+        crate::container_probe::preflight()
+            .expect("container preflight refused; do not relax host security");
+        tokio::time::timeout(Duration::from_secs(20), async {
+        crate::manager_diagnostic::inspect_system_manager().await.expect("private manager unavailable");
+        let connection=Builder::address("unix:path=/run/dbus/system_bus_socket").unwrap().build().await.unwrap();
+        let bus=zbus::fdo::DBusProxy::new(&connection).await.unwrap();
+        let owner=bus.get_name_owner("org.freedesktop.systemd1".try_into().unwrap()).await.unwrap();
+        let (_tx,rx)=tokio::sync::watch::channel(false);
+        let spec=LaunchSpec::container_probe();
+        let phase=Attempt::new(1).submit_system(&spec,rx).await;
+        assert!(matches!(phase,Phase::JobObserved{ref result,..} if result=="done"),"unconfirmed submit: {phase:?}; never retry blindly");
+        assert_eq!(bus.get_name_owner("org.freedesktop.systemd1".try_into().unwrap()).await.unwrap(),owner);
+        tokio::time::timeout(Duration::from_secs(10),async {
+            let manager=zbus::Proxy::new(&connection,owner.as_str(),"/org/freedesktop/systemd1","org.freedesktop.systemd1.Manager").await.unwrap();
+            let path:OwnedObjectPath=manager.call("GetUnit",&(spec.unit(),)).await.unwrap();
+            let service=zbus::Proxy::new(&connection,owner.as_str(),path.as_str(),"org.freedesktop.systemd1.Service").await.unwrap();
+            assert_eq!(service.get_property::<u64>("RuntimeMaxUSec").await.unwrap(),2_000_000);
+            assert_eq!(service.get_property::<u64>("MemoryMax").await.unwrap(),64_000_000);
+            assert_eq!(service.get_property::<u64>("TasksMax").await.unwrap(),8);
+            assert!(service.get_property::<bool>("DynamicUser").await.unwrap());
+            loop {
+                let result=service.get_property::<String>("Result").await.unwrap();
+                let pid=service.get_property::<u32>("MainPID").await.unwrap();
+                if result=="timeout" && pid==0 {break}
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+            assert_eq!(bus.get_name_owner("org.freedesktop.systemd1".try_into().unwrap()).await.unwrap(),owner);
+        }).await.expect("unit stop unconfirmed; operator must inspect fixed probe unit");
+        println!("{{\"scope\":\"benign-container-manager-diagnostic\",\"fixed_sleep_timeout_observed\":true,\"execution_available\":false,\"isolation_certified\":false}}");
+        }).await.expect("diagnostic deadline exceeded; inspect probe unit, do not retry blindly");
+    }
 }

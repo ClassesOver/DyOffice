@@ -16,6 +16,7 @@ export const pl = {
   appPhPromptBody: 'Kliknij, aby dodać tekst',
   appStatusOpened: 'Otwarto {name} ({count} slajdów)',
   appStatusNewBlank: 'Utworzono pustą prezentację',
+  appEditCommitPending: "Trwa wprowadzanie zmiany. Spróbuj ponownie za chwilę.",
   appStatusSaved: 'Zapisano',
   appStatusSaveFailed: 'Zapisywanie nie powiodło się: {error}',
   appErrorCanceled: 'Anulowano',

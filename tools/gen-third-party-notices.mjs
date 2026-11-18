@@ -163,9 +163,9 @@ const FONTS = [
     '© Adobe / Google. This bundle ships a subset of the original fonts (reduced glyph coverage for size);\nno other modifications were made.',
   ],
   [
-    'GenOffice UI Kana JP (Noto Sans JP derivative)',
+    'DyOffice UI Kana JP (Noto Sans JP derivative)',
     'SIL OFL 1.1',
-    'Source: Noto Sans JP from https://github.com/notofonts/noto-cjk. Copyright 2014-2021 Adobe\n(http://www.adobe.com/), with Reserved Font Name "Source". This bundle ships Regular and Bold\ninstances subset to U+3000-30FF, with modified advances and horizontally condensed outlines to\nmatch Meiryo UI metrics and vertical metrics set to the Hiragino class. Renamed to GenOffice UI\nKana JP per OFL 1.1; the upstream Reserved Font Name is not used.',
+    'Source: Noto Sans JP from https://github.com/notofonts/noto-cjk. Copyright 2014-2021 Adobe\n(http://www.adobe.com/), with Reserved Font Name "Source". This bundle ships Regular and Bold\ninstances subset to U+3000-30FF, with modified advances and horizontally condensed outlines to\nmatch Meiryo UI metrics and vertical metrics set to the Hiragino class. Renamed to DyOffice UI\nKana JP per OFL 1.1; the upstream Reserved Font Name is not used.',
   ],
   [
     'GenOffice Sans KR (Noto Sans CJK KR derivative)',

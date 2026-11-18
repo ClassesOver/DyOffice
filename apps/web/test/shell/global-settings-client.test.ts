@@ -77,7 +77,7 @@ test('unknown writes survive remount-style reads until an explicit successful re
   expect(writes).toBe(2)
 })
 
-describe.each([400, 409, 503])('known HTTP %i rejection', status => {
+describe.each([400, 409])('known HTTP %i rejection', status => {
   test('keeps corrections retryable without exposing server messages', async () => {
     let calls = 0
     const client = createGlobalSettingsClient(requestFrom(async () => {if (++calls === 1) throw Object.assign(new Error('secret-leak'), {status}); return snapshot(4)}))
@@ -133,3 +133,21 @@ test('subscriptions reveal an exclusive operation and unsubscribe before later c
   expect(states).toEqual([{pending: 'load', unknownWrite: false}])
 })
 
+
+test.each([408,503].flatMap(status=>(['save','remove','rotate'] as const).map(operation=>({status,operation}))))('HTTP $status during $operation fences writes until an explicitly valid reconciliation',async({status,operation})=>{
+ let writes=0,readMode:'valid'|'failed'|'malformed'='valid',timeout=true
+ const client=createGlobalSettingsClient(requestFrom(async(_path,method='GET')=>{
+  if(method!=='GET'){writes++;if(timeout)throw Object.assign(new Error('timeout'),{status});return snapshot(4)}
+  if(readMode==='failed')throw Object.assign(new Error('read failed'),{status:500})
+  return readMode==='malformed'?{}:snapshot()
+ }))
+ const mutate=()=>operation==='rotate'?client.rotate(3):client.save(3,operation==='remove'?{removes:['chat-primary'],defaults:{chat:null}}:patch)
+ await expect(mutate()).rejects.toMatchObject({code:'write_unknown',status})
+ await expect(client.save(3,patch)).rejects.toMatchObject({code:'write_unknown'})
+ await expect(client.rotate(3)).rejects.toMatchObject({code:'write_unknown'})
+ expect(writes).toBe(1)
+ await client.load();expect(client.getState().unknownWrite).toBe(true)
+ for(const mode of ['failed','malformed'] as const){readMode=mode;await expect(client.load({reconcile:true})).rejects.toThrow();expect(client.getState().unknownWrite).toBe(true)}
+ readMode='valid';await client.load({reconcile:true});expect(client.getState().unknownWrite).toBe(false);expect(writes).toBe(1)
+ timeout=false;await mutate();expect(writes).toBe(2)
+})

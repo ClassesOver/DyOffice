@@ -40,6 +40,8 @@ export function AiSkillsMenu({
   const [open, setOpen] = useState(false)
   const [page, setPage] = useState<'root' | 'skills'>('root')
   const [skills, setSkills] = useState<readonly AiSkillsMenuEntry[] | null>(null)
+  const [loadFailed, setLoadFailed] = useState(false)
+  const loadSequence = useRef(0)
   const [query, setQuery] = useState('')
   const [popStyle, setPopStyle] = useState<React.CSSProperties>({})
   const btnRef = useRef<HTMLButtonElement | null>(null)
@@ -49,14 +51,20 @@ export function AiSkillsMenu({
   const close = useCallback(() => setOpen(false), [])
   useDismissablePopover(open, close, { inside: () => [btnRef.current, popRef.current] })
 
-  const showSkills = useCallback(() => {
+  const loadSkills = useCallback(() => {
+    const sequence = ++loadSequence.current
+    setSkills(null)
+    setLoadFailed(false)
+    listSkills()
+      .then((list) => { if (sequence === loadSequence.current) setSkills(list) })
+      .catch(() => { if (sequence === loadSequence.current) setLoadFailed(true) })
+  }, [listSkills])
+
+  const showSkills = () => {
     setPage('skills')
     setQuery('')
-    setSkills(null)
-    listSkills()
-      .then((list) => setSkills(list))
-      .catch(() => setSkills([]))
-  }, [listSkills])
+    loadSkills()
+  }
 
   const toggle = () => {
     if (!open) {
@@ -104,7 +112,14 @@ export function AiSkillsMenu({
         </svg>
       </button>
       {open && (
-        <div ref={popRef} className="ai-plus-pop" role="menu" style={popStyle}>
+        <div ref={popRef} className="ai-plus-pop" role="menu" style={popStyle} onKeyDown={(event) => {
+          if (event.key === 'Escape') {
+            event.preventDefault()
+            event.stopPropagation()
+            setOpen(false)
+            btnRef.current?.focus()
+          }
+        }}>
           {page === 'root' ? (
             <>
               <button
@@ -155,12 +170,14 @@ export function AiSkillsMenu({
                   value={query}
                   placeholder={strings.searchPlaceholder}
                   onChange={(e) => setQuery(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Escape') setOpen(false)
-                  }}
                 />
               </div>
               <div className="ai-plus-list" role="group" aria-label={strings.skills}>
+                {skills === null && !loadFailed && <div className="ai-plus-empty" role="status">{strings.loading}</div>}
+                {loadFailed && <div className="ai-plus-empty" role="alert">
+                  <div>{strings.loadFailed}</div>
+                  <button type="button" className="ai-plus-item ai-plus-retry" onClick={() => { searchRef.current?.focus(); loadSkills() }}>{strings.retry}</button>
+                </div>}
                 {shown && shown.length === 0 && (
                   <div className="ai-plus-empty">
                     {skills?.length ? strings.noMatch : strings.noSkills}

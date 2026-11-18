@@ -53,9 +53,9 @@ export const it = {
   ribbonRotateLeft: 'Ruota a sinistra di 90°',
   ribbonFlipH: 'Capovolgi orizzontalmente',
   ribbonFlipV: 'Capovolgi verticalmente',
-  ribbonCropTip: "Ritaglia l'immagine (trascina le maniglie, Invio per confermare)",
+  ribbonCropTip: "Ritaglia l'immagine (trascina le maniglie)",
   ribbonCropHint:
-    "Trascina le maniglie o sposta il riquadro per scegliere l'area da mantenere; Invio per applicare, Esc per annullare",
+    "Trascina le maniglie o sposta il riquadro per scegliere l'area da mantenere; Esc per annullare",
   ribbonReplacePicture: 'Sostituisci immagine',
   ribbonReplacePictureTip:
     "Sostituisci l'immagine mantenendo le dimensioni e la disposizione attuali",

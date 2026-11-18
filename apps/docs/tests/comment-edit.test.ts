@@ -16,6 +16,7 @@ function makeCtx(comments: CommentInfo[]): {
 } {
   const state = { comments, commentsDirty: false, dirty: false, status: '' }
   const ctx = {
+    canComment: true,
     editor: null,
     doc: null,
     dirtyRef: {

@@ -29,3 +29,15 @@ test('cumulative pixel budget clears already rendered pages and stops before fif
  fake.getDocument.mockReturnValue({promise:Promise.resolve({numPages:5,getPage:async()=>({getViewport:()=>({width:4000,height:4000}),render,getTextContent:async()=>({items:[]})})}),destroy});
  const host=document.createElement('div');await expect(mountPdfEditor(host,new Uint8Array([1]))).rejects.toThrow('PDF_RENDER_LIMIT');expect(render).toHaveBeenCalledTimes(4);expect(host.childElementCount).toBe(0);expect(destroy).toHaveBeenCalledOnce()
 })
+
+test('closing during asynchronous page rendering destroys the worker and never repopulates the detached host',async()=>{
+ let finish!:(value:void)=>void
+ const rendered=new Promise<void>(resolve=>{finish=resolve}),destroy=vi.fn(async()=>{}),started=vi.fn()
+ fake.getDocument.mockReturnValue({promise:Promise.resolve({numPages:1,getPage:async()=>({getViewport:()=>({width:10,height:10}),render:()=>{started();return {promise:rendered}},getTextContent:async()=>({items:[{str:'late text'}]})})}),destroy})
+ const host=document.createElement('div'),abort=new AbortController()
+ const mounted=mountPdfEditor(host,new Uint8Array([1]),abort.signal)
+ await vi.waitFor(()=>expect(started).toHaveBeenCalled())
+ abort.abort();host.replaceChildren();finish()
+ await expect(mounted).rejects.toThrow()
+ expect(host.childElementCount).toBe(0);expect(destroy).toHaveBeenCalledOnce()
+})

@@ -192,3 +192,12 @@ test('invalid source fails closed rather than returning partial inventory', asyn
   const base = await tree(t, { 'r/a.ts': 'window.desktop.' })
   assert.throws(() => analyzeRenderer([join(base, 'r/a.ts')], ['desktop'], base), /Cannot parse host inventory source/)
 })
+
+
+test('inventories explicit optional transport metadata as a local preload member',()=>{
+ const {bridges}=preloadBridges(`const api: DesktopApi = {saveEditsInlineMaxBytes: undefined};contextBridge.exposeInMainWorld('desktopApi',api)`)
+ assert.deepEqual(names(bridges[0]),['saveEditsInlineMaxBytes'])
+ assert.equal(bridges[0].members[0].lifecycle,'local')
+ assert.deepEqual(bridges[0].members[0].ipc,[])
+ assert.deepEqual(bridges[0].unresolved,[])
+})

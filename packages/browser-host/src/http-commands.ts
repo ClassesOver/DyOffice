@@ -85,7 +85,7 @@ export function createHttpCommandClient({
         throw Error('Editor changed while preparing command request')
       const response = await untilDisposed(fetchImpl('/api/v1/commands/' + action, {
         method: 'POST',
-        mode: 'same-origin',
+        mode: 'same-origin', referrerPolicy: 'same-origin',
         redirect: 'error',
         signal: controller.signal,
         credentials: 'same-origin',

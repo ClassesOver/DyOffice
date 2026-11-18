@@ -266,8 +266,8 @@
       "size": 2809656
     },
     "apps/docs/src/renderer/fonts/README.md": {
-      "sha256": "4df778a41916dc9361bc24a332640932058c7c2be3a57c815553408ba4ea7e46",
-      "size": 19881
+      "sha256": "f2784360a1efc80638353b3ee89feb11760b3c4be7274c6965e6d668af570a39",
+      "size": 19879
     },
     "apps/pdf/package.json": {
       "sha256": "dc5718ea07e1f4e385372c8d996c0ee0a165e705cdbd42e6206e5f67641e19e0",
@@ -306,16 +306,16 @@
       "size": 1446
     },
     "apps/web/package-lock.json": {
-      "sha256": "26721bb4568fc2398262e7473f883a7e253c8a8b2a66bb9ee142c6cea4b7301c",
-      "size": 235180
+      "sha256": "206a6b435f237ba0dd57b7ebd7ef29f36c7b9031365aa42c8d5cb3d4d0291e0d",
+      "size": 271857
     },
     "apps/web/package.json": {
-      "sha256": "8a95b1c5f48c2be7e14bf33dedb33b67d336d366675eacbd48a58d0148eb631f",
-      "size": 3129
+      "sha256": "699208b24438088c3196b606fca19d7ea43c090f2488057f6418a3c46a2222f8",
+      "size": 3186
     },
     "package-lock.json": {
-      "sha256": "9252a41031282abe55375e9a188ae406a861c1b5dddeb38efa8da0fe9f53aaad",
-      "size": 532611
+      "sha256": "d6530b4fec14a9404cc69d20af1fa3279b7df82ca39a29eba6b5f3da3689971a",
+      "size": 568185
     },
     "package.json": {
       "sha256": "e65d4910b7f86a75c2f3bdeb5ed669ed8ba1bef393920a0f91a914f854bae515",

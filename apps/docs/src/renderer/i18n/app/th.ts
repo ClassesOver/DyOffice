@@ -1,6 +1,7 @@
 import type { zh } from './zh'
 
 export const th = {
+  appPasteRemoteImageFailed: 'ไม่สามารถวางรูปภาพระยะไกลได้ โปรดคัดลอกรูปภาพอีกครั้งหรือแทรกไฟล์รูปภาพในเครื่อง',
   appScTitle: 'แป้นพิมพ์ลัด',
   appScFilter: 'ค้นหาแป้นพิมพ์ลัด',
   appScNone: 'ไม่พบแป้นพิมพ์ลัดที่ตรงกัน',

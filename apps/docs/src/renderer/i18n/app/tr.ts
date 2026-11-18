@@ -1,6 +1,7 @@
 import type { zh } from './zh'
 
 export const tr = {
+  appPasteRemoteImageFailed: 'Uzak görüntü yapıştırılamadı. Görüntüyü yeniden kopyalayın veya yerel bir görüntü dosyası ekleyin.',
   appScTitle: 'Klavye Kısayolları',
   appScFilter: 'Kısayollarda ara',
   appScNone: 'Eşleşen kısayol yok',

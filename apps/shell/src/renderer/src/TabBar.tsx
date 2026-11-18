@@ -174,7 +174,7 @@ export function renamedFileName(currentPath: string, typedName: string): string 
   return ext ? `${typedName}.${ext}` : typedName
 }
 
-export function TabBar() {
+export function TabBar({hideSingleTabList=false,hideAppMenu=false}:{hideSingleTabList?:boolean;hideAppMenu?:boolean}={}) {
   const { t } = useI18n()
   const [tabs, setTabs] = useState<TabSummary[]>([])
   const stripRef = useRef<HTMLDivElement>(null)
@@ -453,7 +453,7 @@ export function TabBar() {
   return (
     <div className="tab-bar">
       <div className="tab-bar-drag-spacer" />
-      {!IS_MAC && (
+      {!IS_MAC && !hideAppMenu && (
         <button
           className="tab-app-menu-btn"
           title={t('appMenu')}
@@ -475,6 +475,8 @@ export function TabBar() {
       )}
       <div
         className={`tab-strip ${dragVisual ? 'dragging' : ''} ${dockX !== null ? 'dock-target' : ''}`}
+        role="tablist"
+        aria-label={t('tabList')}
         ref={stripRef}
         // the strip, not the grabbed tab, owns the pointer capture: a torn-off
         // tab's element unmounts mid-gesture, and the moves must keep coming
@@ -502,6 +504,22 @@ export function TabBar() {
           return (
             <div
               key={tab.id}
+              role="tab"
+              aria-label={tab.title}
+              aria-selected={tab.active}
+              tabIndex={tab.active ? 0 : -1}
+              onKeyDown={(event) => {
+                if (event.target !== event.currentTarget || event.altKey || event.ctrlKey || event.metaKey) return
+                let target = index
+                if (event.key === 'ArrowRight') target = (index + 1) % tabs.length
+                else if (event.key === 'ArrowLeft') target = (index + tabs.length - 1) % tabs.length
+                else if (event.key === 'Home') target = 0
+                else if (event.key === 'End') target = tabs.length - 1
+                else if (event.key !== 'Enter' && event.key !== ' ') return
+                event.preventDefault(); event.stopPropagation()
+                void window.aiOfficeTabs.activate(tabs[target].id)
+                stripRef.current?.querySelectorAll<HTMLElement>('.tab-item')[target]?.focus({preventScroll: true})
+              }}
               className={`tab-item ${tab.kind === 'home' ? 'tab-home' : ''} ${tab.active ? 'active' : ''} ${tab.dormant ? 'tab-dormant' : ''} ${dragVisual?.id === tab.id ? 'drag-source' : ''}`}
               // long file names ellipsize in the strip — hover reveals the
               // full title and where the file is (the close button's own tooltip still wins there)
@@ -638,7 +656,7 @@ export function TabBar() {
           </svg>
         </button>
       </div>
-      <button
+      {(!hideSingleTabList||tabs.length>1)&&<button
         className="tab-overflow-btn"
         title={t('tabList')}
         aria-label={t('tabList')}
@@ -664,7 +682,7 @@ export function TabBar() {
             strokeLinejoin="round"
           />
         </svg>
-      </button>
+      </button>}
       <div className="tab-bar-caption-spacer" />
     </div>
   )

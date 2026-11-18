@@ -232,3 +232,59 @@ matches the initial value. This is observation through the checked reply, not a
 promise that the owner cannot change after the function returns. The regression
 uses the same submit-and-finalize control flow with an actual P2P submission,
 then injects owner loss during the final query; it asserts quarantine and no retry.
+
+## Private sealed-input binding (not runtime admission)
+
+`BoundInput` joins the bounded control-frame parser with the real sealed-FD
+receiver. It requires Start and exact equality with a trusted expected frame,
+then checks actual immutable bytes against input size and SHA-256. The entire
+frame is retained privately; reads for any different frame fail. This binds
+content to the supplied request identity; it does not establish that the supplied
+expected frame is authorized, live, or from an authenticated dispatcher.
+
+The 64 KiB prototype cap remains. Reads use positional offsets, bounded forward
+progress and reject interrupted, short-to-EOF or failed reads without returning
+partial content. A consumed receiver closes on failure, including queued FDs.
+Seals are checked by the receiver before metadata/content reads. This adds no
+listener, D-Bus FD passing, launch permission or production dispatcher wiring.
+Deadline/lease validation, authorization, replay prevention and authenticated
+handoff remain separate prerequisites. Production still exits 78. Tests use real
+local memfd/seqpacket transport, not a Docker isolation acceptance environment.
+
+## Private installed-artifact content observation (execution still disabled)
+
+`runtime_artifact` adds a private Linux FD/content observation primitive. Its
+compiled reviewed-artifact registry is **empty**; the installed-runtime entry
+returns `Unavailable` before accessing the filesystem. No public constructor,
+launch method, manifest input, environment override or conversion to
+`ApprovedRuntime` is added. The broker still exits 78.
+
+For a future separately reviewed fixed registry, traversal starts from `/`, pins
+each directory with `openat`/NOFOLLOW/CLOEXEC, and rejects untrusted ownership or
+group/world-writable directories. A fixed relative-component allowlist rejects
+absolute paths, dot traversal and embedded separators. The leaf is first pinned with O_PATH; nonregular inodes (including devices and
+FIFOs) are rejected before opening their contents. Only a verified regular inode
+is reopened through its retained FD in kernel procfs (filesystem type checked),
+never through the installation pathname. The leaf must be singly linked,
+owned by the expected installation owner and have no writable permission bits.
+Size (1..16 MiB), SHA256 and pre/post descriptor metadata must agree. Reads are
+positional, bounded and use the retained FD. A usable kernel /proc/self/fd in the
+trusted mount namespace is an explicit prerequisite.
+
+This is **not** rootfs immutability, authentication, authorization, execution
+isolation or admission. The trusted installation owner/root, mount namespace and
+filesystem are prerequisites. The test-only owner is the fixture user's UID;
+the installed entry requires UID 0. Trusted root can replace mounts, change
+permissions or mutate an already-open file. A later recheck can reject observed
+changes, but does not prevent mutations after it. File I/O has a byte bound, not
+an OS-enforced wall-clock deadline; this helper is not attached to the submission
+deadline or dispatcher. It does not validate a complete dependency closure,
+signed provenance, read-only rootfs, fs-verity, executable policy or live host.
+The private registry must not be populated merely because these unit tests pass.
+
+Kernel-backed tests cover actual bounded hashing, wrong hash/size/owner, writable
+leaf/parent, symbolic links at leaf/directory, traversal, hardlinks, later writes,
+and retained descriptor identity after pathname replacement. They do not run a
+document engine, systemd unit or container. Positive production/runtime acceptance
+remains NOT_RUN; Ubuntu userns/seccomp/LSM/cgroup and durable dispatch/recovery
+requirements remain unchanged.

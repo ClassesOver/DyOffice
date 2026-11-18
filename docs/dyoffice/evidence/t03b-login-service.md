@@ -4,7 +4,7 @@
 
 ## Isolation and ownership
 
-This work was created from `feat/dyoffice-t03b-session-core` commit `3e4bb784c2b126cb1986faf03a440ed2e5b11303`, so its PR must target that branch, **not** directly `feat/dyoffice-web`. It makes no changes to GenOffice renderers, DOCX, revisions, sources, `apps/web/server/application.mjs`, `apps/web/public`, Fastify T02 migration, or upstream dependency manifests.
+This work was created from `feat/dyoffice-t03b-session-core` commit `3e4bb784c2b126cb1986faf03a440ed2e5b11303`, so its PR must target that branch, **not** directly `feat/dyoffice-web`. It makes no changes to DyOffice renderers, DOCX, revisions, sources, `apps/web/server/application.mjs`, `apps/web/public`, Fastify T02 migration, or upstream dependency manifests.
 
 ## Implemented files and behavior
 

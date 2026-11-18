@@ -86,7 +86,7 @@ export function execFileRunner(cmd: string, args: string[]): Promise<string> {
   })
 }
 
-/** /Applications/GenOffice.app/Contents/MacOS/GenOffice → /Applications/GenOffice.app */
+/** /Applications/DyOffice.app/Contents/MacOS/DyOffice → /Applications/DyOffice.app */
 export function macAppBundlePath(exePath: string): string | null {
   let dir = exePath
   for (let i = 0; i < 6; i++) {

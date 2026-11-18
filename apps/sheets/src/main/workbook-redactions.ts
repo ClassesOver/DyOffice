@@ -23,7 +23,7 @@ import type { EntrySource } from '@genoffice/xlsx-gateway/gateway/xlsx-gateway'
  *
  * ## Why there is a second place to read the marks from
  *
- * The part survives Excel and GenOffice, and not everything else. A reader that
+ * The part survives Excel and DyOffice, and not everything else. A reader that
  * rebuilds the package from its own model drops parts it does not model along
  * with their relationships and content-type overrides — `soffice
  * --convert-to xlsx` leaves none of the three. So every save also writes the

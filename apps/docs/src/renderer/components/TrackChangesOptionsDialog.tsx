@@ -136,7 +136,9 @@ export function TrackChangesOptionsDialog({ options, onApply, onClose }: Props) 
       onMouseDown={(e) => e.target === e.currentTarget && onClose()}
     >
       <form
-        className="modal gs-form tco-dialog"
+        className="modal gs-form tco-dialog editor-settings-dialog"
+        role="dialog"
+        aria-label={t('ribbonTcOptionsTitle')}
         noValidate
         onSubmit={(e) => {
           e.preventDefault()

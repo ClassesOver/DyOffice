@@ -52,9 +52,9 @@ export const cs = {
   ribbonRotateLeft: 'Otočit doleva o 90°',
   ribbonFlipH: 'Překlopit vodorovně',
   ribbonFlipV: 'Překlopit svisle',
-  ribbonCropTip: 'Oříznout obrázek (tažením úchytů, Enter potvrdí)',
+  ribbonCropTip: 'Oříznout obrázek (tažením úchytů)',
   ribbonCropHint:
-    'Tažením úchytů nebo posunem rámečku zvolte oblast, která zůstane; Enter použije, Esc zruší',
+    'Tažením úchytů nebo posunem rámečku zvolte oblast, která zůstane; Esc zruší',
   ribbonReplacePicture: 'Nahradit obrázek',
   ribbonReplacePictureTip: 'Nahradit obrázek se zachováním aktuální velikosti a obtékání',
   ribbonResetSize: 'Obnovit velikost',

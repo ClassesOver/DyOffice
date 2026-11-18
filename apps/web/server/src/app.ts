@@ -252,7 +252,7 @@ export async function buildLocalApp(config: LocalWebConfig): Promise<FastifyInst
         method: ['GET','HEAD'], url: '/native-docx/*',
         onRequest: async (request,reply) => {
           reply.raw.setHeader('Cache-Control','private, no-store')
-          reply.raw.setHeader('Content-Security-Policy',`default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data: blob:; worker-src 'self' blob:; connect-src ${nativeConnectSources}; object-src 'none'; base-uri 'none'; frame-ancestors 'none'`)
+          reply.raw.setHeader('Content-Security-Policy',`default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data: blob:; worker-src 'self' blob:; connect-src ${nativeConnectSources}; object-src 'none'; base-uri 'none'; frame-ancestors 'self'`)
           await sessions.authenticate(cookies(request).session ?? '')
         },
         handler: async (request,reply) => {
@@ -274,7 +274,7 @@ export async function buildLocalApp(config: LocalWebConfig): Promise<FastifyInst
           reply.raw.setHeader('Cache-Control','private, no-store')
           // 'wasm-unsafe-eval' keeps harfbuzzjs font shaping working; media-src covers
           // PPTX-embedded audio/video played through the slides renderer.
-          reply.raw.setHeader('Content-Security-Policy',`default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob:; font-src 'self' data: blob:; worker-src 'self' blob:; connect-src ${nativeConnectSources}; object-src 'none'; base-uri 'none'; frame-ancestors 'none'`)
+          reply.raw.setHeader('Content-Security-Policy',`default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob:; font-src 'self' data: blob:; worker-src 'self' blob:; connect-src ${nativeConnectSources}; object-src 'none'; base-uri 'none'; frame-ancestors 'self'`)
           await sessions.authenticate(cookies(request).session ?? '')
         },
         handler: async (request,reply) => {
@@ -294,7 +294,7 @@ export async function buildLocalApp(config: LocalWebConfig): Promise<FastifyInst
         method: ['GET','HEAD'], url: '/native-xlsx/*',
         onRequest: async (request,reply) => {
           reply.raw.setHeader('Cache-Control','private, no-store')
-          reply.raw.setHeader('Content-Security-Policy',`default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data: blob:; worker-src 'self' blob:; connect-src ${nativeConnectSources}; object-src 'none'; base-uri 'none'; frame-ancestors 'none'`)
+          reply.raw.setHeader('Content-Security-Policy',`default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data: blob:; worker-src 'self' blob:; connect-src ${nativeConnectSources}; object-src 'none'; base-uri 'none'; frame-ancestors 'self'`)
           await sessions.authenticate(cookies(request).session ?? '')
         },
         handler: async (request,reply) => {

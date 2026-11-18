@@ -1,9 +1,14 @@
 import {afterEach, beforeEach, expect, test, vi} from 'vitest'
 import {act, createElement as h} from 'react'
 import {createRoot, type Root} from 'react-dom/client'
+import {readFileSync} from 'node:fs'
+import {resolve} from 'node:path'
 import {Home} from '../../../shell/src/renderer/src/Home'
 import {LocaleProvider} from '../../../shell/src/renderer/src/locale'
 import type {FolderListing, HomeApi, RecentEntry} from '../../../shell/src/shared/home-api'
+
+const homeStyles = readFileSync(resolve(import.meta.dirname, '../../../shell/src/renderer/src/home.css'), 'utf8')
+const workspaceStyles = readFileSync(resolve(import.meta.dirname, '../../src/shell/workspace-shell.css'), 'utf8')
 
 const fileId = 'aa000000-0000-4000-8000-000000000001'
 const project = '/workspace/bb000000-0000-4000-8000-000000000002'
@@ -76,6 +81,59 @@ test('move search displays human folder ancestry instead of opaque folder IDs', 
   await act(async () => {})
   expect(host.querySelector('.picker-rel')?.textContent).toBe('Projects / Contracts')
   expect(host.querySelector('[role="dialog"]')?.textContent).not.toContain('bb000000')
+})
+
+test('move destinations can be reached, expanded and selected with the keyboard', async () => {
+  const moves: string[] = []; api.movePaths = async (_paths, target) => {moves.push(target); return {moved: [], conflicts: [], failed: []}}
+  await chooseFileAction('Move to folder…')
+  const dialog = host.querySelector<HTMLElement>('.picker-modal')!
+  const search = dialog.querySelector<HTMLInputElement>('.picker-search')!
+  expect(document.activeElement).toBe(search)
+  const rows = () => [...dialog.querySelectorAll<HTMLElement>('[role="treeitem"]')]
+  const key = async (node: HTMLElement, value: string) => {await act(async () => node.dispatchEvent(new KeyboardEvent('keydown', {key: value, bubbles: true, cancelable: true})))}
+  const rootRow = rows()[0]
+  expect(rootRow.tabIndex).toBe(0)
+  await act(async () => rootRow.focus())
+  await key(rootRow, 'ArrowDown')
+  const projects = rows().find(row => row.querySelector('.picker-name')?.textContent === 'Projects')!
+  expect(document.activeElement).toBe(projects)
+  expect(projects.getAttribute('aria-expanded')).toBe('false')
+  await key(projects, 'ArrowRight')
+  await key(projects, 'ArrowRight')
+  const contractsRow = rows().find(row => row.querySelector('.picker-name')?.textContent === 'Contracts')!
+  expect(document.activeElement).toBe(contractsRow)
+  await key(contractsRow, ' ')
+  expect(contractsRow.getAttribute('aria-selected')).toBe('true')
+  await click(button('Move 1', dialog))
+  expect(moves).toEqual([contracts])
+})
+
+test('move search results allow keyboard selection and a disabled current folder cannot be picked', async () => {
+  await chooseFileAction('Move to folder…')
+  const search = host.querySelector<HTMLInputElement>('.picker-search')!
+  await fill(search, 'Contracts'); await act(async () => {})
+  const match = host.querySelector<HTMLElement>('.picker-row[role="treeitem"]')!
+  expect(match.tabIndex).toBe(0)
+  await act(async () => {match.focus(); match.dispatchEvent(new KeyboardEvent('keydown', {key:'Enter',bubbles:true,cancelable:true}))})
+  expect(match.getAttribute('aria-selected')).toBe('true')
+  await fill(search, '')
+  expect(host.querySelector('.picker-row[tabindex="0"] .picker-name')?.textContent).toBe('My files')
+  await click(button('Cancel', host.querySelector('.picker-modal')!))
+  await folderAction('Move to folder…')
+  const current = [...host.querySelectorAll<HTMLElement>('.picker-row')].find(row => row.querySelector('.picker-name')?.textContent === 'My files')!
+  expect(current.getAttribute('aria-disabled')).toBe('true')
+  await act(async () => current.dispatchEvent(new KeyboardEvent('keydown', {key:'Enter',bubbles:true,cancelable:true})))
+  expect(current.getAttribute('aria-selected')).toBe('false')
+})
+
+test('Tab stays inside the move picker instead of reaching background file actions', async () => {
+  await chooseFileAction('Move to folder…')
+  const dialog = host.querySelector('.picker-modal')!
+  const search = dialog.querySelector<HTMLInputElement>('.picker-search')!, cancel = button('Cancel', dialog)
+  await act(async () => search.dispatchEvent(new KeyboardEvent('keydown', {key:'Tab',shiftKey:true,bubbles:true,cancelable:true})))
+  expect(document.activeElement).toBe(cancel)
+  await act(async () => cancel.dispatchEvent(new KeyboardEvent('keydown', {key:'Tab',bubbles:true,cancelable:true})))
+  expect(document.activeElement).toBe(search)
 })
 
 test('failed folder creation leaves a visible error and the draft can be corrected without an automatic retry', async () => {
@@ -317,4 +375,744 @@ test('SaaS home removes the standalone Ask entry without removing workspace navi
   expect(host.querySelector('[aria-current="page"]')?.textContent).toContain('Starred')
   await click([...host.querySelectorAll<HTMLButtonElement>('.sidebar-nav button')].find(node => node.querySelector('.nav-label')?.textContent === 'Recent')!)
   expect(host.querySelector('[aria-current="page"]')?.textContent).toContain('Recent')
+})
+
+test('workspace reveal clears a search, opens nested ancestors and selects the located file',async()=>{
+ const {notifyRevealWorkspaceFolder}=await import('../../../shell/src/renderer/src/file-events')
+ const search=host.querySelector<HTMLInputElement>('input[type="search"]')!
+ await fill(search,'no match')
+ await act(async()=>notifyRevealWorkspaceFolder({dir:project,fileId}))
+ await vi.waitFor(()=>expect(host.querySelector('.recent-item:not(.folder-item) .recent-name')?.textContent).toBe(file.name))
+ expect(search.value).toBe('')
+ expect(tree('Projects')?.getAttribute('aria-selected')).toBe('true')
+ expect(host.querySelector<HTMLInputElement>('.recent-item:not(.folder-item) input[type=checkbox]')?.checked).toBe(true)
+ expect(tree('Contracts')).toBeTruthy()
+})
+
+test('Web capabilities hide OS folder actions and preserve workspace folder creation', async () => {
+  const added = vi.fn(), dropped = vi.fn()
+  api.addFolderRoot = added; api.dropFolderRoots = dropped
+  await act(async () => root.render(h(LocaleProvider, {initial: 'en', children: h(Home, {accountEntry: h('div', null, 'Account'), supportedNewFormats: [], capabilities: {localFolders: false}})})))
+  expect(host.querySelector('.folder-add-root-btn')).toBeNull()
+  const drop = new Event('drop', {bubbles: true, cancelable: true})
+  Object.defineProperty(drop, 'dataTransfer', {value: {types: ['Files'], files: [new File([''], 'folder')]}})
+  await act(async () => host.querySelector('.folder-panel')!.dispatchEvent(drop))
+  expect(added).not.toHaveBeenCalled(); expect(dropped).not.toHaveBeenCalled()
+  await click(host.querySelector<HTMLButtonElement>('.folder-new-btn')!)
+  expect(host.querySelector('.folder-rename-input')).not.toBeNull()
+})
+
+test('Web capabilities remove unsupported file actions while retaining supported actions', async () => {
+  const groups = vi.fn(async () => ['Team'])
+  api.starredGroups = groups
+  await act(async () => root.render(h(LocaleProvider, {initial: 'en', children: h(Home, {accountEntry: h('div', null, 'Account'), supportedNewFormats: [], capabilities: {copyPath: false, duplicateFile: false, starredGroups: false}})})))
+  await act(async () => window.dispatchEvent(new Event('focus')))
+  await click(host.querySelector<HTMLButtonElement>('.recent-item .more-btn')!)
+  const menu = host.querySelector('[role="menu"]')!
+  expect(menu.textContent).not.toContain('Copy path')
+  expect(menu.textContent).not.toContain('Duplicate')
+  expect(menu.textContent).not.toContain('Move to group')
+  expect(menu.textContent).toContain('Rename')
+  expect(menu.textContent).toContain('Move to folder')
+  expect(groups).not.toHaveBeenCalled()
+})
+
+test('Web hides unavailable semantic ranking and never calls its bridge', async()=>{
+ const rerank=vi.fn(async()=>null);api.rerankSearch=rerank
+ api.searchFiles=async()=>({hits:[file,{...file,path:'second-id',name:'Second report.docx'}].map(entry=>({...entry,snippet:null,needles:['report']})),total:2,index:{indexed:2,pending:0,scanning:false}})
+ await act(async()=>root.render(h(LocaleProvider,{initial:'en',children:h(Home,{accountEntry:h('div',null,'Account'),supportedNewFormats:[],capabilities:{semanticRanking:false}})})))
+ expect(host.querySelector('.file-search-settings')).toBeNull()
+ const input=host.querySelector<HTMLInputElement>('input[type="search"]')!
+ await act(async()=>{Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value')!.set!.call(input,'report');input.dispatchEvent(new Event('input',{bubbles:true}))})
+ await act(async()=>{await new Promise(resolve=>setTimeout(resolve,350))})
+ await act(async()=>{await new Promise(resolve=>setTimeout(resolve,650))})
+ expect(rerank).not.toHaveBeenCalled();expect(host.querySelector('.search-rerank-badge')).toBeNull()
+})
+
+test('recent and search rows display host locations for opaque identities before folders are opened', async () => {
+  const located = {...file, locationLabel: 'Parent / Child'}
+  api.recents = async () => ({entries: [located], total: 1, totalAll: 1})
+  api.searchFiles = async () => ({hits: [{...located, snippet: null, needles: ['report']}], total: 1, index: {indexed: 1, pending: 0, scanning: false}})
+  await act(async () => window.dispatchEvent(new Event('focus')))
+  expect(host.querySelector('.recent-path')?.textContent).toBe('Parent / Child')
+  expect(host.querySelector('.recent-path')?.getAttribute('title')).toBe('Parent / Child')
+  await fill(host.querySelector<HTMLInputElement>('.file-search input')!, 'report')
+  await act(async () => new Promise(resolve => setTimeout(resolve, 200)))
+  expect(host.querySelector('.search-path')?.textContent).toBe('Parent / Child')
+  expect(host.querySelector('.search-path')?.getAttribute('title')).toBe('Parent / Child')
+  expect(host.querySelector('.search-path')?.textContent).not.toContain(fileId)
+})
+
+test('Web file and folder menus render outside the scrolling list and retain real actions', async () => {
+  const renamed: string[] = []
+  api.renameFile = async (_path, name) => {renamed.push(name); return {ok: true, path: fileId}}
+  await act(async () => root.render(h(LocaleProvider, {initial: 'en', children: h(Home, {accountEntry: h('div', null, 'Account'), supportedNewFormats: [], supportedFormats: ['docx']})})))
+  await click(host.querySelector<HTMLButtonElement>('.recent-item .more-btn')!)
+  const menu = document.body.querySelector<HTMLElement>('.row-menu')!
+  expect(menu).not.toBeNull(); expect(host.contains(menu)).toBe(false)
+  expect(menu.style.position).toBe('fixed')
+  const rename = button('Rename', menu)
+  await act(async () => rename.dispatchEvent(new MouseEvent('pointerdown', {bubbles: true})))
+  expect(document.body.querySelector('.row-menu')).not.toBeNull()
+  await click(rename)
+  await fill(host.querySelector<HTMLInputElement>('.rename-input')!, 'Renamed')
+  await enter(host.querySelector<HTMLInputElement>('.rename-input')!)
+  expect(renamed).toEqual(['Renamed.docx'])
+  await click(tree('Projects').querySelector<HTMLButtonElement>('.folder-more-btn')!)
+  const folderMenu = document.body.querySelector('.folder-menu')!
+  expect(host.contains(folderMenu)).toBe(false)
+  await click(button('Rename', folderMenu))
+  expect(host.querySelector('.folder-rename-input')).not.toBeNull()
+})
+
+test('the next-page sentinel stays inside the recent list within the page scrollport', async () => {
+  vi.stubGlobal('IntersectionObserver', class {observe() {} disconnect() {}})
+  api.recents = async () => ({entries: [file], total: 100, totalAll: 100})
+  await act(async () => window.dispatchEvent(new Event('focus')))
+  const sentinel = host.querySelector('.recent-list > .load-more')
+  expect(sentinel?.tagName).toBe('LI')
+})
+
+test.each(['Enter', ' '])('Web row menu supports %s opening, arrow navigation, Escape and normal Tab dismissal', async key => {
+  await act(async () => root.render(h(LocaleProvider, {initial: 'en', children: h(Home, {accountEntry: h('div', null, 'Account'), supportedNewFormats: [], supportedFormats: ['docx']})})))
+  const trigger = host.querySelector<HTMLButtonElement>('.recent-item .more-btn')!
+  trigger.focus()
+  await act(async () => trigger.dispatchEvent(new KeyboardEvent('keydown', {key, bubbles: true, cancelable: true})))
+  const menu = document.body.querySelector<HTMLElement>('.row-menu')!
+  expect(menu).not.toBeNull()
+  const items = [...menu.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')]
+  expect(document.activeElement).toBe(items[0])
+  await act(async () => items[0].dispatchEvent(new KeyboardEvent('keydown', {key: 'ArrowDown', bubbles: true, cancelable: true})))
+  expect(document.activeElement).toBe(items[1])
+  await act(async () => items[1].dispatchEvent(new KeyboardEvent('keydown', {key: 'ArrowUp', bubbles: true, cancelable: true})))
+  expect(document.activeElement).toBe(items[0])
+  await act(async () => items[0].dispatchEvent(new KeyboardEvent('keydown', {key: 'Escape', bubbles: true, cancelable: true})))
+  expect(document.body.querySelector('.row-menu')).toBeNull()
+  expect(document.activeElement).toBe(trigger)
+  await act(async () => trigger.dispatchEvent(new KeyboardEvent('keydown', {key, bubbles: true, cancelable: true})))
+  const first = document.body.querySelector<HTMLElement>('.row-menu [role="menuitem"]')!
+  const tab = new KeyboardEvent('keydown', {key: 'Tab', bubbles: true, cancelable: true})
+  await act(async () => first.dispatchEvent(tab))
+  expect(document.body.querySelector('.row-menu')).toBeNull()
+  expect(tab.defaultPrevented).toBe(false)
+})
+
+test('desktop row menu keeps its existing native button keyboard handling', async () => {
+  const trigger = host.querySelector<HTMLButtonElement>('.recent-item .more-btn')!
+  await act(async () => trigger.dispatchEvent(new KeyboardEvent('keydown', {key: 'Enter', bubbles: true, cancelable: true})))
+  expect(host.querySelector('.row-menu')).toBeNull()
+  await click(trigger)
+  expect(host.querySelector('.row-menu')).not.toBeNull()
+})
+
+test('Web row menu ignores delayed pre-opening scroll events but closes when its list moves', async () => {
+  await act(async () => root.render(h(LocaleProvider, {initial: 'en', children: h(Home, {accountEntry: h('div', null, 'Account'), supportedNewFormats: [], supportedFormats: ['docx']})})))
+  const list = host.querySelector<HTMLElement>('.recent-list')!
+  list.scrollLeft = 99; list.scrollTop = 452
+  await click(host.querySelector<HTMLButtonElement>('.recent-item .more-btn')!)
+  await act(async () => list.dispatchEvent(new Event('scroll')))
+  expect(document.body.querySelector('.row-menu')).not.toBeNull()
+  list.scrollLeft = 100
+  await act(async () => list.dispatchEvent(new Event('scroll')))
+  expect(document.body.querySelector('.row-menu')).toBeNull()
+})
+
+
+test('Web home inherits the original page scrollport, spacing and wrapping card grid', async () => {
+ await act(async () => root.render(h(LocaleProvider, {initial: 'en', children: h(Home, {accountEntry: h('div', null, 'Account'), supportedNewFormats: [], supportedFormats: ['docx', 'xlsx', 'pptx', 'pdf']})})))
+ const style = document.createElement('style')
+ style.textContent = homeStyles + '\n' + workspaceStyles
+ document.head.append(style)
+ try {
+  const content = getComputedStyle(host.querySelector('.content')!)
+  expect(content.overflowY).toBe('auto')
+  expect(content.overflow).not.toBe('hidden')
+  expect(content.padding).toBe('28px 36px 40px')
+  expect(getComputedStyle(host.querySelector('.home-hero')!).margin).toBe('28px 0px 20px')
+  expect(getComputedStyle(host.querySelector('.hero-title')!).fontSize).toBe('28px')
+  const cards = getComputedStyle(host.querySelector('.quick-cards')!)
+  expect(cards.display).toBe('grid')
+  expect(cards.gridTemplateColumns).toBe('repeat(auto-fill, minmax(148px, 1fr))')
+  // CSSOM covers nested viewport rules too; jsdom does not perform responsive layout.
+  // The original stylesheet alone owns home geometry at narrow/short viewports.
+  const selectors = (rules: CSSRuleList): string[] => [...rules].flatMap(rule => {
+   if ('selectorText' in rule) return [(rule as CSSStyleRule).selectorText]
+   if ('cssRules' in rule) return selectors((rule as CSSGroupingRule).cssRules)
+   return []
+  })
+  expect(selectors(style.sheet!.cssRules).filter(selector => selector.includes('.home-web'))).toEqual([])
+ } finally {style.remove()}
+})
+
+test('Web quick cards keep original extension captions and unavailable-creation explanations', async () => {
+ await act(async () => root.render(h(LocaleProvider, {initial: 'en', children: h(Home, {accountEntry: h('div', null, 'Account'), supportedNewFormats: [], supportedFormats: ['docx', 'xlsx', 'pptx', 'pdf']})})))
+ const cards = [...host.querySelectorAll<HTMLButtonElement>('.quick-card')].filter(card => card.disabled)
+ expect(cards.map(card => card.querySelector('.quick-sub')?.textContent)).toEqual(['.docx', '.xlsx', '.pptx', '.pdf'])
+ expect(cards.every(card => card.title.includes('暂不支持新建'))).toBe(true)
+ expect(host.querySelectorAll('.quick-card')).toHaveLength(5)
+ expect((host.querySelectorAll<HTMLButtonElement>('.quick-card')[4]).disabled).toBe(false)
+})
+
+test('page-scroll sentinel loads the next real page once and stops after exhaustion', async () => {
+ let intersect: IntersectionObserverCallback = () => {}
+ const observe = vi.fn(), disconnect = vi.fn(), options: (IntersectionObserverInit | undefined)[] = []
+ vi.stubGlobal('IntersectionObserver', class {
+  constructor(callback: IntersectionObserverCallback, init?: IntersectionObserverInit) {intersect = callback; options.push(init)}
+  observe = observe
+  disconnect = disconnect
+ })
+ const next = {...file, path: 'aa000000-0000-4000-8000-000000000002', name: 'Next report.docx'}
+ const recents = vi.fn(async (request?: {offset?: number}) => ({entries: request?.offset ? [next] : [file], total: 2, totalAll: 2}))
+ api.recents = recents
+ await act(async () => window.dispatchEvent(new Event('focus')))
+ const sentinel = host.querySelector('.recent-list > .load-more')!
+ expect(host.querySelector('.content')?.contains(sentinel)).toBe(true)
+ expect(observe).toHaveBeenCalledWith(sentinel)
+ expect(options.at(-1)).toEqual({rootMargin: '240px'})
+ await act(async () => intersect([{isIntersecting: true} as IntersectionObserverEntry], {} as IntersectionObserver))
+ expect(recents.mock.calls.map(([request]) => request?.offset ?? 0)).toEqual([0, 1])
+ expect([...host.querySelectorAll('.recent-name')].map(node => node.textContent)).toEqual(['Quarterly report.docx', 'Next report.docx'])
+ expect(host.querySelector('.recent-list > .load-more')).toBeNull()
+ await act(async () => intersect([{isIntersecting: true} as IntersectionObserverEntry], {} as IntersectionObserver))
+ expect(recents).toHaveBeenCalledTimes(2)
+ expect(disconnect).toHaveBeenCalled()
+})
+
+function pagingObserver(){let notify:IntersectionObserverCallback=()=>{};vi.stubGlobal('IntersectionObserver',class{constructor(callback:IntersectionObserverCallback){notify=callback}observe(){}disconnect(){}});return()=>notify([{isIntersecting:true} as IntersectionObserverEntry],{} as IntersectionObserver)}
+test('same-tick sentinel callbacks share one pending page and never append duplicate rows',async()=>{
+ const intersect=pagingObserver(),next={...file,path:'next-file',name:'Next.docx'},pending=deferred<{entries:RecentEntry[];total:number;totalAll:number}>()
+ const recents=vi.fn(async(query?:{offset?:number})=>query?.offset?pending.promise:{entries:[file],total:2,totalAll:2});api.recents=recents
+ await act(async()=>window.dispatchEvent(new Event('focus')))
+ await act(async()=>{intersect();intersect()})
+ expect(recents.mock.calls.filter(([query])=>query?.offset)).toHaveLength(1)
+ await act(async()=>pending.resolve({entries:[next],total:2,totalAll:2}))
+ expect([...host.querySelectorAll('.recent-name')].map(node=>node.textContent)).toEqual([file.name,next.name])
+})
+test('late paging from an old view cannot clear the new view paging lock',async()=>{
+ const intersect=pagingObserver(),old=deferred<{entries:RecentEntry[];total:number;totalAll:number}>(),current=deferred<{entries:RecentEntry[];total:number;totalAll:number}>()
+ api.recents=async query=>query?.offset?old.promise:{entries:[file],total:2,totalAll:2}
+ const star={...file,path:'star-first',name:'Star first.docx'},next={...file,path:'star-next',name:'Star next.docx'}
+ const starred=vi.fn(async(query?:{offset?:number;limit?:number})=>query?.limit===0?{entries:[],total:2,totalAll:2}:query?.offset?current.promise:{entries:[star],total:2,totalAll:2});api.starred=starred
+ await act(async()=>window.dispatchEvent(new Event('focus')));await act(async()=>intersect())
+ await click([...host.querySelectorAll<HTMLButtonElement>('.sidebar-nav button')].find(node=>node.querySelector('.nav-label')?.textContent==='Starred')!)
+ await act(async()=>intersect());expect(starred.mock.calls.filter(([query])=>query?.offset)).toHaveLength(1)
+ await act(async()=>old.resolve({entries:[{...file,path:'old-next',name:'Old next.docx'}],total:2,totalAll:2}))
+ await act(async()=>intersect());expect(starred.mock.calls.filter(([query])=>query?.offset)).toHaveLength(1)
+ await act(async()=>current.resolve({entries:[next],total:2,totalAll:2}))
+ expect([...host.querySelectorAll('.recent-name')].map(node=>node.textContent)).toEqual([star.name,next.name])
+})
+test.each(['total','overlap','empty'])('paging %s changes reload the first page instead of appending a shifted page',async mode=>{
+ const intersect=pagingObserver(),fresh={...file,path:'fresh-file',name:'Fresh.docx'};let initial=true
+ const recents=vi.fn(async(query?:{offset?:number})=>{if(query?.offset)return {entries:mode==='empty'?[]:mode==='overlap'?[file]:[fresh],total:mode==='total'?3:2,totalAll:mode==='total'?3:2};const entries=initial?[file]:[fresh];initial=false;return {entries,total:2,totalAll:2}});api.recents=recents
+ await act(async()=>window.dispatchEvent(new Event('focus')));await act(async()=>intersect())
+ expect(recents.mock.calls.map(([query])=>query?.offset??0)).toEqual([0,1,0])
+ expect([...host.querySelectorAll('.recent-name')].map(node=>node.textContent)).toEqual([fresh.name])
+})
+test('a pending first page prevents fetching the previous view offset',async()=>{
+ const intersect=pagingObserver(),pending=deferred<{entries:RecentEntry[];total:number;totalAll:number}>()
+ api.recents=async()=>({entries:[file],total:2,totalAll:2})
+ await act(async()=>window.dispatchEvent(new Event('focus')))
+ const starred=vi.fn(async(query?:{offset?:number;limit?:number})=>query?.limit===0?{entries:[],total:2,totalAll:2}:pending.promise);api.starred=starred
+ await click([...host.querySelectorAll<HTMLButtonElement>('.sidebar-nav button')].find(node=>node.querySelector('.nav-label')?.textContent==='Starred')!)
+ expect(host.querySelector('.recent-item')).toBeNull()
+ expect(host.querySelector('[role="status"][aria-busy="true"]')).not.toBeNull()
+ await act(async()=>intersect());expect(starred.mock.calls.filter(([query])=>query?.offset)).toHaveLength(0)
+ await act(async()=>pending.resolve({entries:[{...file,path:'new-view',name:'New view.docx'}],total:2,totalAll:2}))
+})
+test('a new view with unchanged row count rearms its visible sentinel after the first page settles',async()=>{
+ const callbacks:IntersectionObserverCallback[]=[]
+ vi.stubGlobal('IntersectionObserver',class{constructor(callback:IntersectionObserverCallback){callbacks.push(callback)}observe(){}disconnect(){}})
+ api.recents=async()=>({entries:[file],total:2,totalAll:2})
+ await act(async()=>window.dispatchEvent(new Event('focus')))
+ const pending=deferred<{entries:RecentEntry[];total:number;totalAll:number}>(),next={...file,path:'next-star',name:'Next star.docx'}
+ const starred=vi.fn(async(query?:{offset?:number;limit?:number})=>query?.limit===0?{entries:[],total:2,totalAll:2}:query?.offset?{entries:[next],total:2,totalAll:2}:pending.promise);api.starred=starred
+ const count=callbacks.length
+ await click([...host.querySelectorAll<HTMLButtonElement>('.sidebar-nav button')].find(node=>node.querySelector('.nav-label')?.textContent==='Starred')!)
+ await act(async()=>callbacks.at(-1)!([{isIntersecting:true} as IntersectionObserverEntry],{} as IntersectionObserver))
+ await act(async()=>pending.resolve({entries:[{...file,path:'first-star',name:'First star.docx'}],total:2,totalAll:2}))
+ expect(callbacks.length).toBeGreaterThan(count)
+ await act(async()=>callbacks.at(-1)!([{isIntersecting:true} as IntersectionObserverEntry],{} as IntersectionObserver))
+ expect(starred.mock.calls.filter(([query])=>query?.offset)).toHaveLength(1)
+})
+test('a failed new-view first page blocks old-offset paging until a successful focus refresh',async()=>{
+ const intersect=pagingObserver();api.recents=async()=>({entries:[file],total:2,totalAll:2})
+ await act(async()=>window.dispatchEvent(new Event('focus')))
+ let fail=true
+ const first={...file,path:'star-first',name:'Star first.docx'},next={...file,path:'star-next',name:'Star next.docx'}
+ const starred=vi.fn(async(query?:{offset?:number;limit?:number})=>{
+  if(query?.limit===0)return {entries:[],total:2,totalAll:2}
+  if(query?.offset)return {entries:[next],total:2,totalAll:2}
+  if(fail)throw Error('Starred first page unavailable')
+  return {entries:[first],total:2,totalAll:2}
+ });api.starred=starred
+ await click([...host.querySelectorAll<HTMLButtonElement>('.sidebar-nav button')].find(node=>node.querySelector('.nav-label')?.textContent==='Starred')!)
+ expect(host.querySelector('[role="alert"]')?.textContent).toContain('Starred first page unavailable')
+ await act(async()=>intersect());expect(starred.mock.calls.filter(([query])=>query?.offset)).toHaveLength(0)
+ expect(host.querySelector('.recent-item')).toBeNull()
+ expect(button('Retry')).toBeTruthy()
+ fail=false;await act(async()=>window.dispatchEvent(new Event('focus')));await act(async()=>intersect())
+ expect(starred.mock.calls.filter(([query])=>query?.offset)).toHaveLength(1)
+ expect([...host.querySelectorAll('.recent-name')].map(node=>node.textContent)).toEqual([first.name,next.name])
+})
+
+test('Web file-menu portal closes when the restored content scrollport moves', async () => {
+ await act(async () => root.render(h(LocaleProvider, {initial: 'en', children: h(Home, {accountEntry: h('div', null, 'Account'), supportedNewFormats: [], supportedFormats: ['docx']})})))
+ const content = host.querySelector<HTMLElement>('.content')!
+ content.scrollTop = 120
+ await click(host.querySelector<HTMLButtonElement>('.recent-item .more-btn')!)
+ const menu = document.body.querySelector('.row-menu')!
+ expect(menu).not.toBeNull()
+ expect(content.contains(menu)).toBe(false)
+ await act(async () => content.dispatchEvent(new Event('scroll')))
+ expect(document.body.querySelector('.row-menu')).not.toBeNull()
+ content.scrollTop = 121
+ await act(async () => content.dispatchEvent(new Event('scroll')))
+ expect(document.body.querySelector('.row-menu')).toBeNull()
+})
+
+test('a changed search immediately hides old hits and rejects their late response during debounce', async () => {
+  vi.useFakeTimers()
+  try {
+    const late = deferred<Awaited<ReturnType<HomeApi['searchFiles']>>>()
+    api.searchFiles = vi.fn(async ({q}) => q === 'old' ? late.promise : ({hits: [], total: 0, index: {indexed: 0, pending: 0, scanning: false}}))
+    const search = host.querySelector<HTMLInputElement>('input[type="search"]')!
+    await fill(search, 'old')
+    await act(async () => {await vi.advanceTimersByTimeAsync(150)})
+    expect(api.searchFiles).toHaveBeenCalledTimes(1)
+    await fill(search, 'new')
+    await act(async () => late.resolve({hits: [{...file, snippet: null, needles: ['old']}], total: 1, index: {indexed: 1, pending: 0, scanning: false}}))
+    expect(host.querySelector('.search-row')).toBeNull()
+    await act(async () => {await vi.advanceTimersByTimeAsync(150)})
+    expect(host.querySelector('.search-row')).toBeNull()
+    await fill(search, 'old')
+    await act(async () => {await vi.advanceTimersByTimeAsync(150)})
+    expect(host.querySelector('.search-row')).not.toBeNull()
+    await fill(search, 'another')
+    expect(host.querySelector('.search-row')).toBeNull()
+  } finally {vi.useRealTimers()}
+})
+
+test('searching clears hidden file selections before any bulk action can target them', async () => {
+  api.searchFiles = async () => ({hits: [], total: 0, index: {indexed: 0, pending: 0, scanning: false}})
+  await click(host.querySelector<HTMLInputElement>('.row-check')!)
+  expect(host.querySelector('.selection-count')?.textContent).toContain('1')
+  await fill(host.querySelector<HTMLInputElement>('input[type="search"]')!, 'unrelated')
+  expect(host.querySelector('.selection-bar')).toBeNull()
+  await fill(host.querySelector<HTMLInputElement>('input[type="search"]')!, '')
+  expect(host.querySelector<HTMLInputElement>('.row-check')?.checked).toBe(false)
+})
+
+test('search results beyond the first hundred remain reachable without duplicate requests',async()=>{
+ vi.useFakeTimers()
+ try{
+  const hits=Array.from({length:105},(_,i)=>({...file,path:`search-${i}`,name:`match-${i}.docx`,snippet:null,needles:['match']}))
+  const next=deferred<Awaited<ReturnType<HomeApi['searchFiles']>>>()
+  api.searchFiles=vi.fn(async({offset=0})=>offset?next.promise:{hits:hits.slice(0,100),total:105,index:{indexed:105,pending:0,scanning:false}})
+  await fill(host.querySelector<HTMLInputElement>('input[type="search"]')!,'match');await act(async()=>{await vi.advanceTimersByTimeAsync(150)})
+  expect(host.querySelectorAll('.search-row')).toHaveLength(100)
+  const more=button('Load more results');await click(more);await click(more)
+  expect(api.searchFiles).toHaveBeenCalledTimes(2);expect(api.searchFiles).toHaveBeenLastCalledWith({q:'match',ext:undefined,offset:100,limit:100})
+  await act(async()=>next.resolve({hits:hits.slice(100),total:105,index:{indexed:105,pending:0,scanning:false}}))
+  expect(host.querySelectorAll('.search-row')).toHaveLength(105);expect(host.querySelector('.search-more')).toBeNull()
+ }finally{vi.useRealTimers()}
+})
+test('late additional search results cannot replace a changed query',async()=>{
+ vi.useFakeTimers()
+ try{
+  const next=deferred<Awaited<ReturnType<HomeApi['searchFiles']>>>(),hit={...file,snippet:null,needles:['old']}
+  api.searchFiles=vi.fn(async({q,offset=0})=>offset?next.promise:{hits:q==='old'?[hit]:[],total:q==='old'?2:0,index:{indexed:2,pending:0,scanning:false}})
+  const search=host.querySelector<HTMLInputElement>('input[type="search"]')!;await fill(search,'old');await act(async()=>{await vi.advanceTimersByTimeAsync(150)})
+  await click(button('Load more results'));await fill(search,'new')
+  await act(async()=>next.resolve({hits:[{...hit,path:'late'}],total:2,index:{indexed:2,pending:0,scanning:false}}))
+  expect(host.querySelector('.search-row')).toBeNull();await act(async()=>{await vi.advanceTimersByTimeAsync(150)});expect(host.querySelector('.search-row')).toBeNull()
+ }finally{vi.useRealTimers()}
+})
+test('a failed additional search retains existing rows and permits an explicit retry',async()=>{
+ vi.useFakeTimers()
+ try{
+  let attempt=0;const hit={...file,snippet:null,needles:['match']}
+  api.searchFiles=async({offset=0})=>{if(offset&&attempt++===0)throw Error('Search page unavailable');return {hits:[{...hit,path:offset?'second':'first'}],total:2,index:{indexed:2,pending:0,scanning:false}}}
+  await fill(host.querySelector<HTMLInputElement>('input[type="search"]')!,'match');await act(async()=>{await vi.advanceTimersByTimeAsync(150)})
+  await click(button('Load more results'));expect(host.querySelectorAll('.search-row')).toHaveLength(1);expect(host.querySelector('[role="alert"]')?.textContent).toContain('Search page unavailable')
+  await click(button('Load more results'));expect(host.querySelectorAll('.search-row')).toHaveLength(2)
+ }finally{vi.useRealTimers()}
+})
+
+test('a changed search listing refreshes its first page instead of looping at a duplicate offset',async()=>{
+ vi.useFakeTimers()
+ try{
+  const hits=Array.from({length:105},(_,i)=>({...file,path:`search-${i}`,name:`match-${i}.docx`,snippet:null,needles:['match']}));let live=hits
+  api.searchFiles=vi.fn(async({offset=0})=>({hits:live.slice(offset,offset+100),total:live.length,index:{indexed:live.length,pending:0,scanning:false}}))
+  await fill(host.querySelector<HTMLInputElement>('input[type="search"]')!,'match');await act(async()=>{await vi.advanceTimersByTimeAsync(150)})
+  live=[{...hits[0],path:'inserted',name:'new-match.docx'},...hits]
+  await click(button('Load more results'));await act(async()=>{await vi.advanceTimersByTimeAsync(150)})
+  expect(api.searchFiles).toHaveBeenCalledTimes(3);expect(api.searchFiles).toHaveBeenLastCalledWith({q:'match',ext:undefined,limit:100})
+  expect(host.querySelector('.search-row')?.textContent).toContain('new-match.docx')
+  await click(button('Load more results'));expect(host.querySelectorAll('.search-row')).toHaveLength(106);expect(host.querySelector('.search-more')).toBeNull()
+ }finally{vi.useRealTimers()}
+})
+
+ test('a type filter clears previous rows while loading and retries its own failed query',async()=>{
+ const pending=deferred<Awaited<ReturnType<HomeApi['recents']>>>()
+ let fail=true
+ api.recents=vi.fn(async(query)=>{if(query?.ext==='pdf' && query.limit!==0){if(fail){await pending.promise;throw Error('PDF unavailable')}return {entries:[{...file,path:'pdf-file',name:'Result.pdf',ext:'pdf'}],total:1,totalAll:1}}return {entries:[file],total:1,totalAll:1}})
+ await click(button('PDF'))
+ expect(host.querySelector('.recent-item')).toBeNull()
+ expect(host.querySelector('[role="status"][aria-busy="true"]')).not.toBeNull()
+ await act(async()=>pending.resolve({entries:[],total:0,totalAll:0}))
+ expect(host.querySelector('.recent-item')).toBeNull()
+ fail=false;await click(button('Retry'))
+ expect(host.querySelector('.recent-name')?.textContent).toBe('Result.pdf')
+ expect(api.recents).toHaveBeenLastCalledWith(expect.objectContaining({ext:'pdf',offset:0}))
+ })
+ test('a failed same-view refresh preserves the currently matching rows',async()=>{
+ api.recents=async()=>{throw Error('Refresh unavailable')}
+ await act(async()=>window.dispatchEvent(new Event('focus')))
+ expect(host.querySelector('.recent-name')?.textContent).toBe(file.name)
+ expect(host.querySelector('[role="alert"]')?.textContent).toContain('Refresh unavailable')
+ })
+
+test('a late failed view request cannot replace a newer successful view with an error',async()=>{
+ const pending=deferred<Awaited<ReturnType<HomeApi['starred']>>>()
+ api.starred=async query=>query?.limit===0?{entries:[],total:0,totalAll:0}:pending.promise.then(()=>{throw Error('Old starred failure')})
+ const nav=(label:string)=>[...host.querySelectorAll<HTMLButtonElement>('.sidebar-nav button')].find(node=>node.querySelector('.nav-label')?.textContent===label)!
+ await click(nav('Starred'));await click(nav('Recent'))
+ await act(async()=>pending.resolve({entries:[],total:0,totalAll:0}))
+ expect(host.querySelector('.recent-name')?.textContent).toBe(file.name)
+ expect(host.querySelector('[role="alert"]')).toBeNull()
+ expect(host.querySelector('[role="status"][aria-busy="true"]')).toBeNull()
+})
+
+test('search distinguishes a pending first page from failure and retries the unchanged query',async()=>{
+ vi.useFakeTimers()
+ try{
+  const pending=deferred<Awaited<ReturnType<HomeApi['searchFiles']>>>()
+  let fail=true
+  api.searchFiles=vi.fn(async()=>{if(fail){await pending.promise;throw Error('Search unavailable')}return {hits:[{...file,snippet:null,needles:['report']}],total:1,index:{indexed:1,pending:0,scanning:false}}})
+  await fill(host.querySelector<HTMLInputElement>('input[type="search"]')!,'report')
+  expect(host.querySelector('.search-results [role="status"][aria-busy="true"]')).not.toBeNull()
+  await act(async()=>{await vi.advanceTimersByTimeAsync(150)})
+  await act(async()=>pending.resolve({hits:[],total:0,index:{indexed:0,pending:0,scanning:false}}))
+  expect(host.querySelector('.search-results [role="alert"]')?.textContent).toContain('Search unavailable')
+  expect(host.querySelector('.search-results [aria-busy="true"]')).toBeNull()
+  fail=false;await click(button('Retry',host.querySelector('.search-results')!))
+  await act(async()=>{await vi.advanceTimersByTimeAsync(150)})
+  expect(host.querySelector('.search-row')?.textContent).toContain(file.name)
+  expect(host.querySelector('.search-results [role="alert"]')).toBeNull()
+  expect(api.searchFiles).toHaveBeenLastCalledWith(expect.objectContaining({q:'report'}))
+ }finally{vi.useRealTimers()}
+})
+test('an indexing poll failure stops the indexing indicator, retains matching hits and offers retry',async()=>{
+ vi.useFakeTimers()
+ try{
+  let count=0
+  api.searchFiles=vi.fn(async()=>{if(++count>1)throw Error('Index poll failed');return {hits:[{...file,snippet:null,needles:['report']}],total:1,index:{indexed:1,pending:1,scanning:true}}})
+  await fill(host.querySelector<HTMLInputElement>('input[type="search"]')!,'report')
+  await act(async()=>{await vi.advanceTimersByTimeAsync(150)})
+  expect(host.querySelector('.search-status')).not.toBeNull()
+  await act(async()=>{await vi.advanceTimersByTimeAsync(1500)})
+  expect(host.querySelector('.search-status')).toBeNull()
+  expect(host.querySelector('.search-row')?.textContent).toContain(file.name)
+  expect(host.querySelector('.search-results [role="alert"]')?.textContent).toContain('Index poll failed')
+  expect(button('Retry',host.querySelector('.search-results')!)).toBeTruthy()
+ }finally{vi.useRealTimers()}
+})
+
+test('late failure from a previous search does not replace newer results or leave a retry banner',async()=>{
+ vi.useFakeTimers()
+ try{
+  const late=deferred<void>()
+  api.searchFiles=vi.fn(async({q})=>{if(q==='old'){await late.promise;throw Error('Late old failure')}return {hits:[{...file,snippet:null,needles:['report']}],total:1,index:{indexed:1,pending:0,scanning:false}}})
+  const input=host.querySelector<HTMLInputElement>('input[type="search"]')!
+  await fill(input,'old');await act(async()=>{await vi.advanceTimersByTimeAsync(150)})
+  await fill(input,'report');await act(async()=>{await vi.advanceTimersByTimeAsync(150)})
+  await act(async()=>late.resolve())
+  expect(host.querySelector('.search-row')?.textContent).toContain(file.name)
+  expect(host.querySelector('[role="alert"]')).toBeNull()
+  await fill(input,'')
+  expect(host.querySelector('.search-results')).toBeNull()
+ }finally{vi.useRealTimers()}
+})
+
+test('failed polling of an empty partial index does not claim zero final search results',async()=>{
+ vi.useFakeTimers()
+ try{
+  let count=0
+  api.searchFiles=async()=>{if(++count>1)throw Error('Partial index unavailable');return {hits:[],total:0,index:{indexed:0,pending:1,scanning:true}}}
+  await fill(host.querySelector<HTMLInputElement>('input[type="search"]')!,'report')
+  await act(async()=>{await vi.advanceTimersByTimeAsync(1650)})
+  expect(host.querySelector('.search-results [role="alert"]')?.textContent).toContain('Partial index unavailable')
+  expect(host.querySelector('.recents-heading .file-count')).toBeNull()
+  expect(host.querySelector('.search-status')).toBeNull()
+  expect(host.querySelector('.search-results')?.textContent).not.toContain('No files')
+ }finally{vi.useRealTimers()}
+})
+
+test('search result buttons support Space and Enter without page scrolling or key-repeat opens',async()=>{
+ vi.useFakeTimers()
+ try{
+  api.openPath=vi.fn(async()=>{})
+  api.searchFiles=async()=>({hits:[{...file,snippet:null,needles:['report']}],total:1,index:{indexed:1,pending:0,scanning:false}})
+  await fill(host.querySelector<HTMLInputElement>('input[type="search"]')!,'report')
+  await act(async()=>{await vi.advanceTimersByTimeAsync(150)})
+  const row=host.querySelector<HTMLElement>('.search-row')!
+  row.focus()
+  for(const key of [' ','Enter']){
+   const event=new KeyboardEvent('keydown',{key,bubbles:true,cancelable:true})
+   await act(async()=>row.dispatchEvent(event))
+   expect(event.defaultPrevented).toBe(true)
+  }
+  await act(async()=>row.dispatchEvent(new KeyboardEvent('keydown',{key:' ',repeat:true,bubbles:true,cancelable:true})))
+  expect(api.openPath).toHaveBeenCalledTimes(2)
+  expect(api.openPath).toHaveBeenLastCalledWith(file.path)
+ }finally{vi.useRealTimers()}
+})
+
+for (const kind of ['file', 'folder', 'missing'] as const) test(`${kind} confirmation keeps Tab inside and Escape restores its opener`, async () => {
+  let opener: HTMLElement
+  if (kind === 'folder') {
+    opener = tree('Projects').querySelector<HTMLButtonElement>('.folder-more-btn')!
+    await folderAction('Delete folder…')
+  } else if (kind === 'missing') {
+    api.recents = async () => ({entries: [{...file, missing: true}], total: 1, totalAll: 1})
+    await act(async () => window.dispatchEvent(new Event('focus')))
+    opener = host.querySelector<HTMLElement>('.recent-item')!
+    opener.focus(); await click(opener)
+  } else {
+    opener = host.querySelector<HTMLButtonElement>('.recent-actions .more-btn')!
+    await chooseFileAction('Delete files')
+  }
+  const dialog = host.querySelector<HTMLElement>('[role="dialog"]')!
+  const controls = [...dialog.querySelectorAll<HTMLButtonElement>('button')]
+  const key = async (node: HTMLElement, value: string, shiftKey = false) => {
+    const event = new KeyboardEvent('keydown', {key: value, shiftKey, bubbles: true, cancelable: true})
+    await act(async () => node.dispatchEvent(event)); return event
+  }
+  controls.at(-1)!.focus()
+  expect((await key(controls.at(-1)!, 'Tab')).defaultPrevented).toBe(true)
+  expect(document.activeElement).toBe(controls[0])
+  expect((await key(controls[0], 'Tab', true)).defaultPrevented).toBe(true)
+  expect(document.activeElement).toBe(controls.at(-1))
+  await key(controls.at(-1)!, 'Escape')
+  expect(host.querySelector('[role="dialog"]')).toBeNull()
+  expect(document.activeElement).toBe(opener)
+})
+
+test('canceling the move picker restores the persistent file menu trigger', async () => {
+  const opener = host.querySelector<HTMLButtonElement>('.recent-actions .more-btn')!
+  await chooseFileAction('Move to folder…')
+  const search = host.querySelector<HTMLInputElement>('.picker-search')!
+  await act(async () => search.dispatchEvent(new KeyboardEvent('keydown', {key: 'Escape', bubbles: true, cancelable: true})))
+  expect(host.querySelector('[role="dialog"]')).toBeNull()
+  expect(document.activeElement).toBe(opener)
+})
+
+test('pending deletion keeps keyboard traversal inside after the disabled submit loses focus', async () => {
+  const pending = deferred<void>()
+  api.deleteFiles = () => pending.promise
+  await chooseFileAction('Delete files')
+  const dialog = host.querySelector<HTMLElement>('[role="dialog"]')!
+  const confirm = button('Delete', dialog), cancel = button('Cancel', dialog)
+  confirm.focus(); await click(confirm)
+  expect(confirm.disabled).toBe(true)
+  // Chromium 会将新禁用的提交按钮焦点移到 body。
+  document.body.setAttribute('tabindex', '-1')
+  document.body.focus()
+  document.body.removeAttribute('tabindex')
+  expect(document.activeElement).toBe(document.body)
+  const event = new KeyboardEvent('keydown', {key: 'Tab', bubbles: true, cancelable: true})
+  await act(async () => document.body.dispatchEvent(event))
+  expect(event.defaultPrevented).toBe(true)
+  expect(document.activeElement).toBe(cancel)
+  await act(async () => pending.resolve())
+})
+
+async function mountServerSortedHome() {
+  await act(async () => root.render(null))
+  await act(async () => root.render(h(LocaleProvider, {initial:'en', children:h(Home, {accountEntry:h('div',null,'Account'), supportedNewFormats:[], capabilities:{serverFileSort:true}})})))
+}
+async function chooseModifiedSort(label: string) {
+  await click(host.querySelector<HTMLButtonElement>('.cloud-col-sort-btn')!)
+  await click(button(label, host.querySelector('[role="menu"]')!))
+}
+const sortingFiles = () => Array.from({length:55},(_,i)=>({...file,path:`sorted-${String(i).padStart(3,'0')}`,name:`Sort ${i}.docx`,mtimeMs:i+1}))
+
+test('Web explicit modified sort resets the first page and keeps server order without eager tail reads', async()=>{
+  const intersect=pagingObserver(),items=sortingFiles()
+  const recents=vi.fn(async(query?:{offset?:number;limit?:number;sort?:string})=>{
+    const ordered=query?.sort==='modified-desc'?[...items].reverse():items
+    return {entries:ordered.slice(query?.offset??0,(query?.offset??0)+(query?.limit??50)),total:55,totalAll:55}
+  });api.recents=recents
+  await mountServerSortedHome()
+  expect(recents).toHaveBeenCalledTimes(1);expect(recents.mock.calls[0][0]).not.toHaveProperty('sort')
+  await click(host.querySelector<HTMLButtonElement>('.cloud-col-sort-btn')!)
+  expect([...host.querySelectorAll('[role="menuitemradio"]')].map(n=>n.getAttribute('aria-checked'))).toEqual(['false','false'])
+  await click(button('Oldest',host.querySelector('[role="menu"]')!))
+  expect(recents).toHaveBeenLastCalledWith(expect.objectContaining({offset:0,sort:'modified-asc'}))
+  expect(recents.mock.calls.filter(([query])=>query?.offset)).toHaveLength(0)
+  expect(host.querySelectorAll('.recent-name')).toHaveLength(50)
+  expect(host.querySelector('.recent-name')?.textContent).toBe(items[0].name)
+  await act(async()=>intersect())
+  expect(recents).toHaveBeenLastCalledWith(expect.objectContaining({offset:50,sort:'modified-asc'}))
+  expect([...host.querySelectorAll('.recent-name')].map(n=>n.textContent)).toEqual(items.map(n=>n.name))
+  await chooseModifiedSort('Recent')
+  expect(recents).toHaveBeenLastCalledWith(expect.objectContaining({offset:0,sort:'modified-desc'}))
+  expect(host.querySelectorAll('.recent-name')).toHaveLength(50)
+  expect(host.querySelector('.recent-name')?.textContent).toBe(items[54].name)
+})
+
+test('switching modified sort isolates the old tail response and the new tail lock',async()=>{
+  const intersect=pagingObserver(),items=sortingFiles(),old=deferred<{entries:RecentEntry[];total:number;totalAll:number}>(),current=deferred<{entries:RecentEntry[];total:number;totalAll:number}>()
+  const recents=vi.fn(async(query?:{offset?:number;sort?:string})=>query?.offset?(query.sort?current.promise:old.promise):{entries:query?.sort?[...items].reverse().slice(0,50):items.slice(0,50),total:55,totalAll:55});api.recents=recents
+  await mountServerSortedHome();await act(async()=>intersect())
+  await chooseModifiedSort('Recent');await act(async()=>intersect())
+  await act(async()=>old.resolve({entries:items.slice(50),total:55,totalAll:55}))
+  await act(async()=>intersect())
+  expect(recents.mock.calls.filter(([query])=>query?.offset&&query.sort==='modified-desc')).toHaveLength(1)
+  expect([...host.querySelectorAll('.recent-name')].map(n=>n.textContent)).toEqual([...items].reverse().slice(0,50).map(n=>n.name))
+  await act(async()=>current.resolve({entries:[...items].reverse().slice(50),total:55,totalAll:55}))
+  expect([...host.querySelectorAll('.recent-name')].map(n=>n.textContent)).toEqual([...items].reverse().map(n=>n.name))
+})
+
+test('Web folder modified sort uses actual timestamps while desktop keeps its existing query contract',async()=>{
+  const items=[{...file,path:'new',name:'New.docx',mtimeMs:3},{...file,path:'old',name:'Old.docx',mtimeMs:1},{...file,path:'middle',name:'Middle.docx',mtimeMs:2}]
+  const original=api.listFolder;api.listFolder=async path=>({...await original(path),files:items})
+  await mountServerSortedHome();await click(tree('Projects'))
+  await chooseModifiedSort('Oldest')
+  expect([...host.querySelectorAll('.recent-item:not(.folder-item) .recent-name')].map(n=>n.textContent)).toEqual(['Old.docx','Middle.docx','New.docx'])
+  await chooseModifiedSort('Recent')
+  expect([...host.querySelectorAll('.recent-item:not(.folder-item) .recent-name')].map(n=>n.textContent)).toEqual(['New.docx','Middle.docx','Old.docx'])
+  await act(async()=>root.render(null))
+  const recents=vi.fn(async(_query?:{sort?:string})=>({entries:items,total:3,totalAll:3}));api.recents=recents
+  await act(async()=>root.render(h(LocaleProvider,{initial:'en',children:h(Home,{accountEntry:h('div',null,'Account'),supportedNewFormats:[]})})))
+  await chooseModifiedSort('Oldest')
+  expect([...host.querySelectorAll('.recent-item:not(.folder-item) .recent-name')].map(n=>n.textContent)).toEqual([...items].reverse().map(n=>n.name))
+  expect(recents.mock.calls.every(args=>!('sort' in (args[0]??{})))).toBe(true)
+})
+
+test('modified sort menu closes on Escape and returns focus from an option to its trigger',async()=>{
+  await mountServerSortedHome()
+  const trigger=host.querySelector<HTMLButtonElement>('.cloud-col-sort-btn')!
+  await click(trigger)
+  const option=host.querySelector<HTMLButtonElement>('[role="menuitemradio"]')!
+  option.focus()
+  await act(async()=>option.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true,cancelable:true})))
+  expect(host.querySelector('[role="menu"]')).toBeNull()
+  expect(document.activeElement).toBe(trigger)
+})
+
+async function renderWebReveal() {
+  await act(async () => root.render(h(LocaleProvider, {initial: 'en', children: h(Home, {supportedFormats: ['docx'], supportedNewFormats: []})})))
+}
+async function revealFile() {
+  await click(host.querySelector<HTMLButtonElement>('.recent-item:not(.folder-item) .more-btn')!)
+  await click(button('Reveal in folder', document.body.querySelector('.row-menu')!))
+}
+
+for (const navigation of ['folder', 'recent', 'starred', 'filter', 'search', 'open'] as const) {
+  test(`Web 位置导航等待期间显式 ${navigation} 会同步作废旧请求及旧错误`, async () => {
+    const pending = deferred<void>()
+    let signal: AbortSignal | undefined
+    api.revealPath = async (_path, current) => {signal = current; await pending.promise; throw new Error('obsolete location failure')}
+    api.openPath = vi.fn(async () => {})
+    await renderWebReveal(); await revealFile()
+    if (navigation === 'folder') await click(tree('Projects'))
+    else if (navigation === 'recent' || navigation === 'starred') await click([...host.querySelectorAll<HTMLElement>('.sidebar-nav .nav-item')].find(node => node.querySelector('.nav-label')?.textContent === (navigation === 'recent' ? 'Recent' : 'Starred'))!)
+    else if (navigation === 'filter') await click(button('Docs'))
+    else if (navigation === 'search') await fill(host.querySelector<HTMLInputElement>('.file-search input')!, 'new intent')
+    else await click(host.querySelector<HTMLElement>('.recent-item:not(.folder-item)')!)
+    expect(signal?.aborted).toBe(true)
+    await act(async () => pending.resolve())
+    expect(host.querySelector('[role="alert"]')).toBeNull()
+    if (navigation === 'folder') expect(host.querySelector('.tree-row.active .tree-name')?.textContent).toBe('Projects')
+    if (navigation === 'open') expect(api.openPath).toHaveBeenCalledWith(fileId)
+  })
+}
+
+test('Web 第二次位置导航作废旧操作，保留新操作并允许失败后重试', async () => {
+  const old = deferred<void>(), signals: (AbortSignal | undefined)[] = []
+  api.revealPath = async (_path, signal) => {signals.push(signal); if (signals.length === 1) {await old.promise; throw new Error('obsolete failure')} if (signals.length === 2) throw new Error('current parent failure')}
+  await renderWebReveal(); await revealFile(); await revealFile()
+  expect(signals[0]?.aborted).toBe(true); expect(signals[1]?.aborted).toBe(false)
+  expect(host.querySelector('[role="alert"]')?.textContent).toContain('current parent failure')
+  await act(async () => old.resolve())
+  expect(host.querySelector('[role="alert"]')?.textContent).not.toContain('obsolete failure')
+  await revealFile(); expect(signals).toHaveLength(3)
+  expect(host.querySelector('[role="alert"]')).toBeNull()
+})
+
+test('Web Home 卸载会作废位置导航，桌面位置调用仍只有路径参数', async () => {
+  api.revealPath = vi.fn(async () => {})
+  await chooseFileAction('Reveal in folder')
+  expect(api.revealPath).toHaveBeenLastCalledWith(fileId)
+  const pending = deferred<void>(); let signal: AbortSignal | undefined
+  api.revealPath = async (_path, current) => {signal = current; await pending.promise}
+  await renderWebReveal(); await revealFile()
+  await act(async () => root.render(h('div', null, 'other page')))
+  expect(signal?.aborted).toBe(true)
+  await act(async () => pending.resolve())
+})
+
+function mockRevealTabs() {
+  const handlers = new Set<(tabs: import('../../../shell/src/shared/tabs-api').TabSummary[]) => void>()
+  const unsubscribe = vi.fn()
+  const onChanged = vi.fn((handler: (tabs: import('../../../shell/src/shared/tabs-api').TabSummary[]) => void) => {
+    handlers.add(handler)
+    return () => {handlers.delete(handler); unsubscribe()}
+  })
+  vi.stubGlobal('aiOfficeTabs', {onChanged})
+  const emit = (documentActive: boolean, title: string) => {
+    for (const handler of handlers) handler([
+      {id: 'home', kind: 'home', title: 'Home', closable: false, active: !documentActive},
+      {id: fileId, kind: 'docs', title, closable: true, active: documentActive},
+    ])
+  }
+  return {emit, handlers, unsubscribe, onChanged}
+}
+
+test('Web 首页仍活动时后台文档重命名不会取消位置请求', async () => {
+  const tabs = mockRevealTabs(), pending = deferred<void>()
+  let signal: AbortSignal | undefined
+  const {notifyRevealWorkspaceFolder} = await import('../../../shell/src/renderer/src/file-events')
+  api.revealPath = async (_path, current) => {
+    signal = current; await pending.promise
+    if (!current?.aborted) notifyRevealWorkspaceFolder({dir: project, fileId})
+  }
+  await renderWebReveal(); await revealFile()
+  expect(tabs.onChanged).toHaveBeenCalledTimes(1)
+  await act(async () => tabs.emit(false, 'Renamed in background.docx'))
+  expect(signal?.aborted).toBe(false)
+  await act(async () => pending.resolve())
+  expect(host.querySelector('.tree-row.active .tree-name')?.textContent).toBe('Projects')
+  expect(host.querySelector('[role="alert"]')).toBeNull()
+})
+
+test('Web 切到活动文档会取消位置请求及其旧错误，回首页不会恢复旧请求', async () => {
+  const tabs = mockRevealTabs(), pending = deferred<void>()
+  let signal: AbortSignal | undefined
+  api.revealPath = async (_path, current) => {signal = current; await pending.promise; throw new Error('obsolete location after tab switch')}
+  await renderWebReveal(); await revealFile()
+  await act(async () => tabs.emit(true, 'Active document.docx'))
+  expect(signal?.aborted).toBe(true)
+  await act(async () => tabs.emit(false, 'Renamed after returning Home.docx'))
+  expect(signal?.aborted).toBe(true)
+  await act(async () => pending.resolve())
+  expect(host.querySelector('[role="alert"]')).toBeNull()
+  expect(host.querySelector('.tree-row.active')).toBeNull()
+})
+
+test('位置页签监听仅用于 Web，卸载会取消订阅和未结算位置操作', async () => {
+  const tabs = mockRevealTabs(), pending = deferred<void>()
+  let signal: AbortSignal | undefined
+  api.revealPath = async (_path, current) => {signal = current; await pending.promise}
+  // 桌面 Home 已由 beforeEach 挂载，重渲染仍不应订阅 Web 页签事件。
+  await act(async () => root.render(h(LocaleProvider, {initial: 'en', children: h(Home, {supportedNewFormats: []})})))
+  expect(tabs.onChanged).not.toHaveBeenCalled()
+  await renderWebReveal(); await revealFile()
+  expect(tabs.handlers.size).toBe(1)
+  await act(async () => root.render(h('div', null, 'other page')))
+  expect(tabs.unsubscribe).toHaveBeenCalledTimes(1)
+  expect(tabs.handlers.size).toBe(0)
+  expect(signal?.aborted).toBe(true)
+  await act(async () => pending.resolve())
 })

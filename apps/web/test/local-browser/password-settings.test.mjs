@@ -4,6 +4,7 @@ import {fileURLToPath} from 'node:url'
 import {mkdir} from 'node:fs/promises'
 import {expect} from '@playwright/test'
 import {launchTestBrowser} from '../helpers/browser.mjs'
+import {accountAction, settingsTab, closeWorkspaceDialog} from '../helpers/workspace-ui.mjs'
 import {fileFixture} from '../helpers/files.mjs'
 import {password} from '../helpers/identity.mjs'
 import {buildLocalApp} from '../../server/src/app.ts'
@@ -16,7 +17,7 @@ test('original Settings changes password with real session rotation and revokes 
  const login=async value=>{await page.getByLabel('用户名',{exact:true}).fill('alice');await page.getByLabel('密码',{exact:true}).fill(value);await page.getByRole('button',{name:'登录',exact:true}).click()}
  await page.goto(origin);await login(password);await expect(page.locator('.home')).toBeVisible()
  const oldCookie=(await context.cookies()).find(c=>c.name==='__Host-dyoffice-session').value
- await page.locator('.account-btn').click();await page.getByRole('button',{name:'个人设置',exact:true}).click();const dialog=page.getByRole('dialog')
+ await accountAction(page,'个人设置');const dialog=page.getByRole('dialog')
  // Real layout assertion: labels of different lengths share the original flexible label column.
  // Keep the original entrance motion. Sequential boundingBox reads sample different
  // scale(.99)->scale(1) frames; await finite animations and read all rectangles atomically.
@@ -36,9 +37,9 @@ test('original Settings changes password with real session rotation and revokes 
  assert.equal(await f.accounts.verifyCredentials('alice',password),null);assert.ok(await f.accounts.verifyCredentials('alice',next))
  await mkdir('test-results',{recursive:true});await page.screenshot({path:'test-results/local-shell-password-changed.png',fullPage:true})
  // The retained original settings UI can still write with the replacement CSRF.
- await dialog.getByRole('button',{name:'通用',exact:true}).click();await expect(dialog.locator('#set-author-name')).toBeEnabled();await dialog.locator('#set-author-name').fill('After password rotation')
- const saved=page.waitForResponse(r=>r.url().endsWith('/api/v1/preferences')&&r.request().method()==='PUT');await dialog.locator('#set-author-name').press('Enter');assert.equal((await saved).status(),200)
- await dialog.locator('.set-close').click();await page.locator('.account-btn').click();await page.getByRole('button',{name:'退出登录',exact:true}).click();await expect(page.getByLabel('用户名',{exact:true})).toBeVisible()
+ await settingsTab(dialog, '通用偏好');await expect(dialog.getByLabel('文档作者', {exact:true})).toBeEnabled();await dialog.getByLabel('文档作者', {exact:true}).fill('After password rotation')
+ const saved=page.waitForResponse(r=>r.url().endsWith('/api/v1/preferences')&&r.request().method()==='PUT');await dialog.getByRole('button',{name:'保存个人偏好',exact:true}).click();assert.equal((await saved).status(),200)
+ await closeWorkspaceDialog(dialog);await accountAction(page,'退出登录');await expect(page.getByLabel('用户名',{exact:true})).toBeVisible()
  await login(next);await expect(page.locator('.home')).toBeVisible()
  assert.deepEqual(await page.evaluate(()=>[...Object.keys(localStorage),...Object.keys(sessionStorage)].filter(k=>/password|token|session/i.test(k))),[])
 })

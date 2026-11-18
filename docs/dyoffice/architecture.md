@@ -6,7 +6,7 @@
 
 ## 1. 目标、边界与现状
 
-目标是将 GenOffice 改造成可企业部署的 Web 原生 Office 工作区，而不是另造一个聊天工具或报告平台。原生格式只支持 DOCX、XLSX、PPTX、PDF；用户拥有彼此隔离的个人工作区。保留数据源、个人偏好、原生编辑器、AI 面板、工具、Skills、模型 Provider 和 Agent Core。所有全局模型、媒体、搜索、重排、服务凭据、HTTP MCP 与默认能力归 Admin。
+目标是将 DyOffice 改造成可企业部署的 Web 原生 Office 工作区，而不是另造一个聊天工具或报告平台。原生格式只支持 DOCX、XLSX、PPTX、PDF；用户拥有彼此隔离的个人工作区。保留数据源、个人偏好、原生编辑器、AI 面板、工具、Skills、模型 Provider 和 Agent Core。所有全局模型、媒体、搜索、重排、服务凭据、HTTP MCP 与默认能力归 Admin。
 
 企业落地增加身份集成、安全、审计、部署、备份、运维和交付流程，不自动增加团队、组织成员、共享文件夹、团队权限、实时多人协同或 Markdown/HTML 产品入口。部署级隔离是技术边界，不是新的组织产品模型。首批优先企业独立部署；共享 SaaS 的跨企业隔离另有上线门槛。
 
@@ -24,7 +24,7 @@
 | `apps/pdf/package.json` | PDF.js、PDFium、pdf-lib 等依赖 | 需要逐项验证 WASM、字体、导出与浏览器兼容 |
 | `packages/cli/src/control-protocol.ts`、`agent-mcp.ts` | 桌面定位/选区协议、外部 Agent 的 stdio 注册逻辑 | 本地 socket、文件路径和 stdio 不能直接暴露到公网 |
 
-GenOffice 上游基线是 `19a389b39be75f611ec21dcda4a7b91a658239d2`。sm PR #245 的历史参考提交为 `beeb717b31e2201cc1e541c54b2f750f606d99e2`；它是管理边界和浏览器适配参考，不是本计划对其最新状态或上线能力的背书。只移植经依赖、许可、测试核对的缺失能力，不导入整个 Python/Agno/团队报告体系。
+DyOffice 上游基线是 `19a389b39be75f611ec21dcda4a7b91a658239d2`。sm PR #245 的历史参考提交为 `beeb717b31e2201cc1e541c54b2f750f606d99e2`；它是管理边界和浏览器适配参考，不是本计划对其最新状态或上线能力的背书。只移植经依赖、许可、测试核对的缺失能力，不导入整个 Python/Agno/团队报告体系。
 
 ## 2. 方案比较与最终建议
 

@@ -1,0 +1,33 @@
+# Standalone, opt-in diagnostic. Never combine this service with document inputs.
+name: dyoffice-document-diagnostic
+services:
+  document-runtime-diagnostic:
+    profiles: [document-runtime-diagnostic]
+    image: dyoffice-document-diagnostic:local
+    build:
+      context: ../../..
+      dockerfile: deploy/docker/document-runtime-diagnostic/Dockerfile
+      args:
+        SOURCE_COMMIT: ${DIAGNOSTIC_SOURCE_COMMIT:?Provide exact clean audited source commit}
+        UBUNTU_IMAGE: ${DIAGNOSTIC_UBUNTU_IMAGE:?Provide audited Ubuntu 24.04 image pinned by digest}
+        RUST_BUILD_IMAGE: ${DIAGNOSTIC_RUST_BUILD_IMAGE:?Provide audited Ubuntu Rust 1.93 offline-cache image pinned by digest}
+        APT_MIRROR: ${DIAGNOSTIC_APT_MIRROR:-https://repo.huaweicloud.com/ubuntu/}
+    # systemd itself is PID 1; no Docker --init wrapper.
+    entrypoint: [/sbin/init]
+    command: [--unit=dyoffice-diagnostic.target]
+    environment:
+      container: docker
+    cgroup: private
+    network_mode: none
+    read_only: true
+    tmpfs:
+      - /run:rw,nosuid,nodev,size=32m,mode=755
+      - /tmp:rw,nosuid,nodev,size=16m,mode=1777
+    security_opt: [no-new-privileges:true]
+    cap_drop: [NET_RAW]
+    pids_limit: 128
+    mem_limit: 512m
+    cpus: 1.0
+    stop_signal: SIGRTMIN+3
+    stop_grace_period: 15s
+    restart: 'no'

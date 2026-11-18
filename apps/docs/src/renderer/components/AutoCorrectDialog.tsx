@@ -53,7 +53,7 @@ export function AutoCorrectDialog({ onClose }: { onClose: () => void }) {
       onKeyDown={modalKeys.onKeyDown}
       onMouseDown={(e) => e.target === e.currentTarget && onClose()}
     >
-      <div className="modal protect-dialog" role="dialog" aria-label={t('appAcTitle')}>
+      <div className="modal protect-dialog editor-settings-dialog" role="dialog" aria-label={t('appAcTitle')}>
         <h2>{t('appAcTitle')}</h2>
         <p className="modal-desc">{t('appAcIntro')}</p>
         {AUTOCORRECT_RULES.map((rule) => (

@@ -1,3 +1,4 @@
+import {assertDocumentBackendPolicy} from './sandbox/document-backend-policy.ts'
 import { Pool } from 'pg'
 import { setTimeout as delay } from 'node:timers/promises'
 import { resolve } from 'node:path'
@@ -17,6 +18,7 @@ import { createXlsxNativeWorker } from './native/xlsx.ts'
 import { createXlsxJobExecutor } from './jobs/xlsx.ts'
 
 export async function startNativeWorker(environment: NodeJS.ProcessEnv = process.env,{ signal }: { signal?: AbortSignal } = {}) {
+  assertDocumentBackendPolicy(environment)
   if (environment.NODE_ENV==='production' || environment.DYOFFICE_NATIVE_WORKER!=='experimental') throw new Error('Explicit experimental worker required')
   if (environment.DYOFFICE_DATABASE_URL || environment.DYOFFICE_AUTH_DATABASE_URL || environment.DYOFFICE_USER_TOKEN || environment.DYOFFICE_ADMIN_TOKEN) throw new Error('Worker rejects privileged or unrelated credentials')
   if (environment.DYOFFICE_OBJECT_STORE!=='s3') throw new Error('Native worker requires S3 object storage')

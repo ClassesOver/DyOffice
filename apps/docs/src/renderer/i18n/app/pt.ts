@@ -1,6 +1,7 @@
 import type { zh } from './zh'
 
 export const pt = {
+  appPasteRemoteImageFailed: 'Não foi possível colar a imagem remota. Copie a imagem novamente ou insira um arquivo de imagem local.',
   appScTitle: 'Atalhos de Teclado',
   appScFilter: 'Pesquisar atalho',
   appScNone: 'Nenhum atalho correspondente',

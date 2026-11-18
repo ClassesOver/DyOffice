@@ -94,7 +94,7 @@ export function createHttpCommandRecoveryClient({
       if (disposed || ctrl.signal.aborted) throw Error('Recovery request stopped')
       const response = await untilStopped(fetchImpl('/api/v1/command-recovery/' + action, {
         method: 'POST',
-        mode: 'same-origin',
+        mode: 'same-origin', referrerPolicy: 'same-origin',
         redirect: 'error',
         credentials: 'same-origin',
         cache: 'no-store',

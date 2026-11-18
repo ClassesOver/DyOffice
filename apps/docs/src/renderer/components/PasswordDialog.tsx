@@ -8,7 +8,9 @@
  * reveal toggle, error under the field, footer buttons bottom-right.
  * Value / error / busy state live in App's retry loop.
  */
+import { useImeEnterGuard } from '@genoffice/ui'
 import { FieldError, PasswordInput } from './PasswordInput'
+import { useModalKeys } from './modal-keys'
 
 export function PasswordDialog({
   title,
@@ -42,12 +44,18 @@ export function PasswordDialog({
   onSubmit: () => void
   onCancel: () => void
 }) {
+  const modalKeys = useModalKeys(onCancel)
+  const ime = useImeEnterGuard()
   return (
-    <div className="modal-backdrop">
+    <div {...modalKeys} className="modal-backdrop">
       <div className="modal gs-form pwd-dialog" role="dialog" aria-modal="true">
         <h2>{title}</h2>
         <p className="modal-desc">{body}</p>
-        <label className={`fld${error ? ' has-error' : ''}`}>
+        <label
+          className={`fld${error ? ' has-error' : ''}`}
+          onCompositionStart={ime.handleCompositionStart}
+          onCompositionEnd={ime.handleCompositionEnd}
+        >
           {label}
           <PasswordInput
             value={value}
@@ -57,7 +65,7 @@ export function PasswordDialog({
             disabled={busy}
             onChange={onChange}
             onKeyDown={(e) => {
-              if (e.key === 'Enter') onSubmit()
+              if (e.key === 'Enter' && !ime.isImeConfirm(e.nativeEvent)) onSubmit()
             }}
           />
           {error && <FieldError>{error}</FieldError>}

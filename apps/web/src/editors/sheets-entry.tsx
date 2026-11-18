@@ -1,3 +1,5 @@
+import {DocumentNotifications} from './document-notifications'
+import {createEditorCloseLifecycle,installEditorCloseLifecycle} from './editor-close-lifecycle'
 import {createAnalysisDocumentTarget} from '../../../../packages/browser-host/src/analysis-document-target.ts'
 import ReactDOM from 'react-dom/client'
 import {useState} from 'react'
@@ -27,20 +29,22 @@ import '@univerjs/preset-sheets-core/lib/index.css'
 import '../../../sheets/src/renderer/styles.css'
 
 import './sheets.css'
-import {createEditorAssistant} from './assistant.tsx'
+import {loadEditorAssistant,editorAssistantNotice} from './editor-assistant-status'
 
 export async function mountSheetsEditor(host: SessionFileHost, container: HTMLElement, fileId: string) {
   container.textContent = messages.zh.opening
-  const assistant = await createEditorAssistant({fileId,editorId:host.getEditorId()!,generation:()=>1}).catch(() => undefined)
+  const assistantResult = await loadEditorAssistant({fileId,editorId:host.getEditorId()!,generation:()=>1})
+  const assistant = assistantResult.assistant
   const opened = await host.open(fileId)
   if (opened.format !== 'xlsx') throw new Error(messages.zh.failed)
   const prefs = await host.getPreferences(), locale = prefs.language === 'en' ? 'en' : 'zh', text = messages[locale]
   setModuleLang(locale); document.documentElement.lang = locale
   if (prefs.theme === 'system') delete document.documentElement.dataset.theme
   else document.documentElement.dataset.theme = prefs.theme
-  let changed = () => {}, editor: SheetsEditorHandle | null = null, disposed = false
+  let changed = () => {}, editor: SheetsEditorHandle | null = null, disposed = false, closing=false
   let downloading = false, takingOver = false, confirming = false, actionError = ''
   const bridge = createSheetsBridge(host,fileId,prefs,{onChange:()=>changed()})
+  const assistantNotice = editorAssistantNotice(assistantResult,prefs.showAssistant,locale)
   const assistantAvailable = Boolean(assistant?.available && prefs.showAssistant !== false)
   const panelPrefs = {...await bridge.api.getAiPanelPrefs(), showAiSidebar: assistantAvailable}
   Object.defineProperty(window,'desktopApi',{value:{...bridge.api,...assistant?.api,getAiPanelPrefs:async()=>panelPrefs} as unknown as DesktopApi,configurable:true})
@@ -89,34 +93,42 @@ export async function mountSheetsEditor(host: SessionFileHost, container: HTMLEl
   }
   function NativeWorkbook() {
     const [,tick] = useState(0), [loaded,setLoaded] = useState(false), [failed,setFailed] = useState(false)
-    changed = () => tick(value=>value+1)
+    changed = () => {if(!closing)tick(value=>value+1)}
     const state = host.getState(fileId)
     const readOnly = failed || takingOver || !state.lease || state.status === 'conflict' || state.status === 'unknown' || bridge.needsConfirmation() || state.status === 'unauthorized'
     const status = failed ? text.failed : !loaded ? text.opening : (state.status === 'unknown' || bridge.needsConfirmation()) ? text.unknown : state.status === 'unauthorized' ? text.unauthorized : takingOver ? text.takingOver : !state.lease || state.status==='conflict' ? (dirty() ? text.takeoverDirty : initialLease ? text.conflict : text.readOnly) : downloading ? text.downloadSaving : actionError || (bridge.isDirty() ? '' : text.ready)
+    const notice = realtime.notice(locale)
+    const warning = failed || state.status === 'unknown' || bridge.needsConfirmation() || state.status === 'unauthorized' || (!state.lease && loaded && !takingOver) || state.status === 'conflict' ? status : actionError
     const historical = loaded && !failed && !state.lease && !dirty() && state.status !== 'unknown' && state.status !== 'unauthorized' && !bridge.needsConfirmation() && !takingOver
     return <div className="dyoffice-native-sheets">
-      <div className="dyoffice-sheets-state" role="status"><span>{status}</span>
-        {realtime.notice(locale) && <span>{realtime.notice(locale)}</span>}
+      <div className="dyoffice-sheets-state" role="status"><span title={warning || status}>{warning ? (locale === 'zh' ? '需要处理' : 'Needs attention') : status}</span>
+        {assistantNotice && <span className="dyoffice-editor-assistant-status">{assistantNotice}</span>}
         <button className="dyoffice-sheets-download" disabled={!loaded || failed || !editor || !state.lease || state.status==='conflict' || state.status==='unauthorized' || downloading || takingOver} onClick={()=>{void saveAndDownload()}}>{text.saveDownload}</button>
         {historical && <a href={`/api/v1/files/${fileId}/content?revision=${state.revision.revision}`} download={state.name}>{text.downloadReadOnly}</a>}
-        {!state.lease && !failed && state.status!=='unauthorized' && <button disabled={!loaded || !editor || downloading || takingOver || dirty() || state.status==='unknown' || bridge.needsConfirmation()} onClick={()=>{void takeOver()}}>{text.takeover}</button>}
-        {bridge.needsConfirmation() && <button data-save-fence-allow="confirm" disabled={confirming} onClick={()=>{void confirmSave()}}>{text.retry}</button>}
-        {actionError && status!==actionError && <span className="dyoffice-sheets-action-error">{actionError}</span>}
       </div>
+      <DocumentNotifications locale={locale} items={[
+        ...(warning ? [{id:'document-state',level:'error' as const,title:locale === 'zh' ? '文档需要处理' : 'Document needs attention',message:warning,actions:<>{!state.lease && !failed && state.status!=='unauthorized' && <button disabled={!loaded || !editor || downloading || takingOver || dirty() || state.status==='unknown' || bridge.needsConfirmation()} onClick={()=>{void takeOver()}}>{text.takeover}</button>}{bridge.needsConfirmation() && <button data-save-fence-allow="confirm" disabled={confirming} onClick={()=>{void confirmSave()}}>{text.retry}</button>}</>}] : []),
+        ...(notice ? [{id:'version',level:'info' as const,title:locale === 'zh' ? '版本同步' : 'Version updates',message:notice}] : []),
+      ]} />
       <App queuedWorkbookAtBoot host={{readOnly,inPlaceSave:true,assistantAvailable,...(assistant?{assistant}:{}),onWorkbookOpened:()=>setLoaded(true),onOpenFailed:()=>setFailed(true),onEditorReady:handle=>{editor=handle}}} />
     </div>
   }
   const root = ReactDOM.createRoot(container)
   root.render(<LocaleProvider initial={locale}><NativeWorkbook /></LocaleProvider>)
-  const beforeUnload = (event: BeforeUnloadEvent) => { if (editor?.isDirty() || host.getState(fileId).status === 'unknown') { event.preventDefault(); event.returnValue='' } }
+  const closeState=()=>({dirty:dirty(),blocked:downloading||takingOver||confirming||bridge.needsConfirmation()||['unknown','saving'].includes(host.getState(fileId).status)})
+  const beforeUnload = (event: BeforeUnloadEvent) => { if (closeState().dirty||closeState().blocked) { event.preventDefault(); event.returnValue='' } }
   window.addEventListener('beforeunload',beforeUnload)
-  return {save:()=>editor?.saveAndWait() ?? Promise.resolve(false),dispose(){unregisterAnalysis?.();analysisTarget.dispose();disposed=true;assistant?.dispose();realtime.dispose();changed=()=>{};window.removeEventListener('beforeunload',beforeUnload);stop();unsubscribe();root.unmount();bridge.dispose()}}
+  const cleanup=()=>{if(disposed)return;unregisterAnalysis?.();analysisTarget.dispose();disposed=true;assistant?.dispose();realtime.dispose();changed=()=>{};window.removeEventListener('beforeunload',beforeUnload);stop();unsubscribe();root.unmount();bridge.dispose()}
+  const lifecycle=createEditorCloseLifecycle({state:closeState,save:()=>editor?.saveAndWait()??Promise.resolve(false),release:()=>host.releaseLease(fileId),cleanup,setClosing:value=>{closing=value;container.inert=value;if(!value)changed()},confirm:()=>window.confirm('工作簿有未保存的更改，是否保存后关闭？取消将保留当前页签。'),notify:()=>window.alert('保存仍在进行或结果待确认，请先在工作簿中核对后再关闭。')})
+  return {save:()=>editor?.saveAndWait()??Promise.resolve(false),canClose:lifecycle.canClose,dispose:lifecycle.dispose,unload(){void host.releaseLease(fileId,true).catch(()=>{});cleanup()}}
 }
 async function bootstrap() {
   const host=createSessionFileHost(),fileId=new URL(location.href).searchParams.get('fileId') ?? ''
+  installEditorCloseLifecycle(window,{canClose:async()=>false,dispose:async()=>false})
   try {
     const mounted=await mountSheetsEditor(host,document.getElementById('root')!,fileId)
-    window.addEventListener('pagehide',()=>{void host.releaseLease(fileId,true).catch(()=>{});mounted.dispose();host.dispose()},{once:true})
-  } catch(error){host.dispose();throw error}
+    installEditorCloseLifecycle(window,{canClose:mounted.canClose,dispose:async()=>{const closed=await mounted.dispose();if(closed)host.dispose();return closed}})
+    window.addEventListener('pagehide',()=>{mounted.unload();host.dispose()},{once:true})
+  } catch(error){await host.releaseLease(fileId).catch(()=>{});host.dispose();installEditorCloseLifecycle(window,{canClose:async()=>true,dispose:async()=>true});throw error}
 }
 void bootstrap().catch(()=>{document.getElementById('root')!.textContent=messages.zh.failed})

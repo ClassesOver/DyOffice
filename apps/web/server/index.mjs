@@ -1,3 +1,4 @@
+import {assertDocumentBackendPolicy} from '../worker/src/sandbox/document-backend-policy.ts';
 import { configuredSheetsRuntime } from './src/modules/sheets/runtime.ts';
 import { resolve } from 'node:path';
 import { readFile } from 'node:fs/promises';
@@ -10,6 +11,7 @@ import { connectIdentityStore } from './src/db/identity.ts';
 import { parseConfigKeyring } from './src/modules/admin/keyring-config.ts';
 
 async function configuredApplication() {
+  assertDocumentBackendPolicy(process.env);
   const mode=process.env.DYOFFICE_AUTH_MODE||'development';
   const httpDevFlag=process.env.DYOFFICE_INSECURE_HTTP_DEV;
   if(httpDevFlag!==undefined && !['0','1'].includes(httpDevFlag))throw new Error('Invalid HTTP development flag');
@@ -74,8 +76,8 @@ try {
   process.on('SIGINT',close);
   const address=await app.listen({port:Number(process.env.PORT||3080),host:process.env.HOST||'127.0.0.1'});
   console.log(`dyoffice: ${address}`);
-} catch {
-  console.error('dyoffice: startup failed');
+} catch (error) {
+  console.error(error?.code==='DOCUMENT_BROKER_UNAVAILABLE' ? 'dyoffice: document broker unavailable' : error?.code==='DOCUMENT_BACKEND_INVALID' ? 'dyoffice: document backend invalid' : 'dyoffice: startup failed');
   await close();
   process.exitCode=1;
 }

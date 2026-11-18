@@ -35,3 +35,19 @@ mod systemd_driver;
 // Private restricted database observations, not runtime admission.
 #[allow(dead_code)]
 mod dispatch_ledger;
+
+#[cfg(test)]
+mod container_probe;
+
+#[allow(dead_code)]
+mod unit_binding;
+
+// Private input binding; no production admission or launch capability.
+#[cfg(target_os = "linux")]
+#[allow(dead_code)]
+mod bound_input;
+
+// Content observations cannot construct runtime admission.
+#[cfg(target_os = "linux")]
+#[allow(dead_code)]
+mod runtime_artifact;

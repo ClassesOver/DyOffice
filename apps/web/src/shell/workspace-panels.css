@@ -1,0 +1,306 @@
+.workspace-panel-host {
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--surface-subtle);
+}
+
+.workspace-panel {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  color: var(--text-primary);
+  background: var(--surface);
+}
+
+.workspace-panel-header {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 20px 28px;
+  border-bottom: 1px solid var(--border);
+}
+
+.workspace-panel-header .set-title {
+  display: block;
+  margin: 0;
+  font-size: 20px;
+  font-weight: 600;
+  line-height: 1.5;
+}
+
+.workspace-panel-body {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  padding: 24px 28px 32px;
+  overflow: auto;
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+.workspace-panel-body > p:first-child,
+.workspace-panel-body .source-editor > p:first-child {
+  margin-top: 0;
+  color: var(--text-secondary);
+}
+
+.workspace-panel .source-body {
+  grid-template-columns: 240px minmax(0, 1fr);
+  gap: 28px;
+}
+
+.workspace-panel .source-list {
+  padding-right: 24px;
+  border-right: 1px solid var(--border);
+}
+
+.workspace-panel .source-editor {
+  max-width: 980px;
+}
+
+.workspace-panel .source-fields {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px 20px;
+}
+
+.workspace-panel .source-fields .set-field {
+  min-width: 0;
+  border: 0;
+}
+
+.workspace-panel .source-fields .set-field:has(textarea),
+.workspace-panel .source-fields .set-field:has([aria-label='连接凭据']) {
+  grid-column: 1 / -1;
+}
+
+.workspace-panel .source-fields .set-input,
+.workspace-panel .source-editor .set-input {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.workspace-panel .source-fields .set-field:has(input[type='checkbox']) {
+  flex-direction: row;
+  align-items: center;
+  justify-content: flex-start;
+}
+
+.workspace-panel .source-fields > .set-btn {
+  justify-self: end;
+  align-self: center;
+}
+
+.workspace-panel .source-actions {
+  padding: 16px 0;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.workspace-panel .source-results {
+  margin-top: 16px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.workspace-panel .source-results th {
+  background: var(--surface-subtle);
+  font-weight: 600;
+}
+
+.workspace-panel .source-results th,
+.workspace-panel .source-results td {
+  padding: 10px 14px;
+}
+
+.workspace-panel .workspace-trash {
+  max-width: 1100px;
+}
+
+.workspace-panel .workspace-trash .set-field {
+  gap: 20px;
+  padding: 16px 0;
+}
+
+.workspace-panel .workspace-trash .set-field-text {
+  align-items: flex-start;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.workspace-panel .workspace-trash .set-pane-desc {
+  margin: 0;
+}
+
+.workspace-panel .workspace-trash > .set-pane-desc {
+  margin-bottom: 18px;
+}
+
+.workspace-data-results-panel .workspace-panel-body > ul {
+  margin: 20px 0;
+  padding: 0;
+  list-style: none;
+}
+
+.workspace-data-results-panel .workspace-panel-body > ul > li {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  padding: 14px 0;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.workspace-data-results-panel .workspace-panel-body > ul > li > span {
+  flex: 1;
+  color: var(--text-secondary);
+}
+
+@media (max-width: 760px) {
+  .workspace-panel-header {
+    padding: 16px 18px;
+  }
+
+  .workspace-panel-body {
+    padding: 20px 18px 28px;
+  }
+
+  .workspace-panel .source-body,
+  .workspace-panel .source-fields {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .workspace-panel .source-list {
+    padding: 0 0 18px;
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+  }
+}
+
+.workspace-panel .source-list .ant-btn.source-item {
+  height: auto;
+  align-items: flex-start;
+  justify-content: flex-start;
+  gap: 5px;
+  padding: 14px;
+  white-space: normal;
+  color: var(--text-primary);
+  border-color: var(--border);
+}
+
+.workspace-panel .source-item > span {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.workspace-panel .source-fields .ant-input,
+.workspace-panel .source-fields .ant-select {
+  width: 100%;
+  min-width: 0;
+}
+
+.workspace-panel .source-fields > .ant-btn {
+  justify-self: end;
+  align-self: center;
+}
+
+.workspace-panel .source-fields .set-field:has(.ant-checkbox-wrapper) {
+  flex-direction: row;
+  align-items: center;
+}
+
+.workspace-panel .source-advanced {
+  grid-column: 1 / -1;
+  margin: 8px 0;
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-subtle);
+}
+
+.workspace-panel .source-advanced summary {
+  cursor: pointer;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.workspace-panel .source-advanced p {
+  margin: 8px 0 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.workspace-panel .source-workbench-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 18px;
+}
+
+.workspace-panel .source-workbench-heading h3 {
+  margin: 0 0 6px;
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.workspace-panel .source-workbench-heading p {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.workspace-panel .source-version-badge {
+  flex-shrink: 0;
+  padding: 3px 8px;
+  border-radius: 6px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 12px;
+}
+
+.workspace-panel .ant-alert {
+  margin: 14px 0;
+}
+
+/* B management surface: keep the actual connection list as its navigation. */
+section.workspace-panel.workspace-sources-panel .source-body,
+section.set-dialog.source-dialog .source-body {
+  gap: 24px;
+}
+section.workspace-panel.workspace-sources-panel .source-list,
+section.set-dialog.source-dialog .source-list {
+  box-sizing: border-box;
+  padding: 16px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 12px;
+  background: var(--accent-soft, var(--surface-subtle));
+}
+section.workspace-panel.workspace-sources-panel .source-list > .source-item,
+section.set-dialog.source-dialog .source-list > .source-item {
+  background: var(--surface);
+  border-color: var(--border-subtle);
+}
+section.workspace-panel.workspace-sources-panel .source-list > .source-item:focus-visible,
+section.set-dialog.source-dialog .source-list > .source-item:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+section.workspace-panel.workspace-sources-panel .source-workbench-heading,
+section.set-dialog.source-dialog .source-workbench-heading {
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+@media (max-width: 760px) {
+  section.workspace-panel.workspace-sources-panel .source-list,
+  section.set-dialog.source-dialog .source-list {
+    padding: 12px;
+  }
+}

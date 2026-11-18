@@ -52,6 +52,9 @@ test('native DOCX inserts a verified synthetic artifact explicitly and saves a s
   await expect(deliveries.locator('summary')).toContainText('(1)',{timeout:30_000})
   await deliveries.locator('summary').click()
   await expect(deliveries.getByText('Synthetic literal content; not a real model result',{exact:true})).toBeVisible()
+  // Artifact commit precedes the delegate return and the provider's second turn.
+  // Require the final second-turn response, not just artifact availability.
+  await expect(page.locator('.ai-panel').getByText('Synthetic artifact ready. Insert and save are separate user actions.', {exact:true})).toBeVisible({timeout:30_000})
   assert.equal(adapter.runs,1);assert.equal(net.writes,2)
   assert.equal((await f.files.openFile(f.alice.token,opened.file.fileId)).file.revision,opened.file.revision)
   await deliveries.getByRole('button',{name:'Insert into document',exact:true}).click()

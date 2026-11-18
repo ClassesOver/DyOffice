@@ -1,6 +1,7 @@
 import type { zh } from './zh'
 
 export const ms = {
+  appPasteRemoteImageFailed: 'Imej jauh tidak dapat ditampal. Salin imej semula atau sisipkan fail imej setempat.',
   appScTitle: 'Pintasan Papan Kekunci',
   appScFilter: 'Cari pintasan',
   appScNone: 'Tiada pintasan yang sepadan',

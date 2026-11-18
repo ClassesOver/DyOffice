@@ -53,9 +53,9 @@ export const fr = {
   ribbonRotateLeft: 'Rotation 90° à gauche',
   ribbonFlipH: 'Retourner horizontalement',
   ribbonFlipV: 'Retourner verticalement',
-  ribbonCropTip: "Rogner l'image (faites glisser les poignées, Entrée pour confirmer)",
+  ribbonCropTip: "Rogner l'image (faites glisser les poignées)",
   ribbonCropHint:
-    'Faites glisser les poignées ou déplacez le cadre pour choisir la zone à conserver ; Entrée pour appliquer, Échap pour annuler',
+    'Faites glisser les poignées ou déplacez le cadre pour choisir la zone à conserver ; Échap pour annuler',
   ribbonReplacePicture: "Remplacer l'image",
   ribbonReplacePictureTip: "Remplacer l'image en conservant sa taille et son habillage actuels",
   ribbonResetSize: 'Rétablir la taille',

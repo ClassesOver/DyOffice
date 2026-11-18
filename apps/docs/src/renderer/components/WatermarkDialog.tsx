@@ -3,6 +3,7 @@
  * Text (face, size, bold, italic, transparency, color, layout), with a page
  * preview drawn through the same helpers the page preview and save use.
  */
+import { useImeEnterGuard } from '@genoffice/ui'
 import { useEffect, useState } from 'react'
 import {
   pictureWatermarkPreviewImage,
@@ -136,6 +137,7 @@ export function WatermarkDialog({
 }) {
   const { t, lang } = useI18n()
   const modalKeys = useModalKeys(onClose)
+  const ime = useImeEnterGuard()
   const box = pageBox ?? LETTER
   // pending edits win; otherwise the saved shape seeds the fields (text style is
   // not kept on the file context, only its text is)
@@ -329,7 +331,11 @@ export function WatermarkDialog({
                   value={text}
                   placeholder={t('ribbonWatermarkPh')}
                   onChange={(e) => setText(e.target.value)}
-                  onKeyDown={(e) => e.key === 'Enter' && submit()}
+                  onCompositionStart={ime.handleCompositionStart}
+                  onCompositionEnd={ime.handleCompositionEnd}
+                  onKeyDown={(e) =>
+                    e.key === 'Enter' && !ime.isImeConfirm(e.nativeEvent) && submit()
+                  }
                   autoFocus={textOn}
                 />
                 <datalist id="wm-text-presets">

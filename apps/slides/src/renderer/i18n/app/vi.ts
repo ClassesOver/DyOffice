@@ -16,6 +16,7 @@ export const vi = {
   appPhPromptBody: 'Bấm để thêm văn bản',
   appStatusOpened: 'Đã mở {name} ({count} trang chiếu)',
   appStatusNewBlank: 'Đã tạo bản trình bày trống',
+  appEditCommitPending: "Đang áp dụng chỉnh sửa. Vui lòng thử lại sau giây lát.",
   appStatusSaved: 'Đã lưu',
   appStatusSaveFailed: 'Lưu thất bại: {error}',
   appErrorCanceled: 'Đã hủy',

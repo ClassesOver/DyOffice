@@ -2635,7 +2635,8 @@ export function App({ host }: { host?: SlidesAppHost } = {}) {
       slideIndex: current,
       sourceId: editing.sourceId,
     })
-    if (updated) applySlide(current, updated)
+    if (!updated) return
+    applySlide(current, updated)
     setEditing(null)
     setSelectedIds([])
   }, [editing, current, applySlide])
@@ -2650,10 +2651,11 @@ export function App({ host }: { host?: SlidesAppHost } = {}) {
         paragraphs,
         ...(editing.groupId ? { groupId: editing.groupId } : {}),
       })
-      if (updated) {
-        setSlides((s) => s.map((sl, i) => (i === current ? updated : sl)))
-        setDirty(true)
-      }
+      // A null receipt is a rejected edit, not a completed commit. Keep the
+      // overlay (and its draft) alive so save cannot flush stale slide data.
+      if (!updated) return
+      setSlides((s) => s.map((sl, i) => (i === current ? updated : sl)))
+      setDirty(true)
       setEditing(null)
       setSelectedIds([editing.sourceId]) // Back to shape-selected state after committing
     },

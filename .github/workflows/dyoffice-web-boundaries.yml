@@ -4,6 +4,8 @@ on:
   push:
     branches: [main, feat/dyoffice-web]
     paths:
+      - 'deploy/docker/document-runtime-diagnostic/**'
+      - 'services/document-broker/**'
       - 'tools/dyoffice/runtime-lock*'
       - 'package.json'
       - 'package-lock.json'
@@ -20,8 +22,11 @@ on:
       - 'docs/dyoffice/inventory/host-ipc*'
       - 'docs/dyoffice/inventory/agent-tools*'
       - '.github/workflows/dyoffice-web-boundaries.yml'
+      - '.github/workflows/dyoffice-ubuntu-docker-audit.yml'
   pull_request:
     paths:
+      - 'deploy/docker/document-runtime-diagnostic/**'
+      - 'services/document-broker/**'
       - 'tools/dyoffice/runtime-lock*'
       - 'package.json'
       - 'package-lock.json'
@@ -38,12 +43,41 @@ on:
       - 'docs/dyoffice/inventory/host-ipc*'
       - 'docs/dyoffice/inventory/agent-tools*'
       - '.github/workflows/dyoffice-web-boundaries.yml'
+      - '.github/workflows/dyoffice-ubuntu-docker-audit.yml'
   workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
+  # No container launch or privileged host provisioning in this job.
+  diagnostic-regression:
+    name: Diagnostic static and fixture regression (not isolation acceptance)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22.23.5'
+      - name: Verify immutable Node runtime
+        run: node tools/dyoffice/runtime-lock.mjs --runtime
+      - name: Install pinned YAML parser in an isolated Python environment
+        run: |
+          python3 -m venv "$RUNNER_TEMP/diagnostic-python"
+          "$RUNNER_TEMP/diagnostic-python/bin/python" -m pip install --disable-pip-version-check --only-binary=:all: PyYAML==6.0.3
+      - name: Run diagnostic syntax and fixture tests only
+        run: |
+          export PATH="$RUNNER_TEMP/diagnostic-python/bin:$PATH"
+          for script in deploy/docker/document-runtime-diagnostic/*.sh; do sh -n "$script"; done
+          python -m py_compile deploy/docker/document-runtime-diagnostic/*.py
+          python -m unittest discover -s deploy/docker/document-runtime-diagnostic/tests -v
+      - name: State the limited evidence scope
+        if: always()
+        run: |
+          printf '%s\n' '## Diagnostic regression only' 'Static contracts and synthetic evidence tests; not Ubuntu/Docker isolation acceptance.' 'No Docker build/up, systemd unit launch, production runtime grant or business document execution occurred in this job.' >> "$GITHUB_STEP_SUMMARY"
   boundary-check:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
@@ -283,4 +317,3 @@ jobs:
         run: npx vitest run --root packages/xlsx-gateway --maxWorkers=1
       - name: Regress original name calculation and undo
         run: npx vitest run --root apps/sheets --maxWorkers=1 tests/defined-name-recalculation.test.ts
-

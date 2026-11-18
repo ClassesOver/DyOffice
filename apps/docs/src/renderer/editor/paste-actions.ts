@@ -4,6 +4,7 @@
  * pipeline with a synthesized clipboard event, so App's handlePaste lanes and
  * the paste-mode handshake behave exactly as on a native Ctrl+V.
  */
+import { pendingDocumentOperation } from './pending-document-operation'
 import type { Editor } from '@tiptap/core'
 import { insertImageFromDataUrl } from '../components/ribbon-tabs'
 import {
@@ -14,11 +15,61 @@ import {
   type PasteMode,
 } from './paste-options'
 import { isForeignPasteHtml } from './paste-web-html'
+import { pasteTextSlice } from './paste-text'
 
 export type ClipboardPayload = { html: string; text: string; image: Blob | null }
 
 /** A paste-special choice: one of the paste modes, or the bitmap flavor. */
 export type PasteChoice = PasteMode | 'picture'
+
+/** Remote clipboard images use the desktop bridge; Web can retain their plain text. */
+export async function pasteRemoteImages(
+  editor: Editor,
+  sources: string[],
+  text: string,
+  onFailure: () => void,
+): Promise<void> {
+  const { current, dispose } = pendingDocumentOperation(editor)
+  try {
+    let inserted = false
+    let failed = false
+    for (const src of sources.slice(0, 10)) {
+      if (!current()) return
+      try {
+        const fetched = await window.desktop.fetchImage(src)
+        if (!current()) return
+        if (fetched) {
+          const success = await insertImageFromDataUrl(
+            editor,
+            `data:${fetched.mime};base64,${fetched.base64}`,
+            'Image (pasted)',
+            current,
+          )
+          // Cancellation is not an image failure: never adopt a replacement
+          // document or write the plain-text fallback into it.
+          if (!current()) return
+          inserted ||= success
+          failed ||= !success
+        } else {
+          failed = true
+        }
+      } catch {
+        failed = true
+      }
+    }
+    if (!current()) return
+    if (failed) {
+      if (!inserted && text.trim()) {
+        const view = editor.view
+        const slice = pasteTextSlice(text, view.state.selection.$from, view)
+        view.dispatch(view.state.tr.replaceSelection(slice).scrollIntoView())
+      }
+      onFailure()
+    }
+  } finally {
+    dispose()
+  }
+}
 
 export async function readClipboardPayload(): Promise<ClipboardPayload> {
   const payload: ClipboardPayload = { html: '', text: '', image: null }
@@ -62,14 +113,25 @@ function htmlText(html: string): string {
   }
 }
 
-function insertBlobImage(editor: Editor, blob: Blob): void {
+export function insertBlobImage(editor: Editor, blob: Blob): void {
+  const { current, dispose } = pendingDocumentOperation(editor)
   const reader = new FileReader()
-  reader.onload = () => {
-    if (typeof reader.result === 'string') {
-      void insertImageFromDataUrl(editor, reader.result, 'Image (pasted)')
+  reader.onerror = reader.onabort = () => dispose()
+  reader.onload = async () => {
+    try {
+      if (current() && typeof reader.result === 'string') {
+        await insertImageFromDataUrl(editor, reader.result, 'Image (pasted)', current)
+      }
+    } finally {
+      dispose()
     }
   }
-  reader.readAsDataURL(blob)
+  try {
+    reader.readAsDataURL(blob)
+  } catch (error) {
+    dispose()
+    throw error
+  }
 }
 
 /**
@@ -133,5 +195,11 @@ export function pastePayload(
 }
 
 export async function pasteFromClipboard(editor: Editor, mode?: PasteMode): Promise<boolean> {
-  return pastePayload(editor, await readClipboardPayload(), mode)
+  const { current, dispose } = pendingDocumentOperation(editor)
+  try {
+    const payload = await readClipboardPayload()
+    return current() ? pastePayload(editor, payload, mode) : false
+  } finally {
+    dispose()
+  }
 }

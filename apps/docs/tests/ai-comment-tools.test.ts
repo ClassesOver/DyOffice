@@ -196,6 +196,7 @@ describe('comment tools', () => {
     // reference — a render-time snapshot here would mint duplicate ids
     let live = comments
     const ctx = {
+      canComment: true,
       editor,
       get comments() {
         return live

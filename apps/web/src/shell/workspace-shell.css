@@ -1,0 +1,74 @@
+.workspace-settings-page { max-width:1120px; padding:28px 36px 48px; margin:auto; }
+.workspace-page-heading { display:flex; justify-content:space-between; align-items:flex-start; gap:20px; margin-bottom:16px; }
+.workspace-page-heading h3 { margin:0 0 6px; }
+.workspace-page-heading p { margin-bottom:0; }
+.workspace-settings-page .personal-account-section { margin-top:0; border:0; padding-top:0; }
+.workspace-settings-page .personal-account-section-title { display:none; }
+.workspace-settings-page .personal-account-password .set-field { gap:16px; }
+.workspace-settings-page .personal-account-password .set-input { max-width:none; }
+.workspace-settings-page .personal-account-actions { margin-left:120px; }
+.dy-login { min-height:100dvh; display:grid; place-items:center; padding:24px; box-sizing:border-box; background:var(--surface-subtle); }
+.dy-login-card { width:100%; max-width:440px; box-shadow:var(--shadow-menu); }
+.dy-login-card .ant-card-body { padding:32px; }
+.dy-login-logo { width:158px; height:38px; object-fit:contain; object-position:left; margin-bottom:24px; }
+.dy-login-footer { margin:20px 0 0!important; text-align:center; font-size:12px; }
+
+.workspace-config-modal .ant-modal-container,
+.workspace-config-modal .ant-modal-content {
+  padding:0;
+  overflow:hidden;
+  border:1px solid var(--border-subtle);
+  border-radius:14px;
+  background:var(--surface);
+  box-shadow:0 24px 80px rgb(0 0 0 / 18%),0 4px 20px rgb(0 0 0 / 8%);
+}
+.workspace-config-modal .ant-modal-header {
+  margin:0;
+  padding:22px 64px 22px 24px;
+  border-bottom:1px solid var(--border-subtle);
+  background:var(--surface);
+}
+.workspace-config-modal .ant-modal-title {
+  color:var(--text-primary);
+  font-size:17px;
+  font-weight:600;
+  line-height:24px;
+  letter-spacing:.1px;
+}
+.workspace-config-modal .ant-modal-close {
+  inset-block-start:17px;
+  inset-inline-end:18px;
+  width:34px;
+  height:34px;
+  border:1px solid transparent;
+  border-radius:8px;
+  color:var(--text-secondary);
+  transition:background-color .15s,color .15s,border-color .15s;
+}
+.workspace-config-modal .ant-modal-close:hover {
+  color:var(--text-primary);
+  background:var(--bg-hover);
+  border-color:var(--border-subtle);
+}
+.workspace-config-modal .ant-modal-close:focus-visible {
+  outline:2px solid var(--accent);
+  outline-offset:2px;
+}
+.workspace-config-modal .ant-modal-body {
+  box-sizing:border-box;
+  height:min(76dvh,800px);
+  overflow:auto;
+  background:var(--surface-subtle);
+  scrollbar-gutter:stable;
+  overscroll-behavior:contain;
+}
+@media(max-width:680px) {
+  .workspace-config-modal .ant-modal-header { padding:18px 56px 18px 20px; }
+  .workspace-config-modal .ant-modal-title { font-size:16px; }
+  .workspace-config-modal .ant-modal-close { inset-block-start:13px; inset-inline-end:12px; }
+}
+.workspace-config-modal .workspace-panel-host { height:100%; }
+@media(max-width:680px) { .workspace-settings-page { padding:20px 16px; } .workspace-settings-page .personal-account-actions { margin-left:0; } }
+.workspace-document { position:absolute; inset:40px 0 0; background:var(--surface); overflow:auto; }
+.workspace-document[hidden] { display:none; }
+.workspace-document-frame { display:block; border:0; width:100%; height:100%; }

@@ -52,9 +52,9 @@ export const vi = {
   ribbonRotateLeft: 'Xoay trái 90°',
   ribbonFlipH: 'Lật ngang',
   ribbonFlipV: 'Lật dọc',
-  ribbonCropTip: 'Cắt xén hình ảnh (kéo các chốt, Enter để xác nhận)',
+  ribbonCropTip: 'Cắt xén hình ảnh (kéo các chốt)',
   ribbonCropHint:
-    'Kéo các chốt hoặc di chuyển khung để chọn vùng giữ lại; Enter để áp dụng, Esc để hủy',
+    'Kéo các chốt hoặc di chuyển khung để chọn vùng giữ lại; Esc để hủy',
   ribbonReplacePicture: 'Thay thế hình ảnh',
   ribbonReplacePictureTip: 'Thay thế hình ảnh, giữ nguyên kích thước và cách ngắt dòng hiện tại',
   ribbonResetSize: 'Đặt lại kích thước',
