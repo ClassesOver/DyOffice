@@ -291,3 +291,61 @@ test('download fences a server edit arriving after save acknowledgement but befo
   assert.equal(server.preparations(), 1)
   assert.equal(bridge.isDirty(), true)
 })
+
+for (const lost of [false,true]) test(`disposed slides save rejects its late ${lost?'unknown':'committed'} outcome without resurrecting recovery`, {timeout:30000}, async t=>{
+ const createSlidesBridge=await bundleBridge(t),server=createSlidesMockServer({slideCount:1})
+ const reached=Promise.withResolvers(),resume=Promise.withResolvers(),keys=[]
+ const send=async(path,init={})=>{const response=await server.fetchImpl(path,init);if(String(path).endsWith('/commits')){keys.push(JSON.parse(init.body).idempotencyKey);if(keys.length===1){reached.resolve();await resume.promise;if(lost){await response.arrayBuffer();throw new TypeError('lost commit')}}}return response}
+ const host=createSessionFileHost({fetchImpl:send});t.after(()=>host.dispose());await host.open(server.file().fileId);await host.acquireLease(server.file().fileId)
+ let changes=0
+ const bridge=createSlidesBridge(host,server.file().fileId,{language:'en',theme:'light'},{fetchImpl:send,onChange:()=>changes++});t.after(()=>bridge.dispose())
+ await bridge.api.openPptx(1280);await bridge.api.editText({slideIndex:0,sourceId:'e1-title',paragraphs:[{runs:[{text:'kept'}]}]})
+ let outcome
+ const saving=bridge.api.save().then(value=>{outcome={value}},error=>{outcome={error}})
+ await reached.promise;bridge.dispose();const changesAtDispose=changes;resume.resolve()
+ await new Promise(resolve=>setImmediate(resolve))
+ assert.equal(bridge.needsConfirmation(),false,'unmounted view must not recreate receipt recovery')
+ assert.equal(changes,changesAtDispose,'no UI notification after teardown')
+ assert.ok(outcome?.error,'late completion must reject, not hang or report success')
+ assert.equal(outcome.error.code,'UNAVAILABLE');await saving
+ assert.equal(host.getState(server.file().fileId).status,lost?'unknown':'idle','host retains durable outcome; teardown cannot undo commit')
+ await bridge.confirmSave();assert.equal(bridge.needsConfirmation(),false);assert.equal(changes,changesAtDispose)
+ if(lost){
+  const receipt=await host.reconcileSlides(server.file().fileId)
+  assert.equal(receipt.revision,server.file().revision,'independent host reconciliation still sees the committed head')
+  assert.equal(host.getState(server.file().fileId).status,'idle')
+ }
+ assert.equal(new Set(keys).size,1,'explicit reconciliation only replays the same idempotent commit')
+ assert.equal(keys.length,lost?2:1)
+ assert.equal(server.preparations(),1,'disposal and reconciliation never re-export a new snapshot')
+})
+
+for(const lost of [false,true]) test(`disposing during ${lost?'unknown':'committed'} receipt confirmation never notifies the old renderer`, {timeout:30000}, async t=>{
+ const createSlidesBridge=await bundleBridge(t),server=createSlidesMockServer({slideCount:1})
+ const reached=Promise.withResolvers(),resume=Promise.withResolvers(),keys=[];let commits=0
+ const send=async(path,init={})=>{
+  const response=await server.fetchImpl(path,init)
+  if(String(path).endsWith('/commits')){
+   keys.push(JSON.parse(init.body).idempotencyKey)
+   if(++commits===1){await response.arrayBuffer();throw new TypeError('lost commit')}
+   if(commits===2){reached.resolve();await resume.promise;if(lost){await response.arrayBuffer();throw new TypeError('lost confirmation')}}
+  }
+  return response
+ }
+ const host=createSessionFileHost({fetchImpl:send});t.after(()=>host.dispose());await host.open(server.file().fileId);await host.acquireLease(server.file().fileId)
+ let changes=0
+ const bridge=createSlidesBridge(host,server.file().fileId,{language:'en',theme:'light'},{fetchImpl:send,onChange:()=>changes++});t.after(()=>bridge.dispose())
+ await bridge.api.openPptx(1280);await bridge.api.editText({slideIndex:0,sourceId:'e1-title',paragraphs:[{runs:[{text:'kept'}]}]})
+ const saving=bridge.api.save().then(value=>({value}),error=>({error}))
+ const deadline=Date.now()+10000
+ while(!bridge.needsConfirmation()){assert.ok(Date.now()<deadline);await new Promise(resolve=>setImmediate(resolve))}
+ const confirming=bridge.confirmSave().then(value=>({value}),error=>({error}));await reached.promise;bridge.dispose();const before=changes;resume.resolve()
+ const confirmation=await confirming
+ assert.equal(confirmation.error?.code,'UNAVAILABLE','disposed confirmation rejects instead of reporting success')
+ assert.equal(changes,before,'no notification after disposal during reconciliation')
+ assert.equal((await saving).error?.code,'UNAVAILABLE');assert.equal(bridge.needsConfirmation(),false)
+ assert.equal(host.getState(server.file().fileId).status,lost?'unknown':'idle')
+ if(lost)await host.reconcileSlides(server.file().fileId)
+ assert.equal(host.getState(server.file().fileId).status,'idle');assert.equal(server.preparations(),1)
+ assert.equal(new Set(keys).size,1);assert.equal(commits,lost?3:2)
+})

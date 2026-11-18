@@ -375,11 +375,15 @@ export function createSlidesBridge(host: SessionFileHost, fileId: string, prefs:
       try {
         saved = await host.saveSlides(fileId, {revision: current.revision, generation: current.generation})
       } catch (error) {
+        // A dispatched commit can outlive this view. Keep its outcome in the
+        // host, but never resurrect recovery for an already disposed renderer.
+        if (disposed) throw hostError('UNAVAILABLE', 'disposed')
         if (!saved && host.getState(fileId).status !== 'unknown') return {ok: false as const, error: text.saveFailed}
         // The receipt is unknown: the renderer's save promise stays pending and
         // its exact journal survives until the entry's Confirm save outcome resolves it.
         return new Promise<SaveResult>((resolve, reject) => { recovery = {resolve, reject}; onChange() })
       }
+      if (disposed) throw hostError('UNAVAILABLE', 'disposed')
       // Adopt the committed head: the pinned revision moved, the generation continues.
       current.revision = saved.revision
       current.dirty = false
@@ -439,6 +443,7 @@ export function createSlidesBridge(host: SessionFileHost, fileId: string, prefs:
     confirming = true
     try {
       const saved = await host.reconcileSlides(fileId)
+      if (disposed) throw hostError('UNAVAILABLE', 'disposed')
       // Adopt the confirmed head and clear the tracked dirty flag: the parked
       // receipt fenced mutations, so nothing was edited between the export and
       // this confirmation; edits made afterwards take the normal path.
@@ -446,9 +451,10 @@ export function createSlidesBridge(host: SessionFileHost, fileId: string, prefs:
       recovery = null
       pending.resolve({ok: true, path: host.getState(fileId).name})
     } catch (error) {
+      if (disposed) throw hostError('UNAVAILABLE', 'disposed')
       if (host.getState(fileId).status !== 'unknown') { recovery = null; pending.resolve({ok: false, error: text.saveFailed}) }
       throw error
-    } finally { confirming = false; onChange() }
+    } finally { confirming = false; if (!disposed) onChange() }
   }
   async function prepareDownload(editor: {saveAndWait(): Promise<boolean>; isDirty(): boolean}) {
     if (disposed) throw hostError('UNAVAILABLE', 'disposed')
