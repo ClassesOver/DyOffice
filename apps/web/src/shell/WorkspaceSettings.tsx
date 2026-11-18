@@ -1,3 +1,4 @@
+import './personal-settings-b.css'
 import {useCallback,useEffect,useId,useRef,useState} from 'react'
 import {Alert,Button,Card,Descriptions,Form,Input,Select,Space,Switch,Tabs,Typography} from 'antd'
 import type {WebSettingsPreferences} from '../../../shell/src/renderer/src/SettingsModal'
@@ -16,6 +17,9 @@ export function WorkspaceSettings({user,load,save,security,skills,onLogout,onClo
  security:{changePassword:(current:string,next:string)=>Promise<void>;onCurrentRevoked:()=>void};skills:ReactNode|((registerGuard:(guard:(()=>boolean)|null)=>void)=>ReactNode);onLogout:()=>void;onClose:()=>void;onCloseGuardChange:(guard:(()=>boolean)|null)=>void
 }){
  const preferenceId=useId()
+ const [localTab,setLocalTab]=useState('account')
+ const selectedTab=activeTab??localTab
+ const tabTitles:Record<string,[string,string]>={account:['账户与安全','管理个人资料、密码与登录活动。'],general:['通用偏好','让工作区更贴合你的习惯。'],skills:['个人技能','管理和扩展你的个人办公技能。']}
  const [baseline,setBaseline]=useState<WebSettingsPreferences|null>(null),[draft,setDraft]=useState<WebSettingsPreferences|null>(null)
  const [sessionVersion,setSessionVersion]=useState(0)
  const [busy,setBusy]=useState(false),[error,setError]=useState(''),[saved,setSaved]=useState(false)
@@ -39,18 +43,21 @@ export function WorkspaceSettings({user,load,save,security,skills,onLogout,onClo
   <Card className="personal-settings-history" title={<Space size={8}><HistoryOutlined aria-hidden="true"/>登录记录</Space>}><LoginHistoryPanel client={historyClient}/></Card>
   <Card className="personal-settings-logout"><Space style={{width:'100%',justifyContent:'space-between'}} wrap><div><Typography.Text strong>退出当前账号</Typography.Text><Paragraph type="secondary" style={{marginBottom:0}}>仅退出此浏览器，其他会话保持有效。</Paragraph></div><Button danger onClick={()=>{if(guard())onLogout()}}>退出登录</Button></Space></Card>
  </Space>
- const general=<Card className="personal-settings-general" title="显示与文档偏好" extra={<Space><Button disabled={busy} onClick={()=>void refresh()}>重新读取</Button><Button type="primary" loading={busy} disabled={!dirty} onClick={()=>void commit()}>保存个人偏好</Button></Space>}>
-  <Form layout="vertical" style={{maxWidth:540}} disabled={busy||!draft}>
+ const general=<div className="personal-settings-general">
+  <Form layout="vertical" disabled={busy||!draft}>
+   <h3 className="personal-settings-group-title">外观与语言</h3>
    <Form.Item label="语言" htmlFor={`${preferenceId}-language`}><Select id={`${preferenceId}-language`} aria-label="语言" value={draft?.language} options={[{value:'zh',label:'简体中文'},{value:'en',label:'English'}]} onChange={language=>edit({language})}/></Form.Item>
-   <Form.Item label="主题" htmlFor={`${preferenceId}-theme`}><Select id={`${preferenceId}-theme`} aria-label="主题" value={draft?.theme} options={[{value:'system',label:'跟随系统'},{value:'light',label:'浅色'},{value:'dark',label:'深色'}]} onChange={theme=>edit({theme})}/></Form.Item>
+   <fieldset className="personal-settings-theme" aria-label="主题" disabled={busy||!draft}><legend>主题</legend><div className="personal-settings-theme-options">{([{value:'light',label:'浅色'},{value:'dark',label:'深色'},{value:'system',label:'跟随系统'}] as const).map(option=><label key={option.value} className={`personal-settings-theme-choice theme-preview-${option.value}`}><input type="radio" name={`${preferenceId}-theme`} value={option.value} checked={draft?.theme===option.value} onChange={()=>edit({theme:option.value})}/><span className="personal-settings-theme-preview" aria-hidden="true"><span className="theme-preview-nav"><b>D</b><i/><i/><i/></span><span className="theme-preview-content"><i/><i/><i/></span><span className="theme-preview-check">✓</span></span><span>{option.label}</span></label>)}</div></fieldset>
+   <h3 className="personal-settings-group-title personal-settings-group-divider">编辑偏好</h3>
    <Form.Item label="文档作者" htmlFor={`${preferenceId}-author`} extra="作为文档批注与修订的作者名称。"><Input id={`${preferenceId}-author`} aria-label="文档作者" value={draft?.authorName} maxLength={100} onChange={e=>edit({authorName:e.target.value})}/></Form.Item>
-   <Form.Item label="自动保存" htmlFor={`${preferenceId}-autosave`}><Switch id={`${preferenceId}-autosave`} aria-label="自动保存" checked={draft?.autoSave} onChange={autoSave=>edit({autoSave})}/></Form.Item>
-   <Form.Item label="显示 AI 助手" htmlFor={`${preferenceId}-assistant`}><Switch id={`${preferenceId}-assistant`} aria-label="显示 AI 助手" checked={draft?.showAssistant} onChange={showAssistant=>edit({showAssistant})}/></Form.Item>
+   <Form.Item className="personal-settings-switch-row" label="自动保存" htmlFor={`${preferenceId}-autosave`}><Switch id={`${preferenceId}-autosave`} aria-label="自动保存" checked={draft?.autoSave} onChange={autoSave=>edit({autoSave})}/></Form.Item>
+   <Form.Item className="personal-settings-switch-row" label="显示 AI 助手" htmlFor={`${preferenceId}-assistant`}><Switch id={`${preferenceId}-assistant`} aria-label="显示 AI 助手" checked={draft?.showAssistant} onChange={showAssistant=>edit({showAssistant})}/></Form.Item>
   </Form>
   <Typography.Text type="secondary">语言与编辑器偏好保存后，在刷新页面或重新打开文档时生效。</Typography.Text>
- </Card>
- return <section className="workspace-settings-page"><header className="workspace-page-heading"><Paragraph type="secondary">管理你的账号安全、显示偏好与个人技能。</Paragraph></header>
+ <div className="personal-settings-actions"><Button disabled={busy} onClick={()=>void refresh()}>重新读取</Button><Button type="primary" loading={busy} disabled={!dirty} onClick={()=>void commit()}>保存个人偏好</Button></div>
+ </div>
+ return <section className="workspace-settings-page personal-settings-b">
  {error&&<Alert type="error" showIcon title={error} style={{marginBottom:16}}/>}{saved&&<Alert type="success" showIcon title="个人偏好已保存" style={{marginBottom:16}}/>}
- <Tabs activeKey={activeTab} onChange={onTabChange} className="personal-settings-tabs" items={[{key:'account',icon:<SafetyCertificateOutlined aria-hidden="true"/>,label:'账户与安全',children:account},{key:'general',icon:<SlidersOutlined aria-hidden="true"/>,label:'通用偏好',children:general},{key:'skills',icon:<AppstoreOutlined aria-hidden="true"/>,label:'个人技能',children:<div className="personal-settings-skills">{typeof skills==='function'?skills(skillsGuard):skills}</div>}]} destroyOnHidden={false}/>
+ <Tabs tabBarExtraContent={{left:<div className="personal-settings-brand"><span aria-hidden="true">D</span><strong>DyOffice</strong><small>个人设置</small></div>}} tabPlacement="start" activeKey={selectedTab} onChange={tab=>{setLocalTab(tab);onTabChange?.(tab)}} className="personal-settings-tabs" items={[{key:'account',icon:<SafetyCertificateOutlined aria-hidden="true"/>,label:'账户与安全',children:<><header className="personal-settings-heading"><h2>{tabTitles.account[0]}</h2><Paragraph type="secondary">{tabTitles.account[1]}</Paragraph></header>{account}</>},{key:'general',icon:<SlidersOutlined aria-hidden="true"/>,label:'通用偏好',children:<><header className="personal-settings-heading"><h2>{tabTitles.general[0]}</h2><Paragraph type="secondary">{tabTitles.general[1]}</Paragraph></header>{general}</>},{key:'skills',icon:<AppstoreOutlined aria-hidden="true"/>,label:'个人技能',children:<div className="personal-settings-skills"><header className="personal-settings-heading"><h2>{tabTitles.skills[0]}</h2><Paragraph type="secondary">{tabTitles.skills[1]}</Paragraph></header>{typeof skills==='function'?skills(skillsGuard):skills}</div>}]} destroyOnHidden={false}/>
  </section>
 }

@@ -7,7 +7,7 @@ test('host-requested skills tab preserves existing personal preference drafts an
  let skillsBlocked=true
  function Skills({register}:{register:(guard:(()=>boolean)|null)=>void}){useEffect(()=>{register(()=>!skillsBlocked);return()=>register(null)},[register]);return h('p',null,'Personal skills content')}
  const host=document.createElement('div');document.body.append(host);const root=createRoot(host);let guard:(()=>boolean)|null=null
- const props={user:{username:'alice',displayName:'Alice',roles:['personal']},load:async()=>prefs,save:async()=>prefs,sessionsClient:{list:async()=>[],revoke:async()=>{},revokeOthers:async()=>{}},historyClient:{list:async()=>[]},security:{changePassword:async()=>{},onCurrentRevoked(){}},skills:(register:(guard:(()=>boolean)|null)=>void)=>h(Skills,{register}),onClose(){},onLogout(){},onCloseGuardChange:(value:(()=>boolean)|null)=>{guard=value}}
+ const props={user:{username:'alice',displayName:'Alice',roles:['personal']},load:async()=>prefs,save:async()=>prefs,sessionsClient:{listPage:async()=>({sessions:[],nextCursor:null}),list:async()=>[],revoke:async()=>{},revokeOthers:async()=>{}},historyClient:{list:async()=>[],listPage:async()=>({events:[],nextCursor:null})},security:{changePassword:async()=>{},onCurrentRevoked(){}},skills:(register:(guard:(()=>boolean)|null)=>void)=>h(Skills,{register}),onClose(){},onLogout(){},onCloseGuardChange:(value:(()=>boolean)|null)=>{guard=value}}
  const before=(globalThis as typeof globalThis & {IS_REACT_ACT_ENVIRONMENT?:boolean}).IS_REACT_ACT_ENVIRONMENT
  Object.assign(globalThis,{IS_REACT_ACT_ENVIRONMENT:true})
  const confirm=vi.spyOn(window,'confirm').mockReturnValue(false)

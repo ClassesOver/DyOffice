@@ -1,3 +1,4 @@
+import {SettingsListPager} from './SettingsListPager'
 import {useEffect, useRef, useState} from 'react'
 import {parseSkillFrontmatter} from '@genoffice/agent-core'
 import {Alert, Button, Card, Input, Modal, Select, Space, Table, Tag} from 'antd'
@@ -8,6 +9,8 @@ import type {FoundSkill} from '../../../shell/src/shared/found-skill'
 
 export function UserSkillsPanel({client,onCloseGuardChange}: {client: ReturnType<typeof createUserSkillsClient>;onCloseGuardChange?:(guard:(()=>boolean)|null)=>void}) {
   const [skills, setSkills] = useState<FoundSkill[]>([])
+  const [skillPage,setSkillPage]=useState(0)
+  const currentSkillPage=Math.min(skillPage,Math.max(0,Math.ceil(skills.length/6)-1))
   const [listed, setListed] = useState(false)
   const [catalogSearch, setCatalogSearch] = useState(''), [catalogFormat, setCatalogFormat] = useState('all'), [catalogPage, setCatalogPage] = useState(1)
   const catalog = WEB_OFFICE_SKILL_CATALOG.filter(skill => (catalogFormat === 'all' || skill.formats.includes(catalogFormat)) && `${skill.key} ${skill.name} ${skill.description}`.toLowerCase().includes(catalogSearch.trim().toLowerCase()))
@@ -34,13 +37,13 @@ export function UserSkillsPanel({client,onCloseGuardChange}: {client: ReturnType
     pending.current = true; setBusy(true); setError(''); setMessage('')
     try {
       const items = await client.listSkills()
-      if (current === generation.current) { setSkills(items); setListed(true); setUncertain(false) }
+      if (current === generation.current) { setSkills(items); setSkillPage(0); setListed(true); setUncertain(false) }
     } catch { if (current === generation.current) setError('无法读取当前账号的 Skills，请刷新列表重试。') }
     finally { if (current === generation.current) { pending.current = false; setBusy(false) } }
   }
   useEffect(() => {
     generation.current++; pending.current = false
-    setSkills([]); setListed(false); setView(null); setRemoving(null); setReplacing(null); setUncertain(false); setError(''); setMessage('')
+    setSkills([]); setSkillPage(0); setListed(false); setView(null); setRemoving(null); setReplacing(null); setUncertain(false); setError(''); setMessage('')
     void refresh()
     return () => { generation.current++; pending.current = false }
   }, [client])
@@ -108,20 +111,22 @@ export function UserSkillsPanel({client,onCloseGuardChange}: {client: ReturnType
     <h4>可安装的办公技能</h4>
     <p>从 DyOffice 推荐任务中选择，点击安装后才保存到当前账号；已有同名技能不会覆盖。</p>
     <Space wrap style={{marginBottom:16}}><Input.Search aria-label="搜索可安装技能" placeholder="搜索技能名称或说明" value={catalogSearch} allowClear onChange={event => {setCatalogSearch(event.target.value); setCatalogPage(1)}}/><Select aria-label="筛选技能格式" value={catalogFormat} onChange={value => {setCatalogFormat(value); setCatalogPage(1)}} options={[{value:'all',label:'全部格式'},...['docx','xlsx','pptx','pdf'].map(value => ({value,label:value.toUpperCase()}))]}/></Space>
-    <Table rowKey="key" dataSource={catalog} pagination={{current:catalogPage,pageSize:6,showSizeChanger:false,onChange:setCatalogPage}} locale={{emptyText:'没有匹配的办公技能'}} columns={[
+    <Table rowKey="key" dataSource={catalog.slice((catalogPage-1)*6,catalogPage*6)} pagination={false} locale={{emptyText:'没有匹配的办公技能'}} columns={[
       {title:'技能',key:'skill',render:(_value,skill) => <><strong>{skill.name}</strong><p>{skill.description}</p><Space wrap>{skill.formats.map(format => <Tag key={format}>{format.toUpperCase()}</Tag>)}</Space></>},
       {title:'操作',key:'actions',render:(_value,skill) => <Space><Button autoInsertSpace={false} onClick={() => setView({name:skill.name,body:parseSkillFrontmatter(skill.source)?.body ?? skill.source})}>查看正文</Button><Button autoInsertSpace={false} disabled={!listed || busy || uncertain || skills.some(item => item.name === skill.key)} onClick={() => void install(skill)}>{skills.some(item => item.name === skill.key) ? '已添加' : '安装'}</Button></Space>},
     ]}/>
+    <SettingsListPager page={catalogPage-1} pageSize={6} total={catalog.length} onPageChange={page=>setCatalogPage(page+1)} label="办公技能目录"/>
     <h4>当前账号的办公技能</h4>
     <p>支持不超过 256 KiB、包含 name、description 和正文的 SKILL.md。其他类别的旧记录保留，但不在此处或助手技能列表中展示。</p>
     <input ref={input} type="file" accept=".md,text/markdown" hidden aria-label="导入 Skill 文件" onChange={event => {const file = event.target.files?.[0]; event.target.value = ''; if (file) void importFile(file)}}/>
     {error && <Alert type="error" showIcon title={error}/>}
     {message && <Alert type="success" showIcon title={message} role="status"/>}
-    <Table rowKey="name" loading={busy} pagination={false} dataSource={skills} locale={{emptyText:'尚未导入办公技能'}} columns={[
+    <Table className="personal-skills-owned" rowKey="name" loading={busy} pagination={false} dataSource={skills.slice(currentSkillPage*6,(currentSkillPage+1)*6)} locale={{emptyText:'尚未导入办公技能'}} columns={[
       {title:'名称',dataIndex:'name',key:'name',render:(name:string) => <>{WEB_OFFICE_SKILL_CATALOG.find(skill => skill.key === name)?.name ?? name}<div>{name}</div></>},
       {title:'说明',dataIndex:'description',key:'description'},
       {title:'操作',key:'actions',render:(_value: unknown, skill: FoundSkill) => <Space><Button autoInsertSpace={false} disabled={busy} onClick={() => void read(skill)}>查看</Button><Button autoInsertSpace={false} danger disabled={busy || uncertain} onClick={() => setRemoving(skill)}>删除</Button></Space>},
     ]}/>
+    <SettingsListPager page={currentSkillPage} pageSize={6} total={skills.length} onPageChange={setSkillPage} label="个人技能" disabled={busy||uncertain||!!replacing||!!removing}/>
     {view && <Modal title={`Skill：${view.name}`} open={true} destroyOnHidden onCancel={() => setView(null)} footer={<Button autoInsertSpace={false} onClick={() => setView(null)}>关闭</Button>}>
       {view && <Input.TextArea aria-label="Skill 内容" value={view.body} readOnly rows={16}/>}
       {error && <Alert type="error" showIcon title={error}/>}

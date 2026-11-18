@@ -14,7 +14,7 @@ test('settings retains drafts, close guard and unknown write across verified ses
  const scoped=createLocalPreferencesSession(client)
  let finish:(value:typeof initial)=>void=()=>{},writes=0,guard:(()=>boolean)|null=null
  scoped.bind({proof:'a'.repeat(43),request:(async(_path,method)=>method==='PUT'?(writes++,new Promise(resolve=>{finish=resolve})):initial) as SettingsRequest})
- const props={user:{username:'alice',displayName:'Alice',roles:['personal']},activeTab:'general',load:scoped.preferences.getPreferences,save:scoped.preferences.updatePreferences,security:{changePassword:async()=>{},onCurrentRevoked:()=>{}},skills:h('p',null,'skills'),sessionsClient:{list:async()=>[],revoke:async()=>{},revokeOthers:async()=>{}},historyClient:{list:async()=>[]},onClose:()=>{},onLogout:()=>{},onCloseGuardChange:(g:(()=>boolean)|null)=>{guard=g}}
+ const props={user:{username:'alice',displayName:'Alice',roles:['personal']},activeTab:'general',load:scoped.preferences.getPreferences,save:scoped.preferences.updatePreferences,security:{changePassword:async()=>{},onCurrentRevoked:()=>{}},skills:h('p',null,'skills'),sessionsClient:{listPage:async()=>({sessions:[],nextCursor:null}),list:async()=>[],revoke:async()=>{},revokeOthers:async()=>{}},historyClient:{list:async()=>[],listPage:async()=>({events:[],nextCursor:null})},onClose:()=>{},onLogout:()=>{},onCloseGuardChange:(g:(()=>boolean)|null)=>{guard=g}}
  const button=(text:string)=>[...document.querySelectorAll<HTMLButtonElement>('button')].find(b=>b.textContent===text)!
  const confirm=vi.spyOn(window,'confirm').mockReturnValue(false)
  try{

@@ -332,3 +332,75 @@
     padding: 16px;
   }
 }
+
+/* B: a quiet navigation rail and flat editing sections. Scope stays local to
+   global configuration; controls, credential lifecycle and guards are unchanged. */
+section.global-settings-panel .global-settings-grid {
+  gap: 0;
+  border: 1px solid var(--border-subtle);
+  border-radius: 14px;
+  background: var(--surface);
+}
+
+section.global-settings-panel .global-settings-list {
+  align-self: stretch;
+  border: 0;
+  border-right: 1px solid var(--border-subtle);
+  border-radius: 14px 0 0 14px;
+  background: var(--accent-soft, var(--surface-subtle));
+}
+
+section.global-settings-panel .global-settings-editor {
+  border: 0;
+  border-radius: 0 14px 14px 0;
+  padding: 28px;
+}
+
+section.global-settings-panel .global-settings-entry.active {
+  background: var(--surface);
+  border-color: var(--accent);
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+
+section.global-settings-panel .global-settings-entry.active strong {
+  color: var(--accent);
+}
+
+section.global-settings-panel .global-settings-entry:focus-visible,
+section.global-settings-panel .global-settings-latest summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+
+section.global-settings-panel .global-settings-key {
+  padding: 22px 0 0;
+  border: 0;
+  border-top: 1px solid var(--border-subtle);
+  border-radius: 0;
+  background: transparent;
+}
+
+section.global-settings-panel .global-settings-defaults,
+section.global-settings-panel .global-settings-maintenance {
+  border: 0;
+  border-top: 1px solid var(--border-subtle);
+  border-radius: 0;
+  padding: 24px 0 4px;
+}
+
+@media (max-width: 760px) {
+  section.global-settings-panel .global-settings-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  section.global-settings-panel .global-settings-list {
+    border-right: 0;
+    border-bottom: 1px solid var(--border-subtle);
+    border-radius: 14px 14px 0 0;
+  }
+
+  section.global-settings-panel .global-settings-editor {
+    border-radius: 0 0 14px 14px;
+    padding: 20px 16px;
+  }
+}

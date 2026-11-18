@@ -162,7 +162,7 @@ test('catalog remains paged and unknown installation cannot be repeated until ex
  let writes=0,guard:(()=>boolean)|null=null
  const host=await mount(async(_path,method)=>{if(method==='PUT'){writes++;throw Error('lost')}return [] as never},value=>{guard=value})
  expect(host.querySelectorAll('.ant-table')[0].querySelectorAll('tr[data-row-key]')).toHaveLength(6)
- expect(host.querySelector('.ant-pagination')).not.toBeNull()
+ expect(host.querySelector('[aria-label="办公技能目录分页"]')).not.toBeNull()
  await act(async()=>button('安装').click())
  expect(writes).toBe(1);expect(button('安装').disabled).toBe(true)
  await act(async()=>expect(guard!()).toBe(false))

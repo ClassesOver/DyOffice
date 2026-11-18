@@ -268,3 +268,39 @@
 .workspace-panel .ant-alert {
   margin: 14px 0;
 }
+
+/* B management surface: keep the actual connection list as its navigation. */
+section.workspace-panel.workspace-sources-panel .source-body,
+section.set-dialog.source-dialog .source-body {
+  gap: 24px;
+}
+section.workspace-panel.workspace-sources-panel .source-list,
+section.set-dialog.source-dialog .source-list {
+  box-sizing: border-box;
+  padding: 16px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 12px;
+  background: var(--accent-soft, var(--surface-subtle));
+}
+section.workspace-panel.workspace-sources-panel .source-list > .source-item,
+section.set-dialog.source-dialog .source-list > .source-item {
+  background: var(--surface);
+  border-color: var(--border-subtle);
+}
+section.workspace-panel.workspace-sources-panel .source-list > .source-item:focus-visible,
+section.set-dialog.source-dialog .source-list > .source-item:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+section.workspace-panel.workspace-sources-panel .source-workbench-heading,
+section.set-dialog.source-dialog .source-workbench-heading {
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+@media (max-width: 760px) {
+  section.workspace-panel.workspace-sources-panel .source-list,
+  section.set-dialog.source-dialog .source-list {
+    padding: 12px;
+  }
+}

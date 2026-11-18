@@ -1,6 +1,7 @@
 import {Button, Input, Checkbox, Alert, Table, Select, type InputRef} from 'antd'
 import { useEffect, useRef, useState } from 'react'
 import './workspace-panels.css'
+import {SettingsListPager} from './SettingsListPager'
 import {offerSourceResultDownload} from './source-result-download'
 import type { SourceDetail, SourceDescriptor, SourceConfig, SourceKind, QuerySnapshot } from '../../../../packages/web-contracts/src/sources.ts'
 import type { SourcesClient } from './sources-client'
@@ -15,10 +16,12 @@ const fromDetail = (detail: SourceDetail): Draft => ({ sourceId: detail.source.s
 
 export function SourcesPanel({ client, resultsClient, onClose, presentation = 'dialog', onCloseGuardChange }: { client: SourcesClient; resultsClient?: SourceResultsClient; onClose: () => void; presentation?: 'dialog' | 'page'; onCloseGuardChange?: (guard: (() => boolean) | null) => void }) {
   const [items, setItems] = useState<SourceDescriptor[]>([]), [cursor, setCursor] = useState<string | null>(null)
+  const [listPage,setListPage]=useState(0),[pageStarts,setPageStarts]=useState<(string|undefined)[]>([undefined])
   const [detail, setDetail] = useState<SourceDetail | null>(null), [latest, setLatest] = useState<SourceDetail | null>(null)
   const [missing, setMissing] = useState<string|null>(null)
   const [draft, setDraft] = useState<Draft>(empty), [confirmDelete, setConfirmDelete] = useState(false)
   const [queryFailed, setQueryFailed] = useState(false)
+  const [resultPage,setResultPage]=useState(0)
   const [result, setResult] = useState<QuerySnapshot | null>(null), [sql, setSql] = useState('SELECT 1 AS value')
   const [capture, setCapture] = useState<SourceToolQueryOutcome | null>(null), [savedResult, setSavedResult] = useState<WorkspaceSourceResultArtifact | null>(null)
   const [resultName, setResultName] = useState('查询结果'), [resultBusy, setResultBusy] = useState(false)
@@ -29,7 +32,7 @@ export function SourcesPanel({ client, resultsClient, onClose, presentation = 'd
   useEffect(() => {
     alive.current = true
     const unsubscribe = client.subscribe(() => { if (alive.current) tick(n => n + 1) })
-    void client.list().then(page => { if (alive.current) { setItems(page.items); setCursor(page.nextCursor) } }).catch(e => { if (alive.current) setError(e.message) })
+    void client.list().then(page => { if (alive.current) { setItems(page.items); setCursor(page.nextCursor); setListPage(0); setPageStarts([undefined]) } }).catch(e => { if (alive.current) setError(e.message) })
     return () => { alive.current = false; unsubscribe(); if (inputRef.current) inputRef.current.input && (inputRef.current.input.value = '') }
   }, [client])
   const legacyHttp = detail?.source.kind === 'http'
@@ -62,13 +65,18 @@ export function SourcesPanel({ client, resultsClient, onClose, presentation = 'd
     try { await action() } catch (e) { if (alive.current) setError((e as Error).message) }
     finally { if (alive.current && clearSubmittedSecret) { setDraft(current => ({ ...current, secret: '' })); if (inputRef.current) inputRef.current.input && (inputRef.current.input.value = '') } }
   }
-  async function reloadList(append = false) {
-    const page = await client.list(append ? cursor ?? undefined : undefined)
-    if (alive.current) { setItems(current => append ? [...current, ...page.items] : page.items); setCursor(page.nextCursor) }
+  async function reloadList(targetPage=0,after?:string) {
+    const page = await client.list(after)
+    if (alive.current) { setItems(page.items); setCursor(page.nextCursor); setListPage(targetPage); setPageStarts(old=>targetPage===0?[undefined]:[...old.slice(0,targetPage),after]) }
+  }
+  function changeListPage(next:number) {
+    if(client.getState().pending||resultBusy||dirty||client.getState().unknownWrite||unresolvedResult)return
+    if(next===listPage+1&&cursor)void operation(()=>reloadList(next,cursor))
+    else if(next===listPage-1&&next>=0)void operation(()=>reloadList(next,pageStarts[next]))
   }
   async function select(sourceId: string) {
     const value = await client.detail(sourceId)
-    if (alive.current) { setDetail(value); setDraft(fromDetail(value)); setLatest(null); setMissing(null); setResult(null); setQueryFailed(false); setCapture(null); setSavedResult(null); saveIntent.current = null; setConfirmDelete(false) }
+    if (alive.current) { setDetail(value); setDraft(fromDetail(value)); setLatest(null); setMissing(null); setResult(null); setResultPage(0); setQueryFailed(false); setCapture(null); setSavedResult(null); saveIntent.current = null; setConfirmDelete(false) }
   }
   async function readLatest(sourceId:string){
     setMissing(null)
@@ -101,7 +109,7 @@ export function SourcesPanel({ client, resultsClient, onClose, presentation = 'd
         {items.map(item => <Button autoInsertSpace={false} className="source-item" key={item.sourceId} disabled={busy || dirty || unresolvedResult} onClick={() => { if (!unresolvedResult) void operation(() => select(item.sourceId)) }}>
           <strong>{item.name}</strong><span>{item.kind} · 草稿 v{item.version} · {item.publishedRevision ? `已发布 r${item.publishedRevision}` : '未发布'}</span><span>{item.enabled ? '已启用' : '已禁用'}{item.hasUnpublishedChanges ? ' · 有未发布修改' : ''}</span>
         </Button>)}
-        {cursor && <Button autoInsertSpace={false} disabled={busy} onClick={() => void operation(() => reloadList(true))}>加载更多</Button>}
+        <SettingsListPager page={listPage} pageSize={50} hasPrevious={listPage>0} hasNext={!!cursor} label="数据连接" onPageChange={changeListPage} disabled={busy||dirty||unknown||unresolvedResult}/>
         <Button autoInsertSpace={false} disabled={busy} onClick={() => void operation(() => reloadList())}>刷新列表</Button>
       </aside>
       <main className="source-editor">
@@ -144,8 +152,8 @@ export function SourcesPanel({ client, resultsClient, onClose, presentation = 'd
               const query = draft.kind === 'http' ? {} : { sql }
               if (resultsClient) {
                 const captured = await resultsClient.query(detail.source.sourceId, query)
-                if (alive.current) { setCapture(captured); setSavedResult(null); saveIntent.current = null; setResultName(detail.source.name + '查询结果'); setResult({ version: 1, sourceId: captured.artifact.sourceId, sourceVersion: captured.artifact.sourceVersion, schema: captured.schema, timezone: captured.timezone, rows: captured.preview, truncated: captured.sourceTruncated, sha256: captured.sha256 }) }
-              } else { const snapshot = await client.query(detail.source.sourceId, query); if (alive.current) { setResult(snapshot); setCapture(null) } }
+                if (alive.current) { setResultPage(0); setCapture(captured); setSavedResult(null); saveIntent.current = null; setResultName(detail.source.name + '查询结果'); setResult({ version: 1, sourceId: captured.artifact.sourceId, sourceVersion: captured.artifact.sourceVersion, schema: captured.schema, timezone: captured.timezone, rows: captured.preview, truncated: captured.sourceTruncated, sha256: captured.sha256 }) }
+              } else { const snapshot = await client.query(detail.source.sourceId, query); if (alive.current) { setResultPage(0); setResult(snapshot); setCapture(null) } }
             } catch { if (alive.current) setQueryFailed(true); throw Error('查询未完成，请检查当前工作区的连接授权与连接状态。') }
             finally { if (alive.current) setResultBusy(false) }
           })}>执行已发布查询</Button>
@@ -169,10 +177,11 @@ export function SourcesPanel({ client, resultsClient, onClose, presentation = 'd
               finally { if (alive.current) setResultBusy(false) }
             })}>{savedResult ? '已保存到工作区' : saveIntent.current ? '确认保存结果' : '保存结果到工作区'}</Button>
             {savedResult && <Button autoInsertSpace={false} disabled={busy} onClick={() => void operation(async () => { const json = await resultsClient.download(savedResult.resultId); if (alive.current) offerSourceResultDownload(json, savedResult.resultId) })}>下载冻结结果 JSON</Button>}
-            <span>默认每批读取 1,000 行；当前预览最多 100 行。{capture.sourceTruncated ? '原查询已截断，保存不会补回未查询行。' : ''}</span>
+            <span>默认每批读取 1,000 行；当前预览已载入 {result.rows.length} 行，每页显示 20 行。{capture.sourceTruncated ? '原查询已截断，保存不会补回未查询行。' : ''}</span>
           </div>}
-          <div className="source-results"><Table size="small" pagination={false} scroll={{x:'max-content'}} rowKey="__rowKey" dataSource={result.rows.slice(0,100).map((row,index)=>({values:row,__rowKey:String(index)}))} columns={result.schema.map(column=>({title:column.name+(column.unit ? `（${column.unit}）` : ''),key:column.name,render:(_value:unknown,record:{values:Record<string,unknown>})=>record.values[column.name]===null?'—':String(record.values[column.name]??'')}))}/></div>
-          {result.rows.length > 100 && <p>界面仅显示前 100 行，完整受限结果共 {result.rows.length} 行。</p>}
+          <div className="source-results"><Table size="small" pagination={false} scroll={{x:'max-content'}} rowKey="__rowKey" dataSource={result.rows.slice(resultPage*20,(resultPage+1)*20).map((row,index)=>({values:row,__rowKey:String(resultPage*20+index)}))} columns={result.schema.map(column=>({title:column.name+(column.unit ? `（${column.unit}）` : ''),key:column.name,render:(_value:unknown,record:{values:Record<string,unknown>})=>record.values[column.name]===null?'—':String(record.values[column.name]??'')}))}/></div>
+          <SettingsListPager page={resultPage} pageSize={20} total={result.rows.length} label="查询结果" disabled={busy} onPageChange={setResultPage}/>
+          <p>分页仅浏览当前已返回的 {result.rows.length} 行，不会重新执行查询。</p>
         </section>}
         {message && <Alert type="success" showIcon title={message} role="status"/>}
       </main>

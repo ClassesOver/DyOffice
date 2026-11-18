@@ -28,7 +28,7 @@ for(const component of ['sessions','skills','trash'] as const)test(`${component}
  const pending=()=>new Promise<void>((_resolve,reject)=>{fail=reject}),confirm=vi.spyOn(window,'confirm')
  const session={id:'other',current:false,createdAt:'2026-01-01',lastSeenAt:'2026-01-01',expiresAt:'2027-01-01'}
  const file={id:'file-a',name:'audit.docx',format:'docx',size:1,updatedAt:'2026-01-01',starred:false,folderId:null,lastOpenedAt:null}
- await mount(component==='sessions'?h(LocalSessionsPanel,{client:{list:async()=>[session],revoke:pending,revokeOthers:pending},onCurrentRevoked:()=>{}}):component==='skills'?h(UserSkillsPanel,{client:{listSkills:async()=>[],importText:pending} as never}):h(WorkspaceTrash,{request:(async(_path:string,method?:string)=>method==='POST'?pending():{files:[file],total:1}) as never,onClose:()=>{},onChanged:()=>{}}))
+ await mount(component==='sessions'?h(LocalSessionsPanel,{client:{listPage:async()=>({sessions:[session],nextCursor:null}),list:async()=>[session],revoke:pending,revokeOthers:pending},onCurrentRevoked:()=>{}}):component==='skills'?h(UserSkillsPanel,{client:{listSkills:async()=>[],importText:pending} as never}):h(WorkspaceTrash,{request:(async(_path:string,method?:string)=>method==='POST'?pending():{files:[file],total:1}) as never,onClose:()=>{},onChanged:()=>{}}))
  expect(reloadProtected()).toBe(false)
  if(component==='sessions'){await click('撤销此会话');await click('确认撤销')}else if(component==='skills'){await click('安装')}else await click('恢复')
  expect(reloadProtected()).toBe(true)

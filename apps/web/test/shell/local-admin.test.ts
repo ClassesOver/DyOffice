@@ -52,9 +52,9 @@ test('failed next member page retains loaded rows and cursor for an explicit ret
   expect(next().disabled).toBe(false)
   next().click()
   await vi.waitFor(()=>expect(document.body.textContent).toContain('Bob'))
-  expect(document.body.textContent).toContain('Alice')
+  expect(document.body.textContent).not.toContain('Alice')
   expect(document.body.textContent).not.toContain('next page unavailable')
-  expect(next()).toBeUndefined()
+  expect(next().disabled).toBe(true)
   expect(list.mock.calls).toEqual([[undefined],['alice'],['alice']])
  }finally{root.unmount()}
 })

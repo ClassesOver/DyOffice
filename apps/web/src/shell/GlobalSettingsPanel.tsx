@@ -4,6 +4,7 @@ import {GLOBAL_SETTING_KINDS} from '../../../../packages/web-contracts/src/setti
 import type {AdminGlobalConfig, AdminGlobalEntry, GlobalConfigCheck, GlobalConfigPatch, GlobalEntryUpsert, GlobalSettingKind} from '../../../../packages/web-contracts/src/settings'
 import {GlobalSettingsError, type GlobalSettingsClient} from './global-settings-client'
 import './global-settings.css'
+import {SettingsListPager} from './SettingsListPager'
 
 const kindLabels: Record<GlobalSettingKind, string> = {chat: '对话', image_generation: '图像生成', image_analysis: '图像分析', video_analysis: '视频分析', web_search: '网页搜索', image_search: '图片搜索', rerank: '重排', http_mcp: 'HTTP MCP'}
 type EntryDraft = Omit<AdminGlobalEntry, 'hasKey'>
@@ -57,6 +58,9 @@ export function GlobalSettingsPanel({client, onClose, presentation = 'dialog', o
     ...Object.values(drafts).filter(entry => !saved.entries.some(previous => previous.id === entry.id) && !removed.includes(entry.id)).map(entry => ({...entry, hasKey: false})),
   ] : []
   const filtered = entries.filter(entry => !filter || entry.kind === filter)
+  const selectedIndex = filtered.findIndex(entry => entry.id === selected)
+  const listPage = Math.floor(Math.max(0,selectedIndex)/10)
+  const pageEntries = filtered.slice(listPage*10,(listPage+1)*10)
   const current = filtered.find(entry => entry.id === selected) ?? filtered[0]
   const provider = current && saved?.providerCatalog.find(item => item.id === current.providerId && item.kinds.includes(current.kind))
   const patch = draftPatch(saved, drafts, removed, defaults, keys.current, clearKeys)
@@ -206,8 +210,9 @@ export function GlobalSettingsPanel({client, onClose, presentation = 'dialog', o
       <div className="global-settings-grid">
         <aside className="global-settings-list" aria-label="配置列表">
           <div className="global-settings-list-head"><h4>服务配置</h4><Button autoInsertSpace={false}  htmlType="button" disabled={busy || entries.length >= 100} onClick={add}>添加配置</Button></div>
-          <label className="global-settings-filter">配置类型筛选<Select aria-label="配置类型筛选" value={filter} disabled={busy} onChange={value => {setFilter(value); setConfirmation(null)}} options={[{value: '', label: '全部类型'}, ...GLOBAL_SETTING_KINDS.map(kind => ({value: kind, label: kindLabels[kind]}))]}/></label>
-          <ul>{filtered.map(entry => <li key={entry.id}><Button autoInsertSpace={false} htmlType="button" className={`global-settings-entry${current?.id === entry.id ? ' active' : ''}`} aria-pressed={current?.id === entry.id} disabled={busy} onClick={() => {setSelected(entry.id); setConfirmation(null)}}><strong>{entry.label || '未命名配置'}</strong><span>{kindLabels[entry.kind]} · {entry.enabled ? '已启用' : '已停用'}{saved.defaults[entry.kind] === entry.id ? ' · 已保存默认' : ''}</span></Button></li>)}</ul>
+          <label className="global-settings-filter">配置类型筛选<Select aria-label="配置类型筛选" value={filter} disabled={busy} onChange={value => {setFilter(value); setSelected(''); setConfirmation(null)}} options={[{value: '', label: '全部类型'}, ...GLOBAL_SETTING_KINDS.map(kind => ({value: kind, label: kindLabels[kind]}))]}/></label>
+          <ul>{pageEntries.map(entry => <li key={entry.id}><Button autoInsertSpace={false} htmlType="button" className={`global-settings-entry${current?.id === entry.id ? ' active' : ''}`} aria-pressed={current?.id === entry.id} disabled={busy} onClick={() => {setSelected(entry.id); setConfirmation(null)}}><strong>{entry.label || '未命名配置'}</strong><span>{kindLabels[entry.kind]} · {entry.enabled ? '已启用' : '已停用'}{saved.defaults[entry.kind] === entry.id ? ' · 已保存默认' : ''}</span></Button></li>)}</ul>
+          <SettingsListPager page={listPage} pageSize={10} total={filtered.length} label="服务配置" disabled={busy} onPageChange={page=>{const next=filtered[page*10];if(next&&!api.getState().pending){setSelected(next.id);setConfirmation(null)}}}/>
           {!filtered.length && <p className="set-field-desc">暂无配置。添加一个服务配置以开始设置。</p>}
           {removed.length > 0 && <p className="set-field-desc">{removed.length} 个条目待删除，保存后生效。</p>}
         </aside>

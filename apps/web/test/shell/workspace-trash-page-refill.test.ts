@@ -21,7 +21,7 @@ for(const action of ['restore','purge'] as const){
   expect(document.querySelector('[data-row-key="file-10"]')).not.toBeNull()
   expect(document.querySelectorAll('.ant-table-body [data-row-key]')).toHaveLength(10)
   expect(document.querySelector('[data-row-key="file-0"]')).toBeNull()
-  expect(document.querySelector('.ant-pagination-item-2')).toBeNull()
+  expect(document.querySelector<HTMLButtonElement>('[aria-label="下一页回收站"]')?.disabled).toBe(true)
   expect(offsets).toEqual([0,0]);expect(writes).toEqual([`/api/v1/files/file-0/${action}`])
  })
  test(`${action} remains confirmed when its page refill fails and an explicit reload never resends it`,async()=>{
@@ -38,8 +38,8 @@ for(const action of ['restore','purge'] as const){
  test(`${action} refill normalizes the page after concurrent removals shrink the server total`,async()=>{
   let rows=Array.from({length:21},(_,index)=>file(index));const offsets:number[]=[],writes:string[]=[]
   await mount((async(path:string,method?:string)=>{if(method==='POST'){writes.push(path);rows=rows.slice(0,5);return action==='purge'?{state:'purged'}:undefined}const offset=Number(new URL(path,'http://local').searchParams.get('offset'));offsets.push(offset);return {files:rows.slice(offset,offset+10),total:rows.length}}) as SettingsRequest)
-  await act(async()=>document.querySelector<HTMLElement>('.ant-pagination-item-2 a')!.click());await mutate('file-10',action)
-  expect(document.querySelector('.ant-pagination-item-active')?.textContent).toBe('1')
+  await act(async()=>document.querySelector<HTMLButtonElement>('[aria-label="下一页回收站"]')!.click());await mutate('file-10',action)
+  expect(document.querySelector('.settings-list-page-status')?.textContent).toBe('1–5 / 5')
   expect(document.querySelectorAll('.ant-table-body [data-row-key]')).toHaveLength(5)
   expect(offsets).toEqual([0,10,10,0]);expect(writes).toEqual([`/api/v1/files/file-10/${action}`])
  })

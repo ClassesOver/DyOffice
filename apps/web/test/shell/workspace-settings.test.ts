@@ -9,10 +9,10 @@ test('preference labels associate with their controls and switch labels toggle o
  document.body.innerHTML='<div id="labels-test"></div>'
  const root=createRoot(document.getElementById('labels-test')!),save=vi.fn(async()=>initial)
  try{
-  await act(async()=>root.render(h(WorkspaceSettings,{user:{username:'alice',displayName:'Alice',roles:['personal']},load:async()=>initial,save,sessionsClient:{list:async()=>[],revoke:async()=>{},revokeOthers:async()=>{}},historyClient:{list:async()=>[]},security:{changePassword:async()=>{},onCurrentRevoked:()=>{}},skills:h('p',null,'skills'),onClose:()=>{},onLogout:()=>{},onCloseGuardChange:()=>{},activeTab:'general'})))
+  await act(async()=>root.render(h(WorkspaceSettings,{user:{username:'alice',displayName:'Alice',roles:['personal']},load:async()=>initial,save,sessionsClient:{listPage:async()=>({sessions:[],nextCursor:null}),list:async()=>[],revoke:async()=>{},revokeOthers:async()=>{}},historyClient:{list:async()=>[],listPage:async()=>({events:[],nextCursor:null})},security:{changePassword:async()=>{},onCurrentRevoked:()=>{}},skills:h('p',null,'skills'),onClose:()=>{},onLogout:()=>{},onCloseGuardChange:()=>{},activeTab:'general'})))
   const pane=document.querySelector('.personal-settings-general')!
   const label=(name:string)=>[...pane.querySelectorAll<HTMLLabelElement>('label')].find(element=>element.textContent===name)!
-  for(const name of ['语言','主题','文档作者','自动保存','显示 AI 助手']){
+  for(const name of ['语言','文档作者','自动保存','显示 AI 助手']){
    const control=pane.querySelector<HTMLElement>(`[aria-label="${name}"]`)!
    expect(label(name).control,name).toBe(control)
   }
@@ -51,8 +51,8 @@ test('successful password rotation reloads current sessions without losing the p
  ;(globalThis as typeof globalThis & {IS_REACT_ACT_ENVIRONMENT:boolean}).IS_REACT_ACT_ENVIRONMENT=true
  let rotated=false
  const session=(id:string)=>({id,current:true,createdAt:'2026-01-01T00:00:00Z',lastSeenAt:'2026-01-01T00:00:00Z',expiresAt:'2027-01-01T00:00:00Z'})
- const list=vi.spyOn(localSessionsClient,'list').mockImplementation(async()=>[session(rotated?'replacement-session':'old-session')])
- const history=vi.spyOn(loginHistoryClient,'list').mockResolvedValue([])
+ const list=vi.spyOn(localSessionsClient,'listPage').mockImplementation(async()=>({sessions:[session(rotated?'replacement-session':'old-session')],nextCursor:null}))
+ const history=vi.spyOn(loginHistoryClient,'listPage').mockResolvedValue({events:[],nextCursor:null})
  document.body.innerHTML='<div id="rotation-test"></div>'
  const root=createRoot(document.getElementById('rotation-test')!)
  try{
@@ -77,12 +77,12 @@ for(const outcome of ['success','unknown','current'] as const)test(`password rot
  const list=vi.fn().mockResolvedValueOnce([session('current',true),session('other',false)])
  if(outcome==='success')list.mockResolvedValue([session('replacement',true)])
  else list.mockRejectedValue(new Error('read unavailable'))
- const client={list,revoke,revokeOthers:vi.fn()},onCurrentRevoked=vi.fn()
+ const client={listPage:async()=>({sessions:await list(),nextCursor:null}),list,revoke,revokeOthers:vi.fn()},onCurrentRevoked=vi.fn()
  document.body.innerHTML='<div id="pending-rotation-test"></div>'
  const root=createRoot(document.getElementById('pending-rotation-test')!)
  const button=(text:string)=>[...document.querySelectorAll<HTMLButtonElement>('button')].find(b=>b.textContent===text)!
  try{
-  await act(async()=>root.render(h(WorkspaceSettings,{user:{username:'alice',displayName:'Alice',roles:['personal']},load:async()=>initial,save:async()=>initial,sessionsClient:client,historyClient:{list:async()=>[]},security:{changePassword:async()=>{},onCurrentRevoked},skills:h('p',null,'skills'),onClose:()=>{},onLogout:()=>{},onCloseGuardChange:g=>{guard=g}})))
+  await act(async()=>root.render(h(WorkspaceSettings,{user:{username:'alice',displayName:'Alice',roles:['personal']},load:async()=>initial,save:async()=>initial,sessionsClient:client,historyClient:{list:async()=>[],listPage:async()=>({events:[],nextCursor:null})},security:{changePassword:async()=>{},onCurrentRevoked},skills:h('p',null,'skills'),onClose:()=>{},onLogout:()=>{},onCloseGuardChange:g=>{guard=g}})))
   await act(async()=>button(outcome==='current'?'撤销当前会话':'撤销此会话').click())
   await act(async()=>button('确认撤销').click())
   expect(revoke).toHaveBeenCalledOnce()

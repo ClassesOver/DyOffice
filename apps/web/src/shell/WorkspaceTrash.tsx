@@ -5,6 +5,7 @@ import type {SettingsRequest} from '../../../../packages/browser-host/src/prefer
 import type {WorkspaceFile,WorkspaceFileList} from '../../../../packages/web-contracts/src/workspace'
 import './workspace-trash.css'
 import {ManagementList} from './ManagementList'
+import {SettingsListPager} from './SettingsListPager'
 const pageSize=10
 const sizeLabel=(size:number)=>size<1024?`${size} B`:size<1024*1024?`${(size/1024).toFixed(1)} KB`:`${(size/1024/1024).toFixed(1)} MB`
 export function WorkspaceTrash({request,onClose,onChanged,presentation='dialog',onCloseGuardChange}:{request:SettingsRequest;onClose():void;onChanged():void;presentation?:'dialog'|'page';onCloseGuardChange?:(guard:(()=>boolean)|null)=>void}){
@@ -52,8 +53,8 @@ export function WorkspaceTrash({request,onClose,onChanged,presentation='dialog',
    summary={<><span>回收站 <strong>{total}</strong> 个文件</span><span>当前页 {sizeLabel(files.reduce((sum,file)=>sum+file.size,0))}</span></>}
    toolbar={<><Input.Search aria-label="搜索当前页文件" placeholder="搜索当前页文件名" value={search} allowClear disabled={busy} onChange={e=>setSearch(e.target.value)}/><Button autoInsertSpace={false} icon={<ReloadOutlined/>} disabled={busy} onClick={()=>void load()}>重新加载</Button></>}
    panel={(error||message||busy)?<>{error&&<Alert type="error" showIcon title={error}/>}{message&&<Alert type="success" showIcon role="status" title={message}/>} {busy&&<span role="status" className="trash-processing">正在处理…</span>}</>:undefined}
-   footer={<Typography.Text type="secondary" className="trash-footnote">仅显示当前账号文件，搜索范围为当前页</Typography.Text>}
-   rowKey="id" loading={busy} dataSource={filtered} scrollX={640} locale={{emptyText:<Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={error?'暂时无法显示回收站，请重新加载。':search?'当前页没有匹配文件':'回收站为空。'}/>}} pagination={{current:page,pageSize,total,showSizeChanger:false,disabled:busy||uncertain,showTotal:count=>`共 ${count} 个文件`,onChange:next=>void load(next)}} columns={[
+   footer={<><Typography.Text type="secondary" className="trash-footnote">仅显示当前账号文件，搜索范围为当前页</Typography.Text><SettingsListPager page={page-1} pageSize={pageSize} total={total} label="回收站" disabled={busy||uncertain} onPageChange={next=>void load(next+1)}/></>}
+   rowKey="id" loading={busy} dataSource={filtered} scrollX={640} locale={{emptyText:<Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={error?'暂时无法显示回收站，请重新加载。':search?'当前页没有匹配文件':'回收站为空。'}/>}} columns={[
    {title:'文件',key:'name',render:(_value,file)=><div className="trash-file"><span className={`trash-file-icon trash-format-${file.format}`}><FileOutlined/></span><div><Typography.Text strong>{file.name}</Typography.Text><div><Tag>{file.format.toUpperCase()}</Tag><Typography.Text type="secondary">{sizeLabel(file.size)}</Typography.Text></div></div></div>},
    {title:'最后修改',dataIndex:'updatedAt',key:'updatedAt',width:180,render:(value:string)=><time dateTime={value}>{Number.isNaN(Date.parse(value))?'—':new Date(value).toLocaleString()}</time>},
    {title:'操作',key:'actions',width:210,render:(_value,file)=><Space><Button autoInsertSpace={false} icon={<UndoOutlined/>} disabled={busy||uncertain} onClick={()=>void mutate(file,'restore')}>恢复</Button><Button autoInsertSpace={false} type="text" danger disabled={busy||uncertain} onClick={()=>setPurging(file)}>永久删除</Button></Space>},

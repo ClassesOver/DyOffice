@@ -1,6 +1,7 @@
 import {Pagination,Table,type PaginationProps,type TableProps} from 'antd'
 import {useEffect,useRef,useState,type ReactNode} from 'react'
 import './management-list.css'
+import './settings-primitives.css'
 
 type ManagementListProps<RecordType extends object> = Omit<TableProps<RecordType>,'pagination'|'scroll'|'title'|'footer'|'summary'> & {
  summary:ReactNode;toolbar:ReactNode;panel?:ReactNode;footer?:ReactNode;pagination?:PaginationProps;scrollX?:number
@@ -14,7 +15,7 @@ export function ManagementList<RecordType extends object>({summary,toolbar,panel
   const observer=new ResizeObserver(entries=>{const entry=entries.find(item=>item.target===element);if(entry)update(entry.contentRect.height)})
   observer.observe(element);return()=>observer.disconnect()
  },[])
- return <div className="management-list">
+ return <div className="management-list settings-list-surface">
   <div className="management-list-summary">{summary}</div>
   <div className="management-list-toolbar">{toolbar}</div>
   {panel&&<div className="management-list-panel">{panel}</div>}

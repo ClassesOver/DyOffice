@@ -41,7 +41,7 @@ import type {LocalSessionsClient} from '../../src/shell/local-sessions-client'
 test('sessions label the actual current session and require confirmation before revocation',async()=>{
  document.body.innerHTML='<div id="test"></div>'
  const root=createRoot(document.getElementById('test')!)
- const client={list:async()=>[{id:'self',current:true,createdAt:'2026-11-16T12:00:00Z',lastSeenAt:'2026-11-16T12:00:00Z',expiresAt:'2026-11-17T12:00:00Z'}]} as unknown as LocalSessionsClient
+ const client={listPage:async()=>({nextCursor:null,sessions:[{id:'self',current:true,createdAt:'2026-11-16T12:00:00Z',lastSeenAt:'2026-11-16T12:00:00Z',expiresAt:'2026-11-17T12:00:00Z'}]})} as unknown as LocalSessionsClient
  root.render(h(LocalSessionsPanel,{client,onCurrentRevoked:()=>{}}))
  try{
  await vi.waitFor(()=>expect(document.querySelector('li')).not.toBeNull())
