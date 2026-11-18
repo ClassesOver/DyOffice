@@ -1,3 +1,4 @@
+import { PHASED_APPEND } from './editor/streaming-tail-guard'
 import {createAnalysisSaveConsent} from '../../../../packages/browser-host/src/analysis-save-consent'
 import {docsAnalysisEditor} from './analysis-insert'
 import { usePageColorState } from './page-color-state'
@@ -1550,9 +1551,13 @@ export function App({ host }: { host?: { fileActions?: React.ReactNode; saveStat
     onSelectionUpdate: () => forceRender(),
     // typing in the main document takes ribbon routing back from any textbox
     onFocus: () => setActiveSubEditor(null),
-    onUpdate: () => {
-      host?.onDocumentEdited()
-      dirtyRef.current = true
+    onUpdate: ({ transaction }) => {
+      // Only marked document-load transactions are not user edits. Genuine
+      // edits remain dirty even while the rest of a phased open is pending.
+      if (!transaction.getMeta(PHASED_APPEND)) {
+        host?.onDocumentEdited()
+        dirtyRef.current = true
+      }
       forceRender()
     },
   })
