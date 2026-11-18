@@ -9,8 +9,11 @@ let directory,mountDocsEditor,act
 before(async()=>{
  directory=await mkdtemp(fileURLToPath(new URL('./.docs-download-entry-',import.meta.url)))
  const entry=fileURLToPath(new URL('../../src/editors/native-docs.tsx',import.meta.url))
+ // Keep the native host, bridge, notifications and download guards real. Only
+ // the heavyweight document renderer is a slot-consuming test double; this
+ // tests host actions, not Ribbon implementation or browser download transport.
  const mocks={
-  App:`import React,{useEffect} from 'react';export function App({host}){useEffect(()=>{globalThis.__docsDownloadTest.lifecycle=host.lifecycle;host.onEditorReady(globalThis.__docsDownloadTest.editor);host.lifecycle.documentOpened();return()=>host.onEditorReady(null)},[]);return null}`,
+  App:`import React,{useEffect,useState} from 'react';export function App({host}){const [open,setOpen]=useState(false);useEffect(()=>{globalThis.__docsDownloadTest.lifecycle=host.lifecycle;host.onEditorReady(globalThis.__docsDownloadTest.editor);host.lifecycle.documentOpened();return()=>host.onEditorReady(null)},[]);return React.createElement(React.Fragment,null,host.saveStatus,React.createElement('button',{'data-test-file-menu':true,onClick:()=>setOpen(!open)},'File'),open?React.createElement('div',{'data-test-file-actions':true},host.fileActions):null)}`,
   locale:'export const LocaleProvider=({children})=>children;export const setModuleLang=()=>{}',
   'author-name':'export const setAuthorName=()=>{}',
   ui:'export const applyAiPanelPrefs=()=>{};export const installScreenTips=()=>{}',
@@ -24,7 +27,7 @@ before(async()=>{
   b.onResolve({filter:/\/i18n\/locale$/},()=>({path:'locale',namespace:'stub'}))
   b.onResolve({filter:/\/author-name$/},()=>({path:'author-name',namespace:'stub'}))
   b.onResolve({filter:/^@genoffice\/ui$/},()=>({path:'ui',namespace:'stub'}))
-  b.onResolve({filter:/\/assistant\.tsx$/},()=>({path:'assistant',namespace:'stub'}))
+  b.onResolve({filter:/\/assistant(?:\.tsx)?$/},()=>({path:'assistant',namespace:'stub'}))
   b.onResolve({filter:/\/editor-realtime\.ts$/},()=>({path:'realtime',namespace:'stub'}))
   b.onResolve({filter:/\/analysis-document-target\.ts$/},()=>({path:'analysis',namespace:'stub'}))
   b.onLoad({filter:/.*/,namespace:'stub'},args=>({contents:mocks[args.path]??'',loader:'js',resolveDir:fileURLToPath(new URL('../../../../',import.meta.url))}))
@@ -44,6 +47,9 @@ async function fixture(t,{outcome='success',gate}={}){
  const control={editor:{getSelection:()=>null,serialize:async()=>null,isDirty:()=>dirty,async save(){await control.lifecycle.beforeSave();const result=await dom.window.desktop.saveDocx(`/files/${fileId}/a.docx`,new ArrayBuffer(2));dirty=outcome==='late-edit'||!result.ok;control.lifecycle.afterSave(result.ok&&outcome!=='late-edit');return result.ok}}}
  globalThis.__docsDownloadTest=control
  let mounted;await act(async()=>{mounted=await mountDocsEditor(host,dom.window.document.getElementById('editor'),fileId)})
+ assert.equal(dom.window.document.querySelector('.dyoffice-docs-save-download'),null,'host actions are hidden until the File slot is opened')
+ await act(async()=>{dom.window.document.querySelector('[data-test-file-menu]').click()})
+ assert.ok(dom.window.document.querySelector('.dyoffice-docs-save-download'),'renderer must expose the real host action')
  let disposed=false
  const dispose=async()=>{if(!disposed){disposed=true;await act(async()=>mounted.unload())}}
  t.after(async()=>{await dispose();dom.window.close();delete globalThis.__docsDownloadTest;for(const key of Object.keys(old)){if(old[key])Object.defineProperty(globalThis,key,old[key]);else delete globalThis[key]}})
@@ -53,7 +59,8 @@ for(const outcome of ['success','late-edit','unknown-before','unknown-after'])te
  const f=await fixture(t,{outcome})
  const historical=f.element.querySelector('a[download]')
  assert.equal(historical.textContent,'Download saved version');assert.ok(historical.href.endsWith(f.before.revision))
- assert.match(f.element.textContent,/may create a new version/)
+ assert.match(f.button.title,/may create a new version/)
+ assert.equal(f.button.disabled,outcome==='unknown-before')
  await act(async()=>{f.button.click()})
  if(outcome==='success'){assert.equal(f.downloads.length,1);assert.ok(f.downloads[0].endsWith(f.after.revision))}
  else assert.deepEqual(f.downloads,[])
