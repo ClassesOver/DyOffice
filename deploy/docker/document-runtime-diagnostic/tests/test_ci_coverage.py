@@ -31,6 +31,19 @@ class DiagnosticCICoverage(unittest.TestCase):
         self.assertNotIn('collect-evidence.py --', commands)
         self.assertIn('not Ubuntu/Docker isolation acceptance', commands)
 
+    def test_diagnostic_obeys_shared_runtime_lock_before_python_install(self):
+        steps = self.workflow()['jobs']['diagnostic-regression']['steps']
+        setup = [i for i, step in enumerate(steps) if step.get('uses', '').startswith('actions/setup-node@')]
+        self.assertEqual(len(setup), 1)
+        index = setup[0]
+        self.assertEqual(steps[index]['with']['node-version'], '22.23.5')
+        guard = steps[index + 1]
+        self.assertEqual(guard['run'], 'node tools/dyoffice/runtime-lock.mjs --runtime')
+        self.assertNotIn('if', guard)
+        self.assertNotIn('continue-on-error', guard)
+        install = next(i for i, step in enumerate(steps) if 'pip install' in step.get('run', ''))
+        self.assertLess(index + 1, install)
+
     def test_syntax_checks_are_real_commands(self):
         job = self.workflow()['jobs'].get('diagnostic-regression', {})
         commands = '\n'.join(s.get('run','') for s in job.get('steps',[]))
