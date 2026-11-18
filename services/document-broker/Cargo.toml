@@ -29,3 +29,6 @@ unsafe-test-harness = []
 name = "admission-fixture"
 path = "examples/admission-fixture.rs"
 required-features = ["unsafe-test-harness"]
+
+[dev-dependencies]
+tokio = { version = "=1.54.1", features = ["test-util"] }
