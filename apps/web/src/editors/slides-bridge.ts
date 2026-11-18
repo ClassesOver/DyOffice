@@ -430,13 +430,13 @@ export function createSlidesBridge(host: SessionFileHost, fileId: string, prefs:
     editBackground: graceful, editImageFill: graceful,
     editPictureSrcRect: graceful, editPictureOpacity: graceful,
     async changeShape(input) {
-      const raw = await applyOps([op('changeShape', {target: {slide: input.slideIndex, el: input.sourceId}, shape: input.prst, ...(input.groupId ? {group: input.groupId} : {})})])
+      const raw = await applyOps([op('setShapeGeometry', {target: {slide: input.slideIndex, el: input.sourceId}, prst: input.prst, ...(input.groupId ? {group: input.groupId} : {})})])
       if (!raw?.changed?.length) return null
       return await fetchSlide(raw.changed[0]!)
     },
     async setShapeAdjust(input) {
       if (input.preview) return null
-      const raw = await applyOps([op('setShapeAdjust', {target: {slide: input.slideIndex, el: input.sourceId}, adjustments: input.adjust, ...(input.groupId ? {group: input.groupId} : {})})])
+      const raw = await applyOps([op('setShapeAdjust', {target: {slide: input.slideIndex, el: input.sourceId}, adjust: input.adjust, ...(input.groupId ? {group: input.groupId} : {})})])
       if (!raw?.changed?.length) return null
       return await fetchSlide(raw.changed[0]!)
     },
@@ -447,7 +447,7 @@ export function createSlidesBridge(host: SessionFileHost, fileId: string, prefs:
       return await fetchSlide(raw.changed[0]!)
     },
     async setTextBodyProps(input) {
-      const raw = await applyOps([op('setTextBodyProps', {target: {slide: input.slideIndex, el: input.sourceId}, bodyPr: input.props})])
+      const raw = await applyOps([op('setTextBodyProps', {target: {slide: input.slideIndex, el: input.sourceId}, props: input.props})])
       if (!raw?.changed?.length) return null
       return await fetchSlide(raw.changed[0]!)
     },
@@ -476,57 +476,58 @@ export function createSlidesBridge(host: SessionFileHost, fileId: string, prefs:
       return await fetchSlide(raw.changed[0]!)
     },
     async tableStructure(input) {
-      const raw = await applyOps([op('tableStructure', {target: {slide: input.slideIndex, el: input.sourceId}, action: input.action, index: input.index})])
+      const raw = await applyOps([op('tableStructure', {target: {slide: input.slideIndex, el: input.sourceId}, kind: input.kind, index: input.index, ...(input.before !== undefined ? {before: input.before} : {})})])
       if (!raw?.changed?.length) return null
       return {slide: await fetchSlide(raw.changed[0]!), sourceId: raw.created?.[0] ?? input.sourceId}
     },
     async tableMerge(input) {
-      const raw = await applyOps([op('tableMerge', {target: {slide: input.slideIndex, el: input.sourceId}, kind: input.kind, row: input.row, col: input.col, ...(input.rowSpan !== undefined ? {rowSpan: input.rowSpan} : {}), ...(input.colSpan !== undefined ? {colSpan: input.colSpan} : {})})])
+      const raw = await applyOps([op('tableMerge', {target: {slide: input.slideIndex, el: input.sourceId}, kind: input.kind, row: input.row, col: input.col})])
       if (!raw?.changed?.length) return null
       return {slide: await fetchSlide(raw.changed[0]!), sourceId: raw.created?.[0] ?? input.sourceId}
     },
     async setTableColWidth(input) {
       const current = requireSession()
-      const widthEmu = Math.round(input.widthPx * (current.size.cx / Math.max(1, input.fitWidthPx)))
-      const raw = await applyOps([op('setTableColWidth', {target: {slide: input.slideIndex, el: input.sourceId}, col: input.col, widthEmu})])
+      const wEmu = Math.round(input.wPx * (current.size.cx / Math.max(1, input.fitWidthPx)))
+      const raw = await applyOps([op('setTableColWidth', {target: {slide: input.slideIndex, el: input.sourceId}, col: input.col, wEmu})])
       if (!raw?.changed?.length) return null
       return await fetchSlide(raw.changed[0]!)
     },
     async setTableRowHeight(input) {
       const current = requireSession()
-      const heightEmu = Math.round(input.heightPx * (current.size.cx / Math.max(1, input.fitWidthPx)))
-      const raw = await applyOps([op('setTableRowHeight', {target: {slide: input.slideIndex, el: input.sourceId}, row: input.row, heightEmu})])
+      const hEmu = Math.round(input.hPx * (current.size.cx / Math.max(1, input.fitWidthPx)))
+      const raw = await applyOps([op('setTableRowHeight', {target: {slide: input.slideIndex, el: input.sourceId}, row: input.row, hEmu})])
       if (!raw?.changed?.length) return null
       return await fetchSlide(raw.changed[0]!)
     },
     async setTableCellAnchor(input) {
-      const raw = await applyOps([op('setTableCellAnchor', {target: {slide: input.slideIndex, el: input.sourceId}, cells: input.cells, anchor: input.anchor})])
+      const raw = await applyOps([op('setTableCellAnchor', {target: {slide: input.slideIndex, el: input.sourceId}, row: input.row, col: input.col, anchor: input.anchor})])
       if (!raw?.changed?.length) return null
       return await fetchSlide(raw.changed[0]!)
     },
     async editTableStyle(input) {
-      const raw = await applyOps([op('setTableStyle', {target: {slide: input.slideIndex, el: input.sourceId}, patch: input.edit, ...(input.cells ? {cells: input.cells} : {})})])
+      const {slideIndex, sourceId, ...styleFields} = input
+      const raw = await applyOps([op('setTableStyle', {target: {slide: slideIndex, el: sourceId}, ...styleFields})])
       if (!raw?.changed?.length) return null
-      return {slide: await fetchSlide(raw.changed[0]!), sourceId: raw.created?.[0] ?? input.sourceId}
+      return {slide: await fetchSlide(raw.changed[0]!), sourceId: raw.created?.[0] ?? sourceId}
     },
     editChart: graceful, addComment: graceful, deleteComment: graceful,
     async setSlidesHidden(input) {
-      const ops = input.slideIndices.map(slide => op('setHidden', {target: {slide}, hidden: input.hidden}))
+      const ops = input.slideIndexes.map((slide: number) => op('setHidden', {target: {slide}, hidden: input.hidden}))
       const raw = await applyOps(ops)
-      if (!raw) return null
-      const deck = await fetchDeck()
-      return deck.slides
+      if (!raw?.changed?.length) return null
+      const slides = await Promise.all(raw.changed.map(index => fetchSlide(index)))
+      return {order: raw.order ?? [], slides}
     },
     async deleteSlides(input) {
-      const ops = [...input.slideIndices].sort((a, b) => b - a).map(slide => op('deleteSlide', {target: {slide}}))
+      const ops = [...input.slideIndexes].sort((a, b) => b - a).map((slide: number) => op('deleteSlide', {target: {slide}}))
       const raw = await applyOps(ops)
       if (!raw?.order) return null
       const deck = await fetchDeck()
       return {...slideUpdateFrom(raw.order, deck), sections: raw.sections ?? []}
     },
     async duplicateSlides(input) {
-      const sorted = [...input.slideIndices].sort((a, b) => a - b)
-      const ops = sorted.map((slide, idx) => op('duplicateSlide', {target: {slide: slide + idx}}))
+      const sorted = [...input.slideIndexes].sort((a, b) => a - b)
+      const ops = sorted.map((slide: number, idx: number) => op('duplicateSlide', {target: {slide: slide + idx}}))
       const raw = await applyOps(ops)
       if (!raw?.order) return null
       const deck = await fetchDeck()
