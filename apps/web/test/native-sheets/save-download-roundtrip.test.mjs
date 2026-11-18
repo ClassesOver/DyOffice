@@ -139,6 +139,93 @@ test('XLSX assistant reads recorded synthetic cells through a real provider', {t
   await verifyAssistant(t, await readReplay(), JSON.parse(await readFile(liveConfig, 'utf8')))
 })
 
+// Exercise the original Univer command/journal and UI save path, not desktopApi
+// injection. A10:T509 is 10,000 cells inside the default 1000x26 grid; U10
+// crosses the historical IPC threshold without changing dimensions or formulas.
+async function editBulkCells(page, oversized = false) {
+  await page.evaluate(async oversized => {
+    const sheet = window.__genofficeDebug.univerAPI.getActiveWorkbook().getActiveSheet()
+    const values = Array.from({length: 500}, (_, row) =>
+      Array.from({length: 20}, (_, column) => oversized ? '界'.repeat(150) : row * 20 + column + 1))
+    await sheet.getRange('A10:T509').setValues(values)
+    await sheet.getRange('U10').setValue('末尾-10001')
+  }, oversized)
+}
+
+async function assertBulkStillLive(page, oversized = false) {
+  assert.equal(await page.evaluate(oversized => {
+    const sheet = window.__genofficeDebug.univerAPI.getActiveWorkbook().getActiveSheet()
+    const values = sheet.getRange('A10:T509').getValues()
+    return values.length === 500 && values.every((row, r) => row.length === 20 &&
+      row.every((value, c) => value === (oversized ? '界'.repeat(150) : r * 20 + c + 1))) &&
+      sheet.getRange('U10').getValue() === '末尾-10001'
+  }, oversized), true, 'all 10001 edits must remain in the live workbook')
+}
+
+test('bulk 10001 cells save through the real editor, download and reopen with native bytes', {timeout: 120000}, async t => {
+  const f = await fixture(t)
+  const preparations = []
+  f.page.on('request', request => {
+    if (new URL(request.url()).pathname.endsWith('/sheets/uploads')) preparations.push(request.postDataJSON().request)
+  })
+  await editBulkCells(f.page)
+  await assertBulkStillLive(f.page)
+  await expect(f.page.locator('.qa-btn').first()).toBeEnabled()
+  const [download] = await Promise.all([
+    f.page.waitForEvent('download'),
+    saveAndDownload(f.page).click(),
+  ])
+  const bytes = await readFile(await download.path())
+  assert.equal(preparations.length, 1)
+  assert.equal(preparations[0].edits.length, 10001, 'the real save snapshot must cross the old IPC threshold')
+  assert.equal(preparations[0].editsTransferId, undefined)
+  const head = (await f.files.openFile(f.alice.token, f.opened.file.fileId)).file
+  assert.notEqual(head.revision, f.opened.file.revision)
+  assert.deepEqual(bytes, await f.files.readFile(f.alice.token, head.fileId, head.revision))
+  await expect(f.page.locator('.qa-btn').first()).toBeDisabled()
+  const zip = await JSZip.loadAsync(bytes, {checkCRC32: true})
+  const xml = await zip.file('xl/worksheets/sheet1.xml').async('string')
+  const cells = new Map([...xml.matchAll(/<c\b[^>]*\br="([^"]+)"[^>]*>([\s\S]*?)<\/c>/g)].map(match => [match[1], match[2]]))
+  for (let row = 0; row < 500; row++) for (let col = 0; col < 20; col++) {
+    assert.match(cells.get(`${String.fromCharCode(65 + col)}${row + 10}`) ?? '',
+      new RegExp(`<v>${row * 20 + col + 1}</v>`))
+  }
+  // Reopen the actual downloaded archive in the real native worker as well as
+  // a fresh renderer session. No recorded reader, provider replay or mock save.
+  const native = createXlsxNativeWorker(await sandboxFixture('native'))
+  const reopened = await native.readRange(bytes, 'Acceptance', {startRow: 9, endRow: 9, startColumn: 20, endColumn: 20})
+  assert.equal(reopened.cells.find(cell => cell.column === 20)?.value, '末尾-10001')
+  await f.page.reload()
+  await expect.poll(() => f.page.evaluate(() => window.__genofficeDebug?.univerAPI.getActiveWorkbook()?.getActiveSheet()?.getRange('A10').getValue()), {timeout: 30000}).toBe(1)
+  await expect(f.page.locator('.qa-btn').first()).toBeDisabled()
+})
+
+test('bulk 10001 cells over the UTF-8 limit remain unsaved without a download or revision', {timeout: 120000}, async t => {
+  const f = await fixture(t)
+  let preparations = 0, commits = 0, downloads = 0
+  f.page.on('request', request => {
+    const path = new URL(request.url()).pathname
+    if (path.endsWith('/sheets/uploads')) preparations++
+    if (path.endsWith('/commits')) commits++
+  })
+  f.page.on('download', () => downloads++)
+  // The text alone is 4,500,000 UTF-8 bytes, already above 4MiB, while
+  // each cell remains well below its individual string-size limit.
+  assert.ok(Buffer.byteLength('界'.repeat(150), 'utf8') * 10000 > 4 * 1024 * 1024)
+  await editBulkCells(f.page, true)
+  await assertBulkStillLive(f.page, true)
+  await saveAndDownload(f.page).click()
+  await expect(f.page.locator('.workbook-status').filter({hasText: 'Web save exceeds the request limit. Your edits are still unsaved; keep this page open and reduce the changes before retrying.'})).toBeVisible()
+  await expect(f.page.locator('.qa-btn').first()).toBeEnabled()
+  await assertBulkStillLive(f.page, true)
+  assert.equal(preparations, 0)
+  assert.equal(commits, 0)
+  assert.equal(downloads, 0)
+  const head = (await f.files.openFile(f.alice.token, f.opened.file.fileId)).file
+  assert.equal(head.revision, f.opened.file.revision)
+  assert.deepEqual(await f.files.readFile(f.alice.token, head.fileId, head.revision), f.original)
+})
+
 test('dirty download submits the latest editor snapshot and downloads those exact native bytes', { timeout: 120000 }, async t => {
   const f = await fixture(t)
   // No formula/chart debounce wait: the product must settle before capture.
