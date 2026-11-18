@@ -114,9 +114,13 @@ test('native DyOffice DOCX renders, edits, commits, refreshes and preserves unre
   assert.ok((await archive.file('word/document.xml').async('string')).includes('浏览器剪贴板'))
   assert.equal(await archive.file('customXml/dyoffice-preserve.xml').async('string'),'<probe>Untouched custom part</probe>')
   await expectCleanPersistence(f.page)
-  const pendingDownload = f.page.waitForEvent('download')
-  await f.page.getByRole('link',{ name: 'Download saved version' }).click()
-  const download = await pendingDownload
+  await f.page.getByRole('button',{ name: 'File',exact: true }).click()
+  const savedDownload = f.page.getByRole('link',{ name: 'Download saved version',exact: true })
+  await expect(savedDownload).toBeVisible()
+  const [download] = await Promise.all([
+    f.page.waitForEvent('download'),
+    savedDownload.click(),
+  ])
   assert.equal(download.suggestedFilename(),'native-roundtrip.docx')
   assert.deepEqual(await readFile(await download.path()),bytes)
   const history = await f.context.request.get(`${f.origin}/api/v1/files/${opened.file.fileId}/revisions`)
@@ -171,7 +175,7 @@ test('editing during a delayed native save keeps the newer draft dirty and saves
   const firstRef = await f.files.openFile(f.alice.token,f.opened.file.fileId)
   const firstZip = await JSZip.loadAsync(await f.files.readFile(f.alice.token,firstRef.file.fileId,firstRef.file.revision))
   assert.ok(!(await firstZip.file('word/document.xml').async('string')).includes('Newer unsaved draft'))
-  // The dirty label is already empty while the first commit response is held.
+  // The draft remains dirty while the first commit response is held.
   // Wait for that exact response and native settlement before observing save two.
   const firstResponse = f.page.waitForResponse(reply => reply.request() === firstRequest && reply.status() === 200)
   diagnostic.stage('release')
@@ -185,7 +189,8 @@ test('editing during a delayed native save keeps the newer draft dirty and saves
   diagnostic.stage('native-dirty')
   await expect(f.page.locator('.dyoffice-docs-persistence-state')).toHaveAttribute('data-dirty','true')
   diagnostic.stage('dirty-assert')
-  await expect(f.page.locator('.dyoffice-docs-persistence-state')).toHaveText('',{ timeout: 15_000 })
+  await expect(f.page.locator('.dyoffice-docs-persistence-state')).toHaveText('Unsaved',{ timeout: 15_000 })
+  await expect(f.page.locator('.dyoffice-docs-persistence-state')).toHaveAttribute('data-incomplete-reasons',/(^|,)document(,|$)/)
   await expect(editor).toContainText('Newer unsaved draft')
   diagnostic.stage('second-save-wait')
   const next = f.page.waitForResponse(reply => reply.url().endsWith('/commits') && reply.request().method() === 'POST' && reply.request() !== firstRequest && reply.status() === 200)
@@ -195,6 +200,7 @@ test('editing during a delayed native save keeps the newer draft dirty and saves
   assert.notEqual(current.file.revision,firstRef.file.revision)
   const currentZip = await JSZip.loadAsync(await f.files.readFile(f.alice.token,current.file.fileId,current.file.revision))
   assert.ok((await currentZip.file('word/document.xml').async('string')).includes('Newer unsaved draft'))
+  await expectCleanPersistence(f.page)
   diagnostic.stage('complete')
   } catch (error) { diagnostic.report(); throw error }
 })
@@ -287,7 +293,11 @@ test('page-color edits during a delayed native commit remain dirty and persist o
   await f.page.getByRole('button',{ name: 'Page Color',exact: true }).click()
   await f.page.getByRole('gridcell',{ name: 'Red',exact: true }).click()
   release()
-  await expect(f.page.locator('.dyoffice-docs-persistence-state')).toHaveText('')
+  const persistence = f.page.locator('.dyoffice-docs-persistence-state')
+  await expect(persistence).toHaveText('Unsaved')
+  await expect(persistence).toHaveAttribute('data-native-save','incomplete')
+  await expect(persistence).toHaveAttribute('data-dirty','true')
+  await expect(persistence).toHaveAttribute('data-incomplete-reasons',/(^|,)metadata:pageColorDirty(,|$)/)
   await expect(f.page.locator('.doc-zoom').first()).toHaveCSS('--page-bg','#FF0000')
   const next = f.page.waitForResponse(reply => reply.url().endsWith('/commits') && reply.status() === 200)
   await f.page.keyboard.press('Control+s'); await next
