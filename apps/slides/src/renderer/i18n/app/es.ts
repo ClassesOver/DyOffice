@@ -16,6 +16,7 @@ export const es = {
   appPhPromptBody: 'Haga clic para agregar texto',
   appStatusOpened: 'Se abrió {name} ({count} diapositivas)',
   appStatusNewBlank: 'Se creó una presentación en blanco',
+  appEditCommitPending: "Se está aplicando una edición. Vuelve a intentarlo en unos instantes.",
   appStatusSaved: 'Guardado',
   appStatusSaveFailed: 'Error al guardar: {error}',
   appErrorCanceled: 'Cancelado',

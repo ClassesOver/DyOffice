@@ -16,6 +16,7 @@ export const fr = {
   appPhPromptBody: 'Cliquez pour ajouter du texte',
   appStatusOpened: '{name} ouvert ({count} diapositives)',
   appStatusNewBlank: 'Nouvelle présentation vierge créée',
+  appEditCommitPending: "Une modification est en cours. Veuillez réessayer dans un instant.",
   appStatusSaved: 'Enregistré',
   appStatusSaveFailed: 'Échec de l’enregistrement : {error}',
   appErrorCanceled: 'Annulé',

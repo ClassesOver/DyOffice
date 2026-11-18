@@ -16,6 +16,7 @@ export const hi = {
   appPhPromptBody: 'टेक्स्ट जोड़ने के लिए क्लिक करें',
   appStatusOpened: '{name} खोला गया ({count} स्लाइड)',
   appStatusNewBlank: 'रिक्त प्रस्तुति बनाई गई',
+  appEditCommitPending: "संपादन अभी लागू किया जा रहा है। कृपया थोड़ी देर बाद फिर कोशिश करें।",
   appStatusSaved: 'सहेजा गया',
   appStatusSaveFailed: 'सहेजना विफल: {error}',
   appErrorCanceled: 'रद्द किया गया',

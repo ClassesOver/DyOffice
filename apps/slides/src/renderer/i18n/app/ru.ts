@@ -16,6 +16,7 @@ export const ru = {
   appPhPromptBody: 'Щелкните, чтобы добавить текст',
   appStatusOpened: 'Открыт файл {name} ({count} слайдов)',
   appStatusNewBlank: 'Создана пустая презентация',
+  appEditCommitPending: "Изменение ещё применяется. Повторите попытку чуть позже.",
   appStatusSaved: 'Сохранено',
   appStatusSaveFailed: 'Не удалось сохранить: {error}',
   appErrorCanceled: 'Отменено',

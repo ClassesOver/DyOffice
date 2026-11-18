@@ -24,13 +24,21 @@ import { showToast } from './components/toast-bus'
  * overlay commits (blur→commitEdit), and save only after the commit lands —
  * otherwise we save pre-edit content and get a dirty-close prompt again.
  */
-export async function flushActiveEdit(ctx: ActionCtx): Promise<void> {
+export async function flushActiveEdit(ctx: ActionCtx): Promise<boolean> {
   const active = document.activeElement as HTMLElement | null
-  if (!active?.isContentEditable) return
-  active.blur()
+  if (active?.isContentEditable) active.blur()
+  // A button click can move focus before the asynchronous blur commit finishes.
+  // The editing ref, not the currently focused node, owns the pending state.
   for (let i = 0; i < 40 && ctx.editingActiveRef.current; i++) {
     await new Promise((r) => setTimeout(r, 50))
   }
+  if (ctx.editingActiveRef.current) {
+    const pending = t('appEditCommitPending')
+    ctx.setStatus(pending)
+    showToast(pending, 'error')
+    return false
+  }
+  return true
 }
 
 /**
@@ -97,7 +105,7 @@ export async function save(getCtx: () => ActionCtx, quiet = false): Promise<bool
   return runSerialized(async () => {
     // resolved only now: a queued pass must remap selection against the tree the prior save adopted
     const ctx = getCtx()
-    await flushActiveEdit(ctx)
+    if (!await flushActiveEdit(ctx)) return false
     await ctx.flushNotes()
     // No name is proposed here: a save never waits on a model round-trip. An
     // untitled deck keeps the app's own name, the localized "Untitled
@@ -139,7 +147,7 @@ export async function nameWithAi(getCtx: () => ActionCtx): Promise<void> {
   const ctx = getCtx()
   // the model reads the deck, so an edit still being typed has to land first
   const editing = ctx.editingActiveRef.current
-  await flushActiveEdit(ctx)
+  if (!await flushActiveEdit(ctx)) return
   // that commit can replace the deck, so read it again rather than from the
   // snapshot taken before the flush
   const deck = editing ? getCtx() : ctx
@@ -159,7 +167,7 @@ export async function saveAsWithName(getCtx: () => ActionCtx, name: string | nul
   // the same main-process pipe and would interleave without it.
   await runSerialized(async () => {
     const ctx = getCtx()
-    await flushActiveEdit(ctx)
+    if (!await flushActiveEdit(ctx)) return
     await ctx.flushNotes()
     const target = name ?? (baseName(ctx.path ?? '') || 'presentation.pptx')
     const r = await window.slidesApi.saveAs(target)

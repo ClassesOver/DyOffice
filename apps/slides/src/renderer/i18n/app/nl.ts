@@ -16,6 +16,7 @@ export const nl = {
   appPhPromptBody: 'Klik om tekst toe te voegen',
   appStatusOpened: "{name} geopend ({count} dia's)",
   appStatusNewBlank: 'Lege presentatie gemaakt',
+  appEditCommitPending: "Een bewerking wordt nog toegepast. Probeer het zo opnieuw.",
   appStatusSaved: 'Opgeslagen',
   appStatusSaveFailed: 'Opslaan mislukt: {error}',
   appErrorCanceled: 'Geannuleerd',

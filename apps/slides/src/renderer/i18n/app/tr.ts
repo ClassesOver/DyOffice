@@ -16,6 +16,7 @@ export const tr = {
   appPhPromptBody: 'Metin eklemek için tıklayın',
   appStatusOpened: '{name} açıldı ({count} slayt)',
   appStatusNewBlank: 'Boş sunu oluşturuldu',
+  appEditCommitPending: "Düzenleme hâlâ uygulanıyor. Lütfen biraz sonra yeniden deneyin.",
   appStatusSaved: 'Kaydedildi',
   appStatusSaveFailed: 'Kaydetme başarısız: {error}',
   appErrorCanceled: 'İptal edildi',

@@ -22,7 +22,7 @@ vi.mock('../src/renderer/slide-actions', () => ({
   cutSlides: vi.fn(),
   deleteSlides: vi.fn(),
 }))
-vi.mock('../src/renderer/file-actions', () => ({ flushActiveEdit: vi.fn(async () => {}) }))
+vi.mock('../src/renderer/file-actions', () => ({ flushActiveEdit: vi.fn(async () => true) }))
 vi.mock('../src/renderer/arrange-actions', () => ({}))
 vi.mock('../src/renderer/show-actions', () => ({ startSlideShow: vi.fn() }))
 vi.mock('../src/renderer/style-actions', () => ({
@@ -626,6 +626,7 @@ describe('new slide shortcut', () => {
     const order: string[] = []
     vi.mocked(fileActions.flushActiveEdit).mockImplementationOnce(async () => {
       order.push('edit')
+      return true
     })
     const ctx = makeCtx({
       flushNotes: vi.fn(async () => {
@@ -1169,4 +1170,14 @@ describe('Enter / F2 on a selected text shape', () => {
     handleGlobalKeydown(field, key('F2'))
     expect(field.setEditing).not.toHaveBeenCalled()
   })
+})
+
+it('pending text commit blocks the new-slide shortcut without flushing notes or inserting', async () => {
+  vi.clearAllMocks(); document.body.innerHTML = ''
+  vi.mocked(fileActions.flushActiveEdit).mockResolvedValueOnce(false)
+  const ctx = makeCtx()
+  handleGlobalKeydown(ctx, keydown('N', {shiftKey: true}), 'MacIntel')
+  await new Promise(resolve => setTimeout(resolve, 0))
+  expect(ctx.flushNotes).not.toHaveBeenCalled()
+  expect(slideActions.addSlide).not.toHaveBeenCalled()
 })
