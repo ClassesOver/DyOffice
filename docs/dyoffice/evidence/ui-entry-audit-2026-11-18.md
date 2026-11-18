@@ -431,3 +431,11 @@
 - 最终构建Chromium1440/390各3流程通过：查询组合Enter不推进1/2索引、普通Enter推进2/2；替换组合Enter不改正文且保留草稿，普通Enter确实替换；定位组合Enter不改实际滚动和页码，普通Enter从第15页跳到第1页且editor-scroll归零。共6流程0页面异常，全部业务写mock/blocked；书签定位仅真实Editor组件验证，不计浏览器覆盖。证据 `/tmp/dyoffice-ui-audit/word-find-ime-goto-green-{1440,390}/report.json`。最初DOM文本选区反映面板焦点，不能作为编辑器定位指标；最终硬断言改为实际文档滚动位置及页码，没有放宽为“无异常即通过”。
 - 发布前再保留远端3a16202a的跨活动编辑器图片保护。合入后旧Ribbon源码执行测试未注入新导入别名guardPictureOperation而失败（10失败及1未处理拒绝），属于测试harness绑定过期；改为注入真实新helper，并在双Editor测试显式设置活动子编辑器、加入正常重置正对照，未改产品图片逻辑或放宽断言。最终输入法/查找/批注及图片相关5文件99项通过；日志 `/tmp/dyoffice-find-ime-merged-{tests,green,type,build}.log`。
 - 含3a16202a的最终合并构建Web docs类型/生产构建通过，边界1340文件0违规；1440/390查找/替换/定位六流程再次全部通过，0页面异常。最终浏览器日志 `/tmp/dyoffice-find-ime-final-browser-{1440,390}.log`，报告沿用上述goto-green路径。
+
+## 弹窗输入法候选取消 Escape
+
+- 正式Word插入→书签入口填草稿后派发isComposing Escape，复现弹窗关闭并丢失当前输入。红证据 `/tmp/dyoffice-ui-audit/word-modal-ime-escape-red-1440/report.json`。此处为合成信号，不等于实体IME键盘验证。
+- useModalKeys在根DOM capture监听compositionstart/end，按事件实际target使用既有createImeEnterGuard；兼容只传ref/onKeyDown的现有消费者，无需改各弹窗。组合Escape在React路径停止冒泡但不preventDefault、不关闭，保留候选取消默认行为；焦点在外fallback保护原生isComposing/229，普通Escape沿原逻辑关闭。WeakMap使卸载输入节点不污染重建节点。未改FindPanel/CommentsPanel等独立Escape逻辑，不将本次修复泛化为这些入口已修好。
+- 新增6项均先红后绿：内部原生/229/活动组合/结束同tick，外部原生/229；另1项验证组合中输入DOM移除重建后普通Escape可关闭。最终含弹窗Enter与键盘相关6文件75项通过，既有canvas提示保留；Web docs类型/生产构建通过（既有chunk提示），边界1340文件0违规、git diff --check通过。日志 `/tmp/dyoffice-modal-ime-escape-{red,final-tests,type,build}.log`。独立只读复核未发现阻塞；未将源码嵌套归属推断冒充嵌套IME专项端测。
+- 最终1440/390书签真实入口各依次验证原生isComposing、229、活动composition、compositionend同tick Escape：弹窗与草稿保留，未preventDefault，下一普通Escape关闭；两流程0页面异常。证据 `/tmp/dyoffice-ui-audit/word-modal-ime-escape-green-{1440,390}/report.json`。文档/lease mock，其余业务写阻止。
+- 发布前保留远端c05dea18会话分页提交，非重叠文件精确导入ff合入；客户端8项通过，未重跑其真实PG集成。用仓库provision-runtime补齐本地0033迁移/权限后服务HTTP200，没有创建/修改登录密码；合入后两尺寸上述浏览器再次通过。全量UI、独立面板Escape及实体输入法仍未验收完毕。

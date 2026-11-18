@@ -1,5 +1,6 @@
-import { useEffect, useRef } from 'react'
+import { useCallback, useEffect, useRef } from 'react'
 import type { KeyboardEvent as ReactKeyboardEvent } from 'react'
+import { createImeEnterGuard, type ImeEnterGuard } from '@genoffice/ui'
 
 const openModals: HTMLDivElement[] = []
 
@@ -12,6 +13,29 @@ const openModals: HTMLDivElement[] = []
  */
 export function useModalKeys(onClose: () => void) {
   const ref = useRef<HTMLDivElement>(null)
+  const imeGuards = useRef(new WeakMap<EventTarget, ImeEnterGuard>())
+  const imeFor = useCallback((target: EventTarget) => {
+    let guard = imeGuards.current.get(target)
+    if (!guard) {
+      guard = createImeEnterGuard()
+      imeGuards.current.set(target, guard)
+    }
+    return guard
+  }, [])
+
+  useEffect(() => {
+    const el = ref.current
+    if (!el) return
+    // 直接监听组合事件，兼容只接收 ref/onKeyDown 的现有弹窗。
+    const start = (e: Event) => { if (e.target) imeFor(e.target).handleCompositionStart() }
+    const end = (e: Event) => { if (e.target) imeFor(e.target).handleCompositionEnd() }
+    el.addEventListener('compositionstart', start, true)
+    el.addEventListener('compositionend', end, true)
+    return () => {
+      el.removeEventListener('compositionstart', start, true)
+      el.removeEventListener('compositionend', end, true)
+    }
+  }, [imeFor])
 
   useEffect(() => {
     const el = ref.current
@@ -36,19 +60,21 @@ export function useModalKeys(onClose: () => void) {
       if (openModals.at(-1) !== ref.current || !focusOutsideModal(ref.current)) return
       if (e.key === 'Tab') trapTab(ref.current, e)
       else if (e.key === 'Escape') {
+        if (imeFor(e.target ?? window).isImeConfirm(e)) return
         e.preventDefault()
         onClose()
       }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [onClose])
+  }, [onClose, imeFor])
 
   const onKeyDown = (e: ReactKeyboardEvent) => {
     if (openModals.at(-1) !== ref.current) return
     if (e.key === 'Escape') {
-      e.preventDefault()
       e.stopPropagation()
+      if (imeFor(e.target).isImeConfirm(e.nativeEvent)) return
+      e.preventDefault()
       onClose()
       return
     }
