@@ -18,6 +18,7 @@ test('same-name file import preserves existing content until explicit replacemen
  await upload(replacementFile())
  expect(writes).toBe(0);expect(body).toBe('existing Word instructions')
  expect(document.querySelector('[role="dialog"]')?.textContent).toContain('替换同名 Skill')
+ expect(document.querySelector('[role="dialog"]')?.classList.contains('settings-dialog-b')).toBe(true)
  await act(async()=>expect(guard!()).toBe(false))
  const reload=new Event('beforeunload',{cancelable:true});window.dispatchEvent(reload);expect(reload.defaultPrevented).toBe(true)
  await act(async()=>button('取消替换').click());expect(writes).toBe(0);expect(guard).toBeNull()
@@ -56,6 +57,7 @@ test('imports markdown through the real client and reads skill body only when vi
  expect(document.body.textContent).not.toContain('private skill body')
  await act(async()=>button('查看').click())
  expect(document.querySelector<HTMLTextAreaElement>('textarea[aria-label="Skill 内容"]')?.value).toBe('private skill body')
+ expect(document.querySelector('[role="dialog"]')?.classList.contains('settings-dialog-b')).toBe(true)
  await act(async()=>button('关闭').click())
  expect(document.querySelector('textarea[aria-label="Skill 内容"]')).toBeNull()
 })
@@ -72,6 +74,7 @@ test('unknown deletion is not repeated before an explicit list reconciliation',a
  let deletes=0,removed=false
  await mount(async(_path,method)=>{if(method==='DELETE'){deletes++;removed=true;throw Error('lost response')}return (removed?[]:[{name:'report',description:'Word 报告'}]) as never})
  await act(async()=>button('删除').click())
+ expect(document.querySelector('[role="dialog"]')?.classList.contains('settings-dialog-b')).toBe(true)
  expect(deletes).toBe(0)
  await act(async()=>button('确认删除').click())
  expect(deletes).toBe(1)

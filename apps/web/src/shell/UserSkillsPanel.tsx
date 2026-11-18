@@ -1,3 +1,4 @@
+import './settings-dialog-b.css'
 import './personal-skills-b.css'
 import {SettingsListPager} from './SettingsListPager'
 import {useEffect, useRef, useState} from 'react'
@@ -128,15 +129,15 @@ export function UserSkillsPanel({client,onCloseGuardChange}: {client: ReturnType
       {title:'操作',key:'actions',render:(_value: unknown, skill: FoundSkill) => <Space><Button autoInsertSpace={false} disabled={busy} onClick={() => void read(skill)}>查看</Button><Button autoInsertSpace={false} danger disabled={busy || uncertain} onClick={() => setRemoving(skill)}>删除</Button></Space>},
     ]}/>
     <SettingsListPager page={currentSkillPage} pageSize={6} total={skills.length} onPageChange={setSkillPage} label="个人技能" disabled={busy||uncertain||!!replacing||!!removing}/>
-    {view && <Modal title={`Skill：${view.name}`} open={true} destroyOnHidden onCancel={() => setView(null)} footer={<Button autoInsertSpace={false} onClick={() => setView(null)}>关闭</Button>}>
+    {view && <Modal className="settings-dialog-b" title={`Skill：${view.name}`} open={true} destroyOnHidden onCancel={() => setView(null)} footer={<Button autoInsertSpace={false} onClick={() => setView(null)}>关闭</Button>}>
       {view && <Input.TextArea aria-label="Skill 内容" value={view.body} readOnly rows={16}/>}
       {error && <Alert type="error" showIcon title={error}/>}
     </Modal>}
-    <Modal title="替换同名 Skill？" open={!!replacing} destroyOnHidden mask={{closable:false}} closable={!busy&&!uncertain} keyboard={!busy&&!uncertain} onCancel={()=>{if(!pending.current&&!uncertain)setReplacing(null)}} footer={<Space><Button autoInsertSpace={false} disabled={busy} onClick={()=>void refresh()}>刷新列表核对</Button><Button autoInsertSpace={false} disabled={busy||uncertain} onClick={()=>{setReplacing(null);setError('')}}>取消替换</Button><Button autoInsertSpace={false} danger type="primary" disabled={busy||uncertain} onClick={()=>{if(replacing){const draft=replacing;void mutate(()=>client.importText(draft.source,{overwrite:true}),'Skill 已替换。',()=>setReplacing(null))}}}>确认替换</Button></Space>}>
+    <Modal className="settings-dialog-b" title="替换同名 Skill？" open={!!replacing} destroyOnHidden mask={{closable:false}} closable={!busy&&!uncertain} keyboard={!busy&&!uncertain} onCancel={()=>{if(!pending.current&&!uncertain)setReplacing(null)}} footer={<Space><Button autoInsertSpace={false} disabled={busy} onClick={()=>void refresh()}>刷新列表核对</Button><Button autoInsertSpace={false} disabled={busy||uncertain} onClick={()=>{setReplacing(null);setError('')}}>取消替换</Button><Button autoInsertSpace={false} danger type="primary" disabled={busy||uncertain} onClick={()=>{if(replacing){const draft=replacing;void mutate(()=>client.importText(draft.source,{overwrite:true}),'Skill 已替换。',()=>setReplacing(null))}}}>确认替换</Button></Space>}>
       <Alert type="warning" showIcon title={`当前账号已有「${replacing?.name??''}」`} description="确认后将用所选 SKILL.md 的说明和正文替换已有内容，此操作无法撤销。取消会保留原技能。"/>
       {error&&<Alert type="error" showIcon title={error}/>}
     </Modal>
-    <Modal title="删除 Skill" open={!!removing} destroyOnHidden onCancel={() => setRemoving(null)} footer={<Space><Button autoInsertSpace={false} onClick={() => setRemoving(null)}>取消</Button><Button autoInsertSpace={false} danger type="primary" disabled={busy || uncertain} onClick={() => {if (removing) {const name = removing.name; void mutate(() => client.removeSkill(name), 'Skill 已删除。', () => setSkills(items => items.filter(skill => skill.name !== name)))}}}>确认删除</Button></Space>}>
+    <Modal className="settings-dialog-b" title="删除 Skill" open={!!removing} destroyOnHidden onCancel={() => setRemoving(null)} footer={<Space><Button autoInsertSpace={false} onClick={() => setRemoving(null)}>取消</Button><Button autoInsertSpace={false} danger type="primary" disabled={busy || uncertain} onClick={() => {if (removing) {const name = removing.name; void mutate(() => client.removeSkill(name), 'Skill 已删除。', () => setSkills(items => items.filter(skill => skill.name !== name)))}}}>确认删除</Button></Space>}>
       <p>确定从当前账号删除「{removing?.name}」？此操作无法撤销。</p>
     </Modal>
   </Card>

@@ -22,3 +22,21 @@ test('recycle bin retains failed restoration and prevents duplicate clicks until
  root.unmount()
 })
 
+test('permanent deletion uses the shared B dialog portal and cancel never mutates',async()=>{
+ const host=document.createElement('div');document.body.append(host)
+ const row={id:'file-a',name:'report.docx',format:'docx',size:12,updatedAt:'2026-01-01',starred:false,folderId:null,lastOpenedAt:null}
+ const request=vi.fn(async()=>({files:[row],total:1})),root=createRoot(host)
+ try{
+  root.render(h(WorkspaceTrash,{request:request as never,presentation:'page',onClose(){},onChanged(){}}))
+  await vi.waitFor(()=>expect(host.textContent).toContain('report.docx'))
+  ;([...host.querySelectorAll<HTMLButtonElement>('button')].find(b=>b.textContent==='永久删除')!).click()
+  await vi.waitFor(()=>expect(document.querySelector('[role=dialog]')).not.toBeNull())
+  const dialog=document.querySelector('[role=dialog]')!
+  expect(dialog.classList.contains('settings-dialog-b')).toBe(true)
+  expect(dialog.textContent).toContain('此操作无法恢复')
+  ;([...dialog.querySelectorAll<HTMLButtonElement>('button')].find(b=>b.textContent==='取消')!).click()
+  // AntD keeps the portal for its leave animation; verify closing starts.
+  await vi.waitFor(()=>expect(dialog.className).toContain('ant-zoom-leave'))
+  expect(request.mock.calls).toHaveLength(1)
+ }finally{root.unmount();host.remove()}
+})

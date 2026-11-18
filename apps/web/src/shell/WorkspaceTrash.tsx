@@ -1,3 +1,4 @@
+import './settings-dialog-b.css'
 import {Button,Alert,Empty,Input,Modal,Space,Tag,Typography} from 'antd'
 import {FileOutlined,ReloadOutlined,UndoOutlined} from '@ant-design/icons'
 import {useEffect,useRef,useState} from 'react'
@@ -60,7 +61,7 @@ export function WorkspaceTrash({request,onClose,onChanged,presentation='dialog',
    {title:'最后修改',dataIndex:'updatedAt',key:'updatedAt',width:180,render:(value:string)=><time dateTime={value}>{Number.isNaN(Date.parse(value))?'—':new Date(value).toLocaleString()}</time>},
    {title:'操作',key:'actions',width:210,render:(_value,file)=><Space><Button autoInsertSpace={false} icon={<UndoOutlined/>} disabled={busy||uncertain} onClick={()=>void mutate(file,'restore')}>恢复</Button><Button autoInsertSpace={false} type="text" danger disabled={busy||uncertain} onClick={()=>setPurging(file)}>永久删除</Button></Space>},
   ]}/>
-  <Modal title="永久删除文件？" open={!!purging} onCancel={()=>setPurging(null)} destroyOnHidden footer={<Space><Button autoInsertSpace={false} onClick={()=>setPurging(null)}>取消</Button><Button autoInsertSpace={false} danger type="primary" disabled={busy||uncertain} onClick={()=>{if(purging)void mutate(purging,'purge')}}>确认永久删除</Button></Space>}><Alert type="warning" showIcon title="此操作无法恢复" description={`将永久删除「${purging?.name??''}」及其历史版本。请确认已保存所需副本。`}/></Modal>
+  <Modal className="settings-dialog-b" title="永久删除文件？" open={!!purging} onCancel={()=>setPurging(null)} destroyOnHidden footer={<Space><Button autoInsertSpace={false} onClick={()=>setPurging(null)}>取消</Button><Button autoInsertSpace={false} danger type="primary" disabled={busy||uncertain} onClick={()=>{if(purging)void mutate(purging,'purge')}}>确认永久删除</Button></Space>}><Alert type="warning" showIcon title="此操作无法恢复" description={`将永久删除「${purging?.name??''}」及其历史版本。请确认已保存所需副本。`}/></Modal>
  </div>
  return <div className={presentation==='page'?'workspace-panel-host':'set-overlay'}><section className={presentation==='page'?'workspace-panel workspace-trash-panel':'set-dialog trash-dialog'} role={presentation==='page'?undefined:'dialog'} aria-modal={presentation==='page'?undefined:true} aria-label="回收站">
  {presentation==='dialog'&&<header className="set-header"><h2 className="set-title">回收站</h2><Button autoInsertSpace={false} disabled={busy} onClick={()=>{if(canClose())onClose()}}>关闭</Button></header>}
