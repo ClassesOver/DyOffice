@@ -86,3 +86,16 @@ test('B entry retains server modified sort, file search and returning to the sor
     expect([...host.querySelectorAll('.recent-name')].map(node=>node.textContent)).toEqual(['Newer.docx','Older.docx'])
   } finally {vi.useRealTimers()}
 })
+
+test('XLSX creation card is enabled only by the safe native capability and invokes the wired action', async () => {
+  const {localNewFormats,createLocalNewSheet}=await import('../../src/shell/local-new-sheet')
+  const opened=vi.fn(async()=>{})
+  const request=vi.fn(async(path:string)=>path==='/api/v1/capabilities'?{xlsx:'editable'}:path==='/api/v1/files/uploads'?{uploadId:'new-upload'}:path.endsWith('/finish')?{file:{fileId:'new-workbook'}}:undefined)
+  api.newSheet=createLocalNewSheet({getSessionProof:()=>'A'.repeat(43),bindSession:async()=>({request:request as any}),fetchTemplate:async()=>new Response('xlsx'),open:opened,changed:()=>{}})
+  await act(async()=>root.render(h(LocaleProvider,{initial:'en',children:h(Home,{supportedFormats:['docx','xlsx','pptx','pdf'],supportedNewFormats:localNewFormats({xlsx:'editable'})})})))
+  const cards=[...host.querySelectorAll<HTMLButtonElement>('.quick-card')]
+  expect(cards.map(card=>card.disabled)).toEqual([true,false,true,true,false])
+  await click(cards[1]);await vi.waitFor(()=>expect(opened).toHaveBeenCalledWith('new-workbook',request))
+  await act(async()=>root.render(h(LocaleProvider,{initial:'en',children:h(Home,{supportedFormats:['docx','xlsx','pptx','pdf'],supportedNewFormats:localNewFormats({xlsx:'unsupported'})})})))
+  expect(host.querySelectorAll<HTMLButtonElement>('.quick-card')[1].disabled).toBe(true)
+})
