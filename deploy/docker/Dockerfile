@@ -6,8 +6,9 @@ WORKDIR /app
 COPY . .
 RUN NPM_REGISTRY="${NPM_REGISTRY}" node deploy/docker/rewrite-lock.mjs \
  && npm ci --ignore-scripts --include=dev --registry="${NPM_REGISTRY}" \
- && npm run build:web && npm run build:web:docs \
+ && npm run build:saas \
  && mkdir -p /data/objects && chown node:node /data/objects
+# Asset availability does not enable native runtimes; their safety gates remain unchanged.
 # tsx is a runtime dependency of the existing start script, so dev deps are retained.
 USER node
 ENTRYPOINT ["sh", "/app/deploy/docker/entrypoint.sh"]

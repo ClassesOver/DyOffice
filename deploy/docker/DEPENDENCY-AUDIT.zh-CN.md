@@ -10,7 +10,7 @@
 |基础镜像|`NODE_IMAGE` / `POSTGRES_IMAGE` 由部署者提供已同步 SWR 地址|没有已验证的公共镜像或 digest。必须记录源镜像、平台、目标 SWR 的实际 `@sha256:…`，不得用伪造 digest 或浮动 tag 宣称可复现。|
 |APT|已有 `host/ubuntu-noble.sources.example` 保留 Ubuntu 官方签名 keyring|只是旧宿主配置示例，当前 Node bookworm-slim Dockerfile 不运行 APT；不能把 Ubuntu noble 源应用到 Debian bookworm。尚无 Ubuntu 容器依赖安装阶段。|
 |Rust/Cargo|旧模板留空/REPLACE，保留 Cargo.lock|没有经验证的华为 rustup 工具链、Cargo index 和 crate tarball 完整镜像，当前 Dockerfile 也不编译 Rust。不能只配置 index 就称为全华为。|
-|原生业务|当前 Dockerfile 只构建 Web 和 DOCX 静态资源|缺少正式 Ubuntu 容器内 zbus/systemd 业务运行时及真实集成验收；不启用 production 或 unsupported 格式。|
+|原生业务|Dockerfile 调用现有 `build:saas`：Web/PDF 页面、DOCX/XLSX/PPTX 静态资源及 XLSX gateway JavaScript bundle|这些构建产物不等于原生业务运行时。缺少正式 Ubuntu 容器内 zbus/systemd 业务运行时及真实集成验收；不启用 production 或 unsupported 格式。|
 
 ## npm 拒绝式校验
 
@@ -40,3 +40,12 @@ NPM_REGISTRY=https://repo.huaweicloud.com/repository/npm/ node deploy/docker/rew
 - `npm test` 在这个按文件提取的独立审计工作区被缺少 `tools/test/saas-entrypoints.test.mjs` 阻断，不能宣称全仓测试通过。
 - 2026-11-17 环境对华为 APT InRelease 请求返回 HTTP 200，但正文是 `Site Unavailable` HTML；npm tarball 与 Rust 目录 HEAD 也为 text/html。因此本轮无镜像可达/制品可用证据。
 - 未执行 Docker build/up、APT 安装、Cargo 在线镜像取件或离线重建；没有变更运行权限、安全 gate、数据库或镜像发布。
+
+
+## 四格式静态构建切片（非完整镜像验收）
+
+Dockerfile 复用根 `build:saas` 固定脚本顺序，不单独猜测编辑器命令：`build:web` → `build:web:docs` → `build:web:sheets` → `build:web:slides`。其中 sheets 脚本继续构建 `dist-sheets-server/gateway.mjs` 与 `gateway-process.mjs`。Docker 专用 ignore 排除宿主已有 `dist-sheets-server`，避免把旧的未验证 gateway bundle 当作镜像输入。
+
+构建上下文仍必须是仓库根；`COPY . .` 目标为 `/app`。运行时保留 `tsx` 所需 dev dependencies，继续 `npm ci --ignore-scripts --include=dev` 与原锁完整性校验，默认 npm 华为源未变。最终 `USER node` 与对象目录所有权配置不变；本切片不添加 root worker、privileged、Docker socket、XLSX/PPTX capability 或 production 开关。
+
+Node/PG 基础镜像仍由操作者在自己的 SWR 中固定真实 digest 与平台，当前配置没有自动验证其镜像内容/架构。Ubuntu noble APT 示例不得用于 Node bookworm 镜像；Rust/Cargo 镜像仍未验证，不在这次静态资源构建范围。即使 `build:saas` 成功，也不能证明 Rust binary、systemd/zbus、隔离 rootfs、Redis/S3/数据库、模型服务或四格式保存运行链已包含且可用。

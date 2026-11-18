@@ -56,3 +56,18 @@ test('required environment template is tracked for clean-clone secret generation
  assert.match(read('.env.example'),/^NODE_IMAGE=/m)
  assert.match(read('.env.example'),/^POSTGRES_IMAGE=/m)
 })
+
+test('container build includes all SaaS asset targets without enabling native runtimes',()=>{
+ const dockerfile=read('Dockerfile'),scripts=JSON.parse(readFileSync(join(root,'package.json'),'utf8')).scripts
+ assert.match(dockerfile,/npm run build:saas/)
+ assert.match(dockerfile,/^WORKDIR \/app$/m)
+ assert.match(dockerfile,/^COPY \. \.$/m)
+ assert.match(dockerfile,/^USER node$/m)
+ assert.match(dockerfile,/^FROM \$\{NODE_IMAGE\}$/m)
+ assert.match(dockerfile,/npm ci --ignore-scripts --include=dev --registry=/)
+ assert.match(dockerfile,/^ARG NPM_REGISTRY=https:\/\/repo\.huaweicloud\.com\/repository\/npm\/$/m)
+ for(const target of ['build:web','build:web:docs','build:web:sheets','build:web:slides'])assert.ok(scripts['build:saas'].split(' && ').includes('npm run '+target))
+ assert.doesNotMatch(dockerfile,/ENV\s+(?:NODE_ENV=production|DYOFFICE_NATIVE_(?:XLSX|PPTX)=)/)
+ assert.doesNotMatch(read('compose.yaml'),/DYOFFICE_NATIVE_(?:XLSX|PPTX):/)
+ assert.ok(read('Dockerfile.dockerignore').split('\n').includes('**/dist-sheets-server'),'do not copy unverified host-built gateway bundles')
+})
