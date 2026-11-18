@@ -1,3 +1,4 @@
+import {assertDocumentBackendPolicy} from '../../../../worker/src/sandbox/document-backend-policy.ts'
 import {resolve} from 'node:path'
 import {fileURLToPath} from 'node:url'
 import {open} from 'node:fs/promises'
@@ -24,6 +25,7 @@ async function executableHash(path:string,max:number){
 /** Explicit experimental startup only. All parsers run behind the existing
  * host isolation boundary, with shared shutdown cancellation and bounded slots. */
 export async function configuredSheetsRuntime(environment: NodeJS.ProcessEnv = process.env) {
+  assertDocumentBackendPolicy(environment)
   const flag=environment.DYOFFICE_NATIVE_XLSX
   if (!flag) return undefined
   if (flag!=='experimental' || environment.DYOFFICE_AUTH_MODE!=='local' || environment.NODE_ENV==='production') throw new Error('Native Sheets requires experimental local mode')
