@@ -2,6 +2,8 @@ import React,{useEffect,useRef,useState} from 'react'
 import {createAssistantClient} from '../../../../packages/browser-host/src/assistant'
 import type {SettingsRequest} from '../../../../packages/browser-host/src/preferences'
 import './home-assistant.css'
+import {prepareHomeHistory} from './home-assistant-history'
+const HOME_SYSTEM='You are the DyOffice home assistant. Answer questions in the user language. No document context, attachments, tools, or file operations are available in this chat.'
 type Bound={proof:string;request:SettingsRequest}
 type Assistant=Awaited<ReturnType<typeof createAssistantClient>>
 type Message={role:'user'|'assistant';text:string}
@@ -13,7 +15,7 @@ export function HomeAssistant({bind,fetchImpl=fetch,recovery=false}:{bind:()=>Pr
 }
 function Chat({bind,fetchImpl,onClose}:{bind:()=>Promise<Bound>;fetchImpl:typeof fetch;onClose:()=>void}){
  const [assistant,setAssistant]=useState<Assistant>(),[error,setError]=useState(''),[loading,setLoading]=useState(true),[retry,setRetry]=useState(0)
- const [messages,setMessages]=useState<Message[]>([]),[text,setText]=useState(''),[busy,setBusy]=useState(false),[model,setModel]=useState('')
+ const [messages,setMessages]=useState<Message[]>([]),[text,setText]=useState(''),[busy,setBusy]=useState(false),[model,setModel]=useState(''),[contextNotice,setContextNotice]=useState('')
  const active=useRef<{cancel():void}|undefined>(undefined),live=useRef(true),running=useRef(false)
  useEffect(()=>{
   let disposed=false;let current:Assistant|undefined;live.current=true
@@ -26,11 +28,15 @@ function Chat({bind,fetchImpl,onClose}:{bind:()=>Promise<Bound>;fetchImpl:typeof
  function send(){
   const value=text.trim();if(running.current||!value||!assistant?.available||!model)return
   if(new TextEncoder().encode(value).length>32*1024){setError('消息过长，请缩短后再发送。');return}
+  let prepared:ReturnType<typeof prepareHomeHistory>
+  try{prepared=prepareHomeHistory(messages,value,history=>assistant.requestBytes({system:HOME_SYSTEM,messages:history,tools:[]}))}
+  catch{setError('消息过长，请缩短后再发送。');return}
+  const history=prepared.messages
+  setContextNotice(prepared.truncated?'对话上下文已缩短：较早的完整交互已移出本次请求。':'')
   running.current=true;setBusy(true);setError('');setText('')
-  const history=[...messages.slice(-20),{role:'user' as const,text:value}]
   setMessages([...history,{role:'assistant',text:''}]);assistant.transport.beginRun?.()
   let done=false
-  const handle=assistant.transport.stream({system:'You are the DyOffice home assistant. Answer questions in the user language. No document context, attachments, tools, or file operations are available in this chat.',messages:history,tools:[]},{
+  const handle=assistant.transport.stream({system:HOME_SYSTEM,messages:history,tools:[]},{
    onDelta(delta){if(live.current)setMessages(rows=>rows.map((row,index)=>index===rows.length-1?{...row,text:row.text+delta}:row))},
    onToolCall(){throw Error('首页聊天不允许工具调用。')},
    onError(message){if(live.current)setError(message)},
@@ -51,10 +57,11 @@ function Chat({bind,fetchImpl,onClose}:{bind:()=>Promise<Bound>;fetchImpl:typeof
   <p>首页问答 · 不读取或修改文档。关闭后清空本次对话。</p>
   {loading&&<p role="status">正在检查会话和可用模型…</p>}
   {error&&<p role="alert">{error}</p>}
+  {contextNotice&&<p role="status">{contextNotice}</p>}
   {!loading&&!assistant&&<button onClick={()=>setRetry(n=>n+1)}>重试</button>}
   {assistant&&!assistant.available&&<><p role="status">没有可用模型。请在个人设置中检查模型配置、授权和调用额度；服务器也需启用模型网关。</p><button onClick={()=>setRetry(n=>n+1)}>重新检查</button></>}
   {assistant?.available&&<>
-   <label>模型<select aria-label="聊天模型" value={model} disabled={busy} onChange={e=>{assistant.select(e.target.value);setModel(e.target.value);setMessages([]);setError('')}}>{assistant.catalog.entries.map(entry=><option key={entry.id} value={entry.id}>{entry.label}</option>)}</select></label>
+   <label>模型<select aria-label="聊天模型" value={model} disabled={busy} onChange={e=>{assistant.select(e.target.value);setModel(e.target.value);setMessages([]);setError('');setContextNotice('')}}>{assistant.catalog.entries.map(entry=><option key={entry.id} value={entry.id}>{entry.label}</option>)}</select></label>
    <div className="home-assistant-messages" role="log" aria-label="对话记录">{messages.map((message,index)=><div key={index}><strong>{message.role==='user'?'你':'助手'}</strong><p>{message.text||'…'}</p></div>)}</div>
    <form onSubmit={event=>{event.preventDefault();send()}}><label>消息<textarea aria-label="消息" value={text} maxLength={32768} disabled={busy} onChange={event=>setText(event.target.value)}/></label><button type="submit" disabled={busy||!text.trim()||!model}>发送</button>{busy&&<button type="button" onClick={()=>active.current?.cancel()}>停止</button>}</form>
   </>}

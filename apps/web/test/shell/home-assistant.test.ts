@@ -162,3 +162,35 @@ it('account-key replacement clears the old chat and ignores its late response',a
  expect(document.querySelector('[role=log]')!.textContent).toBe('')
  expect(document.querySelector('textarea')!.value).toBe('')
 })
+
+it('keeps a long multi-turn conversation within the real provider request budget',async()=>{
+ const {buildOpenAiChatRequest}=await import('../../server/src/modules/providers/openai-request')
+ const f=fixture();let validTurns=0,rejections=0
+ const answer='答'.repeat(40000) // 120KB UTF-8, below the single-message and SSE-frame limits.
+ const send:typeof fetch=async(input,init)=>{
+  if(String(input)!=='/api/v1/ai/turns')return f.send(input,init)
+  const body=init!.body as string
+  try{
+   if(new TextEncoder().encode(body).length>1024*1024)throw Error('HTTP body limit')
+   buildOpenAiChatRequest(JSON.parse(body).request,{model:'synthetic',maxOutputTokens:32768})
+  }catch{rejections++;return new Response('too large',{status:413})}
+  validTurns++
+  return new Response(`event: delta\ndata: ${JSON.stringify({text:answer})}\n\nevent: done\ndata: {}\n\n`,{headers:{'content-type':'text/event-stream'}})
+ }
+ await render(React.createElement(HomeAssistant,{bind:f.bind,fetchImpl:send}));await click('AI 助手')
+ for(let i=0;i<10;i++){
+  await act(async()=>{const input=document.querySelector('textarea')!;Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value')!.set!.call(input,'question '+i);input.dispatchEvent(new Event('input',{bubbles:true}))})
+  await click('发送')
+ }
+ expect(rejections).toBe(0);expect(validTurns).toBe(10)
+ expect(document.body.textContent).toContain('对话上下文已缩短')
+})
+
+it('rejects an oversized multibyte latest input without dispatch or clearing the draft',async()=>{
+ const f=fixture();await render(React.createElement(HomeAssistant,{bind:f.bind,fetchImpl:f.send}));await click('AI 助手')
+ const draft='界'.repeat(10923)
+ await act(async()=>{const input=document.querySelector('textarea')!;Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value')!.set!.call(input,draft);input.dispatchEvent(new Event('input',{bubbles:true}))})
+ await click('发送');expect(document.querySelector('textarea')!.value).toBe(draft)
+ expect(f.requests.some(r=>r.url==='/api/v1/ai/turns')).toBe(false)
+ expect(document.querySelector('[role=alert]')!.textContent).toContain('消息过长')
+})
