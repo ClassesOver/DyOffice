@@ -58,8 +58,9 @@ fn validate(
 pub(super) async fn read(
     connection: &zbus::Connection,
     destination: &str,
-    expected: &str,
+    spec: &crate::launch_spec::LaunchSpec,
 ) -> Result<UnitBinding, ()> {
+    let expected = spec.unit();
     // No environment address, path synthesis, GetAll, or property cache.
     let manager: zbus::Proxy<'_> = zbus::proxy::Builder::new(connection)
         .destination(destination)
@@ -121,7 +122,9 @@ pub(super) async fn read(
     // Identity snapshots bracket both uncached configuration reads. This only
     // observes the manager's declared settings, never kernel enforcement.
     read_fixed_security(&service).await?;
+    read_resource_policy(&service, spec).await?;
     read_fixed_security(&service).await?;
+    read_resource_policy(&service, spec).await?;
     let second = snapshot(&unit, &service, path.as_str(), expected).await?;
     let final_path: OwnedObjectPath = manager
         .call("GetUnit", &(expected,))
@@ -131,6 +134,46 @@ pub(super) async fn read(
         return Err(());
     }
     Ok(first)
+}
+
+// Exact manager-declared values, not effective kernel limits or cleanup authority.
+// Derive expectations from the same private spec used for submission (including
+// test-only container probe overrides), never from caller-provided properties.
+async fn read_resource_policy(
+    service: &zbus::Proxy<'_>,
+    spec: &crate::launch_spec::LaunchSpec,
+) -> Result<(), ()> {
+    let properties = spec.properties();
+    let expected = |name: &str| {
+        let mut found = properties.iter().filter(|(key, _)| key == name);
+        let value = &found.next().ok_or(())?.1;
+        if found.next().is_some() {
+            return Err(());
+        }
+        Ok(value)
+    };
+    for name in [
+        "MemoryMax",
+        "MemorySwapMax",
+        "TasksMax",
+        "CPUQuotaPerSecUSec",
+        "RuntimeMaxUSec",
+        "TimeoutStopUSec",
+    ] {
+        let actual: u64 = service.get_property(name).await.map_err(|_| ())?;
+        if actual != u64::try_from(expected(name)?).map_err(|_| ())? {
+            return Err(());
+        }
+    }
+    let mask: u32 = service.get_property("UMask").await.map_err(|_| ())?;
+    if mask != u32::try_from(expected("UMask")?).map_err(|_| ())? {
+        return Err(());
+    }
+    let mode: String = service.get_property("KillMode").await.map_err(|_| ())?;
+    if mode != <&str>::try_from(expected("KillMode")?).map_err(|_| ())? {
+        return Err(());
+    }
+    Ok(())
 }
 
 // systemd v255 Service interface / dbus-execute.c exec-context vtable.
@@ -195,5 +238,79 @@ mod tests {
         assert!(validate(PATH, "x.service", "y.service", vec![1; 16], "/a/b").is_err());
         assert!(validate("/arbitrary", "x.service", "x.service", vec![1; 16], "/a/b").is_err());
         assert!(validate(PATH, "x.service", "x.service", vec![1; 16], "/a/b").is_ok());
+    }
+    struct ProbeResources;
+    #[zbus::interface(name = "org.freedesktop.systemd1.Service")]
+    impl ProbeResources {
+        #[zbus(property)]
+        fn memory_max(&self) -> u64 {
+            64_000_000
+        }
+        #[zbus(property)]
+        fn memory_swap_max(&self) -> u64 {
+            0
+        }
+        #[zbus(property)]
+        fn tasks_max(&self) -> u64 {
+            8
+        }
+        #[zbus(property, name = "CPUQuotaPerSecUSec")]
+        fn cpu(&self) -> u64 {
+            1_000_000
+        }
+        #[zbus(property, name = "RuntimeMaxUSec")]
+        fn runtime(&self) -> u64 {
+            2_000_000
+        }
+        #[zbus(property, name = "TimeoutStopUSec")]
+        fn stop(&self) -> u64 {
+            5_000_000
+        }
+        #[zbus(property, name = "UMask")]
+        fn mask(&self) -> u32 {
+            63
+        }
+        #[zbus(property)]
+        fn kill_mode(&self) -> &str {
+            "control-group"
+        }
+    }
+    #[tokio::test]
+    async fn probe_budget_is_read_from_its_spec_not_default_fixture() {
+        use zbus::connection::Builder;
+        let (s, c) = tokio::net::UnixStream::pair().unwrap();
+        let guid = zbus::Guid::generate();
+        let server = Builder::unix_stream(s)
+            .server(guid)
+            .unwrap()
+            .p2p()
+            .serve_at(PATH, ProbeResources)
+            .unwrap()
+            .build();
+        let client = Builder::unix_stream(c).p2p().build();
+        let (server, client) = tokio::join!(server, client);
+        let _server = server.unwrap();
+        let client = client.unwrap();
+        let service: zbus::Proxy<'_> = zbus::proxy::Builder::new(&client)
+            .destination("org.freedesktop.systemd1")
+            .unwrap()
+            .path(PATH)
+            .unwrap()
+            .interface("org.freedesktop.systemd1.Service")
+            .unwrap()
+            .cache_properties(CacheProperties::No)
+            .build()
+            .await
+            .unwrap();
+        assert!(
+            read_resource_policy(&service, &crate::launch_spec::LaunchSpec::container_probe())
+                .await
+                .is_ok()
+        );
+        assert!(
+            read_resource_policy(&service, &crate::launch_spec::LaunchSpec::fixture())
+                .await
+                .is_err()
+        );
     }
 }

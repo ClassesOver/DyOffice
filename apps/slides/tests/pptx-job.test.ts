@@ -14,6 +14,33 @@ async function fixture(){
 }
 const request=(id:string)=>JSON.stringify({version:1,action:'setText',ops:[{op:'setText',target:{slide:0,el:id},paragraphs:[{runs:[{text:'after'}]}]}]})
 describe('private one-shot PPTX job protocol',()=>{
+ it('reopens a saved output for a second edit without losing text, formatting or unrelated parts',async()=>{
+  const {bytes,id}=await fixture(),original=await JSZip.loadAsync(bytes)
+  let current=bytes
+  const edits=[
+   [{runs:[{text:'第一轮 <&> 😀',bold:true}]},{runs:[{text:'second paragraph',italic:true}]}],
+   [{runs:[{text:'再次保存 <&> 😀',bold:true}]},{runs:[{text:'',italic:true}]}],
+  ]
+  for(const paragraphs of edits){
+   // A new processor models a later independent job, not a retained session.
+   const output=await createPptxJobProcessor().execute(current,JSON.stringify({version:1,action:'setText',ops:[{op:'setText',target:{slide:0,el:id},paragraphs}]}))
+   expect(output.localGeneration).toBe(1)
+   expect(output.sha256).toBe(createHash('sha256').update(output.bytes).digest('hex'))
+   const reopened=await openPptx(output.bytes)
+   const element=reopened.deck.slides[0]!.elements.find(e=>elementDurableId(e)===id)
+   if(!element || !('text' in element))throw new Error('Saved text element missing')
+   expect(element.text!.paragraphs.map(p=>p.runs.map(r=>r.text).join(''))).toEqual(paragraphs.map(p=>p.runs.map(r=>r.text).join('')))
+   expect(element.text!.paragraphs[0]!.runs[0]!.bold).toBe(true)
+   const saved=await JSZip.loadAsync(output.bytes)
+   const names=Object.keys(original.files).filter(n=>!original.files[n]!.dir).sort()
+   expect(Object.keys(saved.files).filter(n=>!saved.files[n]!.dir).sort()).toEqual(names)
+   for(const name of names){
+    if(name==='ppt/slides/slide1.xml')continue
+    expect(await saved.files[name]!.async('uint8array'),name).toEqual(await original.files[name]!.async('uint8array'))
+   }
+   current=output.bytes
+  }
+ })
  it('returns reopened native output and digest without durable save acknowledgement',async()=>{
   const {bytes,id}=await fixture(), job=createPptxJobProcessor()
   const result=await job.execute(bytes,request(id))

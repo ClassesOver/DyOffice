@@ -41,3 +41,8 @@ mod container_probe;
 
 #[allow(dead_code)]
 mod unit_binding;
+
+// Private input binding; no production admission or launch capability.
+#[cfg(target_os = "linux")]
+#[allow(dead_code)]
+mod bound_input;
