@@ -2112,7 +2112,8 @@ export function App({ host }: { host?: { fileActions?: React.ReactNode; saveStat
   // StreamingTailGuardExtension; saves wait for the full content).
   useEffect(() => {
     if (!editor) return
-    editor.setEditable(!readMode && !isProtected)
+    // Permission and view-mode changes are not document edits.
+    editor.setEditable(!readMode && !isProtected, false)
     if (!readMode) return
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') setReadMode(false)
