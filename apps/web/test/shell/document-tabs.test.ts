@@ -179,3 +179,18 @@ test('requests reserved during a confirmed close stay cancelled but a later expl
  tabs.open(a,pending);expect(tabs.documents()).toHaveLength(0)
  tabs.open(a,tabs.reserveOpen(a.id));expect(tabs.documents()).toEqual([a])
 })
+
+test('restored entries mount only selected document and dormant close does not need an editor guard',async()=>{
+ const tabs=createDocumentTabs()
+ tabs.restoreEntries([a,b],b.id)
+ expect(tabs.list().map(t=>t.id)).toEqual(['home',a.id,b.id])
+ expect(tabs.renderedDocuments()).toEqual([b])
+ expect(await tabs.close(a.id)).toBe(true)
+ expect(await tabs.close(b.id)).toBe(false)
+})
+test('activating a restored entry retains already mounted editors and does not reset existing close guards',async()=>{
+ const tabs=createDocumentTabs();tabs.restoreEntries([a,b],a.id)
+ tabs.setGuard(a.id,()=>false);tabs.activate(b.id)
+ expect(tabs.renderedDocuments()).toEqual([a,b]);expect(await tabs.close(a.id)).toBe(false)
+ expect(()=>tabs.restoreEntries([b],'home')).toThrow()
+})

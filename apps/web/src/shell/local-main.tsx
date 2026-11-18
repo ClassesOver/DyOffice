@@ -40,6 +40,9 @@ const workspacePages={settings:'个人设置',trash:'回收站',sources:'数据�
 type WorkspacePage=keyof typeof workspacePages
 import {AccountMenu} from './AccountMenu'
 import {createDocumentTabs,type DocumentFormat} from './document-tabs'
+import {resolvedDocument,readOpenDocument} from './document-entry-reader'
+import {createEntryNavigator} from './workspace-entry-navigation'
+import {createEntryRecovery,entryHash,parseEntryHash,resolveEntrySnapshot} from './workspace-entry-recovery'
 import {DocumentFrame} from './DocumentFrame'
 import {DocumentPreview} from './DocumentPreview'
 import './workspace-shell.css'
@@ -65,15 +68,20 @@ let showUpload=(_files:File[]=[])=>{}
 let capabilities:Record<string,string>={}
 let showChromeMenu=(kind:'app'|'new'|'tabs'|'tab',x:number,y:number,id?:string)=>{}
 const documentTabs=createDocumentTabs()
+let entryRecovery:ReturnType<typeof createEntryRecovery>|undefined
+let entryRecoveryNotice=''
+async function resolveOpenDocument(id:string){
+ // Capture the authenticated workspace, not a mutable cookie-only client. The
+ // bound reader rechecks session proof after each request, including other tabs.
+ const workspace=sourceWorkspace
+ if(!workspace)throw new Error('请先核对登录状态。')
+ const document=await readOpenDocument(workspace,capabilities,id)
+ notifyFilesChanged()
+ return document
+}
 async function open(id:string){
  const token=documentTabs.reserveOpen(id)
- const result=await client.request<{name:string;format:string;file:{fileId:string;revision:string};downloadEndpoint:string}>(`/api/v1/files/${encodeURIComponent(id)}`)
- if(result.file.fileId!==id)throw new Error('文件标识不匹配。')
- await client.request(`/api/v1/workspace/files/${encodeURIComponent(id)}/open`,'POST')
- notifyFilesChanged()
- if(!['docx','xlsx','pptx','pdf'].includes(result.format)||typeof result.file.revision!=='string'||!result.file.revision||result.downloadEndpoint!==`/api/v1/files/${encodeURIComponent(id)}/content?revision=${encodeURIComponent(result.file.revision)}`)throw new Error('文件格式或下载地址无效。')
- const native=result.format!=='pdf'&&capabilities[result.format]==='editable'
- documentTabs.open({id,name:result.name,format:result.format as DocumentFormat,src:native?`/native-${result.format}/?fileId=${encodeURIComponent(id)}`:result.downloadEndpoint},token)
+ documentTabs.open(await resolveOpenDocument(id),token)
 }
 let busy=false
 async function upload(file:File){if(busy)throw new Error('正在导入，请稍候');if(!/\.(docx|xlsx|pptx|pdf)$/i.test(file.name))throw new Error('请选择 DOCX、XLSX、PPTX 或 PDF 文件。');busy=true;try{const result=await client.upload(file);try{await open(result.file.fileId)}catch{notifyFilesChanged();throw new Error('文件已上传，但打开失败。请从最近文件中打开，不要重复上传。')}}finally{busy=false}}
@@ -87,22 +95,34 @@ function installBridge(){
 async function restore(){
  const workspace=await createSourceWorkspaceSession(client)
  const bound=workspace.bound
- const identity=await bound.request<{user:User}>('/api/v1/auth/me')
+ const identity=await bound.request<{user:User;deploymentId?:string}>('/api/v1/auth/me')
  preferenceSession.bind(bound)
  const personal=await preferences.getPreferences()
  const catalog=await bound.request<Record<string,string>>('/api/v1/capabilities')
  user=identity.user;capabilities=catalog;initialLanguage=personal.language==='en'?'en':'zh';userSkills=createUserSkillsClient(bound.request);sourceWorkspace=workspace
  if(personal.theme==='system')delete document.documentElement.dataset.theme;else document.documentElement.dataset.theme=personal.theme
+ // Only authenticated identity may select a storage namespace. Legacy servers
+ // without a deployment identity safely skip entry restoration.
+ if(identity.deploymentId && !documentTabs.documents().length){
+  let storage:Storage|undefined;try{storage=window.sessionStorage}catch{}
+  entryRecovery=storage?createEntryRecovery(storage,identity.deploymentId,user.id):undefined
+  const restored=await resolveEntrySnapshot(entryRecovery?.read()??{ids:[],active:'home'},parseEntryHash(location.hash),async id=>resolvedDocument(capabilities,id,await bound.request(`/api/v1/files/${encodeURIComponent(id)}`)))
+  documentTabs.restoreEntries(restored.entries,restored.active)
+  entryRecoveryNotice=restored.failed?'部分文档入口无法恢复，请从最近文件重新打开。未保存内容不会由入口恢复。':''
+  history.replaceState(null,'',entryHash(restored.active))
+ }
  installBridge()
 }
 async function logout(){
  const editors=[...document.querySelectorAll<HTMLIFrameElement>('.workspace-document-frame')].map(frame=>({id:frame.dataset.documentId!,api:frame.contentWindow as unknown as {dyofficeEditorCanClose?:()=>Promise<boolean>;dyofficeEditorDispose?:()=>Promise<boolean>}|null}))
  for(const editor of editors)if(!editor.api?.dyofficeEditorCanClose||!await editor.api.dyofficeEditorCanClose())return
+ // Avoid activating a dormant neighbor while disposing for logout.
+ documentTabs.activate('home')
  for(const editor of editors){
   if(!editor.api?.dyofficeEditorDispose||!await editor.api.dyofficeEditorDispose())return
   await documentTabs.close(editor.id)
  }
- await client.logout();location.replace('/')
+ await client.logout();entryRecovery?.clear();location.replace('/')
 }
 function WorkspacePageContent({page,onClose,onCloseGuardChange,settingsTab,onSettingsTabChange}:{settingsTab?:string;onSettingsTabChange?:(tab:string)=>void;page:WorkspacePage;onClose:()=>void;onCloseGuardChange:(guard:(()=>boolean)|null)=>void}){
  const [sessionVersion,setSessionVersion]=useState(0)
@@ -126,13 +146,24 @@ function WorkspacePageContent({page,onClose,onCloseGuardChange,settingsTab,onSet
 function Account({onOpen}:{onOpen:(page:WorkspacePage)=>void}){return <div className="account-entry">{user&&<AccountMenu user={user} onSettings={()=>onOpen('settings')} onTrash={()=>onOpen('trash')} onSources={()=>onOpen('sources')} onGlobalSettings={()=>onOpen('global')} onUsers={()=>onOpen('users')} onLogout={()=>void logout().catch(e=>notice(e.message))}/>}</div>}
 
 function Shell({recovery=false}:{recovery?:boolean}){
- const [message,setMessage]=useState(''),[page,setPage]=useState<WorkspacePage|null>(null)
+ const [message,setMessage]=useState(entryRecoveryNotice),[page,setPage]=useState<WorkspacePage|null>(null)
  const [tabs,setTabs]=useState(documentTabs.list())
  const [uploadFiles,setUploadFiles]=useState<File[]|null>(null)
  showUpload=files=>setUploadFiles(files??[])
  const [chromeMenu,setChromeMenu]=useState<{kind:'app'|'new'|'tabs'|'tab';x:number;y:number;id?:string}|null>(null)
  showChromeMenu=(kind,x,y,id)=>setChromeMenu({kind,x,y,id})
- useEffect(()=>documentTabs.subscribe(setTabs),[])
+ const routeNavigation=useRef(false)
+ useEffect(()=>{
+  const changed=(next:ReturnType<typeof documentTabs.list>)=>{
+   setTabs(next)
+   const active=next.find(tab=>tab.active)?.id??'home'
+   entryRecovery?.save(next.filter(tab=>tab.id!=='home').map(tab=>tab.id),active)
+   const hash=entryHash(active)
+   if(location.hash!==hash)history[routeNavigation.current?'replaceState':'pushState'](null,'',hash)
+  }
+  changed(documentTabs.list())
+  return documentTabs.subscribe(changed)
+ },[])
  useEffect(()=>{
   const dragover=(event:DragEvent)=>{if(event.dataTransfer?.types.includes('Files'))event.preventDefault()}
   const drop=(event:DragEvent)=>{if(event.target instanceof Element&&event.target.closest('.workspace-upload-modal'))return;const files=[...(event.dataTransfer?.files??[])];if(!files.length)return;event.preventDefault();if(!document.querySelector('.workspace-upload-modal'))showUpload(files)}
@@ -143,6 +174,15 @@ function Shell({recovery=false}:{recovery?:boolean}){
  const registerGuard=useCallback((guard:(()=>boolean)|null)=>{closeGuard.current=guard},[])
  const [settingsTab,setSettingsTab]=useState('account')
  useEffect(()=>{if(page!=='settings')setSettingsTab('account')},[page])
+ useEffect(()=>{
+  const navigation=createEntryNavigator({tabs:documentTabs,resolve:resolveOpenDocument,
+   allow:()=>!recoveryBlocked.current&&closeGuard.current?.()!==false,
+   onStart:()=>setPage(null),onError:error=>setMessage((error as Error).message),
+   replace:id=>history.replaceState(null,'',entryHash(id)),markRouting:value=>{routeNavigation.current=value}})
+  const navigate=()=>{void navigation.navigate(parseEntryHash(location.hash)??'home')}
+  window.addEventListener('hashchange',navigate)
+  return()=>{navigation.dispose();window.removeEventListener('hashchange',navigate)}
+ },[])
  const activePage=useRef(page),recoveryBlocked=useRef(recovery)
  activePage.current=page;recoveryBlocked.current=recovery
  useEffect(()=>client.onSessionEnded(()=>{recoveryBlocked.current=true}),[])
@@ -164,7 +204,7 @@ function Shell({recovery=false}:{recovery?:boolean}){
  const close=()=>{if(closeGuard.current?.()===false)return;setPage(null)}
  notice=setMessage;showTrash=()=>setPage('trash')
  return <>
-  <AppFrame hideAppMenu hideSingleTabList initialOnboardingSeen={true} homeProps={{capabilities:{localFolders:false,copyPath:false,duplicateFile:false,starredGroups:false,cloudProjects:false,semanticRanking:false,serverFileSort:true},supportedFormats:['docx','xlsx','pptx','pdf'],supportedNewFormats:capabilities.docx==='editable'?['docx']:[],accountEntry:<Account onOpen={setPage}/>,folderDeleteDescription:name=>`仅可删除空文件夹「${name}」。请先移出文件和子文件夹；回收站中仍属于此目录的文件需先恢复并移出。`}} editorContent={<>{documentTabs.documents().map(file=><div key={file.id} className="workspace-document" hidden={!tabs.find(tab=>tab.id===file.id)?.active}>{file.src.startsWith('/native-')?<DocumentFrame file={file} registerGuard={documentTabs.setGuard}/>:<DocumentPreview fileId={file.id} name={file.name} format={file.format} request={client.request}/>}</div>)}</>}/>
+  <AppFrame hideAppMenu hideSingleTabList initialOnboardingSeen={true} homeProps={{capabilities:{localFolders:false,copyPath:false,duplicateFile:false,starredGroups:false,cloudProjects:false,semanticRanking:false,serverFileSort:true},supportedFormats:['docx','xlsx','pptx','pdf'],supportedNewFormats:capabilities.docx==='editable'?['docx']:[],accountEntry:<Account onOpen={setPage}/>,folderDeleteDescription:name=>`仅可删除空文件夹「${name}」。请先移出文件和子文件夹；回收站中仍属于此目录的文件需先恢复并移出。`}} editorContent={<>{documentTabs.renderedDocuments().map(file=><div key={file.id} className="workspace-document" hidden={!tabs.find(tab=>tab.id===file.id)?.active}>{file.src.startsWith('/native-')?<DocumentFrame file={file} registerGuard={documentTabs.setGuard}/>:<DocumentPreview fileId={file.id} name={file.name} format={file.format} request={client.request}/>}</div>)}</>}/>
   <Modal open={page!==null} title={page?workspacePages[page]:undefined} onCancel={close} footer={null} width={1120} centered destroyOnHidden maskClosable={false} className="workspace-config-modal">
    {page&&<WorkspacePageContent key={page} page={page} settingsTab={settingsTab} onSettingsTabChange={setSettingsTab} onClose={()=>setPage(null)} onCloseGuardChange={registerGuard}/>}
   </Modal>

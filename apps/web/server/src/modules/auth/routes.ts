@@ -33,7 +33,7 @@ export function registerAuthRoutes(app: FastifyInstance, { sessions, csrf, throt
   })
   app.get('/api/v1/auth/me', async request => {
     const principal = await sessions.authenticate(cookies(request).session ?? '')
-    return { user: { id: principal.userId, username: principal.username, displayName: principal.displayName, roles: principal.roles } }
+    return { deploymentId: principal.deploymentId, user: { id: principal.userId, username: principal.username, displayName: principal.displayName, roles: principal.roles } }
   })
   app.get('/api/v1/auth/session-proof', async request => {
     csrf.originCheck(request, false)

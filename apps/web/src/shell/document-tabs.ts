@@ -8,6 +8,7 @@ const kinds: Record<DocumentFormat, TabSummary['kind']> = {docx:'docs',xlsx:'she
 
 export function createDocumentTabs() {
   const documents: DocumentTab[] = []
+  const mounted = new Set<string>()
   const listeners = new Set<(tabs: TabSummary[]) => void>()
   const guards = new Map<string, DocumentCloseGuard>()
   const closing = new Map<string, Promise<boolean>>()
@@ -25,7 +26,7 @@ export function createDocumentTabs() {
     if (id !== 'home' && !documents.some(document => document.id === id)) return
     selectionSequence = ++openSequence
     if (id === active) return
-    active = id; emit()
+    active = id; if(id !== 'home')mounted.add(id); emit()
   }
   function reserveOpen(id: string): DocumentOpenToken {
     selectionSequence = ++openSequence
@@ -44,11 +45,11 @@ export function createDocumentTabs() {
     if (current) {
       if (current.name === name && (!select || active === document.id)) return
       current.name = name
-      if (select) active = document.id
+      if (select) {active = document.id; mounted.add(document.id)}
       emit(); return
     }
     documents.push({...document, name})
-    if (select) active = document.id
+    if (select) {active = document.id; mounted.add(document.id)}
     emit()
   }
   function rename(id: string, name: string) {
@@ -65,15 +66,16 @@ export function createDocumentTabs() {
     if (existing) return existing
     const work = Promise.resolve().then(async () => {
       const guard = guards.get(id)
-      if (!guard && documents.find(document => document.id === id)?.src.startsWith('/native-')) return false
+      if (!guard && mounted.has(id) && documents.find(document => document.id === id)?.src.startsWith('/native-')) return false
       if (guard && !await guard()) return false
       const index = documents.findIndex(document => document.id === id)
       if (index < 0) return false
       closedAt.set(id, openSequence)
-      documents.splice(index, 1); guards.delete(id)
+      documents.splice(index, 1); guards.delete(id); mounted.delete(id)
       if (active === id) {
         selectionSequence = ++openSequence
         active = documents[Math.min(index, documents.length - 1)]?.id ?? 'home'
+        if(active !== 'home')mounted.add(active)
       }
       emit(); return true
     }).finally(() => { closing.delete(id) })
@@ -91,9 +93,19 @@ export function createDocumentTabs() {
   }
   return {
     list,
+    // Startup only, after authenticated metadata resolution. Never replaces live drafts.
+    restoreEntries(entries:DocumentTab[],selected:string){
+      if(documents.length||openSequence)throw new Error('Cannot restore over a live workspace')
+      for(const entry of entries){if(entry.id==='home'||documents.some(doc=>doc.id===entry.id))continue;documents.push({...entry})}
+      active=documents.some(doc=>doc.id===selected)?selected:'home'
+      if(active!=='home')mounted.add(active)
+      emit()
+    },
+    renderedDocuments:()=>documents.filter(document=>mounted.has(document.id)).map(document=>({...document})),
     documents: () => documents.map(document => ({...document})),
     subscribe(listener: (tabs: TabSummary[]) => void) { listeners.add(listener); return () => { listeners.delete(listener) } },
     open, activate, close, reorder, rename, reserveOpen,
+    isOpenCurrent:(token:DocumentOpenToken)=>token.sequence===selectionSequence,
     setGuard(id: string, guard: DocumentCloseGuard | null) {
       if (!documents.some(document => document.id === id)) return
       if (guard) guards.set(id, guard); else guards.delete(id)
