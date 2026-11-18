@@ -34,6 +34,7 @@ import {hideAccountRecoveryPortals} from './account-recovery-portals'
 import {createLocalShellClient,type SessionEndReason} from './local-client'
 import {createLocalAdminClient} from './local-admin-client'
 import {createLocalSessionsClient} from './local-sessions-client'
+import {createLocalWorkspaceSession} from './local-workspace-session'
 import {createLoginHistoryClient} from './local-login-history-client'
 import {ConfigProvider,theme as antdTheme,Dropdown,Modal,Button,Alert,Form,Input,Card,Typography} from 'antd'
 import logo from '../../../shell/src/renderer/src/assets/dyoffice-logo.svg'
@@ -55,7 +56,8 @@ import {PasswordActionForm} from './PasswordActionForm'
 import './config-polish.css'
 const client=createLocalShellClient()
 const adminClient=createLocalAdminClient(fetch,()=>client.endSession('expired'))
-const sessionsClient=createLocalSessionsClient(fetch,()=>client.endSession('expired'))
+const workspaceSession=createLocalWorkspaceSession(client)
+const sessionsClient=createLocalSessionsClient(workspaceSession.sessionFetch,()=>client.endSession('expired'))
 const historyClient=createLoginHistoryClient(fetch,()=>client.endSession('expired'))
 const preferenceSession=createLocalPreferencesSession(client)
 const preferences=preferenceSession.preferences
@@ -92,7 +94,7 @@ async function upload(file:File,expectedProof=sourceWorkspace?.bound.proof){if(b
 async function browse(){showUpload()}
 const unsupported=async()=>{throw new Error('此桌面操作尚未适配到本地 Web。')}
 function installBridge(){
- window.aiOffice=createLocalHomeBridge({request:client.request,preferences,open,openTrash:()=>showTrash(),changed:notifyFilesChanged,renamed:documentTabs.rename,unsupported:m=>notice(m),browse})
+ window.aiOffice=createLocalHomeBridge({request:workspaceSession.request,preferences,open,openTrash:()=>showTrash(),changed:notifyFilesChanged,renamed:documentTabs.rename,unsupported:m=>notice(m),browse})
  window.aiOffice.newDoc=async()=>{const proof=sourceWorkspace?.bound.proof;if(!proof)throw new Error('登录状态未核验，请重新加载当前工作区。');if(capabilities.docx!=='editable')return unsupported();const response=await fetch(blankDocx);if(!response.ok)throw new Error('原版空白模板不可用');await upload(new File([await response.blob()],'未命名.docx'),proof)}
  window.aiOffice.newSheet=createLocalNewSheet({getSessionProof:()=>sourceWorkspace?.bound.proof,bindSession:proof=>client.bindSession(proof),fetchTemplate:()=>fetch(blankXlsx),open:(id,request)=>openCreatedDocument(documentTabs,capabilities,id,request),changed:notifyFilesChanged})
  window.aiOfficeTabs={list:async()=>documentTabs.list(),activate:async id=>documentTabs.activate(id),close:async id=>{await documentTabs.close(id)},onChanged:documentTabs.subscribe,showNewMenu:async(x,y)=>showChromeMenu('new',x,y),showAppMenu:async(x,y)=>showChromeMenu('app',x,y),showMenu:async(x,y)=>showChromeMenu('tabs',x,y),showTabMenu:async(id,x,y)=>showChromeMenu('tab',x,y,id),detach:unsupported,tearOff:async()=>false,dragTornWindow:()=>{},dockTornWindow:unsupported,endTornDrag:async()=>{},onDockPreview:()=>()=>{},reportDockIndex:()=>{},reorder:async(id,index)=>documentTabs.reorder(id,index),notifyChromePressed:()=>{},onChromePressed:()=>()=>{}} satisfies TabsApi
@@ -105,7 +107,7 @@ async function restore(){
   globalSettingsSession.bind(bound)
  const personal=await preferences.getPreferences()
  const catalog=await bound.request<Record<string,string>>('/api/v1/capabilities')
- user=identity.user;capabilities=catalog;initialLanguage=personal.language==='en'?'en':'zh';userSkills=createUserSkillsClient(bound.request);sourceWorkspace=workspace
+ user=identity.user;capabilities=catalog;initialLanguage=personal.language==='en'?'en':'zh';userSkills=createUserSkillsClient(bound.request);sourceWorkspace=workspace;workspaceSession.bind(bound)
  if(personal.theme==='system')delete document.documentElement.dataset.theme;else document.documentElement.dataset.theme=personal.theme
  // Only authenticated identity may select a storage namespace. Legacy servers
  // without a deployment identity safely skip entry restoration.
@@ -151,7 +153,7 @@ function WorkspacePageContent({page,onClose,onCloseGuardChange,settingsTab,onSet
   if(identity.user.id!==user?.id)throw new Error('登录状态已改变，请重新加载当前工作区。')
   preferenceSession.bind(bound)
   globalSettingsSession.bind(bound)
-  userSkills=createUserSkillsClient(bound.request);sourceWorkspace=workspace
+  userSkills=createUserSkillsClient(bound.request);sourceWorkspace=workspace;workspaceSession.bind(bound)
   setSessionVersion(version=>version+1)
  }
  if(page==='settings'&&user)return <WorkspaceSettings activeTab={settingsTab} onTabChange={onSettingsTabChange} sessionsClient={sessionsClient} historyClient={historyClient} user={user} load={preferences.getPreferences} save={preferences.updatePreferences} security={{changePassword:async(current,next)=>{const proof=await client.changePassword(current,next);await updateSession(proof).catch(()=>client.endSession('expired'))},onCurrentRevoked:()=>client.endSession('expired')}} skills={registerSkillsGuard=>userSkills&&<UserSkillsPanel key={sessionVersion} client={userSkills} onCloseGuardChange={registerSkillsGuard}/>} onLogout={()=>void logout().catch(e=>notice(e.message))} onClose={onClose} onCloseGuardChange={registerGuard}/>
