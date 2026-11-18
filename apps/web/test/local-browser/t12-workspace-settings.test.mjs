@@ -110,7 +110,9 @@ test('T12 original Home persists folders stars recents and trash while themes pr
     await settingsTab(settings,'通用偏好')
     await settings.getByLabel('文档作者',{exact:true}).fill('T12 '+theme+' author')
     const themeChoice = settings.getByRole('group', {name: '主题', exact: true}).getByRole('radio', {name: title, exact: true})
-    await themeChoice.check()
+    // The native input is visually hidden; users select its wrapping preview label.
+    await settings.getByRole('group', {name: '主题', exact: true}).locator('label')
+      .filter({has: page.getByRole('radio', {name: title, exact: true})}).click()
     await expect(themeChoice).toBeChecked()
     const [saved] = await Promise.all([
       page.waitForResponse(response => response.url().endsWith('/preferences') && response.request().method() === 'PUT'),

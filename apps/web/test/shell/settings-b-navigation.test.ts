@@ -35,7 +35,9 @@ test('B theme previews use labelled native radios and only update the draft',asy
   expect(group.querySelectorAll('input[type=radio]')).toHaveLength(3)
   const dark=group.querySelector<HTMLInputElement>('input[value=dark]')!
   dark.focus();expect(document.activeElement).toBe(dark)
-  await act(async()=>dark.click())
+  const darkLabel=dark.closest('label')!
+  expect(darkLabel.textContent).toContain('深色')
+  await act(async()=>darkLabel.querySelector<HTMLElement>('.personal-settings-theme-preview')!.click())
   expect(dark.checked).toBe(true)
   expect(save).not.toHaveBeenCalled()
  }finally{await act(async()=>root.unmount());document.body.innerHTML=''}
