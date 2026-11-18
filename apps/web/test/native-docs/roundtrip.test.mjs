@@ -217,7 +217,17 @@ test('native editor preserves unsaved text and becomes read only after another t
   await second.goto(path)
   await expect(second.getByRole('button',{ name: 'Take over editing' })).toBeVisible({ timeout: 45_000 })
   await expect(second.locator('.tiptap.doc-page')).toHaveAttribute('contenteditable','false')
+  try {
   await second.getByRole('button',{ name: 'Take over editing' }).click()
+  } catch(error) {
+    const state=await second.evaluate(()=>{
+      const button=document.querySelector('[data-takeover-blockers]')
+      const allowed=new Set(['loading','no-handle','taking-over','downloading','dirty','local-busy','host-unknown','host-saving'])
+      return {present:!!button,disabled:button instanceof HTMLButtonElement?button.disabled:null,blockers:(button?.getAttribute('data-takeover-blockers')??'').split(',').filter(value=>allowed.has(value))}
+    }).catch(()=>({unavailable:true}))
+    console.error('takeover-state',JSON.stringify(state))
+    throw error
+  }
   await expect(second.locator('.tiptap.doc-page')).toHaveAttribute('contenteditable','true')
   await f.page.bringToFront()
   await expect(f.page.locator('.tiptap.doc-page')).toHaveAttribute('contenteditable','false',{ timeout: 25_000 })
