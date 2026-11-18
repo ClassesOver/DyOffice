@@ -52,12 +52,13 @@ const EMU_MAX = 2147483647, ROT_DEG_MAX = 35791
  * Media bytes, master-part targets, grouping and journal controls stay out. */
 const OP_FIELDS: Record<string, readonly string[]> = {
   setText: ['op','target','paragraphs','group'],
-  setFill: ['op','target','fill'],
-  setStroke: ['op','target','stroke'],
-  addElement: ['op','target','offset','kind','paragraphs','fill','stroke'],
+  setFill: ['op','target','fill','group'],
+  setStroke: ['op','target','stroke','group'],
+  addElement: ['op','target','offset','kind','paragraphs','fill','stroke','bodyPr'],
   deleteElement: ['op','target'],
   setTransform: ['op','target','box','rotDeg','group'],
   reorderElement: ['op','target','dir'],
+  groupElements: ['op','target','els'],
   ungroupElement: ['op','target'],
   setFont: ['op','target','font','group'],
   setParagraphFormat: ['op','target','format','group'],
@@ -68,6 +69,29 @@ const OP_FIELDS: Record<string, readonly string[]> = {
   deleteSlide: ['op','target'],
   moveSlide: ['op','target','to'],
   setNotes: ['op','target','text'],
+  setSlideLayout: ['op','target','layout','layoutPath'],
+  applyHeaderFooter: ['op','settings'],
+  setTransition: ['op','target','kind'],
+  setHidden: ['op','target','hidden'],
+  setSections: ['op','sections'],
+  addSection: ['op','atSlideIndex','name'],
+  renameSection: ['op','id','name'],
+  removeSection: ['op','id'],
+  moveSection: ['op','id','dir'],
+  changeShape: ['op','target','shape','group'],
+  flipElements: ['op','target','els','axis','group'],
+  setShapeAdjust: ['op','target','adjustments','group'],
+  setTextAnchor: ['op','target','anchor','group'],
+  setTextBodyProps: ['op','target','bodyPr','group'],
+  setEffects: ['op','target','effects','group'],
+  addTable: ['op','target','offset','rows','cols','cells','styleId'],
+  setTableCell: ['op','target','row','col','paragraphs'],
+  tableStructure: ['op','target','action','index'],
+  tableMerge: ['op','target','kind','row','col','rowSpan','colSpan'],
+  setTableColWidth: ['op','target','col','widthEmu'],
+  setTableRowHeight: ['op','target','row','heightEmu'],
+  setTableCellAnchor: ['op','target','cells','anchor'],
+  setTableStyle: ['op','target','patch','cells'],
 }
 const ADDING_SLIDES = new Set(['addBlankSlide','addSlideWithLayout','duplicateSlide'])
 const PARAGRAPH_KEYS = ['runs','align','level','srcPara']
@@ -124,9 +148,10 @@ function checkFillPatch(value: unknown) {
 function checkStrokePatch(value: unknown, allowGradient: boolean) {
   if (value === null) { if (allowGradient) return; throw new Error('INVALID_STROKE') }
   if (!record(value)) throw new Error('INVALID_STROKE')
-  keys(value, allowGradient ? ['color','widthEmu','gradient'] : ['color','widthEmu'])
+  keys(value, allowGradient ? ['color','widthEmu','dash','gradient'] : ['color','widthEmu','dash'])
   if (!isHexColor(value.color)) throw new Error('INVALID_STROKE')
   if (typeof value.widthEmu !== 'number' || !Number.isFinite(value.widthEmu) || (value.widthEmu as number) <= 0 || (value.widthEmu as number) > EMU_MAX) throw new Error('INVALID_STROKE')
+  if (value.dash !== undefined && (typeof value.dash !== 'string' || !value.dash || value.dash.length > 32)) throw new Error('INVALID_STROKE')
   if (value.gradient !== undefined) {
     if (!allowGradient || !record(value.gradient)) throw new Error('INVALID_STROKE')
     keys(value.gradient, ['stops','angle'])
@@ -368,10 +393,23 @@ export async function createPptxSession(bytes: Uint8Array, signal?: AbortSignal)
     }
     return created
   }
+  function mediaResolver(state: OpenedPptx) {
+    return (mediaRef: string): string | undefined => {
+      const bytes = state.archive.readBytes(mediaRef)
+      if (!bytes || bytes.byteLength === 0 || bytes.byteLength > 8 * 1024 * 1024) return undefined
+      const ext = mediaRef.split('.').pop()?.toLowerCase() ?? ''
+      const mime = bytes[0] === 0x89 && bytes[1] === 0x50 ? 'image/png'
+        : bytes[0] === 0xff && bytes[1] === 0xd8 ? 'image/jpeg'
+        : bytes[0] === 0x47 && bytes[1] === 0x49 ? 'image/gif'
+        : ({png:'image/png',jpg:'image/jpeg',jpeg:'image/jpeg',gif:'image/gif',webp:'image/webp',bmp:'image/bmp',svg:'image/svg+xml'} as Record<string,string>)[ext]
+      if (!mime) return undefined
+      return `data:${mime};base64,${Buffer.from(bytes).toString('base64')}`
+    }
+  }
   function renderSlides(state: OpenedPptx, width: number): RenderSlide[] {
     if (state.deck.slides.length>MAX_RENDER_SLIDES) throw new Error('RENDER_LIMIT')
-    // No media resolver / system font access yet: not a visual-fidelity or image preview gate.
-    return state.deck.slides.map((slide,index)=>structuredClone(buildRenderSlide(slide,state.deck.size,{fitWidthPx:width,slideNo:index+1})))
+    const media = mediaResolver(state)
+    return state.deck.slides.map((slide,index)=>structuredClone(buildRenderSlide(slide,state.deck.size,{fitWidthPx:width,slideNo:index+1,media})))
   }
   return {
     selection(expected,slide,elementId,signal) {
@@ -445,8 +483,7 @@ export async function createPptxSession(bytes: Uint8Array, signal?: AbortSignal)
     render(expected,slide,width,signal) {
       return enqueue(expected,signal,state=>{
         if (!Number.isSafeInteger(slide) || slide<0 || slide>=state.deck.slides.length) throw new Error('INVALID_SLIDE')
-        // No media resolver / system font access yet: not a visual-fidelity or image preview gate.
-        return structuredClone(buildRenderSlide(state.deck.slides[slide]!,state.deck.size,{fitWidthPx:fitWidth(width),slideNo:slide+1}))
+        return structuredClone(buildRenderSlide(state.deck.slides[slide]!,state.deck.size,{fitWidthPx:fitWidth(width),slideNo:slide+1,media:mediaResolver(state)}))
       })
     },
     renderAll(expected,width,signal) {
