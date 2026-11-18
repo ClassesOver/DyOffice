@@ -15,6 +15,11 @@ export interface SseTransportOptions {
   createTurnId?: () => string
 }
 
+/** Shared wire encoding keeps client-side admission aligned with the sent envelope. */
+export function serializeTurnRequest(turnId:string,modelId:string|undefined,request:AgentStreamRequest){
+  return JSON.stringify({turnId,...(modelId===undefined?{}:{modelId}),request:{system:request.system,messages:request.messages,tools:request.tools}})
+}
+
 /** Browser-side adapter for server-mediated model streams; never holds provider secrets. */
 export function createSseAgentTransport(options: SseTransportOptions = {}): AgentTransport {
   const endpoint = options.endpoint ?? '/api/v1/ai/turns'
@@ -98,7 +103,7 @@ export function createSseAgentTransport(options: SseTransportOptions = {}): Agen
             method: 'POST',
             credentials: 'same-origin', mode: 'same-origin', referrerPolicy: 'same-origin', redirect: 'error',
             headers: { Accept: 'text/event-stream', 'Content-Type': 'application/json', ...(csrfProof ? { 'x-csrf-token': csrfProof } : {}) },
-            body: JSON.stringify({ turnId, ...(options.modelId === undefined ? {} : { modelId: options.modelId }), request: { system: request.system, messages: request.messages, tools: request.tools } }),
+            body: serializeTurnRequest(turnId, options.modelId, request),
             signal: controller.signal,
           })
           if (!response.ok) throw new Error('AI stream HTTP ' + response.status)

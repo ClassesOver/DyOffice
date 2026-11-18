@@ -1,5 +1,5 @@
-import type {AgentTransport} from '@genoffice/agent-core'
-import {createSseAgentTransport} from './ai-transport.ts'
+import type {AgentTransport,AgentStreamRequest} from '@genoffice/agent-core'
+import {createSseAgentTransport,serializeTurnRequest} from './ai-transport.ts'
 import type {SettingsRequest} from './preferences.ts'
 import {createSourceCatalogSkill} from './source-catalog-skill.ts'
 import {createCodingClient} from './coding.ts'
@@ -21,6 +21,13 @@ export async function createAssistantClient({request, fetchImpl, csrfToken, onDe
       return {sources,results}
     }, ...(fetchImpl ? {fetchImpl} : {})}) : undefined
   const encoder = new TextEncoder()
+  const prepare=(input:AgentStreamRequest):AgentStreamRequest=>{
+      const tools = input.tools.filter(t => (allowedTools.has(t.name) || ((coding||input.tools.some(tool=>tool.name==='list_channel_agents')) && ASSISTANT_DELEGATION_TOOLS.has(t.name))))
+      const messages = input.messages.map(message => message.role === 'assistant'
+        ? {role: message.role, text: message.text, toolCalls: message.toolCalls}
+        : message)
+    return {...input,messages,tools,system:input.system+(coding?'\nThis assistant can read and explain. Document mutation and direct CLI execution are unavailable. You may delegate coding using the offered agent tools.':'\nThis assistant can read and explain. Document mutation and CLI execution are unavailable.')}
+  }
   const active = new Set<{cancel(): void}>()
   const transport: AgentTransport = {
     beginRun() {
@@ -32,19 +39,14 @@ export async function createAssistantClient({request, fetchImpl, csrfToken, onDe
       if (disposed || !catalog.entries.some(e => e.id === runModel)) {
         callbacks.onError('助手当前不可用。'); callbacks.onDone(); return {cancel() {}}
       }
-      const tools = input.tools.filter(t => (allowedTools.has(t.name) || ((coding||input.tools.some(tool=>tool.name==='list_channel_agents')) && ASSISTANT_DELEGATION_TOOLS.has(t.name))))
-      const messages = input.messages.map(message => message.role === 'assistant'
-        ? {role: message.role, text: message.text, toolCalls: message.toolCalls}
-        : message)
+      const prepared=prepare(input), {tools,messages}=prepared
       if (messages.some(message => message.role === 'user' && encoder.encode(message.text).length > 256 * 1024)) {
         callbacks.onError('消息、文档上下文和附加 Skills 超出模型请求上限。请缩短消息或减少附加 Skills。')
         callbacks.onDone()
         return {cancel() {}}
       }
       let handle: {cancel(): void}
-      handle = createSseAgentTransport({modelId: runModel!, getCsrfToken: async () => csrf, ...(fetchImpl ? {fetchImpl} : {})}).stream({
-        ...input, messages, tools, system: input.system + (coding ? '\nThis assistant can read and explain. Document mutation and direct CLI execution are unavailable. You may delegate coding using the offered agent tools.' : '\nThis assistant can read and explain. Document mutation and CLI execution are unavailable.'),
-      }, {...callbacks, onToolCall(call) {
+      handle = createSseAgentTransport({modelId: runModel!, getCsrfToken: async () => csrf, ...(fetchImpl ? {fetchImpl} : {})}).stream(prepared, {...callbacks, onToolCall(call) {
         if (!tools.some(t => t.name === call.name)) throw new Error('助手返回了未授权的工具。')
         callbacks.onToolCall(call)
       }, onDone() {active.delete(handle); callbacks.onDone()}})
@@ -53,6 +55,9 @@ export async function createAssistantClient({request, fetchImpl, csrfToken, onDe
     },
   }
   return {
+    // Default transport turn IDs are UUIDs (36 ASCII bytes). All other bytes
+    // use the identical normalized request and serializer as dispatch.
+    requestBytes(input:AgentStreamRequest){return encoder.encode(serializeTurnRequest('00000000-0000-0000-0000-000000000000',selected??undefined,prepare(input))).length},
     catalog, transport, extraSkills: coding ? [coding.skill] : [],
     ...(catalog.sourceCatalog === true ? {sourceSkill: createSourceCatalogSkill(request, () => disposed)} : {}),
     selected: () => selected,
