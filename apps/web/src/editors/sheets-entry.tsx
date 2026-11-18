@@ -28,11 +28,12 @@ import '@univerjs/preset-sheets-core/lib/index.css'
 import '../../../sheets/src/renderer/styles.css'
 
 import './sheets.css'
-import {createEditorAssistant} from './assistant.tsx'
+import {loadEditorAssistant,editorAssistantNotice} from './editor-assistant-status'
 
 export async function mountSheetsEditor(host: SessionFileHost, container: HTMLElement, fileId: string) {
   container.textContent = messages.zh.opening
-  const assistant = await createEditorAssistant({fileId,editorId:host.getEditorId()!,generation:()=>1}).catch(() => undefined)
+  const assistantResult = await loadEditorAssistant({fileId,editorId:host.getEditorId()!,generation:()=>1})
+  const assistant = assistantResult.assistant
   const opened = await host.open(fileId)
   if (opened.format !== 'xlsx') throw new Error(messages.zh.failed)
   const prefs = await host.getPreferences(), locale = prefs.language === 'en' ? 'en' : 'zh', text = messages[locale]
@@ -42,6 +43,7 @@ export async function mountSheetsEditor(host: SessionFileHost, container: HTMLEl
   let changed = () => {}, editor: SheetsEditorHandle | null = null, disposed = false, closing=false
   let downloading = false, takingOver = false, confirming = false, actionError = ''
   const bridge = createSheetsBridge(host,fileId,prefs,{onChange:()=>changed()})
+  const assistantNotice = editorAssistantNotice(assistantResult,prefs.showAssistant,locale)
   const assistantAvailable = Boolean(assistant?.available && prefs.showAssistant !== false)
   const panelPrefs = {...await bridge.api.getAiPanelPrefs(), showAiSidebar: assistantAvailable}
   Object.defineProperty(window,'desktopApi',{value:{...bridge.api,...assistant?.api,getAiPanelPrefs:async()=>panelPrefs} as unknown as DesktopApi,configurable:true})
@@ -97,6 +99,7 @@ export async function mountSheetsEditor(host: SessionFileHost, container: HTMLEl
     const historical = loaded && !failed && !state.lease && !dirty() && state.status !== 'unknown' && state.status !== 'unauthorized' && !bridge.needsConfirmation() && !takingOver
     return <div className="dyoffice-native-sheets">
       <div className="dyoffice-sheets-state" role="status"><span>{status}</span>
+        {assistantNotice && <span className="dyoffice-editor-assistant-status">{assistantNotice}</span>}
         {realtime.notice(locale) && <span>{realtime.notice(locale)}</span>}
         <button className="dyoffice-sheets-download" disabled={!loaded || failed || !editor || !state.lease || state.status==='conflict' || state.status==='unauthorized' || downloading || takingOver} onClick={()=>{void saveAndDownload()}}>{text.saveDownload}</button>
         {historical && <a href={`/api/v1/files/${fileId}/content?revision=${state.revision.revision}`} download={state.name}>{text.downloadReadOnly}</a>}

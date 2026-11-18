@@ -11,7 +11,7 @@ import { createDocsBridge } from './docs-bridge.ts'
 import type { DocsEditorHandle } from '../../../docs/src/renderer/file-actions'
 import type { DesktopApi } from '../../../docs/src/shared/ipc'
 import { messages } from './messages.ts'
-import {createEditorAssistant} from './assistant.tsx'
+import {loadEditorAssistant,editorAssistantNotice} from './editor-assistant-status'
 import { mountEditorRealtime } from './editor-realtime.ts'
 import '@genoffice/ui/tokens.css'
 import '@genoffice/ui/screentip.css'
@@ -39,7 +39,8 @@ export async function mountDocsEditor(host: SessionFileHost,element: HTMLElement
   let editorHandle: DocsEditorHandle | null = null
   const registerEditor = (handle: DocsEditorHandle | null) => { editorHandle = handle }
   const unsubscribe = host.subscribe(() => changed())
-  const assistant = await createEditorAssistant({fileId,editorId:host.getEditorId()!,generation:()=>1}).catch(() => undefined)
+  const assistantResult = await loadEditorAssistant({fileId,editorId:host.getEditorId()!,generation:()=>1})
+  const assistant = assistantResult.assistant
   const opened = await host.open(fileId)
   if (opened.format !== 'docx') throw new Error(messages.zh.failed)
   const prefs = await host.getPreferences(), locale = prefs.language === 'en' ? 'en' : 'zh', text = messages[locale]
@@ -52,6 +53,7 @@ export async function mountDocsEditor(host: SessionFileHost,element: HTMLElement
     editor:()=>editorHandle?.analysis??null,receipt:()=>bridge.getReceipt(),
     save:check=>bridge.guardedSave(check,async()=>!!editorHandle&&await editorHandle.save()&&!editorHandle.isDirty()&&bridge.getState().nativeSaveOutcome==='accepted')})
   const unregisterAnalysis=assistant?.documents.register(analysisTarget)
+  const assistantNotice = editorAssistantNotice(assistantResult,prefs.showAssistant,locale)
   const assistantAvailable = Boolean(assistant?.available && prefs.showAssistant !== false)
   const panelPrefs = {...await bridge.api.getAiPanelPrefs(), showAiSidebar: assistantAvailable}
   window.desktop = {...bridge.api,...assistant?.api, getAiPanelPrefs: async () => ({...await bridge.api.getAiPanelPrefs(),showAiSidebar:assistantAvailable})} as unknown as DesktopApi
@@ -88,6 +90,7 @@ export async function mountDocsEditor(host: SessionFileHost,element: HTMLElement
     const status = failed ? text.failed : state.status === 'unknown' ? text.unknown : state.status === 'unauthorized' ? text.unauthorized : !state.lease ? (initialLease ? text.conflict : text.readOnly) : downloading ? text.downloadSaving : actionError || (bridge.getState().dirty ? '' : text.ready)
     return <div className="dyoffice-native-docs">
       <div className="dyoffice-docs-state" role="status"><span className="dyoffice-docs-persistence-state" data-native-save={bridge.getState().nativeSaveOutcome} data-incomplete-reasons={bridge.getState().nativeSaveReasons.join(',')} data-dirty={String(bridge.getState().dirty)}>{status}</span>
+        {assistantNotice && <span className="dyoffice-editor-assistant-status">{assistantNotice}</span>}
         {realtime.notice(locale) && <span className="dyoffice-docs-notification-state">{realtime.notice(locale)}</span>}
         <button className="dyoffice-docs-save-download" title={text.saveDownloadVersionHint} disabled={!loaded || failed || !editorHandle || !state.lease || state.status !== 'idle' || downloading} onClick={() => { void saveAndDownload() }}>{text.saveDownload}</button>
         <span className="dyoffice-docs-save-download-hint">{text.saveDownloadVersionHint}</span>
