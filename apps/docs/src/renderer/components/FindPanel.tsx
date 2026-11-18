@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { createImeEnterGuard, type ImeEnterGuard } from '@genoffice/ui'
 import type { Editor } from '@tiptap/core'
 import { TextSelection, type Transaction } from '@tiptap/pm/state'
 import { useI18n, type StringKey } from '../i18n/locale'
@@ -119,6 +120,16 @@ export function FindPanel({
   layout,
 }: FindPanelProps) {
   const { t } = useI18n()
+  // 页签切换会重建输入框，组合状态只属于当前实际节点。
+  const imeGuards = useRef(new WeakMap<HTMLElement, ImeEnterGuard>())
+  const imeFor = (input: HTMLElement) => {
+    let guard = imeGuards.current.get(input)
+    if (!guard) {
+      guard = createImeEnterGuard()
+      imeGuards.current.set(input, guard)
+    }
+    return guard
+  }
   const canEdit = editor.isEditable
   const [tab, setTab] = useState<FindTab>(() =>
     focusGoToNonce ? 'goto' : focusReplaceNonce && canEdit ? 'replace' : 'find',
@@ -524,8 +535,10 @@ export function FindPanel({
                 queryRef.current = e.target.value
                 scheduleRefresh(e.target.value)
               }}
+              onCompositionStart={(e) => imeFor(e.currentTarget).handleCompositionStart()}
+              onCompositionEnd={(e) => imeFor(e.currentTarget).handleCompositionEnd()}
               onKeyDown={(e) => {
-                if (e.key === 'Enter') step(e.shiftKey ? -1 : 1)
+                if (e.key === 'Enter' && !imeFor(e.currentTarget).isImeConfirm(e.nativeEvent)) step(e.shiftKey ? -1 : 1)
                 if (e.key === 'Escape') close()
               }}
             />
@@ -589,8 +602,10 @@ export function FindPanel({
                 aria-label={t('appReplacePlaceholder')}
                 value={replacement}
                 onChange={(e) => setReplacement(e.target.value)}
+                onCompositionStart={(e) => imeFor(e.currentTarget).handleCompositionStart()}
+                onCompositionEnd={(e) => imeFor(e.currentTarget).handleCompositionEnd()}
                 onKeyDown={(e) => {
-                  if (e.key === 'Enter') replaceOne()
+                  if (e.key === 'Enter' && !imeFor(e.currentTarget).isImeConfirm(e.nativeEvent)) replaceOne()
                   if (e.key === 'Escape') close()
                 }}
               />
@@ -674,8 +689,10 @@ export function FindPanel({
                   setGotoInput(e.target.value)
                   setGotoMiss(false)
                 }}
+                onCompositionStart={(e) => imeFor(e.currentTarget).handleCompositionStart()}
+                onCompositionEnd={(e) => imeFor(e.currentTarget).handleCompositionEnd()}
                 onKeyDown={(e) => {
-                  if (e.key === 'Enter') runGoTo(1, true)
+                  if (e.key === 'Enter' && !imeFor(e.currentTarget).isImeConfirm(e.nativeEvent)) runGoTo(1, true)
                   if (e.key === 'Escape') close()
                 }}
               >
@@ -697,8 +714,10 @@ export function FindPanel({
                   setGotoInput(e.target.value)
                   setGotoMiss(false)
                 }}
+                onCompositionStart={(e) => imeFor(e.currentTarget).handleCompositionStart()}
+                onCompositionEnd={(e) => imeFor(e.currentTarget).handleCompositionEnd()}
                 onKeyDown={(e) => {
-                  if (e.key === 'Enter') runGoTo(e.shiftKey ? -1 : 1, true)
+                  if (e.key === 'Enter' && !imeFor(e.currentTarget).isImeConfirm(e.nativeEvent)) runGoTo(e.shiftKey ? -1 : 1, true)
                   if (e.key === 'Escape') close()
                 }}
               />

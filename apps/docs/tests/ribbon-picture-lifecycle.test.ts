@@ -3,7 +3,8 @@ import ts from 'typescript'
 import { Editor } from '@tiptap/core'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { editorExtensions } from '../src/renderer/editor/extensions'
-import { pendingDocumentOperation } from '../src/renderer/editor/pending-document-operation'
+import { pendingPictureOperation as guardPictureOperation } from '../src/renderer/editor/pending-picture-operation'
+import { setActiveSubEditor } from '../src/renderer/editor/active-editor'
 import { applyPictureBytes as replacePictureBytes } from '../src/renderer/editor/apply-picture-bytes'
 import { setToastEmitter, showToast } from '../src/renderer/components/toast-bus'
 import { t } from '../src/renderer/i18n/locale'
@@ -15,7 +16,7 @@ const source = readFileSync('src/renderer/components/Ribbon.tsx', 'utf8')
 const start = source.indexOf('  const pendingPictureOperation = ')
 const end = source.indexOf('  const rotatePicture = ', start)
 if (start < 0 || end < 0) throw Error('Ribbon picture handlers not found')
-const handlers = new Function('editor', 'canEdit', 'imageSizeOf', 'pendingDocumentOperation', 'replacePictureBytes', 'showToast', 't',
+const handlers = new Function('editor', 'canEdit', 'imageSizeOf', 'guardPictureOperation', 'replacePictureBytes', 'showToast', 't',
   ts.transpileModule(source.slice(start, end), { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText + ';return { applyPictureBytes, replacePicture }')
 let editor: Editor
 let decode: () => void
@@ -25,8 +26,9 @@ const picture = (id: string) => ({ type: 'docProtected', attrs: {
   genImage: { base64: id, mime: 'image/png', widthPx: 120, heightPx: 60 },
 } })
 const content = () => ({ type: 'doc', content: [picture('first'), picture('second')] })
-const api = () => handlers(editor, true, imageSizeOf, pendingDocumentOperation, replacePictureBytes, showToast, t)
+const api = () => handlers(editor, true, imageSizeOf, guardPictureOperation, replacePictureBytes, showToast, t)
 beforeEach(() => {
+  setActiveSubEditor(null)
   notify.mockReset(); setToastEmitter(notify)
   pickImage.mockReset(); decode = () => {}
   editor = new Editor({ element: document.createElement('div'), extensions: editorExtensions, content: content() })
@@ -38,7 +40,7 @@ beforeEach(() => {
     set src(_value: string) { decode = () => this.onload?.() }
   })
 })
-afterEach(() => { editor.destroy(); setToastEmitter(null); vi.unstubAllGlobals() })
+afterEach(() => { setActiveSubEditor(null); editor.destroy(); setToastEmitter(null); vi.unstubAllGlobals() })
 it('does not apply decoded bytes to a different selected picture', async () => {
   const pending = api().applyPictureBytes('data:image/png;base64,new')
   editor.commands.setNodeSelection(editor.state.doc.child(0).nodeSize)
@@ -110,28 +112,30 @@ it('keeps a normal file-picker replacement', async () => {
 const resetStart = source.indexOf('  const resetPictureSize = async ')
 const resetEnd = source.indexOf('  const runTableCommand = ', resetStart)
 if (resetStart < 0 || resetEnd < 0) throw Error('Ribbon reset picture handler not found')
-const resetHandler = new Function('editor', 'ed', 'canEdit', 'inImage', 'fs', 'imageSizeOf', 'setPicturePx', 'inlinePictureHostWidthPx', 'pendingDocumentOperation',
+const resetHandler = new Function('editor', 'ed', 'canEdit', 'inImage', 'fs', 'imageSizeOf', 'setPicturePx', 'inlinePictureHostWidthPx', 'guardPictureOperation',
   ts.transpileModule(source.slice(start, source.indexOf('  const applyPictureBytes = ', start)) + source.slice(resetStart, resetEnd),
     { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText + ';return resetPictureSize')
 it.each([true, false])('reset size only updates its unchanged target (switch target %s)', async switchTarget => {
   const resize = vi.fn()
-  const pending = resetHandler(editor, editor, true, true, { imageDataUrl: 'data:image/png;base64,first' }, imageSizeOf, resize, () => 600, pendingDocumentOperation)()
+  const pending = resetHandler(editor, editor, true, true, { imageDataUrl: 'data:image/png;base64,first' }, imageSizeOf, resize, () => 600, guardPictureOperation)()
   if (switchTarget) editor.commands.setNodeSelection(editor.state.doc.child(0).nodeSize)
   decode(); await pending
   if (switchTarget) expect(resize).not.toHaveBeenCalled()
   else expect(resize).toHaveBeenCalledExactlyOnceWith(60, 30)
 })
 
-it('reset size checks the actual inline-picture subeditor target', async () => {
+it.each([true, false])('reset size checks the actual inline-picture subeditor target (switch %s)', async switchTarget => {
   const subeditor = new Editor({ element: document.createElement('div'), extensions: editorExtensions, content: content() })
   try {
     subeditor.commands.setNodeSelection(0)
+    setActiveSubEditor(subeditor)
     const resize = vi.fn()
-    const pending = resetHandler(editor, subeditor, true, true, { imageDataUrl: 'data:image/png;base64,first' }, imageSizeOf, resize, () => 600, pendingDocumentOperation)()
-    subeditor.commands.setNodeSelection(subeditor.state.doc.child(0).nodeSize)
+    const pending = resetHandler(editor, subeditor, true, true, { imageDataUrl: 'data:image/png;base64,first' }, imageSizeOf, resize, () => 600, guardPictureOperation)()
+    if (switchTarget) subeditor.commands.setNodeSelection(subeditor.state.doc.child(0).nodeSize)
     decode(); await pending
-    expect(resize).not.toHaveBeenCalled()
-  } finally { subeditor.destroy() }
+    if (switchTarget) expect(resize).not.toHaveBeenCalled()
+    else expect(resize).toHaveBeenCalledExactlyOnceWith(60, 30)
+  } finally { setActiveSubEditor(null); subeditor.destroy() }
 })
 
 it('reports rejected picture selection and keeps the original without an unhandled rejection', async () => {

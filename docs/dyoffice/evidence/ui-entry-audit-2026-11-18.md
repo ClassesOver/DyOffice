@@ -421,3 +421,13 @@
 - 首版面板级guard经只读复核发现卸载后组合状态残留及回复框互相影响；补4项测试在该版4红。最终通过局部WeakMap按实际输入DOM持有现有createImeEnterGuard，保持输入框彼此隔离，卸载后不污染重建节点。不改批注保存/图片处理/Escape或主页布局。
 - 最终相关4文件44项通过，Web docs类型/生产构建通过（保留既有chunk提示），Web边界1339文件0违规及git diff --check通过。独立只读复核无阻塞。日志 `/tmp/dyoffice-comment-ime-{red,lifecycle-red,final-tests,final-type,final-build}.log`。实体IME、FindPanel、输入法Escape及其他尚未覆盖入口继续待查；不宣称UI穷举完成。
 - 最终构建Chromium1440/390各4流程通过：新建Ctrl+Enter、编辑Ctrl+Enter及Meta+Enter、回复Enter，合成composition期间均保留草稿和现有批注，结束后的普通快捷键正常写入mock文档内批注，0页面异常。证据 `/tmp/dyoffice-ui-audit/word-comment-ime-green-{1440,390}/report.json`。业务写mock/blocked；未将组件卸载/跨线程测试冒充对应浏览器端测，也未将本轮新建Meta组件验证算作浏览器覆盖。
+
+## 查找、替换与定位的输入法 Enter
+
+- 正式Word Ctrl+H入口，填入查找词与替换草稿后派发compositionstart和isComposing Enter，复现正文立即被替换。红证据 `/tmp/dyoffice-ui-audit/word-find-ime-1440/report.json`。文档字节与lease均mock，其余业务写阻止。
+- 四处入口（查询、替换、数字定位、书签定位select）按实际DOM使用既有createImeEnterGuard，组合确认仅跳过业务动作，保留默认输入行为、普通Enter、Shift方向和原Escape逻辑。WeakMap使页签移除/重建及跨输入框组合状态隔离；不改查找算法或主页。
+- 16项回归先红后绿，覆盖四入口×原生isComposing/229/组合活动/组合结束同tick，验证正文、选区、草稿及查询索引保持，下一普通Enter正常导航/替换。另3项验证组合中切页签重开、查询/替换跨框隔离和普通Shift+Enter反向查询。最初JSDOM缺scrollIntoView属于harness错误，补齐只读滚动stub后才计产品红；查询以高亮索引而非PM选区为验证指标。最终相关3文件69项通过，Web docs类型/生产构建（既有chunk提示）及边界1339文件0违规通过。日志 `/tmp/dyoffice-find-ime-{red,final-tests,type,build}.log`。
+- 独立只读复核未发现阻塞，普通快捷键及定位参数保持；实体输入法和IME Escape仍未验证。本轮保留远端729aa34e的受限任务分页提交，非重叠文件精确对象导入后ff合入；未宣称重跑该提交的真实数据库集成。
+- 最终构建Chromium1440/390各3流程通过：查询组合Enter不推进1/2索引、普通Enter推进2/2；替换组合Enter不改正文且保留草稿，普通Enter确实替换；定位组合Enter不改实际滚动和页码，普通Enter从第15页跳到第1页且editor-scroll归零。共6流程0页面异常，全部业务写mock/blocked；书签定位仅真实Editor组件验证，不计浏览器覆盖。证据 `/tmp/dyoffice-ui-audit/word-find-ime-goto-green-{1440,390}/report.json`。最初DOM文本选区反映面板焦点，不能作为编辑器定位指标；最终硬断言改为实际文档滚动位置及页码，没有放宽为“无异常即通过”。
+- 发布前再保留远端3a16202a的跨活动编辑器图片保护。合入后旧Ribbon源码执行测试未注入新导入别名guardPictureOperation而失败（10失败及1未处理拒绝），属于测试harness绑定过期；改为注入真实新helper，并在双Editor测试显式设置活动子编辑器、加入正常重置正对照，未改产品图片逻辑或放宽断言。最终输入法/查找/批注及图片相关5文件99项通过；日志 `/tmp/dyoffice-find-ime-merged-{tests,green,type,build}.log`。
+- 含3a16202a的最终合并构建Web docs类型/生产构建通过，边界1340文件0违规；1440/390查找/替换/定位六流程再次全部通过，0页面异常。最终浏览器日志 `/tmp/dyoffice-find-ime-final-browser-{1440,390}.log`，报告沿用上述goto-green路径。
