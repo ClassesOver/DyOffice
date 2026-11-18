@@ -466,3 +466,11 @@
 - 12项覆盖回复、Ctrl/Meta编辑与原生/229/活动/结束同tick组合信号，原实现11红1绿；修后相关4文件65项通过。Web docs类型及生产构建通过（既有chunk提示），边界1341文件0违规，git diff --check通过。日志 `/tmp/dyoffice-margin-ime-{red-final,green}.log`、`/tmp/dyoffice-margin-{type,build,boundary}.log`。
 - 最终构建1440/390各验证回复、Ctrl编辑、Meta编辑三流程：组合确认保留草稿，随后普通快捷键提交，0页面异常。证据 `/tmp/dyoffice-ui-audit/word-margin-ime-green-{1440,390}/report.json`；文档及lease mock，其他业务写blocked，合成IME信号不替代实体输入法验收。
 - 发布前保留远端d2ce20d2保存响应诊断提交，非重叠文件精确导入ff合入；未宣称重跑该提交完整native保存集成。全量UI穷举仍未完成。
+
+
+## 正文批注浮层与输入框的 IME Escape
+
+- 正式正文批注浮层回复框派发原生isComposing Escape，App document capture先关闭浮层，浏览器红证据 `/tmp/dyoffice-ui-audit/word-margin-ime-escape-red-1440/report.json`。局部回复/编辑输入的8项新增测试全部先红：原实现会失焦或取消编辑。
+- 页边输入按节点登记已有guard至WeakMap，App捕获监听读取同一状态；局部输入对IME Escape停止传播并保留默认行为，普通Escape仍关闭浮层/取消编辑/回复失焦。未增加第二份组合状态，移除节点不污染新输入。
+- 新增8项覆盖回复/编辑×四信号，并验证捕获阶段的状态读取、焦点/草稿/默认行为和随后普通Escape。另增1项验证编辑中组合状态随节点移除隔离；相关4文件69项通过，Web docs类型/构建通过（既有chunk提示），边界1341文件0违规及git diff --check通过。日志 `/tmp/dyoffice-margin-escape-{red,green,type,build,boundary}.log`。
+- 最终构建1440/390共6流程、24次合成IME Escape，回复及编辑草稿、浮层均保留；各流程下一普通Escape关闭浮层，重开未发布草稿，0页面异常。证据 `/tmp/dyoffice-ui-audit/word-margin-ime-escape-green-{1440,390}/report.json`；业务API mock/blocked，不替代实体输入法或真实保存验收。正文批注菜单键盘和生命周期仍待查，全量UI穷举未完成。

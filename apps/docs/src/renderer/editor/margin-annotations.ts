@@ -24,7 +24,7 @@
  *   thread in the Comments panel.
  */
 import type { CommentInfo } from '@genoffice/docx-engine'
-import { createImeEnterGuard } from '@genoffice/ui'
+import { createImeEnterGuard, type ImeEnterGuard } from '@genoffice/ui'
 import { PAGE_TURN_SEL } from './pagination-gaps'
 import { pagePaperEdges, pageReaderShadow, type PageCut } from '../pagination-cuts'
 import type { EditorView } from '@tiptap/pm/view'
@@ -57,6 +57,14 @@ const REV_SELECTOR =
   'tr.row-rev-ins, tr.row-rev-del, td.cell-rev-ins, th.cell-rev-ins, td.cell-rev-del, th.cell-rev-del'
 
 const SVG_NS = 'http://www.w3.org/2000/svg'
+
+const commentImeGuards = new WeakMap<HTMLElement, ImeEnterGuard>()
+
+/** 浮层捕获监听先于输入框执行，读取同一节点的组合状态。 */
+export function isMarginCommentImeConfirm(event: KeyboardEvent): boolean {
+  return event.isComposing || event.keyCode === 229 ||
+    (event.target instanceof HTMLElement && commentImeGuards.get(event.target)?.isImeConfirm(event) === true)
+}
 
 export type ChangeLine = { top: number; bottom: number; pos?: number }
 
@@ -299,6 +307,7 @@ function makeBubble(
       ta.className = 'comment-edit-input'
       ta.value = c.text
       const ime = createImeEnterGuard()
+      commentImeGuards.set(ta, ime)
       ta.addEventListener('compositionstart', ime.handleCompositionStart)
       ta.addEventListener('compositionend', ime.handleCompositionEnd)
       const row = document.createElement('div')
@@ -324,9 +333,10 @@ function makeBubble(
       saveBtn.textContent = t('appSave')
       saveBtn.addEventListener('click', save)
       ta.addEventListener('keydown', (e) => {
+        e.stopPropagation()
+        if (e.key === 'Escape' && ime.isImeConfirm(e)) return
         if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && !ime.isImeConfirm(e)) save()
         if (e.key === 'Escape') cancel()
-        e.stopPropagation()
       })
       box.addEventListener('click', (e) => e.stopPropagation())
       row.append(cancelBtn, saveBtn)
@@ -351,11 +361,13 @@ function makeBubble(
     input.placeholder = t('appReplyPlaceholder')
     input.setAttribute('aria-label', t('appReply'))
     const ime = createImeEnterGuard()
+    commentImeGuards.set(input, ime)
     input.addEventListener('compositionstart', ime.handleCompositionStart)
     input.addEventListener('compositionend', ime.handleCompositionEnd)
     input.addEventListener('click', (e) => e.stopPropagation())
     input.addEventListener('keydown', (e) => {
       e.stopPropagation()
+      if (e.key === 'Escape' && ime.isImeConfirm(e)) return
       if (e.key === 'Enter' && !e.shiftKey && !ime.isImeConfirm(e)) {
         e.preventDefault()
         const text = input.value.trim()
