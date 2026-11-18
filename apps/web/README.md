@@ -372,3 +372,32 @@ session-switch/save-failure, or native DOCX theme/roundtrip acceptance.
 This stage wires the original Home to per-user workspace folders, favorites and recoverable Trash, and exposes personal settings and administrator global-configuration controls. Web personal preferences use an explicit draft/save flow; unsupported desktop controls remain disabled.
 
 Existing DOCX navigation is retained. XLSX retains #52’s original-download/import-notification implementation even if a native capability is advertised (the target previously rejected non-DOCX opening): the new unverified XLSX Home jump stays in draft #52. No migrations, native runtime adapters, isolation settings or provider execution paths change here. See [scoped evidence](../../docs/dyoffice/evidence/t12-nonnative-ui.md).
+
+### Required document backend selection (fail closed)
+
+`DYOFFICE_DOCUMENT_BACKEND` is an optional deployment requirement, checked at the
+start of the API process, native worker, and Sheets runtime composition:
+
+- Unset: retain existing behavior. Native XLSX/jobs still require their explicit
+  `experimental` flags, existing credentials, storage and verified legacy sandbox.
+- `legacy-experimental`: explicitly retain that same behavior; this selector does
+  not enable any native capability or remove existing production restrictions.
+- `broker-required`: refuse startup with `DOCUMENT_BROKER_UNAVAILABLE`. The broker
+  has no approved production runtime yet. No fallback to the legacy host sandbox,
+  dependency connection, queue consumption or job claim is attempted.
+- Any other value (including an explicitly empty value) is a configuration error,
+  `DOCUMENT_BACKEND_INVALID`; omit the variable instead of setting it to empty.
+
+The server logs only a fixed bounded reason. It does not print configuration,
+credentials, paths or raw errors. This mode does not probe arbitrary binaries,
+trust an operator-supplied runtime report, register candidate SQL, enable a
+runtime, provide a broker socket, or claim Docker/four-format execution readiness.
+An operator can use it to ensure a deployment requiring the future broker cannot
+silently start on the experimental legacy backend. Existing deployments that do
+not set the new variable retain their original explicit mode checks.
+
+Verification exercises the actual worker/Sheets functions with configuration
+access sentinels and socket-connect counters (zero), as well as the real server
+entry in a child process (exit 1, fixed reason, no advertised listener). Legacy
+negative startup tests remain unchanged. This is startup-denial evidence, not
+positive legacy host, Docker, broker execution or production acceptance.
