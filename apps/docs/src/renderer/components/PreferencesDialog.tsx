@@ -16,7 +16,7 @@ export function PreferencesDialog({ onClose }: { onClose: () => void }) {
       onKeyDown={modalKeys.onKeyDown}
       onMouseDown={(e) => e.target === e.currentTarget && onClose()}
     >
-      <div className="modal protect-dialog" role="dialog" aria-label={t('appPrefsTitle')}>
+      <div className="modal protect-dialog editor-settings-dialog" role="dialog" aria-label={t('appPrefsTitle')}>
         <h2>{t('appPrefsTitle')}</h2>
         <label className="fld prefs-field">
           <span>{t('appPrefsUnitsLabel')}</span>
