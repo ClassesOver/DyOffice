@@ -205,7 +205,12 @@ test('second browser editor is read only until explicit takeover',{timeout:90000
  await f.page.goto(url)
  await expect.poll(()=>f.page.evaluate(()=>window.__genofficeDebug?.univerAPI.getActiveWorkbook()?.getActiveSheet()?.getRange('A2').getValue()),{timeout:30000}).toBe(12.5)
  const second=await f.context.newPage();await second.addInitScript(()=>{window.__genofficeDebugHooks=true});await second.goto(url)
- await expect(second.locator('.document-notification')).toContainText('Read only',{timeout:30000})
+ // Lease authority errors and transient realtime information can coexist.
+ // Select the semantic error role, never the first arbitrary notification.
+ const secondAuthority = second.locator('.document-notification[role="alert"]')
+ await expect(secondAuthority).toHaveCount(1,{timeout:30000})
+ await expect(secondAuthority).toContainText('Read only',{timeout:30000})
+ await expect(second.locator('.dyoffice-sheets-download')).toBeDisabled()
  await expect.poll(()=>second.evaluate(()=>window.__genofficeDebug?.univerAPI.getActiveWorkbook()?.getActiveSheet()?.getRange('A2').getValue()),{timeout:30000}).toBe(12.5)
  const stillReadOnly=await second.evaluate(async()=>{const r=window.__genofficeDebug.univerAPI.getActiveWorkbook().getActiveSheet().getRange('A2');try{await r.setValue(77)}catch{}return r.getValue()})
  assert.equal(stillReadOnly,12.5,'readonly user command must not overwrite imported cells')
@@ -217,5 +222,8 @@ test('second browser editor is read only until explicit takeover',{timeout:90000
  await second.evaluate(()=>window.__genofficeDebug.univerAPI.getActiveWorkbook().getActiveSheet().getRange('A2').setValue(99))
  await expect(second.locator('.qa-btn').first()).toBeEnabled();await second.locator('.qa-btn').first().click()
  await expect.poll(async()=>(await f.files.openFile(f.alice.token,id)).file.revision,{timeout:15000}).not.toBe(f.opened.file.revision)
- await expect(f.page.locator('.document-notification')).toContainText('Editing permission expired',{timeout:20000})
+ const formerAuthority = f.page.locator('.document-notification[role="alert"]')
+ await expect(formerAuthority).toHaveCount(1,{timeout:20000})
+ await expect(formerAuthority).toContainText('Editing permission expired',{timeout:20000})
+ await expect(f.page.locator('.dyoffice-sheets-download')).toBeDisabled()
 })

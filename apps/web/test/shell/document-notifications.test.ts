@@ -22,3 +22,23 @@ it('keeps actionable errors until dismissed and clears resolved messages',()=>{
  act(()=>node.querySelector<HTMLButtonElement>('[aria-label="关闭通知"]')!.click());expect(node.querySelector('.document-notification')).toBeNull()
  render([]);expect(node.querySelector('.document-notification-trigger')).toBeNull()
 })
+
+it('keeps lease-authority alerts distinct from concurrent version status notices',()=>{
+ vi.useFakeTimers()
+ const takeover=vi.fn()
+ const info={id:'version',level:'info',title:'Version updates',message:'Restoring version updates.'}
+ const node=render([{id:'document-state',level:'error',title:'Document needs attention',message:'Read only: another editor holds this document.',actions:createElement('button',{onClick:takeover},'Take over editing')},info])
+ expect(node.querySelectorAll('.document-notification')).toHaveLength(2)
+ const alerts=node.querySelectorAll('.document-notification[role="alert"]')
+ expect(alerts).toHaveLength(1)
+ expect(alerts[0].textContent).toContain('Read only')
+ expect(node.querySelectorAll('.document-notification[role="status"]')).toHaveLength(1)
+ act(()=>alerts[0].querySelector<HTMLButtonElement>('button')!.click())
+ expect(takeover).toHaveBeenCalledOnce()
+ render([{id:'document-state',level:'error',title:'Document needs attention',message:'Editing permission expired or the document changed.'},info])
+ expect(node.querySelectorAll('.document-notification[role="alert"]')).toHaveLength(1)
+ expect(node.querySelector('.document-notification[role="alert"]')!.textContent).toContain('Editing permission expired')
+ render([info])
+ expect(node.querySelectorAll('.document-notification[role="alert"]')).toHaveLength(0)
+ expect(node.querySelector('.document-notification[role="status"]')!.textContent).toContain('Restoring version updates')
+})
