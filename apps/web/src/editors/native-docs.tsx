@@ -1,3 +1,5 @@
+import {LocalDraftCopy} from './local-draft-copy'
+import type {DraftCopyAuthority} from './draft-copy-authority'
 import {DocumentNotifications} from './document-notifications'
 import {createEditorCloseLifecycle} from './editor-close-lifecycle'
 import {createAnalysisDocumentTarget} from '../../../../packages/browser-host/src/analysis-document-target.ts'
@@ -31,7 +33,7 @@ import '../../../docs/src/renderer/styles.css'
 import '../../../docs/src/renderer/fonts/fonts.css'
 import './docs.css'
 
-export async function mountDocsEditor(host: SessionFileHost,element: HTMLElement,fileId: string) {
+export async function mountDocsEditor(host: SessionFileHost,element: HTMLElement,fileId: string,draftAuthority:DraftCopyAuthority={current:()=>false,verify:async()=>false}) {
   element.textContent = messages.zh.opening
   if (!/^[0-9a-f-]{36}$/i.test(fileId)) throw new Error(messages.zh.failed)
   let closing=false
@@ -44,6 +46,10 @@ export async function mountDocsEditor(host: SessionFileHost,element: HTMLElement
     editorHandle = handle
     if (readinessChanged) changed()
   }
+  // Every registration gets a fresh local-copy identity, including detach/rebind
+  // of the same renderer handle. Keep the readiness callback semantics unchanged.
+  let draftEditor:Pick<DocsEditorHandle,'serialize'>|null=null
+  const registerDraftEditor=(handle:DocsEditorHandle|null)=>{draftEditor=handle?{serialize:()=>handle.serialize()}:null;registerEditor(handle)}
   const unsubscribe = host.subscribe(() => changed())
   const assistantResult = await loadEditorAssistant({fileId,editorId:host.getEditorId()!,generation:()=>1})
   const assistant = assistantResult.assistant
@@ -111,6 +117,7 @@ export async function mountDocsEditor(host: SessionFileHost,element: HTMLElement
     const fileActions = <>
       <div className="file-menu-sep" />
       <button className="dyoffice-docs-save-download" title={text.saveDownloadVersionHint} disabled={!loaded || failed || !editorHandle || !state.lease || state.status !== 'idle' || downloading} onClick={() => { void saveAndDownload() }}>{text.saveDownload}</button>
+      <LocalDraftCopy name={state.name} locale={locale} authority={draftAuthority} getEditor={()=>!disposed&&!closing&&loaded&&!failed&&host.getState(fileId).status!=='unauthorized'?draftEditor:null}/>
       <a className="dyoffice-docs-download" href={`/api/v1/files/${fileId}/content?revision=${state.revision.revision}`} download>{text.download}</a>
     </>
     return <div className="dyoffice-native-docs">
@@ -121,7 +128,7 @@ export async function mountDocsEditor(host: SessionFileHost,element: HTMLElement
       </>}] : []),
         ...(notice ? [{id:'version',level:'info' as const,title:locale === 'zh' ? '版本同步' : 'Version updates',message:notice}] : []),
       ]} />
-      <App host={{ fileActions,saveStatus,desktopActionsAvailable:false,readOnly: !loaded || failed || !state.lease || local.takingOver,assistantAvailable,assistant,preferenceScope: fileId,onEditorReady: registerEditor,lifecycle: { ...bridge.lifecycle,documentOpened() { bridge.lifecycle.documentOpened(); setLoaded(true) } },onDocumentEdited: bridge.lifecycle.edited,onOpenFailed: () => setFailed(true) }} />
+      <App host={{ fileActions,saveStatus,desktopActionsAvailable:false,readOnly: !loaded || failed || !state.lease || local.takingOver,assistantAvailable,assistant,preferenceScope: fileId,onEditorReady: registerDraftEditor,lifecycle: { ...bridge.lifecycle,documentOpened() { bridge.lifecycle.documentOpened(); setLoaded(true) } },onDocumentEdited: bridge.lifecycle.edited,onOpenFailed: () => setFailed(true) }} />
     </div>
   }
   const root = createRoot(element)

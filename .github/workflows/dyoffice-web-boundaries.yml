@@ -217,8 +217,8 @@ jobs:
         run: node_modules/.bin/playwright install chromium --with-deps
       - name: Regress native save generation and Web bridge state
         run: node --experimental-strip-types --test apps/web/test/unit/save-generation.test.mjs apps/web/test/unit/docs-bridge-save.test.mjs
-      - name: Regress phased DOCX loading and concurrent edits
-        run: node --import tsx --test --test-concurrency=1 apps/web/test/unit/docs-phased-load-dirty.test.mjs
+      - name: Regress phased DOCX loading, concurrent edits and draft-copy entry
+        run: node --import tsx --test --test-concurrency=1 apps/web/test/unit/docs-phased-load-dirty.test.mjs apps/web/test/unit/docs-save-download-entry.test.mjs
       - name: Check native Web host types
         run: npm run typecheck:web:docs
       - name: Build real DOCX renderer and test native edits over TLS
