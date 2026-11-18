@@ -3,14 +3,15 @@ import assert from 'node:assert/strict'
 import {readFile} from 'node:fs/promises'
 import {runInNewContext} from 'node:vm'
 import {transform} from 'esbuild'
+import {readOpenDocument} from '../src/shell/document-entry-reader.ts'
 const source=await readFile(new URL('../src/shell/local-main.tsx',import.meta.url),'utf8')
-const slice=source.slice(source.indexOf('async function open(id:'),source.indexOf('const unsupported='))
+const slice=source.slice(source.indexOf('async function resolveOpenDocument(id:'),source.indexOf('const unsupported='))
 const {code}=await transform(slice,{loader:'ts',target:'es2022'})
 function fixture({format='docx',capability='editable',fail=false,download,revision='rev',pending=false}={}){
  const calls=[],opened=[],navigated=[],inputs=[],reserved=[];let release
  const result={name:`test.${format}`,format,file:{fileId:'file',revision},downloadEndpoint:download??`/api/v1/files/file/content?revision=${revision}`}
  const client={async request(path,method){calls.push([path,method]);if(fail)throw Error('Forbidden');return result},async upload(file){calls.push(['upload',file.name]);if(pending)await new Promise(r=>release=r);return result}}
- const api=runInNewContext(code+'\n({open,upload,browse})',{client,capabilities:{[format]:capability},documentTabs:{reserveOpen:id=>{const token={renameVersion:0,sequence:reserved.length+1};reserved.push({id,token});return token},open:(x,token)=>{assert.equal(reserved.at(-1)?.id,x.id);assert.equal(token,reserved.at(-1)?.token);opened.push(x)}},notifyFilesChanged(){},notice(){},showUpload(){inputs.push({dialog:true})},location:{assign:x=>navigated.push(x)},document:{createElement(){return {click(){inputs.push(this)}}}},encodeURIComponent})
+ const api=runInNewContext(code+'\n({open,upload,browse})',{client,sourceWorkspace:{bound:{request:client.request}},readOpenDocument,capabilities:{[format]:capability},documentTabs:{reserveOpen:id=>{const token={renameVersion:0,sequence:reserved.length+1};reserved.push({id,token});return token},open:(x,token)=>{assert.equal(reserved.at(-1)?.id,x.id);assert.equal(token,reserved.at(-1)?.token);opened.push(x)}},notifyFilesChanged(){},notice(){},showUpload(){inputs.push({dialog:true})},location:{assign:x=>navigated.push(x)},document:{createElement(){return {click(){inputs.push(this)}}}},encodeURIComponent})
  return {api,calls,opened,navigated,inputs,release:()=>release()}
 }
 for(const format of ['docx','xlsx','pptx','pdf'])for(const capability of ['editable','unsupported'])test(`${format} ${capability} opens in-app without navigating the browser`,async()=>{

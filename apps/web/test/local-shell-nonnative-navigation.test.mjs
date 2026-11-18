@@ -3,10 +3,11 @@ import assert from 'node:assert/strict'
 import {readFile} from 'node:fs/promises'
 import {runInNewContext} from 'node:vm'
 import {transform} from 'esbuild'
+import {readOpenDocument} from '../src/shell/document-entry-reader.ts'
 
 // Execute the real Home open/upload bodies without mounting unrelated React UI.
 const source=await readFile(new URL('../src/shell/local-main.tsx',import.meta.url),'utf8')
-const slice=source.slice(source.indexOf('async function open(id:'),source.indexOf('async function browse()'))
+const slice=source.slice(source.indexOf('async function resolveOpenDocument(id:'),source.indexOf('async function browse()'))
 assert.ok(slice.includes('async function upload('))
 const {code}=await transform(slice,{loader:'ts',target:'es2022'})
 function fixture({format='xlsx',capability='editable',missingCapability=false,fail,download='/api/v1/files/file/content?revision=rev'}={}){
@@ -14,7 +15,7 @@ function fixture({format='xlsx',capability='editable',missingCapability=false,fa
  const result={format,name:'book.'+format,file:{fileId:'file',revision:'rev'},downloadEndpoint:download}
  const client={async request(path,method){calls.push([path,method]);if(fail&&(fail==='read'||method==='POST'))throw new Error('Forbidden');return result},async upload(file){calls.push(['upload',file.name]);return result}}
  const opened=[]
- const context={documentTabs:{reserveOpen:()=>({renameVersion:0,sequence:1}),open:x=>opened.push(x)},client,capabilities:{docx:'editable',...(missingCapability?{}:{xlsx:capability})},notifyFilesChanged(){calls.push(['changed'])},notice:x=>notices.push(x),location:{assign:x=>navigated.push(x)},document:{createElement(){return {click(){downloads.push([this.href,this.download])}}}},encodeURIComponent}
+ const context={documentTabs:{reserveOpen:()=>({renameVersion:0,sequence:1}),open:x=>opened.push(x)},client,sourceWorkspace:{bound:{request:client.request}},readOpenDocument,capabilities:{docx:'editable',...(missingCapability?{}:{xlsx:capability})},notifyFilesChanged(){calls.push(['changed'])},notice:x=>notices.push(x),location:{assign:x=>navigated.push(x)},document:{createElement(){return {click(){downloads.push([this.href,this.download])}}}},encodeURIComponent}
  const api=runInNewContext(code+'\n({open,upload})',context)
  return {api,calls,navigated,downloads,notices,opened}
 }
