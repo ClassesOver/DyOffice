@@ -304,6 +304,7 @@ import { formattingMarksPluginKey, sectionBreakMap } from './editor/formatting-m
 import {
   COMMENT_AREA_W,
   clearMarginAnnotations,
+  dismissMarginCommentMenu,
   isMarginCommentImeConfirm,
   syncMarginAnnotations,
   type MarginHandlers,
@@ -7829,7 +7830,7 @@ export function App({ host }: { host?: { desktopActionsAvailable?: boolean; read
       if (!el?.closest('.comment-bubble.comment-popup, .comment-balloon')) setCommentPopup(null)
     }
     const onKey = (e: globalThis.KeyboardEvent) => {
-      if (e.key === 'Escape' && !isMarginCommentImeConfirm(e)) setCommentPopup(null)
+      if (e.key === 'Escape' && !isMarginCommentImeConfirm(e) && !dismissMarginCommentMenu(e)) setCommentPopup(null)
     }
     document.addEventListener('pointerdown', onDown, true)
     document.addEventListener('keydown', onKey, true)

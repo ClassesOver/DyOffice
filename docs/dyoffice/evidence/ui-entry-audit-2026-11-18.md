@@ -474,3 +474,14 @@
 - 页边输入按节点登记已有guard至WeakMap，App捕获监听读取同一状态；局部输入对IME Escape停止传播并保留默认行为，普通Escape仍关闭浮层/取消编辑/回复失焦。未增加第二份组合状态，移除节点不污染新输入。
 - 新增8项覆盖回复/编辑×四信号，并验证捕获阶段的状态读取、焦点/草稿/默认行为和随后普通Escape。另增1项验证编辑中组合状态随节点移除隔离；相关4文件69项通过，Web docs类型/构建通过（既有chunk提示），边界1341文件0违规及git diff --check通过。日志 `/tmp/dyoffice-margin-escape-{red,green,type,build,boundary}.log`。
 - 最终构建1440/390共6流程、24次合成IME Escape，回复及编辑草稿、浮层均保留；各流程下一普通Escape关闭浮层，重开未发布草稿，0页面异常。证据 `/tmp/dyoffice-ui-audit/word-margin-ime-escape-green-{1440,390}/report.json`；业务API mock/blocked，不替代实体输入法或真实保存验收。正文批注菜单键盘和生命周期仍待查，全量UI穷举未完成。
+
+
+## 正文页边批注菜单键盘、重绘与监听清理
+
+- 正式Word正文批注浮层打开操作菜单后，焦点未移到菜单项；原实现也不支持方向键/Home/End/Escape、未初始化aria-expanded，删除不重绘时菜单未关，批注层重绘/清除后document pointerdown监听未解除。首轮10项组件回归全部先红；浏览器红证据 `/tmp/dyoffice-ui-audit/word-margin-menu-red-1440/report.json`。
+- 菜单打开聚焦首项，ArrowDown/Up从触发器打开到首/末项；菜单内箭头循环、Home/End定位。菜单Escape由App capture优先调用同一关闭逻辑，返回焦点到触发器并保留浮层；下一普通Escape才关闭浮层。IME Escape不关闭、不prevent默认动作。Tab/Shift+Tab关闭菜单后按浏览器默认顺序前进/后退。
+- 删除先关闭菜单再回调；焦点或指针移到菜单及触发器以外时关闭（包括同排的赞）。菜单document监听使用同一函数解除，批注层clear及重绘清空DOM前逐一关闭；WeakMap登记不强留旧节点。
+- 首轮浏览器复验还发现真实后台分页重绘会替换操作节点，造成Escape后或Tab后的焦点丢失；新增3项重绘测试全部先红，再按entryId与当前操作恢复菜单/焦点，仅限原条目仍存在。另2项同排赞的pointer/focus回归先红后绿。最终菜单19项还覆盖原生/229 IME、回复条目跨线程重排、被删线程不转移焦点及恢复菜单再次外部关闭。最初点击被菜单遮住的回复框属于harness错误，已改为实际可见的作者区域，不计产品缺陷。
+- 保留远端e30a0225主题测试与7fb44478只读批注/历史权限修复，精确导入并rebase，无覆盖。最终相关8文件101项通过，Web docs类型/生产构建通过（既有chunk提示），边界1342文件0违规、git diff --check通过；日志 `/tmp/dyoffice-margin-menu-{red,redraw-red,sibling-red,merged-tests,merged-type,merged-build,merged-boundary}.log`。独立只读复核无阻塞，不宣称权限修复的完整真实保存集成已重跑。
+- 最终构建1440/390各9组菜单检查通过：焦点和导航、原生/229 IME Escape、菜单/浮层两级Escape、双向Tab、Enter激活编辑、外部与同排赞点击关闭。通过合成字体loadingdone触发真实分页重测并确认旧菜单节点已断开，重建菜单仍保留当前项目焦点。证据 `/tmp/dyoffice-ui-audit/word-margin-menu-final-{1440,390}/report.json`。
+- 最终构建同时复验两尺寸回复/Ctrl编辑/Meta编辑的四类IME Escape共24次：草稿、浮层保留，普通Escape正常关闭，0页面异常。证据 `/tmp/dyoffice-ui-audit/word-margin-ime-escape-menu-final-{1440,390}/report.json`。全部文档/lease写mock，其他业务写blocked；合成信号不代替实体输入法。全量UI穷举仍在进行。
