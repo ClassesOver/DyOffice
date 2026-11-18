@@ -1,6 +1,6 @@
 import type { Editor } from '@tiptap/core'
 import { NodeSelection } from '@tiptap/pm/state'
-import { pendingDocumentOperation } from './pending-document-operation'
+import { pendingPictureOperation } from './pending-picture-operation'
 import { imageSizeOf } from '../components/ribbon-tabs'
 import { showToast } from '../components/toast-bus'
 import { t } from '../i18n/locale'
@@ -18,7 +18,8 @@ export async function applyPictureBytes(
   const target = selection.node
   const attrs = target.attrs
   if (attrs?.blockType !== 'image') return
-  const operation = pendingDocumentOperation(editor)
+  const operation = pendingPictureOperation(editor)
+  if (!operation) return
   const currentTarget = () => {
     if (!operation.current()) return false
     const currentSelection = editor.state.selection

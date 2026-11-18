@@ -12,7 +12,7 @@ import type {
 } from 'react'
 import type { ChainedCommands, Editor } from '@tiptap/core'
 import { NodeSelection, type Command } from '@tiptap/pm/state'
-import { pendingDocumentOperation } from '../editor/pending-document-operation'
+import { pendingPictureOperation as guardPictureOperation } from '../editor/pending-picture-operation'
 import { showToast } from './toast-bus'
 import type { Mark, Node as PMNode } from '@tiptap/pm/model'
 import {
@@ -1237,17 +1237,8 @@ function RibbonInner({
     align: sub ? fs.align : fs.shapeTextAlign,
   }
 
-  const pendingPictureOperation = (targetEditor: Editor = editor) => {
-    const selection = targetEditor.state.selection
-    const node = targetEditor.state.doc.nodeAt(selection.from)
-    const operation = pendingDocumentOperation(targetEditor)
-    return {
-      current: () => operation.current()
-        && targetEditor.state.selection.eq(selection)
-        && targetEditor.state.doc.nodeAt(selection.from) === node,
-      dispose: operation.dispose,
-    }
-  }
+  const pendingPictureOperation = (targetEditor: Editor = editor) =>
+    guardPictureOperation(editor, targetEditor)
 
   /**
    * Replace the selected image's bytes (shared by Replace Picture / remove background / crop).
@@ -1261,6 +1252,7 @@ function RibbonInner({
   const replacePicture = async () => {
     if (!canEdit) return
     const operation = pendingPictureOperation()
+    if (!operation) return
     try {
       const picked = await window.desktop.pickImage()
       if (!picked || !operation.current()) return
@@ -1355,6 +1347,7 @@ function RibbonInner({
     const url = fs.imageDataUrl
     if (!inImage || !url) return
     const operation = pendingPictureOperation(ed)
+    if (!operation) return
     try {
       const natural = await imageSizeOf(url)
       if (!operation.current()) return
