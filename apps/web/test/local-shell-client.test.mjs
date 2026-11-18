@@ -16,8 +16,14 @@ test('new API files paginate and map preferences without legacy endpoint fallbac
  assert.deepEqual(await client.homeRequest('/files'),[{id:'a'},{id:'b'}]);assert.equal(calls[1],'/api/v1/files?limit=100&cursor=next');await assert.rejects(client.homeRequest('/unknown'),/Unsupported/)
 })
 test('upload stages exact bytes then finishes once; failed finish is not cancelled or retried',async()=>{
- const calls=[];const client=createLocalShellClient(async(path,init)=>{calls.push({path,...init});if(path.endsWith('/csrf'))return json({csrfToken:'session'});if(path.endsWith('/files/uploads'))return json({uploadId:'up'});if(path.endsWith('/finish'))return json({title:'Unknown commit'},503);return new Response(null,{status:204})})
- const file=new File(['abc'],'a.docx');await assert.rejects(client.upload(file),/Unknown commit/);assert.deepEqual(calls.map(c=>c.path),['/api/v1/auth/csrf','/api/v1/files/uploads','/api/v1/uploads/up/content','/api/v1/uploads/up/finish']);assert.equal(calls[2].body,file);assert.equal(calls[3].body,undefined)
+ const calls=[];const proof='a'.repeat(43)
+ const client=createLocalShellClient(async(path,init)=>{calls.push({path,...init});if(path.endsWith('/session-proof'))return json({csrfToken:proof});if(path.endsWith('/files/uploads'))return json({uploadId:'up'});if(path.endsWith('/finish'))return json({title:'Unknown commit'},503);return new Response(null,{status:204})})
+ const file=new File(['abc'],'a.docx');await assert.rejects(client.upload(file,proof),/Unknown commit/)
+ const writes=calls.filter(c=>c.method!=='GET')
+ assert.deepEqual(writes.map(c=>c.path),['/api/v1/files/uploads','/api/v1/uploads/up/content','/api/v1/uploads/up/finish'])
+ assert.equal(writes[1].body,file);assert.equal(writes[2].body,undefined)
+ assert.ok(writes.every(c=>c.headers['X-CSRF-Token']===proof))
+ assert.equal(calls.filter(c=>c.path.endsWith('/session-proof')).length,3)
 })
 test('password change adopts rotated session CSRF; failures clear stale token without retry',async()=>{
  const calls=[];let fail=false;const client=createLocalShellClient(async(path,init)=>{calls.push({path,...init});if(path.endsWith('/csrf'))return json({csrfToken:'before'});if(path.endsWith('/change-password'))return fail?json({title:'Unauthorized'},401):json({csrfToken:'a'.repeat(43)});return json({theme:'dark'})})
@@ -81,3 +87,46 @@ test('configuration conflicts keep the draft guidance without hiding other resou
  await assert.rejects(client.request('/api/v1/admin/config'),/草稿已保留/)
 })
 
+
+test('file upload refuses a cookie rotated before the initiating workspace action',async()=>{
+ let cookie='a';const writes=[]
+ const client=createLocalShellClient(async(path,init)=>{
+  if(path.endsWith('/session-proof')||path.endsWith('/csrf'))return json({csrfToken:cookie.repeat(43)})
+  if(!['GET','HEAD'].includes(init.method)){
+   if(init.headers['X-CSRF-Token']!==cookie.repeat(43))return json({error:'Forbidden'},403)
+   writes.push({account:cookie,path})
+  }
+  if(path.endsWith('/files/uploads'))return json({uploadId:'up'})
+  if(path.endsWith('/finish'))return json({file:{fileId:'created'}})
+  return new Response(null,{status:204})
+ })
+ const workspace=await client.bindSession()
+ cookie='b'
+ const result=await client.upload(new File(['private A bytes'],'a.docx'),workspace.proof).then(value=>({value}),error=>({error}))
+ assert.deepEqual(writes,[],'no private bytes or new files may be sent to the new cookie account')
+ assert.equal(result.error?.code,'stale_session')
+})
+
+for(const rotateAfter of ['stage','content','finish'])test(`upload fences cookie rotation after ${rotateAfter} without replay or cross-account bytes`,async()=>{
+ let cookie='a';const writes=[];const proof='a'.repeat(43)
+ const client=createLocalShellClient(async(path,init)=>{
+  if(path.endsWith('/session-proof'))return json({csrfToken:cookie.repeat(43)})
+  assert.equal(init.headers['X-CSRF-Token'],proof)
+  if(init.headers['X-CSRF-Token']!==cookie.repeat(43))return json({error:'Forbidden'},403)
+  const phase=path.endsWith('/files/uploads')?'stage':path.endsWith('/content')?'content':'finish'
+  writes.push({account:cookie,phase,body:init.body})
+  if(phase===rotateAfter)cookie='b'
+  return phase==='stage'?json({uploadId:'up'}):phase==='finish'?json({file:{fileId:'created'}}):new Response(null,{status:204})
+ })
+ const file=new File(['private A bytes'],'a.xlsx')
+ await assert.rejects(client.upload(file,proof),{code:'stale_session'})
+ const phases=['stage','content','finish'];assert.deepEqual(writes.map(w=>w.phase),phases.slice(0,phases.indexOf(rotateAfter)+1))
+ assert.ok(writes.every(w=>w.account==='a'))
+ if(rotateAfter!=='stage')assert.equal(writes[1].body,file)
+})
+
+test('upload without an initiating workspace proof makes no request',async()=>{
+ let calls=0;const client=createLocalShellClient(async()=>{calls++;throw Error('must not call')})
+ await assert.rejects(client.upload(new File(['x'],'a.pdf'),undefined),{code:'stale_session'})
+ assert.equal(calls,0)
+})
