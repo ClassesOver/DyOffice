@@ -1,6 +1,8 @@
 import {assertDocumentBackendPolicy} from '../worker/src/sandbox/document-backend-policy.ts';
+import { openIsolatedPptxSession } from '../worker/src/native/pptx-session-host.ts';
 import { configuredSheetsRuntime } from './src/modules/sheets/runtime.ts';
-import { resolve } from 'node:path';
+import { resolve, join } from 'node:path';
+import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { localShellDirectory } from './local-shell-config.mjs';
 import { fileURLToPath } from 'node:url';
@@ -50,11 +52,19 @@ async function configuredApplication() {
     businessPool=new Pool({connectionString:businessConnectionString,max:4,connectionTimeoutMillis:5000});
     storage=await configuredObjectStore(process.env);
     const nativeFlag=process.env.DYOFFICE_NATIVE_DOCX;
-    if(nativeFlag && nativeFlag!=='experimental') throw new Error('Unknown native DOCX mode');
-    const nativeDocsDirectory=nativeFlag ? resolve(process.env.DYOFFICE_NATIVE_DOCX_DIRECTORY||fileURLToPath(new URL('../dist-docs/',import.meta.url))) : undefined;
+    if(nativeFlag && nativeFlag!=='experimental' && nativeFlag!=='off') throw new Error('Unknown native DOCX mode');
+    const defaultDocsDir=resolve(process.env.DYOFFICE_NATIVE_DOCX_DIRECTORY||fileURLToPath(new URL('../dist-docs/',import.meta.url)));
+    const nativeDocsDirectory=nativeFlag==='experimental' ? defaultDocsDir : (nativeFlag===undefined && storage.objectStore && existsSync(join(defaultDocsDir,'.vite/manifest.json')) ? defaultDocsDir : undefined);
+    const slidesFlag=process.env.DYOFFICE_NATIVE_PPTX;
+    if(slidesFlag && slidesFlag!=='experimental' && slidesFlag!=='off') throw new Error('Unknown native PPTX mode');
+    const defaultSlidesDir=resolve(process.env.DYOFFICE_NATIVE_PPTX_DIRECTORY||fileURLToPath(new URL('../dist-slides/',import.meta.url)));
+    const nativeSlidesDirectory=slidesFlag==='experimental' ? defaultSlidesDir : (slidesFlag===undefined && storage.objectStore && existsSync(join(defaultSlidesDir,'.vite/manifest.json')) ? defaultSlidesDir : undefined);
+    const slidesHost=nativeSlidesDirectory ? {openSession:(input)=>openIsolatedPptxSession({fileId:input.fileId,revision:input.revision,bytes:input.bytes},{timeoutMs:60000,experimental:true})} : undefined;
+    const defaultShellDir=fileURLToPath(new URL('../dist-local-shell/',import.meta.url));
+    const effectiveShellDirectory=shellDirectory ?? (storage.objectStore && existsSync(join(defaultShellDir,'.vite/manifest.json')) ? defaultShellDir : undefined);
     sheets=await configuredSheetsRuntime(process.env);
     const {close:closeSheets,...sheetsConfig}=sheets ?? {};
-    return await buildLocalApp({db,businessPool,...storage,...sheetsConfig,nativeDocsDirectory,localShellDirectory:shellDirectory,nativeJobs:jobFlag==='experimental',deploymentId,origin,csrfKey,globalConfigKeyring,providerGateway,assistantSourceCatalog,assistantChannels:process.env.DYOFFICE_ASSISTANT_CHANNELS==='on',codingHarnesses:process.env.DYOFFICE_CODING_AGENT==='off'?false:{cliPath:process.env.DYOFFICE_CODEX_PATH,analysisPython:process.env.DYOFFICE_ANALYSIS_PYTHON},sourcesCredentialKeys,sourcesEgressTargets,passwordBlocklistFile:process.env.DYOFFICE_PASSWORD_BLOCKLIST_FILE,closeDb:async()=>{await closeSheets?.();storage.close();await Promise.all([close(),businessPool.end()]);}});
+    return await buildLocalApp({db,businessPool,...storage,...sheetsConfig,nativeDocsDirectory,nativeSlidesDirectory,slidesHost,localShellDirectory:effectiveShellDirectory,nativeJobs:jobFlag==='experimental',deploymentId,origin,csrfKey,globalConfigKeyring,providerGateway,assistantSourceCatalog,assistantChannels:process.env.DYOFFICE_ASSISTANT_CHANNELS==='on',codingHarnesses:process.env.DYOFFICE_CODING_AGENT==='off'?false:{cliPath:process.env.DYOFFICE_CODEX_PATH,analysisPython:process.env.DYOFFICE_ANALYSIS_PYTHON},sourcesCredentialKeys,sourcesEgressTargets,passwordBlocklistFile:process.env.DYOFFICE_PASSWORD_BLOCKLIST_FILE,closeDb:async()=>{await closeSheets?.();storage.close();await Promise.all([close(),businessPool.end()]);}});
   } catch(error) { await sheets?.close();storage?.close();await Promise.allSettled([close(),businessPool?.end()]); throw error; }
 }
 
