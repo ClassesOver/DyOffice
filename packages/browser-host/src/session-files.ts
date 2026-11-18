@@ -305,7 +305,11 @@ export function createSessionFileHost({ fetchImpl = fetch, editorId = crypto.ran
       let committing = false
       try {
         const snapshot = structuredClone(edits)
-        const draft = await mutation(`/api/v1/files/${id}/sheets/uploads`,'POST',{ baseRevision: base,leaseEpoch: lease.leaseEpoch,editorId: editor,request: snapshot })
+        const body = { baseRevision: base,leaseEpoch: lease.leaseEpoch,editorId: editor,request: snapshot }
+        // Match the server's existing sheets/uploads bodyLimit. Count the full
+        // UTF-8 JSON envelope, not just edits or UTF-16 string length.
+        if (new TextEncoder().encode(JSON.stringify(body)).byteLength > 4 * 1024 * 1024) throw hostError('PAYLOAD_TOO_LARGE','workbook save; edits remain unsaved')
+        const draft = await mutation(`/api/v1/files/${id}/sheets/uploads`,'POST',body)
         const uploadId = uuid(draft?.uploadId)
         if (draft.baseRevision !== base || draft.leaseEpoch !== lease.leaseEpoch || typeof draft.sha256 !== 'string' || !/^[a-f0-9]{64}$/.test(draft.sha256) || !Number.isSafeInteger(draft.size) || draft.size < 1 || draft.size > 32 * 1024 * 1024) throw hostError('INVALID_RESPONSE','prepared workbook')
         if (context(id) !== ctx || ctx.revision.revision !== base || ctx.lease?.leaseEpoch !== lease.leaseEpoch) throw hostError('CONFLICT','changed save authority')
