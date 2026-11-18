@@ -65,3 +65,41 @@ docker compose exec -T document-runtime-diagnostic systemctl show dyoffice-probe
 ## 本次验证
 
 静态测试：`python3 -m unittest discover -s deploy/docker/document-runtime-diagnostic/tests -v`（需要PyYAML，仅测试解析Compose）；Shell/Python语法检查。未运行Docker build/config/up、未观察systemd PID1、私有DBus或cgroup委派，没有真实容器单元成功证据。不能将只读审计或静态测试称为闭环。
+
+## 可复验只读证据收集
+
+构建前新增必填 `DIAGNOSTIC_SOURCE_COMMIT`，为干净、已审核构建源码的完整40位提交。
+最终镜像保留 `org.opencontainers.image.revision` 标签。标签是构建者声明，不是签名、
+远程证明或自动确认构建上下文干净；须由操作员独立审核源码和最终镜像。
+
+在操作员已明确启动诊断容器之后，使用宿主 Python3（仅标准库）收集：
+
+```sh
+python3 deploy/docker/document-runtime-diagnostic/collect-evidence.py \
+  --container-id <完整64位容器ID> \
+  --image-id sha256:<审核后的最终本地镜像64位内容ID> \
+  --source-commit <完整40位提交> > /tmp/dyoffice-diagnostic-evidence.json
+```
+
+这里的 `image-id` 是 `docker image inspect` 的最终镜像配置内容摘要 `.Id`，不是可变tag，
+也不是仓库 manifest 的 RepoDigest。不要仅为让检查通过而现场把期望值替换成任意当前值。
+这三个期望值应来自已审核部署记录。信任本机 Docker CLI/daemon 及该镜像构建者，
+不把恶意 daemon/镜像自己报告的标签和日志当可信认证。
+
+该命令只调用 Docker inspect 和固定 `systemctl show` / `journalctl` 读取命令，
+不 build/up/start/stop/restart/清理、不传入业务文档、不修改权限；每次读取8秒和128KiB上限，
+超时只终止读取CLI，不停止容器。只接受当前 probe InvocationID 的日志，前后核对容器/单元
+身份与状态，不把历史成功和本次失败拼成成功。报告不输出原始日志，只保留日志哈希。
+
+结果：
+- `fixed_probe_passed` / 退出0：固定sleep诊断标记、单个测试成功、probe正常退出，且读取到
+  sleep单元timeout/MainPID=0。**不是生产运行可用，也不是所有后代进程/cgroup已清空证明。**
+- `failed` / 退出2：当前probe明确失败；可能已提交，不能据此自动重试。
+- `unknown` / 退出2：缺字段/标记/日志、镜像或提交不符、超时、日志过大、容器已退出、单元
+  尚未结束或观察期间发生变化。包括无法观察的启动失败，不猜测为“从未提交”。保留环境人工核查。
+
+所有报告始终 `execution_available=false`、`isolation_certified=false`。这是点时观察，不保证
+报告返回后容器不变化。只读命令失败不会触发重试、清理或降级。旧镜像没有revision标签将拒绝判通过。
+
+本工具在开发环境仅完成合成证据分支及真实子进程读取上限测试；没有Docker build/up、
+Ubuntu容器/systemd实机正例，测试中的 `fixed_probe_passed` 不是实机验收结果。

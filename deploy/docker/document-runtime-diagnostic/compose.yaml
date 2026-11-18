@@ -8,6 +8,7 @@ services:
       context: ../../..
       dockerfile: deploy/docker/document-runtime-diagnostic/Dockerfile
       args:
+        SOURCE_COMMIT: ${DIAGNOSTIC_SOURCE_COMMIT:?Provide exact clean audited source commit}
         UBUNTU_IMAGE: ${DIAGNOSTIC_UBUNTU_IMAGE:?Provide audited Ubuntu 24.04 image pinned by digest}
         RUST_BUILD_IMAGE: ${DIAGNOSTIC_RUST_BUILD_IMAGE:?Provide audited Ubuntu Rust 1.93 offline-cache image pinned by digest}
         APT_MIRROR: ${DIAGNOSTIC_APT_MIRROR:-https://repo.huaweicloud.com/ubuntu/}
