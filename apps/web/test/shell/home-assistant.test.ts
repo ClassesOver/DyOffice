@@ -103,3 +103,62 @@ it('homepage chat chrome uses existing semantic tokens without raw colors',async
  expect(css).toContain('box-shadow:var(--shadow-menu)');expect(css).toContain('color:var(--danger)')
  expect(tokens.match(/--shadow-menu:/g)?.length).toBe(3);expect(tokens.match(/--danger:/g)?.length).toBe(3)
 })
+
+it.each(['budget','permission','sse','stop'])('a %s failure before the first token does not poison the next provider request',async mode=>{
+ const {buildOpenAiChatRequest}=await import('../../server/src/modules/providers/openai-request')
+ const f=fixture();let turns=0,validNext=false
+ const send:typeof fetch=async(input,init)=>{
+  if(String(input)!=='/api/v1/ai/turns')return f.send(input,init)
+  turns++
+  if(turns===1){
+   if(mode==='budget'||mode==='permission')return new Response('denied',{status:mode==='budget'?429:403})
+   if(mode==='sse')return new Response('event: error\ndata: {"message":"AI stream unavailable"}\n\nevent: done\ndata: {}\n\n',{headers:{'content-type':'text/event-stream'}})
+   return new Promise<Response>((_,reject)=>init!.signal!.addEventListener('abort',()=>reject(new DOMException('Aborted','AbortError'))))
+  }
+  const request=JSON.parse(init!.body as string).request
+  buildOpenAiChatRequest(request,{model:'synthetic',maxOutputTokens:128})
+  validNext=true
+  return new Response('event: delta\ndata: {"text":"recovered answer"}\n\nevent: done\ndata: {}\n\n',{headers:{'content-type':'text/event-stream'}})
+ }
+ const type=async(value:string)=>act(async()=>{const input=document.querySelector('textarea')!;Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value')!.set!.call(input,value);input.dispatchEvent(new Event('input',{bubbles:true}))})
+ await render(React.createElement(HomeAssistant,{bind:f.bind,fetchImpl:send}));await click('AI 助手');await type('first question');await click('发送')
+ if(mode==='stop')await click('停止')
+ await type('next question');await click('发送')
+ expect(turns).toBe(2);expect(validNext).toBe(true)
+ expect(document.querySelector('[role=log]')!.textContent).toContain('recovered answer')
+})
+
+it('retains a partial interrupted answer and rejects duplicate submits while running',async()=>{
+ const {buildOpenAiChatRequest}=await import('../../server/src/modules/providers/openai-request')
+ const f=fixture();let turns=0;let nextHistory:Array<{role:string;text:string}>=[]
+ const send:typeof fetch=async(input,init)=>{
+  if(String(input)!=='/api/v1/ai/turns')return f.send(input,init)
+  if(++turns===1)return new Response(new ReadableStream({start(controller){controller.enqueue(new TextEncoder().encode('event: delta\ndata: {"text":"partial answer"}\n\n'))}}),{headers:{'content-type':'text/event-stream'}})
+  const request=JSON.parse(init!.body as string).request
+  buildOpenAiChatRequest(request,{model:'synthetic',maxOutputTokens:128});nextHistory=request.messages
+  return new Response('event: done\ndata: {}\n\n',{headers:{'content-type':'text/event-stream'}})
+ }
+ const type=async(value:string)=>act(async()=>{const input=document.querySelector('textarea')!;Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value')!.set!.call(input,value);input.dispatchEvent(new Event('input',{bubbles:true}))})
+ await render(React.createElement(HomeAssistant,{bind:f.bind,fetchImpl:send}));await click('AI 助手');await type('question');await click('发送')
+ expect(document.querySelector('[role=log]')!.textContent).toContain('partial answer')
+ await act(async()=>{document.querySelector('form')!.dispatchEvent(new Event('submit',{bubbles:true,cancelable:true}))})
+ expect(turns).toBe(1);await click('停止');await type('continue');await click('发送')
+ expect(nextHistory).toContainEqual({role:'assistant',text:'partial answer'})
+ expect(document.querySelector('[role=log]')!.textContent).not.toContain('…')
+})
+
+it('account-key replacement clears the old chat and ignores its late response',async()=>{
+ const f=fixture();let late!:(response:Response)=>void,signal:AbortSignal|undefined
+ const send:typeof fetch=async(input,init)=>{
+  if(String(input)==='/api/v1/ai/turns'){signal=init?.signal as AbortSignal;return new Promise(resolve=>{late=resolve})}
+  return f.send(input,init)
+ }
+ await render(React.createElement(HomeAssistant,{key:'account-a',bind:f.bind,fetchImpl:send}));await click('AI 助手')
+ await act(async()=>{const input=document.querySelector('textarea')!;Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value')!.set!.call(input,'private A');input.dispatchEvent(new Event('input',{bubbles:true}))})
+ await click('发送')
+ await act(async()=>root.render(React.createElement(HomeAssistant,{key:'account-b',bind:f.bind,fetchImpl:f.send})))
+ expect(signal?.aborted).toBe(true);await click('AI 助手')
+ await act(async()=>late(new Response('event: delta\ndata: {"text":"late private A"}\n\nevent: done\ndata: {}\n\n',{headers:{'content-type':'text/event-stream'}})))
+ expect(document.querySelector('[role=log]')!.textContent).toBe('')
+ expect(document.querySelector('textarea')!.value).toBe('')
+})
