@@ -1,0 +1,30 @@
+/* B interior, isolated to personal skills. No shared table or dialog overrides. */
+.personal-skills-b.ant-card{border:0;background:var(--surface);color:var(--text);border-radius:0}
+.personal-skills-b>.ant-card-head{padding:0;min-height:48px;border:0;font-size:20px}
+.personal-skills-b>.ant-card-body{padding:12px 0 0}
+.personal-skills-b .personal-skills-toolbar{display:flex;justify-content:flex-end;gap:12px!important;margin-bottom:16px}
+.personal-skills-b>.ant-card-body>p{color:var(--text-secondary);line-height:1.7;margin:0 0 20px;overflow-wrap:anywhere}
+.personal-skills-b>.ant-card-body>h4{font-size:16px;font-weight:600;margin:28px 0 8px;color:var(--text)}
+.personal-skills-b .personal-skills-filters{display:flex;gap:12px!important;padding:16px;margin-bottom:16px;border:1px solid var(--border-subtle);border-radius:10px;background:var(--accent-soft)}
+.personal-skills-b .personal-skills-filters>.ant-space-item:first-child{flex:1 1 260px;min-width:0}
+.personal-skills-b .personal-skills-filters>.ant-space-item:last-child{flex:0 1 160px;min-width:140px}
+.personal-skills-b .personal-skills-filters .ant-select{width:100%}
+.personal-skills-b .ant-table-wrapper{border:1px solid var(--border-subtle);border-radius:10px;overflow:auto}
+.personal-skills-b .ant-table{background:var(--surface);color:var(--text);min-width:480px}
+.personal-skills-b .ant-table-thead>tr>th{background:var(--accent-soft);color:var(--text-secondary);font-size:12px;font-weight:600;padding:12px 16px;border-color:var(--border-subtle)}
+.personal-skills-b .ant-table-tbody>tr>td{padding:16px;border-color:var(--border-subtle);vertical-align:top;overflow-wrap:anywhere}
+.personal-skills-b .ant-table-tbody>tr:last-child>td{border-bottom:0}
+.personal-skills-b .ant-table-tbody strong{font-size:14px;font-weight:600;color:var(--text)}
+.personal-skills-b .ant-table-tbody p{margin:6px 0 10px;line-height:1.6;color:var(--text-secondary)}
+.personal-skills-b .ant-table-tbody .ant-space{flex-wrap:wrap}
+.personal-skills-b .personal-skills-owned td:first-child>div{font-size:12px;color:var(--text-secondary);margin-top:4px}
+.personal-skills-b .ant-tag{border:0;border-radius:5px;background:var(--accent-soft);color:var(--accent);font-size:11px;letter-spacing:.03em}
+.personal-skills-b .ant-btn{border-radius:7px;box-shadow:none}
+.personal-skills-b>.ant-card-body>.ant-alert{margin:12px 0}
+.personal-skills-b :is(button,input,[role=combobox]):focus-visible{outline:2px solid var(--accent);outline-offset:3px}
+@media(max-width:680px){
+ .personal-skills-b .personal-skills-toolbar{justify-content:flex-start}
+ .personal-skills-b .personal-skills-filters{padding:12px}
+ .personal-skills-b .personal-skills-filters>.ant-space-item:last-child{flex:1 1 140px}
+ .personal-skills-b .ant-table-tbody>tr>td{padding:12px}
+}

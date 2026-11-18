@@ -175,3 +175,14 @@ test('catalog write rejection never shows a successful installation',async()=>{
  expect(button('已添加')).toBeUndefined()
  expect(document.querySelector('[role="alert"]')?.textContent).toContain('操作被拒绝')
 })
+
+test('personal skills B scope retains both tables and labelled search and pagers',async()=>{
+ const host=await mount(async()=>[] as never)
+ const panel=host.querySelector('.personal-skills-b')
+ expect(panel).not.toBeNull()
+ expect(panel!.querySelectorAll('.ant-table')).toHaveLength(2)
+ expect(panel!.querySelector('.personal-skills-filters input[aria-label="搜索可安装技能"]')).not.toBeNull()
+ expect(panel!.querySelector('[aria-label="筛选技能格式"]')).not.toBeNull()
+ expect(panel!.querySelector('[aria-label="办公技能目录分页"]')).not.toBeNull()
+ expect(panel!.textContent).toContain('当前账号的办公技能')
+})
