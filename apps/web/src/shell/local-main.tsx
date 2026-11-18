@@ -144,7 +144,7 @@ function WorkspacePageContent({page,onClose,onCloseGuardChange,settingsTab,onSet
  if(page==='users'&&user?.roles.includes('config_admin'))return <section className="workspace-panel"><LocalAdminPanel client={adminClient} presentation="page" currentUserId={user.id} onSessionRotated={proof=>{client.invalidateCsrf();if(proof)void updateSession(proof).catch(e=>notice(e.message))}} onOwnAuthorityChanged={()=>client.endSession('expired')} onClose={onClose} onCloseGuardChange={registerGuard}/></section>
  if(page==='global'&&user?.roles.includes('config_admin'))return <GlobalSettingsPanel client={globalSettings} onClose={onClose} presentation="page" onCloseGuardChange={registerGuard}/>
  if(page==='sources'&&sourceWorkspace)return <SourcesPanel key={sessionVersion} client={sourceWorkspace.sources} resultsClient={sourceWorkspace.results} onClose={onClose} presentation="page" onCloseGuardChange={registerGuard}/>
- if(page==='trash')return <WorkspaceTrash request={client.request} onChanged={notifyFilesChanged} onClose={onClose} presentation="page" onCloseGuardChange={registerGuard}/>
+ if(page==='trash'&&sourceWorkspace)return <WorkspaceTrash request={sourceWorkspace.bound.request} onChanged={notifyFilesChanged} onClose={onClose} presentation="page" onCloseGuardChange={registerGuard}/>
  return null
 }
 async function bindHomeAssistant(){if(!sourceWorkspace)throw new Error('登录状态未就绪。');return client.bindSession(sourceWorkspace.bound.proof)}
