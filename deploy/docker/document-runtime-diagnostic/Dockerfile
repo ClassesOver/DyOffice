@@ -23,12 +23,16 @@ RUN --network=none rustc --version | grep '^rustc 1.93.0 ' \
       --lib --no-run --message-format=json > /tmp/cargo-artifacts.jsonl \
  && python3 /opt/select-test-binary.py /tmp/cargo-artifacts.jsonl /out
 FROM ${UBUNTU_IMAGE}
+ARG SOURCE_COMMIT
+LABEL org.opencontainers.image.revision=${SOURCE_COMMIT}
 ARG UBUNTU_IMAGE
 ARG APT_MIRROR=https://repo.huaweicloud.com/ubuntu/
 USER root
 COPY deploy/docker/document-runtime-diagnostic/configure-apt.sh /opt/configure-apt.sh
 COPY deploy/docker/document-runtime-diagnostic/validate-inputs.sh /opt/validate-inputs.sh
-RUN sh /opt/configure-apt.sh "$UBUNTU_IMAGE" "$APT_MIRROR" \
+RUN test "${#SOURCE_COMMIT}" -eq 40 \
+ && case "$SOURCE_COMMIT" in *[!0-9a-f]*) exit 78 ;; esac \
+ && sh /opt/configure-apt.sh "$UBUNTU_IMAGE" "$APT_MIRROR" \
  && apt-get update \
  && apt-get install -y --no-install-recommends systemd systemd-sysv dbus coreutils libssl3t64 libgcc-s1 ca-certificates \
  && rm -rf /var/lib/apt/lists/* /opt/configure-apt.sh /opt/validate-inputs.sh \
