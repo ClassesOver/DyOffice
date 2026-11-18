@@ -19,7 +19,7 @@ import './web-shell.css'
 import {installScreenTips} from '@genoffice/ui'
 import {createLocalHomeBridge} from './local-home-bridge'
 import {createLocalPreferencesSession} from './local-preferences-session'
-import {createGlobalSettingsClient} from './global-settings-client'
+import {createLocalGlobalSettingsSession} from './local-global-settings-session'
 import {GlobalSettingsPanel} from './GlobalSettingsPanel'
 import {WorkspaceTrash} from './WorkspaceTrash'
 import {createUserSkillsClient} from './user-skills-client'
@@ -59,7 +59,8 @@ const sessionsClient=createLocalSessionsClient(fetch,()=>client.endSession('expi
 const historyClient=createLoginHistoryClient(fetch,()=>client.endSession('expired'))
 const preferenceSession=createLocalPreferencesSession(client)
 const preferences=preferenceSession.preferences
-const globalSettings=createGlobalSettingsClient(client.request)
+const globalSettingsSession=createLocalGlobalSettingsSession(client)
+const globalSettings=globalSettingsSession.settings
 let userSkills: ReturnType<typeof createUserSkillsClient> | undefined
 let sourceWorkspace: Awaited<ReturnType<typeof createSourceWorkspaceSession>> | undefined
 type User={id:string;username:string;displayName:string;roles:string[]}
@@ -101,6 +102,7 @@ async function restore(){
  const bound=workspace.bound
  const identity=await bound.request<{user:User;deploymentId?:string}>('/api/v1/auth/me')
  preferenceSession.bind(bound)
+  globalSettingsSession.bind(bound)
  const personal=await preferences.getPreferences()
  const catalog=await bound.request<Record<string,string>>('/api/v1/capabilities')
  user=identity.user;capabilities=catalog;initialLanguage=personal.language==='en'?'en':'zh';userSkills=createUserSkillsClient(bound.request);sourceWorkspace=workspace
@@ -148,6 +150,7 @@ function WorkspacePageContent({page,onClose,onCloseGuardChange,settingsTab,onSet
   const identity=await bound.request<{user:User}>('/api/v1/auth/me')
   if(identity.user.id!==user?.id)throw new Error('登录状态已改变，请重新加载当前工作区。')
   preferenceSession.bind(bound)
+  globalSettingsSession.bind(bound)
   userSkills=createUserSkillsClient(bound.request);sourceWorkspace=workspace
   setSessionVersion(version=>version+1)
  }
