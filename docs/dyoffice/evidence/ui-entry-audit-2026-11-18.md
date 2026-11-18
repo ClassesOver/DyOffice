@@ -457,3 +457,12 @@
 - 菜单监听先检查原生isComposing/229，再读取既有按target隔离guard的active/just-ended状态；不创建额外guard、不阻止默认事件、不改普通Escape或pointerdown关闭。App正文批注浮层的独立capture仍待查，未以本轮菜单修复声称全部capture监听已覆盖。
 - 新增4项原生/229/活动/结束同tick全部先红后绿，验证菜单、焦点、默认行为保留及随后普通Escape可关闭；相关4文件58项通过。Web docs类型/生产构建（既有chunk提示）、边界1341文件0违规与git diff --check通过，独立只读复核无阻塞。日志 `/tmp/dyoffice-comment-menu-{escape-red,escape-green,type,build}.log`。合成信号仍不替代实体输入法验证。
 - 最终构建1440/390各1流程，四类IME信号均保留菜单/回复草稿/焦点，随后普通Escape关闭菜单并回复失焦，0页面异常；证据 `/tmp/dyoffice-ui-audit/word-comment-menu-escape-green-{1440,390}/report.json`。全部业务写mock/blocked。保留远端5595eb71的设置主题radio浏览器测试调整，非产品代码，无需重建Word；未宣称运行其完整设置浏览器验收。
+
+
+## 正文页边批注的 IME Enter
+
+- 正式Word插入批注后关闭侧栏及显示批注，点击正文批注图标打开页边浮层。组合状态下派发229 Enter，回复提前提交并清空草稿，浏览器红证据 `/tmp/dyoffice-ui-audit/word-margin-ime-red-1440/report.json`。最初定位显示批注按钮失败属于测试入口错误，不计产品失败。
+- 页边回复及编辑textarea分别创建现有createImeEnterGuard，监听本节点composition事件，仅保护Enter提交。未修改Escape或App捕获监听，不将本次修复视作这些路径已修好。
+- 12项覆盖回复、Ctrl/Meta编辑与原生/229/活动/结束同tick组合信号，原实现11红1绿；修后相关4文件65项通过。Web docs类型及生产构建通过（既有chunk提示），边界1341文件0违规，git diff --check通过。日志 `/tmp/dyoffice-margin-ime-{red-final,green}.log`、`/tmp/dyoffice-margin-{type,build,boundary}.log`。
+- 最终构建1440/390各验证回复、Ctrl编辑、Meta编辑三流程：组合确认保留草稿，随后普通快捷键提交，0页面异常。证据 `/tmp/dyoffice-ui-audit/word-margin-ime-green-{1440,390}/report.json`；文档及lease mock，其他业务写blocked，合成IME信号不替代实体输入法验收。
+- 发布前保留远端d2ce20d2保存响应诊断提交，非重叠文件精确导入ff合入；未宣称重跑该提交完整native保存集成。全量UI穷举仍未完成。

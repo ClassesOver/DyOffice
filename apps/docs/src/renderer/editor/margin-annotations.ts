@@ -24,6 +24,7 @@
  *   thread in the Comments panel.
  */
 import type { CommentInfo } from '@genoffice/docx-engine'
+import { createImeEnterGuard } from '@genoffice/ui'
 import { PAGE_TURN_SEL } from './pagination-gaps'
 import { pagePaperEdges, pageReaderShadow, type PageCut } from '../pagination-cuts'
 import type { EditorView } from '@tiptap/pm/view'
@@ -297,6 +298,9 @@ function makeBubble(
       const ta = document.createElement('textarea')
       ta.className = 'comment-edit-input'
       ta.value = c.text
+      const ime = createImeEnterGuard()
+      ta.addEventListener('compositionstart', ime.handleCompositionStart)
+      ta.addEventListener('compositionend', ime.handleCompositionEnd)
       const row = document.createElement('div')
       row.className = 'comment-compose-actions'
       const cancel = () => {
@@ -320,7 +324,7 @@ function makeBubble(
       saveBtn.textContent = t('appSave')
       saveBtn.addEventListener('click', save)
       ta.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) save()
+        if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && !ime.isImeConfirm(e)) save()
         if (e.key === 'Escape') cancel()
         e.stopPropagation()
       })
@@ -346,10 +350,13 @@ function makeBubble(
     input.className = 'comment-reply-input'
     input.placeholder = t('appReplyPlaceholder')
     input.setAttribute('aria-label', t('appReply'))
+    const ime = createImeEnterGuard()
+    input.addEventListener('compositionstart', ime.handleCompositionStart)
+    input.addEventListener('compositionend', ime.handleCompositionEnd)
     input.addEventListener('click', (e) => e.stopPropagation())
     input.addEventListener('keydown', (e) => {
       e.stopPropagation()
-      if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
+      if (e.key === 'Enter' && !e.shiftKey && !ime.isImeConfirm(e)) {
         e.preventDefault()
         const text = input.value.trim()
         if (!text) return
