@@ -33,6 +33,9 @@ def assess(facts):
         'docker_systemd_driver': docker.get('cgroupDriver') == 'systemd',
         'docker_user_namespace': any(v in options for v in ['name=rootless', 'name=userns']),
         'docker_seccomp': 'name=seccomp,profile=builtin' in options,
+        # Daemon metadata is only a prerequisite observation, not proof that a
+        # particular container has an enforcing LSM profile. Unknown fails closed.
+        'docker_lsm_observed': any(v in options for v in ['name=apparmor', 'name=selinux']),
         'daemon_delegation_observed': facts.get('daemonDelegate') == 'yes',
     }
     return {'scope':'read-only-hosted-ubuntu-docker-audit', 'status':'unsupported',
