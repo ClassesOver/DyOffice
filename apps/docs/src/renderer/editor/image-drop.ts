@@ -3,6 +3,7 @@ import { TextSelection } from '@tiptap/pm/state'
 import type { Node as PmNode } from '@tiptap/pm/model'
 import { insertImageFromDataUrl } from '../components/ribbon-tabs'
 import { t } from '../i18n/locale'
+import { pendingDocumentOperation } from './pending-document-operation'
 
 /** same formats as Insert > Picture and the clipboard lane */
 const IMAGE_MIME: Record<string, string> = {
@@ -42,19 +43,28 @@ export async function insertImageFilesAt(
   files: File[],
   pos: number,
 ): Promise<number> {
-  const sel = nearestTextSelection(editor.state.doc, pos)
-  if (!sel) return 0
-  editor.view.dispatch(editor.state.tr.setSelection(sel))
+  if (editor.isDestroyed) return 0
+  const { current, dispose } = pendingDocumentOperation(editor)
   let inserted = 0
-  for (const file of files) {
-    const mime = droppedImageMime(file)
-    if (!mime) continue
-    const dataUrl = await readImageDataUrl(file, mime)
-    if (!dataUrl) continue
-    if (await insertImageFromDataUrl(editor, dataUrl, t('ribbonPictureLabel', { name: file.name })))
-      inserted++
+  try {
+    const sel = nearestTextSelection(editor.state.doc, pos)
+    if (!sel) return 0
+    editor.view.dispatch(editor.state.tr.setSelection(sel))
+    for (const file of files) {
+      if (!current()) break
+      const mime = droppedImageMime(file)
+      if (!mime) continue
+      const dataUrl = await readImageDataUrl(file, mime)
+      if (!current()) break
+      if (!dataUrl) continue
+      if (await insertImageFromDataUrl(
+        editor, dataUrl, t('ribbonPictureLabel', { name: file.name }), current,
+      )) inserted++
+    }
+    return inserted
+  } finally {
+    dispose()
   }
-  return inserted
 }
 
 export function insertImageFilesAtCoords(

@@ -53,9 +53,9 @@ export const id = {
   ribbonRotateLeft: 'Putar Kiri 90°',
   ribbonFlipH: 'Balik Horizontal',
   ribbonFlipV: 'Balik Vertikal',
-  ribbonCropTip: 'Pangkas gambar (seret gagang, Enter untuk mengonfirmasi)',
+  ribbonCropTip: 'Pangkas gambar (seret gagang)',
   ribbonCropHint:
-    'Seret gagang atau pindahkan kotak untuk memilih area yang dipertahankan; Enter untuk menerapkan, Esc untuk membatalkan',
+    'Seret gagang atau pindahkan kotak untuk memilih area yang dipertahankan; Esc untuk membatalkan',
   ribbonReplacePicture: 'Ganti Gambar',
   ribbonReplacePictureTip: 'Ganti gambar dengan mempertahankan ukuran dan pelilitan teks saat ini',
   ribbonResetSize: 'Atur Ulang Ukuran',

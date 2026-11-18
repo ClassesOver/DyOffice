@@ -60,8 +60,8 @@ async function fixture(t, autoSave = false, enableAssistant = false, replay = un
     await settings.saveGlobalConfig(f.adminSigned.token, 0, {upserts: [{id: profile.entryId, kind: 'chat', providerId: profile.providerId, label: 'Company Chat', model: profile.model, baseUrl: profile.baseUrl, enabled: true, apiKey}]})
     await f.ownerPool.query('INSERT INTO provider_budget_accounts(deployment_id,owner_id,entry_id,config_revision,available_units,per_call_units) VALUES($1,$2,$3,1,$4,10)', [f.deploymentId, f.alice.user.id, profile.entryId, live ? 30 : analysis ? 20 : 10])
     const skills = createSkillService(f.transactions)
-    await skills.save(f.alice.token, 'alice-workbook', {description: '', body: 'Alice workbook instructions.'})
-    await skills.save(f.bob.token, 'bob-workbook', {description: '', body: 'Bob workbook instructions.'})
+    await skills.save(f.alice.token, 'alice-workbook', {description: 'Excel workbook skill', body: 'Alice workbook instructions.'})
+    await skills.save(f.bob.token, 'bob-workbook', {description: 'Excel workbook skill', body: 'Bob workbook instructions.'})
     if(analysis)analysisAdapter=syntheticAnalysisAdapter(()=>app,{text:'=1+1,literal <script>cell</script>\n0012,TRUE',name:'analysis.csv',mediaType:'text/csv',role:'table'})
     app = await buildLocalApp({db: f.db, businessPool: f.businessPool, passwords: f.passwords, deploymentId: f.deploymentId, origin, csrfKey: f.csrfKey, objectStore: f.objects, globalConfigKeyring: keyring, providerGateway: {profiles: [profile]}, ...(analysisAdapter?{codingHarnesses:{adapters:[analysisAdapter],defaultId:analysisAdapter.descriptor.id}}:{}), ...sheets})
   }

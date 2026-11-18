@@ -1,7 +1,7 @@
 # T03 personal password settings UI
 
 Scope: local-account original Home/Settings entry only. The development-token shell,
-GenOffice desktop Settings, identity tables and password/session service remain unchanged.
+DyOffice desktop Settings, identity tables and password/session service remain unchanged.
 This is a follow-up to PR #32, not a claim that all T03 or production release gates are complete.
 
 The original SettingsModal account slot embeds a small form using its existing `set-*`

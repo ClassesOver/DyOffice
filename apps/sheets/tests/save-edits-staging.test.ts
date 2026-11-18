@@ -91,3 +91,35 @@ describe('stageEditsForSave', () => {
     expect(begins).toHaveLength(0)
   })
 })
+
+
+describe('same-process Web inline save staging',()=>{
+ it('keeps 10001 cells inline only with explicit Web opt-in',async()=>{
+  const {api,begins}=recordingApi()
+  api.saveEditsInlineMaxBytes=4*1024*1024
+  const input=edits(10001)
+  const result=await stageEditsForSave(api,SESSION,input)
+  expect(result.edits).toBe(input);expect(result.editsTransferId).toBeUndefined();expect(begins).toHaveLength(0)
+ })
+ it('rejects oversized multibyte edits without truncating the input or starting a transfer',async()=>{
+  const {api,begins}=recordingApi();api.saveEditsInlineMaxBytes=256
+  const input=edits(3);input[0]!.value='界'.repeat(100)
+  await expect(stageEditsForSave(api,SESSION,input)).rejects.toThrow(/still unsaved/)
+  expect(input).toHaveLength(3);expect(input[0]!.value).toBe('界'.repeat(100));expect(begins).toHaveLength(0)
+ })
+ it('rejects invalid bridge limits rather than silently enabling unbounded inline data',async()=>{
+  const {api}=recordingApi();api.saveEditsInlineMaxBytes=Number.MAX_SAFE_INTEGER
+  await expect(stageEditsForSave(api,SESSION,edits(1))).rejects.toThrow(/Invalid Web save limit/)
+ })
+})
+
+
+it('explicitly undefined native preload hint preserves the original chunked save path',async()=>{
+ const {api,begins,chunks}=recordingApi()
+ api.saveEditsInlineMaxBytes=undefined
+ const staged=await stageEditsForSave(api,SESSION,edits(10001))
+ expect(staged.edits).toEqual([])
+ expect(staged.editsTransferId).toBe(begins[0]?.transferId)
+ expect(begins).toHaveLength(1)
+ expect(chunks.reduce((sum,chunk)=>sum+chunk.count,0)).toBe(10001)
+})

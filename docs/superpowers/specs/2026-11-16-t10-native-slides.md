@@ -4,7 +4,7 @@ This historical plan does not establish OS isolation. Ordinary Node fork is test
 
 # T10 native Slides Web design（实施后修订 2026-11-17）
 
-Goal: mount the original GenOffice Slides renderer in the Web workspace with real PPTX open, edit, save, download, and reopen verification, reusing the T09 lease fencing and T06 commit contracts.
+Goal: mount the original DyOffice Slides renderer in the Web workspace with real PPTX open, edit, save, download, and reopen verification, reusing the T09 lease fencing and T06 commit contracts.
 
 > 修订说明：初稿声称“PPTX 纯 TS、格式层无需 Rust 二进制或 systemd 沙箱”。实施时纠正：解析不可信 PPTX 必须与 API 进程隔离。最终方案为每会话 fork 独立 Node 子进程（serialization:'advanced'），父进程不 import 任何引擎代码；不需要 Rust 二进制，但 OS 级进程隔离必须有。
 

@@ -127,3 +127,19 @@ test('known and unknown throttled accounts retain counters and one audit each wh
   assert.equal(events.length,2);assert.equal(events.filter(e=>e.subject_user_id===f.alice.user.id).length,1);assert.equal(events.filter(e=>e.subject_user_id===null).length,1)
  }finally{await owner.query('ROLLBACK');owner.release()}
 })
+
+test('paged retained history crosses twenty, stable equal-timestamp ordering and rejects foreign anchors',async t=>{
+ const f=await restrictedFixture(t)
+ const ids=Array.from({length:27},()=>randomUUID()).sort().reverse()
+ for(const id of ids)await f.ownerPool.query("INSERT INTO auth_security_events(id,deployment_id,actor_id,event,request_id,created_at) VALUES($1,$2,$3,'login_succeeded',$4,'2030-01-01T00:00:00.123456Z')",[id,f.deploymentId,f.alice.user.id,randomUUID()])
+ let after,seen=0,cursors=[]
+ do {
+  const r=await f.app.inject({method:'GET',url:url+'?limit=5'+(after?'&after='+after:''),headers:headers(f.alice.token)});assert.equal(r.statusCode,200,r.body)
+  const page=r.json();seen+=page.events.length;after=page.nextCursor;if(after)cursors.push(after)
+ }while(after)
+ assert.equal(seen,28);assert.deepEqual(cursors,ids.filter((_,i)=>(i+1)%5===0))
+ for(const token of [f.bob.token])assert.equal((await f.app.inject({method:'GET',url:url+'?limit=5&after='+ids[0],headers:headers(token)})).statusCode,400)
+ await assert.rejects(()=>f.businessPool.query('SELECT * FROM read_login_history_page($1,$2,$3,$4,$5)',[f.deploymentId,tokenHash(f.alice.token),28800000,5,null]),{code:'42501'})
+ await f.ownerPool.query('UPDATE sessions SET revoked_at=clock_timestamp() WHERE id=$1',[f.alice.sessionId])
+ assert.equal((await f.app.inject({method:'GET',url:url+'?limit=5&after='+ids[0],headers:headers(f.alice.token)})).statusCode,401)
+})

@@ -29,12 +29,13 @@ export function registerWorkspaceRoutes(app: FastifyInstance, workspace: Workspa
       q: { type: 'string', maxLength: 200 },
       id,
       view: { type: 'string', enum: ['all','recent','starred','trash'] },
+      sort: { type: 'string', enum: ['modified-asc','modified-desc'] },
       folderId: { anyOf: [id, { type: 'string', const: 'root' }] },
       limit: { type: 'string', pattern: '^(?:0|[1-9][0-9]?|100)$' },
       offset: { type: 'string', pattern: '^(?:0|[1-9][0-9]{0,5}|1000000)$' },
     } } } }, request => {
-      const query = request.query as { ext?: WorkspaceFileQuery['ext']; q?: string; id?: string; view?: WorkspaceFileQuery['view']; folderId?: string; limit?: string; offset?: string }
-      return workspace.listFiles(token(request), { ext: query.ext, q: query.q, id: query.id, view: query.view, folderId: query.folderId, limit: query.limit === undefined ? undefined : Number(query.limit), offset: query.offset === undefined ? undefined : Number(query.offset) })
+      const query = request.query as { ext?: WorkspaceFileQuery['ext']; q?: string; id?: string; view?: WorkspaceFileQuery['view']; sort?: WorkspaceFileQuery['sort']; folderId?: string; limit?: string; offset?: string }
+      return workspace.listFiles(token(request), { ext: query.ext, q: query.q, id: query.id, view: query.view, sort: query.sort, folderId: query.folderId, limit: query.limit === undefined ? undefined : Number(query.limit), offset: query.offset === undefined ? undefined : Number(query.offset) })
     })
     api.get('/api/v1/workspace/folders', { schema: { querystring: emptyQuery } }, request => workspace.listFolders(token(request)))
     api.post('/api/v1/workspace/folders', { bodyLimit: 4096, schema: { querystring: emptyQuery, body: { type: 'object', additionalProperties: false, required: ['name','parentId'], properties: folderProperties } } }, async (request, reply) => reply.code(201).send(await workspace.createFolder(token(request), request.body as CreateWorkspaceFolder)))

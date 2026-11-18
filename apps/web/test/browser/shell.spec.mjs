@@ -7,7 +7,7 @@ test('original shell import, fail-closed retired DOCX, return, theme and indepen
  await copyFile(fileURLToPath(new URL('../../../shell/src/renderer/src/i18n/help/topics/img/home-screen.en.png',import.meta.url)),'test-results/original-genoffice-home-reference.png');
  const errors=[];page.on('pageerror',e=>errors.push(e.message));
  await page.goto('/');await page.getByLabel('个人访问令牌').fill('visual-test-user');await page.getByRole('button',{name:'登录',exact:true}).click();
- await expect(page.locator('.logo-lockup')).toHaveAttribute('alt','GenOffice');
+ await expect(page.locator('.logo-lockup')).toHaveAttribute('alt','DyOffice');
  await expect(page.locator('.tab-bar')).toBeVisible();
  await expect(page.locator('.quick-card')).toHaveCount(5);
  await expect(page.locator('.sidebar')).toHaveCSS('width','232px');

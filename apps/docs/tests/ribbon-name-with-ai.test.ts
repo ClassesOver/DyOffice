@@ -74,6 +74,31 @@ afterEach(() => {
 })
 
 describe('File ▸ the manual naming trigger', () => {
+  for (const [lang, explanation] of [
+    ['en', 'AI file naming is only available in the desktop app.'],
+    ['zh', 'AI 命名仅桌面版可用。'],
+  ] as const) it(`disables Web naming with a ${lang} explanation and keeps the menu open`, () => {
+    setModuleLang(lang)
+    act(() => root.unmount())
+    root = createRoot(container)
+    act(() => root.render(createElement(LocaleProvider, {
+      initial: lang,
+      children: createElement(Ribbon, {
+        ...ribbonProps(editor, computeFormatState(editor)),
+        desktopActionsAvailable: false,
+        onNameWithAi,
+      }),
+    })))
+    act(() => container.querySelector<HTMLButtonElement>('.ribbon-tab-file')!.click())
+    const button = nameButton()!
+    expect(button.textContent).toBe(t('ribbonNameWithAi'))
+    expect(button.disabled).toBe(true)
+    expect(button.title).toBe(explanation)
+    act(() => button.click())
+    expect(onNameWithAi).not.toHaveBeenCalled()
+    expect(nameButton()).toBe(button)
+  })
+
   it('is there, labelled, and enabled once a document is open', () => {
     const button = nameButton()
     expect(button).not.toBeNull()

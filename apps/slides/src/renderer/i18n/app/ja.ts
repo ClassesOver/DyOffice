@@ -16,6 +16,7 @@ export const ja = {
   appPhPromptBody: 'クリックしてテキストを追加',
   appStatusOpened: '{name} を開きました（{count} ページ）',
   appStatusNewBlank: '空白のプレゼンテーションを作成しました',
+  appEditCommitPending: "編集を適用中です。しばらくしてからもう一度お試しください。",
   appStatusSaved: '保存しました',
   appStatusSaveFailed: '保存に失敗しました：{error}',
   appErrorCanceled: 'キャンセル',

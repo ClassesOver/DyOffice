@@ -45,9 +45,11 @@ function paperOfPreview(): PrintPaper | undefined {
 }
 
 export function PrintDialog({
+  browserOnly = false,
   onClose,
   setStatus,
 }: {
+  browserOnly?: boolean
   onClose: () => void
   setStatus: (s: string) => void
 }) {
@@ -58,7 +60,7 @@ export function PrintDialog({
   const [customRange, setCustomRange] = useState('')
   const [printing, setPrinting] = useState(false)
   const [printers, setPrinters] = useState<PrinterInfo[]>([])
-  const [deviceName, setDeviceName] = useState(IS_MAC ? SYSTEM_DIALOG : DEFAULT_PRINTER)
+  const [deviceName, setDeviceName] = useState(browserOnly || IS_MAC ? SYSTEM_DIALOG : DEFAULT_PRINTER)
   const [copies, setCopies] = useState(1)
   const [collate, setCollate] = useState(true)
   const [duplex, setDuplex] = useState<PrintDuplex>('simplex')
@@ -224,6 +226,7 @@ export function PrintDialog({
               <select
                 className="print-select"
                 value={deviceName}
+                disabled={browserOnly}
                 onChange={(e) => setDeviceName(e.target.value)}
               >
                 <option value={DEFAULT_PRINTER}>{t('appPrintDefaultPrinter')}</option>

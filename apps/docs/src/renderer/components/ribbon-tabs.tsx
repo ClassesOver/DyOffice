@@ -1,3 +1,4 @@
+import { pendingDocumentOperation } from '../editor/pending-document-operation'
 import { useRef, useState } from 'react'
 import type { Editor, JSONContent } from '@tiptap/core'
 import type { Node as PmNode } from '@tiptap/pm/model'
@@ -30,6 +31,7 @@ import { isStraightLineKind } from '../editor/shape-svg'
 import { HIGHLIGHTER_ALPHA, isPenKind, type InkPenKind, type InkTool } from '../editor/ink'
 import { colorsFor, newInkPreset, widthsFor, type InkPreset } from '../editor/ink-presets'
 import { t, useI18n, type StringKey } from '../i18n/locale'
+import { showToast } from './toast-bus'
 import iconEditor from '../assets/icon-editor.png'
 import iconTranslate from '../assets/icon-translate.png'
 import type { BalloonMode, RevisionDisplayMode } from '../editor/revision-view'
@@ -401,13 +403,16 @@ export async function insertImageFromDataUrl(
   editor: Editor,
   dataUrl: string,
   label = t('ribbonPicture'),
+  canInsert: () => boolean = () => !editor.isDestroyed,
 ): Promise<boolean> {
+  if (editor.isDestroyed || !editor.isEditable || !canInsert()) return false
   const m = /^data:([^;]+);base64,(.*)$/s.exec(dataUrl)
   if (!m) return false
   const mime = m[1]
   if (!/^image\/(png|jpeg|gif)$/.test(mime)) return false
   try {
     const natural = await imageSizeOf(dataUrl)
+    if (editor.isDestroyed || !editor.isEditable || !canInsert()) return false
     const scale = Math.min(1, MAX_IMAGE_WIDTH_PX / natural.width)
     insertPictureAtSelection(editor, {
       dataUrl,
@@ -442,13 +447,22 @@ export async function insertImageFromDataUrl(
 }
 
 export async function insertImageViaDialog(editor: Editor): Promise<void> {
-  const picked = await window.desktop.pickImage()
-  if (!picked) return
-  await insertImageFromDataUrl(
-    editor,
-    `data:${picked.mime};base64,${picked.base64}`,
-    t('ribbonPictureLabel', { name: picked.name }),
-  )
+  const { current, dispose } = pendingDocumentOperation(editor)
+  try {
+    const picked = await window.desktop.pickImage()
+    if (!picked || !current()) return
+    const inserted = await insertImageFromDataUrl(
+      editor,
+      `data:${picked.mime};base64,${picked.base64}`,
+      t('ribbonPictureLabel', { name: picked.name }),
+      current,
+    )
+    if (current() && !inserted) showToast(t('ribbonImageLoadFail'), 'error')
+  } catch {
+    if (current()) showToast(t('ribbonImageLoadFail'), 'error')
+  } finally {
+    dispose()
+  }
 }
 
 /** 5 cm × 3 cm default textbox size in EMU (1 cm = 360000 EMU) */
@@ -773,6 +787,7 @@ export const AI_REWRITE_ACK_KEY = 'docs-ai-rewrite-ack'
 export type { BalloonMode, RevisionDisplayMode }
 
 interface ReviewTabProps extends TabProps {
+  desktopActionsAvailable?: boolean
   onAiPreset: (instruction: string) => void
   commentCount: number
   /** unresolved root comments; 0 disables the AI resolve-comments action */
@@ -823,6 +838,7 @@ interface ReviewTabProps extends TabProps {
 }
 
 export function ReviewTab({
+  desktopActionsAvailable = true,
   editor,
   hasDoc,
   dropdown,
@@ -1322,7 +1338,8 @@ export function ReviewTab({
         <div className="ribbon-group-items">
           <button
             className="rb-big"
-            disabled={!hasDoc}
+            disabled={!hasDoc || !desktopActionsAvailable}
+            title={!desktopActionsAvailable ? '文档比较仅桌面版可用。' : undefined}
             data-tip={t('ribbonCompareTip')}
             onClick={onCompare}
           >
@@ -1341,8 +1358,8 @@ export function ReviewTab({
         <div className="ribbon-group-items">
           <button
             className={`rb-big ${protectActive ? 'active' : ''}`}
-            disabled={!hasDoc}
-            title={t('ribbonProtectDocTip')}
+            disabled={!hasDoc || !desktopActionsAvailable}
+            title={!desktopActionsAvailable ? '文档密码与保护仅桌面版可用。' : t('ribbonProtectDocTip')}
             onClick={onProtectDoc}
           >
             <span className="rb-big-icon">
@@ -1366,6 +1383,7 @@ interface ViewTabProps {
   hasDoc: boolean
   /** current document path, so New Window can open the same file */
   filePath: string | null
+  newTabUnavailableReason?: string
   zoom: number
   onZoom: (zoom: number) => void
   onZoomFit: (mode: 'width' | 'page' | 'multi') => void
@@ -1390,6 +1408,7 @@ interface ViewTabProps {
 export function ViewTab({
   hasDoc,
   filePath,
+  newTabUnavailableReason,
   zoom,
   onZoom,
   onZoomFit,
@@ -1413,18 +1432,43 @@ export function ViewTab({
   const { t } = useI18n()
   const [winMenuOpen, setWinMenuOpen] = useState(false)
   const [windows, setWindows] = useState<DocsTabInfo[]>([])
+  const [winError, setWinError] = useState('')
   /** wrap holding both the switch-tabs trigger and its menu */
   const winMenuRef = useRef<HTMLDivElement>(null)
+  const winMenuRequest = useRef(0)
+  const closeWinMenu = () => {
+    winMenuRequest.current += 1
+    setWinMenuOpen(false)
+  }
 
   const toggleWinMenu = async () => {
-    if (!winMenuOpen) setWindows(await window.desktop.listDocsTabs())
-    setWinMenuOpen((v) => !v)
+    if (winMenuOpen) { closeWinMenu(); return }
+    const request = ++winMenuRequest.current
+    setWinError('')
+    setWindows([])
+    setWinMenuOpen(true)
+    try {
+      const tabs = await window.desktop.listDocsTabs()
+      if (request === winMenuRequest.current) setWindows(tabs)
+    } catch (error) {
+      if (request === winMenuRequest.current) {
+        closeWinMenu()
+        setWinError(String(error instanceof Error ? error.message : error))
+      }
+    }
+  }
+  const focusWin = async (id: string) => {
+    closeWinMenu()
+    setWinError('')
+    try { await window.desktop.focusDocsTab(id) }
+    catch (error) { setWinError(String(error instanceof Error ? error.message : error)) }
   }
 
   // presses inside the wrap (trigger + menu) are handled by their own onClick;
   // anything else — including window blur / shell chrome presses — closes it
-  useDismissablePopover(winMenuOpen, () => setWinMenuOpen(false), {
+  useDismissablePopover(winMenuOpen, closeWinMenu, {
     inside: () => [winMenuRef.current],
+    escape: true,
   })
 
   return (
@@ -1654,7 +1698,9 @@ export function ViewTab({
         <div className="ribbon-group-items">
           <button
             className="rb-big"
-            data-tip={t('ribbonNewTabTip')}
+            disabled={!!newTabUnavailableReason}
+            title={newTabUnavailableReason}
+            data-tip={newTabUnavailableReason || t('ribbonNewTabTip')}
             onClick={() => void window.desktop.openNewTab(filePath)}
           >
             <span className="rb-big-icon">
@@ -1690,19 +1736,17 @@ export function ViewTab({
                 {windows.map((w) => (
                   <button
                     key={w.id}
-                    onClick={() => {
-                      void window.desktop.focusDocsTab(w.id)
-                      setWinMenuOpen(false)
-                    }}
+                    onClick={() => void focusWin(w.id)}
                   >
                     {w.focused ? '✓ ' : ''}
-                    {w.title || 'GenOffice Docs'}
+                    {w.title || 'DyOffice Docs'}
                   </button>
                 ))}
               </div>
             )}
           </div>
         </div>
+        {winError && <div role="alert">{winError}</div>}
         <div className="ribbon-group-label">{t('ribbonGroupWindow')}</div>
       </div>
     </>

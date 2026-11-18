@@ -47,6 +47,7 @@ test('fresh connection binds editor identity, accepts UUID revisions and drops s
   const f = fixture(); t.after(() => f.bridge.dispose())
   await waitFor(() => f.sockets.length === 1)
   assert.deepEqual(JSON.parse(f.calls[1].init.body), { fileId, editorId })
+  assert.equal(f.calls[1].init.referrerPolicy, 'same-origin')
   const s = f.sockets[0]; s.open()
   s.message({ type: 'state', generation: 1, headRevision: revision, lease })
   s.message({ type: 'file-event', fileEvent: { generation: 3, headRevision: nextRevision, lease } })

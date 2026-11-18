@@ -16,7 +16,7 @@ export function registerSkillRoutes(app: FastifyInstance, skills: ReturnType<typ
     })
     api.get('/api/v1/skills', {schema: {querystring}}, request => skills.list(cookies(request).session!))
     api.get<{Params: {name: string}}>('/api/v1/skills/:name', {schema: {querystring, params}}, request => skills.read(cookies(request).session!, request.params.name))
-    api.put<{Params: {name: string}}>('/api/v1/skills/:name', {bodyLimit: 300000, schema: {querystring, params, body: {type: 'object', additionalProperties: false, required: ['description','body'], properties: {description: {type: 'string', maxLength: 4096}, body: {type: 'string', minLength: 1, maxLength: 262144}}}}}, request => skills.save(cookies(request).session!, request.params.name, request.body))
+    api.put<{Params: {name: string}}>('/api/v1/skills/:name', {bodyLimit: 300000, schema: {querystring, params, body: {type: 'object', additionalProperties: false, required: ['description','body'], properties: {description: {type: 'string', maxLength: 4096}, body: {type: 'string', minLength: 1, maxLength: 262144},overwrite:{type:'boolean'}}}}}, request => skills.save(cookies(request).session!, request.params.name, request.body))
     api.delete<{Params: {name: string}}>('/api/v1/skills/:name', {schema: {querystring, params}}, async (request, reply) => {
       await skills.remove(cookies(request).session!, request.params.name)
       return reply.code(204).send()

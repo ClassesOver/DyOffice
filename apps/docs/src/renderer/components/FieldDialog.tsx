@@ -1,3 +1,4 @@
+import { useImeEnterGuard } from '@genoffice/ui'
 import { useState } from 'react'
 import { useI18n } from '../i18n/locale'
 import { useModalKeys } from './modal-keys'
@@ -14,6 +15,7 @@ export function FieldDialog({
 }) {
   const { t } = useI18n()
   const modalKeys = useModalKeys(onClose)
+  const ime = useImeEnterGuard()
   const [code, setCode] = useState(instr)
   const submit = () => {
     if (!code.trim()) return
@@ -36,7 +38,9 @@ export function FieldDialog({
             value={code}
             spellCheck={false}
             onChange={(e) => setCode(e.target.value)}
-            onKeyDown={(e) => e.key === 'Enter' && submit()}
+            onCompositionStart={ime.handleCompositionStart}
+            onCompositionEnd={ime.handleCompositionEnd}
+            onKeyDown={(e) => e.key === 'Enter' && !ime.isImeConfirm(e.nativeEvent) && submit()}
           />
         </label>
         <div className="modal-actions">

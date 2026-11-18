@@ -33,7 +33,7 @@ export function registerAuthRoutes(app: FastifyInstance, { sessions, csrf, throt
   })
   app.get('/api/v1/auth/me', async request => {
     const principal = await sessions.authenticate(cookies(request).session ?? '')
-    return { user: { id: principal.userId, username: principal.username, displayName: principal.displayName, roles: principal.roles } }
+    return { deploymentId: principal.deploymentId, user: { id: principal.userId, username: principal.username, displayName: principal.displayName, roles: principal.roles } }
   })
   app.get('/api/v1/auth/session-proof', async request => {
     csrf.originCheck(request, false)
@@ -50,8 +50,14 @@ export function registerAuthRoutes(app: FastifyInstance, { sessions, csrf, throt
     reply.header('Set-Cookie', [serializeCookie(SESSION_COOKIE, '', 0), serializeCookie(LOGIN_COOKIE, '', 0)])
     return reply.code(204).send()
   })
-  app.get('/api/v1/auth/login-history', { schema: { querystring: { type: 'object', additionalProperties: false, properties: {} } } }, async request => ({ events: await sessions.loginHistory(cookies(request).session ?? '') }))
-  app.get('/api/v1/auth/sessions', async request => ({ sessions: await sessions.list(cookies(request).session ?? '') }))
+  app.get<{Querystring: {limit?: string; after?: string}}>('/api/v1/auth/login-history', { schema: { querystring: { type: 'object', additionalProperties: false, properties: {limit: {type: 'string', pattern: '^(?:[1-9]|1[0-9]|20)$'}, after: {type: 'string', pattern: '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'}} } } }, async request => {
+    const token = cookies(request).session ?? ''
+    return Object.keys(request.query).length ? sessions.loginHistoryPage(token, {limit: request.query.limit === undefined ? undefined : Number(request.query.limit), after: request.query.after}) : {events: await sessions.loginHistory(token)}
+  })
+  app.get<{Querystring: {limit?: string; after?: string}}>('/api/v1/auth/sessions', { schema: { querystring: { type: 'object', additionalProperties: false, properties: {limit: {type: 'string', pattern: '^(?:[1-9][0-9]?|100)$'}, after: {type: 'string', pattern: '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'}} } } }, async request => {
+    const token = cookies(request).session ?? ''
+    return Object.keys(request.query).length ? sessions.listPage(token, {limit: request.query.limit === undefined ? undefined : Number(request.query.limit), after: request.query.after}) : {sessions: await sessions.list(token)}
+  })
   app.post('/api/v1/auth/sessions/revoke-others', {
     bodyLimit: 1024,
     schema: { querystring: { type: 'object', additionalProperties: false, properties: {} } },

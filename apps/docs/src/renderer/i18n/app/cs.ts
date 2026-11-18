@@ -1,6 +1,7 @@
 import type { zh } from './zh'
 
 export const cs = {
+  appPasteRemoteImageFailed: 'Vzdálený obrázek nelze vložit. Zkopírujte jej znovu nebo vložte místní soubor obrázku.',
   appScTitle: 'Klávesové zkratky',
   appScFilter: 'Hledat zkratky',
   appScNone: 'Žádné odpovídající zkratky',

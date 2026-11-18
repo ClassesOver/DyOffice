@@ -1,6 +1,7 @@
 import type { zh } from './zh'
 
 export const it = {
+  appPasteRemoteImageFailed: 'Impossibile incollare l’immagine remota. Copiare di nuovo l’immagine o inserire un file immagine locale.',
   appScTitle: 'Scelte rapide da tastiera',
   appScFilter: 'Cerca scelta rapida',
   appScNone: 'Nessuna scelta rapida corrispondente',

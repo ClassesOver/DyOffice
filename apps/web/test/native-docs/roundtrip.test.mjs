@@ -10,6 +10,7 @@ import { chromium, expect } from '@playwright/test'
 import JSZip from 'jszip'
 import { fileFixture, docxBytes, importFile } from '../helpers/files.mjs'
 import { password } from '../helpers/identity.mjs'
+import { phaseDiagnostics, observeFirstRequest } from '../helpers/phase-diagnostics.mjs'
 import { withInputDiagnostics } from '../helpers/input-diagnostics.mjs'
 
 const docsDirectory = fileURLToPath(new URL('../../dist-docs/',import.meta.url))
@@ -62,7 +63,7 @@ async function expectCleanPersistence(page) {
   }
 }
 
-test('native GenOffice DOCX renders, edits, commits, refreshes and preserves unrelated original parts', { timeout: 120_000 }, async t => {
+test('native DyOffice DOCX renders, edits, commits, refreshes and preserves unrelated original parts', { timeout: 120_000 }, async t => {
   const f = await fixture(t), errors = []
   const filePath = '/native-docx/?fileId=' + f.opened.file.fileId
   const cookie = token => ({ cookie: '__Host-dyoffice-session=' + token })
@@ -113,9 +114,13 @@ test('native GenOffice DOCX renders, edits, commits, refreshes and preserves unr
   assert.ok((await archive.file('word/document.xml').async('string')).includes('浏览器剪贴板'))
   assert.equal(await archive.file('customXml/dyoffice-preserve.xml').async('string'),'<probe>Untouched custom part</probe>')
   await expectCleanPersistence(f.page)
-  const pendingDownload = f.page.waitForEvent('download')
-  await f.page.getByRole('link',{ name: 'Download saved version' }).click()
-  const download = await pendingDownload
+  await f.page.getByRole('button',{ name: 'File',exact: true }).click()
+  const savedDownload = f.page.getByRole('link',{ name: 'Download saved version',exact: true })
+  await expect(savedDownload).toBeVisible()
+  const [download] = await Promise.all([
+    f.page.waitForEvent('download'),
+    savedDownload.click(),
+  ])
   assert.equal(download.suggestedFilename(),'native-roundtrip.docx')
   assert.deepEqual(await readFile(await download.path()),bytes)
   const history = await f.context.request.get(`${f.origin}/api/v1/files/${opened.file.fileId}/revisions`)
@@ -130,41 +135,74 @@ test('native GenOffice DOCX renders, edits, commits, refreshes and preserves unr
 })
 
 test('editing during a delayed native save keeps the newer draft dirty and saves a later child revision', { timeout: 120_000 },async t => {
+  const diagnostic = phaseDiagnostics(t.signal)
+  t.after(() => diagnostic.dispose())
+  try {
   const f = await fixture(t)
+  f.page.on('pageerror', () => diagnostic.count('pageerror'))
+  const requestDiagnostic = observeFirstRequest(f.page, diagnostic)
+  t.after(() => requestDiagnostic.dispose())
+  diagnostic.stage('open')
   await f.page.goto(f.origin + '/native-docx/?fileId=' + f.opened.file.fileId)
   const editor = f.page.locator('.tiptap.doc-page[contenteditable="true"]')
+  diagnostic.stage('editor-ready')
   await editor.waitFor({ timeout: 45_000 })
+  diagnostic.stage('type-first')
   await editor.click(); await f.page.keyboard.press('Control+End'); await f.page.keyboard.press('Enter'); await f.page.keyboard.type('Captured snapshot')
   let reached, release, firstRequest, first = true
   const started = new Promise(resolve => { reached = resolve }), wait = new Promise(resolve => { release = resolve })
   t.after(() => release())
+  diagnostic.stage('route-install')
   await f.page.route('**/commits',async route => {
     if (!first) return route.continue()
     first = false
     firstRequest = route.request()
-    const response = await route.fetch()
-    reached(); await wait; await route.fulfill({ response })
+    requestDiagnostic.watch(firstRequest)
+    diagnostic.count('route-entered')
+    try {
+      diagnostic.count('fetch-started')
+      const response = await route.fetch()
+      diagnostic.count('fetch-resolved'); diagnostic.status(response.status())
+      reached(); await wait; await route.fulfill({ response })
+      diagnostic.count('fulfilled')
+    } catch (error) { diagnostic.count('route-error'); throw error }
   })
-  await f.page.keyboard.press('Control+s'); await started
+  diagnostic.stage('first-save-key')
+  await f.page.keyboard.press('Control+s'); diagnostic.stage('first-commit-wait'); await started
+  diagnostic.stage('edit-newer')
   await editor.click(); await f.page.keyboard.press('Control+End'); await f.page.keyboard.press('Enter'); await f.page.keyboard.type('Newer unsaved draft')
+  diagnostic.stage('read-first')
   const firstRef = await f.files.openFile(f.alice.token,f.opened.file.fileId)
   const firstZip = await JSZip.loadAsync(await f.files.readFile(f.alice.token,firstRef.file.fileId,firstRef.file.revision))
   assert.ok(!(await firstZip.file('word/document.xml').async('string')).includes('Newer unsaved draft'))
-  // The dirty label is already empty while the first commit response is held.
+  // The draft remains dirty while the first commit response is held.
   // Wait for that exact response and native settlement before observing save two.
   const firstResponse = f.page.waitForResponse(reply => reply.request() === firstRequest && reply.status() === 200)
+  diagnostic.stage('release')
   release()
-  assert.equal(await (await firstResponse).finished(),null)
+  diagnostic.stage('first-response-wait')
+  const releasedResponse = await firstResponse
+  diagnostic.stage('first-response-finished')
+  assert.equal(await releasedResponse.finished(),null)
+  diagnostic.stage('native-incomplete')
   await expect(f.page.locator('.dyoffice-docs-persistence-state')).toHaveAttribute('data-native-save','incomplete')
+  diagnostic.stage('native-dirty')
   await expect(f.page.locator('.dyoffice-docs-persistence-state')).toHaveAttribute('data-dirty','true')
-  await expect(f.page.locator('.dyoffice-docs-persistence-state')).toHaveText('',{ timeout: 15_000 })
+  diagnostic.stage('dirty-assert')
+  await expect(f.page.locator('.dyoffice-docs-persistence-state')).toHaveText('Unsaved',{ timeout: 15_000 })
+  await expect(f.page.locator('.dyoffice-docs-persistence-state')).toHaveAttribute('data-incomplete-reasons',/(^|,)document(,|$)/)
   await expect(editor).toContainText('Newer unsaved draft')
+  diagnostic.stage('second-save-wait')
   const next = f.page.waitForResponse(reply => reply.url().endsWith('/commits') && reply.request().method() === 'POST' && reply.request() !== firstRequest && reply.status() === 200)
   await f.page.keyboard.press('Control+s'); await next
+  diagnostic.stage('read-final')
   const current = await f.files.openFile(f.alice.token,f.opened.file.fileId)
   assert.notEqual(current.file.revision,firstRef.file.revision)
   const currentZip = await JSZip.loadAsync(await f.files.readFile(f.alice.token,current.file.fileId,current.file.revision))
   assert.ok((await currentZip.file('word/document.xml').async('string')).includes('Newer unsaved draft'))
+  await expectCleanPersistence(f.page)
+  diagnostic.stage('complete')
+  } catch (error) { diagnostic.report(); throw error }
 })
 
 test('native editor preserves unsaved text and becomes read only after another tab takes over', { timeout: 120_000 },async t => {
@@ -255,7 +293,11 @@ test('page-color edits during a delayed native commit remain dirty and persist o
   await f.page.getByRole('button',{ name: 'Page Color',exact: true }).click()
   await f.page.getByRole('gridcell',{ name: 'Red',exact: true }).click()
   release()
-  await expect(f.page.locator('.dyoffice-docs-persistence-state')).toHaveText('')
+  const persistence = f.page.locator('.dyoffice-docs-persistence-state')
+  await expect(persistence).toHaveText('Unsaved')
+  await expect(persistence).toHaveAttribute('data-native-save','incomplete')
+  await expect(persistence).toHaveAttribute('data-dirty','true')
+  await expect(persistence).toHaveAttribute('data-incomplete-reasons',/(^|,)metadata:pageColorDirty(,|$)/)
   await expect(f.page.locator('.doc-zoom').first()).toHaveCSS('--page-bg','#FF0000')
   const next = f.page.waitForResponse(reply => reply.url().endsWith('/commits') && reply.status() === 200)
   await f.page.keyboard.press('Control+s'); await next

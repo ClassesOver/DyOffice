@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="188" height="40" viewBox="0 0 188 40">
+  <title>DyOffice</title>
+  <path fill="#2672df" d="M10 2h16l12 12v16a8 8 0 0 1-8 8H10a8 8 0 0 1-8-8V10a8 8 0 0 1 8-8Z"/>
+  <path fill="#8bbcff" d="M26 2v8a4 4 0 0 0 4 4h8Z"/>
+  <path fill="#fff" fill-rule="evenodd" d="M11 11h7c7 0 12 4 12 10.5S25 32 18 32h-7Zm5 5v11h2c4.5 0 7-2 7-5.5S22.5 16 18 16Z"/>
+  <text x="49" y="29" fill="#367ad9" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif" font-size="29" font-weight="650" letter-spacing="-.8">DyOffice</text>
+</svg>

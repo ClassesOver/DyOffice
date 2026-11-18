@@ -1,0 +1,57 @@
+.account-menu-trigger {
+  width:100%;
+  gap:10px;
+  position:relative;
+  color:var(--text-primary);
+  border:1px solid transparent;
+  border-radius:9px;
+  transition:background-color .15s,border-color .15s;
+}
+.account-menu-trigger:hover,
+.account-menu-trigger[aria-expanded="true"] {
+  background:var(--bg-hover);
+  border-color:var(--border-subtle);
+}
+.account-menu-trigger .account-text { min-width:0; flex:1; }
+.account-menu-trigger .account-name { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-weight:600; }
+.account-menu-trigger .account-sub { color:var(--text-secondary); font-size:11px; }
+.account-menu-chevron { flex:none; color:var(--text-tertiary); margin-left:auto; font-size:10px; }
+.account-menu-trigger:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+.account-menu-popover {
+  width:280px;
+  max-width:calc(100vw - 16px);
+  max-height:calc(100dvh - 16px);
+  overflow-y:auto;
+  padding:6px;
+  box-sizing:border-box;
+  border:1px solid var(--border-subtle);
+  overscroll-behavior:contain;
+}
+.account-menu-profile {
+  display:flex;
+  align-items:center;
+  gap:12px;
+  padding:14px 12px 16px;
+  margin-bottom:4px;
+  border-bottom:1px solid var(--border-subtle);
+}
+.account-menu-identity { display:flex; flex:1; min-width:0; flex-direction:column; gap:4px; }
+.account-menu-identity strong { font-size:14px; line-height:20px; font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.account-menu-identity > span { font-size:12px; line-height:18px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.account-menu-profile .ant-tag { flex:none; margin-inline-end:0; border-radius:5px; font-size:11px; }
+.account-menu-popover .ant-dropdown-menu { padding:0; box-shadow:none; background:transparent; }
+.account-menu-popover .ant-dropdown-menu-item-group-title { padding:10px 12px 6px; font-size:11px; line-height:18px; color:var(--text-tertiary); }
+.account-menu-popover .ant-dropdown-menu-item-group-list { margin:0; }
+.account-menu-popover .ant-dropdown-menu-item {
+  min-height:40px;
+  padding:9px 12px;
+  margin:2px 0;
+  border-radius:7px;
+  font-size:13px;
+  line-height:20px;
+}
+.account-menu-popover .ant-dropdown-menu-item .ant-dropdown-menu-item-icon { margin-inline-end:10px; font-size:15px; }
+.account-menu-popover .ant-dropdown-menu-item-divider { margin:7px 6px; border-color:var(--border-subtle); }
+@media(prefers-reduced-motion:reduce) {
+  .account-menu-trigger { transition:none; }
+}

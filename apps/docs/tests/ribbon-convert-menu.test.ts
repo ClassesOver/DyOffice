@@ -71,4 +71,13 @@ describe('Home → Convert', () => {
   it('is disabled without a document', () => {
     expect(render(false).disabled).toBe(true)
   })
+
+  it('closes the open menu with Escape without converting', () => {
+    const btn = render(true)
+    act(() => btn.click())
+    expect(container.querySelector('.spacing-menu')).not.toBeNull()
+    act(() => btn.dispatchEvent(new KeyboardEvent('keydown', {key: 'Escape', bubbles: true})))
+    expect(container.querySelector('.spacing-menu')).toBeNull()
+    expect(onConvert).not.toHaveBeenCalled()
+  })
 })

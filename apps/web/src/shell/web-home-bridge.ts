@@ -10,7 +10,7 @@ interface Dependencies {
 /** Only Web-supported behavior is provided. Native mutations never resolve as success. */
 export function createWebHomeBridge(deps:Dependencies):HomeApi {
  const stars=new Set<string>() // explicitly session-only until the server exposes a starred API
- const unsupported=async(name:string)=>{const error=new Error(`${name} is not supported in this Web build`);deps.unsupported(error.message);throw error}
+ const unsupported=async(_name:string)=>{const error=new Error('当前网页版不支持此操作。');deps.unsupported(error.message);throw error}
  async function entries():Promise<RecentEntry[]>{const files=await deps.request('/files') as WebFile[];return files.map(f=>({path:f.id,name:f.name,ext:f.format,mtimeMs:Date.parse(f.updatedAt),sizeBytes:f.size,starred:stars.has(f.id)}))}
  async function page(query:RecentQuery={},starred=false){const all=(await entries()).filter(f=>!starred||f.starred);const filtered=all.filter(f=>!query.ext||f.ext===query.ext);return {entries:filtered.slice(query.offset||0,(query.offset||0)+(query.limit??50)),total:filtered.length,totalAll:all.length}}
  const bridge:Partial<HomeApi>={

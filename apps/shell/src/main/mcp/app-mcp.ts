@@ -145,7 +145,7 @@ function buildTools(): McpToolDefinition[] {
         openInTab: (filePath) => {
           if (!deps) return
           const opened = deps.openPath(filePath)
-          if (!opened) throw new Error(`could not open ${filePath} in GenOffice`)
+          if (!opened) throw new Error(`could not open ${filePath} in DyOffice`)
         },
         docs: deps.docsControl,
         extraFormats,

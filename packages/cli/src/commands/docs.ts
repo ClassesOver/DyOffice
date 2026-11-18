@@ -99,7 +99,7 @@ export const docsCommand: CommandDef = {
       name: 'author',
       value: 'name',
       description:
-        'apply --track / compare: author of the tracked changes (compare default: GenOffice)',
+        'apply --track / compare: author of the tracked changes (compare default: DyOffice)',
     },
     {
       name: 'date',
@@ -130,7 +130,7 @@ export const docsCommand: CommandDef = {
     {
       name: 'force',
       description:
-        'apply / compare: overwrite an existing --out file, or write while GenOffice has the file open',
+        'apply / compare: overwrite an existing --out file, or write while DyOffice has the file open',
     },
   ],
   async run(args, ctx) {

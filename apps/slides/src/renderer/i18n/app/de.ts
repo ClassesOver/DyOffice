@@ -16,6 +16,7 @@ export const de = {
   appPhPromptBody: 'Text durch Klicken hinzufügen',
   appStatusOpened: '{name} geöffnet ({count} Folien)',
   appStatusNewBlank: 'Leere Präsentation erstellt',
+  appEditCommitPending: "Eine Änderung wird noch angewendet. Bitte versuchen Sie es gleich erneut.",
   appStatusSaved: 'Gespeichert',
   appStatusSaveFailed: 'Speichern fehlgeschlagen: {error}',
   appErrorCanceled: 'Abgebrochen',

@@ -16,6 +16,7 @@ export const pt = {
   appPhPromptBody: 'Clique para adicionar texto',
   appStatusOpened: '{name} aberto ({count} slides)',
   appStatusNewBlank: 'Apresentação em branco criada',
+  appEditCommitPending: "Uma edição ainda está sendo aplicada. Tente novamente em instantes.",
   appStatusSaved: 'Salvo',
   appStatusSaveFailed: 'Falha ao salvar: {error}',
   appErrorCanceled: 'Cancelado',

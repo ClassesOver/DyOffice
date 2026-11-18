@@ -1,0 +1,283 @@
+.personal-account-section {
+  min-width: 0;
+  margin-top: 28px;
+  padding-top: 24px;
+  border-top: 1px solid var(--border);
+  overflow-wrap: anywhere;
+}
+
+.personal-account-section-title {
+  margin: 0 0 8px;
+  color: var(--text-primary);
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.5;
+}
+
+.personal-account-section-desc {
+  margin: 0 0 18px;
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.65;
+}
+
+.personal-account-fields {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.personal-account-password .set-field {
+  gap: 20px;
+  padding: 10px 0;
+  border-bottom: 0;
+}
+
+.personal-account-password .set-field-text {
+  flex: 0 0 104px;
+}
+
+.personal-account-password .set-input {
+  box-sizing: border-box;
+  flex: 1;
+  width: 100%;
+  min-width: 0;
+  max-width: 360px;
+  min-height: 38px;
+}
+
+.personal-account-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 12px 0 0 124px;
+}
+
+.personal-account-section .set-btn {
+  min-height: 36px;
+  line-height: 1.4;
+}
+
+.personal-account-section .set-btn:focus-visible {
+  outline: 2px solid var(--color-border-brand);
+  outline-offset: 3px;
+}
+
+.personal-account-toolbar {
+  flex-wrap: wrap;
+  margin: 0 0 16px;
+}
+
+.personal-account-message,
+.personal-account-confirm {
+  margin: 14px 0;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-subtle);
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.65;
+}
+
+.personal-account-message.success {
+  border-color: var(--success-border);
+  background: var(--success-bg);
+  color: var(--success);
+}
+
+.personal-account-message.error {
+  border-color: var(--danger-border);
+  background: var(--danger-bg);
+  color: var(--danger);
+}
+
+.personal-account-confirm {
+  border-color: var(--danger-border);
+}
+
+.personal-account-confirm p {
+  margin: 0 0 12px;
+}
+
+.personal-account-confirm .set-btn + .set-btn {
+  margin-left: 8px;
+}
+
+.personal-session-list,
+.personal-history-list {
+  margin: 16px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.personal-session-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-top: 10px;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+
+.personal-session-content {
+  flex: 1;
+  min-width: 0;
+}
+
+.personal-session-title {
+  display: block;
+  margin-bottom: 12px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.personal-session-times {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.6;
+  font-variant-numeric: tabular-nums;
+}
+
+.personal-session-times > div {
+  display: grid;
+  grid-template-columns: 60px minmax(0, 1fr);
+  gap: 10px;
+}
+
+.personal-session-times dt,
+.personal-session-times dd {
+  margin: 0;
+}
+
+.personal-session-times dt {
+  color: var(--text-tertiary);
+}
+
+.personal-session-row > .set-btn {
+  flex-shrink: 0;
+}
+
+.personal-history-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  padding: 13px 0;
+  border-bottom: 1px solid var(--border-subtle);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.personal-history-list time {
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+.personal-history-outcome {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.personal-history-outcome::before {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--text-tertiary);
+  content: '';
+}
+
+[data-history-event='success'] .personal-history-outcome::before {
+  background: var(--success);
+}
+
+[data-history-event='failure'] .personal-history-outcome::before,
+[data-history-event='throttled'] .personal-history-outcome::before {
+  background: var(--danger);
+}
+
+.personal-account-empty {
+  margin: 16px 0 0;
+  padding: 20px 16px;
+  border-radius: 8px;
+  background: var(--surface-subtle);
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.6;
+  text-align: center;
+}
+
+@media (max-width: 680px) {
+  .personal-account-section {
+    margin-top: 24px;
+    padding-top: 20px;
+  }
+
+  .personal-account-password .set-field {
+    align-items: stretch;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .personal-account-password .set-field-text {
+    flex-basis: auto;
+  }
+
+  .personal-account-password .set-input {
+    max-width: none;
+  }
+
+  .personal-account-actions {
+    margin-left: 0;
+  }
+
+  .personal-session-row {
+    flex-direction: column;
+    padding: 14px;
+  }
+
+  .personal-session-row > .set-btn {
+    align-self: flex-end;
+  }
+}
+
+.personal-account-password .set-field > .ant-input-affix-wrapper {
+  flex: 1;
+  width: 100%;
+  min-width: 0;
+  max-width: 360px;
+}
+
+.personal-account-section .ant-alert {
+  margin-top: 14px;
+}
+
+@media (max-width: 680px) {
+  .personal-account-password .set-field > .ant-input-affix-wrapper {
+    max-width: none;
+  }
+}
+
+.personal-account-password .set-field {
+  display: flex;
+  align-items: center;
+}
+
+.personal-account-toolbar {
+  display: flex;
+  gap: 8px;
+}
+
+.personal-account-confirm .ant-btn + .ant-btn {
+  margin-left: 8px;
+}

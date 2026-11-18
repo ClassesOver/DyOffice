@@ -127,9 +127,11 @@ export function handleGlobalKeydown(
     if (e.defaultPrevented || ctx.viewMode === 'reading' || ctx.masterItems || ctx.cropTarget)
       return
     e.preventDefault()
-    void flushActiveEdit(ctx)
-      .then(() => ctx.flushNotes())
-      .then(() => slideActions.addSlide(ctx))
+    void flushActiveEdit(ctx).then(async (ready) => {
+      if (!ready) return
+      await ctx.flushNotes()
+      await slideActions.addSlide(ctx)
+    })
     return
   }
   // Undo/redo (menu accelerators normally intercept; fallback for shell/menuless scenarios)

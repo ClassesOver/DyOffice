@@ -21,11 +21,13 @@ function project(value: unknown): PersonalPreferences {
 export function createPreferencesClient(request: SettingsRequest) {
   let inFlight: Promise<PersonalPreferences> | undefined
   let uncertain = false
+  let writeVersion = 0
   return {
     async getPreferences(): Promise<PersonalPreferences> {
       if (inFlight) return inFlight
+      const version = writeVersion
       const prefs = project(await request('/api/v1/preferences'))
-      uncertain = false
+      if (version === writeVersion) uncertain = false
       return prefs
     },
     async updatePreferences(patch: Partial<PersonalPreferences>): Promise<PersonalPreferences> {
@@ -33,9 +35,10 @@ export function createPreferencesClient(request: SettingsRequest) {
       if (uncertain) throw new Error('上次保存结果尚未确认，请重新加载后再修改。')
       if (!patch || typeof patch !== 'object' || Array.isArray(patch) || Object.keys(patch).some(key => !fields.includes(key as typeof fields[number]))) throw new Error('只接受个人偏好字段。')
       const snapshot = {...patch}
+      writeVersion++
       inFlight = Promise.resolve().then(() => request('/api/v1/preferences', 'PUT', snapshot)).then(project).catch(error => {
         const status = (error as {status?: number})?.status
-        uncertain = !(status !== undefined && status >= 400 && status < 500) && (error as {code?: string})?.code !== 'stale_session'
+        uncertain = !(status !== undefined && status >= 400 && status < 500 && status !== 408) && (error as {code?: string})?.code !== 'stale_session'
         throw error
       }).finally(() => { inFlight = undefined })
       return inFlight

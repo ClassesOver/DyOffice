@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build the GenOffice Thai faces from upstream Noto Sans Thai, metric-fitted to
+"""Build the DyOffice Thai faces from upstream Noto Sans Thai, metric-fitted to
 the Thai faces Word for Mac lays out with.
 
 Word ships Cordia New and TH SarabunPSK in its DFonts; a declared Thai family

@@ -1,11 +1,14 @@
+import {onRevealWorkspaceFolder} from './file-events'
+import {createPortal} from 'react-dom'
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type {
   DragEvent as ReactDragEvent,
   PointerEvent as ReactPointerEvent,
+  KeyboardEvent as ReactKeyboardEvent,
   ReactElement,
   ReactNode,
 } from 'react'
-import logoLockup from './assets/genoffice-logo.svg'
+import logoLockup from './assets/dyoffice-logo.svg'
 import { FileBadge } from './file-badge'
 import { placeFolderMenu } from './folder-menu-position'
 import type {
@@ -24,7 +27,7 @@ import type {
 } from '../../shared/home-api'
 import type { IntegrationsApi } from '../../shared/integrations-api'
 import { markText } from '../../shared/text-marks'
-import { useDismissablePopover, useEscapeToClose } from '@genoffice/ui'
+import { trapTab, useDismissablePopover, useEscapeToClose } from '@genoffice/ui'
 import { fileCountLabel, visiblePageCount } from './counts'
 import { useI18n } from './locale'
 import type { I18n, StringKey } from './locale'
@@ -429,6 +432,7 @@ function FolderPicker({
     () => new Set(roots.map((r) => r.path)),
   )
   const [picked, setPicked] = useState<string | null>(null)
+  const [focusedPath, setFocusedPath] = useState(roots[0]?.path ?? '')
   const pickedGeneration = useRef(0)
   const [query, setQuery] = useState('')
   const [creatingIn, setCreatingIn] = useState<string | null>(null)
@@ -448,6 +452,29 @@ function FolderPicker({
     currentDirs.has(dir) ||
     movingDirs.some((m) => isUnder(m, dir)) ||
     rootOf(dir, roots)?.usable === false
+
+  function pickerKeyDown(event: ReactKeyboardEvent<HTMLDivElement>, path: string) {
+    if (event.nativeEvent.isComposing) return
+    const row = event.currentTarget
+    const rows = [...row.closest('.picker-tree')!.querySelectorAll<HTMLElement>('[role="treeitem"]')]
+    const index = rows.indexOf(row)
+    let next: HTMLElement | undefined
+    if (event.key === 'Enter' || event.key === ' ') {
+      if (!disabledDir(path)) {pickedGeneration.current++; setPicked(path)}
+    } else if (event.key === 'ArrowDown') next = rows[Math.min(rows.length - 1, index + 1)]
+    else if (event.key === 'ArrowUp') next = rows[Math.max(0, index - 1)]
+    else if (event.key === 'Home') next = rows[0]
+    else if (event.key === 'End') next = rows.at(-1)
+    else if (!query.trim() && event.key === 'ArrowRight') {
+      if (!expanded.has(path)) {
+        if (!listings.has(path) || listings.get(path)!.folders.length) setExpanded(previous => new Set([...previous, path]))
+      } else next = row.parentElement?.querySelector<HTMLElement>(':scope > ul > li > [role="treeitem"]') ?? undefined
+    } else if (!query.trim() && event.key === 'ArrowLeft') {
+      if (expanded.has(path)) setExpanded(previous => {const next = new Set(previous); next.delete(path); return next})
+      else next = row.closest('[role="group"]')?.parentElement?.querySelector<HTMLElement>(':scope > [role="treeitem"]') ?? undefined
+    } else return
+    event.preventDefault(); event.stopPropagation(); next?.focus()
+  }
 
   // Enter or blur commits, Escape cancels; the blur an unmount may fire reads
   // the edit from a ref mirrored during render, so a finished edit is a no-op
@@ -481,7 +508,7 @@ function FolderPicker({
   // name search flattens the tree to every loaded folder whose name matches;
   // folders not yet expanded are loaded on the fly one level at a time
   const needle = query.trim().toLowerCase()
-  const renderNode = (entry: { path: string; name: string }, depth: number): ReactElement => {
+  const renderNode = (entry: { path: string; name: string; hasSubfolders?: boolean }, depth: number): ReactElement => {
     const listing = listings.get(entry.path)
     const isOpen = expanded.has(entry.path)
     const children = listing?.folders ?? []
@@ -493,8 +520,12 @@ function FolderPicker({
           className={`picker-row${picked === entry.path ? ' active' : ''}${disabled ? ' disabled' : ''}`}
           style={{ paddingLeft: 8 + depth * 16 }}
           role="treeitem"
+          tabIndex={focusedPath === entry.path ? 0 : -1}
+          onFocus={() => setFocusedPath(entry.path)}
+          onKeyDown={event => pickerKeyDown(event, entry.path)}
+          aria-disabled={disabled}
           aria-selected={picked === entry.path}
-          aria-expanded={children.length > 0 ? isOpen : undefined}
+          aria-expanded={children.length > 0 || (!listing && entry.hasSubfolders) ? isOpen : undefined}
           onClick={() => {
             if (!disabled) {pickedGeneration.current++; setPicked(entry.path)}
           }}
@@ -509,6 +540,8 @@ function FolderPicker({
             style={{ visibility: listing && children.length === 0 ? 'hidden' : undefined }}
             onClick={(e) => {
               e.stopPropagation()
+              setFocusedPath(entry.path)
+              e.currentTarget.parentElement?.focus()
               setExpanded((prev) => {
                 const next = new Set(prev)
                 if (next.has(entry.path)) next.delete(entry.path)
@@ -574,13 +607,17 @@ function FolderPicker({
     if (hits.length === 0) return <p className="picker-empty">{t('noMatchingFolders')}</p>
     return (
       <ul role="tree">
-        {hits.map((h) => {
+        {hits.map((h, index) => {
           const disabled = disabledDir(h.path)
           return (
             <li key={h.path}>
               <div
                 className={`picker-row${picked === h.path ? ' active' : ''}${disabled ? ' disabled' : ''}`}
                 role="treeitem"
+                tabIndex={focusedPath === h.path || (!hits.some(hit => hit.path === focusedPath) && index === 0) ? 0 : -1}
+                onFocus={() => setFocusedPath(h.path)}
+                onKeyDown={event => pickerKeyDown(event, h.path)}
+                aria-disabled={disabled}
                 aria-selected={picked === h.path}
                 onClick={() => {
                   if (!disabled) {pickedGeneration.current++; setPicked(h.path)}
@@ -609,15 +646,23 @@ function FolderPicker({
         aria-modal="true"
         aria-label={t('moveToFolderTitle')}
         onClick={(e) => e.stopPropagation()}
+        onKeyDown={(event) => {
+          if (event.key !== 'Tab') return
+          const controls = [...event.currentTarget.querySelectorAll<HTMLElement>('*')].filter(control => control.tabIndex >= 0 && !control.matches(':disabled'))
+          const first = controls[0], last = controls.at(-1)
+          if (event.shiftKey && document.activeElement === first) {event.preventDefault(); last?.focus()}
+          else if (!event.shiftKey && document.activeElement === last) {event.preventDefault(); first?.focus()}
+        }}
       >
         <h3>{t('moveToFolderTitle')}</h3>
         {(error || operationFailure) && <p className="home-action-error" role="alert">{error || operationFailure}</p>}
         <input
           className="picker-search"
+          autoFocus
           type="search"
           placeholder={t('searchFolders')}
           value={query}
-          onChange={(e) => setQuery(e.target.value)}
+          onChange={(e) => {setQuery(e.target.value); setFocusedPath(roots[0]?.path ?? '')}}
         />
         <div className="picker-tree">
           {needle ? (
@@ -1531,17 +1576,44 @@ export interface HomeProps {
   supportedFormats?: readonly string[]
   supportedNewFormats?: readonly string[]
   accountEntry?: ReactNode
+  /** Omitted flags preserve desktop actions; Web hosts disable unavailable capabilities. */
+  capabilities?: {localFolders?: boolean; copyPath?: boolean; duplicateFile?: boolean; starredGroups?: boolean; cloudProjects?: boolean; semanticRanking?: boolean; serverFileSort?: boolean}
   /** A host with empty-only directory deletion supplies its own accurate description. */
   folderDeleteDescription?: (name: string) => string
 }
 
-export function Home({supportedFormats, supportedNewFormats, accountEntry, folderDeleteDescription}:HomeProps = {}) {
+export function Home({supportedFormats, supportedNewFormats, accountEntry, folderDeleteDescription, capabilities}:HomeProps = {}) {
   const i18n = useI18n()
   const { t, lang } = i18n
   const [actionError, setActionError] = useState('')
   const errorFallback = useRef(t('askArtifactFailed'))
   errorFallback.current = t('askArtifactFailed')
   const reportError = useCallback((cause: unknown) => setActionError(operationError(cause, errorFallback.current)), [])
+  // 仅 Web 位置导航携带取消信号；桌面调用仍只传路径，避免把信号传入 IPC。
+  const pendingReveal = useRef<AbortController | null>(null)
+  const cancelReveal = useCallback(() => {pendingReveal.current?.abort(); pendingReveal.current = null}, [])
+  useEffect(() => cancelReveal, [cancelReveal])
+  const webReveal = supportedFormats !== undefined
+  useEffect(() => {
+    if (!webReveal) return
+    return window.aiOfficeTabs?.onChanged(tabs => {
+      if (tabs.some(tab => tab.active && tab.id !== 'home')) cancelReveal()
+    })
+  }, [webReveal, cancelReveal])
+  const revealPath = async (path: string) => {
+    if (!supportedFormats) {void window.aiOffice.revealPath(path).catch(reportError); return}
+    cancelReveal()
+    const controller = new AbortController()
+    pendingReveal.current = controller
+    setActionError('')
+    try {await window.aiOffice.revealPath(path, controller.signal)}
+    catch (cause) {if (!controller.signal.aborted) reportError(cause)}
+    finally {if (pendingReveal.current === controller) pendingReveal.current = null}
+  }
+  const openPath = (path: string) => {
+    cancelReveal()
+    void window.aiOffice.openPath(path).catch(reportError)
+  }
   const activeActions = useRef(new Set<string>())
   const attemptedDrafts = useRef(new Map<string, string>())
   const [pendingActions, setPendingActions] = useState<ReadonlySet<string>>(new Set())
@@ -1557,7 +1629,6 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
   const [listTotal, setListTotal] = useState(0)
   /** sidebar Recent / Starred counts under the active type filter */
   const [navCounts, setNavCounts] = useState({ recent: 0, starred: 0 })
-  const [loadingMore, setLoadingMore] = useState(false)
   const [sidebarWidth, setSidebarWidth] = useState(readSidebarWidth)
   const sidebarRef = useRef<HTMLElement>(null)
   const [view, setView] = useState<'recent' | 'starred'>('recent')
@@ -1574,6 +1645,7 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
   // ── File search (names + indexed content); active while the box has text ──
   const [searchQuery, setSearchQuery] = useState('')
   const [searchPage, setSearchPage] = useState<FileSearchPage | null>(null)
+  const [searchError, setSearchError] = useState('')
   const [rerank, setRerank] = useState<{ key: string; result: FileSearchRerank } | null>(null)
   // bumped when the Jev settings change so the current results are judged again (or the order dropped)
   const [rerankSettingsTick, setRerankSettingsTick] = useState(0)
@@ -1589,14 +1661,22 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
   // IME composition: wait for the committed text instead of searching each keystroke
   const composingRef = useRef(false)
   const searchSeq = useRef(0)
+  const searchMoreRequest = useRef<number | null>(null)
+  const [searchMoreBusy, setSearchMoreBusy] = useState(false)
+  const [searchRefresh, setSearchRefresh] = useState(0)
   const searchActive = searchQuery.trim().length > 0
   // modified-column sort (WPS-style header popover), shared by the global and folder tables
-  const [fileSort, setFileSort] = useState<'recent' | 'oldest'>('recent')
+  const [fileSort, setFileSort] = useState<'recent' | 'oldest' | undefined>(capabilities?.serverFileSort ? undefined : 'recent')
+  const serverSort = capabilities?.serverFileSort && fileSort ? fileSort === 'oldest' ? 'modified-asc' : 'modified-desc' : undefined
   const [fileSortMenuOpen, setFileSortMenuOpen] = useState(false)
   const fileSortRef = useRef<HTMLDivElement>(null)
   const [rowMenu, setRowMenu] = useState<string | null>(null)
   // actions cell (… button + menu) of the row whose menu is open — the dismissal guard root
   const rowMenuWrapRef = useRef<HTMLSpanElement>(null)
+  const rowMenuPopRef = useRef<HTMLDivElement>(null)
+  const rowMenuAnchor = useRef<DOMRect | null>(null)
+  const rowMenuTrigger = useRef<HTMLButtonElement | null>(null)
+  const renderMenu = (menu: ReactElement) => supportedFormats ? createPortal(menu, document.body) : menu
   const [selected, setSelected] = useState<ReadonlySet<string>>(new Set())
   const [renaming, setRenaming] = useState<{ path: string; value: string } | null>(null)
   const renameGeneration = useRef(0)
@@ -1656,6 +1736,20 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
     folderMenu?.where === where && folderMenu.path === path
   const folderMenuWrapRef = useRef<HTMLDivElement>(null)
   const folderMenuPopRef = useRef<HTMLDivElement>(null)
+  const folderMenuTrigger = useRef<HTMLElement | null>(null)
+  const folderMenuKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+    event.stopPropagation()
+    if (event.key === 'Escape' || event.key === 'Tab') {
+      if (event.key === 'Escape') event.preventDefault()
+      folderMenuTrigger.current?.focus({preventScroll: true})
+      setFolderMenu(null)
+    } else if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+      event.preventDefault()
+      const items = [...event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="menuitem"]:not(:disabled)')]
+      const index = items.indexOf(document.activeElement as HTMLButtonElement)
+      items[(index + (event.key === 'ArrowDown' ? 1 : items.length - 1)) % items.length]?.focus({preventScroll: true})
+    }
+  }
   const [folderRenaming, setFolderRenaming] = useState<{
     path: string
     where: 'tree' | 'table'
@@ -1672,6 +1766,35 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
   const movePickerRef = useRef(movePicker)
   movePickerRef.current = movePicker
   const [conflict, setConflict] = useState<{ paths: string[]; targetDir: string } | null>(null)
+  const confirmationRef = useRef<HTMLDivElement>(null)
+  const dialogOpener = useRef<HTMLElement | null>(null)
+  const rememberDialogOpener = (element?: HTMLElement) => {
+    if (element) dialogOpener.current = element
+    else if (rowMenu) dialogOpener.current = rowMenuTrigger.current
+    else if (folderMenu) dialogOpener.current = folderMenuTrigger.current
+    else dialogOpener.current = document.activeElement instanceof HTMLElement ? document.activeElement : null
+  }
+  const fileDialogOpen = !!(confirmDelete || confirmMissing || confirmDeleteFolder || movePicker || conflict)
+  useLayoutEffect(() => {
+    if (!fileDialogOpen) return
+    const opener = dialogOpener.current
+    return () => {if (opener?.isConnected) opener.focus({preventScroll: true})}
+  }, [fileDialogOpen])
+  const confirmationOpen = !!(confirmDelete || confirmMissing || confirmDeleteFolder)
+  useEffect(() => {
+    if (!confirmationOpen) return
+    const onKey = (event: KeyboardEvent) => {
+      const dialog = confirmationRef.current
+      if (event.key !== 'Tab' || !dialog) return
+      if (!dialog.contains(document.activeElement)) {
+        const controls = [...dialog.querySelectorAll<HTMLButtonElement>('button:not(:disabled)')]
+        event.preventDefault()
+        ;(event.shiftKey ? controls.at(-1) : controls[0])?.focus()
+      } else trapTab(dialog, event)
+    }
+    window.addEventListener('keydown', onKey, true)
+    return () => window.removeEventListener('keydown', onKey, true)
+  }, [confirmationOpen])
   // folder row currently hovered by a drag (sidebar or table)
   const [dropTarget, setDropTarget] = useState<string | null>(null)
   const dragExpandTimer = useRef<number | null>(null)
@@ -1740,12 +1863,25 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
   // ── Paged loading ──
   // stale responses are dropped via a request sequence number (when views/filters switch quickly)
   const requestSeq = useRef(0)
+  const [readyPageSeq, setReadyPageSeq] = useState(0)
+  const [listLoading, setListLoading] = useState(true)
+  const [listError, setListError] = useState('')
+  const moreRequest = useRef<number | null>(null)
+  const firstPageRequest = useRef<number | null>(null)
   const entriesLen = useRef(0)
   entriesLen.current = entries.length
 
   /** reload the list; keepCount keeps the loaded row count (refresh), otherwise back to page one */
   const reload = (keepCount: boolean) => {
     const seq = ++requestSeq.current
+    moreRequest.current = null
+    firstPageRequest.current = seq
+    setListLoading(true)
+    setListError('')
+    if (!keepCount) {
+      setEntries([])
+      setListTotal(0)
+    }
     const ext = filter === 'all' ? undefined : filter
     // the group pills only scope the Starred view's own list; the sidebar
     // counters and the other view stay group-agnostic
@@ -1753,16 +1889,24 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
     const limit = keepCount ? Math.max(entriesLen.current, PAGE_SIZE) : PAGE_SIZE
     const primary = view === 'recent' ? window.aiOffice.recents : window.aiOffice.starred
     const secondary = view === 'recent' ? window.aiOffice.starred : window.aiOffice.recents
-    void primary({ offset: 0, limit, ext, group }).then((page) => {
+    void primary({ offset: 0, limit, ext, group, ...(serverSort ? {sort: serverSort} : {}) }).then((page) => {
       if (seq !== requestSeq.current) return
       setEntries(page.entries)
+      setListLoading(false)
       setListTotal(page.total)
+      setReadyPageSeq(seq)
       setNavCounts((prev) =>
         view === 'recent'
           ? { ...prev, recent: visiblePageCount(page) }
           : { ...prev, starred: visiblePageCount(page) },
       )
-    }).catch((cause) => {if (seq === requestSeq.current) reportError(cause)})
+    }).catch((cause) => {
+      if (seq !== requestSeq.current) return
+      setListLoading(false)
+      setListError(operationError(cause, errorFallback.current))
+      if (keepCount && entriesLen.current > 0) reportError(cause)
+    })
+      .finally(() => {if(firstPageRequest.current === seq) firstPageRequest.current = null})
     // The other view fetches only its count under the same active filter.
     void secondary({ offset: 0, limit: 0, ext }).then((page) => {
       if (seq !== requestSeq.current) return
@@ -1775,7 +1919,7 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
     // the group pills live on the renderer, so their list rides along with
     // every reload; a vanished group (last file unstarred/ungrouped) clears
     // the filter instead of showing a silently empty list
-    void window.aiOffice.starredGroups().then((groups) => {
+    if (capabilities?.starredGroups !== false) void window.aiOffice.starredGroups().then((groups) => {
       if (seq !== requestSeq.current) return
       setStarredGroups(groups)
       setGroupFilter((cur) => (cur && !groups.includes(cur) ? null : cur))
@@ -1795,10 +1939,14 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
 
   useEffect(() => {
     reloadRef.current(false)
-  }, [view, filter, groupFilter])
+  }, [view, filter, groupFilter, serverSort])
 
   const q = searchQuery.trim()
   useEffect(() => {
+    setSearchPage(null)
+    setSearchError('')
+    searchMoreRequest.current = null; setSearchMoreBusy(false)
+    if (q) setSelected(new Set())
     if (!q) {
       searchSeq.current++
       setSearchPage(null)
@@ -1815,13 +1963,37 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
       void window.aiOffice.searchFiles({ q, ext, limit: 100 }).then((page) => {
         if (seq !== searchSeq.current) return
         setSearchPage(page)
+        setSearchError('')
         // results grow while the background index catches up
         if (page.index.pending > 0 || page.index.scanning) timer = window.setTimeout(run, 1500)
-      }).catch((cause) => {if (seq === searchSeq.current) reportError(cause)})
+      }).catch((cause) => {if (seq === searchSeq.current) setSearchError(operationError(cause, errorFallback.current))})
     }
     timer = window.setTimeout(run, 150)
-    return () => window.clearTimeout(timer)
-  }, [q, filter, reportError])
+    return () => {
+      window.clearTimeout(timer)
+      searchMoreRequest.current = null
+      searchSeq.current++
+    }
+  }, [q, filter, reportError, searchRefresh])
+
+  async function loadMoreSearch() {
+    if (!searchPage || searchPage.index.pending > 0 || searchPage.index.scanning || searchPage.hits.length >= searchPage.total) return
+    const seq = searchSeq.current
+    if (searchMoreRequest.current === seq) return
+    searchMoreRequest.current = seq; setSearchMoreBusy(true)
+    const offset = searchPage.hits.length
+    try {
+      const page = await window.aiOffice.searchFiles({q, ext: filter === 'all' ? undefined : filter, offset, limit: 100})
+      if (seq !== searchSeq.current) return
+      const known = new Set(searchPage.hits.map(hit => hit.path))
+      // Inserts/deletions can shift offset pages. Re-read the first page when
+      // totals or overlap expose that change instead of looping on duplicate hits.
+      if (page.total !== searchPage.total || !page.hits.length || page.hits.some(hit => known.has(hit.path))) {
+        setSearchRefresh(value => value + 1)
+      } else setSearchPage(current => current ? {...page, hits: [...current.hits, ...page.hits]} : current)
+    } catch (cause) { if (seq === searchSeq.current) reportError(cause) }
+    finally { if (searchMoreRequest.current === seq) { searchMoreRequest.current = null; setSearchMoreBusy(false) } }
+  }
 
   // Jev judges the top local hits once they settle; the main process answers null when reranking is off.
   // The key changes only with the query, filter or candidate set, so index polls do not restart the timer.
@@ -1830,7 +2002,7 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
       ? [q, filter, ...searchPage.hits.slice(0, 20).map((h) => h.path)].join('\n')
       : ''
   useEffect(() => {
-    if (!rerankKey) return
+    if (capabilities?.semanticRanking === false || !rerankKey) return
     const key = rerankKey
     const paths = key.split('\n').slice(2)
     const timer = window.setTimeout(() => {
@@ -1840,7 +2012,7 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
       }).catch(reportError)
     }, 600)
     return () => window.clearTimeout(timer)
-  }, [q, filter, rerankKey, rerankSettingsTick, reportError])
+  }, [q, filter, rerankKey, rerankSettingsTick, reportError, capabilities?.semanticRanking])
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -1873,31 +2045,33 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
   })
 
   const loadMore = () => {
-    if (loadingMore || !hasMore) return
-    setLoadingMore(true)
     const seq = requestSeq.current
+    if (readyPageSeq !== seq || moreRequest.current === seq || firstPageRequest.current === seq || !hasMore) return
+    moreRequest.current = seq
     const ext = filter === 'all' ? undefined : filter
+    const group = view === 'starred' && groupFilter ? groupFilter : undefined
     const api = view === 'recent' ? window.aiOffice.recents : window.aiOffice.starred
-    void api({ offset: entriesLen.current, limit: PAGE_SIZE, ext }).then((page) => {
-      setLoadingMore(false)
+    const offset = entriesLen.current, known = new Set(entries.map(entry => entry.path))
+    void api({ offset, limit: PAGE_SIZE, ext, group, ...(serverSort ? {sort: serverSort} : {}) }).then((page) => {
       if (seq !== requestSeq.current) return
+      if(page.total !== listTotal || !page.entries.length || page.entries.some(entry => known.has(entry.path)) || new Set(page.entries.map(entry => entry.path)).size !== page.entries.length){reloadRef.current(false);return}
       setEntries((prev) => [...prev, ...page.entries])
       setListTotal(page.total)
-    }).catch((cause) => {setLoadingMore(false); if (seq === requestSeq.current) reportError(cause)})
+    }).catch((cause) => {if (seq === requestSeq.current) reportError(cause)})
+      .finally(() => {if(moreRequest.current === seq)moreRequest.current = null})
   }
   const loadMoreRef = useRef(loadMore)
   loadMoreRef.current = loadMore
 
-  // oldest-first over a partially loaded list would miss the tail pages —
-  // keep pulling until the list is complete (backend caps recents at 100)
+  // 本地反转需要先补齐列表；Web 采用服务端分页排序，不主动拉全。
   useEffect(() => {
-    if (fileSort === 'oldest' && hasMore) loadMoreRef.current()
-  }, [fileSort, hasMore, entries.length])
+    if (!capabilities?.serverFileSort && fileSort === 'oldest' && hasMore) loadMoreRef.current()
+  }, [fileSort, hasMore, entries.length, readyPageSeq, capabilities?.serverFileSort])
 
   // Load the next page once the bottom sentinel enters the viewport (240px early);
   // depending on entries.length rebuilds the observer after each page — observe fires an immediate
   // callback, so while the sentinel stays in view we keep loading until full or exhausted
-  const sentinelRef = useRef<HTMLDivElement>(null)
+  const sentinelRef = useRef<HTMLLIElement>(null)
   useEffect(() => {
     const el = sentinelRef.current
     if (!el) return
@@ -1909,15 +2083,48 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
     )
     observer.observe(el)
     return () => observer.disconnect()
-  }, [hasMore, entries.length])
+  }, [hasMore, entries.length, readyPageSeq])
 
   // unified dismissal: outside press, window blur, chrome press (tab strip / window drag)
   useDismissablePopover(rowMenu !== null, () => setRowMenu(null), {
-    inside: () => [rowMenuWrapRef.current],
+    inside: () => [rowMenuWrapRef.current, rowMenuPopRef.current],
   })
   useDismissablePopover(folderMenu !== null, () => setFolderMenu(null), {
-    inside: () => [folderMenuWrapRef.current],
+    inside: () => [folderMenuWrapRef.current, folderMenuPopRef.current],
   })
+  useLayoutEffect(() => {
+    const el = rowMenuPopRef.current, anchor = rowMenuAnchor.current
+    if (!supportedFormats || !rowMenu || !el || !anchor) return
+    el.style.setProperty('position-anchor', 'none')
+    el.style.setProperty('position-visibility', 'always')
+    el.style.setProperty('position-try-fallbacks', 'none')
+    const {left, top} = placeFolderMenu(
+      {x: anchor.right, y: anchor.bottom + 4, above: anchor.top - 4, align: 'end'},
+      {width: el.offsetWidth, height: el.offsetHeight},
+      {width: fixedViewportWidth(), height: document.documentElement.clientHeight},
+    )
+    el.style.left = `${left}px`; el.style.top = `${top}px`
+    el.querySelector<HTMLButtonElement>('[role="menuitem"]:not(:disabled)')?.focus({preventScroll: true})
+  }, [rowMenu, supportedFormats])
+  useEffect(() => {
+    if (!supportedFormats || !rowMenu) return
+    // Revealing an offscreen trigger can queue a scroll event before the menu opens.
+    // Only dismiss for a position change after opening, not that delayed event.
+    const positions = new Map<Element, {top: number; left: number}>()
+    for (let element: Element | null = rowMenuTrigger.current; element; element = element.parentElement) {
+      positions.set(element, {top: element.scrollTop, left: element.scrollLeft})
+    }
+    const close = (event: Event) => {
+      if (event.target instanceof Node && rowMenuPopRef.current?.contains(event.target)) return
+      if (event.type === 'scroll' && event.target instanceof Element) {
+        const previous = positions.get(event.target)
+        if (previous && previous.top === event.target.scrollTop && previous.left === event.target.scrollLeft) return
+      }
+      setRowMenu(null)
+    }
+    window.addEventListener('scroll', close, true); window.addEventListener('resize', close)
+    return () => {window.removeEventListener('scroll', close, true); window.removeEventListener('resize', close)}
+  }, [rowMenu, supportedFormats])
   // the fixed-position folder menu would detach from its row while the tree scrolls
   useEffect(() => {
     if (!folderMenu) return
@@ -1936,16 +2143,22 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
     )
     el.style.left = `${left}px`
     el.style.top = `${top}px`
-  }, [folderMenu])
+    if (supportedFormats) el.querySelector<HTMLButtonElement>('[role="menuitem"]:not(:disabled)')?.focus({preventScroll: true})
+  }, [folderMenu, supportedFormats])
 
-  // Escape closes the row menu and the confirm dialogs
+  // Escape 关闭排序、行菜单和确认弹窗。
   useEscapeToClose(
-    rowMenu !== null ||
+    fileSortMenuOpen ||
+      rowMenu !== null ||
       folderMenu !== null ||
       confirmDelete !== null ||
       confirmMissing !== null ||
       confirmDeleteFolder !== null,
     () => {
+      if (fileSortMenuOpen) {
+        setFileSortMenuOpen(false)
+        fileSortRef.current?.querySelector<HTMLButtonElement>('.cloud-col-sort-btn')?.focus({preventScroll: true})
+      }
       setRowMenu(null)
       setFolderMenu(null)
       setConfirmDelete(null)
@@ -1959,6 +2172,7 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
     <div className="cloud-col-sort" ref={fileSortRef}>
       <button
         className="cloud-col-sort-btn"
+        title={t('colModified')}
         aria-haspopup="menu"
         aria-expanded={fileSortMenuOpen}
         onClick={() => setFileSortMenuOpen((o) => !o)}
@@ -2016,6 +2230,7 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
     folderFiles.length > 0 && folderSelectedPaths.length === folderFiles.length
 
   const changeView = (next: 'recent' | 'starred') => {
+    cancelReveal()
     setView(next)
     setSelectedFolder(null)
     setCloudMode(false)
@@ -2025,18 +2240,21 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
   }
 
   const changeFilter = (key: string) => {
+    cancelReveal()
     setFilter(key)
     setSelected(new Set())
     setRowMenu(null)
   }
 
   const changeGroupFilter = (group: string | null) => {
+    cancelReveal()
     setGroupFilter(group)
     setSelected(new Set())
     setRowMenu(null)
   }
 
   const selectFolder = (dir: string) => {
+    cancelReveal()
     setSelectedFolder(dir)
     setCloudMode(false)
     setSelected(new Set())
@@ -2062,6 +2280,19 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
       return next
     })
   }
+
+  useEffect(() => onRevealWorkspaceFolder(({dir, fileId}) => {
+    const owner = rootOf(dir, roots)
+    if (!owner?.readable) return
+    setExpanded(previous => new Set([...previous, ...crumbsOf(owner, dir).map(crumb => crumb.path)]))
+    setSelectedFolder(dir)
+    setCloudMode(false)
+    setSearchQuery('')
+    setFilter('all')
+    setSelected(new Set(fileId ? [fileId] : []))
+    setRowMenu(null)
+    setFolderMenu(null)
+  }), [roots])
 
   const toggleSelect = (path: string, on: boolean) => {
     setSelected((prev) => {
@@ -2103,6 +2334,7 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
   }
 
   const deleteFiles = (paths: string[]) => {
+    rememberDialogOpener()
     setActionError('')
     setRowMenu(null)
     setConfirmDelete(paths)
@@ -2234,6 +2466,7 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
   }
 
   const startMove = (paths: string[]) => {
+    rememberDialogOpener()
     setActionError('')
     setRowMenu(null)
     setFolderMenu(null)
@@ -2371,7 +2604,7 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
     return (
       <div className="quick-cards">
         {NEW_ITEMS.filter(item => !supportedFormats || supportedFormats.includes(item.ext)).map((item) => (
-          <button key={item.ext} className="quick-card" disabled={Boolean(supportedNewFormats && !supportedNewFormats.includes(item.ext))} title={supportedNewFormats && !supportedNewFormats.includes(item.ext) ? 'Not available in this Web build' : undefined} onClick={() => void item.action().catch(reportError)}>
+          <button key={item.ext} className="quick-card" disabled={Boolean(supportedNewFormats && !supportedNewFormats.includes(item.ext))} title={supportedNewFormats && !supportedNewFormats.includes(item.ext) ? '暂不支持新建此格式，可通过打开文件导入现有文档。' : undefined} onClick={() => void item.action().catch(reportError)}>
             <FileBadge ext={item.ext} size={30} />
             <span className="quick-text">
               <span className="quick-title-row">
@@ -2420,7 +2653,7 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
   }
 
   // folders dragged in from the OS join the tree in place; documents open as they do anywhere else
-  const panelDropProps = {
+  const panelDropProps = capabilities?.localFolders === false ? {} : {
     onDragOver: (event: ReactDragEvent) => {
       if (!event.dataTransfer.types.includes('Files')) return
       event.preventDefault()
@@ -2456,6 +2689,7 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
         aria-expanded={menuOpenAt('tree', entry.path)}
         onClick={(e) => {
           e.stopPropagation()
+          folderMenuTrigger.current = e.currentTarget
           if (menuOpenAt('tree', entry.path)) {
             setFolderMenu(null)
             return
@@ -2473,8 +2707,8 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
       >
         <MoreDots />
       </button>
-      {folderMenu && menuOpenAt('tree', entry.path) && (
-        <div className="folder-menu" role="menu" ref={folderMenuPopRef}>
+      {folderMenu && menuOpenAt('tree', entry.path) && renderMenu(
+        <div className="folder-menu" role="menu" ref={folderMenuPopRef} onKeyDown={supportedFormats ? folderMenuKeyDown : undefined}>
           {editableAt(entry.path) && (
             <button role="menuitem" onClick={() => startCreateFolder(entry.path)}>
               {t('newSubfolder')}
@@ -2495,7 +2729,7 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
               role="menuitem"
               onClick={() => {
                 setFolderMenu(null)
-                void window.aiOffice.revealPath(entry.path).catch(reportError)
+                void revealPath(entry.path)
               }}
             >
               {t('revealInFolder')}
@@ -2509,6 +2743,7 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
                 className="danger"
                 onClick={() => {
                   setFolderMenu(null)
+                  rememberDialogOpener()
                   setConfirmDeleteFolder({path: entry.path})
                 }}
               >
@@ -2516,7 +2751,7 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
               </button>
             </>
           )}
-          {rootEntry?.removable && (
+          {capabilities?.localFolders !== false && rootEntry?.removable && (
             <>
               <div className="row-menu-divider" />
               <button role="menuitem" onClick={() => removeFolderRoot(entry.path)}>
@@ -2586,12 +2821,14 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
             if (!unavailable) selectFolder(entry.path)
           }}
           onKeyDown={(e) => {
+            if (e.target !== e.currentTarget) return
             if (e.key === 'Enter' && !unavailable) selectFolder(entry.path)
             if (e.key === 'ArrowRight' && !isOpen) toggleExpanded(entry.path)
             if (e.key === 'ArrowLeft' && isOpen) toggleExpanded(entry.path)
           }}
           onContextMenu={(e) => {
             e.preventDefault()
+            folderMenuTrigger.current = e.currentTarget
             setFolderMenu({
               path: entry.path,
               where: 'tree',
@@ -2664,7 +2901,7 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
         <div className="folder-panel-head">
           <span className="folder-panel-title">{t('folders')}</span>
           <div className="folder-panel-actions">
-            {roots.length > 0 && (
+            {capabilities?.localFolders !== false && roots.length > 0 && (
               <button
                 className="folder-add-btn folder-add-root-btn"
                 data-tip={t('addFolderRoot')}
@@ -2711,12 +2948,12 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
           {root && !root.usable ? (
             <li className="folder-unusable">
               <p>{t('rootUnusable')}</p>
-              <button
+              {capabilities?.localFolders !== false && <button
                 className="btn btn-secondary"
                 onClick={() => void window.aiOffice.pickDefaultSaveDir().then(() => loadRoot()).catch(reportError)}
               >
                 {t('pickSaveDir')}
-              </button>
+              </button>}
             </li>
           ) : (
             root && renderTreeNode({ path: root.path, name: root.name, hasSubfolders: true }, 0)
@@ -2746,15 +2983,15 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
           tabIndex={0}
           draggable={!isRenaming && !entry.missing}
           onDragStart={(e) => onRowDragStart(e, dragPathsFor(entry.path, context))}
-          onClick={() => {
+          onClick={(event) => {
             if (isRenaming) return
-            if (entry.missing) setConfirmMissing(entry)
-            else void window.aiOffice.openPath(entry.path).catch(reportError)
+            if (entry.missing) {rememberDialogOpener(event.currentTarget); setConfirmMissing(entry)}
+            else openPath(entry.path)
           }}
           onKeyDown={(event) => {
             if (event.key === 'Enter' && event.target === event.currentTarget) {
-              if (entry.missing) setConfirmMissing(entry)
-              else void window.aiOffice.openPath(entry.path).catch(reportError)
+              if (entry.missing) {rememberDialogOpener(event.currentTarget); setConfirmMissing(entry)}
+              else openPath(entry.path)
             }
           }}
         >
@@ -2790,8 +3027,8 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
           ) : (
             <span className="recent-name">{entry.name}</span>
           )}
-          <span className="recent-path" title={locationLabel(entry.path, roots, listings) || undefined}>
-            {locationLabel(entry.path, roots, listings)}
+          <span className="recent-path" title={(entry.locationLabel ?? locationLabel(entry.path, roots, listings)) || undefined}>
+            {(entry.locationLabel ?? locationLabel(entry.path, roots, listings))}
           </span>
           <span className="recent-time">
             {entry.missing ? '—' : formatModified(entry.mtimeMs, i18n)}
@@ -2824,7 +3061,18 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
               className="more-btn"
               aria-label={t('moreActions')}
               aria-expanded={rowMenu === entry.path}
-              onClick={() => setRowMenu(rowMenu === entry.path ? null : entry.path)}
+              onKeyDown={supportedFormats ? event => {
+                if (event.key !== 'Enter' && event.key !== ' ') return
+                event.preventDefault(); event.stopPropagation()
+                rowMenuTrigger.current = event.currentTarget
+                rowMenuAnchor.current = event.currentTarget.getBoundingClientRect()
+                setRowMenu(entry.path)
+              } : undefined}
+              onClick={(event) => {
+                rowMenuTrigger.current = event.currentTarget
+                rowMenuAnchor.current = event.currentTarget.getBoundingClientRect()
+                setRowMenu(rowMenu === entry.path ? null : entry.path)
+              }}
             >
               <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
                 <circle cx="3.2" cy="8" r="1.4" fill="currentColor" />
@@ -2832,13 +3080,25 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
                 <circle cx="12.8" cy="8" r="1.4" fill="currentColor" />
               </svg>
             </button>
-            {rowMenu === entry.path && (
-              <div className="row-menu" role="menu">
+            {rowMenu === entry.path && renderMenu(
+              <div className="row-menu" role="menu" onKeyDown={supportedFormats ? event => {
+                if (event.key === 'Escape' || event.key === 'Tab') {
+                  if (event.key === 'Escape') event.preventDefault()
+                  event.stopPropagation()
+                  rowMenuTrigger.current?.focus({preventScroll: true})
+                  setRowMenu(null)
+                } else if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+                  event.preventDefault(); event.stopPropagation()
+                  const items = [...event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="menuitem"]:not(:disabled)')]
+                  const index = items.indexOf(document.activeElement as HTMLButtonElement)
+                  items[(index + (event.key === 'ArrowDown' ? 1 : items.length - 1)) % items.length]?.focus({preventScroll: true})
+                }
+              } : undefined} ref={rowMenuPopRef} style={supportedFormats ? {position: 'fixed', right: 'auto', bottom: 'auto', zIndex: 1200} : undefined}>
                 <button
                   role="menuitem"
                   onClick={() => {
                     setRowMenu(null)
-                    void window.aiOffice.openPath(entry.path).catch(reportError)
+                    openPath(entry.path)
                   }}
                 >
                   {t('open')}
@@ -2847,20 +3107,20 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
                   role="menuitem"
                   onClick={() => {
                     setRowMenu(null)
-                    void window.aiOffice.revealPath(entry.path).catch(reportError)
+                    void revealPath(entry.path)
                   }}
                 >
                   {t('revealInFolder')}
                 </button>
-                <button
+                {capabilities?.copyPath !== false && <button
                   role="menuitem"
                   onClick={() => {
                     setRowMenu(null)
-                    void navigator.clipboard.writeText(entry.path)
+                    void navigator.clipboard.writeText(entry.path).catch(reportError)
                   }}
                 >
                   {t('copyPath')}
-                </button>
+                </button>}
                 {canMove && editable && !entry.missing && (
                   <>
                     <div className="row-menu-divider" />
@@ -2875,12 +3135,12 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
                     <button role="menuitem" onClick={() => startRename(entry)}>
                       {t('rename')}
                     </button>
-                    <button role="menuitem" onClick={() => duplicateFile(entry.path)}>
+                    {capabilities?.duplicateFile !== false && <button role="menuitem" onClick={() => duplicateFile(entry.path)}>
                       {t('duplicate')}
-                    </button>
+                    </button>}
                   </>
                 )}
-                {entry.starred && (
+                {capabilities?.starredGroups !== false && entry.starred && (
                   <>
                     <div className="row-menu-divider" />
                     <button
@@ -2954,6 +3214,7 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
           }}
           onContextMenu={(e) => {
             e.preventDefault()
+            folderMenuTrigger.current = e.currentTarget
             setFolderMenu({
               path: entry.path,
               where: 'table',
@@ -3005,6 +3266,7 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
               aria-label={t('folderMoreActions', { name: entry.name })}
               aria-expanded={menuOpenAt('table', entry.path)}
               onClick={(e) => {
+                folderMenuTrigger.current = e.currentTarget
                 if (menuOpenAt('table', entry.path)) {
                   setFolderMenu(null)
                   return
@@ -3022,8 +3284,8 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
             >
               <MoreDots />
             </button>
-            {folderMenu && menuOpenAt('table', entry.path) && (
-              <div className="folder-menu" role="menu" ref={folderMenuPopRef}>
+            {folderMenu && menuOpenAt('table', entry.path) && renderMenu(
+              <div className="folder-menu" role="menu" ref={folderMenuPopRef} onKeyDown={supportedFormats ? folderMenuKeyDown : undefined}>
                 <button
                   role="menuitem"
                   onClick={() => {
@@ -3048,7 +3310,7 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
                   role="menuitem"
                   onClick={() => {
                     setFolderMenu(null)
-                    void window.aiOffice.revealPath(entry.path).catch(reportError)
+                    void revealPath(entry.path)
                   }}
                 >
                   {t('revealInFolder')}
@@ -3061,6 +3323,7 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
                       className="danger"
                       onClick={() => {
                         setFolderMenu(null)
+                        rememberDialogOpener()
                         setConfirmDeleteFolder({path: entry.path})
                       }}
                     >
@@ -3104,11 +3367,12 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
   // ── Folder view ────────────────────────────────────────
 
   const clearSearch = () => {
+    cancelReveal()
     setSearchQuery('')
     searchInputRef.current?.focus()
   }
 
-  const renderSearchSettingsButton = () => (
+  const renderSearchSettingsButton = () => capabilities?.semanticRanking === false ? null : (
     <button
       className="file-search-settings"
       title={t('searchJevSettings')}
@@ -3145,11 +3409,13 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
         placeholder={t('searchFilesPlaceholder')}
         aria-label={t('searchFilesPlaceholder')}
         spellCheck={false}
-        onChange={(e) => setSearchQuery(e.target.value)}
+        onChange={(e) => {cancelReveal(); setSearchQuery(e.target.value)}}
         onCompositionStart={() => {
+          cancelReveal()
           composingRef.current = true
         }}
         onCompositionEnd={(e) => {
+          cancelReveal()
           composingRef.current = false
           setSearchQuery(e.currentTarget.value)
         }}
@@ -3181,9 +3447,12 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
       className="search-row"
       role="button"
       tabIndex={0}
-      onClick={() => void window.aiOffice.openPath(hit.path).catch(reportError)}
+      onClick={() => openPath(hit.path)}
       onKeyDown={(e) => {
-        if (e.key === 'Enter') void window.aiOffice.openPath(hit.path).catch(reportError)
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault()
+          if (!e.repeat) openPath(hit.path)
+        }
       }}
     >
       <span className="recent-icon">
@@ -3192,8 +3461,8 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
       <div className="search-main">
         <div className="search-head">
           <span className="search-name">{highlightText(hit.name, hit.needles)}</span>
-          <span className="search-path" title={locationLabel(hit.path, roots, listings) || undefined}>
-            {highlightText(locationLabel(hit.path, roots, listings), hit.needles)}
+          <span className="search-path" title={(hit.locationLabel ?? locationLabel(hit.path, roots, listings)) || undefined}>
+            {highlightText((hit.locationLabel ?? locationLabel(hit.path, roots, listings)), hit.needles)}
           </span>
         </div>
         {hit.snippet && (
@@ -3216,19 +3485,24 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
 
   const renderSearchResults = () => {
     const page = searchPage
-    const busy = !!page && (page.index.pending > 0 || page.index.scanning)
+    const busy = !searchError && !!page && (page.index.pending > 0 || page.index.scanning)
     return (
       <div className="search-results" aria-live="polite">
+        {!page && !searchError && <div className="load-more" role="status" aria-busy="true" aria-label={t('cloudRefresh')}><span className="load-more-spinner" /></div>}
+        {searchError && <div className="empty"><span className="empty-hint" role="alert">{searchError}</span><button className="btn btn-secondary" onClick={() => setSearchRefresh(value => value + 1)}>{t('cloudRetry')}</button></div>}
         {busy && (
           <div className="search-status">
             <span className="load-more-spinner" />
             {t('searchIndexing', { n: page.index.pending })}
           </div>
         )}
-        {page && page.hits.length === 0 && !busy
+        {page && page.hits.length === 0 && !busy && !searchError
           ? renderEmpty(t('searchNoResults', { q }))
           : page && (
-              <ul className="search-list">{orderedSearchHits(page.hits).map(renderSearchRow)}</ul>
+              <>
+                <ul className="search-list">{orderedSearchHits(page.hits).map(renderSearchRow)}</ul>
+                {!busy && !searchError && page.hits.length < page.total && <button className="btn btn-secondary search-more" disabled={searchMoreBusy} aria-busy={searchMoreBusy} onClick={() => void loadMoreSearch()}>{t('searchMore')}</button>}
+              </>
             )}
       </div>
     )
@@ -3252,9 +3526,9 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
             Jev
           </span>
         )}
-        <span className="file-count">
+        {searchPage && !searchError && <span className="file-count">
           {t(total === 1 ? 'searchResultCountOne' : 'searchResultCount', { n: total })}
-        </span>
+        </span>}
       </div>
     )
   }
@@ -3264,7 +3538,9 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
   function renderFolderContent() {
     if (roots.length === 0) return null
     const total = folderSubfolders.length + folderFiles.length
-    const sortedFiles = fileSort === 'oldest' ? [...folderFiles].reverse() : folderFiles
+    const sortedFiles = capabilities?.serverFileSort && fileSort
+      ? [...folderFiles].sort((a, b) => (fileSort === 'oldest' ? a.mtimeMs - b.mtimeMs : b.mtimeMs - a.mtimeMs) || a.path.localeCompare(b.path))
+      : fileSort === 'oldest' ? [...folderFiles].reverse() : folderFiles
     return (
       <main className="content">
         {!confirmDelete && !confirmDeleteFolder && !movePicker && renderActionError()}
@@ -3447,7 +3723,7 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
                     </button>
                   ))}
                 </div>
-                {view === 'starred' && starredGroups.length > 0 && (
+                {capabilities?.starredGroups !== false && view === 'starred' && starredGroups.length > 0 && (
                   // the group pills refine the Starred view further; the type
                   // pills above them keep working on the group-scoped list
                   <div className="filter-pills" role="tablist" aria-label={t('groupFilterAria')}>
@@ -3488,6 +3764,15 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
 
           {searchActive ? (
             renderSearchResults()
+          ) : entries.length === 0 && listLoading ? (
+            <div className="load-more" role="status" aria-busy="true" aria-label={t('cloudRefresh')}>
+              <span className="load-more-spinner" />
+            </div>
+          ) : entries.length === 0 && listError ? (
+            <div className="empty">
+              <span className="empty-hint" role="alert">{listError}</span>
+              <button className="btn btn-secondary" onClick={() => reloadRef.current(false)}>{t('cloudRetry')}</button>
+            </div>
           ) : entries.length === 0 ? (
             renderEmpty(
               view === 'starred'
@@ -3515,15 +3800,15 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
                 <span />
               </div>
               <ul className="recent-list">
-                {(fileSort === 'oldest' ? [...entries].reverse() : entries).map((entry) =>
+                {(!capabilities?.serverFileSort && fileSort === 'oldest' ? [...entries].reverse() : entries).map((entry) =>
                   renderFileRow(entry, 'global'),
                 )}
+                {hasMore && (
+                  <li ref={sentinelRef} className="load-more" aria-hidden="true">
+                    <span className="load-more-spinner" />
+                  </li>
+                )}
               </ul>
-              {hasMore && (
-                <div ref={sentinelRef} className="load-more" aria-hidden="true">
-                  <span className="load-more-spinner" />
-                </div>
-              )}
             </div>
           )}
         </section>
@@ -3569,14 +3854,14 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
   }
 
   return (
-    <div className="home">
+    <div className={supportedFormats ? 'home home-web' : 'home'}>
       <aside
         className="sidebar"
         ref={sidebarRef}
         style={sidebarWidth === null ? undefined : { width: sidebarWidth }}
       >
         <div className="sidebar-logo">
-          <img className="logo-lockup" src={logoLockup} alt="GenOffice" />
+          <img className="logo-lockup" src={logoLockup} alt="DyOffice" />
         </div>
         <nav className="sidebar-nav">
           <button
@@ -3612,10 +3897,11 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
             <span className="nav-label">{t('navStarred')}</span>
             <span className="nav-count">{navCounts.starred}</span>
           </button>
-          {loggedIn && (
+          {capabilities?.cloudProjects !== false && loggedIn && (
             <button
               className={`nav-item${cloudMode && !selectedFolder ? ' active' : ''}`}
               onClick={() => {
+                cancelReveal()
                 setCloudMode(true)
                 setSelectedFolder(null)
                 setSelected(new Set())
@@ -3673,6 +3959,7 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
             role="dialog"
             aria-modal="true"
             aria-label={t('deleteModalTitle')}
+            ref={confirmationRef}
             onClick={(event) => event.stopPropagation()}
           >
             <h3>{t('deleteModalTitle')}</h3>
@@ -3715,6 +4002,7 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
             role="dialog"
             aria-modal="true"
             aria-label={t('deleteFolderTitle')}
+            ref={confirmationRef}
             onClick={(event) => event.stopPropagation()}
           >
             <h3>{t('deleteFolderTitle')}</h3>
@@ -3743,6 +4031,7 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
             role="dialog"
             aria-modal="true"
             aria-label={t('missingFileTitle')}
+            ref={confirmationRef}
             onClick={(event) => event.stopPropagation()}
           >
             <h3>{t('missingFileTitle')}</h3>
@@ -3782,7 +4071,7 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
         />
       )}
 
-      {groupPicker && (
+      {capabilities?.starredGroups !== false && groupPicker && (
         <GroupPicker
           groups={starredGroups}
           count={groupPicker.length}

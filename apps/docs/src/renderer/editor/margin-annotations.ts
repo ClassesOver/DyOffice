@@ -24,6 +24,7 @@
  *   thread in the Comments panel.
  */
 import type { CommentInfo } from '@genoffice/docx-engine'
+import { createImeEnterGuard, type ImeEnterGuard } from '@genoffice/ui'
 import { PAGE_TURN_SEL } from './pagination-gaps'
 import { pagePaperEdges, pageReaderShadow, type PageCut } from '../pagination-cuts'
 import type { EditorView } from '@tiptap/pm/view'
@@ -57,6 +58,33 @@ const REV_SELECTOR =
 
 const SVG_NS = 'http://www.w3.org/2000/svg'
 
+const commentImeGuards = new WeakMap<HTMLElement, ImeEnterGuard>()
+const commentMenuClosers = new WeakMap<HTMLElement, (restoreFocus?: boolean) => void>()
+
+/** 浮层捕获监听先于输入框执行，读取同一节点的组合状态。 */
+export function isMarginCommentImeConfirm(event: KeyboardEvent): boolean {
+  return event.isComposing || event.keyCode === 229 ||
+    (event.target instanceof HTMLElement && commentImeGuards.get(event.target)?.isImeConfirm(event) === true)
+}
+
+/** App 的捕获监听让菜单先处理 Escape，保留外层批注浮层。 */
+export function dismissMarginCommentMenu(event: KeyboardEvent): boolean {
+  if (event.key !== 'Escape' || isMarginCommentImeConfirm(event)) return false
+  const menu = event.target instanceof Element
+    ? event.target.closest('.comment-card-actions')?.querySelector<HTMLElement>('.comment-menu:not([hidden])')
+    : null
+  const close = menu && commentMenuClosers.get(menu)
+  if (!close) return false
+  event.preventDefault()
+  event.stopPropagation()
+  close(true)
+  return true
+}
+
+function closeMarginCommentMenus(layer: Element): void {
+  for (const menu of layer.querySelectorAll<HTMLElement>('.comment-menu')) commentMenuClosers.get(menu)?.()
+}
+
 export type ChangeLine = { top: number; bottom: number; pos?: number }
 
 /** touching / overlapping changed lines collapse into one bar that keeps its first document position */
@@ -74,6 +102,8 @@ export function mergeChangeLines(segs: ChangeLine[]): ChangeLine[] {
 }
 
 export interface MarginHandlers {
+  /** 正文只读时仍可能允许批注，不能由 editor.isEditable 推断。 */
+  canComment?: boolean
   onChangeBar?: (pos: number) => void
   /** anchor icon clicked */
   onCommentBalloon?: (id: string) => void
@@ -88,7 +118,7 @@ export interface MarginHandlers {
 
 type BubbleHandlers = Pick<
   MarginHandlers,
-  'onCommentReply' | 'onCommentResolve' | 'onCommentEdit' | 'onCommentDelete'
+  'canComment' | 'onCommentReply' | 'onCommentResolve' | 'onCommentEdit' | 'onCommentDelete'
 >
 
 function makeBalloonIcon(c: CommentInfo, on: boolean, onJump: () => void): HTMLElement {
@@ -196,6 +226,7 @@ function makeCardActions(
   startEdit: () => void,
   flushEdits: () => void,
 ): HTMLElement | null {
+  if (h.canComment === false) return null
   const actions = document.createElement('span')
   actions.className = 'comment-card-actions'
   actions.addEventListener('click', (e) => e.stopPropagation())
@@ -211,6 +242,7 @@ function makeCardActions(
   if (h.onCommentEdit || h.onCommentDelete) {
     const more = iconButton('comment-more', t('appMoreActions'), '⋯', () => toggle())
     more.setAttribute('aria-haspopup', 'menu')
+    more.setAttribute('aria-expanded', 'false')
     const menu = document.createElement('div')
     menu.className = 'comment-menu'
     menu.setAttribute('role', 'menu')
@@ -228,22 +260,63 @@ function makeCardActions(
           ? t('appDeleteCommentWithReplies')
           : t('appDeleteComment')
         : t('appDeleteReply')
-      menu.appendChild(menuItem('comment-card-del', label, () => h.onCommentDelete!(c.id)))
+      menu.appendChild(menuItem('comment-card-del', label, () => {
+        close(true)
+        h.onCommentDelete!(c.id)
+      }))
     }
     const onDocDown = (e: PointerEvent) => {
-      if (!actions.contains(e.target as Node)) close()
+      if (!more.contains(e.target as Node) && !menu.contains(e.target as Node)) close()
     }
-    const close = () => {
+    const onFocus = (e: FocusEvent) => {
+      if (!more.contains(e.target as Node) && !menu.contains(e.target as Node)) close()
+    }
+    const close = (restoreFocus = false) => {
       menu.hidden = true
       more.setAttribute('aria-expanded', 'false')
       document.removeEventListener('pointerdown', onDocDown, true)
+      document.removeEventListener('focusin', onFocus, true)
+      if (restoreFocus && more.isConnected) more.focus()
     }
-    const toggle = () => {
-      if (!menu.hidden) return close()
+    commentMenuClosers.set(menu, close)
+    const items = [...menu.querySelectorAll<HTMLButtonElement>('button')]
+    const open = (last = false) => {
       menu.hidden = false
       more.setAttribute('aria-expanded', 'true')
       document.addEventListener('pointerdown', onDocDown, true)
+      document.addEventListener('focusin', onFocus, true)
+      ;(last ? items.at(-1) : items[0])?.focus()
     }
+    const toggle = () => {
+      if (!menu.hidden) close(true)
+      else open()
+    }
+    actions.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && isMarginCommentImeConfirm(e)) {
+        e.stopPropagation()
+        return
+      }
+      if (dismissMarginCommentMenu(e)) return
+      if (menu.hidden) {
+        if (e.target === more && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) {
+          e.preventDefault()
+          e.stopPropagation()
+          open(e.key === 'ArrowUp')
+        }
+        return
+      }
+      if (e.key === 'Tab') {
+        close(true)
+        return
+      }
+      if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(e.key)) return
+      e.preventDefault()
+      e.stopPropagation()
+      const index = items.indexOf(document.activeElement as HTMLButtonElement)
+      const next = e.key === 'Home' ? 0 : e.key === 'End' ? items.length - 1
+        : (index + (e.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length
+      items[next]?.focus()
+    })
     actions.append(more, menu)
   }
   if (root) {
@@ -297,6 +370,10 @@ function makeBubble(
       const ta = document.createElement('textarea')
       ta.className = 'comment-edit-input'
       ta.value = c.text
+      const ime = createImeEnterGuard()
+      commentImeGuards.set(ta, ime)
+      ta.addEventListener('compositionstart', ime.handleCompositionStart)
+      ta.addEventListener('compositionend', ime.handleCompositionEnd)
       const row = document.createElement('div')
       row.className = 'comment-compose-actions'
       const cancel = () => {
@@ -320,9 +397,10 @@ function makeBubble(
       saveBtn.textContent = t('appSave')
       saveBtn.addEventListener('click', save)
       ta.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) save()
-        if (e.key === 'Escape') cancel()
         e.stopPropagation()
+        if (e.key === 'Escape' && ime.isImeConfirm(e)) return
+        if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && !ime.isImeConfirm(e)) save()
+        if (e.key === 'Escape') cancel()
       })
       box.addEventListener('click', (e) => e.stopPropagation())
       row.append(cancelBtn, saveBtn)
@@ -338,7 +416,7 @@ function makeBubble(
   }
   addEntry(root, true)
   for (const r of replies) addEntry(r, false)
-  const onReply = h.onCommentReply
+  const onReply = h.canComment === false ? undefined : h.onCommentReply
   if (onReply) {
     // Word's margin card: the Reply box is part of the selected card (.active, CSS), posts on Enter
     const input = document.createElement('input')
@@ -346,10 +424,15 @@ function makeBubble(
     input.className = 'comment-reply-input'
     input.placeholder = t('appReplyPlaceholder')
     input.setAttribute('aria-label', t('appReply'))
+    const ime = createImeEnterGuard()
+    commentImeGuards.set(input, ime)
+    input.addEventListener('compositionstart', ime.handleCompositionStart)
+    input.addEventListener('compositionend', ime.handleCompositionEnd)
     input.addEventListener('click', (e) => e.stopPropagation())
     input.addEventListener('keydown', (e) => {
       e.stopPropagation()
-      if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
+      if (e.key === 'Escape' && ime.isImeConfirm(e)) return
+      if (e.key === 'Enter' && !e.shiftKey && !ime.isImeConfirm(e)) {
         e.preventDefault()
         const text = input.value.trim()
         if (!text) return
@@ -727,7 +810,11 @@ function pageBandsOf(
 }
 
 export function clearMarginAnnotations(wrap: HTMLElement): void {
-  wrap.querySelector(':scope > .page-margin-annotations')?.remove()
+  const layer = wrap.querySelector(':scope > .page-margin-annotations')
+  if (layer) {
+    closeMarginCommentMenus(layer)
+    layer.remove()
+  }
   wrap.classList.remove('has-markup-area')
 }
 
@@ -799,6 +886,7 @@ export function syncMarginAnnotations(
   const placed: Placed[] = []
   const icons: Placed[] = []
   const bubbleHandlers: BubbleHandlers = {
+    canComment: handlers?.canComment,
     onCommentReply: handlers?.onCommentReply,
     onCommentResolve: handlers?.onCommentResolve,
     onCommentEdit: handlers?.onCommentEdit,
@@ -912,6 +1000,13 @@ export function syncMarginAnnotations(
     value: typing.value,
     caret: typing.selectionStart ?? typing.value.length,
   }
+  const active = document.activeElement as HTMLElement | null
+  const action = active && layer.contains(active) && active.closest('.comment-card-actions') ? {
+    entryId: active.closest<HTMLElement>('[data-entry-id]')?.dataset.entryId,
+    button: active.classList[0],
+    menuOpen: active.closest('.comment-card-actions')?.querySelector<HTMLElement>('.comment-menu')?.hidden === false,
+  } : null
+  closeMarginCommentMenus(layer)
   layer.textContent = ''
 
   // Word: revision balloons live in a markup strip glued to the page; comment cards
@@ -1028,5 +1123,12 @@ export function syncMarginAnnotations(
         input.setSelectionRange(draft.caret, draft.caret)
       }
     }
+  }
+  if (action) {
+    const entry = [...layer.querySelectorAll<HTMLElement>('[data-entry-id]')]
+      .find(el => el.dataset.entryId === action.entryId)
+    if (action.menuOpen) entry?.querySelector<HTMLButtonElement>('.comment-more')?.click()
+    const button = entry?.getElementsByClassName(action.button)[0]
+    if (button instanceof HTMLElement) button.focus()
   }
 }

@@ -4,7 +4,7 @@
   "license": "Apache-2.0",
   "homepage": "https://github.com/genspark-ai/genoffice",
   "private": true,
-  "description": "Unified GenOffice shell: one app hosting the docs and sheets modules behind a home/launcher window",
+  "description": "Unified DyOffice shell: one app hosting the docs and sheets modules behind a home/launcher window",
   "scripts": {
     "notices": "node ../../tools/gen-third-party-notices.mjs",
     "test": "vitest run",

@@ -12,25 +12,25 @@ import {
 describe('findOpenableDocPath', () => {
   it('finds Finder and Explorer document arguments case-insensitively', () => {
     expect(
-      findOpenableDocPath(['/Applications/GenOffice Docs.app', '/tmp/Quarterly Plan.docx']),
+      findOpenableDocPath(['/Applications/DyOffice Docs.app', '/tmp/Quarterly Plan.docx']),
     ).toBe('/tmp/Quarterly Plan.docx')
-    expect(findOpenableDocPath(['GenOffice Docs.exe', 'C:\\Users\\Me\\REPORT.DOCX'])).toBe(
+    expect(findOpenableDocPath(['DyOffice Docs.exe', 'C:\\Users\\Me\\REPORT.DOCX'])).toBe(
       'C:\\Users\\Me\\REPORT.DOCX',
     )
     // an .odt argument routes through the import filter like the shell open
-    expect(findOpenableDocPath(['GenOffice Docs', '/tmp/notes.odt'])).toBe('/tmp/notes.odt')
+    expect(findOpenableDocPath(['DyOffice Docs', '/tmp/notes.odt'])).toBe('/tmp/notes.odt')
     // and so do the .ott template and legacy Word .doc/.dot, in either case
-    expect(findOpenableDocPath(['GenOffice Docs', '/tmp/letter.ott'])).toBe('/tmp/letter.ott')
+    expect(findOpenableDocPath(['DyOffice Docs', '/tmp/letter.ott'])).toBe('/tmp/letter.ott')
     // .hwpx (Hancom) joins too, as a converted .docx copy
-    expect(findOpenableDocPath(['GenOffice Docs', '/tmp/신고서.HWPX'])).toBe('/tmp/신고서.HWPX')
-    expect(findOpenableDocPath(['GenOffice Docs', '/tmp/LETTER.OTT'])).toBe('/tmp/LETTER.OTT')
-    expect(findOpenableDocPath(['GenOffice Docs', '/tmp/legacy.doc'])).toBe('/tmp/legacy.doc')
-    expect(findOpenableDocPath(['GenOffice Docs', '/tmp/TEMPLATE.DOT'])).toBe('/tmp/TEMPLATE.DOT')
+    expect(findOpenableDocPath(['DyOffice Docs', '/tmp/신고서.HWPX'])).toBe('/tmp/신고서.HWPX')
+    expect(findOpenableDocPath(['DyOffice Docs', '/tmp/LETTER.OTT'])).toBe('/tmp/LETTER.OTT')
+    expect(findOpenableDocPath(['DyOffice Docs', '/tmp/legacy.doc'])).toBe('/tmp/legacy.doc')
+    expect(findOpenableDocPath(['DyOffice Docs', '/tmp/TEMPLATE.DOT'])).toBe('/tmp/TEMPLATE.DOT')
   })
 
   it('ignores Electron switches and unrelated files', () => {
     expect(
-      findOpenableDocPath(['GenOffice Docs', '--inspect=document.docx', '/tmp/notes.txt']),
+      findOpenableDocPath(['DyOffice Docs', '--inspect=document.docx', '/tmp/notes.txt']),
     ).toBeNull()
   })
 })

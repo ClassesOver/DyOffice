@@ -9,8 +9,9 @@ import {
   type Block,
   type SourceInfo,
 } from '@genoffice/docx-engine'
-import { Dropdown } from '@genoffice/ui'
+import { Dropdown, useImeEnterGuard } from '@genoffice/ui'
 import { PromptModal } from './PromptModal'
+import { useModalKeys } from './modal-keys'
 import {
   collectTocEntriesWithPages,
   tocFieldNodes,
@@ -58,6 +59,8 @@ function CaptionModal({
   onClose: () => void
 }) {
   const { t } = useI18n()
+  const modalKeys = useModalKeys(onClose)
+  const ime = useImeEnterGuard()
   const CAPTION_LABELS = CAPTION_LABEL_KEYS.map((k) => t(k))
   const [label, setLabel] = useState<string>(() => t(CAPTION_LABEL_KEYS[0]))
   const [text, setText] = useState('')
@@ -94,7 +97,7 @@ function CaptionModal({
   }
 
   return (
-    <div className="modal-backdrop" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
+    <div {...modalKeys} className="modal-backdrop" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
       <div className="modal">
         <h2>{t('ribbonCaptionInsertTitle')}</h2>
         <label>
@@ -112,7 +115,9 @@ function CaptionModal({
             value={text}
             onChange={(e) => setText(e.target.value)}
             placeholder={t('ribbonCaptionPh', { label, n: nextNumber(label) })}
-            onKeyDown={(e) => e.key === 'Enter' && insert()}
+            onCompositionStart={ime.handleCompositionStart}
+            onCompositionEnd={ime.handleCompositionEnd}
+            onKeyDown={(e) => e.key === 'Enter' && !ime.isImeConfirm(e.nativeEvent) && insert()}
           />
         </label>
         <div className="modal-actions">
@@ -147,6 +152,7 @@ function SourceModal({
   onClose: () => void
 }) {
   const { t } = useI18n()
+  const modalKeys = useModalKeys(onClose)
   const [type, setType] = useState('Book')
   const [author, setAuthor] = useState('')
   const [title, setTitle] = useState('')
@@ -174,7 +180,7 @@ function SourceModal({
   }
 
   return (
-    <div className="modal-backdrop" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
+    <div {...modalKeys} className="modal-backdrop" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
       <div className="modal">
         <h2>{t('ribbonSourceCreateTitle')}</h2>
         <label>
@@ -234,6 +240,7 @@ function SourceModal({
 }
 
 interface ReferencesTabProps extends TabProps {
+  desktopActionsAvailable?: boolean
   blocks: Block[]
   onInsertNote: (kind: 'footnote' | 'endnote') => void
   sources: SourceInfo[]
@@ -245,6 +252,7 @@ interface ReferencesTabProps extends TabProps {
 }
 
 export function ReferencesTab({
+  desktopActionsAvailable = true,
   editor,
   hasDoc,
   blocks,
@@ -392,7 +400,8 @@ export function ReferencesTab({
         <div className="ribbon-group-items">
           <button
             className="rb-big"
-            disabled={!hasDoc || zoteroBusy !== null}
+            disabled={!hasDoc || !desktopActionsAvailable || zoteroBusy !== null}
+            title={!desktopActionsAvailable ? 'Zotero 连接仅桌面版可用。' : undefined}
             data-tip={t('zoteroCitationTip')}
             onClick={() => void runZotero('addEditCitation')}
           >
@@ -403,7 +412,8 @@ export function ReferencesTab({
           </button>
           <button
             className="rb-big"
-            disabled={!hasDoc || zoteroBusy !== null}
+            disabled={!hasDoc || !desktopActionsAvailable || zoteroBusy !== null}
+            title={!desktopActionsAvailable ? 'Zotero 连接仅桌面版可用。' : undefined}
             data-tip={t('zoteroBibliographyTip')}
             onClick={() => void runZotero('addEditBibliography')}
           >
@@ -414,7 +424,8 @@ export function ReferencesTab({
           </button>
           <button
             className="rb-big"
-            disabled={!hasDoc || zoteroBusy !== null}
+            disabled={!hasDoc || !desktopActionsAvailable || zoteroBusy !== null}
+            title={!desktopActionsAvailable ? 'Zotero 连接仅桌面版可用。' : undefined}
             data-tip={t('zoteroRefreshTip')}
             onClick={() => void runZotero('refresh')}
           >
@@ -426,7 +437,8 @@ export function ReferencesTab({
           <div className="rb-split-wrap">
             <button
               className="rb-big"
-              disabled={!hasDoc || zoteroBusy !== null}
+              disabled={!hasDoc || !desktopActionsAvailable || zoteroBusy !== null}
+            title={!desktopActionsAvailable ? 'Zotero 连接仅桌面版可用。' : undefined}
               data-tip={t('zoteroDocumentSettingsTip')}
               onClick={() => toggleDropdown(setDropdown, 'zotero-settings')}
             >

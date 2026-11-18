@@ -1,6 +1,7 @@
 import type { zh } from './zh'
 
 export const de = {
+  appPasteRemoteImageFailed: 'Das entfernte Bild konnte nicht eingefügt werden. Kopieren Sie es erneut oder fügen Sie eine lokale Bilddatei ein.',
   appScTitle: 'Tastenkombinationen',
   appScFilter: 'Tastenkombination suchen',
   appScNone: 'Keine passenden Tastenkombinationen',

@@ -1,3 +1,4 @@
+import { applyPictureBytes as replacePictureBytes } from '../editor/apply-picture-bytes'
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import type { Lang } from '@genoffice/i18n'
@@ -11,6 +12,8 @@ import type {
 } from 'react'
 import type { ChainedCommands, Editor } from '@tiptap/core'
 import { NodeSelection, type Command } from '@tiptap/pm/state'
+import { pendingPictureOperation as guardPictureOperation } from '../editor/pending-picture-operation'
+import { showToast } from './toast-bus'
 import type { Mark, Node as PMNode } from '@tiptap/pm/model'
 import {
   addColumnAfter,
@@ -256,6 +259,8 @@ import {
   IconComments,
 } from './icons'
 interface RibbonProps {
+  fileActions?: React.ReactNode
+  desktopActionsAvailable?: boolean
   /** App keyboard shortcuts reuse ribbon closures through here (font-size stepping keeps its coalescing) */
   actionsRef?: React.MutableRefObject<{
     stepFontSize?: (dir: 1 | -1) => void
@@ -715,6 +720,8 @@ function keepDocumentFocus(e: ReactMouseEvent<HTMLDivElement>) {
 function RibbonInner({
   actionsRef,
   quickActions,
+  desktopActionsAvailable = true,
+  fileActions,
   trailingActions,
   editor,
   formatState: fs,
@@ -916,6 +923,7 @@ function RibbonInner({
   // trigger counts as "inside" and falls through to the trigger's onClick
   // toggle (closing it) instead of being treated as an outside press.
   useDismissablePopover(dropdown != null, () => setDropdown(null), {
+    escape: true,
     inside: () =>
       Array.from(document.querySelectorAll('[data-rb-panel]')).flatMap((panel) => [
         panel,
@@ -1231,6 +1239,9 @@ function RibbonInner({
     align: sub ? fs.align : fs.shapeTextAlign,
   }
 
+  const pendingPictureOperation = (targetEditor: Editor = editor) =>
+    guardPictureOperation(editor, targetEditor)
+
   /**
    * Replace the selected image's bytes (shared by Replace Picture / remove background / crop).
    * Original images (docxIndex set) swap bytes in place via the imageReplace patch: the
@@ -1238,44 +1249,21 @@ function RibbonInner({
    * keep working. Images not yet saved (genImage) just update their pending payload.
    * Display size keeps the current width; height adapts to the new image's aspect ratio.
    */
-  const applyPictureBytes = async (dataUrl: string) => {
-    if (!canEdit) return
-    const m = /^data:(image\/(?:png|jpeg|gif));base64,(.*)$/s.exec(dataUrl)
-    if (!m) return
-    const attrs = editor.getAttributes('docProtected')
-    if (attrs?.blockType !== 'image') return
-    try {
-      const natural = await imageSizeOf(dataUrl)
-      const currentW = Number(attrs.imageWidthPx) || Math.min(natural.width, 620)
-      const w = Math.max(1, Math.round(currentW))
-      const h = Math.max(1, Math.round((currentW * natural.height) / natural.width))
-      const isOriginal = attrs.docxIndex !== null && attrs.docxIndex !== undefined
-      editor
-        .chain()
-        .focus()
-        .updateAttributes('docProtected', {
-          imageDataUrl: dataUrl,
-          imageWidthPx: w,
-          imageHeightPx: h,
-          // The new bytes are the full picture (crop/cutout bake destructively) and
-          // the replace pipeline strips a:srcRect on save — drop a Word-authored
-          // crop/fill window or it would keep clipping the new image until reload
-          imageCrop: null,
-          imageFillRect: null,
-          ...(isOriginal
-            ? { imageReplace: { base64: m[2], mime: m[1] } }
-            : { genImage: { base64: m[2], mime: m[1], widthPx: w, heightPx: h } }),
-        })
-        .run()
-    } catch {
-      /* image decode failed: keep the original untouched */
-    }
-  }
+  const applyPictureBytes = (dataUrl: string) => replacePictureBytes(editor, dataUrl, canEdit)
 
   const replacePicture = async () => {
-    const picked = await window.desktop.pickImage()
-    if (!picked) return
-    await applyPictureBytes(`data:${picked.mime};base64,${picked.base64}`)
+    if (!canEdit) return
+    const operation = pendingPictureOperation()
+    if (!operation) return
+    try {
+      const picked = await window.desktop.pickImage()
+      if (!picked || !operation.current()) return
+      await applyPictureBytes(`data:${picked.mime};base64,${picked.base64}`)
+    } catch {
+      if (operation.current()) showToast(t('ribbonImageLoadFail'), 'error')
+    } finally {
+      operation.dispose()
+    }
   }
 
   const rotatePicture = (deltaDeg: number) => {
@@ -1360,8 +1348,11 @@ function RibbonInner({
     if (!canEdit) return
     const url = fs.imageDataUrl
     if (!inImage || !url) return
+    const operation = pendingPictureOperation(ed)
+    if (!operation) return
     try {
       const natural = await imageSizeOf(url)
+      if (!operation.current()) return
       const scale = Math.min(1, inlinePictureHostWidthPx() / natural.width)
       setPicturePx(
         Math.max(1, Math.round(natural.width * scale)),
@@ -1369,6 +1360,8 @@ function RibbonInner({
       )
     } catch {
       /* decode failed: leave as is */
+    } finally {
+      operation.dispose()
     }
   }
 
@@ -2197,7 +2190,8 @@ function RibbonInner({
   ).map(([format, key]) => (
     <button
       key={format}
-      disabled={!hasDoc}
+      disabled={!hasDoc || (!desktopActionsAvailable && format !== 'html')}
+      title={!desktopActionsAvailable && format !== 'html' ? '此导出格式暂不支持 Web，请下载原件。' : undefined}
       onClick={() => {
         setDropdown(null)
         onConvert(format)
@@ -2217,7 +2211,7 @@ function RibbonInner({
         className={`ribbon-tabs ${IN_TAB ? '' : IS_MAC ? 'ribbon-tabs-mac' : 'ribbon-tabs-win'}`}
         onDoubleClick={collapse.onTabsDoubleClick}
       >
-        {!IS_MAC && (
+        {(!IS_MAC || !desktopActionsAvailable) && (
           <div className="file-tab-wrap">
             <button
               className={`ribbon-tab ribbon-tab-file ${dropdown === 'file' ? 'open' : ''}`}
@@ -2228,6 +2222,8 @@ function RibbonInner({
             {dropdown === 'file' && (
               <div data-rb-panel="" className="file-menu">
                 <button
+                  disabled={!desktopActionsAvailable}
+                  title={!desktopActionsAvailable ? '请在工作区打开其他文件。' : undefined}
                   onClick={() => {
                     setDropdown(null)
                     onOpen()
@@ -2245,7 +2241,8 @@ function RibbonInner({
                   {t('ribbonSave')} <span className="file-menu-key">Ctrl+S</span>
                 </button>
                 <button
-                  disabled={!hasDoc}
+                  disabled={!hasDoc || !desktopActionsAvailable}
+                  title={!desktopActionsAvailable ? '请使用工作区原件下载，Web 暂不支持另存为。' : undefined}
                   onClick={() => {
                     setDropdown(null)
                     onSaveAs()
@@ -2255,7 +2252,8 @@ function RibbonInner({
                 </button>
                 <button
                   className="qa-name-with-ai"
-                  disabled={!hasDoc}
+                  disabled={!hasDoc || !desktopActionsAvailable}
+                  title={!desktopActionsAvailable ? lang === 'en' ? 'AI file naming is only available in the desktop app.' : 'AI 命名仅桌面版可用。' : undefined}
                   onClick={() => {
                     setDropdown(null)
                     onNameWithAi()
@@ -2263,6 +2261,7 @@ function RibbonInner({
                 >
                   {t('ribbonNameWithAi')}
                 </button>
+                {fileActions && <div onClick={() => setDropdown(null)}>{fileActions}</div>}
                 <div className="file-menu-sep" />
                 {convertItems}
               </div>
@@ -2273,6 +2272,8 @@ function RibbonInner({
         {TABS.filter((tabName) => tabName !== 'file').map((tabName) => (
           <button
             key={tabName}
+            disabled={!desktopActionsAvailable && tabName === 'mailings'}
+            title={!desktopActionsAvailable && tabName === 'mailings' ? '邮件合并仅桌面版可用。' : undefined}
             className={`ribbon-tab ${collapse.tabClass(tab === tabName)}`}
             data-tip={collapse.tabTip(tab === tabName)}
             onClick={() => {
@@ -4520,6 +4521,7 @@ function RibbonInner({
           />
         ) : tab === 'references' ? (
           <ReferencesTab
+            desktopActionsAvailable={desktopActionsAvailable}
             editor={editor}
             hasDoc={canEdit}
             blocks={blocks}
@@ -4544,6 +4546,7 @@ function RibbonInner({
           />
         ) : tab === 'review' ? (
           <ReviewTab
+            desktopActionsAvailable={desktopActionsAvailable}
             editor={editor}
             hasDoc={hasDoc}
             dropdown={dropdown}
@@ -4588,6 +4591,7 @@ function RibbonInner({
           <ViewTab
             hasDoc={hasDoc}
             filePath={filePath}
+            newTabUnavailableReason={typeof window.desktop.openNewTab === 'function' ? undefined : lang === 'en' ? 'Opening the same document in multiple tabs is not supported in the Web app.' : 'Web 版暂不支持同一文档在多个标签中打开。'}
             zoom={zoom}
             onZoom={onZoom}
             onZoomFit={onZoomFit}

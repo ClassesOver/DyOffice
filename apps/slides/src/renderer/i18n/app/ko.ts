@@ -16,6 +16,7 @@ export const ko = {
   appPhPromptBody: '텍스트를 추가하려면 클릭',
   appStatusOpened: '{name}을(를) 열었습니다({count}페이지)',
   appStatusNewBlank: '새 프레젠테이션을 만들었습니다',
+  appEditCommitPending: "편집 내용을 적용 중입니다. 잠시 후 다시 시도해 주세요.",
   appStatusSaved: '저장했습니다',
   appStatusSaveFailed: '저장 실패: {error}',
   appErrorCanceled: '취소됨',

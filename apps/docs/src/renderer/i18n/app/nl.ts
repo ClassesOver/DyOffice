@@ -1,6 +1,7 @@
 import type { zh } from './zh'
 
 export const nl = {
+  appPasteRemoteImageFailed: 'De externe afbeelding kon niet worden geplakt. Kopieer de afbeelding opnieuw of voeg een lokaal afbeeldingsbestand in.',
   appScTitle: 'Sneltoetsen',
   appScFilter: 'Sneltoets zoeken',
   appScNone: 'Geen overeenkomende sneltoetsen',

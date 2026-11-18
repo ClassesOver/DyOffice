@@ -1,3 +1,5 @@
+import {DocumentNotifications} from './document-notifications'
+import {createEditorCloseLifecycle} from './editor-close-lifecycle'
 import {createAnalysisDocumentTarget} from '../../../../packages/browser-host/src/analysis-document-target.ts'
 import { useEffect, useState } from 'react'
 import { createRoot } from 'react-dom/client'
@@ -10,7 +12,7 @@ import { createDocsBridge } from './docs-bridge.ts'
 import type { DocsEditorHandle } from '../../../docs/src/renderer/file-actions'
 import type { DesktopApi } from '../../../docs/src/shared/ipc'
 import { messages } from './messages.ts'
-import {createEditorAssistant} from './assistant.tsx'
+import {loadEditorAssistant,editorAssistantNotice} from './editor-assistant-status'
 import { mountEditorRealtime } from './editor-realtime.ts'
 import '@genoffice/ui/tokens.css'
 import '@genoffice/ui/screentip.css'
@@ -32,12 +34,14 @@ import './docs.css'
 export async function mountDocsEditor(host: SessionFileHost,element: HTMLElement,fileId: string) {
   element.textContent = messages.zh.opening
   if (!/^[0-9a-f-]{36}$/i.test(fileId)) throw new Error(messages.zh.failed)
+  let closing=false
   let changed = () => {}
   let disposed = false, downloading = false, actionError = ''
   let editorHandle: DocsEditorHandle | null = null
   const registerEditor = (handle: DocsEditorHandle | null) => { editorHandle = handle }
   const unsubscribe = host.subscribe(() => changed())
-  const assistant = await createEditorAssistant({fileId,editorId:host.getEditorId()!,generation:()=>1}).catch(() => undefined)
+  const assistantResult = await loadEditorAssistant({fileId,editorId:host.getEditorId()!,generation:()=>1})
+  const assistant = assistantResult.assistant
   const opened = await host.open(fileId)
   if (opened.format !== 'docx') throw new Error(messages.zh.failed)
   const prefs = await host.getPreferences(), locale = prefs.language === 'en' ? 'en' : 'zh', text = messages[locale]
@@ -50,9 +54,10 @@ export async function mountDocsEditor(host: SessionFileHost,element: HTMLElement
     editor:()=>editorHandle?.analysis??null,receipt:()=>bridge.getReceipt(),
     save:check=>bridge.guardedSave(check,async()=>!!editorHandle&&await editorHandle.save()&&!editorHandle.isDirty()&&bridge.getState().nativeSaveOutcome==='accepted')})
   const unregisterAnalysis=assistant?.documents.register(analysisTarget)
+  const assistantNotice = editorAssistantNotice(assistantResult,prefs.showAssistant,locale)
   const assistantAvailable = Boolean(assistant?.available && prefs.showAssistant !== false)
   const panelPrefs = {...await bridge.api.getAiPanelPrefs(), showAiSidebar: assistantAvailable}
-  window.desktop = {...bridge.api,...assistant?.api, getAiPanelPrefs: async () => panelPrefs} as unknown as DesktopApi
+  window.desktop = {...bridge.api,...assistant?.api, getAiPanelPrefs: async () => ({...await bridge.api.getAiPanelPrefs(),showAiSidebar:assistantAvailable})} as unknown as DesktopApi
   applyAiPanelPrefs(panelPrefs); installScreenTips()
   let initialLease = true
   try { await host.acquireLease(fileId) } catch { initialLease = false }
@@ -77,35 +82,51 @@ export async function mountDocsEditor(host: SessionFileHost,element: HTMLElement
   function NativeDocument() {
     const [,tick] = useState(0), [loaded,setLoaded] = useState(false), [failed,setFailed] = useState(false)
     const state = host.getState(fileId)
-    changed = () => tick(value => value + 1)
+    changed = () => {if(!closing)tick(value => value + 1)}
     useEffect(() => {
       const focus = () => { if (host.getState(fileId).lease) void host.renewLease(fileId).catch(() => {}) }
       window.addEventListener('focus',focus)
       return () => window.removeEventListener('focus',focus)
     },[])
-    const status = failed ? text.failed : state.status === 'unknown' ? text.unknown : state.status === 'unauthorized' ? text.unauthorized : !state.lease ? (initialLease ? text.conflict : text.readOnly) : downloading ? text.downloadSaving : actionError || (bridge.getState().dirty ? '' : text.ready)
+    const local = bridge.getState()
+    const warning = failed ? text.failed : state.status === 'unknown' ? text.unknown : state.status === 'unauthorized' ? text.unauthorized : !state.lease && loaded ? (initialLease ? text.conflict : text.readOnly) : actionError
+    const notice = realtime.notice(locale)
+    const status = !loaded ? text.opening : downloading ? text.downloadSaving : state.status === 'saving' || local.status === 'saving' ? (locale === 'zh' ? '正在保存…' : 'Saving…') : local.dirty ? (locale === 'zh' ? '未保存' : 'Unsaved') : text.ready
+    const saveStatus = <>
+      <span className="dyoffice-docs-persistence-state" role="status" data-attention={Boolean(warning || notice)} data-native-save={local.nativeSaveOutcome} data-incomplete-reasons={local.nativeSaveReasons.join(',')} data-dirty={String(local.dirty)} title={warning || [status, notice].filter(Boolean).join(' · ')}>{warning ? (locale === 'zh' ? '需要处理' : 'Needs attention') : status}</span>
+      {assistantNotice && <span className="dyoffice-editor-assistant-status">{assistantNotice}</span>}
+    </>
+    const fileActions = <>
+      <div className="file-menu-sep" />
+      <button className="dyoffice-docs-save-download" title={text.saveDownloadVersionHint} disabled={!loaded || failed || !editorHandle || !state.lease || state.status !== 'idle' || downloading} onClick={() => { void saveAndDownload() }}>{text.saveDownload}</button>
+      <a className="dyoffice-docs-download" href={`/api/v1/files/${fileId}/content?revision=${state.revision.revision}`} download>{text.download}</a>
+    </>
     return <div className="dyoffice-native-docs">
-      <div className="dyoffice-docs-state" role="status"><span className="dyoffice-docs-persistence-state" data-native-save={bridge.getState().nativeSaveOutcome} data-incomplete-reasons={bridge.getState().nativeSaveReasons.join(',')} data-dirty={String(bridge.getState().dirty)}>{status}</span>
-        {realtime.notice(locale) && <span className="dyoffice-docs-notification-state">{realtime.notice(locale)}</span>}
-        <button className="dyoffice-docs-save-download" title={text.saveDownloadVersionHint} disabled={!loaded || failed || !editorHandle || !state.lease || state.status !== 'idle' || downloading} onClick={() => { void saveAndDownload() }}>{text.saveDownload}</button>
-        <span className="dyoffice-docs-save-download-hint">{text.saveDownloadVersionHint}</span>
-        <a href={`/api/v1/files/${fileId}/content?revision=${state.revision.revision}`} download>{text.download}</a>
-        {!state.lease && !failed && <button onClick={() => { void host.takeoverLease(fileId).then(() => { initialLease = true }).catch(() => {}) }}>{text.takeover}</button>}
+      <DocumentNotifications locale={locale} items={[
+        ...(warning ? [{id:'document-state',level:'error' as const,title:locale === 'zh' ? '文档需要处理' : 'Document needs attention',message:warning,actions:<>
+        {!state.lease && !failed && state.status !== 'unauthorized' && <button onClick={() => { void host.takeoverLease(fileId).then(() => { initialLease = true }).catch(() => { actionError = text.takeoverFailed; changed() }) }}>{text.takeover}</button>}
         {state.status === 'unknown' && <button onClick={() => { void host.reconcile(fileId).then(() => changed()).catch(() => {}) }}>{text.retry}</button>}
-      </div>
-      <App host={{ readOnly: !loaded || failed || !state.lease,assistantAvailable,assistant,preferenceScope: fileId,onEditorReady: registerEditor,lifecycle: { ...bridge.lifecycle,documentOpened() { bridge.lifecycle.documentOpened(); setLoaded(true) } },onDocumentEdited: bridge.lifecycle.edited,onOpenFailed: () => setFailed(true) }} />
+      </>}] : []),
+        ...(notice ? [{id:'version',level:'info' as const,title:locale === 'zh' ? '版本同步' : 'Version updates',message:notice}] : []),
+      ]} />
+      <App host={{ fileActions,saveStatus,desktopActionsAvailable:false,readOnly: !loaded || failed || !state.lease,assistantAvailable,assistant,preferenceScope: fileId,onEditorReady: registerEditor,lifecycle: { ...bridge.lifecycle,documentOpened() { bridge.lifecycle.documentOpened(); setLoaded(true) } },onDocumentEdited: bridge.lifecycle.edited,onOpenFailed: () => setFailed(true) }} />
     </div>
   }
   const root = createRoot(element)
   root.render(<LocaleProvider initial={locale}><NativeDocument /></LocaleProvider>)
+  const closeState=()=>({dirty:!!editorHandle?.isDirty()||bridge.getState().dirty,blocked:downloading||['unknown','saving'].includes(host.getState(fileId).status)||bridge.getState().nativeSaveOutcome==='pending'})
   const beforeUnload = (event: BeforeUnloadEvent) => {
-    if (editorHandle?.isDirty() || host.getState(fileId).status === 'unknown') { event.preventDefault(); event.returnValue = '' }
+    if (closeState().dirty || closeState().blocked) { event.preventDefault(); event.returnValue = '' }
   }
   window.addEventListener('beforeunload',beforeUnload)
+  const cleanup=()=>{if(disposed)return;disposed=true;unregisterAnalysis?.();analysisTarget.dispose();window.removeEventListener('beforeunload',beforeUnload);assistant?.dispose();realtime.dispose();stop();unsubscribe();root.unmount();bridge.dispose()}
+  const lifecycle=createEditorCloseLifecycle({state:closeState,save:()=>editorHandle?.save()??Promise.resolve(false),release:()=>host.releaseLease(fileId),cleanup,setClosing:value=>{closing=value;element.inert=value;if(!value)changed()},confirm:()=>window.confirm('文档有未保存的更改，是否保存后关闭？取消将保留当前页签。'),notify:()=>window.alert('保存仍在进行或结果待确认，请先在文档中核对后再关闭。')})
   return {
+    canClose:lifecycle.canClose,
+    dispose:lifecycle.dispose,
+    unload(){void host.releaseLease(fileId,true).catch(()=>{});cleanup()},
     getSelection: () => editorHandle?.getSelection() ?? null,
     serialize: () => editorHandle ? editorHandle.serialize() : Promise.reject(new Error(text.opening)),
     save: () => editorHandle ? editorHandle.save() : Promise.resolve(false),
-    dispose() { disposed = true; unregisterAnalysis?.();analysisTarget.dispose(); window.removeEventListener('beforeunload',beforeUnload); assistant?.dispose();realtime.dispose(); stop(); unsubscribe(); root.unmount(); bridge.dispose() },
   }
 }

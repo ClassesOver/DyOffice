@@ -16,6 +16,7 @@ export const ar = {
   appPhPromptBody: 'انقر لإضافة نص',
   appStatusOpened: 'تم فتح {name} ({count} شريحة)',
   appStatusNewBlank: 'تم إنشاء عرض تقديمي فارغ',
+  appEditCommitPending: "لا يزال تطبيق التعديل جارياً. يُرجى المحاولة مجدداً بعد قليل.",
   appStatusSaved: 'تم الحفظ',
   appStatusSaveFailed: 'فشل الحفظ: {error}',
   appErrorCanceled: 'تم الإلغاء',

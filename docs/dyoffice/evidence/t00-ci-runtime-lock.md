@@ -5,7 +5,7 @@
 Candidate based on PR #33 `b43779c9aa20e1500e1b6a84397039e53f4d03c0`.
 This change locks the ten **existing DyOffice CI workflows**, not a production
 API/worker image. It does not modify #32's separate host-service workflow.
-The existing `packaging/docker/Dockerfile` is an upstream GenOffice desktop
+The existing `packaging/docker/Dockerfile` is an upstream DyOffice desktop
 headless conversion utility, not a DyOffice server deployment manifest.
 
 ## Verified inputs

@@ -181,3 +181,14 @@ describe('the reader asks for a name, and the answer goes to the Save As dialog'
     expect(slidesApi.saveAs).not.toHaveBeenCalled()
   })
 })
+
+it('pending text commit never asks AI to name stale content or opens Save As', async () => {
+  vi.useFakeTimers()
+  try {
+    const context = ctxWith({path: '/deck.pptx', editing: true})
+    const naming = nameWithAi(() => context)
+    await vi.advanceTimersByTimeAsync(2100); await naming
+    expect(suggestFileName).not.toHaveBeenCalled()
+    expect(slidesApi.saveAs).not.toHaveBeenCalled()
+  } finally {vi.useRealTimers()}
+})

@@ -1,6 +1,7 @@
 import type { zh } from './zh'
 
 export const en = {
+  appPasteRemoteImageFailed: 'Could not paste the remote image. Copy the image again, or insert a local image file.',
   appScTitle: 'Keyboard Shortcuts',
   appScFilter: 'Search shortcuts',
   appScNone: 'No matching shortcuts',

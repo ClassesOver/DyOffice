@@ -1,0 +1,11 @@
+.settings-list-pager{display:flex;align-items:center;justify-content:flex-end;flex-wrap:wrap;gap:8px 12px;margin-top:12px;color:var(--text-secondary);font-size:13px}
+.settings-list-pager .settings-list-page-status{font-variant-numeric:tabular-nums;white-space:nowrap}
+.settings-list-scroll-region{max-height:260px;overflow:auto;overscroll-behavior:contain;scrollbar-gutter:stable;min-width:0}
+.settings-list-scroll-region:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+@media(max-width:680px){
+ .settings-list-pager{justify-content:space-between;gap:8px}
+ .settings-list-scroll-region{max-height:240px}
+}
+.management-list.settings-list-surface .management-list-summary{padding:14px 16px;margin-bottom:18px;background:var(--accent-soft,var(--surface-subtle));border-radius:10px}
+.management-list.settings-list-surface .management-list-table-region{border-radius:12px}
+.management-list.settings-list-surface .management-list-footer{margin-top:12px;border-top:1px solid var(--border-subtle)}

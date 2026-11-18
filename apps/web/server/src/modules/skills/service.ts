@@ -24,15 +24,17 @@ export function createSkillService(transactions: PrincipalTransactions) {
     }),
     async save(token: string, name: string, value: unknown) {
       nameOf(name)
-      if (!value || typeof value !== 'object' || Array.isArray(value) || Object.keys(value).some(k => !['description','body'].includes(k))) throw authError(400)
-      const {description, body} = value as Record<string, unknown>
+      if (!value || typeof value !== 'object' || Array.isArray(value) || Object.keys(value).some(k => !['description','body','overwrite'].includes(k))) throw authError(400)
+      const {description, body, overwrite} = value as Record<string, unknown>
+      if(Object.hasOwn(value,'overwrite')&&typeof overwrite!=='boolean')throw authError(400)
       if (typeof description !== 'string' || Buffer.byteLength(description) > 4096 || typeof body !== 'string' || !body.trim() || Buffer.byteLength(body) > 262144 || body.includes('\0') || description.includes('\0')) throw authError(400)
       return access<{name: string; description: string}>(token, true, async (c, p) => {
         // Serialize quota admission for this owner, including different names.
         await c.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))', ['skills:' + p.deploymentId + ':' + p.userId])
         const count = await c.query('SELECT count(*)::integer AS count FROM user_skills WHERE deployment_id=$1 AND owner_id=$2 AND name<>$3', [p.deploymentId, p.userId, name])
         if (count.rows[0].count >= 100) throw authError(409)
-        await c.query('INSERT INTO user_skills(deployment_id,owner_id,workspace_id,name,description,body) SELECT $1,$2,id,$3,$4,$5 FROM workspaces WHERE deployment_id=$1 AND owner_id=$2 ON CONFLICT(deployment_id,owner_id,name) DO UPDATE SET description=EXCLUDED.description,body=EXCLUDED.body', [p.deploymentId, p.userId, name, description, body])
+        const result=await c.query('INSERT INTO user_skills(deployment_id,owner_id,workspace_id,name,description,body) SELECT $1,$2,id,$3,$4,$5 FROM workspaces WHERE deployment_id=$1 AND owner_id=$2 ON CONFLICT(deployment_id,owner_id,name) '+(overwrite===false?'DO NOTHING':'DO UPDATE SET description=EXCLUDED.description,body=EXCLUDED.body'), [p.deploymentId, p.userId, name, description, body])
+        if(!result.rowCount)throw authError(409)
         return {name, description}
       })
     },

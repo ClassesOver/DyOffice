@@ -58,6 +58,21 @@ export function createJobService({ transactions,enabledTypes = [],maxActiveJobs 
       return dto(row)
     }),
     listJobs: (token: string) => run<{ jobs: ReturnType<typeof dto>[] }>(token,false,async (c,p) => ({ jobs: (await c.query<Row>('SELECT * FROM native_jobs WHERE deployment_id=$1 AND owner_id=$2 ORDER BY created_at DESC,id DESC LIMIT 100',scope(p))).rows.map(dto) })),
+    listJobPage: (token: string, {limit = 50, after}: {limit?: number; after?: string} = {}) => run<{jobs: ReturnType<typeof dto>[]; nextCursor: string|null}>(token,false,async (c,p) => {
+      if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) throw authError(400)
+      let boundary: string|null = null
+      if (after !== undefined) {
+        // Keep the timestamp in PostgreSQL precision, not JS Date milliseconds.
+        // Lock the owned anchor until the page read completes so a concurrent
+        // purge cannot turn a valid page into a misleading empty result.
+        const anchor = (await c.query<{created_at: string}>('SELECT created_at::text AS created_at FROM native_jobs WHERE deployment_id=$1 AND owner_id=$2 AND id=$3 FOR SHARE', [...scope(p),uuid(after)])).rows[0]
+        if (!anchor) throw authError(400)
+        boundary = anchor.created_at
+      }
+      const rows = (await c.query<Row>('SELECT * FROM native_jobs WHERE deployment_id=$1 AND owner_id=$2 AND ($3::timestamptz IS NULL OR (created_at,id)<($3::timestamptz,$4::uuid)) ORDER BY created_at DESC,id DESC LIMIT $5', [...scope(p),boundary,after ?? null,limit+1])).rows
+      const page = rows.slice(0,limit)
+      return {jobs: page.map(dto), nextCursor: rows.length > limit ? page.at(-1)!.id : null}
+    }),
     cancelJob: (token: string,id: string) => run<ReturnType<typeof dto>>(token,true,async (c,p) => {
       const row = (await c.query<Row>('SELECT * FROM native_jobs WHERE deployment_id=$1 AND owner_id=$2 AND id=$3 FOR UPDATE',[...scope(p),uuid(id)])).rows[0]
       if (!row) throw authError(404)

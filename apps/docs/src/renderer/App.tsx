@@ -19,13 +19,13 @@ import {
   useState,
 } from 'react'
 import type { CSSProperties, MouseEvent as ReactMouseEvent, SetStateAction } from 'react'
-import { EditorContent, useEditor } from '@tiptap/react'
+import { EditorContent } from '@tiptap/react'
+import { useWordEditor } from './editor/use-word-editor'
 import type { Editor } from '@tiptap/core'
 import { handleDocsControl, type ControlRequest } from './control'
 import { DOMParser as PmDOMParser, type Mark as PmMark, Slice as PmSlice } from '@tiptap/pm/model'
 import { NodeSelection, TextSelection, type Command, type Transaction } from '@tiptap/pm/state'
 import {
-  Dropdown,
   ImageViewer,
   aiPanelInitiallyOpen,
   rememberAiPanelOpen,
@@ -40,6 +40,7 @@ import { linkTarget } from './editor/link-actions'
 import { FieldDialog } from './components/FieldDialog'
 import { markdownPasteHtml } from './editor/markdown-paste'
 import { pasteTextSlice, singleCellPasteText } from './editor/paste-text'
+import { insertBlobImage, pasteRemoteImages } from './editor/paste-actions'
 import {
   imageFilesFromDataTransfer,
   insertImageFilesAtCoords,
@@ -304,6 +305,8 @@ import { formattingMarksPluginKey, sectionBreakMap } from './editor/formatting-m
 import {
   COMMENT_AREA_W,
   clearMarginAnnotations,
+  dismissMarginCommentMenu,
+  isMarginCommentImeConfirm,
   syncMarginAnnotations,
   type MarginHandlers,
 } from './editor/margin-annotations'
@@ -425,6 +428,7 @@ import { PreferencesDialog } from './components/PreferencesDialog'
 import { applyCase, nextCaseMode, selectionText } from './editor/case-transform'
 import { stepHangingIndent, stepParagraphIndent } from './editor/indent'
 import { PasswordDialog } from './components/PasswordDialog'
+import { PageNumberFormatDialog } from './components/PageNumberFormatDialog'
 import { ProtectDialog, type ProtectDialogResult } from './components/ProtectDialog'
 import { t, useI18n } from './i18n/locale'
 import {
@@ -805,7 +809,7 @@ function shadowPlanDiff(
   return diffs
 }
 
-export function App({ host }: { host?: { readOnly: boolean; assistantAvailable: boolean; assistant?: {sourceSkill?: import('@genoffice/agent-core').AgentSkill; transport: import('@genoffice/agent-core').AgentTransport; modelPicker: React.ReactNode; extraSkills?: readonly import('@genoffice/agent-core').AgentSkill[]; agents?: readonly import('@genoffice/ui').AssistantParticipant[]; onManageAgents?: () => void; control?: import('@genoffice/ui').AssistantControl | undefined}; preferenceScope: string; onEditorReady?(handle: import('./file-actions').DocsEditorHandle | null): void; lifecycle: import('./file-actions').DocsHostLifecycle; onDocumentEdited(): void; onOpenFailed(): void } } = {}) {
+export function App({ host }: { host?: { fileActions?: React.ReactNode; saveStatus?: React.ReactNode; desktopActionsAvailable?: boolean; readOnly: boolean; assistantAvailable: boolean; assistant?: {sourceSkill?: import('@genoffice/agent-core').AgentSkill; transport: import('@genoffice/agent-core').AgentTransport; modelPicker: React.ReactNode; extraSkills?: readonly import('@genoffice/agent-core').AgentSkill[]; agents?: readonly import('@genoffice/ui').AssistantParticipant[]; onManageAgents?: () => void; control?: import('@genoffice/ui').AssistantControl | undefined}; preferenceScope: string; onEditorReady?(handle: import('./file-actions').DocsEditorHandle | null): void; lifecycle: import('./file-actions').DocsHostLifecycle; onDocumentEdited(): void; onOpenFailed(): void } } = {}) {
   // subscribe to language switches for re-render; strings all go through module-level t, so memoized callbacks never capture stale closures
   const { lang } = useI18n()
   const [doc, setDoc] = useState<DocState | null>(null)
@@ -1312,7 +1316,7 @@ export function App({ host }: { host?: { readOnly: boolean; assistantAvailable: 
 
   const editorRef = useRef<Editor | null>(null)
   const zoteroControllerRef = useRef<ZoteroDocumentController | null>(null)
-  const editor = useEditor({
+  const editor = useWordEditor({
     extensions: editorExtensions,
     content: { type: 'doc', content: [{ type: 'docParagraph' }] },
     editorProps: {
@@ -1486,33 +1490,19 @@ export function App({ host }: { host?: { readOnly: boolean; assistantAvailable: 
         // image-only copies keep the bitmap even when text/plain carries the
         // source URL (browser "Copy image" does that) — Word pastes the picture
         if (imageFile && (!text.trim() || imageOnlyHtml)) {
-          const reader = new FileReader()
-          reader.onload = () => {
-            const ed = editorRef.current
-            if (ed && typeof reader.result === 'string') {
-              void insertImageFromDataUrl(ed, reader.result, 'Image (pasted)')
-            }
-          }
-          reader.readAsDataURL(imageFile)
+          const ed = editorRef.current
+          if (ed) insertBlobImage(ed, imageFile)
           return true
         }
         // bitmap-less web image copy: fetch the referenced image(s) through the
         // hardened main-process fetcher (SSRF-guarded, CDN headers) and insert
         if (!imageFile && imageOnlyHtml) {
-          void (async () => {
-            for (const src of htmlImgSrcs.slice(0, 10)) {
-              const ed = editorRef.current
-              if (!ed) return
-              const fetched = await window.desktop.fetchImage(src)
-              if (fetched) {
-                await insertImageFromDataUrl(
-                  ed,
-                  `data:${fetched.mime};base64,${fetched.base64}`,
-                  'Image (pasted)',
-                )
-              }
-            }
-          })()
+          const ed = editorRef.current
+          if (ed) {
+            void pasteRemoteImages(ed, htmlImgSrcs, text, () => {
+              showToast(t('appPasteRemoteImageFailed'), 'error')
+            })
+          }
           return true
         }
         // text/plain-only Markdown (code blocks, terminals, .md files, LLM
@@ -1859,6 +1849,7 @@ export function App({ host }: { host?: { readOnly: boolean; assistantAvailable: 
   useEffect(() => {
     let cancelRespellKick = () => {}
     localStorage.setItem(SPELLCHECK_KEY, spellcheck ? '1' : '0')
+    if (!editor) return
     spellDiag(
       `toggle spellcheck=${spellcheckActive} platform=${navigator.platform} composing=${editor.view.composing}`,
     )
@@ -2107,6 +2098,7 @@ export function App({ host }: { host?: { readOnly: boolean; assistantAvailable: 
     editRestriction === 'comments'
   /** comments restriction: body read-only but adding comments stays allowed */
   const commentsAllowed = !writeLocked && editRestriction === 'comments'
+  const canComment = !readMode && (!isProtected || commentsAllowed)
   /** trackedChanges restriction: editing allowed, revision recording forced on */
   const trackChangesForced = !writeLocked && editRestriction === 'trackedChanges'
 
@@ -2166,7 +2158,7 @@ export function App({ host }: { host?: { readOnly: boolean; assistantAvailable: 
 
   // window title follows the document, so the OS window list and Switch Window show file names
   useEffect(() => {
-    document.title = doc ? doc.fileName : 'GenOffice Docs'
+    document.title = doc ? doc.fileName : 'DyOffice Docs'
   }, [doc])
 
   useEffect(() => window.desktop.onTeardown?.(() => setTornDown(true)), [])
@@ -2492,14 +2484,13 @@ export function App({ host }: { host?: { readOnly: boolean; assistantAvailable: 
   }, [commitOpenedFile, editor, loadFile, resetFile])
 
   const openFile = useCallback(
-    () =>
-      runGuardedCandidate(
+    () => { if(host?.desktopActionsAvailable===false){setStatus('请在工作区打开其他文件。');return Promise.resolve(false)} return runGuardedCandidate(
         () => window.desktop.confirmDocumentReplace(),
         () => window.desktop.openDocx(),
         commitOpenedFile,
         replacesDocument,
-      ),
-    [commitOpenedFile],
+      )},
+    [commitOpenedFile,host?.desktopActionsAvailable],
   )
 
   /** new document from the built-in blank template (AI can then generate into it) */
@@ -2599,10 +2590,10 @@ export function App({ host }: { host?: { readOnly: boolean; assistantAvailable: 
   }
 
   const save = useCallback(
-    (saveAs: boolean, auto = false) => analysisSaveConsent.current.run(auto,
+    (saveAs: boolean, auto = false) => {if(saveAs&&host?.desktopActionsAvailable===false){setStatus('Web 暂不支持另存为，请下载原件。');return Promise.resolve(false)}return analysisSaveConsent.current.run(auto,
       () => saveImpl(fileCtxRef.current, saveAs, auto),
-      ok => ok && !isDocDirty(fileCtxRef.current),false),
-    [],
+      ok => ok && !isDocDirty(fileCtxRef.current),false)},
+    [host?.desktopActionsAvailable],
   )
 
   // ---- Mailings: the data source and the merge ----
@@ -3059,7 +3050,7 @@ export function App({ host }: { host?: { readOnly: boolean; assistantAvailable: 
       host ? undefined : window.desktop.onZoteroRequest(async (request) => {
         try {
           const activeEditor = editorRef.current
-          if (!activeEditor) throw new Error('No active GenOffice document')
+          if (!activeEditor) throw new Error('No active DyOffice document')
           const controller =
             zoteroControllerRef.current ??
             new ZoteroDocumentController(activeEditor, {
@@ -3282,6 +3273,7 @@ export function App({ host }: { host?: { readOnly: boolean; assistantAvailable: 
   /** App state bundle for the extracted review actions (review-actions.ts); refreshed every render. */
   const reviewCtxRef = useRef<ReviewContext>(null as unknown as ReviewContext)
   reviewCtxRef.current = {
+    canComment,
     editor,
     doc,
     dirtyRef,
@@ -4112,7 +4104,7 @@ export function App({ host }: { host?: { readOnly: boolean; assistantAvailable: 
 
   // status-bar page number: real page slicing (same algorithm as the pagination preview). Edits remeasure with debounce; scrolling only relocates
   useEffect(() => {
-    if (!doc || !section) {
+    if (!editor || !doc || !section) {
       setPageInfo({ current: 1, total: 1 })
       setLastPageNo(null)
       setEdgeSectionPages(null)
@@ -7138,7 +7130,7 @@ export function App({ host }: { host?: { readOnly: boolean; assistantAvailable: 
             const dataUrl = `data:${picked.mime};base64,${picked.base64}`
             const natural = await imageSizeOf(dataUrl)
             insertHfPicture(sub, { dataUrl, widthPx: natural.width, heightPx: natural.height })
-          })()
+          })().catch(() => showToast(t('ribbonImageLoadFail'), 'error'))
         }
         break
       case 'linkToPrevious':
@@ -7218,7 +7210,7 @@ export function App({ host }: { host?: { readOnly: boolean; assistantAvailable: 
   useEffect(() => {
     const parsed = doc?.parsed
     const upserts = Object.values(styleUpserts)
-    if (!parsed || upserts.length === 0) {
+    if (!editor || !parsed || upserts.length === 0) {
       liveStylesRef.current = null
       setLiveStyles(null)
       return
@@ -7267,6 +7259,7 @@ export function App({ host }: { host?: { readOnly: boolean; assistantAvailable: 
     [],
   )
   const queueAdd = (instruction: string): void => {
+    if (!editor) return
     const { from, to, empty } = editor.state.selection
     if (empty || editQueueRef.current.length >= EDIT_QUEUE_MAX) return
     const qid = `q${++queueSeqRef.current}`
@@ -7281,19 +7274,23 @@ export function App({ host }: { host?: { readOnly: boolean; assistantAvailable: 
   const queueUpdate = (qid: string, instruction: string): void =>
     setEditQueue((queue) => queue.map((i) => (i.qid === qid ? { ...i, instruction } : i)))
   const queueRemove = (qid: string): void => {
+    if (!editor) return
     removeQueueAnchors(editor, [qid])
     setEditQueue((queue) => queue.filter((i) => i.qid !== qid))
   }
   const queueClear = (): void => {
+    if (!editor) return
     clearQueueAnchors(editor)
     setEditQueue([])
   }
   /** a submission hands its items to the run and drops them from the queue */
   const queueConsume = (qids: string[]): void => {
+    if (!editor) return
     removeQueueAnchors(editor, qids)
     setEditQueue((queue) => queue.filter((i) => !qids.includes(i.qid)))
   }
   const queueFocus = (qid: string): void => {
+    if (!editor) return
     const selection = selectionForAnchor(editor, qid)
     if (!selection) return
     editor.view.dispatch(editor.state.tr.setSelection(selection).scrollIntoView())
@@ -7313,8 +7310,7 @@ export function App({ host }: { host?: { readOnly: boolean; assistantAvailable: 
       resolve: (id) => {
         const ctx = reviewCtxRef.current
         if (!ctx.comments.some((c) => c.id === id)) return false
-        resolveCommentImpl(ctx, id, true)
-        return true
+        return resolveCommentImpl(ctx, id, true)
       },
       add: (range, text, meta) =>
         addCommentAtImpl(
@@ -7327,8 +7323,7 @@ export function App({ host }: { host?: { readOnly: boolean; assistantAvailable: 
       remove: (id) => {
         const ctx = reviewCtxRef.current
         if (!ctx.comments.some((c) => c.id === id)) return false
-        deleteCommentImpl(ctx, id)
-        return true
+        return deleteCommentImpl(ctx, id)
       },
     }),
     [],
@@ -7843,7 +7838,7 @@ export function App({ host }: { host?: { readOnly: boolean; assistantAvailable: 
       if (!el?.closest('.comment-bubble.comment-popup, .comment-balloon')) setCommentPopup(null)
     }
     const onKey = (e: globalThis.KeyboardEvent) => {
-      if (e.key === 'Escape') setCommentPopup(null)
+      if (e.key === 'Escape' && !isMarginCommentImeConfirm(e) && !dismissMarginCommentMenu(e)) setCommentPopup(null)
     }
     document.addEventListener('pointerdown', onDown, true)
     document.addEventListener('keydown', onKey, true)
@@ -7856,7 +7851,7 @@ export function App({ host }: { host?: { readOnly: boolean; assistantAvailable: 
     setCommentPopup(null)
   }, [commentsUi.cards, commentsUi.panel])
 
-  // selection / popup changes only restyle the margin layer: redraw it without a pagination pass
+  // 选择、浮层或批注权限变化仅重绘页边层，无需重新分页。
   useEffect(() => {
     if (!editor || !doc) return
     const pm = document.querySelector('.editor-scroll .ProseMirror') as HTMLElement | null
@@ -7871,14 +7866,15 @@ export function App({ host }: { host?: { readOnly: boolean; assistantAvailable: 
       editor.view,
       marginHandlersRef.current,
     )
-    // only the flags on the root matter here; the pagination pass owns every other input
+    // 其余布局输入由分页流程处理。
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [commentFocus?.id, commentPopup])
+  }, [commentFocus?.id, commentPopup, canComment])
 
   // Simple Markup overlay callbacks (the overlay is rebuilt per pagination
   // frame; a stable object keeps the DOM listeners on the current editor)
   const marginHandlersRef = useRef<MarginHandlers>({})
   marginHandlersRef.current = {
+    canComment,
     onChangeBar: (pos) => {
       setRevisionDisplay('all')
       if (!editor) return
@@ -7953,7 +7949,7 @@ export function App({ host }: { host?: { readOnly: boolean; assistantAvailable: 
           className="qa-btn"
           data-tip={t('appUndo')}
           aria-label={t('appUndo')}
-          disabled={!hasDoc || !histState.canUndo}
+          disabled={!hasDoc || readMode || isProtected || !histState.canUndo}
           onClick={() => editor?.chain().focus().undo().run()}
         >
           <IconUndo size={16} />
@@ -7962,7 +7958,7 @@ export function App({ host }: { host?: { readOnly: boolean; assistantAvailable: 
           className="qa-btn"
           data-tip={t('appRedo')}
           aria-label={t('appRedo')}
-          disabled={!hasDoc || !histState.canRedo}
+          disabled={!hasDoc || readMode || isProtected || !histState.canRedo}
           onClick={() => editor?.chain().focus().redo().run()}
         >
           <IconRedo size={16} />
@@ -7980,7 +7976,7 @@ export function App({ host }: { host?: { readOnly: boolean; assistantAvailable: 
       </>
     ),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [hasDoc, hasUnsavedChanges, autoSave, editor, save, lang, histState],
+    [hasDoc, hasUnsavedChanges, autoSave, editor, save, lang, histState, readMode, isProtected],
   )
 
   // ---- Multiple Pages: the grid is a function of zoom × pane width ----
@@ -8376,6 +8372,9 @@ export function App({ host }: { host?: { readOnly: boolean; assistantAvailable: 
 .editor-scroll .doc-page.measuring-columns { column-count: auto; width: ${colFlow.colWidthPx + twipsToPx(canvasSection?.marginLeft ?? section?.marginLeft ?? 0) + twipsToPx(canvasSection?.marginRight ?? section?.marginRight ?? 0)}px; }`}</style>
       )}
       <Ribbon
+        desktopActionsAvailable={host?.desktopActionsAvailable}
+        fileActions={host?.fileActions}
+        trailingActions={host?.saveStatus}
         actionsRef={ribbonActionsRef}
         quickActions={quickActions}
         mergeSource={mergeSource}
@@ -8837,6 +8836,7 @@ export function App({ host }: { host?: { readOnly: boolean; assistantAvailable: 
             )}
             {doc && commentsUi.panel && (
               <CommentsPanel
+                canComment={canComment}
                 comments={comments}
                 docNode={editor.state.doc}
                 composing={commentComposing}
@@ -9340,7 +9340,7 @@ export function App({ host }: { host?: { readOnly: boolean; assistantAvailable: 
               clearFloatShifts(wrap as HTMLElement)
             }
           }}
-          onExportPdf={() => void exportPdf()}
+          onExportPdf={host?.desktopActionsAvailable === false ? undefined : () => void exportPdf()}
           onClose={() => {
             if (!exportLocksPreview) setShowPagePreview(false)
           }}
@@ -9349,7 +9349,7 @@ export function App({ host }: { host?: { readOnly: boolean; assistantAvailable: 
         />
       )}
 
-      {doc && showPrintDialog && <PrintDialog onClose={closePrintDialog} setStatus={setStatus} />}
+      {doc && showPrintDialog && <PrintDialog browserOnly={host?.desktopActionsAvailable === false} onClose={closePrintDialog} setStatus={setStatus} />}
 
       {stats && <WordCountDialog stats={stats} onClose={() => setStats(null)} />}
 
@@ -9400,53 +9400,14 @@ export function App({ host }: { host?: { readOnly: boolean; assistantAvailable: 
         />
       )}
       {pgNumModal && (
-        <div
-          className="modal-backdrop"
-          onMouseDown={(e) => e.target === e.currentTarget && setPgNumModal(null)}
-        >
-          <div className="modal">
-            <h2>{t('appPageNumFormatTitle')}</h2>
-            <label className="pgnum-row">
-              {t('appNumberFormat')}
-              <Dropdown
-                value={pgNumModal.fmt}
-                ariaLabel={t('appNumberFormat')}
-                options={[
-                  { value: 'decimal', label: '1, 2, 3, …' },
-                  { value: 'numberInDash', label: '- 1 -, - 2 -, - 3 -, …' },
-                  { value: 'lowerLetter', label: 'a, b, c, …' },
-                  { value: 'upperLetter', label: 'A, B, C, …' },
-                  { value: 'lowerRoman', label: 'i, ii, iii, …' },
-                  { value: 'upperRoman', label: 'I, II, III, …' },
-                  { value: 'chineseCounting', label: '一, 二, 三, …' },
-                ]}
-                onPick={(v) => setPgNumModal({ ...pgNumModal, fmt: v })}
-              />
-            </label>
-            <label className="pgnum-row">
-              {t('appStartAt')}
-              <input
-                type="number"
-                min={0}
-                placeholder={t('appContinueFromPrev')}
-                value={pgNumModal.start}
-                onChange={(e) => setPgNumModal({ ...pgNumModal, start: e.target.value })}
-              />
-            </label>
-            <p className="pgnum-hint">
-              {t('appPgNumHintBlank')}
-              {sections.length > 1
-                ? t('appPgNumAppliesTo', { n: Math.min(activeSection, sections.length - 1) + 1 })
-                : ''}
-            </p>
-            <div className="modal-actions">
-              <button onClick={() => setPgNumModal(null)}>{t('appCancel')}</button>
-              <button className="btn-primary" onClick={applyPgNumFormat}>
-                {t('appOk')}
-              </button>
-            </div>
-          </div>
-        </div>
+        <PageNumberFormatDialog
+          value={pgNumModal}
+          sectionCount={sections.length}
+          activeSection={activeSection}
+          onChange={setPgNumModal}
+          onApply={applyPgNumFormat}
+          onClose={() => setPgNumModal(null)}
+        />
       )}
     </div>
   )

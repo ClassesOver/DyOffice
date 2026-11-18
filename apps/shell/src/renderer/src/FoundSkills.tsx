@@ -6,9 +6,9 @@ import type { FoundSkill, RecommendedSkill } from '../../shared/found-skill'
 import type { IntegrationsApi } from '../../shared/integrations-api'
 
 /**
- * The skills the user installed into GenOffice.
+ * The skills the user installed into DyOffice.
  *
- * Only GenOffice's own folder is listed. A skill gets in one way: the user
+ * Only DyOffice's own folder is listed. A skill gets in one way: the user
  * picks a folder or a zip and presses Import. Nothing on this screen runs
  * anything.
  */

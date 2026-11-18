@@ -83,12 +83,13 @@ describe('trapTab', () => {
   })
 })
 
-function Modal({ onClose }: { onClose: () => void }) {
+function Modal({ onClose, children }: { onClose: () => void; children?: React.ReactNode }) {
   const keys = useModalKeys(onClose)
   return createElement(
     'div',
     { ref: keys.ref, onKeyDown: keys.onKeyDown },
-    createElement('button', null, 'ok'),
+    ...['first', 'middle', 'last'].map(name => createElement('button', {key: name}, name)),
+    children,
   )
 }
 
@@ -113,6 +114,56 @@ const windowEscape = () =>
   })
 
 describe('useModalKeys Escape fallback', () => {
+  it('gives the nested dialog keyboard ownership even though its effect mounts before the parent', () => {
+    const container = document.createElement('div');document.body.append(container)
+    const root = createRoot(container), outerClose = vi.fn(), innerClose = vi.fn()
+    try {
+      act(() => root.render(createElement(Modal, {onClose: outerClose}, createElement(Modal, {onClose: innerClose}))))
+      const buttons = container.querySelectorAll<HTMLButtonElement>('button')
+      ;(document.activeElement as HTMLElement).blur()
+      act(() => document.body.dispatchEvent(new KeyboardEvent('keydown', {key: 'Tab', bubbles: true})))
+      expect(document.activeElement).toBe(buttons[3])
+      buttons[5]!.focus()
+      act(() => buttons[5]!.dispatchEvent(new KeyboardEvent('keydown', {key: 'Tab', bubbles: true, cancelable: true})))
+      expect(document.activeElement).toBe(buttons[3])
+      ;(document.activeElement as HTMLElement).blur();windowEscape()
+      expect(innerClose).toHaveBeenCalledOnce();expect(outerClose).not.toHaveBeenCalled()
+    } finally {act(() => root.unmount());container.remove()}
+  })
+
+  it('keeps normal Tab in the top dialog and restores the lower trap when the top unmounts', () => {
+    const lower = mountModal(), upper = mountModal()
+    let upperClosed = false
+    try {
+      const buttons = [...document.querySelectorAll<HTMLButtonElement>('button')]
+      buttons[4]!.focus()
+      const inside = new KeyboardEvent('keydown', {key: 'Tab', bubbles: true, cancelable: true})
+      act(() => buttons[4]!.dispatchEvent(inside))
+      expect(inside.defaultPrevented).toBe(false)
+      expect(document.activeElement).toBe(buttons[4])
+      buttons[4]!.blur()
+      const outside = new KeyboardEvent('keydown', {key: 'Tab', shiftKey: true, bubbles: true, cancelable: true})
+      act(() => document.body.dispatchEvent(outside))
+      expect(document.activeElement).toBe(buttons[5])
+      upper.cleanup();upperClosed = true
+      buttons[0]!.focus();buttons[0]!.blur()
+      act(() => document.body.dispatchEvent(new KeyboardEvent('keydown', {key: 'Tab', bubbles: true})))
+      expect(document.activeElement).toBe(buttons[0])
+    } finally {if (!upperClosed) upper.cleanup();lower.cleanup()}
+  })
+
+  it.each([false, true])('returns an outside Tab to the modal (reverse=%s)', (shiftKey) => {
+    const { onClose, cleanup } = mountModal()
+    try {
+      ;(document.activeElement as HTMLElement).blur()
+      const event = new KeyboardEvent('keydown', {key: 'Tab', shiftKey, bubbles: true, cancelable: true})
+      act(() => document.body.dispatchEvent(event))
+      expect(event.defaultPrevented).toBe(true)
+      expect(document.activeElement?.tagName).toBe('BUTTON')
+      expect(onClose).not.toHaveBeenCalled()
+    } finally {cleanup()}
+  })
+
   it('closes on Escape when focus has left the modal', () => {
     const { onClose, cleanup } = mountModal()
     try {

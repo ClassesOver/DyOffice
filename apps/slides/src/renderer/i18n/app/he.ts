@@ -16,6 +16,7 @@ export const he = {
   appPhPromptBody: 'לחץ כדי להוסיף טקסט',
   appStatusOpened: '{name} נפתח ({count} שקופיות)',
   appStatusNewBlank: 'נוצרה מצגת ריקה',
+  appEditCommitPending: "השינוי עדיין מוחל. נא לנסות שוב בעוד רגע.",
   appStatusSaved: 'נשמר',
   appStatusSaveFailed: 'השמירה נכשלה: {error}',
   appErrorCanceled: 'בוטל',

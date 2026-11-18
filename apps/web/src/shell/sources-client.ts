@@ -1,7 +1,7 @@
 import type { CreateSourceRequest, SourceDescriptor, SourceDetail, SourceList, SourceQueryRequest, SaveSourceRequest, PublishedSourceVersion, QuerySnapshot, SourceConnectionCheck } from '../../../../packages/web-contracts/src/sources.ts'
 
 type Request = <T>(path: string, method?: string, body?: unknown) => Promise<T>
-export interface SourcesClientState { pending: boolean; unknownWrite: boolean }
+export interface SourcesClientState { pending: boolean; unknownWrite: boolean; unknownSourceId: string | null }
 const id = (value: string) => { if (!/^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/.test(value)) throw Error('数据源标识无效。'); return encodeURIComponent(value) }
 function safeError(error: unknown) {
   const status = (error as { status?: number })?.status
@@ -17,35 +17,35 @@ function safeError(error: unknown) {
  * writes remain fenced across modal remounts: this instance lives at Home scope. */
 export function createSourcesClient(request: Request) {
   let pending = false, unknownWrite = false
+  let unknownSourceId:string|null=null, verifiedSourceId:string|null=null
   const listeners = new Set<() => void>()
   const emit = () => { for (const listener of listeners) listener() }
-  async function run<T>(write: boolean, operation: () => Promise<T>, acknowledge = false) {
+  async function run<T>(write: boolean, operation: () => Promise<T>, sourceId?:string) {
     if (pending) throw Error('数据源操作正在进行中。')
     if (write && unknownWrite) throw Error('上次写入结果未确认，请先读取并核对最新数据源。')
     pending = true; emit()
     try {
       const result = await operation()
-      if (acknowledge) unknownWrite = false
       return result
     } catch (error) {
       const status = (error as { status?: number })?.status
-      if (write && (status === undefined || status >= 500 || status === 408)) unknownWrite = true
+      if (write && (status === undefined || status >= 500 || status === 408)){unknownWrite=true;unknownSourceId=sourceId??null;verifiedSourceId=null}
       throw safeError(error)
     } finally { pending = false; emit() }
   }
   const path = (sourceId: string) => '/api/v1/sources/' + id(sourceId)
   return {
-    getState: (): SourcesClientState => ({ pending, unknownWrite }),
+    getState: (): SourcesClientState => ({ pending, unknownWrite, unknownSourceId }),
     subscribe(listener: () => void) { listeners.add(listener); return () => { listeners.delete(listener) } },
     list(after?: string) { return run(false, () => request<SourceList>('/api/v1/sources?limit=50' + (after ? '&after=' + id(after) : ''))) },
-    detail(sourceId: string) { return run(false, () => request<SourceDetail>(path(sourceId))) },
-    acknowledgeLatest() { if (pending) throw Error('数据源操作正在进行中。'); unknownWrite = false; emit() },
-    create(input: CreateSourceRequest) { const body = structuredClone(input); return run(true, () => request<SourceDescriptor>('/api/v1/sources', 'POST', body)) },
-    save(sourceId: string, input: SaveSourceRequest) { const body = structuredClone(input); return run(true, () => request<SourceDescriptor>(path(sourceId), 'PUT', body)) },
-    publish(sourceId: string, expectedVersion: number) { return run(true, () => request<PublishedSourceVersion>(path(sourceId) + '/publish', 'POST', { expectedVersion })) },
+    detail(sourceId: string) { return run(false, async () => {verifiedSourceId=null;try{const result=await request<SourceDetail>(path(sourceId));if(result.source.sourceId!==sourceId)throw Error('数据源响应标识不匹配。');verifiedSourceId=sourceId;return result}catch(error){if((error as {status?:number}).status===404)verifiedSourceId=sourceId;throw error}}) },
+    acknowledgeLatest(sourceId:string) { if (pending) throw Error('数据源操作正在进行中。');if(unknownWrite&&(sourceId!==unknownSourceId||verifiedSourceId!==sourceId))return false;unknownWrite=false;unknownSourceId=null;verifiedSourceId=null;emit();return true },
+    create(input: CreateSourceRequest) { const body = structuredClone(input); return run(true, () => request<SourceDescriptor>('/api/v1/sources', 'POST', body),input.sourceId) },
+    save(sourceId: string, input: SaveSourceRequest) { const body = structuredClone(input); return run(true, () => request<SourceDescriptor>(path(sourceId), 'PUT', body),sourceId) },
+    publish(sourceId: string, expectedVersion: number) { return run(true, () => request<PublishedSourceVersion>(path(sourceId) + '/publish', 'POST', { expectedVersion }),sourceId) },
     test(sourceId: string) { return run(false, () => request<SourceConnectionCheck>(path(sourceId) + '/test', 'POST', {})) },
     query(sourceId: string, input: SourceQueryRequest) { const body = structuredClone(input); return run(false, () => request<QuerySnapshot>(path(sourceId) + '/query', 'POST', body)) },
-    remove(sourceId: string, expectedVersion: number) { return run(true, () => request<void>(path(sourceId), 'DELETE', { expectedVersion })) },
+    remove(sourceId: string, expectedVersion: number) { return run(true, () => request<void>(path(sourceId), 'DELETE', { expectedVersion }),sourceId) },
   }
 }
 export type SourcesClient = ReturnType<typeof createSourcesClient>

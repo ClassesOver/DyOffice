@@ -1,6 +1,7 @@
 import type { zh } from './zh'
 
 export const ja = {
+  appPasteRemoteImageFailed: 'リモート画像を貼り付けできません。画像を再度コピーするか、ローカル画像ファイルを挿入してください。',
   appScTitle: 'キーボードショートカット',
   appScFilter: 'ショートカットを検索',
   appScNone: '一致するショートカットがありません',

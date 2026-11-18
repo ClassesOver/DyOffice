@@ -1,6 +1,7 @@
 import type { OfficeFormat } from './api.ts'
 
 export type WorkspaceView = 'all' | 'recent' | 'starred' | 'trash'
+export type WorkspaceFileSort = 'modified-asc' | 'modified-desc'
 
 export interface WorkspaceFile {
   id: string
@@ -19,6 +20,7 @@ export interface WorkspaceFileQuery {
   /** Direct identity lookup; totalAll is limited to this identity, not the entire workspace. */
   id?: string
   view?: WorkspaceView
+  sort?: WorkspaceFileSort
   /** Omit to include all folders; use "root" for files without a folder. */
   folderId?: string
   limit?: number

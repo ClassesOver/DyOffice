@@ -9,12 +9,17 @@ import {build} from 'esbuild'
 import {createSessionFileHost} from '../../../../packages/browser-host/src/session-files.ts'
 import {sheetsSaveRequest} from '../helpers/sheets-request.mjs'
 
-let directory,createSheetsBridge
+let directory,createSheetsBridge,stageEditsForSave
 before(async()=>{
  directory=await mkdtemp(join(tmpdir(),'dyoffice-sheet-barriers-'))
  const outfile=join(directory,'bridge.mjs')
  await build({entryPoints:[fileURLToPath(new URL('../../src/editors/sheets-bridge.ts',import.meta.url))],bundle:true,platform:'node',format:'esm',outfile,logLevel:'silent'})
  ;({createSheetsBridge}=await import(pathToFileURL(outfile).href))
+ // Renderer sources use bundler resolution, unlike Node's native TS loader.
+ // Bundle the real staging implementation just like the bridge, without mocks.
+ const stagingFile=join(directory,'staging.mjs')
+ await build({entryPoints:[fileURLToPath(new URL('../../../sheets/src/renderer/save-edits-staging.ts',import.meta.url))],bundle:true,platform:'node',format:'esm',outfile:stagingFile,logLevel:'silent'})
+ ;({stageEditsForSave}=await import(pathToFileURL(stagingFile).href))
 })
 after(()=>rm(directory,{recursive:true,force:true}))
 const json=(value,status=200)=>new Response(JSON.stringify(value),{status,headers:{'content-type':'application/json'}})
@@ -160,5 +165,62 @@ test('guard revoked in native save queue or prepared upload never submits workbo
   await assert.rejects(saving)
   assert.equal(f.counts().commits,0)
   if(stage==='queue')assert.equal(f.counts().preparations,0)
+ }
+})
+
+
+test('Web saves 10001 edited cells inline through the real bridge/host without an IPC transfer',async t=>{
+ let payload
+ const f=await fixture(t,(path,init)=>{if(path.endsWith('/sheets/uploads'))payload=JSON.parse(init.body)})
+ const file=await f.bridge.api.selectWorkbook()
+ const edits=Array.from({length:10001},(_,row)=>({sheetId:file.sheets[0].id,row,column:0,writeValue:true,value:row}))
+ const staged=await stageEditsForSave(f.bridge.api,file.sessionId,edits)
+ assert.equal(staged.edits.length,10001);assert.equal(staged.editsTransferId,undefined)
+ const result=await f.bridge.api.saveWorkbookEdits({...sheetsSaveRequest(file.sheets[0].id,[]),sessionId:file.sessionId,...staged})
+ assert.equal(payload.request.edits.length,10001)
+ assert.equal(payload.request.edits[10000].value,10000)
+ assert.equal(result.file.sha256,f.saved.sha256)
+ assert.deepEqual(f.counts(),{preparations:1,commits:1})
+})
+
+test('full UTF-8 save body exceeding 4 MiB is rejected before upload and leaves dirty edits intact',async t=>{
+ const f=await fixture(t)
+ const file=await f.bridge.api.selectWorkbook()
+ f.bridge.api.notifyPendingEdits(1)
+ const request={...sheetsSaveRequest(file.sheets[0].id,[{row:0,column:0,writeValue:true,value:42}]),sessionId:file.sessionId}
+ // The host also checks non-cell fields; Unicode byte length exceeds its
+ // JavaScript length. No mutation or unknown receipt may be created.
+ await assert.rejects(f.host.saveSheets(f.fileId,{...request,extra:'界'.repeat(1400000)}),{code:'PAYLOAD_TOO_LARGE'})
+ assert.deepEqual(f.counts(),{preparations:0,commits:0})
+ assert.equal(f.host.getState(f.fileId).revision.revision,f.initial.revision)
+ assert.equal(f.host.getState(f.fileId).status,'idle')
+ assert.equal(f.bridge.isDirty(),true)
+ assert.equal(f.bridge.needsConfirmation(),false)
+})
+
+test('save envelope overhead is counted even when request JSON alone fits exactly',async t=>{
+ const f=await fixture(t)
+ const request={value:''}
+ request.value='a'.repeat(4*1024*1024-JSON.stringify(request).length)
+ assert.equal(new TextEncoder().encode(JSON.stringify(request)).byteLength,4*1024*1024)
+ await assert.rejects(f.host.saveSheets(f.fileId,request),{code:'PAYLOAD_TOO_LARGE'})
+ assert.deepEqual(f.counts(),{preparations:0,commits:0})
+})
+
+for(const extra of [-1,0,1])test(`full UTF-8 save envelope at 4 MiB ${extra>=0?'+':''}${extra} bytes`,async t=>{
+ let sentBytes=0
+ const f=await fixture(t,(path,init)=>{if(path.endsWith('/sheets/uploads'))sentBytes=new TextEncoder().encode(init.body).byteLength})
+ const request={value:''}
+ const envelope={baseRevision:f.initial.revision,leaseEpoch:1,editorId:f.host.getEditorId(),request}
+ const remaining=4*1024*1024+extra-new TextEncoder().encode(JSON.stringify(envelope)).byteLength
+ request.value='界'.repeat(Math.floor(remaining/3))+'a'.repeat(remaining%3)
+ if(extra>0){
+  await assert.rejects(f.host.saveSheets(f.fileId,request),{code:'PAYLOAD_TOO_LARGE'})
+  assert.equal(sentBytes,0);assert.deepEqual(f.counts(),{preparations:0,commits:0})
+ }else{
+  const result=await f.host.saveSheets(f.fileId,request)
+  assert.equal(sentBytes,4*1024*1024+extra)
+  assert.equal(result.revision,f.saved.revision)
+  assert.deepEqual(f.counts(),{preparations:1,commits:1})
  }
 })

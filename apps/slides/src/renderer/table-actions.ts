@@ -99,7 +99,8 @@ export async function commitCellEdit(ctx: ActionCtx, paragraphs: EditParagraph[]
     col: ctx.editingCell.col,
     paragraphs,
   })
-  if (updated) ctx.applySlide(ctx.current, updated)
+  if (!updated) return
+  ctx.applySlide(ctx.current, updated)
   ctx.setEditingCell(null)
 }
 
@@ -122,7 +123,8 @@ export async function navigateCell(
       col: editingCell.col,
       paragraphs,
     })
-    if (updated) ctx.applySlide(current, updated)
+    if (!updated) return
+    ctx.applySlide(current, updated)
   }
   const cells = [...tbl.cells].sort((a, b) => a.row - b.row || a.col - b.col)
   const idx = cells.findIndex((c) => c.row === editingCell.row && c.col === editingCell.col)

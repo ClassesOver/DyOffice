@@ -52,9 +52,9 @@ export const en = {
   ribbonRotateLeft: 'Rotate Left 90°',
   ribbonFlipH: 'Flip Horizontal',
   ribbonFlipV: 'Flip Vertical',
-  ribbonCropTip: 'Crop the picture (drag the handles, Enter to confirm)',
+  ribbonCropTip: 'Crop the picture (drag the handles)',
   ribbonCropHint:
-    'Drag the handles or move the box to choose the area to keep; Enter to apply, Esc to cancel',
+    'Drag the handles or move the box to choose the area to keep; Esc to cancel',
   ribbonReplacePicture: 'Replace Picture',
   ribbonReplacePictureTip: 'Replace the picture, keeping its current size and wrapping',
   ribbonResetSize: 'Reset Size',

@@ -1,5 +1,6 @@
 import type { WorkbookCellEdit } from '../shared/desktop-api'
 import {
+  MAX_SAVE_EDITS,
   MAX_SAVE_EDITS_TOTAL,
   SAVE_EDITS_CHUNK_MAX,
   SAVE_EDITS_INLINE_MAX,
@@ -7,6 +8,7 @@ import {
 
 /// The slice of desktopApi the staging step needs (injectable for tests).
 export interface SaveEditsTransferApi {
+  saveEditsInlineMaxBytes?: number | undefined
   beginSaveEditsTransfer(request: {
     sessionId: string
     transferId: string
@@ -39,6 +41,22 @@ export async function stageEditsForSave(
   sessionId: string,
   edits: WorkbookCellEdit[],
 ): Promise<StagedEdits> {
+  if (api.saveEditsInlineMaxBytes !== undefined) {
+    const limit = api.saveEditsInlineMaxBytes
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 4 * 1024 * 1024) throw new Error('Invalid Web save limit.')
+    const tooLarge = () => new Error('Web save exceeds the request limit. Your edits are still unsaved; keep this page open and reduce the changes before retrying.')
+    if (edits.length > MAX_SAVE_EDITS) throw tooLarge()
+    // Bound the edit array without creating another full JSON copy. The host
+    // checks the final UTF-8 request envelope, including all non-cell fields.
+    const encoder = new TextEncoder()
+    let size = 2
+    for (const edit of edits) {
+      const encoded = JSON.stringify(edit)
+      size += encoder.encode(encoded).byteLength + (size === 2 ? 0 : 1)
+      if (size > limit) throw tooLarge()
+    }
+    return { edits }
+  }
   if (edits.length <= SAVE_EDITS_INLINE_MAX) return { edits }
   if (edits.length > MAX_SAVE_EDITS_TOTAL) {
     throw new Error(

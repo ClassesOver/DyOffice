@@ -130,6 +130,8 @@ export interface McpStatus {
 
 /** a recent file entry shown on the home screen; type derives from the extension */
 export interface RecentEntry {
+  /** Human-readable location supplied by hosts whose file identity is not a filesystem path. */
+  locationLabel?: string
   path: string
   name: string
   /** lowercased extension without the dot ('docx' | 'xlsx' | 'pptx') */
@@ -150,6 +152,8 @@ export interface RecentEntry {
 
 /** paged query for the home file lists */
 export interface RecentQuery {
+  /** Web 显式选择修改时间排序；省略时保留最近打开顺序。 */
+  sort?: 'modified-asc' | 'modified-desc'
   /** number of entries to skip (default 0) */
   offset?: number
   /** page size; 0 returns no entries but still reports totals (default 50) */
@@ -291,7 +295,7 @@ export interface HomeApi {
   // ---- knowledge-base ask panel: the reader's starred corpus, askable ----
   /** the starred corpus as the AI's knowledge base */
   kbList(): Promise<KbFileInfo[]>
-  /** the skills the user installed into GenOffice */
+  /** the skills the user installed into DyOffice */
   skillsList(): Promise<UserSkillEntry[]>
   /** one installed skill's body, by name */
   skillText(name: string): Promise<string>
@@ -352,7 +356,7 @@ export interface HomeApi {
   /** unstar files in bulk (Starred view selection bar); the recents list and the files are untouched */
   unstarPaths(paths: string[]): Promise<void>
   /** reveal the file in Finder / Explorer */
-  revealPath(path: string): Promise<void>
+  revealPath(path: string, signal?: AbortSignal): Promise<void>
   /** rename the file on disk (same directory) and update the recent list */
   renameFile(path: string, newName: string): Promise<RenameResult>
   /** copy the file next to itself (localized "copy" suffix before .ext) and record it as recent */
@@ -474,7 +478,7 @@ export interface HomeApi {
   getAiPanelPrefs(): Promise<AiPanelPrefs>
   /** merge + persist; broadcasts 'app:ai-panel-prefs-changed' to all web contents */
   setAiPanelPrefs(patch: Partial<AiPanelPrefs>): Promise<AiPanelPrefs>
-  /** effective default save folder for new/untitled files (configured in userData/app-settings.json, falls back to <Documents>/GenOffice) */
+  /** effective default save folder for new/untitled files (configured in userData/app-settings.json, falls back to <Documents>/DyOffice) */
   getDefaultSaveDir(): Promise<string>
   /** directory picker to change the default save folder; resolves to the new folder, or null when canceled or the pick was unusable */
   pickDefaultSaveDir(): Promise<string | null>

@@ -92,6 +92,7 @@ test('stream and cancellation requests disallow redirects', async () => {
     assert.equal(init.credentials,'same-origin')
     assert.equal(init.redirect,'error')
     assert.equal(init.mode,'same-origin')
+    assert.equal(init.referrerPolicy, 'same-origin')
   }
 })
 
@@ -254,4 +255,22 @@ test('cancelling while CSRF proof is pending never sends a prompt afterwards',as
  const {calls,callbacks}=callbackRecorder();const handle=transport.stream({system:'private',messages:[],tools:[]},callbacks)
  handle.cancel();proof('p'.repeat(43));await delay()
  assert.deepEqual(requests,[]);assert.deepEqual(calls,[['done']])
+})
+
+
+test('SSE done completes successfully and cancels the reader without waiting for network EOF', {timeout: 2000}, async () => {
+  const cancelled = Promise.withResolvers()
+  const requests = [], {calls, callbacks} = callbackRecorder()
+  const transport = createSseAgentTransport({createTurnId: () => 'done-before-eof', fetchImpl: async (url, init) => {
+    requests.push({url, init})
+    return new Response(new ReadableStream({
+      start(controller) {controller.enqueue(new TextEncoder().encode(event('delta', {text: 'complete'}) + event('done', {})))},
+      cancel() {cancelled.resolve()},
+    }), {headers: {'Content-Type': 'text/event-stream'}})
+  }})
+  transport.stream({system: '', messages: [], tools: []}, callbacks)
+  await cancelled.promise
+  assert.deepEqual(calls, [['delta', 'complete'], ['done']])
+  assert.equal(requests.length, 1)
+  assert.equal(JSON.parse(requests[0].init.body).turnId, 'done-before-eof')
 })

@@ -71,7 +71,7 @@ export function createFileService({ transactions, objects, quotaBytes = 1024 ** 
         await connection.query("UPDATE uploads SET state='receiving',attempt_id=$4 WHERE deployment_id=$1 AND owner_id=$2 AND id=$3", [...scope(principal),id,attempt])
         return { row, key: objectKey(principal,row.revision_id) }
       })
-      let published = false
+      let published = false, completedSha: string | undefined
       try {
         if (!Buffer.isBuffer(input) || input.length !== claimed.row.expected_size) throw authError(400)
         const bytes = Buffer.from(input), validated = await validateUpload(bytes, claimed.row.name)
@@ -83,6 +83,7 @@ export function createFileService({ transactions, objects, quotaBytes = 1024 ** 
         // this assertion; caller-supplied metadata is never proof of integrity.
         const reference = await objects.putImmutable(claimed.key, bytes, { size: validated.size, sha256: validated.sha256 })
         if (reference.key !== claimed.key || reference.size !== validated.size || reference.sha256 !== validated.sha256) throw authError(503)
+        completedSha = validated.sha256
         return await run(token, 'files:write', async (connection, principal) => {
           await lockAccount(connection, principal)
           const row = await lockUpload(connection, principal, id)
@@ -95,6 +96,22 @@ export function createFileService({ transactions, objects, quotaBytes = 1024 ** 
           return { uploadId: id, sha256: validated.sha256, size: validated.size }
         })
       } catch (error) {
+        // A verified PUT receipt proves that this attempt has finished writing.
+        // Preserve it for terminal reclamation without publishing a revision or
+        // bypassing the original credential. Ambiguous PUT failures stay fenced.
+        if (completedSha) await run(token, 'files:write', async (connection, principal) => {
+          await lockAccount(connection, principal)
+          const row = (await connection.query<Upload & { completed_file_id: string | null }>(
+            'SELECT * FROM uploads WHERE deployment_id=$1 AND owner_id=$2 AND id=$3 FOR UPDATE', [...scope(principal),id])).rows[0]
+          if (!row || (principal.job ? row.job_id !== principal.job.id || Number(row.job_epoch) !== principal.job.epoch : row.job_id !== null)) throw authError(404)
+          if (row.auth_version !== principal.authVersion || (row.kind === 'revision' && row.session_id !== principal.sessionId)) throw authError(409)
+          if (row.attempt_id !== attempt || row.sha256 !== null || row.completed_file_id !== null) return
+          if (row.state === 'receiving') {
+            const charged = await connection.query('UPDATE storage_accounts SET reserved_bytes=reserved_bytes-$3,stored_bytes=stored_bytes+$3 WHERE deployment_id=$1 AND owner_id=$2 AND reserved_bytes>=$3', [...scope(principal),row.expected_size])
+            if (charged.rowCount !== 1) throw authError(503)
+          } else if (row.state !== 'expired') return
+          await connection.query("UPDATE uploads SET state=CASE WHEN state='receiving' THEN 'cancelled' ELSE state END,sha256=$4 WHERE deployment_id=$1 AND owner_id=$2 AND id=$3", [...scope(principal),id,completedSha])
+        }).catch(() => {})
         if (!published) await run(token, 'files:write', async (connection, principal) => {
           await lockAccount(connection, principal)
           // This is proof of *no* publication, not permission to publish an

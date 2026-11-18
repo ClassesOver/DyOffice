@@ -29,8 +29,8 @@ export function mountEditorRealtime(host: SessionFileHost, fileId: string, onCha
         ? 'A different saved version is available. Your draft is preserved.'
         : '检测到其他已保存版本，当前草稿已保留。'
       if (status === 'backoff') return locale === 'en'
-        ? 'Live notifications are reconnecting. HTTP saving remains available.'
-        : '版本通知正在重连，仍可通过 HTTP 保存。'
+        ? 'Restoring version updates. You can continue editing and saving.'
+        : '正在恢复版本同步，文档仍可编辑和保存。'
       return ''
     },
     dispose() { bridge.dispose() },

@@ -52,9 +52,9 @@ export const he = {
   ribbonRotateLeft: 'סיבוב 90° שמאלה',
   ribbonFlipH: 'היפוך אופקי',
   ribbonFlipV: 'היפוך אנכי',
-  ribbonCropTip: 'חיתוך התמונה (גרור את הידיות, Enter לאישור)',
+  ribbonCropTip: 'חיתוך התמונה (גרור את הידיות)',
   ribbonCropHint:
-    'גרור את הידיות או הזז את המסגרת כדי לבחור את האזור שיישמר; Enter להחלה, Esc לביטול',
+    'גרור את הידיות או הזז את המסגרת כדי לבחור את האזור שיישמר; Esc לביטול',
   ribbonReplacePicture: 'החלפת תמונה',
   ribbonReplacePictureTip: 'החלפת התמונה תוך שמירה על הגודל וגלישת הטקסט הנוכחיים',
   ribbonResetSize: 'איפוס גודל',

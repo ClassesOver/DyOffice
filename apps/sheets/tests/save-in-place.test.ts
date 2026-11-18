@@ -1,3 +1,4 @@
+import {createSheetsBridge} from '../../web/src/editors/sheets-bridge'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { handleSave, type SaveContext } from '../src/renderer/save-actions'
 import {
@@ -297,4 +298,21 @@ describe('T09 in-place save acknowledgment', () => {
     await expect(handleSave(ctx, 'recovery')).resolves.toMatchObject({ ok: false })
     expect(save).toHaveBeenCalledTimes(1)
   })
+})
+
+
+it('Web oversize save keeps the entire journal and does not claim success or reopen',async()=>{
+ const {ctx,journal,applySavedWorkbook,openLazyWorkbook}=setup()
+ const input:Record<number,Record<number,{v:string}>>={}
+ for(let row=0;row<10001;row++)input[row]={0:{v:'界'.repeat(200)}}
+ recordSetRangeValues(journal,'sheet-1',input)
+ const bridge=createSheetsBridge({} as never,'unused',{language:'en',theme:'light'} as never)
+ vi.stubGlobal('window',{desktopApi:bridge.api})
+ try{
+  const result=await handleSave(ctx,'save',true)
+  expect(result.ok).toBe(false)
+  expect(ctx.setMessage).toHaveBeenCalledWith(expect.stringMatching(/still unsaved/))
+  expect(journalSize(journal)).toBe(10001)
+  expect(applySavedWorkbook).not.toHaveBeenCalled();expect(openLazyWorkbook).not.toHaveBeenCalled()
+ }finally{bridge.dispose()}
 })

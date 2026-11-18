@@ -460,18 +460,20 @@ export function createSlidesBridge(host: SessionFileHost, fileId: string, prefs:
     if (!await editor.saveAndWait()) throw hostError('UNAVAILABLE', 'download save')
     if (disposed) throw hostError('UNAVAILABLE', 'disposed')
     const state = host.getState(fileId)
-    if (editor.isDirty() || recovery || state.status !== 'idle' || !state.lease) throw hostError('CONFLICT', 'download not clean')
+    // Server edits update the bridge before React's dirty notification settles.
+    // Both views must be clean before exporting an acknowledged revision.
+    if (editor.isDirty() || session?.dirty || recovery || state.status !== 'idle' || !state.lease) throw hostError('CONFLICT', 'download not clean')
     return {...state.revision}
   }
   async function takeover(editor: {reload(): Promise<boolean>; isDirty(): boolean}) {
     if (disposed) throw hostError('UNAVAILABLE', 'disposed')
-    if (editor.isDirty() || recovery || host.getState(fileId).status === 'unknown') throw hostError('CONFLICT', 'unsaved takeover')
+    if (editor.isDirty() || session?.dirty || recovery || host.getState(fileId).status === 'unknown') throw hostError('CONFLICT', 'unsaved takeover')
     let acquired = false
     try {
       await host.takeoverLease(fileId); acquired = true
-      if (disposed || editor.isDirty() || recovery) throw hostError('CONFLICT', 'unsaved takeover')
+      if (disposed || editor.isDirty() || session?.dirty || recovery) throw hostError('CONFLICT', 'unsaved takeover')
       await host.refreshHead(fileId)
-      if (disposed || editor.isDirty() || recovery) throw hostError('CONFLICT', 'unsaved takeover')
+      if (disposed || editor.isDirty() || session?.dirty || recovery) throw hostError('CONFLICT', 'unsaved takeover')
       if (!await editor.reload()) throw hostError('UNAVAILABLE', 'takeover reload')
       if (disposed || !host.getState(fileId).lease) throw hostError('CONFLICT', 'takeover authority')
     } catch (error) {

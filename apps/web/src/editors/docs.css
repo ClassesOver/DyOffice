@@ -1,6 +1,67 @@
 .dyoffice-native-docs { height: 100vh; display: flex; flex-direction: column; color: var(--text); background: var(--surface); }
 .dyoffice-native-docs > .app { flex: 1; min-height: 0; }
-.dyoffice-docs-state { flex: none; min-height: 1.5rem; padding: 0.25rem 0.75rem; font: 0.8rem sans-serif; background: var(--surface); color: var(--text); border-bottom: 1px solid var(--border); }
-.dyoffice-docs-state button { margin-inline-start: 0.75rem; color: var(--text); background: var(--surface); border: 1px solid var(--border); border-radius: 0.25rem; padding: 0.15rem 0.5rem; cursor: pointer; }
+.dyoffice-docs-persistence-state { display: inline-flex; align-items: center; gap: 6px; max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 0 12px; color: var(--text-secondary); font: 12px/1.5 var(--gs-font-sans); }
+.dyoffice-docs-persistence-state::before { content: ''; flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--text-tertiary); }
+.dyoffice-docs-persistence-state[data-dirty='true']::before { background: var(--accent); }
 
 .dyoffice-docs-state a { margin-inline-start: 0.75rem; color: var(--text); }
+
+/* Web-only B settings dialogs. Native dialogs and document-operation dialogs keep their layout. */
+.dyoffice-native-docs .editor-settings-dialog {
+  box-sizing: border-box;
+  max-width: calc(100vw - 24px);
+  max-height: calc(100dvh - 32px);
+  overflow-y: auto;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  padding: 20px 24px;
+  background: var(--surface);
+  color: var(--text-primary);
+  box-shadow: var(--shadow-menu);
+}
+.dyoffice-native-docs .editor-settings-dialog h2 {
+  margin: 0 0 20px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--border-subtle);
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 24px;
+}
+.dyoffice-native-docs .editor-settings-dialog :is(label, legend) { font-size: 14px; }
+.dyoffice-native-docs .editor-settings-dialog :is(.modal-desc, .fld-hint) {
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.6;
+}
+.dyoffice-native-docs .editor-settings-dialog :is(select, input:not([type="checkbox"]):not([type="radio"])) {
+  min-height: 36px;
+  border-color: var(--border-subtle);
+  border-radius: 6px;
+  color: var(--text-primary);
+  background: var(--surface);
+  font-size: 14px;
+}
+.dyoffice-native-docs .editor-settings-dialog .modal-actions {
+  padding-top: 16px;
+  border-top: 1px solid var(--border-subtle);
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.dyoffice-native-docs .editor-settings-dialog .modal-actions button {
+  min-height: 36px;
+  border-radius: 6px;
+  font-size: 14px;
+}
+.dyoffice-native-docs .editor-settings-dialog :is(button, select, input):focus-visible,
+.dyoffice-native-docs .editor-settings-dialog input:focus-visible + .ctl {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+@media (max-width: 680px) {
+  .dyoffice-native-docs .editor-settings-dialog { padding: 16px; }
+  .dyoffice-native-docs .editor-settings-dialog .tco-actions-right { flex-wrap: wrap; }
+}
+.dyoffice-docs-download { display: block; padding: 8px 12px; border-radius: 4px; color: var(--text); font-size: 13px; text-decoration: none; }
+.dyoffice-docs-download:hover { background: var(--hover); }
+.dyoffice-docs-download:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+@media (max-width: 600px) { .dyoffice-docs-persistence-state { max-width: 100px; padding: 0 6px; } }

@@ -1,3 +1,4 @@
+import { useImeEnterGuard } from '@genoffice/ui'
 import { useMemo, useState, type CSSProperties } from 'react'
 import type { StyleInfo, StyleParaProps, StyleRunProps, StyleUpsert } from '@genoffice/docx-engine'
 import { useI18n } from '../i18n/locale'
@@ -112,6 +113,7 @@ interface Props {
 export function StyleDialog({ target, initial, styles, pending, onSubmit, onClose }: Props) {
   const { t, lang } = useI18n()
   const modalKeys = useModalKeys(onClose)
+  const ime = useImeEnterGuard()
   const [values, setValues] = useState(initial)
   const [touched, setTouched] = useState<Set<Field>>(() => new Set())
   const set = <F extends Field>(f: F, v: StyleFormValues[F]) => {
@@ -183,7 +185,9 @@ export function StyleDialog({ target, initial, styles, pending, onSubmit, onClos
               value={values.name}
               autoFocus
               onChange={(e) => set('name', e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && submit()}
+              onCompositionStart={ime.handleCompositionStart}
+              onCompositionEnd={ime.handleCompositionEnd}
+              onKeyDown={(e) => e.key === 'Enter' && !ime.isImeConfirm(e.nativeEvent) && submit()}
             />
           </label>
           <label>

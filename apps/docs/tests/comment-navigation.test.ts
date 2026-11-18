@@ -68,6 +68,7 @@ const info = (id: string, extra: Partial<CommentInfo> = {}): CommentInfo => ({
 function makeCtx(editor: Editor, comments: CommentInfo[]) {
   const state = { comments }
   const ctx = {
+    canComment: true,
     editor,
     dirtyRef: { current: false },
     setStatus: vi.fn(),

@@ -53,9 +53,9 @@ export const pt = {
   ribbonRotateLeft: 'Girar 90° para a esquerda',
   ribbonFlipH: 'Inverter horizontalmente',
   ribbonFlipV: 'Inverter verticalmente',
-  ribbonCropTip: 'Cortar a imagem (arraste as alças, Enter para confirmar)',
+  ribbonCropTip: 'Cortar a imagem (arraste as alças)',
   ribbonCropHint:
-    'Arraste as alças ou mova a caixa para escolher a área a manter; Enter para aplicar, Esc para cancelar',
+    'Arraste as alças ou mova a caixa para escolher a área a manter; Esc para cancelar',
   ribbonReplacePicture: 'Substituir Imagem',
   ribbonReplacePictureTip: 'Substituir a imagem, mantendo o tamanho e a disposição atuais',
   ribbonResetSize: 'Redefinir Tamanho',
