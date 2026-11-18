@@ -8,7 +8,7 @@ SPEC.loader.exec_module(audit)
 class AuditTests(unittest.TestCase):
     def good(self):
         return {'ubuntu':'24.04', 'pid1':'systemd', 'cgroupFs':'cgroup2fs',
-                'controllers':['cpu','memory','pids'], 'docker':{'serverVersion':'28.0.4','cgroupVersion':'2','cgroupDriver':'systemd','securityOptions':['name=rootless','name=seccomp,profile=builtin']}, 'daemonDelegate':'yes'}
+                'controllers':['cpu','memory','pids'], 'docker':{'serverVersion':'28.0.4','cgroupVersion':'2','cgroupDriver':'systemd','securityOptions':['name=rootless','name=seccomp,profile=builtin','name=apparmor']}, 'daemonDelegate':'yes'}
     def test_even_complete_host_facts_never_certify_nested_runtime(self):
         r=audit.assess(self.good())
         self.assertEqual(r['status'],'unsupported')
@@ -23,6 +23,26 @@ class AuditTests(unittest.TestCase):
         f=self.good();f['docker']['securityOptions']=['name=seccomp,profile=builtin'];f['controllers']=['memory']
         self.assertIn('docker_user_namespace',audit.assess(f)['missing'])
         self.assertIn('cpu_memory_pids',audit.assess(f)['missing'])
+    def test_lsm_must_be_observed_without_conferring_runtime_admission(self):
+        for lsm in [None, '', 'name=unconfined', 'name=apparmor,profile=unconfined',
+                    'name=apparmor-pretend', {'name':'apparmor'}, 'name=selinux-disabled']:
+            with self.subTest(lsm=lsm):
+                f=self.good()
+                f['docker']['securityOptions']=['name=rootless','name=seccomp,profile=builtin',lsm]
+                r=audit.assess(f)
+                self.assertIn('docker_lsm_observed',r['missing'])
+                self.assertFalse(r['host_prerequisites_observed'])
+                self.assertFalse(r['execution_available'])
+        for lsm in ['name=apparmor','name=selinux']:
+            f=self.good()
+            f['docker']['securityOptions']=['name=rootless','name=seccomp,profile=builtin',lsm]
+            r=audit.assess(f)
+            self.assertTrue(r['checks']['docker_lsm_observed'])
+            self.assertTrue(r['host_prerequisites_observed'])
+            self.assertEqual(r['status'],'unsupported')
+            self.assertFalse(r['execution_available'])
+            self.assertFalse(r['container_probe_run'])
+
     def test_wrong_or_malformed_docker_facts_reject(self):
         for value in [None,[],{},'not-json',{'cgroupVersion':'1','cgroupDriver':'cgroupfs','securityOptions':None}]:
             f=self.good();f['docker']=value
