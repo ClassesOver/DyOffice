@@ -4,6 +4,7 @@ import {GLOBAL_SETTING_KINDS} from '../../../../packages/web-contracts/src/setti
 import type {AdminGlobalConfig, AdminGlobalEntry, GlobalConfigCheck, GlobalConfigPatch, GlobalEntryUpsert, GlobalSettingKind} from '../../../../packages/web-contracts/src/settings'
 import {GlobalSettingsError, type GlobalSettingsClient} from './global-settings-client'
 import './global-settings.css'
+import './connection-config-b.css'
 import {SettingsListPager} from './SettingsListPager'
 
 const kindLabels: Record<GlobalSettingKind, string> = {chat: '对话', image_generation: '图像生成', image_analysis: '图像分析', video_analysis: '视频分析', web_search: '网页搜索', image_search: '图片搜索', rerank: '重排', http_mcp: 'HTTP MCP'}
@@ -182,7 +183,7 @@ export function GlobalSettingsPanel({client, onClose, presentation = 'dialog', o
   useEffect(() => {onCloseGuardChange?.(canClose); return () => onCloseGuardChange?.(null)}, [canClose, onCloseGuardChange])
   function close() {if (canClose()) {clearSecrets(); onClose()}}
 
-  return <section className={`set-pane global-settings-panel${presentation === 'page' ? ' global-settings-page' : ''}`} aria-label="全局配置" onKeyDown={event => {if (event.key === 'Escape') {event.stopPropagation(); if (confirmation) setConfirmation(null); else if (presentation === 'dialog') close()}}}>
+  return <section className={`set-pane global-settings-panel global-settings-b${presentation === 'page' ? ' global-settings-page' : ''}`} aria-label="全局配置" onKeyDown={event => {if (event.key === 'Escape') {event.stopPropagation(); if (confirmation) setConfirmation(null); else if (presentation === 'dialog') close()}}}>
     {presentation === 'dialog' && <div className="set-pane-head global-settings-heading"><h3 className="set-pane-title">全局配置</h3><Button autoInsertSpace={false} className="set-close" htmlType="button" aria-label="关闭全局配置" onClick={close}>×</Button></div>}
     <p className="set-field-desc global-settings-intro">统一管理当前部署的服务商、模型和默认选项，配置保存后供所有用户使用。</p>
     <section className="global-settings-overview" aria-label="配置状态摘要">

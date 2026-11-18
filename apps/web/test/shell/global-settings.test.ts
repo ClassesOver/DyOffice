@@ -259,3 +259,12 @@ test('saved server configuration uses independent bounded pages and clamps after
   expect(input('配置名称').value).toBe('Unsaved local draft')
   expect(next().disabled).toBe(true)
 })
+
+test('B global settings keeps selected configuration and default/key controls accessible', async () => {
+ const {host} = await mount(createGlobalSettingsClient(requestFrom(async () => initial())))
+ expect(host.querySelector('.global-settings-b')).not.toBeNull()
+ expect(host.querySelector('.global-settings-entry[aria-pressed="true"]')?.textContent).toContain('Original')
+ expect(input('API 密钥').type).toBe('password')
+ expect(button('保存配置').disabled).toBe(true)
+ expect(host.querySelector('[aria-label="默认配置"]')).not.toBeNull()
+})
