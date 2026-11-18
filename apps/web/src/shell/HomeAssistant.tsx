@@ -34,7 +34,15 @@ function Chat({bind,fetchImpl,onClose}:{bind:()=>Promise<Bound>;fetchImpl:typeof
    onDelta(delta){if(live.current)setMessages(rows=>rows.map((row,index)=>index===rows.length-1?{...row,text:row.text+delta}:row))},
    onToolCall(){throw Error('首页聊天不允许工具调用。')},
    onError(message){if(live.current)setError(message)},
-   onDone(){done=true;running.current=false;active.current=undefined;if(live.current)setBusy(false)},
+   onDone(){
+    done=true;running.current=false;active.current=undefined
+    if(live.current){
+     // A refused or stopped turn may have no text. Its visual placeholder is
+     // not a provider message; sending it next time would invalidate history.
+     setMessages(rows=>rows.at(-1)?.role==='assistant'&&rows.at(-1)?.text===''?rows.slice(0,-1):rows)
+     setBusy(false)
+    }
+   },
   })
   if(!done)active.current=handle
  }
