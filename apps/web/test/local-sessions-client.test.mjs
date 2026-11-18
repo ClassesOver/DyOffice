@@ -33,3 +33,10 @@ for(const operation of ['revoke','revokeOthers'])test(`${operation} HTTP 408 sta
  await assert.rejects(send(),/刷新/);assert.equal(writes,1)
  await client.list();await assert.rejects(send(),error=>error.status===408);assert.equal(writes,2)
 })
+test('paged reads validate cursor and bounds but never reconcile unknown revocations',async()=>{
+ let calls=[],body={sessions:[session],nextCursor:id};const client=createLocalSessionsClient(async path=>{calls.push(path);if(path.endsWith('/csrf'))return json({csrfToken:'c'.repeat(43)});if(path.includes('?'))return json(body);return json({})})
+ assert.deepEqual(await client.listPage({limit:1}),body);assert.equal(calls[0],'/api/v1/auth/sessions?limit=1')
+ await assert.rejects(client.revoke(id),/无法确认/);await client.listPage({limit:1,after:id});await assert.rejects(client.revoke(id),/刷新/)
+ for(const bad of [{sessions:[session],nextCursor:'bad'},{sessions:[],nextCursor:id},{sessions:[session,session],nextCursor:null},{sessions:[session],nextCursor:'22222222-2222-4222-8222-222222222222'}]){body=bad;await assert.rejects(client.listPage({limit:1}),/无法确认/)}
+ await assert.rejects(client.listPage({limit:0}));await assert.rejects(client.listPage({after:'bad'}))
+})

@@ -131,6 +131,21 @@ export function createSessionService({ db, accounts, deploymentId, idleMs = 8 * 
       const result = await connection.query('SELECT id,created_at,last_seen_at,expires_at FROM sessions WHERE deployment_id=$1 AND user_id=$2 AND auth_version=$3 AND revoked_at IS NULL AND expires_at>$4 AND last_seen_at>$4-$5*interval \'1 millisecond\' ORDER BY created_at,id', [deploymentId, principal.userId, principal.authVersion, now, idleMs])
       return result.rows.map(row => ({ id: row.id, createdAt: row.created_at.toISOString(), lastSeenAt: row.last_seen_at.toISOString(), expiresAt: row.expires_at.toISOString(), current: row.id === principal.sessionId }))
     }),
+    listPage: (token: string, {limit = 20, after}: {limit?: number; after?: string} = {}) => withSession(token, [], async (connection, principal, _session, now) => {
+      if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100 || (after !== undefined && (typeof after !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(after)))) throw authError(400)
+      let boundary: string | null = null
+      if (after !== undefined) {
+        // A revoked/expired owned session remains a valid boundary. Never use
+        // JS Date precision or accept another user's/tenant's anchor. Copy the
+        // immutable timestamp so deletion after this read cannot shift the page.
+        const anchor = (await connection.query('SELECT created_at::text AS created_at FROM sessions WHERE deployment_id=$1 AND user_id=$2 AND id=$3', [deploymentId, principal.userId, after])).rows[0]
+        if (!anchor) throw authError(400)
+        boundary = anchor.created_at
+      }
+      const result = await connection.query("SELECT id,created_at,last_seen_at,expires_at FROM sessions WHERE deployment_id=$1 AND user_id=$2 AND auth_version=$3 AND revoked_at IS NULL AND expires_at>$4 AND last_seen_at>$4-$5*interval '1 millisecond' AND ($6::timestamptz IS NULL OR (created_at,id)>($6::timestamptz,$7::uuid)) ORDER BY created_at,id LIMIT $8", [deploymentId, principal.userId, principal.authVersion, now, idleMs, boundary, after ?? null, limit+1])
+      const rows = result.rows.slice(0, limit)
+      return {sessions: rows.map(row => ({id: row.id, createdAt: row.created_at.toISOString(), lastSeenAt: row.last_seen_at.toISOString(), expiresAt: row.expires_at.toISOString(), current: row.id === principal.sessionId})), nextCursor: result.rows.length > limit ? rows.at(-1)!.id as string : null}
+    }),
     revoke: (token: string, targetId: string, context: AuthContext = {}) => withSession(token, [targetId], async (connection, principal) => {
       const result = await connection.query('UPDATE sessions SET revoked_at=clock_timestamp() WHERE deployment_id=$1 AND user_id=$2 AND id=$3 RETURNING id', [deploymentId, principal.userId, targetId])
       if (!result.rowCount) throw authError(404)
