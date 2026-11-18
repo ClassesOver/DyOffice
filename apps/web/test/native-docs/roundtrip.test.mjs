@@ -10,7 +10,7 @@ import { chromium, expect } from '@playwright/test'
 import JSZip from 'jszip'
 import { fileFixture, docxBytes, importFile } from '../helpers/files.mjs'
 import { password } from '../helpers/identity.mjs'
-import { phaseDiagnostics } from '../helpers/phase-diagnostics.mjs'
+import { phaseDiagnostics, observeFirstRequest } from '../helpers/phase-diagnostics.mjs'
 import { withInputDiagnostics } from '../helpers/input-diagnostics.mjs'
 
 const docsDirectory = fileURLToPath(new URL('../../dist-docs/',import.meta.url))
@@ -136,6 +136,8 @@ test('editing during a delayed native save keeps the newer draft dirty and saves
   try {
   const f = await fixture(t)
   f.page.on('pageerror', () => diagnostic.count('pageerror'))
+  const requestDiagnostic = observeFirstRequest(f.page, diagnostic)
+  t.after(() => requestDiagnostic.dispose())
   diagnostic.stage('open')
   await f.page.goto(f.origin + '/native-docx/?fileId=' + f.opened.file.fileId)
   const editor = f.page.locator('.tiptap.doc-page[contenteditable="true"]')
@@ -151,6 +153,7 @@ test('editing during a delayed native save keeps the newer draft dirty and saves
     if (!first) return route.continue()
     first = false
     firstRequest = route.request()
+    requestDiagnostic.watch(firstRequest)
     diagnostic.count('route-entered')
     try {
       diagnostic.count('fetch-started')

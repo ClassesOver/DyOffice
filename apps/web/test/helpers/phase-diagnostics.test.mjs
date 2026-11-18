@@ -50,3 +50,42 @@ test('each post-release wait has a distinct synchronous timeout marker',()=>{
   assert.equal(JSON.parse(lines[0].slice('browser-phase '.length)).stage,stage)
  }
 })
+
+// EventEmitter models only Playwright's public request event boundary; the real
+// observer and sanitizing reporter are exercised, not a mock diagnostic sink.
+import { EventEmitter } from 'node:events'
+import * as diagnostics from './phase-diagnostics.mjs'
+test('first request lifecycle is exact identity, fixed output and disposed',()=>{
+ const page=new EventEmitter(),lines=[],controller=new AbortController()
+ const d=phaseDiagnostics(controller.signal,line=>lines.push(line))
+ assert.equal(typeof diagnostics.observeFirstRequest,'function')
+ const observer=diagnostics.observeFirstRequest(page,d)
+ const secret='secret-token-document-body'
+ const first={failure:()=>({errorText:secret}),url(){throw new Error('must not inspect URL')}}
+ const other={failure(){throw new Error('must not inspect other request')}}
+ page.emit('requestfinished',undefined)
+ observer.watch(first);observer.watch(other)
+ page.emit('requestfinished',other);page.emit('requestfailed',other)
+ page.emit('requestfinished',first);page.emit('requestfailed',first)
+ observer.dispose();page.emit('requestfinished',first)
+ controller.abort()
+ assert.deepEqual(JSON.parse(lines[0].slice(14)).counts,{'first-request-finished':1,'first-request-failed':1,'first-failure-other':1})
+ assert.equal(lines[0].includes(secret),false)
+ assert.equal(page.listenerCount('requestfinished'),0)
+ assert.equal(page.listenerCount('requestfailed'),0)
+})
+test('failure categories never stringify unknown values or throw into browser events',()=>{
+ for(const [failure,key] of [
+  [()=>({errorText:'net::ERR_ABORTED'}),'first-failure-aborted'],
+  [()=>({errorText:{toString(){throw new Error('secret')}}}),'first-failure-unavailable'],
+  [()=>null,'first-failure-unavailable'],
+  [()=>{throw new Error('secret')},'first-failure-unavailable'],
+ ]){
+  const page=new EventEmitter(),lines=[],d=phaseDiagnostics(new AbortController().signal,line=>lines.push(line))
+  assert.equal(typeof diagnostics.observeFirstRequest,'function')
+  const observer=diagnostics.observeFirstRequest(page,d),request={failure}
+  observer.watch(request);assert.doesNotThrow(()=>page.emit('requestfailed',request));d.report();observer.dispose()
+  assert.deepEqual(JSON.parse(lines[0].slice(14)).counts,{'first-request-failed':1,[key]:1})
+  assert.equal(lines[0].includes('secret'),false)
+ }
+})
