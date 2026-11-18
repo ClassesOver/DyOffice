@@ -1,3 +1,4 @@
+import {expectManagementLayout} from '../helpers/management-layout.mjs'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import {fileURLToPath} from 'node:url'
@@ -42,6 +43,7 @@ test('administrator UI creates activates resets and manages roles with authorita
  const readAction=async p=>{const field=panel(p).getByLabel('一次性码',{exact:true});await expect(field).toBeVisible();const code=await field.inputValue();assert.equal(code.length,43);await panel(p).getByRole('button',{name:'已记录，隐藏',exact:true}).click();await expect(field).toHaveCount(0);return code}
  const me=token=>app.inject({url:'/api/v1/auth/me',headers:{cookie:'__Host-dyoffice-session='+token}})
  await owner.goto(origin);await login(owner,'owner');await owner.locator('.home input[type="search"]').fill('retained administrator search');await openAdmin(owner)
+ await expectManagementLayout(owner,panel(owner),'成员与权限','成员')
  // Last admin removal must be visibly rejected, not a successful local state change.
  await row(owner,'owner').getByRole('button',{name:'编辑角色',exact:true}).click()
  await panel(owner).getByLabel('配置管理员',{exact:true}).uncheck()

@@ -327,3 +327,11 @@ test.each(['dialog','page'] as const)('a failed initial source list is announced
  expect(host.querySelector('.source-item')?.textContent).toContain('营业收入')
  expect(writes).toBe(0)
 })
+
+test('B source surface exposes the selected connection without changing its actions', async () => {
+ const {host} = await mount(async path => read(path))
+ expect(host.querySelector('.sources-panel-b')).not.toBeNull()
+ expect(host.querySelector('.source-item[aria-pressed="true"]')).not.toBeNull()
+ expect(host.querySelector('.source-item[aria-pressed="true"]')?.textContent).toContain(initial().source.name)
+ expect(button('保存草稿')).toBeDefined()
+})

@@ -16,6 +16,7 @@ export const it = {
   appPhPromptBody: 'Fai clic per aggiungere del testo',
   appStatusOpened: '{name} aperto ({count} diapositive)',
   appStatusNewBlank: 'Presentazione vuota creata',
+  appEditCommitPending: "Una modifica è ancora in corso. Riprova tra poco.",
   appStatusSaved: 'Salvato',
   appStatusSaveFailed: 'Salvataggio non riuscito: {error}',
   appErrorCanceled: 'Annullato',

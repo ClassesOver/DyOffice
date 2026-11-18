@@ -16,6 +16,7 @@ export const cs = {
   appPhPromptBody: 'Klikněte a přidejte text',
   appStatusOpened: 'Otevřeno {name} ({count} snímků)',
   appStatusNewBlank: 'Vytvořena prázdná prezentace',
+  appEditCommitPending: "Úprava se ještě používá. Zkuste to za chvíli znovu.",
   appStatusSaved: 'Uloženo',
   appStatusSaveFailed: 'Uložení se nezdařilo: {error}',
   appErrorCanceled: 'Zrušeno',

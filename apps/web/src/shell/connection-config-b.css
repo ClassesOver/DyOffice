@@ -1,0 +1,78 @@
+/* B surface finishing layer. Scope only to connections and global configuration. */
+section.sources-panel-b .source-editor,
+section.global-settings-b .global-settings-editor { min-width: 0; }
+section.sources-panel-b .source-list .source-item[aria-pressed='true'] {
+  border-color: var(--accent);
+  background: var(--surface);
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+section.sources-panel-b .source-item[aria-pressed='true'] strong { color: var(--accent); }
+section.sources-panel-b .source-item strong,
+section.global-settings-b .global-settings-entry strong { overflow-wrap: anywhere; }
+section.sources-panel-b .source-item span { white-space: normal; font-size: 12px; line-height: 1.6; color: var(--text-secondary); }
+section.sources-panel-b .source-workbench-heading h3 { font-size: 18px; line-height: 1.5; letter-spacing: -.2px; }
+section.sources-panel-b .source-version-badge {
+  color: var(--accent);
+  background: var(--accent-soft);
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  padding: 6px 10px;
+  font-size: 12px;
+}
+section.sources-panel-b .source-fields { gap: 16px; }
+section.sources-panel-b .source-advanced {
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+  background: var(--surface-subtle);
+  padding: 14px 16px;
+}
+section.sources-panel-b .source-advanced summary { cursor: pointer; color: var(--text-primary); font-weight: 600; }
+section.sources-panel-b .source-actions {
+  border-top: 1px solid var(--border-subtle);
+  padding-top: 16px;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+section.sources-panel-b .source-results {
+  border: 1px solid var(--border-subtle);
+  border-radius: 12px;
+  padding: 16px;
+  background: var(--surface);
+  min-width: 0;
+  overflow-x: auto;
+}
+section.global-settings-b .global-settings-overview {
+  background: var(--accent-soft);
+  border: 1px solid var(--border-subtle);
+  border-radius: 12px;
+  padding: 18px 20px;
+}
+section.global-settings-b .global-settings-overview strong { color: var(--accent); font-size: 20px; line-height: 1.4; }
+section.global-settings-b .global-settings-toolbar { gap: 8px; flex-wrap: wrap; padding-block: 4px 12px; }
+section.global-settings-b .global-settings-latest {
+  border: 1px solid var(--border-subtle);
+  background: var(--surface-subtle);
+  border-radius: 10px;
+  padding: 14px 16px;
+}
+section.global-settings-b .global-settings-latest summary { cursor: pointer; font-weight: 600; }
+section.global-settings-b .global-settings-entry-danger {
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+  padding: 16px;
+  background: var(--surface-subtle);
+  gap: 12px;
+}
+section.sources-panel-b .source-advanced summary:focus-visible,
+section.sources-panel-b .source-item:focus-visible,
+section.global-settings-b .global-settings-latest summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+@media (max-width: 760px) {
+  section.sources-panel-b .source-workbench-heading { flex-wrap: wrap; gap: 10px; }
+  section.sources-panel-b .source-results { padding: 12px; }
+  section.global-settings-b .global-settings-overview { padding: 16px; gap: 16px; }
+  section.global-settings-b .global-settings-toolbar { gap: 8px; }
+  section.global-settings-b .global-settings-entry-danger { flex-wrap: wrap; }
+}

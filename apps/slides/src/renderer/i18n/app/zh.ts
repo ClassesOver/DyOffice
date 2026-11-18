@@ -15,6 +15,7 @@ export const zh = {
   appPhPromptBody: '单击此处添加文本',
   appStatusOpened: '已打开 {name}（{count} 页）',
   appStatusNewBlank: '已新建空白演示文稿',
+  appEditCommitPending: "正在提交编辑，请稍后重试。",
   appStatusSaved: '已保存',
   appStatusSaveFailed: '保存失败：{error}',
   appErrorCanceled: '取消',

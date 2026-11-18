@@ -16,6 +16,7 @@ export const zhTW = {
   appPhPromptBody: '按一下此處新增文字',
   appStatusOpened: '已開啟 {name}（{count} 頁）',
   appStatusNewBlank: '已建立空白簡報',
+  appEditCommitPending: "正在套用編輯，請稍後重試。",
   appStatusSaved: '已儲存',
   appStatusSaveFailed: '儲存失敗：{error}',
   appErrorCanceled: '取消',

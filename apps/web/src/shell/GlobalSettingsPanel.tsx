@@ -4,6 +4,7 @@ import {GLOBAL_SETTING_KINDS} from '../../../../packages/web-contracts/src/setti
 import type {AdminGlobalConfig, AdminGlobalEntry, GlobalConfigCheck, GlobalConfigPatch, GlobalEntryUpsert, GlobalSettingKind} from '../../../../packages/web-contracts/src/settings'
 import {GlobalSettingsError, type GlobalSettingsClient} from './global-settings-client'
 import './global-settings.css'
+import './connection-config-b.css'
 import {SettingsListPager} from './SettingsListPager'
 
 const kindLabels: Record<GlobalSettingKind, string> = {chat: '对话', image_generation: '图像生成', image_analysis: '图像分析', video_analysis: '视频分析', web_search: '网页搜索', image_search: '图片搜索', rerank: '重排', http_mcp: 'HTTP MCP'}
@@ -40,6 +41,10 @@ function draftPatch(saved: AdminGlobalConfig | null, drafts: Record<string, Entr
 export function GlobalSettingsPanel({client, onClose, presentation = 'dialog', onCloseGuardChange}: {client: GlobalSettingsClient; onClose: () => void; presentation?: 'dialog' | 'page'; onCloseGuardChange?: (guard: (() => boolean) | null) => void}) {
   const api = useRef(client).current, formId = useId(), modelsId = useId()
   const [saved, setSaved] = useState<AdminGlobalConfig | null>(null)
+  const [serverPage, setServerPage] = useState(0)
+  const serverLastPage = Math.max(0, Math.ceil((saved?.entries.length ?? 0) / 10) - 1)
+  const currentServerPage = Math.min(serverPage, serverLastPage)
+  useEffect(() => {setServerPage(page => Math.min(page, serverLastPage))}, [serverLastPage])
   const [drafts, setDrafts] = useState<Record<string, EntryDraft>>({}), [removed, setRemoved] = useState<string[]>([])
   const [defaults, setDefaults] = useState<DefaultDraft>({}), [clearKeys, setClearKeys] = useState<string[]>([])
   const [selected, setSelected] = useState(''), [filter, setFilter] = useState<GlobalSettingKind | ''>('')
@@ -178,7 +183,7 @@ export function GlobalSettingsPanel({client, onClose, presentation = 'dialog', o
   useEffect(() => {onCloseGuardChange?.(canClose); return () => onCloseGuardChange?.(null)}, [canClose, onCloseGuardChange])
   function close() {if (canClose()) {clearSecrets(); onClose()}}
 
-  return <section className={`set-pane global-settings-panel${presentation === 'page' ? ' global-settings-page' : ''}`} aria-label="全局配置" onKeyDown={event => {if (event.key === 'Escape') {event.stopPropagation(); if (confirmation) setConfirmation(null); else if (presentation === 'dialog') close()}}}>
+  return <section className={`set-pane global-settings-panel global-settings-b${presentation === 'page' ? ' global-settings-page' : ''}`} aria-label="全局配置" onKeyDown={event => {if (event.key === 'Escape') {event.stopPropagation(); if (confirmation) setConfirmation(null); else if (presentation === 'dialog') close()}}}>
     {presentation === 'dialog' && <div className="set-pane-head global-settings-heading"><h3 className="set-pane-title">全局配置</h3><Button autoInsertSpace={false} className="set-close" htmlType="button" aria-label="关闭全局配置" onClick={close}>×</Button></div>}
     <p className="set-field-desc global-settings-intro">统一管理当前部署的服务商、模型和默认选项，配置保存后供所有用户使用。</p>
     <section className="global-settings-overview" aria-label="配置状态摘要">
@@ -247,7 +252,7 @@ export function GlobalSettingsPanel({client, onClose, presentation = 'dialog', o
         return <label className="global-settings-field" key={kind}><span>{kindLabels[kind]}</span><Select aria-label={`默认${kindLabels[kind]}配置`} value={value} disabled={busy} onChange={value => setDefaults(previous => ({...previous, [kind]: value || null}))} options={[{value: '', label: '未指定默认'}, ...available.map(entry => ({value: entry.id, label: entry.label}))]}/></label>
       })}</div></section>
     </form>}
-    {saved && <><details className="global-settings-latest"><summary>查看服务器当前配置（版本 {saved.revision}）</summary><ul>{saved.entries.map(entry => <li key={entry.id}><strong>{entry.label}</strong> · {kindLabels[entry.kind]} · {entry.providerId} · {entry.model || '未指定模型'} · {entry.enabled ? '已启用' : '已停用'} · {entry.hasKey ? '已保存密钥' : '未保存密钥'}<span>{entry.baseUrl}</span></li>)}</ul>{!saved.entries.length && <p>尚无已保存配置。</p>}</details>
+    {saved && <><details className="global-settings-latest"><summary>查看服务器当前配置（版本 {saved.revision}）</summary><ul>{saved.entries.slice(currentServerPage * 10, (currentServerPage + 1) * 10).map(entry => <li key={entry.id}><strong>{entry.label}</strong> · {kindLabels[entry.kind]} · {entry.providerId} · {entry.model || '未指定模型'} · {entry.enabled ? '已启用' : '已停用'} · {entry.hasKey ? '已保存密钥' : '未保存密钥'}<span>{entry.baseUrl}</span></li>)}</ul><SettingsListPager page={currentServerPage} pageSize={10} total={saved.entries.length} onPageChange={setServerPage} label="服务器当前配置" disabled={busy}/>{!saved.entries.length && <p>尚无已保存配置。</p>}</details>
       <section className="global-settings-maintenance" aria-label="密钥维护"><div><h4>密钥维护 <Tag color="warning">管理员操作</Tag></h4><p className="set-field-desc">服务器活动加密密钥更新后，可重新加密已保存的 API 密钥。操作不会保存当前草稿。</p></div><Button autoInsertSpace={false}  htmlType="button" disabled={blocked || !saved.keyStorageAvailable} onClick={() => setConfirmation({kind: 'rotate'})}>轮换加密密钥</Button></section></>}
   </section>
 }

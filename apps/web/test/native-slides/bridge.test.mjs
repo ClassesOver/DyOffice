@@ -245,3 +245,49 @@ test('slides bridge stops mutations once the lease is lost', {timeout: 30000}, a
   assert.equal(saved.ok, false)
   assert.equal(server.appliedOps().length, edits, 'unfenced mutations must never reach the server')
 })
+
+test('download refuses a bridge-dirty deck before React dirty state catches up', async t => {
+  const createSlidesBridge = await bundleBridge(t)
+  const server = createSlidesMockServer({slideCount: 1})
+  const {bridge} = await openBridge(createSlidesBridge, server, t)
+  await bridge.api.openPptx(1280)
+  await bridge.api.editText({slideIndex: 0, sourceId: 'e1-title', paragraphs: [{runs: [{text: 'not yet saved'}]}]})
+  assert.equal(bridge.isDirty(), true)
+  // The renderer has not processed its asynchronous isDirty() notification.
+  await assert.rejects(bridge.prepareDownload({saveAndWait: async () => true, isDirty: () => false}), {code: 'CONFLICT'})
+  assert.equal(server.preparations(), 0)
+  assert.equal(bridge.isDirty(), true)
+  const receipt = await bridge.prepareDownload({saveAndWait: async () => (await bridge.api.save()).ok, isDirty: () => false})
+  assert.equal(receipt.revision, server.file().revision)
+  assert.equal(bridge.isDirty(), false)
+})
+
+test('takeover refuses bridge-dirty edits even before renderer dirty notification', async t => {
+  const createSlidesBridge = await bundleBridge(t)
+  const server = createSlidesMockServer({slideCount: 1})
+  const {bridge} = await openBridge(createSlidesBridge, server, t)
+  await bridge.api.openPptx(1280)
+  await bridge.api.editText({slideIndex: 0, sourceId: 'e1-title', paragraphs: [{runs: [{text: 'keep my unsaved edit'}]}]})
+  let reloads = 0
+  await assert.rejects(bridge.takeover({isDirty: () => false, reload: async () => {reloads++; return true}}), {code: 'CONFLICT'})
+  assert.equal(reloads, 0)
+  assert.equal(bridge.isDirty(), true)
+})
+
+test('download fences a server edit arriving after save acknowledgement but before renderer refresh', async t => {
+  const createSlidesBridge = await bundleBridge(t)
+  const server = createSlidesMockServer({slideCount: 1})
+  const {bridge} = await openBridge(createSlidesBridge, server, t)
+  await bridge.api.openPptx(1280)
+  await bridge.api.editText({slideIndex: 0, sourceId: 'e1-title', paragraphs: [{runs: [{text: 'first edit'}]}]})
+  await assert.rejects(bridge.prepareDownload({
+    isDirty: () => false,
+    async saveAndWait() {
+      assert.equal((await bridge.api.save()).ok, true)
+      await bridge.api.editText({slideIndex: 0, sourceId: 'e1-title', paragraphs: [{runs: [{text: 'late edit'}]}]})
+      return true
+    },
+  }), {code: 'CONFLICT'})
+  assert.equal(server.preparations(), 1)
+  assert.equal(bridge.isDirty(), true)
+})

@@ -1,3 +1,4 @@
+import {expectManagementLayout} from '../helpers/management-layout.mjs'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import {fileURLToPath} from 'node:url'
@@ -91,6 +92,7 @@ test('T12 original Home persists folders stars recents and trash while themes pr
   await account(page, '回收站')
   const trash = page.getByRole('dialog', {name: '回收站', exact: true})
   await expect(trash).toContainText('workspace.docx')
+  await expectManagementLayout(page,trash,'已删除文件','回收站')
   const deleted = files.find(file => file.name === 'workspace.docx')
   const deletedRow = trash.locator(`tr[data-row-key="${deleted.id}"]`)
   await expect(deletedRow).toContainText('workspace.docx')

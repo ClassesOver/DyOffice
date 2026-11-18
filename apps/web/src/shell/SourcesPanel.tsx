@@ -1,6 +1,7 @@
 import {Button, Input, Checkbox, Alert, Table, Select, type InputRef} from 'antd'
 import { useEffect, useRef, useState } from 'react'
 import './workspace-panels.css'
+import './connection-config-b.css'
 import {SettingsListPager} from './SettingsListPager'
 import {offerSourceResultDownload} from './source-result-download'
 import type { SourceDetail, SourceDescriptor, SourceConfig, SourceKind, QuerySnapshot } from '../../../../packages/web-contracts/src/sources.ts'
@@ -100,13 +101,13 @@ export function SourcesPanel({ client, resultsClient, onClose, presentation = 'd
     await select(draft.sourceId); await reloadList()
     if (alive.current) setMessage('草稿已保存，查询仍使用已发布版本。')
   }
-  return <div className={presentation === 'page' ? 'workspace-panel-host' : 'set-overlay'}><section className={presentation === 'page' ? 'workspace-panel workspace-sources-panel' : 'set-dialog source-dialog'} role={presentation === 'page' ? undefined : 'dialog'} aria-modal={presentation === 'page' ? undefined : true} aria-label="数据连接">
+  return <div className={presentation === 'page' ? 'workspace-panel-host' : 'set-overlay'}><section className={presentation === 'page' ? 'workspace-panel workspace-sources-panel sources-panel-b' : 'set-dialog source-dialog sources-panel-b'} role={presentation === 'page' ? undefined : 'dialog'} aria-modal={presentation === 'page' ? undefined : true} aria-label="数据连接">
     {presentation==='dialog'&&<div className="set-header"><h2 className="set-title">数据连接</h2><Button autoInsertSpace={false} disabled={busy} onClick={() => { if (canClose()) onClose() }}>关闭</Button></div>}
     {error && <Alert type="error" showIcon title={error}/> }
     <div className={presentation === 'page' ? 'workspace-panel-body source-body' : 'set-body source-body'}>
       <aside className="source-list" aria-label="连接列表">
         <Button autoInsertSpace={false} disabled={busy || dirty || unknown || unresolvedResult} onClick={() => { setDetail(null); setDraft(empty()); setLatest(null); setResult(null); setConfirmDelete(false) }}>新建数据连接</Button>
-        {items.map(item => <Button autoInsertSpace={false} className="source-item" key={item.sourceId} disabled={busy || dirty || unresolvedResult} onClick={() => { if (!unresolvedResult) void operation(() => select(item.sourceId)) }}>
+        {items.map(item => <Button autoInsertSpace={false} className="source-item" aria-pressed={detail?.source.sourceId === item.sourceId} key={item.sourceId} disabled={busy || dirty || unresolvedResult} onClick={() => { if (!unresolvedResult) void operation(() => select(item.sourceId)) }}>
           <strong>{item.name}</strong><span>{item.kind} · 草稿 v{item.version} · {item.publishedRevision ? `已发布 r${item.publishedRevision}` : '未发布'}</span><span>{item.enabled ? '已启用' : '已禁用'}{item.hasUnpublishedChanges ? ' · 有未发布修改' : ''}</span>
         </Button>)}
         <SettingsListPager page={listPage} pageSize={50} hasPrevious={listPage>0} hasNext={!!cursor} label="数据连接" onPageChange={changeListPage} disabled={busy||dirty||unknown||unresolvedResult}/>

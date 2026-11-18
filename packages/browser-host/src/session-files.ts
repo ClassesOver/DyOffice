@@ -17,6 +17,7 @@ export function createSessionFileHost({ fetchImpl = fetch, editorId = crypto.ran
   const renewals = new Map<string,{context: Context; operation: number; promise: Promise<Lease>}>()
   const retryDelay = Math.max(0,Math.min(1000,Number.isFinite(leaseRetryDelayMs) ? leaseRetryDelayMs : 150))
   const listeners = new Set<() => void>()
+  const committing = new WeakSet<Context>()
   let csrf: string | undefined, disposed = false
   // JSON metadata/preferences are bounded independently of 32MiB document bytes.
   // 1MiB leaves room for ordinary file/capability lists without unbounded json().
@@ -152,6 +153,10 @@ export function createSessionFileHost({ fetchImpl = fetch, editorId = crypto.ran
     return ref
   }
   async function commit(fileId: string, ctx: Context, pending: Pending, authorized:()=>boolean = ()=>true) {
+    // A retry may only start after the previous attempt settles. Otherwise an
+    // older response can clear a newer pending save or regress its revision.
+    if (committing.has(ctx)) throw hostError('UNAVAILABLE','commit already in flight')
+    committing.add(ctx)
     const recovering = ctx.pending === pending
     pending.authorized ??= authorized
     const permitted=()=>pending.authorized!()&&authorized()
@@ -169,7 +174,7 @@ export function createSessionFileHost({ fetchImpl = fetch, editorId = crypto.ran
         if (ctx.status === 'unauthorized' || (error as HostError).code === 'CONFLICT') revokeLease(fileId,ctx)
       } else ctx.status = 'unknown'
       emit(); throw error
-    }
+    } finally { committing.delete(ctx) }
   }
   function commitStaged(input:SaveInput,authorized:()=>boolean = ()=>true){
     const id=uuid(input.fileId),ctx=context(id),staged=ctx.staged.get(input.uploadId)
