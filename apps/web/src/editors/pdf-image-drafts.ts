@@ -4,7 +4,7 @@ import {pdfToView,viewToPdf,type PageGeom} from '../../../pdf/src/renderer/annot
 import type {PdfPendingSnapshot} from './pdf-pending-ops'
 import type {SettingsRequest} from '../../../../packages/browser-host/src/preferences'
 import type {PdfImageBytes} from '../shell/pdf-preview-skill'
-import {getPdfImageDraftCrop,inspectPdfImageDraftBytes,transformPdfImageDraftPixels,validatePdfImageDraftBake,type PdfImageDraftBakeOperation,type TransformPdfImageDraftPixels} from './pdf-image-draft-pixels'
+import {base64ByteSize,getPdfImageDraftCrop,inspectPdfImageDraftBytes,transformPdfImageDraftPixels,validatePdfImageDraftBake,type PdfImageDraftBakeOperation,type TransformPdfImageDraftPixels} from './pdf-image-draft-pixels'
 export type {PdfImageDraftBakeOperation,TransformPdfImageDraftPixels} from './pdf-image-draft-pixels'
 export type PendingImageInsert={page:number;image:PdfImageBytes;anchor_text?:string;placement?:'above'|'below'|'left'|'right';x?:number;y?:number;width?:number;height?:number;layer?:'above_text'|'below_text'}
 export type PdfImageDraftInfo={id:string;page:number;x:number;y:number;width:number;height:number;layer:'above_text'|'below_text';pixelWidth:number;pixelHeight:number;image:PdfImageBytes}
@@ -12,7 +12,7 @@ type Entry=PdfSessionImageDraft
 type Geometry=Pick<PendingImageInsert,'x'|'y'|'width'|'height'|'layer'>
 const MAX_TOTAL=20*1024*1024,MAX_HISTORY=40*1024*1024
 const clone=<T>(value:T):T=>structuredClone(value)
-function bytesSize(image:PdfImageBytes){return image.base64.length/4*3-(image.base64.endsWith('==')?2:image.base64.endsWith('=')?1:0)}
+const bytesSize=(image:PdfImageBytes)=>base64ByteSize(image.base64)
 const payloadSize=(entries:readonly Entry[])=>entries.reduce((total,entry)=>total+bytesSize(entry.info.image),0)
 function memory(entries:readonly Entry[]){const images=new Map<string,number>();for(const entry of entries)for(const image of [entry.info.image,entry.opacityBase])images.set(image.base64,bytesSize(image));return [...images.values()].reduce((sum,n)=>sum+n,0)}
 function validateGeometry(input:Geometry){

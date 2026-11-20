@@ -1,9 +1,9 @@
-import {readOpenDocument} from './document-entry-reader'
+import {editorCapabilityKey,readOpenDocument} from './document-entry-reader'
 import type {createDocumentTabs} from './document-tabs'
 type Request = <T=unknown>(path:string,method?:string,body?:unknown)=>Promise<T>
 /** Only formats with an implemented creation path, never just any editable claim. */
 export function localNewFormats(capabilities:Record<string,string>):string[]{
- return ['docx','xlsx','pptx','pdf'].filter(format=>capabilities[format==='pdf'?'pdfEditor':format]==='editable')
+ return ['docx','xlsx','pptx','pdf'].filter(format=>capabilities[editorCapabilityKey(format)]==='editable')
 }
 type LocalNewDeps={getSessionProof:()=>string|undefined;bindSession:(expectedProof:string)=>Promise<{request:Request}>;open:(id:string,request:Request)=>Promise<void>;changed:()=>void}
 type LocalNewTemplateDeps=LocalNewDeps&{fetchTemplate:()=>Promise<Response>}
@@ -19,7 +19,7 @@ function createLocalNew(format:'xlsx'|'pptx'|'pdf',busyMessage:string,unsupporte
    const proof=deps.getSessionProof()
    if(!proof)throw new Error('登录状态未核验，请重新加载当前工作区。')
    const bound=await deps.bindSession(proof)
-   const capabilityKey=format==='pdf'?'pdfEditor':format
+   const capabilityKey=editorCapabilityKey(format)
    const requireEditable=async()=>{if((await bound.request<Record<string,string>>('/api/v1/capabilities'))[capabilityKey]!=='editable')throw new Error(unsupportedMessage)}
    await requireEditable()
    let endpoint='/api/v1/files/new-pdf'

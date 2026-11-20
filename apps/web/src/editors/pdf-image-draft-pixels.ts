@@ -11,6 +11,8 @@ export type PdfImageDraftBakeOperation=
 export type TransformPdfImageDraftPixels=(image:PdfImageBytes,operation:PdfImageDraftBakeOperation,signal?:AbortSignal)=>Promise<PdfImageBytes>
 const MAX_BYTES=5*1024*1024,MAX_RGBA=32*1024*1024
 function invalid():never{throw Error('图片格式无效或超过大小限制。')}
+/** Decoded byte length of a padded base64 string, without decoding it. */
+export function base64ByteSize(base64:string){return base64.length/4*3-(base64.endsWith('==')?2:base64.endsWith('=')?1:0)}
 function dimensions(width:number,height:number){if(!Number.isSafeInteger(width)||!Number.isSafeInteger(height)||width<1||height<1||width>8192||height>8192||width*height*4>MAX_RGBA)invalid();return {width,height}}
 /** 浏览器分配像素缓冲前，先检查有界的文件头和尺寸。 */
 export function inspectPdfImageDraftBytes(image:PdfImageBytes){

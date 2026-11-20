@@ -301,40 +301,27 @@ export function registerPdfRoutes(
       {type:'object',additionalProperties:false,required:['op','page','image_number'],properties:{...pendingImageTarget,op:{const:'crop_image'},...Object.fromEntries(['left','top','right','bottom'].map(side=>[side,{type:'number',minimum:0,exclusiveMaximum:1}]))}},
       {type:'object',additionalProperties:false,required:['op','page','image_number'],properties:{...pendingImageTarget,op:{const:'remove_image_background'},tolerance:{type:'number',minimum:0,maximum:100}}},
     ]}
+    const textInsertItemSchema={type:'object',additionalProperties:false,required:['page','text'],properties:{
+      page:{type:'integer',minimum:1,maximum:100},text:{type:'string',minLength:1,maxLength:10000},anchor_text:{type:'string',maxLength:2000},placement:{enum:['right','below','above']},
+      x:{type:'number',minimum:-100000,maximum:100000},y:{type:'number',minimum:-100000,maximum:100000},font_size:{type:'number',exclusiveMinimum:0,maximum:1000},max_width:{type:'number',exclusiveMinimum:0,maximum:100000},
+      color:{type:'string',pattern:'^#?[0-9a-fA-F]{6}$'},align:{enum:['left','center','right']},font:{enum:['arial','times','courier']},bold:{type:'boolean'},italic:{type:'boolean'},
+    }}
     const pendingImageSchema={type:'object',additionalProperties:false,required:['page','image'],properties:{page:{type:'integer',minimum:1,maximum:100},image:{$ref:'pdf-image-content#'},anchor_text:{type:'string',maxLength:2000},placement:{enum:['above','below','left','right']},x:{type:'number',minimum:-100000,maximum:100000},y:{type:'number',minimum:-100000,maximum:100000},width:{type:'number',exclusiveMinimum:0,maximum:100000},height:{type:'number',exclusiveMinimum:0,maximum:100000},layer:{enum:['above_text','below_text']}}}
     api.post('/api/v1/files/:id/pdf/image-inserts/query',{
       bodyLimit:8*1024*1024,schema:{params:fileParamsSchema,querystring:emptyQuerySchema,body:{type:'object',additionalProperties:false,required:['revision','operation'],properties:{revision:uuidSchema,operation:pendingImageSchema,rotationDelta:{type:'integer',enum:[0,90,180,270]}}}},
     },async(request,reply)=>withDisconnect(request,reply,signal=>pdf.queryImageInserts(cookies(request).session??'',(request.params as {id:string}).id,request.body as Parameters<PdfService['queryImageInserts']>[2],signal)))
     api.post('/api/v1/files/:id/pdf/draft-inserts/uploads',{
-      bodyLimit:32*1024*1024,schema:{params:fileParamsSchema,querystring:emptyQuerySchema,body:{type:'object',additionalProperties:false,required:['baseRevision','editorId','leaseEpoch','operation'],properties:{...mutationProperties,operation:{type:'object',additionalProperties:false,required:['texts','images'],properties:{texts:{type:'array',minItems:0,maxItems:20,items:{
-          type:'object',additionalProperties:false,required:['page','text'],properties:{
-            page:{type:'integer',minimum:1,maximum:100},text:{type:'string',minLength:1,maxLength:10000},anchor_text:{type:'string',maxLength:2000},placement:{enum:['right','below','above']},
-            x:{type:'number',minimum:-100000,maximum:100000},y:{type:'number',minimum:-100000,maximum:100000},font_size:{type:'number',exclusiveMinimum:0,maximum:1000},max_width:{type:'number',exclusiveMinimum:0,maximum:100000},
-            color:{type:'string',pattern:'^#?[0-9a-fA-F]{6}$'},align:{enum:['left','center','right']},font:{enum:['arial','times','courier']},bold:{type:'boolean'},italic:{type:'boolean'},
-          },
-        }},images:{type:'array',maxItems:20,items:pendingImageSchema},imageEdits:{type:'array',maxItems:20,items:pendingImageEditSchema}}}}}},
+      bodyLimit:32*1024*1024,schema:{params:fileParamsSchema,querystring:emptyQuerySchema,body:{type:'object',additionalProperties:false,required:['baseRevision','editorId','leaseEpoch','operation'],properties:{...mutationProperties,operation:{type:'object',additionalProperties:false,required:['texts','images'],properties:{texts:{type:'array',minItems:0,maxItems:20,items:textInsertItemSchema},images:{type:'array',maxItems:20,items:pendingImageSchema},imageEdits:{type:'array',maxItems:20,items:pendingImageEditSchema}}}}}},
     },async(request,reply)=>withDisconnect(request,reply,signal=>pdf.stageDraftInserts(cookies(request).session??'',(request.params as {id:string}).id,request.body as PdfDraftInsertsUploadInput,signal)))
     api.post('/api/v1/files/:id/pdf/draft-inserts/query',{
-      bodyLimit:32*1024*1024,schema:{params:fileParamsSchema,querystring:emptyQuerySchema,body:{type:'object',additionalProperties:false,required:['revision','operation'],properties:{revision:uuidSchema,operation:{type:'object',additionalProperties:false,required:['texts','images'],properties:{texts:{type:'array',minItems:0,maxItems:20,items:{
-          type:'object',additionalProperties:false,required:['page','text'],properties:{
-            page:{type:'integer',minimum:1,maximum:100},text:{type:'string',minLength:1,maxLength:10000},anchor_text:{type:'string',maxLength:2000},placement:{enum:['right','below','above']},
-            x:{type:'number',minimum:-100000,maximum:100000},y:{type:'number',minimum:-100000,maximum:100000},font_size:{type:'number',exclusiveMinimum:0,maximum:1000},max_width:{type:'number',exclusiveMinimum:0,maximum:100000},
-            color:{type:'string',pattern:'^#?[0-9a-fA-F]{6}$'},align:{enum:['left','center','right']},font:{enum:['arial','times','courier']},bold:{type:'boolean'},italic:{type:'boolean'},
-          },
-        }},images:{type:'array',maxItems:20,items:pendingImageSchema},imageEdits:{type:'array',maxItems:20,items:pendingImageEditSchema}}}}}},
+      bodyLimit:32*1024*1024,schema:{params:fileParamsSchema,querystring:emptyQuerySchema,body:{type:'object',additionalProperties:false,required:['revision','operation'],properties:{revision:uuidSchema,operation:{type:'object',additionalProperties:false,required:['texts','images'],properties:{texts:{type:'array',minItems:0,maxItems:20,items:textInsertItemSchema},images:{type:'array',maxItems:20,items:pendingImageSchema},imageEdits:{type:'array',maxItems:20,items:pendingImageEditSchema}}}}}},
     },async(request,reply)=>withDisconnect(request,reply,signal=>pdf.queryDraftInserts(cookies(request).session??'',(request.params as {id:string}).id,request.body as Parameters<PdfService['queryDraftInserts']>[2],signal)))
 
     api.post('/api/v1/files/:id/pdf/text-inserts/query',{
       bodyLimit:1048576,
       schema:{params:fileParamsSchema,querystring:emptyQuerySchema,body:{
         type:'object',additionalProperties:false,required:['revision','operations'],
-        properties:{revision:uuidSchema,rotationDeltas:{type:'array',minItems:1,maxItems:20,items:{type:'integer',enum:[0,90,180,270]}},operations:{type:'array',minItems:1,maxItems:20,items:{
-          type:'object',additionalProperties:false,required:['page','text'],properties:{
-            page:{type:'integer',minimum:1,maximum:100},text:{type:'string',minLength:1,maxLength:10000},anchor_text:{type:'string',maxLength:2000},placement:{enum:['right','below','above']},
-            x:{type:'number',minimum:-100000,maximum:100000},y:{type:'number',minimum:-100000,maximum:100000},font_size:{type:'number',exclusiveMinimum:0,maximum:1000},max_width:{type:'number',exclusiveMinimum:0,maximum:100000},
-            color:{type:'string',pattern:'^#?[0-9a-fA-F]{6}$'},align:{enum:['left','center','right']},font:{enum:['arial','times','courier']},bold:{type:'boolean'},italic:{type:'boolean'},
-          },
-        }}},
+        properties:{revision:uuidSchema,rotationDeltas:{type:'array',minItems:1,maxItems:20,items:{type:'integer',enum:[0,90,180,270]}},operations:{type:'array',minItems:1,maxItems:20,items:textInsertItemSchema}},
       }},
     },async(request,reply)=>withDisconnect(request,reply,signal=>pdf.queryTextInserts(cookies(request).session??'',(request.params as {id:string}).id,request.body as Parameters<PdfService['queryTextInserts']>[2],signal)))
 
@@ -342,13 +329,7 @@ export function registerPdfRoutes(
       bodyLimit:1048576,
       schema:{params:fileParamsSchema,querystring:emptyQuerySchema,body:{
         type:'object',additionalProperties:false,required:['baseRevision','editorId','leaseEpoch','operations'],
-        properties:{...mutationProperties,operations:{type:'array',minItems:1,maxItems:20,items:{
-          type:'object',additionalProperties:false,required:['page','text'],properties:{
-            page:{type:'integer',minimum:1,maximum:100},text:{type:'string',minLength:1,maxLength:10000},anchor_text:{type:'string',maxLength:2000},placement:{enum:['right','below','above']},
-            x:{type:'number',minimum:-100000,maximum:100000},y:{type:'number',minimum:-100000,maximum:100000},font_size:{type:'number',exclusiveMinimum:0,maximum:1000},max_width:{type:'number',exclusiveMinimum:0,maximum:100000},
-            color:{type:'string',pattern:'^#?[0-9a-fA-F]{6}$'},align:{enum:['left','center','right']},font:{enum:['arial','times','courier']},bold:{type:'boolean'},italic:{type:'boolean'},
-          },
-        }}},
+        properties:{...mutationProperties,operations:{type:'array',minItems:1,maxItems:20,items:textInsertItemSchema}},
       }},
     },async(request,reply)=>withDisconnect(request,reply,signal=>pdf.stageTextInserts(cookies(request).session??'',(request.params as {id:string}).id,request.body as PdfTextInsertsUploadInput,signal)))
 

@@ -432,13 +432,17 @@ function deckFont(state: OpenedPptx): string | undefined {
   }
   return undefined
 }
-function chartColors(state:OpenedPptx,key:string):string[]|undefined{
-  const legacy:Record<string,string[]>={blue:['#2E75B6','#4472C4','#5B9BD5','#70AD47','#ED7D31'],warm:['#ED7D31','#FFC000','#FF0000','#C55A11','#833C00'],cool:['#0070C0','#00B0F0','#00B0A0','#7030A0','#2E75B6'],mono:['#404040','#666666','#888888','#AAAAAA','#CCCCCC']}
-  if(legacy[key])return legacy[key]
+function themeAccents(state:OpenedPptx):string[]{
   const slide=state.deck.slides[0]
   let accents:string[]=[]
   try{const chain=slide&&state.archive.resolveSlideChain(slide.path);const xml=chain?.themePath?state.archive.readText(chain.themePath):null;const colors=xml?parseTheme(xml).colors:undefined;accents=['accent1','accent2','accent3','accent4','accent5','accent6'].map(name=>colors?.[name]).filter((color):color is string=>!!color)}catch{}
-  if(accents.length<3)accents=['#4472C4','#ED7D31','#A5A5A5','#FFC000','#5B9BD5','#70AD47']
+  return accents.length<3?['#4472C4','#ED7D31','#A5A5A5','#FFC000','#5B9BD5','#70AD47']:accents
+}
+/** `accents` lets callers resolving many schemes parse the theme once. */
+function chartColors(state:OpenedPptx,key:string,accents?:string[]):string[]|undefined{
+  const legacy:Record<string,string[]>={blue:['#2E75B6','#4472C4','#5B9BD5','#70AD47','#ED7D31'],warm:['#ED7D31','#FFC000','#FF0000','#C55A11','#833C00'],cool:['#0070C0','#00B0F0','#00B0A0','#7030A0','#2E75B6'],mono:['#404040','#666666','#888888','#AAAAAA','#CCCCCC']}
+  if(legacy[key])return legacy[key]
+  accents??=themeAccents(state)
   if(key==='default')return []
   if(key==='colorful')return accents
   if(key==='colorful2')return [...accents.slice(3),...accents.slice(0,3)]
@@ -826,7 +830,7 @@ export async function createPptxSession(bytes: Uint8Array, signal?: AbortSignal)
       })
     },
     chartColorSchemes(expected,signal) {
-      return enqueue(expected,signal,state=>['default','colorful','colorful2',...chartColors(state,'colorful')!.map((_,i)=>`mono-accent${i+1}`)].map(key=>({key,colors:chartColors(state,key)!})))
+      return enqueue(expected,signal,state=>{const accents=themeAccents(state);return ['default','colorful','colorful2',...accents.map((_,i)=>`mono-accent${i+1}`)].map(key=>({key,colors:chartColors(state,key,accents)!}))})
     },
     animations(expected,slide,signal) {
       return enqueue(expected,signal,state=>{

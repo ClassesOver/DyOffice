@@ -1,8 +1,8 @@
 import type {DrawingInput,MarkupInput,TextInsertInput,ImageEditInput} from '../../../pdf/src/shared/ipc'
 import type {PdfImageDraftInfo} from './pdf-image-drafts'
-import {inspectPdfImageDraftBytes} from './pdf-image-draft-pixels'
+import {base64ByteSize,inspectPdfImageDraftBytes} from './pdf-image-draft-pixels'
 import type {PdfImageBytes,PdfTextInsert,PdfTextDraftInfo} from '../shell/pdf-preview-skill'
-import {createEmptyPdfPendingSnapshot,planPdfPendingOps,type PdfPendingContext,type PdfPendingSnapshot} from './pdf-pending-ops'
+import {createEmptyPdfPendingSnapshot,freeze,planPdfPendingOps,type PdfPendingContext,type PdfPendingSnapshot} from './pdf-pending-ops'
 
 export type PdfPendingToken=Pick<PdfPendingSnapshot,'fileId'|'baseRevision'|'generation'>
 export interface PdfPreparedAnnotations {
@@ -16,9 +16,8 @@ const MAX_IMAGE_BYTES=20*1024*1024,MAX_IMAGE_HISTORY=40*1024*1024
 function imageMemory(entries:readonly HistoryEntry[]){
  const images=new Set<string>()
  for(const entry of entries){for(const edit of entry.snapshot.imageEdits)if('image'in edit.input)images.add(edit.input.image);for(const edit of entry.snapshot.savedImageEdits??[])if(edit.op==='replace_image')images.add(edit.image.base64);for(const draft of entry.images){images.add(draft.info.image.base64);images.add(draft.opacityBase.base64)}}
- let bytes=0;for(const base64 of images)bytes+=base64.length/4*3-(base64.endsWith('==')?2:base64.endsWith('=')?1:0);return bytes
+ let bytes=0;for(const base64 of images)bytes+=base64ByteSize(base64);return bytes
 }
-function freeze<T>(value:T):T{if(value&&typeof value==='object'){for(const child of Object.values(value))freeze(child);Object.freeze(value)}return value}
 
 /** One history owner for canonical PDF batches; all changes stay local until Save. */
 export function createPdfPendingSession({getContext,onChange}:{getContext:()=>Omit<PdfPendingContext,'generation'|'dryRun'>;onChange:()=>void}){
@@ -64,7 +63,7 @@ export function createPdfPendingSession({getContext,onChange}:{getContext:()=>Om
    }
    const next=freeze({...current,generation:current.generation+1,imageEdits:[...saved,...native.map((input,i)=>({id:nextImages[i]!.info.id,input}))]})
    if(next.imageEdits.length+next.markups.length+next.notes.length+next.textInserts.length+next.formFields.length+Object.keys(next.formEdits).length>250)invalid()
-   const payloadBytes=next.imageEdits.reduce((sum,e)=>{if(!('image'in e.input))return sum;const base64=e.input.image;return sum+base64.length/4*3-(base64.endsWith('==')?2:base64.endsWith('=')?1:0)},0)
+   const payloadBytes=next.imageEdits.reduce((sum,e)=>{if(!('image'in e.input))return sum;return sum+base64ByteSize(e.input.image)},0)
    if(payloadBytes>MAX_IMAGE_BYTES||imageMemory([{snapshot:next,texts,images:nextImages}])>MAX_IMAGE_BYTES)throw Error('待保存图片压缩大小合计不能超过 20 MiB。')
    push();images=freeze(nextImages);current=next;onChange()
   },

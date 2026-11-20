@@ -1,14 +1,12 @@
 import {preservePdfManagedStamps} from './stamps-job.mjs'
 import {createHash} from 'node:crypto'
-import {createRequire} from 'node:module'
-import {dirname,join,sep} from 'node:path'
 import {openEditablePdf} from './editable-document.mjs'
-import {PDF_OPEN_OPTIONS} from '../../../src/editors/pdf-csp.ts'
+import {pdfjsDocumentParams} from './pdfjs-open.mjs'
 import {groupPageBlocks} from '../../../../pdf/src/renderer/text-block.ts'
 import {joinBlockLines} from '../../../../pdf/src/renderer/text-wrap.ts'
 import {viewToPdf} from '../../../../pdf/src/renderer/annotations.ts'
 import {indexPdfBlockPage} from './block-edits-job.mjs'
-const require=createRequire(import.meta.url),MAX_BYTES=64*1024*1024
+const MAX_BYTES=64*1024*1024
 const hash=bytes=>createHash('sha256').update(bytes).digest('hex')
 function fail(code){throw Object.assign(new Error(code),{code})}
 function check(signal){if(signal?.aborted)fail('ABORTED')}
@@ -34,8 +32,8 @@ export function parsePdfBlockMovesRequest(raw){
  return validatePdfBlockMoveOperations(request.operations)
 }
 export async function planPdfBlockMoves(bytes,operations,signal){
- const {validateTextEdits,verifyTextBlockMoves}=await import('../../../../pdf/src/main/text-edit.ts'),{getDocument}=await import('pdfjs-dist/legacy/build/pdf.mjs'),root=dirname(require.resolve('pdfjs-dist/package.json'))
- const task=getDocument({data:Uint8Array.from(bytes),...PDF_OPEN_OPTIONS,cMapUrl:join(root,'cmaps')+sep,cMapPacked:true,standardFontDataUrl:join(root,'standard_fonts')+sep})
+ const {validateTextEdits,verifyTextBlockMoves}=await import('../../../../pdf/src/main/text-edit.ts'),{getDocument}=await import('pdfjs-dist/legacy/build/pdf.mjs')
+ const task=getDocument(pdfjsDocumentParams(bytes))
  try{
   const doc=await task.promise,pages=new Map(),targets=[],claimed=new Set();check(signal)
   for(const op of operations){

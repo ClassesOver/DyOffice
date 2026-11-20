@@ -1,14 +1,12 @@
 import {preservePdfManagedStamps} from './stamps-job.mjs'
 import {createHash} from 'node:crypto'
-import {createRequire} from 'node:module'
-import {dirname,join,sep} from 'node:path'
 import fontkit from '@pdf-lib/fontkit'
 import {openPdfForInserts,assertPdfInsertFormPreserved} from './insert-form-integrity.mjs'
-import {PDF_OPEN_OPTIONS} from '../../../src/editors/pdf-csp.ts'
+import {pdfjsDocumentParams} from './pdfjs-open.mjs'
 import {viewToPdf,pdfRectToCss,geomDispSize} from '../../../../pdf/src/renderer/annotations.ts'
 import {wrapTextMeasured} from '../../../../pdf/src/renderer/text-wrap.ts'
 import {foldCase} from '../../../../../packages/ui/src/find-text.ts'
-const require=createRequire(import.meta.url),MAX_BYTES=64*1024*1024
+const MAX_BYTES=64*1024*1024
 const hash=bytes=>createHash('sha256').update(bytes).digest('hex')
 const keys=['page','text','anchor_text','placement','x','y','font_size','color','max_width','align','font','bold','italic']
 function fail(code){throw Object.assign(new Error(code),{code})}
@@ -68,8 +66,8 @@ async function planPdfTextInsertDetails(bytes,operations,signal,rotationDeltas){
   const face=fontkit.create(resolved.bytes)
   faces.set(key,face);check(signal)
  }
- const {getDocument}=await import('pdfjs-dist/legacy/build/pdf.mjs'),root=dirname(require.resolve('pdfjs-dist/package.json'))
- const task=getDocument({data:Uint8Array.from(bytes),...PDF_OPEN_OPTIONS,cMapUrl:join(root,'cmaps')+sep,cMapPacked:true,standardFontDataUrl:join(root,'standard_fonts')+sep})
+ const {getDocument}=await import('pdfjs-dist/legacy/build/pdf.mjs')
+ const task=getDocument(pdfjsDocumentParams(bytes))
  try{
   const doc=await task.promise,result=[],blocks=[],pages=new Map();check(signal)
   for(const [index,op] of operations.entries()){
