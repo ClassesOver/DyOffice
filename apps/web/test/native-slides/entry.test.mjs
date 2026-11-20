@@ -18,7 +18,7 @@ export function App({host} = {}) {
   const [count, setCount] = useState(null)
   useEffect(() => {
     const api = window.slidesApi
-    window.__slidesEntryProbe = {api, openedResults: [], saves: 0, readOnly: host?.readOnly === true}
+    window.__slidesEntryProbe = {api, openedResults: [], saves: 0, readOnly: host?.readOnly === true, assistantMediaCapabilities: host?.assistant?.mediaCapabilities}
     api.onOpened(result => { window.__slidesEntryProbe.openedResults.push(result) })
     let handle
     handle = {
@@ -27,6 +27,7 @@ export function App({host} = {}) {
         return (await api.save()).ok
       },
       isDirty() { return !!window.__slidesEntryProbe.dirty },
+      canContinueAssistant() { return !window.__slidesEntryProbe.dirty && !window.__slidesEntryProbe.editing },
       async reload() {
         const r = await api.openPptx(1280)
         if (!r) return false
@@ -44,12 +45,35 @@ export function App({host} = {}) {
   if (window.__slidesEntryProbe) {
     if(window.__slidesEntryProbe.markReadOnlyDirty && host?.readOnly && !window.__slidesEntryProbe.readOnly)window.__slidesEntryProbe.dirty=true
     window.__slidesEntryProbe.readOnly = host?.readOnly === true
+    window.__slidesEntryProbe.assistantMediaCapabilities = host?.assistant?.mediaCapabilities
   }
-  return <div className="app-shell" data-slides-app="mounted">{count === null ? 'opening' : count + ' slides'}</div>
+  return <div className="app-shell"><span data-slides-app="mounted">{count === null ? 'opening' : count + ' slides'}</span>{host?.saveDownload}</div>
 }
 `
 
 const STUB_NOOP = 'export function installCanvasKerning(): void {}\n'
+const STUB_ASSISTANT = `
+export async function createEditorAssistant(options) {
+  window.__slidesContinuationRevision=options?.continuationRevision
+  return {
+    available: true,
+    workspace: {conversation: children => children},
+    documents:{register(target){window.__analysisTarget=target;return ()=>{window.__analysisTarget=null}}},
+    mediaCapabilities: {imageGeneration: true, mediaAnalysis: true},
+    api: {
+      pickAttachments: async () => ({accepted: [{path: 'web-attachment:test'}], rejected: []}),
+      getPathForFile: () => 'web-attachment:test',
+      addAttachmentPaths: async paths => ({accepted: paths.map(path => ({path})), rejected: []}),
+      addPastedImage: async () => ({accepted: [], rejected: []}),
+      readAttachment: async () => ({ok: true, text: 'attachment text'}),
+      readAttachmentImage: async () => ({ok: true, base64: 'aGVsbG8=', mime: 'image/png'}),
+      skillsList: async () => [{name: 'weekly-report', description: 'Create weekly Office reports', relevance: {relevant: true}}],
+      skillText: async name => name === 'weekly-report' ? '# Weekly report instructions' : Promise.reject(new Error('Skill unavailable')),
+    },
+    dispose() {},
+  }
+}
+`
 
 /** Bundles slides-entry.tsx with the heavy slides renderer App replaced by a probe stub. */
 async function bundleEntry(t) {
@@ -60,12 +84,15 @@ async function bundleEntry(t) {
   const here = fileURLToPath(new URL('.', import.meta.url))
   const stub = join(here, '.entry-stub-app.jsx')
   const noop = join(here, '.entry-stub-kerning.ts')
+  const assistantStub = join(here, '.entry-stub-assistant.ts')
   await writeFile(stub, STUB_APP)
   await writeFile(noop, STUB_NOOP)
-  t.after(() => rm(stub, {force: true}).catch(() => {}).then(() => rm(noop, {force: true}).catch(() => {})))
+  await writeFile(assistantStub, STUB_ASSISTANT)
+  t.after(() => rm(stub, {force: true}).catch(() => {}).then(() => rm(noop, {force: true}).catch(() => {})).then(() => rm(assistantStub, {force: true}).catch(() => {})))
   const redirects = new Map([
     ['../../../slides/src/renderer/App', stub],
     ['../../../slides/src/renderer/canvas-kerning', noop],
+    ['./assistant', assistantStub],
   ])
   const redirect = {
     name: 'slides-entry-stub',
@@ -83,6 +110,28 @@ async function bundleEntry(t) {
   })
   return import(pathToFileURL(outfile).href)
 }
+
+test('slides entry installs the Web attachment API for GenOffice AI tools and restores it on close', {timeout: 60000}, async t => {
+  const server = createSlidesMockServer({slideCount: 1})
+  const dom = installDom(t)
+  globalThis.fetch = server.fetchImpl
+  const host = createSessionFileHost({fetchImpl: server.fetchImpl})
+  t.after(() => host.dispose())
+  const {mountSlidesEditor} = await bundleEntry(t)
+  const mounted = await mountSlidesEditor(host, dom.window.document.getElementById('mount'), server.file().fileId)
+  await until(() => typeof dom.window.desktop?.pickAttachments === 'function', 'Web attachment API')
+  assert.deepEqual(await dom.window.desktop.pickAttachments(), {accepted: [{path: 'web-attachment:test'}], rejected: []})
+  assert.deepEqual(await dom.window.desktop.readAttachmentImage('web-attachment:test'), {ok: true, base64: 'aGVsbG8=', mime: 'image/png'})
+  await until(() => dom.window.__slidesEntryProbe?.assistantMediaCapabilities, 'SaaS media capabilities')
+  assert.deepEqual(dom.window.__slidesEntryProbe.assistantMediaCapabilities, {imageGeneration: true, mediaAnalysis: true})
+  assert.deepEqual(await dom.window.slidesApi.skillsList(), [{name: 'weekly-report', description: 'Create weekly Office reports', relevant: true}])
+  assert.equal(await dom.window.slidesApi.skillText('weekly-report'), '# Weekly report instructions')
+  assert.equal(dom.window.__analysisTarget.format,'pptx')
+  assert.equal(dom.window.__analysisTarget.fileId,server.file().fileId)
+  mounted.unload()
+  assert.equal(dom.window.__analysisTarget,null)
+  assert.equal(dom.window.desktop, undefined)
+})
 
 function installDom(t) {
   const dom = new JSDOM('<!DOCTYPE html><html><body><div id="mount"></div><div id="root"></div></body></html>', {pretendToBeVisual: true, url: 'https://slides.example/native-pptx/?fileId='})
@@ -119,8 +168,8 @@ async function until(condition, label, timeoutMs = 8000) {
   }
 }
 
-const statusText = container => [...container.querySelectorAll('.dyoffice-slides-state,.document-notification')].map(node=>node.textContent).join(' ')
-// The entry's bridge is private; recovery state is observable through the status bar.
+const statusText = container => [...container.querySelectorAll('.document-notification')].map(node=>node.textContent).join(' ')
+// The entry's bridge is private; recovery state is observable through document notifications.
 const bridgeProbe = () => 'n/a'
 
 test('slides entry mounts the renderer, saves and downloads through the confirmed receipt', {timeout: 60000}, async t => {
@@ -139,7 +188,13 @@ test('slides entry mounts the renderer, saves and downloads through the confirme
   t.after(() => mounted.unload())
 
   await until(() => container.querySelector('[data-slides-app]')?.textContent === '2 slides', 'renderer App boot')
-  await until(() => statusText(container).includes('Editing'), 'editing status')
+  await until(() => typeof window.__slidesContinuationRevision === 'function', 'assistant authority loaded')
+  const cleanRevision=window.__slidesContinuationRevision
+  assert.equal(cleanRevision(), server.file().revision)
+  window.__slidesEntryProbe.editing=true
+  assert.equal(cleanRevision(), undefined, 'a pending editor draft fences recovery')
+  window.__slidesEntryProbe.editing=false
+  assert.equal(container.querySelector('.dyoffice-slides-state'), null, 'no separate editor status bar')
   const saveButton = () => container.querySelector('.dyoffice-slides-download')
   await until(() => saveButton()?.disabled === false, 'save button enabled')
   assert.equal(downloads.length, 0)
@@ -153,12 +208,14 @@ test('slides entry mounts the renderer, saves and downloads through the confirme
 
   // A dirty deck runs the renderer save cycle first, then downloads the new receipt.
   await globalThis.window.__slidesEntryProbe.api.editText({slideIndex: 0, sourceId: 'e1-title', paragraphs: [{runs: [{text: 'entry edit'}]}]})
+  assert.equal(cleanRevision(), undefined, 'unsaved bridge changes fence recovery')
   saveButton().click()
   await until(() => downloads.length === 2, 'saved download')
   assert.notEqual(downloads[1], downloads[0])
   assert.equal(server.preparations(), 1)
   assert.equal(window.__slidesEntryProbe.saves, 2, 'the dirty download ran one renderer save cycle')
-  await until(() => statusText(container).includes('Editing'), 'back to editing after download')
+  await until(() => saveButton()?.disabled === false, 'download available again')
+  assert.equal(cleanRevision(), server.file().revision, 'the confirmed revision is usable after save')
 })
 
 test('slides entry surfaces an unknown commit receipt and confirms it without re-exporting', {timeout: 60000}, async t => {
@@ -194,7 +251,7 @@ test('slides entry surfaces an unknown commit receipt and confirms it without re
   confirm().click()
   await until(() => downloads.length === 1, 'confirmed download')
   assert.equal(server.preparations(), 1, 'confirmation reconciles the staged commit without a second export')
-  await until(() => statusText(container).includes('Editing'), 'back to editing after confirmation')
+  await until(() => !container.querySelector('[data-save-fence-allow="confirm"]'), 'confirmation cleared')
   assert.match(server.file().revision, /^[0-9a-f-]{36}$/)
 })
 
@@ -216,12 +273,12 @@ test('slides entry is read only without the lease and takes over editing explici
   const takeover = () => container.querySelector('.dyoffice-slides-takeover')
   await until(() => takeover() !== null && takeover().disabled === false, 'takeover button')
   const save = () => container.querySelector('.dyoffice-slides-download')
-  assert.equal(save().disabled, true, 'no save authority while read only')
-  assert.ok(container.querySelector('.dyoffice-slides-state a[href*="content?revision="]'), 'read-only download link to the opened revision')
+  assert.equal(save(), null, 'no save action without an authorized editor')
+  assert.ok(container.querySelector('.document-notification a[href*="content?revision="]'), 'read-only download link to the opened revision')
 
   server.grantLeaseTo('first-editor')
   takeover().click()
-  await until(() => statusText(container).includes('Editing'), 'editing after takeover')
+  await until(() => save()?.disabled === false, 'download enabled after takeover')
   assert.equal(statusText(container).includes('Read only'), false)
   assert.equal(window.__slidesEntryProbe.openedResults.length, 0, 'first authorized mount boots once rather than reusing an unowned draft')
   assert.equal(container.querySelector('[data-slides-app]')?.textContent, '2 slides')
@@ -289,4 +346,22 @@ test('lease release during clean disposal does not push an artificial read-only 
  assert.equal(await mounted.canClose(),true)
  assert.equal(await mounted.dispose(),true)
  assert.equal(container.querySelector('[data-slides-app]'),null)
+})
+
+test('slides readiness is published only after slide content replaces the opening screen', {timeout:60000}, async t => {
+  const server=createSlidesMockServer({slideCount:2}),dom=installDom(t)
+  globalThis.fetch=server.fetchImpl
+  const host=createSessionFileHost({fetchImpl:server.fetchImpl})
+  t.after(()=>host.dispose())
+  const {mountSlidesEditor}=await bundleEntry(t)
+  const container=dom.window.document.getElementById('mount'),readyContent=[]
+  const observer=new dom.window.MutationObserver(()=>{
+    if(dom.window.document.documentElement.dataset.documentLoading==='ready')readyContent.push(container.querySelector('[data-slides-app]')?.textContent)
+  })
+  observer.observe(dom.window.document.documentElement,{attributes:true,attributeFilter:['data-document-loading']})
+  t.after(()=>observer.disconnect())
+  const mounted=await mountSlidesEditor(host,container,server.file().fileId)
+  t.after(()=>mounted.unload())
+  await until(()=>readyContent.length>0,'committed ready state')
+  assert.deepEqual(readyContent,['2 slides'])
 })

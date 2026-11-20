@@ -26,7 +26,6 @@ test('trusted presentation and attachment download fence real session changes, o
  const artifacts=createHarnessArtifacts({transactions:f.transactions,objects:await createLocalObjectStore({directory})})
  const sources=createSourceService({transactions:f.transactions,credentialKeys:'test:'+randomBytes(32).toString('base64')}),results=createWorkspaceSourceResults({transactions:f.transactions}),tools=createWorkspaceSourceTools({sources,results})
  await sources.create(f.alice.token,{sourceId:'metrics',name:'Metrics',kind:'http',config:{timezone:'UTC'},secret:'https://fixture.invalid/never-contacted'})
- await sources.publish(f.alice.token,'metrics',{expectedVersion:1})
  const frozen=await results.capture(f.alice.token,createQuerySnapshot({sourceId:'metrics',sourceVersion:1,timezone:'Asia/Shanghai',schema:[{name:'n',type:'number',unit:'CNY'}],rows:[{n:1}],sourceTruncated:true}),hash('query'))
  const access=createHarnessDataAccess({tools,results,sessions:f.sessions,artifacts});t.after(()=>access.dispose())
  const grant=await access.issue({token:f.alice.token,agentId:'fixture',inputs:{sourceIds:[],resultIds:[frozen.resultId]},signal:new AbortController().signal})
@@ -45,6 +44,15 @@ test('trusted presentation and attachment download fence real session changes, o
  await client.observe(hint,agent);assert.equal(client.snapshot()[0].receipt.summary,'Untrusted conclusion');assert.equal(client.snapshot()[0].receipt.inputs[0].truncated,true)
  assert.equal(client.snapshot()[0].receipt.inputs[0].timezone,'Asia/Shanghai');assert.equal(client.snapshot()[0].receipt.inputs[0].schema[0].unit,'CNY')
  const downloaded=await client.download(receipt.commandId,file.artifactId);assert.deepEqual(Buffer.from(downloaded.bytes),bytes)
+ const recovered=createAnalysisDeliveryClient({request:bound.request,csrfToken:bound.proof,fetchImpl:send});t.after(()=>recovered.dispose())
+ await recovered.restore()
+ assert.deepEqual(recovered.snapshot(),[{receipt}])
+ const history='/api/v1/agents/deliveries'
+ assert.equal((await send(history)).status,403)
+ token=f.bob.token
+ const bobBound=await createLocalShellClient(send).bindSession()
+ assert.deepEqual(await bobBound.request(history),{deliveries:[]})
+ await recovered.restore();assert.deepEqual(recovered.snapshot(),[])
  token=f.bob.token;await assert.rejects(client.download(receipt.commandId,file.artifactId));assert.equal(client.snapshot().length,0)
  const sameOwner=await f.sessions.login('alice',password);token=sameOwner.token
  await client.observe(hint,agent);assert.equal(client.snapshot().length,0,'Old proof cannot read even a replacement login for the same owner')

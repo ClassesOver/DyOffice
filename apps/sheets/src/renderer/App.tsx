@@ -1,3 +1,4 @@
+import {bindDocumentHandoff} from '@genoffice/agent-core'
 import {createAnalysisSaveConsent} from '../../../../packages/browser-host/src/analysis-save-consent'
 import {captureSheetAnalysis} from './analysis-insert'
 import {journalFingerprint} from './edit-journal'
@@ -156,6 +157,9 @@ import {
   composeSkills,
   withAttachedSkills,
   type AgentImage,
+  type AgentToolResult,
+  type FileChatTurn,
+  type HarnessCheckpoint,
 } from '@genoffice/agent-core'
 import { imageGenerationAvailable, type AiSettings } from '@genoffice/ai-provider/browser'
 import { type WorkbookOperation } from '@genoffice/xlsx-gateway/domain/workbook-dsl'
@@ -179,7 +183,7 @@ import type { SheetRedactionState } from '@genoffice/xlsx-gateway/gateway/xlsx-r
 import { statesOnScreen } from './redact-marks-shift'
 import { installLazyFindBridge } from './lazy-find'
 import { startFullLoad } from './full-load'
-import { autoFullLoadsAtOpen, opensInFormulaMode, workbookCellCounts } from './load-budget'
+import { autoFullLoadsAtOpen, fitsFullLoad, opensInFormulaMode, workbookCellCounts } from './load-budget'
 import { installReplaceAutoSearch } from './replace-autosearch'
 import { FindReplacePanel } from './FindReplacePanel'
 import { SpellingDialog } from './SpellingDialog'
@@ -219,6 +223,7 @@ import {
 import { isSelectionDrag, type Point, type SelectionAskAnchor } from './ai/selection-ask'
 import { createAiDocument } from './ai/create-document'
 import { createWorkbookSkill } from './ai/workbook-skill'
+import { completeAiRunSave } from './ai/ai-run-save'
 import { findWorkbookCells, selectWorkbookRange } from './ai/workbook-search'
 import { ImportProgressCard } from './ImportProgressCard'
 import { useImportProgress } from './import-progress'
@@ -488,7 +493,7 @@ import { handleExportCsv as handleExportCsvImpl, type CsvExportContext } from '.
 import { effectivePageBreaks, installPageBreakPreview } from './page-break-preview'
 import { mapProtectedRanges } from './protected-ranges'
 import { settleFormulas } from './formula-settle'
-import { handleSave as handleSaveImpl, type SaveContext, type SaveOutcome } from './save-actions'
+import { exportWorkbookDraft, handleSave as handleSaveImpl, type SaveContext, type SaveOutcome, type WorkbookDraftExporter } from './save-actions'
 import {
   applyChartEdit as applyChartEditImpl,
   applyShapeEdit as applyShapeEditImpl,
@@ -634,14 +639,36 @@ export interface SheetsEditorHandle {
   /** Commit the editor and await formula/chart work without writing the file. */
   flush(): Promise<boolean>
   /** Wait behind any current save and drain late edits; fail closed if still dirty. */
+  prepareHandoff(): Promise<void>
   saveAndWait(): Promise<boolean>
   saveForDownload(): Promise<boolean>
+  exportCsv(): Promise<void>
   /** Reopen the host revision only while clean. */
   reload(): Promise<boolean>
   isDirty(): boolean
+  getWorkbookSessionId(): string | undefined
 }
 export interface SheetsEditorHost {
-  assistant?: {sourceSkill?: import('@genoffice/agent-core').AgentSkill; transport: import('@genoffice/agent-core').AgentTransport; modelPicker: React.ReactNode; extraSkills?: readonly import('@genoffice/agent-core').AgentSkill[]; agents?: readonly import('@genoffice/ui').AssistantParticipant[]; onManageAgents?: () => void; control?: import('@genoffice/ui').AssistantControl | undefined}
+  getSupportedCreateDocumentTypes?: () => readonly import('../shared/desktop-api').WorkbookCreateDocumentRequest['type'][]
+  setImageAttachments?: (files: readonly { name: string; image: AgentImage }[]) => string
+  supportedMergeExtensions?: readonly string[]
+  saveDownload?: React.ReactNode
+  fileMenu?: React.ReactNode
+  namedCopy?: {
+    suggest(content: string): Promise<string>
+    save(stem: string, capture: (exportCopy: WorkbookDraftExporter) => Promise<SaveOutcome>): Promise<void>
+  } | undefined
+  assistant?: {sourceSkill?: import('@genoffice/agent-core').AgentSkill; transport: import('@genoffice/agent-core').AgentTransport; modelPicker: React.ReactNode; mediaCapabilities?: {imageGeneration: boolean}; workspace?: import('@genoffice/ui').AssistantWorkspace; extraSkills?: readonly import('@genoffice/agent-core').AgentSkill[]; agents?: readonly import('@genoffice/ui').AssistantParticipant[]; onManageAgents?: () => void; control?: import('@genoffice/ui').AssistantControl | undefined}
+  harnessRecovery?: {
+    coding: {
+      subscribe(listener: () => void): () => void
+      snapshot(): readonly {id: string; continuationModelId?: string}[]
+      resume(id: string, signal: AbortSignal): Promise<{revision: string; modelId: string; checkpoint: HarnessCheckpoint; result: AgentToolResult} | undefined>
+    }
+    fileChat: {resume(turnId: string, loop: AgentLoop): Promise<FileChatTurn | undefined>}
+    continuationRevision(): string | undefined
+    hasModel(modelId: string): boolean
+  }
   /** Opt in only when the host returns stable sheet/drawing IDs after saving. */
   inPlaceSave?: boolean
   readOnly: boolean
@@ -756,10 +783,31 @@ export function App({
   useEffect(() => {
     host?.onEditorReady?.({
       analysis: {captureAnalysis},
+      prepareHandoff: async()=>{const runtime=univerRef.current,state=lazyWorkbookRef.current;if(runtime&&state&&fitsFullLoad(workbookCellCounts(state.file.sheets)))await startFullLoad(runtime,lazyWorkbookRef,setMessage)},
       save: async () => (await handleSave('save')).ok,
       flush: () => saveGateRef.current.run(flushEditor),
       saveAndWait,
       saveForDownload: saveAndWait,
+      exportCsv: async () => {
+        const context = csvExportContext()
+        const runtime = univerRef.current
+        const state = lazyWorkbookRef.current
+        if (runtime && state && !state.flags.preloadComplete) {
+          if (!fitsFullLoad(workbookCellCounts(state.file.sheets))) {
+            setMessage(t('appCsvExportTooLarge'))
+            return
+          }
+          setMessage(t('appFullLoadRunning'))
+          try {
+            await startFullLoad(runtime, lazyWorkbookRef, setMessage)
+          } catch {
+            setMessage(t('appCsvExportFailed'))
+            return
+          }
+          if (lazyWorkbookRef.current !== state) return
+        }
+        await handleExportCsvImpl(context)
+      },
       reload: () => saveGateRef.current.run(async () => {
         if (editorIsDirty()) return false
         const selected = await window.desktopApi.selectWorkbook()
@@ -798,6 +846,7 @@ export function App({
         })
       }),
       isDirty: editorIsDirty,
+      getWorkbookSessionId: () => lazyWorkbookRef.current?.file.sessionId,
     })
     return () => host?.onEditorReady?.(null)
   })
@@ -1477,6 +1526,7 @@ export function App({
   // Display history survives restarts via localStorage; the AgentLoop's model
   // context does not, so restored turns are read-only transcript.
   const [chat, setChat] = useState<readonly AiChatMessage[]>([])
+  const freshChatRef = useRef(true)
   /** History loaded from project-store (read-only transcript, not fed to the model) */
   const [historicChat, setHistoricChat] = useState<readonly AiChatMessage[]>([])
   // ── Chat attachments (same structure as docs/slides: text types go through the
@@ -1743,6 +1793,7 @@ export function App({
   }
 
   function appendChat(entry: AiChatMessage): void {
+    freshChatRef.current = false
     setChat((previous) => [...previous, entry])
   }
 
@@ -1776,12 +1827,18 @@ export function App({
   const runMutatedRef = useRef(false)
   const pendingContinuationsRef = useRef<{instruction: string; continuationToken?: string | undefined}[]>([])
   const assistantRunTokenRef = useRef<string | undefined>(undefined)
+  const harnessResumeRef = useRef<AbortController | undefined>(undefined)
+  const checkHarnessResumeRef = useRef<(() => void) | undefined>(undefined)
+  const recoverableDraftRef = useRef<{ text: string; attachments: readonly AttachmentMeta[]; skills: readonly string[] } | undefined>(undefined)
+  const composerTextRef = useRef(prompt)
+  composerTextRef.current = prompt
 
   const agentLoopRef = useRef<AgentLoop | null>(null)
   if (!agentLoopRef.current) {
     agentLoopRef.current = new AgentLoop({
       transport: host?.assistant?.transport ?? createElectronTransport(() => aiSettingsRef.current!),
       allowDelegationYield: !!host?.assistant?.control,
+      allowHarnessResume: !!host?.harnessRecovery,
       systemSuffix: aiLangDirective,
       skill: composeSkills('sheets+files', '', [
         ...(host?.assistant?.extraSkills ?? []),
@@ -1790,6 +1847,7 @@ export function App({
         createFilesSkill(availableAttachments),
         createMergeSkill({
           getAttachments: availableAttachments,
+          supportedMergeExtensions: () => hostRef.current?.supportedMergeExtensions,
           mergePaths: (paths) => {
             const runtime = univerRef.current
             if (!runtime) throw new Error(t('appMergeWorkbooksFailed'))
@@ -1798,12 +1856,13 @@ export function App({
         }),
         createSearchSkill(),
         createImageSkill(() =>
+          host?.assistant?.mediaCapabilities?.imageGeneration ??
           imageGenerationAvailable(aiSettingsRef.current, gskLoggedInRef.current),
         ),
       ]),
       events: {
         onText: (text) => {
-          if (text) runLastTextRef.current = text
+          if (text) { recoverableDraftRef.current = undefined; runLastTextRef.current = text }
           // Status bar (and the ribbon-row status span) show a short state only;
           // the full streamed prose lives in the chat panel.
           setMessage(t('appAiThinking'))
@@ -1813,6 +1872,7 @@ export function App({
           patchLastAssistant((entry) => ({ ...entry, text, isError: false }))
         },
         onToolStart: (call) => {
+          recoverableDraftRef.current = undefined
           // Live "running" chip: replaced in place by onToolExecuted
           patchLastAssistant((entry) => ({
             ...entry,
@@ -1865,6 +1925,8 @@ export function App({
           patchLastAssistant((entry) => ({ ...entry, usage: runUsageRef.current }))
         },
         onDone: ({ text, cancelled, turnLimit, truncated, yielded }) => {
+          hostRef.current?.setImageAttachments?.([])
+          recoverableDraftRef.current = undefined
           const runToken = assistantRunTokenRef.current
           assistantRunTokenRef.current = undefined
           if (runToken) host?.assistant?.control?.endRun?.(runToken, {text, cancelled, failed: turnLimit || !!truncated, ...(yielded ? {yielded} : {})})
@@ -1904,7 +1966,7 @@ export function App({
           const finalText = truncated
             ? [baseText, t('appAiTruncatedNote')].filter(Boolean).join('\n\n')
             : baseText
-          setMessage(cancelled ? t('appAiStopped') : t('appAiDone'))
+          setMessage(cancelled ? t('appAiStopped') : truncated ? t('appAiTruncatedNote') : t('appAiDone'))
           patchLastAssistant((entry) => ({
             ...entry,
             text: finalText,
@@ -1928,6 +1990,14 @@ export function App({
           })
         },
         onError: (error) => {
+          hostRef.current?.setImageAttachments?.([])
+          const draft = recoverableDraftRef.current
+          recoverableDraftRef.current = undefined
+          if (draft && !composerTextRef.current && !attachmentsRef.current.length && !attachedSkillsRef.current.length) {
+            setPrompt(draft.text)
+            setAttachments(draft.attachments)
+            setAttachedSkills(draft.skills)
+          }
           const runToken = assistantRunTokenRef.current
           assistantRunTokenRef.current = undefined
           if (runToken) host?.assistant?.control?.endRun?.(runToken, {text: error, cancelled: false, failed: true})
@@ -1946,7 +2016,7 @@ export function App({
             if (last?.role === 'assistant') {
               next[next.length - 1] = {
                 ...last,
-                text: error,
+                error,
                 isError: true,
                 streaming: false,
                 tools: last.tools.filter((tl) => !tl.running),
@@ -1980,14 +2050,80 @@ export function App({
     })
   }
 
+  const harnessRecovery = host?.harnessRecovery
+  useEffect(() => {
+    const loop = agentLoopRef.current
+    if (!harnessRecovery || !loop) return
+    const {coding, fileChat, continuationRevision, hasModel} = harnessRecovery
+    const attempted = new Set<string>()
+    let mounted = true
+    const check = () => {
+      if (!mounted || !hostRef.current?.assistantAvailable || !freshChatRef.current ||
+          harnessResumeRef.current || runStartingRef.current || loop.busy || loop.messages.length || !continuationRevision()) return
+      const task = coding.snapshot().find(item => item.continuationModelId && !attempted.has(item.id))
+      if (!task?.continuationModelId) return
+      attempted.add(task.id)
+      const zh = getLang() === 'zh'
+      if (!hasModel(task.continuationModelId)) {
+        setMessage(zh ? '原模型已不可用。请在任务卡片查看结果。' : 'The original model is unavailable. See the task card for its result.')
+        return
+      }
+      const observer = new AbortController()
+      harnessResumeRef.current = observer
+      setAiBusy(true)
+      setMessage(t('appAiThinking'))
+      void (async () => {
+        let started = false
+        try {
+          const run = await coding.resume(task.id, observer.signal)
+          if (observer.signal.aborted) return
+          if (!run?.checkpoint.chatTurnId) throw Error('Office conversation unavailable')
+          const turn = await fileChat.resume(run.checkpoint.chatTurnId, loop)
+          if (!mounted || observer.signal.aborted) return
+          if (!turn || continuationRevision() !== run.revision) throw Error('Office conversation unavailable')
+          // Reuse the original transcript; the native run handlers still own edits and saving.
+          setAiRunScope(null)
+          started = loop.resumeHarness(run.checkpoint, run.result, {chat:turn, modelId:run.modelId, canContinue:()=>continuationRevision()===run.revision})
+          if (!started) throw Error('Office conversation unavailable')
+        } catch {
+          if (mounted && !observer.signal.aborted) setMessage(zh ? '无法继续原对话。请在任务卡片查看结果。' : 'Could not continue the original conversation. See the task card for its result.')
+        } finally {
+          if (harnessResumeRef.current === observer) {
+            harnessResumeRef.current = undefined
+            if (mounted && !started) {
+              setAiRunScope(undefined)
+              setAiBusy(false)
+            }
+          }
+        }
+      })()
+    }
+    checkHarnessResumeRef.current = check
+    const unsubscribe = coding.subscribe(check)
+    return () => {
+      mounted = false
+      harnessResumeRef.current?.abort()
+      checkHarnessResumeRef.current = undefined
+      unsubscribe()
+    }
+  }, [harnessRecovery])
+  // The result may arrive while the workbook is still mounting or restoring its lease.
+  useEffect(() => { checkHarnessResumeRef.current?.() })
+
+  useEffect(()=>bindDocumentHandoff(host?.assistant?.transport,async (instruction,handoff)=>{
+    const loop=agentLoopRef.current
+    if(!loop||loop.busy||runStartingRef.current||harnessResumeRef.current)return
+    return runContinuation(instruction,undefined,handoff)
+  }))
   const assistantControl = host?.assistant?.control
   useEffect(() => {
     if (!assistantControl) return
     return assistantControl.register({
-      isBusy: () => !agentLoopRef.current || agentLoopRef.current.busy || !!runStartingRef.current,
+      isBusy: () => !agentLoopRef.current || agentLoopRef.current.busy || !!runStartingRef.current || !!harnessResumeRef.current,
       cancelRun(token) { if (assistantRunTokenRef.current === token) agentLoopRef.current?.cancel() },
       requestYield(taskIds) { agentLoopRef.current?.requestYield(taskIds) },
       continue(instruction, continuationToken) {
+        if (harnessResumeRef.current) return false
         if (agentLoopRef.current?.busy || runStartingRef.current) {
           pendingContinuationsRef.current.push({instruction, continuationToken})
           return true
@@ -1997,7 +2133,7 @@ export function App({
       },
       async execute(instruction, signal) {
         const loop = agentLoopRef.current
-        if (!loop || loop.busy || runStartingRef.current) throw new Error('Office assistant is busy')
+        if (!loop || loop.busy || runStartingRef.current || harnessResumeRef.current) throw new Error('Office assistant is busy')
         setAiBusy(true)
         try {
           return await loop.runScoped(instruction, { signal, allowedTools: assistantControl.allowedTools })
@@ -2023,14 +2159,14 @@ export function App({
   /** Image attachments read as base64 and sent multimodal with this user message
    * (≤5MB each, max 20; same structure as docs/slides) */
   const MAX_IMAGES_PER_MESSAGE = 20
-  async function collectImageAttachments(atts: readonly AttachmentMeta[]): Promise<AgentImage[]> {
+  async function collectImageAttachments(atts: readonly AttachmentMeta[]): Promise<{ name: string; image: AgentImage }[]> {
     const imageAtts = atts.filter((a) => ATTACHMENT_IMAGE_EXTS.has(a.ext))
-    const images: AgentImage[] = []
+    const images: { name: string; image: AgentImage }[] = []
     const failures: string[] = []
     for (const att of imageAtts.slice(0, MAX_IMAGES_PER_MESSAGE)) {
       const result = await window.desktopApi.readAttachmentImage(att.path)
       if (result.ok && result.base64 && result.mime) {
-        images.push({ base64: result.base64, mime: result.mime })
+        images.push({ name: att.name, image: { base64: result.base64, mime: result.mime } })
       } else {
         failures.push(result.error ?? t('appAttachmentReadFailed', { name: att.name }))
       }
@@ -2068,9 +2204,11 @@ export function App({
     sentAttachments: readonly AttachmentMeta[],
     sentSkills: readonly string[] = [],
     continuationToken?: string,
-  ): void {
+    handoff?: import('@genoffice/agent-core').DocumentHandoffOptions,
+    composerDraft?: string,
+  ) {
     const loop = agentLoopRef.current
-    if (!instruction.trim() || !loop || loop.busy || runStartingRef.current) return
+    if (!instruction.trim() || !loop || loop.busy || runStartingRef.current || harnessResumeRef.current) return
     const pending = {}
     runStartingRef.current = pending
     // Freeze the selection scope for the whole run: users go on clicking around
@@ -2083,11 +2221,11 @@ export function App({
     setAiBusy(true)
     setMessage(t('appAiThinking'))
     appendChat({ role: 'assistant', text: '', tools: [], streaming: true })
-    void collectImageAttachments(sentAttachments)
-      .catch((): AgentImage[] => [])
-      .then(async (images) => {
+    return collectImageAttachments(sentAttachments)
+      .catch(() => [])
+      .then(async (attachments) => {
         if (runStartingRef.current !== pending) return
-        const modelInstruction = await withSkillBodies(instruction, sentSkills).catch(() => instruction)
+        const withSkills = await withSkillBodies(instruction, sentSkills).catch(() => instruction)
         if (runStartingRef.current !== pending) return
         runStartingRef.current = null
         const runToken = assistantControl?.beginRun?.(instruction, continuationToken)
@@ -2098,14 +2236,21 @@ export function App({
           return
         }
         assistantRunTokenRef.current = runToken
-        loop.run(modelInstruction, images, modelInstruction !== instruction && host?.assistant ? instruction : undefined)
+        const draft = composerDraft
+        recoverableDraftRef.current = host?.assistant && draft !== undefined
+          ? { text: draft, attachments: sentAttachments, skills: sentSkills }
+          : undefined
+        if(handoff)return loop.runDocumentHandoff(withSkills,handoff)
+        const imageContext = hostRef.current?.setImageAttachments?.(attachments)
+        const modelInstruction = imageContext ? withSkills + '\n\n' + imageContext : withSkills
+        loop.run(modelInstruction, attachments.map(({image}) => image), modelInstruction !== instruction && host?.assistant ? instruction : undefined,continuationToken?undefined:{text:instruction})
       })
   }
 
-  function runContinuation(instruction: string, continuationToken?: string): void {
-    appendChat({ role: 'user', text: instruction, tools: [] })
+  function runContinuation(instruction: string, continuationToken?: string,handoff?:import('@genoffice/agent-core').DocumentHandoffOptions) {
+    appendChat({ role: 'user', text: instruction, tools: [], ...(handoff&&{sender:'dsh' as const}) })
     persistChatMessage('user', instruction)
-    runAgent(instruction, [], [], continuationToken)
+    return runAgent(instruction, [], [], continuationToken,handoff)
   }
 
   const mergeAttachments = (result: AttachmentAddResult | null): void => {
@@ -2140,6 +2285,10 @@ export function App({
   }
 
   function handleStopAgent(): void {
+    if (harnessResumeRef.current) {
+      harnessResumeRef.current.abort()
+      setMessage(t('appAiStopped'))
+    }
     if (runStartingRef.current) {
       runStartingRef.current = null
       setAiRunScope(undefined)
@@ -2161,10 +2310,14 @@ export function App({
   }
 
   function handleNewChat(): void {
+    freshChatRef.current = false
+    harnessResumeRef.current?.abort()
+    harnessResumeRef.current = undefined
     assistantControl?.resetConversation?.()
     assistantRunTokenRef.current = undefined
     pendingContinuationsRef.current = []
     runStartingRef.current = null
+    hostRef.current?.setImageAttachments?.([])
     agentLoopRef.current?.reset()
     setAiRunScope(undefined)
     setAiBusy(false)
@@ -2426,6 +2579,7 @@ export function App({
       redactions: () => redactionIndexRef.current ?? NO_REDACTIONS,
       proposeOperations,
       createDocument: (request) => createAiDocument({ univerRef, lazyWorkbookRef }, request),
+      supportedCreateDocumentTypes: () => hostRef.current?.getSupportedCreateDocumentTypes?.(),
     }
   }
 
@@ -4234,7 +4388,7 @@ export function App({
   ): void {
     if (hostRef.current?.readOnly || hostRef.current?.assistantAvailable === false) return
     const instruction = (overrideInstruction ?? prompt).trim()
-    if (!instruction || aiBusy) return
+    if (!instruction || aiBusy || harnessResumeRef.current) return
     runToolsRef.current = []
     runUsageRef.current = undefined
     // The message consumes the composer attachments: they ride along (echoed on the
@@ -4286,7 +4440,7 @@ export function App({
     // otherwise fall back to the local, deterministic regex planner
     // (kept for offline use and for the fixed micro-DSL it still supports).
     if (agentConfigured) {
-      runAgent(instruction, sentAtts, sentSkills)
+      runAgent(instruction, sentAtts, sentSkills, undefined, undefined, overrideInstruction === undefined ? prompt : undefined)
       return
     }
     const outcome = runDeterministicPlan(instruction)
@@ -4386,20 +4540,18 @@ export function App({
   async function autoSaveCompletedAiRun(): Promise<void> {
     const applies = aiApplyPromisesRef.current
     aiApplyPromisesRef.current = []
-    if (applies.length === 0) return
-    const results = await Promise.all(applies)
-    if (!results.some(Boolean)) return
-    const state = lazyWorkbookRef.current
-    if (!state || journalSize(state.editJournal) === 0) return
-    // AutoSave off = the user decides when the file is written: the
-    // run's edits stay pending in the journal, so the offered Undo / ⌘Z keeps
-    // working (saving would reopen the session and reset the undo stack).
-    if (!autoSaveRef.current) {
-      setMessage(t('appAiChangesNotSaved'))
-      return
-    }
-    // AutoSave-driven write after an AI run: silent like the interval autosave.
-    await handleSave('save', true)
+    const saved = await completeAiRunSave({
+      applies,
+      mutated: runMutatedRef.current,
+      hasPendingEdits: () => {
+        const state = lazyWorkbookRef.current
+        return !!state && journalSize(state.editJournal) > 0
+      },
+      autoSave: autoSaveRef.current,
+      save: () => handleSave('save', true),
+      onUnsaved: () => setMessage(t('appAiChangesNotSaved')),
+    })
+    if (!saved) return
     const after = lazyWorkbookRef.current
     if (after && journalSize(after.editJournal) === 0) {
       // Saving reopens the sidecar session and resets Univer's undo stack.
@@ -5339,7 +5491,7 @@ export function App({
       ),
       formulaMode: opensInFormulaMode(cellCounts),
       editJournal: createEditJournal(),
-      flags: { preloadComplete: false, preloadRunning: false },
+      flags: { preloadComplete: false, preloadRunning: false, quietBackgroundLoading: Boolean(hostRef.current?.inPlaceSave) },
       closure: { status: 'idle', pinned: new Map() },
       formulaText: new Map(),
       formulaTextTruncated: new Set(),
@@ -5506,12 +5658,17 @@ export function App({
     threadStore.load(selected)
     threadPane.close()
     applyDefinedNames(univerRef.current, selected, state, hostRef.current !== undefined)
+    const finishInitialRange = (): void => {
+      if (lazyWorkbookRef.current !== state) return
+      opts?.onInitialRangeLoaded?.()
+      hostRef.current?.onWorkbookOpened?.()
+    }
     const runtime = univerRef.current
     if (runtime) {
       requestAnimationFrame(() => {
         const workbook = runtime.univerAPI.getActiveWorkbook()
         if (!workbook) {
-          opts?.onInitialRangeLoaded?.()
+          finishInitialRange()
           return
         }
         // Register existing file tables under their displayName so Univer
@@ -5574,7 +5731,7 @@ export function App({
         })
         const worksheet = workbook.getActiveSheet()
         if (!worksheet) {
-          opts?.onInitialRangeLoaded?.()
+          finishInitialRange()
           return
         }
         // apply the opening sheet's formula view (sheetView/@showFormulas)
@@ -5624,10 +5781,10 @@ export function App({
             ? { row: restore.viewRow, column: restore.viewColumn }
             : undefined,
         ).then(
-          () => opts?.onInitialRangeLoaded?.(),
+          () => finishInitialRange(),
           (error: unknown) => {
             setMessage(error instanceof Error ? error.message : t('appLoadRangeFailed'))
-            opts?.onInitialRangeLoaded?.()
+            finishInitialRange()
           },
         )
         if (state.formulaMode) {
@@ -5656,9 +5813,8 @@ export function App({
         }
       })
     } else {
-      opts?.onInitialRangeLoaded?.()
+      finishInitialRange()
     }
-    hostRef.current?.onWorkbookOpened?.()
     return true
   }
 
@@ -5849,6 +6005,24 @@ export function App({
    * no-op rather than a failure.
    */
   async function nameWithAi(): Promise<void> {
+    const web = hostRef.current
+    if (web) {
+      const copy = web.namedCopy
+      const gate = saveGateRef.current
+      if (!copy || web.readOnly || gate.busy) return
+      // Keep autosave from writing back while the user is naming the copy.
+      await gate.run(async () => {
+        if (!(await commitActiveEditor())) return
+        const state = lazyWorkbookRef.current
+        const stem = await modelSaveAsName(readContext(), copy.suggest)
+        if (!stem || hostRef.current?.readOnly || lazyWorkbookRef.current !== state) return
+        await copy.save(stem, async (exportCopy) => {
+          if (hostRef.current?.readOnly || lazyWorkbookRef.current !== state || !(await commitActiveEditor())) return { ok: false }
+          return exportWorkbookDraft(saveContext(), exportCopy)
+        })
+      })
+      return
+    }
     const stem = await modelSaveAsName(readContext())
     if (!stem) return
     await handleSave('save-as', false, undefined, stem)
@@ -6322,6 +6496,7 @@ export function App({
       )}
       <ExcelShell
         modelPicker={host?.assistant?.modelPicker}
+              assistantWorkspace={host?.assistant?.workspace}
         assistantAgents={host?.assistant?.agents}
         onManageAgents={host?.assistant?.onManageAgents}
         assistantAvailable={host?.assistantAvailable ?? true}
@@ -6401,7 +6576,10 @@ export function App({
         canSave={mutationPhase === 'open' && !host?.readOnly && (pendingEdits > 0 || workbookFile?.unsavedNew === true)}
         onSave={() => void handleSave('save')}
         canSaveAs={mutationPhase === 'open' && !host && workbookFile !== null}
+        canNameWithAi={mutationPhase === 'open' && workbookFile !== null && (!host || Boolean(host.namedCopy && !host.readOnly))}
         onSaveAs={() => void handleSave('save-as')}
+        saveDownload={host?.saveDownload}
+        fileMenu={host?.fileMenu}
         onNameWithAi={() => void nameWithAi()}
         onRedo={handleRedo}
         autoSave={autoSave}
@@ -6465,7 +6643,7 @@ export function App({
         onGetConsolidateDefault={() => consolidateDefaultReferenceImpl(dataToolsContext())}
         onApplyHeaderFooter={(result) => handleApplyHeaderFooterImpl(pageLayoutContext(), result)}
       />
-      {openingWorkbook && (
+      {openingWorkbook && !host?.inPlaceSave && (
         <div className="workbook-opening-screen" role="status" aria-live="polite">
           <ImportProgressCard
             progress={importProgress}

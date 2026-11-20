@@ -34,6 +34,16 @@ test('pins lookup and authenticated TLS peer before exact hashed body is sent',a
  const lookup=await new Promise((resolve,reject)=>n.options.lookup('provider.example',{},(e,a,f)=>e?reject(e):resolve([a,f])))
  assert.deepEqual(lookup,['8.8.8.8',4]);assert.equal(tr.activeCount(),0)
 })
+test('accepts multimodal-sized requests above 1 MiB but rejects requests over 10 MiB',async t=>{
+ const n=network(t),large=Buffer.from(JSON.stringify({model:'synthetic',stream:true,padding:'x'.repeat(1024*1024)}))
+ const largeScope={...scope(),requestDigest:createHash('sha256').update(large).digest('hex')}
+ await createPinnedProviderTransport({profiles:[profile]}).send(largeScope,large,()=>{})
+ assert.deepEqual(n.written,large)
+ const oversized=Buffer.alloc(10*1024*1024+1),oversizedScope={...scope(),requestDigest:createHash('sha256').update(oversized).digest('hex')}
+ const blocked=network(t)
+ await assert.rejects(createPinnedProviderTransport({profiles:[profile]}).send(oversizedScope,oversized,()=>{}),{message:'Provider transport unavailable'})
+ assert.equal(blocked.requests,0)
+})
 test('pins public IPv4 addresses in 172/8 and asks the resolver only for IPv4',async t=>{
  const address='172.67.156.25',p={...profile,allowedIpv4:[address]}
  const n=network(t,{peer:address})

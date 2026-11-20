@@ -158,7 +158,7 @@ async function daemonEnvironment(f,bucket) {
   return { PATH: process.env.PATH,NODE_ENV: 'test',DYOFFICE_NATIVE_WORKER: 'experimental',DYOFFICE_WORKER_DATABASE_URL: f.urls.worker,DYOFFICE_BUSINESS_DATABASE_URL: f.urls.business,DYOFFICE_DEPLOYMENT_ID: f.deploymentId,DYOFFICE_REDIS_URL: process.env.DYOFFICE_TEST_REDIS_URL,DYOFFICE_NATIVE_BINARY: manifest.nativeBinary,DYOFFICE_NATIVE_SHA256: manifest.nativeSha256,DYOFFICE_FILE_API: 'experimental',DYOFFICE_OBJECT_STORE: 's3',DYOFFICE_S3_ENDPOINT: process.env.DYOFFICE_TEST_S3_ENDPOINT,DYOFFICE_S3_REGION: 'us-east-1',DYOFFICE_S3_BUCKET: bucket,DYOFFICE_S3_FORCE_PATH_STYLE: 'true',AWS_ACCESS_KEY_ID: process.env.DYOFFICE_TEST_S3_ACCESS_KEY,AWS_SECRET_ACCESS_KEY: process.env.DYOFFICE_TEST_S3_SECRET_KEY,DYOFFICE_WORKER_RUNTIME_DIRECTORY: join(f.directory,'worker-control') }
 }
 function daemon(env) {
-  const child = spawn(process.execPath,['--experimental-strip-types',fileURLToPath(new URL('../../worker/src/main.ts',import.meta.url))],{ env,stdio: ['ignore','pipe','pipe'] })
+  const child = spawn(process.execPath,['--import','tsx',fileURLToPath(new URL('../../worker/src/main.ts',import.meta.url))],{ env,stdio: ['ignore','pipe','pipe'] })
   let stdout = '',stderr = '',readyTimer
   const exited = new Promise(resolve => child.once('exit',resolve))
   const ready = new Promise((resolve,reject) => {

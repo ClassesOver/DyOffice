@@ -85,6 +85,7 @@ const fontPreviewFamily = (f: string): string | undefined =>
 export function RibbonHomeTab({ rb }: { rb: RibbonTabCtx }) {
   const {
     aiOpen,
+    aiAvailable = true,
     brushMode,
     canDistribute,
     canPaste,
@@ -243,20 +244,21 @@ export function RibbonHomeTab({ rb }: { rb: RibbonTabCtx }) {
   }
   return (
     <>
-      <Group label="Genspark AI">
+      <Group label="AI 助手">
         <button
           className={`rb-big ai-entry${aiOpen ? ' active' : ''}`}
+          disabled={!aiAvailable}
           data-tip={t('aiOpenAssistant')}
           onClick={onToggleAi}
         >
           <span className="rb-big-icon">
             <GensparkMark size={26} />
           </span>
-          <span>Genspark AI</span>
+          <span>AI 助手</span>
         </button>
         <button
           className="rb-big ai-entry"
-          disabled={!hasDoc || deckEmpty}
+          disabled={!aiAvailable || !hasDoc || deckEmpty}
           data-tip={t('aiBeautifyBtn')}
           onClick={() => onAiPreset(t('aiBeautifyPrompt'), { slideShot: true })}
         >
@@ -269,7 +271,7 @@ export function RibbonHomeTab({ rb }: { rb: RibbonTabCtx }) {
         </button>
         <button
           className="rb-big ai-entry"
-          disabled={!hasDoc || deckEmpty}
+          disabled={!aiAvailable || !hasDoc || deckEmpty}
           data-tip={t('aiFactCheckBtn')}
           onClick={() => onAiPreset(t('aiFactCheckPrompt'))}
         >
@@ -282,7 +284,7 @@ export function RibbonHomeTab({ rb }: { rb: RibbonTabCtx }) {
         </button>
         <button
           className="rb-big ai-entry"
-          disabled={!hasDoc || deckEmpty}
+          disabled={!aiAvailable || !hasDoc || deckEmpty}
           data-tip={t('aiImageBtn')}
           onClick={() => onAiPreset(t('aiImagePrompt'))}
         >

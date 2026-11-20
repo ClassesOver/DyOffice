@@ -1,8 +1,10 @@
 import { randomUUID } from 'node:crypto'
 import type { PoolClient } from 'pg'
 import type { BusinessPrincipal, PrincipalTransactions } from '../../db/context.ts'
-import type { SourceConfig, SourceDescriptor, SourceDetail, SourceExecution, SourceKind, SourceList, PublishedSourceVersion, QuerySnapshot, QueryColumn, QueryCell } from '../../../../../../packages/web-contracts/src/sources.ts'
-import { createSourceEgressPolicy, parseSourceDsn, type SourceEgressTarget } from '../../security/egress.ts'
+import type { SourceConfig, SourceDescriptor, SourceDetail, SourceDiscovery, SourceExecution, SourceKind, SourceList, QuerySnapshot, QueryColumn, QueryCell } from '../../../../../../packages/web-contracts/src/sources.ts'
+import { createSourceEgressPolicy, parseSourceDsn, type SourceEgressPolicy, type SourceEgressTarget } from '../../security/egress.ts'
+import { readSourceEgressTargets } from '../admin/service.ts'
+import { tokenHash } from '../auth/sessions.ts'
 import { createCredentialVault } from './vault.ts'
 import { contentHash, executionFor, object, positiveVersion, secretHash, sourceConfig, sourceError, sourceId, sourceName, validateSourceSecret } from './config.ts'
 import { queryHttpSource } from './http.ts'
@@ -10,13 +12,19 @@ import { querySqlSource, type SqlRows } from './sql.ts'
 import { createQuerySnapshot } from './provenance.ts'
 
 type Row = Record<string, any>
+const userSchemaFilter = "LOWER(table_schema) NOT IN ('information_schema','mysql','sys','performance_schema') AND SUBSTRING(LOWER(table_schema), 1, 3) <> 'pg_'"
 const scope = (p: BusinessPrincipal, id: string) => [p.deploymentId, p.userId, id]
-const joined = `SELECT s.*,d.version,d.kind,d.name,d.config,d.credential_ref,d.credential_revision,d.content_hash,v.content_hash AS published_hash FROM data_sources s JOIN data_source_drafts d USING(deployment_id,owner_id,source_id) LEFT JOIN data_source_versions v ON v.deployment_id=s.deployment_id AND v.owner_id=s.owner_id AND v.source_id=s.source_id AND v.revision=s.published_revision`
-const descriptor = (row: Row): SourceDescriptor => ({ sourceId: row.source_id, name: row.name, kind: row.kind, version: row.version, enabled: row.enabled, publishedRevision: row.published_revision, hasCredential: row.credential_ref !== null, hasUnpublishedChanges: row.published_hash != null && row.published_hash !== row.content_hash, updatedAt: new Date(row.updated_at).toISOString() })
-const published = (row: Row): PublishedSourceVersion => ({ sourceId: row.source_id, revision: row.revision, contentHash: row.content_hash, publishedAt: new Date(row.published_at).toISOString(), name: row.name, kind: row.kind, config: row.config, execution: row.execution })
+const joined = `SELECT s.*,d.version,d.kind,d.name,d.config,d.credential_ref,d.credential_revision,d.content_hash FROM data_sources s JOIN data_source_drafts d USING(deployment_id,owner_id,source_id)`
+const descriptor = (row: Row): SourceDescriptor => ({ sourceId: row.source_id, name: row.name, kind: row.kind, version: row.version, enabled: row.enabled, hasCredential: row.credential_ref !== null, updatedAt: new Date(row.updated_at).toISOString() })
 
-export function createSourceService({ transactions, credentialKeys = '', egressTargets = [] }: { transactions: PrincipalTransactions; credentialKeys?: string; egressTargets?: readonly SourceEgressTarget[] }) {
-  const vault = createCredentialVault(credentialKeys), policy = createSourceEgressPolicy(egressTargets)
+export function createSourceService({ transactions, credentialKeys = '', egressTargets }: { transactions: PrincipalTransactions; credentialKeys?: string; egressTargets?: readonly SourceEgressTarget[] }) {
+  const vault = createCredentialVault(credentialKeys)
+  const fixedPolicy = egressTargets === undefined ? undefined : createSourceEgressPolicy(egressTargets)
+  async function sourcePolicy(connection: PoolClient, principal: BusinessPrincipal, token: string) {
+    if (fixedPolicy) return fixedPolicy
+    await connection.query("SELECT set_config('dyoffice.global_session_hash',$1,true),set_config('dyoffice.global_idle_ms',$2,true)", [tokenHash(token), String(transactions.sessionIdleMs)])
+    return createSourceEgressPolicy(await readSourceEgressTargets(connection, principal.deploymentId), { allowUnlistedSql: true })
+  }
   async function access<T>(token: string, operation: (connection: PoolClient, principal: BusinessPrincipal) => Promise<T>): Promise<T> {
     return transactions.withPrincipalTransaction({ kind: 'session', token }, async (connection, principal) => {
       if (!principal.roles.includes('personal') || principal.job) throw sourceError(404)
@@ -48,28 +56,26 @@ export function createSourceService({ transactions, credentialKeys = '', egressT
   function digest(name: string, kind: SourceKind, config: SourceConfig, reference: string | null, revision: number | null) {
     return contentHash({ name, kind, config, credentialRef: reference, credentialRevision: revision, execution: executionFor(kind, config) })
   }
-  async function execute(row: Row, secret: string, query: Record<string, any>) {
+  async function execute(policy: SourceEgressPolicy, row: Row, secret: string, query: Record<string, any>) {
     const execution: SourceExecution = row.execution ?? executionFor(row.kind, row.config)
     if (row.kind === 'http') {
       if (query.sql !== undefined) throw sourceError()
       return { rows: await queryHttpSource(policy, secret, row.config, execution), execution }
     }
-    return { sql: await querySqlSource(policy, row.kind, secret, query.sql, execution), execution }
+    return { sql: await querySqlSource(policy, row.kind, secret, query.sql, execution, { allowedTables: row.config.allowedTables, allowedSchemas: row.config.allowedSchemas, defaultSchema: row.kind === 'postgres' ? 'public' : parseSourceDsn(row.kind, secret).database }), execution }
   }
   return Object.freeze({
-    /** AI metadata projection: never read draft names, credentials or configs. */
-    async listPublishedMetadata(token: string, input: unknown = {}) {
+    /** AI metadata projection: current saved names only, never credentials or configs. */
+    async listSavedMetadata(token: string, input: unknown = {}) {
       const query = object(input, ['after'])
       const after = query.after === undefined ? '' : sourceId(query.after)
       return access(token, async (c, p) => {
-        const rows = (await c.query(`SELECT s.source_id,v.name,v.kind,v.revision
-          FROM data_sources s JOIN data_source_versions v
-          ON v.deployment_id=s.deployment_id AND v.owner_id=s.owner_id
-            AND v.source_id=s.source_id AND v.revision=s.published_revision
+        const rows = (await c.query(`SELECT s.source_id,d.name,d.kind,d.version
+          FROM data_sources s JOIN data_source_drafts d USING(deployment_id,owner_id,source_id)
           WHERE s.deployment_id=$1 AND s.owner_id=$2 AND s.source_id>$3
-            AND s.deleted_at IS NULL AND s.enabled=true
+            AND s.deleted_at IS NULL AND s.enabled=true AND d.credential_ref IS NOT NULL
           ORDER BY s.source_id LIMIT 51`, [p.deploymentId,p.userId,after])).rows
-        return {items: rows.slice(0,50).map(row => ({sourceId: row.source_id as string, name: row.name as string, kind: row.kind as SourceKind, sourceVersion: row.revision as number})), nextCursor: rows.length > 50 ? rows[49].source_id as string : null}
+        return {items: rows.slice(0,50).map(row => ({sourceId: row.source_id as string, name: row.name as string, kind: row.kind as SourceKind, sourceVersion: row.version as number})), nextCursor: rows.length > 50 ? rows[49].source_id as string : null}
       })
     },
     async list(token: string, input: unknown = {}): Promise<SourceList> {
@@ -86,18 +92,18 @@ export function createSourceService({ transactions, credentialKeys = '', egressT
       const id = sourceId(input)
       return access(token, async (c, p) => {
         const row = await get(c, p, id)
-        const version = row.published_revision === null ? null : (await c.query('SELECT * FROM data_source_versions WHERE deployment_id=$1 AND owner_id=$2 AND source_id=$3 AND revision=$4', [...scope(p, id), row.published_revision])).rows[0]
-        return { source: descriptor(row), config: row.config, published: version ? published(version) : null }
+        return { source: descriptor(row), config: row.config }
       })
     },
     async create(token: string, input: unknown): Promise<SourceDescriptor> {
-      const value = object(input, ['sourceId','name','kind','config','secret'])
+      const value = object(input, ['sourceId','name','kind','config','secret','enabled'])
       const id = sourceId(value.sourceId), name = sourceName(value.name), kind = value.kind as SourceKind
       if (!['http','postgres','mysql','starrocks'].includes(kind)) throw sourceError()
+      if (value.enabled !== undefined && typeof value.enabled !== 'boolean') throw sourceError()
       const config = sourceConfig(kind, value.config ?? {}), secret = validateSourceSecret(kind, value.secret, config)
       return access(token, async (c, p) => {
         if (!vault.available) throw sourceError(503)
-        const inserted = await c.query('INSERT INTO data_sources(deployment_id,owner_id,source_id) VALUES($1,$2,$3) ON CONFLICT DO NOTHING RETURNING source_id', scope(p, id))
+        const inserted = await c.query('INSERT INTO data_sources(deployment_id,owner_id,source_id,enabled) VALUES($1,$2,$3,$4) ON CONFLICT DO NOTHING RETURNING source_id', [...scope(p, id), value.enabled ?? true])
         if (!inserted.rowCount) throw sourceError(409)
         const credential = await storeCredential(c, p, id, secret)
         await c.query('INSERT INTO data_source_drafts(deployment_id,owner_id,source_id,version,kind,name,config,credential_ref,credential_revision,content_hash) VALUES($1,$2,$3,1,$4,$5,$6::jsonb,$7,$8,$9)', [...scope(p, id), kind, name, JSON.stringify(config), credential.reference, credential.revision, digest(name, kind, config, credential.reference, credential.revision)])
@@ -128,21 +134,6 @@ export function createSourceService({ transactions, credentialKeys = '', egressT
         return descriptor(await get(c, p, id))
       })
     },
-    async publish(token: string, input: unknown, payload: unknown): Promise<PublishedSourceVersion> {
-      const id = sourceId(input), value = object(payload, ['expectedVersion']), expected = positiveVersion(value.expectedVersion)
-      return access(token, async (c, p) => {
-        const row = await get(c, p, id, true)
-        if (row.version !== expected) throw sourceError(409)
-        if (!row.credential_ref) throw sourceError(409)
-        await readCredential(c, p, id, row)
-        if (row.published_revision !== null && row.content_hash === row.published_hash) return published((await c.query('SELECT * FROM data_source_versions WHERE deployment_id=$1 AND owner_id=$2 AND source_id=$3 AND revision=$4', [...scope(p, id), row.published_revision])).rows[0])
-        const revision = (row.published_revision ?? 0) + 1
-        const version = (await c.query('INSERT INTO data_source_versions(deployment_id,owner_id,source_id,revision,content_hash,kind,name,config,execution,credential_ref,credential_revision) VALUES($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9::jsonb,$10,$11) RETURNING *', [...scope(p, id), revision, row.content_hash, row.kind, row.name, JSON.stringify(row.config), JSON.stringify(executionFor(row.kind, row.config)), row.credential_ref, row.credential_revision])).rows[0]
-        await c.query('UPDATE data_sources SET published_revision=$4,updated_at=clock_timestamp() WHERE deployment_id=$1 AND owner_id=$2 AND source_id=$3', [...scope(p, id), revision])
-        await audit(c, p, id, 'source_published', { revision })
-        return published(version)
-      })
-    },
     async remove(token: string, input: unknown, payload: unknown): Promise<void> {
       const id = sourceId(input), value = object(payload, ['expectedVersion']), expected = positiveVersion(value.expectedVersion)
       await access(token, async (c, p) => {
@@ -157,10 +148,11 @@ export function createSourceService({ transactions, credentialKeys = '', egressT
       const prepared = await access(token, async (c, p) => {
         const row = await get(c, p, id)
         if (!row.enabled) throw sourceError(409)
-        try { return { row, secret: await readCredential(c, p, id, row) } } catch { return { row, secret: null } }
+        const policy = await sourcePolicy(c, p, token)
+        try { return { row, policy, secret: await readCredential(c, p, id, row) } } catch { return { row, policy, secret: null } }
       })
       let ok = false, code = 'SOURCE_UNAVAILABLE'
-      if (prepared.secret) try { await execute(prepared.row, prepared.secret, prepared.row.kind === 'http' ? {} : { sql: 'SELECT 1 AS connection_ok' }); ok = true } catch (error) { const status = (error as { statusCode?: number }).statusCode; code = status === 400 ? 'TARGET_NOT_APPROVED' : status === 403 ? 'READONLY_ROLE_REQUIRED' : status === 504 ? 'SOURCE_TIMEOUT' : 'SOURCE_UNAVAILABLE' }
+      if (prepared.secret) try { await execute(prepared.policy, prepared.row, prepared.secret, prepared.row.kind === 'http' ? {} : { sql: 'SELECT 1 AS connection_ok' }); ok = true } catch (error) { const { statusCode: status, code: failure } = error as { statusCode?: number; code?: string }; code = failure === 'SOURCE_TLS_UNSUPPORTED' ? failure : status === 400 ? 'TARGET_NOT_APPROVED' : status === 403 ? 'READONLY_ROLE_REQUIRED' : status === 504 ? 'SOURCE_TIMEOUT' : 'SOURCE_UNAVAILABLE' }
       return access(token, async (c, p) => {
         // Lock the permanent root through the final authorization/audit commit.
         // A deleted scoped ID cannot be recreated, so this is the same instance.
@@ -170,48 +162,91 @@ export function createSourceService({ transactions, credentialKeys = '', egressT
         return { ok, kind: prepared.row.kind as SourceKind, ...(ok ? {} : { code }) }
       })
     },
-    async describe(token: string, input: unknown, payload: unknown = {}) {
-      const id = sourceId(input), request = object(payload, ['table'])
-      if (request.table !== undefined && (typeof request.table !== 'string' || !/^[A-Za-z_][A-Za-z0-9_$]{0,127}$/.test(request.table))) throw sourceError()
+    async discover(token: string, input: unknown, payload: unknown): Promise<SourceDiscovery> {
+      const id = sourceId(input), request = object(payload, ['expectedVersion','directory'])
+      const version = positiveVersion(request.expectedVersion)
+      const directory = request.directory
+      const selectable = (name: unknown): name is string => typeof name === 'string' && /^[A-Za-z_][A-Za-z0-9_$]{0,127}$/.test(name)
+      const userDirectory = (name: unknown): name is string => selectable(name) && !/^(?:pg_|information_schema$|mysql$|sys$|performance_schema$)/i.test(name)
+      if (directory !== undefined && !userDirectory(directory)) throw sourceError()
       const prepared = await access(token, async (c, p) => {
-        const source = await get(c, p, id)
-        if (!source.enabled || source.published_revision === null) throw sourceError(409)
-        const row = (await c.query('SELECT * FROM data_source_versions WHERE deployment_id=$1 AND owner_id=$2 AND source_id=$3 AND revision=$4', [...scope(p, id), source.published_revision])).rows[0]
-        if (!row) throw sourceError(404)
-        return { row, secret: await readCredential(c, p, id, row) }
+        const row = await get(c, p, id)
+        if (row.version !== version || !row.enabled) throw sourceError(409)
+        if (row.kind === 'http') throw sourceError(400)
+        return {row, secret: await readCredential(c,p,id,row), policy: await sourcePolicy(c,p,token)}
       })
-      let metadata: QuerySnapshot | null = null
-      if (prepared.row.kind !== 'http') {
-        // Identifiers are selected from a fixed information_schema projection;
-        // the only optional caller value is a strictly validated table name.
-        const database = prepared.row.kind === 'postgres' ? 'public' : parseSourceDsn(prepared.row.kind, prepared.secret).database
-        const schema = database.replaceAll("'", "''")
-        const sql = request.table === undefined
-          ? `SELECT table_name, table_type FROM information_schema.tables WHERE table_schema = '${schema}' ORDER BY table_name`
-          : `SELECT column_name, data_type, is_nullable FROM information_schema.columns WHERE table_schema = '${schema}' AND table_name = '${request.table}' ORDER BY ordinal_position`
-        const row = { ...prepared.row, config: { ...prepared.row.config, units: {} }, execution: { ...prepared.row.execution, maxRows: 1000 } }
-        const result = await execute(row, prepared.secret, { sql })
-        metadata = snapshotFor(row, result.execution, result.sql, result.rows)
-      }
-      return access(token, async (c, p) => {
-        const current = await get(c, p, id, true)
-        if (!current.enabled) throw sourceError(409)
-        return { sourceId: id, sourceVersion: prepared.row.revision as number, kind: prepared.row.kind as SourceKind, config: prepared.row.config as SourceConfig, metadata }
+      const {row,secret,policy} = prepared
+      const connectedDatabase = parseSourceDsn(row.kind,secret).database
+      if (row.kind !== 'postgres' && directory !== undefined && directory !== connectedDatabase) throw sourceError(403)
+      // Only fixed metadata queries run here. The optional filter names one
+      // validated directory; no query, DSN or account comes from this request.
+      const quote = (name: string) => "'" + name.replaceAll("'", "''") + "'"
+      const condition = directory !== undefined ? `table_schema = ${quote(directory)}`
+        : row.kind !== 'postgres' ? `table_schema = ${quote(connectedDatabase)}`
+        : userSchemaFilter
+      const column = directory === undefined ? 'table_schema' : 'table_name'
+      const sql = `SELECT DISTINCT ${column} FROM information_schema.tables WHERE ${condition} ORDER BY ${column}`
+      const maxRows = 1000
+      const result = await querySqlSource(policy,row.kind,secret,sql,{...executionFor(row.kind,row.config),maxRows},
+        {defaultSchema:row.kind === 'postgres' ? 'public' : connectedDatabase,allowedTables:['information_schema.tables']})
+      return access(token, async (c,p) => {
+        const current = await get(c,p,id,true)
+        if (!current.enabled || current.version !== version) throw sourceError(409)
+        return {items:result.rows.slice(0,maxRows).map(([name])=>name).filter(directory === undefined ? userDirectory : selectable),truncated:result.rows.length > maxRows}
       })
     },
-    async querySource(token: string, input: unknown, payload: unknown = {}): Promise<QuerySnapshot> {
-      const id = sourceId(input), query = object(payload, ['sql','sourceVersion'])
-      if (query.sourceVersion !== undefined) positiveVersion(query.sourceVersion)
+    async describe(token: string, input: unknown, payload: unknown = {}) {
+      const id = sourceId(input), request = object(payload, ['table'])
+      if (request.table !== undefined && (typeof request.table !== 'string' || !/^[A-Za-z_][A-Za-z0-9_$]{0,127}(?:\.[A-Za-z_][A-Za-z0-9_$]{0,127})?$/.test(request.table))) throw sourceError()
       const prepared = await access(token, async (c, p) => {
         const source = await get(c, p, id)
         if (!source.enabled) throw sourceError(409)
-        const revision = query.sourceVersion ?? source.published_revision
-        if (revision === null) throw sourceError(409)
-        const row = (await c.query('SELECT * FROM data_source_versions WHERE deployment_id=$1 AND owner_id=$2 AND source_id=$3 AND revision=$4', [...scope(p, id), revision])).rows[0]
-        if (!row) throw sourceError(404)
-        return { row, secret: await readCredential(c, p, id, row) }
+        const row: Row = { ...source, execution: executionFor(source.kind, source.config) }
+        return { row, secret: await readCredential(c, p, id, row), policy: await sourcePolicy(c, p, token) }
       })
-      const result = await execute(prepared.row, prepared.secret, query)
+      let metadata: QuerySnapshot | null = null
+      if (prepared.row.kind !== 'http') {
+        const database = prepared.row.kind === 'postgres' ? 'public' : parseSourceDsn(prepared.row.kind, prepared.secret).database
+        const schemas: string[] | undefined = prepared.row.config.allowedSchemas
+        const schemaAllowed = (table: string) => !schemas || schemas.includes(table.slice(0, table.indexOf('.')))
+        const allowed: string[] | undefined = prepared.row.config.allowedTables
+          ?.map((table: string) => table.includes('.') ? table : `${database}.${table}`).filter(schemaAllowed)
+        const requested = request.table === undefined ? undefined : request.table.includes('.') ? request.table : `${database}.${request.table}`
+        if (requested !== undefined && (!schemaAllowed(requested) || (allowed ? !allowed.includes(requested) : /^(?:pg_|information_schema\.|mysql\.|sys\.|performance_schema\.)/i.test(requested)))) throw sourceError(403)
+        const literal = (value: string) => "'" + value.replaceAll("'", "''") + "'"
+        const predicate = (table: string) => {
+          const dot = table.indexOf('.')
+          return `(table_schema = ${literal(table.slice(0, dot))} AND table_name = ${literal(table.slice(dot + 1))})`
+        }
+        // Filter inside the fixed metadata projection so unrelated names never
+        // leave the target. Only this internal query can read information_schema.
+        const where = requested !== undefined ? predicate(requested)
+          : allowed ? allowed.length ? allowed.map(predicate).join(' OR ') : '1 = 0'
+          : schemas ? schemas.length ? `table_schema IN (${schemas.map(literal).join(', ')})` : '1 = 0'
+          : prepared.row.kind === 'postgres' ? userSchemaFilter : `table_schema = ${literal(database)}`
+        const sql = request.table === undefined
+          ? `SELECT table_schema, table_name, table_type FROM information_schema.tables WHERE ${where} ORDER BY table_name, table_schema`
+          : `SELECT column_name, data_type, is_nullable FROM information_schema.columns WHERE ${where} ORDER BY ordinal_position`
+        const row = { ...prepared.row, config: { ...prepared.row.config, units: {} }, execution: { ...prepared.row.execution, maxRows: 1000 } }
+        const execution = row.execution
+        const result = { execution, sql: await querySqlSource(prepared.policy, prepared.row.kind, prepared.secret, sql, execution, { defaultSchema: database, allowedTables: [request.table === undefined ? 'information_schema.tables' : 'information_schema.columns'] }) }
+        metadata = snapshotFor(row, result.execution, result.sql)
+      }
+      return access(token, async (c, p) => {
+        const current = await get(c, p, id, true)
+        if (!current.enabled || current.version !== prepared.row.version) throw sourceError(409)
+        return { sourceId: id, sourceVersion: prepared.row.version as number, kind: prepared.row.kind as SourceKind, config: prepared.row.config as SourceConfig, metadata }
+      })
+    },
+    async querySource(token: string, input: unknown, payload: unknown = {}): Promise<QuerySnapshot> {
+      const id = sourceId(input), query = object(payload, ['sql'])
+      const prepared = await access(token, async (c, p) => {
+        const source = await get(c, p, id)
+        if (!source.enabled) throw sourceError(409)
+        const row: Row = { ...source, execution: executionFor(source.kind, source.config) }
+        return { row, secret: await readCredential(c, p, id, row), policy: await sourcePolicy(c, p, token) }
+      })
+      const result = await execute(prepared.policy, prepared.row, prepared.secret, query)
       const snapshot = snapshotFor(prepared.row, result.execution, result.sql, result.rows)
       // No identity transaction is held over network I/O. Recheck revocation and
       // source state before releasing any data or writing a success audit.
@@ -219,8 +254,8 @@ export function createSourceService({ transactions, credentialKeys = '', egressT
         // Lock the permanent root through the final authorization/audit commit.
         // A deleted scoped ID cannot be recreated, so this is the same instance.
         const current = await get(c, p, id, true)
-        if (!current.enabled) throw sourceError(409)
-        await audit(c, p, id, 'source_queried', { revision: prepared.row.revision, rows: snapshot.rows.length, truncated: snapshot.truncated, sha256: snapshot.sha256 })
+        if (!current.enabled || current.version !== prepared.row.version) throw sourceError(409)
+        await audit(c, p, id, 'source_queried', { version: prepared.row.version, rows: snapshot.rows.length, truncated: snapshot.truncated, sha256: snapshot.sha256 })
         return snapshot
       })
     },
@@ -275,6 +310,6 @@ function snapshotFor(row: Row, execution: SourceExecution, sql?: SqlRows, http?:
       return raw as Record<string, QueryCell>
     })
   }
-  try { return createQuerySnapshot({ sourceId: row.source_id, sourceVersion: row.revision, schema, timezone: row.config.timezone, rows, sourceTruncated: (sql?.rows.length ?? http?.length ?? 0) > maxRows }, { maxRows, maxBytes: execution.maxResponseBytes ?? 1_000_000 }) } catch { throw sourceError(502) }
+  try { return createQuerySnapshot({ sourceId: row.source_id, sourceVersion: row.version, schema, timezone: row.config.timezone, rows, sourceTruncated: (sql?.rows.length ?? http?.length ?? 0) > maxRows }, { maxRows, maxBytes: execution.maxResponseBytes ?? 1_000_000 }) } catch { throw sourceError(502) }
 }
 export type SourceService = ReturnType<typeof createSourceService>

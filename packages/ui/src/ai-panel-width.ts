@@ -1,8 +1,7 @@
 /**
  * Resizable AI-panel width: the same clamp/load/save contract every app's
  * AiPanel carried by hand (docs/slides/pdf/markdown/html/sheets). The storage
- * key stays per-app so existing persisted widths migrate unchanged; slides
- * keeps its width session-only and uses only the clamp.
+ * key stays per-app so existing persisted widths migrate unchanged.
  */
 
 export const AI_PANEL_WIDTH_DEFAULT = 360

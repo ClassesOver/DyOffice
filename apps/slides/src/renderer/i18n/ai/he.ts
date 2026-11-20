@@ -12,6 +12,7 @@ export const he = {
   aiQcPageOk: 'עמוד {n}: הפריסה תקינה',
   aiQcPageFixed: 'עמוד {n}: {summary}',
   aiQcPageFixedDefault: 'בעיות פריסה תוקנו',
+  aiQcPageRollbackFailed: "עמוד {n}: התיקון החמיר את הפריסה; השחזור לא אושר. בדקו את העמוד או בטלו את השינויים.",
   aiQcPageReverted: 'עמוד {n}: התיקון האוטומטי החמיר את המצב — בוטל',
   aiQcPageFailed: 'עמוד {n}: הבדיקה נכשלה ({error})',
   aiQcPageSkipped: 'עמוד {n}: בדיקת הפריסה האוטומטית דולגה',

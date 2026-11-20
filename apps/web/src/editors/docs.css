@@ -65,3 +65,5 @@
 .dyoffice-docs-download:hover { background: var(--hover); }
 .dyoffice-docs-download:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 @media (max-width: 600px) { .dyoffice-docs-persistence-state { max-width: 100px; padding: 0 6px; } }
+.dyoffice-collaboration-message { margin-block-end: 12px; }
+.dyoffice-collaboration-message p { margin: 4px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; }

@@ -52,7 +52,6 @@ test('actual HTTP source response completed before cross-tab switch is withheld 
 test('actual frozen JSON download keeps canonical server bytes and rejects a replaced cookie',async t=>{
  const f=await fixture(t)
  const created=await f.workspace.sources.create({sourceId:'download',name:'Download',kind:'http',config:{},secret:f.sourceUrl})
- await f.workspace.sources.publish('download',created.version)
  const capture=await f.workspace.results.query('download',{})
  const saved=await f.workspace.results.save(capture.artifact.resultId,'Frozen',randomUUID())
  const response=await fetch(f.address+'/api/v1/workspace/data-results/'+saved.resultId+'/content',{headers:{cookie:'__Host-dyoffice-session='+f.alice.token}})

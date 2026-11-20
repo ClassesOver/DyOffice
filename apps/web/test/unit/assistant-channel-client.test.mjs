@@ -53,6 +53,21 @@ test('an unstarted channel makes no HTTP requests and creates no scheduler',asyn
  assert.equal(f.intervals.length,0)
 })
 
+test('the listed agentId is the channel recipient, even when the harness has a different agentId',async t=>{
+ const f=fixture(t)
+ f.setSnapshot({members:[
+  {membershipId:'peer-1',agentId:'harness-1',harnessSessionId:'session-1',displayName:'DSH',kind:'dsh',online:true,revoked:false},
+  {membershipId:'revoked-peer',agentId:'harness-2',displayName:'Revoked',kind:'dsh',online:false,revoked:true},
+ ]})
+ f.register();await f.client.start()
+ const listed=await f.client.skill.executeTool({id:'list',name:'list_channel_agents',input:{}})
+ const {agents}=JSON.parse(listed.output)
+ assert.deepEqual(agents,[{agentId:'peer-1',displayName:'DSH',kind:'dsh',online:true}])
+ const delegated=await f.client.skill.executeTool({id:'delegate',name:'delegate_channel_task',input:{agentId:agents[0].agentId,instruction:'Return a finding'}})
+ assert.equal(delegated.isError,undefined)
+ assert.equal(f.calls.find(call=>call.path.endsWith('/actions')).body.to,'peer-1')
+})
+
 test('a snapshot for another document cannot replace the bound document or execute work',async t=>{
  const f=fixture(t);f.register();await f.client.start()
  f.setSnapshot({fileId:'another-file',tasks:[task('foreign-task')]})
@@ -60,6 +75,17 @@ test('a snapshot for another document cannot replace the bound document or execu
  assert.equal(f.client.snapshot().fileId,'file-1')
  assert.ok(f.client.error())
  assert.equal(f.executions.length,0)
+})
+
+test('removing the channel from realtime notifications clears the deleted channel snapshot',async t=>{
+ const f=fixture(t);await f.client.start()
+ const response=f.holdRefresh()
+ f.client.observe([])
+ response.reject(Object.assign(Error('Not found'),{status:404}))
+ await tick()
+ assert.equal(f.client.snapshot(),null)
+ assert.equal(f.client.connected(),false)
+ assert.ok(f.client.error())
 })
 
 test('claiming a queued task executes once despite repeated notification and refresh',async t=>{
@@ -103,6 +129,17 @@ test('a failed peer read retains the registered executor for later work',async t
  await f.client.refresh();await tick();await tick()
  assert.equal(f.executions.length,2)
  assert.ok(f.calls.some(call=>call.path.endsWith('/actions')&&call.body.action.taskId==='next-task'&&call.body.action.outcome==='succeeded'))
+})
+
+test('a peer read that hits a model or step limit is not posted as a successful finding',async t=>{
+ const f=fixture(t)
+ f.setSnapshot({tasks:[task('token-limit'),task('step-limit')]})
+ f.register(async()=>({text:'Partial finding',cancelled:false,...(f.executions.length===1?{truncated:true}:{turnLimit:true})}))
+ await f.client.start()
+ for(let n=0;n<4;n++){await tick();await f.client.refresh()}
+ const receipts=f.calls.filter(call=>call.path.endsWith('/actions')&&call.body.action.kind==='result').map(call=>call.body.action)
+ assert.deepEqual(receipts.map(({taskId,outcome})=>[taskId,outcome]),[['token-limit','failed'],['step-limit','failed']])
+ for(const receipt of receipts){assert.match(receipt.summary,/limit/i);assert.doesNotMatch(receipt.summary,/Partial finding/)}
 })
 
 

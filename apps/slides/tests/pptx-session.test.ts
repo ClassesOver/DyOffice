@@ -49,7 +49,12 @@ describe('transport-free PPTX session, local generation only', () => {
   it('rejects a bad native batch without changing generation or package parts', async () => {
     const {bytes,id}=await fixture();const s=await createPptxSession(bytes)
     const before=await s.exportBytes(0)
-    await expect(s.apply(0,[op(id,'not saved'),{...op('missing','bad'),target:{slide:999,el:'missing'}}])).rejects.toThrow('OP_REJECTED')
+    const rejected=await s.apply(0,[{op:'deleteElement',target:{slide:0,el:id}},op(id,'not saved')])
+    expect(rejected).toMatchObject({
+      generation:0,stateGeneration:0,canUndo:false,canRedo:false,
+      transaction:{applied:false,failures:[{index:1,error:expect.stringContaining('no element')}]},
+    })
+    expect(rejected.records).toEqual([])
     await expectSameParts((await s.exportBytes(0)).bytes, before.bytes)
     await expect(s.apply(0,[{op:'removeSlide',target:{slide:0}}])).rejects.toThrow('UNSUPPORTED_OP')
     s.close()
@@ -128,7 +133,9 @@ describe('T10 op whitelist: slide lifecycle, element add/delete/transform, fill/
     await expect(s.apply(4,[{op:'setFill',target:{slide:0,el:shape},fill:{stops:[{pos:0,color:'#112233'},{pos:1,color:'#445566'}],angle:45}}])).resolves.toMatchObject({generation:5})
     await expect(s.apply(5,[{op:'setStroke',target:{slide:0,el:shape},stroke:null}])).resolves.toMatchObject({generation:6})
     await expect(s.apply(6,[{op:'deleteElement',target:{slide:0,el:shape}}])).resolves.toMatchObject({generation:7})
-    await expect(s.apply(7,[{op:'deleteElement',target:{slide:0,el:shape}}])).rejects.toThrow('OP_REJECTED')
+    await expect(s.apply(7,[{op:'deleteElement',target:{slide:0,el:shape}}])).resolves.toMatchObject({
+      generation:7,transaction:{applied:false,failures:[{index:0,error:expect.stringContaining('no element')}]},
+    })
     expect((await s.outline(7)).count).toBe(1)
     expect(JSON.stringify(await s.render(7,0))).toContain('original')
     s.close()
@@ -146,7 +153,9 @@ describe('T10 op whitelist: slide lifecycle, element add/delete/transform, fill/
     expect(outline.count).toBe(4);expect(outline.slideIds).toHaveLength(4)
     await expect(s.apply(4,[{op:'deleteSlide',target:{slide:3}}])).resolves.toMatchObject({generation:5})
     expect((await s.outline(5)).count).toBe(3)
-    await expect(s.apply(5,[{op:'moveSlide',target:{slide:9},to:0}])).rejects.toThrow('OP_REJECTED')
+    await expect(s.apply(5,[{op:'moveSlide',target:{slide:9},to:0}])).resolves.toMatchObject({
+      generation:5,transaction:{applied:false,failures:[{index:0,error:expect.stringContaining('slide index 9 is out of range')}]},
+    })
     s.close()
   })
   it('exposes deck paths, default font, full render sets and history state for the route contract', async () => {
@@ -179,9 +188,9 @@ describe('T10 op whitelist: slide lifecycle, element add/delete/transform, fill/
     const {bytes,id}=await fixture();const s=await createPptxSession(bytes)
     for (const rejected of [
       {op:'addPicture',target:{slide:0},offset:{x:0,y:0,cx:914400,cy:914400},ext:'png',bytes:'aGk='},
-      {op:'setBackground',target:{slide:0},kind:'solid',color:'#000000'},
-      {op:'setText',target:{slide:0,el:id},paragraphs:[{runs:[{text:'x',link:{kind:'url',url:'https://x.example'}}]}]},
-      {op:'addElement',target:{slide:0},kind:'textbox',offset:{x:0,y:0,cx:914400,cy:914400},adjustments:{adj:1}},
+      {op:'setBackground',target:{slide:0},kind:'solid',color:'#000000',image:'aGk='},
+      {op:'setText',target:{slide:0,el:id},paragraphs:[{runs:[{text:'x',link:{kind:'url',url:'file:///local.txt'}}]}]},
+      {op:'addElement',target:{slide:0},kind:'roundRect',offset:{x:0,y:0,cx:914400,cy:914400},adjustments:{adj:'1000'}},
       {op:'addElement',target:{slide:0},kind:'roundRect',offset:{x:NaN,y:0,cx:914400,cy:914400}},
       {op:'addElement',target:{slide:0},kind:'../../etc',offset:{x:0,y:0,cx:914400,cy:914400}},
       {op:'setFill',target:{slide:0,el:id},fill:'#zzzzzz'},
@@ -342,7 +351,10 @@ describe('bounded local history and structured selection', () => {
     const {bytes,id}=await fixture(); const s=await createPptxSession(bytes)
     await expect(s.undo(0)).rejects.toThrow('NOTHING_TO_UNDO')
     await s.apply(0,[op(id,'one')]); await s.undo(1)
-    await expect(s.apply(2,[op('missing','bad')])).rejects.toThrow('OP_REJECTED')
+    await expect(s.apply(2,[op('missing','bad')])).resolves.toMatchObject({
+      generation:2,stateGeneration:0,canUndo:false,canRedo:true,
+      transaction:{applied:false,failures:[{index:0,error:expect.stringContaining('no element "missing"')}]},
+    })
     await s.redo(2); await s.undo(3); await s.apply(4,[op(id,'different')])
     await expect(s.redo(5)).rejects.toThrow('NOTHING_TO_REDO'); s.close()
   })
@@ -444,6 +456,12 @@ it('supports shape geometry, table creation/editing, and slide visibility operat
   await expect(s.apply(4,[{op:'setTableCell',target:{slide:0,el:tableId},row:0,col:0,paragraphs:[{runs:[{text:'Cell A1'}]}]}])).resolves.toMatchObject({generation:5})
   await expect(s.apply(5,[{op:'setHidden',target:{slide:0},hidden:true}])).resolves.toMatchObject({generation:6})
   const render=await s.render(6,0)
-  expect(JSON.stringify(render)).toContain('Cell A1')
+  expect(render.hidden).toBe(true)
+  const table=render.nodes.find(node=>node.type==='table')
+  const cell=table?.cells.find(cell=>cell.row===0&&cell.col===0)
+  expect(cell?.text?.lines.flatMap(line=>line.runs.map(run=>run.text)).join('')).toBe('Cell A1')
+  const reopened=await openPptx((await s.exportBytes(6)).bytes)
+  const savedTable=reopened.deck.slides[0]!.elements.find(element=>element.type==='table')
+  expect(savedTable?.rows[0]?.[0]?.text?.paragraphs[0]?.runs.map(run=>run.text).join('')).toBe('Cell A1')
   s.close()
 })

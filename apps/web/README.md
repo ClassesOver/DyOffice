@@ -271,23 +271,21 @@ T05b 提供原件生命周期；下文 T06 增加受控的版本保存 API。未
 所有历史版本、待清理对象继续占配额；尚无自动硬删除或历史回收。outbox 当前只在保存事务内持久记录事件意图，T08 才实现派发，不能把它当外部任务已完成。真实 PostgreSQL/S3/Chromium 测试、升级与已知边界见 [T06 证据](../../docs/dyoffice/evidence/t06-revision-transactions.md)。完整原生编辑、解析 OS 沙箱、生产部署和客户验收仍未完成。
 
 
-### T07 原生 DOCX 浏览器实验入口
+### 原生 DOCX 默认入口
 
-在上述 local 会话、当前全部迁移、文件实验 API 和 HTTPS Origin 配置完成后，使用 Node 22 在仓库根目录执行：
+在上述 local 会话、当前全部迁移、对象存储和 HTTPS Origin 配置完成后，使用 Node 22 在仓库根目录执行：
 
 ```sh
 npm ci --ignore-scripts --include=dev
 npm run build:web:docs
-# 在已配置 local 模式的服务环境中启用原生入口
-export DYOFFICE_NATIVE_DOCX=experimental
 npm run dev:web
 ```
 
-默认只读取 `apps/web/dist-docs` 的构建清单；可用受信任的服务配置 `DYOFFICE_NATIVE_DOCX_DIRECTORY` 指向同类完整输出目录。缺少文件 API 或构建资源会拒绝启动，不回退到源文件服务。通过登录 API 建立 Secure Cookie 后，导入 DOCX，再访问 `/native-docx/?fileId=<文件 UUID>`。该路径要求本人拥有未删除的 DOCX；静态资源也需要有效会话。开启该入口后，能力目录和打开结果只将 DOCX 标记为 editable，其他三格式仍 unsupported。
+已配置对象存储时，服务按 `apps/web/dist-docs` 的构建清单自动接入；可用受信任的服务配置 `DYOFFICE_NATIVE_DOCX_DIRECTORY` 指向同类完整输出目录。缺少构建产物时不发布原生 DOCX 能力。登录后可在工作区打开 DOCX，也可访问 `/native-docx/?fileId=<文件 UUID>`。该路径要求本人拥有未删除的 DOCX；静态资源也需要有效会话。XLSX、PPTX 和 PDF 同样按各自的构建资源和运行条件接入，构建全部格式可运行 `npm run build:saas`。
 
 页面复用 DyOffice 的 Tiptap 渲染器、DOCX parser/writer、分页和字体，通过会话 BrowserHost 保存；Ctrl+S 提交新版本。使用租约续期、显式接管、捕获基线 CAS 与幂等回执。失去租约后只读，未知保存结果保留草稿并先确认原请求；保存期间的新输入不会被旧响应清空。版本下载使用既有 content API，单个历史版本元数据新增 `GET /api/v1/files/:id/revisions/:revision`。
 
-这仍是纵向开发接缝：登录/文件列表 UI、AI、完整桌面功能替代、崩溃草稿恢复与外部 Word QA 尚待后续验收，production 拒绝保持生效。浏览器不能调用桌面文件路径或通用 IPC。测试使用真正的 Chromium + TLS + 独立 PostgreSQL：`npm run test:web:docs` 会先重新构建，需预先安装 Chromium 并配置隔离的 `DYOFFICE_TEST_DATABASE_URL`。类型检查为 `npm run typecheck:web:docs`；现有 Docs 与 docx-engine 测试必须使用 Node 22。
+生产模式仍需要独立运行环境验收。浏览器不能调用桌面文件路径或通用 IPC。测试使用真正的 Chromium、TLS 和独立 PostgreSQL：`npm run test:web:docs` 会先重新构建，需预先安装 Chromium 并配置隔离的 `DYOFFICE_TEST_DATABASE_URL`。类型检查为 `npm run typecheck:web:docs`；现有 Docs 与 docx-engine 测试使用 Node 22。
 
 ### T08a 持久任务与投递基础（内部接缝）
 

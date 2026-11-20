@@ -5,11 +5,11 @@ import {createEditorAssistant} from '../../src/editors/assistant'
 const initialLanguage=document.documentElement.lang
 afterEach(()=>{vi.unstubAllGlobals();document.documentElement.lang=initialLanguage})
 
-for(const [initial,preferred,label,wrong] of [
- ['zh-CN','en','Analysis deliveries','分析交付'],
- ['en','zh','分析交付','Analysis deliveries'],
+for(const [initial,preferred,deliveryLabel,taskLabel,wrongDelivery,wrongTask] of [
+ ['zh-CN','en','Analysis deliveries','Tasks','分析交付','任务'],
+ ['en','zh','分析交付','任务','Analysis deliveries','Tasks'],
 ]) {
- test(`analysis panel uses loaded ${preferred} preference rather than initial ${initial} HTML`,async()=>{
+ test(`assistant workspace uses loaded ${preferred} preference rather than initial ${initial} HTML`,async()=>{
   // Exercise the real assistant factory and panel; only the HTTP boundary is synthetic.
   vi.stubGlobal('fetch',vi.fn(async(path:string)=>{
    if(path==='/api/v1/auth/session-proof')return new Response(JSON.stringify({csrfToken:'p'.repeat(43)}))
@@ -21,9 +21,11 @@ for(const [initial,preferred,label,wrong] of [
   try {
    // Native DOCX loads preferences after binding the assistant, before root.render.
    document.documentElement.lang=preferred
-   const markup=renderToStaticMarkup(assistant.modelPicker)
-   expect(markup).toContain(label)
-   expect(markup).not.toContain(wrong)
+   const markup=renderToStaticMarkup(assistant.workspace.panel)
+   expect(markup).toContain(deliveryLabel)
+   expect(markup).not.toContain(wrongDelivery)
+   expect(markup).toContain(`aria-label="${taskLabel}"`)
+   expect(markup).not.toContain(`aria-label="${wrongTask}"`)
   } finally {assistant.dispose()}
  })
 }

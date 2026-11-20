@@ -60,6 +60,6 @@ function modelTextOfDeck(slides: readonly RenderSlide[]): string {
  * unreachable one, a refusal, or a reply that sanitised away to nothing — and
  * the reader keeps the name the deck already had.
  */
-export async function modelSaveAsName(slides: readonly RenderSlide[]): Promise<string> {
-  return suggestFileName({ content: modelTextOfDeck(slides) })
+export async function modelSaveAsName(slides: readonly RenderSlide[], suggest = suggestFileName): Promise<string> {
+  return suggest({ content: modelTextOfDeck(slides) })
 }

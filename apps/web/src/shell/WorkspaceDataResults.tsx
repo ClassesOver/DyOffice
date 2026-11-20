@@ -1,4 +1,4 @@
-import {Button, Alert, Table} from 'antd'
+import './native-settings.css'
 import { useEffect, useRef, useState } from 'react'
 import {offerSourceResultDownload} from './source-result-download'
 import type { SourceResultsClient } from './source-results-client'
@@ -22,18 +22,18 @@ export function WorkspaceDataResults({ client, onClose, presentation = 'dialog' 
   }
   async function read(resultId: string, offset = 0) { const value = await client.read(resultId, offset); if (alive.current) setPage(value) }
   return <div className={presentation === 'page' ? 'workspace-panel-host' : 'set-overlay'}><section className={presentation === 'page' ? 'workspace-panel workspace-data-results-panel' : 'set-dialog source-dialog'} role={presentation === 'page' ? undefined : 'dialog'} aria-modal={presentation === 'page' ? undefined : true} aria-label="工作区数据结果">
-    <div className={presentation === 'page' ? 'workspace-panel-header' : 'set-header'}><h2 className="set-title">工作区数据结果</h2><Button autoInsertSpace={false} disabled={presentation === 'dialog' && busy} onClick={onClose}>关闭</Button></div>
+    <div className={presentation === 'page' ? 'workspace-panel-header' : 'set-header'}><h2 className="set-title">工作区数据结果</h2><button type="button" className="native-settings-button" disabled={presentation === 'dialog' && busy} onClick={onClose}>关闭</button></div>
     <div className={presentation === 'page' ? 'workspace-panel-body' : 'set-body'}><p>这里保存的是已冻结的查询结果，不会在打开、翻页或下载时重新查询数据库。截断结果会继续显示截断标记。</p>
-      <ul>{items.map(item => <li key={item.resultId}><Button autoInsertSpace={false} disabled={busy} onClick={() => void run(() => read(item.resultId))}>{item.name}</Button>
-        <span> {item.sourceId} r{item.sourceVersion} · {item.rowCount} 行{item.truncated ? ' · 源查询已截断' : ''}</span>
-        <Button autoInsertSpace={false} disabled={busy} onClick={() => void run(async () => { const json = await client.download(item.resultId); if (alive.current) offerSourceResultDownload(json, item.resultId) })}>下载 JSON</Button></li>)}</ul>
-      {cursor && <Button autoInsertSpace={false} disabled={busy} onClick={() => void run(async () => { const result = await client.list(cursor); if (alive.current) { setItems(current => [...current, ...result.items]); setCursor(result.nextCursor) } })}>加载更多结果</Button>}
+      <ul>{items.map(item => <li key={item.resultId}><button type="button" className="native-settings-button" disabled={busy} onClick={() => void run(() => read(item.resultId))}>{item.name}</button>
+        <span> {item.sourceId} · {item.rowCount} 行{item.truncated ? ' · 源查询已截断' : ''}</span>
+        <button type="button" className="native-settings-button" disabled={busy} onClick={() => void run(async () => { const json = await client.download(item.resultId); if (alive.current) offerSourceResultDownload(json, item.resultId) })}>下载 JSON</button></li>)}</ul>
+      {cursor && <button type="button" className="native-settings-button" disabled={busy} onClick={() => void run(async () => { const result = await client.list(cursor); if (alive.current) { setItems(current => [...current, ...result.items]); setCursor(result.nextCursor) } })}>加载更多结果</button>}
       {page && <section aria-label="冻结结果预览"><h3>{page.artifact.name}</h3><p>时区 {page.timezone} · 第 {page.offset + 1}–{page.offset + page.rows.length} 行 / {page.totalRows} 行{page.sourceTruncated ? '（原查询已截断）' : ''}</p><p className="source-hash">SHA-256 {page.sha256}</p>
-        <div className="source-results"><Table size="small" pagination={false} scroll={{x:'max-content'}} rowKey="__rowKey" dataSource={page.rows.map((row,index)=>({values:row,__rowKey:String(page.offset+index)}))} columns={page.schema.map(column=>({title:column.name+(column.unit ? `（${column.unit}）` : ''),key:column.name,render:(_value:unknown,record:{values:Record<string,unknown>})=>record.values[column.name]===null?'—':String(record.values[column.name]??'')}))}/></div>
-        <Button autoInsertSpace={false} disabled={busy || page.offset === 0} onClick={() => void run(() => read(page.artifact.resultId, Math.max(0, page.offset - 1000)))}>上一批</Button>
-        <Button autoInsertSpace={false} disabled={busy || page.nextOffset === null} onClick={() => void run(() => read(page.artifact.resultId, page.nextOffset!))}>下一批</Button>
+        <div className="source-results"><table><thead><tr>{page.schema.map(column=><th key={column.name} scope="col">{column.name}{column.unit?`（${column.unit}）`:''}</th>)}</tr></thead><tbody>{page.rows.map((row,index)=><tr key={page.offset+index}>{page.schema.map(column=><td key={column.name}>{row[column.name]===null?'—':String(row[column.name]??'')}</td>)}</tr>)}</tbody></table></div>
+        <button type="button" className="native-settings-button" disabled={busy || page.offset === 0} onClick={() => void run(() => read(page.artifact.resultId, Math.max(0, page.offset - 1000)))}>上一批</button>
+        <button type="button" className="native-settings-button" disabled={busy || page.nextOffset === null} onClick={() => void run(() => read(page.artifact.resultId, page.nextOffset!))}>下一批</button>
       </section>}
-      {error && <Alert type="error" showIcon title={error}/>}
+      {error && <p role="alert" className="native-settings-notice is-error">{error}</p>}
     </div>
   </section></div>
 }

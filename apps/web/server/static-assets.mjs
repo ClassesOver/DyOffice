@@ -11,7 +11,32 @@ const contentTypes = {
   '.docx':'application/octet-stream', '.xlsx':'application/octet-stream', '.pptx':'application/octet-stream',
   '.ico':'image/x-icon', '.woff':'font/woff', '.woff2':'font/woff2',
   '.ttf':'font/ttf', '.wasm':'application/wasm',
+  '.bcmap':'application/octet-stream', '.pfb':'application/octet-stream',
 };
+
+export async function createRefreshableStaticAssets(options) {
+  const manifest = join(options.assetDirectory, '.vite/manifest.json');
+  const stamp = async () => {
+    const info = await stat(manifest, { bigint:true });
+    return `${info.ino}:${info.size}:${info.mtimeNs}:${info.ctimeNs}`;
+  };
+  let currentStamp = await stamp();
+  let assets = await createStaticAssets(options);
+  let refreshing;
+  return async (request, response, pathname) => {
+    if (refreshing) await refreshing;
+    if (await stamp() !== currentStamp) {
+      if (!refreshing) refreshing = (async () => {
+        const nextStamp = await stamp();
+        const nextAssets = await createStaticAssets(options);
+        assets = nextAssets;
+        currentStamp = nextStamp;
+      })();
+      try { await refreshing; } finally { refreshing = undefined; }
+    }
+    return assets(request, response, pathname);
+  };
+}
 
 /** Source is the legacy default. Built mode is a local integration seam, not production auth.
  * @param {{assetMode?: string, assetDirectory?: string, pages?: string[], assetInventory?: string, cacheControl?: string}} options

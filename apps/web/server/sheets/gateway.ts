@@ -2,7 +2,8 @@ import { readWorkbookRedactionSource } from '../../../sheets/src/main/workbook-r
 import { parseSlicerState } from '../../../../packages/xlsx-gateway/src/gateway/xlsx-slicer'
 import { listWorkbookQueries } from '../../../../packages/xlsx-gateway/src/gateway/xlsx-connections'
 import { refreshableQueriesOf } from '../../../../packages/xlsx-gateway/src/gateway/xlsx-connection-refresh'
-import { workbookSaveRequestSchema } from '../../../sheets/src/shared/desktop-api'
+import { parsePivotDefinition } from '../../../../packages/xlsx-gateway/src/gateway/xlsx-pivot'
+import { workbookPivotDefinitionSchema, workbookSaveRequestSchema } from '../../../sheets/src/shared/desktop-api'
 import { mapWorkbookSaveRequest } from '../../../sheets/src/shared/workbook-save-plan'
 import { createBufferEntrySource, type EntrySource } from '../../../../packages/xlsx-gateway/src/gateway/xlsx-gateway'
 import { parseSheetElements, readAttribute, decodeAttribute, parseRelationships } from '../../../../packages/xlsx-gateway/src/gateway/xlsx-sheets'
@@ -90,8 +91,17 @@ async function planSave(source: EntrySource, sheets: readonly { id: string; name
 
 /** Read preserved package metadata using the same parsers as desktop. This
  * enumerates connections; it never fetches any linked workbook or URL. */
-export async function readWorkbookPackage(bytes: Buffer) {
+export async function readWorkbookPackage(bytes: Buffer, _signal?: AbortSignal, pivot?: {path:string;cachePath:string}) {
   const source = await createBufferEntrySource(bytes)
+  if (pivot) {
+    if (!/^xl\/pivotTables\/[A-Za-z0-9._-]+\.xml$/.test(pivot.path) || !/^xl\/pivotCache\/[A-Za-z0-9._-]+\.xml$/.test(pivot.cachePath)) throw Object.assign(new Error('Invalid pivot parts'), {statusCode:400})
+    try {
+      const [pivotXml,cacheXml] = await Promise.all([source.readText(pivot.path),source.readText(pivot.cachePath)])
+      return workbookPivotDefinitionSchema.parse(parsePivotDefinition(pivotXml,cacheXml))
+    } catch {
+      throw Object.assign(new Error('Invalid pivot definition'), {statusCode:400})
+    }
+  }
   const names = new Set(await source.paths())
   const read = async (path: string) => names.has(path) ? source.readText(path) : undefined
   return {

@@ -21,7 +21,11 @@ export async function createDraftCopyAuthority(active:()=>boolean,send:typeof fe
   return {current,async verify(){
    if(!current())return false
    try{await client.bindSession(original.proof);return current()}
-   catch{valid=false;return false}
+   catch(error){
+    const status=(error as {status?:number})?.status
+    if(!(error instanceof TypeError||status===429||(typeof status==='number'&&status>=500)))valid=false
+    return false
+   }
   }}
  }catch{valid=false;return {current,verify:async()=>false}}
 }

@@ -106,6 +106,12 @@ export function createHarnessArtifacts({transactions,objects}:{transactions:Prin
     return delivery
    })
   },
+  async recent(token:string):Promise<AnalysisDelivery[]> {
+   return access(token,async(c,p)=>{
+    const {rows}=await c.query<{receipt:AnalysisDelivery}>('SELECT receipt FROM harness_analysis_deliveries WHERE deployment_id=$1 AND owner_id=$2 ORDER BY created_at DESC,command_id DESC LIMIT 10',scope(p))
+    return rows.map(row=>row.receipt)
+   })
+  },
   async receipt(token:string,commandId:string):Promise<AnalysisDelivery> {
    const id=uuid(commandId)
    return access(token,async(c,p)=>{

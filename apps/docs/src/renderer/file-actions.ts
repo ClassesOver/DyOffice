@@ -77,6 +77,7 @@ import { TABLE_TRAILING_SKIP, setLazyMediaHashes } from './editor/extensions'
 import { setStaticAsciiResolver } from './editor/protected-render'
 import { FORMAT_MARKS, serializeMarks } from './editor/caret-marks'
 import { TRACK_IGNORE } from './editor/revisions'
+import {wordSaveNormalization} from './collab-save'
 import {
   cancelPhasedContent,
   isPhasedContentPending,
@@ -94,6 +95,7 @@ import { t, getLang } from './i18n/locale'
 import { isBlankDocument, parseHtmlFragment, replaceBlockRange } from './ai/protocol'
 import { carryDocSeen } from './ai/tools'
 import { isDocDirty, resetCrossDocEditState } from './doc-dirty'
+import { hasDocumentWriterDraft } from './ai/doc-writer'
 import { pruneUnreferencedNumbering } from './numbering-actions'
 import { applySectPrRewrites, type SectPrRewrite } from './sectpr-rewrite'
 import { createSaveSerializer } from './save-until-persisted'
@@ -121,15 +123,27 @@ export type PendingPdfExport = {
   closePreview: boolean
 }
 
+export type OfficeHandoffFailure = 'conflict' | 'outputLimit' | 'timedOut' | 'emptyOutput' | 'noTool' | 'failed'
+export type OfficeHandoffRunner = (input: {
+  mode: 'write' | 'followup'
+  skill?: import('@genoffice/agent-core').DocumentHandoffOptions['skill']
+  instruction: string
+  signal: AbortSignal
+  onText?(text: string): void
+  onWriteTool?(state: 'running' | 'done' | 'failed'): void
+}) => Promise<{ text: string; mutated?: boolean; failure?: OfficeHandoffFailure }>
+
 /** The App state the file actions need; built fresh per call. */
 export interface DocsEditorHandle {
   analysis?: import('../../../../packages/web-contracts/src/analysis-document').NativeAnalysisEditor
+  readDraftText?(includeSaved?: boolean, includeWriterDraft?: boolean): { text: string; truncated: boolean } | null
+  beginExternalWrite?(): boolean
   getSelection(): { from: number; to: number; text: string } | null
   serialize(): Promise<Uint8Array | null>
   save(): Promise<boolean>
   isDirty(): boolean
 }
-export interface DocsHostLifecycle { documentOpened(): void; beforeSave(): Promise<void>; afterSave(accepted: boolean, incompleteReasons?: readonly string[]): void }
+export interface DocsHostLifecycle {wordSyncActive?():boolean; documentOpened(): void; beforeSave(): Promise<void>; afterSave(accepted: boolean, incompleteReasons?: readonly string[]): void; aiDocumentCreated?(accepted: boolean): void }
 export interface FileActionContext {
   hostLifecycle?: DocsHostLifecycle
   /** Read the latest React state after asynchronous native serialization/write. */
@@ -859,10 +873,10 @@ function docxNameFromStem(stem: string): string | null {
  * is the one thing that reaches them after the model has seen the rest of the
  * document, so a leak here would survive the redaction it was meant to outlive.
  */
-export async function suggestedSaveAsName(ctx: FileActionContext): Promise<string> {
+export async function suggestedSaveAsName(ctx: FileActionContext, suggest: (input: { content: string }) => Promise<string> = suggestFileName): Promise<string> {
   const { editor } = ctx
   if (!editor) return ''
-  const stem = await suggestFileName({ content: modelTextOfDocument(editor) })
+  const stem = await suggest({ content: modelTextOfDocument(editor) })
   // a full file name, extension and all, because this is what the save dialog takes
   return docxNameFromStem(stem) ?? ''
 }
@@ -886,6 +900,8 @@ export async function buildDocBytes(
   if (docGeneration !== generation) return null
   const { doc, editor } = ctx
   if (!doc || !editor) return null
+  // Streamed writer content is temporary until the complete/keep decision lands.
+  if (hasDocumentWriterDraft(editor)) return null
   const pmJson = pmOverride ?? (editor.getJSON() as PmNode)
   const plan = pmDocToSavePlan(pmJson, doc.parsed.blocks)
   // chart data edits patch the chart's own zip part, not the body XML
@@ -1187,22 +1203,21 @@ export function aiDocContentNodes(html: string): PmNode[] {
  * Boot-time half of the AI create_document tool: fill the fresh blank
  * document with the queued content (same restricted-HTML pipeline as
  * insert_content), then silently save it under the tool-provided title.
- * The save runs even when nothing could be parsed — the tool already
- * reported the document as created, so an unsaved untitled tab would lie.
+ * Return success only when the generated body was accepted and saved.
  */
 export async function applyAiDocContent(
   ctx: FileActionContext,
   content: AiDocContent,
-): Promise<void> {
+): Promise<boolean> {
   const { editor, doc } = ctx
-  if (!editor || !doc) return
+  if (!editor || !doc) return false
   const nodes = aiDocContentNodes(content.html)
-  if (nodes.length > 0) {
-    replaceBlockRange(editor, 0, editor.state.doc.childCount - 1, nodes)
-    // the document is born with this content: undo must not reach back to empty
-    resetEditorHistory(editor)
-  }
-  await save(ctx, false, true, `${content.title}.docx`)
+  if (nodes.length === 0) return false
+  replaceBlockRange(editor, 0, editor.state.doc.childCount - 1, nodes)
+  // the document is born with this content: undo must not reach back to empty
+  resetEditorHistory(editor)
+  const saved = await save(ctx, false, true, `${content.title}.docx`)
+  return saved && !ctx.saveIncompleteRef.current
 }
 
 async function saveOnce(
@@ -1233,9 +1248,17 @@ async function saveOnce(
     if (docGeneration !== generation) return false
     const docSnapshot = editor.state.doc
     const metadataSnapshot = captureSaveMetadata(ctx)
-    const bytes = await buildDocBytes(ctx)
+    const coediting=!!ctx.hostLifecycle?.wordSyncActive?.()
+    const bytes = await buildDocBytes(ctx,coediting?docSnapshot.toJSON() as PmNode:undefined)
     if (docGeneration !== generation) return false
     if (!bytes) return false
+    // A checkpoint may only start a new browser at positions compatible with
+    // the step journal. Check before uploading any bytes.
+    const checked=coediting?await parseDocxOffThread(bytes):undefined
+    if(checked){
+      const target=editor.schema.nodeFromJSON(blocksToPmDoc(checked.blocks,readSections(checked),pmDocOptions(checked)))
+      if(editor.state.doc!==docSnapshot||!wordSaveNormalization(editor.state,target))throw Error('文档正在变更或保存会改变协同位置，请保留草稿后重试。')
+    }
     const buffer = bytes.buffer.slice(
       bytes.byteOffset,
       bytes.byteOffset + bytes.byteLength,
@@ -1326,7 +1349,7 @@ async function saveOnce(
       if (result.dataUrl) fullBytes = await fetchDocBytes(result.dataUrl)
     }
     // parse before the identity check: a document opened during this await must not be rewritten
-    const reparsed = await parseDocxOffThread(fullBytes ?? bytes)
+    const reparsed = checked&&!fullBytes?checked:await parseDocxOffThread(fullBytes ?? bytes)
     if (docGeneration !== generation) return false
     const currentSaveContext = ctx.getCurrentSaveContext?.() ?? ctx
     const documentChanged = editor.state.doc !== docSnapshot
@@ -1378,7 +1401,11 @@ async function saveOnce(
       /* unrepresentable → rewrite */
     }
     // Equal doc: skip the rewrite so undo history, caret and scroll survive.
-    if (!unchanged) {
+    if (!unchanged && coediting) {
+      const tr=wordSaveNormalization(editor.state,editor.schema.nodeFromJSON(rebasedPm))
+      if(!tr)throw Error('保存后的共同编辑位置不兼容')
+      editor.view.dispatch(tr)
+    } else if (!unchanged) {
       // The caret's marks — the ribbon's font/size live here as storedMarks and
       // apply to whatever is typed next. setContent replaces the doc, so they
       // have to travel with the selection or an autosave silently drops the

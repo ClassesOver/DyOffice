@@ -1,6 +1,6 @@
 import type {RevisionRef} from '../../web-contracts/src/api.ts'
 import type {AnalysisDocumentTarget,AnalysisTargetCapture,NativeAnalysisEditor,PreparedAnalysisContent} from '../../web-contracts/src/analysis-document.ts'
-export function createAnalysisDocumentTarget(o:{fileId:string;format:'docx'|'xlsx';state:()=>{revision:RevisionRef;lease:{leaseEpoch:number}|null;status:string};editor:()=>NativeAnalysisEditor|null;save:(check:()=>boolean)=>Promise<boolean>;receipt:()=>RevisionRef|null;verifyAuthority:()=>Promise<void>}):AnalysisDocumentTarget {
+export function createAnalysisDocumentTarget(o:{fileId:string;format:'docx'|'xlsx'|'pptx';state:()=>{revision:RevisionRef;lease:{leaseEpoch:number}|null;status:string};editor:()=>NativeAnalysisEditor|null;save:(check:()=>boolean)=>Promise<boolean>;receipt:()=>RevisionRef|null;verifyAuthority:()=>Promise<void>}):AnalysisDocumentTarget {
  let disposed=false,busy=false
  const captures=new Map<AnalysisTargetCapture,{native:ReturnType<NativeAnalysisEditor['captureAnalysis']>}>()
  const applications=new Map<string,{native:ReturnType<NativeAnalysisEditor['captureAnalysis']>;base:string;epoch:number}>()
@@ -11,7 +11,7 @@ export function createAnalysisDocumentTarget(o:{fileId:string;format:'docx'|'xls
  capture(){if(busy||!live())throw error();const native=o.editor()?.captureAnalysis();if(!native)throw error();const s=o.state();const c=Object.freeze({token:crypto.randomUUID(),fileId:o.fileId,format:o.format,baseRevision:s.revision.revision,leaseEpoch:s.lease!.leaseEpoch});captures.clear();captures.set(c,{native});return c},
  async apply(c,content:PreparedAnalysisContent,artifact,authorized){
   const held=captures.get(c);captures.delete(c)
-  if(!held||busy||!artifact.artifactId||!/^[a-f0-9]{64}$/.test(artifact.sha256))throw error()
+  if(c.format==='pdf'||!held||busy||!artifact.artifactId||!/^[a-f0-9]{64}$/.test(artifact.sha256))throw error()
   const fence={base:c.baseRevision,epoch:c.leaseEpoch},check=()=>authorized()&&authority(fence)&&held.native.matches()
   if(!check())throw error();busy=true
   try{await o.verifyAuthority();if(!check())throw error();if(!await held.native.apply(content,check)||!authorized()||!authority(fence))throw error()

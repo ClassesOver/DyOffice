@@ -554,7 +554,10 @@ export async function assembleWithJsZip(source: Buffer, plan: MutationPlan): Pro
   }
 }
 
-export async function readBasicWorkbook(buffer: Buffer): Promise<ImportedXlsx> {
+export async function readBasicWorkbook(
+  buffer: Buffer,
+  { includeFormulaCache = false }: { includeFormulaCache?: boolean } = {},
+): Promise<ImportedXlsx> {
   const zip = await createBufferEntrySource(buffer)
   const workbookXml = await zip.readText('xl/workbook.xml')
   const sharedStrings = await readSharedStrings(zip)
@@ -581,7 +584,7 @@ export async function readBasicWorkbook(buffer: Buffer): Promise<ImportedXlsx> {
     sheets.push({
       id,
       name: decodedName,
-      cells: parseWorksheetCells(inferWorksheetAddresses(worksheetXml), sharedStrings),
+      cells: parseWorksheetCells(inferWorksheetAddresses(worksheetXml), sharedStrings, includeFormulaCache),
     })
     sheetNamesById[id] = decodedName
   }
@@ -3548,6 +3551,7 @@ function parseCell(worksheetXml: string, address: string): CellState {
 function parseWorksheetCells(
   worksheetXml: string,
   sharedStrings: readonly string[],
+  includeFormulaCache: boolean,
 ): Readonly<Record<string, CellState>> {
   const cells: Record<string, CellState> = {}
   const cellPattern = /<c\b([^>]*?)(?:\/>|>([\s\S]*?)<\/c>)/g
@@ -3558,7 +3562,7 @@ function parseWorksheetCells(
     if (!address || !isGridCellAddress(address)) continue
     const body = match[2] ?? ''
     const formula = /<f(?:\s[^>]*[^/>])?>([\s\S]*?)<\/f>/.exec(body)?.[1]
-    if (formula !== undefined) {
+    if (formula !== undefined && !includeFormulaCache) {
       cells[address] = { value: null, formula: `=${decodeXmlText(formula)}` }
       continue
     }
@@ -3568,23 +3572,25 @@ function parseWorksheetCells(
         .map((textMatch) => decodeCellText(textMatch[1] ?? ''))
         .join('')
       cells[address] = { value: text }
-      continue
-    }
-    const rawValue = /<v(?:\s[^>]*)?>([\s\S]*?)<\/v>/.exec(body)?.[1]
-    if (rawValue === undefined) {
-      cells[address] = { value: null }
-    } else if (type === 's') {
-      const index = Number(rawValue)
-      cells[address] = { value: sharedStrings[index] ?? '' }
-    } else if (type === 'b') {
-      cells[address] = { value: rawValue === '1' }
-    } else if (type === 'str') {
-      cells[address] = { value: decodeCellText(rawValue) }
     } else {
-      const numericValue = Number(rawValue)
-      cells[address] = {
-        value: Number.isFinite(numericValue) ? numericValue : decodeXmlText(rawValue),
+      const rawValue = /<v(?:\s[^>]*)?>([\s\S]*?)<\/v>/.exec(body)?.[1]
+      if (rawValue === undefined || (formula !== undefined && rawValue === '' && type !== 'str')) {
+        cells[address] = { value: null }
+      } else if (type === 's') {
+        cells[address] = { value: sharedStrings[Number(rawValue)] ?? '' }
+      } else if (type === 'b') {
+        cells[address] = { value: rawValue === '1' }
+      } else if (type === 'str') {
+        cells[address] = { value: decodeCellText(rawValue) }
+      } else {
+        const numericValue = Number(rawValue)
+        cells[address] = {
+          value: Number.isFinite(numericValue) ? numericValue : decodeXmlText(rawValue),
+        }
       }
+    }
+    if (formula !== undefined) {
+      cells[address] = { value: cells[address]!.value, formula: `=${decodeXmlText(formula)}` }
     }
   }
   return cells

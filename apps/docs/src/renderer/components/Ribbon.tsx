@@ -261,6 +261,7 @@ import {
 interface RibbonProps {
   fileActions?: React.ReactNode
   desktopActionsAvailable?: boolean
+  aiNamingAvailable?: boolean
   /** App keyboard shortcuts reuse ribbon closures through here (font-size stepping keeps its coalescing) */
   actionsRef?: React.MutableRefObject<{
     stepFontSize?: (dir: 1 | -1) => void
@@ -721,6 +722,7 @@ function RibbonInner({
   actionsRef,
   quickActions,
   desktopActionsAvailable = true,
+  aiNamingAvailable = desktopActionsAvailable,
   fileActions,
   trailingActions,
   editor,
@@ -2252,8 +2254,8 @@ function RibbonInner({
                 </button>
                 <button
                   className="qa-name-with-ai"
-                  disabled={!hasDoc || !desktopActionsAvailable}
-                  title={!desktopActionsAvailable ? lang === 'en' ? 'AI file naming is only available in the desktop app.' : 'AI 命名仅桌面版可用。' : undefined}
+                  disabled={!hasDoc || !aiNamingAvailable}
+                  title={!aiNamingAvailable ? lang === 'en' ? 'AI file naming is currently unavailable.' : '当前无法使用 AI 命名。' : undefined}
                   onClick={() => {
                     setDropdown(null)
                     onNameWithAi()
@@ -3356,7 +3358,7 @@ function RibbonInner({
                   <span className="rb-big-icon">
                     <GensparkMark size={26} />
                   </span>
-                  <span>Genspark AI</span>
+                  <span>AI 助手</span>
                 </button>
                 <button
                   className="rb-big ai-entry"
@@ -3481,7 +3483,7 @@ function RibbonInner({
                   <span>{t('aiMindMapBtn')}</span>
                 </button>
               </div>
-              <div className="ribbon-group-label">Genspark AI</div>
+              <div className="ribbon-group-label">AI 助手</div>
             </div>
 
             <div className="ribbon-sep" />

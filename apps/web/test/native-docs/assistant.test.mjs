@@ -113,7 +113,7 @@ test('native DOCX assistant delivers selected private Skill through the personal
   await expect(page.locator('.ai-dock')).toBeAttached()
   assert.deepEqual(errors, [])
   if (await page.locator('.ai-rail').isVisible()) await page.locator('.ai-rail').click()
-  await expect(page.getByLabel('助手模型')).toHaveValue('primary')
+  await expect(page.getByRole('button', {name: '模型: synthetic', exact: true})).toBeVisible()
   let attachAttempt = 0
   const attachSkill = async () => {
     attachAttempt++
@@ -169,7 +169,7 @@ test('native DOCX assistant delivers selected private Skill through the personal
   assert.equal(wire.max_tokens, 128)
   assert.match(JSON.stringify(wire.messages), /Alice private instructions/)
   assert.doesNotMatch(JSON.stringify(wire), /Bob private instructions|synthetic-private-key/)
-  assert.ok(!wire.tools.some(tool => tool.function.name === 'apply_ops'))
+  assert.ok(wire.tools.some(tool => tool.function.name === 'apply_ops'), 'Native DOCX supports editing the open document')
   const secondTurn = page.waitForResponse(r => r.url() === origin + '/api/v1/ai/turns' && r.request().method() === 'POST')
   await composer.fill('Follow-up without a Skill')
   phase = 'send-turn'

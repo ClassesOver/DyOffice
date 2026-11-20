@@ -5,7 +5,7 @@ import { createBoundedSourceSocket } from './wire-budget.ts'
 import { checkServerIdentity } from 'node:tls'
 import type { SourceExecution } from '../../../../../../packages/web-contracts/src/sources.ts'
 import type { SourceEgressPolicy, SqlSourceKind } from '../../security/egress.ts'
-import { validateReadOnlySql } from './sql-policy.ts'
+import { validateReadOnlySql, type SqlTableScope } from './sql-policy.ts'
 import { sourceGrantQuery, validateSourceGrantRows } from './grants.ts'
 import { sourceError } from './config.ts'
 
@@ -14,6 +14,7 @@ const pgType = (oid: number): 'string' | 'number' | 'boolean' => oid === 16 ? 'b
 const mysqlType = (id: number): 'string' | 'number' | 'boolean' => [0,1,2,3,4,5,8,9,13,246].includes(id) ? 'number' : 'string'
 export function safeFailure(error: unknown, kind: SqlSourceKind): never {
   const code = (error as { code?: string }).code
+  if (kind !== 'postgres' && code === 'HANDSHAKE_NO_SSL_SUPPORT') throw Object.assign(sourceError(502), { code: 'SOURCE_TLS_UNSUPPORTED' })
   if (code === '42501' || code === '25006' || ['ER_TABLEACCESS_DENIED_ERROR','ER_DBACCESS_DENIED_ERROR','ER_SPECIFIC_ACCESS_DENIED_ERROR'].includes(code ?? '')) throw sourceError(403)
   if (code === '57014' || ['PROTOCOL_SEQUENCE_TIMEOUT','ER_QUERY_TIMEOUT','ETIMEDOUT'].includes(code ?? '')) throw sourceError(504)
   // pg emits this exact local driver error without a SQLSTATE when its
@@ -22,10 +23,10 @@ export function safeFailure(error: unknown, kind: SqlSourceKind): never {
   if ((error as { statusCode?: number }).statusCode) throw error
   throw sourceError(502)
 }
-/** No connectionString is passed to either driver. DNS is checked against the
- * operator pin set first; the socket always dials that numeric address. */
-export async function querySqlSource(policy: SourceEgressPolicy, kind: SqlSourceKind, secret: string, sql: unknown, execution: SourceExecution): Promise<SqlRows> {
-  const normalized = validateReadOnlySql(sql, kind)
+/** No connectionString is passed to either driver. The socket always dials
+ * the numeric address checked by the egress policy. */
+export async function querySqlSource(policy: SourceEgressPolicy, kind: SqlSourceKind, secret: string, sql: unknown, execution: SourceExecution, scope?: SqlTableScope): Promise<SqlRows> {
+  const normalized = validateReadOnlySql(sql, kind, scope)
   const target = await policy.sql(kind, secret)
   const timeout = execution.statementTimeoutMs ?? 5000, maxRows = execution.maxRows
   // Include bounded TLS/auth/row framing overhead; evidence has a stricter cap.

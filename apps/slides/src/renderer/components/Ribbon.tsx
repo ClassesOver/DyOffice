@@ -1079,6 +1079,7 @@ export function Ribbon({
   onUndo,
   onRedo,
   onSaveAs,
+  saveDownload,
   onNameWithAi,
   onExportPdf,
   onPrint,
@@ -1091,6 +1092,7 @@ export function Ribbon({
   showThumbs,
   onToggleThumbs,
   aiOpen,
+  aiAvailable,
   onToggleAi,
   onAiPreset,
   onPickShape,
@@ -1237,6 +1239,7 @@ export function Ribbon({
 
   const [tab, setTab] = useState<MainTab | ContextTab>('home')
   const [fileOpen, setFileOpen] = useState(false)
+  const fileButtonRef = useRef<HTMLButtonElement>(null)
   const [colorOpen, setColorOpen] = useState(false)
   const [fontOpen, setFontOpen] = useState(false)
   const [sizeOpen, setSizeOpen] = useState(false)
@@ -1342,6 +1345,7 @@ export function Ribbon({
   // ribbon-tabs window drag region (drag regions swallow mousedown, so a
   // press there could never dismiss otherwise)
   const anyPanelOpen =
+    fileOpen ||
     tableOpen ||
     colorOpen ||
     translateOpen ||
@@ -1593,6 +1597,7 @@ export function Ribbon({
 
   const tabCtx: RibbonTabCtx = {
     aiOpen,
+    aiAvailable,
     brushMode,
     canDistribute,
     canPaste,
@@ -1716,9 +1721,17 @@ export function Ribbon({
         }`}
         onDoubleClick={collapse.onTabsDoubleClick}
       >
-        {!IS_MAC && (
-          <div className="file-tab-wrap">
+        {(!IS_MAC || saveDownload) && (
+          <div className="file-tab-wrap" onKeyDown={(event) => {
+            if (event.key !== 'Escape' || !fileOpen) return
+            event.stopPropagation()
+            setFileOpen(false)
+            fileButtonRef.current?.focus()
+          }}>
             <button
+              ref={fileButtonRef}
+              type="button"
+              aria-expanded={fileOpen}
               className={`ribbon-tab ribbon-tab-file ${fileOpen ? 'open' : ''}`}
               onMouseDown={(e) => {
                 e.stopPropagation()
@@ -1729,7 +1742,7 @@ export function Ribbon({
               {t('ribbonTabFile')}
             </button>
             {fileOpen && (
-              <div className="file-menu">
+              <div className="file-menu" role="group" aria-label={t('ribbonTabFile')} onMouseDown={(event) => event.stopPropagation()}>
                 <button
                   onClick={() => {
                     setFileOpen(false)
@@ -1747,7 +1760,7 @@ export function Ribbon({
                 >
                   {t('ribbonFileSave')} <span className="file-menu-key">Ctrl+S</span>
                 </button>
-                <button
+                {saveDownload ? <div onClick={() => setFileOpen(false)}>{saveDownload}</div> : <button
                   disabled={!hasDoc}
                   onClick={() => {
                     setFileOpen(false)
@@ -1755,9 +1768,9 @@ export function Ribbon({
                   }}
                 >
                   {t('ribbonFileSaveAs')} <span className="file-menu-key">Ctrl+Shift+S</span>
-                </button>
+                </button>}
                 <button
-                  disabled={!hasDoc}
+                  disabled={!hasDoc || aiAvailable === false}
                   onClick={() => {
                     setFileOpen(false)
                     onNameWithAi()

@@ -18,7 +18,7 @@ test('legacy compatibility never enables missing experimental runtime flags',asy
   const env=backend?{DYOFFICE_DOCUMENT_BACKEND:backend}:{}
   assert.equal(await configuredSheetsRuntime(env),undefined)
   await assert.rejects(()=>startNativeWorker(env),/Explicit experimental worker required/)
-  await assert.rejects(()=>configuredSheetsRuntime({...env,DYOFFICE_NATIVE_XLSX:'experimental',DYOFFICE_AUTH_MODE:'local',NODE_ENV:'production'}),/experimental local mode/)
+  await assert.rejects(()=>configuredSheetsRuntime({...env,DYOFFICE_AUTH_MODE:'local',NODE_ENV:'production'},{enabled:true}),{message:'Native Sheets requires local mode'})
   await assert.rejects(()=>startNativeWorker({...env,DYOFFICE_NATIVE_WORKER:'experimental',DYOFFICE_OBJECT_STORE:'disk'}),/requires S3/)
  }
 })
@@ -29,4 +29,17 @@ test('actual server entry rejects broker selection before exposing a listener',a
    assert.equal(error.code,1);assert.match(error.stderr,new RegExp('dyoffice: '+message));assert.ok(!error.stdout.includes('http'));return true
   })
  }
+})
+test('production local startup reports the missing document runtime before listening',async()=>{
+ const {execFile}=await import('node:child_process'),{promisify}=await import('node:util'),{fileURLToPath}=await import('node:url')
+ await assert.rejects(()=>promisify(execFile)(process.execPath,['--import','tsx','server/index.mjs'],{
+  cwd:fileURLToPath(new URL('../../',import.meta.url)),
+  env:{PATH:process.env.PATH,NODE_ENV:'production',DYOFFICE_AUTH_MODE:'local'},
+  timeout:15000,
+ }),error=>{
+  assert.equal(error.code,1)
+  assert.match(error.stderr,/dyoffice: production local document runtime is unavailable/)
+  assert.equal(error.stdout,'')
+  return true
+ })
 })

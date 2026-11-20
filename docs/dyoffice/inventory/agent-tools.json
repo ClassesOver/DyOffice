@@ -1075,10 +1075,10 @@
     },
     {
       "id": "packages/agent-core/src/mind-map.ts#generate_mindmap",
-      "placement": "unsupported",
-      "web": "No Web exposure; return explicit unsupported",
-      "verifyIn": "T19",
-      "rationale": "Desktop app/process or non-four-format facility is not an authorized Web capability; do not forward arbitrary local commands."
+      "placement": "live",
+      "web": "Word editor chat card and optional user-triggered image insertion",
+      "verifyIn": "T14",
+      "rationale": "Validates cited blocks against the active document and renders a card without editing. Only the explicit insert action adds it to the document draft."
     },
     {
       "id": "packages/browser-host/src/assistant-channel.ts#delegate_channel_task",

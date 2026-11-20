@@ -4,6 +4,7 @@
 import { describe, expect, it, onTestFinished, vi } from 'vitest'
 import { act, createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
+import * as docxEngine from '@genoffice/docx-engine'
 import { hashProtectionPassword, verifyProtectionPassword } from '@genoffice/docx-engine'
 import { ProtectDialog, type ProtectDialogResult } from '../src/renderer/components/ProtectDialog'
 
@@ -106,6 +107,10 @@ describe('ProtectDialog', () => {
   })
 
   it('setting a modify password produces verifiable writeProtection credentials', async () => {
+    // Exercise real hash and verification without running production work factors twice in jsdom.
+    const realHash = hashProtectionPassword
+    const hash = vi.spyOn(docxEngine, 'hashProtectionPassword').mockImplementationOnce(password => realHash(password, 1000))
+    onTestFinished(() => { hash.mockRestore() })
     const d = await mount({})
     const [, , modify, modifyConfirm] = d.passwordInputs()
     await d.setValue(modify, 'to-modify')

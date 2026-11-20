@@ -1,7 +1,7 @@
 import type { OpenFileResult, PublicSettings, RevisionRef, SaveInput } from './api.ts'
 
 export type CapabilityState = 'unsupported' | 'read_only' | 'editable'
-export type CapabilityCatalog = Readonly<Record<'docx' | 'xlsx' | 'pptx' | 'pdf', CapabilityState>>
+export type CapabilityCatalog = Readonly<Record<'docx' | 'xlsx' | 'pptx' | 'pdf', CapabilityState> & {pdfEditor?:CapabilityState}>
 export interface BrowserHost {
   getCapabilities(): Promise<CapabilityCatalog>
   open(fileId: string): Promise<OpenFileResult>

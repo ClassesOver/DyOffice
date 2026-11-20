@@ -3,7 +3,9 @@ import {Editor} from '@tiptap/core'
 import {expect,it} from 'vitest'
 import {editorExtensions} from '../src/renderer/editor/extensions'
 const source=readFileSync('src/renderer/App.tsx','utf8')
-const applyProtection=new Function('editor','readMode','isProtected',source.match(/editor\.setEditable\(!readMode && !isProtected[^\n]*/)?.[0]??'throw Error("missing production expression")')
+const setEditable=source.match(/editor\.setEditable\([^\n]*/)?.[0]
+if(!setEditable)throw Error('production setEditable call not found')
+const applyProtection=new Function('editor','readMode','isProtected','host','writeProtection','editRestriction',setEditable)
 const updateBody=source.match(/onUpdate: \(\{ transaction \}\) => \{([\s\S]*?)\n    \},\n  \}\)/)?.[1]
 if(!updateBody)throw Error('production onUpdate not found')
 const onUpdate=new Function('host','dirtyRef','forceRender','transaction','PHASED_APPEND',updateBody)

@@ -1,6 +1,6 @@
 import {describe,it,expect,vi} from 'vitest'
 import {createLocalShellClient} from '../../src/shell/local-client'
-import {createLocalNewSheet,createLocalNewSlide,localNewFormats} from '../../src/shell/local-new-sheet'
+import {createLocalNewSheet,createLocalNewSlide,createLocalNewPdf,localNewFormats} from '../../src/shell/local-new-sheet'
 function setup() {
  const request=vi.fn(async(path:string)=>{
   if(path==='/api/v1/capabilities')return {xlsx:'editable'}
@@ -10,10 +10,26 @@ function setup() {
  const deps={getSessionProof:()=> 'A'.repeat(43),bindSession:vi.fn(async()=>({request})),fetchTemplate:vi.fn(async()=>new Response('xlsx')),open:vi.fn(async()=>{}),changed:vi.fn()}
  return {deps,request,create:createLocalNewSheet(deps as any)}
 }
-describe('capability-gated XLSX and PPTX creation',()=>{
- it('keeps PDF disabled even when a caller supplies editable; enables DOCX/XLSX/PPTX when editable',()=>{
-  expect(localNewFormats({docx:'editable',xlsx:'editable',pptx:'editable',pdf:'editable'})).toEqual(['docx','xlsx','pptx'])
-  expect(localNewFormats({xlsx:'unsupported',pptx:'unsupported'})).toEqual([])
+describe('capability-gated document creation',()=>{
+ it('offers PDF creation when the PDF editor is enabled',()=>{
+ expect(localNewFormats({docx:'editable',xlsx:'editable',pptx:'editable',pdf:'editable',pdfEditor:'editable'})).toEqual(['docx','xlsx','pptx','pdf'])
+ expect(localNewFormats({docx:'editable',xlsx:'editable',pptx:'editable',pdf:'editable'})).toEqual(['docx','xlsx','pptx'])
+  expect(localNewFormats({xlsx:'unsupported',pptx:'unsupported',pdf:'unsupported'})).toEqual([])
+ })
+ it('does not create PDF when only the generic PDF capability is editable',async()=>{
+  const request=vi.fn(async()=>({pdf:'editable'}))
+  const deps={getSessionProof:()=> 'A'.repeat(43),bindSession:vi.fn(async()=>({request})),open:vi.fn(async()=>{}),changed:vi.fn()}
+  const create=createLocalNewPdf(deps as any)
+  await expect(create()).rejects.toThrow('当前运行环境未启用 PDF 编辑')
+  expect(request).toHaveBeenCalledTimes(1)
+  expect(deps.open).not.toHaveBeenCalled()
+ })
+ it('creates a blank PDF at the dedicated endpoint without marking imported files',async()=>{
+  const request=vi.fn(async(path:string)=>path==='/api/v1/capabilities'?{pdfEditor:'editable'}:{file:{fileId:'blank'}})
+  const deps={getSessionProof:()=> 'A'.repeat(43),bindSession:vi.fn(async()=>({request})),open:vi.fn(async()=>{}),changed:vi.fn()}
+  await createLocalNewPdf(deps as any)()
+  expect(request.mock.calls).toEqual([['/api/v1/capabilities'],['/api/v1/files/new-pdf','POST']])
+  expect(deps.open).toHaveBeenCalledWith('blank',request)
  })
  it('uploads the blank PPTX template through bound requests then opens that presentation',async()=>{
   const request=vi.fn(async(path:string)=>{

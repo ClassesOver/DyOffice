@@ -72,3 +72,12 @@ test('gateway decodes large canonical binary without recursive regular expressio
   assert.deepEqual(decoded.addedBinary.get('xl/media/large.bin'),binary)
   assert.throws(()=>decodeGatewayPlan({replaced:[],added:[],addedBinary:[['xl/media/large.bin',encoded.slice(0,-4)+'!!!!']],removedEntries:[]}),{code:'INVALID_OUTPUT'})
 })
+
+test('pivot package requests retain the bounded protocol and reject malformed definition output',async()=>{
+  const pivot={path:'xl/pivotTables/pivotTable1.xml',cachePath:'xl/pivotCache/pivotCacheDefinition1.xml'}
+  const definition={outputRef:'F1:G4',sourceSheet:'Data',sourceRef:'A1:B4',fields:[],unsupported:[]},f=fixture(definition)
+  assert.deepEqual(await f.adapter.readWorkbookPackage(Buffer.from('xlsx'),undefined,pivot),definition)
+  assert.deepEqual(f.calls[1],['part',pivot])
+  assert.deepEqual(f.calls[2],['request','gateway_package',{path:part}])
+  await assert.rejects(()=>fixture({outputRef:'A1'}).adapter.readWorkbookPackage(Buffer.from('xlsx'),undefined,pivot),{code:'INVALID_OUTPUT'})
+})

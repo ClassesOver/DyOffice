@@ -12,6 +12,7 @@ export const tr = {
   aiQcPageOk: 'Sayfa {n}: düzen uygun',
   aiQcPageFixed: 'Sayfa {n}: {summary}',
   aiQcPageFixedDefault: 'düzen sorunları giderildi',
+  aiQcPageRollbackFailed: "Sayfa {n}: otomatik düzeltme düzeni kötüleştirdi; geri yükleme doğrulanamadı. Sayfayı kontrol edin veya değişiklikleri geri alın.",
   aiQcPageReverted: 'Sayfa {n}: otomatik düzeltme durumu kötüleştirdi — geri alındı',
   aiQcPageFailed: 'Sayfa {n}: denetim başarısız ({error})',
   aiQcPageSkipped: 'Sayfa {n}: otomatik düzen denetimi atlandı',

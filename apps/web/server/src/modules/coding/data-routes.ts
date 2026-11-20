@@ -33,6 +33,10 @@ export function registerAnalysisDeliveryRoutes(app:FastifyInstance,artifacts:Ret
     csrf.requireSessionRead(request,value)
     return value
   }
+  app.get('/api/v1/agents/deliveries',async(request,reply)=>{
+    reply.header('Cache-Control','private, no-store')
+    return {deliveries:await artifacts.recent(token(request))}
+  })
   app.get<{Params:{commandId:string}}>('/api/v1/agents/deliveries/:commandId',async(request,reply)=>{
     reply.header('Cache-Control','private, no-store')
     return artifacts.receipt(token(request),request.params.commandId)

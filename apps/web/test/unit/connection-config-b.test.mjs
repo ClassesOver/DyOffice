@@ -8,11 +8,14 @@ test('B connections and global configuration styles cannot reach other managemen
  root.walkRules(rule=>{for(const selector of rule.selectors)assert.match(selector,/^section\.(sources-panel-b|global-settings-b)\b/)})
  assert.doesNotMatch(css,/#[0-9a-f]{3,8}\b|\brgba?\(/i)
 })
-test('both actual panels opt in without replacing the shared styles',()=>{
- for(const [file,base,marker] of [['SourcesPanel','workspace-panels','sources-panel-b'],['GlobalSettingsPanel','global-settings','global-settings-b']]){
-  const source=readFileSync(new URL(`../../src/shell/${file}.tsx`,import.meta.url),'utf8')
-  assert.ok(source.includes(`import './${base}.css'`));assert.ok(source.includes("import './connection-config-b.css'"));assert.ok(source.includes(marker))
- }
+test('database connections load their native styles while global configuration retains its styles',()=>{
+ const sources=readFileSync(new URL('../../src/shell/SourcesPanel.tsx',import.meta.url),'utf8')
+ assert.ok(sources.includes("import './database-connections.css'"))
+ assert.doesNotMatch(sources,/from ['"]antd['"]|from ['"]@ant-design/)
+ assert.ok(sources.includes('database-connections'))
+ const global=readFileSync(new URL('../../src/shell/GlobalSettingsPanel.tsx',import.meta.url),'utf8')
+ assert.ok(global.includes("import './global-settings.css'"))
+ assert.ok(global.includes('global-settings-refined'))
 })
 test('B finishing layer keeps pagination and content visible with focus and narrow-screen wrapping',()=>{
  assert.doesNotMatch(css,/(?:display:\s*none|overflow(?:-y)?:\s*hidden|outline:\s*(?:none|0))/)

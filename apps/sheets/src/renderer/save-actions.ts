@@ -435,6 +435,8 @@ export interface SaveOutcome {
   reason?: 'no-edits'
 }
 
+export type WorkbookDraftExporter = (sessionId: string, phases: WorkbookSaveRequest[]) => Promise<void>
+
 /**
  * mode 'recovery': assemble the very same payload but hand it to the
  * crash-recovery writer instead of the save pipeline — no dialogs, no status
@@ -518,13 +520,24 @@ export async function handleSave(
   explicitTarget?: { path: string; overwrite: boolean },
   defaultName?: string,
 ): Promise<SaveOutcome> {
+  return handleSaveOrExport(ctx, mode, quiet, explicitTarget, defaultName)
+}
+
+async function handleSaveOrExport(
+  ctx: SaveContext,
+  mode: 'save' | 'save-as' | 'recovery',
+  quiet: boolean,
+  explicitTarget?: { path: string; overwrite: boolean },
+  defaultName?: string,
+  exportCopy?: WorkbookDraftExporter,
+): Promise<SaveOutcome> {
   const state = ctx.lazyWorkbookRef.current
   if (!state) return handlePreparedSave(ctx, mode, quiet, explicitTarget, defaultName, false)
   await settleFormulas(ctx.univerRef.current)
   await ctx.flushPendingChanges?.()
   if (ctx.lazyWorkbookRef.current !== state) return { ok: false }
   // Recovery never replaces a runtime; ordinary in-place saves retain late edits.
-  if (mode === 'recovery' || !ctx.applySavedWorkbook || canSaveInPlace(ctx, state)) {
+  if (!exportCopy && (mode === 'recovery' || !ctx.applySavedWorkbook || canSaveInPlace(ctx, state))) {
     return handlePreparedSave(ctx, mode, quiet, explicitTarget, defaultName, Boolean(ctx.applySavedWorkbook) && mode !== 'recovery')
   }
   const gate = mutationAdmission(state.editJournal)
@@ -540,7 +553,7 @@ export async function handleSave(
     })
     await lock.freeze()
     if (ctx.lazyWorkbookRef.current !== state) return { ok: false }
-    return await handlePreparedSave(ctx, mode, quiet, explicitTarget, defaultName, canSaveInPlace(ctx, state))
+    return await handlePreparedSave(ctx, mode, quiet, explicitTarget, defaultName, canSaveInPlace(ctx, state), exportCopy)
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
     ctx.setMessage(message)
@@ -551,6 +564,13 @@ export async function handleSave(
   }
 }
 
+export function exportWorkbookDraft(
+  ctx: SaveContext,
+  exportCopy: WorkbookDraftExporter,
+): Promise<SaveOutcome> {
+  return handleSaveOrExport(ctx, 'save-as', true, undefined, undefined, exportCopy)
+}
+
 async function handlePreparedSave(
   ctx: SaveContext,
   mode: 'save' | 'save-as' | 'recovery',
@@ -558,6 +578,7 @@ async function handlePreparedSave(
   explicitTarget: { path: string; overwrite: boolean } | undefined,
   defaultName: string | undefined,
   canApplyInPlace: boolean,
+  exportCopy?: WorkbookDraftExporter,
 ): Promise<SaveOutcome> {
   const state = ctx.lazyWorkbookRef.current
   // Captured at save start (the Ctrl+S moment): the post-save session swap
@@ -795,7 +816,7 @@ async function handlePreparedSave(
     sparklineAdditions.length +
     // A save with nothing else pending but newly withheld cells or a slicer
     // change is still a save: skipping it would drop the change.
-    (redactionStates?.length ?? 0) +
+    (redactionStates === null ? 0 : 1) +
     (slicerState === null ? 0 : 1) +
     // A link break/retarget is a file change on its own: the journal can be
     // clean (every referencing cell carries an error cache, so the literal
@@ -951,51 +972,44 @@ async function handlePreparedSave(
     return { ok: written.ok === true }
   }
   try {
-    ctx.setMessage(t('appSavingEdits', { count: total }))
-    const result = await window.desktopApi.saveWorkbookEdits({
-      sessionId: state.file.sessionId,
-      mode,
-      ...(restoreWriteBack ? { restoreWriteBack: true } : {}),
-      ...(quiet ? { quiet: true } : {}),
-      ...(csvContent === undefined ? {} : { csvContent }),
-      // a name the reader (or the model, via the ribbon) chose for the dialog
-      ...(defaultName === undefined ? {} : { defaultName }),
-      // MCP explicit-path save: main skips the Save-As dialog for these
-      ...(explicitTarget
-        ? { targetPath: explicitTarget.path, overwrite: explicitTarget.overwrite }
-        : {}),
-      edits: staged.edits,
-      bulkConstantFills,
-      ...(staged.editsTransferId === undefined ? {} : { editsTransferId: staged.editsTransferId }),
-      structuralOps,
-      chartEdits,
-      visualEdits,
-      visualAdditions,
-      cellImageAdditions,
+    if (!exportCopy) ctx.setMessage(t('appSavingEdits', { count: total }))
+    const firstPhase: WorkbookSaveRequest = {
+      ...payload,
       tableAdditions: splitSave && heldTables.length > 0 ? [] : tableAdditions,
       tableEdits: phaseOneTableEdits,
       pivotAdditions: splitSave && heldPivots.length > 0 ? [] : pivotAdditions,
-      sheetOps,
-      sheetOrder,
-      filterStates,
-      hyperlinkEdits,
-      cfStates,
-      dvStates,
-      pageSetupStates,
-      noteStates,
-      pivotCacheRefreshPaths,
-      pivotRefreshUpdates,
-      sheetProtections,
-      sparklineAdditions,
-      formulaValues,
       definedNamesState: splitSave ? null : definedNamesState,
-      themeState,
-      workbookProtectionState,
-      protectedRangeStates,
-      redactionStates,
       // Held slicers ride phase two (heldSlicerState carries them there).
       slicerState: hasShifts ? null : slicerState,
-      externalLinkOps,
+    }
+    const secondPhase = (sessionId: string): WorkbookSaveRequest => ({
+      sessionId,
+      mode: 'save',
+      // A desktop unsaved workbook's quiet save writes its backing file in place.
+      ...(quiet ? { quiet: true } : {}),
+      edits: [], bulkConstantFills: [], structuralOps: [], chartEdits: [], visualEdits: [],
+      visualAdditions: [], cellImageAdditions: [], tableAdditions: heldTables, tableEdits: heldTableEdits,
+      pivotAdditions: heldPivots, sheetOps: [], sheetOrder: [], filterStates: [], hyperlinkEdits: [],
+      cfStates: [], dvStates: [], pageSetupStates: [], noteStates: [], pivotCacheRefreshPaths: [],
+      pivotRefreshUpdates: [], sheetProtections: [], sparklineAdditions: [], slicerState: heldSlicerState,
+      // Phase one already wrote formulas, redactions and external link changes.
+      formulaValues: [], definedNamesState: heldNames, themeState: null, workbookProtectionState: null,
+      protectedRangeStates: [], redactionStates: null, externalLinkOps: null,
+    })
+    if (exportCopy) {
+      if (ctx.lazyWorkbookRef.current !== state) return { ok: false }
+      const phases: WorkbookSaveRequest[] = total === 0 ? [] : [{ ...firstPhase, mode: 'save' }]
+      if (splitSave) phases.push(secondPhase(state.file.sessionId))
+      await exportCopy(state.file.sessionId, phases)
+      if (ctx.lazyWorkbookRef.current === state) ctx.setMessage('')
+      return { ok: true }
+    }
+    const result = await window.desktopApi.saveWorkbookEdits({
+      ...firstPhase,
+      ...(restoreWriteBack ? { restoreWriteBack: true } : {}),
+      ...(quiet ? { quiet: true } : {}),
+      ...(csvContent === undefined ? {} : { csvContent }),
+      ...(defaultName === undefined ? {} : { defaultName }),
     })
     if (ctx.lazyWorkbookRef.current !== state) return { ok: false }
     if (result.canceled) {
@@ -1051,48 +1065,7 @@ async function handlePreparedSave(
     // carry undo history across them (and clears any stale stash).
     stashUndoCarry(null)
     try {
-      const second = await window.desktopApi.saveWorkbookEdits({
-        sessionId: result.file.sessionId,
-        mode: 'save',
-        // an unsaved new workbook's quiet save writes its backing file in
-        // place; without the flag the second phase would open Save As
-        ...(quiet ? { quiet: true } : {}),
-        edits: [],
-        bulkConstantFills: [],
-        structuralOps: [],
-        chartEdits: [],
-        visualEdits: [],
-        visualAdditions: [],
-        cellImageAdditions: [],
-        tableAdditions: heldTables,
-        tableEdits: heldTableEdits,
-        pivotAdditions: heldPivots,
-        sheetOps: [],
-        sheetOrder: [],
-        filterStates: [],
-        hyperlinkEdits: [],
-        cfStates: [],
-        dvStates: [],
-        pageSetupStates: [],
-        noteStates: [],
-        pivotCacheRefreshPaths: [],
-        pivotRefreshUpdates: [],
-        sheetProtections: [],
-        sparklineAdditions: [],
-        slicerState: heldSlicerState,
-        // The first phase already refreshed the cached values
-        formulaValues: [],
-        definedNamesState: heldNames,
-        themeState: null,
-        workbookProtectionState: null,
-        protectedRangeStates: [],
-        // Phase one already wrote the marks, re-keyed for the renames it
-        // performed. Sending them again would rewrite the part under the names
-        // this session loaded — the pre-rename ones — and orphan it.
-        redactionStates: null,
-        // link ops rode with the first phase; a second phase carries none
-        externalLinkOps: null,
-      })
+      const second = await window.desktopApi.saveWorkbookEdits(secondPhase(result.file.sessionId))
       if (ctx.lazyWorkbookRef.current !== state) return { ok: false }
       if (second.canceled) {
         ctx.stashViewRestore(viewAtSave)

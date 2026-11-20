@@ -34,11 +34,14 @@ export function createUserService({ db, accounts, sessions, passwords, deploymen
     const count = await connection.query("SELECT count(*)::int AS count FROM users u JOIN user_roles r ON r.deployment_id=u.deployment_id AND r.user_id=u.id AND r.role='config_admin' WHERE u.deployment_id=$1 AND u.id<>$2 AND u.status='active' AND NOT u.password_reset_required", [deploymentId, targetId])
     if (count.rows[0].count === 0) throw authError(409)
   }
-  async function lookupAction(token: string, purpose: Purpose) {
-    if (!/^[A-Za-z0-9_-]{43}$/.test(token) || !['activate', 'reset'].includes(purpose)) throw authError(400)
-    const { rows: [row] } = await db.pool.query('SELECT id,user_id FROM password_action_tokens WHERE deployment_id=$1 AND token_hash=$2 AND purpose=$3 AND consumed_at IS NULL AND expires_at>clock_timestamp()', [deploymentId, tokenHash(token), purpose])
-    if (!row) throw authError(400)
-    return row as { id: string; user_id: string }
+  async function lookupAction(token: string, purpose?: Purpose) {
+    if (!/^[A-Za-z0-9_-]{43}$/.test(token)) throw authError(400)
+    const { rows: [row] } = await db.pool.query<{ id: string; user_id: string; purpose: Purpose }>(
+      'SELECT id,user_id,purpose FROM password_action_tokens WHERE deployment_id=$1 AND token_hash=$2 AND consumed_at IS NULL AND expires_at>clock_timestamp()',
+      [deploymentId, tokenHash(token)],
+    )
+    if (!row || (purpose !== undefined && row.purpose !== purpose)) throw authError(400)
+    return row
   }
   async function issueForUser(token: string, targetInput: string, purpose: Purpose, context: AuthContext) {
     const targetId = idOf(targetInput)
@@ -115,7 +118,7 @@ export function createUserService({ db, accounts, sessions, passwords, deploymen
     },
     issueReset: (token: string, userId: string, context: AuthContext = {}) => issueForUser(token, userId, 'reset', context),
     issueActivation: (token: string, userId: string, context: AuthContext = {}) => issueForUser(token, userId, 'activate', context),
-    async actionIdentity(token: string, purpose: Purpose) { return (await lookupAction(token, purpose)).user_id },
+    resolveAction: lookupAction,
     async redeemAction(token: string, purpose: Purpose, newPassword: unknown, context: AuthContext = {}) {
       const initial = await lookupAction(token, purpose)
       const encoded = await passwords.hash(newPassword)

@@ -16,14 +16,16 @@ before(async()=>{
   App:`import React,{useEffect,useState} from 'react';export function App({host}){const [open,setOpen]=useState(false);useEffect(()=>{globalThis.__docsDownloadTest.lifecycle=host.lifecycle;if(globalThis.__docsDownloadTest.deferReady)globalThis.__docsDownloadTest.ready=(handle=globalThis.__docsDownloadTest.editor)=>host.onEditorReady(handle);else host.onEditorReady(globalThis.__docsDownloadTest.editor);host.lifecycle.documentOpened();return()=>host.onEditorReady(null)},[]);return React.createElement(React.Fragment,null,host.saveStatus,React.createElement('button',{'data-test-file-menu':true,onClick:()=>setOpen(!open)},'File'),open?React.createElement('div',{'data-test-file-actions':true},host.fileActions):null)}`,
   locale:'export const LocaleProvider=({children})=>children;export const setModuleLang=()=>{}',
   'author-name':'export const setAuthorName=()=>{}',
-  ui:'export const applyAiPanelPrefs=()=>{};export const installScreenTips=()=>{}',
-  assistant:'export const createEditorAssistant=async()=>undefined',
+  ui:'export const applyAiPanelPrefs=()=>{};export const installScreenTips=()=>{};export const AssistantAvatar=()=>null',
+  assistant:'export const createEditorAssistant=async(...args)=>{globalThis.__docsDownloadTest.assistantArgs=args;return globalThis.__docsDownloadTest.assistant}',
+  'docs-ai-tools':'export const AGENT_TOOLS=[]',
   realtime:'export const mountEditorRealtime=()=>({notice:()=>null,dispose(){}})',
   analysis:'export const createAnalysisDocumentTarget=()=>({dispose(){}})',
  }
  await build({stdin:{contents:`export {mountDocsEditor} from ${JSON.stringify(entry)};export {act} from 'react'`,resolveDir:fileURLToPath(new URL('../../../../',import.meta.url)),loader:'tsx'},bundle:true,external:['react','react-dom/client','react/jsx-runtime'],platform:'node',format:'esm',outfile:join(directory,'entry.mjs'),jsx:'automatic',logLevel:'silent',plugins:[{name:'native-renderer-test-double',setup(b){
   b.onResolve({filter:/\.css$/},()=>({path:'css',namespace:'stub'}))
   b.onResolve({filter:/\/App$/},()=>({path:'App',namespace:'stub'}))
+  b.onResolve({filter:/\/renderer\/ai\/tools$/},()=>({path:'docs-ai-tools',namespace:'stub'}))
   b.onResolve({filter:/\/i18n\/locale$/},()=>({path:'locale',namespace:'stub'}))
   b.onResolve({filter:/\/author-name$/},()=>({path:'author-name',namespace:'stub'}))
   b.onResolve({filter:/^@genoffice\/ui$/},()=>({path:'ui',namespace:'stub'}))
@@ -35,7 +37,7 @@ before(async()=>{
  ;({mountDocsEditor,act}=await import(pathToFileURL(join(directory,'entry.mjs')).href))
 })
 after(()=>rm(directory,{recursive:true,force:true}))
-async function fixture(t,{outcome='success',gate,readOnly=false,initialDirty=true,currentHead=true,deferReady=false,draftAuthority,serialize=async()=>null}={}){
+async function fixture(t,{outcome='success',gate,readOnly=false,initialDirty=true,currentHead=true,deferReady=false,draftAuthority,serialize=async()=>null,assistant}={}){
  const dom=new JSDOM('<div id="editor"></div>',{url:'https://office.example/'})
  dom.window.document.getElementById('editor').inert=false
  const old={};for(const [key,value] of Object.entries({window:dom.window,document:dom.window.document,navigator:dom.window.navigator,IS_REACT_ACT_ENVIRONMENT:true})){
@@ -45,7 +47,7 @@ async function fixture(t,{outcome='success',gate,readOnly=false,initialDirty=tru
  let state={name:'a.docx',status:outcome==='unknown-before'?'unknown':'idle',revision:before,lease:readOnly?null:{leaseEpoch:1}},saves=0,reconciles=0,dirty=initialDirty
  const downloads=[];dom.window.HTMLAnchorElement.prototype.click=function(){downloads.push(this.href)}
  const host={isCurrentRevision:async()=>currentHead,takeoverLease:async()=>{state.lease={leaseEpoch:2};state.status='idle'},releaseLease:async()=>{state.lease=null},getEditorId:()=>fileId,subscribe:()=>()=>{},open:async()=>({format:'docx'}),getPreferences:async()=>({language:'en',theme:'light',showAssistant:false}),getState:()=>state,acquireLease:async()=>{if(readOnly)throw Error('held elsewhere');return {leaseEpoch:1}},startRenewal:()=>()=>{},save:async()=>{saves++;await gate?.promise;if(outcome==='unknown-after'){state.status='unknown';throw Error('lost acknowledgement')}state.revision=after;return {...after}},reconcile:async()=>{reconciles++;throw Error('unexpected reconcile')}}
- const control={deferReady,editor:{getSelection:()=>null,serialize,isDirty:()=>dirty,async save(){await control.lifecycle.beforeSave();const result=await dom.window.desktop.saveDocx(`/files/${fileId}/a.docx`,new ArrayBuffer(2));dirty=outcome==='late-edit'||!result.ok;control.lifecycle.afterSave(result.ok&&outcome!=='late-edit');return result.ok}}}
+ const control={assistant,deferReady,editor:{getSelection:()=>null,serialize,isDirty:()=>dirty,async save(){await control.lifecycle.beforeSave();const result=await dom.window.desktop.saveDocx(`/files/${fileId}/a.docx`,new ArrayBuffer(2));dirty=outcome==='late-edit'||!result.ok;control.lifecycle.afterSave(result.ok&&outcome!=='late-edit');return result.ok}}}
  globalThis.__docsDownloadTest=control
  let mounted;await act(async()=>{mounted=await mountDocsEditor(host,dom.window.document.getElementById('editor'),fileId,draftAuthority)})
  assert.equal(dom.window.document.querySelector('.dyoffice-docs-save-download'),null,'host actions are hidden until the File slot is opened')
@@ -148,4 +150,24 @@ test('real File menu drops pending snapshot across detach/rebind of the same edi
  await act(async()=>{control.ready(null);control.ready()})
  await act(async()=>resolve())
  assert.deepEqual(f.downloads,[]);assert.deepEqual(f.counts(),{saves:0,reconciles:0})
+})
+
+test('Word entry injects the existing assistant bound request into its knowledge bridge',async t=>{
+ const requests=[],corpus=[{path:'/files/11111111-1111-4111-8111-111111111111/revisions/22222222-2222-4222-8222-222222222222/source.docx',name:'source.docx',ext:'docx',folder:'',folderPath:'',sizeBytes:1}]
+ const assistant={available:false,api:{},documents:{register:()=>()=>{}},request:async path=>{requests.push(path);return corpus},dispose(){}}
+ const f=await fixture(t,{assistant})
+ assert.deepEqual(await window.desktop.kbList(),corpus)
+ assert.deepEqual(requests,['/api/v1/knowledge/files'])
+ await f.dispose();await assert.rejects(window.desktop.kbList())
+})
+
+test('Word entry offers knowledge tools in its actual native assistant inventory',async t=>{
+ await fixture(t)
+ const args=globalThis.__docsDownloadTest.assistantArgs
+ assert.equal(args[2],'docx')
+ assert.equal(args[3] instanceof Set,true)
+ assert.equal(args[3].has('read_attachment'),true)
+ assert.equal(args[3].has('read_knowledge_file'),true)
+ assert.equal(args[3].has('search_knowledge_base'),true)
+ assert.equal(args[3].has('not_a_native_tool'),false)
 })

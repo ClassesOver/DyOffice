@@ -8,7 +8,11 @@ export function createLocalShellClient(send:typeof fetch=fetch) {
  let authTransition=false
  const pending=new Set<AbortController>()
  const sessionListeners=new Set<(reason:SessionEndReason)=>void>()
- function endSession(reason:SessionEndReason){invalidateSession();for(const listener of sessionListeners)listener(reason)}
+ function endSession(reason:SessionEndReason){
+  // Requests invalidated by an explicit account transition must not cancel that transition.
+  if(authTransition&&reason==='expired')return
+  invalidateSession();for(const listener of sessionListeners)listener(reason)
+ }
  const stale=()=>Object.assign(new Error('登录状态已改变，请重新加载当前工作区。'),{code:'stale_session'})
  function assertCurrent(stamp:number){if(stamp!==generation)throw stale()}
  function invalidateSession(){
@@ -16,47 +20,53 @@ export function createLocalShellClient(send:typeof fetch=fetch) {
   for(const controller of pending)controller.abort()
   pending.clear()
  }
- async function perform<T=unknown>(path:string,method='GET',body?:unknown,stamp=generation,sessionProof?:string):Promise<T>{
+ async function perform<T=unknown>(path:string,method='GET',body?:unknown,stamp=generation,sessionProof?:string,signal?:AbortSignal):Promise<T>{
   if(!path.startsWith('/api/v1/')||path.includes('\\')||path.includes('#'))throw new Error('Expected same-origin local API path')
   assertCurrent(stamp)
+  signal?.throwIfAborted()
   const write=!['GET','HEAD'].includes(method)
-  if(write&&!csrf&&!sessionProof){const result=await perform<{csrfToken:string}>('/api/v1/auth/csrf','GET',undefined,stamp);assertCurrent(stamp);csrf=result.csrfToken}
+  if(write&&!csrf&&!sessionProof){const result=await perform<{csrfToken:string}>('/api/v1/auth/csrf','GET',undefined,stamp,undefined,signal);assertCurrent(stamp);signal?.throwIfAborted();csrf=result.csrfToken}
   assertCurrent(stamp)
   const binary=body instanceof Blob
   const controller=new AbortController();pending.add(controller)
+  const abort=()=>controller.abort(signal?.reason)
+  signal?.addEventListener('abort',abort,{once:true})
+  if(signal?.aborted)abort()
   try{
    const response=await send(path,{method,credentials:'same-origin',cache:'no-store',signal:controller.signal,headers:{...(write||sessionProof?{'X-CSRF-Token':sessionProof??csrf!}:{}),...(body!==undefined?{'Content-Type':binary?'application/octet-stream':'application/json'}:{})},...(body===undefined?{}:{body:binary?body:JSON.stringify(body)})})
    assertCurrent(stamp)
+   signal?.throwIfAborted()
    const value=response.status===204?undefined:await response.json().catch(error=>{if(response.ok)throw error;return undefined})
    assertCurrent(stamp)
+   signal?.throwIfAborted()
    if(!response.ok){
     if(response.status===401&&path!=='/api/v1/auth/login'&&path!=='/api/v1/auth/change-password')endSession('expired')
     else if(response.status===403)csrf=undefined
-    const message=response.status===409&&path.startsWith('/api/v1/admin/config')?'配置版本冲突，请核对最新版本；当前草稿已保留。'
+    const message=response.status===409&&path.startsWith('/api/v1/admin/config')?'配置已被更新，请读取最新配置并核对；当前草稿已保留。'
      :response.status===409&&path.startsWith('/api/v1/workspace/folders')?'文件夹操作冲突：请检查重名、非空目录或移动目标，再刷新重试。'
      :response.status===400&&path.startsWith('/api/v1/workspace/folders')?'文件夹名称或移动目标无效，请检查名称长度、路径符号及目标目录。'
      :value?.message||value?.title||value?.error||'请求失败'
     throw Object.assign(new Error(message),{status:response.status})
    }
    return value as T
-  }catch(error){if((error as {status?:number})?.status!==401)assertCurrent(stamp);throw error}
-  finally{pending.delete(controller)}
+  }catch(error){if((error as {status?:number})?.status!==401)assertCurrent(stamp);signal?.throwIfAborted();throw error}
+  finally{pending.delete(controller);signal?.removeEventListener('abort',abort)}
  }
- async function request<T=unknown>(path:string,method='GET',body?:unknown):Promise<T>{
+ async function request<T=unknown>(path:string,method='GET',body?:unknown,signal?:AbortSignal):Promise<T>{
   if(authTransition)throw stale()
-  return perform<T>(path,method,body)
+  return perform<T>(path,method,body,generation,undefined,signal)
  }
- async function bindSession(expectedProof?:string){
+ async function bindSession(expectedProof?:string,signal?:AbortSignal){
    const stamp=generation
-   const {csrfToken}=await request<{csrfToken:string}>('/api/v1/auth/session-proof')
+   const {csrfToken}=await request<{csrfToken:string}>('/api/v1/auth/session-proof','GET',undefined,signal)
    assertCurrent(stamp)
    if(!/^[A-Za-z0-9_-]{43}$/.test(csrfToken)||(expectedProof!==undefined&&expectedProof!==csrfToken))throw stale()
    return {
     proof:csrfToken,
-    async request<T=unknown>(path:string,method='GET',body?:unknown){
-     const result=await perform<T>(path,method,body,stamp,csrfToken)
+    async request<T=unknown>(path:string,method='GET',body?:unknown,requestSignal?:AbortSignal){
+     const result=await perform<T>(path,method,body,stamp,csrfToken,requestSignal)
      // A rotated cookie can arrive in another tab before its page navigates.
-     try{const current=await perform<{csrfToken:string}>('/api/v1/auth/session-proof','GET',undefined,stamp);if(current.csrfToken!==csrfToken)throw stale()}catch(cause){throw Object.assign(stale(),{cause})}
+     try{const current=await perform<{csrfToken:string}>('/api/v1/auth/session-proof','GET',undefined,stamp,undefined,requestSignal);if(current.csrfToken!==csrfToken)throw stale()}catch(cause){requestSignal?.throwIfAborted();throw Object.assign(stale(),{cause})}
      return result
     },
    }

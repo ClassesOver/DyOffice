@@ -185,6 +185,7 @@ export interface PdfAiDeps {
   }>
   /** Download a URL (main-process, SSRF-guarded) and re-encode as PNG; null on failure */
   fetchImage(url: string): Promise<{ png: string; width: number; height: number } | null>
+  isImageAttachment?(reference: string): boolean
   /** Session watermark / header-footer configuration; null when none is queued */
   stamps(): StampConfig | null
   /** Replace the session stamp configuration (null clears it); rendered on every page at save */
@@ -1212,7 +1213,7 @@ function err(output: string, summary: string): ToolExecution {
 }
 
 /** Validate a 1-based page number; returns the original page index or an error */
-function resolvePage(deps: PdfAiDeps, raw: unknown): { origIdx: number } | { bad: string } {
+function resolvePage(deps: Pick<PdfAiDeps, 'pageCount' | 'isDeleted'>, raw: unknown): { origIdx: number } | { bad: string } {
   const page = Number(raw)
   if (!Number.isInteger(page) || page < 1 || page > deps.pageCount()) {
     return {
@@ -1271,7 +1272,7 @@ async function readPages(deps: PdfAiDeps, input: Record<string, unknown>): Promi
   }
 }
 
-async function searchText(deps: PdfAiDeps, input: Record<string, unknown>): Promise<ToolExecution> {
+export async function searchText(deps: Pick<PdfAiDeps, 'searchIndex'>, input: Record<string, unknown>): Promise<ToolExecution> {
   const query = String(input.query ?? '').trim()
   if (!query) return err('query must not be empty', t('aiToolSearch', { query: '', count: 0 }))
   const indexPromise = deps.searchIndex()
@@ -1343,7 +1344,7 @@ async function findSensitiveInfo(
   }
 }
 
-async function markupText(deps: PdfAiDeps, input: Record<string, unknown>): Promise<ToolExecution> {
+export async function markupText(deps: Pick<PdfAiDeps, 'readOnly' | 'pageCount' | 'isDeleted' | 'searchIndex' | 'addMarkup' | 'gotoPage'>, input: Record<string, unknown>): Promise<ToolExecution> {
   const type = String(input.type) as MarkupType
   const summary = t('aiToolMarkup', { page: Number(input.page) })
   if (deps.readOnly()) return err(READONLY_OUTPUT, summary)
@@ -1403,8 +1404,8 @@ function textUnderRect(entry: PageEntry, rect: readonly [number, number, number,
   return out.replace(/\s+/g, ' ').trim()
 }
 
-async function readAnnotations(
-  deps: PdfAiDeps,
+export async function readAnnotations(
+  deps: Pick<PdfAiDeps, 'pageCount' | 'isDeleted' | 'searchIndex' | 'annotationsOn'>,
   input: Record<string, unknown>,
 ): Promise<ToolExecution> {
   const summary = t('aiToolReadAnnots')
@@ -1459,8 +1460,8 @@ async function readAnnotations(
   return { output: `${notes} note thread(s), ${marks} markup(s):\n${lines.join('\n')}`, summary }
 }
 
-async function addNoteTool(
-  deps: PdfAiDeps,
+export async function addNoteTool(
+  deps: Pick<PdfAiDeps, 'readOnly' | 'pageCount' | 'isDeleted' | 'searchIndex' | 'pageGeom' | 'addNote' | 'gotoPage'>,
   input: Record<string, unknown>,
   signal?: AbortSignal,
 ): Promise<ToolExecution> {
@@ -1508,8 +1509,8 @@ async function addNoteTool(
   }
 }
 
-async function replyNoteTool(
-  deps: PdfAiDeps,
+export async function replyNoteTool(
+  deps: Pick<PdfAiDeps, 'readOnly' | 'pageCount' | 'isDeleted' | 'findNoteRoot' | 'replyToThread' | 'gotoPage'>,
   input: Record<string, unknown>,
   signal?: AbortSignal,
 ): Promise<ToolExecution> {
@@ -1538,8 +1539,8 @@ async function replyNoteTool(
   }
 }
 
-async function editNoteTool(
-  deps: PdfAiDeps,
+export async function editNoteTool(
+  deps: Pick<PdfAiDeps, 'readOnly' | 'pageCount' | 'isDeleted' | 'annotationsOn' | 'editNote' | 'gotoPage'>,
   input: Record<string, unknown>,
   signal?: AbortSignal,
 ): Promise<ToolExecution> {
@@ -1624,8 +1625,8 @@ const HEX_COLOR = /^#?([0-9a-f]{6})$/i
 
 const MARKUP_TYPES: MarkupType[] = ['highlight', 'underline', 'squiggly', 'strikeout']
 
-async function deleteMarkupTool(
-  deps: PdfAiDeps,
+export async function deleteMarkupTool(
+  deps: Pick<PdfAiDeps, 'readOnly' | 'pageCount' | 'isDeleted' | 'annotationsOn' | 'deleteMarkups' | 'gotoPage'>,
   input: Record<string, unknown>,
 ): Promise<ToolExecution> {
   const summary = t('aiToolDeleteMarkup', { page: Number(input.page) })
@@ -1705,7 +1706,7 @@ function describeMetadata(meta: MetadataInput): string {
   return METADATA_FIELDS.map((k) => `${k}: ${meta[k] ? `"${meta[k]}"` : '(empty)'}`).join(', ')
 }
 
-function setWatermarkTool(deps: PdfAiDeps, input: Record<string, unknown>): ToolExecution {
+export function setWatermarkTool(deps: Pick<PdfAiDeps, 'readOnly' | 'stamps' | 'setStamps'>, input: Record<string, unknown>): ToolExecution {
   const summary = t('aiToolWatermark')
   if (deps.readOnly()) return err(READONLY_OUTPUT, summary)
   const prev = deps.stamps()
@@ -1739,8 +1740,8 @@ function setWatermarkTool(deps: PdfAiDeps, input: Record<string, unknown>): Tool
   }
 }
 
-async function deleteNoteTool(
-  deps: PdfAiDeps,
+export async function deleteNoteTool(
+  deps: Pick<PdfAiDeps, 'readOnly' | 'pageCount' | 'isDeleted' | 'findNoteRoot' | 'deleteNoteThread' | 'gotoPage'>,
   input: Record<string, unknown>,
 ): Promise<ToolExecution> {
   const summary = t('aiToolDeleteNote', { page: Number(input.page) })
@@ -1840,8 +1841,8 @@ const rangeStillValid = (deps: PdfAiDeps, raw: unknown, map: number[]): boolean 
 const fmtPath = (r: { savedPath: string }): string =>
   `saved at ${r.savedPath} and opened in a new tab`
 
-async function insertBlankPageTool(
-  deps: PdfAiDeps,
+export async function insertBlankPageTool(
+  deps: Pick<PdfAiDeps, 'readOnly' | 'pageCount' | 'isDeleted' | 'pageOrder' | 'insertBlankPage'>,
   input: Record<string, unknown>,
   signal?: AbortSignal,
 ): Promise<ToolExecution> {
@@ -2067,7 +2068,7 @@ async function replacePagesTool(
   }
 }
 
-function setHeaderFooterTool(deps: PdfAiDeps, input: Record<string, unknown>): ToolExecution {
+export function setHeaderFooterTool(deps: Pick<PdfAiDeps, 'readOnly' | 'stamps' | 'setStamps'>, input: Record<string, unknown>): ToolExecution {
   const summary = t('aiToolHeaderFooter')
   if (deps.readOnly()) return err(READONLY_OUTPUT, summary)
   const prev = deps.stamps()
@@ -2112,7 +2113,7 @@ function setHeaderFooterTool(deps: PdfAiDeps, input: Record<string, unknown>): T
   }
 }
 
-async function editText(deps: PdfAiDeps, input: Record<string, unknown>): Promise<ToolExecution> {
+export async function editText(deps: Pick<PdfAiDeps, 'readOnly' | 'pageCount' | 'isDeleted' | 'searchIndex' | 'editFonts' | 'editText' | 'gotoPage'>, input: Record<string, unknown>): Promise<ToolExecution> {
   const summary = t('aiToolEditText', { page: Number(input.page) })
   if (deps.readOnly()) return err(READONLY_OUTPUT, summary)
   const r = resolvePage(deps, input.page)
@@ -2187,7 +2188,7 @@ async function editText(deps: PdfAiDeps, input: Record<string, unknown>): Promis
 
 /** The one clustered paragraph on a page containing `anchor` (whitespace-insensitive) */
 async function locateBlock(
-  deps: PdfAiDeps,
+  deps: Pick<PdfAiDeps, 'searchIndex'>,
   origIdx: number,
   anchor: string,
 ): Promise<{ block: TextBlock } | { bad: string }> {
@@ -2214,7 +2215,7 @@ async function locateBlock(
 }
 
 /** Rewrite one clustered paragraph, reflowed within the block's original width */
-async function editBlock(deps: PdfAiDeps, input: Record<string, unknown>): Promise<ToolExecution> {
+export async function editBlock(deps: Parameters<typeof editText>[0], input: Record<string, unknown>): Promise<ToolExecution> {
   const summary = t('aiToolEditText', { page: Number(input.page) })
   if (deps.readOnly()) return err(READONLY_OUTPUT, summary)
   const r = resolvePage(deps, input.page)
@@ -2300,8 +2301,8 @@ async function editBlock(deps: PdfAiDeps, input: Record<string, unknown>): Promi
   }
 }
 
-async function addFormMarkTool(
-  deps: PdfAiDeps,
+export async function addFormMarkTool(
+  deps: Pick<PdfAiDeps, 'readOnly' | 'pageCount' | 'isDeleted' | 'pageGeom' | 'searchIndex' | 'formWidgets' | 'pageBoxes' | 'applyOps' | 'addFormMark' | 'gotoPage'>,
   input: Record<string, unknown>,
   signal?: AbortSignal,
 ): Promise<ToolExecution> {
@@ -2384,8 +2385,8 @@ async function addFormMarkTool(
 }
 
 /** Translate one clustered paragraph by a display-space offset (the AI counterpart of dragging a block) */
-async function moveTextBlockTool(
-  deps: PdfAiDeps,
+export async function moveTextBlockTool(
+  deps: Pick<PdfAiDeps, 'readOnly' | 'pageCount' | 'isDeleted' | 'searchIndex' | 'pageGeom' | 'moveTextBlock' | 'gotoPage'>,
   input: Record<string, unknown>,
 ): Promise<ToolExecution> {
   const summary = t('aiToolMoveTextBlock', { page: Number(input.page) })
@@ -2424,8 +2425,8 @@ async function moveTextBlockTool(
 }
 
 /** Insert a brand-new text block (the blank-page counterpart of edit_text/edit_block) */
-async function insertTextTool(
-  deps: PdfAiDeps,
+export async function insertTextTool(
+  deps: Pick<PdfAiDeps, 'readOnly' | 'pageCount' | 'isDeleted' | 'pageGeom' | 'editFonts' | 'searchIndex' | 'insertText' | 'gotoPage'>,
   input: Record<string, unknown>,
   signal?: AbortSignal,
 ): Promise<ToolExecution> {
@@ -2583,7 +2584,7 @@ function remeasureOffsets(
 const INSERT_ID_HINT =
   'call list_inserted_text for the current ids (only unsaved inserts qualify; saved text is page content — use edit_text)'
 
-function resolveInsert(deps: PdfAiDeps, raw: unknown): { ins: LocalTextInsert } | { bad: string } {
+function resolveInsert(deps: Pick<PdfAiDeps, 'textInserts'>, raw: unknown): { ins: LocalTextInsert } | { bad: string } {
   const key = String(raw ?? '').trim()
   if (!key) return { bad: `id must not be empty; ${INSERT_ID_HINT}` }
   const id = key.startsWith('T') ? key.slice(1) : key
@@ -2600,7 +2601,7 @@ function insertDispTopLeft(geom: PageGeom, ins: LocalTextInsert): [number, numbe
 
 const isAlign = (v: unknown): v is TextAlign => v === 'left' || v === 'center' || v === 'right'
 
-function listInsertedTextTool(deps: PdfAiDeps, input: Record<string, unknown>): ToolExecution {
+export function listInsertedTextTool(deps: Pick<PdfAiDeps, 'textInserts' | 'pageCount' | 'isDeleted' | 'pageGeom'>, input: Record<string, unknown>): ToolExecution {
   const summary = t('aiToolListInsertedText')
   let inserts = deps.textInserts()
   let where = ''
@@ -2633,7 +2634,7 @@ function listInsertedTextTool(deps: PdfAiDeps, input: Record<string, unknown>): 
   }
 }
 
-function editInsertedTextTool(deps: PdfAiDeps, input: Record<string, unknown>): ToolExecution {
+export function editInsertedTextTool(deps: Pick<PdfAiDeps, 'readOnly' | 'textInserts' | 'updateTextInsert' | 'gotoPage'>, input: Record<string, unknown>): ToolExecution {
   const summary = t('aiToolEditInsertedText')
   if (deps.readOnly()) return err(READONLY_OUTPUT, summary)
   const r = resolveInsert(deps, input.id)
@@ -2682,7 +2683,7 @@ function editInsertedTextTool(deps: PdfAiDeps, input: Record<string, unknown>): 
   }
 }
 
-function moveInsertedTextTool(deps: PdfAiDeps, input: Record<string, unknown>): ToolExecution {
+export function moveInsertedTextTool(deps: Pick<PdfAiDeps, 'readOnly' | 'textInserts' | 'pageGeom' | 'moveTextInsert' | 'gotoPage'>, input: Record<string, unknown>): ToolExecution {
   const summary = t('aiToolMoveInsertedText')
   if (deps.readOnly()) return err(READONLY_OUTPUT, summary)
   const r = resolveInsert(deps, input.id)
@@ -2723,7 +2724,7 @@ function moveInsertedTextTool(deps: PdfAiDeps, input: Record<string, unknown>): 
   }
 }
 
-function deleteInsertedTextTool(deps: PdfAiDeps, input: Record<string, unknown>): ToolExecution {
+export function deleteInsertedTextTool(deps: Pick<PdfAiDeps, 'readOnly' | 'textInserts' | 'deleteTextInsert'>, input: Record<string, unknown>): ToolExecution {
   const summary = t('aiToolDeleteInsertedText')
   if (deps.readOnly()) return err(READONLY_OUTPUT, summary)
   const r = resolveInsert(deps, input.id)
@@ -2764,7 +2765,7 @@ function dispToPdfRect(
 }
 
 /** Stable per-page numbering: top-to-bottom, then left-to-right, as displayed */
-const sortImageRefs = (refs: PageImageRef[], geom: PageGeom): PageImageRef[] =>
+export const sortImageRefs = (refs: PageImageRef[], geom: PageGeom): PageImageRef[] =>
   [...refs].sort((a, b) => {
     const da = dispBox(geom, a.rect)
     const db = dispBox(geom, b.rect)
@@ -2779,8 +2780,11 @@ function describeImage(ref: PageImageRef, geom: PageGeom, n: number, claimed: bo
   } the text${state}`
 }
 
-async function listPageImagesTool(
-  deps: PdfAiDeps,
+type ImageLookupDeps = Pick<PdfAiDeps, 'pageCount' | 'isDeleted' | 'pageGeom' | 'listImages' | 'isImageClaimed'>
+type ExistingImageEditDeps = ImageLookupDeps & Pick<PdfAiDeps, 'readOnly' | 'gotoPage'>
+
+export async function listPageImagesTool(
+  deps: ImageLookupDeps,
   input: Record<string, unknown>,
 ): Promise<ToolExecution> {
   const summary = t('aiToolListImages')
@@ -2818,7 +2822,7 @@ async function listPageImagesTool(
 
 /** page + 1-based listing number → the actual image, using the same ordering as the listing */
 async function resolveImageRef(
-  deps: PdfAiDeps,
+  deps: ImageLookupDeps,
   origIdx: number,
   geom: PageGeom,
   rawNumber: unknown,
@@ -2879,8 +2883,8 @@ async function generateImageTool(
   }
 }
 
-async function insertImageTool(
-  deps: PdfAiDeps,
+export async function insertImageTool(
+  deps: Pick<PdfAiDeps, 'readOnly' | 'pageCount' | 'isDeleted' | 'pageGeom' | 'searchIndex' | 'fetchImage' | 'isImageAttachment' | 'insertImage' | 'gotoPage'>,
   input: Record<string, unknown>,
   signal?: AbortSignal,
 ): Promise<ToolExecution> {
@@ -2890,7 +2894,7 @@ async function insertImageTool(
   if ('bad' in r) return err(r.bad, summary)
   const url = String(input.url ?? '')
   // file:// = a BYOK-generated image in the local store (the main process only resolves its own files)
-  if (!/^(https?|file):\/\//.test(url))
+  if (!/^(https?|file):\/\//.test(url) && !deps.isImageAttachment?.(url))
     return err('invalid url; pass an imageUrl from image_search or generate_image', summary)
   const geom = deps.pageGeom(r.origIdx)
   if (!geom) return err('Document not ready', summary)
@@ -2961,6 +2965,7 @@ async function insertImageTool(
 
   const rect = dispToPdfRect(geom, tx, ty, w, h)
   const layer: ImageLayer = input.layer === 'above_text' ? 'aboveText' : 'belowText'
+  if (signal?.aborted || deps.readOnly()) return err('The PDF can no longer accept this image draft.', summary)
   deps.insertImage(r.origIdx, fetched.png, rect, layer)
   deps.gotoPage(r.origIdx + 1)
   return {
@@ -2972,8 +2977,8 @@ async function insertImageTool(
   }
 }
 
-async function transformImageTool(
-  deps: PdfAiDeps,
+export async function transformImageTool(
+  deps: ExistingImageEditDeps & Pick<PdfAiDeps, 'transformImage'>,
   input: Record<string, unknown>,
   signal?: AbortSignal,
 ): Promise<ToolExecution> {
@@ -3014,6 +3019,7 @@ async function transformImageTool(
 
   const layer: ImageLayer | undefined =
     input.layer === undefined ? undefined : input.layer === 'above_text' ? 'aboveText' : 'belowText'
+  if (deps.readOnly() || deps.isImageClaimed(ref)) return err('The image can no longer accept this draft.', summary)
   deps.transformImage(ref, dispToPdfRect(geom, tx, ty, w, h), layer)
   deps.gotoPage(r.origIdx + 1)
   return {
@@ -3025,8 +3031,8 @@ async function transformImageTool(
   }
 }
 
-async function rotateImageTool(
-  deps: PdfAiDeps,
+export async function rotateImageTool(
+  deps: ExistingImageEditDeps & Pick<PdfAiDeps, 'transformImage'>,
   input: Record<string, unknown>,
   signal?: AbortSignal,
 ): Promise<ToolExecution> {
@@ -3053,6 +3059,7 @@ async function rotateImageTool(
           (y1 + y2) / 2 + (x2 - x1) / 2,
         ]
       : [x1, y1, x2, y2]
+  if (deps.readOnly() || deps.isImageClaimed(ref)) return err('The image can no longer accept this draft.', summary)
   deps.transformImage(ref, rect, undefined, turns)
   deps.gotoPage(r.origIdx + 1)
   return {
@@ -3064,8 +3071,8 @@ async function rotateImageTool(
   }
 }
 
-async function replaceImageTool(
-  deps: PdfAiDeps,
+export async function replaceImageTool(
+  deps: ExistingImageEditDeps & Pick<PdfAiDeps, 'fetchImage' | 'isImageAttachment' | 'replaceImage'>,
   input: Record<string, unknown>,
   signal?: AbortSignal,
 ): Promise<ToolExecution> {
@@ -3078,7 +3085,7 @@ async function replaceImageTool(
   const ref = await resolveImageRef(deps, r.origIdx, geom, input.image_number)
   if (typeof ref === 'string') return err(ref, summary)
   const url = String(input.url ?? '')
-  if (!/^https?:\/\//.test(url)) return err('url must be a direct http(s) image link', summary)
+  if (!/^https?:\/\//.test(url) && !deps.isImageAttachment?.(url)) return err('url must be a direct http(s) image link', summary)
   const fetched = await deps.fetchImage(url)
   if (signal?.aborted) return err('stopped by the user; nothing was changed', summary)
   if (!fetched)
@@ -3086,6 +3093,7 @@ async function replaceImageTool(
       'The image could not be downloaded or decoded (the link may be inaccessible or not a raster image); pick another result or generate a new one.',
       summary,
     )
+  if (deps.readOnly() || deps.isImageClaimed(ref)) return err('The image can no longer accept this draft.', summary)
   deps.replaceImage(ref, fetched.png)
   deps.gotoPage(r.origIdx + 1)
   return {
@@ -3237,8 +3245,8 @@ async function bakeImageTool(
   }
 }
 
-async function deleteImageTool(
-  deps: PdfAiDeps,
+export async function deleteImageTool(
+  deps: ExistingImageEditDeps & Pick<PdfAiDeps, 'deleteImage'>,
   input: Record<string, unknown>,
   signal?: AbortSignal,
 ): Promise<ToolExecution> {
@@ -3251,6 +3259,7 @@ async function deleteImageTool(
   const ref = await resolveImageRef(deps, r.origIdx, geom, input.image_number)
   if (signal?.aborted) return err('stopped by the user; nothing was changed', summary)
   if (typeof ref === 'string') return err(ref, summary)
+  if (deps.readOnly() || deps.isImageClaimed(ref)) return err('The image can no longer accept this draft.', summary)
   deps.deleteImage(ref)
   deps.gotoPage(r.origIdx + 1)
   return {
@@ -3278,7 +3287,7 @@ async function collectFields(
   return fields
 }
 
-async function listFormFields(deps: PdfAiDeps): Promise<ToolExecution> {
+export async function listFormFields(deps: Pick<PdfAiDeps, 'doc' | 'formEdits'>): Promise<ToolExecution> {
   const doc = deps.doc()
   if (!doc) return err('Document not ready', t('aiToolFields', { count: 0 }))
   const fields = await collectFields(doc)
@@ -3319,8 +3328,8 @@ const pendingId = (
  * and out-of-range pages here, with the tool's wording), prefixed ids lose their
  * prefix, form values get their kind from the field catalog.
  */
-async function applyOpsTool(
-  deps: PdfAiDeps,
+export async function applyOpsTool(
+  deps: Pick<PdfAiDeps, 'readOnly' | 'pageCount' | 'isDeleted' | 'doc' | 'pageOrder' | 'metadata' | 'pageGeom' | 'applyOps' | 'gotoPage'>,
   input: Record<string, unknown>,
 ): Promise<ToolExecution> {
   const raw = Array.isArray(input.ops) ? (input.ops as unknown[]) : null
@@ -3538,6 +3547,7 @@ async function applyOpsTool(
   if (problems.length > 0)
     return err(`Nothing was applied (atomic):\n${problems.join('\n')}`, summary)
 
+  if (deps.readOnly()) return err(READONLY_OUTPUT, summary)
   const plan = deps.applyOps(ops, dryRun ? { dryRun: true } : undefined)
   if (plan.failures.length > 0) {
     const lines = plan.failures.map((f) => `- ops[${f.index}]: ${f.error}`).join('\n')
@@ -3601,6 +3611,22 @@ function singleOpSummary(op: Op, before: number[]): string {
       return t('aiToolFill', { name: (op.value as FormValueInput).name })
     default:
       return t('aiToolApplyOps', { count: 1 })
+  }
+}
+
+export function getOutlineTool(deps: Pick<PdfAiDeps, 'outline'>): ToolExecution {
+  const outline = deps.outline()
+  const lines: string[] = []
+  const walk = (nodes: OutlineNode[], depth: number) => {
+    for (const node of nodes) {
+      lines.push(`${'  '.repeat(depth)}${node.title}`)
+      if (node.items) walk(node.items, depth + 1)
+    }
+  }
+  if (outline) walk(outline, 0)
+  return {
+    output: lines.join('\n') || 'The document has no outline',
+    summary: t('aiToolOutline'),
   }
 }
 
@@ -3701,21 +3727,8 @@ export async function executePdfTool(
       return setWatermarkTool(deps, input)
     case 'set_header_footer':
       return setHeaderFooterTool(deps, input)
-    case 'get_outline': {
-      const outline = deps.outline()
-      const lines: string[] = []
-      const walk = (nodes: OutlineNode[], depth: number) => {
-        for (const n of nodes) {
-          lines.push(`${'  '.repeat(depth)}${n.title}`)
-          if (n.items) walk(n.items, depth + 1)
-        }
-      }
-      if (outline) walk(outline, 0)
-      return {
-        output: lines.join('\n') || 'The document has no outline',
-        summary: t('aiToolOutline'),
-      }
-    }
+    case 'get_outline':
+      return getOutlineTool(deps)
     case 'create_document': {
       const typeRaw = input.type === undefined ? 'pdf' : String(input.type)
       const summary = t('aiToolCreateDocument')

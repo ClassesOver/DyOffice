@@ -20,6 +20,16 @@ test('recovery during async proof check cannot grant authority',async()=>{
  active=false;release();expect(await pending).toBe(false)
  active=true;expect(await access.verify()).toBe(false)
 })
+test('a transient proof error denies the current copy but allows rechecking the original proof',async()=>{
+ let unavailable=false
+ const access=await createDraftCopyAuthority(()=>true,async()=>unavailable
+  ?new Response('{}',{status:503}): new Response(JSON.stringify({csrfToken:proof})))
+ unavailable=true
+ expect(await access.verify()).toBe(false)
+ expect(access.current()).toBe(true)
+ unavailable=false
+ expect(await access.verify()).toBe(true)
+})
 test('missing parent grant, detached frame and cross-origin access refuse',()=>{
  const parent={} as Window
  for(const frame of [null,{isConnected:true,ownerDocument:{defaultView:parent}},{isConnected:false,ownerDocument:{defaultView:parent},dyofficeDraftCopySessionActive:()=>true}]){

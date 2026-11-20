@@ -1,7 +1,9 @@
+import {DRAFT_META} from './doc-writer'
+import type { OfficeHandoffFailure, OfficeHandoffRunner } from '../file-actions'
+import { AssistantConversation, useAiPanelResize } from '@genoffice/ui'
 import { AssistantParticipants, DelegatedAgentResultCard, delegatedAgentResult, compactDelegatedTranscript, type AssistantParticipant, type DelegatedAgentResult } from '@genoffice/ui'
 import { showToast } from '../components/toast-bus'
 import {
-  aiPanelWidthAtPointer,
   AiPanelSideButton,
   AiModelPicker,
   type AiModelPickerBridge,
@@ -14,7 +16,7 @@ import {
   type AiTokenUsageView,
   useChatRunQueue,
 } from '@genoffice/ui'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { aiRevisionAuthor } from './revision-author'
 import type { Editor } from '@tiptap/core'
 import type { Block } from '@genoffice/docx-engine'
@@ -25,21 +27,21 @@ import {
   createKnowledgeBaseSkill,
   streamText,
   type AgentImage,
+  type AgentSkill,
+  type AgentToolResult,
+  type FileChatTurn,
+  type HarnessCheckpoint,
   type KbFileInfo,
   type MindMapTreeNode,
 } from '@genoffice/agent-core'
 import { redactTextBetween, type RedactableNode } from './redact-view'
 import { imageGenerationAvailable, mediaAnalysisAvailable } from '@genoffice/ai-provider/browser'
-import type { AiSettings, AttachmentAddResult, AttachmentMeta } from '../../shared/ipc'
+import type { AiSettings, AttachmentAddResult, AttachmentMeta, CreateDocumentType } from '../../shared/ipc'
 import { ATTACHMENT_IMAGE_EXTS } from '../../shared/ipc'
 import {
-  AI_PANEL_WIDTH_DEFAULT,
   AttachmentCardIcon,
-  clampAiPanelWidth,
   fileImageIcon,
   formatAttachmentSize,
-  loadAiPanelWidth,
-  saveAiPanelWidth,
   SentAttachments,
   truncateCardName,
 } from '@genoffice/ui'
@@ -55,7 +57,7 @@ import {
 } from './tools'
 import type { AiPageSetupAccess } from './page-setup'
 import type { AiNotesAccess } from './note-ops'
-import { createDocsSkill } from './docs-skill'
+import { createDocsSkill, type RunAttachmentImages } from './docs-skill'
 import { MindMapCard } from './MindMapCard'
 import { insertPictureAtSelection } from '../editor/insert-picture'
 import {
@@ -63,6 +65,7 @@ import {
   countFragmentBlocks,
   DOC_MAX_CHARS,
   extractFragment,
+  hasDocumentWriterDraft,
   type DocWriteResult,
   type DocWriteSpec,
 } from './doc-writer'
@@ -91,9 +94,6 @@ import { useI18n, t as tModule, aiLangDirective, type StringKey } from '../i18n/
 import { createFileNav, Markdown } from '@genoffice/ui'
 import { AiComposer, AiScopeQuote, AiTypingIndicator, type AiScopeQuoteData } from '@genoffice/ui'
 import { GensparkMark } from '../components/icons'
-import sendEnterOn from '../assets/send-enter-on.png'
-import sendEnterOff from '../assets/send-enter-off.png'
-import sendStop from '../assets/send-stop.png'
 import { IconNewChat, IconSidebarCollapse } from '../components/icons'
 
 interface ToolActivity {
@@ -172,6 +172,7 @@ function safeJsonInput(input: unknown): string | undefined {
 }
 
 interface ChatEntry {
+  sender?: 'dsh'
   role: 'user' | 'assistant'
   text: string
   error?: string
@@ -232,12 +233,36 @@ const PASTE_MIME_EXT: Record<string, string> = {
 
 export { aiRevisionAuthor }
 
+export interface DocsAssistantRecovery {
+  continuationRevision?: (() => string | undefined) | undefined
+  coding?: {
+    snapshot(): readonly { id: string; continuationModelId?: string }[]
+    subscribe(listener: () => void): () => void
+    resume(id: string, signal: AbortSignal): Promise<{
+      revision: string; modelId: string; checkpoint: HarnessCheckpoint; result: AgentToolResult
+    } | undefined>
+  } | undefined
+  catalog?: { entries: readonly { id: string }[] }
+  fileChat?: { resume(turnId: string, loop: object): Promise<FileChatTurn | undefined> } | undefined
+}
+
+export type SetDocsImageAttachments = (files: readonly {name: string; image: AgentImage}[]) => string
+
 interface AiPanelProps {
   sourceSkill?: import('@genoffice/agent-core').AgentSkill
+  setImageAttachments?: SetDocsImageAttachments | undefined
   transport?: import('@genoffice/agent-core').AgentTransport
   extraSkills?: readonly import('@genoffice/agent-core').AgentSkill[]
+  getSupportedCreateDocumentTypes?: (() => readonly CreateDocumentType[]) | undefined
+  mediaCapabilities?: { imageGeneration: boolean; mediaAnalysis: boolean; imageAnalysis?: boolean } | undefined
+  assistantWorkspace?: import('@genoffice/ui').AssistantWorkspace | undefined
+  externalActivity?: React.ReactNode
+  onHandoffReady?: ((runner: OfficeHandoffRunner | null) => void) | undefined
+  activityOnly?: boolean
   modelPicker?: React.ReactNode
   assistantControl?: import('@genoffice/ui').AssistantControl
+  assistantRecovery?: DocsAssistantRecovery | undefined
+  recoveryRevision?: string | undefined
   assistantAgents?: readonly AssistantParticipant[]
   onManageAgents?: () => void
   editor: Editor
@@ -343,10 +368,19 @@ export function AiPanel({
   sourceSkill,
   transport,
   modelPicker,
+  assistantWorkspace,
+  externalActivity,
+  onHandoffReady,
+  activityOnly = false,
   assistantControl,
+  assistantRecovery,
+  recoveryRevision,
   assistantAgents,
   onManageAgents,
   extraSkills,
+  mediaCapabilities,
+  setImageAttachments,
+  getSupportedCreateDocumentTypes,
   editor,
   blocks,
   settings,
@@ -384,7 +418,15 @@ export function AiPanel({
   const isRtl = lang === 'ar' || lang === 'he'
   const [input, setInput] = useState('')
   const [busy, setBusy] = useState(false)
+  const [recoveryNotice, setRecoveryNotice] = useState<'model' | 'unavailable'>()
+  const recoveryAllowed = useRef(true)
+  const recovering = useRef<AbortController | undefined>(undefined)
+  const checkRecovery = useRef<(() => void) | undefined>(undefined)
+  const resumedRun = useRef(false)
   const assistantRunTokenRef = useRef<string | undefined>(undefined)
+  const recoverableDraftRef = useRef<{ text: string; attachments: AttachmentMeta[]; skills: string[] } | undefined>(undefined)
+  const composerTextRef = useRef(input)
+  composerTextRef.current = input
   /** messages queued while a reply runs; the pump re-runs them through runWith on settle */
   const msgQueue = useChatRunQueue<{
     attachments: AttachmentMeta[]
@@ -395,7 +437,7 @@ export function AiPanel({
     busy,
     submit: (text, meta) => {
       const loop = loopRef.current
-      if (!loop || loop.busy || pendingSendRef.current) return false
+      if (!loop || loop.busy || pendingSendRef.current || recovering.current) return false
       runWith(text, text, meta.attachments, meta.scope, false, meta.preserveComposer, meta.continuationToken)
       return true
     },
@@ -408,13 +450,13 @@ export function AiPanel({
   // on mount and before each send so a freshly starred file is answerable
   const kbFilesRef = useRef<KbFileInfo[]>([])
   const refreshKbFiles = (): Promise<void> => {
-    if (typeof window.desktop?.kbList !== 'function') return Promise.resolve()
+    if (typeof window.desktop?.kbList !== 'function') { kbFilesRef.current=[]; return Promise.resolve() }
     return window.desktop
       .kbList()
       .then((files) => {
         kbFilesRef.current = files
       })
-      .catch(() => undefined)
+      .catch(() => { kbFilesRef.current=[] })
   }
   const [chat, setChat] = useState<ChatEntry[]>([])
   /** a streamed write stopped early: the draft stays in the document until the user keeps or discards it */
@@ -497,29 +539,12 @@ export function AiPanel({
     attachScrollFadeRef.current = window.setTimeout(() => el.classList.remove('is-scrolling'), 800)
   }
   const [dragOver, setDragOver] = useState(false)
-  // preferred = the user's chosen width (the only value persisted); panelWidth =
-  // what fits the current window. Deriving the display width from the preference
-  // means a transiently small window never permanently shrinks the panel.
-  const preferredWidthRef = useRef(loadAiPanelWidth(PANEL_WIDTH_KEY) ?? AI_PANEL_WIDTH_DEFAULT)
-  const [panelWidth, setPanelWidth] = useState(() => clampAiPanelWidth(preferredWidthRef.current))
-  const [resizing, setResizing] = useState(false)
+  const { width, resizing, handle } = useAiPanelResize(PANEL_WIDTH_KEY, lang, open)
   const asideRef = useRef<HTMLElement>(null)
-
-  // The .ai-dock wrapper owns the animated width (Excel-parity 180ms slide);
-  // it tracks the resizable panel width through this variable
-  // `open` dep: the aside ref only exists while expanded
-  useEffect(() => {
-    const dock = asideRef.current?.closest('.ai-dock') as HTMLElement | null
-    dock?.style.setProperty('--ai-panel-width', `${panelWidth}px`)
-  }, [panelWidth, open])
-
-  // Re-derive the display width on window resize (max is 60% of the window);
-  // growing the window back restores the preferred width
-  useEffect(() => {
-    const onResize = () => setPanelWidth(clampAiPanelWidth(preferredWidthRef.current))
-    window.addEventListener('resize', onResize)
-    return () => window.removeEventListener('resize', onResize)
-  }, [])
+  useLayoutEffect(() => {
+    const dock = asideRef.current?.closest<HTMLElement>('.ai-dock')
+    dock?.style.setProperty('--ai-panel-width', `${width}px`)
+  }, [width, open])
   // a pending keep/discard must not outlive the panel: settle it as discard
   useEffect(
     () => () => {
@@ -575,6 +600,7 @@ export function AiPanel({
   attachedSkillsRef.current = attachedSkills
   /** attachments consumed by the most recent send — retry resends the same set */
   const lastAttachmentsRef = useRef<AttachmentMeta[]>([])
+  const runImagesRef = useRef<RunAttachmentImages>(new Map())
   /** the scope quote of the last send, so a retry reuses it instead of re-reading the live selection */
   const lastScopeRef = useRef<AiScopeQuoteData | undefined>(undefined)
   /** composer attachments plus everything already sent this session (deduped by path) */
@@ -758,6 +784,7 @@ export function AiPanel({
     spec: DocWriteSpec,
     onProgress: (html: string) => void,
     signal?: AbortSignal,
+    reportHandoffFailure?: (failure: OfficeHandoffFailure) => void,
   ): Promise<DocWriteResult> => {
     const { system, user } = buildDocWriterRequest(spec, aiLangDirective())
     const epoch = writerEpochRef.current
@@ -794,6 +821,13 @@ export function AiPanel({
     closed = true
     if (chipTimer !== null) clearTimeout(chipTimer)
     if (outcome.status === 'complete') return { ok: true, html: outcome.text }
+    if (reportHandoffFailure) {
+      const error = outcome.error
+      reportHandoffFailure((outcome.status === 'partial' && outcome.reason === 'max_tokens') || error === 'max_tokens'
+        ? 'outputLimit' : error === 'AI stream timed out' ? 'timedOut' :
+          outcome.status === 'empty' && error === 'empty reply' ? 'emptyOutput' : 'failed')
+      return { ok: false, error: error ?? 'Incomplete draft' }
+    }
     if (outcome.status === 'empty') return { ok: false, error: outcome.error }
     if (epoch !== writerEpochRef.current) return { ok: false, error: 'the chat was reset' }
     // the draft stays in the document while the user decides
@@ -808,6 +842,7 @@ export function AiPanel({
           error: `${outcome.reason}${outcome.error ? `: ${outcome.error}` : ''}; the user discarded the partial content`,
         }
   }
+  const handoffDraft=useRef<{signal:AbortSignal;instruction:string;skill?:import('@genoffice/agent-core').DocumentHandoffOptions['skill'];failure?:OfficeHandoffFailure;abort:()=>void}|null>(null)
   const runDocWriterRef = useRef(runDocWriter)
   runDocWriterRef.current = runDocWriter
 
@@ -822,15 +857,47 @@ export function AiPanel({
     decidePartial(false)
   }
 
+  const docsSkillRef = useRef<AgentSkill | null>(null)
   const loopRef = useRef<AgentLoop<PmNode> | null>(null)
   if (!loopRef.current) {
     const numIds = (): NumIds => ({
       bullet: findNumId(blocksRef.current, 'bullet') ?? numIdFallbackRef.current?.bullet ?? null,
       ordered: findNumId(blocksRef.current, 'ordered') ?? numIdFallbackRef.current?.ordered ?? null,
     })
+    docsSkillRef.current = createDocsSkill(
+      () => editorRef.current,
+      numIds,
+      () => (trackChangesRef.current ? { author: aiRevisionAuthor() } : undefined),
+      () => commentsAccessRef.current,
+      () => hfAccessRef.current,
+      () => mediaCapabilities?.imageGeneration ?? imageGenerationAvailable(settingsRef.current, gskLoggedInRef.current),
+      () => ({
+        preserveConcurrentEdits:!!handoffDraft.current,
+        async write(spec,onProgress,signal){
+          const task=handoffDraft.current
+          if(!task)return runDocWriterRef.current(spec,onProgress,signal)
+          const current=editorRef.current
+          const watch=({transaction}:{transaction:import('@tiptap/pm/state').Transaction})=>{
+            if(transaction.docChanged&&!transaction.getMeta(DRAFT_META))task.abort()
+          }
+          current.on('transaction',watch)
+          try {
+            const result=await runDocWriterRef.current({...spec,instruction:task.instruction,...(task.skill&&{taskReference:task.skill})},onProgress,signal,failure=>{task.failure=failure})
+            return task.signal.aborted?{ok:false}:result
+          }finally{current.off('transaction',watch)}
+        },
+      }),
+      () => pageSetupAccessRef.current,
+      () => docExtrasRef.current,
+      () => notesAccessRef.current,
+      () => mediaCapabilities?.mediaAnalysis ?? mediaAnalysisAvailable(settingsRef.current, gskLoggedInRef.current),
+      transport && mediaCapabilities?.imageAnalysis !== false ? () => runImagesRef.current : undefined,
+      getSupportedCreateDocumentTypes,
+    )
     loopRef.current = new AgentLoop<PmNode>({
       transport: transportRef.current,
       allowDelegationYield: !!assistantControl,
+      allowHarnessResume: !!assistantRecovery?.continuationRevision,
       systemSuffix: aiLangDirective,
       skill: composeSkills('docs+files+skills', '', [
         ...(extraSkills ?? []),
@@ -847,28 +914,16 @@ export function AiPanel({
               }),
             ]
           : []),
-        createDocsSkill(
-          () => editorRef.current,
-          numIds,
-          () => (trackChangesRef.current ? { author: aiRevisionAuthor() } : undefined),
-          () => commentsAccessRef.current,
-          () => hfAccessRef.current,
-          () => imageGenerationAvailable(settingsRef.current, gskLoggedInRef.current),
-          () => ({
-            write: (spec, onProgress, signal) => runDocWriterRef.current(spec, onProgress, signal),
-          }),
-          () => pageSetupAccessRef.current,
-          () => docExtrasRef.current,
-          () => notesAccessRef.current,
-          () => mediaAnalysisAvailable(settingsRef.current, gskLoggedInRef.current),
-        ),
-        ...(!transport ? [createFilesSkill(availableAttachments), createSkillsSkill()] : []),
+        docsSkillRef.current,
+        ...(typeof window.desktop?.readAttachment === 'function' ? [createFilesSkill(availableAttachments)] : []),
+        ...(!transport ? [createSkillsSkill()] : []),
         ...(sourceSkill ? [sourceSkill] : []),
       ]),
       captureSnapshot: () => editorRef.current.getJSON() as PmNode,
       events: {
-        onText: (text) => patchLastAssistant({ text }),
+        onText: (text) => { if (text) recoverableDraftRef.current = undefined; patchLastAssistant({ text }) },
         onToolStart: (call) => {
+          recoverableDraftRef.current = undefined
           // Live "running" chip: replaced in place by onToolExecuted
           patchLastAssistant((last) => ({
             tools: [
@@ -919,6 +974,7 @@ export function AiPanel({
           })
         },
         onTurnEnd: () => {
+          if (resumedRun.current) return
           patchLastAssistant({ streaming: false })
           setChat((prev) =>
             boundChatHistory([...prev, { role: 'assistant', text: '', streaming: true }]),
@@ -930,6 +986,14 @@ export function AiPanel({
           patchLastAssistant({ usage: runUsageRef.current })
         },
         onDone: ({ text, cancelled, turnLimit, truncated, yielded }) => {
+          setImageAttachments?.([])
+          if (resumedRun.current) {
+            resumedRun.current = false
+            setBusy(false)
+            return
+          }
+          recoverableDraftRef.current = undefined
+          runImagesRef.current = new Map()
           const runToken = assistantRunTokenRef.current
           assistantRunTokenRef.current = undefined
           if (runToken) assistantControl?.endRun?.(runToken, {text, cancelled, failed: turnLimit || !!truncated, ...(yielded ? {yielded} : {})})
@@ -960,6 +1024,21 @@ export function AiPanel({
           }
         },
         onError: (error) => {
+          setImageAttachments?.([])
+          if (resumedRun.current) {
+            resumedRun.current = false
+            setRecoveryNotice('unavailable')
+            setBusy(false)
+            return
+          }
+          const draft = recoverableDraftRef.current
+          recoverableDraftRef.current = undefined
+          if (draft && !composerTextRef.current && !attachmentsRef.current.length && !attachedSkillsRef.current.length) {
+            setInput(draft.text)
+            setAttachments(draft.attachments)
+            setAttachedSkills(draft.skills)
+          }
+          runImagesRef.current = new Map()
           const runToken = assistantRunTokenRef.current
           assistantRunTokenRef.current = undefined
           if (runToken) assistantControl?.endRun?.(runToken, {text: error, cancelled: false, failed: true})
@@ -1001,6 +1080,74 @@ export function AiPanel({
       },
     })
   }
+
+  useEffect(() => {
+    const { coding, fileChat, continuationRevision, catalog } = assistantRecovery ?? {}
+    const loop = loopRef.current
+    if (!coding || !fileChat || !continuationRevision || !loop) return
+    let mounted = true
+    const attempted = new Set<string>()
+    const readyRevision = () => {
+      const editor = editorRef.current
+      return editor.isEditable && !editor.isDestroyed && !hasDocumentWriterDraft(editor) ? continuationRevision() : undefined
+    }
+    const check = () => {
+      if (!mounted || !recoveryAllowed.current || recovering.current || loop.busy || loop.messages.length ||
+          pendingSendRef.current || handoffDraft.current || !readyRevision()) return
+      const task = coding.snapshot().find(item => {
+        if (!item.continuationModelId || attempted.has(item.id)) return false
+        if (catalog?.entries.some(entry => entry.id === item.continuationModelId)) return true
+        attempted.add(item.id)
+        setRecoveryNotice('model')
+        return false
+      })
+      if (!task) return
+      attempted.add(task.id)
+      const observer = new AbortController()
+      recovering.current = observer
+      setBusy(true)
+      setRecoveryNotice(undefined)
+      void (async () => {
+        let started = false
+        try {
+          const run = await coding.resume(task.id, observer.signal)
+          if (observer.signal.aborted) return
+          if (!run?.checkpoint.chatTurnId || readyRevision() !== run.revision) throw Error('Office conversation unavailable')
+          const chat = await fileChat.resume(run.checkpoint.chatTurnId, loop)
+          if (!mounted || observer.signal.aborted) return
+          if (!chat || readyRevision() !== run.revision) throw Error('Office conversation unavailable')
+          runStartedAtRef.current = Date.now()
+          markDocSeen(editorRef.current)
+          // The persisted conversation renders both sides of this original turn.
+          resumedRun.current = true
+          started = loop.resumeHarness(run.checkpoint, run.result, { chat, modelId: run.modelId, canContinue: () => readyRevision() === run.revision })
+          if (!started) throw Error('Office conversation unavailable')
+        } catch {
+          if (mounted && !observer.signal.aborted) setRecoveryNotice('unavailable')
+        } finally {
+          if (recovering.current === observer) recovering.current = undefined
+          if (mounted && !started) {
+            resumedRun.current = false
+            setBusy(false)
+            if (!observer.signal.aborted) check()
+          }
+        }
+      })()
+    }
+    checkRecovery.current = check
+    const unsubscribe = coding.subscribe(check)
+    check()
+    return () => {
+      mounted = false
+      recovering.current?.abort()
+      recovering.current = undefined
+      checkRecovery.current = undefined
+      unsubscribe()
+      if (loop.busy) loop.cancel()
+    }
+  }, [assistantRecovery])
+
+  useEffect(() => { queueMicrotask(() => checkRecovery.current?.()) }, [recoveryRevision])
 
   useEffect(() => {
     if (!preset) return
@@ -1097,18 +1244,26 @@ export function AiPanel({
     stickToBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 48
   }
 
-  const run = () => runWith(input.trim(), input.trim(), undefined, undefined, true)
+  const run = async () => {
+    if (assistantWorkspace && !assistantWorkspace.isOffice()) {
+      const draft = input
+      const result = await assistantWorkspace.submit(draft.trim(), hasScopeSelection || attachmentsRef.current.length > 0 || attachedSkillsRef.current.length > 0)
+      if (result === 'sent') setInput(current => current === draft ? '' : current)
+      return
+    }
+    runWith(input.trim(), input.trim(), undefined, undefined, true, false, undefined, undefined, input)
+  }
 
   /** Image attachments are read as base64 and go multimodal with this user message (≤5MB per image, max 20) */
   const MAX_IMAGES_PER_MESSAGE = 20
-  const collectImageAttachments = async (atts: AttachmentMeta[]): Promise<AgentImage[]> => {
-    const imageAtts = atts.filter((a) => ATTACHMENT_IMAGE_EXTS.has(a.ext))
-    const images: AgentImage[] = []
+  const collectImageAttachments = async (atts: AttachmentMeta[]): Promise<RunAttachmentImages> => {
+    const imageAtts = atts.map((attachment, index) => ({attachment, index})).filter(({attachment}) => ATTACHMENT_IMAGE_EXTS.has(attachment.ext))
+    const images: RunAttachmentImages = new Map()
     const failures: string[] = []
-    for (const att of imageAtts.slice(0, MAX_IMAGES_PER_MESSAGE)) {
+    for (const {attachment: att, index} of imageAtts.slice(0, MAX_IMAGES_PER_MESSAGE)) {
       const result = await window.desktop.readAttachmentImage(att.path)
       if (result.ok && result.base64 && result.mime) {
-        images.push({ base64: result.base64, mime: result.mime })
+        images.set(index, { name: att.name, image: { base64: result.base64, mime: result.mime } })
       } else {
         failures.push(result.error ?? t('aiImageReadFail', { name: att.name }))
       }
@@ -1126,7 +1281,7 @@ export function AiPanel({
   useEffect(() => {
     if (!assistantControl) return
     return assistantControl.register({
-      isBusy: () => !loopRef.current || loopRef.current.busy || !!pendingSendRef.current,
+      isBusy: () => !loopRef.current || loopRef.current.busy || !!pendingSendRef.current || !!recovering.current,
       cancelRun(token) { if (assistantRunTokenRef.current === token) loopRef.current?.cancel() },
       requestYield(taskIds) { loopRef.current?.requestYield(taskIds) },
       continue(instruction, continuationToken) {
@@ -1135,7 +1290,7 @@ export function AiPanel({
       },
       async execute(instruction, signal) {
         const loop = loopRef.current
-        if (!loop || loop.busy || pendingSendRef.current) throw new Error('Office assistant is busy')
+        if (!loop || loop.busy || pendingSendRef.current || recovering.current) throw new Error('Office assistant is busy')
         setBusy(true)
         try {
           return await loop.runScoped(instruction, { signal, allowedTools: assistantControl.allowedTools })
@@ -1156,9 +1311,13 @@ export function AiPanel({
     attachSkills = false,
     preserveComposer = false,
     continuationToken?: string,
+    handoff?: import('@genoffice/agent-core').DocumentHandoffOptions,
+    composerDraft?: string,
   ) => {
     const loop = loopRef.current
-    if (!instruction || !loop || loop.busy || pendingSendRef.current) return
+    if (!instruction || !loop || loop.busy || pendingSendRef.current || recovering.current) return
+    recoveryAllowed.current = false
+    setRecoveryNotice(undefined)
     if (!preserveComposer) setInput('')
     // The message consumes the composer attachments: they ride along (echoed on the
     // bubble, images multimodal, files via the files skill) and the composer clears.
@@ -1197,6 +1356,7 @@ export function AiPanel({
         {
           role: 'user',
           text: displayInstruction,
+          ...(handoff && {sender:'dsh' as const}),
           ...(sentAtts.length > 0 ? { attachments: sentAtts } : {}),
           ...(sentSkills.length > 0 ? { skills: sentSkills } : {}),
           ...(scope ? { scope } : {}),
@@ -1212,11 +1372,11 @@ export function AiPanel({
     pendingSendRef.current = pending
     persistMessage('user', instruction, undefined, sentAtts, scope)
     // a rejected image read must not strand the run (busy would stay true forever): degrade to a no-image send
-    void collectImageAttachments(sentAtts)
-      .catch((): AgentImage[] => {
+    return collectImageAttachments(sentAtts)
+      .catch((): RunAttachmentImages => {
         setAttachNotice(t('aiImagesSendFailed'))
         window.setTimeout(() => setAttachNotice(null), 5000)
-        return []
+        return new Map()
       })
       // a phased open still streaming its tail: the context must describe the whole document
       .then(async (images) => {
@@ -1245,9 +1405,50 @@ export function AiPanel({
           return
         }
         assistantRunTokenRef.current = runToken
-        return loop.run(modelInstruction, images, modelInstruction !== instruction && transport ? instruction : undefined)
+        const draft = composerDraft
+        recoverableDraftRef.current = transport && draft !== undefined
+          ? { text: draft, attachments: sentAtts, skills: sentSkills }
+          : undefined
+        if (transport) runImagesRef.current = images
+        if(handoff)return loop.runDocumentHandoff(modelInstruction,handoff)
+        const attached = [...images.values()]
+        const imageContext = setImageAttachments?.(attached)
+        const prompt = imageContext ? modelInstruction + '\n\n' + imageContext : modelInstruction
+        loop.run(prompt, attached.map(({image}) => image), prompt !== instruction && transport ? instruction : undefined,continuationToken?undefined:{text:displayInstruction})
       })
   }
+
+  // The handoff supplies the message only; runWith owns native chat, tool
+  // events and persistence just as it does for a local composer submission.
+  useEffect(() => {
+    if (!onHandoffReady) return
+    onHandoffReady(async input => {
+      const loop=loopRef.current
+      if(!loop||loop.busy||pendingSendRef.current||handoffDraft.current||recovering.current)return {text:'',failure:'conflict'}
+      let mutated=false
+      const change=new AbortController(),signal=AbortSignal.any([input.signal,change.signal])
+      const task={instruction:input.instruction,skill:input.skill,signal,abort:()=>change.abort(),failure:undefined as OfficeHandoffFailure|undefined}
+      handoffDraft.current=task
+      try{
+      const result=await runWith(input.instruction,input.instruction,[],null,false,true,undefined,{
+        ...(input.skill&&{skill:input.skill}),signal,check:()=>!editorRef.current.isDestroyed&&editorRef.current.isEditable&&!signal.aborted,
+        tools:['get_document_context','read_blocks','write_document','insert_content','replace_blocks','replace_selection','apply_ops'],
+        onText:text=>input.onText?.(text),
+        onTool:(name,state,edited)=>{
+          if(edited)mutated=true
+          if(name==='write_document'||edited)input.onWriteTool?.(state)
+        },
+      })
+      if(change.signal.aborted)return {text:'',failure:'conflict'}
+      if(task.failure)return {text:'',failure:task.failure}
+      if(!result||result.cancelled)return {text:'',failure:'conflict'}
+      if(result.truncated||result.turnLimit)return {text:result.text,failure:'outputLimit'}
+      if(input.mode==='write'&&!mutated)return {text:result.text,failure:'noTool'}
+      return {text:result.text,mutated}
+      }finally{handoffDraft.current=null}
+    })
+    return ()=>onHandoffReady(null)
+  },[onHandoffReady])
 
   /** the attached skills' full text in front of the request; a skill that vanished is skipped */
   const withSkillBodies = async (instruction: string, names: readonly string[]) => {
@@ -1277,13 +1478,14 @@ export function AiPanel({
   const cancel = () => {
     msgQueue.hold()
     if (pendingSendRef.current) pendingSendRef.current.aborted = true
+    recovering.current?.abort()
     loopRef.current?.cancel()
   }
 
   /** submit every still-anchored queued edit as one batch run */
   const sendQueue = () => {
     const loop = loopRef.current
-    if (!loop || loop.busy || editQueue.length === 0) return
+    if (!loop || loop.busy || recovering.current || editQueue.length === 0) return
     const entries = liveItems(resolveQueue(editorRef.current, editQueue))
     if (entries.length === 0) {
       onQueueClear?.()
@@ -1309,6 +1511,7 @@ export function AiPanel({
 
   /** Enter while a reply runs: the draft joins the queue above the composer */
   const enqueueDraft = () => {
+    if (assistantWorkspace && !assistantWorkspace.isOffice()) { void run(); return }
     const text = input.trim()
     if (!text) return
     // snapshot + consume the composer attachments exactly like a send does: the
@@ -1327,6 +1530,12 @@ export function AiPanel({
   }
 
   const newChat = () => {
+    setImageAttachments?.([])
+    recoveryAllowed.current = false
+    recovering.current?.abort()
+    resumedRun.current = false
+    setRecoveryNotice(undefined)
+    runImagesRef.current = new Map()
     assistantControl?.resetConversation?.()
     assistantRunTokenRef.current = undefined
     msgQueue.clear()
@@ -1419,44 +1628,6 @@ export function AiPanel({
     )
   }
 
-  const resizeCleanupRef = useRef<(() => void) | null>(null)
-  useEffect(() => () => resizeCleanupRef.current?.(), [])
-
-  /** Drag the inner panel edge to resize from the selected window side. */
-  const startResize = (e: React.PointerEvent<HTMLDivElement>) => {
-    e.preventDefault()
-    const resizer = e.currentTarget
-    setResizing(true)
-    document.body.style.cursor = 'col-resize'
-    document.body.style.userSelect = 'none'
-    const onMove = (ev: PointerEvent) => {
-      const w = clampAiPanelWidth(aiPanelWidthAtPointer(ev.clientX))
-      preferredWidthRef.current = w
-      setPanelWidth(w)
-    }
-    let done = false
-    const cleanup = () => {
-      if (done) return
-      done = true
-      resizeCleanupRef.current = null
-      window.removeEventListener('pointermove', onMove)
-      window.removeEventListener('pointerup', cleanup)
-      window.removeEventListener('pointercancel', cleanup)
-      resizer.removeEventListener('lostpointercapture', cleanup)
-      document.body.style.cursor = ''
-      document.body.style.userSelect = ''
-      setResizing(false)
-      saveAiPanelWidth(PANEL_WIDTH_KEY, preferredWidthRef.current)
-    }
-    resizeCleanupRef.current = cleanup
-    window.addEventListener('pointermove', onMove)
-    window.addEventListener('pointerup', cleanup)
-    window.addEventListener('pointercancel', cleanup)
-    // lostpointercapture also fires if the resizer is unmounted mid-drag (panel collapse)
-    resizer.addEventListener('lostpointercapture', cleanup)
-    resizer.setPointerCapture(e.pointerId)
-  }
-
   // collapsed: rail only — after all hooks, so the instance and its state survive
   if (!open) {
     // the sidebar setting is off: nothing to show until an explicit AI action opens the panel
@@ -1476,10 +1647,11 @@ export function AiPanel({
   return (
     <aside
       ref={asideRef}
+      aria-label={t('aiPanelTitle')}
       style={{ width: '100%' }}
       dir={isRtl ? 'rtl' : undefined}
       className={`ai-panel${dragOver ? ' ai-panel-dragover' : ''}${resizing ? ' ai-panel-resizing' : ''}`}
-      onDragOver={transport ? undefined : (e) => {
+      onDragOver={typeof window.desktop?.addAttachmentPaths !== 'function' ? undefined : (e) => {
         if (e.dataTransfer.types.includes('Files')) {
           e.preventDefault()
           e.stopPropagation()
@@ -1489,22 +1661,16 @@ export function AiPanel({
       onDragLeave={(e) => {
         if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDragOver(false)
       }}
-      onDrop={transport ? undefined : onDrop}
+      onDrop={typeof window.desktop?.addAttachmentPaths === 'function' ? onDrop : undefined}
     >
-      <div
-        className="ai-panel-resizer"
-        onPointerDown={startResize}
-        role="separator"
-        aria-orientation="vertical"
-        aria-label={t('aiPanelTitle')}
-      />
+      <div {...handle} />
       <div className="ai-panel-header">
         <span className="ai-panel-title">
           <GensparkMark size={22} />
           {t('aiPanelTitle')}
         </span>
         <div className="ai-panel-header-actions">
-          {!transport && <AiPanelSideButton
+          {!activityOnly && !transport && <AiPanelSideButton
             lang={lang}
             onMove={(side) => window.desktop.setAiPanelPrefs({ side })}
           />}
@@ -1531,9 +1697,20 @@ export function AiPanel({
         </div>
       </div>
 
-      {assistantAgents && <AssistantParticipants agents={assistantAgents} lang={lang} onManageAgents={onManageAgents} />}
+      {!activityOnly && <>
+      {assistantWorkspace?.panel}
+      {!assistantWorkspace && assistantAgents && <AssistantParticipants agents={assistantAgents} lang={lang} onManageAgents={onManageAgents} />}
+      </>}
 
       <div ref={logRef} className="ai-chat" onScroll={onLogScroll}>
+        <AssistantConversation workspace={activityOnly ? undefined : assistantWorkspace}>
+        {externalActivity}
+        {!activityOnly && <>
+        {recoveryNotice && <div className="ai-attach-notice" role="alert">
+          {recoveryNotice === 'model'
+            ? lang.startsWith('zh') ? '原模型已不可用。请在任务卡片查看结果。' : 'The original model is unavailable. See the task card for its result.'
+            : lang.startsWith('zh') ? '无法继续原对话。请在任务卡片查看结果。' : 'Could not continue the original conversation. See the task card for its result.'}
+        </div>}
         {/* past conversation (read-only transcript, not fed to the model), shown continuously with the current turn */}
         {historicChat.length > 0 && (
           <>
@@ -1557,7 +1734,7 @@ export function AiPanel({
             <div className="ai-history-sep">{t('aiHistorySep')}</div>
           </>
         )}
-        {chat.length === 0 && historicChat.length === 0 && (
+        {!externalActivity && chat.length === 0 && historicChat.length === 0 && (
           <div className="ai-chat-empty">
             <div className="ai-chat-empty-title">
               {t(docEmpty ? 'aiEmptyDraftTitle' : 'aiEmptyTitle')}
@@ -1607,6 +1784,7 @@ export function AiPanel({
           return (
             <div
               key={i}
+              data-sender={entry.sender}
               className={`ai-msg ai-msg-${entry.role}${entry.role === 'assistant' && entry.streaming ? ' ai-msg-streaming' : ''}`}
             >
               {entry.role === 'user' && entry.scope && <AiScopeQuote scope={entry.scope} />}
@@ -1739,8 +1917,11 @@ export function AiPanel({
             </div>
           )
         })}
+        </>}
+        </AssistantConversation>
       </div>
 
+      {!activityOnly && <>
       <div className="ai-composer">
         {attachNotice && <div className="ai-attach-notice">{attachNotice}</div>}
         {activePartial && (
@@ -1981,21 +2162,18 @@ export function AiPanel({
           }
           value={input}
           busy={busy}
-          placeholder={t('aiInputPlaceholder')}
+          placeholder={assistantWorkspace ? (lang === 'zh' ? '描述你想完成的事…' : 'Describe what you want done…') : t('aiInputPlaceholder')}
           hintIdle={t('aiHintIdle')}
           hintBusy={t('aiHintBusy')}
           hintIdleTitle={t('aiHintIdleTitle')}
           sendLabel={t('aiSend')}
           stopLabel={t('aiStop')}
           iconOnly
-          sendIconEnabled={<img src={sendEnterOn} alt="" aria-hidden />}
-          sendIconDisabled={<img src={sendEnterOff} alt="" aria-hidden />}
-          stopIcon={<img src={sendStop} alt="" aria-hidden />}
           textareaRef={inputRef}
           onChange={setInput}
           onSend={run}
           onStop={cancel}
-          onPasteFiles={transport ? undefined : (files) => void onPasteFiles(files)}
+          onPasteFiles={typeof window.desktop?.addAttachmentPaths === 'function' ? (files) => void onPasteFiles(files) : undefined}
           footerStart={
             <>
               {modelPicker ?? <AiModelPicker bridge={MODEL_BRIDGE} lang={lang} />}
@@ -2005,7 +2183,7 @@ export function AiPanel({
                 listSkills={listSkillsForMenu}
                 selected={attachedSkills}
                 onToggle={toggleSkill}
-                onAddFile={transport ? undefined : () => void pickAttachments()}
+                onAddFile={typeof window.desktop?.pickAttachments === 'function' ? () => void pickAttachments() : undefined}
                 onManage={() => void window.desktop.openSkillsSettings?.()}
               />
               <button
@@ -2023,6 +2201,7 @@ export function AiPanel({
           }
         />
       </div>
+      </>}
     </aside>
   )
 }

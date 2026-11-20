@@ -1,406 +1,116 @@
-.global-settings-panel,
-.set-dialog .global-settings-panel.set-pane {
+.global-settings-refined {
+  color: var(--text-primary);
+  width: 100%;
+  min-width: 0;
   box-sizing: border-box;
-  width: 100%;
-  min-width: 0;
-  min-height: 0;
-  padding: 0 28px 28px;
-  color: var(--text-primary);
-  overflow-wrap: anywhere;
+}
+.global-settings-heading { display: flex; align-items: center; justify-content: space-between; padding: 20px 28px; border-bottom: 1px solid var(--border-subtle); }
+.global-settings-heading h3 { margin: 0; font-size: 18px; }
+.global-settings-layout { display: grid; grid-template-columns: 208px minmax(0, 1fr); min-height: 550px; }
+.global-settings-navigation { display: flex; flex-direction: column; padding: 28px 14px 24px; background: var(--surface-subtle); border-right: 1px solid var(--border-subtle); }
+.global-settings-nav-caption { padding: 0 14px; margin-bottom: 16px; color: var(--text-tertiary, var(--text-secondary)); font-size: 11px; letter-spacing: 1px; }
+.global-settings-groups.ant-tabs-left { display: block; }
+.global-settings-groups > .ant-tabs-nav { width: 100%; }
+.global-settings-groups > .ant-tabs-nav::before,
+.global-settings-groups .ant-tabs-ink-bar,
+.global-settings-groups .ant-tabs-content-holder { display: none; }
+.global-settings-groups .ant-tabs-nav-list { width: 100%; }
+.global-settings-groups.ant-tabs-left > .ant-tabs-nav .ant-tabs-tab { margin: 0 0 6px; padding: 12px 14px; border-radius: 8px; text-align: left; }
+.global-settings-groups .ant-tabs-tab-btn { font-size: 13px; font-weight: 500; }
+.global-settings-groups .ant-tabs-tab-icon { font-size: 16px; margin-inline-end: 10px; }
+.global-settings-groups .ant-tabs-tab-active { background: var(--accent-soft); }
+.global-settings-nav-foot { display: flex; align-items: flex-start; gap: 9px; margin: auto 14px 0; padding-top: 40px; color: var(--text-secondary); font-size: 11px; line-height: 1.7; }
+.global-settings-nav-foot > .anticon { font-size: 16px; padding-top: 2px; color: var(--accent); }
+.global-settings-content { min-width: 0; padding: 28px 34px 24px; }
+.global-settings-content-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 20px; }
+.global-settings-content-head h2 { margin: 0 0 7px; font-size: 20px; font-weight: 600; letter-spacing: -.4px; }
+.global-settings-intro { margin: 0; font-size: 12px; line-height: 1.7; color: var(--text-secondary); }
+.global-settings-primary-actions { display: flex; gap: 8px; flex-shrink: 0; }
+.global-settings-primary-actions .ant-btn { border-radius: 7px; font-size: 12px; }
+.global-settings-status { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 18px; margin: 12px 0 16px; color: var(--text-secondary); font-size: 11px; }
+.global-settings-save-state { display: inline-flex; align-items: center; gap: 6px; }
+.global-settings-save-state::before { content: ''; width: 5px; height: 5px; border-radius: 50%; background: #52a774; }
+.global-settings-save-state.is-dirty::before { background: #d39728; }
+.global-settings-status > span + span { color: var(--text-tertiary, var(--text-secondary)); }
+.global-settings-config-picker { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 8px 10px; background: var(--surface-subtle); border: 1px solid var(--border-subtle); border-radius: 9px; margin-bottom: 12px; }
+.global-settings-config-picker > .ant-select { min-width: 140px; }
+.global-settings-config-picker .global-settings-config-select { flex: 1; min-width: 160px; }
+.global-settings-editor fieldset { min-width: 0; border: 0; padding: 0; margin: 0; }
+.global-settings-field { display: grid; grid-template-columns: minmax(150px, 1fr) minmax(220px, 1.4fr); align-items: center; gap: 24px; padding: 14px 0; margin: 0; border-bottom: 1px solid var(--border-subtle); font-size: 13px; }
+.global-settings-field > span:first-child,
+.global-settings-field > label { color: var(--text-primary); font-weight: 500; line-height: 1.5; }
+.global-settings-field small { display: block; font-size: 11px; font-weight: 400; line-height: 1.65; color: var(--text-secondary); margin-top: 4px; }
+.global-settings-field > .ant-select { width: 100%; }
+.global-settings-field .ant-input,
+.global-settings-field .ant-input-affix-wrapper,
+.global-settings-field .ant-select { font-size: 13px; }
+.global-settings-field .ant-input,
+.global-settings-field .ant-input-affix-wrapper { border-radius: 7px; }
+.global-settings-secure-hint { display: flex; gap: 5px; align-items: center; margin: 7px 0 0; color: var(--text-secondary); font-size: 11px; line-height: 1.6; }
+.global-settings-advanced,
+.global-settings-maintenance { margin-top: 20px; }
+.global-settings-advanced > summary,
+.global-settings-maintenance > summary { cursor: pointer; color: var(--text-primary); font-size: 12px; line-height: 1.8; padding: 8px 0; }
+.global-settings-advanced > summary > span,
+.global-settings-maintenance > summary > span { margin-left: 12px; color: var(--text-secondary); font-size: 11px; font-weight: 400; }
+.global-settings-entry-actions,
+.global-settings-maintenance-actions { display: flex; flex-wrap: wrap; gap: 8px; padding-top: 16px; }
+.global-settings-maintenance { border-top: 1px solid var(--border-subtle); padding-top: 8px; }
+.global-settings-latest { margin-top: 18px; font-size: 12px; line-height: 1.6; }
+.global-settings-latest summary { cursor: pointer; }
+.global-settings-latest ul { list-style: none; padding: 0; margin: 10px 0; }
+.global-settings-latest li { padding: 10px 0; border-bottom: 1px solid var(--border-subtle); overflow-wrap: anywhere; }
+.global-settings-latest li > span { display: block; color: var(--text-secondary); }
+.global-settings-key-maintenance { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; padding: 18px 0 6px; font-size: 12px; }
+.global-settings-key-maintenance p { color: var(--text-secondary); margin: 6px 0 0; font-size: 11px; }
+.global-settings-content .ant-alert { margin: 12px 0; }
+.global-settings-confirm { padding: 16px; border: 1px solid var(--border-subtle); background: var(--surface-subtle); border-radius: 8px; margin: 12px 0; font-size: 13px; }
+.global-settings-confirm h4 { margin: 0; }
+.global-settings-confirm .ant-btn + .ant-btn { margin-left: 8px; }
+.global-settings-capability { display: flex; align-items: center; gap: 12px; border-bottom: 1px solid var(--border-subtle); padding: 20px 0; }
+.global-settings-capability-icon { display: grid; place-items: center; width: 38px; height: 38px; border-radius: 9px; background: var(--surface-subtle); border: 1px solid var(--border-subtle); color: var(--text-secondary); font-size: 18px; }
+.global-settings-capability strong { font-size: 13px; font-weight: 500; }
+.global-settings-capability p { margin: 5px 0 0; font-size: 12px; color: var(--text-secondary); }
+.global-settings-capability > .ant-btn { margin-left: auto; font-size: 12px; }
+.global-settings-empty { text-align: center; padding: 60px 16px; }
+.global-settings-empty > .anticon { font-size: 32px; color: var(--accent); }
+.global-settings-empty h4 { margin: 18px 0 8px; font-size: 16px; }
+.global-settings-empty p { color: var(--text-secondary); font-size: 12px; margin: 0 0 20px; }
+.global-settings-refined summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+@media (max-width: 850px) {
+  .global-settings-layout { grid-template-columns: 175px minmax(0, 1fr); }
+  .global-settings-content { padding: 24px; }
+  .global-settings-content-head { flex-wrap: wrap; gap: 12px; }
+  .global-settings-field { grid-template-columns: minmax(110px, 1fr) minmax(170px, 1.4fr); gap: 14px; }
+}
+@media (max-width: 600px) {
+  .global-settings-layout { grid-template-columns: minmax(0, 1fr); min-height: 0; }
+  .global-settings-navigation { border-right: 0; border-bottom: 1px solid var(--border-subtle); padding: 12px; }
+  .global-settings-nav-caption, .global-settings-nav-foot { display: none; }
+  .global-settings-groups .ant-tabs-nav-list { flex-direction: row !important; }
+  .global-settings-groups.ant-tabs-left > .ant-tabs-nav .ant-tabs-tab { margin: 0; padding: 10px 12px; }
+  .global-settings-content { padding: 20px; }
+  .global-settings-field { grid-template-columns: minmax(0, 1fr); gap: 10px; padding: 16px 0; }
+  .global-settings-capability { flex-wrap: wrap; }
+}
+/* Override the older shared modal polish only for this settings surface. */
+.workspace-config-modal section.global-settings-refined { padding: 0; height: 100%; overflow: hidden; }
+.workspace-config-modal .global-settings-refined .global-settings-layout { height: 100%; min-height: 0; }
+.workspace-config-modal .global-settings-refined .global-settings-navigation { overflow: auto; }
+.workspace-config-modal .global-settings-refined .global-settings-content { overflow: auto; scrollbar-width: thin; scrollbar-gutter: stable; overscroll-behavior: contain; background: var(--surface); }
+.workspace-config-modal .global-settings-refined .global-settings-editor { padding: 0; border-radius: 0; }
+.workspace-config-modal .global-settings-refined .global-settings-field { margin: 0; gap: 24px; font-size: 13px; }
+.workspace-config-modal .global-settings-refined .global-settings-intro { padding: 0; font-size: 12px; }
+.workspace-config-modal .global-settings-refined .global-settings-defaults { padding: 0; margin: 0; border-radius: 0; }
+.workspace-config-modal .global-settings-refined .global-settings-latest { padding: 0; border-radius: 0; }
+.workspace-config-modal .global-settings-refined .global-settings-maintenance { padding: 8px 0 0; border-radius: 0; }
+@media (max-width: 600px) {
+  .workspace-config-modal section.global-settings-refined { height: auto; overflow: visible; }
+  .workspace-config-modal .global-settings-refined .global-settings-layout { height: auto; }
+  .workspace-config-modal .global-settings-refined .global-settings-content { overflow: visible; }
+  .workspace-config-modal .global-settings-refined .global-settings-field { gap: 10px; }
 }
 
-.global-settings-page.set-pane {
-  overflow: visible;
-}
-
-.global-settings-heading,
-.set-dialog .global-settings-panel .global-settings-heading {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  margin: 0 -28px 18px;
-  padding: 20px 28px 16px;
-  border-bottom: 1px solid var(--border-subtle);
-}
-
-.global-settings-heading .set-pane-title {
-  margin: 0;
-  font-size: 20px;
-  font-weight: 600;
-}
-
-.global-settings-heading .set-close {
-  width: 36px;
-  height: 36px;
-}
-
-.global-settings-panel h4 {
-  margin: 0 0 8px;
-  font-size: 14px;
-  font-weight: 600;
-}
-
-.global-settings-panel .set-field-desc {
-  margin: 0;
-  color: var(--text-secondary);
-  font-size: 13px;
-  line-height: 1.65;
-}
-
-.global-settings-intro {
-  padding: 4px 0 18px;
-}
-
-.global-settings-overview {
-  display: grid;
-  grid-template-columns: minmax(200px, 2fr) repeat(3, minmax(0, 1fr));
-  gap: 20px;
-  padding: 18px 20px;
-  border: 1px solid var(--border-subtle);
-  border-radius: 12px;
-  background: var(--surface-subtle);
-}
-
-.global-settings-overview > div {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 8px;
-  min-width: 0;
-}
-
-.global-settings-eyebrow {
-  color: var(--text-secondary);
-  font-size: 12px;
-}
-
-.global-settings-overview strong {
-  font-size: 20px;
-  line-height: 1.4;
-  font-weight: 600;
-}
-
-.global-settings-save-state strong {
-  font-size: 16px;
-}
-
-.global-settings-panel .set-btn-row,
-.global-settings-toolbar {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-
-.global-settings-toolbar {
-  margin: 16px 0 22px;
-}
-
-.global-settings-panel .ant-alert,
-.global-settings-alert,
-.global-settings-result,
-.global-settings-confirm {
-  margin: 12px 0;
-}
-
-.global-settings-alert,
-.global-settings-result,
-.global-settings-confirm {
-  padding: 14px 16px;
-  border: 1px solid var(--border-subtle);
-  border-radius: 10px;
-  background: var(--surface-subtle);
-  font-size: 13px;
-  line-height: 1.6;
-}
-
-.global-settings-alert {
-  color: var(--danger);
-}
-
-.global-settings-confirm > .ant-btn + .ant-btn {
-  margin-left: 8px;
-}
-
-.global-settings-grid {
-  display: grid;
-  grid-template-columns: minmax(200px, 250px) minmax(0, 1fr);
-  gap: 20px;
-}
-
-.global-settings-list,
-.global-settings-editor,
-.global-settings-defaults,
-.global-settings-latest,
-.global-settings-maintenance {
-  min-width: 0;
-  padding: 20px;
-  border: 1px solid var(--border-subtle);
-  border-radius: 12px;
-  background: var(--surface);
-}
-
-.global-settings-list {
-  align-self: start;
-}
-
-.global-settings-list-head,
-.global-settings-entry-danger,
-.global-settings-maintenance {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  flex-wrap: wrap;
-  gap: 12px;
-}
-
-.global-settings-list-head h4 {
-  margin: 0;
-}
-
-.global-settings-list ul,
-.global-settings-latest ul {
-  margin: 12px 0 0;
-  padding: 0;
-  list-style: none;
-}
-
-.global-settings-panel .global-settings-entry {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  justify-content: center;
-  gap: 6px;
-  width: 100%;
-  height: auto;
-  min-height: 72px;
-  margin-top: 8px;
-  padding: 12px;
-  border: 1px solid transparent;
-  border-radius: 8px;
-  background: transparent;
-  color: var(--text-primary);
-  white-space: normal;
-  text-align: left;
-  overflow-wrap: anywhere;
-}
-
-.global-settings-panel .global-settings-entry.active {
-  background: var(--bg-hover);
-  border-color: var(--accent);
-}
-
-.global-settings-entry span {
-  color: var(--text-secondary);
-  font-size: 12px;
-  line-height: 1.5;
-}
-
-.global-settings-entry strong {
-  font-weight: 600;
-}
-
-.global-settings-editor fieldset {
-  min-width: 0;
-  margin: 0;
-  padding: 0;
-  border: 0;
-}
-
-.global-settings-editor legend {
-  margin-bottom: 20px;
-  font-size: 17px;
-  font-weight: 600;
-}
-
-.global-settings-form-section + .global-settings-form-section,
-.global-settings-key,
-.global-settings-entry-danger {
-  margin-top: 22px;
-  padding-top: 20px;
-  border-top: 1px solid var(--border-subtle);
-}
-
-.global-settings-basic-grid,
-.global-settings-default-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 0 20px;
-}
-
-.global-settings-field,
-.global-settings-filter {
-  display: flex;
-  flex-direction: column;
-  gap: 7px;
-  min-width: 0;
-  margin: 14px 0;
-  font-size: 13px;
-}
-
-.global-settings-field > .ant-select,
-.global-settings-filter > .ant-select {
-  width: 100%;
-}
-
-.global-settings-field .set-input {
-  width: 100%;
-  min-width: 0;
-  max-width: 100%;
-}
-
-.global-settings-toggle {
-  margin-top: 16px;
-}
-
-.global-settings-key {
-  padding: 18px;
-  border: 1px solid var(--border-subtle);
-  border-radius: 8px;
-  background: var(--surface-subtle);
-}
-
-.global-settings-key .set-btn-row {
-  margin-bottom: 10px;
-}
-
-.global-settings-entry-danger h4 {
-  color: var(--danger);
-}
-
-.global-settings-defaults,
-.global-settings-latest,
-.global-settings-maintenance {
-  margin-top: 20px;
-}
-
-.global-settings-latest {
-  font-size: 13px;
-  line-height: 1.6;
-}
-
-.global-settings-latest summary {
-  font-weight: 500;
-  cursor: pointer;
-}
-
-.global-settings-latest li {
-  padding: 10px 0;
-  border-bottom: 1px solid var(--border-subtle);
-}
-
-.global-settings-latest li:last-child {
-  border-bottom: 0;
-}
-
-.global-settings-latest li span {
-  display: block;
-  color: var(--text-secondary);
-}
-
-@media (max-width: 760px) {
-  .global-settings-panel,
-  .set-dialog .global-settings-panel.set-pane {
-    padding: 0 16px 20px;
-  }
-
-  .global-settings-heading,
-  .set-dialog .global-settings-panel .global-settings-heading {
-    margin-right: -16px;
-    margin-left: -16px;
-    padding-right: 16px;
-    padding-left: 16px;
-  }
-
-  .global-settings-overview {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 18px 12px;
-    padding: 16px;
-  }
-
-  .global-settings-grid,
-  .global-settings-basic-grid,
-  .global-settings-default-grid {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  .global-settings-list,
-  .global-settings-editor,
-  .global-settings-defaults,
-  .global-settings-latest,
-  .global-settings-maintenance {
-    padding: 16px;
-  }
-}
-
-/* B: a quiet navigation rail and flat editing sections. Scope stays local to
-   global configuration; controls, credential lifecycle and guards are unchanged. */
-section.global-settings-panel .global-settings-grid {
-  gap: 0;
-  border: 1px solid var(--border-subtle);
-  border-radius: 14px;
-  background: var(--surface);
-}
-
-section.global-settings-panel .global-settings-list {
-  align-self: stretch;
-  border: 0;
-  border-right: 1px solid var(--border-subtle);
-  border-radius: 14px 0 0 14px;
-  background: var(--accent-soft, var(--surface-subtle));
-}
-
-section.global-settings-panel .global-settings-editor {
-  border: 0;
-  border-radius: 0 14px 14px 0;
-  padding: 28px;
-}
-
-section.global-settings-panel .global-settings-entry.active {
-  background: var(--surface);
-  border-color: var(--accent);
-  box-shadow: inset 3px 0 0 var(--accent);
-}
-
-section.global-settings-panel .global-settings-entry.active strong {
-  color: var(--accent);
-}
-
-section.global-settings-panel .global-settings-entry:focus-visible,
-section.global-settings-panel .global-settings-latest summary:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 3px;
-}
-
-section.global-settings-panel .global-settings-key {
-  padding: 22px 0 0;
-  border: 0;
-  border-top: 1px solid var(--border-subtle);
-  border-radius: 0;
-  background: transparent;
-}
-
-section.global-settings-panel .global-settings-defaults,
-section.global-settings-panel .global-settings-maintenance {
-  border: 0;
-  border-top: 1px solid var(--border-subtle);
-  border-radius: 0;
-  padding: 24px 0 4px;
-}
-
-@media (max-width: 760px) {
-  section.global-settings-panel .global-settings-grid {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  section.global-settings-panel .global-settings-list {
-    border-right: 0;
-    border-bottom: 1px solid var(--border-subtle);
-    border-radius: 14px 14px 0 0;
-  }
-
-  section.global-settings-panel .global-settings-editor {
-    border-radius: 0 0 14px 14px;
-    padding: 20px 16px;
-  }
-}
+.global-settings-current-status { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 14px 0 4px; font-size: 13px; }
+.global-settings-current-status strong { margin-right: 4px; overflow-wrap: anywhere; font-weight: 500; }
+.global-settings-current-status .ant-tag { margin-inline-end: 0; }

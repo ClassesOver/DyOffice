@@ -14,6 +14,7 @@ const agentHarness = vi.hoisted(() => ({
   cancel: vi.fn(),
   reset: vi.fn(),
   restore: vi.fn(),
+  resumeHarness: vi.fn(),
 }))
 
 vi.mock('@genoffice/agent-core', async () => {
@@ -23,6 +24,7 @@ vi.mock('@genoffice/agent-core', async () => {
     ...actual,
     AgentLoop: class MockAgentLoop {
       busy = false
+      messages = []
 
       constructor(options: { events?: typeof agentHarness.events }) {
         agentHarness.events = options.events ?? null
@@ -42,6 +44,10 @@ vi.mock('@genoffice/agent-core', async () => {
 
       restore(...args: unknown[]) {
         agentHarness.restore(...args)
+      }
+
+      resumeHarness(...args: unknown[]) {
+        return agentHarness.resumeHarness(...args)
       }
     },
   }
@@ -135,6 +141,7 @@ beforeEach(() => {
   agentHarness.cancel.mockReset()
   agentHarness.reset.mockReset()
   agentHarness.restore.mockReset()
+  agentHarness.resumeHarness.mockReset()
   installSlidesApi()
   Object.defineProperty(window, 'projectApi', { configurable: true, value: undefined })
   Object.defineProperty(window, 'desktop', {
@@ -152,6 +159,91 @@ afterEach(() => {
 })
 
 describe('AiPanel agent run lifecycle (slides)', () => {
+  it('reattaches the saved turn once when the deck becomes ready and leaves the composer alone', async () => {
+    let revision: string | undefined
+    const listeners = new Set<() => void>()
+    const checkpoint = { chatTurnId: 'persisted-turn' }
+    const result = { name: 'delegate_agent_task', output: '42' }
+    const chat = { turnId: 'persisted-turn' }
+    const continuation = {
+      revision: () => revision,
+      hasModel: (id: string) => id === 'original-model',
+      coding: {
+        snapshot: () => [
+          { id: 'removed-1', continuationModelId: 'retired-model' },
+          { id: 'removed-2', continuationModelId: 'retired-model' },
+          { id: 'expired', continuationModelId: 'original-model' },
+          { id: 'completed-task', continuationModelId: 'original-model' },
+        ],
+        subscribe(listener: () => void) {
+          listeners.add(listener)
+          return () => { listeners.delete(listener) }
+        },
+        resume: vi.fn(async (id: string) => {
+          if (id === 'expired') throw Error('Harness continuation unavailable')
+          return { revision, modelId: 'original-model', checkpoint, result }
+        }),
+      },
+      fileChat: { resume: vi.fn(async () => chat) },
+    }
+    agentHarness.resumeHarness.mockImplementation(() => {
+      agentHarness.events?.onDone?.({ text: 'Recovered answer', cancelled: false, turnLimit: false })
+      return true
+    })
+    const props = (current: number) => panelProps({ current, assistantContinuation: continuation })
+    const { root, container } = mount(createElement(AiPanel, props(0)))
+    const composer = container.querySelector('textarea')!
+    act(() => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!.call(composer, 'keep this draft')
+      composer.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    await flushEffects()
+    expect(continuation.coding.resume).not.toHaveBeenCalled()
+    revision = 'saved-revision'
+    await act(async () => root.render(createElement(AiPanel, props(1))))
+    expect(agentHarness.resumeHarness).toHaveBeenCalledExactlyOnceWith(checkpoint, result, { chat, modelId: 'original-model', canContinue: expect.any(Function) })
+    await act(async () => listeners.forEach(listener => listener()))
+    expect(continuation.coding.resume.mock.calls.map(([id]) => id)).toEqual(['expired', 'completed-task'])
+    expect(continuation.fileChat.resume).toHaveBeenCalledWith('persisted-turn', expect.any(Object))
+    expect(agentHarness.run).not.toHaveBeenCalled()
+    expect(composer.value).toBe('keep this draft')
+    expect(container.querySelector('.ai-msg-user')).toBeNull()
+  })
+
+  it('retries an unconfirmed batch close before starting the next run', async () => {
+    const begin = vi.mocked(window.slidesApi.beginHistoryBatch).mockResolvedValue(true)
+    const end = vi.mocked(window.slidesApi.endHistoryBatch)
+      .mockRejectedValueOnce(new Error('503 before dispatch'))
+      .mockRejectedValueOnce(new Error('still offline'))
+      .mockResolvedValue(12)
+    const props = (nonce: number) => panelProps({ preset: { text: 'Polish slides', nonce, autoRun: true } })
+    const { root } = mount(createElement(AiPanel, props(1)))
+    await flushEffects()
+    expect(begin).toHaveBeenCalledTimes(1)
+    act(() => agentHarness.events!.onDone?.({ text: 'Done', cancelled: false, turnLimit: false }))
+    await flushEffects()
+    expect(end).toHaveBeenCalledTimes(1)
+    act(() => root.render(createElement(AiPanel, props(2))))
+    await flushEffects()
+    // The close retry fails; a new nested batch must not be opened.
+    expect(begin).toHaveBeenCalledTimes(1)
+    expect(agentHarness.run).toHaveBeenCalledTimes(1)
+    act(() => root.render(createElement(AiPanel, props(3))))
+    await flushEffects()
+    expect(begin).toHaveBeenCalledTimes(2)
+    expect(agentHarness.run).toHaveBeenCalledTimes(2)
+  })
+
+  it('closes a possibly opened batch after begin loses its response', async () => {
+    const begin = vi.mocked(window.slidesApi.beginHistoryBatch).mockRejectedValueOnce(new Error('lost response'))
+    const end = vi.mocked(window.slidesApi.endHistoryBatch).mockResolvedValue(null)
+    mount(createElement(AiPanel, panelProps({ preset: { text: 'Polish slides', nonce: 1, autoRun: true } })))
+    await flushEffects()
+    expect(begin).toHaveBeenCalledTimes(1)
+    expect(end).toHaveBeenCalledTimes(1)
+    expect(agentHarness.run).not.toHaveBeenCalled()
+  })
+
   it('persists a successful tool-only run so reopening can restore the completed turn', async () => {
     const appendChat = vi.fn(async () => undefined)
     Object.defineProperty(window, 'projectApi', {
@@ -228,6 +320,6 @@ describe('AiPanel agent run lifecycle (slides)', () => {
     expect(readAttachmentImage).toHaveBeenCalledWith('/tmp/bad.png')
     expect(agentHarness.run).toHaveBeenCalledWith('Polish this slide', [
       { base64: 'AAAA', mime: 'image/png' },
-    ])
+    ], undefined, { text: 'Polish this slide' })
   })
 })

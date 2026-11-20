@@ -12,7 +12,12 @@ const EMU_PER_PX_96 = 9525
 const EMU_PER_PT = 12700
 
 export function mapScriptOps(opened: OpenedPptx, req: ApplyEditScriptOp): Op[] {
-  const baseWidthPx = opened.deck.size.cx / EMU_PER_PX_96
+  return mapScriptOpsForWidth(opened.deck.size.cx, req)
+}
+
+/** Map an edit script when the caller has the document-space slide width but not the archive. */
+export function mapScriptOpsForWidth(slideWidthEmu: number, req: ApplyEditScriptOp): Op[] {
+  const baseWidthPx = slideWidthEmu / EMU_PER_PX_96
   const scale = req.fitWidthPx / baseWidthPx
   const toEmu = (px: number) => Math.round((px / scale) * EMU_PER_PX_96)
   const target = (el: string) => ({ slide: req.slideIndex, el })

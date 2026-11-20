@@ -33,6 +33,8 @@ export const rectsNear = (a: readonly number[], b: readonly number[], tolerance 
 export interface StampConfig {
   wm: WatermarkConfig | null
   hf: HeaderFooterConfig | null
+  clearWatermark?: boolean
+  clearHeaderFooter?: boolean
 }
 
 /** A markup annotation already saved in the file (read via pdf.js getAnnotations) */

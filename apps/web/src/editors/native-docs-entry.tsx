@@ -1,3 +1,4 @@
+import {reportDocumentLoading} from './document-loading-state'
 import {createDraftCopyAuthority,draftCopyParentActive} from './draft-copy-authority'
 import { createSessionFileHost } from '../../../../packages/browser-host/src/files.ts'
 import { mountDocsEditor } from './native-docs.tsx'
@@ -14,4 +15,4 @@ async function bootstrap() {
     window.addEventListener('pagehide',()=>{mounted.unload();host.dispose()},{once:true})
   } catch (error) { await host.releaseLease(fileId).catch(()=>{});host.dispose();installEditorCloseLifecycle(window,{canClose:async()=>true,dispose:async()=>true});throw error }
 }
-void bootstrap().catch(() => { document.getElementById('root')!.textContent = messages.zh.failed })
+void bootstrap().catch(() => { reportDocumentLoading('error');document.getElementById('root')!.textContent = messages.zh.failed })

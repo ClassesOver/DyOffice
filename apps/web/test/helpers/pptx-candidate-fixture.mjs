@@ -6,6 +6,7 @@ import {dirname} from 'node:path'
 import {verifyPptxCandidate} from '../../scripts/prepare-pptx-runtime-candidate.mjs'
 import {validatePptxOutline} from '../../worker/src/sandbox/pptx-outline-schema.ts'
 const ENTRY=fileURLToPath(new URL('./pptx-candidate-entry.mjs',import.meta.url))
+const MAX_FIXTURE_BYTES=1024*1024
 const exact=(value,keys)=>value&&typeof value==='object'&&!Array.isArray(value)&&Object.keys(value).sort().join(',')===[...keys].sort().join(',')
 const invalid=()=>new Error('PPTX_FIXTURE_INVALID_REPLY')
 function openReply(value){
@@ -14,7 +15,7 @@ function openReply(value){
 }
 export async function openGeneratedPptxCandidateFixture({directory,contentDigest,bytes,unsafeGeneratedFixtureOnly}){
  if(process.env.NODE_ENV!=='test'||unsafeGeneratedFixtureOnly!==true)throw new Error('PPTX_FIXTURE_ONLY')
- if(!(bytes instanceof Uint8Array)||bytes.byteLength<1||bytes.byteLength>1024*1024)throw new Error('PPTX_FIXTURE_INPUT_LIMIT')
+ if(!(bytes instanceof Uint8Array)||bytes.byteLength<1||bytes.byteLength>MAX_FIXTURE_BYTES)throw new Error('PPTX_FIXTURE_INPUT_LIMIT')
  const copied=Uint8Array.from(bytes),binding=Object.freeze({fileId:randomUUID(),revision:randomUUID()})
  const candidateDirectory=directory,expectedDigest=contentDigest
  await verifyPptxCandidate(candidateDirectory,expectedDigest)
@@ -54,14 +55,30 @@ export async function openGeneratedPptxCandidateFixture({directory,contentDigest
  child.on('disconnect',()=>{if(pending)fatal(new Error('PPTX_FIXTURE_DISCONNECT'))})
  child.on('message',raw=>{
   try{
-   if(!pending||!raw||JSON.stringify(raw).length>64*1024||raw.id!==pending.id)throw invalid()
+   if(!pending||!raw||raw.id!==pending.id)throw invalid()
    const current=pending
+   const exporting=current.method==='export'&&raw.ok===true
+   if(!exporting&&JSON.stringify(raw).length>64*1024)throw invalid()
    if(raw.ok===false){
     if(!exact(raw,['id','ok','error'])||typeof raw.error!=='string'||raw.error.length>256)throw invalid()
     throw new Error(raw.error)
    }
    if(raw.ok!==true||!exact(raw,['id','ok','result']))throw invalid()
-   const result=current.method==='open'?openReply(raw.result):current.method==='outline'?validatePptxOutline(raw.result):raw.result===true?true:(()=>{throw invalid()})()
+   let result=raw.result
+   switch(current.method){
+    case 'open':result=openReply(result);break
+    case 'outline':result=validatePptxOutline(result);break
+    case 'apply':
+     if(!result||typeof result.transaction?.applied!=='boolean'||
+       result.generation!==current.expected+Number(result.transaction.applied))throw invalid()
+     break
+    case 'export':
+     if(!exact(result,['generation','bytes'])||result.generation!==current.expected||
+       !(result.bytes instanceof Uint8Array)||result.bytes.byteLength<1||result.bytes.byteLength>MAX_FIXTURE_BYTES)throw invalid()
+     break
+    case 'close':if(result!==true)throw invalid();break
+    default:throw invalid()
+   }
    pending=undefined;current.resolve(result)
   }catch(error){fatal(error)}
  })
@@ -71,7 +88,7 @@ export async function openGeneratedPptxCandidateFixture({directory,contentDigest
   const id=nextId++
   try{
    return await new Promise((resolve,reject)=>{
-    pending={id,method,resolve,reject}
+    pending={id,method,expected:fields.expected,resolve,reject}
     child.send({id,m:method,...fields},error=>{if(error&&pending?.id===id)fatal(error)})
    })
   }catch(error){await cleanup();throw error}
@@ -86,6 +103,8 @@ export async function openGeneratedPptxCandidateFixture({directory,contentDigest
     const snapshot={fileId:overrideBinding.fileId,revision:overrideBinding.revision}
     return call('outline',{expected,binding:snapshot})
    },
+   apply(expected,ops){return call('apply',{expected,binding,ops})},
+   exportBytes(expected){return call('export',{expected,binding})},
    async close(){const acknowledged=await call('close',{binding});await cleanup();return acknowledged},
    dispose:cleanup,
   })

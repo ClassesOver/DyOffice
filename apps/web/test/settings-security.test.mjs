@@ -55,6 +55,27 @@ test('configured endpoint validation never accepts embedded credentials, queries
   }
 })
 
+test('public global settings report search readiness without exposing secret material', async () => {
+  const { createGlobalConfigService } = await import('../server/src/modules/admin/service.ts')
+  const rows = [
+    { id: 'web', kind: 'web_search', provider_id: 'serper', label: 'Web', model: '', base_url: '', enabled: true, has_key: false },
+    { id: 'keyless', kind: 'web_search', provider_id: 'parallel', label: 'Keyless', model: '', base_url: '', enabled: true, has_key: false },
+    { id: 'chat', kind: 'chat', provider_id: 'openai', label: 'Chat', model: 'gpt-6-luna', base_url: '', enabled: true, has_key: true },
+  ]
+  const connection = { query: async sql => {
+    assert.equal(sql.includes('FROM global_config_secrets'), false)
+    if (sql.includes('FROM global_configs')) return { rows: [{ revision: 2, defaults: { web_search: 'web' } }] }
+    if (sql.includes('global_config_key_readiness()')) return { rows: rows.map(({id,has_key}) => ({id,has_key})) }
+    return { rows: rows.map(row => ({...row,has_key:false})) }
+  } }
+  const transactions = { sessionIdleMs: 1000, withPrincipalTransaction: (_scope, work) => work(connection, { roles: ['personal'], deploymentId: 'd1' }) }
+  const service = createGlobalConfigService({ transactions })
+  const result = await service.getPublicSettings('a'.repeat(43))
+  assert.deepEqual(result.catalog.map(entry => [entry.id, entry.ready]), [['web', false], ['keyless', true], ['chat', true]])
+  assert.equal(JSON.stringify(result).includes('has_key'), false)
+  assert.equal(JSON.stringify(result).includes('ciphertext'), false)
+})
+
 test('global catalog preserves original model, media and search metadata without desktop authorization fallback', async () => {
   const { getProviderCatalog } = await import('../server/src/modules/admin/catalog.ts')
   const { AI_PROVIDERS } = await import('../../../packages/ai-provider/src/providers.ts')

@@ -3,6 +3,10 @@ import { SandboxError, type SandboxSession } from '../sandbox/contracts.ts'
 import { createNativeAdmission, type NativeProcess } from './admission.ts'
 
 export interface RecalcInput {edits: {sheetName: string; row: number; column: number; input: string}[]; reads: {sheetName: string; range: {startRow: number; endRow: number; startColumn: number; endColumn: number}}[]}
+export interface FindInput {
+  query:string; matchCase:boolean; matchEntireCell:boolean; lookIn:'values'|'formulas'|'formulas_only'|'both'
+  wildcards:boolean; limit:number; resumeAt?:{row:number;column:number}
+}
 type Opened = { sessionId: string; sheets: { id: string; name: string }[] }
 function opened(value: unknown): Opened {
   const result = value as Opened
@@ -78,6 +82,18 @@ export function createXlsxNativeWorker(process: NativeProcess) {
           return await io.request(kind === 'formulas' ? 'read_formula_cells' : 'read_row_outline', {sessionId: source.sessionId, sheetId: sheet.id})
         } finally { await io.request('close', {sessionId: source.sessionId}) }
       }, {signal})
+    },
+    findCells(input:Uint8Array,sheetName:string,request:FindInput,signal?:AbortSignal){
+      const {resumeAt,...options}=request
+      return native.run(input,async io=>{
+        const source=opened(await io.request('open',{path:'/work/input.xlsx',locale:'en'}))
+        try{
+          const sheet=source.sheets.find(sheet=>sheet.name===sheetName)
+          if(!sheet)throw new SandboxError('UNKNOWN_SHEET')
+          await waitForSheet(io,source.sessionId,sheet.id,signal)
+          return await io.request('find_cells',{...options,sessionId:source.sessionId,sheetId:sheet.id,...(resumeAt?{resumeAt:{...resumeAt,sheetId:sheet.id}}:{})})
+        }finally{await io.request('close',{sessionId:source.sessionId})}
+      },{signal})
     },
     readRange(input:Uint8Array,sheetName:string,range:{startRow:number;endRow:number;startColumn:number;endColumn:number},signal?:AbortSignal){
       if(!range||Object.keys(range).sort().join(',')!=='endColumn,endRow,startColumn,startRow'||Object.values(range).some(value=>!Number.isInteger(value)||value<0)||range.endRow<range.startRow||range.endColumn<range.startColumn||range.endRow>=1048576||range.endColumn>=16384||(range.endRow-range.startRow+1)*(range.endColumn-range.startColumn+1)>20000)return Promise.reject(new SandboxError('INPUT_LIMIT'))

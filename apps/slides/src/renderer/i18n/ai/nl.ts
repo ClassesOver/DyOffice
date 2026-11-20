@@ -12,6 +12,7 @@ export const nl = {
   aiQcPageOk: 'Pagina {n}: lay-out in orde',
   aiQcPageFixed: 'Pagina {n}: {summary}',
   aiQcPageFixedDefault: 'lay-outproblemen verholpen',
+  aiQcPageRollbackFailed: "Pagina {n}: de correctie verslechterde de indeling; herstel niet bevestigd. Controleer de pagina of maak wijzigingen ongedaan.",
   aiQcPageReverted: 'Pagina {n}: automatische correctie maakte het erger — teruggedraaid',
   aiQcPageFailed: 'Pagina {n}: controle mislukt ({error})',
   aiQcPageSkipped: 'Pagina {n}: automatische lay-outcontrole overgeslagen',

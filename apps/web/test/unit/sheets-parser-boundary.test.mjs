@@ -10,8 +10,10 @@ test('Sheets API startup cannot load a package parser into the API process', asy
   assert.match(source,/await gatewaySandbox\.run\(/)
 })
 
-test('Sheets isolation remains opt-in and cannot be enabled in production', async()=>{
+test('Sheets runtime requested by the application is restricted to non-production local mode', async()=>{
   assert.equal(await configuredSheetsRuntime({}),undefined)
-  await assert.rejects(()=>configuredSheetsRuntime({DYOFFICE_NATIVE_XLSX:'experimental',DYOFFICE_AUTH_MODE:'local',NODE_ENV:'production'}),/requires experimental local mode/)
-  await assert.rejects(()=>configuredSheetsRuntime({DYOFFICE_NATIVE_XLSX:'experimental',DYOFFICE_AUTH_MODE:'development'}),/requires experimental local mode/)
+  assert.equal(await configuredSheetsRuntime({DYOFFICE_AUTH_MODE:'local',DYOFFICE_NATIVE_XLSX:'experimental'}),undefined)
+  await assert.rejects(()=>configuredSheetsRuntime({DYOFFICE_AUTH_MODE:'local',NODE_ENV:'production'},{enabled:true}),/requires local mode/)
+  await assert.rejects(()=>configuredSheetsRuntime({DYOFFICE_AUTH_MODE:'development'},{enabled:true}),/requires local mode/)
+  await assert.rejects(()=>configuredSheetsRuntime({DYOFFICE_AUTH_MODE:'local'},{enabled:true}),/Native Sheets configuration missing/)
 })

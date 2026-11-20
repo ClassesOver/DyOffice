@@ -1,4 +1,5 @@
 import {test} from 'node:test'
+import {createHash} from 'node:crypto'
 import assert from 'node:assert/strict'
 import {readFile,mkdtemp,rm} from 'node:fs/promises'
 import {tmpdir} from 'node:os'
@@ -10,6 +11,7 @@ import {sandboxFixture} from '../helpers/native-sandbox.mjs'
 import {sheetsGateway} from '../helpers/sheets-gateway.mjs'
 import {sheetsSaveRequest} from '../helpers/sheets-request.mjs'
 import {createXlsxNativeWorker} from '../../worker/src/native/xlsx.ts'
+import {createWebAttachments} from '../../src/editors/web-attachments.ts'
 import {createSessionFileHost} from '../../../../packages/browser-host/src/files.ts'
 test('Sheets bridge preserves its original save across lost receipts and metadata retries',{timeout:30000},async t=>{
  const dir=await mkdtemp(join(tmpdir(),'dyoffice-bridge-'));t.after(()=>rm(dir,{recursive:true,force:true}))
@@ -75,4 +77,99 @@ test('unsupported workbook operations reject asynchronously instead of breaking 
   assert.doesNotThrow(()=>{operation=bridge.api[method]({})},method)
   await assert.rejects(operation,error=>error.message.length>0&&!/is not a function/.test(error.message))
  }
+})
+
+test('AI create_document delegates XLSX output to the authenticated shell creator', async t => {
+ const dir=await mkdtemp(join(tmpdir(),'dyoffice-create-xlsx-'));t.after(()=>rm(dir,{recursive:true,force:true}))
+ const outfile=join(dir,'bridge.mjs')
+ await build({entryPoints:[fileURLToPath(new URL('../../src/editors/sheets-bridge.ts',import.meta.url))],bundle:true,platform:'node',format:'esm',outfile,logLevel:'silent'})
+ const {createSheetsBridge}=await import(pathToFileURL(outfile).href)
+ const previous=globalThis.window,received=[]
+ globalThis.window={parent:{dyofficeCreateAiXlsx:async input=>received.push(input)}}
+ t.after(()=>{globalThis.window=previous})
+ const bridge=createSheetsBridge({},'unused',{language:'en',theme:'light'});t.after(()=>bridge.dispose())
+ assert.deepEqual(bridge.supportedCreateDocumentTypes,['xlsx','csv'])
+ const result=await bridge.api.createDocument({type:'xlsx',title:'Quarterly',sheetName:'Results',content:'Name,Value\nA,42'})
+ assert.deepEqual(result,{ok:true})
+ assert.deepEqual(received,[{title:'Quarterly',sheetName:'Results',content:'Name,Value\nA,42'}])
+ const {runInNewContext}=await import('node:vm')
+ globalThis.window.parent.dyofficeCreateAiXlsx=async()=>{throw runInNewContext('new Error("The workbook was created but could not be opened; check recent files before retrying.")')}
+ assert.deepEqual(await bridge.api.createDocument({type:'xlsx',title:'Quarterly',content:'Name,Value\nA,42'}),{ok:false,error:'The workbook was created but could not be opened; check recent files before retrying.'})
+ globalThis.window.parent=new Proxy({}, {get(){throw new DOMException('Blocked a frame','SecurityError')}})
+ assert.deepEqual(bridge.supportedCreateDocumentTypes,['csv'])
+})
+
+test('AI XLSX create_document generates a real PDF before uploading it through the shell', async t => {
+ const dir=await mkdtemp(join(tmpdir(),'dyoffice-sheets-pdf-'));t.after(()=>rm(dir,{recursive:true,force:true}))
+ const outfile=join(dir,'bridge.mjs')
+ await build({entryPoints:[fileURLToPath(new URL('../../src/editors/sheets-bridge.ts',import.meta.url))],bundle:true,platform:'node',format:'esm',outfile,logLevel:'silent'})
+ const {createSheetsBridge}=await import(pathToFileURL(outfile).href)
+ const {JSDOM}=await import('jsdom'),{PDFDocument}=await import('pdf-lib')
+ const previous=globalThis.window,previousParser=globalThis.DOMParser,received=[]
+ globalThis.window={parent:{dyofficeCreateAiDoc:async input=>received.push(input)}}
+ globalThis.DOMParser=new JSDOM('').window.DOMParser
+ t.after(()=>{globalThis.window=previous;if(previousParser===undefined)delete globalThis.DOMParser;else globalThis.DOMParser=previousParser})
+ const font=await readFile(new URL('../../../docs/src/renderer/fonts/NotoSansCJKsc-Regular-subset.woff2',import.meta.url))
+ const fetchImpl=async()=>new Response(font)
+ const bridge=createSheetsBridge({},'unused',{language:'en',theme:'light'},{fetchImpl});t.after(()=>bridge.dispose())
+ const result=await bridge.api.createDocument({type:'pdf',title:'季度报告',content:'<h1>经营结果</h1><p>收入增长 12%。</p>'})
+ assert.deepEqual(result,{ok:true})
+ assert.deepEqual(bridge.supportedCreateDocumentTypes,['csv','docx','pdf'])
+ assert.equal(received.length,1)
+ assert.equal(received[0].type,'pdf')
+ assert.equal(received[0].file.type,'application/pdf')
+ const bytes=new Uint8Array(await received[0].file.arrayBuffer()),pdf=await PDFDocument.load(bytes)
+ assert.equal(pdf.getTitle(),'季度报告')
+ assert.equal(pdf.getPageCount(),1)
+})
+
+test('Web XLSX merge attachment sessions stream ranges through the authenticated bridge',async t=>{
+ const dir=await mkdtemp(join(tmpdir(),'dyoffice-merge-bridge-'));t.after(()=>rm(dir,{recursive:true,force:true}))
+ const outfile=join(dir,'bridge.mjs')
+ await build({entryPoints:[fileURLToPath(new URL('../../src/editors/sheets-bridge.ts',import.meta.url))],bundle:true,platform:'node',format:'esm',outfile,logLevel:'silent'})
+ const {createSheetsBridge}=await import(pathToFileURL(outfile).href)
+ const bytes=Buffer.from('xlsx attachment'),sourceSession='d91a5506-41d7-4eb6-86e2-ec904707bc0e'
+ const inspection={entryCount:1,sheets:[{id:'sheet-1',name:'Acceptance',rowCount:2,columnCount:6,columnWidths:[],defaultRowHeight:null,defaultColumnWidth:null,freeze:null,hidden:false,tabColor:null,showGridLines:true,tables:[],comments:[],pivotRanges:[]}],styles:[],dxfStyles:[],visuals:[],definedNames:[]}
+ const rangeData={cells:[{row:1,column:0,value:12.5}],rows:[],merges:[],hyperlinks:[],conditionalRules:[],autoFilter:null,autoFilterColumns:[],dataValidations:[],sheetProtection:null,rowBreaks:[],colBreaks:[],pageSetup:null,protectedRanges:[],indexedThroughRow:1,indexingComplete:true}
+ const calls=[],csrfToken='a'.repeat(43)
+ const fetchImpl=async(path,init={})=>{
+  calls.push({path,init})
+  if(path==='/api/v1/auth/csrf')return new Response(JSON.stringify({csrfToken}),{headers:{'content-type':'application/json'}})
+  if(path.includes('/merge-sources/open?'))return new Response(JSON.stringify({...inspection,sessionId:sourceSession,name:'source.xlsx',sha256:'a'.repeat(64),fileBytes:bytes.length,readOnly:true,needsSaveAs:false,automaticRecoveryDisabled:true}),{headers:{'content-type':'application/json'}})
+  if(path.endsWith('/merge-sources/range')){
+   const {range}=JSON.parse(init.body)
+   if((range.endRow-range.startRow+1)*(range.endColumn-range.startColumn+1)>20_000)return new Response('{}',{status:500})
+   const cells=[...rangeData.cells,{row:999,column:0,value:42}].filter(cell=>cell.row>=range.startRow&&cell.row<=range.endRow)
+   const crossingMerge={startRow:768,endRow:769,startColumn:1,endColumn:1}
+   const merges=range.startRow<=crossingMerge.endRow&&range.endRow>=crossingMerge.startRow?[crossingMerge]:[]
+   return new Response(JSON.stringify({...rangeData,cells,merges}),{headers:{'content-type':'application/json'}})
+  }
+  if(path.endsWith('/merge-sources/close'))return new Response('{}',{headers:{'content-type':'application/json'}})
+  throw new Error(`Unexpected request: ${path}`)
+ }
+ const host={getState:()=>({revision:{revision:'current-revision',sha256:'b'.repeat(64),size:1},name:'current.xlsx',lease:{}})}
+ const file=new File([bytes],'source.xlsx')
+ const attachments=createWebAttachments(async()=>({ok:true,kind:'text',text:'partial workbook text',truncated:true}))
+ t.after(()=>attachments.dispose())
+ const attachmentPath=attachments.getPathForFile(file)
+ assert.equal((await attachments.addAttachmentPaths([attachmentPath])).accepted.length,1)
+ const bridge=createSheetsBridge(host,'current-file',{language:'en',theme:'light'},{fetchImpl,getAttachmentFile:attachments.getFileForPath})
+ t.after(()=>bridge.dispose())
+ const sources=await bridge.api.openWorkbooksForMerge([attachmentPath])
+ assert.equal(sources.length,1);assert.equal(sources[0].name,'source.xlsx');assert.equal(sources[0].readOnly,true)
+ const range=await bridge.api.readWorkbookRange({sessionId:sourceSession,sheetId:sources[0].sheets[0].id,range:{startRow:1,endRow:1,startColumn:0,endColumn:5}})
+ assert.equal(range.cells.find(cell=>cell.column===0).value,12.5)
+ const wideRange=await bridge.api.readWorkbookRange({sessionId:sourceSession,sheetId:sources[0].sheets[0].id,range:{startRow:0,endRow:999,startColumn:0,endColumn:25}})
+ assert.deepEqual(wideRange.cells.map(cell=>cell.value),[12.5,42])
+ assert.equal(wideRange.merges.length,1)
+ await bridge.api.closeWorkbook(sourceSession)
+ const uploads=calls.filter(call=>call.path.includes('/merge-sources/open?'))
+ assert.equal(uploads.length,1)
+ assert.equal(uploads[0].init.body,file)
+ assert.deepEqual(Buffer.from(await uploads[0].init.body.arrayBuffer()),bytes)
+ assert.equal(createHash('sha256').update(Buffer.from(await uploads[0].init.body.arrayBuffer())).digest('hex'),createHash('sha256').update(bytes).digest('hex'))
+ assert.equal(uploads[0].init.credentials,'same-origin')
+ assert.equal(uploads[0].init.headers['x-csrf-token'],csrfToken)
+ assert.ok(calls.some(call=>call.path.endsWith('/merge-sources/range')))
+ assert.ok(calls.some(call=>call.path.endsWith('/merge-sources/close')))
 })

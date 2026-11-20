@@ -103,3 +103,57 @@ test('XLSX creation card is enabled only by the safe native capability and invok
   await act(async()=>root.render(h(LocaleProvider,{initial:'en',children:h(Home,{supportedFormats:['docx','xlsx','pptx','pdf'],supportedNewFormats:localNewFormats({xlsx:'unsupported'})})})))
   expect(host.querySelectorAll<HTMLButtonElement>('.quick-card')[1].disabled).toBe(true)
 })
+
+test('Web pages request only visible rows, clear selection and reset filtering to the first page', async () => {
+  const files=Array.from({length:45},(_,index)=>({...file,path:`file-${index}`,name:`Report ${index}.docx`}))
+  api.recents=vi.fn(async query=>({entries:files.slice(query?.offset??0,(query?.offset??0)+(query?.limit??20)),total:files.length,totalAll:files.length}))
+  await act(async()=>window.dispatchEvent(new Event('focus')))
+  expect(host.querySelectorAll('.recent-row')).toHaveLength(20)
+  await click(host.querySelector<HTMLInputElement>('.recent-row .row-check')!)
+  await click(button('Next',host.querySelector('.home-file-pager')!))
+  expect(api.recents).toHaveBeenLastCalledWith(expect.objectContaining({offset:20,limit:20}))
+  expect(host.querySelector('.recent-name')?.textContent).toBe('Report 20.docx')
+  expect(host.querySelector('.selection-bar')).toBeNull()
+  expect(host.querySelector('.home-file-pager')?.textContent).toContain('Page 2 of 3')
+  await click(button('Next',host.querySelector('.home-file-pager')!))
+  expect(host.querySelectorAll('.recent-row')).toHaveLength(5)
+  expect(button('Next',host.querySelector('.home-file-pager')!).disabled).toBe(true)
+  await click(button('Docs',host.querySelector('.filter-pills')!))
+  expect(api.recents).toHaveBeenLastCalledWith(expect.objectContaining({offset:0,limit:20,ext:'docx'}))
+})
+
+test('select all distinguishes partial, complete and cleared file selection', async () => {
+  const files=[file,{...file,path:'second-file',name:'Second.docx'}]
+  api.recents=vi.fn(async()=>({entries:files,total:2,totalAll:2}))
+  api.listFolder=vi.fn(async path=>({...listings()[path],files:path===project?files:[]}))
+  await act(async()=>window.dispatchEvent(new Event('focus')))
+  for(const context of ['recent','folder']){
+    if(context==='folder')await click([...host.querySelectorAll<HTMLElement>('.tree-name')].find(node=>node.textContent==='Projects')!)
+    const selectAll=host.querySelector<HTMLInputElement>('.recent-columns input')!
+    expect(selectAll.indeterminate).toBe(false)
+    await click(host.querySelector<HTMLInputElement>('.recent-row .row-check')!)
+    expect(selectAll.indeterminate).toBe(true)
+    expect(selectAll.getAttribute('aria-checked')).toBe('mixed')
+    await click(selectAll)
+    expect(selectAll.checked).toBe(true)
+    expect(selectAll.indeterminate).toBe(false)
+    expect([...host.querySelectorAll<HTMLInputElement>('.row-check')].every(node=>node.checked)).toBe(true)
+    await click(selectAll)
+    expect(selectAll.checked).toBe(false)
+    expect(selectAll.indeterminate).toBe(false)
+    expect(host.querySelector('.selection-bar')).toBeNull()
+  }
+})
+
+test('Web refresh returns to the last available page after the final page disappears', async () => {
+  let files=Array.from({length:21},(_,index)=>({...file,path:`file-${index}`}))
+  api.recents=vi.fn(async query=>({entries:files.slice(query?.offset??0,(query?.offset??0)+(query?.limit??20)),total:files.length,totalAll:files.length}))
+  await act(async()=>window.dispatchEvent(new Event('focus')))
+  await click(button('Next',host.querySelector('.home-file-pager')!))
+  expect(host.querySelectorAll('.recent-row')).toHaveLength(1)
+  files=files.slice(0,20)
+  await act(async()=>window.dispatchEvent(new Event('focus')))
+  expect(host.querySelectorAll('.recent-row')).toHaveLength(20)
+  expect(host.querySelector('.home-file-pager')?.textContent).toContain('Page 1 of 1')
+  expect(api.recents).toHaveBeenLastCalledWith(expect.objectContaining({offset:0,limit:20}))
+})

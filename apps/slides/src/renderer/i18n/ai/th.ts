@@ -12,6 +12,7 @@ export const th = {
   aiQcPageOk: 'หน้า {n}: เลย์เอาต์ปกติ',
   aiQcPageFixed: 'หน้า {n}: {summary}',
   aiQcPageFixedDefault: 'แก้ไขปัญหาเลย์เอาต์แล้ว',
+  aiQcPageRollbackFailed: "หน้า {n}: การแก้ไขทำให้ปัญหาเพิ่มขึ้น และยังยืนยันการคืนค่าไม่ได้ โปรดตรวจสอบหน้าหรือเลิกทำ",
   aiQcPageReverted: 'หน้า {n}: การแก้ไขอัตโนมัติทำให้แย่ลง — ย้อนกลับแล้ว',
   aiQcPageFailed: 'หน้า {n}: ตรวจสอบไม่สำเร็จ ({error})',
   aiQcPageSkipped: 'หน้า {n}: ข้ามการตรวจสอบเลย์เอาต์อัตโนมัติ',

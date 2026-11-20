@@ -1,5 +1,8 @@
+import {runInNewContext} from 'node:vm'
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { readFile } from 'node:fs/promises'
+import { JSDOM } from 'jsdom'
 import { createDocsBridge } from '../../src/editors/docs-bridge.ts'
 
 test('a native save reporting newer metadata retains an unsaved UI state', async () => {
@@ -11,6 +14,77 @@ test('a native save reporting newer metadata retains an unsaved UI state', async
   bridge.lifecycle.afterSave(false)
   assert.equal(bridge.getState().nativeSaveOutcome, 'incomplete')
   assert.equal(bridge.getState().dirty, true)
+})
+
+test('Web DOCX bridge consumes generated document content once', async () => {
+  const content = { title: 'Quarterly report', html: '<h1>Quarterly report</h1><p>Results</p>' }
+  const bridge = createDocsBridge(
+    { getState: () => ({ name: 'blank.docx', status: 'idle' }) },
+    'file',
+    { language: 'en' },
+    () => {},
+    async () => content,
+  )
+  assert.deepEqual(await bridge.api.consumeAiDocContent(), content)
+  assert.equal(await bridge.api.consumeAiDocContent(), null)
+})
+
+test('Web docs bridge advertises DOCX and PDF, rejecting Markdown and HTML', async () => {
+  const created = []
+  const previousWindow = globalThis.window
+  const previousFetch = globalThis.fetch
+  const previousParser = globalThis.DOMParser
+  globalThis.DOMParser = new JSDOM('').window.DOMParser
+  const font = await readFile(new URL('../../../docs/src/renderer/fonts/NotoSansCJKsc-Regular-subset.woff2',import.meta.url))
+  globalThis.fetch = async () => ({ ok: true, arrayBuffer: async () => font.buffer.slice(font.byteOffset,font.byteOffset+font.byteLength) })
+  Object.defineProperty(globalThis, 'window', {
+    configurable: true,
+    value: { parent: { dyofficeCreateAiDoc: async request => created.push(request) } },
+  })
+  const bridge = createDocsBridge(
+    { getState: () => ({ name: 'blank.docx', status: 'idle' }) },
+    'file',
+    { language: 'en' },
+    () => {},
+  )
+  try {
+    assert.deepEqual(bridge.supportedCreateDocumentTypes, ['docx', 'pdf'])
+    assert.deepEqual(await bridge.api.createDocument({ type: 'docx', title: 'Report', content: '<p>Body</p>' }), { ok: true, destination: 'workspace' })
+    assert.deepEqual(await bridge.api.createDocument({ type: 'pdf', title: 'Report', content: '<p>Body</p>' }), { ok: true, destination: 'workspace' })
+    for (const type of ['md', 'html']) {
+      assert.deepEqual(await bridge.api.createDocument({ type, title: 'Report', content: 'Body' }), { ok: false, error: 'This feature is currently unavailable.' })
+    }
+    assert.deepEqual(created.map(({type,title,content})=>({type,title,content})), [
+      { type: 'docx', title: 'Report', content: '<p>Body</p>' },
+      { type: 'pdf', title: 'Report', content: '<p>Body</p>' },
+    ])
+  } finally {
+    globalThis.fetch = previousFetch
+    if (previousParser === undefined) delete globalThis.DOMParser
+    else globalThis.DOMParser = previousParser
+    if (previousWindow === undefined) delete globalThis.window
+    else Object.defineProperty(globalThis, 'window', { configurable: true, value: previousWindow })
+  }
+})
+
+test('standalone Word does not advertise creation without a workspace creator', async t => {
+  const previousWindow = globalThis.window
+  const standalone = {}
+  standalone.parent = standalone
+  globalThis.window = standalone
+  t.after(() => { if (previousWindow === undefined) delete globalThis.window; else globalThis.window = previousWindow })
+  const bridge = createDocsBridge({ getState: () => ({ name: 'source.docx' }) }, 'file', { language: 'en' }, () => {})
+  assert.deepEqual(bridge.supportedCreateDocumentTypes, [])
+  const result = await bridge.api.createDocument({ type: 'docx', title: 'Report', content: '<p>Body</p>' })
+  assert.equal(result.ok, false)
+})
+
+test('Word capability discovery tolerates an inaccessible parent frame', t => {
+  const previousWindow = globalThis.window
+  globalThis.window = { parent: { get dyofficeCreateAiDoc() { throw new DOMException('Blocked a frame', 'SecurityError') } } }
+  t.after(() => { if (previousWindow === undefined) delete globalThis.window; else globalThis.window = previousWindow })
+  const bridge = createDocsBridge({ getState: () => ({ name: 'source.docx' }) }, 'file', { language: 'en' }, () => {})
+  assert.deepEqual(bridge.supportedCreateDocumentTypes, [])
 })
 
  test('a fully accepted native save clears dirty only after the native acknowledgement', async () => {
@@ -119,4 +193,66 @@ test('disposed guarded save neither starts a new action nor accepts a late actio
  assert.equal(await pending,false)
  assert.equal(await f.bridge.guardedSave(()=>true,async()=>{actions++;return true}),false)
  assert.equal(actions,1)
+})
+
+test('generated DOCX completion requires native acknowledgement and the exact persisted receipt',async()=>{
+ const previousWindow=globalThis.window,completed=[]
+ globalThis.window={parent:{dyofficeCompleteAiDocContent:(fileId,result)=>completed.push({fileId,result})}}
+ const revision={fileId:'file',revision:'saved',sha256:'a'.repeat(64),size:10}
+ const host={getState:()=>({name:'a.docx',status:'idle',lease:{},revision}),save:async()=>revision}
+ const bridge=createDocsBridge(host,'file',{language:'en'},()=>{},async()=>({title:'Report',html:'<p>Body</p>'}))
+ try{
+  await bridge.api.consumeAiDocContent()
+  bridge.lifecycle.edited();await bridge.lifecycle.beforeSave()
+  await bridge.api.saveDocx('/files/file/a.docx',new ArrayBuffer(10))
+  assert.deepEqual(completed,[])
+  bridge.lifecycle.afterSave(true)
+  bridge.lifecycle.aiDocumentCreated(true)
+  assert.deepEqual(completed,[{fileId:'file',result:{ok:true,revision}}])
+  bridge.dispose();assert.equal(completed.length,1)
+ }finally{if(previousWindow===undefined)delete globalThis.window;else globalThis.window=previousWindow}
+})
+test('closing an unpersisted generated DOCX reports failure to the initiating tool',async()=>{
+ const previousWindow=globalThis.window,completed=[]
+ globalThis.window={parent:{dyofficeCompleteAiDocContent:(_fileId,result)=>completed.push(result)}}
+ const bridge=createDocsBridge({getState:()=>({name:'a.docx',status:'idle'})},'file',{language:'en'},()=>{},async()=>({title:'Report',html:'<p>Body</p>'}))
+ try{
+  await bridge.api.consumeAiDocContent();bridge.dispose()
+  assert.equal(completed.length,1);assert.equal(completed[0].ok,false)
+ }finally{if(previousWindow===undefined)delete globalThis.window;else globalThis.window=previousWindow}
+})
+
+test('generated DOCX rejects incomplete, missing or mismatched persistence receipts',async()=>{
+ const previousWindow=globalThis.window
+ try{
+  for(const kind of ['native-pending','incomplete','mismatched','unknown']){
+   const completed=[]
+   globalThis.window={parent:{dyofficeCompleteAiDocContent:(_fileId,result)=>completed.push(result)}}
+   const revision={fileId:'file',revision:'saved',sha256:'a'.repeat(64),size:10}
+   let status='idle'
+   const host={getState:()=>({name:'a.docx',status,lease:{},revision}),save:async()=>{
+    if(kind==='unknown'){status='unknown';throw Error('lost receipt')}
+    return {...revision,revision:kind==='mismatched'?'other':'saved'}
+   }}
+   const bridge=createDocsBridge(host,'file',{language:'en'},()=>{},async()=>({title:'Report',html:'<p>Body</p>'}))
+   await bridge.api.consumeAiDocContent();bridge.lifecycle.edited();await bridge.lifecycle.beforeSave()
+   await bridge.api.saveDocx('/files/file/a.docx',new ArrayBuffer(10))
+   if(kind!=='native-pending')bridge.lifecycle.afterSave(kind!=='incomplete')
+   bridge.lifecycle.aiDocumentCreated(true)
+   assert.equal(completed.length,1,kind);assert.equal(completed[0].ok,false,kind)
+   bridge.dispose()
+  }
+ }finally{if(previousWindow===undefined)delete globalThis.window;else globalThis.window=previousWindow}
+})
+
+
+test('DOCX creation preserves parent-frame save failures across JavaScript realms',async()=>{
+ const previousWindow=globalThis.window
+ const error=runInNewContext('new Error("Word 正文未确认保存")')
+ assert.equal(error instanceof Error,false)
+ globalThis.window={parent:{dyofficeCreateAiDoc:async()=>{throw error}}}
+ const bridge=createDocsBridge({getState:()=>({name:'a.docx',status:'idle'})},'file',{language:'en'},()=>{})
+ try{
+  assert.deepEqual(await bridge.api.createDocument({type:'docx',title:'Report',content:'<p>Body</p>'}),{ok:false,error:'Word 正文未确认保存'})
+ }finally{if(previousWindow===undefined)delete globalThis.window;else globalThis.window=previousWindow}
 })

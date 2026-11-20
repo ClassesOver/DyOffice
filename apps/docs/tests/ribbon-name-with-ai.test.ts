@@ -75,9 +75,9 @@ afterEach(() => {
 
 describe('File ▸ the manual naming trigger', () => {
   for (const [lang, explanation] of [
-    ['en', 'AI file naming is only available in the desktop app.'],
-    ['zh', 'AI 命名仅桌面版可用。'],
-  ] as const) it(`disables Web naming with a ${lang} explanation and keeps the menu open`, () => {
+    ['en', 'AI file naming is currently unavailable.'],
+    ['zh', '当前无法使用 AI 命名。'],
+  ] as const) it(`explains unavailable AI naming in ${lang} and keeps the menu open`, () => {
     setModuleLang(lang)
     act(() => root.unmount())
     root = createRoot(container)
@@ -86,6 +86,7 @@ describe('File ▸ the manual naming trigger', () => {
       children: createElement(Ribbon, {
         ...ribbonProps(editor, computeFormatState(editor)),
         desktopActionsAvailable: false,
+        aiNamingAvailable: false,
         onNameWithAi,
       }),
     })))

@@ -57,6 +57,9 @@
       "@genoffice/pptx-ops/font-size": [
         "../../../packages/pptx-ops/src/font-size.ts"
       ],
+      "@genoffice/pipelines/slides": [
+        "../../../packages/pipelines/src/slides/index.ts"
+      ],
       "@genoffice/pptx-render": [
         "../../../packages/pptx-render/src/index.ts"
       ],

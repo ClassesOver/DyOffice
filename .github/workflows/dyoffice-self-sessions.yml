@@ -63,12 +63,16 @@ jobs:
           node --test apps/web/test/self-session-management.test.mjs apps/web/test/self-session-management-http.test.mjs apps/web/test/session-security-schema.test.mjs
       - name: Install workspace dependencies without launching Electron
         run: npm ci --ignore-scripts --no-audit --no-fund
-      - name: Install locked Web dependencies with native Argon2id
-        run: npm ci --prefix apps/web --workspaces=false --include=dev --no-audit --no-fund
+      - name: Prepare native Argon2id in the workspace installation
+        run: npm rebuild argon2 --workspace=@dyoffice/web
       - name: Real PostgreSQL owner isolation, pagination, revocation, races and audit rollback
         env:
           DYOFFICE_TEST_DATABASE_URL: postgresql://dyoffice_test:local-ci-only-not-for-production@localhost:5432/dyoffice_sessions_test
         run: node --test apps/web/test/integration/self-session-management.postgres.test.mjs
+      - name: Install native PDF test dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends poppler-utils fonts-noto-cjk fonts-liberation fonts-dejavu-core
       - name: Web API regressions
         run: npm run test:web
       - name: Web typecheck and production build smoke

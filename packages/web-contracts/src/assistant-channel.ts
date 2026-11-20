@@ -1,10 +1,12 @@
 import type {HarnessDataInputs} from './harness-data.ts'
+export const dshTokenExpiryOptions:readonly number[]=[60,1440,10080,43200]
+export const defaultDshTokenExpiryMinutes = 1440
 export const CHANNEL_LIMITS=Object.freeze({maxContentBytes:32768,maxMembers:4,maxActiveTasks:32,maxDepth:4,maxChildren:16,deadlineMs:600000})
 export type TaskState='queued'|'running'|'waiting_peer'|'cancel_requested'|'succeeded'|'failed'|'cancelled'|'unknown_outcome'
 export type AgentCapability='chat'|'office.read'|'harness.execute'
 export type AgentAction=
  |{kind:'message';content:string;replyTo?:string}
- |{kind:'delegate';instruction:string;parentTaskId?:string;dataInputs?:HarnessDataInputs}
+ |{kind:'delegate';instruction:string;parentTaskId?:string;dataInputs?:HarnessDataInputs;execution?:'saved-revision'}
  |{kind:'result';taskId:string;claimId:string;connectionEpoch:number;summary:string;outcome:'succeeded'|'failed'}
  |{kind:'cancel';taskId:string}
 export interface SubmitAgentAction {requestId:string;conversationId:string;to:string;action:AgentAction}
@@ -13,6 +15,7 @@ export interface ChannelTask {
  taskId:string;conversationId:string;parentTaskId:string|null;rootTaskId:string;state:TaskState
  from:string;to:string;instruction:string;claimId:string|null;connectionEpoch:number|null
  continuation?:{parentTaskId:string;untrusted:true;children:{taskId:string;state:TaskState;summary:string|null;outcome:string|null;summaryTruncated:boolean}[]}
+ execution?:'saved-revision';savedRevision?:string;
  deadlineAt:string;summary:string|null;outcome?:string|null;dataInputs?:HarnessDataInputs
 }
 const invalid=()=>Object.assign(Error('Invalid assistant channel request'),{statusCode:400})
@@ -38,9 +41,10 @@ export function decodeAgentAction(raw:unknown):SubmitAgentAction {
   const a=channelObject(input.action,['kind','content','replyTo'])
   action={kind,content:content(a.content),...(a.replyTo===undefined?{}:{replyTo:channelUuid(a.replyTo)})}
  } else if(kind==='delegate') {
-  const a=channelObject(input.action,['kind','instruction','parentTaskId','dataInputs'])
+  const a=channelObject(input.action,['kind','instruction','parentTaskId','dataInputs','execution'])
+  if(a.execution!==undefined&&(a.execution!=='saved-revision'||to!=='office'))throw invalid()
   const dataInputs=a.dataInputs===undefined?undefined:decodeChannelDataInputs(a.dataInputs)
-  action={kind,...(dataInputs===undefined?{}:{dataInputs}),instruction:content(a.instruction),...(a.parentTaskId===undefined?{}:{parentTaskId:channelUuid(a.parentTaskId)})}
+  action={kind,...(a.execution===undefined?{}:{execution:'saved-revision' as const}),...(dataInputs===undefined?{}:{dataInputs}),instruction:content(a.instruction),...(a.parentTaskId===undefined?{}:{parentTaskId:channelUuid(a.parentTaskId)})}
  } else if(kind==='result') {
   const a=channelObject(input.action,['kind','taskId','claimId','connectionEpoch','summary','outcome'])
   if(!Number.isSafeInteger(a.connectionEpoch)||(a.connectionEpoch as number)<1||!['succeeded','failed'].includes(a.outcome as string))throw invalid()

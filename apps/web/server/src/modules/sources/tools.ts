@@ -24,16 +24,15 @@ export function createWorkspaceSourceTools({ sources, results }: { sources: Sour
         const name = call.name as SourceToolName
         if (name === 'sources.list') {
           const args = object(call.arguments, ['after'])
-          const page = await sources.list(token, args)
-          return { items: page.items.filter(source => source.enabled && source.publishedRevision !== null).map(source => ({ sourceId: source.sourceId, name: source.name, kind: source.kind, sourceVersion: source.publishedRevision })), nextCursor: page.nextCursor }
+          return sources.listSavedMetadata(token, args)
         }
         if (name === 'sources.describe') {
           const args = object(call.arguments, ['sourceId','table'])
           return sources.describe(token, args.sourceId, args.table === undefined ? {} : { table: args.table })
         }
         if (name === 'sources.query') {
-          const args = object(call.arguments, ['sourceId','sql','sourceVersion'])
-          const query = { ...(args.sql === undefined ? {} : { sql: args.sql }), ...(args.sourceVersion === undefined ? {} : { sourceVersion: args.sourceVersion }) }
+          const args = object(call.arguments, ['sourceId','sql'])
+          const query = { ...(args.sql === undefined ? {} : { sql: args.sql }) }
           const snapshot = await sources.querySource(token, args.sourceId, query)
           const queryHash = createHash('sha256').update(JSON.stringify({ sourceId: snapshot.sourceId, sourceVersion: snapshot.sourceVersion, sql: args.sql ?? null })).digest('hex')
           const artifact = await results.capture(token, snapshot, queryHash)

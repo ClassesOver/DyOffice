@@ -1,7 +1,7 @@
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import JSZip from 'jszip'
-import { parseFileToText } from '../src/index'
+import { parseBytesToText, parseFileToText } from '../src/index'
 import { pptxToText } from '../src/pptx'
 import { xlsxToText } from '../src/xlsx'
 import { resolveTarget } from '../src/opc'
@@ -63,6 +63,15 @@ describe('parseFileToText: doc', () => {
 })
 
 describe('parseFileToText: docx', () => {
+  it('parses uploaded DOCX bytes with the same extracted structure', async () => {
+    const bytes = await buildDocxFixture()
+    const result = await parseBytesToText('report.docx', bytes)
+    expect(result.ok).toBe(true)
+    expect(result.kind).toBe('text')
+    expect(result.text).toContain('# Annual Report')
+    expect(result.text).toContain('Metric | Value')
+  })
+
   it('extracts headings, paragraphs and tables', async () => {
     const path = writeFixture('report.docx', await buildDocxFixture())
     const result = await parseFileToText(path)

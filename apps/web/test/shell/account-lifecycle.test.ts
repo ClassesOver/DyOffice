@@ -1,6 +1,7 @@
 import {expect,test,vi} from 'vitest'
 import {createLocalShellClient} from '../../src/shell/local-client'
 import {createLocalAdminClient} from '../../src/shell/local-admin-client'
+import {createLocalWorkspaceSession} from '../../src/shell/local-workspace-session'
 test('expired API sessions notify the shell and invalidate bound requests, including a non-JSON 401',async()=>{
  let expired=false
  const send=vi.fn(async(path:RequestInfo|URL)=>String(path).endsWith('session-proof')?new Response(JSON.stringify({csrfToken:'p'.repeat(43)})):expired?new Response('expired',{status:401}):new Response('{}'))
@@ -23,6 +24,22 @@ test('uncertain logout notifies recovery without automatically retrying the logo
  const client=createLocalShellClient(send),notify=vi.fn();client.onSessionEnded(notify)
  await expect(client.logout()).rejects.toMatchObject({status:500})
  expect(notify).toHaveBeenCalledWith('logout_failed');expect(send.mock.calls.filter(([path])=>String(path).endsWith('/logout'))).toHaveLength(1)
+})
+test('invalidating a pending workspace read does not interrupt logout',async()=>{
+ const send=vi.fn(async(path:RequestInfo|URL,init?:RequestInit)=>{
+  if(String(path).endsWith('/logout'))return new Response(null,{status:204})
+  if(String(path).endsWith('/files'))return new Promise<Response>((_resolve,reject)=>{
+   const signal=init!.signal!;signal.addEventListener('abort',()=>reject(signal.reason),{once:true})
+  })
+  return new Response(JSON.stringify({csrfToken:'p'.repeat(43)}))
+ })
+ const client=createLocalShellClient(send),workspace=createLocalWorkspaceSession(client),notify=vi.fn()
+ client.onSessionEnded(notify);workspace.bind(await client.bindSession())
+ const pending=expect(workspace.request('/api/v1/files')).rejects.toMatchObject({code:'stale_session'})
+ const outcome=await client.logout().then(()=>null,error=>error)
+ await pending
+ expect(outcome).toBeNull();expect(send.mock.calls.filter(([path])=>String(path).endsWith('/logout'))).toHaveLength(1)
+ expect(notify).not.toHaveBeenCalled()
 })
 test('independent admin requests notify 401 only when identity is no longer available',async()=>{
  let expired=false

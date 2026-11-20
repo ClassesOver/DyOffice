@@ -11,7 +11,7 @@ function fixture(t){
  let current=revision,epoch=1,owner='a',applied=0,closed=0
  const files={openFile:async()=>({format:'pptx',file:{revision:current,sha256:'x'}}),download:async()=>({format:'pptx',bytes:new Uint8Array([1])})}
  const leases={renewLease:async(token,_file,a)=>{if(token!==owner||a.editorId!==editor||a.leaseEpoch!==epoch)throw Object.assign(Error('lost'),{statusCode:409})}}
- const handle={close(){closed++},outline:async()=>({size:{cx:1,cy:1}}),renderAll:async()=>[],apply:async()=>{applied++;return {generation:1,stateGeneration:1,records:[],created:[],slideIds:[],paths:[],canUndo:true,canRedo:false}},exportBytes:async()=>({generation:0,bytes:Buffer.from('old draft')})}
+ const handle={close(){closed++},outline:async()=>({size:{cx:1,cy:1}}),renderAll:async()=>[],apply:async()=>{applied++;return {generation:1,stateGeneration:1,transaction:{applied:true},records:[],created:[],slideIds:[],paths:[],canUndo:true,canRedo:false}},exportBytes:async()=>({generation:0,bytes:Buffer.from('old draft')})}
  const s=createSlidesService({files,leases,host:{openSession:async()=>handle}});t.after(()=>s.closeAll())
  return {s,files,leases,applied:()=>applied,closed:()=>closed,takeover(){epoch++},newHead(){current='44444444-4444-4444-8444-444444444444';return current},otherSession(){owner='b'}}
 }
@@ -59,7 +59,7 @@ test('actual bridge request passes real Fastify open schema and sends lease iden
 test('lease lost during native work discards the draft and returns no success',async t=>{
  let release,entered,closed=0,epoch=1
  const gate=new Promise(r=>release=r),start=new Promise(r=>entered=r)
- const handle={close(){closed++},outline:async()=>({size:{cx:1,cy:1}}),renderAll:async()=>[],apply:async()=>{entered();await gate;return {generation:1,stateGeneration:1,records:[],slideIds:[],paths:[],created:[]}}}
+ const handle={close(){closed++},outline:async()=>({size:{cx:1,cy:1}}),renderAll:async()=>[],apply:async()=>{entered();await gate;return {generation:1,stateGeneration:1,transaction:{applied:true},records:[],slideIds:[],paths:[],created:[]}}}
  const s=createSlidesService({files:{openFile:async()=>({format:'pptx',file:{revision}}),download:async()=>({format:'pptx',bytes:new Uint8Array([1])})},leases:{renewLease:async(_t,_f,a)=>{if(a.leaseEpoch!==epoch)throw Object.assign(Error(),{statusCode:409})}},host:{openSession:async()=>handle}});t.after(()=>s.closeAll())
  await s.open('a',file,input);const pending=s.apply('a',file,{...input,ops:[]});await start;epoch=2;release()
  await assert.rejects(pending,{statusCode:409});assert.equal(closed,1)
@@ -71,7 +71,7 @@ test('deployment assembly rejects incomplete slides configuration without File A
 })
 test('delayed old-pin apply after own export commit cannot mutate or destroy live draft',async t=>{
  const {createHash}=await import('node:crypto');let head=revision,sha='original',applied=0,closed=0
- const bytes=Buffer.from('own-export'),handle={close(){closed++},outline:async()=>({size:{cx:1,cy:1}}),renderAll:async()=>[],exportBytes:async()=>({generation:0,bytes}),apply:async()=>{applied++;return {generation:1,stateGeneration:1,records:[],slideIds:[],paths:[],created:[]}}}
+ const bytes=Buffer.from('own-export'),handle={close(){closed++},outline:async()=>({size:{cx:1,cy:1}}),renderAll:async()=>[],exportBytes:async()=>({generation:0,bytes}),apply:async()=>{applied++;return {generation:1,stateGeneration:1,transaction:{applied:true},records:[],slideIds:[],paths:[],created:[]}}}
  const s=createSlidesService({files:{openFile:async()=>({format:'pptx',file:{revision:head,sha256:sha}}),download:async()=>({format:'pptx',bytes:new Uint8Array([1])})},leases:{renewLease:async()=>{}},revisions:{verifyUploadCommit:async(_t,_f,p)=>{assert.equal(p.uploadId,'55555555-5555-4555-8555-555555555555')}},host:{openSession:async()=>handle}});t.after(()=>s.closeAll())
  await s.open('a',file,input);await s.exportForSave('a',file,input);await s.bindPreparedUpload('a',file,{...input,uploadId:'55555555-5555-4555-8555-555555555555'});head='44444444-4444-4444-8444-444444444444';sha=createHash('sha256').update(bytes).digest('hex')
  await assert.rejects(()=>s.apply('a',file,{...input,ops:[]}),{statusCode:409});assert.equal(applied,0);assert.equal(closed,0)
@@ -79,7 +79,7 @@ test('delayed old-pin apply after own export commit cannot mutate or destroy liv
 })
 test('save after undo adopts the exported state generation rather than IPC generation',async t=>{
  const {createHash}=await import('node:crypto');let head=revision,sha='original'
- const bytes=Buffer.from('undo-state'),handle={close(){},outline:async()=>({size:{cx:1,cy:1}}),renderAll:async()=>[],apply:async()=>({generation:1,stateGeneration:1,records:[],slideIds:[],paths:[],created:[]}),undo:async()=>({generation:2,stateGeneration:0,slides:[],canUndo:false,canRedo:true}),exportBytes:async()=>({generation:2,bytes})}
+ const bytes=Buffer.from('undo-state'),handle={close(){},outline:async()=>({size:{cx:1,cy:1}}),renderAll:async()=>[],apply:async()=>({generation:1,stateGeneration:1,transaction:{applied:true},records:[],slideIds:[],paths:[],created:[]}),undo:async()=>({generation:2,stateGeneration:0,slides:[],canUndo:false,canRedo:true}),exportBytes:async()=>({generation:2,bytes})}
  const s=createSlidesService({files:{openFile:async()=>({format:'pptx',file:{revision:head,sha256:sha}}),download:async()=>({format:'pptx',bytes:new Uint8Array([1])})},leases:{renewLease:async()=>{}},revisions:{verifyUploadCommit:async(_t,_f,p)=>{assert.equal(p.uploadId,'55555555-5555-4555-8555-555555555555')}},host:{openSession:async()=>handle}});t.after(()=>s.closeAll())
  await s.open('a',file,input);await s.apply('a',file,{...input,ops:[]});await s.undo('a',file,{...input,generation:1});await s.exportForSave('a',file,{...input,generation:2});await s.bindPreparedUpload('a',file,{...input,generation:2,uploadId:'55555555-5555-4555-8555-555555555555'})
  head='44444444-4444-4444-8444-444444444444';sha=createHash('sha256').update(bytes).digest('hex')
@@ -87,7 +87,7 @@ test('save after undo adopts the exported state generation rather than IPC gener
 })
 test('same-hash foreign revision is not adopted as this session commit',async t=>{
  const {createHash}=await import('node:crypto');let head=revision,sha='original',applied=0
- const bytes=Buffer.from('same bytes'),handle={close(){},outline:async()=>({size:{cx:1,cy:1}}),renderAll:async()=>[],exportBytes:async()=>({generation:0,bytes}),apply:async()=>{applied++;return {generation:1,stateGeneration:1,records:[],slideIds:[],paths:[],created:[]}}}
+ const bytes=Buffer.from('same bytes'),handle={close(){},outline:async()=>({size:{cx:1,cy:1}}),renderAll:async()=>[],exportBytes:async()=>({generation:0,bytes}),apply:async()=>{applied++;return {generation:1,stateGeneration:1,transaction:{applied:true},records:[],slideIds:[],paths:[],created:[]}}}
  const s=createSlidesService({files:{openFile:async()=>({format:'pptx',file:{revision:head,sha256:sha}}),download:async()=>({format:'pptx',bytes:new Uint8Array([1])})},leases:{renewLease:async()=>{}},revisions:{verifyUploadCommit:async()=>{throw Object.assign(Error('foreign'),{statusCode:409})}},host:{openSession:async()=>handle}});t.after(()=>s.closeAll())
  await s.open('a',file,input);await s.exportForSave('a',file,input);await s.bindPreparedUpload('a',file,{...input,uploadId:'55555555-5555-4555-8555-555555555555'})
  head='44444444-4444-4444-8444-444444444444';sha=createHash('sha256').update(bytes).digest('hex')

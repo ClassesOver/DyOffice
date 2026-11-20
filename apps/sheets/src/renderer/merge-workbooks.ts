@@ -19,8 +19,8 @@ import { t } from './i18n/locale'
 import type { LazyWorkbookState, UniverRuntime } from './univer-state'
 import { characterWidthToPixels, toUniverStyle, workbookStructureLocked } from './univer-sync'
 
-/// Stay under the IPC schema's MAX_RANGE_CELLS (100k) with headroom.
-const READ_CHUNK_CELLS = 90_000
+/// Stay under the Web native reader's 20k-cell limit with protocol headroom.
+const READ_CHUNK_CELLS = 16_000
 const SET_RANGE_VALUES_COMMAND = 'sheet.command.set-range-values'
 const SET_COL_WIDTH_COMMAND = 'sheet.command.set-worksheet-col-width'
 const SET_ROW_HEIGHT_COMMAND = 'sheet.command.set-row-height'

@@ -25,24 +25,48 @@ async function fixture(t, url) {
   return f
 }
 
-test('draft test, explicit clear, retain, disable, idempotent publish and concurrent CAS', async t => {
+test('creating a disabled connection retains its state and rejects execution until enabled',async t=>{
+ const url=await start(t,(_q,r)=>r.writeHead(200,{'content-type':'application/json'}).end('{"rows":[{"v":1}]}'))
+ const f=await fixture(t,url)
+ const created=await f.call('POST','',{sourceId:'off',name:'Disabled',kind:'http',config:{},secret:url,enabled:false},201)
+ assert.equal(created.enabled,false)
+ await f.call('POST','/off/test',{},409)
+ await f.call('POST','/off/query',{},409)
+ await f.call('PUT','/off',{expectedVersion:1,enabled:true})
+ assert.equal((await f.call('POST','/off/query',{})).rows[0].v,1)
+ await f.call('POST','',{sourceId:'bad',name:'Invalid',kind:'http',config:{},secret:url,enabled:'false'},400)
+})
+
+test('saving a connection takes effect immediately and cannot execute historical configuration', async t => {
+  const url = await start(t, (_q, r) => r.writeHead(200, { 'content-type': 'application/json' }).end('{"rows":[{"v":1},{"v":2}]}'))
+  const f = await fixture(t, url)
+  assert.equal((await f.call('POST', '/a/query', {})).rows.length, 2)
+  await f.call('PUT', '/a', { expectedVersion: 1, config: {maxRows:1}, name:'Current connection' })
+  const current = await f.call('POST', '/a/query', {})
+  assert.equal(current.rows.length, 1)
+  assert.equal(current.sourceVersion, 2)
+  const detail = await f.call('GET', '/a')
+  assert.equal(detail.source.name, 'Current connection')
+  assert.equal('published' in detail, false)
+  assert.equal('publishedRevision' in detail.source, false)
+  await f.call('POST', '/a/query', {sourceVersion:1}, 400)
+  await f.call('POST', '/a/publish', {expectedVersion:2}, 501)
+  await f.call('PUT', '/a', {expectedVersion:2,secret:null})
+  await f.call('POST', '/a/query', {}, 503)
+})
+
+test('current configuration supports explicit clear, retain, disable and concurrent CAS', async t => {
   const url = await start(t, (_q, r) => r.writeHead(200, { 'content-type': 'application/json' }).end('{"rows":[{"v":1}]}'))
   const f = await fixture(t, url)
-  await f.call('POST', '/a/query', {}, 409)
   assert.equal((await f.call('POST', '/a/test', {})).ok, true)
-  const pub = await f.call('POST', '/a/publish', { expectedVersion: 1 })
-  const again = await f.call('POST', '/a/publish', { expectedVersion: 1 })
-  assert.deepEqual(again, pub)
   // Empty secret never accidentally clears; null has an explicit meaning.
   await f.call('PUT', '/a', { expectedVersion: 1, secret: '' }, 400)
   await f.call('PUT', '/a', { expectedVersion: 1, secret: null })
   let detail = await f.call('GET', '/a')
   assert.equal(detail.source.hasCredential, false)
-  assert.equal(detail.source.hasUnpublishedChanges, true)
   assert.equal((await f.call('POST', '/a/test', {})).ok, false)
-  await f.call('POST', '/a/publish', { expectedVersion: 2 }, 409)
-  // Clearing only the draft does not rewrite a published credential or evidence.
-  assert.equal((await f.call('POST', '/a/query', {})).rows[0].v, 1)
+  // Clearing the current credential immediately prevents further execution.
+  await f.call('POST', '/a/query', {}, 503)
   await f.call('PUT', '/a', { expectedVersion: 2, secret: url })
   const outcomes = await Promise.all([f.request('PUT', '/a', { expectedVersion: 3, name: 'Writer 1' }), f.request('PUT', '/a', { expectedVersion: 3, name: 'Writer 2' })])
   assert.deepEqual(outcomes.map(r => r.statusCode).sort(), [200, 409])
@@ -53,7 +77,6 @@ test('draft test, explicit clear, retain, disable, idempotent publish and concur
   await f.call('PUT', '/a', { expectedVersion: 4, enabled: false })
   await f.call('POST', '/a/query', {}, 409)
   await f.call('POST', '/a/test', {}, 409)
-  await f.call('POST', '/a/publish', { expectedVersion: 5 })
   assert.equal((await f.call('GET', '/a')).source.enabled, false)
   await f.call('PUT', '/a', { expectedVersion: 5, enabled: true })
   assert.equal((await f.call('POST', '/a/query', {})).rows[0].v, 1)
@@ -67,7 +90,6 @@ test('in-flight HTTP result is withheld after source disable or session revocati
   const started = () => new Promise(r => { entered = r })
   const url = await start(t, (_q, r) => { respond = () => r.writeHead(200, { 'content-type': 'application/json' }).end('{"rows":[{"v":"private-revoked-query-value"}]}'); entered?.() })
   const f = await fixture(t, url)
-  await f.call('POST', '/a/publish', { expectedVersion: 1 })
   let gate = started(), pending = f.request('POST', '/a/query', {})
   await gate
   await f.call('PUT', '/a', { expectedVersion: 1, enabled: false })
@@ -83,27 +105,37 @@ test('in-flight HTTP result is withheld after source disable or session revocati
   assert.equal(denied.body.includes('private-revoked-query-value'), false)
 })
 
-test('DELETE validates CAS and preserves the newer publication before permanently reserving the source ID', async t => {
+test('an in-flight query cannot release data from a configuration replaced during execution', async t=>{
+  let release,entered
+  const received=new Promise(resolve=>{entered=resolve})
+  const url=await start(t,(_q,r)=>{release=()=>r.writeHead(200,{'content-type':'application/json'}).end('{"rows":[{"v":1}]}');entered()})
+  const f=await fixture(t,url)
+  const pending=f.request('POST','/a/query',{})
+  await received
+  await f.call('PUT','/a',{expectedVersion:1,config:{maxRows:1}})
+  release()
+  const denied=await pending
+  assert.equal(denied.statusCode,409)
+  assert.equal(denied.body.includes('"rows"'),false)
+})
+
+test('DELETE validates CAS and preserves the current configuration before permanently reserving the source ID', async t => {
   const url = await start(t, (_q, r) => r.writeHead(200, { 'content-type': 'application/json' }).end('{"rows":[{"v":7}]}'))
   const f = await fixture(t, url)
-  await f.call('POST', '/a/publish', { expectedVersion: 1 })
   await f.call('PUT', '/a', { expectedVersion: 1, name: 'New publication' })
-  const publication = await f.call('POST', '/a/publish', { expectedVersion: 2 })
-  assert.equal(publication.revision, 2)
   for (const payload of [undefined, {}, { expectedVersion: 0 }, { expectedVersion: '2' }, { expectedVersion: 2, force: true }]) {
     assert.equal((await f.request('DELETE', '/a', payload)).statusCode, 400)
   }
   assert.equal((await f.request('DELETE', '/a', { expectedVersion: 1 })).statusCode, 409)
   const intact = await f.call('GET', '/a')
   assert.equal(intact.source.version, 2)
-  assert.deepEqual(intact.published, publication)
+  assert.equal(intact.source.name, 'New publication')
   assert.equal((await f.call('POST', '/a/query', {})).sourceVersion, 2)
   assert.equal((await f.request('DELETE', '/a', { expectedVersion: 2 })).statusCode, 204)
   assert.deepEqual(await f.call('GET', ''), { items: [], nextCursor: null })
   await f.call('GET', '/a', undefined, 404)
   await f.call('POST', '', { sourceId: 'a', name: 'Replacement', kind: 'http', config: {}, secret: url }, 409)
   await f.call('PUT', '/a', { expectedVersion: 1, name: 'Old writer' }, 404)
-  await f.call('POST', '/a/publish', { expectedVersion: 1 }, 404)
   await f.call('POST', '/a/test', {}, 404)
   await f.call('POST', '/a/query', {}, 404)
   assert.equal((await f.request('DELETE', '/a', { expectedVersion: 2 })).statusCode, 404)
@@ -119,7 +151,6 @@ for (const operation of ['test','query']) test(`in-flight ${operation} refuses a
   const received = new Promise(resolve => { entered = resolve })
   const url = await start(t, (_q, r) => { release = () => r.writeHead(200, { 'content-type': 'application/json' }).end('{"rows":[{"v":"old-instance-data"}]}'); entered() })
   const f = await fixture(t, url)
-  await f.call('POST', '/a/publish', { expectedVersion: 1 })
   const pending = f.request('POST', '/a/' + operation, {})
   await received
   assert.equal((await f.request('DELETE', '/a', { expectedVersion: 1 })).statusCode, 204)
@@ -131,10 +162,9 @@ for (const operation of ['test','query']) test(`in-flight ${operation} refuses a
   assert.equal(denied.body.includes('"ok":true'), false)
 })
 
-test('RLS and least privileges independently isolate drafts, publications and vault', async t => {
+test('RLS and least privileges independently isolate configuration, legacy records and vault', async t => {
   const url = await start(t, (_q, r) => r.writeHead(200, { 'content-type': 'application/json' }).end('{"rows":[{"v":1}]}'))
   const f = await fixture(t, url)
-  await f.call('POST', '/a/publish', { expectedVersion: 1 })
   const tables = ['data_sources','data_source_drafts','data_source_versions','data_source_credentials']
   const c = await f.businessPool.connect()
   try {

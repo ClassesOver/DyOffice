@@ -1,6 +1,14 @@
+import {WorkspaceLoading} from './WorkspaceLoading'
+import {HomeHero} from './HomeHero'
+import type {PreparedAiDocumentCreator} from './pdf-create-document-skill'
+import {createAiDocCreationQueue,type AiDocCreationResult} from './ai-doc-creation'
+import {isRevisionRef,type RevisionRef} from '../../../../packages/web-contracts/src/api'
+import {AssistantChannelsPage} from './AssistantChannelsPage'
+import {BackgroundTasksPage} from './BackgroundTasksPage'
 import React,{useEffect,useState,useCallback,useRef} from 'react'
 import {createRoot} from 'react-dom/client'
 import {WorkspaceSettings} from './WorkspaceSettings'
+import {NativeSettingsDialog} from './NativeSettingsDialog'
 import {WorkspaceUploadDialog} from './WorkspaceUploadDialog'
 import {AppFrame} from '../../../shell/src/renderer/src/AppFrame'
 
@@ -29,7 +37,7 @@ import {createSourceWorkspaceSession} from './source-workspace-session'
 import blankDocx from '../../../shell/build/shell-new/blank.docx?url'
 import blankXlsx from '../../../shell/build/shell-new/blank.xlsx?url'
 import blankPptx from '../../../shell/build/shell-new/blank.pptx?url'
-import {createLocalNewSheet,createLocalNewSlide,localNewFormats,openCreatedDocument} from './local-new-sheet'
+import {createLocalNewSheet,createLocalNewSlide,createLocalNewPdf,localNewFormats,openCreatedDocument} from './local-new-sheet'
 
 import {hideAccountRecoveryPortals} from './account-recovery-portals'
 import {createLocalShellClient,type SessionEndReason} from './local-client'
@@ -37,12 +45,11 @@ import {createLocalAdminClient} from './local-admin-client'
 import {createLocalSessionsClient} from './local-sessions-client'
 import {createLocalWorkspaceSession} from './local-workspace-session'
 import {createLoginHistoryClient} from './local-login-history-client'
-import {ConfigProvider,theme as antdTheme,Dropdown,Modal,Button,Alert,Form,Input,Card,Typography} from 'antd'
+import {ConfigProvider,theme as antdTheme,Dropdown,Button,Alert,Form,Input,Card,Typography} from 'antd'
 import logo from '../../../shell/src/renderer/src/assets/dyoffice-logo.svg'
 import zhCN from 'antd/locale/zh_CN'
-const workspacePages={settings:'个人设置',trash:'回收站',sources:'数据连接',global:'全局配置',users:'用户管理'} as const
+const workspacePages={channels:'频道分享',tasks:'后台任务',settings:'个人设置',trash:'回收站',sources:'数据连接',global:'全局配置',users:'用户管理'} as const
 type WorkspacePage=keyof typeof workspacePages
-import {HomeAssistant} from './HomeAssistant'
 import {AccountMenu} from './AccountMenu'
 import {createDocumentTabs,type DocumentFormat} from './document-tabs'
 import {resolvedDocument,readOpenDocument} from './document-entry-reader'
@@ -55,6 +62,8 @@ import './home-entry-b.css'
 import {LocalAdminPanel} from './LocalAdminPanel'
 import {PasswordActionForm} from './PasswordActionForm'
 import './config-polish.css'
+import './personal-config-polish.css'
+import './configuration-theme.css'
 const client=createLocalShellClient()
 const adminClient=createLocalAdminClient(fetch,()=>client.endSession('expired'))
 const workspaceSession=createLocalWorkspaceSession(client)
@@ -69,12 +78,29 @@ let sourceWorkspace: Awaited<ReturnType<typeof createSourceWorkspaceSession>> | 
 type User={id:string;username:string;displayName:string;roles:string[]}
 let user:User|null=null
 let initialLanguage:'zh'|'en'='zh'
+let assistantVisible=true
 let notice=(message:string)=>window.alert(message)
 let showTrash=()=>{}
 let showUpload=(_files:File[]=[])=>{}
 let capabilities:Record<string,string>={}
 let showChromeMenu=(kind:'app'|'new'|'tabs'|'tab',x:number,y:number,id?:string)=>{}
 const documentTabs=createDocumentTabs()
+function updateAutoPdfTab(id:string,previous:string,name:string){
+ const file=documentTabs.renderedDocuments().find(item=>item.id===id)
+ if(file?.format==='pdf'&&file.name===previous)documentTabs.rename(id,name)
+ notifyFilesChanged()
+}
+const pendingAiDocContents=createAiDocCreationQueue()
+declare global {
+ interface Window {
+  dyofficeCompleteAiDocContent?:(fileId:string,result:AiDocCreationResult)=>void
+  dyofficeConsumeAiDocContent?:(fileId:string)=>Promise<{title:string;html:string}|null>
+  dyofficePrepareAiDoc?:(signal?:AbortSignal,expectedProof?:string)=>Promise<PreparedAiDocumentCreator>
+  dyofficeOpenPdfCopy?:(receipt:RevisionRef,proof:string,signal?:AbortSignal)=>Promise<void>
+  dyofficeCreateAiDoc?:(request:{type?:'docx'|'pdf';title:string;content:string;file?:Blob})=>Promise<RevisionRef>
+  dyofficeCreateAiXlsx?:(request:{title:string;sheetName?:string;content:string})=>Promise<void>
+ }
+}
 let entryRecovery:ReturnType<typeof createEntryRecovery>|undefined
 let entryRecoveryNotice=''
 async function resolveOpenDocument(id:string){
@@ -99,6 +125,74 @@ function installBridge(){
  window.aiOffice.newDoc=async()=>{const proof=sourceWorkspace?.bound.proof;if(!proof)throw new Error('登录状态未核验，请重新加载当前工作区。');if(capabilities.docx!=='editable')return unsupported();const response=await fetch(blankDocx);if(!response.ok)throw new Error('原版空白模板不可用');await upload(new File([await response.blob()],'未命名.docx'),proof)}
  window.aiOffice.newSheet=createLocalNewSheet({getSessionProof:()=>sourceWorkspace?.bound.proof,bindSession:proof=>client.bindSession(proof),fetchTemplate:()=>fetch(blankXlsx),open:(id,request)=>openCreatedDocument(documentTabs,capabilities,id,request),changed:notifyFilesChanged})
  window.aiOffice.newSlide=createLocalNewSlide({getSessionProof:()=>sourceWorkspace?.bound.proof,bindSession:proof=>client.bindSession(proof),fetchTemplate:()=>fetch(blankPptx),open:(id,request)=>openCreatedDocument(documentTabs,capabilities,id,request),changed:notifyFilesChanged})
+ window.aiOffice.newPdf=createLocalNewPdf({
+  getSessionProof:()=>sourceWorkspace?.bound.proof,
+  bindSession:proof=>client.bindSession(proof),
+  open:(id,request)=>openCreatedDocument(documentTabs,capabilities,id,request),
+  changed:notifyFilesChanged,
+ })
+ window.dyofficeConsumeAiDocContent=async fileId=>pendingAiDocContents.consume(fileId)
+ window.dyofficeCompleteAiDocContent=(fileId,result)=>pendingAiDocContents.complete(fileId,result)
+ window.dyofficeOpenPdfCopy=async(receipt,proof,signal)=>{
+  const bound=await client.bindSession(proof,signal)
+  signal?.throwIfAborted()
+  notifyFilesChanged()
+  await openCreatedDocument(documentTabs,capabilities,receipt.fileId,bound.request)
+ }
+ window.dyofficePrepareAiDoc=async(signal,expectedProof)=>{
+  const proof=expectedProof??sourceWorkspace?.bound.proof
+  if(!proof)throw new Error('登录状态未核验，请重新加载当前工作区。')
+  const bound=await client.bindSession(proof,signal)
+  const docxEditable=(await bound.request<Record<string,string>>('/api/v1/capabilities','GET',undefined,signal)).docx==='editable'
+  let used=false
+  return {docxEditable,async save({type,title,content,file},saveSignal){
+   saveSignal?.throwIfAborted()
+   if(used)throw new Error('此创建请求已发起，请核对现有文件，不要重复创建。')
+   if(!['docx','pdf'].includes(type)||typeof title!=='string'||!title.trim()||typeof content!=='string'||!content.trim())throw new Error('文档创建请求无效。')
+   const stem=title.replace(/[\\/:*?"<>|]/g,' ').trim().slice(0,120)||'未命名'
+   let createdFile:File
+   if(type==='pdf'){
+    if(!file||file.type!=='application/pdf'||file.size===0)throw new Error('PDF 文档生成失败。')
+    createdFile=new File([file],`${stem}.pdf`,{type:'application/pdf'})
+   }else{
+    if(!docxEditable||(await bound.request<Record<string,string>>('/api/v1/capabilities','GET',undefined,saveSignal)).docx!=='editable')throw new Error('当前运行环境未启用安全的 DOCX 编辑，暂不支持新建。')
+    const response=await fetch(blankDocx,{signal:saveSignal})
+    if(!response.ok)throw new Error('原版空白模板不可用')
+    createdFile=new File([await response.arrayBuffer()],`${stem}.docx`)
+   }
+   saveSignal?.throwIfAborted()
+   // Reusing this closure after any write is unsafe, including a late auth error.
+   used=true
+   const stage=await bound.request<{uploadId:string;fileId:string}>('/api/v1/files/uploads','POST',{name:createdFile.name,size:createdFile.size},saveSignal)
+   await bound.request(`/api/v1/uploads/${encodeURIComponent(stage.uploadId)}/content`,'PUT',createdFile,saveSignal)
+   const result=await bound.request<{file:RevisionRef}>(`/api/v1/uploads/${encodeURIComponent(stage.uploadId)}/finish`,'POST',undefined,saveSignal)
+   if(!isRevisionRef(result?.file)||result.file.size<1||result.file.fileId!==stage.fileId)throw new Error('无法确认文档创建的保存版本，请核对工作区文件，不要重复创建。')
+   const id=result.file.fileId
+   const saved=type==='docx'?pendingAiDocContents.begin(id,{title,html:content}):null
+   notifyFilesChanged()
+   try{await openCreatedDocument(documentTabs,capabilities,id,bound.request)}catch{
+    const error=`${type==='pdf'?'PDF':'Word 文档'}已写入工作区，但打开失败。请从最近文件中打开，不要重复创建。`
+    if(saved)pendingAiDocContents.complete(id,{ok:false,error})
+    throw new Error(error)
+   }
+   const receipt=saved?await saved:result.file
+   const confirmed=await bound.request<RevisionRef>(`/api/v1/files/${encodeURIComponent(id)}/revisions/${encodeURIComponent(receipt.revision)}`,'GET',undefined,saveSignal)
+   if(!isRevisionRef(confirmed)||confirmed.fileId!==id||confirmed.revision!==receipt.revision||confirmed.sha256!==receipt.sha256||confirmed.size!==receipt.size)throw new Error('无法确认正文的保存版本，请核对工作区文件，不要重复创建。')
+   return confirmed
+  }}
+ }
+ window.dyofficeCreateAiDoc=async input=>(await window.dyofficePrepareAiDoc!()).save({...input,type:input.type??'docx'})
+ window.dyofficeCreateAiXlsx=async request=>{
+  const proof=sourceWorkspace?.bound.proof
+  if(!proof)throw new Error('登录状态未核验，请重新加载当前工作区。')
+  const bound=await client.bindSession(proof)
+  if((await bound.request<Record<string,string>>('/api/v1/capabilities')).xlsx!=='editable')throw new Error('当前运行环境未启用安全的 XLSX 编辑，暂不支持新建。')
+  const result=await bound.request<{file:{fileId:string}}>('/api/v1/ai/xlsx-documents','POST',request)
+  const id=result?.file?.fileId
+  if(!id)throw new Error('电子表格创建失败')
+  notifyFilesChanged()
+  try{await openCreatedDocument(documentTabs,capabilities,id,bound.request)}catch{throw new Error('电子表格已创建，但打开失败。请从最近文件中打开，不要重复创建。')}
+ }
  window.aiOfficeTabs={list:async()=>documentTabs.list(),activate:async id=>documentTabs.activate(id),close:async id=>{await documentTabs.close(id)},onChanged:documentTabs.subscribe,showNewMenu:async(x,y)=>showChromeMenu('new',x,y),showAppMenu:async(x,y)=>showChromeMenu('app',x,y),showMenu:async(x,y)=>showChromeMenu('tabs',x,y),showTabMenu:async(id,x,y)=>showChromeMenu('tab',x,y,id),detach:unsupported,tearOff:async()=>false,dragTornWindow:()=>{},dockTornWindow:unsupported,endTornDrag:async()=>{},onDockPreview:()=>()=>{},reportDockIndex:()=>{},reorder:async(id,index)=>documentTabs.reorder(id,index),notifyChromePressed:()=>{},onChromePressed:()=>()=>{}} satisfies TabsApi
 }
 async function restore(){
@@ -109,7 +203,7 @@ async function restore(){
   globalSettingsSession.bind(bound)
  const personal=await preferences.getPreferences()
  const catalog=await bound.request<Record<string,string>>('/api/v1/capabilities')
- user=identity.user;capabilities=catalog;initialLanguage=personal.language==='en'?'en':'zh';userSkills=createUserSkillsClient(bound.request);sourceWorkspace=workspace;workspaceSession.bind(bound)
+ user=identity.user;capabilities=catalog;initialLanguage=personal.language==='en'?'en':'zh';assistantVisible=personal.showAssistant!==false;userSkills=createUserSkillsClient(bound.request);sourceWorkspace=workspace;workspaceSession.bind(bound)
  if(personal.theme==='system')delete document.documentElement.dataset.theme;else document.documentElement.dataset.theme=personal.theme
  // Only authenticated identity may select a storage namespace. Legacy servers
  // without a deployment identity safely skip entry restoration.
@@ -145,7 +239,7 @@ async function logout(){
   if(!leaving){resumeEntries();if(app)app.inert=wasInert;logoutPending=false}
  }
 }
-function WorkspacePageContent({page,onClose,onCloseGuardChange,settingsTab,onSettingsTabChange}:{settingsTab?:string;onSettingsTabChange?:(tab:string)=>void;page:WorkspacePage;onClose:()=>void;onCloseGuardChange:(guard:(()=>boolean)|null)=>void}){
+function WorkspacePageContent({page,onClose,onCloseGuardChange,settingsTab,onSettingsTabChange,channelId,onOpenChannel}:{channelId?:string;onOpenChannel:(id:string)=>void;settingsTab?:string;onSettingsTabChange?:(tab:string)=>void;page:WorkspacePage;onClose:()=>void;onCloseGuardChange:(guard:(()=>boolean)|null)=>void}){
  const [sessionVersion,setSessionVersion]=useState(0)
  const registerGuard=onCloseGuardChange
  async function updateSession(proof:string){
@@ -158,18 +252,39 @@ function WorkspacePageContent({page,onClose,onCloseGuardChange,settingsTab,onSet
   userSkills=createUserSkillsClient(bound.request);sourceWorkspace=workspace;workspaceSession.bind(bound)
   setSessionVersion(version=>version+1)
  }
+ const openChannelDocument=async(fileId:string,channelId:string)=>{
+  const existing=documentTabs.documents().find(file=>file.id===fileId)
+  if(existing){
+   if(new URL(existing.src,location.origin).searchParams.get('channel')!==channelId)throw Error('请先关闭已打开的来源文档，再从频道打开。')
+   documentTabs.activate(fileId);onClose();return
+  }
+  const token=documentTabs.reserveOpen(fileId),file=await resolveOpenDocument(fileId)
+  file.src+=(file.src.includes('?')?'&':'?')+'channel='+encodeURIComponent(channelId)
+  documentTabs.open(file,token);onClose()
+ }
+ if(page==='channels'&&sourceWorkspace)return <AssistantChannelsPage request={sourceWorkspace.bound.request} initialChannelId={channelId} onOpenDocument={openChannelDocument}/>
+ if(page==='tasks'&&sourceWorkspace)return <BackgroundTasksPage request={sourceWorkspace.bound.request} onOpenDocument={openChannelDocument} onOpenChannel={onOpenChannel}/>
  if(page==='settings'&&user)return <WorkspaceSettings activeTab={settingsTab} onTabChange={onSettingsTabChange} sessionsClient={sessionsClient} historyClient={historyClient} user={user} load={preferences.getPreferences} save={preferences.updatePreferences} security={{changePassword:async(current,next)=>{const proof=await client.changePassword(current,next);await updateSession(proof).catch(()=>client.endSession('expired'))},onCurrentRevoked:()=>client.endSession('expired')}} skills={registerSkillsGuard=>userSkills&&<UserSkillsPanel key={sessionVersion} client={userSkills} onCloseGuardChange={registerSkillsGuard}/>} onLogout={()=>void logout().catch(e=>notice(e.message))} onClose={onClose} onCloseGuardChange={registerGuard}/>
  if(page==='users'&&user?.roles.includes('config_admin'))return <section className="workspace-panel"><LocalAdminPanel client={adminClient} presentation="page" currentUserId={user.id} onSessionRotated={proof=>{client.invalidateCsrf();if(proof)void updateSession(proof).catch(e=>notice(e.message))}} onOwnAuthorityChanged={()=>client.endSession('expired')} onClose={onClose} onCloseGuardChange={registerGuard}/></section>
  if(page==='global'&&user?.roles.includes('config_admin'))return <GlobalSettingsPanel client={globalSettings} onClose={onClose} presentation="page" onCloseGuardChange={registerGuard}/>
- if(page==='sources'&&sourceWorkspace)return <SourcesPanel key={sessionVersion} client={sourceWorkspace.sources} resultsClient={sourceWorkspace.results} onClose={onClose} presentation="page" onCloseGuardChange={registerGuard}/>
+ if(page==='sources'&&sourceWorkspace)return <SourcesPanel key={sessionVersion} client={sourceWorkspace.sources} onClose={onClose} presentation="page" onCloseGuardChange={registerGuard}/>
  if(page==='trash'&&sourceWorkspace)return <WorkspaceTrash request={sourceWorkspace.bound.request} onChanged={notifyFilesChanged} onClose={onClose} presentation="page" onCloseGuardChange={registerGuard}/>
  return null
 }
-async function bindHomeAssistant(){if(!sourceWorkspace)throw new Error('登录状态未就绪。');return client.bindSession(sourceWorkspace.bound.proof)}
-function Account({onOpen,recovery}:{onOpen:(page:WorkspacePage)=>void;recovery:boolean}){return <div className="account-entry">{user&&<HomeAssistant key={user.id} bind={bindHomeAssistant} recovery={recovery}/>} {user&&<AccountMenu user={user} onSettings={()=>onOpen('settings')} onTrash={()=>onOpen('trash')} onSources={()=>onOpen('sources')} onGlobalSettings={()=>onOpen('global')} onUsers={()=>onOpen('users')} onLogout={()=>void logout().catch(e=>notice(e.message))}/>}</div>}
+function Account({onOpen}:{onOpen:(page:WorkspacePage)=>void}){return <div className="account-entry">{user&&<AccountMenu user={user} onSettings={()=>onOpen('settings')} onChannels={()=>onOpen('channels')} onTasks={()=>onOpen('tasks')} onTrash={()=>onOpen('trash')} onSources={()=>onOpen('sources')} onGlobalSettings={()=>onOpen('global')} onUsers={()=>onOpen('users')} onLogout={()=>void logout().catch(e=>notice(e.message))}/>}</div>}
 
 function Shell({recovery=false}:{recovery?:boolean}){
- const [message,setMessage]=useState(entryRecoveryNotice),[page,setPage]=useState<WorkspacePage|null>(null)
+ const previewBound=sourceWorkspace?.bound
+ const preparePdfDocument=previewBound?(signal?:AbortSignal)=>{
+  if(!window.dyofficePrepareAiDoc)throw new Error('文档创建入口不可用。')
+  return window.dyofficePrepareAiDoc(signal,previewBound.proof)
+ }:undefined
+ const openExtractedPdf=previewBound?async(receipt:RevisionRef)=>{
+  notifyFilesChanged()
+  try{await openCreatedDocument(documentTabs,capabilities,receipt.fileId,previewBound.request)}catch{throw new Error('PDF 已创建，但打开失败。请从最近文件中打开，不要重复提取。')}
+ }:undefined
+ const [message,setMessage]=useState(entryRecoveryNotice),[page,setPage]=useState<WorkspacePage|null>(()=>new URLSearchParams(location.search).get('panel')==='channels'?'channels':null)
+ const [channelId,setChannelId]=useState<string|undefined>(undefined)
  const [tabs,setTabs]=useState(documentTabs.list())
  const [uploadFiles,setUploadFiles]=useState<File[]|null>(null)
  showUpload=files=>setUploadFiles(files??[])
@@ -227,27 +342,34 @@ function Shell({recovery=false}:{recovery?:boolean}){
  const close=()=>{if(closeGuard.current?.()===false)return;setPage(null)}
  notice=setMessage;showTrash=()=>setPage('trash')
  return <>
-  <AppFrame hideAppMenu hideSingleTabList initialOnboardingSeen={true} homeProps={{capabilities:{localFolders:false,copyPath:false,duplicateFile:false,starredGroups:false,cloudProjects:false,semanticRanking:false,serverFileSort:true},supportedFormats:['docx','xlsx','pptx','pdf'],supportedNewFormats:localNewFormats(capabilities),accountEntry:<Account onOpen={setPage} recovery={recovery}/>,folderDeleteDescription:name=>`仅可删除空文件夹「${name}」。请先移出文件和子文件夹；回收站中仍属于此目录的文件需先恢复并移出。`}} editorContent={<>{documentTabs.renderedDocuments().map(file=><div key={file.id} className="workspace-document" hidden={!tabs.find(tab=>tab.id===file.id)?.active}>{file.src.startsWith('/native-')?<DocumentFrame file={file} registerGuard={documentTabs.setGuard} sessionActive={()=>!recoveryBlocked.current}/>:<DocumentPreview fileId={file.id} name={file.name} format={file.format} request={client.request}/>}</div>)}</>}/>
-  <Modal open={page!==null} title={page?workspacePages[page]:undefined} onCancel={close} footer={null} width={1120} centered destroyOnHidden maskClosable={false} className="workspace-config-modal">
-   {page&&<WorkspacePageContent key={page} page={page} settingsTab={settingsTab} onSettingsTabChange={setSettingsTab} onClose={()=>setPage(null)} onCloseGuardChange={registerGuard}/>}
-  </Modal>
+  <AppFrame hideAppMenu hideSingleTabList initialOnboardingSeen={true} homeProps={{renderHero:({language,...fallback})=><HomeHero key={sourceWorkspace?.bound.proof} fallback={fallback} language={language} request={sourceWorkspace?.bound.request??client.request} csrfToken={sourceWorkspace?.bound.proof??''} enabled={!recovery}/>,capabilities:{localFolders:false,copyPath:false,duplicateFile:false,starredGroups:false,cloudProjects:false,semanticRanking:false,serverFileSort:true},supportedFormats:['docx','xlsx','pptx','pdf'],supportedNewFormats:localNewFormats(capabilities),accountEntry:<Account onOpen={setPage}/>,folderDeleteDescription:name=>`仅可删除空文件夹「${name}」。请先移出文件和子文件夹；回收站中仍属于此目录的文件需先恢复并移出。`}} editorContent={<>{documentTabs.renderedDocuments().map(file=><div key={file.id} className="workspace-document" hidden={!tabs.find(tab=>tab.id===file.id)?.active}>{file.src.startsWith('/native-')?<DocumentFrame file={file} registerGuard={documentTabs.setGuard} onAutoPdfName={updateAutoPdfTab} sessionActive={()=>!recoveryBlocked.current}/>:<DocumentPreview registerGuard={documentTabs.setGuard} fileId={file.id} name={file.name} format={file.format} conversationId={new URL(file.src,location.origin).searchParams.get('channel')??undefined} request={previewBound?.request??client.request} onCreatedPdf={openExtractedPdf} prepareDocument={preparePdfDocument} docxCreationAvailable={capabilities.docx==='editable'} assistantEnabled={assistantVisible}/>}</div>)}</>}/>
+  {page&&<NativeSettingsDialog title={workspacePages[page]} onClose={close}><WorkspacePageContent key={page} page={page} channelId={channelId} onOpenChannel={id=>{setChannelId(id);setPage('channels')}} settingsTab={settingsTab} onSettingsTabChange={setSettingsTab} onClose={()=>setPage(null)} onCloseGuardChange={registerGuard}/></NativeSettingsDialog>}
   {uploadFiles!==null&&<WorkspaceUploadDialog open initialFiles={uploadFiles} upload={upload} onClose={()=>setUploadFiles(null)}/>}
-  {chromeMenu&&<Dropdown open trigger={['click']} onOpenChange={open=>{if(!open)setChromeMenu(null)}} menu={{items:chromeMenu.kind==='tabs'?tabs.map(tab=>({key:tab.id,label:tab.title})):chromeMenu.kind==='tab'?[{key:'close',label:'关闭文档',danger:true}]:chromeMenu.kind==='new'?[...(capabilities.docx==='editable'?[{key:'word',label:'新建 Word 文档'}]:[]),...(capabilities.xlsx==='editable'?[{key:'sheet',label:'新建 Excel 表格'}]:[]),...(capabilities.pptx==='editable'?[{key:'slide',label:'新建 PPT 演示文稿'}]:[]),{key:'import',label:'打开文件…'}]:[{key:'home',label:'首页'},{key:'import',label:'打开文件…'},{key:'settings',label:'个人设置'}],onClick:({key})=>{const target=chromeMenu;setChromeMenu(null);if(target.kind==='tabs')documentTabs.activate(key);else if(key==='close'&&target.id)void documentTabs.close(target.id).catch(e=>notice(e.message));else if(key==='word')void window.aiOffice.newDoc().catch(e=>notice(e.message));else if(key==='sheet')void window.aiOffice.newSheet().catch(e=>notice(e.message));else if(key==='slide')void window.aiOffice.newSlide().catch(e=>notice(e.message));else if(key==='import')void browse().catch(e=>notice(e.message));else if(key==='home')documentTabs.activate('home');else if(key==='settings')setPage('settings')}}}><span style={{position:'fixed',left:Math.min(chromeMenu.x,window.innerWidth-200),top:chromeMenu.y,width:1,height:1}}/></Dropdown>}
+  {chromeMenu&&<Dropdown open trigger={['click']} onOpenChange={open=>{if(!open)setChromeMenu(null)}} menu={{items:chromeMenu.kind==='tabs'?tabs.map(tab=>({key:tab.id,label:tab.title})):chromeMenu.kind==='tab'?[{key:'close',label:'关闭文档',danger:true}]:chromeMenu.kind==='new'?[...(capabilities.docx==='editable'?[{key:'word',label:'新建 Word 文档'}]:[]),...(capabilities.xlsx==='editable'?[{key:'sheet',label:'新建 Excel 表格'}]:[]),...(capabilities.pptx==='editable'?[{key:'slide',label:'新建 PPT 演示文稿'}]:[]),...(capabilities.pdfEditor==='editable'?[{key:'pdf',label:'新建 PDF'}]:[]),{key:'import',label:'打开文件…'}]:[{key:'home',label:'首页'},{key:'import',label:'打开文件…'},{key:'settings',label:'个人设置'}],onClick:({key})=>{const target=chromeMenu;setChromeMenu(null);if(target.kind==='tabs')documentTabs.activate(key);else if(key==='close'&&target.id)void documentTabs.close(target.id).catch(e=>notice(e.message));else if(key==='word')void window.aiOffice.newDoc().catch(e=>notice(e.message));else if(key==='sheet')void window.aiOffice.newSheet().catch(e=>notice(e.message));else if(key==='slide')void window.aiOffice.newSlide().catch(e=>notice(e.message));else if(key==='pdf')void window.aiOffice.newPdf().catch(e=>notice(e.message));else if(key==='import')void browse().catch(e=>notice(e.message));else if(key==='home')documentTabs.activate('home');else if(key==='settings')setPage('settings')}}}><span style={{position:'fixed',left:Math.min(chromeMenu.x,window.innerWidth-200),top:chromeMenu.y,width:1,height:1}}/></Dropdown>}
   {message&&<div className="web-notice" role="alert">{message}<button onClick={()=>setMessage('')}>关闭</button></div>}
  </>
 }
 
 function Login({done}:{done:()=>void}){
  const [error,setError]=useState(''),[pending,setPending]=useState(false),[signed,setSigned]=useState(false),[action,setAction]=useState(false)
- if(action&&!signed)return <main className="dy-login"><Card className="dy-login-card"><img className="dy-login-logo" src={logo} alt="DyOffice"/><PasswordActionForm onClose={()=>{setAction(false);client.invalidateCsrf()}}/></Card></main>
- return <main className="dy-login"><Card className="dy-login-card"><img className="dy-login-logo" src={logo} alt="DyOffice"/><Typography.Title level={3}>登录你的工作区</Typography.Title><Typography.Paragraph type="secondary">统一管理文档、数据与个人工作。</Typography.Paragraph>
- {error&&<Alert type="error" showIcon title={error} style={{marginBottom:20}}/>}
- <Form layout="vertical" onFinish={async(values:{username:string;password:string})=>{if(pending)return;setPending(true);setError('');try{if(!signed){await client.login(values.username,values.password);setSigned(true)}await restore();done()}catch(err){const status=(err as {status?:number}).status;setError(status===401?'用户名或密码不正确，请核对后重试。':status===403?'登录请求被拒绝，请确认使用 http://localhost:3080 并刷新重试。':status===429?'登录尝试过于频繁，请稍后再试。':(err as Error).message)}finally{setPending(false)}}}>
+ if(action&&!signed)return <main className="dy-login dy-login-signin dy-login-password-action"><Card className="dy-login-card"><img className="dy-login-logo" src={logo} alt="DyOffice"/><PasswordActionForm onClose={()=>{setAction(false);client.invalidateCsrf()}}/></Card></main>
+ return <main className="dy-login dy-login-signin"><Card className="dy-login-card">
+ <header className="dy-login-heading">
+  <img className="dy-login-logo" src={logo} alt="DyOffice"/>
+  <h1>登录你的工作区</h1>
+  <p>统一管理文档、数据与个人工作。</p>
+ </header>
+ <div className="dy-login-fields">
+ {error&&<Alert type="error" showIcon title={error} className="dy-login-error"/>}
+ <Form layout="vertical" onFinish={async(values:{username:string;password:string})=>{if(pending)return;setPending(true);setError('');try{if(!signed){await client.login(values.username,values.password);setSigned(true)}await restore();done()}catch(err){const status=(err as {status?:number}).status;setError(status===401?'用户名或密码不正确，请核对后重试。':status===403?'登录请求被拒绝，请从工作区入口打开页面后重试。':status===429?'登录尝试过于频繁，请稍后再试。':(err as Error).message)}finally{setPending(false)}}}>
  {!signed&&<><Form.Item label="用户名" name="username" rules={[{required:true,message:'请输入用户名'}]}><Input aria-label="用户名" autoComplete="username" placeholder="请输入用户名" disabled={pending}/></Form.Item><Form.Item label="密码" name="password" rules={[{required:true,message:'请输入密码'}]}><Input.Password aria-label="密码" autoComplete="current-password" placeholder="请输入密码" disabled={pending}/></Form.Item></>}
  <Button type="primary" htmlType="submit" block loading={pending} aria-label={signed?'重新加载工作区':'登录'} aria-busy={pending}>{signed?'重新加载工作区':'登录'}</Button>
  </Form>
- <Button type="link" block onClick={()=>setAction(true)} disabled={pending}>激活或重置密码</Button>
- <Typography.Paragraph type="secondary" className="dy-login-footer">你的文档与数据，仅在授权范围内访问。</Typography.Paragraph>
+ <div className="dy-login-support">
+  <Button className="dy-login-reset" type="link" onClick={()=>setAction(true)} disabled={pending || signed}>设置密码</Button>
+  <Typography.Paragraph type="secondary" className="dy-login-footer">你的文档与数据，仅在授权范围内访问。</Typography.Paragraph>
+ </div>
+ </div>
  </Card></main>
 }
 
@@ -256,7 +378,7 @@ function Root(){
  useEffect(()=>client.onSessionEnded(reason=>{if(user)setRecovery(current=>current??reason)}),[])
  useEffect(()=>{if(recovery)return hideAccountRecoveryPortals()},[recovery])
  useEffect(()=>{void restore().then(()=>setState('ready')).catch(e=>{if(e.status===401)setState('login');else{setError(e.message);setState('error')}})},[])
- if(state==='loading')return <main className="web-login">正在加载个人工作区…</main>
+ if(state==='loading')return <WorkspaceLoading/>
  if(state==='error')return <main className="web-login" role="alert"><p>{error}</p><button onClick={()=>location.reload()}>重试</button><button onClick={()=>void logout().catch(e=>setError(e.message))}>退出登录</button></main>
  return state==='ready'?<LocaleProvider initial={initialLanguage} onError={error=>notice(error instanceof Error?error.message:String(error))}>
   <div inert={recovery?true:undefined} style={{display:recovery?'none':'contents'}}><Shell recovery={!!recovery}/></div>

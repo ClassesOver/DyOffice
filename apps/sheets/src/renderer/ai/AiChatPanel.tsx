@@ -1,11 +1,11 @@
+import { AssistantConversation, useAiPanelResize } from '@genoffice/ui'
 import { AssistantParticipants, DelegatedAgentResultCard, type AssistantParticipant, type DelegatedAgentResult } from '@genoffice/ui'
 import {
-  aiPanelWidthAtPointer,
   AiPanelSideButton,
   AiModelPicker,
   type AiModelPickerBridge,
 } from '@genoffice/ui'
-import React, { useEffect, useRef, useState } from 'react'
+import React, { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import {
   AiComposer,
   AiQueueStrip,
@@ -22,20 +22,14 @@ import type { ChangePlan } from '@genoffice/xlsx-gateway/domain/workbook.types'
 import { ATTACHMENT_IMAGE_EXTS, type AttachmentMeta } from '../../shared/desktop-api'
 import {
   AttachmentCardIcon,
-  clampAiPanelWidth,
   fileImageIcon,
   formatAttachmentSize,
-  loadAiPanelWidth,
-  saveAiPanelWidth,
   SentAttachments,
   truncateCardName,
 } from '@genoffice/ui'
 import { useI18n, type TFunc } from '../i18n/locale'
 import { AiSkillChips, AiSkillsMenu, createFileNav, Markdown } from '@genoffice/ui'
 import { SHEET_NAV_SCHEME } from './sheet-nav'
-import sendEnterOn from '../assets/send-enter-on.png'
-import sendEnterOff from '../assets/send-enter-off.png'
-import sendStop from '../assets/send-stop.png'
 
 export function scopeLabel(range: string, columns: readonly string[] | null, t: TFunc): string {
   if (columns?.length === 1) return t('aiScopeColumn', { name: columns[0] ?? '' })
@@ -73,11 +67,13 @@ export interface AiToolChip {
 }
 
 export interface AiChatMessage {
+  sender?: 'dsh'
   readonly role: 'user' | 'assistant'
   readonly text: string
   readonly tools: readonly AiToolChip[]
   readonly streaming?: boolean | undefined
   readonly isError?: boolean | undefined
+  readonly error?: string | undefined
   /** the run failed and this user message was rolled back out of the model context */
   readonly undelivered?: boolean | undefined
   /** this user message was written to the project-store chat log (Retry re-persists when it wasn't) */
@@ -106,6 +102,7 @@ const MODEL_BRIDGE: AiModelPickerBridge = {
 
 export function AiChatPanel({
   modelPicker,
+  assistantWorkspace,
   assistantAgents,
   onManageAgents,
   isOpen,
@@ -140,6 +137,7 @@ export function AiChatPanel({
   onCollapse,
 }: {
   readonly isOpen: boolean
+  readonly assistantWorkspace?: import('@genoffice/ui').AssistantWorkspace | undefined
   readonly modelPicker?: React.ReactNode
   readonly assistantAgents?: readonly AssistantParticipant[] | undefined
   readonly onManageAgents?: (() => void) | undefined
@@ -207,10 +205,11 @@ export function AiChatPanel({
   const isRtl = lang === 'ar' || lang === 'he'
   const chatRef = useRef<HTMLDivElement | null>(null)
   const inputRef = useRef<HTMLTextAreaElement | null>(null)
+  const promptRef = useRef(prompt)
+  promptRef.current = prompt
   const stickToBottomRef = useRef(true)
   const [dragOver, setDragOver] = useState(false)
   const asideRef = useRef<HTMLElement | null>(null)
-  const [resizing, setResizing] = useState(false)
   /** data-URL previews for image attachments, keyed by path (Genspark composer thumbnails) */
   const [attachmentPreviews, setAttachmentPreviews] = useState<Record<string, string>>({})
   /** image paths with a read already issued — one readAttachmentImage per attach, even while pending */
@@ -271,34 +270,11 @@ export function AiChatPanel({
     if (aiBusy) busyStartRef.current = Date.now()
   }, [aiBusy])
 
-  // preferred = the user's chosen width (the only value persisted); the CSS var
-  // gets the clamped display width. Deriving the display width from the
-  // preference means a transiently small window never permanently shrinks the panel.
-  const preferredWidthRef = useRef<number | null>(null)
-
-  // Restore the persisted panel width (the grid column tracks --copilot-width on .sheet-body)
-  useEffect(() => {
-    if (!isOpen) return
-    const saved = loadAiPanelWidth(PANEL_WIDTH_KEY)
-    if (saved === null) return
-    preferredWidthRef.current = saved
-    const area = asideRef.current?.closest('.sheet-body') as HTMLElement | null
-    area?.style.setProperty('--copilot-width', `${clampAiPanelWidth(saved)}px`)
-  }, [isOpen])
-
-  // Re-derive the display width on window resize (max is 60% of the window);
-  // growing the window back restores the preferred width
-  useEffect(() => {
-    if (!isOpen) return
-    const onResize = (): void => {
-      const area = asideRef.current?.closest('.sheet-body') as HTMLElement | null
-      const preferred = preferredWidthRef.current
-      if (!area || preferred === null) return
-      area.style.setProperty('--copilot-width', `${clampAiPanelWidth(preferred)}px`)
-    }
-    window.addEventListener('resize', onResize)
-    return () => window.removeEventListener('resize', onResize)
-  }, [isOpen])
+  const { width, resizing, handle } = useAiPanelResize(PANEL_WIDTH_KEY, lang, isOpen)
+  useLayoutEffect(() => {
+    const area = asideRef.current?.closest<HTMLElement>('.sheet-body')
+    area?.style.setProperty('--copilot-width', `${width}px`)
+  }, [width, isOpen])
 
   // follow the stream, but stop yanking once the user scrolls up to read
   useEffect(() => {
@@ -306,49 +282,6 @@ export function AiChatPanel({
       chatRef.current?.scrollTo({ top: chatRef.current.scrollHeight })
     }
   }, [chat, preview])
-
-  const resizeCleanupRef = useRef<(() => void) | null>(null)
-  useEffect(() => () => resizeCleanupRef.current?.(), [])
-
-  /** Drag the inner panel edge to resize from the selected window side. */
-  const startResize = (e: React.PointerEvent<HTMLDivElement>): void => {
-    e.preventDefault()
-    const area = asideRef.current?.closest('.sheet-body') as HTMLElement | null
-    if (!area) return
-    const resizer = e.currentTarget
-    setResizing(true)
-    area.style.transition = 'none'
-    document.body.style.cursor = 'col-resize'
-    document.body.style.userSelect = 'none'
-    let width = 0
-    const onMove = (ev: PointerEvent): void => {
-      width = clampAiPanelWidth(aiPanelWidthAtPointer(ev.clientX))
-      preferredWidthRef.current = width
-      area.style.setProperty('--copilot-width', `${width}px`)
-    }
-    let done = false
-    const cleanup = (): void => {
-      if (done) return
-      done = true
-      resizeCleanupRef.current = null
-      window.removeEventListener('pointermove', onMove)
-      window.removeEventListener('pointerup', cleanup)
-      window.removeEventListener('pointercancel', cleanup)
-      resizer.removeEventListener('lostpointercapture', cleanup)
-      area.style.transition = ''
-      document.body.style.cursor = ''
-      document.body.style.userSelect = ''
-      setResizing(false)
-      if (width > 0) saveAiPanelWidth(PANEL_WIDTH_KEY, width)
-    }
-    resizeCleanupRef.current = cleanup
-    window.addEventListener('pointermove', onMove)
-    window.addEventListener('pointerup', cleanup)
-    window.addEventListener('pointercancel', cleanup)
-    // lostpointercapture also fires if the resizer is unmounted mid-drag (panel collapse)
-    resizer.addEventListener('lostpointercapture', cleanup)
-    resizer.setPointerCapture(e.pointerId)
-  }
 
   const onChatScroll = (): void => {
     const el = chatRef.current
@@ -385,7 +318,13 @@ export function AiChatPanel({
   const listSkillsForMenu = async () =>
     (await window.desktopApi.skillsList()).map(({ name, description }) => ({ name, description }))
 
-  const send = (): void => {
+  const send = async (): Promise<void> => {
+    if (assistantWorkspace && !assistantWorkspace.isOffice()) {
+      const draft = prompt
+      const result = await assistantWorkspace.submit(draft.trim(), scopeRange !== null || attachments.length > 0 || attachedSkills.length > 0)
+      if (result === 'sent' && promptRef.current === draft) onPromptChange('')
+      return
+    }
     if (!canSend) return
     stickToBottomRef.current = true
     onSend()
@@ -393,6 +332,7 @@ export function AiChatPanel({
 
   /** Enter while a reply runs: the draft joins the queue above the composer */
   const enqueueDraft = (): void => {
+    if (assistantWorkspace && !assistantWorkspace.isOffice()) { void send(); return }
     const text = prompt.trim()
     if (!text) return
     // the queued message owns the composer attachments; the pump hands them to onSend
@@ -445,17 +385,11 @@ export function AiChatPanel({
       }}
       onDrop={onDrop}
     >
-      <div
-        className="ai-panel-resizer"
-        onPointerDown={startResize}
-        role="separator"
-        aria-orientation="vertical"
-        aria-label={t('aiGensparkAccount')}
-      />
+      <div {...handle} />
       <header className="ai-panel-header">
         <span className="ai-panel-title">
           <GensparkMark size={22} />
-          Genspark
+          AI 助手
         </span>
         <div className="ai-panel-header-actions">
           {!modelPicker && <AiPanelSideButton
@@ -486,9 +420,11 @@ export function AiChatPanel({
         </div>
       </header>
 
-      {assistantAgents && <AssistantParticipants agents={assistantAgents} lang={lang} onManageAgents={onManageAgents} />}
+      {assistantWorkspace?.panel}
+      {!assistantWorkspace && assistantAgents && <AssistantParticipants agents={assistantAgents} lang={lang} onManageAgents={onManageAgents} />}
 
       <div className="ai-chat" ref={chatRef} onScroll={onChatScroll}>
+        <AssistantConversation workspace={assistantWorkspace}>
         {/* Past conversation (read-only transcript), shown continuously with the current turn */}
         {historicChat.length > 0 && (
           <>
@@ -525,6 +461,7 @@ export function AiChatPanel({
         {chat.map((entry, index) => (
           <div
             key={index}
+            data-sender={entry.sender}
             className={`ai-msg ai-msg-${entry.role}${entry.isError ? ' ai-msg-error' : ''}${entry.role === 'assistant' && entry.streaming ? ' ai-msg-streaming' : ''}`}
           >
             {entry.role === 'user' ? (
@@ -570,6 +507,7 @@ export function AiChatPanel({
                     </span>
                   )
                 )}
+                {entry.error && <div>{entry.error}</div>}
                 {entry.autoApplied && (
                   <div className="ai-auto-applied">
                     <span className="ai-auto-applied-text">
@@ -649,6 +587,7 @@ export function AiChatPanel({
             ))}
           </section>
         )}
+        </AssistantConversation>
       </div>
 
       <div className="ai-composer">
@@ -774,7 +713,7 @@ export function AiChatPanel({
           }
           value={prompt}
           busy={aiBusy}
-          placeholder={t(hasContent ? 'aiComposerPlaceholder' : 'aiComposerPlaceholderBuild')}
+          placeholder={assistantWorkspace ? (lang === 'zh' ? '描述你想完成的事…' : 'Describe what you want done…') : t(hasContent ? 'aiComposerPlaceholder' : 'aiComposerPlaceholderBuild')}
           hintIdle={t('aiHintIdle')}
           hintBusy={t('aiHintBusy')}
           hintIdleTitle={t('aiHintIdleTitle')}
@@ -782,9 +721,6 @@ export function AiChatPanel({
           stopLabel={t('aiStop')}
           ariaLabel={t('aiInstructionAria')}
           iconOnly
-          sendIconEnabled={<img src={sendEnterOn} alt="" aria-hidden />}
-          sendIconDisabled={<img src={sendEnterOff} alt="" aria-hidden />}
-          stopIcon={<img src={sendStop} alt="" aria-hidden />}
           footerStart={
             <>
               {modelPicker ?? <AiModelPicker bridge={MODEL_BRIDGE} lang={lang} />}
@@ -794,7 +730,7 @@ export function AiChatPanel({
                 listSkills={listSkillsForMenu}
                 selected={attachedSkills}
                 onToggle={onToggleSkill}
-                onAddFile={modelPicker ? undefined : onPickAttachments}
+                onAddFile={typeof window.desktopApi?.pickAttachments === 'function' ? onPickAttachments : undefined}
                 onManage={() => void window.desktopApi.openSkillsSettings?.().catch(() => {})}
               />
             </>
@@ -806,7 +742,7 @@ export function AiChatPanel({
             msgQueue.hold()
             onStop()
           }}
-          onPasteFiles={modelPicker ? undefined : onPasteFiles}
+          onPasteFiles={typeof window.desktopApi?.addAttachmentPaths === 'function' ? onPasteFiles : undefined}
         />
       </div>
     </aside>

@@ -236,6 +236,17 @@ export function refreshPivotTables(ctx: PivotActionContext, sheetId: string): nu
   }
   const target = workbook.getSheetBySheetId(sheetId)
   if (!target) throw new Error(`Unknown sheet: ${sheetId}`)
+  // Check the whole batch before an earlier pivot can change the workbook.
+  for (const pivot of sheetMeta.pivotTables) {
+    const definition = state.pivotDefinitions.get(pivot.path)
+    if (!definition) throw new Error(t('appPivotDefNotLoaded'))
+    if (definition.unsupported.length > 0) {
+      throw new Error(t('appPivotEditUnsupported', { reasons: definition.unsupported.join('; ') }))
+    }
+    if (!workbook.getSheets().some((sheet) => sheet.getSheetName() === definition.sourceSheet)) {
+      throw new Error(t('appPivotSourceSheetMissing', { name: definition.sourceSheet }))
+    }
+  }
   let refreshed = 0
   for (const pivot of sheetMeta.pivotTables) {
     const definition = state.pivotDefinitions.get(pivot.path)

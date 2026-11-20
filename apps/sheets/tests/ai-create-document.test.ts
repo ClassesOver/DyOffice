@@ -83,6 +83,13 @@ describe('create_document tool (executor)', () => {
     })
   })
 
+  it('reports a Web CSV export as downloaded instead of claiming it opened in a tab',async()=>{
+    const createDocument=vi.fn(async():Promise<CreateDocumentToolOutcome>=>({ok:true,name:'Sales.csv',downloaded:true}))
+    const result=await exec({type:'csv'},createDocument)
+    expect(result.output).toContain('Downloaded Sales.csv')
+    expect(result.output).not.toContain('opened in a new tab')
+  })
+
   it('appends the formula-loss note when the sheet has formulas', async () => {
     const createDocument = vi.fn(async (): Promise<CreateDocumentToolOutcome> => ({
       ok: true,

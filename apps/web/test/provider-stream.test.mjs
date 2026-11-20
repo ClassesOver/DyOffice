@@ -40,6 +40,27 @@ test('disabled permit, provider failure and output quota end with one redacted e
   assert.equal((r.body.match(/event: error/g)||[]).length,1);assert.equal((r.body.match(/event: done/g)||[]).length,1);assert.equal(r.body.includes('private key'),false)
  }
 })
+test('Office reports the turn deadline after partial text without redispatching the model',async t=>{
+ let attempts=0
+ const {app}=await fixture(t,{stream:async function*(_permit,_request,signal){
+  attempts++
+  yield {type:'delta',text:'partial reply'}
+  await new Promise(resolve=>signal.addEventListener('abort',resolve,{once:true}))
+  throw Error('private upstream detail')
+ }})
+ const r=await app.inject({method:'POST',url:'/api/v1/ai/turns',headers,payload:request})
+ assert.equal(r.statusCode,200)
+ const frames=r.body.trim().split('\n\n').map(frame=>{
+  const [event,data]=frame.split('\n')
+  return [event.slice(7),JSON.parse(data.slice(6))]
+ })
+ assert.deepEqual(frames.map(([event])=>event),['delta','error','done'])
+ assert.equal(frames[0][1].text,'partial reply')
+ assert.equal(frames[1][1].reason,'AI_TURN_TIMED_OUT')
+ assert.match(frames[1][1].message,/timed out/i)
+ assert.doesNotMatch(r.body,/private upstream detail/)
+ assert.equal(attempts,1)
+})
 test('cancel route rejects request bodies and cannot bypass CSRF',async t=>{
  const {app}=await fixture(t)
  assert.equal((await app.inject({method:'POST',url:'/api/v1/ai/turns/turn/cancel',headers,payload:{}})).statusCode,400)

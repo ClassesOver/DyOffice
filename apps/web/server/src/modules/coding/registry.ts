@@ -1,6 +1,7 @@
-import type {CodingTask,CodingResult,HarnessDescriptor} from '../../../../../../packages/agent-core/src/coding-skill.ts'
+import type {CodingTask,CodingResult,HarnessDescriptor,CodingProgress} from '../../../../../../packages/agent-core/src/coding-skill.ts'
 
 export interface HarnessRunContext {
+  onProgress?:(event:CodingProgress)=>void
   modelId:string
   openModel?:()=>Promise<{baseUrl:string;apiKey:string;modelId:string;close():Promise<void>}>
   data?:{baseUrl:string;grant:import('../../../../../../packages/web-contracts/src/harness-data.ts').HarnessDataGrant}

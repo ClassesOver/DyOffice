@@ -2455,7 +2455,8 @@ export const workbookSaveRequestSchema = z
       request.pivotAdditions.length > 0 ||
       request.sparklineAdditions.length > 0 ||
       request.slicerState !== null ||
-      (request.redactionStates?.length ?? 0) > 0 ||
+      request.redactionStates !== null ||
+      request.formulaValues.length > 0 ||
       request.externalLinkOps !== null,
     { message: 'A save needs at least one edit.' },
   )
@@ -3322,6 +3323,7 @@ export const workbookCreateDocumentResultSchema = z
   .object({
     ok: z.boolean(),
     path: z.string().min(1).optional(),
+    downloaded: z.boolean().optional(),
     error: z.string().optional(),
   })
   .strict()

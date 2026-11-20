@@ -4,6 +4,13 @@ import { randomBytes } from 'node:crypto'
 import { createCredentialVault } from '../../server/src/modules/sources/vault.ts'
 import { validateReadOnlySql, validateReadOnlyGrants } from '../../server/src/modules/sources/sql-policy.ts'
 import { createSourceEgressPolicy } from '../../server/src/security/egress.ts'
+import { createSourceService } from '../../server/src/modules/sources/service.ts'
+
+test('invalid configured egress targets cannot fall back to unset policy', () => {
+  for (const egressTargets of [null, false, 0]) {
+    assert.throws(() => createSourceService({transactions: {}, egressTargets}), /Invalid source egress configuration/)
+  }
+})
 
 const scope = { deploymentId: 'd', ownerId: 'u', sourceId: 's', reference: 'r', revision: 1 }
 test('credential vault binds ciphertext to source/revision and retains old decryption keys', () => {
@@ -39,6 +46,16 @@ test('PostgreSQL serialization qualifies ordinary tables while preserving CTE re
   assert.doesNotMatch(sql, /"public"\."x"/)
 })
 
+test('PostgreSQL accepts a monthly sum with typed date bounds within the configured scope', () => {
+  const scope = { defaultSchema: 'public', allowedSchemas: ['sales'], allowedTables: ['sales.orders'] }
+  const sql = "SELECT to_char(date_trunc('month', paid_at), 'YYYY-MM') AS month, sum(paid_amount) AS total FROM sales.orders WHERE paid_at >= DATE '2026-01-01' AND paid_at < DATE '2026-03-01' GROUP BY 1 ORDER BY 1"
+  const normalized = validateReadOnlySql(sql, 'postgres', scope)
+  assert.match(normalized, /FROM "sales"\."orders"/)
+  assert.match(normalized, /DATE '2026-01-01'.*DATE '2026-03-01'/)
+  assert.throws(() => validateReadOnlySql(sql.replace('sales.orders', 'sales.other'), 'postgres', scope))
+  assert.throws(() => validateReadOnlySql(sql.replace('to_char', 'public.to_char'), 'postgres', scope))
+})
+
 test('MySQL/StarRocks grants attest only explicit SELECT grants on the approved database', () => {
   for (const grants of [["GRANT USAGE ON *.* TO 'reader'@'%'", "GRANT SELECT ON `sales`.* TO 'reader'@'%'"]]) assert.doesNotThrow(() => validateReadOnlyGrants(grants, 'sales'))
   for (const grants of [
@@ -63,4 +80,14 @@ test('source egress requires exact approved endpoint/identity and rejects broad 
   const wrong = createSourceEgressPolicy([{ ...target, addresses: ['192.0.2.1'] }])
   await assert.rejects(wrong.sql('postgres', 'postgresql://reader:s@localhost:5432/sales'))
   await assert.rejects(createSourceEgressPolicy([]).sql('postgres', 'postgresql://reader:s@127.0.0.1:5432/sales'))
+})
+
+test('ordinary database transport is the default without a configured database target; pinned TLS is still honored',async()=>{
+  for (const [kind,scheme,port] of [['postgres','postgresql',5432],['mysql','mysql',3306],['starrocks','starrocks',9030]]) {
+    const dsn=scheme+'://reader:test-only@127.0.0.1:'+port+'/sales'
+    const target={kind,endpoint:scheme+'://127.0.0.1:'+port,addresses:['127.0.0.1'],username:'reader',database:'sales',allowInsecure:false}
+    assert.equal((await createSourceEgressPolicy([],{allowUnlistedSql:true}).sql(kind,dsn)).tls,false)
+    assert.equal((await createSourceEgressPolicy([target],{allowUnlistedSql:true}).sql(kind,dsn)).tls,true)
+    await assert.rejects(createSourceEgressPolicy([target],{allowUnlistedSql:true}).sql(kind,dsn.replace('/sales','/other')))
+  }
 })

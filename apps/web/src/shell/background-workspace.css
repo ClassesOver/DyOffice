@@ -1,0 +1,89 @@
+.background-workspace button{border:1px solid var(--line,#dedede);border-radius:8px;padding:8px 12px;background:var(--bg,#fff);color:inherit;cursor:pointer}
+.background-workspace{padding:20px;color:var(--text,#262626);min-height:360px}
+.background-workspace header,.background-row{display:flex;align-items:center;justify-content:space-between;gap:12px}
+.background-workspace h2{margin:0}.background-workspace p{line-height:1.6}
+.background-workspace button:disabled{opacity:.5;cursor:default}
+.background-workspace button:focus-visible,.background-workspace select:focus-visible{outline:2px solid #6875ef;outline-offset:2px}
+.background-workspace select{padding:8px;border-radius:8px;max-width:100%}
+.background-actions{display:flex;flex-wrap:wrap;gap:8px}
+.background-columns{display:grid;grid-template-columns:minmax(180px,1fr) minmax(0,3fr);gap:24px;margin-top:20px}
+.background-columns nav{display:flex;flex-direction:column;gap:8px}
+.background-columns nav button{text-align:start}.background-columns nav small{display:block;margin-top:6px}
+.background-columns nav button[aria-current=true]{border-color:#6875ef;background:#6875ef12}
+.background-columns article{min-width:0}.background-row{padding:8px 0;flex-wrap:wrap}
+.background-invitation{padding:12px;background:#6875ef0d;margin-top:12px;border-radius:8px}
+.background-workspace code{overflow-wrap:anywhere}.background-invitation code{display:block;margin-bottom:10px}
+.background-task-list{display:grid;gap:12px;margin-top:16px}.background-task-list article,.background-task-detail{padding:16px;border:1px solid var(--line,#dedede);border-radius:10px;margin-top:12px}
+.background-result{white-space:pre-wrap}.background-workspace [role=alert]{color:#b42318}
+@media(max-width:640px){.background-columns{grid-template-columns:1fr}.background-workspace header{align-items:flex-start;flex-direction:column}}
+
+.background-service-address{display:flex;flex-direction:column;gap:6px;margin:12px 0}
+.background-service-address input,.background-invitation textarea{box-sizing:border-box;width:100%;min-width:0;padding:8px;border:1px solid var(--line,#dedede);border-radius:6px;background:var(--bg,#fff);color:inherit}
+.background-invitation details{margin-top:12px}.background-invitation textarea{margin-top:8px;resize:vertical}.background-invitation li{margin:6px 0}
+.personal-settings-b .background-workspace{padding:0}
+
+.background-workspace{color:var(--text-primary,#262626);font-size:13px}
+.background-workspace button{font:inherit;min-height:34px;border-color:var(--border-subtle,#dedede);background:var(--surface,#fff);transition:background .15s,border-color .15s}
+.background-workspace button:not(:disabled):hover{border-color:var(--accent,#5268dd);background:var(--accent-soft,#eef1ff)}
+.background-workspace :is(input,textarea,select){font:inherit;color:inherit;background:var(--surface,#fff);border-color:var(--border-subtle,#dedede)}
+.background-workspace :is(button,input,textarea,select):focus-visible{outline:2px solid var(--accent,#5268dd);outline-offset:3px}
+.background-workspace header{padding-bottom:16px;border-bottom:1px solid var(--border-subtle,#e5e7eb)}
+.background-workspace header p{color:var(--text-secondary,#626a78);margin:8px 0 0;font-size:12px}
+.background-workspace h2{font-size:18px}.background-workspace h3{font-size:15px;margin:0 0 12px}
+.background-columns{grid-template-columns:minmax(150px,1fr) minmax(0,3fr);gap:16px}
+.background-columns nav{padding:12px;background:var(--surface-subtle,#f6f7fa);border-radius:10px;align-self:start;border:1px solid var(--border-subtle,#e5e7eb)}
+.background-columns nav small{color:var(--text-secondary,#626a78);font-size:11px;line-height:1.6}
+.background-columns nav button[aria-current=true]{border-color:var(--accent,#5268dd);background:var(--accent-soft,#eef1ff)}
+.background-columns article{padding:20px;border:1px solid var(--border-subtle,#e5e7eb);border-radius:12px;background:var(--surface,#fff)}
+.background-columns article>h4{padding-top:20px;margin:22px 0 12px;border-top:1px solid var(--border-subtle,#e5e7eb);font-size:13px}
+.background-invitation{padding:16px;background:var(--accent-soft,#eef1ff);border:1px solid var(--border-subtle,#dde3f5);border-radius:10px}
+.background-invitation h4{margin:0 0 12px;font-size:14px}.background-invitation ol{padding-left:20px;line-height:1.7}
+.background-invitation summary{cursor:pointer;color:var(--accent,#5268dd);font-size:12px}
+.background-invitation textarea{font-family:ui-monospace,monospace;font-size:12px;line-height:1.7}
+.background-task-list article,.background-task-detail{border-color:var(--border-subtle,#e5e7eb);background:var(--surface,#fff);padding:20px}
+.background-task-list small{color:var(--text-secondary,#626a78)}
+.background-result{padding:16px;background:var(--surface-subtle,#f6f7fa);border-radius:8px;line-height:1.8}
+.personal-settings-b .background-workspace>header h2{display:none}
+.personal-settings-b .background-workspace>header{border:0;padding-bottom:4px}
+@media(max-width:640px){.background-columns{grid-template-columns:1fr}.background-columns article,.background-task-list article,.background-task-detail{padding:14px}.background-invitation{padding:12px}}
+
+.personal-settings-b .background-workspace button{height:36px;padding:0 14px;border-radius:7px;font-size:12px}
+.personal-settings-b .background-columns article{padding:0 0 0 16px;border:0;border-left:1px solid var(--border-subtle);border-radius:0}
+.personal-settings-b .background-invitation,.personal-settings-b .background-task-list article,.personal-settings-b .background-task-detail{border-radius:8px}
+@media(max-width:640px){.personal-settings-b .background-columns article{padding:16px 0 0;border-left:0;border-top:1px solid var(--border-subtle)}}
+
+.workspace-config-modal .background-workspace{padding:24px 34px}
+.workspace-config-modal .background-workspace>header h2{display:none}
+.background-workspace button.background-primary{background:var(--accent,#1677ff);border-color:var(--accent,#1677ff);color:#fff}
+.background-workspace button.background-primary:not(:disabled):hover{filter:brightness(.94);background:var(--accent,#1677ff)}
+.background-filter{display:flex;align-items:center;gap:12px;margin-top:16px;padding:10px 12px;border:1px solid var(--border-subtle,#e5e7eb);border-radius:8px;background:var(--surface-subtle,#f6f7fa)}
+.background-state{padding:3px 9px;border-radius:4px;font-size:12px;background:var(--surface-subtle,#f6f7fa);color:var(--text-secondary,#626a78)}
+.background-state[data-state=succeeded]{background:color-mix(in srgb,var(--success,#38976a) 10%,transparent);color:var(--success,#278250)}
+.background-state[data-state=running]{background:var(--accent-soft,#eef1ff);color:var(--accent,#5268dd)}
+.background-state[data-state=failed],.background-state[data-state=unknown_outcome]{color:var(--danger,#b42318)}
+.background-empty{padding:40px 16px;text-align:center;color:var(--text-secondary,#626a78);border:1px dashed var(--border-subtle,#e5e7eb);border-radius:8px}
+@media(max-width:640px){.workspace-config-modal .background-workspace{padding:16px}.background-filter{flex-wrap:wrap}.background-actions button{min-height:36px}}
+.workspace-config-modal .background-workspace button{border-radius:7px;min-height:36px;font-size:12px}
+.workspace-config-modal .background-workspace>header{padding-bottom:16px}
+.background-task-detail{scroll-margin-top:16px;overflow-wrap:anywhere}
+.background-task-detail:focus{outline:2px solid var(--accent,#1677ff);outline-offset:3px}
+.background-task-list article>p,.background-row strong{overflow-wrap:anywhere}
+.background-channel-back{display:none}
+@media(max-width:640px){
+ .background-columns:not(.background-channel-detail-open)>article{display:none}
+ .background-channel-detail-open>nav{display:none}
+ .background-workspace .background-channel-back{display:inline-flex;align-items:center;margin-bottom:16px}
+ .background-channel-detail-open{grid-template-columns:minmax(0,1fr)}
+}
+.background-columns nav button{overflow-wrap:anywhere}
+
+.background-task-detail>.background-actions{position:sticky;top:0;z-index:1;padding:10px 0;background:var(--surface,#fff);border-bottom:1px solid var(--border-subtle,#e5e7eb)}
+
+.background-workspace button.background-danger{color:var(--danger,#b42318)}
+.background-workspace button.background-danger:not(:disabled):hover{border-color:var(--danger,#b42318);background:var(--surface-subtle)}
+
+.background-token-history,.background-token-value{margin-block:12px;padding:12px 16px;border:1px solid var(--border-subtle);border-radius:8px;background:var(--surface)}
+.background-token-history>summary{cursor:pointer;font-weight:600}
+.background-token-history small{display:block;margin-top:4px;color:var(--text-secondary)}
+.background-token-history .background-row{margin-top:8px;border-top:1px solid var(--border-subtle)}
+.background-token-value .background-service-address{margin-top:0}

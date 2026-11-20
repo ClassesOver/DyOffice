@@ -48,7 +48,8 @@ test('single-connection real PG + scoped secret + mock pinned HTTPS + SSE parser
  assert.equal(Number((await f.ownerPool.query('SELECT available_units FROM provider_budget_accounts')).rows[0].available_units),90)
 })
 test('truncated upstream stays unknown and never exposes completed tool candidate or retries',async t=>{
- const n=network(t,validChunks.slice(0,2)),f=await fixture(t),events=[]
+ // A complete finish frame followed by a clean EOF is valid, but an unfinished frame is not.
+ const n=network(t,[validChunks[0],validChunks[1].subarray(0,-1)]),f=await fixture(t),events=[]
  await assert.rejects(f.appPipeline.turns.run(f.input,async e=>events.push(e)),/AI turn unavailable/);await idle(f)
  assert.equal(events.some(e=>e.type==='tool_call'),false)
  assert.equal((await f.budget.status(f.adminSigned.token,f.binding(n.wire))).state,'unknown')

@@ -1,0 +1,14 @@
+.web-ai-naming-dialog {
+  width: min(420px, calc(100% - 32px)); box-sizing: border-box; padding: 22px;
+  border: 1px solid var(--border); border-radius: 12px;
+  background: var(--surface); color: var(--text); box-shadow: var(--shadow-modal-strong);
+}
+.web-ai-naming-dialog::backdrop { background: rgb(0 0 0 / 27%); }
+.web-ai-naming-dialog h2 { margin: 0 0 16px; font-size: 17px; }
+.web-ai-naming-dialog label { display: grid; gap: 6px; }
+.web-ai-naming-dialog input, .web-ai-naming-actions button {
+  min-width: 0; padding: 7px 10px; border: 1px solid var(--border-strong);
+  border-radius: 6px; background: var(--surface); color: inherit; font: inherit;
+}
+.web-ai-naming-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
+.web-ai-naming-actions button[type='submit'] { background: var(--accent, #2563eb); color: white; border-color: transparent; }

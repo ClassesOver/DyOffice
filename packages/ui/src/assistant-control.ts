@@ -5,7 +5,7 @@ export interface AssistantControl {
   endRun?(token: string, result: {text: string; cancelled: boolean; failed?: boolean; yielded?: {taskIds: string[]}}): void
   readonly allowedTools: readonly string[]
   register(executor: {
-    execute(instruction: string, signal: AbortSignal): Promise<{ text: string; cancelled: boolean }>
+    execute(instruction: string, signal: AbortSignal): Promise<{ text: string; cancelled: boolean; truncated?: boolean; turnLimit?: boolean }>
     isBusy(): boolean
     cancelRun?(token: string): void
     requestYield(taskIds: readonly string[]): void

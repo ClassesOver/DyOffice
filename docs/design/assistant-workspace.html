@@ -1,0 +1,182 @@
+<div id="office-workspace-design" class="viz-dotted-background">
+  <style>
+    #office-workspace-design { padding:24px 12px; }
+    #office-workspace-design .office {
+      --o-bg:light-dark(#ffffff,#20242c);--o-text:light-dark(#243047,#ecf0f6);
+      --o-sub:light-dark(#69758a,#a6b1c2);--o-line:light-dark(#e7ebf2,#384150);
+      --o-soft:light-dark(#f6f8fc,#282f3b);--o-accent:light-dark(#245ccd,#93b8ff);
+      --o-tint:light-dark(#edf3ff,#2c3d59);--o-green:light-dark(#297356,#87c8a6);
+      --o-warn:light-dark(#99601f,#e9bc76);--o-shadow:light-dark(#233b5c12,#00000030);
+      font:14px/1.55 system-ui,sans-serif;color:var(--o-text);background:var(--o-bg);
+      max-width:408px;margin:auto;border:1px solid var(--o-line);border-radius:16px;
+      box-shadow:0 12px 40px var(--o-shadow);overflow:hidden;
+    }
+    #office-workspace-design .office * { box-sizing:border-box; }
+    #office-workspace-design [hidden] { display:none!important; }
+    #office-workspace-design button,#office-workspace-design select,#office-workspace-design textarea { font:inherit;color:inherit; }
+    #office-workspace-design button { display:inline-flex;align-items:center;justify-content:center;gap:6px;border:0;background:transparent;border-radius:8px;padding:7px 9px;text-align:left; }
+    #office-workspace-design button:hover { background:var(--o-soft); }
+    #office-workspace-design button:focus-visible,#office-workspace-design summary:focus-visible,#office-workspace-design select:focus-visible { outline:2px solid var(--o-accent);outline-offset:2px; }
+    #office-workspace-design button:disabled { opacity:.5;cursor:default; }
+    #office-workspace-design svg { width:16px;height:16px;flex-shrink:0; }
+    #office-workspace-design .bar { display:flex;align-items:center;gap:8px; }
+    #office-workspace-design .grow { flex:1;min-width:0; }
+    #office-workspace-design .muted { color:var(--o-sub);font-size:12px; }
+    #office-workspace-design .top { padding:15px 16px 10px; }
+    #office-workspace-design .title { font-weight:600; }
+    #office-workspace-design .mark { width:30px;height:30px;border-radius:9px;display:inline-flex;align-items:center;justify-content:center;background:var(--o-tint);color:var(--o-accent);flex-shrink:0; }
+    #office-workspace-design .avatar { width:30px;height:30px;border:1px solid var(--o-line);border-radius:9px;background:var(--o-soft);display:inline-flex;align-items:center;justify-content:center;flex-shrink:0; }
+    #office-workspace-design .context { margin-top:10px;gap:6px; }
+    #office-workspace-design .context span { white-space:nowrap;overflow:hidden;text-overflow:ellipsis; }
+    #office-workspace-design .nav { padding:0 16px;display:flex;gap:18px;border-bottom:1px solid var(--o-line); }
+    #office-workspace-design .nav button { border-radius:0;padding:10px 0;border-bottom:2px solid transparent;color:var(--o-sub);font-size:13px; }
+    #office-workspace-design .nav button[aria-pressed=true] { color:var(--o-accent);border-bottom-color:var(--o-accent); }
+    #office-workspace-design .badge { font-size:11px;padding:1px 6px;border-radius:5px;background:var(--o-soft);color:var(--o-sub);white-space:nowrap; }
+    #office-workspace-design .content { height:365px;overflow:auto;padding:20px 16px; }
+    #office-workspace-design .bubble { margin:0 0 20px auto;max-width:88%;padding:10px 13px;background:var(--o-soft);border-radius:12px 12px 3px 12px; }
+    #office-workspace-design .message-head { margin-bottom:8px;font-size:13px;font-weight:500; }
+    #office-workspace-design p { margin:6px 0 12px; }
+    #office-workspace-design .task { border:1px solid var(--o-line);border-radius:12px;padding:13px;margin-top:14px; }
+    #office-workspace-design .task-title { margin:9px 0 4px;font-weight:500; }
+    #office-workspace-design .state { color:var(--o-accent);font-size:12px;white-space:nowrap; }
+    #office-workspace-design .state[data-state=failed],#office-workspace-design .state[data-state=unknown_outcome] { color:var(--o-warn); }
+    #office-workspace-design .state[data-state=succeeded] { color:var(--o-green); }
+    #office-workspace-design .task-foot { border-top:1px solid var(--o-line);margin-top:12px;padding-top:8px; }
+    #office-workspace-design .task-foot button { padding:4px 7px;font-size:12px;color:var(--o-sub); }
+    #office-workspace-design .task-detail { margin-top:8px;padding:9px;background:var(--o-soft);border-radius:7px;font-size:12px; }
+    #office-workspace-design .file { display:flex;gap:9px;align-items:center;margin-top:10px;padding:9px;background:var(--o-soft);border-radius:8px; }
+    #office-workspace-design .member { padding:12px 0;border-bottom:1px solid var(--o-line); }
+    #office-workspace-design .member:first-child { padding-top:0; }
+    #office-workspace-design .member p { margin:7px 0 0 39px;font-size:12px;color:var(--o-sub); }
+    #office-workspace-design .member button { font-size:12px;color:var(--o-accent); }
+    #office-workspace-design .section-label { font-size:12px;color:var(--o-sub);margin:18px 0 8px; }
+    #office-workspace-design .outline { border:1px solid var(--o-line); }
+    #office-workspace-design .join { margin-top:12px;padding:12px;border-radius:10px;background:var(--o-soft); }
+    #office-workspace-design .join code { font:12px/1.5 ui-monospace,monospace;word-break:break-all; }
+    #office-workspace-design .compose-area { padding:12px;border-top:1px solid var(--o-line); }
+    #office-workspace-design .composer { position:relative;border:1px solid var(--o-line);border-radius:13px;padding:10px; }
+    #office-workspace-design .composer:focus-within { border-color:var(--o-accent); }
+    #office-workspace-design .recipient { display:inline-flex;align-items:center;gap:6px;color:var(--o-accent);font-size:12px; }
+    #office-workspace-design .recipient summary { display:flex;align-items:center;gap:6px;list-style:none;padding:4px 6px;border-radius:6px;background:var(--o-tint); }
+    #office-workspace-design summary::-webkit-details-marker { display:none; }
+    #office-workspace-design .picker { position:absolute;bottom:calc(100% + 7px);left:0;right:0;padding:6px;border:1px solid var(--o-line);border-radius:12px;background:var(--o-bg);box-shadow:0 8px 26px var(--o-shadow);z-index:5; }
+    #office-workspace-design .picker button { width:100%;justify-content:flex-start;padding:10px; }
+    #office-workspace-design .picker button[aria-pressed=true] { background:var(--o-tint); }
+    #office-workspace-design .picker small { display:block;font-size:12px;color:var(--o-sub); }
+    #office-workspace-design textarea { display:block;width:100%;height:62px;resize:none;border:0;background:transparent;outline:none;padding:12px 4px 4px;font-size:13px; }
+    #office-workspace-design textarea::placeholder { color:var(--o-sub); }
+    #office-workspace-design .model { display:inline-flex;align-items:center;gap:5px;max-width:155px;min-width:0;font-size:12px;white-space:nowrap; }
+    #office-workspace-design .model select { border:0;min-width:0;max-width:120px;background:var(--o-soft);padding:4px 6px;border-radius:6px;text-overflow:ellipsis; }
+    #office-workspace-design option { background:var(--o-bg); }
+    #office-workspace-design .send { width:30px;height:30px;background:var(--o-accent);color:var(--o-bg);border-radius:9px;padding:0; }
+    #office-workspace-design .send:hover { background:var(--o-accent); }
+    #office-workspace-design .hint { font-size:11px;color:var(--o-sub);margin:7px 3px 0;min-height:17px; }
+    #office-workspace-design .notice { font-size:12px;color:var(--o-accent);margin:8px 0 0; }
+    #office-workspace-design .demo { text-align:center;font:12px/1.5 system-ui,sans-serif;color:light-dark(#69758a,#a6b1c2);margin:0 0 12px; }
+    @media(max-width:380px) { #office-workspace-design{padding:12px 0} #office-workspace-design .content{padding:16px 12px} }
+  </style>
+  <div class="demo">交互设计 · 示例数据，操作不会调用真实助手</div>
+  <section class="office" aria-label="Office 助手协作区设计">
+    <header class="top">
+      <div class="bar"><span class="mark"><i data-lucide="sparkles" aria-hidden="true"></i></span><span class="title grow">AI 助手</span><button data-action="team" class="cursor-interaction" aria-label="查看协作助手"><i data-lucide="users" aria-hidden="true"></i><span class="muted">协作</span></button></div>
+      <div class="bar context muted"><i data-lucide="file-text" aria-hidden="true"></i><span>系统模块配置巡检报告</span><span class="grow"></span><span>当前文档</span></div>
+    </header>
+    <nav class="nav" aria-label="助手视图"><button data-view="chat" aria-pressed="true" class="cursor-interaction">对话</button><button data-view="team" aria-pressed="false" class="cursor-interaction">助手 <span class="badge">3</span></button><button data-view="tasks" aria-pressed="false" class="cursor-interaction">任务 <span class="badge">1</span></button></nav>
+    <main class="content">
+      <section data-panel="chat" aria-label="对话">
+        <div class="bubble">分析巡检记录，整理出需要优先处理的问题。</div>
+        <div class="bar message-head"><span class="mark"><i data-lucide="sparkles" aria-hidden="true"></i></span>Office 助手</div>
+        <p>我会先核对报告内容，再交给 Codex 分析你选择的巡检数据，最后汇总处理建议。</p>
+        <div id="ow-task-slot"></div>
+        <p class="muted" style="margin-top:14px">你可以继续提问，或展开任务查看执行情况。</p>
+      </section>
+      <section data-panel="team" aria-label="助手列表" hidden>
+        <div class="member"><div class="bar"><span class="mark"><i data-lucide="sparkles" aria-hidden="true"></i></span><span class="grow">Office 助手 <span class="badge">主助手</span></span><button data-target="office" class="cursor-interaction">对话</button></div><p>理解当前文档、回答问题、协调任务与汇总结果。</p></div>
+        <div class="section-label">内置 harness</div>
+        <div class="member"><div class="bar"><span class="avatar"><i data-lucide="terminal" aria-hidden="true"></i></span><span class="grow">Codex <span class="badge">内置</span></span><button data-target="codex" class="cursor-interaction">交给它</button></div><p>代码 · 数据处理 · 图表<br><span id="ow-builtin-state">已配置 · 本次任务执行中</span></p></div>
+        <div class="section-label">外接 harness</div>
+        <div class="member"><div class="bar"><span class="avatar"><i data-lucide="plug" aria-hidden="true"></i></span><span class="grow">研究助手 <span class="badge">外接</span></span><button data-target="external" class="cursor-interaction">交给它</button></div><p><span id="ow-external-state">已连接</span> · 使用自己的模型<br>当前授权：按任务请求读取本文档</p></div>
+        <div class="bar" style="margin-top:16px"><button class="outline cursor-interaction" data-action="join"><i data-lucide="plus" aria-hidden="true"></i>连接外接助手</button><button data-action="pause" class="cursor-interaction muted">暂停协作</button></div>
+        <div class="join" id="ow-join" hidden><div class="title">连接外接助手</div><p class="muted">生成邀请 → 对方申请 → 核对身份与权限 → 批准连接</p><code>演示邀请 · 不可用于真实连接</code><div class="bar" style="margin-top:10px"><button class="outline cursor-interaction" data-action="application">查看申请示例</button><button class="cursor-interaction muted" data-action="close-join">收起</button></div><div id="ow-application" hidden><p>数据助手 · 请求读取当前文档</p><div class="bar"><button class="outline cursor-interaction" data-action="approve">批准</button><button class="cursor-interaction" data-action="reject">拒绝</button></div></div></div>
+      </section>
+      <section data-panel="tasks" aria-label="协作任务" hidden><div class="bar"><span class="title grow">当前任务</span><span class="muted">按执行方追踪</span></div><div id="ow-tasks-slot"></div><p class="muted" style="margin-top:12px">取消请求确认前保留当前状态。连接中断时先核对结果，再决定是否重试。</p></section>
+    </main>
+    <div class="compose-area">
+      <form class="composer" id="ow-composer">
+        <details class="recipient" id="ow-recipient"><summary class="cursor-interaction"><i data-lucide="at-sign" aria-hidden="true"></i><span id="ow-recipient-name">Office 助手</span><i data-lucide="chevron-down" aria-hidden="true"></i></summary><div class="picker" aria-label="发送给谁">
+          <button type="button" data-target="office" aria-pressed="true" class="cursor-interaction"><span class="mark"><i data-lucide="sparkles" aria-hidden="true"></i></span><span>Office 助手<small>默认入口 · 按需要协调协作</small></span></button>
+          <button type="button" data-target="codex" aria-pressed="false" class="cursor-interaction"><span class="avatar"><i data-lucide="terminal" aria-hidden="true"></i></span><span>Codex <span class="badge">内置</span><small>直接提交代码或数据任务</small></span></button>
+          <button type="button" data-target="external" aria-pressed="false" class="cursor-interaction"><span class="avatar"><i data-lucide="plug" aria-hidden="true"></i></span><span>研究助手 <span class="badge">外接</span><small id="ow-external-hint">已连接 · 使用自己的模型</small></span></button>
+        </div></details>
+        <textarea id="ow-input" aria-label="消息或任务" placeholder="描述需求，或对当前文档提问…"></textarea>
+        <div class="bar"><label class="model" id="ow-model-label"><i data-lucide="cpu" aria-hidden="true"></i><select id="ow-model" aria-label="模型"><option value="ds">ds</option><option value="example">备用模型（示例）</option></select></label><span class="muted" id="ow-own-model" hidden>由外接助手管理模型</span><span class="grow"></span><button type="submit" class="send cursor-interaction" aria-label="发送消息" id="ow-send" disabled><i data-lucide="arrow-up" aria-hidden="true"></i></button></div>
+      </form>
+      <div class="hint" id="ow-scope">当前文档 · 按需读取；外接助手只接收任务授权内容</div>
+      <div class="notice" role="status" aria-live="polite" id="ow-notice"></div>
+    </div>
+  </section>
+  <template id="ow-task-template"><article class="task"><div class="bar"><span class="avatar"><i data-lucide="terminal" aria-hidden="true"></i></span><span class="grow">Codex <span class="badge">内置</span></span><span class="state" data-state="running">执行中</span></div><div class="task-title">分析巡检记录</div><div class="muted task-description">Office 委派 · 已授权的巡检数据</div><div class="task-detail" hidden>已接收任务 → 执行分析 → 返回结果。只展示实际收到的阶段事件。</div><div class="file" hidden><i data-lucide="file-text" aria-hidden="true"></i><span class="grow">巡检分析.md<small class="muted" style="display:block">示例结果 · 尚未插入文档</small></span><button type="button" data-action="preview-result" class="cursor-interaction">查看</button></div><div class="bar task-foot"><button type="button" data-action="detail" class="cursor-interaction">查看详情</button><span class="grow"></span><button type="button" data-action="cancel" class="cursor-interaction">取消任务</button></div></article></template>
+  <script>
+    (()=>{
+      const root=document.getElementById('office-workspace-design');
+      const q=s=>root.querySelector(s),all=s=>[...root.querySelectorAll(s)];
+      const state={target:'office',view:'chat',task:'running',external:true,paused:false};
+      const names={office:'Office 助手',codex:'Codex',external:'研究助手'};
+      const statuses={queued:'排队中',running:'执行中',cancel_requested:'正在取消',cancelled:'已取消',succeeded:'已完成',failed:'失败',unknown_outcome:'结果待核对'};
+      const descriptions={queued:'等待执行方接收任务',running:'Office 委派 · 已授权的巡检数据',cancel_requested:'取消请求已发出，等待执行方确认',cancelled:'执行方已确认取消',succeeded:'分析结果已返回，等待查看',failed:'任务未完成，可查看详情后重新提交',unknown_outcome:'连接中断，尚不能确认任务是否完成'};
+      for(const id of ['#ow-task-slot','#ow-tasks-slot'])q(id).append(q('#ow-task-template').content.cloneNode(true));
+      const say=text=>{q('#ow-notice').textContent=text;};
+      const busy=()=>['queued','running','cancel_requested','unknown_outcome'].includes(state.task);
+      function render(){
+        all('[data-panel]').forEach(el=>el.hidden=el.dataset.panel!==state.view);
+        all('[data-view]').forEach(el=>el.setAttribute('aria-pressed',String(el.dataset.view===state.view)));
+        all('[data-target]').forEach(el=>{el.setAttribute('aria-pressed',String(el.dataset.target===state.target));el.disabled=el.dataset.target==='external'&&(!state.external||state.paused);});
+        q('#ow-recipient-name').textContent=names[state.target];
+        q('#ow-model-label').hidden=state.target==='external';q('#ow-own-model').hidden=state.target!=='external';
+        q('#ow-external-state').textContent=state.paused?'协作已暂停':state.external?'已连接':'已离线';
+        q('#ow-external-hint').textContent=(state.paused?'协作已暂停':state.external?'已连接':'已离线')+' · 使用自己的模型';
+        q('[data-action=pause]').textContent=state.paused?'恢复协作':'暂停协作';
+        q('#ow-builtin-state').textContent=state.task==='succeeded'?'本次任务已完成':state.task==='running'?'已配置 · 本次任务执行中':'已配置 · '+statuses[state.task];
+        q('#ow-scope').textContent=state.target==='office'?'当前文档 · 按需读取；外接助手只接收任务授权内容':state.target==='codex'?'直接委派 · 使用所选模型；不会自动修改文档':'直接委派 · 仅发送任务内容与明确授权的数据';
+        q('#ow-input').placeholder=state.target==='office'?'描述需求，或对当前文档提问…':'给'+names[state.target]+'安排一个任务…';
+        q('#ow-send').disabled=!q('#ow-input').value.trim()||(state.target==='external'&&(!state.external||state.paused))||(state.target!=='office'&&busy());
+        q('#ow-send').setAttribute('aria-label',state.target==='office'?'发送消息':'提交任务');
+        all('.task .state').forEach(el=>{el.textContent=statuses[state.task];el.dataset.state=state.task;});
+        all('.task-description').forEach(el=>el.textContent=descriptions[state.task]);
+        all('.task .file').forEach(el=>el.hidden=state.task!=='succeeded');
+        all('[data-action=cancel]').forEach(el=>{el.hidden=!['queued','running','cancel_requested'].includes(state.task);el.disabled=state.task==='cancel_requested';el.textContent=state.task==='cancel_requested'?'等待确认':'取消任务';});
+      }
+      root.addEventListener('click',event=>{
+        const button=event.target.closest('button');if(!button||button.disabled)return;
+        if(button.dataset.view){state.view=button.dataset.view;render();return;}
+        if(button.dataset.target){state.target=button.dataset.target;state.view='chat';q('#ow-recipient').open=false;render();q('#ow-input').focus();return;}
+        switch(button.dataset.action){
+          case 'team':state.view='team';break;
+          case 'join':q('#ow-join').hidden=false;break;
+          case 'close-join':q('#ow-join').hidden=true;break;
+          case 'application':q('#ow-application').hidden=false;break;
+          case 'approve':q('#ow-application').hidden=true;say('示例：申请已批准，等待对方建立连接。');break;
+          case 'reject':q('#ow-application').hidden=true;say('示例：申请已拒绝。');break;
+          case 'pause':state.paused=!state.paused;say(state.paused?'已暂停外接协作；Office 对话仍可继续。':'已恢复外接协作。');break;
+          case 'detail':{const detail=button.closest('.task').querySelector('.task-detail');detail.hidden=!detail.hidden;button.textContent=detail.hidden?'查看详情':'收起详情';break;}
+          case 'cancel':state.task='cancel_requested';say('示例：取消请求已发送，尚未收到确认。');break;
+          case 'preview-result':say('示例结果：优先核对岗位授权与审批链。正式结果提供下载及受支持内容的插入操作。');break;
+        }
+        render();
+      });
+      q('#ow-input').addEventListener('input',render);
+      q('#ow-model').addEventListener('change',()=>say('模型切换在下一条新任务生效，当前执行中的任务保持原模型。'));
+      q('#ow-composer').addEventListener('submit',event=>{
+        event.preventDefault();if(q('#ow-send').disabled)return;
+        say('演示：将发送给 '+names[state.target]+'。当前草稿已保留，未调用真实模型。');
+      });
+      root.addEventListener('keydown',event=>{if(event.key==='Escape'){q('#ow-recipient').open=false;q('#ow-join').hidden=true;}});
+      render();
+      if(globalThis.Tweak){
+        const tweak=new Tweak({container:q('.office'),onChange:render});
+        tweak.addSelect(state,'task',{label:'任务状态示例',options:Object.entries(statuses).map(([value,label])=>({value,label}))});
+        tweak.addToggle(state,'external',{label:'外接助手在线'});
+      }
+    })();
+  </script>
+</div>

@@ -10,12 +10,13 @@ for (const app of ['docs', 'sheets', 'slides', 'pdf', 'markdown', 'html']) {
     try {
       const page = await browser.newPage({ viewport: { width: 1200, height: 800 } })
       const sheets = app === 'sheets'
+      const resizeHandle = app === 'markdown' || app === 'html' ? 'ai-panel-resizer' : 'ai-panel-width-handle'
       const panelClass = app === 'docs' || app === 'slides' ? 'ai-panel' : 'copilot'
       await page.setContent(
         `<div class="app-shell"><div class="${sheets ? 'sheet-body' : 'app-main'}" style="width:1000px;height:600px">` +
           (sheets
-            ? '<aside class="copilot"><div class="ai-panel-resizer"></div><button class="ai-panel-collapse"><svg width="16" height="16"></svg></button>AI chat</aside>'
-            : `<div class="ai-dock"><aside class="${panelClass}" style="width:360px"><div class="ai-panel-resizer"></div><button class="ai-panel-collapse"><svg width="16" height="16"></svg></button>AI chat</aside><button class="ai-rail" style="display:none">AI</button></div>`) +
+            ? `<aside class="copilot"><div class="${resizeHandle}"></div><button class="ai-panel-collapse"><svg width="16" height="16"></svg></button>AI chat</aside>`
+            : `<div class="ai-dock"><aside class="${panelClass}" style="width:360px"><div class="${resizeHandle}"></div><button class="ai-panel-collapse"><svg width="16" height="16"></svg></button>AI chat</aside><button class="ai-rail" style="display:none">AI</button></div>`) +
           '<div class="fixture-document" style="flex:1;min-width:0;display:flex"><nav style="width:160px">Navigation</nav><article style="flex:1">Document</article></div></div></div>',
       )
       for (const path of [
@@ -41,7 +42,7 @@ for (const app of ['docs', 'sheets', 'slides', 'pdf', 'markdown', 'html']) {
         const docBox = (await document.boundingBox())!
         expect(side === 'left' ? box.x < docBox.x : box.x > docBox.x).toBe(true)
         expect((await nav.boundingBox())!.x).toBeCloseTo(docBox.x, 0)
-        const handle = (await page.locator('.ai-panel-resizer').boundingBox())!
+        const handle = (await page.locator(`.${resizeHandle}`).boundingBox())!
         expect(
           Math.abs(
             side === 'right' ? handle.x - box.x : handle.x + handle.width - box.x - box.width,

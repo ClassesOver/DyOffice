@@ -257,7 +257,10 @@ export async function handleExportCsv(ctx: CsvExportContext, targetPath?: string
     const result = await window.desktopApi.exportCsv({
       fileName: `${baseName}.csv`,
       content,
-      hasFormulas: sheetHasFormulas(sheet),
+      hasFormulas:
+        sheetHasFormulas(sheet) ||
+        (state?.formulaText.get(sheet.getSheetId())?.size ?? 0) > 0 ||
+        state?.formulaTextTruncated.has(sheet.getSheetId()) === true,
       ...(sheetCount > 1 ? { activeSheetName: sheet.getSheetName() } : {}),
       ...(targetPath === undefined ? {} : { targetPath }),
     })

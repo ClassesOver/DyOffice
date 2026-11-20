@@ -98,12 +98,26 @@ export async function parseFileToText(
   filePath: string,
   opts: ParseFileOptions = {},
 ): Promise<ParsedFile> {
-  const ext = extname(filePath).slice(1).toLowerCase()
+  try {
+    return await parseBytesToText(filePath, await readFile(filePath), opts)
+  } catch (e) {
+    return { ok: false, kind: 'text', error: e instanceof Error ? e.message : String(e) }
+  }
+}
+
+/** Parse uploaded bytes with the same extension checks and extractors as local attachments. */
+export async function parseBytesToText(
+  fileName: string,
+  input: Uint8Array,
+  opts: ParseFileOptions = {},
+): Promise<ParsedFile> {
+  const ext = extname(fileName).slice(1).toLowerCase()
   const imageMime = IMAGE_MIMES[ext]
   if (imageMime) return { ok: true, kind: 'image', mime: imageMime }
+  const bytes = Buffer.from(input)
   try {
     if (TEXT_EXTS.has(ext)) {
-      const text = decodeTextBytes(await readFile(filePath))
+      const text = decodeTextBytes(bytes)
       if (text === null) {
         return {
           ok: false,
@@ -114,7 +128,6 @@ export async function parseFileToText(
       }
       return { ok: true, kind: 'text', text }
     }
-    const bytes = await readFile(filePath)
     const sniffed = sniffBinary(bytes)
     if (ext === 'pdf' && sniffed !== 'pdf') {
       return {

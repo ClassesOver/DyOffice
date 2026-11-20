@@ -6,6 +6,7 @@ import {WEB_OFFICE_SKILL_CATALOG} from '../../src/shell/office-skill-catalog'
 import {createUserSkillsClient} from '../../src/shell/user-skills-client'
 
 ;(globalThis as typeof globalThis & {IS_REACT_ACT_ENVIRONMENT:boolean}).IS_REACT_ACT_ENVIRONMENT=true
+Object.defineProperties(HTMLDialogElement.prototype,{showModal:{configurable:true,value:function(){this.setAttribute('open','')}},close:{configurable:true,value:function(){this.removeAttribute('open')}}})
 const roots:Root[]=[]
 afterEach(async()=>{await act(async()=>{for(const root of roots.splice(0))root.unmount()});document.body.innerHTML='';vi.restoreAllMocks()})
 async function mount(request:Parameters<typeof createUserSkillsClient>[0],onCloseGuardChange?: (guard:(()=>boolean)|null)=>void){const host=document.createElement('div');document.body.append(host);const root=createRoot(host);roots.push(root);await act(async()=>root.render(h(UserSkillsPanel,{client:createUserSkillsClient(request),onCloseGuardChange})));return host}
@@ -18,7 +19,7 @@ test('same-name file import preserves existing content until explicit replacemen
  await upload(replacementFile())
  expect(writes).toBe(0);expect(body).toBe('existing Word instructions')
  expect(document.querySelector('[role="dialog"]')?.textContent).toContain('替换同名 Skill')
- expect(document.querySelector('[role="dialog"]')?.classList.contains('settings-dialog-b')).toBe(true)
+ expect(document.querySelector('[role="dialog"]')?.classList.contains('workspace-native-dialog')).toBe(true)
  await act(async()=>expect(guard!()).toBe(false))
  const reload=new Event('beforeunload',{cancelable:true});window.dispatchEvent(reload);expect(reload.defaultPrevented).toBe(true)
  await act(async()=>button('取消替换').click());expect(writes).toBe(0);expect(guard).toBeNull()
@@ -57,7 +58,7 @@ test('imports markdown through the real client and reads skill body only when vi
  expect(document.body.textContent).not.toContain('private skill body')
  await act(async()=>button('查看').click())
  expect(document.querySelector<HTMLTextAreaElement>('textarea[aria-label="Skill 内容"]')?.value).toBe('private skill body')
- expect(document.querySelector('[role="dialog"]')?.classList.contains('settings-dialog-b')).toBe(true)
+ expect(document.querySelector('[role="dialog"]')?.classList.contains('workspace-native-dialog')).toBe(true)
  await act(async()=>button('关闭').click())
  expect(document.querySelector('textarea[aria-label="Skill 内容"]')).toBeNull()
 })
@@ -74,14 +75,14 @@ test('unknown deletion is not repeated before an explicit list reconciliation',a
  let deletes=0,removed=false
  await mount(async(_path,method)=>{if(method==='DELETE'){deletes++;removed=true;throw Error('lost response')}return (removed?[]:[{name:'report',description:'Word 报告'}]) as never})
  await act(async()=>button('删除').click())
- expect(document.querySelector('[role="dialog"]')?.classList.contains('settings-dialog-b')).toBe(true)
+ expect(document.querySelector('[role="dialog"]')?.classList.contains('workspace-native-dialog')).toBe(true)
  expect(deletes).toBe(0)
  await act(async()=>button('确认删除').click())
  expect(deletes).toBe(1)
  expect(document.querySelector('[role="alert"]')?.textContent).toContain('核对')
  expect(button('删除').disabled).toBe(true)
  await act(async()=>button('刷新列表').click())
- expect(document.querySelectorAll('.ant-table')[1].textContent).not.toContain('Word 报告')
+ expect(document.querySelectorAll('table')[1].textContent).not.toContain('Word 报告')
  expect(deletes).toBe(1)
 })
 
@@ -151,7 +152,7 @@ test('catalog installation writes the selected source only after clicking and di
  const host=await mount(async(path,method,body)=>{calls.push({path,method,body});if(method==='PUT'){saved={name:offered.key,...body as {description:string;body:string}};return saved as never}return (saved?[saved]:[]) as never})
  expect(calls.every(call=>!call.method)).toBe(true)
  await searchCatalog(host,offered.name)
- expect(host.querySelectorAll('.ant-table-tbody > tr[data-row-key]')).toHaveLength(1)
+ expect(host.querySelectorAll('tbody > tr[data-row-key]')).toHaveLength(1)
  await act(async()=>button('查看正文').click())
  expect(document.querySelector<HTMLTextAreaElement>('textarea[aria-label="Skill 内容"]')?.value).toContain('document tools')
  expect(calls).toHaveLength(1)
@@ -159,12 +160,12 @@ test('catalog installation writes the selected source only after clicking and di
  expect(calls.filter(call=>call.method==='PUT').map(call=>call.path)).toEqual(['/api/v1/skills/weekly-report'])
  expect(saved?.body).toContain('Web 工具适配')
  expect(button('已添加').disabled).toBe(true)
- expect(host.querySelectorAll('.ant-table')[1].textContent).toContain(offered.name)
+ expect(host.querySelectorAll('table')[1].textContent).toContain(offered.name)
 })
 test('catalog remains paged and unknown installation cannot be repeated until explicit reconciliation',async()=>{
  let writes=0,guard:(()=>boolean)|null=null
  const host=await mount(async(_path,method)=>{if(method==='PUT'){writes++;throw Error('lost')}return [] as never},value=>{guard=value})
- expect(host.querySelectorAll('.ant-table')[0].querySelectorAll('tr[data-row-key]')).toHaveLength(6)
+ expect(host.querySelectorAll('table')[0].querySelectorAll('tr[data-row-key]')).toHaveLength(6)
  expect(host.querySelector('[aria-label="办公技能目录分页"]')).not.toBeNull()
  await act(async()=>button('安装').click())
  expect(writes).toBe(1);expect(button('安装').disabled).toBe(true)
@@ -179,11 +180,12 @@ test('catalog write rejection never shows a successful installation',async()=>{
  expect(document.querySelector('[role="alert"]')?.textContent).toContain('操作被拒绝')
 })
 
-test('personal skills B scope retains both tables and labelled search and pagers',async()=>{
+test('personal skills uses native controls with both lists and labelled search and pagers',async()=>{
  const host=await mount(async()=>[] as never)
- const panel=host.querySelector('.personal-skills-b')
+ const panel=host.querySelector('.personal-skills-native')
  expect(panel).not.toBeNull()
- expect(panel!.querySelectorAll('.ant-table')).toHaveLength(2)
+ expect(panel!.querySelector('[class*="ant-"]')).toBeNull()
+ expect(panel!.querySelectorAll('table')).toHaveLength(2)
  expect(panel!.querySelector('.personal-skills-filters input[aria-label="搜索可安装技能"]')).not.toBeNull()
  expect(panel!.querySelector('[aria-label="筛选技能格式"]')).not.toBeNull()
  expect(panel!.querySelector('[aria-label="办公技能目录分页"]')).not.toBeNull()

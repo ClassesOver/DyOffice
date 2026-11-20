@@ -1,13 +1,13 @@
 import type { RevisionRef } from './api.ts'
 export type PreparedAnalysisContent =
  | {kind:'text';text:string}
- | {kind:'table';rows:readonly (readonly string[])[]}
-export type AnalysisTargetCapture = Readonly<{token:string;fileId:string;format:'docx'|'xlsx';baseRevision:RevisionRef['revision'];leaseEpoch:number}>
+ | {kind:'table';rows:readonly (readonly string[])[];provenance?:readonly string[]}
+export type AnalysisTargetCapture = Readonly<{token:string;fileId:string;baseRevision:RevisionRef['revision']} & ({format:'docx'|'xlsx'|'pptx';leaseEpoch:number}|{format:'pdf'})>
 export type AnalysisApplyResult = {status:'applied_uncommitted';applicationId:string}
 export type AnalysisSaveResult = {status:'saved';applicationId:string;receipt:RevisionRef}|{status:'not_confirmed';reason:'conflict'|'unknown'|'newer_edits'|'unavailable'}
 export interface AnalysisDocumentTarget {
  readonly fileId:string
- readonly format:'docx'|'xlsx'
+ readonly format:'docx'|'xlsx'|'pptx'|'pdf'
  capture():AnalysisTargetCapture
  apply(capture:AnalysisTargetCapture,content:PreparedAnalysisContent,artifact:{artifactId:string;sha256:string},authorized:()=>boolean):Promise<AnalysisApplyResult>
  save(applicationId:string,authorized:()=>boolean):Promise<AnalysisSaveResult>

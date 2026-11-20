@@ -1,3 +1,8 @@
+import type { AssistantSourceMode } from '../../../../packages/web-contracts/src/assistant.ts'
+import {createKnowledgeService} from './modules/knowledge/service.ts'
+import {registerKnowledgeRoutes} from './modules/knowledge/routes.ts'
+import {createAssistantBackgroundRunner} from './modules/assistant-channel/background-runner.ts'
+import {createAssistantBackgroundStore} from './modules/assistant-channel/background-store.ts'
 import {registerAssistantSourceCatalog} from './modules/sources/assistant-catalog.ts'
 import {createCodingModelBridge} from './modules/coding/model-bridge.ts'
 import {createCodingHarness} from './modules/coding/harness.ts'
@@ -6,6 +11,14 @@ import {registerCodingRoutes} from './modules/coding/routes.ts'
 import {registerProbeAssets} from './modules/providers/probe-assets.ts'
 import {createSkillService} from './modules/skills/service.ts'
 import {registerSkillRoutes} from './modules/skills/routes.ts'
+import {registerSharedProviderGateway} from './modules/providers/shared-gateway.ts'
+import {registerAssistantAttachmentRoutes} from './modules/providers/attachments.ts'
+import {createAiSearchService} from './modules/ai-tools/search-service.ts'
+import {registerAiSearchRoutes} from './modules/ai-tools/routes.ts'
+import {createAiMediaService} from './modules/ai-tools/media-service.ts'
+import {registerAiMediaRoutes} from './modules/ai-tools/media-routes.ts'
+import {createStyleTemplateService} from './modules/style-templates/service.ts'
+import {registerStyleTemplateRoutes} from './modules/style-templates/routes.ts'
 import {registerPersonalProviderGateway} from './modules/providers/gateway.ts'
 import { registerFixedProviderProbe } from './modules/providers/fixed-probe.ts'
 import type { AdminPipelineProfile } from './modules/providers/admin-pipeline.ts'
@@ -17,8 +30,8 @@ import { createSlidesSaveService } from './modules/slides/save.ts'
 import { createSlidesService, type SlidesSessionHost } from './modules/slides/service.ts'
 import { registerSlidesRoutes } from './modules/slides/routes.ts'
 import { createReadinessProbe } from './readiness.ts'
-import { createStaticAssets } from '../static-assets.mjs'
-import { registerLocalShell } from './local-shell.ts'
+import { createStaticAssets, createRefreshableStaticAssets } from '../static-assets.mjs'
+import { dshEmbedOrigin, registerLocalShell } from './local-shell.ts'
 import type { FastifyInstance, HTTPMethods } from 'fastify'
 import { buildApp as buildModularApp } from './app.mjs'
 import { createLegacyContext } from './legacy-context.mjs'
@@ -86,21 +99,24 @@ export async function buildApp(config: WebConfig): Promise<FastifyInstance> {
 }
 
 export interface LocalWebConfig {
+  rateLimit?: { max: number; windowMs: number };
   db: IdentityStore; businessPool?: Pool; deploymentId: string; origin: string; csrfKey: string; passwords?: PasswordService;
-  objectStore?: ObjectStore; filePolicy?: FilePolicy; nativeDocsDirectory?: string; nativeSheetsDirectory?: string; nativeSlidesDirectory?: string; slidesHost?: SlidesSessionHost; nativePdf?: boolean; nativeJobs?: boolean; sheetsNative?: SheetsNative & Partial<SheetsSaveNative>; sheetsPlanner?: SheetsPlanner; sheetsWorkbookPlanner?: SheetsWorkbookPlanner; sheetsPackageReader?: SheetsPackageReader; localShellDirectory?: string;
+  objectStore?: ObjectStore; filePolicy?: FilePolicy; nativeDocsDirectory?: string; nativeSheetsDirectory?: string; nativeSlidesDirectory?: string; slidesHost?: SlidesSessionHost; nativePdf?: boolean; nativePdfDirectory?: string; nativeJobs?: boolean; sheetsNative?: SheetsNative & Partial<SheetsSaveNative>; sheetsPlanner?: SheetsPlanner; sheetsWorkbookPlanner?: SheetsWorkbookPlanner; sheetsPackageReader?: SheetsPackageReader; localShellDirectory?: string; dshEditorOrigin?: string;
   globalConfigKeyring?: SecretKeyring;
   sourcesCredentialKeys?: string;
   sourcesEgressTargets?: readonly SourceEgressTarget[];
   /** Trusted assistant composition; never model-supplied credentials or scope. */
   assistantSourceCatalog?: boolean;
+  assistantSourceMode?: AssistantSourceMode;
   onSourceToolsReady?: (tools: WorkspaceSourceTools) => void;
   adminAiSyntheticProbe?: boolean;
   // Explicit network-capable fixed probe, NOT the offline diagnostic. No automatic run.
   adminProviderProbeDirectory?: string;
   adminProviderProbe?: { profiles: readonly AdminPipelineProfile[] };
-  providerGateway?: { profiles: readonly AdminPipelineProfile[] };
+  providerGateway?: { profiles: readonly AdminPipelineProfile[] } | {mode:'shared'};
   /** Optional peer adapters are trusted server composition, never browser supplied. */
   assistantChannels?: boolean;
+  assistantBackground?: {pool:Pool};
   codingHarnesses?: false | {adapters?: readonly HarnessAdapter[]; defaultId?: string; cliPath?: string; analysisPython?: string};
   providerShutdownTimeoutMs?: number;
   /** Notification polling/heartbeat timing; saves remain on the HTTP file API. */
@@ -108,6 +124,7 @@ export interface LocalWebConfig {
   /** Explicit trusted composition; no HTTP route can supply policy or dispatch. */
   realtimeCommands?: RealtimeCommandPolicy;
   onRealtimeReady?: (server: RealtimeServer) => void;
+  wordCollaboration?: boolean;
   passwordBlocklistFile?: string; loginLimits?: LoginLimits; idleMs?: number; absoluteMs?: number; closeDb?: () => Promise<void>
 }
 export async function buildLocalApp(config: LocalWebConfig): Promise<FastifyInstance> {
@@ -117,9 +134,12 @@ export async function buildLocalApp(config: LocalWebConfig): Promise<FastifyInst
   if (config.providerShutdownTimeoutMs !== undefined && (!Number.isSafeInteger(config.providerShutdownTimeoutMs) || config.providerShutdownTimeoutMs < 1 || config.providerShutdownTimeoutMs > 35_000)) throw new Error('Invalid provider shutdown timeout')
   if (config.adminProviderProbe !== undefined && (!config.adminProviderProbe || Object.keys(config.adminProviderProbe).join() !== 'profiles' || !Array.isArray(config.adminProviderProbe.profiles) || !config.adminProviderProbe.profiles.length || !config.businessPool || !config.globalConfigKeyring || config.adminProviderProbe.profiles.some(p=>!p || p.deploymentId!==config.deploymentId))) throw new Error('Invalid provider probe configuration')
   if(config.adminProviderProbeDirectory!==undefined && (!config.adminProviderProbe || typeof config.adminProviderProbeDirectory!=='string' || !config.adminProviderProbeDirectory))throw new Error('Probe assets require explicit local probe')
+  const assistantSourceMode = config.assistantSourceMode ?? (config.assistantSourceCatalog ? 'metadata-only' : 'off')
+  if (!['off','metadata-only','read-only-analysis'].includes(assistantSourceMode) || assistantSourceMode !== 'off' && !config.providerGateway) throw new Error('Assistant source mode requires provider gateway')
+  if (assistantSourceMode === 'read-only-analysis' && !config.sourcesCredentialKeys) throw new Error('Assistant source analysis requires source credential keys')
   if(config.assistantSourceCatalog!==undefined && (typeof config.assistantSourceCatalog!=='boolean' || config.assistantSourceCatalog && !config.providerGateway)) throw new Error('Assistant source catalog requires provider gateway')
   if(config.assistantChannels!==undefined&&typeof config.assistantChannels!=='boolean')throw Error('Invalid assistant channel configuration')
-  if(config.providerGateway!==undefined && (!config.providerGateway || Object.keys(config.providerGateway).join()!=='profiles' || !Array.isArray(config.providerGateway.profiles) || !config.businessPool || !config.globalConfigKeyring))throw new Error('Provider gateway requires profiles, restricted pool and keyring')
+  if(config.providerGateway!==undefined && (!config.providerGateway || !config.businessPool || !config.globalConfigKeyring || ('mode' in config.providerGateway ? config.providerGateway.mode!=='shared'||Object.keys(config.providerGateway).join()!=='mode' : Object.keys(config.providerGateway).join()!=='profiles'||!Array.isArray(config.providerGateway.profiles))))throw new Error('Provider gateway requires restricted pool and keyring')
   const probeAssets=config.adminProviderProbeDirectory?await createStaticAssets({assetMode:'built',assetDirectory:config.adminProviderProbeDirectory,pages:['index.html'],cacheControl:'private, no-store'}):undefined
   if ('userToken' in config || 'adminToken' in config) throw new Error('Local mode rejects development tokens')
   async function assertReady() {
@@ -143,10 +163,13 @@ export async function buildLocalApp(config: LocalWebConfig): Promise<FastifyInst
   if (config.nativeDocsDirectory && !config.objectStore) throw new Error('Native DOCX requires File API')
   if (config.nativeSheetsDirectory && (!config.objectStore || !config.sheetsNative?.readSheet || !config.sheetsNative?.savePlan || !config.sheetsPlanner || !config.sheetsPackageReader)) throw new Error('Native Sheets requires complete native adapters')
   if (config.nativeSlidesDirectory && !config.objectStore) throw new Error('Native slides require File API')
+  if (config.nativeSlidesDirectory && typeof config.slidesHost?.openSession !== 'function') throw new Error('Native slides require a session host')
+  if (config.nativePdfDirectory && !config.objectStore) throw new Error('Native PDF requires File API')
   if (config.slidesHost && !config.objectStore) throw new Error('Native slides sessions require File API')
-  const nativeSheets = config.nativeSheetsDirectory ? await createStaticAssets({assetMode:'built',assetDirectory:config.nativeSheetsDirectory,pages:['index.html'],assetInventory:'.vite/native-assets.json',cacheControl:'private, no-store'}) : undefined
-  const nativeSlides = config.nativeSlidesDirectory ? await createStaticAssets({assetMode:'built',assetDirectory:config.nativeSlidesDirectory,pages:['index.html'],assetInventory:'.vite/native-assets.json',cacheControl:'private, no-store'}) : undefined
-  const nativeDocs = config.nativeDocsDirectory ? await createStaticAssets({ assetMode: 'built',assetDirectory: config.nativeDocsDirectory,pages: ['index.html'],assetInventory: '.vite/native-assets.json',cacheControl: 'private, no-store' }) : undefined
+  const nativeSheets = config.nativeSheetsDirectory ? await createRefreshableStaticAssets({assetMode:'built',assetDirectory:config.nativeSheetsDirectory,pages:['index.html'],assetInventory:'.vite/native-assets.json',cacheControl:'private, no-store'}) : undefined
+  const nativeSlides = config.nativeSlidesDirectory ? await createRefreshableStaticAssets({assetMode:'built',assetDirectory:config.nativeSlidesDirectory,pages:['index.html'],assetInventory:'.vite/native-assets.json',cacheControl:'private, no-store'}) : undefined
+  const nativePdf = config.nativePdfDirectory ? await createRefreshableStaticAssets({assetMode:'built',assetDirectory:config.nativePdfDirectory,pages:['index.html'],assetInventory:'.vite/native-assets.json',cacheControl:'private, no-store'}) : undefined
+  const nativeDocs = config.nativeDocsDirectory ? await createRefreshableStaticAssets({ assetMode: 'built',assetDirectory: config.nativeDocsDirectory,pages: ['index.html'],assetInventory: '.vite/native-assets.json',cacheControl: 'private, no-store' }) : undefined
   const passwords = config.passwords ?? await createPasswordService({ blockedPasswords: await loadPasswordBlocklist(config.passwordBlocklistFile) })
   const accounts = createAccountService({ db: config.db, passwords, deploymentId: config.deploymentId })
   const sessions = createSessionService({ db: config.db, accounts, deploymentId: config.deploymentId, idleMs: config.idleMs, absoluteMs: config.absoluteMs })
@@ -157,9 +180,16 @@ export async function buildLocalApp(config: LocalWebConfig): Promise<FastifyInst
   realtimeSource.protocol = realtimeSource.protocol === 'https:' ? 'wss:' : 'ws:'
   const nativeConnectSources = `'self' blob: ${realtimeSource.origin}`
   const throttle = createLoginThrottle(config.db, config.deploymentId, config.csrfKey, config.loginLimits)
-  const app = await createApiShell()
+  const app = await createApiShell(config.rateLimit?{max:config.rateLimit.max,timeWindow:config.rateLimit.windowMs}:undefined)
   try {
-  if (config.localShellDirectory) await registerLocalShell(app,config.localShellDirectory)
+  const dshEditorOrigin=config.localShellDirectory?dshEmbedOrigin(config.dshEditorOrigin):undefined
+  if(dshEditorOrigin===config.origin)throw new Error('DSH editor embed requires a separate origin')
+  const nativeAncestors=(target:string)=>{
+    const url=new URL(target,config.origin)
+    return dshEditorOrigin&&(url.pathname.endsWith('/')||url.pathname.endsWith('/index.html'))&&url.searchParams.get('dshEmbed')==='1'
+      ? "'self' "+dshEditorOrigin : "'self'"
+  }
+  if (config.localShellDirectory) await registerLocalShell(app,config.localShellDirectory,dshEditorOrigin)
   const ownedProbes: {dispose():void;drain(options?:{timeoutMs?:number}):Promise<void>}[]=[]
   app.addHook('preClose',async()=>{for(const probe of ownedProbes)probe.dispose()})
   app.addHook('onClose',async()=>{
@@ -177,12 +207,13 @@ export async function buildLocalApp(config: LocalWebConfig): Promise<FastifyInst
     const sources = createSourceService({ transactions, credentialKeys: config.sourcesCredentialKeys, egressTargets: config.sourcesEgressTargets })
     const sourceResults = createWorkspaceSourceResults({ transactions })
     const sourceTools = createWorkspaceSourceTools({ sources, results: sourceResults })
-    const assistantChannels=config.assistantChannels===true?createAssistantChannelService({transactions,credentialKey:config.csrfKey}):undefined
+    if(config.assistantBackground&&(!config.assistantChannels||!config.objectStore||!config.providerGateway))throw Error('Background execution requires channels, object storage and model gateway')
+    const assistantChannels=config.assistantChannels===true?createAssistantChannelService({transactions,credentialKey:config.csrfKey,backgroundEnabled:!!config.assistantBackground}):undefined
     const artifacts=config.objectStore?createHarnessArtifacts({transactions,objects:config.objectStore}):undefined
     const harnessData=createHarnessDataAccess({tools:sourceTools,results:sourceResults,sessions,artifacts})
     // Lazy runtime: registering Codex neither resolves its executable nor starts a process.
     const codingConfig = config.codingHarnesses === false ? undefined : config.codingHarnesses ?? {}
-    let officeGateway: ReturnType<typeof registerPersonalProviderGateway> | undefined
+    let officeGateway: ReturnType<typeof registerPersonalProviderGateway> | ReturnType<typeof registerSharedProviderGateway> | undefined
     const codingRuntime=createCodingHarness({cliPath:codingConfig?.cliPath,analysisPython:codingConfig?.analysisPython})
     const harnesses = config.providerGateway && codingConfig ? createHarnessRegistry([
       {descriptor: {id: 'codex', name: 'Codex', origin: 'builtin', capabilities: ['coding']},async run(input,signal,context){
@@ -191,26 +222,35 @@ export async function buildLocalApp(config: LocalWebConfig): Promise<FastifyInst
         let mailbox:Awaited<ReturnType<typeof createHarnessDataMailbox>>|undefined
         try{
           mailbox=context.data?await createHarnessDataMailbox(app,context.data.grant.taskId):undefined
-          return await codingRuntime.run(input,signal,bridge,context.data?{...context.data,mailboxDirectory:mailbox!.directory}:undefined)
+          return await codingRuntime.run(input,signal,bridge,context.data?{...context.data,mailboxDirectory:mailbox!.directory}:undefined,context.onProgress)
         } finally{try{await mailbox?.close()}finally{await bridge.close()}}
       }},
       ...(codingConfig.adapters ?? []),
     ], codingConfig.defaultId ?? 'codex') : undefined
-    if(assistantChannels)registerAssistantChannelRoutes(app,assistantChannels,csrf,{data:harnessData,baseUrl:config.origin+'/api/v1/agents'})
+    const files = config.objectStore ? createFileService({ transactions, objects: config.objectStore, ...config.filePolicy, capabilities: nativeDocs || nativeSheets || nativeSlides || nativePdf ? { docx: nativeDocs ? 'editable' : 'unsupported',xlsx: nativeSheets ? 'editable' : 'unsupported',pptx: nativeSlides ? 'editable' : 'unsupported',pdf: nativePdf ? 'editable' : 'unsupported',...(nativePdf?{pdfEditor:'editable' as const}:{}) } : undefined }) : undefined
+    if(assistantChannels)registerAssistantChannelRoutes(app,assistantChannels,csrf,{data:harnessData,baseUrl:config.origin+'/api/v1/agents'},config.objectStore,files,dshEditorOrigin)
     if(harnesses||assistantChannels){
       registerHarnessDataRoutes(app,harnessData)
       if(artifacts)registerAnalysisDeliveryRoutes(app,artifacts,csrf)
     }
-    if(harnesses){
-      registerCodingRoutes(app,{registry:harnesses,sessions,csrf,data:harnessData,dataBaseUrl:config.origin+'/api/v1/agents',
-        async openModel(token,modelId,signal){
+    const codingRoutes=harnesses?registerCodingRoutes(app,{registry:harnesses,sessions,csrf,data:harnessData,dataBaseUrl:config.origin+'/api/v1/agents',
+        authorizeDocument:files?(token,documentId)=>files.openFile(token,documentId):undefined,
+        async openModel(token,modelId,signal,onProgress){
           if(!officeGateway?.codingTurns)throw Error('Office model unavailable')
-          const bridge=await createCodingModelBridge({token,modelId,signal,turns:officeGateway.codingTurns})
+          const bridge=await createCodingModelBridge({token,modelId,signal,turns:officeGateway.codingTurns,...(onProgress?{onProgress}:{})})
           return {...bridge,modelId}
-        }})
-    }
-    if(config.providerGateway)ownedProbes.push(officeGateway=registerPersonalProviderGateway(app,{transactions,sessions,csrf,deploymentId:config.deploymentId,keyring:config.globalConfigKeyring!,profiles:config.providerGateway.profiles,harnesses,sourceCatalog:config.assistantSourceCatalog===true,assistantChannels:config.assistantChannels}))
+        }}):undefined
+    const admitContinuation=codingRoutes?.admitContinuation
+    if(config.providerGateway && 'mode' in config.providerGateway)ownedProbes.push(officeGateway=registerSharedProviderGateway(app,{transactions,sessions,csrf,keyring:config.globalConfigKeyring!,harnesses,sourceMode:assistantSourceMode,assistantChannels:config.assistantChannels,admitContinuation}))
+    else if(config.providerGateway)ownedProbes.push(officeGateway=registerPersonalProviderGateway(app,{transactions,sessions,csrf,deploymentId:config.deploymentId,keyring:config.globalConfigKeyring!,profiles:config.providerGateway.profiles,harnesses,sourceMode:assistantSourceMode,assistantChannels:config.assistantChannels,admitContinuation}))
     else app.get('/api/v1/ai/catalog',async(request,reply)=>{reply.header('Cache-Control','private, no-store');await sessions.authenticate(cookies(request).session??'');return {entries:[],defaultId:null}})
+    if(config.assistantBackground&&assistantChannels&&config.objectStore&&officeGateway){
+      await assertRuntimePool(config.assistantBackground.pool,'worker')
+      await assertSharedDatabase(config.db.pool,config.assistantBackground.pool)
+      const runner=createAssistantBackgroundRunner({store:createAssistantBackgroundStore({pool:config.assistantBackground.pool,deploymentId:config.deploymentId}),service:assistantChannels,objects:config.objectStore,answer:officeGateway.backgroundAnswer})
+      ownedProbes.push(runner)
+      app.addHook('onReady',async()=>{runner.start()})
+    }
     if (config.adminAiSyntheticProbe === true) ownedProbes.push(registerAdminSyntheticProbe(app, { transactions, sessions, csrf }))
     if(config.adminProviderProbe){
       try{const probe=registerFixedProviderProbe(app,{deploymentId:config.deploymentId,transactions,sessions,csrf,keyring:config.globalConfigKeyring!,profiles:config.adminProviderProbe.profiles});ownedProbes.push(probe);if(probeAssets)registerProbeAssets(app,probeAssets,probe.authorize)}
@@ -219,16 +259,21 @@ export async function buildLocalApp(config: LocalWebConfig): Promise<FastifyInst
     registerSourceRoutes(app, sources, sessions, csrf)
     registerWorkspaceSourceToolRoutes(app, { tools: sourceTools, results: sourceResults, sessions, csrf })
     config.onSourceToolsReady?.(sourceTools)
-    if (config.assistantSourceCatalog === true && config.providerGateway) registerAssistantSourceCatalog(app, {sessions,csrf,sources})
+    if (assistantSourceMode !== 'off') registerAssistantSourceCatalog(app, {sessions,csrf,sources, analysis: assistantSourceMode === 'read-only-analysis' ? sourceTools : undefined})
     registerPreferenceRoutes(app, createPreferenceService(transactions), sessions, csrf)
     registerSkillRoutes(app, createSkillService(transactions), sessions, csrf)
     registerWorkspaceRoutes(app, createWorkspaceService(transactions), sessions, csrf)
+    const convertMergeSource=config.sheetsNative?.convertMergeSource
+    registerAssistantAttachmentRoutes(app,{sessions,csrf,convertLegacyWorkbook:convertMergeSource&&((bytes,signal)=>convertMergeSource(bytes,'xls',signal))})
+    registerAiSearchRoutes(app,{service:createAiSearchService({transactions,keyring:config.globalConfigKeyring}),sessions,csrf})
+    registerAiMediaRoutes(app,{service:createAiMediaService({transactions,keyring:config.globalConfigKeyring}),sessions,csrf})
+    registerStyleTemplateRoutes(app,createStyleTemplateService(transactions),sessions,csrf)
     registerGlobalConfigRoutes(app, createGlobalConfigService({transactions, keyring: config.globalConfigKeyring}), sessions, csrf)
-    if (config.objectStore) {
-      const files = createFileService({ transactions, objects: config.objectStore, ...config.filePolicy, capabilities: nativeDocs || nativeSheets || nativeSlides || config.nativePdf ? { docx: nativeDocs ? 'editable' : 'unsupported',xlsx: nativeSheets ? 'editable' : 'unsupported',pptx: nativeSlides ? 'editable' : 'unsupported',pdf: config.nativePdf ? 'editable' : 'unsupported' } : undefined })
+    if (config.objectStore && files) {
       const leases = createLeaseService({ transactions })
       const revisions = createRevisionService({ transactions, objects: config.objectStore, files, ...config.filePolicy })
-      registerFileRoutes(app,files,sessions,csrf,{ leases, revisions })
+      registerFileRoutes(app,files,sessions,csrf,{ leases, revisions, wordCollaboration:config.wordCollaboration })
+      registerKnowledgeRoutes(app,createKnowledgeService({transactions,files}),sessions,csrf)
       registerPdfRoutes(app,createPdfService({ files, leases, revisions }),sessions,csrf)
       // T17 notification/reconciliation only; preClose terminates upgraded
       // sockets before HTTP shutdown waits on their lifetime.
@@ -250,7 +295,7 @@ export async function buildLocalApp(config: LocalWebConfig): Promise<FastifyInst
         method: ['GET','HEAD'], url: '/native-docx/*',
         onRequest: async (request,reply) => {
           reply.raw.setHeader('Cache-Control','private, no-store')
-          reply.raw.setHeader('Content-Security-Policy',`default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data: blob:; worker-src 'self' blob:; connect-src ${nativeConnectSources}; object-src 'none'; base-uri 'none'; frame-ancestors 'self'`)
+          reply.raw.setHeader('Content-Security-Policy',`default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data: blob:; worker-src 'self' blob:; connect-src ${nativeConnectSources}; object-src 'none'; base-uri 'none'; frame-ancestors ${nativeAncestors(request.url)}`)
           await sessions.authenticate(cookies(request).session ?? '')
         },
         handler: async (request,reply) => {
@@ -266,13 +311,30 @@ export async function buildLocalApp(config: LocalWebConfig): Promise<FastifyInst
           reply.hijack()
         },
       })
+      if (nativePdf) app.route({
+        method: ['GET','HEAD'], url: '/native-pdf/*',
+        onRequest: async (request,reply) => {
+          reply.raw.setHeader('Cache-Control','private, no-store')
+          reply.raw.setHeader('Content-Security-Policy',`default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data: blob:; worker-src 'self' blob:; connect-src ${nativeConnectSources}; object-src 'none'; base-uri 'none'; frame-ancestors ${nativeAncestors(request.url)}`)
+          await sessions.authenticate(cookies(request).session ?? '')
+        },
+        handler: async (request,reply) => {
+          const url = new URL(request.url,config.origin), path = url.pathname.slice('/native-pdf'.length)
+          if (path === '/' || path === '/index.html') {
+            const opened = await files.openFile(cookies(request).session ?? '',url.searchParams.get('fileId') ?? '')
+            if (opened.format !== 'pdf') throw authError(404)
+          }
+          if (!await nativePdf(request.raw,reply.raw,path)) throw authError(404)
+          reply.hijack()
+        },
+      })
       if (nativeSlides) app.route({
         method: ['GET','HEAD'], url: '/native-pptx/*',
         onRequest: async (request,reply) => {
           reply.raw.setHeader('Cache-Control','private, no-store')
           // 'wasm-unsafe-eval' keeps harfbuzzjs font shaping working; media-src covers
           // PPTX-embedded audio/video played through the slides renderer.
-          reply.raw.setHeader('Content-Security-Policy',`default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob:; font-src 'self' data: blob:; worker-src 'self' blob:; connect-src ${nativeConnectSources}; object-src 'none'; base-uri 'none'; frame-ancestors 'self'`)
+          reply.raw.setHeader('Content-Security-Policy',`default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob:; font-src 'self' data: blob:; worker-src 'self' blob:; connect-src ${nativeConnectSources}; object-src 'none'; base-uri 'none'; frame-ancestors ${nativeAncestors(request.url)}`)
           await sessions.authenticate(cookies(request).session ?? '')
         },
         handler: async (request,reply) => {
@@ -292,7 +354,7 @@ export async function buildLocalApp(config: LocalWebConfig): Promise<FastifyInst
         method: ['GET','HEAD'], url: '/native-xlsx/*',
         onRequest: async (request,reply) => {
           reply.raw.setHeader('Cache-Control','private, no-store')
-          reply.raw.setHeader('Content-Security-Policy',`default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data: blob:; worker-src 'self' blob:; connect-src ${nativeConnectSources}; object-src 'none'; base-uri 'none'; frame-ancestors 'self'`)
+          reply.raw.setHeader('Content-Security-Policy',`default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data: blob:; worker-src 'self' blob:; connect-src ${nativeConnectSources}; object-src 'none'; base-uri 'none'; frame-ancestors ${nativeAncestors(request.url)}`)
           await sessions.authenticate(cookies(request).session ?? '')
         },
         handler: async (request,reply) => {

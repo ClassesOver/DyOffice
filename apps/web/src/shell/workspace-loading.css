@@ -1,0 +1,13 @@
+.workspace-loading { position: fixed; inset: 0; min-width: 0; overflow: auto; background: var(--surface-subtle); }
+.workspace-loading > .document-loading { position: relative; min-height: 100%; padding: 40px 24px; }
+.workspace-loading-logo { width: 56px; height: 56px; margin-bottom: 16px; }
+.workspace-loading-brand { font-size: 25px; font-weight: 650; letter-spacing: -.7px; }
+.workspace-loading .document-loading-status { margin-top: 12px; }
+.workspace-loading-preview { width: min(280px, 100%); margin-top: 32px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); overflow: hidden; box-shadow: 0 8px 28px color-mix(in srgb, var(--text) 4%, transparent); }
+.workspace-loading-tabs { display: flex; gap: 7px; padding: 12px; border-bottom: 1px solid var(--border-subtle); }
+.workspace-loading-tabs i { width: 46px; height: 7px; border-radius: 3px; background: var(--border-subtle); }
+.workspace-loading-tabs i:first-child { background: color-mix(in srgb, var(--document-accent) 20%, var(--surface)); }
+.workspace-loading-body { display: flex; min-height: 90px; }
+.workspace-loading-sidebar { display: grid; align-content: start; gap: 10px; width: 52px; padding: 16px 12px; box-sizing: border-box; border-right: 1px solid var(--border-subtle); }
+.workspace-loading-sidebar i { height: 5px; border-radius: 3px; background: var(--border-subtle); }
+.workspace-loading-body .document-loading-skeleton { flex: 1; width: auto; margin: 18px; align-content: start; }

@@ -1,3 +1,4 @@
+export { AssistantSendButton } from './AssistantSendButton'
 export { AiPanelSideButton } from './AiPanelSideButton'
 export { AiComposer } from './AiComposer'
 export { AiQueueStrip } from './AiQueueStrip'
@@ -60,6 +61,7 @@ export {
   loadAiPanelWidth,
   saveAiPanelWidth,
 } from './ai-panel-width'
+export { useAiPanelResize } from './use-ai-panel-resize'
 export {
   installPopoverDismiss,
   useDismissablePopover,
@@ -173,3 +175,6 @@ export { createImeEnterGuard, useImeEnterGuard, type ImeEnterGuard } from './ime
 
 export { AssistantParticipants, AssistantAvatar, DelegatedAgentResultCard, delegatedAgentResult, compactDelegatedTranscript, type AssistantParticipant, type DelegatedAgentResult } from './assistant-participants'
 export type { AssistantControl } from './assistant-control'
+export type { AssistantWorkspace } from './assistant-workspace'
+
+export { AssistantConversation } from './assistant-workspace'

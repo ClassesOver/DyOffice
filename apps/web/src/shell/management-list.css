@@ -1,47 +1,30 @@
-.management-list{display:flex;flex:1;flex-direction:column;height:100%;min-width:0;min-height:0;overflow:hidden;color:var(--text-primary)}.management-list-summary{flex-shrink:0;display:flex;align-items:center;flex-wrap:wrap;gap:8px 18px;padding:0 0 14px;color:var(--text-secondary);font-size:13px;line-height:1.5}.management-list-summary strong{color:var(--text-primary);font-weight:600}.management-list-toolbar{flex-shrink:0;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px 16px;padding:0 0 16px}.management-list-toolbar .ant-input-search{width:260px;max-width:100%}.management-list-toolbar .ant-select{min-width:128px}.management-list-panel{flex-shrink:0;max-height:40%;overflow-y:auto;margin-bottom:14px;scrollbar-gutter:stable}.management-list-panel:empty{display:none}.management-list-panel .ant-alert{margin:0 0 10px}.management-list-table-region{flex:1;min-width:0;min-height:0;overflow:hidden;border:1px solid var(--border);border-radius:8px;background:var(--surface)}.management-list-table-region .ant-table-header{border-radius:0}.management-list-table-region .ant-table-thead>tr>th{height:42px;padding:10px 14px;background:var(--surface-subtle);font-size:12px;font-weight:600;color:var(--text-secondary)}.management-list-table-region .ant-table-tbody>tr>td{padding:11px 14px;font-size:13px}.management-list-table-region .ant-table-body{overflow-y:scroll!important;overscroll-behavior:contain;scrollbar-gutter:stable}.management-list-table-region .ant-table-empty .ant-table-tbody>tr>td{height:160px}.management-list-table-region .ant-empty{margin:24px 0}.management-list-footer{flex-shrink:0;display:flex;align-items:center;justify-content:flex-end;flex-wrap:wrap;gap:12px;padding:14px 0 0;min-height:42px}.management-list-footer .ant-pagination{margin:0}.management-list-panel form{margin:0}.management-list-panel form h4{margin:0 0 8px}.management-list-panel form p{margin:6px 0;color:var(--text-secondary);font-size:13px}.management-list-panel .set-field{min-height:0;padding:0;border:0}.management-list-panel form label.set-field{margin:10px 0}.management-list-panel .ant-card-body{padding:14px 16px}@media(max-width:680px){.management-list-summary{padding-bottom:10px;gap:6px 12px;font-size:12px}.management-list-toolbar{gap:10px;padding-bottom:12px}.management-list-toolbar>.ant-space{flex:1 1 100%;width:100%;min-width:0;flex-wrap:wrap}.management-list-toolbar .ant-input-search{width:190px}.management-list-footer{justify-content:center}.management-list-panel{max-height:44%}.management-list-table-region .ant-table-tbody>tr>td{padding:10px}}
-.workspace-config-modal .ant-modal-body:has(.management-list){overflow:hidden}
-/* Configuration dialogs use one outer gutter; rows stay dense enough to scan. */
-.workspace-config-modal .management-list-summary{padding-bottom:14px;font-size:13px;gap:6px 20px}
-.workspace-config-modal .management-list-summary>span+span{font-size:12px;color:var(--text-tertiary,var(--text-secondary))}
-.workspace-config-modal .management-list-toolbar{padding-bottom:16px;gap:12px}
-.workspace-config-modal .management-list-table-region{border-color:var(--border-subtle);border-radius:8px}
-.workspace-config-modal .management-list-table-region .ant-table-thead>tr>th{height:40px;padding:9px 16px;font-size:12px;font-weight:500;line-height:21px;background:var(--surface-subtle);border-bottom-color:var(--border-subtle)}
-.workspace-config-modal .management-list-table-region .ant-table-tbody>tr>td{height:58px;padding:9px 16px;font-size:14px;line-height:20px;border-bottom-color:var(--border-subtle)}
-.workspace-config-modal .management-list-table-region .ant-table-tbody .ant-typography strong{font-weight:500}
-.workspace-config-modal .management-list-table-region .ant-table-tbody .ant-typography-secondary{font-size:12px}
-.workspace-config-modal .management-list-table-region .ant-avatar{width:30px;height:30px;font-size:13px;border-radius:6px}
-.workspace-config-modal .management-list-footer{min-height:48px;padding-top:12px;font-size:12px}
-.workspace-config-modal .management-list-footer>.ant-typography{font-size:12px;margin-inline-end:auto}
-.workspace-config-modal .management-list-panel .ant-card-head{min-height:40px}
+/* Shared native management table: header and paging stay outside its scroll region. */
+.management-list{display:flex;flex:1;flex-direction:column;height:100%;min-width:0;min-height:0;overflow:hidden;color:var(--text-primary)}
+.management-list .management-list-heading{flex-shrink:0;margin:0 0 20px;min-width:0}
+.management-list .management-list-heading h3{margin:0 0 8px;font-size:22px;font-weight:600;line-height:1.4;overflow-wrap:anywhere}
+.management-list .management-list-description{margin:0;color:var(--text-secondary);font-size:13px;line-height:1.7}
+.management-list .management-list-summary{flex-shrink:0;display:flex;align-items:center;flex-wrap:wrap;gap:8px 18px;border:1px solid var(--border-subtle);border-radius:8px;background:var(--surface-subtle);padding:12px 16px;margin-bottom:16px;color:var(--text-secondary);font-size:12px;line-height:1.6}
+.management-list .management-list-summary strong{color:var(--text-primary);font-weight:600}
+.management-list .management-list-toolbar{flex-shrink:0;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px 16px;padding:0 0 16px;min-width:0}
+.management-list .management-list-panel{flex-shrink:0;max-height:44%;overflow:auto;margin-bottom:14px;scrollbar-gutter:stable}
+.management-list .management-list-panel:empty{display:none}
+.management-list .management-list-table-region{flex:1;min-width:0;min-height:0;overflow:hidden;border:1px solid var(--border-subtle);border-radius:8px;background:var(--surface)}
+.management-list .management-list-table-scroll{overflow:auto;overscroll-behavior:contain;scrollbar-gutter:stable;scrollbar-width:thin}
+.management-list .management-list-table-scroll:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
+.management-list .management-list-table{width:100%;border-collapse:collapse;table-layout:auto;color:inherit;font-size:13px;line-height:1.6}
+.management-list .management-list-table th{position:sticky;top:0;z-index:1;text-align:left;padding:10px 14px;background:var(--surface-subtle);color:var(--text-secondary);font-size:12px;font-weight:600;border-bottom:1px solid var(--border-subtle)}
+.management-list .management-list-table td{padding:12px 14px;border-bottom:1px solid var(--border-subtle);vertical-align:middle;overflow-wrap:anywhere}
+.management-list .management-list-table tbody tr:last-child td{border-bottom:0}
+.management-list .management-list-table .management-list-empty{height:150px;text-align:center;color:var(--text-secondary)}
+.management-list .management-list-footer{flex-shrink:0;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;padding-top:14px;min-height:42px;font-size:12px;color:var(--text-secondary)}
+.management-list .management-list-footer :is(.settings-list-pager,.native-settings-pager){margin:0}
+.management-list .management-list-panel form{margin:0}
 @media(max-width:680px){
- .workspace-config-modal .management-list-toolbar{gap:10px}
- .workspace-config-modal .management-list-toolbar>.ant-space:first-child{display:flex;flex-wrap:nowrap;gap:8px!important}
- .workspace-config-modal .management-list-toolbar>.ant-space:first-child>.ant-space-item:first-child{flex:1;min-width:0}
- .workspace-config-modal .management-list-toolbar .ant-input-search{width:100%;min-width:0}
- .workspace-config-modal .management-list-toolbar .ant-select{min-width:108px;width:108px}
- .workspace-config-modal .management-list-footer{gap:8px}
- .workspace-config-modal .management-list-table-region .ant-table-tbody>tr>td{padding:9px 12px}
-}
-
-/* B management pages share the personal-settings hierarchy and theme tokens.
-   Only the table scrolls; heading, feedback and pagination remain reachable. */
-.management-list.settings-list-surface .management-list-heading{flex-shrink:0;margin:0 0 20px;min-width:0}
-.management-list.settings-list-surface .management-list-heading h3{margin:0 0 8px;color:var(--text);font-size:24px;font-weight:600;line-height:1.4;overflow-wrap:anywhere}
-.management-list.settings-list-surface .management-list-description{margin:0;color:var(--text-secondary);font-size:14px;line-height:1.6;overflow-wrap:anywhere}
-.management-list.settings-list-surface .management-list-summary{border:1px solid var(--border-subtle);border-radius:10px;background:var(--surface-subtle);padding:12px 16px;margin-bottom:16px}
-.management-list.settings-list-surface .management-list-toolbar{padding:0 0 16px;gap:12px;min-width:0}
-.management-list.settings-list-surface .management-list-table-region{border-color:var(--border-subtle);border-radius:12px}
-.management-list.settings-list-surface .management-list-panel{border-inline-start:3px solid var(--accent);padding-inline-start:12px}
-.management-list.settings-list-surface .management-list-panel:empty{border:0;padding:0}
-.management-list.settings-list-surface .management-list-footer{border-top:0;gap:8px 16px;padding-top:14px}
-.management-list.settings-list-surface .settings-list-pager{margin-top:0}
-@media(max-width:680px){
- .management-list.settings-list-surface .management-list-heading{margin-bottom:14px}
- .management-list.settings-list-surface .management-list-heading h3{font-size:20px;margin-bottom:6px}
- .management-list.settings-list-surface .management-list-description{font-size:13px}
- .management-list.settings-list-surface .management-list-summary{padding:10px 12px;margin-bottom:12px;gap:6px 12px}
- .management-list.settings-list-surface .management-list-toolbar{gap:10px;padding-bottom:12px}
- .management-list.settings-list-surface .management-list-footer{justify-content:space-between;gap:8px;padding-top:10px}
- .management-list.settings-list-surface .management-list-footer>.ant-typography{flex-basis:100%;font-size:12px}
- .management-list.settings-list-surface .settings-list-pager{width:100%;justify-content:space-between}
+ .management-list .management-list-heading{margin-bottom:14px}
+ .management-list .management-list-heading h3{font-size:20px}
+ .management-list .management-list-summary{padding:10px 12px;margin-bottom:12px;gap:6px 12px}
+ .management-list .management-list-toolbar{gap:10px;padding-bottom:12px}
+ .management-list .management-list-table td{padding:10px 12px}
+ .management-list .management-list-footer{gap:8px;padding-top:10px}
+ .management-list .management-list-footer>span{flex-basis:100%}
 }

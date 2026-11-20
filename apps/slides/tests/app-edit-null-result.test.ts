@@ -208,3 +208,29 @@ describe('App rejected text commit', () => {
     expect(container!.querySelector('[data-testid=draft-overlay]')).toBeNull()
   })
 })
+
+describe('App analysis delivery save consent',()=>{
+ it('holds blur and timer saves after insertion until an explicit save',async()=>{
+  const interval=vi.spyOn(window,'setInterval'),api=makeSlidesApi() as any
+  let generation=1,handle:any
+  api.consumePendingOpen=async()=>({path:'analysis.pptx',slides:[blankSlide()],defaultFont:'Arial'})
+  api.isDirty=vi.fn(async()=>true)
+  api.save=vi.fn(async()=>({ok:true,path:'analysis.pptx'}))
+  window.slidesApi=api
+  localStorage.setItem('ai-slides-auto-save','1')
+  container=document.createElement('div');document.body.append(container);root=createRoot(container)
+  try{
+   await act(async()=>root!.render(createElement(App,{host:{inPlaceSave:true,analysisGeneration:()=>generation,onEditorReady:value=>{handle=value},runAnalysis:async(_ops,check,adopt)=>{if(!check())return false;generation++;adopt([blankSlide()] as any);return true}}})))
+   await settle()
+   await act(async()=>{expect(await handle.analysis.captureAnalysis().apply({kind:'text',text:'delivery'},()=>true)).toBe(true)})
+   const tick=interval.mock.calls.find(call=>call[1]===30_000)?.[0] as ()=>void
+   expect(tick).toBeTypeOf('function')
+   await act(async()=>{window.dispatchEvent(new Event('blur'));tick();await Promise.resolve()})
+   expect(api.save).not.toHaveBeenCalled()
+   await act(async()=>{expect(await handle.saveAndWait()).toBe(true)})
+   expect(api.save).toHaveBeenCalledTimes(1)
+   await act(async()=>{window.dispatchEvent(new Event('blur'));await Promise.resolve()})
+   expect(api.save).toHaveBeenCalledTimes(2)
+  }finally{localStorage.removeItem('ai-slides-auto-save');interval.mockRestore()}
+ })
+})

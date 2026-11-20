@@ -1,0 +1,56 @@
+.personal-skills-native{min-width:0;color:var(--text-primary)}
+.personal-skills-native .personal-skills-toolbar{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:14px}
+.personal-skills-native p{margin:6px 0;font-size:13px;line-height:1.7}
+.personal-skills-native .skill-hint{color:var(--text-secondary);font-size:12px}
+.personal-skills-native .skill-section{margin-top:26px;padding-top:24px;border-top:1px solid var(--border-subtle)}
+.personal-skills-native h3{font-size:15px;margin:0 0 8px}
+.personal-skills-native .skill-actions{display:flex;gap:8px;flex-wrap:wrap}
+.personal-skills-native .personal-skills-filters{display:flex;gap:12px;margin:18px 0}
+.personal-skills-native .personal-skills-filters input{flex:1;min-width:0}
+.personal-skills-native .personal-skills-filters select{width:150px}
+.personal-skills-native .skill-table-wrap{border:1px solid var(--border-subtle);border-radius:8px;overflow:hidden}
+.personal-skills-native table{width:100%;border-collapse:collapse;table-layout:fixed;text-align:left;font-size:13px}
+.personal-skills-native th{padding:11px 16px;background:var(--surface-subtle);font-size:12px;color:var(--text-secondary);font-weight:500}
+.personal-skills-native td{padding:16px;vertical-align:top;border-top:1px solid var(--border-subtle);overflow-wrap:anywhere}
+.personal-skills-native th:last-child,.personal-skills-native td:last-child{width:170px}
+.personal-skills-native td p,.personal-skills-native small{color:var(--text-secondary);font-size:12px}
+.personal-skills-native small{display:block;margin-top:4px}
+.personal-skills-native .skill-formats{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
+.personal-skills-native .skill-formats span{padding:2px 6px;border-radius:4px;background:var(--surface-subtle);color:var(--text-secondary);font-size:11px}
+.personal-skills-native .skill-empty{padding:30px 16px;text-align:center;color:var(--text-secondary)}
+.skill-body-preview{resize:vertical;font-family:ui-monospace,monospace}
+@media(max-width:680px){.personal-skills-native th:last-child,.personal-skills-native td:last-child{width:84px}.personal-skills-native td,.personal-skills-native th{padding:12px}.personal-skills-native .personal-skills-filters select{width:112px}.personal-skills-native .skill-actions{gap:6px}.personal-skills-native .native-settings-button{font-size:12px;padding-inline:9px}}
+
+.personal-skills-native tbody tr:focus-within{background:var(--accent-soft)}
+.personal-skills-native td strong{font-weight:600;line-height:1.7}
+.personal-skills-native .skill-formats span{border:1px solid var(--border-subtle);line-height:17px}
+@media(max-width:680px){
+ .personal-skills-native .personal-skills-toolbar > p { margin: 0; }
+ .personal-skills-native .personal-skills-toolbar > .skill-actions {
+  display: grid;
+  width: 100%;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+ }
+ .personal-skills-native .personal-skills-filters {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(88px, auto);
+  gap: 8px;
+ }
+ .personal-skills-native .personal-skills-filters select{width:100%}
+ .personal-skills-native .skill-table-wrap{border:0;overflow:visible}
+ .personal-skills-native thead{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
+ .personal-skills-native tbody{display:grid;gap:12px}
+ .personal-skills-native tbody tr{display:grid;gap:14px;padding:16px;border:1px solid var(--border-subtle);border-radius:10px;background:var(--surface)}
+ .personal-skills-native td,.personal-skills-native td:last-child{display:block;width:auto;min-width:0;padding:0;border:0}
+ .personal-skills-native td+td{padding-top:12px;border-top:1px solid var(--border-subtle)}
+ .personal-skills-native .skill-actions{gap:8px}
+ .personal-skills-native .personal-skills-catalog td .skill-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+ }
+ .personal-skills-native td .skill-actions button{flex:1;min-height:38px}
+ .personal-skills-native td.skill-empty{display:grid;place-items:center;min-height:110px;padding:16px;line-height:1.8}
+}
+@media(max-width:360px){
+ .personal-skills-native .personal-skills-filters{grid-template-columns:minmax(0,1fr)}
+}
