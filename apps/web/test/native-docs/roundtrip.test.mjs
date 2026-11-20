@@ -269,11 +269,19 @@ test('Word AI naming confirms an independent copy of the unsaved draft', {timeou
   await editor.first().click()
   await f.page.keyboard.press('Control+End');await f.page.keyboard.press('Enter');await f.page.keyboard.type(marker)
   await expect(f.page.locator('.dyoffice-docs-persistence-state')).toHaveAttribute('data-dirty','true')
-  await f.page.route('**/api/v1/auth/session-proof',route=>route.fulfill({status:503,json:{}}),{times:1})
   await f.page.getByRole('button',{name:'File',exact:true}).click()
-  await f.page.locator('.qa-name-with-ai').click()
-  await expect(f.page.getByText('Could not verify this workspace session. Your draft is still open.')).toBeVisible()
-  assert.equal(requests.length,0)
+  const namingButton=f.page.locator('.qa-name-with-ai')
+  await expect(namingButton).toBeEnabled()
+  // A background proof request must not consume the refusal intended for naming.
+  const proofPath='**/api/v1/auth/session-proof',denyProof=route=>route.fulfill({status:503,json:{}})
+  await f.page.route(proofPath,denyProof)
+  try {
+    await namingButton.click()
+    await expect(f.page.getByText('Could not verify this workspace session. Your draft is still open.')).toBeVisible()
+    assert.equal(requests.length,0)
+  } finally {
+    await f.page.unroute(proofPath,denyProof)
+  }
   async function choose(name){
     await f.page.getByRole('button',{name:'File',exact:true}).click()
     const button=f.page.locator('.qa-name-with-ai')

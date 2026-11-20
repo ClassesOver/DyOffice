@@ -187,10 +187,14 @@ for(const creationOnly of [true,false])test(creationOnly
   const rail=editor.locator(format==='xlsx'?'.expand-copilot':'.ai-rail').first()
   const panel=editor.locator(format==='xlsx'?'.copilot:not(.collapsed)':'.ai-panel').first()
   const input=panel.locator('textarea')
-  try{await expect.poll(async()=>{
-   if(await rail.isVisible()||await input.isVisible())return 'available'
-   return (await editor.locator('html').getAttribute('data-document-loading',{timeout:1000}).catch(()=>null))??'not mounted'
-  },{timeout:45000,message:stage+' '+format+' assistant becomes available'}).toBe('available')}
+  try{
+   // The workbook renders its composer inside an inert shell until its first range loads.
+   if(format==='xlsx')await expect(editor.locator('html'),stage+' XLSX workbook becomes ready').toHaveAttribute('data-document-loading','ready',{timeout:45000})
+   await expect.poll(async()=>{
+    if(await rail.isVisible()||await input.isVisible())return 'available'
+    return (await editor.locator('html').getAttribute('data-document-loading',{timeout:1000}).catch(()=>null))??'not mounted'
+   },{timeout:45000,message:stage+' '+format+' assistant becomes available'}).toBe('available')
+  }
   catch(error){t.diagnostic(loadErrors.join('\n'));throw error}
   if(await rail.isVisible())await rail.click()
   return panel

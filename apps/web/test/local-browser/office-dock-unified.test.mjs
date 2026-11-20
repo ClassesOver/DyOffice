@@ -111,11 +111,15 @@ test('four real Office editors share assistant chrome and retain drafts across c
   await expect(panel.locator('.ai-chat')).toBeVisible()
   const draft='核对当前文档\n保留这份草稿'
   const textarea=panel.locator('textarea')
+  const textareaHeight=()=>textarea.evaluate(node=>node.getBoundingClientRect().height)
+  const compactHeight=44
   await textarea.fill(draft)
-  const shortHeight=(await textarea.boundingBox()).height
+  // The composer measures after the React update; the previous starter can still be at maximum height.
+  await expect.poll(textareaHeight,{message:format+' short draft settles before measuring growth'}).toBe(compactHeight)
   await textarea.fill(`${draft}\n检查第三行\n检查第四行`)
-  await expect.poll(async()=>(await textarea.boundingBox()).height).toBeGreaterThan(shortHeight)
+  await expect.poll(textareaHeight,{message:format+' composer grows for a longer draft'}).toBeGreaterThan(compactHeight)
   await textarea.fill(draft)
+  await expect.poll(textareaHeight,{message:format+' composer shrinks for the short draft'}).toBe(compactHeight)
   {
    const handle=panel.getByRole('separator',{name:'调整 AI 助手宽度'})
    await expect(handle).toBeVisible()
@@ -221,7 +225,7 @@ test('four real Office editors share assistant chrome and retain drafts across c
    assert.equal(chrome.input.height,108,format+' model picker fits the compact composer')
    assert.equal(chrome.input.borderRadius,'12px',format+' input radius')
    assert.equal(chrome.textarea.fontSize,'14px',format+' input typography')
-   assert.equal(chrome.textarea.height,44,format+' short draft keeps a compact input')
+   assert.equal(chrome.textarea.height,compactHeight,format+' short draft keeps a compact input')
    assert.ok(await panel.locator('.ai-chat,.ai-composer').evaluateAll(nodes=>nodes.every(node=>node.scrollWidth<=node.clientWidth+1)),format+' chat and composer have no horizontal overflow')
   }
   await panel.locator('.ai-panel-collapse').click()
@@ -230,11 +234,11 @@ test('four real Office editors share assistant chrome and retain drafts across c
   await page.screenshot({path:`test-results/office-dock-unified/${format}-collapsed.png`,animations:'disabled'})
   await rail.click();await expect(panel.locator('textarea')).toHaveValue(draft)
   await expect(panel).toHaveCSS('width','450px')
-  await expect.poll(()=>panel.locator('textarea').evaluate(node=>node.getBoundingClientRect().height)).toBe(44)
+  await expect.poll(textareaHeight).toBe(compactHeight)
   await panel.locator('textarea').fill(Array(20).fill('这是一段较长的编辑指令').join('\n'))
-  await expect.poll(()=>panel.locator('textarea').evaluate(node=>node.getBoundingClientRect().height)).toBe(168)
+  await expect.poll(textareaHeight).toBe(168)
   await panel.locator('textarea').fill(draft)
-  await expect.poll(()=>panel.locator('textarea').evaluate(node=>node.getBoundingClientRect().height)).toBe(44)
+  await expect.poll(textareaHeight).toBe(compactHeight)
   await page.setViewportSize({width:768,height:900})
   await expect(panel.locator('textarea')).toBeVisible()
   if(format==='pdf'){
