@@ -53,7 +53,7 @@ test('personal HTTP gateway is opt-in and an unfunded account cannot dispatch or
   const app = await buildLocalApp({db: f.db, businessPool: f.businessPool, passwords: f.passwords, deploymentId: f.deploymentId, origin, csrfKey: f.csrfKey, globalConfigKeyring: f.keyring, providerGateway: {profiles: [profile]}})
   f.cleanup.push(() => app.close())
   const aliceHeaders = {...headers, cookie: '__Host-dyoffice-session=' + f.alice.token, 'x-csrf-token': csrf.sessionToken(f.alice.token)}
-  assert.deepEqual((await app.inject({url: '/api/v1/ai/catalog', headers: aliceHeaders})).json(), {entries: [{id: entry.id, label: entry.label, model: entry.model}], defaultId: entry.id, agents: [{id: 'codex', name: 'Codex', origin: 'builtin', capabilities: ['coding']}], defaultAgentId: 'codex'})
+  assert.deepEqual((await app.inject({url: '/api/v1/ai/catalog', headers: aliceHeaders})).json(), {entries: [{id: entry.id, label: entry.label, model: entry.model, providerId: entry.providerId}], defaultId: entry.id, agents: [{id: 'codex', name: 'Codex', origin: 'builtin', capabilities: ['coding']}], defaultAgentId: 'codex'})
   assert.deepEqual((await app.inject({url: '/api/v1/ai/catalog', headers})).json(), {entries: [], defaultId: null})
   const request = {method: 'POST', url: '/api/v1/ai/turns', headers, payload: {turnId: randomUUID(), modelId: entry.id, request: {system: '', messages: [{role: 'user', text: 'synthetic'}], tools: []}}}
   assert.equal((await f.app.inject(request)).statusCode, 501)

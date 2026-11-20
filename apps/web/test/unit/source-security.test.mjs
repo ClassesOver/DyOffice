@@ -4,6 +4,13 @@ import { randomBytes } from 'node:crypto'
 import { createCredentialVault } from '../../server/src/modules/sources/vault.ts'
 import { validateReadOnlySql, validateReadOnlyGrants } from '../../server/src/modules/sources/sql-policy.ts'
 import { createSourceEgressPolicy } from '../../server/src/security/egress.ts'
+import { createSourceService } from '../../server/src/modules/sources/service.ts'
+
+test('invalid configured egress targets cannot fall back to unset policy', () => {
+  for (const egressTargets of [null, false, 0]) {
+    assert.throws(() => createSourceService({transactions: {}, egressTargets}), /Invalid source egress configuration/)
+  }
+})
 
 const scope = { deploymentId: 'd', ownerId: 'u', sourceId: 's', reference: 'r', revision: 1 }
 test('credential vault binds ciphertext to source/revision and retains old decryption keys', () => {

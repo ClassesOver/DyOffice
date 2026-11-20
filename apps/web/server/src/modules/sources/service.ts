@@ -19,7 +19,7 @@ const descriptor = (row: Row): SourceDescriptor => ({ sourceId: row.source_id, n
 
 export function createSourceService({ transactions, credentialKeys = '', egressTargets }: { transactions: PrincipalTransactions; credentialKeys?: string; egressTargets?: readonly SourceEgressTarget[] }) {
   const vault = createCredentialVault(credentialKeys)
-  const fixedPolicy = egressTargets && createSourceEgressPolicy(egressTargets)
+  const fixedPolicy = egressTargets === undefined ? undefined : createSourceEgressPolicy(egressTargets)
   async function sourcePolicy(connection: PoolClient, principal: BusinessPrincipal, token: string) {
     if (fixedPolicy) return fixedPolicy
     await connection.query("SELECT set_config('dyoffice.global_session_hash',$1,true),set_config('dyoffice.global_idle_ms',$2,true)", [tokenHash(token), String(transactions.sessionIdleMs)])
