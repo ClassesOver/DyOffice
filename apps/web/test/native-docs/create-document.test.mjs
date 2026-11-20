@@ -6,15 +6,15 @@ import {join} from 'node:path'
 import {execFileSync} from 'node:child_process'
 import {createServer} from 'node:https'
 import {randomUUID} from 'node:crypto'
-import {fileURLToPath} from 'node:url'
 import {expect} from '@playwright/test'
 import JSZip from 'jszip'
 import {launchTestBrowser} from '../helpers/browser.mjs'
 import {fileFixture,importFile} from '../helpers/files.mjs'
 import {password} from '../helpers/identity.mjs'
+import {officeBrowserAsset} from '../helpers/office-browser-assets.mjs'
 import {buildLocalApp} from '../../server/src/app.ts'
 
-async function fixture(t,{embed=false}={}){
+async function fixture(t,{embed=false,wordCollaboration=false}={}){
  const directory=await mkdtemp(join(tmpdir(),'dyoffice-docx-create-'))
  let app,server,parentServer,browser
  t.after(async()=>{
@@ -36,7 +36,7 @@ async function fixture(t,{embed=false}={}){
  }
  const f=await fileFixture(t,{origin,buildApp:false})
  await f.preferences.update(f.alice.token,{language:'en',autoSave:false,showAssistant:false})
- app=await buildLocalApp({db:f.db,businessPool:f.businessPool,passwords:f.passwords,deploymentId:f.deploymentId,origin,csrfKey:f.csrfKey,objectStore:f.objects,nativeDocsDirectory:process.env.DYOFFICE_TEST_NATIVE_DOCS_DIRECTORY??fileURLToPath(new URL('../../dist-docs/',import.meta.url)),localShellDirectory:fileURLToPath(new URL('../../dist-local-shell/',import.meta.url)),dshEditorOrigin,assistantChannels:embed})
+ app=await buildLocalApp({db:f.db,businessPool:f.businessPool,passwords:f.passwords,deploymentId:f.deploymentId,origin,csrfKey:f.csrfKey,objectStore:f.objects,nativeDocsDirectory:process.env.DYOFFICE_TEST_NATIVE_DOCS_DIRECTORY??officeBrowserAsset('docs'),localShellDirectory:officeBrowserAsset('local-shell'),dshEditorOrigin,assistantChannels:embed,wordCollaboration})
  browser=await launchTestBrowser()
  const context=await browser.newContext({ignoreHTTPSErrors:true,viewport:{width:1440,height:1100}}),page=await context.newPage()
  const challenge=await (await context.request.get(origin+'/api/v1/auth/csrf')).json()
@@ -104,17 +104,21 @@ test('real shell DOCX creation waits for saved body; native bridge rejects a fai
  const reached=Promise.withResolvers(),resume=Promise.withResolvers()
  t.after(()=>resume.resolve())
  let fileId
+ let commitResponse
  await f.page.route('**/api/v1/files/*/commits',async route=>{
   fileId=route.request().postDataJSON().fileId
   const response=await route.fetch()
-  assert.equal(response.status(),200)
+  commitResponse=response
   reached.resolve();await resume.promise;await route.fulfill({response})
  },{times:1})
  await f.page.evaluate(()=>{
   window.creationOutcome={status:'pending'}
   void window.dyofficeCreateAiDoc({type:'docx',title:'Created report',content:'<h1>Quarterly report</h1><p>Browser persisted generated body 2026</p>'}).then(()=>{window.creationOutcome={status:'succeeded'}},error=>{window.creationOutcome={status:'failed',error:error.message}})
  })
- await reached.promise
+ await Promise.race([reached.promise,f.page.waitForFunction(()=>window.creationOutcome?.status!=='pending',undefined,{timeout:30_000}).then(async()=>{
+  assert.fail(`DOCX creation completed before its commit: ${JSON.stringify(await f.page.evaluate(()=>window.creationOutcome))}`)
+ })])
+ assert.equal(commitResponse.status(),200,await commitResponse.text())
  assert.equal(await f.page.evaluate(()=>window.creationOutcome.status),'pending','Opening the iframe or a held HTTP commit must not report success')
  const committed=await f.files.openFile(f.alice.token,fileId)
  const zip=await JSZip.loadAsync(await f.files.readFile(f.alice.token,fileId,committed.file.revision))
@@ -147,7 +151,7 @@ test('real shell DOCX creation waits for saved body; native bridge rejects a fai
 
 
 test('two independently logged-in browsers merge concurrent Word input and persist it on reopen',{timeout:90_000},async t=>{
- const f=await fixture(t)
+ const f=await fixture(t,{wordCollaboration:true})
  const {file:{fileId}}=await importFile(f,f.alice.token,await readFile(new URL('../../../../fixtures/generated/kitchen-sink.docx',import.meta.url)),'Concurrent.docx')
  const otherBrowser=await launchTestBrowser()
  t.after(()=>otherBrowser.close())

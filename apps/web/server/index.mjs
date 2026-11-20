@@ -44,6 +44,7 @@ async function configuredApplication() {
   const globalConfigKeyring=parseConfigKeyring(process.env.DYOFFICE_CONFIG_KEYRING);
   const providerGateway=profilesFile ? {profiles:JSON.parse(await readFile(resolve(profilesFile),'utf8'))} : globalConfigKeyring ? {mode:'shared'} : undefined;
   const sourcesCredentialKeys=process.env.DYOFFICE_SOURCES_CREDENTIAL_KEYS||'';
+  const sourcesEgressTargets=process.env.DYOFFICE_SOURCES_EGRESS_TARGETS===undefined ? undefined : JSON.parse(process.env.DYOFFICE_SOURCES_EGRESS_TARGETS||'[]');
   if(!connectionString||!businessConnectionString||!deploymentId||!origin||!csrfKey) throw new Error('Local account configuration missing');
   const {db,close}=connectIdentityStore(connectionString);
   let businessPool,backgroundPool,storage,sheets;
@@ -76,7 +77,7 @@ async function configuredApplication() {
     const defaultPdfDir=resolve(process.env.DYOFFICE_NATIVE_PDF_DIRECTORY||fileURLToPath(new URL('../dist-pdf/',import.meta.url)));
     const nativePdfDirectory=storage.objectStore && existsSync(join(defaultPdfDir,'.vite/manifest.json')) ? defaultPdfDir : undefined;
     const nativePdf=Boolean(nativePdfDirectory || nativeDocsDirectory || nativeSlidesDirectory || sheets);
-    return await buildLocalApp({db,businessPool,...storage,...sheetsConfig,nativeDocsDirectory,nativeSlidesDirectory,slidesHost,nativePdf,nativePdfDirectory,localShellDirectory:effectiveShellDirectory,dshEditorOrigin:process.env.DYOFFICE_DSH_EMBED_ORIGIN,nativeJobs:jobFlag==='experimental',deploymentId,origin,csrfKey,globalConfigKeyring,providerGateway,assistantSourceMode,assistantChannels:process.env.DYOFFICE_ASSISTANT_CHANNELS==='on',assistantBackground:backgroundPool?{pool:backgroundPool}:undefined,codingHarnesses:codingHarnessConfig(process.env),sourcesCredentialKeys,passwordBlocklistFile:process.env.DYOFFICE_PASSWORD_BLOCKLIST_FILE,closeDb:async()=>{await closeSheets?.();storage.close();await Promise.all([close(),businessPool.end(),backgroundPool?.end()]);}});
+    return await buildLocalApp({db,businessPool,...storage,...sheetsConfig,nativeDocsDirectory,nativeSlidesDirectory,slidesHost,nativePdf,nativePdfDirectory,localShellDirectory:effectiveShellDirectory,dshEditorOrigin:process.env.DYOFFICE_DSH_EMBED_ORIGIN,nativeJobs:jobFlag==='experimental',deploymentId,origin,csrfKey,globalConfigKeyring,providerGateway,assistantSourceMode,assistantChannels:process.env.DYOFFICE_ASSISTANT_CHANNELS==='on',assistantBackground:backgroundPool?{pool:backgroundPool}:undefined,codingHarnesses:codingHarnessConfig(process.env),sourcesCredentialKeys,sourcesEgressTargets,wordCollaboration:process.env.DYOFFICE_WORD_COLLAB==='experimental',passwordBlocklistFile:process.env.DYOFFICE_PASSWORD_BLOCKLIST_FILE,closeDb:async()=>{await closeSheets?.();storage.close();await Promise.all([close(),businessPool.end(),backgroundPool?.end()]);}});
   } catch(error) { await sheets?.close();storage?.close();await Promise.allSettled([close(),businessPool?.end(),backgroundPool?.end()]); throw error; }
 }
 

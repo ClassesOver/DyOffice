@@ -15,7 +15,7 @@ import type { LeaseService } from '../leases/service.ts'
 import { createAiXlsxDocument } from '../sheets/create-document.ts'
 
 const token = (request: FastifyRequest) => cookies(request).session ?? ''
-export function registerFileRoutes(app: FastifyInstance, files: FileService, sessions: SessionService, csrf: ReturnType<typeof createCsrfService>, saves?: { revisions: RevisionService; leases: LeaseService }) {
+export function registerFileRoutes(app: FastifyInstance, files: FileService, sessions: SessionService, csrf: ReturnType<typeof createCsrfService>, saves?: { revisions: RevisionService; leases: LeaseService; wordCollaboration?: boolean }) {
   const admission = objectTransferAdmission(app)
   const { transfer } = admission
   app.register(async api => {

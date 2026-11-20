@@ -124,6 +124,7 @@ export interface LocalWebConfig {
   /** Explicit trusted composition; no HTTP route can supply policy or dispatch. */
   realtimeCommands?: RealtimeCommandPolicy;
   onRealtimeReady?: (server: RealtimeServer) => void;
+  wordCollaboration?: boolean;
   passwordBlocklistFile?: string; loginLimits?: LoginLimits; idleMs?: number; absoluteMs?: number; closeDb?: () => Promise<void>
 }
 export async function buildLocalApp(config: LocalWebConfig): Promise<FastifyInstance> {
@@ -271,7 +272,7 @@ export async function buildLocalApp(config: LocalWebConfig): Promise<FastifyInst
     if (config.objectStore && files) {
       const leases = createLeaseService({ transactions })
       const revisions = createRevisionService({ transactions, objects: config.objectStore, files, ...config.filePolicy })
-      registerFileRoutes(app,files,sessions,csrf,{ leases, revisions })
+      registerFileRoutes(app,files,sessions,csrf,{ leases, revisions, wordCollaboration:config.wordCollaboration })
       registerKnowledgeRoutes(app,createKnowledgeService({transactions,files}),sessions,csrf)
       registerPdfRoutes(app,createPdfService({ files, leases, revisions }),sessions,csrf)
       // T17 notification/reconciliation only; preClose terminates upgraded

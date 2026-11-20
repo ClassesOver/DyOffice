@@ -13,8 +13,9 @@ test('SaaS Node entrypoints transform parameter properties before tests or worke
  try {
   const file=join(dir,'fixture.ts');await writeFile(file,"class Example {constructor(readonly value:number){}};if(new Example(7).value!==7)throw Error('value');")
   for(const command of scripts){
-   assert.match(command,/^node --experimental-transform-types /)
-   const run=spawnSync(process.execPath,[command.split(' ')[1],file],{encoding:'utf8',timeout:10000})
+   const flags=/^node (--experimental-transform-types(?: --import tsx)?|--import tsx) /.exec(command)
+   assert.ok(flags,command)
+   const run=spawnSync(process.execPath,[...flags[1].split(' '),file],{encoding:'utf8',timeout:10000})
    assert.equal(run.status,0,run.stderr)
   }
  }finally{await rm(dir,{recursive:true,force:true})}

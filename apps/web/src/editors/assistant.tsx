@@ -131,14 +131,16 @@ export async function createEditorAssistant(channelOptions?:{fileId:string;edito
     </div>
   }
   // Native hosts load preferences after binding the assistant, before rendering.
-  function DeliveryManager(){return <AnalysisDeliveryPanel client={deliveries} documents={documents} lang={document.documentElement.lang==='en'?'en':'zh'}/>}
-  const makeWorkspacePanel=()=><AssistantWorkspacePanel client={workspace} lang={lang()} channelConnection={channel&&<ChannelConnection/>}
-    deliveries={(!!assistant.catalog.agents?.length||assistant.catalog.assistantChannels&&channelOptions)&&<DeliveryManager/>}/>
+  function WorkspacePanel(){
+    const language=lang()
+    return <AssistantWorkspacePanel client={workspace} lang={language} channelConnection={channel&&<ChannelConnection/>}
+      deliveries={(!!assistant.catalog.agents?.length||assistant.catalog.assistantChannels&&channelOptions)&&<AnalysisDeliveryPanel client={deliveries} documents={documents} lang={language}/>}/>
+  }
   const noEvent = () => () => {}
   return {
     request:bound.request,sessionProof:bound.proof,
     ...assistant,agents:assistant.catalog.agents??[],modelPicker:<ModelPicker/>,fileChat,continuationRevision:channelOptions?.continuationRevision,
-    workspace:{conversation:(children:ReactNode)=><Conversation>{children}</Conversation>,isOffice:workspace.isOffice,submit:workspace.submit,panel:makeWorkspacePanel()},
+    workspace:{conversation:(children:ReactNode)=><Conversation>{children}</Conversation>,isOffice:workspace.isOffice,submit:workspace.submit,panel:<WorkspacePanel/>},
     documents,channel,searchApi,mediaApi,mediaCapabilities:{imageGeneration:configuredTools.has('generate_image'),mediaAnalysis:configuredTools.has('analyze_media'),imageAnalysis:mediaAnalysis.image},control:channel?.control,extraSkills:[...assistant.extraSkills,...additionalSkills,...(pdfMediaSkill?[pdfMediaSkill]:[]),...(channel?[channel.skill]:[])],
     api: {
       // Local compatibility projection only. Full desktop settings and global

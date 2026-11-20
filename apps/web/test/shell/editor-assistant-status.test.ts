@@ -21,9 +21,13 @@ test('available assistant remains available; hidden preference is explained with
  http([{id:'model',label:'Model'}]);const result=await loadEditorAssistant()
  try{expect(result.assistant?.available).toBe(true);expect(editorAssistantNotice(result,true,'zh')).toBe('');expect(editorAssistantNotice(result,false,'zh')).toContain('个人设置');expect(editorAssistantNotice(result,false,'en')).toContain('preferences')}finally{result.assistant?.dispose()}
 })
-test('only DOCX and XLSX use the safe loader and render its notice',async()=>{
+test('DOCX, XLSX and PPTX use the safe loader and render its notice',async()=>{
  const {readFileSync}=await import('node:fs')
  for(const file of ['native-docs.tsx','sheets-entry.tsx']){const source=readFileSync('src/editors/'+file,'utf8');expect(source).toContain('await loadEditorAssistant(');expect(source).toContain('editorAssistantNotice(assistantResult,prefs.showAssistant,locale)');expect(source).toContain("id:'assistant'");expect(source).not.toContain('{assistantNotice && <span');expect(source).toContain('Boolean(assistant?.available && prefs.showAssistant !== false)');expect(source).not.toContain('.catch(() => undefined)')}
- expect(readFileSync('src/editors/slides-entry.tsx','utf8')).toMatch(/assistantAvailable:Boolean\(sharedAssistant\?\.available&&prefs\.showAssistant!==false\)/)
- expect(readFileSync('src/editors/slides-entry.tsx','utf8')).toMatch(/mountEditorRealtime\(host, fileId, \(\) => changed\(\),\s*channels\s*=>\s*sharedAssistant\?\.channel\?\.observe\(channels\)\)/)
+ const slides=readFileSync('src/editors/slides-entry.tsx','utf8')
+ expect(slides).toContain('void loadEditorAssistant(')
+ expect(slides).toContain('editorAssistantNotice(assistantResult,showAssistant,locale)')
+ expect(slides).toContain("id:'assistant'")
+ expect(slides).toMatch(/assistantAvailable:Boolean\(sharedAssistant\?\.available&&\(prefs\.showAssistant!==false\|\|handoffOpen\)\)/)
+ expect(slides).toMatch(/mountEditorRealtime\(host, fileId, \(\) => changed\(\),\s*channels\s*=>\s*sharedAssistant\?\.channel\?\.observe\(channels\)\)/)
 })

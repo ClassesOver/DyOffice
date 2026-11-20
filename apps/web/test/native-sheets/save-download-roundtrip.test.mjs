@@ -142,13 +142,21 @@ test('XLSX browser CSV bridge confirms loss and downloads current values without
  await expect.poll(()=>f.page.evaluate(()=>window.__genofficeDebug.univerAPI.getActiveWorkbook().getActiveSheet().getRange('B2').getValue())).toBe(42.5)
  const request=await f.page.evaluate(()=>({fileName:'工作表.csv',content:'项目,金额\r\n'+window.__genofficeDebug.univerAPI.getActiveWorkbook().getActiveSheet().getRange('A2:B2').getValues()[0].join(',')+'\r\n',hasFormulas:true,activeSheetName:'Acceptance'}))
  let downloads=0;f.page.on('download',()=>downloads++)
- f.page.once('dialog',async dialog=>{assert.equal(dialog.type(),'confirm');assert.match(dialog.message(),/formatting/);assert.match(dialog.message(),/Formulas.*values/);assert.match(dialog.message(),/Acceptance/);await dialog.dismiss()})
- assert.deepEqual(await f.page.evaluate(request=>window.desktopApi.exportCsv(request),request),{canceled:true})
+ const dialog=f.page.getByRole('dialog')
+ const exportCsv=()=>f.page.evaluate(request=>window.desktopApi.exportCsv(request),request)
+ const [canceled]=await Promise.all([exportCsv(),(async()=>{
+  await expect(dialog).toBeVisible()
+  await expect(dialog).toContainText(/formatting.*Formulas.*values.*Acceptance/)
+  await dialog.getByRole('button',{name:'Cancel',exact:true}).click()
+ })()])
+ assert.deepEqual(canceled,{canceled:true})
  assert.equal(downloads,0)
- f.page.once('dialog',dialog=>dialog.accept())
- const downloaded=f.page.waitForEvent('download')
- assert.deepEqual(await f.page.evaluate(request=>window.desktopApi.exportCsv(request),request),{canceled:false,path:'工作表.csv'})
- const download=await downloaded
+ const [download,result]=await Promise.all([
+  f.page.waitForEvent('download',{timeout:30_000}),
+  exportCsv(),
+  dialog.getByRole('button',{name:'Continue as CSV',exact:true}).click(),
+ ])
+ assert.deepEqual(result,{canceled:false,path:'工作表.csv'})
  assert.equal(download.suggestedFilename(),'工作表.csv')
  assert.deepEqual(await readFile(await download.path()),Buffer.from('\uFEFF项目,金额\r\n21.25,42.5\r\n'))
  const head=(await f.files.openFile(f.alice.token,f.opened.file.fileId)).file
@@ -448,11 +456,13 @@ test('native XLSX explicitly writes literal analysis cells and independently sav
  const composer=page.locator('.copilot textarea')
  await composer.fill('Create the local synthetic analysis table');await composer.press('Enter')
  const panel=page.locator('.analysis-deliveries')
- await expect(panel.locator('summary')).toContainText('(1)',{timeout:30_000});await panel.locator('summary').click()
  // The delivery can arrive before the provider's second reply. Wait for that
  // reply's text before checking the exact two-turn request count; this does
  // not assert that the SSE stream or durable budget settlement has finished.
  await expect(page.locator('.copilot').getByText('Synthetic artifact ready. Insert and save are separate user actions.',{exact:true})).toBeVisible({timeout:30_000})
+ await page.getByRole('tab',{name:/^(?:Tasks|任务)(?:\s*\d+)?$/}).click()
+ await expect(panel.locator('summary')).toContainText('(1)',{timeout:30_000})
+ await panel.locator('summary').click()
  assert.equal(f.analysisAdapter.runs,1);assert.equal(net.writes,2)
  // Explicitly select a free area using the existing test-only native editor hook.
  await page.evaluate(()=>window.__genofficeDebug.univerAPI.getActiveWorkbook().getActiveSheet().getRange('J10').activate())

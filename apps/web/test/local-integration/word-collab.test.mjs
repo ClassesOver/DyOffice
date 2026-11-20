@@ -8,7 +8,7 @@ import { createCsrfService, SESSION_COOKIE } from '../../server/src/modules/auth
 import { restrictedOrigin as origin } from '../helpers/restricted.mjs'
 
 test('Word sessions serialize concurrent appends, catch up on retries and preserve edits beyond a save checkpoint',async t=>{
-  const f=await fileFixture(t),bytes=await docxBytes(),{file:initial}=await importFile(f,f.alice.token,bytes)
+  const f=await fileFixture(t,{wordCollaboration:true}),bytes=await docxBytes(),{file:initial}=await importFile(f,f.alice.token,bytes)
   const {fileId,revision}=initial,a=randomUUID(),b=randomUUID(),alice=f.alice.token
   const csrf=createCsrfService({db:f.db,deploymentId:f.deploymentId,origin,key:f.csrfKey})
   const post=(clientId,input={},token=alice)=>f.app.inject({method:'POST',url:'/api/v1/files/'+fileId+'/word-collab',

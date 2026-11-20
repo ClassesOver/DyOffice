@@ -6,32 +6,42 @@ import {GlobalSettingsPanel} from '../../src/shell/GlobalSettingsPanel'
 import {createGlobalSettingsClient} from '../../src/shell/global-settings-client'
 import {UserSkillsPanel} from '../../src/shell/UserSkillsPanel'
 import {createUserSkillsClient} from '../../src/shell/user-skills-client'
+import type {AdminGlobalConfig} from '../../../../packages/web-contracts/src/settings'
 const roots:Root[]=[]
 afterEach(async()=>{await act(async()=>{roots.splice(0).forEach(root=>root.unmount())});document.body.replaceChildren()})
 async function mount(node:ReturnType<typeof h>){const host=document.createElement('div');document.body.append(host);const root=createRoot(host);roots.push(root);await act(async()=>root.render(node));return host}
-async function popup(label:string){const input=document.querySelector(`[role="combobox"][aria-label="${label}"]`)!;expect(input).not.toBeNull();await act(async()=>input.dispatchEvent(new MouseEvent('mousedown',{bubbles:true})));const open=[...document.querySelectorAll<HTMLElement>('.ant-select-dropdown')].find(node=>!node.classList.contains('ant-select-dropdown-hidden'))!;expect(open).toBeDefined();return open}
-test('global configuration Select popup uses B scope outside panel and preserves filter selection',async()=>{
+function select(host:HTMLElement,label:string){const control=host.querySelector<HTMLSelectElement>(`select[aria-label="${label}"]`);expect(control).not.toBeNull();return control!}
+async function choose(control:HTMLSelectElement,value:string){await act(async()=>{control.value=value;control.dispatchEvent(new Event('change',{bubbles:true}))})}
+test('global configuration type filter limits selectable services without writing',async()=>{
  let writes=0
- const client=createGlobalSettingsClient(async(_path,method)=>{if(method&&method!=='GET')writes++;return {revision:1,entries:[],defaults:{},providerCatalog:[],keyStorageAvailable:true} as never})
+ const common={providerId:'example',model:'model',baseUrl:'https://example.test/v1',enabled:true,hasKey:true}
+ const config:AdminGlobalConfig={revision:1,entries:[
+  {...common,id:'images',kind:'image_generation',label:'Image service'},
+  {...common,id:'search',kind:'web_search',label:'Search service'},
+ ],defaults:{},providerCatalog:[],keyStorageAvailable:true}
+ const client=createGlobalSettingsClient(async(_path,method)=>{if(method&&method!=='GET')writes++;return config as never})
  const host=await mount(h(GlobalSettingsPanel,{client,onClose(){}}))
  await act(async()=>{[...host.querySelectorAll<HTMLElement>('[role="tab"]')].find(node=>node.textContent?.includes('生图、媒体与搜索'))!.click()})
- const layer=await popup('配置类型筛选')
- expect(host.contains(layer)).toBe(false)
- expect(layer.classList.contains('settings-select-b')).toBe(true)
- const options=[...layer.querySelectorAll<HTMLElement>('.ant-select-item-option')]
- expect(options.length).toBeGreaterThan(1)
- await act(async()=>options[1].click())
- expect(document.querySelector('[aria-label="配置类型筛选"]')?.closest('.ant-select')?.textContent).toContain(options[1].textContent)
+ const filter=select(host,'配置类型筛选'),services=select(host,'选择服务配置')
+ expect(services.textContent).toContain('Image service')
+ expect(services.textContent).toContain('Search service')
+ await choose(filter,'web_search')
+ expect(filter.selectedOptions[0]?.textContent).toBe('网页搜索')
+ expect(services.selectedOptions[0]?.textContent).toBe('Search service')
+ expect(services.textContent).not.toContain('Image service')
  expect(writes).toBe(0)
 })
-test('personal skill format popup keeps B styling and real filtering without writes',async()=>{
+test('personal skill format filter limits catalog rows without writing',async()=>{
  let writes=0
  const host=await mount(h(UserSkillsPanel,{client:createUserSkillsClient(async(_path,method)=>{if(method&&method!=='GET')writes++;return [] as never})}))
- const layer=await popup('筛选技能格式')
- expect(host.contains(layer)).toBe(false);expect(layer.classList.contains('settings-select-b')).toBe(true)
- const option=[...layer.querySelectorAll<HTMLElement>('.ant-select-item-option')].find(node=>node.textContent==='PDF')!
- expect(option).toBeDefined();await act(async()=>option.click())
- expect(document.querySelector('[aria-label="筛选技能格式"]')?.closest('.ant-select')?.textContent).toContain('PDF');expect(writes).toBe(0)
+ const filter=select(host,'筛选技能格式')
+ const formats=()=>[...host.querySelectorAll('.personal-skills-catalog tbody tr[data-row-key]')].map(row=>[...row.querySelectorAll('.skill-formats span')].map(format=>format.textContent))
+ expect(formats().some(row=>!row.includes('PDF'))).toBe(true)
+ await choose(filter,'pdf')
+ expect(filter.selectedOptions[0]?.textContent).toBe('PDF')
+ expect(formats().length).toBeGreaterThan(0)
+ expect(formats().every(row=>row.includes('PDF'))).toBe(true)
+ expect(writes).toBe(0)
 })
 test('popup B is isolated and tokenized with narrow, long label, active and disabled treatment',()=>{
  const css=readFileSync('src/shell/settings-select-b.css','utf8')

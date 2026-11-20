@@ -14,11 +14,14 @@ const editor = { editorId: id }, base = { baseRevision: id, leaseEpoch: epoch, .
 const object = (properties: object, required = Object.keys(properties)) => ({ type: 'object', additionalProperties: false, required, properties })
 const token = (request: FastifyRequest) => cookies(request).session ?? ''
 const fileId = (request: FastifyRequest) => (request.params as { id: string }).id
-export function registerRevisionRoutes(api: FastifyInstance, { leases, revisions, transfer }: { leases: LeaseService; revisions: RevisionService; transfer: TransferRunner }) {
+export function registerRevisionRoutes(api: FastifyInstance, { leases, revisions, transfer, wordCollaboration }: { leases: LeaseService; revisions: RevisionService; transfer: TransferRunner; wordCollaboration?: boolean }) {
   const wordVersion={type:'integer',minimum:0,maximum:2147483647}
   api.post('/api/v1/files/:id/word-collab',{bodyLimit:256*1024,schema:{params,querystring,body:object({
     revision:id,clientId:id,version:wordVersion,steps:{type:'array',maxItems:64,items:{type:'object',required:['stepType'],properties:{stepType:{type:'string',maxLength:64}},additionalProperties:true}},
-  },['revision','clientId'])}}, request=>revisions.syncWord(token(request),fileId(request),request.body as Parameters<typeof revisions.syncWord>[2]))
+  },['revision','clientId'])}}, request=>{
+    if(!wordCollaboration)throw authError(404)
+    return revisions.syncWord(token(request),fileId(request),request.body as Parameters<typeof revisions.syncWord>[2])
+  })
   api.get('/api/v1/files/:id/lease', { schema: { params, querystring } }, request => leases.getLease(token(request),fileId(request)))
   api.post('/api/v1/files/:id/lease', { bodyLimit: 4096, schema: { params, querystring, body: object(editor) } }, request => leases.acquireLease(token(request),fileId(request),request.body as { editorId: string }))
   api.post('/api/v1/files/:id/lease/renew', { bodyLimit: 4096, schema: { params, querystring, body: object({ ...editor, leaseEpoch: epoch }) } }, request => leases.renewLease(token(request),fileId(request),request.body as { editorId: string; leaseEpoch: number }))

@@ -48,9 +48,12 @@ test('AcroForm static image and text insert query preview save preserve fields a
  assert.ok(leaves.some(item=>item.type===1&&item.text?.trim()==='Added text'));assert.equal(leaves.filter(item=>item.type===3).length,1)
 })
 
-test('AcroForm existing image edits signatures XFA and managed stamps stay refused',async()=>{
+test('AcroForm drafts refuse an edit targeting an image that does not exist',async()=>{
+ await assert.rejects(createPdfDraftInsertsJob('draftInserts').execute(await fixture(),raw('draftInserts',{...operation(),imageEdits:[{op:'delete_image',page:1,image_number:1}]})),{code:'PDF_IMAGE_NOT_FOUND'})
+})
+
+test('AcroForm inserts still refuse signatures XFA and managed stamps',async()=>{
  const original=await fixture(),op=operation()
- await assert.rejects(createPdfDraftInsertsJob('draftInserts').execute(original,raw('draftInserts',{...op,imageEdits:[{op:'delete_image',page:1,image_number:1}]})),{code:'PDF_EDIT_UNSUPPORTED_STRUCTURE'})
  for(const kind of ['signature','xfa','managed']){
   const doc=await PDFDocument.load(original),acro=doc.catalog.lookup(PDFName.of('AcroForm'),PDFDict)
   if(kind==='signature'){const field=doc.context.register(doc.context.obj({FT:'Sig',T:doc.context.obj('Unsigned')}));acro.lookup(PDFName.of('Fields')).push(field)}

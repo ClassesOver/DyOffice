@@ -24,7 +24,7 @@ export function joinWordCollab(editor:Editor,revision:string,clientID:string,req
     catch(error){
       if(disposed)return
       const code=(error as {status?:number}).status
-      if(code===404&&!initialized){terminal=true;report('unavailable')}
+      if(code===404&&!initialized){terminal=true;report('unavailable');return}
       else if(code&&[400,401,403,409,410,413,422].includes(code)){terminal=true;report('stale')}
       else report('offline')
       throw error
@@ -63,6 +63,7 @@ export function joinWordCollab(editor:Editor,revision:string,clientID:string,req
       if(terminal&&status==='unavailable')return undefined
       for(let i=0;i<25&&!disposed&&!terminal;i++){
         await pump()
+        if(terminal&&status==='unavailable')return undefined
         if(initialized&&!sendableSteps(editor.state))return getVersion(editor.state)
       }
       throw Error('文档协同尚未同步，请稍后保存')

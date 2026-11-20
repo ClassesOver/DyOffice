@@ -1,6 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import {Readable} from 'node:stream'
+import {randomFillSync} from 'node:crypto'
 import {fileURLToPath} from 'node:url'
 import {expect} from '@playwright/test'
 import JSZip from 'jszip'
@@ -27,8 +28,9 @@ test('Word AI inserts generated, linked and attached images into DOCX without re
  const app=await buildLocalApp({db:f.db,businessPool:f.businessPool,passwords:f.passwords,deploymentId:f.deploymentId,origin,csrfKey:f.csrfKey,objectStore:f.objects,globalConfigKeyring:keyring,providerGateway:{mode:'shared'},codingHarnesses:false,nativeDocsDirectory:process.env.DYOFFICE_TEST_DOCS_DIST??fileURLToPath(new URL('../../dist-docs',import.meta.url))})
  f.cleanup.push(async()=>{app.server.closeAllConnections();await app.close()});await app.listen({host:'127.0.0.1',port:4254})
  const browser=await launchTestBrowser();t.after(()=>browser.close())
- const page=await browser.newPage(),errors=[],mediaCalls=[],results=[]
+ const page=await browser.newPage(),errors=[],mediaCalls=[],results=[],collaborationResponses=[]
  page.on('pageerror',error=>errors.push(error.message))
+ page.on('response',response=>{if(response.url().endsWith('/word-collab'))collaborationResponses.push(response.status())})
  await page.route('**/api/v1/ai/media',route=>{
   const body=route.request().postDataJSON()
   mediaCalls.push(body.action)
@@ -47,7 +49,7 @@ test('Word AI inserts generated, linked and attached images into DOCX without re
   const current=turns++,index=Math.floor(current/2)
   const [name,input]=calls[index]
   const request=JSON.parse(network.wire.toString())
-  assert.ok(request.tools.some(tool=>tool.function.name===name))
+  assert.ok(request.tools.some(tool=>tool.function.name===name),`Missing ${name}; tools: ${request.tools.map(tool=>tool.function.name).join(', ')}`)
   if(current%2){
    results.push(JSON.parse(request.messages.filter(message=>message.role==='tool').at(-1).content))
    return Readable.from([frame({content:'Image action '+index+' complete'},'stop'),Buffer.from('data: [DONE]\n\n')])
@@ -67,18 +69,23 @@ test('Word AI inserts generated, linked and attached images into DOCX without re
   return Readable.from([frame({tool_calls:[{index:0,id:'word-media-'+index,type:'function',function:{name,arguments:JSON.stringify(input)}}]},'tool_calls'),Buffer.from('data: [DONE]\n\n')])
  })
  await page.goto(origin+'/native-docx/?fileId='+opened.fileId)
- await expect(page.locator('.tiptap.doc-page').first()).toBeVisible({timeout:45_000})
+ try{await expect(page.locator('.tiptap.doc-page[contenteditable="true"]').first()).toBeVisible({timeout:15_000})}
+ catch(error){t.diagnostic(JSON.stringify({errors,collaborationResponses,status:await page.locator('.native-docs-status').allTextContents()}));throw error}
+ assert.ok(collaborationResponses.length&&collaborationResponses.every(status=>status===404))
  if(await page.locator('.ai-rail').isVisible())await page.locator('.ai-rail').click()
  const composer=page.locator('.ai-panel textarea')
  for(let index=0;index<calls.length;index++){
   if(index===2||index===3){
-   const image=new PNG({width:4,height:4})
-   for(let i=0;i<16;i++)image.data.set(index===2?[0,255,0,255]:[0,0,255,255],i*4)
+   const size=index===2?200:4,image=new PNG({width:size,height:size})
+   if(index===2){randomFillSync(image.data);image.data.set([0,255,0,255])}
+   else for(let i=0;i<16;i++)image.data.set([0,0,255,255],i*4)
+   const bytes=PNG.sync.write(image)
+   if(index===2)assert.ok(bytes.length>128*1024)
    const panel=page.locator('.ai-panel')
    await panel.locator('.ai-plus-btn').click()
    const chooser=page.waitForEvent('filechooser')
    await panel.getByRole('menuitem',{name:'Add file',exact:true}).click()
-   await (await chooser).setFiles({name:'local.png',mimeType:'image/png',buffer:PNG.sync.write(image)})
+   await (await chooser).setFiles({name:'local.png',mimeType:'image/png',buffer:bytes})
    await expect(panel.getByRole('img',{name:'local.png',exact:true}).first()).toBeVisible()
   }
   await composer.fill('Insert image '+index);await composer.press('Enter')
@@ -89,7 +96,7 @@ test('Word AI inserts generated, linked and attached images into DOCX without re
  assert.deepEqual(mediaCalls,['generate_image','fetch_image'])
  await expect(page.locator('.tiptap.doc-page img')).toHaveCount(4)
  assert.equal((await f.files.openFile(f.alice.token,opened.fileId)).file.revision,opened.revision)
- const committed=page.waitForResponse(response=>response.url().endsWith('/commits')&&response.status()===200)
+ const committed=page.waitForResponse(response=>response.url().endsWith('/commits')&&response.status()===200,{timeout:15_000})
  await page.keyboard.press('Control+s');await committed
  const saved=(await f.files.openFile(f.alice.token,opened.fileId)).file
  assert.notEqual(saved.revision,opened.revision)
@@ -103,7 +110,8 @@ test('Word AI inserts generated, linked and attached images into DOCX without re
  const colors=new Set()
  for(const file of media){
   const image=PNG.sync.read(await file.async('nodebuffer'))
-  assert.deepEqual([image.width,image.height],[4,4])
+  const large=image.data[1]===255
+  assert.deepEqual([image.width,image.height],large?[200,200]:[4,4])
   colors.add([...image.data.subarray(0,4)].join(','))
  }
  assert.deepEqual(colors,new Set(['255,0,0,255','0,255,0,255','0,0,255,255']))
