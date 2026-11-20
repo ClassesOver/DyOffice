@@ -15,7 +15,7 @@
     "test:integration": "node tools/run-web-integration.mjs",
     "test:e2e": "node --import tsx --test test/e2e/*.test.mjs",
     "test:storage": "node --experimental-transform-types --test test/storage/*.test.mjs",
-    "test:jobs": "node --experimental-transform-types --test test/jobs/*.test.mjs",
+    "test:jobs": "node --import tsx --test test/jobs/*.test.mjs",
     "test:sandbox": "node --experimental-transform-types --test --test-concurrency=1 test/sandbox/*.test.mjs test/host-native/*.test.mjs",
     "typecheck:worker": "tsc -p worker/tsconfig.json",
     "test:native-jobs": "node --import tsx --test --test-concurrency=1 test/native-jobs/*.test.mjs",
