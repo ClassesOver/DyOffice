@@ -10,7 +10,7 @@ import {launchTestBrowser} from '../helpers/browser.mjs'
 import {buildLocalApp} from '../../server/src/app.ts'
 
 test('browser manages PostgreSQL connections and table scope without manual query UI',{timeout:120000},async t=>{
- const origin='http://localhost:4224',f=await fileFixture(t,{origin})
+ const origin='http://localhost:4286',f=await fileFixture(t,{origin})
  const reader='source_ui_'+randomBytes(6).toString('hex'),secret=randomBytes(16).toString('hex')
  await f.admin.query(`CREATE ROLE ${reader} LOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '${secret}'`)
  f.cleanup.push(async()=>{await f.ownerPool.query('DROP TABLE IF EXISTS source_ui_allowed,source_ui_hidden');await f.ownerPool.query(`REVOKE CONNECT ON DATABASE "${f.database}" FROM ${reader}`);await f.ownerPool.query(`REVOKE USAGE ON SCHEMA public FROM ${reader}`);await f.admin.query(`DROP ROLE ${reader}`)})
@@ -26,7 +26,7 @@ test('browser manages PostgreSQL connections and table scope without manual quer
   sourcesCredentialKeys:'ui:'+randomBytes(32).toString('base64'),
   sourcesEgressTargets:[{kind:'postgres',endpoint:target.protocol+'//'+target.host,username:reader,database:f.database,addresses:['127.0.0.1'],allowInsecure:true}],
   localShellDirectory:fileURLToPath(new URL('../../dist-local-shell',import.meta.url))})
- f.cleanup.push(()=>app.close());await app.listen({host:'127.0.0.1',port:4224})
+ f.cleanup.push(()=>app.close());await app.listen({host:'127.0.0.1',port:4286})
  const browser=await launchTestBrowser();t.after(()=>browser.close())
  const page=await browser.newPage({viewport:{width:1440,height:1000}}),requests=[],errors=[],toolCalls=[]
  page.on('request',r=>{requests.push(r.url());if(r.url().includes('/source-tools/execute')&&r.method()==='POST')toolCalls.push(r.postDataJSON().name)});page.on('pageerror',e=>errors.push(e.message));page.setDefaultTimeout(12000)

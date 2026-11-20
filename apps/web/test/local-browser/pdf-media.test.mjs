@@ -23,7 +23,7 @@ for(const {format:generatedFormat,native} of cases)test((native?'Native PDF':'PD
  let app,browser,turn=0,generatedUrl
  const includeLinks=generatedFormat==='png'||native
  t.after(async()=>{await browser?.close();app?.server.closeAllConnections();await app?.close()})
- const origin='http://127.0.0.1:4243',f=await fileFixture(t,{origin,buildApp:false}),keyring={activeKeyId:'media',keys:{media:new Uint8Array(32).fill(64)}}
+ const origin='http://127.0.0.1:4288',f=await fileFixture(t,{origin,buildApp:false}),keyring={activeKeyId:'media',keys:{media:new Uint8Array(32).fill(64)}}
  const network=mockProviderNetwork(t,()=>{
   const index=Math.floor(turn/2),tool=turn++%2===0
   const request=JSON.parse(network.wire.toString())
@@ -57,7 +57,7 @@ for(const {format:generatedFormat,native} of cases)test((native?'Native PDF':'PD
  }
  const original=Buffer.from(await d.save()),source=(await importFile(f,f.alice.token,original,'media.pdf')).file
  app=await buildLocalApp({db:f.db,businessPool:f.businessPool,passwords:f.passwords,deploymentId:f.deploymentId,origin,csrfKey:f.csrfKey,objectStore:f.objects,globalConfigKeyring:keyring,providerGateway:{mode:'shared'},codingHarnesses:false,nativePdfDirectory:native?nativeDirectory:undefined,localShellDirectory:process.env.DYOFFICE_TEST_LOCAL_SHELL_DIRECTORY??fileURLToPath(new URL('../../dist-local-shell',import.meta.url))})
- await app.listen({host:'127.0.0.1',port:4243});browser=await launchTestBrowser();const tab=await browser.newPage({viewport:{width:1600,height:1100}});await stubHomeHero(tab)
+ await app.listen({host:'127.0.0.1',port:4288});browser=await launchTestBrowser();const tab=await browser.newPage({viewport:{width:1600,height:1100}});await stubHomeHero(tab)
  const png=new PNG({width:4,height:4});for(let i=0;i<png.data.length;i+=4){png.data[i]=255;png.data[i+3]=255}const base64=PNG.sync.write(png).toString('base64'),apiCalls=[]
  // Deterministic media/search responses: this test verifies renderer wiring and actual PDF storage, not provider inference.
  await tab.route('**/api/v1/ai/media',route=>{const body=route.request().postDataJSON();apiCalls.push(body);if(body.action==='fetch_image'){assert.ok(['https://images.example/icon.gif','https://images.example/icon.webp'].includes(body.url));const fixture=body.url.endsWith('.gif')?generatedFixtures.gif:generatedFixtures.webp;return route.fulfill({json:fixture})}assert.equal(body.action,'generate_image');assert.equal(body.prompt,'Draw a red square');return route.fulfill({json:{url:generatedFormat==='png'?'data:image/png;base64,'+base64:'data:'+generatedFixtures[generatedFormat].mime+';base64,'+generatedFixtures[generatedFormat].base64}})})

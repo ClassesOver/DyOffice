@@ -16,7 +16,7 @@ import {createGlobalConfigService} from '../../server/src/modules/admin/service.
 test('PDF replacement requires user file choice and confirmation, recovers one commit and reopens the saved page order',{timeout:120000},async t=>{
  let app,browser
  t.after(async()=>{await browser?.close();app?.server.closeAllConnections();await app?.close()})
- const origin='http://127.0.0.1:4239',f=await fileFixture(t,{origin,buildApp:false})
+ const origin='http://127.0.0.1:4287',f=await fileFixture(t,{origin,buildApp:false})
  const keyring={activeKeyId:'pdf-form',keys:{'pdf-form':new Uint8Array(32).fill(49)}}
  const nativePdfDirectory=process.env.DYOFFICE_TEST_NATIVE_PDF_DIST
  const pageInput=nativePdfDirectory?'1,3':[1,3]
@@ -33,7 +33,7 @@ test('PDF replacement requires user file choice and confirmation, recovers one c
  const other=await PDFDocument.create();for(let i=1;i<=2;i++)other.addPage([450,500]).drawText('Source '+i,{x:40,y:250,size:14})
  const selected=Buffer.from(await other.save()),bytes=Buffer.from(await doc.save()),source=(await importFile(f,f.alice.token,bytes,'target.pdf')).file
  app=await buildLocalApp({db:f.db,businessPool:f.businessPool,passwords:f.passwords,deploymentId:f.deploymentId,origin,csrfKey:f.csrfKey,objectStore:f.objects,globalConfigKeyring:keyring,providerGateway:{mode:'shared'},codingHarnesses:false,nativePdfDirectory,localShellDirectory:process.env.DYOFFICE_TEST_LOCAL_SHELL_DIRECTORY??fileURLToPath(new URL('../../dist-local-shell',import.meta.url))})
- await app.listen({host:'127.0.0.1',port:4239});browser=await launchTestBrowser()
+ await app.listen({host:'127.0.0.1',port:4287});browser=await launchTestBrowser()
  const context=await browser.newContext({viewport:{width:1440,height:1000}}),tab=await context.newPage()
  await stubHomeHero(tab)
  await tab.goto(origin);await tab.getByLabel('用户名',{exact:true}).fill('alice');await tab.getByLabel('密码',{exact:true}).fill(password)

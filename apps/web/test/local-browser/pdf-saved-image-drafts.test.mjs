@@ -22,7 +22,7 @@ test('saved PDF image edits remain pending across undo/discard and one mixed sav
  let app,browser,tab,saved,turn=0
  const review='/tmp/dyoffice-pdf-saved-image-drafts-review';await mkdir(review,{recursive:true})
  t.after(async()=>{if(tab)await tab.screenshot({path:review+'/latest.png',fullPage:true}).catch(()=>{});await browser?.close();app?.server.closeAllConnections();await app?.close()})
- const origin='http://127.0.0.1:4243',f=await fileFixture(t,{origin,buildApp:false}),keyring={activeKeyId:'saved-images',keys:{'saved-images':new Uint8Array(32).fill(62)}}
+ const origin='http://127.0.0.1:4289',f=await fileFixture(t,{origin,buildApp:false}),keyring={activeKeyId:'saved-images',keys:{'saved-images':new Uint8Array(32).fill(62)}}
  const replacement='data:image/png;base64,'+png([0,255,255,255]).toString('base64'),inserted='data:image/png;base64,'+png([255,0,255,255]).toString('base64'),list=['list_page_images',{}],remove=['delete_image',{page:1,image_number:1}]
  const calls=[list,remove,list,['transform_image',{page:1,image_number:1,x:200}],remove,list,remove,list,['transform_image',{page:1,image_number:2,x:180,y:420}],list,['set_image_opacity',{page:1,image_number:3,opacity:.8}],list,['replace_image',{page:1,image_number:4,url:replacement}],list,['insert_text',{page:2,text:'Pending mixed text',x:50,y:80,font_size:16}],['insert_image',{page:2,url:inserted,x:200,y:150,width:40,layer:'below_text'}],list]
  const network=mockProviderNetwork(t,()=>{const index=Math.floor(turn/2),tool=turn++%2===0,[name,input]=calls[index],delta=tool?{tool_calls:[{index:0,id:'saved-image-'+index,type:'function',function:{name,arguments:JSON.stringify(input)}}]}:{content:'Saved image result '+index};return Readable.from([Buffer.from(`data: ${JSON.stringify({choices:[{delta}]})}\n\ndata: ${JSON.stringify({choices:[{delta:{},finish_reason:tool?'tool_calls':'stop'}]})}\n\ndata: [DONE]\n\n`)])})
@@ -32,7 +32,7 @@ test('saved PDF image edits remain pending across undo/discard and one mixed sav
  const second=d.addPage([500,600]);second.setRotation(degrees(90));second.drawText('Original page 2',{x:40,y:500,size:14})
  const original=Buffer.from(await d.save()),source=(await importFile(f,f.alice.token,original,'saved-image-drafts.pdf')).file
  app=await buildLocalApp({db:f.db,businessPool:f.businessPool,passwords:f.passwords,deploymentId:f.deploymentId,origin,csrfKey:f.csrfKey,objectStore:f.objects,globalConfigKeyring:keyring,providerGateway:{mode:'shared'},codingHarnesses:false,localShellDirectory:process.env.DYOFFICE_TEST_LOCAL_SHELL_DIRECTORY??fileURLToPath(new URL('../../dist-local-shell',import.meta.url))})
- await app.listen({host:'127.0.0.1',port:4243});browser=await launchTestBrowser();tab=await browser.newPage({viewport:{width:1600,height:1200}});await stubHomeHero(tab)
+ await app.listen({host:'127.0.0.1',port:4289});browser=await launchTestBrowser();tab=await browser.newPage({viewport:{width:1600,height:1200}});await stubHomeHero(tab)
  await tab.goto(origin);await tab.getByLabel('用户名',{exact:true}).fill('alice');await tab.getByLabel('密码',{exact:true}).fill(password);await tab.getByRole('button',{name:'登录',exact:true}).click();await expect(tab.locator('.home')).toBeVisible();await tab.goto(origin+'/#/file/'+source.fileId)
  await expect(tab.getByRole('region',{name:'PDF 页面',exact:true}).locator('figure')).toHaveCount(2);await expect(tab.locator('.workspace-document:not([hidden]) .ant-spin-spinning')).toHaveCount(0)
  let stages=0,commits=0,leases=0,queries=0

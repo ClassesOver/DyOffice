@@ -16,7 +16,7 @@ before(async()=>{
   App:`import React,{useEffect,useState} from 'react';export function App({host}){const [open,setOpen]=useState(false);useEffect(()=>{globalThis.__docsDownloadTest.lifecycle=host.lifecycle;if(globalThis.__docsDownloadTest.deferReady)globalThis.__docsDownloadTest.ready=(handle=globalThis.__docsDownloadTest.editor)=>host.onEditorReady(handle);else host.onEditorReady(globalThis.__docsDownloadTest.editor);host.lifecycle.documentOpened();return()=>host.onEditorReady(null)},[]);return React.createElement(React.Fragment,null,host.saveStatus,React.createElement('button',{'data-test-file-menu':true,onClick:()=>setOpen(!open)},'File'),open?React.createElement('div',{'data-test-file-actions':true},host.fileActions):null)}`,
   locale:'export const LocaleProvider=({children})=>children;export const setModuleLang=()=>{}',
   'author-name':'export const setAuthorName=()=>{}',
-  ui:'export const applyAiPanelPrefs=()=>{};export const installScreenTips=()=>{}',
+  ui:'export const applyAiPanelPrefs=()=>{};export const installScreenTips=()=>{};export const AssistantAvatar=()=>null',
   assistant:'export const createEditorAssistant=async(...args)=>{globalThis.__docsDownloadTest.assistantArgs=args;return globalThis.__docsDownloadTest.assistant}',
   'docs-ai-tools':'export const AGENT_TOOLS=[]',
   realtime:'export const mountEditorRealtime=()=>({notice:()=>null,dispose(){}})',

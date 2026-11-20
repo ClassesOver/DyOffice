@@ -60,11 +60,11 @@ test('native DOCX inserts a verified synthetic artifact explicitly and saves a s
   await composer.fill('Create the local synthetic analysis artifact')
   await composer.press('Enter')
   const deliveries=page.locator('.analysis-deliveries')
-  await expect(deliveries.locator('summary')).toContainText('(1)',{timeout:30_000})
   // Artifact commit precedes the delegate return and the provider's second turn.
   // Require the final second-turn response, not just artifact availability.
   await expect(page.locator('.ai-panel').getByText('Synthetic artifact ready. Insert and save are separate user actions.', {exact:true})).toBeVisible({timeout:30_000})
-  await page.getByRole('tab',{name:/^(Tasks|任务)$/}).click()
+  await page.getByRole('tab',{name:/^(?:Tasks|任务)(?:\s*\d+)?$/}).click()
+  await expect(deliveries.locator('summary')).toContainText('(1)',{timeout:30_000})
   await deliveries.locator('summary').click()
   await expect(deliveries.getByText('Synthetic literal content; not a real model result',{exact:true})).toBeVisible()
   assert.equal(adapter.runs,1);assert.equal(net.writes,2)

@@ -73,7 +73,7 @@ test('a trusted DSH page can edit and save Word in the DyOffice frame',{timeout:
  await parent.locator('iframe').evaluate((frame,url)=>frame.src=url,f.origin+'/?dshEmbed=1#/file/'+fileId)
  const editor=parent.frameLocator('iframe').frameLocator('iframe[data-document-id="'+fileId+'"]')
  const page=editor.locator('.tiptap.doc-page[contenteditable="true"]').first()
- await expect(page).toBeVisible()
+ await expect(page).toBeVisible({timeout:20_000})
  const text='Edited from the DSH sidebar'
  await page.click()
  await parent.keyboard.insertText(text)

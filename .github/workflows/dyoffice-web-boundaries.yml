@@ -80,7 +80,8 @@ jobs:
           printf '%s\n' '## Diagnostic regression only' 'Static contracts and synthetic evidence tests; not Ubuntu/Docker isolation acceptance.' 'No Docker build/up, systemd unit launch, production runtime grant or business document execution occurred in this job.' >> "$GITHUB_STEP_SUMMARY"
   boundary-check:
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    # The serial four-editor Chromium suite alone can take about 40 minutes.
+    timeout-minutes: 75
     env:
       RUSTUP_TOOLCHAIN: 1.93.0
       DYOFFICE_TEST_REDIS_URL: redis://127.0.0.1:16379/15

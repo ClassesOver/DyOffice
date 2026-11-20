@@ -46,8 +46,16 @@ for(const live of [false,true])test((live?'Live model':'Fixture model')+' finds 
  f.cleanup.unshift(()=>runtime.close())
  const marker='FIND-'+randomUUID()
  const zip=await JSZip.loadAsync(await readFile(new URL('../fixtures/sheets/acceptance.xlsx',import.meta.url)))
- zip.file('xl/worksheets/sheet1.xml',`<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><dimension ref="A1:AZ25001"/><sheetData><row r="1001"><c r="AA1001" t="inlineStr"><is><t>REPORT-12345</t></is></c></row><row r="1002"><c r="AB1002" t="e"><f>1/0</f><v>#DIV/0!</v></c></row><row r="25001"><c r="AZ25001" t="inlineStr"><is><t>${marker}</t></is></c></row></sheetData></worksheet>`)
+ zip.file('xl/worksheets/sheet1.xml',`<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><dimension ref="A1:AZ25001"/><sheetData><row r="25001"><c r="AZ25001" t="inlineStr"><is><t>${marker}</t></is></c></row></sheetData></worksheet>`)
+ // Keep the range-paged formula checks off-screen without scanning the distant native-find marker twice.
+ const append=async(path,tag,value)=>zip.file(path,(await zip.file(path).async('string')).replace(tag,value+tag))
+ await append('xl/workbook.xml','</sheets>','<sheet name="Audit" sheetId="2" r:id="rIdAudit"/>')
+ await append('xl/_rels/workbook.xml.rels','</Relationships>','<Relationship Id="rIdAudit" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet2.xml"/>')
+ await append('[Content_Types].xml','</Types>','<Override PartName="/xl/worksheets/sheet2.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>')
+ zip.file('xl/worksheets/sheet2.xml','<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><dimension ref="A1:AB1002"/><sheetData><row r="1001"><c r="AA1001" t="inlineStr"><is><t>REPORT-12345</t></is></c></row><row r="1002"><c r="AB1002" t="e"><f>1/0</f><v>#DIV/0!</v></c></row></sheetData></worksheet>')
  const original=await zip.generateAsync({type:'nodebuffer'})
+ const auditSheet=(await runtime.sheetsNative.inspect(original)).sheets.find(sheet=>sheet.name==='Audit')
+ assert.ok(auditSheet)
  const {file}=await importFile(f,f.alice.token,original,'search.xlsx')
  const app=await buildLocalApp({db:f.db,businessPool:f.businessPool,passwords:f.passwords,deploymentId:f.deploymentId,origin,csrfKey:f.csrfKey,objectStore:f.objects,codingHarnesses:false,localShellDirectory:process.env.DYOFFICE_TEST_LOCAL_SHELL_DIRECTORY??fileURLToPath(new URL('../../dist-local-shell',import.meta.url)),globalConfigKeyring:keyring,providerGateway:{mode:'shared'},...runtime})
  f.cleanup.unshift(()=>app.close())
@@ -85,12 +93,12 @@ for(const live of [false,true])test((live?'Live model':'Fixture model')+' finds 
     for(const [index,address] of addresses.entries()){
      const result=JSON.parse(results[index].content)
      assert.ok(!result.isError,result.output)
-     assert.match(result.output,new RegExp('Acceptance!'+address))
+     assert.match(result.output,new RegExp((regexTurn?'Audit':'Acceptance')+'!'+address))
     }
     delta={content:addresses.join('、')}
    }else{
     assert.ok(tools.some(tool=>tool.function.name==='find_cells'))
-    const input=regexTurn?(results.length?{errors_only:true}:{query:'^REPORT-[0-9]{5}$',regex:true}):{query:marker}
+    const input=regexTurn?{sheetId:auditSheet.id,...(results.length?{errors_only:true}:{query:'^REPORT-[0-9]{5}$',regex:true})}:{query:marker}
     delta={tool_calls:[{index:0,id:'find-'+(regexTurn?'audit-'+results.length:'marker'),type:'function',function:{name:'find_cells',arguments:JSON.stringify(input)}}]}
    }
    return Readable.from([Buffer.from('data: '+JSON.stringify({choices:[{delta,finish_reason:delta.tool_calls?'tool_calls':'stop'}]})+'\n\ndata: [DONE]\n\n')])
@@ -108,10 +116,10 @@ for(const live of [false,true])test((live?'Live model':'Fixture model')+' finds 
  await expect(assistant.locator('.ai-msg-error')).toHaveCount(0)
  const range=page.waitForResponse(async response=>{
   if(!response.ok()||!response.url().endsWith('/sheets/range'))return false
-  const {range}=response.request().postDataJSON()
-  return range.endRow>=1001&&range.startRow<=1000&&range.endColumn>=27
+  const {sheetName,range}=response.request().postDataJSON()
+  return sheetName==='Audit'&&range.endRow>=1001&&range.startRow<=1000&&range.endColumn>=27
  },{timeout:60000})
- await assistant.locator('textarea').fill('请用 find_cells 执行两次搜索：第一次设置 regex:true，查询 ^REPORT-[0-9]{5}$；第二次单独设置 errors_only:true 查公式错误。报告两类结果的单元格地址，不修改工作簿。')
+ await assistant.locator('textarea').fill(`请用 find_cells 在 Audit 工作表（sheetId: ${auditSheet.id}）执行两次搜索：第一次设置 regex:true，查询 ^REPORT-[0-9]{5}$；第二次单独设置 errors_only:true 查公式错误。报告两类结果的单元格地址，不修改工作簿。`)
  await assistant.getByRole('button',{name:'发送',exact:true}).click()
  const rangeCells=(await (await range).json()).cells
  assert.ok(rangeCells.some(cell=>cell.row===1000&&cell.column===26&&cell.value==='REPORT-12345'))

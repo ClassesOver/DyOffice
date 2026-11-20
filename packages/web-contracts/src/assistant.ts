@@ -60,12 +60,12 @@ export function scopeAssistantRequest(request: unknown, fallbackTools: ReadonlyS
   const fallback={request,tools:fallbackTools,historicalTools:fallbackTools}
   if (!request || typeof request !== 'object' || Array.isArray(request)) return fallback
   const value = request as Record<string, unknown>
-  if (value.format === undefined) return fallback
-  if (value.format !== 'docx' && value.format !== 'xlsx' && value.format !== 'pptx' && value.format !== 'pdf') throw new Error('Unsupported assistant format')
-  const tools = assistantToolsForFormat(value.format, {
-    delegation: [...ASSISTANT_DELEGATION_TOOLS].some(name => fallbackTools.has(name)),
-  })
-  const permitted = new Set([...tools, ...assistantSourceTools('read-only-analysis').filter(name => fallbackTools.has(name))])
+  const format = value.format
+  if (format !== undefined && format !== 'docx' && format !== 'xlsx' && format !== 'pptx' && format !== 'pdf') throw new Error('Unsupported assistant format')
+  const permitted = format === undefined ? fallbackTools : new Set([
+    ...assistantToolsForFormat(format, {delegation: [...ASSISTANT_DELEGATION_TOOLS].some(name => fallbackTools.has(name))}),
+    ...assistantSourceTools('read-only-analysis').filter(name => fallbackTools.has(name)),
+  ])
   const wire = {...value}
   delete wire.format
   const offeredTools = new Set<string>()
@@ -79,11 +79,12 @@ export function scopeAssistantRequest(request: unknown, fallbackTools: ReadonlyS
       return true
     })
   }
+  if(format===undefined)return {request:wire,tools:offeredTools,historicalTools:fallbackTools}
   // A resumed run has a paired Harness result but must not offer it again.
   const historicalTools=new Set(offeredTools)
   if(fallbackTools.has('delegate_agent_task'))historicalTools.add('delegate_agent_task')
   // Prior PDF turns may have read an attachment that is no longer offered.
-  if(value.format==='pdf')historicalTools.add('read_attachment')
+  if(format==='pdf')historicalTools.add('read_attachment')
   return {request: wire, tools: offeredTools,historicalTools}
 }
 export interface AssistantModel {id: string; label: string; model: string; providerId?: string}

@@ -26,7 +26,7 @@ const cases=[
  ['extract_pages',{pages:'2'},[]],
 ]
 test('native PDF assistant and ribbon save separate page copies',{skip:!nativePdfDirectory,timeout:120000},async t=>{
- const origin='http://localhost:4248',f=await fileFixture(t,{origin,buildApp:false})
+ const origin='http://localhost:4290',f=await fileFixture(t,{origin,buildApp:false})
  const keyring={activeKeyId:'copies',keys:{copies:new Uint8Array(32).fill(37)}}
  const source=await PDFDocument.create()
  for(const width of [400,500,600])source.addPage([width,300]).drawText('Source '+width,{x:30,y:250})
@@ -38,7 +38,7 @@ test('native PDF assistant and ribbon save separate page copies',{skip:!nativePd
   localShellDirectory:process.env.DYOFFICE_TEST_LOCAL_SHELL_DIRECTORY??fileURLToPath(new URL('../../dist-local-shell',import.meta.url)),
  })
  f.cleanup.unshift(()=>app.close())
- await app.listen({port:4248,host:'127.0.0.1'})
+ await app.listen({port:4290,host:'127.0.0.1'})
  const browser=await launchTestBrowser();f.cleanup.unshift(()=>browser.close())
  const page=await browser.newPage({viewport:{width:1440,height:1000}})
  await stubHomeHero(page)

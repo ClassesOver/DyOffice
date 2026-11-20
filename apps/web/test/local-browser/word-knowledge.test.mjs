@@ -20,7 +20,7 @@ async function document(text){const zip=await JSZip.loadAsync(await docxBytes())
 const liveConfig=process.env.DYOFFICE_LIVE_WORD_KNOWLEDGE_CONFIG
 test('Word searches a starred saved source, reads its actual text and opens the cited workspace file'+(liveConfig?' with a real model':''),{timeout:180000},async t=>{
  let app,browser;t.after(async()=>{await browser?.close();app?.server.closeAllConnections();await app?.close()})
- const origin='http://127.0.0.1:4248',f=await fileFixture(t,{origin,buildApp:false}),keyring={activeKeyId:'word-kb',keys:{'word-kb':new Uint8Array(32).fill(54)}}
+ const origin='http://127.0.0.1:4291',f=await fileFixture(t,{origin,buildApp:false}),keyring={activeKeyId:'word-kb',keys:{'word-kb':new Uint8Array(32).fill(54)}}
  const modelEntry=liveConfig?JSON.parse(await readFile(liveConfig,'utf8')).entry:{id:'shared-chat',kind:'chat',providerId:'deepseek',label:'Test model',model:'synthetic-model',baseUrl:'https://provider.example/v1',enabled:true,apiKey:'synthetic-key'}
  assert.ok(modelEntry?.enabled&&modelEntry?.apiKey&&modelEntry?.kind==='chat','Enabled test model configuration required')
  await createGlobalConfigService({transactions:f.transactions,keyring}).saveGlobalConfig(f.adminSigned.token,0,{upserts:[modelEntry],defaults:{chat:modelEntry.id}})
@@ -36,7 +36,7 @@ test('Word searches a starred saved source, reads its actual text and opens the 
   return Readable.from([Buffer.from(`data: ${JSON.stringify({choices:[{delta}]})}\n\ndata: ${JSON.stringify({choices:[{delta:{},finish_reason:tool?'tool_calls':'stop'}]})}\n\ndata: [DONE]\n\n`)])
  })}
  app=await buildLocalApp({db:f.db,businessPool:f.businessPool,passwords:f.passwords,deploymentId:f.deploymentId,origin,csrfKey:f.csrfKey,objectStore:f.objects,globalConfigKeyring:keyring,providerGateway:{mode:'shared'},codingHarnesses:false,nativeDocsDirectory:process.env.DYOFFICE_TEST_KB_DOCS_DIRECTORY??fileURLToPath(new URL('../../dist-docs',import.meta.url)),localShellDirectory:process.env.DYOFFICE_TEST_LOCAL_SHELL_DIRECTORY??fileURLToPath(new URL('../../dist-local-shell',import.meta.url))})
- await app.listen({host:'127.0.0.1',port:4248});browser=await launchTestBrowser();const page=await browser.newPage({viewport:{width:1440,height:1000}})
+ await app.listen({host:'127.0.0.1',port:4291});browser=await launchTestBrowser();const page=await browser.newPage({viewport:{width:1440,height:1000}})
  await stubHomeHero(page)
  await page.goto(origin);await page.getByLabel('用户名',{exact:true}).fill('alice');await page.getByLabel('密码',{exact:true}).fill(password)
  await page.getByRole('button',{name:'登录',exact:true}).click();await expect(page.locator('.home')).toBeVisible()

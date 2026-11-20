@@ -58,7 +58,7 @@
     "provision:runtime": "node --experimental-strip-types tools/dyoffice/provision-runtime.ts",
     "test:web:storage": "npm run test:storage --prefix apps/web --workspaces=false",
     "build:web:docs": "vite build --config apps/web/vite.docs.config.ts",
-    "test:web:docs": "node --import tsx --test apps/web/test/native-docs/*.test.mjs",
+    "test:web:docs": "node --import tsx --test --test-concurrency=1 apps/web/test/native-docs/*.test.mjs",
     "pretest:web:docs": "npm run build:web:docs && npm run build:web:shell",
     "build:web:shell": "vite build --config apps/web/vite.local-shell.config.mjs",
     "typecheck:web:docs": "tsc -p apps/web/tsconfig.docs.json",

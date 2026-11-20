@@ -29,7 +29,7 @@
     "test:identity:integration": "node --test test/integration/*.test.mjs",
     "test:shell": "vitest run --config vitest.shell.config.mjs",
     "typecheck:shell": "tsc -p tsconfig.shell.json",
-    "test:integration:local": "node --import tsx --test test/local-integration/*.test.mjs"
+    "test:integration:local": "node --import tsx --test --test-concurrency=4 test/local-integration/*.test.mjs"
   },
   "dependencies": {
     "@ant-design/icons": "^6.3.4",

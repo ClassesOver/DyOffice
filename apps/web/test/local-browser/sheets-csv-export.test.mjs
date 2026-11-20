@@ -15,7 +15,7 @@ import {password} from '../helpers/identity.mjs'
 import {stubHomeHero} from '../helpers/home-hero.mjs'
 
 test('XLSX exports only the current sheet as a UTF-8 CSV without saving the workbook',{timeout:120000},async t=>{
- const port=4257,origin='http://127.0.0.1:'+port
+ const port=4293,origin='http://127.0.0.1:'+port
  const f=await fileFixture(t,{origin,buildApp:false})
  await f.preferences.update(f.alice.token,{language:'zh',autoSave:false})
  const directory=await mkdtemp(join(tmpdir(),'dyoffice-sheets-csv-'))

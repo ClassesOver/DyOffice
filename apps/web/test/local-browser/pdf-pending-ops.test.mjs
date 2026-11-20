@@ -20,7 +20,7 @@ import {PNG} from 'pngjs'
 test('PDF chat mixed canonical edits preview undo and save one revision with lost receipt recovery',{timeout:210000},async t=>{
  let app,browser,turn=0,markupId,noteId,removedTextId
  t.after(async()=>{await browser?.close();app?.server.closeAllConnections();await app?.close()})
- const origin='http://127.0.0.1:4251',f=await fileFixture(t,{origin,buildApp:false}),keyring={activeKeyId:'pending',keys:{pending:new Uint8Array(32).fill(75)}}
+ const origin='http://127.0.0.1:4292',f=await fileFixture(t,{origin,buildApp:false}),keyring={activeKeyId:'pending',keys:{pending:new Uint8Array(32).fill(75)}}
  const calls=()=>[
   ['markup_text',{page:1,text:'Original page 1',type:'highlight'}],
   ['add_note',{page:2,anchor_text:'Original page 2',contents:'Before pending note'}],
@@ -47,7 +47,7 @@ test('PDF chat mixed canonical edits preview undo and save one revision with los
  const original=Buffer.from(await doc.save()),source=(await importFile(f,f.alice.token,original,'pending-mixed.pdf')).file
  const n=PDFName.of,appearance=pdf=>Buffer.from(pdf.getForm().getTextField('Locked').acroField.getWidgets()[0].dict.lookup(n('AP'),PDFDict).lookup(n('N')).getContents()),oldAppearance=appearance(await PDFDocument.load(original))
  app=await buildLocalApp({db:f.db,businessPool:f.businessPool,passwords:f.passwords,deploymentId:f.deploymentId,origin,csrfKey:f.csrfKey,objectStore:f.objects,globalConfigKeyring:keyring,providerGateway:{mode:'shared'},codingHarnesses:false,localShellDirectory:process.env.DYOFFICE_TEST_LOCAL_SHELL_DIRECTORY??fileURLToPath(new URL('../../dist-local-shell',import.meta.url))})
- await app.listen({host:'127.0.0.1',port:4251});browser=await launchTestBrowser();const tab=await browser.newPage({viewport:{width:1600,height:1100}});await stubHomeHero(tab)
+ await app.listen({host:'127.0.0.1',port:4292});browser=await launchTestBrowser();const tab=await browser.newPage({viewport:{width:1600,height:1100}});await stubHomeHero(tab)
  const errors=[];tab.on('pageerror',error=>errors.push(error.message))
  await tab.goto(origin);await tab.getByLabel('用户名',{exact:true}).fill('alice');await tab.getByLabel('密码',{exact:true}).fill(password);await tab.getByRole('button',{name:'登录',exact:true}).click();await expect(tab.locator('.home')).toBeVisible();await tab.goto(origin+'/#/file/'+source.fileId)
  const region=tab.getByRole('region',{name:'PDF 页面',exact:true}),assistant=tab.locator('.shared-editor-assistant')
