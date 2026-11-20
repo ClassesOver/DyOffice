@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import {restrictedFixture} from '../helpers/restricted.mjs'
 import {createSkillService} from '../../server/src/modules/skills/service.ts'
 import {tokenHash} from '../../server/src/modules/auth/sessions.ts'
+import {createStyleTemplateService} from '../../server/src/modules/style-templates/service.ts'
 
 // Removing owner binding, FORCE RLS, or the live session check must break this test.
 test('Skills with the same name stay private to each user including config admins and direct SQL', async t => {
@@ -25,6 +26,25 @@ test('Skills with the same name stay private to each user including config admin
   assert.equal((await skills.list(f.alice.token))[0].description, 'Alice only')
   await f.sessions.logout(f.alice.token)
   await assert.rejects(skills.read(f.alice.token, 'report'), {statusCode: 401})
+})
+
+test('PPTX style templates with the same name stay private to each user under RLS',async t=>{
+ const f=await restrictedFixture(t),templates=createStyleTemplateService(f.transactions)
+ const data=(topic,styleSkill)=>({topic,styleSkill,createdAt:'2026-11-19T00:00:00.000Z',layout:{canvas:{w:1280,h:720}}})
+ await templates.save(f.alice.token,'Quarterly / report',data('Alice topic','Alice style'))
+ await templates.save(f.bob.token,'Quarterly / report',data('Bob topic','Bob style'))
+ assert.equal((await templates.list(f.alice.token))[0].name,'Quarterly _ report')
+ assert.equal((await templates.load(f.alice.token,'Quarterly _ report')).styleSkill,'Alice style')
+ assert.equal((await templates.load(f.bob.token,'Quarterly _ report')).styleSkill,'Bob style')
+ assert.deepEqual(await templates.list(f.adminSigned.token),[])
+ assert.deepEqual(await templates.load(f.adminSigned.token,'Quarterly _ report'),{ok:false,error:'Style template not found.'})
+ await f.transactions.withPrincipalTransaction({kind:'session',token:f.bob.token},async c=>{
+  await c.query("SELECT set_config('dyoffice.global_session_hash',$1,true),set_config('dyoffice.global_idle_ms',$2,true)",[tokenHash(f.bob.token),String(f.transactions.sessionIdleMs)])
+  assert.deepEqual((await c.query('SELECT style_skill FROM user_style_templates')).rows,[{style_skill:'Bob style'}])
+  await c.query("SELECT set_config('dyoffice.user_id',$1,true)",[f.alice.user.id])
+  assert.equal((await c.query('SELECT style_skill FROM user_style_templates')).rowCount,0)
+ })
+ assert.equal((await f.businessPool.query('SELECT * FROM user_style_templates')).rowCount,0)
 })
 
 test('Skills API derives ownership from cookie, rejects injected principals, and requires CSRF on writes', async t => {

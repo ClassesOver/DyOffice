@@ -4,13 +4,11 @@ import { expect, test, vi } from 'vitest'
 import { createAssistantWorkspace } from '../../../../packages/browser-host/src/assistant-workspace'
 import {
   AssistantWorkspacePanel,
-  AssistantRecipient,
   AssistantTeamConversation,
-  handleTeamMentionKey,
 } from '../../src/editors/assistant-workspace-panel'
 import { createEditorAssistant } from '../../src/editors/assistant'
 
-test('assistant views and recipient use real targets without unmounting the native draft', async () => {
+test('workspace keeps only the chat and tasks tabs without a manual routing menu', async () => {
   const host = document.createElement('div')
   document.body.append(host)
   const root = createRoot(host)
@@ -26,23 +24,16 @@ test('assistant views and recipient use real targets without unmounting the nati
           {},
           h(AssistantWorkspacePanel, { client, lang: 'en' }),
           h('textarea', { defaultValue: 'Keep draft' }),
-          h(AssistantRecipient, { client, lang: 'en' }),
         ),
       ),
     )
     const draft = host.querySelector('textarea')!
     const button = (text: string) =>
       [...host.querySelectorAll('button')].find((node) => node.textContent?.includes(text))!
-    await act(async () => button('Assistants').click())
-    expect(host.textContent).toContain('Built-in')
-    expect(host.textContent).toContain('Runtime not verified')
-    expect(host.querySelector('.assistant-mention-trigger')).toBeNull()
-    await act(async () =>
-      [...host.querySelectorAll<HTMLButtonElement>('.assistant-member button')]
-        .find((node) => node.textContent?.includes('Codex'))!
-        .click(),
-    )
-    expect(client.isOffice()).toBe(false)
+    expect([...host.querySelectorAll('[role=tab]')].map(node=>node.textContent)).toEqual(['Chat','Tasks'])
+    expect(host.querySelector('.assistant-member button')).toBeNull()
+    expect(host.querySelector('.assistant-execution-picker,.assistant-execution-menu')).toBeNull()
+    expect(client.isOffice()).toBe(true)
     expect(host.querySelector('textarea')).toBe(draft)
     expect(draft.value).toBe('Keep draft')
     await act(async () => button('Tasks').click())
@@ -54,7 +45,6 @@ test('assistant views and recipient use real targets without unmounting the nati
     host.remove()
   }
 })
-
 test('team conversation interleaves members with Office messages and never switches to Tasks on send', async () => {
   let task:
     | {
@@ -115,11 +105,22 @@ test('team conversation interleaves members with Office messages and never switc
     expect(client.snapshot().view).toBe('chat')
     expect(host.querySelector('.assistant-team-feed')?.textContent).toContain('Office assistant')
     expect(host.querySelector('.assistant-team-feed')?.textContent).toContain('Codex')
+    const memberMessage = host.querySelector('.assistant-team-feed .assistant-task-message')
     task = { ...task, progress: 'Checking the numbers', activity: 'Executing command' }
     await act(async () => listeners.forEach((listener) => listener()))
     expect(host.querySelector('.assistant-team-feed [aria-label="Live output"]')?.textContent).toBe(
       'Checking the numbers',
     )
+    const log=memberMessage!.querySelector<HTMLDetailsElement>('.assistant-task-log')!
+    expect(log.open).toBe(true)
+    await act(async()=>log.querySelector('summary')!.click())
+    expect(log.open).toBe(false)
+    task={...task,progress:'Checking the numbers\nStill running'}
+    await act(async()=>listeners.forEach(listener=>listener()))
+    expect(log.open).toBe(false)
+    await act(async()=>log.querySelector('summary')!.click())
+    expect(log.open).toBe(true)
+    expect(log.querySelector('pre')?.textContent).toContain('Still running')
     expect(host.querySelector('.assistant-team-feed [role=status]')?.textContent).toBe(
       'Executing command',
     )
@@ -127,14 +128,16 @@ test('team conversation interleaves members with Office messages and never switc
     await act(async () => listeners.forEach((listener) => listener()))
     await act(async () => render(['I will delegate the calculation.', 'The answer is ready.']))
     const feed = host.querySelector('.assistant-team-feed')!
+    expect(feed.querySelector('.assistant-task-message')).toBe(memberMessage)
     expect(feed.textContent!.indexOf('I will delegate')).toBeLessThan(
       feed.textContent!.indexOf('Calculated'),
     )
     expect(feed.textContent!.indexOf('Calculated')).toBeLessThan(
       feed.textContent!.indexOf('The answer'),
     )
-    const viewTask = [...feed.querySelectorAll('button')].find(
-      (button) => button.textContent === 'View task',
+    expect(feed.querySelector('.assistant-task-details')).not.toBeNull()
+    const viewTask = [...host.querySelectorAll<HTMLButtonElement>('[role=tab]')].find(
+      (button) => button.textContent?.startsWith('Tasks'),
     )!
     await act(async () => viewTask.click())
     expect(client.snapshot().view).toBe('tasks')
@@ -160,8 +163,7 @@ test('team conversation interleaves members with Office messages and never switc
   }
 })
 
-test('real editor factory routes to Codex with the selected model and renders the returned result', async () => {
-  const sent: Record<string, unknown>[] = []
+test('real editor factory keeps Office as the default and removes executor routing controls', async () => {
   vi.stubGlobal(
     'fetch',
     vi.fn(async (path: string, init?: RequestInit) => {
@@ -176,13 +178,6 @@ test('real editor factory routes to Codex with the selected model and renders th
           agents: [{ id: 'codex', name: 'Codex', origin: 'builtin', capabilities: ['coding'] }],
           defaultAgentId: 'codex',
         })
-      if (path === '/api/v1/agents/tasks') {
-        sent.push(JSON.parse(init!.body as string))
-        return new Response(
-          `event: delta\ndata: ${JSON.stringify({ text: JSON.stringify({ summary: 'Analysis ready', output: 'Computed: 42' }) })}\n\nevent: done\ndata: {}\n\n`,
-          { headers: { 'content-type': 'text/event-stream' } },
-        )
-      }
       throw Error('Unexpected request: ' + path)
     }),
   )
@@ -197,36 +192,16 @@ test('real editor factory routes to Codex with the selected model and renders th
           'div',
           {},
           assistant.workspace.panel,
-          assistant.workspace.recipient,
           assistant.workspace.conversation(null),
           assistant.modelPicker,
         ),
       ),
     )
     expect(host.querySelector('.assistant-team-roster')).toBeNull()
-    await act(async () =>
-      [...host.querySelectorAll<HTMLButtonElement>('[role=tab]')]
-        .find((node) => node.textContent?.includes('助手'))!
-        .click(),
-    )
-    await act(async () =>
-      [...host.querySelectorAll<HTMLButtonElement>('.assistant-member button')]
-        .find((node) => node.textContent?.includes('Codex'))!
-        .click(),
-    )
-    assistant.select('two')
-    let result: unknown
-    await act(async () => {
-      result = await assistant.workspace.submit('Calculate 6 * 7', false)
-    })
-    expect(result).toBe('sent')
-    expect(sent).toHaveLength(1)
-    expect(sent[0]!.modelId).toBe('codex')
-    expect(
-      JSON.parse((sent[0]!.request as { messages: { text: string }[] }).messages[0]!.text),
-    ).toEqual({ officeModelId: 'two', instruction: 'Calculate 6 * 7' })
-    expect(host.textContent).toContain('Analysis ready')
-    expect(host.textContent).toContain('Computed: 42')
+    expect(host.querySelector('.assistant-execution-picker,.assistant-execution-menu')).toBeNull()
+    expect(assistant.workspace.isOffice()).toBe(true)
+    expect([...host.querySelectorAll('[role=tab]')].map(node=>node.textContent)).toEqual(['对话','任务'])
+    expect(host.querySelector('.assistant-member button')).toBeNull()
   } finally {
     await act(async () => root.unmount())
     assistant.dispose()
@@ -235,25 +210,50 @@ test('real editor factory routes to Codex with the selected model and renders th
   }
 })
 
-test('mention Enter only intercepts the text input, leaving member buttons activatable', () => {
-  const client = createAssistantWorkspace({ agents: [] })
-  const preventDefault = vi.fn(),
-    stopPropagation = vi.fn(),
-    onChange = vi.fn()
-  const event = {
-    nativeEvent: { isComposing: false },
-    key: 'Enter',
-    shiftKey: false,
-    target: document.createElement('button'),
-    preventDefault,
-    stopPropagation,
+test.each(['running','succeeded','failed','unknown_outcome'] as const)('channel member message uses the existing assistant UI in %s state',async state=>{
+ vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT',true)
+ const run=vi.fn(),cancel=vi.fn()
+ const client=createAssistantWorkspace({agents:[],coding:{run,cancel,subscribe:()=>()=>{},snapshot:()=>[{
+  id:'task',agent:{id:'codex',name:'Codex',origin:'builtin',capabilities:['coding']},instruction:'查询 2025 年收入\n按月份汇总，单位为元。',initiator:'office',state,
+  ...(['running','succeeded'].includes(state)?{progress:'正在汇总收入'}:{}),
+  ...(state==='succeeded'?{summary:'2025 年收入为 42 万元',output:'详细数据：420000'}:{}),
+  ...(['failed','unknown_outcome'].includes(state)?{failure:'AI stream HTTP 403'}:{}),
+ }]}})
+ const host=document.createElement('div');document.body.append(host);const root=createRoot(host)
+ try{
+  await act(async()=>root.render(h(AssistantTeamConversation,{client,lang:'zh'},h('textarea',{defaultValue:'保留 Office 草稿'}))))
+  const card=host.querySelector('.assistant-task-message')!
+  expect(host.querySelector('.assistant-task')).toBeNull()
+  expect(card.querySelector('.assistant-team-author strong')?.textContent).toBe('Codex')
+  expect(card.querySelector('.ai-msg-assistant')).not.toBeNull()
+  expect(card.querySelector('.assistant-member-heading')).toBeNull()
+  expect(card.querySelector('.assistant-task-title')?.textContent).toBe('查询 2025 年收入')
+  const request=card.querySelector<HTMLDetailsElement>('.assistant-task-details')!
+  expect(request.querySelector('summary')?.textContent).toBe('任务详情');expect(request.open).toBe(false)
+  expect(request.textContent).toContain('按月份汇总')
+  const log=card.querySelector<HTMLDetailsElement>('.assistant-task-log')
+  if(state==='running'||state==='succeeded'){
+   expect(log?.open).toBe(state==='running')
+   expect(log?.querySelector('pre')?.textContent).toContain('正在汇总收入')
   }
-  handleTeamMentionKey(client, event as never, '@', onChange)
-  expect(preventDefault).not.toHaveBeenCalled()
-  expect(onChange).not.toHaveBeenCalled()
-  event.target = document.createElement('textarea') as never
-  handleTeamMentionKey(client, event as never, '@Office', onChange)
-  expect(preventDefault).toHaveBeenCalled()
-  expect(onChange).toHaveBeenCalledWith('')
-  client.dispose()
+  if(state==='succeeded'){
+   expect(card.querySelector('.assistant-task-result')?.textContent).toContain('42 万元')
+   expect(card.querySelector('.assistant-task-output')?.textContent).toContain('420000')
+  }else expect(card.querySelector('.assistant-task-output')).toBeNull()
+  if(state==='failed'||state==='unknown_outcome'){
+   expect(card.querySelector('.assistant-task-failure')?.textContent).toContain('AI stream HTTP 403')
+   await act(async()=>request.querySelector('summary')!.click())
+   expect(request.open).toBe(true)
+   expect(client.snapshot().view).toBe('chat')
+   expect(card.textContent).not.toContain('重新执行')
+  }
+  expect(host.querySelector('textarea')?.value).toBe('保留 Office 草稿')
+  expect(run).not.toHaveBeenCalled();expect(cancel).not.toHaveBeenCalled();expect(client.isOffice()).toBe(true)
+  if(state==='running'){
+   const stop=[...card.querySelectorAll<HTMLButtonElement>('button')].find(button=>button.textContent==='请求取消')!
+   await act(async()=>stop.click())
+   expect(cancel).toHaveBeenCalledExactlyOnceWith('task')
+   expect(run).not.toHaveBeenCalled()
+  }
+ }finally{await act(async()=>root.unmount());client.dispose();host.remove();vi.unstubAllGlobals()}
 })

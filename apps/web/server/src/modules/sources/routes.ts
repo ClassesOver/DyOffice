@@ -10,7 +10,7 @@ import { object, sourceError } from './config.ts'
 export function registerSourceRoutes(app: FastifyInstance, sources: SourceService, sessions: SessionService, csrf: ReturnType<typeof createCsrfService>) {
   const base = '/api/v1/sources'
   for (const method of ['GET','POST','PUT','DELETE'] as const) {
-    const paths = method === 'GET' ? [base, base + '/:sourceId'] : method === 'POST' ? [base, base + '/:sourceId/publish', base + '/:sourceId/test', base + '/:sourceId/query'] : [base + '/:sourceId']
+    const paths = method === 'GET' ? [base, base + '/:sourceId'] : method === 'POST' ? [base, base + '/:sourceId/test', base + '/:sourceId/query', base + '/:sourceId/discover'] : [base + '/:sourceId']
     for (const url of paths) app.route({
       method, url, bodyLimit: url.endsWith('/query') ? 40_000 : 16_384,
       onRequest: async (request, reply) => {
@@ -29,8 +29,8 @@ export function registerSourceRoutes(app: FastifyInstance, sources: SourceServic
         if (method === 'DELETE') { await sources.remove(token, id, request.body); return reply.code(204).send() }
         if (method === 'PUT') return sources.save(token, id, request.body)
         if (url === base) return reply.code(201).send(await sources.create(token, request.body))
-        if (url.endsWith('/publish')) return sources.publish(token, id, request.body)
         if (url.endsWith('/test')) { object(request.body ?? {}, []); return sources.test(token, id) }
+        if (url.endsWith('/discover')) return sources.discover(token,id,request.body)
         return sources.querySource(token, id, request.body ?? {})
       },
     })

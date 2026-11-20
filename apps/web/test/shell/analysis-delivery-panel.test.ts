@@ -111,3 +111,12 @@ test('source display renders recorded units/timezone as text and labels legacy o
  const html=renderToStaticMarkup(h(AnalysisDeliveryPanel,{client:f.fake as never,lang:'en'}));expect(html).toContain('Asia/Shanghai');expect(html).toContain('&lt;script&gt;CNY&lt;/script&gt;');expect(html).toContain('number');expect(html).not.toMatch(/<img|<script/)
  const legacy=renderToStaticMarkup(h(AnalysisDeliveryPanel,{client:client() as never,lang:'en'}));expect(legacy).toContain('Timezone: not recorded');expect(legacy).toContain('Column types and units: not recorded')
 })
+
+test('PPTX delivery explicitly targets the current slide and native table insertion',()=>{
+ const f=insertionFixture();Object.assign(f.target,{format:'pptx'})
+ const html=renderToStaticMarkup(h(AnalysisDeliveryPanel,{client:f.fake as never,documents:f.documents as never,lang:'en'}))
+ expect(html).toContain('Insert into current slide')
+ expect(html).toContain('Insert native text or a table on the current slide')
+ expect(html).not.toContain('Insert after the current paragraph')
+ expect(f.target.apply).not.toHaveBeenCalled()
+})

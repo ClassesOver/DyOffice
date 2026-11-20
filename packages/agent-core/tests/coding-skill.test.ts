@@ -32,3 +32,11 @@ describe('Office team delegation', () => {
     expect(result.isError).toBe(true)
   })
 })
+
+it('runtime failures do not claim that an available agent is unavailable',async()=>{
+ const skill=createCodingSkill({run:async()=>{throw Error('Harness task failed. Check server diagnostics.')}})
+ const result=await skill.executeTool({id:'failure',name:'delegate_agent_task',input:{instruction:'Analyze'}})
+ expect(result.isError).toBe(true)
+ expect(result.output).toBe('Harness task failed. Check server diagnostics.')
+ expect(result.summary).toBe('Delegated task did not complete')
+})

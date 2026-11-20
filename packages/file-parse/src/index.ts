@@ -1,5 +1,6 @@
 export {
   parseFileToText,
+  parseBytesToText,
   type ParsedFile,
   type ParsedFileKind,
   type ParseFileOptions,

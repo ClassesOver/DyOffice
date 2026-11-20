@@ -17,6 +17,27 @@ function fakeTransport(
 const passthrough = (raw: string) => ({ text: raw.trim() })
 
 describe('streamText', () => {
+  it('reports reasoning as activity without adding it to the artifact', async () => {
+    const activity = vi.fn()
+    const progress = vi.fn()
+    const outcome = await streamText({
+      transport: fakeTransport((callbacks) => {
+        callbacks.onReasoning?.('Plan the page')
+        callbacks.onDelta('page JSON')
+        callbacks.onDone()
+      }),
+      system: 's',
+      user: 'u',
+      maxChars: 1000,
+      extract: passthrough,
+      onActivity: activity,
+      onProgress: progress,
+    })
+    expect(activity).toHaveBeenCalledTimes(2)
+    expect(progress.mock.calls).toEqual([['page JSON']])
+    expect(outcome).toEqual({ status: 'complete', text: 'page JSON' })
+  })
+
   it('sends a tool-less request and reports cumulative progress', async () => {
     const progress: string[] = []
     let request: { tools: unknown[]; messages: unknown[] } | undefined

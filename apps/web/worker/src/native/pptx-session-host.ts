@@ -1,3 +1,7 @@
+import type {SlideAnimation,LinkTarget} from '@genoffice/pptx-engine'
+export type AnimationItem={sourceId:string;targetName:string}&Omit<SlideAnimation,'spid'>
+type LinkTargetOp=LinkTarget
+export type RunLink = {sourceId:string;paraIndex:number;runIndex:number;target:LinkTarget}
 import { fork } from 'node:child_process'
 import { createRequire } from 'node:module'
 import { fileURLToPath, pathToFileURL } from 'node:url'
@@ -9,7 +13,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 export interface SlidesRenderNodeLike { type: string; [key: string]: unknown }
 export interface SlidesRenderSlideLike { widthPx: number; heightPx: number; scale: number; nodes: SlidesRenderNodeLike[]; partPath?: string }
 export interface PptxChildBinding { fileId: string; revision: string }
-export interface SlidesStepView { generation: number; stateGeneration: number; canUndo: boolean; canRedo: boolean; slides: SlidesRenderSlideLike[] }
+export interface SlidesStepView { generation: number; stateGeneration: number; canUndo: boolean; canRedo: boolean; size: {cx:number;cy:number}; slides: SlidesRenderSlideLike[] }
 /** The child's apply result: the applied transaction records plus the post-transaction deck
  * outline (durable slide ids and part paths) that drives changed/order reporting. Records
  * carry the original op object (`op.op` is the op name) per the executor journal. */
@@ -17,21 +21,40 @@ export interface SlidesCreatedEntryView { slide: number; index: number; id: stri
 export interface SlidesApplyView {
   generation: number; stateGeneration: number; canUndo: boolean; canRedo: boolean
   records: Array<{ op: { op: string }; slideId?: string; created?: string[]; after?: unknown }>
+  transaction: { applied: boolean; dryRun?: boolean; plan?: string[]; failures?: Array<{ index: number; error: string }>; records?: Array<{ op: { op: string }; slideId?: string; created?: string[]; after?: unknown }> }
   count: number; size: { cx: number; cy: number }; slideIds: string[]; paths: string[]
   created: SlidesCreatedEntryView[]
 }
+export type SlidesImageCommand =
+  | {mode:'insert';slide:number;offset:{x:number;y:number;cx:number;cy:number};bytes:Uint8Array;ext:string}
+  | {mode:'replace';slide:number;sourceId:string;bytes:Uint8Array;ext:string;keepSrcRect?:boolean}
 export interface SlidesOutlineView { count: number; size: { cx: number; cy: number }; slideIds: string[]; paths: string[]; defaultFont?: string }
 export interface PptxChildSession {
-  apply(expectedGeneration: number, ops: unknown, signal?: AbortSignal): Promise<SlidesApplyView>
+  apply(expectedGeneration: number, ops: unknown, signal?: AbortSignal, options?: { isolation?: 'atomic' | 'per_op'; dryRun?: boolean }): Promise<SlidesApplyView>
+  editChart(expectedGeneration:number,slide:number,sourceId:string,patch:Record<string,unknown>,signal?:AbortSignal):Promise<{generation:number;stateGeneration:number;canUndo:boolean;canRedo:boolean;slide:SlidesRenderSlideLike;sourceId:string}>
+  generatePage(expectedGeneration:number,specJson:string,images:Array<{url:string;bytes:Uint8Array;ext:string}>,signal?:AbortSignal):Promise<{marker:string;imageFailures:string[];imageWarnings:string[]}>
+  landGeneratedPages(expectedGeneration:number,markers:string[],mode:'replace'|'append'|'replace_at'|'insert_at',atIndex?:number,signal?:AbortSignal):Promise<SlidesApplyView>
+  applyImage(expectedGeneration:number,input:SlidesImageCommand,signal?:AbortSignal):Promise<SlidesApplyView>
   undo(expectedGeneration: number, signal?: AbortSignal): Promise<SlidesStepView>
   redo(expectedGeneration: number, signal?: AbortSignal): Promise<SlidesStepView>
+  beginHistoryBatch(expectedGeneration:number,signal?:AbortSignal):Promise<boolean>
+  endHistoryBatch(expectedGeneration:number,signal?:AbortSignal):Promise<{snapshotId:number|null;canUndo:boolean;canRedo:boolean}>
+  restoreSnapshot(expectedGeneration:number,snapshotId:number,signal?:AbortSignal):Promise<SlidesStepView|null>
   render(expectedGeneration: number, slide: number, fitWidthPx?: number, signal?: AbortSignal): Promise<SlidesRenderSlideLike>
+  chartData(expectedGeneration:number,slide:number,sourceId:string,signal?:AbortSignal):Promise<ReturnType<typeof import('@genoffice/pptx-engine').getChartElementData>>
+  chartColorSchemes(expectedGeneration:number,signal?:AbortSignal):Promise<Array<{key:string;colors:string[]}>>
+  animations(expectedGeneration:number,slide:number,signal?:AbortSignal):Promise<AnimationItem[]>
+  links(expectedGeneration:number,slide:number,signal?:AbortSignal):Promise<Array<{sourceId:string;target:LinkTargetOp}>>
+  runLinks(expectedGeneration:number,slide:number,signal?:AbortSignal):Promise<RunLink[]>
+  notes(expectedGeneration: number, slide: number, signal?: AbortSignal): Promise<string>
+  comments(expectedGeneration: number, slide: number, signal?: AbortSignal): Promise<Array<{authorId:number;author:string;initials:string;dt:string;idx:number;text:string}>>
+  layouts(expectedGeneration: number, signal?: AbortSignal): Promise<{layouts:Array<{path:string;name:string;layoutType:string;placeholders:Array<{type:string;idx:string;x:number;y:number;cx:number;cy:number;hint:string}>}>;size:{cx:number;cy:number}}>
   renderAll(expectedGeneration: number, fitWidthPx?: number, signal?: AbortSignal): Promise<SlidesRenderSlideLike[]>
   outline(expectedGeneration: number, signal?: AbortSignal): Promise<SlidesOutlineView>
   exportBytes(expectedGeneration: number, signal?: AbortSignal): Promise<{ generation: number; bytes: Uint8Array }>
   close(): void
 }
-interface ChildMessage { id: number; m: string; expected?: number; ops?: unknown; slide?: number; width?: number; bytes?: Uint8Array; binding?: PptxChildBinding }
+interface ChildMessage { snapshotId?:number; id: number; m: string; expected?: number; ops?: unknown; image?:SlidesImageCommand; isolation?: 'atomic' | 'per_op'; dryRun?: boolean; slide?: number; width?: number; sourceId?:string;patch?:Record<string,unknown>;specJson?:string;images?:Array<{url:string;bytes:Uint8Array;ext:string}>;markers?:string[];mode?:'replace'|'append'|'replace_at'|'insert_at';atIndex?:number; bytes?: Uint8Array; binding?: PptxChildBinding }
 export interface IsolatedPptxSessionOptions { unsafeTestOnly?: boolean; experimental?: boolean; timeoutMs?: number; childModule?: URL; tsxModule?: URL; mdHooks?: URL }
 /** Mirrors the in-process session gate: no oversized package is ever handed to a child. */
 const MAX_INPUT_BYTES = 32 * 1024 * 1024
@@ -82,18 +105,45 @@ export async function openIsolatedPptxSession(input: {fileId: string; revision: 
       child.send({...message,id} satisfies ChildMessage,()=>{})
     })
   }
-  await call({m:'open',binding,bytes:input.bytes})
+  try {
+    await call({m:'open',binding,bytes:input.bytes})
+  } catch (error) {
+    // No session handle reaches the caller on failure, so close the child here.
+    if (!closed) {
+      failAll(new Error('SESSION_CLOSED'))
+      child.kill('SIGKILL')
+    }
+    throw error
+  }
   return {
     binding,
-    apply(expected,ops,signal){
+    apply(expected,ops,signal,options = {}){
       if (signal?.aborted) return Promise.reject(new Error('ABORTED'))
       // Once sent, the atomic transaction lands in the child; later aborts must not
       // desynchronize the caller's generation, so the promise always settles.
-      return call({m:'apply',expected,ops})
+      return call({m:'apply',expected,ops,isolation:options.isolation,dryRun:options.dryRun})
     },
+    applyImage(expected,input,signal){
+      if(signal?.aborted)return Promise.reject(new Error('ABORTED'))
+      return call({m:'applyImage',expected,image:input})
+    },
+    editChart(expected,slide,sourceId,patch,signal){if(signal?.aborted)return Promise.reject(new Error('ABORTED'));return call({m:'editChart',expected,slide,sourceId,patch})},
+    generatePage(expected,specJson,images,signal){if(signal?.aborted)return Promise.reject(new Error('ABORTED'));return call({m:'generatePage',expected,specJson,images})},
+    landGeneratedPages(expected,markers,mode,atIndex,signal){if(signal?.aborted)return Promise.reject(new Error('ABORTED'));return call({m:'landGeneratedPages',expected,markers,mode,atIndex})},
     undo(expected,signal){ if (signal?.aborted) return Promise.reject(new Error('ABORTED')); return call({m:'undo',expected}) },
     redo(expected,signal){ if (signal?.aborted) return Promise.reject(new Error('ABORTED')); return call({m:'redo',expected}) },
+    beginHistoryBatch(expected,signal){if(signal?.aborted)return Promise.reject(new Error('ABORTED'));return call({m:'historyBatchBegin',expected})},
+    endHistoryBatch(expected,signal){if(signal?.aborted)return Promise.reject(new Error('ABORTED'));return call({m:'historyBatchEnd',expected})},
+    restoreSnapshot(expected,snapshotId,signal){if(signal?.aborted)return Promise.reject(new Error('ABORTED'));return call({m:'snapshotRestore',expected,snapshotId})},
     render(expected,slide,width,signal){ if (signal?.aborted) return Promise.reject(new Error('ABORTED')); return call({m:'render',expected,slide,width}) },
+    chartData(expected,slide,sourceId,signal){if(signal?.aborted)return Promise.reject(new Error('ABORTED'));return call({m:'chartData',expected,slide,sourceId})},
+    chartColorSchemes(expected,signal){if(signal?.aborted)return Promise.reject(new Error('ABORTED'));return call({m:'chartColorSchemes',expected})},
+    animations(expected,slide,signal){if(signal?.aborted)return Promise.reject(new Error('ABORTED'));return call({m:'animations',expected,slide})},
+    links(expected,slide,signal){if(signal?.aborted)return Promise.reject(new Error('ABORTED'));return call({m:'links',expected,slide})},
+    runLinks(expected,slide,signal){if(signal?.aborted)return Promise.reject(new Error('ABORTED'));return call({m:'runLinks',expected,slide})},
+    notes(expected,slide,signal){ if (signal?.aborted) return Promise.reject(new Error('ABORTED')); return call({m:'notes',expected,slide}) },
+    comments(expected,slide,signal){ if (signal?.aborted) return Promise.reject(new Error('ABORTED')); return call({m:'comments',expected,slide}) },
+    layouts(expected,signal){ if (signal?.aborted) return Promise.reject(new Error('ABORTED')); return call({m:'layouts',expected}) },
     renderAll(expected,width,signal){ if (signal?.aborted) return Promise.reject(new Error('ABORTED')); return call({m:'renderAll',expected,width}) },
     outline(expected,signal){ if (signal?.aborted) return Promise.reject(new Error('ABORTED')); return call({m:'outline',expected}) },
     exportBytes(expected,signal){ if (signal?.aborted) return Promise.reject(new Error('ABORTED')); return call({m:'export',expected}) },

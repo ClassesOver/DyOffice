@@ -77,6 +77,17 @@ describe('create_document tool', () => {
     expect(exec.output).toContain('/tmp/Summary.pdf')
   })
 
+  it('reports workspace storage when the host returns a workspace destination', async () => {
+    const createDocument = vi.fn(async () => ({ ok: true, destination: 'workspace' as const }))
+    const exec = await runWithDesktop(createDocument, {
+      type: 'pdf',
+      title: 'Summary',
+      content: '<p>Body</p>',
+    })
+    expect(exec.output).toContain('workspace')
+    expect(exec.output).not.toContain('default folder')
+  })
+
   it('rejects bad input without calling the bridge', async () => {
     const createDocument = vi.fn(async () => ({ ok: true }))
     for (const input of [

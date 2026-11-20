@@ -7,7 +7,7 @@ import {createBudgetedAdminCredentialConsumer} from './budgeted-credential.ts'
 import {createPinnedProviderTransport,type EgressProfile} from './pinned-egress.ts'
 import {parseOpenAiChatStream} from './openai-stream.ts'
 import {buildOpenAiChatRequest} from './openai-request.ts'
-import {assistantReadTools} from '../../../../../../packages/web-contracts/src/assistant.ts'
+import {assistantReadTools,scopeAssistantRequest} from '../../../../../../packages/web-contracts/src/assistant.ts'
 
 export interface AdminPipelineProfile extends EgressProfile {maxOutputTokens:number}
 interface Permit extends TurnPermit {profile:Readonly<AdminPipelineProfile>}
@@ -100,7 +100,8 @@ export function createAdminProviderPipeline({transactions,keyring,profiles,timeo
    let consumer:ReturnType<typeof createBudgetedAdminCredentialConsumer>|undefined
    try{
     if(disposed||control.signal.aborted)throw fail()
-    const built=buildOpenAiChatRequest(request,{model:permit.profile.model,maxOutputTokens:permit.profile.maxOutputTokens},audience==='personal'?personalTools:undefined)
+   const scoped=scopeAssistantRequest(request,audience==='personal'?personalTools:new Set())
+   const built=buildOpenAiChatRequest(scoped.request,{model:permit.profile.model,maxOutputTokens:permit.profile.maxOutputTokens},audience==='personal'?scoped.historicalTools:undefined)
     wire=Buffer.from(built.body);built.body.fill(0)
     binding={turnId,entryId:permit.profile.entryId,configRevision:permit.profile.revision,requestDigest:built.digest}
     let reservation:Awaited<ReturnType<typeof budget.reserve>>
@@ -136,7 +137,7 @@ export function createAdminProviderPipeline({transactions,keyring,profiles,timeo
     const terminal:TurnEvent[]=[];let terminalBytes=0
     for await(const event of parseOpenAiChatStream(bytes.source,{signal:control.signal})){
      if(event.type==='delta'||event.type==='reasoning')yield event
-     else {terminalBytes+=Buffer.byteLength(JSON.stringify(event));if(terminalBytes>2*1024*1024)throw fail();terminal.push(event)}
+     else {if(audience==='personal'&&event.type==='tool_call'&&!scoped.tools.has(event.name))throw fail();terminalBytes+=Buffer.byteLength(JSON.stringify(event));if(terminalBytes>2*1024*1024)throw fail();terminal.push(event)}
     }
     await producer
     if(control.signal.aborted)throw fail()

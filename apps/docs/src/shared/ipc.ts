@@ -302,6 +302,7 @@ export interface CreateDocumentResult {
   ok: boolean
   /** the created file, when it is written directly (pdf/md); docx opens as a new tab that saves itself */
   path?: string
+  destination?: 'workspace'
   error?: string
 }
 

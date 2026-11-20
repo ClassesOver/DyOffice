@@ -197,7 +197,11 @@ export function readDateParts(
     got[p] = p === 'year' ? expandYear(n) : n
   })
   if (!isRealDate(got) && open.includes('month') && open.includes('day')) {
-    ;[got.month, got.day] = [got.day, got.month]
+    const month = got.month
+    const day = got.day
+    if (month === undefined || day === undefined) return null
+    got.month = day
+    got.day = month
     if (!isRealDate(got)) return null
   } else if (!isRealDate(got)) return null
   return complete(got)

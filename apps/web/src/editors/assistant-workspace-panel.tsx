@@ -8,7 +8,6 @@ import {
   useState,
   type ReactNode,
   type ReactElement,
-  type KeyboardEvent,
 } from 'react'
 import { AssistantAvatar } from '@genoffice/ui'
 import type {
@@ -23,11 +22,10 @@ const labels = {
     team: '助手',
     tasks: '任务',
     office: 'Office 助手',
-    main: '协调者',
     builtin: '内置',
     external: '外接',
-    officeHelp: '理解文档、回答问题、协调任务与汇总结果。',
-    harnessHelp: '代码、数据处理与图表；使用 Office 所选模型。',
+    officeHelp: '负责理解需求、处理文档并汇总执行结果。',
+    harnessHelp: '处理编程、脚本与需要运行环境的分析任务。',
     externalHelp: '通过协作任务接收授权内容。',
     configured: '已配置 · 运行待验证',
     verified: '本会话已有完成任务',
@@ -35,30 +33,28 @@ const labels = {
     offline: '不可用 / 已离线',
     empty: '暂无协作任务',
     none: '暂无已配置的 harness',
-    peer: '外接助手',
-    peerHelp: '连接后可在发送对象中选择，批准前不会发送文档内容。',
-    closed: '当前服务未开启外接协作。',
-    send: '交给它',
-    recipient: '发送给',
-    scope: '直接任务仅发送输入文字；如需选区、Skills 或数据分析，请交由 Office 协调授权。',
+    peer: '外接执行器',
+    peerHelp: '外接连接仅接收明确委派且获授权的任务。',
+    closed: '当前未连接外接执行器。',
+    send: '委派',
+    recipient: '执行方式',
     selfModel: '由外接助手管理模型',
     cancel: '请求取消',
-    details: '查看任务详情',
     summary: '结果',
-    session: '内置任务仅保留在当前编辑器会话。',
+    session: '刷新此页后可查看同一文档的近期任务。',
     states: {
       running: '执行中',
       cancel_requested: '正在取消',
       succeeded: '已完成',
-      failed: '失败',
+      failed: '未完成',
       unknown_outcome: '结果待核对',
     },
     notices: {
-      extras: '当前含有选区、附件或 Skills，请切回 Office 助手处理，或移除这些内容后直接委派。',
-      busy: '上一条直接任务仍在处理中，请查看任务状态。',
-      unavailable: '目标当前不可用，请检查连接或选择其他助手。',
+      extras: '当前含有选区、附件或 Skills，请由 Office 助手协调处理。',
+      busy: '上一项执行任务仍在处理中，请查看任务状态。',
+      unavailable: '当前执行器不可用，请选择自动安排或检查连接。',
       failed: '任务未完成或提交未获确认，草稿已保留。请先查看任务，避免重复执行。',
-      sent: '已交给团队成员，进展将在对话中更新。',
+      sent: '执行任务已提交，进展将在对话中更新。',
       cancelFailed: '取消请求未获确认，请检查连接与任务状态。',
       length: '任务文字不能超过 16000 字符。',
     },
@@ -68,11 +64,10 @@ const labels = {
     team: 'Assistants',
     tasks: 'Tasks',
     office: 'Office assistant',
-    main: 'Coordinator',
     builtin: 'Built-in',
     external: 'External',
-    officeHelp: 'Read documents, answer questions and coordinate tasks.',
-    harnessHelp: 'Code, data and charts using the selected Office model.',
+    officeHelp: 'Understand requests, edit files and summarize results.',
+    harnessHelp: 'Run code, scripts and analysis that needs an execution environment.',
     externalHelp: 'Receives authorized content through collaboration tasks.',
     configured: 'Configured · Runtime not verified',
     verified: 'Completed a task in this session',
@@ -80,19 +75,15 @@ const labels = {
     offline: 'Unavailable / Offline',
     empty: 'No tasks',
     none: 'No harness configured',
-    peer: 'External assistants',
-    peerHelp:
-      'Connected peers appear in the recipient list. Approval is required before sharing document content.',
-    closed: 'External collaboration is disabled on this service.',
+    peer: 'External executors',
+    peerHelp: 'External connections receive only explicitly delegated and authorized tasks.',
+    closed: 'No external executor is connected.',
     send: 'Delegate',
-    recipient: 'Send to',
-    scope:
-      'Direct tasks send only your text. Use Office to coordinate selections, skills and authorized analysis data.',
+    recipient: 'Execution mode',
     selfModel: 'Model managed by the external assistant',
     cancel: 'Request cancellation',
-    details: 'Task details',
     summary: 'Result',
-    session: 'Built-in task history is limited to this editor session.',
+    session: 'Refresh this tab to reopen recent tasks for this document.',
     states: {
       running: 'Running',
       cancel_requested: 'Cancelling',
@@ -101,13 +92,12 @@ const labels = {
       unknown_outcome: 'Outcome needs review',
     },
     notices: {
-      extras:
-        'Selections, attachments or skills are present. Use Office, or remove them before direct delegation.',
-      busy: 'A direct task is still pending. Check its status.',
-      unavailable: 'The target is unavailable. Check its connection or choose another assistant.',
+      extras: 'Selections, attachments or skills are present. Let Office coordinate this task.',
+      busy: 'A task is still running. Check its status.',
+      unavailable: 'This executor is unavailable. Choose automatic routing or check its connection.',
       failed:
         'Task or submission could not be confirmed. Your draft is retained; check the task before retrying.',
-      sent: 'Sent to your teammate. Updates appear in this conversation.',
+      sent: 'Task submitted. Updates appear in this conversation.',
       cancelFailed: 'Cancellation could not be confirmed. Check the connection and task status.',
       length: 'Task text must not exceed 16000 characters.',
     },
@@ -124,12 +114,10 @@ const teamLabels = {
   zh: {
     team: '文档协作团队',
     automatic: 'Office 自动协调',
-    members: '团队成员',
-    coordinator: '需求理解 · 文档问答 · 分工汇总',
+    members: '频道成员',
     executor: '执行成员',
     capability: '编码 · 脚本 · 数据分析',
     externalCapability: '按授权参与任务',
-    you: '你',
     assigned: '交给',
     delegated: '委派给',
     returned: '返回结果',
@@ -144,12 +132,11 @@ const teamLabels = {
     noAttention: '没有需要处理的任务',
     invite: '连接新成员',
     mention: '@成员',
-    lead: '大部分需求交给 Office；编码和分析由 harness 执行。',
     waiting: '等待成员响应',
     queued: '排队中',
     paused: '协作已暂停',
     cancelled: '已取消',
-    unknown: '结果待核对，请确认后再重试。',
+    unknown: '尚未收到可确认的结果。请先查看任务详情和最后进展，核对后再安排执行，避免重复处理。',
     requestCancel: '请求取消',
     requestFailed: '执行未完成，请核对任务详情。',
     initiator: '发起方',
@@ -162,12 +149,10 @@ const teamLabels = {
   en: {
     team: 'Document team',
     automatic: 'Office coordinates',
-    members: 'Team members',
-    coordinator: 'Understand · Read · Coordinate · Summarize',
+    members: 'Channel members',
     executor: 'Executor',
     capability: 'Code · Scripts · Data analysis',
     externalCapability: 'Works within authorized tasks',
-    you: 'You',
     assigned: 'assigned to',
     delegated: 'delegated to',
     returned: 'returned a result',
@@ -182,12 +167,11 @@ const teamLabels = {
     noAttention: 'No tasks need attention',
     invite: 'Connect a teammate',
     mention: '@Mention a teammate',
-    lead: 'Office handles most requests; harnesses execute code and analysis.',
     waiting: 'Waiting for teammate',
     queued: 'Queued',
     paused: 'Collaboration paused',
     cancelled: 'Cancelled',
-    unknown: 'Outcome needs review. Verify before retrying.',
+    unknown: 'No confirmed result was received. Review task details and the last update before requesting another run.',
     requestCancel: 'Request cancellation',
     requestFailed: 'Execution did not complete. Check task details.',
     initiator: 'Requested by',
@@ -216,139 +200,8 @@ const taskGroup = (task: TeamTask) =>
       ? 'attention'
       : 'active'
 
-export function AssistantRecipient({
-  client,
-  lang,
-  draft = '',
-  onDraftChange,
-}: {
-  client: AssistantWorkspaceClient
-  lang: 'zh' | 'en'
-  draft?: string
-  onDraftChange?: (value: string) => void
-}) {
-  const snapshot = useWorkspace(client),
-    text = labels[lang],
-    team = teamLabels[lang]
-  const [dismissed, setDismissed] = useState('')
-  const host = useRef<HTMLDivElement>(null)
-  const mention = /^@([^\s]*)/.exec(draft),
-    typed = !!mention && draft !== dismissed
-  const show = typed
-  const query = typed ? mention![1]!.toLocaleLowerCase() : ''
-  const targets = snapshot.targets.filter(
-    (target) =>
-      !query ||
-      target.name.toLocaleLowerCase().includes(query) ||
-      (target.kind === 'office' && text.office.toLocaleLowerCase().includes(query)),
-  )
-  useEffect(() => {
-    if (!show) return
-    const close = (event: PointerEvent) => {
-      if (!host.current?.contains(event.target as Node)) {
-        setDismissed(draft)
-      }
-    }
-    document.addEventListener('pointerdown', close)
-    return () => document.removeEventListener('pointerdown', close)
-  }, [show, draft])
-  function choose(id: string) {
-    client.select(id)
-    setDismissed(draft)
-    if (typed) onDraftChange?.(draft.replace(/^@[^\s]*\s?/, ''))
-  }
-  return (
-    <div
-      className="assistant-recipient assistant-team-recipient"
-      ref={host}
-      onKeyDown={(event) => {
-        if (event.key === 'Escape') {
-          event.stopPropagation()
-          setDismissed(draft)
-        }
-      }}
-    >
-      <div className="assistant-team-composer-row">
-        <span className="assistant-team-scope">
-          {snapshot.selected.kind === 'channel'
-            ? team.ownModel
-            : lang === 'zh'
-              ? '当前文档'
-              : 'Current document'}
-        </span>
-      </div>
-      {show && (
-        <div className="assistant-mention-menu" role="listbox" aria-label={team.members}>
-          {!targets.length && <p>{team.noMatch}</p>}
-          {targets.map((target) => (
-            <button
-              type="button"
-              role="option"
-              aria-selected={snapshot.selected.id === target.id}
-              disabled={!target.available}
-              key={target.id}
-              onClick={() => choose(target.id)}
-            >
-              <AssistantAvatar
-                name={target.kind === 'office' ? text.office : target.name}
-                origin={target.origin}
-              />
-              <span>
-                <strong>{target.kind === 'office' ? text.office : target.name}</strong>
-                <small>
-                  {target.kind === 'office'
-                    ? team.coordinator
-                    : !target.available
-                      ? text.offline
-                      : target.kind === 'channel'
-                        ? text.external
-                        : team.capability}
-                </small>
-              </span>
-              {snapshot.selected.id === target.id && <span aria-hidden="true">✓</span>}
-            </button>
-          ))}
-        </div>
-      )}
-      {snapshot.selected.kind !== 'office' && (
-        <small>{snapshot.selected.kind === 'channel' ? text.selfModel : text.scope}</small>
-      )}
-      {snapshot.notice && snapshot.notice !== 'sent' && (
-        <p role="alert">{text.notices[snapshot.notice as keyof typeof text.notices]}</p>
-      )}
-    </div>
-  )
-}
-
-export function handleTeamMentionKey(
-  client: AssistantWorkspaceClient,
-  event: KeyboardEvent,
-  value: string,
-  onChange: (value: string) => void,
-) {
-  if (
-    !(event.target instanceof HTMLTextAreaElement) ||
-    event.nativeEvent.isComposing ||
-    event.key !== 'Enter' ||
-    event.shiftKey
-  )
-    return
-  const match = /^@([^\s]*)/.exec(value)
-  if (!match) return
-  event.preventDefault()
-  event.stopPropagation()
-  const query = match[1]!.toLocaleLowerCase(),
-    target = client
-      .snapshot()
-      .targets.find((target) => target.available && target.name.toLocaleLowerCase().includes(query))
-  if (target) {
-    client.select(target.id)
-    onChange(value.replace(/^@[^\s]*\s?/, ''))
-  }
-}
-
 const progressLabels: Record<string, string> = {
-  'Starting harness': '正在启动 harness',
+  'Starting harness': '正在连接执行服务',
   'Preparing Codex workspace': '正在准备 Codex 工作区',
   'Generating response': '正在生成回复',
   'Executing command': '正在执行命令',
@@ -359,9 +212,13 @@ const progressLabels: Record<string, string> = {
 function TaskProgress({ task, lang }: { task: TeamTask; lang: 'zh' | 'en' }) {
   const pre = useRef<HTMLPreElement>(null),
     follow = useRef(true)
+  const [hasNewOutput, setHasNewOutput] = useState(false)
   const active = ['queued', 'running', 'waiting_peer', 'cancel_requested'].includes(task.state)
+  const initiallyOpen = useRef(active)
   useEffect(() => {
-    if (pre.current && follow.current) pre.current.scrollTop = pre.current.scrollHeight
+    if (!pre.current) return
+    if (follow.current) pre.current.scrollTop = pre.current.scrollHeight
+    else setHasNewOutput(true)
   }, [task.progress])
   if (!active && !task.progress && !task.activity) return null
   const activity = task.activity
@@ -372,21 +229,19 @@ function TaskProgress({ task, lang }: { task: TeamTask; lang: 'zh' | 'en' }) {
       ? '等待执行输出'
       : 'Waiting for output'
   return (
-    <details
-      className="assistant-task-progress"
-      open={active || task.state === 'failed' || task.state === 'unknown_outcome'}
-    >
-      <summary>
-        <span className="assistant-task-pulse" data-active={active} aria-hidden="true" />
-        {lang === 'zh' ? '执行过程' : 'Execution progress'}
-      </summary>
+    <div className="assistant-task-progress">
       {(active || task.activity) && (
         <p role={active ? 'status' : undefined} className="assistant-task-activity">
+          <span className="assistant-task-pulse" data-active={active} aria-hidden="true" />
           {!active && (lang === 'zh' ? '最后进展：' : 'Last update: ')}
           {activity}
         </p>
       )}
-      {task.progress && (
+      {task.progress && <details className="assistant-task-log" open={initiallyOpen.current} onToggle={(event) => {
+        if (event.currentTarget.open && follow.current && pre.current)
+          pre.current.scrollTop = pre.current.scrollHeight
+      }}>
+        <summary>{lang === 'zh' ? '执行记录' : 'Execution log'}</summary>
         <pre
           ref={pre}
           aria-label={lang === 'zh' ? '实时输出' : 'Live output'}
@@ -394,16 +249,27 @@ function TaskProgress({ task, lang }: { task: TeamTask; lang: 'zh' | 'en' }) {
           onScroll={(event) => {
             const node = event.currentTarget
             follow.current = node.scrollHeight - node.scrollTop - node.clientHeight < 32
+            if (follow.current) setHasNewOutput(false)
           }}
         >
           {task.progress}
         </pre>
-      )}
-    </details>
+      {hasNewOutput && <button type="button" className="assistant-task-latest" onClick={() => {follow.current=true;setHasNewOutput(false);if(pre.current)pre.current.scrollTop=pre.current.scrollHeight}}>{lang === 'zh' ? '回到最新' : 'Back to latest'}</button>}
+      </details>}
+    </div>
   )
 }
 
-function TaskCard({
+function taskFailureHint(task: TeamTask, lang: 'zh' | 'en') {
+  const failure = task.failure ?? ''
+  if (/HTTP 401|Invalid CSRF proof/.test(failure)) return lang === 'zh' ? '登录状态需要更新。请先保存文档，再重新登录。' : 'Your session needs updating. Save your document before signing in again.'
+  if (/HTTP 403/.test(failure)) return lang === 'zh' ? '执行请求被拒绝，请核对账号权限。' : 'The execution request was denied. Check your account permissions.'
+  if (/HTTP 429|agents are busy/.test(failure)) return lang === 'zh' ? '执行服务繁忙，请稍后再通过 Office 助手安排任务。' : 'The execution service is busy. Ask Office to arrange the task later.'
+  if (failure === 'Coding agent unavailable') return lang === 'zh' ? '所选执行器当前不可用。' : 'The selected executor is unavailable.'
+  return lang === 'zh' ? '这项任务未完成。可展开任务详情查看错误信息，Office 助手仍可继续处理其他请求。' : 'This task did not complete. Open task details for diagnostics; Office can continue handling other requests.'
+}
+
+function TaskMessage({
   task,
   client,
   lang,
@@ -416,68 +282,61 @@ function TaskCard({
 }) {
   const text = labels[lang],
     team = teamLabels[lang]
-  const from =
-    task.initiator === 'user'
-      ? team.you
-      : task.initiator === 'external'
-        ? text.external
-        : text.office
+  const title = task.instruction.trim().split(/\r?\n/).find(Boolean)?.replace(/^任务[：:]\s*/, '') ?? (lang === 'zh' ? '执行任务' : 'Execution task')
+  const attention = task.state === 'failed' || task.state === 'unknown_outcome'
+  const executor = task.kind === 'channel' ? text.external : task.agent.origin === 'builtin' ? text.builtin : text.external
   return (
-    <article
-      className={`assistant-task${conversation ? ' assistant-team-message' : ''}`}
+    <div
+      className="assistant-chat-row assistant-chat-row-assistant assistant-task-message"
       data-team-task={task.id}
       tabIndex={-1}
     >
-      <div className="assistant-member-heading">
-        <AssistantAvatar name={task.agent.name} origin={task.agent.origin} />
-        <strong>{task.agent.name === 'Office' ? text.office : task.agent.name}</strong>
-        <span className="assistant-source">
-          {task.agent.origin === 'office' ? text.main : text[task.agent.origin]}
-        </span>
-        <span className="assistant-task-state" data-state={task.state}>
-          {taskStatus(task, lang)}
-        </span>
-      </div>
-      <div className="assistant-task-body">
-        <div className="assistant-team-handoff">
-          {from} <span aria-hidden="true">→</span>{' '}
-          {task.agent.name === 'Office' ? text.office : task.agent.name}
-          <span> · {team.delegation}</span>
+      <AssistantAvatar id={task.kind === 'harness' ? task.targetId.slice('harness:'.length) : undefined} name={task.agent.name} origin={task.agent.origin} />
+      <div className="assistant-chat-message">
+        <div className="assistant-team-author">
+          <strong dir="auto">{task.agent.name}</strong>
+          <span>{executor}</span>
+          <span className="assistant-task-state" data-state={task.state}>
+            {taskStatus(task, lang)}
+          </span>
         </div>
-        <p className="assistant-task-instruction" dir="auto">
-          {task.instruction}
-        </p>
-        <TaskProgress task={task} lang={lang} />
-        {task.state === 'succeeded' && task.summary && (
-          <p className="assistant-task-result" dir="auto">
-            {task.summary}
-          </p>
-        )}
-        {task.state === 'unknown_outcome' && <p role="status">{team.unknown}</p>}
-        {task.state === 'failed' && <p>{team.requestFailed}</p>}
-        {task.output && (
-          <details>
-            <summary>{team.result}</summary>
-            <pre dir="auto">{task.output}</pre>
+        <div className="ai-msg ai-msg-assistant assistant-execution-message">
+          <p className="assistant-task-title" dir="auto">{title.length > 120 ? title.slice(0, 120) + '…' : title}</p>
+          {task.savedRevision && <p>后台读取 · 已保存版本 <code>{task.savedRevision}</code></p>}
+          {task.state === 'succeeded' && task.summary && (
+            <p className="assistant-task-result" dir="auto">{task.summary}</p>
+          )}
+          {task.state === 'unknown_outcome' && <p role="status">{team.unknown}</p>}
+          {task.state === 'failed' && <p className="assistant-task-notice">{taskFailureHint(task, lang)}</p>}
+          {task.state === 'succeeded' && task.output && (
+            <details className="assistant-task-output">
+              <summary>{lang === 'zh' ? '完整结果' : 'Full result'}</summary>
+              <pre dir="auto">{task.output}</pre>
+            </details>
+          )}
+          <TaskProgress task={task} lang={lang} />
+          <details className="assistant-task-details">
+            <summary>{lang === 'zh' ? '任务详情' : 'Task details'}</summary>
+            <p className="assistant-task-detail-label">{lang === 'zh' ? '原始要求' : 'Original request'}</p>
+            <p className="assistant-task-instruction" dir="auto">{task.instruction}</p>
+            {attention && task.failure && <div className="assistant-task-failure">
+              <p className="assistant-task-detail-label">{lang === 'zh' ? '错误信息' : 'Error details'}</p>
+              <pre dir="auto">{task.failure}</pre>
+            </div>}
+            {attention && !task.failure && task.summary && <p dir="auto">{task.summary}</p>}
+            <p className="assistant-task-detail-label">{lang === 'zh' ? '任务编号' : 'Task ID'}: <code>{task.executionId}</code></p>
           </details>
-        )}
+          {(!conversation || attention || ['queued', 'running', 'waiting_peer'].includes(task.state)) && (
+            <div className="ai-msg-toolbar assistant-task-actions">
+              {!conversation && <button type="button" onClick={() => client.openConversation(task.id)}>{team.viewChat}</button>}
+              {['queued', 'running', 'waiting_peer'].includes(task.state) && (
+                <button type="button" onClick={() => void client.cancelTask(task.id)}>{team.requestCancel}</button>
+              )}
+            </div>
+          )}
+        </div>
       </div>
-      <div className="assistant-task-actions">
-        <button
-          type="button"
-          onClick={() =>
-            conversation ? client.openTask(task.id) : client.openConversation(task.id)
-          }
-        >
-          {conversation ? team.viewTask : team.viewChat}
-        </button>
-        {['queued', 'running', 'waiting_peer'].includes(task.state) && (
-          <button type="button" onClick={() => void client.cancelTask(task.id)}>
-            {team.requestCancel}
-          </button>
-        )}
-      </div>
-    </article>
+    </div>
   )
 }
 
@@ -485,15 +344,16 @@ function TaskCard({
 export function AssistantTeamConversation({
   client,
   lang,
+  accountName,
   children,
 }: {
   client: AssistantWorkspaceClient
   lang: 'zh' | 'en'
+  accountName?: string
   children: ReactNode
 }) {
   const snapshot = useWorkspace(client),
     text = labels[lang],
-    team = teamLabels[lang],
     host = useRef<HTMLDivElement>(null)
   const order = useRef(new Map<string, number>()),
     next = useRef(0)
@@ -518,7 +378,7 @@ export function AssistantTeamConversation({
   for (const task of [...snapshot.teamTasks].reverse())
     items.push({
       id: task.id,
-      node: <TaskCard task={task} client={client} lang={lang} conversation />,
+      node: <TaskMessage task={task} client={client} lang={lang} conversation />,
     })
   for (const item of items)
     if (!order.current.has(item.id)) order.current.set(item.id, next.current++)
@@ -539,35 +399,23 @@ export function AssistantTeamConversation({
       {items.map((item) => {
         let node = item.node
         if (isValidElement(node)) {
-          const element = node as ReactElement<{ className?: string; children?: ReactNode }>,
+          const element = node as ReactElement<{ className?: string; children?: ReactNode; 'data-sender'?:string }>,
             className = element.props.className ?? ''
           if (className.includes('ai-msg-')) {
-            const user = className.includes('ai-msg-user')
+            const user = className.includes('ai-msg-user'),dsh=user&&element.props['data-sender']==='dsh'
             node = (
               <div
                 className={`assistant-chat-row assistant-chat-row-${user ? 'user' : 'assistant'}`}
               >
-                {user ? (
-                  <span className="assistant-user-avatar" aria-hidden="true">
-                    <svg
-                      viewBox="0 0 24 24"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="1.7"
-                      strokeLinecap="round"
-                    >
-                      <circle cx="12" cy="8" r="3.2" />
-                      <path d="M5.5 20v-1.5a6.5 6.5 0 0 1 13 0V20" />
-                    </svg>
+                {dsh ? <AssistantAvatar name="DSH" id="dsh" origin="external"/> : user ? (
+                  <span className="assistant-user-avatar" role="img" aria-label={accountName || (lang === 'zh' ? '用户' : 'User')} title={accountName || undefined}>
+                    {Array.from(accountName || (lang === 'zh' ? '用' : 'U'))[0]?.toUpperCase()}
                   </span>
                 ) : (
                   <AssistantAvatar name={text.office} origin="office" />
                 )}
                 <div className="assistant-chat-message">
-                  <div className="assistant-team-author">
-                    <strong>{user ? team.you : text.office}</strong>
-                    {!user && <span>{text.main}</span>}
-                  </div>
+                  {(dsh||!user) && <div className="assistant-team-author"><strong>{dsh?'DSH':text.office}</strong></div>}
                   {element}
                 </div>
               </div>
@@ -587,13 +435,12 @@ export function AssistantTeamConversation({
 export function AssistantWorkspacePanel({
   client,
   lang,
-  channelMembers,
+  channelConnection,
   deliveries,
 }: {
   client: AssistantWorkspaceClient
   lang: 'zh' | 'en'
-  channelMembers?: ReactNode
-  channelTasks?: ReactNode
+  channelConnection?: ReactNode
   deliveries?: ReactNode
 }) {
   const snapshot = useWorkspace(client),
@@ -602,6 +449,7 @@ export function AssistantWorkspacePanel({
     id = useId(),
     host = useRef<HTMLElement>(null)
   const [filter, setFilter] = useState<'all' | 'active' | 'done' | 'attention'>('all')
+  const tabs = ['chat', 'tasks'] as const
   const view = snapshot.view,
     counts = { active: 0, done: 0, attention: 0 }
   snapshot.teamTasks.forEach((task) => counts[taskGroup(task)]++)
@@ -621,11 +469,11 @@ export function AssistantWorkspacePanel({
     <section
       className="assistant-workspace assistant-team-workspace"
       data-view={view}
-      aria-label={team.team}
+      aria-label={text.office}
       ref={host}
     >
-      <div className="assistant-workspace-tabs" role="tablist" aria-label={team.team}>
-        {(['chat', 'team', 'tasks'] as const).map((tab) => (
+      <div className="assistant-workspace-tabs" role="tablist" aria-label={text.office}>
+        {tabs.map((tab) => (
           <button
             type="button"
             role="tab"
@@ -637,25 +485,24 @@ export function AssistantWorkspacePanel({
             onKeyDown={(event) => {
               if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return
               event.preventDefault()
-              const tabs = ['chat', 'team', 'tasks'] as const,
-                index = tabs.indexOf(tab),
+              const index = tabs.indexOf(tab),
                 next =
                   event.key === 'Home'
                     ? 0
                     : event.key === 'End'
-                      ? 2
-                      : (index + (event.key === 'ArrowRight' ? 1 : 2)) % 3
+                      ? tabs.length - 1
+                      : (index + (event.key === 'ArrowRight' ? 1 : tabs.length - 1)) % tabs.length
               client.setView(tabs[next]!)
               document.getElementById(`${id}-${tabs[next]}`)?.focus()
             }}
             tabIndex={view === tab ? 0 : -1}
           >
             {text[tab]}
-            {tab === 'team' && <span>{snapshot.targets.length}</span>}
             {tab === 'tasks' && counts.active > 0 && <span>{counts.active}</span>}
           </button>
         ))}
       </div>
+      {channelConnection}
       <div
         id={`${id}-panel`}
         role="tabpanel"
@@ -663,76 +510,6 @@ export function AssistantWorkspacePanel({
         className="assistant-workspace-content"
         hidden={view === 'chat'}
       >
-        <div hidden={view !== 'team'}>
-          <p className="assistant-section-eyebrow">{team.members}</p>
-          {snapshot.targets.map((target) => {
-            const assigned = snapshot.teamTasks.filter((task) =>
-                target.kind === 'office'
-                  ? task.agent.origin === 'office'
-                  : task.targetId === target.id,
-              ),
-              active = assigned.filter((task) => taskGroup(task) === 'active').length
-            return (
-              <article
-                className={`assistant-member ${target.kind === 'office' ? 'assistant-member-lead' : ''}`}
-                key={target.id}
-              >
-                <div className="assistant-member-heading">
-                  <AssistantAvatar
-                    name={target.kind === 'office' ? text.office : target.name}
-                    origin={target.origin}
-                  />
-                  <strong>{target.kind === 'office' ? text.office : target.name}</strong>
-                  <span className="assistant-source">
-                    {target.kind === 'office' ? text.main : text[target.origin]}
-                  </span>
-                  <button
-                    type="button"
-                    disabled={!target.available}
-                    onClick={() => {
-                      client.select(target.id)
-                      client.setView('chat')
-                    }}
-                  >
-                    {target.kind === 'office' ? text.chat : '@ ' + target.name}
-                  </button>
-                </div>
-                <p>
-                  {target.kind === 'office'
-                    ? team.coordinator
-                    : target.kind === 'harness'
-                      ? team.capability
-                      : team.externalCapability}
-                </p>
-                {target.kind !== 'office' && (
-                  <div className="assistant-member-status">
-                    <span>
-                      {!target.available
-                        ? snapshot.channel?.paused && target.kind === 'channel'
-                          ? team.paused
-                          : text.offline
-                        : active
-                          ? `${active} · ${team.active}`
-                          : target.kind === 'channel'
-                            ? text.online
-                            : assigned.some((task) => task.state === 'succeeded')
-                              ? text.verified
-                              : text.configured}
-                    </span>
-                    <span>{team.executor}</span>
-                  </div>
-                )}
-              </article>
-            )
-          })}
-          <details className="assistant-team-connect">
-            <summary>{team.invite}</summary>
-            <p className="assistant-workspace-muted">
-              {channelMembers ? text.peerHelp : text.closed}
-            </p>
-            {channelMembers}
-          </details>
-        </div>
         <div hidden={view !== 'tasks'}>
           <div className="assistant-task-filters" aria-label={text.tasks}>
             {(['all', 'active', 'done', 'attention'] as const).map((key) => (
@@ -759,16 +536,15 @@ export function AssistantWorkspacePanel({
                       ? team.noDone
                       : team.noAttention}
               </strong>
-              <p>{team.lead}</p>
             </div>
           )}
           {snapshot.teamTasks
             .filter((task) => filter === 'all' || taskGroup(task) === filter)
             .map((task) => (
-              <TaskCard key={task.id} task={task} client={client} lang={lang} />
+              <TaskMessage key={task.id} task={task} client={client} lang={lang} />
             ))}
-          {deliveries}
           <p className="assistant-workspace-muted">{text.session}</p>
+          {deliveries}
         </div>
       </div>
     </section>

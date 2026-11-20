@@ -694,6 +694,7 @@ describe('execute_slide_script tool', () => {
           }
           return { slide: { ...slide, nodes } }
         }),
+        insertImageUrl: vi.fn(async () => ({ slide })),
         editText: vi.fn(async (op: any) => {
           const nodes = slide.nodes.map((n) => {
             if (n.sourceId !== op.sourceId) return n
@@ -703,6 +704,25 @@ describe('execute_slide_script tool', () => {
         }),
       },
     }
+  })
+
+  it('uses the rendered slide width for model pixel positions on Web', async () => {
+    slide = slideOf(slide.nodes, 960, 540)
+    const skill = createSlidesSkill(access())
+    const api = (globalThis as any).window.slidesApi
+    expect((await skill.executeTool({
+      id: 'move', name: 'execute_slide_script',
+      input: { slideIndex: 0, code: "moveBy('t1', 10, 0)" },
+    })).mutated).toBe(true)
+    expect(api.applyEditScript.mock.calls[0][0]).toMatchObject({
+      fitWidthPx: 960,
+      boxes: [{ id: 't1', x: 110, w: 400 }],
+    })
+    expect((await skill.executeTool({
+      id: 'insert', name: 'insert_web_image',
+      input: { slideIndex: 0, url: 'https://images.example/cover.png', x: 100, y: 120, w: 200, h: 180 },
+    })).mutated).toBe(true)
+    expect(api.insertImageUrl.mock.calls[0][0]).toMatchObject({ fitWidthPx: 960, xPx: 100, wPx: 200 })
   })
 
   it('mixed script: one IPC carrying merged geometry + ordered edits', async () => {

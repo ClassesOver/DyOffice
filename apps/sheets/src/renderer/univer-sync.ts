@@ -3565,7 +3565,7 @@ async function loadRange(
         }, 250)
         state.retryTimers.set(sheetId, timer)
       }
-    } else if (isActiveSheet(runtime, sheetId)) {
+    } else if (!state.flags.quietBackgroundLoading && isActiveSheet(runtime, sheetId)) {
       setMessage(
         t('appStreamingRows', {
           name: state.file.name,
@@ -6162,7 +6162,7 @@ async function preloadEntireWorkbookInner(
   if (lazyWorkbookRef.current === state) {
     state.flags.preloadComplete = true
     if (state.formulaMode && !isManualCalculation(runtime)) requestFullRecalcAfterStream()
-    setMessage(t('appFullyLoaded'))
+    if (!state.flags.quietBackgroundLoading) setMessage(t('appFullyLoaded'))
   }
 }
 

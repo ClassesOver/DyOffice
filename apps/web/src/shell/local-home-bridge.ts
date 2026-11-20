@@ -150,6 +150,45 @@ export function createLocalHomeBridge(deps: Dependencies): HomeApi {
     batches.delete(key)
     })
   }
+  const uncertainTrash = new Set<string>()
+  async function trashFiles(selection: string[]) {
+    const ids = [...new Set(selection)].sort()
+    if (!ids.length) return
+    if (ids.length > 10000) throw new Error('一次最多可移动 10000 个文件，请分批选择。')
+    return once('trash-selection', async () => {
+      const uncertain = ids.filter(id => uncertainTrash.has(id))
+      let targets = ids
+      if (uncertain.length) {
+        // A lost response can follow a commit. Check first, including overlapping selections.
+        let active: string[]
+        try {
+          const state = await deps.request<{active: string[]}>('/api/v1/files/trash-batch/status', 'POST', {ids: uncertain})
+          if (!Array.isArray(state?.active)) throw new Error()
+          active = state.active
+        } catch {
+          throw new Error('文件状态暂时无法核对。请稍后重试，或在废纸篓中查看。')
+        }
+        const remaining = new Set(active)
+        targets = ids.filter(id => !uncertainTrash.has(id) || remaining.has(id))
+        for (const id of uncertain) uncertainTrash.delete(id)
+      }
+      if (targets.length) {
+        try {
+          await deps.request('/api/v1/files/trash-batch', 'POST', {ids: targets})
+        } catch (error) {
+          const status = (error as {status?: number})?.status
+          if (!status || status === 408 || status >= 500) {
+            for (const id of targets) uncertainTrash.add(id)
+            throw new Error('尚未确认移动结果。再次确认时会先核对废纸篓，只处理仍在文件列表中的项目。')
+          }
+          if (status === 429) throw new Error('请求过于频繁，本次请求未移动文件。请稍后重试。')
+          if (status === 404) throw new Error('部分文件已不存在或无法访问，本次请求未移动文件。请刷新列表后重新选择。')
+          throw error
+        }
+      }
+      changed()
+    }, JSON.stringify(ids))
+  }
   function toggleStar(id:string):Promise<void>{return once('star:'+id,async()=>{
     if(unknownMutations.has('star:'+id)){await reconcileMutation('star:'+id);return}
     const reconciling=unknownStars.has(id)
@@ -195,7 +234,7 @@ export function createLocalHomeBridge(deps: Dependencies): HomeApi {
     toggleStar,
     unstarPaths: (ids: string[]) => mutateFiles(ids, 'star', 'PUT', {starred: false}),
     removeRecent: (ids: string[]) => mutateFiles(ids, 'recent', 'DELETE'),
-    deleteFiles: (ids: string[]) => mutateFiles(ids, 'trash', 'DELETE'),
+    deleteFiles: trashFiles,
     openTrash: async () => deps.openTrash(),
     statPaths: async (ids: string[]) => {
       const result: WorkspaceFile[] = []

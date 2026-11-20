@@ -13,7 +13,7 @@ const check=signal=>{if(signal?.aborted)fail('ABORTED')}
  * recovery if commit has an unknown outcome; never rerun preparation to retry it.
  */
 export function createPdfSavePreparation({files,leases,revisions,processor}){
-  return {async prepare(input,{signal}={}){
+  return {async prepare(input,{signal,autoPdfName}={}){
     if(!input||typeof input!=='object'||Array.isArray(input)
       ||Object.keys(input).sort().join(',')!=='baseRevision,editorId,fileId,idempotencyKey,leaseEpoch,request,token')throw authError(400)
     const {token,request,idempotencyKey,leaseEpoch}=input
@@ -48,7 +48,7 @@ export function createPdfSavePreparation({files,leases,revisions,processor}){
     let upload
     try{
       // Authoritative fresh revision/lease/auth checks occur again inside T06.
-      upload=await revisions.stageUpload(token,fileId,{size:output.length,baseRevision,leaseEpoch,editorId});check(signal)
+      upload=await revisions.stageUpload(token,fileId,{size:output.length,baseRevision,leaseEpoch,editorId},autoPdfName);check(signal)
       await files.receiveUpload(token,upload.uploadId,output);check(signal)
       return Object.freeze({commitInput:Object.freeze({fileId,uploadId:upload.uploadId,baseRevision,leaseEpoch,idempotencyKey}),sha256,size:output.length})
     }catch(error){

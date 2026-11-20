@@ -22,9 +22,11 @@
 .workspace-config-modal .personal-settings-heading{margin-bottom:24px}
 .workspace-config-modal .personal-settings-heading h2{margin:0 0 8px;color:var(--text);font-size:24px;font-weight:600;line-height:1.4}
 .workspace-config-modal .personal-settings-heading p{margin:0;font-size:14px;line-height:1.6}
+.workspace-config-modal .personal-settings-b .personal-settings-account{display:flex;flex-direction:column}
+.workspace-config-modal .personal-settings-b .personal-settings-account>*+*{margin-top:24px}
 .workspace-config-modal .personal-settings-b .personal-settings-account .ant-card{border-radius:0;border:0;border-bottom:1px solid var(--border-subtle);background:var(--surface)}
 .workspace-config-modal .personal-settings-b .personal-settings-account .ant-card-head{border:0;padding:0;min-height:40px}
-.workspace-config-modal .personal-settings-b .personal-settings-account .ant-card-body{padding:12px 0 24px}
+.workspace-config-modal .personal-settings-b .personal-settings-account>.ant-card>.ant-card-body{padding:8px 0 0}
 .workspace-config-modal .personal-settings-b .personal-settings-profile .ant-card-body{padding-bottom:24px}
 .workspace-config-modal .personal-settings-b .personal-settings-logout{border-bottom:0!important}
 .workspace-config-modal .personal-settings-group-title{font-size:16px;font-weight:600;color:var(--text);margin:0 0 20px}
@@ -83,12 +85,50 @@
  .workspace-config-modal .personal-settings-theme-options{gap:8px}
  .workspace-config-modal .personal-settings-theme-preview{height:66px}
 }
-.workspace-config-modal .personal-settings-history .settings-list-scroll-region{height:260px}
-@media(max-width:680px){.workspace-config-modal .personal-settings-history .settings-list-scroll-region{height:240px}}
+.workspace-config-modal .personal-settings-b .personal-settings-history .settings-list-scroll-region{height:auto;min-height:0}
+.workspace-config-modal .personal-settings-b .personal-sessions-scroll{max-height:none;overflow:visible;scrollbar-gutter:auto}
 .workspace-config-modal .personal-settings-actions{align-items:center;justify-content:space-between;background:var(--surface)}
 .workspace-config-modal .personal-settings-save-state{font-size:13px;line-height:1.6;color:var(--text-secondary)}
 .workspace-config-modal .personal-settings-save-state{display:inline-flex;align-items:center;gap:7px}
 .workspace-config-modal .personal-settings-save-state::before{content:'';width:6px;height:6px;border-radius:50%;background:var(--success,#38976a)}
 @media(max-width:680px){
  .workspace-config-modal .personal-settings-actions>.ant-space{width:100%;justify-content:flex-end}
+}
+
+/* Account sections retain their own list controls when the workbench scrolls. */
+.workspace-config-modal .personal-settings-b .personal-settings-account .ant-card-head-title{font-size:14px;font-weight:600}
+.workspace-config-modal .personal-settings-b .personal-settings-account .personal-account-section{margin:0;padding:0;border:0}
+.workspace-config-modal .personal-settings-b .personal-settings-profile .ant-descriptions-item-content{overflow-wrap:anywhere}
+.workspace-config-modal .personal-settings-b .personal-account-section-desc{margin:0 0 14px;font-size:12px;line-height:1.7}
+.workspace-config-modal .personal-settings-b .personal-account-list-heading{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:14px}
+.workspace-config-modal .personal-settings-b .personal-account-list-heading .personal-account-section-desc{margin-bottom:4px}
+.workspace-config-modal .personal-settings-b .personal-account-list-heading>.ant-btn{flex-shrink:0}
+.workspace-config-modal .personal-settings-b .personal-account-disclosure{color:var(--text-secondary);font-size:12px;line-height:1.7}
+.workspace-config-modal .personal-settings-b .personal-account-disclosure summary{cursor:pointer;width:fit-content}
+.workspace-config-modal .personal-settings-b .personal-account-disclosure summary:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
+.workspace-config-modal .personal-settings-b .personal-account-disclosure p{max-width:560px;margin:6px 0 0}
+.workspace-config-modal .personal-settings-b .personal-account-list-footer{display:flex;align-items:center;justify-content:space-between;gap:10px 16px;flex-wrap:wrap;padding-top:12px;color:var(--text-secondary);font-size:12px}
+.workspace-config-modal .personal-settings-b .personal-account-list-footer .settings-list-pager{margin:0;font-size:12px}
+.workspace-config-modal .personal-settings-b .personal-settings-account .personal-history-list{margin:0}
+.workspace-config-modal .personal-settings-b .personal-settings-account .personal-history-list li{padding:10px 12px;border:0;border-radius:4px}
+.workspace-config-modal .personal-settings-b .personal-settings-account .personal-history-list li:nth-child(odd){background:var(--surface-subtle)}
+.workspace-config-modal .personal-settings-b .personal-settings-account .personal-history-list .ant-tag{margin:0;font-size:12px}
+.workspace-config-modal .personal-settings-b .personal-settings-account .personal-session-list{margin:0}
+.workspace-config-modal .personal-settings-b .personal-settings-account .personal-session-row{margin:0;padding:12px 0;background:transparent;border:0;border-radius:0;align-items:center}
+.workspace-config-modal .personal-settings-b .personal-settings-account .personal-session-row+.personal-session-row{border-top:1px solid var(--border-subtle)}
+.workspace-config-modal .personal-settings-b .personal-settings-account .personal-session-title{margin-bottom:6px}
+.workspace-config-modal .personal-settings-b .personal-settings-account .personal-session-times{display:flex;flex-wrap:wrap;gap:6px 22px}
+.workspace-config-modal .personal-settings-b .personal-settings-account .personal-session-times>div{display:block}
+.workspace-config-modal .personal-settings-b .personal-settings-account .personal-session-times dt{font-size:11px}
+.workspace-config-modal .personal-settings-b .personal-settings-account .personal-session-row>.ant-btn{flex-shrink:0}
+.workspace-config-modal .personal-settings-b .personal-settings-logout{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:0 0 4px}
+.workspace-config-modal .personal-settings-b .personal-settings-logout .ant-typography-secondary{margin-top:4px;font-size:12px}
+.workspace-config-modal .personal-settings-b .personal-settings-logout>.ant-btn{flex-shrink:0}
+@media(max-width:680px){
+ .workspace-config-modal .personal-settings-b .personal-settings-account>*+*{margin-top:20px}
+ .workspace-config-modal .personal-settings-b .personal-account-list-heading{flex-wrap:wrap}
+ .workspace-config-modal .personal-settings-b .personal-account-list-footer>.settings-list-pager{width:100%;justify-content:flex-end}
+ .workspace-config-modal .personal-settings-b .personal-settings-account .personal-session-row{align-items:stretch}
+ .workspace-config-modal .personal-settings-b .personal-settings-account .personal-session-row>.ant-btn{align-self:flex-end}
+ .workspace-config-modal .personal-settings-b .personal-settings-logout{flex-wrap:wrap}
 }

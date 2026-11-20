@@ -12,6 +12,7 @@ export const ar = {
   aiQcPageOk: 'الصفحة {n}: التخطيط سليم',
   aiQcPageFixed: 'الصفحة {n}: {summary}',
   aiQcPageFixedDefault: 'تم إصلاح مشاكل التخطيط',
+  aiQcPageRollbackFailed: "الصفحة {n}: زادت مشكلات التخطيط بعد الإصلاح ولم يتم تأكيد الاستعادة. تحقق من الصفحة أو تراجع عن التغييرات.",
   aiQcPageReverted: 'الصفحة {n}: الإصلاح التلقائي زاد الأمر سوءًا — تم التراجع',
   aiQcPageFailed: 'الصفحة {n}: فشل الفحص ({error})',
   aiQcPageSkipped: 'الصفحة {n}: تم تخطي فحص التخطيط التلقائي',

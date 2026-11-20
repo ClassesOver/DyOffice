@@ -47,3 +47,23 @@ test('successful account mutation identifies the target and clears stale success
  await click('重置密码')
  expect(document.querySelector('[role="status"]')).toBeNull()
 })
+
+test('native management controls filter status and preserve semantic table rows without library wrappers',async()=>{
+ const pending={...alice,id:'pending',username:'pending',status:'pending'}
+ const list=vi.fn(async()=>({users:[alice,pending],nextCursor:null}))
+ await mount({list})
+ expect(document.querySelector('.local-admin-panel .ant-table,.local-admin-panel .ant-select,.local-admin-panel .ant-btn')).toBeNull()
+ expect(document.querySelector('table thead th')?.getAttribute('scope')).toBe('col')
+ const select=document.querySelector<HTMLSelectElement>('select[aria-label="账号状态筛选"]')!
+ await act(async()=>{select.value='pending';select.dispatchEvent(new Event('change',{bubbles:true}))})
+ expect(document.querySelector('tbody tr[data-row-key="alice"]')).toBeNull()
+ expect(document.querySelector('tbody tr[data-row-key="pending"]')).not.toBeNull()
+ expect(list).toHaveBeenCalledOnce()
+ await click('编辑角色')
+ const checkbox=document.querySelector<HTMLInputElement>('input[name=role][value=operator]')!
+ expect(checkbox.type).toBe('checkbox')
+ expect(checkbox.closest('label')?.textContent).toBe('运维人员')
+ const password=document.querySelector<HTMLInputElement>('[aria-label="管理员当前密码"]')!
+ expect(password.type).toBe('password')
+ expect(password.autocomplete).toBe('current-password')
+})

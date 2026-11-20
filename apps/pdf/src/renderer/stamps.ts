@@ -1,3 +1,4 @@
+import {fillStampPlaceholders,stampBarLayout,fitWatermarkFontSize} from './stamp-layout'
 import type { StampInput } from '../shared/ipc'
 
 /** Bitmap supersampling factor relative to PDF pt — stays sharp even when enlarged for print */
@@ -73,12 +74,9 @@ export function renderWatermark(cfg: WatermarkConfig, pw: number, ph: number): s
   // Shrink long text to the diagonal so slanted ends aren't clipped by the page
   let size = pw * cfg.sizeRatio * SS
   ctx.font = FONT(size, true)
-  const maxW = Math.hypot(canvas.width, canvas.height) * 0.8
   const w = ctx.measureText(text).width
-  if (w > maxW) {
-    size *= maxW / w
-    ctx.font = FONT(size, true)
-  }
+  size = fitWatermarkFontSize(pw, ph, cfg.sizeRatio, w / SS) * SS
+  ctx.font = FONT(size, true)
   ctx.fillStyle = cfg.color
   ctx.textAlign = 'center'
   ctx.textBaseline = 'middle'
@@ -122,9 +120,6 @@ function renderBar(
   return toBase64(canvas)
 }
 
-/** Replace {page}/{total} placeholders */
-const fill = (tpl: string, page: number, total: number) =>
-  tpl.replaceAll('{page}', String(page)).replaceAll('{total}', String(total))
 
 /**
  * Build stamps for each target page. pages provides (original page index, unrotated
@@ -158,11 +153,10 @@ export function buildStamps(
 
     if (!hf) continue
     const no = hf.startAt + p.displayNo - 1
-    const barH = hf.fontSize * 2.2
-    const margin = Math.min(p.ph * 0.035, 26)
+    const { height: barH, margin } = stampBarLayout(p.pw, p.ph, hf.fontSize)
 
     const header = renderBar(
-      [hf.headerLeft, hf.headerCenter, hf.headerRight].map((s) => fill(s, no, total)) as [string, string, string],
+      [hf.headerLeft, hf.headerCenter, hf.headerRight].map((s) => fillStampPlaceholders(s, no, total)) as [string, string, string],
       p.pw,
       hf.fontSize,
       hf.color,
@@ -175,9 +169,9 @@ export function buildStamps(
       })
     }
 
-    const footerCenter = hf.pageNumber ? `${no} / ${total}` : fill(hf.footerCenter, no, total)
+    const footerCenter = hf.pageNumber ? `${no} / ${total}` : fillStampPlaceholders(hf.footerCenter, no, total)
     const footer = renderBar(
-      [fill(hf.footerLeft, no, total), footerCenter, fill(hf.footerRight, no, total)],
+      [fillStampPlaceholders(hf.footerLeft, no, total), footerCenter, fillStampPlaceholders(hf.footerRight, no, total)],
       p.pw,
       hf.fontSize,
       hf.color,

@@ -1,0 +1,64 @@
+/* User management owns its native control styling; no global settings selectors. */
+.local-admin-panel{box-sizing:border-box;display:flex;flex:1;height:100%;min-height:0;min-width:0;padding:24px 28px;overflow:hidden;color:var(--text-primary);font-size:13px}
+.local-admin-panel *{box-sizing:border-box}
+.local-admin-panel button{min-height:34px;padding:7px 12px;border:1px solid var(--border-subtle);border-radius:6px;background:var(--surface);color:var(--text-primary);font:inherit;line-height:1.4;cursor:pointer}
+.local-admin-panel button:hover:enabled{border-color:var(--accent);color:var(--accent)}
+.local-admin-panel button:disabled{opacity:.45;cursor:not-allowed}
+.local-admin-panel button.is-primary{background:var(--accent);border-color:var(--accent);color:#fff}
+.local-admin-panel button.is-primary:hover:enabled{color:#fff;filter:brightness(.95)}
+.local-admin-panel button[data-danger=true]{color:var(--danger)}
+.local-admin-panel button.is-primary[data-danger=true]{background:var(--danger);border-color:var(--danger);color:#fff}
+.local-admin-panel button.is-link{padding:3px 6px;min-height:28px;border:0;background:transparent;color:var(--accent);font-size:12px}
+.local-admin-panel button.is-link[data-danger=true]{color:var(--danger)}
+.local-admin-panel :is(input:not([type=checkbox]),select){width:100%;min-width:0;min-height:36px;padding:7px 10px;border:1px solid var(--border-subtle);border-radius:6px;background:var(--surface);color:var(--text-primary);font:inherit;line-height:1.5}
+.local-admin-panel input[aria-invalid=true]{border-color:var(--danger)}
+.local-admin-panel :is(input,select):disabled{opacity:.55;cursor:not-allowed}
+.local-admin-panel :is(button,input,select):focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.local-admin-panel .admin-toolbar-group{display:flex;flex-wrap:wrap;align-items:center;gap:10px;min-width:0}
+.local-admin-panel .admin-toolbar-group input[type=search]{width:260px}
+.local-admin-panel .admin-toolbar-group select{width:auto;min-width:150px}
+.local-admin-panel .admin-inline,.local-admin-panel .admin-row-actions{display:inline-flex;align-items:center;gap:6px;flex-wrap:wrap}
+.local-admin-panel .admin-row-actions{gap:2px}
+.local-admin-panel .admin-stack{display:flex;align-items:flex-start;flex-direction:column;gap:4px}
+.local-admin-panel .admin-member{display:flex;align-items:center;gap:10px;min-width:180px}
+.local-admin-panel .admin-member strong{font-size:13px;font-weight:600}
+.local-admin-panel .admin-avatar{display:grid;place-items:center;flex:0 0 32px;width:32px;height:32px;background:var(--accent-soft);color:var(--accent);font-size:14px;border-radius:6px}
+.local-admin-panel .admin-tag{display:inline-block;padding:2px 6px;border-radius:4px;background:var(--surface-subtle);color:var(--text-secondary);font-size:11px;line-height:1.6;white-space:nowrap}
+.local-admin-panel .admin-tag.is-current{margin-left:7px;background:var(--accent-soft);color:var(--accent)}
+.local-admin-panel .admin-tag.is-active{background:var(--success-bg,var(--surface-subtle));color:var(--success)}
+.local-admin-panel .admin-tag.is-disabled{background:var(--danger-bg,var(--surface-subtle));color:var(--danger)}
+.local-admin-panel .admin-tag.is-pending,.local-admin-panel .admin-warning{color:var(--warning,#946200)}
+.local-admin-panel .admin-secondary{font-size:12px;color:var(--text-secondary)}
+.local-admin-panel .admin-notice,.local-admin-panel .admin-progress{padding:10px 12px;margin-bottom:10px;border:1px solid var(--border-subtle);border-radius:6px;background:var(--surface-subtle);font-size:12px;line-height:1.7}
+.local-admin-panel .admin-progress{color:var(--accent);background:var(--accent-soft);border-color:transparent}
+.local-admin-panel .admin-notice.is-success{color:var(--success);border-color:var(--success-border)}
+.local-admin-panel .admin-notice.is-error{color:var(--danger);border-color:var(--danger-border)}
+.local-admin-panel .admin-notice.is-warning{color:var(--warning,#946200)}
+.local-admin-panel .admin-create,.local-admin-panel .admin-confirm,.local-admin-panel .admin-secret{padding:16px;border:1px solid var(--border-subtle);border-radius:8px;background:var(--surface-subtle)}
+.local-admin-panel .admin-create h4,.local-admin-panel .admin-confirm h4{margin:0 0 12px;font-size:14px;line-height:1.6;overflow-wrap:anywhere}
+.local-admin-panel .admin-create form>div{display:flex;align-items:flex-start;gap:12px;flex-wrap:wrap}
+.local-admin-panel label.set-field{display:flex;flex-direction:column;align-items:stretch;gap:7px;padding:0;min-height:0;border:0;max-width:520px;font-size:13px}
+.local-admin-panel .admin-create label.set-field{flex:1;min-width:220px;margin:0}
+.local-admin-panel .admin-create form>div>button{margin-top:25px}
+.local-admin-panel .admin-field-hint{font-size:12px;line-height:1.7;font-weight:400;color:var(--text-secondary)}
+.local-admin-panel .admin-field-hint[data-invalid=true]{color:var(--danger)}
+.local-admin-panel .admin-confirm p,.local-admin-panel .admin-secret p{margin:6px 0 12px;font-size:12px;line-height:1.7;color:var(--text-secondary)}
+.local-admin-panel .admin-confirm fieldset{margin:12px 0;padding:12px;border:1px solid var(--border-subtle);border-radius:6px;background:var(--surface)}
+.local-admin-panel .admin-confirm legend{padding:0 5px;font-size:13px}
+.local-admin-panel .admin-confirm label.set-field{margin:14px 0}
+.local-admin-panel .admin-role-option{display:inline-flex;align-items:center;gap:6px;margin:5px 16px 5px 0;font-size:13px}
+.local-admin-panel .admin-role-option input{accent-color:var(--accent);width:15px;height:15px}
+.local-admin-panel .admin-confirm>button+button{margin-left:8px}
+.local-admin-panel .admin-secret input{font-family:monospace;letter-spacing:.04em}
+.local-admin-panel .admin-filter-empty{display:flex;flex-direction:column;align-items:center;gap:8px;padding:16px}
+@media(max-width:680px){
+ .local-admin-panel{padding:20px 16px}
+ .local-admin-panel .admin-toolbar-group{width:100%;flex-wrap:nowrap;gap:8px}
+ .local-admin-panel .admin-toolbar-group input[type=search]{width:100%;flex:1;min-width:0}
+ .local-admin-panel .admin-toolbar-group select{width:120px;min-width:0;font-size:12px}
+ .local-admin-panel .admin-create,.local-admin-panel .admin-confirm,.local-admin-panel .admin-secret{padding:12px}
+ .local-admin-panel .admin-create form>div{display:flex;flex-direction:column;align-items:stretch}
+ .local-admin-panel .admin-create label.set-field{min-width:0;width:100%}
+ .local-admin-panel .admin-create form>div>button{margin-top:0}
+ .local-admin-panel .admin-role-option{display:flex;margin:8px 0}
+}

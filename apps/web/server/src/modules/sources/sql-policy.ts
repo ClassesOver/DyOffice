@@ -28,7 +28,8 @@ export function validateReadOnlyGrants(grants: readonly string[], database: stri
 }
 /** Parser serialization removes comments/hints; the separate role/read-only
  * transaction remains mandatory. Numeric text must survive parsing unchanged. */
-export function validateReadOnlySql(sql: unknown, dialect: SqlSourceKind): string {
+export interface SqlTableScope { allowedTables?: readonly string[]; allowedSchemas?: readonly string[]; defaultSchema: string }
+export function validateReadOnlySql(sql: unknown, dialect: SqlSourceKind, scope?: SqlTableScope): string {
   if (typeof sql !== 'string' || !sql.trim() || Buffer.byteLength(sql) > 32_768 || /[\u0000-\u0008\u000b\u000c\u000e-\u001f]/.test(sql) || /\/\*[!+]/.test(sql)) throw invalid()
   try {
     const database = dialect === 'postgres' ? 'Postgresql' : 'MySQL'
@@ -47,13 +48,16 @@ export function validateReadOnlySql(sql: unknown, dialect: SqlSourceKind): strin
       if (++nodes > 8000 || depth > 64) throw invalid()
       if (Array.isArray(value)) { for (const item of value) walk(item, depth + 1); return }
       const node = value as Record<string, any>
-      if (node.type !== undefined && node.type !== null && !nodeTypes.has(node.type) && !['ASC','DESC','DISTINCT'].includes(node.type)) throw invalid()
+      const pgDate = dialect === 'postgres' && node.type === 'date' && typeof node.value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(node.value) && Object.keys(node).length === 2
+      if (node.type !== undefined && node.type !== null && !nodeTypes.has(node.type) && !['ASC','DESC','DISTINCT'].includes(node.type) && !pgDate) throw invalid()
       if (node.type === 'select') {
         if (Object.keys(node).some(key => !selectKeys.has(key)) || node.options || node.locking_read || node.window || node.collate || node.into && Object.values(node.into).some(v => v !== null) || node.set_op && !['union','union all','intersect','except'].includes(node.set_op)) throw invalid()
       }
       if (node.type === 'function') {
         const name = node.name
-        if (!name || name.schema || !Array.isArray(name.name) || name.name.length !== 1 || !functions.has(String(name.name[0].value).toLowerCase()) || node.over) throw invalid()
+        if (!name || name.schema || !Array.isArray(name.name) || name.name.length !== 1 || node.over) throw invalid()
+        const fn = String(name.name[0].value).toLowerCase()
+        if (!functions.has(fn) && !(dialect === 'postgres' && fn === 'to_char')) throw invalid()
       }
       if (node.type === 'aggr_func' && (!aggregates.has(String(node.name).toLowerCase()) || node.over)) throw invalid()
       if (node.type === 'number' && (!Number.isFinite(Number(node.value)) || Number.isInteger(Number(node.value)) && !Number.isSafeInteger(Number(node.value)))) throw invalid()
@@ -65,20 +69,35 @@ export function validateReadOnlySql(sql: unknown, dialect: SqlSourceKind): strin
     }
     if (!ast || ast.type !== 'select') throw invalid()
     walk(ast)
-    if (dialect === 'postgres') {
-      const qualify = (value: any, inherited: Set<string>) => {
-        if (!value || typeof value !== 'object') return
-        if (Array.isArray(value)) { for (const item of value) qualify(item, inherited); return }
-        let names = inherited
-        if (value.type === 'select') {
-          names = new Set(inherited)
-          for (const cte of value.with ?? []) names.add(String(cte.name?.value ?? cte.name))
-          for (const table of value.from ?? []) if (typeof table.table === 'string' && !table.db && !names.has(table.table)) table.db = 'public'
+    const defaultSchema = dialect === 'postgres' ? 'public' : scope?.defaultSchema
+    const allowedSchemas = scope?.allowedSchemas === undefined ? undefined : new Set(scope.allowedSchemas)
+    const allowed = scope?.allowedTables === undefined ? undefined : new Set(scope.allowedTables.map(table => table.includes('.') ? table : `${defaultSchema}.${table}`))
+    // Resolve each CTE body before adding its alias: a nonrecursive CTE may
+    // read a physical table with its own name, but cannot whitelist it.
+    const qualify = (value: any, inherited: Set<string>) => {
+      if (!value || typeof value !== 'object') return
+      if (Array.isArray(value)) { for (const item of value) qualify(item, inherited); return }
+      let names = inherited
+      if (value.type === 'select') {
+        names = new Set(inherited)
+        for (const cte of value.with ?? []) {
+          if (cte.recursive) names.add(String(cte.name?.value ?? cte.name))
+          qualify(cte.stmt, names)
+          names.add(String(cte.name?.value ?? cte.name))
         }
-        for (const child of Object.values(value)) qualify(child, names)
+        for (const table of value.from ?? []) {
+          if (table.schema) throw invalid()
+          if (typeof table.table !== 'string') continue
+          if (!table.db && names.has(table.table)) continue
+          const schema = table.db ?? defaultSchema
+          const name = `${schema}.${table.table}`
+          if ((allowedSchemas && !allowedSchemas.has(String(schema))) || (allowed ? !allowed.has(name) : /^(?:pg_|information_schema$|mysql$|sys$|performance_schema$)/i.test(String(schema)))) throw invalid()
+          if (!table.db && dialect === 'postgres') table.db = 'public'
+        }
       }
-      qualify(ast, new Set())
+      for (const [key, child] of Object.entries(value)) if (key !== 'with') qualify(child, names)
     }
+    qualify(ast, new Set())
     return parser.sqlify(ast, { database })
   } catch { throw invalid() }
 }

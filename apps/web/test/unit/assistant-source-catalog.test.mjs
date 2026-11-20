@@ -6,9 +6,9 @@ const catalog = enabled => ({entries: [{id:'chat',label:'Chat',model:'synthetic'
 const call = input => ({id:'call1',name:'sources_list',input})
 test('source catalog skill is absent by default and appears only after explicit server advertisement',async()=>{
  const off=await createAssistantClient({request:async()=>catalog(false),csrfToken:'c'.repeat(43)})
- assert.equal(off.sourceSkill,undefined)
+ assert.equal(off.extraSkills[0],undefined)
  const on=await createAssistantClient({request:async()=>catalog(true),csrfToken:'c'.repeat(43)})
- assert.deepEqual(on.sourceSkill?.tools.map(t=>t.name),['sources_list'])
+ assert.deepEqual(on.extraSkills[0]?.tools.map(t=>t.name),['sources_list'])
 })
 test('source listing sends only validated pagination through the bound request and projects metadata',async()=>{
  const requests=[]
@@ -16,22 +16,22 @@ test('source listing sends only validated pagination through the bound request a
   requests.push({path,method,body})
   return path.endsWith('/catalog')?catalog(true):{items:[{sourceId:'demo',name:'Demo',kind:'postgres',sourceVersion:1,secret:'never-return',url:'https://private.invalid'}],nextCursor:null}
  }})
- const result=await client.sourceSkill?.executeTool(call({after:'previous'}))
+ const result=await client.extraSkills[0]?.executeTool(call({after:'previous'}))
  assert.equal(result?.isError,undefined)
  assert.deepEqual(JSON.parse(result.output),{items:[{sourceId:'demo',name:'Demo',kind:'postgres',sourceVersion:1}],nextCursor:null})
  assert.deepEqual(requests[1],{path:'/api/v1/ai/sources/list',method:'POST',body:{after:'previous'}})
- for(const input of [{ownerId:'other'},{after:5},{after:'../bad'},42,true,'text'])assert.equal((await client.sourceSkill.executeTool(call(input))).isError,true)
- assert.equal((await client.sourceSkill.executeTool({...call({}),name:'sources_query'})).isError,true)
+ for(const input of [{ownerId:'other'},{after:5},{after:'../bad'},42,true,'text'])assert.equal((await client.extraSkills[0].executeTool(call(input))).isError,true)
+ assert.equal((await client.extraSkills[0].executeTool({...call({}),name:'sources_query'})).isError,true)
  assert.equal(requests.length,2)
  client.dispose()
- assert.equal((await client.sourceSkill.executeTool(call({}))).isError,true)
+ assert.equal((await client.extraSkills[0].executeTool(call({}))).isError,true)
  assert.equal(requests.length,2)
 })
 test('source-list failure and cancellation do not expose response data or raw error details',async()=>{
  const control=new AbortController()
  let finish
  const client=await createAssistantClient({csrfToken:'c'.repeat(43),request:async path=>path.endsWith('/catalog')?catalog(true):new Promise(resolve=>{finish=resolve})})
- const pending=client.sourceSkill?.executeTool(call({}),control.signal)
+ const pending=client.extraSkills[0]?.executeTool(call({}),control.signal)
  assert.equal(typeof finish,'function')
  control.abort();finish({items:[{sourceId:'hidden',name:'hidden',kind:'http',sourceVersion:1}],nextCursor:null})
  const outcome=await pending
@@ -67,6 +67,6 @@ test('editor-bound source list discards response after account replacement',asyn
  })
  const bound=await local.bindSession()
  const client=await createAssistantClient({request:bound.request,csrfToken:bound.proof})
- const result=await client.sourceSkill.executeTool(call({}))
+ const result=await client.extraSkills[0].executeTool(call({}))
  assert.equal(result.isError,true);assert.doesNotMatch(result.output,/other-account/)
 })

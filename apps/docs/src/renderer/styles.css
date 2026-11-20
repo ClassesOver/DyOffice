@@ -9207,18 +9207,6 @@ body.docs-crop-active
   color: var(--color-text-primary);
 }
 
-/* drag handle on the panel's right edge — resize the panel horizontally */
-.ai-panel-resizer {
-  position: absolute;
-  right: -3px;
-  top: 0;
-  bottom: 0;
-  width: 7px;
-  cursor: col-resize;
-  z-index: 20;
-  background: transparent;
-}
-
 /* while dragging: keep the col-resize cursor everywhere, no text selection */
 .ai-panel-resizing {
   cursor: col-resize;

@@ -1,4 +1,5 @@
 import React, { useEffect, useRef } from 'react'
+import { AssistantSendButton } from './AssistantSendButton'
 import { IconEnter, IconSend, IconStop } from './icons'
 import { useAiPanelPrefs } from './ai-panel-prefs-store'
 import { useImeEnterGuard } from './ime-enter'
@@ -139,7 +140,14 @@ export function AiComposer({
             {busy ? hintBusy : hintIdle}
           </span>
         )}
-        {busy ? (
+        {iconOnly && !sendIconEnabled && !sendIconDisabled && !stopIcon ? (
+          <AssistantSendButton
+            label={busy ? stopLabel : sendLabel}
+            stop={busy}
+            disabled={!busy && !canSend}
+            onClick={busy ? onStop : onSend}
+          />
+        ) : busy ? (
           <button
             className="ai-send-btn ai-stop-btn"
             onClick={onStop}

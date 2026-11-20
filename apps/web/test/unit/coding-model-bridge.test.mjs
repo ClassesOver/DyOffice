@@ -1,6 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import {createCodingModelBridge} from '../../server/src/modules/coding/model-bridge.ts'
+import {buildOpenAiChatRequest} from '../../server/src/modules/providers/openai-request.ts'
 
 const task={instructions:'Code carefully',input:[{role:'user',content:[{type:'input_text',text:'write a parser'}]}],tools:[{type:'function',name:'exec_command',description:'Run shell',parameters:{type:'object',properties:{cmd:{type:'string'}}}}],stream:true,model:'untrusted-model'}
 test('Codex requests use Office model and session through the budgeted gateway, not supplied model or keys',async()=>{
@@ -36,6 +37,25 @@ test('custom apply_patch calls and batched results survive the Responses/chat co
   assert.match(await response.text(),/Tested/)
   assert.deepEqual(seen[0].request.messages[1].toolCalls,[{id:'patch1',name:'apply_patch',input:{input:'*** Begin Patch'}}])
   assert.equal(seen[0].request.messages[2].results[0].name,'apply_patch')
+ }finally{await bridge.close()}
+})
+test('assistant text after a tool call stays in the same assistant turn as the call',async()=>{
+ const bridge=await createCodingModelBridge({token:'session',modelId:'selected',signal:new AbortController().signal,turns:{async run(input,emit){
+  const {body}=buildOpenAiChatRequest(input.request,{model:'selected',maxOutputTokens:256})
+  const [, , assistant,result]=JSON.parse(body.toString()).messages
+  assert.equal(assistant.content,'Checking the result')
+  assert.equal(assistant.tool_calls[0].id,'call1')
+  assert.equal(result.tool_call_id,'call1')
+  await emit({type:'delta',text:'Verified'})
+ }}})
+ try {
+  const input=[...task.input,
+   {type:'function_call',call_id:'call1',name:'exec_command',arguments:'{"cmd":"echo ok"}'},
+   {type:'message',role:'assistant',content:[{type:'output_text',text:'Checking the result'}]},
+   {type:'function_call_output',call_id:'call1',output:'ok'},
+  ]
+  const response=await fetch(bridge.baseUrl+'/responses',{method:'POST',body:JSON.stringify({...task,input}),headers:{authorization:'Bearer '+bridge.apiKey}})
+  assert.match(await response.text(),/Verified/)
  }finally{await bridge.close()}
 })
 

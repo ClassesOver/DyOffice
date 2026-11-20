@@ -79,6 +79,12 @@ test('apply fences generations and reports changed indices, order and history',a
  await assert.rejects(()=>f.service.slide(f.alice.token,f.file.file.fileId,{...f.authority,revision:f.file.file.revision,generation:4,index:9}),{statusCode:409})
 })
 
+test('image mutation rejects a slide outside the deck before invoking the worker',async t=>{
+ const f=await fixture(t)
+ await f.service.open(f.alice.token,f.file.file.fileId,{...f.authority,revision:f.file.file.revision,generation:0})
+ await assert.rejects(()=>f.service.applyImage(f.alice.token,f.file.file.fileId,{...f.authority,revision:f.file.file.revision,generation:0,mode:'insert',slide:9,xPx:0,yPx:0,wPx:100,hPx:100,fitWidthPx:1280,bytesBase64:'aGVsbG8=',ext:'png'}),{statusCode:400})
+})
+
 test('undo and redo return full slide sets and report nothing-to-do without changing generations',async t=>{
  const f=await fixture(t)
  await f.service.open(f.alice.token,f.file.file.fileId,{...f.authority,revision:f.file.file.revision,generation:0})
@@ -159,4 +165,28 @@ test('exportForSave fences the session and a T06 commit of those bytes is adopte
  const view=await f.service.slides(f.alice.token,fileId,{...f.authority,revision:head,generation:2})
  assert.equal(view.generation,2)
  assert.equal(view.slides.length,2)
+})
+
+test('AI checkpoint restoration after a real committed revision is dirty and preserves the saved head',async t=>{
+ const f=await fixture(t),fileId=f.file.file.fileId,base=f.file.file.revision
+ const input={...f.authority,revision:base,generation:0}
+ const original=await f.service.open(f.alice.token,fileId,input)
+ await f.service.beginHistoryBatch(f.alice.token,fileId,input)
+ await f.service.apply(f.alice.token,fileId,{...input,ops:ops('e_904989a1','AI saved body')})
+ const {snapshotId,history}=await f.service.endHistoryBatch(f.alice.token,fileId,{...input,generation:1})
+ assert.equal(typeof snapshotId,'number');assert.equal(history.canUndo,true)
+ const draft=await f.service.exportForSave(f.alice.token,fileId,{...input,generation:1})
+ const upload=await f.revisions.stageUpload(f.alice.token,fileId,{size:draft.bytes.byteLength,baseRevision:base,...f.authority})
+ await f.files.receiveUpload(f.alice.token,upload.uploadId,draft.bytes)
+ await f.service.bindPreparedUpload(f.alice.token,fileId,{...input,generation:1,uploadId:upload.uploadId})
+ const saved=await f.revisions.commitRevision(f.alice.token,{fileId,uploadId:upload.uploadId,baseRevision:base,leaseEpoch:f.authority.leaseEpoch,idempotencyKey:randomUUID()})
+ const current={...input,revision:saved.revision,generation:1}
+ assert.equal((await f.service.open(f.alice.token,fileId,current)).dirty,false)
+ await assert.rejects(f.service.restoreSnapshot(f.bob.token,fileId,{...current,snapshotId}),error=>[404,409].includes(error.statusCode))
+ const restored=await f.service.restoreSnapshot(f.alice.token,fileId,{...current,snapshotId})
+ assert.equal(restored.dirty,true)
+ assert.equal(restored.generation,2)
+ assert.deepEqual(restored.slides,original.slides)
+ assert.equal((await f.files.openFile(f.alice.token,fileId)).file.revision,saved.revision)
+ assert.deepEqual(await f.files.readFile(f.alice.token,fileId,saved.revision),Buffer.from(draft.bytes))
 })

@@ -5,15 +5,16 @@ import {decodeChannelDataInputs,type AgentReceipt,type ChannelTask} from '../../
 import {ASSISTANT_READ_TOOLS} from '../../web-contracts/src/assistant.ts'
 
 export interface ChannelSnapshot {
- conversationId:string;fileId:string;paused:boolean;sequence:number
- members:{membershipId:string;displayName:string;kind:string;online:boolean;revoked:boolean}[]
+ conversationId:string;fileId:string|null;paused:boolean;sequence:number
+ backgroundEnabled?:boolean;backgroundAvailable?:boolean
+ members:{membershipId:string;displayName:string;kind:string;online:boolean;previewActive?:boolean;revoked:boolean;expiresAt:string;issuedAt?:string|null;canRevealDshToken?:boolean;dshTokenFromOtherSession?:boolean}[]
  applications:{applicationId:string;displayName:string;kind:string}[]
  tasks:ChannelTask[]
 }
 const base='/api/v1/assistant-channels'
 /** Optional collaboration uses the existing editor's notification channel and
  * executor. Native messages never wait for pairing, snapshots or peer tasks. */
-export function createAssistantChannelClient(options:{request:SettingsRequest;fileId:string;editorId:string;generation:()=>number}) {
+export function createAssistantChannelClient(options:{request:SettingsRequest;fileId:string;editorId:string;conversationId?:string;generation:()=>number}) {
  let snapshot:ChannelSnapshot|null=null,disposed=false,error='',executor:Parameters<AssistantControl['register']>[0]|undefined
  let connection:{id:string;epoch:number}|undefined,refreshing:Promise<void>|undefined,starting:Promise<void>|undefined
  let localGeneration=0
@@ -59,7 +60,7 @@ export function createAssistantChannelClient(options:{request:SettingsRequest;fi
  const sendAction=(to:string,action:unknown,requestId=crypto.randomUUID())=>request(base+'/actions','POST',{requestId,conversationId:snapshot!.conversationId,to,action})
  async function pump() {
   if(disposed||pumping||running||settlingRuns.size||!snapshot||snapshot.paused||!connection||!executor||executor.isBusy())return
-  const task=snapshot.tasks.find(task=>task.to==='office'&&task.state==='queued'&&!attempted.has(task.taskId))
+  const task=snapshot.tasks.find(task=>task.to==='office'&&!task.execution&&task.state==='queued'&&!attempted.has(task.taskId))
   if(!task)return
   pumping=true
   const taskGeneration=localGeneration
@@ -96,8 +97,11 @@ export function createAssistantChannelClient(options:{request:SettingsRequest;fi
    let summary='',outcome:'succeeded'|'failed'='succeeded'
    try {
     const result=await target.execute(claim.instruction,controller.signal)
-    summary=result.cancelled?'Office task cancelled':result.text||'Office task completed without findings'
-    if(result.cancelled)outcome='failed'
+    const failure=result.cancelled?'Office task cancelled'
+     :result.truncated?'Office model reached the output length limit'
+     :result.turnLimit?'Office task reached the step limit':''
+    summary=failure||result.text||'Office task completed without findings'
+    if(failure)outcome='failed'
    } catch {summary='Office delegated read could not complete';outcome='failed'}
    if(disposed||localGeneration!==taskGeneration||snapshot?.conversationId!==channelId)return
    // Persist a result once. A lost response is reconciled from the durable
@@ -119,7 +123,12 @@ export function createAssistantChannelClient(options:{request:SettingsRequest;fi
     if(nativeRun?.parent){const parent=next.tasks.find(task=>task.taskId===nativeRun!.parent!.taskId);if(next.paused||!parent||parent.state!=='running'||parent.claimId!==nativeRun.parent.claimId)cancelParentRun()}
     if(running&&!next.tasks.some(task=>task.taskId===running!.task.taskId&&task.state==='running'))running.controller.abort()
     notify();void pump()
-   } catch {if(!disposed&&generation===localGeneration){error='Collaboration unavailable';running?.controller.abort();cancelParentRun();notify()}}
+   } catch (cause) {
+    if(!disposed&&generation===localGeneration){
+     if((cause as {status?:number})?.status===404)resetConversation()
+     error='Collaboration unavailable';running?.controller.abort();cancelParentRun();notify()
+    }
+   }
    finally{if(generation===localGeneration)refreshing=undefined}
   })()
   return refreshing
@@ -159,12 +168,15 @@ export function createAssistantChannelClient(options:{request:SettingsRequest;fi
   return ()=>{if(executor===value){executor=undefined;running?.controller.abort()}}
  }}
  const skill:AgentSkill={id:'channel-delegation',systemPrompt:'Optional channel peers: use list_channel_agents and delegate_channel_task to delegate to an explicitly connected external peer. The task ID is an acknowledgement, not completion. Results and reverse Office reads are scoped to this document and have their own task cards. Never claim an acknowledged task succeeded. For data processing and analysis, pass explicit dataInputs sourceIds/resultIds discovered through Office data metadata tools; never include raw rows or credentials. The harness performs analysis. Do not wait synchronously for peer results.',tools:[
-  {name:'list_channel_agents',description:'List authorized channel peers and their durable task states.',inputSchema:{type:'object',properties:{},additionalProperties:false}},
-  {name:'delegate_channel_task',description:'Delegate to a connected external channel agent. Returns a durable task acknowledgement.',inputSchema:{type:'object',properties:{agentId:{type:'string'},instruction:{type:'string',maxLength:16000},dataInputs:{type:'object',properties:{sourceIds:{type:'array',items:{type:'string'},maxItems:32},resultIds:{type:'array',items:{type:'string'},maxItems:32}},required:['sourceIds','resultIds'],additionalProperties:false}},required:['agentId','instruction'],additionalProperties:false}},
+  {name:'list_channel_agents',description:'List authorized channel peers with their delegation agentId and durable task states.',inputSchema:{type:'object',properties:{},additionalProperties:false}},
+  {name:'delegate_channel_task',description:'Delegate to a connected external channel agent. Returns a durable task acknowledgement.',inputSchema:{type:'object',properties:{agentId:{type:'string',description:'Use the agentId returned by list_channel_agents.'},instruction:{type:'string',maxLength:16000},dataInputs:{type:'object',properties:{sourceIds:{type:'array',items:{type:'string'},maxItems:32},resultIds:{type:'array',items:{type:'string'},maxItems:32}},required:['sourceIds','resultIds'],additionalProperties:false}},required:['agentId','instruction'],additionalProperties:false}},
  ],async executeTool(call){
   try {
    if(!snapshot||disposed)throw Error('No active channel')
-   if(call.name==='list_channel_agents'&&!Object.keys(call.input).length)return {output:JSON.stringify({agents:snapshot.members.filter(member=>!member.revoked),tasks:snapshot.tasks.map(task=>({taskId:task.taskId,state:task.state,summary:task.summary}))}),summary:'Channel agents'}
+   if(call.name==='list_channel_agents'&&!Object.keys(call.input).length){
+    const agents=snapshot.members.filter(member=>!member.revoked).map(({membershipId,displayName,kind,online})=>({agentId:membershipId,displayName,kind,online}))
+    return {output:JSON.stringify({agents,tasks:snapshot.tasks.map(task=>({taskId:task.taskId,state:task.state,summary:task.summary}))}),summary:'Channel agents'}
+   }
    if(call.name!=='delegate_channel_task'||Object.keys(call.input).some(key=>!['agentId','instruction','dataInputs'].includes(key))||typeof call.input.agentId!=='string'||typeof call.input.instruction!=='string'||!call.input.instruction.trim()||call.input.instruction.length>16000||!snapshot.members.some(member=>member.membershipId===call.input.agentId&&!member.revoked))throw Error('Invalid channel task')
    const dataInputs=call.input.dataInputs===undefined?undefined:decodeChannelDataInputs(call.input.dataInputs)
    const taskGeneration=localGeneration,channelId=snapshot.conversationId,target=executor,run=nativeRun
@@ -186,7 +198,7 @@ export function createAssistantChannelClient(options:{request:SettingsRequest;fi
  }}
  return {
   control,skill,
-  snapshot:()=>snapshot,error:()=>error,
+  snapshot:()=>snapshot,error:()=>error,connected:()=>!!connection,
   subscribe(listener:()=>void){listeners.add(listener);return ()=>{listeners.delete(listener)}},
   async start(){
    if(disposed)throw Error('Channel disposed')
@@ -196,9 +208,12 @@ export function createAssistantChannelClient(options:{request:SettingsRequest;fi
    starting=(async()=>{
    if(!snapshot){
     const key='dyoffice-assistant-channel:'+options.fileId
-    let conversationId:string|undefined
-    try{const stored=sessionStorage.getItem(key);if(stored&&/^[a-f0-9-]{36}$/.test(stored))conversationId=stored}catch{/* Storage is optional. */}
-    const created=await request<{conversationId:string;fileId:string;paused:boolean}>(base+'/channels','POST',{fileId:options.fileId,...(conversationId?{conversationId}:{})})
+    let conversationId=options.conversationId
+    try{const selected=new URLSearchParams(location.search).get('channel');if(!conversationId&&selected&&/^[a-f0-9-]{36}$/.test(selected))conversationId=selected}catch{/* Host may have no location. */}
+    try{const stored=sessionStorage.getItem(key);if(!conversationId&&stored&&/^[a-f0-9-]{36}$/.test(stored))conversationId=stored}catch{/* Storage is optional. */}
+    const created=options.conversationId
+     ?await request<ChannelSnapshot>(base+'/channels/'+encodeURIComponent(options.conversationId))
+     :await request<{conversationId:string;fileId:string;paused:boolean}>(base+'/channels','POST',{fileId:options.fileId,...(conversationId?{conversationId}:{})})
     if(disposed)throw Error('Channel disposed')
     if(startGeneration!==localGeneration)throw Error('Channel changed')
     if(created.fileId!==options.fileId||typeof created.conversationId!=='string')throw Error('Channel file changed')
@@ -220,7 +235,7 @@ export function createAssistantChannelClient(options:{request:SettingsRequest;fi
    try {await starting} finally {if(startGeneration===localGeneration)starting=undefined}
   },
   refresh,
-  observe(channels:readonly {conversationId:string;sequence:number}[]){if(snapshot&&channels.some(channel=>channel.conversationId===snapshot!.conversationId&&channel.sequence!==snapshot!.sequence))void refresh()},
+  observe(channels:readonly {conversationId:string;sequence:number}[]){if(snapshot&&channels.find(channel=>channel.conversationId===snapshot!.conversationId)?.sequence!==snapshot.sequence)void refresh()},
   async invite(){if(!snapshot)throw Error('No active channel');return request<{inviteToken:string;expiresAt:string}>(base+'/channels/'+snapshot.conversationId+'/invitations','POST',{})},
   async approve(id:string,approved:boolean){await request(base+'/channels/'+snapshot!.conversationId+'/applications/'+encodeURIComponent(id)+'/approve','POST',{approved});await refresh()},
   async remove(id:string){await request(base+'/channels/'+snapshot!.conversationId+'/members/'+encodeURIComponent(id)+'/revoke','POST',{});await refresh()},

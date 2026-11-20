@@ -15,6 +15,9 @@ export interface CodingSkillDeps {
   dataCatalog?(input:{sourcesAfter?:string;resultsAfter?:string}):Promise<unknown>
 }
 export const DELEGATE_AGENT_TOOL = 'delegate_agent_task'
+export class HarnessContinuationUnavailable extends Error {
+  constructor(){super('The Harness task may have completed, but this Office request could not safely continue. Check the task card before retrying.')}
+}
 export function createCodingSkill(deps: CodingSkillDeps): AgentSkill {
   return {
     id: 'coding-delegation',
@@ -22,7 +25,7 @@ export function createCodingSkill(deps: CodingSkillDeps): AgentSkill {
 You remain the Office assistant using the user's selected model and existing document tools.
 You lead most requests: understand the goal, coordinate teammates and summarize their real results.
 Use delegate_agent_task for coding, debugging, scripts, tests and other tasks requiring a harness. The harness executes these tasks; do not claim execution without a returned result.
-Delegate data cleaning, SQL authoring, statistics and charts to a harness; pass explicit dataInputs sourceIds/resultIds, never raw rows. Only analyze downloaded frozen results and report truncation or missing data.
+When direct source tools are offered, use them to inspect tables and run straightforward read-only SQL aggregations. Delegate code execution, complex computation, data cleaning and plotting to a harness. For a follow-up on a query, pass dataInputs with sourceIds: [] and resultIds containing the specific artifact.resultId; never paste raw rows into the task. Do not grant live source access or rerun a query to silently replace an expired snapshot. For a task without data, omit dataInputs. Report truncation or missing data.
 Use ordinary Office tools directly for document reading, authoring, formatting, formulas and editing. A request to write an article, report or Word document belongs to Office: use write_document or insert_content, never delegate the writing itself to a coding harness.
 Built-in and external agents are peers. list_agents lists their capabilities; omitting agentId selects the default coding agent.
 Use list_agent_data to discover source and frozen-result IDs before delegating analysis. This tool returns metadata only; the harness fetches and processes the data.
@@ -59,7 +62,8 @@ Delegation failure affects only that task; continue Office work independently.`,
         const result=await deps.run({instruction,...(context===undefined?{}:{context:context as string}),...(agentId===undefined?{}:{agentId:agentId as string}),...(dataInputs===undefined?{}:{dataInputs:dataInputs as NonNullable<CodingTask['dataInputs']>})},signal)
         return {output:JSON.stringify(result),summary:'Coding agent: '+result.summary.slice(0,160)}
       } catch(error) {
-        return {output:error instanceof Error?error.message:'Coding agent unavailable',summary:'Coding agent unavailable',isError:true}
+        if(error instanceof HarnessContinuationUnavailable)throw error
+        return {output:error instanceof Error?error.message:'Coding agent unavailable',summary:'Delegated task did not complete',isError:true}
       }
     },
   }

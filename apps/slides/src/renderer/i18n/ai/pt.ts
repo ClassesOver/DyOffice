@@ -12,6 +12,7 @@ export const pt = {
   aiQcPageOk: 'Página {n}: layout OK',
   aiQcPageFixed: 'Página {n}: {summary}',
   aiQcPageFixedDefault: 'problemas de layout corrigidos',
+  aiQcPageRollbackFailed: "Página {n}: a correção piorou o layout; restauração não confirmada. Verifique a página ou desfaça as alterações.",
   aiQcPageReverted: 'Página {n}: a correção automática piorou o resultado — revertida',
   aiQcPageFailed: 'Página {n}: verificação falhou ({error})',
   aiQcPageSkipped: 'Página {n}: verificação automática de layout ignorada',

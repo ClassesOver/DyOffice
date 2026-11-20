@@ -55,7 +55,14 @@ export function createBrowserHost(adapter: Partial<BrowserHost> = {}): BrowserHo
       const result = await adapter.open(fileId)
       if (!result || !isRevisionRef(result.file) || result.file.fileId !== fileId || !['docx','xlsx','pptx','pdf'].includes(result.format) || !isSameOriginPath(result.downloadEndpoint)) throw hostError('INVALID_RESPONSE', 'open')
       if (result.name !== undefined && (typeof result.name !== 'string' || !result.name.length || result.name.length > 255 || /[\\/\u0000-\u001f]/.test(result.name))) throw hostError('INVALID_RESPONSE', 'file name')
-      return { ...(result.name === undefined ? {} : { name: result.name }), file: publicRevision(result.file), format: result.format, downloadEndpoint: result.downloadEndpoint, capabilities: availableCapabilities(safeCapabilities(result.capabilities), adapter) }
+      return {
+        ...(result.name === undefined ? {} : { name: result.name }),
+        ...(result.format === 'pdf' && result.pdfAutoNamePending === true ? { pdfAutoNamePending: true as const } : {}),
+        file: publicRevision(result.file),
+        format: result.format,
+        downloadEndpoint: result.downloadEndpoint,
+        capabilities: availableCapabilities(safeCapabilities(result.capabilities), adapter),
+      }
     },
     async readBytes(fileId, revision) {
       nonempty(fileId, 'fileId'); nonempty(revision, 'revision')

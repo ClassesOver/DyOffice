@@ -22,6 +22,7 @@ export interface DocWriteSpec {
   context?: string | undefined
   /** the user's own request, verbatim */
   instruction: string
+  taskReference?: {name:string;content:string}
 }
 
 export interface DocWriteResult {
@@ -35,6 +36,7 @@ export interface DocWriteResult {
 
 /** Panel-owned writer: streams the fragment, reports progress, settles partial output with the user. */
 export interface AiDocWriter {
+  preserveConcurrentEdits?: boolean
   write(
     spec: DocWriteSpec,
     onProgress: (html: string) => void,
@@ -65,9 +67,12 @@ export function buildDocWriterRequest(
   const instruction = spec.instruction.trim()
     ? `\n\n## The user's request\n${spec.instruction.slice(0, 2000)}`
     : ''
+  const reference=spec.taskReference
+    ? `\n\n## DSH task reference (${spec.taskReference.name})\n${spec.taskReference.content}`
+    : ''
   return {
     system: WRITER_SYSTEM + langDirective,
-    user: `## Plan\n${spec.title ? `Title: ${spec.title}\n` : ''}${spec.plan.slice(0, 6000)}${context}${instruction}\n\nWrite the content now.`,
+    user: `## Plan\n${spec.title ? `Title: ${spec.title}\n` : ''}${spec.plan.slice(0, 6000)}${context}${instruction}${reference}\n\nWrite the content now.`,
   }
 }
 
@@ -90,6 +95,11 @@ export type WritePosition = { kind: 'whole' } | { kind: 'after'; index: number }
 /** meta on every draft transaction: not an edit, not history, not a tracked change */
 export const DRAFT_META = 'aiDraft'
 
+const activeDrafts = new WeakSet<Editor>()
+export function hasDocumentWriterDraft(editor: Editor): boolean {
+  return activeDrafts.has(editor)
+}
+
 /**
  * Live draft of a streaming fragment inside the document. Each tick re-parses
  * the fragment received so far (the HTML parser closes open tags, so a
@@ -107,8 +117,20 @@ export class DraftLanding {
   private timer: ReturnType<typeof setTimeout> | null = null
   private closed = false
   private follow = true
+  remoteConflict=false
   private readonly onTransaction = ({ transaction }: { transaction: Transaction }) => {
     if (!transaction.docChanged || transaction.getMeta(DRAFT_META)) return
+    if(transaction.getMeta('dyofficeRemoteEdit')){
+      this.remoteConflict=true
+      this.pending=null
+    }
+    if(this.preserveConcurrentEdits||this.remoteConflict){
+      // A collaborator typed in the visible draft. Leave the edited range
+      // intact for review instead of removing their input with our preview.
+      for(const map of transaction.mapping.maps)map.forEach((from,to)=>{
+        if(from<this.to&&to>this.from){this.pending=null;this.to=this.from}
+      })
+    }
     this.from = transaction.mapping.map(this.from, 1)
     this.to = Math.max(this.from, transaction.mapping.map(this.to, -1))
   }
@@ -117,18 +139,20 @@ export class DraftLanding {
     private readonly editor: Editor,
     private readonly numIds: NumIds,
     position: WritePosition,
+    private readonly preserveConcurrentEdits=false,
   ) {
     this.from =
       position.kind === 'after' && position.index >= 0
         ? blockRangePositions(editor, position.index, position.index).to
         : 0
     this.to = this.from
+    activeDrafts.add(editor)
     editor.on('transaction', this.onTransaction)
   }
 
   /** latest cumulative fragment; rendered on the next tick */
   update(html: string): void {
-    if (this.closed) return
+    if (this.closed || this.remoteConflict) return
     this.pending = html
     if (this.timer === null) this.timer = setTimeout(() => this.flush(), DRAFT_TICK_MS)
   }
@@ -161,6 +185,7 @@ export class DraftLanding {
       this.editor.view.dispatch(this.draftTr().delete(this.from, this.to))
     }
     this.to = this.from
+    activeDrafts.delete(this.editor)
     return this.rendered
   }
 

@@ -1,3 +1,4 @@
+import {completeCreatedDocumentBoot} from './ai/created-document-boot'
 import { PHASED_APPEND } from './editor/streaming-tail-guard'
 import {createAnalysisSaveConsent} from '../../../../packages/browser-host/src/analysis-save-consent'
 import {docsAnalysisEditor} from './analysis-insert'
@@ -7,6 +8,7 @@ import { useEvenOddHfState } from './even-odd-hf-state'
 import { FloatWatch } from './editor/float-watch'
 import { scriptFontHtml } from './editor/script-fonts'
 import { carryDocSeen } from './ai/tools'
+import { hasDocumentWriterDraft } from './ai/doc-writer'
 import { DOC_CSS_COMMITTED_EVENT, WRAP_WIDTHS_COMMITTED_EVENT } from './editor/cjk-punct-shrink'
 import { justifyShrinkPluginKey } from './editor/justify-shrink'
 import { tabReflowMeta } from './editor/decoration-extensions'
@@ -122,7 +124,7 @@ import {
   type MailMergeResponse,
 } from './mail-merge/output'
 import { ZoteroDocumentController } from './zotero/controller'
-import { AiPanel, aiRevisionAuthor } from './ai/AiPanel'
+import { AiPanel, aiRevisionAuthor, type DocsAssistantRecovery, type SetDocsImageAttachments } from './ai/AiPanel'
 import type { AiCommentsAccess, AiDocExtras, AiHeaderFooterAccess } from './ai/tools'
 import type { AiStyleInfo } from './ai/style-ops'
 import { applyResolvedPageSetup, describeSection, type AiPageSetupAccess } from './ai/page-setup'
@@ -810,7 +812,9 @@ function shadowPlanDiff(
   return diffs
 }
 
-export function App({ host }: { host?: { fileActions?: React.ReactNode; saveStatus?: React.ReactNode; desktopActionsAvailable?: boolean; readOnly: boolean; assistantAvailable: boolean; assistant?: {sourceSkill?: import('@genoffice/agent-core').AgentSkill; transport: import('@genoffice/agent-core').AgentTransport; modelPicker: React.ReactNode; workspace?: import('@genoffice/ui').AssistantWorkspace; extraSkills?: readonly import('@genoffice/agent-core').AgentSkill[]; agents?: readonly import('@genoffice/ui').AssistantParticipant[]; onManageAgents?: () => void; control?: import('@genoffice/ui').AssistantControl | undefined}; preferenceScope: string; onEditorReady?(handle: import('./file-actions').DocsEditorHandle | null): void; lifecycle: import('./file-actions').DocsHostLifecycle; onDocumentEdited(): void; onOpenFailed(): void } } = {}) {
+export type DocsNamedCopy = (propose: (suggest: NonNullable<Parameters<typeof suggestedSaveAsName>[1]>) => Promise<string>) => Promise<void>
+
+export function App({ host }: { host?: { fileActions?: React.ReactNode; saveStatus?: React.ReactNode; setImageAttachments?: SetDocsImageAttachments; desktopActionsAvailable?: boolean; namedCopy?: DocsNamedCopy; bodyCollaboration?: boolean; syncBody?:()=>Promise<boolean>; onCollabEditor?: (editor: import('@tiptap/core').Editor | null) => void; readOnly: boolean; assistantAvailable: boolean; getSupportedCreateDocumentTypes?: () => readonly import('../shared/ipc').CreateDocumentType[]; externalAssistant?: {id:string;activity:React.ReactNode}; onHandoffReady?: (runner: import('./file-actions').OfficeHandoffRunner | null) => void; assistant?: {sourceSkill?: import('@genoffice/agent-core').AgentSkill; transport: import('@genoffice/agent-core').AgentTransport; modelPicker: React.ReactNode; mediaCapabilities?: {imageGeneration: boolean; mediaAnalysis: boolean; imageAnalysis?: boolean}; workspace?: import('@genoffice/ui').AssistantWorkspace; extraSkills?: readonly import('@genoffice/agent-core').AgentSkill[]; agents?: readonly import('@genoffice/ui').AssistantParticipant[]; onManageAgents?: () => void; control?: import('@genoffice/ui').AssistantControl | undefined} & DocsAssistantRecovery; recoveryRevision?: string | undefined; preferenceScope: string; onEditorReady?(handle: import('./file-actions').DocsEditorHandle | null): void; lifecycle: import('./file-actions').DocsHostLifecycle; onDocumentEdited(): void; onOpenFailed(): void } } = {}) {
   // subscribe to language switches for re-render; strings all go through module-level t, so memoized callbacks never capture stale closures
   const { lang } = useI18n()
   const [doc, setDoc] = useState<DocState | null>(null)
@@ -846,6 +850,8 @@ export function App({ host }: { host?: { fileActions?: React.ReactNode; saveStat
   // returns to hidden. The dock stays mounted either way, so panel state and
   // in-flight runs survive; the hook closes it when the switch itself goes off.
   const aiSidebarEnabled = useAiSidebarEnabled(setShowAi)
+  const externalAssistantId = host?.externalAssistant?.id
+  useEffect(() => { if (externalAssistantId) setShowAi(true) }, [externalAssistantId])
   const [spellcheck, setSpellcheck] = useState(spellcheckEnabled)
   const [largeDocSpellOff, setLargeDocSpellOff] = useState(false)
   const spellcheckActive = spellcheck && !largeDocSpellOff
@@ -2118,14 +2124,14 @@ export function App({ host }: { host?: { fileActions?: React.ReactNode; saveStat
   useEffect(() => {
     if (!editor) return
     // Permission and view-mode changes are not document edits.
-    editor.setEditable(!readMode && !isProtected, false)
+    editor.setEditable(!readMode && (!isProtected || !!(host?.bodyCollaboration && !writeProtection?.hash && !editRestriction)), false)
     if (!readMode) return
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') setReadMode(false)
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [editor, readMode, isProtected])
+  }, [editor, readMode, isProtected,host?.bodyCollaboration,writeProtection?.hash,editRestriction])
 
   // Track Changes: the recorder plugin reads its toggle from extension storage
   useEffect(() => {
@@ -2472,16 +2478,15 @@ export function App({ host }: { host?: { fileActions?: React.ReactNode; saveStat
         // 'password': the prompt is up; its cancel path lands on blank instead.
         const outcome = pending ? await loadFile(pending) : 'canceled'
         if (outcome === 'canceled') await resetFile()
-        if (aiContent && !pending) {
-          // fileCtxRef refreshes per render: wait until resetFile's setDoc landed
-          for (let i = 0; i < 100 && !fileCtxRef.current.doc; i++) {
-            await new Promise((resolve) => setTimeout(resolve, 20))
-          }
-          await applyAiDocContentImpl(fileCtxRef.current, aiContent)
-        }
+        await completeCreatedDocumentBoot({
+          content: aiContent, pendingPath: pending?.path, opened: outcome === 'ok', hosted: !!host,
+          getContext: () => fileCtxRef.current, apply: applyAiDocContentImpl,
+          complete: accepted => host?.lifecycle.aiDocumentCreated?.(accepted),
+        })
       })
       // Open failures also land on a blank document, or the tab stays at "Opening…" forever
       .catch(() => {
+        host?.lifecycle.aiDocumentCreated?.(false)
         if (bootHandledRef.current) return
         bootHandledRef.current = true
         void resetFile().catch(() => {})
@@ -2596,10 +2601,10 @@ export function App({ host }: { host?: { fileActions?: React.ReactNode; saveStat
   }
 
   const save = useCallback(
-    (saveAs: boolean, auto = false) => {if(saveAs&&host?.desktopActionsAvailable===false){setStatus('Web 暂不支持另存为，请下载原件。');return Promise.resolve(false)}return analysisSaveConsent.current.run(auto,
+    (saveAs: boolean, auto = false) => {if(host?.bodyCollaboration && host.syncBody)return host.syncBody();if(saveAs&&host?.desktopActionsAvailable===false){setStatus('Web 暂不支持另存为，请下载原件。');return Promise.resolve(false)}return analysisSaveConsent.current.run(auto,
       () => saveImpl(fileCtxRef.current, saveAs, auto),
       ok => ok && !isDocDirty(fileCtxRef.current),false)},
-    [host?.desktopActionsAvailable],
+    [host?.desktopActionsAvailable,host?.bodyCollaboration,host?.syncBody],
   )
 
   // ---- Mailings: the data source and the merge ----
@@ -2658,11 +2663,17 @@ export function App({ host }: { host?: { fileActions?: React.ReactNode; saveStat
    * is where the reader confirms, and moving a file that may be open elsewhere
    * or synced is not ours to do quietly.
    */
+  const namedCopy = host?.namedCopy
+  const desktopActionsAvailable = host?.desktopActionsAvailable
   const nameWithAi = useCallback(async () => {
+    if (desktopActionsAvailable === false) {
+      await namedCopy?.(suggest => suggestedSaveAsName(fileCtxRef.current, suggest))
+      return
+    }
     const proposed = await suggestedSaveAsName(fileCtxRef.current)
     if (!proposed) return
     await saveImpl(fileCtxRef.current, true, false, proposed)
-  }, [])
+  }, [desktopActionsAvailable, namedCopy])
 
   // inserting a section break needs one save for the new section to take effect; the
   // flag is consumed in the render after state commit, guaranteeing the save closure
@@ -6183,11 +6194,44 @@ export function App({ host }: { host?: { fileActions?: React.ReactNode; saveStat
   const anyDirtyRef = useRef(false)
   const hasUnsavedChanges = isDocDirty(fileCtxRef.current)
   anyDirtyRef.current = hasUnsavedChanges
+  const hostDirtyNotified = useRef(false)
+  useEffect(() => {
+    // Metadata stores (headers, styles, page setup, etc.) do not emit a
+    // ProseMirror update, but the Web host must still show their unsaved state.
+    if (hasUnsavedChanges && !hostDirtyNotified.current) host?.onDocumentEdited()
+    hostDirtyNotified.current = hasUnsavedChanges
+  }, [hasUnsavedChanges, host?.onDocumentEdited])
 
+  useEffect(() => {
+    if (!host?.onCollabEditor || !editor || !doc || tornDown) return
+    let live=true
+    void waitForFullContent().then(()=>{if(live)host.onCollabEditor?.(editor)})
+    return ()=>{live=false;host.onCollabEditor?.(null)}
+  },[host?.onCollabEditor,editor,!!doc,tornDown])
   useEffect(() => {
     if (!host?.onEditorReady || !editor || !doc || tornDown) return
     host.onEditorReady({
       analysis: docsAnalysisEditor(editor,()=>fileCtxRef.current,()=>!!host.readOnly,()=>{analysisSaveConsent.current.hold()}),
+      beginExternalWrite() {
+        const current = editorRef.current
+        if (!current || current.isDestroyed || !current.isEditable || host.readOnly || isPhasedContentPending() ||
+            isDocDirty(fileCtxRef.current) || current.state.doc.childCount !== 1 ||
+            current.state.doc.firstChild?.type.name !== 'docParagraph' || current.state.doc.firstChild.content.size !== 0) return false
+        analysisSaveConsent.current.hold()
+        return true
+      },
+      readDraftText(includeSaved = false, includeWriterDraft = false) {
+        const current = editorRef.current
+        if (!current || current.isDestroyed || host.readOnly ||
+            (!includeSaved && !isDocDirty(fileCtxRef.current) && !(includeWriterDraft && hasDocumentWriterDraft(current)))) return null
+        let text = ''
+        current.state.doc.forEach(block => {
+          if (text.length > 24000) return
+          if (text) text += '\n'
+          text += block.textBetween(0, block.content.size, '\n').slice(0, 24001 - text.length)
+        })
+        return {text: text.slice(0, 24000).replace(/[\uD800-\uDBFF]$/u, ''), truncated: text.length > 24000}
+      },
       getSelection() {
         const current = editorRef.current
         if (!current || current.isDestroyed) return null
@@ -7310,6 +7354,7 @@ export function App({ host }: { host?: { fileActions?: React.ReactNode; saveStat
   // AI comment tools run the same review-actions code paths as the comments pane
   const aiCommentsAccess = useMemo<AiCommentsAccess>(
     () => ({
+      canWrite: () => reviewCtxRef.current.canComment,
       list: () => reviewCtxRef.current.comments,
       reply: (parentId, text) =>
         replyToCommentImpl(reviewCtxRef.current, parentId, text, aiRevisionAuthor()),
@@ -8378,7 +8423,8 @@ export function App({ host }: { host?: { fileActions?: React.ReactNode; saveStat
 .editor-scroll .doc-page.measuring-columns { column-count: auto; width: ${colFlow.colWidthPx + twipsToPx(canvasSection?.marginLeft ?? section?.marginLeft ?? 0) + twipsToPx(canvasSection?.marginRight ?? section?.marginRight ?? 0)}px; }`}</style>
       )}
       <Ribbon
-        desktopActionsAvailable={host?.desktopActionsAvailable}
+        desktopActionsAvailable={desktopActionsAvailable}
+        aiNamingAvailable={desktopActionsAvailable !== false || !!namedCopy}
         fileActions={host?.fileActions}
         trailingActions={host?.saveStatus}
         actionsRef={ribbonActionsRef}
@@ -8468,10 +8514,10 @@ export function App({ host }: { host?: { fileActions?: React.ReactNode; saveStat
       />
 
       <div className="app-main">
-        {doc && host?.assistantAvailable !== false && (
+        {doc && (host?.assistantAvailable !== false || host.externalAssistant) && (
           <div
             className={`ai-dock${showAi ? '' : ' collapsed'}${
-              !aiSidebarEnabled && !showAi ? ' ai-dock-off' : ''
+              !aiSidebarEnabled && !externalAssistantId && !showAi ? ' ai-dock-off' : ''
             }`}
           >
             {/* always mounted: collapse must not drop state or in-flight runs */}
@@ -8479,11 +8525,19 @@ export function App({ host }: { host?: { fileActions?: React.ReactNode; saveStat
               transport={host?.assistant?.transport}
               modelPicker={host?.assistant?.modelPicker}
               assistantWorkspace={host?.assistant?.workspace}
+              externalActivity={host?.externalAssistant?.activity}
+              onHandoffReady={host?.onHandoffReady}
+              activityOnly={host?.assistantAvailable === false}
               sourceSkill={host?.assistant?.sourceSkill}
               assistantAgents={host?.assistant?.agents}
               onManageAgents={host?.assistant?.onManageAgents}
               assistantControl={host?.assistant?.control}
+              assistantRecovery={host?.assistant}
+              recoveryRevision={isProtected || readMode ? undefined : host?.recoveryRevision}
               extraSkills={host?.assistant?.extraSkills}
+              mediaCapabilities={host?.assistant?.mediaCapabilities}
+              setImageAttachments={host?.setImageAttachments}
+              getSupportedCreateDocumentTypes={host?.getSupportedCreateDocumentTypes}
               key={aiPanelKey}
               editor={editor}
               blocks={doc.parsed.blocks}
@@ -8494,7 +8548,7 @@ export function App({ host }: { host?: { fileActions?: React.ReactNode; saveStat
               }
               preset={aiPreset}
               open={showAi}
-              hideRail={!aiSidebarEnabled}
+              hideRail={!aiSidebarEnabled && !externalAssistantId}
               onExpand={() => setShowAi(true)}
               onCollapse={() => setShowAi(false)}
               filePath={doc?.filePath ?? null}

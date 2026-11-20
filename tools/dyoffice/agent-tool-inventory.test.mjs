@@ -30,6 +30,16 @@ test('schema changes are visible in the inventory fingerprint', () => {
   const after=inspectTools("const x={name:'a',inputSchema:{type:'number'}}",'fixture.ts')
   assert.notEqual(before[0].schemaSha256,after[0].schemaSha256)
 })
+test('Word and Sheets host-specific schema filtering does not declare additional tools', async () => {
+  for (const file of [
+    'apps/docs/src/renderer/ai/create-document-capabilities.ts',
+    'apps/docs/src/renderer/ai/docs-skill.ts',
+    'apps/sheets/src/renderer/ai/workbook-skill.ts',
+  ]) {
+    const source=await readFile(new URL('../../'+file,import.meta.url),'utf8')
+    assert.deepEqual(inspectTools(source,file),[])
+  }
+})
 test('repository tool definitions and reviewed generated inventory remain in sync', async () => {
   assert.equal((await checkInventory()).count,157)
 })

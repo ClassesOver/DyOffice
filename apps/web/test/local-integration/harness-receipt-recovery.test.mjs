@@ -24,7 +24,6 @@ test('PG receipt recovery survives input expiry without writes and rejects cross
  const results=createWorkspaceSourceResults({transactions:f.transactions}),tools=createWorkspaceSourceTools({sources,results})
  const access=createHarnessDataAccess({tools,results,sessions:f.sessions,artifacts});t.after(()=>access.dispose())
  await sources.create(f.alice.token,{sourceId:'metrics',name:'Metrics',kind:'http',config:{timezone:'UTC'},secret:'https://fixture.invalid/data'})
- await sources.publish(f.alice.token,'metrics',{expectedVersion:1})
  const snapshot=createQuerySnapshot({sourceId:'metrics',sourceVersion:1,timezone:'UTC',schema:[{name:'amount',type:'number'}],rows:[{amount:42}],sourceTruncated:false})
  const captured=await results.capture(f.alice.token,snapshot,hash('fixture only'))
  const issue=(token,inputs,extra={})=>access.issue({token,agentId:'external',inputs,signal:new AbortController().signal,...extra})

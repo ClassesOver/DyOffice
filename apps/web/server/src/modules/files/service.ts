@@ -1,6 +1,8 @@
+import { syncFileAssistantChat } from './assistant-chat.ts'
 import { purgeFile } from './purge.ts'
 import { UNSUPPORTED_CAPABILITIES, type CapabilityCatalog } from '../../../../../../packages/web-contracts/src/host.ts'
 import { randomUUID } from 'node:crypto'
+import { PDFDocument, PageSizes } from 'pdf-lib'
 import type { PoolClient } from 'pg'
 import type { BusinessPrincipal, PrincipalTransactions, FileCredential } from '../../db/context.ts'
 import type { ObjectStore } from '../../storage/object-store.ts'
@@ -134,9 +136,23 @@ export function createFileService({ transactions, objects, quotaBytes = 1024 ** 
         throw error
       }
     },
-    async finishUpload(token: FileCredential, uploadId: string) {
+    async createBlankPdf(token: string) {
+      const pdf = await PDFDocument.create()
+      pdf.addPage(PageSizes.A4)
+      const bytes = Buffer.from(await pdf.save({useObjectStreams:false}))
+      const {uploadId} = await service.stageUpload(token, {name:'未命名.pdf',size:bytes.length})
+      try {
+        await service.receiveUpload(token,uploadId,bytes)
+        return await service.finishUpload(token,uploadId,undefined,true)
+      } catch (error) {
+        await service.cancelUpload(token,uploadId).catch(() => {})
+        throw error
+      }
+    },
+    async finishUpload(token: FileCredential, uploadId: string, authorize?: (connection: PoolClient, principal: BusinessPrincipal) => Promise<void>, blankPdf = false) {
       const id = uuid(uploadId)
       return personal(token, 'files:write', async (connection, principal) => {
+        await authorize?.(connection, principal)
         await lockAccount(connection, principal)
         const row = await lockUpload(connection, principal, id)
         if (row.kind !== 'import') throw authError(409)
@@ -146,7 +162,7 @@ export function createFileService({ transactions, objects, quotaBytes = 1024 ** 
         }
         if (row.state !== 'ready' || !row.sha256) throw authError(409)
         await objects.verifyObject({ key: objectKey(principal,row.revision_id), size: row.expected_size, sha256: row.sha256 })
-        await connection.query('INSERT INTO files(id,deployment_id,owner_id,workspace_id,name,format,current_revision) VALUES($1,$2,$3,$4,$5,$6,$7)', [row.file_id,...scope(principal),row.workspace_id,row.name,row.format,row.revision_id])
+        await connection.query('INSERT INTO files(id,deployment_id,owner_id,workspace_id,name,format,current_revision,pdf_auto_name_pending) VALUES($1,$2,$3,$4,$5,$6,$7,$8)', [row.file_id,...scope(principal),row.workspace_id,row.name,row.format,row.revision_id,blankPdf])
         await connection.query('INSERT INTO file_revisions(id,deployment_id,owner_id,file_id,object_key,sha256,size) VALUES($1,$2,$3,$4,$5,$6,$7)', [row.revision_id,...scope(principal),row.file_id,objectKey(principal,row.revision_id),row.sha256,row.expected_size])
         await connection.query("UPDATE uploads SET state='committed',completed_file_id=file_id WHERE deployment_id=$1 AND owner_id=$2 AND id=$3", [...scope(principal),id])
         await connection.query('UPDATE storage_accounts SET reserved_bytes=reserved_bytes-$3,stored_bytes=stored_bytes+$3 WHERE deployment_id=$1 AND owner_id=$2', [...scope(principal),row.expected_size])
@@ -154,6 +170,7 @@ export function createFileService({ transactions, objects, quotaBytes = 1024 ** 
         // A locked row does not freeze time. Recheck after object I/O and all
         // metadata writes; an expired initial finish rolls the whole txn back.
         await lockUpload(connection, principal, id, true)
+        await authorize?.(connection, principal)
         return result
       })
     },
@@ -168,6 +185,7 @@ export function createFileService({ transactions, objects, quotaBytes = 1024 ** 
         if (row.state === 'staged' || row.state === 'ready') await releaseReservation(connection, principal, row, 'cancelled')
       })
     },
+    syncAssistantChat:(token:string,fileId:string,input:Parameters<typeof syncFileAssistantChat>[3])=>syncFileAssistantChat(transactions,token,fileId,input),
     openFile: (token: FileCredential, fileId: string) => run(token, 'files:read', async (connection, principal) => openResult(await loadFile(connection, principal, uuid(fileId)))),
     download: (token: FileCredential, fileId: string, revision: string) => run(token, 'files:read', async (connection, principal) => {
       const row = await loadFile(connection, principal, uuid(fileId))
@@ -191,9 +209,26 @@ export function createFileService({ transactions, objects, quotaBytes = 1024 ** 
       return personal(token, 'files:write', async (connection, principal) => {
         const row = await loadFile(connection, principal, id, false, 'UPDATE')
         if (format !== row.format) throw authError(400)
-        await connection.query('UPDATE files SET name=$4,updated_at=clock_timestamp() WHERE deployment_id=$1 AND owner_id=$2 AND id=$3', [...scope(principal),id,name])
+        await connection.query('UPDATE files SET name=$4,pdf_auto_name_pending=false,updated_at=clock_timestamp() WHERE deployment_id=$1 AND owner_id=$2 AND id=$3', [...scope(principal),id,name])
       })
     },
+    trashBatch: (token: FileCredential, fileIds: string[], inspectOnly = false) =>
+      personal(token, inspectOnly ? 'files:read' : 'files:write', async (connection, principal) => {
+        const ids = [...new Set(fileIds.map(uuid))]
+        const args = [...scope(principal), ids]
+        const rows = await connection.query<{id: string; deleted_at: Date | null}>(
+          `SELECT id, deleted_at FROM files WHERE deployment_id=$1 AND owner_id=$2
+           AND id=ANY($3::uuid[]) AND purge_started_at IS NULL ORDER BY id
+           ${inspectOnly ? '' : 'FOR UPDATE'}`, args)
+        if (rows.rowCount !== ids.length) throw authError(404)
+        const active = rows.rows.filter(row => !row.deleted_at).map(row => row.id)
+        if (!inspectOnly && active.length) {
+          const targets = [...scope(principal), active]
+          await connection.query('UPDATE edit_leases SET lease_epoch=lease_epoch+1,expires_at=clock_timestamp() WHERE deployment_id=$1 AND owner_id=$2 AND file_id=ANY($3::uuid[])', targets)
+          await connection.query('UPDATE files SET deleted_at=clock_timestamp(),updated_at=clock_timestamp() WHERE deployment_id=$1 AND owner_id=$2 AND id=ANY($3::uuid[])', targets)
+        }
+        return { active: inspectOnly ? active : [] }
+      }),
     trashFile: (token: FileCredential, fileId: string) => personal(token, 'files:write', async (connection, principal) => {
       const id = uuid(fileId)
       await loadFile(connection, principal, id, true, 'UPDATE')

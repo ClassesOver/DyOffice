@@ -20,6 +20,10 @@ export type SourceKind = 'postgres' | 'mysql' | 'starrocks' | 'http'
 /** Public postgres connector settings. The DSN is a credential and never appears here. */
 export interface PostgresSourceConfig {
   database?: string
+  /** Omitted: all readable tables; empty: none; otherwise schema.table or default-schema table names. */
+  allowedTables?: readonly string[]
+  /** When present, only these schemas/databases are visible; intersects allowedTables. */
+  allowedSchemas?: readonly string[]
   timezone?: string
   /** Read-only execution limits; invalid/excessive values are rejected server-side. */
   statementTimeoutMs?: number
@@ -38,7 +42,7 @@ export interface HttpSourceConfig {
 
 export type SourceConfig = PostgresSourceConfig | HttpSourceConfig
 
-/** Frozen execution parameters recorded with each published version. */
+/** Bounded execution parameters derived from the current saved configuration. */
 export interface SourceExecution {
   readonly maxRows: number
   readonly statementTimeoutMs?: number
@@ -50,32 +54,19 @@ export interface SourceDescriptor {
   sourceId: string
   name: string
   kind: SourceKind
+  /** Internal optimistic concurrency token; not a selectable configuration version. */
   version: number
   enabled: boolean
-  publishedRevision: number | null
   hasCredential: boolean
-  hasUnpublishedChanges: boolean
   updatedAt: string
 }
 
 export interface SourceList { items: SourceDescriptor[]; nextCursor: string | null }
 
-export interface PublishedSourceVersion {
-  sourceId: string
-  revision: number
-  contentHash: string
-  publishedAt: string
-  name: string
-  kind: SourceKind
-  config: SourceConfig
-  execution: SourceExecution
-}
-
 export interface SourceDetail {
   source: SourceDescriptor
   /** Full configuration is owner-visible but never includes credentials or DSNs. */
   config: SourceConfig
-  published: PublishedSourceVersion | null
 }
 
 export interface CreateSourceRequest {
@@ -85,22 +76,24 @@ export interface CreateSourceRequest {
   config: SourceConfig
   /** DSN (postgres) or endpoint URL (http). Stored encrypted; omitted from every response. */
   secret: string
+  enabled?: boolean
 }
 
 export interface SaveSourceRequest {
   expectedVersion: number
   name?: string
   config?: SourceConfig
-  /** Omit to retain, null to clear this draft, string to append a rotated credential. Published history retains its original credential. */
+  /** Omit to retain, null to clear, string to replace the current credential. */
   secret?: string | null
   enabled?: boolean
 }
 
-export interface PublishSourceRequest { expectedVersion: number }
-
-export interface SourceQueryRequest { sql?: string; sourceVersion?: number }
+export interface SourceQueryRequest { sql?: string }
 
 /** MySQL wire protocol; StarRocks uses its own server timeout dialect. */
 export type MySqlSourceConfig = PostgresSourceConfig
 
 export interface SourceConnectionCheck { ok: boolean; kind: SourceKind; code?: string }
+
+/** Available to the connection editor; independent of the saved assistant scope. */
+export interface SourceDiscovery { items: string[]; truncated: boolean }

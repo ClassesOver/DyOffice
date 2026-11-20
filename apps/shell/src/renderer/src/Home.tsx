@@ -50,6 +50,7 @@ declare global {
 
 /** page size of the home list; scrolling to the bottom auto-loads the next page */
 const PAGE_SIZE = 50
+const WEB_PAGE_SIZE = 20
 
 /** greeting sublines on the home page: one is picked at random on entry */
 const GREET_ASK_KEYS = [
@@ -1572,6 +1573,7 @@ function DropToOpenOverlay(): ReactElement | null {
 // ── Main component ──────────────────────────────────────
 
 export interface HomeProps {
+  renderHero?: (fallback:{greeting:string;guidance:string;language:string})=>ReactNode
   /** Web hosts retain the native layout while exposing only supported formats. */
   supportedFormats?: readonly string[]
   supportedNewFormats?: readonly string[]
@@ -1582,7 +1584,7 @@ export interface HomeProps {
   folderDeleteDescription?: (name: string) => string
 }
 
-export function Home({supportedFormats, supportedNewFormats, accountEntry, folderDeleteDescription, capabilities}:HomeProps = {}) {
+export function Home({supportedFormats, supportedNewFormats, accountEntry, folderDeleteDescription, capabilities, renderHero}:HomeProps = {}) {
   const i18n = useI18n()
   const { t, lang } = i18n
   const [actionError, setActionError] = useState('')
@@ -1627,6 +1629,11 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
   const [entries, setEntries] = useState<RecentEntry[]>([])
   /** total count under the current view + filter (not just the loaded rows) */
   const [listTotal, setListTotal] = useState(0)
+  const [webPage, setWebPage] = useState(0)
+  const webPageRef = useRef(0)
+  const [folderPage, setFolderPage] = useState(0)
+  const folderRevealFile = useRef<string | null>(null)
+  const tableRef = useRef<HTMLDivElement>(null)
   /** sidebar Recent / Starred counts under the active type filter */
   const [navCounts, setNavCounts] = useState({ recent: 0, starred: 0 })
   const [sidebarWidth, setSidebarWidth] = useState(readSidebarWidth)
@@ -1872,7 +1879,7 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
   entriesLen.current = entries.length
 
   /** reload the list; keepCount keeps the loaded row count (refresh), otherwise back to page one */
-  const reload = (keepCount: boolean) => {
+  const reload = (keepCount: boolean, requestedPage?: number) => {
     const seq = ++requestSeq.current
     moreRequest.current = null
     firstPageRequest.current = seq
@@ -1886,12 +1893,23 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
     // the group pills only scope the Starred view's own list; the sidebar
     // counters and the other view stay group-agnostic
     const group = view === 'starred' && groupFilter ? groupFilter : undefined
-    const limit = keepCount ? Math.max(entriesLen.current, PAGE_SIZE) : PAGE_SIZE
+    const paged = !!supportedFormats
+    const pageIndex = paged ? requestedPage ?? (keepCount ? webPageRef.current : 0) : 0
+    const limit = paged ? WEB_PAGE_SIZE : keepCount ? Math.max(entriesLen.current, PAGE_SIZE) : PAGE_SIZE
     const primary = view === 'recent' ? window.aiOffice.recents : window.aiOffice.starred
     const secondary = view === 'recent' ? window.aiOffice.starred : window.aiOffice.recents
-    void primary({ offset: 0, limit, ext, group, ...(serverSort ? {sort: serverSort} : {}) }).then((page) => {
+    void primary({ offset: pageIndex * (paged ? WEB_PAGE_SIZE : 0), limit, ext, group, ...(serverSort ? {sort: serverSort} : {}) }).then((page) => {
       if (seq !== requestSeq.current) return
+      if (paged && pageIndex > 0 && pageIndex * WEB_PAGE_SIZE >= page.total) {
+        reloadRef.current(true, Math.max(0, Math.ceil(page.total / WEB_PAGE_SIZE) - 1))
+        return
+      }
       setEntries(page.entries)
+      if (paged) {
+        webPageRef.current = pageIndex
+        setWebPage(pageIndex)
+        tableRef.current?.scrollTo({top: 0})
+      }
       setListLoading(false)
       setListTotal(page.total)
       setReadyPageSeq(seq)
@@ -2037,7 +2055,7 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
   // a rename from the tab strip happens while this renderer already has focus
   useEffect(() => onFilesChanged(() => refreshRef.current()), [])
 
-  const hasMore = entries.length < listTotal
+  const hasMore = !supportedFormats && entries.length < listTotal
 
   // unified dismissal: outside press, window blur, chrome press (tab strip / window drag)
   useDismissablePopover(fileSortMenuOpen, () => setFileSortMenuOpen(false), {
@@ -2225,11 +2243,51 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
   const folderListing = selectedFolder ? listings.get(selectedFolder) : undefined
   const folderFiles = (folderListing?.files ?? []).filter((e) => matchesFilter(e, filter))
   const folderSubfolders = folderListing?.folders ?? []
+  const sortedFolderFiles = capabilities?.serverFileSort && fileSort
+    ? [...folderFiles].sort((a, b) => (fileSort === 'oldest' ? a.mtimeMs - b.mtimeMs : b.mtimeMs - a.mtimeMs) || a.path.localeCompare(b.path))
+    : fileSort === 'oldest' ? [...folderFiles].reverse() : folderFiles
+  const folderTotal = folderSubfolders.length + folderFiles.length
+  const currentFolderPage = Math.min(folderPage, Math.max(0, Math.ceil(folderTotal / WEB_PAGE_SIZE) - 1))
+  const folderStart = supportedFormats ? currentFolderPage * WEB_PAGE_SIZE : 0
+  const visibleSubfolders = supportedFormats ? folderSubfolders.slice(folderStart, folderStart + WEB_PAGE_SIZE) : folderSubfolders
+  const visibleFolderFiles = supportedFormats ? sortedFolderFiles.slice(Math.max(0, folderStart - folderSubfolders.length), Math.max(0, folderStart + WEB_PAGE_SIZE - folderSubfolders.length)) : sortedFolderFiles
   const folderSelectedPaths = folderFiles.filter((e) => selected.has(e.path)).map((e) => e.path)
   const folderAllSelected =
-    folderFiles.length > 0 && folderSelectedPaths.length === folderFiles.length
+    visibleFolderFiles.length > 0 && visibleFolderFiles.every(e => selected.has(e.path))
+
+  useEffect(() => {setFolderPage(0)}, [selectedFolder, filter, fileSort])
+  useEffect(() => {
+    if (!supportedFormats || !folderRevealFile.current) return
+    const index = sortedFolderFiles.findIndex(file => file.path === folderRevealFile.current)
+    if (index < 0) return
+    folderRevealFile.current = null
+    setFolderPage(Math.floor((folderSubfolders.length + index) / WEB_PAGE_SIZE))
+  }, [supportedFormats, sortedFolderFiles, folderSubfolders.length])
+
+  function renderFilePager(page: number, total: number, change: (page: number) => void, loading = false) {
+    if (!supportedFormats) return null
+    const pages = Math.max(1, Math.ceil(total / WEB_PAGE_SIZE))
+    const english = lang === 'en'
+    return <nav className="home-file-pager" aria-label={english ? 'File pagination' : '文件分页'}>
+      <span className="home-file-range">{english ? `${total ? page * WEB_PAGE_SIZE + 1 : 0}–${Math.min((page + 1) * WEB_PAGE_SIZE, total)} of ${total}` : `第 ${total ? page * WEB_PAGE_SIZE + 1 : 0}–${Math.min((page + 1) * WEB_PAGE_SIZE, total)} 项 · 共 ${total} 项`}</span>
+      <div><button type="button" disabled={loading || page === 0} onClick={() => change(page - 1)}>{english ? 'Previous' : '上一页'}</button><span role="status" aria-live="polite">{loading ? english ? 'Loading…' : '正在加载…' : english ? `Page ${page + 1} of ${pages}` : `第 ${page + 1} / ${pages} 页`}</span><button type="button" disabled={loading || page + 1 >= pages} onClick={() => change(page + 1)}>{english ? 'Next' : '下一页'}</button></div>
+    </nav>
+  }
+
+  function changeWebPage(next: number) {
+    if (listLoading) return
+    setSelected(new Set()); setRowMenu(null)
+    reloadRef.current(true, next)
+  }
+
+  function changeFolderPage(next: number) {
+    setSelected(new Set()); setRowMenu(null); setFolderMenu(null)
+    setFolderPage(next)
+    tableRef.current?.scrollTo({top: 0})
+  }
 
   const changeView = (next: 'recent' | 'starred') => {
+    folderRevealFile.current = null
     cancelReveal()
     setView(next)
     setSelectedFolder(null)
@@ -2240,6 +2298,7 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
   }
 
   const changeFilter = (key: string) => {
+    folderRevealFile.current = null
     cancelReveal()
     setFilter(key)
     setSelected(new Set())
@@ -2254,7 +2313,9 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
   }
 
   const selectFolder = (dir: string) => {
+    folderRevealFile.current = null
     cancelReveal()
+    setFolderPage(0)
     setSelectedFolder(dir)
     setCloudMode(false)
     setSelected(new Set())
@@ -2284,6 +2345,7 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
   useEffect(() => onRevealWorkspaceFolder(({dir, fileId}) => {
     const owner = rootOf(dir, roots)
     if (!owner?.readable) return
+    folderRevealFile.current = fileId ?? null
     setExpanded(previous => new Set([...previous, ...crumbsOf(owner, dir).map(crumb => crumb.path)]))
     setSelectedFolder(dir)
     setCloudMode(false)
@@ -2308,7 +2370,7 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
   }
 
   const toggleSelectAllFolder = () => {
-    setSelected(folderAllSelected ? new Set() : new Set(folderFiles.map((e) => e.path)))
+    setSelected(folderAllSelected ? new Set() : new Set(visibleFolderFiles.map((e) => e.path)))
   }
 
   const toggleStar = (path: string) => {
@@ -2616,7 +2678,7 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
           </button>
         ))}
         <button
-          className="quick-card"
+          className="quick-card quick-card--local"
           onClick={() => void window.aiOffice.browse().catch(reportError)}
           data-tip={supportedFormats ? supportedFormats.map(ext => `.${ext}`).join(' / ') : OPEN_LOCAL_EXTENSIONS}
         >
@@ -2708,7 +2770,7 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
         <MoreDots />
       </button>
       {folderMenu && menuOpenAt('tree', entry.path) && renderMenu(
-        <div className="folder-menu" role="menu" ref={folderMenuPopRef} onKeyDown={supportedFormats ? folderMenuKeyDown : undefined}>
+        <div className={`folder-menu${supportedFormats ? ' home-web-menu' : ''}`} role="menu" ref={folderMenuPopRef} onKeyDown={supportedFormats ? folderMenuKeyDown : undefined}>
           {editableAt(entry.path) && (
             <button role="menuitem" onClick={() => startCreateFolder(entry.path)}>
               {t('newSubfolder')}
@@ -3081,7 +3143,7 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
               </svg>
             </button>
             {rowMenu === entry.path && renderMenu(
-              <div className="row-menu" role="menu" onKeyDown={supportedFormats ? event => {
+              <div className={`row-menu${supportedFormats ? ' home-web-menu' : ''}`} role="menu" onKeyDown={supportedFormats ? event => {
                 if (event.key === 'Escape' || event.key === 'Tab') {
                   if (event.key === 'Escape') event.preventDefault()
                   event.stopPropagation()
@@ -3285,7 +3347,7 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
               <MoreDots />
             </button>
             {folderMenu && menuOpenAt('table', entry.path) && renderMenu(
-              <div className="folder-menu" role="menu" ref={folderMenuPopRef} onKeyDown={supportedFormats ? folderMenuKeyDown : undefined}>
+              <div className={`folder-menu${supportedFormats ? ' home-web-menu' : ''}`} role="menu" ref={folderMenuPopRef} onKeyDown={supportedFormats ? folderMenuKeyDown : undefined}>
                 <button
                   role="menuitem"
                   onClick={() => {
@@ -3538,9 +3600,6 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
   function renderFolderContent() {
     if (roots.length === 0) return null
     const total = folderSubfolders.length + folderFiles.length
-    const sortedFiles = capabilities?.serverFileSort && fileSort
-      ? [...folderFiles].sort((a, b) => (fileSort === 'oldest' ? a.mtimeMs - b.mtimeMs : b.mtimeMs - a.mtimeMs) || a.path.localeCompare(b.path))
-      : fileSort === 'oldest' ? [...folderFiles].reverse() : folderFiles
     return (
       <main className="content">
         {!confirmDelete && !confirmDeleteFolder && !movePicker && renderActionError()}
@@ -3611,7 +3670,7 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
           ) : total === 0 ? (
             renderEmpty(filter === 'all' ? t('emptyFolder') : t('emptyFiltered'))
           ) : (
-            <div
+            <><div ref={tableRef}
               className={`recent-table${folderSelectedPaths.length > 0 ? ' has-selection' : ''}`}
             >
               <div className="recent-columns">
@@ -3619,7 +3678,9 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
                   <input
                     type="checkbox"
                     checked={folderAllSelected}
-                    disabled={folderFiles.length === 0}
+                    ref={(node) => { if (node) node.indeterminate = !folderAllSelected && visibleFolderFiles.some(entry => selected.has(entry.path)) }}
+                    aria-checked={!folderAllSelected && visibleFolderFiles.some(entry => selected.has(entry.path)) ? 'mixed' : folderAllSelected}
+                    disabled={visibleFolderFiles.length === 0}
                     onChange={toggleSelectAllFolder}
                     aria-label={t('selectAll')}
                   />
@@ -3632,10 +3693,10 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
                 <span />
               </div>
               <ul className="recent-list">
-                {folderSubfolders.map((entry) => renderSubfolderRow(entry))}
-                {sortedFiles.map((entry) => renderFileRow(entry, 'folder'))}
+                {visibleSubfolders.map((entry) => renderSubfolderRow(entry))}
+                {visibleFolderFiles.map((entry) => renderFileRow(entry, 'folder'))}
               </ul>
-            </div>
+            </div>{renderFilePager(currentFolderPage, total, changeFolderPage)}</>
           )}
         </section>
       </main>
@@ -3662,10 +3723,10 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
         {!confirmDelete && !confirmDeleteFolder && !movePicker && renderActionError()}
         <section className="quick-start" aria-label={t('secQuickStart')}>
           <div className="home-hero">
-            <h1 className="hero-title">
+            {renderHero?renderHero({greeting,guidance:t(greetAskKey),language:lang}):<h1 className="hero-title">
               {greeting}
               <span className="hero-ask">{t(greetAskKey)}</span>
-            </h1>
+            </h1>}
           </div>
           {renderQuickCards()}
         </section>
@@ -3782,12 +3843,14 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
                   : t('emptyFiltered'),
             )
           ) : (
-            <div className={`recent-table${selectedPaths.length > 0 ? ' has-selection' : ''}`}>
+            <><div ref={tableRef} aria-busy={listLoading} inert={listLoading ? true : undefined} className={`recent-table${selectedPaths.length > 0 ? ' has-selection' : ''}`}>
               <div className="recent-columns">
                 <span className="col-check">
                   <input
                     type="checkbox"
                     checked={allSelected}
+                    ref={(node) => { if (node) node.indeterminate = !allSelected && selectedPaths.length > 0 }}
+                    aria-checked={!allSelected && selectedPaths.length > 0 ? 'mixed' : allSelected}
                     onChange={toggleSelectAll}
                     aria-label={t('selectAll')}
                   />
@@ -3809,7 +3872,7 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
                   </li>
                 )}
               </ul>
-            </div>
+            </div>{renderFilePager(webPage, listTotal, changeWebPage, listLoading)}</>
           )}
         </section>
       </main>
@@ -3970,15 +4033,12 @@ export function Home({supportedFormats, supportedNewFormats, accountEntry, folde
             </p>
             {confirmDelete.length > 1 && (
               <ul className="modal-file-list">
-                {confirmDelete.slice(0, 6).map((p) => (
-                  <li key={p}>{displayName(p)}</li>
+                {confirmDelete.map((p) => (
+                  <li key={p} title={displayName(p)}>{displayName(p)}</li>
                 ))}
-                {confirmDelete.length > 6 && (
-                  <li>{t('deleteMoreCount', { n: confirmDelete.length })}</li>
-                )}
               </ul>
             )}
-            {renderActionError()}
+            {actionError && <p className="home-action-error" role="alert">{actionError}</p>}
             <div className="modal-buttons">
               <button
                 className="btn btn-secondary"

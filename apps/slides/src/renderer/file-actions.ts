@@ -143,7 +143,11 @@ export async function saveAs(getCtx: () => ActionCtx): Promise<void> {
  * leaves the dialog on the deck's current name, so this is a no-op rather than
  * a failure.
  */
-export async function nameWithAi(getCtx: () => ActionCtx): Promise<void> {
+export type SlidesNamedCopy = {
+  suggest(input: {content:string}): Promise<string>
+  save(stem:string): Promise<void>
+}
+export async function nameWithAi(getCtx: () => ActionCtx, copy?: SlidesNamedCopy): Promise<void> {
   const ctx = getCtx()
   // the model reads the deck, so an edit still being typed has to land first
   const editing = ctx.editingActiveRef.current
@@ -151,8 +155,17 @@ export async function nameWithAi(getCtx: () => ActionCtx): Promise<void> {
   // that commit can replace the deck, so read it again rather than from the
   // snapshot taken before the flush
   const deck = editing ? getCtx() : ctx
-  const stem = await modelSaveAsName(deck.slides)
+  const stem = await modelSaveAsName(deck.slides, copy?.suggest)
   if (!stem) return
+  if (copy) {
+    await runSerialized(async () => {
+      const current = getCtx()
+      if (!await flushActiveEdit(current)) return
+      await current.flushNotes()
+      await copy.save(stem)
+    })
+    return
+  }
   await saveAsWithName(getCtx, `${stem}.pptx`)
 }
 

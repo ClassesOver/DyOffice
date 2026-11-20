@@ -1,13 +1,16 @@
 import {createHash} from 'node:crypto'
+import {ASSISTANT_MAX_REQUEST_BYTES} from '../../../../../../packages/web-contracts/src/assistant.ts'
 
-export interface OpenAiBodyProfile {readonly model:string;readonly maxOutputTokens:number}
+export interface OpenAiBodyProfile {readonly model:string;readonly maxOutputTokens:number;readonly reasoningEffort?:'none'}
 export interface OpenAiBody {readonly body:Buffer;readonly digest:string}
 type Json = null | boolean | number | string | Json[] | {[key:string]:Json}
 const invalid=()=>new Error('Invalid provider request')
-const MAX_BODY=1024*1024, MAX_TEXT=256*1024, MAX_OBJECT=64*1024
+const MAX_BODY=ASSISTANT_MAX_REQUEST_BYTES, MAX_TEXT=256*1024, MAX_OBJECT=64*1024
+const MAX_IMAGE_BYTES=5*1024*1024,MAX_IMAGES=20
+const IMAGE_MIMES=new Set(['image/png','image/jpeg','image/gif','image/webp'])
 const unsafeKeys=new Set(['__proto__','prototype','constructor'])
 
-/** Strict text-only OpenAI subset, not authority, token billing or tool execution.
+/** Strict OpenAI request subset, not authority, token billing or tool execution.
  * The returned metadata is frozen; callers must retain a private body snapshot.
  * Transport must independently copy and verify its SHA256 before sending.
  */
@@ -65,9 +68,10 @@ export function buildOpenAiChatRequest(request:unknown,profile:unknown,historica
    if(!new RegExp(`^[A-Za-z0-9_-]{1,${max}}$`).test(result))throw invalid()
    return result
   }
-  const p=object(profile,['model','maxOutputTokens'],['model','maxOutputTokens'])
+  const p=object(profile,['model','maxOutputTokens','reasoningEffort'],['model','maxOutputTokens'])
   const model=text(p.model,256)
   if(!/^[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}$/.test(model)||typeof p.maxOutputTokens!=='number'||!Number.isSafeInteger(p.maxOutputTokens)||p.maxOutputTokens<1||p.maxOutputTokens>32768)throw invalid()
+  if(Object.hasOwn(p,'reasoningEffort')&&p.reasoningEffort!=='none')throw invalid()
   const r=object(request,['system','messages','tools'],['system','messages','tools'])
   const system=text(r.system),declared=new Set<string>()
   const tools=array(r.tools,64).map(raw=>{
@@ -78,11 +82,23 @@ export function buildOpenAiChatRequest(request:unknown,profile:unknown,historica
   const messages:Record<string,unknown>[]=[{role:'system',content:system}]
   const pending=new Map<string,string>(),seen=new Set<string>()
   for(const raw of array(r.messages,512,1)){
-   const m=object(raw,['role','text','toolCalls','results'],['role'])
+   const m=object(raw,['role','text','images','toolCalls','results'],['role'])
    if(pending.size&&m.role!=='tool')throw invalid()
    if(m.role==='user'){
-    object(m,['role','text'],['role','text']);const content=text(m.text)
-    if(!content.length)throw invalid();messages.push({role:'user',content})
+    object(m,['role','text','images'],['role','text']);const content=text(m.text)
+    if(!content.length)throw invalid()
+    let multimodal:unknown=content
+    if(Object.hasOwn(m,'images')){
+     const images=array(m.images,MAX_IMAGES,1).map(raw=>{
+      const image=object(raw,['base64','mime'],['base64','mime']),mime=text(image.mime,64),base64=text(image.base64,Math.ceil(MAX_IMAGE_BYTES/3)*4)
+      if(!IMAGE_MIMES.has(mime)||!/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(base64))throw invalid()
+      const bytes=Buffer.from(base64,'base64')
+      if(bytes.length<1||bytes.length>MAX_IMAGE_BYTES||bytes.toString('base64')!==base64)throw invalid()
+      return {type:'image_url',image_url:{url:`data:${mime};base64,${base64}`}}
+     })
+     multimodal=[{type:'text',text:content},...images]
+    }
+    messages.push({role:'user',content:multimodal})
    }else if(m.role==='assistant'){
     object(m,['role','text','toolCalls'],['role','text']);const content=text(m.text)
     let calls:Record<string,unknown>[]|undefined
@@ -107,7 +123,7 @@ export function buildOpenAiChatRequest(request:unknown,profile:unknown,historica
    }else throw invalid()
   }
   if(pending.size)throw invalid()
-  const body=Buffer.from(JSON.stringify({model,max_tokens:p.maxOutputTokens,stream:true,stream_options:{include_usage:true},messages,...(tools.length?{tools}:{})}),'utf8')
+  const body=Buffer.from(JSON.stringify({model,max_tokens:p.maxOutputTokens,...(p.reasoningEffort?{reasoning_effort:p.reasoningEffort}:{}),stream:true,stream_options:{include_usage:true},messages,...(tools.length?{tools}:{})}),'utf8')
   if(body.byteLength>MAX_BODY)throw invalid()
   return Object.freeze({body,digest:createHash('sha256').update(body).digest('hex')})
  }catch{throw invalid()}

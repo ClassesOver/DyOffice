@@ -38,12 +38,10 @@
   font-size: 11px;
   white-space: nowrap;
 }
-.assistant-workspace[data-view='team'],
 .assistant-workspace[data-view='tasks'] {
   flex: 1 1 0;
 }
-.ai-panel:has(> .assistant-workspace:not([data-view='chat'])) > .ai-chat,
-.copilot:has(> .assistant-workspace:not([data-view='chat'])) > .ai-chat {
+:is(.ai-panel,.copilot):has(> .assistant-workspace:not([data-view='chat'])) > :is(.ai-chat,.ai-composer) {
   display: none;
 }
 .assistant-workspace-content {
@@ -117,14 +115,7 @@
   font-size: 12px;
   margin: 8px 0;
 }
-.assistant-task {
-  border: 1px solid var(--border);
-  padding: 12px;
-  border-radius: 12px;
-  margin-bottom: 12px;
-  overflow-wrap: anywhere;
-}
-.assistant-task p {
+.assistant-execution-message p {
   margin: 8px 0;
 }
 .assistant-task-state {
@@ -132,19 +123,21 @@
   color: var(--accent);
   font-size: 12px;
 }
-.assistant-task-state[data-state='failed'],
-.assistant-task-state[data-state='unknown_outcome'] {
-  color: var(--text-secondary);
+.assistant-task-state[data-state='failed'] {
+  color: var(--danger);
 }
-.assistant-task details {
+.assistant-task-state[data-state='unknown_outcome'] {
+  color: var(--text);
+}
+.assistant-execution-message details {
   margin-block: 8px;
   font-size: 12px;
 }
-.assistant-task summary {
+.assistant-execution-message summary {
   cursor: pointer;
   color: var(--text-secondary);
 }
-.assistant-task pre {
+.assistant-execution-message pre {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   font-size: 12px;
@@ -153,48 +146,6 @@
   background: var(--hover);
   border-radius: 7px;
   padding: 8px;
-}
-.assistant-recipient {
-  color: var(--text-secondary);
-  padding: 0 2px 8px;
-  font-size: 12px;
-}
-.assistant-recipient label {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-.assistant-recipient label > span {
-  flex-shrink: 0;
-  white-space: nowrap;
-}
-.assistant-recipient select {
-  min-width: 0;
-  max-width: 100%;
-  flex: 1;
-  border: 1px solid var(--border);
-  border-radius: 7px;
-  background: var(--surface);
-  color: var(--text);
-  padding: 5px 8px;
-  font: inherit;
-  text-overflow: ellipsis;
-}
-.assistant-recipient select:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
-}
-.assistant-recipient small {
-  display: block;
-  margin-top: 6px;
-  font-size: 11px;
-}
-.assistant-recipient p {
-  margin: 6px 0 0;
-  overflow-wrap: anywhere;
-}
-.assistant-recipient [role='alert'] {
-  color: var(--text);
 }
 .editor-model-external {
   color: var(--text-secondary);
@@ -296,13 +247,6 @@
   width: 23px;
   height: 23px;
 }
-.assistant-team-message {
-  background: var(--surface);
-  margin: 12px 0;
-  border-inline-start: 1px solid var(--border);
-  font-size: 13px;
-  line-height: 1.6;
-}
 .assistant-team-handoff {
   color: var(--text-secondary);
   font-size: 11px;
@@ -312,9 +256,9 @@
   white-space: pre-wrap;
 }
 .assistant-task-result {
-  border-top: 1px solid var(--border);
-  padding-top: 9px;
   white-space: pre-wrap;
+  font-weight: 500;
+  color: var(--text);
 }
 .assistant-task-actions {
   display: flex;
@@ -332,86 +276,17 @@
   padding: 5px 8px;
   cursor: pointer;
 }
-.assistant-task:focus {
+.assistant-task-message:focus {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
-.assistant-team-recipient {
-  position: relative;
-}
-.assistant-team-composer-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-}
-.assistant-team-scope {
-  color: var(--text-secondary);
-  font-size: 10px;
-  flex-shrink: 0;
-}
-.assistant-mention-menu {
-  position: absolute;
-  bottom: 100%;
-  inset-inline: 0;
-  z-index: 30;
-  max-height: 280px;
-  overflow-y: auto;
-  padding: 5px;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  box-shadow: 0 8px 28px #0002;
-}
-.assistant-mention-menu button {
-  display: flex;
-  width: 100%;
-  text-align: start;
-  align-items: center;
-  gap: 8px;
-  padding: 9px;
-  color: var(--text);
-  background: transparent;
-  border: 0;
-  border-radius: 8px;
-  font: inherit;
-  cursor: pointer;
-}
-.assistant-mention-menu button:hover,
-.assistant-mention-menu button[aria-selected='true'] {
-  background: var(--hover);
-}
-.assistant-mention-menu button > span:nth-child(2) {
-  flex: 1;
-  min-width: 0;
-  overflow-wrap: anywhere;
-}
-.assistant-mention-menu strong {
-  font-size: 12px;
-  font-weight: 500;
-}
-.assistant-mention-menu small {
-  margin-top: 3px;
-  line-height: 1.5;
-}
-.assistant-mention-menu button:disabled {
-  opacity: 0.5;
-  cursor: default;
-}
-.assistant-mention-menu button:focus-visible,
 .assistant-task-actions button:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
 
 .assistant-task-progress {
-  border-top: 1px solid var(--border);
-  padding-top: 8px;
-}
-.assistant-task-progress > summary {
-  display: flex;
-  align-items: center;
-  gap: 6px;
+  padding-top: 4px;
 }
 .assistant-task-pulse {
   width: 6px;
@@ -424,7 +299,10 @@
   background: var(--accent);
   animation: assistant-task-pulse 1.6s ease-in-out infinite;
 }
-.assistant-task .assistant-task-activity {
+.assistant-execution-message .assistant-task-activity {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
   color: var(--text-secondary);
   font-size: 11px;
   margin: 7px 0;
@@ -458,19 +336,25 @@
 }
 .assistant-chat-row > .assistant-avatar,
 .assistant-user-avatar {
-  flex: 0 0 28px;
-  width: 28px;
-  height: 28px;
-  margin-top: 1px;
+  flex: 0 0 32px;
+  width: 32px;
+  height: 32px;
+}
+.assistant-chat-row > .assistant-avatar-office {
+  border-radius: 50%;
 }
 .assistant-chat-message {
   flex: 1;
   min-width: 0;
-  max-width: calc(100% - 36px);
+  max-width: calc(100% - 40px);
+}
+.assistant-reply-status {
+  display: block;
+  color: var(--text-secondary);
 }
 .assistant-team-author {
-  height: 22px;
-  margin: 0 0 5px;
+  min-height: 24px;
+  margin: 0 0 4px;
   font-size: 11px;
   gap: 5px;
 }
@@ -482,33 +366,39 @@
 }
 .assistant-chat-row-user {
   flex-direction: row-reverse;
-  padding-inline-start: 28px;
+  padding-inline-start: 4px;
 }
 .assistant-chat-row-user .assistant-chat-message {
   flex: 0 1 auto;
 }
-.assistant-chat-row-user .assistant-team-author {
-  justify-content: flex-end;
-}
 .assistant-user-avatar {
   display: grid;
   place-items: center;
-  color: var(--text-secondary);
-  border: 1px solid var(--border);
-  background: var(--hover);
+  flex-basis: 28px;
+  width: 28px;
+  height: 28px;
+  margin-top: 3px;
   border-radius: 50%;
-  box-sizing: border-box;
-}
-.assistant-user-avatar svg {
-  width: 19px;
-  height: 19px;
+  background: color-mix(in srgb, var(--accent) 14%, var(--surface));
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1;
 }
 .assistant-team-feed .ai-msg-user {
   max-width: 100%;
-  padding: 9px 12px;
-  border-radius: 12px 3px 12px 12px;
-  background: color-mix(in srgb, var(--accent) 9%, var(--surface));
-  border: 1px solid color-mix(in srgb, var(--accent) 16%, var(--border));
+  box-sizing: border-box;
+  margin: 0;
+  padding: 8px 12px;
+  line-height: 20px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  border-radius: 12px;
+  border-end-end-radius: 4px;
+  text-wrap: pretty;
+  background: var(--surface-subtle, var(--hover));
+  color: var(--text);
+  border: 1px solid var(--border-subtle);
   font-size: 13px;
 }
 .assistant-team-feed .ai-msg-assistant {
@@ -518,53 +408,10 @@
 .assistant-team-feed .ai-msg-toolbar {
   margin-top: 8px;
 }
-.assistant-task {
-  display: flex;
-  flex-direction: column;
-  box-sizing: border-box;
-  width: 100%;
-  height: 280px;
-  min-height: 280px;
-  padding: 0;
-  overflow: hidden;
-  background: var(--surface);
-}
-.assistant-team-feed .assistant-team-message {
-  margin: 0;
-  width: calc(100% - 36px);
-  margin-inline-start: 36px;
-}
-.assistant-task > .assistant-member-heading {
-  flex: 0 0 auto;
-  padding: 10px 12px;
-  gap: 5px;
-  border-bottom: 1px solid var(--border);
-  background: color-mix(in srgb, var(--hover) 45%, var(--surface));
-}
-.assistant-task > .assistant-member-heading strong {
-  font-size: 12px;
-}
-.assistant-task > .assistant-member-heading .assistant-avatar {
-  flex-basis: 23px;
-  width: 23px;
-  height: 23px;
-}
 .assistant-task-state {
   font-size: 10px;
 }
-.assistant-task-body {
-  flex: 1;
-  min-height: 0;
-  overflow: auto;
-  padding: 9px 12px;
-  overscroll-behavior: contain;
-  scrollbar-width: thin;
-}
-.assistant-task .assistant-team-handoff {
-  margin: 0 0 6px;
-  font-size: 10px;
-}
-.assistant-task .assistant-task-instruction {
+.assistant-execution-message .assistant-task-instruction {
   margin: 0 0 9px;
   font-size: 12px;
   line-height: 1.6;
@@ -572,29 +419,67 @@
 .assistant-task-progress {
   padding-top: 7px;
 }
-.assistant-task-progress > summary {
-  font-size: 11px;
-}
-.assistant-task pre {
+.assistant-execution-message pre {
   font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
   font-size: 11px;
   line-height: 1.6;
-  max-height: 140px;
+  max-height: 240px;
   margin: 8px 0 0;
 }
-.assistant-task > .assistant-task-actions {
-  flex: 0 0 auto;
-  padding: 8px 12px;
-  margin: 0;
-  border-top: 1px solid var(--border);
-  background: var(--surface);
+.assistant-task-details { margin-top: 8px; }
+.assistant-task-log { position: relative; }
+.assistant-task-log pre {
+  box-sizing: border-box;
+  height: 7.5rem;
+  overscroll-behavior: contain;
 }
+.assistant-task-latest {
+  position: absolute;
+  bottom: 4px;
+  inset-inline-end: 4px;
+  min-height: 25px !important;
+  padding: 2px 7px !important;
+  background: var(--surface) !important;
+}
+.assistant-capability {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--border);
+}
+.assistant-capability > div { flex: 1; min-width: 0; }
+.assistant-capability strong { font-size: 12px; font-weight: 500; }
+.assistant-capability p { margin: 3px 0 0; color: var(--text-secondary); font-size: 11px; }
+.assistant-capability > span:last-child { color: var(--text-secondary); font-size: 11px; text-align: end; }
+.assistant-capability > span[data-available='true'] { color: var(--accent); }
 .assistant-task-actions button {
   border: 0;
   padding: 4px 0;
   font-size: 11px;
 }
-.assistant-task-actions button + button {
-  margin-inline-start: auto;
+.assistant-task-title { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; line-height: 1.5; }
+.assistant-task-state { flex-shrink: 0; padding-top: 2px; }
+.assistant-execution-message .assistant-task-detail-label { color: var(--text-secondary); font-size: 11px; margin-bottom: 4px; }
+.assistant-task-notice { line-height: 1.65; }
+.assistant-execution-message summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 3px; }
+
+.assistant-task-message { overflow-wrap: anywhere; }
+.assistant-workspace-content .assistant-task-message { margin-bottom: 20px; }
+.assistant-task-message .assistant-team-author { height: auto; min-height: 22px; flex-wrap: wrap; }
+.assistant-task-message .assistant-team-author strong { overflow-wrap: anywhere; min-width: 0; }
+.assistant-task-message .assistant-task-state { margin-inline-start: 0; }
+.assistant-execution-message { min-width: 0; }
+.assistant-execution-message .assistant-task-title { margin: 0 0 8px; color: var(--text-secondary); font-size: 12px; }
+
+.assistant-channel-connection {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--border-subtle);
   color: var(--text-secondary);
+  font-size: 12px;
 }

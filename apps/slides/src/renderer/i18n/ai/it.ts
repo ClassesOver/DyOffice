@@ -12,6 +12,7 @@ export const it = {
   aiQcPageOk: 'Pagina {n}: layout a posto',
   aiQcPageFixed: 'Pagina {n}: {summary}',
   aiQcPageFixedDefault: 'problemi di layout corretti',
+  aiQcPageRollbackFailed: "Pagina {n}: la correzione ha peggiorato il layout; ripristino non confermato. Controlla la pagina o annulla le modifiche.",
   aiQcPageReverted: 'Pagina {n}: la correzione automatica ha peggiorato il risultato — annullata',
   aiQcPageFailed: 'Pagina {n}: controllo non riuscito ({error})',
   aiQcPageSkipped: 'Pagina {n}: controllo automatico del layout saltato',

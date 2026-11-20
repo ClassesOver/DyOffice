@@ -4,7 +4,7 @@ export interface AnalysisInput {resultId:string;sourceId:string;sourceVersion:nu
 export interface AnalysisFile {artifactId:string;taskId:string;name:string;mediaType:string;role:string;sizeBytes:number;sha256:string;inputResultIds:string[]}
 export interface AnalysisReceipt {taskId:string;claimId:string;connectionEpoch:number;commandId:string;summary:string;artifacts:AnalysisFile[];inputs:AnalysisInput[];runtimeManifestSha256:string;limitations:string[];createdAt:string}
 export interface AnalysisAgent {id:string;name:string;origin:'builtin'|'external'}
-export interface AnalysisPresentation {agent:AnalysisAgent;receipt:AnalysisReceipt}
+export interface AnalysisPresentation {agent?:AnalysisAgent;receipt:AnalysisReceipt}
 const maxFileBytes=8*1024*1024
 const unavailable=()=>Error('Cannot confirm analysis delivery')
 const record=(v:unknown):v is Record<string,unknown>=>!!v&&typeof v==='object'&&!Array.isArray(v)
@@ -46,7 +46,7 @@ function receipt(value:unknown,taskId:string,commandId:string):AnalysisReceipt {
  * Agent summaries and document bytes remain untrusted, never active previews. */
 export function createAnalysisDeliveryClient(options:{request:SettingsRequest;csrfToken:string;fetchImpl?:typeof fetch}) {
  const send=options.fetchImpl??fetch,items=new Map<string,AnalysisPresentation>(),listeners=new Set<()=>void>(),pending=new Set<string>(),downloads=new Set<AbortController>()
- let disposed=false,generation=0,message='',refreshing=false
+ let disposed=false,generation=0,message='',refreshing=false,restoring=false
  const emit=()=>{for(const listener of listeners)try{listener()}catch{}}
  const current=(stamp:number)=>!disposed&&stamp===generation
  function check(stamp:number){if(!current(stamp))throw unavailable()}
@@ -73,13 +73,35 @@ export function createAnalysisDeliveryClient(options:{request:SettingsRequest;cs
    }catch{if(current(stamp))fail()}
    finally{if(commandId&&current(stamp))pending.delete(commandId)}
   },
+  async restore() {
+   const stamp=generation;if(disposed||restoring)return
+   restoring=true
+   try {
+    const value=await options.request('/api/v1/agents/deliveries');check(stamp)
+    if(!record(value))throw unavailable()
+    const recovered=list(value.deliveries,10,item=>{
+     if(!record(item))throw unavailable()
+     return receipt(item,uuid(item.taskId),uuid(item.commandId))
+    })
+    if(new Set(recovered.map(item=>item.commandId)).size!==recovered.length)throw unavailable()
+    const merged=new Map(items)
+    for(const item of recovered){
+     const agent=merged.get(item.commandId)?.agent
+     merged.set(item.commandId,{receipt:item,...(agent?{agent}:{})})
+    }
+    const recent=[...merged.values()].sort((a,b)=>Date.parse(a.receipt.createdAt)-Date.parse(b.receipt.createdAt)).slice(-10)
+    items.clear();for(const item of recent)items.set(item.receipt.commandId,item)
+    message='';emit()
+   }catch{if(current(stamp))fail()}
+   finally{restoring=false}
+  },
   async refresh() {
    const stamp=generation;if(disposed||refreshing||!items.size)return
    refreshing=true
    try {
     for(const item of [...items.values()]) {
      const updated=await load(item.receipt.taskId,item.receipt.commandId,stamp)
-     if(items.get(item.receipt.commandId)===item)items.set(item.receipt.commandId,{agent:item.agent,receipt:updated})
+     if(items.get(item.receipt.commandId)===item)items.set(item.receipt.commandId,{...item,receipt:updated})
     }
     check(stamp);message='';emit()
    }catch{if(current(stamp))fail()}

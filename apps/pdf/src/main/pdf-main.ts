@@ -1,3 +1,4 @@
+import { sanitizeAutoRenameBase } from '../shared/auto-name'
 import {
   constants,
   copyFileSync,
@@ -935,22 +936,6 @@ export function setPdfRenamedHook(
   hook: (wc: WebContents, oldPath: string, newPath: string) => void,
 ): void {
   pdfRenamedHook = hook
-}
-
-/** Sanitize a proposed base name into a safe filename: strip illegal path chars, collapse whitespace, cap length; null if nothing survives. (Mirrors docs' deriveAutoFileName.) */
-function sanitizeAutoRenameBase(raw: string): string | null {
-  const cleaned = raw
-    // eslint-disable-next-line no-control-regex -- stripping control chars is the point here
-    .replace(/[\\/:*?"<>|\u0000-\u001f]/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim()
-    .replace(/^\.+|\.+$/g, '')
-    .trim()
-  if (!cleaned) return null
-  // Windows device names stay reserved with an extension (CON.pdf is still
-  // CON): suffix them so the no-clobber move works there instead of failing.
-  const safe = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i.test(cleaned) ? cleaned + '_' : cleaned
-  return safe.length > 40 ? safe.slice(0, 40).trim() : safe
 }
 
 export type NoClobberMoveResult = 'moved' | 'occupied' | 'failed'

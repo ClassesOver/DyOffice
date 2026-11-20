@@ -83,12 +83,19 @@ export async function saveRehearseTimings(ctx: ActionCtx): Promise<void> {
   const times = ctx.pendingRehearse
     .map((sec, i) => ({ slideIndex: i, ms: sec * 1000 }))
     .filter((t) => t.ms > 0)
-  ctx.setPendingRehearse(null)
-  const ok = await window.slidesApi.setAdvanceTimes({ times })
-  if (ok) {
-    ctx.setDirty(true)
-    ctx.setStatus(t('appStatusRehearseSaved', { count: times.length }))
+  let ok = false
+  try {
+    ok = await window.slidesApi.setAdvanceTimes({ times })
+  } catch {
+    ok = false
   }
+  if (!ok) {
+    ctx.setStatus(t('appStatusSaveFailed', { error: 'Rehearsal timings. Please retry.' }))
+    return
+  }
+  ctx.setPendingRehearse(null)
+  ctx.setDirty(true)
+  ctx.setStatus(t('appStatusRehearseSaved', { count: times.length }))
 }
 
 export function startRecordShow(ctx: ActionCtx, fromStart: boolean): void {

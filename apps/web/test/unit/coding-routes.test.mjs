@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import Fastify from 'fastify'
 import {registerCodingRoutes} from '../../server/src/modules/coding/routes.ts'
 import {createHarnessRegistry} from '../../server/src/modules/coding/registry.ts'
+import {createCodingClient} from '../../../../packages/browser-host/src/coding.ts'
 const token='t'.repeat(43)
 const headers={cookie:'__Host-dyoffice-session='+token,'x-csrf-token':'c'.repeat(43)}
 async function setup(t) {
@@ -26,6 +27,69 @@ test('rejects anonymous access and arbitrary cwd',async t=>{
  assert.equal((await f.app.inject({url:'/api/v1/agents/catalog'})).statusCode,401)
  const response=await f.app.inject({method:'POST',url:'/api/v1/agents/tasks',headers,payload:{turnId:'t2',modelId:'codex',request:{system:'',messages:[{role:'user',text:JSON.stringify({instruction:'code',cwd:'/etc'})}],tools:[]}}})
  assert.match(response.body,/event: error/);assert.equal(f.calls(),0)
+})
+
+test('reports an unavailable Office model on the Harness card without retrying the task',async t=>{
+ const app=Fastify();t.after(()=>app.close())
+ const registry=createHarnessRegistry([{descriptor:{id:'codex',name:'Codex',origin:'builtin',capabilities:['coding']},async run(){throw Error('Office model unavailable')}}],'codex')
+ registerCodingRoutes(app,{registry,sessions:{async authenticate(){return {deploymentId:'d',userId:'u',sessionId:'s',roles:['personal']}}},csrf:{requireSession(){},requireSessionRead(){}}})
+ const original=console.error,logged=[]
+ console.error=(...parts)=>logged.push(parts)
+ let requests=0
+ const client=createCodingClient({
+  agents:registry.list(),defaultId:'codex',csrfToken:'c'.repeat(43),getModelId:()=> 'office',
+  async fetchImpl(url,init){
+   requests++
+   const response=await app.inject({method:'POST',url,headers:{...headers,'content-type':'application/json'},payload:init.body})
+   return new Response(response.body,{status:response.statusCode,headers:{'content-type':response.headers['content-type']}})
+  },
+ })
+ t.after(()=>client.dispose())
+ const expected='The Office model is unavailable for this Harness task. Select an available model and try again.'
+ try{await assert.rejects(client.run({instruction:'code'}),{message:expected})}finally{console.error=original}
+ assert.equal(client.snapshot()[0].failure,expected)
+ assert.equal(client.snapshot()[0].state,'failed')
+ assert.equal(requests,1)
+ assert.ok(logged.some(([message,details])=>message==='dyoffice: coding task failed'&&details.stage==='harness_execution'&&details.code==='OFFICE_MODEL_UNAVAILABLE'))
+})
+
+test('a stream lost after Harness progress does not confirm execution failure',async t=>{
+ const client=createCodingClient({
+  agents:[{id:'codex',name:'Codex',origin:'builtin',capabilities:['coding']}],
+  defaultId:'codex',csrfToken:'c'.repeat(43),getModelId:()=> 'office',
+  async fetchImpl(){return new Response('event: progress\ndata: {"kind":"status","text":"Executing command"}\n\n',{headers:{'content-type':'text/event-stream'}})},
+ })
+ t.after(()=>client.dispose())
+ await assert.rejects(client.run({instruction:'code'}),/ended without done/)
+ assert.equal(client.snapshot()[0].activity,'Executing command')
+ assert.equal(client.snapshot()[0].state,'unknown_outcome')
+})
+
+test('a second editor receives a confirmed busy result without starting another task',async t=>{
+ const app=Fastify();t.after(()=>app.close())
+ let release,started,runs=0
+ const gate=new Promise(resolve=>{release=resolve}),ready=new Promise(resolve=>{started=resolve})
+ const registry=createHarnessRegistry([{descriptor:{id:'codex',name:'Codex',origin:'builtin',capabilities:['coding']},async run(){
+  runs++;started();await gate;return {summary:'Finished',output:'42'}
+ }}],'codex')
+ registerCodingRoutes(app,{registry,sessions:{async authenticate(){return {deploymentId:'d',userId:'u',sessionId:'s',roles:['personal']}}},csrf:{requireSession(){},requireSessionRead(){}}})
+ const create=()=>createCodingClient({
+  agents:registry.list(),defaultId:'codex',csrfToken:'c'.repeat(43),getModelId:()=> 'office',
+  async fetchImpl(url,init){
+   const response=await app.inject({method:'POST',url,headers:{...headers,'content-type':'application/json'},payload:init.body})
+   return new Response(response.body,{status:response.statusCode,headers:{'content-type':response.headers['content-type']}})
+  },
+ })
+ const first=create(),second=create()
+ t.after(()=>{first.dispose();second.dispose()})
+ const pending=first.run({instruction:'first task'})
+ try{
+  await ready
+  await assert.rejects(second.run({instruction:'second task'}),/agents are busy/)
+  assert.equal(second.snapshot()[0].state,'failed')
+  assert.equal(runs,1)
+ }finally{release();await pending}
+ assert.equal(first.snapshot()[0].state,'succeeded')
 })
 
 test('delegation passes task credentials without Office cookies and returns only the server receipt',async t=>{

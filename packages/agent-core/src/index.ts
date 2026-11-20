@@ -51,6 +51,7 @@ export type { SkillFrontmatter, SkillRelevance } from './imported-skill'
 export { classifySkill, parseSkillFrontmatter, SKILL_FORMAT_TOKENS } from './imported-skill'
 export {
   AgentLoop,
+  getHarnessCheckpoint,
   COMPLETED_VIA_TOOLS_TEXT,
   CONTEXT_OMITTED_NOTE,
   CONTEXT_SUPERSEDES_NOTE,
@@ -64,6 +65,7 @@ export {
 } from './loop'
 export type {
   AgentLoopEvents,
+  HarnessCheckpoint,
   AgentLoopOptions,
   AgentRunResult,
   CompactionOptions,
@@ -76,3 +78,8 @@ export type { IpcStreamChunk, IpcStreamStart, IpcTransportOptions } from './elec
 
 export {createCodingSkill, DELEGATE_AGENT_TOOL} from './coding-skill'
 export type {CodingTask, CodingResult, CodingSkillDeps, HarnessDescriptor} from './coding-skill'
+
+export { bindDocumentHandoff, documentHandoffEditor } from './document-handoff'
+
+export type {DocumentHandoffOptions} from './loop'
+export {bindFileChat,type VisibleChatMessage,type FileChatTurn} from './file-chat'

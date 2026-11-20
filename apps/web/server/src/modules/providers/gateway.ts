@@ -1,6 +1,7 @@
+import {createBackgroundAnswer} from '../assistant-channel/background-answer.ts'
 import type {FastifyInstance} from 'fastify'
 import {createAdminProviderPipeline, type AdminPipelineProfile} from './admin-pipeline.ts'
-import {registerProviderRoutes} from './routes.ts'
+import {registerProviderRoutes,type AdmitHarnessContinuation} from './routes.ts'
 import {cookies} from '../auth/csrf.ts'
 import {tokenHash, type SessionService} from '../auth/sessions.ts'
 import type {createCsrfService} from '../auth/csrf.ts'
@@ -8,18 +9,18 @@ import type {PrincipalTransactions} from '../../db/context.ts'
 import type {SecretKeyring} from '../admin/secrets.ts'
 import {CODING_MODEL_TOOLS} from '../coding/model-bridge.ts'
 import type {HarnessRegistry} from '../coding/registry.ts'
-import {assistantReadTools,ASSISTANT_DOCUMENT_TOOLS, ASSISTANT_DELEGATION_TOOLS} from '../../../../../../packages/web-contracts/src/assistant.ts'
+import {assistantReadTools,ASSISTANT_DOCUMENT_TOOLS, ASSISTANT_DELEGATION_TOOLS,scopeAssistantRequest,type AssistantSourceMode} from '../../../../../../packages/web-contracts/src/assistant.ts'
 
 /** Trusted bootstrap profiles pin egress; HTTP never accepts destinations/keys. */
 export function registerPersonalProviderGateway(app: FastifyInstance, options: {
   transactions: PrincipalTransactions; sessions: SessionService; csrf: ReturnType<typeof createCsrfService>
-  sourceCatalog?:boolean;assistantChannels?:boolean;harnesses?: HarnessRegistry; keyring: SecretKeyring; profiles: readonly AdminPipelineProfile[]; deploymentId: string
+  sourceMode?:AssistantSourceMode;assistantChannels?:boolean;harnesses?: HarnessRegistry;admitContinuation?:AdmitHarnessContinuation; keyring: SecretKeyring; profiles: readonly AdminPipelineProfile[]; deploymentId: string
 }) {
   if (!options.profiles.length || options.profiles.length > 128 || options.profiles.some(p => !p || p.deploymentId !== options.deploymentId)
     || options.profiles.some(p => typeof p.entryId !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9_-]{0,99}$/.test(p.entryId))
     || new Set(options.profiles.map(p => p.entryId)).size !== options.profiles.length) throw new Error('Invalid provider gateway profiles')
   const profiles = options.profiles.map(p => ({...p, allowedIpv4: [...p.allowedIpv4]}))
-  const personalTools = new Set([...assistantReadTools(options.sourceCatalog===true),...ASSISTANT_DOCUMENT_TOOLS, ...((options.harnesses||options.assistantChannels) ? ASSISTANT_DELEGATION_TOOLS : [])])
+  const personalTools = new Set([...assistantReadTools(options.sourceMode),...ASSISTANT_DOCUMENT_TOOLS, ...((options.harnesses||options.assistantChannels) ? ASSISTANT_DELEGATION_TOOLS : [])])
   const pipeline = createAdminProviderPipeline({...options, profiles, audience: 'personal', personalTools})
   const codingPipeline = options.harnesses ? createAdminProviderPipeline({...options, profiles, audience: 'personal', personalTools: CODING_MODEL_TOOLS}) : undefined
   app.addHook('preClose', async () => {pipeline.dispose();codingPipeline?.dispose()})
@@ -27,9 +28,9 @@ export function registerPersonalProviderGateway(app: FastifyInstance, options: {
     cancel: pipeline.turns.cancel,
     async run(input, emit) {
       const request = input.request as {system: string; messages: unknown[]; tools: {name: string}[]}
-      const tools = request.tools.filter(t => t && personalTools.has(t.name))
-      await pipeline.turns.run({...input, request: {...request, tools}}, async event => {
-        if (event.type === 'tool_call' && !tools.some(t => t.name === event.name)) throw new Error('Unapproved assistant tool')
+      const scoped=scopeAssistantRequest(request,personalTools)
+      await pipeline.turns.run({...input, request}, async event => {
+        if (event.type === 'tool_call' && !scoped.tools.has(event.name)) throw new Error('Unapproved assistant tool')
         await emit(event)
       })
     },
@@ -43,8 +44,13 @@ export function registerPersonalProviderGateway(app: FastifyInstance, options: {
       await c.query("SELECT set_config('dyoffice.global_session_hash',$1,true),set_config('dyoffice.global_idle_ms',$2,true)", [tokenHash(token), String(options.transactions.sessionIdleMs)])
       const {rows} = await c.query('SELECT * FROM personal_provider_catalog()')
       const available = rows.filter(e => profiles.some(p => p.entryId === e.id && p.revision === e.revision && p.providerId === e.provider_id && p.model === e.model && p.baseUrl === e.base_url))
-      return {...(options.sourceCatalog===true && available.length?{sourceCatalog:true}:{}),...(options.assistantChannels?{assistantChannels:true}:{}),...(options.harnesses && available.length ? {agents: options.harnesses.list(), defaultAgentId: options.harnesses.defaultId} : {}), entries: available.map(({id, label, model, provider_id: providerId}) => ({id, label, model, providerId})), defaultId: available.find(e => e.preferred)?.id ?? available[0]?.id ?? null}
+      return {...(options.sourceMode && options.sourceMode !== 'off' && available.length ? {sourceCatalog:true, sourceMode:options.sourceMode} : {}),...(options.assistantChannels?{assistantChannels:true}:{}),...(options.harnesses && available.length ? {agents: options.harnesses.list(), defaultAgentId: options.harnesses.defaultId} : {}), entries: available.map(({id, label, model, provider_id: providerId}) => ({id, label, model, providerId})), defaultId: available.find(e => e.preferred)?.id ?? available[0]?.id ?? null}
     })
   })
-  return {...pipeline,codingTurns:codingPipeline?.turns,dispose(){pipeline.dispose();codingPipeline?.dispose()},async drain(options?:{timeoutMs?:number}){await Promise.all([pipeline.drain(options),codingPipeline?.drain(options)])}}
+  const backgroundAnswer=createBackgroundAnswer({defaultModel:async token=>options.transactions.withPrincipalTransaction({kind:'session',token},async(c,p)=>{
+    await c.query("SELECT set_config('dyoffice.global_session_hash',$1,true),set_config('dyoffice.global_idle_ms',$2,true)",[tokenHash(token),String(options.transactions.sessionIdleMs)])
+    const available=(await c.query('SELECT * FROM personal_provider_catalog()')).rows.filter(e=>profiles.some(p=>p.entryId===e.id&&p.revision===e.revision&&p.providerId===e.provider_id&&p.model===e.model&&p.baseUrl===e.base_url))
+    return (available.find(e=>e.preferred)??available[0])?.id
+  }),run:pipeline.turns.run})
+  return {...pipeline,backgroundAnswer,codingTurns:codingPipeline?.turns,dispose(){pipeline.dispose();codingPipeline?.dispose()},async drain(options?:{timeoutMs?:number}){await Promise.all([pipeline.drain(options),codingPipeline?.drain(options)])}}
 }

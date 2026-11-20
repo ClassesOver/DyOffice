@@ -136,7 +136,7 @@ export interface LazyWorkbookState {
   readonly editJournal: EditJournal
   /// preloadRunning: preloadEntireWorkbook is filling the model — viewport
   /// loads must not evict installed rows or shrink loadedRanges meanwhile.
-  readonly flags: { preloadComplete: boolean; preloadRunning: boolean }
+  readonly flags: { preloadComplete: boolean; preloadRunning: boolean; quietBackgroundLoading?: boolean }
   /// Closure mode: on streamed workbooks whose formula dependency closure is
   /// small, the closure cells are installed once and pinned (re-applied after
   /// viewport eviction) so the engine recalculates them live.

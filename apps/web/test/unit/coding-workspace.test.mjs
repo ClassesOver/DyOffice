@@ -127,3 +127,18 @@ test('publishes live progress before the final receipt without parsing progress 
   assert.equal(client.snapshot()[0].state, 'succeeded')
   client.dispose()
 })
+
+test('task failure retains diagnostic context without resubmitting or changing outcome certainty',async()=>{
+ for(const [response,state,detail] of [
+  [()=>new Response(null,{status:403}),'failed','AI stream HTTP 403'],
+  [()=>new Response(null,{status:408}),'unknown_outcome','AI stream HTTP 408'],
+  [()=>new Response(null,{status:499}),'unknown_outcome','AI stream HTTP 499'],
+  [()=>new Response(null,{status:502}),'unknown_outcome','AI stream HTTP 502'],
+  [()=>new Response(null,{status:504}),'unknown_outcome','AI stream HTTP 504'],
+  [()=>new Response('event: error\ndata: {"message":"Harness task failed. Check server diagnostics."}\n\nevent: done\ndata: {}\n\n',{headers:{'content-type':'text/event-stream'}}),'unknown_outcome','Harness task failed. Check server diagnostics.'],
+ ]){
+  let requests=0
+  const client=createCodingClient({agents:[{id:'codex',name:'Codex',origin:'builtin',capabilities:['coding']}],defaultId:'codex',csrfToken:'p'.repeat(43),getModelId:()=> 'office',fetchImpl:async()=>{requests++;return response()}})
+  try{await assert.rejects(client.run({instruction:'查询收入'}));assert.equal(client.snapshot()[0].state,state);assert.equal(client.snapshot()[0].failure,detail);assert.equal(requests,1)}finally{client.dispose()}
+ }
+})

@@ -312,6 +312,10 @@
 - 真实隔离PostgreSQL/HTTP/native DOCX fixture，390/1440打开缩放弹窗点击h2→焦点BODY→Shift+Tab均逃到背景，Tab正向恰好由浏览器顺序进入。新增外焦点正反Tab组件两条先红后绿，现窗口fallback在焦点外时接回trap；独立复核又确认多个同层hook的初版会互抢中间Tab。追加三控件同层红测，稳定挂载顺序且父backdrop位于子层之前，仅最上层处理键盘；补卸载恢复lower与嵌套子effect先挂载回归。相关7文件45项通过；独立DOM复核中间Tab不prevent/抢焦点，嵌套循环正确。
 - 最终native构建的隔离fixture四场景全部通过，正反Tab均留弹窗，Escape正常关闭，0页面异常；测试临时数据库/角色/对象目录随fixture清理，没有用户部署数据写入。证据：`/tmp/dyoffice-native-dialog-keyboard-{red,green}.log`、`/tmp/dyoffice-ui-audit/native-dialog-keyboard-{red,green}/report.json`、`/tmp/dyoffice-docs-modal-{keys,stack}-{red,green}.log`、`/tmp/dyoffice-docs-dialogs-final.log`。既有trapTab隐藏/inert控件过滤局限另有诊断，未在本次实际缩放弹窗确认，不据helper探针扩大成实际入口bug。
 - DOCX文件菜单“以AI命名…”原先在Web可点击，但缺aiNamingApi时返回空名称并静默退出；后续另存为也无Web实现。正式renderer/mock DOCX及lease复现无命名请求/反馈，0真实业务写。现遵循desktopActionsAvailable禁用Web入口并给中英文说明，PC既有命名行为保留。两语言菜单行为先红后绿，命名/转换9项及Web docs-entry类型通过；最终构建浏览器确认disabled/title/菜单保留，0页面异常。证据：`/tmp/dyoffice-ui-audit/word-capability-readonly/findings.md`、`word-capability-fix/{red.log,green.log,web-docs-typecheck.log}`、`word-capability-postfix/report.json`。全桌面docs类型检查仍因缺少Electron依赖及桌面导出诊断失败，不声称全桌面类型通过。
+- 后续已接通 Web 的 AI 命名入口：选定模型只接收 PC 同款脱敏正文，不开放工具；确认可改名的建议后，将当前草稿另存为工作区 DOCX 副本。`test/native-docs/roundtrip.test.mjs` 在隔离 PostgreSQL 和 Chromium 中验证取消不生成文件、确认后的副本含未保存正文、源版本与未保存状态保持不变；同批普通编辑保存回归通过。模型响应由测试替身提供。
+- Word、XLSX、PPTX 共用页内命名确认；Word 会话校验遇到临时服务不可用时本次不传正文，恢复后须再次核对原会话。PPTX `test/native-slides/size-roundtrip.test.mjs` 验证副本包含未保存演讲者备注。`test/native-slides/analysis-live.test.mjs` 用本机 Codex 和固定模型验证任务进度、取消、重新委派、交付插入及保存后复开；真实上游模型和生产进程隔离未在这一组验证。
+- XLSX `test/native-sheets/save-download-roundtrip.test.mjs` 使用原生 Node XLSX 引擎测试移动行与新建表格的两段导出；确认命名后的副本包含未保存数值和新表格，源文件字节、版本、编辑器状态保持不变。取消不导出、不上传。
+- `test/local-browser/dsh-office-handoff.test.mjs` 验证 XLSX、PPTX、PDF 的 DSH→Office 写入和跟进。PDF 使用命中的原文执行改写、新增及回复批注；检查落盘文字、批注线程关系和旧版本字节。模型响应使用替身，工具与保存走真实浏览器和编辑器代码。
 
 ## 上传异常扩展
 

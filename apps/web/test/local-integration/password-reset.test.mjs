@@ -9,7 +9,8 @@ test('activation validates policy/purpose and has exactly one concurrent consume
   const created = await create('alice')
   assert.equal((await redeem(created.action, 'short')).statusCode, 400)
   assert.equal((await redeem({ ...created.action, purpose: 'reset' })).statusCode, 400)
-  const outcomes = await Promise.all([redeem(created.action), redeem(created.action)])
+  const automaticAction = { token: created.action.token }
+  const outcomes = await Promise.all([redeem(automaticAction), redeem(automaticAction)])
   assert.deepEqual(outcomes.map(x => x.statusCode).sort(), [204, 400])
   assert.equal((await login('alice')).statusCode, 200)
   assert.equal((await redeem(created.action)).statusCode, 400)
@@ -27,7 +28,7 @@ test('reset issuance freezes old-password login and revokes sessions before one-
   assert.equal(action.purpose, 'reset')
   assert.equal((await login('alice')).statusCode, 401)
   assert.equal((await app.inject({ method: 'GET', url: '/api/v1/auth/me', headers: { cookie: before.cookie } })).statusCode, 401)
-  assert.equal((await redeem(action, nextPassword)).statusCode, 204)
+  assert.equal((await redeem({ token: action.token }, nextPassword)).statusCode, 204)
   assert.equal((await login('alice', nextPassword)).statusCode, 200)
   assert.equal((await login('alice', password)).statusCode, 401)
   assert.equal((await redeem(action, nextPassword)).statusCode, 400)

@@ -19,15 +19,10 @@ section.sources-panel-b .source-list-footer { margin-top: auto; padding-top: 8px
 section.sources-panel-b .source-list-footer .ant-space-item:first-child { margin-inline-end: auto; }
 section.sources-panel-b .source-workbench-heading .ant-tag { margin: 0; }
 section.sources-panel-b .source-workbench-heading h3 { font-size: 18px; line-height: 1.5; letter-spacing: -.2px; }
-section.sources-panel-b .source-version-badge {
-  color: var(--accent);
-  background: var(--accent-soft);
-  border: 1px solid var(--border-subtle);
-  border-radius: 8px;
-  padding: 6px 10px;
-  font-size: 12px;
-}
+
 section.sources-panel-b .source-fields { gap: 16px; }
+section.sources-panel-b .source-table-scope { display:grid; gap:8px; grid-column:1/-1; }
+section.sources-panel-b .source-table-scope > span { color:var(--text-secondary); font-size:12px; line-height:1.7; }
 section.sources-panel-b .source-advanced {
   border: 1px solid var(--border-subtle);
   border-radius: 10px;

@@ -195,6 +195,8 @@ export type CreateDocumentToolOutcome =
       name: string
       /** absolute path when the file was written directly (docx opens a tab that saves itself) */
       path?: string
+      /** true when the host delivered the file as a browser download */
+      downloaded?: boolean
       /** xlsx/csv: the exported worksheet's name */
       sheetName?: string
       /** xlsx/csv: the sheet holds formulas — the file keeps computed values only */
@@ -203,6 +205,7 @@ export type CreateDocumentToolOutcome =
   | { ok: false; error: string }
 
 export interface SheetsSkillDeps {
+  supportedCreateDocumentTypes?(): readonly CreateDocumentFileType[] | undefined
   getActiveSheetInfo(): ActiveSheetInfo
   /** Ensure a lazy workbook range is present in Univer before reading it. */
   ensureRangeLoaded?(range: RangeBounds, sheetId?: string): boolean | Promise<boolean>
@@ -1467,7 +1470,10 @@ export function executeWorkbookTool(
       const summary = t('aiToolCreateDocument')
       const create = deps.createDocument
       if (!create) return fail(summary, 'create_document is not available in this context.')
-      const typeRaw = call.input.type === undefined ? 'xlsx' : String(call.input.type)
+      const supported = deps.supportedCreateDocumentTypes?.()
+      const typeRaw = call.input.type === undefined ? supported?.[0] ?? 'xlsx' : String(call.input.type)
+      if (supported && !supported.some(type => type === typeRaw))
+        return fail(summary, `This host supports standalone document types: ${supported.join(', ')}.`)
       if (
         typeRaw !== 'xlsx' &&
         typeRaw !== 'csv' &&
@@ -1498,6 +1504,11 @@ export function executeWorkbookTool(
           const note = outcome.hadFormulas
             ? ' Note: the sheet contains formulas — the new file holds their current computed values only (no formulas or formatting).'
             : ''
+          if(outcome.downloaded)return {
+            output:`Downloaded ${outcome.name} from sheet "${outcome.sheetName??''}". The current workbook is unchanged.${note}`,
+            mutated:false,
+            summary:t('aiToolCreatedDocument',{name:outcome.name}),
+          }
           return {
             output:
               `Created ${outcome.name}${outcome.path ? ` at ${outcome.path}` : ''} from sheet ` +
@@ -1519,7 +1530,7 @@ export function executeWorkbookTool(
         return {
           output: outcome.path
             ? `Created the new document at ${outcome.path} and opened it in a new tab.`
-            : `Created the new document "${outcome.name}" in a new tab; it saves itself into the default folder.`,
+            : `Created the new document "${outcome.name}" and opened it in a new tab.`,
           mutated: false,
           summary: t('aiToolCreatedDocument', { name: outcome.name }),
         }

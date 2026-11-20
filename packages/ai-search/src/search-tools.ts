@@ -31,6 +31,36 @@ export function searchOptionsFromSettings(settings: AiSettings): SearchOptions {
     : { useGsk: false, serperKey: key }
 }
 
+const globalProviderKeys = {
+  serper: 'serperKey',
+  serply: 'serplyKey',
+  searchapi: 'searchapiKey',
+  tavily: 'tavilyKey',
+  parallel: 'parallelKey',
+  exa: 'exaKey',
+  firecrawl: 'firecrawlKey',
+  keenable: 'keenableKey',
+} as const satisfies Record<Exclude<AiSearchProviderId, 'genspark'>, keyof SearchOptions>
+
+/** Server-managed search credentials must not fall through to environment keys. */
+export function globalSearchOptions(provider: string, apiKey: string): SearchOptions {
+  const key = globalProviderKeys[provider as keyof typeof globalProviderKeys]
+  if (!key || typeof apiKey !== 'string') throw new Error('Search provider unavailable')
+  return {
+    useGsk: false,
+    serperKey: '',
+    serplyKey: '',
+    searchapiKey: '',
+    tavilyKey: '',
+    parallelKey: '',
+    exaKey: '',
+    firecrawlKey: '',
+    keenableKey: '',
+    [key]: apiKey,
+    prefer: provider as SearchOptions['prefer'],
+  }
+}
+
 export function webSearchTool(settingsPath: string, query: string, maxResults = 6) {
   return webSearch(query, maxResults, searchOptionsFromSettings(readAiSettingsFile(settingsPath)))
 }

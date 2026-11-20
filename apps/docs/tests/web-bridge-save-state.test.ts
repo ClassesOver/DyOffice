@@ -9,8 +9,9 @@ import { parseDocx, readSections } from '@genoffice/docx-engine'
 import { buildDocx, TABLE_XML } from '../../../packages/docx-engine/tests/helpers/build-docx'
 import { editorExtensions } from '../src/renderer/editor/extensions'
 import { blocksToPmDoc, pmDocOptions } from '../src/renderer/editor/convert'
-import { noteDocumentSwapped, save, type FileActionContext } from '../src/renderer/file-actions'
+import { buildDocBytes, noteDocumentSwapped, save, type FileActionContext } from '../src/renderer/file-actions'
 import { EMPTY_HF_VARIANTS } from '../src/renderer/doc-state'
+import { DraftLanding } from '../src/renderer/ai/doc-writer'
 
 ;(globalThis as { CSS?: unknown }).CSS ??= { escape: (s: string) => s }
 
@@ -102,6 +103,27 @@ it('native serializer and Web bridge stay clean after acknowledgement, then pres
  editor.commands.insertContent('Newer draft')
  expect(bridge.getState().dirty).toBe(true)
  expect(await zip.file('word/document.xml')!.async('string')).not.toContain('Newer draft')
+})
+
+it('does not autosave an unaccepted streaming Word draft', async () => {
+ const {editor,ctx,path}=await fixture(false)
+ editor.on('update',()=>{ctx.dirtyRef.current=true})
+ const draft=new DraftLanding(editor,{bullet:null,ordered:null},{kind:'after',index:0})
+ try{
+  draft.update('<p>UNACCEPTED_STREAM_DRAFT</p>')
+  await new Promise(resolve=>setTimeout(resolve,350))
+  expect(editor.getText()).toContain('UNACCEPTED_STREAM_DRAFT')
+  expect(await buildDocBytes(ctx)).toBeNull()
+  expect(await save(ctx,false,true)).toBe(false)
+  const zip=await JSZip.loadAsync(await readFile(path))
+  expect(await zip.file('word/document.xml')!.async('string')).not.toContain('UNACCEPTED_STREAM_DRAFT')
+ }finally{draft.finish()}
+ editor.commands.insertContent('ACCEPTED_WRITER_BODY')
+ expect(await save(ctx,false,true)).toBe(true)
+ const reopened=await parseDocx(new Uint8Array(await readFile(path)))
+ const body=reopened.blocks.flatMap(block=>block.runs?.map(run=>run.text)??[]).join('')
+ expect(body).toContain('ACCEPTED_WRITER_BODY')
+ expect(body).not.toContain('UNACCEPTED_STREAM_DRAFT')
 })
 
 it.each(['document','metadata'] as const)('records content-free %s reasons without consuming a racing edit', async (kind) => {
@@ -247,4 +269,19 @@ it('a queued explicit analysis save cannot write after a newer native edit',asyn
  const xml=await (await JSZip.loadAsync(await readFile(path))).file('word/document.xml')!.async('string')
  expect(xml).not.toContain('Analysis report')
  expect(editor.getText()).toContain('Newer edit while queued')
+})
+
+it('AI-created DOCX reports success only after its body is actually serialized', async () => {
+ const {ctx,path}=await fixture(false)
+ const {applyAiDocContent}=await import('../src/renderer/file-actions')
+ expect(await applyAiDocContent(ctx,{title:'Report',html:'<h1>Quarterly report</h1><p>Persisted generated body</p>'})).toBe(true)
+ const zip=await JSZip.loadAsync(await readFile(path))
+ expect(await zip.file('word/document.xml')!.async('string')).toContain('Persisted generated body')
+})
+it('AI-created DOCX reports failed or empty body saves as failures', async () => {
+ const {ctx}=await fixture(false)
+ const {applyAiDocContent}=await import('../src/renderer/file-actions')
+ window.desktop={saveDocx:async()=>({ok:false,error:'save failed'})} as never
+ expect(await applyAiDocContent(ctx,{title:'Report',html:'<p>Unsaved body</p>'})).toBe(false)
+ expect(await applyAiDocContent(ctx,{title:'Report',html:''})).toBe(false)
 })

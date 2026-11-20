@@ -7,7 +7,7 @@ export interface PersonalPreferences {
   autoSave: boolean
   showAssistant: boolean
 }
-export type SettingsRequest = <T = unknown>(path: string, method?: string, body?: unknown) => Promise<T>
+export type SettingsRequest = <T = unknown>(path: string, method?: string, body?: unknown, signal?: AbortSignal) => Promise<T>
 const fields = ['theme', 'language', 'authorName', 'autoSave', 'showAssistant'] as const
 
 function project(value: unknown): PersonalPreferences {

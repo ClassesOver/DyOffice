@@ -1,6 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { createSseAgentTransport } from '../../../../packages/browser-host/src/ai-transport.ts'
+import { createAssistantClient } from '../../../../packages/browser-host/src/assistant.ts'
 
 const stream = text => new Response(new ReadableStream({start(controller) {controller.enqueue(new TextEncoder().encode(text));controller.close()}}),{headers:{'Content-Type':'text/event-stream'}})
 const event = (name,data) => 'event: ' + name + '\ndata: ' + JSON.stringify(data) + '\n\n'
@@ -9,6 +10,25 @@ const callbackRecorder = () => {
   return {calls, callbacks:{onDelta:x=>calls.push(['delta',x]),onReasoning:x=>calls.push(['reasoning',x]),onToolCall:x=>calls.push(['tool_call',x]),onPhase:x=>calls.push(['phase',x]),onUsage:x=>calls.push(['usage',x]),onStopReason:x=>calls.push(['stop_reason',x]),onDone:()=>calls.push(['done']),onError:x=>calls.push(['error',x])}}
 }
 const delay = () => new Promise(resolve=>setTimeout(resolve,30))
+
+test('a standalone PPTX generation can finish after the normal browser deadline',async t=>{
+  t.mock.timers.enable({apis:['setTimeout']})
+  const client=await createAssistantClient({
+    request:async()=>({entries:[{id:'page-model'}],defaultId:'page-model'}),
+    format:'pptx',csrfToken:'c'.repeat(43),
+    fetchImpl:async url=>{
+      if(url.endsWith('/cancel'))return new Response(null,{status:204})
+      return new Promise(resolve=>setTimeout(()=>resolve(stream(event('delta',{text:'page JSON'})+event('done',{}))),121000))
+    },
+  })
+  t.after(()=>client.dispose())
+  const {calls,callbacks}=callbackRecorder()
+  const done=new Promise(resolve=>client.transport.stream({system:'',messages:[{role:'user',text:'Design one editable slide'}],tools:[]},{...callbacks,onDone(){callbacks.onDone();resolve()}}))
+  await Promise.resolve()
+  t.mock.timers.tick(121000)
+  await done
+  assert.deepEqual(calls,[['delta','page JSON'],['done']])
+})
 
 test('streams SSE in order and preserves completed tool calls',async()=>{
   let request
@@ -29,6 +49,57 @@ test('missing done event is an error and finishes exactly once', async()=>{
   transport.stream({system:'',messages:[],tools:[]},callbacks)
   await delay()
   assert.deepEqual(calls.map(x=>x[0]),['delta','error','done'])
+})
+
+test('localizes a known provider failure without replaying the request or executing a tool',async t=>{
+  const previous=Object.getOwnPropertyDescriptor(globalThis,'document')
+  Object.defineProperty(globalThis,'document',{configurable:true,value:{documentElement:{lang:'zh-CN'}}})
+  t.after(()=>{if(previous)Object.defineProperty(globalThis,'document',previous);else delete globalThis.document})
+  let attempts=0
+  const transport=createSseAgentTransport({fetchImpl:async()=>{
+    attempts++
+    return stream(event('error',{reason:'PROVIDER_RATE_LIMITED',message:'English fallback'})+event('tool_call',{id:'c1',name:'write',input:{}})+event('done',{}))
+  }})
+  const {calls,callbacks}=callbackRecorder()
+  await new Promise(resolve=>transport.stream({system:'',messages:[],tools:[]},{...callbacks,onDone(){callbacks.onDone();resolve()}}))
+  assert.deepEqual(calls,[['error','模型供应商限流或额度不足，请稍后重试或切换模型。'],['done']])
+  assert.equal(attempts,1)
+})
+
+test('localizes Office model timeouts from both the server and browser deadlines',async t=>{
+ const previous=Object.getOwnPropertyDescriptor(globalThis,'document')
+ Object.defineProperty(globalThis,'document',{configurable:true,value:{documentElement:{lang:'zh-CN'}}})
+ t.after(()=>{if(previous)Object.defineProperty(globalThis,'document',previous);else delete globalThis.document})
+ for(const serverDeadline of [true,false]){
+  const requests=[]
+  const transport=createSseAgentTransport({timeoutMs:serverDeadline?1000:20,createTurnId:()=> 'timeout',fetchImpl:async(url,init)=>{
+   requests.push(url)
+   if(url.endsWith('/cancel'))return new Response(null,{status:204})
+   if(serverDeadline)return stream(event('delta',{text:'partial reply'})+event('error',{reason:'AI_TURN_TIMED_OUT',message:'AI turn timed out'})+event('done',{}))
+   return new Promise((_resolve,reject)=>init.signal.addEventListener('abort',()=>reject(new Error('aborted')),{once:true}))
+  }})
+  const {calls,callbacks}=callbackRecorder()
+  await new Promise(resolve=>transport.stream({system:'',messages:[],tools:[]},{...callbacks,onDone(){callbacks.onDone();resolve()}}))
+  assert.deepEqual(calls.map(([kind])=>kind),serverDeadline?['delta','error','done']:['error','done'])
+  assert.match(calls.at(-2)[1],/超时.*重试/)
+  assert.deepEqual(requests,serverDeadline?['/api/v1/ai/turns']:['/api/v1/ai/turns','/api/v1/ai/turns/timeout/cancel'])
+ }
+})
+
+test('a rejected Harness model admission cannot finalize the shared turn',async()=>{
+  const harnessResume={taskId:'task',documentId:'document',revision:'revision'}
+  const statuses=[]
+  for(const response of [new Response(null,{status:409}),stream(event('error',{message:'Provider failed'}))]){
+    const transport=createSseAgentTransport({harnessResume,fetchImpl:async(_url,init)=>{
+      assert.deepEqual(JSON.parse(init.body).harnessResume,harnessResume)
+      return response
+    }})
+    await new Promise(resolve=>transport.stream({system:'',messages:[],tools:[]},{
+      onDelta(){},onToolCall(){},onError(message,disposition){statuses.push([message,disposition])},
+      onDone(disposition){statuses.push(['done',disposition]);resolve()},
+    }))
+  }
+  assert.deepEqual(statuses,[['AI stream HTTP 409','harness-admission-unconfirmed'],['done','harness-admission-unconfirmed'],['Provider failed',undefined],['done',undefined]])
 })
 
 test('cancel aborts stream and requests explicit server cancellation', async()=>{
@@ -147,9 +218,9 @@ test('rejects query and fragment endpoints that cannot form a cancellation path'
 
 test('serializes only AgentStreamRequest fields, never client routing or credentials', async () => {
   let body
-  const transport=createSseAgentTransport({fetchImpl:async(url,init)=>{body=JSON.parse(init.body);return stream(event('done',{}))}})
+  const transport=createSseAgentTransport({format:'xlsx',fetchImpl:async(url,init)=>{body=JSON.parse(init.body);return stream(event('done',{}))}})
   await new Promise(resolve=>transport.stream({system:'s',messages:[],tools:[],apiKey:'secret',baseUrl:'https://evil.example',ownerId:'other'}, {...callbackRecorder().callbacks,onDone:resolve}))
-  assert.deepEqual(body.request,{system:'s',messages:[],tools:[]})
+  assert.deepEqual(body.request,{format:'xlsx',system:'s',messages:[],tools:[]})
 })
 
 test('timeout aborts stalled headers, emits one error/done and requests server cancellation once', async () => {

@@ -108,6 +108,9 @@ function modelTextOfWorkbook(ctx: WorkbookReadContext): string {
  * provider, a refusal, or a reply that sanitised away to nothing. The caller
  * keeps the name it already had, which is the only acceptable outcome.
  */
-export async function modelSaveAsName(ctx: WorkbookReadContext): Promise<string> {
-  return suggestFileName({ content: modelTextOfWorkbook(ctx) })
+export async function modelSaveAsName(
+  ctx: WorkbookReadContext,
+  suggest: (content: string) => Promise<string> = (content) => suggestFileName({ content }),
+): Promise<string> {
+  return suggest(modelTextOfWorkbook(ctx))
 }

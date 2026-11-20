@@ -1,3 +1,4 @@
+export { AssistantSendButton } from './AssistantSendButton'
 export { AiPanelSideButton } from './AiPanelSideButton'
 export { AiComposer } from './AiComposer'
 export { AiQueueStrip } from './AiQueueStrip'
@@ -60,6 +61,7 @@ export {
   loadAiPanelWidth,
   saveAiPanelWidth,
 } from './ai-panel-width'
+export { useAiPanelResize } from './use-ai-panel-resize'
 export {
   installPopoverDismiss,
   useDismissablePopover,

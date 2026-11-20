@@ -12,6 +12,7 @@ export const fr = {
   aiQcPageOk: 'Page {n} : mise en page correcte',
   aiQcPageFixed: 'Page {n} : {summary}',
   aiQcPageFixedDefault: 'problèmes de mise en page corrigés',
+  aiQcPageRollbackFailed: "Page {n} : la correction a aggravé la mise en page ; restauration non confirmée. Vérifiez la page ou annulez.",
   aiQcPageReverted: 'Page {n} : la correction automatique a aggravé les choses — annulée',
   aiQcPageFailed: 'Page {n} : échec de la vérification ({error})',
   aiQcPageSkipped: 'Page {n} : vérification automatique de la mise en page ignorée',

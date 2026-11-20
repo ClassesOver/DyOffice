@@ -9,7 +9,7 @@ test('source catalog route maps only list, never accepts identity or query argum
  registerAssistantSourceCatalog(app,{
   sessions:{authenticate:async token=>{assert.equal(token,'a'.repeat(43))}},
   csrf:{requireSession:(_request,token)=>assert.equal(token,'a'.repeat(43))},
-  sources:{listPublishedMetadata:async(token,input)=>{calls.push({token,input});return {items:[],nextCursor:null}}},
+  sources:{listSavedMetadata:async(token,input)=>{calls.push({token,input});return {items:[],nextCursor:null}}},
  })
  const request={method:'POST',url:'/api/v1/ai/sources/list',headers:{cookie:'__Host-dyoffice-session=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'}}
  assert.equal((await app.inject({...request,payload:{after:'previous'}})).statusCode,200)

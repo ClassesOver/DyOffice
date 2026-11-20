@@ -90,6 +90,20 @@ import {
  * into three safe primitives plus the deterministic command engine.
  */
 
+/** All tools that mutate the open Word document, including its metadata stores. */
+export const DOCS_MUTATION_TOOLS = new Set([
+  ...ASSISTANT_DOCUMENT_TOOLS,
+  'insert_chart', 'edit_chart', 'insert_image', 'insert_picture', 'generate_image',
+  'reply_comment', 'resolve_comment', 'add_comment', 'delete_comment', 'accept_changes', 'reject_changes',
+  'insert_footnote', 'insert_endnote', 'edit_note', 'delete_note', 'set_header_footer', 'set_page_setup',
+  'insert_section_break', 'define_style', 'set_watermark', 'insert_text_box',
+])
+
+const COMMENT_MUTATION_TOOLS = new Set(['reply_comment', 'resolve_comment', 'add_comment', 'delete_comment'])
+export function docsToolCanWrite(editor: Editor, name: string, comments?: AiCommentsAccess): boolean {
+  return editor.isEditable || (COMMENT_MUTATION_TOOLS.has(name) && comments?.canWrite?.() === true)
+}
+
 const READ_MAX_CHARS = 24_000
 
 export const AGENT_TOOLS: AgentToolDef[] = [
@@ -684,6 +698,8 @@ export interface AiDocExtras {
 }
 
 export interface AiCommentsAccess {
+  /** Explicit permission for comments-only protection; false after host authority is lost. */
+  canWrite?(): boolean
   list(): CommentInfo[]
   /** false when the parent thread or its anchor no longer exists */
   reply(parentId: string, text: string): boolean
@@ -1029,7 +1045,9 @@ async function executeAsyncTool(
       return {
         output: r.path
           ? `Created the new document at ${r.path} and opened it in a new tab.`
-          : `Created the new document "${name}" in a new tab; it saves itself into the default folder.`,
+          : r.destination === 'workspace'
+            ? `Created the new document "${name}" in the workspace and opened it in a new tab.`
+            : `Created the new document "${name}" in a new tab; it saves itself into the default folder.`,
         mutated: false,
         summary: t('aiSumCreatedDocument', { name }),
       }
@@ -1056,6 +1074,7 @@ export function sniffImageMime(base64: string): 'image/png' | 'image/jpeg' | 'im
 
 /** set_watermark with an image: download / decode, then hand the measured bytes to the store */
 async function setPictureWatermark(
+  editor: Editor,
   call: AgentToolCall,
   signal: AbortSignal | undefined,
   extras: AiDocExtras | undefined,
@@ -1082,6 +1101,7 @@ async function setPictureWatermark(
   } catch {
     return fail(summary, 'the image could not be decoded')
   }
+  if (!editor.isEditable) return fail(summary, 'The document became read-only; the watermark was not set.')
   const resolved = resolvePictureWatermark(call.input, {
     base64: fetched.base64,
     mime,
@@ -1134,6 +1154,7 @@ async function insertPicture(
     return fail(summary, 'the image could not be decoded')
   }
   if (signal?.aborted) return fail(summary, 'stopped by the user; the picture was not inserted')
+  if (!editor.isEditable) return fail(summary, 'The document became read-only; the picture was not inserted.')
   const built = pictureNode({
     base64: fetched.base64,
     mime,
@@ -1165,7 +1186,9 @@ async function insertImageFromUrl(
   signal: AbortSignal | undefined,
   labels: { failLabel: string; doneLabel: string; blockLabel: string },
 ): Promise<ToolExecution> {
-  const fetched = await window.desktop.fetchImage(url)
+  const fetched = url.startsWith('data:image/')
+    ? { base64: url.slice(url.indexOf(',') + 1) }
+    : await window.desktop.fetchImage(url)
   // never write after the user hit stop (the download may resolve long after the abort)
   if (signal?.aborted)
     return fail(labels.failLabel, 'stopped by the user; the image was not inserted')
@@ -1186,6 +1209,7 @@ async function insertImageFromUrl(
     const natural = await imageSizeOf(dataUrl)
     if (signal?.aborted)
       return fail(labels.failLabel, 'stopped by the user; the image was not inserted')
+    if (!editor.isEditable) return fail(labels.failLabel, 'The document became read-only; the image was not inserted.')
     const scale = Math.min(1, maxW / natural.width)
     const w = Math.round(natural.width * scale)
     const h = Math.round(natural.height * scale)
@@ -1226,7 +1250,7 @@ export function executeTool(
   extras?: AiDocExtras,
   notes?: AiNotesAccess,
 ): ToolExecution | Promise<ToolExecution> {
-  if(ASSISTANT_DOCUMENT_TOOLS.has(call.name)&&!editor.isEditable) return fail(call.name,'The document is read-only. No changes were made.')
+  if(DOCS_MUTATION_TOOLS.has(call.name)&&!docsToolCanWrite(editor,call.name,comments)) return fail(call.name,'The document is read-only. No changes were made.')
   const scope = frozen && frozen.doc === editor.state.doc ? frozen.scope : null
   const staleSummary = staleSummaryOf(call)
   if (staleSummary && editedExternally(editor)) return fail(staleSummary(), STALE_DOC_ERROR)
@@ -1253,7 +1277,7 @@ export function executeTool(
   if (call.name === 'write_document')
     return writeDocument(editor, call, numIds, track, signal, writer)
   if (call.name === 'set_watermark' && typeof call.input.image === 'string')
-    return setPictureWatermark(call, signal, extras)
+    return setPictureWatermark(editor, call, signal, extras)
   return settle(
     executeSyncTool(editor, call, numIds, track, scope, comments, hf, pageSetup, extras, notes),
   )
@@ -1287,7 +1311,7 @@ async function writeDocument(
     )
   }
   const str = (v: unknown) => (v === undefined || v === null ? undefined : String(v))
-  const draft = new DraftLanding(editor, numIds, position)
+  const draft = new DraftLanding(editor, numIds, position,writer.preserveConcurrentEdits)
   let result: DocWriteResult
   let rendered: string | null
   try {
@@ -1305,6 +1329,7 @@ async function writeDocument(
     rendered = draft.finish()
   }
   if (editor.isDestroyed) return fail(summary, 'the document was closed')
+  if (draft.remoteConflict) return fail(summary,'A collaborator edited the document while writing. Their input is preserved. Read the current document before retrying.')
   if (!editor.isEditable) return fail(summary,'The document became read-only; writing stopped.')
   if (!result.ok || !result.html) {
     return fail(

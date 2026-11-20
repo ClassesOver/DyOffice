@@ -88,3 +88,44 @@ it('composed scoped execution routes through the owning skill without native sel
   expect(JSON.stringify(requests)).not.toContain('private selection')
   expect(JSON.stringify(requests)).toContain('document content')
 })
+
+it('document handoffs continue the visible Office conversation and retain the document tool boundary',async()=>{
+ const requests:any[]=[],visible:string[]=[]
+ const loop=new AgentLoop({skill:{id:'native',systemPrompt:'Office instructions',tools:['read_blocks','delegate'].map(name=>({name,description:'',inputSchema:{}})),buildContext:()=>'Current selection',executeTool:()=>({output:'',summary:''})},
+   transport:{stream(request,callbacks){requests.push(request);queueMicrotask(()=>{callbacks.onDelta('Office response');callbacks.onDone()});return {cancel(){}}}},
+   events:{onText:text=>visible.push(text)}})
+ const options={signal:new AbortController().signal,check:()=>true,tools:['read_blocks'],onTool:()=>{},onText:()=>{}}
+ await loop.runDocumentHandoff('First request',{...options,skill:{name:'events',content:'Include event owner'}})
+ expect(JSON.stringify(requests[0].messages)).toContain('Include event owner')
+ expect(JSON.stringify(requests[0].system)).not.toContain('Include event owner')
+ await loop.runDocumentHandoff('Follow up',options)
+ expect(visible).toEqual(['Office response','Office response'])
+ expect(JSON.stringify(requests[1].messages)).toContain('First request')
+ expect(JSON.stringify(requests[1].messages)).not.toContain('Include event owner')
+ expect(JSON.stringify(requests[1].messages)).toContain('Current selection')
+ expect(requests[1].tools.map((x:any)=>x.name)).toEqual(['read_blocks'])
+ expect(loop.messages.at(-1)).toMatchObject({role:'assistant',text:'Office response'})
+})
+
+it('publishes only visible foreground messages and restores completed remote replies without executing them',async()=>{
+ const {bindFileChat}=await import('../src/file-chat')
+ const starts:string[]=[],replies:string[]=[],requests:any[]=[]
+ const transport={stream:(request:any,cb:any)=>{requests.push(request);queueMicrotask(()=>{cb.onDelta('Visible answer');cb.onDone()});return {cancel(){}}}}
+ const unbind=bindFileChat(transport,({text})=>{
+   starts.push(text)
+   return {history:async()=>[{role:'user',text:'Remote question'},{role:'assistant',text:'Remote answer'}],
+     text(){},finish(text){replies.push(text)}}
+ })
+ const loop=new AgentLoop({transport,skill:{id:'office',systemPrompt:'',tools:[],buildContext:()=>'private selection',executeTool(){throw Error()}}})
+ try{
+   loop.run('instruction with hidden skill',[],undefined,{text:'Displayed question'})
+   await new Promise(resolve=>setTimeout(resolve,0))
+   expect(starts).toEqual(['Displayed question'])
+   expect(replies).toEqual(['Visible answer'])
+   expect(requests[0].messages).toContainEqual({role:'assistant',text:'Remote answer'})
+   expect(requests).toHaveLength(1)
+   await loop.runScoped('private peer task',{allowedTools:[]})
+   expect(starts).toHaveLength(1)
+   expect(replies).toHaveLength(1)
+ }finally{unbind()}
+})

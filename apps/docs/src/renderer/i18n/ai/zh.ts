@@ -71,7 +71,7 @@ export const zh = {
   aiStarterLaunchPost: '写一篇产品发布公告',
   aiStarterEventOutline: '列一个活动策划提纲',
   aiThinking: '思考中',
-  aiWorkedSteps: '已完成 · {n} 个步骤',
+  aiWorkedSteps: '执行记录 · {n} 个步骤',
   aiGroupWorking: '处理中…',
   aiWorking: '继续处理中',
   aiErrorPrefix: '出错: {error}',

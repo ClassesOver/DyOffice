@@ -14,6 +14,8 @@ import { Fragment, type ReactNode } from 'react'
 export interface MarkdownNav {
   /** href prefix that renders as an in-app navigation link (e.g. 'docnav://') */
   scheme: string
+  /** Optional host check for whether this target is valid in the current document. */
+  accepts?: (href: string) => boolean
   onNavigate: (href: string) => void
 }
 
@@ -24,7 +26,7 @@ export interface MarkdownImage {
 
 /** first nav whose scheme prefixes href; undefined keeps the link dead text */
 function matchNav(navs: readonly MarkdownNav[], href: string): MarkdownNav | undefined {
-  return navs.find((n) => href.startsWith(n.scheme))
+  return navs.find((n) => href.startsWith(n.scheme) && (n.accepts?.(href) ?? true))
 }
 
 // Hrefs may carry one level of balanced parens (sheet names like `Data (2)`

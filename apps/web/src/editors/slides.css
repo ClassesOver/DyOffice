@@ -1,14 +1,16 @@
 .dyoffice-native-slides { height: 100vh; display: flex; flex-direction: column; color: var(--text); background: var(--surface); }
 .dyoffice-native-slides > .app-shell { flex: 1; min-height: 0; }
-.dyoffice-slides-state { flex: none; min-height: 1.5rem; padding: 0.25rem 0.75rem; font: 0.8rem sans-serif; background: var(--surface); color: var(--text); border-bottom: 1px solid var(--border); }
-.dyoffice-slides-state button { margin-inline-start: 0.75rem; color: var(--text); background: var(--surface); border: 1px solid var(--border); border-radius: 0.25rem; padding: 0.15rem 0.5rem; cursor: pointer; }
-
-.dyoffice-slides-state a { margin-inline-start: 0.75rem; color: var(--text); }
-.dyoffice-slides-state button:disabled { opacity: 0.55; cursor: default; }
-.dyoffice-slides-state .dyoffice-slides-action-error { margin-inline-start: 0.75rem; color: var(--danger, #b42318); }
-.dyoffice-slides-state .dyoffice-slides-download { font-weight: 600; }
-
-/* Saving and permission changes update content without resizing the editor. */
-.dyoffice-slides-state { display: flex; align-items: center; gap: 12px; height: 36px; min-height: 36px; box-sizing: border-box; white-space: nowrap; overflow-x: auto; }
-.dyoffice-slides-state > span:first-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-.dyoffice-slides-state button, .dyoffice-slides-state a { flex: none; margin-inline-start: 0; }
+.dyoffice-shared-assistant-dock { flex: 0 0 360px; min-height: 240px; max-height: 42vh; border-top: 1px solid var(--border); }
+.dyoffice-native-slides .dyoffice-slides-download-saved {
+  display: block;
+  padding: 8px 12px;
+  border-radius: 4px;
+  color: var(--text);
+  text-decoration: none;
+  font-size: 13px;
+}
+.dyoffice-native-slides .dyoffice-slides-download-saved:hover { background: var(--hover); }
+.dyoffice-native-slides .file-menu :is(.dyoffice-slides-download,.dyoffice-slides-download-saved):focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}

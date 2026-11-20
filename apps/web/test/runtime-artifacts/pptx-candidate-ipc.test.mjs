@@ -8,8 +8,9 @@ import {createRequire} from 'node:module'
 import {spawnSync,fork} from 'node:child_process'
 import {preparePptxCandidate} from '../../scripts/prepare-pptx-runtime-candidate.mjs'
 import {openGeneratedPptxCandidateFixture} from '../helpers/pptx-candidate-fixture.mjs'
+import JSZip from 'jszip'
 const PptxGenJS=createRequire(import.meta.url)('pptxgenjs')
-test('actual minified candidate uses existing IPC open/outline/close on generated PPTX only',async()=>{
+test('actual minified candidate edits, exports and reopens a generated PPTX over existing IPC',async()=>{
  const root=await mkdtemp(join(tmpdir(),'pptx-ipc-test-')),old=process.env.NODE_ENV
  let session
  try{
@@ -26,8 +27,33 @@ test('actual minified candidate uses existing IPC open/outline/close on generate
   assert.equal(session.opened.count,1)
   const outline=await session.outline(0)
   assert.equal(outline.count,1);assert.equal(outline.paths.length,1)
+  const marker='Office 助手讲者备注'
+  const createPage=[
+   {op:'addBlankSlide',target:{slide:0}},
+  ]
+  const note={op:'setNotes',target:{slide:1},text:marker}
+  const premature=await session.apply(0,[...createPage,note])
+  assert.equal(premature.transaction.applied,false)
+  assert.match(premature.transaction.failures[0].error,/slide index 1 is out of range/)
+  assert.equal(premature.count,1)
+  const applied=await session.apply(0,createPage)
+  assert.equal(applied.transaction.applied,true,JSON.stringify(applied.transaction.failures))
+  assert.equal(applied.generation,1)
+  assert.equal(applied.count,2)
+  assert.equal((await session.outline(1)).count,2)
+  const noted=await session.apply(1,[note])
+  assert.equal(noted.transaction.applied,true,JSON.stringify(noted.transaction.failures))
+  assert.equal(noted.generation,2)
+  const exported=await session.exportBytes(2)
+  const original=await JSZip.loadAsync(bytes),result=await JSZip.loadAsync(exported.bytes)
+  assert.match(await result.file('ppt/slides/slide1.xml').async('string'),/Trusted generated fixture/)
+  assert.ok(!(await Promise.all(original.file(/^ppt\/notesSlides\/notesSlide\d+\.xml$/).map(item=>item.async('string')))).some(xml=>xml.includes(marker)))
+  assert.ok((await Promise.all(result.file(/^ppt\/notesSlides\/notesSlide\d+\.xml$/).map(item=>item.async('string')))).some(xml=>xml.includes(marker)))
   assert.equal(await session.close(),true)
-  await assert.rejects(session.outline(0),/CLOSED/)
+  await assert.rejects(session.outline(2),/CLOSED/)
+  session=await openGeneratedPptxCandidateFixture({...candidate,bytes:exported.bytes,unsafeGeneratedFixtureOnly:true})
+  assert.equal((await session.outline(0)).count,2)
+  assert.equal(await session.close(),true)
   session=undefined
   session=await openGeneratedPptxCandidateFixture({...candidate,bytes,unsafeGeneratedFixtureOnly:true})
   await assert.rejects(session.outline(1),/GENERATION/)

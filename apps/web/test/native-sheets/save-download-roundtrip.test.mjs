@@ -4,7 +4,7 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { execFileSync } from 'node:child_process'
-import { createHash, randomBytes } from 'node:crypto'
+import { createHash, randomBytes, randomUUID } from 'node:crypto'
 import { createServer } from 'node:https'
 import { fileURLToPath } from 'node:url'
 import { chromium, expect } from '@playwright/test'
@@ -19,8 +19,10 @@ import { createGlobalConfigService } from '../../server/src/modules/admin/servic
 import { createSkillService } from '../../server/src/modules/skills/service.ts'
 import { syntheticAnalysisAdapter,syntheticAnalysisFrames } from '../helpers/analysis-delivery.mjs'
 import { mockProviderNetwork } from '../helpers/provider-network.mjs'
+import { configuredSheetsRuntime } from '../../server/src/modules/sheets/runtime.ts'
+import { buildSheetsGateway } from '../../server/sheets/build.mjs'
 
-async function fixture(t, autoSave = false, enableAssistant = false, replay = undefined, live = undefined, analysis = false) {
+async function fixture(t, autoSave = false, enableAssistant = false, replay = undefined, live = undefined, analysis = false, namedCopy = false) {
   const directory = await mkdtemp(join(tmpdir(), 'dyoffice-sheets-download-'))
   let f, app, browser, server, analysisAdapter
   t.after(async () => {
@@ -31,9 +33,12 @@ async function fixture(t, autoSave = false, enableAssistant = false, replay = un
   })
   execFileSync('openssl', ['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-keyout', join(directory, 'key.pem'), '-out', join(directory, 'cert.pem'), '-days', '1', '-subj', '/CN=localhost'], { stdio: 'pipe' })
   server = createServer({ key: await readFile(join(directory, 'key.pem')), cert: await readFile(join(directory, 'cert.pem')) }, (req, res) => app.routing(req, res))
-  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
+  await new Promise(resolve => server.listen(Number(process.env.DYOFFICE_TEST_SHEETS_PORT ?? 0), '127.0.0.1', resolve))
   const origin = `https://127.0.0.1:${server.address().port}`
-  const gateway = await sheetsGateway(t)
+  const gateway = namedCopy ? undefined : await sheetsGateway(t)
+  if (namedCopy) await buildSheetsGateway(join(directory,'gateway.mjs'))
+  const copyRuntime = namedCopy ? await configuredSheetsRuntime({DYOFFICE_AUTH_MODE:'local',DYOFFICE_SANDBOX_MODE:'subprocess',DYOFFICE_DEPLOYMENT_ID:randomUUID(),DYOFFICE_XLSX_NODE_ENGINE:join(directory,'xlsx-node-engine.mjs'),DYOFFICE_XLSX_GATEWAY_RUNNER:join(directory,'gateway-process.mjs')},{enabled:true}) : undefined
+  if (copyRuntime) t.after(()=>copyRuntime.close())
   const original = await readFile(new URL('../fixtures/sheets/acceptance.xlsx', import.meta.url))
   // Test-only replay accepts only the checked-in synthetic fixture. The separate
   // native test below still requires the original systemd sandbox.
@@ -47,8 +52,8 @@ async function fixture(t, autoSave = false, enableAssistant = false, replay = un
     },
     readSheet: async (input, _name, kind) => bound(kind === 'formulas' ? replay.formulas : replay.outline)(input),
     savePlan: async () => assert.fail('The assistant must not save the workbook'),
-  } : createXlsxNativeWorker(await sandboxFixture('native'))
-  const sheets = { nativeSheetsDirectory: process.env.DYOFFICE_TEST_SHEETS_DIRECTORY ?? fileURLToPath(new URL('../../dist-sheets/', import.meta.url)), sheetsNative: native, sheetsPlanner: gateway.planWorkbookSave, sheetsPackageReader: gateway.readWorkbookPackage }
+  } : copyRuntime?.sheetsNative ?? createXlsxNativeWorker(await sandboxFixture('native'))
+  const sheets = { ...(copyRuntime ?? { sheetsNative: native, sheetsPlanner: gateway.planWorkbookSave, sheetsPackageReader: gateway.readWorkbookPackage }), nativeSheetsDirectory: process.env.DYOFFICE_TEST_SHEETS_DIRECTORY ?? fileURLToPath(new URL('../../dist-sheets/', import.meta.url)) }
   f = await fileFixture(t, { origin, ...sheets })
   app = f.app
   if (enableAssistant) {
@@ -58,7 +63,7 @@ async function fixture(t, autoSave = false, enableAssistant = false, replay = un
     const apiKey = live ? (await readFile(live.keyFile, 'utf8')).trim() : 'synthetic-private-key'
     const settings = createGlobalConfigService({transactions: f.transactions, keyring})
     await settings.saveGlobalConfig(f.adminSigned.token, 0, {upserts: [{id: profile.entryId, kind: 'chat', providerId: profile.providerId, label: 'Company Chat', model: profile.model, baseUrl: profile.baseUrl, enabled: true, apiKey}]})
-    await f.ownerPool.query('INSERT INTO provider_budget_accounts(deployment_id,owner_id,entry_id,config_revision,available_units,per_call_units) VALUES($1,$2,$3,1,$4,10)', [f.deploymentId, f.alice.user.id, profile.entryId, live ? 30 : analysis ? 20 : 10])
+    await f.ownerPool.query('INSERT INTO provider_budget_accounts(deployment_id,owner_id,entry_id,config_revision,available_units,per_call_units) VALUES($1,$2,$3,1,$4,10)', [f.deploymentId, f.alice.user.id, profile.entryId, live ? 30 : analysis || namedCopy ? 20 : 10])
     const skills = createSkillService(f.transactions)
     await skills.save(f.alice.token, 'alice-workbook', {description: 'Excel workbook skill', body: 'Alice workbook instructions.'})
     await skills.save(f.bob.token, 'bob-workbook', {description: 'Excel workbook skill', body: 'Bob workbook instructions.'})
@@ -102,15 +107,15 @@ const saveAndDownload = page => page.getByRole('button', { name: 'Save and downl
 async function verifyAssistant(t, replay, live) {
   const {page, opened, files, original, alice, ownerPool} = await fixture(t, false, true, replay, live)
   const net = live ? undefined : mockProviderNetwork(t, [Buffer.from('data: {"choices":[{"delta":{"content":"Verified workbook reply"},"finish_reason":"stop"}]}\n\n'), Buffer.from('data: [DONE]\n\n')])
-  const model = page.getByLabel('助手模型')
-  if (await page.locator('.expand-copilot').isVisible()) await page.locator('.expand-copilot').click()
-  await expect(model).toHaveValue('primary')
+  const openAssistant = page.getByRole('button', {name: 'Open AI assistant', exact: true})
+  if (await openAssistant.isVisible()) await openAssistant.click()
+  await expect(page.getByRole('button', {name: 'Model: ' + (live?.model ?? 'synthetic'), exact: true})).toBeVisible()
   await page.locator('.ai-plus-btn').click()
   const skills = page.getByRole('menuitem', {name: 'Skills', exact: true})
   if (await skills.isVisible()) await skills.click()
   await page.getByRole('menuitemcheckbox', {name: /alice-workbook/}).click()
   await expect(page.getByText('bob-workbook', {exact: true})).toHaveCount(0)
-  const composer = page.locator('.copilot textarea')
+  const composer = page.getByRole('textbox', {name: 'AI instruction', exact: true})
   await composer.fill(live ? 'What is the value of cell A2 on the Acceptance sheet? Return only the number.' : 'Summarize this workbook')
   await composer.press('Enter')
   await expect(page.locator('.copilot').getByText(live ? '12.5' : 'Verified workbook reply', {exact: true})).toBeVisible({timeout: 65_000})
@@ -131,8 +136,80 @@ async function verifyAssistant(t, replay, live) {
 test('native XLSX assistant streams with the selected personal Skill and leaves the workbook unchanged', {timeout: 120_000}, t => verifyAssistant(t))
 
 const readReplay = async () => JSON.parse(await readFile(new URL('../fixtures/sheets/assistant-replay.json', import.meta.url), 'utf8'))
+test('XLSX browser CSV bridge confirms loss and downloads current values without committing the workbook', {timeout:120_000}, async t=>{
+ const f=await fixture(t,false,false,await readReplay())
+ await f.page.evaluate(()=>window.__genofficeDebug.univerAPI.getActiveWorkbook().getActiveSheet().getRange('A2').setValue(21.25))
+ await expect.poll(()=>f.page.evaluate(()=>window.__genofficeDebug.univerAPI.getActiveWorkbook().getActiveSheet().getRange('B2').getValue())).toBe(42.5)
+ const request=await f.page.evaluate(()=>({fileName:'工作表.csv',content:'项目,金额\r\n'+window.__genofficeDebug.univerAPI.getActiveWorkbook().getActiveSheet().getRange('A2:B2').getValues()[0].join(',')+'\r\n',hasFormulas:true,activeSheetName:'Acceptance'}))
+ let downloads=0;f.page.on('download',()=>downloads++)
+ f.page.once('dialog',async dialog=>{assert.equal(dialog.type(),'confirm');assert.match(dialog.message(),/formatting/);assert.match(dialog.message(),/Formulas.*values/);assert.match(dialog.message(),/Acceptance/);await dialog.dismiss()})
+ assert.deepEqual(await f.page.evaluate(request=>window.desktopApi.exportCsv(request),request),{canceled:true})
+ assert.equal(downloads,0)
+ f.page.once('dialog',dialog=>dialog.accept())
+ const downloaded=f.page.waitForEvent('download')
+ assert.deepEqual(await f.page.evaluate(request=>window.desktopApi.exportCsv(request),request),{canceled:false,path:'工作表.csv'})
+ const download=await downloaded
+ assert.equal(download.suggestedFilename(),'工作表.csv')
+ assert.deepEqual(await readFile(await download.path()),Buffer.from('\uFEFF项目,金额\r\n21.25,42.5\r\n'))
+ const head=(await f.files.openFile(f.alice.token,f.opened.file.fileId)).file
+ assert.equal(head.revision,f.opened.file.revision)
+ assert.deepEqual(await f.files.readFile(f.alice.token,head.fileId,head.revision),f.original)
+})
 test('XLSX assistant browser flow with recorded synthetic workbook data', {timeout: 120_000}, async t => {
   await verifyAssistant(t, await readReplay())
+})
+test('XLSX AI naming confirms an independent current draft and leaves no copy on cancel', {timeout:120_000}, async t=>{
+ const f=await fixture(t,false,true,undefined,undefined,false,true)
+ const {page}=f
+ const network=mockProviderNetwork(t,[Buffer.from('data: {"choices":[{"delta":{"content":"Sales Draft"},"finish_reason":"stop"}]}\n\n'),Buffer.from('data: [DONE]\n\n')])
+ const requests=[],exports=[]
+ page.on('request',request=>{
+   if(request.method()!=='POST')return
+   const path=new URL(request.url()).pathname
+   requests.push(path)
+   if(path.endsWith('/sheets/export'))exports.push(request.postDataJSON())
+ })
+ assert.equal((await page.evaluate(async()=>{
+   const debug=window.__genofficeDebug,sheet=debug.univerAPI.getActiveWorkbook().getActiveSheet()
+   await sheet.getRange('A2').setValue(21.25)
+   return debug.applyOps([
+     {op:'insert_rows',sheetId:sheet.getSheetId(),row:9,count:1},
+     {op:'set_cell',sheetId:sheet.getSheetId(),address:'J1',value:'Item'},
+     {op:'set_cell',sheetId:sheet.getSheetId(),address:'J2',value:'Draft row'},
+     {op:'add_table',sheetId:sheet.getSheetId(),range:'J1:J2',name:'DraftItems'},
+   ])
+ })).ok,true)
+ const naming=page.getByRole('button',{name:'Name with AI…',exact:true})
+ const dialog=page.getByRole('dialog').filter({has:page.getByRole('textbox',{name:'File name'})})
+ await expect(naming).toBeEnabled()
+ await naming.click()
+ await expect(dialog.getByRole('textbox',{name:'File name'})).toHaveValue('Sales Draft.xlsx',{timeout:30000})
+ await dialog.getByRole('button',{name:'Cancel',exact:true}).click()
+ await expect(dialog).toHaveCount(0)
+ assert.equal((await f.files.listFiles(f.alice.token)).files.length,1)
+ assert.ok(!requests.some(path=>path.endsWith('/sheets/export')||path.endsWith('/uploads')))
+ await naming.click()
+ await dialog.getByRole('textbox',{name:'File name'}).fill('Reviewed Draft.xlsx')
+ await dialog.getByRole('button',{name:'Save copy',exact:true}).click()
+ await expect(page.getByText('Saved copy: Reviewed Draft.xlsx',{exact:true})).toBeVisible({timeout:30000})
+ const {files}=await f.files.listFiles(f.alice.token)
+ const copy=files.find(file=>file.name==='Reviewed Draft.xlsx')
+ assert.ok(copy);assert.notEqual(copy.id,f.opened.file.fileId)
+ const copyZip=await JSZip.loadAsync(await f.files.readFile(f.alice.token,copy.id,copy.revision))
+ assert.match(await copyZip.file('xl/worksheets/sheet1.xml').async('string'),/<v>21\.25<\/v>/)
+ const tables=await Promise.all(copyZip.file(/^xl\/tables\/table\d+\.xml$/).map(part=>part.async('string')))
+ assert.ok(tables.some(table=>/name="DraftItems"/.test(table)))
+ assert.equal(exports.length,1)
+ assert.equal(exports[0].phases.length,2)
+ assert.equal(exports[0].phases[0].structuralOps.length,1)
+ assert.equal(exports[0].phases[1].tableAdditions[0].name,'DraftItems')
+ assert.equal((await f.files.openFile(f.alice.token,f.opened.file.fileId)).file.revision,f.opened.file.revision)
+ assert.deepEqual(await f.files.readFile(f.alice.token,f.opened.file.fileId,f.opened.file.revision),f.original)
+ await expect.poll(()=>page.evaluate(()=>window.__genofficeDebug.univerAPI.getActiveWorkbook().getActiveSheet().getRange('A2').getValue())).toBe(21.25)
+ assert.equal(await page.evaluate(()=>window.__savedWorkbookIdentity===window.__genofficeDebug.univerAPI.getActiveWorkbook().getWorkbook()),true)
+ await expect(page.getByRole('button',{name:/^Save \(/})).toBeEnabled()
+ assert.equal(network.writes,2)
+ assert.ok(!requests.some(path=>path.endsWith('/sheets/uploads')||path.endsWith('/commits')))
 })
 const liveConfig = process.env.DYOFFICE_LIVE_ASSISTANT_TEST_CONFIG
 test('XLSX assistant reads recorded synthetic cells through a real provider', {timeout: 120_000, skip: !liveConfig}, async t => {
@@ -238,6 +315,14 @@ test('dirty download submits the latest editor snapshot and downloads those exac
   assert.notEqual(head.revision, f.opened.file.revision)
   assert.deepEqual(downloaded, await f.files.readFile(f.alice.token, head.fileId, head.revision))
   assert.equal(await f.page.evaluate(() => window.__savedWorkbookIdentity === window.__genofficeDebug.univerAPI.getActiveWorkbook().getWorkbook()), true, 'ordinary save must retain the live workbook facade')
+  assert.deepEqual(await f.files.readFile(f.alice.token, head.fileId, f.opened.file.revision), f.original)
+  const native = createXlsxNativeWorker(await sandboxFixture('native'))
+  const reopened = await native.readRange(downloaded, 'Acceptance', {startRow: 1, endRow: 1, startColumn: 0, endColumn: 1})
+  assert.equal(reopened.cells.find(cell => cell.column === 0)?.value, 21.25)
+  assert.equal(reopened.cells.find(cell => cell.column === 1)?.value, 42.5)
+  await f.page.reload()
+  await expect.poll(() => f.page.evaluate(() => window.__genofficeDebug?.univerAPI.getActiveWorkbook()?.getActiveSheet()?.getRange('A2').getValue()), {timeout: 30000}).toBe(21.25)
+  await expect.poll(() => f.page.evaluate(() => window.__genofficeDebug?.univerAPI.getActiveWorkbook()?.getActiveSheet()?.getRange('B2').getValue()), {timeout: 30000}).toBe(42.5)
 })
 
 test('download waits for a blocked save receipt, then drains edits made after that save snapshot', { timeout: 120000 }, async t => {

@@ -11,27 +11,27 @@ test('preference drafts can be reverted locally and submitted by the form',async
  const button=(text:string)=>[...document.querySelectorAll<HTMLButtonElement>('button')].find(node=>node.textContent===text)!
  try{
   await act(async()=>root.render(h(WorkspaceSettings,{user:{username:'alice',displayName:'Alice',roles:['personal']},activeTab:'general',load,save,security:{changePassword:async()=>{},onCurrentRevoked:()=>{}},skills:null,onClose:()=>{},onLogout:()=>{},onCloseGuardChange:value=>{guard=value}})))
-  expect(document.querySelector('.personal-settings-save-state')?.textContent).toContain('所有更改已保存')
+  expect(document.querySelector('.personal-page-save-state')?.textContent).toContain('所有更改已保存')
   await act(async()=>document.querySelector<HTMLButtonElement>('[aria-label="自动保存"]')!.click())
-  expect(document.querySelector('.personal-settings-save-state')?.textContent).toContain('有未保存的更改')
+  expect(document.querySelector('.personal-page-save-state')?.textContent).toContain('有未保存的更改')
   await act(async()=>button('撤销更改').click())
   expect(document.querySelector('[aria-label="自动保存"]')?.getAttribute('aria-checked')).toBe('false')
   expect(load).toHaveBeenCalledOnce();expect(save).not.toHaveBeenCalled();expect(guard?.()).toBe(true)
   await act(async()=>document.querySelector<HTMLButtonElement>('[aria-label="自动保存"]')!.click())
-  await act(async()=>document.querySelector('.personal-settings-general form')!.dispatchEvent(new Event('submit',{bubbles:true,cancelable:true})))
+  await act(async()=>document.querySelector('.personal-page-general')!.dispatchEvent(new Event('submit',{bubbles:true,cancelable:true})))
   expect(save).toHaveBeenCalledWith({autoSave:true})
  }finally{await act(async()=>root.unmount());document.body.innerHTML=''}
 })
-test('personal settings workbench switches categories and keeps the selected category state',async()=>{
+test('personal settings top tabs switch categories and keep the selected category state',async()=>{
  document.body.innerHTML='<div id="settings-navigation-test"></div>'
  const root=createRoot(document.getElementById('settings-navigation-test')!)
  const changed=vi.fn()
  try{
   await act(async()=>root.render(h(WorkspaceSettings,{user:{username:'alice',displayName:'Alice',roles:['personal']},load:async()=>initial,save:vi.fn(),security:{changePassword:async()=>{},onCurrentRevoked:()=>{}},skills:null,onClose:()=>{},onLogout:()=>{},onCloseGuardChange:()=>{},onTabChange:changed})))
-  const skills=[...document.querySelectorAll<HTMLButtonElement>('.settings-workbench-nav-item')].find(item=>item.textContent?.includes('个人技能'))!
+  const skills=[...document.querySelectorAll<HTMLButtonElement>('[role="tab"]')].find(item=>item.textContent?.includes('个人技能'))!
   await act(async()=>skills.click())
-  expect(skills.getAttribute('aria-current')).toBe('page')
-  expect(document.querySelector('.settings-workbench-header h2')?.textContent).toBe('个人技能')
+  expect(skills.getAttribute('aria-selected')).toBe('true')
+  expect(document.querySelector('[role=tabpanel]:not([hidden]) .personal-page-heading h2')?.textContent).toBe('个人技能')
   expect(changed).toHaveBeenCalledWith('skills')
  }finally{await act(async()=>root.unmount());document.body.innerHTML=''}
 })
@@ -44,11 +44,11 @@ test('preference save failure retains the draft for retry and exposes pending st
   await act(async()=>root.render(h(WorkspaceSettings,{user:{username:'alice',displayName:'Alice',roles:['personal']},activeTab:'general',load:async()=>initial,save,security:{changePassword:async()=>{},onCurrentRevoked:()=>{}},skills:null,onClose:()=>{},onLogout:()=>{},onCloseGuardChange:()=>{}})))
   await act(async()=>document.querySelector<HTMLButtonElement>('[aria-label="自动保存"]')!.click())
   await act(async()=>[...document.querySelectorAll<HTMLButtonElement>('button')].find(node=>node.textContent==='保存个人偏好')!.click())
-  expect(document.querySelector('.personal-settings-save-state')?.textContent).toContain('正在保存')
+  expect(document.querySelector('.personal-page-save-state')?.textContent).toContain('正在保存')
   await act(async()=>fail(new Error('保存服务暂不可用')))
   expect(document.querySelector('[role="alert"]')?.textContent).toContain('保存服务暂不可用')
   expect(document.querySelector('[aria-label="自动保存"]')?.getAttribute('aria-checked')).toBe('true')
-  expect(document.querySelector('.personal-settings-save-state')?.textContent).toContain('有未保存的更改')
+  expect(document.querySelector('.personal-page-save-state')?.textContent).toContain('有未保存的更改')
  }finally{await act(async()=>root.unmount());document.body.innerHTML=''}
 })
 test('invalid password confirmation focuses its field and clearing inputs releases the close guard',async()=>{
@@ -78,7 +78,7 @@ test('failed preference loading leaves retry available and announces the loading
  const load=vi.fn().mockImplementationOnce(()=>new Promise((_resolve,no)=>{reject=no})).mockResolvedValue(initial)
  try{
   await act(async()=>root.render(h(WorkspaceSettings,{user:{username:'alice',displayName:'Alice',roles:['personal']},activeTab:'general',load,save:vi.fn(),security:{changePassword:async()=>{},onCurrentRevoked:()=>{}},skills:null,onClose:()=>{},onLogout:()=>{},onCloseGuardChange:()=>{}})))
-  expect(document.querySelector('.personal-settings-save-state')?.textContent).toContain('正在读取')
+  expect(document.querySelector('.personal-page-save-state')?.textContent).toContain('正在读取')
   await act(async()=>reject(new Error('暂时无法读取')))
   const retry=[...document.querySelectorAll<HTMLButtonElement>('button')].find(node=>node.textContent==='重新读取')!
   expect(retry.disabled).toBe(false)
@@ -87,4 +87,21 @@ test('failed preference loading leaves retry available and announces the loading
   expect(document.querySelector('[role=alert]')).toBeNull()
   expect(document.querySelector<HTMLInputElement>('[aria-label="文档作者"]')?.value).toBe('Original')
  }finally{await act(async()=>root.unmount());document.body.innerHTML=''}
+})
+
+test('preference actions belong only to general settings while drafts remain protected',async()=>{
+ const host=document.createElement('div');document.body.append(host);const root=createRoot(host)
+ const button=(text:string)=>[...host.querySelectorAll<HTMLButtonElement>('button')].find(b=>b.textContent===text&&!b.closest('[hidden]'))
+ let guard:(()=>boolean)|null=null
+ try{
+  await act(async()=>root.render(h(WorkspaceSettings,{user:{username:'alice',displayName:'Alice',roles:['personal']},load:async()=>initial,save:vi.fn(),security:{changePassword:async()=>{},onCurrentRevoked:()=>{}},skills:h('p',null,'skills'),onClose:()=>{},onLogout:()=>{},onCloseGuardChange:g=>{guard=g}})))
+  expect(button('保存个人偏好')).toBeUndefined()
+  await act(async()=>button('通用偏好')!.click())
+  await act(async()=>host.querySelector<HTMLButtonElement>('[aria-label="自动保存"]')!.click())
+  await act(async()=>button('个人技能')!.click())
+  expect(button('保存个人偏好')).toBeUndefined();expect(host.textContent).toContain('通用偏好有未保存的更改')
+  const confirm=vi.spyOn(window,'confirm').mockReturnValue(false);expect(guard?.()).toBe(false);confirm.mockRestore()
+  await act(async()=>button('通用偏好')!.click())
+  expect(button('保存个人偏好')!.disabled).toBe(false)
+ }finally{await act(async()=>root.unmount());host.remove()}
 })

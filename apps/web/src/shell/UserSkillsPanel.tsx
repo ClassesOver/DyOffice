@@ -1,10 +1,8 @@
-import './settings-select-b.css'
-import './settings-dialog-b.css'
-import './personal-skills-b.css'
-import {SettingsListPager} from './SettingsListPager'
 import {useEffect, useRef, useState} from 'react'
 import {parseSkillFrontmatter} from '@genoffice/agent-core'
-import {Alert, Button, Card, Input, Modal, Select, Space, Table, Tag} from 'antd'
+import {NativeSettingsDialog} from './NativeSettingsDialog'
+import {NativeSettingsPager as SettingsListPager} from './NativeSettingsPager'
+import './personal-skills-native.css'
 import {WEB_OFFICE_SKILL_CATALOG} from './office-skill-catalog'
 import {classifyOfficeSkill, OFFICE_SKILL_REQUIRED} from './office-skills'
 import type {createUserSkillsClient} from './user-skills-client'
@@ -108,38 +106,30 @@ export function UserSkillsPanel({client,onCloseGuardChange}: {client: ReturnType
     pending.current = false
     await mutate(() => client.importText(source,{overwrite:false}), 'Skill 已导入当前账号。',undefined,()=>setReplacing({name:parsed.name,source}))
   }
-  return <Card className="personal-skills-b" title="个人技能">
-    <Space className="personal-skills-toolbar" wrap><Button autoInsertSpace={false} disabled={busy} onClick={() => void refresh()}>刷新列表</Button><Button autoInsertSpace={false} type="primary" disabled={busy || uncertain || !!replacing} onClick={() => input.current?.click()}>导入 SKILL.md</Button></Space>
-    <p>导入说明用于指导已有工具，不会安装程序或开通额外能力；实际可用操作以当前编辑器和账号配置为准。</p>
-    <h4>可安装的办公技能</h4>
-    <p>从 DyOffice 推荐任务中选择，点击安装后才保存到当前账号；已有同名技能不会覆盖。</p>
-    <Space className="personal-skills-filters" wrap><Input.Search aria-label="搜索可安装技能" placeholder="搜索技能名称或说明" value={catalogSearch} allowClear onChange={event => {setCatalogSearch(event.target.value); setCatalogPage(1)}}/><Select classNames={{popup:{root:'settings-select-b'}}} aria-label="筛选技能格式" value={catalogFormat} onChange={value => {setCatalogFormat(value); setCatalogPage(1)}} options={[{value:'all',label:'全部格式'},...['docx','xlsx','pptx','pdf'].map(value => ({value,label:value.toUpperCase()}))]}/></Space>
-    <Table className="personal-skills-catalog" rowKey="key" dataSource={catalog.slice((catalogPage-1)*6,catalogPage*6)} pagination={false} locale={{emptyText:'没有匹配的办公技能'}} columns={[
-      {title:'技能',key:'skill',render:(_value,skill) => <><strong>{skill.name}</strong><p>{skill.description}</p><Space wrap>{skill.formats.map(format => <Tag key={format}>{format.toUpperCase()}</Tag>)}</Space></>},
-      {title:'操作',key:'actions',render:(_value,skill) => <Space><Button autoInsertSpace={false} onClick={() => setView({name:skill.name,body:parseSkillFrontmatter(skill.source)?.body ?? skill.source})}>查看正文</Button><Button autoInsertSpace={false} disabled={!listed || busy || uncertain || skills.some(item => item.name === skill.key)} onClick={() => void install(skill)}>{skills.some(item => item.name === skill.key) ? '已添加' : '安装'}</Button></Space>},
-    ]}/>
+  return <section className="personal-skills-native" aria-label="个人技能管理">
+    <div className="personal-skills-toolbar"><p>将常用办公方法保存为个人技能，供助手使用。</p><div className="skill-actions"><button type="button" className="native-settings-button" disabled={busy} onClick={() => void refresh()}>刷新列表</button><button type="button" className="native-settings-button is-primary" disabled={busy || uncertain || !!replacing} onClick={() => input.current?.click()}>导入 SKILL.md</button></div></div>
+    <p className="skill-hint">技能说明用于指导已有工具，不会安装程序或开通额外能力。</p>
+    {error && <p className="native-settings-notice is-error" role="alert">{error}</p>}
+    {message && <p className="native-settings-notice is-success" role="status">{message}</p>}
+    <section className="skill-section" aria-labelledby="skill-catalog-title">
+    <h3 id="skill-catalog-title">可安装的办公技能</h3><p className="skill-hint">选择所需技能安装到当前账号；已有同名技能不会被覆盖。</p>
+    <div className="personal-skills-filters"><input className="native-settings-input" type="search" aria-label="搜索可安装技能" placeholder="搜索技能名称或说明" value={catalogSearch} onChange={event => {setCatalogSearch(event.target.value); setCatalogPage(1)}}/><select className="native-settings-input" aria-label="筛选技能格式" value={catalogFormat} onChange={event => {setCatalogFormat(event.target.value); setCatalogPage(1)}}><option value="all">全部格式</option>{['docx','xlsx','pptx','pdf'].map(value=><option key={value} value={value}>{value.toUpperCase()}</option>)}</select></div>
+    <div className="skill-table-wrap"><table className="personal-skills-catalog"><thead><tr><th scope="col">技能</th><th scope="col">操作</th></tr></thead><tbody>{catalog.slice((catalogPage-1)*6,catalogPage*6).map(skill=><tr key={skill.key} data-row-key={skill.key}><td><strong>{skill.name}</strong><p>{skill.description}</p><div className="skill-formats">{skill.formats.map(format=><span key={format}>{format.toUpperCase()}</span>)}</div></td><td><div className="skill-actions"><button type="button" className="native-settings-button" onClick={()=>setView({name:skill.name,body:parseSkillFrontmatter(skill.source)?.body??skill.source})}>查看正文</button><button type="button" className="native-settings-button" disabled={!listed||busy||uncertain||skills.some(item=>item.name===skill.key)} onClick={()=>void install(skill)}>{skills.some(item=>item.name===skill.key)?'已添加':'安装'}</button></div></td></tr>)}{!catalog.length&&<tr><td colSpan={2} className="skill-empty">没有匹配的办公技能</td></tr>}</tbody></table></div>
     <SettingsListPager page={catalogPage-1} pageSize={6} total={catalog.length} onPageChange={page=>setCatalogPage(page+1)} label="办公技能目录"/>
-    <h4>当前账号的办公技能</h4>
-    <p>支持不超过 256 KiB、包含 name、description 和正文的 SKILL.md。其他类别的旧记录保留，但不在此处或助手技能列表中展示。</p>
-    <input ref={input} type="file" accept=".md,text/markdown" hidden aria-label="导入 Skill 文件" onChange={event => {const file = event.target.files?.[0]; event.target.value = ''; if (file) void importFile(file)}}/>
-    {error && <Alert type="error" showIcon title={error}/>}
-    {message && <Alert type="success" showIcon title={message} role="status"/>}
-    <Table className="personal-skills-owned" rowKey="name" loading={busy} pagination={false} dataSource={skills.slice(currentSkillPage*6,(currentSkillPage+1)*6)} locale={{emptyText:'尚未导入办公技能'}} columns={[
-      {title:'名称',dataIndex:'name',key:'name',render:(name:string) => <>{WEB_OFFICE_SKILL_CATALOG.find(skill => skill.key === name)?.name ?? name}<div>{name}</div></>},
-      {title:'说明',dataIndex:'description',key:'description'},
-      {title:'操作',key:'actions',render:(_value: unknown, skill: FoundSkill) => <Space><Button autoInsertSpace={false} disabled={busy} onClick={() => void read(skill)}>查看</Button><Button autoInsertSpace={false} danger disabled={busy || uncertain} onClick={() => setRemoving(skill)}>删除</Button></Space>},
-    ]}/>
+    </section>
+    <section className="skill-section" aria-labelledby="skill-owned-title"><h3 id="skill-owned-title">当前账号的办公技能</h3><p className="skill-hint">支持不超过 256 KiB、包含 name、description 和正文的 SKILL.md。其他类别的旧记录保留，但不在此处或助手技能列表中展示。</p>
+    <input ref={input} type="file" accept=".md,text/markdown" hidden aria-label="导入 Skill 文件" onChange={event=>{const file=event.target.files?.[0];event.target.value='';if(file)void importFile(file)}}/>
+    <div className="skill-table-wrap"><table className="personal-skills-owned" aria-busy={busy}><thead><tr><th scope="col">技能</th><th scope="col">操作</th></tr></thead><tbody>{skills.slice(currentSkillPage*6,(currentSkillPage+1)*6).map(skill=><tr key={skill.name} data-row-key={skill.name}><td><strong>{WEB_OFFICE_SKILL_CATALOG.find(item=>item.key===skill.name)?.name??skill.name}</strong><small>{skill.name}</small><p>{skill.description}</p></td><td><div className="skill-actions"><button type="button" className="native-settings-button" disabled={busy} onClick={()=>void read(skill)}>查看</button><button type="button" className="native-settings-button is-danger" disabled={busy||uncertain} onClick={()=>setRemoving(skill)}>删除</button></div></td></tr>)}{!skills.length&&<tr><td colSpan={2} className="skill-empty">{busy?'正在读取个人技能…':'尚未导入办公技能'}</td></tr>}</tbody></table></div>
     <SettingsListPager page={currentSkillPage} pageSize={6} total={skills.length} onPageChange={setSkillPage} label="个人技能" disabled={busy||uncertain||!!replacing||!!removing}/>
-    {view && <Modal className="settings-dialog-b" title={`Skill：${view.name}`} open={true} destroyOnHidden onCancel={() => setView(null)} footer={<Button autoInsertSpace={false} onClick={() => setView(null)}>关闭</Button>}>
-      {view && <Input.TextArea aria-label="Skill 内容" value={view.body} readOnly rows={16}/>}
-      {error && <Alert type="error" showIcon title={error}/>}
-    </Modal>}
-    <Modal className="settings-dialog-b" title="替换同名 Skill？" open={!!replacing} destroyOnHidden mask={{closable:false}} closable={!busy&&!uncertain} keyboard={!busy&&!uncertain} onCancel={()=>{if(!pending.current&&!uncertain)setReplacing(null)}} footer={<Space><Button autoInsertSpace={false} disabled={busy} onClick={()=>void refresh()}>刷新列表核对</Button><Button autoInsertSpace={false} disabled={busy||uncertain} onClick={()=>{setReplacing(null);setError('')}}>取消替换</Button><Button autoInsertSpace={false} danger type="primary" disabled={busy||uncertain} onClick={()=>{if(replacing){const draft=replacing;void mutate(()=>client.importText(draft.source,{overwrite:true}),'Skill 已替换。',()=>setReplacing(null))}}}>确认替换</Button></Space>}>
-      <Alert type="warning" showIcon title={`当前账号已有「${replacing?.name??''}」`} description="确认后将用所选 SKILL.md 的说明和正文替换已有内容，此操作无法撤销。取消会保留原技能。"/>
-      {error&&<Alert type="error" showIcon title={error}/>}
-    </Modal>
-    <Modal className="settings-dialog-b" title="删除 Skill" open={!!removing} destroyOnHidden onCancel={() => setRemoving(null)} footer={<Space><Button autoInsertSpace={false} onClick={() => setRemoving(null)}>取消</Button><Button autoInsertSpace={false} danger type="primary" disabled={busy || uncertain} onClick={() => {if (removing) {const name = removing.name; void mutate(() => client.removeSkill(name), 'Skill 已删除。', () => setSkills(items => items.filter(skill => skill.name !== name)))}}}>确认删除</Button></Space>}>
-      <p>确定从当前账号删除「{removing?.name}」？此操作无法撤销。</p>
-    </Modal>
-  </Card>
+    </section>
+    {view&&<NativeSettingsDialog compact title={`Skill：${view.name}`} onClose={()=>setView(null)} footer={<button type="button" className="native-settings-button" onClick={()=>setView(null)}>关闭</button>}>
+      <textarea className="native-settings-input skill-body-preview" aria-label="Skill 内容" value={view.body} readOnly rows={16}/>
+      {error&&<p role="alert" className="native-settings-notice is-error">{error}</p>}
+    </NativeSettingsDialog>}
+    {replacing&&<NativeSettingsDialog compact title="替换同名 Skill？" onClose={()=>{if(!pending.current&&!uncertain)setReplacing(null)}} footer={<><button type="button" className="native-settings-button" disabled={busy} onClick={()=>void refresh()}>刷新列表核对</button><button type="button" className="native-settings-button" disabled={busy||uncertain} onClick={()=>{setReplacing(null);setError('')}}>取消替换</button><button type="button" className="native-settings-button is-danger" disabled={busy||uncertain} onClick={()=>{const draft=replacing;void mutate(()=>client.importText(draft.source,{overwrite:true}),'Skill 已替换。',()=>setReplacing(null))}}>确认替换</button></>}>
+      <p>当前账号已有「{replacing.name}」。确认后将用所选 SKILL.md 的说明和正文替换已有内容，此操作无法撤销。取消会保留原技能。</p>
+      {error&&<p role="alert" className="native-settings-notice is-error">{error}</p>}
+    </NativeSettingsDialog>}
+    {removing&&<NativeSettingsDialog compact title="删除 Skill" onClose={()=>setRemoving(null)} footer={<><button type="button" className="native-settings-button" onClick={()=>setRemoving(null)}>取消</button><button type="button" className="native-settings-button is-danger" disabled={busy||uncertain} onClick={()=>{const name=removing.name;void mutate(()=>client.removeSkill(name),'Skill 已删除。',()=>setSkills(items=>items.filter(skill=>skill.name!==name)))}}>确认删除</button></>}><p>确定从当前账号删除「{removing.name}」？此操作无法撤销。</p></NativeSettingsDialog>}
+  </section>
 }

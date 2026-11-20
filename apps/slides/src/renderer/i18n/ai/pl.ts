@@ -12,6 +12,7 @@ export const pl = {
   aiQcPageOk: 'Strona {n}: układ w porządku',
   aiQcPageFixed: 'Strona {n}: {summary}',
   aiQcPageFixedDefault: 'naprawiono problemy z układem',
+  aiQcPageRollbackFailed: "Strona {n}: poprawka pogorszyła układ; przywrócenie niepotwierdzone. Sprawdź stronę lub cofnij zmiany.",
   aiQcPageReverted: 'Strona {n}: automatyczna poprawka pogorszyła wynik — cofnięto',
   aiQcPageFailed: 'Strona {n}: sprawdzanie nie powiodło się ({error})',
   aiQcPageSkipped: 'Strona {n}: pominięto automatyczne sprawdzanie układu',

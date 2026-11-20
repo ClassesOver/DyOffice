@@ -44,7 +44,10 @@ export function createLocalAdminClient(send:typeof fetch=fetch,onSessionExpired?
   async issue(userId:string,purpose:'activate'|'reset'){if(!['activate','reset'].includes(purpose))throw new Error('无效用途');const path=`/api/v1/admin/users/${id(userId)}/${purpose==='activate'?'activation':'password-reset'}`;return mutate(async started=>{const result=await request<{action:unknown}>(path,{},'POST',false,started);return {action:action(result?.action,purpose)}})},
   async setStatus(userId:string,status:'active'|'disabled'){if(!['active','disabled'].includes(status))throw new Error('无效状态');const path=`/api/v1/admin/users/${id(userId)}`;return mutate(async started=>{const result=await request<{user:unknown}>(path,{status},'PATCH',false,started);return {user:user(result?.user)}})},
   async setRoles(userId:string,roles:string[]){if(!roles.length||roles.length>4||new Set(roles).size!==roles.length||roles.some(r=>!['personal','config_admin','operator','auditor'].includes(r)))throw new Error('无效角色');const path=`/api/v1/admin/users/${id(userId)}`;return mutate(async started=>{const result=await request<{user:unknown}>(path,{roles},'PATCH',false,started);return {user:user(result?.user)}})},
-  async redeem(token:string,purpose:'activate'|'reset',password:string){if(!/^[A-Za-z0-9_-]{43}$/.test(token)||!['activate','reset'].includes(purpose))throw new Error('无效一次性码');await request('/api/v1/auth/password-action',{token,purpose,password},'POST',true)},
+  async redeem(token:string,password:string){
+   if(!/^[A-Za-z0-9_-]{43}$/.test(token))throw new Error('无效一次性码')
+   await request('/api/v1/auth/password-action',{token,password},'POST',true)
+  },
  }
 }
 export type LocalAdminClient=ReturnType<typeof createLocalAdminClient>

@@ -8,7 +8,7 @@ export interface ObjectStore {
   /** Optional metadata is an assertion, never a trusted substitute for hashing
    *  and bounding the actual private byte snapshot before publication. */
   putImmutable(key: string, bytes: Buffer, expected?: { size: number; sha256: string }): Promise<ObjectRef>
-  readVerified(reference: ObjectRef): Promise<Buffer>
+  readVerified(reference: ObjectRef, signal?: AbortSignal): Promise<Buffer>
   // Internal only: caller must prove terminal publication and no live references.
   // Missing objects succeed; adapters unable to physically reclaim must reject.
   removeUnreferenced?(key: string): Promise<void>

@@ -15,6 +15,10 @@ const object = (properties: object, required = Object.keys(properties)) => ({ ty
 const token = (request: FastifyRequest) => cookies(request).session ?? ''
 const fileId = (request: FastifyRequest) => (request.params as { id: string }).id
 export function registerRevisionRoutes(api: FastifyInstance, { leases, revisions, transfer }: { leases: LeaseService; revisions: RevisionService; transfer: TransferRunner }) {
+  const wordVersion={type:'integer',minimum:0,maximum:2147483647}
+  api.post('/api/v1/files/:id/word-collab',{bodyLimit:256*1024,schema:{params,querystring,body:object({
+    revision:id,clientId:id,version:wordVersion,steps:{type:'array',maxItems:64,items:{type:'object',required:['stepType'],properties:{stepType:{type:'string',maxLength:64}},additionalProperties:true}},
+  },['revision','clientId'])}}, request=>revisions.syncWord(token(request),fileId(request),request.body as Parameters<typeof revisions.syncWord>[2]))
   api.get('/api/v1/files/:id/lease', { schema: { params, querystring } }, request => leases.getLease(token(request),fileId(request)))
   api.post('/api/v1/files/:id/lease', { bodyLimit: 4096, schema: { params, querystring, body: object(editor) } }, request => leases.acquireLease(token(request),fileId(request),request.body as { editorId: string }))
   api.post('/api/v1/files/:id/lease/renew', { bodyLimit: 4096, schema: { params, querystring, body: object({ ...editor, leaseEpoch: epoch }) } }, request => leases.renewLease(token(request),fileId(request),request.body as { editorId: string; leaseEpoch: number }))
@@ -31,7 +35,7 @@ export function registerRevisionRoutes(api: FastifyInstance, { leases, revisions
     const upload = await revisions.stageRestore(token(request),fileId(request),request.body as { revision: string; baseRevision: string; leaseEpoch: number; editorId: string })
     return reply.code(201).send(upload)
   }))
-  api.post('/api/v1/files/:id/commits', { bodyLimit: 4096, schema: { params, querystring, body: object({ fileId: id, uploadId: id, baseRevision: id, leaseEpoch: epoch, idempotencyKey: { type: 'string', pattern: '^[A-Za-z0-9_-]{8,128}$' }, sourceCommandId: id }, ['fileId','uploadId','baseRevision','leaseEpoch','idempotencyKey']) } }, (request, reply) => transfer(request,reply,async () => {
+  api.post('/api/v1/files/:id/commits', { bodyLimit: 4096, schema: { params, querystring, body: object({ fileId: id, uploadId: id, baseRevision: id, leaseEpoch: epoch, idempotencyKey: { type: 'string', pattern: '^[A-Za-z0-9_-]{8,128}$' }, sourceCommandId: id, wordVersion }, ['fileId','uploadId','baseRevision','leaseEpoch','idempotencyKey']) } }, (request, reply) => transfer(request,reply,async () => {
     const body = request.body as SaveInput
     if (uuid(body.fileId) !== uuid(fileId(request))) throw authError(400)
     return revisions.commitRevision(token(request),body)

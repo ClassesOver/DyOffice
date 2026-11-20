@@ -561,7 +561,7 @@ function findNoteAnnotRef(
  *  so the note shows up in one viewer and not the other. markupAppearance never
  *  hit this because it always passes a Resources object; naming the colour
  *  space as well keeps the result independent of the page's default. */
-function noteAppearance(
+export function noteAppearance(
   pdfDoc: PDFDocument,
   rect: number[],
   color: [number, number, number],
@@ -1144,6 +1144,15 @@ export function mergeGrid(perSheet: number): { cols: number; rows: number } {
   return { cols, rows: Math.ceil(n / cols) }
 }
 
+/** Match the viewer's visible region, including disjoint CropBox fallback. */
+function pageViewBox(page: PDFPage): { x: number; y: number; width: number; height: number } {
+  const media = page.getMediaBox(), crop = page.getCropBox()
+  const x = Math.max(media.x, crop.x), y = Math.max(media.y, crop.y)
+  const right = Math.min(media.x + media.width, crop.x + crop.width)
+  const top = Math.min(media.y + media.height, crop.y + crop.height)
+  return right > x && top > y ? { x, y, width: right - x, height: top - y } : media
+}
+
 /**
  * N-up imposition: place every perSheet consecutive pages onto one sheet, each
  * scaled to fit its cell and centered. The sheet matches the first page's size;
@@ -1158,13 +1167,21 @@ export async function mergePagesBytes(
   const out = await PDFDocument.create()
   const total = src.getPageCount()
   const first = src.getPage(0)
+  // Embed only the displayed region so cropped-out content stays out of view.
+  const visibleBoxes = src.getPages().map((page) => {
+    const box = pageViewBox(page)
+    return { left: box.x, bottom: box.y, right: box.x + box.width, top: box.y + box.height }
+  })
+  const firstBox = visibleBoxes[0]!
+  const firstWidth = firstBox.right - firstBox.left
+  const firstHeight = firstBox.top - firstBox.bottom
   const { cols, rows } = mergeGrid(perSheet)
   const normalizeRotation = (angle: number): number =>
     (((Math.round(angle / 90) * 90) % 360) + 360) % 360
   const firstRotation = normalizeRotation(first.getRotation().angle)
   const firstTurns = firstRotation === 90 || firstRotation === 270
-  const firstDisplayW = firstTurns ? first.getHeight() : first.getWidth()
-  const firstDisplayH = firstTurns ? first.getWidth() : first.getHeight()
+  const firstDisplayW = firstTurns ? firstHeight : firstWidth
+  const firstDisplayH = firstTurns ? firstWidth : firstHeight
   const sheetW = perSheet === 2 ? firstDisplayH : firstDisplayW
   const sheetH = perSheet === 2 ? firstDisplayW : firstDisplayH
   // embedPages throws on pages without a content stream (e.g. our own inserted
@@ -1174,7 +1191,7 @@ export async function mergePagesBytes(
       p.node.set(PDFName.of('Contents'), src.context.register(src.context.stream('')))
     }
   }
-  const embedded = await out.embedPages(src.getPages())
+  const embedded = await out.embedPages(src.getPages(), visibleBoxes)
   const cellW = sheetW / cols
   const cellH = sheetH / rows
   for (let start = 0; start < total; start += perSheet) {
@@ -1343,7 +1360,7 @@ export async function splitPagesBytes(bytes: Uint8Array, perPage: 2 | 4 | 9): Pr
       const row = Math.floor(c / cols)
       const rect = displayFracToUserRect(
         rot,
-        page.getCropBox(),
+        pageViewBox(page),
         col / cols,
         row / rows,
         (col + 1) / cols,
@@ -1553,6 +1570,13 @@ async function appendBlankPages(bytes: Uint8Array, blanks: BlankPageInput[]): Pr
 export async function applySaveRequest(
   bytes: Uint8Array,
   request: SavePdfRequest,
+  // Trusted in-process extensions only; these callbacks are never part of SavePdfRequest.
+  forms: {
+    applyFormValues?: (doc: PDFDocument) => void | Promise<void>
+    applyFormFields?: (doc: PDFDocument) => void | Promise<void>
+    updateFieldAppearances?: (doc: PDFDocument) => void | Promise<void>
+    decodeImage?: (base64: string) => { width: number; height: number; bgra: Buffer }
+  } = {},
 ): Promise<AppliedSaveRequest> {
   // A protected session works on the document's plain form: the bytes on disk are
   // the protected output of the previous save, and the session's edits only make
@@ -1613,12 +1637,13 @@ export async function applySaveRequest(
   }
   if (request.imageEdits && request.imageEdits.length > 0) {
     const { applyImageEdits } = await import('./image-edit')
-    const applied = await applyImageEdits(bytes, request.imageEdits)
+    const applied = await applyImageEdits(bytes, request.imageEdits, forms.decodeImage)
     bytes = applied.bytes
     skippedImageEdits = applied.skipped
   }
   const pdfDoc = await PDFDocument.load(bytes, { updateMetadata: false })
-  if (request.formValues.length > 0) applyFormValues(pdfDoc, request.formValues)
+  if (forms.applyFormValues) await forms.applyFormValues(pdfDoc)
+  else if (request.formValues.length > 0) applyFormValues(pdfDoc, request.formValues)
   const pages = pdfDoc.getPages()
   // Apply rotations first so markup appearances draw lines for the page's final orientation
   for (const r of request.rotations ?? []) {
@@ -1628,7 +1653,8 @@ export async function applySaveRequest(
   if (request.formWidgetEdits && request.formWidgetEdits.length > 0) {
     applyFormWidgetEdits(pdfDoc, request.formWidgetEdits)
   }
-  if (request.formFields && request.formFields.length > 0) {
+  if (forms.applyFormFields) await forms.applyFormFields(pdfDoc)
+  else if (request.formFields && request.formFields.length > 0) {
     applyFormFields(pdfDoc, request.formFields)
   }
   const author = request.annotationAuthor || DEFAULT_ANNOT_AUTHOR
@@ -1724,7 +1750,8 @@ export async function applySaveRequest(
       )
   }
   if (request.attachments) applyAttachments(pdfDoc, request.attachments)
-  refreshFieldAppearances(pdfDoc)
+  if (forms.updateFieldAppearances) await forms.updateFieldAppearances(pdfDoc)
+  else refreshFieldAppearances(pdfDoc)
   // Protection serializes with the document: strings and streams are encrypted in
   // place, so no object/xref stream may be created after this point (all saves here
   // already run with useObjectStreams off). Redaction below re-serializes a cleaned

@@ -90,7 +90,7 @@ function storedSnapshot(row: Row) {
  * Explicit save freezes one command receipt permanently. Saved evidence is
  * personal workspace data even after the source is disabled/logically deleted;
  * every operation still requires a live owner session. Pending evidence also
- * requires its original session and an enabled, nondeleted published source.
+ * requires its original session and an enabled, nondeleted saved source.
  * This service never calls a connector, executes SQL from input, or charges T05
  * object storage bytes. No remove/rename API: no reuse of result/command IDs.
  */
@@ -120,10 +120,13 @@ export function createWorkspaceSourceResults(options: WorkspaceSourceResultsOpti
     const keys = [p.deploymentId, p.userId, sourceId]
     // Source mutations take UPDATE on this permanent root. Hold SHARE through
     // commit so disabled/deleted state cannot race capture/save/pending access.
-    const source = (await c.query('SELECT enabled,published_revision FROM data_sources WHERE deployment_id=$1 AND owner_id=$2 AND source_id=$3 AND deleted_at IS NULL FOR SHARE', keys)).rows[0]
+    const source = (await c.query('SELECT enabled,draft_version FROM data_sources WHERE deployment_id=$1 AND owner_id=$2 AND source_id=$3 AND deleted_at IS NULL FOR SHARE', keys)).rows[0]
     if (!source) throw error(404)
     if (!source.enabled) throw error(409)
-    if (source.published_revision === null || !(await c.query('SELECT 1 FROM data_source_versions WHERE deployment_id=$1 AND owner_id=$2 AND source_id=$3 AND revision=$4', [...keys, sourceVersion])).rowCount) throw error(404)
+    if (sourceVersion > source.draft_version) throw error(404)
+    // A pending snapshot is tied to the connection scope at query time.
+    // Saved materializations have their own owner authorization.
+    if (sourceVersion !== source.draft_version) throw error(409)
   }
   async function readable(c: PoolClient, p: BusinessPrincipal, workspaceId: string, id: string): Promise<Row> {
     const row = (await c.query<Row>(`SELECT ${metadata},snapshot FROM workspace_source_results WHERE deployment_id=$1 AND owner_id=$2 AND workspace_id=$3 AND result_id=$4 AND (state='saved' OR (state='pending' AND session_id=$5 AND expires_at>clock_timestamp()))`, [...scope(p, workspaceId), id, p.sessionId])).rows[0]

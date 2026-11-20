@@ -1,9 +1,14 @@
 import { describe, expect, it } from 'vitest'
-import { parseFileToText } from '../src/index'
+import { parseBytesToText, parseFileToText } from '../src/index'
 import { resolveTarget } from '../src/opc'
 import { writeFixture } from './helpers/fixtures'
 
 describe('parseFileToText: plain-text formats', () => {
+  it('parses bytes using the supplied filename without temporary files', async () => {
+    const result = await parseBytesToText('sample.txt', Buffer.from('plain text hello'))
+    expect(result).toEqual({ ok: true, kind: 'text', text: 'plain text hello' })
+  })
+
   const cases: Array<[string, string]> = [
     ['sample.txt', 'plain text hello'],
     ['sample.md', '# Title\n\nBody paragraph'],

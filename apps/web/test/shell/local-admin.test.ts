@@ -25,10 +25,10 @@ test('failed mutation is not retried and arbitrary IDs/purposes fail before fetc
 test('password action puts one-time token only in POST body and fetches fresh challenge every attempt',async()=>{
  const send=vi.fn(async(path:RequestInfo|URL)=>String(path).endsWith('/csrf')?new Response(JSON.stringify({csrfToken:'challenge'})):new Response(null,{status:204}))
  const c=createLocalAdminClient(send);const token='a'.repeat(43)
- await c.redeem(token,'activate','new password')
+ await c.redeem(token,'new password')
  expect(send.mock.calls[1]?.[0]).toBe('/api/v1/auth/password-action')
  const init=send.mock.calls[1]?.[1] as RequestInit
- expect(JSON.parse(String(init.body))).toEqual({token,purpose:'activate',password:'new password'})
+ expect(JSON.parse(String(init.body))).toEqual({token,password:'new password'})
 })
 
 import {act,createElement as h} from 'react'
@@ -97,7 +97,7 @@ test('malformed 2xx DTOs never report successful actions',async()=>{
  await expect(c.create('x','')).rejects.toThrow()
  await expect(c.issue(id,'reset')).rejects.toThrow()
  await expect(c.setStatus(id,'disabled')).rejects.toThrow()
- await expect(c.redeem('a'.repeat(43),'activate','new')).rejects.toThrow()
+ await expect(c.redeem('a'.repeat(43),'new')).rejects.toThrow()
 })
 test('reauth network failure clears shared CSRF and never starts the admin mutation',async()=>{
  const client={list:vi.fn(async()=>({users:[],nextCursor:null})),reauthenticate:vi.fn(async()=>{throw new Error('network outcome unknown')}),create:vi.fn()} as unknown as LocalAdminClient
@@ -140,10 +140,10 @@ test('self role replacement is explicit, preserves personal and requires a fresh
  await vi.waitFor(()=>expect(changed).toHaveBeenCalledOnce())
  expect(client.setRoles).toHaveBeenCalledWith('me',['personal']);root.unmount()
 })
-test('password action purpose has an explicit stable accessible label',async()=>{
+test('password setup uses a single form with a labeled one-time code field',async()=>{
  const root=await mount(h(PasswordActionForm,{onClose:()=>{}}))
- await vi.waitFor(()=>expect(document.querySelector('[role=combobox]')).not.toBeNull())
- expect(document.querySelector('[role=combobox]')?.getAttribute('aria-label')).toBe('用途')
+ await vi.waitFor(()=>expect(document.querySelector('input[name=token]')?.getAttribute('aria-label')).toBe('一次性码'))
+ expect(document.querySelector('[role=combobox]')).toBeNull()
  root.unmount()
 })
 
@@ -154,7 +154,7 @@ test('user management labels roles and status in Chinese and protects an unfinis
  const root=await mount(h(LocalAdminPanel,{currentUserId:'me',onClose:()=>{},onSessionRotated:()=>{},client,onCloseGuardChange(next:(()=>boolean)|null){guard=next}}))
  try{
   await vi.waitFor(()=>expect(document.body.textContent).toContain('Alice'))
-  expect(document.body.textContent).toContain('待激活')
+  expect(document.body.textContent).toContain('待设置密码')
   expect(document.body.textContent).toContain('运维人员')
   expect(guard?.()).toBe(true)
   ;([...document.querySelectorAll('button')].find(b=>b.textContent==='编辑角色')!).click()
@@ -208,7 +208,7 @@ test('reauthentication clears actual typed administrator passwords while waiting
  }finally{await act(async()=>root.unmount());environment.IS_REACT_ACT_ENVIRONMENT=previous}
 })
 
-test('password action selects reset explicitly and clears typed credentials before the pending request completes',async()=>{
+test('password setup clears typed credentials before the pending request completes',async()=>{
  const {act}=await import('react')
  let finish!:()=>void
  const redeem=vi.fn(()=>new Promise<void>(resolve=>{finish=resolve}))
@@ -217,15 +217,11 @@ test('password action selects reset explicitly and clears typed credentials befo
  const environment=globalThis as typeof globalThis & {IS_REACT_ACT_ENVIRONMENT?:boolean}
  const previous=environment.IS_REACT_ACT_ENVIRONMENT;environment.IS_REACT_ACT_ENVIRONMENT=true
  try{
-  const purpose=document.querySelector<HTMLInputElement>('[role="combobox"][aria-label="用途"]')!
-  expect(purpose).not.toBeNull()
-  await act(async()=>purpose.dispatchEvent(new MouseEvent('mousedown',{bubbles:true})))
-  await act(async()=>{([...document.querySelectorAll<HTMLElement>('.ant-select-item-option')].find(option=>option.textContent==='重置密码')!).click()})
   const form=document.querySelector('form')!
   await act(async()=>{for(const [name,value] of [['token','x'.repeat(43)],['password','new reset test passphrase'],['confirm','new reset test passphrase']]){const input=form.querySelector<HTMLInputElement>(`[name="${name}"]`)!;Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value')!.set!.call(input,value);input.dispatchEvent(new Event('input',{bubbles:true}))}})
   await act(async()=>{form.dispatchEvent(new Event('submit',{bubbles:true,cancelable:true}))})
-  expect(redeem).toHaveBeenCalledWith('x'.repeat(43),'reset','new reset test passphrase')
-  expect([...form.querySelectorAll<HTMLInputElement>('input:not([name=purpose])')].filter(input=>input.name).every(input=>input.value==='')).toBe(true)
+  expect(redeem).toHaveBeenCalledWith('x'.repeat(43),'new reset test passphrase')
+  expect([...form.querySelectorAll<HTMLInputElement>('input')].filter(input=>input.name).every(input=>input.value==='')).toBe(true)
   await act(async()=>finish())
  }finally{await act(async()=>root.unmount());environment.IS_REACT_ACT_ENVIRONMENT=previous}
 })

@@ -4,7 +4,7 @@ export function loginDomSnapshot() {
  const buttons=[...document.querySelectorAll('button[type="submit"]')]
  return {
   login:count('.dy-login'),home:count('.home'),recovery:count('.account-session-recovery'),
-  passwordAction:count('section[aria-label="激活或重置密码"]'),
+  passwordAction:count('section[aria-labelledby="password-action-title"]'),
   forms:count('.dy-login form'),inputs:count('.dy-login input'),disabledInputs:count('.dy-login input:disabled'),
   submits:Math.min(100,buttons.length),disabledSubmits:Math.min(100,buttons.filter(b=>b.disabled).length),
   loadingSubmits:Math.min(100,buttons.filter(b=>b.classList.contains('ant-btn-loading')).length),

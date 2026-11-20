@@ -12,6 +12,7 @@ export const ja = {
   aiQcPageOk: 'ページ {n}:レイアウト正常',
   aiQcPageFixed: 'ページ {n}:{summary}',
   aiQcPageFixedDefault: 'レイアウトの問題を修正しました',
+  aiQcPageRollbackFailed: "ページ {n}: 自動修正後に問題が増え、復元を確認できません。ページを確認するか、変更を取り消してください。",
   aiQcPageReverted: 'ページ {n}:自動修正が改善しなかったため元に戻しました',
   aiQcPageFailed: 'ページ {n}:チェック失敗({error})',
   aiQcPageSkipped: 'ページ {n}:自動レイアウトチェックをスキップ',

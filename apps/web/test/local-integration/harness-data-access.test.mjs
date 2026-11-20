@@ -18,7 +18,6 @@ test('task grants preserve real frozen-result RLS, result-only scope and live ow
   const access=createHarnessDataAccess({tools,results,sessions:f.sessions});t.after(()=>access.dispose())
   for(const token of [f.alice.token,f.bob.token]) {
     await sources.create(token,{sourceId:'metrics',name:'Metrics',kind:'http',config:{timezone:'UTC'},secret:'https://fixture.invalid/data'})
-    await sources.publish(token,'metrics',{expectedVersion:1})
   }
   const snapshot=createQuerySnapshot({sourceId:'metrics',sourceVersion:1,timezone:'UTC',schema:[{name:'amount',type:'number',unit:'CNY'}],rows:[{amount:42}],sourceTruncated:false})
   const queryHash=createHash('sha256').update('bounded fixture').digest('hex')

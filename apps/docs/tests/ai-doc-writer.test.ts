@@ -180,6 +180,20 @@ describe('write_document tool', () => {
     expect(texts(editor)).toEqual([''])
   })
 
+  it('keeps a remote insert inside the draft instead of landing a late whole-document result', async () => {
+    const editor=await createBlankEditor()
+    const result=await executeTool(editor,{id:'t',name:'write_document',input:{plan:'p'}},NUM_IDS,
+      undefined,undefined,null,undefined,undefined,{async write(_spec,progress){
+        progress('<p>initial</p>')
+        await tick()
+        editor.view.dispatch(editor.state.tr.insertText('[peer]',3).setMeta('dyofficeRemoteEdit',true))
+        progress('<p>late replacement</p>')
+        return {ok:true,html:'<p>late replacement</p>'}
+      }})
+    expect(result.isError).toBe(true)
+    expect(editor.state.doc.textContent).toBe('in[peer]itial')
+  })
+
   it('refuses a whole-document write on a non-blank document without replaceDocument', async () => {
     const editor = await createBlankEditor()
     editor.commands.setContent('<p>keep</p>')

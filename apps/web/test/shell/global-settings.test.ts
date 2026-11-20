@@ -29,12 +29,12 @@ function button(text: string, host: ParentNode = document) {const found = [...ho
 function input(label: string) {const found = document.querySelector<HTMLInputElement>(`input[aria-label="${label}"]`); expect(found, label).not.toBeNull(); return found!}
 async function click(text: string) {await act(async () => button(text).click())}
 async function choose(label: string, text: string) {
-  const node = document.querySelector<HTMLInputElement>(`[role="combobox"][aria-label="${label}"]`)!
-  expect(node, label).not.toBeNull()
-  await act(async () => node.dispatchEvent(new MouseEvent('mousedown', {bubbles: true})))
-  const option = [...document.querySelectorAll<HTMLElement>('.ant-select-item-option')].find(item => item.textContent === text)
-  expect(option, text).toBeDefined()
-  await act(async () => option!.click())
+ const node=document.querySelector<HTMLSelectElement>(`select[aria-label="${label}"]`)!
+ expect(node,label).not.toBeNull()
+ const option=[...node.options].find(item=>item.textContent===text)
+ expect(option,text).toBeDefined()
+ if(option!.disabled)return
+ await act(async()=>{Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype,'value')!.set!.call(node,option!.value);node.dispatchEvent(new Event('change',{bubbles:true}))})
 }
 async function change(label: string, value: string) {await act(async () => {const node = input(label); Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(node, value); node.dispatchEvent(new Event('input', {bubbles: true}))})}
 async function submit() {await act(async () => document.querySelector('form[aria-label="全局配置表单"]')!.dispatchEvent(new Event('submit', {bubbles: true, cancelable: true})))}
@@ -48,7 +48,7 @@ test('shows saved key presence without returning credentials and obtains provide
   expect(document.body.textContent).toContain('已保存密钥')
   await choose('服务商', 'Codex CLI（当前 Web 不可用）')
   expect(input('模型标识').value).toBe('model-a')
-  expect(document.querySelector('[role="combobox"][aria-label="服务商"]')?.closest('.ant-select')?.textContent).toContain('OpenAI')
+  expect(document.querySelector<HTMLSelectElement>('select[aria-label="服务商"]')?.value).toBe('openai')
   expect(document.querySelector('datalist')?.textContent).toContain('model-b')
 })
 
@@ -285,6 +285,18 @@ test('shared model connection test uses the saved entry and waits for unsaved ed
  expect(document.body.textContent).toContain('请先保存，再测试连接')
 })
 
+test.each([
+ ['PROVIDER_AUTH_REJECTED','请检查 API 密钥和模型访问权限'],
+ ['PROVIDER_RATE_LIMITED','请检查供应商额度，或稍后重试'],
+ ['PROVIDER_TEMPORARILY_UNAVAILABLE','供应商服务暂时不可用'],
+ ['unexpected-private-provider-text','请检查 API 密钥、模型名称和接口地址'],
+])('shared model connection test explains failure safely (%s)',async(reason,guidance)=>{
+ await mount(createGlobalSettingsClient(requestFrom(async(_path,method='GET')=>method==='GET'?initial():{ok:false,reason})))
+ await click('测试连接')
+ expect(document.querySelector('[role="alert"]')?.textContent).toContain(guidance)
+ expect(document.body.textContent).not.toContain(reason)
+})
+
 test('AI and media groups preserve drafts and credentials across navigation and save together', async () => {
   let submitted: SaveGlobalConfigRequest | undefined
   const config = initial()
@@ -361,4 +373,28 @@ test('toolbar discard requires confirmation and reloads without submitting a dra
   expect(writes).toBe(0)
   expect(input('配置名称').value).toBe('Original')
   expect(input('API 密钥').value).toBe('')
+})
+
+
+test('global configuration uses native controls and searches configuration choices without losing unsaved secrets',async()=>{
+ const config=initial();config.entries.push({...config.entries[0],id:'second',label:'Second model'})
+ const {host}=await mount(createGlobalSettingsClient(requestFrom(async()=>config)))
+ expect(host.querySelectorAll('[class*="ant-"]')).toHaveLength(0)
+ await change('API 密钥','private-draft')
+ await change('搜索服务配置','Second')
+ await choose('选择服务配置','Second model')
+ expect(input('API 密钥').value).toBe('')
+ await change('搜索服务配置','Original')
+ await choose('选择服务配置','Original')
+ expect(input('API 密钥').value).toBe('private-draft')
+})
+
+
+test('native save button submits the associated form exactly once',async()=>{
+ const writes:unknown[]=[]
+ await mount(createGlobalSettingsClient(requestFrom(async(_path,method='GET',body)=>{if(method==='GET')return initial();writes.push(body);return {...initial(),revision:4}})))
+ await change('配置名称','Saved by button')
+ await click('保存配置')
+ expect(writes).toHaveLength(1)
+ expect(writes[0]).toMatchObject({expectedRevision:3,patch:{upserts:[{id:'primary',label:'Saved by button'}]}})
 })

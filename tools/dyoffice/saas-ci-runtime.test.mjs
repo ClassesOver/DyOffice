@@ -29,8 +29,8 @@ test('native worker CI installs the no-Electron shared workspace required by the
  assert.ok(root.workspaces.includes('apps/sheets'))
 })
 
-test('native Sheets server child uses the same TypeScript transform mode as its parent',async()=>{
+test('native Sheets server child uses the same TypeScript transform and resolution as its parent',async()=>{
  const source=await readFile(new URL('../../apps/web/test/native-sheets/runtime.test.mjs',import.meta.url),'utf8')
- assert.match(source,/spawn\(process\.execPath,\['--experimental-transform-types','server\/index\.mjs'\]/)
+ assert.match(source,/spawn\(process\.execPath,\['--experimental-transform-types','--import','tsx','server\/index\.mjs'\]/)
  assert.doesNotMatch(source,/--experimental-strip-types/)
 })

@@ -17,7 +17,9 @@ export interface TeamTask {
   targetId: string
   instruction: string
   state: TaskState
+  savedRevision?:string|undefined
   summary?: string | undefined
+  failure?: string | undefined
   output?: string | undefined
   progress?: string | undefined
   activity?: string | undefined
@@ -43,7 +45,7 @@ export function createAssistantWorkspace(options: {
     pending = false,
     notice = '',
     disposed = false
-  let view: 'chat' | 'team' | 'tasks' = 'chat',
+  let view: 'chat' | 'tasks' = 'chat',
     focusedTask = ''
   const directChannelTasks = new Set<string>()
   const listeners = new Set<() => void>()
@@ -84,6 +86,7 @@ export function createAssistantWorkspace(options: {
         instruction: task.instruction,
         state: task.state,
         summary: task.summary,
+        failure: task.failure,
         output: task.output,
         progress: task.progress,
         activity: task.activity,
@@ -105,6 +108,7 @@ export function createAssistantWorkspace(options: {
               },
         instruction: task.instruction,
         state: task.state,
+        savedRevision:task.savedRevision,
         summary: task.summary ?? undefined,
         initiator: directChannelTasks.has(task.taskId)
           ? ('user' as const)
@@ -134,7 +138,7 @@ export function createAssistantWorkspace(options: {
       }
     },
     isOffice: () => selected.kind === 'office',
-    setView(next: 'chat' | 'team' | 'tasks') {
+    setView(next: 'chat' | 'tasks') {
       view = next
       notify()
     },
@@ -200,7 +204,7 @@ export function createAssistantWorkspace(options: {
     },
     async cancelTask(id: string) {
       try {
-        if (id.startsWith('harness:')) options.coding?.cancel(id.slice(8))
+        if (id.startsWith('harness:')) await options.coding?.cancel(id.slice(8))
         else if (id.startsWith('channel:')) await options.channel?.cancel(id.slice(8))
       } catch {
         notice = 'cancelFailed'
@@ -208,7 +212,7 @@ export function createAssistantWorkspace(options: {
       }
     },
     cancel(id: string) {
-      options.coding?.cancel(id)
+      return this.cancelTask('harness:'+id)
     },
     dispose() {
       disposed = true

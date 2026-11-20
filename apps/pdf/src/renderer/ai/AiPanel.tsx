@@ -1,17 +1,13 @@
 import {
-  aiPanelWidthAtPointer,
+  useAiPanelResize,
   AiPanelSideButton,
   AiModelPicker,
   type AiModelPickerBridge,
 } from '@genoffice/ui'
 import {
-  AI_PANEL_WIDTH_DEFAULT,
-  clampAiPanelWidth,
-  loadAiPanelWidth,
-  saveAiPanelWidth,
 } from '@genoffice/ui'
-import { useEffect, useRef, useState } from 'react'
-import type { PointerEvent as ReactPointerEvent, ReactElement } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import type { ReactElement } from 'react'
 import { AgentLoop, withAttachedSkills } from '@genoffice/agent-core'
 import { imageGenerationAvailable, type AiSettings } from '@genoffice/ai-provider/browser'
 import {
@@ -30,9 +26,6 @@ import {
 } from '@genoffice/ui'
 import { aiLangDirective, t as tGlobal, useI18n } from '../i18n/locale'
 import { createFileNav, Markdown } from '@genoffice/ui'
-import sendEnterOn from '../assets/send-enter-on.png'
-import sendEnterOff from '../assets/send-enter-off.png'
-import sendStop from '../assets/send-stop.png'
 import { createPdfSkill } from './pdf-skill'
 import { createElectronTransport } from './transport'
 import { PDF_NAV_SCHEME, parsePdfNavHref } from './pdf-nav'
@@ -93,6 +86,7 @@ const MODEL_BRIDGE: AiModelPickerBridge = {
 export function AiPanel({
   api,
   filePath,
+  collapsed,
   onCollapse,
   preset,
   onRunDone,
@@ -101,6 +95,7 @@ export function AiPanel({
   api: PdfAppDeps
   /** Absolute path of the open PDF (chat history is keyed to it) */
   filePath?: string
+  collapsed: boolean
   onCollapse: () => void
   /** Ribbon AI buttons push a one-shot prompt; a new nonce triggers an auto-run */
   preset?: { text: string; nonce: number } | null
@@ -269,20 +264,12 @@ export function AiPanel({
         /* silent */
       })
   }, [filePath])
-  // preferred = the user's chosen width (the only value persisted); panelWidth =
-  // what fits the current window. Deriving the display width from the preference
-  // means a transiently small window never permanently shrinks the panel.
-  const preferredWidthRef = useRef(loadAiPanelWidth(PANEL_WIDTH_KEY) ?? AI_PANEL_WIDTH_DEFAULT)
-  const [panelWidth, setPanelWidth] = useState(() => clampAiPanelWidth(preferredWidthRef.current))
-  const [resizing, setResizing] = useState(false)
+  const { width, resizing, handle } = useAiPanelResize(PANEL_WIDTH_KEY, lang, !collapsed)
   const asideRef = useRef<HTMLElement>(null)
-
-  // The .ai-dock wrapper owns the animated width (docs-style 180ms slide);
-  // it tracks the resizable panel width through this variable
-  useEffect(() => {
-    const dock = asideRef.current?.closest('.ai-dock') as HTMLElement | null
-    dock?.style.setProperty('--ai-panel-width', `${panelWidth}px`)
-  }, [panelWidth])
+  useLayoutEffect(() => {
+    const dock = asideRef.current?.closest<HTMLElement>('.ai-dock')
+    dock?.style.setProperty('--ai-panel-width', `${width}px`)
+  }, [width])
   const settingsRef = useRef<AiSettings | null>(null)
 
   /** gsk login state for the cloud-tools gate (refreshed on mount and window focus) */
@@ -619,52 +606,6 @@ export function AiPanel({
     // eslint-disable-next-line react-hooks/exhaustive-deps -- run once per nonce
   }, [preset?.nonce])
 
-  // Re-derive the display width on window resize (max is 60% of the window);
-  // growing the window back restores the preferred width
-  useEffect(() => {
-    const onResize = (): void => setPanelWidth(clampAiPanelWidth(preferredWidthRef.current))
-    window.addEventListener('resize', onResize)
-    return () => window.removeEventListener('resize', onResize)
-  }, [])
-
-  const resizeCleanupRef = useRef<(() => void) | null>(null)
-  useEffect(() => () => resizeCleanupRef.current?.(), [])
-
-  /** Drag the inner panel edge to resize from the selected window side. */
-  const startResize = (e: ReactPointerEvent<HTMLDivElement>): void => {
-    e.preventDefault()
-    const resizer = e.currentTarget
-    setResizing(true)
-    document.body.style.cursor = 'col-resize'
-    document.body.style.userSelect = 'none'
-    const onMove = (ev: PointerEvent): void => {
-      const w = clampAiPanelWidth(aiPanelWidthAtPointer(ev.clientX))
-      preferredWidthRef.current = w
-      setPanelWidth(w)
-    }
-    let done = false
-    const cleanup = (): void => {
-      if (done) return
-      done = true
-      resizeCleanupRef.current = null
-      window.removeEventListener('pointermove', onMove)
-      window.removeEventListener('pointerup', cleanup)
-      window.removeEventListener('pointercancel', cleanup)
-      resizer.removeEventListener('lostpointercapture', cleanup)
-      document.body.style.cursor = ''
-      document.body.style.userSelect = ''
-      setResizing(false)
-      saveAiPanelWidth(PANEL_WIDTH_KEY, preferredWidthRef.current)
-    }
-    resizeCleanupRef.current = cleanup
-    window.addEventListener('pointermove', onMove)
-    window.addEventListener('pointerup', cleanup)
-    window.addEventListener('pointercancel', cleanup)
-    // lostpointercapture also fires if the resizer is unmounted mid-drag (panel collapse)
-    resizer.addEventListener('lostpointercapture', cleanup)
-    resizer.setPointerCapture(e.pointerId)
-  }
-
   const typingLabel =
     phase === 'replying' ? t('aiReplying') : phase === 'working' ? t('aiWorking') : t('aiThinking')
 
@@ -710,13 +651,7 @@ export function AiPanel({
       style={{ width: '100%' }}
       dir={lang === 'ar' || lang === 'he' ? 'rtl' : undefined}
     >
-      <div
-        className="ai-panel-resizer"
-        onPointerDown={startResize}
-        role="separator"
-        aria-orientation="vertical"
-        aria-label={t('ribbonAiAssistant')}
-      />
+      {!collapsed && <div {...handle} />}
       <header className="ai-panel-header">
         <span className="ai-panel-title">
           <GensparkMark size={22} />
@@ -946,9 +881,6 @@ export function AiPanel({
               />
             </>
           }
-          sendIconEnabled={<img src={sendEnterOn} alt="" aria-hidden />}
-          sendIconDisabled={<img src={sendEnterOff} alt="" aria-hidden />}
-          stopIcon={<img src={sendStop} alt="" aria-hidden />}
           onChange={setPrompt}
           onSend={() => send(prompt, undefined, true)}
           onStop={stop}

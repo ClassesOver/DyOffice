@@ -3,6 +3,12 @@ import { constants } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import { crc32 } from 'node:zlib'
 import JSZip from 'jszip'
+import {parseSheetElements,parseRelationships,readAttribute,decodeAttribute} from '../../../../packages/xlsx-gateway/src/gateway/xlsx-sheets.ts'
+import {relsPathFor,resolveRelTarget} from '../../../../packages/xlsx-gateway/src/gateway/xlsx-drawing-add.ts'
+import {parseRef} from '../../../../packages/xlsx-gateway/src/gateway/xlsx-table-add.ts'
+import {resolvedStyleEntries} from '../../../../packages/xlsx-gateway/src/gateway/xlsx-style-entries.ts'
+import {pivotBandMetadata,pivotTheme} from './pivot-band-metadata'
+import type {WorkbookFile} from '../../../sheets/src/shared/desktop-api.ts'
 import { readBasicWorkbook } from '../../../../packages/xlsx-gateway/src/gateway/xlsx-gateway.ts'
 
 // Isolated Node fallback sidecar for XLSX when the Rust xlsx-sidecar binary is not compiled.
@@ -19,6 +25,7 @@ interface ParsedCell {
   row: number
   column: number
   value: string | number | boolean | null
+  styleIndex?: number
   formula?: string
 }
 
@@ -26,16 +33,126 @@ interface ParsedSheet {
   id: string
   name: string
   cells: ParsedCell[]
+  rowCount: number
+  columnCount: number
+  valueCellCount: number
+  valueRowCount: number
+  valueColumnCount: number
 }
 
 const sessions = new Map<string, { sheets: ParsedSheet[]; zip: JSZip }>()
+
+const star=Symbol('star'),one=Symbol('one')
+function matchFindText(query:string,matchCase:boolean,whole:boolean,wildcards:boolean){
+  const fold=(text:string)=>matchCase?text:text.toLowerCase()
+  const needle=fold(query.trim())
+  if(!needle)throw new Error('INVALID_FIND_QUERY')
+  if(!wildcards)return (text:string)=>whole?fold(text).replace(/^ +| +$/g,'')===needle:fold(text).includes(needle)
+  const chars=Array.from(needle),tokens: (string|typeof star|typeof one)[]=[]
+  for(let i=0;i<chars.length;i++){
+    const ch=chars[i]!
+    if(ch==='~')tokens.push(chars[i+1]===undefined?'~':chars[++i]!)
+    else if(ch==='*'){if(tokens.at(-1)!==star)tokens.push(star)}
+    else tokens.push(ch==='?'?one:ch)
+  }
+  if(!whole){if(tokens[0]!==star)tokens.unshift(star);if(tokens.at(-1)!==star)tokens.push(star)}
+  return (text:string)=>{
+    const input=Array.from(fold(whole?text.replace(/^ +| +$/g,''):text))
+    let i=0,j=0,backtrack=-1,start=0
+    while(i<input.length){
+      const token=tokens[j]
+      if(token===star){backtrack=j++;start=i}
+      else if(token===one||token===input[i]){i++;j++}
+      else if(backtrack!==-1){j=backtrack+1;i=++start}
+      else return false
+    }
+    while(tokens[j]===star)j++
+    return j===tokens.length
+  }
+}
+
+async function readPivotMetadata(zip:JSZip){
+  const text=async(path:string)=>(await zip.file(path)?.async('string'))??''
+  const workbookPath='xl/workbook.xml',theme=pivotTheme(await text('xl/theme/theme1.xml'))
+  const workbookRels=parseRelationships(await text(relsPathFor(workbookPath)))
+  const result=new Map<string,Pick<WorkbookFile['sheets'][number],'pivotTables'|'pivotRanges'>>()
+  for(const sheet of parseSheetElements(await text(workbookPath))){
+    const rel=workbookRels.find(rel=>rel.id===sheet.relationshipId&&!rel.external&&rel.type.endsWith('/worksheet'))
+    if(!rel)continue
+    const sheetPath=resolveRelTarget(workbookPath,rel.target)
+    const pivotTables:WorkbookFile['sheets'][number]['pivotTables']=[]
+    for(const pivotRel of parseRelationships(await text(relsPathFor(sheetPath)))){
+      if(pivotRel.external||!pivotRel.type.endsWith('/pivotTable'))continue
+      const path=resolveRelTarget(sheetPath,pivotRel.target),xml=await text(path)
+      const location=/<(?:[\w.-]+:)?location\b[^>]*>/.exec(xml)?.[0]
+      const outputRef=location&&readAttribute(location,'ref')
+      if(!outputRef)continue
+      const cacheRel=parseRelationships(await text(relsPathFor(path))).find(rel=>!rel.external&&rel.type.endsWith('/pivotCacheDefinition'))
+      pivotTables.push({...pivotBandMetadata(xml,theme),path,cachePath:cacheRel?resolveRelTarget(path,cacheRel.target):null,outputRef:decodeAttribute(outputRef),firstDataRow:Number(readAttribute(location,'firstDataRow')??1),firstDataCol:Number(readAttribute(location,'firstDataCol')??1)})
+    }
+    result.set(sheet.name,{pivotTables,pivotRanges:pivotTables.map(pivot=>parseRef(pivot.outputRef))})
+  }
+  return result
+}
+
+const BUILTIN_NUMBER_FORMATS: Record<number, string> = {
+  0: 'General', 1: '0', 2: '0.00', 3: '#,##0', 4: '#,##0.00', 9: '0%', 10: '0.00%',
+  11: '0.00E+00', 12: '# ?/?', 13: '# ??/??', 14: 'mm-dd-yy', 15: 'd-mmm-yy',
+  16: 'd-mmm', 17: 'mmm-yy', 18: 'h:mm AM/PM', 19: 'h:mm:ss AM/PM', 20: 'h:mm',
+  21: 'h:mm:ss', 22: 'm/d/yy h:mm', 37: '#,##0 ;(#,##0)', 38: '#,##0 ;[Red](#,##0)',
+  39: '#,##0.00;(#,##0.00)', 40: '#,##0.00;[Red](#,##0.00)',
+}
+
+async function readWorkbookStyles(zip: JSZip) {
+  const xml = await zip.file('xl/styles.xml')?.async('string') ?? ''
+  const section = (name: string) => new RegExp(`<(?:(?:\\w+):)?${name}\\b[^>]*>([\\s\\S]*?)<\\/(?:(?:\\w+):)?${name}\\s*>`).exec(xml)?.[1] ?? ''
+  const formats = new Map<number, string>()
+  for (const id of Object.keys(BUILTIN_NUMBER_FORMATS)) formats.set(Number(id), BUILTIN_NUMBER_FORMATS[Number(id)]!)
+  for (const entry of resolvedStyleEntries(section('numFmts'), 'numFmt')) {
+    const id = Number(readAttribute(entry, 'numFmtId'))
+    const code = readAttribute(entry, 'formatCode')
+    if (Number.isInteger(id) && code !== null) formats.set(id, decodeAttribute(code))
+  }
+  return resolvedStyleEntries(section('cellXfs'), 'xf').map(entry => {
+    const id = Number(readAttribute(entry, 'numFmtId') ?? 0)
+    const style: Record<string, unknown> = {
+      bold: false, italic: false, underline: false, strikethrough: false,
+      wrapText: false, diagonalUp: false, diagonalDown: false,
+    }
+    const format = formats.get(id)
+    if (format !== undefined) style.numberFormat = format
+    return style
+  })
+}
+
+async function readSheetStyleIndexes(zip: JSZip) {
+  const workbookPath = 'xl/workbook.xml'
+  const workbookRels = parseRelationships(await zip.file(relsPathFor(workbookPath))?.async('string') ?? '')
+  const indexes = new Map<string, Map<string, number>>()
+  for (const sheet of parseSheetElements(await zip.file(workbookPath)?.async('string') ?? '')) {
+    const rel = workbookRels.find(item => item.id === sheet.relationshipId && !item.external && item.type.endsWith('/worksheet'))
+    if (!rel) continue
+    const path = resolveRelTarget(workbookPath, rel.target)
+    const xml = await zip.file(path)?.async('string') ?? ''
+    const cells = new Map<string, number>()
+    for (const match of xml.matchAll(/<(?:[\w.-]+:)?c\b([^>]*)>/g)) {
+      const address = readAttribute(match[1]!, 'r')
+      const style = readAttribute(match[1]!, 's')
+      if (address && style !== null && /^\d+$/.test(style)) cells.set(decodeAttribute(address), Number(style))
+    }
+    indexes.set(sheet.name, cells)
+  }
+  return indexes
+}
+
 
 function parseA1(address: string): { row: number; column: number } | null {
   const match = /^([A-Z]{1,3})([1-9][0-9]*)$/.exec(address)
   if (!match) return null
   let col = 0
   for (const ch of match[1]!) col = col * 26 + (ch.charCodeAt(0) - 64)
-  return { row: Number(match[2]!) - 1, column: col - 1 }
+  const row = Number(match[2]!)
+  return row <= 1048576 && col <= 16384 ? { row: row - 1, column: col - 1 } : null
 }
 
 async function readBounded(path: string, max: number): Promise<Buffer> {
@@ -77,22 +194,40 @@ async function handleCommand(packet: Record<string, unknown>): Promise<unknown> 
     }
     const bytes = await readBounded(resolveWorkPath(path), MAX)
     const zip = await JSZip.loadAsync(bytes)
-    const imported = await readBasicWorkbook(bytes)
+    const imported = await readBasicWorkbook(bytes, { includeFormulaCache: true })
+    const pivots = await readPivotMetadata(zip)
+    const styles = await readWorkbookStyles(zip)
+    const styleIndexes = await readSheetStyleIndexes(zip)
     let entryCount = 0
     for (const file of Object.values(zip.files)) if (!file.dir) entryCount++
     const parsedSheets: ParsedSheet[] = imported.snapshot.sheets.map(s => {
       const cells: ParsedCell[] = []
+      let rowCount=1,columnCount=1,valueCellCount=0,valueRowCount=0,valueColumnCount=0
       for (const [addr, cell] of Object.entries(s.cells)) {
         const pos = parseA1(addr)
         if (!pos) continue
+        const value = cell.rawValue !== undefined ? cell.rawValue : cell.value
+        rowCount=Math.max(rowCount,pos.row+1)
+        columnCount=Math.max(columnCount,pos.column+1)
+        if(value!==null||cell.formula){
+          valueCellCount++
+          valueRowCount=Math.max(valueRowCount,pos.row+1)
+          valueColumnCount=Math.max(valueColumnCount,pos.column+1)
+        }
         cells.push({
           row: pos.row,
           column: pos.column,
-          value: cell.rawValue !== undefined ? cell.rawValue : cell.value,
+          value,
+          ...(styleIndexes.get(s.name)?.get(addr) === undefined ? {} : { styleIndex: styleIndexes.get(s.name)!.get(addr)! }),
           ...(cell.formula ? { formula: cell.formula } : {}),
         })
       }
-      return { id: s.id, name: s.name, cells }
+      for(const area of pivots.get(s.name)?.pivotRanges??[]){
+        rowCount=Math.max(rowCount,area.endRow+1)
+        columnCount=Math.max(columnCount,area.endColumn+1)
+      }
+      cells.sort((a,b)=>a.row-b.row||a.column-b.column)
+      return { id: s.id, name: s.name, cells, rowCount, columnCount, valueCellCount, valueRowCount, valueColumnCount }
     })
     const sessionId = randomUUID()
     sessions.set(sessionId, { sheets: parsedSheets, zip })
@@ -102,8 +237,12 @@ async function handleCommand(packet: Record<string, unknown>): Promise<unknown> 
       sheets: parsedSheets.map(s => ({
         id: s.id,
         name: s.name,
-        rowCount: 1000,
-        columnCount: 26,
+        rowCount:s.rowCount,
+        columnCount:s.columnCount,
+        storedCellCount:s.cells.length,
+        valueCellCount:s.valueCellCount,
+        valueRowCount:s.valueRowCount,
+        valueColumnCount:s.valueColumnCount,
         columnWidths: [],
         defaultRowHeight: null,
         defaultColumnWidth: null,
@@ -113,13 +252,13 @@ async function handleCommand(packet: Record<string, unknown>): Promise<unknown> 
         showGridLines: true,
         tables: [],
         comments: [],
-        pivotRanges: [],
-        pivotTables: [],
+        pivotRanges: pivots.get(s.name)?.pivotRanges ?? [],
+        pivotTables: pivots.get(s.name)?.pivotTables ?? [],
         sparklines: [],
         cellImages: [],
       })),
       activeTab: 0,
-      styles: [],
+      styles,
       dxfStyles: [],
       visuals: [],
       definedNames: [],
@@ -156,9 +295,29 @@ async function handleCommand(packet: Record<string, unknown>): Promise<unknown> 
       colBreaks: [],
       pageSetup: null,
       protectedRanges: [],
-      indexedThroughRow: 1000,
+      indexedThroughRow: sheet.rowCount-1,
       indexingComplete: true,
     }
+  }
+  if (cmd === 'find_cells') {
+    const sheet=sessions.get(String(packet.sessionId??''))?.sheets.find(s=>s.id===packet.sheetId)
+    if(!sheet)throw new Error('UNKNOWN_SHEET')
+    const start=packet.resumeAt as {row:number;column:number}|undefined
+    const matches=[],limit=Number(packet.limit),deadline=Date.now()+8000
+    const match=matchFindText(String(packet.query),packet.matchCase===true,packet.matchEntireCell===true,packet.wildcards===true)
+    for(const {row,column,value,formula} of sheet.cells){
+      if(start&&(row<start.row||row===start.row&&column<start.column))continue
+      const cursor={sheetId:sheet.id,row,column}
+      if(Date.now()>=deadline)return {matches,complete:false,nextCursor:cursor,indexingComplete:true}
+      const valueText=value===null?null:typeof value==='boolean'?(value?'1':'0'):String(value)
+      const values=()=>valueText!==null&&match(valueText)
+      const formulas=()=>formula!==undefined&&match(formula)
+      const hit=packet.lookIn==='values'?values():packet.lookIn==='formulas_only'?formulas():packet.lookIn==='formulas'?(formula===undefined?values():formulas()):values()||formulas()
+      if(!hit)continue
+      if(matches.length>=limit)return {matches,complete:false,nextCursor:cursor,indexingComplete:true}
+      matches.push({...cursor,value,valueText,...(formula===undefined?{}:{formulaText:formula})})
+    }
+    return {matches,complete:true,indexingComplete:true}
   }
   if (cmd === 'read_formula_cells') {
     const session = sessions.get(String(packet.sessionId ?? ''))

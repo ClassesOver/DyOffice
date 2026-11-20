@@ -12,6 +12,7 @@ export const id = {
   aiQcPageOk: 'Halaman {n}: tata letak baik',
   aiQcPageFixed: 'Halaman {n}: {summary}',
   aiQcPageFixedDefault: 'masalah tata letak diperbaiki',
+  aiQcPageRollbackFailed: "Halaman {n}: perbaikan memperburuk tata letak; pemulihan belum dikonfirmasi. Periksa halaman atau urungkan perubahan.",
   aiQcPageReverted: 'Halaman {n}: perbaikan otomatis memperburuk hasil — dibatalkan',
   aiQcPageFailed: 'Halaman {n}: pemeriksaan gagal ({error})',
   aiQcPageSkipped: 'Halaman {n}: pemeriksaan tata letak otomatis dilewati',

@@ -1,6 +1,9 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import {createAssistantClient} from '../../../../packages/browser-host/src/assistant.ts'
+import {createCodingClient} from '../../../../packages/browser-host/src/coding.ts'
+import {AgentLoop} from '../../../../packages/agent-core/src/loop.ts'
+import {bindFileChat} from '../../../../packages/agent-core/src/file-chat.ts'
 const descriptors=[{id:'codex',name:'Codex',origin:'builtin',capabilities:['coding']},{id:'remote',name:'Remote',origin:'external',capabilities:['coding']}]
 const catalog={entries:[{id:'office-model',label:'Original',model:'original'}],defaultId:'office-model',agents:descriptors,defaultAgentId:'codex'}
 const stream=client=>new Promise(resolve=>client.transport.stream({system:'Office system',messages:[{role:'user',text:'read document'}],tools:[{name:'read_blocks',description:'Read',inputSchema:{}},...client.extraSkills.flatMap(s=>s.tools)]},{onDelta(){},onToolCall(){},onError:assert.fail,onDone:resolve}))
@@ -50,18 +53,80 @@ test('without agents the original assistant offers no delegation tools',async()=
  const client=await createAssistantClient({request:async()=>({entries:catalog.entries,defaultId:catalog.defaultId}),csrfToken:'c'.repeat(43)})
  assert.deepEqual(client.extraSkills,[]);assert.equal(client.available,true);client.dispose()
 })
-test('cancelling a delegated task sends cancellation on its own endpoint',async()=>{
- const urls=[];let started
+test('the task card shows the same ID used by execution and cancellation',async()=>{
+ const urls=[];let started,turnId
  const ready=new Promise(resolve=>{started=resolve})
  const client=await createAssistantClient({request:async()=>catalog,csrfToken:'c'.repeat(43),fetchImpl:async(url,init)=>{
   urls.push(url)
   if(url.endsWith('/cancel'))return new Response('{}')
+  turnId=JSON.parse(init.body).turnId
   started();return new Promise((_,reject)=>init.signal.addEventListener('abort',()=>reject(new Error('aborted')),{once:true}))
  }})
  const controller=new AbortController()
  const pending=client.extraSkills[0].executeTool({id:'code',name:'delegate_agent_task',input:{instruction:'code'}},controller.signal)
- await ready;controller.abort();assert.equal((await pending).isError,true)
- assert.equal(urls.length,2);assert.match(urls[1],/^\/api\/v1\/agents\/tasks\/[^/]+\/cancel$/);client.dispose()
+ await ready
+ const cardId=client.coding.snapshot()[0].id
+ controller.abort();assert.equal((await pending).isError,true)
+ assert.equal(cardId,turnId)
+ assert.deepEqual(urls,['/api/v1/agents/tasks','/api/v1/agents/tasks/'+cardId+'/cancel'])
+ client.dispose()
+})
+
+test('closing the document observer keeps its task ID and reopening reads the original task without dispatching',async t=>{
+ const documentId='10000000-0000-4000-8000-000000000001',calls=[],saved=new Map()
+ const storage={getItem:key=>saved.get(key)??null,setItem:(key,value)=>saved.set(key,value)}
+ let dispatch
+ const ready=new Promise(resolve=>{dispatch=resolve})
+ let id
+ const fetchImpl=async(url,init)=>{
+  calls.push({url,method:init.method})
+  if(init.method==='POST'){
+   const request=JSON.parse(init.body)
+   id=request.turnId;dispatch(request)
+   return new Promise((_,reject)=>init.signal.addEventListener('abort',()=>reject(Error('disconnected')),{once:true}))
+  }
+  return Response.json({turnId:id,documentId,agentId:'codex',instruction:'Compute the total',state:'succeeded',activity:'Collecting task results',result:{summary:'Finished',output:'42'}})
+ }
+ const create=()=>createCodingClient({agents:descriptors,defaultId:'codex',documentId,storage,csrfToken:'c'.repeat(43),getModelId:()=> 'office-model',fetchImpl})
+ const first=create(),pending=first.run({instruction:'Compute the total'}).catch(error=>error)
+ t.after(()=>first.dispose())
+ assert.equal((await ready).documentId,documentId)
+ first.dispose()
+ await pending
+ assert.doesNotMatch(JSON.stringify([...saved]),/Compute the total|cccccccc/)
+ const reopened=create()
+ try{
+  for(let i=0;i<20&&!reopened.snapshot().length;i++)await new Promise(resolve=>setImmediate(resolve))
+  assert.equal(reopened.snapshot()[0].id,id)
+  assert.equal(reopened.snapshot()[0].state,'succeeded')
+  assert.equal(reopened.snapshot()[0].output,'42')
+  assert.deepEqual(calls,[{url:'/api/v1/agents/tasks',method:'POST'},{url:'/api/v1/agents/tasks/'+id+'/status?documentId='+documentId,method:'GET'}])
+ }finally{reopened.dispose()}
+})
+
+test('cancelling a recovered running task targets its original ID without submitting work',async t=>{
+ const documentId='10000000-0000-4000-8000-000000000001',turnId='10000000-0000-4000-8000-000000000002'
+ const calls=[],storage={getItem:()=>JSON.stringify([turnId]),setItem(){}},base='/api/v1/agents/tasks/'+turnId
+ let cancelled=false,finish
+ const terminal=new Promise(resolve=>{finish=resolve})
+ const client=createCodingClient({agents:descriptors,defaultId:'codex',documentId,storage,csrfToken:'c'.repeat(43),getModelId:()=> 'office-model',fetchImpl:async(url,init)=>{
+  calls.push([init.method,url])
+  if(url===base+'/cancel'){
+   cancelled=true
+   return Response.json({})
+  }
+  return Response.json({turnId,documentId,agentId:'codex',instruction:'Compute the total',state:cancelled?'unknown_outcome':'running',failure:cancelled?'Harness cancellation requested. Check for saved delivery.':undefined})
+ }})
+ t.after(()=>client.dispose())
+ await new Promise(resolve=>setImmediate(resolve))
+ assert.equal(client.snapshot()[0]?.state,'running')
+ const off=client.subscribe(()=>{const [card]=client.snapshot();if(card?.state==='unknown_outcome')finish(card)})
+ t.after(off)
+ await client.cancel(turnId)
+ const card=await Promise.race([terminal,new Promise((_,reject)=>{const timer=setTimeout(()=>reject(Error('Expected cancelled task status')),3000);timer.unref()})])
+ assert.equal(card.id,turnId)
+ assert.equal(card.failure,'Harness cancellation requested. Check for saved delivery.')
+ assert.deepEqual(calls,[['GET',base+'/status?documentId='+documentId],['POST',base+'/cancel'],['GET',base+'/status?documentId='+documentId]])
 })
 
 test('Office discovers only metadata and passes explicit data scope to either peer',async()=>{
@@ -83,6 +148,49 @@ test('Office discovers only metadata and passes explicit data scope to either pe
  for(const agentId of ['codex','remote'])await skill.executeTool({id:'a',name:'delegate_agent_task',input:{instruction:'Analyze',agentId,dataInputs:{sourceIds:['sales'],resultIds:[resultId]}}})
  assert.deepEqual(sent.map(x=>x.dataInputs),[{sourceIds:['sales'],resultIds:[resultId]},{sourceIds:['sales'],resultIds:[resultId]}])
  client.dispose()
+})
+
+for(const mode of ['stream','rejected','disconnected'])test('a finished task '+({stream:'enters the original Office model once',rejected:'does not continue after model admission is rejected',disconnected:'continues through the status endpoint after the observer loses SSE'}[mode]),{timeout:5000},async t=>{
+ const documentId='10000000-0000-4000-8000-000000000001',revision='10000000-0000-4000-8000-000000000003'
+ const calls=[]
+ let dispatch
+ let finish
+ const done=new Promise(resolve=>{finish=resolve})
+ const client=await createAssistantClient({request:async()=>catalog,documentId,continuationRevision:()=>revision,csrfToken:'c'.repeat(43),fetchImpl:async(url,init)=>{
+  const body=init.body?JSON.parse(init.body):undefined;calls.push({url,body})
+  if(init.method==='GET')return Response.json({turnId:dispatch.turnId,documentId,agentId:'codex',state:'succeeded',hasContinuation:true,continuationModelId:'office-model',result:{summary:'Finished',output:'42'}})
+  if(url==='/api/v1/ai/turns'){
+   if(!dispatch)return response('tool_call',{id:'original-tool',name:'delegate_agent_task',input:{instruction:'Compute'}})
+   if(mode==='rejected')return new Response(null,{status:409})
+   return response('delta',{text:'Office reused the result'})
+  }
+  assert.equal(url,'/api/v1/agents/tasks')
+  dispatch=body
+  if(mode==='disconnected')throw TypeError('Connection lost')
+  return response('delta',{text:JSON.stringify({summary:'Finished',output:'42'})})
+ }})
+ t.after(()=>client.dispose())
+ const {transport}=client
+ const chatTurnId='10000000-0000-4000-8000-000000000004'
+ t.after(bindFileChat(transport,()=>({turnId:chatTurnId,async history(){return []},text(){},finish(){}})))
+ const loop=new AgentLoop({allowHarnessResume:true,skill:client.extraSkills[0],events:{onDone:finish,onError:error=>finish({error})},transport})
+ loop.run('Private original Office request',undefined,undefined,{text:'Private original Office request'})
+ const outcome=await done
+ const requests=calls.filter(call=>call.url==='/api/v1/ai/turns').map(call=>call.body)
+ assert.equal(dispatch.continuation.revision,revision)
+ assert.equal(dispatch.continuation.checkpoint.chatTurnId,chatTurnId)
+ assert.equal(dispatch.continuation.checkpoint.messages[0].text,'Private original Office request')
+ assert.equal(requests.length,2)
+ assert.deepEqual(requests[1].harnessResume,{taskId:dispatch.turnId,documentId,revision})
+ assert.equal(requests[1].modelId,'office-model')
+ assert.equal(requests[1].request.messages.at(-1).results[0].id,'original-tool')
+ if(mode!=='rejected'){
+  assert.equal(outcome.text,'Office reused the result')
+ }else{
+  assert.match(outcome.error,/409/)
+ }
+ assert.equal(client.coding.snapshot()[0].state,'succeeded')
+ assert.equal(calls.filter(call=>call.url==='/api/v1/agents/tasks').length,1)
 })
 
 test('delivery observation receives only a server result hint and does not break successful Office work',async()=>{

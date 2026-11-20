@@ -3,8 +3,11 @@ import {cookies,uniqueHeader,type createCsrfService} from '../auth/csrf.ts'
 import {channelObject as object,channelUuid as uuid,decodeAgentAction} from '../../../../../../packages/web-contracts/src/assistant-channel.ts'
 import type {createHarnessDataAccess} from '../coding/data-access.ts'
 import type {createAssistantChannelService} from './service.ts'
+import type {ObjectStore} from '../../storage/object-store.ts'
+import type {FileService} from '../files/service.ts'
+import {readBackgroundDocument} from './background-read.ts'
 
-export function registerAssistantChannelRoutes(app:FastifyInstance,service:ReturnType<typeof createAssistantChannelService>,csrf:ReturnType<typeof createCsrfService>,dataOptions?:{data:ReturnType<typeof createHarnessDataAccess>;baseUrl:string}) {
+export function registerAssistantChannelRoutes(app:FastifyInstance,service:ReturnType<typeof createAssistantChannelService>,csrf:ReturnType<typeof createCsrfService>,dataOptions?:{data:ReturnType<typeof createHarnessDataAccess>;baseUrl:string},previewObjects?:Pick<ObjectStore,'readVerified'>,files?:FileService,dshEditorOrigin?:string) {
  const base='/api/v1/assistant-channels'
  const owner=(request:FastifyRequest)=>{
   const token=cookies(request).session??''
@@ -25,10 +28,30 @@ export function registerAssistantChannelRoutes(app:FastifyInstance,service:Retur
  app.register(async api=>{
   api.addHook('onRequest',async(_request,reply)=>{reply.header('Cache-Control','private, no-store')})
   api.post(base+'/channels',{bodyLimit:4096},request=>{
-   const value=body(request,['fileId','conversationId']);return service.createConversation(owner(request),{fileId:uuid(value.fileId),...(value.conversationId===undefined?{}:{conversationId:uuid(value.conversationId)})})
+   const value=body(request,['fileId','conversationId']);return service.createConversation(owner(request),{...(value.fileId===undefined?{}:{fileId:uuid(value.fileId)}),...(value.conversationId===undefined?{}:{conversationId:uuid(value.conversationId)})})
+  })
+  api.get<{Querystring:{after?:string;fileId?:string}}>(base+'/channels',request=>service.listChannels(owner(request),request.query.after,request.query.fileId))
+  api.get<{Querystring:{after?:string}}>(base+'/background-tasks',request=>service.backgroundTasks(owner(request),request.query.after))
+  api.get<{Params:{id:string}}>(base+'/background-tasks/:id',request=>service.backgroundTask(owner(request),uuid(request.params.id)))
+  api.post<{Params:{id:string}}>(base+'/channels/:id/background',request=>{
+   const value=body(request,['enabled','fileId'])
+   return service.configureBackground(owner(request),uuid(request.params.id),{enabled:value.enabled as boolean,...(value.fileId===undefined?{}:{fileId:uuid(value.fileId)})})
   })
   api.get<{Params:{id:string}}>(base+'/channels/:id',request=>service.snapshot(owner(request),uuid(request.params.id)))
+  api.delete<{Params:{id:string}}>(base+'/channels/:id',async(request,reply)=>{
+   await service.deleteConversation(owner(request),uuid(request.params.id))
+   return reply.code(204).send()
+  })
   api.post<{Params:{id:string}}>(base+'/channels/:id/invitations',request=>{body(request,[]);return service.invite(owner(request),uuid(request.params.id))})
+  api.post<{Params:{id:string}}>(base+'/channels/:id/dsh-token',{bodyLimit:1024},request=>{
+   const value=body(request,['expiresInMinutes','allowCreate'])
+   const token=owner(request)
+   if(value.allowCreate===true&&!files)throw Object.assign(Error('Document creation is unavailable'),{statusCode:503})
+   return service.issueDshToken(token,uuid(request.params.id),value.expiresInMinutes,value.allowCreate)
+  })
+  api.post<{Params:{id:string;memberId:string}}>(base+'/channels/:id/members/:memberId/dsh-token',{bodyLimit:1024},request=>{
+   body(request,[]);return service.revealDshToken(owner(request),uuid(request.params.id),uuid(request.params.memberId))
+  })
   api.post<{Params:{id:string;applicationId:string}}>(base+'/channels/:id/applications/:applicationId/approve',request=>{
    const value=body(request,['approved']);return service.approve(owner(request),uuid(request.params.id),uuid(request.params.applicationId),{approved:value.approved as boolean})
   })
@@ -70,6 +93,58 @@ export function registerAssistantChannelRoutes(app:FastifyInstance,service:Retur
    return {...result,memberId:result.member.membershipId,expiresAt:result.member.expiresAt}
   })
   api.get<{Params:{id:string}}>(base+'/members/:id/tasks',async request=>(await member(request,request.params.id)).snapshot)
+  api.get(base+'/member',async request=>({
+   ...await service.memberSnapshot(bearer(request)),...(dshEditorOrigin&&{dshEditorOrigin}),
+  }))
+  if(files)api.post(base+'/member/documents',{bodyLimit:2048},request=>{
+   const token=bearer(request),{format,title}=body(request,['format','title'])
+   return service.createMemberDocument(token,files,{format,title})
+  })
+  api.post<{Params:{id:string}}>(base+'/member/documents/:id/draft-sync',{bodyLimit:1024},request=>{
+   const {origin,write}=body(request,['origin','write'])
+   return service.issueDraftSync(bearer(request),uuid(request.params.id),uniqueHeader(request,'x-dyoffice-document-preview'),origin,write)
+  })
+  api.post<{Params:{id:string}}>(base+'/documents/:id/draft-sync',{bodyLimit:1024},request=>{
+   const {origin,ticket}=body(request,['origin','ticket'])
+   return service.verifyDraftSync(owner(request),uuid(request.params.id),origin,ticket)
+  })
+  if(previewObjects){
+   const renderPreview=async(read:()=>ReturnType<typeof service.memberPreview>,afterValue?:string)=>{
+    const after=afterValue===undefined?undefined:uuid(afterValue)
+    const {reference,...preview}=await read()
+    if(preview.revision===after)return preview
+    const signal=AbortSignal.timeout(15000)
+    const bytes=await previewObjects.readVerified(reference,signal)
+    const document=await readBackgroundDocument(bytes,preview.format,signal)
+    const latest=await read()
+    if(latest.fileId!==preview.fileId||latest.revision!==preview.revision)throw Object.assign(Error('Preview revision changed'),{statusCode:409})
+    return {...preview,...document}
+   }
+   api.get<{Params:{id:string};Querystring:{after?:string}}>(base+'/members/:id/preview',request=>{
+    const token=bearer(request),id=uuid(request.params.id)
+    return renderPreview(()=>service.memberPreview(token,id),request.query.after)
+   })
+   api.get<{Params:{id:string};Querystring:{after?:string;head?:string}}>(base+'/member/documents/:id/preview',async request=>{
+    const token=bearer(request),id=uuid(request.params.id),proof=uniqueHeader(request,'x-dyoffice-document-preview')
+    if(request.query.head==='1'){
+     const {fileId,name,format,revision,activity}=await service.createdDocumentPreview(token,id,proof)
+     return {fileId,name,format,revision,activity}
+    }
+    return renderPreview(()=>service.createdDocumentPreview(token,id,proof),request.query.after)
+   })
+   api.get<{Params:{id:string};Querystring:{revision:string}}>(base+'/member/documents/:id/snapshot-source',async(request,reply)=>{
+    const token=bearer(request),id=uuid(request.params.id),proof=uniqueHeader(request,'x-dyoffice-document-preview')
+    const revision=uuid(request.query.revision)
+    const read=async()=>{
+     const preview=await service.createdDocumentPreview(token,id,proof)
+     if(preview.revision!==revision)throw Object.assign(Error('Preview revision changed'),{statusCode:409})
+     return preview.reference
+    }
+    const bytes=await previewObjects.readVerified(await read(),AbortSignal.timeout(15000))
+    await read()
+    return reply.type('application/octet-stream').header('X-Content-Type-Options','nosniff').send(bytes)
+   })
+  }
   api.get<{Params:{id:string;taskId:string}}>(base+'/members/:id/tasks/:taskId',async request=>{
    const {token}=await member(request,request.params.id)
    return service.memberTask(token,uuid(request.params.taskId))

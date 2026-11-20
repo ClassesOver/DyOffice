@@ -4,6 +4,7 @@ import type { BusinessPrincipal, PrincipalTransactions } from '../../db/context.
 import { authError, tokenHash } from '../auth/sessions.ts'
 import { createSecretBox, type SecretKeyring, type SecretEnvelope } from './secrets.ts'
 import { findProvider, getProviderCatalog } from './catalog.ts'
+import { validateSourceEgressTargets } from '../../security/egress.ts'
 import { GLOBAL_SETTING_KINDS } from '../../../../../../packages/web-contracts/src/settings.ts'
 import type { AdminGlobalConfig, AdminGlobalEntry, CheckGlobalConfigRequest, GlobalConfigCheck, GlobalConfigPatch, GlobalDefaults, GlobalEntryUpsert, GlobalSettingKind, PublicGlobalEntry, PublicGlobalSettings } from '../../../../../../packages/web-contracts/src/settings.ts'
 
@@ -35,7 +36,7 @@ function endpoint(value: unknown, enabled: boolean): string {
   } catch { throw invalid() }
 }
 export function validateGlobalConfigPatch(input: unknown): GlobalConfigPatch {
-  const patch = object(input, ['upserts','removes','defaults'])
+  const patch = object(input, ['upserts','removes','defaults','sourceEgressTargets'])
   const result: GlobalConfigPatch = {}, seen = new Set<string>()
   if (patch.upserts !== undefined) {
     if (!Array.isArray(patch.upserts) || patch.upserts.length > 100) throw invalid()
@@ -63,7 +64,10 @@ export function validateGlobalConfigPatch(input: unknown): GlobalConfigPatch {
     const defaults = object(patch.defaults, GLOBAL_SETTING_KINDS)
     result.defaults = Object.fromEntries(Object.entries(defaults).map(([kind,value]) => [kind, value === null ? null : id(value)]))
   }
-  if (!(result.upserts?.length || result.removes?.length || Object.keys(result.defaults ?? {}).length)) throw invalid()
+  if (patch.sourceEgressTargets !== undefined) {
+    try { result.sourceEgressTargets = validateSourceEgressTargets(patch.sourceEgressTargets) } catch { throw invalid() }
+  }
+  if (!(result.upserts?.length || result.removes?.length || Object.keys(result.defaults ?? {}).length || result.sourceEgressTargets)) throw invalid()
   return result
 }
 interface EntryRow { id: string; kind: GlobalSettingKind; provider_id: string; label: string; model: string; base_url: string; enabled: boolean; has_key: boolean }
@@ -71,6 +75,10 @@ interface SecretRow { entry_id: string; kind: GlobalSettingKind; provider_id: st
 const publicEntry = (row: EntryRow): PublicGlobalEntry => ({ id: row.id, kind: row.kind, providerId: row.provider_id, label: row.label, model: row.model })
 const adminEntry = (row: EntryRow): AdminGlobalEntry => ({ ...publicEntry(row), baseUrl: row.base_url, enabled: row.enabled, hasKey: row.has_key })
 
+export async function readSourceEgressTargets(connection: PoolClient, deploymentId: string) {
+  const row = (await connection.query('SELECT source_egress_targets FROM global_configs WHERE deployment_id=$1', [deploymentId])).rows[0]
+  return validateSourceEgressTargets(row?.source_egress_targets ?? [])
+}
 export function createGlobalConfigService({ transactions, keyring }: { transactions: PrincipalTransactions; keyring?: SecretKeyring }) {
   const box = keyring ? createSecretBox(keyring) : undefined
   async function access<T>(token: string, admin: boolean, operation: (connection: PoolClient, principal: BusinessPrincipal) => Promise<T>, writing = false): Promise<T> {
@@ -93,7 +101,7 @@ export function createGlobalConfigService({ transactions, keyring }: { transacti
   }
   async function adminResult(connection: PoolClient, deploymentId: string): Promise<AdminGlobalConfig> {
     const saved = await state(connection, deploymentId, true)
-    return { revision: saved.revision, entries: saved.rows.map(adminEntry), defaults: saved.defaults, providerCatalog: getProviderCatalog(), keyStorageAvailable: Boolean(box) }
+    return { revision: saved.revision, entries: saved.rows.map(adminEntry), defaults: saved.defaults, providerCatalog: getProviderCatalog(), keyStorageAvailable: Boolean(box), sourceEgressTargets: await readSourceEgressTargets(connection, deploymentId) }
   }
   async function lock(connection: PoolClient, deploymentId: string, expectedRevision: number) {
     await connection.query('INSERT INTO global_configs(deployment_id) VALUES($1) ON CONFLICT DO NOTHING', [deploymentId])
@@ -112,9 +120,16 @@ export function createGlobalConfigService({ transactions, keyring }: { transacti
   return {
     getPublicSettings: (token: string) => access<PublicGlobalSettings>(token, false, async (connection, principal) => {
       const saved = await state(connection, principal.deploymentId, false)
-      const rows = saved.rows.filter(row => row.enabled && findProvider(row.kind, row.provider_id)?.available)
+      // Only the readiness bit crosses the secret boundary; secret-table RLS stays admin-only.
+      const readiness = new Map((await connection.query<{ id: string; has_key: boolean }>('SELECT id,has_key FROM global_config_key_readiness()')).rows.map(row => [row.id, row.has_key]))
+      const rows = saved.rows.filter(row => row.enabled && findProvider(row.kind, row.provider_id)?.available).map(row => ({ ...row, has_key: readiness.get(row.id) === true }))
       const defaults = Object.fromEntries(Object.entries(saved.defaults).filter(([kind,value]) => rows.some(row => row.kind === kind && row.id === value)))
-      return { revision: saved.revision, catalog: rows.map(publicEntry), defaults }
+      const catalog = rows.map(row => {
+        const keylessSearch = (row.kind === 'web_search' || row.kind === 'image_search') && ['parallel','keenable'].includes(row.provider_id)
+        const keylessMedia = row.provider_id === 'custom' && (row.kind === 'image_generation' || row.kind === 'image_analysis') && !!row.base_url
+        return { ...publicEntry(row), ready: row.has_key || keylessSearch || keylessMedia }
+      })
+      return { revision: saved.revision, catalog, defaults }
     }),
     getAdminConfig: (token: string) => access(token, true, (connection, principal) => adminResult(connection, principal.deploymentId)),
     async saveGlobalConfig(token: string, expected: unknown, input: unknown): Promise<AdminGlobalConfig> {
@@ -143,6 +158,7 @@ export function createGlobalConfigService({ transactions, keyring }: { transacti
           if (entry.apiKey) await writeSecret(connection, deployment, entry, entry.apiKey)
         }
         await connection.query('UPDATE global_configs SET revision=revision+1,defaults=$2::jsonb,updated_at=clock_timestamp() WHERE deployment_id=$1', [deployment,JSON.stringify(defaults)])
+        if (patch.sourceEgressTargets) await connection.query('UPDATE global_configs SET source_egress_targets=$2::jsonb WHERE deployment_id=$1', [deployment,JSON.stringify(patch.sourceEgressTargets)])
         await audit(connection, principal, 'config_saved', expectedRevision+1, [...(patch.upserts ?? []).map(entry => entry.id),...(patch.removes ?? [])].sort())
         return adminResult(connection, deployment)
       }, true)

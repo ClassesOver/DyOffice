@@ -28,6 +28,7 @@ electron-builder.env
 
 # Playwright artifacts
 /test-results/
+/apps/web/test-results/
 
 .cursor/rules/git-remote.mdc
 __pycache__/
@@ -53,6 +54,7 @@ apps/web/.dyoffice/
 
 /apps/web/dist-sheets/
 /apps/web/dist-slides/
+/apps/web/dist-pdf/
 
 /apps/web/dist-sheets-server/
 

@@ -159,12 +159,12 @@ for(const action of ['rename','move'])test(`different ${action} intents for the 
  assert.equal(writes.length,1)
 })
 
-for(const action of ['deleteFiles','removeRecent','unstarPaths'])test(`${action} resumes partial batches with read-only unknown reconciliation and never rewrites confirmed items`,async()=>{
+for(const action of ['removeRecent','unstarPaths'])test(`${action} resumes partial batches with read-only unknown reconciliation and never rewrites confirmed items`,async()=>{
  const writes=[];let unknown=true,achieved=false
  const bridge=createLocalHomeBridge(deps(async(path,method)=>{
   if(method){writes.push(path);if(path.includes('/b')&&unknown){unknown=false;throw Error('lost response')}return}
   const id=new URL(path,'http://local').searchParams.get('id')
-  const found=action==='deleteFiles'?achieved:action==='removeRecent'?!achieved:true
+  const found=action==='removeRecent'?!achieved:true
   return {files:found?[{...item,id,starred:!achieved}]:[],total:found?1:0,totalAll:found?1:0}
  }))
  await assert.rejects(bridge[action](['a','b','c']),/待核对/)
@@ -176,12 +176,20 @@ for(const action of ['deleteFiles','removeRecent','unstarPaths'])test(`${action}
  // Full completion releases the old batch: a later restore/open/star then new action is a new intent.
  await bridge[action](['a','b','c']);assert.equal(writes.length,6)
 })
-test('definite bulk failure retries only its rejected item and remaining work',async()=>{
- const writes=[];let fail=true
- const bridge=createLocalHomeBridge(deps(async(path,method)=>{if(!method)return {files:[{...item,id:'a'}],total:1,totalAll:1};writes.push(path);if(path.endsWith('/b')&&fail){fail=false;throw Object.assign(Error('forbidden'),{status:403})}}))
- await assert.rejects(bridge.deleteFiles(['a','b','c']),/forbidden/)
- await bridge.deleteFiles(['a','b','c'])
- assert.deepEqual(writes,['/api/v1/files/a','/api/v1/files/b','/api/v1/files/b','/api/v1/files/c'])
+test('42 selected files use one batch write and one refresh, including double confirmation',async()=>{
+ const requests=[], ids=Array.from({length:42},(_,i)=>String(i).padStart(2,'0'))
+ let refresh=0
+ const bridge=createLocalHomeBridge({...deps(async(path,method,body)=>requests.push({path,method,body})),changed:()=>refresh++})
+ await Promise.all([bridge.deleteFiles(ids),bridge.deleteFiles([...ids].reverse())])
+ assert.deepEqual(requests,[{path:'/api/v1/files/trash-batch',method:'POST',body:{ids}}])
+ assert.equal(refresh,1)
+})
+test('rate limited batch explains the rejection and leaves selection retryable',async()=>{
+ let requests=0
+ const bridge=createLocalHomeBridge(deps(async()=>{if(++requests===1)throw Object.assign(Error('Too Many Requests'),{status:429})}))
+ await assert.rejects(bridge.deleteFiles(['a','b']),/本次请求未移动文件/)
+ await bridge.deleteFiles(['a','b'])
+ assert.equal(requests,2)
 })
 test('bulk unstar unknown cannot be bypassed by toggle or by a failed reconciliation read',async()=>{
  let readsFail=false,starred=true;const writes=[]
@@ -195,37 +203,26 @@ test('bulk unstar unknown cannot be bypassed by toggle or by a failed reconcilia
  readsFail=false;await assert.rejects(bridge.toggleStar(item.id),/待核对/);assert.equal(writes.length,1)
  starred=false;await bridge.toggleStar(item.id);assert.equal(writes.length,1)
 })
-test('reconciling an unknown item through a different selection does not resend that item',async()=>{
- const writes=[];let achieved=false
- const bridge=createLocalHomeBridge(deps(async(path,method)=>{
-  if(method){writes.push(path);if(path.endsWith('/b'))throw Object.assign(Error('unavailable'),{status:503});return}
-  return {files:achieved?[{...item,id:'b'}]:[],total:achieved?1:0,totalAll:achieved?1:0}
+test('lost batch response reconciles an overlapping selection before retrying remaining files',async()=>{
+ const writes=[], reads=[]
+ let connected=false
+ const bridge=createLocalHomeBridge(deps(async(path,method,{ids})=>{
+   if(path.endsWith('/status')){reads.push(ids);if(!connected)throw Error('offline');return {active:['b']}}
+   writes.push(ids);if(writes.length===1)throw Error('lost')
  }))
- await assert.rejects(bridge.deleteFiles(['a','b']),/待核对/)
- achieved=true;await bridge.deleteFiles(['b','c'])
- assert.deepEqual(writes,['/api/v1/files/a','/api/v1/files/b','/api/v1/files/c'])
- // Reconciliation also completed the original batch, so a new delete intent must not be skipped.
- await bridge.deleteFiles(['a']);assert.equal(writes.at(-1),'/api/v1/files/a');assert.equal(writes.length,4)
+ await assert.rejects(bridge.deleteFiles(['a','b','c']),/尚未确认/)
+ await assert.rejects(bridge.deleteFiles(['a','b','d']),/无法核对/)
+ connected=true
+ await bridge.deleteFiles(['a','b','d'])
+ assert.deepEqual(writes,[['a','b','c'],['b','d']])
+ assert.deepEqual(reads,[['a','b'],['a','b']])
 })
-test('a completed overlapping selection retires the old batch before a restore then delete intent',async()=>{
- const writes=[];let unknown=true
- const bridge=createLocalHomeBridge(deps(async(path,method)=>{
-  if(method){writes.push(path);if(path.endsWith('/b')&&unknown){unknown=false;throw Error('lost response')}return}
-  return {files:[{...item,id:'b'}],total:1,totalAll:1}
- }))
- await assert.rejects(bridge.deleteFiles(['a','b','c']),/待核对/)
- await bridge.deleteFiles(['b','c'])
- assert.deepEqual(writes,['/api/v1/files/a','/api/v1/files/b','/api/v1/files/c'])
- // The user restores a after the overlapping batch has completed; the next deletion is new.
- await bridge.deleteFiles(['a','b','c'])
- assert.deepEqual(writes.slice(3),['/api/v1/files/a','/api/v1/files/b','/api/v1/files/c'])
-})
-for(const action of ['deleteFiles','removeRecent','unstarPaths'])test(`${action} rechecks a confirmed item reversed by restore, reopen or star before resuming`,async()=>{
+for(const action of ['removeRecent','unstarPaths'])test(`${action} rechecks a confirmed item reversed by restore, reopen or star before resuming`,async()=>{
  const writes=[];let fail=true,reversed=false,readFails=false
  const bridge=createLocalHomeBridge(deps(async(path,method)=>{
   if(method){writes.push(path);if(path.includes('/b')&&fail){fail=false;throw Object.assign(Error('forbidden'),{status:403})}return}
   if(readFails)throw Error('offline')
-  const id=new URL(path,'http://local').searchParams.get('id'),found=action==='deleteFiles'?!reversed:action==='removeRecent'?reversed:true
+  const id=new URL(path,'http://local').searchParams.get('id'),found=action==='removeRecent'?reversed:true
   return {files:found?[{...item,id,starred:reversed}]:[],total:found?1:0,totalAll:found?1:0}
  }))
  await assert.rejects(bridge[action](['a','b']),/forbidden/)

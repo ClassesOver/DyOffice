@@ -1,4 +1,4 @@
-import type { SignatureData } from './SignatureDialog'
+import type { SignatureData } from '../shared/ipc'
 
 export type StaticFormFillKind = 'text' | 'check' | 'cross'
 

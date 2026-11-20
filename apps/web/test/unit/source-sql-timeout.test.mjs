@@ -4,6 +4,11 @@ import {createServer} from 'node:net'
 import {Client} from 'pg'
 import {safeFailure} from '../../server/src/modules/sources/sql.ts'
 
+test('StarRocks without TLS has a specific safe connection failure', () => {
+ assert.throws(() => safeFailure({code:'HANDSHAKE_NO_SSL_SUPPORT',message:'private connection details'}, 'starrocks'),
+  error => error.statusCode === 502 && error.code === 'SOURCE_TLS_UNSUPPORTED' && !error.message.includes('private'))
+})
+
 // Use the actual installed pg driver against a synthetic local protocol peer.
 // The peer authenticates but never answers a query, exercising its own timer.
 test('real pg query read timeout is a gateway timeout, without exposing query or target', async t => {

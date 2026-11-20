@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs'
+import { createHash } from 'node:crypto'
 import { PDFDict, PDFDocument, PDFName, PDFRawStream, decodePDFRawStream } from 'pdf-lib'
 import { fontCoversText } from './font-cmap'
 import { findFontCovering, findSystemFont, isTruetype } from './font-locate'
@@ -15,6 +16,7 @@ import { SYNTHETIC_BOLD_STROKE_EM } from '../shared/ipc'
 import { foldRadicals } from '../shared/radicals'
 import { chainLayers } from '../shared/x-layers'
 import {
+  concatMat,
   SHARED_TEMPLATE_REASON,
   chainIsExclusive,
   formDrawTree,
@@ -74,7 +76,13 @@ export interface Pdfium {
   _FPDFFormObj_RemoveObject(form: number, obj: number): number
   _FPDFPageObj_Destroy(obj: number): void
   _FPDFPageObj_GetBounds(obj: number, l: number, b: number, r: number, t: number): number
+  _FPDFImageObj_GetImagePixelSize(obj: number, width: number, height: number): number
+  _FPDFImageObj_GetBitmap(obj: number): number
+  _FPDFBitmap_GetFormat(bitmap: number): number
   _FPDFImageObj_GetImageDataRaw(obj: number, buffer: number, buflen: number): number
+  _FPDFPageObj_GetClipPath(obj: number): number
+  _FPDFClipPath_CountPaths(clip: number): number
+  _FPDF_RenderPageBitmapWithMatrix(bitmap: number, page: number, matrix: number, clip: number, flags: number): void
   _FPDFPageObj_GetMatrix(obj: number, matrix: number): number
   _FPDFPageObj_SetMatrix(obj: number, matrix: number): number
   _FPDFPageObj_GetFillColor(obj: number, r: number, g: number, b: number, a: number): number
@@ -1696,6 +1704,213 @@ function buildKeepPlan(
   }
 }
 
+/** Shared by the writer and its read-only layout measurements. */
+async function loadTextEditFont(
+  m: Pdfium, doc: number, originalFont: number, edit: TextEditInput, text: string,
+): Promise<{ font: number; synth: boolean; cff: boolean }> {
+  const drawn = text.trim() ? text : 'x'
+  const standard = originalFont ? keptStandardFont(
+    fontString(m, (b, l) => m._FPDFFont_GetBaseFontName(originalFont, b, l)),
+    !!m._FPDFFont_GetIsEmbedded(originalFont), edit, drawn.replace(/\n/g, ''),
+  ) : null
+  if (standard) {
+    const font = loadStandardFont(m, doc, standard)
+    if (!font) throw new Error('FPDFText_LoadStandardFont failed')
+    return { font, synth: !!edit.newBold && !faceIsBold(m, originalFont), cff: false }
+  }
+  const { bytes, syntheticBold } = await resolveRebuildFont(m, originalFont, edit, drawn)
+  const ptr = m._malloc(bytes.length)
+  try {
+    m.HEAPU8.set(bytes, ptr)
+    const font = m._FPDFText_LoadFont(doc, ptr, bytes.length, isTruetype(bytes) ? FPDF_FONT_TRUETYPE : FPDF_FONT_TYPE1, 1)
+    if (!font) throw new Error('FPDFText_LoadFont failed')
+    return { font, synth: syntheticBold, cff: !isTruetype(bytes) }
+  } finally { m._free(ptr) }
+}
+
+/** Read effective page-space leaf object state without changing source bytes. */
+export function readPdfLeafObjects(bytes: Uint8Array, imageAlpha = false, options: { normalizeSyntheticTextSuffix?: boolean } = {}): Promise<PdfLeafSnapshot[]> {
+  return chainPdfium(async () => {
+    const objects = await readPdfLeafObjectsInner(await loadPdfium(), bytes, [], imageAlpha, options.normalizeSyntheticTextSuffix)
+    if (!objects) throw new Error('object snapshot unavailable')
+    return objects
+  })
+}
+
+export function readUneditedPdfLeaves(bytes: Uint8Array, edits: TextEditInput[]): Promise<PdfLeafSnapshot[] | null> {
+  return chainPdfium(async () => readPdfLeafObjectsInner(await loadPdfium(), bytes, edits, true, true, true))
+}
+
+export type PdfLeafSnapshot = { page: number; type: number; text: string; font: string; image: string; fill: number[]; stroke: number[]; size: number; mode: number; bounds: number[]; matrix: number[]; delta: readonly number[] }
+
+function readPdfLeafObjectsInner(m: Pdfium, bytes: Uint8Array, targets: TextEditInput[], imageAlpha = false, normalizeSyntheticTextSuffix = false, omitTargets = false): Promise<PdfLeafSnapshot[] | null> {
+  return withDocument(m, bytes, async (doc) => {
+      const out: PdfLeafSnapshot[] = [], ptr = m._malloc(64)
+      try {
+        for (let pageIndex = 0; pageIndex < m._FPDF_GetPageCount(doc); pageIndex++) {
+          const page = m._FPDF_LoadPage(doc, pageIndex), textPage = m._FPDFText_LoadPage(page)
+          try {
+            const texts = collectTextObjects(m, page, textPage), byObj = new Map(texts.map(text => [text.obj, text])), selected = new Map<number, readonly number[]>()
+            for (const edit of targets.filter(edit => edit.pageIndex === pageIndex)) {
+              const match = matchEdit(texts, edit)
+              if ('reason' in match || !omitTargets && (!match.whole || !edit.translate)) return null
+              for (const text of match.matches) {
+                if (selected.has(text.obj)) return null
+                selected.set(text.obj, edit.translate ?? [0, 0])
+              }
+            }
+            // FPDFTextObj_GetText can append a layout-gap space absent from the
+            // object's real page characters. Verification may remove only that proven
+            // ASCII suffix; authored trailing spaces and all other text stay exact.
+            const realCharCounts = new Map<number, number>()
+            if (normalizeSyntheticTextSuffix) {
+              for (let i = 0; i < m._FPDFText_CountChars(textPage); i++) {
+                const obj = m._FPDFText_GetTextObject(textPage, i)
+                realCharCounts.set(obj, (realCharCounts.get(obj) ?? 0) + 1)
+              }
+            }
+            let count = 0
+            const walk = (parent: number, form: boolean, toPage: readonly [number, number, number, number, number, number], depth: number): void => {
+              if (depth > 32) throw new Error('form nesting limit')
+              const length = form ? m._FPDFFormObj_CountObjects(parent) : m._FPDFPage_CountObjects(parent)
+              for (let index = 0; index < length; index++) {
+                if (++count > 100000) throw new Error('page object limit')
+                const obj = form ? m._FPDFFormObj_GetObject(parent, index) : m._FPDFPage_GetObject(parent, index), type = m._FPDFPageObj_GetType(obj)
+                if (!m._FPDFPageObj_GetMatrix(obj, ptr)) throw new Error('object matrix unavailable')
+                const local = Array.from(m.HEAPF32.subarray(ptr >> 2, (ptr >> 2) + 6)) as [number, number, number, number, number, number]
+                const matrix = concatMat(local, toPage)
+                if (type === 5) { walk(obj, true, matrix, depth + 1); continue }
+                if (omitTargets && selected.has(obj)) continue
+                if (!m._FPDFPageObj_GetBounds(obj, ptr, ptr + 4, ptr + 8, ptr + 12)) throw new Error('object bounds unavailable')
+                const bounds = type === 3 ? transformRect([0, 0, 1, 1], matrix) : transformRect(Array.from(m.HEAPF32.subarray(ptr >> 2, (ptr >> 2) + 4)) as [number, number, number, number], toPage)
+                const readColor = (stroke: boolean): number[] => {
+                  const ok = stroke ? m._FPDFPageObj_GetStrokeColor(obj, ptr, ptr + 4, ptr + 8, ptr + 12) : m._FPDFPageObj_GetFillColor(obj, ptr, ptr + 4, ptr + 8, ptr + 12)
+                  return ok ? [0, 4, 8, 12].map(offset => m.HEAP32[(ptr + offset) >> 2]!) : []
+                }
+                const fill = readColor(false), stroke = readColor(true), text = byObj.get(obj)
+                let image = ''
+                if (type === 3) {
+                  const length = m._FPDFImageObj_GetImageDataRaw(obj, 0, 0)
+                  if (length > 64 * 1024 * 1024) throw new Error('image size limit')
+                  const buffer = m._malloc(length)
+                  try { m._FPDFImageObj_GetImageDataRaw(obj, buffer, length); image = createHash('sha256').update(m.HEAPU8.subarray(buffer, buffer + length)).digest('hex') }
+                  finally { m._free(buffer) }
+                  if (imageAlpha) {
+                    if (!m._FPDFImageObj_GetImagePixelSize(obj, ptr, ptr + 4)) throw new Error('image dimensions unavailable')
+                    const width = m.HEAP32[ptr >> 2]!, height = m.HEAP32[(ptr + 4) >> 2]!
+                    if (width < 1 || height < 1 || width > 8192 || height > 8192 || width * height * 4 > 32 * 1024 * 1024) throw new Error('image pixels limit')
+                  }
+                  const bitmap = m._FPDFImageObj_GetBitmap(obj)
+                  if (!bitmap) throw new Error('image pixels unavailable')
+                  try {
+                    const width = m._FPDFBitmap_GetWidth(bitmap), height = m._FPDFBitmap_GetHeight(bitmap), stride = m._FPDFBitmap_GetStride(bitmap), format = m._FPDFBitmap_GetFormat(bitmap), data = m._FPDFBitmap_GetBuffer(bitmap)
+                    const rowBytes = width * (format === 1 ? 1 : format === 2 ? 3 : 4)
+                    if (!data || width < 1 || height < 1 || stride < rowBytes || stride * height > 64 * 1024 * 1024) throw new Error('image pixels limit')
+                    const pixels = createHash('sha256').update(`${width},${height},${format}:`)
+                    for (let row = 0; row < height; row++) pixels.update(m.HEAPU8.subarray(data + row * stride, data + row * stride + rowBytes))
+                    image += ':' + pixels.digest('hex')
+                    if (imageAlpha) {
+                      m.HEAPF32.set([width, 0, 0, height, 0, 0], ptr >> 2)
+                      if (!m._FPDFPageObj_SetMatrix(obj, ptr)) throw new Error('image matrix unavailable')
+                      let rendered = 0
+                      try {
+                        rendered = m._FPDFImageObj_GetRenderedBitmap(doc, page, obj)
+                        if (!rendered) throw new Error('image alpha unavailable')
+                        const renderedStride = m._FPDFBitmap_GetStride(rendered), renderedData = m._FPDFBitmap_GetBuffer(rendered)
+                        if (m._FPDFBitmap_GetWidth(rendered) !== width || m._FPDFBitmap_GetHeight(rendered) !== height || m._FPDFBitmap_GetFormat(rendered) !== 4 || !renderedData || renderedStride < width * 4 || renderedStride * height > 64 * 1024 * 1024) throw new Error('image alpha limit')
+                        const alpha = createHash('sha256')
+                        for (let row = 0; row < height; row++) alpha.update(m.HEAPU8.subarray(renderedData + row * renderedStride, renderedData + row * renderedStride + width * 4))
+                        image += ':' + alpha.digest('hex')
+                      } finally {
+                        if (rendered) m._FPDFBitmap_Destroy(rendered)
+                        m.HEAPF32.set(local, ptr >> 2)
+                        m._FPDFPageObj_SetMatrix(obj, ptr)
+                      }
+                    }
+                  } finally { m._FPDFBitmap_Destroy(bitmap) }
+                }
+                const size = text && m._FPDFTextObj_GetFontSize(obj, ptr) ? m.HEAPF32[ptr >> 2]! : 0
+                let verifiedText = text?.text ?? ''
+                const realCount = realCharCounts.get(obj) ?? 0, codepoints = [...verifiedText]
+                if (realCount > 0 && realCount < codepoints.length && codepoints.slice(realCount).every(char => char === ' ')) verifiedText = codepoints.slice(0, realCount).join('')
+                out.push({ page: pageIndex, type, text: verifiedText, font: text ? fontString(m, (b, l) => m._FPDFFont_GetBaseFontName(text.font, b, l)) : '', image, fill, stroke, size, mode: text ? m._FPDFTextObj_GetTextRenderMode(obj) : 0, bounds, matrix: [...matrix], delta: selected.get(obj) ?? [0, 0] })
+              }
+            }
+            walk(page, false, [1, 0, 0, 1, 0, 0], 0)
+          } finally { m._FPDFText_ClosePage(textPage); m._FPDF_ClosePage(page) }
+        }
+        return out
+      } finally { m._free(ptr) }
+    })
+}
+
+/** Verify pure moves against all leaf objects, including untouched images/paths.
+ * Form containers may be lifted by the writer; compare effective page matrices. */
+export function verifyTextBlockMoves(original: Uint8Array, saved: Uint8Array, edits: TextEditInput[]): Promise<boolean> {
+  return chainPdfium(async () => {
+    const m = await loadPdfium()
+    const before = await readPdfLeafObjectsInner(m, original, edits), after = await readPdfLeafObjectsInner(m, saved, [])
+    if (!before || !after || before.length !== after.length) return false
+    const signature = (item: PdfLeafSnapshot) => JSON.stringify([item.page, item.type, item.text, item.font, item.image, item.fill, item.stroke, item.size, item.mode])
+    const groups = new Map<string, PdfLeafSnapshot[]>()
+    for (const item of after) { const key = signature(item); groups.set(key, [...(groups.get(key) ?? []), item]) }
+    for (const item of before) {
+      const choices = groups.get(signature(item))
+      const expectedBounds = item.bounds.map((value, index) => value + item.delta[index % 2]!)
+      const expectedMatrix = item.matrix.map((value, index) => value + (index === 4 ? item.delta[0]! : index === 5 ? item.delta[1]! : 0))
+      const found = choices?.findIndex(choice => choice.bounds.every((value, index) => Math.abs(value - expectedBounds[index]!) < 0.05) && choice.matrix.every((value, index) => Math.abs(value - expectedMatrix[index]!) < 0.05)) ?? -1
+      if (!choices || found < 0) return false
+      choices.splice(found, 1)
+    }
+    return true
+  })
+}
+
+/** Measure the exact original/rebuild face and retained original objects before reflow.
+ * No inserted-text fallback is used: matching and font selection mirror rebuildRun. */
+export function measureTextEditLayout(bytes: Uint8Array, edit: TextEditInput): Promise<{
+  text: string
+  advances: Record<string, number | null>
+  retained: { start: number; end: number; text: string; width: number; x: number; y: number }[]
+}> {
+  return chainPdfium(async () => {
+    const m = await loadPdfium()
+    return withDocument(m, bytes, async (doc) => {
+      const page = m._FPDF_LoadPage(doc, edit.pageIndex)
+      if (!page) throw new Error('page does not exist')
+      const textPage = m._FPDFText_LoadPage(page)
+      const ptr = m._malloc(4)
+      try {
+        const match = matchEdit(collectTextObjects(m, page, textPage), edit)
+        if ('reason' in match) throw new Error(match.reason)
+        if (!match.whole) throw new Error('paragraph must own complete text objects')
+        const text = match.newText
+        if (!text.trim()) return { text: '', advances: {}, retained: [] }
+        const anchor = match.matches.reduce((a, b) => b.bounds[0] < a.bounds[0] ? b : a)
+        const colors = edit.newColor ? null : matchCharColors(m, match.matches, text)
+        const styles = overlayStyles(colors, plannedCharStyles(edit, text), text)
+        const override = edit.newFontSize !== undefined || edit.newFont !== undefined || edit.newBold || edit.newItalic
+        const keeps = !override ? buildKeepPlan(m, textPage, match.matches, text, styles, edit.newColor, edit) : null
+        const parts: string[] = []
+        let k = 0
+        for (const keep of [...(keeps ?? [])].sort((a, b) => a.startK - b.startK)) {
+          parts.push(text.slice(k, keep.startK)); k = keep.endK
+        }
+        parts.push(text.slice(k))
+        const { font } = await loadTextEditFont(m, doc, anchor.font, edit, keeps ? parts.join('') : text)
+        const advances: Record<string, number | null> = {}
+        const size = edit.newFontSize ?? edit.fontSize
+        for (const char of text.replace(/\n/g, '')) {
+          advances[char] = m._FPDFFont_GetGlyphWidth(font, char.codePointAt(0)!, 1, ptr) ? m.HEAPF32[ptr >> 2]! * size : null
+        }
+        return { text, advances, retained: (keeps ?? []).map(keep => ({ start: keep.startK, end: keep.endK, text: text.slice(keep.startK, keep.endK), width: keep.advW, x: keep.origX, y: keep.origY })) }
+      } finally {
+        m._free(ptr); m._FPDFText_ClosePage(textPage); m._FPDF_ClosePage(page)
+      }
+    })
+  })
+}
+
 async function rebuildRun(
   m: Pdfium,
   doc: number,
@@ -1777,42 +1992,10 @@ async function rebuildRun(
     let font = 0
     let fontSynth = false
     let anyCff = false
-    const loadFont = async (
-      styleEdit: TextEditInput,
-      text: string,
-    ): Promise<{ font: number; synth: boolean }> => {
-      const standard = anchor.font
-        ? keptStandardFont(
-            fontString(m, (b, l) => m._FPDFFont_GetBaseFontName(anchor.font, b, l)),
-            !!m._FPDFFont_GetIsEmbedded(anchor.font),
-            styleEdit,
-            (text.trim() ? text : 'x').replace(/\n/g, ''),
-          )
-        : null
-      if (standard) {
-        const f = loadStandardFont(m, doc, standard)
-        if (!f) throw new Error('FPDFText_LoadStandardFont failed')
-        return { font: f, synth: !!styleEdit.newBold && !faceIsBold(m, anchor.font) }
-      }
-      const { bytes: fontBytes, syntheticBold } = await resolveRebuildFont(
-        m,
-        anchor.font,
-        styleEdit,
-        text.trim() ? text : 'x',
-      )
-      const fontPtr = m._malloc(fontBytes.length)
-      m.HEAPU8.set(fontBytes, fontPtr)
-      const f = m._FPDFText_LoadFont(
-        doc,
-        fontPtr,
-        fontBytes.length,
-        isTruetype(fontBytes) ? FPDF_FONT_TRUETYPE : FPDF_FONT_TYPE1,
-        1,
-      )
-      m._free(fontPtr)
-      if (!f) throw new Error('FPDFText_LoadFont failed')
-      anyCff = anyCff || !isTruetype(fontBytes)
-      return { font: f, synth: syntheticBold }
+    const loadFont = async (styleEdit: TextEditInput, text: string) => {
+      const resolved = await loadTextEditFont(m, doc, anchor.font, styleEdit, text)
+      anyCff = anyCff || resolved.cff
+      return resolved
     }
     const loadRebuild = async (text: string) => {
       ;({ font, synth: fontSynth } = await loadFont(edit, text))
@@ -2177,6 +2360,17 @@ export function textInsertAxes(rotate = 0): readonly [number, number, number, nu
     default:
       return [1, 0, 0, 1]
   }
+}
+
+/** Resolve exactly the face used by a new text insert, for server-side layout.
+ * Callers combine all text sharing font/style, just as applyTextInserts does. */
+export function resolveTextInsertFont(
+  input: Pick<TextInsertInput, 'text' | 'font' | 'bold' | 'italic'>,
+): Promise<{ bytes: Buffer; syntheticBold: boolean }> {
+  return chainPdfium(async () => resolveRebuildFont(await loadPdfium(), 0, {
+    pageIndex: 0, rect: [0, 0, 0, 0], oldText: '', newText: input.text,
+    fontSize: 14, newFont: input.font, newBold: input.bold, newItalic: input.italic,
+  }, input.text))
 }
 
 /** Insert new searchable text objects without matching/removing existing page content. */

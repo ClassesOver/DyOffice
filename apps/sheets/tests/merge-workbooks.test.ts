@@ -43,9 +43,9 @@ describe('dedupeSheetName', () => {
 })
 
 describe('chunkRowsFor', () => {
-  it('keeps rows × columns under the IPC cap', () => {
-    expect(chunkRowsFor(1) * 1).toBeLessThanOrEqual(100_000)
-    expect(chunkRowsFor(50) * 50).toBeLessThanOrEqual(100_000)
-    expect(chunkRowsFor(200_000)).toBe(1)
+  it('keeps merge reads under the Web native range limit', () => {
+    expect(chunkRowsFor(1) * 1).toBeLessThanOrEqual(20_000)
+    expect(chunkRowsFor(50) * 50).toBeLessThanOrEqual(20_000)
+    expect(chunkRowsFor(16_384)).toBe(1)
   })
 })

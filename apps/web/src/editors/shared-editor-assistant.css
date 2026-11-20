@@ -1,0 +1,12 @@
+.shared-editor-assistant{height:100%;min-height:0;display:flex;flex-direction:column;background:var(--surface);color:var(--text)}
+.shared-editor-assistant-head{min-height:48px;display:flex;align-items:center;justify-content:space-between;gap:12px;padding:8px 14px;border-bottom:1px solid var(--border)}
+.shared-assistant-feed{flex:1;min-height:0;overflow:auto;padding:14px}
+.shared-assistant-feed .ai-msg{max-width:min(88%,720px);margin:10px 0;padding:10px 12px;border-radius:8px;background:var(--surface-raised,var(--surface));overflow-wrap:anywhere}
+.shared-assistant-feed .ai-msg-user{margin-inline-start:auto;background:var(--accent-soft)}
+.shared-editor-assistant-composer{flex:none;display:grid;grid-template-columns:minmax(0,1fr);gap:8px;padding:10px 12px;border-top:1px solid var(--border)}
+.shared-editor-assistant-composer .assistant-recipient{grid-column:1/-1}
+.shared-editor-assistant-composer textarea{width:100%;min-height:72px;max-height:180px;box-sizing:border-box;resize:vertical;padding:10px 12px;line-height:22px;border:1px solid var(--border);border-radius:12px;background:var(--surface);color:var(--text);font-family:inherit;font-size:14px}
+.pdf-shared-assistant{height:460px;min-height:320px;margin-top:20px;border-top:1px solid var(--border)}
+.shared-assistant-file-list{display:flex;flex-wrap:wrap;gap:6px;padding:4px 0;min-width:0;font-size:12px}
+.shared-assistant-file-list>span{display:inline-flex;align-items:center;gap:6px;max-width:100%;padding:4px 7px;border:1px solid var(--border);border-radius:6px;overflow-wrap:anywhere}
+.shared-assistant-file-list button{flex:none;border:0;padding:0;background:none;color:inherit;cursor:pointer}
