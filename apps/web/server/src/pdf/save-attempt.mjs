@@ -1,4 +1,4 @@
-function fail(code){throw Object.assign(new Error(code),{code})}
+import {fail} from './job-common.mjs'
 const revisionPattern=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
 /** Private in-memory save attempt. No HTTP registration, persistence or sandbox.

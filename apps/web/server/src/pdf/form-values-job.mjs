@@ -1,11 +1,8 @@
-import {createHash} from 'node:crypto'
 import {readFile} from 'node:fs/promises'
 import {PDFCheckBox,PDFTextField,PDFRadioGroup,PDFDropdown,PDFOptionList,PDFSignature,PDFButton,PDFAcroNonTerminal,PDFName,PDFDict,PDFArray,StandardFonts} from 'pdf-lib'
 import {openEditablePdf} from './editable-document.mjs'
 import {pdfFontkit} from '../../../src/editors/pdf-fontkit.ts'
-const hash=bytes=>createHash('sha256').update(bytes).digest('hex')
-function fail(code){throw Object.assign(new Error(code),{code})}
-function check(signal){if(signal?.aborted)fail('ABORTED')}
+import {fail,check,hash} from './job-common.mjs'
 const plain=value=>value&&typeof value==='object'&&!Array.isArray(value)&&[Object.prototype,null].includes(Object.getPrototypeOf(value))&&Reflect.ownKeys(value).every(key=>typeof key==='string'&&Object.getOwnPropertyDescriptor(value,key)?.enumerable&&'value'in Object.getOwnPropertyDescriptor(value,key))
 export const pdfFormValuesSafetyCodes=new Set(['MAGIC_MISMATCH','PASSWORD','UNREADABLE','PDF_EDIT_LIMIT','SIGNATURE_EDIT_REFUSED','PDF_EDIT_UNSUPPORTED_STRUCTURE','INVALID_PDF_FORM_VALUES','PDF_FORM_VERIFY_FAILED','PDF_FORM_FONT_UNAVAILABLE','OUTPUT_LIMIT'])
 export function validatePdfFormValueOperations(input){

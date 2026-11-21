@@ -1,6 +1,5 @@
 import {preservePdfManagedStamps} from './stamps-job.mjs'
 import {replacePdfImagePixels,createPdfImagePixelSource} from './isolate-image-resources.mjs'
-import {createHash} from 'node:crypto'
 import {PNG} from 'pngjs'
 import {JpegImage} from 'pdfjs-dist/image_decoders/pdf.image_decoders.mjs'
 import {catalog,pdfImageEditsSafetyCodes} from './image-edits-job.mjs'
@@ -9,10 +8,8 @@ import {openPdfForPendingEdits} from './pending-document.mjs'
 import {assertPdfInsertFormPreserved} from './insert-form-integrity.mjs'
 import {PDF_OPEN_OPTIONS} from '../../../src/editors/pdf-csp.ts'
 import {pdfRectToCss,viewToPdf,geomDispSize} from '../../../../pdf/src/renderer/annotations.ts'
+import {fail,check,hash,requireEnvelope} from './job-common.mjs'
 const MAX_IMAGE_BYTES=5*1024*1024,MAX_RGBA_BYTES=32*1024*1024,MAX_REQUEST_BYTES=7*1024*1024
-const hash=bytes=>createHash('sha256').update(bytes).digest('hex')
-function fail(code){throw Object.assign(new Error(code),{code})}
-function check(signal){if(signal?.aborted)fail('ABORTED')}
 export const pdfImageContentSafetyCodes=new Set([...pdfImageEditsSafetyCodes,...pdfTextInsertsSafetyCodes,'INVALID_PDF_IMAGE_CONTENT','PDF_IMAGE_FORMAT_UNSUPPORTED','PDF_IMAGE_CONTENT_LIMIT','PDF_IMAGE_CONTENT_DECODE_FAILED','PDF_IMAGE_RESOURCE_UNSUPPORTED'])
 function plain(value){return value&&typeof value==='object'&&!Array.isArray(value)&&[Object.prototype,null].includes(Object.getPrototypeOf(value))&&Reflect.ownKeys(value).every(key=>typeof key==='string'&&Object.getOwnPropertyDescriptor(value,key)?.enumerable&&'value'in Object.getOwnPropertyDescriptor(value,key))}
 export function validatePdfImageContentOperation(operation){
@@ -29,7 +26,7 @@ export function validatePdfImageContentOperation(operation){
 export function parsePdfImageContentRequest(raw){
  if(typeof raw!=='string'||Buffer.byteLength(raw)>MAX_REQUEST_BYTES)fail('REQUEST_LIMIT')
  let request;try{request=JSON.parse(raw)}catch{fail('INVALID_REQUEST')}
- if(!request||Object.keys(request).sort().join(',')!=='action,operation,version'||request.version!==1||request.action!=='imageContent')fail('INVALID_REQUEST')
+ requireEnvelope(request,'imageContent','operation')
  return validatePdfImageContentOperation(request.operation)
 }
 function dimensions(bytes,mime){

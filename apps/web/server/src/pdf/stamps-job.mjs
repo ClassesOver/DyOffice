@@ -1,4 +1,4 @@
-import {createHash,randomUUID} from 'node:crypto'
+import {randomUUID} from 'node:crypto'
 import {PDFName,PDFDict,PDFArray,PDFRef,PDFStream,PDFHexString,PDFNumber} from 'pdf-lib'
 import fontkit from '@pdf-lib/fontkit'
 import {validatePdfStampOperation} from '../../../../../packages/web-contracts/src/pdf-stamp-ops.ts'
@@ -7,14 +7,13 @@ import {validateStampSourceState,readStampContent} from './stamp-state.mjs'
 import {openEditablePdf} from './editable-document.mjs'
 import {DEFAULT_WATERMARK,DEFAULT_HEADER_FOOTER} from '../../../../pdf/src/renderer/stamps.ts'
 import {fillStampPlaceholders,stampBarLayout,fitWatermarkFontSize} from '../../../../pdf/src/renderer/stamp-layout.ts'
-const MAX_BYTES=64*1024*1024,META=PDFName.of('DyOfficeStamps'),name=PDFName.of,hash=bytes=>createHash('sha256').update(bytes).digest('hex')
-function fail(code){throw Object.assign(new Error(code),{code})}
-function check(signal){if(signal?.aborted)fail('ABORTED')}
+import {fail,check,hash,requireEnvelope} from './job-common.mjs'
+const MAX_BYTES=64*1024*1024,META=PDFName.of('DyOfficeStamps'),name=PDFName.of
 export const pdfStampsSafetyCodes=new Set(['MAGIC_MISMATCH','PASSWORD','UNREADABLE','PDF_EDIT_LIMIT','SIGNATURE_EDIT_REFUSED','PDF_EDIT_UNSUPPORTED_STRUCTURE','INVALID_PDF_STAMP','PDF_STAMP_NOT_FOUND','PDF_STAMP_INTEGRITY_FAILED','PDF_STAMP_FONT_UNAVAILABLE','PDF_STAMP_LAYOUT_REFUSED','PDF_STAMP_VERIFY_FAILED','OUTPUT_LIMIT'])
 export function parsePdfStampsRequest(raw){
  if(typeof raw!=='string'||Buffer.byteLength(raw)>65536)fail('REQUEST_LIMIT')
  let request;try{request=JSON.parse(raw)}catch{fail('INVALID_REQUEST')}
- if(!request||Object.keys(request).sort().join(',')!=='action,operation,version'||request.version!==1||request.action!=='stamps')fail('INVALID_REQUEST')
+ requireEnvelope(request,'stamps','operation')
  try{return validatePdfStampOperation(request.operation)}catch{fail('INVALID_PDF_STAMP')}
 }
 const canonicalObject=value=>value instanceof PDFDict?'<<'+value.entries().filter(([key])=>String(key)!=='/Length').sort(([a],[b])=>String(a).localeCompare(String(b))).map(([key,item])=>String(key)+' '+canonicalObject(item)).join(' ')+'>>':value instanceof PDFArray?'['+value.asArray().map(canonicalObject).join(' ')+']':value instanceof PDFNumber?String(Math.fround(value.asNumber())):String(value)

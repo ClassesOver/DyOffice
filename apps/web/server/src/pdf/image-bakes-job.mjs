@@ -1,7 +1,6 @@
 import {preservePdfManagedStamps} from './stamps-job.mjs'
 import {replacePdfImagePixels,createPdfImagePixelSource} from './isolate-image-resources.mjs'
 import {PDFDocument,PDFName} from 'pdf-lib'
-import {createHash} from 'node:crypto'
 import {catalog,pdfImageEditsSafetyCodes} from './image-edits-job.mjs'
 import {openPdfForPendingEdits} from './pending-document.mjs'
 import {assertPdfInsertFormPreserved} from './insert-form-integrity.mjs'
@@ -9,9 +8,7 @@ import {pdfToView,pdfRectToCss,viewToPdf} from '../../../../pdf/src/renderer/ann
 import {flipPixels,multiplyAlpha,DEFAULT_CUTOUT_TOLERANCE} from '../../../../pdf/src/renderer/image-bake.ts'
 import {removeBackground} from '../../../../pdf/src/renderer/cutout.ts'
 import {concatMat,transformRect} from '../../../../pdf/src/main/form-text.ts'
-const hash=bytes=>createHash('sha256').update(bytes).digest('hex')
-function fail(code){throw Object.assign(new Error(code),{code})}
-function check(signal){if(signal?.aborted)fail('ABORTED')}
+import {fail,check,hash,requireEnvelope} from './job-common.mjs'
 export const pdfImageBakesSafetyCodes=new Set([...pdfImageEditsSafetyCodes,'INVALID_PDF_IMAGE_BAKE','PDF_IMAGE_BAKE_UNSUPPORTED_TRANSFORM','PDF_IMAGE_BAKE_LIMIT','PDF_IMAGE_RESOURCE_UNSUPPORTED'])
 export function validatePdfImageBakeOperation(operation){
  if(!operation||typeof operation!=='object'||Array.isArray(operation)||![Object.prototype,null].includes(Object.getPrototypeOf(operation)))fail('INVALID_PDF_IMAGE_BAKE')
@@ -32,7 +29,7 @@ export function validatePdfImageBakeOperation(operation){
 export function parsePdfImageBakesRequest(raw){
  if(typeof raw!=='string'||Buffer.byteLength(raw)>65536)fail('REQUEST_LIMIT')
  let request;try{request=JSON.parse(raw)}catch{fail('INVALID_REQUEST')}
- if(!request||Object.keys(request).sort().join(',')!=='action,operation,version'||request.version!==1||request.action!=='imageBakes')fail('INVALID_REQUEST')
+ requireEnvelope(request,'imageBakes','operation')
  return validatePdfImageBakeOperation(request.operation)
 }
 const near=(a,b,tolerance=.05)=>a.length===b.length&&a.every((value,index)=>Math.abs(value-b[index])<=tolerance)

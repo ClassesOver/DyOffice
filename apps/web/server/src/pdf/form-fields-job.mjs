@@ -1,19 +1,17 @@
-import {createHash} from 'node:crypto'
 import {PDFDocument,PDFName,PDFArray,PDFDict,PDFNumber,PDFObjectCopier,PDFTextField,PDFCheckBox,PDFRadioGroup,PDFDropdown,PDFSignature,StandardFonts} from 'pdf-lib'
 import fontkit from '@pdf-lib/fontkit'
 import {validatePdfFormFieldOperations} from '../../../../../packages/web-contracts/src/pdf-form-fields.ts'
 import {pdfInsertFormState} from './insert-form-integrity.mjs'
 import {openEditablePdf} from './editable-document.mjs'
 import {viewToPdf,geomDispSize} from '../../../../pdf/src/renderer/annotations.ts'
+import {fail,check,hash,requireEnvelope} from './job-common.mjs'
 export {validatePdfFormFieldOperations}
-const n=PDFName.of,MAX_BYTES=64*1024*1024,hash=b=>createHash('sha256').update(b).digest('hex')
-function fail(code){throw Object.assign(new Error(code),{code})}
-function check(signal){if(signal?.aborted)fail('ABORTED')}
+const n=PDFName.of,MAX_BYTES=64*1024*1024
 export const pdfFormFieldsSafetyCodes=new Set(['MAGIC_MISMATCH','PASSWORD','UNREADABLE','PDF_EDIT_LIMIT','SIGNATURE_EDIT_REFUSED','PDF_EDIT_UNSUPPORTED_STRUCTURE','INVALID_PDF_FORM_FIELDS','PDF_FORM_FIELD_CONFLICT','PDF_FORM_FIELD_VERIFY_FAILED','PDF_TEXT_FONT_UNAVAILABLE','OUTPUT_LIMIT','PDF_FORM_INSERT_INTEGRITY_FAILED'])
 export function parsePdfFormFieldsRequest(raw){
  if(typeof raw!=='string')fail('INVALID_REQUEST');if(Buffer.byteLength(raw)>1024*1024)fail('REQUEST_LIMIT')
  let request;try{request=JSON.parse(raw)}catch{fail('INVALID_REQUEST')}
- if(!request||Array.isArray(request)||Object.keys(request).sort().join(',')!=='action,operations,version'||request.version!==1||request.action!=='formFields')fail('INVALID_REQUEST')
+ requireEnvelope(request,'formFields','operations')
  return validatePdfFormFieldOperations(request.operations)
 }
 /** Form authoring permits existing unsigned signature widgets; signed documents stay immutable. */

@@ -122,6 +122,14 @@ export interface PdfDraftInsertsUploadInput {baseRevision:string;editorId:string
 export type PdfRedactedCopyInput={baseRevision:string;editorId:string;leaseEpoch:number;name?:string}&
  ({patterns?:PdfRedactPattern[];ids:string[];regions?:never}|{regions:unknown;ids?:never;patterns?:never})
 export interface PdfReplacePagesInput {baseRevision:string;editorId:string;leaseEpoch:number;idempotencyKey?:string;pages?:number[];afterPageIndex?:number}
+/** HTTP errors pass through; known job safety codes become 400 with that detail; anything else is a 500. */
+function mapJobError(error:unknown,safetyCodes:ReadonlySet<string>,failDetail:string):never{
+  if((error as {statusCode?:number})?.statusCode)throw error
+  const code=(error as {code?:string})?.code??''
+  if(safetyCodes.has(code))throw Object.assign(authError(400),{detail:code})
+  throw Object.assign(authError(500),{detail:failDetail})
+}
+
 export function createPdfService({
   files,
   leases,
@@ -134,6 +142,27 @@ export function createPdfService({
   const recognizeOcr = createPdfOcr()
   const processor = createPdfRotationJob()
   const preparation = createPdfSavePreparation({ files, leases, revisions, processor })
+  // Shared by the stage* methods: run the pinned save preparation and map job failures.
+  async function stageVia<R>(prep:{prepare(input:{token:string;fileId:string;baseRevision:string;editorId:string;leaseEpoch:number;idempotencyKey:string;request:string},options:{signal?:AbortSignal}):Promise<R>},token:string,fileId:string,input:{baseRevision:string;editorId:string;leaseEpoch:number;idempotencyKey?:string},payload:{action:string}&Record<string,unknown>,safetyCodes:ReadonlySet<string>,failDetail:string,signal?:AbortSignal):Promise<R>{
+    // Key order (version, action, payload) is preserved from the per-method literals.
+    try{return await prep.prepare({token,fileId,baseRevision:input.baseRevision,editorId:input.editorId,leaseEpoch:input.leaseEpoch,idempotencyKey:input.idempotencyKey??randomUUID(),request:JSON.stringify({version:1,...payload})},{signal})}
+    catch(error){mapJobError(error,safetyCodes,failDetail)}
+  }
+  /** Read-only job over the exact pinned revision: verify source and output binding, then re-check freshness. */
+  async function runPinnedQuery(token:string,fileId:string,revision:string,job:{execute(bytes:Buffer,raw:string,signal?:AbortSignal):Promise<{bytes:Buffer;inputSha256:string;size:number;sha256:string}>},raw:string,signal?:AbortSignal):Promise<Buffer>{
+    const check=()=>signal?.throwIfAborted()
+    check();const current=await files.openFile(token,fileId);check()
+    if(current.format!=='pdf')throw authError(415)
+    if(current.file.revision!==revision)throw authError(409)
+    const source=await files.download(token,fileId,revision);check()
+    const inputSha256=createHash('sha256').update(source.bytes).digest('hex')
+    if(source.format!=='pdf'||current.file.sha256!==inputSha256)throw authError(409)
+    const result=await job.execute(source.bytes,raw,signal);check()
+    if(result.inputSha256!==inputSha256||result.size!==result.bytes.length||result.sha256!==createHash('sha256').update(result.bytes).digest('hex'))throw Error('PDF_OUTPUT_BINDING')
+    const fresh=await files.openFile(token,fileId);check()
+    if(fresh.file.revision!==revision||fresh.file.sha256!==inputSha256)throw authError(409)
+    return result.bytes
+  }
   const textPreparation = createPdfSavePreparation({ files, leases, revisions, processor:createIsolatedPdfTextEditJob() })
   const annotationPreparation = createPdfSavePreparation({ files, leases, revisions, processor:createIsolatedPdfAnnotationJob() })
   const annotationDeletePreparation = createPdfSavePreparation({ files, leases, revisions, processor:createIsolatedPdfAnnotationDeleteJob() })
@@ -321,12 +350,7 @@ export function createPdfService({
         const fresh=await files.openFile(token,fileId);check()
         if(fresh.file.revision!==revision||fresh.file.sha256!==result.inputSha256)throw authError(409)
         return {revision,result:JSON.parse(result.bytes.toString()).result as unknown}
-      }catch(error){
-        check();if((error as {statusCode?:number})?.statusCode)throw error
-        const code=(error as {code?:string})?.code??''
-        if(imagePreviewSafetyCodes.has(code))throw Object.assign(authError(400),{detail:code})
-        throw Object.assign(authError(500),{detail:'PDF_IMAGE_PREVIEW_FAILED'})
-      }
+      }catch(error){check();mapJobError(error,imagePreviewSafetyCodes,'PDF_IMAGE_PREVIEW_FAILED')}
     },
     async queryImages(token:string,fileId:string,input:{revision:string},signal?:AbortSignal):Promise<{revision:string;images:PdfImageInfo[]}>{
       signal?.throwIfAborted()
@@ -359,16 +383,7 @@ export function createPdfService({
       let operation:PdfPendingImageInsert;try{operation=validatePdfPendingImageInsert(input.operation)}catch{throw authError(400)}
       const check=()=>signal?.throwIfAborted()
       try{
-        check();const current=await files.openFile(token,fileId);check()
-        if(current.format!=='pdf')throw authError(415)
-        if(current.file.revision!==input.revision)throw authError(409)
-        const source=await files.download(token,fileId,input.revision);check()
-        const inputSha256=createHash('sha256').update(source.bytes).digest('hex')
-        if(source.format!=='pdf'||current.file.sha256!==inputSha256)throw authError(409)
-        const result=await createIsolatedPdfImageInsertsQueryJob().execute(source.bytes,JSON.stringify({version:1,action:'imageInsertsQuery',operation,rotationDelta:input.rotationDelta}),signal);check()
-        if(result.inputSha256!==inputSha256||result.size!==result.bytes.length||result.sha256!==createHash('sha256').update(result.bytes).digest('hex'))throw Error('PDF_OUTPUT_BINDING')
-        const fresh=await files.openFile(token,fileId);check()
-        if(fresh.file.revision!==input.revision||fresh.file.sha256!==inputSha256)throw authError(409)
+        const result={bytes:await runPinnedQuery(token,fileId,input.revision,createIsolatedPdfImageInsertsQueryJob(),JSON.stringify({version:1,action:'imageInsertsQuery',operation,rotationDelta:input.rotationDelta}),signal)}
         const report=JSON.parse(result.bytes.toString()) as PdfImageInsertsQueryReport
         return {revision:input.revision,image:report.image,edit:report.edit}
       }catch(error){check();if((error as {statusCode?:number})?.statusCode)throw error;const code=(error as {code?:string})?.code??'';if(pdfDraftInsertsSafetyCodes.has(code))throw Object.assign(authError(400),{detail:code});throw Object.assign(authError(500),{detail:'PDF_IMAGE_INSERT_QUERY_FAILED'})}
@@ -377,16 +392,7 @@ export function createPdfService({
       let operation:PdfDraftInserts;try{operation=validatePdfDraftInserts(input.operation)}catch{throw authError(400)}
       const check=()=>signal?.throwIfAborted()
       try{
-        check();const current=await files.openFile(token,fileId);check()
-        if(current.format!=='pdf')throw authError(415)
-        if(current.file.revision!==input.revision)throw authError(409)
-        const source=await files.download(token,fileId,input.revision);check()
-        const inputSha256=createHash('sha256').update(source.bytes).digest('hex')
-        if(source.format!=='pdf'||current.file.sha256!==inputSha256)throw authError(409)
-        const result=await createIsolatedPdfDraftInsertsQueryJob().execute(source.bytes,JSON.stringify({version:1,action:'draftInsertsQuery',operation}),signal);check()
-        if(result.inputSha256!==inputSha256||result.size!==result.bytes.length||result.sha256!==createHash('sha256').update(result.bytes).digest('hex'))throw Error('PDF_OUTPUT_BINDING')
-        const fresh=await files.openFile(token,fileId);check()
-        if(fresh.file.revision!==input.revision||fresh.file.sha256!==inputSha256)throw authError(409)
+        const result={bytes:await runPinnedQuery(token,fileId,input.revision,createIsolatedPdfDraftInsertsQueryJob(),JSON.stringify({version:1,action:'draftInsertsQuery',operation}),signal)}
         return {revision:input.revision,pages:(JSON.parse(result.bytes.toString()) as {pages:{page:number;width:number;height:number;png:string}[]}).pages}
       }catch(error){check();if((error as {statusCode?:number})?.statusCode)throw error;const code=(error as {code?:string})?.code??'';if(pdfDraftInsertsSafetyCodes.has(code))throw Object.assign(authError(400),{detail:code});throw Object.assign(authError(500),{detail:'PDF_DRAFT_INSERT_QUERY_FAILED'})}
     },
@@ -394,38 +400,15 @@ export function createPdfService({
       let operations:readonly PdfAnnotationOperation[];try{operations=validatePdfAnnotationOperations(input.operations)}catch{throw authError(400)}
       const check=()=>signal?.throwIfAborted()
       try{
-        check();const current=await files.openFile(token,fileId);check()
-        if(current.format!=='pdf')throw authError(415)
-        if(current.file.revision!==input.revision)throw authError(409)
-        const source=await files.download(token,fileId,input.revision);check()
-        const inputSha256=createHash('sha256').update(source.bytes).digest('hex')
-        if(source.format!=='pdf'||current.file.sha256!==inputSha256)throw authError(409)
-        const result=await createIsolatedPdfAnnotationsQueryJob().execute(source.bytes,JSON.stringify({version:1,action:'annotationsQuery',operations}),signal);check()
-        if(result.inputSha256!==inputSha256||result.size!==result.bytes.length||result.sha256!==createHash('sha256').update(result.bytes).digest('hex'))throw Error('PDF_OUTPUT_BINDING')
-        const fresh=await files.openFile(token,fileId);check()
-        if(fresh.file.revision!==input.revision||fresh.file.sha256!==inputSha256)throw authError(409)
+        const result={bytes:await runPinnedQuery(token,fileId,input.revision,createIsolatedPdfAnnotationsQueryJob(),JSON.stringify({version:1,action:'annotationsQuery',operations}),signal)}
         return {revision:input.revision,...JSON.parse(result.bytes.toString()) as PdfAnnotationsQueryReport}
-      }catch(error){
-        check();if((error as {statusCode?:number})?.statusCode)throw error
-        const code=(error as {code?:string})?.code??''
-        if(annotationsQuerySafetyCodes.has(code))throw Object.assign(authError(400),{detail:code})
-        throw Object.assign(authError(500),{detail:'PDF_ANNOTATIONS_QUERY_FAILED'})
-      }
+      }catch(error){check();mapJobError(error,annotationsQuerySafetyCodes,'PDF_ANNOTATIONS_QUERY_FAILED')}
     },
     async queryTextInserts(token:string,fileId:string,input:{revision:string;operations:readonly PdfTextInsertOperation[];rotationDeltas?:readonly number[]},signal?:AbortSignal){
       let operations:readonly PdfTextInsertOperation[];try{operations=validatePdfTextInsertOperations(input.operations)}catch{throw authError(400)}
       const check=()=>signal?.throwIfAborted()
       try{
-        check();const current=await files.openFile(token,fileId);check()
-        if(current.format!=='pdf')throw authError(415)
-        if(current.file.revision!==input.revision)throw authError(409)
-        const source=await files.download(token,fileId,input.revision);check()
-        const inputSha256=createHash('sha256').update(source.bytes).digest('hex')
-        if(source.format!=='pdf'||current.file.sha256!==inputSha256)throw authError(409)
-        const result=await createIsolatedPdfTextInsertsQueryJob().execute(source.bytes,JSON.stringify({version:1,action:'textInsertsQuery',operations,rotationDeltas:input.rotationDeltas}),signal);check()
-        if(result.inputSha256!==inputSha256||result.size!==result.bytes.length||result.sha256!==createHash('sha256').update(result.bytes).digest('hex'))throw Error('PDF_OUTPUT_BINDING')
-        const fresh=await files.openFile(token,fileId);check()
-        if(fresh.file.revision!==input.revision||fresh.file.sha256!==inputSha256)throw authError(409)
+        const result={bytes:await runPinnedQuery(token,fileId,input.revision,createIsolatedPdfTextInsertsQueryJob(),JSON.stringify({version:1,action:'textInsertsQuery',operations,rotationDeltas:input.rotationDeltas}),signal)}
         const report=JSON.parse(result.bytes.toString()) as PdfTextInsertsQueryReport
         return {revision:input.revision,blocks:report.blocks,inserts:report.inserts}
       }catch(error){
@@ -438,16 +421,7 @@ export function createPdfService({
       let patterns:PdfRedactPattern[];try{patterns=validatePdfRedactionPatterns(input.patterns)}catch{throw authError(400)}
       const check=()=>signal?.throwIfAborted()
       try{
-        check();const current=await files.openFile(token,fileId);check()
-        if(current.format!=='pdf')throw authError(415)
-        if(current.file.revision!==input.revision)throw authError(409)
-        const source=await files.download(token,fileId,input.revision);check()
-        const inputSha256=createHash('sha256').update(source.bytes).digest('hex')
-        if(source.format!=='pdf'||current.file.sha256!==inputSha256)throw authError(409)
-        const result=await createIsolatedPdfRedactionsQueryJob().execute(source.bytes,JSON.stringify({version:1,action:'redactionsQuery',revision:input.revision,patterns}),signal);check()
-        if(result.inputSha256!==inputSha256||result.size!==result.bytes.length||result.sha256!==createHash('sha256').update(result.bytes).digest('hex'))throw Error('PDF_OUTPUT_BINDING')
-        const fresh=await files.openFile(token,fileId);check()
-        if(fresh.file.revision!==input.revision||fresh.file.sha256!==inputSha256)throw authError(409)
+        const result={bytes:await runPinnedQuery(token,fileId,input.revision,createIsolatedPdfRedactionsQueryJob(),JSON.stringify({version:1,action:'redactionsQuery',revision:input.revision,patterns}),signal)}
         return JSON.parse(result.bytes.toString()) as PdfRedactionReport
       }catch(error){
         check();if((error as {statusCode?:number})?.statusCode)throw error
@@ -515,79 +489,37 @@ export function createPdfService({
     async stageStamps(token:string,fileId:string,input:PdfStampsUploadInput,signal?:AbortSignal){
       let operation:PdfStampOperation
       try{operation=validatePdfStampOperation(input.operation)}catch{throw authError(400)}
-      try{return await stampsPreparation.prepare({token,fileId,baseRevision:input.baseRevision,editorId:input.editorId,leaseEpoch:input.leaseEpoch,idempotencyKey:input.idempotencyKey??randomUUID(),request:JSON.stringify({version:1,action:'stamps',operation})},{signal})}
-      catch(error){
-        if((error as {statusCode?:number})?.statusCode)throw error
-        const code=(error as {code?:string})?.code??''
-        if(pdfStampsSafetyCodes.has(code))throw Object.assign(authError(400),{detail:code})
-        throw Object.assign(authError(500),{detail:'PDF_STAMP_FAILED'})
-      }
+      return stageVia(stampsPreparation,token,fileId,input,{action:'stamps',operation},pdfStampsSafetyCodes,'PDF_STAMP_FAILED',signal)
     },
     async stageImageBakes(token:string,fileId:string,input:PdfImageBakesUploadInput,signal?:AbortSignal){
       let operation:PdfImageBakeOperation
       try{operation=validatePdfImageBakeOperation(input.operation)}catch{throw authError(400)}
-      try{return await imageBakesPreparation.prepare({token,fileId,baseRevision:input.baseRevision,editorId:input.editorId,leaseEpoch:input.leaseEpoch,idempotencyKey:input.idempotencyKey??randomUUID(),request:JSON.stringify({version:1,action:'imageBakes',operation})},{signal})}
-      catch(error){
-        if((error as {statusCode?:number})?.statusCode)throw error
-        const code=(error as {code?:string})?.code??''
-        if(pdfImageBakesSafetyCodes.has(code))throw Object.assign(authError(400),{detail:code})
-        throw Object.assign(authError(500),{detail:'PDF_IMAGE_BAKE_FAILED'})
-      }
+      return stageVia(imageBakesPreparation,token,fileId,input,{action:'imageBakes',operation},pdfImageBakesSafetyCodes,'PDF_IMAGE_BAKE_FAILED',signal)
     },
     async stageImageContent(token:string,fileId:string,input:PdfImageContentUploadInput,signal?:AbortSignal){
       let operation:PdfImageContentOperation
       try{operation=validatePdfImageContentOperation(input.operation)}catch{throw authError(400)}
-      try{return await imageContentPreparation.prepare({token,fileId,baseRevision:input.baseRevision,editorId:input.editorId,leaseEpoch:input.leaseEpoch,idempotencyKey:input.idempotencyKey??randomUUID(),request:JSON.stringify({version:1,action:'imageContent',operation})},{signal})}
-      catch(error){
-        if((error as {statusCode?:number})?.statusCode)throw error
-        const code=(error as {code?:string})?.code??''
-        if(pdfImageContentSafetyCodes.has(code))throw Object.assign(authError(400),{detail:code})
-        throw Object.assign(authError(500),{detail:'PDF_IMAGE_CONTENT_FAILED'})
-      }
+      return stageVia(imageContentPreparation,token,fileId,input,{action:'imageContent',operation},pdfImageContentSafetyCodes,'PDF_IMAGE_CONTENT_FAILED',signal)
     },
     async stageImageEdits(token:string,fileId:string,input:PdfImageEditsUploadInput,signal?:AbortSignal){
       let operations:ReturnType<typeof validatePdfImageEditOperations>
       try{operations=validatePdfImageEditOperations(input.operations)}catch{throw authError(400)}
-      try{return await imageEditsPreparation.prepare({token,fileId,baseRevision:input.baseRevision,editorId:input.editorId,leaseEpoch:input.leaseEpoch,idempotencyKey:input.idempotencyKey??randomUUID(),request:JSON.stringify({version:1,action:'imageEdits',operations})},{signal})}
-      catch(error){
-        if((error as {statusCode?:number})?.statusCode)throw error
-        const code=(error as {code?:string})?.code??''
-        if(pdfImageEditsSafetyCodes.has(code))throw Object.assign(authError(400),{detail:code})
-        throw Object.assign(authError(500),{detail:'PDF_IMAGE_EDIT_FAILED'})
-      }
+      return stageVia(imageEditsPreparation,token,fileId,input,{action:'imageEdits',operations},pdfImageEditsSafetyCodes,'PDF_IMAGE_EDIT_FAILED',signal)
     },
     async stageBlockMoves(token:string,fileId:string,input:PdfBlockMovesUploadInput,signal?:AbortSignal){
       let operations:ReturnType<typeof validatePdfBlockMoveOperations>
       try{operations=validatePdfBlockMoveOperations(input.operations)}catch{throw authError(400)}
-      try{return await blockMovesPreparation.prepare({token,fileId,baseRevision:input.baseRevision,editorId:input.editorId,leaseEpoch:input.leaseEpoch,idempotencyKey:input.idempotencyKey??randomUUID(),request:JSON.stringify({version:1,action:'blockMoves',operations})},{signal})}
-      catch(error){
-        if((error as {statusCode?:number})?.statusCode)throw error
-        const code=(error as {code?:string})?.code??''
-        if(pdfBlockMovesSafetyCodes.has(code))throw Object.assign(authError(400),{detail:code})
-        throw Object.assign(authError(500),{detail:'PDF_BLOCK_MOVE_FAILED'})
-      }
+      return stageVia(blockMovesPreparation,token,fileId,input,{action:'blockMoves',operations},pdfBlockMovesSafetyCodes,'PDF_BLOCK_MOVE_FAILED',signal)
     },
     async stageBlockEdits(token:string,fileId:string,input:PdfBlockEditsUploadInput,signal?:AbortSignal){
       let operations:ReturnType<typeof validatePdfBlockEditOperations>
       try{operations=validatePdfBlockEditOperations(input.operations)}catch{throw authError(400)}
-      try{return await blockEditsPreparation.prepare({token,fileId,baseRevision:input.baseRevision,editorId:input.editorId,leaseEpoch:input.leaseEpoch,idempotencyKey:input.idempotencyKey??randomUUID(),request:JSON.stringify({version:1,action:'blockEdits',operations})},{signal})}
-      catch(error){
-        if((error as {statusCode?:number})?.statusCode)throw error
-        const code=(error as {code?:string})?.code??''
-        if(pdfBlockEditsSafetyCodes.has(code))throw Object.assign(authError(400),{detail:code})
-        throw Object.assign(authError(500),{detail:'PDF_BLOCK_EDIT_FAILED'})
-      }
+      return stageVia(blockEditsPreparation,token,fileId,input,{action:'blockEdits',operations},pdfBlockEditsSafetyCodes,'PDF_BLOCK_EDIT_FAILED',signal)
     },
     async stageTextInserts(token:string,fileId:string,input:PdfTextInsertsUploadInput,signal?:AbortSignal){
       let operations:ReturnType<typeof validatePdfTextInsertOperations>
       try{operations=validatePdfTextInsertOperations(input.operations)}catch{throw authError(400)}
-      try{return await textInsertsPreparation.prepare({token,fileId,baseRevision:input.baseRevision,editorId:input.editorId,leaseEpoch:input.leaseEpoch,idempotencyKey:input.idempotencyKey??randomUUID(),request:JSON.stringify({version:1,action:'textInserts',operations})},{signal})}
-      catch(error){
-        if((error as {statusCode?:number})?.statusCode)throw error
-        const code=(error as {code?:string})?.code??''
-        if(pdfTextInsertsSafetyCodes.has(code))throw Object.assign(authError(400),{detail:code})
-        throw Object.assign(authError(500),{detail:'PDF_TEXT_INSERT_FAILED'})
-      }
+      return stageVia(textInsertsPreparation,token,fileId,input,{action:'textInserts',operations},pdfTextInsertsSafetyCodes,'PDF_TEXT_INSERT_FAILED',signal)
     },
     async queryTextEdits(token:string,fileId:string,input:{revision:string;edits:unknown[]},signal?:AbortSignal){
       const check=()=>signal?.throwIfAborted()
@@ -604,12 +536,7 @@ export function createPdfService({
         const report=JSON.parse(result.bytes.toString()) as TextEditValidation[]
         if(!Array.isArray(report)||report.length!==edits.length)throw Error('Invalid text edit report')
         return {revision,edits:report}
-      }catch(error){
-        check();if((error as {statusCode?:number})?.statusCode)throw error
-        const code=(error as {code?:string})?.code??''
-        if(textEditsQuerySafetyCodes.has(code))throw Object.assign(authError(400),{detail:code})
-        throw Object.assign(authError(500),{detail:'PDF_TEXT_EDITS_QUERY_FAILED'})
-      }
+      }catch(error){check();mapJobError(error,textEditsQuerySafetyCodes,'PDF_TEXT_EDITS_QUERY_FAILED')}
     },
     async queryApplyOps(token:string,fileId:string,input:{revision:string;snapshot:unknown},signal?:AbortSignal):Promise<{revision:string;generation:number;pdf:string}>{
       const check=()=>signal?.throwIfAborted()
@@ -633,12 +560,7 @@ export function createPdfService({
         const fresh=await files.openFile(token,fileId);check()
         if(fresh.file.revision!==revision||fresh.file.sha256!==inputSha256)throw authError(409)
         return {revision,generation:snapshot.generation,pdf:result.bytes.toString('base64')}
-      }catch(error){
-        check();if((error as {statusCode?:number})?.statusCode)throw error
-        const code=(error as {code?:string})?.code??''
-        if(pdfApplyOpsSafetyCodes.has(code))throw Object.assign(authError(400),{detail:code})
-        throw Object.assign(authError(500),{detail:'PDF_APPLY_OPS_QUERY_FAILED'})
-      }
+      }catch(error){check();mapJobError(error,pdfApplyOpsSafetyCodes,'PDF_APPLY_OPS_QUERY_FAILED')}
     },
     async stageApplyOps(token:string,fileId:string,input:PdfApplyOpsUploadInput,signal?:AbortSignal){
       let snapshot:ReturnType<typeof validatePdfApplySnapshot>
@@ -660,24 +582,12 @@ export function createPdfService({
     async stageFormFields(token:string,fileId:string,input:PdfFormFieldsUploadInput,signal?:AbortSignal){
       let operations:ReturnType<typeof validatePdfFormFieldOperations>
       try{operations=validatePdfFormFieldOperations(input.operations)}catch{throw authError(400)}
-      try{return await formFieldsPreparation.prepare({token,fileId,baseRevision:input.baseRevision,editorId:input.editorId,leaseEpoch:input.leaseEpoch,idempotencyKey:input.idempotencyKey??randomUUID(),request:JSON.stringify({version:1,action:'formFields',operations})},{signal})}
-      catch(error){
-        if((error as {statusCode?:number})?.statusCode)throw error
-        const code=(error as {code?:string})?.code??''
-        if(pdfFormFieldsSafetyCodes.has(code))throw Object.assign(authError(400),{detail:code})
-        throw Object.assign(authError(500),{detail:'PDF_FORM_FIELDS_FAILED'})
-      }
+      return stageVia(formFieldsPreparation,token,fileId,input,{action:'formFields',operations},pdfFormFieldsSafetyCodes,'PDF_FORM_FIELDS_FAILED',signal)
     },
     async stageFormValues(token:string,fileId:string,input:PdfFormValuesUploadInput,signal?:AbortSignal){
       let operations:ReturnType<typeof validatePdfFormValueOperations>
       try{operations=validatePdfFormValueOperations(input.operations)}catch{throw authError(400)}
-      try{return await formValuesPreparation.prepare({token,fileId,baseRevision:input.baseRevision,editorId:input.editorId,leaseEpoch:input.leaseEpoch,idempotencyKey:input.idempotencyKey??randomUUID(),request:JSON.stringify({version:1,action:'formValues',operations})},{signal})}
-      catch(error){
-        if((error as {statusCode?:number})?.statusCode)throw error
-        const code=(error as {code?:string})?.code??''
-        if(pdfFormValuesSafetyCodes.has(code))throw Object.assign(authError(400),{detail:code})
-        throw Object.assign(authError(500),{detail:'PDF_FORM_VALUES_FAILED'})
-      }
+      return stageVia(formValuesPreparation,token,fileId,input,{action:'formValues',operations},pdfFormValuesSafetyCodes,'PDF_FORM_VALUES_FAILED',signal)
     },
     async stageUpdateNotes(token:string,fileId:string,input:PdfNoteUpdateUploadInput,signal?:AbortSignal){
       let operations:ReturnType<typeof validatePdfNoteUpdateOperations>

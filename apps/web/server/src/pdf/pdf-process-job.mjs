@@ -1,10 +1,8 @@
 import {splitPdfReplacePagesFrame} from './replace-pages-job.mjs'
-import {createHash} from 'node:crypto'
 import {fork} from 'node:child_process'
+import {fail,hash} from './job-common.mjs'
 
 const MAX_BYTES=64*1024*1024
-const hash=bytes=>createHash('sha256').update(bytes).digest('hex')
-function fail(code){throw Object.assign(new Error(code),{code})}
 
 /** Shared killable process boundary for the fixed PDF edit actions. Caps
  * V8 old-space and wall time, not OS filesystem/network access or WASM RSS. */

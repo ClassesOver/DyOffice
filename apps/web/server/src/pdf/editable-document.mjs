@@ -1,7 +1,7 @@
 import {EncryptedPDFError,PDFDocument,PDFName} from 'pdf-lib'
 import {assertPdfEditStructure} from '../../../shared/pdf-edit-structure.mjs'
+import {fail} from './job-common.mjs'
 
-function fail(code){throw Object.assign(new Error(code),{code})}
 
 export async function openEditablePdf(bytes,{allowAcroForm=false}={}){
  if(!bytes.subarray(0,5).equals(Buffer.from('%PDF-')))fail('MAGIC_MISMATCH')

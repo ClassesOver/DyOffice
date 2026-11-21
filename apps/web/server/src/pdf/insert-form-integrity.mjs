@@ -2,8 +2,8 @@ import {PDFArray,PDFDict,PDFName,PDFRef,PDFStream} from 'pdf-lib'
 import {createHash} from 'node:crypto'
 import {openEditablePdf} from './editable-document.mjs'
 import {assertPdfManagedStamps} from './stamps-job.mjs'
+import {fail} from './job-common.mjs'
 const name=PDFName.of
-function fail(code){throw Object.assign(Error(code),{code})}
 /** Protection checks for additive text and image operations. */
 export async function openPdfForInserts(bytes,{planning=false}={}){
  const doc=await openEditablePdf(bytes,{allowAcroForm:true}),acro=doc.catalog.lookup(name('AcroForm'))

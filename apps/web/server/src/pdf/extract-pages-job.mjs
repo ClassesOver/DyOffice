@@ -1,11 +1,8 @@
 import {capturePdfManagedStamps,reapplyPdfManagedStamps,pdfStampsSafetyCodes} from './stamps-job.mjs'
-import {createHash} from 'node:crypto'
 import {PDFName} from 'pdf-lib'
 import {openEditablePdf} from './editable-document.mjs'
+import {fail,check,hash,requireEnvelope} from './job-common.mjs'
 const MAX_BYTES=64*1024*1024
-const hash=bytes=>createHash('sha256').update(bytes).digest('hex')
-function fail(code){throw Object.assign(new Error(code),{code})}
-function check(signal){if(signal?.aborted)fail('ABORTED')}
 export const pdfExtractSafetyCodes=new Set([...pdfStampsSafetyCodes,'MAGIC_MISMATCH','PASSWORD','UNREADABLE','PDF_EDIT_LIMIT','SIGNATURE_EDIT_REFUSED','PDF_EDIT_UNSUPPORTED_STRUCTURE','INVALID_PDF_EXTRACT_PAGES','PDF_EXTRACT_VERIFY_FAILED','OUTPUT_LIMIT'])
 export function validatePdfExtractPages(value){
  if(!Array.isArray(value)||value.length<1||value.length>100||Reflect.ownKeys(value).length!==value.length+1)fail('INVALID_PDF_EXTRACT_PAGES')
@@ -20,7 +17,7 @@ export function validatePdfExtractPages(value){
 export function parsePdfExtractPagesRequest(raw){
  if(typeof raw!=='string'||Buffer.byteLength(raw,'utf8')>4096)fail('INVALID_REQUEST')
  let command;try{command=JSON.parse(raw)}catch{fail('INVALID_REQUEST')}
- if(!command||Array.isArray(command)||Object.keys(command).sort().join(',')!=='action,pages,version'||command.version!==1||command.action!=='extractPages')fail('INVALID_REQUEST')
+ requireEnvelope(command,'extractPages','pages')
  return validatePdfExtractPages(command.pages)
 }
 function annotations(page){

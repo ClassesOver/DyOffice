@@ -1,12 +1,10 @@
-import {createHash} from 'node:crypto'
 import {validateTextEdits} from '../../../../pdf/src/main/text-edit.ts'
 import {validateNativeTextEdits} from './apply-snapshot.mjs'
 import {openPdfForPendingEdits} from './pending-document.mjs'
 import {createPdfProcessJob} from './pdf-process-job.mjs'
+import {fail,hash} from './job-common.mjs'
 
 const limit=256*1024
-const hash=bytes=>createHash('sha256').update(bytes).digest('hex')
-function fail(code){throw Object.assign(Error(code),{code})}
 export const textEditsQuerySafetyCodes=new Set([
  'INVALID_PDF_APPLY_SNAPSHOT','MAGIC_MISMATCH','PASSWORD','UNREADABLE','PDF_EDIT_LIMIT',
  'SIGNATURE_EDIT_REFUSED','PDF_EDIT_UNSUPPORTED_STRUCTURE','PDF_STAMP_INTEGRITY_FAILED',

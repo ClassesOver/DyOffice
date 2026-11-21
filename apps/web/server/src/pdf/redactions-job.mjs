@@ -1,12 +1,11 @@
-import {createHash} from 'node:crypto'
 import {PDFName} from 'pdf-lib'
 import {openEditablePdf} from './editable-document.mjs'
 import {capturePdfManagedStamps} from './stamps-job.mjs'
 import {REDACT_PATTERNS,findPattern} from '../../../../pdf/src/renderer/redact-patterns.ts'
 import {pdfRectToCss} from '../../../../pdf/src/renderer/annotations.ts'
 import {validateRedactionRegions} from '../../../../pdf/src/main/redaction.ts'
-const MAX=64*1024*1024,hash=bytes=>createHash('sha256').update(bytes).digest('hex')
-function fail(code){throw Object.assign(Error(code),{code})}
+import {fail,hash} from './job-common.mjs'
+const MAX=64*1024*1024
 const check=signal=>{if(signal?.aborted)fail('ABORTED')}
 export const pdfRedactionsSafetyCodes=new Set(['MAGIC_MISMATCH','PASSWORD','UNREADABLE','PDF_EDIT_LIMIT','SIGNATURE_EDIT_REFUSED','PDF_EDIT_UNSUPPORTED_STRUCTURE','INVALID_PDF_REDACTION','PDF_REDACTION_STALE_SELECTION','PDF_REDACTION_TRUNCATED','PDF_REDACTION_REFUSED','PDF_REDACTION_VERIFY_FAILED','PDF_STAMP_INTEGRITY_FAILED','OUTPUT_LIMIT'])
 export function validatePdfRedactionPatterns(input=REDACT_PATTERNS){

@@ -1,9 +1,7 @@
-import {createHash} from 'node:crypto'
 import {parsePdfAnnotationRequest,planPdfAnnotations} from './annotation-job.mjs'
 import {openPdfForPendingEdits} from './pending-document.mjs'
+import {fail,hash} from './job-common.mjs'
 const MAX_BYTES=64*1024*1024,MAX_REQUEST=64*1024
-const hash=bytes=>createHash('sha256').update(bytes).digest('hex')
-function fail(code){throw Object.assign(Error(code),{code})}
 const check=signal=>{if(signal?.aborted)fail('ABORTED')}
 export const annotationsQuerySafetyCodes=new Set(['MAGIC_MISMATCH','PASSWORD','UNREADABLE','PDF_EDIT_LIMIT','SIGNATURE_EDIT_REFUSED','PDF_EDIT_UNSUPPORTED_STRUCTURE','PDF_STAMP_INTEGRITY_FAILED','PDF_ANNOTATION_TEXT_NOT_FOUND','OUTPUT_LIMIT'])
 export function parsePdfAnnotationsQueryRequest(raw){

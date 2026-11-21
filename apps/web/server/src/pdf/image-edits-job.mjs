@@ -1,15 +1,12 @@
 import {preservePdfManagedStamps} from './stamps-job.mjs'
-import {createHash} from 'node:crypto'
 import {EncryptedPDFError,PDFDocument} from 'pdf-lib'
 import {openPdfForPendingEdits} from './pending-document.mjs'
 import {assertPdfInsertFormPreserved} from './insert-form-integrity.mjs'
 import {pdfjsDocumentParams} from './pdfjs-open.mjs'
 import {pdfRectToCss,viewToPdf,geomDispSize} from '../../../../pdf/src/renderer/annotations.ts'
 import {concatMat,transformRect} from '../../../../pdf/src/main/form-text.ts'
+import {fail,check,hash,requireEnvelope} from './job-common.mjs'
 const MAX_BYTES=64*1024*1024
-const hash=bytes=>createHash('sha256').update(bytes).digest('hex')
-function fail(code){throw Object.assign(new Error(code),{code})}
-function check(signal){if(signal?.aborted)fail('ABORTED')}
 export const pdfImageEditsSafetyCodes=new Set(['MAGIC_MISMATCH','PASSWORD','UNREADABLE','PDF_EDIT_LIMIT','SIGNATURE_EDIT_REFUSED','PDF_EDIT_UNSUPPORTED_STRUCTURE','INVALID_PDF_IMAGE_EDIT','PDF_IMAGE_NOT_FOUND','PDF_IMAGE_TARGET_OVERLAP','PDF_IMAGE_TARGET_AMBIGUOUS','PDF_IMAGE_EDIT_REFUSED','PDF_IMAGE_VERIFY_FAILED','PDF_FORM_INSERT_INTEGRITY_FAILED','OUTPUT_LIMIT'])
 export function validatePdfImageEditOperations(input){
  if(!Array.isArray(input)||input.length<1||input.length>20||Reflect.ownKeys(input).length!==input.length+1)fail('INVALID_PDF_IMAGE_EDIT')
@@ -30,7 +27,7 @@ export function validatePdfImageEditOperations(input){
 export function parsePdfImageEditsRequest(raw){
  if(typeof raw!=='string')fail('INVALID_REQUEST');if(Buffer.byteLength(raw)>65536)fail('REQUEST_LIMIT')
  let request;try{request=JSON.parse(raw)}catch{fail('INVALID_REQUEST')}
- if(!request||Array.isArray(request)||Object.keys(request).sort().join(',')!=='action,operations,version'||request.version!==1||request.action!=='imageEdits')fail('INVALID_REQUEST')
+ requireEnvelope(request,'imageEdits','operations')
  return validatePdfImageEditOperations(request.operations)
 }
 export function parsePdfImageQueryRequest(raw){

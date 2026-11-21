@@ -1,21 +1,18 @@
 import {capturePdfManagedStamps,reapplyPdfManagedStamps,pdfStampsSafetyCodes} from './stamps-job.mjs'
-import {createHash} from 'node:crypto'
 import {PDFName} from 'pdf-lib'
 import {openEditablePdf} from './editable-document.mjs'
 
 const MAX_BYTES=64*1024*1024,MAX_REQUEST=64*1024
-const hash=bytes=>createHash('sha256').update(bytes).digest('hex')
 const annotationRefs=page=>JSON.stringify((page.node.Annots()?.asArray()??[]).map(String))
-function fail(code){throw Object.assign(new Error(code),{code})}
-function check(signal){if(signal?.aborted)fail('ABORTED')}
 export const pdfPageOpsSafetyCodes=new Set([...pdfStampsSafetyCodes,'MAGIC_MISMATCH','PASSWORD','UNREADABLE','PDF_EDIT_LIMIT','SIGNATURE_EDIT_REFUSED','PDF_EDIT_UNSUPPORTED_STRUCTURE','INVALID_PDF_PAGE_OPS','PDF_PAGE_OPS_VERIFY_FAILED','OUTPUT_LIMIT'])
 export {validatePdfPageOperations} from '../../../../../packages/web-contracts/src/pdf-page-ops.ts'
 import {validatePdfPageOperations} from '../../../../../packages/web-contracts/src/pdf-page-ops.ts'
+import {fail,check,hash,requireEnvelope} from './job-common.mjs'
 export function parsePdfPageOpsRequest(raw){
  if(typeof raw!=='string')fail('INVALID_REQUEST')
  if(Buffer.byteLength(raw,'utf8')>MAX_REQUEST)fail('REQUEST_LIMIT')
  let command;try{command=JSON.parse(raw)}catch{fail('INVALID_REQUEST')}
- if(!command||Array.isArray(command)||Object.keys(command).sort().join(',')!=='action,operations,version'||command.version!==1||command.action!=='pageOps')fail('INVALID_REQUEST')
+ requireEnvelope(command,'pageOps','operations')
  return validatePdfPageOperations(command.operations)
 }
 
