@@ -103,10 +103,11 @@ export function createPdfImageBakesJob(){
    let axes,expected
    if(['flip_image','crop_image'].includes(operation.op)){
     try{axes=displayAxes(target.item.matrix,geometries.get(operation.page))}catch(error){
-     if(!bare.rasterSafe)throw error
      // Crop keeps the surviving pixels at their original page coordinates.
-     // A flip would move them across the stationary occurrence clip.
+     // The writer retains the occurrence's blend, group and clipping state.
+     // A flip would move pixels across the stationary occurrence clip.
      if(operation.op==='flip_image'){
+      if(!bare.rasterSafe)throw error
       const {imageOccurrenceHasClip}=await import('../../../../pdf/src/main/image-edit.ts')
       if(await imageOccurrenceHasClip(original,operation.page-1,entry.ref.rect))throw error
      }
