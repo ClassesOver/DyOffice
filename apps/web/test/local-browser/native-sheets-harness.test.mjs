@@ -19,7 +19,7 @@ import {mockProviderNetwork} from '../helpers/provider-network.mjs'
 
 const sheetsDirectory=process.env.DYOFFICE_TEST_SHEETS_DIST
 for(const manualEdit of [false,true])test(manualEdit
- ?'a manual XLSX edit wins when the resumed assistant returns a conflicting tool call'
+ ?'a manual XLSX edit in a new tab wins when the resumed assistant returns a conflicting tool call'
  :'refresh skips stale XLSX continuations and applies the recoverable edit once',{skip:!sheetsDirectory,timeout:120000},async t=>{
  const server=createServer()
  t.after(async()=>{server.closeAllConnections();if(server.listening)await new Promise(resolve=>server.close(resolve))})
@@ -54,16 +54,18 @@ for(const manualEdit of [false,true])test(manualEdit
  await app.ready()
  server.on('request',app.routing)
  const browser=await launchTestBrowser();f.cleanup.unshift(()=>browser.close())
- const page=await browser.newPage({viewport:{width:1440,height:1000}})
- if(manualEdit)await page.addInitScript(()=>{window.__genofficeDebugHooks=true})
+ const context=await browser.newContext({viewport:{width:1440,height:1000}})
+ if(manualEdit)await context.addInitScript(()=>{window.__genofficeDebugHooks=true})
+ let page=await context.newPage()
  await stubHomeHero(page)
  await page.goto(origin)
  await page.getByLabel('用户名',{exact:true}).fill('alice')
  await page.getByLabel('密码',{exact:true}).fill(password)
  await page.getByRole('button',{name:'登录',exact:true}).click()
  await expect(page.locator('.home')).toBeVisible()
- await page.goto(origin+'/native-xlsx/?fileId='+file.fileId)
- const assistant=page.locator('.copilot:not(.collapsed)'),composer=assistant.locator('textarea')
+ const documentUrl=origin+'/native-xlsx/?fileId='+file.fileId
+ await page.goto(documentUrl)
+ let assistant=page.locator('.copilot:not(.collapsed)'),composer=assistant.locator('textarea')
  async function showAssistant(){
   await expect(page.locator('html')).toHaveAttribute('data-document-loading','ready',{timeout:30000})
   const rail=page.locator('.expand-copilot')
@@ -99,7 +101,7 @@ for(const manualEdit of [false,true])test(manualEdit
   return Readable.from([packet])
  }catch(error){t.diagnostic(error.stack);throw error}})
  const submissions=[],cancellations=[],claims=[]
- page.on('request',request=>{
+ context.on('request',request=>{
   const path=new URL(request.url()).pathname
   if(request.method()==='POST'&&path==='/api/v1/agents/tasks')submissions.push(request.postDataJSON())
   if(path.startsWith('/api/v1/agents/tasks/')&&path.endsWith('/cancel'))cancellations.push(path)
@@ -129,10 +131,15 @@ for(const manualEdit of [false,true])test(manualEdit
   })
   await page.route('**'+expiredPath+'/continuation',route=>route.fulfill({status:409,json:{error:'Harness continuation unavailable'}}))
   await page.route(`**/api/v1/agents/tasks/${turnId}/status?*`,async route=>{await expiredRestored;await route.continue()},{times:1})
+ }else{
+  await page.close()
+  page=await context.newPage()
+  assistant=page.locator('.copilot:not(.collapsed)');composer=assistant.locator('textarea')
  }
  await page.route(`**/files/${file.fileId}/sheets/inspect`,async route=>{await inspectGate;await route.continue()})
  const restoring=page.waitForResponse(response=>new URL(response.url()).pathname===`/api/v1/agents/tasks/${turnId}/status`)
- await page.reload()
+ if(manualEdit)await page.goto(documentUrl)
+ else await page.reload()
  const recoveredTask=await restoring
  assert.equal(recoveredTask.status(),200)
  const finished=page.waitForResponse(async response=>new URL(response.url()).pathname===`/api/v1/agents/tasks/${turnId}/status`&&response.ok()&&(await response.json()).state==='succeeded')
@@ -150,12 +157,18 @@ for(const manualEdit of [false,true])test(manualEdit
   try{
    await toolStarted
    await expect(save).toBeDisabled()
-   await page.evaluate(value=>window.__genofficeDebug.univerAPI.getActiveWorkbook().getActiveSheet().getRange('H2').setValue(value),cellValue)
-   await expect(save).toBeEnabled()
+   const editedValue=await page.evaluate(async value=>{
+    const cell=window.__genofficeDebug.univerAPI.getActiveWorkbook().getActiveSheet().getRange('H2')
+    cell.activate()
+    await cell.setValue(value)
+    return cell.getValue()
+   },cellValue)
+   assert.equal(editedValue,cellValue)
+   await expect(save).toBeEnabled({timeout:15000})
   }finally{allowTool()}
-  await expect(page.locator('.status-msg')).toContainText(reply,{timeout:10000})
+  await expect(page.locator('.status-msg')).toContainText(reply,{timeout:15000})
  }
- await expect(assistant.getByText(reply,{exact:true})).toBeVisible({timeout:10000})
+ if(!manualEdit)await expect(assistant.getByText(reply,{exact:true})).toBeVisible({timeout:10000})
  await expect(assistant.getByText(instruction,{exact:true})).toHaveCount(1)
  assert.equal(runs,1)
  assert.equal(submissions.length,1)
@@ -173,12 +186,13 @@ for(const manualEdit of [false,true])test(manualEdit
  const cell=await runtime.sheetsNative.readRange(bytes,book.sheets[0].name,{startRow:1,endRow:1,startColumn:7,endColumn:7})
  assert.deepEqual(cell.cells.map(cell=>cell.value),[cellValue])
  assert.deepEqual(await f.files.readFile(f.alice.token,file.fileId,file.revision),original)
- if(!manualEdit)await page.evaluate(({documentId,turnId})=>{
+ await page.evaluate(({documentId,turnId})=>{
   sessionStorage.setItem('dyoffice.harness.tasks:'+documentId,JSON.stringify([turnId]))
  },{documentId,turnId})
  await page.reload()
  await showAssistant()
- await expect(assistant.getByText(reply,{exact:true})).toBeVisible()
+ await expect(assistant.locator('.assistant-task-message:visible').getByText('Recovered workbook total: 42',{exact:true})).toBeVisible()
+ if(!manualEdit)await expect(assistant.getByText(reply,{exact:true})).toBeVisible()
  await expect(assistant.getByText(instruction,{exact:true})).toHaveCount(1)
  assert.equal(submissions.length,1)
  assert.deepEqual(claims,expectedClaims)

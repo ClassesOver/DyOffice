@@ -271,7 +271,10 @@ test('Word AI naming confirms an independent copy of the unsaved draft', {timeou
   const editor=f.page.locator('.tiptap.doc-page[contenteditable="true"]')
   await editor.waitFor({timeout:45000})
   await editor.first().click()
-  await f.page.keyboard.press('Control+End');await f.page.keyboard.press('Enter');await f.page.keyboard.type(marker)
+  // The model names the document from its opening excerpt; this fixture is longer.
+  await f.page.keyboard.press('Control+Home')
+  await f.page.keyboard.insertText(marker)
+  await f.page.keyboard.press('Enter')
   await expect(f.page.locator('.dyoffice-docs-persistence-state')).toHaveAttribute('data-dirty','true')
   await f.page.getByRole('button',{name:'File',exact:true}).click()
   const namingButton=f.page.locator('.qa-name-with-ai')
@@ -448,7 +451,19 @@ test('editing during a delayed native save keeps the newer draft dirty and saves
   diagnostic.stage('first-response-wait')
   const releasedResponse = await firstResponse
   diagnostic.stage('first-response-finished')
-  assert.equal(await requestDiagnostic.finished(releasedResponse),null)
+  try {
+    assert.equal(await requestDiagnostic.finished(releasedResponse),null)
+  } catch (error) {
+    // Chromium's network event can arrive before the editor settles the save.
+    // Record the editor's own verdict without converting a failed request into a pass.
+    const state = f.page.locator('.dyoffice-docs-persistence-state')
+    const acknowledged = await expect.poll(() => state.evaluate(element =>
+      element.textContent === 'Unsaved' && element.getAttribute('data-native-save') === 'incomplete' &&
+      (element.getAttribute('data-incomplete-reasons') ?? '').split(',').includes('document'),
+    undefined,{ timeout: 500 }),{ timeout: 3000 }).toBe(true).then(() => true,() => false)
+    console.error('first-native-save-receipt',JSON.stringify({acknowledged}))
+    throw error
+  }
   diagnostic.stage('native-incomplete')
   await expect(f.page.locator('.dyoffice-docs-persistence-state')).toHaveAttribute('data-native-save','incomplete')
   diagnostic.stage('native-dirty')

@@ -14,7 +14,7 @@ import {password} from '../helpers/identity.mjs'
 import {mockProviderNetwork} from '../helpers/provider-network.mjs'
 
 const slidesDirectory=process.env.DYOFFICE_TEST_SLIDES_DIST
-test('refresh resumes the PPTX conversation once and keeps its edit in the draft until save',{skip:!slidesDirectory,timeout:90000},async t=>{
+test('a new PPTX tab resumes the conversation once and keeps its edit in the draft until save',{skip:!slidesDirectory,timeout:90000},async t=>{
  const origin='http://localhost:43682',f=await fileFixture(t,{origin,buildApp:false})
  const original=await readFile(new URL('../fixtures/slides/acceptance.pptx',import.meta.url))
  const {file}=await importFile(f,f.alice.token,original,'recover-task.pptx')
@@ -39,11 +39,12 @@ test('refresh resumes the PPTX conversation once and keeps its edit in the draft
  f.cleanup.unshift(async()=>{release();await app.close()})
  await app.listen({port:43682,host:'127.0.0.1'})
  const browser=await launchTestBrowser();f.cleanup.unshift(()=>browser.close())
- const page=await browser.newPage({viewport:{width:1360,height:900}})
+ const context=await browser.newContext({viewport:{width:1360,height:900}})
+ let page=await context.newPage()
  const {csrfToken}=await (await page.request.get(origin+'/api/v1/auth/csrf')).json()
  assert.equal((await page.request.post(origin+'/api/v1/auth/login',{headers:{origin,'x-csrf-token':csrfToken},data:{username:'alice',password}})).status(),200)
- const panel=page.locator('.ai-panel'),composer=panel.locator('textarea')
- const rail=page.getByRole('button',{name:'展开 AI 助手',exact:true})
+ let panel=page.locator('.ai-panel'),composer=panel.locator('textarea')
+ let rail=page.getByRole('button',{name:'展开 AI 助手',exact:true})
  async function openAssistant(){
   await expect(page.locator('html')).toHaveAttribute('data-document-loading','ready',{timeout:25000})
   await expect(composer.or(rail)).toBeVisible({timeout:15000})
@@ -72,13 +73,14 @@ test('refresh resumes the PPTX conversation once and keeps its edit in the draft
   return Readable.from([Buffer.from('data: '+JSON.stringify({choices:[{delta,finish_reason:delta.tool_calls?'tool_calls':'stop'}]})+'\n\ndata: [DONE]\n\n')])
  }catch(error){t.diagnostic(error.stack);throw error}})
  const submissions=[],cancellations=[],claims=[]
- page.on('request',request=>{
+ context.on('request',request=>{
   const path=new URL(request.url()).pathname
   if(request.method()==='POST'&&path==='/api/v1/agents/tasks')submissions.push(request.postDataJSON())
   if(path.startsWith('/api/v1/agents/tasks/')&&path.endsWith('/cancel'))cancellations.push(path)
   if(path.startsWith('/api/v1/agents/tasks/')&&path.endsWith('/continuation'))claims.push(path)
  })
- await page.goto(origin+'/native-pptx/?fileId='+file.fileId)
+ const documentUrl=origin+'/native-pptx/?fileId='+file.fileId
+ await page.goto(documentUrl)
  await openAssistant()
  await composer.fill(instruction)
  await panel.getByRole('button',{name:'发送',exact:true}).click()
@@ -88,11 +90,15 @@ test('refresh resumes the PPTX conversation once and keeps its edit in the draft
  assert.equal(documentId,file.fileId)
  assert.equal(continuation?.revision,file.revision,'PPTX delegation must checkpoint the clean saved revision')
  assert.ok(continuation.checkpoint.chatTurnId)
+ await page.close()
+ page=await context.newPage()
+ await page.goto(documentUrl)
+ panel=page.locator('.ai-panel');composer=panel.locator('textarea')
+ rail=page.getByRole('button',{name:'展开 AI 助手',exact:true})
  const task=panel.locator(`.assistant-task-message[data-team-task="harness:${turnId}"]:visible`)
- await page.reload()
  await openAssistant()
  await expect(task.getByText('Computing PPTX total',{exact:true})).toBeVisible({timeout:15000})
- const draft='保留刷新后输入的草稿'
+ const draft='保留新页签中输入的草稿'
  await composer.fill(draft)
  release()
  await expect(task.getByText('Recovered total: 42',{exact:true})).toBeVisible({timeout:15000})

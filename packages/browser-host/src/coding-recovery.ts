@@ -19,25 +19,45 @@ export function createCodingRecovery({documentId,storage,fetchImpl=fetch,csrfTok
 }){
   const key='dyoffice.harness.tasks:'+documentId
   const headers={'x-csrf-token':csrfToken}
+  const taskPath='/api/v1/agents/tasks', query='?documentId='+encodeURIComponent(documentId)
   const read=():string[]=>{
     try{const ids=JSON.parse(storage?.getItem(key)??'[]');return Array.isArray(ids)?ids.filter(validId).slice(0,limit):[]}
     catch{return []}
   }
   const write=(ids:string[])=>{try{storage?.setItem(key,JSON.stringify(ids.slice(0,limit)))}catch{/* storage is optional */}}
-  const watched=new Set(read()),controller=new AbortController()
+  const saved=read(),watched=new Set<string>(),controller=new AbortController()
   const observers=new Map<string,(status?:RecoveryStatus)=>void>()
-  let pending=false,timer:ReturnType<typeof setTimeout>|undefined
+  let discovering=true,pending=false,timer:ReturnType<typeof setTimeout>|undefined
+  let discoveryTimer:ReturnType<typeof setTimeout>|undefined
   const terminal=new Set(['succeeded','failed','unknown_outcome'])
+  const get=(path:string)=>fetchImpl(path,{
+    method:'GET',headers,credentials:'same-origin',mode:'same-origin',redirect:'error',cache:'no-store',
+    signal:AbortSignal.any([controller.signal,AbortSignal.timeout(5000)]),
+  })
+  async function discover(){
+    const fallback=discovering?saved:[]
+    let ids:string[]=[],retry=false
+    try {
+      const response=await get(taskPath+query)
+      retry=response.status===429||(response.status>=500&&response.status!==501)
+      if(response.ok){
+        const value=await response.json()
+        if(Array.isArray(value?.taskIds))ids=value.taskIds.slice(0,limit).filter(validId)
+      }
+    }catch{retry=true}
+    discovering=false
+    if(controller.signal.aborted)return
+    for(const id of [...new Set([...ids,...fallback])].slice(0,limit))watched.add(id)
+    if(retry)discoveryTimer=setTimeout(()=>void discover(),1000)
+    void poll()
+  }
   async function poll(){
-    if(pending||controller.signal.aborted||!watched.size)return
+    if(discovering||pending||controller.signal.aborted||!watched.size)return
     pending=true
     try{
       await Promise.all([...watched].map(async id=>{
         try{
-          const response=await fetchImpl('/api/v1/agents/tasks/'+id+'/status?documentId='+encodeURIComponent(documentId),{
-            method:'GET',headers,credentials:'same-origin',mode:'same-origin',redirect:'error',cache:'no-store',
-            signal:AbortSignal.any([controller.signal,AbortSignal.timeout(5000)]),
-          })
+          const response=await get(taskPath+'/'+id+'/status'+query)
           if(controller.signal.aborted)return
           if([401,403,404].includes(response.status)){
             watched.delete(id);write(read().filter(saved=>saved!==id));observers.get(id)?.();return
@@ -59,7 +79,7 @@ export function createCodingRecovery({documentId,storage,fetchImpl=fetch,csrfTok
       if(watched.size&&!controller.signal.aborted)timer=setTimeout(()=>void poll(),1000)
     }
   }
-  void poll()
+  void discover()
   function watch(id:string){watched.add(id);clearTimeout(timer);void poll()}
   return {
     remember(id:string){write([id,...read().filter(saved=>saved!==id)])},
@@ -101,6 +121,6 @@ export function createCodingRecovery({documentId,storage,fetchImpl=fetch,csrfTok
       const response=await fetchImpl('/api/v1/agents/tasks/'+id+'/cancel',{method:'POST',headers,credentials:'same-origin',mode:'same-origin',redirect:'error',signal:AbortSignal.any([controller.signal,AbortSignal.timeout(5000)])})
       if(!response.ok)throw Error('Harness cancellation could not be confirmed')
     },
-    dispose(){controller.abort();clearTimeout(timer);watched.clear()},
+    dispose(){controller.abort();clearTimeout(timer);clearTimeout(discoveryTimer);watched.clear()},
   }
 }

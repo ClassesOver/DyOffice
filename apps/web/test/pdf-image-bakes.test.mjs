@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import {spawnSync} from 'node:child_process'
-import {PDFDocument,PDFName,degrees,rgb,pushGraphicsState,popGraphicsState,rectangle,clip,endPath} from 'pdf-lib'
+import {PDFDocument,PDFName,BlendMode,degrees,rgb,pushGraphicsState,popGraphicsState,rectangle,clip,endPath} from 'pdf-lib'
 import {PNG} from 'pngjs'
 import {createPdfImageBakesJob,validatePdfImageBakeOperation} from '../server/src/pdf/image-bakes-job.mjs'
 import {createIsolatedPdfImageBakesJob} from '../server/src/pdf/image-bakes-isolated.mjs'
@@ -92,12 +92,13 @@ test('image bakes preserve AcroForm values, widgets and existing appearances',as
  assert.deepEqual(after.pixels.bgra.subarray(0,4),before.pixels.bgra.subarray(12,16))
  assert.equal(pdfInsertFormState(await PDFDocument.load(result.bytes)),pdfInsertFormState(await PDFDocument.load(input)))
 })
-test('visual crop of a slanted image keeps the original clip and retained pixels on the page',async()=>{
+test('visual crop keeps a slanted image clipped without changing nearby blended artwork',async()=>{
  const picture=new PNG({width:16,height:16})
  for(let i=0;i<picture.data.length;i+=4)picture.data.set([216,24+(i/4)%16,16,255],i)
  for(const nested of [false,true]){
   const doc=await PDFDocument.create(),page=doc.addPage([240,200])
   page.drawRectangle({x:0,y:0,width:240,height:200,color:rgb(.7,.85,1)})
+  page.drawRectangle({x:20,y:20,width:12,height:12,color:rgb(.7,.4,.2),blendMode:BlendMode.Multiply})
   page.pushOperators(pushGraphicsState(),rectangle(70,60,82,65),clip(),endPath())
   page.drawImage(await doc.embedPng(PNG.sync.write(picture)),{x:100,y:45,width:100,height:80,rotate:degrees(30)})
   page.pushOperators(popGraphicsState())
@@ -122,6 +123,8 @@ test('visual crop of a slanted image keeps the original clip and retained pixels
   assert.ok(after(120,95).every((value,i)=>Math.abs(value-before(120,95)[i])<=3),'kept pixels stay in place')
   assert.deepEqual(before(157,95),backdrop)
   assert.deepEqual(after(157,95),backdrop,'original clip still hides pixels to the right')
+  assert.notDeepEqual(before(26,26),backdrop)
+  assert.deepEqual(after(26,26),before(26,26),'earlier blended artwork is unchanged')
   assert.deepEqual(after(118,111),before(118,111),'later vector drawing is unchanged')
  }
 })
@@ -139,9 +142,11 @@ test('bakes refuse protected documents, ambiguous image bounds, oversized metada
  const wrapper=await PDFDocument.create(),wrapperPage=wrapper.addPage([400,400]);wrapperPage.drawPage(await wrapper.embedPage((await PDFDocument.load(await clipped.save())).getPage(0)),{x:50,y:50});await assert.rejects(createPdfImageBakesJob().execute(Buffer.from(await wrapper.save()),command({...operation,image_number:1})),{code:'PDF_IMAGE_BAKE_UNSUPPORTED_TRANSFORM'})
  const grouped=await PDFDocument.load(await fixture({angle:30,nested:true}));for(const [,object]of grouped.context.enumerateIndirectObjects())if(object.dict?.get(PDFName.of('Subtype'))?.toString()==='/Form')object.dict.set(PDFName.of('Group'),grouped.context.obj({S:'Transparency'}))
  const groupBytes=Buffer.from(await grouped.save()),groupNumber=(await selected(groupBytes)).number
- const {pushGraphicsState,popGraphicsState,rectangle,clip,endPath,BlendMode}=await import('pdf-lib'),d=await PDFDocument.create(),page=d.addPage([400,400]),image=await d.embedPng(png)
+ const d=await PDFDocument.create(),page=d.addPage([400,400]),image=await d.embedPng(png)
  page.pushOperators(pushGraphicsState(),rectangle(200,180,80,100),clip(),endPath());page.drawImage(image,{x:250,y:200,width:100,height:75,rotate:degrees(30),opacity:.4,blendMode:BlendMode.Multiply});page.pushOperators(popGraphicsState())
- for(const [source,image_number]of [[groupBytes,groupNumber],[Buffer.from(await d.save()),1]])for(const op of [operation,{op:'crop_image',page:1,left:.25}])
+ const blended=await PDFDocument.create(),blendedPage=blended.addPage([500,500]);blendedPage.drawPage(await blended.embedPage((await PDFDocument.load(await fixture({angle:30}))).getPage(0)),{blendMode:BlendMode.Multiply})
+ const blendedBytes=Buffer.from(await blended.save()),blendedNumber=(await selected(blendedBytes)).number
+ for(const [source,image_number]of [[groupBytes,groupNumber],[Buffer.from(await d.save()),1],[blendedBytes,blendedNumber]])for(const op of [operation,{op:'crop_image',page:1,left:.25}])
   await assert.rejects(createPdfImageBakesJob().execute(source,command({...op,image_number})),{code:'PDF_IMAGE_BAKE_UNSUPPORTED_TRANSFORM'})
  const plainClip=await PDFDocument.create(),plainPage=plainClip.addPage([400,400]);plainPage.pushOperators(pushGraphicsState(),rectangle(200,180,80,100),clip(),endPath());plainPage.drawImage(await plainClip.embedPng(png),{x:250,y:200,width:100,height:75,rotate:degrees(30)});plainPage.pushOperators(popGraphicsState())
  await assert.rejects(createPdfImageBakesJob().execute(Buffer.from(await plainClip.save()),command({...operation,image_number:1})),{code:'PDF_IMAGE_BAKE_UNSUPPORTED_TRANSFORM'})

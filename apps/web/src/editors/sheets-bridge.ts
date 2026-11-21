@@ -22,7 +22,7 @@ type ParentAiWindow = Window & {
 type SaveResult = {canceled: false; file: WorkbookFile; touchedEntries: string[]}
 type Recovery = {saved?: Awaited<ReturnType<SessionFileHost['saveSheets']>>; resolve(value: SaveResult): void; reject(error: unknown): void}
 type Session = {revision: string; file: WorkbookFile; attachment?: boolean; extras?: Promise<Record<string,unknown>>}
-export function createSheetsBridge(host: SessionFileHost, fileId: string, prefs: Preferences, {fetchImpl = fetch, onChange = () => {},getAttachmentFile}: {fetchImpl?: typeof fetch; onChange?: () => void; getAttachmentFile?:(path:string)=>Promise<File|null>} = {}) {
+export function createSheetsBridge(host: SessionFileHost, fileId: string, prefs: Preferences, {fetchImpl = fetch, onChange = () => {},getAttachmentFile,docxCreationAvailable=false}: {fetchImpl?: typeof fetch; onChange?: () => void; getAttachmentFile?:(path:string)=>Promise<File|null>; docxCreationAvailable?:boolean} = {}) {
   let saveFence:(()=>boolean)|null=null
   async function guardedSave(check:()=>boolean,action:()=>Promise<boolean>){
     if(saveFence||!check())return false
@@ -214,7 +214,7 @@ export function createSheetsBridge(host: SessionFileHost, fileId: string, prefs:
       try{
         const parent=parentWindow()
         if(input.type==='xlsx'&&typeof parent?.dyofficeCreateAiXlsx==='function'){await parent.dyofficeCreateAiXlsx({title:input.title,...(input.sheetName?{sheetName:input.sheetName}:{}),content:input.content});return {ok:true}}
-        if(input.type==='docx'&&typeof parent?.dyofficeCreateAiDoc==='function'){await parent.dyofficeCreateAiDoc({title:input.title,content:input.content});return {ok:true}}
+        if(input.type==='docx'&&docxCreationAvailable&&typeof parent?.dyofficeCreateAiDoc==='function'){await parent.dyofficeCreateAiDoc({title:input.title,content:input.content});return {ok:true}}
         if(input.type==='pdf'&&typeof parent?.dyofficeCreateAiDoc==='function'){
           const response=await fetchImpl(new URL('../../../docs/src/renderer/fonts/NotoSansCJKsc-Regular-subset.woff2',import.meta.url))
           if(!response.ok)throw new Error(text.unavailable)
@@ -325,7 +325,7 @@ export function createSheetsBridge(host: SessionFileHost, fileId: string, prefs:
         return [
           ...(typeof parent?.dyofficeCreateAiXlsx==='function' ? ['xlsx'] as const : []),
           'csv',
-          ...(typeof parent?.dyofficeCreateAiDoc==='function' ? ['docx','pdf'] as const : []),
+          ...(typeof parent?.dyofficeCreateAiDoc==='function' ? docxCreationAvailable?['docx','pdf'] as const:['pdf'] as const : []),
         ] as const
       } catch {
         return ['csv'] as const // Cross-origin parents cannot supply workspace creators.

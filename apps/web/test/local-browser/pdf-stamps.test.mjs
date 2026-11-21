@@ -21,8 +21,13 @@ test('PDF stamp tools save, recover the same commit, replace and remove through 
  const keyring={activeKeyId:'pdf-form',keys:{'pdf-form':new Uint8Array(32).fill(49)}}
  const calls=[['set_watermark',{text:'First draft'}],['set_header_footer',{header_left:'Project',page_number:true}],['set_watermark',{text:'Final draft'}],['set_watermark',{text:''}],['set_header_footer',{}],['set_watermark',{text:'Editable draft'}],['insert_text',{page:1,text:'Added after watermark',x:40,y:100}],['set_watermark',{text:''}],['set_watermark',{text:'Page draft'}],['set_header_footer',{page_number:true}],['insert_blank_page',{after_page:1}],['apply_ops',{ops:[{op:'deletePage',page:1}]}],['set_watermark',{text:''}],['set_header_footer',{}]]
  let turn=0
+ const toolResults=[]
  const network=mockProviderNetwork(t,()=>{
   const index=Math.floor(turn/2),isTool=turn++%2===0
+  if(!isTool){
+   const message=JSON.parse(network.wire.toString()).messages.find(item=>item.role==='tool'&&item.tool_call_id==='form-'+index)
+   if(message)toolResults[index]=JSON.parse(message.content)
+  }
   const delta=isTool?{tool_calls:[{index:0,id:'form-'+index,type:'function',function:{name:calls[index][0],arguments:JSON.stringify(calls[index][1])}}]}:{content:'Form result '+index}
   return Readable.from([Buffer.from(`data: ${JSON.stringify({choices:[{delta}]})}\n\ndata: ${JSON.stringify({choices:[{delta:{},finish_reason:isTool?'tool_calls':'stop'}]})}\n\ndata: [DONE]\n\n`)])
  })
@@ -81,12 +86,19 @@ test('PDF stamp tools save, recover the same commit, replace and remove through 
    assert.doesNotMatch((await contents()).text,/Added after watermark/)
    await save.click()
    await expect(tab.getByLabel('待保存文字覆盖层',{exact:true})).toHaveCount(0,{timeout:30000})
+   // The receipt clears the overlay before the newly saved preview finishes loading.
+   await expect(tab.getByText('PDF 修改已保存为新版本。',{exact:true})).toBeVisible({timeout:30000})
   }
   const current=await contents()
   assert.match(current.text,/Footer unchanged/)
   if(index===5)assert.match(current.text,/Editable draft/)
   if(index>=6)assert.match(current.text,/Added after watermark/)
-  if(index===7)assert.doesNotMatch(current.text,/Editable draft/)
+  if(index===7){
+   assert.ok(toolResults[index],'The watermark tool returned a result to the model')
+   assert.ok(!toolResults[index].isError,toolResults[index].output)
+   assert.match(toolResults[index].output,/Saved a new PDF revision/)
+   assert.doesNotMatch(current.text,/Editable draft/)
+  }
  }
  for(const [index,prompt] of [[8,'添加 Page draft 水印'],[9,'添加页码'],[10,'在第一页后插入空白页'],[11,'删除第一页'],[12,'移除水印'],[13,'移除页码']]){
   const before=index===11?(await f.files.openFile(f.alice.token,source.fileId)).file.revision:undefined

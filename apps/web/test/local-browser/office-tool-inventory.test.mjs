@@ -8,6 +8,7 @@ import {officeBrowserAsset as dist} from '../helpers/office-browser-assets.mjs'
 import {execFileSync} from 'node:child_process'
 import {createServer} from 'node:https'
 import {PDFDocument} from 'pdf-lib'
+import JSZip from 'jszip'
 import {PNG} from 'pngjs'
 import {expect} from '@playwright/test'
 import {launchTestBrowser} from '../helpers/browser.mjs'
@@ -22,9 +23,11 @@ import {mockProviderNetwork} from '../helpers/provider-network.mjs'
 import {Readable} from 'node:stream'
 import {ASSISTANT_FORMAT_TOOLS} from '../../../../packages/web-contracts/src/assistant.ts'
 
-for(const creationOnly of [true,false])test(creationOnly
- ? 'Word and Excel expose only executable creation formats, including standalone CSV download'
+for(const mode of ['creation','no-word','all'])test(mode==='no-word'
+ ? 'Excel offers workspace creation formats without DOCX when native Word is unavailable'
+ : mode==='creation'?'Word and Excel expose only executable creation formats, including standalone CSV download'
  : 'native Office editors scope model tools, save WebP images in Excel and complete Harness delegation',{timeout:180000},async t=>{
+ const creationOnly=mode!=='all',noWord=mode==='no-word'
  const directory=await mkdtemp(join(tmpdir(),'dyoffice-office-tools-'))
  let app,browser,server
  t.after(async()=>{
@@ -73,13 +76,13 @@ for(const creationOnly of [true,false])test(creationOnly
   },
  }
  // Match the SaaS request limit: this fixture cold-loads a number of editors from one IP.
- app=await buildLocalApp({db:f.db,businessPool:f.businessPool,passwords:f.passwords,deploymentId:f.deploymentId,origin,csrfKey:f.csrfKey,objectStore:f.objects,rateLimit:{max:5000,windowMs:60000},globalConfigKeyring:keyring,providerGateway:{mode:'shared'},codingHarnesses:{adapters:[adapter],defaultId:adapter.descriptor.id},nativeDocsDirectory:dist('docs'),nativeSheetsDirectory:dist('sheets'),...(!creationOnly?{nativeSlidesDirectory:dist('slides'),nativePdfDirectory:dist('pdf'),slidesHost}:{}),localShellDirectory:dist('local-shell'),sheetsNative,sheetsPlanner:gateway.planWorkbookSave,sheetsPackageReader:gateway.readWorkbookPackage})
+ app=await buildLocalApp({db:f.db,businessPool:f.businessPool,passwords:f.passwords,deploymentId:f.deploymentId,origin,csrfKey:f.csrfKey,objectStore:f.objects,rateLimit:{max:5000,windowMs:60000},globalConfigKeyring:keyring,providerGateway:{mode:'shared'},codingHarnesses:{adapters:[adapter],defaultId:adapter.descriptor.id},...(!noWord?{nativeDocsDirectory:dist('docs'),nativePdfDirectory:dist('pdf')}:{}),nativeSheetsDirectory:dist('sheets'),...(!creationOnly?{nativeSlidesDirectory:dist('slides'),slidesHost}:{}),localShellDirectory:dist('local-shell'),sheetsNative,sheetsPlanner:gateway.planWorkbookSave,sheetsPackageReader:gateway.readWorkbookPackage})
  browser=await launchTestBrowser()
 
- const frames=[]
+ const frames=[],exportsByType=new Map()
  const remoteImage='https://images.example/blue.webp'
  let attachedImagePath,attachedImageSheet
- const toolCall=(name,input)=>({tool_calls:[{index:0,id:'excel-'+name,type:'function',function:{name,arguments:JSON.stringify(input)}}]})
+ const toolCall=(name,input,id='excel-'+name)=>({tool_calls:[{index:0,id,type:'function',function:{name,arguments:JSON.stringify(input)}}]})
  const network=mockProviderNetwork(t,()=>{try{
   const {tools,messages}=JSON.parse(network.wire.toString())
   const content=messages.findLast(message=>message.role==='user')?.content
@@ -122,6 +125,18 @@ for(const creationOnly of [true,false])test(creationOnly
     const create=tools.find(tool=>tool.function.name==='create_document')
     assert.deepEqual(create.function.parameters.properties.type.enum,['csv'])
     delta=toolCall('create_document',{title:'Office CSV probe'})
+   }
+  }else if(/Excel workspace export (xlsx|docx|pdf)/.test(prompt??'')){
+   const type=prompt.match(/Excel workspace export (xlsx|docx|pdf)/)[1]
+   const result=messages.at(-1)
+   const title='Office export '+type
+   if(result.role==='tool'){
+    const outcome=JSON.parse(result.content)
+    exportsByType.set(type,outcome)
+    delta={content:'Finished '+type+' export'}
+   }else{
+    assert.ok(tools.find(tool=>tool.function.name==='create_document')?.function.parameters.properties.type.enum.includes(type))
+    delta=toolCall('create_document',{type,title,...(type==='xlsx'?{}:{content:'<p>Quarterly revenue checkpoint</p>'})},'excel-create-'+type)
    }
   }else if(prompt?.includes('Excel WebP probe')){
    const results=messages.slice(messages.findLastIndex(message=>message.role==='user')+1)
@@ -189,7 +204,10 @@ for(const creationOnly of [true,false])test(creationOnly
   const input=panel.locator('textarea')
   try{
    // The workbook renders its composer inside an inert shell until its first range loads.
-   if(format==='xlsx')await expect(editor.locator('html'),stage+' XLSX workbook becomes ready').toHaveAttribute('data-document-loading','ready',{timeout:45000})
+   if(format==='xlsx'){
+    await expect(editor.locator('html'),stage+' XLSX workbook becomes ready').toHaveAttribute('data-document-loading','ready',{timeout:45000})
+    await expect.poll(()=>editor.locator('main.app-shell').evaluate(node=>!node.hasAttribute('inert')),{timeout:15000,message:stage+' XLSX shell becomes interactive'}).toBe(true)
+   }
    await expect.poll(async()=>{
     if(await rail.isVisible()||await input.isVisible())return 'available'
     return (await editor.locator('html').getAttribute('data-document-loading',{timeout:1000}).catch(()=>null))??'not mounted'
@@ -216,6 +234,7 @@ for(const creationOnly of [true,false])test(creationOnly
    await expect(panel.getByRole('img',{name:'pixel.png',exact:true})).toBeVisible()
   }
   await panel.locator('textarea').fill('Office capability probe '+stage+' '+format)
+  await expect(panel.getByRole('button',{name:'发送',exact:true})).toBeEnabled({timeout:15000})
   const previous=frames.length
   await panel.getByRole('button',{name:'发送',exact:true}).click()
   await expect(panel.getByText('Office tool inventory received '+stage+' '+format,{exact:true})).toBeVisible({timeout:15000})
@@ -238,7 +257,7 @@ for(const creationOnly of [true,false])test(creationOnly
   assert.deepEqual(tools.map(tool=>tool.name).sort(),expected.sort(),stage+' '+format+' model tools')
   if((format==='docx'&&!direct)||format==='xlsx'){
    const creation=tools.find(tool=>tool.name==='create_document')
-   assert.deepEqual(creation.parameters.properties.type.enum,format==='docx'?['docx','pdf']:direct?['csv']:['xlsx','csv','docx','pdf'])
+   assert.deepEqual(creation.parameters.properties.type.enum,format==='docx'?['docx','pdf']:direct?['csv']:noWord?['xlsx','csv','pdf']:['xlsx','csv','docx','pdf'])
   }
   if(configured&&(format==='docx'||format==='pptx')){
    const analysis=tools.find(tool=>tool.name==='analyze_media')
@@ -251,9 +270,53 @@ for(const creationOnly of [true,false])test(creationOnly
   }
   return panel
  }
+ if(noWord){
+  const config=await app.inject({method:'GET',url:'/api/v1/capabilities',headers:{cookie:`__Host-dyoffice-session=${f.alice.token}`}})
+  assert.equal(config.statusCode,200)
+  assert.equal(config.json().docx,'unsupported')
+  await probe('xlsx','chat-only')
+  return
+ }
  if(creationOnly){
   await probe('docx','chat-only')
-  await probe('xlsx','chat-only')
+  const workbook=await probe('xlsx','chat-only')
+  const source=files.xlsx
+  for(const type of ['xlsx','docx','pdf']){
+   if(type!=='xlsx')await page.getByText('tools.xlsx',{exact:true}).first().click()
+   const input=workbook.locator('textarea')
+   await input.click()
+   await input.fill('Excel workspace export '+type)
+   await workbook.getByRole('button',{name:'发送',exact:true}).click()
+   await expect(workbook.getByText('Finished '+type+' export',{exact:true})).toBeAttached({timeout:45000})
+   const outcome=exportsByType.get(type)
+   assert.ok(outcome&&!outcome.isError,JSON.stringify({type,outcome,loadErrors}))
+   const name='Office export '+type+'.'+type
+   assert.ok(outcome.output.includes(name),outcome.output)
+   const exports=(await f.files.listFiles(f.alice.token)).files.filter(entry=>entry.name===name)
+   assert.equal(exports.length,1)
+   const {file:saved}=await f.files.openFile(f.alice.token,exports[0].id)
+   assert.notEqual(saved.fileId,source.fileId)
+   await expect(page).toHaveURL(url=>url.origin===origin&&url.hash==='#/file/'+saved.fileId)
+   const opened=page.frameLocator(`iframe[data-document-id="${saved.fileId}"]`)
+   await expect(opened.locator('html')).toHaveAttribute('data-document-loading','ready',{timeout:30000})
+   if(type==='xlsx')await expect(opened.locator('main.app-shell:not([inert])')).toBeVisible()
+   const bytes=await f.files.readFile(f.alice.token,saved.fileId,saved.revision)
+   if(type==='pdf'){
+    const {readPdfLeafObjects}=await import('../../../pdf/src/main/text-edit.ts')
+    assert.ok((await readPdfLeafObjects(bytes)).some(leaf=>leaf.text==='Quarterly revenue checkpoint'))
+   }else{
+    const archive=await JSZip.loadAsync(bytes)
+    if(type==='docx')assert.match(await archive.file('word/document.xml').async('string'),/Quarterly revenue checkpoint/)
+    else{
+     const sheet=await archive.file('xl/worksheets/sheet1.xml').async('string')
+     assert.match(sheet,/<c r="A1"[^>]*><is><t\b[^>]*>Revenue<\/t><\/is><\/c>/)
+     assert.match(sheet,/<c r="B2"[^>]*><v>25<\/v><\/c>/)
+     assert.doesNotMatch(sheet,/<f[\s>]/)
+    }
+   }
+  }
+  assert.equal((await f.files.openFile(f.alice.token,source.fileId)).file.revision,source.revision)
+  assert.deepEqual(await f.files.readFile(f.alice.token,source.fileId,source.revision),sources.find(([format])=>format==='xlsx')[1])
   await probe('docx','direct',{direct:true})
   const directWorkbook=await probe('xlsx','direct',{direct:true})
   const downloads=[]

@@ -16,7 +16,7 @@ import {mockProviderNetwork} from '../helpers/provider-network.mjs'
 
 const nativePdfDirectory=process.env.DYOFFICE_TEST_NATIVE_PDF_DIST
 const liveConfig=process.env.DYOFFICE_LIVE_PDF_HARNESS_CONFIG
-test('refresh resumes the PDF parent conversation and saves its draft once',{skip:!nativePdfDirectory,timeout:90000},async t=>{
+test('a new PDF tab resumes the parent conversation and saves its draft once',{skip:!nativePdfDirectory,timeout:90000},async t=>{
  const origin='http://localhost:4260',f=await fileFixture(t,{origin,buildApp:false})
  const doc=await PDFDocument.create()
  doc.addPage().drawText('Resume harness fixture')
@@ -40,15 +40,17 @@ test('refresh resumes the PDF parent conversation and saves its draft once',{ski
  f.cleanup.unshift(async()=>{release();await app.close()})
  await app.listen({port:4260,host:'127.0.0.1'})
  const browser=await launchTestBrowser();f.cleanup.unshift(()=>browser.close())
- const page=await browser.newPage({viewport:{width:1360,height:900}})
+ const context=await browser.newContext({viewport:{width:1360,height:900}})
+ let page=await context.newPage()
  await stubHomeHero(page)
  await page.goto(origin)
  await page.getByLabel('用户名',{exact:true}).fill('alice')
  await page.getByLabel('密码',{exact:true}).fill(password)
  await page.getByRole('button',{name:'登录',exact:true}).click()
  await expect(page.locator('.home')).toBeVisible()
- await page.goto(origin+'/#/file/'+file.fileId)
- const editor=page.frameLocator(`iframe[data-document-id="${file.fileId}"]`)
+ const documentUrl=origin+'/#/file/'+file.fileId
+ await page.goto(documentUrl)
+ let editor=page.frameLocator(`iframe[data-document-id="${file.fileId}"]`)
  const showAssistant=async()=>{
   await expect(editor.locator('html')).toHaveAttribute('data-document-loading','ready',{timeout:20000})
   await editor.getByRole('button',{name:'AI 助手',exact:true}).click()
@@ -80,18 +82,18 @@ test('refresh resumes the PDF parent conversation and saves its draft once',{ski
   return Readable.from([Buffer.from('data: '+JSON.stringify({choices:[{delta,finish_reason:delta.tool_calls?'tool_calls':'stop'}]})+'\n\ndata: [DONE]\n\n')])
  }catch(error){t.diagnostic(error.stack);throw error}})
  const submissions=[],cancellations=[],claims=[],recoveryResponses=[],modelResumes=[]
- page.on('request',request=>{
+ context.on('request',request=>{
   const path=new URL(request.url()).pathname
   if(request.method()==='POST'&&path==='/api/v1/agents/tasks')submissions.push(request.postDataJSON())
   if(path.startsWith('/api/v1/agents/tasks/')&&path.endsWith('/cancel'))cancellations.push(path)
   if(path.startsWith('/api/v1/agents/tasks/')&&path.endsWith('/continuation'))claims.push(path)
   if(path==='/api/v1/ai/turns'&&request.postDataJSON()?.harnessResume)modelResumes.push(request.postDataJSON().harnessResume.taskId)
  })
- page.on('response',response=>{
+ context.on('response',response=>{
   const path=new URL(response.url()).pathname
   if(path==='/api/v1/ai/turns'||path.endsWith('/continuation'))recoveryResponses.push([path,response.status()])
  })
- const assistant=editor.locator('.shared-editor-assistant')
+ let assistant=editor.locator('.shared-editor-assistant')
  const send=async text=>{
   await assistant.getByRole('textbox',{name:'消息'}).fill(text)
   await assistant.getByRole('button',{name:'发送',exact:true}).click()
@@ -103,9 +105,15 @@ test('refresh resumes the PDF parent conversation and saves its draft once',{ski
  assert.equal(submissions.length,1)
  const {turnId,documentId}=submissions[0]
  assert.equal(documentId,file.fileId)
- const task=assistant.locator(`.assistant-task-message[data-team-task="harness:${turnId}"]:visible`)
+ let task=assistant.locator(`.assistant-task-message[data-team-task="harness:${turnId}"]:visible`)
  await expect(task).toBeVisible()
- await page.reload()
+ await page.close()
+ page=await context.newPage()
+ await stubHomeHero(page)
+ await page.goto(documentUrl)
+ editor=page.frameLocator(`iframe[data-document-id="${file.fileId}"]`)
+ assistant=editor.locator('.shared-editor-assistant')
+ task=assistant.locator(`.assistant-task-message[data-team-task="harness:${turnId}"]:visible`)
  await showAssistant()
  await expect(task.getByText('Computing fixture total',{exact:true})).toBeVisible({timeout:15000})
  await expect(task.getByText('Calculate the fixture total',{exact:true}).first()).toBeVisible()

@@ -24,6 +24,7 @@ export async function purgeFile(transactions: PrincipalTransactions, objects: Ob
     if (drafts.rows.some(u => u.state === 'receiving' || (u.attempt_id && !u.sha256))) throw authError(409)
     for (const upload of drafts.rows) if (upload.state==='staged' || upload.state==='ready') await releaseReservation(c,p,upload,'cancelled')
     await c.query('DELETE FROM file_assistant_messages WHERE deployment_id=$1 AND owner_id=$2 AND file_id=$3',[...scope(p),id])
+    await c.query('DELETE FROM harness_task_recovery WHERE deployment_id=$1 AND owner_id=$2 AND file_id=$3',[...scope(p),id])
     await c.query('DELETE FROM word_collab_steps WHERE deployment_id=$1 AND owner_id=$2 AND file_id=$3',[...scope(p),id])
     await c.query('UPDATE files SET purge_started_at=clock_timestamp() WHERE deployment_id=$1 AND owner_id=$2 AND id=$3',[...scope(p),id])
     await c.query('UPDATE edit_leases SET lease_epoch=lease_epoch+1,expires_at=clock_timestamp() WHERE deployment_id=$1 AND owner_id=$2 AND file_id=$3',[...scope(p),id])

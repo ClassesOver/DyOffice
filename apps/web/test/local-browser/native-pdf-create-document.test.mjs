@@ -1,7 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import {Readable} from 'node:stream'
-import {fileURLToPath} from 'node:url'
 import {PDFDocument} from 'pdf-lib'
 import {expect} from '@playwright/test'
 import JSZip from 'jszip'
@@ -13,12 +12,13 @@ import {fileFixture,importFile} from '../helpers/files.mjs'
 import {stubHomeHero} from '../helpers/home-hero.mjs'
 import {password} from '../helpers/identity.mjs'
 import {mockProviderNetwork} from '../helpers/provider-network.mjs'
+import {officeBrowserAsset} from '../helpers/office-browser-assets.mjs'
 
-const nativePdfDirectory=process.env.DYOFFICE_TEST_NATIVE_PDF_DIST
+const nativePdfDirectory=(process.env.DYOFFICE_TEST_NATIVE_PDF_DIST||process.env.DYOFFICE_TEST_OFFICE_ASSETS)&&officeBrowserAsset('pdf')
 test('the homepage blank PDF saves and takes the first heading after Office writes following a connection failure',{skip:!nativePdfDirectory,timeout:90000},async t=>{
  const origin='http://localhost:4248',f=await fileFixture(t,{origin,buildApp:false})
  const app=await buildLocalApp({db:f.db,businessPool:f.businessPool,passwords:f.passwords,deploymentId:f.deploymentId,origin,
-  csrfKey:f.csrfKey,objectStore:f.objects,nativePdfDirectory,localShellDirectory:fileURLToPath(new URL('../../dist-local-shell',import.meta.url))})
+  csrfKey:f.csrfKey,objectStore:f.objects,nativePdfDirectory,localShellDirectory:officeBrowserAsset('local-shell')})
  f.cleanup.unshift(()=>app.close())
  await app.listen({port:4248,host:'127.0.0.1'})
  const browser=await launchTestBrowser();f.cleanup.unshift(()=>browser.close())
@@ -84,8 +84,7 @@ test('native PDF assistant creates saved PDF and DOCX separately from the source
  const app=await buildLocalApp({
   db:f.db,businessPool:f.businessPool,passwords:f.passwords,deploymentId:f.deploymentId,origin,csrfKey:f.csrfKey,objectStore:f.objects,
   globalConfigKeyring:keyring,providerGateway:{mode:'shared'},codingHarnesses:false,nativePdfDirectory,
-  nativeDocsDirectory:process.env.DYOFFICE_TEST_NATIVE_DOCS_DIST??fileURLToPath(new URL('../../dist-docs',import.meta.url)),
-  localShellDirectory:process.env.DYOFFICE_TEST_LOCAL_SHELL_DIRECTORY??fileURLToPath(new URL('../../dist-local-shell',import.meta.url)),
+  nativeDocsDirectory:officeBrowserAsset('docs'),localShellDirectory:officeBrowserAsset('local-shell'),
  })
  f.cleanup.unshift(()=>app.close())
  await app.listen({port:4247,host:'127.0.0.1'})
@@ -157,16 +156,26 @@ test('native PDF assistant creates saved PDF and DOCX separately from the source
     const data=new DataTransfer()
     const bytes=Uint8Array.from(atob('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jR1sAAAAASUVORK5CYII='),c=>c.charCodeAt(0))
     data.items.add(new File([bytes],'pixel.png',{type:'image/png'}))
-    textarea.dispatchEvent(new ClipboardEvent('paste',{bubbles:true,cancelable:true,clipboardData:data}))
+    const paste=new ClipboardEvent('paste',{bubbles:true,cancelable:true})
+    // Firefox drops files supplied through the synthetic ClipboardEvent initializer.
+    Object.defineProperty(paste,'clipboardData',{value:data})
+    textarea.dispatchEvent(paste)
    })
    await expect(assistant.getByRole('button',{name:'移除附件 pixel.png',exact:true})).toBeVisible()
   }else{
    await page.getByText('source.pdf',{exact:true}).first().click()
   }
-  const request=page.waitForRequest(req=>req.method()==='POST'&&new URL(req.url()).pathname==='/api/v1/ai/turns')
-  await assistant.getByRole('textbox',{name:'消息'}).fill('创建一个独立的 '+type.toUpperCase()+' 报告')
-  await assistant.getByRole('button',{name:'发送',exact:true}).click()
-  const tools=(await request).postDataJSON().request.tools
+  const composer=assistant.getByRole('textbox',{name:'消息'})
+  // After switching back to the PDF, focus its iframe before filling the composer.
+  await composer.click()
+  const prompt='创建一个独立的 '+type.toUpperCase()+' 报告'
+  await composer.fill(prompt)
+  await expect(composer).toHaveValue(prompt)
+  const [request]=await Promise.all([
+   page.waitForRequest(req=>req.method()==='POST'&&new URL(req.url()).pathname==='/api/v1/ai/turns'),
+   assistant.getByRole('button',{name:'发送',exact:true}).click(),
+  ])
+  const tools=request.postDataJSON().request.tools
   if(type==='pdf')assert.ok(tools.some(tool=>tool.name==='read_attachment'))
   else assert.ok(!tools.some(tool=>tool.name==='read_attachment'))
   assert.deepEqual(tools.find(tool=>tool.name==='create_document')?.inputSchema.properties.type.enum,['pdf','docx'])
