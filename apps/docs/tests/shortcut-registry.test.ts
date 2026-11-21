@@ -3,8 +3,6 @@
  * renders, so it has to stay honest: no chord listed twice on either platform,
  * every row translatable, and no menu accelerator missing from the list.
  */
-import { readFileSync } from 'node:fs'
-import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import {
   SHORTCUTS,
@@ -60,27 +58,5 @@ describe('shortcut registry', () => {
     // platform-specific keys come from the explicit override, not a rewrite
     expect(win('endnote')).toBe('Ctrl+Alt+D')
     expect(shortcutKeys(byId.get('endnote')!, true)).toBe('⌥⌘E')
-  })
-
-  it('lists every menu accelerator', () => {
-    const source = readFileSync(join(__dirname, '../src/main/docs-main.ts'), 'utf8')
-    const accelerators = [...source.matchAll(/accelerator: '([^']+)'/g)].map((m) => m[1])
-    expect(accelerators.length).toBeGreaterThan(15)
-    const listed = new Set(SHORTCUTS.flatMap((def) => chords(def, false)))
-    for (const accelerator of accelerators) {
-      // Electron writes modifiers in any order; the sheet renders Ctrl+Alt+Shift+key
-      const parts = accelerator.split('+')
-      const key = parts.pop()!
-      const mods = new Set(parts)
-      const normalized = [
-        mods.has('CmdOrCtrl') || mods.has('Ctrl') ? 'Ctrl' : null,
-        mods.has('Alt') ? 'Alt' : null,
-        mods.has('Shift') ? 'Shift' : null,
-        key,
-      ]
-        .filter(Boolean)
-        .join('+')
-      expect(listed.has(normalized), `${accelerator} is not in the shortcut sheet`).toBe(true)
-    }
   })
 })

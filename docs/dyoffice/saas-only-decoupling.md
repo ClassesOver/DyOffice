@@ -73,6 +73,18 @@ explicitly rather than depending on incidental packages from retired workspaces.
 2. Remove now-inactive desktop main/preload/IPC/auto-update source and obsolete
    release instructions only after tracing every shared consumer. They are not
    supported entrypoints; their on-disk presence is a remaining cleanup item.
+   - Done for the Docs, Sheets, Slides, PDF and Markdown apps: every
+     `src/main` / `src/preload` file outside the import closure of Web, the
+     packages, CLI and the retained renderers was removed, together with the
+     tests that only exercised it. Still in place because Web or packages
+     import them: the PDF engine modules in `apps/pdf/src/main` (save,
+     text/image edit, redaction, fonts), Sheets `atomic-write`,
+     `workbook-redactions` and `xlsx-sidecar-client`, and Slides `i18n-main`.
+     The four editor preloads stay as the input of
+     `tools/audit-web-host.mjs` / `host-ipc-classification` (CI `--check`).
+   - Remaining: `apps/shell` (its renderer and shared modules are reused by
+     the Web local shell; its main/preload still import removed modules and
+     are compiled nowhere) and `apps/html`.
 3. Validate the full authenticated server/worker flows and browser behavior.
    Bundle builds and unit tests are not Office feature parity or real production
    sandbox acceptance. Existing unsupported runtime capabilities remain closed.

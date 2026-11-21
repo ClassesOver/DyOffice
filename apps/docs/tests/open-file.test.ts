@@ -1,5 +1,3 @@
-import { readFileSync } from 'node:fs'
-import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import { runGuardedCandidate, runGuardedDocumentAction } from '../src/renderer/doc-dirty'
 import {
@@ -64,45 +62,6 @@ describe('docImportKindForPath', () => {
     expect(docImportKindForPath('/tmp/report.docx')).toBeNull()
     expect(docImportKindForPath('/tmp/notes.txt')).toBeNull()
     expect(docImportKindForPath('/tmp/noextension')).toBeNull()
-  })
-})
-
-/**
- * The external-open guard and the picker filter live in the Electron main
- * module, which no unit test can import. Asserting both sites reference the one
- * shared list is what keeps the dialog and the guard from drifting apart.
- */
-describe('the open dialog and the external-open guard', () => {
-  const source = readFileSync(join(import.meta.dirname, '../src/main/docs-main.ts'), 'utf8')
-
-  it('offers exactly the extensions the guard accepts', () => {
-    expect(source).toContain('extensions: [...OPENABLE_DOC_EXTENSIONS]')
-    expect(source).not.toMatch(/extensions: \[[^\]]*'odt'[^\]]*\]/)
-  })
-
-  it('guards the external-open route with the same helper', () => {
-    expect(source).toContain('if (!isOpenableDocPath(filePath)) return')
-  })
-
-  it('opens .hwp/.hwpx as a converted .docx copy, like .odt', () => {
-    const prepare = source.slice(
-      source.indexOf('async function prepareDocumentForOpen('),
-      source.indexOf('async function loadDocx('),
-    )
-    expect(prepare).toContain("const isHwp = importKind === 'hwp'")
-    expect(prepare).toContain("isHwp ? 'hwpImportDetail' : 'odtImportDetail'")
-    expect(prepare).toContain('? await convertHwpToDocx(source)')
-    expect(prepare).toContain(".replace(/\\.(odt|ott|hwpx?|doc|dot)$/i, '.docx')")
-    // loadDocx itself still opens nothing but .docx
-    expect(source).toContain('!/\\.docx$/i.test(filePath)) return null')
-  })
-
-  it('routes legacy Word files through doc2docx with its own dialog keys', () => {
-    expect(source).toContain('convertLegacyDocToDocx')
-    expect(source).toContain('docImportKindForPath(filePath)')
-    for (const key of ['docImportMsg', 'docImportDetail', 'docImportConvertBtn']) {
-      expect(source).toContain(key)
-    }
   })
 })
 

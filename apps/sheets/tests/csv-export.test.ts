@@ -336,12 +336,6 @@ describe('workbookExportCsv schemas', () => {
 })
 
 describe('Export CSV wiring', () => {
-  it('has the File-menu item forwarding export-csv to the renderer', () => {
-    const mainSrc = read('src/main/sheets-main.ts')
-    expect(mainSrc).toMatch(/menuExportCsv[\s\S]{0,80}sendMenuAction\('export-csv'\)/)
-    expect(mainSrc).toContain("action === 'export-csv'")
-  })
-
   it('dispatches the menu action into handleExportCsv', () => {
     const appSrc = read('src/renderer/App.tsx')
     expect(appSrc).toMatch(/action === 'export-csv'[\s\S]{0,80}handleExportCsvImpl/)
