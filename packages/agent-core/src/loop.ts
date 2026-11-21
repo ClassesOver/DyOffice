@@ -482,6 +482,8 @@ export const CONTEXT_SUPERSEDES_NOTE =
   '[Current state. It supersedes the context attached to earlier requests in this conversation]'
 
 /** Approximate UTF-8 byte count (ASCII 1 byte, CJK etc. 3; surrogate pairs count as 6 — slight overestimate is harmless) */
+const STALE_TOOL_TRUNCATED = '\n…(output truncated: too long)'
+
 function utf8Size(s: string): number {
   let n = 0
   for (let i = 0; i < s.length; i++) {
@@ -491,8 +493,17 @@ function utf8Size(s: string): number {
   return n
 }
 
-/** Approximate byte cost of one message (text + tool inputs/outputs + image base64) */
+// History messages are never mutated in place (squashing replaces them), so a message's
+// size can be computed once instead of re-walking the whole history every turn.
+const messageSizes = new WeakMap<AgentMessage, number>()
 function messageSize(m: AgentMessage): number {
+  let n = messageSizes.get(m)
+  if (n === undefined) messageSizes.set(m, (n = computeMessageSize(m)))
+  return n
+}
+
+/** Approximate byte cost of one message (text + tool inputs/outputs + image base64) */
+function computeMessageSize(m: AgentMessage): number {
   if (m.role === 'tool') {
     return m.results.reduce((n, r) => n + utf8Size(r.output) + 40, 0)
   }
@@ -1116,14 +1127,18 @@ export class AgentLoop<TSnapshot = unknown> {
       if (m.role !== 'tool') continue
       recent++
       if (recent <= STALE_TOOL_KEEP_RECENT) continue
-      m.results = m.results.map((r) =>
-        r.output.length > STALE_TOOL_OUTPUT_MAX
-          ? {
-              ...r,
-              output: `${r.output.slice(0, STALE_TOOL_OUTPUT_MAX)}\n…(output truncated: too long)`,
-            }
-          : r,
-      )
+      // Replace (never mutate) the message: sizes are cached per object, and the caller may
+      // still hold the restored message. Already-truncated outputs are left as they are.
+      if (!m.results.some((r) => r.output.length > STALE_TOOL_OUTPUT_MAX && !r.output.endsWith(STALE_TOOL_TRUNCATED)))
+        continue
+      this.history[i] = {
+        ...m,
+        results: m.results.map((r) =>
+          r.output.length > STALE_TOOL_OUTPUT_MAX && !r.output.endsWith(STALE_TOOL_TRUNCATED)
+            ? { ...r, output: `${r.output.slice(0, STALE_TOOL_OUTPUT_MAX)}${STALE_TOOL_TRUNCATED}` }
+            : r,
+        ),
+      }
     }
   }
 

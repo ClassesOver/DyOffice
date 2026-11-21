@@ -716,9 +716,16 @@ export function createAssistantChannelService({transactions,credentialKey,backgr
   async notifications(token:string,fileId:string) {
    return owner(token,async(c,p)=>{
     await loadFile(c,p,uuid(fileId))
-    const channels=(await c.query('SELECT conversation_id FROM assistant_channels WHERE deployment_id=$1 AND owner_id=$2 AND file_id=$3 ORDER BY created_at DESC LIMIT 32 FOR UPDATE',[...scope(p),fileId])).rows
-    for(const ch of channels)await reapDisconnected(c,p,ch.conversation_id)
-    const rows=(await c.query('SELECT conversation_id,sequence FROM assistant_channels WHERE deployment_id=$1 AND owner_id=$2 AND file_id=$3 ORDER BY created_at DESC LIMIT 32',[...scope(p),fileId])).rows
+    // Polled every 2 s per open editor. Read without locks and only take the channel locks
+    // (same order as before: channel rows, then members) when a member actually went stale.
+    const list=()=>c.query('SELECT conversation_id,sequence FROM assistant_channels WHERE deployment_id=$1 AND owner_id=$2 AND file_id=$3 ORDER BY created_at DESC LIMIT 32',[...scope(p),fileId])
+    let rows=(await list()).rows
+    const stale=rows.length?new Set((await c.query("SELECT DISTINCT conversation_id FROM assistant_members WHERE deployment_id=$1 AND owner_id=$2 AND conversation_id=ANY($3::uuid[]) AND connection_id IS NOT NULL AND (last_seen_at IS NULL OR last_seen_at<clock_timestamp()-interval '45 seconds' OR expires_at<=clock_timestamp())",[...scope(p),rows.map(r=>r.conversation_id)])).rows.map(r=>r.conversation_id)):new Set()
+    if(stale.size){
+     const locked=(await c.query('SELECT conversation_id FROM assistant_channels WHERE deployment_id=$1 AND owner_id=$2 AND file_id=$3 AND conversation_id=ANY($4::uuid[]) ORDER BY created_at DESC FOR UPDATE',[...scope(p),fileId,[...stale]])).rows
+     for(const ch of locked)await reapDisconnected(c,p,ch.conversation_id)
+     rows=(await list()).rows
+    }
     return rows.map(r=>({conversationId:r.conversation_id,sequence:Number(r.sequence)}))
    })
   },

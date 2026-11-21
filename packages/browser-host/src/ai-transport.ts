@@ -5,6 +5,10 @@ import {MODEL_CONNECTION_FAILURES,type ModelConnectionFailure} from '../../web-c
 import {AI_TURN_TIMED_OUT} from '../../web-contracts/src/assistant.ts'
 
 const MAX_SSE_EVENT_BYTES = 256 * 1024
+const sseEncoder = new TextEncoder()
+/** UTF-8 size lies between length and 3x length, so most strings never need encoding. */
+const overSseLimit = (text: string) =>
+  text.length > MAX_SSE_EVENT_BYTES || (text.length * 3 > MAX_SSE_EVENT_BYTES && sseEncoder.encode(text).byteLength > MAX_SSE_EVENT_BYTES)
 const OFFICE_TURNS_ENDPOINT = '/api/v1/ai/turns'
 const modelTimeoutZh = '等待模型回复超时。请重试、缩短请求，或切换模型。'
 const isChinese = () => globalThis.document?.documentElement.lang.toLowerCase().startsWith('zh')
@@ -82,7 +86,7 @@ export function createSseAgentTransport(options: SseTransportOptions = {}) {
       }
       const emit = (event: string, raw: string) => {
         if (finished) return
-        if (new TextEncoder().encode(raw).byteLength > MAX_SSE_EVENT_BYTES) throw new Error('AI stream event too large')
+        if (overSseLimit(raw)) throw new Error('AI stream event too large')
         const value = raw.length ? JSON.parse(raw) as unknown : {}
         const data = value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {}
         if (event === 'delta' && typeof data.text === 'string') callbacks.onDelta(data.text)
@@ -143,9 +147,8 @@ export function createSseAgentTransport(options: SseTransportOptions = {}) {
           let event = 'message'
           let dataLines: string[] = []
           let dataBytes = 0
-          const encoder = new TextEncoder()
           const acceptLine = (line: string) => {
-            if (encoder.encode(line).byteLength > MAX_SSE_EVENT_BYTES) throw new Error('AI stream event too large')
+            if (overSseLimit(line)) throw new Error('AI stream event too large')
             if (line === '') {
               if (dataLines.length) emit(event, dataLines.join('\n'))
               event = 'message'
@@ -154,7 +157,7 @@ export function createSseAgentTransport(options: SseTransportOptions = {}) {
             } else if (line.startsWith('event:')) event = line.slice(6).trimStart()
             else if (line.startsWith('data:')) {
               const data = line.slice(5).trimStart()
-              dataBytes += encoder.encode(data).byteLength + (dataLines.length ? 1 : 0)
+              dataBytes += sseEncoder.encode(data).byteLength + (dataLines.length ? 1 : 0)
               if (dataBytes > MAX_SSE_EVENT_BYTES) throw new Error('AI stream event too large')
               dataLines.push(data)
             }
@@ -169,7 +172,7 @@ export function createSseAgentTransport(options: SseTransportOptions = {}) {
               pending = pending.slice(cut + 1)
               acceptLine(line)
             }
-            if (new TextEncoder().encode(pending).byteLength > MAX_SSE_EVENT_BYTES) throw new Error('AI stream event too large')
+            if (overSseLimit(pending)) throw new Error('AI stream event too large')
           }
           if (!finished && !cancelled) finish('AI stream ended without done event')
         } catch (error) {
