@@ -1,6 +1,7 @@
 import { lookup } from 'node:dns/promises'
 import { isIP } from 'node:net'
 import type { SourceEgressTarget } from '../../../../../packages/web-contracts/src/settings.ts'
+import { publicAddress } from './ip-ranges.ts'
 export type { SourceEgressTarget } from '../../../../../packages/web-contracts/src/settings.ts'
 
 export type SqlSourceKind = 'postgres' | 'mysql' | 'starrocks'
@@ -57,14 +58,16 @@ export function validateSourceEgressTargets(input: unknown): SourceEgressTarget[
 }
 export function createSourceEgressPolicy(targets: readonly SourceEgressTarget[] = [], { allowUnlistedSql = false } = {}) {
   const approved = validateSourceEgressTargets(targets)
-  async function resolve(hostname: string, addresses?: readonly string[]) {
+  // publicOnly: an administrator has not approved this host, so it may reach
+  // only globally routable addresses, never loopback or a private network.
+  async function resolve(hostname: string, addresses?: readonly string[], publicOnly = false) {
     let timer: ReturnType<typeof setTimeout> | undefined
     try {
       const answers = await Promise.race([
         isIP(hostname) ? Promise.resolve([{ address: hostname, family: isIP(hostname) }]) : lookup(hostname, { all: true, verbatim: true }),
         new Promise<never>((_, reject) => { timer = setTimeout(() => reject(unavailable()), 3000) }),
       ])
-      if (!answers.length || answers.length > 32 || answers.some(a => forbiddenPinnedAddress(a.address) || (addresses && !addresses.includes(normalizePinnedAddress(a.address))))) throw unavailable()
+      if (!answers.length || answers.length > 32 || answers.some(a => forbiddenPinnedAddress(a.address) || (publicOnly && !publicAddress(normalizePinnedAddress(a.address))) || (addresses && !addresses.includes(normalizePinnedAddress(a.address))))) throw unavailable()
       return { address: normalizePinnedAddress(answers[0].address), family: answers[0].family as 4 | 6 }
     } catch { throw unavailable() } finally { clearTimeout(timer) }
   }
@@ -82,7 +85,7 @@ export function createSourceEgressPolicy(targets: readonly SourceEgressTarget[] 
     async sql(kind: SqlSourceKind, secret: string) {
       const parsed = parseSourceDsn(kind, secret)
       if (allowUnlistedSql && approved.every(target => target.kind === 'http')) {
-        return { ...parsed, ...await resolve(parsed.hostname), tls: false, ca: undefined }
+        return { ...parsed, ...await resolve(parsed.hostname, undefined, true), tls: false, ca: undefined }
       }
       const matches = approved.filter(p => p.kind === kind && p.endpoint === parsed.endpoint && p.username === parsed.username && p.database === parsed.database)
       if (matches.length !== 1) throw unavailable()
