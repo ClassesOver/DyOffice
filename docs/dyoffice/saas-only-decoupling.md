@@ -124,6 +124,8 @@ Web CI 在运行 Chromium 前构建四种原生编辑器与工作区，并准备
 逐项验证记录在 `evidence/web-pdf-ai-edits-2026-11-19.md` 等现有证据文件中。
 此表随实际实现与验收结果更新；表中待完成项尚未全部关闭。
 
+PDF 斜放图片的裁剪按该图片实际使用的混合模式判断。同页其他图形的混合模式不再阻止裁剪；[像素回归](../../apps/web/test/pdf-image-bakes.test.mjs)核对原裁剪路径与相邻混合图形，[浏览器回归](../../apps/web/test/local-browser/pdf-affine-image-drafts.test.mjs)验证助手预览、显式保存和重开。目标图片本身使用复杂混合模式或位于透明组时，仍不执行需要栅格化的裁剪。
+
 PPTX 的浏览器资源与原生会话后端必须一起配置，否则应用拒绝启动，避免对用户报告可编辑却在打开时失败。当前本地模式使用 Node 子进程，与生产文档隔离分开验收；生产账号模式仍在监听端口之前拒绝启动，日志明确报告文档运行时不可用。
 
 2026-11-20 的 Ubuntu 24.04 只读探测发现本机 Docker 未启用用户命名空间，未运行容器隔离探针。可用 [宿主前置检查](../../tools/dyoffice/audit-ubuntu-docker.py)输出 JSON 复查。仓库的 `manager-preflight` 已读取实际 systemd 255 管理器，核对 UID 0、PID 1，并返回 `execution_available: false`。[拒绝路径回归](../../apps/web/test/native-jobs/broker-required.test.mjs)通过：缺少可用 broker 时，API 和 worker 在读取凭据或连接依赖前拒绝启动。该结果不代表生产隔离已通过。
