@@ -1,5 +1,6 @@
 import {splitPdfReplacePagesFrame} from './replace-pages-job.mjs'
 import {fork} from 'node:child_process'
+import {pdfWorkerLaunch} from './worker-launch.mjs'
 import {fail,hash} from './job-common.mjs'
 
 const MAX_BYTES=64*1024*1024
@@ -16,7 +17,7 @@ export function createPdfProcessJob(action,parseRequest,safetyCodes){
   const operations=parseRequest(raw),bytes=Buffer.from(input),binding=action==='replacePages'?splitPdfReplacePagesFrame(bytes):{target:bytes},inputSha256=hash(binding.target)
   busy=true
   try{return await new Promise((resolve,reject)=>{
-   const child=fork(new URL('./pdf-edit-worker.mjs',import.meta.url),[],{execArgv:['--max-old-space-size=256','--import','tsx'],env:{LANG:'C.UTF-8'},serialization:'advanced',stdio:['ignore','ignore','ignore','ipc']})
+   const worker=pdfWorkerLaunch(),child=fork(worker.url,[],{execArgv:['--max-old-space-size=256',...worker.execArgv],env:{LANG:'C.UTF-8'},serialization:'advanced',stdio:['ignore','ignore','ignore','ipc']})
    let settled=false
    const finish=(error,result)=>{
     if(settled)return;settled=true;clearTimeout(timer);signal?.removeEventListener('abort',aborted)

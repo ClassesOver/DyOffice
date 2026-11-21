@@ -1,9 +1,14 @@
 import {readFile} from 'node:fs/promises'
+import {createRequire} from 'node:module'
+import {dirname,join} from 'node:path'
 import {PDFCheckBox,PDFTextField,PDFRadioGroup,PDFDropdown,PDFOptionList,PDFSignature,PDFButton,PDFAcroNonTerminal,PDFName,PDFDict,PDFArray,StandardFonts} from 'pdf-lib'
 import {openEditablePdf} from './editable-document.mjs'
 import {pdfFontkit} from '../../../src/editors/pdf-fontkit.ts'
 import {fail,check,hash} from './job-common.mjs'
 const plain=value=>value&&typeof value==='object'&&!Array.isArray(value)&&[Object.prototype,null].includes(Object.getPrototypeOf(value))&&Reflect.ownKeys(value).every(key=>typeof key==='string'&&Object.getOwnPropertyDescriptor(value,key)?.enumerable&&'value'in Object.getOwnPropertyDescriptor(value,key))
+// Resolved through the docs workspace package, not this file's location, so the job also works
+// when bundled into dist-pdf-worker.
+const cjkSubsetFontPath=()=>join(dirname(createRequire(import.meta.url).resolve('@genoffice/docs/package.json')),'src/renderer/fonts/NotoSansCJKsc-Regular-subset.woff2')
 export const pdfFormValuesSafetyCodes=new Set(['MAGIC_MISMATCH','PASSWORD','UNREADABLE','PDF_EDIT_LIMIT','SIGNATURE_EDIT_REFUSED','PDF_EDIT_UNSUPPORTED_STRUCTURE','INVALID_PDF_FORM_VALUES','PDF_FORM_VERIFY_FAILED','PDF_FORM_FONT_UNAVAILABLE','OUTPUT_LIMIT'])
 export function validatePdfFormValueOperations(input){
  if(!Array.isArray(input)||input.length<1||input.length>100||Reflect.ownKeys(input).length!==input.length+1)fail('INVALID_PDF_FORM_VALUES')
@@ -66,7 +71,7 @@ export async function updatePdfFormValueAppearances(doc,names,signal){
     let font
     if(/^[\x00-\x7f]*$/.test(text))font=latin??=await doc.embedFont(StandardFonts.Helvetica)
     else{
-     cjk??=await doc.embedFont(await readFile(new URL('../../../../docs/src/renderer/fonts/NotoSansCJKsc-Regular-subset.woff2',import.meta.url)),{subset:true})
+     cjk??=await doc.embedFont(await readFile(cjkSubsetFontPath()),{subset:true})
      font=cjk
      const covers=f=>{const chars=new Set(f.getCharacterSet());return Array.from(text).every(char=>/[\r\n\t]/.test(char)||chars.has(char.codePointAt(0)))}
      if(!covers(font)){

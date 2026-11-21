@@ -55,6 +55,7 @@ apps/web/.dyoffice/
 /apps/web/dist-sheets/
 /apps/web/dist-slides/
 /apps/web/dist-pdf/
+/apps/web/dist-pdf-worker/
 
 /apps/web/dist-sheets-server/
 
