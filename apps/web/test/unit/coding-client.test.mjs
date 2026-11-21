@@ -74,12 +74,14 @@ test('the task card shows the same ID used by execution and cancellation',async(
 
 test('closing the document observer keeps its task ID and reopening reads the original task without dispatching',async t=>{
  const documentId='10000000-0000-4000-8000-000000000001',calls=[],saved=new Map()
+ const discovery='/api/v1/agents/tasks?documentId='+documentId
  const storage={getItem:key=>saved.get(key)??null,setItem:(key,value)=>saved.set(key,value)}
  let dispatch
  const ready=new Promise(resolve=>{dispatch=resolve})
  let id
  const fetchImpl=async(url,init)=>{
   calls.push({url,method:init.method})
+  if(url===discovery)return new Response(null,{status:501}) // Older API still supports direct status reads.
   if(init.method==='POST'){
    const request=JSON.parse(init.body)
    id=request.turnId;dispatch(request)
@@ -100,17 +102,19 @@ test('closing the document observer keeps its task ID and reopening reads the or
   assert.equal(reopened.snapshot()[0].id,id)
   assert.equal(reopened.snapshot()[0].state,'succeeded')
   assert.equal(reopened.snapshot()[0].output,'42')
-  assert.deepEqual(calls,[{url:'/api/v1/agents/tasks',method:'POST'},{url:'/api/v1/agents/tasks/'+id+'/status?documentId='+documentId,method:'GET'}])
+  assert.deepEqual(calls,[{url:discovery,method:'GET'},{url:'/api/v1/agents/tasks',method:'POST'},
+   {url:discovery,method:'GET'},{url:'/api/v1/agents/tasks/'+id+'/status?documentId='+documentId,method:'GET'}])
  }finally{reopened.dispose()}
 })
 
 test('cancelling a recovered running task targets its original ID without submitting work',async t=>{
  const documentId='10000000-0000-4000-8000-000000000001',turnId='10000000-0000-4000-8000-000000000002'
- const calls=[],storage={getItem:()=>JSON.stringify([turnId]),setItem(){}},base='/api/v1/agents/tasks/'+turnId
+ const calls=[],base='/api/v1/agents/tasks/'+turnId,discovery='/api/v1/agents/tasks?documentId='+documentId
  let cancelled=false,finish
  const terminal=new Promise(resolve=>{finish=resolve})
- const client=createCodingClient({agents:descriptors,defaultId:'codex',documentId,storage,csrfToken:'c'.repeat(43),getModelId:()=> 'office-model',fetchImpl:async(url,init)=>{
+ const client=createCodingClient({agents:descriptors,defaultId:'codex',documentId,csrfToken:'c'.repeat(43),getModelId:()=> 'office-model',fetchImpl:async(url,init)=>{
   calls.push([init.method,url])
+  if(url===discovery)return Response.json({taskIds:[turnId,turnId]})
   if(url===base+'/cancel'){
    cancelled=true
    return Response.json({})
@@ -126,7 +130,7 @@ test('cancelling a recovered running task targets its original ID without submit
  const card=await Promise.race([terminal,new Promise((_,reject)=>{const timer=setTimeout(()=>reject(Error('Expected cancelled task status')),3000);timer.unref()})])
  assert.equal(card.id,turnId)
  assert.equal(card.failure,'Harness cancellation requested. Check for saved delivery.')
- assert.deepEqual(calls,[['GET',base+'/status?documentId='+documentId],['POST',base+'/cancel'],['GET',base+'/status?documentId='+documentId]])
+ assert.deepEqual(calls,[['GET',discovery],['GET',base+'/status?documentId='+documentId],['POST',base+'/cancel'],['GET',base+'/status?documentId='+documentId]])
 })
 
 test('Office discovers only metadata and passes explicit data scope to either peer',async()=>{
@@ -158,6 +162,7 @@ for(const mode of ['stream','rejected','disconnected'])test('a finished task '+(
  const done=new Promise(resolve=>{finish=resolve})
  const client=await createAssistantClient({request:async()=>catalog,documentId,continuationRevision:()=>revision,csrfToken:'c'.repeat(43),fetchImpl:async(url,init)=>{
   const body=init.body?JSON.parse(init.body):undefined;calls.push({url,body})
+  if(url==='/api/v1/agents/tasks?documentId='+documentId)return Response.json({taskIds:[]})
   if(init.method==='GET')return Response.json({turnId:dispatch.turnId,documentId,agentId:'codex',state:'succeeded',hasContinuation:true,continuationModelId:'office-model',result:{summary:'Finished',output:'42'}})
   if(url==='/api/v1/ai/turns'){
    if(!dispatch)return response('tool_call',{id:'original-tool',name:'delegate_agent_task',input:{instruction:'Compute'}})

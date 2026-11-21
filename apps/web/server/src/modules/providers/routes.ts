@@ -18,6 +18,7 @@ const documentId={type:'string',pattern:'^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a
 export function registerProviderRoutes(app: FastifyInstance, options: {
   turns: TurnRunner; sessions: Pick<SessionService,'authenticate'>;
   csrf: Pick<ReturnType<typeof createCsrfService>,'requireSession'> & Partial<Pick<ReturnType<typeof createCsrfService>,'requireSessionRead'>>; maxOutputBytes?: number; endpoint?: string; errorMessage?: string
+  listTaskIds?:(token:string,documentId:string)=>Promise<string[]>
   taskStatus?:(token:string,turnId:string,documentId:string)=>Promise<unknown>
   claimContinuation?:(token:string,turnId:string,input:{documentId:string;revision:string;modelId:string;defer?:boolean})=>Promise<unknown>
   admitContinuation?:AdmitHarnessContinuation
@@ -100,6 +101,8 @@ export function registerProviderRoutes(app: FastifyInstance, options: {
         response.off('close',disconnect)
       }
     })
+    if(options.listTaskIds)api.get(endpoint,{schema:{querystring:object({documentId})}},async request=>
+      ({taskIds:await options.listTaskIds!(cookies(request).session!,(request.query as {documentId:string}).documentId)}))
     if(options.taskStatus)api.get(endpoint+'/:id/status',{schema:{params:object({id}),querystring:object({documentId})}},request=>
       options.taskStatus!(cookies(request).session!,(request.params as {id:string}).id,(request.query as {documentId:string}).documentId))
     const claim=object({documentId,revision:documentId,modelId:id})

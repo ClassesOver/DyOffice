@@ -24,6 +24,15 @@ export function createCodingTaskRecoveryStore(transactions:PrincipalTransactions
     })
   const where=key+' AND file_id=$5'
   return {
+    async listTaskIds(token:string,documentId:string){
+      return runFileTransaction(transactions,token,'files:read',async(c,p)=>{
+        await loadFile(c,p,documentId)
+        const {rows}=await c.query<{turn_id:string}>(`SELECT turn_id FROM harness_task_recovery
+          WHERE ${own} AND session_id=$3 AND file_id=$4 AND expires_at>clock_timestamp()
+          ORDER BY (${validLease}) DESC,expires_at DESC,turn_id LIMIT 8`,[...scope(p),p.sessionId,documentId])
+        return rows.map(row=>row.turn_id)
+      })
+    },
     async start(token:string,documentId:string,turnId:string,snapshot:Snapshot,continuation:Continuation|undefined,signal?:AbortSignal){
       await withFile(token,documentId,turnId,async(c,args,revision)=>{
         if(continuation&&continuation.revision!==revision)throw authError(409)

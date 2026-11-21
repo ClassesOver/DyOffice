@@ -11,7 +11,7 @@ import {password} from '../helpers/identity.mjs'
 import {mockProviderNetwork} from '../helpers/provider-network.mjs'
 
 const nativeDocsDirectory=process.env.DYOFFICE_TEST_NATIVE_DOCS_DIST
-test('Word refresh resumes the original Harness turn and edits the document once',{skip:!nativeDocsDirectory,timeout:90000},async t=>{
+test('a new Word tab without stored task IDs resumes the original Harness turn once',{skip:!nativeDocsDirectory,timeout:90000},async t=>{
   const origin='http://localhost:4261',f=await fileFixture(t,{origin,buildApp:false})
   await f.preferences.update(f.alice.token,{language:'en',autoSave:false,showAssistant:true})
   const original=await docxBytes(),{file}=await importFile(f,f.alice.token,original,'recover-task.docx')
@@ -40,7 +40,8 @@ test('Word refresh resumes the original Harness turn and edits the document once
   await app.listen({port:4261,host:'127.0.0.1'})
   const browser=await launchTestBrowser()
   f.cleanup.unshift(()=>browser.close())
-  const page=await browser.newPage({viewport:{width:1360,height:900}})
+  const context=await browser.newContext({viewport:{width:1360,height:900}})
+  let page=await context.newPage()
   const {csrfToken}=await (await page.request.get(origin+'/api/v1/auth/csrf')).json()
   assert.equal((await page.request.post(origin+'/api/v1/auth/login',{
     headers:{origin,'x-csrf-token':csrfToken},data:{username:'alice',password},
@@ -66,20 +67,21 @@ test('Word refresh resumes the original Harness turn and edits the document once
     return Readable.from([Buffer.from('data: '+JSON.stringify({choices:[{delta,finish_reason:delta.tool_calls?'tool_calls':'stop'}]})+'\n\ndata: [DONE]\n\n')])
   }catch(error){t.diagnostic(error.stack);throw error}})
   const submissions=[],cancellations=[],claims=[]
-  page.on('request',request=>{
+  context.on('request',request=>{
     const path=new URL(request.url()).pathname
     if(request.method()==='POST'&&path==='/api/v1/agents/tasks')submissions.push(request.postDataJSON())
     if(path.startsWith('/api/v1/agents/tasks/')&&path.endsWith('/cancel'))cancellations.push(path)
     if(path.startsWith('/api/v1/agents/tasks/')&&path.endsWith('/continuation'))claims.push(path)
   })
-  const editor=page.locator('.tiptap.doc-page[contenteditable="true"]').first()
-  const assistant=page.locator('.ai-panel')
+  let editor=page.locator('.tiptap.doc-page[contenteditable="true"]').first()
+  let assistant=page.locator('.ai-panel')
   async function showAssistant(){
     await expect(editor).toBeVisible({timeout:20000})
     if(await page.locator('.ai-rail').isVisible())await page.locator('.ai-rail').click()
     await expect(assistant).toBeVisible()
   }
-  await page.goto(origin+'/native-docx/?fileId='+file.fileId)
+  const documentUrl=origin+'/native-docx/?fileId='+file.fileId
+  await page.goto(documentUrl)
   await showAssistant()
   await assistant.locator('textarea').fill(instruction)
   await assistant.locator('textarea').press('Enter')
@@ -88,8 +90,13 @@ test('Word refresh resumes the original Harness turn and edits the document once
   assert.equal(submissions[0].documentId,file.fileId)
   assert.equal(submissions[0].continuation.revision,file.revision)
   const {turnId}=submissions[0]
+  await page.close()
+  page=await context.newPage()
+  await page.goto(documentUrl)
+  assert.equal(await page.evaluate(id=>sessionStorage.getItem('dyoffice.harness.tasks:'+id),file.fileId),null)
+  editor=page.locator('.tiptap.doc-page[contenteditable="true"]').first()
+  assistant=page.locator('.ai-panel')
   const task=assistant.locator(`.assistant-task-message[data-team-task="harness:${turnId}"]:visible`)
-  await page.reload()
   await showAssistant()
   await expect(task.getByText('Computing fixture total',{exact:true})).toBeVisible({timeout:15000})
   release()
@@ -112,6 +119,7 @@ test('Word refresh resumes the original Harness turn and edits the document once
   assert.deepEqual(await f.files.readFile(f.alice.token,file.fileId,file.revision),original)
   await page.reload()
   await showAssistant()
+  await expect(editor.getByText(revised,{exact:true})).toHaveCount(1)
   await expect(assistant.getByText(reply,{exact:true})).toBeVisible()
   await expect(assistant.getByText(instruction,{exact:true})).toHaveCount(1)
   assert.equal(claims.length,1)

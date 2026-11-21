@@ -54,6 +54,8 @@ test('recovering a document Harness task rechecks a real login and current file 
  }finally{controller.abort()}
  const status=(token=f.alice.token,documentId=file.fileId,extra={})=>
   app.inject({url:'/api/v1/agents/tasks/fixture-recover/status?documentId='+documentId,headers:{...headers(token),...extra}})
+ const list=(token=f.alice.token,documentId=file.fileId,extra={})=>
+  app.inject({url:'/api/v1/agents/tasks?documentId='+documentId,headers:{...headers(token),...extra}})
  const claim=(token=f.alice.token,extra={})=>app.inject({method:'POST',url:'/api/v1/agents/tasks/fixture-recover/continuation',
   headers:{...headers(token),origin:restrictedOrigin,...extra},payload:{documentId:file.fileId,revision:file.revision,modelId:'local-fixture',defer:true}})
  assert.equal((await status()).json().state,'running')
@@ -63,6 +65,11 @@ test('recovering a document Harness task rechecks a real login and current file 
  assert.equal((await status(f.alice.token,file.fileId,{'x-csrf-token':'z'.repeat(43)})).statusCode,403)
  const secondSession=await f.sessions.login('alice',password)
  assert.equal((await status(secondSession.token)).statusCode,404)
+ assert.deepEqual((await list()).json(),{taskIds:['fixture-recover']})
+ assert.deepEqual((await list(secondSession.token)).json(),{taskIds:[]})
+ assert.deepEqual((await list(f.alice.token,unrelated.fileId)).json(),{taskIds:[]})
+ assert.equal((await list(f.bob.token)).statusCode,404)
+ assert.equal((await list(f.alice.token,file.fileId,{'x-csrf-token':'z'.repeat(43)})).statusCode,403)
  release()
  let final
  for(let i=0;i<50;i++){
@@ -87,6 +94,7 @@ test('recovering a document Harness task rechecks a real login and current file 
  const restored=await status()
  assert.equal(restored.statusCode,200)
  assert.deepEqual(restored.json(),final)
+ assert.deepEqual((await list()).json(),{taskIds:['fixture-recover']})
  assert.deepEqual((await claim()).json().checkpoint,checkpoint)
  assert.equal((await status(f.bob.token)).statusCode,404)
  assert.equal((await status(secondSession.token)).statusCode,404)
@@ -123,6 +131,7 @@ test('recovering a document Harness task rechecks a real login and current file 
  assert.equal(runs,2)
  await f.files.trashFile(f.alice.token,file.fileId)
  assert.equal((await status()).statusCode,404)
+ assert.equal((await list()).statusCode,404)
  assert.equal((await claim()).statusCode,404)
  assert.equal((await f.files.purgeFile(f.alice.token,file.fileId)).state,'purged')
  assert.equal(await f.transactions.withPrincipalTransaction({kind:'session',token:f.alice.token},async c=>
