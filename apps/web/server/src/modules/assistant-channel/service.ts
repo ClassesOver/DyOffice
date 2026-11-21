@@ -25,8 +25,30 @@ function taskPreview(r:Record<string,any>):ChannelTask {
  const result=taskDto(r)
  delete result.dataInputs
  const bounded=(value:string,bytes:number)=>{
-  let preview=value.slice(0,bytes)
-  while(Buffer.byteLength(JSON.stringify(preview))>bytes)preview=preview.slice(0,-1)
+  // Longest prefix whose JSON.stringify UTF-8 size fits, in one pass (was a re-encode per
+  // trimmed character). A prefix ending on a high surrogate encodes it alone as \uXXXX.
+  const limit=Math.min(value.length,bytes)
+  let size=2,best=0
+  for(let i=0;i<limit;i++){
+   const c=value.charCodeAt(i)
+   let cost
+   if(c===0x22||c===0x5c||c===8||c===9||c===10||c===12||c===13)cost=2
+   else if(c<0x20)cost=6
+   else if(c<0x80)cost=1
+   else if(c<0x800)cost=2
+   else if(c>=0xd800&&c<=0xdbff){
+    const next=i+1<value.length?value.charCodeAt(i+1):0
+    if(size+6<=bytes)best=i+1
+    if(next>=0xdc00&&next<=0xdfff&&i+1<limit){size+=4;i++;if(size<=bytes)best=i+1;else break;continue}
+    cost=6
+   }
+   else if(c>=0xdc00&&c<=0xdfff)cost=6
+   else cost=3
+   size+=cost
+   if(size>bytes)break
+   best=i+1
+  }
+  let preview=value.slice(0,best)
   // Avoid emitting a split UTF-16 surrogate at the preview boundary.
   if(/[\uD800-\uDBFF]$/.test(preview))preview=preview.slice(0,-1)
   return preview

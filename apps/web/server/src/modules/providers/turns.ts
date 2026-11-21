@@ -46,7 +46,9 @@ function snapshot(value: unknown): TurnRequest {
   if (new TextEncoder().encode(json).length > ASSISTANT_MAX_REQUEST_BYTES) throw fail('Invalid AI request')
   return JSON.parse(json) as TurnRequest
 }
-function normalize(event: TurnEvent): TurnEvent {
+/** Strict copy of a provider event plus its encoded JSON size (reused for the output budget). */
+const encoder = new TextEncoder()
+function normalize(event: TurnEvent): {event: TurnEvent; bytes: number} {
   if (!event || typeof event !== 'object') throw fail('AI turn unavailable')
   let clean: TurnEvent
   if ((event.type === 'delta' || event.type === 'reasoning') && typeof event.text === 'string') clean = {type:event.type,text:event.text}
@@ -56,9 +58,10 @@ function normalize(event: TurnEvent): TurnEvent {
   else if (event.type === 'error' && typeof event.message === 'string') clean = {type:event.type,message:event.message,...(event.outcome==='failed'?{outcome:event.outcome}:{})}
   else if (event.type === 'usage' && [event.inputTokens,event.outputTokens].every(n=>n===undefined || Number.isSafeInteger(n) && n>=0)) clean = {type:'usage',...(event.inputTokens===undefined?{}:{inputTokens:event.inputTokens}),...(event.outputTokens===undefined?{}:{outputTokens:event.outputTokens})}
   else throw fail('AI turn unavailable')
-  const json = JSON.stringify(clean)
-  if (new TextEncoder().encode(json).length > 256 * 1024) throw fail('AI turn unavailable')
-  return JSON.parse(json) as TurnEvent
+  const json = JSON.stringify(clean), bytes = encoder.encode(json).length
+  if (bytes > 256 * 1024) throw fail('AI turn unavailable')
+  // Only tool inputs carry provider-owned nested data; deep-copy those through JSON.
+  return {event: clean.type === 'tool_call' ? JSON.parse(json) as TurnEvent : clean, bytes}
 }
 export function createProviderTurns<P extends TurnPermit>(deps: TurnDependencies<P>, {timeoutMs = 120_000,maxActive = 16,cancelTimeoutMs = 10_000,maxOutputBytes = 4 * 1024 * 1024}: {timeoutMs?: number|((request:TurnRequest)=>number);maxActive?: number;cancelTimeoutMs?: number;maxOutputBytes?: number} = {}) {
   const validTimeout=(value:number)=>Number.isSafeInteger(value)&&value>=1&&value<=2_147_483_647
@@ -132,9 +135,8 @@ export function createProviderTurns<P extends TurnPermit>(deps: TurnDependencies
           const result = await step(()=>iterator!.next())
           if (result.done) break
           stage = 'validate_event'
-          const event = normalize(result.value)
           // Budget normalized JSON payload bytes, not UTF-16 code units.
-          const eventBytes = new TextEncoder().encode(JSON.stringify(event)).byteLength
+          const {event, bytes: eventBytes} = normalize(result.value)
           if (eventBytes > maxOutputBytes - outputBytes) throw fail('AI turn output limit exceeded')
           outputBytes += eventBytes
           await step(()=>deps.revalidate(token,permit))

@@ -16,7 +16,7 @@ const base='/api/v1/assistant-channels'
  * executor. Native messages never wait for pairing, snapshots or peer tasks. */
 export function createAssistantChannelClient(options:{request:SettingsRequest;fileId:string;editorId:string;conversationId?:string;generation:()=>number}) {
  let snapshot:ChannelSnapshot|null=null,disposed=false,error='',executor:Parameters<AssistantControl['register']>[0]|undefined
- let connection:{id:string;epoch:number}|undefined,refreshing:Promise<void>|undefined,starting:Promise<void>|undefined
+ let connection:{id:string;epoch:number}|undefined,refreshing:Promise<void>|undefined,starting:Promise<void>|undefined,refreshAgain=false
  let localGeneration=0
  let running:{task:ChannelTask;controller:AbortController}|undefined,pumping=false
  type NativeRun={token:string;instruction:string;generation:number;cancel:()=>void;cancelRequested?:boolean;channelId?:string;parent?:ChannelTask;pending?:Promise<ChannelTask>}
@@ -112,7 +112,9 @@ export function createAssistantChannelClient(options:{request:SettingsRequest;fi
  }
  async function refresh():Promise<void> {
   if(disposed||!snapshot)return
-  if(refreshing)return refreshing
+  // A refresh requested mid-flight (a realtime sequence bump, or an action awaiting its own
+  // write) must not be satisfied by a GET that started earlier: queue one follow-up read.
+  if(refreshing){refreshAgain=true;return refreshing.then(()=>refreshing)}
   const channelId=snapshot.conversationId,generation=localGeneration
   refreshing=(async()=>{
    try {
@@ -129,7 +131,12 @@ export function createAssistantChannelClient(options:{request:SettingsRequest;fi
      error='Collaboration unavailable';running?.controller.abort();cancelParentRun();notify()
     }
    }
-   finally{if(generation===localGeneration)refreshing=undefined}
+   finally{
+    if(generation===localGeneration){
+     refreshing=undefined
+     if(refreshAgain){refreshAgain=false;if(!disposed)void refresh()}
+    }
+   }
   })()
   return refreshing
  }

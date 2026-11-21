@@ -86,10 +86,15 @@
   color: inherit;
 }
 
+.native-pdf-redaction-actions {
+  --redaction-confirm-ink: #fff;
+  --redaction-confirm-bg: #b53020;
+}
+
 .native-pdf-redaction-actions button:first-child:not(:disabled) {
-  color: #fff;
-  background: #b53020;
-  border-color: #b53020;
+  color: var(--redaction-confirm-ink);
+  background: var(--redaction-confirm-bg);
+  border-color: var(--redaction-confirm-bg);
 }
 
 .native-pdf-redaction-review button:disabled {
@@ -103,8 +108,10 @@
   height: 100%;
   z-index: 5;
   pointer-events: none;
-  fill: #111;
+  --redaction-mark-fill: #111;
+  --redaction-mark-stroke: #dc2626;
+  fill: var(--redaction-mark-fill);
   fill-opacity: .65;
-  stroke: #dc2626;
+  stroke: var(--redaction-mark-stroke);
   stroke-dasharray: 4 2;
 }

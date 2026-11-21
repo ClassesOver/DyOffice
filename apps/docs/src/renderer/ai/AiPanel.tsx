@@ -1175,16 +1175,24 @@ export function AiPanel({
 
   // scope chip data, recomputed per render (the scope tick above keeps it fresh)
   const liveSelection = editor.state.selection
-  const selectionText = liveSelection.empty
-    ? ''
-    : redactTextBetween(
-        editor.getJSON() as RedactableNode,
-        liveSelection.from,
-        liveSelection.to,
-        '\n',
-      )
-        .replace(/\s+/g, ' ')
-        .trim()
+  // getJSON() copies the whole document; the doc node is immutable, so reuse the result until
+  // the document or the selection range actually changes (renders also fire per streamed token).
+  const liveDoc = editor.state.doc
+  const selectionText = useMemo(
+    () =>
+      liveSelection.empty
+        ? ''
+        : redactTextBetween(
+            editor.getJSON() as RedactableNode,
+            liveSelection.from,
+            liveSelection.to,
+            '\n',
+          )
+            .replace(/\s+/g, ' ')
+            .trim(),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed on the immutable doc + range
+    [liveDoc, liveSelection.empty, liveSelection.from, liveSelection.to],
+  )
   const hasScopeSelection = selectionText.length > 0
 
   /** the × on the scope chip: collapse the selection so the run targets the whole document */

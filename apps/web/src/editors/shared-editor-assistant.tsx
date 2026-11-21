@@ -39,6 +39,9 @@ export function SharedEditorAssistant({assistant,lang,context='',dock,widthKey,o
  const checkRecovery=useRef<()=>void>(undefined)
  const editDone=useRef(onLocalEditDone),localEdit=useRef<'local'|'edited'|undefined>(undefined)
  const language=useRef(lang)
+ // Follow new messages and streamed text unless the user scrolled up to read.
+ const feedRef=useRef<HTMLDivElement>(null),stickToBottom=useRef(true)
+ useEffect(()=>{const feed=feedRef.current;if(feed&&stickToBottom.current)feed.scrollTop=feed.scrollHeight})
  language.current=lang
  editDone.current=onLocalEditDone
  const loop=useMemo(()=>{
@@ -74,7 +77,7 @@ export function SharedEditorAssistant({assistant,lang,context='',dock,widthKey,o
    // Browser-local attachment handles cannot be recovered after a refresh.
    canCheckpointHarness:()=>!activeFiles.current.length,
    events:{
-    onText:text=>{if(text)recoverableDraft.current=undefined;setItems(current=>{const next=[...current];const last=next.at(-1);if(last?.role==='assistant')last.text=text;return next})},
+    onText:text=>{if(text)recoverableDraft.current=undefined;setItems(current=>{const last=current.at(-1);return last?.role==='assistant'?[...current.slice(0,-1),{...last,text}]:current})},
     onToolStart:()=>{recoverableDraft.current=undefined},
     onToolExecuted:({execution})=>{if(localEdit.current==='local'&&execution.mutated&&!execution.isError)localEdit.current='edited'},
     onDone:result=>{
@@ -121,7 +124,7 @@ export function SharedEditorAssistant({assistant,lang,context='',dock,widthKey,o
     if(!item.continuationModelId||attempted.has(item.id))return false
     if(assistant.catalog.entries.some(entry=>entry.id===item.continuationModelId))return true
     attempted.add(item.id)
-    setError(lang==='zh'?'原模型已不可用。请在任务卡片查看结果。':'The original model is unavailable. See the task card for its result.')
+    setError(language.current==='zh'?'原模型已不可用。请在任务卡片查看结果。':'The original model is unavailable. See the task card for its result.')
     return false
    })
    if(!task)return
@@ -140,7 +143,7 @@ export function SharedEditorAssistant({assistant,lang,context='',dock,widthKey,o
      started=loop.resumeHarness(run.checkpoint,run.result,{chat,modelId:run.modelId,canContinue:()=>continuationRevision()===run.revision})
      if(!started)throw Error('Office conversation unavailable')
     }catch{
-     if(mounted&&!observer.signal.aborted)setError(lang==='zh'?'无法继续原对话。请在任务卡片查看结果。':'Could not continue the original conversation. See the task card for its result.')
+     if(mounted&&!observer.signal.aborted)setError(language.current==='zh'?'无法继续原对话。请在任务卡片查看结果。':'Could not continue the original conversation. See the task card for its result.')
     }finally{
      if(resuming.current===observer)resuming.current=undefined
      if(mounted&&!started){
@@ -153,7 +156,7 @@ export function SharedEditorAssistant({assistant,lang,context='',dock,widthKey,o
   const unsubscribe=coding.subscribe(check)
   checkRecovery.current=check
   return ()=>{mounted=false;checkRecovery.current=undefined;resuming.current?.abort();unsubscribe()}
- },[assistant,loop,lang])
+ },[assistant,loop])
  // The host can become ready after the final task event. Recheck after its layout effects update the lifecycle.
  useEffect(()=>{checkRecovery.current?.()})
  function runOffice(instruction:string,continuationToken?:string,handoff?:import('@genoffice/agent-core').DocumentHandoffOptions,composerDraft?:ComposerDraft,skillBodies:readonly AttachedSkill[]=[]){
@@ -224,6 +227,7 @@ export function SharedEditorAssistant({assistant,lang,context='',dock,widthKey,o
   setSkills(current=>current.includes(name)?current.filter(item=>item!==name):[...current,name])
  }
  async function send(){
+  stickToBottom.current=true
   const text=draft.trim()
   if(!text||busy||loop.busy||resuming.current||addingFiles.current||pendingSkills.current)return
   setError('')
@@ -263,7 +267,8 @@ export function SharedEditorAssistant({assistant,lang,context='',dock,widthKey,o
  }
  const conversation=assistant.workspace.conversation
  const messages:ReactNode=<>
-  {items.map(item=><div data-sender={item.sender} className={`ai-msg ai-msg-${item.role}`} key={item.id}>{item.text?<><Markdown text={item.text} nav={item.role==='assistant'?assistantNav:undefined}/><AiSkillChips lang={lang} names={item.skills??[]}/>{!!item.files?.length&&<div className="shared-assistant-file-list">{item.files.map((name,index)=><span key={index}>{name}</span>)}</div>}</>:busy&&item.role==='assistant'?<span role="status">{lang==='zh'?'正在思考…':'Thinking…'}</span>:null}</div>)}
+  {!items.length&&<div className="ai-chat-empty"><div className="ai-chat-empty-title">{lang==='zh'?'可以帮你做什么？':'How can I help?'}</div><div className="ai-chat-empty-body">{lang==='zh'?'总结内容、核对信息，或描述需要完成的修改。':'Summarize content, check details, or describe a change.'}</div></div>}
+  {items.map(item=><div data-sender={item.sender} className={`ai-msg ai-msg-${item.role}`} key={item.id}>{item.text?<><Markdown text={item.text} nav={item.role==='assistant'?assistantNav:undefined}/><AiSkillChips lang={lang} names={item.skills??[]}/>{!!item.files?.length&&<div className="shared-assistant-file-list">{item.files.map((name,index)=><span key={index}>{name}</span>)}</div>}</>:busy&&item.role==='assistant'&&item===items.at(-1)?<span role="status">{lang==='zh'?'正在思考…':'Thinking…'}</span>:null}</div>)}
   {error&&<p role="alert">{error}</p>}
  </>
  return <div className={`ai-dock shared-assistant-dock${collapsed?' collapsed':''}${resizing?' ai-panel-resizing':''}`} style={widthKey?{'--ai-panel-width':`${width}px`} as CSSProperties:undefined}>
@@ -271,7 +276,7 @@ export function SharedEditorAssistant({assistant,lang,context='',dock,widthKey,o
   <section hidden={collapsed} className="shared-editor-assistant ai-panel" aria-label={lang==='zh'?'Office 助手':'Office assistant'}>
   <header className="shared-editor-assistant-head ai-panel-header"><span className="ai-panel-title"><GensparkMark size={22}/>{lang==='zh'?'AI 助手':'AI Assistant'}</span><div className="ai-panel-header-actions"><button type="button" className="ai-header-btn ai-panel-collapse" aria-label={lang==='zh'?'收起 AI 助手':'Collapse AI assistant'} onClick={()=>changeCollapsed(true)}><svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true"><rect x="2" y="3" width="16" height="14" rx="2"/><path d="M7 3v14m6-10-3 3 3 3"/></svg></button></div></header>
   {assistant.workspace.panel}
-  <div className="shared-assistant-feed ai-chat">{!items.length&&<div className="ai-chat-empty"><div className="ai-chat-empty-title">{lang==='zh'?'可以帮你做什么？':'How can I help?'}</div><div className="ai-chat-empty-body">{lang==='zh'?'总结内容、核对信息，或描述需要完成的修改。':'Summarize content, check details, or describe a change.'}</div></div>}{conversation?conversation(messages):messages}</div>
+  <div ref={feedRef} className="shared-assistant-feed ai-chat" onScroll={event=>{const feed=event.currentTarget;stickToBottom.current=feed.scrollHeight-feed.scrollTop-feed.clientHeight<48}}>{conversation?conversation(messages):messages}</div>
   <div className="shared-editor-assistant-composer ai-composer">
    <AiComposer value={draft} busy={busy||readingSkills} textareaRef={inputRef} ariaLabel={lang==='zh'?'消息':'Message'} placeholder={lang==='zh'?'描述你想完成的事…':'Describe what you want done…'} hintIdle="" hintBusy="" sendLabel={lang==='zh'?'发送':'Send'} stopLabel={lang==='zh'?'停止':'Stop'} iconOnly header={<>
    <AiSkillChips lang={lang} names={skills} onRemove={toggleSkill}/>

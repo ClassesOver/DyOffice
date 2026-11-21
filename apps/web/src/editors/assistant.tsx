@@ -11,7 +11,7 @@ import {createAssistantClient} from '../../../../packages/browser-host/src/assis
 import {createLocalShellClient} from '../shell/local-client'
 import {createWebAttachments} from './web-attachments'
 import {createUserSkillsClient} from '../shell/user-skills-client'
-import {AiModelPicker} from '@genoffice/ui'
+import {AiModelPicker,Markdown} from '@genoffice/ui'
 import {configuredAiTool,createWebAiSearchApi,officeToolsWithConfiguredAiTools} from './web-ai-search-api.ts'
 import {createWebAiMediaApi,createDocumentImageApi} from './web-ai-media-api.ts'
 import {createPdfMediaSkill} from './pdf-media-skill.ts'
@@ -36,10 +36,11 @@ export async function createEditorAssistant(channelOptions?:{fileId:string;edito
       isValidElement<{children?:ReactNode;className?:string}>(node)&&node.type===Fragment?visible(node.props.children):
       messages.length&&isValidElement<{className?:string}>(node)&&node.props.className?.includes('ai-chat-empty')?[]:[node])
     return <AssistantTeamConversation client={workspace} lang={lang()} accountName={name}>
-      {messages.map(m=><div key={m.turnId+':'+m.role} data-sender={m.sender} className={'ai-msg ai-msg-'+m.role} dir="auto" style={{whiteSpace:'pre-wrap'}}>
+      {messages.map(m=><div key={m.turnId+':'+m.role} data-sender={m.sender} className={'ai-msg ai-msg-'+m.role} dir="auto" style={m.role==='assistant'&&m.state!=='failed'?undefined:{whiteSpace:'pre-wrap'}}>
         {m.state==='failed'
           ? <>{m.text&&<span>{m.text}</span>}<small className="assistant-reply-status">{lang()==='zh'?'未完成':'Not completed'}</small></>
-          : m.text||(m.state==='streaming'?(lang()==='zh'?'正在思考…':'Thinking…'):'')}
+          // Assistant replies render as Markdown, like the same reply while it streams locally.
+          : m.text?(m.role==='assistant'?<Markdown text={m.text}/>:m.text):(m.state==='streaming'?(lang()==='zh'?'正在思考…':'Thinking…'):'')}
       </div>)}
       {format!=='docx'&&channelOptions&&<DocumentHandoffMessages fileId={channelOptions.fileId}/>}{visible(children)}
     </AssistantTeamConversation>

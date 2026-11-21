@@ -29,9 +29,14 @@
   overflow: hidden;
 }
 .assistant-avatar svg { width: 78%; height: 78%; display: block; }
-.assistant-avatar-office { border-radius: 8px; color: light-dark(#4965be, #a7baff); }
-.assistant-avatar-builtin { border-radius: 8px; color: light-dark(#217b68, #85d8bd); }
-.assistant-avatar-external { border-radius: 50%; color: light-dark(#8252b1, #d2acfa); }
+.assistant-avatar-office,.assistant-avatar-builtin,.assistant-avatar-external {
+  --assistant-avatar-office-ink: light-dark(#4965be, #a7baff);
+  --assistant-avatar-builtin-ink: light-dark(#217b68, #85d8bd);
+  --assistant-avatar-external-ink: light-dark(#8252b1, #d2acfa);
+}
+.assistant-avatar-office { border-radius: 8px; color: var(--assistant-avatar-office-ink); }
+.assistant-avatar-builtin { border-radius: 8px; color: var(--assistant-avatar-builtin-ink); }
+.assistant-avatar-external { border-radius: 50%; color: var(--assistant-avatar-external-ink); }
 .assistant-avatar-brand { background: var(--surface); color: var(--text); }
 .assistant-avatar-mark { display: grid; place-items: center; width: 72%; height: 72%; }
 .assistant-avatar-mark svg { width: 100%; height: 100%; }

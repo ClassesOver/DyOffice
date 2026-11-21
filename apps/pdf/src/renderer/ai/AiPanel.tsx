@@ -499,10 +499,10 @@ export function AiPanel({
   }
 
   useEffect(() => {
-    if (stickToBottomRef.current) {
-      chatRef.current?.scrollTo({ top: chatRef.current.scrollHeight })
-    }
-  }, [chat, busy, fileOpConfirm])
+    const list = chatRef.current
+    if (stickToBottomRef.current && list) list.scrollTop = list.scrollHeight
+  // collapsed: scrolling a hidden panel is a no-op, so re-follow once it is shown again
+  }, [chat, busy, fileOpConfirm, collapsed])
 
   const onChatScroll = (): void => {
     const el = chatRef.current

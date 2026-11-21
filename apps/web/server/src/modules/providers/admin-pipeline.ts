@@ -129,7 +129,7 @@ export function createAdminProviderPipeline({transactions,keyring,profiles,timeo
      try{await consumer.run(token,{...binding!,reservationId:claim.id,claimId:claimId!,signal:dispatchSignal})}
      finally{consumer.dispose();consumer=undefined}
     },async chunk=>{
-     await validate(token,permit) // Short transaction; no lock spans bridge/backpressure.
+     // createProviderTurns revalidates (this same validate) before every emitted event.
      if(control.signal.aborted)throw fail()
      await bytes.push(chunk)
     })

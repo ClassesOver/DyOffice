@@ -278,10 +278,10 @@ export function AiChatPanel({
 
   // follow the stream, but stop yanking once the user scrolls up to read
   useEffect(() => {
-    if (stickToBottomRef.current) {
-      chatRef.current?.scrollTo({ top: chatRef.current.scrollHeight })
-    }
-  }, [chat, preview])
+    const list = chatRef.current
+    if (stickToBottomRef.current && list) list.scrollTop = list.scrollHeight
+  // isOpen: the chat list remounts at the top when the panel reopens
+  }, [chat, preview, isOpen])
 
   const onChatScroll = (): void => {
     const el = chatRef.current

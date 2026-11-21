@@ -109,14 +109,14 @@ export function registerSharedProviderGateway(app:FastifyInstance,options:{trans
        const credential=Buffer.from(box.unseal(envelope,{deploymentId:profile.deploymentId,configId:profile.entryId,providerId:profile.providerId,kind:'chat'}))
        try{if(dispatchSignal.aborted)throw fail();await write(credential)}finally{credential.fill(0)}
       })
-      },async chunk=>{await validate(token,permit);await turnBytes.push(chunk)})
+      },async chunk=>{await turnBytes.push(chunk)})
      void producer.then(()=>turnBytes.close(),error=>{
       if(error instanceof ProviderResponseFailure)responseFailure=error
       turnBytes.close(true)
      })
      stage='stream_parse'
-     // No per-event validate here: createProviderTurns revalidates every yielded event before
-     // emitting it, and each network chunk is already validated above.
+     // Authorization is rechecked by createProviderTurns before every emitted event (revalidate),
+     // which also aborts this stream; a per-chunk or per-event check here would only add DB round trips.
      for await(const event of parseOpenAiChatStream(turnBytes.source,{signal:turnControl.signal})){if(event.type==='tool_call'&&!scoped.tools.has(event.name))throw fail();yield event}
      await producer
      stage='dispatch_settle'

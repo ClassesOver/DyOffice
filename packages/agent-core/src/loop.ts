@@ -918,9 +918,11 @@ export class AgentLoop<TSnapshot = unknown> {
         // The history fetch has no timeout of its own; Stop must still settle the run promptly.
         const older=await untilAborted(this.fileTurn.history(),this.abortController?.signal,[])
         if(generation!==this.generation)return
-        this.history.push(...older)
+        // Turns written by other windows are raw visible text; redact them like this window's own.
+        this.history.push(...older.map(m=>m.role==='user'?{...m,text:sanitizeAgentPayload(m.text)}:m))
       }
-      await this.maybeCompact()
+      // Stopped while loading history: don't start a billed summary turn nobody will cancel.
+      if (!this.cancelled) await this.maybeCompact()
     } catch {
       // Proceed with the run even if compaction fails (an over-budget history only costs more, it's still correct)
     }
@@ -1022,6 +1024,8 @@ export class AgentLoop<TSnapshot = unknown> {
       this.mergeRunUsage()
       this.options.events?.onUsage?.(summaryUsage)
     }
+    // Stopped while summarizing: keep the real history rather than folding it into a digest.
+    if (this.cancelled) return
     if (!summary) summary = mechanicalDigest(dropped)
     this.history = [
       { role: 'user', text: `${COMPACT_SUMMARY_HEADER}\n${summary}` },
@@ -1085,7 +1089,8 @@ export class AgentLoop<TSnapshot = unknown> {
             onUsage: (u) => {
               usage = u
             },
-            onDone: () => finish(text.trim() || null),
+            // Transports report Stop through onDone: a cancelled summary is partial, never a result.
+            onDone: () => finish(this.cancelled ? null : text.trim() || null),
             onError: () => finish(null),
           },
         )
@@ -1145,6 +1150,7 @@ export class AgentLoop<TSnapshot = unknown> {
         text: this.turnText,
         cancelled: true,
         turnLimit: this.finalizing,
+        ...(this.runUsage ? { usage: this.runUsage } : {}),
       })
       return
     }
@@ -1620,11 +1626,14 @@ export class AgentLoop<TSnapshot = unknown> {
     if (executedInTurn) this.inputParseFails = 0
     else if (unusableInTurn) this.inputParseFails++
 
-    // Cancelled while tools were executing: finish immediately, no further model request
+    // Cancelled while tools were executing: finish immediately, no further model request.
+    // Close the turn with an assistant reply like every other terminal path, so the next
+    // run never sends tool results followed directly by a new user message.
     if (this.cancelled) {
+      this.history.push({ role: 'assistant', text: this.turnText || COMPLETED_VIA_TOOLS_TEXT })
       this.running = false
       this.runUserMsg = null
-      events?.onDone?.({ text: this.turnText, cancelled: true, turnLimit: false })
+      events?.onDone?.({ text: this.turnText, cancelled: true, turnLimit: false, ...(this.runUsage ? { usage: this.runUsage } : {}) })
       return
     }
 

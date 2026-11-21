@@ -1,4 +1,4 @@
-import { Fragment, type ReactNode } from 'react'
+import { Fragment, useMemo, type ReactNode } from 'react'
 
 /**
  * Minimal dependency-free markdown for chat bubbles: paragraphs, ul/ol,
@@ -258,9 +258,11 @@ export function Markdown({
   // the legacy single nav rides along with the newer list; first scheme
   // match wins, and hosts never pass overlapping schemes anyway
   const navList: readonly MarkdownNav[] = nav ? [nav, ...(navs ?? [])] : (navs ?? [])
+  // Chat panels re-render every bubble per streamed token; only the changed text re-parses.
+  const blocks = useMemo(() => parseBlocks(text), [text])
   return (
     <div className="ai-md">
-      {parseBlocks(text).map((b, i) => {
+      {blocks.map((b, i) => {
         if (b.kind === 'h') {
           // level class lets hosts scale heading sizes (chat keeps them equal;
           // the manual styles h2/h3 distinctly)

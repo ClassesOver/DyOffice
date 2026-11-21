@@ -30,7 +30,9 @@ export function createFileChat(fileId:string,transport:AgentTransport,request:Re
           for(const u of updates)if(outbox.get(key(u))===u)outbox.delete(key(u))
           for(const m of batch.messages){records.set(key(m),m);if(!local.has(m.turnId))changed=true}
           cursor=batch.cursor
-          if(!batch.hasMore&&outbox.size===0)break
+          // Streaming text is paced by the 700 ms timer (each POST row-locks the file);
+          // only server pages and final/user messages are flushed back to back.
+          if(!batch.hasMore&&![...outbox.values()].some(m=>m.state!=='streaming'))break
         }
       }catch(error){
         if((error as {code?:string}).code==='stale_session'||[401,403,404].includes((error as {status:number}).status)){
