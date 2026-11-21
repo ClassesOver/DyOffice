@@ -2,6 +2,7 @@ import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify'
 import type { SessionService } from '../auth/sessions.ts'
 import { cookies, type createCsrfService } from '../auth/csrf.ts'
 import { uuidSchema, fileParamsSchema, emptyQuerySchema } from '../files/http-schema.ts'
+import { objectTransferAdmission } from '../files/transfer-admission.ts'
 import {MAX_OCR_BASE64} from '../../pdf/ocr.ts'
 import {MAX_PDF_OCR_INSERTS,MAX_PDF_TEXT_INSERTS} from '../../../../../../packages/web-contracts/src/pdf-ocr-bake.ts'
 import type { createPdfService, PdfUploadInput, PdfTextUploadInput, PdfAnnotationUploadInput, PdfAnnotationDeleteUploadInput, PdfNoteUpdateUploadInput, PdfPageOpsUploadInput, PdfExtractPagesInput, PdfSplitInput, PdfPageLayoutInput, PdfFormValuesUploadInput, PdfFormFieldsUploadInput, PdfTextInsertsUploadInput, PdfBlockEditsUploadInput, PdfBlockMovesUploadInput, PdfImageEditsUploadInput, PdfImageContentUploadInput, PdfImageBakesUploadInput, PdfStampsUploadInput, PdfReplacePagesInput, PdfRedactedCopyInput, PdfDraftInsertsUploadInput, PdfApplyOpsUploadInput } from './service.ts'
@@ -64,6 +65,10 @@ export function registerPdfRoutes(
   sessions: SessionService,
   csrf: ReturnType<typeof createCsrfService>,
 ) {
+  // The 64 MiB binary page uploads share the app-wide object-I/O budget with the
+  // file and sheets routes, so parallel uploads cannot grow memory without bound.
+  const admission = objectTransferAdmission(app)
+  const binaryUpload = (url: string | undefined) => /\/pdf\/(?:replace|insert)-pages\/uploads$/.test(url ?? '')
   app.register(async api => {
     api.addHook('onRequest', async (request, reply) => {
       reply.header('Cache-Control', 'private, no-store')
@@ -71,7 +76,10 @@ export function registerPdfRoutes(
       csrf.originCheck(request, true)
       csrf.requireSession(request, token)
       await sessions.authenticate(token)
+      if (binaryUpload(request.routeOptions.url)) await admission.admit(request, reply, { waitMs: 10_000 })
     })
+    api.addHook('onResponse', async request => admission.close(request))
+    api.addHook('onError', async request => admission.error(request))
 
     api.post('/api/v1/files/:id/pdf/ocr',{
       bodyLimit:MAX_OCR_BASE64+160,
@@ -207,24 +215,24 @@ export function registerPdfRoutes(
     api.post('/api/v1/files/:id/pdf/replace-pages/uploads',{
       bodyLimit:64*1024*1024,
       schema:{params:fileParamsSchema,querystring:{type:'object',additionalProperties:false,required:['baseRevision','editorId','leaseEpoch','pages'],properties:{baseRevision:uuidSchema,editorId:uuidSchema,leaseEpoch:{type:'string',pattern:'^[1-9][0-9]{0,15}$'},idempotencyKey:mutationProperties.idempotencyKey,pages:{type:'string',minLength:3,maxLength:1000}}}},
-    },async(request,reply)=>withDisconnect(request,reply,signal=>{
+    },async(request,reply)=>withDisconnect(request,reply,signal=>admission.transfer(request,reply,async()=>{
       const query=request.query as {baseRevision:string;editorId:string;leaseEpoch:string;idempotencyKey?:string;pages:string}
       let pages:number[];try{pages=JSON.parse(query.pages)}catch{throw Object.assign(Error('Bad Request'),{statusCode:400})}
       const leaseEpoch=Number(query.leaseEpoch)
       if(!Buffer.isBuffer(request.body)||!Number.isSafeInteger(leaseEpoch))throw Object.assign(Error('Bad Request'),{statusCode:400})
       return pdf.stageReplacePages(cookies(request).session??'',(request.params as {id:string}).id,{...query,leaseEpoch,pages} as PdfReplacePagesInput,request.body,signal)
-    }))
+    })))
 
     api.post('/api/v1/files/:id/pdf/insert-pages/uploads',{
       bodyLimit:64*1024*1024,
       schema:{params:fileParamsSchema,querystring:{type:'object',additionalProperties:false,required:['baseRevision','editorId','leaseEpoch','afterPageIndex'],properties:{baseRevision:uuidSchema,editorId:uuidSchema,leaseEpoch:{type:'string',pattern:'^[1-9][0-9]{0,15}$'},idempotencyKey:mutationProperties.idempotencyKey,afterPageIndex:{type:'string',pattern:'^(?:-1|0|[1-9][0-9]?)$'}}}},
-    },async(request,reply)=>withDisconnect(request,reply,signal=>{
+    },async(request,reply)=>withDisconnect(request,reply,signal=>admission.transfer(request,reply,async()=>{
       const query=request.query as {baseRevision:string;editorId:string;leaseEpoch:string;idempotencyKey?:string;afterPageIndex:string}
       const leaseEpoch=Number(query.leaseEpoch)
       const afterPageIndex=Number(query.afterPageIndex)
       if(!Buffer.isBuffer(request.body)||!Number.isSafeInteger(leaseEpoch)||!Number.isSafeInteger(afterPageIndex))throw Object.assign(Error('Bad Request'),{statusCode:400})
       return pdf.stageReplacePages(cookies(request).session??'',(request.params as {id:string}).id,{baseRevision:query.baseRevision,editorId:query.editorId,leaseEpoch,idempotencyKey:query.idempotencyKey,afterPageIndex},request.body,signal)
-    }))
+    })))
 
     api.post('/api/v1/files/:id/pdf/stamps/uploads',{
       bodyLimit:65536,

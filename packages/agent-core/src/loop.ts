@@ -915,7 +915,8 @@ export class AgentLoop<TSnapshot = unknown> {
     this.runUsage = null
     try {
       if(this.fileTurn){
-        const older=await this.fileTurn.history()
+        // The history fetch has no timeout of its own; Stop must still settle the run promptly.
+        const older=await untilAborted(this.fileTurn.history(),this.abortController?.signal,[])
         if(generation!==this.generation)return
         this.history.push(...older)
       }
@@ -1753,4 +1754,15 @@ export function sanitizeAgentPayload(payload: string): string {
         '$1$2[REDACTED_SECURE_TOKEN]',
       )
   )
+}
+
+/** Resolves with `fallback` as soon as `signal` aborts, otherwise with `work`'s result. */
+function untilAborted<T>(work:Promise<T>,signal:AbortSignal|undefined,fallback:T):Promise<T>{
+  if(!signal)return work
+  if(signal.aborted){work.catch(()=>{});return Promise.resolve(fallback)}
+  return new Promise<T>((resolve,reject)=>{
+    const onAbort=()=>{work.catch(()=>{});resolve(fallback)}
+    signal.addEventListener('abort',onAbort,{once:true})
+    work.then(value=>{signal.removeEventListener('abort',onAbort);resolve(value)},error=>{signal.removeEventListener('abort',onAbort);reject(error)})
+  })
 }

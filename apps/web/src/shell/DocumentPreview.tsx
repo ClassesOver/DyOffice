@@ -313,9 +313,19 @@ export function DocumentPreview({fileId,name,format,conversationId,request:lates
  }catch{if(alive)setError('无法生成只读预览，可下载原件查看。')}finally{if(alive){loading.current=false;setBusy(false)}}})()
  return()=>{alive=false;abort.abort();target?.replaceChildren()}
  },[fileId,format,request,attempt])
+ // A pending page deletion removes that page from the selector; move the selection to the
+ // first remaining page so rotate/add-text never target a page that no longer exists.
+ useEffect(()=>{
+  if(targetPage<1)return
+  const deleted=pendingSession.current!.read().deleted
+  if(!deleted.includes(targetPage-1))return
+  const remaining=baselineGeometries.current.map((_,i)=>i).find(i=>!deleted.includes(i))
+  setTargetPage(remaining===undefined?1:remaining+1)
+ },[pendingTick,targetPage])
  async function rotatePage(delta:number){
   if(!draftReady.current()||textDrafts.current!.isBusy()||imageWorkBusy())return
   const snapshot=pendingSession.current!.read(),pages=(targetPage===0?baselineGeometries.current.map((_,i)=>i+1):[targetPage]).filter(page=>!snapshot.deleted.includes(page-1))
+  if(!pages.length)return
   const result=pendingSession.current!.apply([{op:'rotatePages',pages,dir:delta}])
   setPdfMessage(result.failures[0]?.error??'页面旋转尚未保存。')
  }

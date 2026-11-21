@@ -67,9 +67,14 @@ export function createCodingTaskRecovery(turns:TurnRunner,identity:(token:string
       if(entries.has(taskKey))throw authError(409)
       if([...entries.values()].filter(task=>task.expiresAt===Infinity).length>=maxRunning)throw authError(429)
       if(entries.size>=maxTasks){
-        const oldestFinished=[...entries.entries()].reduce<[string,Entry]|undefined>((oldest,current)=>
-          current[1].expiresAt<(oldest?.[1].expiresAt??Infinity)?current:oldest,undefined)
-        if(oldestFinished)entries.delete(oldestFinished[0])
+        // Evict the caller's own oldest finished task first, so one user's burst of tasks
+        // cannot discard another user's unclaimed result/continuation.
+        const owner=(entryKey:string)=>JSON.stringify((JSON.parse(entryKey) as string[]).slice(0,2))
+        const callerOwner=owner(taskKey)
+        const oldestFinished=(mine:boolean)=>[...entries.entries()].reduce<[string,Entry]|undefined>((oldest,current)=>
+          (!mine||owner(current[0])===callerOwner)&&current[1].expiresAt<(oldest?.[1].expiresAt??Infinity)?current:oldest,undefined)
+        const evicted=oldestFinished(true)??oldestFinished(false)
+        if(evicted)entries.delete(evicted[0])
       }
       const instruction=typeof task?.instruction==='string'?task.instruction.trim().slice(0,1000):undefined
       const entry:Entry={documentId,modelId,instruction,continuation,controller:new AbortController(),state:'running',expiresAt:Infinity}
