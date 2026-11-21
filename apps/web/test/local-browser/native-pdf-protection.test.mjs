@@ -76,10 +76,22 @@ test('native PDF protected structures stay readable without offering edit drafts
   await expect(page.locator('html')).toHaveAttribute('data-document-loading','ready')
   await page.getByRole('button',{name:'AI 助手',exact:true}).click()
   const assistant=page.locator('.shared-editor-assistant')
-  await assistant.getByRole('textbox',{name:'消息'}).fill('Read the first page.')
-  await assistant.getByRole('button',{name:'发送',exact:true}).click()
-  await expect(assistant.getByText('Read finished',{exact:true})).toBeVisible({timeout:15000})
-  assert.match(turns.at(-1).messages.at(-1).results[0].output,kind==='encrypted'?/confidential/:new RegExp('Readable original '+kind))
+  const composer=assistant.getByRole('textbox',{name:'消息'})
+  try{
+   await composer.fill('Read the first page.')
+   await assistant.getByRole('button',{name:'发送',exact:true}).click()
+   await expect(assistant.getByText('Read finished',{exact:true}),`${kind}: assistant read reply`).toBeVisible({timeout:15000})
+   assert.equal(turns.length,2,`${kind}: one model request and one tool-result request`)
+   assert.match(turns[1].messages.at(-1).results[0].output,kind==='encrypted'?/confidential/:new RegExp('Readable original '+kind))
+  }catch(error){
+   t.diagnostic(JSON.stringify({
+    kind,
+    requests:turns.map(turn=>({lastRole:turn.messages.at(-1)?.role,hasToolResult:!!turn.messages.at(-1)?.results?.length})),
+    draft:await composer.inputValue({timeout:1000}).catch(()=>null),
+    assistant:await assistant.innerText({timeout:1000}).catch(()=>null),
+   }))
+   throw error
+  }
   const tools=turns[0].tools.map(tool=>tool.name)
   await page.getByRole('button',{name:'页面',exact:true}).click()
   const rotate=page.getByRole('button',{name:'向右旋转',exact:true})
