@@ -8,6 +8,7 @@ import {officeBrowserAsset as dist} from '../helpers/office-browser-assets.mjs'
 import {execFileSync} from 'node:child_process'
 import {createServer} from 'node:https'
 import {PDFDocument} from 'pdf-lib'
+import JSZip from 'jszip'
 import {PNG} from 'pngjs'
 import {expect} from '@playwright/test'
 import {launchTestBrowser} from '../helpers/browser.mjs'
@@ -75,13 +76,13 @@ for(const mode of ['creation','no-word','all'])test(mode==='no-word'
   },
  }
  // Match the SaaS request limit: this fixture cold-loads a number of editors from one IP.
- app=await buildLocalApp({db:f.db,businessPool:f.businessPool,passwords:f.passwords,deploymentId:f.deploymentId,origin,csrfKey:f.csrfKey,objectStore:f.objects,rateLimit:{max:5000,windowMs:60000},globalConfigKeyring:keyring,providerGateway:{mode:'shared'},codingHarnesses:{adapters:[adapter],defaultId:adapter.descriptor.id},...(!noWord?{nativeDocsDirectory:dist('docs')}:{}),nativeSheetsDirectory:dist('sheets'),...(!creationOnly?{nativeSlidesDirectory:dist('slides'),nativePdfDirectory:dist('pdf'),slidesHost}:{}),localShellDirectory:dist('local-shell'),sheetsNative,sheetsPlanner:gateway.planWorkbookSave,sheetsPackageReader:gateway.readWorkbookPackage})
+ app=await buildLocalApp({db:f.db,businessPool:f.businessPool,passwords:f.passwords,deploymentId:f.deploymentId,origin,csrfKey:f.csrfKey,objectStore:f.objects,rateLimit:{max:5000,windowMs:60000},globalConfigKeyring:keyring,providerGateway:{mode:'shared'},codingHarnesses:{adapters:[adapter],defaultId:adapter.descriptor.id},...(!noWord?{nativeDocsDirectory:dist('docs'),nativePdfDirectory:dist('pdf')}:{}),nativeSheetsDirectory:dist('sheets'),...(!creationOnly?{nativeSlidesDirectory:dist('slides'),slidesHost}:{}),localShellDirectory:dist('local-shell'),sheetsNative,sheetsPlanner:gateway.planWorkbookSave,sheetsPackageReader:gateway.readWorkbookPackage})
  browser=await launchTestBrowser()
 
- const frames=[]
+ const frames=[],exportsByType=new Map()
  const remoteImage='https://images.example/blue.webp'
  let attachedImagePath,attachedImageSheet
- const toolCall=(name,input)=>({tool_calls:[{index:0,id:'excel-'+name,type:'function',function:{name,arguments:JSON.stringify(input)}}]})
+ const toolCall=(name,input,id='excel-'+name)=>({tool_calls:[{index:0,id,type:'function',function:{name,arguments:JSON.stringify(input)}}]})
  const network=mockProviderNetwork(t,()=>{try{
   const {tools,messages}=JSON.parse(network.wire.toString())
   const content=messages.findLast(message=>message.role==='user')?.content
@@ -124,6 +125,18 @@ for(const mode of ['creation','no-word','all'])test(mode==='no-word'
     const create=tools.find(tool=>tool.function.name==='create_document')
     assert.deepEqual(create.function.parameters.properties.type.enum,['csv'])
     delta=toolCall('create_document',{title:'Office CSV probe'})
+   }
+  }else if(/Excel workspace export (xlsx|docx|pdf)/.test(prompt??'')){
+   const type=prompt.match(/Excel workspace export (xlsx|docx|pdf)/)[1]
+   const result=messages.at(-1)
+   const title='Office export '+type
+   if(result.role==='tool'){
+    const outcome=JSON.parse(result.content)
+    exportsByType.set(type,outcome)
+    delta={content:'Finished '+type+' export'}
+   }else{
+    assert.ok(tools.find(tool=>tool.function.name==='create_document')?.function.parameters.properties.type.enum.includes(type))
+    delta=toolCall('create_document',{type,title,...(type==='xlsx'?{}:{content:'<p>Quarterly revenue checkpoint</p>'})},'excel-create-'+type)
    }
   }else if(prompt?.includes('Excel WebP probe')){
    const results=messages.slice(messages.findLastIndex(message=>message.role==='user')+1)
@@ -266,7 +279,44 @@ for(const mode of ['creation','no-word','all'])test(mode==='no-word'
  }
  if(creationOnly){
   await probe('docx','chat-only')
-  await probe('xlsx','chat-only')
+  const workbook=await probe('xlsx','chat-only')
+  const source=files.xlsx
+  for(const type of ['xlsx','docx','pdf']){
+   if(type!=='xlsx')await page.getByText('tools.xlsx',{exact:true}).first().click()
+   const input=workbook.locator('textarea')
+   await input.click()
+   await input.fill('Excel workspace export '+type)
+   await workbook.getByRole('button',{name:'发送',exact:true}).click()
+   await expect(workbook.getByText('Finished '+type+' export',{exact:true})).toBeAttached({timeout:45000})
+   const outcome=exportsByType.get(type)
+   assert.ok(outcome&&!outcome.isError,JSON.stringify({type,outcome,loadErrors}))
+   const name='Office export '+type+'.'+type
+   assert.ok(outcome.output.includes(name),outcome.output)
+   const exports=(await f.files.listFiles(f.alice.token)).files.filter(entry=>entry.name===name)
+   assert.equal(exports.length,1)
+   const {file:saved}=await f.files.openFile(f.alice.token,exports[0].id)
+   assert.notEqual(saved.fileId,source.fileId)
+   await expect(page).toHaveURL(url=>url.origin===origin&&url.hash==='#/file/'+saved.fileId)
+   const opened=page.frameLocator(`iframe[data-document-id="${saved.fileId}"]`)
+   await expect(opened.locator('html')).toHaveAttribute('data-document-loading','ready',{timeout:30000})
+   if(type==='xlsx')await expect(opened.locator('main.app-shell:not([inert])')).toBeVisible()
+   const bytes=await f.files.readFile(f.alice.token,saved.fileId,saved.revision)
+   if(type==='pdf'){
+    const {readPdfLeafObjects}=await import('../../../pdf/src/main/text-edit.ts')
+    assert.ok((await readPdfLeafObjects(bytes)).some(leaf=>leaf.text==='Quarterly revenue checkpoint'))
+   }else{
+    const archive=await JSZip.loadAsync(bytes)
+    if(type==='docx')assert.match(await archive.file('word/document.xml').async('string'),/Quarterly revenue checkpoint/)
+    else{
+     const sheet=await archive.file('xl/worksheets/sheet1.xml').async('string')
+     assert.match(sheet,/<c r="A1"[^>]*><is><t\b[^>]*>Revenue<\/t><\/is><\/c>/)
+     assert.match(sheet,/<c r="B2"[^>]*><v>25<\/v><\/c>/)
+     assert.doesNotMatch(sheet,/<f[\s>]/)
+    }
+   }
+  }
+  assert.equal((await f.files.openFile(f.alice.token,source.fileId)).file.revision,source.revision)
+  assert.deepEqual(await f.files.readFile(f.alice.token,source.fileId,source.revision),sources.find(([format])=>format==='xlsx')[1])
   await probe('docx','direct',{direct:true})
   const directWorkbook=await probe('xlsx','direct',{direct:true})
   const downloads=[]
