@@ -352,13 +352,29 @@ for(const creationOnly of [true,false])test(creationOnly
   assert.deepEqual([png.width,png.height,...png.data.subarray(0,4)],expectedPixels[index])
  }
  for(const [index,image] of images.entries())assertImage(await sheetsNative.readMedia(output,image.id),index)
- const reopened=images.map(image=>page.waitForResponse(response=>{
-  if(!response.ok()||!new URL(response.url()).pathname.endsWith('/sheets/media'))return false
-  const request=response.request().postDataJSON()
-  return request.revision===revision&&request.visualId===image.id
- }))
- await page.reload()
- for(const [index,response] of (await Promise.all(reopened)).entries())assertImage(await response.json(),index)
+ // Only accept media requested by the reopened document, and read each body
+ // as soon as its response arrives; Chromium can discard bodies on navigation.
+ let reloadCommitted=false
+ const trackReload=frame=>{if(frame===page.mainFrame())reloadCommitted=true}
+ const mediaRequests=new WeakSet()
+ const trackMedia=request=>{
+  if(reloadCommitted&&request.method()==='POST'&&request.url()===`${origin}/api/v1/files/${source.fileId}/sheets/media`)mediaRequests.add(request)
+ }
+ page.on('framenavigated',trackReload)
+ page.on('request',trackMedia)
+ try{
+  const reopened=images.map(image=>page.waitForResponse(response=>{
+   const request=response.request()
+   if(!response.ok()||!mediaRequests.has(request))return false
+   const payload=request.postDataJSON()
+   return payload.revision===revision&&payload.visualId===image.id
+  }).then(response=>response.json()))
+  const [media]=await Promise.all([Promise.all(reopened),page.reload()])
+  for(const [index,result] of media.entries())assertImage(result,index)
+ }finally{
+  page.off('request',trackMedia)
+  page.off('framenavigated',trackReload)
+ }
  assert.equal(await head(),revision)
  assert.deepEqual(await f.files.readFile(f.alice.token,source.fileId,source.revision),original)
  await probe('pptx','configured',{configured:true})
