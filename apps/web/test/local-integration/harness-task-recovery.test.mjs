@@ -1,5 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import {fork} from 'node:child_process'
+import {once} from 'node:events'
 import {buildLocalApp} from '../../server/src/app.ts'
 import {createCsrfService} from '../../server/src/modules/auth/csrf.ts'
 import {fileFixture,docxBytes,importFile} from '../helpers/files.mjs'
@@ -127,4 +129,65 @@ test('recovering a document Harness task rechecks a real login and current file 
   (await c.query('SELECT 1 FROM harness_task_recovery WHERE file_id=$1',[file.fileId])).rowCount),0)
  await f.sessions.logout(f.alice.token)
  assert.equal((await status()).statusCode,401)
+})
+
+test('a killed API leaves finished Harness work recoverable and never replays interrupted work',{timeout:65000},async t=>{
+ const f=await fileFixture(t,{buildApp:false}),{file}=await importFile(f,f.alice.token,await docxBytes())
+ const csrf=createCsrfService({db:f.db,deploymentId:f.deploymentId,origin:restrictedOrigin,key:f.csrfKey})
+ const headers={cookie:'__Host-dyoffice-session='+f.alice.token,'x-csrf-token':csrf.sessionToken(f.alice.token),origin:restrictedOrigin,'content-type':'application/json'}
+ const start=async()=>{
+  const child=fork(new URL('../helpers/harness-recovery-process.mjs',import.meta.url),[],{execArgv:['--import','tsx'],stdio:['ignore','ignore','inherit','ipc']})
+  const exit=once(child,'exit'),execution=[]
+  const stop=async()=>{if(child.exitCode===null&&child.signalCode===null)child.kill('SIGKILL');return exit}
+  f.cleanup.unshift(stop)
+  child.on('message',message=>{if(message.phase==='execution')execution.push(message.instruction)})
+  const ready=once(child,'message',{signal:AbortSignal.timeout(15000)})
+  child.send({auth:f.urls.auth,business:f.urls.business,deploymentId:f.deploymentId,csrfKey:f.csrfKey,directory:f.directory})
+  const [message]=await Promise.race([ready,exit.then(()=>{throw Error('Harness API fixture exited before listen')})])
+  assert.equal(message.phase,'ready')
+  return {execution,stop,request:(path,body)=>fetch(message.origin+path,{headers,method:body===undefined?'GET':'POST',
+    ...(body===undefined?{}:{body:JSON.stringify(body)}),signal:AbortSignal.timeout(10000)})}
+ }
+ const endpoint='/api/v1/agents/tasks'
+ const complete='crash-complete',interrupted='crash-interrupted',instruction='Calculate the fixture total'
+ const checkpoint={userIndex:0,turns:0,executedCalls:[],messages:[{role:'user',text:instruction},{role:'assistant',text:'',toolCalls:[{id:'crash-call',name:'delegate_agent_task',input:{instruction}}]}]}
+ const body=(turnId,instruction,continuation)=>({turnId,documentId:file.fileId,modelId:'fixture',...(continuation?{continuation:{revision:file.revision,checkpoint}}:{}),
+  request:{system:'',tools:[],messages:[{role:'user',text:JSON.stringify({instruction,officeModelId:'fixture'})}]}})
+ const status=async(api,id)=>{
+  const response=await api.request(`${endpoint}/${id}/status?documentId=${file.fileId}`)
+  assert.equal(response.status,200);return response.json()
+ }
+ const original=await start(),completedBody=body(complete,instruction,true),interruptedBody=body(interrupted,'Wait for interruption')
+ const completed=await original.request(endpoint,completedBody)
+ assert.equal(completed.status,200)
+ const reply=(await completed.text()).match(/event: delta\ndata: (.+)/)
+ assert.ok(reply,'Harness output was delivered before the crash')
+ assert.deepEqual(JSON.parse(JSON.parse(reply[1]).text),{summary:'Calculated',output:'42'})
+ const running=await original.request(endpoint,interruptedBody),reader=running.body.getReader(),decoder=new TextDecoder()
+ let text=''
+ while(!text.includes('Waiting for interruption')){
+  const part=await reader.read();assert.equal(part.done,false);text+=decoder.decode(part.value,{stream:true})
+ }
+ // The execution notifications use IPC while the output uses HTTP; either can arrive first.
+ const notified=Date.now()+2000
+ while(original.execution.length<2&&Date.now()<notified)await new Promise(resolve=>setTimeout(resolve,20))
+ assert.deepEqual(original.execution,[instruction,'Wait for interruption'])
+ const finished=await status(original,complete)
+ assert.equal(finished.state,'succeeded');assert.equal(finished.hasContinuation,true)
+ assert.equal((await status(original,interrupted)).state,'running')
+ assert.deepEqual(await original.stop(),[null,'SIGKILL'])
+ await reader.cancel().catch(()=>{})
+ const restarted=await start()
+ assert.deepEqual(await status(restarted,complete),finished)
+ const claim=await restarted.request(`${endpoint}/${complete}/continuation`,{documentId:file.fileId,revision:file.revision,modelId:'fixture',defer:true})
+ assert.equal(claim.status,200);assert.deepEqual((await claim.json()).checkpoint,checkpoint)
+ // Let the actual database lease expire; the killed process cannot renew it.
+ const deadline=Date.now()+32000
+ let lost=await status(restarted,interrupted)
+ while(lost.state==='running'&&Date.now()<deadline){
+  await new Promise(resolve=>setTimeout(resolve,250));lost=await status(restarted,interrupted)
+ }
+ assert.equal(lost.state,'unknown_outcome');assert.equal(lost.hasContinuation,false);assert.equal(lost.result,undefined)
+ for(const payload of [completedBody,interruptedBody])assert.match(await (await restarted.request(endpoint,payload)).text(),/event: error/)
+ assert.deepEqual(restarted.execution,[])
 })
