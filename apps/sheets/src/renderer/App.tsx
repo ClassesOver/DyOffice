@@ -211,6 +211,7 @@ import {
   type SheetsSkillDeps,
 } from './ai/tools'
 import { scopeLabel, type AiChatMessage } from './ai/AiChatPanel'
+import { createChatStore } from './ai/chat-store'
 import { pruneFailedExchange } from './ai/retry-prune'
 import { parseSheetNavHref } from './ai/sheet-nav'
 import {
@@ -1525,7 +1526,9 @@ export function App({
   const [aiBusy, setAiBusy] = useState(false)
   // Display history survives restarts via localStorage; the AgentLoop's model
   // context does not, so restored turns are read-only transcript.
-  const [chat, setChat] = useState<readonly AiChatMessage[]>([])
+  // Chat lives in a store read by the chat panel only; see ai/chat-store.ts.
+  const chatStore = useMemo(createChatStore, [])
+  const setChat = chatStore.set
   const freshChatRef = useRef(true)
   /** History loaded from project-store (read-only transcript, not fed to the model) */
   const [historicChat, setHistoricChat] = useState<readonly AiChatMessage[]>([])
@@ -4401,7 +4404,7 @@ export function App({
     const agentConfigured = isAgentConfigured()
     // Retry re-sends in place: drop the failed bubble and its error reply instead
     // of stacking a "Not sent" duplicate above the resent copy.
-    const alreadyPersisted = retryIndex !== undefined && chat[retryIndex]?.persisted === true
+    const alreadyPersisted = retryIndex !== undefined && chatStore.get()[retryIndex]?.persisted === true
     if (retryIndex !== undefined) {
       setChat((previous) => pruneFailedExchange(previous, retryIndex))
     }
@@ -4411,7 +4414,7 @@ export function App({
     // a retry quotes what the failed message quoted; a fresh send the live scope runAgent freezes for the run
     const scope =
       retryIndex !== undefined
-        ? chat[retryIndex]?.scope
+        ? chatStore.get()[retryIndex]?.scope
         : aiScope && !aiScopeDismissed
           ? { label: scopeLabel(aiScope.a1, aiScope.columns ?? null, t) }
           : undefined
@@ -6541,7 +6544,7 @@ export function App({
         onDismissEmptyCsvNotice={() => setEmptyCsvNotice(false)}
         aiBusy={aiBusy}
         {...(sessionUsage !== undefined ? { sessionUsage } : {})}
-        chat={chat}
+        chatStore={chatStore}
         historicChat={historicChat}
         attachments={attachments}
         attachedSkills={attachedSkills}

@@ -84,6 +84,7 @@ import type {
   WorkbookQueriesResult,
 } from '../shared/desktop-api'
 import { AiChatPanel, type AiChatMessage } from './ai/AiChatPanel'
+import { ChatFromStore, type ChatStore } from './ai/chat-store'
 import { AiSelectionAsk } from './ai/AiSelectionAsk'
 import type { SelectionAskAnchor } from './ai/selection-ask'
 import {
@@ -257,7 +258,8 @@ interface ExcelShellProps {
   readonly aiBusy: boolean
   /** tokens billed across the session, shown beside the composer */
   readonly sessionUsage?: AiTokenUsageView
-  readonly chat: readonly AiChatMessage[]
+  /** streamed chat messages; only the chat panel subscribes (see ai/chat-store.ts) */
+  readonly chatStore: ChatStore
   readonly historicChat?: readonly AiChatMessage[]
   /// Chat attachments (chips + 📎 button + drag-and-drop), same structure as the
   /// docs/slides AI panels.
@@ -503,7 +505,7 @@ export function ExcelShell({
   sheetHasContent,
   aiBusy,
   sessionUsage,
-  chat,
+  chatStore,
   historicChat,
   attachments,
   attachedSkills,
@@ -1054,7 +1056,7 @@ export function ExcelShell({
 
       {/* AI panel docks on the left, full height under the ribbon (unified with docs) */}
       <div className="sheet-body">
-        {assistantAvailable && <AiChatPanel
+        {assistantAvailable && <ChatFromStore store={chatStore}>{(chat) => <AiChatPanel
           assistantWorkspace={assistantWorkspace}
           modelPicker={modelPicker}
           assistantAgents={assistantAgents}
@@ -1093,7 +1095,7 @@ export function ExcelShell({
           onCitation={onAiCitation}
           onExpand={() => setIsCopilotOpen(true)}
           onCollapse={() => setIsCopilotOpen(false)}
-        />}
+        />}</ChatFromStore>}
         <div className="sheet-main">
           <section className="workbook-area">
             <div id="univer-container" className="spreadsheet" />
