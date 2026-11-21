@@ -15,11 +15,22 @@ export interface EgressScope extends Omit<EgressProfile,'allowedIpv4'> {
 }
 const fail=()=>new Error('Provider transport unavailable')
 const profileFields=['deploymentId','entryId','revision','providerId','model','baseUrl','endpoint'] as const
+// IANA IPv4 special-purpose registry (RFC 6890 and successors): every block
+// that is not globally routable, plus multicast and reserved space. Blocking
+// whole first octets (all of 100/8, 169/8, 192/8, 198/8, 203/8) also rejected
+// ordinary public provider addresses.
+const NON_GLOBAL_IPV4:readonly (readonly [number,number])[]=[
+ ['0.0.0.0',8],['10.0.0.0',8],['100.64.0.0',10],['127.0.0.0',8],['169.254.0.0',16],['172.16.0.0',12],
+ ['192.0.0.0',24],['192.0.2.0',24],['192.31.196.0',24],['192.52.193.0',24],['192.88.99.0',24],['192.168.0.0',16],
+ ['192.175.48.0',24],['198.18.0.0',15],['198.51.100.0',24],['203.0.113.0',24],['224.0.0.0',4],['240.0.0.0',4],
+].map(([base,bits])=>[ipv4Number(base as string),bits as number] as const)
+function ipv4Number(address:string):number {
+ return address.split('.').reduce((value,part)=>value*256+Number(part),0)
+}
 export function publicIpv4(address:string):boolean {
  if(isIP(address)!==4)return false
- const [first=0,second=0]=address.split('.').map(Number)
- return first>0&&first<224&&![10,100,127,169,192,198,203].includes(first)
-   && !(first===172&&second>=16&&second<=31)
+ const value=ipv4Number(address)
+ return !NON_GLOBAL_IPV4.some(([base,bits])=>Math.floor(value/2**(32-bits))===Math.floor(base/2**(32-bits)))
 }
 function url(value:string):URL {
  const u=new URL(value)
