@@ -2,12 +2,12 @@ import type {SettingsRequest} from '../../../../packages/browser-host/src/prefer
 import type {PendingImageInsert} from './pdf-image-drafts'
 import type {PdfTextInsert} from '../shell/pdf-preview-skill'
 import type {PdfImageOperation,PdfImageContentOperation} from '../shell/pdf-preview-skill'
-import {inspectPdfImageDraftBytes} from './pdf-image-draft-pixels'
+import {base64ByteSize,inspectPdfImageDraftBytes} from './pdf-image-draft-pixels'
 import type {createPdfPendingSession} from './pdf-pending-session'
 import {queryPdfPendingPreview} from './pdf-pending-preview'
 export type PdfSavedImageOperation=PdfImageOperation|Extract<PdfImageContentOperation,{op:'replace_image'}>
 const clone=<T>(value:T):T=>structuredClone(value)
-const bytes=(operations:readonly PdfSavedImageOperation[])=>operations.reduce((sum,operation)=>sum+(operation.op==='replace_image'?operation.image.base64.length/4*3-(operation.image.base64.endsWith('==')?2:operation.image.base64.endsWith('=')?1:0):0),0)
+const bytes=(operations:readonly PdfSavedImageOperation[])=>operations.reduce((sum,operation)=>sum+(operation.op==='replace_image'?base64ByteSize(operation.image.base64):0),0)
 export function createPdfSavedImageDrafts({fileId,request,getRevision,isReady,onChange,session,getOtherDrafts=()=>({texts:[],images:[]})}:{fileId:string;request:SettingsRequest;getRevision:()=>string;isReady:()=>boolean;onChange:()=>void;session?:ReturnType<typeof createPdfPendingSession>;getOtherDrafts?:()=>{texts:readonly PdfTextInsert[];images:readonly PendingImageInsert[]}}){
  let operations:PdfSavedImageOperation[]=[],history:PdfSavedImageOperation[][]=[],revision='',busy=false,generation=0
  function check(){

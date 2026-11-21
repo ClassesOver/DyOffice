@@ -1,12 +1,9 @@
 import {preservePdfManagedStamps} from './stamps-job.mjs'
 import {createHash} from 'node:crypto'
-import {createRequire} from 'node:module'
-import {dirname,join,sep} from 'node:path'
 import {EncryptedPDFError,PDFArray,PDFDict,PDFDocument,PDFName} from 'pdf-lib'
-import {PDF_OPEN_OPTIONS} from '../../../src/editors/pdf-csp.ts'
+import {pdfjsDocumentParams} from './pdfjs-open.mjs'
 
 const MAX_BYTES=64*1024*1024,MAX_REQUEST=64*1024
-const require=createRequire(import.meta.url)
 const hash=bytes=>createHash('sha256').update(bytes).digest('hex')
 function fail(code){throw Object.assign(new Error(code),{code})}
 function check(signal){if(signal?.aborted)fail('ABORTED')}
@@ -61,8 +58,7 @@ async function editableDocument(bytes){
 
 async function locate(bytes,operation){
  const {getDocument}=await import('pdfjs-dist/legacy/build/pdf.mjs')
- const root=dirname(require.resolve('pdfjs-dist/package.json'))
- const task=getDocument({data:Uint8Array.from(bytes),...PDF_OPEN_OPTIONS,cMapUrl:join(root,'cmaps')+sep,cMapPacked:true,standardFontDataUrl:join(root,'standard_fonts')+sep})
+ const task=getDocument(pdfjsDocumentParams(bytes))
  try{
   const doc=await task.promise
   if(operation.page>doc.numPages)fail('PDF_TEXT_NOT_FOUND')
@@ -101,7 +97,7 @@ async function locate(bytes,operation){
  }finally{await task.destroy()}
 }
 
-const safetyCodes=new Set(['MAGIC_MISMATCH','PASSWORD','UNREADABLE','PDF_EDIT_LIMIT','SIGNATURE_EDIT_REFUSED','PDF_EDIT_UNSUPPORTED_STRUCTURE','PDF_TEXT_NOT_FOUND','PDF_TEXT_EDIT_REFUSED','PDF_TEXT_VERIFY_FAILED','OUTPUT_LIMIT'])
+export const pdfTextEditSafetyCodes=new Set(['MAGIC_MISMATCH','PASSWORD','UNREADABLE','PDF_EDIT_LIMIT','SIGNATURE_EDIT_REFUSED','PDF_EDIT_UNSUPPORTED_STRUCTURE','PDF_TEXT_NOT_FOUND','PDF_TEXT_EDIT_REFUSED','PDF_TEXT_VERIFY_FAILED','OUTPUT_LIMIT'])
 
 /** Private byte processor only. The authorized host must enforce process/resource
  * isolation and lease/base-revision fencing. Abort suppresses the result at await
@@ -131,7 +127,7 @@ export function createPdfTextEditJob(){
    await editableDocument(bytes);check(signal)
    const preserved=await preservePdfManagedStamps(original,bytes);
    return {bytes:preserved,inputSha256,sha256:hash(preserved),size:preserved.length}
-  }catch(error){check(signal);if(safetyCodes.has(error?.code))fail(error.code);fail('NATIVE_FAILED')}
+  }catch(error){check(signal);if(pdfTextEditSafetyCodes.has(error?.code))fail(error.code);fail('NATIVE_FAILED')}
   finally{busy=false}
  }}
 }

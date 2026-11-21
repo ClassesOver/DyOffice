@@ -1,14 +1,12 @@
 import {preservePdfManagedStamps} from './stamps-job.mjs'
 import {createHash} from 'node:crypto'
-import {createRequire} from 'node:module'
-import {dirname,join,sep} from 'node:path'
 import {EncryptedPDFError,PDFDocument} from 'pdf-lib'
 import {openPdfForPendingEdits} from './pending-document.mjs'
 import {assertPdfInsertFormPreserved} from './insert-form-integrity.mjs'
-import {PDF_OPEN_OPTIONS} from '../../../src/editors/pdf-csp.ts'
+import {pdfjsDocumentParams} from './pdfjs-open.mjs'
 import {pdfRectToCss,viewToPdf,geomDispSize} from '../../../../pdf/src/renderer/annotations.ts'
 import {concatMat,transformRect} from '../../../../pdf/src/main/form-text.ts'
-const require=createRequire(import.meta.url),MAX_BYTES=64*1024*1024
+const MAX_BYTES=64*1024*1024
 const hash=bytes=>createHash('sha256').update(bytes).digest('hex')
 function fail(code){throw Object.assign(new Error(code),{code})}
 function check(signal){if(signal?.aborted)fail('ABORTED')}
@@ -49,7 +47,7 @@ async function readable(bytes){
 export async function catalog(bytes,signal){
  await readable(bytes);check(signal)
  const {listPageImages}=await import('../../../../pdf/src/main/image-edit.ts'),refs=await listPageImages(bytes);if(refs.length>1000)fail('PDF_EDIT_LIMIT');check(signal)
- const {getDocument}=await import('pdfjs-dist/legacy/build/pdf.mjs'),root=dirname(require.resolve('pdfjs-dist/package.json')),task=getDocument({data:Uint8Array.from(bytes),...PDF_OPEN_OPTIONS,cMapUrl:join(root,'cmaps')+sep,cMapPacked:true,standardFontDataUrl:join(root,'standard_fonts')+sep})
+ const {getDocument}=await import('pdfjs-dist/legacy/build/pdf.mjs'),task=getDocument(pdfjsDocumentParams(bytes))
  try{
   const doc=await task.promise,entries=[],geometries=new Map()
   for(let pageNumber=1;pageNumber<=doc.numPages;pageNumber++){

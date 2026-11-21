@@ -52,7 +52,8 @@ export interface PdfPendingPlan {
  readonly failures:readonly {readonly index:number;readonly error:string}[]
 }
 function fail(message:string):never{throw Error(message)}
-function freeze<T>(value:T):T{
+/** Recursively freezes a plain value tree in place. */
+export function freeze<T>(value:T):T{
  if(value&&typeof value==='object'){for(const child of Object.values(value))freeze(child);Object.freeze(value)}
  return value
 }

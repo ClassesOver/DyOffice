@@ -1,13 +1,10 @@
 import {preservePdfManagedStamps} from './stamps-job.mjs'
 import {createHash} from 'node:crypto'
-import {createRequire} from 'node:module'
-import {dirname,join,sep} from 'node:path'
 import {PDFArray,PDFDict,PDFName} from 'pdf-lib'
 import {openEditablePdf} from './editable-document.mjs'
-import {PDF_OPEN_OPTIONS} from '../../../src/editors/pdf-csp.ts'
+import {pdfjsDocumentParams} from './pdfjs-open.mjs'
 
 const MAX_BYTES=64*1024*1024,MAX_REQUEST=64*1024
-const require=createRequire(import.meta.url)
 const hash=bytes=>createHash('sha256').update(bytes).digest('hex')
 const subtypes={highlight:'Highlight',underline:'Underline',strikeout:'StrikeOut',note:'Text'}
 function fail(code){throw Object.assign(new Error(code),{code})}
@@ -44,8 +41,7 @@ export function parsePdfAnnotationRequest(raw){
 
 async function locateAnnotations(bytes,operations,signal){
  const {getDocument}=await import('pdfjs-dist/legacy/build/pdf.mjs')
- const root=dirname(require.resolve('pdfjs-dist/package.json'))
- const task=getDocument({data:Uint8Array.from(bytes),...PDF_OPEN_OPTIONS,cMapUrl:join(root,'cmaps')+sep,cMapPacked:true,standardFontDataUrl:join(root,'standard_fonts')+sep})
+ const task=getDocument(pdfjsDocumentParams(bytes))
  try{
   const doc=await task.promise,located=[]
   for(const operation of operations){

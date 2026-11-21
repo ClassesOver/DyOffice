@@ -18,9 +18,8 @@
 @media(max-width:640px){.background-columns{grid-template-columns:1fr}.background-workspace header{align-items:flex-start;flex-direction:column}}
 
 .background-service-address{display:flex;flex-direction:column;gap:6px;margin:12px 0}
-.background-service-address input,.background-invitation textarea{box-sizing:border-box;width:100%;min-width:0;padding:8px;border:1px solid var(--line,#dedede);border-radius:6px;background:var(--bg,#fff);color:inherit}
+.background-service-address input,.background-invitation textarea{box-sizing:border-box;width:100%;min-width:0;padding:8px;border:1px solid var(--border-subtle);border-radius:6px;background:var(--surface);color:inherit}
 .background-invitation details{margin-top:12px}.background-invitation textarea{margin-top:8px;resize:vertical}.background-invitation li{margin:6px 0}
-.personal-settings-b .background-workspace{padding:0}
 
 .background-workspace{color:var(--text-primary,#262626);font-size:13px}
 .background-workspace button{font:inherit;min-height:34px;border-color:var(--border-subtle,#dedede);background:var(--surface,#fff);transition:background .15s,border-color .15s}
@@ -43,14 +42,8 @@
 .background-task-list article,.background-task-detail{border-color:var(--border-subtle,#e5e7eb);background:var(--surface,#fff);padding:20px}
 .background-task-list small{color:var(--text-secondary,#626a78)}
 .background-result{padding:16px;background:var(--surface-subtle,#f6f7fa);border-radius:8px;line-height:1.8}
-.personal-settings-b .background-workspace>header h2{display:none}
-.personal-settings-b .background-workspace>header{border:0;padding-bottom:4px}
 @media(max-width:640px){.background-columns{grid-template-columns:1fr}.background-columns article,.background-task-list article,.background-task-detail{padding:14px}.background-invitation{padding:12px}}
 
-.personal-settings-b .background-workspace button{height:36px;padding:0 14px;border-radius:7px;font-size:12px}
-.personal-settings-b .background-columns article{padding:0 0 0 16px;border:0;border-left:1px solid var(--border-subtle);border-radius:0}
-.personal-settings-b .background-invitation,.personal-settings-b .background-task-list article,.personal-settings-b .background-task-detail{border-radius:8px}
-@media(max-width:640px){.personal-settings-b .background-columns article{padding:16px 0 0;border-left:0;border-top:1px solid var(--border-subtle)}}
 
 .workspace-config-modal .background-workspace{padding:24px 34px}
 .workspace-config-modal .background-workspace>header h2{display:none}

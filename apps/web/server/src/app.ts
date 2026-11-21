@@ -166,10 +166,9 @@ export async function buildLocalApp(config: LocalWebConfig): Promise<FastifyInst
   if (config.nativeSlidesDirectory && typeof config.slidesHost?.openSession !== 'function') throw new Error('Native slides require a session host')
   if (config.nativePdfDirectory && !config.objectStore) throw new Error('Native PDF requires File API')
   if (config.slidesHost && !config.objectStore) throw new Error('Native slides sessions require File API')
-  const nativeSheets = config.nativeSheetsDirectory ? await createRefreshableStaticAssets({assetMode:'built',assetDirectory:config.nativeSheetsDirectory,pages:['index.html'],assetInventory:'.vite/native-assets.json',cacheControl:'private, no-store'}) : undefined
-  const nativeSlides = config.nativeSlidesDirectory ? await createRefreshableStaticAssets({assetMode:'built',assetDirectory:config.nativeSlidesDirectory,pages:['index.html'],assetInventory:'.vite/native-assets.json',cacheControl:'private, no-store'}) : undefined
-  const nativePdf = config.nativePdfDirectory ? await createRefreshableStaticAssets({assetMode:'built',assetDirectory:config.nativePdfDirectory,pages:['index.html'],assetInventory:'.vite/native-assets.json',cacheControl:'private, no-store'}) : undefined
-  const nativeDocs = config.nativeDocsDirectory ? await createRefreshableStaticAssets({ assetMode: 'built',assetDirectory: config.nativeDocsDirectory,pages: ['index.html'],assetInventory: '.vite/native-assets.json',cacheControl: 'private, no-store' }) : undefined
+  // The four native editor bundles are independent; load their asset inventories concurrently.
+  const nativeEditorAssets = (assetDirectory: string | undefined) => assetDirectory ? createRefreshableStaticAssets({assetMode:'built',assetDirectory,pages:['index.html'],assetInventory:'.vite/native-assets.json',cacheControl:'private, no-store'}) : undefined
+  const [nativeSheets, nativeSlides, nativePdf, nativeDocs] = await Promise.all([config.nativeSheetsDirectory, config.nativeSlidesDirectory, config.nativePdfDirectory, config.nativeDocsDirectory].map(nativeEditorAssets))
   const passwords = config.passwords ?? await createPasswordService({ blockedPasswords: await loadPasswordBlocklist(config.passwordBlocklistFile) })
   const accounts = createAccountService({ db: config.db, passwords, deploymentId: config.deploymentId })
   const sessions = createSessionService({ db: config.db, accounts, deploymentId: config.deploymentId, idleMs: config.idleMs, absoluteMs: config.absoluteMs })
