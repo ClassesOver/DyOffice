@@ -35,7 +35,8 @@ export function registerFileRoutes(app: FastifyInstance, files: FileService, ses
           const length = request.headers['content-length']
           if (length !== undefined && (!/^\d+$/.test(length) || Number(length) !== upload.size)) throw authError(400)
         }
-        admission.admit(request, reply)
+        // Briefly wait for reads to finish before receiving a staged upload body.
+        await admission.admit(request, reply, request.method === 'PUT' ? { waitMs: 2_000 } : undefined)
       }
     })
     api.addHook('onResponse', async request => admission.close(request))
