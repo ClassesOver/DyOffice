@@ -210,10 +210,12 @@ async function restore(){
  if(identity.deploymentId && !documentTabs.documents().length){
   let storage:Storage|undefined;try{storage=window.sessionStorage}catch{}
   entryRecovery=storage?createEntryRecovery(storage,identity.deploymentId,user.id):undefined
-  const restored=await resolveEntrySnapshot(entryRecovery?.read()??{ids:[],active:'home'},parseEntryHash(location.hash),async id=>resolvedDocument(capabilities,id,await bound.request(`/api/v1/files/${encodeURIComponent(id)}`)))
+  const restoringHash=location.hash
+  const restored=await resolveEntrySnapshot(entryRecovery?.read()??{ids:[],active:'home'},parseEntryHash(restoringHash),async id=>resolvedDocument(capabilities,id,await bound.request(`/api/v1/files/${encodeURIComponent(id)}`)))
   documentTabs.restoreEntries(restored.entries,restored.active)
   entryRecoveryNotice=restored.failed?'部分文档入口无法恢复，请从最近文件重新打开。未保存内容不会由入口恢复。':''
-  history.replaceState(null,'',entryHash(restored.active))
+  // Let the Shell resolve a newer route instead of normalizing it back to the snapshot.
+  if(location.hash===restoringHash)history.replaceState(null,'',entryHash(restored.active))
  }
  installBridge()
 }
@@ -292,17 +294,6 @@ function Shell({recovery=false}:{recovery?:boolean}){
  showChromeMenu=(kind,x,y,id)=>setChromeMenu({kind,x,y,id})
  const routeNavigation=useRef(false)
  useEffect(()=>{
-  const changed=(next:ReturnType<typeof documentTabs.list>)=>{
-   setTabs(next)
-   const active=next.find(tab=>tab.active)?.id??'home'
-   entryRecovery?.save(next.filter(tab=>tab.id!=='home').map(tab=>tab.id),active)
-   const hash=entryHash(active)
-   if(location.hash!==hash)history[routeNavigation.current?'replaceState':'pushState'](null,'',hash)
-  }
-  changed(documentTabs.list())
-  return documentTabs.subscribe(changed)
- },[])
- useEffect(()=>{
   const dragover=(event:DragEvent)=>{if(event.dataTransfer?.types.includes('Files'))event.preventDefault()}
   const drop=(event:DragEvent)=>{if(event.target instanceof Element&&event.target.closest('.workspace-upload-modal'))return;const files=[...(event.dataTransfer?.files??[])];if(!files.length)return;event.preventDefault();if(!document.querySelector('.workspace-upload-modal'))showUpload(files)}
   window.addEventListener('dragover',dragover);window.addEventListener('drop',drop,true)
@@ -313,13 +304,36 @@ function Shell({recovery=false}:{recovery?:boolean}){
  const [settingsTab,setSettingsTab]=useState('account')
  useEffect(()=>{if(page!=='settings')setSettingsTab('account')},[page])
  useEffect(()=>{
+  const changed=(next:ReturnType<typeof documentTabs.list>)=>{
+   setTabs(next)
+   const active=next.find(tab=>tab.active)?.id??'home'
+   entryRecovery?.save(next.filter(tab=>tab.id!=='home').map(tab=>tab.id),active)
+   const hash=entryHash(active)
+   if(location.hash!==hash)history[routeNavigation.current?'replaceState':'pushState'](null,'',hash)
+  }
   const navigation=createEntryNavigator({tabs:documentTabs,resolve:resolveOpenDocument,
    allow:()=>!recoveryBlocked.current&&closeGuard.current?.()!==false,
    onStart:()=>setPage(null),onError:error=>setMessage((error as Error).message),
    replace:id=>history.replaceState(null,'',entryHash(id)),markRouting:value=>{routeNavigation.current=value}})
-  const navigate=()=>{void navigation.navigate(parseEntryHash(location.hash)??'home')}
+  let pendingInitialTarget:string|undefined
+  const navigate=()=>{
+   const target=parseEntryHash(location.hash)??'home'
+   if(target===pendingInitialTarget)return
+   pendingInitialTarget=undefined
+   void navigation.navigate(target)
+  }
   window.addEventListener('hashchange',navigate)
-  return()=>{navigation.dispose();window.removeEventListener('hashchange',navigate)}
+  const unsubscribe=documentTabs.subscribe(changed)
+  const currentTabs=documentTabs.list()
+  const target=parseEntryHash(location.hash)
+  // An explicit route can arrive after restore() and before this effect installs.
+  // Resolve it rather than writing the previous selection over it.
+  if(target&&location.hash===entryHash(target)&&target!==currentTabs.find(tab=>tab.active)?.id){
+   pendingInitialTarget=target
+   void navigation.navigate(target).finally(()=>{pendingInitialTarget=undefined})
+  }
+  else changed(currentTabs)
+  return()=>{unsubscribe();navigation.dispose();window.removeEventListener('hashchange',navigate)}
  },[])
  const activePage=useRef(page),recoveryBlocked=useRef(recovery)
  activePage.current=page;recoveryBlocked.current=recovery

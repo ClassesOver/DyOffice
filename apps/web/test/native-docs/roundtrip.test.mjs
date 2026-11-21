@@ -12,9 +12,10 @@ import { fileFixture, docxBytes, importFile } from '../helpers/files.mjs'
 import { password } from '../helpers/identity.mjs'
 import { phaseDiagnostics, observeFirstRequest } from '../helpers/phase-diagnostics.mjs'
 import { withInputDiagnostics } from '../helpers/input-diagnostics.mjs'
+import { holdFirstResponseEnd } from '../helpers/delayed-http-response.mjs'
 
 const docsDirectory = fileURLToPath(new URL('../../dist-docs/',import.meta.url))
-async function fixture(t, {beforeCleanup = () => {}, assistantChannels = false} = {}) {
+async function fixture(t, {beforeCleanup = () => {}, beforeHttpRequest = () => {}, assistantChannels = false} = {}) {
   const directory = await mkdtemp(join(tmpdir(),'dyoffice-native-docs-'))
   let f, browser, server
   t.after(async () => {
@@ -27,7 +28,10 @@ async function fixture(t, {beforeCleanup = () => {}, assistantChannels = false} 
   execFileSync('openssl',['req','-x509','-newkey','rsa:2048','-nodes','-keyout',join(directory,'key.pem'),'-out',join(directory,'cert.pem'),'-days','1','-subj','/CN=localhost'],{ stdio: 'pipe' })
   // HTTP-only persistence fixture: no WebSocket upgrade is attached. A reconnect
   // notice is expected and must not replace the independent save-state assertions.
-  server = createServer({ key: await readFile(join(directory,'key.pem')),cert: await readFile(join(directory,'cert.pem')) },(req,res) => f.app.routing(req,res))
+  server = createServer({ key: await readFile(join(directory,'key.pem')),cert: await readFile(join(directory,'cert.pem')) },(req,res) => {
+    beforeHttpRequest(req,res)
+    f.app.routing(req,res)
+  })
   await new Promise(resolve => server.listen(0,'127.0.0.1',resolve))
   const origin = `https://127.0.0.1:${server.address().port}`
   f = await fileFixture(t,{ origin,nativeDocsDirectory: docsDirectory,assistantChannels })
@@ -387,8 +391,19 @@ test('editing during a delayed native save keeps the newer draft dirty and saves
   const diagnostic = phaseDiagnostics(t.signal)
   t.after(() => diagnostic.dispose())
   try {
-  let requestDiagnostic
-  const f = await fixture(t, {beforeCleanup: () => requestDiagnostic?.beginCleanup()})
+  let requestDiagnostic, commitPath
+  // Pause the real authenticated server reply after the commit, without a
+  // Chromium route.fetch/fulfill replay of the TLS request or its response.
+  const held = holdFirstResponseEnd(
+    req => req.method === 'POST' && commitPath !== undefined && req.url === commitPath,
+    status => { diagnostic.count('commit-response-held'); diagnostic.status(status) },
+  )
+  const f = await fixture(t, {
+    beforeCleanup() { requestDiagnostic?.beginCleanup(); held.release() },
+    beforeHttpRequest(req,res) {
+      if (held.intercept(req,res)) diagnostic.count('commit-request')
+    },
+  })
   f.page.on('pageerror', () => diagnostic.count('pageerror'))
   requestDiagnostic = observeFirstRequest(f.page, diagnostic, {signal: t.signal})
   t.after(() => requestDiagnostic.dispose())
@@ -399,37 +414,37 @@ test('editing during a delayed native save keeps the newer draft dirty and saves
   await editor.waitFor({ timeout: 45_000 })
   diagnostic.stage('type-first')
   await editor.click(); await f.page.keyboard.press('Control+End'); await f.page.keyboard.press('Enter'); await f.page.keyboard.type('Captured snapshot')
-  let reached, release, firstRequest, first = true
-  const started = new Promise(resolve => { reached = resolve }), wait = new Promise(resolve => { release = resolve })
-  t.after(() => release())
-  diagnostic.stage('route-install')
-  await f.page.route('**/commits',async route => {
-    if (!first) return route.continue()
-    first = false
-    firstRequest = route.request()
-    requestDiagnostic.watch(firstRequest)
-    diagnostic.count('route-entered')
-    try {
-      diagnostic.count('fetch-started')
-      const response = await route.fetch()
-      diagnostic.count('fetch-resolved'); diagnostic.status(response.status())
-      reached(); await wait; await route.fulfill({ response })
-      diagnostic.count('fulfilled')
-    } catch (error) { diagnostic.count('route-error'); throw error }
-  })
+  commitPath = '/api/v1/files/' + f.opened.file.fileId + '/commits'
+  const matchesCommit = request => request.method() === 'POST' && request.url() === f.origin + commitPath
+  let firstRequest
+  const watch = request => {
+    if (!matchesCommit(request)) return
+    firstRequest = request
+    requestDiagnostic.watch(request)
+    f.page.off('request',watch)
+  }
+  f.page.on('request',watch)
+  t.after(() => f.page.off('request',watch))
   diagnostic.stage('first-save-key')
-  await f.page.keyboard.press('Control+s'); diagnostic.stage('first-commit-wait'); await started
+  await f.page.keyboard.press('Control+s')
+  diagnostic.stage('first-commit-wait')
+  assert.equal(await held.started,200)
+  assert.ok(firstRequest)
+  assert.equal(firstRequest.postDataJSON().baseRevision,f.opened.file.revision)
   diagnostic.stage('edit-newer')
   await editor.click(); await f.page.keyboard.press('Control+End'); await f.page.keyboard.press('Enter'); await f.page.keyboard.type('Newer unsaved draft')
   diagnostic.stage('read-first')
   const firstRef = await f.files.openFile(f.alice.token,f.opened.file.fileId)
+  assert.notEqual(firstRef.file.revision,f.opened.file.revision)
   const firstZip = await JSZip.loadAsync(await f.files.readFile(f.alice.token,firstRef.file.fileId,firstRef.file.revision))
-  assert.ok(!(await firstZip.file('word/document.xml').async('string')).includes('Newer unsaved draft'))
-  // The draft remains dirty while the first commit response is held.
-  // Wait for that exact response and native settlement before observing save two.
+  const firstXml = await firstZip.file('word/document.xml').async('string')
+  assert.ok(firstXml.includes('Captured snapshot'))
+  assert.ok(!firstXml.includes('Newer unsaved draft'))
+  // Wait for that exact response and check the native draft still remains
+  // dirty after settlement before observing save two.
   const firstResponse = f.page.waitForResponse(reply => reply.request() === firstRequest && reply.status() === 200)
   diagnostic.stage('release')
-  release()
+  held.release()
   diagnostic.stage('first-response-wait')
   const releasedResponse = await firstResponse
   diagnostic.stage('first-response-finished')
@@ -443,8 +458,10 @@ test('editing during a delayed native save keeps the newer draft dirty and saves
   await expect(f.page.locator('.dyoffice-docs-persistence-state')).toHaveAttribute('data-incomplete-reasons',/(^|,)document(,|$)/)
   await expect(editor).toContainText('Newer unsaved draft')
   diagnostic.stage('second-save-wait')
-  const next = f.page.waitForResponse(reply => reply.url().endsWith('/commits') && reply.request().method() === 'POST' && reply.request() !== firstRequest && reply.status() === 200)
-  await f.page.keyboard.press('Control+s'); await next
+  const next = f.page.waitForResponse(reply => matchesCommit(reply.request()) && reply.request() !== firstRequest && reply.status() === 200)
+  await f.page.keyboard.press('Control+s')
+  const latestResponse = await next
+  assert.equal(latestResponse.request().postDataJSON().baseRevision,firstRef.file.revision)
   diagnostic.stage('read-final')
   const current = await f.files.openFile(f.alice.token,f.opened.file.fileId)
   assert.notEqual(current.file.revision,firstRef.file.revision)

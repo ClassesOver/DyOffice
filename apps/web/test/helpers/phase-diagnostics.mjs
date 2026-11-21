@@ -1,6 +1,6 @@
 // Failure-only, synchronous snapshots. Never serialize browser objects or errors.
 const stages = new Set(['fixture','open','editor-ready','type-first','route-install','first-save-key','first-commit-wait','edit-newer','read-first','release','first-response-wait','first-response-finished','native-incomplete','native-dirty','dirty-assert','second-save-wait','read-final','login-fill','login-click','login-response','complete'])
-const counters = new Set(['attempt','request','response','failed','pageerror','route-entered','fetch-started','fetch-resolved','fulfilled','route-error','first-request-finished','first-request-failed','first-failure-aborted','first-failure-other','first-failure-unavailable'])
+const counters = new Set(['attempt','request','response','failed','pageerror','commit-request','commit-response-held','route-entered','fetch-started','fetch-resolved','fulfilled','route-error','first-request-finished','first-request-failed','first-failure-aborted','first-failure-other','first-failure-unavailable'])
 const events = new Set(['test-aborted','cleanup-started','request-finished','request-failed-before-abort','request-failed-after-abort','request-failed-during-cleanup'])
 export function phaseDiagnostics(signal, emit = line => console.error(line)) {
   let stage = 'fixture', printed = false
