@@ -86,8 +86,20 @@ test('ordinary database transport is the default without a configured database t
   for (const [kind,scheme,port] of [['postgres','postgresql',5432],['mysql','mysql',3306],['starrocks','starrocks',9030]]) {
     const dsn=scheme+'://reader:test-only@127.0.0.1:'+port+'/sales'
     const target={kind,endpoint:scheme+'://127.0.0.1:'+port,addresses:['127.0.0.1'],username:'reader',database:'sales',allowInsecure:false}
-    assert.equal((await createSourceEgressPolicy([],{allowUnlistedSql:true}).sql(kind,dsn)).tls,false)
+    // Without an approved database target, a user-entered host may reach only public addresses.
+    const publicDsn=dsn.replace('127.0.0.1','8.8.8.8')
+    assert.equal((await createSourceEgressPolicy([],{allowUnlistedSql:true}).sql(kind,publicDsn)).tls,false)
+    for (const host of ['127.0.0.1','10.0.0.5','172.16.3.4','192.168.1.10','100.64.0.1','169.254.169.254','[::1]','[fd00::1]','[fe80::1]','[::ffff:10.0.0.1]','[2001:db8::1]','[2002:a00:1::1]','localhost'])
+      await assert.rejects(createSourceEgressPolicy([],{allowUnlistedSql:true}).sql(kind,dsn.replace('127.0.0.1',host)),/not approved/,host)
+    // An administrator-approved private target stays reachable.
     assert.equal((await createSourceEgressPolicy([target],{allowUnlistedSql:true}).sql(kind,dsn)).tls,true)
     await assert.rejects(createSourceEgressPolicy([target],{allowUnlistedSql:true}).sql(kind,dsn.replace('/sales','/other')))
   }
+})
+
+test('public address helpers accept only globally routable unicast',async()=>{
+  const {publicAddress,publicIpv6}=await import('../../server/src/security/ip-ranges.ts')
+  for (const ip of ['8.8.8.8','203.208.40.1','192.30.255.112','2606:4700:4700::1111','2400:3200::1','2001:4860:4860::8888']) assert.equal(publicAddress(ip),true,ip)
+  for (const ip of ['127.0.0.1','10.1.1.1','100.64.0.1','::','::1','fc00::1','fd12:3456::1','fe80::1','ff02::1','::ffff:8.8.8.8','64:ff9b::808:808','2001:db8::1','2001::1','2002:808:808::1','not-an-ip']) assert.equal(publicAddress(ip),false,ip)
+  assert.equal(publicIpv6('2606:4700:4700::1111%eth0'),true)
 })

@@ -170,3 +170,14 @@ test('writer refuses a replaced or closed socket after authorization began',asyn
  await assert.rejects(tr.sendAuthorized(scope(),body,async write=>{n.sockets[0].destroyed=true;await write(Buffer.from('synthetic-key'))},()=>{}))
  assert.equal(n.written,undefined)
 })
+
+test('publicIpv4 rejects every IPv4 special-purpose range but not ordinary public neighbours',async()=>{
+  const {publicIpv4}=await import('../../server/src/modules/providers/pinned-egress.ts')
+  const reserved=['0.0.0.1','10.1.2.3','100.64.0.1','100.100.100.200','100.127.255.255','127.0.0.1','169.254.0.1','169.254.169.254','172.16.0.1','172.31.255.254',
+    '192.0.0.8','192.0.2.1','192.31.196.1','192.52.193.1','192.88.99.1','192.168.1.1','192.175.48.1','198.18.0.1','198.19.255.255','198.51.100.7','203.0.113.1',
+    '224.0.0.1','239.255.255.250','240.0.0.1','255.255.255.255','::ffff:8.8.8.8','1.2.3','01.2.3.4']
+  for(const address of reserved)assert.equal(publicIpv4(address),false,address)
+  // Same first octet as a reserved block, but globally routable.
+  const routable=['8.8.8.8','100.1.1.1','100.128.0.1','169.1.2.3','172.15.255.255','172.32.0.1','172.217.112.4','192.30.255.112','192.169.0.1','198.17.255.255','198.20.0.1','198.41.0.4','203.0.114.1','203.208.40.1','223.255.255.255']
+  for(const address of routable)assert.equal(publicIpv4(address),true,address)
+})

@@ -4,7 +4,9 @@
 
 ## 启用与回退
 
-在已有模型网关、数据源凭据密钥和连接配置的本地账号环境中，设置 `DYOFFICE_ASSISTANT_SOURCE_CATALOG=read-only-analysis` 并重启 Web。未设置时不提供直连工具；`metadata-only` 仍只列当前工作区启用的连接名称和标识。退回 `metadata-only` 或移除变量并重启后，服务端不再开放直接分析路由，模型网关也不再接受这些工具。重开编辑器可更新工具列表。回退不删除工作区已有数据结果。保存连接配置后，旧版本的临时结果不能继续读取或委派；已正式保存的数据结果仍按原有的工作区权限管理。
+默认开启：本地账号模式（`DYOFFICE_AUTH_MODE=local`）下，只要配置了模型网关（`DYOFFICE_PROVIDER_GATEWAY_PROFILES` 或 `DYOFFICE_CONFIG_KEYRING`）和数据源凭据密钥（`DYOFFICE_SOURCES_CREDENTIAL_KEYS`），未设置 `DYOFFICE_ASSISTANT_SOURCE_CATALOG` 时即按 `read-only-analysis` 启动；任一条件缺失则自动保持关闭，不影响启动。显式设置的值始终优先：`off` 关闭，`metadata-only` 只列当前工作区启用的连接名称和标识；显式设为非 `off` 而条件缺失时启动失败，并列出缺少的配置。判断集中在 `apps/web/server/assistant-source-mode.mjs`。设为 `metadata-only` 或 `off` 并重启后，服务端不再开放直接分析路由，模型网关也不再接受这些工具。
+
+未在管理员数据源出站白名单中的 SQL 主机只能解析到公网地址；企业内网数据库（例如客户 StarRocks）需先由管理员加入白名单。重开编辑器可更新工具列表。回退不删除工作区已有数据结果。保存连接配置后，旧版本的临时结果不能继续读取或委派；已正式保存的数据结果仍按原有的工作区权限管理。
 
 账号菜单的「数据连接」与「全局配置」使用同一套独立设置页面容器。打开连接后可切换「连接设置」「可见范围」「高级配置」。在「可见范围」读取保存后的连接，再勾选目录和表，可用手工输入补充。目录限定可访问的数据库或 Schema；表范围在这些目录里进一步筛选具体表。选择「仅指定」后未勾选任何项表示不开放，两项都设了限制时取交集。仅配置页可探查账号可读的候选项，Office 的目录、字段和查询仍按已保存的限制执行。MySQL 和 StarRocks 的候选目录限定为绑定的数据库；PostgreSQL 候选目录为该数据库内可用的用户 Schema。
 

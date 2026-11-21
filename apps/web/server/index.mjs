@@ -1,4 +1,5 @@
 import {codingHarnessConfig} from './coding-config.mjs';
+import {resolveAssistantSourceMode} from './assistant-source-mode.mjs';
 import {assertDocumentBackendPolicy} from '../worker/src/sandbox/document-backend-policy.ts';
 import { openIsolatedPptxSession } from '../worker/src/native/pptx-session-host.ts';
 import { configuredSheetsRuntime } from './src/modules/sheets/runtime.ts';
@@ -19,10 +20,7 @@ async function configuredApplication() {
   const shellDirectory=localShellDirectory({...process.env,DYOFFICE_AUTH_MODE:mode});
   const profilesFile=process.env.DYOFFICE_PROVIDER_GATEWAY_PROFILES;
   if(profilesFile && mode!=='local') throw new Error('Provider Gateway requires local mode');
-  const assistantSourceFlag=process.env.DYOFFICE_ASSISTANT_SOURCE_CATALOG;
-  const assistantSourceMode=assistantSourceFlag||'off';
-  if (!['off','metadata-only','read-only-analysis'].includes(assistantSourceMode) ||
-      assistantSourceMode!=='off' && (mode!=='local'||(!profilesFile&&!process.env.DYOFFICE_CONFIG_KEYRING))) throw new Error('Assistant source catalog requires an explicit source mode, local accounts and provider gateway');
+  const assistantSourceMode=resolveAssistantSourceMode(process.env,{authMode:mode});
   const jobFlag=process.env.DYOFFICE_NATIVE_JOBS;
   if(jobFlag && (jobFlag!=='experimental'||mode!=='local')) throw new Error('Native jobs require explicit experimental local mode');
   if(mode==='development') return buildApp({

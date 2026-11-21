@@ -6,6 +6,8 @@ import {ASSISTANT_MAX_REQUEST_BYTES,PPTX_GENERATION_DEADLINE_MS} from '../../../
 import type {ClientRequest,IncomingMessage} from 'node:http'
 import type {TLSSocket} from 'node:tls'
 import {ProviderResponseFailure,providerResponseFailure} from './response-failure.ts'
+import {publicIpv4} from '../../security/ip-ranges.ts'
+export {publicIpv4}
 
 export interface EgressProfile {
  deploymentId:string;entryId:string;revision:number;providerId:string;model:string;baseUrl:string;endpoint:string;allowedIpv4:readonly string[]
@@ -15,12 +17,6 @@ export interface EgressScope extends Omit<EgressProfile,'allowedIpv4'> {
 }
 const fail=()=>new Error('Provider transport unavailable')
 const profileFields=['deploymentId','entryId','revision','providerId','model','baseUrl','endpoint'] as const
-export function publicIpv4(address:string):boolean {
- if(isIP(address)!==4)return false
- const [first=0,second=0]=address.split('.').map(Number)
- return first>0&&first<224&&![10,100,127,169,192,198,203].includes(first)
-   && !(first===172&&second>=16&&second<=31)
-}
 function url(value:string):URL {
  const u=new URL(value)
  if(u.href!==value||u.protocol!=='https:'||u.port||u.username||u.password||u.search||u.hash||isIP(u.hostname)||u.hostname.includes(':'))throw fail()
