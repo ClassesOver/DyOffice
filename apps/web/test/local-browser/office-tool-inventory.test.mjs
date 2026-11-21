@@ -22,9 +22,11 @@ import {mockProviderNetwork} from '../helpers/provider-network.mjs'
 import {Readable} from 'node:stream'
 import {ASSISTANT_FORMAT_TOOLS} from '../../../../packages/web-contracts/src/assistant.ts'
 
-for(const creationOnly of [true,false])test(creationOnly
- ? 'Word and Excel expose only executable creation formats, including standalone CSV download'
+for(const mode of ['creation','no-word','all'])test(mode==='no-word'
+ ? 'Excel offers workspace creation formats without DOCX when native Word is unavailable'
+ : mode==='creation'?'Word and Excel expose only executable creation formats, including standalone CSV download'
  : 'native Office editors scope model tools, save WebP images in Excel and complete Harness delegation',{timeout:180000},async t=>{
+ const creationOnly=mode!=='all',noWord=mode==='no-word'
  const directory=await mkdtemp(join(tmpdir(),'dyoffice-office-tools-'))
  let app,browser,server
  t.after(async()=>{
@@ -73,7 +75,7 @@ for(const creationOnly of [true,false])test(creationOnly
   },
  }
  // Match the SaaS request limit: this fixture cold-loads a number of editors from one IP.
- app=await buildLocalApp({db:f.db,businessPool:f.businessPool,passwords:f.passwords,deploymentId:f.deploymentId,origin,csrfKey:f.csrfKey,objectStore:f.objects,rateLimit:{max:5000,windowMs:60000},globalConfigKeyring:keyring,providerGateway:{mode:'shared'},codingHarnesses:{adapters:[adapter],defaultId:adapter.descriptor.id},nativeDocsDirectory:dist('docs'),nativeSheetsDirectory:dist('sheets'),...(!creationOnly?{nativeSlidesDirectory:dist('slides'),nativePdfDirectory:dist('pdf'),slidesHost}:{}),localShellDirectory:dist('local-shell'),sheetsNative,sheetsPlanner:gateway.planWorkbookSave,sheetsPackageReader:gateway.readWorkbookPackage})
+ app=await buildLocalApp({db:f.db,businessPool:f.businessPool,passwords:f.passwords,deploymentId:f.deploymentId,origin,csrfKey:f.csrfKey,objectStore:f.objects,rateLimit:{max:5000,windowMs:60000},globalConfigKeyring:keyring,providerGateway:{mode:'shared'},codingHarnesses:{adapters:[adapter],defaultId:adapter.descriptor.id},...(!noWord?{nativeDocsDirectory:dist('docs')}:{}),nativeSheetsDirectory:dist('sheets'),...(!creationOnly?{nativeSlidesDirectory:dist('slides'),nativePdfDirectory:dist('pdf'),slidesHost}:{}),localShellDirectory:dist('local-shell'),sheetsNative,sheetsPlanner:gateway.planWorkbookSave,sheetsPackageReader:gateway.readWorkbookPackage})
  browser=await launchTestBrowser()
 
  const frames=[]
@@ -242,7 +244,7 @@ for(const creationOnly of [true,false])test(creationOnly
   assert.deepEqual(tools.map(tool=>tool.name).sort(),expected.sort(),stage+' '+format+' model tools')
   if((format==='docx'&&!direct)||format==='xlsx'){
    const creation=tools.find(tool=>tool.name==='create_document')
-   assert.deepEqual(creation.parameters.properties.type.enum,format==='docx'?['docx','pdf']:direct?['csv']:['xlsx','csv','docx','pdf'])
+   assert.deepEqual(creation.parameters.properties.type.enum,format==='docx'?['docx','pdf']:direct?['csv']:noWord?['xlsx','csv','pdf']:['xlsx','csv','docx','pdf'])
   }
   if(configured&&(format==='docx'||format==='pptx')){
    const analysis=tools.find(tool=>tool.name==='analyze_media')
@@ -254,6 +256,13 @@ for(const creationOnly of [true,false])test(creationOnly
    assert.equal(required.includes('mediaUrls'),format==='pptx'||videoOnly)
   }
   return panel
+ }
+ if(noWord){
+  const config=await app.inject({method:'GET',url:'/api/v1/capabilities',headers:{cookie:`__Host-dyoffice-session=${f.alice.token}`}})
+  assert.equal(config.statusCode,200)
+  assert.equal(config.json().docx,'unsupported')
+  await probe('xlsx','chat-only')
+  return
  }
  if(creationOnly){
   await probe('docx','chat-only')

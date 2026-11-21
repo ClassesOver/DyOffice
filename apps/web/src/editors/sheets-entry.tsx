@@ -63,7 +63,7 @@ export async function mountSheetsEditor(host: SessionFileHost, container: HTMLEl
   else document.documentElement.dataset.theme = prefs.theme
   let naming = false, copying = false, copyNotice = ''
   const copyLifetime = new AbortController()
-  const bridge = createSheetsBridge(host,fileId,prefs,{onChange:()=>changed(),getAttachmentFile:path=>assistant?.api.getAttachmentFile(path)??Promise.resolve(null)})
+  const bridge = createSheetsBridge(host,fileId,prefs,{docxCreationAvailable:opened.capabilities?.docx==='editable',onChange:()=>changed(),getAttachmentFile:path=>assistant?.api.getAttachmentFile(path)??Promise.resolve(null)})
   const documentApi=createWebWorkbookDocumentApi(bridge.api,async input=>downloadWebCsv(input),{language:locale})
   const assistantNotice = editorAssistantNotice(assistantResult,prefs.showAssistant,locale)
   const assistantAvailable = Boolean(assistant?.available && prefs.showAssistant !== false)
