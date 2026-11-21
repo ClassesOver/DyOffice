@@ -36,12 +36,12 @@ export function createCodingTaskRecoveryStore(transactions:PrincipalTransactions
     async start(token:string,documentId:string,turnId:string,snapshot:Snapshot,continuation:Continuation|undefined,signal?:AbortSignal){
       await withFile(token,documentId,turnId,async(c,args,revision)=>{
         if(continuation&&continuation.revision!==revision)throw authError(409)
-        // Serialize per-account eviction and admission without locking other owners.
+        // Serialize per-account cleanup and admission without locking other owners.
         await c.query("SELECT pg_advisory_xact_lock(hashtextextended('harness-recovery:'||$1||':'||$2,0))",args.slice(0,2))
         signal?.throwIfAborted()
         await c.query(`DELETE FROM harness_task_recovery WHERE ${own} AND expires_at<=clock_timestamp()`,args.slice(0,2))
         if((await c.query(`SELECT 1 FROM harness_task_recovery WHERE ${key}`,args.slice(0,4))).rowCount)throw authError(409)
-        const {rows:[{count}]}=await c.query<{count:number}>(`SELECT count(*)::int AS count FROM harness_task_recovery WHERE ${own}`,args.slice(0,2))
+        const {rows:[{count}]}=await c.query<{count:number}>(`SELECT count(*)::int AS count FROM harness_task_recovery WHERE ${own} AND ${validLease}`,args.slice(0,2))
         if(count>=32)throw authError(429)
         await c.query(`INSERT INTO harness_task_recovery(deployment_id,owner_id,session_id,turn_id,file_id,state,status_payload,checkpoint,lease_until,expires_at)
           VALUES($1,$2,$3,$4,$5,'running',$6,$7,clock_timestamp()+${lease},clock_timestamp()+${lease}+${retention})`,
@@ -49,9 +49,12 @@ export function createCodingTaskRecoveryStore(transactions:PrincipalTransactions
       })
     },
     async renew(token:string,documentId:string,turnId:string,snapshot:Snapshot){
-      return withFile(token,documentId,turnId,async(c,args)=>!!(await c.query(`UPDATE harness_task_recovery
-        SET status_payload=$6,lease_until=clock_timestamp()+${lease},expires_at=clock_timestamp()+${lease}+${retention}
-        WHERE ${where} AND state='running' AND lease_until>clock_timestamp()`,[...args,JSON.stringify(snapshot)])).rowCount)
+      return withFile(token,documentId,turnId,async(c,args)=>{
+        await c.query("SELECT pg_advisory_xact_lock(hashtextextended('harness-recovery:'||$1||':'||$2,0))",args.slice(0,2))
+        return !!(await c.query(`UPDATE harness_task_recovery
+          SET status_payload=$6,lease_until=clock_timestamp()+${lease},expires_at=clock_timestamp()+${lease}+${retention}
+          WHERE ${where} AND state='running' AND lease_until>clock_timestamp()`,[...args,JSON.stringify(snapshot)])).rowCount
+      })
     },
     async finish(token:string,documentId:string,turnId:string,task:Task){
       return withFile(token,documentId,turnId,async(c,args)=>{

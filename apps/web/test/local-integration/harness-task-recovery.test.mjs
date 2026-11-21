@@ -4,9 +4,68 @@ import {fork} from 'node:child_process'
 import {once} from 'node:events'
 import {buildLocalApp} from '../../server/src/app.ts'
 import {createCsrfService} from '../../server/src/modules/auth/csrf.ts'
+import {createCodingTaskRecoveryStore} from '../../server/src/modules/coding/task-recovery-store.ts'
 import {fileFixture,docxBytes,importFile} from '../helpers/files.mjs'
 import {password} from '../helpers/identity.mjs'
 import {restrictedOrigin} from '../helpers/restricted.mjs'
+
+test('finished Harness tasks release admission capacity while retaining duplicate protection',async t=>{
+ const f=await fileFixture(t,{buildApp:false})
+ const {file}=await importFile(f,f.alice.token,await docxBytes())
+ const store=createCodingTaskRecoveryStore(f.transactions)
+ for(let i=0;i<33;i++){
+  const turnId='finished-'+i
+  await store.start(f.alice.token,file.fileId,turnId,{modelId:'fixture'},undefined)
+  await store.finish(f.alice.token,file.fileId,turnId,{modelId:'fixture',state:'succeeded',result:{output:'42'}})
+ }
+ const peer=createCodingTaskRecoveryStore(f.transactions)
+ assert.deepEqual(await peer.access(f.alice.token,file.fileId,'finished-0',false,task=>({value:task.result})),{output:'42'})
+ await assert.rejects(peer.start(f.alice.token,file.fileId,'finished-0',{modelId:'fixture'},undefined),{statusCode:409})
+ await Promise.all(Array.from({length:32},(_,i)=>
+  peer.start(f.alice.token,file.fileId,'running-'+i,{modelId:'fixture'},undefined)))
+ await assert.rejects(store.start(f.alice.token,file.fileId,'next',{modelId:'fixture'},undefined),{statusCode:429})
+ await store.finish(f.alice.token,file.fileId,'running-0',{modelId:'fixture',state:'succeeded',result:{output:'43'}})
+ await peer.start(f.alice.token,file.fileId,'next',{modelId:'fixture'},undefined)
+ await assert.rejects(store.start(f.alice.token,file.fileId,'running-0',{modelId:'fixture'},undefined),{statusCode:409})
+})
+
+test('Harness admission waits for a renewal committing after its previous lease expires',{timeout:30000},async t=>{
+ const f=await fileFixture(t,{buildApp:false})
+ const {file}=await importFile(f,f.alice.token,await docxBytes())
+ const store=createCodingTaskRecoveryStore(f.transactions)
+ await Promise.all(Array.from({length:32},(_,i)=>
+  store.start(f.alice.token,file.fileId,'running-'+i,{modelId:'fixture'},undefined)))
+ const transaction=operation=>f.transactions.withPrincipalTransaction({kind:'session',token:f.alice.token},operation)
+ await transaction(c=>c.query("UPDATE harness_task_recovery SET lease_until=clock_timestamp()+interval '2 seconds' WHERE turn_id='running-0'"))
+ let updated,release
+ const hasUpdated=new Promise(resolve=>{updated=resolve}),gate=new Promise(resolve=>{release=resolve})
+ const delayed={...f.transactions,withPrincipalTransaction:(input,operation)=>f.transactions.withPrincipalTransaction(input,async(c,p)=>{
+  const result=await operation(c,p)
+  updated();await gate
+  return result
+ })}
+ const renewing=createCodingTaskRecoveryStore(delayed).renew(f.alice.token,file.fileId,'running-0',{modelId:'fixture'})
+ let starting,admissionPid
+ try{
+  await Promise.race([hasUpdated,renewing])
+  await transaction(c=>c.query("SELECT pg_sleep(GREATEST(0,extract(epoch FROM lease_until-clock_timestamp()))+0.05) FROM harness_task_recovery WHERE turn_id='running-0'"))
+  let settled=false
+  const competing=createCodingTaskRecoveryStore({...f.transactions,withPrincipalTransaction:(input,operation)=>f.transactions.withPrincipalTransaction(input,(c,p)=>{
+   admissionPid=c.processID
+   return operation(c,p)
+  })})
+  starting=competing.start(f.alice.token,file.fileId,'next',{modelId:'fixture'},undefined)
+   .then(()=>{settled=true;return 200},error=>{settled=true;return error.statusCode})
+  let waiting=false
+  for(let i=0;i<100&&!settled&&!waiting;i++){
+   waiting=await transaction(async c=>(await c.query("SELECT 1 FROM pg_locks WHERE locktype='advisory' AND NOT granted AND pid=$1",[admissionPid??0])).rowCount>0)
+   if(!settled&&!waiting)await new Promise(resolve=>setTimeout(resolve,10))
+  }
+  assert.ok(settled||waiting,'the competing admission reached the database')
+ }finally{release();await renewing}
+ assert.equal(await starting,429)
+ assert.equal(await transaction(async c=>(await c.query("SELECT count(*)::int AS count FROM harness_task_recovery WHERE state='running' AND lease_until>clock_timestamp()")).rows[0].count),32)
+})
 
 test('recovering a document Harness task rechecks a real login and current file visibility',{timeout:30000},async t=>{
  const f=await fileFixture(t,{buildApp:false})
