@@ -115,7 +115,10 @@ test('four real Office editors share assistant chrome and retain drafts across c
   const textarea=panel.locator('textarea')
   const textareaHeight=()=>textarea.evaluate(node=>node.getBoundingClientRect().height)
   const compactHeight=44
+  // Keyboard tab navigation leaves focus on the tab; focus the iframe composer before filling it.
+  await textarea.click()
   await textarea.fill(draft)
+  await expect(textarea,format+' short draft is entered').toHaveValue(draft)
   // The composer measures after the React update; the previous starter can still be at maximum height.
   await expect.poll(textareaHeight,{timeout:15000,message:format+' short draft settles before measuring growth'}).toBe(compactHeight)
   await textarea.fill(`${draft}\n检查第三行\n检查第四行`)
