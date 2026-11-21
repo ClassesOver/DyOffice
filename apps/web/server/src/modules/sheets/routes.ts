@@ -1,4 +1,5 @@
 import { objectTransferAdmission } from '../files/transfer-admission.ts'
+import { withDisconnect } from '../request-signal.ts'
 import type {FindInput,RecalcInput} from '../../../../worker/src/native/xlsx.ts'
 import type { createSheetsSaveService, SheetsExportInput, SheetsSaveInput } from './save.ts'
 import type { FastifyInstance } from 'fastify'
@@ -28,18 +29,7 @@ export function registerSheetsRoutes(app: FastifyInstance, sheets: ReturnType<ty
     api.addHook('onError', async request => admission.error(request))
     function route<T>(path: string, properties: Record<string, unknown>, operation: (token: string, fileId: string, body: T, signal: AbortSignal) => Promise<unknown>, bodyLimit = 4096, optional:readonly string[] = []) {
       api.post(path, { bodyLimit, schema: { params: fileParamsSchema, querystring: emptyQuerySchema, body: { type: 'object', additionalProperties: false, required: Object.keys(properties).filter(key=>!optional.includes(key)), properties } } }, async (request, reply) => {
-        const controller = new AbortController()
-        const abort = () => controller.abort()
-        request.raw.once('aborted', abort)
-        const onClose = () => { if (!reply.raw.writableFinished) abort() }
-        reply.raw.once('close', onClose)
-        try {
-          if (request.raw.aborted || reply.raw.destroyed) controller.abort()
-          return await admission.transfer(request, reply, () => operation(cookies(request).session ?? '', (request.params as {id: string}).id, request.body as T, controller.signal))
-        } finally {
-          request.raw.removeListener('aborted', abort)
-          reply.raw.removeListener('close', onClose)
-        }
+        return withDisconnect(request, reply, signal => admission.transfer(request, reply, () => operation(cookies(request).session ?? '', (request.params as {id: string}).id, request.body as T, signal)))
       })
     }
     if (saves) route<SheetsSaveInput>('/api/v1/files/:id/sheets/uploads', {
@@ -77,12 +67,10 @@ export function registerSheetsRoutes(app: FastifyInstance, sheets: ReturnType<ty
       } },
     }, (token, id, body: { revision: string; sheetName: string; range: SheetRange }, signal) => sheets.readRange(token, id, body.revision, body.sheetName, body.range, signal))
     api.post('/api/v1/files/:id/sheets/merge-sources/open',{bodyLimit:50*1024*1024,schema:{params:fileParamsSchema,querystring:{type:'object',additionalProperties:false,required:['revision','name'],properties:{revision:uuidSchema,name:{type:'string',minLength:1,maxLength:255}}}}},async(request,reply)=>{
-      const controller=new AbortController(),abort=()=>controller.abort(),onClose=()=>{if(!reply.raw.writableFinished)abort()}
-      request.raw.once('aborted',abort);reply.raw.once('close',onClose)
-      try{
+      return withDisconnect(request,reply,signal=>{
         if(request.headers['content-type']?.split(';')[0].trim().toLowerCase()!=='application/octet-stream')throw Object.assign(new Error('Unsupported media type'),{statusCode:415})
-        return await admission.transfer(request,reply,()=>sheets.openMergeWorkbook(cookies(request).session??'',(request.params as {id:string}).id,(request.query as {revision:string}).revision,request.body as Buffer,(request.query as {name:string}).name,controller.signal))
-      }finally{request.raw.removeListener('aborted',abort);reply.raw.removeListener('close',onClose)}
+        return admission.transfer(request,reply,()=>sheets.openMergeWorkbook(cookies(request).session??'',(request.params as {id:string}).id,(request.query as {revision:string}).revision,request.body as Buffer,(request.query as {name:string}).name,signal))
+      })
     })
     route<{revision:string;sessionId:string;sheetName:string;range:SheetRange}>('/api/v1/files/:id/sheets/merge-sources/range',{
       ...revisionBody,sessionId:uuidSchema,sheetName:{type:'string',minLength:1,maxLength:255},range:{type:'object',additionalProperties:false,required:['startRow','endRow','startColumn','endColumn'],properties:{startRow:{type:'integer',minimum:0,maximum:1048575},endRow:{type:'integer',minimum:0,maximum:1048575},startColumn:{type:'integer',minimum:0,maximum:16383},endColumn:{type:'integer',minimum:0,maximum:16383}}},

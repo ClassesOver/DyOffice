@@ -71,8 +71,14 @@ function matchFindText(query:string,matchCase:boolean,whole:boolean,wildcards:bo
   }
 }
 
-async function readPivotMetadata(zip:JSZip){
-  const text=async(path:string)=>(await zip.file(path)?.async('string'))??''
+type ZipText=(path:string)=>Promise<string>
+/** Inflates each part at most once per command; the readers below share workbook.xml and its rels. */
+function zipText(zip:JSZip):ZipText{
+  const cache=new Map<string,Promise<string>>()
+  return path=>{let text=cache.get(path);if(!text){text=zip.file(path)?.async('string').then(value=>value??'')??Promise.resolve('');cache.set(path,text)}return text}
+}
+
+async function readPivotMetadata(text:ZipText){
   const workbookPath='xl/workbook.xml',theme=pivotTheme(await text('xl/theme/theme1.xml'))
   const workbookRels=parseRelationships(await text(relsPathFor(workbookPath)))
   const result=new Map<string,Pick<WorkbookFile['sheets'][number],'pivotTables'|'pivotRanges'>>()
@@ -103,8 +109,8 @@ const BUILTIN_NUMBER_FORMATS: Record<number, string> = {
   39: '#,##0.00;(#,##0.00)', 40: '#,##0.00;[Red](#,##0.00)',
 }
 
-async function readWorkbookStyles(zip: JSZip) {
-  const xml = await zip.file('xl/styles.xml')?.async('string') ?? ''
+async function readWorkbookStyles(text: ZipText) {
+  const xml = await text('xl/styles.xml')
   const section = (name: string) => new RegExp(`<(?:(?:\\w+):)?${name}\\b[^>]*>([\\s\\S]*?)<\\/(?:(?:\\w+):)?${name}\\s*>`).exec(xml)?.[1] ?? ''
   const formats = new Map<number, string>()
   for (const id of Object.keys(BUILTIN_NUMBER_FORMATS)) formats.set(Number(id), BUILTIN_NUMBER_FORMATS[Number(id)]!)
@@ -125,15 +131,15 @@ async function readWorkbookStyles(zip: JSZip) {
   })
 }
 
-async function readSheetStyleIndexes(zip: JSZip) {
+async function readSheetStyleIndexes(text: ZipText) {
   const workbookPath = 'xl/workbook.xml'
-  const workbookRels = parseRelationships(await zip.file(relsPathFor(workbookPath))?.async('string') ?? '')
+  const workbookRels = parseRelationships(await text(relsPathFor(workbookPath)))
   const indexes = new Map<string, Map<string, number>>()
-  for (const sheet of parseSheetElements(await zip.file(workbookPath)?.async('string') ?? '')) {
+  for (const sheet of parseSheetElements(await text(workbookPath))) {
     const rel = workbookRels.find(item => item.id === sheet.relationshipId && !item.external && item.type.endsWith('/worksheet'))
     if (!rel) continue
     const path = resolveRelTarget(workbookPath, rel.target)
-    const xml = await zip.file(path)?.async('string') ?? ''
+    const xml = await text(path)
     const cells = new Map<string, number>()
     for (const match of xml.matchAll(/<(?:[\w.-]+:)?c\b([^>]*)>/g)) {
       const address = readAttribute(match[1]!, 'r')
@@ -194,10 +200,11 @@ async function handleCommand(packet: Record<string, unknown>): Promise<unknown> 
     }
     const bytes = await readBounded(resolveWorkPath(path), MAX)
     const zip = await JSZip.loadAsync(bytes)
-    const imported = await readBasicWorkbook(bytes, { includeFormulaCache: true })
-    const pivots = await readPivotMetadata(zip)
-    const styles = await readWorkbookStyles(zip)
-    const styleIndexes = await readSheetStyleIndexes(zip)
+    const text = zipText(zip)
+    const [imported, pivots, styles, styleIndexes] = await Promise.all([
+      readBasicWorkbook(bytes, { includeFormulaCache: true }),
+      readPivotMetadata(text), readWorkbookStyles(text), readSheetStyleIndexes(text),
+    ])
     let entryCount = 0
     for (const file of Object.values(zip.files)) if (!file.dir) entryCount++
     const parsedSheets: ParsedSheet[] = imported.snapshot.sheets.map(s => {

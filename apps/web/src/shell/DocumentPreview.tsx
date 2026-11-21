@@ -116,7 +116,9 @@ export function DocumentPreview({fileId,name,format,conversationId,request:lates
  if(!documentCreator.current&&prepareDocument)documentCreator.current=createPdfDocumentCreator({prepare:prepareDocument})
  const canCreateDocument=!!documentCreator.current
  const [pages,setPages]=useState<PreviewPage[]>([]),[url,setUrl]=useState(''),[error,setError]=useState(''),[busy,setBusy]=useState(true)
- const revision=useRef(''),[pdfPageCount,setPdfPageCount]=useState(0),[targetPage,setTargetPage]=useState(1),[savingPdf,setSavingPdf]=useState(false),[pdfMessage,setPdfMessage]=useState('')
+ const revision=useRef(''),[pdfPageCount,setPdfPageCount]=useState(0),[targetPage,setTargetPage]=useState(1),[savingPdf,setSavingPdf]=useState(false),[pdfMessage,setPdfMessageText]=useState(''),[pdfMessageIsError,setPdfMessageIsError]=useState(false)
+ // Level travels with the message: error text (often an error.message) need not say "失败".
+ function setPdfMessage(message:string,isError=false){setPdfMessageText(message);setPdfMessageIsError(isError)}
  const [pdfPageInput,setPdfPageInput]=useState<number|null>(1),[pdfSearch,setPdfSearch]=useState('')
  const host=useRef<HTMLDivElement>(null),loading=useRef(true),pdfBytesRef=useRef<Uint8Array|null>(null),pdfPages=useRef<PdfPreviewPage[]>([]),editorId=useRef(crypto.randomUUID()),[sharedAssistant,setSharedAssistant]=useState<Awaited<ReturnType<typeof createEditorAssistant>>>()
  const [pdfContext,setPdfContext]=useState('')
@@ -327,7 +329,7 @@ export function DocumentPreview({fileId,name,format,conversationId,request:lates
   const snapshot=pendingSession.current!.read(),pages=(targetPage===0?baselineGeometries.current.map((_,i)=>i+1):[targetPage]).filter(page=>!snapshot.deleted.includes(page-1))
   if(!pages.length)return
   const result=pendingSession.current!.apply([{op:'rotatePages',pages,dir:delta}])
-  setPdfMessage(result.failures[0]?.error??'页面旋转尚未保存。')
+  setPdfMessage(result.failures[0]?.error??'页面旋转尚未保存。',!!result.failures[0])
  }
  async function savePdfMutation(action:'rotate'|'edit-text'|'annotate'|'delete-annotations'|'update-notes'|'page-ops'|'form-values'|'form-fields'|'text-inserts'|'block-edits'|'block-moves'|'image-edits'|'image-content'|'image-bakes'|'stamps'|'replace-pages'|'draft-inserts'|'apply-ops',operations:readonly unknown[],message:string,signal?:AbortSignal):Promise<boolean>{
   signal?.throwIfAborted()
@@ -343,7 +345,7 @@ export function DocumentPreview({fileId,name,format,conversationId,request:lates
   }catch{
    const unknown=hasPendingPdf()
    setSaveUnknown(unknown)
-   setPdfMessage(unknown?'PDF 保存结果待确认。请点击“确认保存结果”，不要重复执行修改。':'PDF 保存失败：原文可能无法匹配、字体不支持、版本已变化，或文档受保护。')
+   setPdfMessage(unknown?'PDF 保存结果待确认。请点击“确认保存结果”，不要重复执行修改。':'PDF 保存失败：原文可能无法匹配、字体不支持、版本已变化，或文档受保护。',!unknown)
    return false
   }finally{pdfSaveLock.current=false;setSavingPdf(false)}
  }
@@ -352,7 +354,7 @@ export function DocumentPreview({fileId,name,format,conversationId,request:lates
   pdfSaveLock.current=true;setSavingPdf(true)
   const confirmingCreation=extractionClient.current!.hasPending()
   try{if(await (confirmingCreation?extractionClient.current!.confirm():mutationClient.current!.confirm())){const progress=extractionClient.current!.getProgress();if(confirmingCreation)clearRedactions();setPdfMessage(confirmingCreation?`已生成并打开 ${progress.created}/${progress.total} 份 PDF，保存结果已确认。`:'PDF 保存结果已确认。')}}
-  catch(error){const progress=extractionClient.current!.getProgress();setPdfMessage(confirmingCreation?`${error instanceof Error?error.message:'PDF 创建结果待确认。'} 已确认生成 ${progress.created}/${progress.total} 份 PDF。${hasPendingPdf()?'请确认保存结果，不要重复生成。':''}`:hasPendingPdf()?'PDF 保存结果仍待确认，请保留当前页面后重试。':'PDF 保存失败：版本或租约发生冲突，请重新加载后再修改。')}
+  catch(error){const progress=extractionClient.current!.getProgress();setPdfMessage(confirmingCreation?`${error instanceof Error?error.message:'PDF 创建结果待确认。'} 已确认生成 ${progress.created}/${progress.total} 份 PDF。${hasPendingPdf()?'请确认保存结果，不要重复生成。':''}`:hasPendingPdf()?'PDF 保存结果仍待确认，请保留当前页面后重试。':'PDF 保存失败：版本或租约发生冲突，请重新加载后再修改。',confirmingCreation||!hasPendingPdf())}
   finally{setSaveUnknown(hasPendingPdf());pdfSaveLock.current=false;setSavingPdf(false)}
  }
  function clearRedactions(){redactionQuery.current++;setRedactionReview(null);setSelectedRedactions([]);setRedactionConfirm(false)}
@@ -383,7 +385,7 @@ export function DocumentPreview({fileId,name,format,conversationId,request:lates
   if(!redactionReview||!selectedRedactions.length||redactionReview.truncated||redactionReview.revision!==revision.current||pdfSaveLock.current||hasPendingPdf()||hasPendingRotations||replacementPending.current)return
   pdfSaveLock.current=true;setSavingPdf(true);setPdfMessage('')
   try{if(await extractionClient.current!.redact({patterns:redactionReview.patterns,ids:selectedRedactions})){clearRedactions();setPdfMessage('已生成并打开涂黑副本，原文件保持不变。')}}
-  catch(error){setSaveUnknown(hasPendingPdf());setPdfMessage(error instanceof Error?error.message:'涂黑副本保存失败。')}
+  catch(error){setSaveUnknown(hasPendingPdf());setPdfMessage(error instanceof Error?error.message:'涂黑副本保存失败。',true)}
   finally{pdfSaveLock.current=false;setSavingPdf(false);setRedactionConfirm(false)}
  }
  function finishReplacement(saved:boolean){
@@ -463,7 +465,7 @@ export function DocumentPreview({fileId,name,format,conversationId,request:lates
    const progress=extractionClient.current!.getProgress()
    const count=kind==='split'&&progress.total?` 已确认生成 ${progress.created}/${progress.total} 份 PDF。`:''
    const detail=`${message}${count}${extractionClient.current!.hasPending()?' 请确认保存结果，不要重复生成。':''}`
-   setSaveUnknown(hasPendingPdf());setPdfMessage(detail)
+   setSaveUnknown(hasPendingPdf());setPdfMessage(detail,true)
    return {ok:false,error:detail}
   }finally{pdfSaveLock.current=false;setSavingPdf(false)}
  }
@@ -474,8 +476,8 @@ export function DocumentPreview({fileId,name,format,conversationId,request:lates
  const draftOverlayPages=pdfPages.current.map(page=>(pendingSession.current!.read().rotations[page.page-1]??0)%180===0?page:{...page,width:page.height,height:page.width})
  const draftBusy=busy||pickingImage||savingPdf||saveUnknown||textDrafts.current.isBusy()||imageWorkBusy()
  const rotationDisabled=draftBusy
- async function changeDraft(change:()=>Promise<unknown>|unknown){try{await change();setPdfMessage('文字修改尚未保存，请核对页面后点击“保存新版本”。')}catch(error){setPdfMessage(error instanceof Error?error.message:'文字修改失败。')}}
- async function changeImageDraft(change:()=>Promise<unknown>|unknown){try{await change();setPdfMessage('图片修改尚未保存，请核对页面后点击“保存新版本”。')}catch(error){setPdfMessage(error instanceof Error?error.message:'图片修改失败。')}}
+ async function changeDraft(change:()=>Promise<unknown>|unknown){try{await change();setPdfMessage('文字修改尚未保存，请核对页面后点击“保存新版本”。')}catch(error){setPdfMessage(error instanceof Error?error.message:'文字修改失败。',true)}}
+ async function changeImageDraft(change:()=>Promise<unknown>|unknown){try{await change();setPdfMessage('图片修改尚未保存，请核对页面后点击“保存新版本”。')}catch(error){setPdfMessage(error instanceof Error?error.message:'图片修改失败。',true)}}
  function bakeImage(operation:PdfImageDraftBakeOperation){if(activeImage)void changeImageDraft(()=>imageDrafts.current!.bake(activeImage.id,operation))}
  async function pickImage(file:File|null,replaceId?:string){
   if(!file||imagePicking.current||!draftReady.current())return
@@ -504,7 +506,7 @@ export function DocumentPreview({fileId,name,format,conversationId,request:lates
  return <div className="document-loading-host">{busy&&<DocumentLoading key={`${fileId}-${attempt}`} name={name} format={format} state={loadPhase}/>}<div className="document-loading-content" data-loading={busy} aria-busy={busy}><div className={`document-preview-layout${format==='pdf'&&sharedAssistant?.available?' has-assistant':''}`}><section className="document-preview-main" style={{height:'100%',overflow:'auto',padding:24}}><Card title={name} extra={<>{url&&<Button href={url} download={name}>下载原件</Button>}{format==='pdf'&&pdfPageCount>0&&<span className="dyoffice-pdf-toolbar" style={{display:'inline-flex',gap:8,alignItems:'center'}}><select aria-label="选择旋转页码" value={targetPage} onChange={e=>setTargetPage(Number(e.target.value))} disabled={savingPdf||saveUnknown} style={{height:32,borderRadius:6,padding:'0 8px'}}><option value={0}>全部页面 ({pdfPageCount} 页)</option>{Array.from({length:pdfPageCount},(_,i)=>i).filter(i=>!pendingSession.current!.read().deleted.includes(i)).map(i=><option key={i+1} value={i+1}>第 {i+1} 页</option>)}</select><Button disabled={rotationDisabled} onClick={()=>{void rotatePage(-90)}}>向左旋转 90°</Button><Button disabled={rotationDisabled} onClick={()=>{void rotatePage(90)}}>向右旋转 90°</Button><Button disabled={draftBusy||!!redactionReview?.candidates.length||!!replacementPages} onClick={()=>{void changeDraft(()=>textDrafts.current!.insert({page:targetPage||1,text:'新文字',x:72,y:72}))}}>添加文字</Button><Button disabled={draftBusy||!pendingSession.current!.canUndo()} onClick={()=>pendingSession.current!.undo()}>撤销修改</Button><Button disabled={draftBusy||!pendingSession.current!.canRedo()} onClick={()=>pendingSession.current!.redo()}>重做修改</Button><Button disabled={draftBusy||!hasCanonicalPending()} onClick={()=>pendingSession.current!.discard()}>放弃修改</Button><Button type="primary" loading={savingPdf} disabled={(!hasCanonicalPending()&&!hasRasterDrafts())||draftBusy||draftPreviewBusy||!!draftPreviewError} onClick={()=>{void savePdfDrafts()}}>保存新版本</Button></span>}</>}>
  <DocumentNotifications key={fileId} items={[
  {id:'preview-mode',level:'info',title:format==='pdf'?'PDF 编辑与批注':'只读预览',message:format==='pdf'?'页面旋转、删除和排序、元数据、批注、新增文字与图片、表单编辑进入待保存修改，可统一撤销、重做或放弃；点击“保存新版本”后统一写入。原文改写、已有批注和其他专用工具会立即保存，执行前须先保存或放弃待保存修改。裁剪仅调整显示区域，不会完成脱敏。PDF 不会自动重排；签名字段和只读字段不可填写。受保护文档或助手管理的水印可能限制编辑。':'仅提取文本与缓存数值，不执行公式或外部连接，不保证原始排版。每张工作表最多显示 200 行、200 列。'},
- ...(pdfMessage?[{id:'pdf-save-state',level:(pdfMessage.includes('失败')?'error':'info') as 'error'|'info',title:'PDF 保存状态',message:pdfMessage,...(saveUnknown?{actions:<Button disabled={savingPdf} onClick={()=>{void confirmPdfSave()}}>确认保存结果</Button>}:{})}]:[]),
+ ...(pdfMessage?[{id:'pdf-save-state',level:(pdfMessageIsError?'error':'info') as 'error'|'info',title:'PDF 保存状态',message:pdfMessage,...(saveUnknown?{actions:<Button disabled={savingPdf} onClick={()=>{void confirmPdfSave()}}>确认保存结果</Button>}:{})}]:[]),
  ...(assistantEnabled&&assistantError?[{id:'pdf-assistant-state',level:'error' as const,title:'Office 助手',message:assistantError,actions:<Button onClick={()=>setAssistantAttempt(value=>value+1)}>重试助手</Button>}]:[]),
  ...(error?[{id:'preview-error',level:'error' as const,title:'预览未完成',message:error,actions:<Button disabled={busy} onClick={retry}>重新加载预览</Button>}]:[]),
  ]}/>

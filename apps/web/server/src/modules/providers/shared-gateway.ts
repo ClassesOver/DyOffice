@@ -115,7 +115,9 @@ export function registerSharedProviderGateway(app:FastifyInstance,options:{trans
       turnBytes.close(true)
      })
      stage='stream_parse'
-     for await(const event of parseOpenAiChatStream(turnBytes.source,{signal:turnControl.signal})){await validate(token,permit);if(event.type==='tool_call'&&!scoped.tools.has(event.name))throw fail();yield event}
+     // No per-event validate here: createProviderTurns revalidates every yielded event before
+     // emitting it, and each network chunk is already validated above.
+     for await(const event of parseOpenAiChatStream(turnBytes.source,{signal:turnControl.signal})){if(event.type==='tool_call'&&!scoped.tools.has(event.name))throw fail();yield event}
      await producer
      stage='dispatch_settle'
      await transaction(token,async c=>{await c.query("SELECT shared_provider_dispatch('settle',$1,$2,$3,$4)",binding)})

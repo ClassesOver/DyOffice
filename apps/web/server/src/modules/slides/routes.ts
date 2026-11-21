@@ -1,4 +1,5 @@
 import type { SlidesSessions } from './service.ts'
+import { withDisconnect } from '../request-signal.ts'
 import type { SlidesSaveService, SlidesSaveInput } from './save.ts'
 import type { FastifyInstance } from 'fastify'
 import type { SessionService } from '../auth/sessions.ts'
@@ -20,18 +21,7 @@ export function registerSlidesRoutes(app: FastifyInstance, slides: SlidesSession
     })
     function route<T>(path: string, properties: Record<string, unknown>, operation: (token: string, fileId: string, body: T & {editorId:string;leaseEpoch:number}, signal: AbortSignal) => Promise<unknown>, bodyLimit = 4096, optionalKeys: string[] = []) {
       api.post(path, { bodyLimit, schema: { params: fileParamsSchema, querystring: emptyQuerySchema, body: { type: 'object', additionalProperties: false, required: Object.keys(properties).filter(key=>key!=='fitWidthPx'&&!optionalKeys.includes(key)), properties } } }, async (request, reply) => {
-        const controller = new AbortController()
-        const abort = () => controller.abort()
-        request.raw.once('aborted', abort)
-        const onClose = () => { if (!reply.raw.writableFinished) abort() }
-        reply.raw.once('close', onClose)
-        try {
-          if (request.raw.aborted || reply.raw.destroyed) controller.abort()
-          return await operation(cookies(request).session ?? '', (request.params as {id: string}).id, request.body as T & {editorId:string;leaseEpoch:number}, controller.signal)
-        } finally {
-          request.raw.removeListener('aborted', abort)
-          reply.raw.removeListener('close', onClose)
-        }
+        return withDisconnect(request, reply, signal => operation(cookies(request).session ?? '', (request.params as {id: string}).id, request.body as T & {editorId:string;leaseEpoch:number}, signal))
       })
     }
     const fitWidthPx = { type: 'integer', minimum: 320, maximum: 4096 }
@@ -72,22 +62,13 @@ export function registerSlidesRoutes(app: FastifyInstance, slides: SlidesSession
     }, (token,id,body,signal) => saves.prepare(token,id,body,signal))
     // Current-draft download: binary, generation-fenced, never marks anything saved.
     api.post('/api/v1/files/:id/slides/export', { bodyLimit: 4096, schema: { params: fileParamsSchema, querystring: emptyQuerySchema, body: { type: 'object', additionalProperties: false, required: ['revision','generation','editorId','leaseEpoch'], properties: {...revisionBody, generation: generationBody} } } }, async (request, reply) => {
-      const controller = new AbortController()
-      const abort = () => controller.abort()
-      request.raw.once('aborted', abort)
-      const onClose = () => { if (!reply.raw.writableFinished) abort() }
-      reply.raw.once('close', onClose)
-      try {
-        if (request.raw.aborted || reply.raw.destroyed) controller.abort()
-        const exported = await slides.exportDraft(cookies(request).session ?? '', (request.params as {id: string}).id, request.body as {revision: string; generation: number; editorId:string; leaseEpoch:number}, controller.signal)
+      return withDisconnect(request, reply, async signal => {
+        const exported = await slides.exportDraft(cookies(request).session ?? '', (request.params as {id: string}).id, request.body as {revision: string; generation: number; editorId:string; leaseEpoch:number}, signal)
         reply.header('Content-Type', 'application/octet-stream')
         reply.header('Content-Disposition', 'attachment; filename="draft.pptx"')
         reply.header('X-Slides-Generation', String(exported.generation))
         return reply.send(exported.bytes)
-      } finally {
-        request.raw.removeListener('aborted', abort)
-        reply.raw.removeListener('close', onClose)
-      }
+      })
     })
   })
 }

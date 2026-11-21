@@ -3,6 +3,7 @@ import type { SessionService } from '../auth/sessions.ts'
 import { cookies, type createCsrfService } from '../auth/csrf.ts'
 import { uuidSchema, fileParamsSchema, emptyQuerySchema } from '../files/http-schema.ts'
 import { objectTransferAdmission } from '../files/transfer-admission.ts'
+import { withDisconnect } from '../request-signal.ts'
 import {MAX_OCR_BASE64} from '../../pdf/ocr.ts'
 import {MAX_PDF_OCR_INSERTS,MAX_PDF_TEXT_INSERTS} from '../../../../../../packages/web-contracts/src/pdf-ocr-bake.ts'
 import type { createPdfService, PdfUploadInput, PdfTextUploadInput, PdfAnnotationUploadInput, PdfAnnotationDeleteUploadInput, PdfNoteUpdateUploadInput, PdfPageOpsUploadInput, PdfExtractPagesInput, PdfSplitInput, PdfPageLayoutInput, PdfFormValuesUploadInput, PdfFormFieldsUploadInput, PdfTextInsertsUploadInput, PdfBlockEditsUploadInput, PdfBlockMovesUploadInput, PdfImageEditsUploadInput, PdfImageContentUploadInput, PdfImageBakesUploadInput, PdfStampsUploadInput, PdfReplacePagesInput, PdfRedactedCopyInput, PdfDraftInsertsUploadInput, PdfApplyOpsUploadInput } from './service.ts'
@@ -47,17 +48,6 @@ const applyOpsSnapshotSchema={type:'object',additionalProperties:false,required:
             metadata:{anyOf:[{type:'null'},{type:'object',additionalProperties:false,properties:Object.fromEntries(['title','author','subject','keywords'].map(key=>[key,{type:'string',maxLength:4000}]))}]},
           }}
 
-async function withDisconnect<T>(request:FastifyRequest,reply:FastifyReply,operation:(signal:AbortSignal)=>Promise<T>):Promise<T>{
-  const controller=new AbortController(),abort=()=>controller.abort()
-  const onClose=()=>{if(!reply.raw.writableFinished)abort()}
-  request.raw.once('aborted',abort);reply.raw.once('close',onClose)
-  try{
-    if(request.raw.aborted||reply.raw.destroyed)abort()
-    return await operation(controller.signal)
-  }finally{
-    request.raw.removeListener('aborted',abort);reply.raw.removeListener('close',onClose)
-  }
-}
 
 export function registerPdfRoutes(
   app: FastifyInstance,
