@@ -78,13 +78,14 @@ export function createCodingTaskRecovery(turns:TurnRunner,identity:(token:string
       const instruction=typeof task?.instruction==='string'?task.instruction.trim().slice(0,1000):undefined
       const entry:Entry={documentId,modelId,instruction,continuation,controller:new AbortController(),state:'running',expiresAt:Infinity}
       entries.set(taskKey,entry)
-      try{await store?.start(token,documentId,turnId,{modelId,instruction},continuation,signal)}
-      catch(error){entries.delete(taskKey);throw error}
       const queue:TurnEvent[]=[]
       let notify:(()=>void)|undefined,complete=false,observer=true
       const wake=()=>{notify?.();notify=undefined}
       let candidate:{type:'delta';text:string}|undefined,candidateResult:unknown
       const run=async()=>{
+        try{await store?.start(token,documentId,turnId,{modelId,instruction},continuation,
+          signal?AbortSignal.any([entry.controller.signal,signal]):entry.controller.signal)}
+        catch(error){entries.delete(taskKey);complete=true;wake();throw error}
         let renewing:Promise<void>|undefined
         const heartbeat=store&&setInterval(()=>{
           if(renewing||entry.controller.signal.aborted)return
@@ -95,6 +96,7 @@ export function createCodingTaskRecovery(turns:TurnRunner,identity:(token:string
         },10000)
         heartbeat&&heartbeat.unref()
         try {
+          entry.controller.signal.throwIfAborted()
           await turns.run({...input,signal:entry.controller.signal},async event=>{
             if(event.type==='progress'){
               if(event.kind==='status')entry.activity=event.text.slice(0,200)
@@ -145,6 +147,7 @@ export function createCodingTaskRecovery(turns:TurnRunner,identity:(token:string
           if(event)await emit(event)
           else await new Promise<void>(resolve=>{notify=resolve})
         }
+        if(!signal?.aborted)await execution
       }finally{observer=false;queue.length=0;signal?.removeEventListener('abort',wake)}
     },
     async cancel(token,turnId){
