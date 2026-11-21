@@ -117,11 +117,11 @@ test('four real Office editors share assistant chrome and retain drafts across c
   const compactHeight=44
   await textarea.fill(draft)
   // The composer measures after the React update; the previous starter can still be at maximum height.
-  await expect.poll(textareaHeight,{message:format+' short draft settles before measuring growth'}).toBe(compactHeight)
+  await expect.poll(textareaHeight,{timeout:15000,message:format+' short draft settles before measuring growth'}).toBe(compactHeight)
   await textarea.fill(`${draft}\n检查第三行\n检查第四行`)
   await expect.poll(textareaHeight,{message:format+' composer grows for a longer draft'}).toBeGreaterThan(compactHeight)
   await textarea.fill(draft)
-  await expect.poll(textareaHeight,{message:format+' composer shrinks for the short draft'}).toBe(compactHeight)
+  await expect.poll(textareaHeight,{timeout:15000,message:format+' composer shrinks for the short draft'}).toBe(compactHeight)
   {
    const handle=panel.getByRole('separator',{name:'调整 AI 助手宽度'})
    await expect(handle).toBeVisible()

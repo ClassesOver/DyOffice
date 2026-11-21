@@ -189,7 +189,10 @@ for(const creationOnly of [true,false])test(creationOnly
   const input=panel.locator('textarea')
   try{
    // The workbook renders its composer inside an inert shell until its first range loads.
-   if(format==='xlsx')await expect(editor.locator('html'),stage+' XLSX workbook becomes ready').toHaveAttribute('data-document-loading','ready',{timeout:45000})
+   if(format==='xlsx'){
+    await expect(editor.locator('html'),stage+' XLSX workbook becomes ready').toHaveAttribute('data-document-loading','ready',{timeout:45000})
+    await expect.poll(()=>editor.locator('main.app-shell').evaluate(node=>!node.hasAttribute('inert')),{timeout:15000,message:stage+' XLSX shell becomes interactive'}).toBe(true)
+   }
    await expect.poll(async()=>{
     if(await rail.isVisible()||await input.isVisible())return 'available'
     return (await editor.locator('html').getAttribute('data-document-loading',{timeout:1000}).catch(()=>null))??'not mounted'
@@ -216,6 +219,7 @@ for(const creationOnly of [true,false])test(creationOnly
    await expect(panel.getByRole('img',{name:'pixel.png',exact:true})).toBeVisible()
   }
   await panel.locator('textarea').fill('Office capability probe '+stage+' '+format)
+  await expect(panel.getByRole('button',{name:'发送',exact:true})).toBeEnabled({timeout:15000})
   const previous=frames.length
   await panel.getByRole('button',{name:'发送',exact:true}).click()
   await expect(panel.getByText('Office tool inventory received '+stage+' '+format,{exact:true})).toBeVisible({timeout:15000})
