@@ -150,6 +150,7 @@ export async function mountDocsEditor(host: SessionFileHost,element: HTMLElement
     copyNotice = undefined
     changed()
     const en = locale === 'en'
+    let upload: string | undefined, finishStarted = false
     try {
       if (!await draftAuthority.verify() || !active()) {
         if (!signal.aborted) copyNotice = {message:en?'Could not verify this workspace session. Your draft is still open.':'无法验证当前工作区会话，草稿仍保留在此页。',failed:true}
@@ -165,14 +166,19 @@ export async function mountDocsEditor(host: SessionFileHost,element: HTMLElement
       if (!bytes?.byteLength || bytes.byteLength > 32*1024*1024 || !await draftAuthority.verify() || !active()) throw Error('Draft snapshot unavailable')
       const blob = new Blob([bytes.slice().buffer as ArrayBuffer])
       const {uploadId} = await assistant.request<{uploadId:string}>('/api/v1/files/uploads','POST',{name,size:blob.size},signal)
-      const upload = '/api/v1/uploads/'+encodeURIComponent(uploadId)
+      upload = '/api/v1/uploads/'+encodeURIComponent(uploadId)
       if (!active()) throw Error('Draft session ended')
       await assistant.request(upload+'/content','PUT',blob,signal)
       if (!active()) throw Error('Draft session ended')
+      finishStarted = true
       await assistant.request(upload+'/finish','POST',undefined,signal)
       copyNotice = {message:en?`Saved copy: ${name}`:`已保存副本：${name}`,failed:false}
     } catch {
-      if (!signal.aborted) copyNotice = {message:en?'Could not confirm the copy. Check your workspace before retrying.':'无法确认副本是否已保存。请先在工作区核对，再决定是否重试。',failed:true}
+      // Before /finish nothing can have been created: drop the staged upload and say so plainly.
+      if (upload && !finishStarted && !signal.aborted) await assistant.request(upload,'DELETE',undefined,signal).catch(()=>{})
+      if (!signal.aborted) copyNotice = {message:finishStarted
+        ? (en?'Could not confirm the copy. Check your workspace before retrying.':'无法确认副本是否已保存。请先在工作区核对，再决定是否重试。')
+        : (en?'Could not save the copy. The source document and its unsaved changes are still intact.':'无法保存副本。原文档和未保存的修改仍保留。'),failed:true}
     } finally {
       naming = false
       if (!disposed) changed()

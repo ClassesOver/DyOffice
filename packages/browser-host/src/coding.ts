@@ -66,6 +66,7 @@ export function createCodingClient(options:{agents:readonly HarnessDescriptor[];
         })
       },
   }
+  const cancelledByUser=new Set<string>()
   async function run(input:CodingTask,signal?:AbortSignal,modelId=options.getModelId(),initiator:'office'|'user'='office'):Promise<CodingResult> {
     if(disposed||signal?.aborted)throw Error('Coding task cancelled')
     const agent=agents.find(a=>a.id===(input.agentId??options.defaultId)&&a.capabilities.includes('coding'))
@@ -104,10 +105,12 @@ export function createCodingClient(options:{agents:readonly HarnessDescriptor[];
         result={...status.result,agent:{id:agent.id,name:agent.name,origin:agent.origin}}
       }else{
         if(!disposed&&task.state==='unknown_outcome')recovery?.watch(task.id)
-        if(continuation&&task.state==='unknown_outcome')throw new HarnessContinuationUnavailable()
+        // A cancel from the task card is a normal tool failure for the Office run, not a lost
+        // continuation: only an outcome we could not observe fails the whole run.
+        if(continuation&&task.state==='unknown_outcome'&&!cancelledByUser.has(task.id))throw new HarnessContinuationUnavailable()
         throw error
       }
-    } finally {signal?.removeEventListener('abort',cancel);controllers.delete(task.id);notify()}
+    } finally {signal?.removeEventListener('abort',cancel);controllers.delete(task.id);cancelledByUser.delete(task.id);notify()}
     if(continuation&&recovery&&modelId){
       const tail=continuation.checkpoint.messages.at(-1)
       const call=tail?.role==='assistant'?tail.toolCalls?.[0]:undefined
@@ -142,7 +145,7 @@ export function createCodingClient(options:{agents:readonly HarnessDescriptor[];
       if(task?.state!=='running')return
       task.state='cancel_requested';notify()
       const controller=controllers.get(id)
-      if(controller)controller.abort()
+      if(controller){cancelledByUser.add(id);controller.abort()}
       else if(recovery)try{await recovery.cancel(id);recovery.watch(id)}catch(error){
         if(task.state==='cancel_requested')task.state='running'
         notify();throw error

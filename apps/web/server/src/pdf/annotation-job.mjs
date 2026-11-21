@@ -1,14 +1,11 @@
 import {preservePdfManagedStamps} from './stamps-job.mjs'
-import {createHash} from 'node:crypto'
 import {PDFArray,PDFDict,PDFName} from 'pdf-lib'
 import {openEditablePdf} from './editable-document.mjs'
 import {pdfjsDocumentParams} from './pdfjs-open.mjs'
+import {fail,check,hash,requireEnvelope} from './job-common.mjs'
 
 const MAX_BYTES=64*1024*1024,MAX_REQUEST=64*1024
-const hash=bytes=>createHash('sha256').update(bytes).digest('hex')
 const subtypes={highlight:'Highlight',underline:'Underline',strikeout:'StrikeOut',note:'Text'}
-function fail(code){throw Object.assign(new Error(code),{code})}
-function check(signal){if(signal?.aborted)fail('ABORTED')}
 
 export function validatePdfAnnotationOperations(value){
  if(!Array.isArray(value)||value.length<1||value.length>20||Reflect.ownKeys(value).length!==value.length+1)fail('INVALID_PDF_ANNOTATION')
@@ -34,7 +31,7 @@ export function parsePdfAnnotationRequest(raw){
  if(typeof raw!=='string')fail('INVALID_REQUEST')
  if(Buffer.byteLength(raw,'utf8')>MAX_REQUEST)fail('REQUEST_LIMIT')
  let command;try{command=JSON.parse(raw)}catch{fail('INVALID_REQUEST')}
- if(!command||Array.isArray(command)||Object.keys(command).sort().join(',')!=='action,operations,version'||command.version!==1||command.action!=='annotateText')fail('INVALID_REQUEST')
+ requireEnvelope(command,'annotateText','operations')
  return validatePdfAnnotationOperations(command.operations)
 }
 

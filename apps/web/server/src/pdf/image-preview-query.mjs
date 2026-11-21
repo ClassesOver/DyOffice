@@ -1,12 +1,11 @@
-import {createHash} from 'node:crypto'
 import {PNG} from 'pngjs'
 import {listPageImages,renderImagePng,renderPagePreviewPng} from '../../../../pdf/src/main/image-edit.ts'
 import {openPdfForPendingEdits} from './pending-document.mjs'
 import {createPdfProcessJob} from './pdf-process-job.mjs'
 import {applyExistingImages} from './draft-inserts-job.mjs'
 import {pdfImageBakesSafetyCodes,validatePdfImageBakeOperation} from './image-bakes-job.mjs'
+import {hash} from './job-common.mjs'
 
-const hash=bytes=>createHash('sha256').update(bytes).digest('hex')
 function fail(code='INVALID_PDF_IMAGE_PREVIEW'){throw Object.assign(Error(code),{code})}
 export const imagePreviewSafetyCodes=new Set([
  ...pdfImageBakesSafetyCodes,

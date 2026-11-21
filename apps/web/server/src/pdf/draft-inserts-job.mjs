@@ -2,15 +2,14 @@ import {PNG} from 'pngjs'
 import {catalog,createPdfImageEditsJob,validatePdfImageEditOperations} from './image-edits-job.mjs'
 import {createPdfImageBakesJob,validatePdfImageBakeOperation,pdfImageBakesSafetyCodes} from './image-bakes-job.mjs'
 import {geomDispSize} from '../../../../pdf/src/renderer/annotations.ts'
-import {createHash} from 'node:crypto'
 import {openPdfForPendingEdits} from './pending-document.mjs'
 import {openPdfForInserts,assertPdfInsertFormPreserved} from './insert-form-integrity.mjs'
 import {decodePdfImage,planPdfImageContent,validatePdfImageContentOperation,pdfImageContentSafetyCodes,createPdfImageContentJob} from './image-content-job.mjs'
 import {createPdfTextInsertsJob,validatePdfTextInsertOperations} from './text-inserts-job.mjs'
 import {preservePdfManagedStamps} from './stamps-job.mjs'
 import {createPdfImagePixelSource} from './isolate-image-resources.mjs'
-const MAX=64*1024*1024,RAW=32*1024*1024,hash=bytes=>createHash('sha256').update(bytes).digest('hex')
-function fail(code){throw Object.assign(Error(code),{code})}
+import {fail,hash} from './job-common.mjs'
+const MAX=64*1024*1024,RAW=32*1024*1024
 const check=signal=>{if(signal?.aborted)fail('ABORTED')}
 export const pdfDraftInsertsSafetyCodes=new Set([...pdfImageContentSafetyCodes,...pdfImageBakesSafetyCodes,'INVALID_PDF_DRAFT_INSERTS','PDF_DRAFT_INSERT_VERIFY_FAILED','PDF_STAMP_INTEGRITY_FAILED','PDF_IMAGE_BAKE_LIMIT'])
 export function validatePdfPendingImageInsert(input){

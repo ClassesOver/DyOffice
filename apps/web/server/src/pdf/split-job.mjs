@@ -1,11 +1,8 @@
 import {capturePdfManagedStamps,reapplyPdfManagedStamps,pdfStampsSafetyCodes} from './stamps-job.mjs'
-import {createHash} from 'node:crypto'
 import {PDFName} from 'pdf-lib'
 import {openEditablePdf} from './editable-document.mjs'
+import {fail,check,hash,requireEnvelope} from './job-common.mjs'
 const MAX_BYTES=64*1024*1024
-const hash=bytes=>createHash('sha256').update(bytes).digest('hex')
-function fail(code){throw Object.assign(new Error(code),{code})}
-function check(signal){if(signal?.aborted)fail('ABORTED')}
 export const pdfSplitSafetyCodes=new Set([...pdfStampsSafetyCodes,'MAGIC_MISMATCH','PASSWORD','UNREADABLE','PDF_EDIT_LIMIT','SIGNATURE_EDIT_REFUSED','PDF_EDIT_UNSUPPORTED_STRUCTURE','INVALID_PDF_SPLIT','PDF_SPLIT_VERIFY_FAILED','OUTPUT_LIMIT'])
 export function validatePdfSplitSize(value){
  if(!Number.isSafeInteger(value)||value<1||value>100)fail('INVALID_PDF_SPLIT')
@@ -14,7 +11,7 @@ export function validatePdfSplitSize(value){
 export function parsePdfSplitRequest(raw){
  if(typeof raw!=='string'||Buffer.byteLength(raw,'utf8')>4096)fail('INVALID_REQUEST')
  let command;try{command=JSON.parse(raw)}catch{fail('INVALID_REQUEST')}
- if(!command||Array.isArray(command)||Object.keys(command).sort().join(',')!=='action,pagesPerFile,version'||command.version!==1||command.action!=='splitPdf')fail('INVALID_REQUEST')
+ requireEnvelope(command,'splitPdf','pagesPerFile')
  return validatePdfSplitSize(command.pagesPerFile)
 }
 const notes=page=>(page.node.Annots()?.asArray()??[]).map(ref=>{

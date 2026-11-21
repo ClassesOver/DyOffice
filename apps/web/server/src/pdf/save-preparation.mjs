@@ -1,9 +1,7 @@
-import {createHash} from 'node:crypto'
 import {uuid} from '../modules/files/queries.ts'
 import {authError} from '../modules/auth/sessions.ts'
+import {fail,hash} from './job-common.mjs'
 
-const hash=bytes=>createHash('sha256').update(bytes).digest('hex')
-function fail(code){throw Object.assign(new Error(code),{code})}
 const check=signal=>{if(signal?.aborted)fail('ABORTED')}
 
 /** Trusted session-side preparation only, not registered as an HTTP route.

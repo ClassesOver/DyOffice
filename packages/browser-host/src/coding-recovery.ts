@@ -46,7 +46,10 @@ export function createCodingRecovery({documentId,storage,fetchImpl=fetch,csrfTok
           const value=await response.json() as RecoveryStatus
           if(controller.signal.aborted||!value||value.turnId!==id||value.documentId!==documentId||typeof value.agentId!=='string')return
           if(!terminal.has(value.state)&&value.state!=='running'&&value.state!=='cancel_requested')return
-          if(value.state==='succeeded'&&(typeof value.result?.summary!=='string'||typeof value.result.output!=='string'))return
+          // A terminal status we cannot use is still terminal: stop polling and fail the waiter fast.
+          if(value.state==='succeeded'&&(typeof value.result?.summary!=='string'||typeof value.result.output!=='string')){
+            watched.delete(id);write(read().filter(saved=>saved!==id));observers.get(id)?.();return
+          }
           if(terminal.has(value.state)){watched.delete(id);observers.get(id)?.(value)}
           onStatus(value)
         }catch{/* a transient read failure must not retry execution */}

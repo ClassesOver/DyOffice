@@ -1,9 +1,8 @@
-import {createHash} from 'node:crypto'
 import {PDFName} from 'pdf-lib'
 import {openEditablePdf} from './editable-document.mjs'
 import {capturePdfManagedStamps,reapplyPdfManagedStamps,pdfStampsSafetyCodes} from './stamps-job.mjs'
-const MAX=64*1024*1024,hash=bytes=>createHash('sha256').update(bytes).digest('hex')
-function fail(code){throw Object.assign(Error(code),{code})}
+import {fail,hash} from './job-common.mjs'
+const MAX=64*1024*1024
 const check=signal=>{if(signal?.aborted)fail('ABORTED')}
 export const pdfReplacePagesSafetyCodes=new Set([...pdfStampsSafetyCodes,'INVALID_PDF_REPLACE_PAGES','INVALID_PDF_INSERT_PAGES','PDF_REPLACE_VERIFY_FAILED'])
 export function validatePdfReplacePages(input){

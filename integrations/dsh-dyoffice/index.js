@@ -219,10 +219,17 @@ function createHandler(config, authorizationRequests, createdDocument, creations
       })
       if (fileId !== null) {
         const created = createdDocument.get(fileId)
-        const preview = office.canCreate && !office.paused && created?.connectionKey === office.connectionKey
-          ? await readPreview(office.createdPreview(fileId, created.proof, after)) : null
-        if (inlinePreview) return send(200, {preview, ...(preview&&created?.writing&&{writing:{topic:created.writing.topic}})})
-        const {tasks} = office.fileId !== null && !office.paused ? await office.request('/tasks') : {tasks: []}
+        const previewRequest = office.canCreate && !office.paused && created?.connectionKey === office.connectionKey
+          ? readPreview(office.createdPreview(fileId, created.proof, after)) : Promise.resolve(null)
+        if (inlinePreview) {
+          const preview = await previewRequest
+          return send(200, {preview, ...(preview&&created?.writing&&{writing:{topic:created.writing.topic}})})
+        }
+        // Polled every 1-2 s: fetch the preview and the task list concurrently.
+        const [preview, {tasks}] = await Promise.all([
+          previewRequest,
+          office.fileId !== null && !office.paused ? office.request('/tasks') : {tasks: []},
+        ])
         const writing = preview && created?.writing
         return send(200, {...connection, preview, tasks, href: preview ? office.origin + '/#/file/' + fileId : undefined,
           ...(writing && {writing: {id: writing.id, topic: writing.topic, baseRevision:writing.baseRevision, review: writing.review, ...(writing.skill&&{skill:writing.skill})}})})

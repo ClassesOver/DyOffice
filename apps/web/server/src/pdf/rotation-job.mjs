@@ -1,12 +1,9 @@
-import {createHash} from 'node:crypto'
 import {PDFDocument} from 'pdf-lib'
 import {rotatePdfPages} from './rotate.mjs'
+import {fail,check,hash} from './job-common.mjs'
 
 const MAX_BYTES=64*1024*1024, MAX_REQUEST=64*1024
 const safetyCodes=new Set(['MAGIC_MISMATCH','PDF_EDIT_LIMIT','INVALID_PDF_ROTATION','PASSWORD','SIGNATURE_EDIT_REFUSED','PDF_EDIT_UNSUPPORTED_STRUCTURE'])
-function fail(code){throw Object.assign(new Error(code),{code})}
-function check(signal){if(signal?.aborted)fail('ABORTED')}
-const hash=bytes=>createHash('sha256').update(bytes).digest('hex')
 function capture(raw){
   if(typeof raw!=='string')fail('INVALID_REQUEST')
   if(raw.length>MAX_REQUEST||Buffer.byteLength(raw,'utf8')>MAX_REQUEST)fail('REQUEST_LIMIT')

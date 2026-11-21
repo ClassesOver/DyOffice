@@ -1,5 +1,5 @@
 import {createPdfApplyOpsJob,parsePdfApplyOpsRequest,pdfApplyOpsSafetyCodes} from './apply-ops-job.mjs'
-function fail(code){throw Object.assign(Error(code),{code})}
+import {fail} from './job-common.mjs'
 export const pdfApplyOpsQuerySafetyCodes=pdfApplyOpsSafetyCodes
 export function parsePdfApplyOpsQueryRequest(raw){
  if(typeof raw!=='string')fail('INVALID_REQUEST');if(Buffer.byteLength(raw)>32*1024*1024)fail('REQUEST_LIMIT')

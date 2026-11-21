@@ -2,8 +2,8 @@ import {PDFName,PDFDict,PDFArray} from 'pdf-lib'
 import {hasUnsupportedPdfForm} from '../../../shared/pdf-edit-structure.mjs'
 import {openEditablePdf} from './editable-document.mjs'
 import {assertPdfManagedStamps} from './stamps-job.mjs'
+import {fail} from './job-common.mjs'
 const n=PDFName.of
-function fail(code){throw Object.assign(Error(code),{code})}
 
 /** Shared protection boundary for canonical edits and their read-only planning. */
 export async function openPdfForPendingEdits(bytes){

@@ -72,7 +72,7 @@ const ZIP_LIMITS = {maxParts:1500, maxPartBytes:8*1024*1024, maxTotalBytes:64*10
 // count and the estimated retained bytes so a hostile deck cannot grow the session without limit.
 const MAX_HISTORY = 8, MAX_HISTORY_BYTES = 16 * 1024 * 1024
 const MAX_RENDER_SLIDES = 200
-const MAX_GENERATED_BYTES=64*1024*1024,MAX_GENERATED_PAGES=200
+const MAX_GENERATED_BYTES=64*1024*1024,MAX_GENERATED_PAGES=200,GENERATED_PAGE_TTL_MS=30*60_000
 const MIN_FIT_WIDTH_PX = 320, MAX_FIT_WIDTH_PX = 4096, DEFAULT_FIT_WIDTH_PX = 960
 const EMU_MAX = 2147483647, ROT_DEG_MAX = 35791
 function imageContent(input:SlidesImageCommand){
@@ -432,11 +432,15 @@ function deckFont(state: OpenedPptx): string | undefined {
   }
   return undefined
 }
+const DEFAULT_ACCENTS=['#4472C4','#ED7D31','#A5A5A5','#FFC000','#5B9BD5','#70AD47']
+/** Theme accent1..6, always six entries aligned by slot so `mono-accentN` names the real accentN. */
 function themeAccents(state:OpenedPptx):string[]{
   const slide=state.deck.slides[0]
-  let accents:string[]=[]
-  try{const chain=slide&&state.archive.resolveSlideChain(slide.path);const xml=chain?.themePath?state.archive.readText(chain.themePath):null;const colors=xml?parseTheme(xml).colors:undefined;accents=['accent1','accent2','accent3','accent4','accent5','accent6'].map(name=>colors?.[name]).filter((color):color is string=>!!color)}catch{}
-  return accents.length<3?['#4472C4','#ED7D31','#A5A5A5','#FFC000','#5B9BD5','#70AD47']:accents
+  let found:(string|undefined)[]=[]
+  try{const chain=slide&&state.archive.resolveSlideChain(slide.path);const xml=chain?.themePath?state.archive.readText(chain.themePath):null;const colors=xml?parseTheme(xml).colors:undefined;found=['accent1','accent2','accent3','accent4','accent5','accent6'].map(name=>colors?.[name])}catch{}
+  // A theme with fewer than three readable accents is treated as having none.
+  if(found.filter(Boolean).length<3)return [...DEFAULT_ACCENTS]
+  return DEFAULT_ACCENTS.map((fallback,index)=>found[index]||fallback)
 }
 /** `accents` lets callers resolving many schemes parse the theme once. */
 function chartColors(state:OpenedPptx,key:string,accents?:string[]):string[]|undefined{
@@ -462,8 +466,13 @@ export async function createPptxSession(bytes: Uint8Array, signal?: AbortSignal)
   let opened: OpenedPptx | undefined=await openPptx(input)
   aborted(signal)
   let generation=0
-  const generatedPages=new Map<string,{source:MergeSlideSource;bytes:number;size:SlideSize}>()
+  const generatedPages=new Map<string,{source:MergeSlideSource;bytes:number;size:SlideSize;createdAt:number}>()
   let generatedBytes=0
+  // Markers from aborted/failed/superseded generations are never landed. Drop ones old enough that
+  // no live generation can still land them, so they cannot pin GENERATED_PAGE_LIMIT for the session.
+  function dropAbandonedGeneratedPages(now=Date.now()){
+    for(const [marker,page] of generatedPages){if(now-page.createdAt<GENERATED_PAGE_TTL_MS)break;generatedBytes-=page.bytes;generatedPages.delete(marker)}
+  }
   // The generation whose exact state the deck currently holds; a deck restored by undo/redo
   // maps back to the snapshot's pre-edit generation, which drives the caller's dirty tracking.
   let stateGeneration=0
@@ -660,9 +669,10 @@ export async function createPptxSession(bytes: Uint8Array, signal?: AbortSignal)
         const source=await extractMergeSlideSource(built.bytes)
         if(!source)throw new Error('INVALID_GENERATED_PAGE')
         const cost=new TextEncoder().encode(source.slideXml).byteLength+source.media.reduce((sum,item)=>sum+item.bytes.byteLength,0)+source.layoutChain.reduce((sum,item)=>sum+item.bytes.byteLength,0)
+        dropAbandonedGeneratedPages()
         if(generatedPages.size>=MAX_GENERATED_PAGES||generatedBytes+cost>MAX_GENERATED_BYTES)throw new Error('GENERATED_PAGE_LIMIT')
         const marker='webpptx:'+randomUUID()
-        generatedPages.set(marker,{source,bytes:cost,size:built.size});generatedBytes+=cost
+        generatedPages.set(marker,{source,bytes:cost,size:built.size,createdAt:Date.now()});generatedBytes+=cost
         return {marker,imageFailures:built.imageFailures,imageWarnings:[...parsed.warnings,...built.imageWarnings]}
       })
     },

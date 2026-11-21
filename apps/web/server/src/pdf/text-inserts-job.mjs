@@ -1,16 +1,13 @@
 import {preservePdfManagedStamps} from './stamps-job.mjs'
-import {createHash} from 'node:crypto'
 import fontkit from '@pdf-lib/fontkit'
 import {openPdfForInserts,assertPdfInsertFormPreserved} from './insert-form-integrity.mjs'
 import {pdfjsDocumentParams} from './pdfjs-open.mjs'
 import {viewToPdf,pdfRectToCss,geomDispSize} from '../../../../pdf/src/renderer/annotations.ts'
 import {wrapTextMeasured} from '../../../../pdf/src/renderer/text-wrap.ts'
 import {foldCase} from '../../../../../packages/ui/src/find-text.ts'
+import {fail,check,hash,requireEnvelope} from './job-common.mjs'
 const MAX_BYTES=64*1024*1024
-const hash=bytes=>createHash('sha256').update(bytes).digest('hex')
 const keys=['page','text','anchor_text','placement','x','y','font_size','color','max_width','align','font','bold','italic']
-function fail(code){throw Object.assign(new Error(code),{code})}
-function check(signal){if(signal?.aborted)fail('ABORTED')}
 export const pdfTextInsertsSafetyCodes=new Set(['MAGIC_MISMATCH','PASSWORD','UNREADABLE','PDF_EDIT_LIMIT','SIGNATURE_EDIT_REFUSED','PDF_EDIT_UNSUPPORTED_STRUCTURE','INVALID_PDF_TEXT_INSERT','PDF_TEXT_ANCHOR_NOT_FOUND','PDF_TEXT_INSERT_REFUSED','PDF_TEXT_VERIFY_FAILED','PDF_TEXT_FONT_UNAVAILABLE','OUTPUT_LIMIT','PDF_FORM_INSERT_INTEGRITY_FAILED','PDF_STAMP_INTEGRITY_FAILED'])
 export function validatePdfTextInsertOperations(input){
  if(!Array.isArray(input)||input.length<1||input.length>20||Reflect.ownKeys(input).length!==input.length+1)fail('INVALID_PDF_TEXT_INSERT')
@@ -32,7 +29,7 @@ export function parsePdfTextInsertsRequest(raw){
  if(typeof raw!=='string')fail('INVALID_REQUEST')
  if(Buffer.byteLength(raw)>1024*1024)fail('REQUEST_LIMIT')
  let request;try{request=JSON.parse(raw)}catch{fail('INVALID_REQUEST')}
- if(!request||Array.isArray(request)||Object.keys(request).sort().join(',')!=='action,operations,version'||request.version!==1||request.action!=='textInserts')fail('INVALID_REQUEST')
+ requireEnvelope(request,'textInserts','operations')
  return validatePdfTextInsertOperations(request.operations)
 }
 const faceKey=op=>`${op.font??''}|${op.bold?1:0}|${op.italic?1:0}`

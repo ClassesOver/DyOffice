@@ -5,6 +5,8 @@ import {authError} from '../auth/sessions.ts'
 import {parseBytesToText} from '../../../../../../packages/file-parse/src/index.ts'
 
 const MAX_FILES=10_000,MAX_BYTES=50*1024*1024,MAX_TEXT=4_000_000,CHUNK=24_000
+// Parsed text of immutable revisions, bounded by total characters (~32 MB of UTF-16).
+const CACHE_CHARS=16_000_000
 const pathPattern=/^\/files\/([0-9a-f-]{36})\/revisions\/([0-9a-f-]{36})\/([^/]+)$/i
 function reference(path:string){
  if(typeof path!=='string'||path.length>1500)throw authError(400)
@@ -39,8 +41,21 @@ export function createKnowledgeService({transactions,files}:{transactions:Princi
   if(row.size>MAX_BYTES)throw authError(413)
   return {ref,row}
  }
+ // Revisions are immutable, so paging through one document or searching it again
+ // reuses the parse. Authorization still runs on every call via requireFile.
+ const parsedText=new Map<string,string>()
+ let cachedChars=0
+ function remember(key:string,value:string){
+  if(value.length>CACHE_CHARS)return
+  const previous=parsedText.get(key)
+  if(previous!==undefined){parsedText.delete(key);cachedChars-=previous.length}
+  parsedText.set(key,value);cachedChars+=value.length
+  for(const [oldest,evicted] of parsedText){if(cachedChars<=CACHE_CHARS)break;parsedText.delete(oldest);cachedChars-=evicted.length}
+ }
  async function text(token:string,path:string){
-  const {ref,row}=await requireFile(token,path),bytes=await files.readFile(token,ref.fileId,ref.revision)
+  const {ref,row}=await requireFile(token,path),key=`${ref.fileId}:${ref.revision}:${row.format}`,cached=parsedText.get(key)
+  if(cached!==undefined){parsedText.delete(key);parsedText.set(key,cached);return {row,text:cached}}
+  const bytes=await files.readFile(token,ref.fileId,ref.revision)
   if(bytes.length>MAX_BYTES)throw authError(413)
   const parsed=await parseBytesToText('knowledge.'+row.format,bytes)
   if(!parsed.ok||parsed.kind!=='text'||parsed.text===undefined)throw authError(422)
@@ -48,6 +63,7 @@ export function createKnowledgeService({transactions,files}:{transactions:Princi
   // 不能以返回字符串短于预算来证明正文完整。
   if(parsed.text.length>MAX_TEXT)throw authError(413)
   await requireFile(token,path)
+  remember(key,parsed.text)
   return {row,text:parsed.text}
  }
  return {

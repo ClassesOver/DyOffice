@@ -1,15 +1,12 @@
 import {preservePdfManagedStamps} from './stamps-job.mjs'
-import {createHash} from 'node:crypto'
 import {openEditablePdf} from './editable-document.mjs'
 import {pdfjsDocumentParams} from './pdfjs-open.mjs'
 import {groupPageBlocks} from '../../../../pdf/src/renderer/text-block.ts'
 import {joinBlockLines} from '../../../../pdf/src/renderer/text-wrap.ts'
 import {viewToPdf} from '../../../../pdf/src/renderer/annotations.ts'
 import {indexPdfBlockPage} from './block-edits-job.mjs'
+import {fail,check,hash,requireEnvelope} from './job-common.mjs'
 const MAX_BYTES=64*1024*1024
-const hash=bytes=>createHash('sha256').update(bytes).digest('hex')
-function fail(code){throw Object.assign(new Error(code),{code})}
-function check(signal){if(signal?.aborted)fail('ABORTED')}
 export const pdfBlockMovesSafetyCodes=new Set(['MAGIC_MISMATCH','PASSWORD','UNREADABLE','PDF_EDIT_LIMIT','SIGNATURE_EDIT_REFUSED','PDF_EDIT_UNSUPPORTED_STRUCTURE','INVALID_PDF_BLOCK_MOVE','PDF_BLOCK_NOT_FOUND','PDF_BLOCK_AMBIGUOUS','PDF_BLOCK_OVERLAP','PDF_BLOCK_MOVE_REFUSED','PDF_BLOCK_MOVE_VERIFY_FAILED','OUTPUT_LIMIT'])
 export function validatePdfBlockMoveOperations(input){
  if(!Array.isArray(input)||input.length<1||input.length>20||Reflect.ownKeys(input).length!==input.length+1)fail('INVALID_PDF_BLOCK_MOVE')
@@ -28,7 +25,7 @@ export function parsePdfBlockMovesRequest(raw){
  if(typeof raw!=='string')fail('INVALID_REQUEST')
  if(Buffer.byteLength(raw)>128*1024)fail('REQUEST_LIMIT')
  let request;try{request=JSON.parse(raw)}catch{fail('INVALID_REQUEST')}
- if(!request||Array.isArray(request)||Object.keys(request).sort().join(',')!=='action,operations,version'||request.version!==1||request.action!=='blockMoves')fail('INVALID_REQUEST')
+ requireEnvelope(request,'blockMoves','operations')
  return validatePdfBlockMoveOperations(request.operations)
 }
 export async function planPdfBlockMoves(bytes,operations,signal){

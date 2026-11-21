@@ -90,6 +90,10 @@ export function createSheetsService({ files, native, readPackage, maxConcurrent 
         timer.unref()
         mergeSessions.set(id,{tokenDigest:tokenDigest(token),fileId,revision,bytes,expiresAt,sheets:new Set(sheets.map(sheet=>sheet.name)),timer})
         return {...metadata,sessionId:id,name,sha256:createHash('sha256').update(source).digest('hex'),fileBytes:source.length,readOnly:true,needsSaveAs:false,automaticRecoveryDisabled:true}
+      }catch(error){
+        // The native sandbox caps input below maxMergeBytes; report that as 413, not a generic 500.
+        if((error as {code?:unknown})?.code==='INPUT_LIMIT'||(error as Error)?.message==='INPUT_LIMIT')throw authError(413)
+        throw error
       }finally{active--}
     },
     async readMergeWorkbookRange(token:string,fileId:string,revision:string,sessionId:string,sheetName:string,range:SheetRange,signal?:AbortSignal){
@@ -105,7 +109,10 @@ export function createSheetsService({ files, native, readPackage, maxConcurrent 
       pruneMergeSessions()
       const session=mergeSessions.get(sessionId)
       if(!session||session.tokenDigest!==tokenDigest(token)||session.fileId!==fileId)throw authError(404)
-      await assertMergeContext(token,fileId,revision)
+      // Closing only releases this caller's own buffered source, so it must still work after the
+      // host workbook was saved (head revision moved); re-authenticate without pinning the revision.
+      void revision
+      await files.openFile(token,fileId)
       clearTimeout(session.timer)
       mergeSessions.delete(sessionId)
     },

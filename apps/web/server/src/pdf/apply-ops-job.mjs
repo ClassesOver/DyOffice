@@ -1,4 +1,3 @@
-import {createHash} from 'node:crypto'
 import {PDFDocument,PDFName,PDFDict,PDFNumber,PDFRef,PDFHexString,PDFString} from 'pdf-lib'
 import {openPdfForPendingEdits as open} from './pending-document.mjs'
 import {pdfInsertFormState,assertPdfInsertFormPreserved} from './insert-form-integrity.mjs'
@@ -10,15 +9,15 @@ import {decodePdfImage} from './image-content-job.mjs'
 import {applyExistingImages,pdfDraftInsertsSafetyCodes} from './draft-inserts-job.mjs'
 import {capturePdfManagedStamps,reapplyPdfManagedStamps,preservePdfManagedStamps,pdfStampsSafetyCodes} from './stamps-job.mjs'
 import {isolatePdfImageResources} from './isolate-image-resources.mjs'
+import {fail,hash,requireEnvelope} from './job-common.mjs'
 export {validatePdfApplySnapshot}
-const n=PDFName.of,MAX=64*1024*1024,hash=b=>createHash('sha256').update(b).digest('hex')
-function fail(code){throw Object.assign(Error(code),{code})}
+const n=PDFName.of,MAX=64*1024*1024
 const check=signal=>{if(signal?.aborted)fail('ABORTED')}
 export const pdfApplyOpsSafetyCodes=new Set([...pdfFormFieldsSafetyCodes,...pdfFormValuesSafetyCodes,...pdfStampsSafetyCodes,...pdfDraftInsertsSafetyCodes,'INVALID_PDF_APPLY_SNAPSHOT','PDF_APPLY_OPS_VERIFY_FAILED','PDF_APPLY_OPS_REFUSED'])
 export function parsePdfApplyOpsRequest(raw){
  if(typeof raw!=='string')fail('INVALID_REQUEST');if(Buffer.byteLength(raw)>32*1024*1024)fail('REQUEST_LIMIT')
  let r;try{r=JSON.parse(raw)}catch{fail('INVALID_REQUEST')}
- if(!r||Array.isArray(r)||Object.keys(r).sort().join(',')!=='action,snapshot,version'||r.version!==1||r.action!=='applyOps')fail('INVALID_REQUEST')
+ requireEnvelope(r,'applyOps','snapshot')
  return validatePdfApplySnapshot(r.snapshot)
 }
 

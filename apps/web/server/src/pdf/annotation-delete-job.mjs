@@ -1,12 +1,9 @@
-import {createHash} from 'node:crypto'
 import {PDFArray,PDFDict,PDFName,PDFRef} from 'pdf-lib'
 import {openEditablePdf} from './editable-document.mjs'
+import {fail,check,hash,requireEnvelope} from './job-common.mjs'
 
 const MAX_BYTES=64*1024*1024,MAX_REQUEST=64*1024
 const allowedSubtypes=new Set(['/Highlight','/Underline','/StrikeOut','/Squiggly','/Text'])
-const hash=bytes=>createHash('sha256').update(bytes).digest('hex')
-function fail(code){throw Object.assign(new Error(code),{code})}
-function check(signal){if(signal?.aborted)fail('ABORTED')}
 const refId=ref=>ref.objectNumber+'R'+(ref.generationNumber||'')
 
 export function validatePdfAnnotationDeleteOperations(value){
@@ -31,7 +28,7 @@ export function parsePdfAnnotationDeleteRequest(raw){
  if(typeof raw!=='string')fail('INVALID_REQUEST')
  if(Buffer.byteLength(raw,'utf8')>MAX_REQUEST)fail('REQUEST_LIMIT')
  let command;try{command=JSON.parse(raw)}catch{fail('INVALID_REQUEST')}
- if(!command||Array.isArray(command)||Object.keys(command).sort().join(',')!=='action,operations,version'||command.version!==1||command.action!=='deleteAnnotations')fail('INVALID_REQUEST')
+ requireEnvelope(command,'deleteAnnotations','operations')
  return validatePdfAnnotationDeleteOperations(command.operations)
 }
 

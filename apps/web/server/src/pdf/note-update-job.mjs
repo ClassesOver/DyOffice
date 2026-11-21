@@ -1,11 +1,8 @@
-import {createHash} from 'node:crypto'
 import {PDFDict,PDFHexString,PDFName,PDFRef,PDFString} from 'pdf-lib'
 import {openEditablePdf} from './editable-document.mjs'
+import {fail,check,hash,requireEnvelope} from './job-common.mjs'
 
 const MAX_BYTES=64*1024*1024,MAX_REQUEST=512*1024
-const hash=bytes=>createHash('sha256').update(bytes).digest('hex')
-function fail(code){throw Object.assign(new Error(code),{code})}
-function check(signal){if(signal?.aborted)fail('ABORTED')}
 const refId=ref=>ref.objectNumber+'R'+(ref.generationNumber||'')
 export const pdfNoteUpdateSafetyCodes=new Set(['MAGIC_MISMATCH','PASSWORD','UNREADABLE','PDF_EDIT_LIMIT','SIGNATURE_EDIT_REFUSED','PDF_EDIT_UNSUPPORTED_STRUCTURE','PDF_ANNOTATION_NOT_FOUND','PDF_ANNOTATION_VERIFY_FAILED','OUTPUT_LIMIT'])
 
@@ -32,7 +29,7 @@ export function parsePdfNoteUpdateRequest(raw){
  if(typeof raw!=='string')fail('INVALID_REQUEST')
  if(Buffer.byteLength(raw,'utf8')>MAX_REQUEST)fail('REQUEST_LIMIT')
  let command;try{command=JSON.parse(raw)}catch{fail('INVALID_REQUEST')}
- if(!command||Array.isArray(command)||Object.keys(command).sort().join(',')!=='action,operations,version'||command.version!==1||command.action!=='updateNotes')fail('INVALID_REQUEST')
+ requireEnvelope(command,'updateNotes','operations')
  return validatePdfNoteUpdateOperations(command.operations)
 }
 

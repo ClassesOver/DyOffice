@@ -160,18 +160,24 @@ export async function mountSlidesEditor(host: SessionFileHost, container: HTMLEl
     async save(stem){
       const assistant=sharedAssistant,signal=copyLifetime.signal
       if(!assistant||signal.aborted||closing||!host.getState(fileId).lease)return
+      let upload:string|undefined,finishStarted=false
       try{
         const chosen=await confirmWebFileName(stem+'.pptx',{locale,signal,document:stage.document})
         if(!chosen||signal.aborted||closing)return
         const name=chosen.replace(/\.pptx$/i,'')+'.pptx'
         const blob=await bridge.exportDraftCopy(assistant.sessionProof,signal)
         const {uploadId}=await assistant.request<{uploadId:string}>('/api/v1/files/uploads','POST',{name,size:blob.size},signal)
-        const upload='/api/v1/uploads/'+encodeURIComponent(uploadId)
+        upload='/api/v1/uploads/'+encodeURIComponent(uploadId)
         await assistant.request(upload+'/content','PUT',blob,signal)
+        finishStarted=true
         await assistant.request(upload+'/finish','POST',undefined,signal)
         copyNotice=locale==='zh'?`已保存副本：${name}`:`Saved copy: ${name}`
       }catch{
-        if(!signal.aborted)actionError=locale==='zh'?'无法确认副本是否已保存。请先在工作区核对，再决定是否重试。':'Could not confirm the copy. Check your workspace before retrying.'
+        // Before /finish nothing can have been created: drop the staged upload and say so plainly.
+        if(upload&&!finishStarted&&!signal.aborted)await assistant.request(upload,'DELETE',undefined,signal).catch(()=>{})
+        if(!signal.aborted)actionError=finishStarted
+          ?(locale==='zh'?'无法确认副本是否已保存。请先在工作区核对，再决定是否重试。':'Could not confirm the copy. Check your workspace before retrying.')
+          :(locale==='zh'?'无法保存副本。原演示文稿和未保存的修改仍保留。':'Could not save the copy. The source presentation and its unsaved changes are still intact.')
       }finally{if(!disposed)changed()}
     },
   }
