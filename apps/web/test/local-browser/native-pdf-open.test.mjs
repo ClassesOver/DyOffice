@@ -401,6 +401,8 @@ test('GenOffice PDF assistant and ribbon edits preview and save, including recov
   return [...image.data.subarray(i,i+3)]
  })
  await expect.poll(pixel,{timeout:15000}).toEqual([0,0,255])
+ // The text draft stays on this page, so undo must remove the already rendered image-erasure patch.
+ await expect(page.locator('.pdf-page').first().locator('.pdf-page-livepreview')).toBeVisible()
  await page.getByRole('button',{name:/^撤销/}).click()
  await expect.poll(pixel).toEqual([255,0,0])
  await page.getByRole('button',{name:/^重做/}).click()
