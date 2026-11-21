@@ -8,6 +8,7 @@ import {createCodingModelBridge} from './modules/coding/model-bridge.ts'
 import {createCodingHarness} from './modules/coding/harness.ts'
 import {createHarnessRegistry, type HarnessAdapter} from './modules/coding/registry.ts'
 import {registerCodingRoutes} from './modules/coding/routes.ts'
+import {createCodingTaskRecoveryStore} from './modules/coding/task-recovery-store.ts'
 import {registerProbeAssets} from './modules/providers/probe-assets.ts'
 import {createSkillService} from './modules/skills/service.ts'
 import {registerSkillRoutes} from './modules/skills/routes.ts'
@@ -234,6 +235,7 @@ export async function buildLocalApp(config: LocalWebConfig): Promise<FastifyInst
     }
     const codingRoutes=harnesses?registerCodingRoutes(app,{registry:harnesses,sessions,csrf,data:harnessData,dataBaseUrl:config.origin+'/api/v1/agents',
         authorizeDocument:files?(token,documentId)=>files.openFile(token,documentId):undefined,
+        recoveryStore:files?createCodingTaskRecoveryStore(transactions):undefined,
         async openModel(token,modelId,signal,onProgress){
           if(!officeGateway?.codingTurns)throw Error('Office model unavailable')
           const bridge=await createCodingModelBridge({token,modelId,signal,turns:officeGateway.codingTurns,...(onProgress?{onProgress}:{})})

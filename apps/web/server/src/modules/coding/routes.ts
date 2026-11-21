@@ -4,6 +4,7 @@ import {cookies,type createCsrfService} from '../auth/csrf.ts'
 import {registerProviderRoutes} from '../providers/routes.ts'
 import {createProviderTurns} from '../providers/turns.ts'
 import {createCodingTaskRecovery,type AuthorizeTaskDocument} from './task-recovery.ts'
+import type {CodingTaskRecoveryStore} from './task-recovery-store.ts'
 import type {HarnessRunContext,HarnessRegistry} from './registry.ts'
 import type {createHarnessDataAccess} from './data-access.ts'
 import type {CodingTask,CodingProgress,CodingResult} from '../../../../../../packages/agent-core/src/coding-skill.ts'
@@ -35,6 +36,7 @@ const publicCodingFailures = new Map<string,{message:string;outcome?:'failed'}>(
 export function registerCodingRoutes(app:FastifyInstance,options:{
   data?:ReturnType<typeof createHarnessDataAccess>;dataBaseUrl?:string
   authorizeDocument?:AuthorizeTaskDocument
+  recoveryStore?:CodingTaskRecoveryStore
   openModel?:(token:string,modelId:string,signal:AbortSignal,onProgress?:(event:CodingProgress)=>void)=>ReturnType<NonNullable<HarnessRunContext['openModel']>>
   registry:HarnessRegistry;sessions:Pick<SessionService,'authenticate'>;
   csrf:Pick<ReturnType<typeof createCsrfService>,'requireSession'|'requireSessionRead'>
@@ -115,7 +117,7 @@ export function registerCodingRoutes(app:FastifyInstance,options:{
       }finally {if(grant)options.data!.revoke(grant.taskId)}
     },
   },{timeoutMs:610000,maxActive:4,maxOutputBytes:384*1024})
-  const recovery=options.authorizeDocument?createCodingTaskRecovery(turns,identity,options.authorizeDocument):undefined
+  const recovery=options.authorizeDocument?createCodingTaskRecovery(turns,identity,options.authorizeDocument,options.recoveryStore):undefined
   registerProviderRoutes(app,{...options,turns:recovery?.runner??turns,taskStatus:recovery?.status,claimContinuation:recovery?.claimContinuation,endpoint:'/api/v1/agents/tasks',errorMessage:'Harness task failed. Check server diagnostics.'})
   app.get('/api/v1/agents/catalog',async(request,reply)=>{
     reply.header('Cache-Control','private, no-store')
@@ -125,6 +127,6 @@ export function registerCodingRoutes(app:FastifyInstance,options:{
     await identity(token)
     return {agents:options.registry.list(),defaultId:options.registry.defaultId}
   })
-  app.addHook('preClose',async()=>{recovery?.dispose();turns.dispose()})
+  app.addHook('preClose',async()=>{const draining=recovery?.dispose();turns.dispose();await draining})
   return {...turns,admitContinuation:recovery?.admitContinuation}
 }

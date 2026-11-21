@@ -2,17 +2,15 @@ import type {AdmitHarnessContinuation,TurnRunner} from '../providers/routes.ts'
 import type {TurnEvent,TurnIdentity} from '../providers/turns.ts'
 import {authError} from '../auth/sessions.ts'
 import type {HarnessCheckpoint} from '../../../../../../packages/agent-core/src/loop.ts'
+import {interruptedFailure,type CodingTaskRecoveryStore,type Continuation,type TaskState} from './task-recovery-store.ts'
 
 export type AuthorizeTaskDocument=(token:string,id:string)=>Promise<{file:{revision:string}}|void>
-type Continuation={revision:string;modelId:string;checkpoint:HarnessCheckpoint;callId:string}
-
-type State='running'|'cancel_requested'|'succeeded'|'failed'|'unknown_outcome'
-type Entry={
-  documentId:string;modelId:string;instruction?:string;controller:AbortController;state:State
+type Task={
+  modelId:string;instruction?:string;state:TaskState
   activity?:string;progress?:string;result?:unknown;failure?:string
   continuation?:Continuation
-  expiresAt:number
 }
+type Entry=Task&{documentId:string;controller:AbortController;expiresAt:number}
 const maxTasks=32,maxRunning=4,retentionMs=10*60_000
 const genericFailure='Harness task failed. Check server diagnostics.'
 const isChatTurnId=(id:unknown)=>typeof id==='string'&&/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(id)
@@ -42,10 +40,11 @@ function readContinuation(value:unknown,task:ReturnType<typeof taskInput>,curren
   return {revision,modelId:task.officeModelId,checkpoint,callId:call.id}
 }
 
-/** Retain bounded task events and optional private checkpoints in this process. An SSE connection
- * observes the execution; after admission, only explicit cancel owns abort. */
-export function createCodingTaskRecovery(turns:TurnRunner,identity:(token:string)=>Promise<TurnIdentity>,authorizeDocument:AuthorizeTaskDocument){
+/** Keep live events in memory and checkpoint them in the database when available.
+ * Losing an SSE observer does not resubmit or cancel a task. */
+export function createCodingTaskRecovery(turns:TurnRunner,identity:(token:string)=>Promise<TurnIdentity>,authorizeDocument:AuthorizeTaskDocument,store?:CodingTaskRecoveryStore){
   const entries=new Map<string,Entry>()
+  const executions=new Set<Promise<void>>()
   let closed=false
   const prune=()=>{const now=Date.now();for(const [key,entry] of entries)if(entry.expiresAt<=now)entries.delete(key)}
   const timer=setInterval(prune,30_000);timer.unref()
@@ -79,11 +78,22 @@ export function createCodingTaskRecovery(turns:TurnRunner,identity:(token:string
       const instruction=typeof task?.instruction==='string'?task.instruction.trim().slice(0,1000):undefined
       const entry:Entry={documentId,modelId,instruction,continuation,controller:new AbortController(),state:'running',expiresAt:Infinity}
       entries.set(taskKey,entry)
+      try{await store?.start(token,documentId,turnId,{modelId,instruction},continuation,signal)}
+      catch(error){entries.delete(taskKey);throw error}
       const queue:TurnEvent[]=[]
       let notify:(()=>void)|undefined,complete=false,observer=true
       const wake=()=>{notify?.();notify=undefined}
-      let candidateResult:unknown
+      let candidate:{type:'delta';text:string}|undefined,candidateResult:unknown
       const run=async()=>{
+        let renewing:Promise<void>|undefined
+        const heartbeat=store&&setInterval(()=>{
+          if(renewing||entry.controller.signal.aborted)return
+          const {activity,progress}=entry
+          renewing=store.renew(token,documentId,turnId,{modelId,instruction,activity,progress}).then(live=>{
+            if(!live)entry.controller.abort()
+          },()=>entry.controller.abort()).finally(()=>{renewing=undefined})
+        },10000)
+        heartbeat&&heartbeat.unref()
         try {
           await turns.run({...input,signal:entry.controller.signal},async event=>{
             if(event.type==='progress'){
@@ -92,7 +102,8 @@ export function createCodingTaskRecovery(turns:TurnRunner,identity:(token:string
             }else if(event.type==='delta'){
               const value:unknown=JSON.parse(event.text)
               if(!value||typeof value!=='object'||!('summary' in value)||typeof value.summary!=='string'||!('output' in value)||typeof value.output!=='string')throw Error('Invalid Harness result')
-              candidateResult=value
+              candidate={type:'delta',text:event.text};candidateResult=value
+              return
             }else if(event.type==='error'){
               entry.failure=event.message
               entry.state=event.outcome==='failed'?'failed':'unknown_outcome'
@@ -104,17 +115,30 @@ export function createCodingTaskRecovery(turns:TurnRunner,identity:(token:string
             entry.state='succeeded'
           }
         }catch{
-          entry.failure=entry.controller.signal.aborted?'Harness cancellation requested. Check for saved delivery.':genericFailure
+          entry.failure=entry.state==='cancel_requested'?'Harness cancellation requested. Check for saved delivery.':entry.controller.signal.aborted?interruptedFailure:genericFailure
           if(observer&&!signal?.aborted){queue.push({type:'error',message:entry.failure});wake()}
         }finally{
+          if(heartbeat)clearInterval(heartbeat)
+          await renewing
           if(entry.state==='running'||entry.state==='cancel_requested')entry.state='unknown_outcome'
           if(entry.state!=='succeeded')delete entry.continuation
+          if(store){
+            const {controller:_controller,documentId:_documentId,expiresAt:_expiresAt,...task}=entry
+            try{Object.assign(entry,await store.finish(token,documentId,turnId,task))}
+            catch{entry.state='unknown_outcome';entry.failure=interruptedFailure}
+            if(entry.state!=='succeeded'){delete entry.continuation;delete entry.result}
+          }
+          if(observer&&candidate){
+            if(entry.state==='succeeded')queue.push(candidate)
+            else queue.push({type:'error',message:entry.failure??interruptedFailure})
+          }
           entry.expiresAt=Date.now()+retentionMs
           complete=true;wake()
         }
       }
       signal?.addEventListener('abort',wake,{once:true})
-      void run()
+      const execution=run();executions.add(execution)
+      void execution.then(()=>executions.delete(execution),()=>executions.delete(execution))
       try {
         while(!signal?.aborted&&(!complete||queue.length)){
           const event=queue.shift()
@@ -125,6 +149,11 @@ export function createCodingTaskRecovery(turns:TurnRunner,identity:(token:string
     },
     async cancel(token,turnId){
       const entry=entries.get(await key(token,turnId))
+      if(store&&await store.cancel(token,turnId)){
+        if(entry){entry.state='cancel_requested';entry.controller.abort()}
+        return true
+      }
+      if(store&&entry)return false
       if(!entry)return turns.cancel(token,turnId)
       await authorizeDocument(token,entry.documentId)
       if(entry.state!=='running')return false
@@ -144,32 +173,46 @@ export function createCodingTaskRecovery(turns:TurnRunner,identity:(token:string
     return entry
   }
   const admitContinuation:AdmitHarnessContinuation=async(token,modelId,input,request,signal)=>{
-    const entry=await authorizedEntry(token,input.taskId,input.documentId)
-    const continuation=entry.continuation
     const messages=(request as {messages:{role:string;results?:{id:string;name:string;isError?:boolean}[]}[]}).messages
     const last=messages.at(-1)?.role==='user'?messages.at(-2):messages.at(-1)
     const result=last?.role==='tool'?last.results:undefined
-    if(entry.state!=='succeeded'||!continuation||input.revision!==continuation.revision||modelId!==continuation.modelId||
-      !Array.isArray(result)||!result.some(item=>item?.id===continuation.callId&&item.name==='delegate_agent_task'&&!item.isError))throw authError(409)
-    if(signal.aborted)throw authError(409)
-    // Consume in the same request that starts the model, with no await between check and delete.
+    const check=(entry:Task)=>{
+      const continuation=entry.continuation
+      if(entry.state!=='succeeded'||!continuation||input.revision!==continuation.revision||modelId!==continuation.modelId||
+        !Array.isArray(result)||!result.some(item=>item?.id===continuation.callId&&item.name==='delegate_agent_task'&&!item.isError)||signal.aborted)throw authError(409)
+    }
+    // A row lock also fences simultaneous resumes on different API instances.
+    if(store)return store.access(token,input.documentId,input.taskId,true,entry=>{check(entry);return {value:undefined,consume:true}})
+    const entry=await authorizedEntry(token,input.taskId,input.documentId)
+    check(entry)
     delete entry.continuation
   }
-  return {runner,admitContinuation,async status(token:string,turnId:string,documentId:string){
-    const entry=await authorizedEntry(token,turnId,documentId)
+  function statusFor(entry:Task,turnId:string,documentId:string){
     const {state,modelId,instruction,activity,progress,result,failure}=entry
     const continuationModelId=state==='succeeded'?entry.continuation?.modelId:undefined
     return {turnId,documentId,agentId:modelId,instruction,state,activity,progress,result,failure,hasContinuation:!!continuationModelId,continuationModelId}
+  }
+  return {runner,admitContinuation,async status(token:string,turnId:string,documentId:string){
+    if(!store)return statusFor(await authorizedEntry(token,turnId,documentId),turnId,documentId)
+    const live=entries.get(await key(token,turnId))
+    return store.access(token,documentId,turnId,false,entry=>({value:statusFor(live&&entry.state==='running'&&live.documentId===documentId?
+      {...entry,activity:live.activity,progress:live.progress}:entry,turnId,documentId)}))
   },async claimContinuation(token:string,turnId:string,input:{documentId:string;revision:string;modelId:string;defer?:boolean}){
+    const read=(entry:Task)=>{
+      const continuation=entry.continuation
+      if(entry.state!=='succeeded'||!continuation||input.revision!==continuation.revision||input.modelId!==continuation.modelId)throw authError(409)
+      return {checkpoint:continuation.checkpoint,result:{id:continuation.callId,name:'delegate_agent_task',output:JSON.stringify(entry.result)}}
+    }
+    if(store)return store.access(token,input.documentId,turnId,input.defer!==true,entry=>({value:read(entry),consume:input.defer!==true}))
     const entry=await authorizedEntry(token,turnId,input.documentId)
-    const continuation=entry.continuation
-    if(entry.state!=='succeeded'||!continuation||input.revision!==continuation.revision||input.modelId!==continuation.modelId)throw authError(409)
+    const result=read(entry)
     // Already-open editors from the previous build still consume on this request.
     if(input.defer!==true)delete entry.continuation
-    return {checkpoint:continuation.checkpoint,result:{id:continuation.callId,name:'delegate_agent_task',output:JSON.stringify(entry.result)}}
-  },dispose(){
+    return result
+  },async dispose(){
     closed=true;clearInterval(timer)
     for(const entry of entries.values())entry.controller.abort()
     entries.clear()
+    await Promise.allSettled(executions)
   }}
 }
