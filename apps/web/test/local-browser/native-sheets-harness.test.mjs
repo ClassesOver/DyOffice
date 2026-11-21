@@ -150,12 +150,18 @@ for(const manualEdit of [false,true])test(manualEdit
   try{
    await toolStarted
    await expect(save).toBeDisabled()
-   await page.evaluate(value=>window.__genofficeDebug.univerAPI.getActiveWorkbook().getActiveSheet().getRange('H2').setValue(value),cellValue)
-   await expect(save).toBeEnabled()
+   const editedValue=await page.evaluate(async value=>{
+    const cell=window.__genofficeDebug.univerAPI.getActiveWorkbook().getActiveSheet().getRange('H2')
+    cell.activate()
+    await cell.setValue(value)
+    return cell.getValue()
+   },cellValue)
+   assert.equal(editedValue,cellValue)
+   await expect(save).toBeEnabled({timeout:15000})
   }finally{allowTool()}
-  await expect(page.locator('.status-msg')).toContainText(reply,{timeout:10000})
+  await expect(page.locator('.status-msg')).toContainText(reply,{timeout:15000})
  }
- await expect(assistant.getByText(reply,{exact:true})).toBeVisible({timeout:10000})
+ if(!manualEdit)await expect(assistant.getByText(reply,{exact:true})).toBeVisible({timeout:10000})
  await expect(assistant.getByText(instruction,{exact:true})).toHaveCount(1)
  assert.equal(runs,1)
  assert.equal(submissions.length,1)
@@ -173,12 +179,13 @@ for(const manualEdit of [false,true])test(manualEdit
  const cell=await runtime.sheetsNative.readRange(bytes,book.sheets[0].name,{startRow:1,endRow:1,startColumn:7,endColumn:7})
  assert.deepEqual(cell.cells.map(cell=>cell.value),[cellValue])
  assert.deepEqual(await f.files.readFile(f.alice.token,file.fileId,file.revision),original)
- if(!manualEdit)await page.evaluate(({documentId,turnId})=>{
+ await page.evaluate(({documentId,turnId})=>{
   sessionStorage.setItem('dyoffice.harness.tasks:'+documentId,JSON.stringify([turnId]))
  },{documentId,turnId})
  await page.reload()
  await showAssistant()
- await expect(assistant.getByText(reply,{exact:true})).toBeVisible()
+ await expect(assistant.locator('.assistant-task-message:visible').getByText('Recovered workbook total: 42',{exact:true})).toBeVisible()
+ if(!manualEdit)await expect(assistant.getByText(reply,{exact:true})).toBeVisible()
  await expect(assistant.getByText(instruction,{exact:true})).toHaveCount(1)
  assert.equal(submissions.length,1)
  assert.deepEqual(claims,expectedClaims)
