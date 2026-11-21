@@ -104,7 +104,14 @@ export async function parseOfficePreview(bytes:Uint8Array,format:'xlsx'|'pptx'):
  if(!pages.length)throw Error('此文档没有可预览的内容，请下载原件。')
  return pages
 }
-export function DocumentPreview({fileId,name,format,conversationId,request,assistantEnabled=false,registerGuard,onCreatedPdf,prepareDocument,docxCreationAvailable=false}:{fileId:string;name:string;format:'docx'|'xlsx'|'pptx'|'pdf';conversationId?:string;request:SettingsRequest;assistantEnabled?:boolean;registerGuard?:(id:string,guard:DocumentCloseGuard|null)=>void;onCreatedPdf?:(receipt:RevisionRef)=>Promise<void>;prepareDocument?:(signal?:AbortSignal)=>Promise<PreparedAiDocumentCreator>;docxCreationAvailable?:boolean}){
+export function DocumentPreview({fileId,name,format,conversationId,request:latestRequest,assistantEnabled=false,registerGuard,onCreatedPdf,prepareDocument:latestPrepareDocument,docxCreationAvailable=false}:{fileId:string;name:string;format:'docx'|'xlsx'|'pptx'|'pdf';conversationId?:string;request:SettingsRequest;assistantEnabled?:boolean;registerGuard?:(id:string,guard:DocumentCloseGuard|null)=>void;onCreatedPdf?:(receipt:RevisionRef)=>Promise<void>;prepareDocument?:(signal?:AbortSignal)=>Promise<PreparedAiDocumentCreator>;docxCreationAvailable?:boolean}){
+ // The bound request/prepare callbacks change identity when the session proof rotates (e.g. after a
+ // password change). The clients below are created once and the load effect must not re-run (which
+ // would discard pending edits), so route every call through refs that always hold the latest proof.
+ const requestRef=useRef(latestRequest),prepareRef=useRef(latestPrepareDocument)
+ requestRef.current=latestRequest;prepareRef.current=latestPrepareDocument
+ const [request]=useState<SettingsRequest>(()=>((...args:Parameters<SettingsRequest>)=>requestRef.current(...args)) as SettingsRequest)
+ const prepareDocument=latestPrepareDocument&&((signal?:AbortSignal)=>prepareRef.current!(signal))
  const documentCreator=useRef<ReturnType<typeof createPdfDocumentCreator>|undefined>(undefined)
  if(!documentCreator.current&&prepareDocument)documentCreator.current=createPdfDocumentCreator({prepare:prepareDocument})
  const canCreateDocument=!!documentCreator.current

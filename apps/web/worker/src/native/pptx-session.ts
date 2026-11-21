@@ -432,11 +432,15 @@ function deckFont(state: OpenedPptx): string | undefined {
   }
   return undefined
 }
+const DEFAULT_ACCENTS=['#4472C4','#ED7D31','#A5A5A5','#FFC000','#5B9BD5','#70AD47']
+/** Theme accent1..6, always six entries aligned by slot so `mono-accentN` names the real accentN. */
 function themeAccents(state:OpenedPptx):string[]{
   const slide=state.deck.slides[0]
-  let accents:string[]=[]
-  try{const chain=slide&&state.archive.resolveSlideChain(slide.path);const xml=chain?.themePath?state.archive.readText(chain.themePath):null;const colors=xml?parseTheme(xml).colors:undefined;accents=['accent1','accent2','accent3','accent4','accent5','accent6'].map(name=>colors?.[name]).filter((color):color is string=>!!color)}catch{}
-  return accents.length<3?['#4472C4','#ED7D31','#A5A5A5','#FFC000','#5B9BD5','#70AD47']:accents
+  let found:(string|undefined)[]=[]
+  try{const chain=slide&&state.archive.resolveSlideChain(slide.path);const xml=chain?.themePath?state.archive.readText(chain.themePath):null;const colors=xml?parseTheme(xml).colors:undefined;found=['accent1','accent2','accent3','accent4','accent5','accent6'].map(name=>colors?.[name])}catch{}
+  // A theme with fewer than three readable accents is treated as having none.
+  if(found.filter(Boolean).length<3)return [...DEFAULT_ACCENTS]
+  return DEFAULT_ACCENTS.map((fallback,index)=>found[index]||fallback)
 }
 /** `accents` lets callers resolving many schemes parse the theme once. */
 function chartColors(state:OpenedPptx,key:string,accents?:string[]):string[]|undefined{
