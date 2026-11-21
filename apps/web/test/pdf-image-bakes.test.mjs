@@ -92,31 +92,40 @@ test('image bakes preserve AcroForm values, widgets and existing appearances',as
  assert.deepEqual(after.pixels.bgra.subarray(0,4),before.pixels.bgra.subarray(12,16))
  assert.equal(pdfInsertFormState(await PDFDocument.load(result.bytes)),pdfInsertFormState(await PDFDocument.load(input)))
 })
-test('visual crop keeps a slanted image clipped without changing nearby blended artwork',async()=>{
+test('visual crop preserves clipped blended images and transparency groups through repeated crops',async()=>{
  const picture=new PNG({width:16,height:16})
- for(let i=0;i<picture.data.length;i+=4)picture.data.set([216,24+(i/4)%16,16,255],i)
- for(const nested of [false,true]){
+ for(let i=0;i<picture.data.length;i+=4)picture.data.set([216,24+(i/4)%16,16,192+(i/4%2)*63],i)
+ for(const composite of ['plain','target-multiply','ancestor-multiply','group','isolated-group'])for(const nested of [false,true]){
   const doc=await PDFDocument.create(),page=doc.addPage([240,200])
-  page.drawRectangle({x:0,y:0,width:240,height:200,color:rgb(.7,.85,1)})
+  const outerComposite=['ancestor-multiply','group','isolated-group'].includes(composite)
+  if(!outerComposite)page.drawRectangle({x:0,y:0,width:240,height:200,color:rgb(.7,.85,1)})
   page.drawRectangle({x:20,y:20,width:12,height:12,color:rgb(.7,.4,.2),blendMode:BlendMode.Multiply})
   page.pushOperators(pushGraphicsState(),rectangle(70,60,82,65),clip(),endPath())
-  page.drawImage(await doc.embedPng(PNG.sync.write(picture)),{x:100,y:45,width:100,height:80,rotate:degrees(30)})
+  page.drawImage(await doc.embedPng(PNG.sync.write(picture)),{x:100,y:45,width:100,height:80,rotate:degrees(30),opacity:.6,...(composite==='target-multiply'?{blendMode:BlendMode.Multiply}:{})})
   page.pushOperators(popGraphicsState())
   page.drawRectangle({x:113,y:105,width:12,height:12,color:rgb(.1,.6,.2)})
   let bytes=Buffer.from(await doc.save())
-  if(nested){
+  for(let level=0;level<Number(nested)+Number(outerComposite);level++){
    const outer=await PDFDocument.create(),wrapper=outer.addPage([240,200])
-   wrapper.drawPage(await outer.embedPage((await PDFDocument.load(bytes)).getPage(0)))
+   if(level===0&&outerComposite)wrapper.drawRectangle({x:0,y:0,width:240,height:200,color:rgb(.7,.85,1)})
+   wrapper.drawPage(await outer.embedPage((await PDFDocument.load(bytes)).getPage(0)),level===0&&composite==='ancestor-multiply'?{blendMode:BlendMode.Multiply}:{})
+   if(level===0&&(composite==='group'||composite==='isolated-group'))for(const [,object]of outer.context.enumerateIndirectObjects())if(object.dict?.get(PDFName.of('Subtype'))?.toString()==='/Form')object.dict.set(PDFName.of('Group'),outer.context.obj({S:'Transparency',I:composite==='isolated-group'}))
    bytes=Buffer.from(await outer.save())
   }
+  const original=await selected(bytes)
   const result=await createPdfImageBakesJob().execute(bytes,command({op:'crop_image',page:1,image_number:1,left:.25}))
+  const cropped=await selected(result.bytes);sameNeighbors(original,cropped)
+  assert.ok(Math.abs(cropped.item.bounds[0]-91.65)<.2,composite)
+  const repeated=await createPdfImageBakesJob().execute(result.bytes,command({op:'crop_image',page:1,image_number:1,left:.2}))
+  const twice=await selected(repeated.bytes);sameNeighbors(cropped,twice)
+  assert.ok(Math.abs(twice.item.bounds[0]-110.64)<.2,composite)
   const render=input=>{
    const rendered=spawnSync('pdftoppm',['-png','-singlefile','-r','144','-'],{input,maxBuffer:2*1024*1024,timeout:10000})
    assert.equal(rendered.status,0,String(rendered.stderr||rendered.error))
    const {data,width,height}=PNG.sync.read(rendered.stdout)
    return (x,y)=>data.subarray(((height-1-y*2)*width+x*2)*4,((height-1-y*2)*width+x*2)*4+4)
   }
-  const before=render(bytes),after=render(result.bytes),backdrop=before(40,25)
+  const before=render(bytes),after=render(result.bytes),afterAgain=render(repeated.bytes),backdrop=before(40,25)
   assert.notDeepEqual(before(80,90),backdrop)
   assert.deepEqual(after(80,90),backdrop,'removed area shows backdrop')
   assert.notDeepEqual(before(120,95),backdrop)
@@ -125,7 +134,11 @@ test('visual crop keeps a slanted image clipped without changing nearby blended 
   assert.deepEqual(after(157,95),backdrop,'original clip still hides pixels to the right')
   assert.notDeepEqual(before(26,26),backdrop)
   assert.deepEqual(after(26,26),before(26,26),'earlier blended artwork is unchanged')
-  assert.deepEqual(after(118,111),before(118,111),'later vector drawing is unchanged')
+  assert.ok(after(118,111).every((value,i)=>Math.abs(value-before(118,111)[i])<=3),'later vector drawing preserves its appearance')
+  assert.notDeepEqual(after(100,90),backdrop)
+  assert.deepEqual(afterAgain(100,90),backdrop,'second crop uses the current displayed width')
+  assert.ok(afterAgain(120,95).every((value,i)=>Math.abs(value-before(120,95)[i])<=3),'second crop keeps the surviving pixels in place')
+  assert.ok(afterAgain(118,111).every((value,i)=>Math.abs(value-before(118,111)[i])<=3),'second crop preserves the later vector drawing')
  }
 })
 test('bakes refuse protected documents, ambiguous image bounds, oversized metadata and unsafe affine clipping',async()=>{
@@ -146,8 +159,8 @@ test('bakes refuse protected documents, ambiguous image bounds, oversized metada
  page.pushOperators(pushGraphicsState(),rectangle(200,180,80,100),clip(),endPath());page.drawImage(image,{x:250,y:200,width:100,height:75,rotate:degrees(30),opacity:.4,blendMode:BlendMode.Multiply});page.pushOperators(popGraphicsState())
  const blended=await PDFDocument.create(),blendedPage=blended.addPage([500,500]);blendedPage.drawPage(await blended.embedPage((await PDFDocument.load(await fixture({angle:30}))).getPage(0)),{blendMode:BlendMode.Multiply})
  const blendedBytes=Buffer.from(await blended.save()),blendedNumber=(await selected(blendedBytes)).number
- for(const [source,image_number]of [[groupBytes,groupNumber],[Buffer.from(await d.save()),1],[blendedBytes,blendedNumber]])for(const op of [operation,{op:'crop_image',page:1,left:.25}])
-  await assert.rejects(createPdfImageBakesJob().execute(source,command({...op,image_number})),{code:'PDF_IMAGE_BAKE_UNSUPPORTED_TRANSFORM'})
+ for(const [source,image_number]of [[groupBytes,groupNumber],[Buffer.from(await d.save()),1],[blendedBytes,blendedNumber]])
+  await assert.rejects(createPdfImageBakesJob().execute(source,command({...operation,image_number})),{code:'PDF_IMAGE_BAKE_UNSUPPORTED_TRANSFORM'})
  const plainClip=await PDFDocument.create(),plainPage=plainClip.addPage([400,400]);plainPage.pushOperators(pushGraphicsState(),rectangle(200,180,80,100),clip(),endPath());plainPage.drawImage(await plainClip.embedPng(png),{x:250,y:200,width:100,height:75,rotate:degrees(30)});plainPage.pushOperators(popGraphicsState())
  await assert.rejects(createPdfImageBakesJob().execute(Buffer.from(await plainClip.save()),command({...operation,image_number:1})),{code:'PDF_IMAGE_BAKE_UNSUPPORTED_TRANSFORM'})
 })
