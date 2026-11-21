@@ -28,23 +28,27 @@ export function createCodingRecovery({documentId,storage,fetchImpl=fetch,csrfTok
   const saved=read(),watched=new Set<string>(),controller=new AbortController()
   const observers=new Map<string,(status?:RecoveryStatus)=>void>()
   let discovering=true,pending=false,timer:ReturnType<typeof setTimeout>|undefined
+  let discoveryTimer:ReturnType<typeof setTimeout>|undefined
   const terminal=new Set(['succeeded','failed','unknown_outcome'])
   const get=(path:string)=>fetchImpl(path,{
     method:'GET',headers,credentials:'same-origin',mode:'same-origin',redirect:'error',cache:'no-store',
     signal:AbortSignal.any([controller.signal,AbortSignal.timeout(5000)]),
   })
   async function discover(){
-    let ids:string[]=[]
+    const fallback=discovering?saved:[]
+    let ids:string[]=[],retry=false
     try {
       const response=await get(taskPath+query)
+      retry=response.status===429||(response.status>=500&&response.status!==501)
       if(response.ok){
         const value=await response.json()
         if(Array.isArray(value?.taskIds))ids=value.taskIds.slice(0,limit).filter(validId)
       }
-    }catch{/* use saved IDs if discovery is temporarily unavailable */}
+    }catch{retry=true}
     discovering=false
     if(controller.signal.aborted)return
-    for(const id of [...new Set([...ids,...saved])].slice(0,limit))watched.add(id)
+    for(const id of [...new Set([...ids,...fallback])].slice(0,limit))watched.add(id)
+    if(retry)discoveryTimer=setTimeout(()=>void discover(),1000)
     void poll()
   }
   async function poll(){
@@ -117,6 +121,6 @@ export function createCodingRecovery({documentId,storage,fetchImpl=fetch,csrfTok
       const response=await fetchImpl('/api/v1/agents/tasks/'+id+'/cancel',{method:'POST',headers,credentials:'same-origin',mode:'same-origin',redirect:'error',signal:AbortSignal.any([controller.signal,AbortSignal.timeout(5000)])})
       if(!response.ok)throw Error('Harness cancellation could not be confirmed')
     },
-    dispose(){controller.abort();clearTimeout(timer);watched.clear()},
+    dispose(){controller.abort();clearTimeout(timer);clearTimeout(discoveryTimer);watched.clear()},
   }
 }

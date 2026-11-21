@@ -133,6 +133,45 @@ test('cancelling a recovered running task targets its original ID without submit
  assert.deepEqual(calls,[['GET',discovery],['GET',base+'/status?documentId='+documentId],['POST',base+'/cancel'],['GET',base+'/status?documentId='+documentId]])
 })
 
+test('a new tab retries transient task discovery without dispatching new work',async t=>{
+ const documentId='10000000-0000-4000-8000-000000000001',turnId='10000000-0000-4000-8000-000000000002'
+ const discovery='/api/v1/agents/tasks?documentId='+documentId
+ for(const failure of ['network',503,429]){
+  const calls=[]
+  const client=createCodingClient({agents:descriptors,defaultId:'codex',documentId,csrfToken:'c'.repeat(43),getModelId:()=> 'office-model',fetchImpl:async(url,init)=>{
+   calls.push([init.method,url])
+   if(calls.length===1){
+    if(failure==='network')throw Error('API restarting')
+    return new Response(null,{status:failure})
+   }
+   if(url===discovery)return Response.json({taskIds:[turnId]})
+   return Response.json({turnId,documentId,agentId:'codex',state:'succeeded',result:{summary:'Recovered',output:'42'}})
+  }})
+  t.after(()=>client.dispose())
+  await new Promise(resolve=>setTimeout(resolve,1200))
+  assert.equal(client.snapshot()[0]?.output,'42',String(failure))
+  assert.deepEqual(calls,[['GET',discovery],['GET',discovery],['GET','/api/v1/agents/tasks/'+turnId+'/status?documentId='+documentId]])
+  client.dispose()
+ }
+})
+
+test('task discovery stops on access rejection, older APIs and document disposal',async t=>{
+ const documentId='10000000-0000-4000-8000-000000000001'
+ const cases=[401,403,404,501,'disposed']
+ const calls=new Map(cases.map(status=>[status,0]))
+ for(const status of cases){
+  const client=createCodingClient({agents:descriptors,defaultId:'codex',documentId,csrfToken:'c'.repeat(43),getModelId:()=> 'office-model',fetchImpl:async()=>{
+   calls.set(status,calls.get(status)+1)
+   return new Response(null,{status:status==='disposed'?503:status})
+  }})
+  t.after(()=>client.dispose())
+  await new Promise(resolve=>setImmediate(resolve))
+  if(status==='disposed')client.dispose()
+ }
+ await new Promise(resolve=>setTimeout(resolve,1200))
+ assert.deepEqual([...calls.values()],[1,1,1,1,1])
+})
+
 test('Office discovers only metadata and passes explicit data scope to either peer',async()=>{
  const requests=[],sent=[]
  const resultId='11111111-1111-4111-8111-111111111111'
