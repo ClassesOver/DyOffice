@@ -49,7 +49,7 @@ test('a failed query returns status-specific rewrite advice and truncated result
   const fail = status => async () => { throw Object.assign(new Error('x'), { status }) }
   const output = async status => (await createWorkspaceSourceSkill(fail(status), { tools: ['sources_query'], disposed: () => false }).executeTool({ id: '1', name: 'sources_query', input: { sourceId: 's', sql: 'select 1' } })).output
   assert.match(await output(504), /statement timeout.*Do not retry the same SQL.*GROUP BY/s)
-  assert.match(await output(400), /single SELECT/)
+  assert.match(await output(400), /SQL was rejected.*column alias lists.*sources_describe/s)
   assert.match(await output(403), /allowed scope/)
   assert.match(await output(500), /did not complete/)
   assert.equal(sourceFailure('sources.read_result', 504), sourceFailure('sources.list', undefined))
