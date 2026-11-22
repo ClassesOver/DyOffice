@@ -4,7 +4,7 @@ import {execFileSync} from 'node:child_process'
 import {PDFDocument,PDFName,PDFString,rgb} from 'pdf-lib'
 import {expect} from '@playwright/test'
 import {fileFixture,importFile} from '../helpers/files.mjs'
-import {launchTestBrowser} from '../helpers/browser.mjs'
+import {launchTestBrowser,recordVerifiedOfficeEffect} from '../helpers/browser.mjs'
 import {password} from '../helpers/identity.mjs'
 import {isHomeHeroRequest,stubHomeHero} from '../helpers/home-hero.mjs'
 import {buildLocalApp} from '../../server/src/app.ts'
@@ -21,6 +21,62 @@ import {renderPdfPages} from '../../server/src/pdf/raster.mjs'
 
 const directory=process.env.DYOFFICE_TEST_NATIVE_PDF_DIST
 const liveImageConfig=process.env.DYOFFICE_LIVE_PDF_IMAGE_CONFIG
+test('native PDF assistant saves a rotation and reopens the new revision',{skip:!directory,timeout:60000},async t=>{
+ const origin='http://localhost:4274',f=await fileFixture(t,{origin,buildApp:false})
+ const fixture=await PDFDocument.create()
+ for(let index=0;index<3;index++)fixture.addPage([240,300]).drawText('Page '+(index+1),{x:20,y:200})
+ const original=Buffer.from(await fixture.save())
+ const {file}=await importFile(f,f.alice.token,original,'rotation.pdf')
+ const app=await buildLocalApp({db:f.db,businessPool:f.businessPool,passwords:f.passwords,deploymentId:f.deploymentId,
+  origin,csrfKey:f.csrfKey,objectStore:f.objects,nativePdfDirectory:directory,
+  localShellDirectory:process.env.DYOFFICE_TEST_LOCAL_SHELL_DIRECTORY??fileURLToPath(new URL('../../dist-local-shell',import.meta.url))})
+ f.cleanup.unshift(()=>app.close())
+ await app.listen({port:4274,host:'127.0.0.1'})
+ const browser=await launchTestBrowser();f.cleanup.unshift(()=>browser.close())
+ const page=await browser.newPage()
+ await stubHomeHero(page)
+ await page.route('**/api/v1/ai/catalog',route=>route.fulfill({json:{entries:[{id:'mock',label:'Rotation fixture model'}],defaultId:'mock'}}))
+ const calls=[]
+ await page.route('**/api/v1/ai/turns',route=>{
+  if(isHomeHeroRequest(route.request()))return route.fallback()
+  calls.push(route.request().postDataJSON().request)
+  const body=calls.length===1
+   ? 'event: tool_call\ndata: '+JSON.stringify({id:'native-rotation',name:'apply_ops',input:{ops:[{op:'rotatePages',pages:[2],dir:90}]}})
+   : 'event: delta\ndata: {"text":"Rotation queued"}'
+  return route.fulfill({contentType:'text/event-stream',body:body+'\n\nevent: done\ndata: {}\n\n'})
+ })
+ await page.goto(origin)
+ await page.getByLabel('用户名',{exact:true}).fill('alice')
+ await page.getByLabel('密码',{exact:true}).fill(password)
+ await page.getByRole('button',{name:'登录',exact:true}).click()
+ await expect(page.locator('.home')).toBeVisible()
+ await page.goto(origin+'/native-pdf/?fileId='+file.fileId)
+ const ready=page.locator('html')
+ await expect(ready).toHaveAttribute('data-document-loading','ready')
+ await page.getByRole('button',{name:'AI 助手',exact:true}).click()
+ const assistant=page.locator('.shared-editor-assistant')
+ await assistant.getByRole('textbox',{name:'消息'}).fill('把第二页顺时针旋转九十度')
+ await assistant.getByRole('button',{name:'发送',exact:true}).click()
+ await expect(assistant.getByText('Rotation queued',{exact:true})).toBeVisible({timeout:20000})
+ assert.ok(calls[0].tools.some(tool=>tool.name==='apply_ops'))
+ assert.ok(!calls[0].tools.some(tool=>tool.name==='rotate_pages'))
+ const results=calls[1].messages.filter(message=>message.role==='tool').flatMap(message=>message.results)
+ assert.ok(results.some(result=>result.name==='apply_ops'&&!result.isError))
+ const head=async()=>(await f.files.openFile(f.alice.token,file.fileId)).file.revision
+ assert.equal(await head(),file.revision)
+ await page.locator('.ribbon-tabs .qa-btn').first().click()
+ await expect.poll(head,{timeout:15000}).not.toBe(file.revision)
+ const revision=await head()
+ const persisted=await PDFDocument.load(await f.files.readFile(f.alice.token,file.fileId,revision))
+ assert.deepEqual(persisted.getPages().map(saved=>saved.getRotation().angle),[0,90,0])
+ assert.deepEqual(await f.files.readFile(f.alice.token,file.fileId,file.revision),original)
+ const reopened=page.waitForResponse(response=>response.ok()&&response.url().endsWith('/content?revision='+revision))
+ await page.reload()
+ await reopened
+ await expect(ready).toHaveAttribute('data-document-loading','ready')
+ recordVerifiedOfficeEffect('pdf','apply_ops.rotatePages')
+})
+
 test('native PDF OCR reads a real scan and saves a searchable layer without changing pixels',{skip:!directory||process.env.DYOFFICE_TEST_PDF_OCR!=='1',timeout:60000},async t=>{
  const origin='http://localhost:4269',f=await fileFixture(t,{origin,buildApp:false})
  const source=await PDFDocument.create()

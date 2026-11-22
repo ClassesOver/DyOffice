@@ -17,7 +17,7 @@ import {createXlsxNativeWorker} from '../../worker/src/native/xlsx.ts'
 import {openIsolatedPptxSession} from '../../worker/src/native/pptx-session-host.ts'
 import {sheetsGateway} from '../helpers/sheets-gateway.mjs'
 import {expect} from '@playwright/test'
-import {launchTestBrowser} from '../helpers/browser.mjs'
+import {launchTestBrowser,recordVerifiedOfficeEffect} from '../helpers/browser.mjs'
 import {fileFixture,docxBytes,importFile} from '../helpers/files.mjs'
 import {mockProviderNetwork} from '../helpers/provider-network.mjs'
 import {stubHomeHero} from '../helpers/home-hero.mjs'
@@ -409,6 +409,7 @@ print(json.dumps(dict(series=line.get_ydata().tolist(), total=sum(line.get_ydata
  await assertSavedChart(saved,/^word\/media\/.+\.png$/,docx)
  await reopenNative()
  await expectFrozenTable()
+ recordVerifiedOfficeEffect('docx','insert_data_result')
  for(const [format,entry] of Object.entries(siblings)){
   const start=toolFrames.length
   const errors=[]
@@ -471,6 +472,7 @@ print(json.dumps(dict(series=line.get_ydata().tolist(), total=sum(line.get_ydata
     return rows.map(row=>row.map(text)).filter(([month])=>month==='2026-01'||month==='2026-02')
    }),{timeout:30000}).toEqual([['2026-01','30'],['2026-02','40']])
   }
+  recordVerifiedOfficeEffect(format,'insert_data_result')
  }
  assert.equal(queries,2,'Inserting into another document must reuse the frozen result')
 })

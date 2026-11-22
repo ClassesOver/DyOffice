@@ -2,7 +2,7 @@
 
 基准提交 29415fca。以 Web 允许名单的格式和工具名为单位，同名工具在各格式分别核对。共享工具按实际入口和权限验证。[Web 工具合同](../../../packages/web-contracts/src/assistant.ts) [GenOffice 静态清单](../inventory/agent-tools.md)
 
-范围包括 DOCX 42、XLSX 19、PPTX 20、PDF 49，共 130 个格式与工具组合，另有 9 个数据源与委派共享工具。GenOffice 清单的 159 条定义来自四格式编辑器 119 条、桌面 MCP 25 条和共享代码 15 条。重复定义保留原位置。
+范围包括 DOCX 42、XLSX 19、PPTX 20、PDF 48，共 129 个格式与工具组合，另有 9 个数据源与委派共享工具。GenOffice 清单的 159 条定义来自四格式编辑器 119 条、桌面 MCP 25 条和共享代码 15 条。重复定义保留原位置。
 
 候选用例来自工具名检索。读工具验收准确性和授权，写工具验收目标内容和对应原生文件，适用时下载成品，在 Web 编辑器或原生执行器中重开，并核对未改内容和撤销边界。条件工具按实际配置核对。
 
@@ -10,17 +10,17 @@
 
 各测试批次合并去重后，浏览器观察到 129 个组合注册，129 个已注册组合和 9 个共享工具均向模型返回过成功结果。采集仅保留格式、工具名和错误标记。下表中的工具行保留具体效果、成品和待验项，四格式真实模型用例见主报告。[注册用例](../../../apps/web/test/local-browser/office-tool-inventory.test.mjs) [四格式验收](genoffice-web-parity.md)
 
-Web 门禁在 Chromium 用例完成后，按当前工具合同核对当次运行的注册和成功执行。缺项会按格式和工具名列出并使门禁失败。PDF 旋转兼容映射的成品断言核对保存后的页面角度。正文、数值、对象、保存与重开的效果由对应的浏览器用例断言。[覆盖检查](../../../apps/web/test/helpers/office-tool-coverage.mjs) [PDF 原生效果用例](../../../apps/web/test/local-browser/native-pdf-open.test.mjs)
+Web 门禁在 Chromium 用例完成后，按当前工具合同核对当次运行的注册和成功执行。缺项会按格式和工具名列出并使门禁失败。门禁还要求当次保存成品证据。PDF 核对页面角度，DOCX、XLSX 和 PPTX 分别核对冻结结果表格、准确金额及 Web 重开。正文、数值、对象、保存与重开的效果由对应的浏览器用例断言。[覆盖检查](../../../apps/web/test/helpers/office-tool-coverage.mjs) [PDF 原生效果用例](../../../apps/web/test/local-browser/native-pdf-open.test.mjs)
 
 | 格式 | Web 合同 | 浏览器注册 | 定向浏览器成功 |
 | --- | ---: | ---: | ---: |
 | DOCX | 42 | 42 | 42 |
 | XLSX | 19 | 19 | 19 |
 | PPTX | 20 | 20 | 20 |
-| PDF | 49 | 48 | 48 |
-| 合计 | 130 | 129 | 129 |
+| PDF | 48 | 48 | 48 |
+| 合计 | 129 | 129 | 129 |
 
-PDF 原生旋转使用 `apply_ops.rotatePages`，合同仍保留兼容名称 `rotate_pages`。已验证的成品包括保存重开的冻结数据表、Word 脚注和尾注、Excel 合并附件、PowerPoint 单页重做及图片替换、PDF 批注和分页副本。[数据写回](../../../apps/web/test/local-browser/office-source-analysis.test.mjs) [Word 脚注和尾注](../../../apps/web/test/local-browser/word-knowledge.test.mjs) [Excel 合并附件](../../../apps/web/test/local-browser/sheets-attachment-merge.test.mjs) [PPTX 生成](../../../apps/web/test/local-browser/native-slides-generate.test.mjs) [PDF 工具](../../../apps/web/test/local-browser/native-pdf-open.test.mjs)
+PDF 原生旋转使用 `apply_ops.rotatePages`。旧预览工具名已从 Web 合同移除，覆盖门禁要求当次浏览器实测保存后重开验证页角度。已验证的成品包括保存重开的冻结数据表、Word 脚注和尾注、Excel 合并附件、PowerPoint 单页重做及图片替换、PDF 批注和分页副本。[数据写回](../../../apps/web/test/local-browser/office-source-analysis.test.mjs) [Word 脚注和尾注](../../../apps/web/test/local-browser/word-knowledge.test.mjs) [Excel 合并附件](../../../apps/web/test/local-browser/sheets-attachment-merge.test.mjs) [PPTX 生成](../../../apps/web/test/local-browser/native-slides-generate.test.mjs) [PDF 工具](../../../apps/web/test/local-browser/native-pdf-open.test.mjs)
 
 Excel 已覆盖 19 个实际注册工具。稀疏工作簿的全量预加载曾让已装入网格的点读区域误报未加载。修复后同时确认定向请求是否完成和当前工作簿是否仍有效。Node 与宿主 Rust 进程均验证工作表保护、有效 AutoFilter 范围 A1:C2，以及值筛选和双条件比较。自定义工作表视图中的旧范围不覆盖当前筛选。两条路径均读取小写 A1 引用，并跳过带有未知操作符的整组比较条件。[Excel 定向读取](../../../apps/web/test/local-browser/sheets-find-cells.test.mjs) [Node 执行器](../../../apps/web/server/sheets/xlsx-node-engine.ts)
 
@@ -164,7 +164,7 @@ Excel 已覆盖 19 个实际注册工具。稀疏工作簿的全量预加载曾�
 | `replace_pages` | 观察到 | [ai-tools.test.ts](../../../apps/pdf/tests/ai-tools.test.ts)、[assistant-client.test.mjs](../../../apps/web/test/unit/assistant-client.test.mjs) | 用户确认来源文件后仅替换第二页。新版本页宽为 400、710、600，独立读取新页正文，原文件版本保持原字节。[浏览器用例](../../../apps/web/test/local-browser/native-pdf-page-copies.test.mjs) |
 | `reply_note` | 观察到 | [dsh-office-handoff.test.mjs](../../../apps/web/test/local-browser/dsh-office-handoff.test.mjs)、[native-pdf-open.test.mjs](../../../apps/web/test/local-browser/native-pdf-open.test.mjs) | 浏览器实际调用成功，追问保存了便笺回复。[实测用例](../../../apps/web/test/local-browser/dsh-office-handoff.test.mjs) |
 | `rotate_image` | 观察到 | [pdf-media.test.mjs](../../../apps/web/test/local-browser/pdf-media.test.mjs)、[ai-tools.test.ts](../../../apps/pdf/tests/ai-tools.test.ts) | 顺时针旋转后核对保存成品的图框位置、宽和高。[浏览器用例](../../../apps/web/test/local-browser/pdf-media.test.mjs) |
-| `rotate_pages` | 未观察到 | [office-tool-inventory.test.mjs](../../../apps/web/test/local-browser/office-tool-inventory.test.mjs)、[assistant-client.test.mjs](../../../apps/web/test/unit/assistant-client.test.mjs) | 兼容名称。原生操作由 `apply_ops.rotatePages` 执行，[浏览器用例](../../../apps/web/test/local-browser/native-pdf-open.test.mjs) |
+| `apply_ops.rotatePages` | 作为 `apply_ops` 子操作 | [浏览器用例](../../../apps/web/test/local-browser/native-pdf-open.test.mjs) | 目标页保存为 90°，相邻页为 0°，原修订字节一致，Web 重开成功后记录成品验证。 |
 | `search_text` | 观察到 | [dsh-office-handoff.test.mjs](../../../apps/web/test/local-browser/dsh-office-handoff.test.mjs)、[native-pdf-open.test.mjs](../../../apps/web/test/local-browser/native-pdf-open.test.mjs) | 浏览器实际调用成功，追问读取到已保存的位置与原文。[实测用例](../../../apps/web/test/local-browser/dsh-office-handoff.test.mjs) |
 | `set_header_footer` | 观察到 | [native-pdf-open.test.mjs](../../../apps/web/test/local-browser/native-pdf-open.test.mjs)、[ai-tools.test.ts](../../../apps/pdf/tests/ai-tools.test.ts) | 从 7 开始添加页码，独立提取核对三页上的 7 / 3、8 / 3、9 / 3。[浏览器用例](../../../apps/web/test/local-browser/native-pdf-open.test.mjs) |
 | `set_image_opacity` | 观察到 | [pdf-media.test.mjs](../../../apps/web/test/local-browser/pdf-media.test.mjs)、[ai-tools.test.ts](../../../apps/pdf/tests/ai-tools.test.ts) | 成品指定区域 Alpha 为 128。[浏览器用例](../../../apps/web/test/local-browser/pdf-media.test.mjs) |

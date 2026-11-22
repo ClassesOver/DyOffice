@@ -302,13 +302,12 @@ for(const mode of ['creation','no-word','all'])test(mode==='no-word'
   const absent=new Set(configured?[]:conditional[format])
   // Query results are insertable only in read-only analysis mode, which this fixture leaves off.
   absent.add('insert_data_result')
-  // No starred files; native PDF rotates through apply_ops.
+  // No starred files in this fixture.
   if(format==='docx'){
    for(const name of ['read_knowledge_file','search_knowledge_base'])absent.add(name)
    if(direct)absent.add('create_document')
   }
   if(format==='pdf'){
-   absent.add('rotate_pages')
    absent.add('read_attachment') // Offered only to the turn with a text attachment.
    // Creating and opening a separate file requires the workspace parent.
    if(direct)for(const name of ['create_document','extract_pages','split_pdf','split_pages','merge_pages','confirm_pdf_copies'])absent.add(name)

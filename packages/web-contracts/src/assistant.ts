@@ -49,7 +49,7 @@ export const ASSISTANT_FORMAT_TOOLS: Readonly<Record<AssistantDocumentFormat, Re
     'list_page_images','insert_image','transform_image','rotate_image','replace_image','flip_image','set_image_opacity',
     'crop_image','remove_image_background','delete_image','list_form_fields','apply_ops','insert_blank_page','set_page_size',
     'crop_pages','extract_pages','split_pdf','split_pages','merge_pages','confirm_pdf_copies','replace_pages','get_outline','set_watermark',
-    'set_header_footer','create_document','rotate_pages',
+    'set_header_footer','create_document',
   ]),
 }
 export function assistantToolsForFormat(format: AssistantDocumentFormat, options: {sourceCatalog?: boolean; delegation?: boolean} = {}): ReadonlySet<string> {
