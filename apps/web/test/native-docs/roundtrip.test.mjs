@@ -605,7 +605,8 @@ test('native lost-response warning keeps the draft until the original commit rec
   })
 })
 
-test('actual server entry serves built native DOCX without a format flag and rejects invalid storage settings', { timeout: 30_000 },async t => {
+// The total deadline covers database setup and three actual server processes.
+test('actual server entry serves built native DOCX without a format flag and rejects invalid storage settings', { timeout: 60_000 },async t => {
   const { spawn,execFile } = await import('node:child_process')
   const { once } = await import('node:events'), { promisify } = await import('node:util')
   const f = await fileFixture(t), opened = await importFile(f,f.alice.token,await docxBytes())
