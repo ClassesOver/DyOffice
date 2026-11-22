@@ -8,15 +8,15 @@
 
 首轮定向工具回归共 672 项通过，含 DOCX 71、XLSX 155、PPTX 48、PDF 299、Web 合同与工具 99 项。XLSX 的截断附件提示断言按现有工具文案修正后复跑通过，继续检查读取错误、原件保留和合并用途。[XLSX 截断附件用例](../../../apps/sheets/tests/files-skill.test.ts)
 
-各测试批次合并去重后，浏览器观察到 129 个组合注册，120 个组合向模型返回成功结果。采集仅保留格式、工具名和错误标记。下表中的工具行保留具体效果、成品和待验项，四格式真实模型用例见主报告。[注册用例](../../../apps/web/test/local-browser/office-tool-inventory.test.mjs) [四格式验收](genoffice-web-parity.md)
+各测试批次合并去重后，浏览器观察到 129 个组合注册，123 个组合向模型返回成功结果。采集仅保留格式、工具名和错误标记。下表中的工具行保留具体效果、成品和待验项，四格式真实模型用例见主报告。[注册用例](../../../apps/web/test/local-browser/office-tool-inventory.test.mjs) [四格式验收](genoffice-web-parity.md)
 
 | 格式 | Web 合同 | 浏览器注册 | 定向浏览器成功 |
 | --- | ---: | ---: | ---: |
-| DOCX | 42 | 42 | 34 |
+| DOCX | 42 | 42 | 37 |
 | XLSX | 19 | 19 | 19 |
 | PPTX | 20 | 20 | 19 |
 | PDF | 49 | 48 | 48 |
-| 合计 | 130 | 129 | 120 |
+| 合计 | 130 | 129 | 123 |
 
 PDF 原生旋转使用 `apply_ops.rotatePages`，合同仍保留兼容名称 `rotate_pages`。已验证的成品包括保存重开的冻结数据表、Word 脚注和尾注、Excel 合并附件、PowerPoint 单页重做及图片替换、PDF 批注和分页副本。[数据写回](../../../apps/web/test/local-browser/office-source-analysis.test.mjs) [Word 脚注和尾注](../../../apps/web/test/local-browser/word-knowledge.test.mjs) [Excel 合并附件](../../../apps/web/test/local-browser/sheets-attachment-merge.test.mjs) [PPTX 生成](../../../apps/web/test/local-browser/native-slides-generate.test.mjs) [PDF 工具](../../../apps/web/test/local-browser/native-pdf-open.test.mjs)
 
@@ -58,8 +58,8 @@ Excel 已覆盖 19 个实际注册工具。稀疏工作簿的全量预加载曾�
 | `read_notes` | 观察到 | [Word 只读工具测试](../../../apps/docs/tests/ai-read-only-tools.test.ts) | 返回现有脚注、尾注内容，读取结果反映同轮的编辑与删除。[浏览器用例](../../../apps/web/test/local-browser/word-knowledge.test.mjs) |
 | `read_revisions` | 观察到 | [ai-redline-summary.test.ts](../../../apps/docs/tests/ai-redline-summary.test.ts)、[ai-revision-tools.test.ts](../../../apps/docs/tests/ai-revision-tools.test.ts) | 从真实 DOCX 读取两个待处理修订及其定位 ID。[浏览器用例](../../../apps/web/test/local-browser/word-knowledge.test.mjs) |
 | `reject_changes` | 观察到 | [ai-read-only-tools.test.ts](../../../apps/docs/tests/ai-read-only-tools.test.ts)、[ai-revision-tools.test.ts](../../../apps/docs/tests/ai-revision-tools.test.ts) | 按定位 ID 拒绝第二个插入修订，成品省略被拒绝的文字。[浏览器用例](../../../apps/web/test/local-browser/word-knowledge.test.mjs) |
-| `replace_blocks` | 观察到 | [agent-docs.test.ts](../../../apps/docs/tests/agent-docs.test.ts)、[ai-deleted-revision-context.test.ts](../../../apps/docs/tests/ai-deleted-revision-context.test.ts) | 修订模式保留旧文本划线副本和新增文本，导出包含对应的 OOXML 修订，[单测](../../../apps/docs/tests/ai-track-revisions.test.ts) |
-| `replace_selection` | 观察到 | [agent-docs.test.ts](../../../apps/docs/tests/agent-docs.test.ts)、[ai-keep-pictures-on-replace.test.ts](../../../apps/docs/tests/ai-keep-pictures-on-replace.test.ts) | 只影响指定选区，修订模式记录新旧文字，[单测](../../../apps/docs/tests/agent-docs.test.ts) [单测](../../../apps/docs/tests/redact-range.test.ts) |
+| `replace_blocks` | 观察到 | [agent-docs.test.ts](../../../apps/docs/tests/agent-docs.test.ts)、[ai-deleted-revision-context.test.ts](../../../apps/docs/tests/ai-deleted-revision-context.test.ts) | 按索引替换独立段落，保存后检查旧段落已移除。[浏览器用例](../../../apps/web/test/local-browser/word-knowledge.test.mjs) |
+| `replace_selection` | 观察到 | [agent-docs.test.ts](../../../apps/docs/tests/agent-docs.test.ts)、[ai-keep-pictures-on-replace.test.ts](../../../apps/docs/tests/ai-keep-pictures-on-replace.test.ts) | 仅将段落中的 draft 替换为加粗的 approved，保存后核对前后文字保持一致。[浏览器用例](../../../apps/web/test/local-browser/word-knowledge.test.mjs) |
 | `reply_comment` | 观察到 | [ai-comment-tools.test.ts](../../../apps/docs/tests/ai-comment-tools.test.ts)、[ai-read-only-tools.test.ts](../../../apps/docs/tests/ai-read-only-tools.test.ts) | 向指定线程写入回复，成品的扩展批注保留父级关系。[浏览器用例](../../../apps/web/test/local-browser/word-knowledge.test.mjs) |
 | `resolve_comment` | 观察到 | [ai-comment-tools.test.ts](../../../apps/docs/tests/ai-comment-tools.test.ts)、[ai-read-only-tools.test.ts](../../../apps/docs/tests/ai-read-only-tools.test.ts) | 解决批注和回复，成品的 commentsExtended.xml 含两个完成标记。[浏览器用例](../../../apps/web/test/local-browser/word-knowledge.test.mjs) |
 | `search_knowledge_base` | 观察到 | [word-knowledge.test.mjs](../../../apps/web/test/local-browser/word-knowledge.test.mjs)、[docs-save-download-entry.test.mjs](../../../apps/web/test/unit/docs-save-download-entry.test.mjs) | 从星标文件中检出匹配项，并核对搜索返回的文件路径，[浏览器用例](../../../apps/web/test/local-browser/word-knowledge.test.mjs) |
@@ -67,7 +67,7 @@ Excel 已覆盖 19 个实际注册工具。稀疏工作簿的全量预加载曾�
 | `set_page_setup` | 观察到 | [ai-page-setup.test.ts](../../../apps/docs/tests/ai-page-setup.test.ts)、[ai-read-only-tools.test.ts](../../../apps/docs/tests/ai-read-only-tools.test.ts) | 连续分节后将页面改为 A5 横向，等待最终修订并核对纸张方向。[浏览器用例](../../../apps/web/test/local-browser/word-knowledge.test.mjs) |
 | `set_watermark` | 观察到 | [native-pdf-open.test.mjs](../../../apps/web/test/local-browser/native-pdf-open.test.mjs)、[ai-read-only-tools.test.ts](../../../apps/docs/tests/ai-read-only-tools.test.ts) | 设置文本水印，保存后核对页眉部件中的水印内容。[浏览器用例](../../../apps/web/test/local-browser/word-knowledge.test.mjs) |
 | `web_search` | 观察到 | [t12-workspace-settings.test.mjs](../../../apps/web/test/local-browser/t12-workspace-settings.test.mjs)、[agent-docs.test.ts](../../../apps/docs/tests/agent-docs.test.ts) | 后端不可用时工具返回失败，真实检索质量待复验，[单测](../../../apps/docs/tests/agent-docs.test.ts) |
-| `write_document` | 观察到 | [ai-doc-writer.test.ts](../../../apps/docs/tests/ai-doc-writer.test.ts)、[assistant-channel-bidirectional.test.mjs](../../../apps/web/test/local-integration/assistant-channel-bidirectional.test.mjs) | 流式草稿按插入位置写入，部分输出标记为未完成，[单测](../../../apps/docs/tests/ai-doc-writer.test.ts) |
+| `write_document` | 观察到 | [ai-doc-writer.test.ts](../../../apps/docs/tests/ai-doc-writer.test.ts)、[assistant-channel-bidirectional.test.mjs](../../../apps/web/test/local-integration/assistant-channel-bidirectional.test.mjs) | 流式草稿保持在编辑器中，最终正文在显式保存后落盘，重开仍可读。[浏览器用例](../../../apps/web/test/native-docs/writer-draft-save.test.mjs) |
 
 ## XLSX
 

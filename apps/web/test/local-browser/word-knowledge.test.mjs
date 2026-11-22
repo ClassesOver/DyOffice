@@ -38,6 +38,22 @@ test('Word searches a starred saved source, reads its actual text and opens the 
   const user=request.messages.findLastIndex(message=>message.role==='user')
   const content=request.messages[user]?.content
   const prompt=typeof content==='string'?content:content?.map(part=>part.text??'').join(' ')
+  if(prompt?.includes('验证替换正文')||prompt?.includes('验证替换选区')){
+   const selection=prompt.includes('验证替换选区')
+   const results=request.messages.slice(user+1).filter(message=>message.role==='tool').map(message=>JSON.parse(message.content))
+   const calls=selection
+    ? [['replace_selection',{html:'<strong>approved</strong>'},/Replaced the selected text.*"draft".*"approved"/]]
+    : [['insert_content',{afterBlockIndex:0,html:'<p>Draft block 651</p>'},/Inserted 1 block/],
+      ['replace_blocks',{startBlockIndex:1,endBlockIndex:1,html:'<p>Begin draft report</p>'},/Replaced blocks 1-1/]]
+   if(results.length){
+    const {output,isError}=results.at(-1),[name,,expected]=calls[results.length-1]
+    assert.ok(!isError,name+': '+output)
+    assert.match(output,expected,name+': '+output)
+   }
+   const action=calls[results.length]
+   const delta=action?{tool_calls:[{index:0,id:'replace-'+action[0],type:'function',function:{name:action[0],arguments:JSON.stringify(action[1])}}]}:{content:selection?'已验证替换选区':'已验证替换正文'}
+   return Readable.from([Buffer.from(`data: ${JSON.stringify({choices:[{delta,finish_reason:action?'tool_calls':'stop'}]})}\n\ndata: [DONE]\n\n`)])
+  }
   if(prompt?.includes('验证批注与修订')){
    const results=request.messages.slice(user+1).filter(message=>message.role==='tool').map(message=>JSON.parse(message.content))
    const keepId=results[3]?.output.match(/Added comment (\d+)/)?.[1]
@@ -177,6 +193,22 @@ test('Word searches a starred saved source, reads its actual text and opens the 
   await composer.fill('验证页面与样式');await composer.press('Enter')
   await expect(editor.locator('.ai-msg-assistant').last()).toContainText('已验证页面与样式',{timeout:45000})
   await expect(editor.locator('.ai-msg-streaming')).toHaveCount(0)
+  await composer.fill('验证替换正文');await composer.press('Enter')
+  await expect(editor.locator('.ai-msg-assistant').last()).toContainText('已验证替换正文',{timeout:45000})
+  const rewritten=editor.locator('.tiptap.doc-page p').filter({hasText:/^Begin draft report$/})
+  await rewritten.evaluate(paragraph=>{
+   const text=paragraph.ownerDocument.createTreeWalker(paragraph,NodeFilter.SHOW_TEXT).nextNode()
+   const range=paragraph.ownerDocument.createRange()
+   range.setStart(text,6)
+   range.setEnd(text,11)
+   paragraph.closest('.tiptap').focus()
+   const selection=paragraph.ownerDocument.getSelection()
+   selection.removeAllRanges()
+   selection.addRange(range)
+  })
+  await expect.poll(()=>rewritten.evaluate(node=>node.ownerDocument.getSelection().toString())).toBe('draft')
+  await composer.fill('验证替换选区');await composer.press('Enter')
+  await expect(editor.locator('.ai-msg-assistant').last()).toContainText('已验证替换选区',{timeout:45000})
   const head=async()=>(await f.files.openFile(f.alice.token,draft.fileId)).file.revision
   const readSaved=async()=>JSZip.loadAsync(await f.files.readFile(f.alice.token,draft.fileId,await head()))
   await page.keyboard.press('Control+s')
@@ -215,6 +247,8 @@ test('Word searches a starred saved source, reads its actual text and opens the 
   assert.match(commentThreads,/w15:paraIdParent="[A-F0-9]+"/i)
   assert.match(body,/Keep pending insertion/)
   assert.doesNotMatch(body,/Drop pending insertion|<w:ins\b/)
+  assert.match(body,/Begin <\/w:t>[\s\S]*?<w:t[^>]*>approved<\/w:t>[\s\S]*? report<\/w:t>/)
+  assert.doesNotMatch(body,/Draft block 651/)
  }
  await link.click()
  const cited=page.frameLocator(`iframe[data-document-id="${source.fileId}"]`)
