@@ -670,6 +670,63 @@ test('native lost-response warning keeps the draft until the original commit rec
   })
 })
 
+test('native Word preserves the unsaved draft through an offline save and reconnect, then retries a canceled download', {timeout:120_000},async t=>{
+  let downloadPath,downloadResponse
+  const interrupted=holdFirstResponseEnd(req=>req.method==='GET'&&req.url===downloadPath,()=>downloadResponse.flushHeaders())
+  const f=await fixture(t,{
+    beforeCleanup:interrupted.release,
+    beforeHttpRequest(req,res){if(interrupted.intercept(req,res))downloadResponse=res},
+  })
+  const {fileId,revision}=f.opened.file
+  const head=async()=>(await f.files.openFile(f.alice.token,fileId)).file.revision
+  const marker='Draft saved after reconnect'
+  await f.page.goto(f.origin+'/native-docx/?fileId='+fileId)
+  const editor=f.page.locator('.tiptap.doc-page[contenteditable="true"]')
+  const status=f.page.locator('.dyoffice-docs-persistence-state')
+  await editor.click()
+  await f.page.keyboard.press('Control+End')
+  await f.page.keyboard.type(marker)
+  await expect(status).toHaveAttribute('data-dirty','true')
+  await f.context.setOffline(true)
+  try{
+    const failed=f.page.waitForEvent('requestfailed',{predicate:request=>request.method()==='POST'&&request.url().endsWith(`/files/${fileId}/uploads`),timeout:15000})
+    await f.page.keyboard.press('Control+s')
+    assert.match((await failed).failure()?.errorText??'',/ERR_INTERNET_DISCONNECTED/)
+    await expect(status).toHaveAttribute('data-native-save','incomplete')
+    await expect(status).toHaveAttribute('data-dirty','true')
+    await expect(editor).toContainText(marker)
+    assert.equal(await head(),revision)
+  }finally{await f.context.setOffline(false)}
+  const committed=f.page.waitForResponse(response=>response.url().endsWith(`/files/${fileId}/commits`)&&response.request().method()==='POST'&&response.ok(),{timeout:30000})
+  await f.page.keyboard.press('Control+s')
+  await committed
+  await expectCleanPersistence(f.page)
+  const savedRevision=await head()
+  assert.notEqual(savedRevision,revision)
+  assert.deepEqual(await f.files.readFile(f.alice.token,fileId,revision),f.original)
+  downloadPath=`/api/v1/files/${fileId}/content?revision=${savedRevision}`
+  const fileMenu=f.page.getByRole('button',{name:'File',exact:true})
+  const downloadLink=f.page.getByRole('link',{name:'Download saved version',exact:true})
+  await fileMenu.click()
+  const canceled=f.page.waitForEvent('download',{timeout:15000})
+  await downloadLink.click()
+  const first=await canceled
+  assert.equal(await interrupted.started,200)
+  await first.cancel()
+  assert.equal(await first.failure(),'canceled')
+  interrupted.release()
+  await expectCleanPersistence(f.page)
+  await f.page.keyboard.press('Escape')
+  await fileMenu.click()
+  const retried=f.page.waitForEvent('download',{timeout:15000})
+  await downloadLink.click()
+  const savedBytes=await f.files.readFile(f.alice.token,fileId,savedRevision)
+  assert.deepEqual(await readFile(await (await retried).path()),savedBytes)
+  assert.equal(await head(),savedRevision)
+  await f.page.reload()
+  await expect(f.page.locator('.tiptap.doc-page')).toContainText(marker,{timeout:45000})
+})
+
 // The total deadline covers database setup and three actual server processes.
 test('actual server entry serves built native DOCX without a format flag and rejects invalid storage settings', { timeout: 60_000 },async t => {
   const { spawn,execFile } = await import('node:child_process')

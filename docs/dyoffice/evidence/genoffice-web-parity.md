@@ -34,6 +34,8 @@ Chromium 使用隔离 Node 执行路径打开同一工作表中的四类单元�
 
 同一 DOCX 构建的 F14 修改密码浏览器用例通过。错误密码提示后可只读打开，键入被阻止，下载仍为原始字节且修订不变。输入正确密码后可编辑并保存新修订，写保护字段及历史原件保持不变。重开仍提示修改密码，只读查看时可读回授权修改。[DOCX 原生浏览器回归](../../../apps/web/test/native-docs/roundtrip.test.mjs)
 
+F12 使用 `d8392ce2` 的构建产物通过 Chromium 定向复验。断网时实际上传请求失败，当前页草稿保持未保存，服务端修订不变。恢复联网后手动保存成功，历史原件字节一致。下载响应发送头部后取消，重试取得同一修订的完整字节且没有重复提交。刷新后读回已保存正文。[DOCX 原生浏览器回归](../../../apps/web/test/native-docs/roundtrip.test.mjs)
+
 该样本 `DyOffice-Word-样式批注-d90ea092.docx` 的 SHA-256 为 `e224c6359f2f522bf3b5f1e1e7637bec4a4d65149015830653813e94eb2fb649`。LibreOffice Writer 24.2.7.2 在隔离网络命名空间打开并另存为 DOCX。另存成品保留 `Heading1`、标题、批注文本和范围起止及引用。Web 下载原件哈希保持一致，桌面 Microsoft Word 仍待验。
 
 同一候选的 XLSX 主题用例两项通过。浅色和深色 UI 均经原生 Univer 编辑并用“保存并下载”提交，下载字节与对应修订一致。两份成品均保留 `B2` 公式 `A2*2`、重算缓存 `42.5`、Revenue 名称、图表数列和原填充色 `4472C4`，未修改的绘图和 Custom XML 部件也保持原样。刷新后原生工作簿读到已保存的 `A2=21.25`。[XLSX 原生浏览器回归](../../../apps/web/test/native-sheets/entry.test.mjs)
