@@ -65,12 +65,23 @@ for(const live of [false,true])test((live?'Live model':'Fixture model')+' finds 
    <row r="1002"><c r="AB1002" t="e"><f>1/0</f><v>#DIV/0!</v></c></row>
   </sheetData>
   <sheetProtection sheet="1"/>
-  <autoFilter ref="A1:C2"/>
+  <autoFilter ref="A1:C2">
+   <filterColumn colId="0"><filters><filter val="11"/></filters></filterColumn>
+   <filterColumn colId="1"><customFilters and="1"><customFilter operator="greaterThan" val="0"/><customFilter val="0.25"/></customFilters></filterColumn>
+  </autoFilter>
+  <customSheetViews><customSheetView guid="{11111111-1111-1111-1111-111111111111}"><autoFilter ref="A1:A2"/></customSheetView></customSheetViews>
  </worksheet>`)
  const original=await zip.generateAsync({type:'nodebuffer'})
  const auditSheet=(await runtime.sheetsNative.inspect(original)).sheets.find(sheet=>sheet.name==='Audit')
  assert.ok(auditSheet)
  const sheetId=auditSheet.id
+ const filterArea={startRow:0,endRow:1,startColumn:0,endColumn:2}
+ const filtered=await runtime.sheetsNative.readRange(original,'Audit',filterArea)
+ assert.deepEqual(filtered.autoFilter,filterArea)
+ assert.deepEqual(filtered.autoFilterColumns,[
+  {colId:0,values:['11']},
+  {colId:1,customs:{and:true,filters:[{operator:'greaterThan',val:'0'},{val:'0.25'}]}},
+ ])
  const auditCalls=[
   ['read_cells',{sheetId,addresses:['A1','C1']},[/A1: 7/,/=A1\+A2/]],
   ['aggregate_range',{sheetId,range:'A1:A2'},[/numeric cells: 2, sum: 18/]],
@@ -79,7 +90,7 @@ for(const live of [false,true])test((live?'Live model':'Fixture model')+' finds 
   ['trace_dependents',{sheetId,address:'A1'},[/Audit!C1 = 18/]],
   ['load_guide',{guides:['writing']},[/set_range/]],
   ['select_range',{sheetId,range:'A1:C2'},[/Selected Audit!A1:C2/]],
-  ['read_sheet_features',{sheetId},[/Status: visible, protected/,...(nativeAudit?[/AutoFilter[^\n]*A1:C2/i]:[])]],
+  ['read_sheet_features',{sheetId},[/Status: visible, protected/,/AutoFilter[^\n]*A1:C2/i]],
  ]
  const {file}=await importFile(f,f.alice.token,original,'search.xlsx')
  const app=await buildLocalApp({db:f.db,businessPool:f.businessPool,passwords:f.passwords,deploymentId:f.deploymentId,origin,csrfKey:f.csrfKey,objectStore:f.objects,codingHarnesses:false,localShellDirectory:process.env.DYOFFICE_TEST_LOCAL_SHELL_DIRECTORY??fileURLToPath(new URL('../../dist-local-shell',import.meta.url)),globalConfigKeyring:keyring,providerGateway:{mode:'shared'},...runtime})

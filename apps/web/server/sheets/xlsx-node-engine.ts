@@ -31,9 +31,11 @@ interface ParsedCell {
   formula?: string
 }
 
-type SheetProtection=Pick<WorkbookRangeResult,'sheetProtection'|'protectedRanges'>
+type SheetMetadata=Pick<WorkbookRangeResult,'sheetProtection'|'protectedRanges'|'autoFilter'|'autoFilterColumns'>
+type FilterColumn=WorkbookRangeResult['autoFilterColumns'][number]
+const EMPTY_SHEET_METADATA:SheetMetadata={sheetProtection:null,protectedRanges:[],autoFilter:null,autoFilterColumns:[]}
 
-interface ParsedSheet extends SheetProtection {
+interface ParsedSheet extends SheetMetadata {
   id: string
   name: string
   cells: ParsedCell[]
@@ -76,10 +78,13 @@ function matchFindText(query:string,matchCase:boolean,whole:boolean,wildcards:bo
 }
 
 type ZipText=(path:string)=>Promise<string>
-type XmlElement=Record<string,string|undefined>
+type XmlElement={ [name: `@_${string}`]: string|undefined }
 const metadataXml=new XMLParser({
   ignoreAttributes:false,removeNSPrefix:true,processEntities:false,parseTagValue:false,trimValues:false,
-  stopNodes:['*.sheetData'],isArray:(_name,path)=>path==='worksheet.protectedRanges.protectedRange',
+  stopNodes:['*.sheetData'],isArray:(_name,path)=>[
+    'worksheet.protectedRanges.protectedRange','worksheet.autoFilter','worksheet.autoFilter.filterColumn',
+    'worksheet.autoFilter.filterColumn.filters.filter','worksheet.autoFilter.filterColumn.customFilters.customFilter',
+  ].includes(path),
 })
 const attribute=(element:XmlElement|undefined,name:string)=>{
   const value=element?.['@_'+name]
@@ -96,12 +101,14 @@ function readWorkbookProtection(xml:string):WorkbookFile['workbookProtection']{
     hasPassword:attribute(element,'workbookPassword')!==undefined||attribute(element,'workbookHashValue')!==undefined}
 }
 
-function readWorksheetProtection(xml:string):SheetProtection{
-  if(!xml.includes('sheetProtection')&&!xml.includes('protectedRanges'))return {sheetProtection:null,protectedRanges:[]}
+const filterOperators=['notEqual','greaterThan','greaterThanOrEqual','lessThan','lessThanOrEqual'] as const
+
+function readWorksheetMetadata(xml:string):SheetMetadata{
+  if(!xml.includes('sheetProtection')&&!xml.includes('protectedRanges')&&!xml.includes('autoFilter'))return EMPTY_SHEET_METADATA
   const worksheet=metadataXml.parse(xml).worksheet
   const element=worksheet?.sheetProtection
   const parsed=element===undefined?null:parseSheetProtectionAttributes(name=>attribute(element,name))
-  const protectedRanges:SheetProtection['protectedRanges']=[]
+  const protectedRanges:SheetMetadata['protectedRanges']=[]
   for(const range of worksheet?.protectedRanges?.protectedRange??[]){
     const name=attribute(range,'name'),sqref=attribute(range,'sqref')
     if(name===undefined||sqref===undefined)continue
@@ -112,7 +119,44 @@ function readWorksheetProtection(xml:string):SheetProtection{
     protected:parsed.protected,allow:parsed.allow,hasPassword:parsed.password!==null,
     ...(parsed.password?{password:parsed.password}:{}),
   }
-  return {sheetProtection,protectedRanges}
+  return {sheetProtection,protectedRanges,...readAutoFilter(worksheet?.autoFilter?.[0])}
+}
+
+type AutoFilterXml=XmlElement & {filterColumn?:Array<XmlElement & {
+  filters?:XmlElement & {filter?:XmlElement[]}
+  customFilters?:XmlElement & {customFilter?:XmlElement[]}
+}>}
+
+function readAutoFilter(element:AutoFilterXml|undefined):Pick<SheetMetadata,'autoFilter'|'autoFilterColumns'> {
+  const ref=attribute(element,'ref')
+  let autoFilter:SheetMetadata['autoFilter']=null
+  if(ref&&/^\$?[A-Z]{1,3}\$?[1-9]\d{0,6}(?::\$?[A-Z]{1,3}\$?[1-9]\d{0,6})?$/.test(ref)){
+    const area=parseRef(ref)
+    if(area.startRow<=area.endRow&&area.endRow<1_048_576&&area.startColumn<=area.endColumn&&area.endColumn<16_384)autoFilter=area
+  }
+  const autoFilterColumns:FilterColumn[]=[]
+  if(autoFilter)for(const column of element?.filterColumn??[]){
+    const id=attribute(column,'colId')
+    if(id===undefined||!/^\d+$/.test(id))continue
+    const colId=Number(id)
+    if(colId>autoFilter.endColumn-autoFilter.startColumn)continue
+    const filters=column.filters
+    const custom=column.customFilters
+    const values=filters?.filter?.flatMap(filter=>{
+      const val=attribute(filter,'val')
+      return val!==undefined&&val.length<=32_767?[val]:[]
+    }).slice(0,10_000)
+    const comparisons=custom?.customFilter?.flatMap(filter=>{
+      const val=attribute(filter,'val'),name=attribute(filter,'operator')
+      const operator=filterOperators.find(item=>item===name)
+      return val===undefined||val.length>32_767||(name&&name!=='equal'&&!operator)?[]:[{val,...(operator?{operator}:{})}]
+    }).slice(0,2)
+    if(filters===undefined&&!comparisons?.length)continue
+    autoFilterColumns.push({colId,...(filters!==undefined?{values:values??[],...(enabled(attribute(filters,'blank'))?{blank:true}:{})}:{}),
+      ...(comparisons?.length?{customs:{filters:comparisons,...(enabled(attribute(custom,'and'))?{and:true}:{})}}:{})})
+    if(autoFilterColumns.length===1_000)break
+  }
+  return {autoFilter,autoFilterColumns}
 }
 
 /** Inflates each part at most once per command; the readers below share workbook.xml and its rels. */
@@ -186,7 +230,7 @@ async function readWorkbookStyles(text: ZipText) {
 async function readSheetMetadata(text: ZipText) {
   const workbookPath = 'xl/workbook.xml'
   const workbookRels = parseRelationships(await text(relsPathFor(workbookPath)))
-  const sheets = new Map<string, SheetProtection & {styleIndexes:Map<string,number>}>()
+  const sheets = new Map<string, SheetMetadata & {styleIndexes:Map<string,number>}>()
   for (const sheet of parseSheetElements(await text(workbookPath))) {
     const rel = workbookRels.find(item => item.id === sheet.relationshipId && !item.external && item.type.endsWith('/worksheet'))
     if (!rel) continue
@@ -198,7 +242,7 @@ async function readSheetMetadata(text: ZipText) {
       const style = readAttribute(match[1]!, 's')
       if (address && style !== null && /^\d+$/.test(style)) cells.set(decodeAttribute(address), Number(style))
     }
-    sheets.set(sheet.name,{styleIndexes:cells,...readWorksheetProtection(xml)})
+    sheets.set(sheet.name,{styleIndexes:cells,...readWorksheetMetadata(xml)})
   }
   return sheets
 }
@@ -289,7 +333,8 @@ async function handleCommand(packet: Record<string, unknown>): Promise<unknown> 
       }
       cells.sort((a,b)=>a.row-b.row||a.column-b.column)
       return { id: s.id, name: s.name, cells, rowCount, columnCount, valueCellCount, valueRowCount, valueColumnCount,
-        sheetProtection:sheetMetadata?.sheetProtection??null,protectedRanges:sheetMetadata?.protectedRanges??[] }
+        sheetProtection:sheetMetadata?.sheetProtection??null,protectedRanges:sheetMetadata?.protectedRanges??[],
+        autoFilter:sheetMetadata?.autoFilter??null,autoFilterColumns:sheetMetadata?.autoFilterColumns??[] }
     })
     const sessionId = randomUUID()
     sessions.set(sessionId, { sheets: parsedSheets, zip })
@@ -351,8 +396,8 @@ async function handleCommand(packet: Record<string, unknown>): Promise<unknown> 
       merges: [],
       hyperlinks: [],
       conditionalRules: [],
-      autoFilter: null,
-      autoFilterColumns: [],
+      autoFilter: sheet.autoFilter,
+      autoFilterColumns: sheet.autoFilterColumns,
       dataValidations: [],
       sheetProtection: sheet.sheetProtection,
       rowBreaks: [],
