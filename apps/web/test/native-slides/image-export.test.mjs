@@ -14,6 +14,7 @@ import {openIsolatedPptxSession} from '../../worker/src/native/pptx-session-host
 import {launchTestBrowser} from '../helpers/browser.mjs'
 import {fileFixture,importFile} from '../helpers/files.mjs'
 import {password} from '../helpers/identity.mjs'
+import {hashProtectionPassword} from '../../../../packages/docx-engine/src/protection.ts'
 
 async function fixture(t) {
   const directory = await mkdtemp(join(tmpdir(),'dyoffice-slide-image-export-'))
@@ -43,6 +44,28 @@ async function openDeck({page,origin}, fileId, theme) {
 }
 
 const deckFixture = new URL('../fixtures/slides/acceptance.pptx',import.meta.url)
+
+test('PPTX displays modification protection and downloads the unmodified saved version',{timeout:90000},async t=>{
+  const f=await fixture(t),{page}=f
+  const archive=await JSZip.loadAsync(await readFile(deckFixture))
+  const presentation='ppt/presentation.xml',xml=await archive.file(presentation).async('string')
+  const {hash,salt,spinCount}=await hashProtectionPassword('Synthetic PPTX modify password',1000)
+  const verifier=`<p:modifyVerifier algorithmName="SHA-512" hashValue="${hash}" saltValue="${salt}" spinCount="${spinCount}"/>`
+  archive.file(presentation,xml.replace('</p:presentation>',verifier+'</p:presentation>'))
+  const original=await archive.generateAsync({type:'nodebuffer'})
+  const {file}=await importFile(f,f.alice.token,original,'write-protected.pptx')
+  await f.preferences.update(f.alice.token,{theme:'light'})
+  await openDeck(f,file.fileId,'light')
+  await expect(page.getByText('Write-protected presentation',{exact:true})).toBeVisible()
+  await page.locator('.ribbon-tab-file').click()
+  await expect(page.locator('.dyoffice-slides-download')).toBeDisabled()
+  const [download]=await Promise.all([
+    page.waitForEvent('download'),page.locator('.dyoffice-slides-download-saved').click(),
+  ])
+  assert.equal(download.suggestedFilename(),'write-protected.pptx')
+  assert.deepEqual(await readFile(await download.path()),original)
+  assert.equal((await f.files.openFile(f.alice.token,file.fileId)).file.revision,file.revision)
+})
 
 test('PPTX exports the same visible-slide PNG and JPEG images in both UI themes without committing', {timeout:120000}, async t => {
   const f = await fixture(t), {page} = f

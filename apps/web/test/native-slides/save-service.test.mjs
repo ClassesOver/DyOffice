@@ -9,12 +9,13 @@ import {createLeaseService} from '../../server/src/modules/leases/service.ts'
 import {createRevisionService} from '../../server/src/modules/revisions/service.ts'
 import {createSlidesService} from '../../server/src/modules/slides/service.ts'
 import {createSlidesSaveService} from '../../server/src/modules/slides/save.ts'
+import {hashProtectionPassword} from '../../../../packages/docx-engine/src/protection.ts'
 const bytes=()=>readFile(new URL('../fixtures/slides/acceptance.pptx',import.meta.url))
 const host={openSession(input,_signal){return openIsolatedPptxSession({fileId:input.fileId,revision:input.revision,bytes:input.bytes},{timeoutMs:60000,unsafeTestOnly:true})}}
 const ops=(el,text)=>[{op:'setText',target:{slide:0,el},paragraphs:[{runs:[{text}]}]}]
 
-async function fixture(t){
- const f=await fileFixture(t),file=await importFile(f,f.alice.token,await bytes(),'acceptance.pptx')
+async function fixture(t,input){
+ const f=await fileFixture(t),file=await importFile(f,f.alice.token,input??await bytes(),'acceptance.pptx')
  const leases=createLeaseService({transactions:f.transactions})
  const revisions=createRevisionService({transactions:f.transactions,objects:f.objects,files:f.files})
  const sessions=createSlidesService({files:f.files,leases,revisions,host})
@@ -23,6 +24,27 @@ async function fixture(t){
  const editorId=randomUUID(),lease=await leases.acquireLease(f.alice.token,file.file.fileId,{editorId})
  return {...f,file,leases,revisions,sessions,saves,editorId,input:{baseRevision:file.file.revision,leaseEpoch:lease.leaseEpoch,editorId}}
 }
+
+test('a PPTX with a modification verifier renders and retains its original while edit and save are refused',async t=>{
+ const input=await JSZip.loadAsync(await bytes()),part='ppt/presentation.xml'
+ const xml=await input.file(part).async('string')
+ const {hash,salt,spinCount}=await hashProtectionPassword('Synthetic PPTX modify password',1000)
+ const marker=`<p:modifyVerifier algorithmName="SHA-512" hashValue="${hash}" saltValue="${salt}" spinCount="${spinCount}"/>`
+ assert.match(xml,/<\/p:presentation>/)
+ input.file(part,xml.replace('</p:presentation>',marker+'</p:presentation>'))
+ const original=await input.generateAsync({type:'nodebuffer'})
+ const f=await fixture(t,original),fileId=f.file.file.fileId
+ const request={editorId:f.editorId,leaseEpoch:f.input.leaseEpoch,revision:f.input.baseRevision,generation:0}
+ const opened=await f.sessions.open(f.alice.token,fileId,request)
+ assert.equal(opened.writeProtected,true)
+ assert.equal(opened.slides.length,2)
+ await assert.rejects(()=>f.sessions.apply(f.alice.token,fileId,{...request,ops:ops('e_904989a1','blocked edit')}),{statusCode:403})
+ const reserved=(await f.files.usage(f.alice.token)).reservedBytes
+ await assert.rejects(()=>f.saves.prepare(f.alice.token,fileId,{...f.input,request:{revision:f.input.baseRevision,generation:0}}),{statusCode:403})
+ assert.equal((await f.files.usage(f.alice.token)).reservedBytes,reserved)
+ assert.equal((await f.files.openFile(f.alice.token,fileId)).file.revision,f.input.baseRevision)
+ assert.deepEqual(await f.files.readFile(f.alice.token,fileId,f.input.baseRevision),original)
+})
 
 test('a session export stages a T06 upload and commits exactly once, preserving unrelated parts',async t=>{
  const f=await fixture(t),fileId=f.file.file.fileId

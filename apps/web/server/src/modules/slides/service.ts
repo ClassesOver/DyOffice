@@ -28,7 +28,7 @@ export type SlidesImageInput = SlidesReadInput & {slide:number;bytesBase64:strin
   | {mode:'replace';sourceId:string;keepSrcRect?:boolean;placement?:never}
 )
 export interface SlidesSaveExportInput extends SlidesAuthority { revision: string; generation: number }
-export interface SlidesOpenView { generation: number; dirty: boolean; size: { cx: number; cy: number }; defaultFont: string; slides: SlidesRenderSlideLike[]; history: { canUndo: boolean; canRedo: boolean } }
+export interface SlidesOpenView { generation: number; dirty: boolean; size: { cx: number; cy: number }; defaultFont: string; slides: SlidesRenderSlideLike[]; history: { canUndo: boolean; canRedo: boolean }; writeProtected?: true }
 export interface SlidesSlidesView { generation: number; slides: SlidesRenderSlideLike[] }
 export interface SlidesStepResponse { generation: number; dirty: boolean; size: {cx:number;cy:number}; slides: SlidesRenderSlideLike[] | null; history: { canUndo: boolean; canRedo: boolean } }
 type SlidesTransaction = SlidesApplyView['transaction']
@@ -68,11 +68,13 @@ function mapSessionError(error: unknown): never {
   if (OP_INVALID.has(message)) throw authError(400)
   if (message==='GENERATED_PAGE_LIMIT') throw authError(413)
   if (message === 'INPUT_LIMIT') throw authError(413)
+  if (message === 'PPTX_WRITE_PROTECTED') throw authError(403)
   throw error
 }
 interface SessionEntry {
   handle: PptxChildSession; fileId: string; revision: string; count:number; size: { cx: number; cy: number }; defaultFont: string
   generation: number; stateGeneration: number; savedGeneration: number
+  writeProtected?: true
   preparedUploadId?: string; lastExportSha?: string; exportedGeneration?: number; exportedStateGeneration?: number
   history: { canUndo: boolean; canRedo: boolean }; lastUsed: number
 }
@@ -151,6 +153,7 @@ export function createSlidesService({ files, leases, revisions, host, maxConcurr
       const entry: SessionEntry = {
         handle, fileId, revision, count:outline.count, size: outline.size,
         defaultFont: outline.defaultFont ?? 'Calibri',
+        ...(outline.writeProtected ? {writeProtected:true as const} : {}),
         generation: 0, stateGeneration: 0, savedGeneration: 0,
         history: { canUndo: false, canRedo: false }, lastUsed: Date.now(),
       }
@@ -222,7 +225,8 @@ export function createSlidesService({ files, leases, revisions, host, maxConcurr
       const entry = await ensure(token, fileId, input.revision, signal)
       fence(entry, input.generation)
       const slides = await entry.handle.renderAll(input.generation, input.fitWidthPx).catch(mapSessionError)
-      return { generation: entry.generation, dirty: dirty(entry), size: entry.size, defaultFont: entry.defaultFont, slides, history: entry.history }
+      return { generation: entry.generation, dirty: dirty(entry), size: entry.size, defaultFont: entry.defaultFont, slides, history: entry.history,
+        ...(entry.writeProtected ? {writeProtected:entry.writeProtected} : {}) }
     },
     async slide(token: string, fileId: string, input: SlidesSlideInput, signal?: AbortSignal): Promise<SlidesRenderSlideLike> {
       const { entry } = await pinned(token, fileId, input.revision, signal)

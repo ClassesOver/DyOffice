@@ -88,6 +88,8 @@ PPTX 文件菜单已支持 PNG/JPG 导出。Web 使用同一套 GenOffice 画布
 
 固定候选 `d90ea092` 的 F15 PPTX 两项用例通过。浅色和深色 UI 导出的同格式可见页图片逐字节一致，隐藏页均被排除，导出没有生成文件修订。在两种主题下插入同一填充色的矩形，经原生链路保存并下载。下载成品的 OOXML 均包含真实矩形和色值 `A14173`，未编辑幻灯片、文稿主题及历史原件的字节保持一致。重开后两个矩形都可继续修改填充色。[PPTX 保存与图片导出回归](../../../apps/web/test/native-slides/image-export.test.mjs)
 
+PPTX 的 F14 修改密码保护通过原生会话复验。对照候选 `d8392ce2` 会保留 `p:modifyVerifier` 字段并提交修改后的正文。修复后识别到验证器的演示文稿可渲染和浏览，原生编辑及保存请求返回 403，原件与修订保持一致。原生会话及保存专项 32 项全部通过。Chromium 三项通过，覆盖只读提示、保存按钮禁用、原件下载，以及普通 PPTX 图片导出和原生对象编辑保存。Web 通过修改密码解锁仍待适配。[Microsoft PresentationML 修改保护说明](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.presentation.modificationverifier?view=openxml-3.0.1) [PPTX 原生保存与下载用例](../../../apps/web/test/native-slides/image-export.test.mjs)
+
 合入上游 `6e92710c` 后，PPTX 功能区可以选择 TIFF。Web 原生会话复用 GenOffice 解码器生成 PNG 预览，限制解码为 16,777,216 像素、单张 PNG 输出为 8 MiB。Chromium 通过功能区插入 TIFF，核对预览尺寸和像素、下载包中的 TIFF 原始字节和重开结果。同次 Chromium 复跑通过 TIFF 原生往返和 PNG/JPG 导出两项。PPTX 原生会话、解码和识别共 42 项，独立 PPTX CI 夹具本地运行 56 项，Web 桥接及测试子进程共 66 项全部通过。完整 SaaS 构建、服务端及 Web PPTX 类型检查也通过。
 
 固定候选 `d90ea092` 的 `bridge`、`service` 与 `session-host` 套件共 74 项全部通过，覆盖保存身份、母版和原生对象、历史批次及撤销、范围检查、代数与会话限制。该组结果来自 Web 适配和测试宿主，正式执行后端及 PowerPoint 复开另行验收。

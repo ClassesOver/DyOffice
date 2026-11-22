@@ -131,7 +131,7 @@ export class PackageArchive {
   /**
    * Read the presentation's slide size and the slide part paths in order.
    */
-  readPresentation(): { size: SlideSize; slidePaths: string[] } {
+  readPresentation(): { size: SlideSize; slidePaths: string[]; writeProtected?: true } {
     const presXml = this.readText('ppt/presentation.xml')
     if (!presXml) throw new Error('pptx: missing ppt/presentation.xml')
 
@@ -144,6 +144,14 @@ export class PackageArchive {
     const rootRaw = pres['p:presentation'] ?? pres.presentation
     if (!rootRaw) throw new Error('pptx: malformed presentation.xml')
     const root = asXmlNode(rootRaw)
+    const writeProtected = Object.entries(root).some(([name, value]) => {
+      const split = name.split(':')
+      if (split.at(-1) !== 'modifyVerifier') return false
+      const xmlns = split.length === 2 ? `@_xmlns:${split[0]}` : '@_xmlns'
+      const namespace = asXmlNode(value)[xmlns] ?? root[xmlns]
+      return namespace === 'http://schemas.openxmlformats.org/presentationml/2006/main' ||
+        namespace === 'http://purl.oclc.org/ooxml/presentationml/main'
+    })
 
     // Slide size
     const szRaw = root['p:sldSz'] ?? root.sldSz
@@ -170,7 +178,7 @@ export class PackageArchive {
       if (!rel) continue
       slidePaths.push(resolveTarget('ppt/presentation.xml', rel.target))
     }
-    return { size, slidePaths }
+    return { size, slidePaths, ...(writeProtected ? { writeProtected: true as const } : {}) }
   }
 
   /** Resolve a slide's layout / master part paths (via the rels chain). */

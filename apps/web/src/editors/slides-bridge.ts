@@ -29,7 +29,7 @@ type SaveResult = {ok: boolean; path?: string; error?: string}
 type SaveReceipt = Awaited<ReturnType<SessionFileHost['saveSlides']>>
 type Recovery = {saved?: SaveReceipt; resolve(value: SaveResult): void; reject(error: unknown): void}
 /** The server pptx session: pinned to the file revision, fenced by generation. */
-type Session = {revision: string; generation: number; dirty: boolean; size: {cx: number; cy: number}; defaultFont: string}
+type Session = {revision: string; generation: number; dirty: boolean; size: {cx: number; cy: number}; defaultFont: string; writeProtected: boolean}
 type ApplyResponse = {generation: number; dirty: boolean; changed?: number[]; created?: Array<{id:string;slide:number;index:number}>; size?: {cx:number;cy:number}; order?: string[]; index?: number; sections?: SectionInfo[] | null; history?: {canUndo: boolean; canRedo: boolean}; slide?: OpenResult['slides'][number]; transaction?: {applied:boolean;dryRun?:boolean;plan?:string[];failures?:Array<{index:number;error:string}>;records?:Array<{op:{op:string};slidePath?:string;created?:string[];after?:unknown}>}}
 type HistoryState = {canUndo: boolean; canRedo: boolean}
 const SLIDE_IMAGE_LIMIT = 6990508
@@ -168,6 +168,7 @@ export function createSlidesBridge(host: SessionFileHost, fileId: string, prefs:
     if (waiting.length >= 64) throw hostError('UNAVAILABLE', 'read capacity')
     const captured=session,epoch=openEpoch
     const readOnly=['slide','slides','notes','comments','animations','links','run-links','layouts','chart-data','chart-color-schemes','master-parts'].includes(method)
+    if(method!=='open'&&!readOnly&&captured?.writeProtected)throw hostError('UNAVAILABLE','write-protected presentation')
     if(!readOnly)changing++
     await acquireSlot()
     try {
@@ -190,9 +191,9 @@ export function createSlidesBridge(host: SessionFileHost, fileId: string, prefs:
     try{
     const state = host.getState(fileId)
     const generation = session && session.revision === state.revision.revision ? session.generation : 0
-    const raw = await call(state.revision.revision, generation, 'open') as {generation: number; dirty: boolean; size?: {cx: number; cy: number}; defaultFont?: string; slides: OpenResult['slides']}
+    const raw = await call(state.revision.revision, generation, 'open') as {generation: number; dirty: boolean; size?: {cx: number; cy: number}; defaultFont?: string; slides: OpenResult['slides']; writeProtected?: true}
     if (disposed) throw hostError('UNAVAILABLE', 'disposed')
-    session = {revision: state.revision.revision, generation: raw.generation, dirty: !!raw.dirty, size: raw.size ?? {cx: 12192000, cy: 6858000}, defaultFont: raw.defaultFont ?? 'Calibri'}
+    session = {revision: state.revision.revision, generation: raw.generation, dirty: !!raw.dirty, size: raw.size ?? {cx: 12192000, cy: 6858000}, defaultFont: raw.defaultFont ?? 'Calibri',writeProtected: raw.writeProtected===true}
     const result: OpenResult = {path: state.name, slides: raw.slides, size: session.size, defaultFont: session.defaultFont}
     if (fire) for (const handler of openedHandlers) { try { handler(result) } catch { /* renderer listeners cannot change durable results */ } }
     return result
@@ -1161,6 +1162,7 @@ export function createSlidesBridge(host: SessionFileHost, fileId: string, prefs:
     takeover,
     needsConfirmation: () => recovery !== null,
     isDirty: () => session?.dirty ?? false,
+    isWriteProtected: () => session?.writeProtected ?? false,
     cleanRevision: () => !disposed&&!opening&&!changing&&!saveFence&&!applyFence&&!recovery&&!session?.dirty ? session?.revision : undefined,
     dispose() {
       disposed = true

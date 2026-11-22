@@ -188,7 +188,8 @@ export async function mountSlidesEditor(host: SessionFileHost, container: HTMLEl
     },[loaded,failed,editorMounted])
     changed = () => {if(!closing)tick(value => value + 1)}
     const state = host.getState(fileId)
-    const readOnly = failed || takingOver || !state.lease || state.status === 'conflict' || state.status === 'unknown' || bridge.needsConfirmation() || state.status === 'unauthorized'
+    const writeProtected=bridge.isWriteProtected()
+    const readOnly = writeProtected || failed || takingOver || !state.lease || state.status === 'conflict' || state.status === 'unknown' || bridge.needsConfirmation() || state.status === 'unauthorized'
     const status = !editorMounted ? (takingOver ? text.takingOver : actionError || text.readOnly) : failed ? text.failed : !loaded ? text.opening : (state.status === 'unknown' || bridge.needsConfirmation()) ? text.unknown : state.status === 'unauthorized' ? text.unauthorized : takingOver ? text.takingOver : !state.lease || state.status === 'conflict' ? (dirty() ? text.takeoverDirty : initialLease ? text.conflict : text.readOnly) : downloading ? text.downloadSaving : actionError || (bridge.isDirty() ? '' : text.ready)
     const notice = realtime.notice(locale)
     const showAssistant=prefs.showAssistant!==false||handoffOpen
@@ -197,7 +198,7 @@ export async function mountSlidesEditor(host: SessionFileHost, container: HTMLEl
     const historical = (!editorMounted || loaded) && !failed && !state.lease && !dirty() && state.status !== 'unknown' && state.status !== 'unauthorized' && !bridge.needsConfirmation() && !takingOver
     const saveDownload = <>
       <button type="button" className="dyoffice-slides-download"
-        title={text.saveDownloadVersionHint} disabled={!loaded || failed || !editor || !state.lease || state.status === 'conflict' || state.status === 'unauthorized' || downloading || takingOver}
+        title={text.saveDownloadVersionHint} disabled={writeProtected || !loaded || failed || !editor || !state.lease || state.status === 'conflict' || state.status === 'unauthorized' || downloading || takingOver}
         onClick={() => { void saveAndDownload() }}>{text.saveDownload}</button>
       {loaded && !failed && state.status !== 'unauthorized' && <a className="dyoffice-slides-download-saved"
         href={`/api/v1/files/${fileId}/content?revision=${state.revision.revision}`} download={state.name}>{text.download}</a>}
@@ -207,9 +208,12 @@ export async function mountSlidesEditor(host: SessionFileHost, container: HTMLEl
       const {downloadSlidesImages} = await import('./slides-image-download')
       return downloadSlidesImages(baseName,format,pages,copyLifetime.signal)
     }
-    hostProps.namedCopy=namedCopy
+    hostProps.namedCopy=writeProtected?undefined:namedCopy
     return <div className="dyoffice-native-slides">
       <DocumentNotifications locale={locale} items={[
+        ...(writeProtected ? [{id:'write-protected',level:'info' as const,
+          title:locale==='zh'?'演示文稿受写保护':'Write-protected presentation',
+          message:locale==='zh'?'此演示文稿需要修改密码。Web 当前以只读方式打开，可下载已保存版本。':'This presentation requires a password to modify. The Web editor opens it read only, and the saved version can be downloaded.'}] : []),
         ...(warning ? [{id:'document-state',level:'error' as const,title:locale === 'zh' ? '文档需要处理' : 'Document needs attention',message:warning,actions:<>{!state.lease && (!editorMounted || !failed) && state.status !== 'unauthorized' && <button className="dyoffice-slides-takeover" disabled={(editorMounted && (!loaded || !editor)) || downloading || takingOver || dirty() || state.status === 'unknown' || bridge.needsConfirmation()} onClick={() => { void takeOver() }}>{text.takeover}</button>}{historical && <a href={`/api/v1/files/${fileId}/content?revision=${state.revision.revision}`} download={state.name}>{text.downloadReadOnly}</a>}{bridge.needsConfirmation() && <button data-save-fence-allow="confirm" disabled={confirming} onClick={() => { void confirmSave() }}>{text.retry}</button>}</>}] : []),
         ...(notice ? [{id:'version',level:'info' as const,title:locale === 'zh' ? '版本同步' : 'Version updates',message:notice}] : []),
         ...(assistantNotice ? [{id:'assistant',level:showAssistant?'warning' as const:'info' as const,title:locale==='zh'?'AI 助手':'AI Assistant',message:assistantNotice}] : []),

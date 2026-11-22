@@ -381,6 +381,7 @@ export { listMasterParts, parseMasterPart, type MasterPartInfo } from './master-
 export interface OpenedPptx {
   deck: SlideDeck
   archive: PackageArchive
+  writeProtected?: true
 }
 
 /**
@@ -703,7 +704,7 @@ function buildDecorations(
 
 export async function openPptx(bytes: Uint8Array): Promise<OpenedPptx> {
   const archive = await PackageArchive.open(bytes)
-  const { size, slidePaths } = archive.readPresentation()
+  const { size, slidePaths, writeProtected } = archive.readPresentation()
 
   const slides: Slide[] = []
   for (const slidePath of slidePaths) {
@@ -712,7 +713,7 @@ export async function openPptx(bytes: Uint8Array): Promise<OpenedPptx> {
   }
 
   const deck: SlideDeck = { slides, size, originalHash: archive.originalHash }
-  return { deck, archive }
+  return { deck, archive, ...(writeProtected ? { writeProtected } : {}) }
 }
 
 /**
@@ -723,13 +724,13 @@ export async function openPptx(bytes: Uint8Array): Promise<OpenedPptx> {
  */
 export function reparseDeck(opened: OpenedPptx): OpenedPptx {
   const { archive } = opened
-  const { size, slidePaths } = archive.readPresentation()
+  const { size, slidePaths, writeProtected } = archive.readPresentation()
   const slides: Slide[] = []
   for (const slidePath of slidePaths) {
     const slide = parseSlideFromArchive(archive, slidePath)
     if (slide) slides.push(slide)
   }
-  return { deck: { slides, size, originalHash: archive.originalHash }, archive }
+  return { deck: { slides, size, originalHash: archive.originalHash }, archive, ...(writeProtected ? { writeProtected } : {}) }
 }
 
 /**

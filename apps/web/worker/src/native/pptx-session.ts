@@ -35,7 +35,7 @@ export interface SlidesApplyResult {
   transaction: { applied: boolean; dryRun?: boolean; plan?: string[]; failures?: Array<{ index: number; error: string }>; records?: Array<{op:{op:string};slideId?:string;created?:string[]}> }
 }
 export interface SlidesStepResult { generation: number; stateGeneration: number; canUndo: boolean; canRedo: boolean; slides: RenderSlide[] }
-export interface SlidesOutline { count: number; size: SlideSize; slideIds: string[]; paths: string[]; defaultFont?: string }
+export interface SlidesOutline { count: number; size: SlideSize; slideIds: string[]; paths: string[]; defaultFont?: string; writeProtected?: true }
 export interface SlidesMasterView extends MasterPartInfo { slide: RenderSlide }
 export interface SlidesMasterEditResult {
   generation: number
@@ -495,6 +495,7 @@ export async function createPptxSession(bytes: Uint8Array, signal?: AbortSignal)
   await assertZipInflatesWithinLimits(input,ZIP_LIMITS)
   aborted(signal)
   let opened: OpenedPptx | undefined=await openPptx(input)
+  const writeProtected=opened.writeProtected
   aborted(signal)
   let generation=0
   const generatedPages=new Map<string,{source:MergeSlideSource;bytes:number;size:SlideSize;createdAt:number}>()
@@ -556,6 +557,12 @@ export async function createPptxSession(bytes: Uint8Array, signal?: AbortSignal)
     // Recover failed operations so one rejection cannot poison later commands.
     queue=result.then(()=>{pending--},()=>{pending--})
     return result
+  }
+  function enqueueWrite<T>(expected:number, signal:AbortSignal|undefined, work:(state:OpenedPptx)=>T|Promise<T>):Promise<T> {
+    return enqueue(expected,signal,state=>{
+      if(writeProtected)throw new Error('PPTX_WRITE_PROTECTED')
+      return work(state)
+    })
   }
   function history(): {canUndo:boolean;canRedo:boolean} { return {canUndo: undoStack.length>0, canRedo: redoStack.length>0} }
   function outlineOf(state: OpenedPptx) {
@@ -663,7 +670,7 @@ export async function createPptxSession(bytes: Uint8Array, signal?: AbortSignal)
         (captured.op === 'addElement' ? element !== undefined : typeof element !== 'string')) {
         throw new Error('INVALID_TARGET')
       }
-      return enqueue(expected, signal, state => {
+      return enqueueWrite(expected, signal, state => {
         const part = editableMasterParts(state).find(item => item.partPath === partPath)
         const master = part && parseMasterPart(state.archive, part.partPath)
         if (!master) throw new Error('INVALID_MASTER_PART')
@@ -697,7 +704,7 @@ export async function createPptxSession(bytes: Uint8Array, signal?: AbortSignal)
     },
     async apply(expected, ops, signal, options = {}) {
       const captured=captureOps(ops)
-      return enqueue(expected,signal,state=>{
+      return enqueueWrite(expected,signal,state=>{
         // Preserve target's canonical/parse-time alias collision fence for every
         // element-addressed operation before the atomic batch can mutate anything.
         for (const op of captured) {
@@ -722,7 +729,7 @@ export async function createPptxSession(bytes: Uint8Array, signal?: AbortSignal)
       })
     },
     async editChart(expected,slideIndex,sourceId,patch,signal) {
-      return enqueue(expected,signal,state=>{
+      return enqueueWrite(expected,signal,state=>{
         if(!Number.isSafeInteger(slideIndex)||slideIndex<0||slideIndex>=state.deck.slides.length)throw new Error('INVALID_SLIDE')
         if(typeof sourceId!=='string'||!sourceId||sourceId.length>256||!record(patch))throw new Error('INVALID_OPS')
         const slide=state.deck.slides[slideIndex]!
@@ -748,7 +755,7 @@ export async function createPptxSession(bytes: Uint8Array, signal?: AbortSignal)
       })
     },
     async generatePage(expected,specJson,images,signal){
-      return enqueue(expected,signal,async state=>{
+      return enqueueWrite(expected,signal,async state=>{
         if(typeof specJson!=='string'||specJson.length>MAX_PAYLOAD||!Array.isArray(images)||images.length>3)throw new Error('INVALID_GENERATED_PAGE')
         const parsed=parsePageSpec(specJson,1280,720)
         if(!parsed.ok)throw new Error('INVALID_GENERATED_PAGE')
@@ -773,7 +780,7 @@ export async function createPptxSession(bytes: Uint8Array, signal?: AbortSignal)
       })
     },
     async landGeneratedPages(expected,markers,mode,atIndex,signal){
-      return enqueue(expected,signal,state=>{
+      return enqueueWrite(expected,signal,state=>{
         if(!Array.isArray(markers)||!markers.length||markers.length>MAX_GENERATED_PAGES||!['replace','append','replace_at','insert_at'].includes(mode))throw new Error('INVALID_GENERATED_PAGE')
         if((mode==='replace_at'||mode==='insert_at')&&(
           markers.length!==1||!Number.isSafeInteger(atIndex)||atIndex!<0||
@@ -804,7 +811,7 @@ export async function createPptxSession(bytes: Uint8Array, signal?: AbortSignal)
     },
     async applyImage(expected,input,signal){
       const media=imageContent(input)
-      return enqueue(expected,signal,state=>{
+      return enqueueWrite(expected,signal,state=>{
         if(!Number.isSafeInteger(input.slide)||input.slide<0||input.slide>=state.deck.slides.length)throw new Error('INVALID_SLIDE')
         const slide=state.deck.slides[input.slide]!
         let offset:{x:number;y:number;cx:number;cy:number}|undefined
@@ -855,14 +862,14 @@ export async function createPptxSession(bytes: Uint8Array, signal?: AbortSignal)
       })
     },
     beginHistoryBatch(expected,signal){
-      return enqueue(expected,signal,state=>{
+      return enqueueWrite(expected,signal,state=>{
         if(batchDepth===0)batchBefore=snapshot(state)
         batchDepth++
         return true
       })
     },
     endHistoryBatch(expected,signal){
-      return enqueue(expected,signal,()=>{
+      return enqueueWrite(expected,signal,()=>{
         if(batchDepth===0)return {snapshotId:null,...history()}
         if(--batchDepth>0)return {snapshotId:null,...history()}
         const before=batchBefore;batchBefore=undefined
@@ -878,7 +885,7 @@ export async function createPptxSession(bytes: Uint8Array, signal?: AbortSignal)
       })
     },
     restoreSnapshot(expected,snapshotId,signal){
-      return enqueue(expected,signal,state=>{
+      return enqueueWrite(expected,signal,state=>{
         if(batchDepth>0)throw new Error('HISTORY_BATCH_ACTIVE')
         if(!Number.isSafeInteger(snapshotId)||snapshotId<1)throw new Error('INVALID_SNAPSHOT')
         const target=aiSnapshots.get(snapshotId)
@@ -894,7 +901,7 @@ export async function createPptxSession(bytes: Uint8Array, signal?: AbortSignal)
       })
     },
     undo(expected,signal) {
-      return enqueue(expected,signal,state=>{
+      return enqueueWrite(expected,signal,state=>{
         if(batchDepth>0)throw new Error('HISTORY_BATCH_ACTIVE')
         if (undoStack.length===0) throw new Error('NOTHING_TO_UNDO')
         const current=snapshot(state)
@@ -909,7 +916,7 @@ export async function createPptxSession(bytes: Uint8Array, signal?: AbortSignal)
       })
     },
     redo(expected,signal) {
-      return enqueue(expected,signal,state=>{
+      return enqueueWrite(expected,signal,state=>{
         if(batchDepth>0)throw new Error('HISTORY_BATCH_ACTIVE')
         if (redoStack.length===0) throw new Error('NOTHING_TO_REDO')
         const current=snapshot(state)
@@ -982,10 +989,10 @@ export async function createPptxSession(bytes: Uint8Array, signal?: AbortSignal)
       return enqueue(expected,signal,state=>renderSlides(state,fitWidth(width)))
     },
     outline(expected,signal) {
-      return enqueue(expected,signal,state=>({...outlineOf(state),defaultFont:deckFont(state)}))
+      return enqueue(expected,signal,state=>({...outlineOf(state),defaultFont:deckFont(state),...(writeProtected?{writeProtected}:{})}))
     },
     exportBytes(expected,signal) {
-      return enqueue(expected,signal,async state=>{
+      return enqueueWrite(expected,signal,async state=>{
         const bytes=await savePptx(state)
         check(expected,signal)
         // Download bytes only. Never calls commitSaved or marks a durable revision as saved.
