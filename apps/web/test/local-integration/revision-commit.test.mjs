@@ -5,6 +5,11 @@ import { readdir, readFile, writeFile } from 'node:fs/promises'
 import JSZip from 'jszip'
 import { join } from 'node:path'
 import { fileFixture, docxBytes, importFile } from '../helpers/files.mjs'
+import { restrictedOrigin } from '../helpers/restricted.mjs'
+import { createCsrfService } from '../../server/src/modules/auth/csrf.ts'
+import { withOfficeSignatureOrigin } from '../helpers/office-signature.mjs'
+import { password } from '../helpers/identity.mjs'
+import { openIsolatedPptxSession } from '../../worker/src/native/pptx-session-host.ts'
 
 const owned = (f, callback, token = f.alice.token) => f.transactions.withPrincipalTransaction({ kind: 'session', token }, callback)
 async function revisionFixture(t, options = {}) {
@@ -13,7 +18,8 @@ async function revisionFixture(t, options = {}) {
   const { createRevisionService } = await import('../../server/src/modules/revisions/service.ts')
   const leases = createLeaseService({ transactions: f.transactions })
   const revisions = createRevisionService({ transactions: f.transactions, objects: f.objects, files: f.files, ...options.filePolicy })
-  const original = await docxBytes(), opened = await importFile(f,f.alice.token,original)
+  const original = options.initialBytes ?? await docxBytes()
+  const opened = await importFile(f,f.alice.token,original,options.initialName)
   const editorId = randomUUID(), fileId = opened.file.fileId
   const lease = await leases.acquireLease(f.alice.token,fileId,{ editorId })
   return { ...f, leases, revisions, original, initial: opened.file, editorId, fileId, lease }
@@ -29,6 +35,74 @@ async function stage(f, bytes, { token = f.alice.token, baseRevision = f.initial
   await f.files.receiveUpload(token,upload.uploadId,bytes)
   return { fileId: f.fileId, uploadId: upload.uploadId, baseRevision, leaseEpoch, idempotencyKey: randomUUID() }
 }
+
+for (const [format,fixture,declaration] of [
+  ['docx','apps/shell/build/shell-new/blank.docx','encoded-relationship'],
+  ['xlsx','apps/shell/build/shell-new/blank.xlsx','encoded-content-type'],
+  ['pptx','packages/pptx-engine/tests/fixtures/01_standard_business.pptx'],
+]) test(`signed ${format} packages reject revision staging and preserve original bytes`,async t=>{
+  const unsigned=await readFile(new URL('../../../../'+fixture,import.meta.url))
+  const signed=await withOfficeSignatureOrigin(unsigned,{declaration})
+  let verifiedReads=0
+  const f=await revisionFixture(t,{initialBytes:signed,initialName:`signed.${format}`,wordCollaboration:true,
+    ...(format==='docx'?{wrapObjects:store=>({...store,readVerified(input){verifiedReads++;return store.readVerified(input)}})}:{}),
+    ...(format==='pptx'?{slidesHost:{openSession:input=>openIsolatedPptxSession(input,{timeoutMs:60000,unsafeTestOnly:true})}}:{})})
+  await assert.rejects(()=>stage(f,unsigned),{statusCode:423})
+  const opened=await f.files.openFile(f.alice.token,f.fileId)
+  assert.equal(opened.officeSignatureProtected,true)
+  assert.equal(opened.file.revision,f.initial.revision)
+  const csrf=createCsrfService({db:f.db,deploymentId:f.deploymentId,origin:restrictedOrigin,key:f.csrfKey})
+  const headers={cookie:'__Host-dyoffice-session='+f.alice.token,origin:restrictedOrigin,'x-csrf-token':csrf.sessionToken(f.alice.token)}
+  const url=`/api/v1/files/${f.fileId}`
+  const metadata=await f.app.inject({url,headers})
+  assert.equal(metadata.statusCode,200)
+  assert.equal(metadata.json().officeSignatureProtected,true)
+  const lease=await f.app.inject({method:'POST',url:url+'/lease',headers,payload:{editorId:f.editorId}})
+  assert.equal(lease.statusCode,423)
+  if(format==='pptx'){
+    const pinned={revision:f.initial.revision,generation:0}
+    const open=await f.app.inject({method:'POST',url:url+'/slides/open',headers,payload:pinned})
+    assert.equal(open.statusCode,200)
+    assert.ok(open.json().slides.length>1)
+    const viewer=await f.sessions.login('alice',password)
+    const viewerHeaders={...headers,cookie:'__Host-dyoffice-session='+viewer.token,'x-csrf-token':csrf.sessionToken(viewer.token)}
+    const secondOpen=await f.app.inject({method:'POST',url:url+'/slides/open',headers:viewerHeaders,payload:pinned})
+    assert.equal(secondOpen.statusCode,200)
+    const notes=await f.app.inject({method:'POST',url:url+'/slides/notes',headers,payload:{...pinned,index:0}})
+    assert.equal(notes.statusCode,200)
+    const nextSlide=await f.app.inject({method:'POST',url:url+'/slides/slide',headers:viewerHeaders,payload:{...pinned,index:1}})
+    assert.equal(nextSlide.statusCode,200)
+    const edit=await f.app.inject({method:'POST',url:url+'/slides/apply',headers,
+      payload:{...pinned,ops:[{op:'setNotes',target:{slide:0},text:'Blocked change'}],editorId:f.editorId,leaseEpoch:f.lease.leaseEpoch}})
+    assert.equal(edit.statusCode,423)
+  }
+  if(format==='docx'){
+    const collab=await f.app.inject({method:'POST',url:url+'/word-collab',headers,payload:{revision:f.initial.revision,clientId:f.editorId,version:0,steps:[{stepType:'replace',from:1,to:2}]}})
+    assert.equal(collab.statusCode,423)
+    const setProtection=protectedValue=>f.ownerDb.transaction(async connection=>{
+      await connection.query("SELECT set_config('dyoffice.deployment_id',$1,true),set_config('dyoffice.user_id',$2,true)",[f.deploymentId,f.alice.user.id])
+      const affected=await connection.query('UPDATE file_revisions SET office_signature_protected=$1 WHERE id=$2',[protectedValue,f.initial.revision])
+      assert.equal(affected.rowCount,1)
+    })
+    // Simulate a draft prepared before the head signature was classified.
+    await setProtection(false)
+    const draft=await stage(f,unsigned)
+    await setProtection(null)
+    await assert.rejects(()=>f.revisions.commitRevision(f.alice.token,draft),{statusCode:423})
+    assert.equal((await f.files.openFile(f.alice.token,f.fileId)).officeSignatureProtected,true)
+    const readsBeforeOpening=verifiedReads
+    const legacyReads=await Promise.all(Array.from({length:5},()=>f.app.inject({url,headers})))
+    for(const response of legacyReads){
+      assert.equal(response.statusCode,200)
+      assert.equal(response.json().officeSignatureProtected,true)
+    }
+    assert.equal(verifiedReads-readsBeforeOpening,1)
+  }
+  const download=await f.app.inject({url:opened.downloadEndpoint,headers})
+  assert.equal(download.statusCode,200)
+  assert.deepEqual(download.rawPayload,signed)
+  assert.equal((await f.revisions.listRevisions(f.alice.token,f.fileId)).revisions.length,1)
+})
 
 test('same-cookie editor instances require explicit lease takeover and stale epochs cannot renew or commit', async t => {
   const f = await revisionFixture(t), otherEditor = randomUUID()

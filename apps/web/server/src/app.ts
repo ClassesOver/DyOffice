@@ -271,7 +271,7 @@ export async function buildLocalApp(config: LocalWebConfig): Promise<FastifyInst
     registerStyleTemplateRoutes(app,createStyleTemplateService(transactions),sessions,csrf)
     registerGlobalConfigRoutes(app, createGlobalConfigService({transactions, keyring: config.globalConfigKeyring}), sessions, csrf)
     if (config.objectStore && files) {
-      const leases = createLeaseService({ transactions })
+      const leases = createLeaseService({ transactions, assertOfficeWritable:files.assertOfficeWritable })
       const revisions = createRevisionService({ transactions, objects: config.objectStore, files, ...config.filePolicy })
       registerFileRoutes(app,files,sessions,csrf,{ leases, revisions, wordCollaboration:config.wordCollaboration })
       registerKnowledgeRoutes(app,createKnowledgeService({transactions,files}),sessions,csrf)

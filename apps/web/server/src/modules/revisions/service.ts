@@ -41,6 +41,7 @@ export function createRevisionService({ transactions, objects, files, quotaBytes
       const file = await loadFile(connection,principal,id,false,'UPDATE')
       await assertLiveLease(connection,principal,id,epoch,editor)
       if (file.current_revision !== base) throw authError(409)
+      await files.assertOfficeWritable(file)
       if (restoredFrom) await historyRow(connection,principal,id,restoredFrom)
       if (account.reservedBytes + account.storedBytes + size > quotaBytes) throw authError(413)
       const pending = await connection.query("SELECT 1 FROM uploads WHERE deployment_id=$1 AND owner_id=$2 AND state IN ('staged','receiving','ready')",scope(principal))
@@ -52,7 +53,7 @@ export function createRevisionService({ transactions, objects, files, quotaBytes
     })
   }
   return {
-    syncWord: (token:string,fileId:string,input:Parameters<typeof syncWord>[3])=>syncWord(transactions,token,fileId,input),
+    syncWord: (token:string,fileId:string,input:Parameters<typeof syncWord>[3])=>syncWord(transactions,token,fileId,input,files.assertOfficeWritable),
     async stageUpload(token: FileCredential, fileId: string, input: DraftInput, autoPdfName?: string) {
       shape(input,['size','baseRevision','leaseEpoch','editorId'])
       if(autoPdfName!==undefined && validateFileName(autoPdfName)!=='pdf')throw authError(400)
@@ -105,10 +106,11 @@ export function createRevisionService({ transactions, objects, files, quotaBytes
         const file = await loadFile(connection,principal,fileId,false,'UPDATE')
         await assertLiveLease(connection,principal,fileId,epoch,upload.editor_id)
         if (file.current_revision !== base) throw authError(409)
+        await files.assertOfficeWritable(file)
         const source = upload.restored_from ? 'restore' : 'save'
         if(input.wordVersion!==undefined&&(file.format!=='docx'||principal.job||upload.restored_from))throw authError(400)
         const checkpoint=file.format==='docx' ? await wordCheckpoint(connection,principal,fileId,base,input.wordVersion) : null
-        await connection.query('INSERT INTO file_revisions(id,deployment_id,owner_id,file_id,object_key,sha256,size,source,parent_revision,restored_from,word_epoch,word_version) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)',[upload.revision_id,...scope(principal),fileId,objectKey(principal,upload.revision_id),upload.sha256,upload.expected_size,source,base,upload.restored_from,checkpoint?.epoch??null,checkpoint?.version??null])
+        await connection.query('INSERT INTO file_revisions(id,deployment_id,owner_id,file_id,object_key,sha256,size,source,parent_revision,restored_from,word_epoch,word_version,office_signature_protected) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)',[upload.revision_id,...scope(principal),fileId,objectKey(principal,upload.revision_id),upload.sha256,upload.expected_size,source,base,upload.restored_from,checkpoint?.epoch??null,checkpoint?.version??null,upload.office_signature_protected])
         const autoName = file.pdf_auto_name_pending && upload.pdf_auto_name !== file.name ? upload.pdf_auto_name : null
         const changed = await connection.query('UPDATE files SET current_revision=$4,name=COALESCE($6,name),pdf_auto_name_pending=pdf_auto_name_pending AND $6::text IS NULL,updated_at=clock_timestamp() WHERE deployment_id=$1 AND owner_id=$2 AND id=$3 AND current_revision=$5 RETURNING id',[...scope(principal),fileId,upload.revision_id,base,autoName])
         if (changed.rowCount !== 1) throw authError(409)

@@ -452,19 +452,29 @@ export function createSlidesService({ files, leases, revisions, host, maxConcurr
   // a fresh persisted document, never inherits another editor's dirty child.
   const bindings=new Map<string,string>(),busy=new Map<string,{method:Method;count:number}>()
   type Method='open'|'slide'|'notes'|'comments'|'animations'|'links'|'runLinks'|'chartData'|'chartColorSchemes'|'layouts'|'masterParts'|'applyMaster'|'slides'|'apply'|'editChart'|'generatePage'|'landGeneratedPages'|'applyImage'|'undo'|'redo'|'beginHistoryBatch'|'endHistoryBatch'|'restoreSnapshot'|'exportDraft'|'exportForSave'|'bindPreparedUpload'
+  const signedReads=new Set<Method>(['open','slide','slides','notes','comments','animations','links','runLinks','chartData','chartColorSchemes','layouts','masterParts'])
   function guarded<K extends Method>(method:K):typeof service[K]{
     return (async(token:string,fileId:string,input:SlidesReadInput,signal?:AbortSignal)=>{
-      if(!input||typeof input.editorId!=='string'||!Number.isSafeInteger(input.leaseEpoch)||input.leaseEpoch<1)throw authError(400)
+      if(!input)throw authError(400)
+      const signedRead=input.editorId===undefined&&input.leaseEpoch===undefined&&signedReads.has(method)
+      if(!signedRead&&(typeof input.editorId!=='string'||!Number.isSafeInteger(input.leaseEpoch)||input.leaseEpoch<1))throw authError(400)
+      const authorize=async()=>{
+        if(!signedRead){await leases.renewLease(token,fileId,{editorId:input.editorId,leaseEpoch:input.leaseEpoch});return}
+        const head=await files.openFile(token,fileId)
+        if(head.format!=='pptx')throw authError(415)
+        if(head.file.revision!==input.revision)throw authError(409)
+        if(!head.officeSignatureProtected)throw authError(400)
+      }
       const active=busy.get(fileId)
       if(active&&!(method==='generatePage'&&active.method==='generatePage'))throw authError(409)
       if(active)active.count++
       else busy.set(fileId,{method,count:1})
-      const binding=createHash('sha256').update(token).digest('hex')+':'+input.editorId+':'+input.leaseEpoch
+      const binding=signedRead?'signed:'+input.revision:createHash('sha256').update(token).digest('hex')+':'+input.editorId+':'+input.leaseEpoch
       let entered=false,completed=false
       const discard=()=>{if(bindings.get(fileId)===binding){registry.get(fileId)?.handle.close();registry.delete(fileId);bindings.delete(fileId)}}
       try{
         signal?.throwIfAborted()
-        await leases.renewLease(token,fileId,{editorId:input.editorId,leaseEpoch:input.leaseEpoch})
+        await authorize()
         signal?.throwIfAborted()
         if(bindings.has(fileId)&&bindings.get(fileId)!==binding){
           if(method!=='open')throw authError(409)
@@ -481,14 +491,14 @@ export function createSlidesService({ files, leases, revisions, host, maxConcurr
         completed=true
         // Lease/session/head can change during native work; never publish its result
         // or leave a draft alive after authority loss. T06 repeats fences at commit.
-        await leases.renewLease(token,fileId,{editorId:input.editorId,leaseEpoch:input.leaseEpoch})
+        await authorize()
         signal?.throwIfAborted()
         await pinned(token,fileId,input.revision,signal)
         return value
       }catch(error){
         if(entered){
           if(completed)discard()
-          else try{signal?.throwIfAborted();await leases.renewLease(token,fileId,{editorId:input.editorId,leaseEpoch:input.leaseEpoch})}catch{discard()}
+          else try{signal?.throwIfAborted();await authorize()}catch{discard()}
         }
         throw error
       }

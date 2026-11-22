@@ -1,3 +1,4 @@
+import { officeSignatureNotice } from './office-signature-notice'
 import {mountDocumentHandoff} from './document-handoff'
 import './zod-csp'
 import {reportDocumentLoading} from './document-loading-state'
@@ -55,6 +56,7 @@ export async function mountSheetsEditor(host: SessionFileHost, container: HTMLEl
   const assistant = assistantResult.assistant
   const workbookImages = assistant && createWorkbookImageApi(assistant.mediaApi)
   const opened = await host.open(fileId)
+  const signed=opened.officeSignatureProtected===true
   if (opened.format !== 'xlsx') throw new Error(messages.zh.failed)
   const prefs = await host.getPreferences(), locale = prefs.language === 'en' ? 'en' : 'zh', text = messages[locale]
   const exportCsvLabel = locale === 'en' ? 'Export active sheet as CSV' : '导出当前工作表为 CSV'
@@ -73,8 +75,8 @@ export async function mountSheetsEditor(host: SessionFileHost, container: HTMLEl
   const loads: Promise<unknown>[] = [registerTextDingbatsFace()]
   for (const variant of ['', 'bold ', 'italic ', 'italic bold ']) for (const family of ['Calibri','Aptos',"'Aptos Narrow'",'Carlito']) loads.push(document.fonts.load(`${variant}16px ${family}`).catch(()=>{}))
   await untilCellFontsLoaded(Promise.all(loads))
-  let initialLease = true
-  try { await host.acquireLease(fileId) } catch { initialLease = false }
+  let initialLease = !signed
+  if(!signed)try { await host.acquireLease(fileId) } catch { initialLease = false }
   const stop = host.startRenewal(fileId), unsubscribe = host.subscribe(()=>changed())
   const realtime = mountEditorRealtime(host, fileId, () => changed(),channels=>assistant?.channel?.observe(channels))
   const analysisTarget=createAnalysisDocumentTarget({fileId,format:'xlsx',state:()=>host.getState(fileId),verifyAuthority:async()=>{await host.renewLease(fileId)},
@@ -177,7 +179,7 @@ export async function mountSheetsEditor(host: SessionFileHost, container: HTMLEl
     const readOnly = failed || takingOver || !state.lease || state.status === 'conflict' || state.status === 'unknown' || bridge.needsConfirmation() || state.status === 'unauthorized'
     const status = failed ? text.failed : !loaded ? text.opening : (state.status === 'unknown' || bridge.needsConfirmation()) ? text.unknown : state.status === 'unauthorized' ? text.unauthorized : takingOver ? text.takingOver : !state.lease || state.status==='conflict' ? (dirty() ? text.takeoverDirty : initialLease ? text.conflict : text.readOnly) : downloading ? text.downloadSaving : actionError || (bridge.isDirty() ? '' : text.ready)
     const notice = realtime.notice(locale)
-    const warning = failed || state.status === 'unknown' || bridge.needsConfirmation() || state.status === 'unauthorized' || (!state.lease && loaded && !takingOver) || state.status === 'conflict' ? status : actionError
+    const warning = failed || state.status === 'unknown' || bridge.needsConfirmation() || state.status === 'unauthorized' || (!signed && !state.lease && loaded && !takingOver) || state.status === 'conflict' ? status : actionError
     const historical = loaded && !failed && !state.lease && !dirty() && state.status !== 'unknown' && state.status !== 'unauthorized' && !bridge.needsConfirmation() && !takingOver
     const downloadDisabled=!loaded || failed || !editor || !state.lease || state.status === 'conflict' || state.status === 'unauthorized' || downloading || takingOver
     const csvDisabled=!loaded || failed || !editor || state.status === 'unauthorized' || downloading || exportingCsv || takingOver
@@ -190,6 +192,7 @@ export async function mountSheetsEditor(host: SessionFileHost, container: HTMLEl
       {fileOpen&&<div className="file-menu" role="group" aria-label={fileLabel}>
         <button type="button" disabled={downloadDisabled} title={text.saveDownloadVersionHint} onClick={()=>{setFileOpen(false);fileButton.current?.focus();void saveAndDownload()}}>{text.saveDownload}</button>
         <button type="button" disabled={csvDisabled} onClick={()=>{setFileOpen(false);fileButton.current?.focus();void exportCsv()}}>{exportCsvLabel}</button>
+        {signed&&historical&&<a href={`/api/v1/files/${fileId}/content?revision=${state.revision.revision}`} download={state.name}>{text.download}</a>}
       </div>}
     </div>
     const saveDownload = <><button type="button" className="dyoffice-sheets-download qa-btn" aria-label={text.saveDownload} data-tip={text.saveDownload}
@@ -200,8 +203,9 @@ export async function mountSheetsEditor(host: SessionFileHost, container: HTMLEl
         onClick={()=>{void exportCsv()}}><DownloadCsvIcon /></button></>
     return <div className="dyoffice-native-sheets">
       <DocumentNotifications locale={locale} items={[
+        ...(signed ? [{id:'office-signature',level:'info' as const,...officeSignatureNotice[locale]}] : []),
         ...(assistantNotice ? [{id:'assistant',level:prefs.showAssistant === false ? 'info' as const : 'warning' as const,title:locale === 'zh' ? 'AI 助手' : 'AI Assistant',message:assistantNotice}] : []),
-        ...(warning ? [{id:'document-state',level:'error' as const,title:locale === 'zh' ? '文档需要处理' : 'Document needs attention',message:warning,actions:<>{!state.lease && !failed && state.status!=='unauthorized' && <button disabled={!loaded || !editor || downloading || takingOver || dirty() || state.status==='unknown' || bridge.needsConfirmation()} onClick={()=>{void takeOver()}}>{text.takeover}</button>}{historical && <a href={`/api/v1/files/${fileId}/content?revision=${state.revision.revision}`} download={state.name}>{text.downloadReadOnly}</a>}{bridge.needsConfirmation() && <button data-save-fence-allow="confirm" disabled={confirming} onClick={()=>{void confirmSave()}}>{text.retry}</button>}</>}] : []),
+        ...(warning ? [{id:'document-state',level:'error' as const,title:locale === 'zh' ? '文档需要处理' : 'Document needs attention',message:warning,actions:<>{!signed && !state.lease && !failed && state.status!=='unauthorized' && <button disabled={!loaded || !editor || downloading || takingOver || dirty() || state.status==='unknown' || bridge.needsConfirmation()} onClick={()=>{void takeOver()}}>{text.takeover}</button>}{historical && <a href={`/api/v1/files/${fileId}/content?revision=${state.revision.revision}`} download={state.name}>{text.downloadReadOnly}</a>}{bridge.needsConfirmation() && <button data-save-fence-allow="confirm" disabled={confirming} onClick={()=>{void confirmSave()}}>{text.retry}</button>}</>}] : []),
         ...(notice ? [{id:'version',level:'info' as const,title:locale === 'zh' ? '版本同步' : 'Version updates',message:notice}] : []),
         ...(copyNotice ? [{id:'named-copy',level:'info' as const,title:locale==='zh'?'副本已保存':'Copy saved',message:copyNotice}] : []),
       ]} />

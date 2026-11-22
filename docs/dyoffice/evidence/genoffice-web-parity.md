@@ -16,7 +16,9 @@
 
 在 `d8392ce2` 的上传校验上，对浏览器验收包的 DOCX、XLSX、PPTX 成品分别重跑了打开密码对照。三个普通成品均获正确识别。用原 GenOffice Agile 加密模块生成的三个真实打开密码副本均返回 400，输入 SHA-256 保持一致，解密回来的字节与对应成品完全相同。该结果记录三种 OOXML 打开密码文件的当前 Web 上传限制。
 
-F14 的 OOXML 包签名存在保存缺口。在 `e5719120` 上使用 Apache POI 的三个签名样本，分别核对 DOCX 正文、XLSX 工作表和 PPTX 幻灯片的签名摘要。原始部件摘要与签名包清单一致，清单摘要也与 `SignedInfo` 一致，样本自带的公钥可验证 `SignatureValue`。修改被签名的部件并保留签名声明后，三个部件摘要均失配，保存服务仍会接受并切为当前修订。三个历史原件的下载字节保持一致。签名样本尚需 Web 只读和保存拒绝回归。[Microsoft OPC 签名说明](https://learn.microsoft.com/en-us/previous-versions/windows/desktop/opc/digital-signatures-overview) [Apache POI 原始签名样本](https://github.com/apache/poi/tree/c94ee8ad9096bdb8cf8e5e59d8d12432e950dbf3/test-data/xmldsign)
+F14 的 OOXML 包签名存在保存缺口。在 `e5719120` 上使用 Apache POI 的三个签名样本，分别核对 DOCX 正文、XLSX 工作表和 PPTX 幻灯片的签名摘要。原始部件摘要与签名包清单一致，清单摘要也与 `SignedInfo` 一致，样本自带的公钥可验证 `SignatureValue`。修改被签名的部件并保留签名声明后，三个部件摘要均失配，保存服务仍会接受并切为当前修订。三个历史原件的下载字节保持一致。[Microsoft OPC 签名说明](https://learn.microsoft.com/en-us/previous-versions/windows/desktop/opc/digital-signatures-overview) [Apache POI 原始签名样本](https://github.com/apache/poi/tree/c94ee8ad9096bdb8cf8e5e59d8d12432e950dbf3/test-data/xmldsign)
+
+修复后，服务端识别三种 OOXML 包的签名声明。使用上述真实样本复跑，三个样本的修改上传准备均返回 423，当前修订和下载原件的字节保持一致。PostgreSQL 回归另验证十进制、十六进制 XML 字符引用，迁移前 DOCX 的 5 次并发打开只读取并校验一次原件，以及旧草稿提交拒绝，以及两个登录会话只读浏览同一 PPTX 并翻页。OOXML 保护依据是包签名声明，签名人信任和证书验证仍待独立验收。[修订保护回归](../../../apps/web/test/local-integration/revision-commit.test.mjs) [签名样本](../../../apps/web/test/fixtures/signed-office/README.md)
 
 后续修复默认 Node 工作簿执行路径的保护元数据。实际 Node 与 Rust 对照覆盖已有文稿的结构锁、有密码的工作表、允许的格式操作、工作表可编辑区域、锁定单元格及继承的公式隐藏标记。原生读取三项、网关工作表保护十一项均通过。此项覆盖 OOXML 编辑保护。[Node 与 Rust 对照用例](../../../apps/web/test/native-sheets/read.test.mjs)
 

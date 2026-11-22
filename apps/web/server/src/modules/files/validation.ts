@@ -1,6 +1,6 @@
 import { Worker } from 'node:worker_threads'
 import { MAX_OBJECT_BYTES, storageError } from '../../storage/object-store.ts'
-import { validateFileName, type FileValidationPolicy } from './validation-core.ts'
+import { validateFileName, type FileValidationPolicy, type validateUploadInternal } from './validation-core.ts'
 export { validateFileName, uploadLimits } from './validation-core.ts'
 
 // Workers bound parser CPU/wall time and JS heap; this is not the future OS
@@ -8,7 +8,7 @@ export { validateFileName, uploadLimits } from './validation-core.ts'
 export function createFileValidator({ timeoutMs = 5000, maxConcurrent = 2 }: { timeoutMs?: number; maxConcurrent?: number } = {}) {
   if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 30_000 || !Number.isSafeInteger(maxConcurrent) || maxConcurrent < 1 || maxConcurrent > 8) throw storageError(400)
   let active = 0
-  return async function validate(bytes: Buffer, name: string, policy: Partial<FileValidationPolicy> = {}): Promise<{ format: import('../../../../../../packages/web-contracts/src/api.ts').OfficeFormat; mime: string; size: number; sha256: string }> {
+  return async function validate(bytes: Buffer, name: string, policy: Partial<FileValidationPolicy> = {}): ReturnType<typeof validateUploadInternal> {
     validateFileName(name)
     if (!Buffer.isBuffer(bytes) || !bytes.length) throw storageError(400)
     if (bytes.length > MAX_OBJECT_BYTES || bytes.length > (policy.maxBytes ?? MAX_OBJECT_BYTES)) throw storageError(413)

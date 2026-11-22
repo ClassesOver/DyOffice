@@ -1,3 +1,4 @@
+import { officeSignatureNotice } from './office-signature-notice'
 import {readHandoffSkill} from './document-handoff-spec'
 import {joinWordCollab,type WordSyncState} from './word-collab'
 import type {Editor} from '@tiptap/core'
@@ -84,12 +85,13 @@ export async function mountDocsEditor(host: SessionFileHost,element: HTMLElement
   const assistant = assistantResult.assistant
   const opened = await host.open(fileId)
   if (opened.format !== 'docx') throw new Error(messages.zh.failed)
+  const signed=opened.officeSignatureProtected===true
   const prefs = await host.getPreferences(), locale = prefs.language === 'en' ? 'en' : 'zh', text = messages[locale]
   setModuleLang(locale); document.documentElement.lang = locale
   if (prefs.theme === 'system') delete document.documentElement.dataset.theme
   else document.documentElement.dataset.theme = prefs.theme
   setAuthorName(prefs.authorName ?? '')
-  let wordSync:ReturnType<typeof joinWordCollab>|undefined, syncState:WordSyncState='joining'
+  let wordSync:ReturnType<typeof joinWordCollab>|undefined, syncState:WordSyncState=signed?'unavailable':'joining'
   let peerSaveTimer:ReturnType<typeof setTimeout>|undefined
   let checkingWriter=false,nextWriterCheck=0,reopenToSave=false, journalAhead=false, lastSynced=-1
   async function syncBody(){try{await wordSync?.checkpoint();return true}catch{return false}}
@@ -113,7 +115,7 @@ export async function mountDocsEditor(host: SessionFileHost,element: HTMLElement
   }
   function onCollabEditor(editor:Editor|null){
     wordSync?.dispose();wordSync=undefined;clearTimeout(peerSaveTimer)
-    if(!editor||disposed)return
+    if(!editor||disposed||signed)return
     syncState='joining'
     wordSync=joinWordCollab(editor,opened.file.revision,host.getEditorId()!,
       data=>host.wordCollab(fileId,data),next=>{syncState=next;changed()},()=>{
@@ -216,8 +218,8 @@ export async function mountDocsEditor(host: SessionFileHost,element: HTMLElement
   } : {}
   window.desktop = {...bridge.api,...assistant?.api,...imageBridge, getAiPanelPrefs: async () => ({...await bridge.api.getAiPanelPrefs(),showAiSidebar:assistantAvailable})} as unknown as DesktopApi
   applyAiPanelPrefs(panelPrefs); installScreenTips()
-  let initialLease = true
-  try { await host.acquireLease(fileId) } catch { initialLease = false }
+  let initialLease = !signed
+  if(!signed)try { await host.acquireLease(fileId) } catch { initialLease = false }
   const stop = host.startRenewal(fileId)
   const realtime = mountEditorRealtime(host, fileId, () => changed(),channels=>assistant?.channel?.observe(channels))
   async function saveAndDownload() {
@@ -419,9 +421,9 @@ export async function mountDocsEditor(host: SessionFileHost,element: HTMLElement
     const local = bridge.getState()
     const bodyFollower=loaded&&!failed&&!state.lease&&state.status!=='unauthorized'&&syncState==='active'
     const syncWarning=syncState==='offline'||syncState==='stale'?(locale==='zh'?'共同编辑暂停，保留本地草稿。': 'Collaboration paused; your local draft is preserved.'):''
-    const warning = syncWarning || (failed ? text.failed : state.status === 'unknown' ? text.unknown : state.status === 'unauthorized' ? text.unauthorized : !state.lease && loaded && !bodyFollower ? (actionError || (initialLease ? text.conflict : text.readOnly)) : actionError)
+    const warning = syncWarning || (failed ? text.failed : state.status === 'unknown' ? text.unknown : state.status === 'unauthorized' ? text.unauthorized : !signed && !state.lease && loaded && !bodyFollower ? (actionError || (initialLease ? text.conflict : text.readOnly)) : actionError)
     const notice = bodyFollower?(locale==='zh'?'正文共同编辑中，整文件由主编辑器保存。':'Co-editing the body; the primary editor saves the file.'):realtime.notice(locale)
-    const status = bodyFollower ? wordSync?.pending() ? (en?'Syncing…':'正在同步…') : journalAhead ? (en?'Synced; awaiting file save':'已同步，等待写入文件') : (en?'Saved':'已保存') : !loaded ? text.opening : downloading ? text.downloadSaving : state.status === 'saving' || local.status === 'saving' ? (locale === 'zh' ? '正在保存…' : 'Saving…') : local.dirty ? (locale === 'zh' ? '未保存' : 'Unsaved') : text.ready
+    const status = signed ? officeSignatureNotice[locale].title : bodyFollower ? wordSync?.pending() ? (en?'Syncing…':'正在同步…') : journalAhead ? (en?'Synced; awaiting file save':'已同步，等待写入文件') : (en?'Saved':'已保存') : !loaded ? text.opening : downloading ? text.downloadSaving : state.status === 'saving' || local.status === 'saving' ? (locale === 'zh' ? '正在保存…' : 'Saving…') : local.dirty ? (locale === 'zh' ? '未保存' : 'Unsaved') : text.ready
     const saveStatus = <>
       <span className="dyoffice-docs-persistence-state" role="status" data-attention={Boolean(warning || notice)} data-native-save={local.nativeSaveOutcome} data-incomplete-reasons={local.nativeSaveReasons.join(',')} data-dirty={String(local.dirty)} title={warning || [status, notice].filter(Boolean).join(' · ')}>{warning ? (locale === 'zh' ? '需要处理' : 'Needs attention') : status}</span>
       {bodyFollower&&reopenToSave&&<button type="button" onClick={()=>{void syncBody().then(ok=>{if(ok&&!wordSync?.pending())location.reload()})}}>{locale==='zh'?'重新打开并接续保存':'Reopen and resume saving'}</button>}
@@ -435,14 +437,15 @@ export async function mountDocsEditor(host: SessionFileHost,element: HTMLElement
     const fileActions = <>
       <div className="file-menu-sep" />
       <button className="dyoffice-docs-save-download" title={text.saveDownloadVersionHint} disabled={!loaded || failed || !editorHandle || !state.lease || state.status !== 'idle' || downloading} onClick={() => { void saveAndDownload() }}>{text.saveDownload}</button>
-      <LocalDraftCopy name={state.name} locale={locale} authority={draftAuthority} getEditor={()=>!disposed&&!closing&&loaded&&!failed&&host.getState(fileId).status!=='unauthorized'?draftEditor:null}/>
+      {!signed&&<LocalDraftCopy name={state.name} locale={locale} authority={draftAuthority} getEditor={()=>!disposed&&!closing&&loaded&&!failed&&host.getState(fileId).status!=='unauthorized'?draftEditor:null}/>}
       <a className="dyoffice-docs-download" href={`/api/v1/files/${fileId}/content?revision=${state.revision.revision}`} download>{text.download}</a>
     </>
     return <div className="dyoffice-native-docs">
       <DocumentNotifications locale={locale} items={[
+        ...(signed ? [{id:'office-signature',level:'info' as const,...officeSignatureNotice[locale]}] : []),
         ...(assistantNotice ? [{id:'assistant',level:prefs.showAssistant === false ? 'info' as const : 'warning' as const,title:locale === 'zh' ? 'AI 助手' : 'AI Assistant',message:assistantNotice}] : []),
         ...(warning ? [{id:'document-state',level:'error' as const,title:locale === 'zh' ? '文档需要处理' : 'Document needs attention',message:warning,actions:<>
-        {!state.lease && !failed && state.status !== 'unauthorized' && <button data-takeover-blockers={[!loaded && 'loading', !editorHandle && 'no-handle', local.takingOver && 'taking-over', downloading && 'downloading', local.dirty && 'dirty', local.status !== 'idle' && 'local-busy', state.status === 'unknown' && 'host-unknown', state.status === 'saving' && 'host-saving'].filter(Boolean).join(',')} disabled={!loaded || !editorHandle || local.takingOver || downloading || local.dirty || local.status !== 'idle' || state.status === 'unknown' || state.status === 'saving'} onClick={() => { void takeOver() }}>{text.takeover}</button>}
+        {!signed && !state.lease && !failed && state.status !== 'unauthorized' && <button data-takeover-blockers={[!loaded && 'loading', !editorHandle && 'no-handle', local.takingOver && 'taking-over', downloading && 'downloading', local.dirty && 'dirty', local.status !== 'idle' && 'local-busy', state.status === 'unknown' && 'host-unknown', state.status === 'saving' && 'host-saving'].filter(Boolean).join(',')} disabled={!loaded || !editorHandle || local.takingOver || downloading || local.dirty || local.status !== 'idle' || state.status === 'unknown' || state.status === 'saving'} onClick={() => { void takeOver() }}>{text.takeover}</button>}
         {state.status === 'unknown' && <button onClick={() => { void host.reconcile(fileId).then(() => changed()).catch(() => {}) }}>{text.retry}</button>}
       </>}] : []),
         ...(notice ? [{id:'version',level:'info' as const,title:locale === 'zh' ? '版本同步' : 'Version updates',message:notice}] : []),

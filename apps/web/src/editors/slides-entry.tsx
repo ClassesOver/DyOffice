@@ -1,3 +1,4 @@
+import { officeSignatureNotice } from './office-signature-notice'
 import {documentHandoffPeer} from './document-handoff-peer'
 import {mountDocumentHandoff} from './document-handoff'
 import {createAnalysisDocumentTarget} from '../../../../packages/browser-host/src/analysis-document-target.ts'
@@ -42,6 +43,7 @@ export async function mountSlidesEditor(host: SessionFileHost, container: HTMLEl
   const stage = window
   container.textContent = messages.zh.opening
   const opened = await host.open(fileId)
+  const signed=opened.officeSignatureProtected===true
   if (opened.format !== 'pptx') throw new Error(messages.zh.failed)
   const prefs = await host.getPreferences(), locale = prefs.language === 'en' ? 'en' : 'zh', text = messages[locale]
   setModuleLang(locale); document.documentElement.lang = locale
@@ -83,9 +85,9 @@ export async function mountSlidesEditor(host: SessionFileHost, container: HTMLEl
   // Canvas fillText never triggers @font-face downloads: the bundled document fonts
   // (Carlito <-> Calibri) must be requested explicitly or Konva draws the fallback face.
   for (const variant of ['', 'bold ', 'italic ', 'italic bold ']) for (const family of ['Carlito', "'Carlito GO'"]) document.fonts?.load?.(`${variant}16px ${family}`).catch(() => {})
-  let initialLease = true
-  try { await host.acquireLease(fileId) } catch { initialLease = false }
-  let editorMounted = initialLease
+  let initialLease = !signed
+  if(!signed)try { await host.acquireLease(fileId) } catch { initialLease = false }
+  let editorMounted = signed || initialLease
   const stop = host.startRenewal(fileId), unsubscribe = host.subscribe(() => changed())
   const realtime = mountEditorRealtime(host, fileId, () => changed(),channels=>sharedAssistant?.channel?.observe(channels))
   const analysisTarget=createAnalysisDocumentTarget({fileId,format:'pptx',state:()=>host.getState(fileId),verifyAuthority:async()=>{await host.renewLease(fileId)},editor:()=>editor?.analysis??null,receipt:()=>bridge.getReceipt(),save:check=>bridge.guardedSave(check,async()=>!!editor&&await editor.saveAndWait()&&!editor.isDirty()&&!bridge.needsConfirmation())})
@@ -194,7 +196,7 @@ export async function mountSlidesEditor(host: SessionFileHost, container: HTMLEl
     const notice = realtime.notice(locale)
     const showAssistant=prefs.showAssistant!==false||handoffOpen
     const assistantNotice=assistantLoadFinished||!showAssistant?editorAssistantNotice(assistantResult,showAssistant,locale):''
-    const warning = failed || state.status === 'unknown' || bridge.needsConfirmation() || state.status === 'unauthorized' || (!state.lease && (loaded || !editorMounted) && !takingOver) || state.status === 'conflict' ? status : actionError
+    const warning = failed || state.status === 'unknown' || bridge.needsConfirmation() || state.status === 'unauthorized' || (!signed && !state.lease && (loaded || !editorMounted) && !takingOver) || state.status === 'conflict' ? status : actionError
     const historical = (!editorMounted || loaded) && !failed && !state.lease && !dirty() && state.status !== 'unknown' && state.status !== 'unauthorized' && !bridge.needsConfirmation() && !takingOver
     const saveDownload = <>
       <button type="button" className="dyoffice-slides-download"
@@ -208,13 +210,14 @@ export async function mountSlidesEditor(host: SessionFileHost, container: HTMLEl
       const {downloadSlidesImages} = await import('./slides-image-download')
       return downloadSlidesImages(baseName,format,pages,copyLifetime.signal)
     }
-    hostProps.namedCopy=writeProtected?undefined:namedCopy
+    hostProps.namedCopy=signed||writeProtected?undefined:namedCopy
     return <div className="dyoffice-native-slides">
       <DocumentNotifications locale={locale} items={[
+        ...(signed ? [{id:'office-signature',level:'info' as const,...officeSignatureNotice[locale]}] : []),
         ...(writeProtected ? [{id:'write-protected',level:'info' as const,
           title:locale==='zh'?'演示文稿受写保护':'Write-protected presentation',
           message:locale==='zh'?'此演示文稿需要修改密码。Web 当前以只读方式打开，可下载已保存版本。':'This presentation requires a password to modify. The Web editor opens it read only, and the saved version can be downloaded.'}] : []),
-        ...(warning ? [{id:'document-state',level:'error' as const,title:locale === 'zh' ? '文档需要处理' : 'Document needs attention',message:warning,actions:<>{!state.lease && (!editorMounted || !failed) && state.status !== 'unauthorized' && <button className="dyoffice-slides-takeover" disabled={(editorMounted && (!loaded || !editor)) || downloading || takingOver || dirty() || state.status === 'unknown' || bridge.needsConfirmation()} onClick={() => { void takeOver() }}>{text.takeover}</button>}{historical && <a href={`/api/v1/files/${fileId}/content?revision=${state.revision.revision}`} download={state.name}>{text.downloadReadOnly}</a>}{bridge.needsConfirmation() && <button data-save-fence-allow="confirm" disabled={confirming} onClick={() => { void confirmSave() }}>{text.retry}</button>}</>}] : []),
+        ...(warning ? [{id:'document-state',level:'error' as const,title:locale === 'zh' ? '文档需要处理' : 'Document needs attention',message:warning,actions:<>{!signed && !state.lease && (!editorMounted || !failed) && state.status !== 'unauthorized' && <button className="dyoffice-slides-takeover" disabled={(editorMounted && (!loaded || !editor)) || downloading || takingOver || dirty() || state.status === 'unknown' || bridge.needsConfirmation()} onClick={() => { void takeOver() }}>{text.takeover}</button>}{historical && <a href={`/api/v1/files/${fileId}/content?revision=${state.revision.revision}`} download={state.name}>{text.downloadReadOnly}</a>}{bridge.needsConfirmation() && <button data-save-fence-allow="confirm" disabled={confirming} onClick={() => { void confirmSave() }}>{text.retry}</button>}</>}] : []),
         ...(notice ? [{id:'version',level:'info' as const,title:locale === 'zh' ? '版本同步' : 'Version updates',message:notice}] : []),
         ...(assistantNotice ? [{id:'assistant',level:showAssistant?'warning' as const:'info' as const,title:locale==='zh'?'AI 助手':'AI Assistant',message:assistantNotice}] : []),
         ...(copyNotice ? [{id:'named-copy',level:'info' as const,title:locale==='zh'?'副本已保存':'Copy saved',message:copyNotice}] : []),

@@ -9,6 +9,12 @@ import { MAX_OBJECT_BYTES, storageError } from '../../storage/object-store.ts'
 export const uploadLimits = Object.freeze({ maxBytes: MAX_OBJECT_BYTES, maxEntries: 4096, maxPartBytes: 32 * 1024 * 1024, maxInflatedBytes: 128 * 1024 * 1024, maxXmlBytes: 4 * 1024 * 1024 })
 export interface FileValidationPolicy { maxBytes: number; maxEntries: number; maxPartBytes: number; maxInflatedBytes: number; maxXmlBytes: number }
 type Limits = FileValidationPolicy
+const opcSignatureOrigin = 'http://schemas.openxmlformats.org/package/2006/relationships/digital-signature/origin'
+const opcSignatureTypes = new Set([
+  'application/vnd.openxmlformats-package.digital-signature-origin',
+  'application/vnd.openxmlformats-package.digital-signature-xmlsignature+xml',
+  'application/vnd.openxmlformats-package.digital-signature-certificate',
+])
 const definitions = {
   docx: { path: 'word/document.xml', type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml', root: 'document', namespace: 'http://schemas.openxmlformats.org/wordprocessingml/2006/main', mime: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' },
   xlsx: { path: 'xl/workbook.xml', type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml', root: 'workbook', namespace: 'http://schemas.openxmlformats.org/spreadsheetml/2006/main', mime: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' },
@@ -46,6 +52,15 @@ function children(root: Record<string, unknown>, name: string, namespace: string
     }
   }
   return found
+}
+
+function signatureAttribute(value: unknown) {
+  if (typeof value !== 'string') return ''
+  // The signature identifiers are ASCII. Resolve numeric references without enabling XML entities.
+  return value.replace(/&#(x[0-9a-fA-F]+|[0-9]+);/g, (reference, digits: string) => {
+    const code = digits.startsWith('x') ? Number.parseInt(digits.slice(1), 16) : Number.parseInt(digits, 10)
+    return code >= 0x20 && code <= 0x7e ? String.fromCharCode(code) : reference
+  })
 }
 
 async function validateOffice(bytes: Buffer, format: keyof typeof definitions, limits: Limits) {
@@ -90,11 +105,15 @@ async function validateOffice(bytes: Buffer, format: keyof typeof definitions, l
   if (!['[Content_Types].xml','_rels/.rels',definition.path].every(name => parts.has(name))) throw storageError(400)
   const types = xmlRoot(parts.get('[Content_Types].xml')!, 'Types', 'http://schemas.openxmlformats.org/package/2006/content-types')
   const overrides = children(types, 'Override', 'http://schemas.openxmlformats.org/package/2006/content-types')
-  if (overrides.filter(item => item['@_PartName'] === '/' + definition.path && item['@_ContentType'] === definition.type).length !== 1 || [...children(types,'Default', 'http://schemas.openxmlformats.org/package/2006/content-types'),...overrides].some(item => /macroEnabled|vbaProject/i.test(String(item['@_ContentType'])))) throw storageError(400)
+  const contentTypes = [...children(types,'Default', 'http://schemas.openxmlformats.org/package/2006/content-types'),...overrides].map(item => String(item['@_ContentType']))
+  if (overrides.filter(item => item['@_PartName'] === '/' + definition.path && item['@_ContentType'] === definition.type).length !== 1 || contentTypes.some(type => /macroEnabled|vbaProject/i.test(type))) throw storageError(400)
   const relations = xmlRoot(parts.get('_rels/.rels')!, 'Relationships', 'http://schemas.openxmlformats.org/package/2006/relationships')
-  const roots = children(relations,'Relationship', 'http://schemas.openxmlformats.org/package/2006/relationships').filter(item => item['@_Type'] === 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument')
+  const relationships = children(relations,'Relationship', 'http://schemas.openxmlformats.org/package/2006/relationships')
+  const roots = relationships.filter(item => item['@_Type'] === 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument')
   if (roots.length !== 1 || roots[0]['@_TargetMode'] === 'External' || ![definition.path,'/' + definition.path].includes(String(roots[0]['@_Target']))) throw storageError(400)
   xmlRoot(parts.get(definition.path)!, definition.root, definition.namespace)
+  return relationships.some(item => signatureAttribute(item['@_Type']) === opcSignatureOrigin) ||
+    contentTypes.some(type => opcSignatureTypes.has(signatureAttribute(type).toLowerCase()))
 }
 
 export async function validateUploadInternal(bytes: Buffer, name: string, policy: Partial<Limits> = {}) {
@@ -102,15 +121,16 @@ export async function validateUploadInternal(bytes: Buffer, name: string, policy
   if (Object.values(limits).some(value => !Number.isSafeInteger(value) || value < 1)) throw storageError(400)
   if (!Buffer.isBuffer(bytes) || bytes.length === 0) throw storageError(400)
   if (bytes.length > limits.maxBytes || bytes.length > MAX_OBJECT_BYTES) throw storageError(413)
+  let officeSignatureProtected = false
   try {
     if (format === 'pdf') {
       if (!/^%PDF-(?:1\.[0-9]|2\.0)/.test(bytes.subarray(0, 9).toString('ascii')) || !/%%EOF\s*$/.test(bytes.subarray(-1024).toString('latin1'))) throw storageError(400)
       const document = await PDFDocument.load(bytes, { ignoreEncryption: false, throwOnInvalidObject: true, updateMetadata: false })
       if (document.getPageCount() < 1) throw storageError(400)
-    } else await validateOffice(bytes, format, limits)
+    } else officeSignatureProtected = await validateOffice(bytes, format, limits)
   } catch (error) {
     if ((error as { statusCode?: number }).statusCode === 413) throw error
     throw storageError(400)
   }
-  return Object.freeze({ format, mime: format === 'pdf' ? 'application/pdf' : definitions[format].mime, size: bytes.length, sha256: createHash('sha256').update(bytes).digest('hex') })
+  return Object.freeze({ format, mime: format === 'pdf' ? 'application/pdf' : definitions[format].mime, size: bytes.length, sha256: createHash('sha256').update(bytes).digest('hex'), officeSignatureProtected })
 }

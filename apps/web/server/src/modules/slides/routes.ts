@@ -29,18 +29,21 @@ export function registerSlidesRoutes(app: FastifyInstance, slides: SlidesSession
         return withDisconnect(request, reply, signal => operation(cookies(request).session ?? '', (request.params as {id: string}).id, request.body as T & {editorId:string;leaseEpoch:number}, signal))
       })
     }
+    function readRoute<T>(path: string, properties: Record<string, unknown>, operation: (token: string, fileId: string, body: T & {editorId:string;leaseEpoch:number}, signal: AbortSignal) => Promise<unknown>) {
+      route<T>(path, properties, operation, 4096, ['editorId','leaseEpoch'])
+    }
     const fitWidthPx = { type: 'integer', minimum: 320, maximum: 4096 }
-    route<{revision:string;generation:number;fitWidthPx?:number}>('/api/v1/files/:id/slides/open', {...revisionBody,generation:generationBody,fitWidthPx}, (token,id,body,signal)=>slides.open(token,id,body,signal))
-    route<{revision:string;generation:number;index:number;fitWidthPx?:number}>('/api/v1/files/:id/slides/slide', {...revisionBody,generation:generationBody,index:{type:'integer',minimum:0,maximum:1048575},fitWidthPx}, (token,id,body,signal)=>slides.slide(token,id,body,signal))
-    route<{revision:string;generation:number;index:number}>('/api/v1/files/:id/slides/notes', {...revisionBody,generation:generationBody,index:{type:'integer',minimum:0,maximum:1048575}}, (token,id,body,signal)=>slides.notes(token,id,body,signal))
-    route<{revision:string;generation:number;index:number}>('/api/v1/files/:id/slides/comments', {...revisionBody,generation:generationBody,index:{type:'integer',minimum:0,maximum:1048575}}, (token,id,body,signal)=>slides.comments(token,id,body,signal))
-    route<{revision:string;generation:number;index:number;sourceId:string}>('/api/v1/files/:id/slides/chart-data', {...revisionBody,generation:generationBody,index:{type:'integer',minimum:0,maximum:1048575},sourceId:{type:'string',minLength:1,maxLength:256}}, (token,id,body,signal)=>slides.chartData(token,id,body,signal))
-    route<{revision:string;generation:number}>('/api/v1/files/:id/slides/chart-color-schemes', {...revisionBody,generation:generationBody}, (token,id,body,signal)=>slides.chartColorSchemes(token,id,body,signal))
-    route<{revision:string;generation:number;index:number}>('/api/v1/files/:id/slides/animations', {...revisionBody,generation:generationBody,index:{type:'integer',minimum:0,maximum:1048575}}, (token,id,body,signal)=>slides.animations(token,id,body,signal))
-    route<{revision:string;generation:number;index:number}>('/api/v1/files/:id/slides/links', {...revisionBody,generation:generationBody,index:{type:'integer',minimum:0,maximum:1048575}}, (token,id,body,signal)=>slides.links(token,id,body,signal))
-    route<{revision:string;generation:number;index:number}>('/api/v1/files/:id/slides/run-links', {...revisionBody,generation:generationBody,index:{type:'integer',minimum:0,maximum:1048575}}, (token,id,body,signal)=>slides.runLinks(token,id,body,signal))
-    route<{revision:string;generation:number}>('/api/v1/files/:id/slides/layouts', {...revisionBody,generation:generationBody}, (token,id,body,signal)=>slides.layouts(token,id,body,signal))
-    route<{revision:string;generation:number}>('/api/v1/files/:id/slides/slides', {...revisionBody,generation:generationBody}, (token,id,body,signal)=>slides.slides(token,id,body,signal))
+    readRoute<{revision:string;generation:number;fitWidthPx?:number}>('/api/v1/files/:id/slides/open', {...revisionBody,generation:generationBody,fitWidthPx}, (token,id,body,signal)=>slides.open(token,id,body,signal))
+    readRoute<{revision:string;generation:number;index:number;fitWidthPx?:number}>('/api/v1/files/:id/slides/slide', {...revisionBody,generation:generationBody,index:{type:'integer',minimum:0,maximum:1048575},fitWidthPx}, (token,id,body,signal)=>slides.slide(token,id,body,signal))
+    readRoute<{revision:string;generation:number;index:number}>('/api/v1/files/:id/slides/notes', {...revisionBody,generation:generationBody,index:{type:'integer',minimum:0,maximum:1048575}}, (token,id,body,signal)=>slides.notes(token,id,body,signal))
+    readRoute<{revision:string;generation:number;index:number}>('/api/v1/files/:id/slides/comments', {...revisionBody,generation:generationBody,index:{type:'integer',minimum:0,maximum:1048575}}, (token,id,body,signal)=>slides.comments(token,id,body,signal))
+    readRoute<{revision:string;generation:number;index:number;sourceId:string}>('/api/v1/files/:id/slides/chart-data', {...revisionBody,generation:generationBody,index:{type:'integer',minimum:0,maximum:1048575},sourceId:{type:'string',minLength:1,maxLength:256}}, (token,id,body,signal)=>slides.chartData(token,id,body,signal))
+    readRoute<{revision:string;generation:number}>('/api/v1/files/:id/slides/chart-color-schemes', {...revisionBody,generation:generationBody}, (token,id,body,signal)=>slides.chartColorSchemes(token,id,body,signal))
+    readRoute<{revision:string;generation:number;index:number}>('/api/v1/files/:id/slides/animations', {...revisionBody,generation:generationBody,index:{type:'integer',minimum:0,maximum:1048575}}, (token,id,body,signal)=>slides.animations(token,id,body,signal))
+    readRoute<{revision:string;generation:number;index:number}>('/api/v1/files/:id/slides/links', {...revisionBody,generation:generationBody,index:{type:'integer',minimum:0,maximum:1048575}}, (token,id,body,signal)=>slides.links(token,id,body,signal))
+    readRoute<{revision:string;generation:number;index:number}>('/api/v1/files/:id/slides/run-links', {...revisionBody,generation:generationBody,index:{type:'integer',minimum:0,maximum:1048575}}, (token,id,body,signal)=>slides.runLinks(token,id,body,signal))
+    readRoute<{revision:string;generation:number}>('/api/v1/files/:id/slides/layouts', {...revisionBody,generation:generationBody}, (token,id,body,signal)=>slides.layouts(token,id,body,signal))
+    readRoute<{revision:string;generation:number}>('/api/v1/files/:id/slides/slides', {...revisionBody,generation:generationBody}, (token,id,body,signal)=>slides.slides(token,id,body,signal))
     route<{revision:string;generation:number;ops:unknown[];isolation?:'atomic'|'per_op';dryRun?:boolean}>('/api/v1/files/:id/slides/apply', {...revisionBody,generation:generationBody,ops:{type:'array',minItems:1,maxItems:100},isolation:{type:'string',enum:['atomic','per_op']},dryRun:{type:'boolean'}}, (token,id,body,signal)=>slides.apply(token,id,body,signal), SLIDES_APPLY_BODY_LIMIT, ['isolation','dryRun'])
     route<{revision:string;generation:number;slide:number;sourceId:string;patch:Record<string,unknown>;confirmed?:boolean}>('/api/v1/files/:id/slides/chart-edit', {
       ...revisionBody,generation:generationBody,slide:{type:'integer',minimum:0,maximum:1048575},sourceId:{type:'string',minLength:1,maxLength:256},confirmed:{type:'boolean'},
@@ -52,7 +55,7 @@ export function registerSlidesRoutes(app: FastifyInstance, slides: SlidesSession
     route<{revision:string;generation:number;markers:string[];mode:'replace'|'append'|'replace_at'|'insert_at';atIndex?:number}>('/api/v1/files/:id/slides/generated-pages', {
       ...revisionBody,generation:generationBody,markers:{type:'array',minItems:1,maxItems:200,items:{type:'string',minLength:10,maxLength:128}},mode:{type:'string',enum:['replace','append','replace_at','insert_at']},atIndex:{type:'integer',minimum:0,maximum:200},
     },(token,id,body,signal)=>slides.landGeneratedPages(token,id,body,signal),32*1024,['atIndex'])
-    route<Parameters<SlidesSessions['masterParts']>[2]>('/api/v1/files/:id/slides/master-parts', {
+    readRoute<Parameters<SlidesSessions['masterParts']>[2]>('/api/v1/files/:id/slides/master-parts', {
       ...revisionBody,generation:generationBody,fitWidthPx,
     },(token,id,body,signal)=>slides.masterParts(token,id,body,signal))
     route<Parameters<SlidesSessions['applyMaster']>[2]>('/api/v1/files/:id/slides/master-edit', {
