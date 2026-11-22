@@ -41,6 +41,14 @@ for (const [format,fixture,declaration] of [
   ['xlsx','apps/shell/build/shell-new/blank.xlsx','encoded-content-type'],
   ['pptx','packages/pptx-engine/tests/fixtures/01_standard_business.pptx'],
 ]) test(`signed ${format} packages reject revision staging and preserve original bytes`,async t=>{
+  if(format==='pptx'){
+    const previousNodeEnv=process.env.NODE_ENV
+    process.env.NODE_ENV='test'
+    t.after(()=>{
+      if(previousNodeEnv===undefined)delete process.env.NODE_ENV
+      else process.env.NODE_ENV=previousNodeEnv
+    })
+  }
   const unsigned=await readFile(new URL('../../../../'+fixture,import.meta.url))
   const signed=await withOfficeSignatureOrigin(unsigned,{declaration})
   let verifiedReads=0
