@@ -55,7 +55,7 @@ test('an encrypted PDF is not rasterized', async () => {
   await assert.rejects(renderPdfPages(Buffer.from('not a pdf')), { code: 'MAGIC_MISMATCH' })
 })
 
-test('the prototype serves PDF.js resources and rejects the removed viewer page', async (t) => {
+test('the prototype rejects the removed PDF viewer and its resources', async (t) => {
   const directory = await mkdtemp(join(tmpdir(), 'dyoffice-pdf-view-'))
   t.after(() => rm(directory, { recursive: true, force: true }))
   const server = await createApplication({
@@ -69,16 +69,7 @@ test('the prototype serves PDF.js resources and rejects the removed viewer page'
   await new Promise((resolve) => server.once('listening', resolve))
   t.after(() => new Promise((resolve) => server.close(resolve)))
   const origin = `http://127.0.0.1:${server.address().port}`
-  for (const path of ['/pdf.html', '/pdf.css']) assert.equal((await fetch(origin + path)).status, 404)
-  const cmap = await fetch(`${origin}/pdfjs/cmaps/UniGB-UCS2-H.bcmap`)
-  assert.equal(cmap.status, 200)
-  assert.ok((await cmap.arrayBuffer()).byteLength > 1000)
-  for (const path of ['/pdfjs/cmaps/secret.bcmap', '/pdfjs/cmaps/%2e%2e%2fpackage.json']) assert.equal((await fetch(origin + path)).status, 404)
-  const font = await fetch(`${origin}/pdfjs/standard_fonts/LiberationSans-Regular.ttf`)
-  assert.equal(font.status, 200)
-  assert.match(font.headers.get('content-type'), /font/)
-  assert.ok((await font.arrayBuffer()).byteLength > 1000)
-  for (const path of ['/pdfjs/standard_fonts/../package.json', '/pdfjs/standard_fonts/secret.ttf', '/pdfjs/standard_fonts/%2e%2e%2fpackage.json']) {
+  for (const path of ['/pdf.html', '/pdf.css', '/pdfjs/cmaps/UniGB-UCS2-H.bcmap', '/pdfjs/standard_fonts/LiberationSans-Regular.ttf']) {
     assert.equal((await fetch(origin + path)).status, 404, path)
   }
 })

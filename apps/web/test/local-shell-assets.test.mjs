@@ -11,9 +11,7 @@ test('local login shell serves only built manifest assets, never legacy/admin/so
  const app=await createApiShell();t.after(()=>app.close());await registerLocalShell(app,directory);await app.ready()
  const root=await app.inject('/');assert.equal(root.statusCode,200);assert.match(root.body,/local shell/);assert.match(root.headers['content-security-policy'],/frame-ancestors 'none'/);assert.equal(root.headers['cache-control'],'private, no-store');assert.match(root.headers['content-security-policy'],/frame-src 'self'/)
  assert.equal((await app.inject('/assets/app.js')).statusCode,200)
- assert.equal((await app.inject('/pdfjs/standard_fonts/LiberationSans-Regular.ttf')).statusCode,200)
- assert.equal((await app.inject('/pdfjs/standard_fonts/unknown.ttf')).statusCode,404)
- for(const path of ['/legacy.html','/admin','/src/shell/local-main.tsx','/.vite/manifest.json','/api/v1/preferences','/assets/missing.js'])assert.equal((await app.inject(path)).statusCode,404,path)
+ for(const path of ['/legacy.html','/admin','/src/shell/local-main.tsx','/.vite/manifest.json','/api/v1/preferences','/assets/missing.js','/pdfjs/standard_fonts/LiberationSans-Regular.ttf','/pdfjs/cmaps/UniGB-UCS2-H.bcmap'])assert.equal((await app.inject(path)).statusCode,404,path)
  assert.equal((await app.inject({method:'HEAD',url:'/'})).body,'')
 })
 

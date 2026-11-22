@@ -170,6 +170,8 @@ test('native PDF model receives visible page and selection context, and cites na
  await app.listen({port:4268,host:'127.0.0.1'})
  const browser=await launchTestBrowser();f.cleanup.unshift(()=>browser.close())
  const page=await browser.newPage()
+ const fontPath='/native-pdf/assets/pdfjs/standard_fonts/LiberationSans-Regular.ttf'
+ assert.equal((await page.request.get(origin+fontPath)).status(),401)
  await stubHomeHero(page)
  await page.route('**/api/v1/ai/catalog',route=>route.fulfill({json:{entries:[{id:'mock',label:'Office test model'}],defaultId:'mock'}}))
  const requests=[]
@@ -186,6 +188,11 @@ test('native PDF model receives visible page and selection context, and cites na
  await page.getByLabel('密码',{exact:true}).fill(password)
  await page.getByRole('button',{name:'登录',exact:true}).click()
  await expect(page.locator('.home')).toBeVisible()
+ assert.equal((await page.request.get(origin+'/pdfjs/standard_fonts/LiberationSans-Regular.ttf')).status(),404)
+ const font=await page.request.get(origin+fontPath)
+ assert.equal(font.status(),200)
+ assert.match(font.headers()['content-type'],/font\/ttf/)
+ assert.ok((await font.body()).length>1000)
  await page.goto(origin+'/native-pdf/?fileId='+file.fileId)
  await expect(page.locator('html')).toHaveAttribute('data-document-loading','ready')
  await page.getByRole('button',{name:'AI 助手',exact:true}).click()
