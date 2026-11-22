@@ -2,7 +2,27 @@ import { setTimeout as delay } from 'node:timers/promises'
 import { SandboxError, type SandboxSession } from '../sandbox/contracts.ts'
 import { createNativeAdmission, type NativeProcess } from './admission.ts'
 
-export interface RecalcInput {edits: {sheetName: string; row: number; column: number; input: string}[]; reads: {sheetName: string; range: {startRow: number; endRow: number; startColumn: number; endColumn: number}}[]}
+export interface RecalcInput {reportStale?: boolean; edits: {sheetName: string; row: number; column: number; input: string}[]; reads: {sheetName: string; range: {startRow: number; endRow: number; startColumn: number; endColumn: number}}[]}
+export interface RecalculatedCell {
+  sheet: string
+  row: number
+  column: number
+  formatted: string
+  number?: number
+  boolean?: boolean
+  isError?: boolean
+  isFormula: boolean
+}
+export interface RecalcResult {
+  cells: RecalculatedCell[]
+  stale?: RecalculatedCell[]
+  auditSkipped?: 'date1904'
+}
+export interface FormulaIndexSheet {
+  id: string
+  name: string
+  cells: { row: number; column: number; formula: string }[]
+}
 export interface FindInput {
   query:string; matchCase:boolean; matchEntireCell:boolean; lookIn:'values'|'formulas'|'formulas_only'|'both'
   wildcards:boolean; limit:number; resumeAt?:{row:number;column:number}
@@ -92,13 +112,13 @@ export function createXlsxNativeWorker(process: NativeProcess) {
         return count>20000
       })) return Promise.reject(new SandboxError('INPUT_LIMIT'))
       // Snapshot caller-owned containers before native admission can queue.
-      request = {edits: request.edits.map(e=>({...e})), reads: request.reads.map(r=>({...r,range:{...r.range}}))}
+      request = {edits: request.edits.map(e=>({...e})), reads: request.reads.map(r=>({...r,range:{...r.range}})), reportStale: request.reportStale === true}
       return native.run(input,async io=>{
         const source=opened(await io.request('open',{path:'/work/input.xlsx',locale:'en'}))
         try {
           const names=new Set(source.sheets.map(s=>s.name))
           if([...request.edits,...request.reads].some(e=>!names.has(e.sheetName)))throw new SandboxError('UNKNOWN_SHEET')
-          return await io.request('recalc_cells',{path:'/work/input.xlsx',edits:request.edits.map(({sheetName,...e})=>({sheet:sheetName,...e})),reads:request.reads.map(({sheetName,range})=>({sheet:sheetName,range}))}) as {cells:{sheet:string;row:number;column:number;formatted:string;number?:number;isError?:boolean;isFormula:boolean}[]}
+          return await io.request('recalc_cells',{path:'/work/input.xlsx',edits:request.edits.map(({sheetName,...e})=>({sheet:sheetName,...e})),reads:request.reads.map(({sheetName,range})=>({sheet:sheetName,range})), ...(request.reportStale && {reportStale:true})}) as RecalcResult
         } finally {await io.request('close',{sessionId:source.sessionId})}
       },{signal})
     },
@@ -122,6 +142,30 @@ export function createXlsxNativeWorker(process: NativeProcess) {
           return await io.request(kind === 'formulas' ? 'read_formula_cells' : 'read_row_outline', {sessionId: source.sessionId, sheetId: sheet.id})
         } finally { await io.request('close', {sessionId: source.sessionId}) }
       }, {signal})
+    },
+    readFormulaIndex(input: Uint8Array, signal?: AbortSignal): Promise<FormulaIndexSheet[]> {
+      return native.run(input, async io => {
+        const source = opened(await io.request('open', { path: '/work/input.xlsx', locale: 'en' }))
+        try {
+          const index: FormulaIndexSheet[] = []
+          for (const sheet of source.sheets) {
+            await waitForSheet(io, source.sessionId, sheet.id, signal)
+            const result = await io.request('read_formula_cells', { sessionId: source.sessionId, sheetId: sheet.id }) as {
+              cells: FormulaIndexSheet['cells']
+              sharedGroups?: unknown[]
+              indexingComplete?: boolean
+              truncated?: boolean
+            }
+            // Compact shared groups omit followers from cells. Their translated
+            // references are needed to trace volatile dependencies safely.
+            if (!result.indexingComplete || result.truncated || result.sharedGroups?.length || !Array.isArray(result.cells)) {
+              throw new SandboxError('INVALID_PROTOCOL')
+            }
+            index.push({ ...sheet, cells: result.cells })
+          }
+          return index
+        } finally { await io.request('close', { sessionId: source.sessionId }) }
+      }, { signal })
     },
     findCells(input:Uint8Array,sheetName:string,request:FindInput,signal?:AbortSignal){
       const {resumeAt,...options}=request

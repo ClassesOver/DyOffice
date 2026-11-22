@@ -31,7 +31,7 @@ export async function planFromWorkbook(bytes: Buffer, input: unknown) {
   try {
     const source = await createBufferEntrySource(bytes)
     const request = workbookSaveRequestSchema.parse(input)
-    const editedSheets = new Set(request.edits.map(edit => edit.sheetId))
+    const editedSheets = new Set([...request.edits, ...request.formulaValues].map(edit => edit.sheetId))
     const workbook = await source.readText('xl/workbook.xml')
     // The existing text-based sheet planner cannot safely interpret these XML
     // constructs. Reject ambiguity instead of letting a comment forge a sheet.

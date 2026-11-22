@@ -3,6 +3,8 @@ import type { McpXlsxCell } from '../../db/context.ts'
 import { authError } from '../auth/sessions.ts'
 import { uuid } from '../files/queries.ts'
 import { createSheetsSaveService, type SheetsPlanner, type SheetsSaveNative, type SheetsWorkbookPlanner } from '../sheets/save.ts'
+import type { SheetsNative } from '../sheets/service.ts'
+import { planFormulaCacheRefresh } from './xlsx-formula-caches.ts'
 import { approvedSaveResultSchema, createApprovedOfficeSave, type ApprovedSaveOptions } from './approved-save.ts'
 import type { McpExternalCredential } from './credential.ts'
 import { officeReadDescriptor } from './office-read.ts'
@@ -67,7 +69,7 @@ export function parseXlsxCells(value: unknown) {
 }
 
 export interface McpSheetsSaveRuntime {
-  native: SheetsSaveNative
+  native: SheetsSaveNative & Pick<SheetsNative, 'recalculate' | 'readFormulaIndex'>
   plan: SheetsPlanner
   planFromWorkbook: SheetsWorkbookPlanner
 }
@@ -83,19 +85,21 @@ export function createMcpXlsxCells(options: ApprovedSaveOptions & McpSheetsSaveR
     try {
       return await save(credential, { fileId, revision }, { kind: 'xlsx.cells', cells }, deadline, async input => {
         const { files, leases, revisions, token, fileId, baseRevision, editorId, leaseEpoch, signal } = input
+        const request = {
+          sessionId: editorId, mode: 'save', edits: cells.map(cell => ({ ...cell, writeValue: true })),
+          structuralOps: [], chartEdits: [], visualEdits: [], visualAdditions: [], tableAdditions: [], pivotAdditions: [],
+          sheetOps: [], sheetOrder: [], filterStates: [], hyperlinkEdits: [], cfStates: [], dvStates: [], pageSetupStates: [],
+          noteStates: [], formulaValues: [], pivotCacheRefreshPaths: [], pivotRefreshUpdates: [],
+          sheetProtections: [], sparklineAdditions: [], definedNamesState: null,
+        }
+        const { recalculate, readFormulaIndex } = options.native
         const service = createSheetsSaveService({
           files, leases, revisions, native: options.native, plan: options.plan, planFromWorkbook: options.planFromWorkbook,
+          planAfterSave: recalculate && readFormulaIndex && ((source, edited, signal) => planFormulaCacheRefresh({
+            source, edited, request, recalculate, readFormulaIndex, plan: options.planFromWorkbook, signal,
+          })),
         })
-        return service.prepare(token, fileId, {
-          baseRevision, editorId, leaseEpoch,
-          request: {
-            sessionId: editorId, mode: 'save', edits: cells.map(cell => ({ ...cell, writeValue: true })),
-            structuralOps: [], chartEdits: [], visualEdits: [], visualAdditions: [], tableAdditions: [], pivotAdditions: [],
-            sheetOps: [], sheetOrder: [], filterStates: [], hyperlinkEdits: [], cfStates: [], dvStates: [], pageSetupStates: [],
-            noteStates: [], formulaValues: [], pivotCacheRefreshPaths: [], pivotRefreshUpdates: [],
-            sheetProtections: [], sparklineAdditions: [], definedNamesState: null,
-          },
-        }, signal)
+        return service.prepare(token, fileId, { baseRevision, editorId, leaseEpoch, request }, signal)
       })
     } finally { active-- }
   }
