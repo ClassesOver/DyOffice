@@ -227,11 +227,13 @@ test('native PDF model receives visible page and selection context, and cites na
  assert.equal((await f.files.openFile(f.alice.token,file.fileId)).file.revision,file.revision)
 })
 
-test('native PDF saves an assistant mark on a printed checkbox and can select it after reopening',{skip:!directory,timeout:60000},async t=>{
+for (const theme of ['light','dark']) test(`native PDF saves and reopens an assistant mark without changing other page colors in the ${theme} UI theme`,{skip:!directory,timeout:90000},async t=>{
  const origin='http://localhost:4267',f=await fileFixture(t,{origin,buildApp:false})
+ await f.preferences.update(f.alice.token,{theme})
  const source=await PDFDocument.create(),sheet=source.addPage([300,240])
  sheet.drawRectangle({x:40,y:140,width:16,height:16,borderWidth:1,borderColor:rgb(0,0,0)})
  sheet.drawText('Consent',{x:64,y:141,size:12})
+ source.addPage([300,240]).drawRectangle({x:24,y:30,width:180,height:120,color:rgb(0.15,0.45,0.85)})
  const original=Buffer.from(await source.save()),{file}=await importFile(f,f.alice.token,original,'printed-check.pdf')
  const app=await buildLocalApp({db:f.db,businessPool:f.businessPool,passwords:f.passwords,deploymentId:f.deploymentId,origin,csrfKey:f.csrfKey,objectStore:f.objects,
   nativePdfDirectory:directory,localShellDirectory:process.env.DYOFFICE_TEST_LOCAL_SHELL_DIRECTORY??fileURLToPath(new URL('../../dist-local-shell',import.meta.url))})
@@ -260,6 +262,7 @@ test('native PDF saves an assistant mark on a printed checkbox and can select it
  await expect(page.locator('.home')).toBeVisible()
  await page.goto(origin+'/native-pdf/?fileId='+file.fileId)
  await expect(page.locator('html')).toHaveAttribute('data-document-loading','ready')
+ await expect(page.locator('html')).toHaveAttribute('data-theme',theme)
  await page.getByRole('button',{name:'AI 助手',exact:true}).click()
  const assistant=page.locator('.shared-editor-assistant')
  await assistant.getByRole('textbox',{name:'消息'}).fill('Check the printed Consent box.')
@@ -275,9 +278,19 @@ test('native PDF saves an assistant mark on a printed checkbox and can select it
  assert.notEqual(revision,file.revision)
  assert.equal(commits,1)
  const bytes=await f.files.readFile(f.alice.token,file.fileId,revision)
- const leaves=await readPdfLeafObjects(bytes)
+ await page.getByRole('button',{name:'文件',exact:true}).click()
+ const [download]=await Promise.all([
+  page.waitForEvent('download'),
+  page.getByRole('link',{name:'下载已保存版本',exact:true}).click(),
+ ])
+ const downloadedBytes=await readFile(await download.path())
+ assert.deepEqual(downloadedBytes,bytes)
+ const leaves=await readPdfLeafObjects(downloadedBytes)
  assert.deepEqual(leaves.filter(item=>item.type===3).map(item=>[item.page,...item.bounds]),[[0,40,140,56,156]])
  assert.ok(leaves.some(item=>item.text==='Consent'))
+ const before=await renderPdfPages(original),after=await renderPdfPages(downloadedBytes)
+ assert.notEqual(after.pages[0].pixels,before.pages[0].pixels)
+ assert.equal(after.pages[1].pixels,before.pages[1].pixels)
  assert.deepEqual(await f.files.readFile(f.alice.token,file.fileId,file.revision),original)
  await page.reload()
  await expect(page.locator('html')).toHaveAttribute('data-document-loading','ready')
