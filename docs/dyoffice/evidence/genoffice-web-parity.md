@@ -12,6 +12,8 @@
 
 ## 四格式 AI 工具验收
 
+逐工具验收以格式和工具名为单位，保留注册、执行与成品证据。首轮核对涵盖 130 个格式与工具组合、9 个共享工具和桌面 MCP 清单的 Web 对照。[逐工具验收表](office-ai-tool-coverage.md)
+
 `dec77c2d` 的工具清单检查匹配 159 项定义。按四个 GenOffice 编辑器的静态定义核对 Web 策略，DOCX、XLSX、PPTX、PDF 的 Web 允许名单分别为 42、19、20、49 个名称，包含 Web 专用和条件注册的工具。原编辑器定义里唯一被排除的是 DOCX 通用桌面命令 `run_cli`。当前轮实际向模型提供的工具继续按格式、编辑器能力、附件和配置收窄。模型调用未提供的工具会被拒绝。服务端、传输、后台阅读与交接合同共 105 项通过。[GenOffice 工具清单](../inventory/agent-tools.md) [模型工具传输与策略](../../../apps/web/test/unit/assistant-client.test.mjs) [浏览器实际工具注册](../../../apps/web/test/local-browser/office-tool-inventory.test.mjs)
 
 | 格式 | 已通过的代表性浏览器场景，使用测试模型响应 |
@@ -29,9 +31,15 @@
 
 PPTX 在 `89df7aa6` 的英文首轮成功生成、保存并重开两页，第二页重做请求后的标题保持原值，整个用例按失败记录。`9922e244` 重建原生 PPTX 后，中文定向用例通过，耗时约 118 秒。生成的两页含指定标题与周一、周五的正文，包内保留可编辑文本，两个页面均无图片。重做时真实模型调用 `read_slide` 和 `regenerate_slide`，第二页保存并重开后含新标题和发布清单。第一页 XML 字节一致，两个历史版本保留原样。该次生成过程中模型调用了一次澄清工具，测试跳过澄清后继续。[PPTX 成品用例](../../../apps/web/test/local-browser/native-slides-generate.test.mjs)
 
+固定候选 `29415fca` 从源码归档独立构建后，使用同一 `gpt-6-sol` 配置串行运行四格式真实模型用例，4 项通过，0 项失败或跳过。DOCX、XLSX、PPTX、PDF 分别耗时 33.0、54.2、112.9、50.9 秒。PPTX 的追踪确认重做请求已发出，两次历史批次均正常开启和关闭，第一页保持原样；生成阶段仍需跳过一次澄清。这组结果覆盖同一候选的成品效果，全量浏览器回归正在运行。
+
 `9922e244` 上补测了 XLSX 的中文数据分析任务。`gpt-6-sol` 从临时 PostgreSQL 的合成订单计算 2026 年 1 至 6 月实付金额，并调用 `insert_data_result`。6 个月的标签和数值均与数据库真值一致，7 项断言全部通过。该次试验耗时 14.7 秒，调用工具 5 次，输入 9,655 tokens，输出 328 tokens。评估将表格交给内存文档目标，浏览器保存和重开由独立用例覆盖。[真实模型数据分析评估](../../../tools/dyoffice/analysis-eval/README.md)
 
 同一提交的 DOCX 渠道汇总评估通过 6 项断言。模型调用 `insert_data_result`，三个渠道的订单量、金额和来源标记符合真值，耗时 18.1 秒，调用工具 7 次。评估接收表格的目标为内存文档。[真实模型数据分析评估](../../../tools/dyoffice/analysis-eval/README.md)
+
+`29415fca` 的跨表排名追问评估通过全部 7 项断言。模型先按实付金额对商品类别排名，再按用户追问增加华南条件并保留已付款口径。两轮排名与 PostgreSQL 真值一致，首轮金额逐项正确。该次试验耗时 35.1 秒，调用工具 10 次，工具错误与网关重试均为 0。[跨表排名评估用例](../../../tools/dyoffice/analysis-eval/scenarios.ts)
+
+`15a0ed5e` 的 CI 在 Chromium 步骤通过后，有两项数据源服务端回归失败。合入基线 `7663567e` 后，在 `29415fca` 的真实 PostgreSQL 上定向复跑，两项均通过。覆盖管理员批准和撤销数据源、只读 SQL 与超时、结果限额及凭据隔离。[数据源集成回归](../../../apps/web/test/local-integration/data-sources.test.mjs) [旧候选 CI](https://github.com/ClassesOver/DyOffice/actions/runs/45005639852/job/137156502751)
 
 本机通过锁文件安装依赖，使用 Node `22.23.5`、Playwright Chromium `151.0.7922.34`、隔离 PostgreSQL 夹具及主机 OCR，不使用 Docker。本轮确认助手工具清单的 159 个定义与分类一致，兼容输入基线 84 个文件无漂移。四格式后台读取和回答等基础测试 23 项通过，跳过的真实 OCR 项在安装 Tesseract 及 `eng`、`chi_sim` 数据后单独复跑，OCR 套件 3 项通过。
 
