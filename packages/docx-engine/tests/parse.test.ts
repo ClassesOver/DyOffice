@@ -3,6 +3,14 @@ import { parseDocx } from '../src/index'
 import { buildDocx, buildKitchenSinkDocx } from './helpers/build-docx'
 
 describe('parseDocx', () => {
+  it('reads literal entity spellings and actual character references once', async () => {
+    const bytes = await buildDocx({
+      bodyXml: '<w:p><w:r><w:t>&amp;#65; / &amp;#x41; / &#65; / &#38;lt;</w:t></w:r></w:p>',
+    })
+    const doc = await parseDocx(bytes)
+    expect(doc.blocks[0]?.runs?.[0]?.text).toBe('&#65; / &#x41; / A / &lt;')
+  })
+
   it('parses the kitchen-sink document into anchored blocks', async () => {
     const bytes = await buildKitchenSinkDocx()
     const doc = await parseDocx(bytes)
