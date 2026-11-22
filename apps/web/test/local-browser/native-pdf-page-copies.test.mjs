@@ -25,7 +25,7 @@ const cases=[
  ['insert_blank_page',{after_page:1},[]],
  ['extract_pages',{pages:'2'},[]],
 ]
-test('native PDF assistant and ribbon save separate page copies',{skip:!nativePdfDirectory,timeout:120000},async t=>{
+test('native PDF assistant and ribbon save separate page copies',{skip:!nativePdfDirectory,timeout:150000},async t=>{
  const origin='http://localhost:4290',f=await fileFixture(t,{origin,buildApp:false})
  const keyring={activeKeyId:'copies',keys:{copies:new Uint8Array(32).fill(37)}}
  const source=await PDFDocument.create()
@@ -218,9 +218,19 @@ test('native PDF assistant and ribbon save separate page copies',{skip:!nativePd
  await targetFrame.getByLabel('选择来源 PDF', {exact:true}).click()
  const fileChooser=await chooser
  await fileChooser.setFiles({name:'import.pdf',mimeType:'application/pdf',buffer:importedBytes})
+ const route='/api/v1/files/'+file.fileId
+ const saved=page.waitForResponse(response=>{
+  if(response.request().method()!=='POST')return false
+  const path=new URL(response.url()).pathname
+  return path===route+'/commits'||path===route+'/pdf/insert-pages/uploads'&&!response.ok()
+ },{timeout:25000})
  await targetFrame.getByRole('button',{name:'确认导入并保存'}).click()
- await expect.poll(async()=>(await f.files.openFile(f.alice.token,file.fileId)).file.revision).not.toBe(sourceRevision)
+ const saveResponse=await saved
+ assert.ok(saveResponse.ok(),await saveResponse.text())
+ const {revision}=await saveResponse.json()
  const {file:inserted}=await f.files.openFile(f.alice.token,file.fileId)
+ assert.equal(inserted.revision,revision)
+ assert.notEqual(inserted.revision,sourceRevision)
  const insertedDoc=await PDFDocument.load(await f.files.readFile(f.alice.token,file.fileId,inserted.revision))
  assert.equal(insertedDoc.getPageCount(),4)
  const insertedText=await (await import('../../../pdf/src/main/text-edit.ts')).readPdfLeafObjects(await f.files.readFile(f.alice.token,file.fileId,inserted.revision))

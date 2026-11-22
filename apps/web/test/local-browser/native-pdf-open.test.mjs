@@ -667,8 +667,15 @@ test('GenOffice PDF assistant and ribbon edits preview and save, including recov
  await expect(hits).toHaveCount(3)
  for(const x of [60,200]){
   await (x===60?hits.first():hits.last()).click()
+  const erasePreview=page.waitForResponse(response=>{
+   if(!response.url().endsWith('/pdf/image-previews/query'))return false
+   const {operation}=response.request().postDataJSON()
+   return operation.kind==='erase'&&operation.excludeRects.some(rect=>rect[0]===x)
+  },{timeout:20000})
   await page.getByRole('button',{name:'水平翻转',exact:true}).click()
-  await expect.poll(()=>pixel(x+8,65)).toEqual([0,0,255])
+  const preview=await erasePreview
+  assert.ok(preview.ok(),await preview.text())
+  await expect.poll(()=>pixel(x+8,65),{timeout:10000}).toEqual([0,0,255])
  }
  await editImages.click()
  await page.getByRole('button',{name:'开始',exact:true}).click()
