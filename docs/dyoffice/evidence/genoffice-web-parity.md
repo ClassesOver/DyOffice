@@ -12,6 +12,8 @@
 
 本机通过锁文件安装依赖，使用 Node `22.23.5`、Playwright Chromium `151.0.7922.34`、隔离 PostgreSQL 夹具及主机 OCR，不使用 Docker。本轮确认助手工具清单的 159 个定义与分类一致，兼容输入基线 84 个文件无漂移。四格式后台读取和回答等基础测试 23 项通过，跳过的真实 OCR 项在安装 Tesseract 及 `eng`、`chi_sim` 数据后单独复跑，OCR 套件 3 项通过。
 
+固定候选 `ab22f217` 的无 Docker 宿主隔离专项通过 5 项。真实 Node 工作簿网关在 systemd 隔离中完成解析与保存规划，原生 Rust 打开、保存并重开 XLSX。隔离检查核对动态非 root 身份、私有根目录、能力移除、控制进程凭据不继承及原生输出文件边界。用例见 [网关隔离](../../../apps/web/test/host-native/gateway.test.mjs)和 [Rust 进程隔离](../../../apps/web/test/host-native/process.test.mjs)。
+
 同一候选的 DOCX 浏览器套件 12 项全部通过。覆盖段落与表格修改、下载、刷新、保留未编辑部件、保存期间继续编辑、租约接管、回执恢复及元数据保存。用例见 [DOCX 原生浏览器回归](../../../apps/web/test/native-docs/roundtrip.test.mjs)。
 
 同一提交的 GitHub Actions 已完成 [DOCX 原生浏览器与原引擎回归](https://github.com/ClassesOver/DyOffice/actions/runs/44972164512/job/137054101707)、[XLSX 原生浏览器、隔离 Worker 与 gateway 回归](https://github.com/ClassesOver/DyOffice/actions/runs/44972164512/job/137054101587)和 [PPTX 原生会话与包重开回归](https://github.com/ClassesOver/DyOffice/actions/runs/44972164426/job/137054101419)。PPTX 该作业覆盖原生包操作；四格式 Chromium 共用作业随后失败，三个失败均来自同一个工具清单测试文件。无数据源分析的夹具仍把依赖数据源的 `insert_data_result` 计入预期。
