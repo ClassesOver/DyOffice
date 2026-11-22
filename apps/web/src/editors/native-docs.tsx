@@ -244,7 +244,7 @@ export async function mountDocsEditor(host: SessionFileHost,element: HTMLElement
       const current = host.getState(fileId), local = bridge.getState()
       if (editor.isDirty() || local.dirty || local.status !== 'idle' || local.nativeSaveOutcome !== 'accepted' || current.status !== 'idle' || !current.lease || current.revision.fileId !== receipt.fileId || current.revision.revision !== receipt.revision || current.revision.sha256 !== receipt.sha256 || current.revision.size !== receipt.size) throw new Error(text.saveFailed)
       const anchor = document.createElement('a')
-      anchor.href = `/api/v1/files/${fileId}/content?revision=${receipt.revision}`
+      anchor.href = `/api/v1/files/${fileId}/content?revision=${receipt.revision}&download=1`
       anchor.download = host.getState(fileId).name
       anchor.hidden = true; element.append(anchor); anchor.click(); anchor.remove()
     } catch { if (!disposed) actionError = text.saveFailed }
@@ -450,7 +450,7 @@ export async function mountDocsEditor(host: SessionFileHost,element: HTMLElement
       <div className="file-menu-sep" />
       <button className="dyoffice-docs-save-download" title={text.saveDownloadVersionHint} disabled={!loaded || failed || !editorHandle || !state.lease || state.status !== 'idle' || downloading} onClick={() => { void saveAndDownload() }}>{text.saveDownload}</button>
       {!signed&&<LocalDraftCopy name={state.name} locale={locale} authority={draftAuthority} getEditor={()=>!disposed&&!closing&&loaded&&!failed&&host.getState(fileId).status!=='unauthorized'?draftEditor:null}/>}
-      <a className="dyoffice-docs-download" href={`/api/v1/files/${fileId}/content?revision=${state.revision.revision}`} download>{text.download}</a>
+      <a className="dyoffice-docs-download" href={`/api/v1/files/${fileId}/content?revision=${state.revision.revision}&download=1`} download>{text.download}</a>
     </>
     return <div className="dyoffice-native-docs">
       <DocumentNotifications locale={locale} items={[

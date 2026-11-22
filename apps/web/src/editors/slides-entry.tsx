@@ -114,7 +114,7 @@ export async function mountSlidesEditor(host: SessionFileHost, container: HTMLEl
       // Pin the confirmed receipt once. The main action never uses a render's
       // old head or a fallback link while there are unsaved/unknown changes.
       const anchor = document.createElement('a')
-      anchor.href = `/api/v1/files/${fileId}/content?revision=${receipt.revision}`
+      anchor.href = `/api/v1/files/${fileId}/content?revision=${receipt.revision}&download=1`
       anchor.download = host.getState(fileId).name
       anchor.hidden = true; container.append(anchor); anchor.click(); anchor.remove()
     } catch { if (!disposed) actionError = text.saveFailed }
@@ -218,7 +218,7 @@ export async function mountSlidesEditor(host: SessionFileHost, container: HTMLEl
         title={text.saveDownloadVersionHint} disabled={writeProtected || !loaded || failed || !editor || !state.lease || state.status === 'conflict' || state.status === 'unauthorized' || downloading || takingOver}
         onClick={() => { void saveAndDownload() }}>{text.saveDownload}</button>
       {loaded && !failed && state.status !== 'unauthorized' && <a className="dyoffice-slides-download-saved"
-        href={`/api/v1/files/${fileId}/content?revision=${state.revision.revision}`} download={state.name}>{text.download}</a>}
+        href={`/api/v1/files/${fileId}/content?revision=${state.revision.revision}&download=1`} download={state.name}>{text.download}</a>}
     </>
     const hostProps: SlidesAppHost = {saveDownload,analysisGeneration:bridge.getAnalysisGeneration,runAnalysis:(ops,check,adopt)=>bridge.guardedApply(check,async()=>{if(!check())return false;const result=await bridge.api.applyTxn({ops,isolation:'atomic'});if(!result?.applied||!result.slides)return false;adopt(result.slides);return true}),readOnly, inPlaceSave: true, assistantAvailable:Boolean(sharedAssistant?.available&&(prefs.showAssistant!==false||handoffOpen)),...(sharedAssistant?{assistant:{...sharedAssistant,mediaCapabilities:sharedAssistant.mediaCapabilities,continuation:assistantContinuation}}:{}), onDeckOpened: () => {documentLoaded=true;setLoaded(true)}, onOpenFailed: () => {documentLoaded=false;setFailed(true);reportOpenFailure()}, onEditorReady: handle => { editor = handle }}
     hostProps.downloadImages = async (baseName,format,pages) => {
@@ -232,7 +232,7 @@ export async function mountSlidesEditor(host: SessionFileHost, container: HTMLEl
         ...(writeProtected ? [{id:'write-protected',level:'info' as const,
           title:locale==='zh'?'演示文稿受写保护':'Write-protected presentation',
           message:locale==='zh'?'此演示文稿需要修改密码。Web 当前以只读方式打开，可下载已保存版本。':'This presentation requires a password to modify. The Web editor opens it read only, and the saved version can be downloaded.'}] : []),
-        ...(warning ? [{id:'document-state',level:'error' as const,title:locale === 'zh' ? '文档需要处理' : 'Document needs attention',message:warning,actions:<>{!signed && !state.lease && (!editorMounted || !failed) && state.status !== 'unauthorized' && <button className="dyoffice-slides-takeover" disabled={(editorMounted && (!loaded || !editor)) || downloading || takingOver || dirty() || state.status === 'unknown' || bridge.needsConfirmation()} onClick={() => { void takeOver() }}>{text.takeover}</button>}{historical && <a href={`/api/v1/files/${fileId}/content?revision=${state.revision.revision}`} download={state.name}>{text.downloadReadOnly}</a>}{bridge.needsConfirmation() && <button data-save-fence-allow="confirm" disabled={confirming} onClick={() => { void confirmSave() }}>{text.retry}</button>}</>}] : []),
+        ...(warning ? [{id:'document-state',level:'error' as const,title:locale === 'zh' ? '文档需要处理' : 'Document needs attention',message:warning,actions:<>{!signed && !state.lease && (!editorMounted || !failed) && state.status !== 'unauthorized' && <button className="dyoffice-slides-takeover" disabled={(editorMounted && (!loaded || !editor)) || downloading || takingOver || dirty() || state.status === 'unknown' || bridge.needsConfirmation()} onClick={() => { void takeOver() }}>{text.takeover}</button>}{historical && <a href={`/api/v1/files/${fileId}/content?revision=${state.revision.revision}&download=1`} download={state.name}>{text.downloadReadOnly}</a>}{bridge.needsConfirmation() && <button data-save-fence-allow="confirm" disabled={confirming} onClick={() => { void confirmSave() }}>{text.retry}</button>}</>}] : []),
         ...(notice ? [{id:'version',level:'info' as const,title:locale === 'zh' ? '版本同步' : 'Version updates',message:notice}] : []),
         ...(assistantNotice ? [{id:'assistant',level:showAssistant?'warning' as const:'info' as const,title:locale==='zh'?'AI 助手':'AI Assistant',message:assistantNotice}] : []),
         ...(copyNotice ? [{id:'named-copy',level:'info' as const,title:locale==='zh'?'副本已保存':'Copy saved',message:copyNotice}] : []),
