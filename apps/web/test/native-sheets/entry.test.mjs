@@ -38,8 +38,9 @@ async function fixture(t) {
   browser = await chromium.launch({ headless: true })
   const context = await browser.newContext({ ignoreHTTPSErrors: true,viewport: { width: 1440,height: 1100 } }), page = await context.newPage()
   const errors=[]
-  page.on('pageerror',error=>errors.push(error.message))
-  page.on('console',message=>{if(message.type()==='error')errors.push(message.text().slice(0,1000))})
+  const recordError=message=>errors.push(message.replace(/([?&]ticket=)[^&\s'"<>]+/g,'$1[redacted]').slice(0,1000))
+  page.on('pageerror',error=>recordError(error.message))
+  page.on('console',message=>{if(message.type()==='error')recordError(message.text())})
   page.on('response',response=>{if(response.status()>=400)errors.push(response.status()+' '+new URL(response.url()).pathname)})
   t.after(()=>{if(errors.length)console.error('Browser diagnostics:',errors)})
   await page.addInitScript(()=>{window.__genofficeDebugHooks=true})
