@@ -11760,6 +11760,7 @@ export default function App({ hostReadOnly = false, hostEditRestriction, hostSav
               <SignaturesDialog
                 t={t}
                 signatures={digitalSignatures}
+                webHost={Boolean(hostSave)}
                 onClose={() => setSignaturesDlg(false)}
                 onGoToPage={(pageIndex) => scrollToPage(pageIndex + 1)}
               />

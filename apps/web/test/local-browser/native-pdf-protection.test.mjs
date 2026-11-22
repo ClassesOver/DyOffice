@@ -14,7 +14,7 @@ const directory=process.env.DYOFFICE_TEST_NATIVE_PDF_DIST
 test('native PDF protected structures stay readable without offering edit drafts',{skip:!directory,timeout:60000},async t=>{
  const origin='http://localhost:4276',f=await fileFixture(t,{origin,buildApp:false})
  const records=[]
- for(const [kind,label] of [['signature','包含签名结构'],['signed','包含签名结构（未验证签名）'],['xfa','包含 XFA 表单'],['encrypted','加密 PDF'],['plain','']]){
+ for(const [kind,label] of [['signature','包含签名结构'],['signed','包含签名结构'],['xfa','包含 XFA 表单'],['encrypted','加密 PDF'],['plain','']]){
   const pdf=await PDFDocument.create()
   pdf.addPage([320,240]).drawText('Readable original '+kind,{x:24,y:180})
   if(kind==='signature')pdf.catalog.set(PDFName.of('Perms'),pdf.context.obj({}))
@@ -75,6 +75,18 @@ test('native PDF protected structures stay readable without offering edit drafts
    await input.press('Enter')
   }
   await expect(page.locator('html')).toHaveAttribute('data-document-loading','ready')
+  if(kind==='signed'){
+   const banner=page.locator('.pdf-sig-banner')
+   await expect(banner).toContainText('签名完整，但签名人不受信任')
+   await banner.getByRole('button',{name:'查看签名'}).click()
+   const signatures=page.getByRole('dialog',{name:'数字签名'})
+   await expect(signatures).toContainText('DyOffice QA fixture')
+   await expect(signatures).toContainText('自签名证书')
+   await expect(signatures).toContainText('工作区服务器')
+   await expect(signatures).toContainText('未检查证书吊销状态')
+   await page.keyboard.press('Escape')
+   await expect(signatures).toHaveCount(0)
+  }
   await page.getByRole('button',{name:'AI 助手',exact:true}).click()
   const assistant=page.locator('.shared-editor-assistant')
   const composer=assistant.getByRole('textbox',{name:'消息'})

@@ -50,6 +50,7 @@ async function mount(){
  const grant=await openNativePdfBrowserFile({fileId})
  const prefs=await grant.getPreferences().catch(()=>undefined)
  const editRestriction=async(bytes:Uint8Array,encrypted:boolean)=>{
+  grant.inspectSignatureMarker(bytes,encrypted)
   const {nativePdfEditRestriction}=await import('./native-pdf-edit-restriction')
   return nativePdfEditRestriction(bytes,encrypted,prefs?.language??'zh')
  }
@@ -64,7 +65,7 @@ async function mount(){
  const api={
   ...grant.api,
   getUsername:grant.username,getDefaultZoom:async()=>'width' as const,
-  listEditFonts:empty,listStaticFormFills:empty,listDigitalSignatures:empty,listPrinters:empty,
+  listEditFonts:empty,listStaticFormFills:empty,listPrinters:empty,
   onLanguageChanged:unsubscribe,onUsernameChanged:unsubscribe,onFileRenamed:unsubscribe,onSaveAsFlow:unsubscribe,
   onCloseSaveRequest:unsubscribe,onSaveAsRequest:unsubscribe,onPrintRequest:unsubscribe,onChromePressed:unsubscribe,
   async insertPdf({path,afterPageIndex}:Parameters<PdfApi['insertPdf']>[0]){
