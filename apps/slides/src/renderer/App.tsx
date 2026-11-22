@@ -1037,7 +1037,7 @@ export function App({ host }: { host?: SlidesAppHost } = {}) {
       analysis:{captureAnalysis:()=>captureSlideAnalysis({current:(forSave=false)=>{
         const ctx=ctxRef.current,generation=hostRef.current?.analysisGeneration?.()
         if(!ctx.slide||generation==null||(!forSave&&(hostRef.current?.readOnly||analysisSaving.current>0))||ctx.editingActiveRef.current||notesDraftRef.current||ctx.masterItems||effectsInFlight.current||mouseDownRef.current)return null
-        return {identity:ctx.slides,slideId:ctx.slide.partPath??'',index:ctx.current,selection:JSON.stringify(ctx.selectedIds),generation,width:ctx.slide.widthPx,height:ctx.slide.heightPx}
+        return {identity:ctx.slides,slideId:ctx.slide.partPath??'',index:ctx.current,selection:JSON.stringify(ctx.selectedIds),generation,width:ctx.slide.widthPx,height:ctx.slide.heightPx,scale:ctx.slide.scale}
       },hold:()=>analysisConsent.current.hold(),run:async(ops,check)=>{analysisApplying.current=true;try{return await (hostRef.current?.runAnalysis?.(ops,check,all=>flushSync(()=>ctxRef.current.applyDeck(all,ctxRef.current.current)))??false)}finally{analysisApplying.current=false}}})},
       isDirty: () => dirtyRef.current,
       canContinueAssistant: () => !dirtyRef.current && !editingActiveRef.current && !notesDraftRef.current &&

@@ -15,6 +15,8 @@ import { coverCropFractions } from '@genoffice/pipelines/slides'
 import { buildPagePptx, parsePageSpec } from '@genoffice/pipelines/slides'
 import { extractMergeSlideSource, type MergeSlideSource } from '@genoffice/pptx-engine'
 import { assertZipInflatesWithinLimits } from '@genoffice/zip-gate'
+import { PNG } from 'pngjs'
+import { JpegImage } from 'pdfjs-dist/image_decoders/pdf.image_decoders.mjs'
 import { randomUUID } from 'node:crypto'
 import type { SlidesImageCommand, SlidesApplyView } from './pptx-session-host.ts'
 
@@ -83,6 +85,7 @@ const MAX_INPUT = 32 * 1024 * 1024
 const MAX_PAYLOAD = 256 * 1024
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024
 const MAX_IMAGE_DATA_URL = 'data:image/jpeg;base64,'.length + Math.ceil(MAX_IMAGE_BYTES / 3) * 4
+const MAX_ANALYSIS_PICTURE_PIXELS = 8 * 1024 * 1024
 const MAX_TIFF_PIXELS = 16 * 1024 * 1024
 const MAX_RENDER_IMAGE_BYTES = 8 * 1024 * 1024
 const ZIP_LIMITS = {maxParts:1500, maxPartBytes:8*1024*1024, maxTotalBytes:64*1024*1024}
@@ -118,6 +121,66 @@ function imageContent(input:SlidesImageCommand){
   if(!size||size.w<1||size.h<1||size.w>100_000||size.h>100_000||size.w*size.h>100_000_000)throw new Error('INVALID_MEDIA')
   return {bytes,ext,size}
 }
+
+// Reject incomplete inline images without allocating a decoded pixel plane.
+function completePng(bytes:Buffer):boolean {
+  let hasData=false
+  for(let offset=8;offset+12<=bytes.length;){
+    const size=bytes.readUInt32BE(offset),end=offset+8+size
+    if(end+4>bytes.length)return false
+    const type=bytes.toString('ascii',offset+4,offset+8)
+    if(offset===8?(type!=='IHDR'||size!==13):type==='IHDR')return false
+    if(type==='IDAT'&&size>0)hasData=true
+    if(type==='IEND')return hasData&&size===0&&end+4===bytes.length
+    offset=end+4
+  }
+  return false
+}
+
+function completeJpeg(bytes:Buffer):boolean {
+  let hasFrame=false
+  for(let offset=2;offset+4<=bytes.length;){
+    if(bytes[offset++]!==0xff)return false
+    while(bytes[offset]===0xff)offset++
+    const marker=bytes[offset++]
+    if(marker===0x01)continue
+    if(marker===0xd8||marker===0xd9||offset+2>bytes.length)return false
+    const size=bytes.readUInt16BE(offset),end=offset+size
+    if(size<2||end>bytes.length)return false
+    if(marker!==undefined&&marker>=0xc0&&marker<=0xcf&&![0xc4,0xc8,0xcc].includes(marker)){
+      if(hasFrame||size<8)return false
+      const components=bytes[offset+7]!
+      if(components<1||components>4||size!==8+components*3)return false
+      for(let index=0;index<components;index++){
+        const sampling=bytes[offset+9+index*3]!,horizontal=sampling>>>4,vertical=sampling&15
+        if(horizontal<1||horizontal>4||vertical<1||vertical>4)return false
+      }
+      hasFrame=true
+    }
+    if(marker===0xda)return hasFrame&&size>=6&&bytes.indexOf(Buffer.from([0xff,0xd9]),end+1)!==-1
+    offset=end
+  }
+  return false
+}
+
+function decodedAnalysisPicture(bytes:Buffer,ext:'png'|'jpg'):Uint8Array {
+  if (!(ext==='png'?completePng(bytes):completeJpeg(bytes))) throw new Error('INVALID_MEDIA')
+  const media=imageContent({mode:'insert',slide:0,placement:'natural',bytes,ext})
+  const {w:width,h:height}=media.size
+  if (width*height>MAX_ANALYSIS_PICTURE_PIXELS) throw new Error('INVALID_MEDIA')
+  try {
+    if (ext==='png') {
+      const decoded=PNG.sync.read(bytes,{checkCRC:true})
+      if (decoded.width!==width||decoded.height!==height) throw new Error('INVALID_MEDIA')
+    } else {
+      const decoder=new JpegImage()
+      decoder.parse(bytes,{dnlScanLines:height})
+      if (decoder.width!==width||decoder.height!==height||decoder.getData({width,height,forceRGBA:true}).length!==width*height*4) throw new Error('INVALID_MEDIA')
+    }
+  } catch { throw new Error('INVALID_MEDIA') }
+  return media.bytes
+}
+
 /** JSON command fields for native Web operations. Each accepted op is also
  * revalidated by the op registry. */
 const OP_FIELDS: Record<string, readonly string[]> = {
@@ -331,7 +394,7 @@ function checkLayoutRef(value: unknown) {
 }
 /** Copy the batch and validate its fields before scheduling a mutation. One inline
  * PNG or JPEG can share the transaction with its provenance text box. */
-function captureOps(input: unknown): Op[] {
+function captureOps(input: unknown, allowAnalysisPicture=false): Op[] {
   if (!Array.isArray(input) || input.length === 0 || input.length > 100) throw new Error('OPS_LIMIT')
   let json: string
   try { json=JSON.stringify(input) } catch { throw new Error('INVALID_OPS') }
@@ -377,16 +440,23 @@ function captureOps(input: unknown): Op[] {
         break
       case 'addPicture': {
         geometry(value.offset, 'INVALID_GEOMETRY')
-        if (pictureBytes || (value.ext !== 'png' && value.ext !== 'jpg') ||
+        const note=captured[1]
+        if (!allowAnalysisPicture || captured.length!==2 || value!==captured[0] || !record(value.target) ||
+            !record(note) || note.op!=='addElement' || note.kind!=='textbox' || !record(note.target) || note.target.slide!==value.target.slide ||
+            (value.ext !== 'png' && value.ext !== 'jpg') ||
             typeof value.bytes !== 'string' || value.bytes.length > MAX_IMAGE_DATA_URL ||
             (value.descr !== undefined && (typeof value.descr !== 'string' || value.descr.length > 500))) throw new Error('INVALID_MEDIA')
+        const hasProvenanceText=Array.isArray(note.paragraphs) && note.paragraphs.some(paragraph=>
+          record(paragraph) && Array.isArray(paragraph.runs) && paragraph.runs.some(run=>
+            record(run) && typeof run.text==='string' && run.text.trim().length>0))
+        if (!hasProvenanceText) throw new Error('INVALID_MEDIA')
         const prefix = value.ext === 'png' ? 'data:image/png;base64,' : 'data:image/jpeg;base64,'
         if (!value.bytes.startsWith(prefix)) throw new Error('INVALID_MEDIA')
         const encoded = value.bytes.slice(prefix.length)
         const bytes = Buffer.from(encoded, 'base64')
         if (bytes.toString('base64') !== encoded) throw new Error('INVALID_MEDIA')
         pictureBytes = value.bytes.length
-        value.bytes = imageContent({mode:'insert',slide:0,placement:'natural',bytes,ext:value.ext}).bytes
+        value.bytes = decodedAnalysisPicture(bytes,value.ext)
         break
       }
       case 'addElement':
@@ -721,7 +791,7 @@ export async function createPptxSession(bytes: Uint8Array, signal?: AbortSignal)
       })
     },
     async apply(expected, ops, signal, options = {}) {
-      const captured=captureOps(ops)
+      const captured=captureOps(ops,options.isolation!=='per_op')
       return enqueueWrite(expected,signal,state=>{
         // Preserve target's canonical/parse-time alias collision fence for every
         // element-addressed operation before the atomic batch can mutate anything.

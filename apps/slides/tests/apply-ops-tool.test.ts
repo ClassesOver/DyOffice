@@ -185,6 +185,17 @@ describe('apply_ops', () => {
     expect(deckGoTo).toBe(0)
   })
 
+  it('rejects inline pictures before dispatching a model batch', async () => {
+    const dispatch = vi.fn()
+    ;(globalThis as any).window.slidesApi.applyTxn = dispatch
+    const result = await createSlidesSkill(access()).executeTool!(
+      call({ ops: [{ op: 'addPicture', target: { slide: 0 }, bytes: 'data:image/png;base64,AAAA', ext: 'png' }] }),
+    )
+    expect(result.isError).toBe(true)
+    expect(result.output).toContain('insert_analysis_image')
+    expect(dispatch).not.toHaveBeenCalled()
+  })
+
   it('addChart without dataSource is refused before the IPC (figure provenance gate)', async () => {
     const spy = vi.fn()
     ;(globalThis as any).window.slidesApi.applyTxn = spy
