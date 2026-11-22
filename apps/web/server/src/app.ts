@@ -84,6 +84,7 @@ import { registerWorkspaceSourceToolRoutes } from './modules/sources/tool-routes
 import type { SourceEgressTarget } from './security/egress.ts'
 import { createPdfService } from './modules/pdf/service.ts'
 import { registerPdfRoutes } from './modules/pdf/routes.ts'
+import { registerMcpRoutes } from './modules/mcp-server/routes.ts'
 
 export async function buildApp(config: WebConfig): Promise<FastifyInstance> {
   if (process.env.NODE_ENV === 'production') throw new Error('Development token server is not allowed in production')
@@ -274,6 +275,7 @@ export async function buildLocalApp(config: LocalWebConfig): Promise<FastifyInst
       const leases = createLeaseService({ transactions, assertOfficeWritable:files.assertOfficeWritable })
       const revisions = createRevisionService({ transactions, objects: config.objectStore, files, ...config.filePolicy })
       registerFileRoutes(app,files,sessions,csrf,{ leases, revisions, wordCollaboration:config.wordCollaboration })
+      registerMcpRoutes(app,transactions,files,csrf)
       registerKnowledgeRoutes(app,createKnowledgeService({transactions,files}),sessions,csrf)
       registerPdfRoutes(app,createPdfService({ files, leases, revisions }),sessions,csrf)
       // T17 notification/reconciliation only; preClose terminates upgraded

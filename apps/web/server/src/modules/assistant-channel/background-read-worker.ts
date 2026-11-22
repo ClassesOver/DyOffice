@@ -7,12 +7,13 @@ try {
  const bytes=new Uint8Array(workerData.bytes)
  const zip=bytes[0]===0x50&&bytes[1]===0x4b
  if(format==='pdf'?!Buffer.from(bytes).subarray(0,1024).includes(Buffer.from('%PDF-')):!zip)throw Error('Document format mismatch')
+ const options={visibleOnly:workerData.visibleOnly===true}
  let text:string
  switch(format){
-  case 'docx':text=await (await import('../../../../../../packages/file-parse/src/docx.ts')).docxToText(bytes);break
-  case 'xlsx':text=await (await import('../../../../../../packages/file-parse/src/xlsx.ts')).xlsxToText(bytes);break
-  case 'pptx':text=await (await import('../../../../../../packages/file-parse/src/pptx.ts')).pptxToText(bytes);break
-  case 'pdf':text=await (await import('../../../../../../packages/file-parse/src/pdf.ts')).pdfToText(bytes);break
+  case 'docx':text=await (await import('../../../../../../packages/file-parse/src/docx.ts')).docxToText(bytes,options);break
+  case 'xlsx':text=await (await import('../../../../../../packages/file-parse/src/xlsx.ts')).xlsxToText(bytes,options);break
+  case 'pptx':text=await (await import('../../../../../../packages/file-parse/src/pptx.ts')).pptxToText(bytes,options);break
+  case 'pdf':text=await (await import('../../../../../../packages/file-parse/src/pdf.ts')).pdfToText(bytes,options);break
  }
  parentPort!.postMessage({text:text.slice(0,24000),truncated:text.length>24000})
 }catch {parentPort!.postMessage({error:true})}

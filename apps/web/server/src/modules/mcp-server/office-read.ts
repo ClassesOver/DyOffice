@@ -1,6 +1,6 @@
 import { addAbortListener } from 'node:events'
 import type { ToolDescriptor } from '../../../../../../packages/web-contracts/src/tools.ts'
-import type { FileCredential } from '../../db/context.ts'
+import type { OfficeReadCredential } from '../../db/context.ts'
 import { authError } from '../auth/sessions.ts'
 import {
   DOCUMENT_PARSE_TIMEOUT_MS,
@@ -45,7 +45,8 @@ export const officeReadDescriptor = {
 
 // Transport authentication supplies the credential separately from tool arguments.
 export function createOfficeReadTool(files: Pick<FileService, 'assertReadableRevision' | 'download'>) {
-  return async (credential: FileCredential, args: unknown, signal: AbortSignal) => {
+  let activeReads = 0
+  return async (credential: OfficeReadCredential, args: unknown, signal: AbortSignal) => {
     if (!args || typeof args !== 'object' || Array.isArray(args) || Object.keys(args).length !== 2) {
       throw authError(400)
     }
@@ -55,6 +56,7 @@ export function createOfficeReadTool(files: Pick<FileService, 'assertReadableRev
     const revision = uuid(requestedRevision)
     const deadline = AbortSignal.any([signal, AbortSignal.timeout(officeReadDescriptor.maxDurationMs)])
     deadline.throwIfAborted()
+    if (activeReads >= 4) throw authError(503)
     const authorizedCredential = typeof credential === 'string' ? credential : { ...credential }
     let abortSubscription: ReturnType<typeof addAbortListener>
     const cancellation = new Promise<never>((_resolve, reject) => {
@@ -63,15 +65,17 @@ export function createOfficeReadTool(files: Pick<FileService, 'assertReadableRev
     const read = async () => {
       const { bytes, format } = await files.download(authorizedCredential, fileId, revision, DOCUMENT_READ_MAX_BYTES, deadline)
       deadline.throwIfAborted()
-      const document = await readBackgroundDocument(bytes, format, deadline)
+      const document = await readBackgroundDocument(bytes, format, deadline, { visibleOnly: typeof authorizedCredential !== 'string' && authorizedCredential.kind === 'external-token' })
       // Parsing runs outside the download transaction. Recheck the same revision before returning text.
       deadline.throwIfAborted()
       await files.assertReadableRevision(authorizedCredential, fileId, revision, deadline)
       deadline.throwIfAborted()
       return { fileId, revision, format, ...document }
     }
+    activeReads++
+    const running = read().finally(() => { activeReads-- })
     try {
-      return await Promise.race([cancellation, read()])
+      return await Promise.race([cancellation, running])
     } finally {
       abortSubscription![Symbol.dispose]()
     }

@@ -3,12 +3,12 @@ import {isBackgroundFormat,type BackgroundFormat} from './background-format.ts'
 export const DOCUMENT_READ_MAX_BYTES = 10 * 1024 * 1024
 export const DOCUMENT_PARSE_TIMEOUT_MS = 10_000
 
-export function readBackgroundDocument(bytes:Uint8Array,format:BackgroundFormat,signal:AbortSignal):Promise<{text:string;truncated:boolean}> {
+export function readBackgroundDocument(bytes:Uint8Array,format:BackgroundFormat,signal:AbortSignal,options:{visibleOnly?:boolean} = {}):Promise<{text:string;truncated:boolean}> {
  if(!isBackgroundFormat(format))return Promise.reject(Error('Unsupported background format'))
  if(signal.aborted)return Promise.reject(Error('Document read cancelled'))
  if(bytes.byteLength>DOCUMENT_READ_MAX_BYTES)return Promise.reject(Error('Document exceeds background size limit'))
  return new Promise((resolve,reject)=>{
-  const worker=new Worker(new URL('./background-read-worker.ts',import.meta.url),{workerData:{bytes,format},resourceLimits:{maxOldGenerationSizeMb:128}})
+  const worker=new Worker(new URL('./background-read-worker.ts',import.meta.url),{workerData:{bytes,format,visibleOnly:options.visibleOnly===true},resourceLimits:{maxOldGenerationSizeMb:128}})
   let settled=false
   const finish=(error?:Error,result?:{text:string;truncated:boolean})=>{
    if(settled)return;settled=true;clearTimeout(timer);signal.removeEventListener('abort',abort)

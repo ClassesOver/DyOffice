@@ -135,7 +135,7 @@ function installDomMatrixPolyfill(): void {
 }
 
 /** extract text from a pdf with pdfjs-dist (pure JS, no native deps), one section per page */
-export async function pdfToText(bytes: Uint8Array): Promise<string> {
+export async function pdfToText(bytes: Uint8Array, opts: { visibleOnly?: boolean } = {}): Promise<string> {
   installDomMatrixPolyfill()
   // Explicitly import the worker module (its top level registers globalThis.pdfjsWorker,
   // which the fake worker prefers) — otherwise pdfjs looks up pdf.worker.mjs by path at
@@ -143,7 +143,7 @@ export async function pdfToText(bytes: Uint8Array): Promise<string> {
   // worker failed". A literal specifier lets the bundler include it in the output.
   // @ts-expect-error the worker build artifact has no type declarations; imported only for its top-level side effect (registering globalThis.pdfjsWorker)
   await import('pdfjs-dist/legacy/build/pdf.worker.mjs')
-  const { getDocument } = await import('pdfjs-dist/legacy/build/pdf.mjs')
+  const { getDocument, OPS, AnnotationMode } = await import('pdfjs-dist/legacy/build/pdf.mjs')
   const fontUrl = standardFontDataUrl()
   // pdfjs-dist 6.x removed PDFDocumentProxy.destroy(); cleanup goes through the loading task
   const loadingTask = getDocument({
@@ -155,9 +155,37 @@ export async function pdfToText(bytes: Uint8Array): Promise<string> {
   })
   const doc = await loadingTask.promise
   try {
+    const visibleOnly = opts.visibleOnly === true
+    if (visibleOnly && !(await doc.getOptionalContentConfig())[Symbol.iterator]().next().done) {
+      throw new Error('PDF visibility cannot be determined')
+    }
+    // The text layer has no compositing. Refuse content using clipping, masks,
+    // painted backgrounds/overlays, or uncertain text rendering in this view.
+    const unsafeOps = new Set([
+      OPS.clip, OPS.eoClip, OPS.beginGroup, OPS.paintFormXObjectBegin,
+      OPS.constructPath, OPS.rawFillPath, OPS.fill, OPS.eoFill, OPS.stroke,
+      OPS.fillStroke, OPS.eoFillStroke, OPS.closeStroke, OPS.closeFillStroke, OPS.closeEOFillStroke,
+      OPS.shadingFill, OPS.paintXObject, OPS.paintImageXObject, OPS.paintInlineImageXObject,
+      OPS.paintInlineImageXObjectGroup, OPS.paintImageXObjectRepeat, OPS.paintImageMaskXObject,
+      OPS.paintImageMaskXObjectGroup, OPS.paintImageMaskXObjectRepeat, OPS.paintSolidColorImageMask,
+      OPS.setFillTransparent, OPS.setStrokeTransparent, OPS.setFillColorN, OPS.setStrokeColorN,
+    ])
     const pages: string[] = []
     for (let i = 1; i <= doc.numPages; i++) {
       const page = await doc.getPage(i)
+      if (visibleOnly) {
+        const annotations = await page.getAnnotations({ intent: 'display' })
+        if (annotations.length) throw new Error('PDF visibility cannot be determined')
+        const operators = await page.getOperatorList({ annotationMode: AnnotationMode.DISABLE })
+        const ambiguous = operators.fnArray.some((operator, index) => {
+          const args = operators.argsArray[index]
+          return unsafeOps.has(operator) ||
+            (operator === OPS.setTextRenderingMode && args?.[0] !== 0) ||
+            (operator === OPS.setFillRGBColor && args?.[0] === '#ffffff') ||
+            (operator === OPS.setGState && args?.[0]?.some(([name]: [string]) => ['BM', 'CA', 'ca', 'SMask'].includes(name)))
+        })
+        if (ambiguous) throw new Error('PDF visibility cannot be determined')
+      }
       const content = await page.getTextContent()
       let text = ''
       let prev: { endX: number; y: number; size: number } | undefined
@@ -165,6 +193,11 @@ export async function pdfToText(bytes: Uint8Array): Promise<string> {
         if (!('str' in item)) continue
         const [a, b, , , x, y] = item.transform
         const size = item.height || Math.hypot(a, b) || 1
+        if (visibleOnly && item.str.trim()) {
+          const [left, bottom, right, top] = page.view
+          if (![x, y, item.width, size].every(Number.isFinite) || x < left || y < bottom ||
+            x + item.width > right + 1 || y + size > top + 1) throw new Error('PDF visibility cannot be determined')
+        }
         if (prev && item.str.trim()) {
           const sameLine = Math.abs(y - prev.y) <= Math.min(size, prev.size) * 0.5
           if (!sameLine) {

@@ -238,3 +238,11 @@ F16 的 T12 Chromium 用例在固定候选 `d8392ce2` 上通过，覆盖文件�
 | `PowerPoint-saved.pptx` | 确认三页 4:3、首页的 `Jump to slide three`、Revenue 图表和母版 `CanvasMasterText`。在副本中分别选中文字框和图表，确认可编辑，修改标题后另存重开。 |
 
 上述步骤待桌面 Microsoft Office 实测。独立 LibreOffice 和 Poppler 结果见前文。
+
+## T19 外部 MCP 读取
+
+`POST /api/v1/mcp/read-grants` 通过已登录会话和 CSRF 校验签发只读 Bearer 凭据。请求需提供 `fileId` 和 `revision`，响应提供 `id`、`token` 和 `expiresAt`。凭据绑定部署、签发会话和指定修订，数据库仅存储摘要。所有者可用 `DELETE /api/v1/mcp/read-grants/{id}` 撤销。部署前需要应用迁移 0048 并同步运行角色权限。
+
+`/mcp` 的 `read_saved_document` 已验证从 DOCX、XLSX、PPTX 和 PDF 读取保存内容。跨账户及未授权修订被拒绝。XLSX 跳过隐藏的工作表、行和列。PPTX 跳过隐藏页和含隐藏形状的页面，并省略讲稿备注。DOCX 检出隐藏文字标记时拒绝读取。PDF 对裁剪、遮挡、透明图层或其他无法从文本层确认可见性的情况拒绝读取。隐藏内容测试覆盖这四种格式。[HTTP 集成测试](../../../apps/web/test/local-integration/mcp-http.test.mjs) [凭据集成测试](../../../apps/web/test/local-integration/mcp-read-grants.test.mjs)
+
+现代 `2026-07-28` 和兼容 `2025-11-25` 已分别通过官方 TypeScript SDK 2.4.0 和 1.32.1 的读取及重连验证。T19 的编辑、保存、OAuth、隔离的开发测试入口及目标 Harness 完整流程仍待验收。

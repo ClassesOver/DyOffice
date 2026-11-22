@@ -6,6 +6,7 @@ import { resolveTarget } from './opc'
 export interface DocxTextOptions {
   /** stop once this many characters have been collected (the caller slices anyway) */
   maxChars?: number
+  visibleOnly?: boolean
 }
 
 /**
@@ -48,7 +49,15 @@ export async function docxToText(bytes: Uint8Array, opts: DocxTextOptions = {}):
       if (path) parts.set(kind, path)
     }
   }
-  const styleFacts = paragraphStyleFacts(await zip.file(parts.get('styles')!)?.async('string'))
+  const stylesXml = await zip.file(parts.get('styles')!)?.async('string')
+  const assertVisible = (xml: string | undefined) => {
+    if (opts.visibleOnly && xml && /<(?:[\w.-]+:)?(?:vanish|webHidden|specVanish|moveFrom)(?=[\s/>])/u.test(xml)) {
+      throw new Error('Word visibility cannot be determined')
+    }
+  }
+  assertVisible(documentXml)
+  assertVisible(stylesXml)
+  const styleFacts = paragraphStyleFacts(stylesXml)
   const out = new TextSink(opts.maxChars ?? Infinity)
   scanBody(documentXml, styleFacts, out)
   for (const [part, title] of [
@@ -58,6 +67,7 @@ export async function docxToText(bytes: Uint8Array, opts: DocxTextOptions = {}):
     if (out.full) break
     const xml = await zip.file(parts.get(part)!)?.async('string')
     if (!xml) continue
+    assertVisible(xml)
     const notes = new TextSink(Infinity)
     scanBody(xml, styleFacts, notes, { notes: true })
     if (notes.lines.length > 0) {

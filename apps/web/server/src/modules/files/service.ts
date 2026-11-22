@@ -4,7 +4,7 @@ import { UNSUPPORTED_CAPABILITIES, type CapabilityCatalog } from '../../../../..
 import { randomUUID } from 'node:crypto'
 import { PDFDocument, PageSizes } from 'pdf-lib'
 import type { PoolClient } from 'pg'
-import type { BusinessPrincipal, PrincipalTransactions, FileCredential } from '../../db/context.ts'
+import type { BusinessPrincipal, McpPrincipalTransactions, PrincipalTransactions, FileCredential, OfficeReadCredential } from '../../db/context.ts'
 import type { ObjectStore } from '../../storage/object-store.ts'
 import { MAX_OBJECT_BYTES } from '../../storage/object-store.ts'
 import { createFileValidator, validateFileName, validateUpload } from './validation.ts'
@@ -15,7 +15,7 @@ import { reclaimAbandonedUploads } from './reclamation.ts'
 
 export interface FilePolicy { quotaBytes?: number; maxUploads?: number; uploadTtlMs?: number }
 
-export function createFileService({ transactions, objects, quotaBytes = 1024 ** 3, maxUploads = 16, uploadTtlMs = 15 * 60_000, capabilities = UNSUPPORTED_CAPABILITIES }: { capabilities?: CapabilityCatalog; transactions: PrincipalTransactions; objects: ObjectStore } & FilePolicy) {
+export function createFileService({ transactions, objects, quotaBytes = 1024 ** 3, maxUploads = 16, uploadTtlMs = 15 * 60_000, capabilities = UNSUPPORTED_CAPABILITIES }: { capabilities?: CapabilityCatalog; transactions: PrincipalTransactions & Partial<Pick<McpPrincipalTransactions, 'withMcpReadTransaction'>>; objects: ObjectStore } & FilePolicy) {
   if (![quotaBytes,maxUploads,uploadTtlMs].every(value => Number.isSafeInteger(value) && value > 0) || quotaBytes > Number.MAX_SAFE_INTEGER / 2 || maxUploads > 1000 || uploadTtlMs > 24 * 3600_000) throw new Error('Invalid file policy')
   const run = <T>(token: FileCredential, action: 'files:read' | 'files:write', fn: (connection: PoolClient, principal: BusinessPrincipal) => Promise<T>) => runFileTransaction(transactions,token,action,fn)
   const personal: typeof run = (token,action,fn) => run(token,action,(connection,principal) => {
@@ -23,6 +23,13 @@ export function createFileService({ transactions, objects, quotaBytes = 1024 ** 
     return fn(connection,principal)
   })
   const catalog = Object.freeze({ ...capabilities })
+  function readRevision<T>(credential: OfficeReadCredential, fileId: string, revision: string, operation: (connection: PoolClient, principal: BusinessPrincipal) => Promise<T>) {
+    if (typeof credential !== 'string' && credential.kind === 'external-token') {
+      if (!transactions.withMcpReadTransaction) throw authError()
+      return transactions.withMcpReadTransaction(credential, { fileId: uuid(fileId), revision: uuid(revision) }, operation)
+    }
+    return run(credential, 'files:read', operation)
+  }
   async function requireReadableRevision(connection: PoolClient, principal: BusinessPrincipal, fileId: string, revision: string) {
     const file = await loadFile(connection, principal, uuid(fileId))
     const requestedRevision = uuid(revision)
@@ -228,12 +235,12 @@ export function createFileService({ transactions, objects, quotaBytes = 1024 ** 
     },
     syncAssistantChat:(token:string,fileId:string,input:Parameters<typeof syncFileAssistantChat>[3])=>syncFileAssistantChat(transactions,token,fileId,input),
     openFile: (token: FileCredential, fileId: string) => run(token, 'files:read', async (connection, principal) => openResult(await loadFile(connection, principal, uuid(fileId)))),
-    assertReadableRevision: (token: FileCredential, fileId: string, revision: string, signal: AbortSignal) =>
-      run(token, 'files:read', async (connection, principal) => {
+    assertReadableRevision: (token: OfficeReadCredential, fileId: string, revision: string, signal: AbortSignal) =>
+      readRevision(token, fileId, revision, async (connection, principal) => {
         signal.throwIfAborted()
         await requireReadableRevision(connection, principal, fileId, revision)
       }),
-    download: (token: FileCredential, fileId: string, revision: string, maxBytes?: number, signal?: AbortSignal) => run(token, 'files:read', async (connection, principal) => {
+    download: (token: OfficeReadCredential, fileId: string, revision: string, maxBytes?: number, signal?: AbortSignal) => readRevision(token, fileId, revision, async (connection, principal) => {
       signal?.throwIfAborted()
       const { file, reference } = await requireReadableRevision(connection, principal, fileId, revision)
       if (maxBytes !== undefined && reference.size > maxBytes) throw authError(413)
