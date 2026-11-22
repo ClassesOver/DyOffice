@@ -601,9 +601,11 @@ test('page-color edits during a delayed native commit remain dirty and persist o
   await expect(f.page.locator('.doc-zoom').first()).toHaveCSS('--page-bg','#FF0000',{ timeout: 45_000 })
 })
 
-test('a standalone Word metadata edit reports unsaved before saving and reopening its actual bytes', { timeout: 120_000 }, async t => {
+for (const theme of ['light', 'dark']) test(`Word saves and downloads the authored page color with the ${theme} UI theme`, { timeout: 120_000 }, async t => {
   const f = await fixture(t)
+  await f.preferences.update(f.alice.token, { theme })
   await f.page.goto(f.origin + '/native-docx/?fileId=' + f.opened.file.fileId)
+  await expect(f.page.locator('html')).toHaveAttribute('data-theme', theme)
   await f.page.locator('.tiptap.doc-page[contenteditable="true"]').waitFor({ timeout: 45_000 })
   await expectCleanPersistence(f.page)
   await f.page.getByRole('button', { name: 'Design', exact: true }).click()
@@ -619,8 +621,17 @@ test('a standalone Word metadata edit reports unsaved before saving and reopenin
   await expectCleanPersistence(f.page)
   const current = await f.files.openFile(f.alice.token, f.opened.file.fileId)
   assert.notEqual(current.file.revision, f.opened.file.revision)
-  const zip = await JSZip.loadAsync(await f.files.readFile(f.alice.token, current.file.fileId, current.file.revision))
+  const bytes = await f.files.readFile(f.alice.token, current.file.fileId, current.file.revision)
+  await f.page.getByRole('button', { name: 'File', exact: true }).click()
+  const [download] = await Promise.all([
+    f.page.waitForEvent('download'),
+    f.page.getByRole('link', { name: 'Download saved version', exact: true }).click(),
+  ])
+  const downloadedBytes = await readFile(await download.path())
+  assert.deepEqual(downloadedBytes, bytes)
+  const zip = await JSZip.loadAsync(downloadedBytes)
   assert.match(await zip.file('word/document.xml').async('string'), /w:background[^>]*w:color="FF0000"/)
+  assert.equal(await zip.file('customXml/dyoffice-preserve.xml').async('string'), '<probe>Untouched custom part</probe>')
   await f.page.reload()
   await expect(f.page.locator('.doc-zoom').first()).toHaveCSS('--page-bg', '#FF0000', { timeout: 45_000 })
   await expectCleanPersistence(f.page)
