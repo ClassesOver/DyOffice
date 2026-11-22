@@ -87,3 +87,15 @@ PPTX 文件菜单已支持 PNG/JPG 导出。Web 使用同一套 GenOffice 画布
 对浏览器验收包中的成品补做了独立复开。LibreOffice 24.2.7.2 在隔离目录和断网进程中读取了 DOCX、XLSX 和 PPTX。Writer 渲染结果包含新增段落、原生表格文字和中文剪贴板内容。Calc 读取 `A2=21.25`、`B2=42.5` 和 `G3=84`。在合成控制副本中把 `A2` 改为 `22` 并保留旧公式缓存 `42.5`，强制重算后 `B2=44` 且 `G3=84`。Impress 渲染出三页 4:3 幻灯片，保留标题文字、Revenue 图表和母版文字。Poppler 独立读取 PDF 的原文、新增文本与两张裁剪图片。
 
 三个 OOXML 样本也通过了 LibreOffice 另存。通过系统调用追踪定位了首次 Calc 失败，补齐隔离运行时的 `libsal_textenclo.so` 链接后，上游对照和验收样本均可另存为 XLSX。成品保留 `B2` 公式和值、`G3` 数值以及已断开外链的状态。Writer 另存保留段落与两行可编辑表格，另存产物省略了 Web 成品中的自定义 XML。Impress 另存保留三页 4:3 幻灯片、可编辑图表、文字与母版。三个 Web 成品的原字节均通过 SHA-256 对照。桌面 Microsoft Word、Excel 和 PowerPoint 仍待验。
+
+### 桌面 Office 复开核验
+
+用验收包内的 SHA-256 确认输入。每项记录操作系统、Office 应用版本和构建号、应用是否提示修复、打开后观察到的内容，以及编辑另存并复开副本的结果。
+
+| 样本 | 原生对象和保存核验 |
+| --- | --- |
+| `Word-saved.docx` | 确认 `Web native paragraph 2026`、中文剪贴板内容和两行表格。对副本修改首格 `Native table cell`，另存后重开，确认单元格可继续编辑。 |
+| `Excel-saved.xlsx` | 确认 `A2=21.25`、`B2=42.5`、`G3=84`。在公式栏核对 `B2` 的 `=A2*2`，并确认 `G3` 是常量、工作簿链接列表为空。在副本中把 `A2` 改为 `22` 并重算，确认 `B2=44` 且 `G3=84`，再另存重开。 |
+| `PowerPoint-saved.pptx` | 确认三页 4:3、首页的 `Jump to slide three`、Revenue 图表和母版 `CanvasMasterText`。在副本中分别选中文字框和图表，确认可编辑，修改标题后另存重开。 |
+
+上述步骤待桌面 Microsoft Office 实测。独立 LibreOffice 和 Poppler 结果见前文。
