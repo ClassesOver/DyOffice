@@ -7,7 +7,7 @@ import JSZip from 'jszip'
 import {buildLocalApp} from '../../server/src/app.ts'
 import {createGlobalConfigService} from '../../server/src/modules/admin/service.ts'
 import {readPdfLeafObjects} from '../../../pdf/src/main/text-edit.ts'
-import {launchTestBrowser} from '../helpers/browser.mjs'
+import {launchTestBrowser,recordVerifiedOfficeEffect} from '../helpers/browser.mjs'
 import {fileFixture,importFile} from '../helpers/files.mjs'
 import {stubHomeHero} from '../helpers/home-hero.mjs'
 import {password} from '../helpers/identity.mjs'
@@ -199,4 +199,5 @@ test('native PDF assistant creates saved PDF and DOCX separately from the source
  assert.equal((await f.files.listFiles(f.alice.token)).files.length,3)
  assert.equal((await f.files.openFile(f.alice.token,file.fileId)).file.revision,file.revision)
  assert.deepEqual(await f.files.readFile(f.alice.token,file.fileId,file.revision),original)
+ recordVerifiedOfficeEffect('pdf','create_document')
 })

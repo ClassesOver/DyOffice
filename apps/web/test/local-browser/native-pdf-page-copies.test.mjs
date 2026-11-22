@@ -7,7 +7,7 @@ import {PDFDocument} from 'pdf-lib'
 import {expect} from '@playwright/test'
 import {buildLocalApp} from '../../server/src/app.ts'
 import {createGlobalConfigService} from '../../server/src/modules/admin/service.ts'
-import {launchTestBrowser} from '../helpers/browser.mjs'
+import {launchTestBrowser,recordVerifiedOfficeEffect} from '../helpers/browser.mjs'
 import {fileFixture,importFile} from '../helpers/files.mjs'
 import {stubHomeHero} from '../helpers/home-hero.mjs'
 import {password} from '../helpers/identity.mjs'
@@ -18,7 +18,7 @@ const cases=[
  ['extract_pages',{pages:'3,1'},[['source-提取.pdf',[400,600]]]],
  ['split_pdf',{pages_per_file:2},[]],
  ['confirm_pdf_copies',{},[['source-part-1.pdf',[400,500]],['source-part-2.pdf',[600]]]],
- ['split_pages',{per_page:2},[['source-split-pages.pdf',6]]],
+ ['split_pages',{per_page:2},[['source-split-pages.pdf',[200,200,250,250,300,300]]]],
  ['merge_pages',{per_sheet:2},[['source-merged-pages.pdf',2]]],
  ['crop_pages',{pages:'1',left:.1,top:.1,right:.9,bottom:.9},[]],
  ['crop_pages',{pages:'2',left:.1,top:.1,right:.9,bottom:.9},[]],
@@ -129,8 +129,13 @@ test('native PDF assistant and ribbon save separate page copies',{skip:!nativePd
    last=entry.id
    const {file:saved}=await f.files.openFile(f.alice.token,entry.id)
    assert.ok(reply.content.includes(saved.fileId)&&reply.content.includes(saved.revision),reply.content)
-   const pdf=await PDFDocument.load(await f.files.readFile(f.alice.token,entry.id,saved.revision))
+   const bytes=await f.files.readFile(f.alice.token,entry.id,saved.revision)
+   const pdf=await PDFDocument.load(bytes)
    assert.deepEqual(Array.isArray(geometry)?pdf.getPages().map(item=>item.getWidth()):pdf.getPageCount(),geometry)
+   if(name==='merge_pages'){
+    const text=execFileSync('pdftotext',['-','-'],{input:bytes,encoding:'utf8'})
+    assert.deepEqual(text.match(/Source \d+/g),['Source 400','Source 500','Source 600'])
+   }
   }
   await expect(page).toHaveURL(origin+'/#/file/'+last)
   await expect(page.frameLocator(`iframe[data-document-id="${last}"]`).locator('html')).toHaveAttribute('data-document-loading','ready')
@@ -139,6 +144,9 @@ test('native PDF assistant and ribbon save separate page copies',{skip:!nativePd
  assert.equal((await f.files.listFiles(f.alice.token)).files.length,6)
  assert.equal(confirmationCount,3)
  assert.deepEqual(await f.files.readFile(f.alice.token,file.fileId,file.revision),original)
+ for(const effect of ['extract_pages','confirm_pdf_copies','split_pages','merge_pages','crop_pages','set_page_size']){
+  recordVerifiedOfficeEffect('pdf',effect)
+ }
  await frame.getByRole('button',{name:/^撤销/}).click()
  await frame.getByRole('button',{name:'页面',exact:true}).click()
  await frame.getByRole('button',{name:'抽取本页',exact:true}).click()
@@ -328,4 +336,6 @@ test('native PDF assistant replaces only the confirmed page and splits the saved
  }
  assert.equal((await f.files.openFile(f.alice.token,file.fileId)).file.revision,replaced.revision)
  assert.deepEqual(await f.files.readFile(f.alice.token,file.fileId,replaced.revision),bytes)
+ recordVerifiedOfficeEffect('pdf','replace_pages')
+ recordVerifiedOfficeEffect('pdf','split_pdf')
 })

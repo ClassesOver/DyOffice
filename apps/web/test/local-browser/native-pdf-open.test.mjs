@@ -208,12 +208,22 @@ test('native PDF form marks address visible pages after an unsaved reorder',{ski
  assert.equal(await head(),file.revision)
  await page.getByRole('button',{name:'保存',exact:true}).click()
  await expect.poll(head,{timeout:15000}).not.toBe(file.revision)
- const saved=await f.files.readFile(f.alice.token,file.fileId,await head())
+ const revision=await head()
+ const saved=await f.files.readFile(f.alice.token,file.fileId,revision)
  const result=(await PDFDocument.load(saved)).getForm()
  assert.equal(result.getCheckBox('OriginalFirst').isChecked(),false)
  assert.equal(result.getCheckBox('OriginalSecond').isChecked(),true)
- assert.ok((await readPdfLeafObjects(saved)).some(item=>item.page===0&&item.text==='OriginalSecond'))
+ const leaves=await readPdfLeafObjects(saved)
+ assert.deepEqual(leaves.filter(item=>/^Original(First|Second)$/.test(item.text??'')).map(item=>[item.page,item.text]),[
+  [0,'OriginalSecond'],[1,'OriginalFirst'],
+ ])
  assert.deepEqual(await f.files.readFile(f.alice.token,file.fileId,file.revision),bytes)
+ const reopened=page.waitForResponse(response=>response.ok()&&response.url().endsWith('/content?revision='+revision))
+ await page.reload()
+ await reopened
+ await expect(page.locator('html')).toHaveAttribute('data-document-loading','ready')
+ recordVerifiedOfficeEffect('pdf','apply_ops.setPageOrder')
+ recordVerifiedOfficeEffect('pdf','add_form_mark')
 })
 
 test('native PDF model receives visible page and selection context, and cites navigable pages',{skip:!directory,timeout:60000},async t=>{

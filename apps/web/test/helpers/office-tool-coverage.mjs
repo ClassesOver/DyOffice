@@ -12,6 +12,11 @@ const requiredEffects = new Map([
     'edit_block', 'move_text_block', 'edit_text', 'insert_text', 'edit_inserted_text',
     'move_inserted_text', 'delete_inserted_text', 'edit_note', 'reply_note', 'delete_note',
     'markup_text', 'delete_markup', 'insert_blank_page', 'set_watermark', 'set_header_footer',
+    'image_search', 'generate_image', 'insert_image', 'transform_image', 'replace_image',
+    'delete_image', 'rotate_image', 'flip_image', 'crop_image', 'set_image_opacity',
+    'remove_image_background', 'apply_ops.setPageOrder', 'add_form_mark',
+    'extract_pages', 'confirm_pdf_copies', 'split_pages', 'merge_pages', 'crop_pages',
+    'set_page_size', 'replace_pages', 'split_pdf', 'create_document',
   ])],
 ])
 const observations = () => ({offered:new Set(), succeeded:new Set()})
