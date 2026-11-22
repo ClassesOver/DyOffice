@@ -30,6 +30,15 @@ import {mockProviderNetwork} from '../helpers/provider-network.mjs'
 
 const live=process.env.DYOFFICE_REAL_DSH==='on',fixture=process.env.DYOFFICE_DSH_FIXTURE==='on'
 const nativePdfDirectory=process.env.DYOFFICE_TEST_NATIVE_PDF_DIST??process.env.DYOFFICE_DSH_NATIVE_PDF_DIR??(process.env.DYOFFICE_TEST_OFFICE_ASSETS?officeBrowserAsset('pdf'):undefined)
+const viewportMarker='Native file viewport row'
+async function sheetsFixture(){
+ const workbook=await JSZip.loadAsync(await readFile(new URL('../fixtures/sheets/acceptance.xlsx',import.meta.url)))
+ const path='xl/worksheets/sheet1.xml',xml=await workbook.file(path).async('string')
+ assert.match(xml,/ref="A1:F3"/)
+ workbook.file(path,xml.replace('ref="A1:F3"','ref="A1:F601"').replace('</sheetData>',
+  `<row r="601"><c r="A601" t="inlineStr"><is><t>${viewportMarker}</t></is></c></row></sheetData>`))
+ return workbook.generateAsync({type:'nodebuffer'})
+}
 async function fixtureDelivery(t,input){
  const cwd=await mkdtemp(join(tmpdir(),'office-dsh-fixture-'))
  t.after(()=>rm(cwd,{force:true,recursive:true}))
@@ -69,7 +78,7 @@ for(const format of ['docx','xlsx','pptx','pdf'])test(format+' resumes after '+(
   localShellDirectory:officeBrowserAsset('local-shell'),
  })
  f.cleanup.unshift(()=>app.close());await app.listen({port,host:'127.0.0.1'})
- const original=format==='xlsx'?await readFile(new URL('../fixtures/sheets/acceptance.xlsx',import.meta.url)):await backgroundDocumentBytes(format),name='dsh-delegation.'+format
+ const original=format==='xlsx'?await sheetsFixture():await backgroundDocumentBytes(format),name='dsh-delegation.'+format
  const file=(await importFile(f,f.alice.token,original,name)).file
  const sources=createSourceService({transactions:f.transactions,credentialKeys:'test:'+randomBytes(32).toString('base64')})
  const results=createWorkspaceSourceResults({transactions:f.transactions})
@@ -174,6 +183,19 @@ for(const format of ['docx','xlsx','pptx','pdf'])test(format+' resumes after '+(
  assert.equal(tasks.filter(task=>task.parentTaskId===parentId).length,1)
  const head=async()=>(await f.files.openFile(f.alice.token,file.fileId)).file.revision
  assert.equal(await head(),file.revision)
+ const viewport=Promise.withResolvers()
+ let viewportReadPending=false
+ if(format==='xlsx'){
+  t.after(()=>viewport.resolve())
+  await page.route('**/sheets/range',async route=>{
+   const {range}=route.request().postDataJSON()
+   if(range.startRow<=600&&range.endRow>=600&&range.startColumn===0){
+    viewportReadPending=true
+    await viewport.promise
+   }
+   await route.continue()
+  })
+ }
  if(format!=='pdf'){
   await page.reload()
   await waitEditor()
@@ -197,15 +219,21 @@ for(const format of ['docx','xlsx','pptx','pdf'])test(format+' resumes after '+(
  await expect(report.locator('code')).toHaveText(delivery.sha256)
  if(format==='xlsx'){
   await page.evaluate(()=>window.__genofficeDebug.univerAPI.getActiveWorkbook().getActiveSheet().getRange('J10').activate())
-  await expect.poll(()=>page.evaluate(()=>{
+  const selected=()=>page.evaluate(()=>{
    const range=window.__genofficeDebug.univerAPI.getActiveWorkbook().getActiveRange()
    return range ? [range.getRow(),range.getColumn()] : null
-  })).toEqual([9,9])
-  // Recalculation may finish after the insertion captured its target and while
-  // the artifact is being downloaded. Formula bookkeeping leaves J10 selected.
+  })
+  const viewportValue=()=>page.evaluate(()=>window.__genofficeDebug.univerAPI.getActiveWorkbook().getActiveSheet().getRange('A601').getValue())
+  await expect.poll(()=>viewportReadPending,{timeout:30000}).toBe(true)
+  await expect.poll(selected).toEqual([9,9])
+  assert.notEqual(await viewportValue(),viewportMarker)
+  // Release the real viewport read only after the insertion captured J10.
   await page.route('**/api/v1/agents/artifacts/*/content',async route=>{
-   await page.evaluate(()=>window.__genofficeDebug.univerAPI.executeCommand('formula.mutation.set-formula-calculation-notification',{}))
-   await route.continue()
+   viewport.resolve()
+   try{
+    await expect.poll(viewportValue,{timeout:15000}).toBe(viewportMarker)
+    await page.evaluate(()=>window.__genofficeDebug.univerAPI.executeCommand('formula.mutation.set-formula-calculation-notification',{}))
+   }finally{await route.continue()}
   },{times:1})
   await page.evaluate(()=>{
    const commands=[]
@@ -250,6 +278,8 @@ for(const format of ['docx','xlsx','pptx','pdf'])test(format+' resumes after '+(
   const {cells}=await sheets.sheetsNative.readRange(savedBytes,'Acceptance',{startRow:9,endRow:30,startColumn:9,endColumn:9})
   assert.ok(cells.some(cell=>cell.row===9&&cell.value===summary))
   assert.ok(cells.some(cell=>String(cell.value).includes(delivery.sha256)))
+  const viewport=await sheets.sheetsNative.readRange(savedBytes,'Acceptance',{startRow:600,endRow:600,startColumn:0,endColumn:0})
+  assert.equal(viewport.cells[0]?.value,viewportMarker)
   await page.reload();await waitEditor()
   await expect.poll(()=>page.evaluate(()=>window.__genofficeDebug?.univerAPI.getActiveWorkbook()?.getSheetByName('Acceptance')?.getRange('J10').getValue()),{timeout:30000}).toBe(summary)
   return
