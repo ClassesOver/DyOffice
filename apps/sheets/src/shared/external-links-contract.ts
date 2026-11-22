@@ -16,6 +16,6 @@ export type ExternalLinkListStatus = z.infer<typeof externalLinkListStatusSchema
 
 /// The panel's non-probing listing (the sidecar's `list_external_links`).
 export const externalLinksResultSchema = z
-  .object({ links: z.array(externalLinkListStatusSchema) })
+  .object({ links: z.array(externalLinkListStatusSchema), workspaceSources: z.literal(true).optional() })
   .strict()
 export type ExternalLinksResult = z.infer<typeof externalLinksResultSchema>

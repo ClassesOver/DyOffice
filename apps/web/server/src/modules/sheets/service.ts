@@ -3,6 +3,7 @@ import {createHash,randomUUID} from 'node:crypto'
 import type { createFileService } from '../files/service.ts'
 import { authError } from '../auth/sessions.ts'
 import type {WorkbookPackageQuery} from '../../../../worker/src/native/gateway.ts'
+import {externalLinksResultSchema} from '../../../../../sheets/src/shared/external-links-contract.ts'
 
 type Files = ReturnType<typeof createFileService>
 export interface SheetRange { startRow: number; endRow: number; startColumn: number; endColumn: number }
@@ -63,9 +64,10 @@ export function createSheetsService({ files, native, readPackage, maxConcurrent 
       if(!metadata.sheets?.some(sheet=>sheet.pivotTables?.some(pivot=>pivot.path===path&&pivot.cachePath===cachePath)))throw authError(400)
       return readPackage(bytes,signal,{path,cachePath})
     },signal),
-    listExternalLinks: (token:string,fileId:string,revision:string,signal?:AbortSignal)=>read(token,fileId,revision,bytes=>{
+    listExternalLinks: (token:string,fileId:string,revision:string,signal?:AbortSignal)=>read(token,fileId,revision,async bytes=>{
       if(!readPackage)throw authError(501)
-      return readPackage(bytes,signal,{externalLinks:true})
+      const {links}=externalLinksResultSchema.parse(await readPackage(bytes,signal,{externalLinks:true}))
+      return native.refreshExternalLinks?{links,workspaceSources:true}:{links}
     },signal),
     previewExternalLinkRefresh: (token:string,fileId:string,revision:string,bindings:readonly ExternalLinkBinding[],signal?:AbortSignal)=>read(token,fileId,revision,async bytes=>{
       if(!native.refreshExternalLinks)throw authError(501)

@@ -18,7 +18,10 @@ import {createCsrfService,SESSION_COOKIE} from '../../server/src/modules/auth/cs
 const sheetsDirectory=process.env.DYOFFICE_TEST_SHEETS_DIST
 const hostManifest=process.env.DYOFFICE_TEST_HOST_MANIFEST
 
-test('XLSX lists, preserves and breaks external workbook links without fetching the source',{skip:!sheetsDirectory,timeout:150000},async t=>{
+test(hostManifest
+ ?'XLSX preserves external formulas while relinking, refreshing and breaking workbook links'
+ :'XLSX lists, preserves and breaks workbook links without fetching the source',
+{skip:!sheetsDirectory,timeout:180000},async t=>{
  let app,externalRequests=0
  const server=createServer((request,response)=>{
   if(request.url?.split('?')[0]==='/linked-source.xlsx'){
@@ -77,6 +80,12 @@ test('XLSX lists, preserves and breaks external workbook links without fetching 
  zip.file(linkRelationships,`<Relationships xmlns="${packageRelationshipNamespace}"><Relationship Id="rId1" Type="${relationshipNamespace}/externalLinkPath" Target="${externalTarget.replace('&','&amp;')}" TargetMode="External"/></Relationships>`)
  const original=await zip.generateAsync({type:'nodebuffer'})
  const initial=(await importFile(f,f.alice.token,original,'external-reference.xlsx')).file
+ const sourceZip=await JSZip.loadAsync(await readFile(new URL('../fixtures/sheets/acceptance.xlsx',import.meta.url)))
+ sourceZip.file(book,(await sourceZip.file(book).async('string')).replaceAll('Acceptance','Catalog'))
+ sourceZip.file(worksheet,(await sourceZip.file(worksheet).async('string')).replace(
+  '<c r="A1" t="inlineStr"><is><t>Revenue</t></is></c>','<c r="A1"><v>37</v></c>'))
+ const sourceBytes=await sourceZip.generateAsync({type:'nodebuffer'})
+ const source=(await importFile(f,f.alice.token,sourceBytes,'Source catalog.xlsx')).file
  app=await buildLocalApp({
   db:f.db,businessPool:f.businessPool,passwords:f.passwords,deploymentId:f.deploymentId,origin,
   csrfKey:f.csrfKey,objectStore:f.objects,codingHarnesses:false,
@@ -113,7 +122,7 @@ test('XLSX lists, preserves and breaks external workbook links without fetching 
   const panel=page.getByRole('dialog',{name:'External Links',exact:true})
   await expect(panel.getByRole('cell',{name:externalTarget,exact:true})).toBeVisible({timeout:12000})
   await expect(panel.getByRole('cell',{name:'Catalog',exact:true})).toBeVisible()
-  await expect(panel.getByRole('button',{name:'Update',exact:true})).toHaveCount(0)
+  await expect(panel.getByRole('button',{name:'Update Values',exact:true})).toHaveCount(native?1:0)
   return panel
  }
  const panel=await openExternalLinks()
@@ -138,9 +147,53 @@ test('XLSX lists, preserves and breaks external workbook links without fetching 
  const reopenedPanel=await openExternalLinks()
  const revisionCount=()=>f.transactions.withPrincipalTransaction({kind:'session',token:f.alice.token},async connection=>
   (await connection.query('SELECT count(*)::int AS count FROM file_revisions WHERE file_id=$1',[initial.fileId])).rows[0].count)
+ let beforeBreak=head,expectedValue=84
+ if(native){
+  const beforeSourceChange=await revisionCount()
+  await reopenedPanel.getByRole('button',{name:'Change Source',exact:true}).click()
+  await reopenedPanel.getByRole('combobox',{name:'Source',exact:true}).selectOption({label:'Source catalog.xlsx'})
+  await reopenedPanel.getByRole('button',{name:'Save',exact:true}).click()
+  await expect.poll(revisionCount,{timeout:20000}).toBe(beforeSourceChange+1)
+  const changed=(await f.files.openFile(f.alice.token,initial.fileId)).file
+  const savedSource=await JSZip.loadAsync(await f.files.readFile(f.alice.token,initial.fileId,changed.revision))
+  const sourceTarget=origin+'/api/v1/files/'+source.fileId+'/content?revision='+source.revision
+  assert.ok((await savedSource.file(linkRelationships).async('string')).includes(`Target="${sourceTarget}"`))
+  assert.ok((await savedSource.file(worksheet).async('string')).includes(formula))
+  await expect(reopenedPanel.getByRole('cell',{name:'Source catalog.xlsx',exact:true})).toBeVisible()
+  let openedSource
+  await expect.poll(async()=>{
+   openedSource=await app.inject({method:'GET',url:sourceTarget,headers:{cookie:SESSION_COOKIE+'='+f.alice.token}})
+   return openedSource.statusCode
+  },{timeout:12000}).toBe(200)
+  assert.deepEqual(openedSource.rawPayload,sourceBytes)
+  const preview=page.waitForResponse(response=>response.url().endsWith('/sheets/external-links/preview'),{timeout:20000})
+  await reopenedPanel.getByRole('button',{name:'Update Values',exact:true}).click()
+  const previewResult=await preview
+  assert.ok(previewResult.ok(),`External link preview returned HTTP ${previewResult.status()}`)
+  await expect.poll(revisionCount,{timeout:20000}).toBe(beforeSourceChange+2)
+  beforeBreak=(await f.files.openFile(f.alice.token,initial.fileId)).file
+  const refreshedBytes=await f.files.readFile(f.alice.token,initial.fileId,beforeBreak.revision)
+  const refreshed=await JSZip.loadAsync(refreshedBytes)
+  assert.match(await refreshed.file(worksheet).async('string'),/<c r="G3"><f>\[1\]Catalog!\$A\$1<\/f><v>37<\/v><\/c>/)
+  let refreshedDownload
+  await expect.poll(async()=>{
+   refreshedDownload=await app.inject({method:'GET',url:`/api/v1/files/${initial.fileId}/content?revision=${beforeBreak.revision}`,headers:{cookie:SESSION_COOKIE+'='+f.alice.token}})
+   return refreshedDownload.statusCode
+  },{timeout:12000}).toBe(200)
+  assert.deepEqual(refreshedDownload.rawPayload,refreshedBytes)
+  assert.equal(await revisionCount(),beforeSourceChange+2)
+  await page.reload()
+  await expect.poll(()=>page.evaluate(()=>
+   window.__genofficeDebug?.univerAPI.getActiveWorkbook()?.getActiveSheet()?.getRange('G3').getValue()),
+  {timeout:30000}).toBe(37)
+  await page.getByRole('button',{name:'Formulas',exact:true}).click()
+  await page.getByRole('button',{name:'External Links',exact:true}).click()
+  await expect(reopenedPanel.getByRole('cell',{name:'Source catalog.xlsx',exact:true})).toBeVisible()
+  expectedValue=37
+ }
  const countBeforeBreak=await revisionCount()
  await reopenedPanel.getByRole('button',{name:'Break Link',exact:true}).click()
- assert.equal((await f.files.openFile(f.alice.token,initial.fileId)).file.revision,head.revision)
+ assert.equal((await f.files.openFile(f.alice.token,initial.fileId)).file.revision,beforeBreak.revision)
  let refreshFailures=0
  await page.route('**/sheets/external-links',route=>{
   refreshFailures++
@@ -163,7 +216,7 @@ test('XLSX lists, preserves and breaks external workbook links without fetching 
  })
  assert.ok(result.ok(),`External link break commit returned HTTP ${result.status()}`)
  const {revision}=(await f.files.openFile(f.alice.token,initial.fileId)).file
- assert.notEqual(revision,head.revision)
+ assert.notEqual(revision,beforeBreak.revision)
  await expect(reopenedPanel.getByText('External Links: failed to read',{exact:true})).toBeVisible({timeout:15000})
  assert.equal(refreshFailures,1)
  await expect(reopenedPanel.getByText('This workbook has no links to other workbooks.',{exact:true})).toHaveCount(0)
@@ -180,17 +233,17 @@ test('XLSX lists, preserves and breaks external workbook links without fetching 
   const cell=window.__genofficeDebug?.univerAPI.getActiveWorkbook()?.getActiveSheet()?.getRange('G3')
   return {value:cell?.getValue(),formula:cell?.getFormula()??''}
  })
- await expect.poll(readExternalCell,{timeout:30000}).toEqual({value:84,formula:''})
+ await expect.poll(readExternalCell,{timeout:30000}).toEqual({value:expectedValue,formula:''})
  const broken=await JSZip.loadAsync(await f.files.readFile(f.alice.token,initial.fileId,revision))
  assert.equal(broken.file(link),null)
  assert.equal(broken.file(linkRelationships),null)
  assert.ok(!(await broken.file(book).async('string')).includes(reference))
  assert.ok(!(await broken.file(bookRelationships).async('string')).includes(relationship))
- assert.match(await broken.file(worksheet).async('string'),/<c r="G3"><v>84<\/v><\/c>/)
+ assert.ok((await broken.file(worksheet).async('string')).includes(`<c r="G3"><v>${expectedValue}</v></c>`))
  assert.deepEqual(bytes,await f.files.readFile(f.alice.token,initial.fileId,head.revision))
  assert.equal(await revisionCount(),countBeforeBreak+1)
  await page.reload()
  await expect.poll(localAmount,{timeout:30000}).toBe(21.25)
- await expect.poll(readExternalCell,{timeout:30000}).toEqual({value:84,formula:''})
+ await expect.poll(readExternalCell,{timeout:30000}).toEqual({value:expectedValue,formula:''})
  assert.equal(externalRequests,0)
 })

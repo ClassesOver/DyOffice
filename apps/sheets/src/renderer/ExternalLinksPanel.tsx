@@ -17,17 +17,23 @@ export function ExternalLinksPanel({
   links,
   busy,
   sourceActions = true,
+  workspaceActions = false,
+  workspacePicker,
   canBreak = true,
   notice,
   onUpdate,
   onReveal,
   onBreak,
   onChangeSource,
+  onSaveWorkspaceSource,
+  onCancelWorkspaceSource,
   onClose,
 }: {
   readonly links: readonly ExternalLinkRow[]
   readonly busy: boolean
   readonly sourceActions?: boolean
+  readonly workspaceActions?: boolean
+  readonly workspacePicker?: readonly {id:string;name:string}[] | undefined
   readonly canBreak?: boolean
   /** why the listing is empty when it is not simply "no links" */
   readonly notice?: 'unsaved' | 'unavailable' | null
@@ -36,15 +42,19 @@ export function ExternalLinksPanel({
   readonly onReveal: (index: number) => void
   readonly onBreak: (index: number) => void
   readonly onChangeSource: (index: number) => void
+  readonly onSaveWorkspaceSource?: (id: string) => void
+  readonly onCancelWorkspaceSource?: () => void
   readonly onClose: () => void
 }): ReactElement {
   const { t } = useI18n()
   const [confirming, setConfirming] = useState<number | null>(null)
+  const [sourceId, setSourceId] = useState('')
+  const canUpdate = sourceActions || workspaceActions
   return (
     <section className="watch-window" role="dialog" aria-label={t('appLinksPanel')}>
       <header>
         <span className="watch-title">{t('appLinksPanel')}</span>
-        {sourceActions && (
+        {canUpdate && (
           <button className="watch-add" disabled={busy} onClick={onUpdate}>
             {t('appLinksUpdate')}
           </button>
@@ -53,6 +63,20 @@ export function ExternalLinksPanel({
           ✕
         </button>
       </header>
+      {workspacePicker && (
+        <div className="watch-link-picker">
+          <label>
+            {t('appLinksSource')}
+            <select value={sourceId} onChange={(event) => setSourceId(event.currentTarget.value)}>
+              <option value="">—</option>
+              {workspacePicker.map((file) => <option key={file.id} value={file.id}>{file.name}</option>)}
+            </select>
+          </label>
+          <button className="watch-remove" disabled={busy || !workspacePicker.some(file=>file.id===sourceId)}
+            onClick={()=>{onSaveWorkspaceSource?.(sourceId);setSourceId('')}}>{t('appThreadSave')}</button>
+          <button className="watch-remove" onClick={()=>{onCancelWorkspaceSource?.();setSourceId('')}}>{t('appCancel')}</button>
+        </div>
+      )}
       {links.length === 0 ? (
         <p className="watch-empty">
           {notice === 'unavailable'
@@ -64,21 +88,21 @@ export function ExternalLinksPanel({
           <thead>
             <tr>
               <th>{t('appLinksSource')}</th>
-              {sourceActions && <th>{t('appLinksStatus')}</th>}
+              {canUpdate && <th>{t('appLinksStatus')}</th>}
               <th>{t('appLinksSheets')}</th>
-              {(sourceActions || canBreak) && <th />}
+              {(canUpdate || canBreak) && <th />}
             </tr>
           </thead>
           <tbody>
             {links.map((link) => (
               <tr key={link.index}>
-                <td className="watch-formula">
-                  {link.rawTarget}
+                <td className="watch-formula" title={link.displayName?link.rawTarget:undefined}>
+                  {link.displayName ?? link.rawTarget}
                   {link.source !== null && link.source !== link.rawTarget ? (
                     <span className="watch-gone"> → {link.source}</span>
                   ) : null}
                 </td>
-                {sourceActions && (
+                {canUpdate && (
                   <td>
                     {link.reachable === undefined
                       ? '—'
@@ -88,7 +112,7 @@ export function ExternalLinksPanel({
                   </td>
                 )}
                 <td>{link.sheetNames.join(', ')}</td>
-                {(sourceActions || canBreak) && (
+                {(canUpdate || canBreak) && (
                   <td>
                     {sourceActions && link.reachable === true && link.source !== null ? (
                       <button
@@ -99,10 +123,11 @@ export function ExternalLinksPanel({
                         📂
                       </button>
                     ) : null}
-                    {sourceActions && link.source !== null ? (
+                    {workspaceActions || (sourceActions && link.source !== null) ? (
                       <button
                         className="watch-remove"
                         data-tip={t('appLinksChangeSource')}
+                        aria-label={t('appLinksChangeSource')}
                         disabled={busy}
                         onClick={() => onChangeSource(link.index)}
                       >

@@ -2826,7 +2826,7 @@ export type ExternalLinkRevealRequest = z.infer<typeof externalLinkRevealRequest
 
 /// One row of the links panel: the listing's fields, plus the update's
 /// reachability verdict once it has run.
-export type ExternalLinkRow = ExternalLinkListStatus & { readonly reachable?: boolean }
+export type ExternalLinkRow = ExternalLinkListStatus & { readonly reachable?: boolean; readonly displayName?: string }
 
 export const externalLinkStatusSchema = z
   .object({
