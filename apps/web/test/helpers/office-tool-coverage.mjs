@@ -7,7 +7,12 @@ const requiredEffects = new Map([
   ['docx', new Set(['insert_data_result'])],
   ['xlsx', new Set(['insert_data_result'])],
   ['pptx', new Set(['insert_data_result'])],
-  ['pdf', new Set(['apply_ops.rotatePages'])],
+  ['pdf', new Set([
+    'apply_ops.rotatePages', 'apply_ops.setFormValue', 'apply_ops.setMetadata',
+    'edit_block', 'move_text_block', 'edit_text', 'insert_text', 'edit_inserted_text',
+    'move_inserted_text', 'delete_inserted_text', 'edit_note', 'reply_note', 'delete_note',
+    'markup_text', 'delete_markup', 'insert_blank_page', 'set_watermark', 'set_header_footer',
+  ])],
 ])
 const observations = () => ({offered:new Set(), succeeded:new Set()})
 

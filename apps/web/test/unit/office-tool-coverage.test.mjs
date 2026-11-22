@@ -3,9 +3,15 @@ import test from 'node:test'
 import {ASSISTANT_FORMAT_TOOLS, ASSISTANT_DELEGATION_TOOLS, assistantSourceTools} from '../../../../packages/web-contracts/src/assistant.ts'
 import {summarizeOfficeToolCoverage} from '../helpers/office-tool-coverage.mjs'
 
+const pdfEffects = [
+  'apply_ops.rotatePages', 'apply_ops.setFormValue', 'apply_ops.setMetadata',
+  'edit_block', 'move_text_block', 'edit_text', 'insert_text', 'edit_inserted_text',
+  'move_inserted_text', 'delete_inserted_text', 'edit_note', 'reply_note', 'delete_note',
+  'markup_text', 'delete_markup', 'insert_blank_page', 'set_watermark', 'set_header_footer',
+]
 const artifacts = [
   ...['docx','xlsx','pptx'].map(format => ({format,verifiedEffect:'insert_data_result'})),
-  {format:'pdf',verifiedEffect:'apply_ops.rotatePages'},
+  ...pdfEffects.map(verifiedEffect => ({format:'pdf',verifiedEffect})),
 ]
 
 function trace(omit = () => false, omitArtifact = undefined) {
@@ -37,12 +43,13 @@ test('coverage reports missing registrations and failed calls in the relevant fo
   ])
 })
 
-test('PDF rotation coverage requires a verified saved artifact', () => {
+test('each required PDF effect must verify its saved artifact', () => {
   const missing = summarizeOfficeToolCoverage(trace(undefined, 'pdf'))
-  assert.ok(missing.gaps.includes('pdf: missing saved-artifact verification for apply_ops.rotatePages'))
+  assert.deepEqual(missing.gaps, pdfEffects.map(name => 'pdf: missing saved-artifact verification for '+name))
+  assert.deepEqual(missing.effects, {verified:3,required:21})
   const verified = summarizeOfficeToolCoverage(trace())
   assert.deepEqual(verified.gaps, [])
-  assert.deepEqual(verified.effects, {verified:4,required:4})
+  assert.deepEqual(verified.effects, {verified:21,required:21})
   assert.throws(
     () => summarizeOfficeToolCoverage(JSON.stringify({format:'xlsx',verifiedEffect:'apply_ops.rotatePages'})),
     {message:'Invalid Office tool trace at line 1'},

@@ -671,7 +671,10 @@ test('GenOffice PDF assistant and ribbon edits preview and save, including recov
   assert.ok(externalFirstPage.includes(text),externalFirstPage)
  }
  assert.doesNotMatch(externalFirstPage,/Native first page|Original paragraph starts here|Original paragraph ends here/)
- assert.match(externalText(savedBytes,2),/Native revised/)
+ const externalSecondPage=externalText(savedBytes,2)
+ assert.match(externalSecondPage,/Native revised/)
+ assert.match(externalSecondPage,/Final insert/)
+ assert.doesNotMatch(externalSecondPage,/Original insert|Discard this draft/)
  const savedImage=await readImageSource(savedBytes,0,[192,148,228,196])
  assert.deepEqual([...savedImage.bgra.subarray(0,4)],[255,0,0,128])
  const savedCutout=await readImageSource(savedBytes,0,[244,148,284,188])
@@ -710,6 +713,7 @@ test('GenOffice PDF assistant and ribbon edits preview and save, including recov
  assert.ok(savedText.find(item=>item.text==='Native revised').bounds[1]<savedText.find(item=>item.text==='Native second page').bounds[1])
  assert.deepEqual(persisted.getPages().map(page=>page.getRotation().angle),[0,90,0])
  assert.deepEqual(persisted.getPage(2).getSize(),{width:240,height:300})
+ assert.deepEqual(stampLeaves.filter(item=>item.page===2).map(item=>item.text).sort(),['9 / 3','Web review copy'])
  assert.deepEqual(await f.files.readFile(f.alice.token,file.fileId,file.revision),original)
  const refreshed=page.waitForResponse(response=>response.ok()&&response.url().endsWith('/content?revision='+revision))
  await page.reload()
@@ -736,6 +740,12 @@ test('GenOffice PDF assistant and ribbon edits preview and save, including recov
  const cleared=await readPdfLeafObjects(await f.files.readFile(f.alice.token,file.fileId,clearedRevision))
  assert.ok(!cleared.some(leaf=>leaf.text==='Web review copy'))
  for(const index of [0,1,2])assert.ok(cleared.some(leaf=>leaf.page===index&&leaf.text===`${7+index} / 3`))
+ for(const effect of [
+  'apply_ops.setFormValue','apply_ops.setMetadata','edit_block','move_text_block',
+  'edit_text','insert_text','edit_inserted_text','move_inserted_text','delete_inserted_text',
+  'edit_note','reply_note','delete_note','markup_text','delete_markup','insert_blank_page',
+  'set_watermark','set_header_footer',
+ ]) recordVerifiedOfficeEffect('pdf',effect)
 
  if(liveImageConfig){
   const {entry:live}=JSON.parse(await readFile(liveImageConfig,'utf8'))
