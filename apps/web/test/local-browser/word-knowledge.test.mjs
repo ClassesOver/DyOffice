@@ -34,8 +34,8 @@ test('Word searches a starred saved source, reads its actual text and opens the 
  const draftBytes=await document('Working document remains unchanged',liveConfig?'':pendingRevisions),draft=(await importFile(f,f.alice.token,draftBytes,'工作文档.docx')).file
  if(!liveConfig)await f.preferences.update(f.alice.token,{autoSave:false})
  await createWorkspaceService(f.transactions).setStar(f.alice.token,source.fileId,{starred:true})
- const sourcePath=`/files/${source.fileId}/revisions/${source.revision}/${encodeURIComponent('参考资料.docx')}`,cite=kbCiteHref(sourcePath),wire=[];let turn=0
- const mixedEscapeCite=cite.replace('%2583','%83').replace('%2584','%84').replace('%2596%2599','%96%99')
+ const reference=`/files/${source.fileId}/revisions/${source.revision}`,cite=kbCiteHref(reference)
+ const sourcePath=`${reference}/${encodeURIComponent('参考资料.docx')}`,wire=[];let turn=0
  if(!liveConfig){const network=mockProviderNetwork(t,()=>{
   const request=JSON.parse(network.wire.toString())
   const user=request.messages.findLastIndex(message=>message.role==='user')
@@ -137,7 +137,7 @@ test('Word searches a starred saved source, reads its actual text and opens the 
    return Readable.from([Buffer.from(`data: ${JSON.stringify({choices:[{delta,finish_reason:action?'tool_calls':'stop'}]})}\n\ndata: [DONE]\n\n`)])
   }
   wire.push(request)
-  const step=turn++,tool=step<2,delta=step===0?{tool_calls:[{index:0,id:'kb-search',type:'function',function:{name:'search_knowledge_base',arguments:JSON.stringify({query:'ORCHID-KB-6419'})}}]}:step===1?{tool_calls:[{index:0,id:'kb-read',type:'function',function:{name:'read_knowledge_file',arguments:JSON.stringify({index:0,offset:0})}}]}:{content:`Confirmed reference ORCHID-KB-6419 [参考资料.docx](${mixedEscapeCite})`}
+  const step=turn++,tool=step<2,delta=step===0?{tool_calls:[{index:0,id:'kb-search',type:'function',function:{name:'search_knowledge_base',arguments:JSON.stringify({query:'ORCHID-KB-6419'})}}]}:step===1?{tool_calls:[{index:0,id:'kb-read',type:'function',function:{name:'read_knowledge_file',arguments:JSON.stringify({index:0,offset:0})}}]}:{content:`Confirmed reference ORCHID-KB-6419 [参考资料.docx](${cite})`}
   return Readable.from([Buffer.from(`data: ${JSON.stringify({choices:[{delta}]})}\n\ndata: ${JSON.stringify({choices:[{delta:{},finish_reason:tool?'tool_calls':'stop'}]})}\n\ndata: [DONE]\n\n`)])
  })}
  app=await buildLocalApp({db:f.db,businessPool:f.businessPool,passwords:f.passwords,deploymentId:f.deploymentId,origin,csrfKey:f.csrfKey,objectStore:f.objects,globalConfigKeyring:keyring,providerGateway:{mode:'shared'},codingHarnesses:false,nativeDocsDirectory:process.env.DYOFFICE_TEST_KB_DOCS_DIRECTORY??fileURLToPath(new URL('../../dist-docs',import.meta.url)),localShellDirectory:process.env.DYOFFICE_TEST_LOCAL_SHELL_DIRECTORY??fileURLToPath(new URL('../../dist-local-shell',import.meta.url))})
@@ -162,9 +162,7 @@ test('Word searches a starred saved source, reads its actual text and opens the 
  const link=answer.locator('a[href^="filenav://"]')
  if(liveConfig&&await link.count()!==1)t.diagnostic(`Settled answer: ${await answer.innerText()}`)
  await expect(link).toBeVisible({timeout:5000})
- const href=await link.getAttribute('href')
- if(liveConfig)assert.ok(href?.startsWith(`filenav:///files/${source.fileId}/revisions/${source.revision}/`))
- else assert.equal(href,mixedEscapeCite)
+ await expect(link).toHaveAttribute('href',cite)
  assert.ok(knowledgeCalls.includes('/api/v1/knowledge/search'))
  assert.ok(knowledgeCalls.includes('/api/v1/knowledge/read'))
  if(liveConfig){
@@ -172,6 +170,11 @@ test('Word searches a starred saved source, reads its actual text and opens the 
  }else{
  assert.equal(wire.length,3)
  const offered=wire[0].tools.map(tool=>tool.function?.name??tool.name);assert.ok(offered.includes('search_knowledge_base'));assert.ok(offered.includes('read_knowledge_file'))
+ assert.ok(JSON.stringify(wire[0].messages).includes(cite))
+ const search=wire[1].messages.filter(message=>message.role==='tool').at(-1).content
+ assert.ok(search.includes(cite))
+ assert.ok(search.includes('参考资料.docx'))
+ assert.ok(!search.includes(kbCiteHref(sourcePath)))
  const result=wire[2].messages.filter(message=>message.role==='tool').at(-1)
  assert.match(result.content,/Reference evidence: ORCHID-KB-6419/)
  await mkdir('test-results/office-dock-unified',{recursive:true})
