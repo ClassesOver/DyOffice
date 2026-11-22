@@ -42,3 +42,10 @@ test('SQL failure classification preserves permission denial and unknown failure
 test('pg-specific driver timeout is not applied to other SQL connectors',()=>{
  for(const kind of ['mysql','starrocks'])assert.throws(()=>safeFailure(new Error('Query read timeout'),kind),e=>e.statusCode===502)
 })
+
+test('statement errors reported by the database map to a fixable 400, not an unusable source', () => {
+ for(const [kind,code] of [['postgres','42P01'],['postgres','42703'],['postgres','42883'],['postgres','22012'],['mysql','ER_BAD_FIELD_ERROR'],['starrocks','ER_PARSE_ERROR']])
+  assert.throws(()=>safeFailure({code,message:'relation "secret_table" does not exist'},kind),e=>e.statusCode===400&&!e.message.includes('secret_table'),code)
+ // Privilege errors keep their own mapping.
+ assert.throws(()=>safeFailure({code:'42501'},'postgres'),e=>e.statusCode===403)
+})
