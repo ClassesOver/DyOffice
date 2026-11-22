@@ -14,11 +14,13 @@
 
 逐工具验收以格式和工具名为单位，保留注册、执行与成品证据。首轮核对涵盖 130 个格式与工具组合、9 个共享工具和桌面 MCP 清单的 Web 对照。[逐工具验收表](office-ai-tool-coverage.md)
 
-在 `29415fca` 的原生编辑器产物上，浏览器观察到 129 个格式与工具组合注册，定向批次有 79 个组合返回成功结果，覆盖 48 个实际注册的 PDF 工具。PDF 兼容名称 `rotate_pages` 由原生 `apply_ops.rotatePages` 覆盖。工作区数据工具覆盖 5 项，冻结结果写入验证了 Word、Excel 和 PowerPoint 三种原生文件的准确数据、显式保存和重开。[逐工具结果](office-ai-tool-coverage.md)
+以 `29415fca` 原生编辑器产物为基准，加上修复后的 XLSX 构建，浏览器观察到 129 个格式与工具组合注册，定向批次有 89 个组合返回成功结果，覆盖 PDF 和 XLSX 的全部实际注册工具。PDF 兼容名称 `rotate_pages` 由原生 `apply_ops.rotatePages` 覆盖。工作区数据工具覆盖 5 项，冻结结果写入验证了 Word、Excel 和 PowerPoint 三种原生文件的准确数据、显式保存和重开。[逐工具结果](office-ai-tool-coverage.md)
 
 `29415fca` 的 CI 本地集成阶段报出 3 项失败，源于事务崩溃夹具缺少文件服务、元数据并发夹具缺少签名状态、PPTX 签名夹具缺少测试环境。补齐夹具后，在独立 PostgreSQL 上复跑 10 项全部通过，覆盖事务回滚、读取竞态及三格式签名文件原件保护。[原 CI 失败](https://github.com/ClassesOver/DyOffice/actions/runs/45009917486/job/137169747167)
 
 同一固定候选的本机全量 Chromium 跑批共 92 项，82 项通过，3 项失败，7 项按配置跳过。失败项为签名原件下载、PDF 分页副本和 XLSX 单表 CSV 导出。三个旧用例均有定向通过记录，最新全量门禁继续复验。[定向结果](office-ai-tool-coverage.md)
+
+`8346afff` 的 GitHub 门禁有 4 个作业通过，Chromium 步骤共 92 项，84 项通过、1 项失败、7 项跳过。PPTX 使用已保存样式追加单页的步骤在 CI 超时，同一产品构建的定向用例通过。[GitHub Chromium 结果](https://github.com/ClassesOver/DyOffice/actions/runs/45013710258/job/137181389779)
 
 `dec77c2d` 的工具清单检查匹配 159 项定义。按四个 GenOffice 编辑器的静态定义核对 Web 策略，DOCX、XLSX、PPTX、PDF 的 Web 允许名单分别为 42、19、20、49 个名称，包含 Web 专用和条件注册的工具。原编辑器定义里唯一被排除的是 DOCX 通用桌面命令 `run_cli`。当前轮实际向模型提供的工具继续按格式、编辑器能力、附件和配置收窄。模型调用未提供的工具会被拒绝。服务端、传输、后台阅读与交接合同共 105 项通过。[GenOffice 工具清单](../inventory/agent-tools.md) [模型工具传输与策略](../../../apps/web/test/unit/assistant-client.test.mjs) [浏览器实际工具注册](../../../apps/web/test/local-browser/office-tool-inventory.test.mjs)
 

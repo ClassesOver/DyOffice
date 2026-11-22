@@ -8,21 +8,19 @@
 
 首轮定向工具回归共 672 项通过，含 DOCX 71、XLSX 155、PPTX 48、PDF 299、Web 合同与工具 99 项。XLSX 的截断附件提示断言按现有工具文案修正后复跑通过，继续检查读取错误、原件保留和合并用途。[XLSX 截断附件用例](../../../apps/sheets/tests/files-skill.test.ts)
 
-浏览器首轮组合测试 4 项通过。请求发给模型的注册记录覆盖 123 个格式与工具组合，分布为 DOCX 39、XLSX 18、PPTX 19、PDF 47。其中 12 个组合收到成功工具结果。其余记录须继续验证实际执行。[工具注册浏览器用例](../../../apps/web/test/local-browser/office-tool-inventory.test.mjs) [交接浏览器用例](../../../apps/web/test/local-browser/dsh-office-handoff.test.mjs)
+各测试批次合并去重后，浏览器观察到 129 个组合注册，89 个组合向模型返回成功结果。采集仅保留格式、工具名和错误标记。下表中的工具行保留具体效果、成品和待验项，四格式真实模型用例见主报告。[注册用例](../../../apps/web/test/local-browser/office-tool-inventory.test.mjs) [四格式验收](genoffice-web-parity.md)
 
-条件场景 4 项通过，覆盖知识库、数据分析、PDF 附件与分页副本。两轮共观察到 129 个格式与工具组合注册，分布为 DOCX 42、XLSX 19、PPTX 20、PDF 48。其中 23 个组合向模型返回成功工具结果。PDF 的兼容名称 `rotate_pages` 未注册，原生旋转由 `apply_ops.rotatePages` 验证。采集只保存工具名、格式与错误标记。
+| 格式 | Web 合同 | 浏览器注册 | 定向浏览器成功 |
+| --- | ---: | ---: | ---: |
+| DOCX | 42 | 42 | 13 |
+| XLSX | 19 | 19 | 19 |
+| PPTX | 20 | 20 | 9 |
+| PDF | 49 | 48 | 48 |
+| 合计 | 130 | 129 | 89 |
 
-随后补测 DOCX、XLSX、PPTX 的 `insert_data_result`，累计 26 个不同的格式与工具组合在这些浏览器批次返回成功结果，分布为 DOCX 4、XLSX 6、PPTX 2、PDF 14。冻结快照写入三种原生文件，显式保存后独立读取成品，随后在浏览器重开检查。工具具体效果见各表，四格式真实模型代表用例见主报告。[工作区数据分析浏览器用例](../../../apps/web/test/local-browser/office-source-analysis.test.mjs) [四格式验收](genoffice-web-parity.md)
+PDF 原生旋转使用 `apply_ops.rotatePages`，合同仍保留兼容名称 `rotate_pages`。已验证的成品包括保存重开的冻结数据表、Word 脚注和尾注、Excel 合并附件、PowerPoint 单页重做及图片替换、PDF 批注和分页副本。[数据写回](../../../apps/web/test/local-browser/office-source-analysis.test.mjs) [Word 脚注和尾注](../../../apps/web/test/local-browser/word-knowledge.test.mjs) [Excel 合并附件](../../../apps/web/test/local-browser/sheets-attachment-merge.test.mjs) [PPTX 生成](../../../apps/web/test/local-browser/native-slides-generate.test.mjs) [PDF 工具](../../../apps/web/test/local-browser/native-pdf-open.test.mjs)
 
-Word 脚注和尾注的浏览器批次新增 5 个成功组合，累计 31 个。输出检查覆盖新增、读取、编辑、删除，并独立核对 DOCX 脚注和尾注部件及正文引用。[浏览器用例](../../../apps/web/test/local-browser/word-knowledge.test.mjs)
-
-原生 PDF 媒体链新增 12 个成功组合，覆盖搜索、生成、编辑及保存图片。原生 PDF 替换指定页和 XLSX 原附件合并各新增 1 个。Word 读取当前消息的图片也通过，累计 46 个。替换成品保留两侧页面和原文件版本，并独立核对新页宽度和正文。[PDF 媒体](../../../apps/web/test/local-browser/pdf-media.test.mjs) [PDF 替换](../../../apps/web/test/local-browser/native-pdf-page-copies.test.mjs) [XLSX 合并](../../../apps/web/test/local-browser/sheets-attachment-merge.test.mjs) [Word 图片分析](../../../apps/web/test/native-docs/attachment-media.test.mjs)
-
-增加 Word 图片写入、Excel 稀疏区域查找、PowerPoint 原生生成和样式模板、PDF 批处理后，定向批次确认 73 个成功组合，分布为 DOCX 13、XLSX 8、PPTX 7、PDF 45。保存成品核对包含 Word 图片包、重做幻灯片与相邻页、PDF 注释和批量保存。[Word 图片](../../../apps/web/test/native-docs/image-media.test.mjs) [XLSX 查找](../../../apps/web/test/local-browser/sheets-find-cells.test.mjs) [PPTX 生成](../../../apps/web/test/local-browser/native-slides-generate.test.mjs) [PDF 批处理](../../../apps/web/test/local-browser/native-pdf-open.test.mjs)
-
-追加浏览器测试确认跳页、表单标记和完整的分割副本流程。PDF 的 48 个实际注册工具均已有成功结果，另验证原生 `apply_ops.rotatePages` 对应合同中的兼容名称。累计 76 个成功组合。[PDF 跳页与表单](../../../apps/web/test/local-browser/native-pdf-open.test.mjs) [PDF 分割与替换](../../../apps/web/test/local-browser/native-pdf-page-copies.test.mjs)
-
-Excel 的成品生成、文本附件读取和网页搜索也通过浏览器验证。模型读取实际上传的附件正文，收到测试搜索服务返回的标题和链接，工作簿保持原版本。累计 79 个成功组合。[Excel 浏览器用例](../../../apps/web/test/local-browser/office-tool-inventory.test.mjs)
+Excel 已覆盖 19 个实际注册工具。稀疏工作簿的全量预加载曾让已装入网格的点读区域误报未加载。修复后同时确认定向请求是否完成和当前工作簿是否仍有效。Rust 原生进程核对了工作表保护与 AutoFilter 范围，Node 执行路径当前只返回保护状态，省略 AutoFilter 详情。[Excel 定向读取](../../../apps/web/test/local-browser/sheets-find-cells.test.mjs) [Node 执行器](../../../apps/web/server/sheets/xlsx-node-engine.ts)
 
 ## DOCX
 
@@ -75,24 +73,24 @@ Excel 的成品生成、文本附件读取和网页搜索也通过浏览器验�
 
 | 工具 | 浏览器注册 | 候选用例 | 执行或效果证据 |
 | --- | --- | --- | --- |
-| `aggregate_range` | 观察到 | [formula-cost.test.ts](../../../apps/sheets/tests/formula-cost.test.ts)、[plan-operations-formula-guard.test.ts](../../../apps/sheets/tests/plan-operations-formula-guard.test.ts) | 通过的单测包含本工具用例；Web 路径待逐项核验，[单测](../../../apps/sheets/tests/workbook-skill-tools.test.ts) |
+| `aggregate_range` | 观察到 | [formula-cost.test.ts](../../../apps/sheets/tests/formula-cost.test.ts)、[plan-operations-formula-guard.test.ts](../../../apps/sheets/tests/plan-operations-formula-guard.test.ts) | 浏览器从表格的 A1:A2 读取两个数值并核对合计 18。[浏览器用例](../../../apps/web/test/local-browser/sheets-find-cells.test.mjs) |
 | `create_document` | 观察到 | [native-pdf-create-document.test.mjs](../../../apps/web/test/local-browser/native-pdf-create-document.test.mjs)、[ai-create-document.test.ts](../../../apps/sheets/tests/ai-create-document.test.ts) | 浏览器从 Excel 实际生成 XLSX、DOCX、PDF 成品，原生读取核对收入表头、数值和正文。独立 CSV 下载保留预期表头，源工作簿未生成新版本。[浏览器用例](../../../apps/web/test/local-browser/office-tool-inventory.test.mjs) |
 | `find_cells` | 观察到 | [sheets-find-cells.test.mjs](../../../apps/web/test/local-browser/sheets-find-cells.test.mjs)、[redact-actions.test.ts](../../../apps/sheets/tests/redact-actions.test.ts) | 查找到未渲染的 AZ25001，按正则找到 AA1001，按公式错误找到 AB1002，原件保持原字节。[浏览器用例](../../../apps/web/test/local-browser/sheets-find-cells.test.mjs) |
 | `generate_image` | 观察到 | [pdf-media.test.mjs](../../../apps/web/test/local-browser/pdf-media.test.mjs)、[image-skill.test.ts](../../../apps/sheets/tests/image-skill.test.ts) | 浏览器实际调用成功，搜索与图像生成后的 WebP 进入原生工作簿。[实测用例](../../../apps/web/test/local-browser/office-tool-inventory.test.mjs) |
 | `get_workbook_context` | 观察到 | [dsh-office-handoff.test.mjs](../../../apps/web/test/local-browser/dsh-office-handoff.test.mjs)、[native-sheets-harness.test.mjs](../../../apps/web/test/local-browser/native-sheets-harness.test.mjs) | 浏览器实际调用成功，交接工具读到目标工作表标识。[实测用例](../../../apps/web/test/local-browser/dsh-office-handoff.test.mjs) |
 | `image_search` | 观察到 | [pdf-media.test.mjs](../../../apps/web/test/local-browser/pdf-media.test.mjs)、[image-skill.test.ts](../../../apps/sheets/tests/image-skill.test.ts) | 浏览器实际调用成功，可搜索到原始图像并进入图片写入流程。[实测用例](../../../apps/web/test/local-browser/office-tool-inventory.test.mjs) |
 | `insert_data_result` | 观察到 | [office-source-analysis.test.mjs](../../../apps/web/test/local-browser/office-source-analysis.test.mjs)、[office-tool-inventory.test.mjs](../../../apps/web/test/local-browser/office-tool-inventory.test.mjs) | 冻结结果从 J10 选区插入。原生引擎读取保存成品及浏览器重开均核对 K11、K12 为数值 30、40。[浏览器用例](../../../apps/web/test/local-browser/office-source-analysis.test.mjs) |
-| `load_guide` | 观察到 | [workbook-skill-tools.test.ts](../../../apps/sheets/tests/workbook-skill-tools.test.ts) | 通过的单测包含本工具用例；Web 路径待逐项核验，[单测](../../../apps/sheets/tests/workbook-skill-tools.test.ts) |
+| `load_guide` | 观察到 | [workbook-skill-tools.test.ts](../../../apps/sheets/tests/workbook-skill-tools.test.ts) | 返回写入指南，包含 `set_range` 的字段说明。[浏览器用例](../../../apps/web/test/local-browser/sheets-find-cells.test.mjs) |
 | `merge_attached_workbooks` | 观察到 | [sheets-attachment-merge.test.mjs](../../../apps/web/test/local-browser/sheets-attachment-merge.test.mjs)、[merge-skill.test.ts](../../../apps/sheets/tests/merge-skill.test.ts) | 浏览器合并 BIFF XLS、预览截断的 XLSX 和 CSV。原生读取核对工作表、数值和截断文件的最后一行，重开后新表存在，旧版本保持原字节。[浏览器用例](../../../apps/web/test/local-browser/sheets-attachment-merge.test.mjs) |
 | `propose_operations` | 观察到 | [dsh-office-handoff.test.mjs](../../../apps/web/test/local-browser/dsh-office-handoff.test.mjs)、[native-sheets-harness.test.mjs](../../../apps/web/test/local-browser/native-sheets-harness.test.mjs) | 真实模型成品复跑通过，[浏览器用例](../../../apps/web/test/local-browser/native-word-sheets-codex.test.mjs)。。浏览器实际调用成功，交接写入真实公式，保存重开后公式与结果 42 正确。[实测用例](../../../apps/web/test/local-browser/dsh-office-handoff.test.mjs) |
 | `read_attachment` | 观察到 | [native-pdf-create-document.test.mjs](../../../apps/web/test/local-browser/native-pdf-create-document.test.mjs)、[files-skill.test.ts](../../../apps/sheets/tests/files-skill.test.ts) | 读取实际上传的文本附件并核对正文。截断附件另由单测验证报错与保留原件合并入口。[浏览器用例](../../../apps/web/test/local-browser/office-tool-inventory.test.mjs) |
-| `read_cells` | 观察到 | [workbook-skill-tools.test.ts](../../../apps/sheets/tests/workbook-skill-tools.test.ts)、[loop.test.ts](../../../packages/agent-core/tests/loop.test.ts) | 通过的单测包含本工具用例；Web 路径待逐项核验，[单测](../../../apps/sheets/tests/workbook-skill-tools.test.ts) |
-| `read_formats` | 观察到 | [workbook-skill-tools.test.ts](../../../apps/sheets/tests/workbook-skill-tools.test.ts) | 通过的单测包含本工具用例；Web 路径待逐项核验，[单测](../../../apps/sheets/tests/workbook-skill-tools.test.ts) |
+| `read_cells` | 观察到 | [workbook-skill-tools.test.ts](../../../apps/sheets/tests/workbook-skill-tools.test.ts)、[loop.test.ts](../../../packages/agent-core/tests/loop.test.ts) | 全量预加载期间点读 A1 和 C1，返回 7 与公式 `=A1+A2`。[浏览器用例](../../../apps/web/test/local-browser/sheets-find-cells.test.mjs) |
+| `read_formats` | 观察到 | [workbook-skill-tools.test.ts](../../../apps/sheets/tests/workbook-skill-tools.test.ts) | 读取单独设置的 B1 百分比格式。[浏览器用例](../../../apps/web/test/local-browser/sheets-find-cells.test.mjs) |
 | `read_range` | 观察到 | [dsh-office-handoff.test.mjs](../../../apps/web/test/local-browser/dsh-office-handoff.test.mjs)、[office-dock-unified.test.mjs](../../../apps/web/test/local-browser/office-dock-unified.test.mjs) | 浏览器实际调用成功，交接工具读取指定单元格。[实测用例](../../../apps/web/test/local-browser/dsh-office-handoff.test.mjs) |
-| `read_sheet_features` | 观察到 | [redact-features.test.ts](../../../apps/sheets/tests/redact-features.test.ts)、[workbook-skill-tools.test.ts](../../../apps/sheets/tests/workbook-skill-tools.test.ts) | 通过的单测包含本工具用例；Web 路径待逐项核验，[单测](../../../apps/sheets/tests/workbook-skill-tools.test.ts) |
-| `select_range` | 观察到 | [response-verify.test.ts](../../../apps/sheets/tests/response-verify.test.ts)、[sheet-nav.test.ts](../../../apps/sheets/tests/sheet-nav.test.ts) | 通过的单测包含本工具用例；Web 路径待逐项核验，[单测](../../../apps/sheets/tests/workbook-skill-tools.test.ts) |
-| `trace_dependents` | 观察到 | [trace-redaction.test.ts](../../../apps/sheets/tests/trace-redaction.test.ts)、[workbook-skill-tools.test.ts](../../../apps/sheets/tests/workbook-skill-tools.test.ts) | 通过的单测包含本工具用例；Web 路径待逐项核验，[单测](../../../apps/sheets/tests/workbook-skill-tools.test.ts) |
-| `trace_precedents` | 观察到 | [trace-redaction.test.ts](../../../apps/sheets/tests/trace-redaction.test.ts)、[workbook-skill-tools.test.ts](../../../apps/sheets/tests/workbook-skill-tools.test.ts) | 通过的单测包含本工具用例；Web 路径待逐项核验，[单测](../../../apps/sheets/tests/workbook-skill-tools.test.ts) |
+| `read_sheet_features` | 观察到 | [redact-features.test.ts](../../../apps/sheets/tests/redact-features.test.ts)、[workbook-skill-tools.test.ts](../../../apps/sheets/tests/workbook-skill-tools.test.ts) | 报告受保护的工作表。Rust 路径核对原生 AutoFilter 范围 A1:C2，Node 路径当前省略该字段。[浏览器用例](../../../apps/web/test/local-browser/sheets-find-cells.test.mjs) |
+| `select_range` | 观察到 | [response-verify.test.ts](../../../apps/sheets/tests/response-verify.test.ts)、[sheet-nav.test.ts](../../../apps/sheets/tests/sheet-nav.test.ts) | 定位 Audit 工作表 A1:C2，界面选中 Audit，工作簿原版本保持原字节。[浏览器用例](../../../apps/web/test/local-browser/sheets-find-cells.test.mjs) |
+| `trace_dependents` | 观察到 | [trace-redaction.test.ts](../../../apps/sheets/tests/trace-redaction.test.ts)、[workbook-skill-tools.test.ts](../../../apps/sheets/tests/workbook-skill-tools.test.ts) | 从 A1 找到依赖公式 Audit!C1，核对值 18。[浏览器用例](../../../apps/web/test/local-browser/sheets-find-cells.test.mjs) |
+| `trace_precedents` | 观察到 | [trace-redaction.test.ts](../../../apps/sheets/tests/trace-redaction.test.ts)、[workbook-skill-tools.test.ts](../../../apps/sheets/tests/workbook-skill-tools.test.ts) | 读取 C1 的公式值 18，并核对 A1=7、A2=11 两个前置值。[浏览器用例](../../../apps/web/test/local-browser/sheets-find-cells.test.mjs) |
 | `web_search` | 观察到 | [t12-workspace-settings.test.mjs](../../../apps/web/test/local-browser/t12-workspace-settings.test.mjs)、[global-config-readiness.test.mjs](../../../apps/web/test/local-integration/global-config-readiness.test.mjs) | 测试搜索服务返回供应商目录标题和链接，浏览器核对请求参数及工具输出。[浏览器用例](../../../apps/web/test/local-browser/office-tool-inventory.test.mjs) |
 
 ## PPTX
@@ -109,14 +107,14 @@ Excel 的成品生成、文本附件读取和网页搜索也通过浏览器验�
 | `image_search` | 观察到 | [pdf-media.test.mjs](../../../apps/web/test/local-browser/pdf-media.test.mjs)、[global-config-readiness.test.mjs](../../../apps/web/test/local-integration/global-config-readiness.test.mjs) | 待逐项核验 |
 | `insert_analysis_image` | 观察到 | [分析插入工具测试](../../../apps/web/test/unit/analysis-insert-skill.test.mjs) | DOCX 和 PPTX 工具单测均通过，核对验证过的图像字节、来源标记及目标写入；原生成品保存重开待核验 |
 | `insert_data_result` | 观察到 | [office-source-analysis.test.mjs](../../../apps/web/test/local-browser/office-source-analysis.test.mjs)、[office-tool-inventory.test.mjs](../../../apps/web/test/local-browser/office-tool-inventory.test.mjs) | 在当前幻灯片插入原生表格。保存后检查 PPTX 表格 XML，重开后核对日期栏和金额栏是 2026-01 / 30、2026-02 / 40。[浏览器用例](../../../apps/web/test/local-browser/office-source-analysis.test.mjs) |
-| `insert_web_image` | 观察到 | [native-slides-attachment.test.mjs](../../../apps/web/test/local-browser/native-slides-attachment.test.mjs)、[ai-picture-tools.test.ts](../../../apps/slides/tests/ai-picture-tools.test.ts) | 通过的单测包含本工具用例；Web 路径待逐项核验，[单测](../../../apps/slides/tests/ai-picture-tools.test.ts) |
+| `insert_web_image` | 观察到 | [native-slides-attachment.test.mjs](../../../apps/web/test/local-browser/native-slides-attachment.test.mjs)、[ai-picture-tools.test.ts](../../../apps/slides/tests/ai-picture-tools.test.ts) | 浏览器使用当前消息上传的 PNG 插入图片，保存后从幻灯片关系部件读取像素。[浏览器用例](../../../apps/web/test/local-browser/native-slides-attachment.test.mjs) |
 | `list_style_templates` | 观察到 | [native-slides-generate.test.mjs](../../../apps/web/test/local-browser/native-slides-generate.test.mjs)、[generate-deck.test.ts](../../../apps/slides/tests/generate-deck.test.ts) | 浏览器列出已保存的样式模板。[浏览器用例](../../../apps/web/test/local-browser/native-slides-generate.test.mjs) |
 | `load_guide` | 观察到 | [PPTX 批处理工具测试](../../../apps/slides/tests/apply-ops-tool.test.ts) | 单测通过。返回插入操作说明并拒绝未知分组，幻灯片保持原样；Web 浏览器待核验 |
 | `plan_deck` | 观察到 | [slide-progress.test.ts](../../../apps/slides/tests/slide-progress.test.ts) | 规划五页后，进度将五页全部标为未生成，[单测](../../../apps/slides/tests/slide-progress.test.ts) |
 | `read_attachment` | 观察到 | [native-pdf-create-document.test.mjs](../../../apps/web/test/local-browser/native-pdf-create-document.test.mjs)、[files-skill.test.ts](../../../apps/slides/tests/files-skill.test.ts) | 单测核对可用附件正文、无效索引和重复读取，[单测](../../../apps/slides/tests/files-skill.test.ts) |
 | `read_slide` | 观察到 | [native-slides-generate.test.mjs](../../../apps/web/test/local-browser/native-slides-generate.test.mjs)、[layout-tools.test.ts](../../../apps/slides/tests/layout-tools.test.ts) | 真实模型成品复跑通过，[浏览器用例](../../../apps/web/test/local-browser/native-slides-generate.test.mjs) |
 | `regenerate_slide` | 观察到 | [native-slides-generate.test.mjs](../../../apps/web/test/local-browser/native-slides-generate.test.mjs)、[data-source-gate.test.ts](../../../apps/slides/tests/data-source-gate.test.ts) | 真实模型成品复跑通过，[浏览器用例](../../../apps/web/test/local-browser/native-slides-generate.test.mjs) |
-| `replace_image` | 观察到 | [native-slides-attachment.test.mjs](../../../apps/web/test/local-browser/native-slides-attachment.test.mjs)、[pdf-media.test.mjs](../../../apps/web/test/local-browser/pdf-media.test.mjs) | 通过的单测包含本工具用例；Web 路径待逐项核验，[单测](../../../apps/slides/tests/ai-picture-tools.test.ts) |
+| `replace_image` | 观察到 | [native-slides-attachment.test.mjs](../../../apps/web/test/local-browser/native-slides-attachment.test.mjs)、[pdf-media.test.mjs](../../../apps/web/test/local-browser/pdf-media.test.mjs) | 替换为新消息上传的 PNG，保存后像素正确，原图框 XML 保持一致，未送达的附件索引被拒绝。[浏览器用例](../../../apps/web/test/local-browser/native-slides-attachment.test.mjs) |
 | `save_style_template` | 观察到 | [native-slides-generate.test.mjs](../../../apps/web/test/local-browser/native-slides-generate.test.mjs)、[generate-deck.test.ts](../../../apps/slides/tests/generate-deck.test.ts) | 保存了本轮实际生成的样式模板。[浏览器用例](../../../apps/web/test/local-browser/native-slides-generate.test.mjs) |
 | `web_search` | 观察到 | [t12-workspace-settings.test.mjs](../../../apps/web/test/local-browser/t12-workspace-settings.test.mjs)、[data-source-gate.test.ts](../../../apps/slides/tests/data-source-gate.test.ts) | 搜索结果进入图表数据来源校验，缺少检索记录的来源声明被拒绝，[单测](../../../apps/slides/tests/data-source-gate.test.ts) |
 
