@@ -2383,9 +2383,14 @@ export function App({
   const watchStructuralEditsForMarks = (): void => {
     const api = univerRef.current?.univerAPI
     if (!api) return
-    api.onCommandExecuted((command: { id?: string }) => {
-      analysisEpochRef.current++
-      if (!command?.id || !STRUCTURAL_EDIT_COMMAND_PATTERN.test(command.id)) return
+    api.onCommandExecuted(({ id }, options) => {
+      // Derived formula results can arrive while an analysis artifact downloads.
+      // The original cell edits and selection commands still invalidate the capture.
+      if (options?.fromFormula !== true && !id.startsWith('formula.mutation.set-formula-calculation-') &&
+          id !== 'formula.mutation.set-formula-data' && id !== 'formula.mutation.set-array-formula-data') {
+        analysisEpochRef.current++
+      }
+      if (!STRUCTURAL_EDIT_COMMAND_PATTERN.test(id)) return
       rebuildRedactionIndex()
     })
   }

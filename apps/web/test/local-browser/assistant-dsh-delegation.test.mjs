@@ -212,7 +212,19 @@ for(const format of ['docx','xlsx','pptx','pdf'])test(format+' resumes after '+(
   assert.equal(await head(),file.revision)
   return
  }
- if(format==='xlsx')await page.evaluate(()=>window.__genofficeDebug.univerAPI.getActiveWorkbook().getActiveSheet().getRange('J10').activate())
+ if(format==='xlsx'){
+  await page.evaluate(()=>window.__genofficeDebug.univerAPI.getActiveWorkbook().getActiveSheet().getRange('J10').activate())
+  await expect.poll(()=>page.evaluate(()=>{
+   const range=window.__genofficeDebug.univerAPI.getActiveWorkbook().getActiveRange()
+   return range ? [range.getRow(),range.getColumn()] : null
+  })).toEqual([9,9])
+  // Recalculation may finish after the insertion captured its target and while
+  // the artifact is being downloaded. Formula bookkeeping leaves J10 selected.
+  await page.route('**/api/v1/agents/artifacts/*/content',async route=>{
+   await page.evaluate(()=>window.__genofficeDebug.univerAPI.executeCommand('formula.mutation.set-formula-calculation-notification',{}))
+   await route.continue()
+  },{times:1})
+ }
  const insert={docx:'插入文档',xlsx:'写入当前选区',pptx:'插入当前幻灯片',pdf:'追加到 PDF'}[format]
  await report.getByRole('button',{name:insert,exact:true}).click()
  const save=report.getByRole('button',{name:'保存文档',exact:true})
@@ -237,7 +249,7 @@ for(const format of ['docx','xlsx','pptx','pdf'])test(format+' resumes after '+(
   assert.ok(cells.some(cell=>cell.row===9&&cell.value===summary))
   assert.ok(cells.some(cell=>String(cell.value).includes(delivery.sha256)))
   await page.reload();await waitEditor()
-  await expect.poll(()=>page.evaluate(()=>window.__genofficeDebug?.univerAPI.getActiveWorkbook()?.getActiveSheet().getRange('J10').getValue())).toBe(summary)
+  await expect.poll(()=>page.evaluate(()=>window.__genofficeDebug?.univerAPI.getActiveWorkbook()?.getSheetByName('Acceptance')?.getRange('J10').getValue()),{timeout:30000}).toBe(summary)
   return
  }
  const saved=await JSZip.loadAsync(savedBytes)
