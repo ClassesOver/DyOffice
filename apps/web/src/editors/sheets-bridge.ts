@@ -4,7 +4,7 @@ import {messages} from './messages.ts'
 import {createAiPdf} from './create-ai-pdf.ts'
 import {
   workbookMediaRequestSchema,workbookMediaResultSchema,
-  workbookPivotRequestSchema,workbookPivotDefinitionSchema,
+  workbookPivotRequestSchema,workbookPivotDefinitionSchema,externalLinksRequestSchema,externalLinksResultSchema,
   workbookFileSchema, workbookRangeRequestSchema, workbookRangeResultSchema,
   workbookFormulaCellsRequestSchema, workbookFormulaCellsResultSchema, workbookRowOutlineResultSchema,
   workbookRedactionsResultSchema, workbookSlicerStateResultSchema, workbookQueriesResultSchema,
@@ -242,7 +242,13 @@ export function createSheetsBridge(host: SessionFileHost, fileId: string, prefs:
       }catch(error){await Promise.allSettled(opened.map(async file=>{const current=sessions.get(file.sessionId);sessions.delete(file.sessionId);if(current)await call(current.revision,'merge-sources/close',{sessionId:file.sessionId})}));throw error}
     },
     openEncryptedWorkbook:unavailable,reopenWorkbook:unavailable,
-    listExternalLinks:unavailable,refreshWorkbookConnection:unavailable,readLocalImage:unavailable,
+    async listExternalLinks(input){
+      const {sessionId}=externalLinksRequestSchema.parse(input)
+      const current=session(sessionId)
+      if(current.attachment)throw hostError('INVALID_REVISION','external links')
+      return externalLinksResultSchema.parse(await call(current.revision,'external-links'))
+    },
+    refreshWorkbookConnection:unavailable,readLocalImage:unavailable,
     async readPivotDefinition(input){
       const request=workbookPivotRequestSchema.parse(input),current=session(request.sessionId)
       if(current.attachment||!current.file.sheets.some(sheet=>sheet.pivotTables.some(pivot=>pivot.path===request.path&&pivot.cachePath===request.cachePath)))throw hostError('INVALID_REVISION','pivot parts')

@@ -319,6 +319,7 @@ interface ExcelShellProps {
   readonly onSaveAs: () => void
   readonly saveDownload?: React.ReactNode
   readonly fileMenu?: React.ReactNode
+  readonly externalLinkListOnly?: boolean
   /** Ask the model for a name, then open Save As with it prefilled */
   readonly onNameWithAi: () => void
   /// QAT redo (workbook history, same path as the app menu's ⇧⌘Z); undo
@@ -581,6 +582,7 @@ export function ExcelShell({
   onSaveAs,
   saveDownload,
   fileMenu,
+  externalLinkListOnly = false,
   onNameWithAi,
   onRedo,
   canUndo,
@@ -1011,6 +1013,7 @@ export function ExcelShell({
         </nav>
 
         <Ribbon
+          externalLinkListOnly={externalLinkListOnly}
           activeTab={activeTab}
           selectionFormat={selectionFormat}
           formatPainterActive={formatPainterActive}
@@ -2005,6 +2008,7 @@ function LinkDialog({
 
 function Ribbon({
   activeTab,
+  externalLinkListOnly,
   selectionFormat,
   formatPainterActive,
   sheetHasContent,
@@ -2032,6 +2036,7 @@ function Ribbon({
   onIsSelectionInPivot,
 }: {
   readonly activeTab: RibbonTab
+  readonly externalLinkListOnly?: boolean
   readonly selectionFormat: SelectionFormat | null
   readonly formatPainterActive: boolean
   readonly sheetHasContent: boolean
@@ -3077,7 +3082,7 @@ function Ribbon({
           <RibbonButton
             large
             label={t('appLinksPanel')}
-            detail={t('appLinksPanelDetail')}
+            detail={externalLinkListOnly ? '' : t('appLinksPanelDetail')}
             symbol="🔗"
             onClick={() => onCommand('external-links-panel')}
           />

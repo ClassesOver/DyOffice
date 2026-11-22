@@ -2,10 +2,11 @@ import type {FindInput,RecalcInput} from '../../../../worker/src/native/xlsx.ts'
 import {createHash,randomUUID} from 'node:crypto'
 import type { createFileService } from '../files/service.ts'
 import { authError } from '../auth/sessions.ts'
+import type {WorkbookPackageQuery} from '../../../../worker/src/native/gateway.ts'
 
 type Files = ReturnType<typeof createFileService>
 export interface SheetRange { startRow: number; endRow: number; startColumn: number; endColumn: number }
-export type SheetsPackageReader = (bytes: Buffer, signal?: AbortSignal, pivot?: {path:string;cachePath:string}) => Promise<unknown>
+export type SheetsPackageReader = (bytes: Buffer, signal?: AbortSignal, query?: WorkbookPackageQuery) => Promise<unknown>
 export interface SheetsNative {
   convertMergeSource?(input:Buffer,format:'csv'|'tsv'|'xls',signal?:AbortSignal):Promise<Buffer>
   readMedia?(input:Uint8Array,visualId:string,signal?:AbortSignal):Promise<unknown>
@@ -59,6 +60,10 @@ export function createSheetsService({ files, native, readPackage, maxConcurrent 
       const metadata=await native.inspect(bytes,signal) as {sheets?:{pivotTables?:{path:string;cachePath:string|null}[]}[]}
       if(!metadata.sheets?.some(sheet=>sheet.pivotTables?.some(pivot=>pivot.path===path&&pivot.cachePath===cachePath)))throw authError(400)
       return readPackage(bytes,signal,{path,cachePath})
+    },signal),
+    listExternalLinks: (token:string,fileId:string,revision:string,signal?:AbortSignal)=>read(token,fileId,revision,bytes=>{
+      if(!readPackage)throw authError(501)
+      return readPackage(bytes,signal,{externalLinks:true})
     },signal),
     readPackage: (token: string, fileId: string, revision: string, signal?: AbortSignal) => read(token,fileId,revision,bytes => { if (!readPackage) throw authError(501); return readPackage(bytes,signal) },signal),
     inspect: (token: string, fileId: string, revision: string, signal?: AbortSignal) => read(token, fileId, revision, bytes => native.inspect(bytes, signal), signal),

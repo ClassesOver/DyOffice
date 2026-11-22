@@ -16,6 +16,7 @@ import type { ExternalLinkRow } from '../shared/desktop-api'
 export function ExternalLinksPanel({
   links,
   busy,
+  listOnly = false,
   notice,
   onUpdate,
   onReveal,
@@ -25,8 +26,9 @@ export function ExternalLinksPanel({
 }: {
   readonly links: readonly ExternalLinkRow[]
   readonly busy: boolean
+  readonly listOnly?: boolean
   /** why the listing is empty when it is not simply "no links" */
-  readonly notice?: 'unsaved' | null
+  readonly notice?: 'unsaved' | 'unavailable' | null
   readonly onUpdate: () => void
   /** the row's link index, not its path: the main process resolves the source */
   readonly onReveal: (index: number) => void
@@ -40,25 +42,29 @@ export function ExternalLinksPanel({
     <section className="watch-window" role="dialog" aria-label={t('appLinksPanel')}>
       <header>
         <span className="watch-title">{t('appLinksPanel')}</span>
-        <button className="watch-add" disabled={busy} onClick={onUpdate}>
-          {t('appLinksUpdate')}
-        </button>
+        {!listOnly && (
+          <button className="watch-add" disabled={busy} onClick={onUpdate}>
+            {t('appLinksUpdate')}
+          </button>
+        )}
         <button className="watch-close" data-tip={t('appClose')} onClick={onClose}>
           ✕
         </button>
       </header>
       {links.length === 0 ? (
         <p className="watch-empty">
-          {notice === 'unsaved' ? t('appLinksUnsaved') : t('appLinksNone')}
+          {notice === 'unavailable'
+            ? t('appAttachmentReadFailed', {name:t('appLinksPanel')})
+            : t(notice === 'unsaved' ? 'appLinksUnsaved' : 'appLinksNone')}
         </p>
       ) : (
         <table className="watch-table">
           <thead>
             <tr>
               <th>{t('appLinksSource')}</th>
-              <th>{t('appLinksStatus')}</th>
+              {!listOnly && <th>{t('appLinksStatus')}</th>}
               <th>{t('appLinksSheets')}</th>
-              <th />
+              {!listOnly && <th />}
             </tr>
           </thead>
           <tbody>
@@ -70,56 +76,60 @@ export function ExternalLinksPanel({
                     <span className="watch-gone"> → {link.source}</span>
                   ) : null}
                 </td>
-                <td>
-                  {link.reachable === undefined
-                    ? '—'
-                    : link.reachable
-                      ? t('appLinksReachable')
-                      : t('appLinksBroken')}
-                </td>
+                {!listOnly && (
+                  <td>
+                    {link.reachable === undefined
+                      ? '—'
+                      : link.reachable
+                        ? t('appLinksReachable')
+                        : t('appLinksBroken')}
+                  </td>
+                )}
                 <td>{link.sheetNames.join(', ')}</td>
-                <td>
-                  {link.reachable === true && link.source !== null ? (
-                    <button
-                      className="watch-remove"
-                      data-tip={t('appLinksLocate')}
-                      onClick={() => onReveal(link.index)}
-                    >
-                      📂
-                    </button>
-                  ) : null}
-                  {link.source !== null ? (
-                    <button
-                      className="watch-remove"
-                      data-tip={t('appLinksChangeSource')}
-                      disabled={busy}
-                      onClick={() => onChangeSource(link.index)}
-                    >
-                      🔗
-                    </button>
-                  ) : null}
-                  {confirming === link.index ? (
-                    <button
-                      className="watch-remove"
-                      disabled={busy}
-                      onClick={() => {
-                        setConfirming(null)
-                        onBreak(link.index)
-                      }}
-                    >
-                      {t('appLinksBreakConfirm')}
-                    </button>
-                  ) : (
-                    <button
-                      className="watch-remove"
-                      data-tip={t('appLinksBreak')}
-                      disabled={busy}
-                      onClick={() => setConfirming(link.index)}
-                    >
-                      ✂
-                    </button>
-                  )}
-                </td>
+                {!listOnly && (
+                  <td>
+                    {link.reachable === true && link.source !== null ? (
+                      <button
+                        className="watch-remove"
+                        data-tip={t('appLinksLocate')}
+                        onClick={() => onReveal(link.index)}
+                      >
+                        📂
+                      </button>
+                    ) : null}
+                    {link.source !== null ? (
+                      <button
+                        className="watch-remove"
+                        data-tip={t('appLinksChangeSource')}
+                        disabled={busy}
+                        onClick={() => onChangeSource(link.index)}
+                      >
+                        🔗
+                      </button>
+                    ) : null}
+                    {confirming === link.index ? (
+                      <button
+                        className="watch-remove"
+                        disabled={busy}
+                        onClick={() => {
+                          setConfirming(null)
+                          onBreak(link.index)
+                        }}
+                      >
+                        {t('appLinksBreakConfirm')}
+                      </button>
+                    ) : (
+                      <button
+                        className="watch-remove"
+                        data-tip={t('appLinksBreak')}
+                        disabled={busy}
+                        onClick={() => setConfirming(link.index)}
+                      >
+                        ✂
+                      </button>
+                    )}
+                  </td>
+                )}
               </tr>
             ))}
           </tbody>

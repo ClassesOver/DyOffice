@@ -13,13 +13,14 @@ import {launchTestBrowser} from '../helpers/browser.mjs'
 import {fileFixture,importFile} from '../helpers/files.mjs'
 import {password} from '../helpers/identity.mjs'
 import {stubHomeHero} from '../helpers/home-hero.mjs'
+import {createCsrfService,SESSION_COOKIE} from '../../server/src/modules/auth/csrf.ts'
 
 const sheetsDirectory=process.env.DYOFFICE_TEST_SHEETS_DIST
 
-test('XLSX save and reopen preserve an untouched external formula and its source cache without fetching the link',{skip:!sheetsDirectory,timeout:120000},async t=>{
+test('XLSX lists and preserves external workbook links without fetching the source',{skip:!sheetsDirectory,timeout:120000},async t=>{
  let app,externalRequests=0
  const server=createServer((request,response)=>{
-  if(request.url==='/linked-source.xlsx'){
+  if(request.url?.split('?')[0]==='/linked-source.xlsx'){
    externalRequests++
    response.writeHead(404).end()
    return
@@ -29,6 +30,7 @@ test('XLSX save and reopen preserve an untouched external formula and its source
  t.after(()=>{server.closeAllConnections();return new Promise(resolve=>server.close(resolve))})
  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve))
  const origin='http://127.0.0.1:'+server.address().port
+ const externalTarget=origin+'/linked-source.xlsx?year=2026&unit=CNY'
  const f=await fileFixture(t,{origin,buildApp:false})
  await f.preferences.update(f.alice.token,{language:'en',autoSave:false})
 
@@ -65,7 +67,7 @@ test('XLSX save and reopen preserve an untouched external formula and its source
  await update(worksheet,'A1:F3','A1:G3')
  await update(worksheet,'<row r="3"><c r="A3"><v>7.5</v></c></row>',`<row r="3"><c r="A3"><v>7.5</v></c>${formula}</row>`)
  zip.file(link,`<externalLink xmlns="${sheetNamespace}" xmlns:r="${relationshipNamespace}"><externalBook r:id="rId1"><sheetNames><sheetName val="Catalog"/></sheetNames><sheetDataSet><sheetData sheetId="0"><row r="1"><cell r="A1"><v>84</v></cell></row></sheetData></sheetDataSet></externalBook></externalLink>`)
- zip.file(linkRelationships,`<Relationships xmlns="${packageRelationshipNamespace}"><Relationship Id="rId1" Type="${relationshipNamespace}/externalLinkPath" Target="${origin}/linked-source.xlsx" TargetMode="External"/></Relationships>`)
+ zip.file(linkRelationships,`<Relationships xmlns="${packageRelationshipNamespace}"><Relationship Id="rId1" Type="${relationshipNamespace}/externalLinkPath" Target="${externalTarget.replace('&','&amp;')}" TargetMode="External"/></Relationships>`)
  const original=await zip.generateAsync({type:'nodebuffer'})
  const initial=(await importFile(f,f.alice.token,original,'external-reference.xlsx')).file
  app=await buildLocalApp({
@@ -75,6 +77,13 @@ test('XLSX save and reopen preserve an untouched external formula and its source
  })
  f.cleanup.unshift(()=>app.close())
  await app.ready()
+ const csrf=createCsrfService({db:f.db,deploymentId:f.deploymentId,origin,key:f.csrfKey})
+ const readLinks=(token,payload={revision:initial.revision})=>app.inject({
+  method:'POST',url:`/api/v1/files/${initial.fileId}/sheets/external-links`,payload,
+  headers:{origin,cookie:SESSION_COOKIE+'='+token,'x-csrf-token':csrf.sessionToken(token)},
+ })
+ assert.equal((await readLinks(f.bob.token)).statusCode,404)
+ assert.equal((await readLinks(f.alice.token,{revision:initial.revision,path:'/tmp/foreign.xlsx'})).statusCode,400)
  const browser=await launchTestBrowser()
  f.cleanup.unshift(()=>browser.close())
  const page=await browser.newPage()
@@ -88,6 +97,21 @@ test('XLSX save and reopen preserve an untouched external formula and its source
  await page.goto(origin+'/native-xlsx/?fileId='+initial.fileId)
  const localAmount=()=>page.evaluate(()=>window.__genofficeDebug?.univerAPI.getActiveWorkbook()?.getActiveSheet()?.getRange('A2').getValue())
  await expect.poll(localAmount,{timeout:30000}).toBe(12.5)
+ const openExternalLinks=async()=>{
+  await page.getByRole('button',{name:'Formulas',exact:true}).click()
+  const result=page.waitForResponse(response=>response.url().endsWith('/sheets/external-links'),{timeout:20000})
+  await page.getByRole('button',{name:'External Links',exact:true}).click()
+  const response=await result
+  assert.ok(response.ok(),await response.text())
+  const panel=page.getByRole('dialog',{name:'External Links',exact:true})
+  await expect(panel.getByRole('cell',{name:externalTarget,exact:true})).toBeVisible({timeout:12000})
+  await expect(panel.getByRole('cell',{name:'Catalog',exact:true})).toBeVisible()
+  await expect(panel.getByRole('button',{name:'Update',exact:true})).toHaveCount(0)
+  return panel
+ }
+ const panel=await openExternalLinks()
+ assert.equal(externalRequests,0)
+ await panel.locator('.watch-close').click()
  await page.evaluate(()=>window.__genofficeDebug.univerAPI.getActiveWorkbook().getActiveSheet().getRange('A2').setValue(21.25))
  const save=page.getByRole('button',{name:'Save and download',exact:true})
  const [download]=await Promise.all([page.waitForEvent('download',{timeout:30000}),save.click()])
@@ -104,5 +128,6 @@ test('XLSX save and reopen preserve an untouched external formula and its source
  assert.deepEqual(original,await f.files.readFile(f.alice.token,initial.fileId,initial.revision))
  await page.reload()
  await expect.poll(localAmount,{timeout:30000}).toBe(21.25)
+ await openExternalLinks()
  assert.equal(externalRequests,0)
 })

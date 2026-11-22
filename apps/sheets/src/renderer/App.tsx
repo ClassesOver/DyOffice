@@ -1114,7 +1114,7 @@ export function App({
   const [linksOpen, setLinksOpen] = useState(false)
   const [linkStatuses, setLinkStatuses] = useState<ExternalLinkRow[]>([])
   const [linksBusy, setLinksBusy] = useState(false)
-  const [linksNotice, setLinksNotice] = useState<'unsaved' | null>(null)
+  const [linksNotice, setLinksNotice] = useState<'unsaved' | 'unavailable' | null>(null)
   // Load the workbook's links when the panel opens: the listing carries
   // identity fields only and never probes the sources on disk, so it is cheap
   // and reachability stays unknown (the panel's "—") until Update answers it.
@@ -1134,8 +1134,10 @@ export function App({
         const result = await window.desktopApi.listExternalLinks({ sessionId: file.sessionId })
         if (!cancelled) setLinkStatuses(result.links)
       } catch {
-        // an unreadable workbook keeps the panel empty instead of throwing
-        if (!cancelled) setLinkStatuses([])
+        if (!cancelled) {
+          setLinkStatuses([])
+          setLinksNotice('unavailable')
+        }
       }
     })()
     return () => {
@@ -6589,6 +6591,7 @@ export function App({
         onSaveAs={() => void handleSave('save-as')}
         saveDownload={host?.saveDownload}
         fileMenu={host?.fileMenu}
+        externalLinkListOnly={Boolean(host?.inPlaceSave)}
         onNameWithAi={() => void nameWithAi()}
         onRedo={handleRedo}
         autoSave={autoSave}
@@ -6849,6 +6852,7 @@ export function App({
         <ExternalLinksPanel
           links={linkStatuses}
           busy={linksBusy}
+          listOnly={Boolean(host?.inPlaceSave)}
           notice={linksNotice}
           onUpdate={() => {
             void (async () => {

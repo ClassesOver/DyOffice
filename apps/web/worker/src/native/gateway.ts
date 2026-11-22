@@ -1,6 +1,9 @@
 import {SandboxError} from '../sandbox/contracts.ts'
 import {createNativeAdmission,type NativeProcess} from './admission.ts'
 import type {XlsxMutationPlan} from './xlsx.ts'
+import {externalLinksResultSchema} from '../../../../sheets/src/shared/external-links-contract.ts'
+
+export type WorkbookPackageQuery={path:string;cachePath:string}|{externalLinks:true}
 
 const MAX=32*1024*1024,REQUEST_MAX=4*1024*1024
 type WirePlan={replaced:[string,string][];added:[string,string][];addedBinary:[string,string][];removedEntries:string[]}
@@ -59,6 +62,11 @@ export function createGatewayAdapter(process:NativeProcess) {
       }
       let value:unknown;try{value=JSON.parse(output.toString('utf8'))}catch{throw invalid()}
       if(command==='gateway_plan')return decodeGatewayPlan(value)
+      if(record(request)&&request.externalLinks===true){
+        const parsed=externalLinksResultSchema.safeParse(value)
+        if(!parsed.success||parsed.data.links.some(link=>link.source!==null))throw invalid()
+        return parsed.data
+      }
       if(record(request)&&typeof request.path==='string'){
         if(!record(value)||typeof value.outputRef!=='string'||typeof value.sourceSheet!=='string'||typeof value.sourceRef!=='string'||!Array.isArray(value.fields)||!Array.isArray(value.unsupported))throw invalid()
         return value
@@ -74,7 +82,7 @@ export function createGatewayAdapter(process:NativeProcess) {
   return {
     planWorkbookSave:(bytes:Buffer,sheets:readonly {id:string;name:string}[],request:unknown,signal?:AbortSignal)=>run(bytes,'gateway_plan',{sheets:sheets.map(({id,name})=>({id,name})),request},signal) as Promise<XlsxMutationPlan>,
     planFromWorkbook:(bytes:Buffer,request:unknown,signal?:AbortSignal)=>run(bytes,'gateway_plan',{request},signal) as Promise<XlsxMutationPlan>,
-    readWorkbookPackage:(bytes:Buffer,signal?:AbortSignal,pivot?:{path:string;cachePath:string})=>run(bytes,'gateway_package',pivot??{},signal),
+    readWorkbookPackage:(bytes:Buffer,signal?:AbortSignal,query?:WorkbookPackageQuery)=>run(bytes,'gateway_package',query??{},signal),
     convertMergeSource:(bytes:Buffer,format:'csv'|'tsv'|'xls',signal?:AbortSignal)=>run(bytes,'gateway_convert_merge_source',{format},signal) as Promise<Buffer>,
   }
 }

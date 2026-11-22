@@ -9,6 +9,8 @@ import { createBufferEntrySource, type EntrySource } from '../../../../packages/
 import { parseSheetElements, readAttribute, decodeAttribute, parseRelationships } from '../../../../packages/xlsx-gateway/src/gateway/xlsx-sheets'
 import { resolveRelTarget } from '../../../../packages/xlsx-gateway/src/gateway/xlsx-drawing-add'
 import { planWorkbookMutation } from '../../../../packages/xlsx-gateway/src/gateway/xlsx-package-io'
+import {readWorkbookExternalLinks} from './external-links.ts'
+import type {WorkbookPackageQuery} from '../../worker/src/native/gateway.ts'
 
 /** Bundled for the server; no Node gateway code enters the browser build. */
 export async function planWorkbookSave(
@@ -91,8 +93,13 @@ async function planSave(source: EntrySource, sheets: readonly { id: string; name
 
 /** Read preserved package metadata using the same parsers as desktop. This
  * enumerates connections; it never fetches any linked workbook or URL. */
-export async function readWorkbookPackage(bytes: Buffer, _signal?: AbortSignal, pivot?: {path:string;cachePath:string}) {
+export async function readWorkbookPackage(bytes: Buffer, _signal?: AbortSignal, query?: WorkbookPackageQuery) {
   const source = await createBufferEntrySource(bytes)
+  if (query && 'externalLinks' in query) {
+    try { return await readWorkbookExternalLinks(source) }
+    catch { throw Object.assign(new Error('Invalid external link metadata'), {statusCode:400}) }
+  }
+  const pivot=query
   if (pivot) {
     if (!/^xl\/pivotTables\/[A-Za-z0-9._-]+\.xml$/.test(pivot.path) || !/^xl\/pivotCache\/[A-Za-z0-9._-]+\.xml$/.test(pivot.cachePath)) throw Object.assign(new Error('Invalid pivot parts'), {statusCode:400})
     try {
