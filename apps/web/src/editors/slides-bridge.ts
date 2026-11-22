@@ -3,6 +3,8 @@ import {hostError} from '../../../../packages/web-contracts/src/errors.ts'
 import {mapScriptOpsForWidth} from '../../../../packages/pptx-ops/src/ops/script-map.ts'
 import {parsePageSpec} from '../../../../packages/pipelines/src/slides/page-spec-parser.ts'
 import {planSlideMoves} from '../../../slides/src/shared/slide-selection.ts'
+import {pictureFrame} from '../../../slides/src/main/picture-frame.ts'
+import {imageDpiFromBytes, imageSizeFromBytes} from '../../../../packages/pptx-render/src/image-dpi.ts'
 import {normalizeLang} from '@genoffice/i18n'
 import {tMain} from '../../../slides/src/main/i18n-main.ts'
 import {messages} from './messages.ts'
@@ -40,7 +42,28 @@ type ImageEdit = {slideIndex:number;url?:string;base64?:string;ext?:string} & (
   {mode:'replace';sourceId:string;keepSrcRect?:boolean}
 )
 
-export function createSlidesBridge(host: SessionFileHost, fileId: string, prefs: Preferences, {fetchImpl = fetch, onChange = () => {}, searchApi, mediaApi, skillsApi, confirmImportedChart = () => typeof window !== 'undefined' && window.confirm('Editing this imported chart may remove number formats, trendlines, error bars, and per-point styles. Continue?')}: {fetchImpl?: typeof fetch; onChange?: () => void; searchApi?: {webSearch: (query: string, maxResults?: number) => Promise<Awaited<ReturnType<SlidesApi['webSearch']>>>; imageSearch: (query: string, maxResults?: number) => Promise<Awaited<ReturnType<SlidesApi['imageSearch']>>>}; mediaApi?: {generateImage: SlidesApi['generateImage']; analyzeMedia: SlidesApi['analyzeMedia'];fetchImage?:(url:string)=>Promise<{base64:string;mime:string}|null>}; skillsApi?: Pick<SlidesApi, 'skillsList' | 'skillText'>; confirmImportedChart?:()=>boolean} = {}) {
+function choosePicture(signal: AbortSignal): Promise<File | null> {
+  if (signal.aborted) return Promise.resolve(null)
+  return new Promise(resolve => {
+    const input = document.createElement('input')
+    input.type = 'file'
+    input.accept = '.png,.jpg,.jpeg,.gif,.webp'
+    input.hidden = true
+    const finish = (file: File | null) => {
+      signal.removeEventListener('abort', cancel)
+      input.remove()
+      resolve(file)
+    }
+    const cancel = () => finish(null)
+    input.onchange = () => finish(input.files?.[0] ?? null)
+    input.oncancel = cancel
+    signal.addEventListener('abort', cancel, {once:true})
+    document.body.append(input)
+    try { input.click() } catch { cancel() }
+  })
+}
+
+export function createSlidesBridge(host: SessionFileHost, fileId: string, prefs: Preferences, {fetchImpl = fetch, onChange = () => {}, searchApi, mediaApi, skillsApi, pickPicture = choosePicture, confirmImportedChart = () => typeof window !== 'undefined' && window.confirm('Editing this imported chart may remove number formats, trendlines, error bars, and per-point styles. Continue?')}: {fetchImpl?: typeof fetch; onChange?: () => void; searchApi?: {webSearch: (query: string, maxResults?: number) => Promise<Awaited<ReturnType<SlidesApi['webSearch']>>>; imageSearch: (query: string, maxResults?: number) => Promise<Awaited<ReturnType<SlidesApi['imageSearch']>>>}; mediaApi?: {generateImage: SlidesApi['generateImage']; analyzeMedia: SlidesApi['analyzeMedia'];fetchImage?:(url:string)=>Promise<{base64:string;mime:string}|null>}; skillsApi?: Pick<SlidesApi, 'skillsList' | 'skillText'>; pickPicture?: (signal: AbortSignal) => Promise<File|null>; confirmImportedChart?:()=>boolean} = {}) {
   let saveFence:(()=>boolean)|null=null,applyFence:(()=>boolean)|null=null
   let committed:import('../../../../packages/web-contracts/src/api').RevisionRef|null=null
   async function guardedSave(check:()=>boolean,action:()=>Promise<boolean>){
@@ -230,14 +253,77 @@ export function createSlidesBridge(host: SessionFileHost, fileId: string, prefs:
   function applyImage(input: Extract<ImageEdit, {mode:'replace'}>): ReturnType<SlidesApi['replacePictureUrl']>
   async function applyImage(input: ImageEdit){
     const current=requireSession()
-    if(recovery||!host.getState(fileId).lease)return null
+    const stillCurrent = captureImageTarget(current)
+    if (!stillCurrent()) return null
     const image=await imageBytes(input)
-    if(!image)return null
+    if(!image || image.bytesBase64.length > SLIDE_IMAGE_LIMIT || !stillCurrent())return null
     const raw=await call(current.revision,current.generation,'media',{mode:input.mode,slide:input.slideIndex,...image,...(input.mode==='insert'?{xPx:input.xPx,yPx:input.yPx,wPx:input.wPx,hPx:input.hPx,fitWidthPx:input.fitWidthPx}:{sourceId:input.sourceId,...(input.keepSrcRect!==undefined?{keepSrcRect:input.keepSrcRect}:{})})}) as ApplyResponse
     current.generation=raw.generation;current.dirty=raw.dirty
     emitHistory(raw.history);onChange()
     if(!raw.slide)return null
     return input.mode==='insert'?{slide:raw.slide,sourceId:createdId(raw)}:raw.slide
+  }
+
+  function captureImageTarget(current: Session) {
+    const {revision, generation} = current
+    const lease = host.getState(fileId).lease
+    return () => {
+      if (!lease || disposed || session !== current || current.revision !== revision || current.generation !== generation || recovery) return false
+      const activeLease = host.getState(fileId).lease
+      return activeLease?.editorId === lease.editorId && activeLease.leaseEpoch === lease.leaseEpoch
+    }
+  }
+
+  async function pickLocalPicture() {
+    const stillCurrent = captureImageTarget(requireSession())
+    if (!stillCurrent()) return null
+    const controller = new AbortController()
+    controllers.add(controller)
+    try {
+      const file = await pickPicture(controller.signal)
+      if (!file || !stillCurrent()) return null
+      const ext = file.name.split('.').pop()?.toLowerCase().replace(/^jpeg$/, 'jpg') ?? ''
+      if (!['png','jpg','gif','webp'].includes(ext) || !file.size || file.size > 5 * 1024 * 1024) return {base64:'', ext}
+      const bytes = new Uint8Array(await file.arrayBuffer())
+      if (!stillCurrent()) return null
+      const header = String.fromCharCode(...bytes.subarray(0, 12))
+      const detected = header.startsWith('\x89PNG\r\n\x1a\n') ? 'png'
+        : header.startsWith('\xff\xd8\xff') ? 'jpg'
+        : /^GIF8[79]a/.test(header) ? 'gif'
+        : header.startsWith('RIFF') && header.slice(8) === 'WEBP' ? 'webp' : null
+      if (ext !== detected) return {base64:'', ext}
+      let binary = ''
+      for (let offset = 0; offset < bytes.length; offset += 32768) {
+        binary += String.fromCharCode(...bytes.subarray(offset, offset + 32768))
+      }
+      return {base64:btoa(binary), ext}
+    } finally { controllers.delete(controller) }
+  }
+
+  const addImageBytes: SlidesApi['addImageBytes'] = async input => {
+    let {base64, ext} = input
+    const current = requireSession()
+    const stillCurrent = captureImageTarget(current)
+    if (!stillCurrent()) return null
+    if (!base64 || base64.length > SLIDE_IMAGE_LIMIT) return {error:'unsupported', ext}
+    if (ext === 'webp') {
+      const image = await imageBytes(input)
+      if (!image || image.bytesBase64.length > SLIDE_IMAGE_LIMIT) return {error:'unsupported', ext}
+      if (!stillCurrent()) return null
+      base64 = image.bytesBase64
+      ext = image.ext
+    }
+    if ('xPx' in input) return applyImage({mode:'insert', ...input, base64, ext})
+    let bytes: Uint8Array
+    try { bytes = Uint8Array.from(atob(base64), char => char.charCodeAt(0)) } catch { return {error:'unsupported', ext} }
+    const scale = input.fitWidthPx / current.size.cx
+    const size = imageSizeFromBytes(bytes)
+    const gif = ext === 'gif' && bytes.length >= 10
+      ? {width: bytes[6]! + bytes[7]! * 256, height: bytes[8]! + bytes[9]! * 256}
+      : null
+    const frame = pictureFrame({width:current.size.cx, height:current.size.cy}, size ? {width:size.w, height:size.h} : gif ?? input.naturalPx, imageDpiFromBytes(bytes), 96,
+      input.centerPx ? {center:{x:input.centerPx.x/scale,y:input.centerPx.y/scale}} : undefined)
+    return applyImage({mode:'insert', slideIndex:input.slideIndex, fitWidthPx:input.fitWidthPx, base64, ext, xPx:frame.x*scale,yPx:frame.y*scale,wPx:frame.cx*scale,hPx:frame.cy*scale})
   }
   const slideUpdateFrom = (order: string[], deck: {slides: OpenResult['slides']}) => ({order, slides: deck.slides})
   const op = (name: string, fields: Record<string, unknown>) => ({op: name, ...fields})
@@ -293,7 +379,15 @@ export function createSlidesBridge(host: SessionFileHost, fileId: string, prefs:
       return {path: '', slides, appendedFrom, insertedIndex, replacedIndex, size: current.size, defaultFont: current.defaultFont}
     },
     pickExportDir: unavailable, pickExportPdfPath: unavailable,
-    pickExportVideoPath: unavailable, pickPictureFile: unavailable, insertImage: unavailable,
+    pickExportVideoPath: unavailable,
+    async pickPictureFile() {
+      const picture = await pickLocalPicture()
+      return picture?.base64 ? picture : null
+    },
+    async insertImage(slideIndex, fitWidthPx) {
+      const picture = await pickLocalPicture()
+      return picture ? addImageBytes({...picture, slideIndex, fitWidthPx, naturalPx:{width:0,height:0}}) : null
+    },
     insertMedia: unavailable, addMediaBytes: unavailable, getMediaData: graceful,
     pickModel3d: unavailable, addModel3d: unavailable, setModel3dView: graceful, getModel3dData: graceful,
     videoFileOpen: unavailable, videoFileWrite: unavailable, videoFileClose: unavailable,
@@ -747,7 +841,11 @@ export function createSlidesBridge(host: SessionFileHost, fileId: string, prefs:
       if (!raw?.changed?.length) return null
       return {slide: await fetchSlide(raw.changed[0]!), sourceId: createdId(raw)}
     },
-    addInk: graceful, addImageBytes: graceful, replacePictureBytes: graceful,
+    addInk: graceful, addImageBytes,
+    async replacePictureBytes(input) {
+      if (!input.base64 || input.base64.length > SLIDE_IMAGE_LIMIT) return {error:'unsupported' as const, ext:input.ext}
+      return applyImage({mode:'replace', ...input})
+    },
     async editTableCell(input) {
       const raw = await applyOps([op('setTableCell', {target: {slide: input.slideIndex, el: input.sourceId}, row: input.row, col: input.col, paragraphs: input.paragraphs})])
       if (!raw?.changed?.length) return null

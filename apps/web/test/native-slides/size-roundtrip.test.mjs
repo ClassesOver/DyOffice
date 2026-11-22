@@ -8,6 +8,7 @@ import {createServer} from 'node:https'
 import {fileURLToPath} from 'node:url'
 import {expect} from '@playwright/test'
 import JSZip from 'jszip'
+import {PNG} from 'pngjs'
 import {launchTestBrowser} from '../helpers/browser.mjs'
 import {fileFixture,importFile} from '../helpers/files.mjs'
 import {password} from '../helpers/identity.mjs'
@@ -80,6 +81,25 @@ test('actual Ribbon size plus mounted link, run link, animation and chart APIs s
  })
  assert.equal(chartRead.before.title,'Before');assert.equal(chartRead.schemes.length,9)
  assert.equal(chartRead.after.title,'Revenue');assert.deepEqual(chartRead.after.series,[{name:'Sales',values:[42,64]}])
+ const picture = PNG.sync.write(new PNG({width:160,height:90}))
+ await page.getByRole('button',{name:'Insert',exact:true}).click()
+ const picker = page.waitForEvent('filechooser',{timeout:5000})
+ await page.getByRole('button',{name:'Pictures',exact:true}).click()
+ const pictureResponse = page.waitForResponse(response=>response.url().endsWith('/slides/media')&&response.status()===200)
+ await (await picker).setFiles({name:'local-picture.png',mimeType:'image/png',buffer:picture})
+ const insertedPicture = await (await pictureResponse).json()
+ const pictureId = insertedPicture.created[0].id
+ const pictureNode = insertedPicture.slide.nodes.find(node=>node.type==='picture'&&node.sourceId===pictureId)
+ assert.ok(pictureNode)
+ await expect.poll(()=>page.evaluate(async sourceId=>(await window.slidesApi.getRenderSlides())[0].nodes.some(node=>node.sourceId===sourceId),pictureId)).toBe(true)
+ const replacement = PNG.sync.write(new PNG({width:90,height:160}))
+ const replacedPicture = await page.evaluate(async ({sourceId,base64}) => {
+  const slide = await window.slidesApi.replacePictureBytes({slideIndex:0,sourceId,base64,ext:'png'})
+  return slide?.nodes.find(node=>node.type==='picture'&&node.sourceId===sourceId)
+ },{sourceId:pictureId,base64:replacement.toString('base64')})
+ assert.ok(replacedPicture)
+ assert.deepEqual(replacedPicture.box,pictureNode.box)
+ assert.match(replacedPicture.dataUrl,/^data:image\/png;base64,/)
  const downloadPromise=page.waitForEvent('download',{timeout:15000}).catch(async error=>{throw Error(`${error.message}; body=${(await page.locator('body').innerText()).slice(0,1800)}; requests=${JSON.stringify(responses)}; bridgeDirty=${await page.evaluate(()=>window.slidesApi.isDirty())}; head=${(await f.files.openFile(f.alice.token,id)).file.revision}`)})
  await page.locator('.ribbon-tab-file').click()
  await page.locator('.dyoffice-slides-download').click()
@@ -88,6 +108,8 @@ test('actual Ribbon size plus mounted link, run link, animation and chart APIs s
  assert.notEqual(current.file.revision,file.file.revision)
  assert.deepEqual(downloaded,await f.files.readFile(f.alice.token,id,current.file.revision))
  const archive=await JSZip.loadAsync(downloaded)
+ const media = await Promise.all(archive.file(/^ppt\/media\/[^/]+\.png$/).map(entry=>entry.async('nodebuffer')))
+ assert.ok(media.some(bytes=>bytes.equals(replacement)))
  assert.match(await archive.file('ppt/presentation.xml').async('string'),/<p:sldSz[^>]*cx="9144000"[^>]*cy="6858000"/)
  assert.deepEqual(await f.files.readFile(f.alice.token,id,file.file.revision),original)
  await page.unroute('**/api/v1/ai/catalog')
@@ -97,11 +119,12 @@ test('actual Ribbon size plus mounted link, run link, animation and chart APIs s
  await expect(assistantNotice.filter({hasText:'AI assistant failed to load.'})).toBeVisible()
  await expect(assistantNotice.filter({hasText:'provider diagnostic must stay private'})).toHaveCount(0)
  await expect.poll(()=>page.evaluate(()=>window.slidesApi.getSlideSize())).toEqual({cx:9144000,cy:6858000})
- const reloaded=await page.evaluate(async()=>{
+ const reloaded=await page.evaluate(async pictureData=>{
   const slides=await window.slidesApi.getRenderSlides(),chart=slides[0].nodes.find(node=>node.type==='chart')
-  return {links:await window.slidesApi.getSlideLinks(0),runLinks:await window.slidesApi.getRunLinks(0),animations:await window.slidesApi.getAnimations(0),chart:await window.slidesApi.getChartData(0,chart.sourceId),schemes:await window.slidesApi.getChartColorSchemes()}
- })
+  return {links:await window.slidesApi.getSlideLinks(0),runLinks:await window.slidesApi.getRunLinks(0),animations:await window.slidesApi.getAnimations(0),chart:await window.slidesApi.getChartData(0,chart.sourceId),schemes:await window.slidesApi.getChartColorSchemes(),picture:slides[0].nodes.some(node=>node.type==='picture'&&node.dataUrl===pictureData)}
+ },replacedPicture.dataUrl)
  assert.deepEqual(reloaded.chart,chartRead.after);assert.deepEqual(reloaded.schemes,chartRead.schemes)
+ assert.ok(reloaded.picture)
  assert.ok(reloaded.links.some(item=>item.target.url===link.url))
  assert.deepEqual(withoutSourceIds(reloaded.runLinks),expectedRuns)
  assert.deepEqual(reloaded.animations.map(({sourceId,targetName,...item})=>item),[{effect:'fade',trigger:'onClick',durationMs:650,delayMs:100}])
