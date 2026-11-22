@@ -19,9 +19,11 @@ import {objectTransferAdmission} from '../../server/src/modules/files/transfer-a
 
 const sheetsDirectory=process.env.DYOFFICE_TEST_SHEETS_DIST
 const hostManifest=process.env.DYOFFICE_TEST_HOST_MANIFEST
+const engine=process.env.DYOFFICE_TEST_XLSX_EXTERNAL_ENGINE
+const modes=hostManifest ? engine?[engine]:['rust','hybrid'] : ['node']
 
-test(hostManifest
- ?'XLSX preserves external formulas while relinking, refreshing and breaking workbook links'
+for(const mode of modes)test(hostManifest
+ ?`XLSX (${mode}) preserves external formulas while relinking, refreshing and breaking workbook links`
  :'XLSX lists, preserves and breaks workbook links without fetching the source',
 {skip:!sheetsDirectory,timeout:180000},async t=>{
  let app,externalRequests=0,downloadRevision
@@ -52,11 +54,12 @@ test(hostManifest
  if(native)assert.ok(native.nativeBinary&&native.nativeSha256,'The host manifest must describe a native XLSX binary')
  const runtime=await configuredSheetsRuntime({
   DYOFFICE_AUTH_MODE:'local',DYOFFICE_DEPLOYMENT_ID:f.deploymentId,
-  ...(native ? {
+  ...(native && {
    DYOFFICE_NATIVE_BINARY:native.nativeBinary,DYOFFICE_NATIVE_SHA256:native.nativeSha256,
-  } : {
-   DYOFFICE_SANDBOX_MODE:'subprocess',DYOFFICE_XLSX_NODE_ENGINE:join(directory,'xlsx-node-engine.mjs'),
   }),
+  ...(mode==='node'||mode==='hybrid' ? {
+   DYOFFICE_SANDBOX_MODE:'subprocess',DYOFFICE_XLSX_NODE_ENGINE:join(directory,'xlsx-node-engine.mjs'),
+  } : {}),
   DYOFFICE_XLSX_GATEWAY_RUNNER:join(directory,'gateway-process.mjs'),
   DYOFFICE_NATIVE_XLSX_DIRECTORY:sheetsDirectory,
  },{enabled:true})

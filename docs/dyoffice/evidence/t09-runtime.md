@@ -4,10 +4,11 @@ T09 仍在验收中。以下记录启动接线及已执行的检查，不代表�
 
 ## 构建和启用
 
-在仓库根目录使用 Node 22，先构建浏览器和服务器 gateway：
+在仓库根目录用 Node 22 构建浏览器和服务器 gateway，再构建原生执行器。
 
 ```sh
 npm run build:sheets --workspace=@dyoffice/web
+npm run build:web:native
 ```
 
 在本地账户、独立 auth/business 数据库凭据、文件存储和部署 ID 的配置中加入以下环境变量。
@@ -19,6 +20,8 @@ DYOFFICE_NATIVE_BINARY=/absolute/path/to/xlsx-sidecar
 DYOFFICE_NATIVE_SHA256=<该二进制的实际 SHA-256>
 ```
 
+原生构建将二进制路径和 SHA-256 写入 `.dyoffice-native-build/host-manifest.json`。需要保留 Node 工作簿读写时，在同一组配置里增加 `DYOFFICE_XLSX_NODE_ENGINE=/absolute/path/to/apps/web/dist-sheets-server/xlsx-node-engine.mjs`。混合模式继续用 Node 读取和保存工作簿，Rust 子进程只接受已授权外链的刷新计算。仅配置 Node 执行器时可查看和断开外链。
+
 该本地运行时仅在 `DYOFFICE_AUTH_MODE=local` 且 `NODE_ENV` 为非 production 时可用。在 Linux 上，服务以 UID 0 运行、存在 `/usr/bin/systemd-run` 且未选择 `DYOFFICE_SANDBOX_MODE=subprocess` 时，原生二进制由 T08 的 systemd 主机沙箱运行。该路径需要相应的 systemd 权限与 cgroup 支持，文档执行无 Docker 依赖。
 
 服务器在文件存储、`apps/web/dist-sheets/.vite/manifest.json` 和 `apps/web/dist-sheets-server/gateway-process.mjs` 齐备且具有执行引擎时自动启用 XLSX。部署管理员可通过 `DYOFFICE_NATIVE_XLSX_DIRECTORY` 和 `DYOFFICE_XLSX_GATEWAY_RUNNER` 调整前端构建目录与网关子进程入口。启用条件缺失时 XLSX 入口不可用。已选原生二进制的哈希校验或沙箱启动失败会阻止服务器启动。
@@ -26,6 +29,8 @@ DYOFFICE_NATIVE_SHA256=<该二进制的实际 SHA-256>
 打开 `/native-xlsx/?fileId=<拥有的 XLSX 文件 UUID>`。入口使用 Cookie 登录和文件所有权校验；原生请求使用文件版本引用，不接受服务器路径。保存通过 T06 上传暂存、租约和幂等提交。关闭服务器会取消并等待该运行时的原生调用。
 
 ## 当前证据
+
+混合模式的启动专项与 Rust 单引擎启动专项均已通过。真实 `server/index.mjs` 返回 XLSX 编辑能力和外链工作区来源能力，并在 SIGTERM 后清理进程。无效二进制哈希在两种配置中均被拒绝，不完整的二进制与哈希组合也会被拒绝。[实际入口回归](../../../apps/web/test/native-sheets/runtime.test.mjs)
 
 后续 Web 验收覆盖了文件级查找、外链列表和断开外链，以及工作簿图片保存重开。浏览器验收包中的工作簿已经由 LibreOffice Calc 复开、重算和另存。真实 Microsoft Excel 复开仍待验。[四格式对齐验收](genoffice-web-parity.md)
 
