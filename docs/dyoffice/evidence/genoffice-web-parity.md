@@ -12,6 +12,8 @@
 
 ## 四格式核心保存与重开复验
 
+四个原生 Web 编辑器的显式文件下载使用 `download=1`，让请求在传输槽位繁忙时短暂排队。预览和编辑器后台读取沿用现有并发限制。签名样本验收会从文件菜单下载指定修订，并与保存原件逐字节比对。[传输队列集成测试](../../../apps/web/test/local-integration/files.test.mjs) [OOXML 签名原件](../../../apps/web/test/local-browser/native-office-signature.test.mjs) [PDF 签名原件](../../../apps/web/test/local-browser/native-pdf-protection.test.mjs)
+
 候选 `731e5a8d` 的原生 Web 编辑器按 F01–F04 定向复验。DOCX 下载字节和修订相同，重开保留段落、表格、样式和批注锚点。XLSX 浅色、深色两条路径均保留原公式、日期、百分比与单位，下载成品含 `B2=A2*2` 的缓存 `42.5`、原生图表数据和原有绘图部件。XLSX 首轮浅色用例在画布已出现但工作簿还未就绪时检查过早，调整为等待明确的就绪事件后，两条路径均通过。PPTX 下载和重开保留可编辑形状、颜色、链接、动画及图表。PDF 定向复验检查页旋转、重排后的表单、原文编辑与批注、原件字节，以及丢失保存响应后恢复同一修订。 组合用例的末段图片保存与重开曾触及 120 秒总限，调整总时限后在 132.1 秒通过。四格式定向用例合计 9 项通过。[DOCX](../../../apps/web/test/native-docs/roundtrip.test.mjs) [XLSX](../../../apps/web/test/native-sheets/entry.test.mjs) [PPTX](../../../apps/web/test/native-slides/size-roundtrip.test.mjs) [PDF](../../../apps/web/test/local-browser/native-pdf-open.test.mjs)
 
 ## 四格式 AI 工具验收
