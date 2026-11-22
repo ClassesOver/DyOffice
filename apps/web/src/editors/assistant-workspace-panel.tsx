@@ -383,17 +383,22 @@ export function AssistantTeamConversation({
   for (const item of items)
     if (!order.current.has(item.id)) order.current.set(item.id, next.current++)
   items.sort((a, b) => order.current.get(a.id)! - order.current.get(b.id)!)
+  // Reveal a task once per "view in conversation" request; returning to the
+  // chat tab later must not pull focus off the tab or composer.
+  const handledRequest = useRef(0)
+  const request = snapshot.focusRequest
   useEffect(() => {
+    if (!request || request.view !== 'chat' || request.id === handledRequest.current || snapshot.view !== 'chat') return
     const scroller = host.current?.closest('.ai-chat')
     if (!scroller) return
     const task = Array.from(
       host.current?.querySelectorAll<HTMLElement>('[data-team-task]') ?? [],
-    ).find((node) => node.dataset.teamTask === snapshot.focusedTask)
-    if (task && snapshot.view === 'chat') {
-      task.scrollIntoView?.({ block: 'nearest' })
-      task.focus({ preventScroll: true })
-    }
-  }, [snapshot.focusedTask, snapshot.view])
+    ).find((node) => node.dataset.teamTask === request.task)
+    if (!task) return
+    handledRequest.current = request.id
+    task.scrollIntoView?.({ block: 'nearest' })
+    task.focus({ preventScroll: true })
+  }, [request, snapshot.view, items.length])
   return (
     <div className="assistant-team-feed" ref={host}>
       {items.map((item) => {
@@ -453,18 +458,24 @@ export function AssistantWorkspacePanel({
   const view = snapshot.view,
     counts = { active: 0, done: 0, attention: 0 }
   snapshot.teamTasks.forEach((task) => counts[taskGroup(task)]++)
+  // Same one-shot rule for "open task": a later tab switch or filter change
+  // must not move keyboard focus from the tab list to an old task card.
+  const handledRequest = useRef(0)
+  const request = snapshot.focusRequest
+  const pendingRequest = request && request.view === 'tasks' && request.id !== handledRequest.current ? request : null
   useEffect(() => {
-    if (view === 'tasks' && snapshot.focusedTask) setFilter('all')
-  }, [view, snapshot.focusedTask])
+    if (view === 'tasks' && pendingRequest) setFilter('all')
+  }, [view, pendingRequest])
   useEffect(() => {
-    if (view === 'tasks' && snapshot.focusedTask) {
-      const task = Array.from(
-        host.current?.querySelectorAll<HTMLElement>('[data-team-task]') ?? [],
-      ).find((node) => node.dataset.teamTask === snapshot.focusedTask)
-      task?.scrollIntoView?.({ block: 'nearest' })
-      task?.focus({ preventScroll: true })
-    }
-  }, [view, snapshot.focusedTask, filter])
+    if (view !== 'tasks' || !pendingRequest) return
+    const task = Array.from(
+      host.current?.querySelectorAll<HTMLElement>('[data-team-task]') ?? [],
+    ).find((node) => node.dataset.teamTask === pendingRequest.task)
+    if (!task) return
+    handledRequest.current = pendingRequest.id
+    task.scrollIntoView?.({ block: 'nearest' })
+    task.focus({ preventScroll: true })
+  }, [view, pendingRequest, filter, snapshot.teamTasks.length])
   return (
     <section
       className="assistant-workspace assistant-team-workspace"
