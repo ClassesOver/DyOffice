@@ -4,7 +4,7 @@ window.__ModuleLoader__.load({
     const {createElement: h, useEffect, useRef, useState, useSyncExternalStore} = require('react')
     const id = '@local/dsh-dyoffice'
     const copy = {
-      zh: {sending:'正在提交 DyOffice 请求…', elapsed:'已用时 {time}', snapshot:'预览快照',previewRight:'在右侧打开预览', openWindow:'在新窗口打开 DyOffice', startWriting:'在新窗口打开文档后，DyOffice 助手会接手撰写。',snapshotUnavailable:'未能生成缩略图，点击预览文件',skillLabel:'DSH Skill',title: 'DyOffice', description: '查看已保存文档和任务进度', loading: '正在连接 DyOffice…',
+      zh: {handoffLog:'协作记录',textMode:'正文',editorMode:'编辑器',syncLive:'消息同步中',syncStale:'同步中断',syncEnded:'对话已结束',destination:'消息接收方',savedPreview:'已保存的正文',sending:'正在提交 DyOffice 请求…', elapsed:'已用时 {time}', snapshot:'预览快照',previewRight:'在右侧打开预览', openWindow:'在新窗口打开 DyOffice', startWriting:'在新窗口打开文档后，DyOffice 助手会接手撰写。',snapshotUnavailable:'未能生成缩略图，点击预览文件',skillLabel:'DSH Skill',title: 'DyOffice', description: '查看已保存文档和任务进度', loading: '正在连接 DyOffice…',
         unavailable: '暂时无法预览，请检查频道连接和后台读取权限。', configure: '请先配置 DyOffice 频道连接。',
         authorization: '连接 DyOffice', pairIntro: '连接频道后，即可在 DSH 创建和预览文档。',
         url: 'DyOffice 服务 URL', code: '授权 Token', codeHint: '粘贴频道分享生成的 Token',
@@ -35,7 +35,7 @@ window.__ModuleLoader__.load({
         truncated: '正文仅显示前 24,000 字符。', tasks: '任务进度', noTasks: '暂无任务。',
         queued: '排队中', running: '运行中', waiting_peer: '等待协作', cancel_requested: '正在取消',
         succeeded: '已完成', failed: '失败', cancelled: '已取消', unknown_outcome: '结果待核对'},
-      en: {sending:'Sending the request to DyOffice…', elapsed:'Elapsed {time}', snapshot:'Preview snapshot',previewRight:'Open preview on the right', openWindow:'Open DyOffice in a new window', startWriting:'Open the document in a new window to start writing with DyOffice.',snapshotUnavailable:'Thumbnail unavailable; open file preview',skillLabel:'DSH Skill',title: 'DyOffice', description: 'Follow the saved document and task progress', loading: 'Connecting to DyOffice…',
+      en: {handoffLog:'Collaboration',textMode:'Text',editorMode:'Editor',syncLive:'Sync active',syncStale:'Sync interrupted',syncEnded:'Conversation ended',destination:'Message recipient',savedPreview:'Saved text',sending:'Sending the request to DyOffice…', elapsed:'Elapsed {time}', snapshot:'Preview snapshot',previewRight:'Open preview on the right', openWindow:'Open DyOffice in a new window', startWriting:'Open the document in a new window to start writing with DyOffice.',snapshotUnavailable:'Thumbnail unavailable; open file preview',skillLabel:'DSH Skill',title: 'DyOffice', description: 'Follow the saved document and task progress', loading: 'Connecting to DyOffice…',
         unavailable: 'Preview unavailable. Check the channel connection and saved document permissions.', configure: 'Configure a DyOffice channel connection first.',
         authorization: 'Connect DyOffice', pairIntro: 'Connect a channel to create and preview documents in DSH.',
         url: 'DyOffice service URL', code: 'Authorization token', codeHint: 'Paste the token from channel sharing',
@@ -110,46 +110,42 @@ window.__ModuleLoader__.load({
     const previewUrl = () => new URL('../dyoffice-preview', window.location.href)
     const allowsEmbed = (connection, origin) => connection?.origin === origin &&
       connection?.dshEditorOrigin === window.location.origin
-    function InlineOfficePreview({receipt, snapshot, draft, pending, openWindow, t}) {
-      const text = (draft ? draft.text : snapshot?.text)?.trim() || ''
-      const content=text.split(/\r?\n/u).filter(line=>line.trim()).map((line,i)=>{
-        const heading=/^(#{1,6}) (.+)$/u.exec(line)
-        if(heading)return h('h'+Math.min(6,heading[1].length+1),{key:i,dir:'auto',style:{margin:'10px 0 6px'}},heading[2])
-        return h('p',{key:i,dir:'auto',style:{margin:'0 0 8px',...textStyle}},line.startsWith('- ')?'• '+line.slice(2):line)
-      })
-      return h('div',{style:{width:'min(100%, 460px)',margin:'16px auto',borderRadius:10,overflow:'hidden',
-        border:'1px solid var(--dsw-alias-border-l2, GrayText)',background:'var(--dsw-alias-bg-layer-1, Canvas)'}},
-        h('div',{style:{display:'flex',alignItems:'center',flexWrap:'wrap',justifyContent:'space-between',gap:'4px 12px',padding:'9px 12px'}},
-          h('strong',{title:receipt.name,style:{flex:'1 1 140px',minWidth:0,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',fontSize:13}},receipt.name),
-          h('button',{type:'button',onClick:openWindow,'aria-label':receipt.name+' · '+t('openWindow'),
-            style:{minHeight:30,padding:'3px 8px',border:0,borderRadius:5,background:'transparent',
-              color:'var(--dsw-alias-brand-primary, LinkText)',font:'inherit',fontSize:12,cursor:'pointer'}},
-            t('openWindow'),' ↗')),
-        text ? h('article',{'aria-label':t('livePreview'),tabIndex:0,style:{maxHeight:250,overflow:'auto',padding:'14px 16px',
-          borderTop:'1px solid var(--dsw-alias-border-l2, GrayText)',fontSize:14,lineHeight:1.65}},content)
-          : h('div',{role:'status',style:{display:'grid',gap:4,placeItems:'center',padding:'14px 12px',textAlign:'center',
-            borderTop:'1px solid var(--dsw-alias-border-l2, GrayText)',
-            background:'color-mix(in srgb, var(--dsw-alias-label-secondary, GrayText) 7%, transparent)'}},
-            h('span',{style:{fontSize:13}},t(snapshot?'previewEmpty':pending?'previewLoading':'previewUnavailable')),
-            (snapshot||!pending)&&h('small',{style:pairStyles.hint},t(snapshot?'previewEmptyHint':'previewUnavailableHint'))))
-    }
-    function officeWindow({receipt,entry,opening,openWindow,previewAnchor,t}) {
-      const format=receipt.name.split('.').at(-1)?.toUpperCase()
-      return h('div',{style:{width:'min(100%, 780px)',margin:'14px auto',borderRadius:12,overflow:'hidden',
-        border:'1px solid var(--dsw-alias-border-l2, GrayText)',background:'var(--dsw-alias-bg-layer-1, Canvas)'}},
-        h('header',{style:{display:'flex',alignItems:'center',flexWrap:'wrap',gap:10,padding:'10px 12px'}},
-          h('span',{style:{...pairStyles.badge,width:38,height:34,fontSize:9,fontWeight:750}},format),
-          h('div',{style:{flex:'1 1 145px',minWidth:0}},
-            h('strong',{style:{display:'block',fontSize:13,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'},title:receipt.name},receipt.name),
-            h('div',{style:{display:'flex',alignItems:'center',gap:7,flexWrap:'wrap'}},
-              h('small',{style:pairStyles.hint},opening?t('livePreview'):t(entry?.checked?'previewUnavailable':'previewLoading')),
-              entry?.skillName&&h('small',{title:t('skillLabel')+': '+entry.skillName,style:{...pairStyles.hint,padding:'1px 5px',borderRadius:4,
-                background:'var(--dsw-alias-bg-layer-2, Canvas)'}},t('skillLabel')+' · '+entry.skillName))),
-          h('button',{type:'button',onClick:openWindow,style:{...pairStyles.button,minHeight:32,fontSize:12,cursor:'pointer'}},t('openWindow'),' ↗')),
-        h('div',{ref:previewAnchor,style:{position:'relative',aspectRatio:opening?'16 / 10':undefined,minHeight:opening?0:44,
-          display:'grid',placeItems:'center',background:'var(--dsw-alias-bg-layer-2, Canvas)',borderTop:'1px solid var(--dsw-alias-border-l2, GrayText)'}},
-          opening&&h('button',{type:'button','aria-label':t('openWindow'),onClick:openWindow,
-            style:{position:'absolute',inset:0,zIndex:2,width:'100%',border:0,background:'transparent',cursor:'zoom-in'}})))
+    const studioStyles = `
+      .dsh-office-studio{container-type:inline-size;box-sizing:border-box;min-width:0;border:1px solid var(--dsw-alias-border-l2,#ccd2da);border-radius:14px;overflow:hidden;background:var(--dsw-alias-bg-layer-1,Canvas);color:var(--dsw-alias-label-primary,CanvasText);font:inherit}
+      .dsh-office-studio *{box-sizing:border-box}
+      .dsh-office-studio header,.dsh-office-footer{display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding:12px 16px}
+      .dsh-office-studio header{border-bottom:1px solid var(--dsw-alias-border-l2,#ccd2da)}
+      .dsh-office-filetype{display:grid;place-items:center;min-width:38px;height:36px;border-radius:7px;background:#234ba2;color:white;font-size:10px;font-weight:700;letter-spacing:.04em}
+      .dsh-office-name{flex:1 1 130px;min-width:0}.dsh-office-name strong{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:15px}
+      .dsh-office-studio small{color:var(--dsw-alias-label-secondary,GrayText);font-size:12px}
+      .dsh-office-studio button{cursor:pointer;font:inherit;font-size:12px;color:inherit;background:var(--dsw-alias-bg-layer-1,Canvas);border:1px solid var(--dsw-alias-border-l2,#ccd2da);border-radius:7px;padding:5px 9px;min-height:30px}
+      .dsh-office-studio button:focus-visible,.dsh-office-paper:focus-visible{outline:2px solid var(--dsw-alias-brand-primary,Highlight);outline-offset:-2px}
+      .dsh-office-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(220px,.78fr)}
+      .dsh-office-grid:has(>.dsh-office-canvas:only-child){grid-template-columns:1fr}
+      .dsh-office-canvas{min-width:0;background:color-mix(in srgb,var(--dsw-alias-label-secondary,GrayText) 8%,var(--dsw-alias-bg-layer-1,Canvas));padding:12px}
+      .dsh-office-tools{display:flex;gap:8px;align-items:center;justify-content:space-between;margin-bottom:9px}
+      .dsh-office-paper,.dsh-office-frame{min-width:0;border:1px solid var(--dsw-alias-border-l2,#ccd2da);border-radius:5px;background:var(--dsw-alias-bg-layer-1,Canvas)}
+      .dsh-office-paper{min-height:145px;max-height:340px;overflow:auto;padding:16px 18px;line-height:1.7;font-size:14px;overflow-wrap:anywhere}.dsh-office-paper p,.dsh-office-paper h3{margin:0 0 .6em}
+      .dsh-office-frame{position:relative;aspect-ratio:16/10;overflow:hidden}.dsh-office-frame button{position:absolute;inset:0;width:100%;z-index:2;background:transparent;border:0;cursor:zoom-in}
+      .dsh-office-log{min-width:0;padding:12px 16px;border-inline-start:1px solid var(--dsw-alias-border-l2,#ccd2da)}
+      .dsh-office-log h3{margin:0 0 10px;font-size:13px}
+      .dsh-office-message{position:relative;border-inline-start:1px solid var(--dsw-alias-border-l2,#ccd2da);margin-inline-start:4px;padding:0 0 12px 13px;font-size:13px;line-height:1.55;overflow-wrap:anywhere}
+      .dsh-office-message:last-child{padding-bottom:0;border-color:transparent}
+      .dsh-office-message:before{content:'';position:absolute;inset-inline-start:-4px;top:6px;width:7px;height:7px;border-radius:50%;background:var(--dsw-alias-label-secondary,GrayText)}
+      .dsh-office-message[data-party="DSH"]:before{background:#8265d0}.dsh-office-message[data-party="DyOffice"]:before{background:#32827c}
+      .dsh-office-message strong{font-size:12px}.dsh-office-message-body{white-space:pre-wrap}
+      .dsh-office-footer{justify-content:space-between;border-top:1px solid var(--dsw-alias-border-l2,#ccd2da);font-size:12px}
+      @container(max-width:570px){.dsh-office-grid{grid-template-columns:1fr}.dsh-office-log{border-inline-start:0;border-top:1px solid var(--dsw-alias-border-l2,#ccd2da)}}
+    `
+    function DocumentExcerpt({entry,pending,t}) {
+      const draft=entry?.draft,snapshot=entry?.snapshot
+      const text=(draft?draft.text:snapshot?.text)?.trim()??''
+      const empty=snapshot||draft?'previewEmpty':pending?'previewLoading':'previewUnavailable'
+      return h('article',{className:'dsh-office-paper',tabIndex:0,'aria-label':t(draft?'draftText':'savedPreview'),dir:'auto'},
+        text?text.split(/\r?\n/u).filter(line=>line.trim()).map((line,i)=>{
+          const heading=/^#{1,6} (.+)$/u.exec(line)
+          return heading?h('h3',{key:i},heading[1]):h('p',{key:i},line.startsWith('- ')?'• '+line.slice(2):line)
+        }):h('div',{role:'status'},h('p',null,t(empty)),empty!=='previewLoading'&&h('small',null,t(empty+'Hint'))))
     }
     function stateStore() {
       const listeners = new Set()
@@ -309,7 +305,7 @@ window.__ModuleLoader__.load({
         let expiry, renewal, ticket, reviewRequested
         function clearLiveDraft() {
           setLiveDraft(null)
-          updateCollaboration(editing.fileId,entry=>entry.draft===undefined?entry:{...entry,draft:undefined})
+          updateCollaboration(editing.fileId,entry=>entry.draft===undefined&&entry.syncState!=='live'?entry:{...entry,draft:undefined,syncState:entry.syncState==='live'?'stale':entry.syncState})
         }
         async function authorize() {
           const url = previewUrl()
@@ -329,8 +325,8 @@ window.__ModuleLoader__.load({
               event.data?.type !== 'dsh-dyoffice:draft' || event.data.fileId !== editing.fileId) return
           const draft = event.data.draft
           if (draft !== null && (typeof draft?.text !== 'string' || draft.text.length > 24000 || typeof draft.truncated !== 'boolean')) return
-          updateCollaboration(editing.fileId,entry=>entry.draft?.text===draft?.text&&entry.draft?.truncated===draft?.truncated
-            ?entry:{...entry,draft:draft??undefined})
+          updateCollaboration(editing.fileId,entry=>entry.syncState==='live'&&entry.draft?.text===draft?.text&&entry.draft?.truncated===draft?.truncated
+            ?entry:{...entry,draft:draft??undefined,syncState:'live'})
           const receipt = event.data.writing
           if (receipt?.id === latestWriting.current?.id && ['planning','writing','saving','saved','conflict','saveFailed','failed','noModel','outputLimit','timedOut','emptyOutput','noTool'].includes(receipt?.state)) {
             setWritingReceipt(previous => previous?.id === receipt.id && previous.state === receipt.state ? previous : receipt)
@@ -673,12 +669,14 @@ window.__ModuleLoader__.load({
               .then(async response=>update(response.ok?await response.json():null)).catch(()=>update(null))
             return ()=>controller.abort()
           },[fileId,sessionId])
-          const row=(author,body,key)=>h('article',{key,style:{margin:'10px 0',padding:'8px 12px',borderInlineStart:'2px solid var(--dsw-alias-border-l2, GrayText)',...textStyle}},
-            h('strong',null,author),h('div',{dir:'auto',style:{margin:'4px 0 0'}},body))
+          const row=(author,body,key)=>h('article',{key,className:'dsh-office-message','data-party':author},
+            h('strong',null,author),h('div',{className:'dsh-office-message-body',dir:'auto'},body))
           const stage={planning:'planning',writing:'generating',saving:'awaitingSave',saved:'handedOff',conflict:'writingConflict',saveFailed:'writingSaveFailed',failed:'writingFailed',noModel:'noModel',outputLimit:'outputLimit',timedOut:'timedOut',emptyOutput:'emptyOutput',noTool:'noTool'}[entry?.state]
           const review=entry?.review
           const inProgress = label=>h(WorkStatus,{label:t(label),started:node.time,t})
           const remote=job?.embedded
+          const [previewMode,setPreviewMode]=useState('text')
+          const liveFrame=previewMode==='editor'&&remote&&editor?.fileId===fileId&&!entry?.disconnected
           const previewAnchor=useRef(null)
           useEffect(()=>{
             const element=previewAnchor.current
@@ -689,7 +687,7 @@ window.__ModuleLoader__.load({
               const locations=new Map(anchors.read())
               if(locations.get(fileId)===anchor){locations.delete(fileId);anchors.set(locations)}
             }
-          },[fileId,remote])
+          },[fileId,remote,liveFrame])
           const external=useRef(null)
           const opening=editor?.fileId===fileId&&!!fileId
           const openWindow=()=>{
@@ -708,12 +706,12 @@ window.__ModuleLoader__.load({
             startRunner(receipt,false,popup)
           }
           const active=!entry?.disconnected&&['planning','writing','saving'].includes(entry?.state)
-          return h('section',{'aria-label':'DyOffice',style:{minWidth:0,overflowWrap:'anywhere'}},
-            remote ? officeWindow({receipt,entry,opening,openWindow,previewAnchor,t})
-              : receipt ? h(InlineOfficePreview,{receipt,snapshot:entry?.snapshot,draft:entry?.draft,pending:!entry?.inlineChecked&&!entry?.checked,openWindow,t})
-              : node.outcome ? h('div',{role:node.outcome.kind==='error'?'alert':undefined,style:textStyle},node.outcome.text)
-                : inProgress(creation?.id&&creation.sessionId===sessionId?'creating':'sending'),
-            entry?.popupBlocked&&h('p',{role:'status',style:pairStyles.hint},t('syncBlocked')),
+          if(!receipt)return node.outcome?h('div',{role:node.outcome.kind==='error'?'alert':undefined,style:textStyle},node.outcome.text)
+            :inProgress(creation?.id&&creation.sessionId===sessionId?'creating':'sending')
+          const syncLabel=entry?.ended?'syncEnded':entry?.disconnected||entry?.syncState==='stale'?'syncStale':entry?.syncState==='live'?'syncLive':null
+          const revision=entry?.snapshot?.revision
+          const canChat=entry?.state==='saved'&&!entry.ended&&officeSessions.get(entry.sessionId)===fileId
+          const messages=[
             entry?.topic&&row('DSH',t('requestDraft')+' '+entry.topic,'request'),
             stage&&row('DyOffice',active?inProgress(stage):h('span',{role:'status'},t(entry.disconnected&&entry.state!=='saved'?'reopenForChat':stage)),'writing'),
             receipt&&entry?.topic&&!stage&&row('DyOffice',entry.disconnected?h('span',{role:'status'},t('reopenForChat')):opening||remote&&!entry?.checked?inProgress('waitingWriter'):t('startWriting'),'waiting'),
@@ -725,8 +723,29 @@ window.__ModuleLoader__.load({
               row(t('you'),turn.question,turn.id+'-question'),
               row('DyOffice',turn.state==='failed'?t('officeAnswerFailed'):turn.answer||inProgress('officeAnswering'),turn.id+'-answer'),
             ]),
-            entry?.state==='saved'&&!entry.ended&&officeSessions.get(entry.sessionId)===receipt.fileId&&
-              h('div',null,h('small',null,t('officeChat')),' ',h('button',{type:'button',onClick:()=>{
+          ].flat().filter(Boolean)
+          return h('section',{'aria-label':'DyOffice',className:'dsh-office-studio'},
+            h('style',null,studioStyles),
+            h('header',null,h('span',{className:'dsh-office-filetype'},receipt.name.split('.').at(-1)?.toUpperCase()),
+              h('div',{className:'dsh-office-name'},h('strong',{title:receipt.name},receipt.name),
+                revision&&h('small',{title:revision},t('revision'),' · ',revision.slice(0,8))),
+              h('button',{type:'button',onClick:openWindow},t('openWindow'),' ↗')),
+            entry?.popupBlocked&&h('p',{role:'status',style:pairStyles.hint},t('syncBlocked')),
+            h('div',{className:'dsh-office-grid'},
+              h('div',{className:'dsh-office-canvas'},
+                h('div',{className:'dsh-office-tools'},
+                  h('small',null,t(liveFrame?'livePreview':entry?.draft?'draftText':'savedPreview')),
+                  remote&&opening&&h('button',{type:'button',onClick:()=>setPreviewMode(liveFrame?'text':'editor')},t(liveFrame?'textMode':'editorMode'))),
+                liveFrame?h('div',{ref:previewAnchor,className:'dsh-office-frame'},
+                  h('button',{type:'button','aria-label':t('openWindow'),onClick:openWindow}))
+                  :h(DocumentExcerpt,{entry,pending:!entry?.inlineChecked&&!entry?.checked,t})),
+              messages.length>0&&h('section',{className:'dsh-office-log','aria-label':t('handoffLog')},
+                h('h3',null,t('handoffLog')),messages)),
+            (syncLabel||canChat||entry?.skillName)&&h('footer',{className:'dsh-office-footer'},
+              syncLabel&&h('span',{role:'status'},t(syncLabel)),
+              entry?.skillName&&h('small',null,t('skillLabel'),' · ',entry.skillName),
+              canChat&&h('span',null,t('destination'),' · DyOffice'),
+              canChat&&h('button',{type:'button',onClick:()=>{
                 officeSessions.delete(entry.sessionId)
                 stopRunner(receipt.fileId)
                 updateCollaboration(receipt.fileId,current=>({...current,ended:true}))
