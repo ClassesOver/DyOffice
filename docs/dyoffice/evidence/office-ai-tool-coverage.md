@@ -12,6 +12,8 @@
 
 Web 门禁在 Chromium 用例完成后，按当前工具合同核对当次运行的注册和成功执行。缺项会按格式和工具名列出并使门禁失败。各项效果由对应的浏览器用例断言。 CI 保留 `office-ai-tool-coverage` 工件，其中包含该次 Chromium 轨迹与门禁报告。轨迹只含工具名称、注册与执行状态及核验过的效果名称。[覆盖检查](../../../apps/web/test/helpers/office-tool-coverage.mjs) [PDF 原生效果用例](../../../apps/web/test/local-browser/native-pdf-open.test.mjs)
 
+GitHub 对 `731e5a8d` 的 Chromium 跑批上传了当次轨迹。用 `164e8804` 的门禁脚本读取下载的轨迹，确认 129 个格式工具组合和 9 个共享工具全部注册并执行，85 项保存产物效果及 56 项结果效果全部通过。[GitHub 验收工件](https://github.com/ClassesOver/DyOffice/actions/runs/45054853815/artifacts/14767877707)
+
 成品门禁要求 85 项效果证据，另加 56 项工具返回内容、导航、模板与委派效果。DOCX、XLSX 和 PPTX 分别核对冻结表格的准确数值及 Web 重开，PDF 核对 41 项原生保存效果，涉及 38 个工具。PDF 用例从提交修订的字节核对正文、插入文字的最终坐标、删除、批注回复关系、空白页、表单值、标题、旋转和分页水印，重开后继续清除水印并确认页脚仍在。[PDF 原生工具成品用例](../../../apps/web/test/local-browser/native-pdf-open.test.mjs)
 
 PDF 图片用例使用工具返回的搜索链接和生成媒体引用插入图片，核对保存包中的像素、位置、删除、旋转、裁剪、透明度与背景去除，并在 Web 重开后复采样。表单用例核对重排后的两页实际顺序、两个复选框状态及旧版本字节。[图片保存与重开](../../../apps/web/test/local-browser/pdf-media.test.mjs) [页面重排与表单](../../../apps/web/test/local-browser/native-pdf-open.test.mjs)
