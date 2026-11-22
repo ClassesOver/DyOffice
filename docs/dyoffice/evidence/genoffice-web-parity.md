@@ -59,6 +59,8 @@ Web Word 知识库把文件名保留为来源标签，模型收到的引用路�
 
 使用 `4f0ad52c` 的四种原生编辑器和同一真实模型复验写回。首轮 PDF、PPTX 和 XLSX 通过，Word 在委派执行阶段报 `ENOENT` 并失败。同一产品构建单独重跑 Word 通过，首次错误的具体缺失路径未记录。Excel 保存重开后 H2 为 441，Word 重跑后正文为 441，PDF 原文和现有便笺均为 42，PPTX 第二页重做后第一页 XML 字节一致。[Word 与 Excel 写回](../../../apps/web/test/local-browser/native-word-sheets-codex.test.mjs) [PowerPoint 写回](../../../apps/web/test/local-browser/native-slides-generate.test.mjs) [PDF 写回](../../../apps/web/test/local-browser/native-pdf-harness.test.mjs)
 
+在 `64e72d80` 的原生 PPTX 构建上，`gpt-6-sol` 发起两道问卷并接收选择，调用 `plan_deck` 返回两页规划，随后生成两页可编辑幻灯片。保存的 OOXML 中，第一页包含所选受众 `Field reviewers` 和周一收件，第二页包含所选交付物 `Release checklist` 和周五发布。保存重开后只重做第二页为 `Cobalt Review`，再次保存时第一页 XML 与前一修订字节一致。跟踪记录显示问卷、规划、生成和单页重做均返回成功。`14bb60ab` 的 GitHub 脚本化问卷偶发等待选项超时，本机复跑通过。现有测试在再次失败时记录 AI HTTP 状态、模拟网关请求数和面板错误。[原生 PPTX 浏览器用例](../../../apps/web/test/local-browser/native-slides-generate.test.mjs) [问卷失败记录](https://github.com/ClassesOver/DyOffice/actions/runs/45029115717)
+
 后续复现了带数据授权的委派在缺少 `harness-data.mjs` 时于 `realpath` 报 `ENOENT`。当前 SaaS 构建会生成该文件，本机完成了带此步骤的全量构建。缺件时界面收到明确失败，服务端日志保留专用错误码，路径不进入客户端响应。实际安装的 Codex 通过了普通执行和受授权数据邮箱测试，独立 Harness 的 PostgreSQL 集成核对了一次源查询、冻结结果和持久交付回执。真实模型曾在普通算术请求中提交 `dataInputs`，因此工具定义明确了普通文本文件与已提交分析产物两种交付方式。使用新版定义复跑 Word 和 Excel，两项均省略该字段，返回代码执行产生的 `total.json`，保存重开后在 Word 正文和 Excel H2 读回 441。[Harness 回归](../../../apps/web/test/unit/coding-harness.test.mjs) [数据交付回归](../../../apps/web/test/local-integration/harness-data-flow.test.mjs)
 
 `4f0ad52c` 的 CI 有两项相关回归失败。Word 宿主用例仍期待旧引用格式，已更新并通过 17 项宿主定向检查。PDF 深色界面勾选在收到助手回复前超时，定向复跑通过并核对下载原件、勾选位置、相邻页像素及重开。本次保留该用例的响应与工具诊断。另有 `a982cdea` 的外部执行器取消用例未观测到预期的进程消失。夹具改为原子发布 PID，并在短时限内核实进程退出及任务的未知结果状态，PostgreSQL 定向复跑通过。[Word 与 PDF 的 CI](https://github.com/ClassesOver/DyOffice/actions/runs/45027900231) [取消用例的 CI](https://github.com/ClassesOver/DyOffice/actions/runs/45027212874)
@@ -154,6 +156,8 @@ XLSX 外链保真用例从 Web 编辑普通单元格后保存、下载并重开�
 Chromium 专项通过 Web 功能区断开外链。确认前文件版本保持不变，确认后只生成一个修订。保存的 `G3` 由外链公式变为数值 `84`，对应关系和缓存部件从新版本移除，其他编辑在重开后仍存在。旧修订保持原字节，外部源监听器收到 0 次请求。真实 PostgreSQL 下，Node 子进程夹具以及 systemd 隔离的宿主 Rust 与工作簿网关分别通过同一用例。
 
 外链列表读取失败现会显示明确提示。专项在断开后的第一次列表读取注入 HTTP 503，确认界面提示读取失败。重新打开面板时验证真实请求成功，才核对空列表。Node 子进程夹具和 systemd 宿主原生路径均通过，网格重开、单个新修订及成品公式缓存检查同时通过。
+
+在 `64e72d80` 上以宿主 Rust 复跑 GenOffice CLI 的 8 项工作簿外链对照。刷新后 `[2]Sheet1!A1*2` 的缓存从 84 变成 20，公式保留，缺失源的缓存保留。断开其中一条外链后，对应公式变成字面值，剩余外链重新编号。桌面 MCP 适配层的 14 项用例也通过，其中外链测试使用模拟 CLI。Web 刷新与换源仍待实现，验收需要基于调用者可读取的工作区源文件，核对保存成品里的缓存、公式及修订。原始 OOXML 中的路径和 URL 在现有 Web 路径中只作为元数据显示。[桌面 CLI 对照](../../../packages/cli/tests/xlsx-links.test.ts) [MCP 适配层](../../../apps/shell/tests/mcp/sheets-tools.test.ts)
 
 PPTX 的 View → Slide Master 已接入原 GenOffice 母版与版式编辑，包括文字、形状、位置、填充和描边。原生会话回归 31 项通过，核对继承、事务历史、稳定对象 ID、原生重开和未修改包部件。服务端路由回归通过，检查当前文件租约、版本和编辑代数；Chromium 通过功能区进入母版，鼠标绘制文本框、输入、保存并在下载文件的真实母版 XML 中核对文字。Web 桥接及隔离子进程回归共 66 项通过，同时恢复了 GenOffice 对不完整主题只显示可用强调色的行为。生产隔离与外部 PowerPoint 复开仍待验。
 

@@ -240,7 +240,9 @@ for(const live of [false,true])test(live?'a real model generates and redoes edit
     const stage=request.tools.length?'assistant':prompt.startsWith('Topic and style preferences:')?'style':prompt.startsWith('Topic: ')?'outline':'page design'
     const turn=prompt.includes('Cobalt Review')?'redo':prompt.includes('Orchid Intake')?'initial':undefined
     const started=Date.now(),repair=prompt.includes('Your previous output was rejected:')
-    const offered=request.tools.map(tool=>tool.name).filter(name=>['generate_deck','read_slide','regenerate_slide'].includes(name))
+    const offered=request.tools.map(tool=>tool.name).filter(name=>[
+     'ask_clarification','plan_deck','generate_deck','read_slide','regenerate_slide',
+    ].includes(name))
     void window.recordSlidesTestEvent({stage,turn,repair,started,offered})
     const response=await fetchOriginal(input,init)
     void response.clone().text().then(stream=>{
@@ -261,6 +263,7 @@ for(const live of [false,true])test(live?'a real model generates and redoes edit
  assert.ok((await renderedText())[0].includes('Acceptance title'))
  if(live){
   const title=['Orchid Intake','Cobalt Release'],redoTitle='Cobalt Review'
+  const audience='Field reviewers',artifact='Release checklist'
   const hasPage=(deck,index,text)=>deck?.[index]?.join(' ').includes(text)??false
   const assertSavedSlides=async(revision,expectedTitle)=>{
    const bytes=await f.files.readFile(f.alice.token,file.fileId,revision),slides=await savedSlides(bytes)
@@ -270,6 +273,10 @@ for(const live of [false,true])test(live?'a real model generates and redoes edit
    assert.ok(slides.every(slide=>slide.pictures===0),'The saved pages contain no images')
    assert.match(slides[0].text.join(' '),/Monday|周一|星期一/i)
    assert.match(slides[1].text.join(' '),expectedTitle===redoTitle?/checklist|清单/i:/Friday|周五|星期五/i)
+   if(expectedTitle!==redoTitle){
+    assert.ok(slides[0].text.join(' ').includes(audience),'The intake slide includes the chosen audience')
+    assert.ok(slides[1].text.join(' ').includes(artifact),'The release slide includes the chosen deliverable')
+   }
    return {bytes,slides}
   }
   const waitForPage=(index,text,timeout=25000)=>expect.poll(async()=>(await renderedText())?.[index]?.join(' ')??'',{timeout}).toContain(text)
@@ -281,16 +288,16 @@ for(const live of [false,true])test(live?'a real model generates and redoes edit
    return revision
   }
   const settled=()=>expect(panel.locator('.ai-stop-btn')).toHaveCount(0,{timeout:30000})
-  await send('用 generate_deck 替换现有演示文稿。只做两页，可编辑，不放图片。第 1 页标题必须是 Orchid Intake，正文说明周一审核收件。第 2 页标题必须是 Cobalt Release，正文说明周五审批发布。用简洁的内部评审风格。信息齐全，请直接生成并替换全部原页面。')
-  const skipSurvey=panel.getByRole('button',{name:'Skip survey',exact:true})
-  // The first write waits for the batch, after the tool decision and up to two
-  // design requests for a page that needs repair.
-  await expect.poll(async()=>{
-   if(await skipSurvey.isVisible())await skipSurvey.click()
-   return hasPage(await renderedText(),0,title[0])
-  },{timeout:270000}).toBe(true)
+  await send('替换现有演示文稿，只做两页，可编辑，不放图片。先用 ask_clarification 调出两道单选题。第一题问受众，选项是 Field reviewers 和 Project sponsors。第二题问交付物，选项是 Release checklist 和 Status memo。请保留选项英文原文。我回答后，先调用 plan_deck 写入两页规划，再调用 generate_deck 直接按规划替换，禁止再次问卷。第 1 页标题必须是 Orchid Intake，正文包含我选的受众英文原文与周一审核收件。第 2 页标题必须是 Cobalt Release，正文包含我选的交付物英文原文与周五审批发布。用简洁的内部评审风格。')
+  await panel.getByRole('radio',{name:audience,exact:true}).click({timeout:120000})
+  await panel.getByRole('radio',{name:artifact,exact:true}).click({timeout:15000})
+  await waitForPage(0,title[0],270000)
   await waitForPage(1,title[1])
   await settled()
+  const clarification=acceptedTools.get('ask_clarification')??''
+  assert.ok(clarification.includes(audience)&&clarification.includes(artifact),clarification)
+  const plan=acceptedTools.get('plan_deck')??''
+  assert.match(plan,/Orchid Intake[\s\S]*Cobalt Release/)
   const generation=acceptedTools.get('generate_deck')??''
   assert.match(generation,/produced 2\/2 pages/,'The real model received a successful two-page generation result')
   assert.doesNotMatch(generation,/degraded to a plain-text fallback|failed after retry/)
@@ -322,9 +329,22 @@ for(const live of [false,true])test(live?'a real model generates and redoes edit
   await waitForPage(1,redoTitle)
   return
  }
- await send(instruction)
- await panel.getByRole('radio',{name:'Field team',exact:true}).click()
- await panel.getByRole('radio',{name:'Action checklist',exact:true}).click()
+ const questionnaireResponses=[]
+ const recordQuestionnaireResponse=response=>{
+  if(response.request().method()==='POST'&&new URL(response.url()).pathname==='/api/v1/ai/turns'){
+   questionnaireResponses.push(response.status())
+  }
+ }
+ page.on('response',recordQuestionnaireResponse)
+ try{
+  await send(instruction)
+  await panel.getByRole('radio',{name:'Field team',exact:true}).click()
+  await panel.getByRole('radio',{name:'Action checklist',exact:true}).click()
+ }catch(error){
+  const panelErrors=await panel.locator('.ai-msg-error').allTextContents().catch(()=>[])
+  t.diagnostic('PPTX questionnaire: '+JSON.stringify({responses:questionnaireResponses,providerWrites:network.writes,panelErrors}))
+  throw error
+ }finally{page.off('response',recordQuestionnaireResponse)}
  await expect(panel.getByText(answer,{exact:true})).toBeVisible({timeout:30000})
  await expect(page.locator('.thumb')).toHaveCount(2)
  await expect.poll(renderedText).toEqual(contents)
