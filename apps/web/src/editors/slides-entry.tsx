@@ -203,6 +203,10 @@ export async function mountSlidesEditor(host: SessionFileHost, container: HTMLEl
         href={`/api/v1/files/${fileId}/content?revision=${state.revision.revision}`} download={state.name}>{text.download}</a>}
     </>
     const hostProps: SlidesAppHost = {saveDownload,analysisGeneration:bridge.getAnalysisGeneration,runAnalysis:(ops,check,adopt)=>bridge.guardedApply(check,async()=>{if(!check())return false;const result=await bridge.api.applyTxn({ops,isolation:'atomic'});if(!result?.applied||!result.slides)return false;adopt(result.slides);return true}),readOnly, inPlaceSave: true, assistantAvailable:Boolean(sharedAssistant?.available&&(prefs.showAssistant!==false||handoffOpen)),...(sharedAssistant?{assistant:{...sharedAssistant,mediaCapabilities:sharedAssistant.mediaCapabilities,continuation:assistantContinuation}}:{}), onDeckOpened: () => {documentLoaded=true;setLoaded(true)}, onOpenFailed: () => {setFailed(true); reportDocumentLoading('error')}, onEditorReady: handle => { editor = handle }}
+    hostProps.downloadImages = async (baseName,format,pages) => {
+      const {downloadSlidesImages} = await import('./slides-image-download')
+      return downloadSlidesImages(baseName,format,pages,copyLifetime.signal)
+    }
     hostProps.namedCopy=namedCopy
     return <div className="dyoffice-native-slides">
       <DocumentNotifications locale={locale} items={[

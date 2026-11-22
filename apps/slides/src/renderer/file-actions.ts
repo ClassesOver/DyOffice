@@ -206,17 +206,29 @@ export function exportBaseName(ctx: ActionCtx): string {
   return (baseName(ctx.path ?? '') || t('appUntitledPresentation')).replace(/\.pptx$/i, '')
 }
 
-/** Export as images: each page (skipping hidden ones) rendered offscreen to 2x PNG or JPG, written to disk by the main process */
-export async function exportImages(ctx: ActionCtx, format: 'png' | 'jpg' = 'png'): Promise<void> {
+export type SlideImageDownload = (baseName: string, format: 'png' | 'jpg', pages: string[]) => Promise<string>
+
+/** Render visible slides at 2x, then hand the output to the host. */
+export async function exportImages(ctx: ActionCtx, format: 'png' | 'jpg' = 'png', download?: SlideImageDownload): Promise<void> {
   const visible = ctx.slides.filter((s) => !s.hidden)
   if (visible.length === 0) {
     ctx.setStatus(t('appExportNoSlides'))
     return
   }
-  const dir = await window.slidesApi.pickExportDir()
-  if (!dir) return
-  ctx.setStatus(t('appExportImagesProgress', { count: visible.length }))
   try {
+    if (download) {
+      if (visible.some(slide => slide.widthPx > 4096 || slide.heightPx > 4096 || slide.widthPx * slide.heightPx > 4 * 1024 * 1024)) {
+        throw new Error('Slide dimensions exceed the image export limit')
+      }
+      ctx.setStatus(t('appExportImagesProgress', { count: visible.length }))
+      const pages = await renderSlidesToImageBase64(visible, ctx.images, {format, maxOutputChars:64 * 1024 * 1024})
+      const archive = await download(exportBaseName(ctx), format, pages)
+      ctx.setStatus(t('appExportImagesDone', {count:pages.length, dir:archive}))
+      return
+    }
+    const dir = await window.slidesApi.pickExportDir()
+    if (!dir) return
+    ctx.setStatus(t('appExportImagesProgress', { count: visible.length }))
     const pages = await renderSlidesToImageBase64(visible, ctx.images, { format })
     const r = await window.slidesApi.exportImages({
       dir,

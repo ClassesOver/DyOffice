@@ -180,7 +180,7 @@ jobs:
           DYOFFICE_TEST_PDF_OCR: '1'
           DYOFFICE_DSH_FIXTURE: 'on'
         # Some editor fixtures bind the same loopback port.
-        run: node --import tsx --test --test-concurrency=1 apps/web/test/local-browser/*.test.mjs apps/web/test/native-docs/{attachment-media,image-media}.test.mjs apps/web/test/native-slides/size-roundtrip.test.mjs
+        run: node --import tsx --test --test-concurrency=1 apps/web/test/local-browser/*.test.mjs apps/web/test/native-docs/{attachment-media,image-media}.test.mjs apps/web/test/native-slides/{size-roundtrip,image-export}.test.mjs
       - name: Retain real local-account Home and Settings screenshots
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9

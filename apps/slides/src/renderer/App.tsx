@@ -379,6 +379,7 @@ export interface SlidesEditorHandle {
 /** Optional host seam: everything keeps desktop-IPC behavior when absent. */
 export interface SlidesAppHost {
   saveDownload?: React.ReactNode
+  downloadImages?: fileActions.SlideImageDownload
   namedCopy?: fileActions.SlidesNamedCopy
   analysisGeneration?:()=>number|null
   runAnalysis?:(ops:unknown[],check:()=>boolean,adopt:(slides:RenderSlide[])=>void)=>Promise<boolean>
@@ -1141,10 +1142,13 @@ export function App({ host }: { host?: SlidesAppHost } = {}) {
 
   const saveAs = useCallback(() => fileActions.saveAs(() => ctxRef.current), [])
   const nameWithAi = useCallback(() => fileActions.nameWithAi(() => ctxRef.current, hostRef.current?.namedCopy), [])
-  const exportImages = useCallback(
-    (format: 'png' | 'jpg' = 'png') => fileActions.exportImages(ctxRef.current, format),
-    [],
-  )
+  const exportingImages = useRef(false)
+  const exportImages = useCallback(async (format: 'png' | 'jpg' = 'png') => {
+    if (exportingImages.current) return
+    exportingImages.current = true
+    try { await fileActions.exportImages(ctxRef.current, format, hostRef.current?.downloadImages) }
+    finally { exportingImages.current = false }
+  }, [])
   const exportPdf = useCallback(() => void fileActions.exportPdf(ctxRef.current), [])
   const [videoDlgOpen, setVideoDlgOpen] = useState(false)
 
