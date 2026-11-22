@@ -85,6 +85,15 @@ test('open only returns public DTO fields, including its nested revision', async
   const host=createBrowserHost({readBytes:async()=>new Uint8Array([1]),stageSave:async()=>({uploadId:'u'}),commitSave:async()=>validRevision,open:async()=>({file:{...validRevision,apiKey:'secret'},format:'docx',downloadEndpoint:'/files/a',capabilities:validCapabilities,apiKey:'secret'})})
   assert.deepEqual(await host.open('file-a'),{file:validRevision,format:'docx',downloadEndpoint:'/files/a',capabilities:validCapabilities})
 })
+test('open preserves the signed package marker for all OOXML editors', async () => {
+  for (const [format,marker,expected] of [
+    ['docx',true,true],['xlsx',true,true],['pptx',true,true],
+    ['docx','true',undefined],['xlsx',false,undefined],['pdf',true,undefined],
+  ]) {
+    const host=createBrowserHost({open:async()=>({file:validRevision,format,downloadEndpoint:'/files/a',capabilities:validCapabilities,officeSignatureProtected:marker})})
+    assert.equal((await host.open('file-a')).officeSignatureProtected,expected,format)
+  }
+})
 test('commitSave only returns public revision fields', async () => {
   const host=createBrowserHost({commitSave:async()=>({...validRevision,apiKey:'secret'})})
   assert.deepEqual(await host.commitSave(validSave),validRevision)
