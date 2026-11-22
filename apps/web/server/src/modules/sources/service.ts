@@ -313,6 +313,8 @@ export function snapshotFor(row: Row, execution: SourceExecution, sql?: SqlRows,
   }
   const maxBytes = execution.maxResponseBytes ?? 1_000_000
   const fitted = fitSnapshotRows({ sourceId: row.source_id, sourceVersion: row.version, schema, timezone: row.config.timezone, rows }, { maxRows, maxBytes })
+  // A single row larger than the whole budget leaves nothing to show: fail rather than return an empty result.
+  if (fitted.truncated && !fitted.rows.length && rows.length) throw sourceError(502)
   rows = fitted.rows
   const sourceTruncated = fitted.truncated || (sql?.rows.length ?? http?.length ?? 0) > maxRows
   try { return createQuerySnapshot({ sourceId: row.source_id, sourceVersion: row.version, schema, timezone: row.config.timezone, rows, sourceTruncated }, { maxRows, maxBytes }) } catch { throw sourceError(502) }
