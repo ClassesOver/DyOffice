@@ -109,7 +109,7 @@ test('XLSX lists, preserves and breaks external workbook links without fetching 
   const result=page.waitForResponse(response=>response.url().endsWith('/sheets/external-links'),{timeout:20000})
   await page.getByRole('button',{name:'External Links',exact:true}).click()
   const response=await result
-  assert.ok(response.ok(),await response.text())
+  assert.ok(response.ok(),`External link list returned HTTP ${response.status()}`)
   const panel=page.getByRole('dialog',{name:'External Links',exact:true})
   await expect(panel.getByRole('cell',{name:externalTarget,exact:true})).toBeVisible({timeout:12000})
   await expect(panel.getByRole('cell',{name:'Catalog',exact:true})).toBeVisible()
@@ -141,6 +141,11 @@ test('XLSX lists, preserves and breaks external workbook links without fetching 
  const countBeforeBreak=await revisionCount()
  await reopenedPanel.getByRole('button',{name:'Break Link',exact:true}).click()
  assert.equal((await f.files.openFile(f.alice.token,initial.fileId)).file.revision,head.revision)
+ let refreshFailures=0
+ await page.route('**/sheets/external-links',route=>{
+  refreshFailures++
+  return route.fulfill({status:503,json:{error:'Unavailable'}})
+ },{times:1})
  const saveResponses=[]
  page.on('response',response=>{
   const path=new URL(response.url()).pathname
@@ -156,10 +161,21 @@ test('XLSX lists, preserves and breaks external workbook links without fetching 
   t.diagnostic(`Break Link save responses: ${JSON.stringify(saveResponses)}`)
   throw error
  })
- assert.ok(result.ok(),await result.text())
- const {revision}=await result.json()
+ assert.ok(result.ok(),`External link break commit returned HTTP ${result.status()}`)
+ const {revision}=(await f.files.openFile(f.alice.token,initial.fileId)).file
  assert.notEqual(revision,head.revision)
- await expect(reopenedPanel.getByText('This workbook has no links to other workbooks.',{exact:true})).toBeVisible({timeout:30000})
+ await expect(reopenedPanel.getByText('External Links: failed to read',{exact:true})).toBeVisible({timeout:15000})
+ assert.equal(refreshFailures,1)
+ await expect(reopenedPanel.getByText('This workbook has no links to other workbooks.',{exact:true})).toHaveCount(0)
+ await reopenedPanel.locator('button.watch-close').click()
+ const linkCommand=page.getByRole('button',{name:'External Links',exact:true})
+ if(!await linkCommand.isVisible())await page.getByRole('button',{name:'Formulas',exact:true}).click()
+ const [reread]=await Promise.all([
+  page.waitForResponse(response=>response.url().endsWith('/sheets/external-links'),{timeout:15000}),
+  linkCommand.click(),
+ ])
+ assert.ok(reread.ok(),`External link list retry returned HTTP ${reread.status()}`)
+ await expect(reopenedPanel.getByText('This workbook has no links to other workbooks.',{exact:true})).toBeVisible({timeout:15000})
  const readExternalCell=()=>page.evaluate(()=>{
   const cell=window.__genofficeDebug?.univerAPI.getActiveWorkbook()?.getActiveSheet()?.getRange('G3')
   return {value:cell?.getValue(),formula:cell?.getFormula()??''}

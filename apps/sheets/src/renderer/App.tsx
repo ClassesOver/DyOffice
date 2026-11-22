@@ -1147,18 +1147,26 @@ export function App({
   /// Re-reads the panel's rows from the session that is open *now*: a save
   /// reopens the workbook, so the session id captured before it is gone.
   async function refreshLinkStatuses(): Promise<void> {
-    const sessionId = lazyWorkbookRef.current?.file.sessionId
-    if (sessionId === undefined) {
+    const file = lazyWorkbookRef.current?.file
+    if (file === undefined || file.needsSaveAs) {
       setLinkStatuses([])
+      setLinksNotice('unsaved')
       return
     }
-    await window.desktopApi
-      .listExternalLinks({ sessionId })
-      .then((fresh) => {
+    const { sessionId } = file
+    const isCurrent = () => lazyWorkbookRef.current?.file.sessionId === sessionId
+    try {
+      const fresh = await window.desktopApi.listExternalLinks({ sessionId })
+      if (isCurrent()) {
         setLinksNotice(null)
         setLinkStatuses(fresh.links)
-      })
-      .catch(() => setLinkStatuses([]))
+      }
+    } catch {
+      if (isCurrent()) {
+        setLinkStatuses([])
+        setLinksNotice('unavailable')
+      }
+    }
   }
   /// External-link breaks/retargets the links panel queued for the next save;
   /// cleared once the save settles (see saveContext).
