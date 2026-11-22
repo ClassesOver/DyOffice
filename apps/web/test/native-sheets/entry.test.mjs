@@ -7,15 +7,18 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { execFileSync } from 'node:child_process'
+import { randomUUID } from 'node:crypto'
 import { createServer } from 'node:https'
 import { fileURLToPath } from 'node:url'
 import { chromium, expect } from '@playwright/test'
 import JSZip from 'jszip'
 import { fileFixture, docxBytes, importFile } from '../helpers/files.mjs'
 import { password } from '../helpers/identity.mjs'
+import {buildSheetsGateway} from '../../server/sheets/build.mjs'
+import {configuredSheetsRuntime} from '../../server/src/modules/sheets/runtime.ts'
 
 const sheetsDirectory = process.env.DYOFFICE_TEST_SHEETS_DIRECTORY ?? fileURLToPath(new URL('../../dist-sheets/',import.meta.url))
-async function fixture(t) {
+async function fixture(t,{nodeEngine=false}={}) {
   const directory = await mkdtemp(join(tmpdir(),'dyoffice-native-sheets-'))
   let f, browser, server
   t.after(async () => {
@@ -28,8 +31,19 @@ async function fixture(t) {
   server = createServer({ key: await readFile(join(directory,'key.pem')),cert: await readFile(join(directory,'cert.pem')) },(req,res) => f.app.routing(req,res))
   await new Promise(resolve => server.listen(0,'127.0.0.1',resolve))
   const origin = `https://127.0.0.1:${server.address().port}`
-  const {planWorkbookSave,readWorkbookPackage}=await sheetsGateway(t)
-  const engine=createXlsxNativeWorker(await sandboxFixture('native'))
+  let engine,planWorkbookSave,readWorkbookPackage
+  if(nodeEngine){
+    await buildSheetsGateway(join(directory,'gateway.mjs'))
+    const runtime=await configuredSheetsRuntime({
+      DYOFFICE_AUTH_MODE:'local',DYOFFICE_SANDBOX_MODE:'subprocess',DYOFFICE_DEPLOYMENT_ID:randomUUID(),
+      DYOFFICE_XLSX_NODE_ENGINE:join(directory,'xlsx-node-engine.mjs'),DYOFFICE_XLSX_GATEWAY_RUNNER:join(directory,'gateway-process.mjs'),
+    },{enabled:true})
+    t.after(()=>runtime.close())
+    ;({sheetsNative:engine,sheetsPlanner:planWorkbookSave,sheetsPackageReader:readWorkbookPackage}=runtime)
+  }else{
+    ;({planWorkbookSave,readWorkbookPackage}=await sheetsGateway(t))
+    engine=createXlsxNativeWorker(await sandboxFixture('native'))
+  }
   const native=Object.fromEntries(Object.entries(engine).map(([name,operation])=>[name,async(...args)=>{try{return await operation(...args)}catch(error){t.diagnostic('Native '+name+' failed: '+String(error?.code ?? error?.message ?? error));throw error}}]))
   const planner=async(...args)=>{try{return await planWorkbookSave(...args)}catch(error){t.diagnostic('Workbook planner failed: '+String(error?.message ?? error));throw error}}
   f = await fileFixture(t,{ origin,nativeSheetsDirectory: sheetsDirectory,sheetsNative:native,sheetsPlanner:planner,sheetsPackageReader:readWorkbookPackage })
@@ -53,6 +67,54 @@ async function fixture(t) {
   errors.length=0
   return { ...f, original, opened, browser, context, page, origin, errors }
 }
+
+test('Node XLSX keeps password-protected ranges locked while saving allowed cells',{timeout:90000},async t=>{
+ const f=await fixture(t,{nodeEngine:true})
+ const zip=await JSZip.loadAsync(f.original)
+ zip.file('xl/styles.xml','<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><fonts count="1"><font/></fonts><fills count="1"><fill><patternFill patternType="none"/></fill></fills><borders count="1"><border/></borders><cellStyleXfs count="1"><xf/></cellStyleXfs><cellXfs count="2"><xf/><xf applyProtection="1"><protection locked="0"/></xf></cellXfs></styleSheet>')
+ const protection='<sheetProtection sheet="1"/><protectedRanges><protectedRange name="Open" sqref="C1"/><protectedRange name="Password" sqref="D1" password="CBEB"/></protectedRanges>'
+ const sheetPath='xl/worksheets/sheet1.xml'
+ zip.file(sheetPath,`<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><dimension ref="A1:D1"/><sheetData><row r="1"><c r="A1"><v>12</v></c><c r="B1" s="1"><v>18</v></c><c r="C1"><v>24</v></c><c r="D1"><v>36</v></c></row></sheetData>${protection}</worksheet>`)
+ const original=await zip.generateAsync({type:'nodebuffer'})
+ const {file}=await importFile(f,f.alice.token,original,'protected.xlsx')
+ await f.page.goto(f.origin+'/native-xlsx/?fileId='+file.fileId)
+ await expect(f.page.locator('html')).toHaveAttribute('data-document-loading','ready',{timeout:45000})
+ const values=()=>f.page.evaluate(()=>{
+  const sheet=window.__genofficeDebug?.univerAPI.getActiveWorkbook()?.getActiveSheet()
+  return ['A1','B1','C1','D1'].map(cell=>sheet?.getRange(cell).getValue())
+ })
+ await expect.poll(values,{timeout:30000}).toEqual([12,18,24,36])
+ const setValue=(cell,value)=>f.page.evaluate(({cell,value})=>{
+  window.__genofficeDebug.univerAPI.getActiveWorkbook().getActiveSheet().getRange(cell).setValue(value)
+ },{cell,value})
+ // Initial paint can precede completion of the full preload. Wait until the
+ // guard can reliably evaluate the unlocked cell's loaded style.
+ await expect.poll(async()=>{
+  if((await values())[1]!==19)await setValue('B1',19)
+  return (await values())[1]
+ },{timeout:30000}).toBe(19)
+ for(const cell of ['A1','D1']){
+  await setValue(cell,99)
+  await expect(f.page.locator('.status-bar .status-msg')).toContainText('protected sheet')
+  assert.deepEqual(await values(),[12,19,24,36])
+ }
+ await setValue('C1',25)
+ await expect.poll(values).toEqual([12,19,25,36])
+ assert.equal((await f.files.openFile(f.alice.token,file.fileId)).file.revision,file.revision)
+
+ const [download]=await Promise.all([
+  f.page.waitForEvent('download'),f.page.locator('.dyoffice-sheets-download').click(),
+ ])
+ const saved=(await f.files.openFile(f.alice.token,file.fileId)).file
+ assert.notEqual(saved.revision,file.revision)
+ const bytes=await readFile(await download.path())
+ assert.deepEqual(bytes,await f.files.readFile(f.alice.token,file.fileId,saved.revision))
+ assert.deepEqual(await f.files.readFile(f.alice.token,file.fileId,file.revision),original)
+ const reopened=await JSZip.loadAsync(bytes)
+ assert.ok((await reopened.file(sheetPath).async('string')).includes(protection))
+ await f.page.reload()
+ await expect.poll(values,{timeout:30000}).toEqual([12,19,25,36])
+})
 
 for (const theme of ['light','dark']) test(`native Sheets saves and downloads formulas and chart colors with the ${theme} UI theme`,{timeout:90000},async t=>{
  const f=await fixture(t)

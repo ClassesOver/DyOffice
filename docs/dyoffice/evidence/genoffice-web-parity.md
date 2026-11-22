@@ -16,6 +16,8 @@
 
 后续修复默认 Node 工作簿执行路径的保护元数据。实际 Node 与 Rust 对照覆盖已有文稿的结构锁、有密码的工作表、允许的格式操作、工作表可编辑区域、锁定单元格及继承的公式隐藏标记。原生读取三项、网关工作表保护十一项均通过。此项覆盖 OOXML 编辑保护。[Node 与 Rust 对照用例](../../../apps/web/test/native-sheets/read.test.mjs)
 
+Chromium 使用隔离 Node 执行路径打开同一工作表中的四类单元格。旧编辑器能修改带密码的允许编辑区域，复用的原生防护现仅豁免无需解锁的区域。新构建中默认锁定格和需密码的区域均拒绝写入，单元格样式明确解锁的单元格和无密码编辑区域可保存。下载与对应新修订字节相同，保护标签和历史原件保持原样，重开后四个数值符合预期。工作表保护单测 8 项及 Web Sheets 类型检查通过。[Chromium 保存重开用例](../../../apps/web/test/native-sheets/entry.test.mjs)
+
 固定候选 `ab22f217` 的无 Docker 宿主隔离专项通过 5 项。真实 Node 工作簿网关在 systemd 隔离中完成解析与保存规划，原生 Rust 打开、保存并重开 XLSX。隔离检查核对动态非 root 身份、私有根目录、能力移除、控制进程凭据不继承及原生输出文件边界。用例见 [网关隔离](../../../apps/web/test/host-native/gateway.test.mjs)和 [Rust 进程隔离](../../../apps/web/test/host-native/process.test.mjs)。
 
 在固定候选 `d90ea092` 上复跑完整的 Node 网关和 Rust 宿主隔离套件，11 项全部通过。除实际 XLSX 保存重开外，复验核对内核限制网络和进程数、CPU/内存/墙钟超限终止、取消清理，以及控制进程被终止后 systemd 回收对应任务。[网关隔离](../../../apps/web/test/host-native/gateway.test.mjs) [Rust 进程隔离](../../../apps/web/test/host-native/process.test.mjs)
