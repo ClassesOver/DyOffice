@@ -62,7 +62,7 @@ async function configuredApplication() {
     const nativeDocsDirectory=storage.objectStore && existsSync(join(defaultDocsDir,'.vite/manifest.json')) ? defaultDocsDir : undefined;
     const defaultSlidesDir=resolve(process.env.DYOFFICE_NATIVE_PPTX_DIRECTORY||fileURLToPath(new URL('../dist-slides/',import.meta.url)));
     const nativeSlidesDirectory=storage.objectStore && existsSync(join(defaultSlidesDir,'.vite/manifest.json')) ? defaultSlidesDir : undefined;
-    const slidesHost=nativeSlidesDirectory ? {openSession:(input)=>openIsolatedPptxSession({fileId:input.fileId,revision:input.revision,bytes:input.bytes},{timeoutMs:60000,experimental:true})} : undefined;
+    const slidesHost=nativeSlidesDirectory ? {openSession:(input,signal)=>openIsolatedPptxSession(input,{timeoutMs:60000,experimental:true,signal})} : undefined;
     const legacyDistDir=resolve(fileURLToPath(new URL('../dist/',import.meta.url)));
     const effectiveShellDirectory=(shellDirectory && shellDirectory!==legacyDistDir) ? shellDirectory : (storage.objectStore && hasBuiltShell ? defaultShellDir : shellDirectory);
     const defaultSheetsDir=resolve(process.env.DYOFFICE_NATIVE_XLSX_DIRECTORY||fileURLToPath(new URL('../dist-sheets/',import.meta.url)));

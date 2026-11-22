@@ -4,6 +4,8 @@ import { authError, tokenHash } from '../auth/sessions.ts'
 import { uuid, loadFile } from '../files/queries.ts'
 import type { McpExternalCredential } from './credential.ts'
 
+const editFormats = { 'pdf.rotate': 'pdf', 'xlsx.cells': 'xlsx', 'pptx.notes': 'pptx' } as const
+
 export function createMcpReadGrants(transactions: McpPrincipalTransactions) {
   return {
     async issue(session: string, target: McpReadScope, approval?: McpEditApproval) {
@@ -14,7 +16,7 @@ export function createMcpReadGrants(transactions: McpPrincipalTransactions) {
       const expiresAt = await transactions.withPrincipalTransaction({ kind: 'session', token: session }, async (connection, principal) => {
         if (approval) {
           const file = await loadFile(connection, principal, fileId)
-          if (file.format !== (approval.kind === 'pdf.rotate' ? 'pdf' : 'xlsx')) throw authError(415)
+          if (file.format !== editFormats[approval.kind]) throw authError(415)
           if (file.current_revision !== revision) throw authError(409)
         }
         const parameters = [principal.deploymentId, tokenHash(session), transactions.sessionIdleMs, id, tokenHash(token), fileId, revision]

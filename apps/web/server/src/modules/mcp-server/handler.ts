@@ -4,6 +4,7 @@ import type { McpExternalCredential } from './credential.ts'
 import { createOfficeReadTool, officeReadDescriptor } from './office-read.ts'
 import { createMcpPdfRotation, pdfRotationDescriptor } from './pdf-rotation.ts'
 import { createMcpXlsxCells, xlsxCellsDescriptor } from './xlsx-cells.ts'
+import { createMcpPptxNotes, pptxNotesDescriptor } from './pptx-notes.ts'
 import type { McpFileGrant } from '../../db/context.ts'
 
 export const modernVersion = '2026-07-28'
@@ -38,10 +39,19 @@ const mcpXlsxCellsTool = {
   annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
 }
 
-export function createMcpTools({ read, rotate, setCells, inspect }: {
+const mcpPptxNotesTool = {
+  name: pptxNotesDescriptor.name,
+  description: 'Replace speaker notes on the exact pre-approved PPTX slide and save one revision.',
+  inputSchema: pptxNotesDescriptor.inputSchema,
+  outputSchema: pptxNotesDescriptor.outputSchema,
+  annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true },
+}
+
+export function createMcpTools({ read, rotate, setCells, setNotes, inspect }: {
   read: ReturnType<typeof createOfficeReadTool>
   rotate: ReturnType<typeof createMcpPdfRotation>
   setCells?: ReturnType<typeof createMcpXlsxCells>
+  setNotes?: ReturnType<typeof createMcpPptxNotes>
   inspect: (credential: McpExternalCredential) => Promise<McpFileGrant>
 }) {
   const failure = (text: string) => ({ isError: true, content: [{ type: 'text' as const, text }] })
@@ -49,11 +59,13 @@ export function createMcpTools({ read, rotate, setCells, inspect }: {
     [mcpReadTool.name, read], [mcpPdfRotationTool.name, rotate],
   ])
   if (setCells) executors.set(mcpXlsxCellsTool.name, setCells)
+  if (setNotes) executors.set(mcpPptxNotesTool.name, setNotes)
   return {
     async list(credential: McpExternalCredential) {
       const grant = await inspect(credential)
       if (grant.approval?.kind === 'pdf.rotate') return [mcpReadTool, mcpPdfRotationTool]
       if (setCells && grant.approval?.kind === 'xlsx.cells') return [mcpReadTool, mcpXlsxCellsTool]
+      if (setNotes && grant.approval?.kind === 'pptx.notes') return [mcpReadTool, mcpPptxNotesTool]
       return [mcpReadTool]
     },
     async run(credential: McpExternalCredential, name: unknown, args: unknown, signal: AbortSignal) {

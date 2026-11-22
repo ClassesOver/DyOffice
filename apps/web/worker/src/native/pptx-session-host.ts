@@ -64,13 +64,15 @@ export interface PptxChildSession {
   close(): void
 }
 interface ChildMessage { snapshotId?:number; id: number; m: string; expected?: number; ops?: unknown; image?:SlidesImageCommand; isolation?: 'atomic' | 'per_op'; dryRun?: boolean; slide?: number; width?: number; sourceId?:string;patch?:Record<string,unknown>;specJson?:string;images?:Array<{url:string;bytes:Uint8Array;ext:string}>;markers?:string[];mode?:'replace'|'append'|'replace_at'|'insert_at';atIndex?:number; bytes?: Uint8Array; binding?: PptxChildBinding; partPath?:string; operation?:unknown }
-export interface IsolatedPptxSessionOptions { unsafeTestOnly?: boolean; experimental?: boolean; timeoutMs?: number; childModule?: URL; tsxModule?: URL; mdHooks?: URL }
+export interface IsolatedPptxSessionOptions { unsafeTestOnly?: boolean; experimental?: boolean; timeoutMs?: number; childModule?: URL; tsxModule?: URL; mdHooks?: URL; signal?: AbortSignal }
 /** Mirrors the in-process session gate: no oversized package is ever handed to a child. */
 const MAX_INPUT_BYTES = 32 * 1024 * 1024
 /** Fork one isolated Node child, hand it fixture/uploaded bytes, and return a generation-fenced
  * proxy. Experimental/test fork: the child never shares the API heap, a
  * crash only fails its own session, and every call is bounded by timeoutMs. */
 export async function openIsolatedPptxSession(input: {fileId: string; revision: string; bytes: Uint8Array}, options: IsolatedPptxSessionOptions = {}): Promise<PptxChildSession & {binding: PptxChildBinding}> {
+  const {signal} = options
+  signal?.throwIfAborted()
   if(process.env.NODE_ENV==='production'||(options.experimental!==true&&(process.env.NODE_ENV!=='test'||options.unsafeTestOnly!==true)))throw new Error('PPTX_OS_ISOLATION_UNAVAILABLE')
   if (!Number.isSafeInteger(input.bytes.byteLength) || input.bytes.byteLength===0 || input.bytes.byteLength>MAX_INPUT_BYTES) throw new Error('INPUT_LIMIT')
   const timeoutMs=options.timeoutMs ?? 30_000
@@ -114,8 +116,14 @@ export async function openIsolatedPptxSession(input: {fileId: string; revision: 
       child.send({...message,id} satisfies ChildMessage,()=>{})
     })
   }
+  const abortOpen = () => {
+    failAll(new Error('ABORTED'))
+    child.kill('SIGKILL')
+  }
+  signal?.addEventListener('abort',abortOpen,{once:true})
   try {
     await call({m:'open',binding,bytes:input.bytes})
+    signal?.throwIfAborted()
   } catch (error) {
     // No session handle reaches the caller on failure, so close the child here.
     if (!closed) {
@@ -123,6 +131,8 @@ export async function openIsolatedPptxSession(input: {fileId: string; revision: 
       child.kill('SIGKILL')
     }
     throw error
+  } finally {
+    signal?.removeEventListener('abort',abortOpen)
   }
   return {
     binding,

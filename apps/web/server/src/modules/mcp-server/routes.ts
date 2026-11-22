@@ -10,15 +10,18 @@ import { createMcpPdfRotation, parsePdfRotation, pdfRotationDescriptor } from '.
 import { createMcpTools, handleModernMcp, isVersionedMessage, modernVersion, object } from './handler.ts'
 import { createOfficeReadTool, officeReadDescriptor } from './office-read.ts'
 import { createLegacyMcp, legacyVersions } from './legacy.ts'
+import type { SlidesSessionHost } from '../slides/service.ts'
+import { createMcpPptxNotes, parsePptxNotes } from './pptx-notes.ts'
 import { createMcpReadGrants } from './read-grants.ts'
 
-export function registerMcpRoutes(app: FastifyInstance, transactions: McpPrincipalTransactions, files: FileService, csrf: ReturnType<typeof createCsrfService>, objects: ObjectStore, filePolicy?: FilePolicy, sheets?: McpSheetsSaveRuntime) {
+export function registerMcpRoutes(app: FastifyInstance, transactions: McpPrincipalTransactions, files: FileService, csrf: ReturnType<typeof createCsrfService>, objects: ObjectStore, filePolicy?: FilePolicy, sheets?: McpSheetsSaveRuntime, slides?: SlidesSessionHost) {
   const grants = createMcpReadGrants(transactions)
   const read = createOfficeReadTool(files)
   const saveOptions = { transactions, objects, filePolicy }
   const tools = createMcpTools({
     read, rotate: createMcpPdfRotation(saveOptions),
-    setCells: sheets && createMcpXlsxCells({ ...saveOptions, ...sheets }), inspect: grants.inspect,
+    setCells: sheets && createMcpXlsxCells({ ...saveOptions, ...sheets }),
+    setNotes: slides && createMcpPptxNotes(saveOptions, slides), inspect: grants.inspect,
   })
   const legacy = createLegacyMcp(app, tools)
   const readCredential = createMcpCredentialReader({ environment: process.env.NODE_ENV ?? 'production' })
@@ -45,6 +48,12 @@ export function registerMcpRoutes(app: FastifyInstance, transactions: McpPrincip
     const session = sessionFor(request)
     const { fileId, revision, cells } = parseXlsxCells(request.body)
     return reply.code(201).send(await grants.issue(session, { fileId, revision }, { kind: 'xlsx.cells', cells }))
+  })
+  if (slides) app.post('/api/v1/mcp/pptx-notes-grants', { bodyLimit: 12 * 1024 }, async (request, reply) => {
+    reply.header('Cache-Control', 'private, no-store')
+    const session = sessionFor(request)
+    const { fileId, revision, slide, text } = parsePptxNotes(request.body)
+    return reply.code(201).send(await grants.issue(session, { fileId, revision }, { kind: 'pptx.notes', slide, text }))
   })
   app.delete<{ Params: { id: string } }>('/api/v1/mcp/read-grants/:id', async (request, reply) => {
     reply.header('Cache-Control', 'private, no-store')

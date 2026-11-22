@@ -279,7 +279,7 @@ export async function buildLocalApp(config: LocalWebConfig): Promise<FastifyInst
         config.sheetsPlanner && config.sheetsWorkbookPlanner && config.sheetsNative?.savePlan ? {
           native: config.sheetsNative as SheetsSaveNative,
           plan: config.sheetsPlanner, planFromWorkbook: config.sheetsWorkbookPlanner,
-        } : undefined)
+        } : undefined, config.slidesHost)
       registerKnowledgeRoutes(app,createKnowledgeService({transactions,files}),sessions,csrf)
       registerPdfRoutes(app,createPdfService({ files, leases, revisions }),sessions,csrf)
       // T17 notification/reconciliation only; preClose terminates upgraded
@@ -294,7 +294,7 @@ export async function buildLocalApp(config: LocalWebConfig): Promise<FastifyInst
       }
       if (config.slidesHost) {
         const slides = createSlidesService({files,leases,revisions,host:config.slidesHost})
-        app.addHook('onClose', () => slides.closeAll())
+        app.addHook('onClose', () => slides.dispose())
         registerSlidesRoutes(app,slides,sessions,csrf,createSlidesSaveService({files,leases,revisions,sessions:slides}))
       }
       if (config.nativeJobs) registerJobRoutes(app,createJobService({ transactions,enabledTypes: ['xlsx.roundtrip'] }),sessions,csrf)

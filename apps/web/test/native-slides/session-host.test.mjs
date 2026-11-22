@@ -9,6 +9,14 @@ import { PNG } from 'pngjs'
 
 
 const bytes=()=>readFile(new URL('../fixtures/slides/acceptance.pptx',import.meta.url))
+
+test('aborting a pending native PPTX open closes the child before returning a handle', async () => {
+ const controller=new AbortController()
+ const pending=openIsolatedPptxSession({fileId:'aborted-open',revision:'r1',bytes:await bytes()},
+  {timeoutMs:60000,unsafeTestOnly:true,signal:controller.signal})
+ controller.abort()
+ await assert.rejects(pending,{message:'ABORTED'})
+})
 const pixel=()=>new Uint8Array(Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=','base64'))
 
 test('native analysis picture and provenance commit atomically with bounded image validation',async t=>{

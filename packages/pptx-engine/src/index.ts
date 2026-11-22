@@ -873,7 +873,7 @@ function buildZip(opened: OpenedPptx): JSZip {
       continue
     }
     const ext = path.slice(path.lastIndexOf('.') + 1).toLowerCase()
-    zip.file(path, data, COMPRESSED_EXTENSIONS.has(ext) ? {} : { compression: 'STORE' })
+    zip.file(path, archive.bytesForExport(path, data), COMPRESSED_EXTENSIONS.has(ext) ? {} : { compression: 'STORE' })
   }
   return zip
 }

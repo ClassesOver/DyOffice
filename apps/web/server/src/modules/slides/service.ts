@@ -149,7 +149,7 @@ export function createSlidesService({ files, leases, revisions, host, maxConcurr
     try {
       const bytes = await downloadPinned(token, fileId, revision, signal)
       const handle = await host.openSession({ fileId, revision, bytes }, signal).catch(mapSessionError)
-      const outline = await handle.outline(0).catch(error => { handle.close(); throw error })
+      const outline = await handle.outline(0, signal).catch(error => { handle.close(); throw error })
       const entry: SessionEntry = {
         handle, fileId, revision, count:outline.count, size: outline.size,
         defaultFont: outline.defaultFont ?? 'Calibri',
@@ -221,10 +221,15 @@ export function createSlidesService({ files, leases, revisions, host, maxConcurr
     return { generation: view.generation, dirty: dirty(entry), size: view.size, slides: view.slides, history: entry.history }
   }
   const service = {
+    async openOutline(token: string, fileId: string, input: SlidesReadInput, signal?: AbortSignal) {
+      const entry = await ensure(token, fileId, input.revision, signal)
+      fence(entry, input.generation)
+      return { generation: entry.generation, count: entry.count }
+    },
     async open(token: string, fileId: string, input: SlidesOpenInput, signal?: AbortSignal): Promise<SlidesOpenView> {
       const entry = await ensure(token, fileId, input.revision, signal)
       fence(entry, input.generation)
-      const slides = await entry.handle.renderAll(input.generation, input.fitWidthPx).catch(mapSessionError)
+      const slides = await entry.handle.renderAll(input.generation, input.fitWidthPx, signal).catch(mapSessionError)
       return { generation: entry.generation, dirty: dirty(entry), size: entry.size, defaultFont: entry.defaultFont, slides, history: entry.history,
         ...(entry.writeProtected ? {writeProtected:entry.writeProtected} : {}) }
     },
@@ -451,9 +456,10 @@ export function createSlidesService({ files, leases, revisions, host, maxConcurr
   // the authenticated token digest + exact editor/lease epoch. A new lease opens
   // a fresh persisted document, never inherits another editor's dirty child.
   const bindings=new Map<string,string>(),busy=new Map<string,{method:Method;count:number}>()
-  type Method='open'|'slide'|'notes'|'comments'|'animations'|'links'|'runLinks'|'chartData'|'chartColorSchemes'|'layouts'|'masterParts'|'applyMaster'|'slides'|'apply'|'editChart'|'generatePage'|'landGeneratedPages'|'applyImage'|'undo'|'redo'|'beginHistoryBatch'|'endHistoryBatch'|'restoreSnapshot'|'exportDraft'|'exportForSave'|'bindPreparedUpload'
+  type Method='open'|'openOutline'|'slide'|'notes'|'comments'|'animations'|'links'|'runLinks'|'chartData'|'chartColorSchemes'|'layouts'|'masterParts'|'applyMaster'|'slides'|'apply'|'editChart'|'generatePage'|'landGeneratedPages'|'applyImage'|'undo'|'redo'|'beginHistoryBatch'|'endHistoryBatch'|'restoreSnapshot'|'exportDraft'|'exportForSave'|'bindPreparedUpload'
   const signedReads=new Set<Method>(['open','slide','slides','notes','comments','animations','links','runLinks','chartData','chartColorSchemes','layouts','masterParts'])
   function guarded<K extends Method>(method:K):typeof service[K]{
+    const opensSession=method==='open'||method==='openOutline'
     return (async(token:string,fileId:string,input:SlidesReadInput,signal?:AbortSignal)=>{
       if(!input)throw authError(400)
       const signedRead=input.editorId===undefined&&input.leaseEpoch===undefined&&signedReads.has(method)
@@ -477,10 +483,10 @@ export function createSlidesService({ files, leases, revisions, host, maxConcurr
         await authorize()
         signal?.throwIfAborted()
         if(bindings.has(fileId)&&bindings.get(fileId)!==binding){
-          if(method!=='open')throw authError(409)
+          if(!opensSession)throw authError(409)
           registry.get(fileId)?.handle.close();registry.delete(fileId);bindings.delete(fileId)
         }
-        if(method==='open'){
+        if(opensSession){
           const head=await files.openFile(token,fileId)
           if(head.file.revision!==input.revision)throw authError(409)
           const previous=registry.get(fileId)
@@ -505,6 +511,6 @@ export function createSlidesService({ files, leases, revisions, host, maxConcurr
       finally{const current=busy.get(fileId);if(current&&--current.count===0)busy.delete(fileId)}
     }) as typeof service[K]
   }
-  return {bindPreparedUpload:guarded('bindPreparedUpload'),open:guarded('open'),slide:guarded('slide'),notes:guarded('notes'),comments:guarded('comments'),chartData:guarded('chartData'),chartColorSchemes:guarded('chartColorSchemes'),animations:guarded('animations'),links:guarded('links'),runLinks:guarded('runLinks'),layouts:guarded('layouts'),masterParts:guarded('masterParts'),applyMaster:guarded('applyMaster'),slides:guarded('slides'),apply:guarded('apply'),editChart:guarded('editChart'),generatePage:guarded('generatePage'),landGeneratedPages:guarded('landGeneratedPages'),applyImage:guarded('applyImage'),undo:guarded('undo'),redo:guarded('redo'),beginHistoryBatch:guarded('beginHistoryBatch'),endHistoryBatch:guarded('endHistoryBatch'),restoreSnapshot:guarded('restoreSnapshot'),exportDraft:guarded('exportDraft'),exportForSave:guarded('exportForSave'),closeAll(){service.closeAll();bindings.clear()}}
+  return {bindPreparedUpload:guarded('bindPreparedUpload'),open:guarded('open'),openOutline:guarded('openOutline'),slide:guarded('slide'),notes:guarded('notes'),comments:guarded('comments'),chartData:guarded('chartData'),chartColorSchemes:guarded('chartColorSchemes'),animations:guarded('animations'),links:guarded('links'),runLinks:guarded('runLinks'),layouts:guarded('layouts'),masterParts:guarded('masterParts'),applyMaster:guarded('applyMaster'),slides:guarded('slides'),apply:guarded('apply'),editChart:guarded('editChart'),generatePage:guarded('generatePage'),landGeneratedPages:guarded('landGeneratedPages'),applyImage:guarded('applyImage'),undo:guarded('undo'),redo:guarded('redo'),beginHistoryBatch:guarded('beginHistoryBatch'),endHistoryBatch:guarded('endHistoryBatch'),restoreSnapshot:guarded('restoreSnapshot'),exportDraft:guarded('exportDraft'),exportForSave:guarded('exportForSave'),closeAll(){service.closeAll();bindings.clear()},dispose(){clearInterval(sweeper);service.closeAll();bindings.clear()}}
 }
 export type SlidesSessions = ReturnType<typeof createSlidesService>

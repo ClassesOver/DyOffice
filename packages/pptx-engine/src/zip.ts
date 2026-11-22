@@ -66,6 +66,7 @@ export class PackageArchive {
     /** Original bytes of every entry, keyed by path inside the zip */
     readonly entries: Map<string, Uint8Array>,
     readonly originalHash: string,
+    private readonly normalizedParts: Map<string, { original: Uint8Array; parsed: Uint8Array }>,
   ) {}
 
   static async open(bytes: Uint8Array): Promise<PackageArchive> {
@@ -77,21 +78,29 @@ export class PackageArchive {
     const zip = await JSZip.loadAsync(bytes)
     assertZipWithinLimits(zip)
     const entries = new Map<string, Uint8Array>()
+    const normalizedParts = new Map<string, { original: Uint8Array; parsed: Uint8Array }>()
     const names = Object.keys(zip.files)
     for (const name of names) {
       const file = zip.files[name]
       if (file.dir) continue
       const bytes = await file.async('uint8array')
-      entries.set(name, isXmlPart(name) ? canonicalXmlBytes(bytes) : bytes)
+      const parsed = isXmlPart(name) ? canonicalXmlBytes(bytes) : bytes
+      if (parsed !== bytes) normalizedParts.set(name, { original: bytes, parsed })
+      entries.set(name, parsed)
     }
     // The JSZip object is not kept: it pins the caller's compressed bytes (a second copy of
     // every part next to the inflated entries) and nothing reads it after this point — saves
     // rebuild the package from `entries`.
-    return new PackageArchive(entries, originalHash)
+    return new PackageArchive(entries, originalHash, normalizedParts)
   }
 
   has(path: string): boolean {
     return this.entries.has(path)
+  }
+
+  bytesForExport(path: string, current: Uint8Array): Uint8Array {
+    const normalized = this.normalizedParts.get(path)
+    return normalized?.parsed === current ? normalized.original : current
   }
 
   /** Read a part as a UTF-8 string (for XML parts). */
@@ -264,7 +273,7 @@ function isXmlPart(name: string): boolean {
   return /\.(xml|rels)$/i.test(name)
 }
 
-/** Only re-encodes when a prefix actually changed, so untouched parts stay byte-identical. */
+/** Only re-encodes when a prefix actually changed. */
 function canonicalXmlBytes(bytes: Uint8Array): Uint8Array {
   const text = Buffer.from(bytes).toString('utf8')
   const fixed = canonicalizeNsPrefixes(text)
