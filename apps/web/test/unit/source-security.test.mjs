@@ -133,4 +133,7 @@ test('column alias lists are refused because re-serialization would corrupt them
   assert.throws(() => validateReadOnlySql('SELECT g.x FROM generate_series(1, 3) AS g(x)', 'postgres', { defaultSchema: 'db' }), /approved read-only SELECT/)
   assert.match(validateReadOnlySql('SELECT x FROM generate_series(1, 3) AS x', 'postgres', { defaultSchema: 'db' }), /generate_series/)
   assert.doesNotThrow(() => validateReadOnlySql('SELECT SUM(paid_amount)::double precision AS p FROM sales.orders', 'postgres', { defaultSchema: 'db' }))
+  // Parenthesised output labels are ordinary aliases and round-trip intact.
+  assert.match(validateReadOnlySql('SELECT SUM(paid_amount) AS "Paid amount (USD)" FROM sales.orders', 'postgres', { defaultSchema: 'db' }), /AS "Paid amount \(USD\)"/)
+  assert.throws(() => validateReadOnlySql('SELECT o.id FROM sales.orders AS o JOIN generate_series(1, 3) AS g(x) ON o.id = g.x', 'postgres', { defaultSchema: 'db' }), /approved read-only SELECT/)
 })

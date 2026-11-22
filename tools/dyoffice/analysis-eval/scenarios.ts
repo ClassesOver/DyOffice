@@ -42,10 +42,19 @@ const linesOf = (text: string) => text.split(/\r?\n/)
 const CN_DIGITS = ['零', '一', '二', '三', '四']
 const quarterLabel = (q: number) => (line: string) =>
   new RegExp(`Q${q}(?!\\d)|第?[${q}${CN_DIGITS[q]}]季度`, 'i').test(line)
-/** Year-month in a cell such as 2026-01, 2026-01-01, 2026/1 or 2026年1月. */
+/**
+ * Month label in a row: a year-month (2026-01, 2026-01-01, 2026/1, 2026年1月; amounts such as 2299305.30 are not dates), or, since the
+ * scenario fixes one year, a month alone (1月, January, or a leading month-number cell).
+ */
+const MONTH_NAMES = ['january', 'february', 'march', 'april', 'may', 'june', 'july', 'august', 'september', 'october', 'november', 'december']
 const monthLabel = (month: string) => {
-  const [year, value] = month.split('-').map(Number)
-  return (line: string) => [...line.matchAll(/(\d{4})\s*[-/年.]\s*(\d{1,2})/g)].some(match => Number(match[1]) === year && Number(match[2]) === value)
+  const [year, value] = month.split('-').map(Number) as [number, number]
+  return (line: string) => {
+    const dated = [...line.matchAll(/(?<![\d.])((?:19|20)\d{2})\s*[-/年]\s*(\d{1,2})(?!\d)/g)]
+    if (dated.length) return dated.some(match => Number(match[1]) === year && Number(match[2]) === value)
+    const name = MONTH_NAMES[value - 1]!
+    return new RegExp(`(?<![\\d.])0?${value}\\s*月`).test(line) || new RegExp(`\\b(?:${name}|${name.slice(0, 3)})\\b`, 'i').test(line) || Number(line.trim().split(/\s+/)[0]) === value
+  }
 }
 const queried = (evidence: TrialEvidence, turn?: number) =>
   evidence.calls.filter(call => call.name === 'sources_query' && !call.isError && (turn === undefined || call.turn === turn))

@@ -75,8 +75,9 @@ export function validateReadOnlySql(sql: unknown, dialect: SqlSourceKind, scope?
       if (node.type === 'binary_expr' && !operators.has(String(node.operator).toUpperCase())) throw invalid()
       if (node.type === 'unary_expr' && !['NOT','+','-'].includes(String(node.operator).toUpperCase())) throw invalid()
       if (node.type === 'cast' && (!Array.isArray(node.target) || node.target.some((target: any) => !['INT','INTEGER','BIGINT','SMALLINT','DECIMAL','NUMERIC','DOUBLE','DOUBLE PRECISION','FLOAT','REAL','TEXT','VARCHAR','CHAR','DATE','TIMESTAMP','BOOLEAN','SIGNED','UNSIGNED'].includes(String(target.dataType).toUpperCase()) || target.schema))) throw invalid()
-      // A column alias list (AS g(x)) does not survive re-serialization: it would come back as the identifier "g(x)".
-      if (typeof node.as === 'string' && /[()]/.test(node.as)) throw invalid()
+      // A relation column alias list (FROM f() AS g(x)) does not survive re-serialization: it would
+      // come back as the identifier "g(x)". Output labels such as AS "Paid (USD)" are unaffected.
+      if (Array.isArray(node.from) && node.from.some((item: any) => typeof item?.as === 'string' && /[()]/.test(item.as))) throw invalid()
       if (node.collate || node.suffix && Array.isArray(node.suffix) && node.suffix.length) throw invalid()
       for (const child of Object.values(node)) walk(child, depth + 1)
     }
