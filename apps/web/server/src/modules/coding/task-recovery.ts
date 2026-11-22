@@ -131,10 +131,9 @@ export function createCodingTaskRecovery(turns:TurnRunner,identity:(token:string
           entry.failure=entry.state==='cancel_requested'?'Harness cancellation requested. Check for saved delivery.':entry.controller.signal.aborted?interruptedFailure:genericFailure
           if(observer&&!signal?.aborted){queue.push({type:'error',message:entry.failure});wake()}
         }finally{
-          const leaseStopped=stopLease?.()
+          stopLease?.()
           if(publisher)clearInterval(publisher)
           await flushing;await flush()
-          await leaseStopped
           if(entry.state==='running'||entry.state==='cancel_requested')entry.state='unknown_outcome'
           if(entry.state!=='succeeded')delete entry.continuation
           if(store){

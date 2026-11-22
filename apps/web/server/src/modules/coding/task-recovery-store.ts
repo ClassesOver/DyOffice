@@ -104,8 +104,9 @@ export function createCodingTaskRecoveryStore(transactions:PrincipalTransactions
         const interrupted=row.state==='cancel_requested'&&state==='succeeded'
         if(interrupted){delete snapshot.result;snapshot.failure=interruptedFailure}
         const savedState=interrupted?'unknown_outcome':state
-        await c.query(`UPDATE harness_task_recovery SET state=$6,status_payload=$7,checkpoint=CASE WHEN $6='succeeded' THEN checkpoint ELSE NULL END,
-          expires_at=clock_timestamp()+${retention} WHERE ${where}`,[...args,savedState,JSON.stringify(snapshot)])
+        const settled=await c.query(`UPDATE harness_task_recovery SET state=$6,status_payload=$7,checkpoint=CASE WHEN $6='succeeded' THEN checkpoint ELSE NULL END,
+          expires_at=clock_timestamp()+${retention} WHERE ${where} AND state=$8 AND lease_until>clock_timestamp()`,[...args,savedState,JSON.stringify(snapshot),row.state])
+        if(!settled.rowCount)throw authError(409)
         await insertEvents(c,args,[{kind:'state',payload:{state:savedState,...(snapshot.failure?{failure:snapshot.failure.slice(0,2000)}:{})}}])
         return {state:savedState,...snapshot}
       })

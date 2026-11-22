@@ -18,10 +18,11 @@ export function maintainTaskLease(controller: AbortController, intervalMs: numbe
     }).finally(() => { inFlight = undefined })
   }, intervalMs)
   timer.unref()
-  return async () => {
+  return () => {
     stopped = true
     clearTimeout(expiry)
     clearInterval(timer)
-    await inFlight
+    // The store fences late renewals by state and claim. A stalled transport
+    // must not keep the worker from settling or processing its next task.
   }
 }

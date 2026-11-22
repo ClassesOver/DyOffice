@@ -76,6 +76,8 @@ test('a stalled renewal cannot carry execution past the last confirmed lease', a
     mock.timers.tick(1);await flush()
     assert.equal(controller.signal.aborted,true)
     assert.equal(renewals,1)
-    release(true);await stop()
+    await stop();release(true);await flush()
+    mock.timers.tick(30_000);await flush()
+    assert.equal(renewals,1)
   }finally{mock.timers.reset()}
 })

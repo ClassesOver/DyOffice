@@ -19,7 +19,7 @@ export function createAssistantBackgroundRunner(options:{
    if(!claim)return false
    if(claim.expired||stopped){await options.store.abandon(claim);return true}
    const controller=new AbortController();active=controller
-   let stopLease:(()=>Promise<void>)|undefined
+   let stopLease:(()=>void)|undefined
    let deadline:ReturnType<typeof setTimeout>|undefined
    try{
     const task=await options.service.backgroundStep(claim,'begin')
@@ -43,7 +43,7 @@ export function createAssistantBackgroundRunner(options:{
     try{
      await options.service.backgroundStep(claim,'finish',{summary:'后台读取未完成，请检查文档、模型配置或任务授权。',outcome:'failed'})
     }catch{await options.store.abandon(claim)}
-   }finally{clearTimeout(deadline);await stopLease?.();active=undefined}
+   }finally{clearTimeout(deadline);stopLease?.();active=undefined}
    return true
   }finally{busy=false}
  }
