@@ -76,6 +76,11 @@ test('Word searches a starred saved source, reads its actual text and opens the 
     ['set_header_footer',{kind:'header',text:'Audit header 651'},/Updated the header/],
     ['define_style',{styleId:'AuditCallout',name:'Audit Callout',type:'paragraph',run:{bold:true}},/Created style AuditCallout/],
     ['list_styles',{},/AuditCallout/],
+    ['apply_ops',{ops:[{op:'applyStyle',target:{blockIndexes:[0]},styleId:'AuditCallout'}]},/applyStyle/i],
+    ['insert_chart',{afterBlockIndex:0,kind:'bar',title:'Draft chart',categories:['East','West'],series:[{name:'Sample',values:[8,13]}]},/Inserted a bar chart/],
+    ['edit_chart',{blockIndex:1,title:'Audit chart',series:[{index:0,name:'Fixture series',values:[21,34]}]},/Updated the data of chart "Audit chart"/],
+    ['insert_text_box',{afterBlockIndex:1,text:'Floating callout 651',width:'5cm',height:'2cm',x:0,y:12},/Inserted a .* text box/],
+    ['set_watermark',{text:'DRAFT 651'},/Watermark set to "DRAFT 651"/],
    ]
    if(results.length){
     const {output,isError}=JSON.parse(results.at(-1).content)
@@ -193,7 +198,15 @@ test('Word searches a starred saved source, reads its actual text and opens the 
   assert.match(body,/<w:pgSz[^>]*w:orient="landscape"/)
   const headers=await Promise.all(saved.file(/^word\/header[0-9]+\.xml$/).map(part=>part.async('string')))
   assert.ok(headers.some(header=>header.includes('Audit header 651')))
+  assert.ok(headers.some(header=>header.includes('DRAFT 651')))
   assert.match(await saved.file('word/styles.xml').async('string'),/w:styleId="AuditCallout"/)
+  assert.match(body,/<w:pStyle w:val="AuditCallout"/)
+  assert.match(body,/<w:txbxContent>[\s\S]*Floating callout 651/)
+  assert.match(body,/<w:commentRangeStart\b/)
+  const [chart]=await Promise.all(saved.file(/^word\/charts\/chart\d+\.xml$/).map(part=>part.async('string')))
+  assert.match(chart,/Audit chart/)
+  assert.match(chart,/Fixture series/)
+  assert.match(chart,/<c:v>21<\/c:v>[\s\S]*<c:v>34<\/c:v>/)
   const comments=await saved.file('word/comments.xml').async('string')
   const commentThreads=await saved.file('word/commentsExtended.xml').async('string')
   assert.match(comments,/Retain review thread[\s\S]*Verified review reply/)

@@ -51,7 +51,18 @@ for(const mode of ['creation','no-word','all'])test(mode==='no-word'
  if(!creationOnly){
   const pdf=await PDFDocument.create();pdf.addPage([400,300]).drawText('Office assistant tools')
   const pdfBytes=Buffer.from(await pdf.save())
-  sources.push(['pptx',await readFile(new URL('../fixtures/slides/acceptance.pptx',import.meta.url))],['pdf',pdfBytes])
+  const deck=await JSZip.loadAsync(await readFile(new URL('../fixtures/slides/acceptance.pptx',import.meta.url)))
+  const slidePart='ppt/slides/slide1.xml',slide=await deck.file(slidePart).async('string')
+  const titleShape=slide.match(/<p:sp>[\s\S]*?<\/p:sp>/)?.[0]
+  assert.match(titleShape,/Acceptance title/)
+  // An existing slide with several text elements qualifies for chart insertion.
+  const contextShapes=['Regional review','Approved sample figures'].map((label,index)=>titleShape
+   .replace('id="2" name="TextBox 2"',`id="${101+index}" name="Context ${index+1}"`)
+   .replace(/<a:extLst>[\s\S]*?<\/a:extLst>/,'')
+   .replace('y="914400"',`y="${3657600+index*914400}"`)
+   .replace('Acceptance title',label)).join('')
+  deck.file(slidePart,slide.replace('</p:spTree>',contextShapes+'</p:spTree>'))
+  sources.push(['pptx',await deck.generateAsync({type:'nodebuffer'})],['pdf',pdfBytes])
   directPdf=(await importFile(f,f.alice.token,pdfBytes,'Direct tools.pdf')).file
  }
  const files={},directFiles={}
@@ -145,6 +156,7 @@ for(const mode of ['creation','no-word','all'])test(mode==='no-word'
    const results=messages.slice(messages.findLastIndex(message=>message.role==='user')+1)
     .filter(message=>message.role==='tool').map(message=>JSON.parse(message.content))
    const generatedUrl=results[3]?.output.match(/https:\/\/generated-image\.invalid\/[A-Za-z0-9-]+/)?.[0]
+   const chartId=results[7]?.output.match(/New element ids: ([\w-]+)\./)?.[1]
    const cases=[
     ['read_attachment',{index:0},/Slides reference 651/],
     ['web_search',{query:'slide source',maxResults:1},/Slide source citation/],
@@ -153,6 +165,8 @@ for(const mode of ['creation','no-word','all'])test(mode==='no-word'
     ['analyze_media',{mediaUrls:[generatedUrl],requirements:'Describe the image'},/Solid red reference image/],
     ['load_guide',{groups:['insert']},/insert/i],
     ['execute_slide_script',{slideIndex:0,code:'const title = els.find(e => e.text && e.text.includes("Acceptance title")); setText(title.id, "Evidence script title"); return "Updated the title";'},/Updated the title/],
+    ['apply_ops',{ops:[{op:'addChart',target:{slide:0},kind:'bar',categories:['North','South'],series:[{name:'Sample',values:[8,13]}],offset:{x:100,y:100,cx:340,cy:240},dataSource:'sample'}]},/New element ids/],
+    ['edit_chart',{slideIndex:0,sourceId:chartId,kind:'line',title:'Evidence chart',categories:['East','West'],series:[{name:'Fixture series',values:[21,34]}],dataSource:'sample'},/Updated chart/],
    ]
    if(results.length){
     const {output,isError}=results.at(-1),[name,,expected]=cases[results.length-1]
@@ -160,6 +174,7 @@ for(const mode of ['creation','no-word','all'])test(mode==='no-word'
     assert.match(output,expected,name+': '+output)
    }
    if(results.length===4)assert.ok(generatedUrl)
+   if(results.length===8)assert.ok(chartId)
    const next=cases[results.length]
    delta=next?toolCall(next[0],next[1],'slides-'+next[0]):{content:'Slides media and script verified'}
   }else if(/Excel workspace export (xlsx|docx|pdf)/.test(prompt??'')){
@@ -537,6 +552,11 @@ for(const mode of ['creation','no-word','all'])test(mode==='no-word'
  await expect.poll(slidesHead,{timeout:30000}).not.toBe(files.pptx.revision)
  const savedSlides=await JSZip.loadAsync(await f.files.readFile(f.alice.token,files.pptx.fileId,await slidesHead()))
  assert.match(await savedSlides.file('ppt/slides/slide1.xml').async('string'),/Evidence script title/)
+ const [chart]=await Promise.all(savedSlides.file(/^ppt\/charts\/chart\d+\.xml$/).map(part=>part.async('string')))
+ assert.match(chart,/<c:lineChart\b/)
+ assert.match(chart,/Evidence chart/)
+ assert.match(chart,/Fixture series/)
+ assert.match(chart,/<c:v>21<\/c:v>[\s\S]*<c:v>34<\/c:v>/)
  const panel=await probe('pdf','configured',{configured:true})
  await panel.locator('textarea').fill('Office Harness probe pdf')
  await panel.getByRole('button',{name:'发送',exact:true}).click()

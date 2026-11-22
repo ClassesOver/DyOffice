@@ -170,8 +170,23 @@ for(const live of [false,true])test(live?'a real model generates and redoes edit
    assert.equal(request,instruction)
    assert.match(user,/<deck outline>[\s\S]*Acceptance title/)
    assert.ok(tools?.some(tool=>tool.function.name==='generate_deck'))
-   phases.push('office tool')
-   delta=call('generate-deck','generate_deck',{topic,approx_pages:2,insert_mode:'replace'})
+   const answers=outcome('handover-audience'),plan=outcome('handover-plan')
+   if(plan){
+    assert.match(plan,/Discovery Summary[\s\S]*Delivery Plan/)
+    phases.push('office tool')
+    delta=call('generate-deck','generate_deck',{topic,approx_pages:2,insert_mode:'replace'})
+   }else if(answers){
+    assert.match(answers,/Field team[\s\S]*Action checklist/)
+    delta=call('handover-plan','plan_deck',{
+     core_hook:'Findings to action',style,
+     pages:contents.map(([title,brief],index)=>({title,brief,layout:index?'closing_cta':'cover_typography_hero'})),
+    })
+   }else{
+    delta=call('handover-audience','ask_clarification',{questions:[
+     {id:'audience',label:'Who is the handover for?',options:['Field team','Executives']},
+     {id:'focus',label:'What should they take away?',options:['Action checklist','Project history']},
+    ]})
+   }
   }
   return Readable.from([Buffer.from('data: '+JSON.stringify({choices:[{delta,finish_reason:delta.tool_calls?'tool_calls':'stop'}]})+'\n\ndata: [DONE]\n\n')])
  }catch(error){t.diagnostic(error.stack);throw error}})
@@ -308,6 +323,8 @@ for(const live of [false,true])test(live?'a real model generates and redoes edit
   return
  }
  await send(instruction)
+ await panel.getByRole('radio',{name:'Field team',exact:true}).click()
+ await panel.getByRole('radio',{name:'Action checklist',exact:true}).click()
  await expect(panel.getByText(answer,{exact:true})).toBeVisible({timeout:30000})
  await expect(page.locator('.thumb')).toHaveCount(2)
  await expect.poll(renderedText).toEqual(contents)
@@ -315,6 +332,8 @@ for(const live of [false,true])test(live?'a real model generates and redoes edit
  assert.deepEqual(phases.slice(3,5).sort(),['page 1','page 2'])
  assert.deepEqual(phases.slice(5),['complete'])
  assert.ok(acceptedTools.has('generate_deck'))
+ assert.ok(acceptedTools.has('ask_clarification'))
+ assert.ok(acceptedTools.has('plan_deck'))
  assert.equal(await page.evaluate(()=>window.slidesApi.isDirty()),true)
  assert.equal(await head(),file.revision)
  assert.deepEqual(await revisions(),[file.revision])
