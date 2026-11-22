@@ -1,5 +1,5 @@
 import {inspectPdfImageDraftBytes} from './pdf-image-draft-pixels'
-import type {PdfImageBytes} from '../shell/pdf-preview-skill'
+import type {PdfImageBytes} from './pdf-types'
 
 const MAX_BYTES=5*1024*1024,MAX_RGBA=32*1024*1024
 function invalid():never{throw Error('图片格式无效或超过大小限制。')}

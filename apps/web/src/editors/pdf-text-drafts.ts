@@ -2,7 +2,7 @@ import type {TextInsertInput} from '../../../pdf/src/shared/ipc'
 import type {createPdfPendingSession,PdfSessionTextDraft} from './pdf-pending-session'
 import {pdfToView,viewToPdf,type PageGeom} from '../../../pdf/src/renderer/annotations'
 import type {SettingsRequest} from '../../../../packages/browser-host/src/preferences'
-import type {PdfTextInsert,PdfTextDraftInfo,PdfTextDraftTools} from '../shell/pdf-preview-skill'
+import type {PdfTextInsert,PdfTextDraftInfo,PdfTextDraftTools} from './pdf-types'
 
 type Entry=PdfSessionTextDraft
 export function createPdfTextDrafts({fileId,request,getRevision,isReady,onChange,session,pageGeometry}:{fileId:string;request:SettingsRequest;getRevision:()=>string;isReady:()=>boolean;onChange:()=>void;session?:ReturnType<typeof createPdfPendingSession>;pageGeometry?:(page:number)=>PageGeom|undefined}){

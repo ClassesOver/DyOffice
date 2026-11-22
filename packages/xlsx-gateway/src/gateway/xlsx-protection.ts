@@ -88,26 +88,35 @@ function unescapeAttr(value: string): string {
 }
 
 export function parseSheetProtectionElement(element: string): ParsedSheetProtection {
+  return parseSheetProtectionAttributes(name => {
+    const value = readAttribute(element, name)
+    return value === undefined ? undefined : unescapeAttr(value)
+  })
+}
+
+export function parseSheetProtectionAttributes(
+  attribute: (name: string) => string | undefined,
+): ParsedSheetProtection {
   const allow = { ...DEFAULT_SHEET_PROTECTION_ALLOW }
   for (const permission of SHEET_PROTECTION_PERMISSIONS) {
-    const value = readAttribute(element, permission)
+    const value = attribute(permission)
     allow[permission] = DEFAULT_ALLOWED.has(permission)
       ? !isTrue(value)
       : value === '0' || value === 'false'
   }
-  const hashValue = readAttribute(element, 'hashValue')
-  const legacy = readAttribute(element, 'password')
+  const hashValue = attribute('hashValue')
+  const legacy = attribute('password')
   const password: SheetPasswordHash | null = hashValue
     ? {
-        algorithmName: readAttribute(element, 'algorithmName') ?? 'SHA-512',
-        hashValue: unescapeAttr(hashValue),
-        saltValue: unescapeAttr(readAttribute(element, 'saltValue') ?? ''),
-        spinCount: Number(readAttribute(element, 'spinCount') ?? '0') || 0,
+        algorithmName: attribute('algorithmName') ?? 'SHA-512',
+        hashValue,
+        saltValue: attribute('saltValue') ?? '',
+        spinCount: Number(attribute('spinCount') ?? '0') || 0,
       }
     : legacy
       ? { legacy }
       : null
-  return { protected: isTrue(readAttribute(element, 'sheet')), allow, password }
+  return { protected: isTrue(attribute('sheet')), allow, password }
 }
 
 /// Worksheet-level parse: null when the sheet has no `<sheetProtection>`.

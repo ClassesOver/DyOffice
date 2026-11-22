@@ -1,4 +1,7 @@
 import {safeExternalUrl} from '../../../../../packages/electron-utils/src/safe-external-url'
+import {sniffImageMime} from '../../../../slides/src/main/media-mime.ts'
+import {pictureFrame} from '../../../../slides/src/main/picture-frame.ts'
+import {tiffToPng} from '../../../../slides/src/main/tiff-decode.ts'
 import type {AnimationItem,RunLink} from './pptx-session-host'
 import {getRunLinks,MAX_INSERT_TABLE_DIM,NAMED_ACTIONS} from '@genoffice/pptx-engine'
 import type {LinkTarget as LinkTargetOp} from '@genoffice/pptx-engine'
@@ -6,11 +9,14 @@ import { openPptx, savePptx, getChartElementData, getSlideLinks, getSlideAnimati
 import { matchesElementRef } from '@genoffice/pptx-engine/identity'
 import { runTxn, elementDurableId, slideDurableId, type Op, type OpRecord } from '@genoffice/pptx-ops'
 import { markChartEditable } from '@genoffice/pptx-engine'
-import { buildRenderSlide, imageSizeFromBytes, type RenderSlide } from '@genoffice/pptx-render'
+import { listMasterParts, parseMasterPart, type MasterPartInfo } from '@genoffice/pptx-engine'
+import { buildRenderSlide, imageDpiFromBytes, imageSizeFromBytes, type RenderSlide } from '@genoffice/pptx-render'
 import { coverCropFractions } from '@genoffice/pipelines/slides'
 import { buildPagePptx, parsePageSpec } from '@genoffice/pipelines/slides'
 import { extractMergeSlideSource, type MergeSlideSource } from '@genoffice/pptx-engine'
 import { assertZipInflatesWithinLimits } from '@genoffice/zip-gate'
+import { PNG } from 'pngjs'
+import { JpegImage } from 'pdfjs-dist/image_decoders/pdf.image_decoders.mjs'
 import { randomUUID } from 'node:crypto'
 import type { SlidesImageCommand, SlidesApplyView } from './pptx-session-host.ts'
 
@@ -31,7 +37,16 @@ export interface SlidesApplyResult {
   transaction: { applied: boolean; dryRun?: boolean; plan?: string[]; failures?: Array<{ index: number; error: string }>; records?: Array<{op:{op:string};slideId?:string;created?:string[]}> }
 }
 export interface SlidesStepResult { generation: number; stateGeneration: number; canUndo: boolean; canRedo: boolean; slides: RenderSlide[] }
-export interface SlidesOutline { count: number; size: SlideSize; slideIds: string[]; paths: string[]; defaultFont?: string }
+export interface SlidesOutline { count: number; size: SlideSize; slideIds: string[]; paths: string[]; defaultFont?: string; writeProtected?: true }
+export interface SlidesMasterView extends MasterPartInfo { slide: RenderSlide }
+export interface SlidesMasterEditResult {
+  generation: number
+  stateGeneration: number
+  canUndo: boolean
+  canRedo: boolean
+  slide: RenderSlide
+  sourceId?: string
+}
 export interface PptxSelection {
   generation: number
   slide: {index: number; id: string | undefined}
@@ -57,6 +72,8 @@ export interface PptxSession {
   notes(expectedGeneration: number, slide: number, signal?: AbortSignal): Promise<string>
   comments(expectedGeneration: number, slide: number, signal?: AbortSignal): Promise<SlideComment[]>
   layouts(expectedGeneration: number, signal?: AbortSignal): Promise<{layouts: ReturnType<typeof listSlideLayouts>; size: SlideSize}>
+  masterParts(expectedGeneration: number, fitWidthPx?: number, signal?: AbortSignal): Promise<SlidesMasterView[]>
+  applyMaster(expectedGeneration: number, partPath: string, operation: unknown, fitWidthPx?: number, signal?: AbortSignal): Promise<SlidesMasterEditResult>
   renderAll(expectedGeneration: number, fitWidthPx?: number, signal?: AbortSignal): Promise<RenderSlide[]>
   outline(expectedGeneration: number, signal?: AbortSignal): Promise<SlidesOutline>
   exportBytes(expectedGeneration: number, signal?: AbortSignal): Promise<{generation:number;bytes:Uint8Array}>
@@ -67,6 +84,10 @@ const DECK_LINK_PROTOCOLS=['http:','https:','mailto:'] as const
 const MAX_INPUT = 32 * 1024 * 1024
 const MAX_PAYLOAD = 256 * 1024
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024
+const MAX_IMAGE_DATA_URL = 'data:image/jpeg;base64,'.length + Math.ceil(MAX_IMAGE_BYTES / 3) * 4
+const MAX_ANALYSIS_PICTURE_PIXELS = 8 * 1024 * 1024
+const MAX_TIFF_PIXELS = 16 * 1024 * 1024
+const MAX_RENDER_IMAGE_BYTES = 8 * 1024 * 1024
 const ZIP_LIMITS = {maxParts:1500, maxPartBytes:8*1024*1024, maxTotalBytes:64*1024*1024}
 // Undo history is whole-deck snapshots (slides deep, archive entries shallow): bound both the
 // count and the estimated retained bytes so a hostile deck cannot grow the session without limit.
@@ -75,25 +96,99 @@ const MAX_RENDER_SLIDES = 200
 const MAX_GENERATED_BYTES=64*1024*1024,MAX_GENERATED_PAGES=200,GENERATED_PAGE_TTL_MS=30*60_000
 const MIN_FIT_WIDTH_PX = 320, MAX_FIT_WIDTH_PX = 4096, DEFAULT_FIT_WIDTH_PX = 960
 const EMU_MAX = 2147483647, ROT_DEG_MAX = 35791
+const MASTER_OPERATIONS = new Set(['setText', 'setTransform', 'setFill', 'setStroke', 'deleteElement', 'addElement'])
+
+function editableMasterParts(state: OpenedPptx): MasterPartInfo[] {
+  const parts = new Map<string, MasterPartInfo>()
+  for (const part of listMasterParts(state.archive)) {
+    const canonical = part.kind === 'master'
+      ? /^ppt\/slideMasters\/slideMaster\d+\.xml$/
+      : /^ppt\/slideLayouts\/slideLayout\d+\.xml$/
+    if (canonical.test(part.partPath) && state.archive.entries.has(part.partPath)) parts.set(part.partPath, part)
+  }
+  return [...parts.values()]
+}
 function imageContent(input:SlidesImageCommand){
   if(!input||typeof input!=='object'||(input.mode!=='insert'&&input.mode!=='replace')||!(input.bytes instanceof Uint8Array)||input.bytes.byteLength<1||input.bytes.byteLength>MAX_IMAGE_BYTES)throw new Error('INVALID_MEDIA')
   const bytes=Uint8Array.from(input.bytes)
-  const mime=bytes[0]===0x89&&bytes[1]===0x50&&bytes[2]===0x4e&&bytes[3]===0x47?'image/png'
-    :bytes[0]===0xff&&bytes[1]===0xd8&&bytes[2]===0xff?'image/jpeg'
-    :bytes[0]===0x47&&bytes[1]===0x49&&bytes[2]===0x46&&bytes[3]===0x38?'image/gif':null
-  const ext=String(input.ext).toLowerCase().replace(/^jpeg$/,'jpg')
-  if(!mime||({png:'image/png',jpg:'image/jpeg',gif:'image/gif'} as Record<string,string>)[ext]!==mime)throw new Error('INVALID_MEDIA')
-  const size=mime==='image/gif'&&bytes.length>=10?{w:bytes[6]!+(bytes[7]!<<8),h:bytes[8]!+(bytes[9]!<<8)}:imageSizeFromBytes(bytes)
+  const mime=sniffImageMime(bytes)
+  const ext=String(input.ext).toLowerCase().replace(/^jpeg$/,'jpg').replace(/^tiff$/,'tif')
+  if(!mime||({png:'image/png',jpg:'image/jpeg',gif:'image/gif',bmp:'image/bmp',tif:'image/tiff'} as Record<string,string>)[ext]!==mime)throw new Error('INVALID_MEDIA')
+  const tiff = mime==='image/tiff' ? tiffToPng(bytes,MAX_TIFF_PIXELS) : null
+  if (mime==='image/tiff' && (!tiff || tiff.png.length>MAX_RENDER_IMAGE_BYTES)) throw new Error('INVALID_MEDIA')
+  const size=tiff?{w:tiff.width,h:tiff.height}
+    :mime==='image/gif'&&bytes.length>=10?{w:bytes[6]!+(bytes[7]!<<8),h:bytes[8]!+(bytes[9]!<<8)}:imageSizeFromBytes(bytes)
   if(!size||size.w<1||size.h<1||size.w>100_000||size.h>100_000||size.w*size.h>100_000_000)throw new Error('INVALID_MEDIA')
   return {bytes,ext,size}
 }
-/** JSON-only surface for GenOffice's AI-callable ops. Media-bearing and explicitly
- * non-AI-callable ops stay out; every accepted op is revalidated by the op registry. */
+
+// Reject incomplete inline images without allocating a decoded pixel plane.
+function completePng(bytes:Buffer):boolean {
+  let hasData=false
+  for(let offset=8;offset+12<=bytes.length;){
+    const size=bytes.readUInt32BE(offset),end=offset+8+size
+    if(end+4>bytes.length)return false
+    const type=bytes.toString('ascii',offset+4,offset+8)
+    if(offset===8?(type!=='IHDR'||size!==13):type==='IHDR')return false
+    if(type==='IDAT'&&size>0)hasData=true
+    if(type==='IEND')return hasData&&size===0&&end+4===bytes.length
+    offset=end+4
+  }
+  return false
+}
+
+function completeJpeg(bytes:Buffer):boolean {
+  let hasFrame=false
+  for(let offset=2;offset+4<=bytes.length;){
+    if(bytes[offset++]!==0xff)return false
+    while(bytes[offset]===0xff)offset++
+    const marker=bytes[offset++]
+    if(marker===0x01)continue
+    if(marker===0xd8||marker===0xd9||offset+2>bytes.length)return false
+    const size=bytes.readUInt16BE(offset),end=offset+size
+    if(size<2||end>bytes.length)return false
+    if(marker!==undefined&&marker>=0xc0&&marker<=0xcf&&![0xc4,0xc8,0xcc].includes(marker)){
+      if(hasFrame||size<8)return false
+      const components=bytes[offset+7]!
+      if(components<1||components>4||size!==8+components*3)return false
+      for(let index=0;index<components;index++){
+        const sampling=bytes[offset+9+index*3]!,horizontal=sampling>>>4,vertical=sampling&15
+        if(horizontal<1||horizontal>4||vertical<1||vertical>4)return false
+      }
+      hasFrame=true
+    }
+    if(marker===0xda)return hasFrame&&size>=6&&bytes.indexOf(Buffer.from([0xff,0xd9]),end+1)!==-1
+    offset=end
+  }
+  return false
+}
+
+function decodedAnalysisPicture(bytes:Buffer,ext:'png'|'jpg'):Uint8Array {
+  if (!(ext==='png'?completePng(bytes):completeJpeg(bytes))) throw new Error('INVALID_MEDIA')
+  const media=imageContent({mode:'insert',slide:0,placement:'natural',bytes,ext})
+  const {w:width,h:height}=media.size
+  if (width*height>MAX_ANALYSIS_PICTURE_PIXELS) throw new Error('INVALID_MEDIA')
+  try {
+    if (ext==='png') {
+      const decoded=PNG.sync.read(bytes,{checkCRC:true})
+      if (decoded.width!==width||decoded.height!==height) throw new Error('INVALID_MEDIA')
+    } else {
+      const decoder=new JpegImage()
+      decoder.parse(bytes,{dnlScanLines:height})
+      if (decoder.width!==width||decoder.height!==height||decoder.getData({width,height,forceRGBA:true}).length!==width*height*4) throw new Error('INVALID_MEDIA')
+    }
+  } catch { throw new Error('INVALID_MEDIA') }
+  return media.bytes
+}
+
+/** JSON command fields for native Web operations. Each accepted op is also
+ * revalidated by the op registry. */
 const OP_FIELDS: Record<string, readonly string[]> = {
   setText: ['op','target','paragraphs','group'],
   setFill: ['op','target','fill','group'],
   setStroke: ['op','target','stroke','group'],
   addElement: ['op','target','offset','kind','paragraphs','fill','stroke','bodyPr','adjustments'],
+  addPicture: ['op','target','offset','bytes','ext','descr'],
   deleteElement: ['op','target'],
   setTransform: ['op','target','box','absBox','rotDeg','group','resizeTableGrid'],
   reorderElement: ['op','target','dir'],
@@ -297,15 +392,16 @@ function checkLayoutRef(value: unknown) {
   if (typeof value === 'string' && value.length > 0 && value.length <= 512 && /^[\w./ -]+$/.test(value)) return
   throw new Error('INVALID_LAYOUT')
 }
-/** JSON-only command surface. Never forward TxnRequest.parts, master-part targets, media bytes
- * or arbitrary op names: each op is field-checked against the whitelist above, then re-validated
- * and journaled by the op registry inside the selected transaction mode. */
-function captureOps(input: unknown): Op[] {
+/** Copy the batch and validate its fields before scheduling a mutation. One inline
+ * PNG or JPEG can share the transaction with its provenance text box. */
+function captureOps(input: unknown, allowAnalysisPicture=false): Op[] {
   if (!Array.isArray(input) || input.length === 0 || input.length > 100) throw new Error('OPS_LIMIT')
   let json: string
   try { json=JSON.stringify(input) } catch { throw new Error('INVALID_OPS') }
-  if (new TextEncoder().encode(json).byteLength > MAX_PAYLOAD) throw new Error('PAYLOAD_LIMIT')
+  const payloadBytes = Buffer.byteLength(json)
+  if (payloadBytes > MAX_PAYLOAD + MAX_IMAGE_DATA_URL) throw new Error('PAYLOAD_LIMIT')
   const captured: unknown[]=JSON.parse(json)
+  let pictureBytes = 0
   for (const value of captured) {
     if (!record(value) || typeof value.op !== 'string') throw new Error('UNSUPPORTED_OP')
     const fields = OP_FIELDS[value.op]
@@ -342,6 +438,27 @@ function captureOps(input: unknown): Op[] {
       case 'setStroke':
         checkStrokePatch(value.stroke, true)
         break
+      case 'addPicture': {
+        geometry(value.offset, 'INVALID_GEOMETRY')
+        const note=captured[1]
+        if (!allowAnalysisPicture || captured.length!==2 || value!==captured[0] || !record(value.target) ||
+            !record(note) || note.op!=='addElement' || note.kind!=='textbox' || !record(note.target) || note.target.slide!==value.target.slide ||
+            (value.ext !== 'png' && value.ext !== 'jpg') ||
+            typeof value.bytes !== 'string' || value.bytes.length > MAX_IMAGE_DATA_URL ||
+            (value.descr !== undefined && (typeof value.descr !== 'string' || value.descr.length > 500))) throw new Error('INVALID_MEDIA')
+        const hasProvenanceText=Array.isArray(note.paragraphs) && note.paragraphs.some(paragraph=>
+          record(paragraph) && Array.isArray(paragraph.runs) && paragraph.runs.some(run=>
+            record(run) && typeof run.text==='string' && run.text.trim().length>0))
+        if (!hasProvenanceText) throw new Error('INVALID_MEDIA')
+        const prefix = value.ext === 'png' ? 'data:image/png;base64,' : 'data:image/jpeg;base64,'
+        if (!value.bytes.startsWith(prefix)) throw new Error('INVALID_MEDIA')
+        const encoded = value.bytes.slice(prefix.length)
+        const bytes = Buffer.from(encoded, 'base64')
+        if (bytes.toString('base64') !== encoded) throw new Error('INVALID_MEDIA')
+        pictureBytes = value.bytes.length
+        value.bytes = decodedAnalysisPicture(bytes,value.ext)
+        break
+      }
       case 'addElement':
         geometry(value.offset, 'INVALID_GEOMETRY')
         if (typeof value.kind !== 'string' || !/^[A-Za-z][A-Za-z0-9]{0,63}$/.test(value.kind)) throw new Error('INVALID_KIND')
@@ -406,6 +523,7 @@ function captureOps(input: unknown): Op[] {
         break
     }
   }
+  if (payloadBytes - pictureBytes > MAX_PAYLOAD) throw new Error('PAYLOAD_LIMIT')
   return captured as Op[]
 }
 function fitWidth(fitWidthPx?: number): number {
@@ -433,14 +551,14 @@ function deckFont(state: OpenedPptx): string | undefined {
   return undefined
 }
 const DEFAULT_ACCENTS=['#4472C4','#ED7D31','#A5A5A5','#FFC000','#5B9BD5','#70AD47']
-/** Theme accent1..6, always six entries aligned by slot so `mono-accentN` names the real accentN. */
+/** GenOffice's gallery enumerates the readable theme accents in their original order. */
 function themeAccents(state:OpenedPptx):string[]{
   const slide=state.deck.slides[0]
   let found:(string|undefined)[]=[]
   try{const chain=slide&&state.archive.resolveSlideChain(slide.path);const xml=chain?.themePath?state.archive.readText(chain.themePath):null;const colors=xml?parseTheme(xml).colors:undefined;found=['accent1','accent2','accent3','accent4','accent5','accent6'].map(name=>colors?.[name])}catch{}
   // A theme with fewer than three readable accents is treated as having none.
-  if(found.filter(Boolean).length<3)return [...DEFAULT_ACCENTS]
-  return DEFAULT_ACCENTS.map((fallback,index)=>found[index]||fallback)
+  const colors = found.filter((color): color is string => !!color)
+  return colors.length >= 3 ? colors : [...DEFAULT_ACCENTS]
 }
 /** `accents` lets callers resolving many schemes parse the theme once. */
 function chartColors(state:OpenedPptx,key:string,accents?:string[]):string[]|undefined{
@@ -452,7 +570,8 @@ function chartColors(state:OpenedPptx,key:string,accents?:string[]):string[]|und
   if(key==='colorful2')return [...accents.slice(3),...accents.slice(0,3)]
   const match=/^mono-accent([1-6])$/.exec(key)
   if(!match)return undefined
-  const color=accents[Number(match[1])-1]!
+  const color=accents[Number(match[1])-1]
+  if(!color)return undefined
   const mix=(target:number,ratio:number)=>{const value=parseInt(color.slice(1),16),channel=(part:number)=>Math.round(part+(target-part)*ratio);return '#'+((channel(value>>16)<<16)|(channel((value>>8)&255)<<8)|channel(value&255)).toString(16).padStart(6,'0').toUpperCase()}
   return [mix(0,.25),color,mix(255,.25),mix(255,.45),mix(255,.65)]
 }
@@ -464,6 +583,7 @@ export async function createPptxSession(bytes: Uint8Array, signal?: AbortSignal)
   await assertZipInflatesWithinLimits(input,ZIP_LIMITS)
   aborted(signal)
   let opened: OpenedPptx | undefined=await openPptx(input)
+  const writeProtected=opened.writeProtected
   aborted(signal)
   let generation=0
   const generatedPages=new Map<string,{source:MergeSlideSource;bytes:number;size:SlideSize;createdAt:number}>()
@@ -526,6 +646,12 @@ export async function createPptxSession(bytes: Uint8Array, signal?: AbortSignal)
     queue=result.then(()=>{pending--},()=>{pending--})
     return result
   }
+  function enqueueWrite<T>(expected:number, signal:AbortSignal|undefined, work:(state:OpenedPptx)=>T|Promise<T>):Promise<T> {
+    return enqueue(expected,signal,state=>{
+      if(writeProtected)throw new Error('PPTX_WRITE_PROTECTED')
+      return work(state)
+    })
+  }
   function history(): {canUndo:boolean;canRedo:boolean} { return {canUndo: undoStack.length>0, canRedo: redoStack.length>0} }
   function outlineOf(state: OpenedPptx) {
     return { count: state.deck.slides.length, size: {cx: state.deck.size.cx, cy: state.deck.size.cy},
@@ -567,7 +693,13 @@ export async function createPptxSession(bytes: Uint8Array, signal?: AbortSignal)
   function mediaResolver(state: OpenedPptx) {
     return (mediaRef: string): string | undefined => {
       const bytes = state.archive.readBytes(mediaRef)
-      if (!bytes || bytes.byteLength === 0 || bytes.byteLength > 8 * 1024 * 1024) return undefined
+      if (!bytes || bytes.byteLength === 0 || bytes.byteLength > MAX_RENDER_IMAGE_BYTES) return undefined
+      if (sniffImageMime(bytes) === 'image/tiff') {
+        const preview = tiffToPng(bytes,MAX_TIFF_PIXELS)
+        return preview && preview.png.length <= MAX_RENDER_IMAGE_BYTES
+          ? `data:image/png;base64,${Buffer.from(preview.png).toString('base64')}`
+          : undefined
+      }
       const ext = mediaRef.split('.').pop()?.toLowerCase() ?? ''
       const mime = bytes[0] === 0x89 && bytes[1] === 0x50 ? 'image/png'
         : bytes[0] === 0xff && bytes[1] === 0xd8 ? 'image/jpeg'
@@ -581,6 +713,15 @@ export async function createPptxSession(bytes: Uint8Array, signal?: AbortSignal)
     if (state.deck.slides.length>MAX_RENDER_SLIDES) throw new Error('RENDER_LIMIT')
     const media = mediaResolver(state)
     return state.deck.slides.map((slide,index)=>structuredClone(buildRenderSlide(slide,state.deck.size,{fitWidthPx:width,slideNo:index+1,media})))
+  }
+  function renderMaster(state: OpenedPptx, slide: Slide, width: number): RenderSlide {
+    const rendered = structuredClone(buildRenderSlide(slide, state.deck.size, {fitWidthPx:width, media:mediaResolver(state)}))
+    // The engine mints parse-time IDs on each read. The renderer's selection
+    // must remain addressable through a later parse of the same package part.
+    for (const node of rendered.nodes) {
+      if (!node.decoration && node.durableId) node.sourceId = node.durableId
+    }
+    return rendered
   }
   return {
     selection(expected,slide,elementId,signal) {
@@ -599,9 +740,59 @@ export async function createPptxSession(bytes: Uint8Array, signal?: AbortSignal)
         return context
       })
     },
+    masterParts(expected, width, signal) {
+      return enqueue(expected, signal, state => {
+        const parts = editableMasterParts(state)
+        if (parts.length > MAX_RENDER_SLIDES) throw new Error('RENDER_LIMIT')
+        return parts.flatMap(part => {
+          const slide = parseMasterPart(state.archive, part.partPath)
+          return slide ? [{...part, slide:renderMaster(state, slide, fitWidth(width))}] : []
+        })
+      })
+    },
+    async applyMaster(expected, partPath, operation, width, signal) {
+      const [captured] = captureOps([operation])
+      if (!captured || !MASTER_OPERATIONS.has(captured.op)) throw new Error('UNSUPPORTED_OP')
+      const element = captured.target?.el
+      if (captured.target?.slide !== undefined || captured.group !== undefined ||
+        (captured.op === 'addElement' ? element !== undefined : typeof element !== 'string')) {
+        throw new Error('INVALID_TARGET')
+      }
+      return enqueueWrite(expected, signal, state => {
+        const part = editableMasterParts(state).find(item => item.partPath === partPath)
+        const master = part && parseMasterPart(state.archive, part.partPath)
+        if (!master) throw new Error('INVALID_MASTER_PART')
+        if (typeof element === 'string' && master.elements.filter(item => matchesElementRef(item, element)).length !== 1) {
+          throw new Error('INVALID_ELEMENT')
+        }
+        const before = snapshot(state)
+        const target = {part:partPath, ...(typeof element === 'string' ? {el:element} : {})}
+        let slide: RenderSlide
+        let sourceId: string | undefined
+        try {
+          const result = runTxn(state, {
+            isolation:'atomic', ops:[{...captured, target}], parts:new Map([[partPath, master]]),
+          })
+          if (!result.applied) throw new Error('MASTER_EDIT_REJECTED')
+          historyCost(state)
+          slide = renderMaster(state, master, fitWidth(width))
+          const created = result.records?.[0]?.created?.[0]
+          const createdElement = created && master.elements.find(item => matchesElementRef(item, created))
+          if (createdElement) sourceId = elementDurableId(createdElement) ?? createdElement.id
+        } catch (error) {
+          restore(state, before)
+          throw error
+        }
+        redoStack.length = 0
+        redoBytes = 0
+        push(undoStack, before)
+        stateGeneration = ++generation
+        return {generation, stateGeneration, ...history(), slide, ...(sourceId ? {sourceId} : {})}
+      })
+    },
     async apply(expected, ops, signal, options = {}) {
-      const captured=captureOps(ops)
-      return enqueue(expected,signal,state=>{
+      const captured=captureOps(ops,options.isolation!=='per_op')
+      return enqueueWrite(expected,signal,state=>{
         // Preserve target's canonical/parse-time alias collision fence for every
         // element-addressed operation before the atomic batch can mutate anything.
         for (const op of captured) {
@@ -622,11 +813,12 @@ export async function createPptxSession(bytes: Uint8Array, signal?: AbortSignal)
           stateGeneration=generation
         }
         const journal=(result.records ?? []).map(record=>({op:{op:record.op.op},...(record.slideId ? {slideId:record.slideId} : {}),...(record.created ? {created:record.created} : {})}))
-        return {generation,stateGeneration,...history(),records:result.records ?? [],...outlineOf(state),created:createdOf(state,result.records ?? []),transaction:{applied:result.applied,...(result.dryRun ? {dryRun:true} : {}),...(result.plan ? {plan:result.plan} : {}),...(result.failures ? {failures:result.failures.map(({index,error})=>({index,error}))} : {}),...(result.records ? {records:journal} : {})}}
+        const records=(result.records??[]).map((record,index)=>record.op.op==='addPicture'?journal[index]!:record)
+        return {generation,stateGeneration,...history(),records,...outlineOf(state),created:createdOf(state,result.records ?? []),transaction:{applied:result.applied,...(result.dryRun ? {dryRun:true} : {}),...(result.plan ? {plan:result.plan} : {}),...(result.failures ? {failures:result.failures.map(({index,error})=>({index,error}))} : {}),...(result.records ? {records:journal} : {})}}
       })
     },
     async editChart(expected,slideIndex,sourceId,patch,signal) {
-      return enqueue(expected,signal,state=>{
+      return enqueueWrite(expected,signal,state=>{
         if(!Number.isSafeInteger(slideIndex)||slideIndex<0||slideIndex>=state.deck.slides.length)throw new Error('INVALID_SLIDE')
         if(typeof sourceId!=='string'||!sourceId||sourceId.length>256||!record(patch))throw new Error('INVALID_OPS')
         const slide=state.deck.slides[slideIndex]!
@@ -652,7 +844,7 @@ export async function createPptxSession(bytes: Uint8Array, signal?: AbortSignal)
       })
     },
     async generatePage(expected,specJson,images,signal){
-      return enqueue(expected,signal,async state=>{
+      return enqueueWrite(expected,signal,async state=>{
         if(typeof specJson!=='string'||specJson.length>MAX_PAYLOAD||!Array.isArray(images)||images.length>3)throw new Error('INVALID_GENERATED_PAGE')
         const parsed=parsePageSpec(specJson,1280,720)
         if(!parsed.ok)throw new Error('INVALID_GENERATED_PAGE')
@@ -677,7 +869,7 @@ export async function createPptxSession(bytes: Uint8Array, signal?: AbortSignal)
       })
     },
     async landGeneratedPages(expected,markers,mode,atIndex,signal){
-      return enqueue(expected,signal,state=>{
+      return enqueueWrite(expected,signal,state=>{
         if(!Array.isArray(markers)||!markers.length||markers.length>MAX_GENERATED_PAGES||!['replace','append','replace_at','insert_at'].includes(mode))throw new Error('INVALID_GENERATED_PAGE')
         if((mode==='replace_at'||mode==='insert_at')&&(
           markers.length!==1||!Number.isSafeInteger(atIndex)||atIndex!<0||
@@ -708,13 +900,15 @@ export async function createPptxSession(bytes: Uint8Array, signal?: AbortSignal)
     },
     async applyImage(expected,input,signal){
       const media=imageContent(input)
-      return enqueue(expected,signal,state=>{
+      return enqueueWrite(expected,signal,state=>{
         if(!Number.isSafeInteger(input.slide)||input.slide<0||input.slide>=state.deck.slides.length)throw new Error('INVALID_SLIDE')
         const slide=state.deck.slides[input.slide]!
         let offset:{x:number;y:number;cx:number;cy:number}|undefined
         let targetId:string|undefined
         if(input.mode==='insert'){
-          const value=input.offset
+          const value=input.placement==='natural'
+            ? pictureFrame({width:state.deck.size.cx,height:state.deck.size.cy},{width:media.size.w,height:media.size.h},imageDpiFromBytes(media.bytes),96)
+            : input.offset
           if(!value||![value.x,value.y,value.cx,value.cy].every(Number.isFinite)||value.cx<=0||value.cy<=0||[value.x,value.y,value.cx,value.cy].some(n=>Math.abs(n)>EMU_MAX))throw new Error('INVALID_GEOMETRY')
           offset={x:Math.round(value.x),y:Math.round(value.y),cx:Math.round(value.cx),cy:Math.round(value.cy)}
         }else{
@@ -757,14 +951,14 @@ export async function createPptxSession(bytes: Uint8Array, signal?: AbortSignal)
       })
     },
     beginHistoryBatch(expected,signal){
-      return enqueue(expected,signal,state=>{
+      return enqueueWrite(expected,signal,state=>{
         if(batchDepth===0)batchBefore=snapshot(state)
         batchDepth++
         return true
       })
     },
     endHistoryBatch(expected,signal){
-      return enqueue(expected,signal,()=>{
+      return enqueueWrite(expected,signal,()=>{
         if(batchDepth===0)return {snapshotId:null,...history()}
         if(--batchDepth>0)return {snapshotId:null,...history()}
         const before=batchBefore;batchBefore=undefined
@@ -780,7 +974,7 @@ export async function createPptxSession(bytes: Uint8Array, signal?: AbortSignal)
       })
     },
     restoreSnapshot(expected,snapshotId,signal){
-      return enqueue(expected,signal,state=>{
+      return enqueueWrite(expected,signal,state=>{
         if(batchDepth>0)throw new Error('HISTORY_BATCH_ACTIVE')
         if(!Number.isSafeInteger(snapshotId)||snapshotId<1)throw new Error('INVALID_SNAPSHOT')
         const target=aiSnapshots.get(snapshotId)
@@ -796,7 +990,7 @@ export async function createPptxSession(bytes: Uint8Array, signal?: AbortSignal)
       })
     },
     undo(expected,signal) {
-      return enqueue(expected,signal,state=>{
+      return enqueueWrite(expected,signal,state=>{
         if(batchDepth>0)throw new Error('HISTORY_BATCH_ACTIVE')
         if (undoStack.length===0) throw new Error('NOTHING_TO_UNDO')
         const current=snapshot(state)
@@ -811,7 +1005,7 @@ export async function createPptxSession(bytes: Uint8Array, signal?: AbortSignal)
       })
     },
     redo(expected,signal) {
-      return enqueue(expected,signal,state=>{
+      return enqueueWrite(expected,signal,state=>{
         if(batchDepth>0)throw new Error('HISTORY_BATCH_ACTIVE')
         if (redoStack.length===0) throw new Error('NOTHING_TO_REDO')
         const current=snapshot(state)
@@ -884,10 +1078,10 @@ export async function createPptxSession(bytes: Uint8Array, signal?: AbortSignal)
       return enqueue(expected,signal,state=>renderSlides(state,fitWidth(width)))
     },
     outline(expected,signal) {
-      return enqueue(expected,signal,state=>({...outlineOf(state),defaultFont:deckFont(state)}))
+      return enqueue(expected,signal,state=>({...outlineOf(state),defaultFont:deckFont(state),...(writeProtected?{writeProtected}:{})}))
     },
     exportBytes(expected,signal) {
-      return enqueue(expected,signal,async state=>{
+      return enqueueWrite(expected,signal,async state=>{
         const bytes=await savePptx(state)
         check(expected,signal)
         // Download bytes only. Never calls commitSaved or marks a durable revision as saved.
@@ -903,7 +1097,7 @@ export async function createPptxSession(bytes: Uint8Array, signal?: AbortSignal)
 // ── child-process IPC loop: one untrusted deck per isolated Node child ──
 
 export interface PptxChildBinding { fileId: string; revision: string }
-interface ChildMessage { snapshotId?:number; id: number; m: string; expected?: number; ops?: unknown; isolation?: 'atomic' | 'per_op'; dryRun?: boolean; slide?: number; width?: number; sourceId?:string;patch?:Record<string,unknown>;specJson?:string;images?:Array<{url:string;bytes:Uint8Array;ext:string}>;image?:SlidesImageCommand;markers?:string[];mode?:'replace'|'append'|'replace_at'|'insert_at';atIndex?:number; bytes?: Uint8Array; binding?: PptxChildBinding }
+interface ChildMessage { snapshotId?:number; id: number; m: string; expected?: number; ops?: unknown; isolation?: 'atomic' | 'per_op'; dryRun?: boolean; slide?: number; width?: number; sourceId?:string;patch?:Record<string,unknown>;specJson?:string;images?:Array<{url:string;bytes:Uint8Array;ext:string}>;image?:SlidesImageCommand;markers?:string[];mode?:'replace'|'append'|'replace_at'|'insert_at';atIndex?:number; bytes?: Uint8Array; binding?: PptxChildBinding; partPath?:string; operation?:unknown }
 /** Child entry body: serves exactly one bound session over IPC, then exits. Exported for the
  * dedicated child entry module; never starts from an imported module by accident. */
 export function runPptxSessionChild(): void {
@@ -945,6 +1139,8 @@ export function runPptxSessionChild(): void {
           case 'notes': reply(id,{id,ok:true,result:await session.notes(raw.expected!,raw.slide!)}); return
           case 'comments': reply(id,{id,ok:true,result:await session.comments(raw.expected!,raw.slide!)}); return
           case 'layouts': reply(id,{id,ok:true,result:await session.layouts(raw.expected!)}); return
+          case 'masterParts': reply(id,{id,ok:true,result:await session.masterParts(raw.expected!,raw.width)}); return
+          case 'applyMaster': reply(id,{id,ok:true,result:await session.applyMaster(raw.expected!,raw.partPath!,raw.operation,raw.width)}); return
           case 'renderAll': reply(id,{id,ok:true,result:await session.renderAll(raw.expected!,raw.width)}); return
           case 'outline': reply(id,{id,ok:true,result:await session.outline(raw.expected!)}); return
           case 'export': reply(id,{id,ok:true,result:await session.exportBytes(raw.expected!)}); return

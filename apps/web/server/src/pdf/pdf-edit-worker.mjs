@@ -8,6 +8,7 @@ process.once('message',async message=>{
   else if(command?.action==='applyOps')job=(await import('./apply-ops-job.mjs')).createPdfApplyOpsJob()
   else if(['imageInsertsQuery','draftInserts','draftInsertsQuery'].includes(command?.action))job=(await import('./draft-inserts-job.mjs')).createPdfDraftInsertsJob(command.action)
   else if(command?.action==='annotationsQuery')job=(await import('./annotations-query-job.mjs')).createPdfAnnotationsQueryJob()
+  else if(command?.action==='signaturesQuery')job=(await import('./signatures-query.mjs')).createPdfSignaturesQueryJob()
   else if(command?.action==='textEditsQuery')job=(await import('./text-edits-query.mjs')).createPdfTextEditsQueryJob()
   else if(command?.action==='imagePreviewQuery')job=(await import('./image-preview-query.mjs')).createPdfImagePreviewQueryJob()
   else if(command?.action==='textInsertsQuery')job=(await import('./text-inserts-job.mjs')).createPdfTextInsertsQueryJob()

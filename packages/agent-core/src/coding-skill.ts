@@ -25,7 +25,8 @@ export function createCodingSkill(deps: CodingSkillDeps): AgentSkill {
 You remain the Office assistant using the user's selected model and existing document tools.
 You lead most requests: understand the goal, coordinate teammates and summarize their real results.
 Use delegate_agent_task for coding, debugging, scripts, tests and other tasks requiring a harness. The harness executes these tasks; do not claim execution without a returned result.
-When direct source tools are offered, use them to inspect tables and run straightforward read-only SQL aggregations. Delegate code execution, complex computation, data cleaning and plotting to a harness. For a follow-up on a query, pass dataInputs with sourceIds: [] and resultIds containing the specific artifact.resultId; never paste raw rows into the task. Do not grant live source access or rerun a query to silently replace an expired snapshot. For a task without data, omit dataInputs. Report truncation or missing data.
+When direct source tools are offered, use them to inspect tables and run straightforward read-only SQL aggregations. Delegate code execution, complex computation, data cleaning and plotting to a harness. For a follow-up on a query, pass dataInputs with sourceIds: [] and resultIds containing the specific artifact.resultId; never paste raw rows into the task. Do not grant live source access or rerun a query to silently replace an expired snapshot. Report truncation or missing data.
+Omit dataInputs for standalone coding or arithmetic that should return text files from the task workspace. Passing dataInputs, even with empty arrays, selects committed artifact delivery. Pass it only for authorized workspace inputs or when the user asks to publish an analysis artifact through the workspace delivery tools.
 Use ordinary Office tools directly for document reading, authoring, formatting, formulas and editing. A request to write an article, report or Word document belongs to Office: use write_document or insert_content, never delegate the writing itself to a coding harness.
 Built-in and external agents are peers. list_agents lists their capabilities; omitting agentId selects the default coding agent.
 Use list_agent_data to discover source and frozen-result IDs before delegating analysis. This tool returns metadata only; the harness fetches and processes the data.
@@ -36,7 +37,30 @@ Delegation failure affects only that task; continue Office work independently.`,
     tools: [
       ...(deps.dataCatalog?[{name:'list_agent_data',description:'List accessible source and frozen-result metadata for harness delegation; contains no data rows.',inputSchema:{type:'object',properties:{sourcesAfter:{type:'string',maxLength:128},resultsAfter:{type:'string',maxLength:128}},additionalProperties:false}}]:[]),
       {name:'list_agents',description:'List available coding agents. Built-in and external agents have equal standing.',inputSchema:{type:'object',properties:{},additionalProperties:false}},
-      {name:DELEGATE_AGENT_TOOL,description:'Delegate programming, data processing, SQL, statistics or charts. Provide dataInputs for analysis and omit agentId for the default agent.',inputSchema:{type:'object',properties:{instruction:{type:'string',minLength:1,maxLength:16000},context:{type:'string',maxLength:32000},agentId:{type:'string',minLength:1,maxLength:100},dataInputs:{type:'object',properties:{sourceIds:{type:'array',items:{type:'string'},maxItems:32},resultIds:{type:'array',items:{type:'string'},maxItems:32}},required:['sourceIds','resultIds'],additionalProperties:false}},required:['instruction'],additionalProperties:false}},
+      {
+        name:DELEGATE_AGENT_TOOL,
+        description:'Delegate programming, data processing, SQL, statistics or charts. Omit dataInputs for ordinary coding and scratch text files. Omit agentId for the default agent.',
+        inputSchema:{
+          type:'object',
+          properties:{
+            instruction:{type:'string',minLength:1,maxLength:16000},
+            context:{type:'string',maxLength:32000},
+            agentId:{type:'string',minLength:1,maxLength:100},
+            dataInputs:{
+              type:'object',
+              description:'Passing dataInputs, even with empty arrays, selects committed artifact delivery. Use it for authorized workspace data or an explicitly requested analysis artifact. Omit this field to return scratch text files.',
+              properties:{
+                sourceIds:{type:'array',items:{type:'string'},maxItems:32},
+                resultIds:{type:'array',items:{type:'string'},maxItems:32},
+              },
+              required:['sourceIds','resultIds'],
+              additionalProperties:false,
+            },
+          },
+          required:['instruction'],
+          additionalProperties:false,
+        },
+      },
     ],
     async executeTool(call,signal) {
       try {

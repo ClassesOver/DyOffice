@@ -3246,9 +3246,9 @@ async function loadRange(
   waitStalls = 0,
   lastIndexedRow: number | null = null,
   bulk = false,
-): Promise<void> {
+): Promise<boolean> {
   const state = lazyWorkbookRef.current
-  if (!state) return
+  if (!state) return false
   const sheetId = worksheet.getSheetId()
   const loaded = state.loadedRanges.get(sheetId)
   // A range loaded before the sidecar finished indexing came without the
@@ -3261,10 +3261,10 @@ async function loadRange(
     containsRange(loaded, range) &&
     !state.decorationsPendingSheets.has(sheetId)
   ) {
-    return
+    return true
   }
   const requestKey = `${range.startRow}:${range.endRow}:${range.startColumn}:${range.endColumn}`
-  if (!isRetry && state.loadingKeys.get(sheetId) === requestKey) return
+  if (!isRetry && state.loadingKeys.get(sheetId) === requestKey) return false
   const previousTimer = state.retryTimers.get(sheetId)
   if (previousTimer) clearTimeout(previousTimer)
   state.retryTimers.delete(sheetId)
@@ -3272,16 +3272,16 @@ async function loadRange(
 
   try {
     const sheetMeta = lazySheetMeta(state, sheetId)
-    if (!sheetMeta) return
+    if (!sheetMeta) return false
     const mapped = await readSheetRangeMapped(state, sheetId, range, sheetMeta)
     if (lazyWorkbookRef.current !== state || state.loadingKeys.get(sheetId) !== requestKey) {
-      return
+      return false
     }
     const richFamilies = mapped ? richRunFamilies(mapped.screen.cells) : null
     if (richFamilies?.size) {
       await untilCellFontsLoaded(registerCellFontAliases(richFamilies))
       if (lazyWorkbookRef.current !== state || state.loadingKeys.get(sheetId) !== requestKey) {
-        return
+        return false
       }
     }
     if (!mapped) {
@@ -3315,7 +3315,7 @@ async function loadRange(
         hiddenRowsInfo(state, sheetId),
       )
       if (!state.flags.preloadRunning) state.loadedRanges.set(sheetId, range)
-      return
+      return true
     }
     const availableEndRow =
       mapped.indexedThroughScreen === null
@@ -3542,7 +3542,7 @@ async function loadRange(
         await new Promise((resolve) => setTimeout(resolve, 250))
         if (lazyWorkbookRef.current === state) {
           state.loadingKeys.delete(sheetId)
-          await loadRange(
+          return await loadRange(
             runtime,
             lazyWorkbookRef,
             worksheet,
@@ -3573,10 +3573,12 @@ async function loadRange(
         }),
       )
     }
+    return availableEndRow !== null && availableEndRow >= range.endRow
   } catch (error: unknown) {
     if (lazyWorkbookRef.current === state && isActiveSheet(runtime, sheetId)) {
       setMessage(error instanceof Error ? error.message : t('appLoadRangeFailed'))
     }
+    return false
   } finally {
     if (state.loadingKeys.get(sheetId) === requestKey) {
       state.loadingKeys.delete(sheetId)
@@ -3608,7 +3610,7 @@ export async function ensureLazyRangeLoaded(
   ) {
     return false
   }
-  await loadRange(
+  const loadedByRequest = await loadRange(
     runtime,
     lazyWorkbookRef,
     worksheet,
@@ -3622,7 +3624,13 @@ export async function ensureLazyRangeLoaded(
   )
   const state = lazyWorkbookRef.current
   const loaded = state?.loadedRanges.get(worksheet.getSheetId())
-  return state === initialState && loaded !== undefined && containsRange(loaded, range)
+  // The full preload owns loadedRanges and prevents eviction while it runs.
+  // An explicit read can still install its complete range before that map is updated.
+  return state === initialState && (
+    state.flags.preloadComplete ||
+    (state.flags.preloadRunning && loadedByRequest) ||
+    (loaded !== undefined && containsRange(loaded, range))
+  )
 }
 
 /// readWorkbookRange's protocol cap (MAX_RANGE_CELLS in desktop-api.ts):

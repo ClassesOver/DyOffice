@@ -19,9 +19,9 @@ it('inserts literal text and table values through the real atomic slide executor
  }
 })
 it('captures identity, slide, selection, generation and blocks queued stale or unauthorized writes',async()=>{
- let state:any={identity:{},slideId:'slide1',index:0,selection:'[]',generation:1,width:960,height:540},hold=0,writes=0
+ let state:any={identity:{},slideId:'slide1',index:0,selection:'[]',generation:1,width:960,height:540,scale:1},hold=0,writes=0
  const capture=()=>captureSlideAnalysis({current:()=>state,hold:()=>hold++,run:async(_ops,check)=>{await Promise.resolve();if(!check())return false;writes++;return true}})
- for(const key of ['identity','slideId','index','selection','generation']){
+ for(const key of ['identity','slideId','index','selection','generation','scale']){
   const saved=state,c=capture();state={...state,[key]:key==='identity'?{}:'changed'}
   expect(c.matches()).toBe(false);expect(await c.apply({kind:'text',text:'x'},()=>true)).toBe(false);state=saved
  }
@@ -61,4 +61,9 @@ it('inserts a verified analysis image as a native picture, aspect ratio kept, pl
 })
 it('rejects an image whose declared size does not match its header',()=>{
  expect(()=>analysisSlideOperations({kind:'image',mediaType:'image/png',base64:PNG_1x1,width:2,height:1,alt:''},0,960,540)).toThrow()
+})
+it('positions the picture and provenance using the actual wide-slide geometry',()=>{
+ const [picture,note]=analysisSlideOperations({kind:'image',mediaType:'image/png',base64:PNG_1x1,width:1,height:1,alt:'chart',provenance:['Frozen result']},0,960,540,.75) as {offset:{x:number;y:number;cx:number;cy:number}}[]
+ expect(picture!.offset.x+picture!.offset.cx/2).toBe(6_096_000)
+ expect(note!.offset.y+note!.offset.cy).toBe(6_172_200)
 })

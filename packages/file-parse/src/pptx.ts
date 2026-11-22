@@ -280,30 +280,41 @@ function joinSections(sections: SlideSection[]): string {
   return `[No extractable text: none of the ${n} slide${n === 1 ? '' : 's'} carries text; the content is in embedded images, which this extraction does not read.]\n\n${body}`
 }
 
+function hasHiddenShape(value: unknown): boolean {
+  if (Array.isArray(value)) return value.some(hasHiddenShape)
+  if (!value || typeof value !== 'object') return false
+  const node = value as Record<string, unknown>
+  if (asArray(node.cNvPr).some(item => {
+    const hidden = (item as Record<string, unknown> | undefined)?.['@_hidden']
+    return hidden !== undefined && hidden !== '0' && hidden !== 'false'
+  })) return true
+  return Object.values(node).some(hasHiddenShape)
+}
+
 /** extract slide text from a pptx: one "## Slide N" section per slide, a line per paragraph */
-export async function pptxToText(bytes: Uint8Array): Promise<string> {
+export async function pptxToText(bytes: Uint8Array, opts: { visibleOnly?: boolean } = {}): Promise<string> {
   // The declared-size pass below is advisory; this metered gate is the one that
   // holds when a part lies about its size (GH #759).
   await assertZipInflatesWithinLimits(bytes)
   const zip = await JSZip.loadAsync(bytes)
   assertZipWithinLimits(zip)
   const slideEntries = await presentationSlideEntries(zip)
+  if (!slideEntries && opts.visibleOnly) throw new Error('Slide visibility cannot be determined')
   const sections: SlideSection[] = []
-  if (slideEntries) {
-    for (const [index, path] of slideEntries.entries()) {
-      if (path === null) continue
-      const xml = await zipText(zip, path)
-      if (!xml) continue
-      sections.push(slideSection(`## Slide ${index + 1}`, xml, await notesXmlForSlide(zip, path)))
-    }
-    return joinSections(sections)
-  }
-  for (const path of legacySlidePaths(zip)) {
+  const entries = slideEntries ?? legacySlidePaths(zip)
+  for (const [index, path] of entries.entries()) {
+    if (path === null) continue
     const xml = await zipText(zip, path)
     if (!xml) continue
-    sections.push(
-      slideSection(`## Slide ${slideNumber(path)}`, xml, await notesXmlForSlide(zip, path)),
-    )
+    if (opts.visibleOnly) {
+      const slide = manifestParser.parse(xml).sld
+      if (!slide || (slide['@_show'] !== undefined && !['1', 'true'].includes(slide['@_show']))) continue
+      // The text walker does not distinguish hidden shapes from visible ones.
+      if (hasHiddenShape(slide)) continue
+    }
+    const number = slideEntries ? index + 1 : slideNumber(path)
+    const notes = opts.visibleOnly ? undefined : await notesXmlForSlide(zip, path)
+    sections.push(slideSection(`## Slide ${number}`, xml, notes))
   }
   return joinSections(sections)
 }

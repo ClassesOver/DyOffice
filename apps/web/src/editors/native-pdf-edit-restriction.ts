@@ -13,7 +13,7 @@ export async function nativePdfEditRestriction(bytes:Uint8Array,encrypted:boolea
   return null
  }catch(error){
   const code=(error as {code?:string}|null)?.code
-  if(code==='SIGNATURE_EDIT_REFUSED')return message('只读：包含签名结构（未验证签名）','Read only: signature structure detected (signature not verified)')
+  if(code==='SIGNATURE_EDIT_REFUSED')return message('只读：包含签名结构','Read only: signature structure detected')
   if(code==='PDF_EDIT_LIMIT')return message('只读：超出 PDF 编辑上限','Read only: PDF exceeds the editing limits')
   return message('只读：无法确认此 PDF 的结构可安全编辑','Read only: this PDF could not be checked for edit support')
  }

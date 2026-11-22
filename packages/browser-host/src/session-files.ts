@@ -11,7 +11,12 @@ function errorFor(status: number) {
   const code = status === 401 || status === 403 ? 'UNAUTHORIZED' : status === 409 || status === 410 ? 'CONFLICT' : status === 413 ? 'PAYLOAD_TOO_LARGE' : status >= 500 || status === 408 ? 'UNAVAILABLE' : 'INVALID_RESPONSE'
   return Object.assign(hostError(code,'request'),{ status })
 }
-export function createSessionFileHost({ fetchImpl = fetch, editorId = crypto.randomUUID(), onState, leaseRetryDelayMs = 150 }: { fetchImpl?: typeof fetch; editorId?: string; onState?: () => void; leaseRetryDelayMs?: number } = {}) {
+export class CitedRevisionChanged extends HostError {
+  constructor() { super('CONFLICT', 'The cited revision is no longer the current document revision.') }
+}
+
+export function createSessionFileHost({ fetchImpl = fetch, editorId = crypto.randomUUID(), onState, leaseRetryDelayMs = 150, expectedRevision }: { fetchImpl?: typeof fetch; editorId?: string; onState?: () => void; leaseRetryDelayMs?: number; expectedRevision?: string | undefined } = {}) {
+  let citedRevision = expectedRevision
   const editor = uuid(editorId), contexts = new Map<string,Context>(), references = new Map<string,RevisionRef>(), timers = new Map<string,ReturnType<typeof setInterval>>()
   const expirations = new Map<string,ReturnType<typeof setTimeout>>()
   const renewals = new Map<string,{context: Context; operation: number; promise: Promise<Lease>}>()
@@ -187,9 +192,12 @@ export function createSessionFileHost({ fetchImpl = fetch, editorId = crypto.ran
     async open(fileId) {
       const id = uuid(fileId)
       if (contexts.get(id)?.pending || contexts.get(id)?.preparing) throw hostError('UNAVAILABLE','unconfirmed commit')
+      const initialCitation = citedRevision === undefined ? undefined : uuid(citedRevision)
       const result = await get(`/api/v1/files/${id}`) as OpenFileResult & { name?: string }
       assertActive()
       if (!isRevisionRef(result?.file) || result.file.fileId !== id) throw hostError('INVALID_RESPONSE','open')
+      if (initialCitation && initialCitation !== result.file.revision) throw new CitedRevisionChanged()
+      citedRevision = undefined
       const name = typeof result.name === 'string' && result.name.length <= 255 ? result.name : id + '.' + result.format
       contexts.set(id,{ preparing: false,leaseOperation: 0,exclusiveLease: null,revision: { ...result.file },name,lease: null,pending: null,status: 'idle',staged: new Map() }); remember(result.file); emit()
       return result

@@ -75,7 +75,7 @@ test('four real Office editors share assistant chrome and retain drafts across c
  })
  for(const format of ['docx','xlsx','pptx','pdf']){
   if(format==='pdf')await f.preferences.update(f.alice.token,{theme:'dark'})
-  await page.goto(origin+'/native-'+format+'/?fileId='+files[format].fileId)
+  await page.goto(origin+'/native-'+format+'/?fileId='+files[format].fileId,{waitUntil:'commit'})
   if(format==='docx')await expect(page.locator('.tiptap.doc-page').first()).toBeVisible({timeout:45000})
   if(format==='xlsx')await expect(page.locator('#univer-container canvas').first()).toBeVisible({timeout:45000})
   if(format==='pptx')await expect(page.locator('.app-main')).toBeVisible({timeout:45000})

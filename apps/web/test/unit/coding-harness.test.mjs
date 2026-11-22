@@ -81,6 +81,14 @@ test('data tasks expose only their grant and runtime hash, never collect raw sna
  assert.equal(result.output,'');assert.match(result.summary,/committed artifacts/)
 })
 
+test('a missing data helper fails before starting the coding process',async t=>{
+ const f=await fixture(t,'process.exit(4)')
+ const data={baseUrl:'http://127.0.0.1/api/v1/agents',grant:{taskId:'task_1',credential:'task-only-token',inputs:{sourceIds:[],resultIds:[]}}}
+ const harness=createCodingHarness({cliPath:f.cli,workspaceRoot:f.root,dataHelper:join(f.root,'missing-helper.mjs')})
+ await assert.rejects(harness.run({instruction:'analyze',dataInputs:data.grant.inputs},new AbortController().signal,model,data),{code:'HARNESS_DATA_HELPER_UNAVAILABLE'})
+ assert.deepEqual(await readdir(f.root),['codex'])
+})
+
 test('reports command lifecycle without streaming raw command output',async t=>{
  const f=await fixture(t,`process.stdin.resume();process.stdin.on('end',()=>{
  console.log(JSON.stringify({type:'item.started',item:{type:'command_execution',command:'private command',aggregated_output:'private data'}}));

@@ -1,6 +1,6 @@
 import {flipPixels,multiplyAlpha} from '../../../pdf/src/renderer/image-bake'
 import {removeBackground,type PixelImage} from '../../../pdf/src/renderer/cutout'
-import type {PdfImageBytes} from '../shell/pdf-preview-skill'
+import type {PdfImageBytes} from './pdf-types'
 
 export type PdfImageDraftBakeOperation=
  |{kind:'rotate';direction:'cw'|'ccw'|'180'}

@@ -1,6 +1,7 @@
 import type { RevisionService } from '../revisions/service.ts'
 import type { LeaseService } from '../leases/service.ts'
 import { createHash } from 'node:crypto'
+import { sniffImageMime } from '../../../../../slides/src/main/media-mime.ts'
 import type { createFileService } from '../files/service.ts'
 import { authError } from '../auth/sessions.ts'
 import type { PptxChildSession, SlidesApplyView, SlidesCreatedEntryView, SlidesImageCommand, SlidesRenderSlideLike, SlidesStepView } from '../../../../worker/src/native/pptx-session-host.ts'
@@ -21,9 +22,13 @@ export interface SlidesChartEditInput extends SlidesReadInput {slide:number;sour
 export interface SlidesGeneratedImageInput {url:string;bytesBase64:string;ext:string}
 export interface SlidesGeneratePageInput extends SlidesReadInput {specJson:string;images:SlidesGeneratedImageInput[]}
 export interface SlidesLandPagesInput extends SlidesReadInput {markers:string[];mode:'replace'|'append'|'replace_at'|'insert_at';atIndex?:number}
-export type SlidesImageInput = SlidesReadInput & ({mode:'insert';slide:number;xPx:number;yPx:number;wPx:number;hPx:number;fitWidthPx:number;bytesBase64:string;ext:string}|{mode:'replace';slide:number;sourceId:string;bytesBase64:string;ext:string;keepSrcRect?:boolean})
+export type SlidesImageInput = SlidesReadInput & {slide:number;bytesBase64:string;ext:string} & (
+  {mode:'insert';placement:'natural';xPx?:never;yPx?:never;wPx?:never;hPx?:never;fitWidthPx?:never}
+  | {mode:'insert';placement?:never;xPx:number;yPx:number;wPx:number;hPx:number;fitWidthPx:number}
+  | {mode:'replace';sourceId:string;keepSrcRect?:boolean;placement?:never}
+)
 export interface SlidesSaveExportInput extends SlidesAuthority { revision: string; generation: number }
-export interface SlidesOpenView { generation: number; dirty: boolean; size: { cx: number; cy: number }; defaultFont: string; slides: SlidesRenderSlideLike[]; history: { canUndo: boolean; canRedo: boolean } }
+export interface SlidesOpenView { generation: number; dirty: boolean; size: { cx: number; cy: number }; defaultFont: string; slides: SlidesRenderSlideLike[]; history: { canUndo: boolean; canRedo: boolean }; writeProtected?: true }
 export interface SlidesSlidesView { generation: number; slides: SlidesRenderSlideLike[] }
 export interface SlidesStepResponse { generation: number; dirty: boolean; size: {cx:number;cy:number}; slides: SlidesRenderSlideLike[] | null; history: { canUndo: boolean; canRedo: boolean } }
 type SlidesTransaction = SlidesApplyView['transaction']
@@ -31,7 +36,7 @@ type SlidesTransactionRecord = NonNullable<SlidesTransaction['records']>[number]
 export interface SlidesApplyResponse { generation: number; dirty: boolean; changed: number[]; created: SlidesCreatedEntryView[]; size: {cx:number;cy:number}; order?: string[]; index?: number; sections?: string[]; history: { canUndo: boolean; canRedo: boolean }; transaction: Omit<SlidesTransaction, 'records'> & {records?: SlidesTransactionRecord[]} }
 
 const OP_REJECTED = new Set(['GENERATION_CONFLICT','OP_REJECTED','SESSION_CLOSED','INVALID_SLIDE','HISTORY_BATCH_ACTIVE'])
-const OP_INVALID = new Set(['OPS_LIMIT','PAYLOAD_LIMIT','INVALID_OPS','INVALID_MEDIA','INVALID_ELEMENT','INVALID_GENERATED_PAGE','UNSUPPORTED_OP','UNSUPPORTED_FIELD','INVALID_TARGET','INVALID_PARAGRAPHS','INVALID_RUN','INVALID_FILL','INVALID_STROKE','INVALID_TABLE','INVALID_GEOMETRY','INVALID_KIND','INVALID_ROTATION','INVALID_LAYOUT','INVALID_TEXT','INVALID_FIT_WIDTH','RENDER_LIMIT'])
+const OP_INVALID = new Set(['OPS_LIMIT','PAYLOAD_LIMIT','INVALID_OPS','INVALID_MEDIA','INVALID_ELEMENT','INVALID_GENERATED_PAGE','UNSUPPORTED_OP','UNSUPPORTED_FIELD','INVALID_TARGET','INVALID_PARAGRAPHS','INVALID_RUN','INVALID_FILL','INVALID_STROKE','INVALID_TABLE','INVALID_GEOMETRY','INVALID_KIND','INVALID_ROTATION','INVALID_LAYOUT','INVALID_TEXT','INVALID_FIT_WIDTH','RENDER_LIMIT','INVALID_MASTER_PART','MASTER_EDIT_REJECTED'])
 const STRUCTURAL = new Set(['addBlankSlide','addSlideWithLayout','duplicateSlide','deleteSlide','moveSlide','insertSlidePptx'])
 const ADDING = new Set(['addBlankSlide','addSlideWithLayout','duplicateSlide','insertSlidePptx'])
 const MAX_DOWNLOAD = 32 * 1024 * 1024
@@ -43,11 +48,9 @@ function decodeImage(input:SlidesImageInput){
   if(typeof input.bytesBase64!=='string'||input.bytesBase64.length<4||input.bytesBase64.length>MAX_IMAGE_BASE64||!/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(input.bytesBase64))throw authError(400)
   const bytes=Buffer.from(input.bytesBase64,'base64')
   if(bytes.length<10||bytes.length>MAX_IMAGE_BYTES||bytes.toString('base64')!==input.bytesBase64)throw authError(400)
-  const mime=bytes[0]===0x89&&bytes[1]===0x50&&bytes[2]===0x4e&&bytes[3]===0x47?'image/png'
-    :bytes[0]===0xff&&bytes[1]===0xd8&&bytes[2]===0xff?'image/jpeg'
-    :bytes[0]===0x47&&bytes[1]===0x49&&bytes[2]===0x46&&bytes[3]===0x38?'image/gif':null
-  const ext=input.ext.toLowerCase().replace(/^jpeg$/,'jpg')
-  if(!mime||IMAGE_MIME_BY_EXT[ext]!==mime)throw authError(400)
+  const mime=sniffImageMime(bytes)
+  const ext=input.ext.toLowerCase().replace(/^jpeg$/,'jpg').replace(/^tiff$/,'tif')
+  if(!mime||({bmp:'image/bmp',tif:'image/tiff',...IMAGE_MIME_BY_EXT} as Record<string,string>)[ext]!==mime)throw authError(400)
   return {bytes,ext}
 }
 function decodeGeneratedImage(input:SlidesGeneratedImageInput){
@@ -65,11 +68,13 @@ function mapSessionError(error: unknown): never {
   if (OP_INVALID.has(message)) throw authError(400)
   if (message==='GENERATED_PAGE_LIMIT') throw authError(413)
   if (message === 'INPUT_LIMIT') throw authError(413)
+  if (message === 'PPTX_WRITE_PROTECTED') throw authError(403)
   throw error
 }
 interface SessionEntry {
   handle: PptxChildSession; fileId: string; revision: string; count:number; size: { cx: number; cy: number }; defaultFont: string
   generation: number; stateGeneration: number; savedGeneration: number
+  writeProtected?: true
   preparedUploadId?: string; lastExportSha?: string; exportedGeneration?: number; exportedStateGeneration?: number
   history: { canUndo: boolean; canRedo: boolean }; lastUsed: number
 }
@@ -144,10 +149,11 @@ export function createSlidesService({ files, leases, revisions, host, maxConcurr
     try {
       const bytes = await downloadPinned(token, fileId, revision, signal)
       const handle = await host.openSession({ fileId, revision, bytes }, signal).catch(mapSessionError)
-      const outline = await handle.outline(0).catch(error => { handle.close(); throw error })
+      const outline = await handle.outline(0, signal).catch(error => { handle.close(); throw error })
       const entry: SessionEntry = {
         handle, fileId, revision, count:outline.count, size: outline.size,
         defaultFont: outline.defaultFont ?? 'Calibri',
+        ...(outline.writeProtected ? {writeProtected:true as const} : {}),
         generation: 0, stateGeneration: 0, savedGeneration: 0,
         history: { canUndo: false, canRedo: false }, lastUsed: Date.now(),
       }
@@ -215,11 +221,17 @@ export function createSlidesService({ files, leases, revisions, host, maxConcurr
     return { generation: view.generation, dirty: dirty(entry), size: view.size, slides: view.slides, history: entry.history }
   }
   const service = {
+    async openOutline(token: string, fileId: string, input: SlidesReadInput, signal?: AbortSignal) {
+      const entry = await ensure(token, fileId, input.revision, signal)
+      fence(entry, input.generation)
+      return { generation: entry.generation, count: entry.count }
+    },
     async open(token: string, fileId: string, input: SlidesOpenInput, signal?: AbortSignal): Promise<SlidesOpenView> {
       const entry = await ensure(token, fileId, input.revision, signal)
       fence(entry, input.generation)
-      const slides = await entry.handle.renderAll(input.generation, input.fitWidthPx).catch(mapSessionError)
-      return { generation: entry.generation, dirty: dirty(entry), size: entry.size, defaultFont: entry.defaultFont, slides, history: entry.history }
+      const slides = await entry.handle.renderAll(input.generation, input.fitWidthPx, signal).catch(mapSessionError)
+      return { generation: entry.generation, dirty: dirty(entry), size: entry.size, defaultFont: entry.defaultFont, slides, history: entry.history,
+        ...(entry.writeProtected ? {writeProtected:entry.writeProtected} : {}) }
     },
     async slide(token: string, fileId: string, input: SlidesSlideInput, signal?: AbortSignal): Promise<SlidesRenderSlideLike> {
       const { entry } = await pinned(token, fileId, input.revision, signal)
@@ -274,6 +286,23 @@ export function createSlidesService({ files, leases, revisions, host, maxConcurr
       if (!entry) throw authError(409)
       fence(entry, input.generation)
       return entry.handle.layouts(input.generation, signal).catch(mapSessionError)
+    },
+    async masterParts(token: string, fileId: string, input: SlidesOpenInput, signal?: AbortSignal) {
+      const {entry} = await pinned(token, fileId, input.revision, signal)
+      if (!entry) throw authError(409)
+      fence(entry, input.generation)
+      const items = await entry.handle.masterParts(input.generation, input.fitWidthPx, signal).catch(mapSessionError)
+      return {items}
+    },
+    async applyMaster(token: string, fileId: string, input: SlidesOpenInput & {partPath:string; operation:unknown}, signal?: AbortSignal) {
+      const {entry} = await pinned(token, fileId, input.revision, signal)
+      if (!entry) throw authError(409)
+      fence(entry, input.generation)
+      const result = await entry.handle.applyMaster(input.generation, input.partPath, input.operation, input.fitWidthPx, signal).catch(mapSessionError)
+      entry.generation = result.generation
+      entry.stateGeneration = result.stateGeneration
+      entry.history = {canUndo:result.canUndo, canRedo:result.canRedo}
+      return {generation:entry.generation, dirty:dirty(entry), slide:result.slide, sourceId:result.sourceId, history:entry.history}
     },
     async slides(token: string, fileId: string, input: SlidesReadInput, signal?: AbortSignal): Promise<SlidesSlidesView> {
       const { entry } = await pinned(token, fileId, input.revision, signal)
@@ -333,13 +362,19 @@ export function createSlidesService({ files, leases, revisions, host, maxConcurr
       fence(entry,input.generation)
       let command:SlidesImageCommand
       if(input.mode==='insert'){
-        if(!Number.isSafeInteger(input.slide)||input.slide<0||input.slide>=entry.count||![input.xPx,input.yPx,input.wPx,input.hPx,input.fitWidthPx].every(Number.isFinite)||input.wPx<=0||input.hPx<=0||input.fitWidthPx<320||input.fitWidthPx>4096)throw authError(400)
-        const scale=entry.size.cx/input.fitWidthPx
-        const offset={x:Math.round(input.xPx*scale),y:Math.round(input.yPx*scale),cx:Math.round(input.wPx*scale),cy:Math.round(input.hPx*scale)}
-        if([offset.x,offset.y,offset.cx,offset.cy].some(value=>!Number.isSafeInteger(value)||Math.abs(value)>EMU_MAX)||offset.cx<1||offset.cy<1)throw authError(400)
-        command={mode:'insert',slide:input.slide,offset,bytes:media.bytes,ext:media.ext}
+        if(!Number.isSafeInteger(input.slide)||input.slide<0||input.slide>=entry.count)throw authError(400)
+        if(input.placement==='natural'){
+          if([input.xPx,input.yPx,input.wPx,input.hPx,input.fitWidthPx].some(value=>value!==undefined))throw authError(400)
+          command={mode:'insert',slide:input.slide,placement:'natural',...media}
+        }else{
+          if(input.placement!==undefined||![input.xPx,input.yPx,input.wPx,input.hPx,input.fitWidthPx].every(Number.isFinite)||input.wPx<=0||input.hPx<=0||input.fitWidthPx<320||input.fitWidthPx>4096)throw authError(400)
+          const scale=entry.size.cx/input.fitWidthPx
+          const offset={x:Math.round(input.xPx*scale),y:Math.round(input.yPx*scale),cx:Math.round(input.wPx*scale),cy:Math.round(input.hPx*scale)}
+          if([offset.x,offset.y,offset.cx,offset.cy].some(value=>!Number.isSafeInteger(value)||Math.abs(value)>EMU_MAX)||offset.cx<1||offset.cy<1)throw authError(400)
+          command={mode:'insert',slide:input.slide,offset,...media}
+        }
       }else{
-        if(!Number.isSafeInteger(input.slide)||input.slide<0||input.slide>=entry.count||typeof input.sourceId!=='string'||!input.sourceId||input.sourceId.length>256||input.keepSrcRect!==undefined&&typeof input.keepSrcRect!=='boolean')throw authError(400)
+        if(input.placement!==undefined||!Number.isSafeInteger(input.slide)||input.slide<0||input.slide>=entry.count||typeof input.sourceId!=='string'||!input.sourceId||input.sourceId.length>256||input.keepSrcRect!==undefined&&typeof input.keepSrcRect!=='boolean')throw authError(400)
         command={mode:'replace',slide:input.slide,sourceId:input.sourceId,bytes:media.bytes,ext:media.ext,...(input.keepSrcRect!==undefined?{keepSrcRect:input.keepSrcRect}:{})}
       }
       const view=await entry.handle.applyImage(input.generation,command,signal).catch(mapSessionError)
@@ -421,26 +456,37 @@ export function createSlidesService({ files, leases, revisions, host, maxConcurr
   // the authenticated token digest + exact editor/lease epoch. A new lease opens
   // a fresh persisted document, never inherits another editor's dirty child.
   const bindings=new Map<string,string>(),busy=new Map<string,{method:Method;count:number}>()
-  type Method='open'|'slide'|'notes'|'comments'|'animations'|'links'|'runLinks'|'chartData'|'chartColorSchemes'|'layouts'|'slides'|'apply'|'editChart'|'generatePage'|'landGeneratedPages'|'applyImage'|'undo'|'redo'|'beginHistoryBatch'|'endHistoryBatch'|'restoreSnapshot'|'exportDraft'|'exportForSave'|'bindPreparedUpload'
+  type Method='open'|'openOutline'|'slide'|'notes'|'comments'|'animations'|'links'|'runLinks'|'chartData'|'chartColorSchemes'|'layouts'|'masterParts'|'applyMaster'|'slides'|'apply'|'editChart'|'generatePage'|'landGeneratedPages'|'applyImage'|'undo'|'redo'|'beginHistoryBatch'|'endHistoryBatch'|'restoreSnapshot'|'exportDraft'|'exportForSave'|'bindPreparedUpload'
+  const signedReads=new Set<Method>(['open','slide','slides','notes','comments','animations','links','runLinks','chartData','chartColorSchemes','layouts','masterParts'])
   function guarded<K extends Method>(method:K):typeof service[K]{
+    const opensSession=method==='open'||method==='openOutline'
     return (async(token:string,fileId:string,input:SlidesReadInput,signal?:AbortSignal)=>{
-      if(!input||typeof input.editorId!=='string'||!Number.isSafeInteger(input.leaseEpoch)||input.leaseEpoch<1)throw authError(400)
+      if(!input)throw authError(400)
+      const signedRead=input.editorId===undefined&&input.leaseEpoch===undefined&&signedReads.has(method)
+      if(!signedRead&&(typeof input.editorId!=='string'||!Number.isSafeInteger(input.leaseEpoch)||input.leaseEpoch<1))throw authError(400)
+      const authorize=async()=>{
+        if(!signedRead){await leases.renewLease(token,fileId,{editorId:input.editorId,leaseEpoch:input.leaseEpoch});return}
+        const head=await files.openFile(token,fileId)
+        if(head.format!=='pptx')throw authError(415)
+        if(head.file.revision!==input.revision)throw authError(409)
+        if(!head.officeSignatureProtected)throw authError(400)
+      }
       const active=busy.get(fileId)
       if(active&&!(method==='generatePage'&&active.method==='generatePage'))throw authError(409)
       if(active)active.count++
       else busy.set(fileId,{method,count:1})
-      const binding=createHash('sha256').update(token).digest('hex')+':'+input.editorId+':'+input.leaseEpoch
+      const binding=signedRead?'signed:'+input.revision:createHash('sha256').update(token).digest('hex')+':'+input.editorId+':'+input.leaseEpoch
       let entered=false,completed=false
       const discard=()=>{if(bindings.get(fileId)===binding){registry.get(fileId)?.handle.close();registry.delete(fileId);bindings.delete(fileId)}}
       try{
         signal?.throwIfAborted()
-        await leases.renewLease(token,fileId,{editorId:input.editorId,leaseEpoch:input.leaseEpoch})
+        await authorize()
         signal?.throwIfAborted()
         if(bindings.has(fileId)&&bindings.get(fileId)!==binding){
-          if(method!=='open')throw authError(409)
+          if(!opensSession)throw authError(409)
           registry.get(fileId)?.handle.close();registry.delete(fileId);bindings.delete(fileId)
         }
-        if(method==='open'){
+        if(opensSession){
           const head=await files.openFile(token,fileId)
           if(head.file.revision!==input.revision)throw authError(409)
           const previous=registry.get(fileId)
@@ -451,20 +497,20 @@ export function createSlidesService({ files, leases, revisions, host, maxConcurr
         completed=true
         // Lease/session/head can change during native work; never publish its result
         // or leave a draft alive after authority loss. T06 repeats fences at commit.
-        await leases.renewLease(token,fileId,{editorId:input.editorId,leaseEpoch:input.leaseEpoch})
+        await authorize()
         signal?.throwIfAborted()
         await pinned(token,fileId,input.revision,signal)
         return value
       }catch(error){
         if(entered){
           if(completed)discard()
-          else try{signal?.throwIfAborted();await leases.renewLease(token,fileId,{editorId:input.editorId,leaseEpoch:input.leaseEpoch})}catch{discard()}
+          else try{signal?.throwIfAborted();await authorize()}catch{discard()}
         }
         throw error
       }
       finally{const current=busy.get(fileId);if(current&&--current.count===0)busy.delete(fileId)}
     }) as typeof service[K]
   }
-  return {bindPreparedUpload:guarded('bindPreparedUpload'),open:guarded('open'),slide:guarded('slide'),notes:guarded('notes'),comments:guarded('comments'),chartData:guarded('chartData'),chartColorSchemes:guarded('chartColorSchemes'),animations:guarded('animations'),links:guarded('links'),runLinks:guarded('runLinks'),layouts:guarded('layouts'),slides:guarded('slides'),apply:guarded('apply'),editChart:guarded('editChart'),generatePage:guarded('generatePage'),landGeneratedPages:guarded('landGeneratedPages'),applyImage:guarded('applyImage'),undo:guarded('undo'),redo:guarded('redo'),beginHistoryBatch:guarded('beginHistoryBatch'),endHistoryBatch:guarded('endHistoryBatch'),restoreSnapshot:guarded('restoreSnapshot'),exportDraft:guarded('exportDraft'),exportForSave:guarded('exportForSave'),closeAll(){service.closeAll();bindings.clear()}}
+  return {bindPreparedUpload:guarded('bindPreparedUpload'),open:guarded('open'),openOutline:guarded('openOutline'),slide:guarded('slide'),notes:guarded('notes'),comments:guarded('comments'),chartData:guarded('chartData'),chartColorSchemes:guarded('chartColorSchemes'),animations:guarded('animations'),links:guarded('links'),runLinks:guarded('runLinks'),layouts:guarded('layouts'),masterParts:guarded('masterParts'),applyMaster:guarded('applyMaster'),slides:guarded('slides'),apply:guarded('apply'),editChart:guarded('editChart'),generatePage:guarded('generatePage'),landGeneratedPages:guarded('landGeneratedPages'),applyImage:guarded('applyImage'),undo:guarded('undo'),redo:guarded('redo'),beginHistoryBatch:guarded('beginHistoryBatch'),endHistoryBatch:guarded('endHistoryBatch'),restoreSnapshot:guarded('restoreSnapshot'),exportDraft:guarded('exportDraft'),exportForSave:guarded('exportForSave'),closeAll(){service.closeAll();bindings.clear()},dispose(){clearInterval(sweeper);service.closeAll();bindings.clear()}}
 }
 export type SlidesSessions = ReturnType<typeof createSlidesService>

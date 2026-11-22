@@ -1,4 +1,5 @@
 import { join } from 'node:path'
+import { exportImageNames } from '../shared/export-image-names'
 
 /**
  * File paths for a page-image export, in page order: <baseName>-01.<ext> …
@@ -11,8 +12,5 @@ export function buildExportImagePaths(
   count: number,
   ext: 'png' | 'jpg',
 ): string[] {
-  const pad = count >= 100 ? 3 : 2
-  return Array.from({ length: Math.max(0, count) }, (_, i) =>
-    join(dir, `${baseName}-${String(i + 1).padStart(pad, '0')}.${ext}`),
-  )
+  return exportImageNames(baseName, count, ext).map(name => join(dir, name))
 }

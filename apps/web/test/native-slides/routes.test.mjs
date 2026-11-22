@@ -360,3 +360,54 @@ test('PPTX chart reads enforce owner generation lease and strict input schema',a
   assert.equal((await post(method,{...input,leaseEpoch:input.leaseEpoch+1})).statusCode,409)
  }
 })
+
+test('master edits are lease and generation fenced and exported from the original package', async t => {
+ const app = await createApiShell(), fileId = randomUUID(), revision = randomUUID(), editorId = randomUUID()
+ const deck = await bytes()
+ const slides = createSlidesService({
+  files:{openFile:async()=>({format:'pptx',file:{revision}}),download:async()=>({format:'pptx',bytes:deck})},
+  leases:{renewLease:async(_token,_id,input)=>{if(input.editorId!==editorId||input.leaseEpoch!==1)throw Object.assign(new Error('lease'),{statusCode:409})}},
+  revisions:{}, host:slidesHost,
+ })
+ t.after(async()=>{slides.closeAll();await app.close()})
+ registerSlidesRoutes(app, slides, {authenticate:async()=>{}}, {originCheck(){},requireSession(){}})
+ const post = (method,payload={}) => app.inject({method:'POST',url:`/api/v1/files/${fileId}/slides/${method}`,payload:{revision,editorId,leaseEpoch:1,generation:0,...payload}})
+ assert.equal((await post('open')).statusCode,200)
+ const listed = await post('master-parts',{fitWidthPx:960})
+ assert.equal(listed.statusCode,200,listed.body)
+ const partPath = listed.json().items.find(item=>item.kind==='master').partPath
+ const operation = {op:'addElement',kind:'textbox',offset:{x:0,y:0,cx:5000000,cy:400000},paragraphs:[{runs:[{text:'RouteMasterRoundTrip'}]}]}
+ assert.equal((await post('master-edit',{leaseEpoch:2,partPath,operation})).statusCode,409)
+ assert.equal((await post('master-edit',{partPath:'ppt/slides/slide1.xml',operation})).statusCode,400)
+ const edited = await post('master-edit',{partPath,operation})
+ assert.equal(edited.statusCode,200,edited.body)
+ assert.equal(edited.json().generation,1)
+ assert.equal(edited.json().dirty,true)
+ assert.ok(edited.json().sourceId)
+ assert.equal((await post('master-edit',{partPath,operation})).statusCode,409)
+ const exported = await post('export',{generation:1})
+ assert.equal(exported.statusCode,200,exported.body)
+ const saved = await JSZip.loadAsync(exported.rawPayload)
+ assert.match(await saved.file(partPath).async('string'),/RouteMasterRoundTrip/)
+
+ slides.closeAll()
+ const bridge=createSlidesBridge({getState:()=>({revision:{revision},name:'deck.pptx',lease:{editorId,leaseEpoch:1}})},fileId,{language:'en'},{fetchImpl:async(url,init)=>{
+  if(url==='/api/v1/auth/csrf')return Response.json({csrfToken:'a'.repeat(43)})
+  const response=await app.inject({method:init.method,url,payload:JSON.parse(init.body)})
+  return new Response(response.body,{status:response.statusCode,headers:{'content-type':'application/json'}})
+ }})
+ t.after(()=>bridge.dispose())
+ await bridge.api.openPptx(960)
+ const master = await bridge.api.masterEnter(960)
+ assert.equal(master.items[0].partPath,partPath)
+ const layout = master.items.find(item=>item.kind==='layout')
+ assert.ok(await bridge.api.masterOpen(layout.partPath))
+ const inserted = await bridge.api.masterAddElement({kind:'textbox',xPx:20,yPx:40,wPx:375,hPx:60,fitWidthPx:960,paragraphs:[{runs:[{text:'BridgeMasterLayout'}]}]})
+ assert.ok(inserted.slide.nodes.some(node=>node.sourceId===inserted.sourceId))
+ await bridge.api.masterEditText({sourceId:inserted.sourceId,paragraphs:[{runs:[{text:'StableLayoutElement'}]}]})
+ assert.ok((await bridge.api.masterClose()).length)
+ assert.equal(await bridge.api.isDirty(),true)
+ const savedLayout = await post('export',{generation:2})
+ assert.equal(savedLayout.statusCode,200)
+ assert.match(await (await JSZip.loadAsync(savedLayout.rawPayload)).file(layout.partPath).async('string'),/StableLayoutElement/)
+})

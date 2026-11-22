@@ -6,7 +6,7 @@ import type { FastifyInstance } from 'fastify'
 import type { SessionService } from '../auth/sessions.ts'
 import { cookies, type createCsrfService } from '../auth/csrf.ts'
 import { uuidSchema, fileParamsSchema, emptyQuerySchema } from '../files/http-schema.ts'
-import type { createSheetsService, SheetRange } from './service.ts'
+import type { createSheetsService, ExternalLinkBinding, SheetRange } from './service.ts'
 
 const revisionBody = { revision: uuidSchema }
 export function registerSheetsRoutes(app: FastifyInstance, sheets: ReturnType<typeof createSheetsService>, sessions: SessionService, csrf: ReturnType<typeof createCsrfService>, saves?: ReturnType<typeof createSheetsSaveService>) {
@@ -55,6 +55,13 @@ export function registerSheetsRoutes(app: FastifyInstance, sheets: ReturnType<ty
     route<{revision:string;path:string;cachePath:string}>('/api/v1/files/:id/sheets/pivot-definition',{
       ...revisionBody,path:{type:'string',maxLength:512,pattern:'^xl/pivotTables/[A-Za-z0-9._-]+\\.xml$'},cachePath:{type:'string',maxLength:512,pattern:'^xl/pivotCache/[A-Za-z0-9._-]+\\.xml$'},
     },(token,id,body,signal)=>sheets.readPivotDefinition(token,id,body.revision,body.path,body.cachePath,signal))
+    route<{revision:string}>('/api/v1/files/:id/sheets/external-links',revisionBody,(token,id,body,signal)=>sheets.listExternalLinks(token,id,body.revision,signal))
+    route<{revision:string;sources:ExternalLinkBinding[]}>('/api/v1/files/:id/sheets/external-links/preview',{
+      ...revisionBody,sources:{type:'array',maxItems:256,items:{
+        type:'object',additionalProperties:false,required:['index','fileId','revision'],
+        properties:{index:{type:'integer',minimum:1,maximum:256},fileId:uuidSchema,revision:uuidSchema},
+      }},
+    },(token,id,body,signal)=>sheets.previewExternalLinkRefresh(token,id,body.revision,body.sources,signal),65536)
     route<{revision: string}>('/api/v1/files/:id/sheets/package', revisionBody, (token,id,body,signal) => sheets.readPackage(token,id,body.revision,signal))
     route<{revision: string; sheetName: string; kind: 'formulas' | 'outline'}>('/api/v1/files/:id/sheets/sheet', {...revisionBody,sheetName: {type:'string',minLength:1,maxLength:255},kind: {type:'string',enum:['formulas','outline']}}, (token,id,body,signal) => sheets.readSheet(token,id,body.revision,body.sheetName,body.kind,signal))
     route<{revision: string}>('/api/v1/files/:id/sheets/inspect', revisionBody, (token, id, body, signal) => sheets.inspect(token, id, body.revision, signal))

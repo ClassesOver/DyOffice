@@ -1,8 +1,12 @@
 import type {SessionFileHost} from '../../../../packages/browser-host/src/files.ts'
+import {CitedRevisionChanged} from '../../../../packages/browser-host/src/session-files'
 import {hostError} from '../../../../packages/web-contracts/src/errors.ts'
 import {mapScriptOpsForWidth} from '../../../../packages/pptx-ops/src/ops/script-map.ts'
 import {parsePageSpec} from '../../../../packages/pipelines/src/slides/page-spec-parser.ts'
 import {planSlideMoves} from '../../../slides/src/shared/slide-selection.ts'
+import {pictureFrame} from '../../../slides/src/main/picture-frame.ts'
+import {sniffImageMime} from '../../../slides/src/main/media-mime.ts'
+import {imageDpiFromBytes, imageSizeFromBytes} from '../../../../packages/pptx-render/src/image-dpi.ts'
 import {normalizeLang} from '@genoffice/i18n'
 import {tMain} from '../../../slides/src/main/i18n-main.ts'
 import {messages} from './messages.ts'
@@ -18,6 +22,7 @@ import type {
   FindReplaceOp, SetNotesOp, SetTransitionOp, SetSlideHiddenOp, SetSlideLayoutOp,
   AddSectionOp, RenameSectionOp, RemoveSectionOp, MoveSectionOp,
   HeaderFooterOp, AddSlideWithLayoutOp, LinkTargetOp,
+  MasterPartItem,
 } from '../../../slides/src/shared/ipc'
 
 type Preferences = Awaited<ReturnType<SessionFileHost['getPreferences']>>
@@ -25,7 +30,7 @@ type SaveResult = {ok: boolean; path?: string; error?: string}
 type SaveReceipt = Awaited<ReturnType<SessionFileHost['saveSlides']>>
 type Recovery = {saved?: SaveReceipt; resolve(value: SaveResult): void; reject(error: unknown): void}
 /** The server pptx session: pinned to the file revision, fenced by generation. */
-type Session = {revision: string; generation: number; dirty: boolean; size: {cx: number; cy: number}; defaultFont: string}
+type Session = {revision: string; generation: number; dirty: boolean; size: {cx: number; cy: number}; defaultFont: string; writeProtected: boolean}
 type ApplyResponse = {generation: number; dirty: boolean; changed?: number[]; created?: Array<{id:string;slide:number;index:number}>; size?: {cx:number;cy:number}; order?: string[]; index?: number; sections?: SectionInfo[] | null; history?: {canUndo: boolean; canRedo: boolean}; slide?: OpenResult['slides'][number]; transaction?: {applied:boolean;dryRun?:boolean;plan?:string[];failures?:Array<{index:number;error:string}>;records?:Array<{op:{op:string};slidePath?:string;created?:string[];after?:unknown}>}}
 type HistoryState = {canUndo: boolean; canRedo: boolean}
 const SLIDE_IMAGE_LIMIT = 6990508
@@ -37,10 +42,32 @@ async function normalizeWebp(base64: string) {
 }
 type ImageEdit = {slideIndex:number;url?:string;base64?:string;ext?:string} & (
   {mode:'insert';xPx:number;yPx:number;wPx:number;hPx:number;fitWidthPx:number} |
+  {mode:'insert';placement:'natural'} |
   {mode:'replace';sourceId:string;keepSrcRect?:boolean}
 )
 
-export function createSlidesBridge(host: SessionFileHost, fileId: string, prefs: Preferences, {fetchImpl = fetch, onChange = () => {}, searchApi, mediaApi, skillsApi, confirmImportedChart = () => typeof window !== 'undefined' && window.confirm('Editing this imported chart may remove number formats, trendlines, error bars, and per-point styles. Continue?')}: {fetchImpl?: typeof fetch; onChange?: () => void; searchApi?: {webSearch: (query: string, maxResults?: number) => Promise<Awaited<ReturnType<SlidesApi['webSearch']>>>; imageSearch: (query: string, maxResults?: number) => Promise<Awaited<ReturnType<SlidesApi['imageSearch']>>>}; mediaApi?: {generateImage: SlidesApi['generateImage']; analyzeMedia: SlidesApi['analyzeMedia'];fetchImage?:(url:string)=>Promise<{base64:string;mime:string}|null>}; skillsApi?: Pick<SlidesApi, 'skillsList' | 'skillText'>; confirmImportedChart?:()=>boolean} = {}) {
+function choosePicture(signal: AbortSignal): Promise<File | null> {
+  if (signal.aborted) return Promise.resolve(null)
+  return new Promise(resolve => {
+    const input = document.createElement('input')
+    input.type = 'file'
+    input.accept = '.png,.jpg,.jpeg,.gif,.bmp,.webp,.tif,.tiff'
+    input.hidden = true
+    const finish = (file: File | null) => {
+      signal.removeEventListener('abort', cancel)
+      input.remove()
+      resolve(file)
+    }
+    const cancel = () => finish(null)
+    input.onchange = () => finish(input.files?.[0] ?? null)
+    input.oncancel = cancel
+    signal.addEventListener('abort', cancel, {once:true})
+    document.body.append(input)
+    try { input.click() } catch { cancel() }
+  })
+}
+
+export function createSlidesBridge(host: SessionFileHost, fileId: string, prefs: Preferences, {fetchImpl = fetch, onChange = () => {}, searchApi, mediaApi, skillsApi, pickPicture = choosePicture, confirmImportedChart = () => typeof window !== 'undefined' && window.confirm('Editing this imported chart may remove number formats, trendlines, error bars, and per-point styles. Continue?')}: {fetchImpl?: typeof fetch; onChange?: () => void; searchApi?: {webSearch: (query: string, maxResults?: number) => Promise<Awaited<ReturnType<SlidesApi['webSearch']>>>; imageSearch: (query: string, maxResults?: number) => Promise<Awaited<ReturnType<SlidesApi['imageSearch']>>>}; mediaApi?: {generateImage: SlidesApi['generateImage']; analyzeMedia: SlidesApi['analyzeMedia'];fetchImage?:(url:string)=>Promise<{base64:string;mime:string}|null>}; skillsApi?: Pick<SlidesApi, 'skillsList' | 'skillText'>; pickPicture?: (signal: AbortSignal) => Promise<File|null>; confirmImportedChart?:()=>boolean} = {}) {
   let saveFence:(()=>boolean)|null=null,applyFence:(()=>boolean)|null=null
   let committed:import('../../../../packages/web-contracts/src/api').RevisionRef|null=null
   async function guardedSave(check:()=>boolean,action:()=>Promise<boolean>){
@@ -52,6 +79,7 @@ export function createSlidesBridge(host: SessionFileHost, fileId: string, prefs:
     applyFence=check;try{return await action()}finally{applyFence=null}
   }
   let session: Session | null = null
+  let master: {session:Session; partPath:string; width:number; slide:MasterPartItem['slide']} | null = null
   let openEpoch=0,opening=0,changing=0
   const controllers = new Set<AbortController>()
   const text = messages[prefs.language === 'en' ? 'en' : 'zh']
@@ -117,7 +145,7 @@ export function createSlidesBridge(host: SessionFileHost, fileId: string, prefs:
           if (typeof body?.csrfToken !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(body.csrfToken)) throw hostError('INVALID_RESPONSE', 'csrf')
           csrf = body.csrfToken
         }
-        if(saveFence&&/\/(apply|media|generated-pages|snapshot-restore|undo|redo|chart-edit)$/.test(path))throw hostError('UNAVAILABLE','analysis save in progress')
+        if(saveFence&&/\/(apply|media|generated-pages|snapshot-restore|undo|redo|chart-edit|master-edit)$/.test(path))throw hostError('UNAVAILABLE','analysis save in progress')
         if(path.endsWith('/apply')&&applyFence&&!applyFence())throw hostError('UNAVAILABLE','analysis target changed')
         const proof = csrf
         const response = await fetchImpl(path, {method:httpMethod,credentials:'same-origin',cache:'no-store',signal:controller.signal,headers:{...(payload?{'content-type':'application/json'}:{}),'x-csrf-token':proof!},...(payload?{body:JSON.stringify(payload)}:{})})
@@ -140,7 +168,8 @@ export function createSlidesBridge(host: SessionFileHost, fileId: string, prefs:
     if(method!=='open'&&opening)throw hostError('CONFLICT','slides session reopening')
     if (waiting.length >= 64) throw hostError('UNAVAILABLE', 'read capacity')
     const captured=session,epoch=openEpoch
-    const readOnly=['slide','slides','notes','comments','animations','links','run-links','layouts','chart-data','chart-color-schemes'].includes(method)
+    const readOnly=['slide','slides','notes','comments','animations','links','run-links','layouts','chart-data','chart-color-schemes','master-parts'].includes(method)
+    if(method!=='open'&&!readOnly&&captured?.writeProtected)throw hostError('UNAVAILABLE','write-protected presentation')
     if(!readOnly)changing++
     await acquireSlot()
     try {
@@ -159,12 +188,13 @@ export function createSlidesBridge(host: SessionFileHost, fileId: string, prefs:
   /** Reopen (or idempotently refresh) the revision-pinned pptx session. `fire` pushes onOpened like the desktop main process does for externally opened files. */
   async function openSession(fire: boolean): Promise<OpenResult> {
     openEpoch++;opening++
+    master=null
     try{
     const state = host.getState(fileId)
     const generation = session && session.revision === state.revision.revision ? session.generation : 0
-    const raw = await call(state.revision.revision, generation, 'open') as {generation: number; dirty: boolean; size?: {cx: number; cy: number}; defaultFont?: string; slides: OpenResult['slides']}
+    const raw = await call(state.revision.revision, generation, 'open') as {generation: number; dirty: boolean; size?: {cx: number; cy: number}; defaultFont?: string; slides: OpenResult['slides']; writeProtected?: true}
     if (disposed) throw hostError('UNAVAILABLE', 'disposed')
-    session = {revision: state.revision.revision, generation: raw.generation, dirty: !!raw.dirty, size: raw.size ?? {cx: 12192000, cy: 6858000}, defaultFont: raw.defaultFont ?? 'Calibri'}
+    session = {revision: state.revision.revision, generation: raw.generation, dirty: !!raw.dirty, size: raw.size ?? {cx: 12192000, cy: 6858000}, defaultFont: raw.defaultFont ?? 'Calibri',writeProtected: raw.writeProtected===true}
     const result: OpenResult = {path: state.name, slides: raw.slides, size: session.size, defaultFont: session.defaultFont}
     if (fire) for (const handler of openedHandlers) { try { handler(result) } catch { /* renderer listeners cannot change durable results */ } }
     return result
@@ -194,6 +224,25 @@ export function createSlidesBridge(host: SessionFileHost, fileId: string, prefs:
     const current = requireSession()
     return await call(current.revision, current.generation, 'slides') as {slides: OpenResult['slides']}
   }
+  async function readMasterParts(current:Session, width:number) {
+    if (recovery || opening || !host.getState(fileId).lease) return null
+    return await call(current.revision, current.generation, 'master-parts', {fitWidthPx:width}) as {items:MasterPartItem[]}
+  }
+  async function editMaster(operation:unknown) {
+    const selected = master
+    if (!selected || selected.session !== session || opening || recovery || !host.getState(fileId).lease) return null
+    const current = selected.session
+    const result = await call(current.revision, current.generation, 'master-edit', {
+      partPath:selected.partPath, fitWidthPx:selected.width, operation,
+    }) as ApplyResponse & {sourceId?:string}
+    if (session !== current || disposed) return null
+    current.dirty = result.dirty
+    emitHistory(result.history)
+    onChange()
+    if (!result.slide || master !== selected) return null
+    selected.slide = result.slide
+    return result
+  }
   async function fetchComments(index: number): Promise<SlideComment[]> {
     const current = requireSession()
     return await call(current.revision, current.generation, 'comments', {index}) as SlideComment[]
@@ -216,28 +265,93 @@ export function createSlidesBridge(host: SessionFileHost, fileId: string, prefs:
       base64=fetched.base64;mime=fetched.mime
     }
     if(!base64||base64.length>SLIDE_IMAGE_LIMIT||!/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(base64))return null
-    const ext=(input.ext??({ 'image/png':'png','image/jpeg':'jpg','image/gif':'gif'} as Record<string,string>)[mime]??'').toLowerCase().replace(/^jpeg$/,'jpg')
+    const ext=(input.ext??({ 'image/png':'png','image/jpeg':'jpg','image/gif':'gif'} as Record<string,string>)[mime]??'').toLowerCase().replace(/^jpeg$/,'jpg').replace(/^tiff$/,'tif')
     if(ext==='webp'&&input.base64){
       try {
         const image=await normalizeWebp(base64)
         return {bytesBase64:image.base64,ext:'png'}
       } catch { return null }
     }
-    if(!['png','jpg','gif'].includes(ext))return null
+    if(!['png','jpg','gif','bmp','tif'].includes(ext))return null
     return {bytesBase64:base64,ext}
   }
   function applyImage(input: Extract<ImageEdit, {mode:'insert'}>): ReturnType<SlidesApi['insertImageUrl']>
   function applyImage(input: Extract<ImageEdit, {mode:'replace'}>): ReturnType<SlidesApi['replacePictureUrl']>
   async function applyImage(input: ImageEdit){
     const current=requireSession()
-    if(recovery||!host.getState(fileId).lease)return null
+    const stillCurrent = captureImageTarget(current)
+    if (!stillCurrent()) return null
     const image=await imageBytes(input)
-    if(!image)return null
-    const raw=await call(current.revision,current.generation,'media',{mode:input.mode,slide:input.slideIndex,...image,...(input.mode==='insert'?{xPx:input.xPx,yPx:input.yPx,wPx:input.wPx,hPx:input.hPx,fitWidthPx:input.fitWidthPx}:{sourceId:input.sourceId,...(input.keepSrcRect!==undefined?{keepSrcRect:input.keepSrcRect}:{})})}) as ApplyResponse
+    if(!image || image.bytesBase64.length > SLIDE_IMAGE_LIMIT || !stillCurrent())return null
+    const target = input.mode==='replace'
+      ? {sourceId:input.sourceId,keepSrcRect:input.keepSrcRect}
+      : 'placement' in input ? {placement:input.placement}
+      : {xPx:input.xPx,yPx:input.yPx,wPx:input.wPx,hPx:input.hPx,fitWidthPx:input.fitWidthPx}
+    const raw=await call(current.revision,current.generation,'media',{mode:input.mode,slide:input.slideIndex,...image,...target}) as ApplyResponse
     current.generation=raw.generation;current.dirty=raw.dirty
     emitHistory(raw.history);onChange()
     if(!raw.slide)return null
     return input.mode==='insert'?{slide:raw.slide,sourceId:createdId(raw)}:raw.slide
+  }
+
+  function captureImageTarget(current: Session) {
+    const {revision, generation} = current
+    const lease = host.getState(fileId).lease
+    return () => {
+      if (!lease || disposed || session !== current || current.revision !== revision || current.generation !== generation || recovery) return false
+      const activeLease = host.getState(fileId).lease
+      return activeLease?.editorId === lease.editorId && activeLease.leaseEpoch === lease.leaseEpoch
+    }
+  }
+
+  async function pickLocalPicture() {
+    const stillCurrent = captureImageTarget(requireSession())
+    if (!stillCurrent()) return null
+    const controller = new AbortController()
+    controllers.add(controller)
+    try {
+      const file = await pickPicture(controller.signal)
+      if (!file || !stillCurrent()) return null
+      const ext = file.name.split('.').pop()?.toLowerCase().replace(/^jpeg$/, 'jpg').replace(/^tiff$/, 'tif') ?? ''
+      const expectedMime = ({png:'image/png',jpg:'image/jpeg',gif:'image/gif',bmp:'image/bmp',webp:'image/webp',tif:'image/tiff'} as Record<string,string>)[ext]
+      if (!expectedMime || !file.size || file.size > 5 * 1024 * 1024) return {base64:'', ext}
+      const bytes = new Uint8Array(await file.arrayBuffer())
+      if (!stillCurrent()) return null
+      if (sniffImageMime(bytes) !== expectedMime) return {base64:'', ext}
+      const header = String.fromCharCode(...bytes.subarray(0, 8))
+      if ((ext === 'png' && header !== '\x89PNG\r\n\x1a\n') || (ext === 'gif' && !/^GIF8[79]a/.test(header))) return {base64:'', ext}
+      let binary = ''
+      for (let offset = 0; offset < bytes.length; offset += 32768) {
+        binary += String.fromCharCode(...bytes.subarray(offset, offset + 32768))
+      }
+      return {base64:btoa(binary), ext}
+    } finally { controllers.delete(controller) }
+  }
+
+  const addImageBytes: SlidesApi['addImageBytes'] = async input => {
+    let {base64, ext} = input
+    const current = requireSession()
+    const stillCurrent = captureImageTarget(current)
+    if (!stillCurrent()) return null
+    if (!base64 || base64.length > SLIDE_IMAGE_LIMIT) return {error:'unsupported', ext}
+    if (ext === 'webp') {
+      const image = await imageBytes(input)
+      if (!image || image.bytesBase64.length > SLIDE_IMAGE_LIMIT) return {error:'unsupported', ext}
+      if (!stillCurrent()) return null
+      base64 = image.bytesBase64
+      ext = image.ext
+    }
+    if ('xPx' in input) return applyImage({mode:'insert', ...input, base64, ext})
+    let bytes: Uint8Array
+    try { bytes = Uint8Array.from(atob(base64), char => char.charCodeAt(0)) } catch { return {error:'unsupported', ext} }
+    const scale = input.fitWidthPx / current.size.cx
+    const size = imageSizeFromBytes(bytes)
+    const gif = ext === 'gif' && bytes.length >= 10
+      ? {width: bytes[6]! + bytes[7]! * 256, height: bytes[8]! + bytes[9]! * 256}
+      : null
+    const frame = pictureFrame({width:current.size.cx, height:current.size.cy}, size ? {width:size.w, height:size.h} : gif ?? input.naturalPx, imageDpiFromBytes(bytes), 96,
+      input.centerPx ? {center:{x:input.centerPx.x/scale,y:input.centerPx.y/scale}} : undefined)
+    return applyImage({mode:'insert', slideIndex:input.slideIndex, fitWidthPx:input.fitWidthPx, base64, ext, xPx:frame.x*scale,yPx:frame.y*scale,wPx:frame.cx*scale,hPx:frame.cy*scale})
   }
   const slideUpdateFrom = (order: string[], deck: {slides: OpenResult['slides']}) => ({order, slides: deck.slides})
   const op = (name: string, fields: Record<string, unknown>) => ({op: name, ...fields})
@@ -293,7 +407,16 @@ export function createSlidesBridge(host: SessionFileHost, fileId: string, prefs:
       return {path: '', slides, appendedFrom, insertedIndex, replacedIndex, size: current.size, defaultFont: current.defaultFont}
     },
     pickExportDir: unavailable, pickExportPdfPath: unavailable,
-    pickExportVideoPath: unavailable, pickPictureFile: unavailable, insertImage: unavailable,
+    pickExportVideoPath: unavailable,
+    async pickPictureFile() {
+      const picture = await pickLocalPicture()
+      return picture?.base64 ? picture : null
+    },
+    async insertImage(slideIndex, fitWidthPx) {
+      const picture = await pickLocalPicture()
+      if (picture?.base64 && picture.ext==='tif') return applyImage({mode:'insert',placement:'natural',...picture,slideIndex})
+      return picture ? addImageBytes({...picture, slideIndex, fitWidthPx, naturalPx:{width:0,height:0}}) : null
+    },
     insertMedia: unavailable, addMediaBytes: unavailable, getMediaData: graceful,
     pickModel3d: unavailable, addModel3d: unavailable, setModel3dView: graceful, getModel3dData: graceful,
     videoFileOpen: unavailable, videoFileWrite: unavailable, videoFileClose: unavailable,
@@ -747,7 +870,11 @@ export function createSlidesBridge(host: SessionFileHost, fileId: string, prefs:
       if (!raw?.changed?.length) return null
       return {slide: await fetchSlide(raw.changed[0]!), sourceId: createdId(raw)}
     },
-    addInk: graceful, addImageBytes: graceful, replacePictureBytes: graceful,
+    addInk: graceful, addImageBytes,
+    async replacePictureBytes(input) {
+      if (!input.base64 || input.base64.length > SLIDE_IMAGE_LIMIT) return {error:'unsupported' as const, ext:input.ext}
+      return applyImage({mode:'replace', ...input})
+    },
     async editTableCell(input) {
       const raw = await applyOps([op('setTableCell', {target: {slide: input.slideIndex, el: input.sourceId}, row: input.row, col: input.col, paragraphs: input.paragraphs})])
       if (!raw?.changed?.length) return null
@@ -860,9 +987,71 @@ export function createSlidesBridge(host: SessionFileHost, fileId: string, prefs:
       if (!raw?.changed?.length) return null
       return await fetchSlide(raw.changed[0]!)
     },
-    masterEnter: unavailable, masterOpen: unavailable, masterClose: unavailable,
-    masterEditText: unavailable, masterEditTransform: unavailable, masterEditFill: unavailable,
-    masterEditStroke: unavailable, masterDeleteElement: unavailable, masterAddElement: unavailable,
+    async masterEnter(fitWidthPx) {
+      const current = requireSession()
+      const result = await readMasterParts(current, fitWidthPx)
+      const first = result?.items[0]
+      if (!first || session !== current || disposed) return null
+      master = {session:current, partPath:first.partPath, width:fitWidthPx, slide:first.slide}
+      return result
+    },
+    async masterOpen(partPath) {
+      const previous = master
+      if (!previous) return null
+      const result = await readMasterParts(previous.session, previous.width)
+      const item = result?.items.find(value => value.partPath === partPath)
+      if (!item || master !== previous || session !== previous.session || disposed) return null
+      master = {...previous, partPath, slide:item.slide}
+      return item.slide
+    },
+    async masterClose() {
+      const previous = master
+      master = null
+      return previous?.session === session && !disposed ? (await fetchDeck()).slides : null
+    },
+    async masterEditText(input) {
+      return (await editMaster(op('setText', {target:{el:input.sourceId},paragraphs:input.paragraphs})))?.slide ?? null
+    },
+    async masterEditTransform(input) {
+      const selected = master
+      if (!selected || selected.session !== session || !host.getState(fileId).lease) return null
+      if (input.preview) {
+        // Drag frames belong to the canvas. Only the final frame is journaled.
+        const slide = structuredClone(selected.slide)
+        const node = slide.nodes.find(value => value.sourceId === input.sourceId && !value.decoration)
+        if (!node) return null
+        const scale = slide.widthPx / input.fitWidthPx
+        const x = input.xPx*scale, y = input.yPx*scale, w = input.wPx*scale, h = input.hPx*scale
+        node.box = {...node.box,x,y,w,h,centerX:x+w/2,centerY:y+h/2,rotationDeg:input.rotationDeg}
+        return slide
+      }
+      const box = emuBox(selected.session,input.fitWidthPx,input.xPx,input.yPx,input.wPx,input.hPx)
+      return (await editMaster(op('setTransform',{target:{el:input.sourceId},box,rotDeg:input.rotationDeg})))?.slide ?? null
+    },
+    async masterEditFill(input) {
+      const fill = typeof input.fill === 'string' ? input.fill : {
+        stops:input.fill.gradient.stops ?? [{pos:0,color:input.fill.gradient.from},{pos:1,color:input.fill.gradient.to}],
+        ...(input.fill.gradient.path ? {path:input.fill.gradient.path}
+          : input.fill.gradient.radial ? {path:'circle'} : {angle:Math.round((input.fill.gradient.angleDeg ?? 0)*60000)}),
+      }
+      return (await editMaster(op('setFill',{target:{el:input.sourceId},fill})))?.slide ?? null
+    },
+    async masterEditStroke(input) {
+      const stroke = input.stroke ? {color:input.stroke.color,widthEmu:Math.round(input.stroke.widthPt*12700)} : null
+      return (await editMaster(op('setStroke',{target:{el:input.sourceId},stroke})))?.slide ?? null
+    },
+    async masterDeleteElement(input) {
+      return (await editMaster(op('deleteElement',{target:{el:input.sourceId}})))?.slide ?? null
+    },
+    async masterAddElement(input) {
+      if (!master) return null
+      const offset = emuBox(master.session,input.fitWidthPx,input.xPx,input.yPx,input.wPx,input.hPx)
+      const result = await editMaster(op('addElement', {
+        kind:input.kind, offset, paragraphs:input.paragraphs, fill:input.fillColor, bodyPr:input.bodyPr,
+        ...(input.stroke ? {stroke:{color:input.stroke.color,widthEmu:Math.round(input.stroke.widthPt*12700)}} : {}),
+      }))
+      return result?.slide && result.sourceId ? {slide:result.slide,sourceId:result.sourceId} : null
+    },
     presenterStart: unavailable, presenterSwap: unavailable, presenterEnd: unavailable,
     onShowSync: noEvent, onShowInk: noEvent, onAudienceNav: noEvent,
     async openAiModelSettings() {
@@ -933,14 +1122,16 @@ export function createSlidesBridge(host: SessionFileHost, fileId: string, prefs:
     if (editor.isDirty() || session?.dirty || recovery || state.status !== 'idle' || !state.lease) throw hostError('CONFLICT', 'download not clean')
     return {...state.revision}
   }
-  async function takeover(editor: {reload(): Promise<boolean>; isDirty(): boolean}) {
+  async function takeover(editor: {reload(): Promise<boolean>; isDirty(): boolean}, preserveRevision=false) {
     if (disposed) throw hostError('UNAVAILABLE', 'disposed')
     if (editor.isDirty() || session?.dirty || recovery || host.getState(fileId).status === 'unknown') throw hostError('CONFLICT', 'unsaved takeover')
     let acquired = false
     try {
       await host.takeoverLease(fileId); acquired = true
       if (disposed || editor.isDirty() || session?.dirty || recovery) throw hostError('CONFLICT', 'unsaved takeover')
-      await host.refreshHead(fileId)
+      if(preserveRevision){
+        if(!await host.isCurrentRevision(fileId))throw new CitedRevisionChanged()
+      }else await host.refreshHead(fileId)
       if (disposed || editor.isDirty() || session?.dirty || recovery) throw hostError('CONFLICT', 'unsaved takeover')
       if (!await editor.reload()) throw hostError('UNAVAILABLE', 'takeover reload')
       if (disposed || !host.getState(fileId).lease) throw hostError('CONFLICT', 'takeover authority')
@@ -974,6 +1165,7 @@ export function createSlidesBridge(host: SessionFileHost, fileId: string, prefs:
     takeover,
     needsConfirmation: () => recovery !== null,
     isDirty: () => session?.dirty ?? false,
+    isWriteProtected: () => session?.writeProtected ?? false,
     cleanRevision: () => !disposed&&!opening&&!changing&&!saveFence&&!applyFence&&!recovery&&!session?.dirty ? session?.revision : undefined,
     dispose() {
       disposed = true

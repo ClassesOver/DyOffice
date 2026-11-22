@@ -19,7 +19,7 @@ export interface DecodedTiff {
 const MAX_TIFF_PIXELS = 256 * 1024 * 1024
 const MAX_TIFF_DIM = 32767
 
-function tiffDimsOk(width: unknown, height: unknown): width is number {
+function tiffDimsOk(width: unknown, height: unknown, maxPixels: number): width is number {
   return (
     typeof width === 'number' &&
     typeof height === 'number' &&
@@ -29,12 +29,13 @@ function tiffDimsOk(width: unknown, height: unknown): width is number {
     height > 0 &&
     width <= MAX_TIFF_DIM &&
     height <= MAX_TIFF_DIM &&
-    width * height <= MAX_TIFF_PIXELS
+    width * height <= maxPixels
   )
 }
 
-export function tiffToPng(bytes: Uint8Array): DecodedTiff | null {
+export function tiffToPng(bytes: Uint8Array, maxPixels = MAX_TIFF_PIXELS): DecodedTiff | null {
   try {
+    maxPixels = Math.min(maxPixels, MAX_TIFF_PIXELS)
     const buf = Buffer.from(bytes)
     const ifds = UTIF.decode(buf)
     if (!ifds.length) return null
@@ -50,7 +51,7 @@ export function tiffToPng(bytes: Uint8Array): DecodedTiff | null {
     let pagePixels = 0
     for (const ifd of ifds) {
       const dims = headerDims(ifd)
-      if (!tiffDimsOk(dims.width, dims.height)) continue
+      if (!tiffDimsOk(dims.width, dims.height, maxPixels)) continue
       const cur = dims.width * (dims.height as number)
       if (!page || cur > pagePixels) {
         page = ifd
@@ -61,7 +62,7 @@ export function tiffToPng(bytes: Uint8Array): DecodedTiff | null {
     UTIF.decodeImage(buf, page)
     const width = page.width as number
     const height = page.height as number
-    if (!tiffDimsOk(width, height)) return null
+    if (!tiffDimsOk(width, height, maxPixels)) return null
     const rgba = UTIF.toRGBA8(page)
     const png = new PNG({ width, height })
     png.data = Buffer.from(rgba.buffer, rgba.byteOffset, rgba.byteLength)

@@ -71,3 +71,10 @@ test('T01 CI executes the documented selectable unit command and watches its run
   assert.match(workflow, /run: npm run test:web:unit -- host-contract\.test\.mjs/)
   assert.equal((workflow.match(/'tools\/run-web-unit\.mjs'/g) ?? []).length, 2)
 })
+
+test('Office tool coverage checks a fresh trace after the Chromium suite, including Word writing', () => {
+  const office = workflow.match(/Verify the local workspace and four native editors in Chromium\n([\s\S]*?)(?=^      - name:)/m)?.[1]
+  assert.ok(office, 'the Chromium job must collect the tool trace')
+  assert.match(office, /DYOFFICE_TEST_AI_TOOL_TRACE: \$\{\{ runner\.temp \}\}/)
+  assert.match(office, /: > "\$DYOFFICE_TEST_AI_TOOL_TRACE"\n.*node --import tsx --test.*writer-draft-save.*\n.*node --import tsx apps\/web\/test\/helpers\/office-tool-coverage\.mjs "\$DYOFFICE_TEST_AI_TOOL_TRACE"/)
+})

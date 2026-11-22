@@ -8,6 +8,7 @@ import JSZip from 'jszip'
 import {JSDOM} from 'jsdom'
 import {buildLocalApp} from '../../server/src/app.ts'
 import {createGlobalConfigService} from '../../server/src/modules/admin/service.ts'
+import {createStyleTemplateService} from '../../server/src/modules/style-templates/service.ts'
 import {openIsolatedPptxSession} from '../../worker/src/native/pptx-session-host.ts'
 import {launchTestBrowser} from '../helpers/browser.mjs'
 import {fileFixture,importFile} from '../helpers/files.mjs'
@@ -27,15 +28,18 @@ async function savedSlides(bytes){
    assert.ok(target,'slide relationship resolves to a package part')
    const path=new URL(target,'https://package.invalid/ppt/presentation.xml').pathname.slice(1)
    const source=await zip.file(path).async('string')
-   const text=[...parser.parseFromString(source,'application/xml').getElementsByTagNameNS('*','t')].map(node=>node.textContent)
-   return {source,text}
+   const document=parser.parseFromString(source,'application/xml')
+   const text=[...document.getElementsByTagNameNS('*','t')].map(node=>node.textContent)
+   const pictures=document.getElementsByTagNameNS('http://schemas.openxmlformats.org/presentationml/2006/main','pic').length
+   const background=document.getElementsByTagNameNS('*','bg')[0]?.getElementsByTagNameNS('*','srgbClr')[0]?.getAttribute('val')
+   return {source,text,pictures,background}
   }))
  }finally{window.close()}
 }
 
 const nativeSlidesDirectory=process.env.DYOFFICE_TEST_SLIDES_DIST
 const liveConfig=process.env.DYOFFICE_LIVE_SLIDES_GENERATE_CONFIG
-for(const live of [false,true])test(live?'a real model generates and redoes editable PPTX pages':'the PPTX assistant generates a deck and can redo one page without changing its neighbor',{
+for(const live of [false,true])test(live?'a real model generates, redoes and reuses a saved style in editable PPTX pages':'the PPTX assistant generates a deck and can redo one page without changing its neighbor',{
  skip:!nativeSlidesDirectory||live&&!liveConfig,timeout:live?600000:90000,
 },async t=>{
  const port=live?43684:43683,origin='http://localhost:'+port,f=await fileFixture(t,{origin,buildApp:false})
@@ -168,8 +172,23 @@ for(const live of [false,true])test(live?'a real model generates and redoes edit
    assert.equal(request,instruction)
    assert.match(user,/<deck outline>[\s\S]*Acceptance title/)
    assert.ok(tools?.some(tool=>tool.function.name==='generate_deck'))
-   phases.push('office tool')
-   delta=call('generate-deck','generate_deck',{topic,approx_pages:2,insert_mode:'replace'})
+   const answers=outcome('handover-audience'),plan=outcome('handover-plan')
+   if(plan){
+    assert.match(plan,/Discovery Summary[\s\S]*Delivery Plan/)
+    phases.push('office tool')
+    delta=call('generate-deck','generate_deck',{topic,approx_pages:2,insert_mode:'replace'})
+   }else if(answers){
+    assert.match(answers,/Field team[\s\S]*Action checklist/)
+    delta=call('handover-plan','plan_deck',{
+     core_hook:'Findings to action',style,
+     pages:contents.map(([title,brief],index)=>({title,brief,layout:index?'closing_cta':'cover_typography_hero'})),
+    })
+   }else{
+    delta=call('handover-audience','ask_clarification',{questions:[
+     {id:'audience',label:'Who is the handover for?',options:['Field team','Executives']},
+     {id:'focus',label:'What should they take away?',options:['Action checklist','Project history']},
+    ]})
+   }
   }
   return Readable.from([Buffer.from('data: '+JSON.stringify({choices:[{delta,finish_reason:delta.tool_calls?'tool_calls':'stop'}]})+'\n\ndata: [DONE]\n\n')])
  }catch(error){t.diagnostic(error.stack);throw error}})
@@ -210,7 +229,8 @@ for(const live of [false,true])test(live?'a real model generates and redoes edit
    window.fetch=async(input,init)=>{
     const path=new URL(input instanceof Request?input.url:input,location.href).pathname
     if(init?.method!=='POST')return fetchOriginal(input,init)
-    const phase=path.endsWith('/slides/generate-page')?'create page':path.endsWith('/slides/generated-pages')?'land page':null
+    const phase=path.endsWith('/slides/generate-page')?'create page':path.endsWith('/slides/generated-pages')?'land page':
+     path.endsWith('/slides/history-batch-begin')?'begin history batch':path.endsWith('/slides/history-batch-end')?'end history batch':null
     if(phase){
      const response=await fetchOriginal(input,init)
      void window.recordSlidesTestEvent({phase,status:response.status})
@@ -220,13 +240,20 @@ for(const live of [false,true])test(live?'a real model generates and redoes edit
     const {request}=JSON.parse(init.body)
     const prompt=request.messages.findLast(message=>message.role==='user')?.text??''
     const stage=request.tools.length?'assistant':prompt.startsWith('Topic and style preferences:')?'style':prompt.startsWith('Topic: ')?'outline':'page design'
+    const turn=prompt.includes('Cobalt Review')?'redo':prompt.includes('Orchid Intake')?'initial':undefined
     const started=Date.now(),repair=prompt.includes('Your previous output was rejected:')
-    void window.recordSlidesTestEvent({stage,repair,started})
+    const offered=request.tools.map(tool=>tool.name).filter(name=>[
+     'ask_clarification','plan_deck','generate_deck','read_slide','regenerate_slide','save_style_template','list_style_templates',
+    ].includes(name))
+    void window.recordSlidesTestEvent({stage,turn,repair,started,offered})
     const response=await fetchOriginal(input,init)
     void response.clone().text().then(stream=>{
      const frames=[...new Set([...stream.matchAll(/^event: ([\w-]+)$/gm)].map(match=>match[1]))]
      const tools=[...stream.matchAll(/^event: tool_call\ndata: (.+)$/gm)].map(match=>JSON.parse(match[1]).name)
-     void window.recordSlidesTestEvent({stage,started,status:response.status,frames,tools,durationMs:Date.now()-started})
+     const reply=stage==='assistant'&&!tools.length
+      ? [...stream.matchAll(/^event: delta\ndata: (.+)$/gm)].map(match=>JSON.parse(match[1]).text??'').join('').slice(0,400)
+      : undefined
+     void window.recordSlidesTestEvent({stage,turn,started,status:response.status,frames,tools,reply,durationMs:Date.now()-started})
     },()=>window.recordSlidesTestEvent({stage,started,interrupted:true,durationMs:Date.now()-started}))
     return response
    }
@@ -238,12 +265,22 @@ for(const live of [false,true])test(live?'a real model generates and redoes edit
  assert.ok((await renderedText())[0].includes('Acceptance title'))
  if(live){
   const title=['Orchid Intake','Cobalt Release'],redoTitle='Cobalt Review'
+  const audience='Field reviewers',artifact='Release checklist'
+  const liveTemplate='Orchid Desk Template',appendTitle='Violet Handoff',appendTopic='Violet Delivery Follow-up'
+  const templateColor='F5E6D3'
   const hasPage=(deck,index,text)=>deck?.[index]?.join(' ').includes(text)??false
   const assertSavedSlides=async(revision,expectedTitle)=>{
    const bytes=await f.files.readFile(f.alice.token,file.fileId,revision),slides=await savedSlides(bytes)
    assert.equal(slides.length,2)
    assert.ok(hasPage(slides.map(slide=>slide.text),0,title[0]),'Generated first page has the requested title')
    assert.ok(hasPage(slides.map(slide=>slide.text),1,expectedTitle),'Saved second page has the requested title')
+   assert.ok(slides.every(slide=>slide.pictures===0),'The saved pages contain no images')
+   assert.match(slides[0].text.join(' '),/Monday|周一|星期一/i)
+   assert.match(slides[1].text.join(' '),expectedTitle===redoTitle?/checklist|清单/i:/Friday|周五|星期五/i)
+   if(expectedTitle!==redoTitle){
+    assert.ok(slides[0].text.join(' ').includes(audience),'The intake slide includes the chosen audience')
+    assert.ok(slides[1].text.join(' ').includes(artifact),'The release slide includes the chosen deliverable')
+   }
    return {bytes,slides}
   }
   const waitForPage=(index,text,timeout=25000)=>expect.poll(async()=>(await renderedText())?.[index]?.join(' ')??'',{timeout}).toContain(text)
@@ -255,27 +292,42 @@ for(const live of [false,true])test(live?'a real model generates and redoes edit
    return revision
   }
   const settled=()=>expect(panel.locator('.ai-stop-btn')).toHaveCount(0,{timeout:30000})
-  await send('Use generate_deck to replace this presentation with exactly two editable slides and no images. Use these exact titles, in order: "Orchid Intake" and "Cobalt Release". Slide 1 describes intake review on Monday. Slide 2 describes release approval on Friday. Use a simple editorial style for an internal review. The brief is complete, so proceed directly without questions and replace all original slides.')
-  const skipSurvey=panel.getByRole('button',{name:'Skip survey',exact:true})
-  // The first write waits for the batch, after the tool decision and up to two
-  // design requests for a page that needs repair.
-  await expect.poll(async()=>{
-   if(await skipSurvey.isVisible())await skipSurvey.click()
-   return hasPage(await renderedText(),0,title[0])
-  },{timeout:270000}).toBe(true)
+  await send('替换现有演示文稿，只做两页，可编辑，不放图片。先用 ask_clarification 调出两道单选题。第一题问受众，选项是 Field reviewers 和 Project sponsors。第二题问交付物，选项是 Release checklist 和 Status memo。请保留选项英文原文。我回答后，先调用 plan_deck 写入两页规划，再调用 generate_deck 直接按规划替换，禁止再次问卷。第 1 页标题必须是 Orchid Intake，正文包含我选的受众英文原文与周一审核收件。第 2 页标题必须是 Cobalt Release，正文包含我选的交付物英文原文与周五审批发布。用简洁的内部评审风格，两页都必须使用纯色原生幻灯片背景 #'+templateColor+'，不添加遮挡背景的矩形。')
+  await panel.getByRole('radio',{name:audience,exact:true}).click({timeout:120000})
+  await panel.getByRole('radio',{name:artifact,exact:true}).click({timeout:15000})
+  await waitForPage(0,title[0],270000)
   await waitForPage(1,title[1])
   await settled()
+  const clarification=acceptedTools.get('ask_clarification')??''
+  assert.ok(clarification.includes(audience)&&clarification.includes(artifact),clarification)
+  const plan=acceptedTools.get('plan_deck')??''
+  assert.match(plan,/Orchid Intake[\s\S]*Cobalt Release/)
   const generation=acceptedTools.get('generate_deck')??''
   assert.match(generation,/produced 2\/2 pages/,'The real model received a successful two-page generation result')
   assert.doesNotMatch(generation,/degraded to a plain-text fallback|failed after retry/)
   assert.deepEqual(await revisions(),[file.revision])
   const generated=await save(file.revision),first=await assertSavedSlides(generated,title[1])
+  assert.equal(first.slides[0].background?.toUpperCase(),templateColor)
+  const templates=createStyleTemplateService(f.transactions)
+  await send('用 save_style_template 保存刚生成的幻灯片样式与版式，模板名称必须是 '+liveTemplate+'。')
+  await expect.poll(()=>acceptedTools.get('save_style_template')??'',{timeout:60000}).toContain('Saved the style "'+liveTemplate+'"')
+  await settled()
+  const savedTemplate=await templates.load(f.alice.token,liveTemplate)
+  assert.equal(savedTemplate.ok,true)
+  assert.equal(savedTemplate.layout?.cover?.background?.toUpperCase(),'#'+templateColor)
+  assert.ok(savedTemplate.styleSkill.trim())
+  assert.deepEqual(await revisions(),[file.revision,generated])
   await page.reload()
   await requireReady()
   await waitForPage(1,title[1])
 
   acceptedTools.clear()
-  await send('Redo only slide 2 in place with the slide regeneration tool. Use the exact title "Cobalt Review" and give the reviewer an action: verify the release checklist. Keep slide 1 exactly as it is.')
+  const redoInstruction='用 regenerate_slide 只重做第 2 页。标题必须是 Cobalt Review，请在正文要求评审人核对发布清单。第 1 页保持原样。'
+  await Promise.all([
+   page.waitForRequest(request=>request.method()==='POST'&&new URL(request.url()).pathname==='/api/v1/ai/turns'&&
+    request.postDataJSON()?.request?.messages.some(message=>message.role==='user'&&message.text?.includes(redoInstruction)),{timeout:30000}),
+   send(redoInstruction),
+  ])
   await waitForPage(1,redoTitle,270000)
   await settled()
   assert.ok(acceptedTools.has('regenerate_slide'),'The real model requested regeneration and received a successful result')
@@ -289,9 +341,49 @@ for(const live of [false,true])test(live?'a real model generates and redoes edit
   await requireReady()
   await waitForPage(0,title[0])
   await waitForPage(1,redoTitle)
+  acceptedTools.clear()
+  const templatePrompts=[]
+  page.on('request',request=>{
+   if(request.method()!=='POST'||new URL(request.url()).pathname!=='/api/v1/ai/turns')return
+   const prompt=request.postDataJSON()?.request?.messages.findLast(message=>message.role==='user')?.text
+   if(prompt?.includes(appendTitle)&&prompt.includes('Now design page 1/1.'))templatePrompts.push(prompt)
+  })
+  await send('先调用 list_style_templates 找到 '+liveTemplate+'。接着用 generate_deck 的 style_template 复用它，insert_mode 为 append，传入一个 page，禁止问卷。主题 '+appendTopic+'，新增页标题 '+appendTitle+'，正文要求签署交接清单。不放图片，原来两页不改。')
+  await waitForPage(2,appendTitle,120000)
+  await settled()
+  assert.ok(acceptedTools.get('list_style_templates')?.includes(liveTemplate))
+  assert.match(acceptedTools.get('generate_deck')??'',/produced 1\/1 pages/)
+  assert.ok(templatePrompts.some(prompt=>prompt.includes(savedTemplate.styleSkill)&&prompt.includes('Template chrome for cover pages')))
+  assert.deepEqual(await revisions(),[file.revision,generated,redone])
+  const appended=await save(redone)
+  const appendedSlides=await savedSlides(await f.files.readFile(f.alice.token,file.fileId,appended))
+  assert.equal(appendedSlides.length,3)
+  assert.deepEqual(appendedSlides.slice(0,2).map(slide=>slide.source),second.slides.map(slide=>slide.source))
+  assert.ok(hasPage(appendedSlides.map(slide=>slide.text),2,appendTitle))
+  assert.match(appendedSlides[2].text.join(' '),/checklist|清单/i)
+  assert.equal(appendedSlides[2].background?.toUpperCase(),templateColor)
+  assert.deepEqual(await revisions(),[file.revision,generated,redone,appended])
+  await page.reload()
+  await requireReady()
+  await waitForPage(2,appendTitle)
   return
  }
- await send(instruction)
+ const questionnaireResponses=[]
+ const recordQuestionnaireResponse=response=>{
+  if(response.request().method()==='POST'&&new URL(response.url()).pathname==='/api/v1/ai/turns'){
+   questionnaireResponses.push(response.status())
+  }
+ }
+ page.on('response',recordQuestionnaireResponse)
+ try{
+  await send(instruction)
+  await panel.getByRole('radio',{name:'Field team',exact:true}).click()
+  await panel.getByRole('radio',{name:'Action checklist',exact:true}).click()
+ }catch(error){
+  const panelErrors=await panel.locator('.ai-msg-error').allTextContents().catch(()=>[])
+  t.diagnostic('PPTX questionnaire: '+JSON.stringify({responses:questionnaireResponses,providerWrites:network.writes,panelErrors}))
+  throw error
+ }finally{page.off('response',recordQuestionnaireResponse)}
  await expect(panel.getByText(answer,{exact:true})).toBeVisible({timeout:30000})
  await expect(page.locator('.thumb')).toHaveCount(2)
  await expect.poll(renderedText).toEqual(contents)
@@ -299,6 +391,8 @@ for(const live of [false,true])test(live?'a real model generates and redoes edit
  assert.deepEqual(phases.slice(3,5).sort(),['page 1','page 2'])
  assert.deepEqual(phases.slice(5),['complete'])
  assert.ok(acceptedTools.has('generate_deck'))
+ assert.ok(acceptedTools.has('ask_clarification'))
+ assert.ok(acceptedTools.has('plan_deck'))
  assert.equal(await page.evaluate(()=>window.slidesApi.isDirty()),true)
  assert.equal(await head(),file.revision)
  assert.deepEqual(await revisions(),[file.revision])
@@ -352,4 +446,14 @@ for(const live of [false,true])test(live?'a real model generates and redoes edit
  await expect.poll(renderedText).toEqual([...revisedDeck,followUp])
  assert.deepEqual(phases.slice(10),['template page'])
  assert.deepEqual(await revisions(),[file.revision,saved,updated])
+ await page.keyboard.press('Control+s')
+ await expect.poll(head,{timeout:15000}).not.toBe(updated)
+ const appended=await head()
+ const appendedSlides=await savedSlides(await f.files.readFile(f.alice.token,file.fileId,appended))
+ assert.deepEqual(appendedSlides.map(slide=>slide.text),[...revisedDeck,followUp])
+ assert.deepEqual(appendedSlides.slice(0,2).map(slide=>slide.source),updatedSlides.map(slide=>slide.source))
+ assert.equal(appendedSlides[2].background?.toUpperCase(),'FFF8E7')
+ await page.reload()
+ await requireReady()
+ await expect.poll(renderedText).toEqual([...revisedDeck,followUp])
 })

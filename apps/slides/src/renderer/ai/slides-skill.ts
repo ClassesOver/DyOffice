@@ -1327,6 +1327,9 @@ function preflightOps(
     }
     const op = { ...(raw as Record<string, unknown>) }
     const name = op.op as string
+    if (name === 'addPicture') {
+      return fail(t('aiFailApplyOps'), `ops[${i}] ${name}: use insert_web_image for source images or insert_analysis_image for a verified analysis delivery.`)
+    }
     // A span withheld from the model is a mark over real words, so an edit that
     // rewrites or drops those words costs the reader data they chose to keep.
     // Checked here, before anything is dispatched — apply_ops is atomic, so a

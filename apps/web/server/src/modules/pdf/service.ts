@@ -40,6 +40,8 @@ import type { createRevisionService } from '../revisions/service.ts'
 import { authError } from '../auth/sessions.ts'
 import {createPdfOcr} from '../../pdf/ocr.ts'
 import { inspectPdf } from '../../pdf/capabilities.mjs'
+import {createIsolatedPdfSignaturesQueryJob,pdfSignatureSafetyCodes} from '../../pdf/signatures-query.mjs'
+import type {PdfSignatureInfo} from '../../../../../pdf/src/shared/ipc.ts'
 import { createPdfRotationJob } from '../../pdf/rotation-job.mjs'
 import { createPdfSavePreparation } from '../../pdf/save-preparation.mjs'
 import { validatePdfTextEditOperations } from '../../pdf/text-edit-job.mjs'
@@ -678,6 +680,16 @@ export function createPdfService({
           if (error.message==='OCR_FAILED') throw authError(503)
         }
         throw error
+      }
+    },
+
+    async querySignatures(token:string,fileId:string,revision:string,signal?:AbortSignal):Promise<{revision:string;signatures:PdfSignatureInfo[]}>{
+      try{
+        const result=await runPinnedQuery(token,fileId,revision,createIsolatedPdfSignaturesQueryJob(),JSON.stringify({version:1,action:'signaturesQuery',operations:[]}),signal)
+        return {revision,signatures:JSON.parse(result.toString('utf8')) as PdfSignatureInfo[]}
+      }catch(error){
+        signal?.throwIfAborted()
+        mapJobError(error,pdfSignatureSafetyCodes,'PDF_SIGNATURE_QUERY_FAILED')
       }
     },
 

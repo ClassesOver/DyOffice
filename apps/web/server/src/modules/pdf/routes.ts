@@ -59,6 +59,7 @@ export function registerPdfRoutes(
   // file and sheets routes, so parallel uploads cannot grow memory without bound.
   const admission = objectTransferAdmission(app)
   const binaryUpload = (url: string | undefined) => /\/pdf\/(?:replace|insert)-pages\/uploads$/.test(url ?? '')
+  const signaturesQuery='/api/v1/files/:id/pdf/signatures/query'
   app.register(async api => {
     api.addHook('onRequest', async (request, reply) => {
       reply.header('Cache-Control', 'private, no-store')
@@ -67,9 +68,21 @@ export function registerPdfRoutes(
       csrf.requireSession(request, token)
       await sessions.authenticate(token)
       if (binaryUpload(request.routeOptions.url)) await admission.admit(request, reply, { waitMs: 10_000 })
+      if (request.routeOptions.url===signaturesQuery) await admission.admit(request,reply)
     })
     api.addHook('onResponse', async request => admission.close(request))
     api.addHook('onError', async request => admission.error(request))
+
+    api.post(signaturesQuery,{
+      bodyLimit:4096,
+      schema:{params:fileParamsSchema,querystring:emptyQuerySchema,body:{
+        type:'object',additionalProperties:false,required:['revision'],properties:{revision:uuidSchema},
+      }},
+    },async(request,reply)=>{
+      const {revision}=request.body as {revision:string}
+      return withDisconnect(request,reply,signal=>admission.transfer(request,reply,()=>
+        pdf.querySignatures(cookies(request).session??'',(request.params as {id:string}).id,revision,signal)))
+    })
 
     api.post('/api/v1/files/:id/pdf/ocr',{
       bodyLimit:MAX_OCR_BASE64+160,

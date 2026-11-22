@@ -18,11 +18,13 @@ import {fileFixture,importFile} from '../helpers/files.mjs'
 import {password} from '../helpers/identity.mjs'
 import {stubHomeHero} from '../helpers/home-hero.mjs'
 import {mockProviderNetwork} from '../helpers/provider-network.mjs'
+import {workbookRangeResultSchema} from '../../../sheets/src/shared/desktop-api.ts'
 
 const liveConfig=process.env.DYOFFICE_LIVE_SHEETS_FIND_CONFIG
 const sheetsDirectory=process.env.DYOFFICE_TEST_SHEETS_DIST
+const nativeAudit=process.env.DYOFFICE_TEST_XLSX_AUDIT_RUST==='1'
 for(const live of [false,true])test((live?'Live model':'Fixture model')+' finds XLSX cells beyond the loaded grid',{
- skip:live?!liveConfig:!sheetsDirectory,timeout:120000,
+ skip:live?!liveConfig:!sheetsDirectory,timeout:180000,
 },async t=>{
  const server=createServer()
  t.after(async()=>{server.closeAllConnections();if(server.listening)await new Promise(resolve=>server.close(resolve))})
@@ -38,9 +40,11 @@ for(const live of [false,true])test((live?'Live model':'Fixture model')+' finds 
  const dir=await mkdtemp(join(tmpdir(),'dyoffice-browser-sheets-find-'))
  f.cleanup.push(()=>rm(dir,{recursive:true,force:true}))
  await buildSheetsGateway(join(dir,'gateway.mjs'))
+ const hostManifest=nativeAudit?JSON.parse(await readFile(new URL('../../../../.dyoffice-native-build/host-manifest.json',import.meta.url),'utf8')):null
  const runtime=await configuredSheetsRuntime({
   DYOFFICE_AUTH_MODE:'local',DYOFFICE_SANDBOX_MODE:'subprocess',DYOFFICE_DEPLOYMENT_ID:f.deploymentId,
-  DYOFFICE_XLSX_GATEWAY_RUNNER:join(dir,'gateway-process.mjs'),DYOFFICE_XLSX_NODE_ENGINE:join(dir,'xlsx-node-engine.mjs'),
+  DYOFFICE_XLSX_GATEWAY_RUNNER:join(dir,'gateway-process.mjs'),
+  ...(hostManifest?{DYOFFICE_NATIVE_BINARY:hostManifest.nativeBinary,DYOFFICE_NATIVE_SHA256:hostManifest.nativeSha256}:{DYOFFICE_XLSX_NODE_ENGINE:join(dir,'xlsx-node-engine.mjs')}),
   DYOFFICE_NATIVE_XLSX_DIRECTORY:sheetsDirectory,
  },{enabled:true})
  f.cleanup.unshift(()=>runtime.close())
@@ -52,10 +56,43 @@ for(const live of [false,true])test((live?'Live model':'Fixture model')+' finds 
  await append('xl/workbook.xml','</sheets>','<sheet name="Audit" sheetId="2" r:id="rIdAudit"/>')
  await append('xl/_rels/workbook.xml.rels','</Relationships>','<Relationship Id="rIdAudit" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet2.xml"/>')
  await append('[Content_Types].xml','</Types>','<Override PartName="/xl/worksheets/sheet2.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>')
- zip.file('xl/worksheets/sheet2.xml','<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><dimension ref="A1:AB1002"/><sheetData><row r="1001"><c r="AA1001" t="inlineStr"><is><t>REPORT-12345</t></is></c></row><row r="1002"><c r="AB1002" t="e"><f>1/0</f><v>#DIV/0!</v></c></row></sheetData></worksheet>')
+ zip.file('xl/worksheets/sheet2.xml',`<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <dimension ref="A1:AB1002"/>
+  <sheetData>
+   <row r="1"><c r="A1"><v>7</v></c><c r="B1" s="2"><v>0.25</v></c><c r="C1"><f>A1+A2</f><v>18</v></c></row>
+   <row r="2"><c r="A2"><v>11</v></c></row>
+   <row r="1001"><c r="AA1001" t="inlineStr"><is><t>REPORT-12345</t></is></c></row>
+   <row r="1002"><c r="AB1002" t="e"><f>1/0</f><v>#DIV/0!</v></c></row>
+  </sheetData>
+  <sheetProtection sheet="1"/>
+  <autoFilter ref="a1:c2">
+   <filterColumn colId="0"><filters><filter val="11"/></filters></filterColumn>
+   <filterColumn colId="1"><customFilters and="1"><customFilter operator="greaterThan" val="0"/><customFilter val="0.25"/></customFilters></filterColumn>
+   <filterColumn colId="2"><customFilters><customFilter operator="vendorRule" val="0"/><customFilter val="18"/></customFilters></filterColumn>
+  </autoFilter>
+  <customSheetViews><customSheetView guid="{11111111-1111-1111-1111-111111111111}"><autoFilter ref="A1:A2"/></customSheetView></customSheetViews>
+ </worksheet>`)
  const original=await zip.generateAsync({type:'nodebuffer'})
  const auditSheet=(await runtime.sheetsNative.inspect(original)).sheets.find(sheet=>sheet.name==='Audit')
  assert.ok(auditSheet)
+ const sheetId=auditSheet.id
+ const filterArea={startRow:0,endRow:1,startColumn:0,endColumn:2}
+ const filtered=await runtime.sheetsNative.readRange(original,'Audit',filterArea)
+ assert.deepEqual(filtered.autoFilter,filterArea)
+ assert.deepEqual(filtered.autoFilterColumns,[
+  {colId:0,values:['11']},
+  {colId:1,customs:{and:true,filters:[{operator:'greaterThan',val:'0'},{val:'0.25'}]}},
+ ])
+ const auditCalls=[
+  ['read_cells',{sheetId,addresses:['A1','C1']},[/A1: 7/,/=A1\+A2/]],
+  ['aggregate_range',{sheetId,range:'A1:A2'},[/numeric cells: 2, sum: 18/]],
+  ['read_formats',{sheetId,range:'B1'},[/B1:.*number format.*%/]],
+  ['trace_precedents',{sheetId,address:'C1'},[/C1 = 18/,/A1=7/,/A2=11/]],
+  ['trace_dependents',{sheetId,address:'A1'},[/Audit!C1 = 18/]],
+  ['load_guide',{guides:['writing']},[/set_range/]],
+  ['select_range',{sheetId,range:'A1:C2'},[/Selected Audit!A1:C2/]],
+  ['read_sheet_features',{sheetId},[/Status: visible, protected/,/AutoFilter[^\n]*A1:C2/i]],
+ ]
  const {file}=await importFile(f,f.alice.token,original,'search.xlsx')
  const app=await buildLocalApp({db:f.db,businessPool:f.businessPool,passwords:f.passwords,deploymentId:f.deploymentId,origin,csrfKey:f.csrfKey,objectStore:f.objects,codingHarnesses:false,localShellDirectory:process.env.DYOFFICE_TEST_LOCAL_SHELL_DIRECTORY??fileURLToPath(new URL('../../dist-local-shell',import.meta.url)),globalConfigKeyring:keyring,providerGateway:{mode:'shared'},...runtime})
  f.cleanup.unshift(()=>app.close())
@@ -63,7 +100,19 @@ for(const live of [false,true])test((live?'Live model':'Fixture model')+' finds 
  server.on('request',app.routing)
  const browser=await launchTestBrowser()
  f.cleanup.unshift(()=>browser.close())
- const page=await browser.newPage({viewport:{width:1440,height:1000}}),errors=[],toolReceipts=[]
+ const page=await browser.newPage({viewport:{width:1440,height:1000}}),errors=[],toolReceipts=[],auditReads=[]
+ page.on('response',async response=>{
+  if(!response.url().endsWith('/sheets/range'))return
+  const {sheetName,range}=response.request().postDataJSON()
+  if(sheetName!=='Audit'||range.startRow!==0)return
+  const diagnostic={range,status:response.status()}
+  auditReads.push(diagnostic)
+  try{
+   const body=await response.json(),parsed=workbookRangeResultSchema.safeParse(body)
+   diagnostic.loaded=[body.indexingComplete,body.indexedThroughRow]
+   diagnostic.schema=parsed.success?[]:parsed.error.issues.map(issue=>[issue.path,issue.code])
+  }catch{diagnostic.loaded=null}
+ })
  page.on('pageerror',error=>errors.push(error.message))
  page.on('request',request=>{
   if(request.method()!=='POST'||!request.url().endsWith('/api/v1/ai/turns'))return
@@ -86,6 +135,17 @@ for(const live of [false,true])test((live?'Live model':'Fixture model')+' finds 
    const {tools,messages}=JSON.parse(network.wire.toString())
    const user=messages.findLastIndex(message=>message.role==='user')
    const results=messages.slice(user+1).filter(message=>message.role==='tool')
+   if(messages[user].content.includes('审计工作表工具')){
+    const action=auditCalls[results.length]
+    if(results.length){
+     const {isError,output}=JSON.parse(results.at(-1).content)
+     const [name,,patterns]=auditCalls[results.length-1]
+     assert.ok(!isError,name+': '+output)
+     for(const pattern of patterns)assert.match(output,pattern,name+': '+output)
+    }
+    const delta=action?{tool_calls:[{index:0,id:'audit-'+action[0],type:'function',function:{name:action[0],arguments:JSON.stringify(action[1])}}]}:{content:'已核对审计工作表'}
+    return Readable.from([Buffer.from('data: '+JSON.stringify({choices:[{delta,finish_reason:delta.tool_calls?'tool_calls':'stop'}]})+'\n\ndata: [DONE]\n\n')])
+   }
    const regexTurn=messages[user].content.includes('regex:true')
    let delta
    if(results.length===(regexTurn?2:1)){
@@ -126,7 +186,15 @@ for(const live of [false,true])test((live?'Live model':'Fixture model')+' finds 
  assert.ok(rangeCells.some(cell=>cell.row===1001&&cell.column===27&&cell.value==='#DIV/0!'))
  await expect.poll(()=>['AA1001','AB1002'].every(address=>toolReceipts.some(output=>String(output).includes(address))),{timeout:60000}).toBe(true)
  await expect(assistant.locator('.ai-msg-error')).toHaveCount(0)
- if(!live)await expect(assistant.getByText('AA1001、AB1002',{exact:true})).toBeVisible()
+ if(!live){
+  await expect(assistant.getByText('AA1001、AB1002',{exact:true})).toBeVisible()
+  await assistant.locator('textarea').fill('审计工作表工具')
+  await assistant.getByRole('button',{name:'发送',exact:true}).click()
+  const success=assistant.getByText('已核对审计工作表',{exact:true})
+  await expect(success.or(assistant.locator('.ai-msg-error'))).toBeVisible({timeout:60000})
+  assert.equal(await success.isVisible(),true,'Audit range responses: '+JSON.stringify(auditReads))
+  await expect(page.getByRole('tab',{name:'Audit',exact:true})).toHaveAttribute('aria-selected','true')
+ }
  assert.equal((await f.files.openFile(f.alice.token,file.fileId)).file.revision,file.revision)
  assert.deepEqual(await f.files.readFile(f.alice.token,file.fileId,file.revision),original)
  assert.deepEqual(errors,[])

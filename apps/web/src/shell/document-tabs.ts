@@ -1,12 +1,15 @@
 import type {TabSummary} from '../../../shell/src/shared/tabs-api'
 
 export type DocumentFormat = 'docx' | 'xlsx' | 'pptx' | 'pdf'
-export interface DocumentTab {id: string; format: DocumentFormat; name: string; src: string}
+export interface DocumentTab {id: string; format: DocumentFormat; name: string; src: string; sourceRevision?: string}
 export type DocumentCloseGuard = () => boolean | Promise<boolean>
 interface DocumentOpenToken {renameVersion: number; sequence: number}
+export class CitationTabUnverified extends Error {
+  constructor() { super('The open editor cannot verify the cited revision.') }
+}
 const kinds: Record<DocumentFormat, TabSummary['kind']> = {docx:'docs',xlsx:'sheets',pptx:'slides',pdf:'pdf'}
 
-export function createDocumentTabs() {
+export function createDocumentTabs({displayedRevision=()=>undefined,isCitationExpired=()=>false}:{displayedRevision?:(id:string)=>string|undefined;isCitationExpired?:(id:string)=>boolean}={}) {
   const documents: DocumentTab[] = []
   const mounted = new Set<string>()
   const listeners = new Set<(tabs: TabSummary[]) => void>()
@@ -41,14 +44,22 @@ export function createDocumentTabs() {
     if (document.id === 'home') throw new Error('文档标识不能使用 home。')
     if (token && token.sequence <= (closedAt.get(document.id) ?? 0)) return
     const select = !token || token.sequence === selectionSequence
+    if (document.sourceRevision && !select) return
     if (!token) selectionSequence = ++openSequence
     const known = names.get(document.id)
     const fresh = !token || (token.renameVersion === (known?.renameVersion ?? 0) && token.sequence >= (known?.sequence ?? 0))
     const name = fresh ? document.name : known?.name ?? document.name
-    names.set(document.id, {name, renameVersion: known?.renameVersion ?? 0, sequence: Math.max(known?.sequence ?? 0, token?.sequence ?? 0)})
     const current = documents.find(current => current.id === document.id)
+    if (select && current && document.sourceRevision && mounted.has(document.id) && displayedRevision(document.id)!==document.sourceRevision) throw new CitationTabUnverified()
+    names.set(document.id, {name, renameVersion: known?.renameVersion ?? 0, sequence: Math.max(known?.sequence ?? 0, token?.sequence ?? 0)})
     if (current) {
-      if (current.name === name && (!select || active === document.id)) return
+      const pinDormant = select && document.sourceRevision && !mounted.has(document.id)
+      const reopen = select && !document.sourceRevision && current.sourceRevision && (current.format==='docx'||isCitationExpired(document.id))
+      if (pinDormant || reopen) {
+        current.src=document.src
+        if(document.sourceRevision)current.sourceRevision=document.sourceRevision
+        else delete current.sourceRevision
+      } else if (current.name === name && (!select || active === document.id)) return
       current.name = name
       if (select) {active = document.id; mounted.add(document.id)}
       emit(); return
@@ -112,7 +123,7 @@ export function createDocumentTabs() {
     renderedDocuments:()=>documents.filter(document=>mounted.has(document.id)).map(document=>({...document})),
     documents: () => documents.map(document => ({...document})),
     subscribe(listener: (tabs: TabSummary[]) => void) { listeners.add(listener); return () => { listeners.delete(listener) } },
-    open, activate, close, reorder, rename, reserveOpen,
+    open, activate, close, reorder, rename, reserveOpen, isCitationExpired,
     isOpenCurrent:(token:DocumentOpenToken)=>token.sequence===selectionSequence,
     setGuard(id: string, guard: DocumentCloseGuard | null) {
       if (!documents.some(document => document.id === id)) return

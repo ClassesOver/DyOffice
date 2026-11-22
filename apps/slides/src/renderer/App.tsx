@@ -379,6 +379,7 @@ export interface SlidesEditorHandle {
 /** Optional host seam: everything keeps desktop-IPC behavior when absent. */
 export interface SlidesAppHost {
   saveDownload?: React.ReactNode
+  downloadImages?: fileActions.SlideImageDownload
   namedCopy?: fileActions.SlidesNamedCopy
   analysisGeneration?:()=>number|null
   runAnalysis?:(ops:unknown[],check:()=>boolean,adopt:(slides:RenderSlide[])=>void)=>Promise<boolean>
@@ -1036,7 +1037,7 @@ export function App({ host }: { host?: SlidesAppHost } = {}) {
       analysis:{captureAnalysis:()=>captureSlideAnalysis({current:(forSave=false)=>{
         const ctx=ctxRef.current,generation=hostRef.current?.analysisGeneration?.()
         if(!ctx.slide||generation==null||(!forSave&&(hostRef.current?.readOnly||analysisSaving.current>0))||ctx.editingActiveRef.current||notesDraftRef.current||ctx.masterItems||effectsInFlight.current||mouseDownRef.current)return null
-        return {identity:ctx.slides,slideId:ctx.slide.partPath??'',index:ctx.current,selection:JSON.stringify(ctx.selectedIds),generation,width:ctx.slide.widthPx,height:ctx.slide.heightPx}
+        return {identity:ctx.slides,slideId:ctx.slide.partPath??'',index:ctx.current,selection:JSON.stringify(ctx.selectedIds),generation,width:ctx.slide.widthPx,height:ctx.slide.heightPx,scale:ctx.slide.scale}
       },hold:()=>analysisConsent.current.hold(),run:async(ops,check)=>{analysisApplying.current=true;try{return await (hostRef.current?.runAnalysis?.(ops,check,all=>flushSync(()=>ctxRef.current.applyDeck(all,ctxRef.current.current)))??false)}finally{analysisApplying.current=false}}})},
       isDirty: () => dirtyRef.current,
       canContinueAssistant: () => !dirtyRef.current && !editingActiveRef.current && !notesDraftRef.current &&
@@ -1141,10 +1142,13 @@ export function App({ host }: { host?: SlidesAppHost } = {}) {
 
   const saveAs = useCallback(() => fileActions.saveAs(() => ctxRef.current), [])
   const nameWithAi = useCallback(() => fileActions.nameWithAi(() => ctxRef.current, hostRef.current?.namedCopy), [])
-  const exportImages = useCallback(
-    (format: 'png' | 'jpg' = 'png') => fileActions.exportImages(ctxRef.current, format),
-    [],
-  )
+  const exportingImages = useRef(false)
+  const exportImages = useCallback(async (format: 'png' | 'jpg' = 'png') => {
+    if (exportingImages.current) return
+    exportingImages.current = true
+    try { await fileActions.exportImages(ctxRef.current, format, hostRef.current?.downloadImages) }
+    finally { exportingImages.current = false }
+  }, [])
   const exportPdf = useCallback(() => void fileActions.exportPdf(ctxRef.current), [])
   const [videoDlgOpen, setVideoDlgOpen] = useState(false)
 

@@ -8,7 +8,7 @@ import { join,isAbsolute } from 'node:path'
 import { SandboxError,type SandboxSession,type SandboxLimits } from './contracts.ts'
 const exec=promisify(execFile),MAX=32*1024*1024
 const UUID=/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/
-const commands=new Set(['open','close','save_archive','read_range','read_formula_cells','read_row_outline','read_media','find_cells','recalc_cells','probe','network','pids','sleep','busy','allocate','flood','output','symlink','park','gateway_package','gateway_plan','gateway_convert_merge_source'])
+const commands=new Set(['open','close','save_archive','read_range','read_formula_cells','read_row_outline','read_media','find_cells','recalc_cells','refresh_bound_external_links','probe','network','pids','sleep','busy','allocate','flood','output','symlink','park','gateway_package','gateway_plan','gateway_convert_merge_source'])
 const environment={ PATH: '/usr/bin:/bin',LANG: 'C.UTF-8',SYSTEMD_COLORS: '0',SYSTEMD_PAGER: 'cat' }
 let active=0,memory=0
 // Only dependency discovery is cached, after this run's binary snapshot has

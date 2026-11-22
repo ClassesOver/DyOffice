@@ -378,17 +378,8 @@
 .document-preview-main .ant-card-head-wrapper{flex-wrap:wrap;gap:12px}
 .document-preview-main .ant-card-head-title{flex:1 1 160px}
 .document-preview-main .ant-card-extra{display:flex;flex-wrap:wrap;gap:8px;max-width:100%;margin-inline-start:0}
-.document-preview-main .dyoffice-pdf-toolbar{flex-wrap:wrap;max-width:100%}
-.document-preview-layout>.pdf-shared-assistant{order:-1;flex:none;height:100%;min-height:0;margin:0;border:0}
 @media(max-width:760px){
  .document-preview-layout .document-notifications{top:52px;bottom:auto;flex-direction:column-reverse}
- .document-preview-layout.has-assistant{flex-direction:column;overflow:auto}
- .document-preview-layout.has-assistant>.document-preview-main{flex:1 0 50dvh;height:auto!important}
- .document-preview-layout>.pdf-shared-assistant{order:1;flex:none;height:440px;min-height:0;width:100%}
- .pdf-shared-assistant .shared-assistant-dock{width:100%}
  :is(.ai-panel,.copilot) :is(.ai-chat,.ai-composer){padding-inline:12px}
- .document-preview-layout>.pdf-shared-assistant:has(.shared-assistant-dock.collapsed){height:38px}
- .pdf-shared-assistant .shared-assistant-dock.collapsed{height:38px}
- .pdf-shared-assistant .shared-assistant-dock>.ai-rail{flex-direction:row;justify-content:center;padding:6px;border:1px solid var(--border-subtle)}
 }
 @media(prefers-reduced-motion:reduce){.shared-assistant-dock,:is(.ai-panel,.copilot) :is(.ai-header-btn,.ai-input-box,.ai-starter){transition:none}}

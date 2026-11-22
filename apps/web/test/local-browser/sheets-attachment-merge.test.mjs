@@ -106,6 +106,7 @@ for(const legacy of [true,false])test(legacy?'browser assistant merges BIFF XLS,
  await expect(save).toBeEnabled({timeout:30000})
  await expect(assistant.locator('.ai-msg-streaming')).toHaveCount(0,{timeout:60000})
  await expect(assistant.locator('.ai-msg-error')).toHaveCount(0)
+ await expect(page.getByRole('tab',{name:'Acceptance',exact:true})).toHaveAttribute('aria-selected','true')
  if(legacy)await expect(assistant.getByText('All attachments were merged.',{exact:true})).toBeVisible()
  const head=async()=>(await f.files.openFile(f.alice.token,initial.fileId)).file.revision
  assert.equal(await head(),initial.revision)

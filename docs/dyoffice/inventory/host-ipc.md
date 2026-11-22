@@ -21,10 +21,10 @@
 | App | `browser-native` | `server-api` | `isolated-worker` | `unsupported` | `desktop-only` | Total |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
 | docs | 22 | 49 | 8 | 15 | 23 | 117 |
-| sheets | 18 | 42 | 23 | 21 | 11 | 115 |
+| sheets | 18 | 42 | 24 | 20 | 11 | 115 |
 | slides | 155 | 46 | 1 | 7 | 12 | 221 |
 | pdf | 10 | 32 | 26 | 10 | 8 | 86 |
-| **all** | 205 | 169 | 58 | 53 | 54 | 539 |
+| **all** | 205 | 169 | 59 | 52 | 54 | 539 |
 
 Lifecycle is derived from the IPC operations the preload member performs:
 `request` (invoke/sendSync), `subscription` (main→renderer events, returns an
@@ -71,7 +71,8 @@ renderer call sites resolved by symbol, including shared workspace packages.
 | `file-lifecycle` | `server-api` | 26 | T06 | openFile()/commitRevision() with SaveInput, rename via file service | Opening, saving and renaming are file-service operations bound to the principal; HTTP commit is the save truth. |
 | `docx-crypto-conversion` | `isolated-worker` | 5 | T07 | Authorized job; password never logged or persisted | Encryption and altChunk HTML conversion run in main today (html2docx has 3 Node-importing files); compound-file itself is Node-free, so a browser port is a T07 option to evaluate. |
 | `xlsx-sidecar` | `isolated-worker` | 22 | T09 | XLSX worker job (Rust sidecar under T08 sandbox), output via T06 | These are served by the native Rust XLSX sidecar; native build is blocked on the verification host (compatibility.md). |
-| `xlsx-external-data` | `unsupported` | 6 | T15 | Read-only data sources (T15) are the governed replacement | Workbook connections and external links reach arbitrary local files/servers; enabling them server-side needs T15 egress and credential policy. |
+| `xlsx-external-link-list` | `isolated-worker` | 1 | T09 | Revision-bound workbook link metadata | The gateway reads stored package relationships and cached sheet names without accessing link targets. |
+| `xlsx-external-data` | `unsupported` | 5 | T15 | Read-only data sources (T15) are the governed replacement | Workbook connections and external links reach arbitrary local files/servers; enabling them server-side needs T15 egress and credential policy. |
 | `xlsx-cross-window-pick` | `unsupported` | 7 | T09 | None in first release | Picking a range in another open workbook relies on shell-managed sibling tabs. |
 | `slides-presenter` | `browser-native` | 10 | T10 | Second window + BroadcastChannel (Presentation API where available) | Presenter/audience windows are coordinated through main today; same-origin windows can coordinate directly. |
 | `slides-deck-session` | `browser-native` | 123 | T10 | Deck session in a browser worker reusing pptx-ops; open/save through T06 | The deck model and journaled ops live in the Electron main process today. @genoffice/pptx-ops has no Node imports in src; @genoffice/pptx-engine has 3 Node-importing files that must be isolated before relocation. |
@@ -236,7 +237,7 @@ renderer call sites resolved by symbol, including shared workspace packages.
 | `desktopApi.refreshWorkbookConnection` | request | invoke `$IPC_CHANNELS.refreshWorkbookConnection` | 1 | `unsupported` | `xlsx-external-data` |
 | `desktopApi.readWorkbookRowOutline` | request | invoke `$IPC_CHANNELS.readWorkbookRowOutline` | 1 | `isolated-worker` | `xlsx-sidecar` |
 | `desktopApi.recalcWorkbook` | request | invoke `$IPC_CHANNELS.recalcWorkbook` | 1 | `isolated-worker` | `xlsx-sidecar` |
-| `desktopApi.listExternalLinks` | request | invoke `$IPC_CHANNELS.listExternalLinks` | 3 | `unsupported` | `xlsx-external-data` |
+| `desktopApi.listExternalLinks` | request | invoke `$IPC_CHANNELS.listExternalLinks` | 3 | `isolated-worker` | `xlsx-external-link-list` |
 | `desktopApi.updateExternalLinks` | request | invoke `$IPC_CHANNELS.updateExternalLinks` | 1 | `unsupported` | `xlsx-external-data` |
 | `desktopApi.readExternalLinkUsage` | request | invoke `$IPC_CHANNELS.readExternalLinkUsage` | 1 | `unsupported` | `xlsx-external-data` |
 | `desktopApi.selectExternalLinkSource` | request | invoke `$IPC_CHANNELS.selectExternalLinkSource` | 1 | `unsupported` | `xlsx-external-data` |
@@ -256,7 +257,7 @@ renderer call sites resolved by symbol, including shared workspace packages.
 | `desktopApi.readSlicerState` | request | invoke `$IPC_CHANNELS.readSlicerState` | 1 | `isolated-worker` | `xlsx-sidecar` |
 | `desktopApi.readWorkbookRedactions` | request | invoke `$IPC_CHANNELS.readWorkbookRedactions` | 1 | `isolated-worker` | `xlsx-sidecar` |
 | `desktopApi.readWorkbookQueries` | request | invoke `$IPC_CHANNELS.readWorkbookQueries` | 1 | `isolated-worker` | `xlsx-sidecar` |
-| `desktopApi.saveWorkbookEdits` | request | invoke `$IPC_CHANNELS.saveWorkbook` | 2 | `isolated-worker` | `xlsx-sidecar` |
+| `desktopApi.saveWorkbookEdits` | request | invoke `$IPC_CHANNELS.saveWorkbook` | 3 | `isolated-worker` | `xlsx-sidecar` |
 | `desktopApi.beginSaveEditsTransfer` | request | invoke `$IPC_CHANNELS.saveEditsBegin` | 1 | `isolated-worker` | `xlsx-sidecar` |
 | `desktopApi.sendSaveEditsChunk` | request | invoke `$IPC_CHANNELS.saveEditsChunk` | 1 | `isolated-worker` | `xlsx-sidecar` |
 | `desktopApi.abortSaveEditsTransfer` | request | invoke `$IPC_CHANNELS.saveEditsAbort` | 1 | `isolated-worker` | `xlsx-sidecar` |

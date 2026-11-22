@@ -483,9 +483,10 @@ export function installSheetProtectionGuard(
         return sheet.getColumnManager().getColumn(column) ?? null
       },
       defaultLocked: state.file.styles[0]?.locked !== false,
-      allowEditRefs: (state.sheetProtectedRanges.get(worksheet.getSheetId()) ?? []).map(
-        (range) => range.sqref,
-      ),
+      // A password or permission descriptor requires an unlock before the range is editable.
+      allowEditRefs: (state.sheetProtectedRanges.get(worksheet.getSheetId()) ?? [])
+        .filter((range) => !range.hasPassword)
+        .map((range) => range.sqref),
       maxRow: sheet.getRowCount() - 1,
       maxColumn: sheet.getColumnCount() - 1,
       residentRows:

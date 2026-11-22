@@ -4,52 +4,70 @@ T09 仍在验收中。以下记录启动接线及已执行的检查，不代表�
 
 ## 构建和启用
 
-在仓库根目录使用 Node 22，先构建浏览器和服务器 gateway：
+默认 SaaS 构建将同一套工作簿计算引擎编译为 WASI，并独立放入 `apps/web/dist-sheets-server`。部署时用 Node 22 启动，服务器自动选用该产物。
+
+```sh
+rustup target add wasm32-wasip1
+npm run build:saas
+```
+
+也可单独构建浏览器和服务器 gateway，再使用宿主原生执行器。
 
 ```sh
 npm run build:sheets --workspace=@dyoffice/web
+npm run build:web:native
 ```
 
-已有本地账户模式、独立 auth/business 数据库凭据、文件存储和部署 ID 配置后，增加：
+在本地账户、独立 auth/business 数据库凭据、文件存储和部署 ID 的配置中加入以下环境变量。
 
 ```sh
-DYOFFICE_NATIVE_XLSX=experimental
+NODE_ENV=development
+DYOFFICE_AUTH_MODE=local
 DYOFFICE_NATIVE_BINARY=/absolute/path/to/xlsx-sidecar
 DYOFFICE_NATIVE_SHA256=<该二进制的实际 SHA-256>
 ```
 
-`DYOFFICE_AUTH_MODE` 必须为 `local`。程序仍拒绝 production 模式。原生执行使用 T08 的 systemd 主机隔离，需要现有服务权限和 cgroup 支持。没有 Docker 依赖。
+原生构建将二进制路径和 SHA-256 写入 `.dyoffice-native-build/host-manifest.json`。需要保留 Node 工作簿读写时，在同一组配置里增加 `DYOFFICE_XLSX_NODE_ENGINE=/absolute/path/to/apps/web/dist-sheets-server/xlsx-node-engine.mjs`。混合模式继续用 Node 读取和保存工作簿，Rust 子进程只接受已授权外链的刷新计算。仅构建编辑器与 gateway 的 Node 部署仍可查看和断开外链。
 
-默认加载 `apps/web/dist-sheets/` 和 `apps/web/dist-sheets-server/gateway.mjs`。可通过 `DYOFFICE_NATIVE_XLSX_DIRECTORY`、`DYOFFICE_XLSX_GATEWAY_MODULE` 指定由部署管理员控制的构建位置。构建文件缺失、原生程序哈希不符或隔离启动失败会阻止服务器启动。
+该本地运行时仅在 `DYOFFICE_AUTH_MODE=local` 且 `NODE_ENV` 为非 production 时可用。在 Linux 上，服务以 UID 0 运行、存在 `/usr/bin/systemd-run` 且未选择 `DYOFFICE_SANDBOX_MODE=subprocess` 时，原生二进制由 T08 的 systemd 主机沙箱运行。该路径需要相应的 systemd 权限与 cgroup 支持，文档执行无 Docker 依赖。
+
+服务器在文件存储、`apps/web/dist-sheets/.vite/manifest.json` 和 `apps/web/dist-sheets-server/gateway-process.mjs` 齐备且具有执行引擎时自动启用 XLSX。部署管理员可通过 `DYOFFICE_NATIVE_XLSX_DIRECTORY` 和 `DYOFFICE_XLSX_GATEWAY_RUNNER` 调整前端构建目录与网关子进程入口。启用条件缺失时 XLSX 入口不可用。已选原生二进制的哈希校验或沙箱启动失败会阻止服务器启动。
 
 打开 `/native-xlsx/?fileId=<拥有的 XLSX 文件 UUID>`。入口使用 Cookie 登录和文件所有权校验；原生请求使用文件版本引用，不接受服务器路径。保存通过 T06 上传暂存、租约和幂等提交。关闭服务器会取消并等待该运行时的原生调用。
 
 ## 当前证据
+
+默认 Node/WASI 模式使用真实 `server/index.mjs` 启动。未配置原生可执行文件时，服务器自动发现 WASI 产物，返回 XLSX 编辑能力和外链工作区来源能力，并在 SIGTERM 后清理进程。WASI 产物通过已有子进程的完整脚本摘要校验。在支持的 Linux 宿主配置下沿用 systemd 隔离。WASI 接口本身的文件系统边界见 Node 文档。[实际入口回归](../../../apps/web/test/native-sheets/runtime.test.mjs) [Node WASI 文档](https://github.com/nodejs/node/blob/v22.23.1/doc/api/wasi.md)
+
+混合模式的启动专项与 Rust 单引擎启动专项均已通过。真实 `server/index.mjs` 返回 XLSX 编辑能力和外链工作区来源能力，并在 SIGTERM 后清理进程。无效二进制哈希在两种配置中均被拒绝，不完整的二进制与哈希组合也会被拒绝。[实际入口回归](../../../apps/web/test/native-sheets/runtime.test.mjs)
+
+后续 Web 验收覆盖了文件级查找、外链列表和断开外链，以及工作簿图片保存重开。浏览器验收包中的工作簿已经由 LibreOffice Calc 复开、重算和另存。[四格式对齐验收](genoffice-web-parity.md)
+
+在固定候选 `d90ea092` 的构建产物上，两项启动回归均通过。首次共用宿主运行触发了旧的 20 秒测试总时限。分段复验核对了数据库准备、工作簿导入、实际服务器监听、能力和文件接口、原生页面及 SIGTERM 退出。测试时限调整为 45 秒后，两项重新通过，服务器入口用例耗时约 27 秒。两轮复验使用本机 PostgreSQL 和 systemd 隔离。
 
 `apps/web/test/native-sheets/runtime.test.mjs` 两项测试通过：
 
 - 实验配置约束、实际隔离程序启动、错误哈希拒绝、工作簿读取、关闭后拒绝新任务。
 - 启动真正的 `server/index.mjs`，使用独立 auth/business 数据库角色和文件存储，读取 `xlsx: editable` 能力、拥有文件的原生 metadata 和页面，SIGTERM 后以 0 退出。
 
-浏览器入口、服务器和 worker TypeScript 检查通过。完整原生 Sheets 专项套件 22 项通过（包含 6 个真实 HTTPS/Playwright 场景）；新增接口能力回归后，bridge 两项测试通过。名称直接引用、嵌套引用和大小写引用的真实引擎测试共 3 项通过，均覆盖撤销与重做。整体 API 回归、最终审查和真实 Excel 复开仍需完成。
+浏览器入口、服务器和 worker TypeScript 检查通过。完整原生 Sheets 专项套件 22 项通过（包含 6 个真实 HTTPS/Playwright 场景）；新增接口能力回归后，bridge 两项测试通过。名称直接引用、嵌套引用和大小写引用的真实引擎测试共 3 项通过，均覆盖撤销与重做。整体 API 回归和最终审查仍需完成。
 
-## 草稿 PR 的已知未完成项
+## 初版草稿记录
 
-本实现当前仍为草稿，未闭环 T09：
+以下为初版草稿的实现和当时待验事项。
 
 - 名称依赖刷新问题已修复：补齐原引擎展开名称时丢失的依赖元数据，并使词法缓存识别间接名称变更。真实引擎直接/嵌套名称及撤销/重做测试、Name Manager 修改后保存复开的浏览器测试通过。
 - 只读加载问题已修复：在用户命令入口限制编辑，允许原有内部导入、选择和计算写回；双页面只读、显式接管、保存和原编辑器租约失效测试通过。
 - 透视表定义刷新、文件级查找、工作簿密码修改、外部链接使用分析和跨工作簿选择当前明确返回不可用。透视表定义读取返回 Promise 拒绝，沿用原编辑器的降级路径，避免未定义方法导致打开流程中断。现有透视表部件仍由原保存链保留；此处不宣称刷新能力。
 - 整体 API 回归和最终审查尚未完成。浏览器依赖边界扫描已通过（939 个文件、0 个违规）；扫描器新增通配符导出解析及拒绝 Node 依赖的回归测试。
-- 尚无已连接的 Excel 会话，真实 Excel 复开核验未执行。
 
-已分别通过的真实浏览器场景包括普通编辑保存与复开、丢失提交响应后的后续编辑保留、公式及数值格式、图表标题编辑，以及原有工具批处理的整体撤销/重做与保存。完整专项套件运行时上述六个浏览器场景均通过；这不代表外部 Excel 验收通过。
+已分别通过的真实浏览器场景包括普通编辑保存与复开、丢失提交响应后的后续编辑保留、公式及数值格式、图表标题编辑，以及原有工具批处理的整体撤销/重做与保存。完整专项套件运行时上述六个浏览器场景均通过。
 
 ## 工作簿媒体读取
 
 图片读取使用拥有文件的不可变版本和图片对象 ID，经原 Rust `read_media` 返回媒体类型和内容。浏览器无需提供路径。与其他读取一致，原生工作结束后再次检查登录和文件可见性。
 
-媒体集成测试使用含 PNG 的真实 OOXML 图片对象，验证返回字节一致；其他用户和管理员访问均为 404，路径参数为 400，缺少 CSRF 为 403。浏览器图片显示验收尚未执行。
+媒体集成测试使用含 PNG 的真实 OOXML 图片对象，验证返回字节一致；其他用户和管理员访问均为 404，路径参数为 400，缺少 CSRF 为 403。后续 Web 工具专项覆盖了 WebP 图片保存和重开。
 
 ## 持续回归
 
@@ -65,7 +83,7 @@ GitHub Actions 增加独立 `native-sheets` 作业：Node 22、主机 PostgreSQL
 - `WorkbookVisuals` 图表编辑器范围对象改为显式回退赋值，消除双类型检查配置下的 TS2783。
 - 回环测试在点击保存前轮询依赖公式（B2=42.5）落定：保存载荷经 `readCells` 活读 Univer 模型公式缓存，异步重算窗口内点击会把旧缓存 25 固化进提交字节。
 
-结果：远端 CI 10/10 全绿（含 native-sheets 7m35s、native-docx 22m37s、boundary-check 6m29s）。外部 Excel 复开核验仍未执行，T09 保持草稿直至该人工门禁完成。
+结果：远端 CI 10/10 全绿（含 native-sheets 7m35s、native-docx 22m37s、boundary-check 6m29s）。
 
 ## 本地 systemd 验收启动与保存字节核验（2026-11-16）
 
@@ -75,4 +93,4 @@ GitHub Actions 增加独立 `native-sheets` 作业：Node 22、主机 PostgreSQL
 
 通过正常密码登录和 CSRF/Cookie 的独立 HTTP 核验：能力目录、文件列表、原生 inspect/range 和下载均返回 200。历史中有初次导入及一次保存；保存版本 `75914d9c-9f1f-4c07-804f-7465ea6c4f99` 为 3993 字节，SHA-256 为 `9e08733f971143ca504314f5369851a84665bc8867cf983f8c616b911c55e1cb`。下载的 worksheet XML 包含新增 A4 公式 `SUM(A2,A3)` 及缓存 20，B2/F2 公式、C2 日期格式、D2 百分比、E2 单位、Revenue 名称和自定义 XML 内容保留。A2 当前仍为 12.5，没有据此宣称 A2=21.25 场景通过。核验完成后只退出该独立核验会话，保持用户页面会话和服务运行。
 
-已导出已提交工作簿至本地忽略目录 `.dyoffice-native-build/t09-acceptance-saved.xlsx` 供真实 Excel 复开。浏览器自动化受到宿主 `Request workspace is not owned by this CLI` 错误阻塞；图片可见性、外部 Excel 复开及服务退出清理仍未验收。
+已导出已提交工作簿至本地忽略目录 `.dyoffice-native-build/t09-acceptance-saved.xlsx` 用于保存成品核验。浏览器自动化受到宿主 `Request workspace is not owned by this CLI` 错误阻塞；图片可见性及服务退出清理仍未验收。

@@ -11,6 +11,7 @@ import {fileURLToPath} from 'node:url'
 import {officeBrowserAsset as dist} from '../helpers/office-browser-assets.mjs'
 import {Pool} from 'pg'
 import {PDFDocument} from 'pdf-lib'
+import JSZip from 'jszip'
 import {createCrossPlatformProcess} from '../../worker/src/sandbox/cross-platform-process.ts'
 import {createXlsxNativeWorker} from '../../worker/src/native/xlsx.ts'
 import {openIsolatedPptxSession} from '../../worker/src/native/pptx-session-host.ts'
@@ -27,7 +28,7 @@ import {createSourceService} from '../../server/src/modules/sources/service.ts'
 import {assistantSourceTools} from '../../../../packages/web-contracts/src/assistant.ts'
 
 const liveConfig=process.env.DYOFFICE_LIVE_ANALYSIS_CONFIG
-test('Office reads an allowed PostgreSQL schema and Coding plots the frozen result until refresh in the four editors',{timeout:220000},async t=>{
+test('Office reads an allowed PostgreSQL schema and Coding plots the frozen result until refresh in the four editors',{timeout:300000},async t=>{
  const directory=await mkdtemp(join(tmpdir(),'office-source-analysis-'))
  t.after(()=>rm(directory,{recursive:true,force:true}))
  const key=join(directory,'key.pem'),cert=join(directory,'cert.pem')
@@ -66,7 +67,7 @@ test('Office reads an allowed PostgreSQL schema and Coding plots the frozen resu
   : {id:'chat',kind:'chat',providerId:'deepseek',label:'Office model',model:'fixture',baseUrl:'https://provider.example/v1',enabled:true,apiKey:'fixture'}
  if(liveConfig)assert.ok(model?.enabled&&model?.kind==='chat'&&model?.apiKey,'An enabled real-model entry is required')
  await createGlobalConfigService({transactions:f.transactions,keyring}).saveGlobalConfig(f.adminSigned.token,0,{upserts:[model],defaults:{chat:model.id}})
- await f.preferences.update(f.adminSigned.token,{language:'zh',showAssistant:true})
+ await f.preferences.update(f.adminSigned.token,{language:'zh',showAssistant:true,autoSave:false})
  const file=(await importFile(f,f.adminSigned.token,await docxBytes(),'Source analysis.docx')).file
  const pdf=await PDFDocument.create()
  pdf.addPage([400,300]).drawText('Source analysis')
@@ -135,11 +136,24 @@ print(json.dumps(dict(series=line.get_ydata().tolist(), total=sum(line.get_ydata
   const prompt=typeof content==='string'?content:content.map(part=>part.text??'').join(' '),results=messages.slice(user+1).filter(m=>m.role==='tool')
   const output=()=>{
    const result=JSON.parse(results.at(-1).content)
-   assert.equal(result.isError,false,result.output)
+   assert.notEqual(result.isError,true,result.output)
    return JSON.parse(result.output)
   }
   let action,answer
-  if(prompt.includes('有哪些表')){
+  if(prompt.includes('检查委派目录')){
+   if(!results.length)action=['list_agents',{}]
+   else if(results.length===1){
+    assert.ok(output().some(agent=>agent.id==='test-python'&&agent.name==='Python fixture'))
+    action=['list_agent_data',{}]
+   }else{
+    const directory=output()
+    assert.ok(directory.sources.items.some(item=>item.sourceId==='sales-db'))
+    const frozen=directory.results.items.find(item=>item.resultId===first.artifact.resultId)
+    assert.equal(frozen?.rowCount,2)
+    assert.ok(!Object.hasOwn(frozen,'rows')&&!Object.hasOwn(frozen,'preview'))
+    answer='已确认委派工具与冻结结果元数据'
+   }
+  }else if(prompt.includes('有哪些表')){
    if(!results.length)action=['sources_list',{}]
    else if(results.length===1)action=['sources_describe',{sourceId:'sales-db'}]
    else {
@@ -151,6 +165,31 @@ print(json.dumps(dict(series=line.get_ydata().tolist(), total=sum(line.get_ydata
   }else if(prompt.includes('有哪些字段')){
    if(!results.length)action=['sources_describe',{sourceId:'sales-db',table:'sales.orders'}]
    else answer=output().metadata.rows.map(r=>r.column_name).join(', ')
+  }else if(prompt.includes('读取上次汇总的第二行')){
+   if(!results.length)action=['sources_read_result',{resultId:first.artifact.resultId,offset:1,limit:1}]
+   else {
+    const page=output()
+    assert.equal(page.sha256,first.sha256)
+    assert.deepEqual(page.rows,[{month:'2026-02',amount:40}])
+    assert.equal(page.nextOffset,null)
+    answer='冻结结果第二行 2026-02：40 CNY'
+   }
+  }else if(prompt.includes('把上次汇总插入')){
+   if(!results.length)action=['insert_data_result',{resultId:first.artifact.resultId}]
+   else {
+    const result=JSON.parse(results.at(-1).content)
+    assert.notEqual(result.isError,true,result.output)
+    assert.match(result.output,/2 rows in the frozen result/)
+    answer='已插入汇总表'
+   }
+  }else if(prompt.includes('插入已交付的分析图')){
+   if(!results.length)action=['insert_analysis_image',{artifactId:committed.artifacts[0].artifactId,alt:'Frozen monthly sales'}]
+   else {
+    const result=JSON.parse(results.at(-1).content)
+    assert.notEqual(result.isError,true,result.output)
+    assert.match(result.output,/Inserted the image monthly-sales\.png/)
+    answer='已插入原始分析图'
+   }
   }else if(prompt.includes('Python')){
    if(!results.length)action=['delegate_agent_task',{instruction:'Plot the previous result and sum it',agentId:'test-python',dataInputs:{sourceIds:[],resultIds:[first.artifact.resultId]}}]
    else {assert.match(results.at(-1).content,/Python total 70/);answer='Python total 70'}
@@ -175,6 +214,7 @@ print(json.dumps(dict(series=line.get_ydata().tolist(), total=sum(line.get_ydata
  assert.equal(probe.statusCode,200,probe.body)
  browser=await launchTestBrowser()
  const page=await browser.newPage({ignoreHTTPSErrors:true})
+ await page.addInitScript(()=>{window.__genofficeDebugHooks=true})
  await stubHomeHero(page)
  await page.context().addCookies([{name:'__Host-dyoffice-session',value:f.adminSigned.token,url:origin,secure:true,httpOnly:true,sameSite:'Lax'}])
  await page.goto(origin)
@@ -282,6 +322,7 @@ print(json.dumps(dict(series=line.get_ydata().tolist(), total=sum(line.get_ydata
  await turn('销售数据源有哪些表？',liveConfig?'orders':'可见表 sales.orders')
  if(!liveConfig){
   for (const name of assistantSourceTools('read-only-analysis')) assert.equal(toolFrames[0].filter(n=>n===name).length,1)
+  assert.equal(toolFrames[0].filter(name=>name==='insert_data_result').length,1)
   assert.ok(!toolFrames[0].includes('sources_save_result'))
  }
  await turn('订单表有哪些字段？',liveConfig?'paid_amount':'paid_at, order_amount, paid_amount')
@@ -295,6 +336,24 @@ print(json.dumps(dict(series=line.get_ydata().tolist(), total=sum(line.get_ydata
  const queriesBeforeCoding=queries
  if(!liveConfig)assert.equal(queriesBeforeCoding,1)
  await owner.query("INSERT INTO sales.orders VALUES ('2026-01-14', 7, 5)")
+ const expectFrozenTable=async()=>{
+  const table=page.locator('.tiptap.doc-page table')
+  await expect(table.getByRole('row').filter({hasText:'2026-01'})).toContainText('30')
+  await expect(table.getByRole('row').filter({hasText:'2026-02'})).toContainText('40')
+ }
+ if(!liveConfig){
+  const savedSnapshot=await app.inject({method:'POST',url:'/api/v1/workspace/source-tools/execute',
+   headers:{origin,cookie:'__Host-dyoffice-session='+f.adminSigned.token,'x-csrf-token':csrf.sessionToken(f.adminSigned.token)},
+   payload:{name:'sources.save_result',arguments:{resultId:first.artifact.resultId,name:'Monthly sales snapshot',commandId:randomUUID()}},
+  })
+  assert.equal(savedSnapshot.statusCode,200,savedSnapshot.body)
+  assert.equal(savedSnapshot.json().sha256,first.sha256)
+  await turn('检查委派目录','已确认委派工具与冻结结果元数据')
+  await turn('读取上次汇总的第二行','冻结结果第二行 2026-02：40 CNY')
+  await turn('把上次汇总插入正文','已插入汇总表')
+  await expectFrozenTable()
+  assert.equal(queries,queriesBeforeCoding,'Reading and inserting the frozen result must not repeat the query')
+ }
  await turn('用 Python fixture 复核刚才按月汇总的两行结果，并画折线图。不重查库。',liveConfig?'70':'Python total 70')
  await expect.poll(()=>Boolean(committed?.artifacts?.length),{message:'Python must commit a downloadable chart',timeout:10000}).toBe(true)
  assert.equal(queries,queriesBeforeCoding);assert.deepEqual(actualSeries,[30,40])
@@ -310,6 +369,7 @@ print(json.dumps(dict(series=line.get_ydata().tolist(), total=sum(line.get_ydata
  assert.equal(chart.mediaType,'image/png')
  assert.deepEqual(chartResponse.rawPayload,plotBytes)
  assert.equal(plotBytes.subarray(1,4).toString(),'PNG')
+ if(!liveConfig)await turn('插入已交付的分析图','已插入原始分析图')
  await turn('刷新汇总','75')
  if(liveConfig){
   await expect.poll(()=>monthlyResults().length).toBe(2)
@@ -321,12 +381,40 @@ print(json.dumps(dict(series=line.get_ydata().tolist(), total=sum(line.get_ydata
   return
  }
  assert.equal(queries,2)
+ const token=f.adminSigned.token
+ async function saveNative(entry,format){
+  const head=async()=>(await f.files.openFile(token,entry.fileId)).file.revision
+  assert.equal(await head(),entry.revision)
+  if(format==='docx')await page.locator('.qa-btn[aria-label^="保存"]').click()
+  else if(format==='xlsx')await page.getByRole('button',{name:/^保存（(?:Ctrl\+S|⌘S)）$/}).click()
+  else await page.keyboard.press('Control+s')
+  await expect.poll(head,{timeout:30000}).not.toBe(entry.revision)
+  return f.files.readFile(token,entry.fileId,await head())
+ }
+ async function reopenNative(){
+  await page.reload({waitUntil:'commit'})
+  await expect(page.locator('html')).toHaveAttribute('data-document-loading','ready',{timeout:30000})
+ }
+ async function assertSavedChart(zip,mediaPaths,provenanceXml){
+  const images=await Promise.all(zip.file(mediaPaths).map(part=>part.async('nodebuffer')))
+  assert.ok(images.some(image=>image.equals(plotBytes)),'The saved document embeds the exact committed PNG')
+  assert.ok(provenanceXml.includes(committed.artifacts[0].sha256),'The saved document records the delivered image hash')
+  assert.ok(provenanceXml.includes(first.artifact.resultId),'The saved document records the frozen input')
+ }
+ const saved=await JSZip.loadAsync(await saveNative(file,'docx'))
+ const docx=await saved.file('word/document.xml').async('string')
+ const rows=[...docx.matchAll(/<w:tr[\s>][\s\S]*?<\/w:tr>/g)].map(match=>match[0])
+ assert.ok(rows.some(row=>row.includes('2026-01')&&row.includes('>30<')))
+ assert.ok(rows.some(row=>row.includes('2026-02')&&row.includes('>40<')))
+ await assertSavedChart(saved,/^word\/media\/.+\.png$/,docx)
+ await reopenNative()
+ await expectFrozenTable()
  for(const [format,entry] of Object.entries(siblings)){
   const start=toolFrames.length
   const errors=[]
   const observe=error=>errors.push(error.message)
   page.on('pageerror',observe)
-  await page.goto(origin+'/native-'+format+'/?fileId='+entry.fileId)
+  await page.goto(origin+'/native-'+format+'/?fileId='+entry.fileId,{waitUntil:'commit'})
   const rail=page.locator(format==='xlsx'?'.expand-copilot':'.ai-rail').first()
   const panel=page.locator(format==='xlsx'?'.copilot:not(.collapsed)':'.ai-panel').first()
   const input=panel.locator('textarea')
@@ -338,6 +426,51 @@ print(json.dumps(dict(series=line.get_ydata().tolist(), total=sum(line.get_ydata
   await expect(panel.getByText('可见表 sales.orders',{exact:true})).toBeVisible({timeout:25000})
   const names=toolFrames[start]
   for(const name of assistantSourceTools('read-only-analysis'))assert.equal(names.filter(offered=>offered===name).length,1,format+': '+name)
+  assert.equal(names.filter(name=>name==='insert_data_result').length,format==='pdf'?0:1)
   assert.ok(!names.includes('sources_save_result'),format+' must not offer saving a source snapshot')
+  if(format==='pdf')continue
+
+  if(format==='xlsx'){
+   await page.evaluate(()=>window.__genofficeDebug.univerAPI.getActiveWorkbook().getActiveSheet().getRange('J10').activate())
+   await expect.poll(()=>page.evaluate(()=>{
+    const range=window.__genofficeDebug.univerAPI.getActiveWorkbook().getActiveRange()
+    return range?[range.getRow(),range.getColumn()]:null
+   })).toEqual([9,9])
+  }
+  await input.fill('把上次汇总插入当前文件');await input.press('Enter')
+  await expect(panel.getByText('已插入汇总表',{exact:true})).toBeVisible({timeout:30000})
+  if(format==='pptx'){
+   await input.fill('用 Python fixture 从冻结结果生成分析图');await input.press('Enter')
+   await expect(panel.getByText('Python total 70',{exact:true}).last()).toBeVisible({timeout:30000})
+   await input.fill('插入已交付的分析图');await input.press('Enter')
+   await expect(panel.getByText('已插入原始分析图',{exact:true})).toBeVisible({timeout:30000})
+  }
+  const bytes=await saveNative(entry,format)
+  if(format==='xlsx'){
+   const {cells}=await sheetsNative.readRange(bytes,'Acceptance',{startRow:10,endRow:11,startColumn:10,endColumn:10})
+   assert.deepEqual(cells.map(cell=>cell.value),[30,40])
+   await reopenNative()
+   await expect.poll(()=>page.evaluate(()=>{
+    const sheet=window.__genofficeDebug?.univerAPI.getActiveWorkbook()?.getSheetByName('Acceptance')
+    return [sheet?.getRange('K11').getValue(),sheet?.getRange('K12').getValue()]
+   }),{timeout:30000}).toEqual([30,40])
+  }else{
+   const deck=await JSZip.loadAsync(bytes)
+   const slide=await deck.file('ppt/slides/slide1.xml').async('string')
+   const tables=[...slide.matchAll(/<a:tbl[\s>][\s\S]*?<\/a:tbl>/g)].map(match=>match[0])
+   assert.ok(tables.some(table=>['2026-01','>30<','2026-02','>40<'].every(value=>table.includes(value))))
+   const notes=await Promise.all(deck.file(/^ppt\/notesSlides\/notesSlide\d+\.xml$/).map(part=>part.async('string')))
+   await assertSavedChart(deck,/^ppt\/media\/.+\.png$/,slide+notes.join(''))
+   await reopenNative()
+   await expect.poll(()=>page.evaluate(async()=>{
+    const [slide]=await window.slidesApi.getRenderSlides()
+    const rows=slide?.nodes.filter(node=>node.type==='table').flatMap(node=>node.cells
+     .filter(cell=>cell.col===0)
+     .map(cell=>[cell,node.cells.find(value=>value.row===cell.row&&value.col===1)]))??[]
+    const text=cell=>cell?.text?.lines.flatMap(line=>line.runs.map(run=>run.text)).join('').trim()??''
+    return rows.map(row=>row.map(text)).filter(([month])=>month==='2026-01'||month==='2026-02')
+   }),{timeout:30000}).toEqual([['2026-01','30'],['2026-02','40']])
+  }
  }
+ assert.equal(queries,2,'Inserting into another document must reuse the frozen result')
 })

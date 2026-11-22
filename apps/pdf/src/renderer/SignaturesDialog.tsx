@@ -130,8 +130,10 @@ export function SignaturesDialog({
   signatures,
   onClose,
   onGoToPage,
+  webHost,
 }: {
   t: TFunc
+  webHost?: boolean
   signatures: readonly PdfSignatureInfo[]
   onClose: () => void
   onGoToPage: (pageIndex: number) => void
@@ -160,7 +162,7 @@ export function SignaturesDialog({
           />
         ))}
         <div className="pdf-modal-hint">
-          {t('sigTrustRoots')} {t('sigNoRevocation')}
+          {t(webHost ? 'sigWebTrustRoots' : 'sigTrustRoots')} {t('sigNoRevocation')}
         </div>
         <div className="pdf-modal-actions">
           <button className="pdf-modal-btn primary" onClick={onClose}>

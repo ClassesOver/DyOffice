@@ -2,7 +2,7 @@ import type { ImageDpi } from '@genoffice/pptx-render'
 import type { Size } from './video-size'
 
 /** PowerPoint for Mac lays untagged bitmaps out at 2 px per point; Windows at 96 dpi. */
-export const DEFAULT_PICTURE_DPI = process.platform === 'darwin' ? 144 : 96
+export const DEFAULT_PICTURE_DPI = typeof process !== 'undefined' && process.platform === 'darwin' ? 144 : 96
 
 const EMU_PER_PT = 12700
 /** Measured cap: every oversize landscape picture came in exactly 8.5 in wide. */

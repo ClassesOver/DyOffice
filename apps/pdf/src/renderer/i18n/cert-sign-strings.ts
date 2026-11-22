@@ -105,6 +105,8 @@ const certSignStrings = {
   sigSelfSigned: 'Self-signed',
   sigTrustRoots:
     'Trust is judged against the TLS root certificates of this computer and the Mozilla bundle (web PKI), not against the Adobe AATL or EU trusted lists for document signing.',
+  sigWebTrustRoots:
+    'The workspace server checks trust against its TLS root certificates and the Mozilla bundle (web PKI).',
   sigNoRevocation: 'Certificate revocation (CRL / OCSP) is not checked.',
   sigProblemDigestMismatch:
     'The document was changed after signing — it no longer matches the signature',
@@ -220,6 +222,7 @@ const localizedCertSignStrings = {
     sigSelfSigned: '自签名',
     sigTrustRoots:
       '信任判断依据本机与 Mozilla 内置的 TLS 根证书（Web PKI），而非 Adobe AATL 或欧盟文档签名信任列表。',
+    sigWebTrustRoots: '信任判断依据工作区服务器与 Mozilla 内置的 TLS 根证书（Web PKI）。',
     sigNoRevocation: '未检查证书吊销状态（CRL / OCSP）。',
     sigProblemDigestMismatch: '文档在签名后被修改，与签名不再一致',
     sigProblemSignatureInvalid: '签名本身无效',
@@ -330,6 +333,7 @@ const localizedCertSignStrings = {
     sigSelfSigned: '自我簽署',
     sigTrustRoots:
       '信任判斷依據本機與 Mozilla 內建的 TLS 根憑證（Web PKI），而非 Adobe AATL 或歐盟文件簽署信任清單。',
+    sigWebTrustRoots: '信任判斷依據工作區伺服器與 Mozilla 內建的 TLS 根憑證（Web PKI）。',
     sigNoRevocation: '未檢查憑證撤銷狀態（CRL / OCSP）。',
     sigProblemDigestMismatch: '文件在簽署後被修改，與簽章不再一致',
     sigProblemSignatureInvalid: '簽章本身無效',

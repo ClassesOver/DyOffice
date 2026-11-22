@@ -46,7 +46,7 @@ test('CLI joins and runs a task through real HTTP; reconnect/revoke fence old cl
  await assert.rejects(service.submit(credential,{requestId:randomUUID(),conversationId:channel.conversationId,to:'office',action:{kind:'result',taskId:claim.taskId,claimId:claim.claimId,connectionEpoch:claim.connectionEpoch,summary:'late',outcome:'succeeded'}}),{statusCode:401})
 })
 
-test('watch observes durable cancellation, kills its process group and leaves an unknown outcome for review',async t=>{
+test('watch observes durable cancellation, kills its process group and leaves an unknown outcome for review',{timeout:30000},async t=>{
  const {watchChannel}=await import('../../../../packages/cli/src/agent-channel/connector.ts')
  const {ChannelClient}=await import('../../../../packages/cli/src/agent-channel/client.ts')
  const {watch}=await import('node:fs')
@@ -62,14 +62,23 @@ test('watch observes durable cancellation, kills its process group and leaves an
  const task=await service.submit({kind:'owner',token:f.alice.token},{requestId:randomUUID(),conversationId:channel.conversationId,to:memberId,action:{kind:'delegate',instruction:'Wait for cancellation'}})
  await f.app.listen({host:'127.0.0.1',port:0})
  const origin=`http://127.0.0.1:${f.app.server.address().port}`,marker=join(directory,'adapter.pid')
- const started=new Promise(resolve=>{const watcher=watch(directory,()=>{watcher.close();resolve()})})
+ const started=new Promise(resolve=>{
+  const watcher=watch(directory,(_event,name)=>{if(name==='adapter.pid'){watcher.close();resolve()}})
+  t.after(()=>watcher.close())
+ })
  const controller=new AbortController()
- const watching=watchChannel({client:new ChannelClient(origin),state:{origin,memberId,memberToken:member.memberToken,conversationId:channel.conversationId},adapter:{command:process.execPath,args:['-e',"require('node:fs').writeFileSync(process.argv[1],String(process.pid));setInterval(()=>{},1000)",marker]},env:{},signal:controller.signal,save:async()=>{}})
+ const watching=watchChannel({client:new ChannelClient(origin),state:{origin,memberId,memberToken:member.memberToken,conversationId:channel.conversationId},adapter:{command:process.execPath,args:['-e',"const fs=require('node:fs'), marker=process.argv[1]; fs.writeFileSync(marker+'.tmp',String(process.pid)); fs.renameSync(marker+'.tmp',marker); setInterval(()=>{},1000)",marker]},env:{},signal:controller.signal,save:async()=>{}})
  t.after(()=>controller.abort())
  await started
  const pid=Number(await readFile(marker,'utf8'))
+ assert.ok(Number.isSafeInteger(pid)&&pid>0,'the adapter published a valid process ID')
  await service.submit({kind:'owner',token:f.alice.token},{requestId:randomUUID(),conversationId:channel.conversationId,to:memberId,action:{kind:'cancel',taskId:task.taskId}})
  await watching
- assert.throws(()=>process.kill(pid,0))
+ const deadline=Date.now()+2000
+ for(;;){
+  try{process.kill(pid,0)}catch(error){if(error.code==='ESRCH')break;throw error}
+  assert.ok(Date.now()<deadline,'the cancelled adapter process exited')
+  await new Promise(resolve=>setTimeout(resolve,20))
+ }
  assert.equal((await service.memberSnapshot(member.memberToken)).tasks[0].state,'unknown_outcome')
 })

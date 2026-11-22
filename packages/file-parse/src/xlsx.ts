@@ -165,11 +165,12 @@ function cellText(
   dates: DateStyles,
   date1904: boolean,
   sharedFormulas: SharedFormulas,
+  visibleOnly: boolean,
 ): string {
   const type = cell['@_t'] ?? ''
   if (type === 'inlineStr') return cell.is ? sharedStringText(cell.is) : ''
   if (cell.f !== undefined) {
-    if (textOf(cell.v).trim() === '') return formulaText(cell, sharedFormulas)
+    if (textOf(cell.v).trim() === '') return visibleOnly ? '' : formulaText(cell, sharedFormulas)
   }
   // <v> is ST_Xstring so it reaches the caller verbatim; the two reads that need it as a
   // scalar handle their own whitespace (Number tolerates it, the boolean compare strips it)
@@ -289,6 +290,7 @@ export interface XlsxTextOptions {
   /// Sheet XML past this many extracted characters is not even parsed: the DOM
   /// of a 100k-row sheet costs ~1 GB of heap for text nobody keeps (genoffice#2011).
   maxChars?: number
+  visibleOnly?: boolean
 }
 
 const XML_BYTES_PER_TEXT_CHAR = 8
@@ -373,6 +375,26 @@ export async function xlsxToText(bytes: Uint8Array, opts: XlsxTextOptions = {}):
     }
   }
 
+  const visibleOnly = opts.visibleOnly === true
+  const rawStyles = visibleOnly ? await zipText(zip, stylesPath) : undefined
+  // A custom empty number format can suppress a cell without hiding its row or column.
+  if (rawStyles) {
+    const styles = parser.parse(rawStyles).styleSheet
+    const definitions = [
+      ...asArray(styles?.numFmts).flatMap(group => asArray((group as Record<string, unknown>).numFmt)),
+      ...asArray(styles?.dxfs?.dxf).flatMap(style => asArray((style as Record<string, unknown>).numFmt)),
+    ] as Array<Record<string, unknown>>
+    for (const definition of definitions) {
+      const code = String(definition['@_formatCode'] ?? '').trim()
+      if (!code) continue
+      // Remove literals, escapes, and spacing directives before counting
+      // separators and checking whether a value or text section stays visible.
+      const sections = code.replace(/"[^"]*"|\\.|_.|\*./g, '').split(';').map(section => section.trim())
+      if (sections.some(section => !section) || (sections.length === 4 && !sections[3].includes('@'))) {
+        throw new Error('Workbook visibility cannot be determined')
+      }
+    }
+  }
   const dateStyles = await loadDateStyles(zip, stylesPath)
   const shared: string[] = []
   const sharedXml = await zipText(zip, sharedStringsPath)
@@ -388,6 +410,7 @@ export async function xlsxToText(bytes: Uint8Array, opts: XlsxTextOptions = {}):
   let imageOnlySheets = 0
   for (const sheet of sheets) {
     if (used >= maxChars) break
+    if (visibleOnly && sheet['@_state'] !== undefined && sheet['@_state'] !== 'visible') continue
     const path = relTargets.get(relationshipId(sheet))
     const budget = maxChars - used
     const raw = path ? await zipTextPrefix(zip, path, sheetXmlByteLimit(budget)) : undefined
@@ -395,25 +418,56 @@ export async function xlsxToText(bytes: Uint8Array, opts: XlsxTextOptions = {}):
     const sheetXml =
       maxChars === Infinity ? raw.text : clipSheetXml(raw.text, budget, raw.truncated)
     const worksheet = parser.parse(sheetXml) as Record<string, any>
+    const xmlTrue = (value: unknown) => value === '1' || value === 'true'
+    const hiddenColumns = new Uint8Array(visibleOnly ? MAX_XLSX_COLS : 0)
+    const hideZeros = visibleOnly && asArray(worksheet.worksheet?.sheetViews?.sheetView).some(view => {
+      const value = (view as Record<string, unknown>)['@_showZeros']
+      return value === '0' || value === 'false'
+    })
+    if (visibleOnly) {
+      const defaults = worksheet.worksheet?.sheetFormatPr
+      if (xmlTrue(defaults?.['@_zeroHeight']) || Number(defaults?.['@_defaultRowHeight']) === 0 ||
+        Number(defaults?.['@_defaultColWidth']) === 0) {
+        throw new Error('Workbook visibility cannot be determined')
+      }
+      for (const definition of asArray(worksheet.worksheet?.cols).flatMap(group => asArray((group as Record<string, unknown>).col))) {
+        const col = definition as Record<string, unknown>
+        if (!xmlTrue(col['@_hidden']) && Number(col['@_width']) !== 0) continue
+        const min = Number(col['@_min']), max = Number(col['@_max'])
+        if (!Number.isInteger(min) || !Number.isInteger(max) || min < 1 || max < min || max > MAX_XLSX_COLS) {
+          throw new Error('Invalid hidden column range')
+        }
+        hiddenColumns.fill(1, min - 1, max)
+      }
+    }
     const lines: string[] = [`# ${decodeXlsxEscapes(String(sheet['@_name'] ?? ''))}`]
     let sheetChars = lines[0].length
     const rows = asArray(worksheet.worksheet?.sheetData?.row) as Array<Record<string, unknown>>
     let hasData = false
     const sharedFormulas: SharedFormulas = new Map()
-    for (const row of rows) {
+    if (!visibleOnly) for (const row of rows) {
       for (const cell of asArray(row.c as Cell | Cell[])) recordSharedFormula(cell, sharedFormulas)
     }
     for (const row of rows) {
+      if (visibleOnly && (xmlTrue(row['@_hidden']) || Number(row['@_ht']) === 0)) continue
       // Sparse by column; a slot holds several values only when refs collide.
       const slots: string[][] = []
       for (const cell of asArray(row.c as Cell | Cell[])) {
-        const text = cellText(cell, shared, dateStyles, date1904, sharedFormulas)
         const ref = cell['@_r']
         // A malformed ref (no leading column letters) yields -1; append in
         // document order instead of writing slots[-1] which would drop text.
         // Clamp wild columns (e.g. XXXXXX99) to append: padding millions of
         // empty cells would OOM on a hostile file.
         const col = ref ? columnIndex(ref) : slots.length
+        if (visibleOnly) {
+          const rowNumber = ref && /^[A-Z]{1,3}([1-9]\d*)$/i.exec(ref)?.[1]
+          if (!rowNumber || rowNumber !== row['@_r'] || col < 0 || col >= MAX_XLSX_COLS || hiddenColumns[col]) continue
+        }
+        if (hideZeros && (!cell['@_t'] || cell['@_t'] === 'n')) {
+          const value = textOf(cell.v).trim()
+          if (value && Number(value) === 0) continue
+        }
+        const text = cellText(cell, shared, dateStyles, date1904, sharedFormulas, visibleOnly)
         const target = col >= 0 && col < MAX_XLSX_COLS ? col : slots.length
         // A ref landing on a slot an earlier ref-less, malformed or duplicate
         // cell took would drop that value silently: keep it right after the

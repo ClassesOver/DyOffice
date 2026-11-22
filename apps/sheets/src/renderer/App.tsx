@@ -1,6 +1,6 @@
 import {bindDocumentHandoff} from '@genoffice/agent-core'
 import {createAnalysisSaveConsent} from '../../../../packages/browser-host/src/analysis-save-consent'
-import {captureSheetAnalysis} from './analysis-insert'
+import {captureSheetAnalysis,invalidatesAnalysisCapture} from './analysis-insert'
 import {journalFingerprint} from './edit-journal'
 import { delegatedAgentResult, compactDelegatedTranscript } from '@genoffice/ui'
 import { ICommandService } from '@univerjs/core'
@@ -494,7 +494,7 @@ import { handleExportCsv as handleExportCsvImpl, type CsvExportContext } from '.
 import { effectivePageBreaks, installPageBreakPreview } from './page-break-preview'
 import { mapProtectedRanges } from './protected-ranges'
 import { settleFormulas } from './formula-settle'
-import { exportWorkbookDraft, handleSave as handleSaveImpl, type SaveContext, type SaveOutcome, type WorkbookDraftExporter } from './save-actions'
+import { exportWorkbookDraft, externalLinkFormulaValueCount, handleSave as handleSaveImpl, type SaveContext, type SaveOutcome, type WorkbookDraftExporter } from './save-actions'
 import {
   applyChartEdit as applyChartEditImpl,
   applyShapeEdit as applyShapeEditImpl,
@@ -672,6 +672,11 @@ export interface SheetsEditorHost {
   }
   /** Opt in only when the host returns stable sheet/drawing IDs after saving. */
   inPlaceSave?: boolean
+  workspaceLinks?: {
+    listSources(): Promise<readonly {id:string;name:string;revision:string}[]>
+    sourceTarget(id: string, revision: string): string
+    refresh(sessionId: string): Promise<{links:ExternalLinkRow[];cells:import('../shared/desktop-api').ExternalLinksUpdateResult['cells']}>
+  }
   readOnly: boolean
   assistantAvailable: boolean
   onWorkbookOpened?(): void
@@ -1114,7 +1119,10 @@ export function App({
   const [linksOpen, setLinksOpen] = useState(false)
   const [linkStatuses, setLinkStatuses] = useState<ExternalLinkRow[]>([])
   const [linksBusy, setLinksBusy] = useState(false)
-  const [linksNotice, setLinksNotice] = useState<'unsaved' | null>(null)
+  const [linksNotice, setLinksNotice] = useState<'unsaved' | 'unavailable' | null>(null)
+  const [workspaceLinksAvailable,setWorkspaceLinksAvailable]=useState(false)
+  const [workspaceLinkPicker,setWorkspaceLinkPicker]=useState<{index:number;sessionId:string;files:readonly {id:string;name:string;revision:string}[]}|null>(null)
+  const workspacePickerRequest=useRef(0)
   // Load the workbook's links when the panel opens: the listing carries
   // identity fields only and never probes the sources on disk, so it is cheap
   // and reachability stays unknown (the panel's "—") until Update answers it.
@@ -1132,10 +1140,16 @@ export function App({
     void (async () => {
       try {
         const result = await window.desktopApi.listExternalLinks({ sessionId: file.sessionId })
-        if (!cancelled) setLinkStatuses(result.links)
+        if (!cancelled) {
+          setLinkStatuses(result.links)
+          setWorkspaceLinksAvailable(result.workspaceSources===true)
+        }
       } catch {
-        // an unreadable workbook keeps the panel empty instead of throwing
-        if (!cancelled) setLinkStatuses([])
+        if (!cancelled) {
+          setLinkStatuses([])
+          setLinksNotice('unavailable')
+          setWorkspaceLinksAvailable(false)
+        }
       }
     })()
     return () => {
@@ -1144,23 +1158,78 @@ export function App({
   }, [linksOpen])
   /// Re-reads the panel's rows from the session that is open *now*: a save
   /// reopens the workbook, so the session id captured before it is gone.
-  function refreshLinkStatuses(): void {
-    const sessionId = lazyWorkbookRef.current?.file.sessionId
-    if (sessionId === undefined) {
+  async function refreshLinkStatuses(): Promise<void> {
+    const file = lazyWorkbookRef.current?.file
+    if (file === undefined || file.needsSaveAs) {
       setLinkStatuses([])
+      setLinksNotice('unsaved')
       return
     }
-    void window.desktopApi
-      .listExternalLinks({ sessionId })
-      .then((fresh) => {
+    const { sessionId } = file
+    const isCurrent = () => lazyWorkbookRef.current?.file.sessionId === sessionId
+    try {
+      const fresh = await window.desktopApi.listExternalLinks({ sessionId })
+      if (isCurrent()) {
         setLinksNotice(null)
         setLinkStatuses(fresh.links)
-      })
-      .catch(() => setLinkStatuses([]))
+        setWorkspaceLinksAvailable(fresh.workspaceSources===true)
+      }
+    } catch {
+      if (isCurrent()) {
+        setLinkStatuses([])
+        setLinksNotice('unavailable')
+        setWorkspaceLinksAvailable(false)
+      }
+    }
   }
   /// External-link breaks/retargets the links panel queued for the next save;
   /// cleared once the save settles (see saveContext).
   const pendingExternalLinkOpsRef = useRef<ExternalLinkOps | null>(null)
+  async function updateWorkspaceExternalLinks() {
+    const workspace=hostRef.current?.workspaceLinks
+    if(!workspace)return
+    await saveGateRef.current.run(async()=>{
+      if(hostRef.current?.readOnly||!userMutationAllowed()||
+        !analysisSaveConsent.current.allowed(false)||!(await commitActiveEditor()))return
+      if(editorIsDirty()){
+        const saved=await handleSaveImpl(saveContext(),'save',true)
+        if(!saved.ok||editorIsDirty())return
+      }
+      const state=lazyWorkbookRef.current, runtime=univerRef.current
+      if(!state||!runtime)return
+      const report=await workspace.refresh(state.file.sessionId)
+      if(lazyWorkbookRef.current!==state||editorIsDirty()||!userMutationAllowed())return
+      setLinkStatuses(report.links)
+      if(!report.links.some(link=>link.reachable))return
+      if(applyExternalLinkValues(state,runtime,report).applied===0)return
+      const saved=await handleSaveImpl(saveContext(),'save')
+      if(saved.ok)analysisSaveConsent.current.confirmClean()
+    })
+  }
+  async function saveWorkspaceExternalLink(id:string) {
+    const picker=workspaceLinkPicker, workspace=hostRef.current?.workspaceLinks
+    const source=picker?.files.find(file=>file.id===id)
+    if(!picker||!workspace||linksBusy||!source)return
+    setWorkspaceLinkPicker(null)
+    setLinksBusy(true)
+    try {
+      await saveGateRef.current.run(async()=>{
+        if(lazyWorkbookRef.current?.file.sessionId!==picker.sessionId||hostRef.current?.readOnly||
+          !userMutationAllowed()||!analysisSaveConsent.current.allowed(false)||!(await commitActiveEditor()))return
+        if(editorIsDirty()){
+          const saved=await handleSaveImpl(saveContext(),'save',true)
+          if(!saved.ok||editorIsDirty())return
+        }
+        pendingExternalLinkOpsRef.current={broken:[],retargets:[{index:picker.index,target:workspace.sourceTarget(id,source.revision)}]}
+        try {
+          const saved=await handleSaveImpl(saveContext(),'save')
+          if(saved.ok)analysisSaveConsent.current.confirmClean()
+        }finally{pendingExternalLinkOpsRef.current=null}
+      })
+      await refreshLinkStatuses()
+    }catch(error){setMessage(error instanceof Error?error.message:t('appSaveFailed'))}
+    finally{setLinksBusy(false)}
+  }
   const [watchCells, setWatchCells] = useState<readonly WatchCell[]>([])
   const [calcManual, setCalcManual] = useState(false)
   /// Non-null while the "Insert Slicer" field picker is open.
@@ -2383,9 +2452,13 @@ export function App({
   const watchStructuralEditsForMarks = (): void => {
     const api = univerRef.current?.univerAPI
     if (!api) return
-    api.onCommandExecuted((command: { id?: string }) => {
-      analysisEpochRef.current++
-      if (!command?.id || !STRUCTURAL_EDIT_COMMAND_PATTERN.test(command.id)) return
+    api.onCommandExecuted(({ id }, options) => {
+      // File viewport hydration and derived formula results can arrive while an artifact downloads.
+      // The original cell edits and selection commands still invalidate the capture.
+      if (invalidatesAnalysisCapture(id, options?.fromFormula === true, journalSuppression.active)) {
+        analysisEpochRef.current++
+      }
+      if (!STRUCTURAL_EDIT_COMMAND_PATTERN.test(id)) return
       rebuildRedactionIndex()
     })
   }
@@ -5917,7 +5990,8 @@ export function App({
   function editorIsDirty(): boolean {
     const state = lazyWorkbookRef.current
     return editingCellRef.current || Boolean(state && journalSize(state.editJournal) > 0) ||
-      redactionsPendingSave() || slicersDirtyRef.current || pendingExternalLinkOpsRef.current !== null
+      redactionsPendingSave() || slicersDirtyRef.current || pendingExternalLinkOpsRef.current !== null ||
+      Boolean(hostRef.current?.workspaceLinks && state && externalLinkFormulaValueCount(state)>0)
   }
 
   async function flushEditor(): Promise<boolean> {
@@ -6584,6 +6658,7 @@ export function App({
         onSaveAs={() => void handleSave('save-as')}
         saveDownload={host?.saveDownload}
         fileMenu={host?.fileMenu}
+        externalLinkSourceActions={!host?.inPlaceSave}
         onNameWithAi={() => void nameWithAi()}
         onRedo={handleRedo}
         autoSave={autoSave}
@@ -6844,6 +6919,10 @@ export function App({
         <ExternalLinksPanel
           links={linkStatuses}
           busy={linksBusy}
+          sourceActions={!host?.inPlaceSave}
+          workspaceActions={Boolean(host?.workspaceLinks&&workspaceLinksAvailable&&!host.readOnly)}
+          workspacePicker={host?.readOnly?undefined:workspaceLinkPicker?.files}
+          canBreak={!host?.readOnly}
           notice={linksNotice}
           onUpdate={() => {
             void (async () => {
@@ -6851,6 +6930,10 @@ export function App({
               if (!file || file.needsSaveAs || linksBusy) return
               setLinksBusy(true)
               try {
+                if(hostRef.current?.workspaceLinks){
+                  await updateWorkspaceExternalLinks()
+                  return
+                }
                 await updateExternalLinksFlow({
                   // quiet: a no-op first save is expected here, not a toast.
                   // Real failures still land in the message bar.
@@ -6877,6 +6960,8 @@ export function App({
                     setLinkStatuses(report.links)
                   },
                 })
+              } catch(error){
+                setMessage(error instanceof Error?error.message:t('appSaveFailed'))
               } finally {
                 setLinksBusy(false)
               }
@@ -6889,6 +6974,24 @@ export function App({
               if (sessionId === null || linksBusy) return
               setLinksBusy(true)
               try {
+                if (hostRef.current?.inPlaceSave) {
+                  await saveGateRef.current.run(async () => {
+                    if (hostRef.current?.readOnly || !userMutationAllowed() ||
+                        !analysisSaveConsent.current.allowed(false) || !(await commitActiveEditor())) return
+                    if (editorIsDirty()) {
+                      const saved = await handleSaveImpl(saveContext(), 'save', true)
+                      if ((!saved.ok && saved.reason !== 'no-edits') || editorIsDirty()) return
+                    }
+                    pendingExternalLinkOpsRef.current = {broken:[index],retargets:[]}
+                    try {
+                      const saved = await handleSaveImpl(saveContext(), 'save')
+                      if (saved.ok) analysisSaveConsent.current.confirmClean()
+                    } finally {
+                      pendingExternalLinkOpsRef.current = null
+                    }
+                  })
+                  return
+                }
                 await breakExternalLinkFlow({
                   index,
                   readUsage: () => window.desktopApi.readExternalLinkUsage({ sessionId }),
@@ -6917,8 +7020,8 @@ export function App({
                   save: () => handleSave('save'),
                 })
               } finally {
+                await refreshLinkStatuses()
                 setLinksBusy(false)
-                refreshLinkStatuses()
               }
             })()
           }}
@@ -6927,6 +7030,19 @@ export function App({
               const file = lazyWorkbookRef.current?.file
               const sessionId = file && !file.needsSaveAs ? file.sessionId : null
               if (sessionId === null || linksBusy) return
+              const workspace=hostRef.current?.workspaceLinks
+              if(workspace){
+                if(!workspaceLinksAvailable||hostRef.current?.readOnly)return
+                setLinksBusy(true)
+                setWorkspaceLinkPicker(null)
+                const attempt=++workspacePickerRequest.current
+                try{
+                  const files=await workspace.listSources()
+                  if(workspacePickerRequest.current===attempt&&lazyWorkbookRef.current?.file.sessionId===sessionId)setWorkspaceLinkPicker({index,sessionId,files})
+                }catch(error){setMessage(error instanceof Error?error.message:t('appSaveFailed'))}
+                finally{setLinksBusy(false)}
+                return
+              }
               // a web source has no local file to point at
               if (linkStatuses.find((link) => link.index === index)?.source === null) return
               const picked = await window.desktopApi.selectExternalLinkSource()
@@ -6949,7 +7065,9 @@ export function App({
             const file = lazyWorkbookRef.current?.file
             if (file) window.desktopApi.revealLinkSource({ sessionId: file.sessionId, index })
           }}
-          onClose={() => setLinksOpen(false)}
+          onSaveWorkspaceSource={(id)=>void saveWorkspaceExternalLink(id)}
+          onCancelWorkspaceSource={()=>setWorkspaceLinkPicker(null)}
+          onClose={() => {workspacePickerRequest.current++;setWorkspaceLinkPicker(null);setLinksOpen(false)}}
         />
       )}
     </>

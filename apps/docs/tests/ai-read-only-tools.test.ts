@@ -1,8 +1,10 @@
 import { afterEach, expect, it } from 'vitest'
 import { Editor } from '@tiptap/core'
+import type { NoteInfo } from '@genoffice/docx-engine'
 import { editorExtensions } from '../src/renderer/editor/extensions'
 import { createDocsSkill } from '../src/renderer/ai/docs-skill'
 import { executeTool, type AiCommentsAccess } from '../src/renderer/ai/tools'
+import type { AiNotesAccess } from '../src/renderer/ai/note-ops'
 
 const editors: Editor[] = []
 afterEach(() => editors.splice(0).forEach(editor => editor.destroy()))
@@ -12,6 +14,60 @@ function readOnlyEditor() {
   editors.push(editor); editor.setEditable(false)
   return editor
 }
+
+it('read_notes lists footnotes and endnotes in a read-only Word document', async () => {
+  const editor = readOnlyEditor(), before = editor.state.doc
+  const notes: AiNotesAccess = {
+    list: kind => kind === 'footnote' ? [{id:'4', text:'Intake source'}] : [{id:'9', text:'Release source'}],
+    protectedMarkBlock: (kind, id) => kind === 'footnote' && id === '4' ? 2 : null,
+    add: () => { throw new Error('read_notes must not add a note') },
+    remove: () => { throw new Error('read_notes must not remove a note') },
+    replace: () => { throw new Error('read_notes must not change a note') },
+  }
+  const result = await executeTool(editor, {id:'notes', name:'read_notes', input:{}}, {bullet:null, ordered:null},
+    undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, notes)
+  expect(result.isError).not.toBe(true)
+  expect(result.mutated).toBe(false)
+  expect(result.output).toContain('id 4 (mark in protected block 2, cannot be deleted here): Intake source')
+  expect(result.output).toContain('id 9 (no reference mark in the text): Release source')
+  expect(editor.state.doc.eq(before)).toBe(true)
+})
+
+it('Word note tools keep note text and in-document references in sync', async () => {
+  const editor = readOnlyEditor()
+  editor.setEditable(true)
+  const entries = {footnote: new Map<string, NoteInfo>(), endnote: new Map<string, NoteInfo>()}
+  const notes: AiNotesAccess = {
+    list: kind => [...entries[kind].values()],
+    add(kind, text) {
+      entries[kind].set('1', {id:'1', text})
+      return '1'
+    },
+    remove: (kind, id) => entries[kind].delete(id),
+    replace(kind, id, note) {
+      if (!entries[kind].has(id)) return false
+      entries[kind].set(id, note)
+      return true
+    },
+  }
+  const run = (name: string, input: Record<string, unknown>) => executeTool(editor, {id:name, name, input},
+    {bullet:null, ordered:null}, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, notes)
+  const footnote = await run('insert_footnote', {blockIndex:0, afterText:'Keep', text:'Intake draft'})
+  const endnote = await run('insert_endnote', {blockIndex:0, text:'Release record'})
+  expect(footnote.mutated).toBe(true)
+  expect(endnote.mutated).toBe(true)
+  expect((await run('edit_note', {id:'1', find:'draft', replace:'final'})).isError).toBe(true)
+  const edit = await run('edit_note', {kind:'footnote', id:'1', find:'draft', replace:'final'})
+  expect(edit.mutated).toBe(true)
+  const edited = await run('read_notes', {})
+  expect(edited.output).toContain('Intake final')
+  expect(edited.output).toContain('Release record')
+  const removed = await run('delete_note', {kind:'footnote', id:'1'})
+  expect(removed.output).toContain('and its reference mark')
+  expect(notes.list('footnote')).toEqual([])
+  expect(notes.list('endnote')).toEqual([{id:'1', text:'Release record'}])
+  expect(editor.state.doc.textContent).toBe('Keep original')
+})
 
 it('hides every current-document mutation when Word editing authority is unavailable', () => {
   const editor = readOnlyEditor()
