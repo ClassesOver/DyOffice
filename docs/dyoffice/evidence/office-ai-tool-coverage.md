@@ -8,7 +8,7 @@
 
 首轮定向工具回归共 672 项通过，含 DOCX 71、XLSX 155、PPTX 48、PDF 299、Web 合同与工具 99 项。XLSX 的截断附件提示断言按现有工具文案修正后复跑通过，继续检查读取错误、原件保留和合并用途。[XLSX 截断附件用例](../../../apps/sheets/tests/files-skill.test.ts)
 
-各测试批次合并去重后，浏览器观察到 129 个组合注册，129 个已注册组合均向模型返回过成功结果。采集仅保留格式、工具名和错误标记。下表中的工具行保留具体效果、成品和待验项，四格式真实模型用例见主报告。[注册用例](../../../apps/web/test/local-browser/office-tool-inventory.test.mjs) [四格式验收](genoffice-web-parity.md)
+各测试批次合并去重后，浏览器观察到 129 个组合注册，129 个已注册组合和 9 个共享工具均向模型返回过成功结果。采集仅保留格式、工具名和错误标记。下表中的工具行保留具体效果、成品和待验项，四格式真实模型用例见主报告。[注册用例](../../../apps/web/test/local-browser/office-tool-inventory.test.mjs) [四格式验收](genoffice-web-parity.md)
 
 | 格式 | Web 合同 | 浏览器注册 | 定向浏览器成功 |
 | --- | ---: | ---: | ---: |
@@ -178,8 +178,8 @@ Excel 已覆盖 19 个实际注册工具。稀疏工作簿的全量预加载曾�
 | --- | --- | --- | --- |
 | `delegate_agent_task` | 观察到 | [dsh-office-handoff.test.mjs](../../../apps/web/test/local-browser/dsh-office-handoff.test.mjs)、[native-docx-harness.test.mjs](../../../apps/web/test/local-browser/native-docx-harness.test.mjs) | 真实模型调用成功，[浏览器用例](../../../apps/web/test/local-browser/native-pdf-harness.test.mjs) |
 | `delegate_channel_task` | 观察到 | [assistant-dsh-delegation.test.mjs](../../../apps/web/test/local-browser/assistant-dsh-delegation.test.mjs)、[dsh-office-handoff.test.mjs](../../../apps/web/test/local-browser/dsh-office-handoff.test.mjs) | DOCX、XLSX、PPTX 委派后继续原对话，从历史恢复并保存代理报告。PDF 首轮保存超时，独立复跑验证成品含报告与来源哈希，重开后可见。[跨代理浏览器用例](../../../apps/web/test/local-browser/assistant-dsh-delegation.test.mjs) |
-| `list_agent_data` | 观察到 | [coding-client.test.mjs](../../../apps/web/test/unit/coding-client.test.mjs)、[office-tool-inventory.test.mjs](../../../apps/web/test/local-browser/office-tool-inventory.test.mjs) | 仅返回可委派数据的元数据，委派范围使用显式引用，[单测](../../../apps/web/test/unit/coding-client.test.mjs) |
-| `list_agents` | 观察到 | [native-pdf-harness.test.mjs](../../../apps/web/test/local-browser/native-pdf-harness.test.mjs)、[coding-client.test.mjs](../../../apps/web/test/unit/coding-client.test.mjs) | 真实模型调用成功，[浏览器用例](../../../apps/web/test/local-browser/native-pdf-harness.test.mjs) |
+| `list_agent_data` | 观察到 | [coding-client.test.mjs](../../../apps/web/test/unit/coding-client.test.mjs)、[office-tool-inventory.test.mjs](../../../apps/web/test/local-browser/office-tool-inventory.test.mjs) | 浏览器读取获准数据源和用户已保存的两行快照元数据，工具结果不含数据行。委派按快照 ID 读取原数据。[浏览器用例](../../../apps/web/test/local-browser/office-source-analysis.test.mjs) |
+| `list_agents` | 观察到 | [native-pdf-harness.test.mjs](../../../apps/web/test/local-browser/native-pdf-harness.test.mjs)、[coding-client.test.mjs](../../../apps/web/test/unit/coding-client.test.mjs) | 浏览器列出当前外部 Python 执行器，后续按该 ID 发起委派。[浏览器用例](../../../apps/web/test/local-browser/office-source-analysis.test.mjs) |
 | `list_channel_agents` | 观察到 | [assistant-dsh-delegation.test.mjs](../../../apps/web/test/local-browser/assistant-dsh-delegation.test.mjs)、[assistant-channel-client.test.mjs](../../../apps/web/test/unit/assistant-channel-client.test.mjs) | 浏览器调用后以频道成员 ID 委派任务，单测核对成员 ID 与执行器 ID 不同时的路由。[跨代理浏览器用例](../../../apps/web/test/local-browser/assistant-dsh-delegation.test.mjs) [频道单测](../../../apps/web/test/unit/assistant-channel-client.test.mjs) |
 | `sources_describe` | 观察到 | [office-source-analysis.test.mjs](../../../apps/web/test/local-browser/office-source-analysis.test.mjs)、[assistant-source-catalog.test.mjs](../../../apps/web/test/local-integration/assistant-source-catalog.test.mjs) | 真实模型调用及数据库真值核验通过，[分析评估](../../../tools/dyoffice/analysis-eval/README.md) |
 | `sources_list` | 观察到 | [office-source-analysis.test.mjs](../../../apps/web/test/local-browser/office-source-analysis.test.mjs)、[assistant-source-catalog.test.mjs](../../../apps/web/test/local-integration/assistant-source-catalog.test.mjs) | 真实模型调用及数据库真值核验通过，[分析评估](../../../tools/dyoffice/analysis-eval/README.md) |

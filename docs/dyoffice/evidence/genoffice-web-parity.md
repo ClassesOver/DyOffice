@@ -14,13 +14,15 @@
 
 逐工具验收以格式和工具名为单位，保留注册、执行与成品证据。首轮核对涵盖 130 个格式与工具组合、9 个共享工具和桌面 MCP 清单的 Web 对照。[逐工具验收表](office-ai-tool-coverage.md)
 
-定向 Chromium 批次复用 `29415fca` 的原生编辑器产物及更新后的 XLSX 构建和 PowerPoint Worker，四种格式实际注册的 129 个工具组合均返回过成功结果。PDF 兼容名称 `rotate_pages` 由原生 `apply_ops.rotatePages` 覆盖。PPTX 浏览器补测覆盖附件读取、搜索、图片生成与分析、指南和幻灯片脚本，脚本的标题修改、图表值和类型已核对保存后的 XML，问卷选项已进入两页规划和生成流程。DOCX 补测核对下载成品中的连续分节、A5 横向页面、原生页眉和自定义段落样式，并验证批注线程的回复、解决、删除及指定修订的接受与拒绝。另核对应用样式、原生图表、浮动文本框、水印、长文写作、段落替换、选区替换和新建 DOCX。Word 和 PowerPoint 均将 Coding 交付的 PNG 原样写入成品，并保存图像哈希和冻结数据来源。PowerPoint 通过同一个原生事务写入图片和来源文本。工作区数据工具覆盖 5 项，冻结结果写入验证了 Word、Excel 和 PowerPoint 三种原生文件的准确数据、显式保存和重开。[逐工具结果](office-ai-tool-coverage.md)
+定向 Chromium 批次复用 `29415fca` 的原生编辑器产物及更新后的 XLSX 构建和 PowerPoint Worker，四种格式实际注册的 129 个工具组合均返回过成功结果。PDF 兼容名称 `rotate_pages` 由原生 `apply_ops.rotatePages` 覆盖。PPTX 浏览器补测覆盖附件读取、搜索、图片生成与分析、指南和幻灯片脚本，脚本的标题修改、图表值和类型已核对保存后的 XML，问卷选项已进入两页规划和生成流程。DOCX 补测核对下载成品中的连续分节、A5 横向页面、原生页眉和自定义段落样式，并验证批注线程的回复、解决、删除及指定修订的接受与拒绝。另核对应用样式、原生图表、浮动文本框、水印、长文写作、段落替换、选区替换和新建 DOCX。Word 和 PowerPoint 均将 Coding 交付的 PNG 原样写入成品，并保存图像哈希和冻结数据来源。PowerPoint 通过同一个原生事务写入图片和来源文本。9 个共享工具已通过浏览器执行，工作区 5 个数据工具已验证授权与效果。冻结结果写入验证了 Word、Excel 和 PowerPoint 三种原生文件的准确数据、显式保存和重开。[逐工具结果](office-ai-tool-coverage.md)
 
 `29415fca` 的 CI 本地集成阶段报出 3 项失败，源于事务崩溃夹具缺少文件服务、元数据并发夹具缺少签名状态、PPTX 签名夹具缺少测试环境。补齐夹具后，在独立 PostgreSQL 上复跑 10 项全部通过，覆盖事务回滚、读取竞态及三格式签名文件原件保护。[原 CI 失败](https://github.com/ClassesOver/DyOffice/actions/runs/45009917486/job/137169747167)
 
 同一固定候选的本机全量 Chromium 跑批共 92 项，82 项通过，3 项失败，7 项按配置跳过。失败项为签名原件下载、PDF 分页副本和 XLSX 单表 CSV 导出。三个旧用例均有定向通过记录，最新全量门禁继续复验。[定向结果](office-ai-tool-coverage.md)
 
 `8346afff` 的 GitHub 门禁有 4 个作业通过，Chromium 步骤共 92 项，84 项通过、1 项失败、7 项跳过。PPTX 使用已保存样式追加单页的步骤在 CI 超时，同一产品构建的定向用例通过。[GitHub Chromium 结果](https://github.com/ClassesOver/DyOffice/actions/runs/45013710258/job/137181389779)
+
+`288f039f` 的完整 Web 门禁通过，Chromium 共 93 项，86 项通过、0 项失败、7 项按配置跳过。同步目标分支后的 `69d80ee9` 完成四格式原生构建，PPTX 原生门禁通过。上游的数据容量迁移保留为 0046，签名保护迁移顺延到 0047。新建与重复运行迁移的集成用例通过。[完整 Web 门禁](https://github.com/ClassesOver/DyOffice/actions/runs/45017342201) [合并后 PPTX 门禁](https://github.com/ClassesOver/DyOffice/actions/runs/45019573006) [合并后 Web 门禁](https://github.com/ClassesOver/DyOffice/actions/runs/45019573071)
 
 `dec77c2d` 的工具清单检查匹配 159 项定义。按四个 GenOffice 编辑器的静态定义核对 Web 策略，DOCX、XLSX、PPTX、PDF 的 Web 允许名单分别为 42、19、20、49 个名称，包含 Web 专用和条件注册的工具。原编辑器定义里唯一被排除的是 DOCX 通用桌面命令 `run_cli`。当前轮实际向模型提供的工具继续按格式、编辑器能力、附件和配置收窄。模型调用未提供的工具会被拒绝。服务端、传输、后台阅读与交接合同共 105 项通过。[GenOffice 工具清单](../inventory/agent-tools.md) [模型工具传输与策略](../../../apps/web/test/unit/assistant-client.test.mjs) [浏览器实际工具注册](../../../apps/web/test/local-browser/office-tool-inventory.test.mjs)
 
@@ -40,6 +42,8 @@
 PPTX 在 `89df7aa6` 的英文首轮成功生成、保存并重开两页，第二页重做请求后的标题保持原值，整个用例按失败记录。`9922e244` 重建原生 PPTX 后，中文定向用例通过，耗时约 118 秒。生成的两页含指定标题与周一、周五的正文，包内保留可编辑文本，两个页面均无图片。重做时真实模型调用 `read_slide` 和 `regenerate_slide`，第二页保存并重开后含新标题和发布清单。第一页 XML 字节一致，两个历史版本保留原样。该次生成过程中模型调用了一次澄清工具，测试跳过澄清后继续。[PPTX 成品用例](../../../apps/web/test/local-browser/native-slides-generate.test.mjs)
 
 固定候选 `29415fca` 从源码归档独立构建后，使用同一 `gpt-6-sol` 配置串行运行四格式真实模型用例，4 项通过，0 项失败或跳过。DOCX、XLSX、PPTX、PDF 分别耗时 33.0、54.2、112.9、50.9 秒。PPTX 的追踪确认重做请求已发出，两次历史批次均正常开启和关闭，第一页保持原样；生成阶段仍需跳过一次澄清。这组结果覆盖同一候选的成品效果。后续 XLSX 预加载修复的浏览器构建已独立通过相同的真实模型与宿主 Codex 用例，保存重开 H2 为 441。初次复跑因宿主 CLI 路径配置触发 ENOENT，直接使用与基线相同的宿主二进制后通过。
+
+合并目标分支后的 `69d80ee9` 重新构建四个原生编辑器并使用相同真实模型复跑，四格式 4 项通过，0 项失败或跳过。Word 与 Excel 保存重开核对 441，PDF 原文和现有便笺均核对为 42，PowerPoint 生成可编辑页面，重做第二页后第一页 XML 与重做前一致。
 
 `9922e244` 上补测了 XLSX 的中文数据分析任务。`gpt-6-sol` 从临时 PostgreSQL 的合成订单计算 2026 年 1 至 6 月实付金额，并调用 `insert_data_result`。6 个月的标签和数值均与数据库真值一致，7 项断言全部通过。该次试验耗时 14.7 秒，调用工具 5 次，输入 9,655 tokens，输出 328 tokens。评估将表格交给内存文档目标，浏览器保存和重开由独立用例覆盖。[真实模型数据分析评估](../../../tools/dyoffice/analysis-eval/README.md)
 

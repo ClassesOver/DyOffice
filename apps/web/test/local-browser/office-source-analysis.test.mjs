@@ -136,11 +136,24 @@ print(json.dumps(dict(series=line.get_ydata().tolist(), total=sum(line.get_ydata
   const prompt=typeof content==='string'?content:content.map(part=>part.text??'').join(' '),results=messages.slice(user+1).filter(m=>m.role==='tool')
   const output=()=>{
    const result=JSON.parse(results.at(-1).content)
-   assert.equal(result.isError,false,result.output)
+   assert.notEqual(result.isError,true,result.output)
    return JSON.parse(result.output)
   }
   let action,answer
-  if(prompt.includes('有哪些表')){
+  if(prompt.includes('检查委派目录')){
+   if(!results.length)action=['list_agents',{}]
+   else if(results.length===1){
+    assert.ok(output().some(agent=>agent.id==='test-python'&&agent.name==='Python fixture'))
+    action=['list_agent_data',{}]
+   }else{
+    const directory=output()
+    assert.ok(directory.sources.items.some(item=>item.sourceId==='sales-db'))
+    const frozen=directory.results.items.find(item=>item.resultId===first.artifact.resultId)
+    assert.equal(frozen?.rowCount,2)
+    assert.ok(!Object.hasOwn(frozen,'rows')&&!Object.hasOwn(frozen,'preview'))
+    answer='已确认委派工具与冻结结果元数据'
+   }
+  }else if(prompt.includes('有哪些表')){
    if(!results.length)action=['sources_list',{}]
    else if(results.length===1)action=['sources_describe',{sourceId:'sales-db'}]
    else {
@@ -329,6 +342,13 @@ print(json.dumps(dict(series=line.get_ydata().tolist(), total=sum(line.get_ydata
   await expect(table.getByRole('row').filter({hasText:'2026-02'})).toContainText('40')
  }
  if(!liveConfig){
+  const savedSnapshot=await app.inject({method:'POST',url:'/api/v1/workspace/source-tools/execute',
+   headers:{origin,cookie:'__Host-dyoffice-session='+f.adminSigned.token,'x-csrf-token':csrf.sessionToken(f.adminSigned.token)},
+   payload:{name:'sources.save_result',arguments:{resultId:first.artifact.resultId,name:'Monthly sales snapshot',commandId:randomUUID()}},
+  })
+  assert.equal(savedSnapshot.statusCode,200,savedSnapshot.body)
+  assert.equal(savedSnapshot.json().sha256,first.sha256)
+  await turn('检查委派目录','已确认委派工具与冻结结果元数据')
   await turn('读取上次汇总的第二行','冻结结果第二行 2026-02：40 CNY')
   await turn('把上次汇总插入正文','已插入汇总表')
   await expectFrozenTable()
