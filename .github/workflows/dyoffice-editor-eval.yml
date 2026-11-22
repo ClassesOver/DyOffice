@@ -67,7 +67,7 @@ jobs:
           if-no-files-found: error
 
   harness-recovery:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-22.04
     timeout-minutes: 20
     services:
       postgres:
@@ -108,6 +108,8 @@ jobs:
           npm install --prefix "$RUNNER_TEMP/chart-cli" --no-save @openai/codex@0.169.0
           cli=$(find "$RUNNER_TEMP/chart-cli" -type f -path '*/vendor/x86_64-unknown-linux-musl/bin/codex' -print -quit)
           test -x "$cli"
+          "$cli" --version
+          "$cli" sandbox -- /bin/true
           echo "DYOFFICE_TEST_CODEX_BINARY=$cli" >> "$GITHUB_ENV"
           sudo apt-get update && sudo apt-get install -y python3-matplotlib python3-venv
           python=/usr/bin/python3

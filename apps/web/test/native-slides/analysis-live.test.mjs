@@ -112,7 +112,13 @@ for(const live of [false,true])test(`PPTX ${live?'saves real Codex artifacts wit
   const first=await firstDispatch,turnId=first.request().postDataJSON().turnId
   assert.equal(first.status(),200)
   const card=panel.locator('.assistant-task-message:visible').filter({hasText:'Wait for the user to cancel this test task'})
-  await expect(card.getByText('正在执行命令',{exact:true})).toBeVisible({timeout:15000})
+  try {
+   await expect(card.getByText('正在执行命令',{exact:true})).toBeVisible({timeout:15000})
+  } catch (error) {
+   const state=await card.locator('.assistant-task-state').getAttribute('data-state',{timeout:1000}).catch(()=>null)
+   const details=await card.textContent({timeout:1000}).catch(()=>null)
+   throw new Error(`Fixed-model cancellation did not reach command execution (model requests: ${network.writes}, state: ${state}, card: ${details?.slice(0,800)})`,{cause:error})
+  }
   const cancel=page.waitForResponse(response=>new URL(response.url()).pathname===`/api/v1/agents/tasks/${turnId}/cancel`&&response.request().method()==='POST')
   await card.getByRole('button',{name:'请求取消',exact:true}).click()
   assert.equal((await cancel).status(),204)
