@@ -50,7 +50,7 @@ function choosePicture(signal: AbortSignal): Promise<File | null> {
   return new Promise(resolve => {
     const input = document.createElement('input')
     input.type = 'file'
-    input.accept = '.png,.jpg,.jpeg,.gif,.webp,.tif,.tiff'
+    input.accept = '.png,.jpg,.jpeg,.gif,.bmp,.webp,.tif,.tiff'
     input.hidden = true
     const finish = (file: File | null) => {
       signal.removeEventListener('abort', cancel)
@@ -270,7 +270,7 @@ export function createSlidesBridge(host: SessionFileHost, fileId: string, prefs:
         return {bytesBase64:image.base64,ext:'png'}
       } catch { return null }
     }
-    if(!['png','jpg','gif','tif'].includes(ext))return null
+    if(!['png','jpg','gif','bmp','tif'].includes(ext))return null
     return {bytesBase64:base64,ext}
   }
   function applyImage(input: Extract<ImageEdit, {mode:'insert'}>): ReturnType<SlidesApi['insertImageUrl']>
@@ -311,7 +311,7 @@ export function createSlidesBridge(host: SessionFileHost, fileId: string, prefs:
       const file = await pickPicture(controller.signal)
       if (!file || !stillCurrent()) return null
       const ext = file.name.split('.').pop()?.toLowerCase().replace(/^jpeg$/, 'jpg').replace(/^tiff$/, 'tif') ?? ''
-      const expectedMime = ({png:'image/png',jpg:'image/jpeg',gif:'image/gif',webp:'image/webp',tif:'image/tiff'} as Record<string,string>)[ext]
+      const expectedMime = ({png:'image/png',jpg:'image/jpeg',gif:'image/gif',bmp:'image/bmp',webp:'image/webp',tif:'image/tiff'} as Record<string,string>)[ext]
       if (!expectedMime || !file.size || file.size > 5 * 1024 * 1024) return {base64:'', ext}
       const bytes = new Uint8Array(await file.arrayBuffer())
       if (!stillCurrent()) return null

@@ -50,7 +50,7 @@ function decodeImage(input:SlidesImageInput){
   if(bytes.length<10||bytes.length>MAX_IMAGE_BYTES||bytes.toString('base64')!==input.bytesBase64)throw authError(400)
   const mime=sniffImageMime(bytes)
   const ext=input.ext.toLowerCase().replace(/^jpeg$/,'jpg').replace(/^tiff$/,'tif')
-  if(!mime||(ext==='tif'?'image/tiff':IMAGE_MIME_BY_EXT[ext])!==mime)throw authError(400)
+  if(!mime||({bmp:'image/bmp',tif:'image/tiff',...IMAGE_MIME_BY_EXT} as Record<string,string>)[ext]!==mime)throw authError(400)
   return {bytes,ext}
 }
 function decodeGeneratedImage(input:SlidesGeneratedImageInput){

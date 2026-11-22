@@ -112,6 +112,19 @@ describe('image dpi tag', () => {
 })
 
 describe('imageSizeFromBytes', () => {
+  it('reads a top-down BMP and rejects a truncated DIB header', () => {
+    const bytes = Buffer.alloc(70)
+    bytes.write('BM')
+    bytes.writeUInt32LE(bytes.length, 2)
+    bytes.writeUInt32LE(54, 10)
+    bytes.writeUInt32LE(40, 14)
+    bytes.writeInt32LE(2, 18)
+    bytes.writeInt32LE(-2, 22)
+    bytes.writeUInt16LE(1, 26)
+    bytes.writeUInt16LE(24, 28)
+    expect(imageSizeFromBytes(bytes)).toEqual({ w: 2, h: 2 })
+    expect(imageSizeFromBytes(bytes.subarray(0, 32))).toBeUndefined()
+  })
   it('reads the PNG IHDR size', () => {
     const b64 = pngWithPhys(2835, 2835).split(',')[1]!
     expect(imageSizeFromBytes(Buffer.from(b64, 'base64'))).toEqual({ w: 2, h: 2 })

@@ -59,7 +59,7 @@ export function registerSlidesRoutes(app: FastifyInstance, slides: SlidesSession
       ...revisionBody,generation:generationBody,fitWidthPx,partPath:{type:'string',minLength:1,maxLength:128},operation:{type:'object'},
     },(token,id,body,signal)=>slides.applyMaster(token,id,body,signal),260*1024)
     route<Parameters<SlidesSessions['applyImage']>[2]>('/api/v1/files/:id/slides/media', {
-      ...revisionBody,generation:generationBody,mode:{type:'string',enum:['insert','replace']},slide:{type:'integer',minimum:0,maximum:1048575},bytesBase64:{type:'string',minLength:16,maxLength:6990508},ext:{type:'string',enum:['png','jpg','jpeg','gif','tif','tiff']},placement:{type:'string',enum:['natural']},
+      ...revisionBody,generation:generationBody,mode:{type:'string',enum:['insert','replace']},slide:{type:'integer',minimum:0,maximum:1048575},bytesBase64:{type:'string',minLength:16,maxLength:6990508},ext:{type:'string',enum:['png','jpg','jpeg','gif','bmp','tif','tiff']},placement:{type:'string',enum:['natural']},
       xPx:{type:'number',minimum:-100000,maximum:100000},yPx:{type:'number',minimum:-100000,maximum:100000},wPx:{type:'number',exclusiveMinimum:0,maximum:100000},hPx:{type:'number',exclusiveMinimum:0,maximum:100000},fitWidthPx:fitWidthPx,sourceId:{type:'string',minLength:1,maxLength:256},keepSrcRect:{type:'boolean'},
     }, (token,id,body,signal)=>slides.applyImage(token,id,body,signal), 7*1024*1024, ['placement','xPx','yPx','wPx','hPx','fitWidthPx','sourceId','keepSrcRect'])
     route<{revision:string;generation:number}>('/api/v1/files/:id/slides/undo', {...revisionBody,generation:generationBody}, (token,id,body,signal)=>slides.undo(token,id,body,signal))

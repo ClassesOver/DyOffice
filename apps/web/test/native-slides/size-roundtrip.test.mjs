@@ -120,6 +120,41 @@ test('actual Ribbon size plus mounted link, run link, animation and chart APIs s
  assert.match(tiffPicture.dataUrl,/^data:image\/png;base64,/)
  const preview = PNG.sync.read(Buffer.from(tiffPicture.dataUrl.split(',')[1],'base64'))
  assert.deepEqual([preview.width,preview.height,...preview.data.subarray(0,4)],[20,12,200,100,50,255])
+ const bmp = Buffer.alloc(70)
+ bmp.write('BM')
+ bmp.writeUInt32LE(bmp.length,2)
+ bmp.writeUInt32LE(54,10)
+ bmp.writeUInt32LE(40,14)
+ bmp.writeInt32LE(2,18)
+ bmp.writeInt32LE(2,22)
+ bmp.writeUInt16LE(1,26)
+ bmp.writeUInt16LE(24,28)
+ for(const offset of [56,59,64,67])bmp[offset]=255
+ const insertTab = page.getByRole('button',{name:'Insert',exact:true})
+ if (!(await insertTab.evaluate(tab=>tab.classList.contains('active')))) await insertTab.click()
+ const [bmpPicker] = await Promise.all([
+  page.waitForEvent('filechooser',{timeout:5000}),
+  page.getByRole('button',{name:'Pictures',exact:true}).click(),
+ ])
+ assert.match(await bmpPicker.element().getAttribute('accept'),/\.bmp/)
+ const [bmpUpload] = await Promise.all([
+  page.waitForResponse(response=>response.url().endsWith('/slides/media')),
+  bmpPicker.setFiles({name:'local-picture.bmp',mimeType:'image/bmp',buffer:bmp}),
+ ])
+ assert.equal(bmpUpload.status(),200)
+ const bmpResult = await bmpUpload.json()
+ const bmpPicture = bmpResult.slide.nodes.find(node=>node.type==='picture'&&node.sourceId===bmpResult.created[0].id)
+ assert.equal(bmpPicture.dataUrl,`data:image/bmp;base64,${bmp.toString('base64')}`)
+ assert.deepEqual(await page.evaluate(async url=>{
+  const image=new Image()
+  image.src=url
+  await image.decode()
+  const canvas=document.createElement('canvas')
+  canvas.width=image.naturalWidth;canvas.height=image.naturalHeight
+  const context=canvas.getContext('2d')
+  context.drawImage(image,0,0)
+  return [canvas.width,canvas.height,...context.getImageData(0,0,1,1).data]
+ },bmpPicture.dataUrl),[2,2,255,0,0,255])
  const openMaster = async () => {
   await page.getByRole('button',{name:'View',exact:true}).click()
   await page.getByRole('button',{name:'Slide Master',exact:true}).click()
@@ -155,6 +190,8 @@ test('actual Ribbon size plus mounted link, run link, animation and chart APIs s
  assert.ok(media.some(bytes=>bytes.equals(replacement)))
  const tiffMedia = await Promise.all(archive.file(/^ppt\/media\/[^/]+\.tiff?$/).map(entry=>entry.async('nodebuffer')))
  assert.ok(tiffMedia.some(bytes=>bytes.equals(tiff)))
+ const bmpMedia = await Promise.all(archive.file(/^ppt\/media\/[^/]+\.bmp$/).map(entry=>entry.async('nodebuffer')))
+ assert.ok(bmpMedia.some(bytes=>bytes.equals(bmp)))
  assert.match(await archive.file('ppt/presentation.xml').async('string'),/<p:sldSz[^>]*cx="9144000"[^>]*cy="6858000"/)
  assert.deepEqual(await f.files.readFile(f.alice.token,id,file.file.revision),original)
  await page.unroute('**/api/v1/ai/catalog')
@@ -167,7 +204,7 @@ test('actual Ribbon size plus mounted link, run link, animation and chart APIs s
  const reloaded=await page.evaluate(async pictureData=>{
   const slides=await window.slidesApi.getRenderSlides(),chart=slides[0].nodes.find(node=>node.type==='chart')
   return {links:await window.slidesApi.getSlideLinks(0),runLinks:await window.slidesApi.getRunLinks(0),animations:await window.slidesApi.getAnimations(0),chart:await window.slidesApi.getChartData(0,chart.sourceId),schemes:await window.slidesApi.getChartColorSchemes(),pictures:pictureData.every(data=>slides[0].nodes.some(node=>node.type==='picture'&&node.dataUrl===data))}
- },[replacedPicture.dataUrl,tiffPicture.dataUrl])
+ },[replacedPicture.dataUrl,tiffPicture.dataUrl,bmpPicture.dataUrl])
  assert.deepEqual(reloaded.chart,chartRead.after);assert.deepEqual(reloaded.schemes,chartRead.schemes)
  assert.ok(reloaded.pictures)
  assert.ok(reloaded.links.some(item=>item.target.url===link.url))

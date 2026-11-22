@@ -109,7 +109,7 @@ function imageContent(input:SlidesImageCommand){
   const bytes=Uint8Array.from(input.bytes)
   const mime=sniffImageMime(bytes)
   const ext=String(input.ext).toLowerCase().replace(/^jpeg$/,'jpg').replace(/^tiff$/,'tif')
-  if(!mime||({png:'image/png',jpg:'image/jpeg',gif:'image/gif',tif:'image/tiff'} as Record<string,string>)[ext]!==mime)throw new Error('INVALID_MEDIA')
+  if(!mime||({png:'image/png',jpg:'image/jpeg',gif:'image/gif',bmp:'image/bmp',tif:'image/tiff'} as Record<string,string>)[ext]!==mime)throw new Error('INVALID_MEDIA')
   const tiff = mime==='image/tiff' ? tiffToPng(bytes,MAX_TIFF_PIXELS) : null
   if (mime==='image/tiff' && (!tiff || tiff.png.length>MAX_RENDER_IMAGE_BYTES)) throw new Error('INVALID_MEDIA')
   const size=tiff?{w:tiff.width,h:tiff.height}
