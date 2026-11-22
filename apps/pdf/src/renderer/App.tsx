@@ -7723,7 +7723,17 @@ export default function App({ hostReadOnly = false, hostEditRestriction, hostSav
   // Shortcuts: ⌘S/⌘F/⌘P/⌘±/⌘0 + page navigation (only ⌘ combos kept while an input control is focused)
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (redactionRequestInFlightRef.current || assistantHoldsKeyboard()) return
+      if (redactionRequestInFlightRef.current) return
+      // In the assistant only document-wide ⌘ commands apply (save, find,
+      // print, zoom); undo, form-field clipboard and page keys stay with it.
+      if (assistantHoldsKeyboard()) {
+        const k = e.key.toLowerCase()
+        const documentCommand =
+          (e.metaKey || e.ctrlKey) &&
+          !e.altKey &&
+          (k === 's' || k === 'f' || (k === 'p' && !e.shiftKey) || ['=', '+', '-', '0'].includes(e.key))
+        if (!documentCommand) return
+      }
       const target = e.target as HTMLElement | null
       const inEditable =
         !!target &&

@@ -44,7 +44,12 @@ export function createAssistantChannelClient(options:{request:SettingsRequest;cs
    }
    if(run.generation===localGeneration)await refresh()
   }catch{if(!disposed&&run.generation===localGeneration){error='Office task receipt unavailable; refresh its durable status.';notify()}}
-  finally{settlingRuns.delete(run.token);if(!disposed&&run.generation===localGeneration&&(run.parent||run.pending))void refresh()}
+  finally{
+   settlingRuns.delete(run.token)
+   // pump() skips work while a run settles and nothing else re-arms it for a
+   // plain run, so look for queued Office tasks again now.
+   if(!disposed&&run.generation===localGeneration){if(run.parent||run.pending)void refresh();else void pump()}
+  }
  }
  const delegated=new Map<string,string>(),yieldedBatches:string[][]=[],continued=new Set<string>()
  const listeners=new Set<()=>void>(),attempted=new Set<string>()
@@ -74,9 +79,30 @@ export function createAssistantChannelClient(options:{request:SettingsRequest;cs
    if(localGeneration===generation){attempted.delete(parent.taskId);void refresh()}
   }catch{if(!disposed&&localGeneration===generation){error='Office continuation could not be released; refresh its durable status.';notify()}}
  }
+ // A queued continuation that no longer matches this editor is never left
+ // waiting silently. A newer document revision can never match again, so it
+ // is cancelled; a different model only needs the user to switch back.
+ const blockedReported=new Set<string>()
+ let notice=''
+ function reportBlocked(task:ChannelTask){
+  const origin=task.continuationOrigin!,revision=options.continuationRevision?.()
+  if(revision!==undefined&&origin.revision!==revision){
+   if(blockedReported.has(task.taskId))return
+   blockedReported.add(task.taskId)
+   // Kept past the next refresh (which clears error) until the user starts new work.
+   notice='The delegated Office task was cancelled because the document changed before its results returned.'
+   void sendAction('office',{kind:'cancel',taskId:task.taskId}).then(()=>refresh(),()=>{blockedReported.delete(task.taskId)})
+   notify()
+   return
+  }
+  const message='Select the model that started the delegated Office task to continue it.'
+  if(error!==message){error=message;notify()}
+ }
  async function pump() {
   if(disposed||pumping||running||settlingRuns.size||!snapshot||snapshot.paused||!connection||!executor)return
-  const task=snapshot.tasks.find(task=>task.to==='office'&&!task.execution&&task.state==='queued'&&!attempted.has(task.taskId)&&canResume(task))
+  const queued=snapshot.tasks.filter(task=>task.to==='office'&&!task.execution&&task.state==='queued'&&!attempted.has(task.taskId))
+  for(const blocked of queued.filter(task=>!canResume(task)))reportBlocked(blocked)
+  const task=queued.find(canResume)
   if(!task)return
   if(executor.isBusy()){
    idleRetry??=setTimeout(()=>{idleRetry=undefined;void pump()},400)
@@ -175,7 +201,7 @@ export function createAssistantChannelClient(options:{request:SettingsRequest;cs
  function resetConversation(){
   cancelParentRun()
   const previous=snapshot,previousConnection=connection
-  running?.controller.abort();snapshot=null;connection=undefined;attempted.clear();delegated.clear();yieldedBatches.length=0;continued.clear();parentContinuations.clear();settlingRuns.clear();nativeRun=undefined;localGeneration++;running=undefined;pumping=false;refreshing=undefined;refreshAgain=false;refreshFailingSince=0;refreshFailures=0;clearRefreshRetry();starting=undefined;error=''
+  running?.controller.abort();snapshot=null;connection=undefined;attempted.clear();blockedReported.clear();delegated.clear();yieldedBatches.length=0;continued.clear();parentContinuations.clear();settlingRuns.clear();nativeRun=undefined;localGeneration++;running=undefined;pumping=false;refreshing=undefined;refreshAgain=false;refreshFailingSince=0;refreshFailures=0;clearRefreshRetry();starting=undefined;error='';notice=''
   stopScheduling()
   try{sessionStorage.removeItem('dyoffice-assistant-channel:'+options.fileId)}catch{/* Storage is optional. */}
   if(previous&&previousConnection)void request(base+'/channels/'+previous.conversationId+'/disconnect','POST',{connectionId:previousConnection.id,connectionEpoch:previousConnection.epoch}).catch(()=>{})
@@ -183,6 +209,7 @@ export function createAssistantChannelClient(options:{request:SettingsRequest;cs
  }
  const control:AssistantControl={allowedTools:[...ASSISTANT_READ_TOOLS],resetConversation,
  beginRun(instruction,continuationToken){
+  if(notice){notice="";notify()}
   if(disposed||nativeRun)return undefined
   let parent:ChannelTask|undefined
   if(continuationToken){
@@ -237,7 +264,7 @@ export function createAssistantChannelClient(options:{request:SettingsRequest;cs
  }}
  return {
   control,skill,
-  snapshot:()=>snapshot,error:()=>error,connected:()=>!!connection,
+  snapshot:()=>snapshot,error:()=>error||notice,connected:()=>!!connection,
   subscribe(listener:()=>void){listeners.add(listener);return ()=>{listeners.delete(listener)}},
   async start(){
    if(disposed)throw Error('Channel disposed')

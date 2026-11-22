@@ -658,10 +658,12 @@ export function createAssistantChannelService({transactions,credentialKey,backgr
    return run({kind:'owner',token},conversationId,async(c,p,ch)=>{
     await expire(c,p,conversationId)
     if(ch.paused||ch.office_connection_id!==connectionId||ch.office_epoch!==input.connectionEpoch)throw fail(409)
-    const revision=origin&&ch.file_id?(await loadFile(c,p,ch.file_id)).current_revision:undefined
-    if(origin&&(!revision||(origin.revision!==null&&origin.revision!==revision)))throw fail(409)
+    // A replay returns the recorded task even if the document has been saved
+    // since; the revision binds only new requests.
     const prior=(await c.query("SELECT * FROM assistant_requests WHERE deployment_id=$1 AND owner_id=$2 AND conversation_id=$3 AND actor='office' AND request_id=$4",[...scope(p),conversationId,requestId])).rows[0]
     if(prior){if(prior.params_hash!==paramsHash)throw fail(409);return taskDto(await task(c,p,conversationId,prior.receipt.taskId))}
+    const revision=origin&&ch.file_id?(await loadFile(c,p,ch.file_id)).current_revision:undefined
+    if(origin&&(!revision||(origin.revision!==null&&origin.revision!==revision)))throw fail(409)
     const busy=(await c.query("SELECT 1 FROM task_runtime_channel WHERE deployment_id=$1 AND owner_id=$2 AND conversation_id=$3 AND recipient='office' AND state IN ('running','cancel_requested')",[...scope(p),conversationId])).rowCount
     if(busy)throw fail(409)
     const active=(await c.query("SELECT count(*) FROM task_runtime_channel WHERE deployment_id=$1 AND owner_id=$2 AND conversation_id=$3 AND state IN ('queued','running','waiting_peer','cancel_requested','unknown_outcome')",[...scope(p),conversationId])).rows[0].count
@@ -685,11 +687,13 @@ export function createAssistantChannelService({transactions,credentialKey,backgr
     const prior=requestId?(await c.query('SELECT * FROM assistant_requests WHERE deployment_id=$1 AND owner_id=$2 AND conversation_id=$3 AND actor=$4 AND request_id=$5',[...scope(p),conversationId,actor.id,requestId])).rows[0]:undefined
     if(prior&&prior.params_hash!==paramsHash)throw fail(409)
     const row=await task(c,p,conversationId,taskId)
-    if(row.continuation_origin&&(!origin||!matchesContinuation(row.continuation_origin,origin)||!ch.file_id||(await loadFile(c,p,ch.file_id)).current_revision!==origin.revision))throw fail(409)
+    // The origin was checked when this claim was recorded; a replay of the
+    // same claim must not fail because the document was saved since.
     if(prior){
      if(row.recipient!==actor.id||row.state!=='running'||row.claim_id!==prior.receipt.claimId||row.connection_id!==connectionId||row.connection_epoch!==epoch||prior.receipt.taskId!==taskId||prior.receipt.connectionEpoch!==epoch)throw fail(409)
      return claimDto(c,p,conversationId,row)
     }
+    if(row.continuation_origin&&(!origin||!matchesContinuation(row.continuation_origin,origin)||!ch.file_id||(await loadFile(c,p,ch.file_id)).current_revision!==origin.revision))throw fail(409)
     if(row.execution||row.recipient!==actor.id||row.state!=='queued')throw fail(409)
     const busy=(await c.query("SELECT 1 FROM task_runtime_channel WHERE deployment_id=$1 AND owner_id=$2 AND conversation_id=$3 AND recipient=$4 AND state IN ('running','cancel_requested')",[...scope(p),conversationId,actor.id])).rowCount
     if(busy)throw fail(409)

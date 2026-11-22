@@ -111,11 +111,11 @@ window.__ModuleLoader__.load({
     const allowsEmbed = (connection, origin) => connection?.origin === origin &&
       connection?.dshEditorOrigin === window.location.origin
     const studioStyles = `
-      .dsh-office-studio{container-type:inline-size;box-sizing:border-box;min-width:0;border:1px solid var(--dsw-alias-border-l2,#ccd2da);border-radius:14px;overflow:hidden;background:var(--dsw-alias-bg-layer-1,Canvas);color:var(--dsw-alias-label-primary,CanvasText);font:inherit}
+      .dsh-office-studio{--dsh-office-party-dsh:#8265d0;--dsh-office-party-office:#32827c;container-type:inline-size;box-sizing:border-box;min-width:0;border:1px solid var(--dsw-alias-border-l2,#ccd2da);border-radius:14px;overflow:hidden;background:var(--dsw-alias-bg-layer-1,Canvas);color:var(--dsw-alias-label-primary,CanvasText);font:inherit}
       .dsh-office-studio *{box-sizing:border-box}
       .dsh-office-studio header,.dsh-office-footer{display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding:12px 16px}
       .dsh-office-studio header{border-bottom:1px solid var(--dsw-alias-border-l2,#ccd2da)}
-      .dsh-office-filetype{display:grid;place-items:center;min-width:38px;height:36px;border-radius:7px;background:#234ba2;color:white;font-size:10px;font-weight:700;letter-spacing:.04em}
+      .dsh-office-filetype{display:grid;place-items:center;min-width:38px;height:36px;border-radius:7px;background:var(--dsw-alias-brand-primary,Highlight);color:var(--dsw-alias-label-on-brand,HighlightText);font-size:10px;font-weight:700;letter-spacing:.04em}
       .dsh-office-name{flex:1 1 130px;min-width:0}.dsh-office-name strong{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:15px}
       .dsh-office-studio small{color:var(--dsw-alias-label-secondary,GrayText);font-size:12px}
       .dsh-office-studio button{cursor:pointer;font:inherit;font-size:12px;color:inherit;background:var(--dsw-alias-bg-layer-1,Canvas);border:1px solid var(--dsw-alias-border-l2,#ccd2da);border-radius:7px;padding:5px 9px;min-height:30px}
@@ -131,7 +131,7 @@ window.__ModuleLoader__.load({
       .dsh-office-message{position:relative;border-inline-start:1px solid var(--dsw-alias-border-l2,#ccd2da);margin-inline-start:4px;padding:0 0 12px 13px;font-size:13px;line-height:1.55;overflow-wrap:anywhere}
       .dsh-office-message:last-child{padding-bottom:0;border-color:transparent}
       .dsh-office-message:before{content:'';position:absolute;inset-inline-start:-4px;top:6px;width:7px;height:7px;border-radius:50%;background:var(--dsw-alias-label-secondary,GrayText)}
-      .dsh-office-message[data-party="DSH"]:before{background:#8265d0}.dsh-office-message[data-party="DyOffice"]:before{background:#32827c}
+      .dsh-office-message[data-party="DSH"]:before{background:var(--dsh-office-party-dsh)}.dsh-office-message[data-party="DyOffice"]:before{background:var(--dsh-office-party-office)}
       .dsh-office-message strong{font-size:12px}.dsh-office-message-body{white-space:pre-wrap}
       .dsh-office-footer{justify-content:space-between;border-top:1px solid var(--dsw-alias-border-l2,#ccd2da);font-size:12px}
       @container(max-width:570px){.dsh-office-grid{grid-template-columns:1fr}.dsh-office-log{border-inline-start:0;border-top:1px solid var(--dsw-alias-border-l2,#ccd2da)}}

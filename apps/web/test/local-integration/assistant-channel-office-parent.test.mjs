@@ -38,7 +38,8 @@ test('Office parent yields, nested question runs, and restart resumes with durab
  const f=await fixture(t),id=f.channel.conversationId,m=await f.join(),officeConnection=randomUUID(),memberConnection=randomUUID()
  const oc=await f.service.connect(f.owner,id,{connectionId:officeConnection,editorId:randomUUID(),editorGeneration:1})
  const mc=await f.service.connect(m.credential,id,{connectionId:memberConnection})
- const parent=await f.service.beginOfficeTask(f.alice.token,id,{requestId:randomUUID(),connectionId:officeConnection,...oc,instruction:'Analyze current document',origin:{revision:null,modelId:'fixture',callId:'call-1'}})
+ const begin={requestId:randomUUID(),connectionId:officeConnection,...oc,instruction:'Analyze current document',origin:{revision:null,modelId:'fixture',callId:'call-1'}}
+ const parent=await f.service.beginOfficeTask(f.alice.token,id,begin)
  const child=await f.submit(m.member.membershipId,{kind:'delegate',instruction:'Analyze paragraph',parentTaskId:parent.taskId})
  const yielded=await f.service.yieldTask(f.owner,id,{taskId:parent.taskId,claimId:parent.claimId,connectionEpoch:parent.connectionEpoch,childTaskIds:[child.taskId]})
  assert.equal(yielded.state,'waiting_peer')
@@ -65,7 +66,13 @@ test('Office parent yields, nested question runs, and restart resumes with durab
  await f.files.receiveUpload(f.alice.token,upload.uploadId,bytes)
  const saved=await revisions.commitRevision(f.alice.token,{fileId:f.file.fileId,uploadId:upload.uploadId,baseRevision:origin.revision,leaseEpoch:lease.leaseEpoch,idempotencyKey:randomUUID()})
  assert.notEqual(saved.revision,origin.revision)
- await assert.rejects(restored.claim(f.owner,id,{...claim,origin}),{statusCode:409})
+ // A lost reply is recovered by replaying the same request: the recorded
+ // claim and task come back even though the document has been saved since.
+ // (The browser re-checks the revision before it continues.)
+ assert.equal((await restored.claim(f.owner,id,{...claim,origin})).claimId,resumed.claimId)
+ assert.equal((await restored.beginOfficeTask(f.alice.token,id,begin)).taskId,parent.taskId)
+ // A new request is still bound to the current revision.
+ await assert.rejects(restored.beginOfficeTask(f.alice.token,id,{...begin,requestId:randomUUID(),origin:{revision:origin.revision,modelId:'fixture',callId:'call-2'}}),{statusCode:409})
  assert.notEqual(resumed.claimId,parent.claimId)
  await assert.rejects(restored.claim(f.owner,id,{taskId:parent.taskId,connectionId:officeConnection,...oc}),{statusCode:409})
  await f.submit('office',{kind:'result',taskId:resumed.taskId,claimId:resumed.claimId,connectionEpoch:resumed.connectionEpoch,summary:'Final answer',outcome:'succeeded'})

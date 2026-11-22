@@ -135,6 +135,16 @@ test('four real Office editors share assistant chrome and retain drafts across c
   await expect.poll(()=>editorControl.evaluate(node=>node.contains(document.activeElement)),{
    message:format+' explicit editor click takes keyboard focus from the assistant',
   }).toBe(true)
+  // Document-wide commands still work while the assistant holds the keyboard:
+  // Ctrl+F opens the editor's own find UI, not the browser's.
+  const findUi={docx:'.find-panel',pdf:'.pdf-search-bar'}[format]
+  if(findUi){
+   await textarea.click()
+   await expect(textarea).toBeFocused()
+   await page.keyboard.press('Control+f')
+   await expect(page.locator(findUi).first(),format+' Ctrl+F from the assistant opens the editor find UI').toBeVisible()
+   await page.keyboard.press('Escape')
+  }
   await page.setViewportSize(viewport)
   await textarea.fill(draft)
   // The composer measures after the React update; the previous starter can still be at maximum height.

@@ -5,7 +5,7 @@ import {createAssistantChannelClient} from '../../../../packages/browser-host/sr
 const tick=()=>new Promise(resolve=>setImmediate(resolve))
 const deferred=()=>{let resolve,reject;const promise=new Promise((done,fail)=>{resolve=done;reject=fail});return {promise,resolve,reject}}
 const task=(id,state='queued')=>({taskId:id,conversationId:'channel-1',from:'peer-1',to:'office',instruction:'Read the document',state,claimId:'claim-'+id,connectionEpoch:1})
-function fixture(t){
+function fixture(t,extra={}){
  const intervals=[],calls=[],executions=[],yieldRequests=[],continuations=[],continuationTokens=[],cancellations=[]
  const originalSetInterval=globalThis.setInterval,originalClearInterval=globalThis.clearInterval
  globalThis.setInterval=(callback)=>{intervals.push(callback);return intervals.length}
@@ -36,7 +36,7 @@ function fixture(t){
   if(method===undefined&&refreshGate){const gate=refreshGate;refreshGate=undefined;return gate.promise}
   return structuredClone(next)
  }
- const client=createAssistantChannelClient({request,fileId:'file-1',editorId:'editor-1',generation:()=>1})
+ const client=createAssistantChannelClient({request,fileId:'file-1',editorId:'editor-1',generation:()=>1,...extra})
  t.after(()=>client.dispose())
  return {client,calls,intervals,executions,yieldRequests,continuations,continuationTokens,cancellations,failClaims(...errors){claimFailures=errors},holdCancel(){cancelGate=deferred();return cancelGate},holdYield(){yieldGate=deferred();return yieldGate},holdRefresh(){refreshGate=deferred();return refreshGate},holdConnect(){connectGate=deferred();return connectGate},holdAction(){actionGate=deferred();return actionGate},holdClaim(){claimGate=deferred();return claimGate},holdCreate(){createGate=deferred();return createGate},setSnapshot(value){next={...next,...value}},register(execute=async()=>({text:'Findings',cancelled:false})){
   return client.control.register({isBusy:()=>false,cancelRun(token){cancellations.push(token)},requestYield(taskIds){yieldRequests.push([...taskIds])},continue(instruction,token){continuations.push(instruction);continuationTokens.push(token);return true},execute(instruction,signal){executions.push({instruction,signal});return execute(instruction,signal)}})
@@ -509,4 +509,50 @@ test('a change notified while a refresh is in flight is read by one follow-up re
  await first;await tick();await tick()
  assert.equal(reads(),before+2)
  assert.equal(f.client.snapshot().sequence,5)
+})
+
+const continuationTask=(id,origin)=>({...task(id),from:'office',parentTaskId:null,continuationOrigin:origin,continuation:{parentTaskId:id,untrusted:true,children:[]}})
+
+test('a queued continuation for an older document revision is cancelled with a visible notice, not left waiting',async t=>{
+ let revision='rev-2'
+ const f=fixture(t,{continuationRevision:()=>revision,selectedModel:()=>'model-a'})
+ f.register()
+ f.setSnapshot({tasks:[continuationTask('parent',{revision:'rev-1',modelId:'model-a',callId:'call-1'})]})
+ await f.client.start();await tick();await tick()
+ const cancels=f.calls.filter(call=>call.body?.action?.kind==='cancel')
+ assert.equal(cancels.length,1);assert.equal(cancels[0].body.action.taskId,'parent')
+ assert.equal(f.calls.some(call=>call.path.endsWith('/claim')),false)
+ assert.match(f.client.error(),/document changed/)
+ // The notice survives the refresh that follows the cancellation.
+ await f.client.refresh();await tick()
+ assert.match(f.client.error(),/document changed/)
+ assert.equal(f.calls.filter(call=>call.body?.action?.kind==='cancel').length,1)
+})
+
+test('a queued continuation for another model waits with a hint and resumes once the model matches',async t=>{
+ let model='model-b'
+ const f=fixture(t,{continuationRevision:()=>'rev-1',selectedModel:()=>model})
+ f.register()
+ f.setSnapshot({tasks:[continuationTask('parent',{revision:'rev-1',modelId:'model-a',callId:'call-1'})]})
+ await f.client.start();await tick()
+ assert.equal(f.calls.some(call=>call.body?.action?.kind==='cancel'),false)
+ assert.match(f.client.error(),/Select the model/)
+ model='model-a'
+ await f.client.refresh();await tick();await tick()
+ assert.equal(f.calls.filter(call=>call.path.endsWith('/claim')).length,1)
+})
+
+test('a queued Office task is picked up as soon as a plain native run finishes settling',async t=>{
+ let busy=true
+ const f=fixture(t)
+ f.client.control.register({isBusy:()=>busy,cancelRun(){},requestYield(){},continue(){return true},execute(instruction,signal){f.executions.push({instruction,signal});return Promise.resolve({text:'done',cancelled:false})}})
+ await f.client.start();await tick()
+ const token=f.client.control.beginRun('User question')
+ f.setSnapshot({tasks:[task('peer-read')]})
+ await f.client.refresh();await tick()
+ assert.equal(f.executions.length,0)
+ busy=false
+ f.client.control.endRun(token,{text:'answer',cancelled:false})
+ await tick();await tick();await tick()
+ assert.equal(f.executions.length,1)
 })
