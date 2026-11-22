@@ -49,7 +49,12 @@ export function sourceConfig(kind: SourceKind, input: unknown): SourceConfig {
   }
   return { ...common, statementTimeoutMs, ...(allowedSchemas === undefined ? {} : { allowedSchemas }), ...(allowedTables === undefined ? {} : { allowedTables }), ...(value.database === undefined ? {} : { database: value.database }) }
 }
-/** Frozen SQL result budget: room for up to 10,000 detail rows of moderate width (stored snapshots allow 8 MB). */
+/**
+ * Frozen SQL result budget, also the capture limit for one stored result
+ * (results.ts maxSnapshotBytes, migration 0046): room for up to 10,000
+ * moderate-width detail rows. Rows past it are kept as a truncated prefix
+ * rather than failing the query.
+ */
 export const SQL_RESULT_MAX_BYTES = 4_000_000
 export function executionFor(kind: SourceKind, config: SourceConfig): SourceExecution {
   return kind === 'http' ? { maxRows: config.maxRows!, requestTimeoutMs: 10_000, maxResponseBytes: 1_000_000 } : { maxRows: config.maxRows!, statementTimeoutMs: ('statementTimeoutMs' in config ? config.statementTimeoutMs : undefined) ?? 5000, maxResponseBytes: SQL_RESULT_MAX_BYTES }

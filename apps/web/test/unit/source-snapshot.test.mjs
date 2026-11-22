@@ -50,3 +50,13 @@ test('live rows are trimmed to the byte budget as a truncated prefix that the sn
  // Within budget nothing is trimmed; the row limit is left to createQuerySnapshot.
  assert.deepEqual(fitSnapshotRows(base, { maxRows: 10, maxBytes: 8_000_000 }), { rows: wide, truncated: false })
 })
+test('a live SQL snapshot trimmed to the result budget always fits the frozen-result capture limit', async () => {
+ const { SQL_RESULT_MAX_BYTES } = await import('../../server/src/modules/sources/config.ts')
+ const wide = Array.from({ length: 1000 }, (_, i) => ({ amount: i, period: 'x'.repeat(5000) }))
+ const base = { ...input(), rows: wide }
+ const fitted = fitSnapshotRows(base, { maxRows: 1000, maxBytes: SQL_RESULT_MAX_BYTES })
+ assert.equal(fitted.truncated, true)
+ const snapshot = createQuerySnapshot({ ...base, rows: fitted.rows, sourceTruncated: true }, { maxRows: 1000, maxBytes: SQL_RESULT_MAX_BYTES })
+ // results.ts verifiedSnapshot measures exactly this serialisation against maxSnapshotBytes.
+ assert.ok(Buffer.byteLength(JSON.stringify(snapshot)) <= SQL_RESULT_MAX_BYTES)
+})
