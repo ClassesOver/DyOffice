@@ -45,6 +45,8 @@ PPTX 在 `89df7aa6` 的英文首轮成功生成、保存并重开两页，第二
 
 合并目标分支后的 `69d80ee9` 重新构建四个原生编辑器并使用相同真实模型复跑，四格式 4 项通过，0 项失败或跳过。Word 与 Excel 保存重开核对 441，PDF 原文和现有便笺均核对为 42，PowerPoint 生成可编辑页面，重做第二页后第一页 XML 与重做前一致。
 
+在 `1b71dc9f` 补测了真实模型的只读任务。Excel 中文指令找到了尚未加载到网格的 `AZ25001`，核对模型回复、`find_cells` 返回值和原生查找坐标。Word 读到了收藏文件原文，但回答的链接对部分文件名进行了不同层数的百分号转义，首次复跑失败。仅修复点击路径后的复跑发现，回答校验要求模型重答，随后模型省略了引用。回答校验与点击现共用收藏目录的路径匹配。Chromium 回归重现原链接，确认模型响应保留引用、点击用原始版本路径重新授权，且打开的文件含有来源原文。[Excel 查找用例](../../../apps/web/test/local-browser/sheets-find-cells.test.mjs) [Word 引用用例](../../../apps/web/test/local-browser/word-knowledge.test.mjs)
+
 `9922e244` 上补测了 XLSX 的中文数据分析任务。`gpt-6-sol` 从临时 PostgreSQL 的合成订单计算 2026 年 1 至 6 月实付金额，并调用 `insert_data_result`。6 个月的标签和数值均与数据库真值一致，7 项断言全部通过。该次试验耗时 14.7 秒，调用工具 5 次，输入 9,655 tokens，输出 328 tokens。评估将表格交给内存文档目标，浏览器保存和重开由独立用例覆盖。[真实模型数据分析评估](../../../tools/dyoffice/analysis-eval/README.md)
 
 同一提交的 DOCX 渠道汇总评估通过 6 项断言。模型调用 `insert_data_result`，三个渠道的订单量、金额和来源标记符合真值，耗时 18.1 秒，调用工具 7 次。评估接收表格的目标为内存文档。[真实模型数据分析评估](../../../tools/dyoffice/analysis-eval/README.md)

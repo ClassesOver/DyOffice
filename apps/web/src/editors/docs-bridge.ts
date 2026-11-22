@@ -236,5 +236,5 @@ export function createDocsBridge(host: SessionFileHost, fileId: string, prefs: A
     }catch(error){if(acquired)await host.releaseLease(fileId).catch(()=>{});throw error}
     finally{takingOver=false;if(!disposed)onChange()}
   }
-  return { api,lifecycle,get supportedCreateDocumentTypes() {return typeof createInWorkspace() === 'function' ? ['docx', 'pdf'] as const : []},guardedSave,takeover,prepareDownload,getReceipt:()=>committed,getState: () => ({...guard.getState(), nativeSaveOutcome, nativeSaveReasons, takingOver}),dispose() { knowledge.dispose(); completeGeneratedContent(false); disposed = true; panelListeners.clear(); for (const url of urls) URL.revokeObjectURL(url); urls.clear() } }
+  return { api,lifecycle,resolveKnowledgeCitation:knowledge.citationPath,get supportedCreateDocumentTypes() {return typeof createInWorkspace() === 'function' ? ['docx', 'pdf'] as const : []},guardedSave,takeover,prepareDownload,getReceipt:()=>committed,getState: () => ({...guard.getState(), nativeSaveOutcome, nativeSaveReasons, takingOver}),dispose() { knowledge.dispose(); completeGeneratedContent(false); disposed = true; panelListeners.clear(); for (const url of urls) URL.revokeObjectURL(url); urls.clear() } }
 }

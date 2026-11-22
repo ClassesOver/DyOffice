@@ -52,6 +52,8 @@ export interface KnowledgeBaseDeps {
   search(query: string, limit: number): Promise<KbSearchHit[]>
   /** one page of parsed text; path must be a corpus file */
   read(path: string, offset: number): Promise<KbReadPage>
+  /** The host may resolve an equivalent citation spelling to its canonical corpus path. */
+  resolveCitationPath?(path: string): string | undefined
   /** paths outside the corpus an answer may still cite (files a sibling skill wrote this session) */
   alsoCitable?(): readonly string[]
 }
@@ -224,7 +226,8 @@ export function createKnowledgeBaseSkill(deps: KnowledgeBaseDeps): AgentSkill {
         } catch {
           // keep the raw text
         }
-        return !known.has(decoded)
+        const resolved = deps.resolveCitationPath?.(decoded)
+        return !known.has(decoded) && (resolved === undefined || !known.has(resolved))
       })
       if (unknown.length === 0) return null
       return (

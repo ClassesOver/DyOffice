@@ -250,6 +250,7 @@ export type SetDocsImageAttachments = (files: readonly {name: string; image: Age
 
 interface AiPanelProps {
   sourceSkill?: import('@genoffice/agent-core').AgentSkill
+  resolveKnowledgeCitation?: ((path: string) => string | undefined) | undefined
   setImageAttachments?: SetDocsImageAttachments | undefined
   transport?: import('@genoffice/agent-core').AgentTransport
   extraSkills?: readonly import('@genoffice/agent-core').AgentSkill[]
@@ -366,6 +367,7 @@ const MODEL_BRIDGE: AiModelPickerBridge = {
 
 export function AiPanel({
   sourceSkill,
+  resolveKnowledgeCitation,
   transport,
   modelPicker,
   assistantWorkspace,
@@ -911,6 +913,7 @@ export function AiPanel({
                 listFiles: () => kbFilesRef.current,
                 search: (query, limit) => window.desktop.kbSearch({ q: query, limit }),
                 read: (path, offset) => window.desktop.kbRead(path, offset),
+                resolveCitationPath: resolveKnowledgeCitation,
               }),
             ]
           : []),

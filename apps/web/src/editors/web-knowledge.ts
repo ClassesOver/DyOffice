@@ -14,6 +14,16 @@ export function createWebKnowledge(request?:SettingsRequest){
  let disposed=false,epoch=0,files=new Map<string,KbFile>()
  const active=()=>{if(disposed||!request)throw Error('Knowledge base unavailable')}
  const known=(path:string)=>{active();source(path);if(!files.has(path))throw Error('Unknown knowledge source')}
+ function citationPath(path:string){
+  if(files.has(path))return path
+  const match=pinnedPath.exec(path)
+  if(!match)return undefined
+  // Markdown may carry a partially double-escaped filename from the model.
+  // Reuse the corpus path only when the file, revision and filename all match.
+  const encodedName=match[3]!.replace(/%25(?=[0-9a-f]{2})/gi,'%')
+  const canonical=`/files/${match[1]}/revisions/${match[2]}/${encodedName}`
+  return files.has(canonical)?canonical:undefined
+ }
  function parent(){
   const current=window.parent as Window & {aiOffice?:{openPath:(id:string)=>Promise<void>}}
   if(current===window||current.location.origin!==window.location.origin||typeof current.aiOffice?.openPath!=='function')throw Error('Workspace source navigation unavailable')
@@ -48,8 +58,8 @@ export function createWebKnowledge(request?:SettingsRequest){
    active();if(stamp!==epoch)throw Error('Knowledge corpus changed')
    if(!Array.isArray(hits)||hits.length>limit||hits.some(hit=>{const file=files.get(hit.path);return !file||typeof hit.name!=='string'||typeof hit.ext!=='string'||typeof hit.folder!=='string'||typeof hit.snippet!=='string'}))throw Error('Invalid knowledge search results')
    return hits.map(hit=>{const file=files.get(hit.path)!;return {...hit,name:file.name,ext:file.ext,folder:file.folder}})
-  },kbRead,
-  async openSourcePath(path:string){known(path);const host=parent();await kbRead(path,0);if(parent()!==host)throw Error('Workspace source navigation changed');await host.aiOffice!.openPath(source(path).fileId)},
+  },kbRead,citationPath,
+  async openSourcePath(path:string){const canonical=citationPath(path);if(!canonical)throw Error('Unknown knowledge source');const host=parent();await kbRead(canonical,0);if(parent()!==host)throw Error('Workspace source navigation changed');await host.aiOffice!.openPath(source(canonical).fileId)},
   dispose(){disposed=true;epoch++;files.clear()},
  }
 }

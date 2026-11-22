@@ -185,6 +185,17 @@ describe('createKnowledgeBaseSkill', () => {
       ),
     ).toBeNull()
   })
+
+  it('accepts host-resolved citations only when they map to the current corpus', () => {
+    const deps = makeDeps()
+    const escaped = '/workspace/mixed%25E6%96%99.docx'
+    const skill = createKnowledgeBaseSkill({
+      ...deps,
+      resolveCitationPath: (path: string) => path === escaped ? deps.listFiles()[0]?.path : '/tmp/unlisted.docx',
+    })
+    expect(skill.verifyResponse!(`source [document](filenav://${escaped})`, [])).toBeNull()
+    expect(skill.verifyResponse!('source [other](filenav:///workspace/other.docx)', [])).toContain('not knowledge-base paths')
+  })
 })
 
 describe('createKnowledgeBaseSkill with no starred files', () => {

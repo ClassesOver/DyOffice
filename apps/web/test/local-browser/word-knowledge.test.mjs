@@ -33,6 +33,7 @@ test('Word searches a starred saved source, reads its actual text and opens the 
  if(!liveConfig)await f.preferences.update(f.alice.token,{autoSave:false})
  await createWorkspaceService(f.transactions).setStar(f.alice.token,source.fileId,{starred:true})
  const sourcePath=`/files/${source.fileId}/revisions/${source.revision}/${encodeURIComponent('参考资料.docx')}`,cite=kbCiteHref(sourcePath),wire=[];let turn=0
+ const mixedEscapeCite=cite.replace('%2583','%83').replace('%2584','%84').replace('%2596%2599','%96%99')
  if(!liveConfig){const network=mockProviderNetwork(t,()=>{
   const request=JSON.parse(network.wire.toString())
   const user=request.messages.findLastIndex(message=>message.role==='user')
@@ -134,7 +135,7 @@ test('Word searches a starred saved source, reads its actual text and opens the 
    return Readable.from([Buffer.from(`data: ${JSON.stringify({choices:[{delta,finish_reason:action?'tool_calls':'stop'}]})}\n\ndata: [DONE]\n\n`)])
   }
   wire.push(request)
-  const step=turn++,tool=step<2,delta=step===0?{tool_calls:[{index:0,id:'kb-search',type:'function',function:{name:'search_knowledge_base',arguments:JSON.stringify({query:'ORCHID-KB-6419'})}}]}:step===1?{tool_calls:[{index:0,id:'kb-read',type:'function',function:{name:'read_knowledge_file',arguments:JSON.stringify({index:0,offset:0})}}]}:{content:`Confirmed reference ORCHID-KB-6419 [参考资料.docx](${cite})`}
+  const step=turn++,tool=step<2,delta=step===0?{tool_calls:[{index:0,id:'kb-search',type:'function',function:{name:'search_knowledge_base',arguments:JSON.stringify({query:'ORCHID-KB-6419'})}}]}:step===1?{tool_calls:[{index:0,id:'kb-read',type:'function',function:{name:'read_knowledge_file',arguments:JSON.stringify({index:0,offset:0})}}]}:{content:`Confirmed reference ORCHID-KB-6419 [参考资料.docx](${mixedEscapeCite})`}
   return Readable.from([Buffer.from(`data: ${JSON.stringify({choices:[{delta}]})}\n\ndata: ${JSON.stringify({choices:[{delta:{},finish_reason:tool?'tool_calls':'stop'}]})}\n\ndata: [DONE]\n\n`)])
  })}
  app=await buildLocalApp({db:f.db,businessPool:f.businessPool,passwords:f.passwords,deploymentId:f.deploymentId,origin,csrfKey:f.csrfKey,objectStore:f.objects,globalConfigKeyring:keyring,providerGateway:{mode:'shared'},codingHarnesses:false,nativeDocsDirectory:process.env.DYOFFICE_TEST_KB_DOCS_DIRECTORY??fileURLToPath(new URL('../../dist-docs',import.meta.url)),localShellDirectory:process.env.DYOFFICE_TEST_LOCAL_SHELL_DIRECTORY??fileURLToPath(new URL('../../dist-local-shell',import.meta.url))})
@@ -154,12 +155,15 @@ test('Word searches a starred saved source, reads its actual text and opens the 
  })
  await expect(composer).toBeVisible();await composer.fill('请先从收藏知识库搜索 ORCHID，再读取匹配文件的原文，逐字给出完整记录编号，并按工具返回的引用链接标注来源。');await composer.press('Enter')
  const link=editor.locator('.ai-panel a').filter({hasText:'参考资料.docx'})
- await expect(link).toBeVisible({timeout:90000});assert.equal(await link.getAttribute('href'),cite)
+ await expect(link).toBeVisible({timeout:90000})
+ await expect(editor.locator('.ai-msg-streaming')).toHaveCount(0,{timeout:30000})
+ const href=await link.getAttribute('href')
+ if(liveConfig)assert.ok(href?.startsWith(`filenav:///files/${source.fileId}/revisions/${source.revision}/`))
+ else assert.equal(href,mixedEscapeCite)
  assert.ok(knowledgeCalls.includes('/api/v1/knowledge/search'))
  assert.ok(knowledgeCalls.includes('/api/v1/knowledge/read'))
  if(liveConfig){
   await expect(editor.locator('.ai-msg-assistant').last()).toContainText(marker)
-  await expect(editor.locator('.ai-msg-streaming')).toHaveCount(0,{timeout:30000})
   await expect(editor.locator('.ai-msg-error')).toHaveCount(0)
  }else{
  assert.equal(wire.length,3)
@@ -250,7 +254,13 @@ test('Word searches a starred saved source, reads its actual text and opens the 
   assert.match(body,/Begin <\/w:t>[\s\S]*?<w:t[^>]*>approved<\/w:t>[\s\S]*? report<\/w:t>/)
   assert.doesNotMatch(body,/Draft block 651/)
  }
- await link.click()
+ await Promise.all([
+  page.waitForResponse(response=>{
+   const url=new URL(response.url())
+   return response.ok()&&url.pathname==='/api/v1/knowledge/read'&&url.searchParams.get('path')===sourcePath
+  }),
+  link.click(),
+ ])
  const cited=page.frameLocator(`iframe[data-document-id="${source.fileId}"]`)
  try{
   await expect(cited.locator('.tiptap.doc-page').first()).toContainText(sourceText,{timeout:45000})

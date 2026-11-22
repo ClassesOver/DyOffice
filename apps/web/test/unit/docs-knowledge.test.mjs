@@ -16,6 +16,22 @@ test('Word knowledge bridge uses the bound request and version-pinned corpus for
  await bridge.api.openSourcePath(path)
  assert.deepEqual(opened,[id])
 })
+test('a citation with mixed escaping opens only the matching canonical knowledge source',async t=>{
+ const reads=[]
+ const {bridge,opened}=fixture(t,async url=>{
+  if(url.endsWith('/files'))return [file]
+  reads.push(new URL(url,'https://office.example').searchParams.get('path'))
+  return {text:'content',totalChars:7,offset:0}
+ })
+ await bridge.api.kbList()
+ const citation=path.replace('%E8%B5%84%E6%96%99','%25E8%25B5%2584%25E6%96%99')
+ await assert.rejects(bridge.api.kbRead(citation,0))
+ await assert.rejects(bridge.api.openSourcePath(citation.replace(revision,id)))
+ await assert.rejects(bridge.api.openSourcePath(citation.replace('%99','%90')))
+ await bridge.api.openSourcePath(citation)
+ assert.deepEqual(reads,[path])
+ assert.deepEqual(opened,[id])
+})
 test('unknown/local/external citation paths and a foreign parent never navigate',async t=>{
  let reads=0
  const {bridge,opened}=fixture(t,async url=>url.endsWith('/files')?[file]:(reads++,{text:'x',totalChars:1,offset:0}))
