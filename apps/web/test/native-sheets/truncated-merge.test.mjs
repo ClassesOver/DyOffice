@@ -76,14 +76,27 @@ test('mixed spreadsheet attachments merge original data and survive save and reo
  globalThis.window={desktopApi:bridge.api};t.after(()=>{globalThis.window=priorWindow})
  // Only the canvas is replaced: real merge reads and algorithms issue commands,
  // whose imported additions/cells feed the actual gateway planner and save.
- const additions=[],edits=[],sheets=file.sheets.map(sheet=>({getSheetName:()=>sheet.name})),commands=[]
- const commandService={async executeCommand(id,input){
-  commands.push(id)
-  if(id===InsertSheetCommand.id){additions.push(input.sheet);sheets.push({getSheetName:()=>input.sheet.name});return true}
-  if(id==='sheet.command.set-range-values'){for(const [row,columns] of Object.entries(input.value))for(const [column,cell] of Object.entries(columns))edits.push({sheetId:input.subUnitId,row:Number(row),column:Number(column),writeValue:true,value:cell.v});return true}
-  return true
- }}
- const workbook={getId:()=>file.sessionId,getSheets:()=>sheets},deps={runtime:{univerAPI:{getActiveWorkbook:()=>workbook},univer:{__getInjector:()=>({get:()=>commandService})}},lazyWorkbookRef:{current:null},setMessage(){}}
+ const sheetHandle=sheet=>({getSheetName:()=>sheet.name,getSheetId:()=>sheet.id})
+ const additions=[],edits=[],sheets=file.sheets.map(sheetHandle),commands=[]
+ const initialSheet=sheets[0]
+ let activeSheet=initialSheet
+ const commandService={
+  syncExecuteCommand(id,input){
+   assert.equal(id,InsertSheetCommand.id)
+   commands.push(id);additions.push(input.sheet)
+   activeSheet=sheetHandle(input.sheet);sheets.push(activeSheet)
+   return true
+  },
+  async executeCommand(id,input){
+   commands.push(id)
+   if(id==='sheet.command.set-range-values'){
+    for(const [row,columns] of Object.entries(input.value))for(const [column,cell] of Object.entries(columns))edits.push({sheetId:input.subUnitId,row:Number(row),column:Number(column),writeValue:true,value:cell.v})
+   }
+   return true
+  },
+ }
+ const workbook={getId:()=>file.sessionId,getSheets:()=>sheets,getActiveSheet:()=>activeSheet,setActiveSheet:sheet=>{activeSheet=sheet}}
+ const deps={runtime:{univerAPI:{getActiveWorkbook:()=>workbook},univer:{__getInjector:()=>({get:()=>commandService})}},lazyWorkbookRef:{current:null},setMessage(){}}
  const emptyPath=client.getPathForFile(new File(['\r\n'],'empty.csv'))
  assert.equal((await client.addAttachmentPaths([emptyPath])).accepted.length,1)
  await assert.rejects(()=>mergeAttachedWorkbooks(deps,[path,emptyPath]))
@@ -91,6 +104,7 @@ test('mixed spreadsheet attachments merge original data and survive save and reo
  const skill=createMergeSkill({supportedMergeExtensions:()=>bridge.supportedMergeExtensions,getAttachments:()=>added.accepted,mergePaths:paths=>mergeAttachedWorkbooks(deps,paths)})
  const execution=await skill.executeTool({id:'merge',name:'merge_attached_workbooks',input:{}})
  assert.equal(execution.isError,undefined,execution.output);assert.equal(execution.mutated,true);assert.equal(additions.length,5);assert.ok(commands.includes(InsertSheetCommand.id))
+ assert.equal(activeSheet,initialSheet,'merging must keep the original sheet selected')
  const xlsxEdits=edits.filter(edit=>edit.sheetId===additions[0].id)
  assert.equal(xlsxEdits.length,40);assert.equal(xlsxEdits.at(-1).value,values[39])
  const request={...sheetsSaveRequest(file.sheets[0].id,[]),sessionId:file.sessionId,edits,sheetOps:additions.map(sheet=>({kind:'add-sheet',sheetId:sheet.id,name:sheet.name})),sheetOrder:[...file.sheets.map(sheet=>sheet.id),...additions.map(sheet=>sheet.id)]}
