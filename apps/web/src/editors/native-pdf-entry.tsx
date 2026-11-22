@@ -727,7 +727,7 @@ async function mount(){
      {marks.map(({id,displayRect:box})=><rect key={id} x={box.left} y={box.top} width={box.width} height={box.height}/>)}
     </svg>
    }}
-   hostDownloadUrl={()=>`/api/v1/files/${encodeURIComponent(fileId)}/content?revision=${encodeURIComponent(grant.current().revision)}`}/>
+   hostDownloadUrl={()=>`/api/v1/files/${encodeURIComponent(fileId)}/content?revision=${encodeURIComponent(grant.current().revision)}&download=1`}/>
   {notice&&<div className="native-pdf-assistant-status" role="status">{notice}</div>}
  </LocaleProvider>)
  render()

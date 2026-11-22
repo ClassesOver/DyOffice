@@ -3,6 +3,11 @@ import {appendFileSync} from 'node:fs'
 
 // The default remains Playwright's pinned browser. Managed local verification may
 // name an installed Chromium explicitly; record that version in the evidence.
+export function recordVerifiedOfficeEffect(format, verifiedEffect) {
+  const tracePath = process.env.DYOFFICE_TEST_AI_TOOL_TRACE
+  if (tracePath) appendFileSync(tracePath, JSON.stringify({format, verifiedEffect})+'\n', {mode:0o600})
+}
+
 export async function launchTestBrowser() {
   const browser = await chromium.launch({
     ...(process.env.DYOFFICE_TEST_CHROMIUM_PATH ? {executablePath: process.env.DYOFFICE_TEST_CHROMIUM_PATH} : {}),

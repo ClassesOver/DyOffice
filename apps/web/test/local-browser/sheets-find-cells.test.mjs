@@ -13,7 +13,7 @@ import {buildLocalApp} from '../../server/src/app.ts'
 import {buildSheetsGateway} from '../../server/sheets/build.mjs'
 import {createGlobalConfigService} from '../../server/src/modules/admin/service.ts'
 import {configuredSheetsRuntime} from '../../server/src/modules/sheets/runtime.ts'
-import {launchTestBrowser} from '../helpers/browser.mjs'
+import {launchTestBrowser,recordVerifiedOfficeEffect} from '../helpers/browser.mjs'
 import {fileFixture,importFile} from '../helpers/files.mjs'
 import {password} from '../helpers/identity.mjs'
 import {stubHomeHero} from '../helpers/home-hero.mjs'
@@ -84,6 +84,8 @@ for(const live of [false,true])test((live?'Live model':'Fixture model')+' finds 
   {colId:1,customs:{and:true,filters:[{operator:'greaterThan',val:'0'},{val:'0.25'}]}},
  ])
  const auditCalls=[
+  ['get_workbook_context',{},[/Active sheet:/,/All sheets: Acceptance/,new RegExp('Audit \\(id='+sheetId)]],
+  ['read_range',{sheetId,range:'A1:A2'},[/requested range A1:A2/,/^1\t7$/m,/^2\t11$/m]],
   ['read_cells',{sheetId,addresses:['A1','C1']},[/A1: 7/,/=A1\+A2/]],
   ['aggregate_range',{sheetId,range:'A1:A2'},[/numeric cells: 2, sum: 18/]],
   ['read_formats',{sheetId,range:'B1'},[/B1:.*number format.*%/]],
@@ -194,8 +196,10 @@ for(const live of [false,true])test((live?'Live model':'Fixture model')+' finds 
   await expect(success.or(assistant.locator('.ai-msg-error'))).toBeVisible({timeout:60000})
   assert.equal(await success.isVisible(),true,'Audit range responses: '+JSON.stringify(auditReads))
   await expect(page.getByRole('tab',{name:'Audit',exact:true})).toHaveAttribute('aria-selected','true')
+  for(const [name] of auditCalls)recordVerifiedOfficeEffect('xlsx',name)
  }
  assert.equal((await f.files.openFile(f.alice.token,file.fileId)).file.revision,file.revision)
  assert.deepEqual(await f.files.readFile(f.alice.token,file.fileId,file.revision),original)
+ recordVerifiedOfficeEffect('xlsx','find_cells')
  assert.deepEqual(errors,[])
 })
