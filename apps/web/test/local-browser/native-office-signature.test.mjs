@@ -7,6 +7,7 @@ import { expect } from '@playwright/test'
 import { launchTestBrowser } from '../helpers/browser.mjs'
 import { fileFixture, importFile } from '../helpers/files.mjs'
 import { password } from '../helpers/identity.mjs'
+import { stubHomeHero } from '../helpers/home-hero.mjs'
 import { officeBrowserAsset } from '../helpers/office-browser-assets.mjs'
 import { buildLocalApp } from '../../server/src/app.ts'
 import { configuredSheetsRuntime } from '../../server/src/modules/sheets/runtime.ts'
@@ -31,24 +32,29 @@ test('native Office editors render signed packages read only and download exact 
   await app.listen({port:4476,host:'127.0.0.1'})
   const browser=await launchTestBrowser()
   f.cleanup.unshift(()=>browser.close())
-  const page=await browser.newPage({viewport:{width:1440,height:1050}})
-  await page.goto(origin)
-  await page.getByLabel('用户名',{exact:true}).fill('alice')
-  await page.getByLabel('密码',{exact:true}).fill(password)
-  await page.getByRole('button',{name:'登录',exact:true}).click()
-  await expect(page.locator('.home')).toBeVisible()
+  const login=await browser.newPage()
+  await stubHomeHero(login)
+  await login.goto(origin)
+  await login.getByLabel('用户名',{exact:true}).fill('alice')
+  await login.getByLabel('密码',{exact:true}).fill(password)
+  await login.getByRole('button',{name:'登录',exact:true}).click()
+  await expect(login.locator('.home')).toBeVisible()
+  const storageState=await login.context().storageState()
+  await login.close()
   for(const format of ['docx','xlsx','pptx']){
+    const page=await browser.newPage({storageState,viewport:{width:1440,height:1050}})
     const bytes=await readFile(new URL(`../fixtures/signed-office/hello-world-signed.${format}`,import.meta.url))
     const {file}=await importFile(f,f.alice.token,bytes,`signed.${format}`)
     await page.goto(`${origin}/native-${format}/?fileId=${file.fileId}`)
     await expect(page.locator('html')).toHaveAttribute('data-document-loading','ready',{timeout:30000})
     const notice=page.locator('.document-notification').getByText('Signed file opened read only',{exact:true})
-    if(!await notice.isVisible()){
+    await expect(async()=>{
+      if(await notice.isVisible())return
       const notifications=page.getByRole('button',{name:/^Notifications \(/})
       if(await notifications.getAttribute('aria-expanded')==='true')await notifications.click()
       await notifications.click()
-    }
-    await expect(notice).toBeVisible()
+      await expect(notice,format+' signature notification').toBeVisible({timeout:1000})
+    }).toPass({timeout:15000})
     await expect(page.getByRole('button',{name:'Take over editing',exact:true})).toHaveCount(0)
     if(format==='docx'){
       const editor=page.locator('.tiptap.doc-page').first()
@@ -61,7 +67,14 @@ test('native Office editors render signed packages read only and download exact 
     await page.getByRole('button',{name:'File',exact:true}).click()
     await expect(page.locator('.file-menu').getByRole('button',{name:'Save and download',exact:true})).toBeDisabled()
     const [download]=await Promise.all([page.waitForEvent('download'),page.getByRole('link',{name:'Download saved version',exact:true}).click()])
+    const failure=await download.failure()
+    if(failure){
+      const direct=await page.request.get(download.url())
+      t.diagnostic(format+' signed file response: '+direct.status()+' '+direct.headers()['content-type']+' / '+(await direct.body()).length+' bytes')
+    }
+    assert.equal(failure,null,format+' signed original download')
     assert.deepEqual(await readFile(await download.path()),bytes)
     assert.equal((await f.files.openFile(f.alice.token,file.fileId)).file.revision,file.revision)
+    await page.close()
   }
 })
