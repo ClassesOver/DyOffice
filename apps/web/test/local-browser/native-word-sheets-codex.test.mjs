@@ -61,7 +61,7 @@ for(const format of ['docx','xlsx']){
   await ready()
   await expect(composer.or(rail)).toBeVisible({timeout:30000})
   if(await rail.isVisible())await rail.click()
-  await composer.fill(`用 delegate_agent_task 委派给默认执行器一次：让它实际运行代码算 143 + 298，并且在任务工作区写 total.json，格式为 {"total": 数值}。不要直接心算。收到结果后，${word?'用 insert_content 在当前 Word 文末插入一段，正文为 Verified total: 加上文件给出的数字。':'先用 get_workbook_context 确认工作表 ID，再用 propose_operations 把文件给出的数字写入当前工作表 H2 单元格，不改其他单元格。'} 写入成功后单独回复一行 ${marker}，我会手动保存。`)
+  await composer.fill(`用 delegate_agent_task 委派给默认执行器一次：让它实际运行代码算 143 + 298，并且在任务工作区写 total.json，格式为 {"total": 数值}。不要直接心算。这是独立算术，不使用工作区数据源或查询结果，委派时省略 dataInputs。收到结果后，${word?'用 insert_content 在当前 Word 文末插入一段，正文为 Verified total: 加上文件给出的数字。':'先用 get_workbook_context 确认工作表 ID，再用 propose_operations 把文件给出的数字写入当前工作表 H2 单元格，不改其他单元格。'} 写入成功后单独回复一行 ${marker}，我会手动保存。`)
   await panel.getByRole('button',{name:'发送',exact:true}).click()
   try{
    await expect(panel.getByText(marker,{exact:true})).toBeVisible({timeout:240000})
@@ -72,6 +72,7 @@ for(const format of ['docx','xlsx']){
    throw error
   }
   assert.deepEqual(tasks.map(task=>task.status),[200])
+  assert.equal(tasks[0].requestedData,false)
   await expect(panel.locator('.assistant-task-message:visible')).toHaveAttribute('data-team-task','harness:'+tasks[0].id)
   const results=turns.at(-1).messages.flatMap(message=>message.results??[])
   const delivery=JSON.parse(results.find(result=>result.name==='delegate_agent_task'&&!result.isError).output)

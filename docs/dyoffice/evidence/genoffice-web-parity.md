@@ -57,6 +57,10 @@ Web Word 知识库把文件名保留为来源标签，模型收到的引用路�
 
 使用 `4f0ad52c` 的四种原生编辑器和同一真实模型复验写回。首轮 PDF、PPTX 和 XLSX 通过，Word 在委派执行阶段报 `ENOENT` 并失败。同一产品构建单独重跑 Word 通过，首次错误的具体缺失路径未记录。Excel 保存重开后 H2 为 441，Word 重跑后正文为 441，PDF 原文和现有便笺均为 42，PPTX 第二页重做后第一页 XML 字节一致。[Word 与 Excel 写回](../../../apps/web/test/local-browser/native-word-sheets-codex.test.mjs) [PowerPoint 写回](../../../apps/web/test/local-browser/native-slides-generate.test.mjs) [PDF 写回](../../../apps/web/test/local-browser/native-pdf-harness.test.mjs)
 
+后续复现了带数据授权的委派在缺少 `harness-data.mjs` 时于 `realpath` 报 `ENOENT`。当前 SaaS 构建会生成该文件，本机完成了带此步骤的全量构建。缺件时界面收到明确失败，服务端日志保留专用错误码，路径不进入客户端响应。实际安装的 Codex 通过了普通执行和受授权数据邮箱测试，独立 Harness 的 PostgreSQL 集成核对了一次源查询、冻结结果和持久交付回执。真实模型曾在普通算术请求中提交 `dataInputs`，因此工具定义明确了普通文本文件与已提交分析产物两种交付方式。使用新版定义复跑 Word 和 Excel，两项均省略该字段，返回代码执行产生的 `total.json`，保存重开后在 Word 正文和 Excel H2 读回 441。[Harness 回归](../../../apps/web/test/unit/coding-harness.test.mjs) [数据交付回归](../../../apps/web/test/local-integration/harness-data-flow.test.mjs)
+
+`4f0ad52c` 的 CI 有两项相关回归失败。Word 宿主用例仍期待旧引用格式，已更新并通过 17 项宿主定向检查。PDF 深色界面勾选在收到助手回复前超时，定向复跑通过并核对下载原件、勾选位置、相邻页像素及重开。本次保留该用例的响应与工具诊断。另有 `a982cdea` 的外部执行器取消用例未观测到预期的进程消失。夹具改为原子发布 PID，并在短时限内核实进程退出及任务的未知结果状态，PostgreSQL 定向复跑通过。[Word 与 PDF 的 CI](https://github.com/ClassesOver/DyOffice/actions/runs/45027900231) [取消用例的 CI](https://github.com/ClassesOver/DyOffice/actions/runs/45027212874)
+
 `9922e244` 上补测了 XLSX 的中文数据分析任务。`gpt-6-sol` 从临时 PostgreSQL 的合成订单计算 2026 年 1 至 6 月实付金额，并调用 `insert_data_result`。6 个月的标签和数值均与数据库真值一致，7 项断言全部通过。该次试验耗时 14.7 秒，调用工具 5 次，输入 9,655 tokens，输出 328 tokens。评估将表格交给内存文档目标，浏览器保存和重开由独立用例覆盖。[真实模型数据分析评估](../../../tools/dyoffice/analysis-eval/README.md)
 
 同一提交的 DOCX 渠道汇总评估通过 6 项断言。模型调用 `insert_data_result`，三个渠道的订单量、金额和来源标记符合真值，耗时 18.1 秒，调用工具 7 次。评估接收表格的目标为内存文档。[真实模型数据分析评估](../../../tools/dyoffice/analysis-eval/README.md)
