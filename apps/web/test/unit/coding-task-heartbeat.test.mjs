@@ -27,7 +27,7 @@ function harness(renewResults) {
 }
 
 test('one failed lease renewal is retried instead of killing a healthy Harness task', async () => {
-  mock.timers.enable({ apis: ['setInterval', 'Date'] })
+  mock.timers.enable({ apis: ['setInterval', 'setTimeout', 'Date'] })
   try {
     const h = harness([new Error('connection reset'), true, true, true])
     await flush()
@@ -39,7 +39,7 @@ test('one failed lease renewal is retried instead of killing a healthy Harness t
 })
 
 test('renewals that keep failing stop the task before the 30 s lease can lapse unnoticed', async () => {
-  mock.timers.enable({ apis: ['setInterval', 'Date'] })
+  mock.timers.enable({ apis: ['setInterval', 'setTimeout', 'Date'] })
   try {
     const h = harness([new Error('db down')])
     await flush()
@@ -53,7 +53,7 @@ test('renewals that keep failing stop the task before the 30 s lease can lapse u
 })
 
 test('a lost lease (renew returns false) still stops the task at once', async () => {
-  mock.timers.enable({ apis: ['setInterval', 'Date'] })
+  mock.timers.enable({ apis: ['setInterval', 'setTimeout', 'Date'] })
   try {
     const h = harness([false])
     await flush()
@@ -61,4 +61,21 @@ test('a lost lease (renew returns false) still stops the task at once', async ()
     assert.equal(h.aborted(), true)
     await h.running.catch(() => {})
   } finally { mock.timers.reset() }
+})
+
+test('a stalled renewal cannot carry execution past the last confirmed lease', async()=>{
+  const {maintainTaskLease}=await import('../../server/src/modules/tasks/lease.ts')
+  mock.timers.enable({apis:['setInterval','setTimeout','Date']})
+  try{
+    const controller=new AbortController()
+    let release, renewals=0
+    const stop=maintainTaskLease(controller,5000,()=>{renewals++;return new Promise(resolve=>{release=resolve})})
+    mock.timers.tick(5000);await flush()
+    mock.timers.tick(19_999);await flush()
+    assert.equal(controller.signal.aborted,false)
+    mock.timers.tick(1);await flush()
+    assert.equal(controller.signal.aborted,true)
+    assert.equal(renewals,1)
+    release(true);await stop()
+  }finally{mock.timers.reset()}
 })

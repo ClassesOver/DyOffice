@@ -1,0 +1,27 @@
+// Both stores issue 30-second leases. Stop execution before an unconfirmed lease expires.
+export function maintainTaskLease(controller: AbortController, intervalMs: number, renew: () => Promise<boolean>) {
+  let stopped = false
+  let inFlight: Promise<void> | undefined
+  const deadline = () => setTimeout(() => controller.abort(), 25_000)
+  let expiry = deadline()
+  expiry.unref()
+  const timer = setInterval(() => {
+    if (inFlight || controller.signal.aborted || stopped) return
+    inFlight = Promise.resolve().then(renew).then(live => {
+      if (stopped || controller.signal.aborted) return
+      if (!live) { controller.abort(); return }
+      clearTimeout(expiry)
+      expiry = deadline()
+      expiry.unref()
+    }).catch(() => {
+      // The next tick retries transport errors; the independent deadline covers hung renewals.
+    }).finally(() => { inFlight = undefined })
+  }, intervalMs)
+  timer.unref()
+  return async () => {
+    stopped = true
+    clearTimeout(expiry)
+    clearInterval(timer)
+    await inFlight
+  }
+}

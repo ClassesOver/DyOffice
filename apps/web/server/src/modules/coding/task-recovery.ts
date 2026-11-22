@@ -1,3 +1,4 @@
+import {maintainTaskLease} from '../tasks/lease.ts'
 import type {AdmitHarnessContinuation,TurnRunner} from '../providers/routes.ts'
 import type {TurnEvent,TurnIdentity} from '../providers/turns.ts'
 import {authError} from '../auth/sessions.ts'
@@ -5,7 +6,7 @@ import type {HarnessCheckpoint} from '../../../../../../packages/agent-core/src/
 import {interruptedFailure,type CodingTaskRecoveryStore,type Continuation,type TaskEvent,type TaskState} from './task-recovery-store.ts'
 
 /** Renewal cadence and the point after which a 30 s lease (task-recovery-store) may have lapsed. */
-const HEARTBEAT_MS=10_000,HEARTBEAT_GIVE_UP_MS=25_000
+const HEARTBEAT_MS=10_000
 /** How often buffered public events are written for readers on other API instances. */
 const EVENT_FLUSH_MS=500
 
@@ -91,20 +92,7 @@ export function createCodingTaskRecovery(turns:TurnRunner,identity:(token:string
         try{await store?.start(token,documentId,turnId,{modelId,instruction},continuation,
           signal?AbortSignal.any([entry.controller.signal,signal]):entry.controller.signal)}
         catch(error){entries.delete(taskKey);complete=true;wake();throw error}
-        let renewing:Promise<void>|undefined,leaseSince=Date.now()
-        const heartbeat=store&&setInterval(()=>{
-          if(renewing||entry.controller.signal.aborted)return
-          const {activity,progress}=entry
-          renewing=store.renew(token,documentId,turnId,{modelId,instruction,activity,progress}).then(live=>{
-            // false: the lease is gone or cancellation was requested.
-            if(!live)entry.controller.abort();else leaseSince=Date.now()
-          },()=>{
-            // A transient store error is retried on the next tick; stop only once
-            // the last confirmed lease could already have expired.
-            if(Date.now()-leaseSince>=HEARTBEAT_GIVE_UP_MS)entry.controller.abort()
-          }).finally(()=>{renewing=undefined})
-        },HEARTBEAT_MS)
-        heartbeat&&heartbeat.unref()
+        const stopLease=store&&maintainTaskLease(entry.controller,HEARTBEAT_MS,()=>store.renew(token,documentId,turnId,{modelId,instruction,activity:entry.activity,progress:entry.progress}))
         // Public events go to the shared event log in small batches. Losing a
         // batch only loses live detail: state and results still come from the
         // recovery row, so append failures never stop the task.
@@ -143,10 +131,10 @@ export function createCodingTaskRecovery(turns:TurnRunner,identity:(token:string
           entry.failure=entry.state==='cancel_requested'?'Harness cancellation requested. Check for saved delivery.':entry.controller.signal.aborted?interruptedFailure:genericFailure
           if(observer&&!signal?.aborted){queue.push({type:'error',message:entry.failure});wake()}
         }finally{
-          if(heartbeat)clearInterval(heartbeat)
+          const leaseStopped=stopLease?.()
           if(publisher)clearInterval(publisher)
           await flushing;await flush()
-          await renewing
+          await leaseStopped
           if(entry.state==='running'||entry.state==='cancel_requested')entry.state='unknown_outcome'
           if(entry.state!=='succeeded')delete entry.continuation
           if(store){

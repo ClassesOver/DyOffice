@@ -162,8 +162,10 @@ export function createAssistantChannelService({transactions,credentialKey,backgr
   if(!row)throw fail(404);return row
  }
  async function state(c:PoolClient,p:BusinessPrincipal,id:string,row:Record<string,any>,value:string) {
-  await c.query('UPDATE assistant_tasks SET state=$4,cancel_requested=cancel_requested OR $5 WHERE deployment_id=$1 AND owner_id=$2 AND task_id=$3',[...scope(p),row.task_id,value,value==='cancel_requested'])
-  row.state=value;await event(c,p,id,'task',taskDto(row),row.recipient,row.task_id)
+  const updated=(await c.query('UPDATE assistant_tasks SET state=$4,cancel_requested=cancel_requested OR $5 WHERE deployment_id=$1 AND owner_id=$2 AND task_id=$3 AND state=$6 AND conversation_id=$7 RETURNING *',[...scope(p),row.task_id,value,value==='cancel_requested',row.state,id])).rows[0]
+  if(!updated)throw fail(409)
+  Object.assign(row,updated)
+  await event(c,p,id,'task',taskDto(updated),updated.recipient,updated.task_id)
  }
  async function reapDisconnected(c:PoolClient,p:BusinessPrincipal,id:string) {
   // At most four members and 32 active tasks; reuse requests/snapshots instead
@@ -663,7 +665,8 @@ export function createAssistantChannelService({transactions,credentialKey,backgr
     const busy=(await c.query("SELECT 1 FROM assistant_tasks WHERE deployment_id=$1 AND owner_id=$2 AND conversation_id=$3 AND recipient=$4 AND state IN ('running','cancel_requested')",[...scope(p),conversationId,actor.id])).rowCount
     if(busy)throw fail(409)
     const claimId=randomUUID()
-    const claimed=(await c.query("UPDATE assistant_tasks SET state='running',claim_id=$4,connection_id=$5,connection_epoch=$6 WHERE deployment_id=$1 AND owner_id=$2 AND task_id=$3 RETURNING *",[...scope(p),row.task_id,claimId,connectionId,epoch])).rows[0]
+    const claimed=(await c.query("UPDATE assistant_tasks SET state='running',claim_id=$4,connection_id=$5,connection_epoch=$6 WHERE deployment_id=$1 AND owner_id=$2 AND task_id=$3 AND state='queued' RETURNING *",[...scope(p),row.task_id,claimId,connectionId,epoch])).rows[0]
+    if(!claimed)throw fail(409)
     await event(c,p,conversationId,'task',taskDto(claimed),actor.id,row.task_id)
     if(requestId)await c.query('INSERT INTO assistant_requests(deployment_id,owner_id,conversation_id,actor,request_id,params_hash,receipt) VALUES($1,$2,$3,$4,$5,$6,$7)',[...scope(p),conversationId,actor.id,requestId,paramsHash,JSON.stringify({taskId:row.task_id,claimId,connectionEpoch:epoch})])
     return claimDto(c,p,conversationId,claimed)
