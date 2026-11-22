@@ -1,6 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import {readFile} from 'node:fs/promises'
+import {createServer} from 'node:http'
 import {expect} from '@playwright/test'
 import JSZip from 'jszip'
 import {JSDOM} from 'jsdom'
@@ -13,7 +14,13 @@ import {password} from '../helpers/identity.mjs'
 
 const nativeSlidesDirectory=process.env.DYOFFICE_TEST_SLIDES_DIST
 test('PPTX image replacement uses the current attachment, with queued images available only after send',{skip:!nativeSlidesDirectory,timeout:90000},async t=>{
- const port=43846,origin='http://localhost:'+port,f=await fileFixture(t,{origin,buildApp:false})
+ const server=createServer()
+ t.after(async()=>{
+  server.closeAllConnections()
+  if(server.listening)await new Promise(resolve=>server.close(resolve))
+ })
+ await new Promise((resolve,reject)=>{server.once('error',reject);server.listen(0,'127.0.0.1',resolve)})
+ const origin='http://localhost:'+server.address().port,f=await fileFixture(t,{origin,buildApp:false})
  const original=await readFile(new URL('../fixtures/slides/acceptance.pptx',import.meta.url))
  const {file}=await importFile(f,f.alice.token,original,'image-attachment.pptx')
  await f.preferences.update(f.alice.token,{language:'en',showAssistant:true,autoSave:false})
@@ -23,7 +30,8 @@ test('PPTX image replacement uses the current attachment, with queued images ava
   slidesHost:{openSession(input){return openIsolatedPptxSession(input,{timeoutMs:60000,unsafeTestOnly:true})}},
  })
  f.cleanup.unshift(()=>app.close())
- await app.listen({port,host:'127.0.0.1'})
+ await app.ready()
+ server.on('request',app.routing)
  const browser=await launchTestBrowser();f.cleanup.unshift(()=>browser.close())
  const page=await browser.newPage({viewport:{width:1360,height:900}})
  const {csrfToken}=await (await page.request.get(origin+'/api/v1/auth/csrf')).json()
