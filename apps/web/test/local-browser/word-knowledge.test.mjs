@@ -28,10 +28,40 @@ test('Word searches a starred saved source, reads its actual text and opens the 
  const sourceText='Reference evidence: '+marker
  const sourceBytes=await document(sourceText),source=(await importFile(f,f.alice.token,sourceBytes,'参考资料.docx')).file
  const draftBytes=await document('Working document remains unchanged'),draft=(await importFile(f,f.alice.token,draftBytes,'工作文档.docx')).file
+ if(!liveConfig)await f.preferences.update(f.alice.token,{autoSave:false})
  await createWorkspaceService(f.transactions).setStar(f.alice.token,source.fileId,{starred:true})
  const sourcePath=`/files/${source.fileId}/revisions/${source.revision}/${encodeURIComponent('参考资料.docx')}`,cite=kbCiteHref(sourcePath),wire=[];let turn=0
  if(!liveConfig){const network=mockProviderNetwork(t,()=>{
-  wire.push(JSON.parse(network.wire.toString()))
+  const request=JSON.parse(network.wire.toString())
+  const user=request.messages.findLastIndex(message=>message.role==='user')
+  const content=request.messages[user]?.content
+  const prompt=typeof content==='string'?content:content?.map(part=>part.text??'').join(' ')
+  if(prompt?.includes('验证脚注与尾注')){
+   const results=request.messages.slice(user+1).filter(message=>message.role==='tool')
+   const outputs=results.map(({content})=>JSON.parse(content))
+   assert.ok(outputs.every(({isError})=>isError!==true))
+   const originalId=outputs[0]?.output.match(/Inserted footnote (\d+)/)?.[1]
+   const temporaryId=outputs[2]?.output.match(/Inserted footnote (\d+)/)?.[1]
+   const calls=[
+    ['insert_footnote',{blockIndex:0,afterText:'Working document',text:'Intake draft'}],
+    ['insert_endnote',{blockIndex:0,text:'Release source'}],
+    ['insert_footnote',{blockIndex:0,afterText:'remains',text:'Temporary note'}],
+    ['edit_note',{kind:'footnote',id:originalId,find:'draft',replace:'final'}],
+    ['delete_note',{kind:'footnote',id:temporaryId}],
+    ['read_notes',{}],
+   ]
+   const action=calls[results.length]
+   if(results.length>=3){assert.ok(originalId);assert.ok(temporaryId);assert.notEqual(originalId,temporaryId)}
+   if(!action){
+    const {output}=outputs.at(-1)
+    assert.match(output,/Intake final/)
+    assert.match(output,/Release source/)
+    assert.doesNotMatch(output,/Temporary note/)
+   }
+   const delta=action?{tool_calls:[{index:0,id:'notes-'+results.length,type:'function',function:{name:action[0],arguments:JSON.stringify(action[1])}}]}:{content:'已验证脚注与尾注'}
+   return Readable.from([Buffer.from(`data: ${JSON.stringify({choices:[{delta,finish_reason:action?'tool_calls':'stop'}]})}\n\ndata: [DONE]\n\n`)])
+  }
+  wire.push(request)
   const step=turn++,tool=step<2,delta=step===0?{tool_calls:[{index:0,id:'kb-search',type:'function',function:{name:'search_knowledge_base',arguments:JSON.stringify({query:'ORCHID-KB-6419'})}}]}:step===1?{tool_calls:[{index:0,id:'kb-read',type:'function',function:{name:'read_knowledge_file',arguments:JSON.stringify({index:0,offset:0})}}]}:{content:`Confirmed reference ORCHID-KB-6419 [参考资料.docx](${cite})`}
   return Readable.from([Buffer.from(`data: ${JSON.stringify({choices:[{delta}]})}\n\ndata: ${JSON.stringify({choices:[{delta:{},finish_reason:tool?'tool_calls':'stop'}]})}\n\ndata: [DONE]\n\n`)])
  })}
@@ -80,6 +110,24 @@ test('Word searches a starred saved source, reads its actual text and opens the 
   assert.equal(await link.evaluate(node=>getComputedStyle(node).textDecorationLine),'underline')
   await editor.locator('.ai-panel').screenshot({path:`test-results/office-dock-unified/docx-citation-${theme}.png`,animations:'disabled'})
  }
+ }
+ if(!liveConfig){
+  await composer.fill('验证脚注与尾注');await composer.press('Enter')
+  await expect(editor.locator('.ai-msg-assistant').last()).toContainText('已验证脚注与尾注',{timeout:45000})
+  await expect(editor.locator('.ai-msg-streaming')).toHaveCount(0)
+  const head=async()=>(await f.files.openFile(f.alice.token,draft.fileId)).file.revision
+  assert.equal(await head(),draft.revision)
+  await page.keyboard.press('Control+s')
+  await expect.poll(head,{timeout:30000}).not.toBe(draft.revision)
+  const saved=await JSZip.loadAsync(await f.files.readFile(f.alice.token,draft.fileId,await head()))
+  const footnotes=await saved.file('word/footnotes.xml').async('string')
+  const endnotes=await saved.file('word/endnotes.xml').async('string')
+  const body=await saved.file('word/document.xml').async('string')
+  assert.match(footnotes,/Intake final/)
+  assert.doesNotMatch(footnotes,/Intake draft|Temporary note/)
+  assert.match(endnotes,/Release source/)
+  assert.equal((body.match(/<w:footnoteReference\b/g)??[]).length,1)
+  assert.equal((body.match(/<w:endnoteReference\b/g)??[]).length,1)
  }
  await link.click()
  const cited=page.frameLocator(`iframe[data-document-id="${source.fileId}"]`)
