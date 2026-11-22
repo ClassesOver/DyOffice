@@ -13,6 +13,7 @@ import {
 } from './preview-canvas-snapshot'
 import type { Editor } from '@tiptap/core'
 import { history } from '@tiptap/pm/history'
+import { Selection } from '@tiptap/pm/state'
 import { suggestFileName } from '@genoffice/ui'
 import { modelTextOf, type RedactableNode } from './ai/redact-view'
 import {
@@ -486,12 +487,16 @@ function focusDocumentStart(editor: Editor): void {
     // behind the opening screen the editor is display:none and DOM focus
     // silently drops — wait for it to be laid out, then focus once
     if (dom.isConnected && dom.offsetParent !== null) {
-      editor.commands.focus('start', { scrollIntoView: false })
+      const { view, state } = editor
+      const start = Selection.atStart(state.doc)
+      if (!state.selection.eq(start)) view.dispatch(state.tr.setSelection(start))
+      // Focus in the guarded frame so a deferred command cannot steal the composer's focus.
+      if (!document.activeElement || document.activeElement === document.body) view.focus()
       if (document.activeElement !== document.body) return
     }
     if (performance.now() - startedAt < 10_000) requestAnimationFrame(attempt)
   }
-  attempt()
+  requestAnimationFrame(attempt)
 }
 
 /** bumped when a document replacement starts; a slower one still parsing must not land */

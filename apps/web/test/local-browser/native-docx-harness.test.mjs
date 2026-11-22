@@ -5,7 +5,7 @@ import {expect} from '@playwright/test'
 import JSZip from 'jszip'
 import {buildLocalApp} from '../../server/src/app.ts'
 import {createGlobalConfigService} from '../../server/src/modules/admin/service.ts'
-import {launchTestBrowser} from '../helpers/browser.mjs'
+import {launchTestBrowser,recordVerifiedOfficeEffect} from '../helpers/browser.mjs'
 import {docxBytes,fileFixture,importFile} from '../helpers/files.mjs'
 import {password} from '../helpers/identity.mjs'
 import {mockProviderNetwork} from '../helpers/provider-network.mjs'
@@ -123,4 +123,5 @@ test('a new Word tab without stored task IDs resumes the original Harness turn o
   await expect(assistant.getByText(reply,{exact:true})).toBeVisible()
   await expect(assistant.getByText(instruction,{exact:true})).toHaveCount(1)
   assert.equal(claims.length,1)
+ recordVerifiedOfficeEffect('docx','insert_content')
 })

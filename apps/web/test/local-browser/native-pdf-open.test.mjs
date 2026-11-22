@@ -4,7 +4,7 @@ import {execFileSync} from 'node:child_process'
 import {PDFDocument,PDFName,PDFString,rgb} from 'pdf-lib'
 import {expect} from '@playwright/test'
 import {fileFixture,importFile} from '../helpers/files.mjs'
-import {launchTestBrowser} from '../helpers/browser.mjs'
+import {launchTestBrowser,recordVerifiedOfficeEffect} from '../helpers/browser.mjs'
 import {password} from '../helpers/identity.mjs'
 import {isHomeHeroRequest,stubHomeHero} from '../helpers/home-hero.mjs'
 import {buildLocalApp} from '../../server/src/app.ts'
@@ -21,6 +21,62 @@ import {renderPdfPages} from '../../server/src/pdf/raster.mjs'
 
 const directory=process.env.DYOFFICE_TEST_NATIVE_PDF_DIST
 const liveImageConfig=process.env.DYOFFICE_LIVE_PDF_IMAGE_CONFIG
+test('native PDF assistant saves a rotation and reopens the new revision',{skip:!directory,timeout:60000},async t=>{
+ const origin='http://localhost:4274',f=await fileFixture(t,{origin,buildApp:false})
+ const fixture=await PDFDocument.create()
+ for(let index=0;index<3;index++)fixture.addPage([240,300]).drawText('Page '+(index+1),{x:20,y:200})
+ const original=Buffer.from(await fixture.save())
+ const {file}=await importFile(f,f.alice.token,original,'rotation.pdf')
+ const app=await buildLocalApp({db:f.db,businessPool:f.businessPool,passwords:f.passwords,deploymentId:f.deploymentId,
+  origin,csrfKey:f.csrfKey,objectStore:f.objects,nativePdfDirectory:directory,
+  localShellDirectory:process.env.DYOFFICE_TEST_LOCAL_SHELL_DIRECTORY??fileURLToPath(new URL('../../dist-local-shell',import.meta.url))})
+ f.cleanup.unshift(()=>app.close())
+ await app.listen({port:4274,host:'127.0.0.1'})
+ const browser=await launchTestBrowser();f.cleanup.unshift(()=>browser.close())
+ const page=await browser.newPage()
+ await stubHomeHero(page)
+ await page.route('**/api/v1/ai/catalog',route=>route.fulfill({json:{entries:[{id:'mock',label:'Rotation fixture model'}],defaultId:'mock'}}))
+ const calls=[]
+ await page.route('**/api/v1/ai/turns',route=>{
+  if(isHomeHeroRequest(route.request()))return route.fallback()
+  calls.push(route.request().postDataJSON().request)
+  const body=calls.length===1
+   ? 'event: tool_call\ndata: '+JSON.stringify({id:'native-rotation',name:'apply_ops',input:{ops:[{op:'rotatePages',pages:[2],dir:90}]}})
+   : 'event: delta\ndata: {"text":"Rotation queued"}'
+  return route.fulfill({contentType:'text/event-stream',body:body+'\n\nevent: done\ndata: {}\n\n'})
+ })
+ await page.goto(origin)
+ await page.getByLabel('用户名',{exact:true}).fill('alice')
+ await page.getByLabel('密码',{exact:true}).fill(password)
+ await page.getByRole('button',{name:'登录',exact:true}).click()
+ await expect(page.locator('.home')).toBeVisible()
+ await page.goto(origin+'/native-pdf/?fileId='+file.fileId)
+ const ready=page.locator('html')
+ await expect(ready).toHaveAttribute('data-document-loading','ready')
+ await page.getByRole('button',{name:'AI 助手',exact:true}).click()
+ const assistant=page.locator('.shared-editor-assistant')
+ await assistant.getByRole('textbox',{name:'消息'}).fill('把第二页顺时针旋转九十度')
+ await assistant.getByRole('button',{name:'发送',exact:true}).click()
+ await expect(assistant.getByText('Rotation queued',{exact:true})).toBeVisible({timeout:20000})
+ assert.ok(calls[0].tools.some(tool=>tool.name==='apply_ops'))
+ assert.ok(!calls[0].tools.some(tool=>tool.name==='rotate_pages'))
+ const results=calls[1].messages.filter(message=>message.role==='tool').flatMap(message=>message.results)
+ assert.ok(results.some(result=>result.name==='apply_ops'&&!result.isError))
+ const head=async()=>(await f.files.openFile(f.alice.token,file.fileId)).file.revision
+ assert.equal(await head(),file.revision)
+ await page.locator('.ribbon-tabs .qa-btn').first().click()
+ await expect.poll(head,{timeout:15000}).not.toBe(file.revision)
+ const revision=await head()
+ const persisted=await PDFDocument.load(await f.files.readFile(f.alice.token,file.fileId,revision))
+ assert.deepEqual(persisted.getPages().map(saved=>saved.getRotation().angle),[0,90,0])
+ assert.deepEqual(await f.files.readFile(f.alice.token,file.fileId,file.revision),original)
+ const reopened=page.waitForResponse(response=>response.ok()&&response.url().endsWith('/content?revision='+revision))
+ await page.reload()
+ await reopened
+ await expect(ready).toHaveAttribute('data-document-loading','ready')
+ recordVerifiedOfficeEffect('pdf','apply_ops.rotatePages')
+})
+
 test('native PDF OCR reads a real scan and saves a searchable layer without changing pixels',{skip:!directory||process.env.DYOFFICE_TEST_PDF_OCR!=='1',timeout:60000},async t=>{
  const origin='http://localhost:4269',f=await fileFixture(t,{origin,buildApp:false})
  const source=await PDFDocument.create()
@@ -146,18 +202,30 @@ test('native PDF form marks address visible pages after an unsaved reorder',{ski
   if(step===0)await expect(page.locator('.pdf-thumb').nth(1)).toHaveClass(/pdf-thumb-active/)
  }
  for(const result of results)assert.ok(!result.isError,result.output)
+ assert.equal(results[0].name,'goto_page')
  assert.match(results[0].output,/Navigated to page 2/)
+ recordVerifiedOfficeEffect('pdf','goto_page')
  assert.match(results[2].output,/OriginalSecond/)
  const head=async()=>(await f.files.openFile(f.alice.token,file.fileId)).file.revision
  assert.equal(await head(),file.revision)
  await page.getByRole('button',{name:'保存',exact:true}).click()
  await expect.poll(head,{timeout:15000}).not.toBe(file.revision)
- const saved=await f.files.readFile(f.alice.token,file.fileId,await head())
+ const revision=await head()
+ const saved=await f.files.readFile(f.alice.token,file.fileId,revision)
  const result=(await PDFDocument.load(saved)).getForm()
  assert.equal(result.getCheckBox('OriginalFirst').isChecked(),false)
  assert.equal(result.getCheckBox('OriginalSecond').isChecked(),true)
- assert.ok((await readPdfLeafObjects(saved)).some(item=>item.page===0&&item.text==='OriginalSecond'))
+ const leaves=await readPdfLeafObjects(saved)
+ assert.deepEqual(leaves.filter(item=>/^Original(First|Second)$/.test(item.text??'')).map(item=>[item.page,item.text]),[
+  [0,'OriginalSecond'],[1,'OriginalFirst'],
+ ])
  assert.deepEqual(await f.files.readFile(f.alice.token,file.fileId,file.revision),bytes)
+ const reopened=page.waitForResponse(response=>response.ok()&&response.url().endsWith('/content?revision='+revision))
+ await page.reload()
+ await reopened
+ await expect(page.locator('html')).toHaveAttribute('data-document-loading','ready')
+ recordVerifiedOfficeEffect('pdf','apply_ops.setPageOrder')
+ recordVerifiedOfficeEffect('pdf','add_form_mark')
 })
 
 test('native PDF model receives visible page and selection context, and cites navigable pages',{skip:!directory,timeout:60000},async t=>{
@@ -319,7 +387,7 @@ for (const theme of ['light','dark']) test(`native PDF saves and reopens an assi
  assert.equal(commits,1)
 })
 
-test('GenOffice PDF assistant and ribbon edits preview and save, including recovery from lost receipts'+(liveImageConfig?' with real model image editing':''),{skip:!directory,timeout:liveImageConfig?210000:120000},async t=>{
+test('GenOffice PDF assistant and ribbon edits preview and save, including recovery from lost receipts'+(liveImageConfig?' with real model image editing':''),{skip:!directory,timeout:liveImageConfig?210000:180000},async t=>{
  const origin='http://localhost:4239',f=await fileFixture(t,{origin,buildApp:false})
  const doc=await PDFDocument.create()
  doc.addPage([300,240]).drawText('Native first page',{x:24,y:144,color:rgb(0,.2,.6)})
@@ -488,6 +556,7 @@ test('GenOffice PDF assistant and ribbon edits preview and save, including recov
   {tool_calls:[{index:0,id:'reply-note',type:'function',function:{name:'reply_note',arguments:JSON.stringify({page:2,note_id:noteId,text:'Assistant reply'})}}]},
   {tool_calls:[{index:0,id:'add-note',type:'function',function:{name:'add_note',arguments:'{"page":2,"text":"Discardable note","x":100,"y":100}'}}]},
   {tool_calls:[{index:0,id:'delete-note',type:'function',function:{name:'delete_note',arguments:'{}'}}]},
+  {tool_calls:[{index:0,id:'keep-note',type:'function',function:{name:'add_note',arguments:'{"page":2,"text":"New review note retained","x":130,"y":100}'}}]},
   {tool_calls:[{index:0,id:'underline',type:'function',function:{name:'markup_text',arguments:'{"page":2,"text":"Native second page","type":"underline"}'}}]},
   {tool_calls:[{index:0,id:'delete-mark',type:'function',function:{name:'delete_markup',arguments:'{"page":2,"type":"underline"}'}}]},
   {tool_calls:[{index:0,id:'fields',type:'function',function:{name:'list_form_fields',arguments:'{}'}}]},
@@ -548,19 +617,40 @@ test('GenOffice PDF assistant and ribbon edits preview and save, including recov
   assert.ok(JSON.parse(advertised).request.tools.some(tool=>tool.name===name),name)
  }
  await expect(assistant.getByText('Read native PDF successfully')).toBeVisible({timeout:20000})
- assert.ok(readback.some(wire=>wire.includes('Page 2 [email]: fixture@example.com')))
- assert.ok(readback.some(wire=>wire.includes('Page 2:')&&wire.includes('Native second page')))
- assert.ok(readback.some(wire=>wire.includes('[Page 2]')&&wire.includes('Native second page')))
+ const toolResults=readback.flatMap(wire=>JSON.parse(wire).request.messages.flatMap(message=>message.results??[]))
+ const output=(id,name)=>{
+  const result=toolResults.find(item=>item.id===id)
+  assert.equal(result?.name,name,id)
+  assert.ok(!result.isError,result.output)
+  return result.output
+ }
+ assert.equal(output('sensitive','find_sensitive_info').split('\n')[0],'Page 2 [email]: fixture@example.com')
+ assert.match(output('search','search_text'),/^Page 2: .*Native second page/m)
+ const secondPage=output('read','read_pages')
+ assert.match(secondPage,/\[Page 2\][\s\S]*Native second page/)
+ assert.match(secondPage,/fixture@example\.com/)
+ assert.doesNotMatch(secondPage,/Original paragraph/)
+ assert.match(output('read-blank','read_pages'),/\[Page 3\]\s*\(unsaved blank page\)/)
+ const inserted=output('list-inserts','list_inserted_text')
+ assert.ok(inserted.includes(`${insertedId}: page 2, x=24`),inserted)
+ assert.match(inserted,/12 pt[^\n]*"Original insert"/)
+ const annots=output('read-annots','read_annotations')
+ assert.match(annots,/\[Page 2\]/)
+ assert.ok(annots.includes('Note '+noteId),annots)
+ assert.match(annots,/Reviewer[^\n]*"Saved browser note"/)
+ assert.match(annots,/Markup .*highlight/)
+ assert.match(output('fields','list_form_fields'),/^ReviewStatus \(text, page 2\) current value: Pending$/m)
+ assert.equal(output('outline','get_outline'),'Review bookmark')
+ for(const name of ['find_sensitive_info','search_text','read_pages','list_inserted_text','read_annotations','list_form_fields','get_outline']){
+  recordVerifiedOfficeEffect('pdf',name)
+ }
  assert.ok(readback.some(wire=>wire.includes('Marked 1 occurrence(s) on page 2')))
  assert.ok(readback.some(wire=>wire.includes('Occurrence 3')&&wire.includes('not found')))
  assert.ok(readback.some(wire=>wire.includes('Replaced occurrence 2')&&wire.includes('unsaved')))
  assert.ok(readback.some(wire=>wire.includes('Replaced the paragraph')&&wire.includes('2 reflowed line(s)')))
  assert.ok(readback.some(wire=>wire.includes('Moved the paragraph')&&wire.includes('dy 10 pt')))
- assert.ok(readback.some(wire=>wire.includes('pending inserted text block(s) on page 2')))
  assert.ok(readback.some(wire=>wire.includes('Updated inserted text')&&wire.includes('Moved inserted text')))
  assert.ok(readback.some(wire=>wire.includes('Removed inserted text')))
- assert.ok(readback.some(wire=>wire.includes('Review bookmark')))
- assert.ok(readback.some(wire=>wire.includes('[Page 3]')&&wire.includes('(unsaved blank page)')))
  assert.ok(readback.some(wire=>wire.includes('Watermark \\"Web review copy\\" applied')))
  assert.ok(readback.some(wire=>wire.includes('Header/footer applied')))
  for(const result of ['ReviewStatus','the document was NOT modified','Nothing was applied (atomic)','Document properties (written on save)']){
@@ -615,7 +705,10 @@ test('GenOffice PDF assistant and ribbon edits preview and save, including recov
   assert.ok(externalFirstPage.includes(text),externalFirstPage)
  }
  assert.doesNotMatch(externalFirstPage,/Native first page|Original paragraph starts here|Original paragraph ends here/)
- assert.match(externalText(savedBytes,2),/Native revised/)
+ const externalSecondPage=externalText(savedBytes,2)
+ assert.match(externalSecondPage,/Native revised/)
+ assert.match(externalSecondPage,/Final insert/)
+ assert.doesNotMatch(externalSecondPage,/Original insert|Discard this draft/)
  const savedImage=await readImageSource(savedBytes,0,[192,148,228,196])
  assert.deepEqual([...savedImage.bgra.subarray(0,4)],[255,0,0,128])
  const savedCutout=await readImageSource(savedBytes,0,[244,148,284,188])
@@ -633,9 +726,13 @@ test('GenOffice PDF assistant and ribbon edits preview and save, including recov
  const annotations=persisted.getPage(1).node.Annots().asArray().map(ref=>persisted.context.lookup(ref))
  const subtype=dict=>String(dict.get(PDFName.of('Subtype')))
  const notes=annotations.filter(dict=>subtype(dict)==='/Text')
- const root=notes.find(dict=>!dict.has(PDFName.of('IRT')))
+ const contents=dict=>dict.lookup(PDFName.of('Contents')).decodeText()
+ const root=notes.find(dict=>contents(dict)==='Revised browser note')
  const reply=notes.find(dict=>dict.has(PDFName.of('IRT')))
- assert.equal(notes.length,2)
+ assert.equal(notes.length,3)
+ assert.ok(root&&!root.has(PDFName.of('IRT')))
+ assert.ok(notes.some(dict=>!dict.has(PDFName.of('IRT'))&&contents(dict)==='New review note retained'))
+ assert.ok(notes.every(dict=>contents(dict)!=='Discardable note'))
  assert.equal(root.lookup(PDFName.of('Contents')).decodeText(),'Revised browser note')
  assert.equal(root.lookup(PDFName.of('T')).decodeText(),'Reviewer')
  assert.equal(reply.lookup(PDFName.of('IRT')),root)
@@ -654,6 +751,7 @@ test('GenOffice PDF assistant and ribbon edits preview and save, including recov
  assert.ok(savedText.find(item=>item.text==='Native revised').bounds[1]<savedText.find(item=>item.text==='Native second page').bounds[1])
  assert.deepEqual(persisted.getPages().map(page=>page.getRotation().angle),[0,90,0])
  assert.deepEqual(persisted.getPage(2).getSize(),{width:240,height:300})
+ assert.deepEqual(stampLeaves.filter(item=>item.page===2).map(item=>item.text).sort(),['9 / 3','Web review copy'])
  assert.deepEqual(await f.files.readFile(f.alice.token,file.fileId,file.revision),original)
  const refreshed=page.waitForResponse(response=>response.ok()&&response.url().endsWith('/content?revision='+revision))
  await page.reload()
@@ -680,6 +778,12 @@ test('GenOffice PDF assistant and ribbon edits preview and save, including recov
  const cleared=await readPdfLeafObjects(await f.files.readFile(f.alice.token,file.fileId,clearedRevision))
  assert.ok(!cleared.some(leaf=>leaf.text==='Web review copy'))
  for(const index of [0,1,2])assert.ok(cleared.some(leaf=>leaf.page===index&&leaf.text===`${7+index} / 3`))
+ for(const effect of [
+  'apply_ops.setFormValue','apply_ops.setMetadata','edit_block','move_text_block',
+  'edit_text','insert_text','edit_inserted_text','move_inserted_text','delete_inserted_text',
+  'add_note','edit_note','reply_note','delete_note','markup_text','delete_markup','insert_blank_page',
+  'set_watermark','set_header_footer',
+ ]) recordVerifiedOfficeEffect('pdf',effect)
 
  if(liveImageConfig){
   const {entry:live}=JSON.parse(await readFile(liveImageConfig,'utf8'))
@@ -729,7 +833,10 @@ test('GenOffice PDF assistant and ribbon edits preview and save, including recov
  await assistant.getByRole('button',{name:'发送',exact:true}).click()
  const readImageTurn=()=>readback.slice(imageReadbackStart)
  await expect.poll(()=>readImageTurn().some(wire=>wire.includes('Image 2 on page 1 has a pending flip_image edit.')),{timeout:liveImageConfig?90000:20000}).toBe(true)
- assert.ok(readImageTurn().some(wire=>wire.includes('image 2: 40 × 40 pt at x=130, y=52')))
+ const imageList=readImageTurn().flatMap(wire=>JSON.parse(wire).request.messages.flatMap(message=>message.results??[]))
+  .find(result=>result.name==='list_page_images'&&!result.isError)
+ assert.match(imageList?.output??'',/image 2: 40 × 40 pt at x=130, y=52/)
+ recordVerifiedOfficeEffect('pdf','list_page_images')
  if(!liveImageConfig)await expect(assistant.getByText('Middle image flip queued',{exact:true})).toBeVisible({timeout:20000})
  await expect(assistant.getByRole('button',{name:'停止',exact:true})).toHaveCount(0,{timeout:liveImageConfig?60000:10000})
  await entry.click()

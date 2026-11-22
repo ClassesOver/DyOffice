@@ -184,11 +184,21 @@ jobs:
           DYOFFICE_TEST_AI_TOOL_TRACE: ${{ runner.temp }}/dyoffice-office-tool-trace.jsonl
         # Some editor fixtures bind the same loopback port.
         run: |
+          set -o pipefail
           umask 077
           node --import tsx --test --test-name-pattern='actual wasi server entry' apps/web/test/native-sheets/runtime.test.mjs
           : > "$DYOFFICE_TEST_AI_TOOL_TRACE"
           node --import tsx --test --test-concurrency=1 apps/web/test/local-browser/*.test.mjs apps/web/test/native-docs/{attachment-media,image-media,writer-draft-save}.test.mjs apps/web/test/native-slides/{size-roundtrip,image-export}.test.mjs
-          node --import tsx apps/web/test/helpers/office-tool-coverage.mjs "$DYOFFICE_TEST_AI_TOOL_TRACE"
+          node --import tsx apps/web/test/helpers/office-tool-coverage.mjs "$DYOFFICE_TEST_AI_TOOL_TRACE" 2>&1 | tee "$RUNNER_TEMP/dyoffice-office-tool-coverage.txt"
+      - name: Retain Office AI tool coverage evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: office-ai-tool-coverage
+          path: |
+            ${{ runner.temp }}/dyoffice-office-tool-trace.jsonl
+            ${{ runner.temp }}/dyoffice-office-tool-coverage.txt
+          if-no-files-found: warn
       - name: Retain real local-account Home and Settings screenshots
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9

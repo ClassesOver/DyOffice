@@ -1,4 +1,4 @@
-# T09 local browser and Excel acceptance
+# T09 local Web and native XLSX acceptance
 
 This is a disposable local acceptance environment. It reuses the actual Sheets
 renderer, restricted PostgreSQL roles, File API, T06 revision commits and native
@@ -74,17 +74,15 @@ The standard acceptance workbook has a chart, not an image. Image display is a
 separate outstanding acceptance item; media-byte integration tests alone do not
 prove browser image display.
 
-## Verify in Microsoft Excel
+## Verify the downloaded revision
 
-Open the **downloaded edited workbook** in actual Microsoft Excel. Record the
-Excel version, workbook SHA-256, any repair/security dialogs, the cell/formula
-checks above, the Revenue defined name and the chart. Reopen an Excel-saved copy
-and check that these remain editable. Do not substitute a parser, LibreOffice or
-the original unedited fixture for this gate.
-
-A passing automated CI run is not external Excel acceptance. Keep PR #30 draft
-until the external acceptance and outstanding browser image verification are
-recorded in `docs/dyoffice/evidence/t09-runtime.md`.
+Import the **downloaded edited workbook** into the disposable workspace and
+reopen it in the native Web Sheets editor. Record the candidate commit, workbook
+SHA-256 and saved revision. Check the formula and values above, the Revenue
+defined name and the chart. Verify that the formulas and chart remain editable
+after reopening. Check the downloaded package for the expected formula caches
+and unchanged parts. Record image results separately using a workbook with
+images. See the [four-format acceptance evidence](evidence/genoffice-web-parity.md).
 
 ## Current validation
 
@@ -97,8 +95,7 @@ all completed. CI remains pinned to Rust 1.93.0 and Node 22.
 Authenticated API verification found an imported revision followed by a saved
 revision. The saved workbook contains the added A4 formula `SUM(A2,A3)` with
 cached value 20; the original formats, defined name and custom XML part remain.
-This verifies committed bytes and native reads, not visual browser acceptance.
-The A2=21.25 scenario, browser image display and actual Excel reopen remain open.
-Browser automation was blocked by the host error
-`Request workspace is not owned by this CLI`. Successful shutdown/cleanup has
-not been verified while this acceptance service remains running.
+That historical run verified committed bytes and native reads. Its browser
+automation stopped with `Request workspace is not owned by this CLI`, and it
+did not verify launcher cleanup. Later native Chromium results are in the
+[four-format acceptance evidence](evidence/genoffice-web-parity.md).

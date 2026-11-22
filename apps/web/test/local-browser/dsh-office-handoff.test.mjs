@@ -10,7 +10,7 @@ import JSZip from 'jszip'
 import { XMLParser } from 'fast-xml-parser'
 import {PDFDict,PDFDocument,PDFName} from 'pdf-lib'
 import {expect} from '@playwright/test'
-import {launchTestBrowser} from '../helpers/browser.mjs'
+import {launchTestBrowser,recordVerifiedOfficeEffect} from '../helpers/browser.mjs'
 import {fileFixture} from '../helpers/files.mjs'
 import {buildLocalApp} from '../../server/src/app.ts'
 import {configuredSheetsRuntime} from '../../server/src/modules/sheets/runtime.ts'
@@ -117,6 +117,13 @@ for(const format of ['xlsx','pptx','pdf'])test('DSH writes, saves and follows up
   assert.equal(total?.f,'SUM(A2:A3)')
   assert.equal(total?.v,42)
  }
+ if(format==='pptx'){
+  const deck=await JSZip.loadAsync(bytes)
+  const notes=await deck.file('ppt/notesSlides/notesSlide1.xml').async('string')
+  assert.match(notes,/Handoff example/)
+  assert.ok(calls.some(tools=>tools.includes('apply_ops')))
+  recordVerifiedOfficeEffect('pptx','apply_ops')
+ }
  await page.evaluate(question=>{window.question={id:crypto.randomUUID(),question}},question)
  await expect.poll(()=>page.evaluate(()=>window.receipt?.followup?.state),{timeout:15000}).toMatch(/^(ready|failed)$/)
  assert.deepEqual(await page.evaluate(()=>({state:window.receipt.followup.state,answer:window.receipt.followup.answer})),{state:'ready',answer:'Office replied'})
@@ -143,6 +150,7 @@ for(const format of ['xlsx','pptx','pdf'])test('DSH writes, saves and follows up
     const range=window.__genofficeDebug?.univerAPI?.getActiveWorkbook()?.getActiveSheet()?.getRange('B2')
     return range?{formula:range.getFormula(),value:range.getValue()}:null
    })).toEqual({formula:'=SUM(A2:A3)',value:42})
+   recordVerifiedOfficeEffect('xlsx','propose_operations')
  }
  await expect(peer.getByText(question,{exact:true})).toHaveCount(1,{timeout:15000})
  assert.equal(passiveRuns,0)

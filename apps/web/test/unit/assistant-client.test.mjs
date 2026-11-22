@@ -140,16 +140,16 @@ test('format-specific native tool names include workbook merge and exclude other
  client.dispose()
 })
 
-test('PDF preview assistant sends read, navigation, and rotation tools with the PDF format',async()=>{
+test('native PDF assistant filters the retired rotation name and sends apply_ops',async()=>{
  const sent=[]
- const client=await createAssistantClient({format:'pdf',nativeToolNames:new Set(['read_pages','search_text','goto_page','rotate_pages']),request:async()=>({entries:[{id:'office',label:'Office'}],defaultId:'office'}),csrfToken:'c'.repeat(43),fetchImpl:async(_url,init)=>{
+ const client=await createAssistantClient({format:'pdf',nativeDocumentEditing:true,nativeToolNames:new Set(['read_pages','search_text','goto_page','apply_ops','rotate_pages']),request:async()=>({entries:[{id:'office',label:'Office'}],defaultId:'office'}),csrfToken:'c'.repeat(43),fetchImpl:async(_url,init)=>{
   sent.push(JSON.parse(init.body))
   return new Response('event: done\\ndata: {}\\n\\n',{headers:{'content-type':'text/event-stream'}})
  }})
- await new Promise(resolve=>client.transport.stream({system:'',messages:[{role:'user',text:'Find the total'}],tools:['read_pages','search_text','goto_page','rotate_pages','edit_text','write_document'].map(name=>({name,description:name,inputSchema:{}}))},{onDelta(){},onToolCall(){},onError:assert.fail,onDone:resolve}))
+ await new Promise(resolve=>client.transport.stream({system:'',messages:[{role:'user',text:'Find the total'}],tools:['read_pages','search_text','goto_page','apply_ops','rotate_pages','edit_text','write_document'].map(name=>({name,description:name,inputSchema:{}}))},{onDelta(){},onToolCall(){},onError:assert.fail,onDone:resolve}))
  assert.equal(sent[0].request.format,'pdf')
- assert.deepEqual(sent[0].request.tools.map(tool=>tool.name),['read_pages','search_text','goto_page','rotate_pages'])
- assert.match(sent[0].request.system,/page rotation only/)
+ assert.deepEqual(sent[0].request.tools.map(tool=>tool.name),['read_pages','search_text','goto_page','apply_ops'])
+ assert.match(sent[0].request.system,/unsaved drafts/)
  client.dispose()
 })
 
@@ -207,7 +207,7 @@ test('format assistant intersects editor tools with SaaS-supported tools',async(
 })
 
 test('server assistant tool policy matches the four GenOffice tool inventories',()=>{
- assert.deepEqual(['docx','xlsx','pptx','pdf'].map(format=>assistantToolsForFormat(format).size),[42,19,20,49])
+ assert.deepEqual(['docx','xlsx','pptx','pdf'].map(format=>assistantToolsForFormat(format).size),[42,19,20,48])
  assert.equal(assistantToolsForFormat('docx').has('read_attachment'),true)
  assert.equal(assistantToolsForFormat('xlsx').has('read_attachment'),true)
  assert.equal(assistantToolsForFormat('docx').has('analyze_media'),true)
@@ -228,8 +228,8 @@ test('server assistant tool policy matches the four GenOffice tool inventories',
  assert.deepEqual(sheets.request.tools.map(tool=>tool.name),['get_workbook_context','create_document','merge_attached_workbooks','web_search'])
  const slides=scopeAssistantRequest({format:'pptx',system:'',messages:[],tools:['read_slide','generate_deck','insert_web_image','save_style_template','edit_chart'].map(name=>({name}))},new Set())
  assert.deepEqual(slides.request.tools.map(tool=>tool.name),['read_slide','generate_deck','insert_web_image','save_style_template','edit_chart'])
- const pdf=scopeAssistantRequest({format:'pdf',system:'',messages:[],tools:['read_pages','rotate_pages','edit_text'].map(name=>({name}))},new Set())
- assert.deepEqual(pdf.request.tools.map(tool=>tool.name),['read_pages','rotate_pages','edit_text'])
+ const pdf=scopeAssistantRequest({format:'pdf',system:'',messages:[],tools:['read_pages','apply_ops','rotate_pages','edit_text'].map(name=>({name}))},new Set())
+ assert.deepEqual(pdf.request.tools.map(tool=>tool.name),['read_pages','apply_ops','edit_text'])
  assert.throws(()=>scopeAssistantRequest({format:'unknown',tools:[]},new Set()))
 })
 

@@ -11,7 +11,7 @@ import {PDFDocument} from 'pdf-lib'
 import JSZip from 'jszip'
 import {PNG} from 'pngjs'
 import {expect} from '@playwright/test'
-import {launchTestBrowser} from '../helpers/browser.mjs'
+import {launchTestBrowser,recordVerifiedOfficeEffect} from '../helpers/browser.mjs'
 import {fileFixture,docxBytes,importFile} from '../helpers/files.mjs'
 import {createCrossPlatformProcess} from '../../worker/src/sandbox/cross-platform-process.ts'
 import {sheetsGateway} from '../helpers/sheets-gateway.mjs'
@@ -154,7 +154,10 @@ for(const mode of ['creation','no-word','all'])test(mode==='no-word'
     const {output,isError}=JSON.parse(result.content)
     assert.ok(!isError,output)
     assert.match(output,attachment?/Audit attachment 712/:/Synthetic supplier registry/)
-    if(!attachment)assert.match(output,/https:\/\/results.example\/registry/)
+    if(!attachment){
+     assert.match(output,/https:\/\/results\.example\/registry/)
+     assert.match(output,/Supplier A: 712 records/)
+    }
     delta={content:attachment?'Excel read the reference attachment':'Excel returned the web citation'}
    }else{
     const name=attachment?'read_attachment':'web_search'
@@ -180,7 +183,14 @@ for(const mode of ['creation','no-word','all'])test(mode==='no-word'
    if(results.length){
     const {output,isError}=results.at(-1),[name,,expected]=cases[results.length-1]
     assert.ok(!isError,name+': '+output)
+    assert.equal(messages.filter(message=>message.role==='tool').at(-1).tool_call_id,'slides-'+name)
     assert.match(output,expected,name+': '+output)
+    if(name==='web_search'){
+     assert.match(output,/https:\/\/results\.example\/slide/)
+     assert.match(output,/Source excerpt/)
+    }
+    if(name==='image_search')assert.match(output,/Blue/)
+    if(name==='load_guide')assert.match(output,/addElement|addTable/)
    }
    if(results.length===4)assert.ok(generatedUrl)
    if(results.length===8)assert.ok(chartId)
@@ -211,7 +221,9 @@ for(const mode of ['creation','no-word','all'])test(mode==='no-word'
     assert.ok(sheetId,results[0].output)
     assert.ok(path,results[1].output)
     assert.doesNotMatch(results[1].output,/base64/)
-    assert.ok(results[2].output.includes(remoteImage),results[2].output)
+    const foundImage=results[2].output.match(/https:\/\/images\.example\/blue\.webp/)?.[0]
+    assert.equal(foundImage,remoteImage,results[2].output)
+    assert.match(results[2].output,/Blue/)
     const attachment=prompt.match(/(https:\/\/attached-image\.invalid\/[\w-]+) \| "green\.png"/)?.[1]
     assert.ok(attachment,'Model request must contain a usable image attachment reference.')
     assert.ok(content.some(part=>part.type==='image_url'),'Model request must include the attached image.')
@@ -219,7 +231,7 @@ for(const mode of ['creation','no-word','all'])test(mode==='no-word'
     attachedImageSheet=sheetId
     delta=toolCall('propose_operations',{summary:'Place generated, downloaded and attached images',operations:[
      {op:'add_image',sheetId,path,anchorCell:'B2'},
-     {op:'add_image',sheetId,path:remoteImage,anchorCell:'D4'},
+     {op:'add_image',sheetId,path:foundImage,anchorCell:'D4'},
      {op:'add_image',sheetId,path:attachment,anchorCell:'F6'},
     ]})
    }else{
@@ -293,7 +305,14 @@ for(const mode of ['creation','no-word','all'])test(mode==='no-word'
    await (await chooser).setFiles({name:'pixel.png',mimeType:'image/png',buffer:PNG.sync.write(image)})
    await expect(panel.getByRole('img',{name:'pixel.png',exact:true})).toBeVisible()
   }
-  await panel.locator('textarea').fill('Office capability probe '+stage+' '+format)
+  const input=panel.locator('textarea'),prompt='Office capability probe '+stage+' '+format
+  if(direct&&format==='docx'){
+   await expect(page.locator('html')).toHaveAttribute('data-document-loading','ready',{timeout:45000})
+   await input.focus()
+   await page.evaluate(()=>window.flushDeferredDocxFocus())
+   await page.keyboard.insertText(prompt)
+   await expect(input).toHaveValue(prompt)
+  }else await input.fill(prompt)
   await expect(panel.getByRole('button',{name:'发送',exact:true})).toBeEnabled({timeout:15000})
   const previous=frames.length
   await panel.getByRole('button',{name:'发送',exact:true}).click()
@@ -302,13 +321,12 @@ for(const mode of ['creation','no-word','all'])test(mode==='no-word'
   const absent=new Set(configured?[]:conditional[format])
   // Query results are insertable only in read-only analysis mode, which this fixture leaves off.
   absent.add('insert_data_result')
-  // No starred files; native PDF rotates through apply_ops.
+  // No starred files in this fixture.
   if(format==='docx'){
    for(const name of ['read_knowledge_file','search_knowledge_base'])absent.add(name)
    if(direct)absent.add('create_document')
   }
   if(format==='pdf'){
-   absent.add('rotate_pages')
    absent.add('read_attachment') // Offered only to the turn with a text attachment.
    // Creating and opening a separate file requires the workspace parent.
    if(direct)for(const name of ['create_document','extract_pages','split_pdf','split_pages','merge_pages','confirm_pdf_copies'])absent.add(name)
@@ -355,6 +373,7 @@ for(const mode of ['creation','no-word','all'])test(mode==='no-word'
    return wordCopyZip.file('word/document.xml').async('string')
   },{timeout:30000}).toMatch(/New Word draft marker 719/)
   await expect(word.getByText('Word created a native document',{exact:true})).toBeAttached({timeout:30000})
+  recordVerifiedOfficeEffect('docx','create_document')
   const workbook=await probe('xlsx','chat-only')
   const source=files.xlsx
   for(const type of ['xlsx','docx','pdf']){
@@ -393,6 +412,20 @@ for(const mode of ['creation','no-word','all'])test(mode==='no-word'
   }
   assert.equal((await f.files.openFile(f.alice.token,source.fileId)).file.revision,source.revision)
   assert.deepEqual(await f.files.readFile(f.alice.token,source.fileId,source.revision),sources.find(([format])=>format==='xlsx')[1])
+  await page.addInitScript(()=>{
+   if(location.pathname!=='/native-docx/')return
+   const requestFrame=window.requestAnimationFrame.bind(window),deferred=[]
+   // Run Tiptap's deferred editor focus after the user focuses the composer.
+   window.requestAnimationFrame=callback=>{
+    const source=callback.toString()
+    if(!source.includes('.focus()')||!source.includes('scrollIntoView'))return requestFrame(callback)
+    deferred.push(callback)
+    return requestFrame(()=>{})
+   }
+   window.flushDeferredDocxFocus=()=>{
+    for(const callback of deferred.splice(0))callback(performance.now())
+   }
+  })
   await probe('docx','direct',{direct:true})
   const directWorkbook=await probe('xlsx','direct',{direct:true})
   const downloads=[]
@@ -411,6 +444,7 @@ for(const mode of ['creation','no-word','all'])test(mode==='no-word'
   assert.equal(csv.suggestedFilename(),'Office CSV probe.csv')
   assert.match(await readFile(await csv.path(),'utf8'),/^Revenue,Formula,Date,Percent,Mass,Named formula/)
   await expect(directWorkbook.getByText('Standalone worksheet downloaded',{exact:true})).toBeVisible({timeout:30000})
+  recordVerifiedOfficeEffect('xlsx','create_document')
   if(!noWord){
    await directWorkbook.locator('.ai-plus-btn').click()
    const chooser=page.waitForEvent('filechooser')
@@ -436,6 +470,8 @@ for(const mode of ['creation','no-word','all'])test(mode==='no-word'
    await searchable.getByRole('button',{name:'发送',exact:true}).click()
    await expect(searchable.getByText('Excel returned the web citation',{exact:true})).toBeVisible({timeout:30000})
    assert.equal((await f.files.openFile(f.alice.token,directFiles.xlsx.fileId)).file.revision,directFiles.xlsx.revision)
+   recordVerifiedOfficeEffect('xlsx','read_attachment')
+   recordVerifiedOfficeEffect('xlsx','web_search')
   }
   return
  }
@@ -458,10 +494,12 @@ for(const mode of ['creation','no-word','all'])test(mode==='no-word'
  const map=word.locator('.ai-mindmap')
  await expect(map).toContainText('Office overview')
  await expect(map).toContainText('First section')
+ await expect(map).toContainText('Second section')
  await expect(wordImages).toHaveCount(imageCount)
  await map.getByRole('button',{name:'插入文档',exact:true}).click()
  await expect(wordImages).toHaveCount(imageCount+1)
  assert.equal((await f.files.openFile(f.alice.token,files.docx.fileId)).file.revision,files.docx.revision)
+ recordVerifiedOfficeEffect('docx','generate_mindmap')
  const workbook=await probe('xlsx','configured',{configured:true})
  await page.route('**/api/v1/ai/search',route=>{
   assert.deepEqual(route.request().postDataJSON(),{kind:'image_search',query:'Synthetic blue image',maxResults:1})
@@ -549,6 +587,8 @@ for(const mode of ['creation','no-word','all'])test(mode==='no-word'
  }
  assert.equal(await head(),revision)
  assert.deepEqual(await f.files.readFile(f.alice.token,source.fileId,source.revision),original)
+ recordVerifiedOfficeEffect('xlsx','generate_image')
+ recordVerifiedOfficeEffect('xlsx','image_search')
  const slides=await probe('pptx','configured',{configured:true})
  await page.route('**/api/v1/ai/search',route=>{
   const request=route.request().postDataJSON()
@@ -574,12 +614,17 @@ for(const mode of ['creation','no-word','all'])test(mode==='no-word'
  await page.keyboard.press('Control+s')
  await expect.poll(slidesHead,{timeout:30000}).not.toBe(files.pptx.revision)
  const savedSlides=await JSZip.loadAsync(await f.files.readFile(f.alice.token,files.pptx.fileId,await slidesHead()))
- assert.match(await savedSlides.file('ppt/slides/slide1.xml').async('string'),/Evidence script title/)
+ const slideXml=await savedSlides.file('ppt/slides/slide1.xml').async('string')
+ assert.match(slideXml,/Evidence script title/)
+ assert.doesNotMatch(slideXml,/Acceptance title/)
  const [chart]=await Promise.all(savedSlides.file(/^ppt\/charts\/chart\d+\.xml$/).map(part=>part.async('string')))
  assert.match(chart,/<c:lineChart\b/)
  assert.match(chart,/Evidence chart/)
  assert.match(chart,/Fixture series/)
  assert.match(chart,/<c:v>21<\/c:v>[\s\S]*<c:v>34<\/c:v>/)
+ for(const effect of ['read_attachment','web_search','image_search','generate_image','analyze_media','load_guide','execute_slide_script','edit_chart']){
+  recordVerifiedOfficeEffect('pptx',effect)
+ }
  const panel=await probe('pdf','configured',{configured:true})
  await panel.locator('textarea').fill('Office Harness probe pdf')
  await panel.getByRole('button',{name:'发送',exact:true}).click()

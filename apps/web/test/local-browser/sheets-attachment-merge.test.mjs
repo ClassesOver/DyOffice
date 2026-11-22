@@ -12,7 +12,7 @@ import {buildLocalApp} from '../../server/src/app.ts'
 import {createGlobalConfigService} from '../../server/src/modules/admin/service.ts'
 import {buildSheetsGateway} from '../../server/sheets/build.mjs'
 import {configuredSheetsRuntime} from '../../server/src/modules/sheets/runtime.ts'
-import {launchTestBrowser} from '../helpers/browser.mjs'
+import {launchTestBrowser,recordVerifiedOfficeEffect} from '../helpers/browser.mjs'
 import {fileFixture,importFile} from '../helpers/files.mjs'
 import {password} from '../helpers/identity.mjs'
 import {stubHomeHero} from '../helpers/home-hero.mjs'
@@ -132,4 +132,5 @@ for(const legacy of [true,false])test(legacy?'browser assistant merges BIFF XLS,
  await page.reload()
  for(const sheet of imported)await expect(page.getByRole('tab',{name:sheet.name,exact:true})).toBeVisible({timeout:30000})
  assert.deepEqual(await f.files.readFile(f.alice.token,initial.fileId,initial.revision),base)
+ recordVerifiedOfficeEffect('xlsx','merge_attached_workbooks')
 })

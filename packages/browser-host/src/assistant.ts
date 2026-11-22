@@ -57,7 +57,6 @@ export async function createAssistantClient({request, fetchImpl, csrfToken, onDe
     const formatLabel = format === 'xlsx' ? 'workbook' : format === 'pptx' ? 'presentation' : format === 'pdf' ? 'PDF' : 'document'
     const pdfPageEditingOffered=format==='pdf'&&tools.some(tool=>['apply_ops','insert_blank_page','set_page_size','crop_pages'].includes(tool.name))
     const pdfExtractionOffered=format==='pdf'&&tools.some(tool=>['extract_pages','split_pdf','split_pages','merge_pages'].includes(tool.name))
-    const pdfRotationOffered=format==='pdf'&&tools.some(tool=>tool.name==='rotate_pages')
     const pdfTextEditingOffered=format==='pdf'&&tools.some(tool=>tool.name==='edit_text')
     const pdfAnnotationEditingOffered=format==='pdf'&&tools.some(tool=>['markup_text','add_note','delete_markup','delete_note','reply_note','edit_note'].includes(tool.name))
     const offered=(names:string[])=>names.filter(name=>tools.some(tool=>tool.name===name)).join(', ')
@@ -77,9 +76,7 @@ export async function createAssistantClient({request, fetchImpl, csrfToken, onDe
         ? '\nUse the offered PDF tools to read and edit original text. Successful edits save a new revision immediately. Read before editing and only confirm changes after the tool reports a saved revision. Delegate programming and computation to the offered harness tools.'
         : pdfAnnotationEditingOffered
         ? '\nUse the offered PDF annotation tools. Read annotations before editing, replying or deleting; preserve note authors and threads when editing, and only remove what the user explicitly requested. Successful changes save a new revision immediately; only confirm changes after a successful tool result. Use only the tools offered in this turn.'
-        : pdfRotationOffered
-        ? '\nThis PDF preview supports reading, navigation, and page rotation only. rotate_pages saves a new revision immediately. Do not claim any other PDF edits or saves.'
-        : '\nThis PDF preview is read-only. Use only the offered reading and navigation tools; do not claim to edit or save the PDF.'
+        : '\nThis PDF session is read-only. Use only the offered reading and navigation tools; do not claim to edit or save the PDF.'
       : editingEnabled
         ? `\nUse the offered native ${formatLabel} tools for the open file. Delegate programming and computation to harnesses, then apply requested file changes using native tools. Direct CLI execution is unavailable.`
         : coding?'\nThis assistant can read and explain. Document mutation and direct CLI execution are unavailable. You may delegate coding using the offered agent tools.':'\nThis assistant can read and explain. Document mutation and CLI execution are unavailable.'

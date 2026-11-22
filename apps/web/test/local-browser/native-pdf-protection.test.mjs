@@ -86,6 +86,12 @@ test('native PDF protected structures stay readable without offering edit drafts
    await expect(signatures).toContainText('未检查证书吊销状态')
    await page.keyboard.press('Escape')
    await expect(signatures).toHaveCount(0)
+   await page.getByRole('button',{name:'文件',exact:true}).click()
+   const savedVersion=page.getByRole('link',{name:'下载已保存版本',exact:true})
+   await expect(savedVersion).toHaveAttribute('href',`/api/v1/files/${file.fileId}/content?revision=${file.revision}&download=1`)
+   const [download]=await Promise.all([page.waitForEvent('download'),savedVersion.click()])
+   assert.equal(await download.failure(),null)
+   assert.deepEqual(await readFile(await download.path()),bytes)
   }
   await page.getByRole('button',{name:'AI 助手',exact:true}).click()
   const assistant=page.locator('.shared-editor-assistant')

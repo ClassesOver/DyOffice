@@ -4,7 +4,7 @@ import {Readable} from 'node:stream'
 import {fileURLToPath} from 'node:url'
 import {expect} from '@playwright/test'
 import {PNG} from 'pngjs'
-import {launchTestBrowser} from '../helpers/browser.mjs'
+import {launchTestBrowser,recordVerifiedOfficeEffect} from '../helpers/browser.mjs'
 import {fileFixture,docxBytes,importFile} from '../helpers/files.mjs'
 import {mockProviderNetwork} from '../helpers/provider-network.mjs'
 import {password} from '../helpers/identity.mjs'
@@ -64,4 +64,5 @@ test('Word media analysis can use an image from the current send but not an earl
  }
  assert.deepEqual(mediaCalls,[{action:'analyze_media',mediaUrls:['data:image/png;base64,'+buffer.toString('base64')],requirements}])
  assert.equal((await f.files.openFile(f.alice.token,opened.fileId)).file.revision,opened.revision)
+ recordVerifiedOfficeEffect('docx','analyze_media')
 })

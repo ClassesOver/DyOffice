@@ -5,6 +5,7 @@ import { createOfficeReadTool, officeReadDescriptor } from './office-read.ts'
 import { createMcpPdfRotation, pdfRotationDescriptor } from './pdf-rotation.ts'
 import { createMcpXlsxCells, xlsxCellsDescriptor } from './xlsx-cells.ts'
 import { createMcpPptxNotes, pptxNotesDescriptor } from './pptx-notes.ts'
+import { createMcpDocxParagraph, docxParagraphDescriptor } from './docx-paragraph.ts'
 import type { McpFileGrant } from '../../db/context.ts'
 
 export const modernVersion = '2026-07-28'
@@ -47,8 +48,17 @@ const mcpPptxNotesTool = {
   annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true },
 }
 
-export function createMcpTools({ read, rotate, setCells, setNotes, inspect }: {
+const mcpDocxParagraphTool = {
+  name: docxParagraphDescriptor.name,
+  description: 'Replace text of the exact pre-approved DOCX body paragraph and save one revision.',
+  inputSchema: docxParagraphDescriptor.inputSchema,
+  outputSchema: docxParagraphDescriptor.outputSchema,
+  annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true },
+}
+
+export function createMcpTools({ read, replaceParagraph, rotate, setCells, setNotes, inspect }: {
   read: ReturnType<typeof createOfficeReadTool>
+  replaceParagraph: ReturnType<typeof createMcpDocxParagraph>
   rotate: ReturnType<typeof createMcpPdfRotation>
   setCells?: ReturnType<typeof createMcpXlsxCells>
   setNotes?: ReturnType<typeof createMcpPptxNotes>
@@ -56,7 +66,7 @@ export function createMcpTools({ read, rotate, setCells, setNotes, inspect }: {
 }) {
   const failure = (text: string) => ({ isError: true, content: [{ type: 'text' as const, text }] })
   const executors = new Map<string, (credential: McpExternalCredential, args: unknown, signal: AbortSignal) => Promise<unknown>>([
-    [mcpReadTool.name, read], [mcpPdfRotationTool.name, rotate],
+    [mcpReadTool.name, read], [mcpPdfRotationTool.name, rotate], [mcpDocxParagraphTool.name, replaceParagraph],
   ])
   if (setCells) executors.set(mcpXlsxCellsTool.name, setCells)
   if (setNotes) executors.set(mcpPptxNotesTool.name, setNotes)
@@ -66,6 +76,7 @@ export function createMcpTools({ read, rotate, setCells, setNotes, inspect }: {
       if (grant.approval?.kind === 'pdf.rotate') return [mcpReadTool, mcpPdfRotationTool]
       if (setCells && grant.approval?.kind === 'xlsx.cells') return [mcpReadTool, mcpXlsxCellsTool]
       if (setNotes && grant.approval?.kind === 'pptx.notes') return [mcpReadTool, mcpPptxNotesTool]
+      if (grant.approval?.kind === 'docx.paragraph') return [mcpReadTool, mcpDocxParagraphTool]
       return [mcpReadTool]
     },
     async run(credential: McpExternalCredential, name: unknown, args: unknown, signal: AbortSignal) {
@@ -79,6 +90,7 @@ export function createMcpTools({ read, rotate, setCells, setNotes, inspect }: {
         if (status === 400) return failure('Invalid tool arguments')
         if (status === 403) return failure('Tool unavailable for this grant')
         if (status === 409) return failure('The saved revision or active edit lease changed')
+        if (status === 422) return failure('The approved edit could not be applied to this saved revision')
         return failure(name === mcpReadTool.name ? 'Saved document unavailable' : 'Document edit unavailable')
       }
     },

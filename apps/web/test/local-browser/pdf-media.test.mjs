@@ -7,7 +7,7 @@ import {PDFDocument,rgb} from 'pdf-lib'
 import {PNG} from 'pngjs'
 import {expect} from '@playwright/test'
 import {isHomeHeroRequest,stubHomeHero} from '../helpers/home-hero.mjs'
-import {launchTestBrowser} from '../helpers/browser.mjs'
+import {launchTestBrowser,recordVerifiedOfficeEffect} from '../helpers/browser.mjs'
 import {fileFixture,importFile} from '../helpers/files.mjs'
 import {password} from '../helpers/identity.mjs'
 import {mockProviderNetwork} from '../helpers/provider-network.mjs'
@@ -19,6 +19,7 @@ const generatedFixtures={"gif":{"mime":"image/gif","base64":"R0lGODdhBAAEAIEAAP8
 const nativeDirectory=process.env.DYOFFICE_TEST_NATIVE_PDF_DIST
 for(const generatedFormat of ['png','gif','webp','animated-gif','animated-webp'])test('Native PDF searches and generates '+generatedFormat+' images through chat and saves a local generated image draft',{skip:!nativeDirectory,timeout:180000},async t=>{
  let app,browser,turn=0,generatedUrl
+ const searchUrls=[]
  t.after(async()=>{await browser?.close();app?.server.closeAllConnections();await app?.close()})
  const origin='http://127.0.0.1:4288',f=await fileFixture(t,{origin,buildApp:false}),keyring={activeKeyId:'media',keys:{media:new Uint8Array(32).fill(64)}}
  const network=mockProviderNetwork(t,()=>{
@@ -28,7 +29,7 @@ for(const generatedFormat of ['png','gif','webp','animated-gif','animated-webp']
   assert.doesNotMatch(network.wire.toString(),/data:image|iVBORw/)
   if(index===2&&tool){const result=JSON.parse(request.messages.filter(message=>message.role==='tool').at(-1).content);assert.ok(!result.isError,result.output);generatedUrl=result.output.match(/https:\/\/generated-image\.invalid\/[A-Za-z0-9-]+/)?.[0];assert.ok(generatedUrl,result.output)}
   const calls=[['image_search',{query:'office icon',max_results:2}],['generate_image',{prompt:'Draw a red square',aspect_ratio:'1:1'}],['insert_image',{page:1,url:generatedUrl,x:80,y:90,width:40}]]
-  calls.push(['insert_image',{page:1,url:'https://images.example/icon.gif',x:180,y:90,width:40}],['insert_image',{page:1,url:'https://images.example/icon.webp',x:280,y:90,width:40}])
+  calls.push(['insert_image',{page:1,url:searchUrls[0],x:180,y:90,width:40}],['insert_image',{page:1,url:searchUrls[1],x:280,y:90,width:40}])
   calls.push(['list_page_images',{page:1}],['transform_image',{page:1,image_number:1,x:40,y:180}],['replace_image',{page:1,image_number:2,url:generatedUrl}],['delete_image',{page:1,image_number:3}],['rotate_image',{page:1,image_number:4,direction:'cw'}],['flip_image',{page:1,image_number:5,axis:'horizontal'}],['crop_image',{page:1,image_number:6,left:.5}],['set_image_opacity',{page:1,image_number:7,opacity:.5}],['remove_image_background',{page:1,image_number:8}])
   const [name,input]=calls[index],delta=tool?{tool_calls:[{index:0,id:'media-'+index,type:'function',function:{name,arguments:JSON.stringify(input)}}]}:{content:'Media result '+index}
   return Readable.from([Buffer.from(`data: ${JSON.stringify({choices:[{delta}]})}\n\ndata: ${JSON.stringify({choices:[{delta:{},finish_reason:tool?'tool_calls':'stop'}]})}\n\ndata: [DONE]\n\n`)])
@@ -68,6 +69,11 @@ for(const generatedFormat of ['png','gif','webp','animated-gif','animated-webp']
  for(let index=0;index<14;index++){
   await assistant.getByRole('textbox',{name:'消息',exact:true}).fill('Run media step '+index);await assistant.getByRole('button',{name:'发送',exact:true}).click();await expect(assistant.getByText('Media result '+index,{exact:true})).toBeVisible({timeout:30000})
   const result=JSON.parse(JSON.parse(network.wire.toString()).messages.filter(message=>message.role==='tool').at(-1).content);assert.ok(!result.isError,result.output)
+  if(index===0){
+   assert.match(result.output,/Office icon[^\n]*\n\s+https:\/\/images\.example\/icon\.gif/)
+   assert.match(result.output,/Office WebP[^\n]*\n\s+https:\/\/images\.example\/icon\.webp/)
+   searchUrls.push(...result.output.match(/https:\/\/images\.example\/icon\.(?:gif|webp)/g))
+  }
   assert.equal((await f.files.openFile(f.alice.token,source.fileId)).file.revision,source.revision)
  }
  assert.equal(apiCalls.length,4)
@@ -116,9 +122,14 @@ for(const generatedFormat of ['png','gif','webp','animated-gif','animated-webp']
  await tab.reload()
  await expect(tab.locator('html')).toHaveAttribute('data-document-loading','ready')
  await expect(tab.getByText('Original PDF',{exact:true}).first()).toBeAttached()
+ await expect.poll(pixels,{timeout:15000}).toEqual(expected)
  await expect(save).toBeDisabled()
  assert.deepEqual(errors,[])
  const review='/tmp/dyoffice-pdf-media-review/native-'+generatedFormat;await mkdir(review,{recursive:true});await writeFile(review+'/saved.pdf',bytes);await tab.screenshot({path:review+'/saved.png',fullPage:true})
+ for(const effect of [
+  'image_search','generate_image','insert_image','transform_image','replace_image','delete_image',
+  'rotate_image','flip_image','crop_image','set_image_opacity','remove_image_background',
+ ]) recordVerifiedOfficeEffect('pdf',effect)
 })
 
 test('native PDF inserts and replaces from current image attachments without fetching a URL',{skip:!nativeDirectory,timeout:90000},async t=>{

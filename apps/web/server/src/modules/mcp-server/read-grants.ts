@@ -4,7 +4,7 @@ import { authError, tokenHash } from '../auth/sessions.ts'
 import { uuid, loadFile } from '../files/queries.ts'
 import type { McpExternalCredential } from './credential.ts'
 
-const editFormats = { 'pdf.rotate': 'pdf', 'xlsx.cells': 'xlsx', 'pptx.notes': 'pptx' } as const
+const editFormats = { 'pdf.rotate': 'pdf', 'xlsx.cells': 'xlsx', 'pptx.notes': 'pptx', 'docx.paragraph': 'docx' } as const
 
 export function createMcpReadGrants(transactions: McpPrincipalTransactions) {
   return {

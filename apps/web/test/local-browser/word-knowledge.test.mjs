@@ -7,7 +7,7 @@ import {mkdir,readFile} from 'node:fs/promises'
 import {fileURLToPath} from 'node:url'
 import JSZip from 'jszip'
 import {expect} from '@playwright/test'
-import {launchTestBrowser} from '../helpers/browser.mjs'
+import {launchTestBrowser,recordVerifiedOfficeEffect} from '../helpers/browser.mjs'
 import {fileFixture,docxBytes,importFile} from '../helpers/files.mjs'
 import {password} from '../helpers/identity.mjs'
 import {mockProviderNetwork} from '../helpers/provider-network.mjs'
@@ -239,6 +239,9 @@ test('Word searches a starred saved source, reads its actual text and opens the 
   assert.equal((body.match(/<w:endnoteReference\b/g)??[]).length,1)
   assert.match(body,/<w:type w:val="continuous"/)
   assert.match(body,/<w:pgSz[^>]*w:orient="landscape"/)
+  const pageSize=(body.match(/<w:pgSz[^>]*w:orient="landscape"[^>]*>/g)??[]).at(-1)
+  assert.match(pageSize??'',/w:w="11906"/)
+  assert.match(pageSize??'',/w:h="8391"/)
   const headers=await Promise.all(saved.file(/^word\/header[0-9]+\.xml$/).map(part=>part.async('string')))
   assert.ok(headers.some(header=>header.includes('Audit header 651')))
   assert.ok(headers.some(header=>header.includes('DRAFT 651')))
@@ -247,6 +250,7 @@ test('Word searches a starred saved source, reads its actual text and opens the 
   assert.match(body,/<w:txbxContent>[\s\S]*Floating callout 651/)
   assert.match(body,/<w:commentRangeStart\b/)
   const [chart]=await Promise.all(saved.file(/^word\/charts\/chart\d+\.xml$/).map(part=>part.async('string')))
+  assert.match(chart,/<c:barChart\b/)
   assert.match(chart,/Audit chart/)
   assert.match(chart,/Fixture series/)
   assert.match(chart,/<c:v>21<\/c:v>[\s\S]*<c:v>34<\/c:v>/)
@@ -260,6 +264,15 @@ test('Word searches a starred saved source, reads its actual text and opens the 
   assert.doesNotMatch(body,/Drop pending insertion|<w:ins\b/)
   assert.match(body,/Begin <\/w:t>[\s\S]*?<w:t[^>]*>approved<\/w:t>[\s\S]*? report<\/w:t>/)
   assert.doesNotMatch(body,/Draft block 651/)
+  const approvedRun=(body.match(/<w:r(?=[\s>])[\s\S]*?<\/w:r>/g)??[]).find(run=>run.includes('>approved</w:t>'))
+  assert.match(approvedRun??'',/<w:b(?=[\s/>])/)
+  for(const effect of [
+   'accept_changes','add_comment','apply_ops','define_style','delete_comment','delete_note',
+   'edit_chart','edit_note','insert_chart','insert_endnote','insert_footnote','insert_section_break',
+   'insert_text_box','reject_changes','replace_blocks','replace_selection','reply_comment',
+   'resolve_comment','set_header_footer','set_page_setup','set_watermark',
+   'get_document_context','list_styles','read_blocks','read_comments','read_notes','read_revisions',
+  ])recordVerifiedOfficeEffect('docx',effect)
  }
  const openSourceWrites=[]
  page.on('request',request=>{
@@ -284,6 +297,8 @@ test('Word searches a starred saved source, reads its actual text and opens the 
   throw error
  }
  assert.deepEqual(await f.files.readFile(f.alice.token,draft.fileId,draft.revision),draftBytes)
+ recordVerifiedOfficeEffect('docx','search_knowledge_base')
+ recordVerifiedOfficeEffect('docx','read_knowledge_file')
  assert.deepEqual(await f.files.readFile(f.alice.token,source.fileId,source.revision),sourceBytes)
  if(!liveConfig){
   await page.evaluate(id=>window.aiOfficeTabs.close(id),source.fileId)
