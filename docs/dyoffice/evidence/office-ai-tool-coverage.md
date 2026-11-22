@@ -10,6 +10,8 @@
 
 各测试批次合并去重后，浏览器观察到 129 个组合注册，129 个已注册组合和 9 个共享工具均向模型返回过成功结果。采集仅保留格式、工具名和错误标记。下表中的工具行保留具体效果、成品和待验项，四格式真实模型用例见主报告。[注册用例](../../../apps/web/test/local-browser/office-tool-inventory.test.mjs) [四格式验收](genoffice-web-parity.md)
 
+Web 门禁在 Chromium 用例完成后，按当前工具合同核对当次运行的注册和成功执行。缺项会按格式和工具名列出并使门禁失败。PDF 旋转兼容映射的成品断言核对保存后的页面角度。正文、数值、对象、保存与重开的效果由对应的浏览器用例断言。[覆盖检查](../../../apps/web/test/helpers/office-tool-coverage.mjs) [PDF 原生效果用例](../../../apps/web/test/local-browser/native-pdf-open.test.mjs)
+
 | 格式 | Web 合同 | 浏览器注册 | 定向浏览器成功 |
 | --- | ---: | ---: | ---: |
 | DOCX | 42 | 42 | 42 |
