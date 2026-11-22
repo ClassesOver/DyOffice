@@ -53,8 +53,14 @@ test('Native PDF assistant flips and crops affine images, then saves and reopens
  const initialPreview=await preview()
  let stages=0,commits=0
  tab.on('request',request=>{const path=new URL(request.url()).pathname;if(path.endsWith('/uploads')&&path.includes('/pdf/'))stages++;if(path.endsWith('/commits'))commits++})
- const failedPreviews=[]
- tab.on('response',response=>{const path=new URL(response.url()).pathname;if(path.includes('/pdf/')&&path.endsWith('/query')&&!response.ok())failedPreviews.push(response.text().catch(()=>''))})
+ const failedPreviews=[],saveResponses=[]
+ tab.on('response',response=>{
+  const path=new URL(response.url()).pathname
+  if(path.includes('/pdf/')&&path.endsWith('/query')&&!response.ok())failedPreviews.push(response.text().catch(()=>''))
+  if(response.request().method()!=='POST')return
+  const phase=path.includes('/pdf/')&&path.endsWith('/uploads')?'prepare':path.endsWith('/commits')?'commit':path.endsWith('/lease')?'lease':null
+  if(phase)saveResponses.push({phase,status:response.status(),error:response.ok()?null:response.json().catch(()=>null)})
+ })
  const assistant=surface.locator('.shared-editor-assistant'),save=surface.getByRole('button',{name:'保存',exact:true})
  const send=async(index,editing=true)=>{await assistant.getByRole('textbox',{name:'消息',exact:true}).fill('Run affine step '+index);await assistant.getByRole('button',{name:'发送',exact:true}).click();await expect(assistant.getByText('Affine result '+index,{exact:true})).toBeVisible({timeout:30000});const result=JSON.parse(JSON.parse(network.wire.toString()).messages.filter(message=>message.role==='tool').at(-1).content);if(result.isError)assert.fail(`Step ${index}: ${result.output} ${(await Promise.all(failedPreviews)).join(' ')}`);if(editing)await expect(save).toBeEnabled()}
  const unchanged=async()=>{assert.equal(stages,0);assert.equal(commits,0);assert.equal((await f.files.openFile(f.alice.token,source.fileId)).file.revision,source.revision)}
@@ -64,7 +70,19 @@ test('Native PDF assistant flips and crops affine images, then saves and reopens
  const firstCropPreview=await preview()
  await send(4,false);await send(5);await expect.poll(()=>difference(firstCropPreview)).toBeGreaterThan(1.5)
  await send(6);await unchanged();await tab.screenshot({path:review+'/pending.png',fullPage:true})
- await save.click();await expect.poll(async()=>(await f.files.openFile(f.alice.token,source.fileId)).file.revision,{timeout:30000}).not.toBe(source.revision);assert.equal(stages,1);assert.equal(commits,1)
+ try{
+  await save.click()
+  await expect.poll(async()=>(await f.files.openFile(f.alice.token,source.fileId)).file.revision,{timeout:30000}).not.toBe(source.revision)
+ }catch(error){
+  const responses=await Promise.all(saveResponses.map(async({phase,status,error:result})=>{
+   const body=await result
+   return {phase,status,code:body?.error?.code??body?.code??null}
+  }))
+  const status=await surface.locator('.dyoffice-pdf-persistence-state').textContent({timeout:2000}).catch(()=>null)
+  t.diagnostic(JSON.stringify({stages,commits,responses,status}))
+  throw error
+ }
+ assert.equal(stages,1);assert.equal(commits,1)
  const saved=(await f.files.openFile(f.alice.token,source.fileId)).file;assert.notEqual(saved.revision,source.revision)
  const output=await f.files.readFile(f.alice.token,source.fileId,saved.revision),before=(await catalog(original)).entries.map(entry=>entry.image),after=(await catalog(output)).entries.map(entry=>entry.image),objects=await readPdfLeafObjects(output)
  assert.equal(after.length,before.length);assert.equal(after.length,2)
