@@ -302,6 +302,11 @@ export function SourcesPanel({ client, onClose, presentation = 'dialog', onClose
         throw Error(s(key==='allowedSchemas'?'srcTooManySchemas':'srcTooManyTables',{count:entries.length,max:maxScopeEntries}))
       }
     }
+    const timeout=(config as Record<string,unknown>).statementTimeoutMs
+    if (timeout!==undefined&&(typeof timeout!=='number'||!Number.isInteger(timeout)||timeout<100||timeout>30000)) {
+      setTab('advanced')
+      throw Error(s('srcTimeoutHint'))
+    }
     if (!detail) {
       if (!draft.secret) throw Error(s('srcCreationRequiresCredentials'))
       await client.create({ sourceId: draft.sourceId, name: draft.name, kind: draft.kind, config, secret: draft.secret, enabled: draft.enabled })

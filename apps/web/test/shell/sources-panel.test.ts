@@ -215,6 +215,12 @@ test('the per-connection statement timeout is editable and clearing it restores 
  await change('查询超时毫秒数','')
  await click('保存连接')
  expect(saves.at(-1)?.config).not.toHaveProperty('statementTimeoutMs')
+ // Out of range is caught before the request, with the field's own hint.
+ const count=saves.length
+ await change('查询超时毫秒数','60000')
+ await click('保存连接')
+ expect(saves.length).toBe(count)
+ expect(document.body.textContent).toContain('100–30000 毫秒')
 })
 
 test('restoring original source values releases the dirty close guard',async()=>{
