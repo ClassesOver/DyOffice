@@ -327,7 +327,7 @@ print(json.dumps(dict(series=line.get_ydata().tolist(), total=sum(line.get_ydata
   const errors=[]
   const observe=error=>errors.push(error.message)
   page.on('pageerror',observe)
-  await page.goto(origin+'/native-'+format+'/?fileId='+entry.fileId)
+  await page.goto(origin+'/native-'+format+'/?fileId='+entry.fileId,{waitUntil:'commit'})
   const rail=page.locator(format==='xlsx'?'.expand-copilot':'.ai-rail').first()
   const panel=page.locator(format==='xlsx'?'.copilot:not(.collapsed)':'.ai-panel').first()
   const input=panel.locator('textarea')
