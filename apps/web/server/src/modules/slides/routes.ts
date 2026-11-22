@@ -58,10 +58,10 @@ export function registerSlidesRoutes(app: FastifyInstance, slides: SlidesSession
     route<Parameters<SlidesSessions['applyMaster']>[2]>('/api/v1/files/:id/slides/master-edit', {
       ...revisionBody,generation:generationBody,fitWidthPx,partPath:{type:'string',minLength:1,maxLength:128},operation:{type:'object'},
     },(token,id,body,signal)=>slides.applyMaster(token,id,body,signal),260*1024)
-    route<{revision:string;generation:number;mode:'insert'|'replace';slide:number;bytesBase64:string;ext:string;xPx?:number;yPx?:number;wPx?:number;hPx?:number;fitWidthPx?:number;sourceId?:string;keepSrcRect?:boolean}>('/api/v1/files/:id/slides/media', {
-      ...revisionBody,generation:generationBody,mode:{type:'string',enum:['insert','replace']},slide:{type:'integer',minimum:0,maximum:1048575},bytesBase64:{type:'string',minLength:16,maxLength:6990508},ext:{type:'string',enum:['png','jpg','jpeg','gif']},
+    route<Parameters<SlidesSessions['applyImage']>[2]>('/api/v1/files/:id/slides/media', {
+      ...revisionBody,generation:generationBody,mode:{type:'string',enum:['insert','replace']},slide:{type:'integer',minimum:0,maximum:1048575},bytesBase64:{type:'string',minLength:16,maxLength:6990508},ext:{type:'string',enum:['png','jpg','jpeg','gif','tif','tiff']},placement:{type:'string',enum:['natural']},
       xPx:{type:'number',minimum:-100000,maximum:100000},yPx:{type:'number',minimum:-100000,maximum:100000},wPx:{type:'number',exclusiveMinimum:0,maximum:100000},hPx:{type:'number',exclusiveMinimum:0,maximum:100000},fitWidthPx:fitWidthPx,sourceId:{type:'string',minLength:1,maxLength:256},keepSrcRect:{type:'boolean'},
-    }, (token,id,body,signal)=>slides.applyImage(token,id,body as Parameters<SlidesSessions['applyImage']>[2],signal), 7*1024*1024, ['xPx','yPx','wPx','hPx','fitWidthPx','sourceId','keepSrcRect'])
+    }, (token,id,body,signal)=>slides.applyImage(token,id,body,signal), 7*1024*1024, ['placement','xPx','yPx','wPx','hPx','fitWidthPx','sourceId','keepSrcRect'])
     route<{revision:string;generation:number}>('/api/v1/files/:id/slides/undo', {...revisionBody,generation:generationBody}, (token,id,body,signal)=>slides.undo(token,id,body,signal))
     route<{revision:string;generation:number}>('/api/v1/files/:id/slides/history-batch-begin', {...revisionBody,generation:generationBody}, (token,id,body,signal)=>slides.beginHistoryBatch(token,id,body,signal))
     route<{revision:string;generation:number}>('/api/v1/files/:id/slides/history-batch-end', {...revisionBody,generation:generationBody}, (token,id,body,signal)=>slides.endHistoryBatch(token,id,body,signal))

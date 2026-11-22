@@ -1,9 +1,11 @@
 // @vitest-environment node
 import { describe, it, expect } from 'vitest'
 import JSZip from 'jszip'
+import UTIF from 'utif2'
+import { PNG } from 'pngjs'
 import {createHash} from 'node:crypto'
 import {elementDurableId} from '@genoffice/pptx-ops'
-import { addElement, createBlankPptx, openPptx, savePptx } from '@genoffice/pptx-engine'
+import { addElement, addPicture, createBlankPptx, openPptx, savePptx } from '@genoffice/pptx-engine'
 import { createPptxSession } from '../../web/worker/src/native/pptx-session'
 async function fixture() {
   const opened = await openPptx(await createBlankPptx())
@@ -508,4 +510,37 @@ describe('PPTX session master and layout editing', () => {
       expect(JSON.stringify(edited.slide)).toContain('UpdatedMasterText')
     } finally { session.close() }
   })
+})
+
+it('renders imported TIFF as PNG and preserves native TIFF bytes across insertion and reopen', async () => {
+  const pixels = new Uint8Array(20*12*4)
+  for (let i=0; i<pixels.length; i+=4) pixels.set([200,100,50,255],i)
+  const tiff = new Uint8Array(UTIF.encodeImage(pixels,20,12))
+  const deck = await openPptx(await createBlankPptx())
+  const offset = {x:100000,y:100000,cx:190500,cy:114300}
+  expect(addPicture(deck,deck.deck.slides[0]!,{bytes:tiff,ext:'tif',offset})).not.toBeNull()
+  const source = await savePptx(deck)
+  const session = await createPptxSession(source)
+  function verifyPicture(slide:Awaited<ReturnType<typeof session.render>>, count:number) {
+    const pictures = slide.nodes.filter(node=>node.type==='picture')
+    expect(pictures).toHaveLength(count)
+    for(const picture of pictures) {
+      expect(picture.dataUrl).toMatch(/^data:image\/png;base64,/)
+      const bitmap = PNG.sync.read(Buffer.from(picture.dataUrl!.split(',')[1]!,'base64'))
+      expect([bitmap.width,bitmap.height,...bitmap.data.subarray(0,4)]).toEqual([20,12,200,100,50,255])
+    }
+  }
+  try {
+    verifyPicture(await session.render(0,0),1)
+    const edit = await session.applyImage(0,{mode:'insert',slide:0,placement:'natural',bytes:tiff,ext:'tiff'})
+    expect(edit.generation).toBe(1)
+    verifyPicture(await session.render(1,0),2)
+    const saved = (await session.exportBytes(1)).bytes
+    const zip = await JSZip.loadAsync(saved)
+    const nativeImages = zip.file(/^ppt\/media\/[^/]+\.tiff?$/)
+    expect(nativeImages.length).toBeGreaterThanOrEqual(1)
+    for(const entry of nativeImages) expect(await entry.async('uint8array')).toEqual(tiff)
+    const fresh = await createPptxSession(saved)
+    try { verifyPicture(await fresh.render(0,0),2) } finally { fresh.close() }
+  } finally { session.close() }
 })

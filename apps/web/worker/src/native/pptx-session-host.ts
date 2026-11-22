@@ -31,7 +31,9 @@ export interface SlidesApplyView {
   created: SlidesCreatedEntryView[]
 }
 export type SlidesImageCommand =
-  | {mode:'insert';slide:number;offset:{x:number;y:number;cx:number;cy:number};bytes:Uint8Array;ext:string}
+  | {mode:'insert';slide:number;bytes:Uint8Array;ext:string} & (
+      {offset:{x:number;y:number;cx:number;cy:number};placement?:never} | {placement:'natural';offset?:never}
+    )
   | {mode:'replace';slide:number;sourceId:string;bytes:Uint8Array;ext:string;keepSrcRect?:boolean}
 export interface SlidesOutlineView { count: number; size: { cx: number; cy: number }; slideIds: string[]; paths: string[]; defaultFont?: string }
 export interface PptxChildSession {

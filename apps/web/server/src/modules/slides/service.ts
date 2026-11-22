@@ -1,6 +1,7 @@
 import type { RevisionService } from '../revisions/service.ts'
 import type { LeaseService } from '../leases/service.ts'
 import { createHash } from 'node:crypto'
+import { sniffImageMime } from '../../../../../slides/src/main/media-mime.ts'
 import type { createFileService } from '../files/service.ts'
 import { authError } from '../auth/sessions.ts'
 import type { PptxChildSession, SlidesApplyView, SlidesCreatedEntryView, SlidesImageCommand, SlidesRenderSlideLike, SlidesStepView } from '../../../../worker/src/native/pptx-session-host.ts'
@@ -21,7 +22,11 @@ export interface SlidesChartEditInput extends SlidesReadInput {slide:number;sour
 export interface SlidesGeneratedImageInput {url:string;bytesBase64:string;ext:string}
 export interface SlidesGeneratePageInput extends SlidesReadInput {specJson:string;images:SlidesGeneratedImageInput[]}
 export interface SlidesLandPagesInput extends SlidesReadInput {markers:string[];mode:'replace'|'append'|'replace_at'|'insert_at';atIndex?:number}
-export type SlidesImageInput = SlidesReadInput & ({mode:'insert';slide:number;xPx:number;yPx:number;wPx:number;hPx:number;fitWidthPx:number;bytesBase64:string;ext:string}|{mode:'replace';slide:number;sourceId:string;bytesBase64:string;ext:string;keepSrcRect?:boolean})
+export type SlidesImageInput = SlidesReadInput & {slide:number;bytesBase64:string;ext:string} & (
+  {mode:'insert';placement:'natural';xPx?:never;yPx?:never;wPx?:never;hPx?:never;fitWidthPx?:never}
+  | {mode:'insert';placement?:never;xPx:number;yPx:number;wPx:number;hPx:number;fitWidthPx:number}
+  | {mode:'replace';sourceId:string;keepSrcRect?:boolean;placement?:never}
+)
 export interface SlidesSaveExportInput extends SlidesAuthority { revision: string; generation: number }
 export interface SlidesOpenView { generation: number; dirty: boolean; size: { cx: number; cy: number }; defaultFont: string; slides: SlidesRenderSlideLike[]; history: { canUndo: boolean; canRedo: boolean } }
 export interface SlidesSlidesView { generation: number; slides: SlidesRenderSlideLike[] }
@@ -43,11 +48,9 @@ function decodeImage(input:SlidesImageInput){
   if(typeof input.bytesBase64!=='string'||input.bytesBase64.length<4||input.bytesBase64.length>MAX_IMAGE_BASE64||!/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(input.bytesBase64))throw authError(400)
   const bytes=Buffer.from(input.bytesBase64,'base64')
   if(bytes.length<10||bytes.length>MAX_IMAGE_BYTES||bytes.toString('base64')!==input.bytesBase64)throw authError(400)
-  const mime=bytes[0]===0x89&&bytes[1]===0x50&&bytes[2]===0x4e&&bytes[3]===0x47?'image/png'
-    :bytes[0]===0xff&&bytes[1]===0xd8&&bytes[2]===0xff?'image/jpeg'
-    :bytes[0]===0x47&&bytes[1]===0x49&&bytes[2]===0x46&&bytes[3]===0x38?'image/gif':null
-  const ext=input.ext.toLowerCase().replace(/^jpeg$/,'jpg')
-  if(!mime||IMAGE_MIME_BY_EXT[ext]!==mime)throw authError(400)
+  const mime=sniffImageMime(bytes)
+  const ext=input.ext.toLowerCase().replace(/^jpeg$/,'jpg').replace(/^tiff$/,'tif')
+  if(!mime||(ext==='tif'?'image/tiff':IMAGE_MIME_BY_EXT[ext])!==mime)throw authError(400)
   return {bytes,ext}
 }
 function decodeGeneratedImage(input:SlidesGeneratedImageInput){
@@ -350,13 +353,19 @@ export function createSlidesService({ files, leases, revisions, host, maxConcurr
       fence(entry,input.generation)
       let command:SlidesImageCommand
       if(input.mode==='insert'){
-        if(!Number.isSafeInteger(input.slide)||input.slide<0||input.slide>=entry.count||![input.xPx,input.yPx,input.wPx,input.hPx,input.fitWidthPx].every(Number.isFinite)||input.wPx<=0||input.hPx<=0||input.fitWidthPx<320||input.fitWidthPx>4096)throw authError(400)
-        const scale=entry.size.cx/input.fitWidthPx
-        const offset={x:Math.round(input.xPx*scale),y:Math.round(input.yPx*scale),cx:Math.round(input.wPx*scale),cy:Math.round(input.hPx*scale)}
-        if([offset.x,offset.y,offset.cx,offset.cy].some(value=>!Number.isSafeInteger(value)||Math.abs(value)>EMU_MAX)||offset.cx<1||offset.cy<1)throw authError(400)
-        command={mode:'insert',slide:input.slide,offset,bytes:media.bytes,ext:media.ext}
+        if(!Number.isSafeInteger(input.slide)||input.slide<0||input.slide>=entry.count)throw authError(400)
+        if(input.placement==='natural'){
+          if([input.xPx,input.yPx,input.wPx,input.hPx,input.fitWidthPx].some(value=>value!==undefined))throw authError(400)
+          command={mode:'insert',slide:input.slide,placement:'natural',...media}
+        }else{
+          if(input.placement!==undefined||![input.xPx,input.yPx,input.wPx,input.hPx,input.fitWidthPx].every(Number.isFinite)||input.wPx<=0||input.hPx<=0||input.fitWidthPx<320||input.fitWidthPx>4096)throw authError(400)
+          const scale=entry.size.cx/input.fitWidthPx
+          const offset={x:Math.round(input.xPx*scale),y:Math.round(input.yPx*scale),cx:Math.round(input.wPx*scale),cy:Math.round(input.hPx*scale)}
+          if([offset.x,offset.y,offset.cx,offset.cy].some(value=>!Number.isSafeInteger(value)||Math.abs(value)>EMU_MAX)||offset.cx<1||offset.cy<1)throw authError(400)
+          command={mode:'insert',slide:input.slide,offset,...media}
+        }
       }else{
-        if(!Number.isSafeInteger(input.slide)||input.slide<0||input.slide>=entry.count||typeof input.sourceId!=='string'||!input.sourceId||input.sourceId.length>256||input.keepSrcRect!==undefined&&typeof input.keepSrcRect!=='boolean')throw authError(400)
+        if(input.placement!==undefined||!Number.isSafeInteger(input.slide)||input.slide<0||input.slide>=entry.count||typeof input.sourceId!=='string'||!input.sourceId||input.sourceId.length>256||input.keepSrcRect!==undefined&&typeof input.keepSrcRect!=='boolean')throw authError(400)
         command={mode:'replace',slide:input.slide,sourceId:input.sourceId,bytes:media.bytes,ext:media.ext,...(input.keepSrcRect!==undefined?{keepSrcRect:input.keepSrcRect}:{})}
       }
       const view=await entry.handle.applyImage(input.generation,command,signal).catch(mapSessionError)

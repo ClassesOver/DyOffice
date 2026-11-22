@@ -4,6 +4,7 @@ import {mapScriptOpsForWidth} from '../../../../packages/pptx-ops/src/ops/script
 import {parsePageSpec} from '../../../../packages/pipelines/src/slides/page-spec-parser.ts'
 import {planSlideMoves} from '../../../slides/src/shared/slide-selection.ts'
 import {pictureFrame} from '../../../slides/src/main/picture-frame.ts'
+import {sniffImageMime} from '../../../slides/src/main/media-mime.ts'
 import {imageDpiFromBytes, imageSizeFromBytes} from '../../../../packages/pptx-render/src/image-dpi.ts'
 import {normalizeLang} from '@genoffice/i18n'
 import {tMain} from '../../../slides/src/main/i18n-main.ts'
@@ -40,6 +41,7 @@ async function normalizeWebp(base64: string) {
 }
 type ImageEdit = {slideIndex:number;url?:string;base64?:string;ext?:string} & (
   {mode:'insert';xPx:number;yPx:number;wPx:number;hPx:number;fitWidthPx:number} |
+  {mode:'insert';placement:'natural'} |
   {mode:'replace';sourceId:string;keepSrcRect?:boolean}
 )
 
@@ -48,7 +50,7 @@ function choosePicture(signal: AbortSignal): Promise<File | null> {
   return new Promise(resolve => {
     const input = document.createElement('input')
     input.type = 'file'
-    input.accept = '.png,.jpg,.jpeg,.gif,.webp'
+    input.accept = '.png,.jpg,.jpeg,.gif,.webp,.tif,.tiff'
     input.hidden = true
     const finish = (file: File | null) => {
       signal.removeEventListener('abort', cancel)
@@ -261,14 +263,14 @@ export function createSlidesBridge(host: SessionFileHost, fileId: string, prefs:
       base64=fetched.base64;mime=fetched.mime
     }
     if(!base64||base64.length>SLIDE_IMAGE_LIMIT||!/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(base64))return null
-    const ext=(input.ext??({ 'image/png':'png','image/jpeg':'jpg','image/gif':'gif'} as Record<string,string>)[mime]??'').toLowerCase().replace(/^jpeg$/,'jpg')
+    const ext=(input.ext??({ 'image/png':'png','image/jpeg':'jpg','image/gif':'gif'} as Record<string,string>)[mime]??'').toLowerCase().replace(/^jpeg$/,'jpg').replace(/^tiff$/,'tif')
     if(ext==='webp'&&input.base64){
       try {
         const image=await normalizeWebp(base64)
         return {bytesBase64:image.base64,ext:'png'}
       } catch { return null }
     }
-    if(!['png','jpg','gif'].includes(ext))return null
+    if(!['png','jpg','gif','tif'].includes(ext))return null
     return {bytesBase64:base64,ext}
   }
   function applyImage(input: Extract<ImageEdit, {mode:'insert'}>): ReturnType<SlidesApi['insertImageUrl']>
@@ -279,7 +281,11 @@ export function createSlidesBridge(host: SessionFileHost, fileId: string, prefs:
     if (!stillCurrent()) return null
     const image=await imageBytes(input)
     if(!image || image.bytesBase64.length > SLIDE_IMAGE_LIMIT || !stillCurrent())return null
-    const raw=await call(current.revision,current.generation,'media',{mode:input.mode,slide:input.slideIndex,...image,...(input.mode==='insert'?{xPx:input.xPx,yPx:input.yPx,wPx:input.wPx,hPx:input.hPx,fitWidthPx:input.fitWidthPx}:{sourceId:input.sourceId,...(input.keepSrcRect!==undefined?{keepSrcRect:input.keepSrcRect}:{})})}) as ApplyResponse
+    const target = input.mode==='replace'
+      ? {sourceId:input.sourceId,keepSrcRect:input.keepSrcRect}
+      : 'placement' in input ? {placement:input.placement}
+      : {xPx:input.xPx,yPx:input.yPx,wPx:input.wPx,hPx:input.hPx,fitWidthPx:input.fitWidthPx}
+    const raw=await call(current.revision,current.generation,'media',{mode:input.mode,slide:input.slideIndex,...image,...target}) as ApplyResponse
     current.generation=raw.generation;current.dirty=raw.dirty
     emitHistory(raw.history);onChange()
     if(!raw.slide)return null
@@ -304,16 +310,14 @@ export function createSlidesBridge(host: SessionFileHost, fileId: string, prefs:
     try {
       const file = await pickPicture(controller.signal)
       if (!file || !stillCurrent()) return null
-      const ext = file.name.split('.').pop()?.toLowerCase().replace(/^jpeg$/, 'jpg') ?? ''
-      if (!['png','jpg','gif','webp'].includes(ext) || !file.size || file.size > 5 * 1024 * 1024) return {base64:'', ext}
+      const ext = file.name.split('.').pop()?.toLowerCase().replace(/^jpeg$/, 'jpg').replace(/^tiff$/, 'tif') ?? ''
+      const expectedMime = ({png:'image/png',jpg:'image/jpeg',gif:'image/gif',webp:'image/webp',tif:'image/tiff'} as Record<string,string>)[ext]
+      if (!expectedMime || !file.size || file.size > 5 * 1024 * 1024) return {base64:'', ext}
       const bytes = new Uint8Array(await file.arrayBuffer())
       if (!stillCurrent()) return null
-      const header = String.fromCharCode(...bytes.subarray(0, 12))
-      const detected = header.startsWith('\x89PNG\r\n\x1a\n') ? 'png'
-        : header.startsWith('\xff\xd8\xff') ? 'jpg'
-        : /^GIF8[79]a/.test(header) ? 'gif'
-        : header.startsWith('RIFF') && header.slice(8) === 'WEBP' ? 'webp' : null
-      if (ext !== detected) return {base64:'', ext}
+      if (sniffImageMime(bytes) !== expectedMime) return {base64:'', ext}
+      const header = String.fromCharCode(...bytes.subarray(0, 8))
+      if ((ext === 'png' && header !== '\x89PNG\r\n\x1a\n') || (ext === 'gif' && !/^GIF8[79]a/.test(header))) return {base64:'', ext}
       let binary = ''
       for (let offset = 0; offset < bytes.length; offset += 32768) {
         binary += String.fromCharCode(...bytes.subarray(offset, offset + 32768))
@@ -408,6 +412,7 @@ export function createSlidesBridge(host: SessionFileHost, fileId: string, prefs:
     },
     async insertImage(slideIndex, fitWidthPx) {
       const picture = await pickLocalPicture()
+      if (picture?.base64 && picture.ext==='tif') return applyImage({mode:'insert',placement:'natural',...picture,slideIndex})
       return picture ? addImageBytes({...picture, slideIndex, fitWidthPx, naturalPx:{width:0,height:0}}) : null
     },
     insertMedia: unavailable, addMediaBytes: unavailable, getMediaData: graceful,

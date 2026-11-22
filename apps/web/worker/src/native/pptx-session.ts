@@ -1,4 +1,7 @@
 import {safeExternalUrl} from '../../../../../packages/electron-utils/src/safe-external-url'
+import {sniffImageMime} from '../../../../slides/src/main/media-mime.ts'
+import {pictureFrame} from '../../../../slides/src/main/picture-frame.ts'
+import {tiffToPng} from '../../../../slides/src/main/tiff-decode.ts'
 import type {AnimationItem,RunLink} from './pptx-session-host'
 import {getRunLinks,MAX_INSERT_TABLE_DIM,NAMED_ACTIONS} from '@genoffice/pptx-engine'
 import type {LinkTarget as LinkTargetOp} from '@genoffice/pptx-engine'
@@ -7,7 +10,7 @@ import { matchesElementRef } from '@genoffice/pptx-engine/identity'
 import { runTxn, elementDurableId, slideDurableId, type Op, type OpRecord } from '@genoffice/pptx-ops'
 import { markChartEditable } from '@genoffice/pptx-engine'
 import { listMasterParts, parseMasterPart, type MasterPartInfo } from '@genoffice/pptx-engine'
-import { buildRenderSlide, imageSizeFromBytes, type RenderSlide } from '@genoffice/pptx-render'
+import { buildRenderSlide, imageDpiFromBytes, imageSizeFromBytes, type RenderSlide } from '@genoffice/pptx-render'
 import { coverCropFractions } from '@genoffice/pipelines/slides'
 import { buildPagePptx, parsePageSpec } from '@genoffice/pipelines/slides'
 import { extractMergeSlideSource, type MergeSlideSource } from '@genoffice/pptx-engine'
@@ -79,6 +82,8 @@ const DECK_LINK_PROTOCOLS=['http:','https:','mailto:'] as const
 const MAX_INPUT = 32 * 1024 * 1024
 const MAX_PAYLOAD = 256 * 1024
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024
+const MAX_TIFF_PIXELS = 16 * 1024 * 1024
+const MAX_RENDER_IMAGE_BYTES = 8 * 1024 * 1024
 const ZIP_LIMITS = {maxParts:1500, maxPartBytes:8*1024*1024, maxTotalBytes:64*1024*1024}
 // Undo history is whole-deck snapshots (slides deep, archive entries shallow): bound both the
 // count and the estimated retained bytes so a hostile deck cannot grow the session without limit.
@@ -102,12 +107,13 @@ function editableMasterParts(state: OpenedPptx): MasterPartInfo[] {
 function imageContent(input:SlidesImageCommand){
   if(!input||typeof input!=='object'||(input.mode!=='insert'&&input.mode!=='replace')||!(input.bytes instanceof Uint8Array)||input.bytes.byteLength<1||input.bytes.byteLength>MAX_IMAGE_BYTES)throw new Error('INVALID_MEDIA')
   const bytes=Uint8Array.from(input.bytes)
-  const mime=bytes[0]===0x89&&bytes[1]===0x50&&bytes[2]===0x4e&&bytes[3]===0x47?'image/png'
-    :bytes[0]===0xff&&bytes[1]===0xd8&&bytes[2]===0xff?'image/jpeg'
-    :bytes[0]===0x47&&bytes[1]===0x49&&bytes[2]===0x46&&bytes[3]===0x38?'image/gif':null
-  const ext=String(input.ext).toLowerCase().replace(/^jpeg$/,'jpg')
-  if(!mime||({png:'image/png',jpg:'image/jpeg',gif:'image/gif'} as Record<string,string>)[ext]!==mime)throw new Error('INVALID_MEDIA')
-  const size=mime==='image/gif'&&bytes.length>=10?{w:bytes[6]!+(bytes[7]!<<8),h:bytes[8]!+(bytes[9]!<<8)}:imageSizeFromBytes(bytes)
+  const mime=sniffImageMime(bytes)
+  const ext=String(input.ext).toLowerCase().replace(/^jpeg$/,'jpg').replace(/^tiff$/,'tif')
+  if(!mime||({png:'image/png',jpg:'image/jpeg',gif:'image/gif',tif:'image/tiff'} as Record<string,string>)[ext]!==mime)throw new Error('INVALID_MEDIA')
+  const tiff = mime==='image/tiff' ? tiffToPng(bytes,MAX_TIFF_PIXELS) : null
+  if (mime==='image/tiff' && (!tiff || tiff.png.length>MAX_RENDER_IMAGE_BYTES)) throw new Error('INVALID_MEDIA')
+  const size=tiff?{w:tiff.width,h:tiff.height}
+    :mime==='image/gif'&&bytes.length>=10?{w:bytes[6]!+(bytes[7]!<<8),h:bytes[8]!+(bytes[9]!<<8)}:imageSizeFromBytes(bytes)
   if(!size||size.w<1||size.h<1||size.w>100_000||size.h>100_000||size.w*size.h>100_000_000)throw new Error('INVALID_MEDIA')
   return {bytes,ext,size}
 }
@@ -592,7 +598,13 @@ export async function createPptxSession(bytes: Uint8Array, signal?: AbortSignal)
   function mediaResolver(state: OpenedPptx) {
     return (mediaRef: string): string | undefined => {
       const bytes = state.archive.readBytes(mediaRef)
-      if (!bytes || bytes.byteLength === 0 || bytes.byteLength > 8 * 1024 * 1024) return undefined
+      if (!bytes || bytes.byteLength === 0 || bytes.byteLength > MAX_RENDER_IMAGE_BYTES) return undefined
+      if (sniffImageMime(bytes) === 'image/tiff') {
+        const preview = tiffToPng(bytes,MAX_TIFF_PIXELS)
+        return preview && preview.png.length <= MAX_RENDER_IMAGE_BYTES
+          ? `data:image/png;base64,${Buffer.from(preview.png).toString('base64')}`
+          : undefined
+      }
       const ext = mediaRef.split('.').pop()?.toLowerCase() ?? ''
       const mime = bytes[0] === 0x89 && bytes[1] === 0x50 ? 'image/png'
         : bytes[0] === 0xff && bytes[1] === 0xd8 ? 'image/jpeg'
@@ -798,7 +810,9 @@ export async function createPptxSession(bytes: Uint8Array, signal?: AbortSignal)
         let offset:{x:number;y:number;cx:number;cy:number}|undefined
         let targetId:string|undefined
         if(input.mode==='insert'){
-          const value=input.offset
+          const value=input.placement==='natural'
+            ? pictureFrame({width:state.deck.size.cx,height:state.deck.size.cy},{width:media.size.w,height:media.size.h},imageDpiFromBytes(media.bytes),96)
+            : input.offset
           if(!value||![value.x,value.y,value.cx,value.cy].every(Number.isFinite)||value.cx<=0||value.cy<=0||[value.x,value.y,value.cx,value.cy].some(n=>Math.abs(n)>EMU_MAX))throw new Error('INVALID_GEOMETRY')
           offset={x:Math.round(value.x),y:Math.round(value.y),cx:Math.round(value.cx),cy:Math.round(value.cy)}
         }else{

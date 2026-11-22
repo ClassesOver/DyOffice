@@ -81,6 +81,9 @@
       "utif2": [
         "./node_modules/utif2"
       ],
+      "pngjs": [
+        "./node_modules/@types/pngjs/index.d.ts"
+      ],
       "opentype.js": [
         "./node_modules/opentype.js"
       ],

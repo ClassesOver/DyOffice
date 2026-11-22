@@ -9,6 +9,7 @@ import {fileURLToPath} from 'node:url'
 import {expect} from '@playwright/test'
 import JSZip from 'jszip'
 import {PNG} from 'pngjs'
+import UTIF from 'utif2'
 import {launchTestBrowser} from '../helpers/browser.mjs'
 import {fileFixture,importFile} from '../helpers/files.mjs'
 import {password} from '../helpers/identity.mjs'
@@ -100,6 +101,25 @@ test('actual Ribbon size plus mounted link, run link, animation and chart APIs s
  assert.ok(replacedPicture)
  assert.deepEqual(replacedPicture.box,pictureNode.box)
  assert.match(replacedPicture.dataUrl,/^data:image\/png;base64,/)
+ const tiffPixels = new Uint8Array(20*12*4)
+ for(let i=0;i<tiffPixels.length;i+=4)tiffPixels.set([200,100,50,255],i)
+ const tiff = Buffer.from(UTIF.encodeImage(tiffPixels,20,12))
+ await expect(page.locator('.ribbon-tab-context.active')).toBeVisible()
+ await page.getByRole('button',{name:'Insert',exact:true}).click()
+ const [tiffPicker] = await Promise.all([
+  page.waitForEvent('filechooser',{timeout:5000}),
+  page.getByRole('button',{name:'Pictures',exact:true}).click(),
+ ])
+ const [tiffUpload] = await Promise.all([
+  page.waitForResponse(response=>response.url().endsWith('/slides/media')),
+  tiffPicker.setFiles({name:'local-picture.tiff',mimeType:'image/tiff',buffer:tiff}),
+ ])
+ assert.equal(tiffUpload.status(),200,'native picture upload must accept the selected TIFF')
+ const tiffResult = await tiffUpload.json()
+ const tiffPicture = tiffResult.slide.nodes.find(node=>node.type==='picture'&&node.sourceId===tiffResult.created[0].id)
+ assert.match(tiffPicture.dataUrl,/^data:image\/png;base64,/)
+ const preview = PNG.sync.read(Buffer.from(tiffPicture.dataUrl.split(',')[1],'base64'))
+ assert.deepEqual([preview.width,preview.height,...preview.data.subarray(0,4)],[20,12,200,100,50,255])
  const openMaster = async () => {
   await page.getByRole('button',{name:'View',exact:true}).click()
   await page.getByRole('button',{name:'Slide Master',exact:true}).click()
@@ -133,6 +153,8 @@ test('actual Ribbon size plus mounted link, run link, animation and chart APIs s
  assert.ok(masters.some(xml=>xml.includes('CanvasMasterText')))
  const media = await Promise.all(archive.file(/^ppt\/media\/[^/]+\.png$/).map(entry=>entry.async('nodebuffer')))
  assert.ok(media.some(bytes=>bytes.equals(replacement)))
+ const tiffMedia = await Promise.all(archive.file(/^ppt\/media\/[^/]+\.tiff?$/).map(entry=>entry.async('nodebuffer')))
+ assert.ok(tiffMedia.some(bytes=>bytes.equals(tiff)))
  assert.match(await archive.file('ppt/presentation.xml').async('string'),/<p:sldSz[^>]*cx="9144000"[^>]*cy="6858000"/)
  assert.deepEqual(await f.files.readFile(f.alice.token,id,file.file.revision),original)
  await page.unroute('**/api/v1/ai/catalog')
@@ -144,10 +166,10 @@ test('actual Ribbon size plus mounted link, run link, animation and chart APIs s
  await expect.poll(()=>page.evaluate(()=>window.slidesApi.getSlideSize())).toEqual({cx:9144000,cy:6858000})
  const reloaded=await page.evaluate(async pictureData=>{
   const slides=await window.slidesApi.getRenderSlides(),chart=slides[0].nodes.find(node=>node.type==='chart')
-  return {links:await window.slidesApi.getSlideLinks(0),runLinks:await window.slidesApi.getRunLinks(0),animations:await window.slidesApi.getAnimations(0),chart:await window.slidesApi.getChartData(0,chart.sourceId),schemes:await window.slidesApi.getChartColorSchemes(),picture:slides[0].nodes.some(node=>node.type==='picture'&&node.dataUrl===pictureData)}
- },replacedPicture.dataUrl)
+  return {links:await window.slidesApi.getSlideLinks(0),runLinks:await window.slidesApi.getRunLinks(0),animations:await window.slidesApi.getAnimations(0),chart:await window.slidesApi.getChartData(0,chart.sourceId),schemes:await window.slidesApi.getChartColorSchemes(),pictures:pictureData.every(data=>slides[0].nodes.some(node=>node.type==='picture'&&node.dataUrl===data))}
+ },[replacedPicture.dataUrl,tiffPicture.dataUrl])
  assert.deepEqual(reloaded.chart,chartRead.after);assert.deepEqual(reloaded.schemes,chartRead.schemes)
- assert.ok(reloaded.picture)
+ assert.ok(reloaded.pictures)
  assert.ok(reloaded.links.some(item=>item.target.url===link.url))
  assert.deepEqual(withoutSourceIds(reloaded.runLinks),expectedRuns)
  assert.deepEqual(reloaded.animations.map(({sourceId,targetName,...item})=>item),[{effect:'fade',trigger:'onClick',durationMs:650,delayMs:100}])
