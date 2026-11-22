@@ -29,6 +29,8 @@ DYOFFICE_NATIVE_SHA256=<该二进制的实际 SHA-256>
 
 后续 Web 验收覆盖了文件级查找、外链列表和断开外链，以及工作簿图片保存重开。浏览器验收包中的工作簿已经由 LibreOffice Calc 复开、重算和另存。真实 Microsoft Excel 复开仍待验。[四格式对齐验收](genoffice-web-parity.md)
 
+在固定候选 `d90ea092` 的构建产物上，两项启动回归均通过。首次共用宿主运行触发了旧的 20 秒测试总时限。分段复验核对了数据库准备、工作簿导入、实际服务器监听、能力和文件接口、原生页面及 SIGTERM 退出。测试时限调整为 45 秒后，两项重新通过，服务器入口用例耗时约 27 秒。两轮复验使用本机 PostgreSQL 和 systemd 隔离。
+
 `apps/web/test/native-sheets/runtime.test.mjs` 两项测试通过：
 
 - 实验配置约束、实际隔离程序启动、错误哈希拒绝、工作簿读取、关闭后拒绝新任务。

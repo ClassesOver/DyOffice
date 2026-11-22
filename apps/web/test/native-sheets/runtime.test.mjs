@@ -25,7 +25,8 @@ test('Sheets runtime verifies the native engine selected by the local server',as
  await assert.rejects(()=>runtime.sheetsNative.inspect(bytes))
 })
 
-test('actual server entry enables owned Sheets API and shuts down cleanly',{timeout:20000},async t=>{
+// The deadline includes database setup, file import and two systemd sandbox startups.
+test('actual server entry enables owned Sheets API and shuts down cleanly',{timeout:45000},async t=>{
  const {spawn}=await import('node:child_process'),{once}=await import('node:events'),{fileURLToPath}=await import('node:url')
  const {fileFixture,importFile}=await import('../helpers/files.mjs')
  const {createCsrfService}=await import('../../server/src/modules/auth/csrf.ts')
