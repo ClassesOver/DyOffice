@@ -15,6 +15,13 @@ const defaultAnalysisPython=fileURLToPath(new URL('../../../../../../.dyoffice-a
 const defaultDataHelper=fileURLToPath(new URL('../../../../../../.dyoffice-analysis-build/harness-data.mjs',import.meta.url))
 export interface CodingHarnessData {baseUrl:string;grant:HarnessDataGrant;socketPath?:string;mailboxDirectory?:string}
 const aborted=()=>Object.assign(new Error('Coding task cancelled'),{name:'AbortError'})
+async function resolveDataHelper(path:string){
+  try {
+    const resolved=await realpath(path)
+    if((await stat(resolved)).isFile())return resolved
+  }catch{/* Only a bounded diagnostic crosses the Harness transport. */}
+  throw Object.assign(Error('Harness data helper unavailable'),{code:'HARNESS_DATA_HELPER_UNAVAILABLE'})
+}
 /** Separate scratch workspace and restricted reads; inference is Office-owned. */
 export function createCodingHarness(options:CodingHarnessOptions={}) {
   if(options.timeoutMs!==undefined&&(!Number.isSafeInteger(options.timeoutMs)||options.timeoutMs<1||options.timeoutMs>600000))throw Error('Invalid coding timeout')
@@ -37,7 +44,7 @@ export function createCodingHarness(options:CodingHarnessOptions={}) {
     const runtimeManifest=analysisRoot?join(dirname(analysisRoot),'manifest.json'):undefined
     const runtimeManifestBytes=runtimeManifest?await readFile(runtimeManifest).catch(()=>undefined):undefined
     const runtimeManifestSha256=runtimeManifestBytes?createHash('sha256').update(runtimeManifestBytes).digest('hex'):undefined
-    const dataHelper=data?await realpath(options.dataHelper??defaultDataHelper):undefined
+    const dataHelper=data?await resolveDataHelper(options.dataHelper??defaultDataHelper):undefined
     const nodeExecutable=data?await realpath(process.execPath):undefined
     if(data&&(!data.grant?.credential||!data.grant.taskId||!data.baseUrl||data.socketPath&&!isAbsolute(data.socketPath)||data?.mailboxDirectory&&!isAbsolute(data.mailboxDirectory)))throw Error('Invalid task data grant')
     const cwd=await mkdtemp(join(options.workspaceRoot??tmpdir(),'office-coding-'))

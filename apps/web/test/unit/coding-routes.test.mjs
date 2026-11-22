@@ -65,6 +65,18 @@ test('a stream lost after Harness progress does not confirm execution failure',a
  assert.equal(client.snapshot()[0].state,'unknown_outcome')
 })
 
+test('reports a missing Harness data helper without disclosing the server path',async t=>{
+ const app=Fastify();t.after(()=>app.close())
+ const registry=createHarnessRegistry([{descriptor:{id:'codex',name:'Codex',origin:'builtin',capabilities:['coding']},async run(){
+  throw Object.assign(Error('/private/server/path'),{code:'HARNESS_DATA_HELPER_UNAVAILABLE'})
+ }}],'codex')
+ registerCodingRoutes(app,{registry,sessions:{async authenticate(){return {deploymentId:'d',userId:'u',sessionId:'s',roles:['personal']}}},csrf:{requireSession(){},requireSessionRead(){}}})
+ const response=await app.inject({method:'POST',url:'/api/v1/agents/tasks',headers,payload:{turnId:'missing_helper',modelId:'codex',request:{system:'',messages:[{role:'user',text:JSON.stringify({instruction:'Analyze',officeModelId:'office'})}],tools:[]}}})
+ assert.match(response.body,/The Harness data helper is unavailable on the server/)
+ assert.match(response.body,/"outcome":"failed"/)
+ assert.doesNotMatch(response.body,/private\/server\/path/)
+})
+
 test('a second editor receives a confirmed busy result without starting another task',async t=>{
  const app=Fastify();t.after(()=>app.close())
  let release,started,runs=0
