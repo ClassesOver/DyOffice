@@ -119,6 +119,24 @@ test('four real Office editors share assistant chrome and retain drafts across c
   await textarea.click()
   await textarea.fill(draft)
   await expect(textarea,format+' short draft is entered').toHaveValue(draft)
+  const viewport=page.viewportSize()
+  await page.setViewportSize({...viewport,width:viewport.width-80})
+  await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))))
+  await expect(textarea).toBeFocused()
+  await page.keyboard.type(' focus')
+  await expect(textarea).toHaveValue(draft+' focus')
+  const editorControl=page.locator({
+   docx:'.tiptap.doc-page[contenteditable="true"]',
+   xlsx:'[data-u-comp="defined-name"] input',
+   pptx:'.slide-list[role="listbox"]',
+   pdf:'.pdf-thumb',
+  }[format]).first()
+  await editorControl.click()
+  await expect.poll(()=>editorControl.evaluate(node=>node.contains(document.activeElement)),{
+   message:format+' explicit editor click takes keyboard focus from the assistant',
+  }).toBe(true)
+  await page.setViewportSize(viewport)
+  await textarea.fill(draft)
   // The composer measures after the React update; the previous starter can still be at maximum height.
   await expect.poll(textareaHeight,{timeout:15000,message:format+' short draft settles before measuring growth'}).toBe(compactHeight)
   await textarea.fill(`${draft}\n检查第三行\n检查第四行`)
@@ -315,7 +333,9 @@ test('four real Office editors share assistant chrome and retain drafts across c
   await expect(panel.locator('.ai-chat')).toContainText(/等待模型回复超时。请重试、缩短请求，或切换模型。|The model response timed out\./)
   await expect(panel.locator('.ai-chat')).toContainText('Partial model reply')
   await expect(panel.locator('.ai-chat')).toContainText('先前提交的请求')
-  await expect(textarea).toHaveValue('正在写的下一条消息')
+  await expect(textarea).toBeFocused()
+  await page.keyboard.type(' OK')
+  await expect(textarea).toHaveValue('正在写的下一条消息 OK')
   assert.equal(requests.length,beforeTimeout+1,format+' does not replay a timed out request')
   {
    assert.match(JSON.stringify(requests.at(-1)),/restore-note\.txt/)
