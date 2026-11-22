@@ -4,7 +4,7 @@ window.__ModuleLoader__.load({
     const {createElement: h, useEffect, useRef, useState, useSyncExternalStore} = require('react')
     const id = '@local/dsh-dyoffice'
     const copy = {
-      zh: {handoffLog:'协作记录',textMode:'正文',editorMode:'编辑器',syncLive:'消息同步中',syncStale:'同步中断',syncEnded:'对话已结束',destination:'消息接收方',savedPreview:'已保存的正文',sending:'正在提交 DyOffice 请求…', elapsed:'已用时 {time}', snapshot:'预览快照',previewRight:'在右侧打开预览', openWindow:'在新窗口打开 DyOffice', startWriting:'在新窗口打开文档后，DyOffice 助手会接手撰写。',snapshotUnavailable:'未能生成缩略图，点击预览文件',skillLabel:'DSH Skill',title: 'DyOffice', description: '查看已保存文档和任务进度', loading: '正在连接 DyOffice…',
+      zh: {handoffLog:'通信记录',textMode:'正文',editorMode:'编辑器',syncLive:'消息同步中',syncStale:'同步中断',syncEnded:'对话已结束',destination:'消息接收方',savedPreview:'已保存的正文',sending:'正在提交 DyOffice 请求…', elapsed:'已用时 {time}', snapshot:'预览快照',previewRight:'在右侧打开预览', openWindow:'在新窗口打开 DyOffice', startWriting:'在新窗口打开文档后，DyOffice 助手会接手撰写。',snapshotUnavailable:'未能生成缩略图，点击预览文件',skillLabel:'DSH Skill',title: 'DyOffice', description: '查看已保存文档和任务进度', loading: '正在连接 DyOffice…',
         unavailable: '暂时无法预览，请检查频道连接和后台读取权限。', configure: '请先配置 DyOffice 频道连接。',
         authorization: '连接 DyOffice', pairIntro: '连接频道后，即可在 DSH 创建和预览文档。',
         url: 'DyOffice 服务 URL', code: '授权 Token', codeHint: '粘贴频道分享生成的 Token',
@@ -35,7 +35,7 @@ window.__ModuleLoader__.load({
         truncated: '正文仅显示前 24,000 字符。', tasks: '任务进度', noTasks: '暂无任务。',
         queued: '排队中', running: '运行中', waiting_peer: '等待协作', cancel_requested: '正在取消',
         succeeded: '已完成', failed: '失败', cancelled: '已取消', unknown_outcome: '结果待核对'},
-      en: {handoffLog:'Collaboration',textMode:'Text',editorMode:'Editor',syncLive:'Sync active',syncStale:'Sync interrupted',syncEnded:'Conversation ended',destination:'Message recipient',savedPreview:'Saved text',sending:'Sending the request to DyOffice…', elapsed:'Elapsed {time}', snapshot:'Preview snapshot',previewRight:'Open preview on the right', openWindow:'Open DyOffice in a new window', startWriting:'Open the document in a new window to start writing with DyOffice.',snapshotUnavailable:'Thumbnail unavailable; open file preview',skillLabel:'DSH Skill',title: 'DyOffice', description: 'Follow the saved document and task progress', loading: 'Connecting to DyOffice…',
+      en: {handoffLog:'Message history',textMode:'Text',editorMode:'Editor',syncLive:'Sync active',syncStale:'Sync interrupted',syncEnded:'Conversation ended',destination:'Message recipient',savedPreview:'Saved text',sending:'Sending the request to DyOffice…', elapsed:'Elapsed {time}', snapshot:'Preview snapshot',previewRight:'Open preview on the right', openWindow:'Open DyOffice in a new window', startWriting:'Open the document in a new window to start writing with DyOffice.',snapshotUnavailable:'Thumbnail unavailable; open file preview',skillLabel:'DSH Skill',title: 'DyOffice', description: 'Follow the saved document and task progress', loading: 'Connecting to DyOffice…',
         unavailable: 'Preview unavailable. Check the channel connection and saved document permissions.', configure: 'Configure a DyOffice channel connection first.',
         authorization: 'Connect DyOffice', pairIntro: 'Connect a channel to create and preview documents in DSH.',
         url: 'DyOffice service URL', code: 'Authorization token', codeHint: 'Paste the token from channel sharing',

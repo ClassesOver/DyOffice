@@ -53,6 +53,7 @@ test('DSH command card separates confirmed document saves from message synchroni
  await expect(card.getByText('活动流程已齐全，建议补充报名截止时间。')).toBeVisible()
  await expect(card.getByText('正文已保存，交给 DSH 审阅。')).toBeVisible()
  await expect(card.getByText('社区阅读日',{exact:true})).toBeVisible()
+ await expect(card.getByRole('heading',{name:'通信记录',exact:true})).toBeVisible()
  const paper=card.locator('.dsh-office-canvas'),log=card.locator('.dsh-office-log')
  assert.ok((await log.boundingBox()).x>(await paper.boundingBox()).x)
  await mkdir('test-results/dsh-studio',{recursive:true})
