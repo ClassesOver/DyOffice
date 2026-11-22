@@ -115,6 +115,7 @@ test('native PDF form marks address visible pages after an unsaved reorder',{ski
  await stubHomeHero(page)
  await page.route('**/api/v1/ai/catalog',route=>route.fulfill({json:{entries:[{id:'mock',label:'Office test model'}],defaultId:'mock'}}))
  const calls=[
+  ['goto_page',{page:2}],
   ['apply_ops',{ops:[{op:'setPageOrder',order:[2,1]}]}],
   ['add_form_mark',{page:1,kind:'check',x:40,y:84}],
  ]
@@ -138,14 +139,15 @@ test('native PDF form marks address visible pages after an unsaved reorder',{ski
  await expect(page.locator('html')).toHaveAttribute('data-document-loading','ready')
  await page.getByRole('button',{name:'AI 助手',exact:true}).click()
  const assistant=page.locator('.shared-editor-assistant')
- for(const step of [0,1]){
+ for(const step of calls.keys()){
   await assistant.getByRole('textbox',{name:'消息'}).fill('Apply form step '+step)
   await assistant.getByRole('button',{name:'发送',exact:true}).click()
   await expect(assistant.getByText('Form step '+step,{exact:true})).toBeVisible({timeout:15000})
+  if(step===0)await expect(page.locator('.pdf-thumb').nth(1)).toHaveClass(/pdf-thumb-active/)
  }
- assert.ok(!results[0].isError,results[0].output)
- assert.ok(!results[1].isError,results[1].output)
- assert.match(results[1].output,/OriginalSecond/)
+ for(const result of results)assert.ok(!result.isError,result.output)
+ assert.match(results[0].output,/Navigated to page 2/)
+ assert.match(results[2].output,/OriginalSecond/)
  const head=async()=>(await f.files.openFile(f.alice.token,file.fileId)).file.revision
  assert.equal(await head(),file.revision)
  await page.getByRole('button',{name:'保存',exact:true}).click()
