@@ -16,6 +16,8 @@
 
 同一候选的 DOCX 浏览器套件 12 项全部通过。覆盖段落与表格修改、下载、刷新、保留未编辑部件、保存期间继续编辑、租约接管、回执恢复及元数据保存。用例见 [DOCX 原生浏览器回归](../../../apps/web/test/native-docs/roundtrip.test.mjs)。
 
+固定候选 `ab22f217` 的 DOCX 补跑验证了成品 OOXML、未编辑部件、租约接管和回执丢失恢复。延迟保存用例在补跑中收到 Chromium 对首个 HTTP 请求的 `ERR_ABORTED`，同时编辑器已确认该回执并保留后续草稿。同一构建的定向复验通过，检查第一版只包含保存时的快照，后续编辑保持未保存并提交为子修订。初次网络事件失败单独保留。
+
 同一提交的 GitHub Actions 已完成 [DOCX 原生浏览器与原引擎回归](https://github.com/ClassesOver/DyOffice/actions/runs/44972164512/job/137054101707)、[XLSX 原生浏览器、隔离 Worker 与 gateway 回归](https://github.com/ClassesOver/DyOffice/actions/runs/44972164512/job/137054101587)和 [PPTX 原生会话与包重开回归](https://github.com/ClassesOver/DyOffice/actions/runs/44972164426/job/137054101419)。PPTX 该作业覆盖原生包操作；四格式 Chromium 共用作业随后失败，三个失败均来自同一个工具清单测试文件。无数据源分析的夹具仍把依赖数据源的 `insert_data_result` 计入预期。
 
 当前工作分支补齐 PPTX 手动插入与替换图片。原功能区打开浏览器文件选择器，后续走既有受授权图片变更与原生 PPTX 保存链。桥接回归先因接口不可用失败，再通过；包含取消、只读、无效图片和选择期间文稿变更的边界。最终补丁通过桥接与 Chromium 共 43 项。浏览器验证选择图片、替换后保持原框、下载字节和重开原生图片对象。原图片布局 23 项回归、Web PPTX 类型检查和浏览器依赖边界扫描通过。手动 BMP 已接入同一功能区与原生保存链。Chromium 核对浏览器解码的尺寸和像素、下载包中的原始 BMP 字节，以及重开后的原生图片对象。图片头单元测试 9 项、Web PPTX 与服务器及 Worker 类型检查、Slides 构建和 Web 依赖边界检查通过。
