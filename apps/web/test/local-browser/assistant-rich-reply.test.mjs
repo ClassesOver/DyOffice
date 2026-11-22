@@ -13,7 +13,9 @@ import {mockProviderNetwork} from '../helpers/provider-network.mjs'
 import {buildLocalApp} from '../../server/src/app.ts'
 import {createGlobalConfigService} from '../../server/src/modules/admin/service.ts'
 
-test('assistant rich replies keep wide tables and code inside their own scroll areas',{timeout:90000},async t=>{
+const nativePdfDirectory=process.env.DYOFFICE_TEST_NATIVE_PDF_DIST
+
+test('native PDF assistant keeps wide tables and code inside their own scroll areas',{skip:!nativePdfDirectory,timeout:90000},async t=>{
  let app,browser
  t.after(async()=>{await browser?.close();app?.server.closeAllConnections();await app?.close()})
  const origin='http://127.0.0.1:4257',f=await fileFixture(t,{origin,buildApp:false})
@@ -24,14 +26,19 @@ test('assistant rich replies keep wide tables and code inside their own scroll a
  await createGlobalConfigService({transactions:f.transactions,keyring}).saveGlobalConfig(f.adminSigned.token,0,{upserts:[{id:'chat',kind:'chat',providerId:'deepseek',label:'Test model',model:'synthetic',baseUrl:'https://provider.example/v1',enabled:true,apiKey:'synthetic-key'}],defaults:{chat:'chat'}})
  const pdf=await PDFDocument.create();pdf.addPage([400,300]).drawText('Rich reply layout')
  const source=(await importFile(f,f.alice.token,Buffer.from(await pdf.save()),'rich.pdf')).file
- app=await buildLocalApp({db:f.db,businessPool:f.businessPool,passwords:f.passwords,deploymentId:f.deploymentId,origin,csrfKey:f.csrfKey,objectStore:f.objects,globalConfigKeyring:keyring,providerGateway:{mode:'shared'},codingHarnesses:false,localShellDirectory:fileURLToPath(new URL('../../dist-local-shell',import.meta.url))})
+ app=await buildLocalApp({db:f.db,businessPool:f.businessPool,passwords:f.passwords,deploymentId:f.deploymentId,origin,csrfKey:f.csrfKey,objectStore:f.objects,globalConfigKeyring:keyring,providerGateway:{mode:'shared'},codingHarnesses:false,nativePdfDirectory,localShellDirectory:process.env.DYOFFICE_TEST_LOCAL_SHELL_DIRECTORY??fileURLToPath(new URL('../../dist-local-shell',import.meta.url))})
  await app.listen({host:'127.0.0.1',port:4257});browser=await launchTestBrowser()
  const page=await browser.newPage({viewport:{width:1440,height:1000}})
  await stubHomeHero(page)
  await page.goto(origin);await page.getByLabel('用户名',{exact:true}).fill('alice');await page.getByLabel('密码',{exact:true}).fill(password)
  await page.getByRole('button',{name:'登录',exact:true}).click();await expect(page.locator('.home')).toBeVisible()
- await page.goto(origin+'/#/file/'+source.fileId)
- const assistant=page.locator('.shared-editor-assistant').first()
+ await page.goto(origin+'/?entry=rich-reply#/file/'+source.fileId)
+ const frame=page.locator('iframe.workspace-document-frame')
+ await expect(frame).toHaveAttribute('src','/native-pdf/?fileId='+source.fileId)
+ const editor=frame.contentFrame()
+ await expect(editor.locator('html')).toHaveAttribute('data-document-loading','ready')
+ await editor.getByRole('button',{name:'AI 助手',exact:true}).click()
+ const assistant=editor.locator('.shared-editor-assistant')
  await assistant.getByRole('textbox',{name:'消息',exact:true}).fill('展示核对结果')
  await assistant.getByRole('button',{name:'发送',exact:true}).click()
  await expect(assistant.getByText('Review complete',{exact:true})).toBeVisible({timeout:30000})
@@ -39,7 +46,7 @@ test('assistant rich replies keep wide tables and code inside their own scroll a
  for(const width of [1440,390]){
   await page.setViewportSize({width,height:1000})
   for(const theme of ['light','dark']){
-   await page.evaluate(theme=>document.documentElement.dataset.theme=theme,theme)
+   await editor.locator('html').evaluate((root,theme)=>root.dataset.theme=theme,theme)
    await assistant.scrollIntoViewIfNeeded()
    const table=assistant.locator('.ai-md-table-wrap'),code=assistant.locator('.ai-md-pre')
    await expect(table).toBeVisible();await expect(code).toBeVisible()
