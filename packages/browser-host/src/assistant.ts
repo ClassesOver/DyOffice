@@ -126,6 +126,7 @@ export async function createAssistantClient({request, fetchImpl, csrfToken, onDe
     requestBytes(input:AgentStreamRequest){return encoder.encode(serializeTurnRequest('00000000-0000-0000-0000-000000000000',selected??undefined,prepare(input),format)).length},
     catalog, transport, coding, extraSkills: [...(coding ? [coding.skill] : []), ...(sourceSkill ? [sourceSkill] : [])],
     selected: () => selected,
+    currentRunModel: () => runModel,
     select(id: string) {if (disposed || !catalog.entries.some(e => e.id === id)) throw new Error('模型不可用。'); selected = id},
     available: catalog.entries.length > 0,
     dispose() {coding?.dispose(); disposed = true; for (const handle of active) handle.cancel(); active.clear()},

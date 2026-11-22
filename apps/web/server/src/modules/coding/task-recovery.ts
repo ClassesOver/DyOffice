@@ -1,3 +1,4 @@
+import {matchesContinuation} from '../../../../../../packages/web-contracts/src/task-continuation.ts'
 import {maintainTaskLease} from '../tasks/lease.ts'
 import type {AdmitHarnessContinuation,TurnRunner} from '../providers/routes.ts'
 import type {TurnEvent,TurnIdentity} from '../providers/turns.ts'
@@ -193,8 +194,8 @@ export function createCodingTaskRecovery(turns:TurnRunner,identity:(token:string
     const result=last?.role==='tool'?last.results:undefined
     const check=(entry:Task)=>{
       const continuation=entry.continuation
-      if(entry.state!=='succeeded'||!continuation||input.revision!==continuation.revision||modelId!==continuation.modelId||
-        !Array.isArray(result)||!result.some(item=>item?.id===continuation.callId&&item.name==='delegate_agent_task'&&!item.isError)||signal.aborted)throw authError(409)
+      if(entry.state!=='succeeded'||!continuation||!Array.isArray(result)||
+        !result.some(item=>item?.name==='delegate_agent_task'&&!item.isError&&matchesContinuation(continuation,{revision:input.revision,modelId,callId:item.id}))||signal.aborted)throw authError(409)
     }
     // A row lock also fences simultaneous resumes on different API instances.
     if(store)return store.access(token,input.documentId,input.taskId,true,entry=>{check(entry);return {value:undefined,consume:true}})

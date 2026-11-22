@@ -1,3 +1,4 @@
+import type {ContinuationOrigin} from './task-continuation.ts'
 import type {HarnessDataInputs} from './harness-data.ts'
 export const dshTokenExpiryOptions:readonly number[]=[60,1440,10080,43200]
 export const defaultDshTokenExpiryMinutes = 1440
@@ -11,7 +12,19 @@ export type AgentAction=
  |{kind:'cancel';taskId:string}
 export interface SubmitAgentAction {requestId:string;conversationId:string;to:string;action:AgentAction}
 export interface AgentReceipt {messageId:string;taskId?:string}
+export type DelegationOrigin=Omit<ContinuationOrigin,'revision'>&{revision:string|null}
+export function decodeDelegationOrigin(raw:unknown):DelegationOrigin {
+ const value=channelObject(raw,['revision','modelId','callId'])
+ for(const key of ['modelId','callId'])if(typeof value[key]!=='string'||!/^[A-Za-z0-9_-]{1,128}$/.test(value[key] as string))throw invalid()
+ return {revision:value.revision===null?null:channelUuid(value.revision),modelId:value.modelId as string,callId:value.callId as string}
+}
+export function decodeContinuationOrigin(raw:unknown):ContinuationOrigin{
+ const origin=decodeDelegationOrigin(raw)
+ if(!origin.revision)throw invalid()
+ return {...origin,revision:origin.revision}
+}
 export interface ChannelTask {
+ continuationOrigin?:ContinuationOrigin
  taskId:string;conversationId:string;parentTaskId:string|null;rootTaskId:string;state:TaskState
  from:string;to:string;instruction:string;claimId:string|null;connectionEpoch:number|null
  continuation?:{parentTaskId:string;untrusted:true;children:{taskId:string;state:TaskState;summary:string|null;outcome:string|null;summaryTruncated:boolean}[]}

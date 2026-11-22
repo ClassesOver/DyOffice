@@ -1,3 +1,4 @@
+import {matchesContinuation,type ContinuationOrigin} from '../../../../../../packages/web-contracts/src/task-continuation.ts'
 import {isBackgroundFormat} from './background-format.ts'
 import {createHash,createHmac,timingSafeEqual,randomUUID,randomBytes,hkdfSync,createCipheriv,createDecipheriv} from 'node:crypto'
 import type {PoolClient} from 'pg'
@@ -5,7 +6,7 @@ import type {PrincipalTransactions,BusinessPrincipal} from '../../db/context.ts'
 import {loadFile,uuid,scope} from '../files/queries.ts'
 import type {FileService} from '../files/service.ts'
 import {blankChannelDocument} from './blank-document.ts'
-import {decodeAgentAction,decodeChannelDataInputs,defaultDshTokenExpiryMinutes,dshTokenExpiryOptions,type SubmitAgentAction,type ChannelTask} from '../../../../../../packages/web-contracts/src/assistant-channel.ts'
+import {decodeDelegationOrigin,decodeContinuationOrigin,type DelegationOrigin,decodeAgentAction,decodeChannelDataInputs,defaultDshTokenExpiryMinutes,dshTokenExpiryOptions,type SubmitAgentAction,type ChannelTask} from '../../../../../../packages/web-contracts/src/assistant-channel.ts'
 
 export type ChannelCredential={kind:'owner'|'member';token:string}
 type Sealed={kind:'invite'|'application'|'member'|'background';session:string;conversationId:string;id:string;nonce:string;allowCreate?:true}
@@ -20,7 +21,7 @@ function descriptor(input:{displayName:string;kind:string}) {
  if(/[\u0000-\u001f\u007f-\u009f]/u.test(displayName)||!/^[-a-zA-Z0-9_. ]+$/.test(kind))throw fail()
  return {displayName,kind}
 }
-function taskDto(r:Record<string,any>):ChannelTask {return {taskId:r.task_id,conversationId:r.conversation_id,parentTaskId:r.parent_task_id,rootTaskId:r.root_task_id,state:r.state,from:r.sender,to:r.recipient,instruction:r.instruction,claimId:r.claim_id,connectionEpoch:r.connection_epoch,deadlineAt:r.deadline_at.toISOString(),summary:r.summary,...(r.data_inputs?{dataInputs:decodeChannelDataInputs(r.data_inputs)}:{}),...(r.execution?{execution:r.execution,savedRevision:r.saved_revision}:{}),...(r.outcome?{outcome:r.outcome}:{})}}
+function taskDto(r:Record<string,any>):ChannelTask {return {...(r.continuation_origin?{continuationOrigin:r.continuation_origin}:{}),taskId:r.task_id,conversationId:r.conversation_id,parentTaskId:r.parent_task_id,rootTaskId:r.root_task_id,state:r.state,from:r.sender,to:r.recipient,instruction:r.instruction,claimId:r.claim_id,connectionEpoch:r.connection_epoch,deadlineAt:r.deadline_at.toISOString(),summary:r.summary,...(r.data_inputs?{dataInputs:decodeChannelDataInputs(r.data_inputs)}:{}),...(r.execution?{execution:r.execution,savedRevision:r.saved_revision}:{}),...(r.outcome?{outcome:r.outcome}:{})}}
 function taskPreview(r:Record<string,any>):ChannelTask {
  const result=taskDto(r)
  delete result.dataInputs
@@ -650,12 +651,15 @@ export function createAssistantChannelService({transactions,credentialKey,backgr
   },
   /** Opt-in ledger entry for an Office run that is about to delegate. Native
    * chat remains independent of this service; no model work starts here. */
-  async beginOfficeTask(token:string,conversationId:string,input:{requestId:string;connectionId:string;connectionEpoch:number;instruction:string}) {
+  async beginOfficeTask(token:string,conversationId:string,input:{requestId:string;connectionId:string;connectionEpoch:number;instruction:string;origin?:DelegationOrigin}) {
    const requestId=uuid(input.requestId),connectionId=uuid(input.connectionId),instruction=text(input.instruction)
-   const paramsHash=hash(JSON.stringify({operation:'begin-office',connectionId,connectionEpoch:input.connectionEpoch,instruction}))
+   const origin=input.origin&&decodeDelegationOrigin(input.origin)
+   const paramsHash=hash(JSON.stringify({operation:'begin-office',connectionId,connectionEpoch:input.connectionEpoch,instruction,origin}))
    return run({kind:'owner',token},conversationId,async(c,p,ch)=>{
     await expire(c,p,conversationId)
     if(ch.paused||ch.office_connection_id!==connectionId||ch.office_epoch!==input.connectionEpoch)throw fail(409)
+    const revision=origin&&ch.file_id?(await loadFile(c,p,ch.file_id)).current_revision:undefined
+    if(origin&&(!revision||(origin.revision!==null&&origin.revision!==revision)))throw fail(409)
     const prior=(await c.query("SELECT * FROM assistant_requests WHERE deployment_id=$1 AND owner_id=$2 AND conversation_id=$3 AND actor='office' AND request_id=$4",[...scope(p),conversationId,requestId])).rows[0]
     if(prior){if(prior.params_hash!==paramsHash)throw fail(409);return taskDto(await task(c,p,conversationId,prior.receipt.taskId))}
     const busy=(await c.query("SELECT 1 FROM task_runtime_channel WHERE deployment_id=$1 AND owner_id=$2 AND conversation_id=$3 AND recipient='office' AND state IN ('running','cancel_requested')",[...scope(p),conversationId])).rowCount
@@ -663,15 +667,16 @@ export function createAssistantChannelService({transactions,credentialKey,backgr
     const active=(await c.query("SELECT count(*) FROM task_runtime_channel WHERE deployment_id=$1 AND owner_id=$2 AND conversation_id=$3 AND state IN ('queued','running','waiting_peer','cancel_requested','unknown_outcome')",[...scope(p),conversationId])).rows[0].count
     if(Number(active)>=32)throw fail(429)
     const taskId=randomUUID(),claimId=randomUUID()
-    const row=(await c.query("INSERT INTO task_runtime_channel(task_id,deployment_id,owner_id,conversation_id,root_task_id,depth,sender,recipient,instruction,state,claim_id,connection_id,connection_epoch,deadline_at) VALUES($1,$2,$3,$4,$1,0,'office','office',$5,'running',$6,$7,$8,clock_timestamp()+interval '10 minutes') RETURNING *",[taskId,...scope(p),conversationId,instruction,claimId,connectionId,input.connectionEpoch])).rows[0]
+    const row=(await c.query("INSERT INTO task_runtime_channel(task_id,deployment_id,owner_id,conversation_id,root_task_id,depth,sender,recipient,instruction,state,claim_id,connection_id,connection_epoch,deadline_at,continuation_origin) VALUES($1,$2,$3,$4,$1,0,'office','office',$5,'running',$6,$7,$8,clock_timestamp()+interval '10 minutes',$9) RETURNING *",[taskId,...scope(p),conversationId,instruction,claimId,connectionId,input.connectionEpoch,origin?{...origin,revision}:null])).rows[0]
     const messageId=await event(c,p,conversationId,'task',taskDto(row),'office',taskId)
     await c.query("INSERT INTO assistant_requests(deployment_id,owner_id,conversation_id,actor,request_id,params_hash,receipt) VALUES($1,$2,$3,'office',$4,$5,$6)",[...scope(p),conversationId,requestId,paramsHash,JSON.stringify({messageId,taskId})])
     return taskDto(row)
    })
   },
-  async claim(credential:ChannelCredential,conversationId:string,input:{taskId:string;connectionId:string;connectionEpoch:number;requestId?:string}) {
+  async claim(credential:ChannelCredential,conversationId:string,input:{taskId:string;connectionId:string;connectionEpoch:number;requestId?:string;origin?:ContinuationOrigin}) {
    const connectionId=uuid(input.connectionId),taskId=uuid(input.taskId),requestId=input.requestId===undefined?undefined:uuid(input.requestId)
-   const paramsHash=hash(JSON.stringify({operation:'claim',taskId,connectionId,connectionEpoch:input.connectionEpoch}))
+   const origin=input.origin&&decodeContinuationOrigin(input.origin)
+   const paramsHash=hash(JSON.stringify({operation:'claim',taskId,connectionId,connectionEpoch:input.connectionEpoch,origin}))
    return run(credential,conversationId,async(c,p,ch,actor)=>{
     await expire(c,p,conversationId)
     if(ch.paused)throw fail(409)
@@ -680,6 +685,7 @@ export function createAssistantChannelService({transactions,credentialKey,backgr
     const prior=requestId?(await c.query('SELECT * FROM assistant_requests WHERE deployment_id=$1 AND owner_id=$2 AND conversation_id=$3 AND actor=$4 AND request_id=$5',[...scope(p),conversationId,actor.id,requestId])).rows[0]:undefined
     if(prior&&prior.params_hash!==paramsHash)throw fail(409)
     const row=await task(c,p,conversationId,taskId)
+    if(row.continuation_origin&&(!origin||!matchesContinuation(row.continuation_origin,origin)||!ch.file_id||(await loadFile(c,p,ch.file_id)).current_revision!==origin.revision))throw fail(409)
     if(prior){
      if(row.recipient!==actor.id||row.state!=='running'||row.claim_id!==prior.receipt.claimId||row.connection_id!==connectionId||row.connection_epoch!==epoch||prior.receipt.taskId!==taskId||prior.receipt.connectionEpoch!==epoch)throw fail(409)
      return claimDto(c,p,conversationId,row)

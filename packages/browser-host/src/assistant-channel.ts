@@ -1,3 +1,4 @@
+import {matchesContinuation} from '../../web-contracts/src/task-continuation.ts'
 import {followChannelEvents} from './channel-event-stream.ts'
 import type {SettingsRequest} from './preferences.ts'
 import type {AgentSkill} from '../../agent-core/src/skill.ts'
@@ -17,7 +18,7 @@ export const REFRESH_GIVE_UP_MS=25_000
 const REFRESH_RETRY_MAX_MS=8_000
 /** Optional collaboration uses the existing editor's notification channel and
  * executor. Native messages never wait for pairing, snapshots or peer tasks. */
-export function createAssistantChannelClient(options:{request:SettingsRequest;csrfToken?:string;fileId:string;editorId:string;conversationId?:string;generation:()=>number}) {
+export function createAssistantChannelClient(options:{request:SettingsRequest;csrfToken?:string;fileId:string;editorId:string;conversationId?:string;generation:()=>number;continuationRevision?:()=>string|undefined;currentRunModel?:()=>string|null|undefined;selectedModel?:()=>string|null|undefined}) {
  let snapshot:ChannelSnapshot|null=null,disposed=false,error='',executor:Parameters<AssistantControl['register']>[0]|undefined
  let connection:{id:string;epoch:number}|undefined,refreshing:Promise<void>|undefined,starting:Promise<void>|undefined
  let localGeneration=0
@@ -63,9 +64,19 @@ export function createAssistantChannelClient(options:{request:SettingsRequest;cs
   }
  }
  const sendAction=(to:string,action:unknown,requestId=crypto.randomUUID())=>request(base+'/actions','POST',{requestId,conversationId:snapshot!.conversationId,to,action})
+ function canResume(task:ChannelTask){
+  const origin=task.continuationOrigin
+  return !origin||matchesContinuation(origin,{revision:options.continuationRevision?.(),modelId:options.selectedModel?.(),callId:origin.callId})
+ }
+ async function releaseUnstarted(parent:ChannelTask,generation:number){
+  try{
+   await request(base+'/channels/'+parent.conversationId+'/yield','POST',{taskId:parent.taskId,claimId:parent.claimId,connectionEpoch:parent.connectionEpoch,childTaskIds:parent.continuation!.children.map(child=>child.taskId)})
+   if(localGeneration===generation){attempted.delete(parent.taskId);void refresh()}
+  }catch{if(!disposed&&localGeneration===generation){error='Office continuation could not be released; refresh its durable status.';notify()}}
+ }
  async function pump() {
   if(disposed||pumping||running||settlingRuns.size||!snapshot||snapshot.paused||!connection||!executor)return
-  const task=snapshot.tasks.find(task=>task.to==='office'&&!task.execution&&task.state==='queued'&&!attempted.has(task.taskId))
+  const task=snapshot.tasks.find(task=>task.to==='office'&&!task.execution&&task.state==='queued'&&!attempted.has(task.taskId)&&canResume(task))
   if(!task)return
   if(executor.isBusy()){
    idleRetry??=setTimeout(()=>{idleRetry=undefined;void pump()},400)
@@ -76,7 +87,7 @@ export function createAssistantChannelClient(options:{request:SettingsRequest;cs
   try {
    attempted.add(task.taskId)
    const target=executor,channelId=snapshot.conversationId,runConnection=connection
-   const claimInput={requestId:crypto.randomUUID(),taskId:task.taskId,connectionId:runConnection.id,connectionEpoch:runConnection.epoch}
+   const claimInput={...(task.continuationOrigin?{origin:task.continuationOrigin}:{}),requestId:crypto.randomUUID(),taskId:task.taskId,connectionId:runConnection.id,connectionEpoch:runConnection.epoch}
    const claimPath=base+'/channels/'+channelId+'/claim'
    let claim:ChannelTask
    try {claim=await request<ChannelTask>(claimPath,'POST',claimInput)}
@@ -95,6 +106,7 @@ export function createAssistantChannelClient(options:{request:SettingsRequest;cs
    if(!current||!['queued','running'].includes(current.state))return
    if(claim.from==='office'&&!claim.parentTaskId){
     if(!claim.continuation)throw Error('Missing Office continuation evidence')
+    if(!canResume(claim)){await releaseUnstarted(claim,taskGeneration);return}
     const token=crypto.randomUUID()
     parentContinuations.set(token,{parent:claim,generation:taskGeneration})
     snapshot={...snapshot,tasks:snapshot.tasks.map(item=>item.taskId===claim.taskId?claim:item)}
@@ -178,6 +190,7 @@ export function createAssistantChannelClient(options:{request:SettingsRequest;cs
    parentContinuations.delete(continuationToken)
    const current=snapshot?.tasks.find(task=>task.taskId===pending?.parent.taskId)
    if(!pending||pending.generation!==localGeneration||snapshot?.paused||current?.state!=='running'||current.claimId!==pending.parent.claimId)return undefined
+   if(!canResume(pending.parent)){void releaseUnstarted(pending.parent,localGeneration);return undefined}
    parent=pending.parent
   }
   const token=crypto.randomUUID()
@@ -209,7 +222,7 @@ export function createAssistantChannelClient(options:{request:SettingsRequest;cs
    if(run){
     if(!connection)throw Error('No Office connection')
     run.channelId=channelId
-    run.pending??=run.parent?Promise.resolve(run.parent):request<ChannelTask>(base+'/channels/'+channelId+'/office-task','POST',{requestId:run.token,connectionId:connection.id,connectionEpoch:connection.epoch,instruction:run.instruction})
+    run.pending??=run.parent?Promise.resolve(run.parent):request<ChannelTask>(base+'/channels/'+channelId+'/office-task','POST',{requestId:run.token,connectionId:connection.id,connectionEpoch:connection.epoch,instruction:run.instruction,...(options.currentRunModel?{origin:{revision:options.continuationRevision?.()??null,modelId:options.currentRunModel(),callId:call.id}}:{})})
     run.parent=await run.pending
     if(disposed||taskGeneration!==localGeneration||nativeRun!==run||snapshot?.conversationId!==channelId||executor!==target)throw Error('Office run changed')
    }
