@@ -13,6 +13,7 @@ import { password } from '../helpers/identity.mjs'
 import { phaseDiagnostics, observeFirstRequest } from '../helpers/phase-diagnostics.mjs'
 import { withInputDiagnostics } from '../helpers/input-diagnostics.mjs'
 import { holdFirstResponseEnd } from '../helpers/delayed-http-response.mjs'
+import { hashProtectionPassword, parseDocx, saveDocx } from '../../../../packages/docx-engine/src/index.ts'
 
 const docsDirectory = fileURLToPath(new URL('../../dist-docs/',import.meta.url))
 async function fixture(t, {beforeCleanup = () => {}, beforeHttpRequest = () => {}, assistantChannels = false} = {}) {
@@ -452,6 +453,70 @@ test('native Word saves a styled paragraph and an anchored review comment', {tim
   await page.getByRole('menuitemradio',{name:'List',exact:true}).click()
   await expect(commentsPane.locator('.comment-card')).toContainText(comment)
   await expect(commentsPane.locator('.comment-anchor')).toContainText(title)
+})
+
+test('native Word preserves modify-password protection across read-only open, edit and save',{timeout:120_000},async t=>{
+  const f=await fixture(t),{page}=f
+  const modifyPassword='Synthetic acceptance password'
+  const document=await parseDocx(f.original)
+  const originalBlocks=document.blocks.filter(block=>!block.hidden&&block.docxIndex!==null)
+    .map(block=>({kind:'original',docxIndex:block.docxIndex}))
+  const original=Buffer.from(await saveDocx(document,originalBlocks,{
+    writeProtection:await hashProtectionPassword(modifyPassword,1000),
+  }))
+  const {file}=await importFile(f,f.alice.token,original,'write-protected.docx')
+  const revision=async()=>(await f.files.openFile(f.alice.token,file.fileId)).file.revision
+  await page.goto(f.origin+'/native-docx/?fileId='+file.fileId)
+  const dialog=page.getByRole('dialog').filter({hasText:'Write-Protected'})
+  const editor=page.locator('.tiptap.doc-page')
+  await expect(dialog).toBeVisible({timeout:45000})
+  await dialog.locator('input').fill('Incorrect fixture password')
+  await dialog.getByRole('button',{name:'OK',exact:true}).click()
+  await expect(dialog.getByText('The password is incorrect. Try again.')).toBeVisible()
+  await dialog.getByRole('button',{name:'Open Read-Only',exact:true}).click()
+  await expect(editor).toHaveAttribute('contenteditable','false')
+  await editor.click()
+  await page.keyboard.type('This edit must be blocked')
+  await expect(editor).not.toContainText('This edit must be blocked')
+  await expect(page.getByRole('button',{name:/^Save \(/})).toBeDisabled()
+  assert.equal(await revision(),file.revision)
+  await page.getByRole('button',{name:'File',exact:true}).click()
+  const [download]=await Promise.all([
+    page.waitForEvent('download'),
+    page.getByRole('link',{name:'Download saved version',exact:true}).click(),
+  ])
+  assert.deepEqual(await readFile(await download.path()),original)
+
+  await page.reload()
+  await expect(dialog).toBeVisible({timeout:45000})
+  await dialog.locator('input').fill(modifyPassword)
+  await dialog.getByRole('button',{name:'OK',exact:true}).click()
+  await expect(dialog).toHaveCount(0)
+  await expect(editor).toHaveAttribute('contenteditable','true')
+  await editor.click()
+  await page.keyboard.press('Control+End')
+  await page.keyboard.press('Enter')
+  const marker='The authorized edit survived the save.'
+  await page.keyboard.type(marker)
+  await expect(editor).toContainText(marker)
+  const committed=page.waitForResponse(reply=>reply.url().endsWith('/commits')&&reply.request().method()==='POST'&&reply.status()===200)
+  await page.keyboard.press('Control+s')
+  await committed
+  await expectCleanPersistence(page)
+  const savedRevision=await revision()
+  assert.notEqual(savedRevision,file.revision)
+  const saved=await f.files.readFile(f.alice.token,file.fileId,savedRevision)
+  const [before,after]=await Promise.all([JSZip.loadAsync(original),JSZip.loadAsync(saved)])
+  const protection=(zip)=>zip.file('word/settings.xml').async('string').then(xml=>xml.match(/<w:writeProtection\b[^>]*\/>/)?.[0])
+  const expected=await protection(before)
+  assert.ok(expected)
+  assert.equal(await protection(after),expected)
+  assert.deepEqual(await f.files.readFile(f.alice.token,file.fileId,file.revision),original)
+  await page.reload()
+  await expect(dialog).toBeVisible({timeout:45000})
+  await dialog.getByRole('button',{name:'Open Read-Only',exact:true}).click()
+  await expect(editor).toHaveAttribute('contenteditable','false')
+  await expect(editor).toContainText(marker)
 })
 
 test('editing during a delayed native save keeps the newer draft dirty and saves a later child revision', { timeout: 120_000 },async t => {
