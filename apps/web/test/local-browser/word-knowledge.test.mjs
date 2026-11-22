@@ -15,7 +15,7 @@ import {buildLocalApp} from '../../server/src/app.ts'
 import {createWorkspaceService} from '../../server/src/modules/workspace/service.ts'
 import {createGlobalConfigService} from '../../server/src/modules/admin/service.ts'
 import {kbCiteHref} from '../../../../packages/agent-core/src/knowledge-base-skill.ts'
-async function document(text){const zip=await JSZip.loadAsync(await docxBytes());zip.file('word/document.xml',`<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>${text}</w:t></w:r></w:p><w:sectPr/></w:body></w:document>`);return zip.generateAsync({type:'nodebuffer'})}
+async function document(text,extraBody=''){const zip=await JSZip.loadAsync(await docxBytes());zip.file('word/document.xml',`<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>${text}</w:t></w:r></w:p>${extraBody}<w:sectPr/></w:body></w:document>`);return zip.generateAsync({type:'nodebuffer'})}
 
 const liveConfig=process.env.DYOFFICE_LIVE_WORD_KNOWLEDGE_CONFIG
 test('Word searches a starred saved source, reads its actual text and opens the cited workspace file'+(liveConfig?' with a real model':''),{timeout:180000},async t=>{
@@ -27,7 +27,9 @@ test('Word searches a starred saved source, reads its actual text and opens the 
  const marker=liveConfig?'ORCHID-KB-'+randomBytes(5).toString('hex'):'ORCHID-KB-6419'
  const sourceText='Reference evidence: '+marker
  const sourceBytes=await document(sourceText),source=(await importFile(f,f.alice.token,sourceBytes,'参考资料.docx')).file
- const draftBytes=await document('Working document remains unchanged'),draft=(await importFile(f,f.alice.token,draftBytes,'工作文档.docx')).file
+ const pendingRevisions='<w:p><w:ins w:id="1" w:author="Reviewer"><w:r><w:t>Keep pending insertion</w:t></w:r></w:ins></w:p>'+
+  '<w:p><w:ins w:id="2" w:author="Reviewer"><w:r><w:t>Drop pending insertion</w:t></w:r></w:ins></w:p>'
+ const draftBytes=await document('Working document remains unchanged',liveConfig?'':pendingRevisions),draft=(await importFile(f,f.alice.token,draftBytes,'工作文档.docx')).file
  if(!liveConfig)await f.preferences.update(f.alice.token,{autoSave:false})
  await createWorkspaceService(f.transactions).setStar(f.alice.token,source.fileId,{starred:true})
  const sourcePath=`/files/${source.fileId}/revisions/${source.revision}/${encodeURIComponent('参考资料.docx')}`,cite=kbCiteHref(sourcePath),wire=[];let turn=0
@@ -36,6 +38,34 @@ test('Word searches a starred saved source, reads its actual text and opens the 
   const user=request.messages.findLastIndex(message=>message.role==='user')
   const content=request.messages[user]?.content
   const prompt=typeof content==='string'?content:content?.map(part=>part.text??'').join(' ')
+  if(prompt?.includes('验证批注与修订')){
+   const results=request.messages.slice(user+1).filter(message=>message.role==='tool').map(message=>JSON.parse(message.content))
+   const keepId=results[3]?.output.match(/Added comment (\d+)/)?.[1]
+   const dropId=results[6]?.output.match(/Added comment (\d+)/)?.[1]
+   const calls=[
+    ['read_revisions',{},/r1[^\n]*Keep pending insertion[\s\S]*r2[^\n]*Drop pending insertion/],
+    ['reject_changes',{ids:['r2']},/Rejected 1 tracked change/],
+    ['accept_changes',{ids:['r1']},/No tracked changes remain/],
+    ['add_comment',{blockIndex:0,text:'Working document',comment:'Retain review thread'},/Added comment/],
+    ['reply_comment',{parentId:keepId,text:'Verified review reply'},/Replied to comment/],
+    ['resolve_comment',{id:keepId},/marked as resolved/],
+    ['add_comment',{blockIndex:0,text:'unchanged',comment:'Temporary review thread'},/Added comment/],
+    ['delete_comment',{id:dropId},/Deleted comment/],
+    ['read_comments',{},/Retain review thread[\s\S]*Verified review reply/],
+   ]
+   if(results.length){
+    const {output,isError}=results.at(-1),[name,,expected]=calls[results.length-1]
+    assert.ok(!isError,name+': '+output)
+    assert.match(output,expected,name+': '+output)
+   }
+   if(results.length===calls.length){
+    assert.match(results.at(-1).output,/\[resolved\]/)
+    assert.doesNotMatch(results.at(-1).output,/Temporary review thread/)
+   }
+   const action=calls[results.length]
+   const delta=action?{tool_calls:[{index:0,id:'review-'+results.length,type:'function',function:{name:action[0],arguments:JSON.stringify(action[1])}}]}:{content:'已验证批注与修订'}
+   return Readable.from([Buffer.from(`data: ${JSON.stringify({choices:[{delta,finish_reason:action?'tool_calls':'stop'}]})}\n\ndata: [DONE]\n\n`)])
+  }
   if(prompt?.includes('验证页面与样式')){
    const results=request.messages.slice(user+1).filter(message=>message.role==='tool')
    const calls=[
@@ -133,6 +163,9 @@ test('Word searches a starred saved source, reads its actual text and opens the 
  }
  }
  if(!liveConfig){
+  await composer.fill('验证批注与修订');await composer.press('Enter')
+  await expect(editor.locator('.ai-msg-assistant').last()).toContainText('已验证批注与修订',{timeout:45000})
+  await expect(editor.locator('.ai-msg-streaming')).toHaveCount(0)
   await composer.fill('验证脚注与尾注');await composer.press('Enter')
   await expect(editor.locator('.ai-msg-assistant').last()).toContainText('已验证脚注与尾注',{timeout:45000})
   await expect(editor.locator('.ai-msg-streaming')).toHaveCount(0)
@@ -161,6 +194,14 @@ test('Word searches a starred saved source, reads its actual text and opens the 
   const headers=await Promise.all(saved.file(/^word\/header[0-9]+\.xml$/).map(part=>part.async('string')))
   assert.ok(headers.some(header=>header.includes('Audit header 651')))
   assert.match(await saved.file('word/styles.xml').async('string'),/w:styleId="AuditCallout"/)
+  const comments=await saved.file('word/comments.xml').async('string')
+  const commentThreads=await saved.file('word/commentsExtended.xml').async('string')
+  assert.match(comments,/Retain review thread[\s\S]*Verified review reply/)
+  assert.doesNotMatch(comments,/Temporary review thread/)
+  assert.equal((commentThreads.match(/w15:done="1"/g)??[]).length,2)
+  assert.match(commentThreads,/w15:paraIdParent="[A-F0-9]+"/i)
+  assert.match(body,/Keep pending insertion/)
+  assert.doesNotMatch(body,/Drop pending insertion|<w:ins\b/)
  }
  await link.click()
  const cited=page.frameLocator(`iframe[data-document-id="${source.fileId}"]`)

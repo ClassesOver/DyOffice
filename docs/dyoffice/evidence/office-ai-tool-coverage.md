@@ -8,15 +8,15 @@
 
 首轮定向工具回归共 672 项通过，含 DOCX 71、XLSX 155、PPTX 48、PDF 299、Web 合同与工具 99 项。XLSX 的截断附件提示断言按现有工具文案修正后复跑通过，继续检查读取错误、原件保留和合并用途。[XLSX 截断附件用例](../../../apps/sheets/tests/files-skill.test.ts)
 
-各测试批次合并去重后，浏览器观察到 129 个组合注册，103 个组合向模型返回成功结果。采集仅保留格式、工具名和错误标记。下表中的工具行保留具体效果、成品和待验项，四格式真实模型用例见主报告。[注册用例](../../../apps/web/test/local-browser/office-tool-inventory.test.mjs) [四格式验收](genoffice-web-parity.md)
+各测试批次合并去重后，浏览器观察到 129 个组合注册，111 个组合向模型返回成功结果。采集仅保留格式、工具名和错误标记。下表中的工具行保留具体效果、成品和待验项，四格式真实模型用例见主报告。[注册用例](../../../apps/web/test/local-browser/office-tool-inventory.test.mjs) [四格式验收](genoffice-web-parity.md)
 
 | 格式 | Web 合同 | 浏览器注册 | 定向浏览器成功 |
 | --- | ---: | ---: | ---: |
-| DOCX | 42 | 42 | 20 |
+| DOCX | 42 | 42 | 28 |
 | XLSX | 19 | 19 | 19 |
 | PPTX | 20 | 20 | 16 |
 | PDF | 49 | 48 | 48 |
-| 合计 | 130 | 129 | 103 |
+| 合计 | 130 | 129 | 111 |
 
 PDF 原生旋转使用 `apply_ops.rotatePages`，合同仍保留兼容名称 `rotate_pages`。已验证的成品包括保存重开的冻结数据表、Word 脚注和尾注、Excel 合并附件、PowerPoint 单页重做及图片替换、PDF 批注和分页副本。[数据写回](../../../apps/web/test/local-browser/office-source-analysis.test.mjs) [Word 脚注和尾注](../../../apps/web/test/local-browser/word-knowledge.test.mjs) [Excel 合并附件](../../../apps/web/test/local-browser/sheets-attachment-merge.test.mjs) [PPTX 生成](../../../apps/web/test/local-browser/native-slides-generate.test.mjs) [PDF 工具](../../../apps/web/test/local-browser/native-pdf-open.test.mjs)
 
@@ -26,13 +26,13 @@ Excel 已覆盖 19 个实际注册工具。稀疏工作簿的全量预加载曾�
 
 | 工具 | 浏览器注册 | 候选用例 | 执行或效果证据 |
 | --- | --- | --- | --- |
-| `accept_changes` | 观察到 | [ai-read-only-tools.test.ts](../../../apps/docs/tests/ai-read-only-tools.test.ts)、[ai-revision-tools.test.ts](../../../apps/docs/tests/ai-revision-tools.test.ts) | 通过的单测包含本工具用例；Web 路径待逐项核验，[单测](../../../apps/docs/tests/ai-revision-tools.test.ts) |
-| `add_comment` | 观察到 | [ai-comment-tools.test.ts](../../../apps/docs/tests/ai-comment-tools.test.ts)、[ai-read-only-tools.test.ts](../../../apps/docs/tests/ai-read-only-tools.test.ts) | 通过的单测包含本工具用例；Web 路径待逐项核验，[单测](../../../apps/docs/tests/ai-comment-tools.test.ts) |
+| `accept_changes` | 观察到 | [ai-read-only-tools.test.ts](../../../apps/docs/tests/ai-read-only-tools.test.ts)、[ai-revision-tools.test.ts](../../../apps/docs/tests/ai-revision-tools.test.ts) | 接受已读出的指定修订，保存成品将保留词句写成普通正文。[浏览器用例](../../../apps/web/test/local-browser/word-knowledge.test.mjs) |
+| `add_comment` | 观察到 | [ai-comment-tools.test.ts](../../../apps/docs/tests/ai-comment-tools.test.ts)、[ai-read-only-tools.test.ts](../../../apps/docs/tests/ai-read-only-tools.test.ts) | 为第一段精确选词添加批注，保存成品包含其正文与原生批注标记。[浏览器用例](../../../apps/web/test/local-browser/word-knowledge.test.mjs) |
 | `analyze_media` | 观察到 | [attachment-media.test.mjs](../../../apps/web/test/native-docs/attachment-media.test.mjs)、[ai-media-routes.test.mjs](../../../apps/web/test/unit/ai-media-routes.test.mjs) | 当前消息的 PNG 按预期转交分析工具并返回结果，过期附件索引被拒绝。[浏览器用例](../../../apps/web/test/native-docs/attachment-media.test.mjs) |
 | `apply_ops` | 观察到 | [dsh-office-handoff.test.mjs](../../../apps/web/test/local-browser/dsh-office-handoff.test.mjs)、[native-pdf-open.test.mjs](../../../apps/web/test/local-browser/native-pdf-open.test.mjs) | 追踪模式记录文字和段落格式修订，拒绝后恢复原格式，[单测](../../../apps/docs/tests/ai-track-revisions.test.ts) |
 | `create_document` | 观察到 | [native-pdf-create-document.test.mjs](../../../apps/web/test/local-browser/native-pdf-create-document.test.mjs)、[ai-create-document.test.ts](../../../apps/docs/tests/ai-create-document.test.ts) | 通过的单测包含本工具用例；Web 路径待逐项核验，[单测](../../../apps/docs/tests/ai-create-document.test.ts) |
 | `define_style` | 观察到 | [ai-read-only-tools.test.ts](../../../apps/docs/tests/ai-read-only-tools.test.ts)、[ai-style-floating-tools.test.ts](../../../apps/docs/tests/ai-style-floating-tools.test.ts) | 新增段落样式 AuditCallout，保存后在 styles.xml 核对样式 ID。[浏览器用例](../../../apps/web/test/local-browser/word-knowledge.test.mjs) |
-| `delete_comment` | 观察到 | [ai-comment-tools.test.ts](../../../apps/docs/tests/ai-comment-tools.test.ts)、[ai-read-only-tools.test.ts](../../../apps/docs/tests/ai-read-only-tools.test.ts) | 通过的单测包含本工具用例；Web 路径待逐项核验，[单测](../../../apps/docs/tests/ai-comment-tools.test.ts) |
+| `delete_comment` | 观察到 | [ai-comment-tools.test.ts](../../../apps/docs/tests/ai-comment-tools.test.ts)、[ai-read-only-tools.test.ts](../../../apps/docs/tests/ai-read-only-tools.test.ts) | 删除临时批注，读取结果和成品均省略该批注。[浏览器用例](../../../apps/web/test/local-browser/word-knowledge.test.mjs) |
 | `delete_note` | 观察到 | [native-pdf-open.test.mjs](../../../apps/web/test/local-browser/native-pdf-open.test.mjs)、[ai-read-only-tools.test.ts](../../../apps/docs/tests/ai-read-only-tools.test.ts) | 删除临时脚注，保存成品排除该正文与多余引用，同时保留尾注。[浏览器用例](../../../apps/web/test/local-browser/word-knowledge.test.mjs) |
 | `edit_chart` | 观察到 | [ai-chart-tools.test.ts](../../../apps/docs/tests/ai-chart-tools.test.ts)、[ai-read-only-tools.test.ts](../../../apps/docs/tests/ai-read-only-tools.test.ts) | 输出已有原生图表的保存补丁，拒绝不可修改的数据点与范围不匹配，[单测](../../../apps/docs/tests/ai-chart-tools.test.ts) |
 | `edit_note` | 观察到 | [native-pdf-harness.test.mjs](../../../apps/web/test/local-browser/native-pdf-harness.test.mjs)、[native-pdf-open.test.mjs](../../../apps/web/test/local-browser/native-pdf-open.test.mjs) | 用指定的类型和 ID 编辑脚注，保存成品保留替换后的正文。[浏览器用例](../../../apps/web/test/local-browser/word-knowledge.test.mjs) |
@@ -53,15 +53,15 @@ Excel 已覆盖 19 个实际注册工具。稀疏工作簿的全量预加载曾�
 | `list_styles` | 观察到 | [ai-read-only-tools.test.ts](../../../apps/docs/tests/ai-read-only-tools.test.ts)、[assistant-client.test.mjs](../../../apps/web/test/unit/assistant-client.test.mjs) | 列出当前样式，并返回同一轮创建的 AuditCallout。[浏览器用例](../../../apps/web/test/local-browser/word-knowledge.test.mjs) |
 | `read_attachment` | 观察到 | [native-pdf-create-document.test.mjs](../../../apps/web/test/local-browser/native-pdf-create-document.test.mjs)、[ai-web-drop-attachments.test.ts](../../../apps/docs/tests/ai-web-drop-attachments.test.ts) | 浏览器传输适配单测以拖放附件返回解析出的正文，[单测](../../../apps/docs/tests/ai-web-drop-attachments.test.ts) |
 | `read_blocks` | 观察到 | [agent-docs.test.ts](../../../apps/docs/tests/agent-docs.test.ts)、[ai-deleted-revision-context.test.ts](../../../apps/docs/tests/ai-deleted-revision-context.test.ts) | 按块范围读取现有第一段的正文。[浏览器用例](../../../apps/web/test/local-browser/word-knowledge.test.mjs) |
-| `read_comments` | 观察到 | [ai-comment-tools.test.ts](../../../apps/docs/tests/ai-comment-tools.test.ts) | 通过的单测包含本工具用例；Web 路径待逐项核验，[单测](../../../apps/docs/tests/ai-comment-tools.test.ts) |
+| `read_comments` | 观察到 | [ai-comment-tools.test.ts](../../../apps/docs/tests/ai-comment-tools.test.ts) | 返回已解决的批注线程与回复，临时批注已移除。[浏览器用例](../../../apps/web/test/local-browser/word-knowledge.test.mjs) |
 | `read_knowledge_file` | 观察到 | [word-knowledge.test.mjs](../../../apps/web/test/local-browser/word-knowledge.test.mjs)、[coding-model-bridge.test.mjs](../../../apps/web/test/unit/coding-model-bridge.test.mjs) | 返回星标知识库文件的实际正文，引用可打开原文件，[浏览器用例](../../../apps/web/test/local-browser/word-knowledge.test.mjs) |
 | `read_notes` | 观察到 | [Word 只读工具测试](../../../apps/docs/tests/ai-read-only-tools.test.ts) | 返回现有脚注、尾注内容，读取结果反映同轮的编辑与删除。[浏览器用例](../../../apps/web/test/local-browser/word-knowledge.test.mjs) |
-| `read_revisions` | 观察到 | [ai-redline-summary.test.ts](../../../apps/docs/tests/ai-redline-summary.test.ts)、[ai-revision-tools.test.ts](../../../apps/docs/tests/ai-revision-tools.test.ts) | 通过的单测包含本工具用例；Web 路径待逐项核验，[单测](../../../apps/docs/tests/ai-revision-tools.test.ts) |
-| `reject_changes` | 观察到 | [ai-read-only-tools.test.ts](../../../apps/docs/tests/ai-read-only-tools.test.ts)、[ai-revision-tools.test.ts](../../../apps/docs/tests/ai-revision-tools.test.ts) | 通过的单测包含本工具用例；Web 路径待逐项核验，[单测](../../../apps/docs/tests/ai-revision-tools.test.ts) |
+| `read_revisions` | 观察到 | [ai-redline-summary.test.ts](../../../apps/docs/tests/ai-redline-summary.test.ts)、[ai-revision-tools.test.ts](../../../apps/docs/tests/ai-revision-tools.test.ts) | 从真实 DOCX 读取两个待处理修订及其定位 ID。[浏览器用例](../../../apps/web/test/local-browser/word-knowledge.test.mjs) |
+| `reject_changes` | 观察到 | [ai-read-only-tools.test.ts](../../../apps/docs/tests/ai-read-only-tools.test.ts)、[ai-revision-tools.test.ts](../../../apps/docs/tests/ai-revision-tools.test.ts) | 按定位 ID 拒绝第二个插入修订，成品省略被拒绝的文字。[浏览器用例](../../../apps/web/test/local-browser/word-knowledge.test.mjs) |
 | `replace_blocks` | 观察到 | [agent-docs.test.ts](../../../apps/docs/tests/agent-docs.test.ts)、[ai-deleted-revision-context.test.ts](../../../apps/docs/tests/ai-deleted-revision-context.test.ts) | 修订模式保留旧文本划线副本和新增文本，导出包含对应的 OOXML 修订，[单测](../../../apps/docs/tests/ai-track-revisions.test.ts) |
 | `replace_selection` | 观察到 | [agent-docs.test.ts](../../../apps/docs/tests/agent-docs.test.ts)、[ai-keep-pictures-on-replace.test.ts](../../../apps/docs/tests/ai-keep-pictures-on-replace.test.ts) | 只影响指定选区，修订模式记录新旧文字，[单测](../../../apps/docs/tests/agent-docs.test.ts) [单测](../../../apps/docs/tests/redact-range.test.ts) |
-| `reply_comment` | 观察到 | [ai-comment-tools.test.ts](../../../apps/docs/tests/ai-comment-tools.test.ts)、[ai-read-only-tools.test.ts](../../../apps/docs/tests/ai-read-only-tools.test.ts) | 通过的单测包含本工具用例；Web 路径待逐项核验，[单测](../../../apps/docs/tests/ai-comment-tools.test.ts) |
-| `resolve_comment` | 观察到 | [ai-comment-tools.test.ts](../../../apps/docs/tests/ai-comment-tools.test.ts)、[ai-read-only-tools.test.ts](../../../apps/docs/tests/ai-read-only-tools.test.ts) | 通过的单测包含本工具用例；Web 路径待逐项核验，[单测](../../../apps/docs/tests/ai-comment-tools.test.ts) |
+| `reply_comment` | 观察到 | [ai-comment-tools.test.ts](../../../apps/docs/tests/ai-comment-tools.test.ts)、[ai-read-only-tools.test.ts](../../../apps/docs/tests/ai-read-only-tools.test.ts) | 向指定线程写入回复，成品的扩展批注保留父级关系。[浏览器用例](../../../apps/web/test/local-browser/word-knowledge.test.mjs) |
+| `resolve_comment` | 观察到 | [ai-comment-tools.test.ts](../../../apps/docs/tests/ai-comment-tools.test.ts)、[ai-read-only-tools.test.ts](../../../apps/docs/tests/ai-read-only-tools.test.ts) | 解决批注和回复，成品的 commentsExtended.xml 含两个完成标记。[浏览器用例](../../../apps/web/test/local-browser/word-knowledge.test.mjs) |
 | `search_knowledge_base` | 观察到 | [word-knowledge.test.mjs](../../../apps/web/test/local-browser/word-knowledge.test.mjs)、[docs-save-download-entry.test.mjs](../../../apps/web/test/unit/docs-save-download-entry.test.mjs) | 从星标文件中检出匹配项，并核对搜索返回的文件路径，[浏览器用例](../../../apps/web/test/local-browser/word-knowledge.test.mjs) |
 | `set_header_footer` | 观察到 | [native-pdf-open.test.mjs](../../../apps/web/test/local-browser/native-pdf-open.test.mjs)、[ai-hf-tool.test.ts](../../../apps/docs/tests/ai-hf-tool.test.ts) | 写入默认页眉，保存后核对原生页眉部件的文字。[浏览器用例](../../../apps/web/test/local-browser/word-knowledge.test.mjs) |
 | `set_page_setup` | 观察到 | [ai-page-setup.test.ts](../../../apps/docs/tests/ai-page-setup.test.ts)、[ai-read-only-tools.test.ts](../../../apps/docs/tests/ai-read-only-tools.test.ts) | 连续分节后将页面改为 A5 横向，等待最终修订并核对纸张方向。[浏览器用例](../../../apps/web/test/local-browser/word-knowledge.test.mjs) |
