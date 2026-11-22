@@ -121,8 +121,8 @@ jobs:
         run: node tools/dyoffice/compatibility-baseline.mjs --check
       - name: Test browser dependency gate
         run: node --test tools/check-web-boundaries.test.mjs
-      - name: Test BrowserHost contracts and PDF assistant form marks
-        run: npm run test:web:unit -- host-contract.test.mjs pdf-form-mark-skill.test.mjs
+      - name: Test BrowserHost contracts and PDF form routes
+        run: npm run test:web:unit -- host-contract.test.mjs pdf-form-fields-routes.test.mjs
       - name: Test account session transitions
         run: npm run test:shell --workspace @dyoffice/web -- account-lifecycle.test.ts
       - name: Test Argon2 password policy and bounded work

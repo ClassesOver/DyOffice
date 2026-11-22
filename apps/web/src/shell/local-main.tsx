@@ -78,7 +78,6 @@ let sourceWorkspace: Awaited<ReturnType<typeof createSourceWorkspaceSession>> | 
 type User={id:string;username:string;displayName:string;roles:string[]}
 let user:User|null=null
 let initialLanguage:'zh'|'en'='zh'
-let assistantVisible=true
 let notice=(message:string)=>window.alert(message)
 let showTrash=()=>{}
 let showUpload=(_files:File[]=[])=>{}
@@ -203,7 +202,7 @@ async function restore(){
   globalSettingsSession.bind(bound)
  const personal=await preferences.getPreferences()
  const catalog=await bound.request<Record<string,string>>('/api/v1/capabilities')
- user=identity.user;capabilities=catalog;initialLanguage=personal.language==='en'?'en':'zh';assistantVisible=personal.showAssistant!==false;userSkills=createUserSkillsClient(bound.request);sourceWorkspace=workspace;workspaceSession.bind(bound)
+ user=identity.user;capabilities=catalog;initialLanguage=personal.language==='en'?'en':'zh';userSkills=createUserSkillsClient(bound.request);sourceWorkspace=workspace;workspaceSession.bind(bound)
  if(personal.theme==='system')delete document.documentElement.dataset.theme;else document.documentElement.dataset.theme=personal.theme
  // Only authenticated identity may select a storage namespace. Legacy servers
  // without a deployment identity safely skip entry restoration.
@@ -276,15 +275,6 @@ function WorkspacePageContent({page,onClose,onCloseGuardChange,settingsTab,onSet
 function Account({onOpen}:{onOpen:(page:WorkspacePage)=>void}){return <div className="account-entry">{user&&<AccountMenu user={user} onSettings={()=>onOpen('settings')} onChannels={()=>onOpen('channels')} onTasks={()=>onOpen('tasks')} onTrash={()=>onOpen('trash')} onSources={()=>onOpen('sources')} onGlobalSettings={()=>onOpen('global')} onUsers={()=>onOpen('users')} onLogout={()=>void logout().catch(e=>notice(e.message))}/>}</div>}
 
 function Shell({recovery=false}:{recovery?:boolean}){
- const previewBound=sourceWorkspace?.bound
- const preparePdfDocument=previewBound?(signal?:AbortSignal)=>{
-  if(!window.dyofficePrepareAiDoc)throw new Error('文档创建入口不可用。')
-  return window.dyofficePrepareAiDoc(signal,previewBound.proof)
- }:undefined
- const openExtractedPdf=previewBound?async(receipt:RevisionRef)=>{
-  notifyFilesChanged()
-  try{await openCreatedDocument(documentTabs,capabilities,receipt.fileId,previewBound.request)}catch{throw new Error('PDF 已创建，但打开失败。请从最近文件中打开，不要重复提取。')}
- }:undefined
  const [message,setMessage]=useState(entryRecoveryNotice),[page,setPage]=useState<WorkspacePage|null>(()=>new URLSearchParams(location.search).get('panel')==='channels'?'channels':null)
  const [channelId,setChannelId]=useState<string|undefined>(undefined)
  const [tabs,setTabs]=useState(documentTabs.list())
@@ -356,7 +346,7 @@ function Shell({recovery=false}:{recovery?:boolean}){
  const close=()=>{if(closeGuard.current?.()===false)return;setPage(null)}
  notice=setMessage;showTrash=()=>setPage('trash')
  return <>
-  <AppFrame hideAppMenu hideSingleTabList initialOnboardingSeen={true} homeProps={{renderHero:({language,...fallback})=><HomeHero key={sourceWorkspace?.bound.proof} fallback={fallback} language={language} request={sourceWorkspace?.bound.request??client.request} csrfToken={sourceWorkspace?.bound.proof??''} enabled={!recovery}/>,capabilities:{localFolders:false,copyPath:false,duplicateFile:false,starredGroups:false,cloudProjects:false,semanticRanking:false,serverFileSort:true},supportedFormats:['docx','xlsx','pptx','pdf'],supportedNewFormats:localNewFormats(capabilities),accountEntry:<Account onOpen={setPage}/>,folderDeleteDescription:name=>`仅可删除空文件夹「${name}」。请先移出文件和子文件夹；回收站中仍属于此目录的文件需先恢复并移出。`}} editorContent={<>{documentTabs.renderedDocuments().map(file=><div key={file.id} className="workspace-document" hidden={!tabs.find(tab=>tab.id===file.id)?.active}>{file.src.startsWith('/native-')?<DocumentFrame file={file} registerGuard={documentTabs.setGuard} onAutoPdfName={updateAutoPdfTab} sessionActive={()=>!recoveryBlocked.current}/>:<DocumentPreview registerGuard={documentTabs.setGuard} fileId={file.id} name={file.name} format={file.format} conversationId={new URL(file.src,location.origin).searchParams.get('channel')??undefined} request={previewBound?.request??client.request} onCreatedPdf={openExtractedPdf} prepareDocument={preparePdfDocument} docxCreationAvailable={capabilities.docx==='editable'} assistantEnabled={assistantVisible}/>}</div>)}</>}/>
+  <AppFrame hideAppMenu hideSingleTabList initialOnboardingSeen={true} homeProps={{renderHero:({language,...fallback})=><HomeHero key={sourceWorkspace?.bound.proof} fallback={fallback} language={language} request={sourceWorkspace?.bound.request??client.request} csrfToken={sourceWorkspace?.bound.proof??''} enabled={!recovery}/>,capabilities:{localFolders:false,copyPath:false,duplicateFile:false,starredGroups:false,cloudProjects:false,semanticRanking:false,serverFileSort:true},supportedFormats:['docx','xlsx','pptx','pdf'],supportedNewFormats:localNewFormats(capabilities),accountEntry:<Account onOpen={setPage}/>,folderDeleteDescription:name=>`仅可删除空文件夹「${name}」。请先移出文件和子文件夹；回收站中仍属于此目录的文件需先恢复并移出。`}} editorContent={<>{documentTabs.renderedDocuments().map(file=><div key={file.id} className="workspace-document" hidden={!tabs.find(tab=>tab.id===file.id)?.active}>{file.format==='pdf'||file.src.startsWith('/native-')?<DocumentFrame file={file} registerGuard={documentTabs.setGuard} onAutoPdfName={updateAutoPdfTab} sessionActive={()=>!recoveryBlocked.current}/>:<DocumentPreview fileId={file.id} name={file.name} format={file.format} request={sourceWorkspace?.bound.request??client.request}/>}</div>)}</>}/>
   {page&&<NativeSettingsDialog title={workspacePages[page]} onClose={close}><WorkspacePageContent key={page} page={page} channelId={channelId} onOpenChannel={id=>{setChannelId(id);setPage('channels')}} settingsTab={settingsTab} onSettingsTabChange={setSettingsTab} onClose={()=>setPage(null)} onCloseGuardChange={registerGuard}/></NativeSettingsDialog>}
   {uploadFiles!==null&&<WorkspaceUploadDialog open initialFiles={uploadFiles} upload={upload} onClose={()=>setUploadFiles(null)}/>}
   {chromeMenu&&<Dropdown open trigger={['click']} onOpenChange={open=>{if(!open)setChromeMenu(null)}} menu={{items:chromeMenu.kind==='tabs'?tabs.map(tab=>({key:tab.id,label:tab.title})):chromeMenu.kind==='tab'?[{key:'close',label:'关闭文档',danger:true}]:chromeMenu.kind==='new'?[...(capabilities.docx==='editable'?[{key:'word',label:'新建 Word 文档'}]:[]),...(capabilities.xlsx==='editable'?[{key:'sheet',label:'新建 Excel 表格'}]:[]),...(capabilities.pptx==='editable'?[{key:'slide',label:'新建 PPT 演示文稿'}]:[]),...(capabilities.pdfEditor==='editable'?[{key:'pdf',label:'新建 PDF'}]:[]),{key:'import',label:'打开文件…'}]:[{key:'home',label:'首页'},{key:'import',label:'打开文件…'},{key:'settings',label:'个人设置'}],onClick:({key})=>{const target=chromeMenu;setChromeMenu(null);if(target.kind==='tabs')documentTabs.activate(key);else if(key==='close'&&target.id)void documentTabs.close(target.id).catch(e=>notice(e.message));else if(key==='word')void window.aiOffice.newDoc().catch(e=>notice(e.message));else if(key==='sheet')void window.aiOffice.newSheet().catch(e=>notice(e.message));else if(key==='slide')void window.aiOffice.newSlide().catch(e=>notice(e.message));else if(key==='pdf')void window.aiOffice.newPdf().catch(e=>notice(e.message));else if(key==='import')void browse().catch(e=>notice(e.message));else if(key==='home')documentTabs.activate('home');else if(key==='settings')setPage('settings')}}}><span style={{position:'fixed',left:Math.min(chromeMenu.x,window.innerWidth-200),top:chromeMenu.y,width:1,height:1}}/></Dropdown>}

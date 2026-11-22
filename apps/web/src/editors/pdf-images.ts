@@ -1,6 +1,6 @@
 import type {PdfSavedImageOperation} from './pdf-saved-image-drafts'
 import type {SettingsRequest} from '../../../../packages/browser-host/src/preferences'
-import type {PdfImageInfo,PdfImageOperation,PdfImageTools,PdfImageContentOperation,PdfImageBytes,PdfImageDraftInfo} from '../shell/pdf-preview-skill'
+import type {PdfImageInfo,PdfImageOperation,PdfImageTools,PdfImageContentOperation,PdfImageBytes,PdfImageDraftInfo} from './pdf-types'
 
 export function createPdfImageAccess({fileId,request,getRevision,isReady,write,fetchImage,writeContent,queueInsert,queueEdit,isClaimed,isDraftReady,isReadable}:{fileId:string;request:SettingsRequest;getRevision:()=>string;isReady:()=>boolean;write:(operation:PdfImageOperation,signal?:AbortSignal)=>Promise<boolean>;fetchImage?:(url:string,signal?:AbortSignal)=>Promise<{base64:string;mime:string}|null>;writeContent?:(operation:PdfImageContentOperation,signal?:AbortSignal)=>Promise<boolean>;queueInsert?:(operation:Extract<PdfImageContentOperation,{op:'insert_image'}>,signal?:AbortSignal)=>Promise<PdfImageDraftInfo>;queueEdit?:(operation:PdfSavedImageOperation,signal?:AbortSignal)=>Promise<void>;isClaimed?:(page:number,imageNumber:number)=>boolean;isDraftReady?:()=>boolean;isReadable?:()=>boolean}):PdfImageTools{
  let snapshot:{revision:string;images:readonly PdfImageInfo[]}|undefined
@@ -26,7 +26,7 @@ export function createPdfImageAccess({fileId,request,getRevision,isReady,write,f
  }
  return {
   ...(queueEdit?{editsAreDrafts:true}:{}),
-  ...(queueInsert?{async insertDraft(input:Extract<import('../shell/pdf-preview-skill').PdfImageContentInput,{op:'insert_image'}>,signal?:AbortSignal){
+  ...(queueInsert?{async insertDraft(input:Extract<import('./pdf-types').PdfImageContentInput,{op:'insert_image'}>,signal?:AbortSignal){
    signal?.throwIfAborted()
    const revision=getRevision(),ready=isDraftReady??isReady
    if(!revision||!ready())throw Error('PDF 尚未就绪，或有修改等待保存确认。')
@@ -35,7 +35,7 @@ export function createPdfImageAccess({fileId,request,getRevision,isReady,write,f
    if(revision!==getRevision()||!ready())throw Error('PDF 版本或编辑状态已变化，请重新插入图片。')
    return queueInsert({...operation,image},signal)
   }}:{}),
-  ...(fetchImage&&(writeContent||queueEdit)?{async content(input:import('../shell/pdf-preview-skill').PdfImageContentInput,signal?:AbortSignal){
+  ...(fetchImage&&(writeContent||queueEdit)?{async content(input:import('./pdf-types').PdfImageContentInput,signal?:AbortSignal){
    signal?.throwIfAborted()
    const revision=getRevision()
    if(!revision||!isReady()||input.op==='replace_image'&&(snapshot?.revision!==revision||!snapshot.images.some(image=>image.page===input.page&&image.image_number===input.image_number))||input.op==='replace_image'&&isClaimed?.(input.page,input.image_number))return false

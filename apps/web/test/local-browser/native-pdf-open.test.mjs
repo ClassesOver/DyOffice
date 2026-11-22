@@ -343,6 +343,7 @@ test('GenOffice PDF assistant and ribbon edits preview and save, including recov
  await page.getByRole('button',{name:'登录',exact:true}).click()
  await expect(page.locator('.home')).toBeVisible()
  if(shell){
+  assert.equal((await page.request.get(origin+'/pdf.html')).status(),404)
   await page.goto(origin+'/?entry=pdf-test#/file/'+file.fileId)
   const frame=page.locator('iframe.workspace-document-frame')
   await expect(frame).toHaveAttribute('src','/native-pdf/?fileId='+file.fileId)

@@ -40,7 +40,7 @@ async function fixtureDelivery(t,input){
 }
 
 for(const format of ['docx','xlsx','pptx','pdf'])test(format+' resumes after '+(live?'official DSH':'an external fixture')+' delivers a report and recovers it from history',{
- skip:(!live&&!fixture)||(process.env.DYOFFICE_DSH_FORMAT&&process.env.DYOFFICE_DSH_FORMAT!==format),timeout:360000,
+ skip:(!live&&!fixture)||(format==='pdf'&&!nativePdfDirectory)||(process.env.DYOFFICE_DSH_FORMAT&&process.env.DYOFFICE_DSH_FORMAT!==format),timeout:360000,
 },async t=>{
  const port=Number(process.env.DYOFFICE_DSH_PORT??4219),origin='http://localhost:'+port,f=await fileFixture(t,{origin,worker:true}),real=live?await realDshBackground(t):null
  await f.preferences.update(f.alice.token,{language:'zh',showAssistant:true,autoSave:false})
@@ -100,24 +100,14 @@ for(const format of ['docx','xlsx','pptx','pdf'])test(format+' resumes after '+(
  const panelSelector=format==='pdf'?'.shared-editor-assistant':format==='xlsx'?'.copilot:not(.collapsed)':'.ai-panel'
  const waitEditor=()=>expect(page.locator(selectors[format]).first()).toBeVisible({timeout:45000})
  async function openDocument(){
-  if(format==='pdf'&&nativePdfDirectory){
+  if(format==='pdf'){
    await page.goto(origin+'/native-pdf/?fileId='+file.fileId+'&channel='+conversationId)
    await expect(page.locator('.pdf-thumb')).toHaveCount(1)
    await page.getByRole('button',{name:'AI 助手',exact:true}).click()
    return
   }
-  if(format!=='pdf'){
-   await page.goto(origin+'/native-'+format+'/?fileId='+file.fileId+'&channel='+conversationId)
-   await waitEditor()
-   return
-  }
-  const homeTab=page.getByRole('tab',{name:'首页',exact:true})
-  if(await homeTab.isVisible())await homeTab.click()
-  await page.getByRole('button',{name:/账号菜单/}).click()
-  await page.getByRole('menuitem',{name:'频道分享',exact:true}).click()
-  await page.getByRole('navigation',{name:'频道列表'}).getByRole('button',{name:new RegExp(name)}).click()
-  await page.getByRole('button',{name:'打开文档',exact:true}).click()
-  await expect(page.getByRole('region',{name:'PDF 页面',exact:true}).locator('figure')).toHaveCount(1)
+  await page.goto(origin+'/native-'+format+'/?fileId='+file.fileId+'&channel='+conversationId)
+  await waitEditor()
  }
  const connectPath='/api/v1/assistant-channels/channels/'+conversationId+'/connect'
  await page.route('**'+connectPath,route=>route.fulfill({status:503,body:'Channel unavailable'}),{times:1})
@@ -205,13 +195,6 @@ for(const format of ['docx','xlsx','pptx','pdf'])test(format+' resumes after '+(
  await expect(deliveries.getByRole('heading',{name:'历史交付',exact:true})).toBeVisible()
  const report=deliveries.locator('li').filter({hasText:'dsh-budget-report.txt'})
  await expect(report.locator('code')).toHaveText(delivery.sha256)
- if(format==='pdf'&&!nativePdfDirectory){
-  const downloaded=page.waitForEvent('download')
-  await report.getByRole('button',{name:'下载',exact:true}).click()
-  assert.equal((await downloaded).suggestedFilename(),'dsh-budget-report.txt')
-  assert.equal(await head(),file.revision)
-  return
- }
  if(format==='xlsx'){
   await page.evaluate(()=>window.__genofficeDebug.univerAPI.getActiveWorkbook().getActiveSheet().getRange('J10').activate())
   await expect.poll(()=>page.evaluate(()=>{

@@ -1,18 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import {createPdfPreviewSkill} from '../../src/shell/pdf-preview-skill.ts'
 import {createPdfMutations} from '../../src/editors/pdf-mutations.ts'
-const create=write=>createPdfPreviewSkill(()=>[{page:1,text:'One'},{page:2,text:'Two'},{page:3,text:'Three'}],()=>true,...Array(17).fill(undefined),write)
-test('replace_pages waits for the user selected source and only claims a confirmed revision',async()=>{
- let selected=false,calls=[];const abort=new AbortController(),skill=create(async(...args)=>{calls.push(args);return selected})
- assert.ok(skill.tools.some(t=>t.name==='replace_pages'));assert.equal(create().tools.some(t=>t.name==='replace_pages'),false)
- const run=input=>skill.executeTool({id:'replace',name:'replace_pages',input},abort.signal)
- for(const input of [{pages:[]},{pages:[0]},{pages:[4]},{pages:[1,1]},{pages:[1.5]},{pages:[1],path:'/tmp/remote.pdf'}])assert.equal((await run(input)).isError,true)
- assert.equal(calls.length,0)
- assert.equal((await run({pages:[3,1]})).mutated,false);assert.deepEqual(calls[0],[[1,3],abort.signal])
- selected=true;assert.equal((await run({pages:[1]})).mutated,true)
- abort.abort();await assert.rejects(run({pages:[1]}),{name:'AbortError'})
-})
 test('replacement uploads the exact selected Blob with revision metadata and recovers only the original commit',async()=>{
  const calls=[],source=new Blob(['%PDF-source']),input={fileId:'f',uploadId:'u',baseRevision:'r',leaseEpoch:2,idempotencyKey:'key'};let commits=0,saved=0
  const client=createPdfMutations({fileId:'f',getRevision:()=> 'r',onSaved:async()=>{saved++},request:async(path,method,body)=>{
