@@ -6,7 +6,7 @@ import {fileURLToPath} from 'node:url'
 import {expect} from '@playwright/test'
 import JSZip from 'jszip'
 import {PNG} from 'pngjs'
-import {launchTestBrowser} from '../helpers/browser.mjs'
+import {launchTestBrowser,recordVerifiedOfficeEffect} from '../helpers/browser.mjs'
 import {fileFixture,docxBytes,importFile} from '../helpers/files.mjs'
 import {mockProviderNetwork} from '../helpers/provider-network.mjs'
 import {password} from '../helpers/identity.mjs'
@@ -122,6 +122,8 @@ test('Word AI inserts generated, linked and attached images into DOCX without re
  assert.match(results[5].output,/Word attachment marker 719/)
  assert.match(results[6].output,/Word search citation[\s\S]*https:\/\/results\.example\/word/)
  assert.ok(results[7].output.includes(remoteUrl))
+ assert.match(results[7].output,/Reference image/)
+ assert.match(results[6].output,/Reference 719/)
  assert.deepEqual(mediaCalls,['generate_image','fetch_image'])
  await expect(page.locator('.tiptap.doc-page img')).toHaveCount(4)
  assert.equal((await f.files.openFile(f.alice.token,opened.fileId)).file.revision,opened.revision)
@@ -147,4 +149,10 @@ test('Word AI inserts generated, linked and attached images into DOCX without re
  assert.deepEqual(await f.files.readFile(f.alice.token,opened.fileId,opened.revision),original)
  await page.reload();await expect(page.locator('.tiptap.doc-page img')).toHaveCount(4,{timeout:30_000})
  assert.deepEqual(errors,[])
+ recordVerifiedOfficeEffect('docx','generate_image')
+ recordVerifiedOfficeEffect('docx','insert_image')
+ recordVerifiedOfficeEffect('docx','insert_picture')
+ recordVerifiedOfficeEffect('docx','image_search')
+ recordVerifiedOfficeEffect('docx','read_attachment')
+ recordVerifiedOfficeEffect('docx','web_search')
 })

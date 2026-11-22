@@ -366,6 +366,7 @@ for(const mode of ['creation','no-word','all'])test(mode==='no-word'
    return wordCopyZip.file('word/document.xml').async('string')
   },{timeout:30000}).toMatch(/New Word draft marker 719/)
   await expect(word.getByText('Word created a native document',{exact:true})).toBeAttached({timeout:30000})
+  recordVerifiedOfficeEffect('docx','create_document')
   const workbook=await probe('xlsx','chat-only')
   const source=files.xlsx
   for(const type of ['xlsx','docx','pdf']){
@@ -472,10 +473,12 @@ for(const mode of ['creation','no-word','all'])test(mode==='no-word'
  const map=word.locator('.ai-mindmap')
  await expect(map).toContainText('Office overview')
  await expect(map).toContainText('First section')
+ await expect(map).toContainText('Second section')
  await expect(wordImages).toHaveCount(imageCount)
  await map.getByRole('button',{name:'插入文档',exact:true}).click()
  await expect(wordImages).toHaveCount(imageCount+1)
  assert.equal((await f.files.openFile(f.alice.token,files.docx.fileId)).file.revision,files.docx.revision)
+ recordVerifiedOfficeEffect('docx','generate_mindmap')
  const workbook=await probe('xlsx','configured',{configured:true})
  await page.route('**/api/v1/ai/search',route=>{
   assert.deepEqual(route.request().postDataJSON(),{kind:'image_search',query:'Synthetic blue image',maxResults:1})

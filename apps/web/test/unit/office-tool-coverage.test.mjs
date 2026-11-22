@@ -35,8 +35,25 @@ const pptxResults = [
   'analyze_media', 'ask_clarification', 'generate_image', 'image_search', 'list_style_templates',
   'load_guide', 'plan_deck', 'read_attachment', 'read_slide', 'save_style_template', 'web_search',
 ]
+const docxEffects = [
+  'accept_changes', 'add_comment', 'apply_ops', 'create_document', 'define_style',
+  'delete_comment', 'delete_note', 'edit_chart', 'edit_note', 'generate_image',
+  'insert_analysis_image', 'insert_chart', 'insert_content', 'insert_data_result', 'insert_endnote',
+  'insert_footnote', 'insert_image', 'insert_picture', 'insert_section_break', 'insert_text_box',
+  'reject_changes', 'replace_blocks', 'replace_selection', 'reply_comment', 'resolve_comment',
+  'set_header_footer', 'set_page_setup', 'set_watermark', 'write_document',
+]
+const docxResults = [
+  'analyze_media', 'generate_mindmap', 'get_document_context', 'image_search', 'list_styles',
+  'read_attachment', 'read_blocks', 'read_comments', 'read_knowledge_file', 'read_notes',
+  'read_revisions', 'search_knowledge_base', 'web_search',
+]
+const sharedResults = [
+  'list_agents', 'list_agent_data', 'delegate_agent_task', 'list_channel_agents',
+  'delegate_channel_task', 'sources_list', 'sources_describe', 'sources_query', 'sources_read_result',
+]
 const artifacts = [
-  {format:'docx',verifiedEffect:'insert_data_result'},
+  ...docxEffects.map(verifiedEffect => ({format:'docx',verifiedEffect})),
   ...pptxEffects.map(verifiedEffect => ({format:'pptx',verifiedEffect})),
   ...xlsxEffects.map(verifiedEffect => ({format:'xlsx',verifiedEffect})),
   ...pdfEffects.map(verifiedEffect => ({format:'pdf',verifiedEffect})),
@@ -51,7 +68,7 @@ function trace(omit = () => false, omitArtifact = undefined, omitResult = undefi
   const shared = [...ASSISTANT_DELEGATION_TOOLS, ...assistantSourceTools('read-only-analysis')]
   events.push({format:'workspace',offered:shared,results:shared.map(name => ({name,error:false}))})
   events.push(...artifacts.filter(event => event.format !== omitArtifact))
-  for (const [format,names] of [['pdf',pdfResults],['xlsx',xlsxResults],['pptx',pptxResults]]) {
+  for (const [format,names] of [['pdf',pdfResults],['xlsx',xlsxResults],['pptx',pptxResults],['docx',docxResults],['shared',sharedResults]]) {
     events.push(...names.filter(name => omitResult?.format !== format || name !== omitResult.name)
       .map(verifiedEffect => ({format,verifiedEffect})))
   }
@@ -78,10 +95,10 @@ test('coverage reports missing registrations and failed calls in the relevant fo
 test('each required PDF effect must verify its saved artifact', () => {
   const missing = summarizeOfficeToolCoverage(trace(undefined, 'pdf'))
   assert.deepEqual(missing.gaps, pdfEffects.map(name => 'pdf: missing saved-artifact verification for '+name))
-  assert.deepEqual(missing.effects, {verified:16,required:57})
+  assert.deepEqual(missing.effects, {verified:44,required:85})
   const verified = summarizeOfficeToolCoverage(trace())
   assert.deepEqual(verified.gaps, [])
-  assert.deepEqual(verified.effects, {verified:57,required:57})
+  assert.deepEqual(verified.effects, {verified:85,required:85})
   assert.throws(
     () => summarizeOfficeToolCoverage(JSON.stringify({format:'xlsx',verifiedEffect:'apply_ops.rotatePages'})),
     {message:'Invalid Office tool trace at line 1'},
@@ -90,11 +107,11 @@ test('each required PDF effect must verify its saved artifact', () => {
 
 test('every PDF tool must have verified content, navigation or saved effects', () => {
   assert.deepEqual(new Set([...pdfEffects.map(effect => effect.split('.')[0]), ...pdfResults]), ASSISTANT_FORMAT_TOOLS.pdf)
-  assert.deepEqual(summarizeOfficeToolCoverage(trace()).resultEffects, {verified:34,required:34})
+  assert.deepEqual(summarizeOfficeToolCoverage(trace()).resultEffects, {verified:56,required:56})
   for (const name of pdfResults) {
     const summary = summarizeOfficeToolCoverage(trace(undefined, undefined, {format:'pdf',name}))
     assert.deepEqual(summary.gaps, ['pdf: missing result verification for '+name])
-    assert.deepEqual(summary.resultEffects, {verified:33,required:34})
+    assert.deepEqual(summary.resultEffects, {verified:55,required:56})
   }
 })
 
@@ -105,7 +122,7 @@ test('every XLSX tool requires saved evidence or verified results', () => {
   for (const name of xlsxResults) {
     const summary = summarizeOfficeToolCoverage(trace(undefined, undefined, {format:'xlsx',name}))
     assert.deepEqual(summary.gaps, ['xlsx: missing result verification for '+name])
-    assert.deepEqual(summary.resultEffects, {verified:33,required:34})
+    assert.deepEqual(summary.resultEffects, {verified:55,required:56})
   }
 })
 
@@ -119,9 +136,22 @@ test('every PPTX tool requires saved evidence or verified results', () => {
   }
 })
 
-test('one format’s saved table does not prove its peers’ native results', () => {
-  const summary = summarizeOfficeToolCoverage(trace(undefined, 'docx'))
-  assert.deepEqual(summary.gaps, ['docx: missing saved-artifact verification for insert_data_result'])
+test('every DOCX tool requires saved evidence or verified results', () => {
+  assert.deepEqual(new Set([...docxEffects, ...docxResults]), ASSISTANT_FORMAT_TOOLS.docx)
+  assert.deepEqual(summarizeOfficeToolCoverage(trace(undefined, 'docx')).gaps,
+    docxEffects.map(name => 'docx: missing saved-artifact verification for '+name))
+  for (const name of docxResults) {
+    const summary = summarizeOfficeToolCoverage(trace(undefined, undefined, {format:'docx',name}))
+    assert.deepEqual(summary.gaps, ['docx: missing result verification for '+name])
+  }
+})
+
+test('every shared source and delegation tool requires verified results', () => {
+  assert.deepEqual(new Set(sharedResults), new Set([...ASSISTANT_DELEGATION_TOOLS, ...assistantSourceTools('read-only-analysis')]))
+  for (const name of sharedResults) {
+    const summary = summarizeOfficeToolCoverage(trace(undefined, undefined, {format:'shared',name}))
+    assert.deepEqual(summary.gaps, ['shared: missing result verification for '+name])
+  }
 })
 
 test('an empty or malformed trace fails', () => {

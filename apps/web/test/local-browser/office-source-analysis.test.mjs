@@ -155,7 +155,13 @@ print(json.dumps(dict(series=line.get_ydata().tolist(), total=sum(line.get_ydata
    }
   }else if(prompt.includes('有哪些表')){
    if(!results.length)action=['sources_list',{}]
-   else if(results.length===1)action=['sources_describe',{sourceId:'sales-db'}]
+   else if(results.length===1){
+    const listed=output()
+    assert.deepEqual(listed.items.map(({sourceId,name,kind})=>[sourceId,name,kind]),[['sales-db','Sales DB','postgres']])
+    assert.equal(listed.nextCursor,null)
+    assert.ok(listed.items.every(item=>Object.keys(item).sort().join(',')==='kind,name,sourceId,sourceVersion'))
+    action=['sources_describe',{sourceId:listed.items[0].sourceId}]
+   }
    else {
     const desc=output()
     assert.ok(desc.metadata,results.at(-1).content)
@@ -381,6 +387,9 @@ print(json.dumps(dict(series=line.get_ydata().tolist(), total=sum(line.get_ydata
   return
  }
  assert.equal(queries,2)
+ for(const effect of ['list_agents','list_agent_data','delegate_agent_task','sources_list','sources_describe','sources_query','sources_read_result']){
+  recordVerifiedOfficeEffect('shared',effect)
+ }
  const token=f.adminSigned.token
  async function saveNative(entry,format){
   const head=async()=>(await f.files.openFile(token,entry.fileId)).file.revision
@@ -407,6 +416,7 @@ print(json.dumps(dict(series=line.get_ydata().tolist(), total=sum(line.get_ydata
  assert.ok(rows.some(row=>row.includes('2026-01')&&row.includes('>30<')))
  assert.ok(rows.some(row=>row.includes('2026-02')&&row.includes('>40<')))
  await assertSavedChart(saved,/^word\/media\/.+\.png$/,docx)
+ recordVerifiedOfficeEffect('docx','insert_analysis_image')
  await reopenNative()
  await expectFrozenTable()
  recordVerifiedOfficeEffect('docx','insert_data_result')

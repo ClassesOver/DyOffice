@@ -12,7 +12,7 @@ import {expect} from '@playwright/test'
 import JSZip from 'jszip'
 import {readPdfLeafObjects} from '../../../pdf/src/main/text-edit.ts'
 import {backgroundDocumentBytes} from '../helpers/background-documents.mjs'
-import {launchTestBrowser} from '../helpers/browser.mjs'
+import {launchTestBrowser,recordVerifiedOfficeEffect} from '../helpers/browser.mjs'
 import {fileFixture,importFile} from '../helpers/files.mjs'
 import {password} from '../helpers/identity.mjs'
 import {stubHomeHero} from '../helpers/home-hero.mjs'
@@ -135,9 +135,26 @@ for(const format of ['docx','xlsx','pptx','pdf'])test(format+' resumes after '+(
  const reportMarker='DSH-RECEIPT-'+randomUUID(),summary=reportMarker+' Total 60 CNY'
  if(!real){
   const tool=(name,input)=>({tool_calls:[{index:0,id:'call_'+name,type:'function',function:{name,arguments:JSON.stringify(input)}}]})
-  const script=[tool('list_channel_agents',{}),tool('delegate_channel_task',{agentId:member.membershipId,instruction:'Total the frozen budget',dataInputs:{sourceIds:[],resultIds:[frozen.resultId]}}),{content:summary}]
-  mockProviderNetwork(t,()=>{
-   const delta=script.shift();assert.ok(delta,'Unexpected model call')
+  let turn=0
+  const network=mockProviderNetwork(t,()=>{
+   let delta
+   if(turn===0)delta=tool('list_channel_agents',{})
+   else if(turn===1){
+    const {messages}=JSON.parse(network.wire.toString())
+    const listing=messages.findLast(message=>message.tool_call_id==='call_list_channel_agents')
+    const result=JSON.parse(listing?.content??'{}')
+    assert.ok(!result.isError,result.output)
+    const {agents}=JSON.parse(result.output)
+    const target=agents.find(agent=>agent.agentId===member.membershipId)
+    assert.equal(target?.displayName,member.displayName)
+    assert.equal(target?.kind,member.kind)
+    assert.ok(target.agentId!==member.agentId)
+    delta=tool('delegate_channel_task',{agentId:target.agentId,instruction:'Total the frozen budget',dataInputs:{sourceIds:[],resultIds:[frozen.resultId]}})
+   }else{
+    assert.equal(turn,2)
+    delta={content:summary}
+   }
+   turn++
    return Readable.from([Buffer.from('data: '+JSON.stringify({choices:[{delta,finish_reason:null}]})+'\n\ndata: '+JSON.stringify({choices:[{delta:{},finish_reason:delta.tool_calls?'tool_calls':'stop'}]})+'\n\ndata: [DONE]\n\n')])
   })
  }
@@ -217,6 +234,8 @@ for(const format of ['docx','xlsx','pptx','pdf'])test(format+' resumes after '+(
  await expect(deliveries.getByRole('heading',{name:'历史交付',exact:true})).toBeVisible()
  const report=deliveries.locator('li').filter({hasText:'dsh-budget-report.txt'})
  await expect(report.locator('code')).toHaveText(delivery.sha256)
+ if(!real)recordVerifiedOfficeEffect('shared','list_channel_agents')
+ recordVerifiedOfficeEffect('shared','delegate_channel_task')
  if(format==='xlsx'){
   await page.evaluate(()=>window.__genofficeDebug.univerAPI.getActiveWorkbook().getActiveSheet().getRange('J10').activate())
   const selected=()=>page.evaluate(()=>{

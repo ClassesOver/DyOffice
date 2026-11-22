@@ -5,7 +5,7 @@ import {fileURLToPath} from 'node:url'
 import {readFile} from 'node:fs/promises'
 import {expect} from '@playwright/test'
 import JSZip from 'jszip'
-import {launchTestBrowser} from '../helpers/browser.mjs'
+import {launchTestBrowser,recordVerifiedOfficeEffect} from '../helpers/browser.mjs'
 import {fileFixture,docxBytes,importFile} from '../helpers/files.mjs'
 import {mockProviderNetwork} from '../helpers/provider-network.mjs'
 import {password} from '../helpers/identity.mjs'
@@ -76,4 +76,5 @@ test(liveConfig?'native Word writes and saves a real model response in the curre
  await page.reload();await expect(page.locator('.tiptap.doc-page').first()).toContainText(savedText,{timeout:30_000})
  if(network)assert.equal(network.writes,3)
  assert.deepEqual(errors,[])
+ recordVerifiedOfficeEffect('docx','write_document')
 })

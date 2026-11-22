@@ -12,7 +12,7 @@
 
 Web 门禁在 Chromium 用例完成后，按当前工具合同核对当次运行的注册和成功执行。缺项会按格式和工具名列出并使门禁失败。各项效果由对应的浏览器用例断言。[覆盖检查](../../../apps/web/test/helpers/office-tool-coverage.mjs) [PDF 原生效果用例](../../../apps/web/test/local-browser/native-pdf-open.test.mjs)
 
-成品门禁要求 57 项效果证据。DOCX、XLSX 和 PPTX 分别核对冻结表格的准确数值及 Web 重开，PDF 核对 41 项原生保存效果，涉及 38 个工具。PDF 用例从提交修订的字节核对正文、插入文字的最终坐标、删除、批注回复关系、空白页、表单值、标题、旋转和分页水印，重开后继续清除水印并确认页脚仍在。[PDF 原生工具成品用例](../../../apps/web/test/local-browser/native-pdf-open.test.mjs)
+成品门禁要求 85 项效果证据，另加 56 项工具返回内容、导航、模板与委派效果。DOCX、XLSX 和 PPTX 分别核对冻结表格的准确数值及 Web 重开，PDF 核对 41 项原生保存效果，涉及 38 个工具。PDF 用例从提交修订的字节核对正文、插入文字的最终坐标、删除、批注回复关系、空白页、表单值、标题、旋转和分页水印，重开后继续清除水印并确认页脚仍在。[PDF 原生工具成品用例](../../../apps/web/test/local-browser/native-pdf-open.test.mjs)
 
 PDF 图片用例使用工具返回的搜索链接和生成媒体引用插入图片，核对保存包中的像素、位置、删除、旋转、裁剪、透明度与背景去除，并在 Web 重开后复采样。表单用例核对重排后的两页实际顺序、两个复选框状态及旧版本字节。[图片保存与重开](../../../apps/web/test/local-browser/pdf-media.test.mjs) [页面重排与表单](../../../apps/web/test/local-browser/native-pdf-open.test.mjs)
 
@@ -37,6 +37,8 @@ XLSX 结果门禁要求 13 项读取、查找与定位效果。实际工作簿�
 XLSX 的其他结果核对实际上传的附件正文，以及 Web 检索返回的供应商标题、网址和摘要。成品门禁另核对 XLSX、DOCX、PDF 和 CSV 的创建结果，复开 B2、D4、F6 的生成图、搜索图和附件图，读取混合附件合并后的全部 40 行和最后一行 CSV，并核对普通批操作保存的公式 `B2=SUM(A2:A3)` 及缓存 42。成品和结果证据覆盖 Web 合同中的 19 个 XLSX 工具。[创建、搜索与图片用例](../../../apps/web/test/local-browser/office-tool-inventory.test.mjs) [附件合并](../../../apps/web/test/local-browser/sheets-attachment-merge.test.mjs) [公式写入与重开](../../../apps/web/test/local-browser/dsh-office-handoff.test.mjs)
 
 ## DOCX
+
+DOCX 的 42 个 Web AI 工具均有门禁断言。29 项成品效果核对正文、粗体选区替换、页眉水印、A5 横向页、样式、原生图表、批注、修订、脚尾注、图片和可独立打开的新文件。13 项结果效果核对文档和附件正文、已解析的批注与修订、来源修订链接、媒体分析、搜索及交互思维导图。[正文、样式和引用](../../../apps/web/test/local-browser/word-knowledge.test.mjs) [图片和附件](../../../apps/web/test/native-docs/image-media.test.mjs) [流式写作保存](../../../apps/web/test/native-docs/writer-draft-save.test.mjs)
 
 | 工具 | 浏览器注册 | 候选用例 | 执行或效果证据 |
 | --- | --- | --- | --- |
@@ -189,6 +191,8 @@ PPTX 的 20 个 Web AI 工具均有门禁断言。9 项成品效果覆盖原生�
 | `transform_image` | 观察到 | [pdf-media.test.mjs](../../../apps/web/test/local-browser/pdf-media.test.mjs)、[ai-tools.test.ts](../../../apps/pdf/tests/ai-tools.test.ts) | 移动目标图片后保存，核对成品中的新坐标和图宽。[浏览器用例](../../../apps/web/test/local-browser/pdf-media.test.mjs) |
 
 ## 共享工具
+
+9 个共享工具均要求效果证据。数据源用例以隔离 PostgreSQL 核对来源元数据、可见表、实收金额和冻结结果分页，并确认委派使用原结果和实际交付的图片。频道用例使用工具返回的成员 ID 路由，核对父子任务恢复、唯一子任务和历史报告哈希。[数据源与执行器](../../../apps/web/test/local-browser/office-source-analysis.test.mjs) [频道列表与委派](../../../apps/web/test/local-browser/assistant-dsh-delegation.test.mjs)
 
 | 工具 | 浏览器注册 | 候选用例 | 执行或效果证据 |
 | --- | --- | --- | --- |

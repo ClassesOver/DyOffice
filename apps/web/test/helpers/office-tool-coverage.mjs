@@ -3,8 +3,16 @@ import {pathToFileURL} from 'node:url'
 import {ASSISTANT_FORMAT_TOOLS, ASSISTANT_DELEGATION_TOOLS, assistantSourceTools} from '../../../../packages/web-contracts/src/assistant.ts'
 
 const toolName = name => typeof name === 'string' && /^[a-z][a-z0-9_]{0,79}$/.test(name)
+const sharedTools = new Set([...ASSISTANT_DELEGATION_TOOLS,...assistantSourceTools('read-only-analysis')])
 const requiredEffects = new Map([
-  ['docx', new Set(['insert_data_result'])],
+  ['docx', new Set([
+    'accept_changes', 'add_comment', 'apply_ops', 'create_document', 'define_style',
+    'delete_comment', 'delete_note', 'edit_chart', 'edit_note', 'generate_image',
+    'insert_analysis_image', 'insert_chart', 'insert_content', 'insert_data_result', 'insert_endnote',
+    'insert_footnote', 'insert_image', 'insert_picture', 'insert_section_break', 'insert_text_box',
+    'reject_changes', 'replace_blocks', 'replace_selection', 'reply_comment', 'resolve_comment',
+    'set_header_footer', 'set_page_setup', 'set_watermark', 'write_document',
+  ])],
   ['xlsx', new Set([
     'insert_data_result', 'create_document', 'generate_image', 'image_search',
     'merge_attached_workbooks', 'propose_operations',
@@ -26,6 +34,12 @@ const requiredEffects = new Map([
   ])],
 ])
 const requiredResults = new Map([
+  ['shared', sharedTools],
+  ['docx', new Set([
+    'analyze_media', 'generate_mindmap', 'get_document_context', 'image_search', 'list_styles',
+    'read_attachment', 'read_blocks', 'read_comments', 'read_knowledge_file', 'read_notes',
+    'read_revisions', 'search_knowledge_base', 'web_search',
+  ])],
   ['pptx', new Set([
     'analyze_media', 'ask_clarification', 'generate_image', 'image_search', 'list_style_templates',
     'load_guide', 'plan_deck', 'read_attachment', 'read_slide', 'save_style_template', 'web_search',
@@ -45,7 +59,7 @@ const observations = () => ({offered:new Set(), succeeded:new Set()})
 export function summarizeOfficeToolCoverage(trace) {
   const observed = new Map([...Object.keys(ASSISTANT_FORMAT_TOOLS), 'workspace'].map(format => [format, observations()]))
   const shared = observations()
-  const verifiedEffects = new Map(Object.keys(ASSISTANT_FORMAT_TOOLS).map(format => [format, new Set()]))
+  const verifiedEffects = new Map([...Object.keys(ASSISTANT_FORMAT_TOOLS),'shared'].map(format => [format, new Set()]))
   for (const [index, line] of trace.split('\n').entries()) {
     if (!line.trim()) continue
     const invalid = () => new Error(`Invalid Office tool trace at line ${index + 1}`)
@@ -101,7 +115,7 @@ export function summarizeOfficeToolCoverage(trace) {
   return {
     formats:Object.fromEntries(Object.entries(ASSISTANT_FORMAT_TOOLS).map(([format,names]) =>
       [format,coverage(format,names,observed.get(format))])),
-    shared:coverage('shared',new Set([...ASSISTANT_DELEGATION_TOOLS,...assistantSourceTools('read-only-analysis')]),shared),
+    shared:coverage('shared',sharedTools,shared),
     effects,
     resultEffects,
     gaps,
