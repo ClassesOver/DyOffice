@@ -154,3 +154,20 @@ test('the DSH listener refreshes on a new complete event and stops on disposal',
  }finally{stop();controller.close()}
  assert.equal(signal.aborted,true)
 })
+
+test('the unified stream scopes identical IDs by document, conversation or channel feed',async t=>{
+ const {registerTaskEventRoutes}=await import('../../server/src/modules/tasks/routes.ts')
+ const server=Fastify();t.after(()=>server.close())
+ const reads=[]
+ const reader=source=>async(...args)=>{reads.push([source,...args]);return {state:'succeeded',events:[]}}
+ const token='s'.repeat(43),headers={cookie:'__Host-dyoffice-session='+token}
+ registerTaskEventRoutes(server,{requireSessionRead(){}},reader('coding'),reader('channel'))
+ const get=query=>server.inject({url:'/api/v1/assistant/tasks/'+ID+'/events?'+query,headers})
+ for(const query of ['documentId='+DOC,'conversationId='+DOC,'feed=channel']){
+  const response=await get(query+'&after=7')
+  assert.equal(response.statusCode,200);assert.match(response.payload,/event: end/)
+ }
+ assert.deepEqual(reads,[['coding',token,ID,DOC,7],['channel',token,DOC,7,ID],['channel',token,ID,7,undefined]])
+ for(const query of ['','documentId='+DOC+'&conversationId='+DOC,'feed=channel&conversationId='+DOC,'feed=channel&after=9007199254740992'])
+  assert.equal((await get(query)).statusCode,400)
+})

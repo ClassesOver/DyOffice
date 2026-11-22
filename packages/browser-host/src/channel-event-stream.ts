@@ -6,7 +6,7 @@ export function followChannelEvents(path: string, proof: string, cursor: () => n
   async function listen() {
     let reconnect = true
     try {
-      const response = await fetchImpl(path + '?after=' + cursor(), {
+      const response = await fetchImpl(path + (path.includes('?') ? '&after=' : '?after=') + cursor(), {
         headers: { accept: 'text/event-stream', 'x-csrf-token': proof },
         credentials: 'same-origin', mode: 'same-origin', redirect: 'error', cache: 'no-store', signal: controller.signal,
       })

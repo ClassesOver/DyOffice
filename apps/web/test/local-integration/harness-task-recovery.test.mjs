@@ -246,18 +246,19 @@ test('a killed API leaves finished Harness work recoverable and never replays in
  const channels='/api/v1/assistant-channels/channels'
  const channelResponse=await original.request(channels,{fileId:file.fileId})
  assert.equal(channelResponse.status,200)
- const channelPath=channels+'/'+(await channelResponse.json()).conversationId
+ const {conversationId}=await channelResponse.json()
+ const channelPath=channels+'/'+conversationId
  const membership=await original.request(channelPath+'/dsh-token',{allowCreate:true})
  assert.equal(membership.status,200)
  const {membershipId}=await membership.json()
  const {sequence}=await (await original.request(channelPath)).json()
- const delegated=await original.request('/api/v1/assistant-channels/actions',{requestId:crypto.randomUUID(),conversationId:channelPath.split('/').at(-1),to:membershipId,action:{kind:'delegate',instruction:'Review the draft'}})
+ const delegated=await original.request('/api/v1/assistant-channels/actions',{requestId:crypto.randomUUID(),conversationId,to:membershipId,action:{kind:'delegate',instruction:'Review the draft'}})
  assert.equal(delegated.status,200)
  const {taskId}=await delegated.json()
  assert.deepEqual(await original.stop(),[null,'SIGKILL'])
  await reader.cancel().catch(()=>{})
  const restarted=await start()
- const events=await restarted.request(channelPath+'/events?after='+sequence)
+ const events=await restarted.request('/api/v1/assistant/tasks/'+conversationId+'/events?feed=channel&after='+sequence)
  assert.equal(events.status,200)
  const channelReader=events.body.pipeThrough(new TextDecoderStream()).getReader()
  let frames=''

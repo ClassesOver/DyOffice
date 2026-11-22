@@ -7,6 +7,7 @@ import {registerAssistantSourceCatalog} from './modules/sources/assistant-catalo
 import {createCodingModelBridge} from './modules/coding/model-bridge.ts'
 import {createCodingHarness} from './modules/coding/harness.ts'
 import {createHarnessRegistry, type HarnessAdapter} from './modules/coding/registry.ts'
+import {registerTaskEventRoutes} from './modules/tasks/routes.ts'
 import {registerCodingRoutes} from './modules/coding/routes.ts'
 import {createCodingTaskRecoveryStore} from './modules/coding/task-recovery-store.ts'
 import {registerProbeAssets} from './modules/providers/probe-assets.ts'
@@ -242,6 +243,7 @@ export async function buildLocalApp(config: LocalWebConfig): Promise<FastifyInst
           const bridge=await createCodingModelBridge({token,modelId,signal,turns:officeGateway.codingTurns,...(onProgress?{onProgress}:{})})
           return {...bridge,modelId}
         }}):undefined
+    if(codingRoutes?.events||assistantChannels)registerTaskEventRoutes(app,csrf,codingRoutes?.events,assistantChannels?.ownerEventPage)
     const admitContinuation=codingRoutes?.admitContinuation
     if(config.providerGateway && 'mode' in config.providerGateway)ownedProbes.push(officeGateway=registerSharedProviderGateway(app,{transactions,sessions,csrf,keyring:config.globalConfigKeyring!,harnesses,sourceMode:assistantSourceMode,assistantChannels:config.assistantChannels,admitContinuation}))
     else if(config.providerGateway)ownedProbes.push(officeGateway=registerPersonalProviderGateway(app,{transactions,sessions,csrf,deploymentId:config.deploymentId,keyring:config.globalConfigKeyring!,profiles:config.providerGateway.profiles,harnesses,sourceMode:assistantSourceMode,assistantChannels:config.assistantChannels,admitContinuation}))

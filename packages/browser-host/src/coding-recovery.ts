@@ -70,7 +70,7 @@ export function createCodingRecovery({documentId,storage,fetchImpl=fetch,csrfTok
     void (async()=>{
       let opened=false,frames=0
       try{
-        const response=await fetchImpl(taskPath+'/'+id+'/events'+query+'&after='+(lastSequence.get(id)??0),{
+        const response=await fetchImpl('/api/v1/assistant/tasks/'+id+'/events'+query+'&after='+(lastSequence.get(id)??0),{
           method:'GET',headers:{...headers,accept:'text/event-stream'},credentials:'same-origin',mode:'same-origin',redirect:'error',cache:'no-store',
           signal:AbortSignal.any([controller.signal,stream.signal]),
         })

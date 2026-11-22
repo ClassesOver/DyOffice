@@ -255,7 +255,7 @@ export function createAssistantChannelClient(options:{request:SettingsRequest;cs
    connection={id,epoch:reply.connectionEpoch}
    await refresh()
    if(!disposed&&startGeneration===localGeneration&&snapshot&&options.csrfToken){
-    stopEvents=followChannelEvents(base+'/channels/'+channelId+'/events',options.csrfToken,()=>snapshot?.sequence??0,()=>{void refresh()})
+    stopEvents=followChannelEvents('/api/v1/assistant/tasks/'+channelId+'/events?feed=channel',options.csrfToken,()=>snapshot?.sequence??0,()=>{void refresh()})
    }
    })()
    try {await starting} finally {if(startGeneration===localGeneration)starting=undefined}

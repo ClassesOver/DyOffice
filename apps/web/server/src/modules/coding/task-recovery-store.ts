@@ -15,7 +15,7 @@ const retention="interval '10 minutes'",lease="interval '30 seconds'"
 const active="state IN ('running','cancel_requested')"
 const validLease=`${active} AND lease_until>clock_timestamp()`
 /** Public task events: bounded, ordered, readable from any API instance. */
-export type TaskEventKind='state'|'activity'|'progress'
+export type TaskEventKind='state'|'activity'|'progress'|'result'
 export type TaskEvent={kind:TaskEventKind;payload:Record<string,unknown>}
 export type StoredTaskEvent=TaskEvent&{sequence:number}
 /** Activity/progress stop here; the remaining sequence numbers are kept for state events. */
@@ -27,7 +27,7 @@ async function insertEvents(c:PoolClient,args:string[],events:TaskEvent[]){
   for(const event of events){
     const payload=JSON.stringify(event.payload)
     if(Buffer.byteLength(payload)>EVENT_PAYLOAD_MAX)continue
-    if(sequence>(event.kind==='state'?4096:EVENT_SOFT_LIMIT))continue
+    if(sequence>(event.kind==='state'||event.kind==='result'?4096:EVENT_SOFT_LIMIT))continue
     await c.query('INSERT INTO harness_task_events(deployment_id,owner_id,session_id,turn_id,sequence,kind,payload) VALUES($1,$2,$3,$4,$5,$6,$7)',[...args.slice(0,4),sequence++,event.kind,payload])
   }
 }
@@ -40,6 +40,12 @@ export function createCodingTaskRecoveryStore(transactions:PrincipalTransactions
       return operation(c,[...scope(p),p.sessionId,turnId,documentId],file.current_revision)
     })
   const where=key+' AND file_id=$5'
+  async function recordExpired(c:PoolClient,args:string[]){
+    const changed=await c.query(`UPDATE task_runtime_codex SET state='unknown_outcome',checkpoint=NULL,
+      status_payload=(status_payload::jsonb || jsonb_build_object('failure',$6::text))::text
+      WHERE ${where} AND ${active} AND lease_until<=clock_timestamp() AND expires_at>clock_timestamp()`,[...args,interruptedFailure])
+    if(changed.rowCount)await insertEvents(c,args,[{kind:'state',payload:{state:'unknown_outcome',failure:interruptedFailure}}])
+  }
   return {
     bindGrantLease(token:string,documentId:string,turnId:string){
       let runtimeId:string|undefined
@@ -89,6 +95,7 @@ export function createCodingTaskRecoveryStore(transactions:PrincipalTransactions
     /** Events after a sequence number plus the task's effective state. */
     async events(token:string,documentId:string,turnId:string,after:number){
       return withFile(token,documentId,turnId,async(c,args)=>{
+        await recordExpired(c,args)
         const {rows:[row]}=await c.query<{state:TaskState}>(`SELECT state FROM task_runtime_status
           WHERE executor='codex' AND ${own} AND session_id=$3 AND task_id=$4 AND file_id=$5 AND expires_at>clock_timestamp()`,args)
         if(!row)throw authError(404)
@@ -117,12 +124,14 @@ export function createCodingTaskRecoveryStore(transactions:PrincipalTransactions
         const settled=await c.query(`UPDATE task_runtime_codex SET state=$6,status_payload=$7,checkpoint=CASE WHEN $6='succeeded' THEN checkpoint ELSE NULL END,
           expires_at=clock_timestamp()+${retention} WHERE ${where} AND state=$8 AND lease_until>clock_timestamp()`,[...args,savedState,JSON.stringify(snapshot),row.state])
         if(!settled.rowCount)throw authError(409)
+        if(savedState==='succeeded'&&snapshot.result)await insertEvents(c,args,[{kind:'result',payload:{turnId}}])
         await insertEvents(c,args,[{kind:'state',payload:{state:savedState,...(snapshot.failure?{failure:snapshot.failure.slice(0,2000)}:{})}}])
         return {state:savedState,...snapshot}
       })
     },
     async access<T>(token:string,documentId:string,turnId:string,mutating:boolean,operation:(task:Task,revision:string)=>{value:T;consume?:boolean}){
       return withFile(token,documentId,turnId,async(c,args,revision)=>{
+        await recordExpired(c,args)
         const {rows:[row]}=await c.query<Row>(`SELECT state,status_payload,checkpoint,lease_until>clock_timestamp() AS live
           FROM task_runtime_codex WHERE ${where} AND expires_at>clock_timestamp() ${mutating?'FOR UPDATE':''}`,args)
         if(!row)throw authError(404)

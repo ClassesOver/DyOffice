@@ -116,3 +116,4 @@
 - E2 的固定模型样本通过（24.3 秒）：Chromium 中取消第一次 Codex 委派，随后用原生 Codex 0.169.0 与 Python/Matplotlib 实际生成并提交 PNG、CSV、文本。在 PowerPoint 历史交付中核对收据，插入三项后显式保存，在 PPTX 媒体包中重新计算 PNG 哈希匹配交付记录，并验证报告和表格内容、旧版原件及重开。周度工作流保留该场景 JSON 结果。
 - T4 存储写入迁移：0055 将原 Codex 和频道任务行纳入 task_runtime，保留原行、外键、恢复检查点以及各执行器约束。0056 将后台认领的截止时间迁入同一任务行；后台与 Codex 在续租时记录 renewed_at，频道认领绑定连接 epoch 与任务截止时间。原来的三张表名以兼容视图保留，业务角色只能读取。54 版原始数据升级和 28 项后台集成用例通过。
 - 文档 Codex 的数据授权绑定到具体 runtime_id 和会话；DSH 授权绑定到领取它的成员、连接 epoch 与 claimId。凭据在每次数据操作前后检查有效租约，并在原截止时间重新读取已确认的续租。后台授权检查不会替断线的 DSH 成员发送心跳。
+- Codex 和 DSH 浏览器订阅统一使用 `GET /api/v1/assistant/tasks/:id/events`。Codex 传入 documentId；读取频道单任务（含后台任务）传入 conversationId；订阅整个频道使用频道 ID 和 feed=channel，使空闲编辑器也能发现新任务。三者均以 after 续读。结果事件只包含任务引用，详细结果仍从原授权接口读取。迁移 0057 增加 Codex 结果事件；读取过期租约时会事务性记录 unknown_outcome，多实例同时恢复只写一次。

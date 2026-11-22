@@ -131,5 +131,5 @@ export function registerCodingRoutes(app:FastifyInstance,options:{
     return {agents:options.registry.list(),defaultId:options.registry.defaultId}
   })
   app.addHook('preClose',async()=>{const draining=recovery?.dispose();turns.dispose();await draining})
-  return {...turns,admitContinuation:recovery?.admitContinuation}
+  return {...turns,events:recovery?.events,admitContinuation:recovery?.admitContinuation}
 }

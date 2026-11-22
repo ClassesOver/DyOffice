@@ -496,13 +496,28 @@ export function createAssistantChannelService({transactions,credentialKey,backgr
     return {ownerToken:sealed.session,agentId:actor.member!.agent_id as string,inputs:decodeChannelDataInputs(row.data_inputs),deadlineAt:row.deadline_at.toISOString(),leaseUntil:Math.min(row.deadline_at.getTime(),row.lease_until?.getTime()??actor.member!.last_seen_at.getTime()+45_000)}
    },renewPresence)
   },
-  async ownerEventPage(token:string,conversationId:string,after:number) {
+  async ownerEventPage(token:string,conversationId:string,after:number,taskId?:string) {
    if(!Number.isSafeInteger(after)||after<0)throw fail()
    return owner(token,async(c,p)=>{
     const args=[...scope(p),uuid(conversationId)]
     const channel=(await c.query('SELECT file_id FROM assistant_channels WHERE deployment_id=$1 AND owner_id=$2 AND conversation_id=$3',args)).rows[0]
     if(!channel)throw fail(404)
     if(channel.file_id)await loadFile(c,p,channel.file_id)
+    if(taskId!==undefined){
+     const current=await task(c,p,conversationId,taskId)
+     const {rows}=await c.query(`SELECT e.channel_sequence AS sequence,e.channel_kind AS type,
+       a.payload->>'state' AS state,a.payload->>'from' AS sender
+       FROM harness_task_events e JOIN assistant_events a ON a.event_id=e.channel_event_id
+       WHERE e.deployment_id=$1 AND e.owner_id=$2 AND e.conversation_id=$3 AND e.channel_task_id=$4 AND e.channel_sequence>$5
+       ORDER BY e.channel_sequence LIMIT 256`,[...args,taskId,after])
+     const events=rows.map(row=>{
+      const sequence=Number(row.sequence)
+      if(row.type==='task')return {sequence,taskId,kind:'state',payload:{state:row.state}}
+      if(row.type==='message'&&row.sender===current.recipient&&current.sender!==current.recipient)return {sequence,taskId,kind:'result',payload:{taskId}}
+      return {sequence,taskId,kind:'activity',payload:{type:row.type}}
+     })
+     return {state:String(current.state),events}
+    }
     const {rows}=await c.query('SELECT channel_sequence AS sequence,channel_kind AS type,channel_task_id AS task_id FROM harness_task_events WHERE deployment_id=$1 AND owner_id=$2 AND conversation_id=$3 AND channel_sequence>$4 ORDER BY channel_sequence LIMIT 256',[...args,after])
     return {events:rows.map(row=>({sequence:Number(row.sequence),kind:row.type,taskId:row.task_id??undefined}))}
    })
