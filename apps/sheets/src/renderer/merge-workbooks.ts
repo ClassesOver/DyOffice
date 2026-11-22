@@ -220,7 +220,8 @@ export async function mergeSourcesIntoCurrent(
         taken.add(name)
         sheetNames.push(name)
         const sheetId = `merge-${Date.now().toString(36)}-${Math.floor(Math.random() * 1e9).toString(36)}`
-        const inserted = await commandService.executeCommand(InsertSheetCommand.id, {
+        const activeSheet = workbook.getActiveSheet()
+        const inserted = commandService.syncExecuteCommand(InsertSheetCommand.id, {
           unitId,
           index: workbook.getSheets().length,
           sheet: {
@@ -231,6 +232,11 @@ export async function mergeSourcesIntoCurrent(
           },
         })
         if (!inserted) throw new Error(t('appMergeWorkbooksInsertFailed', { sheet: name }))
+        // Univer activates a new tab on insertion. Keep the current sheet in
+        // view so the editor and canvas do not lay out the import as it lands.
+        if (workbook.getActiveSheet().getSheetId() === sheetId) {
+          workbook.setActiveSheet(activeSheet)
+        }
         const bandRows = chunkRowsFor(Math.max(1, imported.columnCount))
         for (const band of matrixBands(imported.matrix, bandRows)) {
           const bounds = boundsOf(band)
