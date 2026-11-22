@@ -8,6 +8,7 @@ import JSZip from 'jszip'
 import {JSDOM} from 'jsdom'
 import {buildLocalApp} from '../../server/src/app.ts'
 import {createGlobalConfigService} from '../../server/src/modules/admin/service.ts'
+import {createStyleTemplateService} from '../../server/src/modules/style-templates/service.ts'
 import {openIsolatedPptxSession} from '../../worker/src/native/pptx-session-host.ts'
 import {launchTestBrowser} from '../helpers/browser.mjs'
 import {fileFixture,importFile} from '../helpers/files.mjs'
@@ -30,14 +31,15 @@ async function savedSlides(bytes){
    const document=parser.parseFromString(source,'application/xml')
    const text=[...document.getElementsByTagNameNS('*','t')].map(node=>node.textContent)
    const pictures=document.getElementsByTagNameNS('http://schemas.openxmlformats.org/presentationml/2006/main','pic').length
-   return {source,text,pictures}
+   const background=document.getElementsByTagNameNS('*','bg')[0]?.getElementsByTagNameNS('*','srgbClr')[0]?.getAttribute('val')
+   return {source,text,pictures,background}
   }))
  }finally{window.close()}
 }
 
 const nativeSlidesDirectory=process.env.DYOFFICE_TEST_SLIDES_DIST
 const liveConfig=process.env.DYOFFICE_LIVE_SLIDES_GENERATE_CONFIG
-for(const live of [false,true])test(live?'a real model generates and redoes editable PPTX pages':'the PPTX assistant generates a deck and can redo one page without changing its neighbor',{
+for(const live of [false,true])test(live?'a real model generates, redoes and reuses a saved style in editable PPTX pages':'the PPTX assistant generates a deck and can redo one page without changing its neighbor',{
  skip:!nativeSlidesDirectory||live&&!liveConfig,timeout:live?600000:90000,
 },async t=>{
  const port=live?43684:43683,origin='http://localhost:'+port,f=await fileFixture(t,{origin,buildApp:false})
@@ -241,7 +243,7 @@ for(const live of [false,true])test(live?'a real model generates and redoes edit
     const turn=prompt.includes('Cobalt Review')?'redo':prompt.includes('Orchid Intake')?'initial':undefined
     const started=Date.now(),repair=prompt.includes('Your previous output was rejected:')
     const offered=request.tools.map(tool=>tool.name).filter(name=>[
-     'ask_clarification','plan_deck','generate_deck','read_slide','regenerate_slide',
+     'ask_clarification','plan_deck','generate_deck','read_slide','regenerate_slide','save_style_template','list_style_templates',
     ].includes(name))
     void window.recordSlidesTestEvent({stage,turn,repair,started,offered})
     const response=await fetchOriginal(input,init)
@@ -264,6 +266,8 @@ for(const live of [false,true])test(live?'a real model generates and redoes edit
  if(live){
   const title=['Orchid Intake','Cobalt Release'],redoTitle='Cobalt Review'
   const audience='Field reviewers',artifact='Release checklist'
+  const liveTemplate='Orchid Desk Template',appendTitle='Violet Handoff',appendTopic='Violet Delivery Follow-up'
+  const templateColor='F5E6D3'
   const hasPage=(deck,index,text)=>deck?.[index]?.join(' ').includes(text)??false
   const assertSavedSlides=async(revision,expectedTitle)=>{
    const bytes=await f.files.readFile(f.alice.token,file.fileId,revision),slides=await savedSlides(bytes)
@@ -288,7 +292,7 @@ for(const live of [false,true])test(live?'a real model generates and redoes edit
    return revision
   }
   const settled=()=>expect(panel.locator('.ai-stop-btn')).toHaveCount(0,{timeout:30000})
-  await send('替换现有演示文稿，只做两页，可编辑，不放图片。先用 ask_clarification 调出两道单选题。第一题问受众，选项是 Field reviewers 和 Project sponsors。第二题问交付物，选项是 Release checklist 和 Status memo。请保留选项英文原文。我回答后，先调用 plan_deck 写入两页规划，再调用 generate_deck 直接按规划替换，禁止再次问卷。第 1 页标题必须是 Orchid Intake，正文包含我选的受众英文原文与周一审核收件。第 2 页标题必须是 Cobalt Release，正文包含我选的交付物英文原文与周五审批发布。用简洁的内部评审风格。')
+  await send('替换现有演示文稿，只做两页，可编辑，不放图片。先用 ask_clarification 调出两道单选题。第一题问受众，选项是 Field reviewers 和 Project sponsors。第二题问交付物，选项是 Release checklist 和 Status memo。请保留选项英文原文。我回答后，先调用 plan_deck 写入两页规划，再调用 generate_deck 直接按规划替换，禁止再次问卷。第 1 页标题必须是 Orchid Intake，正文包含我选的受众英文原文与周一审核收件。第 2 页标题必须是 Cobalt Release，正文包含我选的交付物英文原文与周五审批发布。用简洁的内部评审风格，两页都必须使用纯色原生幻灯片背景 #'+templateColor+'，不添加遮挡背景的矩形。')
   await panel.getByRole('radio',{name:audience,exact:true}).click({timeout:120000})
   await panel.getByRole('radio',{name:artifact,exact:true}).click({timeout:15000})
   await waitForPage(0,title[0],270000)
@@ -303,6 +307,16 @@ for(const live of [false,true])test(live?'a real model generates and redoes edit
   assert.doesNotMatch(generation,/degraded to a plain-text fallback|failed after retry/)
   assert.deepEqual(await revisions(),[file.revision])
   const generated=await save(file.revision),first=await assertSavedSlides(generated,title[1])
+  assert.equal(first.slides[0].background?.toUpperCase(),templateColor)
+  const templates=createStyleTemplateService(f.transactions)
+  await send('用 save_style_template 保存刚生成的幻灯片样式与版式，模板名称必须是 '+liveTemplate+'。')
+  await expect.poll(()=>acceptedTools.get('save_style_template')??'',{timeout:60000}).toContain('Saved the style "'+liveTemplate+'"')
+  await settled()
+  const savedTemplate=await templates.load(f.alice.token,liveTemplate)
+  assert.equal(savedTemplate.ok,true)
+  assert.equal(savedTemplate.layout?.cover?.background?.toUpperCase(),'#'+templateColor)
+  assert.ok(savedTemplate.styleSkill.trim())
+  assert.deepEqual(await revisions(),[file.revision,generated])
   await page.reload()
   await requireReady()
   await waitForPage(1,title[1])
@@ -327,6 +341,31 @@ for(const live of [false,true])test(live?'a real model generates and redoes edit
   await requireReady()
   await waitForPage(0,title[0])
   await waitForPage(1,redoTitle)
+  acceptedTools.clear()
+  const templatePrompts=[]
+  page.on('request',request=>{
+   if(request.method()!=='POST'||new URL(request.url()).pathname!=='/api/v1/ai/turns')return
+   const prompt=request.postDataJSON()?.request?.messages.findLast(message=>message.role==='user')?.text
+   if(prompt?.includes(appendTitle)&&prompt.includes('Now design page 1/1.'))templatePrompts.push(prompt)
+  })
+  await send('先调用 list_style_templates 找到 '+liveTemplate+'。接着用 generate_deck 的 style_template 复用它，insert_mode 为 append，传入一个 page，禁止问卷。主题 '+appendTopic+'，新增页标题 '+appendTitle+'，正文要求签署交接清单。不放图片，原来两页不改。')
+  await waitForPage(2,appendTitle,120000)
+  await settled()
+  assert.ok(acceptedTools.get('list_style_templates')?.includes(liveTemplate))
+  assert.match(acceptedTools.get('generate_deck')??'',/produced 1\/1 pages/)
+  assert.ok(templatePrompts.some(prompt=>prompt.includes(savedTemplate.styleSkill)&&prompt.includes('Template chrome for cover pages')))
+  assert.deepEqual(await revisions(),[file.revision,generated,redone])
+  const appended=await save(redone)
+  const appendedSlides=await savedSlides(await f.files.readFile(f.alice.token,file.fileId,appended))
+  assert.equal(appendedSlides.length,3)
+  assert.deepEqual(appendedSlides.slice(0,2).map(slide=>slide.source),second.slides.map(slide=>slide.source))
+  assert.ok(hasPage(appendedSlides.map(slide=>slide.text),2,appendTitle))
+  assert.match(appendedSlides[2].text.join(' '),/checklist|清单/i)
+  assert.equal(appendedSlides[2].background?.toUpperCase(),templateColor)
+  assert.deepEqual(await revisions(),[file.revision,generated,redone,appended])
+  await page.reload()
+  await requireReady()
+  await waitForPage(2,appendTitle)
   return
  }
  const questionnaireResponses=[]
@@ -407,4 +446,14 @@ for(const live of [false,true])test(live?'a real model generates and redoes edit
  await expect.poll(renderedText).toEqual([...revisedDeck,followUp])
  assert.deepEqual(phases.slice(10),['template page'])
  assert.deepEqual(await revisions(),[file.revision,saved,updated])
+ await page.keyboard.press('Control+s')
+ await expect.poll(head,{timeout:15000}).not.toBe(updated)
+ const appended=await head()
+ const appendedSlides=await savedSlides(await f.files.readFile(f.alice.token,file.fileId,appended))
+ assert.deepEqual(appendedSlides.map(slide=>slide.text),[...revisedDeck,followUp])
+ assert.deepEqual(appendedSlides.slice(0,2).map(slide=>slide.source),updatedSlides.map(slide=>slide.source))
+ assert.equal(appendedSlides[2].background?.toUpperCase(),'FFF8E7')
+ await page.reload()
+ await requireReady()
+ await expect.poll(renderedText).toEqual([...revisedDeck,followUp])
 })

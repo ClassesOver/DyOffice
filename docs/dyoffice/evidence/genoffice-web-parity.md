@@ -63,6 +63,12 @@ Web Word 知识库把文件名保留为来源标签，模型收到的引用路�
 
 `a4d293fb` 的完整 Web 门禁通过。Chromium 95 项中 88 项通过、0 项失败、7 项按配置跳过。Word 跨格式引用回归通过，日志记录了 DOCX 42、XLSX 19、PPTX 20、PDF 48 个工具的成功执行，以及 PDF 旋转兼容映射和 9 个共享工具。[Web CI](https://github.com/ClassesOver/DyOffice/actions/runs/45032255128)
 
+含 Excel 外链刷新预览的 `93886e22` 同样通过完整 Web 门禁。Chromium 88 项通过、0 项失败、7 项按配置跳过，129 个实际注册格式工具和 9 个共享工具均有执行成功记录。默认 Node/WASI 候选 `09fbdd32` 在本机完整执行了 `npm run build:saas`，产出四格式编辑器、工作区和外链刷新 WASI 产物。[Web CI](https://github.com/ClassesOver/DyOffice/actions/runs/45033160887)
+
+在 `09fbdd32` 构建上，`gpt-6-sol` 使用 `save_style_template` 持久化 `Orchid Desk Template`，存储记录包含样式指令和封面原生背景色 `#F5E6D3`。重开后，模型调用 `list_style_templates` 找到该模板，再使用 `generate_deck` 追加一页。新增页设计请求收到了已保存的样式指令和封面版式。保存的第三页含可编辑标题 `Violet Handoff`、交接清单文字和相同的原生背景色。原两页 XML 与上一修订字节一致，浏览器重开读回第三页标题。脚本化用例也补齐了新增页保存与复开断言。脚本与真实模型各通过一项。[PPTX 成品回归](../../../apps/web/test/local-browser/native-slides-generate.test.mjs)
+
+`ab278a76` 的远端 Chromium 曾在 PDF GIF 用例等待首轮助手回复时超时。在 `09fbdd32` 的原生构建上，连续两次定向复跑均通过图片搜索、生成、写入及保存成品断言。远端首轮超时未复现，原因仍待确认。[失败记录](https://github.com/ClassesOver/DyOffice/actions/runs/45034843040) [PDF 图片回归](../../../apps/web/test/local-browser/pdf-media.test.mjs)
+
 后续复现了带数据授权的委派在缺少 `harness-data.mjs` 时于 `realpath` 报 `ENOENT`。当前 SaaS 构建会生成该文件，本机完成了带此步骤的全量构建。缺件时界面收到明确失败，服务端日志保留专用错误码，路径不进入客户端响应。实际安装的 Codex 通过了普通执行和受授权数据邮箱测试，独立 Harness 的 PostgreSQL 集成核对了一次源查询、冻结结果和持久交付回执。真实模型曾在普通算术请求中提交 `dataInputs`，因此工具定义明确了普通文本文件与已提交分析产物两种交付方式。使用新版定义复跑 Word 和 Excel，两项均省略该字段，返回代码执行产生的 `total.json`，保存重开后在 Word 正文和 Excel H2 读回 441。[Harness 回归](../../../apps/web/test/unit/coding-harness.test.mjs) [数据交付回归](../../../apps/web/test/local-integration/harness-data-flow.test.mjs)
 
 `4f0ad52c` 的 CI 有两项相关回归失败。Word 宿主用例仍期待旧引用格式，已更新并通过 17 项宿主定向检查。PDF 深色界面勾选在收到助手回复前超时，定向复跑通过并核对下载原件、勾选位置、相邻页像素及重开。本次保留该用例的响应与工具诊断。另有 `a982cdea` 的外部执行器取消用例未观测到预期的进程消失。夹具改为原子发布 PID，并在短时限内核实进程退出及任务的未知结果状态，PostgreSQL 定向复跑通过。[Word 与 PDF 的 CI](https://github.com/ClassesOver/DyOffice/actions/runs/45027900231) [取消用例的 CI](https://github.com/ClassesOver/DyOffice/actions/runs/45027212874)
