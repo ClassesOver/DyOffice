@@ -705,10 +705,11 @@ test('native Word preserves the unsaved draft through an offline save and reconn
   const savedRevision=await head()
   assert.notEqual(savedRevision,revision)
   assert.deepEqual(await f.files.readFile(f.alice.token,fileId,revision),f.original)
-  downloadPath=`/api/v1/files/${fileId}/content?revision=${savedRevision}`
+  downloadPath=`/api/v1/files/${fileId}/content?revision=${savedRevision}&download=1`
   const fileMenu=f.page.getByRole('button',{name:'File',exact:true})
   const downloadLink=f.page.getByRole('link',{name:'Download saved version',exact:true})
   await fileMenu.click()
+  await expect(downloadLink).toHaveAttribute('href',downloadPath)
   const canceled=f.page.waitForEvent('download',{timeout:15000})
   await downloadLink.click()
   const first=await canceled
