@@ -84,15 +84,30 @@ export function AiComposer({
 
   // auto-grow up to ~6 lines; empty clears the inline height outright so the
   // CSS min-height governs (a hidden-at-measure pass can leave a stale value).
+  // Wrapping depends on width too: a measure taken while the panel is still
+  // opening or resizing (narrow) would otherwise stick at the maximum height
+  // until the next keystroke, so re-measure when the textarea width changes.
   useEffect(() => {
     const ta = ref.current
     if (!ta) return
-    if (value === '') {
-      ta.style.height = ''
-      return
+    const measure = (): void => {
+      if (ta.value === '') {
+        ta.style.height = ''
+        return
+      }
+      ta.style.height = 'auto'
+      ta.style.height = `${Math.min(ta.scrollHeight, MAX_TEXTAREA_HEIGHT)}px`
     }
-    ta.style.height = 'auto'
-    ta.style.height = `${Math.min(ta.scrollHeight, MAX_TEXTAREA_HEIGHT)}px`
+    measure()
+    if (typeof ResizeObserver === 'undefined') return
+    let width = ta.clientWidth
+    const observer = new ResizeObserver(() => {
+      if (ta.clientWidth === width) return
+      width = ta.clientWidth
+      measure()
+    })
+    observer.observe(ta)
+    return () => observer.disconnect()
   }, [value, ref])
 
   return (
