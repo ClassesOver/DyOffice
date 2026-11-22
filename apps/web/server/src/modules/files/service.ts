@@ -23,6 +23,17 @@ export function createFileService({ transactions, objects, quotaBytes = 1024 ** 
     return fn(connection,principal)
   })
   const catalog = Object.freeze({ ...capabilities })
+  async function requireReadableRevision(connection: PoolClient, principal: BusinessPrincipal, fileId: string, revision: string) {
+    const file = await loadFile(connection, principal, uuid(fileId))
+    const requestedRevision = uuid(revision)
+    if (principal.job && requestedRevision !== principal.job.baseRevision) throw authError(404)
+    const reference = (await connection.query<{ object_key: string; size: number; sha256: string }>(
+      'SELECT object_key,size,sha256 FROM file_revisions WHERE deployment_id=$1 AND owner_id=$2 AND file_id=$3 AND id=$4',
+      [...scope(principal),file.id,requestedRevision],
+    )).rows[0]
+    if (!reference) throw authError(404)
+    return { file, reference }
+  }
   const legacySignatureResults = new Map<string, boolean>()
   const legacyInspections = new Map<string, Promise<boolean>>()
   const validateLegacyOffice = createFileValidator({maxConcurrent:1})
@@ -217,14 +228,18 @@ export function createFileService({ transactions, objects, quotaBytes = 1024 ** 
     },
     syncAssistantChat:(token:string,fileId:string,input:Parameters<typeof syncFileAssistantChat>[3])=>syncFileAssistantChat(transactions,token,fileId,input),
     openFile: (token: FileCredential, fileId: string) => run(token, 'files:read', async (connection, principal) => openResult(await loadFile(connection, principal, uuid(fileId)))),
-    download: (token: FileCredential, fileId: string, revision: string, maxBytes?: number) => run(token, 'files:read', async (connection, principal) => {
-      const row = await loadFile(connection, principal, uuid(fileId))
-      if (principal.job && uuid(revision)!==principal.job.baseRevision) throw authError(404)
-      const historical = (await connection.query('SELECT object_key,size,sha256 FROM file_revisions WHERE deployment_id=$1 AND owner_id=$2 AND file_id=$3 AND id=$4', [...scope(principal),row.id,uuid(revision)])).rows[0]
-      if (!historical) throw authError(404)
-      if (maxBytes !== undefined && historical.size > maxBytes) throw authError(413)
-      const bytes = await objects.readVerified({ key: historical.object_key, size: historical.size, sha256: historical.sha256 })
-      return { bytes, name: row.name, format: row.format }
+    assertReadableRevision: (token: FileCredential, fileId: string, revision: string, signal: AbortSignal) =>
+      run(token, 'files:read', async (connection, principal) => {
+        signal.throwIfAborted()
+        await requireReadableRevision(connection, principal, fileId, revision)
+      }),
+    download: (token: FileCredential, fileId: string, revision: string, maxBytes?: number, signal?: AbortSignal) => run(token, 'files:read', async (connection, principal) => {
+      signal?.throwIfAborted()
+      const { file, reference } = await requireReadableRevision(connection, principal, fileId, revision)
+      if (maxBytes !== undefined && reference.size > maxBytes) throw authError(413)
+      signal?.throwIfAborted()
+      const bytes = await objects.readVerified({ key: reference.object_key, size: reference.size, sha256: reference.sha256 }, signal)
+      return { bytes, name: file.name, format: file.format }
     }),
     async readFile(token: FileCredential, fileId: string, revision: string): Promise<Buffer> { return (await service.download(token,fileId,revision)).bytes },
     listFiles: async (token: FileCredential, { trash = false, cursor, limit = 50 }: { trash?: boolean; cursor?: string; limit?: number } = {}) => {
