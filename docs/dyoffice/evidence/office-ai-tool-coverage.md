@@ -10,9 +10,9 @@
 
 浏览器首轮组合测试 4 项通过。请求发给模型的注册记录覆盖 123 个格式与工具组合，分布为 DOCX 39、XLSX 18、PPTX 19、PDF 47。其中 12 个组合收到成功工具结果。其余记录须继续验证实际执行。[工具注册浏览器用例](../../../apps/web/test/local-browser/office-tool-inventory.test.mjs) [交接浏览器用例](../../../apps/web/test/local-browser/dsh-office-handoff.test.mjs)
 
-条件场景 4 项通过，覆盖知识库、数据分析、PDF 附件与分页副本。两轮共观察到 129 个格式与工具组合注册，分布为 DOCX 42、XLSX 19、PPTX 20、PDF 48。其中 22 个组合向模型返回成功工具结果。PDF 的兼容名称 `rotate_pages` 未注册，原生旋转由 `apply_ops.rotatePages` 验证。采集只保存工具名、格式与错误标记。
+条件场景 4 项通过，覆盖知识库、数据分析、PDF 附件与分页副本。两轮共观察到 129 个格式与工具组合注册，分布为 DOCX 42、XLSX 19、PPTX 20、PDF 48。其中 23 个组合向模型返回成功工具结果。PDF 的兼容名称 `rotate_pages` 未注册，原生旋转由 `apply_ops.rotatePages` 验证。采集只保存工具名、格式与错误标记。
 
-随后补测 DOCX、XLSX、PPTX 的 `insert_data_result`，累计 25 个不同的格式与工具组合在这些浏览器批次返回成功结果。冻结快照写入三种原生文件，显式保存后独立读取成品，随后在浏览器重开检查。工具具体效果见各表，四格式真实模型代表用例见主报告。[工作区数据分析浏览器用例](../../../apps/web/test/local-browser/office-source-analysis.test.mjs) [四格式验收](genoffice-web-parity.md)
+随后补测 DOCX、XLSX、PPTX 的 `insert_data_result`，累计 26 个不同的格式与工具组合在这些浏览器批次返回成功结果，分布为 DOCX 4、XLSX 6、PPTX 2、PDF 14。冻结快照写入三种原生文件，显式保存后独立读取成品，随后在浏览器重开检查。工具具体效果见各表，四格式真实模型代表用例见主报告。[工作区数据分析浏览器用例](../../../apps/web/test/local-browser/office-source-analysis.test.mjs) [四格式验收](genoffice-web-parity.md)
 
 ## DOCX
 
