@@ -123,6 +123,7 @@ for (const theme of ['light','dark']) test(`native Sheets saves and downloads fo
  assert.equal(response.status(),200,'Native Sheets entry must exist and authorize the owned workbook')
  await expect(f.page.locator('html')).toHaveAttribute('data-theme',theme)
  await f.page.locator('#univer-container canvas').first().waitFor({timeout:45000})
+ await expect(f.page.locator('html')).toHaveAttribute('data-document-loading','ready',{timeout:30000})
  const saveDownload=f.page.locator('.dyoffice-sheets-download')
  await expect(saveDownload).toBeEnabled()
  await expect(f.page.locator('.dyoffice-sheets-state')).toHaveCount(0)

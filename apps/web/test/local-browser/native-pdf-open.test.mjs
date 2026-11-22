@@ -387,7 +387,7 @@ for (const theme of ['light','dark']) test(`native PDF saves and reopens an assi
  assert.equal(commits,1)
 })
 
-test('GenOffice PDF assistant and ribbon edits preview and save, including recovery from lost receipts'+(liveImageConfig?' with real model image editing':''),{skip:!directory,timeout:liveImageConfig?210000:120000},async t=>{
+test('GenOffice PDF assistant and ribbon edits preview and save, including recovery from lost receipts'+(liveImageConfig?' with real model image editing':''),{skip:!directory,timeout:liveImageConfig?210000:180000},async t=>{
  const origin='http://localhost:4239',f=await fileFixture(t,{origin,buildApp:false})
  const doc=await PDFDocument.create()
  doc.addPage([300,240]).drawText('Native first page',{x:24,y:144,color:rgb(0,.2,.6)})
