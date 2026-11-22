@@ -242,3 +242,67 @@ test('native PDF assistant and ribbon save separate page copies',{skip:!nativePd
  assert.equal(pageTexts.filter(text=>text.includes('Source 400')).length,1)
  assert.deepEqual(await f.files.readFile(f.alice.token,file.fileId,sourceRevision),sourceBytes)
 })
+
+test('native PDF assistant replaces only the confirmed page and saves a new revision',{skip:!nativePdfDirectory,timeout:90000},async t=>{
+ const port=4290,origin='http://localhost:'+port,f=await fileFixture(t,{origin,buildApp:false})
+ const keyring={activeKeyId:'replace',keys:{replace:new Uint8Array(32).fill(37)}}
+ await createGlobalConfigService({transactions:f.transactions,keyring}).saveGlobalConfig(f.adminSigned.token,0,{
+  upserts:[{id:'fixture',kind:'chat',providerId:'openai',label:'Fixture',model:'synthetic',baseUrl:'https://provider.example/v1',apiKey:'fixture-key',enabled:true}],
+  defaults:{chat:'fixture'},
+ })
+ const originalDoc=await PDFDocument.create()
+ for(const width of [400,500,600])originalDoc.addPage([width,300]).drawText('Source '+width,{x:30,y:250})
+ const original=Buffer.from(await originalDoc.save()),{file}=await importFile(f,f.alice.token,original,'replace-source.pdf')
+ const app=await buildLocalApp({
+  db:f.db,businessPool:f.businessPool,passwords:f.passwords,deploymentId:f.deploymentId,origin,csrfKey:f.csrfKey,objectStore:f.objects,
+  globalConfigKeyring:keyring,providerGateway:{mode:'shared'},codingHarnesses:false,nativePdfDirectory,
+  localShellDirectory:process.env.DYOFFICE_TEST_LOCAL_SHELL_DIRECTORY??fileURLToPath(new URL('../../dist-local-shell',import.meta.url)),
+ })
+ f.cleanup.unshift(()=>app.close())
+ await app.listen({port,host:'127.0.0.1'})
+ const network=mockProviderNetwork(t,()=>{
+  const {messages}=JSON.parse(network.wire.toString()),last=messages.at(-1)
+  const result=last.role==='tool'?JSON.parse(last.content):undefined
+  if(result){
+   if(result.isError)t.diagnostic('Replace pages tool: '+result.output)
+   assert.match(result.output,/Replaced the selected pages and saved a new revision/)
+  }
+  const delta=result?{content:'已保存替换页'}:{tool_calls:[{index:0,id:'replace-page',type:'function',function:{name:'replace_pages',arguments:'{"pages":"2"}'}}]}
+  return Readable.from([Buffer.from('data: '+JSON.stringify({choices:[{delta,finish_reason:result?'stop':'tool_calls'}]})+'\n\ndata: [DONE]\n\n')])
+ })
+ const browser=await launchTestBrowser();f.cleanup.unshift(()=>browser.close())
+ const page=await browser.newPage()
+ await stubHomeHero(page)
+ await page.goto(origin)
+ await page.getByLabel('用户名',{exact:true}).fill('alice')
+ await page.getByLabel('密码',{exact:true}).fill(password)
+ await page.getByRole('button',{name:'登录',exact:true}).click()
+ await expect(page.locator('.home')).toBeVisible()
+ await page.goto(origin+'/native-pdf/?fileId='+file.fileId)
+ await expect(page.locator('html')).toHaveAttribute('data-document-loading','ready')
+ await expect(page.locator('.dyoffice-pdf-persistence-state')).toHaveText('已保存')
+ await page.getByRole('button',{name:'AI 助手',exact:true}).click()
+ const assistant=page.locator('.shared-editor-assistant')
+ await assistant.getByRole('textbox',{name:'消息'}).fill('替换第二页')
+ await assistant.getByRole('button',{name:'发送',exact:true}).click()
+ const dialog=page.getByRole('dialog',{name:'替换第 2 页',exact:true})
+ await expect(dialog).toBeVisible({timeout:20000})
+ const confirm=dialog.getByRole('button',{name:'确认替换并保存'})
+ await expect(confirm).toBeDisabled()
+ assert.equal((await f.files.openFile(f.alice.token,file.fileId)).file.revision,file.revision)
+ const replacement=await PDFDocument.create()
+ replacement.addPage([710,300]).drawText('Replacement marker',{x:25,y:260})
+ await dialog.getByLabel('选择来源 PDF',{exact:true}).setInputFiles({name:'replacement.pdf',mimeType:'application/pdf',buffer:Buffer.from(await replacement.save())})
+ const stage=page.waitForResponse(response=>new URL(response.url()).pathname==='/api/v1/files/'+file.fileId+'/pdf/replace-pages/uploads')
+ await confirm.click()
+ const staged=await stage
+ assert.ok(staged.ok(),await staged.text())
+ await expect(assistant.getByText('已保存替换页',{exact:true})).toBeAttached({timeout:30000})
+ const {file:replaced}=await f.files.openFile(f.alice.token,file.fileId)
+ assert.notEqual(replaced.revision,file.revision)
+ const bytes=await f.files.readFile(f.alice.token,file.fileId,replaced.revision)
+ assert.deepEqual((await PDFDocument.load(bytes)).getPages().map(value=>value.getWidth()),[400,710,600])
+ const texts=execFileSync('pdftotext',['-','-'],{input:bytes,encoding:'utf8'}).split('\f').map(text=>text.trim()).filter(Boolean)
+ assert.deepEqual(texts,['Source 400','Replacement marker','Source 600'])
+ assert.deepEqual(await f.files.readFile(f.alice.token,file.fileId,file.revision),original)
+})
