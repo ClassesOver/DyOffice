@@ -14,6 +14,7 @@
     "fast-xml-parser": "5.12.0",
     "jszip": "3.10.1",
     "opentype.js": "2.0.0",
+    "pdfjs-dist": "6.2.108",
     "pngjs": "7.0.0",
     "typescript": "5.9.3",
     "utif2": "4.1.0",
