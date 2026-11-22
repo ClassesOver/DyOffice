@@ -3,12 +3,18 @@ import type { SourceService } from './service.ts'
 import type { createWorkspaceSourceResults } from './results.ts'
 import { SOURCE_AGENT_TOOLS, type SourceToolName } from '../../../../../../packages/web-contracts/src/source-tools.ts'
 import { object, sourceError } from './config.ts'
+import { isAssistantErrorCode, type AssistantErrorCode } from '../../../../../../packages/web-contracts/src/assistant-errors.ts'
 
 type Results = ReturnType<typeof createWorkspaceSourceResults>
 const uuid = (value: unknown): string => { if (typeof value !== 'string' || !/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(value)) throw sourceError(); return value.toLowerCase() }
 const safeError = (error: unknown) => {
-  const status = (error as { statusCode?: number }).statusCode
-  return Object.assign(new Error('Workspace source tool unavailable'), { statusCode: [400,401,403,404,409,410,413,429,502,503,504].includes(status ?? 0) ? status : 503 })
+  const raw = (error as { statusCode?: number }).statusCode
+  const status = [400,401,403,404,409,410,413,429,502,503,504].includes(raw ?? 0) ? raw! : 503
+  // Only a public classification crosses this boundary, never the message.
+  const tagged = (error as { code?: unknown } | null)?.code
+  const code: AssistantErrorCode | undefined = isAssistantErrorCode(tagged) ? tagged
+    : status === 502 ? 'SOURCE_RESULT_UNUSABLE' : status === 503 ? 'SOURCE_UNAVAILABLE' : status === 504 ? 'SOURCE_TIMEOUT' : undefined
+  return Object.assign(new Error('Workspace source tool unavailable'), { statusCode: status, ...(code ? { code } : {}) })
 }
 
 /** Steers the model back to database-side aggregation instead of reasoning over a partial row set. */

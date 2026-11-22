@@ -36,7 +36,7 @@ test('Harness admission waits for a renewal committing after its previous lease 
  await Promise.all(Array.from({length:32},(_,i)=>
   store.start(f.alice.token,file.fileId,'running-'+i,{modelId:'fixture'},undefined)))
  const transaction=operation=>f.transactions.withPrincipalTransaction({kind:'session',token:f.alice.token},operation)
- await transaction(c=>c.query("UPDATE harness_task_recovery SET lease_until=clock_timestamp()+interval '2 seconds' WHERE turn_id='running-0'"))
+ await transaction(c=>c.query("UPDATE task_runtime_codex SET lease_until=clock_timestamp()+interval '2 seconds' WHERE turn_id='running-0'"))
  let updated,release
  const hasUpdated=new Promise(resolve=>{updated=resolve}),gate=new Promise(resolve=>{release=resolve})
  const delayed={...f.transactions,withPrincipalTransaction:(input,operation)=>f.transactions.withPrincipalTransaction(input,async(c,p)=>{
@@ -243,9 +243,37 @@ test('a killed API leaves finished Harness work recoverable and never replays in
  const finished=await status(original,complete)
  assert.equal(finished.state,'succeeded');assert.equal(finished.hasContinuation,true)
  assert.equal((await status(original,interrupted)).state,'running')
+ const channels='/api/v1/assistant-channels/channels'
+ const channelResponse=await original.request(channels,{fileId:file.fileId})
+ assert.equal(channelResponse.status,200)
+ const {conversationId}=await channelResponse.json()
+ const channelPath=channels+'/'+conversationId
+ const membership=await original.request(channelPath+'/dsh-token',{allowCreate:true})
+ assert.equal(membership.status,200)
+ const {membershipId}=await membership.json()
+ const {sequence}=await (await original.request(channelPath)).json()
+ const delegated=await original.request('/api/v1/assistant-channels/actions',{requestId:crypto.randomUUID(),conversationId,to:membershipId,action:{kind:'delegate',instruction:'Review the draft'}})
+ assert.equal(delegated.status,200)
+ const {taskId}=await delegated.json()
  assert.deepEqual(await original.stop(),[null,'SIGKILL'])
  await reader.cancel().catch(()=>{})
  const restarted=await start()
+ const events=await restarted.request('/api/v1/assistant/tasks/'+conversationId+'/events?feed=channel&after='+sequence)
+ assert.equal(events.status,200)
+ const channelReader=events.body.pipeThrough(new TextDecoderStream()).getReader()
+ let frames=''
+ try {
+  while(!frames.includes('\n\n')){
+   const chunk=await channelReader.read()
+   assert.equal(chunk.done,false)
+   frames+=chunk.value
+  }
+  const event=JSON.parse(/^data: (.+)$/m.exec(frames)[1])
+  assert.equal(event.taskId,taskId)
+  assert.ok(event.sequence>sequence)
+ } finally {await channelReader.cancel()}
+ const recoveredChannel=await (await restarted.request(channelPath)).json()
+ assert.equal(recoveredChannel.tasks.filter(task=>task.taskId===taskId).length,1)
  assert.deepEqual(await status(restarted,complete),finished)
  const claim=await restarted.request(`${endpoint}/${complete}/continuation`,{documentId:file.fileId,revision:file.revision,modelId:'fixture',defer:true})
  assert.equal(claim.status,200);assert.deepEqual((await claim.json()).checkpoint,checkpoint)

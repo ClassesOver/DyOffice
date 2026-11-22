@@ -130,7 +130,9 @@ test('cancelling a recovered running task targets its original ID without submit
  const card=await Promise.race([terminal,new Promise((_,reject)=>{const timer=setTimeout(()=>reject(Error('Expected cancelled task status')),3000);timer.unref()})])
  assert.equal(card.id,turnId)
  assert.equal(card.failure,'Harness cancellation requested. Check for saved delivery.')
- assert.deepEqual(calls,[['GET',discovery],['GET',base+'/status?documentId='+documentId],['POST',base+'/cancel'],['GET',base+'/status?documentId='+documentId]])
+ assert.deepEqual(calls.filter(([,url])=>!url.includes('/events')),[['GET',discovery],['GET',base+'/status?documentId='+documentId],['POST',base+'/cancel'],['GET',base+'/status?documentId='+documentId]])
+ // A JSON reply is not an event stream: one attempt, then polling only.
+ assert.equal(calls.filter(([,url])=>url.includes('/events')).length,1)
 })
 
 test('a new tab retries transient task discovery without dispatching new work',async t=>{
@@ -243,4 +245,37 @@ test('delivery observation receives only a server result hint and does not break
  const client=await createAssistantClient({request:async()=>catalog,csrfToken:'c'.repeat(43),onDelivery:(hint,agent)=>{seen.push({hint,agent});throw Error('presentation unavailable')},fetchImpl:async()=>response('delta',{text:JSON.stringify({summary:'Done',output:'',delivery})})})
  const result=await client.extraSkills[0].executeTool({id:'run',name:'delegate_agent_task',input:{instruction:'analyze'}})
  assert.equal(result.isError,undefined);assert.equal(seen.length,1);assert.deepEqual(seen[0].hint,delivery);assert.equal(seen[0].agent.id,'codex');client.dispose()
+})
+
+test('a task observed as failed after the stream dropped is an ordinary tool error, not a lost continuation',{timeout:5000},async t=>{
+ const documentId='10000000-0000-4000-8000-000000000001',revision='10000000-0000-4000-8000-000000000003'
+ const calls=[]
+ let dispatch,finish
+ const done=new Promise(resolve=>{finish=resolve})
+ const client=await createAssistantClient({request:async()=>catalog,documentId,continuationRevision:()=>revision,csrfToken:'c'.repeat(43),fetchImpl:async(url,init)=>{
+  const body=init.body?JSON.parse(init.body):undefined;calls.push({url,body})
+  if(url==='/api/v1/agents/tasks?documentId='+documentId)return Response.json({taskIds:[]})
+  if(init.method==='GET')return Response.json({turnId:dispatch.turnId,documentId,agentId:'codex',state:'failed',failure:'Codex execution failed: tests did not pass'})
+  if(url==='/api/v1/ai/turns'){
+   if(!dispatch)return response('tool_call',{id:'original-tool',name:'delegate_agent_task',input:{instruction:'Compute'}})
+   return response('delta',{text:'The delegated task failed; here is what I can do instead.'})
+  }
+  dispatch=body
+  throw TypeError('Connection lost')
+ }})
+ t.after(()=>client.dispose())
+ const {transport}=client
+ t.after(bindFileChat(transport,()=>({turnId:'10000000-0000-4000-8000-000000000004',async history(){return []},text(){},finish(){}})))
+ const loop=new AgentLoop({allowHarnessResume:true,skill:client.extraSkills[0],events:{onDone:finish,onError:error=>finish({error})},transport})
+ loop.run('Private original Office request',undefined,undefined,{text:'Private original Office request'})
+ const outcome=await done
+ assert.equal(outcome.error,undefined)
+ assert.equal(outcome.text,'The delegated task failed; here is what I can do instead.')
+ const requests=calls.filter(call=>call.url==='/api/v1/ai/turns').map(call=>call.body)
+ assert.equal(requests.length,2)
+ assert.equal(requests[1].harnessResume,undefined)
+ const toolResult=requests[1].request.messages.at(-1).results[0]
+ assert.equal(toolResult.id,'original-tool')
+ assert.match(JSON.stringify(toolResult),/Codex execution failed/)
+ assert.equal(client.coding.snapshot()[0].state,'failed')
 })

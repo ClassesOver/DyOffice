@@ -8,6 +8,10 @@ export interface HarnessArtifactRef {artifactId:string;taskId:string;name:string
 export interface AnalysisDelivery {taskId:string;claimId:string;connectionEpoch:number;commandId:string;summary:string;artifacts:HarnessArtifactRef[];inputs:unknown[];runtimeManifestSha256:string;limitations:string[];createdAt:string}
 export interface HarnessArtifactStage extends HarnessArtifactBinding {name:string;mediaType:string;role:string;inputResultIds:string[];sha256:string}
 export interface HarnessArtifactCommit extends HarnessArtifactBinding {commandId:string;summary:string;artifactIds:string[];inputs:unknown[];runtimeManifestSha256:string;limitations:string[]}
+/** Per-owner bytes of stored analysis files (harness_artifact_accounts CHECK). */
+const ARTIFACT_BUDGET_BYTES=16*1024*1024
+/** A committed delivery is not reclaimed this soon, so its editor can still insert it. */
+const RECLAIM_GRACE="interval '30 minutes'"
 const fail=(statusCode=400)=>Object.assign(Error('Analysis artifact unavailable'),{statusCode})
 const hash=(bytes:Buffer|string)=>createHash('sha256').update(bytes).digest('hex')
 function uuid(value:unknown):string {
@@ -62,7 +66,10 @@ export function createHarnessArtifacts({transactions,objects}:{transactions:Prin
    if(!Buffer.isBuffer(source)||source.length<1||source.length>8*1024*1024)throw fail(413)
    const bytes=Buffer.from(source);if(hash(bytes)!==expected)throw fail()
    const artifactId=randomUUID()
-   const row=await access(token,async(c,p)=>{
+   // Reserve the bytes. When the owner budget is full, make room by
+   // reclaiming the oldest committed deliveries of other tasks (the budget
+   // covers live deliveries, not a lifetime total), then try once more.
+   const reserve=(reclaim:boolean)=>access(token,async(c,p)=>{
     await lock(c,p)
     await c.query('INSERT INTO harness_artifact_accounts(deployment_id,owner_id) VALUES($1,$2) ON CONFLICT DO NOTHING',scope(p))
     await c.query('INSERT INTO harness_artifact_tasks(task_id,deployment_id,owner_id,claim_id,epoch) VALUES($3,$1,$2,$4,$5) ON CONFLICT DO NOTHING',[...scope(p),b.taskId,b.claimId,b.epoch])
@@ -70,9 +77,38 @@ export function createHarnessArtifacts({transactions,objects}:{transactions:Prin
     const used=(await c.query('SELECT count(*) AS count,COALESCE(sum(size_bytes),0) AS bytes FROM harness_artifacts WHERE deployment_id=$1 AND owner_id=$2 AND task_id=$3',[...scope(p),b.taskId])).rows[0]
     if(Number(used.count)>=12||Number(used.bytes)+bytes.length>16*1024*1024)throw fail(413)
     const charged=await c.query('UPDATE harness_artifact_accounts SET used_bytes=used_bytes+$3 WHERE deployment_id=$1 AND owner_id=$2 AND used_bytes+$3<=16777216 RETURNING used_bytes',[...scope(p),bytes.length])
-    if(!charged.rowCount)throw fail(413)
-    return (await c.query<ArtifactRow>('INSERT INTO harness_artifacts(artifact_id,deployment_id,owner_id,task_id,object_key,name,media_type,role,input_result_ids,sha256,size_bytes) VALUES($3,$1,$2,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *',[...scope(p),artifactId,b.taskId,p.deploymentId+'/'+p.userId+'/objects/'+artifactId,name,mediaType,role,JSON.stringify(inputResultIds),expected,bytes.length])).rows[0]!
+    if(charged.rowCount)return {row:(await c.query<ArtifactRow>('INSERT INTO harness_artifacts(artifact_id,deployment_id,owner_id,task_id,object_key,name,media_type,role,input_result_ids,sha256,size_bytes) VALUES($3,$1,$2,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *',[...scope(p),artifactId,b.taskId,p.deploymentId+'/'+p.userId+'/objects/'+artifactId,name,mediaType,role,JSON.stringify(inputResultIds),expected,bytes.length])).rows[0]!}
+    if(!reclaim||!objects.removeUnreferenced)throw fail(413)
+    // Choose victims before touching anything and give up when they cannot
+    // free enough. A delivery stays protected for a while after its commit,
+    // so the editor that asked for it can still insert it.
+    const account=(await c.query('SELECT used_bytes FROM harness_artifact_accounts WHERE deployment_id=$1 AND owner_id=$2',scope(p))).rows[0]
+    const needed=Number(account?.used_bytes??0)+bytes.length-ARTIFACT_BUDGET_BYTES
+    const oldest=(await c.query<ArtifactRow>(`SELECT a.* FROM harness_artifacts a WHERE a.deployment_id=$1 AND a.owner_id=$2 AND a.task_id<>$3 AND a.state='committed'
+      AND NOT EXISTS(SELECT 1 FROM harness_analysis_deliveries d WHERE d.deployment_id=a.deployment_id AND d.owner_id=a.owner_id AND d.task_id=a.task_id AND d.created_at>clock_timestamp()-${RECLAIM_GRACE})
+      ORDER BY a.created_at,a.artifact_id LIMIT 256`,[...scope(p),b.taskId])).rows
+    const victims:ArtifactRow[]=[];let freed=0
+    for(const old of oldest){if(freed>=needed)break;victims.push(old);freed+=Number(old.size_bytes)}
+    if(freed<needed)throw fail(413)
+    return {victims}
    })
+   let reserved=await reserve(true)
+   if(!('row' in reserved)){
+    // Bytes stay charged until their object is verifiably gone: remove the
+    // objects first, then drop exactly the rows whose removal succeeded.
+    const removed:ArtifactRow[]=[]
+    for(const old of reserved.victims){
+     try{await objects.removeUnreferenced!(old.object_key);removed.push(old)}catch{/* stays charged; a later stage retries */}
+    }
+    if(removed.length)await access(token,async(c,p)=>{
+     await lock(c,p)
+     const gone=(await c.query<{size_bytes:number}>("DELETE FROM harness_artifacts WHERE deployment_id=$1 AND owner_id=$2 AND artifact_id=ANY($3::uuid[]) AND state='committed' RETURNING size_bytes",[...scope(p),removed.map(old=>old.artifact_id)])).rows
+     const bytesFreed=gone.reduce((sum,row)=>sum+Number(row.size_bytes),0)
+     if(bytesFreed)await c.query('UPDATE harness_artifact_accounts SET used_bytes=used_bytes-$3 WHERE deployment_id=$1 AND owner_id=$2',[...scope(p),bytesFreed])
+    })
+    reserved=await reserve(false)
+   }
+   const row=(reserved as {row:ArtifactRow}).row
    // The committed reservation accounts for ambiguous object writes. Serialize
    // object publication with cancel/commit so removal cannot race an upload.
    return access(token,async(c,p)=>{

@@ -1,5 +1,5 @@
 import {bindDocumentHandoff} from '@genoffice/agent-core'
-import { AssistantSendButton, useAiPanelResize } from '@genoffice/ui'
+import { AssistantSendButton, useAssistantFocusRoot, useAiPanelResize } from '@genoffice/ui'
 import {
   AssistantConversation,
   AssistantParticipants,
@@ -413,6 +413,7 @@ export function AiPanel({
   const [dragOver, setDragOver] = useState(false)
   const { width, resizing, handle } = useAiPanelResize(PANEL_WIDTH_KEY, lang, open)
   const asideRef = useRef<HTMLElement>(null)
+  const focusRoot = useAssistantFocusRoot(asideRef)
   useLayoutEffect(() => {
     const dock = asideRef.current?.closest<HTMLElement>('.ai-dock')
     dock?.style.setProperty('--ai-panel-width', `${width}px`)
@@ -2228,7 +2229,7 @@ export function AiPanel({
 
   return (
     <aside
-      ref={asideRef}
+      ref={focusRoot}
       style={{ width: '100%' }}
       className={`ai-panel${dragOver ? ' ai-panel-dragover' : ''}${resizing ? ' ai-panel-resizing' : ''}`}
       dir={isRtl ? 'rtl' : undefined}

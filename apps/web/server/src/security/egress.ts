@@ -5,7 +5,7 @@ import { publicAddress } from './ip-ranges.ts'
 export type { SourceEgressTarget } from '../../../../../packages/web-contracts/src/settings.ts'
 
 export type SqlSourceKind = 'postgres' | 'mysql' | 'starrocks'
-const unavailable = () => Object.assign(new Error('Source target is not approved'), { statusCode: 400 })
+const unavailable = () => Object.assign(new Error('Source target is not approved'), { statusCode: 400, code: 'SOURCE_TARGET_NOT_APPROVED' as const })
 export function normalizePinnedAddress(value: string): string {
   const family = isIP(value)
   if (!family) throw unavailable()

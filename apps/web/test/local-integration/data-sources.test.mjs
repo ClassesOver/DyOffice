@@ -281,8 +281,10 @@ test('read-only SQL channel: AST guard, real PG denial, row cap, timeout, units'
 
   // Input values and target errors never become response diagnostics.
   const sensitiveSql = 'SELECT missing_sensitive_field_credential_probe FROM ' + targets.probeTable
-  // The database's statement error is a fixable 400 without its text.
+  // The database's statement error is a fixable 400 without its text, classified for the client.
   const failed = await call(f, 'POST', '/metrics/query', { sql: sensitiveSql }, undefined, 400)
+  assert.equal(failed.json().code, 'SQL_DATABASE_ERROR')
+  assert.equal((await call(f, 'POST', '/metrics/query', { sql: 'DELETE FROM ' + targets.probeTable }, undefined, 400)).json().code, 'SQL_POLICY_REJECTED')
   assert.equal(failed.body.includes('missing_sensitive_field'), false)
   assert.equal(failed.body.includes(targets.readerDsn), false)
   // A 1.1 MB cell fits the 4 MB result budget; one row over the whole budget still fails.

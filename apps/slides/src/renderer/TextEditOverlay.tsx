@@ -1,3 +1,4 @@
+import { assistantHoldsKeyboard } from '@genoffice/ui'
 /**
  * 3.2 DOM overlay text editing (run-level rich text) — a contentEditable stacked over the text
  * box takes over input (caret/selection/IME for free). Bold/italic/underline are triggered by the
@@ -736,6 +737,7 @@ export function TextEditOverlay({
       vertText,
     )
     initialRef.current = JSON.stringify(extractParagraphs(div, norm))
+    if (!caretPoint && !replaceWith && !selectAll && assistantHoldsKeyboard()) return
     div.focus()
     const sel = window.getSelection()
     if (sel && (replaceWith || selectAll)) {

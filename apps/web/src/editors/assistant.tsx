@@ -85,7 +85,7 @@ export async function createEditorAssistant(channelOptions?:{fileId:string;edito
   const fileChat=channelOptions?createFileChat(channelOptions.fileId,assistant.transport,bound.request):undefined
   const conversationId=channelOptions?.conversationId??new URLSearchParams(location.search).get('channel')??undefined
   const channel=assistant.catalog.assistantChannels&&channelOptions&&conversationId
-    ?createAssistantChannelClient({...channelOptions,conversationId,request:bound.request}):undefined
+    ?createAssistantChannelClient({...channelOptions,conversationId,currentRunModel:assistant.currentRunModel,selectedModel:assistant.selected,request:bound.request,csrfToken:bound.proof}):undefined
   const workspace=createAssistantWorkspace({agents:assistant.catalog.agents??[],coding:assistant.coding?{...assistant.coding,run:(input,signal)=>assistant.coding!.run(input,signal,assistant.selected(),'user')}:undefined,channel})
   const lang=()=>document.documentElement.lang.startsWith('en')?'en' as const:'zh' as const
   const skills = createUserSkillsClient(bound.request)
@@ -107,7 +107,7 @@ export async function createEditorAssistant(channelOptions?:{fileId:string;edito
       lang={lang()}
       catalogEntries={assistant.catalog.entries}
       selectedId={selected}
-      onCatalogSelect={id => {assistant.select(id); setSelected(id)}}
+      onCatalogSelect={id => {assistant.select(id); setSelected(id); void channel?.refresh()}}
     />
   }
   async function connectChannel(){

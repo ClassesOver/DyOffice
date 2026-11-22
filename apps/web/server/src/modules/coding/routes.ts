@@ -56,7 +56,7 @@ export function registerCodingRoutes(app:FastifyInstance,options:{
     async revalidate(token,permit) {
       if(JSON.stringify(await identity(token))!==JSON.stringify(permit.identity))throw Error('Coding session changed')
     },
-    async *stream(permit,request,signal,{token,turnId}) {
+    async *stream(permit,request,signal,{token,turnId,documentId}) {
       let stage='request_validation'
       let grant:Awaited<ReturnType<NonNullable<typeof options.data>['issue']>>|undefined
       try {
@@ -71,7 +71,8 @@ export function registerCodingRoutes(app:FastifyInstance,options:{
       const {officeModelId,...task}=input
       if(task.dataInputs!==undefined&&!options.data)throw Error('Harness data unavailable')
       stage='data_authorization'
-      grant=options.data&&task.dataInputs!==undefined?await options.data.issue({token,agentId:permit.revision,inputs:task.dataInputs??{sourceIds:[],resultIds:[]},signal}):undefined
+      grant=options.data&&task.dataInputs!==undefined?await options.data.issue({token,agentId:permit.revision,inputs:task.dataInputs??{sourceIds:[],resultIds:[]},signal,
+        ...(documentId&&options.recoveryStore?{leaseUntil:options.recoveryStore.bindGrantLease(token,documentId,turnId)}:{})}):undefined
         // Only bounded public progress crosses SSE; command stdout and reasoning stay local.
         const queue:CodingProgress[]=[]
         let wake:(()=>void)|undefined,finished=false,progressBytes=0
@@ -120,7 +121,7 @@ export function registerCodingRoutes(app:FastifyInstance,options:{
   },{timeoutMs:610000,maxActive:4,maxOutputBytes:384*1024})
   const recovery=options.authorizeDocument?createCodingTaskRecovery(turns,identity,options.authorizeDocument,options.recoveryStore):undefined
   registerProviderRoutes(app,{...options,turns:recovery?.runner??turns,listTaskIds:recovery?options.recoveryStore?.listTaskIds:undefined,
-    taskStatus:recovery?.status,claimContinuation:recovery?.claimContinuation,endpoint:'/api/v1/agents/tasks',errorMessage:'Harness task failed. Check server diagnostics.'})
+    taskStatus:recovery?.status,taskEvents:recovery?.events,claimContinuation:recovery?.claimContinuation,endpoint:'/api/v1/agents/tasks',errorMessage:'Harness task failed. Check server diagnostics.'})
   app.get('/api/v1/agents/catalog',async(request,reply)=>{
     reply.header('Cache-Control','private, no-store')
     const token=cookies(request).session??''
@@ -130,5 +131,5 @@ export function registerCodingRoutes(app:FastifyInstance,options:{
     return {agents:options.registry.list(),defaultId:options.registry.defaultId}
   })
   app.addHook('preClose',async()=>{const draining=recovery?.dispose();turns.dispose();await draining})
-  return {...turns,admitContinuation:recovery?.admitContinuation}
+  return {...turns,events:recovery?.events,admitContinuation:recovery?.admitContinuation}
 }

@@ -1,6 +1,6 @@
 import {DRAFT_META} from './doc-writer'
 import type { OfficeHandoffFailure, OfficeHandoffRunner } from '../file-actions'
-import { AssistantConversation, useAiPanelResize } from '@genoffice/ui'
+import { AssistantConversation, useAssistantFocusRoot, useAiPanelResize } from '@genoffice/ui'
 import { AssistantParticipants, DelegatedAgentResultCard, delegatedAgentResult, compactDelegatedTranscript, type AssistantParticipant, type DelegatedAgentResult } from '@genoffice/ui'
 import { showToast } from '../components/toast-bus'
 import {
@@ -543,6 +543,7 @@ export function AiPanel({
   const [dragOver, setDragOver] = useState(false)
   const { width, resizing, handle } = useAiPanelResize(PANEL_WIDTH_KEY, lang, open)
   const asideRef = useRef<HTMLElement>(null)
+  const focusRoot = useAssistantFocusRoot(asideRef)
   useLayoutEffect(() => {
     const dock = asideRef.current?.closest<HTMLElement>('.ai-dock')
     dock?.style.setProperty('--ai-panel-width', `${width}px`)
@@ -1649,7 +1650,7 @@ export function AiPanel({
 
   return (
     <aside
-      ref={asideRef}
+      ref={focusRoot}
       aria-label={t('aiPanelTitle')}
       style={{ width: '100%' }}
       dir={isRtl ? 'rtl' : undefined}

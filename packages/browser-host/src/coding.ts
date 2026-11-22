@@ -101,6 +101,12 @@ export function createCodingClient(options:{agents:readonly HarnessDescriptor[];
         controllers.delete(task.id);observingStatus=true
         const status=await recovery.waitForTerminal(task.id,controller.signal)
         observingStatus=false
+        // An observed failure is an ordinary tool failure, exactly as when the stream
+        // never dropped; only a result we still cannot confirm ends the Office run.
+        if(status?.state==='failed'){
+          Object.assign(task,{state:'failed',failure:(status.failure??'Task execution failed').slice(0,1000),summary:'The harness task did not complete.'})
+          throw new Error(task.failure)
+        }
         if(status?.state!=='succeeded'||!status.result||!status.hasContinuation)throw new HarnessContinuationUnavailable()
         result={...status.result,agent:{id:agent.id,name:agent.name,origin:agent.origin}}
       }else{

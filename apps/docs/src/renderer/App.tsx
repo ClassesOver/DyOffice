@@ -1,3 +1,4 @@
+import { assistantHoldsKeyboard } from '@genoffice/ui'
 import {completeCreatedDocumentBoot} from './ai/created-document-boot'
 import { PHASED_APPEND } from './editor/streaming-tail-guard'
 import {createAnalysisSaveConsent} from '../../../../packages/browser-host/src/analysis-save-consent'
@@ -1912,6 +1913,15 @@ export function App({ host }: { host?: { fileActions?: React.ReactNode; saveStat
         // kick used to make the re-enable return silently, so existing typos
         // were never re-marked (one "the toggle worked only once" path).
         // Retry for a few seconds instead of dropping the kick.
+        // The kick briefly focuses the body, so it also waits while the user is
+        // in the assistant. That wait is open-ended (the user decides when to
+        // return) and must not use up the retry budget, or existing typos
+        // would never be re-marked; it ends with cancelRespellKick.
+        if (assistantHoldsKeyboard() && !view.composing && !respellKickBusy.current) {
+          spellDiag('kick deferred: assistant holds the keyboard')
+          retryTimer = setTimeout(runKick, 600)
+          return
+        }
         if (view.composing || respellKickBusy.current) {
           spellDiag(
             `kick deferred composing=${view.composing} busy=${respellKickBusy.current} attempt=${attempts}`,
@@ -2036,7 +2046,7 @@ export function App({ host }: { host?: { fileActions?: React.ReactNode; saveStat
               // re-toggle (cancelled) — or the user is left typing in the body
               // with a dropped selection. Only a detached/destroyed view (where
               // focus would throw) is skipped.
-              if (dom.isConnected) {
+              if (dom.isConnected && !assistantHoldsKeyboard()) {
                 view.focus() // resync the DOM selection from PM state
                 // ribbon toggle during textbox editing: keep the routing and
                 // hand the keyboard back where it was — typing must not replace
@@ -6337,6 +6347,10 @@ export function App({ host }: { host?: { fileActions?: React.ReactNode; saveStat
       return !!(el as HTMLElement).closest('.ProseMirror, td[contenteditable]')
     }
     const handler = (e: KeyboardEvent) => {
+      // Editing shortcuts already require focus in an editor surface (canEdit),
+      // so they stay with the assistant composer; document-wide commands
+      // (open, find, replace, go to, track changes) work from the assistant too.
+      const assistantKeys = assistantHoldsKeyboard()
       const canEdit = !!editor?.isEditable && focusInEditor()
       if ((e.metaKey || e.ctrlKey) && isCommandLetter(e, 'o')) {
         e.preventDefault()
@@ -6398,10 +6412,10 @@ export function App({ host }: { host?: { fileActions?: React.ReactNode; saveStat
         e.preventDefault()
         setShowLinkModal(true)
       }
-      if (e.key === 'F9' && e.altKey && doc && editor) {
+      if (e.key === 'F9' && e.altKey && doc && editor && !assistantKeys) {
         e.preventDefault()
         toggleAllFieldCodes(editor.view)
-      } else if (e.key === 'F9' && doc && editor?.isEditable) {
+      } else if (e.key === 'F9' && doc && editor?.isEditable && !assistantKeys) {
         e.preventDefault()
         updateFields()
       }

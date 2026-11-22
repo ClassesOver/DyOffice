@@ -1,0 +1,150 @@
+name: DyOffice editor tool selection
+
+on:
+  schedule:
+    - cron: '27 6 * * 1'
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'tools/dyoffice/analysis-eval/**'
+      - 'tools/dyoffice/runtime-lock*'
+      - 'apps/docs/src/renderer/ai/**'
+      - 'apps/sheets/src/renderer/ai/**'
+      - 'apps/slides/src/renderer/ai/**'
+      - 'apps/pdf/src/renderer/ai/**'
+      - 'apps/pdf/src/renderer/edit-ops/**'
+      - 'apps/sheets/src/renderer/plan-operations.ts'
+      - 'packages/pptx-ops/src/**'
+      - 'packages/xlsx-gateway/src/**'
+      - 'packages/agent-core/src/**'
+      - 'packages/browser-host/src/**'
+      - 'apps/web/server/src/modules/assistant-channel/**'
+      - 'apps/web/server/src/modules/coding/**'
+      - 'apps/web/server/src/modules/tasks/**'
+      - '.github/workflows/dyoffice-editor-eval.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  editor-selection:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: '22.23.5'
+      - name: Verify immutable Node runtime
+        run: node tools/dyoffice/runtime-lock.mjs --runtime
+      - run: npm ci --ignore-scripts --include=dev
+      - run: node_modules/.bin/playwright install chromium --with-deps
+      - name: Load the four native catalogs
+        run: node tools/dyoffice/analysis-eval/editor-selection.mjs --check-catalog
+      - name: Verify Word, Excel, PowerPoint and PDF edits against their real executors
+        id: word_fixture
+        run: |
+          status=0
+          for format in docx xlsx pptx pdf; do
+            node tools/dyoffice/analysis-eval/word-effects.mjs --fixture --format "$format" --out "test-results/effects-fixture/$format" || status=1
+          done
+          exit $status
+      - name: Measure weekly real-model tool selection
+        id: model_selection
+        # Real-model sampling needs the repository's gateway: Settings > Secrets
+        # and variables > Actions (variables DYOFFICE_EVAL_BASE_URL and
+        # DYOFFICE_EVAL_MODEL, secret DYOFFICE_EVAL_API_KEY).
+        if: github.event_name != 'pull_request' && vars.DYOFFICE_EVAL_BASE_URL != '' && vars.DYOFFICE_EVAL_MODEL != ''
+        env:
+          DYOFFICE_EVAL_API_KEY: ${{ secrets.DYOFFICE_EVAL_API_KEY }}
+          DYOFFICE_EVAL_BASE_URL: ${{ vars.DYOFFICE_EVAL_BASE_URL }}
+          DYOFFICE_EVAL_MODEL: ${{ vars.DYOFFICE_EVAL_MODEL }}
+        run: |
+          node tools/dyoffice/analysis-eval/editor-selection.mjs --model "$DYOFFICE_EVAL_MODEL" --trials 1
+      - name: Measure weekly real-model edits in the four editors
+        if: ${{ !cancelled() && github.event_name != 'pull_request' && steps.word_fixture.outcome == 'success' && vars.DYOFFICE_EVAL_BASE_URL != '' && vars.DYOFFICE_EVAL_MODEL != '' }}
+        env:
+          DYOFFICE_EVAL_API_KEY: ${{ secrets.DYOFFICE_EVAL_API_KEY }}
+          DYOFFICE_EVAL_BASE_URL: ${{ vars.DYOFFICE_EVAL_BASE_URL }}
+          DYOFFICE_EVAL_MODEL: ${{ vars.DYOFFICE_EVAL_MODEL }}
+        run: |
+          status=0
+          for format in docx xlsx pptx pdf; do
+            node tools/dyoffice/analysis-eval/word-effects.mjs --model "$DYOFFICE_EVAL_MODEL" --format "$format" --out "test-results/effects-model/$format" || status=1
+          done
+          exit $status
+      - name: Note that real-model sampling is not configured
+        if: github.event_name != 'pull_request' && (vars.DYOFFICE_EVAL_BASE_URL == '' || vars.DYOFFICE_EVAL_MODEL == '')
+        run: echo "::notice::Real-model sampling skipped; set DYOFFICE_EVAL_BASE_URL, DYOFFICE_EVAL_MODEL and the DYOFFICE_EVAL_API_KEY secret."
+      - name: Retain measured input cost and selection results
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: editor-selection-report
+          if-no-files-found: warn
+          path: |
+            test-results/editor-selection/report.json
+            test-results/effects-fixture/*/report.json
+            test-results/effects-model/*/report.json
+
+  harness-recovery:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16@sha256:dd2bf3ce2dc83a81674cf7f217fcfd8a5009a4b325dda5b843bfee82a06cff6f
+        env:
+          POSTGRES_DB: dyoffice_test
+          POSTGRES_PASSWORD: local-ci-only
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d dyoffice_test"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: '22.23.5'
+      - name: Verify immutable Node runtime
+        run: node tools/dyoffice/runtime-lock.mjs --runtime
+      - run: npm ci --ignore-scripts --include=dev
+      - run: npm ci --prefix apps/web --workspaces=false --ignore-scripts --include=dev
+      - run: npm --prefix apps/web exec -- playwright install chromium --with-deps
+      - run: npm run build:web:docs && npm run build:web:shell
+      - name: Verify Word delegation, history recovery, save and reopen
+        env:
+          DYOFFICE_TEST_DATABASE_URL: postgresql://postgres:local-ci-only@localhost:5432/dyoffice_test
+        run: node tools/dyoffice/analysis-eval/dsh-recovery.mjs
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        if: always()
+        with:
+          name: dsh-recovery-report
+          path: test-results/dsh-recovery/report.json
+          if-no-files-found: error
+      - name: Build the PowerPoint editor and Codex data helper
+        run: npm run build:web:slides && npm run build:harness-data-helper
+      - name: Install the pinned Codex and plotting fixture
+        run: |
+          npm install --prefix "$RUNNER_TEMP/chart-cli" --no-save @openai/codex@0.169.0
+          cli=$(find "$RUNNER_TEMP/chart-cli" -type f -path '*/vendor/x86_64-unknown-linux-musl/bin/codex' -print -quit)
+          test -x "$cli"
+          "$cli" --version
+          "$cli" sandbox -- /bin/true
+          echo "DYOFFICE_TEST_CODEX_BINARY=$cli" >> "$GITHUB_ENV"
+          sudo apt-get update && sudo apt-get install -y python3-matplotlib python3-venv
+          python=/usr/bin/python3
+          runtime="$RUNNER_TEMP/chart-python"
+          "$python" -m venv --without-pip --system-site-packages "$runtime/runtime"
+          "$runtime/runtime/bin/python" -c 'import json, matplotlib, platform; print(json.dumps(dict(python=platform.python_version(), matplotlib=matplotlib.__version__, source="ci-system-packages")))' > "$runtime/manifest.json"
+          echo "DYOFFICE_TEST_ANALYSIS_PYTHON=$runtime/runtime/bin/python" >> "$GITHUB_ENV"
+      - name: Verify the Codex chart in the saved presentation
+        env:
+          DYOFFICE_TEST_DATABASE_URL: postgresql://postgres:local-ci-only@localhost:5432/dyoffice_test
+        run: node tools/dyoffice/analysis-eval/codex-chart.mjs
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        if: always()
+        with:
+          name: codex-chart-report
+          path: test-results/codex-chart/report.json
+          if-no-files-found: error

@@ -1,6 +1,7 @@
+import { streamTaskEvents } from '../tasks/event-stream.ts'
 import type {FastifyInstance,FastifyRequest} from 'fastify'
 import {cookies,uniqueHeader,type createCsrfService} from '../auth/csrf.ts'
-import {channelObject as object,channelUuid as uuid,decodeAgentAction} from '../../../../../../packages/web-contracts/src/assistant-channel.ts'
+import {channelObject as object,channelUuid as uuid,decodeContinuationOrigin,decodeDelegationOrigin,decodeAgentAction} from '../../../../../../packages/web-contracts/src/assistant-channel.ts'
 import type {createHarnessDataAccess} from '../coding/data-access.ts'
 import type {createAssistantChannelService} from './service.ts'
 import type {ObjectStore} from '../../storage/object-store.ts'
@@ -38,6 +39,10 @@ export function registerAssistantChannelRoutes(app:FastifyInstance,service:Retur
    return service.configureBackground(owner(request),uuid(request.params.id),{enabled:value.enabled as boolean,...(value.fileId===undefined?{}:{fileId:uuid(value.fileId)})})
   })
   api.get<{Params:{id:string}}>(base+'/channels/:id',request=>service.snapshot(owner(request),uuid(request.params.id)))
+  api.get<{Params:{id:string};Querystring:{after?:string}}>(base+'/channels/:id/events',{schema:{querystring:{type:'object',additionalProperties:false,properties:{after:{type:'string',pattern:'^(0|[1-9][0-9]{0,15})$'}}}}},async(request,reply)=>{
+   const token=owner(request),channelId=uuid(request.params.id)
+   return streamTaskEvents(reply,Number(request.query.after??0),after=>service.ownerEventPage(token,channelId,after))
+  })
   api.delete<{Params:{id:string}}>(base+'/channels/:id',async(request,reply)=>{
    await service.deleteConversation(owner(request),uuid(request.params.id))
    return reply.code(204).send()
@@ -64,12 +69,12 @@ export function registerAssistantChannelRoutes(app:FastifyInstance,service:Retur
    return service.connect({kind:'owner',token:owner(request)},uuid(request.params.id),{connectionId:uuid(value.connectionId),editorId:uuid(value.editorId),editorGeneration:value.editorGeneration as number})
   })
   api.post<{Params:{id:string}}>(base+'/channels/:id/office-task',{bodyLimit:65536},request=>{
-   const value=body(request,['requestId','connectionId','connectionEpoch','instruction'])
-   return service.beginOfficeTask(owner(request),uuid(request.params.id),{requestId:uuid(value.requestId),connectionId:uuid(value.connectionId),connectionEpoch:value.connectionEpoch as number,instruction:value.instruction as string})
+   const value=body(request,['requestId','connectionId','connectionEpoch','instruction','origin'])
+   return service.beginOfficeTask(owner(request),uuid(request.params.id),{requestId:uuid(value.requestId),connectionId:uuid(value.connectionId),connectionEpoch:value.connectionEpoch as number,instruction:value.instruction as string,...(value.origin===undefined?{}:{origin:decodeDelegationOrigin(value.origin)})})
   })
   api.post<{Params:{id:string}}>(base+'/channels/:id/claim',request=>{
-   const value=body(request,['taskId','connectionId','connectionEpoch','requestId'])
-   return service.claim({kind:'owner',token:owner(request)},uuid(request.params.id),{taskId:uuid(value.taskId),connectionId:uuid(value.connectionId),connectionEpoch:value.connectionEpoch as number,...(value.requestId===undefined?{}:{requestId:uuid(value.requestId)})})
+   const value=body(request,['taskId','connectionId','connectionEpoch','requestId','origin'])
+   return service.claim({kind:'owner',token:owner(request)},uuid(request.params.id),{taskId:uuid(value.taskId),connectionId:uuid(value.connectionId),connectionEpoch:value.connectionEpoch as number,...(value.requestId===undefined?{}:{requestId:uuid(value.requestId)}),...(value.origin===undefined?{}:{origin:decodeContinuationOrigin(value.origin)})})
   })
   for(const operation of ['disconnect','yield','reconcile'] as const)api.post<{Params:{id:string}}>(base+'/channels/:id/'+operation,request=>{
    const keys=operation==='disconnect'?['connectionId','connectionEpoch']:operation==='yield'?['taskId','claimId','connectionEpoch','childTaskIds']:['taskId','claimId','connectionEpoch','outcome','summary']
@@ -156,7 +161,7 @@ export function registerAssistantChannelRoutes(app:FastifyInstance,service:Retur
    const ttlMs=Math.min(600000,Date.parse(binding.deadlineAt)-Date.now())
    if(ttlMs<1)throw Object.assign(Error('Channel data unavailable'),{statusCode:403})
    const grant=await dataOptions.data.issue({token:binding.ownerToken,agentId:binding.agentId,inputs:binding.inputs,
-    signal:AbortSignal.timeout(ttlMs),ttlMs,authorize:async()=>{await service.authorizeDataClaim(token,input)}})
+    signal:AbortSignal.timeout(ttlMs),ttlMs,leaseUntil:async()=>(await service.authorizeDataClaim(token,input,false)).leaseUntil})
    return {baseUrl:dataOptions.baseUrl,grant}
   })
   api.post<{Params:{id:string}}>(base+'/members/:id/connect',async request=>{

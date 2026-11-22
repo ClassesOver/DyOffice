@@ -1,12 +1,15 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
+import { registerAssistantFocusRoot } from '@genoffice/ui'
+
 import { guardEditorBridge } from '../src/renderer/chrome-focus-guard'
 
 let grid: HTMLDivElement
 let editor: HTMLDivElement
 let tab: HTMLButtonElement
 let clock = 0
+let unregister: () => void = () => {}
 let calls = 0
 const bridge = {
   setEditCell(): void {
@@ -21,10 +24,12 @@ beforeEach(() => {
   grid = document.getElementById('univer-container') as HTMLDivElement
   editor = document.getElementById('cell-editor') as HTMLDivElement
   tab = document.getElementById('tab') as HTMLButtonElement
+  unregister = registerAssistantFocusRoot(document.querySelector('aside') as HTMLElement)
   clock = 10_000
   calls = 0
 })
 afterEach(() => {
+  unregister()
   document.body.innerHTML = ''
 })
 
@@ -74,5 +79,34 @@ it('leaves ribbon buttons to their own hand-back so commands that move the selec
   ribbon.focus()
   bridge.setEditCell()
   expect(document.activeElement).toBe(editor)
+  guard.dispose()
+})
+
+it('keeps focus in an assistant only through the shared focus contract, not its class name', () => {
+  const guard = guardEditorBridge(bridge, { container: () => grid, now: () => clock })
+  unregister()
+  tab.focus()
+  bridge.setEditCell()
+  expect(document.activeElement).toBe(editor)
+  // Any registered assistant root is protected, whatever its markup.
+  const dock = document.createElement('div')
+  dock.innerHTML = '<button id="card">Task</button>'
+  document.body.append(dock)
+  unregister = registerAssistantFocusRoot(dock)
+  const card = document.getElementById('card') as HTMLButtonElement
+  card.focus()
+  bridge.setEditCell()
+  expect(document.activeElement).toBe(card)
+  guard.dispose()
+})
+
+it('still protects plain text entry outside the assistant', () => {
+  const guard = guardEditorBridge(bridge, { container: () => grid, now: () => clock })
+  unregister()
+  const input = document.createElement('input')
+  document.body.append(input)
+  input.focus()
+  bridge.setEditCell()
+  expect(document.activeElement).toBe(input)
   guard.dispose()
 })

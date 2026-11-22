@@ -68,3 +68,26 @@ test('artifact download rejects any supplied stale or empty session proof before
  assert.equal((await app.inject({url:'/api/v1/agents/artifacts/id/content',headers:{'x-csrf-token':'original-proof'}})).statusCode,200)
  assert.equal(downloads,1)
 })
+
+test('a slow mailbox request is forwarded once and answered once, never with a spurious 403',async t=>{
+ const app=Fastify();t.after(()=>app.close())
+ let executions=0
+ registerHarnessDataRoutes(app,{async execute(){executions++;await new Promise(resolve=>setTimeout(resolve,200));return {items:['slow']}},dispose(){}})
+ await app.ready()
+ const mailbox=await createHarnessDataMailbox(app,'task')
+ try {
+  const ids=[randomUUID(),randomUUID()]
+  for(const id of ids)await writeFile(join(mailbox.directory,id+'.request'),JSON.stringify({path:'/api/v1/agents/tasks/task/data/execute',method:'POST',headers:{authorization:'Bearer '+'x'.repeat(43)},body:JSON.stringify({operation:'sources.list',arguments:{}})}))
+  const responses=[]
+  for(const id of ids){
+   for(let attempt=0;attempt<100;attempt++){
+    try{responses.push(JSON.parse(await readFile(join(mailbox.directory,id+'.response'),'utf8')));break}catch(error){if(error.code!=='ENOENT')throw error}
+    await new Promise(resolve=>setTimeout(resolve,25))
+   }
+  }
+  // Several 25 ms scans ran while each request was in flight.
+  await new Promise(resolve=>setTimeout(resolve,200))
+  assert.deepEqual(responses.map(response=>response.status),[200,200])
+  assert.equal(executions,2)
+ } finally {await mailbox.close()}
+})

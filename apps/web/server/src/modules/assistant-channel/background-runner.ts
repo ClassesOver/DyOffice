@@ -1,3 +1,4 @@
+import {maintainTaskLease} from '../tasks/lease.ts'
 import type {ObjectStore} from '../../storage/object-store.ts'
 import type {createAssistantChannelService} from './service.ts'
 import type {AssistantBackgroundStore} from './background-store.ts'
@@ -18,12 +19,19 @@ export function createAssistantBackgroundRunner(options:{
    if(!claim)return false
    if(claim.expired||stopped){await options.store.abandon(claim);return true}
    const controller=new AbortController();active=controller
-   let checking:Promise<unknown>|undefined
-   const heartbeat=setInterval(()=>{if(checking)return;checking=options.service.backgroundStep(claim,'check').catch(()=>controller.abort()).finally(()=>{checking=undefined})},5000)
+   let stopLease:(()=>void)|undefined
    let deadline:ReturnType<typeof setTimeout>|undefined
    try{
     const task=await options.service.backgroundStep(claim,'begin')
     if(!task)return false
+    stopLease=maintainTaskLease(controller,5000,async()=>{
+     try{return !!await options.service.backgroundStep(claim,'check')}
+     catch(error){
+      const status=(error as {statusCode?:number})?.statusCode
+      if(status!==undefined&&status>=400&&status<500)return false
+      throw error
+     }
+    })
     deadline=setTimeout(()=>controller.abort(),Math.max(1,Date.parse(task.deadlineAt)-Date.now()))
     const bytes=await options.objects.readVerified(task.reference,controller.signal)
     const document=await readBackgroundDocument(bytes,task.format,controller.signal)
@@ -35,7 +43,7 @@ export function createAssistantBackgroundRunner(options:{
     try{
      await options.service.backgroundStep(claim,'finish',{summary:'后台读取未完成，请检查文档、模型配置或任务授权。',outcome:'failed'})
     }catch{await options.store.abandon(claim)}
-   }finally{clearInterval(heartbeat);clearTimeout(deadline);await checking;active=undefined}
+   }finally{clearTimeout(deadline);stopLease?.();active=undefined}
    return true
   }finally{busy=false}
  }

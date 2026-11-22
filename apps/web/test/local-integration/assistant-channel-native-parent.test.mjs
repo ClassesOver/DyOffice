@@ -27,7 +27,8 @@ test('real native AgentLoop yields durable Office parent, handles reverse read, 
   }
   return value
  }
- const browser=createAssistantChannelClient({request,fileId:file.fileId,editorId:randomUUID(),generation:()=>1});t.after(()=>browser.dispose())
+ let selectedModel='fixture'
+ const browser=createAssistantChannelClient({request,selectedModel:()=>selectedModel,currentRunModel:()=>'fixture',continuationRevision:()=>file.revision,fileId:file.fileId,editorId:randomUUID(),generation:()=>1});t.after(()=>browser.dispose())
  await browser.start();const id=browser.snapshot().conversationId,owner={kind:'owner',token:f.alice.token}
  const invitation=await service.invite(f.alice.token,id),application=await service.apply(invitation.inviteToken,{displayName:'Deterministic peer',kind:'fixture'})
  await service.approve(f.alice.token,id,application.applicationId,{approved:true})
@@ -48,7 +49,19 @@ test('real native AgentLoop yields durable Office parent, handles reverse read, 
  await browser.refresh()
  await wait(()=>service.snapshot(f.alice.token,id),s=>s.tasks.some(t=>t.taskId===question.taskId&&t.state==='succeeded'))
  assert.equal(scopedReads,1)
+ selectedModel='other'
  await service.submit(credential,{requestId:randomUUID(),conversationId:id,to:'office',action:{kind:'result',taskId:child.taskId,claimId:claimed.claimId,connectionEpoch:claimed.connectionEpoch,summary:'Analysis verified revenue 42',outcome:'succeeded'}})
+ await browser.refresh()
+ assert.equal(continuations.length,0)
+ assert.equal((await service.snapshot(f.alice.token,id)).tasks.find(t=>t.taskId===parent.taskId).state,'queued')
+ selectedModel='fixture'
+ await browser.refresh();await wait(async()=>continuations,v=>v.length===1)
+ // The model picker can change after a successful claim but before the editor starts the run.
+ selectedModel='other'
+ const stale=continuations.shift()
+ assert.equal(browser.control.beginRun(stale.instruction,stale.continuationToken),undefined)
+ await wait(()=>service.snapshot(f.alice.token,id),s=>s.tasks.some(t=>t.taskId===parent.taskId&&t.state==='queued'))
+ selectedModel='fixture'
  await browser.refresh();await wait(async()=>continuations,v=>v.length===1)
  phase='native';token=browser.control.beginRun('Unrelated user request');loop.run('Unrelated user request');await wait(async()=>loop.busy,b=>!b)
  assert.equal((await service.snapshot(f.alice.token,id)).tasks.find(t=>t.taskId===parent.taskId).state,'running','unrelated native completion cannot complete parent')

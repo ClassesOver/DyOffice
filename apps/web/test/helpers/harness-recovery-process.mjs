@@ -9,7 +9,7 @@ import {restrictedOrigin} from './restricted.mjs'
 process.once('message',async config=>{
  const auth=new Pool({connectionString:config.auth,max:2}),businessPool=new Pool({connectionString:config.business,max:3})
  try{
-  const app=await buildLocalApp({db:createIdentityStore(auth),businessPool,passwords:await createPasswordService(),
+  const app=await buildLocalApp({db:createIdentityStore(auth),businessPool,assistantChannels:true,passwords:await createPasswordService(),
    deploymentId:config.deploymentId,origin:restrictedOrigin,csrfKey:config.csrfKey,
    objectStore:await createLocalObjectStore({directory:config.directory}),providerGateway:{mode:'shared'},
    globalConfigKeyring:{activeKeyId:'fixture',keys:{fixture:new Uint8Array(32).fill(1)}},

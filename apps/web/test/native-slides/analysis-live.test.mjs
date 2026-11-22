@@ -1,5 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import {createHash} from 'node:crypto'
 import {readFile} from 'node:fs/promises'
 import {Readable} from 'node:stream'
 import {fileURLToPath} from 'node:url'
@@ -20,14 +21,20 @@ const dist=name=>fileURLToPath(new URL('../../'+name,import.meta.url))
 const marker='PPTX-CODEX-RESULT-27'
 function calculationScript(helper){
  return [
-  'import base64, hashlib, json, os, subprocess, uuid',
+  'import base64, hashlib, io, json, os, subprocess, uuid',
+  'import matplotlib.pyplot as plt',
   ...(helper?[`helper=${JSON.stringify(helper)}`]:[]),
   'def execute(operation, args):',
   '    return json.loads(subprocess.check_output(helper+["execute",operation,"--args",json.dumps(args)],text=True))["detail"]',
   'total=8+19',
   'assert total==27',
+  'fig,ax=plt.subplots(figsize=(2,1.5),dpi=72)',
+  'ax.bar(["A","B"],[8,19])',
+  'png=io.BytesIO()',
+  'fig.savefig(png,format="png")',
+  'plt.close(fig)',
   'ids=[]',
-  `for name, media, role, raw in [("report.txt","text/plain","report",b"${marker}"),("table.csv","text/csv","table",f"Metric,Value\\nSum,{total}\\n".encode())]:`,
+  `for name, media, role, raw in [("report.txt","text/plain","report",b"${marker}"),("table.csv","text/csv","table",f"Metric,Value\\nSum,{total}\\n".encode()),("chart.png","image/png","chart",png.getvalue())]:`,
   '    ids.append(execute("artifacts.stage",dict(name=name,mediaType=media,role=role,inputResultIds=[],sha256=hashlib.sha256(raw).hexdigest(),bytesBase64=base64.b64encode(raw).decode()))["artifactId"])',
   'execute("artifacts.commit",dict(commandId=str(uuid.uuid4()),summary=f"Sum: {total}",artifactIds=ids,inputs=[],limitations=[],runtimeManifestSha256=os.environ["OFFICE_ANALYSIS_RUNTIME_MANIFEST_SHA256"]))',
  ].join('\n')
@@ -41,10 +48,10 @@ function fixedModel(t){
   tool('delegate_agent_task',{instruction:'Wait for the user to cancel this test task',agentId:'codex',dataInputs:{sourceIds:[],resultIds:[]}}),
   tool('exec_command',{cmd:'sleep 60',yield_time_ms:10000,max_output_tokens:1000}),
   {content:'No delivery was confirmed for the first task.'},
-  tool('delegate_agent_task',{instruction:'Generate and commit the two fixture files',agentId:'codex',dataInputs:{sourceIds:[],resultIds:[]}}),
+  tool('delegate_agent_task',{instruction:'Generate and commit the report, table and chart',agentId:'codex',dataInputs:{sourceIds:[],resultIds:[]}}),
   tool('exec_command',{cmd:`python - <<'PY'\n${script}\nPY`,max_output_tokens:1000}),
   {content:'The script completed.'},
-  {content:'The two files were submitted.'},
+  {content:'The three files were submitted.'},
  ]
  return mockProviderNetwork(t,()=>{
   const delta=turns.shift()
@@ -63,7 +70,7 @@ for(const live of [false,true])test(`PPTX ${live?'saves real Codex artifacts wit
  const original=await readFile(new URL('../fixtures/slides/acceptance.pptx',import.meta.url))
  const file=(await importFile(f,f.alice.token,original,'harness-target.pptx')).file
  const slidesHost={openSession(input){return openIsolatedPptxSession(input,{timeoutMs:60000,unsafeTestOnly:true})}}
- const app=await buildLocalApp({db:f.db,businessPool:f.businessPool,passwords:f.passwords,deploymentId:f.deploymentId,origin,csrfKey:f.csrfKey,objectStore:f.objects,slidesHost,globalConfigKeyring:keyring,providerGateway:{mode:'shared'},codingHarnesses:{analysisPython:python},nativeSlidesDirectory:process.env.DYOFFICE_TEST_SLIDES_DIST??dist('dist-slides'),localShellDirectory:dist('dist-local-shell')})
+ const app=await buildLocalApp({db:f.db,businessPool:f.businessPool,passwords:f.passwords,deploymentId:f.deploymentId,origin,csrfKey:f.csrfKey,objectStore:f.objects,slidesHost,globalConfigKeyring:keyring,providerGateway:{mode:'shared'},codingHarnesses:{analysisPython:python,cliPath:process.env.DYOFFICE_TEST_CODEX_BINARY},nativeSlidesDirectory:process.env.DYOFFICE_TEST_SLIDES_DIST??dist('dist-slides'),localShellDirectory:dist('dist-local-shell')})
  const network=live?undefined:fixedModel(t)
  const artifactOperations=[]
  const inject=app.inject.bind(app)
@@ -105,7 +112,13 @@ for(const live of [false,true])test(`PPTX ${live?'saves real Codex artifacts wit
   const first=await firstDispatch,turnId=first.request().postDataJSON().turnId
   assert.equal(first.status(),200)
   const card=panel.locator('.assistant-task-message:visible').filter({hasText:'Wait for the user to cancel this test task'})
-  await expect(card.getByText('正在执行命令',{exact:true})).toBeVisible({timeout:15000})
+  try {
+   await expect(card.getByText('正在执行命令',{exact:true})).toBeVisible({timeout:15000})
+  } catch (error) {
+   const state=await card.locator('.assistant-task-state').getAttribute('data-state',{timeout:1000}).catch(()=>null)
+   const details=await card.textContent({timeout:1000}).catch(()=>null)
+   throw new Error(`Fixed-model cancellation did not reach command execution (model requests: ${network.writes}, state: ${state}, card: ${details?.slice(0,800)})`,{cause:error})
+  }
   const cancel=page.waitForResponse(response=>new URL(response.url()).pathname===`/api/v1/agents/tasks/${turnId}/cancel`&&response.request().method()==='POST')
   await card.getByRole('button',{name:'请求取消',exact:true}).click()
   assert.equal((await cancel).status(),204)
@@ -127,34 +140,42 @@ for(const live of [false,true])test(`PPTX ${live?'saves real Codex artifacts wit
  } catch(cause) {
   throw Error(`No delivered result; helper operation statuses: ${JSON.stringify(artifactOperations)}`,{cause})
  }
- assert.deepEqual(artifactOperations.filter(([,status])=>status===200),[['artifacts.stage',200],['artifacts.stage',200],['artifacts.commit',200]])
+ assert.deepEqual(artifactOperations.filter(([,status])=>status===200),[['artifacts.stage',200],['artifacts.stage',200],['artifacts.stage',200],['artifacts.commit',200]])
  if(network){
-  await expect(panel.getByText('The two files were submitted.',{exact:true})).toBeVisible()
+  await expect(panel.getByText('The three files were submitted.',{exact:true})).toBeVisible()
   await page.reload()
   await openAssistant()
  }
  await panel.getByRole('tab',{name:'任务',exact:true}).click()
  const history=page.waitForResponse(response=>new URL(response.url()).pathname==='/api/v1/agents/deliveries'&&response.request().method()==='GET')
  await deliveries.locator('summary').click()
- assert.equal((await history).status(),200)
- if(network)await expect(deliveries.getByRole('heading',{name:'历史交付',exact:true})).toBeVisible()
+ const historyResponse=await history
+ assert.equal(historyResponse.status(),200)
+ const {deliveries:receipts}=await historyResponse.json()
+ const restored=receipts.find(item=>item.artifacts.some(file=>file.name==='chart.png'))
+ assert.ok(restored,'The committed chart is listed by the delivery history endpoint')
+ await expect(deliveries.getByText(restored.commandId,{exact:true})).toBeVisible()
  const report=deliveries.locator('li').filter({hasText:'report.txt'})
  const table=deliveries.locator('li').filter({hasText:'table.csv'})
  await expect(report).toBeVisible()
  await expect(table).toBeVisible()
  const head=async()=>(await f.files.openFile(f.alice.token,file.fileId)).file.revision
- for(const artifact of [report,table]){
+ const chart=deliveries.locator('li').filter({hasText:'chart.png'})
+ for(const artifact of [report,table,chart]){
   await artifact.getByRole('button',{name:'插入当前幻灯片',exact:true}).click()
   await expect(artifact.getByRole('button',{name:'保存文档',exact:true})).toBeVisible({timeout:10000})
  }
  assert.equal(await head(),file.revision)
- await table.getByRole('button',{name:'保存文档',exact:true}).click()
+ await chart.getByRole('button',{name:'保存文档',exact:true}).click()
  await expect.poll(head,{timeout:30000}).not.toBe(file.revision)
  const revision=await head(),saved=await JSZip.loadAsync(await f.files.readFile(f.alice.token,file.fileId,revision))
  const slide=await saved.file('ppt/slides/slide1.xml').async('string')
  assert.ok(slide.includes(marker))
  assert.match(slide,/<a:tbl[ >][\s\S]*?<a:t>Metric<\/a:t>[\s\S]*?<a:t>27<\/a:t>/)
  assert.ok(slide.includes(await table.locator('code').innerText()),'Table provenance hash is present in the saved slide')
+ const chartHash=await chart.locator('code').innerText()
+ const images=await Promise.all(saved.file(/^ppt\/media\/.+\.png$/i).map(part=>part.async('nodebuffer')))
+ assert.ok(images.some(bytes=>createHash('sha256').update(bytes).digest('hex')===chartHash),'The saved deck contains the committed chart bytes')
  assert.deepEqual(await f.files.readFile(f.alice.token,file.fileId,file.revision),original)
  await page.reload()
  await expect(page.locator('html')).toHaveAttribute('data-document-loading','ready',{timeout:45000})

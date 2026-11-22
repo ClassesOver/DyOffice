@@ -1,3 +1,4 @@
+import { streamTaskEvents } from '../tasks/event-stream.ts'
 import type { FastifyInstance } from 'fastify'
 import type { SessionService } from '../auth/sessions.ts'
 import { authError } from '../auth/sessions.ts'
@@ -20,6 +21,7 @@ export function registerProviderRoutes(app: FastifyInstance, options: {
   csrf: Pick<ReturnType<typeof createCsrfService>,'requireSession'> & Partial<Pick<ReturnType<typeof createCsrfService>,'requireSessionRead'>>; maxOutputBytes?: number; endpoint?: string; errorMessage?: string
   listTaskIds?:(token:string,documentId:string)=>Promise<string[]>
   taskStatus?:(token:string,turnId:string,documentId:string)=>Promise<unknown>
+  taskEvents?:(token:string,turnId:string,documentId:string,after:number)=>Promise<{state:string;events:{sequence:number;kind:string;payload:unknown}[]}>
   claimContinuation?:(token:string,turnId:string,input:{documentId:string;revision:string;modelId:string;defer?:boolean})=>Promise<unknown>
   admitContinuation?:AdmitHarnessContinuation
 }) {
@@ -105,6 +107,13 @@ export function registerProviderRoutes(app: FastifyInstance, options: {
       ({taskIds:await options.listTaskIds!(cookies(request).session!,(request.query as {documentId:string}).documentId)}))
     if(options.taskStatus)api.get(endpoint+'/:id/status',{schema:{params:object({id}),querystring:object({documentId})}},request=>
       options.taskStatus!(cookies(request).session!,(request.params as {id:string}).id,(request.query as {documentId:string}).documentId))
+    if(options.taskEvents)api.get(endpoint+'/:id/events',{schema:{params:object({id}),querystring:{type:'object',additionalProperties:false,required:['documentId'],properties:{documentId,after:{type:'string',pattern:'^(0|[1-9][0-9]{0,3})$'}}}}},async(request,reply)=>{
+      const token=cookies(request).session!,turnId=(request.params as {id:string}).id
+      const {documentId:fileId,after:cursor='0'}=request.query as {documentId:string;after?:string}
+      const start=Number(cursor)
+      if(start>4096)throw authError(400)
+      return streamTaskEvents(reply,start,after=>options.taskEvents!(token,turnId,fileId,after))
+    })
     const claim=object({documentId,revision:documentId,modelId:id})
     if(options.claimContinuation)api.post(endpoint+'/:id/continuation',{bodyLimit:1024,schema:{params:object({id}),querystring:object({}),body:{...claim,properties:{...claim.properties,defer:{type:'boolean'}}}}},request=>
       options.claimContinuation!(cookies(request).session!,(request.params as {id:string}).id,request.body as {documentId:string;revision:string;modelId:string;defer?:boolean}))

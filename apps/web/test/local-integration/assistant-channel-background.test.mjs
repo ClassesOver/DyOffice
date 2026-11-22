@@ -7,6 +7,7 @@ import {fileFixture,docxBytes,importFile} from '../helpers/files.mjs'
 import {backgroundDocumentBytes} from '../helpers/background-documents.mjs'
 import {restrictedOrigin} from '../helpers/restricted.mjs'
 import {createAssistantChannelService} from '../../server/src/modules/assistant-channel/service.ts'
+import {createCodingTaskRecoveryStore} from '../../server/src/modules/coding/task-recovery-store.ts'
 import {createCsrfService} from '../../server/src/modules/auth/csrf.ts'
 import {registerAssistantChannelRoutes} from '../../server/src/modules/assistant-channel/routes.ts'
 
@@ -248,6 +249,25 @@ async function queued(t){
  const runner=answer=>createAssistantBackgroundRunner({store:store(),service:f.service,objects:f.objects,answer})
  return {...f,file,conversationId,member,taskId,store,runner}
 }
+test('task runtime status distinguishes executors with colliding IDs and enforces owner visibility',async t=>{
+ const f=await queued(t)
+ const coding=createCodingTaskRecoveryStore(f.transactions)
+ await coding.start(f.alice.token,f.file.fileId,f.taskId,{modelId:'fixture'},undefined)
+ const channel=await f.service.submit(f.member,{requestId:randomUUID(),conversationId:f.conversationId,to:'office',action:{kind:'delegate',instruction:'Read the active document'}})
+ const query=token=>f.transactions.withPrincipalTransaction({kind:'session',token},async c=>
+  (await c.query('SELECT executor,task_id,state FROM task_runtime_status ORDER BY executor')).rows)
+ assert.deepEqual(await query(f.alice.token),[
+  {executor:'background',task_id:f.taskId,state:'queued'},
+  {executor:'channel',task_id:channel.taskId,state:'queued'},
+  {executor:'codex',task_id:f.taskId,state:'running'},
+ ])
+ assert.deepEqual(await query(f.bob.token),[])
+ await assert.rejects(f.workerPool.query('SELECT * FROM task_runtime_status'),{code:'42501'})
+ await f.transactions.withPrincipalTransaction({kind:'session',token:f.alice.token},c=>
+  c.query("UPDATE task_runtime_codex SET lease_until=clock_timestamp()-interval '1 second' WHERE turn_id=$1",[f.taskId]))
+ assert.equal((await coding.events(f.alice.token,f.file.fileId,f.taskId,0)).state,'unknown_outcome')
+ assert.equal((await query(f.alice.token))[0].state,'queued')
+})
 test('two server instances execute a durable queued task once',async t=>{
  const f=await queued(t);let calls=0
  const answer=async()=>{calls++;return 'one result'}
@@ -259,7 +279,7 @@ test('two server instances execute a durable queued task once',async t=>{
 test('expired running claim is never rerun and survives loss of the cleanup response',async t=>{
  const f=await queued(t),store=f.store(),claim=await store.take()
  await f.service.backgroundStep(claim,'begin')
- const expire=()=>f.ownerPool.query("UPDATE assistant_background_queue SET lease_until=clock_timestamp()-interval '1 second' WHERE task_id=$1",[f.taskId])
+ const expire=()=>f.ownerPool.query("UPDATE task_runtime_channel SET lease_until=clock_timestamp()-interval '1 second' WHERE task_id=$1",[f.taskId])
  await expire()
  const lost=await store.take();assert.equal(lost.expired,true)
  // Simulate a process exiting after take() but before it can settle the task.
@@ -332,7 +352,7 @@ test('busy Office execution leaves a background task queued for later',async t=>
  await f.runner(async()=>{calls++;return 'later'}).runOnce()
  assert.equal(calls,0);assert.equal((await f.service.memberTask(f.member.token,f.taskId)).state,'queued')
  // A disconnected browser must not block the queue after its task deadline.
- await f.ownerPool.query("UPDATE assistant_tasks SET deadline_at=clock_timestamp()-interval '1 second' WHERE task_id=$1",[other.taskId])
+ await f.ownerPool.query("UPDATE task_runtime_channel SET deadline_at=clock_timestamp()-interval '1 second' WHERE task_id=$1",[other.taskId])
  await f.runner(async()=>{calls++;return 'later'}).runOnce()
  assert.equal(calls,1)
 })
@@ -382,7 +402,7 @@ for(const finish of ['success','expired-queued'])test('background child '+finish
  if(finish==='success')await f.runner(async()=> 'child result').runOnce()
  else{
   await f.store().take()
-  await f.ownerPool.query("UPDATE assistant_background_queue SET lease_until=clock_timestamp()-interval '1 second' WHERE task_id=$1",[child.taskId])
+  await f.ownerPool.query("UPDATE task_runtime_channel SET lease_until=clock_timestamp()-interval '1 second' WHERE task_id=$1",[child.taskId])
   await f.runner(async()=>{assert.fail('expired claim must never execute')}).runOnce()
  }
  assert.equal((await f.service.memberTask(f.member.token,parent.taskId)).state,'queued')
@@ -430,7 +450,7 @@ test('separate processes compete once and recover a killed executor without repe
  assert.equal((await second.wait('done')).worked,false)
  assert.equal((await second.exit).code,0);assert.equal(second.messages.filter(m=>m.phase==='answer').length,0)
  first.child.kill('SIGKILL');assert.equal((await first.exit).signal,'SIGKILL')
- await f.ownerPool.query("UPDATE assistant_background_queue SET lease_until=clock_timestamp()-interval '1 second' WHERE task_id=$1",[f.taskId])
+ await f.ownerPool.query("UPDATE task_runtime_channel SET lease_until=clock_timestamp()-interval '1 second' WHERE task_id=$1",[f.taskId])
  const restarted=await backgroundProcess(f)
  assert.equal((await restarted.wait('done')).worked,true);assert.equal((await restarted.exit).code,0)
  assert.equal(restarted.messages.filter(m=>m.phase==='answer').length,0)
