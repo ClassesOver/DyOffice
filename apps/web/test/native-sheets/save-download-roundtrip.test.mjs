@@ -21,10 +21,11 @@ import { syntheticAnalysisAdapter,syntheticAnalysisFrames } from '../helpers/ana
 import { mockProviderNetwork } from '../helpers/provider-network.mjs'
 import { configuredSheetsRuntime } from '../../server/src/modules/sheets/runtime.ts'
 import { buildSheetsGateway } from '../../server/sheets/build.mjs'
+import { holdFirstResponseEnd } from '../helpers/delayed-http-response.mjs'
 
 async function fixture(t, autoSave = false, enableAssistant = false, replay = undefined, live = undefined, analysis = false, namedCopy = false) {
   const directory = await mkdtemp(join(tmpdir(), 'dyoffice-sheets-download-'))
-  let f, app, browser, server, analysisAdapter
+  let f, app, browser, server, analysisAdapter, beforeHttpRequest
   t.after(async () => {
     await browser?.close()
     if (server) { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)) }
@@ -32,7 +33,10 @@ async function fixture(t, autoSave = false, enableAssistant = false, replay = un
     await rm(directory, { recursive: true, force: true })
   })
   execFileSync('openssl', ['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-keyout', join(directory, 'key.pem'), '-out', join(directory, 'cert.pem'), '-days', '1', '-subj', '/CN=localhost'], { stdio: 'pipe' })
-  server = createServer({ key: await readFile(join(directory, 'key.pem')), cert: await readFile(join(directory, 'cert.pem')) }, (req, res) => app.routing(req, res))
+  server = createServer({ key: await readFile(join(directory, 'key.pem')), cert: await readFile(join(directory, 'cert.pem')) }, (req, res) => {
+    beforeHttpRequest?.(req, res)
+    app.routing(req, res)
+  })
   await new Promise(resolve => server.listen(Number(process.env.DYOFFICE_TEST_SHEETS_PORT ?? 0), '127.0.0.1', resolve))
   const origin = `https://127.0.0.1:${server.address().port}`
   const gateway = namedCopy ? undefined : await sheetsGateway(t)
@@ -86,7 +90,9 @@ async function fixture(t, autoSave = false, enableAssistant = false, replay = un
   await expect.poll(() => page.evaluate(() => window.__genofficeDebug?.univerAPI.getActiveWorkbook()?.getActiveSheet()?.getRange('A2').getValue()), { timeout: 30000 }).toBe(12.5)
   await expect.poll(() => page.evaluate(() => window.__genofficeDebug.univerAPI.getActiveWorkbook().getActiveSheet().getRange('B2').getValue()), { timeout: 30000 }).toBe(25)
   await page.evaluate(() => { window.__savedWorkbookIdentity = window.__genofficeDebug.univerAPI.getActiveWorkbook().getWorkbook() })
-  return { ...f, page, original, opened, context, origin, analysisAdapter }
+  return { ...f, page, original, opened, context, origin, analysisAdapter,
+    observeHttpRequests(handler) { beforeHttpRequest = handler },
+  }
 }
 
 async function assertWorkbook(bytes, expectedA2, expectedA3 = 7.5) {
@@ -367,19 +373,20 @@ test('download waits for a blocked save receipt, then drains edits made after th
 test('structural save fences new edits until the confirmed workbook is ready, then accepts the next save', { timeout: 120000 }, async t => {
   const f = await fixture(t)
   const preparations = []
+  const responses = []
   f.page.on('request', request => {
     if (new URL(request.url()).pathname.endsWith('/sheets/uploads')) preparations.push(request.postDataJSON().request)
   })
-  let entered, release
-  const reached = new Promise(resolve => { entered = resolve })
-  const barrier = new Promise(resolve => { release = resolve })
-  t.after(() => release())
-  await f.page.route('**/commits', async route => {
-    const response = await route.fetch()
-    assert.equal(response.status(), 200)
-    entered(); await barrier
-    await route.fulfill({ response })
-  }, { times: 1 })
+  const commitPath = `/api/v1/files/${f.opened.file.fileId}/commits`
+  const held = holdFirstResponseEnd(req => req.method === 'POST' && req.url === commitPath)
+  t.after(held.release)
+  f.observeHttpRequests((req, res) => held.intercept(req, res))
+  f.page.on('response', response => {
+    const path = new URL(response.url()).pathname
+    if (path === commitPath || path.endsWith('/sheets/uploads')) {
+      responses.push([path === commitPath ? 'commit' : 'prepare', response.status()])
+    }
+  })
   const changed = await f.page.evaluate(async () => {
     const debug = window.__genofficeDebug
     const sheetId = debug.univerAPI.getActiveWorkbook().getActiveSheet().getSheetId()
@@ -388,7 +395,7 @@ test('structural save fences new edits until the confirmed workbook is ready, th
   assert.equal(changed.ok, true)
   const save = f.page.locator('.qa-btn').first()
   await expect(save).toBeEnabled(); await save.click()
-  await reached
+  assert.equal(await held.started, 200)
   const rejected = await f.page.evaluate(async () => {
     const debug = window.__genofficeDebug
     const sheet = debug.univerAPI.getActiveWorkbook().getActiveSheet()
@@ -400,11 +407,16 @@ test('structural save fences new edits until the confirmed workbook is ready, th
   })
   assert.equal(rejected.after, rejected.before, 'native mutation commands must not write through a structural snapshot')
   assert.equal(rejected.result.ok, false, 'tool writes must be fenced while structural save is frozen')
-  release()
+  held.release()
   await expect.poll(() => f.page.evaluate(() => window.__genofficeDebug?.univerAPI.getActiveWorkbook()?.getActiveSheet()?.getRange('A3').getValue()), { timeout: 30000 }).toBe(12.5)
   await expect(f.page.locator('.qa-btn').first()).toBeDisabled({ timeout: 15000 })
-  await expect(f.page.locator('.status-bar .status-msg')).not.toContainText('Saving workbook structure', { timeout: 15000 })
-  await expect(f.page.locator('.status-bar .status-msg')).not.toContainText('Finishing pending workbook changes', { timeout: 15000 })
+  try {
+    await expect(f.page.locator('.status-bar .status-msg')).not.toContainText('Saving workbook structure', { timeout: 15000 })
+    await expect(f.page.locator('.status-bar .status-msg')).not.toContainText('Finishing pending workbook changes', { timeout: 15000 })
+  } catch (error) {
+    t.diagnostic(`Structural save responses: ${JSON.stringify(responses)}`)
+    throw error
+  }
   const next = await f.page.evaluate(async () => {
     const debug = window.__genofficeDebug
     return debug.applyOps([{ op: 'set_cell', sheetId: debug.univerAPI.getActiveWorkbook().getActiveSheet().getSheetId(), address: 'A4', value: 17 }])
