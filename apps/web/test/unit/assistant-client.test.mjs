@@ -207,7 +207,7 @@ test('format assistant intersects editor tools with SaaS-supported tools',async(
 })
 
 test('server assistant tool policy matches the four GenOffice tool inventories',()=>{
- assert.deepEqual(['docx','xlsx','pptx','pdf'].map(format=>assistantToolsForFormat(format).size),[40,18,18,49])
+ assert.deepEqual(['docx','xlsx','pptx','pdf'].map(format=>assistantToolsForFormat(format).size),[42,19,20,49])
  assert.equal(assistantToolsForFormat('docx').has('read_attachment'),true)
  assert.equal(assistantToolsForFormat('xlsx').has('read_attachment'),true)
  assert.equal(assistantToolsForFormat('docx').has('analyze_media'),true)

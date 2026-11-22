@@ -45,3 +45,20 @@ it('rejects malformed initial table matrices atomically',async()=>{
   expect(opened.deck.slides[0]!.elements.length).toBe(before)
  }
 })
+const PNG_1x1='iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=='
+it('inserts a verified analysis image as a native picture, aspect ratio kept, plus provenance',async()=>{
+ const opened=await openPptx(await createBlankPptx())
+ const ops=analysisSlideOperations({kind:'image',mediaType:'image/png',base64:PNG_1x1,width:1,height:1,alt:'chart',provenance:['Unverified analysis.']},0,960,540)
+ expect(ops.map(op=>(op as {op:string}).op)).toEqual(['addPicture','addElement'])
+ const picture=ops[0] as {offset:{cx:number;cy:number}}
+ expect(picture.offset.cx).toBe(picture.offset.cy)
+ const result=runTxn(opened,{ops})
+ expect(result.applied).toBe(true)
+ const reopened=await openPptx(await savePptx(opened))
+ const elements=reopened.deck.slides[0]!.elements
+ expect(elements.some(el=>el.type==='picture')).toBe(true)
+ expect(JSON.stringify(elements)).toContain('Unverified analysis.')
+})
+it('rejects an image whose declared size does not match its header',()=>{
+ expect(()=>analysisSlideOperations({kind:'image',mediaType:'image/png',base64:PNG_1x1,width:2,height:1,alt:''},0,960,540)).toThrow()
+})

@@ -31,13 +31,16 @@ export const ASSISTANT_FORMAT_TOOLS: Readonly<Record<AssistantDocumentFormat, Re
     'insert_footnote','insert_endnote','delete_note','edit_note','read_notes','add_comment','delete_comment',
     'web_search','image_search','analyze_media','generate_image','insert_image','insert_chart','edit_chart','set_header_footer',
     'set_page_setup','insert_section_break','define_style','list_styles','set_watermark','insert_text_box','insert_picture','create_document','generate_mindmap',
+    'insert_data_result','insert_analysis_image',
   ]),
   xlsx: new Set([
     'get_workbook_context','read_attachment','read_range','aggregate_range','load_guide','read_formats','read_sheet_features',
     'read_cells','find_cells','select_range','trace_precedents','trace_dependents','propose_operations','create_document','merge_attached_workbooks','web_search','image_search','generate_image',
+    'insert_data_result',
   ]),
   pptx: new Set([
     'read_slide','execute_slide_script','read_attachment','web_search','image_search','generate_image','analyze_media','insert_web_image','replace_image','ask_clarification','plan_deck','regenerate_slide','generate_deck','save_style_template','list_style_templates','edit_chart','apply_ops','load_guide',
+    'insert_data_result','insert_analysis_image',
   ]),
   pdf: new Set([
     'read_pages','read_attachment','search_text','find_sensitive_info','goto_page','markup_text','read_annotations','add_note','reply_note',
