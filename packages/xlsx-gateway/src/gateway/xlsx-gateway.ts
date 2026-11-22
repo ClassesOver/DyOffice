@@ -2856,7 +2856,9 @@ function patchFormulaCachedValue(
   const existing = cellPattern.exec(worksheetXml)
   if (!existing || existing[3] === undefined) return worksheetXml
   const body = existing[3] ?? ''
-  if (!/<f[\s/>]/.test(body)) return worksheetXml
+  // The cached value belongs immediately after the formula, before extensions.
+  const formulaAndCache = /^(\s*<f\b[^>]*?(?:\/>|>[\s\S]*?<\/f>))(\s*)(?:<v\b[^>]*?(?:\/>|>[\s\S]*?<\/v>))?/
+  if (!formulaAndCache.test(body)) return worksheetXml
   const attrs = `${existing[1] ?? ''}${existing[2] ?? ''}`
   // Formula results carry t="str" for text, t="e" for an engine-typed error,
   // no t (numeric default) otherwise; booleans use t="b" with 1/0. A null
@@ -2883,9 +2885,8 @@ function patchFormulaCachedValue(
     typeAttr = ' t="str"'
     valueXml = `<v>${escapeCellText(String(value))}</v>`
   }
-  // Keep <f> (and any other children apart from the cached value) verbatim.
-  const kept = body.replace(/<v\b[^>]*\/>|<v\b[^>]*>[\s\S]*?<\/v>/g, '')
-  const replacement = `<c r="${address}"${stripped ? ` ${stripped}` : ''}${typeAttr}>${kept}${valueXml}</c>`
+  const children = body.replace(formulaAndCache, (_match, formula, space) => `${formula}${space}${valueXml}`)
+  const replacement = `<c r="${address}"${stripped ? ` ${stripped}` : ''}${typeAttr}>${children}</c>`
   return worksheetXml.replace(cellPattern, () => replacement)
 }
 

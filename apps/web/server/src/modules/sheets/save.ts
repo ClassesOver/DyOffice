@@ -7,6 +7,7 @@ import type { XlsxMutationPlan } from '../../../../worker/src/native/xlsx.ts'
 
 export type SheetsPlanner = (bytes: Buffer, sheets: readonly { id: string; name: string }[], request: unknown, signal?: AbortSignal) => Promise<XlsxMutationPlan>
 export type SheetsWorkbookPlanner = (bytes: Buffer, request: unknown, signal?: AbortSignal) => Promise<XlsxMutationPlan>
+export type SheetsFollowUpPlan = (source: Buffer, edited: Buffer, signal?: AbortSignal) => Promise<XlsxMutationPlan | undefined>
 export interface SheetsSaveNative {
   inspect(input: Uint8Array, signal?: AbortSignal): Promise<unknown>
   savePlan(input: Uint8Array, plan: XlsxMutationPlan, signal?: AbortSignal): Promise<{ bytes: Buffer }>
@@ -16,8 +17,8 @@ export type SheetsExportInput = Omit<SheetsSaveInput, 'request'> & { phases: unk
 
 /** Prepare the normal T06 upload. The browser then commits it using the same
  * idempotent receipt/reconciliation protocol used by the other editors. */
-export function createSheetsSaveService({ files, leases, revisions, native, plan, planFromWorkbook, maxConcurrent = 2 }: {
-  files: FileService; leases: LeaseService; revisions: RevisionService; native: SheetsSaveNative; plan: SheetsPlanner; planFromWorkbook?: SheetsWorkbookPlanner; maxConcurrent?: number
+export function createSheetsSaveService({ files, leases, revisions, native, plan, planFromWorkbook, planAfterSave, maxConcurrent = 2 }: {
+  files: FileService; leases: LeaseService; revisions: RevisionService; native: SheetsSaveNative; plan: SheetsPlanner; planFromWorkbook?: SheetsWorkbookPlanner; planAfterSave?: SheetsFollowUpPlan; maxConcurrent?: number
 }) {
   if (!Number.isSafeInteger(maxConcurrent) || maxConcurrent < 1 || maxConcurrent > 8) throw new Error('Invalid sheets concurrency')
   let active = 0
@@ -66,7 +67,10 @@ export function createSheetsSaveService({ files, leases, revisions, native, plan
         signal?.throwIfAborted()
         const mutation = await planDraft(bytes, input.request, signal)
         signal?.throwIfAborted()
-        const saved = await native.savePlan(bytes, mutation, signal)
+        let saved = await native.savePlan(bytes, mutation, signal)
+        signal?.throwIfAborted()
+        const followUp = await planAfterSave?.(bytes, saved.bytes, signal)
+        if (followUp) saved = await native.savePlan(saved.bytes, followUp, signal)
         signal?.throwIfAborted()
         // Staging checks current owner/session, head and lease again after all
         // expensive work. The ordinary commit repeats those checks atomically.
@@ -75,7 +79,10 @@ export function createSheetsSaveService({ files, leases, revisions, native, plan
         await files.receiveUpload(token, uploadId, saved.bytes)
         signal?.throwIfAborted()
         await leases.renewLease(token, fileId, { editorId: input.editorId, leaseEpoch: input.leaseEpoch })
-        return { uploadId, touchedEntries: [...mutation.replaced.keys(), ...mutation.added.keys(), ...mutation.addedBinary.keys(), ...mutation.removedEntries], baseRevision: input.baseRevision, leaseEpoch: input.leaseEpoch, sha256: createHash('sha256').update(saved.bytes).digest('hex'), size: saved.bytes.length }
+        const touchedEntries = [...new Set([mutation, ...(followUp ? [followUp] : [])].flatMap(plan =>
+          [...plan.replaced.keys(), ...plan.added.keys(), ...plan.addedBinary.keys(), ...plan.removedEntries],
+        ))]
+        return { uploadId, touchedEntries, baseRevision: input.baseRevision, leaseEpoch: input.leaseEpoch, sha256: createHash('sha256').update(saved.bytes).digest('hex'), size: saved.bytes.length }
       } catch (error) {
         // Cancellation never publishes a revision. Abandoned uploads also have
         // the existing T06 expiry/sweep when revocation prevents cleanup here.
