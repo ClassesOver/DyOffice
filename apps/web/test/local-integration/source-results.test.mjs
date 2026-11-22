@@ -126,7 +126,7 @@ test('save is durable across owner sessions, idempotent with frozen receipt and 
   assert.deepEqual(await rowCounts(f), [{ state: 'saved', count: 1, bytes }])
   const other = await f.results.capture(f.alice.token, s, queryHash)
   await assert.rejects(f.results.save(f.alice.token, { ...command, resultId: other.resultId }), status(409))
-  await assert.rejects(f.results.save(f.alice.token, { resultId: other.resultId, name: 'Over quota', commandId: randomUUID() }), status(413))
+  await assert.rejects(f.results.save(f.alice.token, { resultId: other.resultId, name: 'Over quota', commandId: randomUUID() }), error => error.statusCode === 413 && error.code === 'RESULT_QUOTA_EXCEEDED')
   await f.sources.remove(f.alice.token, 'metrics', { expectedVersion: 1 })
   const page = await f.results.read(login.token, { resultId: saved.resultId })
   assert.deepEqual(page.rows, s.rows); assert.equal(page.artifact.state, 'saved')
@@ -142,6 +142,14 @@ test('save is durable across owner sessions, idempotent with frozen receipt and 
   await assert.rejects(f.results.read(f.alice.token, { resultId: other.resultId }), status(404))
   // Data JSONB has an independent logical quota, never T05 object physical bytes.
   assert.equal((await f.scoped('SELECT COALESCE(sum(stored_bytes),0)::integer AS bytes FROM storage_accounts')).rows[0].bytes, 0)
+  // A full quota names its cause, and the owner (only) can free it by removing a saved result.
+  await assert.rejects(f.results.remove(f.bob.token, { resultId: saved.resultId }), status(404))
+  await f.results.remove(login.token, { resultId: saved.resultId })
+  await assert.rejects(f.results.remove(login.token, { resultId: saved.resultId }), status(404))
+  assert.equal((await f.results.list(login.token)).items.length, 0)
+  await assert.rejects(f.results.save(login.token, command), status(404))
+  // The saved quota is free again (saving a pending result needs the source, deleted above).
+  assert.equal((await rowCounts(f)).some(row => row.state === 'saved'), false)
 })
 
 test('parallel capture and save serialize workspace count/byte quotas, duplicate command makes one artifact', async t => {

@@ -29,6 +29,11 @@ export function registerWorkspaceSourceToolRoutes(app: FastifyInstance, { tools,
       return results.read(cookies(request).session ?? '', { resultId: (request.params as {id: string}).id,
         ...(query.offset === undefined ? {} : { offset: number(query.offset) }), ...(query.limit === undefined ? {} : { limit: number(query.limit) }) })
     })
+    api.delete('/api/v1/workspace/data-results/:id', async (request, reply) => {
+      object(request.query, [])
+      await results.remove(cookies(request).session ?? '', { resultId: (request.params as {id: string}).id })
+      return reply.code(204).send()
+    })
     api.get('/api/v1/workspace/data-results/:id/content', async (request, reply) => {
       object(request.query, [])
       const output = await results.download(cookies(request).session ?? '', (request.params as {id: string}).id)

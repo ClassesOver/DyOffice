@@ -10,6 +10,7 @@ import { contentHash, executionFor, object, positiveVersion, secretHash, sourceC
 import { queryHttpSource } from './http.ts'
 import { querySqlSource, type SqlRows } from './sql.ts'
 import { createQuerySnapshot, fitSnapshotRows } from './provenance.ts'
+import { withAssistantErrorCode } from '../../../../../../packages/web-contracts/src/assistant-errors.ts'
 
 type Row = Record<string, any>
 const userSchemaFilter = "LOWER(table_schema) NOT IN ('information_schema','mysql','sys','performance_schema') AND SUBSTRING(LOWER(table_schema), 1, 3) <> 'pg_'"
@@ -177,7 +178,7 @@ export function createSourceService({ transactions, credentialKeys = '', egressT
       })
       const {row,secret,policy} = prepared
       const connectedDatabase = parseSourceDsn(row.kind,secret).database
-      if (row.kind !== 'postgres' && directory !== undefined && directory !== connectedDatabase) throw sourceError(403)
+      if (row.kind !== 'postgres' && directory !== undefined && directory !== connectedDatabase) throw withAssistantErrorCode(sourceError(403), 'SOURCE_SCOPE_DENIED')
       // Only fixed metadata queries run here. The optional filter names one
       // validated directory; no query, DSN or account comes from this request.
       const quote = (name: string) => "'" + name.replaceAll("'", "''") + "'"
@@ -212,7 +213,7 @@ export function createSourceService({ transactions, credentialKeys = '', egressT
         const allowed: string[] | undefined = prepared.row.config.allowedTables
           ?.map((table: string) => table.includes('.') ? table : `${database}.${table}`).filter(schemaAllowed)
         const requested = request.table === undefined ? undefined : request.table.includes('.') ? request.table : `${database}.${request.table}`
-        if (requested !== undefined && (!schemaAllowed(requested) || (allowed ? !allowed.includes(requested) : /^(?:pg_|information_schema\.|mysql\.|sys\.|performance_schema\.)/i.test(requested)))) throw sourceError(403)
+        if (requested !== undefined && (!schemaAllowed(requested) || (allowed ? !allowed.includes(requested) : /^(?:pg_|information_schema\.|mysql\.|sys\.|performance_schema\.)/i.test(requested)))) throw withAssistantErrorCode(sourceError(403), 'SOURCE_SCOPE_DENIED')
         const literal = (value: string) => "'" + value.replaceAll("'", "''") + "'"
         const predicate = (table: string) => {
           const dot = table.indexOf('.')

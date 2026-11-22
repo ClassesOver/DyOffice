@@ -59,3 +59,25 @@ test('new session key clears old preview and late download cannot start after un
  expect(host.textContent).not.toContain('收入快照');expect(createUrl).not.toHaveBeenCalled()
  vi.restoreAllMocks()
 })
+
+test('deleting a saved result asks first, calls DELETE once and frees the row; cancelling changes nothing', async () => {
+ const calls: {path: string; method?: string}[] = []
+ const request = async (path: string, method?: string): Promise<unknown> => {
+  calls.push({path,method})
+  if (method === 'DELETE') return undefined
+  return {items:[artifact],nextCursor:null}
+ }
+ const client=createSourceResultsClient(request as Parameters<typeof createSourceResultsClient>[0])
+ const host=document.createElement('div');document.body.append(host);const root=createRoot(host);roots.push(root)
+ await act(async()=>root.render(h(WorkspaceDataResults,{client,onClose(){}})))
+ const remove=()=>host.querySelector<HTMLButtonElement>(`[aria-label="删除结果 ${artifact.name}"]`)
+ const confirm=vi.spyOn(window,'confirm').mockReturnValueOnce(false).mockReturnValueOnce(true)
+ await act(async()=>remove()!.click())
+ expect(calls.some(call=>call.method==='DELETE')).toBe(false)
+ expect(remove()).not.toBeNull()
+ await act(async()=>remove()!.click())
+ expect(confirm).toHaveBeenCalledTimes(2)
+ expect(calls.filter(call=>call.method==='DELETE')).toEqual([{path:`/api/v1/workspace/data-results/${resultId}`,method:'DELETE'}])
+ expect(remove()).toBeNull()
+ expect(host.querySelector('[role=status]')?.textContent).toContain('已删除')
+})

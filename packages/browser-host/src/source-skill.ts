@@ -1,5 +1,6 @@
 import type { AgentSkill } from '../../agent-core/src/skill.ts'
 import { SOURCE_AGENT_TOOLS, type SourceToolName } from '../../web-contracts/src/source-tools.ts'
+import { isAssistantErrorCode, type AssistantErrorCode } from '../../web-contracts/src/assistant-errors.ts'
 
 type Request = <T>(path: string, method?: string, body?: unknown) => Promise<T>
 const names = new Map(SOURCE_AGENT_TOOLS.map(tool => [tool.name.replaceAll('.', '_'), tool.name as SourceToolName]))
@@ -18,12 +19,31 @@ export function withDescribeHint(name: SourceToolName, args: Record<string, unkn
   return { ...(result as object), hint: `No columns were found for "${args.table}" in the default schema. Call sources_describe without a table to list tables, then pass the schema-qualified name it returns (for example sales.${args.table}).` }
 }
 
-/** Status-specific recovery advice so the model rewrites the query instead of retrying it unchanged. */
-export function sourceFailure(name: SourceToolName, status: number | undefined): string {
-  if (name === 'sources.query' && status === 504) return "The query exceeded this connection's statement timeout and returned nothing. Do not retry the same SQL. Push the work into a cheaper query: aggregate with GROUP BY instead of fetching rows, filter to a shorter time range on an indexed column, select fewer columns, avoid functions on filtered columns, and pre-aggregate before joins. If a full-history answer is required, split it into smaller time ranges and combine the aggregated results. The owner can raise the timeout on the connection's advanced settings."
-  if (name === 'sources.query' && status === 502) return 'The source returned an unusable result (for example an unsupported column type) and nothing was captured. Cast unusual columns to text or numbers in SQL, or select fewer columns, then retry once; otherwise explain the failure.'
+const POLICY_ADVICE = 'The read-only policy rejected the SQL: only one SELECT or WITH ... SELECT over the allowed tables is accepted; no writes, multiple statements, system catalogs, session settings, unlisted functions or column alias lists such as AS g(x). Rewrite it as one plain SELECT and retry once.'
+const DATABASE_ADVICE = 'The database rejected the statement (unknown table, column or function, syntax or type error). Check every name against sources_describe, cast types explicitly and retry once with the corrected SELECT.'
+const TIMEOUT_ADVICE = "The query exceeded this connection's statement timeout and returned nothing. Do not retry the same SQL. Push the work into a cheaper query: aggregate with GROUP BY instead of fetching rows, filter to a shorter time range on an indexed column, select fewer columns, avoid functions on filtered columns, and pre-aggregate before joins. If a full-history answer is required, split it into smaller time ranges and combine the aggregated results. The owner can raise the timeout on the connection's advanced settings."
+
+/** Advice per public error code (assistant-errors.ts); the status is only a fallback for older servers. */
+const CODE_ADVICE: Partial<Record<AssistantErrorCode, string>> = {
+  SQL_POLICY_REJECTED: POLICY_ADVICE,
+  SQL_DATABASE_ERROR: DATABASE_ADVICE,
+  SOURCE_TIMEOUT: TIMEOUT_ADVICE,
+  SOURCE_RESULT_UNUSABLE: 'The source returned an unusable result (for example an unsupported column type) and nothing was captured. Cast unusual columns to text or numbers in SQL, or select fewer columns, then retry once; otherwise explain the failure.',
+  SOURCE_SCOPE_DENIED: "This table or schema is outside the connection's allowed scope. Use only tables returned by sources_describe; do not try other names. If the user needs it, tell them the connection owner can widen the scope.",
+  SOURCE_READONLY_REQUIRED: 'The connection account is not verified read-only, so queries are refused. Do not retry; tell the user the connection owner must use a dedicated read-only account.',
+  SOURCE_TARGET_NOT_APPROVED: 'The database host is not an approved target. Do not retry; tell the user an administrator must approve this connection target.',
+  SOURCE_TLS_UNSUPPORTED: 'The database does not support the configured TLS mode. Do not retry; tell the user an administrator must check the TLS setting of this target.',
+  SOURCE_UNAVAILABLE: 'The data source is temporarily unavailable. Wait briefly and retry once; if it fails again, tell the user.',
+  RESULT_QUOTA_EXCEEDED: 'The workspace result storage is full. Tell the user to delete saved data results they no longer need (Home, data results), then retry.',
+}
+
+/** Recovery advice so the model rewrites the query instead of retrying it unchanged. */
+export function sourceFailure(name: SourceToolName, status: number | undefined, code?: unknown): string {
+  if (isAssistantErrorCode(code) && CODE_ADVICE[code] && (name === 'sources.query' || !code.startsWith('SQL_'))) return CODE_ADVICE[code]!
+  if (name === 'sources.query' && status === 504) return TIMEOUT_ADVICE
+  if (name === 'sources.query' && status === 502) return CODE_ADVICE.SOURCE_RESULT_UNUSABLE!
   if (name === 'sources.query' && status === 400) return 'The SQL was rejected, either by the read-only policy (only one SELECT or WITH ... SELECT over the allowed tables; no writes, multiple statements, system catalogs, session settings, unlisted functions or column alias lists such as AS g(x)) or by the database (unknown table, column or function, syntax or type error). Check every name against sources_describe, alias columns in the SELECT list, prefer plain GROUP BY over generated series, and retry once with the corrected SELECT.'
-  if (name === 'sources.query' && status === 403) return 'The source refused this query: the table or schema is outside the connection\'s allowed scope or the account is not read-only. Use only tables returned by sources_describe; do not try other names.'
+  if (name === 'sources.query' && status === 403) return CODE_ADVICE.SOURCE_SCOPE_DENIED!
   return GENERIC_FAILURE
 }
 
@@ -60,7 +80,7 @@ export function createWorkspaceSourceSkill(request: Request, options?: { tools: 
       } catch (error) {
         return { output: name === 'sources.save_result'
           ? 'The result save was not confirmed. Do not claim it was saved. Verify permission and retry only the same commandId, resultId and name.'
-          : sourceFailure(name, (error as { status?: number } | undefined)?.status), isError: true, summary: call.name }
+          : sourceFailure(name, (error as { status?: number } | undefined)?.status, (error as { code?: unknown } | undefined)?.code), isError: true, summary: call.name }
       }
     },
   }

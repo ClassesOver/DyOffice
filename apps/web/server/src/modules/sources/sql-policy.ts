@@ -2,7 +2,7 @@ import sqlParser from 'node-sql-parser'
 import type { SqlSourceKind } from '../../security/egress.ts'
 
 const parser = new sqlParser.Parser()
-const invalid = () => Object.assign(new Error('Only an approved read-only SELECT is allowed'), { statusCode: 400 })
+const invalid = () => Object.assign(new Error('Only an approved read-only SELECT is allowed'), { statusCode: 400, code: 'SQL_POLICY_REJECTED' as const })
 const functions = new Set(['abs','ceil','ceiling','floor','round','mod','power','sqrt','lower','upper','length','char_length','concat','concat_ws','substring','substr','trim','ltrim','rtrim','replace','coalesce','nullif','ifnull','greatest','least','current_date','current_timestamp','date_trunc','date_part','date_format','year','month','day','date','extract','generate_series'])
 const extractFields = new Set(['YEAR','QUARTER','MONTH','WEEK','DAY','DOW','ISODOW','DOY','HOUR','MINUTE','SECOND','EPOCH'])
 const intervalUnits = new Set(['YEAR','QUARTER','MONTH','WEEK','DAY','HOUR','MINUTE','SECOND'])
@@ -15,7 +15,7 @@ const selectKeys = new Set(['type','with','options','distinct','columns','into',
  * grant syntaxes. Unsupported StarRocks privilege output is an unverified role,
  * never a reason to silently skip target-side privilege validation. */
 export function validateReadOnlyGrants(grants: readonly string[], database: string): void {
-  const denied = () => Object.assign(new Error('Source role is not verified read-only'), { statusCode: 403 })
+  const denied = () => Object.assign(new Error('Source role is not verified read-only'), { statusCode: 403, code: 'SOURCE_READONLY_REQUIRED' as const })
   if (!Array.isArray(grants) || !grants.length || grants.length > 256) throw denied()
   let select = false
   for (const grant of grants) {

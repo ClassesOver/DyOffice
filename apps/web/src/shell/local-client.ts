@@ -46,7 +46,7 @@ export function createLocalShellClient(send:typeof fetch=fetch) {
      :response.status===409&&path.startsWith('/api/v1/workspace/folders')?'文件夹操作冲突：请检查重名、非空目录或移动目标，再刷新重试。'
      :response.status===400&&path.startsWith('/api/v1/workspace/folders')?'文件夹名称或移动目标无效，请检查名称长度、路径符号及目标目录。'
      :value?.message||value?.title||value?.error||'请求失败'
-    throw Object.assign(new Error(message),{status:response.status})
+    throw Object.assign(new Error(message),{status:response.status,...(typeof value?.code==='string'&&/^[A-Z][A-Z0-9_]{2,63}$/.test(value.code)?{code:value.code}:{})})
    }
    return value as T
   }catch(error){if((error as {status?:number})?.status!==401)assertCurrent(stamp);signal?.throwIfAborted();throw error}
