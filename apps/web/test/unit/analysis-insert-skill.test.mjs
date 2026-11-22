@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { imageDimensions, literalImage, prepareImageContent, fitInside, base64Bytes } from '../../../../packages/browser-host/src/analysis-image.ts'
-import { queryResultTable } from '../../../../packages/browser-host/src/query-result-content.ts'
+import { imageDimensions, literalImage, prepareImageContent, fitInside, base64Bytes, imageAltText } from '../../../../packages/browser-host/src/analysis-image.ts'
+import { queryResultTable, QUERY_RESULT_MAX_BODY_ROWS } from '../../../../packages/browser-host/src/query-result-content.ts'
 import { createAnalysisInsertSkill, ANALYSIS_INSERT_TOOLS } from '../../../../packages/browser-host/src/analysis-insert-skill.ts'
 import { assistantToolsForFormat } from '../../../../packages/web-contracts/src/assistant.ts'
 
@@ -103,7 +103,7 @@ test('insert_data_result reads the frozen snapshot from the server and applies i
   assert.equal(out.isError, undefined, out.output)
   assert.equal(out.mutated, true)
   assert.match(out.output, /not saved yet/)
-  assert.deepEqual(h.requests, [`/api/v1/workspace/data-results/${RESULT.toUpperCase()}?offset=0&limit=501`])
+  assert.deepEqual(h.requests, [`/api/v1/workspace/data-results/${RESULT.toUpperCase()}?offset=0&limit=496`])
   assert.deepEqual(h.applied[0].artifact, { artifactId: RESULT, sha256: SHA })
   assert.deepEqual(h.applied[0].content.rows[1], ['2026-01', '30', 'TRUE'])
   const bad = await h.skill.executeTool({ id: '2', name: ANALYSIS_INSERT_TOOLS.data, input: { resultId: 'not-a-uuid' } })
@@ -135,4 +135,16 @@ test('a document change during insertion, or no editable target, is reported and
   assert.match(out.output, /No editable document/)
   const pdf = harness(); pdf.swap({ fileId: 'f', format: 'pdf' })
   assert.equal((await pdf.skill.executeTool({ id: '3', name: ANALYSIS_INSERT_TOOLS.data, input: { resultId: RESULT } })).isError, true)
+})
+
+test('the advertised maxRows always fits a Word or Excel table, and file names become safe alt text', () => {
+  const skill = harness().skill
+  const max = skill.tools.find(tool => tool.name === ANALYSIS_INSERT_TOOLS.data).inputSchema.properties.maxRows.maximum
+  assert.equal(max, QUERY_RESULT_MAX_BODY_ROWS)
+  const many = Array.from({ length: 600 }, (_, i) => ({ month: String(i), paid: i, closed: false }))
+  for (const format of ['docx', 'xlsx', 'pptx']) assert.equal(queryResultTable([page(many, { totalRows: 600 })], { maxRows: max }, format).rows.slice(1, 1 + max).length, max, format)
+  assert.throws(() => queryResultTable([page(many, { totalRows: 600 })], { maxRows: max + 1 }, 'docx'), /Too large/)
+  assert.equal(imageAltText('chart\tQ1\u0000.png'), 'chart Q1 .png')
+  assert.equal(imageAltText('x'.repeat(5000)).length, 4096)
+  assert.doesNotThrow(() => prepareImageContent(png, 'image/png', imageAltText('chart\tQ1.png')))
 })

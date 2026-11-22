@@ -7,9 +7,10 @@ import type {
   WorkspaceSourceResultPage, WorkspaceSourceResultDownload,
 } from '../../../../../../packages/web-contracts/src/source-results.ts'
 import { createQuerySnapshot } from './provenance.ts'
+import { SQL_RESULT_MAX_BYTES } from './config.ts'
 
 const error = (statusCode = 400) => Object.assign(new Error('Workspace source result unavailable'), { statusCode })
-const hardLimits = Object.freeze({ maxSavedBytes: 64 * 1024 * 1024, maxSavedResults: 64, maxPendingBytes: 8 * 1024 * 1024, maxPendingResults: 8, maxSnapshotBytes: 1_000_000, pendingTtlMs: 15 * 60_000 })
+const hardLimits = Object.freeze({ maxSavedBytes: 256 * 1024 * 1024, maxSavedResults: 64, maxPendingBytes: 32 * 1024 * 1024, maxPendingResults: 8, maxSnapshotBytes: SQL_RESULT_MAX_BYTES, pendingTtlMs: 15 * 60_000 })
 export interface WorkspaceSourceResultsOptions {
   transactions: PrincipalTransactions
   maxSavedBytes?: number

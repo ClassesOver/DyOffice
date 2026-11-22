@@ -37,16 +37,19 @@ function ipv6Groups(address: string): number[] {
 }
 
 /**
- * True only for IPv6 global unicast (2000::/3) outside documentation
- * (2001:db8::/32), Teredo (2001::/32) and 6to4 (2002::/16), whose embedded or
- * relayed IPv4 targets cannot be checked here. Loopback, unique-local,
- * link-local, multicast, IPv4-mapped and NAT64 addresses all fall outside 2000::/3.
+ * True only for IPv6 global unicast (2000::/3) outside the IETF protocol
+ * assignments block 2001::/23 (Teredo, benchmarking, ORCHID, AMT and others),
+ * documentation (2001:db8::/32 and 3fff::/20, RFC 9637) and 6to4 (2002::/16),
+ * whose embedded or relayed IPv4 targets cannot be checked here. Loopback,
+ * unique-local, link-local, multicast, IPv4-mapped and NAT64 addresses all fall
+ * outside 2000::/3.
  */
 export function publicIpv6(address: string): boolean {
   if (isIP(address.split('%')[0]) !== 6) return false
   const [first, second] = ipv6Groups(address)
   if ((first & 0xe000) !== 0x2000) return false
-  if (first === 0x2001 && (second === 0x0db8 || second === 0)) return false
+  if (first === 0x2001 && (second < 0x0200 || second === 0x0db8)) return false
+  if (first === 0x3fff && second < 0x1000) return false
   return first !== 0x2002
 }
 

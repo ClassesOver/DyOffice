@@ -13,7 +13,15 @@ const generationBody = { type: 'integer', minimum: 0, maximum: Number.MAX_SAFE_I
 // Ordinary op batches stay small; one analysis picture (addPicture with a data
 // URL, at most 5 MiB like the media route) may ride in the same atomic batch
 // as its provenance text box.
-const SLIDES_APPLY_BODY_LIMIT = 256 * 1024 + 4096 + 7 * 1024 * 1024
+const SLIDES_APPLY_ORDINARY_LIMIT = 256 * 1024
+const SLIDES_APPLY_BODY_LIMIT = SLIDES_APPLY_ORDINARY_LIMIT + 4096 + 7 * 1024 * 1024
+/** The larger body is only for one analysis picture (plus its provenance text box); ordinary op batches keep the old limit. */
+export function assertApplySize(ops: unknown[]): void {
+  if (Buffer.byteLength(JSON.stringify(ops)) <= SLIDES_APPLY_ORDINARY_LIMIT) return
+  const pictures = ops.filter(op => (op as { op?: unknown } | null)?.op === 'addPicture').length
+  if (pictures === 1 && ops.length <= 2) return
+  throw Object.assign(new Error('Request body is too large'), { statusCode: 413 })
+}
 
 export function registerSlidesRoutes(app: FastifyInstance, slides: SlidesSessions, sessions: SessionService, csrf: ReturnType<typeof createCsrfService>, saves?: SlidesSaveService) {
   app.register(async api => {
@@ -44,7 +52,7 @@ export function registerSlidesRoutes(app: FastifyInstance, slides: SlidesSession
     readRoute<{revision:string;generation:number;index:number}>('/api/v1/files/:id/slides/run-links', {...revisionBody,generation:generationBody,index:{type:'integer',minimum:0,maximum:1048575}}, (token,id,body,signal)=>slides.runLinks(token,id,body,signal))
     readRoute<{revision:string;generation:number}>('/api/v1/files/:id/slides/layouts', {...revisionBody,generation:generationBody}, (token,id,body,signal)=>slides.layouts(token,id,body,signal))
     readRoute<{revision:string;generation:number}>('/api/v1/files/:id/slides/slides', {...revisionBody,generation:generationBody}, (token,id,body,signal)=>slides.slides(token,id,body,signal))
-    route<{revision:string;generation:number;ops:unknown[];isolation?:'atomic'|'per_op';dryRun?:boolean}>('/api/v1/files/:id/slides/apply', {...revisionBody,generation:generationBody,ops:{type:'array',minItems:1,maxItems:100},isolation:{type:'string',enum:['atomic','per_op']},dryRun:{type:'boolean'}}, (token,id,body,signal)=>slides.apply(token,id,body,signal), SLIDES_APPLY_BODY_LIMIT, ['isolation','dryRun'])
+    route<{revision:string;generation:number;ops:unknown[];isolation?:'atomic'|'per_op';dryRun?:boolean}>('/api/v1/files/:id/slides/apply', {...revisionBody,generation:generationBody,ops:{type:'array',minItems:1,maxItems:100},isolation:{type:'string',enum:['atomic','per_op']},dryRun:{type:'boolean'}}, (token,id,body,signal)=>{assertApplySize(body.ops);return slides.apply(token,id,body,signal)}, SLIDES_APPLY_BODY_LIMIT, ['isolation','dryRun'])
     route<{revision:string;generation:number;slide:number;sourceId:string;patch:Record<string,unknown>;confirmed?:boolean}>('/api/v1/files/:id/slides/chart-edit', {
       ...revisionBody,generation:generationBody,slide:{type:'integer',minimum:0,maximum:1048575},sourceId:{type:'string',minLength:1,maxLength:256},confirmed:{type:'boolean'},
       patch:{type:'object',additionalProperties:false,properties:{kind:{type:'string',enum:['bar','bar3D','barStacked','barPercentStacked','barH','line','area','pie','pie3D','doughnut','scatter','radar','comboBarLine']},barDir:{type:'string',enum:['col','bar']},categories:{type:'array',maxItems:1000,items:{type:'string',maxLength:1024}},series:{type:'array',maxItems:100,items:{type:'object',additionalProperties:false,required:['name','values'],properties:{name:{type:'string',maxLength:1024},values:{type:'array',maxItems:1000,items:{type:'number'}}}}},title:{type:'string',maxLength:4096},colorScheme:{type:'string',maxLength:32},legendPos:{type:'string',enum:['b','t','r','l','none']},dataLabels:{type:'boolean'},gridlines:{type:'boolean'},catAxisTitle:{type:'string',maxLength:1024},valAxisTitle:{type:'string',maxLength:1024},gapWidthPct:{type:'number',minimum:0,maximum:500},holeSizePct:{type:'number',minimum:0,maximum:100},switchRowCol:{type:'boolean'},pointColors:{type:'object',maxProperties:100,additionalProperties:{type:'object',maxProperties:100,additionalProperties:{anyOf:[{type:'string',pattern:'^#[0-9A-Fa-f]{6}$'},{type:'null'}]}}}}},

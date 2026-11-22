@@ -27,6 +27,10 @@ function cellText(value:QueryCell):string {
  return value.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g,'')
 }
 
+/** Header row plus the provenance notes that docx/xlsx tables carry as rows. */
+export const QUERY_RESULT_NOTE_ROWS = 4
+/** Body rows that always fit the insert limits alongside the header and notes. */
+export const QUERY_RESULT_MAX_BODY_ROWS = limits.maxRows - 1 - QUERY_RESULT_NOTE_ROWS
 /**
  * Turn frozen query-result pages into literal table content. Values are taken
  * from the server's frozen snapshot, never from model text. The table carries a
@@ -48,7 +52,7 @@ export function queryResultTable(pages:readonly QueryResultPage[],selection:Quer
  if(!Number.isInteger(wanted)||wanted<1)return fail('maxRows must be a positive integer')
  const rows=all.slice(0,wanted)
  const omitted=first.totalRows-rows.length
- const notes=[
+ const notes=[ // QUERY_RESULT_NOTE_ROWS lines
   `Source: ${first.artifact.sourceId??'unknown'}${first.artifact.sourceVersion!==undefined?' v'+first.artifact.sourceVersion:''}; frozen result ${first.artifact.resultId}; SHA-256 ${first.sha256}`,
   `Rows inserted: ${rows.length} of ${first.totalRows}${omitted>0?` (${omitted} not inserted)`:''}`,
   first.sourceTruncated?'TRUNCATED at the source query limit: not the full dataset; no full-population conclusion is established.':'Source truncation not reported.',

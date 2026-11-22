@@ -285,3 +285,27 @@ it('AI-created DOCX reports failed or empty body saves as failures', async () =>
  expect(await applyAiDocContent(ctx,{title:'Report',html:'<p>Unsaved body</p>'})).toBe(false)
  expect(await applyAiDocContent(ctx,{title:'Report',html:''})).toBe(false)
 })
+
+it('an analysis image lands after the cursor paragraph with its provenance right below it', async () => {
+ const {editor,ctx}=await fixture(false)
+ const {docsAnalysisEditor}=await import('../src/renderer/analysis-insert')
+ const {prepareImageContent,base64Bytes}=await import('../../../packages/browser-host/src/analysis-image')
+ const RealImage=globalThis.Image
+ class LoadedImage { naturalWidth=1; naturalHeight=1; onload?:()=>void; onerror?:()=>void; set src(_:string){queueMicrotask(()=>this.onload?.())} }
+ ;(globalThis as {Image:unknown}).Image=LoadedImage
+ try {
+  editor.commands.setTextSelection(2) // inside the first paragraph
+  const blocks=editor.state.doc.childCount
+  const native=docsAnalysisEditor(editor,()=>ctx,()=>false,()=>{})
+  const png=base64Bytes('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==')
+  const content={...prepareImageContent(png,'image/png','Monthly chart'),provenance:['Source: sales v1']}
+  expect(await native.captureAnalysis().apply(content,()=>true)).toBe(true)
+  const doc=editor.state.doc
+  expect(doc.childCount).toBe(blocks+2)
+  expect(doc.child(0).textContent).toContain('Unchanged opening paragraph.')
+  expect(doc.child(1).textContent).toBe('')
+  expect(JSON.stringify(doc.child(1).toJSON())).toContain('Monthly chart')
+  expect(doc.child(2).textContent).toContain('Source: sales v1')
+  expect(doc.lastChild!.textContent).toContain('Unchanged closing paragraph.')
+ } finally { (globalThis as {Image:unknown}).Image=RealImage }
+})

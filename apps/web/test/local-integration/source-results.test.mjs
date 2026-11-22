@@ -226,7 +226,7 @@ test('capture rejects forged snapshots, oversized snapshots, raw query text and 
   await assert.rejects(f.results.capture(f.alice.token, { ...s, rows: [{ ...s.rows[0], zz_amount: 'wrong type' }] }, queryHash), status(400))
   await assert.rejects(f.results.capture(f.alice.token, { ...s, secret: 'dsn' }, queryHash), status(400))
   await assert.rejects(f.results.capture(f.alice.token, s, 'SELECT * FROM private_table'), status(400))
-  await assert.rejects(f.results.capture(f.alice.token, snapshot({ count: 1, text: 'x'.repeat(1_000_000) }), queryHash), status(413))
+  await assert.rejects(f.results.capture(f.alice.token, snapshot({ count: 1, text: 'x'.repeat(4_000_000) }), queryHash), status(413))
   assert.deepEqual(await rowCounts(f), [])
   const captured = await f.results.capture(f.alice.token, s, queryHash)
   for (const name of ['../escape', '/tmp/x', 'a\\b', '..', 'line\nbreak', 'NUL', 'bad:name', 'x'.repeat(256)]) await assert.rejects(f.results.save(f.alice.token, { resultId: captured.resultId, name, commandId: randomUUID() }), status(400))
@@ -239,7 +239,7 @@ test('capture rejects forged snapshots, oversized snapshots, raw query text and 
 
 test('limits are downward-configurable, capture detaches evidence, and runtime cannot rewrite its snapshot', async t => {
   const f = await fixture(t), s = snapshot({ count: 1 }), bytes = Buffer.byteLength(canonical(s))
-  for (const options of [{ maxSavedBytes: 64 * 1024 * 1024 + 1 }, { maxSavedResults: 65 }, { maxPendingBytes: 8 * 1024 * 1024 + 1 }, { maxPendingResults: 9 }, { maxSnapshotBytes: 1_000_001 }, { pendingTtlMs: 900_001 }, { maxPendingResults: 0 }]) {
+  for (const options of [{ maxSavedBytes: 256 * 1024 * 1024 + 1 }, { maxSavedResults: 65 }, { maxPendingBytes: 32 * 1024 * 1024 + 1 }, { maxPendingResults: 9 }, { maxSnapshotBytes: 4_000_001 }, { pendingTtlMs: 900_001 }, { maxPendingResults: 0 }]) {
     assert.throws(() => createWorkspaceSourceResults({ transactions: f.transactions, ...options }), /Invalid workspace source result limit/)
   }
   const small = createWorkspaceSourceResults({ transactions: f.transactions, maxSnapshotBytes: bytes - 1 })

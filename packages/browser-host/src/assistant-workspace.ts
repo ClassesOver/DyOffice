@@ -26,6 +26,12 @@ export interface TeamTask {
   initiator: 'office' | 'user' | 'external'
   kind: 'harness' | 'channel'
 }
+/** A one-shot request to reveal a task; each view consumes a given id once, so later tab or filter changes do not steal focus. */
+export interface WorkspaceFocusRequest {
+  id: number
+  view: 'chat' | 'tasks'
+  task: string
+}
 export function createAssistantWorkspace(options: {
   agents: readonly HarnessDescriptor[]
   coding?:
@@ -46,7 +52,9 @@ export function createAssistantWorkspace(options: {
     notice = '',
     disposed = false
   let view: 'chat' | 'tasks' = 'chat',
-    focusedTask = ''
+    focusedTask = '',
+    focusRequest: WorkspaceFocusRequest | null = null,
+    focusRequests = 0
   const directChannelTasks = new Set<string>()
   const listeners = new Set<() => void>()
   const notify = () => {
@@ -130,6 +138,7 @@ export function createAssistantWorkspace(options: {
       teamTasks: teamTasks(),
       view,
       focusedTask,
+      focusRequest,
     }),
     subscribe(listener: () => void) {
       listeners.add(listener)
@@ -145,11 +154,13 @@ export function createAssistantWorkspace(options: {
     openTask(id: string) {
       view = 'tasks'
       focusedTask = id
+      focusRequest = { id: ++focusRequests, view: 'tasks', task: id }
       notify()
     },
     openConversation(id: string) {
       view = 'chat'
       focusedTask = id
+      focusRequest = { id: ++focusRequests, view: 'chat', task: id }
       notify()
     },
     select(id: string) {

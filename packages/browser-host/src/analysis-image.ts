@@ -45,6 +45,10 @@ export function bytesBase64(bytes:Uint8Array):string {
 }
 
 /** Build image content from verified artifact bytes (PNG/JPEG only). */
+/** Alt text from an untrusted label (a model string or a file name): control characters become spaces, then it is trimmed to the cell limit. */
+export function imageAltText(label:string):string {
+ return label.replace(/[\u0000-\u001f\u007f]+/g,' ').replace(/\s+/g,' ').trim().slice(0,limits.maxCellUnits)
+}
 export function prepareImageContent(bytes:Uint8Array,mediaType:string,alt:string,provenance?:readonly string[]):ImageContent {
  if(!(bytes instanceof Uint8Array)||!bytes.byteLength||bytes.byteLength>limits.maxImageBytes||(mediaType!=='image/png'&&mediaType!=='image/jpeg'))return fail()
  const {width,height}=imageDimensions(bytes,mediaType)

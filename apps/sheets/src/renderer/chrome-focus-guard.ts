@@ -24,13 +24,22 @@ interface Bridge {
   setEditCell(param: unknown): void
 }
 
+/** The assistant dock and text-entry controls: where a stolen focus loses the user's keystrokes. */
+const GUARDED = '.copilot, .ai-panel, .ai-dock, input, textarea, select, [contenteditable="true"]'
+
+/**
+ * Only text entry and the assistant keep their focus. Other chrome (ribbon
+ * buttons, menus) is left to its own hand-back logic, which moves focus into
+ * the grid after a command, as Excel does.
+ */
 export function chromeHoldsFocus(active: Element | null, container: Element | null): active is HTMLElement {
   return (
     active instanceof HTMLElement &&
     active !== document.body &&
     active.isConnected &&
     !(container?.contains(active) ?? false) &&
-    !active.closest('#univer-container')
+    !active.closest('#univer-container') &&
+    !!active.closest(GUARDED)
   )
 }
 

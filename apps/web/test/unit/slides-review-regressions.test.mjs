@@ -93,3 +93,12 @@ test('same-hash foreign revision is not adopted as this session commit',async t=
  head='44444444-4444-4444-8444-444444444444';sha=createHash('sha256').update(bytes).digest('hex')
  await assert.rejects(()=>s.apply('a',file,{...input,revision:head,ops:[]}),{statusCode:409});assert.equal(applied,0)
 })
+
+test('large slides apply bodies are accepted only for one analysis picture batch', async () => {
+  const { assertApplySize } = await import('../../server/src/modules/slides/routes.ts')
+  const big = 'x'.repeat(300 * 1024)
+  assert.doesNotThrow(() => assertApplySize([{ op: 'addElement', text: 'small' }]))
+  assert.doesNotThrow(() => assertApplySize([{ op: 'addPicture', bytes: big }, { op: 'addElement', text: 'Source: s' }]))
+  for (const ops of [[{ op: 'addElement', text: big }], [{ op: 'addPicture', bytes: big }, { op: 'addPicture', bytes: 'y' }], [{ op: 'addPicture', bytes: big }, { op: 'a' }, { op: 'b' }]])
+    assert.throws(() => assertApplySize(ops), error => error.statusCode === 413)
+})
