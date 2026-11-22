@@ -30,7 +30,7 @@ for(const native of [false,...(nativePdfDirectory?[true]:[])])test(`${native?'Na
  p.drawRectangle({x:20,y:50,width:30,height:18,color:rgb(.4,.5,.8),blendMode:BlendMode.Multiply})
  p.drawImage(image,{x:200,y:200,width:100,height:75,rotate:degrees(30),xSkew:degrees(20),opacity:.4})
  p.pushOperators(pushGraphicsState(),rectangle(270,55,82,65),clip(),endPath())
- p.drawImage(image,{x:300,y:40,width:100,height:80,rotate:degrees(30)})
+ p.drawImage(image,{x:300,y:40,width:100,height:80,rotate:degrees(30),opacity:.6,blendMode:BlendMode.Multiply})
  p.pushOperators(popGraphicsState());p.drawText('Affine original',{x:30,y:30})
  const outer=await PDFDocument.create(),page=outer.addPage([600,600]);page.drawPage(await outer.embedPage((await PDFDocument.load(await inner.save())).getPage(0)),{x:40,y:50,xScale:.8,yScale:.9})
  const original=Buffer.from(await outer.save()),source=(await importFile(f,f.alice.token,original,'affine-drafts.pdf')).file
