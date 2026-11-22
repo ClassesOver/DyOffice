@@ -293,7 +293,7 @@ docs/dyoffice/               当前计划及 inventory/ evidence/ adr/
 
 **接口：** `mountPdfEditor()`，能力区分阅读、批注、文本修改、页操作和导出。
 
-**当前 Web 入口（2026-11-22）：** 工作区 PDF 统一走 GenOffice 原生编辑器 `/native-pdf/`，原工作区预览及开发原型 `/pdf.html` 已移除。现有 Chromium 定向证据覆盖原文与批注修改、页序和表单、OCR、保存重开，以及经人工确认写入独立脱敏副本。受保护结构的只读行为已有回归。原生签名面板已接入 GenOffice 验证器，验证了自签样本和签名覆盖内容被更改后的结果。外部阅读器样本及证书签署仍待验，详见 [四格式对齐验收](evidence/genoffice-web-parity.md)。
+**当前 Web 入口（2026-11-22）：** 工作区 PDF 统一走 GenOffice 原生编辑器 `/native-pdf/`，原工作区预览及开发原型 `/pdf.html` 已移除。现有 Chromium 定向证据覆盖原文与批注修改、页序和表单、OCR、保存重开，以及经人工确认写入独立脱敏副本。受保护结构的只读行为已有回归。原生签名面板已接入 GenOffice 验证器，验证了自签样本和签名覆盖内容被更改后的结果。Poppler 已复开成品并核对文本、图片像素、导入页和脱敏副本。证书签署及其他外部阅读器样本仍待验，详见 [四格式对齐验收](evidence/genoffice-web-parity.md)。
 
 **历史状态（2026-11-16）：** 能力门已区分文本页、扫描页和空白页，并报告未嵌入字体与未验证签名，见 [t11-pdf-capabilities.md](evidence/t11-pdf-capabilities.md)。PDF 页签挂载 PDF.js 阅读页，CSP 不允许 eval 或内联脚本；PDFium WASM 对未改动的导出字节做像素重开校验，见 [t11-pdf-render.md](evidence/t11-pdf-render.md)。批注、改字、调页、脱敏仍被拒绝；覆盖文字不是删除原文；加密文件不栅格化。真实改字和批注写入仍延期。不依赖 T07 的 DOCX 挂载，也不走 T08 worker。
 

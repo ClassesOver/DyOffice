@@ -1,5 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import {execFileSync} from 'node:child_process'
 import {PDFDocument,PDFName,PDFString,rgb} from 'pdf-lib'
 import {expect} from '@playwright/test'
 import {fileFixture,importFile} from '../helpers/files.mjs'
@@ -578,6 +579,15 @@ test('GenOffice PDF assistant and ribbon edits preview and save, including recov
  assert.equal(commits.length,3)
  assert.deepEqual(commits,[commits[0],commits[0],commits[0]])
  const savedBytes=await f.files.readFile(f.alice.token,file.fileId,revision)
+ const externalText=(bytes,page)=>execFileSync('pdftotext',['-f',String(page),'-l',String(page),'-','-'],{input:bytes,encoding:'utf8'})
+ assert.match(externalText(original,1),/Native first page/)
+ assert.match(externalText(original,1),/Original paragraph starts here/)
+ const externalFirstPage=externalText(savedBytes,1)
+ for(const text of ['Manual updated page','Revised paragraph begins.','Revised paragraph ends.']){
+  assert.ok(externalFirstPage.includes(text),externalFirstPage)
+ }
+ assert.doesNotMatch(externalFirstPage,/Native first page|Original paragraph starts here|Original paragraph ends here/)
+ assert.match(externalText(savedBytes,2),/Native revised/)
  const savedImage=await readImageSource(savedBytes,0,[192,148,228,196])
  assert.deepEqual([...savedImage.bgra.subarray(0,4)],[255,0,0,128])
  const savedCutout=await readImageSource(savedBytes,0,[244,148,284,188])
@@ -711,6 +721,15 @@ test('GenOffice PDF assistant and ribbon edits preview and save, including recov
  for(const x of lefts){
   const image=await readImageSource(mixedBytes,0,[x,148,x+40,188])
   assert.deepEqual([...image.bgra.subarray(0,4)],[255,0,0,255])
+ }
+ const renderFirstPage=bytes=>PNG.sync.read(execFileSync('pdftoppm',['-png','-r','72','-f','1','-l','1','-singlefile','-'],{input:bytes}))
+ const originalRaster=renderFirstPage(mixedOriginal),savedRaster=renderFirstPage(mixedBytes)
+ assert.deepEqual([originalRaster.width,originalRaster.height,savedRaster.width,savedRaster.height],[300,240,300,240])
+ for(const x of lefts){
+  const index=(65*savedRaster.width+x+8)*4
+  assert.deepEqual([...originalRaster.data.subarray(index,index+4)],[255,0,0,255])
+  const [red,green,blue,alpha]=savedRaster.data.subarray(index,index+4)
+  assert.ok(red<=2&&green<=2&&blue>=253&&alpha===255,`Poppler pixel at ${x+8},65: ${[red,green,blue,alpha]}`)
  }
  assert.equal(pdfInsertFormState(await PDFDocument.load(mixedBytes)),pdfInsertFormState(await PDFDocument.load(mixedOriginal)))
  assert.deepEqual(await f.files.readFile(f.alice.token,mixedFile.fileId,mixedFile.revision),mixedOriginal)

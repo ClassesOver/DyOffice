@@ -1,5 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import {execFileSync} from 'node:child_process'
 import {Readable} from 'node:stream'
 import {fileURLToPath} from 'node:url'
 import {PDFDocument} from 'pdf-lib'
@@ -231,9 +232,13 @@ test('native PDF assistant and ribbon save separate page copies',{skip:!nativePd
  const {file:inserted}=await f.files.openFile(f.alice.token,file.fileId)
  assert.equal(inserted.revision,revision)
  assert.notEqual(inserted.revision,sourceRevision)
- const insertedDoc=await PDFDocument.load(await f.files.readFile(f.alice.token,file.fileId,inserted.revision))
+ const insertedBytes=await f.files.readFile(f.alice.token,file.fileId,inserted.revision)
+ const insertedDoc=await PDFDocument.load(insertedBytes)
  assert.equal(insertedDoc.getPageCount(),4)
- const insertedText=await (await import('../../../pdf/src/main/text-edit.ts')).readPdfLeafObjects(await f.files.readFile(f.alice.token,file.fileId,inserted.revision))
+ const insertedText=await (await import('../../../pdf/src/main/text-edit.ts')).readPdfLeafObjects(insertedBytes)
  assert.ok(insertedText.some(item=>item.type===1&&item.text.includes('Imported marker')))
+ const pageTexts=execFileSync('pdftotext',['-','-'],{input:insertedBytes,encoding:'utf8'}).split('\f').map(text=>text.trim())
+ assert.equal(pageTexts.filter(text=>text.includes('Imported marker')).length,1)
+ assert.equal(pageTexts.filter(text=>text.includes('Source 400')).length,1)
  assert.deepEqual(await f.files.readFile(f.alice.token,file.fileId,sourceRevision),sourceBytes)
 })

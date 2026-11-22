@@ -1,6 +1,7 @@
 import {stubHomeHero} from '../helpers/home-hero.mjs'
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import {execFileSync} from 'node:child_process'
 import {Readable} from 'node:stream'
 import {fileURLToPath} from 'node:url'
 import {readPdfLeafObjects} from '../../../pdf/src/main/text-edit.ts'
@@ -109,7 +110,14 @@ test('Native PDF user-reviewed redaction saves one separate copy and recovers a 
  assert.ok(created)
  await recover.click()
  await expect(tab).toHaveURL(origin+'/#/file/'+created.fileId,{timeout:30000})
- const manualItems=await readPdfLeafObjects(await f.files.readFile(f.alice.token,created.fileId,created.revision))
+ const redactedBytes=await f.files.readFile(f.alice.token,created.fileId,created.revision)
+ const originalText=execFileSync('pdftotext',['-','-'],{input:bytes,encoding:'utf8'})
+ const redactedText=execFileSync('pdftotext',['-','-'],{input:redactedBytes,encoding:'utf8'})
+ assert.match(originalText,/chosen@example\.com/)
+ assert.doesNotMatch(redactedText,/chosen@example\.com/)
+ assert.match(redactedText,/keep@example\.com/)
+ assert.match(redactedText,/PUBLIC/)
+ const manualItems=await readPdfLeafObjects(redactedBytes)
  const manualText=manualItems.filter(o=>o.type===1).map(o=>o.text).join('|')
  assert.doesNotMatch(manualText,/chosen@example.com/);assert.match(manualText,/keep@example.com/);assert.match(manualText,/PUBLIC/)
  assert.equal(stages,2);assert.equal(finishes,4)
