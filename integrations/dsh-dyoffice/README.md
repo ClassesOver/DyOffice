@@ -2,7 +2,7 @@
 
 执行 `/dyoffice word 创建一个活动策划` 后，可以在任务消息里阅读已保存的正文，查看 DSH 交办、DyOffice 交付和后续审阅的记录。底部显示同步状态和消息接收方。点击「编辑器」查看原生编辑器预览，点击「在新窗口打开 DyOffice」编辑同一份文件。XLSX、PPTX、PDF 使用相同入口。
 
-![DSH 任务消息中的 Word 正文和通信记录](../../docs/dyoffice/evidence/dsh-plugin-preview.jpg)
+![DSH 任务消息中的 Word 正文与双方消息](../../docs/dyoffice/evidence/dsh-plugin-preview.jpg)
 
 要在聊天中运行应用，需在 DyOffice 服务端设置 `DYOFFICE_DSH_EMBED_ORIGIN=http://localhost:3080`，从这个地址访问 DSH，并在同一浏览器登录 DyOffice。本机示例：DSH 用 localhost:3080，Office 用 localhost:3081。未允许嵌入时，点击新窗口入口启动 Office。历史消息保留正文摘录和打开原文入口；只有当前任务在聊天里运行原生应用。
 

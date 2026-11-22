@@ -4,7 +4,7 @@ window.__ModuleLoader__.load({
     const {createElement: h, useEffect, useRef, useState, useSyncExternalStore} = require('react')
     const id = '@local/dsh-dyoffice'
     const copy = {
-      zh: {handoffLog:'通信记录',textMode:'正文',editorMode:'编辑器',syncLive:'消息同步中',syncStale:'同步中断',syncEnded:'对话已结束',destination:'消息接收方',savedPreview:'已保存的正文',sending:'正在提交 DyOffice 请求…', elapsed:'已用时 {time}', snapshot:'预览快照',previewRight:'在右侧打开预览', openWindow:'在新窗口打开 DyOffice', startWriting:'在新窗口打开文档后，DyOffice 助手会接手撰写。',snapshotUnavailable:'未能生成缩略图，点击预览文件',skillLabel:'DSH Skill',title: 'DyOffice', description: '查看已保存文档和任务进度', loading: '正在连接 DyOffice…',
+      zh: {messagesLabel:'DSH 与 DyOffice 的消息',textMode:'正文',editorMode:'编辑器',syncLive:'消息同步中',syncStale:'同步中断',syncEnded:'对话已结束',destination:'消息接收方',savedPreview:'已保存的正文',sending:'正在提交 DyOffice 请求…', elapsed:'已用时 {time}', snapshot:'预览快照',previewRight:'在右侧打开预览', openWindow:'在新窗口打开 DyOffice', startWriting:'在新窗口打开文档后，DyOffice 助手会接手撰写。',snapshotUnavailable:'未能生成缩略图，点击预览文件',skillLabel:'DSH Skill',title: 'DyOffice', description: '查看已保存文档和任务进度', loading: '正在连接 DyOffice…',
         unavailable: '暂时无法预览，请检查频道连接和后台读取权限。', configure: '请先配置 DyOffice 频道连接。',
         authorization: '连接 DyOffice', pairIntro: '连接频道后，即可在 DSH 创建和预览文档。',
         url: 'DyOffice 服务 URL', code: '授权 Token', codeHint: '粘贴频道分享生成的 Token',
@@ -35,7 +35,7 @@ window.__ModuleLoader__.load({
         truncated: '正文仅显示前 24,000 字符。', tasks: '任务进度', noTasks: '暂无任务。',
         queued: '排队中', running: '运行中', waiting_peer: '等待协作', cancel_requested: '正在取消',
         succeeded: '已完成', failed: '失败', cancelled: '已取消', unknown_outcome: '结果待核对'},
-      en: {handoffLog:'Message history',textMode:'Text',editorMode:'Editor',syncLive:'Sync active',syncStale:'Sync interrupted',syncEnded:'Conversation ended',destination:'Message recipient',savedPreview:'Saved text',sending:'Sending the request to DyOffice…', elapsed:'Elapsed {time}', snapshot:'Preview snapshot',previewRight:'Open preview on the right', openWindow:'Open DyOffice in a new window', startWriting:'Open the document in a new window to start writing with DyOffice.',snapshotUnavailable:'Thumbnail unavailable; open file preview',skillLabel:'DSH Skill',title: 'DyOffice', description: 'Follow the saved document and task progress', loading: 'Connecting to DyOffice…',
+      en: {messagesLabel:'Messages between DSH and DyOffice',textMode:'Text',editorMode:'Editor',syncLive:'Sync active',syncStale:'Sync interrupted',syncEnded:'Conversation ended',destination:'Message recipient',savedPreview:'Saved text',sending:'Sending the request to DyOffice…', elapsed:'Elapsed {time}', snapshot:'Preview snapshot',previewRight:'Open preview on the right', openWindow:'Open DyOffice in a new window', startWriting:'Open the document in a new window to start writing with DyOffice.',snapshotUnavailable:'Thumbnail unavailable; open file preview',skillLabel:'DSH Skill',title: 'DyOffice', description: 'Follow the saved document and task progress', loading: 'Connecting to DyOffice…',
         unavailable: 'Preview unavailable. Check the channel connection and saved document permissions.', configure: 'Configure a DyOffice channel connection first.',
         authorization: 'Connect DyOffice', pairIntro: 'Connect a channel to create and preview documents in DSH.',
         url: 'DyOffice service URL', code: 'Authorization token', codeHint: 'Paste the token from channel sharing',
@@ -128,7 +128,6 @@ window.__ModuleLoader__.load({
       .dsh-office-paper{min-height:145px;max-height:340px;overflow:auto;padding:16px 18px;line-height:1.7;font-size:14px;overflow-wrap:anywhere}.dsh-office-paper p,.dsh-office-paper h3{margin:0 0 .6em}
       .dsh-office-frame{position:relative;aspect-ratio:16/10;overflow:hidden}.dsh-office-frame button{position:absolute;inset:0;width:100%;z-index:2;background:transparent;border:0;cursor:zoom-in}
       .dsh-office-log{min-width:0;padding:12px 16px;border-inline-start:1px solid var(--dsw-alias-border-l2,#ccd2da)}
-      .dsh-office-log h3{margin:0 0 10px;font-size:13px}
       .dsh-office-message{position:relative;border-inline-start:1px solid var(--dsw-alias-border-l2,#ccd2da);margin-inline-start:4px;padding:0 0 12px 13px;font-size:13px;line-height:1.55;overflow-wrap:anywhere}
       .dsh-office-message:last-child{padding-bottom:0;border-color:transparent}
       .dsh-office-message:before{content:'';position:absolute;inset-inline-start:-4px;top:6px;width:7px;height:7px;border-radius:50%;background:var(--dsw-alias-label-secondary,GrayText)}
@@ -739,8 +738,7 @@ window.__ModuleLoader__.load({
                 liveFrame?h('div',{ref:previewAnchor,className:'dsh-office-frame'},
                   h('button',{type:'button','aria-label':t('openWindow'),onClick:openWindow}))
                   :h(DocumentExcerpt,{entry,pending:!entry?.inlineChecked&&!entry?.checked,t})),
-              messages.length>0&&h('section',{className:'dsh-office-log','aria-label':t('handoffLog')},
-                h('h3',null,t('handoffLog')),messages)),
+              messages.length>0&&h('section',{className:'dsh-office-log','aria-label':t('messagesLabel')},messages)),
             (syncLabel||canChat||entry?.skillName)&&h('footer',{className:'dsh-office-footer'},
               syncLabel&&h('span',{role:'status'},t(syncLabel)),
               entry?.skillName&&h('small',null,t('skillLabel'),' · ',entry.skillName),
