@@ -16,6 +16,8 @@
 
 定向 Chromium 批次复用 `29415fca` 的原生编辑器产物及更新后的 XLSX 构建和 PowerPoint Worker，四种格式实际注册的 129 个工具组合均返回过成功结果。PDF 兼容名称 `rotate_pages` 由原生 `apply_ops.rotatePages` 覆盖。PPTX 浏览器补测覆盖附件读取、搜索、图片生成与分析、指南和幻灯片脚本，脚本的标题修改、图表值和类型已核对保存后的 XML，问卷选项已进入两页规划和生成流程。DOCX 补测核对下载成品中的连续分节、A5 横向页面、原生页眉和自定义段落样式，并验证批注线程的回复、解决、删除及指定修订的接受与拒绝。另核对应用样式、原生图表、浮动文本框、水印、长文写作、段落替换、选区替换和新建 DOCX。Word 和 PowerPoint 均将 Coding 交付的 PNG 原样写入成品，并保存图像哈希和冻结数据来源。PowerPoint 通过同一个原生事务写入图片和来源文本，按实际幻灯片比例定位。原生进程验证 PNG 和 JPEG 能否在限定像素范围内解码，拒绝损坏图片和空来源说明。通用批操作会引导助手使用已验证的分析图交付入口。9 个共享工具已通过浏览器执行，工作区 5 个数据工具已验证授权与效果。冻结结果写入验证了 Word、Excel 和 PowerPoint 三种原生文件的准确数据、显式保存和重开。[逐工具结果](office-ai-tool-coverage.md)
 
+`1b71dc9f` 的 GitHub Chromium 步骤通过，包含当次运行的 129 个格式工具组合和 9 个共享工具覆盖门禁。本机全量复跑未能确认 PDF 助手另建文档的保存回执，停止该批次后单独重跑通过，核对原 PDF 字节和修订保持一致，分别生成的 PDF 与 DOCX 具有独立的保存回执，且成品包含指定正文。[GitHub 工具覆盖门禁](https://github.com/ClassesOver/DyOffice/actions/runs/45023136921/job/137210216827) [PDF 新建用例](../../../apps/web/test/local-browser/native-pdf-create-document.test.mjs)
+
 `29415fca` 的 CI 本地集成阶段报出 3 项失败，源于事务崩溃夹具缺少文件服务、元数据并发夹具缺少签名状态、PPTX 签名夹具缺少测试环境。补齐夹具后，在独立 PostgreSQL 上复跑 10 项全部通过，覆盖事务回滚、读取竞态及三格式签名文件原件保护。[原 CI 失败](https://github.com/ClassesOver/DyOffice/actions/runs/45009917486/job/137169747167)
 
 同一固定候选的本机全量 Chromium 跑批共 92 项，82 项通过，3 项失败，7 项按配置跳过。失败项为签名原件下载、PDF 分页副本和 XLSX 单表 CSV 导出。三个旧用例均有定向通过记录，最新全量门禁继续复验。[定向结果](office-ai-tool-coverage.md)
@@ -46,6 +48,8 @@ PPTX 在 `89df7aa6` 的英文首轮成功生成、保存并重开两页，第二
 合并目标分支后的 `69d80ee9` 重新构建四个原生编辑器并使用相同真实模型复跑，四格式 4 项通过，0 项失败或跳过。Word 与 Excel 保存重开核对 441，PDF 原文和现有便笺均核对为 42，PowerPoint 生成可编辑页面，重做第二页后第一页 XML 与重做前一致。
 
 在 `1b71dc9f` 补测了真实模型的只读任务。Excel 中文指令找到了尚未加载到网格的 `AZ25001`，核对模型回复、`find_cells` 返回值和原生查找坐标。Word 读到了收藏文件原文，但回答的链接对部分文件名进行了不同层数的百分号转义，首次复跑失败。仅修复点击路径后的复跑发现，回答校验要求模型重答，随后模型省略了引用。回答校验与点击现共用收藏目录的路径匹配。Chromium 回归重现原链接，确认模型响应保留引用、点击用原始版本路径重新授权，且打开的文件含有来源原文。[Excel 查找用例](../../../apps/web/test/local-browser/sheets-find-cells.test.mjs) [Word 引用用例](../../../apps/web/test/local-browser/word-knowledge.test.mjs)
+
+在 `ee9d364a` 的 Word 构建上运行三次同一只读任务，首次未能定位最终引用，后两次均在完整回答中找到可点击引用。两次点击均以收藏目录的原始版本路径重新授权，并打开有该次随机记录编号的原件。浏览器断言核对实际链接、版本与原文，允许模型自行选择链接文字。文件保存新版本后，旧引用能否打开历史内容仍待验收。[Word 真实模型用例](../../../apps/web/test/local-browser/word-knowledge.test.mjs)
 
 `9922e244` 上补测了 XLSX 的中文数据分析任务。`gpt-6-sol` 从临时 PostgreSQL 的合成订单计算 2026 年 1 至 6 月实付金额，并调用 `insert_data_result`。6 个月的标签和数值均与数据库真值一致，7 项断言全部通过。该次试验耗时 14.7 秒，调用工具 5 次，输入 9,655 tokens，输出 328 tokens。评估将表格交给内存文档目标，浏览器保存和重开由独立用例覆盖。[真实模型数据分析评估](../../../tools/dyoffice/analysis-eval/README.md)
 
