@@ -11,7 +11,7 @@ import {PDFDocument} from 'pdf-lib'
 import JSZip from 'jszip'
 import {PNG} from 'pngjs'
 import {expect} from '@playwright/test'
-import {launchTestBrowser} from '../helpers/browser.mjs'
+import {launchTestBrowser,recordVerifiedOfficeEffect} from '../helpers/browser.mjs'
 import {fileFixture,docxBytes,importFile} from '../helpers/files.mjs'
 import {createCrossPlatformProcess} from '../../worker/src/sandbox/cross-platform-process.ts'
 import {sheetsGateway} from '../helpers/sheets-gateway.mjs'
@@ -154,7 +154,10 @@ for(const mode of ['creation','no-word','all'])test(mode==='no-word'
     const {output,isError}=JSON.parse(result.content)
     assert.ok(!isError,output)
     assert.match(output,attachment?/Audit attachment 712/:/Synthetic supplier registry/)
-    if(!attachment)assert.match(output,/https:\/\/results.example\/registry/)
+    if(!attachment){
+     assert.match(output,/https:\/\/results\.example\/registry/)
+     assert.match(output,/Supplier A: 712 records/)
+    }
     delta={content:attachment?'Excel read the reference attachment':'Excel returned the web citation'}
    }else{
     const name=attachment?'read_attachment':'web_search'
@@ -211,7 +214,9 @@ for(const mode of ['creation','no-word','all'])test(mode==='no-word'
     assert.ok(sheetId,results[0].output)
     assert.ok(path,results[1].output)
     assert.doesNotMatch(results[1].output,/base64/)
-    assert.ok(results[2].output.includes(remoteImage),results[2].output)
+    const foundImage=results[2].output.match(/https:\/\/images\.example\/blue\.webp/)?.[0]
+    assert.equal(foundImage,remoteImage,results[2].output)
+    assert.match(results[2].output,/Blue/)
     const attachment=prompt.match(/(https:\/\/attached-image\.invalid\/[\w-]+) \| "green\.png"/)?.[1]
     assert.ok(attachment,'Model request must contain a usable image attachment reference.')
     assert.ok(content.some(part=>part.type==='image_url'),'Model request must include the attached image.')
@@ -219,7 +224,7 @@ for(const mode of ['creation','no-word','all'])test(mode==='no-word'
     attachedImageSheet=sheetId
     delta=toolCall('propose_operations',{summary:'Place generated, downloaded and attached images',operations:[
      {op:'add_image',sheetId,path,anchorCell:'B2'},
-     {op:'add_image',sheetId,path:remoteImage,anchorCell:'D4'},
+     {op:'add_image',sheetId,path:foundImage,anchorCell:'D4'},
      {op:'add_image',sheetId,path:attachment,anchorCell:'F6'},
     ]})
    }else{
@@ -410,6 +415,7 @@ for(const mode of ['creation','no-word','all'])test(mode==='no-word'
   assert.equal(csv.suggestedFilename(),'Office CSV probe.csv')
   assert.match(await readFile(await csv.path(),'utf8'),/^Revenue,Formula,Date,Percent,Mass,Named formula/)
   await expect(directWorkbook.getByText('Standalone worksheet downloaded',{exact:true})).toBeVisible({timeout:30000})
+  recordVerifiedOfficeEffect('xlsx','create_document')
   if(!noWord){
    await directWorkbook.locator('.ai-plus-btn').click()
    const chooser=page.waitForEvent('filechooser')
@@ -435,6 +441,8 @@ for(const mode of ['creation','no-word','all'])test(mode==='no-word'
    await searchable.getByRole('button',{name:'发送',exact:true}).click()
    await expect(searchable.getByText('Excel returned the web citation',{exact:true})).toBeVisible({timeout:30000})
    assert.equal((await f.files.openFile(f.alice.token,directFiles.xlsx.fileId)).file.revision,directFiles.xlsx.revision)
+   recordVerifiedOfficeEffect('xlsx','read_attachment')
+   recordVerifiedOfficeEffect('xlsx','web_search')
   }
   return
  }
@@ -548,6 +556,8 @@ for(const mode of ['creation','no-word','all'])test(mode==='no-word'
  }
  assert.equal(await head(),revision)
  assert.deepEqual(await f.files.readFile(f.alice.token,source.fileId,source.revision),original)
+ recordVerifiedOfficeEffect('xlsx','generate_image')
+ recordVerifiedOfficeEffect('xlsx','image_search')
  const slides=await probe('pptx','configured',{configured:true})
  await page.route('**/api/v1/ai/search',route=>{
   const request=route.request().postDataJSON()

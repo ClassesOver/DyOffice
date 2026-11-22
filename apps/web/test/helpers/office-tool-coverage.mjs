@@ -5,7 +5,10 @@ import {ASSISTANT_FORMAT_TOOLS, ASSISTANT_DELEGATION_TOOLS, assistantSourceTools
 const toolName = name => typeof name === 'string' && /^[a-z][a-z0-9_]{0,79}$/.test(name)
 const requiredEffects = new Map([
   ['docx', new Set(['insert_data_result'])],
-  ['xlsx', new Set(['insert_data_result'])],
+  ['xlsx', new Set([
+    'insert_data_result', 'create_document', 'generate_image', 'image_search',
+    'merge_attached_workbooks', 'propose_operations',
+  ])],
   ['pptx', new Set(['insert_data_result'])],
   ['pdf', new Set([
     'apply_ops.rotatePages', 'apply_ops.setFormValue', 'apply_ops.setMetadata',
@@ -23,7 +26,7 @@ const requiredResults = new Map([
   ['xlsx', new Set([
     'find_cells', 'get_workbook_context', 'read_range', 'read_cells', 'aggregate_range',
     'read_formats', 'trace_precedents', 'trace_dependents', 'load_guide', 'select_range',
-    'read_sheet_features',
+    'read_sheet_features', 'read_attachment', 'web_search',
   ])],
   ['pdf', new Set([
     'read_pages', 'read_attachment', 'search_text', 'find_sensitive_info', 'goto_page',

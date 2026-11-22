@@ -12,7 +12,7 @@
 
 Web 门禁在 Chromium 用例完成后，按当前工具合同核对当次运行的注册和成功执行。缺项会按格式和工具名列出并使门禁失败。各项效果由对应的浏览器用例断言。[覆盖检查](../../../apps/web/test/helpers/office-tool-coverage.mjs) [PDF 原生效果用例](../../../apps/web/test/local-browser/native-pdf-open.test.mjs)
 
-成品门禁要求 44 项效果证据。DOCX、XLSX 和 PPTX 分别核对冻结表格的准确数值及 Web 重开，PDF 核对 41 项原生保存效果，涉及 38 个工具。PDF 用例从提交修订的字节核对正文、插入文字的最终坐标、删除、批注回复关系、空白页、表单值、标题、旋转和分页水印，重开后继续清除水印并确认页脚仍在。[PDF 原生工具成品用例](../../../apps/web/test/local-browser/native-pdf-open.test.mjs)
+成品门禁要求 49 项效果证据。DOCX、XLSX 和 PPTX 分别核对冻结表格的准确数值及 Web 重开，PDF 核对 41 项原生保存效果，涉及 38 个工具。PDF 用例从提交修订的字节核对正文、插入文字的最终坐标、删除、批注回复关系、空白页、表单值、标题、旋转和分页水印，重开后继续清除水印并确认页脚仍在。[PDF 原生工具成品用例](../../../apps/web/test/local-browser/native-pdf-open.test.mjs)
 
 PDF 图片用例使用工具返回的搜索链接和生成媒体引用插入图片，核对保存包中的像素、位置、删除、旋转、裁剪、透明度与背景去除，并在 Web 重开后复采样。表单用例核对重排后的两页实际顺序、两个复选框状态及旧版本字节。[图片保存与重开](../../../apps/web/test/local-browser/pdf-media.test.mjs) [页面重排与表单](../../../apps/web/test/local-browser/native-pdf-open.test.mjs)
 
@@ -32,7 +32,9 @@ PDF 原生旋转使用 `apply_ops.rotatePages`。旧预览工具名已从 Web �
 
 Excel 已覆盖 19 个实际注册工具。稀疏工作簿的全量预加载曾让已装入网格的点读区域误报未加载。修复后同时确认定向请求是否完成和当前工作簿是否仍有效。Node 与宿主 Rust 进程均验证工作表保护、有效 AutoFilter 范围 A1:C2，以及值筛选和双条件比较。自定义工作表视图中的旧范围不覆盖当前筛选。两条路径均读取小写 A1 引用，并跳过带有未知操作符的整组比较条件。[Excel 定向读取](../../../apps/web/test/local-browser/sheets-find-cells.test.mjs) [Node 执行器](../../../apps/web/server/sheets/xlsx-node-engine.ts)
 
-XLSX 结果门禁要求 11 项读、查找和定位效果。实际工作簿用例核对上下文中的工作表名和 ID、A1:A2 的 7 和 11、公式依赖、百分比格式、AutoFilter 范围、超出已加载范围的命中地址，并验证定位后 Audit 工作表被选中且文件修订未改变。[XLSX 工具结果](../../../apps/web/test/local-browser/sheets-find-cells.test.mjs)
+XLSX 结果门禁要求 13 项读取、查找与定位效果。实际工作簿用例核对上下文中的工作表名和 ID、A1:A2 的 7 和 11、公式依赖、百分比格式、AutoFilter 范围、超出已加载范围的命中地址，并验证定位后 Audit 工作表被选中且文件修订未改变。[XLSX 工具结果](../../../apps/web/test/local-browser/sheets-find-cells.test.mjs)
+
+XLSX 的其他结果核对实际上传的附件正文，以及 Web 检索返回的供应商标题、网址和摘要。成品门禁另核对 XLSX、DOCX、PDF 和 CSV 的创建结果，复开 B2、D4、F6 的生成图、搜索图和附件图，读取混合附件合并后的全部 40 行和最后一行 CSV，并核对普通批操作保存的公式 `B2=SUM(A2:A3)` 及缓存 42。成品和结果证据覆盖 Web 合同中的 19 个 XLSX 工具。[创建、搜索与图片用例](../../../apps/web/test/local-browser/office-tool-inventory.test.mjs) [附件合并](../../../apps/web/test/local-browser/sheets-attachment-merge.test.mjs) [公式写入与重开](../../../apps/web/test/local-browser/dsh-office-handoff.test.mjs)
 
 ## DOCX
 
@@ -88,9 +90,9 @@ XLSX 结果门禁要求 11 项读、查找和定位效果。实际工作簿用�
 | `aggregate_range` | 观察到 | [formula-cost.test.ts](../../../apps/sheets/tests/formula-cost.test.ts)、[plan-operations-formula-guard.test.ts](../../../apps/sheets/tests/plan-operations-formula-guard.test.ts) | 浏览器从表格的 A1:A2 读取两个数值并核对合计 18。[浏览器用例](../../../apps/web/test/local-browser/sheets-find-cells.test.mjs) |
 | `create_document` | 观察到 | [native-pdf-create-document.test.mjs](../../../apps/web/test/local-browser/native-pdf-create-document.test.mjs)、[ai-create-document.test.ts](../../../apps/sheets/tests/ai-create-document.test.ts) | 浏览器从 Excel 实际生成 XLSX、DOCX、PDF 成品，原生读取核对收入表头、数值和正文。独立 CSV 下载保留预期表头，源工作簿未生成新版本。[浏览器用例](../../../apps/web/test/local-browser/office-tool-inventory.test.mjs) |
 | `find_cells` | 观察到 | [sheets-find-cells.test.mjs](../../../apps/web/test/local-browser/sheets-find-cells.test.mjs)、[redact-actions.test.ts](../../../apps/sheets/tests/redact-actions.test.ts) | 查找到未渲染的 AZ25001，按正则找到 AA1001，按公式错误找到 AB1002，原件保持原字节。[浏览器用例](../../../apps/web/test/local-browser/sheets-find-cells.test.mjs) |
-| `generate_image` | 观察到 | [pdf-media.test.mjs](../../../apps/web/test/local-browser/pdf-media.test.mjs)、[image-skill.test.ts](../../../apps/sheets/tests/image-skill.test.ts) | 浏览器实际调用成功，搜索与图像生成后的 WebP 进入原生工作簿。[实测用例](../../../apps/web/test/local-browser/office-tool-inventory.test.mjs) |
+| `generate_image` | 观察到 | [pdf-media.test.mjs](../../../apps/web/test/local-browser/pdf-media.test.mjs)、[image-skill.test.ts](../../../apps/sheets/tests/image-skill.test.ts) | 生成的 WebP 通过工具返回的媒体引用写入 B2，保存及重开后核对红色像素。[实测用例](../../../apps/web/test/local-browser/office-tool-inventory.test.mjs) |
 | `get_workbook_context` | 观察到 | [dsh-office-handoff.test.mjs](../../../apps/web/test/local-browser/dsh-office-handoff.test.mjs)、[native-sheets-harness.test.mjs](../../../apps/web/test/local-browser/native-sheets-harness.test.mjs) | 读取当前活动表及工作簿清单，核对 Acceptance 与 Audit 的工作表名和 Audit 的实际 ID。[实测用例](../../../apps/web/test/local-browser/dsh-office-handoff.test.mjs) |
-| `image_search` | 观察到 | [pdf-media.test.mjs](../../../apps/web/test/local-browser/pdf-media.test.mjs)、[image-skill.test.ts](../../../apps/sheets/tests/image-skill.test.ts) | 浏览器实际调用成功，可搜索到原始图像并进入图片写入流程。[实测用例](../../../apps/web/test/local-browser/office-tool-inventory.test.mjs) |
+| `image_search` | 观察到 | [pdf-media.test.mjs](../../../apps/web/test/local-browser/pdf-media.test.mjs)、[image-skill.test.ts](../../../apps/sheets/tests/image-skill.test.ts) | 浏览器从检索结果取得图片地址，写入 D4，保存及重开后核对蓝色像素。[实测用例](../../../apps/web/test/local-browser/office-tool-inventory.test.mjs) |
 | `insert_data_result` | 观察到 | [office-source-analysis.test.mjs](../../../apps/web/test/local-browser/office-source-analysis.test.mjs)、[office-tool-inventory.test.mjs](../../../apps/web/test/local-browser/office-tool-inventory.test.mjs) | 冻结结果从 J10 选区插入。原生引擎读取保存成品及浏览器重开均核对 K11、K12 为数值 30、40。[浏览器用例](../../../apps/web/test/local-browser/office-source-analysis.test.mjs) |
 | `load_guide` | 观察到 | [workbook-skill-tools.test.ts](../../../apps/sheets/tests/workbook-skill-tools.test.ts) | 返回写入指南，包含 `set_range` 的字段说明。[浏览器用例](../../../apps/web/test/local-browser/sheets-find-cells.test.mjs) |
 | `merge_attached_workbooks` | 观察到 | [sheets-attachment-merge.test.mjs](../../../apps/web/test/local-browser/sheets-attachment-merge.test.mjs)、[merge-skill.test.ts](../../../apps/sheets/tests/merge-skill.test.ts) | 浏览器合并 BIFF XLS、预览截断的 XLSX 和 CSV。原生读取核对工作表、数值和截断文件的最后一行，重开后新表存在，旧版本保持原字节。[浏览器用例](../../../apps/web/test/local-browser/sheets-attachment-merge.test.mjs) |
