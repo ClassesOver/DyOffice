@@ -72,6 +72,11 @@ for (const [format,fixture,declaration] of [
     assert.equal(notes.statusCode,200)
     const nextSlide=await f.app.inject({method:'POST',url:url+'/slides/slide',headers:viewerHeaders,payload:{...pinned,index:1}})
     assert.equal(nextSlide.statusCode,200)
+    const outsiderHeaders={...headers,cookie:'__Host-dyoffice-session='+f.bob.token,'x-csrf-token':csrf.sessionToken(f.bob.token)}
+    const outsiderSlide=await f.app.inject({method:'POST',url:url+'/slides/slide',headers:outsiderHeaders,payload:{...pinned,index:1}})
+    assert.equal(outsiderSlide.statusCode,404)
+    const staleSlide=await f.app.inject({method:'POST',url:url+'/slides/slide',headers:viewerHeaders,payload:{...pinned,revision:randomUUID(),index:1}})
+    assert.equal(staleSlide.statusCode,409)
     const edit=await f.app.inject({method:'POST',url:url+'/slides/apply',headers,
       payload:{...pinned,ops:[{op:'setNotes',target:{slide:0},text:'Blocked change'}],editorId:f.editorId,leaseEpoch:f.lease.leaseEpoch}})
     assert.equal(edit.statusCode,423)

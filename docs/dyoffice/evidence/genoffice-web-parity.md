@@ -10,6 +10,19 @@
 | F04 PDF | 原文编辑、批注、页面、表单、扫描页和受保护文档 | 独立提取与渲染核对内容、像素和历史原件。实际签名验证与特殊样本单独记结果 |
 | 四格式助手 | 工具按可执行能力注册；真实工具写回、保存、重开，核对委派后的恢复 | 分别记录测试替身、真实模型、本机或外接 Harness、正式隔离环境的结果 |
 
+## 四格式 AI 工具验收
+
+`dec77c2d` 的工具清单检查匹配 159 项定义。按四个 GenOffice 编辑器的静态定义核对 Web 策略，DOCX、XLSX、PPTX、PDF 的 Web 允许名单分别为 42、19、20、49 个名称，包含 Web 专用和条件注册的工具。原编辑器定义里唯一被排除的是 DOCX 通用桌面命令 `run_cli`。当前轮实际向模型提供的工具继续按格式、编辑器能力、附件和配置收窄。模型调用未提供的工具会被拒绝。服务端、传输、后台阅读与交接合同共 105 项通过。[GenOffice 工具清单](../inventory/agent-tools.md) [模型工具传输与策略](../../../apps/web/test/unit/assistant-client.test.mjs) [浏览器实际工具注册](../../../apps/web/test/local-browser/office-tool-inventory.test.mjs)
+
+| 格式 | 已通过的代表性浏览器场景，使用测试模型响应 |
+| --- | --- |
+| DOCX | 原助手机制读取当前附件、插入生成或附加图片，刷新后只恢复一次原 Harness 对话 |
+| XLSX | 查找未加载网格中的单元格，合并 XLS、预览截断的 XLSX 和 CSV，保存后重开所有工作表，历史委派交付写回工作簿。用 `propose_operations` 写入 `B2=SUM(A2:A3)`，保存文件保留公式和值 `42`，新会话重开后仍可读取公式及结果 |
+| PPTX | 助手生成可编辑演示文稿并重做单页，原生备注交接可保存和追问，刷新时只恢复一次原委派 |
+| PDF | 原生助手搜索和改写文本、读写便笺及回复，真实保存回执和原生重开。外接 Harness 适配器和宿主 Codex CLI 0.169.0 分别跑通，计算结果同时写入原文和现有便笺 |
+
+上表的浏览器依据是 `89df7aa6` 的用例结果、`15a0ed5e` 的 Chromium 复跑和在 `dec77c2d` 构建上运行的新增 XLSX 公式断言。真实模型的中文指令四格式写回属于 A14。测试接口的 `gpt-6-sol` 已通过流式函数调用探测，四格式真实写入、保存和重开正在验证。[A14 验收矩阵](../acceptance-matrix.md) [GitHub 四格式浏览器验证](https://github.com/ClassesOver/DyOffice/actions/runs/45005639852/job/137156502751)
+
 本机通过锁文件安装依赖，使用 Node `22.23.5`、Playwright Chromium `151.0.7922.34`、隔离 PostgreSQL 夹具及主机 OCR，不使用 Docker。本轮确认助手工具清单的 159 个定义与分类一致，兼容输入基线 84 个文件无漂移。四格式后台读取和回答等基础测试 23 项通过，跳过的真实 OCR 项在安装 Tesseract 及 `eng`、`chi_sim` 数据后单独复跑，OCR 套件 3 项通过。
 
 固定候选 `d90ea092` 的上传校验 9 项全部通过，覆盖上游四格式样本、文件签名和内部类型校验、损坏归档及解析限额。另用 GenOffice 桌面端的 Agile 加密函数生成真实的打开密码 XLSX 对照件。同一工作簿的普通字节通过 Web 上传校验，加密字节在校验层返回 400，输入哈希保持一致，桌面加密模块解密后恢复完全相同的工作簿字节。Web 打开密码工作簿及修改密码仍待对齐。[上传校验用例](../../../apps/web/test/storage/validation.test.mjs)
@@ -18,7 +31,9 @@
 
 F14 的 OOXML 包签名存在保存缺口。在 `e5719120` 上使用 Apache POI 的三个签名样本，分别核对 DOCX 正文、XLSX 工作表和 PPTX 幻灯片的签名摘要。原始部件摘要与签名包清单一致，清单摘要也与 `SignedInfo` 一致，样本自带的公钥可验证 `SignatureValue`。修改被签名的部件并保留签名声明后，三个部件摘要均失配，保存服务仍会接受并切为当前修订。三个历史原件的下载字节保持一致。[Microsoft OPC 签名说明](https://learn.microsoft.com/en-us/previous-versions/windows/desktop/opc/digital-signatures-overview) [Apache POI 原始签名样本](https://github.com/apache/poi/tree/c94ee8ad9096bdb8cf8e5e59d8d12432e950dbf3/test-data/xmldsign)
 
-修复后，服务端识别三种 OOXML 包的签名声明。使用上述真实样本复跑，三个样本的修改上传准备均返回 423，当前修订和下载原件的字节保持一致。PostgreSQL 回归另验证十进制、十六进制 XML 字符引用，迁移前 DOCX 的 5 次并发打开只读取并校验一次原件，以及旧草稿提交拒绝，以及两个登录会话只读浏览同一 PPTX 并翻页。OOXML 保护依据是包签名声明，签名人信任和证书验证仍待独立验收。[修订保护回归](../../../apps/web/test/local-integration/revision-commit.test.mjs) [签名样本](../../../apps/web/test/fixtures/signed-office/README.md)
+修复后，服务端识别三种 OOXML 包的签名声明。使用上述真实样本复跑，三个样本的修改上传准备均返回 423，当前修订和下载原件的字节保持一致。PostgreSQL 回归另验证十进制和十六进制 XML 字符引用。迁移前 DOCX 的 5 次并发打开只读取并校验一次原件，旧草稿提交被拒绝。同一所有者的两个登录会话可只读浏览同一 PPTX 并翻页，跨账户翻页返回 404，错误修订返回 409。OOXML 保护依据是包签名声明，签名人信任和证书验证仍待独立验收。[修订保护回归](../../../apps/web/test/local-integration/revision-commit.test.mjs) [签名样本](../../../apps/web/test/fixtures/signed-office/README.md)
+
+`ffab0789` 的首轮浏览器回归发现 BrowserHost 的公开字段清单丢弃了签名保护标记，DOCX 因而显示成编辑租约冲突。`dec77c2d` 将布尔值 `true` 传递给三种 OOXML 编辑器。38 项 BrowserHost 与文件传输测试通过。新构建的 DOCX、XLSX、PPTX 通过同一真实签名样本 Chromium 用例，验证只读提示、禁用保存、下载原件字节一致和修订保留。[BrowserHost 合约回归](../../../apps/web/test/unit/host-contract.test.mjs) [真实签名样本浏览器回归](../../../apps/web/test/local-browser/native-office-signature.test.mjs)
 
 后续修复默认 Node 工作簿执行路径的保护元数据。实际 Node 与 Rust 对照覆盖已有文稿的结构锁、有密码的工作表、允许的格式操作、工作表可编辑区域、锁定单元格及继承的公式隐藏标记。原生读取三项、网关工作表保护十一项均通过。此项覆盖 OOXML 编辑保护。[Node 与 Rust 对照用例](../../../apps/web/test/native-sheets/read.test.mjs)
 
@@ -121,6 +136,10 @@ PPTX 的 F14 修改密码保护通过原生会话复验。对照候选 `d8392ce2
 固定候选 `d90ea092` 从独立源码归档安装锁定依赖并完成 `npm run build:saas`。随后在无 Docker 的宿主环境串行执行 49 个 Chromium 测试文件，最终 88 项中 81 项通过、0 项失败、7 项跳过。上一候选四个失败场景在同一跑批内全部通过。本轮也通过了 XLSX 外链断开、原生 PDF 永久脱敏副本和 PPTX 画幅、编辑对象及母版保存重开。跳过项为 6 个需真实模型配置的用例和 1 个需显式启用本机 Codex 的用例。F15 和 Word 样式批注补测使用该候选的四格式构建产物。此后加入的 Node XLSX 保护修复单独取证。真实模型、正式执行环境及桌面 Office 复开另取证据。
 
 固定候选 `d8392ce2` 从独立源码归档完成 SaaS 构建，随后串行运行 49 个 Chromium 测试文件。90 项中 82 项通过、1 项失败、7 项跳过。唯一失败是外部委派交付从历史记录写入 XLSX。`2c013293` 的修复通过正常构建的浏览器定向复验。包含新增回归的固定候选 `89df7aa6` 单独执行全量跑批。
+
+`89df7aa6` 的浏览器跑批共 91 项，83 项通过、1 项失败、7 项跳过。XLSX 历史交付回归通过。原生 PDF 助手交接在追问后 15 秒仍处于 `answering`，该次用例失败。沿用同一候选构建产物，原版用例独立复跑通过。带诊断日志的定向复跑也通过，搜索、改写原文、添加便笺和回复四项工具均成功，追问发出 12.21 秒后收到已保存回执。[PDF 交接浏览器用例](../../../apps/web/test/local-browser/dsh-office-handoff.test.mjs)
+
+PR 候选 `15a0ed5e` 的 GitHub Actions 成功执行了四格式 Chromium 步骤，包含原版 PDF 助手交接用例。这两次候选之间的改动涉及独立 Web 锁文件、验收记录和导航及服务端测试，PDF 助手交接代码与浏览器用例相同。`89df7aa6` 的本地跑批仍保留首次超时记录。[GitHub 四格式 Chromium 验证](https://github.com/ClassesOver/DyOffice/actions/runs/45005639852/job/137156502751)
 
 候选 `d90ea092` 显式启用本机 Codex CLI `0.169.0` 后，跳过的原生 PDF 内置 Codex 用例单独复跑通过。固定模型驱动实际委派和计算，原生编辑器在一次显式保存中提交原文与已有批注的修改，重开后读回结果。此证据使用合成模型响应。[原生 PDF Codex 回归](../../../apps/web/test/local-browser/native-pdf-harness.test.mjs)
 

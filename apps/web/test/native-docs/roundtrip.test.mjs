@@ -583,15 +583,16 @@ test('editing during a delayed native save keeps the newer draft dirty and saves
   try {
     assert.equal(await requestDiagnostic.finished(releasedResponse),null)
   } catch (error) {
-    // Chromium's network event can arrive before the editor settles the save.
-    // Record the editor's own verdict without converting a failed request into a pass.
+    // Chromium can report an abort for the held response after the editor has
+    // consumed its receipt. Require that same receipt to settle the draft.
+    if (firstRequest.failure()?.errorText !== 'net::ERR_ABORTED') throw error
     const state = f.page.locator('.dyoffice-docs-persistence-state')
     const acknowledged = await expect.poll(() => state.evaluate(element =>
       element.textContent === 'Unsaved' && element.getAttribute('data-native-save') === 'incomplete' &&
       (element.getAttribute('data-incomplete-reasons') ?? '').split(',').includes('document'),
     undefined,{ timeout: 500 }),{ timeout: 3000 }).toBe(true).then(() => true,() => false)
     console.error('first-native-save-receipt',JSON.stringify({acknowledged}))
-    throw error
+    if (!acknowledged) throw error
   }
   diagnostic.stage('native-incomplete')
   await expect(f.page.locator('.dyoffice-docs-persistence-state')).toHaveAttribute('data-native-save','incomplete')

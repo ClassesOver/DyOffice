@@ -7,6 +7,7 @@ import {resolve} from 'node:path'
 import {officeBrowserAsset as dist} from '../helpers/office-browser-assets.mjs'
 import {execFileSync} from 'node:child_process'
 import JSZip from 'jszip'
+import { XMLParser } from 'fast-xml-parser'
 import {PDFDict,PDFDocument,PDFName} from 'pdf-lib'
 import {expect} from '@playwright/test'
 import {launchTestBrowser} from '../helpers/browser.mjs'
@@ -68,7 +69,13 @@ for(const format of ['xlsx','pptx','pdf'])test('DSH writes, saves and follows up
    if(format==='pdf'){name='insert_text';input={page:1,text:marker,x:40,y:70,font_size:16,max_width:180}}
   }else if(format==='xlsx'&&calls.length===1){name='read_range';input={range:'A1:A1'}
   }else if(format==='xlsx'&&calls.length===2){
-   name='propose_operations';input={summary:'Write example',operations:[{op:'set_cell',sheetId:/id=([^,)]+)/.exec(request.messages.find(m=>m.role==='tool').results[0].output)?.[1],address:'A1',value:marker}]}
+   const sheetId=/id=([^,)]+)/.exec(request.messages.find(m=>m.role==='tool').results[0].output)?.[1]
+   name='propose_operations';input={summary:'Write example and calculate a total',operations:[
+    {op:'set_cell',sheetId,address:'A1',value:marker},
+    {op:'set_cell',sheetId,address:'A2',value:17},
+    {op:'set_cell',sheetId,address:'A3',value:25},
+    {op:'set_formula',sheetId,address:'B2',formula:'=SUM(A2:A3)'},
+   ]}
   }else if(format==='pdf'&&following){
    if(last?.role==='tool')for(const result of last.results)pdfResults.set(result.name,result)
    switch(pdfStep++){
@@ -101,6 +108,15 @@ for(const format of ['xlsx','pptx','pdf'])test('DSH writes, saves and follows up
  const bytes=await f.files.readFile(f.alice.token,fileId,file.revision)
  const content=format==='pdf'?execFileSync('pdftotext',['-','-'],{input:Buffer.from(bytes),encoding:'utf8'}):await (async()=>{const zip=await JSZip.loadAsync(bytes);return (await Promise.all(zip.file(/\.xml$/).map(item=>item.async('string')))).join('')})()
  assert.ok(content.includes(marker))
+ if(format==='xlsx'){
+  const zip=await JSZip.loadAsync(bytes)
+  const xml=await zip.file('xl/worksheets/sheet1.xml').async('string')
+  const {worksheet}=new XMLParser({ignoreAttributes:false}).parse(xml)
+  const cells=worksheet.sheetData.row.flatMap(row=>row.c)
+  const total=cells.find(cell=>cell['@_r']==='B2')
+  assert.equal(total?.f,'SUM(A2:A3)')
+  assert.equal(total?.v,42)
+ }
  await page.evaluate(question=>{window.question={id:crypto.randomUUID(),question}},question)
  await expect.poll(()=>page.evaluate(()=>window.receipt?.followup?.state),{timeout:15000}).toMatch(/^(ready|failed)$/)
  assert.deepEqual(await page.evaluate(()=>({state:window.receipt.followup.state,answer:window.receipt.followup.answer})),{state:'ready',answer:'Office replied'})
@@ -112,6 +128,7 @@ for(const format of ['xlsx','pptx','pdf'])test('DSH writes, saves and follows up
  // taking over the editing lease or executing the same assistant turn again.
  await f.preferences.update(f.alice.token,{showAssistant:true})
  const viewer=await browser.newContext({ignoreHTTPSErrors:true})
+ if(format==='xlsx')await viewer.addInitScript(()=>{window.__genofficeDebugHooks=true})
  await viewer.addCookies([{name:'__Host-dyoffice-session',value:f.alice.token,url:origin+'/',secure:true,httpOnly:true,sameSite:'Strict'}])
  await viewer.route('**/api/v1/ai/catalog',route=>route.fulfill({json:{entries:[{id:'mock',label:'Office'}],defaultId:'mock'}}))
  let passiveRuns=0
@@ -122,6 +139,10 @@ for(const format of ['xlsx','pptx','pdf'])test('DSH writes, saves and follows up
    await peer.locator('button.expand-copilot,.ai-chat').first().waitFor()
    const rail=peer.locator('button.expand-copilot')
    if(await rail.isVisible())await rail.click()
+   await expect.poll(()=>peer.evaluate(()=>{
+    const range=window.__genofficeDebug?.univerAPI?.getActiveWorkbook()?.getActiveSheet()?.getRange('B2')
+    return range?{formula:range.getFormula(),value:range.getValue()}:null
+   })).toEqual({formula:'=SUM(A2:A3)',value:42})
  }
  await expect(peer.getByText(question,{exact:true})).toHaveCount(1,{timeout:15000})
  assert.equal(passiveRuns,0)
