@@ -278,7 +278,8 @@ function exactNumber(input: unknown): number {
   if (typeof input === 'string' && normalizedDecimal(input) !== normalizedDecimal(String(value))) throw sourceError(502)
   return value
 }
-function snapshotFor(row: Row, execution: SourceExecution, sql?: SqlRows, http?: unknown[]): QuerySnapshot {
+/** Exported for the offline analysis evaluation harness (tools/dyoffice/analysis-eval). */
+export function snapshotFor(row: Row, execution: SourceExecution, sql?: SqlRows, http?: unknown[]): QuerySnapshot {
   let schema: QueryColumn[], rows: Record<string, QueryCell>[]
   const units = row.config.units ?? {}, maxRows = execution.maxRows
   if (sql) {

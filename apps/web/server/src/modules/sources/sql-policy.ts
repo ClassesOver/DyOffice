@@ -4,6 +4,9 @@ import type { SqlSourceKind } from '../../security/egress.ts'
 const parser = new sqlParser.Parser()
 const invalid = () => Object.assign(new Error('Only an approved read-only SELECT is allowed'), { statusCode: 400 })
 const functions = new Set(['abs','ceil','ceiling','floor','round','mod','power','sqrt','lower','upper','length','char_length','concat','concat_ws','substring','substr','trim','ltrim','rtrim','replace','coalesce','nullif','ifnull','greatest','least','current_date','current_timestamp','date_trunc','date_part','date_format','year','month','day','date','extract','generate_series'])
+const extractFields = new Set(['YEAR','QUARTER','MONTH','WEEK','DAY','DOW','ISODOW','DOY','HOUR','MINUTE','SECOND','EPOCH'])
+const intervalUnits = new Set(['YEAR','QUARTER','MONTH','WEEK','DAY','HOUR','MINUTE','SECOND'])
+const intervalText = /^\s*-?\d{1,6}(?:\.\d{1,6})?\s*(?:years?|mons?|months?|weeks?|days?|hours?|mins?|minutes?|secs?|seconds?)(?:\s+-?\d{1,6}(?:\.\d{1,6})?\s*(?:years?|mons?|months?|weeks?|days?|hours?|mins?|minutes?|secs?|seconds?)){0,5}\s*$/i
 const aggregates = new Set(['count','sum','avg','min','max','stddev','stddev_pop','stddev_samp','variance','var_pop','var_samp'])
 const operators = new Set(['=','!=','<>','<','>','<=','>=','+','-','*','/','%','AND','OR','LIKE','NOT LIKE','ILIKE','NOT ILIKE','IS','IS NOT','IN','NOT IN','BETWEEN','NOT BETWEEN','||'])
 const nodeTypes = new Set(['select','expr','column_ref','number','single_quote_string','double_quote_string','string','bool','null','star','default','origin','expr_list','binary_expr','unary_expr','function','aggr_func','case','when','else','cast','array'])
@@ -49,7 +52,15 @@ export function validateReadOnlySql(sql: unknown, dialect: SqlSourceKind, scope?
       if (Array.isArray(value)) { for (const item of value) walk(item, depth + 1); return }
       const node = value as Record<string, any>
       const pgDate = dialect === 'postgres' && node.type === 'date' && typeof node.value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(node.value) && Object.keys(node).length === 2
-      if (node.type !== undefined && node.type !== null && !nodeTypes.has(node.type) && !['ASC','DESC','DISTINCT'].includes(node.type) && !pgDate) throw invalid()
+      // EXTRACT(<field> FROM <expr>) parses to its own node; only fixed date-part names are accepted.
+      const extract = node.type === 'extract' && node.args && typeof node.args.field === 'string' && extractFields.has(node.args.field.toUpperCase()) && Object.keys(node.args).every(key => ['field','cast_type','source'].includes(key)) && (node.args.cast_type === undefined || node.args.cast_type === null)
+      if (node.type === 'extract' && !extract) throw invalid()
+      // INTERVAL '1 month' / INTERVAL 1 MONTH: a literal duration, nothing else.
+      const interval = node.type === 'interval' && Object.keys(node).every(key => ['type','expr','unit'].includes(key)) && typeof node.unit === 'string' && (
+        node.unit === '' ? node.expr?.type === 'single_quote_string' && typeof node.expr.value === 'string' && intervalText.test(node.expr.value)
+          : intervalUnits.has(node.unit.toUpperCase()) && node.expr?.type === 'number' && Number.isFinite(Number(node.expr.value)))
+      if (node.type === 'interval' && !interval) throw invalid()
+      if (node.type !== undefined && node.type !== null && !nodeTypes.has(node.type) && !['ASC','DESC','DISTINCT'].includes(node.type) && !pgDate && !extract && !interval) throw invalid()
       if (node.type === 'select') {
         if (Object.keys(node).some(key => !selectKeys.has(key)) || node.options || node.locking_read || node.window || node.collate || node.into && Object.values(node.into).some(v => v !== null) || node.set_op && !['union','union all','intersect','except'].includes(node.set_op)) throw invalid()
       }
