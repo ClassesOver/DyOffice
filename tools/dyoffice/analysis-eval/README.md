@@ -67,3 +67,7 @@ node tools/dyoffice/analysis-eval/dsh-recovery.mjs
 ```
 
 The browser delegates to an external fixture process, resumes the parent conversation, recovers the delivery from history and inserts it. The test checks the saved document for the report and its hash, then reopens it. The JSON report records the outcome and any failed assertion. Use `--format xlsx|pptx|pdf` with the corresponding native test assets to select another format.
+
+## Word document effects
+
+Run `node tools/dyoffice/analysis-eval/word-effects.mjs --fixture` to verify a table, bold formatting and a comment anchored to the requested text. Each scenario creates a fresh in-memory Tiptap Word document with the production extensions and calls the native tool executor. With the same gateway configuration as editor selection, use `--model MODEL_ID` to execute the model’s first tool call and record its arguments, result and document check in `test-results/word-effects/report.json`.
