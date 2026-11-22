@@ -196,7 +196,7 @@ Office 模型收到 `sources_list`、`sources_describe`、`sources_query`、`sou
 
 ## GenOffice 桌面与共享定义
 
-Web 管理端可以连接外部 MCP 服务器并列出工具。GenOffice 桌面 MCP 的 25 个定义仍由桌面进程提供，Web 的同类能力须按各自的浏览器、授权 API 或原生任务验证。SaaS 外部 MCP 客户端的发现、调用、保存和重连仍需逐工具验收。[管理端 MCP 路由](../../../apps/web/server/src/modules/admin/routes.mjs) [MCP 迁移清单](../inventory/agent-mcp-migration.md)
+Web 管理端可以连接外部 MCP 服务器并列出工具。GenOffice 桌面 MCP 的 25 个定义仍由桌面进程提供，Web 的同类能力须按各自的浏览器、授权 API 或原生任务验证。SaaS 外部 MCP 已实测四格式保存修订读取，以及 PDF 页面旋转、XLSX 字面单元格写入、PPTX 讲稿备注写入和重连回执。DOCX 段落替换已在后续 PR 验证；其余外部操作按工具继续验收。[管理端 MCP 路由](../../../apps/web/server/src/modules/admin/routes.mjs) [MCP 迁移清单](../inventory/agent-mcp-migration.md) [四格式 MCP 证据](genoffice-web-parity.md#t19-外部-mcp-读取) [DOCX 写入 PR #202](https://github.com/ClassesOver/DyOffice/pull/202)
 
 | 定义 | 清单中的执行位置 | Web 对照 |
 | --- | --- | --- |
@@ -212,20 +212,20 @@ Web 管理端可以连接外部 MCP 服务器并列出工具。GenOffice 桌面 
 | [`open_in_genoffice`](../../../apps/shell/src/main/mcp/tools/document-tools.ts) | `unsupported` | 桌面专用。四格式的 Web 助手工具请求均过滤此名称，[模型转发规则单测](../../../apps/web/test/unit/assistant-client.test.mjs) |
 | [`read_blocks`](../../../apps/shell/src/main/mcp/tools/document-tools.ts) | `live` | 见 DOCX 表的 `read_blocks` |
 | [`read_document`](../../../apps/shell/src/main/mcp/tools/document-tools.ts) | `live` | Web 的活动文档读取对应 DOCX 的 `get_document_context` 与 `read_blocks` |
-| [`read_docx`](../../../apps/shell/src/main/mcp/tools/document-tools.ts) | `headless` | Web 有活动文档读取路径。对持久化文件的无界面 MCP 读取待验 |
+| [`read_docx`](../../../apps/shell/src/main/mcp/tools/document-tools.ts) | `headless` | 外部 `read_saved_document` 已验收授权 DOCX 修订的可见正文。活动文档另见 `read_blocks` |
 | [`read_docx_properties`](../../../apps/shell/src/main/mcp/tools/document-tools.ts) | `headless` | Web 的等价文件属性查询工具待验 |
 | [`replace_blocks`](../../../apps/shell/src/main/mcp/tools/document-tools.ts) | `live` | 见 DOCX 表的 `replace_blocks` |
 | [`open_documents`](../../../apps/shell/src/main/mcp/tools/open-documents-tools.ts) | `live` | Web 有按文件 ID 打开工作区文件的路径。一次打开多个文档的 MCP 工具待验 |
-| [`read_pdf`](../../../apps/shell/src/main/mcp/tools/pdf-tools.ts) | `headless` | Web 活动编辑器对应 PDF 的 `read_pages`。无界面 MCP 读取待验 |
+| [`read_pdf`](../../../apps/shell/src/main/mcp/tools/pdf-tools.ts) | `headless` | 外部 `read_saved_document` 已验收授权 PDF 修订的可见文本。活动编辑器另见 `read_pages` |
 | [`create_session`](../../../apps/shell/src/main/mcp/tools/session-tools.ts) | `live` | Web 原生编辑器会打开绑定文件的会话。MCP 会话接口待验 |
 | [`save_session`](../../../apps/shell/src/main/mcp/tools/session-tools.ts) | `live` | Web 原生编辑器有显式保存与版本回执。MCP 会话保存接口待验 |
-| [`apply_sheet_ops`](../../../apps/shell/src/main/mcp/tools/sheets-tools.ts) | `live` | 见 XLSX 表的 `propose_operations`。MCP 批操作接口待验 |
+| [`apply_sheet_ops`](../../../apps/shell/src/main/mcp/tools/sheets-tools.ts) | `live` | 外部 `set_xlsx_cells` 已验收批准的字面值及修订回执。其余批操作见 XLSX 表的 `propose_operations` |
 | [`create_xlsx`](../../../apps/shell/src/main/mcp/tools/sheets-tools.ts) | `headless` | 见 XLSX 表的 `create_document`。无界面 MCP 创建待验 |
-| [`read_sheet`](../../../apps/shell/src/main/mcp/tools/sheets-tools.ts) | `live` | Web 活动工作簿对应 XLSX 的 `read_range` 与 `read_cells`，跨入口对齐待验 |
+| [`read_sheet`](../../../apps/shell/src/main/mcp/tools/sheets-tools.ts) | `live` | 外部 `read_saved_document` 已验收授权 XLSX 修订的可见单元格文本。区域和结构化数据见 `read_range` 与 `read_cells` |
 | [`sheet_links`](../../../apps/shell/src/main/mcp/tools/sheets-tools.ts) | `headless` | 默认 Node/WASI、Rust 和混合部署均已在 Web 原生编辑器验证外链读取、换源、保存式刷新和断开。MCP 入口仍待对齐。[XLSX 验收](genoffice-web-parity.md) |
-| [`apply_slide_ops`](../../../apps/shell/src/main/mcp/tools/slides-tools.ts) | `live` | 见 PPTX 表的 `apply_ops`。MCP 批操作接口待验 |
+| [`apply_slide_ops`](../../../apps/shell/src/main/mcp/tools/slides-tools.ts) | `live` | 外部 `set_pptx_notes` 已验收批准的讲稿备注及修订回执。其他批操作见 PPTX 表的 `apply_ops` |
 | [`create_pptx`](../../../apps/shell/src/main/mcp/tools/slides-tools.ts) | `headless` | Web 助手使用 `generate_deck` 生成并在原生编辑器保存。无界面 MCP 创建待验 |
-| [`read_deck`](../../../apps/shell/src/main/mcp/tools/slides-tools.ts) | `live` | Web 活动编辑器提供 `read_slide`。整套幻灯片的 MCP 读取待验 |
+| [`read_deck`](../../../apps/shell/src/main/mcp/tools/slides-tools.ts) | `live` | 外部 `read_saved_document` 已验收授权 PPTX 修订的可见幻灯片文本。单页结构化输出见 `read_slide` |
 | [`read_attachment`](../../../packages/agent-core/src/attachments-skill.ts) | `headless` | 见 DOCX、XLSX、PPTX、PDF 表 |
 | [`load_guide`](../../../packages/agent-core/src/cli-skill.ts) | `headless` | 见 XLSX、PPTX 表 |
 | [`run_genoffice`](../../../packages/agent-core/src/cli-skill.ts) | `headless` | 四格式 Web 助手工具请求均过滤此名称。Web 任务 API 支持 `xlsx.roundtrip` 固定任务，[模型转发规则单测](../../../apps/web/test/unit/assistant-client.test.mjs) [Web 任务路由](../../../apps/web/server/src/modules/jobs/routes.ts) |
