@@ -71,3 +71,9 @@ The browser delegates to an external fixture process, resumes the parent convers
 ## Word document effects
 
 Run `node tools/dyoffice/analysis-eval/word-effects.mjs --fixture` to verify a table, bold formatting and a comment anchored to the requested text. Each scenario creates a fresh in-memory Tiptap Word document with the production extensions and calls the native tool executor. With the same gateway configuration as editor selection, use `--model MODEL_ID` to execute the model’s first tool call and record its arguments, result and document check in `test-results/word-effects/report.json`.
+
+## Codex chart delivery
+
+Build `build:web:slides` and `build:harness-data-helper`. The evaluation uses Chromium, disposable PostgreSQL, a native Codex CLI and an offline Python environment with Matplotlib. Set `DYOFFICE_TEST_CODEX_BINARY` to the native executable and `DYOFFICE_TEST_ANALYSIS_PYTHON` to the virtual environment's Python. The harness reads the environment manifest from the virtual environment's parent directory.
+
+Run `node tools/dyoffice/analysis-eval/codex-chart.mjs` for the fixed-model sample. The browser delegates to Codex, which runs Python and commits a chart, a table and a report. The sample inserts them in a slide and checks the saved PNG against the committed SHA-256. The JSON report records the outcome in `test-results/codex-chart`. For the live-model variant, use `--live` with `DYOFFICE_LIVE_PPTX_HARNESS_CONFIG` pointing to an enabled Office test model configuration.

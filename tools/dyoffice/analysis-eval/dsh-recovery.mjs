@@ -1,6 +1,4 @@
-import { mkdir, writeFile } from 'node:fs/promises'
-import { join } from 'node:path'
-import { run } from 'node:test'
+import { reportBrowserScenario } from './browser-report.mjs'
 import { parseArgs } from 'node:util'
 import { fileURLToPath } from 'node:url'
 
@@ -19,19 +17,5 @@ process.env.DYOFFICE_REAL_DSH = 'off'
 process.env.DYOFFICE_DSH_FIXTURE = 'on'
 process.env.DYOFFICE_DSH_FORMAT = values.format
 
-const report = { format: values.format, executor: 'external-fixture', checks: [] }
-const stream = run({ files: [testFile], execArgv: ['--import', 'tsx'], concurrency: 1 })
-for await (const {type, data} of stream) {
-  if (type !== 'test:pass' && type !== 'test:fail') continue
-  if (data.skip && !data.name.startsWith(values.format + ' ')) continue
-  const error = data.details.error
-  report.checks.push({ name: data.name, passed: type === 'test:pass' && !data.skip,
-    durationMs: data.details.duration_ms, ...(data.skip && { skipped: true }),
-    ...(error && { error: error.cause?.message ?? error.message }) })
-}
-await mkdir(values.out, { recursive: true })
-const path = join(values.out, 'report.json')
-await writeFile(path, JSON.stringify(report, null, 2) + '\n')
-console.log(path, report.checks)
-if (!report.checks.some(check => check.name.startsWith(values.format + ' ')) ||
-    report.checks.some(check => !check.passed)) process.exitCode = 1
+await reportBrowserScenario({ testFile, pattern: new RegExp('^' + values.format + ' '), out: values.out,
+  metadata: { format: values.format, executor: 'external-fixture' } })

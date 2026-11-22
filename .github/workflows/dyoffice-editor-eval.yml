@@ -50,7 +50,7 @@ jobs:
             test-results/word-effects/report.json
           if-no-files-found: error
 
-  dsh-recovery:
+  harness-recovery:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     services:
@@ -83,4 +83,28 @@ jobs:
         with:
           name: dsh-recovery-report
           path: test-results/dsh-recovery/report.json
+          if-no-files-found: error
+      - name: Build the PowerPoint editor and Codex data helper
+        run: npm run build:web:slides && npm run build:harness-data-helper
+      - name: Install the pinned Codex and plotting fixture
+        run: |
+          npm install --prefix "$RUNNER_TEMP/chart-cli" --no-save @openai/codex@0.169.0
+          cli=$(find "$RUNNER_TEMP/chart-cli" -type f -path '*/vendor/x86_64-unknown-linux-musl/bin/codex' -print -quit)
+          test -x "$cli"
+          echo "DYOFFICE_TEST_CODEX_BINARY=$cli" >> "$GITHUB_ENV"
+          sudo apt-get update && sudo apt-get install -y python3-matplotlib python3-venv
+          python=/usr/bin/python3
+          runtime="$RUNNER_TEMP/chart-python"
+          "$python" -m venv --without-pip --system-site-packages "$runtime/runtime"
+          "$runtime/runtime/bin/python" -c 'import json, matplotlib, platform; print(json.dumps(dict(python=platform.python_version(), matplotlib=matplotlib.__version__, source="ci-system-packages")))' > "$runtime/manifest.json"
+          echo "DYOFFICE_TEST_ANALYSIS_PYTHON=$runtime/runtime/bin/python" >> "$GITHUB_ENV"
+      - name: Verify the Codex chart in the saved presentation
+        env:
+          DYOFFICE_TEST_DATABASE_URL: postgresql://postgres:local-ci-only@localhost:5432/dyoffice_test
+        run: node tools/dyoffice/analysis-eval/codex-chart.mjs
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        if: always()
+        with:
+          name: codex-chart-report
+          path: test-results/codex-chart/report.json
           if-no-files-found: error
