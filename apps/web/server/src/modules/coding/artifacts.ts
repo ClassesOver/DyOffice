@@ -8,6 +8,8 @@ export interface HarnessArtifactRef {artifactId:string;taskId:string;name:string
 export interface AnalysisDelivery {taskId:string;claimId:string;connectionEpoch:number;commandId:string;summary:string;artifacts:HarnessArtifactRef[];inputs:unknown[];runtimeManifestSha256:string;limitations:string[];createdAt:string}
 export interface HarnessArtifactStage extends HarnessArtifactBinding {name:string;mediaType:string;role:string;inputResultIds:string[];sha256:string}
 export interface HarnessArtifactCommit extends HarnessArtifactBinding {commandId:string;summary:string;artifactIds:string[];inputs:unknown[];runtimeManifestSha256:string;limitations:string[]}
+/** Per-owner bytes of stored analysis files (harness_artifact_accounts CHECK). */
+const ARTIFACT_BUDGET_BYTES=16*1024*1024
 const fail=(statusCode=400)=>Object.assign(Error('Analysis artifact unavailable'),{statusCode})
 const hash=(bytes:Buffer|string)=>createHash('sha256').update(bytes).digest('hex')
 function uuid(value:unknown):string {
@@ -69,7 +71,24 @@ export function createHarnessArtifacts({transactions,objects}:{transactions:Prin
     await task(c,p,b)
     const used=(await c.query('SELECT count(*) AS count,COALESCE(sum(size_bytes),0) AS bytes FROM harness_artifacts WHERE deployment_id=$1 AND owner_id=$2 AND task_id=$3',[...scope(p),b.taskId])).rows[0]
     if(Number(used.count)>=12||Number(used.bytes)+bytes.length>16*1024*1024)throw fail(413)
-    const charged=await c.query('UPDATE harness_artifact_accounts SET used_bytes=used_bytes+$3 WHERE deployment_id=$1 AND owner_id=$2 AND used_bytes+$3<=16777216 RETURNING used_bytes',[...scope(p),bytes.length])
+    const charge=()=>c.query('UPDATE harness_artifact_accounts SET used_bytes=used_bytes+$3 WHERE deployment_id=$1 AND owner_id=$2 AND used_bytes+$3<=16777216 RETURNING used_bytes',[...scope(p),bytes.length])
+    let charged=await charge()
+    if(!charged.rowCount&&objects.removeUnreferenced){
+     // The budget covers live deliveries, not a lifetime total: make room by
+     // reclaiming the oldest committed deliveries of other tasks. Their
+     // receipts remain; a later download of a reclaimed file answers 404.
+     const account=(await c.query('SELECT used_bytes FROM harness_artifact_accounts WHERE deployment_id=$1 AND owner_id=$2',scope(p))).rows[0]
+     let needed=Number(account?.used_bytes??0)+bytes.length-ARTIFACT_BUDGET_BYTES,freed=0
+     const oldest=(await c.query<ArtifactRow>("SELECT * FROM harness_artifacts WHERE deployment_id=$1 AND owner_id=$2 AND task_id<>$3 AND state='committed' ORDER BY created_at,artifact_id LIMIT 256",[...scope(p),b.taskId])).rows
+     for(const old of oldest){
+      if(needed<=0)break
+      await objects.removeUnreferenced(old.object_key)
+      await c.query('DELETE FROM harness_artifacts WHERE deployment_id=$1 AND owner_id=$2 AND artifact_id=$3',[...scope(p),old.artifact_id])
+      needed-=old.size_bytes;freed+=old.size_bytes
+     }
+     if(freed)await c.query('UPDATE harness_artifact_accounts SET used_bytes=used_bytes-$3 WHERE deployment_id=$1 AND owner_id=$2',[...scope(p),freed])
+     charged=await charge()
+    }
     if(!charged.rowCount)throw fail(413)
     return (await c.query<ArtifactRow>('INSERT INTO harness_artifacts(artifact_id,deployment_id,owner_id,task_id,object_key,name,media_type,role,input_result_ids,sha256,size_bytes) VALUES($3,$1,$2,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *',[...scope(p),artifactId,b.taskId,p.deploymentId+'/'+p.userId+'/objects/'+artifactId,name,mediaType,role,JSON.stringify(inputResultIds),expected,bytes.length])).rows[0]!
    })

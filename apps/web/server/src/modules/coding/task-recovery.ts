@@ -4,6 +4,9 @@ import {authError} from '../auth/sessions.ts'
 import type {HarnessCheckpoint} from '../../../../../../packages/agent-core/src/loop.ts'
 import {interruptedFailure,type CodingTaskRecoveryStore,type Continuation,type TaskState} from './task-recovery-store.ts'
 
+/** Renewal cadence and the point after which a 30 s lease (task-recovery-store) may have lapsed. */
+const HEARTBEAT_MS=10_000,HEARTBEAT_GIVE_UP_MS=25_000
+
 export type AuthorizeTaskDocument=(token:string,id:string)=>Promise<{file:{revision:string}}|void>
 type Task={
   modelId:string;instruction?:string;state:TaskState
@@ -86,14 +89,19 @@ export function createCodingTaskRecovery(turns:TurnRunner,identity:(token:string
         try{await store?.start(token,documentId,turnId,{modelId,instruction},continuation,
           signal?AbortSignal.any([entry.controller.signal,signal]):entry.controller.signal)}
         catch(error){entries.delete(taskKey);complete=true;wake();throw error}
-        let renewing:Promise<void>|undefined
+        let renewing:Promise<void>|undefined,leaseSince=Date.now()
         const heartbeat=store&&setInterval(()=>{
           if(renewing||entry.controller.signal.aborted)return
           const {activity,progress}=entry
           renewing=store.renew(token,documentId,turnId,{modelId,instruction,activity,progress}).then(live=>{
-            if(!live)entry.controller.abort()
-          },()=>entry.controller.abort()).finally(()=>{renewing=undefined})
-        },10000)
+            // false: the lease is gone or cancellation was requested.
+            if(!live)entry.controller.abort();else leaseSince=Date.now()
+          },()=>{
+            // A transient store error is retried on the next tick; stop only once
+            // the last confirmed lease could already have expired.
+            if(Date.now()-leaseSince>=HEARTBEAT_GIVE_UP_MS)entry.controller.abort()
+          }).finally(()=>{renewing=undefined})
+        },HEARTBEAT_MS)
         heartbeat&&heartbeat.unref()
         try {
           entry.controller.signal.throwIfAborted()

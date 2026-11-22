@@ -244,3 +244,36 @@ test('delivery observation receives only a server result hint and does not break
  const result=await client.extraSkills[0].executeTool({id:'run',name:'delegate_agent_task',input:{instruction:'analyze'}})
  assert.equal(result.isError,undefined);assert.equal(seen.length,1);assert.deepEqual(seen[0].hint,delivery);assert.equal(seen[0].agent.id,'codex');client.dispose()
 })
+
+test('a task observed as failed after the stream dropped is an ordinary tool error, not a lost continuation',{timeout:5000},async t=>{
+ const documentId='10000000-0000-4000-8000-000000000001',revision='10000000-0000-4000-8000-000000000003'
+ const calls=[]
+ let dispatch,finish
+ const done=new Promise(resolve=>{finish=resolve})
+ const client=await createAssistantClient({request:async()=>catalog,documentId,continuationRevision:()=>revision,csrfToken:'c'.repeat(43),fetchImpl:async(url,init)=>{
+  const body=init.body?JSON.parse(init.body):undefined;calls.push({url,body})
+  if(url==='/api/v1/agents/tasks?documentId='+documentId)return Response.json({taskIds:[]})
+  if(init.method==='GET')return Response.json({turnId:dispatch.turnId,documentId,agentId:'codex',state:'failed',failure:'Codex execution failed: tests did not pass'})
+  if(url==='/api/v1/ai/turns'){
+   if(!dispatch)return response('tool_call',{id:'original-tool',name:'delegate_agent_task',input:{instruction:'Compute'}})
+   return response('delta',{text:'The delegated task failed; here is what I can do instead.'})
+  }
+  dispatch=body
+  throw TypeError('Connection lost')
+ }})
+ t.after(()=>client.dispose())
+ const {transport}=client
+ t.after(bindFileChat(transport,()=>({turnId:'10000000-0000-4000-8000-000000000004',async history(){return []},text(){},finish(){}})))
+ const loop=new AgentLoop({allowHarnessResume:true,skill:client.extraSkills[0],events:{onDone:finish,onError:error=>finish({error})},transport})
+ loop.run('Private original Office request',undefined,undefined,{text:'Private original Office request'})
+ const outcome=await done
+ assert.equal(outcome.error,undefined)
+ assert.equal(outcome.text,'The delegated task failed; here is what I can do instead.')
+ const requests=calls.filter(call=>call.url==='/api/v1/ai/turns').map(call=>call.body)
+ assert.equal(requests.length,2)
+ assert.equal(requests[1].harnessResume,undefined)
+ const toolResult=requests[1].request.messages.at(-1).results[0]
+ assert.equal(toolResult.id,'original-tool')
+ assert.match(JSON.stringify(toolResult),/Codex execution failed/)
+ assert.equal(client.coding.snapshot()[0].state,'failed')
+})

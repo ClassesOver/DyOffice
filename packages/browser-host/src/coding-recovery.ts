@@ -28,7 +28,7 @@ export function createCodingRecovery({documentId,storage,fetchImpl=fetch,csrfTok
   const saved=read(),watched=new Set<string>(),controller=new AbortController()
   const observers=new Map<string,(status?:RecoveryStatus)=>void>()
   let discovering=true,pending=false,timer:ReturnType<typeof setTimeout>|undefined
-  let discoveryTimer:ReturnType<typeof setTimeout>|undefined
+  let discoveryTimer:ReturnType<typeof setTimeout>|undefined,discoveryFailures=0
   const terminal=new Set(['succeeded','failed','unknown_outcome'])
   const get=(path:string)=>fetchImpl(path,{
     method:'GET',headers,credentials:'same-origin',mode:'same-origin',redirect:'error',cache:'no-store',
@@ -36,10 +36,12 @@ export function createCodingRecovery({documentId,storage,fetchImpl=fetch,csrfTok
   })
   async function discover(){
     const fallback=discovering?saved:[]
-    let ids:string[]=[],retry=false
+    let ids:string[]=[],retry=false,retryAfterMs=0
     try {
       const response=await get(taskPath+query)
       retry=response.status===429||(response.status>=500&&response.status!==501)
+      const after=Number(response.headers?.get?.('retry-after'))
+      if(retry&&Number.isFinite(after)&&after>0)retryAfterMs=Math.min(after,300)*1000
       if(response.ok){
         const value=await response.json()
         if(Array.isArray(value?.taskIds))ids=value.taskIds.slice(0,limit).filter(validId)
@@ -48,11 +50,18 @@ export function createCodingRecovery({documentId,storage,fetchImpl=fetch,csrfTok
     discovering=false
     if(controller.signal.aborted)return
     for(const id of [...new Set([...ids,...fallback])].slice(0,limit))watched.add(id)
-    if(retry)discoveryTimer=setTimeout(()=>void discover(),1000)
+    // Back off while the server is overloaded or unreachable instead of asking every second.
+    if(retry){
+      discoveryFailures++
+      clearTimeout(discoveryTimer)
+      discoveryTimer=setTimeout(()=>void discover(),Math.max(retryAfterMs,Math.min(60000,1000*2**(discoveryFailures-1))))
+    }else discoveryFailures=0
     void poll()
   }
   async function poll(){
     if(discovering||pending||controller.signal.aborted||!watched.size)return
+    // Exactly one polling loop: drop any scheduled run before starting this one.
+    clearTimeout(timer);timer=undefined
     pending=true
     try{
       await Promise.all([...watched].map(async id=>{
@@ -76,7 +85,8 @@ export function createCodingRecovery({documentId,storage,fetchImpl=fetch,csrfTok
       }))
     }finally{
       pending=false
-      if(watched.size&&!controller.signal.aborted)timer=setTimeout(()=>void poll(),1000)
+      clearTimeout(timer)
+      timer=watched.size&&!controller.signal.aborted?setTimeout(()=>void poll(),1000):undefined
     }
   }
   void discover()

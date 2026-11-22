@@ -42,6 +42,16 @@ interface Entry {
  * credentials are returned. This is an in-memory task lifecycle, not pairing
  * or durable claim recovery. Revocation removes the sole current claim.
  */
+/**
+ * A grant must outlive the Harness run it serves: the 600 s Codex deadline
+ * starts only after CLI and runtime setup, and the delivery receipt is read
+ * after the run. The route revokes the grant as soon as the task ends, so the
+ * margin never extends access past the task.
+ */
+const GRANT_DEFAULT_TTL_MS=720_000,GRANT_MAX_TTL_MS=900_000
+export const HARNESS_GRANT_DEFAULT_TTL_MS=GRANT_DEFAULT_TTL_MS
+const ACTIONABLE_STATUSES=new Set([400,409,413,429,504])
+
 export function createHarnessDataAccess(options:{
   tools:Pick<WorkspaceSourceTools,'execute'>
   results:Pick<WorkspaceSourceResults,'read'|'download'>
@@ -86,7 +96,10 @@ export function createHarnessDataAccess(options:{
     entry.busy=true
     const token=entry.token
     try {await validate(entry);const result=await operation();await validate(entry);return result}
-    catch(error){throw unavailable((error as {statusCode?:number}).statusCode===429?429:403)}
+    // Keep the kinds of failure a task can act on (bad arguments, a conflicting
+    // commit, a size/budget limit, rate limit, source timeout); anything else,
+    // including revocation, stays an opaque 403. Messages never pass through.
+    catch(error){const status=(error as {statusCode?:number}).statusCode;throw unavailable(status!==undefined&&ACTIONABLE_STATUSES.has(status)?status:403)}
     finally {entry.busy=false;if(entries.get(entry.taskId)!==entry)cleanup(entry,token)}
   }
   function resultId(entry:Entry,value:unknown) {
@@ -99,8 +112,8 @@ export function createHarnessDataAccess(options:{
       const value={...object(input,['token','agentId','inputs','signal','ttlMs','authorize'])},inputs=scope(value.inputs)
       if(value.authorize!==undefined&&typeof value.authorize!=='function')throw unavailable(400)
       if(typeof value.token!=='string'||!value.token||typeof value.agentId!=='string'||!/^[A-Za-z0-9_-]{1,100}$/.test(value.agentId)||!(value.signal instanceof AbortSignal))throw unavailable(400)
-      const ttlMs=value.ttlMs??600000
-      if(!Number.isSafeInteger(ttlMs)||(ttlMs as number)<1||(ttlMs as number)>600000)throw unavailable(400)
+      const ttlMs=value.ttlMs??GRANT_DEFAULT_TTL_MS
+      if(!Number.isSafeInteger(ttlMs)||(ttlMs as number)<1||(ttlMs as number)>GRANT_MAX_TTL_MS)throw unavailable(400)
       if(disposed||value.signal.aborted)throw unavailable()
       // Finished remote claims have no local finally block. Reclaim their
       // bounded slots on admission without introducing a cleanup daemon.

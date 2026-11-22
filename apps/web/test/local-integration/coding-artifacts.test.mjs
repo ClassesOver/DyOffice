@@ -88,3 +88,23 @@ test('committed lineage must include every result referenced by an artifact',asy
  const receipt=await f.service.commit(f.alice.token,{...command,inputs:[input]})
  assert.deepEqual(receipt.inputs,[input]);assert.deepEqual(receipt.artifacts[0].inputResultIds,[resultId])
 })
+
+test('committed deliveries are reclaimed oldest first when a new task needs room; the budget is not a lifetime total',async t=>{
+ const f=await fixture(t),bytes=Buffer.alloc(8*1024*1024,2)
+ const older=binding(),newer=binding()
+ const first=await f.stage(older,bytes,{name:'older.bin'})
+ await f.service.commit(f.alice.token,f.commit(older,[first.artifactId]))
+ const second=await f.stage(newer,bytes,{name:'newer.bin'})
+ await f.service.commit(f.alice.token,f.commit(newer,[second.artifactId]))
+ assert.equal(await f.account(),16*1024*1024)
+ // Before the fix this was a permanent 413 for the owner.
+ const next=binding(),small=Buffer.from('fresh chart')
+ const fresh=await f.stage(next,small,{name:'fresh.txt'})
+ assert.equal(await f.account(),8*1024*1024+small.length)
+ await assert.rejects(f.service.download(f.alice.token,first.artifactId),{statusCode:404})
+ assert.equal((await f.service.download(f.alice.token,second.artifactId)).bytes.length,bytes.length)
+ assert.ok(fresh.artifactId)
+ // Staged files of a live task are never reclaimed for another task.
+ await f.stage(next,bytes,{name:'big.bin'})
+ await assert.rejects(f.stage(binding(),bytes,{name:'third.bin'}),{statusCode:413})
+})

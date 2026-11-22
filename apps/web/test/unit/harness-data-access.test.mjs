@@ -107,7 +107,7 @@ test('issued grant and caller input are snapshots, and per-owner admission inclu
 
 test('invalid issue fields and scopes are rejected before tools execute; disposal prevents issue',async t=>{
   const f=fixture(t)
-  for(const extras of [{ttlMs:600001},{ttlMs:0},{ownerId:'bob'},{agentId:'bad agent'}])await assert.rejects(f.issue(undefined,extras))
+  for(const extras of [{ttlMs:900001},{ttlMs:0},{ownerId:'bob'},{agentId:'bad agent'}])await assert.rejects(f.issue(undefined,extras))
   for(const inputs of [{sourceIds:['sales'],resultIds:[],ownerId:'bob'},{sourceIds:['sales'],resultIds:['not-uuid']},{sourceIds:Array(33).fill('sales'),resultIds:[]}])await assert.rejects(f.issue(inputs))
   assert.equal(f.calls.some(x=>x[0]==='tool'),false)
   f.access.dispose();await assert.rejects(f.issue())
@@ -257,4 +257,26 @@ test('expired frozen inputs never requery; a separate source query still needs a
  f.revoked.add(f.alice)
  await assert.rejects(f.access.execute(source.taskId,source.credential,'sources.query',{sourceId:'sales',sql:'SELECT 1'}))
  assert.equal(f.calls.filter(call=>call[0]==='tool'&&call[2].name==='sources.query').length,1,'revoked source query never reaches connector')
+})
+
+test('a default grant outlives the 600 s Harness deadline plus setup and delivery', async () => {
+  const { HARNESS_GRANT_DEFAULT_TTL_MS } = await import('../../server/src/modules/coding/data-access.ts')
+  assert.ok(HARNESS_GRANT_DEFAULT_TTL_MS >= 600_000 + 60_000)
+})
+
+test('a task sees actionable statuses (budget, conflict) but revocation and private failures stay an opaque 403',async t=>{
+  const status=code=>Object.assign(Error('private detail'),{statusCode:code})
+  let next=status(413)
+  const artifacts={async stage(){throw next},async commit(){throw next}}
+  const f=fixture(t,artifacts),g=await f.issue({sourceIds:[],resultIds:[f.resultId]})
+  const args={name:'report.txt',mediaType:'text/plain',role:'report',inputResultIds:[f.resultId],sha256:'a'.repeat(64),bytesBase64:Buffer.from('Report').toString('base64')}
+  for(const code of [413,409]){
+    next=status(code)
+    await assert.rejects(f.access.execute(g.taskId,g.credential,'artifacts.stage',args),error=>error.statusCode===code&&!error.message.includes('private'))
+  }
+  next=Error('database password leaked in message')
+  await assert.rejects(f.access.execute(g.taskId,g.credential,'artifacts.stage',args),error=>error.statusCode===403&&!error.message.includes('password'))
+  f.revoked.add(f.alice)
+  next=status(413)
+  await assert.rejects(f.access.execute(g.taskId,g.credential,'artifacts.stage',args),error=>error.statusCode===403)
 })
