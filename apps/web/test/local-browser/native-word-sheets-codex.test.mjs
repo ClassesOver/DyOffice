@@ -46,7 +46,11 @@ for(const format of ['docx','xlsx']){
    const request=response.request(),path=new URL(request.url()).pathname
    if(request.method()!=='POST')return
    if(path==='/api/v1/ai/turns')turns.push(request.postDataJSON().request)
-   if(path==='/api/v1/agents/tasks')tasks.push({status:response.status(),id:request.postDataJSON().turnId})
+   if(path==='/api/v1/agents/tasks'){
+    const submission=request.postDataJSON()
+    const taskText=submission.request?.messages?.[0]?.text
+    tasks.push({status:response.status(),id:submission.turnId,requestedData:typeof taskText==='string'&&taskText.includes('"dataInputs":')})
+   }
   })
   const editor=page.locator('.tiptap.doc-page'),panel=page.locator(word?'.ai-panel':'.copilot:not(.collapsed)'),rail=page.locator(word?'.ai-rail':'.expand-copilot'),composer=panel.locator('textarea')
   const ready=()=>expect(page.locator('html')).toHaveAttribute('data-document-loading','ready',{timeout:30000})
@@ -59,7 +63,14 @@ for(const format of ['docx','xlsx']){
   if(await rail.isVisible())await rail.click()
   await composer.fill(`用 delegate_agent_task 委派给默认执行器一次：让它实际运行代码算 143 + 298，并且在任务工作区写 total.json，格式为 {"total": 数值}。不要直接心算。收到结果后，${word?'用 insert_content 在当前 Word 文末插入一段，正文为 Verified total: 加上文件给出的数字。':'先用 get_workbook_context 确认工作表 ID，再用 propose_operations 把文件给出的数字写入当前工作表 H2 单元格，不改其他单元格。'} 写入成功后单独回复一行 ${marker}，我会手动保存。`)
   await panel.getByRole('button',{name:'发送',exact:true}).click()
-  await expect(panel.getByText(marker,{exact:true})).toBeVisible({timeout:240000})
+  try{
+   await expect(panel.getByText(marker,{exact:true})).toBeVisible({timeout:240000})
+  }catch(error){
+   const reply=await panel.locator(word?'.ai-msg-assistant,.ai-msg-error':'.ai-chat').allTextContents().catch(()=>[])
+   const results=turns.at(-1)?.messages.flatMap(message=>message.results??[])??[]
+   t.diagnostic(JSON.stringify({reply:reply.join('\n').slice(-1200),tasks,tools:results.map(({name,isError})=>({name,isError}))}))
+   throw error
+  }
   assert.deepEqual(tasks.map(task=>task.status),[200])
   await expect(panel.locator('.assistant-task-message:visible')).toHaveAttribute('data-team-task','harness:'+tasks[0].id)
   const results=turns.at(-1).messages.flatMap(message=>message.results??[])

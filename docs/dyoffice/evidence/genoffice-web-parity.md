@@ -55,6 +55,8 @@ Word 的 D05 浏览器回归核对同版本引用以只读方式打开保存原�
 
 Web Word 知识库把文件名保留为来源标签，模型收到的引用路径只包含文件和修订 ID。点击仍通过当前收藏目录映射回服务端授权路径。单元回归覆盖同修订改名、更新后旧引用失效，以及拒绝目录外路径和伪造搜索结果。脚本化 Chromium 核对上下文和搜索结果给出的引用，以及点击后的原件和版本失效行为。同一构建使用 `gpt-6-sol` 连续运行三次，分别耗时 25.7、22.9、20.1 秒，三次都用搜索和读取工具核对了独有记录编号，返回精确链接并打开了含该编号的只读原件。[浏览器回归](../../../apps/web/test/local-browser/word-knowledge.test.mjs) [知识库桥接回归](../../../apps/web/test/unit/docs-knowledge.test.mjs)
 
+使用 `4f0ad52c` 的四种原生编辑器和同一真实模型复验写回。首轮 PDF、PPTX 和 XLSX 通过，Word 在委派执行阶段报 `ENOENT` 并失败。同一产品构建单独重跑 Word 通过，首次错误的具体缺失路径未记录。Excel 保存重开后 H2 为 441，Word 重跑后正文为 441，PDF 原文和现有便笺均为 42，PPTX 第二页重做后第一页 XML 字节一致。[Word 与 Excel 写回](../../../apps/web/test/local-browser/native-word-sheets-codex.test.mjs) [PowerPoint 写回](../../../apps/web/test/local-browser/native-slides-generate.test.mjs) [PDF 写回](../../../apps/web/test/local-browser/native-pdf-harness.test.mjs)
+
 `9922e244` 上补测了 XLSX 的中文数据分析任务。`gpt-6-sol` 从临时 PostgreSQL 的合成订单计算 2026 年 1 至 6 月实付金额，并调用 `insert_data_result`。6 个月的标签和数值均与数据库真值一致，7 项断言全部通过。该次试验耗时 14.7 秒，调用工具 5 次，输入 9,655 tokens，输出 328 tokens。评估将表格交给内存文档目标，浏览器保存和重开由独立用例覆盖。[真实模型数据分析评估](../../../tools/dyoffice/analysis-eval/README.md)
 
 同一提交的 DOCX 渠道汇总评估通过 6 项断言。模型调用 `insert_data_result`，三个渠道的订单量、金额和来源标记符合真值，耗时 18.1 秒，调用工具 7 次。评估接收表格的目标为内存文档。[真实模型数据分析评估](../../../tools/dyoffice/analysis-eval/README.md)
