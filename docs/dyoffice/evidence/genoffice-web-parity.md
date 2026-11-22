@@ -61,6 +61,8 @@ Web Word 知识库把文件名保留为来源标签，模型收到的引用路�
 
 在 `64e72d80` 的原生 PPTX 构建上，`gpt-6-sol` 发起两道问卷并接收选择，调用 `plan_deck` 返回两页规划，随后生成两页可编辑幻灯片。保存的 OOXML 中，第一页包含所选受众 `Field reviewers` 和周一收件，第二页包含所选交付物 `Release checklist` 和周五发布。保存重开后只重做第二页为 `Cobalt Review`，再次保存时第一页 XML 与前一修订字节一致。跟踪记录显示问卷、规划、生成和单页重做均返回成功。`14bb60ab` 的 GitHub 脚本化问卷偶发等待选项超时，本机复跑通过。现有测试在再次失败时记录 AI HTTP 状态、模拟网关请求数和面板错误。[原生 PPTX 浏览器用例](../../../apps/web/test/local-browser/native-slides-generate.test.mjs) [问卷失败记录](https://github.com/ClassesOver/DyOffice/actions/runs/45029115717)
 
+`a4d293fb` 的完整 Web 门禁通过。Chromium 95 项中 88 项通过、0 项失败、7 项按配置跳过。Word 跨格式引用回归通过，日志记录了 DOCX 42、XLSX 19、PPTX 20、PDF 48 个工具的成功执行，以及 PDF 旋转兼容映射和 9 个共享工具。[Web CI](https://github.com/ClassesOver/DyOffice/actions/runs/45032255128)
+
 后续复现了带数据授权的委派在缺少 `harness-data.mjs` 时于 `realpath` 报 `ENOENT`。当前 SaaS 构建会生成该文件，本机完成了带此步骤的全量构建。缺件时界面收到明确失败，服务端日志保留专用错误码，路径不进入客户端响应。实际安装的 Codex 通过了普通执行和受授权数据邮箱测试，独立 Harness 的 PostgreSQL 集成核对了一次源查询、冻结结果和持久交付回执。真实模型曾在普通算术请求中提交 `dataInputs`，因此工具定义明确了普通文本文件与已提交分析产物两种交付方式。使用新版定义复跑 Word 和 Excel，两项均省略该字段，返回代码执行产生的 `total.json`，保存重开后在 Word 正文和 Excel H2 读回 441。[Harness 回归](../../../apps/web/test/unit/coding-harness.test.mjs) [数据交付回归](../../../apps/web/test/local-integration/harness-data-flow.test.mjs)
 
 `4f0ad52c` 的 CI 有两项相关回归失败。Word 宿主用例仍期待旧引用格式，已更新并通过 17 项宿主定向检查。PDF 深色界面勾选在收到助手回复前超时，定向复跑通过并核对下载原件、勾选位置、相邻页像素及重开。本次保留该用例的响应与工具诊断。另有 `a982cdea` 的外部执行器取消用例未观测到预期的进程消失。夹具改为原子发布 PID，并在短时限内核实进程退出及任务的未知结果状态，PostgreSQL 定向复跑通过。[Word 与 PDF 的 CI](https://github.com/ClassesOver/DyOffice/actions/runs/45027900231) [取消用例的 CI](https://github.com/ClassesOver/DyOffice/actions/runs/45027212874)
@@ -162,6 +164,8 @@ Chromium 专项通过 Web 功能区断开外链。确认前文件版本保持不
 Web 新增外链刷新预览。调用传入目标保存修订，并按链接编号指定源文件 ID 和保存修订。服务端读取用户可访问的源工作簿，Rust 在宿主隔离进程中使用这些暂存字节计算。没有指定来源的链接保留旧缓存，原始包中的路径和 URL 不用于查找或请求。无 Docker 的 systemd 回归验证同一条公式在无绑定时返回缓存 84，指定来源后返回 25，公式文本一致。Rust 全部 328 项和宿主隔离套件全部 97 项通过。PostgreSQL HTTP 回归核对了跨账户、修订不匹配、传路径、重复编号和计算期间源文件进入回收站。预览不生成新修订，Web 编辑器保存、换源和 Node 工作簿执行路径仍待接入。[权限与修订回归](../../../apps/web/test/native-sheets/service.test.mjs) [宿主隔离回归](../../../apps/web/test/host-native/process.test.mjs)
 
 Rust 路径的原生“公式 → 外部链接”已接入工作区换源和保存式刷新。换源保存指向所选工作簿当时修订的同站下载链接。后续 Web 刷新依据同一文件 ID 选取当前保存修订，向原生计算进程提交获授权的字节。Chromium 在无 Docker 的 systemd 宿主上验证换源生成一个修订，公式与缓存 84 保留，链接可下载正确源文件。刷新生成一个新修订，`G3` 的公式保持 `[1]Catalog!$A$1`，缓存变成 37，已授权下载接口返回该修订原字节，重开显示 37。断开后 37 保留为普通数值，原始外部地址收到 0 次请求。一轮紧接刷新点击工具栏下载时下载被取消，独立的修订下载接口验证通过。Node 路径的换源和刷新、桌面 Excel 复开及桌面 MCP 工具入口仍待验。[Chromium 成品回归](../../../apps/web/test/local-browser/sheets-external-links.test.mjs)
+
+工具栏下载取消已通过占满两个共享传输名额复现。旧流程的下载返回 HTTP 503。修复后“保存并下载”使用已确认的修订进入原有有界等待队列。Chromium 在同样条件下收到 HTTP 200，下载字节与刷新后保存修订一致，下载未生成额外修订。后台读取在名额占满时仍返回 HTTP 503。真实 PostgreSQL 复验核对不同会话并发下的上传、下载和跨账户访问拒绝。夹具曾用同一凭据长时间暂停读取，后续请求在进入传输队列前触发了独立的 PostgreSQL 凭据锁超时。[Chromium 下载回归](../../../apps/web/test/local-browser/sheets-external-links.test.mjs) [传输与权限回归](../../../apps/web/test/local-integration/files.test.mjs)
 
 PPTX 的 View → Slide Master 已接入原 GenOffice 母版与版式编辑，包括文字、形状、位置、填充和描边。原生会话回归 31 项通过，核对继承、事务历史、稳定对象 ID、原生重开和未修改包部件。服务端路由回归通过，检查当前文件租约、版本和编辑代数；Chromium 通过功能区进入母版，鼠标绘制文本框、输入、保存并在下载文件的真实母版 XML 中核对文字。Web 桥接及隔离子进程回归共 66 项通过，同时恢复了 GenOffice 对不完整主题只显示可用强调色的行为。生产隔离与外部 PowerPoint 复开仍待验。
 

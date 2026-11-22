@@ -1,6 +1,7 @@
 import {test} from 'node:test'
 import assert from 'node:assert/strict'
 import {createServer} from 'node:http'
+import {EventEmitter} from 'node:events'
 import {mkdtemp,readFile,rm} from 'node:fs/promises'
 import {tmpdir} from 'node:os'
 import {join} from 'node:path'
@@ -14,6 +15,7 @@ import {fileFixture,importFile} from '../helpers/files.mjs'
 import {password} from '../helpers/identity.mjs'
 import {stubHomeHero} from '../helpers/home-hero.mjs'
 import {createCsrfService,SESSION_COOKIE} from '../../server/src/modules/auth/csrf.ts'
+import {objectTransferAdmission} from '../../server/src/modules/files/transfer-admission.ts'
 
 const sheetsDirectory=process.env.DYOFFICE_TEST_SHEETS_DIST
 const hostManifest=process.env.DYOFFICE_TEST_HOST_MANIFEST
@@ -22,12 +24,17 @@ test(hostManifest
  ?'XLSX preserves external formulas while relinking, refreshing and breaking workbook links'
  :'XLSX lists, preserves and breaks workbook links without fetching the source',
 {skip:!sheetsDirectory,timeout:180000},async t=>{
- let app,externalRequests=0
+ let app,externalRequests=0,downloadRevision
+ const downloadStatuses=[]
  const server=createServer((request,response)=>{
   if(request.url?.split('?')[0]==='/linked-source.xlsx'){
    externalRequests++
    response.writeHead(404).end()
    return
+  }
+  const url=new URL(request.url,'http://localhost')
+  if(downloadRevision&&request.method==='GET'&&url.pathname.endsWith('/content')&&url.searchParams.get('revision')===downloadRevision){
+   response.on('finish',()=>downloadStatuses.push(response.statusCode))
   }
   app.routing(request,response)
  })
@@ -175,12 +182,38 @@ test(hostManifest
   const refreshedBytes=await f.files.readFile(f.alice.token,initial.fileId,beforeBreak.revision)
   const refreshed=await JSZip.loadAsync(refreshedBytes)
   assert.match(await refreshed.file(worksheet).async('string'),/<c r="G3"><f>\[1\]Catalog!\$A\$1<\/f><v>37<\/v><\/c>/)
-  let refreshedDownload
-  await expect.poll(async()=>{
-   refreshedDownload=await app.inject({method:'GET',url:`/api/v1/files/${initial.fileId}/content?revision=${beforeBreak.revision}`,headers:{cookie:SESSION_COOKIE+'='+f.alice.token}})
-   return refreshedDownload.statusCode
-  },{timeout:12000}).toBe(200)
-  assert.deepEqual(refreshedDownload.rawPayload,refreshedBytes)
+  const admission=objectTransferAdmission(app),admit=admission.admit
+  const occupying=[{raw:new EventEmitter()},{raw:new EventEmitter()}]
+  const release=()=>occupying.forEach(request=>admission.close(request))
+  await expect.poll(()=>{
+   try{
+    for(const request of occupying)admit(request,{raw:new EventEmitter()})
+    return true
+   }catch(error){
+    release()
+    if(error.statusCode!==503)throw error
+    return false
+   }
+  },{timeout:12000}).toBe(true)
+  try{
+   const normalRead=await app.inject({method:'GET',url:sourceTarget,headers:{cookie:SESSION_COOKIE+'='+f.alice.token}})
+   assert.equal(normalRead.statusCode,503)
+   downloadRevision=beforeBreak.revision
+   t.mock.method(admission,'admit',(request,...args)=>{
+    try{return admit(request,...args)}
+    finally{if(request.method==='GET'&&request.query?.revision===downloadRevision)release()}
+   })
+   const [download]=await Promise.all([page.waitForEvent('download',{timeout:30000}),save.click()])
+   const downloaded=await download.path().catch(error=>{
+    t.diagnostic('Confirmed XLSX download HTTP responses: '+JSON.stringify(downloadStatuses))
+    throw error
+   })
+   assert.deepEqual(await readFile(downloaded),refreshedBytes)
+   assert.deepEqual(downloadStatuses,[200])
+  }finally{
+   release()
+   t.mock.restoreAll()
+  }
   assert.equal(await revisionCount(),beforeSourceChange+2)
   await page.reload()
   await expect.poll(()=>page.evaluate(()=>

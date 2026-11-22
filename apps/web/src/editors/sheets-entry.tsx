@@ -102,7 +102,7 @@ export async function mountSheetsEditor(host: SessionFileHost, container: HTMLEl
       // Pin the confirmed receipt once. The main action never uses a render's
       // old head or a fallback link while there are unsaved/unknown changes.
       const anchor=document.createElement('a')
-      anchor.href=`/api/v1/files/${fileId}/content?revision=${receipt.revision}`
+      anchor.href=`/api/v1/files/${fileId}/content?revision=${receipt.revision}&download=1`
       anchor.download=host.getState(fileId).name
       anchor.hidden=true;container.append(anchor);anchor.click();anchor.remove()
     } catch {if(!disposed)actionError=text.saveFailed}

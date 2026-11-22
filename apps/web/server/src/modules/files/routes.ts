@@ -35,8 +35,12 @@ export function registerFileRoutes(app: FastifyInstance, files: FileService, ses
           const length = request.headers['content-length']
           if (length !== undefined && (!/^\d+$/.test(length) || Number(length) !== upload.size)) throw authError(400)
         }
-        // Briefly wait for reads to finish before receiving a staged upload body.
-        await admission.admit(request, reply, request.method === 'PUT' ? { waitMs: 2_000 } : undefined)
+        // Briefly wait for transfers explicitly initiated by the user. The
+        // editor's background reads keep their immediate backpressure.
+        const interactiveDownload = request.method==='GET' && request.routeOptions.url==='/api/v1/files/:id/content' &&
+          (request.query as {download?:string}).download==='1'
+        await admission.admit(request, reply,
+          request.method==='PUT' ? {waitMs:2_000} : interactiveDownload ? {waitMs:10_000} : undefined)
       }
     })
     api.addHook('onResponse', async request => admission.close(request))
@@ -77,7 +81,7 @@ export function registerFileRoutes(app: FastifyInstance, files: FileService, ses
     api.post('/api/v1/files/:id/assistant-chat',{bodyLimit:1024*1024,schema:{params,querystring:emptyQuery,body:chatBodySchema}},
       request=>files.syncAssistantChat(token(request),(request.params as {id:string}).id,request.body as Parameters<typeof files.syncAssistantChat>[2]))
     api.get('/api/v1/files/:id', { schema: { params, querystring: emptyQuery } }, request => files.openFile(token(request), (request.params as { id: string }).id))
-    api.get('/api/v1/files/:id/content', { schema: { params, querystring: { type: 'object', additionalProperties: false, required: ['revision'], properties: { revision: id } } } }, (request, reply) => transfer(request, reply, async () => {
+    api.get('/api/v1/files/:id/content', { schema: { params, querystring: { type: 'object', additionalProperties: false, required: ['revision'], properties: { revision: id, download: {type:'string',const:'1'} } } } }, (request, reply) => transfer(request, reply, async () => {
       const result = await files.download(token(request), (request.params as { id: string }).id, (request.query as { revision: string }).revision)
       const name = encodeURIComponent(result.name).replace(/[!'()*]/g, character => '%' + character.charCodeAt(0).toString(16).toUpperCase())
       return reply.header('Content-Type', 'application/octet-stream').header('Content-Security-Policy', "sandbox; default-src 'none'")
