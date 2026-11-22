@@ -6,15 +6,14 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import { tokenHash } from '../auth/sessions.ts'
 import { uniqueHeader } from '../auth/csrf.ts'
 import type { McpExternalCredential } from './credential.ts'
-import { mcpError, mcpReadTool, mcpServerInfo, object, runMcpTool } from './handler.ts'
-import type { createOfficeReadTool } from './office-read.ts'
+import { mcpError, mcpServerInfo, object, type McpTools } from './handler.ts'
 
 export const legacyVersion = '2025-11-25'
 const MAX_SESSIONS = 64
 const MAX_SESSIONS_PER_GRANT = 4
 const SESSION_TTL_MS = 10 * 60_000
 
-export function createLegacyMcp(app: FastifyInstance, read: ReturnType<typeof createOfficeReadTool>) {
+export function createLegacyMcp(app: FastifyInstance, tools: McpTools) {
   const sessions = new Map<string, {
     ownerHash: string
     expiresAt: number
@@ -62,10 +61,12 @@ export function createLegacyMcp(app: FastifyInstance, read: ReturnType<typeof cr
       const transport = new WebStandardStreamableHTTPServerTransport({ sessionIdGenerator: () => newId })
       const server = new Server(mcpServerInfo, { capabilities: { tools: {} } })
       transport.onclose = () => { sessions.delete(newId) }
-      server.setRequestHandler(ListToolsRequestSchema, () => ({ tools: [mcpReadTool] }))
+      server.setRequestHandler(ListToolsRequestSchema, async (_request, context) => ({
+        tools: await tools.list({ kind: 'external-token', token: context.authInfo!.token }),
+      }))
       server.setRequestHandler(CallToolRequestSchema, async ({ params }, context) => {
         try {
-          return await runMcpTool(read, { kind: 'external-token', token: context.authInfo!.token }, params.name, params.arguments, context.signal)
+          return await tools.run({ kind: 'external-token', token: context.authInfo!.token }, params.name, params.arguments, context.signal)
         } finally {
           if (context.signal.aborted) transport.closeSSEStream(context.requestId)
         }

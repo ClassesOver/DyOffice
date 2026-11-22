@@ -8,21 +8,25 @@ export interface JobCredential { kind: 'job'; jobId: string; epoch: number; toke
 export type FileCredential = string | JobCredential
 export type OfficeReadCredential = FileCredential | McpExternalCredential
 export type McpReadScope = Readonly<{ fileId: string; revision: string }>
+export type McpPdfRotation = Readonly<{ pages: readonly number[]; degrees: number }>
+export type McpFileGrant = McpReadScope & Readonly<{ id: string; pdfRotation?: McpPdfRotation; resultRevision?: string }>
+export const mcpPdfRotationKey = (grantId: string) => 'mcp_pdf_rotate_' + grantId
 type TransactionCredential = BusinessCredential | McpExternalCredential
 export type BusinessCredential = SessionCredential | JobCredential
-export type BusinessPrincipal = Principal & { roles: readonly string[]; authVersion: number; job?: Readonly<{ id: string; epoch: number; fileId: string; baseRevision: string }>; mcpRead?: McpReadScope }
+export type BusinessPrincipal = Principal & { roles: readonly string[]; authVersion: number; job?: Readonly<{ id: string; epoch: number; fileId: string; baseRevision: string }>; mcpRead?: McpFileGrant }
 export interface SessionCredential { kind: 'session'; token: string }
 export function createPrincipalTransactions({ pool, deploymentId, idleMs = 8 * 3600_000 }: { pool: Pool; deploymentId: string; idleMs?: number }) {
   if (!Number.isSafeInteger(idleMs) || idleMs < 1 || idleMs > 2592000000) throw new Error('Invalid session idle lifetime')
   deploymentId = deploymentId.toLowerCase()
   let admitted: ReturnType<typeof assertRuntimePool> | undefined
-  async function transact<T>(input: TransactionCredential, operation: (connection: PoolClient, principal: BusinessPrincipal) => Promise<T>): Promise<T> {
+  async function transact<T>(input: TransactionCredential, operation: (connection: PoolClient, principal: BusinessPrincipal) => Promise<T>, { signal, grantMode = 'read' }: { signal?: AbortSignal; grantMode?: 'read' | 'publish' | 'cancel' } = {}): Promise<T> {
     // Capture before the first await: callers cannot switch capabilities
     // between initial authorization and the final commit recheck.
     const credential = Object.freeze({ ...input })
     await (admitted ??= assertRuntimePool(pool, 'business'))
     if (!credential || !['session','job','external-token'].includes(credential.kind) || typeof credential.token !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(credential.token)) throw authError()
     if (credential.kind==='job' && (Object.keys(credential).some(key => !['kind','jobId','epoch','token'].includes(key)) || typeof credential.jobId!=='string' || !/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(credential.jobId) || !Number.isSafeInteger(credential.epoch) || credential.epoch<1)) throw authError()
+    signal?.throwIfAborted()
     const connection = await pool.connect()
     let discard: Error | undefined
     try {
@@ -37,7 +41,7 @@ export function createPrincipalTransactions({ pool, deploymentId, idleMs = 8 * 3
           case 'job':
             return connection.query('SELECT lock_job_principal($1::uuid,$2::uuid,$3::bigint,$4::text,$5::boolean) AS job', [deploymentId, credential.jobId, credential.epoch, hash, final])
           case 'external-token':
-            return connection.query('SELECT * FROM lock_mcp_read_grant($1::uuid,$2::text,$3::bigint)', [deploymentId, hash, idleMs])
+            return connection.query('SELECT * FROM lock_mcp_file_grant($1::uuid,$2::text,$3::bigint,$4::text)', [deploymentId, hash, idleMs, grantMode])
         }
       }
       const { rows: [locked] } = await lock(false)
@@ -57,13 +61,22 @@ export function createPrincipalTransactions({ pool, deploymentId, idleMs = 8 * 3
         roles,
         scopes: Object.freeze(scopes[credential.kind]),
         ...(job && { job: Object.freeze({ id: job.jobId, epoch: job.epoch, fileId: job.fileId, baseRevision: job.baseRevision }) }),
-        ...(credential.kind === 'external-token' && { mcpRead: Object.freeze({ fileId: locked.file_id, revision: locked.revision_id }) }),
+        ...(credential.kind === 'external-token' && { mcpRead: Object.freeze({
+          id: locked.grant_id,
+          fileId: locked.file_id,
+          revision: locked.revision_id,
+          ...(locked.committed_pdf_revision && { resultRevision: locked.committed_pdf_revision }),
+          ...(locked.approved_pdf_pages && { pdfRotation: Object.freeze({
+            pages: Object.freeze(locked.approved_pdf_pages), degrees: locked.approved_pdf_degrees,
+          }) }),
+        }) }),
       })
       await connection.query("SELECT set_config('dyoffice.deployment_id',$1,true),set_config('dyoffice.user_id',$2,true),set_config('dyoffice.session_id',$3,true)", [deploymentId, principal.userId, principal.sessionId])
       const result = await operation(connection, principal)
       // Object I/O may outlast a session deadline. Locks prevent revocation
       // races, but clock-based expiry must also be checked before commit.
       await lock(true)
+      signal?.throwIfAborted()
       await connection.query('COMMIT')
       return result
     } catch (error) {
@@ -82,11 +95,26 @@ export function createPrincipalTransactions({ pool, deploymentId, idleMs = 8 * 3
       if (credential?.kind !== 'external-token') throw authError()
       const { fileId, revision } = target
       return transact(credential, (connection, principal) => {
-        if (principal.mcpRead?.fileId !== fileId || principal.mcpRead.revision !== revision) throw authError(404)
+        const grant = principal.mcpRead!
+        if (grant.fileId !== fileId || (grant.revision !== revision && grant.resultRevision !== revision)) throw authError(404)
         return operation(connection, principal)
       })
     },
-    async inspectMcpReadScope(credential: McpExternalCredential): Promise<McpReadScope> {
+    async withMcpPdfRotationTransaction<T>(credential: McpExternalCredential, target: McpFileGrant, operation: (connection: PoolClient, principal: BusinessPrincipal) => Promise<T>, options: { signal?: AbortSignal; publishingGrant?: boolean } = {}) {
+      if (credential?.kind !== 'external-token') throw authError()
+      const { id, fileId, revision } = target
+      return transact(credential, (connection, principal) => {
+        const grant = principal.mcpRead!
+        if (grant.id !== id || grant.fileId !== fileId || grant.revision !== revision || !grant.pdfRotation) throw authError(404)
+        options.signal?.throwIfAborted()
+        return operation(connection, Object.freeze({ ...principal, scopes: Object.freeze(['files:read', 'files:write']) }))
+      }, { signal: options.signal, grantMode: options.publishingGrant ? 'publish' : 'read' })
+    },
+    async authenticateMcpCancellation(credential: McpExternalCredential): Promise<void> {
+      if (credential?.kind !== 'external-token') throw authError()
+      await transact(credential, async () => {}, { grantMode: 'cancel' })
+    },
+    async inspectMcpReadScope(credential: McpExternalCredential): Promise<McpFileGrant> {
       if (credential?.kind !== 'external-token') throw authError()
       return transact(credential, async (_connection, principal) => principal.mcpRead!)
     },

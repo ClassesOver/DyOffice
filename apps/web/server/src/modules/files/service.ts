@@ -78,7 +78,12 @@ export function createFileService({ transactions, objects, quotaBytes = 1024 ** 
       if (!objects.removeUnreferenced) return { reclaimedBytes: 0, reclaimedUploads: 0 }
       // Commit expiry first; physical deletion cannot roll back. The collector
       // only locks already-terminal rows and never terminalizes new rows.
-      await personal(token, 'files:write', (connection,principal) => lockAccount(connection,principal))
+      const canReclaim = await personal(token, 'files:write', async (connection, principal) => {
+        if (principal.mcpRead) return false
+        await lockAccount(connection, principal)
+        return true
+      })
+      if (!canReclaim) return { reclaimedBytes: 0, reclaimedUploads: 0 }
       return personal(token, 'files:write', (connection,principal) => reclaimAbandonedUploads(connection,principal,objects))
     },
     async stageUpload(token: FileCredential, metadata: { name: string; size: number }) {

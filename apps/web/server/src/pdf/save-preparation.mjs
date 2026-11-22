@@ -25,7 +25,7 @@ export function createPdfSavePreparation({files,leases,revisions,processor}){
     const current=await files.openFile(token,fileId);check(signal)
     if(current.format!=='pdf')fail('PDF_FORMAT_REQUIRED')
     if(current.file.revision!==baseRevision)throw authError(409)
-    const source=await files.download(token,fileId,baseRevision);check(signal)
+    const source=await files.download(token,fileId,baseRevision,undefined,signal);check(signal)
     if(source.format!=='pdf')fail('PDF_FORMAT_REQUIRED')
     const inputSha256=hash(source.bytes)
     if(inputSha256!==current.file.sha256)fail('PDF_OUTPUT_BINDING')

@@ -2,6 +2,8 @@ import type { FastifyReply, FastifyRequest } from 'fastify'
 import { uniqueHeader } from '../auth/csrf.ts'
 import type { McpExternalCredential } from './credential.ts'
 import { createOfficeReadTool, officeReadDescriptor } from './office-read.ts'
+import { createMcpPdfRotation, pdfRotationDescriptor } from './pdf-rotation.ts'
+import type { McpFileGrant } from '../../db/context.ts'
 
 export const modernVersion = '2026-07-28'
 export const mcpServerInfo = { name: 'DyOffice', version: '1.0.0' }
@@ -11,13 +13,51 @@ const protocolVersion = prefix + 'protocolVersion'
 export const object = (value: unknown): Record<string, unknown> | undefined =>
   value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : undefined
 
-export const mcpReadTool = {
+const mcpReadTool = {
   name: officeReadDescriptor.name,
   description: 'Read text from the immutable DOCX, XLSX, PPTX, or PDF revision authorized by this grant.',
   inputSchema: officeReadDescriptor.inputSchema,
   outputSchema: officeReadDescriptor.outputSchema,
   annotations: { readOnlyHint: true },
 }
+
+const mcpPdfRotationTool = {
+  name: pdfRotationDescriptor.name,
+  description: 'Rotate the pre-approved one-based PDF pages and save one revision. Retry the same arguments to recover its receipt.',
+  inputSchema: pdfRotationDescriptor.inputSchema,
+  outputSchema: pdfRotationDescriptor.outputSchema,
+  annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
+}
+
+export function createMcpTools({ read, rotate, inspect }: {
+  read: ReturnType<typeof createOfficeReadTool>
+  rotate: ReturnType<typeof createMcpPdfRotation>
+  inspect: (credential: McpExternalCredential) => Promise<McpFileGrant>
+}) {
+  const failure = (text: string) => ({ isError: true, content: [{ type: 'text' as const, text }] })
+  return {
+    async list(credential: McpExternalCredential) {
+      const grant = await inspect(credential)
+      return grant.pdfRotation ? [mcpReadTool, mcpPdfRotationTool] : [mcpReadTool]
+    },
+    async run(credential: McpExternalCredential, name: unknown, args: unknown, signal: AbortSignal) {
+      const execute = name === mcpReadTool.name ? read : name === mcpPdfRotationTool.name ? rotate : undefined
+      if (!execute) return failure('Tool unavailable for this grant')
+      try {
+        const result = await execute(credential, args, signal)
+        return { structuredContent: result, content: [{ type: 'text' as const, text: JSON.stringify(result) }] }
+      } catch (error) {
+        const status = (error as { statusCode?: number }).statusCode
+        if (status === 400) return failure('Invalid tool arguments')
+        if (status === 403) return failure('Tool unavailable for this grant')
+        if (status === 409) return failure('The saved revision or active edit lease changed')
+        return failure(name === mcpPdfRotationTool.name ? 'PDF rotation unavailable' : 'Saved document unavailable')
+      }
+    },
+  }
+}
+
+export type McpTools = ReturnType<typeof createMcpTools>
 
 export function mcpError(reply: FastifyReply, status: number, id: unknown, code: number, message: string, data?: unknown) {
   return reply.code(status).send({ jsonrpc: '2.0', id, error: { code, message, ...(data === undefined ? {} : { data }) } })
@@ -48,7 +88,7 @@ export function isVersionedMessage(request: FastifyRequest) {
     request.headers['mcp-method'] !== undefined || request.headers['mcp-protocol-version'] === modernVersion
 }
 
-export async function handleModernMcp(request: FastifyRequest, reply: FastifyReply, credential: McpExternalCredential, read: ReturnType<typeof createOfficeReadTool>, supportedVersions: readonly string[]) {
+export async function handleModernMcp(request: FastifyRequest, reply: FastifyReply, credential: McpExternalCredential, tools: McpTools, supportedVersions: readonly string[]) {
   const body = object(request.body)
   const id = body?.id
   const validId = typeof id === 'string' || (typeof id === 'number' && Number.isSafeInteger(id))
@@ -89,29 +129,17 @@ export async function handleModernMcp(request: FastifyRequest, reply: FastifyRep
     case 'ping':
       return complete({})
     case 'tools/list':
-      return complete({ tools: [mcpReadTool], ...cache })
+      return complete({ tools: await tools.list(credential), ...cache })
     case 'tools/call': {
       const disconnect = new AbortController()
       const close = () => disconnect.abort()
       reply.raw.once('close', close)
       if (reply.raw.destroyed) close()
       try {
-        return complete(await runMcpTool(read, credential, params?.name, params?.arguments, disconnect.signal))
+        return complete(await tools.run(credential, params?.name, params?.arguments, disconnect.signal))
       } finally { reply.raw.off('close', close) }
     }
     default:
       return mcpError(reply, 404, id, -32601, 'Method not found')
-  }
-}
-
-export async function runMcpTool(read: ReturnType<typeof createOfficeReadTool>, credential: McpExternalCredential, name: unknown, args: unknown, signal: AbortSignal) {
-  const failure = (text: string) => ({ isError: true, content: [{ type: 'text' as const, text }] })
-  if (name !== mcpReadTool.name) return failure('Tool unavailable for this grant')
-  try {
-    const document = await read(credential, args, signal)
-    return { structuredContent: document, content: [{ type: 'text' as const, text: JSON.stringify(document) }] }
-  } catch (error) {
-    if ((error as { statusCode?: number }).statusCode === 400) return failure('Invalid file or revision')
-    return failure('Saved document unavailable')
   }
 }

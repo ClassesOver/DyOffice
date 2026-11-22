@@ -15,7 +15,9 @@ const businessJobFunctions = ['lock_job_principal(uuid,uuid,bigint,text,boolean)
 const businessMcpFunctions = [
   'issue_mcp_read_grant(uuid,text,bigint,uuid,text,uuid,uuid)',
   'revoke_mcp_read_grant(uuid,text,bigint,uuid)',
-  'lock_mcp_read_grant(uuid,text,bigint)',
+  'lock_mcp_file_grant(uuid,text,bigint,text)',
+  'record_mcp_pdf_rotation(uuid,text,bigint,uuid)',
+  'issue_mcp_pdf_rotation_grant(uuid,text,bigint,uuid,text,uuid,uuid,integer[],integer)',
 ]
 const authFunctions = ['read_login_history(uuid,text,bigint)', 'read_login_history_page(uuid,text,bigint,integer,uuid)']
 const globalFunctions = ['shared_provider_catalog()','shared_provider_dispatch(text,text,text,integer,text)','shared_provider_secret(text,text,integer,text)','personal_provider_budget_action(text,text,text,integer,text,uuid)','personal_provider_secret(text,text,integer,text,uuid,uuid)','personal_provider_catalog()','global_config_authorized(uuid,boolean)','global_ai_tool_provider(text)','global_config_key_readiness()']

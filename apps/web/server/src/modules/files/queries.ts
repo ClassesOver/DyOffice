@@ -46,6 +46,7 @@ export async function lockUpload(connection: PoolClient, principal: BusinessPrin
 }
 export async function loadFile(connection: PoolClient, principal: BusinessPrincipal, id: string, includeTrash = false, lock = 'SHARE') {
   if (principal.job && (id!==principal.job.fileId || includeTrash)) throw authError(404)
+  if (principal.mcpRead && (id !== principal.mcpRead.fileId || includeTrash)) throw authError(404)
   // Lock the owner-scoped file before joining its head revision. A single
   // locking join can follow a concurrently updated file via EvalPlanQual while
   // its statement snapshot cannot see that transaction's newly inserted revision.
