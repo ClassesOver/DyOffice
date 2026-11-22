@@ -16,6 +16,12 @@ const name = 'set_pptx_notes'
 const route = '/api/v1/mcp/pptx-notes-grants'
 
 test('approved PPTX notes persist only on their target and replay the same revision', { timeout: 90_000 }, async t => {
+  const previousEnv = process.env.NODE_ENV
+  process.env.NODE_ENV = 'test'
+  t.after(() => {
+    if (previousEnv === undefined) delete process.env.NODE_ENV
+    else process.env.NODE_ENV = previousEnv
+  })
   const f = await fileFixture(t, { buildApp: false })
   const open = (input, signal) => openIsolatedPptxSession(input, { timeoutMs: 20_000, unsafeTestOnly: true, signal })
   let writeSessions = 0
