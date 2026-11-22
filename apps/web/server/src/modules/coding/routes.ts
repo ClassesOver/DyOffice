@@ -120,7 +120,7 @@ export function registerCodingRoutes(app:FastifyInstance,options:{
   },{timeoutMs:610000,maxActive:4,maxOutputBytes:384*1024})
   const recovery=options.authorizeDocument?createCodingTaskRecovery(turns,identity,options.authorizeDocument,options.recoveryStore):undefined
   registerProviderRoutes(app,{...options,turns:recovery?.runner??turns,listTaskIds:recovery?options.recoveryStore?.listTaskIds:undefined,
-    taskStatus:recovery?.status,claimContinuation:recovery?.claimContinuation,endpoint:'/api/v1/agents/tasks',errorMessage:'Harness task failed. Check server diagnostics.'})
+    taskStatus:recovery?.status,taskEvents:recovery?.events,claimContinuation:recovery?.claimContinuation,endpoint:'/api/v1/agents/tasks',errorMessage:'Harness task failed. Check server diagnostics.'})
   app.get('/api/v1/agents/catalog',async(request,reply)=>{
     reply.header('Cache-Control','private, no-store')
     const token=cookies(request).session??''

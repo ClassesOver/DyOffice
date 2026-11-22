@@ -2,10 +2,12 @@ import type {AdmitHarnessContinuation,TurnRunner} from '../providers/routes.ts'
 import type {TurnEvent,TurnIdentity} from '../providers/turns.ts'
 import {authError} from '../auth/sessions.ts'
 import type {HarnessCheckpoint} from '../../../../../../packages/agent-core/src/loop.ts'
-import {interruptedFailure,type CodingTaskRecoveryStore,type Continuation,type TaskState} from './task-recovery-store.ts'
+import {interruptedFailure,type CodingTaskRecoveryStore,type Continuation,type TaskEvent,type TaskState} from './task-recovery-store.ts'
 
 /** Renewal cadence and the point after which a 30 s lease (task-recovery-store) may have lapsed. */
 const HEARTBEAT_MS=10_000,HEARTBEAT_GIVE_UP_MS=25_000
+/** How often buffered public events are written for readers on other API instances. */
+const EVENT_FLUSH_MS=500
 
 export type AuthorizeTaskDocument=(token:string,id:string)=>Promise<{file:{revision:string}}|void>
 type Task={
@@ -103,12 +105,25 @@ export function createCodingTaskRecovery(turns:TurnRunner,identity:(token:string
           }).finally(()=>{renewing=undefined})
         },HEARTBEAT_MS)
         heartbeat&&heartbeat.unref()
+        // Public events go to the shared event log in small batches. Losing a
+        // batch only loses live detail: state and results still come from the
+        // recovery row, so append failures never stop the task.
+        let buffered:TaskEvent[]=[],flushing:Promise<void>|undefined
+        const flush=()=>{
+          if(!store||flushing||!buffered.length)return flushing
+          const batch=buffered;buffered=[]
+          flushing=store.append(token,documentId,turnId,batch).then(()=>undefined,()=>undefined).finally(()=>{flushing=undefined})
+          return flushing
+        }
+        const publisher=store&&setInterval(()=>void flush(),EVENT_FLUSH_MS)
+        publisher&&publisher.unref()
+        const publish=(event:TaskEvent)=>{if(store&&buffered.length<64)buffered.push(event)}
         try {
           entry.controller.signal.throwIfAborted()
           await turns.run({...input,signal:entry.controller.signal},async event=>{
             if(event.type==='progress'){
-              if(event.kind==='status')entry.activity=event.text.slice(0,200)
-              else entry.progress=((entry.progress??'')+event.text).slice(-32000)
+              if(event.kind==='status'){entry.activity=event.text.slice(0,200);publish({kind:'activity',payload:{text:entry.activity}})}
+              else{entry.progress=((entry.progress??'')+event.text).slice(-32000);for(let at=0;at<Math.min(event.text.length,4000);at+=1000)publish({kind:'progress',payload:{text:event.text.slice(at,Math.min(at+1000,4000))}})}
             }else if(event.type==='delta'){
               const value:unknown=JSON.parse(event.text)
               if(!value||typeof value!=='object'||!('summary' in value)||typeof value.summary!=='string'||!('output' in value)||typeof value.output!=='string')throw Error('Invalid Harness result')
@@ -129,6 +144,8 @@ export function createCodingTaskRecovery(turns:TurnRunner,identity:(token:string
           if(observer&&!signal?.aborted){queue.push({type:'error',message:entry.failure});wake()}
         }finally{
           if(heartbeat)clearInterval(heartbeat)
+          if(publisher)clearInterval(publisher)
+          await flushing;await flush()
           await renewing
           if(entry.state==='running'||entry.state==='cancel_requested')entry.state='unknown_outcome'
           if(entry.state!=='succeeded')delete entry.continuation
@@ -203,7 +220,10 @@ export function createCodingTaskRecovery(turns:TurnRunner,identity:(token:string
     const continuationModelId=state==='succeeded'?entry.continuation?.modelId:undefined
     return {turnId,documentId,agentId:modelId,instruction,state,activity,progress,result,failure,hasContinuation:!!continuationModelId,continuationModelId}
   }
-  return {runner,admitContinuation,async status(token:string,turnId:string,documentId:string){
+  return {runner,admitContinuation,
+  /** Shared event log reader (T2); undefined without a recovery store. */
+  events:store?(token:string,turnId:string,documentId:string,after:number)=>store.events(token,documentId,turnId,after):undefined,
+  async status(token:string,turnId:string,documentId:string){
     if(!store)return statusFor(await authorizedEntry(token,turnId,documentId),turnId,documentId)
     const live=entries.get(await key(token,turnId))
     return store.access(token,documentId,turnId,false,entry=>({value:statusFor(live&&entry.state==='running'&&live.documentId===documentId?

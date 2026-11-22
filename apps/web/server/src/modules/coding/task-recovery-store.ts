@@ -14,6 +14,23 @@ const key=own+' AND session_id=$3 AND turn_id=$4'
 const retention="interval '10 minutes'",lease="interval '30 seconds'"
 const active="state IN ('running','cancel_requested')"
 const validLease=`${active} AND lease_until>clock_timestamp()`
+/** Public task events: bounded, ordered, readable from any API instance. */
+export type TaskEventKind='state'|'activity'|'progress'
+export type TaskEvent={kind:TaskEventKind;payload:Record<string,unknown>}
+export type StoredTaskEvent=TaskEvent&{sequence:number}
+/** Activity/progress stop here; the remaining sequence numbers are kept for state events. */
+const EVENT_SOFT_LIMIT=4000,EVENT_PAYLOAD_MAX=8192
+const nextSequence=async(c:PoolClient,args:string[])=>(await c.query<{next:number}>(
+  `SELECT COALESCE(max(sequence),0)+1 AS next FROM harness_task_events WHERE ${key}`,args.slice(0,4))).rows[0]!.next
+async function insertEvents(c:PoolClient,args:string[],events:TaskEvent[]){
+  let sequence=await nextSequence(c,args)
+  for(const event of events){
+    const payload=JSON.stringify(event.payload)
+    if(Buffer.byteLength(payload)>EVENT_PAYLOAD_MAX)continue
+    if(sequence>(event.kind==='state'?4096:EVENT_SOFT_LIMIT))continue
+    await c.query('INSERT INTO harness_task_events(deployment_id,owner_id,session_id,turn_id,sequence,kind,payload) VALUES($1,$2,$3,$4,$5,$6,$7)',[...args.slice(0,4),sequence++,event.kind,payload])
+  }
+}
 export const interruptedFailure='Harness execution outcome could not be confirmed. Check for saved delivery before retrying.'
 
 export function createCodingTaskRecoveryStore(transactions:PrincipalTransactions){
@@ -46,6 +63,30 @@ export function createCodingTaskRecoveryStore(transactions:PrincipalTransactions
         await c.query(`INSERT INTO harness_task_recovery(deployment_id,owner_id,session_id,turn_id,file_id,state,status_payload,checkpoint,lease_until,expires_at)
           VALUES($1,$2,$3,$4,$5,'running',$6,$7,clock_timestamp()+${lease},clock_timestamp()+${lease}+${retention})`,
         [...args,JSON.stringify(snapshot),continuation?JSON.stringify(continuation):null])
+        await insertEvents(c,args,[{kind:'state',payload:{state:'running'}}])
+      })
+    },
+    /** Append live events while this executor still holds the lease; false once it does not. */
+    async append(token:string,documentId:string,turnId:string,events:TaskEvent[]){
+      if(!events.length)return true
+      return withFile(token,documentId,turnId,async(c,args)=>{
+        const {rowCount}=await c.query(`SELECT 1 FROM harness_task_recovery WHERE ${where} AND ${validLease} FOR UPDATE`,args)
+        if(!rowCount)return false
+        await insertEvents(c,args,events)
+        return true
+      })
+    },
+    /** Events after a sequence number plus the task's effective state. */
+    async events(token:string,documentId:string,turnId:string,after:number){
+      return withFile(token,documentId,turnId,async(c,args)=>{
+        const {rows:[row]}=await c.query<{state:TaskState;live:boolean}>(`SELECT state,lease_until>clock_timestamp() AS live
+          FROM harness_task_recovery WHERE ${where} AND expires_at>clock_timestamp()`,args)
+        if(!row)throw authError(404)
+        const {rows}=await c.query<{sequence:number;kind:TaskEventKind;payload:string}>(`SELECT sequence,kind,payload FROM harness_task_events
+          WHERE ${key} AND sequence>$5 ORDER BY sequence LIMIT 256`,[...args.slice(0,4),after])
+        const interrupted=!row.live&&(row.state==='running'||row.state==='cancel_requested')
+        return {state:interrupted?'unknown_outcome' as TaskState:row.state,
+          events:rows.map(event=>({sequence:event.sequence,kind:event.kind,payload:JSON.parse(event.payload) as Record<string,unknown>}))}
       })
     },
     async renew(token:string,documentId:string,turnId:string,snapshot:Snapshot){
@@ -66,6 +107,7 @@ export function createCodingTaskRecoveryStore(transactions:PrincipalTransactions
         const savedState=interrupted?'unknown_outcome':state
         await c.query(`UPDATE harness_task_recovery SET state=$6,status_payload=$7,checkpoint=CASE WHEN $6='succeeded' THEN checkpoint ELSE NULL END,
           expires_at=clock_timestamp()+${retention} WHERE ${where}`,[...args,savedState,JSON.stringify(snapshot)])
+        await insertEvents(c,args,[{kind:'state',payload:{state:savedState,...(snapshot.failure?{failure:snapshot.failure.slice(0,2000)}:{})}}])
         return {state:savedState,...snapshot}
       })
     },
@@ -89,7 +131,9 @@ export function createCodingTaskRecoveryStore(transactions:PrincipalTransactions
         const {rows:[row]}=await c.query<{file_id:string}>(`SELECT file_id FROM harness_task_recovery WHERE ${key} AND ${validLease}`,args)
         if(!row)return false
         await loadFile(c,p,row.file_id)
-        return !!(await c.query(`UPDATE harness_task_recovery SET state='cancel_requested' WHERE ${where} AND state='running' AND lease_until>clock_timestamp()`,[...args,row.file_id])).rowCount
+        const cancelled=!!(await c.query(`UPDATE harness_task_recovery SET state='cancel_requested' WHERE ${where} AND state='running' AND lease_until>clock_timestamp()`,[...args,row.file_id])).rowCount
+        if(cancelled)await insertEvents(c,args,[{kind:'state',payload:{state:'cancel_requested'}}])
+        return cancelled
       })
     },
   }

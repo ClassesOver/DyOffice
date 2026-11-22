@@ -98,4 +98,9 @@
 3. 焦点契约：范围小，可与 T1、T2 并行。
 4. D1、E1：先测量；工具动态加载是否实施，以数据为准。
 
-涉及 #197 正在修改的文件（`apps/web/server/src/app.ts`、`db/roles.ts`、`db/migration-manifest.ts`、`coding/routes.ts` 等）的阶段，等 #197 合并后再开始；迁移编号从 0050 起。
+## 实施进度
+
+- T1 完成：迁移 0052 新建 `harness_task_events`（随恢复行级联删除，单任务最多 4096 条，进度和活动截止于 4000 条，余量留给状态事件）。Codex harness 每 500 ms 批量写入活动和进度，启动、取消和结束的状态事件与恢复行在同一事务中写入。写入失败不影响任务。
+- T2 完成：`GET /api/v1/agents/tasks/:id/events?documentId=&after=` 按序号续读。首页在切换为流之前完成授权，所以 404/403 仍是普通 HTTP 错误。流每 500 ms 读取共享日志，任务结束时发 `end`，最长 120 秒后关闭，由客户端续读。浏览器优先订阅；订阅期间 `/status` 只每 10 秒读一次作为兜底，结果和 continuation 仍从 `/status` 读取。端点不存在、返回非 SSE 或连续三次连不上时回退到每秒轮询；`localStorage['dyoffice.harness.events']='off'` 可关闭订阅。
+- DSH 频道审查：修复两处缺陷。单次快照刷新失败会中止正在运行的 Office 任务，现在只有 401/403/404 或持续失败 25 秒才中止，其余情况退避重试。刷新进行中收到的通知会丢失，现在会补读一次。T3 可以开始。
+- 焦点契约第一步：`@genoffice/ui` 提供 `registerAssistantFocusRoot` / `assistantHoldsKeyboard` / `useAssistantFocusRoot`。共享助手面板和 Excel 助手面板注册根元素，Excel 焦点保护改为查询该接口。Word、PPT、PDF 宿主的自动聚焦尚未接入。

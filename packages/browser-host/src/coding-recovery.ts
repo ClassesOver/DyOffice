@@ -14,8 +14,14 @@ export type TaskIdStorage=Pick<Storage,'getItem'|'setItem'>
 const validId=(id:unknown):id is string=>typeof id==='string'&&/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(id)
 const limit=8
 
-export function createCodingRecovery({documentId,storage,fetchImpl=fetch,csrfToken,onStatus}:{
+/** While a task's event stream is open, /status is still read this often as a safety net. */
+const STREAM_SAFETY_POLLS=10
+type LiveView={activity?:string;progress?:string;state?:'running'|'cancel_requested'}
+
+export function createCodingRecovery({documentId,storage,fetchImpl=fetch,csrfToken,onStatus,events=true}:{
   documentId:string;storage?:TaskIdStorage;fetchImpl?:typeof fetch;csrfToken:string;onStatus:(status:RecoveryStatus)=>void
+  /** Subscribe to the server's task event stream; polling remains the fallback. */
+  events?:boolean
 }){
   const key='dyoffice.harness.tasks:'+documentId
   const headers={'x-csrf-token':csrfToken}
@@ -30,6 +36,80 @@ export function createCodingRecovery({documentId,storage,fetchImpl=fetch,csrfTok
   let discovering=true,pending=false,timer:ReturnType<typeof setTimeout>|undefined
   let discoveryTimer:ReturnType<typeof setTimeout>|undefined,discoveryFailures=0
   const terminal=new Set(['succeeded','failed','unknown_outcome'])
+  let streamEvents=events
+  try{if(storage?.getItem('dyoffice.harness.events')==='off')streamEvents=false}catch{/* storage is optional */}
+  const streams=new Map<string,AbortController>(),streamFailures=new Map<string,number>(),noStream=new Set<string>()
+  const lastSequence=new Map<string,number>(),live=new Map<string,LiveView>(),latest=new Map<string,RecoveryStatus>()
+  let polls=0
+  const merged=(status:RecoveryStatus):RecoveryStatus=>{
+    const view=live.get(status.turnId)
+    if(!view||terminal.has(status.state))return status
+    return {...status,...(view.activity!==undefined?{activity:view.activity}:{}),...(view.progress!==undefined?{progress:view.progress}:{}),
+      ...(view.state==='cancel_requested'?{state:view.state}:{})}
+  }
+  function closeStream(id:string){streams.get(id)?.abort();streams.delete(id)}
+  function applyEvent(id:string,event:{sequence?:unknown;kind?:unknown;payload?:unknown}){
+    if(!Number.isSafeInteger(event.sequence)||(event.sequence as number)<=(lastSequence.get(id)??0))return
+    lastSequence.set(id,event.sequence as number)
+    const payload=(event.payload&&typeof event.payload==='object'?event.payload:{}) as {text?:unknown;state?:unknown}
+    const view=live.get(id)??{}
+    if(event.kind==='activity'&&typeof payload.text==='string')view.activity=payload.text.slice(0,200)
+    else if(event.kind==='progress'&&typeof payload.text==='string')view.progress=((view.progress??'')+payload.text).slice(-32000)
+    else if(event.kind==='state'){
+      if(payload.state==='running'||payload.state==='cancel_requested')view.state=payload.state
+      // A terminal state: the result and continuation come from /status.
+      else if(typeof payload.state==='string'&&terminal.has(payload.state)){closeStream(id);clearTimeout(timer);void poll();return}
+    }
+    live.set(id,view)
+    const base=latest.get(id)
+    if(base&&!terminal.has(base.state))onStatus(merged(base))
+  }
+  function openStream(id:string){
+    if(!streamEvents||streams.has(id)||noStream.has(id)||!watched.has(id)||controller.signal.aborted)return
+    const stream=new AbortController();streams.set(id,stream)
+    void (async()=>{
+      let opened=false,frames=0
+      try{
+        const response=await fetchImpl(taskPath+'/'+id+'/events'+query+'&after='+(lastSequence.get(id)??0),{
+          method:'GET',headers:{...headers,accept:'text/event-stream'},credentials:'same-origin',mode:'same-origin',redirect:'error',cache:'no-store',
+          signal:AbortSignal.any([controller.signal,stream.signal]),
+        })
+        // 404 also covers a server without the endpoint: poll instead.
+        if(!response.ok||!response.body||!/^text\/event-stream\b/.test(response.headers.get('content-type')??'')){
+          if(response.ok||[401,403,404].includes(response.status))noStream.add(id)
+          return
+        }
+        opened=true;streamFailures.delete(id)
+        const reader=response.body.pipeThrough(new TextDecoderStream()).getReader()
+        let buffer=''
+        for(;;){
+          const {value,done}=await reader.read()
+          if(done)break
+          buffer+=value
+          let end:number
+          while((end=buffer.indexOf('\n\n'))>=0){
+            const frame=buffer.slice(0,end);buffer=buffer.slice(end+2)
+            const name=/^event: (.*)$/m.exec(frame)?.[1],data=/^data: (.*)$/m.exec(frame)?.[1]
+            if(name==='end'){closeStream(id);clearTimeout(timer);void poll();return}
+            frames++
+            if(name==='task'&&data){try{applyEvent(id,JSON.parse(data))}catch{/* skip a malformed frame */}}
+          }
+        }
+      }catch{/* the stream is best effort */}
+      finally{
+        if(streams.get(id)===stream){
+          streams.delete(id)
+          if(!opened){
+            const failures=(streamFailures.get(id)??0)+1;streamFailures.set(id,failures)
+            if(failures>=3)noStream.add(id)
+          }
+          // A stream ends after a bounded time; resume from the last sequence.
+          if(watched.has(id)&&!controller.signal.aborted)setTimeout(()=>openStream(id),opened?(frames?0:1000):1000*2**Math.min(streamFailures.get(id)??0,5))
+        }
+      }
+    })()
+  }
+  function forget(id:string){closeStream(id);live.delete(id);latest.delete(id);lastSequence.delete(id)}
   const get=(path:string)=>fetchImpl(path,{
     method:'GET',headers,credentials:'same-origin',mode:'same-origin',redirect:'error',cache:'no-store',
     signal:AbortSignal.any([controller.signal,AbortSignal.timeout(5000)]),
@@ -63,13 +143,14 @@ export function createCodingRecovery({documentId,storage,fetchImpl=fetch,csrfTok
     // Exactly one polling loop: drop any scheduled run before starting this one.
     clearTimeout(timer);timer=undefined
     pending=true
+    const safety=++polls%STREAM_SAFETY_POLLS===0
     try{
-      await Promise.all([...watched].map(async id=>{
+      await Promise.all([...watched].filter(id=>safety||!streams.has(id)).map(async id=>{
         try{
           const response=await get(taskPath+'/'+id+'/status'+query)
           if(controller.signal.aborted)return
           if([401,403,404].includes(response.status)){
-            watched.delete(id);write(read().filter(saved=>saved!==id));observers.get(id)?.();return
+            forget(id);watched.delete(id);write(read().filter(saved=>saved!==id));observers.get(id)?.();return
           }
           if(!response.ok)return
           const value=await response.json() as RecoveryStatus
@@ -77,10 +158,12 @@ export function createCodingRecovery({documentId,storage,fetchImpl=fetch,csrfTok
           if(!terminal.has(value.state)&&value.state!=='running'&&value.state!=='cancel_requested')return
           // A terminal status we cannot use is still terminal: stop polling and fail the waiter fast.
           if(value.state==='succeeded'&&(typeof value.result?.summary!=='string'||typeof value.result.output!=='string')){
-            watched.delete(id);write(read().filter(saved=>saved!==id));observers.get(id)?.();return
+            forget(id);watched.delete(id);write(read().filter(saved=>saved!==id));observers.get(id)?.();return
           }
-          if(terminal.has(value.state)){watched.delete(id);observers.get(id)?.(value)}
-          onStatus(value)
+          if(terminal.has(value.state)){watched.delete(id);forget(id);observers.get(id)?.(value);onStatus(value);return}
+          latest.set(id,value)
+          onStatus(merged(value))
+          openStream(id)
         }catch{/* a transient read failure must not retry execution */}
       }))
     }finally{
@@ -131,6 +214,6 @@ export function createCodingRecovery({documentId,storage,fetchImpl=fetch,csrfTok
       const response=await fetchImpl('/api/v1/agents/tasks/'+id+'/cancel',{method:'POST',headers,credentials:'same-origin',mode:'same-origin',redirect:'error',signal:AbortSignal.any([controller.signal,AbortSignal.timeout(5000)])})
       if(!response.ok)throw Error('Harness cancellation could not be confirmed')
     },
-    dispose(){controller.abort();clearTimeout(timer);clearTimeout(discoveryTimer);watched.clear()},
+    dispose(){controller.abort();clearTimeout(timer);clearTimeout(discoveryTimer);watched.clear();streams.clear()},
   }
 }

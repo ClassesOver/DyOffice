@@ -8,7 +8,7 @@ const quoted = (value: string) => '"' + value.replaceAll('"', '""') + '"'
 const table = (schema: string, name: string) => quoted(schema) + '.' + quoted(name)
 const authTables = ['users','user_roles','sessions','password_action_tokens','login_challenges','login_throttles','auth_security_events','auth_audit_events','deployments','identity_migrations']
 const privateTables = ['mcp_read_grants']
-const personalTables = ['harness_task_recovery','file_assistant_messages','word_collab_steps','workspaces','personal_preferences','user_skills','user_style_templates','files','file_revisions','uploads','storage_accounts','edit_leases','revision_commits','revision_outbox','native_jobs','job_outbox','workspace_folders','workspace_file_state','command_journal','command_upload_bindings','data_sources','data_source_drafts','data_source_versions','data_source_credentials','data_source_audit','realtime_tickets','realtime_command_deliveries','workspace_source_results','harness_artifact_accounts','harness_artifact_tasks','harness_artifacts','harness_analysis_deliveries','assistant_channels','assistant_invites','assistant_applications','assistant_members','assistant_tasks','assistant_events','assistant_requests','assistant_background_queue']
+const personalTables = ['harness_task_recovery','harness_task_events','file_assistant_messages','word_collab_steps','workspaces','personal_preferences','user_skills','user_style_templates','files','file_revisions','uploads','storage_accounts','edit_leases','revision_commits','revision_outbox','native_jobs','job_outbox','workspace_folders','workspace_file_state','command_journal','command_upload_bindings','data_sources','data_source_drafts','data_source_versions','data_source_credentials','data_source_audit','realtime_tickets','realtime_command_deliveries','workspace_source_results','harness_artifact_accounts','harness_artifact_tasks','harness_artifacts','harness_analysis_deliveries','assistant_channels','assistant_invites','assistant_applications','assistant_members','assistant_tasks','assistant_events','assistant_requests','assistant_background_queue']
 const globalTables = ['global_configs','global_config_entries','global_config_secrets','global_config_audit']
 const jobFunctions = ['take_assistant_background(uuid,text)','abandon_assistant_background(uuid,uuid,uuid,text)','take_revision_delivery(uuid,text,integer)','ack_revision_delivery(uuid,uuid,bigint,text,integer)','take_job_delivery(uuid,text,integer)','ack_job_delivery(uuid,uuid,bigint,text,integer)','claim_native_job(uuid,uuid,text,integer)','renew_native_job(uuid,uuid,bigint,text,integer)','fail_native_job(uuid,uuid,bigint,text,text,boolean)']
 const businessJobFunctions = ['lock_job_principal(uuid,uuid,bigint,text,boolean)','complete_native_job(uuid,uuid,bigint,text,uuid)']
@@ -53,6 +53,7 @@ async function grantRuntimePrivileges(connection: Queryable, { authRole, busines
   await connection.query(`GRANT SELECT,INSERT,UPDATE,DELETE ON ${table(schema,'user_style_templates')} TO ${business}`)
   for (const name of ['file_assistant_messages','harness_task_recovery']) await connection.query(`GRANT SELECT,INSERT,UPDATE,DELETE ON ${table(schema,name)} TO ${business}`)
   await connection.query(`GRANT SELECT,INSERT,DELETE ON ${table(schema,'word_collab_steps')} TO ${business}`)
+  await connection.query(`GRANT SELECT,INSERT,DELETE ON ${table(schema,'harness_task_events')} TO ${business}`)
   for (const name of ['files','uploads','storage_accounts','edit_leases']) await connection.query(`GRANT SELECT,INSERT,UPDATE ON ${table(schema,name)} TO ${business}`)
   await connection.query(`GRANT SELECT,INSERT ON ${table(schema,'file_revisions')} TO ${business}`)
   await connection.query(`GRANT UPDATE(reclaimed_at) ON ${table(schema,'file_revisions')} TO ${business}`)
@@ -124,6 +125,7 @@ export async function assertRuntimePool(pool: Pool, kind: 'auth' | 'business' | 
   if(kind==='business')for(const name of ['assistant_channels','assistant_invites','assistant_applications','assistant_members','assistant_tasks','assistant_events','assistant_requests','assistant_background_queue'])required[name]=['SELECT','INSERT','DELETE']
   if (kind === 'business') for (const name of ['file_assistant_messages','harness_task_recovery']) required[name] = ['SELECT','INSERT','UPDATE','DELETE']
   if (kind === 'business') required.word_collab_steps = ['SELECT','INSERT','DELETE']
+  if (kind === 'business') required.harness_task_events = ['SELECT','INSERT','DELETE']
   if (kind === 'business') required.user_style_templates = ['SELECT','INSERT','UPDATE','DELETE']
   if (kind === 'business') Object.assign(required, { harness_artifact_accounts: ['SELECT','INSERT'], harness_artifact_tasks: ['SELECT','INSERT'], harness_artifacts: ['SELECT','INSERT','DELETE'], harness_analysis_deliveries: ['SELECT','INSERT'] })
   for (const name of [...authTables,...personalTables,...globalTables,...privateTables]) {

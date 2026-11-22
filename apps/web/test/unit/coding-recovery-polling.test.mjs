@@ -11,6 +11,7 @@ test('discovery retries back off and never stack extra status-polling loops', as
     let lists = 0, statuses = 0
     const fetchImpl = async path => {
       if (path.includes('/status')) { statuses++; return new Response(JSON.stringify({ turnId: ID, documentId: 'doc', agentId: 'codex', state: 'running' }), { status: 200 }) }
+      if (path.includes('/events')) return new Response('missing', { status: 404 })
       lists++
       return new Response('busy', { status: 503 })
     }

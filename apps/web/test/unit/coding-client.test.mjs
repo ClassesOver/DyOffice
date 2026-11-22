@@ -130,7 +130,9 @@ test('cancelling a recovered running task targets its original ID without submit
  const card=await Promise.race([terminal,new Promise((_,reject)=>{const timer=setTimeout(()=>reject(Error('Expected cancelled task status')),3000);timer.unref()})])
  assert.equal(card.id,turnId)
  assert.equal(card.failure,'Harness cancellation requested. Check for saved delivery.')
- assert.deepEqual(calls,[['GET',discovery],['GET',base+'/status?documentId='+documentId],['POST',base+'/cancel'],['GET',base+'/status?documentId='+documentId]])
+ assert.deepEqual(calls.filter(([,url])=>!url.includes('/events')),[['GET',discovery],['GET',base+'/status?documentId='+documentId],['POST',base+'/cancel'],['GET',base+'/status?documentId='+documentId]])
+ // A JSON reply is not an event stream: one attempt, then polling only.
+ assert.equal(calls.filter(([,url])=>url.includes('/events')).length,1)
 })
 
 test('a new tab retries transient task discovery without dispatching new work',async t=>{
