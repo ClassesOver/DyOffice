@@ -120,21 +120,34 @@ test('finish refuses a missing or same-size-corrupted staged object without comm
 })
 
 test('rename, recycle and restore preserve revision bytes and scoped pagination', async t => {
-  const f = await fileFixture(t), bytes = await docxBytes(), a = await importFile(f, f.alice.token, bytes), b = await importFile(f, f.alice.token, bytes)
+  const f = await fileFixture(t), bytes = await docxBytes()
+  const otherBytes = await readFile(new URL('../../../../apps/shell/build/shell-new/blank.docx', import.meta.url))
+  const name = '重命名.docx'
+  const a = await importFile(f, f.alice.token, bytes), b = await importFile(f, f.alice.token, otherBytes, name)
+  assert.notEqual(a.file.sha256, b.file.sha256)
   const first = await f.files.listFiles(f.alice.token, { limit: 1 })
   assert.equal(first.files.length, 1); assert.ok(first.nextCursor)
   const next = await f.files.listFiles(f.alice.token, { limit: 1, cursor: first.nextCursor })
   assert.equal(next.files.length, 1); assert.notEqual(first.files[0].id, next.files[0].id)
-  await f.files.renameFile(f.alice.token, a.file.fileId, '重命名.docx')
-  await assert.rejects(() => f.files.renameFile(f.alice.token, a.file.fileId, 'wrong.pdf'), { statusCode: 400 })
+  await f.files.renameFile(f.alice.token, a.file.fileId, name)
+  for (const invalid of ['wrong.pdf', '../report.docx', 'folder\\report.docx']) {
+    await assert.rejects(() => f.files.renameFile(f.alice.token, a.file.fileId, invalid), { statusCode: 400 })
+  }
+  for (const token of [f.bob.token, f.adminSigned.token]) {
+    await assert.rejects(() => f.files.renameFile(token, a.file.fileId, 'other.docx'), { statusCode: 404 })
+  }
   await f.files.trashFile(f.alice.token, a.file.fileId)
   await assert.rejects(() => f.files.openFile(f.alice.token, a.file.fileId), { statusCode: 404 })
   await assert.rejects(() => f.files.readFile(f.alice.token, a.file.fileId, a.file.revision), { statusCode: 404 })
-  assert.equal((await f.files.listFiles(f.alice.token, { trash: true })).files[0].name, '重命名.docx')
+  assert.equal((await f.files.listFiles(f.alice.token, { trash: true })).files[0].name, name)
   assert.equal((await f.files.listFiles(f.alice.token)).files[0].id, b.file.fileId)
   await f.files.restoreFile(f.alice.token, a.file.fileId)
-  assert.equal((await f.files.openFile(f.alice.token, a.file.fileId)).file.revision, a.file.revision)
-  assert.deepEqual(await f.files.readFile(f.alice.token, a.file.fileId, a.file.revision), bytes)
+  for (const [opened, original] of [[a, bytes], [b, otherBytes]]) {
+    const current = await f.files.openFile(f.alice.token, opened.file.fileId)
+    assert.equal(current.name, name)
+    assert.equal(current.file.revision, opened.file.revision)
+    assert.deepEqual(await f.files.readFile(f.alice.token, current.file.fileId, current.file.revision), original)
+  }
 })
 
 function signedHeaders(f, token = f.alice.token) {

@@ -128,6 +128,8 @@ PPTX 的 F14 修改密码保护通过原生会话复验。对照候选 `d8392ce2
 
 文件导入和存储专项共 35 项全部通过，含真实 RustFS。四格式按包内结构识别并校验原始字节。伪扩展名、归档路径越界、超额解压、损坏结构及不支持的加密输入被拒绝。解析超时与并发达到上限后，健康文件仍可继续验证。Web 依赖边界扫描检查 1,556 个文件，未发现违规引用。
 
+F16 的 T12 Chromium 用例在固定候选 `d8392ce2` 上通过，覆盖文件夹、收藏、最近打开、回收站恢复及切换账户后的隔离。另有 5 项 PostgreSQL 集成用例通过。把不同内容的两个 DOCX 改为同名并回收、恢复其中一个后，两个文件仍保持各自的原修订与字节。跨账户及配置管理员的重命名被拒绝，文件名中的路径分隔符和异格式扩展名也被拒绝。[工作区 Chromium 用例](../../../apps/web/test/local-browser/t12-workspace-settings.test.mjs) [文件与修订集成用例](../../../apps/web/test/local-integration/files.test.mjs) [工作区权限集成用例](../../../apps/web/test/local-integration/workspace.test.mjs)
+
 对浏览器验收包中的成品补做了独立复开。LibreOffice 24.2.7.2 在隔离目录和断网进程中读取了 DOCX、XLSX 和 PPTX。Writer 渲染结果包含新增段落、原生表格文字和中文剪贴板内容。Calc 读取 `A2=21.25`、`B2=42.5` 和 `G3=84`。在合成控制副本中把 `A2` 改为 `22` 并保留旧公式缓存 `42.5`，强制重算后 `B2=44` 且 `G3=84`。Impress 渲染出三页 4:3 幻灯片，保留标题文字、Revenue 图表和母版文字。Poppler 独立读取 PDF 的原文、新增文本与两张裁剪图片。
 
 三个 OOXML 样本也通过了 LibreOffice 另存。通过系统调用追踪定位了首次 Calc 失败，补齐隔离运行时的 `libsal_textenclo.so` 链接后，上游对照和验收样本均可另存为 XLSX。成品保留 `B2` 公式和值、`G3` 数值以及已断开外链的状态。Writer 另存保留段落与两行可编辑表格，另存产物省略了 Web 成品中的自定义 XML。Impress 另存保留三页 4:3 幻灯片、可编辑图表、文字与母版。三个 Web 成品的原字节均通过 SHA-256 对照。桌面 Microsoft Word、Excel 和 PowerPoint 仍待验。
