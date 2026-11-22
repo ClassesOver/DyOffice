@@ -465,3 +465,47 @@ it('supports shape geometry, table creation/editing, and slide visibility operat
   expect(savedTable?.rows[0]?.[0]?.text?.paragraphs[0]?.runs.map(run=>run.text).join('')).toBe('Cell A1')
   s.close()
 })
+
+describe('PPTX session master and layout editing', () => {
+  it('updates an inherited decoration, journals history and writes only the edited master part', async () => {
+    const {bytes} = await fixture()
+    const session = await createPptxSession(bytes)
+    try {
+      const before = (await session.exportBytes(0)).bytes
+      const items = await session.masterParts(0, 960)
+      const master = items.find(item => item.kind === 'master')!
+      expect(master.partPath).toMatch(/^ppt\/slideMasters\/slideMaster\d+\.xml$/)
+      expect(items.some(item => item.kind === 'layout')).toBe(true)
+      const mutation = {
+        op: 'addElement', kind: 'textbox', offset: {x: 100000, y: 300000, cx: 5000000, cy: 400000},
+        paragraphs: [{runs: [{text: 'WebMasterRoundTrip'}]}],
+      }
+      const result = await session.applyMaster(0, master.partPath, mutation, 960)
+      expect(result).toMatchObject({generation: 1, stateGeneration: 1, canUndo: true})
+      expect(result.sourceId).toBeTruthy()
+      expect(JSON.stringify(result.slide)).toContain('WebMasterRoundTrip')
+      expect(JSON.stringify(await session.render(1, 0))).toContain('WebMasterRoundTrip')
+      const saved = (await session.exportBytes(1)).bytes
+      const original = await JSZip.loadAsync(before), modified = await JSZip.loadAsync(saved)
+      const names = Object.keys(original.files).filter(name => !original.files[name]!.dir)
+      expect(Object.keys(modified.files).filter(name => !modified.files[name]!.dir).sort()).toEqual([...names].sort())
+      const changed: string[] = []
+      for (const name of names) {
+        if (await original.file(name)!.async('base64') !== await modified.file(name)!.async('base64')) changed.push(name)
+      }
+      expect(changed).toEqual([master.partPath])
+      const reopened = await createPptxSession(saved)
+      try { expect(JSON.stringify(await reopened.render(0, 0))).toContain('WebMasterRoundTrip') }
+      finally { reopened.close() }
+      await expect(session.applyMaster(0, master.partPath, mutation, 960)).rejects.toThrow('GENERATION_CONFLICT')
+      await expect(session.applyMaster(1, 'ppt/slides/slide1.xml', mutation, 960)).rejects.toThrow('INVALID_MASTER_PART')
+      await expect(session.applyMaster(1, master.partPath, {...mutation, target:{slide:0}}, 960)).rejects.toThrow('INVALID_TARGET')
+      expect(JSON.stringify((await session.undo(1)).slides)).not.toContain('WebMasterRoundTrip')
+      expect(JSON.stringify((await session.redo(2)).slides)).toContain('WebMasterRoundTrip')
+      const edited = await session.applyMaster(3, master.partPath, {
+        op: 'setText', target: {el: result.sourceId}, paragraphs: [{runs: [{text: 'UpdatedMasterText'}]}],
+      }, 960)
+      expect(JSON.stringify(edited.slide)).toContain('UpdatedMasterText')
+    } finally { session.close() }
+  })
+})

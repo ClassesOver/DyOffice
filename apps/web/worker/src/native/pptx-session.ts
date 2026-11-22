@@ -6,6 +6,7 @@ import { openPptx, savePptx, getChartElementData, getSlideLinks, getSlideAnimati
 import { matchesElementRef } from '@genoffice/pptx-engine/identity'
 import { runTxn, elementDurableId, slideDurableId, type Op, type OpRecord } from '@genoffice/pptx-ops'
 import { markChartEditable } from '@genoffice/pptx-engine'
+import { listMasterParts, parseMasterPart, type MasterPartInfo } from '@genoffice/pptx-engine'
 import { buildRenderSlide, imageSizeFromBytes, type RenderSlide } from '@genoffice/pptx-render'
 import { coverCropFractions } from '@genoffice/pipelines/slides'
 import { buildPagePptx, parsePageSpec } from '@genoffice/pipelines/slides'
@@ -32,6 +33,15 @@ export interface SlidesApplyResult {
 }
 export interface SlidesStepResult { generation: number; stateGeneration: number; canUndo: boolean; canRedo: boolean; slides: RenderSlide[] }
 export interface SlidesOutline { count: number; size: SlideSize; slideIds: string[]; paths: string[]; defaultFont?: string }
+export interface SlidesMasterView extends MasterPartInfo { slide: RenderSlide }
+export interface SlidesMasterEditResult {
+  generation: number
+  stateGeneration: number
+  canUndo: boolean
+  canRedo: boolean
+  slide: RenderSlide
+  sourceId?: string
+}
 export interface PptxSelection {
   generation: number
   slide: {index: number; id: string | undefined}
@@ -57,6 +67,8 @@ export interface PptxSession {
   notes(expectedGeneration: number, slide: number, signal?: AbortSignal): Promise<string>
   comments(expectedGeneration: number, slide: number, signal?: AbortSignal): Promise<SlideComment[]>
   layouts(expectedGeneration: number, signal?: AbortSignal): Promise<{layouts: ReturnType<typeof listSlideLayouts>; size: SlideSize}>
+  masterParts(expectedGeneration: number, fitWidthPx?: number, signal?: AbortSignal): Promise<SlidesMasterView[]>
+  applyMaster(expectedGeneration: number, partPath: string, operation: unknown, fitWidthPx?: number, signal?: AbortSignal): Promise<SlidesMasterEditResult>
   renderAll(expectedGeneration: number, fitWidthPx?: number, signal?: AbortSignal): Promise<RenderSlide[]>
   outline(expectedGeneration: number, signal?: AbortSignal): Promise<SlidesOutline>
   exportBytes(expectedGeneration: number, signal?: AbortSignal): Promise<{generation:number;bytes:Uint8Array}>
@@ -75,6 +87,18 @@ const MAX_RENDER_SLIDES = 200
 const MAX_GENERATED_BYTES=64*1024*1024,MAX_GENERATED_PAGES=200,GENERATED_PAGE_TTL_MS=30*60_000
 const MIN_FIT_WIDTH_PX = 320, MAX_FIT_WIDTH_PX = 4096, DEFAULT_FIT_WIDTH_PX = 960
 const EMU_MAX = 2147483647, ROT_DEG_MAX = 35791
+const MASTER_OPERATIONS = new Set(['setText', 'setTransform', 'setFill', 'setStroke', 'deleteElement', 'addElement'])
+
+function editableMasterParts(state: OpenedPptx): MasterPartInfo[] {
+  const parts = new Map<string, MasterPartInfo>()
+  for (const part of listMasterParts(state.archive)) {
+    const canonical = part.kind === 'master'
+      ? /^ppt\/slideMasters\/slideMaster\d+\.xml$/
+      : /^ppt\/slideLayouts\/slideLayout\d+\.xml$/
+    if (canonical.test(part.partPath) && state.archive.entries.has(part.partPath)) parts.set(part.partPath, part)
+  }
+  return [...parts.values()]
+}
 function imageContent(input:SlidesImageCommand){
   if(!input||typeof input!=='object'||(input.mode!=='insert'&&input.mode!=='replace')||!(input.bytes instanceof Uint8Array)||input.bytes.byteLength<1||input.bytes.byteLength>MAX_IMAGE_BYTES)throw new Error('INVALID_MEDIA')
   const bytes=Uint8Array.from(input.bytes)
@@ -433,14 +457,14 @@ function deckFont(state: OpenedPptx): string | undefined {
   return undefined
 }
 const DEFAULT_ACCENTS=['#4472C4','#ED7D31','#A5A5A5','#FFC000','#5B9BD5','#70AD47']
-/** Theme accent1..6, always six entries aligned by slot so `mono-accentN` names the real accentN. */
+/** GenOffice's gallery enumerates the readable theme accents in their original order. */
 function themeAccents(state:OpenedPptx):string[]{
   const slide=state.deck.slides[0]
   let found:(string|undefined)[]=[]
   try{const chain=slide&&state.archive.resolveSlideChain(slide.path);const xml=chain?.themePath?state.archive.readText(chain.themePath):null;const colors=xml?parseTheme(xml).colors:undefined;found=['accent1','accent2','accent3','accent4','accent5','accent6'].map(name=>colors?.[name])}catch{}
   // A theme with fewer than three readable accents is treated as having none.
-  if(found.filter(Boolean).length<3)return [...DEFAULT_ACCENTS]
-  return DEFAULT_ACCENTS.map((fallback,index)=>found[index]||fallback)
+  const colors = found.filter((color): color is string => !!color)
+  return colors.length >= 3 ? colors : [...DEFAULT_ACCENTS]
 }
 /** `accents` lets callers resolving many schemes parse the theme once. */
 function chartColors(state:OpenedPptx,key:string,accents?:string[]):string[]|undefined{
@@ -452,7 +476,8 @@ function chartColors(state:OpenedPptx,key:string,accents?:string[]):string[]|und
   if(key==='colorful2')return [...accents.slice(3),...accents.slice(0,3)]
   const match=/^mono-accent([1-6])$/.exec(key)
   if(!match)return undefined
-  const color=accents[Number(match[1])-1]!
+  const color=accents[Number(match[1])-1]
+  if(!color)return undefined
   const mix=(target:number,ratio:number)=>{const value=parseInt(color.slice(1),16),channel=(part:number)=>Math.round(part+(target-part)*ratio);return '#'+((channel(value>>16)<<16)|(channel((value>>8)&255)<<8)|channel(value&255)).toString(16).padStart(6,'0').toUpperCase()}
   return [mix(0,.25),color,mix(255,.25),mix(255,.45),mix(255,.65)]
 }
@@ -582,6 +607,15 @@ export async function createPptxSession(bytes: Uint8Array, signal?: AbortSignal)
     const media = mediaResolver(state)
     return state.deck.slides.map((slide,index)=>structuredClone(buildRenderSlide(slide,state.deck.size,{fitWidthPx:width,slideNo:index+1,media})))
   }
+  function renderMaster(state: OpenedPptx, slide: Slide, width: number): RenderSlide {
+    const rendered = structuredClone(buildRenderSlide(slide, state.deck.size, {fitWidthPx:width, media:mediaResolver(state)}))
+    // The engine mints parse-time IDs on each read. The renderer's selection
+    // must remain addressable through a later parse of the same package part.
+    for (const node of rendered.nodes) {
+      if (!node.decoration && node.durableId) node.sourceId = node.durableId
+    }
+    return rendered
+  }
   return {
     selection(expected,slide,elementId,signal) {
       return enqueue(expected,signal,state=>{
@@ -597,6 +631,56 @@ export async function createPptxSession(bytes: Uint8Array, signal?: AbortSignal)
           context.element={id:elementId,type:element.type}
         }
         return context
+      })
+    },
+    masterParts(expected, width, signal) {
+      return enqueue(expected, signal, state => {
+        const parts = editableMasterParts(state)
+        if (parts.length > MAX_RENDER_SLIDES) throw new Error('RENDER_LIMIT')
+        return parts.flatMap(part => {
+          const slide = parseMasterPart(state.archive, part.partPath)
+          return slide ? [{...part, slide:renderMaster(state, slide, fitWidth(width))}] : []
+        })
+      })
+    },
+    async applyMaster(expected, partPath, operation, width, signal) {
+      const [captured] = captureOps([operation])
+      if (!captured || !MASTER_OPERATIONS.has(captured.op)) throw new Error('UNSUPPORTED_OP')
+      const element = captured.target?.el
+      if (captured.target?.slide !== undefined || captured.group !== undefined ||
+        (captured.op === 'addElement' ? element !== undefined : typeof element !== 'string')) {
+        throw new Error('INVALID_TARGET')
+      }
+      return enqueue(expected, signal, state => {
+        const part = editableMasterParts(state).find(item => item.partPath === partPath)
+        const master = part && parseMasterPart(state.archive, part.partPath)
+        if (!master) throw new Error('INVALID_MASTER_PART')
+        if (typeof element === 'string' && master.elements.filter(item => matchesElementRef(item, element)).length !== 1) {
+          throw new Error('INVALID_ELEMENT')
+        }
+        const before = snapshot(state)
+        const target = {part:partPath, ...(typeof element === 'string' ? {el:element} : {})}
+        let slide: RenderSlide
+        let sourceId: string | undefined
+        try {
+          const result = runTxn(state, {
+            isolation:'atomic', ops:[{...captured, target}], parts:new Map([[partPath, master]]),
+          })
+          if (!result.applied) throw new Error('MASTER_EDIT_REJECTED')
+          historyCost(state)
+          slide = renderMaster(state, master, fitWidth(width))
+          const created = result.records?.[0]?.created?.[0]
+          const createdElement = created && master.elements.find(item => matchesElementRef(item, created))
+          if (createdElement) sourceId = elementDurableId(createdElement) ?? createdElement.id
+        } catch (error) {
+          restore(state, before)
+          throw error
+        }
+        redoStack.length = 0
+        redoBytes = 0
+        push(undoStack, before)
+        stateGeneration = ++generation
+        return {generation, stateGeneration, ...history(), slide, ...(sourceId ? {sourceId} : {})}
       })
     },
     async apply(expected, ops, signal, options = {}) {
@@ -903,7 +987,7 @@ export async function createPptxSession(bytes: Uint8Array, signal?: AbortSignal)
 // ── child-process IPC loop: one untrusted deck per isolated Node child ──
 
 export interface PptxChildBinding { fileId: string; revision: string }
-interface ChildMessage { snapshotId?:number; id: number; m: string; expected?: number; ops?: unknown; isolation?: 'atomic' | 'per_op'; dryRun?: boolean; slide?: number; width?: number; sourceId?:string;patch?:Record<string,unknown>;specJson?:string;images?:Array<{url:string;bytes:Uint8Array;ext:string}>;image?:SlidesImageCommand;markers?:string[];mode?:'replace'|'append'|'replace_at'|'insert_at';atIndex?:number; bytes?: Uint8Array; binding?: PptxChildBinding }
+interface ChildMessage { snapshotId?:number; id: number; m: string; expected?: number; ops?: unknown; isolation?: 'atomic' | 'per_op'; dryRun?: boolean; slide?: number; width?: number; sourceId?:string;patch?:Record<string,unknown>;specJson?:string;images?:Array<{url:string;bytes:Uint8Array;ext:string}>;image?:SlidesImageCommand;markers?:string[];mode?:'replace'|'append'|'replace_at'|'insert_at';atIndex?:number; bytes?: Uint8Array; binding?: PptxChildBinding; partPath?:string; operation?:unknown }
 /** Child entry body: serves exactly one bound session over IPC, then exits. Exported for the
  * dedicated child entry module; never starts from an imported module by accident. */
 export function runPptxSessionChild(): void {
@@ -945,6 +1029,8 @@ export function runPptxSessionChild(): void {
           case 'notes': reply(id,{id,ok:true,result:await session.notes(raw.expected!,raw.slide!)}); return
           case 'comments': reply(id,{id,ok:true,result:await session.comments(raw.expected!,raw.slide!)}); return
           case 'layouts': reply(id,{id,ok:true,result:await session.layouts(raw.expected!)}); return
+          case 'masterParts': reply(id,{id,ok:true,result:await session.masterParts(raw.expected!,raw.width)}); return
+          case 'applyMaster': reply(id,{id,ok:true,result:await session.applyMaster(raw.expected!,raw.partPath!,raw.operation,raw.width)}); return
           case 'renderAll': reply(id,{id,ok:true,result:await session.renderAll(raw.expected!,raw.width)}); return
           case 'outline': reply(id,{id,ok:true,result:await session.outline(raw.expected!)}); return
           case 'export': reply(id,{id,ok:true,result:await session.exportBytes(raw.expected!)}); return

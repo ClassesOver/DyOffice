@@ -52,6 +52,12 @@ export function registerSlidesRoutes(app: FastifyInstance, slides: SlidesSession
     route<{revision:string;generation:number;markers:string[];mode:'replace'|'append'|'replace_at'|'insert_at';atIndex?:number}>('/api/v1/files/:id/slides/generated-pages', {
       ...revisionBody,generation:generationBody,markers:{type:'array',minItems:1,maxItems:200,items:{type:'string',minLength:10,maxLength:128}},mode:{type:'string',enum:['replace','append','replace_at','insert_at']},atIndex:{type:'integer',minimum:0,maximum:200},
     },(token,id,body,signal)=>slides.landGeneratedPages(token,id,body,signal),32*1024,['atIndex'])
+    route<Parameters<SlidesSessions['masterParts']>[2]>('/api/v1/files/:id/slides/master-parts', {
+      ...revisionBody,generation:generationBody,fitWidthPx,
+    },(token,id,body,signal)=>slides.masterParts(token,id,body,signal))
+    route<Parameters<SlidesSessions['applyMaster']>[2]>('/api/v1/files/:id/slides/master-edit', {
+      ...revisionBody,generation:generationBody,fitWidthPx,partPath:{type:'string',minLength:1,maxLength:128},operation:{type:'object'},
+    },(token,id,body,signal)=>slides.applyMaster(token,id,body,signal),260*1024)
     route<{revision:string;generation:number;mode:'insert'|'replace';slide:number;bytesBase64:string;ext:string;xPx?:number;yPx?:number;wPx?:number;hPx?:number;fitWidthPx?:number;sourceId?:string;keepSrcRect?:boolean}>('/api/v1/files/:id/slides/media', {
       ...revisionBody,generation:generationBody,mode:{type:'string',enum:['insert','replace']},slide:{type:'integer',minimum:0,maximum:1048575},bytesBase64:{type:'string',minLength:16,maxLength:6990508},ext:{type:'string',enum:['png','jpg','jpeg','gif']},
       xPx:{type:'number',minimum:-100000,maximum:100000},yPx:{type:'number',minimum:-100000,maximum:100000},wPx:{type:'number',exclusiveMinimum:0,maximum:100000},hPx:{type:'number',exclusiveMinimum:0,maximum:100000},fitWidthPx:fitWidthPx,sourceId:{type:'string',minLength:1,maxLength:256},keepSrcRect:{type:'boolean'},

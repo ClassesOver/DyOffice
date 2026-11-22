@@ -20,6 +20,7 @@ import type {
   FindReplaceOp, SetNotesOp, SetTransitionOp, SetSlideHiddenOp, SetSlideLayoutOp,
   AddSectionOp, RenameSectionOp, RemoveSectionOp, MoveSectionOp,
   HeaderFooterOp, AddSlideWithLayoutOp, LinkTargetOp,
+  MasterPartItem,
 } from '../../../slides/src/shared/ipc'
 
 type Preferences = Awaited<ReturnType<SessionFileHost['getPreferences']>>
@@ -75,6 +76,7 @@ export function createSlidesBridge(host: SessionFileHost, fileId: string, prefs:
     applyFence=check;try{return await action()}finally{applyFence=null}
   }
   let session: Session | null = null
+  let master: {session:Session; partPath:string; width:number; slide:MasterPartItem['slide']} | null = null
   let openEpoch=0,opening=0,changing=0
   const controllers = new Set<AbortController>()
   const text = messages[prefs.language === 'en' ? 'en' : 'zh']
@@ -140,7 +142,7 @@ export function createSlidesBridge(host: SessionFileHost, fileId: string, prefs:
           if (typeof body?.csrfToken !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(body.csrfToken)) throw hostError('INVALID_RESPONSE', 'csrf')
           csrf = body.csrfToken
         }
-        if(saveFence&&/\/(apply|media|generated-pages|snapshot-restore|undo|redo|chart-edit)$/.test(path))throw hostError('UNAVAILABLE','analysis save in progress')
+        if(saveFence&&/\/(apply|media|generated-pages|snapshot-restore|undo|redo|chart-edit|master-edit)$/.test(path))throw hostError('UNAVAILABLE','analysis save in progress')
         if(path.endsWith('/apply')&&applyFence&&!applyFence())throw hostError('UNAVAILABLE','analysis target changed')
         const proof = csrf
         const response = await fetchImpl(path, {method:httpMethod,credentials:'same-origin',cache:'no-store',signal:controller.signal,headers:{...(payload?{'content-type':'application/json'}:{}),'x-csrf-token':proof!},...(payload?{body:JSON.stringify(payload)}:{})})
@@ -163,7 +165,7 @@ export function createSlidesBridge(host: SessionFileHost, fileId: string, prefs:
     if(method!=='open'&&opening)throw hostError('CONFLICT','slides session reopening')
     if (waiting.length >= 64) throw hostError('UNAVAILABLE', 'read capacity')
     const captured=session,epoch=openEpoch
-    const readOnly=['slide','slides','notes','comments','animations','links','run-links','layouts','chart-data','chart-color-schemes'].includes(method)
+    const readOnly=['slide','slides','notes','comments','animations','links','run-links','layouts','chart-data','chart-color-schemes','master-parts'].includes(method)
     if(!readOnly)changing++
     await acquireSlot()
     try {
@@ -182,6 +184,7 @@ export function createSlidesBridge(host: SessionFileHost, fileId: string, prefs:
   /** Reopen (or idempotently refresh) the revision-pinned pptx session. `fire` pushes onOpened like the desktop main process does for externally opened files. */
   async function openSession(fire: boolean): Promise<OpenResult> {
     openEpoch++;opening++
+    master=null
     try{
     const state = host.getState(fileId)
     const generation = session && session.revision === state.revision.revision ? session.generation : 0
@@ -216,6 +219,25 @@ export function createSlidesBridge(host: SessionFileHost, fileId: string, prefs:
   async function fetchDeck(): Promise<{slides: OpenResult['slides']}> {
     const current = requireSession()
     return await call(current.revision, current.generation, 'slides') as {slides: OpenResult['slides']}
+  }
+  async function readMasterParts(current:Session, width:number) {
+    if (recovery || opening || !host.getState(fileId).lease) return null
+    return await call(current.revision, current.generation, 'master-parts', {fitWidthPx:width}) as {items:MasterPartItem[]}
+  }
+  async function editMaster(operation:unknown) {
+    const selected = master
+    if (!selected || selected.session !== session || opening || recovery || !host.getState(fileId).lease) return null
+    const current = selected.session
+    const result = await call(current.revision, current.generation, 'master-edit', {
+      partPath:selected.partPath, fitWidthPx:selected.width, operation,
+    }) as ApplyResponse & {sourceId?:string}
+    if (session !== current || disposed) return null
+    current.dirty = result.dirty
+    emitHistory(result.history)
+    onChange()
+    if (!result.slide || master !== selected) return null
+    selected.slide = result.slide
+    return result
   }
   async function fetchComments(index: number): Promise<SlideComment[]> {
     const current = requireSession()
@@ -958,9 +980,71 @@ export function createSlidesBridge(host: SessionFileHost, fileId: string, prefs:
       if (!raw?.changed?.length) return null
       return await fetchSlide(raw.changed[0]!)
     },
-    masterEnter: unavailable, masterOpen: unavailable, masterClose: unavailable,
-    masterEditText: unavailable, masterEditTransform: unavailable, masterEditFill: unavailable,
-    masterEditStroke: unavailable, masterDeleteElement: unavailable, masterAddElement: unavailable,
+    async masterEnter(fitWidthPx) {
+      const current = requireSession()
+      const result = await readMasterParts(current, fitWidthPx)
+      const first = result?.items[0]
+      if (!first || session !== current || disposed) return null
+      master = {session:current, partPath:first.partPath, width:fitWidthPx, slide:first.slide}
+      return result
+    },
+    async masterOpen(partPath) {
+      const previous = master
+      if (!previous) return null
+      const result = await readMasterParts(previous.session, previous.width)
+      const item = result?.items.find(value => value.partPath === partPath)
+      if (!item || master !== previous || session !== previous.session || disposed) return null
+      master = {...previous, partPath, slide:item.slide}
+      return item.slide
+    },
+    async masterClose() {
+      const previous = master
+      master = null
+      return previous?.session === session && !disposed ? (await fetchDeck()).slides : null
+    },
+    async masterEditText(input) {
+      return (await editMaster(op('setText', {target:{el:input.sourceId},paragraphs:input.paragraphs})))?.slide ?? null
+    },
+    async masterEditTransform(input) {
+      const selected = master
+      if (!selected || selected.session !== session || !host.getState(fileId).lease) return null
+      if (input.preview) {
+        // Drag frames belong to the canvas. Only the final frame is journaled.
+        const slide = structuredClone(selected.slide)
+        const node = slide.nodes.find(value => value.sourceId === input.sourceId && !value.decoration)
+        if (!node) return null
+        const scale = slide.widthPx / input.fitWidthPx
+        const x = input.xPx*scale, y = input.yPx*scale, w = input.wPx*scale, h = input.hPx*scale
+        node.box = {...node.box,x,y,w,h,centerX:x+w/2,centerY:y+h/2,rotationDeg:input.rotationDeg}
+        return slide
+      }
+      const box = emuBox(selected.session,input.fitWidthPx,input.xPx,input.yPx,input.wPx,input.hPx)
+      return (await editMaster(op('setTransform',{target:{el:input.sourceId},box,rotDeg:input.rotationDeg})))?.slide ?? null
+    },
+    async masterEditFill(input) {
+      const fill = typeof input.fill === 'string' ? input.fill : {
+        stops:input.fill.gradient.stops ?? [{pos:0,color:input.fill.gradient.from},{pos:1,color:input.fill.gradient.to}],
+        ...(input.fill.gradient.path ? {path:input.fill.gradient.path}
+          : input.fill.gradient.radial ? {path:'circle'} : {angle:Math.round((input.fill.gradient.angleDeg ?? 0)*60000)}),
+      }
+      return (await editMaster(op('setFill',{target:{el:input.sourceId},fill})))?.slide ?? null
+    },
+    async masterEditStroke(input) {
+      const stroke = input.stroke ? {color:input.stroke.color,widthEmu:Math.round(input.stroke.widthPt*12700)} : null
+      return (await editMaster(op('setStroke',{target:{el:input.sourceId},stroke})))?.slide ?? null
+    },
+    async masterDeleteElement(input) {
+      return (await editMaster(op('deleteElement',{target:{el:input.sourceId}})))?.slide ?? null
+    },
+    async masterAddElement(input) {
+      if (!master) return null
+      const offset = emuBox(master.session,input.fitWidthPx,input.xPx,input.yPx,input.wPx,input.hPx)
+      const result = await editMaster(op('addElement', {
+        kind:input.kind, offset, paragraphs:input.paragraphs, fill:input.fillColor, bodyPr:input.bodyPr,
+        ...(input.stroke ? {stroke:{color:input.stroke.color,widthEmu:Math.round(input.stroke.widthPt*12700)}} : {}),
+      }))
+      return result?.slide && result.sourceId ? {slide:result.slide,sourceId:result.sourceId} : null
+    },
     presenterStart: unavailable, presenterSwap: unavailable, presenterEnd: unavailable,
     onShowSync: noEvent, onShowInk: noEvent, onAudienceNav: noEvent,
     async openAiModelSettings() {

@@ -31,7 +31,7 @@ type SlidesTransactionRecord = NonNullable<SlidesTransaction['records']>[number]
 export interface SlidesApplyResponse { generation: number; dirty: boolean; changed: number[]; created: SlidesCreatedEntryView[]; size: {cx:number;cy:number}; order?: string[]; index?: number; sections?: string[]; history: { canUndo: boolean; canRedo: boolean }; transaction: Omit<SlidesTransaction, 'records'> & {records?: SlidesTransactionRecord[]} }
 
 const OP_REJECTED = new Set(['GENERATION_CONFLICT','OP_REJECTED','SESSION_CLOSED','INVALID_SLIDE','HISTORY_BATCH_ACTIVE'])
-const OP_INVALID = new Set(['OPS_LIMIT','PAYLOAD_LIMIT','INVALID_OPS','INVALID_MEDIA','INVALID_ELEMENT','INVALID_GENERATED_PAGE','UNSUPPORTED_OP','UNSUPPORTED_FIELD','INVALID_TARGET','INVALID_PARAGRAPHS','INVALID_RUN','INVALID_FILL','INVALID_STROKE','INVALID_TABLE','INVALID_GEOMETRY','INVALID_KIND','INVALID_ROTATION','INVALID_LAYOUT','INVALID_TEXT','INVALID_FIT_WIDTH','RENDER_LIMIT'])
+const OP_INVALID = new Set(['OPS_LIMIT','PAYLOAD_LIMIT','INVALID_OPS','INVALID_MEDIA','INVALID_ELEMENT','INVALID_GENERATED_PAGE','UNSUPPORTED_OP','UNSUPPORTED_FIELD','INVALID_TARGET','INVALID_PARAGRAPHS','INVALID_RUN','INVALID_FILL','INVALID_STROKE','INVALID_TABLE','INVALID_GEOMETRY','INVALID_KIND','INVALID_ROTATION','INVALID_LAYOUT','INVALID_TEXT','INVALID_FIT_WIDTH','RENDER_LIMIT','INVALID_MASTER_PART','MASTER_EDIT_REJECTED'])
 const STRUCTURAL = new Set(['addBlankSlide','addSlideWithLayout','duplicateSlide','deleteSlide','moveSlide','insertSlidePptx'])
 const ADDING = new Set(['addBlankSlide','addSlideWithLayout','duplicateSlide','insertSlidePptx'])
 const MAX_DOWNLOAD = 32 * 1024 * 1024
@@ -275,6 +275,23 @@ export function createSlidesService({ files, leases, revisions, host, maxConcurr
       fence(entry, input.generation)
       return entry.handle.layouts(input.generation, signal).catch(mapSessionError)
     },
+    async masterParts(token: string, fileId: string, input: SlidesOpenInput, signal?: AbortSignal) {
+      const {entry} = await pinned(token, fileId, input.revision, signal)
+      if (!entry) throw authError(409)
+      fence(entry, input.generation)
+      const items = await entry.handle.masterParts(input.generation, input.fitWidthPx, signal).catch(mapSessionError)
+      return {items}
+    },
+    async applyMaster(token: string, fileId: string, input: SlidesOpenInput & {partPath:string; operation:unknown}, signal?: AbortSignal) {
+      const {entry} = await pinned(token, fileId, input.revision, signal)
+      if (!entry) throw authError(409)
+      fence(entry, input.generation)
+      const result = await entry.handle.applyMaster(input.generation, input.partPath, input.operation, input.fitWidthPx, signal).catch(mapSessionError)
+      entry.generation = result.generation
+      entry.stateGeneration = result.stateGeneration
+      entry.history = {canUndo:result.canUndo, canRedo:result.canRedo}
+      return {generation:entry.generation, dirty:dirty(entry), slide:result.slide, sourceId:result.sourceId, history:entry.history}
+    },
     async slides(token: string, fileId: string, input: SlidesReadInput, signal?: AbortSignal): Promise<SlidesSlidesView> {
       const { entry } = await pinned(token, fileId, input.revision, signal)
       if (!entry) throw authError(409)
@@ -421,7 +438,7 @@ export function createSlidesService({ files, leases, revisions, host, maxConcurr
   // the authenticated token digest + exact editor/lease epoch. A new lease opens
   // a fresh persisted document, never inherits another editor's dirty child.
   const bindings=new Map<string,string>(),busy=new Map<string,{method:Method;count:number}>()
-  type Method='open'|'slide'|'notes'|'comments'|'animations'|'links'|'runLinks'|'chartData'|'chartColorSchemes'|'layouts'|'slides'|'apply'|'editChart'|'generatePage'|'landGeneratedPages'|'applyImage'|'undo'|'redo'|'beginHistoryBatch'|'endHistoryBatch'|'restoreSnapshot'|'exportDraft'|'exportForSave'|'bindPreparedUpload'
+  type Method='open'|'slide'|'notes'|'comments'|'animations'|'links'|'runLinks'|'chartData'|'chartColorSchemes'|'layouts'|'masterParts'|'applyMaster'|'slides'|'apply'|'editChart'|'generatePage'|'landGeneratedPages'|'applyImage'|'undo'|'redo'|'beginHistoryBatch'|'endHistoryBatch'|'restoreSnapshot'|'exportDraft'|'exportForSave'|'bindPreparedUpload'
   function guarded<K extends Method>(method:K):typeof service[K]{
     return (async(token:string,fileId:string,input:SlidesReadInput,signal?:AbortSignal)=>{
       if(!input||typeof input.editorId!=='string'||!Number.isSafeInteger(input.leaseEpoch)||input.leaseEpoch<1)throw authError(400)
@@ -465,6 +482,6 @@ export function createSlidesService({ files, leases, revisions, host, maxConcurr
       finally{const current=busy.get(fileId);if(current&&--current.count===0)busy.delete(fileId)}
     }) as typeof service[K]
   }
-  return {bindPreparedUpload:guarded('bindPreparedUpload'),open:guarded('open'),slide:guarded('slide'),notes:guarded('notes'),comments:guarded('comments'),chartData:guarded('chartData'),chartColorSchemes:guarded('chartColorSchemes'),animations:guarded('animations'),links:guarded('links'),runLinks:guarded('runLinks'),layouts:guarded('layouts'),slides:guarded('slides'),apply:guarded('apply'),editChart:guarded('editChart'),generatePage:guarded('generatePage'),landGeneratedPages:guarded('landGeneratedPages'),applyImage:guarded('applyImage'),undo:guarded('undo'),redo:guarded('redo'),beginHistoryBatch:guarded('beginHistoryBatch'),endHistoryBatch:guarded('endHistoryBatch'),restoreSnapshot:guarded('restoreSnapshot'),exportDraft:guarded('exportDraft'),exportForSave:guarded('exportForSave'),closeAll(){service.closeAll();bindings.clear()}}
+  return {bindPreparedUpload:guarded('bindPreparedUpload'),open:guarded('open'),slide:guarded('slide'),notes:guarded('notes'),comments:guarded('comments'),chartData:guarded('chartData'),chartColorSchemes:guarded('chartColorSchemes'),animations:guarded('animations'),links:guarded('links'),runLinks:guarded('runLinks'),layouts:guarded('layouts'),masterParts:guarded('masterParts'),applyMaster:guarded('applyMaster'),slides:guarded('slides'),apply:guarded('apply'),editChart:guarded('editChart'),generatePage:guarded('generatePage'),landGeneratedPages:guarded('landGeneratedPages'),applyImage:guarded('applyImage'),undo:guarded('undo'),redo:guarded('redo'),beginHistoryBatch:guarded('beginHistoryBatch'),endHistoryBatch:guarded('endHistoryBatch'),restoreSnapshot:guarded('restoreSnapshot'),exportDraft:guarded('exportDraft'),exportForSave:guarded('exportForSave'),closeAll(){service.closeAll();bindings.clear()}}
 }
 export type SlidesSessions = ReturnType<typeof createSlidesService>

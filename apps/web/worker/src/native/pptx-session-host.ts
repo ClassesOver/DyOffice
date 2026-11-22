@@ -12,6 +12,11 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
  * pair, stay generation-fenced per call, and reject once the child exits or times out. */
 export interface SlidesRenderNodeLike { type: string; [key: string]: unknown }
 export interface SlidesRenderSlideLike { widthPx: number; heightPx: number; scale: number; nodes: SlidesRenderNodeLike[]; partPath?: string }
+export interface SlidesMasterView {partPath:string; kind:'master'|'layout'; name:string; slide:SlidesRenderSlideLike}
+export interface SlidesMasterEditResult {
+  generation:number; stateGeneration:number; canUndo:boolean; canRedo:boolean
+  slide:SlidesRenderSlideLike; sourceId?:string
+}
 export interface PptxChildBinding { fileId: string; revision: string }
 export interface SlidesStepView { generation: number; stateGeneration: number; canUndo: boolean; canRedo: boolean; size: {cx:number;cy:number}; slides: SlidesRenderSlideLike[] }
 /** The child's apply result: the applied transaction records plus the post-transaction deck
@@ -49,12 +54,14 @@ export interface PptxChildSession {
   notes(expectedGeneration: number, slide: number, signal?: AbortSignal): Promise<string>
   comments(expectedGeneration: number, slide: number, signal?: AbortSignal): Promise<Array<{authorId:number;author:string;initials:string;dt:string;idx:number;text:string}>>
   layouts(expectedGeneration: number, signal?: AbortSignal): Promise<{layouts:Array<{path:string;name:string;layoutType:string;placeholders:Array<{type:string;idx:string;x:number;y:number;cx:number;cy:number;hint:string}>}>;size:{cx:number;cy:number}}>
+  masterParts(expectedGeneration: number, fitWidthPx?: number, signal?: AbortSignal): Promise<SlidesMasterView[]>
+  applyMaster(expectedGeneration: number, partPath: string, operation: unknown, fitWidthPx?: number, signal?: AbortSignal): Promise<SlidesMasterEditResult>
   renderAll(expectedGeneration: number, fitWidthPx?: number, signal?: AbortSignal): Promise<SlidesRenderSlideLike[]>
   outline(expectedGeneration: number, signal?: AbortSignal): Promise<SlidesOutlineView>
   exportBytes(expectedGeneration: number, signal?: AbortSignal): Promise<{ generation: number; bytes: Uint8Array }>
   close(): void
 }
-interface ChildMessage { snapshotId?:number; id: number; m: string; expected?: number; ops?: unknown; image?:SlidesImageCommand; isolation?: 'atomic' | 'per_op'; dryRun?: boolean; slide?: number; width?: number; sourceId?:string;patch?:Record<string,unknown>;specJson?:string;images?:Array<{url:string;bytes:Uint8Array;ext:string}>;markers?:string[];mode?:'replace'|'append'|'replace_at'|'insert_at';atIndex?:number; bytes?: Uint8Array; binding?: PptxChildBinding }
+interface ChildMessage { snapshotId?:number; id: number; m: string; expected?: number; ops?: unknown; image?:SlidesImageCommand; isolation?: 'atomic' | 'per_op'; dryRun?: boolean; slide?: number; width?: number; sourceId?:string;patch?:Record<string,unknown>;specJson?:string;images?:Array<{url:string;bytes:Uint8Array;ext:string}>;markers?:string[];mode?:'replace'|'append'|'replace_at'|'insert_at';atIndex?:number; bytes?: Uint8Array; binding?: PptxChildBinding; partPath?:string; operation?:unknown }
 export interface IsolatedPptxSessionOptions { unsafeTestOnly?: boolean; experimental?: boolean; timeoutMs?: number; childModule?: URL; tsxModule?: URL; mdHooks?: URL }
 /** Mirrors the in-process session gate: no oversized package is ever handed to a child. */
 const MAX_INPUT_BYTES = 32 * 1024 * 1024
@@ -144,6 +151,8 @@ export async function openIsolatedPptxSession(input: {fileId: string; revision: 
     notes(expected,slide,signal){ if (signal?.aborted) return Promise.reject(new Error('ABORTED')); return call({m:'notes',expected,slide}) },
     comments(expected,slide,signal){ if (signal?.aborted) return Promise.reject(new Error('ABORTED')); return call({m:'comments',expected,slide}) },
     layouts(expected,signal){ if (signal?.aborted) return Promise.reject(new Error('ABORTED')); return call({m:'layouts',expected}) },
+    masterParts(expected,width,signal){ if (signal?.aborted) return Promise.reject(new Error('ABORTED')); return call({m:'masterParts',expected,width}) },
+    applyMaster(expected,partPath,operation,width,signal){ if (signal?.aborted) return Promise.reject(new Error('ABORTED')); return call({m:'applyMaster',expected,partPath,operation,width}) },
     renderAll(expected,width,signal){ if (signal?.aborted) return Promise.reject(new Error('ABORTED')); return call({m:'renderAll',expected,width}) },
     outline(expected,signal){ if (signal?.aborted) return Promise.reject(new Error('ABORTED')); return call({m:'outline',expected}) },
     exportBytes(expected,signal){ if (signal?.aborted) return Promise.reject(new Error('ABORTED')); return call({m:'export',expected}) },

@@ -582,7 +582,7 @@ test('desktop-only slides operations reject asynchronously with an explicit unav
   const createSlidesBridge = await bundleBridge(t)
   const server = createSlidesMockServer({slideCount: 1})
   const {bridge} = await openBridge(createSlidesBridge, server, t)
-  const desktopOnly = ['printSlides', 'exportPdf', 'exportImages', 'pickExportDir', 'pickExportPdfPath', 'pickExportVideoPath', 'videoFileOpen', 'savePicture', 'listPrinters', 'printerOptions', 'fontInstallLocal', 'fontCatalog', 'fontDownload', 'insertMedia', 'addMediaBytes', 'pickModel3d', 'addModel3d', 'openPptxPath', 'newBlank', 'saveAs', 'presenterStart', 'aiStream', 'webSearch', 'masterEnter']
+  const desktopOnly = ['printSlides', 'exportPdf', 'exportImages', 'pickExportDir', 'pickExportPdfPath', 'pickExportVideoPath', 'videoFileOpen', 'savePicture', 'listPrinters', 'printerOptions', 'fontInstallLocal', 'fontCatalog', 'fontDownload', 'insertMedia', 'addMediaBytes', 'pickModel3d', 'addModel3d', 'openPptxPath', 'newBlank', 'saveAs', 'presenterStart', 'aiStream', 'webSearch']
   for (const method of desktopOnly) {
     assert.equal(typeof bridge.api[method], 'function', method)
     let operation
