@@ -36,6 +36,27 @@ test('Word searches a starred saved source, reads its actual text and opens the 
   const user=request.messages.findLastIndex(message=>message.role==='user')
   const content=request.messages[user]?.content
   const prompt=typeof content==='string'?content:content?.map(part=>part.text??'').join(' ')
+  if(prompt?.includes('验证页面与样式')){
+   const results=request.messages.slice(user+1).filter(message=>message.role==='tool')
+   const calls=[
+    ['get_document_context',{},/Working document/],
+    ['read_blocks',{startBlockIndex:0,endBlockIndex:0},/Working document/],
+    ['insert_section_break',{afterBlockIndex:0,type:'continuous'},/Inserted a continuous section break/],
+    ['set_page_setup',{paper:'A5',orientation:'landscape'},/A5 landscape/],
+    ['set_header_footer',{kind:'header',text:'Audit header 651'},/Updated the header/],
+    ['define_style',{styleId:'AuditCallout',name:'Audit Callout',type:'paragraph',run:{bold:true}},/Created style AuditCallout/],
+    ['list_styles',{},/AuditCallout/],
+   ]
+   if(results.length){
+    const {output,isError}=JSON.parse(results.at(-1).content)
+    const [name,,expected]=calls[results.length-1]
+    assert.ok(!isError,name+': '+output)
+    assert.match(output,expected,name+': '+output)
+   }
+   const action=calls[results.length]
+   const delta=action?{tool_calls:[{index:0,id:'layout-'+action[0],type:'function',function:{name:action[0],arguments:JSON.stringify(action[1])}}]}:{content:'已验证页面与样式'}
+   return Readable.from([Buffer.from(`data: ${JSON.stringify({choices:[{delta,finish_reason:action?'tool_calls':'stop'}]})}\n\ndata: [DONE]\n\n`)])
+  }
   if(prompt?.includes('验证脚注与尾注')){
    const results=request.messages.slice(user+1).filter(message=>message.role==='tool')
    const outputs=results.map(({content})=>JSON.parse(content))
@@ -115,11 +136,18 @@ test('Word searches a starred saved source, reads its actual text and opens the 
   await composer.fill('验证脚注与尾注');await composer.press('Enter')
   await expect(editor.locator('.ai-msg-assistant').last()).toContainText('已验证脚注与尾注',{timeout:45000})
   await expect(editor.locator('.ai-msg-streaming')).toHaveCount(0)
+  await composer.fill('验证页面与样式');await composer.press('Enter')
+  await expect(editor.locator('.ai-msg-assistant').last()).toContainText('已验证页面与样式',{timeout:45000})
+  await expect(editor.locator('.ai-msg-streaming')).toHaveCount(0)
   const head=async()=>(await f.files.openFile(f.alice.token,draft.fileId)).file.revision
-  assert.equal(await head(),draft.revision)
+  const readSaved=async()=>JSZip.loadAsync(await f.files.readFile(f.alice.token,draft.fileId,await head()))
   await page.keyboard.press('Control+s')
-  await expect.poll(head,{timeout:30000}).not.toBe(draft.revision)
-  const saved=await JSZip.loadAsync(await f.files.readFile(f.alice.token,draft.fileId,await head()))
+  await expect.poll(async()=>{
+   const snapshot=await readSaved()
+   const xml=await snapshot.file('word/document.xml').async('string')
+   return /<w:pgSz[^>]*w:orient="landscape"/.test(xml)
+  },{timeout:30000}).toBe(true)
+  const saved=await readSaved()
   const footnotes=await saved.file('word/footnotes.xml').async('string')
   const endnotes=await saved.file('word/endnotes.xml').async('string')
   const body=await saved.file('word/document.xml').async('string')
@@ -128,6 +156,11 @@ test('Word searches a starred saved source, reads its actual text and opens the 
   assert.match(endnotes,/Release source/)
   assert.equal((body.match(/<w:footnoteReference\b/g)??[]).length,1)
   assert.equal((body.match(/<w:endnoteReference\b/g)??[]).length,1)
+  assert.match(body,/<w:type w:val="continuous"/)
+  assert.match(body,/<w:pgSz[^>]*w:orient="landscape"/)
+  const headers=await Promise.all(saved.file(/^word\/header[0-9]+\.xml$/).map(part=>part.async('string')))
+  assert.ok(headers.some(header=>header.includes('Audit header 651')))
+  assert.match(await saved.file('word/styles.xml').async('string'),/w:styleId="AuditCallout"/)
  }
  await link.click()
  const cited=page.frameLocator(`iframe[data-document-id="${source.fileId}"]`)
