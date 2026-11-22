@@ -68,9 +68,16 @@ node tools/dyoffice/analysis-eval/dsh-recovery.mjs
 
 The browser delegates to an external fixture process, resumes the parent conversation, recovers the delivery from history and inserts it. The test checks the saved document for the report and its hash, then reopens it. The JSON report records the outcome and any failed assertion. Use `--format xlsx|pptx|pdf` with the corresponding native test assets to select another format.
 
-## Word document effects
+## Editor document effects
 
-Run `node tools/dyoffice/analysis-eval/word-effects.mjs --fixture` to verify a table, bold formatting and a comment anchored to the requested text. Each scenario creates a fresh in-memory Tiptap Word document with the production extensions and calls the native tool executor. With the same gateway configuration as editor selection, use `--model MODEL_ID` to execute the model’s first tool call and record its arguments, result and document check in `test-results/word-effects/report.json`.
+Run `node tools/dyoffice/analysis-eval/word-effects.mjs --fixture --format FORMAT` with `docx` (the default), `xlsx`, `pptx` or `pdf`. Each scenario starts from a fresh in-memory document, sends one tool call through that editor's production executor and checks the document that results:
+
+- `docx`: a Tiptap document with the production extensions. Checks a two-column table, bold text and a comment anchored to the requested paragraph.
+- `xlsx`: an `InMemoryWorkbookAdapter` behind the real `propose_operations` planner. Checks a value and formula written to new cells, and bold plus fill on a range.
+- `pptx`: a blank package from `pptx-engine` with three text boxes, edited by the real `runTxn` executor. Checks replaced text and an added text box in the slide model. This format runs in Node because the engine uses Node built-ins.
+- `pdf`: the editor's pending-edit reducer. Checks a page rotation, a page deletion and document properties in the snapshot that save writes.
+
+With the same gateway configuration as editor selection, use `--model MODEL_ID` to execute the model's first tool call instead of the fixed input. The report records the arguments, result and document check in `test-results/<format>-effects/report.json` (`word`, `sheet`, `slide` or `pdf`), or the directory given by `--out`.
 
 ## Codex chart delivery
 

@@ -118,3 +118,4 @@
 - 文档 Codex 的数据授权绑定到具体 runtime_id 和会话；DSH 授权绑定到领取它的成员、连接 epoch 与 claimId。凭据在每次数据操作前后检查有效租约，并在原截止时间重新读取已确认的续租。后台授权检查不会替断线的 DSH 成员发送心跳。
 - Codex 和 DSH 浏览器订阅统一使用 `GET /api/v1/assistant/tasks/:id/events`。Codex 传入 documentId；读取频道单任务（含后台任务）传入 conversationId；订阅整个频道使用频道 ID 和 feed=channel，使空闲编辑器也能发现新任务。三者均以 after 续读。结果事件只包含任务引用，详细结果仍从原授权接口读取。迁移 0057 增加 Codex 结果事件；读取过期租约时会事务性记录 unknown_outcome，多实例同时恢复只写一次。
 - 迁移 0058 为 Office 发起的 DSH 委派保留初次工具调用 ID、文档修订号和运行模型。新版本编辑器和 Codex 在恢复时共用这三项匹配规则。DSH 领取及领取回执重试还会重读数据库中的文件版本；领取后切换模型但尚未开始执行时，编辑器把任务交回队列。旧任务继续沿用原有的 claimId 和连接 epoch 校验。
+- E1 已覆盖四种格式：Excel 经真实 `propose_operations` 规划器写入内存工作簿，核对单元格值、公式和格式；PowerPoint 由 `runTxn` 在 `pptx-engine` 空白包上执行，核对幻灯片模型中的文字；PDF 经编辑器的待保存编辑归约器，核对页面旋转、删除和文档属性。固定输入 10/10 通过（Word 3、Excel 2、PowerPoint 2、PDF 3），改错输入时各用例均失败。PR 中运行固定输入，周度工作流对四种格式做真实模型采样。

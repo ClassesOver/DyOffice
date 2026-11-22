@@ -12,6 +12,10 @@ on:
       - 'apps/sheets/src/renderer/ai/**'
       - 'apps/slides/src/renderer/ai/**'
       - 'apps/pdf/src/renderer/ai/**'
+      - 'apps/pdf/src/renderer/edit-ops/**'
+      - 'apps/sheets/src/renderer/plan-operations.ts'
+      - 'packages/pptx-ops/src/**'
+      - 'packages/xlsx-gateway/src/**'
       - 'packages/agent-core/src/**'
       - 'packages/browser-host/src/**'
       - 'apps/web/server/src/modules/assistant-channel/**'
@@ -37,9 +41,14 @@ jobs:
       - run: node_modules/.bin/playwright install chromium --with-deps
       - name: Load the four native catalogs
         run: node tools/dyoffice/analysis-eval/editor-selection.mjs --check-catalog
-      - name: Verify table, style and comment changes in the Word editor
+      - name: Verify Word, Excel, PowerPoint and PDF edits against their real executors
         id: word_fixture
-        run: node tools/dyoffice/analysis-eval/word-effects.mjs --fixture --out test-results/word-fixture
+        run: |
+          status=0
+          for format in docx xlsx pptx pdf; do
+            node tools/dyoffice/analysis-eval/word-effects.mjs --fixture --format "$format" --out "test-results/effects-fixture/$format" || status=1
+          done
+          exit $status
       - name: Measure weekly real-model tool selection
         if: github.event_name != 'pull_request'
         env:
@@ -48,13 +57,18 @@ jobs:
           DYOFFICE_EVAL_MODEL: ${{ vars.DYOFFICE_EVAL_MODEL }}
         run: |
           node tools/dyoffice/analysis-eval/editor-selection.mjs --model "$DYOFFICE_EVAL_MODEL" --trials 1
-      - name: Measure weekly real-model Word edits
+      - name: Measure weekly real-model edits in the four editors
         if: ${{ !cancelled() && github.event_name != 'pull_request' && steps.word_fixture.outcome == 'success' }}
         env:
           DYOFFICE_EVAL_API_KEY: ${{ secrets.DYOFFICE_EVAL_API_KEY }}
           DYOFFICE_EVAL_BASE_URL: ${{ vars.DYOFFICE_EVAL_BASE_URL }}
           DYOFFICE_EVAL_MODEL: ${{ vars.DYOFFICE_EVAL_MODEL }}
-        run: node tools/dyoffice/analysis-eval/word-effects.mjs --model "$DYOFFICE_EVAL_MODEL"
+        run: |
+          status=0
+          for format in docx xlsx pptx pdf; do
+            node tools/dyoffice/analysis-eval/word-effects.mjs --model "$DYOFFICE_EVAL_MODEL" --format "$format" --out "test-results/effects-model/$format" || status=1
+          done
+          exit $status
       - name: Retain measured input cost and selection results
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
@@ -62,8 +76,8 @@ jobs:
           name: editor-selection-report
           path: |
             test-results/editor-selection/report.json
-            test-results/word-fixture/report.json
-            test-results/word-effects/report.json
+            test-results/effects-fixture/*/report.json
+            test-results/effects-model/*/report.json
           if-no-files-found: error
 
   harness-recovery:
