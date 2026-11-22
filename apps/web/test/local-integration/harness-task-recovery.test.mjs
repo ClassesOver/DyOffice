@@ -36,7 +36,7 @@ test('Harness admission waits for a renewal committing after its previous lease 
  await Promise.all(Array.from({length:32},(_,i)=>
   store.start(f.alice.token,file.fileId,'running-'+i,{modelId:'fixture'},undefined)))
  const transaction=operation=>f.transactions.withPrincipalTransaction({kind:'session',token:f.alice.token},operation)
- await transaction(c=>c.query("UPDATE harness_task_recovery SET lease_until=clock_timestamp()+interval '2 seconds' WHERE turn_id='running-0'"))
+ await transaction(c=>c.query("UPDATE task_runtime_codex SET lease_until=clock_timestamp()+interval '2 seconds' WHERE turn_id='running-0'"))
  let updated,release
  const hasUpdated=new Promise(resolve=>{updated=resolve}),gate=new Promise(resolve=>{release=resolve})
  const delayed={...f.transactions,withPrincipalTransaction:(input,operation)=>f.transactions.withPrincipalTransaction(input,async(c,p)=>{

@@ -156,7 +156,7 @@ test('long task history returns bounded previews with active tasks first and aut
  await f.transactions.withPrincipalTransaction({kind:'session',token:f.alice.token},async c=>{
   for(let i=0;i<70;i++) {
    const taskId=randomUUID();firstId??=taskId
-   await c.query("INSERT INTO assistant_tasks(task_id,deployment_id,owner_id,conversation_id,root_task_id,depth,sender,recipient,instruction,summary,state,deadline_at) VALUES($1,$2,$3,$4,$1,0,'office',$5,$6,$7,'succeeded',clock_timestamp()+interval '10 minutes')",[taskId,f.deploymentId,f.alice.user.id,id,m.member.membershipId,instruction,summary])
+   await c.query("INSERT INTO task_runtime_channel(task_id,deployment_id,owner_id,conversation_id,root_task_id,depth,sender,recipient,instruction,summary,state,deadline_at) VALUES($1,$2,$3,$4,$1,0,'office',$5,$6,$7,'succeeded',clock_timestamp()+interval '10 minutes')",[taskId,f.deploymentId,f.alice.user.id,id,m.member.membershipId,instruction,summary])
   }
  })
  const active=await f.submit(m.member.membershipId,{kind:'delegate',instruction})

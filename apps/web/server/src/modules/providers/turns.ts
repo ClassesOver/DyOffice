@@ -16,7 +16,7 @@ export interface TurnDependencies<P extends TurnPermit> {
   /** Read-only permit lookup. No budget reservation: settlement is a future wiring gate. */
   authorize(token: string, modelId: string): Promise<P>
   revalidate(token: string, permit: P): Promise<void>
-  stream(permit: P, request: TurnRequest, signal: AbortSignal, context: {token:string;turnId:string;timeoutMs:number}): AsyncIterable<TurnEvent>
+  stream(permit: P, request: TurnRequest, signal: AbortSignal, context: {token:string;turnId:string;timeoutMs:number;documentId?:string}): AsyncIterable<TurnEvent>
 }
 class TurnError extends Error {}
 export class ProviderTurnTimeout extends TurnError {
@@ -76,7 +76,7 @@ export function createProviderTurns<P extends TurnPermit>(deps: TurnDependencies
       for (const controller of all) controller.abort(fail('AI turn unavailable'))
       for (const stop of cancellationStops) stop()
     },
-    async run(input: {token:string;modelId:string;turnId:string;request:unknown;signal?:AbortSignal;admit?:(signal:AbortSignal)=>Promise<void>}, emit:(event:TurnEvent)=>void|Promise<void>) {
+    async run(input: {token:string;modelId:string;turnId:string;request:unknown;signal?:AbortSignal;documentId?:string;admit?:(signal:AbortSignal)=>Promise<void>}, emit:(event:TurnEvent)=>void|Promise<void>) {
       if (disposed) throw fail('AI turn unavailable')
       if (!validId(input.turnId) || !validId(input.modelId) || typeof input.token !== 'string') throw fail('Invalid AI request')
       const {token,modelId,turnId} = input
@@ -126,7 +126,7 @@ export function createProviderTurns<P extends TurnPermit>(deps: TurnDependencies
           await step(()=>input.admit!(controller.signal))
         }
         stage = 'provider_stream'
-        iterator = deps.stream(permit,request,controller.signal,{token,turnId,timeoutMs:turnTimeout})[Symbol.asyncIterator]()
+        iterator = deps.stream(permit,request,controller.signal,{token,turnId,timeoutMs:turnTimeout,...(input.documentId?{documentId:input.documentId}:{})})[Symbol.asyncIterator]()
         for (;;) {
           stage = 'provider_stream'
           const result = await step(()=>iterator!.next())

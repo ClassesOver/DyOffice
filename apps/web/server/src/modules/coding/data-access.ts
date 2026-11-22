@@ -34,6 +34,7 @@ interface Entry {
   sourceIds:Set<string>;resultIds:Set<string>;signal:AbortSignal;owner?:string;identity?:string
   timer:ReturnType<typeof setTimeout>;abort:()=>void;busy:boolean
   authorize?:()=>Promise<void>
+  leaseUntil?:()=>Promise<number>
   delivery?:AnalysisDelivery
 }
 
@@ -75,9 +76,21 @@ export function createHarnessDataAccess(options:{
   const current=(entry:Entry)=>{
     if(disposed||entries.get(entry.taskId)!==entry||entry.signal.aborted||Date.now()>=entry.expiresAt){revoke(entry.taskId);throw unavailable()}
   }
+  async function refreshLease(entry:Entry,rearm=false) {
+    if(!entry.leaseUntil)return
+    if(entries.get(entry.taskId)!==entry||entry.signal.aborted)throw unavailable()
+    const until=await entry.leaseUntil()
+    if(entries.get(entry.taskId)!==entry||entry.signal.aborted||!Number.isSafeInteger(until)||until<=Date.now())throw unavailable()
+    if(!rearm&&until===entry.expiresAt)return
+    clearTimeout(entry.timer)
+    entry.expiresAt=until
+    entry.timer=setTimeout(()=>{void refreshLease(entry,true).catch(entry.abort)},until-Date.now())
+    entry.timer.unref()
+  }
   async function validate(entry:Entry) {
-    current(entry)
     try {
+      await refreshLease(entry)
+      current(entry)
       await entry.authorize?.()
       const principal=await options.sessions.authenticate(entry.token)
       current(entry)
@@ -88,7 +101,7 @@ export function createHarnessDataAccess(options:{
     if(typeof taskId!=='string'||typeof bearer!=='string'||!/^[A-Za-z0-9_-]{43}$/.test(bearer))throw unavailable()
     const entry=entries.get(taskId)
     if(!entry||!timingSafeEqual(entry.credentialHash,hash(bearer)))throw unavailable()
-    current(entry)
+    if(!entry.leaseUntil)current(entry)
     return entry
   }
   async function guarded<T>(entry:Entry,operation:()=>Promise<T>):Promise<T> {
@@ -108,8 +121,9 @@ export function createHarnessDataAccess(options:{
     return id
   }
   return {
-    async issue(input:{token:string;agentId:string;inputs:HarnessDataInputs;signal:AbortSignal;ttlMs?:number;authorize?:()=>Promise<void>}):Promise<HarnessDataGrant> {
-      const value={...object(input,['token','agentId','inputs','signal','ttlMs','authorize'])},inputs=scope(value.inputs)
+    async issue(input:{token:string;agentId:string;inputs:HarnessDataInputs;signal:AbortSignal;ttlMs?:number;authorize?:()=>Promise<void>;leaseUntil?:()=>Promise<number>}):Promise<HarnessDataGrant> {
+      const value={...object(input,['token','agentId','inputs','signal','ttlMs','authorize','leaseUntil'])},inputs=scope(value.inputs)
+      if(value.leaseUntil!==undefined&&typeof value.leaseUntil!=='function')throw unavailable(400)
       if(value.authorize!==undefined&&typeof value.authorize!=='function')throw unavailable(400)
       if(typeof value.token!=='string'||!value.token||typeof value.agentId!=='string'||!/^[A-Za-z0-9_-]{1,100}$/.test(value.agentId)||!(value.signal instanceof AbortSignal))throw unavailable(400)
       const ttlMs=value.ttlMs??GRANT_DEFAULT_TTL_MS
@@ -117,19 +131,19 @@ export function createHarnessDataAccess(options:{
       if(disposed||value.signal.aborted)throw unavailable()
       // Finished remote claims have no local finally block. Reclaim their
       // bounded slots on admission without introducing a cleanup daemon.
-      for(const entry of [...entries.values()])if(entry.authorize&&entry.identity) {
+      for(const entry of [...entries.values()])if((entry.authorize||entry.leaseUntil)&&entry.identity) {
         try {await validate(entry)} catch {/* validate already revoked it. */}
       }
       if(disposed||value.signal.aborted)throw unavailable()
       if(entries.size>=16)throw unavailable(429)
       const taskId=randomUUID(),credential=randomBytes(32).toString('base64url'),claimId=randomUUID(),expiresAt=Date.now()+(ttlMs as number)
       const abort=()=>revoke(taskId),timer=setTimeout(abort,ttlMs as number);timer.unref()
-      const entry:Entry={taskId,credentialHash:hash(credential),token:value.token,agentId:value.agentId,claimId,expiresAt,
-        sourceIds:new Set(inputs.sourceIds),resultIds:new Set(inputs.resultIds),signal:value.signal,timer,abort,busy:false,authorize:value.authorize as (()=>Promise<void>)|undefined}
+      const entry:Entry={taskId,credentialHash:hash(credential),token:value.token,agentId:value.agentId,claimId,expiresAt:input.leaseUntil?0:expiresAt,
+        sourceIds:new Set(inputs.sourceIds),resultIds:new Set(inputs.resultIds),signal:value.signal,timer,abort,busy:false,authorize:input.authorize,leaseUntil:input.leaseUntil}
       // Pending source/result checks consume the same slots as active grants.
       entries.set(taskId,entry);entry.signal.addEventListener('abort',abort,{once:true})
       try {
-        await entry.authorize?.();current(entry)
+        await refreshLease(entry);await entry.authorize?.();current(entry)
         const principal=await options.sessions.authenticate(entry.token);current(entry)
         entry.identity=identity(principal)
         const owner=JSON.stringify([principal.deploymentId,principal.userId])
@@ -138,7 +152,7 @@ export function createHarnessDataAccess(options:{
         for(const id of entry.sourceIds){await options.tools.execute(entry.token,{name:'sources.describe',arguments:{sourceId:id}});current(entry)}
         for(const id of entry.resultIds){await options.results.read(entry.token,{resultId:id,limit:1});current(entry)}
         await validate(entry)
-        return {taskId,claimId,connectionEpoch:1,credential,agentId:entry.agentId,expiresAt:new Date(expiresAt).toISOString(),inputs:{sourceIds:[...entry.sourceIds],resultIds:[...entry.resultIds]}}
+        return {taskId,claimId,connectionEpoch:1,credential,agentId:entry.agentId,expiresAt:new Date(entry.expiresAt).toISOString(),inputs:{sourceIds:[...entry.sourceIds],resultIds:[...entry.resultIds]}}
       } catch(error){revoke(taskId);throw unavailable((error as {statusCode?:number}).statusCode===429?429:403)}
     },
     async execute(taskId:string,bearer:string,operation:string,args:unknown):Promise<unknown> {

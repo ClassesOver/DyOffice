@@ -280,3 +280,19 @@ test('a task sees actionable statuses (budget, conflict) but revocation and priv
   next=status(413)
   await assert.rejects(f.access.execute(g.taskId,g.credential,'artifacts.stage',args),error=>error.statusCode===403)
 })
+
+test('a data grant follows confirmed lease renewals and stops at the last confirmed deadline',async t=>{
+  t.mock.timers.enable({apis:['Date','setTimeout'],now:1000000})
+  const f=fixture(t)
+  let until=Date.now()+30000
+  const grant=await f.issue(undefined,{leaseUntil:async()=>until})
+  assert.equal(Date.parse(grant.expiresAt),until)
+  until+=20000
+  t.mock.timers.tick(30000)
+  await new Promise(resolve=>setImmediate(resolve))
+  await f.access.authorize(grant.taskId,grant.credential)
+  t.mock.timers.tick(20000)
+  await new Promise(resolve=>setImmediate(resolve))
+  until+=30000
+  await assert.rejects(f.access.authorize(grant.taskId,grant.credential),{statusCode:403})
+})

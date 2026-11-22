@@ -30,6 +30,6 @@ test('a task whose lease lapsed reads as unknown_outcome so streams end',async t
  const {file}=await importFile(f,f.alice.token,await docxBytes())
  const store=createCodingTaskRecoveryStore(f.transactions)
  await store.start(f.alice.token,file.fileId,'lapsed',{modelId:'fixture'},undefined)
- await f.transactions.withPrincipalTransaction({kind:'session',token:f.alice.token},c=>c.query("UPDATE harness_task_recovery SET lease_until=clock_timestamp()-interval '1 second' WHERE turn_id='lapsed'"))
+ await f.transactions.withPrincipalTransaction({kind:'session',token:f.alice.token},c=>c.query("UPDATE task_runtime_codex SET lease_until=clock_timestamp()-interval '1 second' WHERE turn_id='lapsed'"))
  assert.equal((await store.events(f.alice.token,file.fileId,'lapsed',0)).state,'unknown_outcome')
 })
