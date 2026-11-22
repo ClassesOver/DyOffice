@@ -28,7 +28,7 @@ import {createSourceService} from '../../server/src/modules/sources/service.ts'
 import {assistantSourceTools} from '../../../../packages/web-contracts/src/assistant.ts'
 
 const liveConfig=process.env.DYOFFICE_LIVE_ANALYSIS_CONFIG
-test('Office reads an allowed PostgreSQL schema and Coding plots the frozen result until refresh in the four editors',{timeout:220000},async t=>{
+test('Office reads an allowed PostgreSQL schema and Coding plots the frozen result until refresh in the four editors',{timeout:300000},async t=>{
  const directory=await mkdtemp(join(tmpdir(),'office-source-analysis-'))
  t.after(()=>rm(directory,{recursive:true,force:true}))
  const key=join(directory,'key.pem'),cert=join(directory,'cert.pem')
@@ -161,7 +161,7 @@ print(json.dumps(dict(series=line.get_ydata().tolist(), total=sum(line.get_ydata
     assert.equal(page.nextOffset,null)
     answer='冻结结果第二行 2026-02：40 CNY'
    }
-  }else if(prompt.includes('把上次汇总插入正文')){
+  }else if(prompt.includes('把上次汇总插入')){
    if(!results.length)action=['insert_data_result',{resultId:first.artifact.resultId}]
    else {
     const result=JSON.parse(results.at(-1).content)
@@ -193,6 +193,7 @@ print(json.dumps(dict(series=line.get_ydata().tolist(), total=sum(line.get_ydata
  assert.equal(probe.statusCode,200,probe.body)
  browser=await launchTestBrowser()
  const page=await browser.newPage({ignoreHTTPSErrors:true})
+ await page.addInitScript(()=>{window.__genofficeDebugHooks=true})
  await stubHomeHero(page)
  await page.context().addCookies([{name:'__Host-dyoffice-session',value:f.adminSigned.token,url:origin,secure:true,httpOnly:true,sameSite:'Lax'}])
  await page.goto(origin)
@@ -352,17 +353,24 @@ print(json.dumps(dict(series=line.get_ydata().tolist(), total=sum(line.get_ydata
  }
  assert.equal(queries,2)
  const token=f.adminSigned.token
- const head=async()=>(await f.files.openFile(token,file.fileId)).file.revision
- assert.equal(await head(),file.revision)
- await page.keyboard.press('Control+s')
- await expect.poll(head,{timeout:30000}).not.toBe(file.revision)
- const saved=await JSZip.loadAsync(await f.files.readFile(token,file.fileId,await head()))
+ async function saveNative(entry,format){
+  const head=async()=>(await f.files.openFile(token,entry.fileId)).file.revision
+  assert.equal(await head(),entry.revision)
+  if(format==='xlsx')await page.getByRole('button',{name:/^保存（(?:Ctrl\+S|⌘S)）$/}).click()
+  else await page.keyboard.press('Control+s')
+  await expect.poll(head,{timeout:30000}).not.toBe(entry.revision)
+  return f.files.readFile(token,entry.fileId,await head())
+ }
+ async function reopenNative(){
+  await page.reload({waitUntil:'commit'})
+  await expect(page.locator('html')).toHaveAttribute('data-document-loading','ready',{timeout:30000})
+ }
+ const saved=await JSZip.loadAsync(await saveNative(file,'docx'))
  const docx=await saved.file('word/document.xml').async('string')
  const rows=[...docx.matchAll(/<w:tr[\s>][\s\S]*?<\/w:tr>/g)].map(match=>match[0])
  assert.ok(rows.some(row=>row.includes('2026-01')&&row.includes('>30<')))
  assert.ok(rows.some(row=>row.includes('2026-02')&&row.includes('>40<')))
- await page.reload({waitUntil:'commit'})
- await expect(page.locator('html')).toHaveAttribute('data-document-loading','ready',{timeout:30000})
+ await reopenNative()
  await expectFrozenTable()
  for(const [format,entry] of Object.entries(siblings)){
   const start=toolFrames.length
@@ -383,5 +391,41 @@ print(json.dumps(dict(series=line.get_ydata().tolist(), total=sum(line.get_ydata
   for(const name of assistantSourceTools('read-only-analysis'))assert.equal(names.filter(offered=>offered===name).length,1,format+': '+name)
   assert.equal(names.filter(name=>name==='insert_data_result').length,format==='pdf'?0:1)
   assert.ok(!names.includes('sources_save_result'),format+' must not offer saving a source snapshot')
+  if(format==='pdf')continue
+
+  if(format==='xlsx'){
+   await page.evaluate(()=>window.__genofficeDebug.univerAPI.getActiveWorkbook().getActiveSheet().getRange('J10').activate())
+   await expect.poll(()=>page.evaluate(()=>{
+    const range=window.__genofficeDebug.univerAPI.getActiveWorkbook().getActiveRange()
+    return range?[range.getRow(),range.getColumn()]:null
+   })).toEqual([9,9])
+  }
+  await input.fill('把上次汇总插入当前文件');await input.press('Enter')
+  await expect(panel.getByText('已插入汇总表',{exact:true})).toBeVisible({timeout:30000})
+  const bytes=await saveNative(entry,format)
+  if(format==='xlsx'){
+   const {cells}=await sheetsNative.readRange(bytes,'Acceptance',{startRow:10,endRow:11,startColumn:10,endColumn:10})
+   assert.deepEqual(cells.map(cell=>cell.value),[30,40])
+   await reopenNative()
+   await expect.poll(()=>page.evaluate(()=>{
+    const sheet=window.__genofficeDebug?.univerAPI.getActiveWorkbook()?.getSheetByName('Acceptance')
+    return [sheet?.getRange('K11').getValue(),sheet?.getRange('K12').getValue()]
+   }),{timeout:30000}).toEqual([30,40])
+  }else{
+   const deck=await JSZip.loadAsync(bytes)
+   const slide=await deck.file('ppt/slides/slide1.xml').async('string')
+   const tables=[...slide.matchAll(/<a:tbl[\s>][\s\S]*?<\/a:tbl>/g)].map(match=>match[0])
+   assert.ok(tables.some(table=>['2026-01','>30<','2026-02','>40<'].every(value=>table.includes(value))))
+   await reopenNative()
+   await expect.poll(()=>page.evaluate(async()=>{
+    const [slide]=await window.slidesApi.getRenderSlides()
+    const rows=slide?.nodes.filter(node=>node.type==='table').flatMap(node=>node.cells
+     .filter(cell=>cell.col===0)
+     .map(cell=>[cell,node.cells.find(value=>value.row===cell.row&&value.col===1)]))??[]
+    const text=cell=>cell?.text?.lines.flatMap(line=>line.runs.map(run=>run.text)).join('').trim()??''
+    return rows.map(row=>row.map(text)).filter(([month])=>month==='2026-01'||month==='2026-02')
+   }),{timeout:30000}).toEqual([['2026-01','30'],['2026-02','40']])
+  }
  }
+ assert.equal(queries,2,'Inserting into another document must reuse the frozen result')
 })

@@ -14,7 +14,7 @@
 
 逐工具验收以格式和工具名为单位，保留注册、执行与成品证据。首轮核对涵盖 130 个格式与工具组合、9 个共享工具和桌面 MCP 清单的 Web 对照。[逐工具验收表](office-ai-tool-coverage.md)
 
-在 `29415fca` 的原生编辑器产物上，浏览器观察到 129 个格式与工具组合注册，定向批次有 23 个组合返回成功结果。PDF 兼容名称 `rotate_pages` 由原生 `apply_ops.rotatePages` 覆盖。工作区数据工具覆盖 5 项，Word 冻结结果写入验证了原生表格、显式保存和重开。[逐工具结果](office-ai-tool-coverage.md)
+在 `29415fca` 的原生编辑器产物上，浏览器观察到 129 个格式与工具组合注册，定向批次有 25 个组合返回成功结果。PDF 兼容名称 `rotate_pages` 由原生 `apply_ops.rotatePages` 覆盖。工作区数据工具覆盖 5 项，冻结结果写入验证了 Word、Excel 和 PowerPoint 三种原生文件的准确数据、显式保存和重开。[逐工具结果](office-ai-tool-coverage.md)
 
 `29415fca` 的 CI 本地集成阶段报出 3 项失败，源于事务崩溃夹具缺少文件服务、元数据并发夹具缺少签名状态、PPTX 签名夹具缺少测试环境。补齐夹具后，在独立 PostgreSQL 上复跑 10 项全部通过，覆盖事务回滚、读取竞态及三格式签名文件原件保护。[原 CI 失败](https://github.com/ClassesOver/DyOffice/actions/runs/45009917486/job/137169747167)
 
