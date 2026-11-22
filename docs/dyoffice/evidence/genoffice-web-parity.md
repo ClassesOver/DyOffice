@@ -258,3 +258,9 @@ Codex App Server 0.169.0 通过真实 MCP 客户端执行写入与读取。重�
 集成用例从下载成品原生重开，核对目标页的中文多行备注、清空及其他页备注。幻灯片、母版和版式部件逐字节对照，未修改页保留自定义 XML 前缀和原可见文字。保存会保留合法 XML 注释，只修改真正的备注节点。多页共用同一备注部件时拒绝写入。用例还核对跨账户、越权参数、活跃编辑租约、取消后原修订保持及重试。[PPTX MCP 集成测试](../../../apps/web/test/local-integration/mcp-pptx-notes.test.mjs)
 
 Codex App Server 0.169.0 通过实际 MCP 客户端写入讲稿、读取保存修订，并在重启后取回同一回执。下载成品由原生引擎重开，核对目标页的备注与幻灯片部件字节。该用例直接调用工具 RPC。
+
+### MCP 原生 DOCX 段落文字
+
+所有者通过 `POST /api/v1/mcp/docx-paragraph-grants` 批准一个保存修订中的正文段落编号、完整原文和替换文字。工具 `replace_docx_paragraph_text` 在有界 Worker 中应用现有 DOCX 段落补丁和原生保存。段落属性、未改文字的格式、邻段和其余包部件通过成品核对。字段、批注范围、隐藏内容及受保护文档的处理遵循授权检查，暂不通过这一文字工具修改。迁移 0052 保留已有 PDF、XLSX 和 PPTX 授权以及保存回执。
+
+集成用例覆盖跨段落字段、非默认路径的保护设置、XML 命名空间、主文档关系和实体字面量。成品经原生引擎重开，核对中文与符号文字以及分处不同格式的文字范围。Codex App Server 0.169.0 通过实际 MCP 客户端写入、读取并在重启后取回同一回执。该用例直接调用工具 RPC。[DOCX MCP 集成测试](../../../apps/web/test/local-integration/mcp-docx-paragraph.test.mjs)

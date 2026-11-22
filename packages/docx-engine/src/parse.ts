@@ -2390,7 +2390,12 @@ function buildTextParagraph(
 ): Block {
   let parsed: XNode[]
   try {
-    parsed = xmlParser.parse(xml) as XNode[]
+    // The parser decodes named entities before buildRun handles numeric ones.
+    // Keep an escaped ampersand numeric until that second step so a literal
+    // character-reference spelling survives as text.
+    const textXml = xml.replace(/(<w:(?:t|delText)(?:\s[^<>]*)?>)([^<]*)(?=<\/w:(?:t|delText)\s*>)/g,
+      (_match, tag: string, text: string) => tag + text.replace(/&amp;(?=#(?:[xX][0-9a-fA-F]+|[0-9]+);)/g, '&#38;'))
+    parsed = xmlParser.parse(textXml) as XNode[]
   } catch {
     // unparseable paragraph (e.g. pathological nesting): keep the original bytes
     return { ...base, type: 'passthrough', label: 'Paragraph', previewText: plainText(xml) }
