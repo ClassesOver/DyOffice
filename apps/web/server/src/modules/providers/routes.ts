@@ -1,3 +1,4 @@
+import { streamTaskEvents } from '../tasks/event-stream.ts'
 import type { FastifyInstance } from 'fastify'
 import type { SessionService } from '../auth/sessions.ts'
 import { authError } from '../auth/sessions.ts'
@@ -10,9 +11,6 @@ export interface TurnRunner {
   run(input: { token: string; modelId: string; turnId: string; request: unknown; signal?: AbortSignal; documentId?:string; continuation?:unknown; admit?:(signal:AbortSignal)=>Promise<void> }, emit: (event: TurnEvent) => Promise<void>): Promise<void>
   cancel(token: string, turnId: string): Promise<boolean>
 }
-/** Task event streams poll the shared log at this cadence and end after a bounded time; clients resume with `after`. */
-const EVENT_POLL_MS=500,EVENT_STREAM_MS=120_000,EVENT_KEEPALIVE_MS=15_000
-const TERMINAL_TASK_STATES=new Set(['succeeded','failed','unknown_outcome'])
 export type AdmitHarnessContinuation = (token:string,modelId:string,input:{taskId:string;documentId:string;revision:string},request:unknown,signal:AbortSignal)=>Promise<void>
 const object = (properties: object) => ({type:'object',additionalProperties:false,required:Object.keys(properties),properties})
 const id = {type:'string',pattern:'^[A-Za-z0-9_-]{1,128}$'}
@@ -109,39 +107,12 @@ export function registerProviderRoutes(app: FastifyInstance, options: {
       ({taskIds:await options.listTaskIds!(cookies(request).session!,(request.query as {documentId:string}).documentId)}))
     if(options.taskStatus)api.get(endpoint+'/:id/status',{schema:{params:object({id}),querystring:object({documentId})}},request=>
       options.taskStatus!(cookies(request).session!,(request.params as {id:string}).id,(request.query as {documentId:string}).documentId))
-    if(options.taskEvents)api.get(endpoint+'/:id/events',{schema:{params:object({id}),querystring:{type:'object',additionalProperties:false,required:['documentId'],properties:{documentId,after:{type:'integer',minimum:0,maximum:4096}}}}},async(request,reply)=>{
+    if(options.taskEvents)api.get(endpoint+'/:id/events',{schema:{params:object({id}),querystring:{type:'object',additionalProperties:false,required:['documentId'],properties:{documentId,after:{type:'string',pattern:'^(0|[1-9][0-9]{0,3})$'}}}}},async(request,reply)=>{
       const token=cookies(request).session!,turnId=(request.params as {id:string}).id
-      const {documentId:fileId,after:start=0}=request.query as {documentId:string;after?:number}
-      // Authorize and read the first page before switching to a stream, so
-      // 404/403 stay ordinary HTTP errors the client can act on.
-      let page=await options.taskEvents!(token,turnId,fileId,start)
-      const response=reply.raw,closed=new AbortController()
-      response.on('close',()=>closed.abort())
-      reply.hijack()
-      response.statusCode=200
-      response.setHeader('Content-Type','text/event-stream; charset=utf-8')
-      response.setHeader('Cache-Control','private, no-store')
-      response.setHeader('X-Accel-Buffering','no')
-      const send=(frame:string)=>{if(!response.destroyed)response.write(frame)}
-      const deadline=Date.now()+EVENT_STREAM_MS
-      let after=start,quietSince=Date.now()
-      try{
-        for(;;){
-          for(const event of page.events){
-            after=event.sequence
-            send(`id: ${event.sequence}\nevent: task\ndata: ${JSON.stringify(event)}\n\n`)
-            quietSince=Date.now()
-          }
-          // Terminal and fully read: the client reads the result from /status.
-          if(TERMINAL_TASK_STATES.has(page.state)&&page.events.length<256){send(`event: end\ndata: ${JSON.stringify({state:page.state})}\n\n`);break}
-          if(closed.signal.aborted||Date.now()>=deadline)break
-          if(Date.now()-quietSince>=EVENT_KEEPALIVE_MS){send(': keep-alive\n\n');quietSince=Date.now()}
-          if(page.events.length<256)await new Promise<void>(resolve=>{const timer=setTimeout(resolve,EVENT_POLL_MS);closed.signal.addEventListener('abort',()=>{clearTimeout(timer);resolve()},{once:true})})
-          if(closed.signal.aborted)break
-          page=await options.taskEvents!(token,turnId,fileId,after)
-        }
-      }catch{/* the client resumes from its last sequence */}
-      finally{response.end()}
+      const {documentId:fileId,after:cursor='0'}=request.query as {documentId:string;after?:string}
+      const start=Number(cursor)
+      if(start>4096)throw authError(400)
+      return streamTaskEvents(reply,start,after=>options.taskEvents!(token,turnId,fileId,after))
     })
     const claim=object({documentId,revision:documentId,modelId:id})
     if(options.claimContinuation)api.post(endpoint+'/:id/continuation',{bodyLimit:1024,schema:{params:object({id}),querystring:object({}),body:{...claim,properties:{...claim.properties,defer:{type:'boolean'}}}}},request=>

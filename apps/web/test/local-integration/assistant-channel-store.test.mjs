@@ -198,3 +198,20 @@ test('only Office can attach data scope; live recipient claims fence task data a
  await f.service.connect(a.credential,id,{connectionId:randomUUID()});await assert.rejects(check())
  await f.service.revoke(f.alice.token,id,a.member.membershipId);await assert.rejects(check())
 })
+
+test('a second API reads only durable channel event metadata after the snapshot cursor',async t=>{
+ const f=await fixture(t),id=f.channel.conversationId,m=await f.join()
+ const {sequence}=await f.service.snapshot(f.alice.token,id)
+ const task=await f.submit(m.member.membershipId,{kind:'delegate',instruction:'Private review instruction'})
+ const second=createAssistantChannelService({transactions:f.transactions,credentialKey:f.csrfKey})
+ const page=await second.ownerEventPage(f.alice.token,id,sequence)
+ assert.ok(page.events.some(event=>event.taskId===task.taskId))
+ for(const event of page.events){
+  assert.ok(event.sequence>sequence)
+  assert.deepEqual(Object.keys(event).sort(),['kind','sequence','taskId'])
+ }
+ assert.deepEqual(await second.ownerEventPage(f.alice.token,id,page.events.at(-1).sequence),{events:[]})
+ await assert.rejects(second.ownerEventPage(f.bob.token,id,0),{statusCode:404})
+ await f.files.trashFile(f.alice.token,f.file.fileId)
+ await assert.rejects(second.ownerEventPage(f.alice.token,id,0),{statusCode:404})
+})

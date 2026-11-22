@@ -486,6 +486,17 @@ export function createAssistantChannelService({transactions,credentialKey,backgr
     return {ownerToken:sealed.session,agentId:actor.member!.agent_id as string,inputs:decodeChannelDataInputs(row.data_inputs),deadlineAt:row.deadline_at.toISOString()}
    })
   },
+  async ownerEventPage(token:string,conversationId:string,after:number) {
+   if(!Number.isSafeInteger(after)||after<0)throw fail()
+   return owner(token,async(c,p)=>{
+    const args=[...scope(p),uuid(conversationId)]
+    const channel=(await c.query('SELECT file_id FROM assistant_channels WHERE deployment_id=$1 AND owner_id=$2 AND conversation_id=$3',args)).rows[0]
+    if(!channel)throw fail(404)
+    if(channel.file_id)await loadFile(c,p,channel.file_id)
+    const {rows}=await c.query('SELECT channel_sequence AS sequence,channel_kind AS type,channel_task_id AS task_id FROM harness_task_events WHERE deployment_id=$1 AND owner_id=$2 AND conversation_id=$3 AND channel_sequence>$4 ORDER BY channel_sequence LIMIT 256',[...args,after])
+    return {events:rows.map(row=>({sequence:Number(row.sequence),kind:row.type,taskId:row.task_id??undefined}))}
+   })
+  },
   async events(credential:ChannelCredential,conversationId:string,after=0) {
    if(!Number.isSafeInteger(after)||after<0)throw fail()
    return run(credential,conversationId,async(c,p,_ch,actor)=>{

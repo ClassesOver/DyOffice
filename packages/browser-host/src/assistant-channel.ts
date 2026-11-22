@@ -1,3 +1,4 @@
+import {followChannelEvents} from './channel-event-stream.ts'
 import type {SettingsRequest} from './preferences.ts'
 import type {AgentSkill} from '../../agent-core/src/skill.ts'
 import type {AssistantControl} from '../../ui/src/assistant-control.ts'
@@ -16,10 +17,12 @@ export const REFRESH_GIVE_UP_MS=25_000
 const REFRESH_RETRY_MAX_MS=8_000
 /** Optional collaboration uses the existing editor's notification channel and
  * executor. Native messages never wait for pairing, snapshots or peer tasks. */
-export function createAssistantChannelClient(options:{request:SettingsRequest;fileId:string;editorId:string;conversationId?:string;generation:()=>number}) {
+export function createAssistantChannelClient(options:{request:SettingsRequest;csrfToken?:string;fileId:string;editorId:string;conversationId?:string;generation:()=>number}) {
  let snapshot:ChannelSnapshot|null=null,disposed=false,error='',executor:Parameters<AssistantControl['register']>[0]|undefined
  let connection:{id:string;epoch:number}|undefined,refreshing:Promise<void>|undefined,starting:Promise<void>|undefined
  let localGeneration=0
+ let stopEvents:(()=>void)|undefined,idleRetry:ReturnType<typeof setTimeout>|undefined
+ function stopScheduling(){stopEvents?.();stopEvents=undefined;clearTimeout(idleRetry);idleRetry=undefined}
  let running:{task:ChannelTask;controller:AbortController}|undefined,pumping=false
  type NativeRun={token:string;instruction:string;generation:number;cancel:()=>void;cancelRequested?:boolean;channelId?:string;parent?:ChannelTask;pending?:Promise<ChannelTask>}
  let nativeRun:NativeRun|undefined
@@ -61,9 +64,13 @@ export function createAssistantChannelClient(options:{request:SettingsRequest;fi
  }
  const sendAction=(to:string,action:unknown,requestId=crypto.randomUUID())=>request(base+'/actions','POST',{requestId,conversationId:snapshot!.conversationId,to,action})
  async function pump() {
-  if(disposed||pumping||running||settlingRuns.size||!snapshot||snapshot.paused||!connection||!executor||executor.isBusy())return
+  if(disposed||pumping||running||settlingRuns.size||!snapshot||snapshot.paused||!connection||!executor)return
   const task=snapshot.tasks.find(task=>task.to==='office'&&!task.execution&&task.state==='queued'&&!attempted.has(task.taskId))
   if(!task)return
+  if(executor.isBusy()){
+   idleRetry??=setTimeout(()=>{idleRetry=undefined;void pump()},400)
+   return
+  }
   pumping=true
   const taskGeneration=localGeneration
   try {
@@ -153,12 +160,11 @@ export function createAssistantChannelClient(options:{request:SettingsRequest;fi
   })()
   return refreshing
  }
- let schedule:ReturnType<typeof setInterval>|undefined
  function resetConversation(){
   cancelParentRun()
   const previous=snapshot,previousConnection=connection
   running?.controller.abort();snapshot=null;connection=undefined;attempted.clear();delegated.clear();yieldedBatches.length=0;continued.clear();parentContinuations.clear();settlingRuns.clear();nativeRun=undefined;localGeneration++;running=undefined;pumping=false;refreshing=undefined;refreshAgain=false;refreshFailingSince=0;refreshFailures=0;clearRefreshRetry();starting=undefined;error=''
-  if(schedule){clearInterval(schedule);schedule=undefined}
+  stopScheduling()
   try{sessionStorage.removeItem('dyoffice-assistant-channel:'+options.fileId)}catch{/* Storage is optional. */}
   if(previous&&previousConnection)void request(base+'/channels/'+previous.conversationId+'/disconnect','POST',{connectionId:previousConnection.id,connectionEpoch:previousConnection.epoch}).catch(()=>{})
   notify()
@@ -247,10 +253,10 @@ export function createAssistantChannelClient(options:{request:SettingsRequest;fi
     throw Error(disposed?'Channel disposed':'Channel changed')
    }
    connection={id,epoch:reply.connectionEpoch}
-   // Local scheduling only: data/status refresh comes from the existing T17
-   // channel, not a second browser server-polling transport.
-   schedule??=setInterval(()=>void pump(),400)
    await refresh()
+   if(!disposed&&startGeneration===localGeneration&&snapshot&&options.csrfToken){
+    stopEvents=followChannelEvents(base+'/channels/'+channelId+'/events',options.csrfToken,()=>snapshot?.sequence??0,()=>{void refresh()})
+   }
    })()
    try {await starting} finally {if(startGeneration===localGeneration)starting=undefined}
   },
@@ -262,7 +268,7 @@ export function createAssistantChannelClient(options:{request:SettingsRequest;fi
   async pause(paused:boolean){await request(base+'/channels/'+snapshot!.conversationId+'/pause','POST',{paused});await refresh()},
   async send(to:string,instruction:string){const receipt=await sendAction(to,{kind:'delegate',instruction}) as AgentReceipt;await refresh();return receipt},
   async cancel(taskId:string){await sendAction('office',{kind:'cancel',taskId});await refresh()},
-  dispose(){if(disposed)return;cancelParentRun();disposed=true;clearRefreshRetry();running?.controller.abort();if(schedule)clearInterval(schedule);
+  dispose(){if(disposed)return;cancelParentRun();disposed=true;clearRefreshRetry();running?.controller.abort();stopScheduling();
    if(snapshot&&connection)void request(base+'/channels/'+snapshot.conversationId+'/disconnect','POST',{connectionId:connection.id,connectionEpoch:connection.epoch}).catch(()=>{})
    listeners.clear()},
  }

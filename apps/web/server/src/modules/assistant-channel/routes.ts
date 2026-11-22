@@ -1,3 +1,4 @@
+import { streamTaskEvents } from '../tasks/event-stream.ts'
 import type {FastifyInstance,FastifyRequest} from 'fastify'
 import {cookies,uniqueHeader,type createCsrfService} from '../auth/csrf.ts'
 import {channelObject as object,channelUuid as uuid,decodeAgentAction} from '../../../../../../packages/web-contracts/src/assistant-channel.ts'
@@ -38,6 +39,10 @@ export function registerAssistantChannelRoutes(app:FastifyInstance,service:Retur
    return service.configureBackground(owner(request),uuid(request.params.id),{enabled:value.enabled as boolean,...(value.fileId===undefined?{}:{fileId:uuid(value.fileId)})})
   })
   api.get<{Params:{id:string}}>(base+'/channels/:id',request=>service.snapshot(owner(request),uuid(request.params.id)))
+  api.get<{Params:{id:string};Querystring:{after?:string}}>(base+'/channels/:id/events',{schema:{querystring:{type:'object',additionalProperties:false,properties:{after:{type:'string',pattern:'^(0|[1-9][0-9]{0,15})$'}}}}},async(request,reply)=>{
+   const token=owner(request),channelId=uuid(request.params.id)
+   return streamTaskEvents(reply,Number(request.query.after??0),after=>service.ownerEventPage(token,channelId,after))
+  })
   api.delete<{Params:{id:string}}>(base+'/channels/:id',async(request,reply)=>{
    await service.deleteConversation(owner(request),uuid(request.params.id))
    return reply.code(204).send()

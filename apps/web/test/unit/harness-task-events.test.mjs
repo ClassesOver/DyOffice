@@ -109,3 +109,48 @@ test('events can be turned off per browser',async()=>{
  assert.equal(streams,0)
  recovery.dispose()
 })
+
+test('a DSH stream resumes from the saved snapshot and only sends task change metadata',async t=>{
+ const {registerAssistantChannelRoutes}=await import('../../server/src/modules/assistant-channel/routes.ts')
+ const server=Fastify()
+ t.after(()=>server.close())
+ const reads=[]
+ const service={async ownerEventPage(token,channelId,after){
+  if(!token)throw Object.assign(Error('missing session'),{statusCode:403})
+  assert.equal(token,'s'.repeat(43))
+  assert.equal(channelId,DOC)
+  reads.push(after)
+  if(after===8)throw Object.assign(Error('access ended'),{statusCode:403})
+  return {events:[{sequence:8,kind:'task.result',taskId:ID}]}
+ }}
+ registerAssistantChannelRoutes(server,service,{requireSessionRead(){}})
+ const response=await server.inject({url:'/api/v1/assistant-channels/channels/'+DOC+'/events?after=7',headers:{cookie:'__Host-dyoffice-session='+'s'.repeat(43)}})
+ assert.equal(response.statusCode,200)
+ assert.deepEqual(reads,[7,8])
+ assert.match(response.payload,/"kind":"task.result"/)
+ assert.doesNotMatch(response.payload,/private document data/)
+ const revoked=await server.inject({url:'/api/v1/assistant-channels/channels/'+DOC+'/events?after=8'})
+ assert.equal(revoked.statusCode,403)
+})
+
+test('the DSH listener refreshes on a new complete event and stops on disposal',async()=>{
+ const {followChannelEvents}=await import('../../../../packages/browser-host/src/channel-event-stream.ts')
+ let controller,signal
+ const seen=[]
+ const stop=followChannelEvents('/channel/events','proof',()=>4,()=>seen.push('refresh'), async(path,init)=>{
+  assert.equal(path,'/channel/events?after=4')
+  assert.equal(init.headers['x-csrf-token'],'proof')
+  signal=init.signal
+  return new Response(new ReadableStream({start(c){controller=c}}),{headers:{'content-type':'text/event-stream'}})
+ })
+ try{
+  const encode=text=>new TextEncoder().encode(text)
+  controller.enqueue(encode('id: 4\nevent: task\n\nid: 5\nevent:'))
+  await flush()
+  assert.deepEqual(seen,[])
+  controller.enqueue(encode(' task\n\n'))
+  await flush()
+  assert.deepEqual(seen,['refresh'])
+ }finally{stop();controller.close()}
+ assert.equal(signal.aborted,true)
+})

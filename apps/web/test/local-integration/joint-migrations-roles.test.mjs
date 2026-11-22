@@ -74,3 +74,27 @@ test('divergent PR132 ledger rejects without modifying history',async t=>{
  }}),/checksum mismatch/)
  assert.deepEqual((await probe.query('SELECT * FROM identity_migrations ORDER BY version')).rows,before)
 })
+
+test('0053 backfills a pre-existing channel cursor and removes it with its source event',async t=>{
+ const [deployment,owner,channel,file,event]=Array.from({length:5},()=>randomUUID())
+ const f=await restrictedFixture(t,{seedAccounts:false,beforeMigrate:async pool=>{
+  await pool.query('CREATE TABLE identity_migrations(version integer PRIMARY KEY,sha256 text NOT NULL)')
+  for(const m of migrations.slice(0,52)){
+   await pool.query(m.sql)
+   await pool.query('INSERT INTO identity_migrations VALUES($1,$2)',[m.version,m.digest])
+  }
+  await createIdentityStore(pool).transaction(async c=>{
+   await c.query('INSERT INTO deployments(id) VALUES($1)',[deployment])
+   await c.query("INSERT INTO users(id,deployment_id,username_normalized,status,password_hash) VALUES($1,$2,'old-owner','active','fixture')",[owner,deployment])
+   await c.query('INSERT INTO assistant_channels(conversation_id,deployment_id,owner_id,file_id,sequence) VALUES($1,$2,$3,$4,7)',[channel,deployment,owner,file])
+   await c.query("INSERT INTO assistant_events(event_id,deployment_id,owner_id,conversation_id,sequence,audience,type,payload) VALUES($1,$2,$3,$4,7,'office','task','{}')",[event,deployment,owner,channel])
+  })
+ }})
+ await f.ownerDb.transaction(async c=>{
+  await c.query("SELECT set_config('dyoffice.deployment_id',$1,true),set_config('dyoffice.user_id',$2,true)",[deployment,owner])
+  const query='SELECT channel_sequence,channel_kind,payload FROM harness_task_events WHERE channel_event_id=$1'
+  assert.deepEqual((await c.query(query,[event])).rows,[{channel_sequence:'7',channel_kind:'task',payload:null}])
+  await c.query('DELETE FROM assistant_events WHERE event_id=$1',[event])
+  assert.equal((await c.query(query,[event])).rowCount,0)
+ })
+})
