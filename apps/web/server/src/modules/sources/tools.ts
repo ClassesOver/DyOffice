@@ -11,6 +11,9 @@ const safeError = (error: unknown) => {
   return Object.assign(new Error('Workspace source tool unavailable'), { statusCode: [400,401,403,404,409,410,413,429,502,503,504].includes(status ?? 0) ? status : 503 })
 }
 
+/** Steers the model back to database-side aggregation instead of reasoning over a partial row set. */
+export const truncatedNotice = (rows: number) => `TRUNCATED: only the first ${rows} rows were kept (this connection's row or size limit); reading later pages does not recover omitted rows. Do not compute totals, averages, counts, shares or rankings from these rows. Re-query with the computation in SQL instead: GROUP BY with SUM/COUNT/AVG/MIN/MAX, bucket dates (for example date_trunc or DATE_FORMAT), filter to the needed time range, and select only needed columns. If row-level detail is really needed, ORDER BY the relevant measure with an explicit LIMIT and state that the list is partial.`
+
 /** The credential is supplied by trusted request composition, never by model
  * arguments. These tools cannot create connections, reveal secrets, choose an
  * owner/workspace or write arbitrary paths. Query results are captured once. */
@@ -39,7 +42,7 @@ export function createWorkspaceSourceTools({ sources, results }: { sources: Sour
           return { artifact, schema: snapshot.schema, timezone: snapshot.timezone, preview: snapshot.rows.slice(0, 100),
             totalRows: snapshot.rows.length, sourceTruncated: snapshot.truncated, sha256: snapshot.sha256,
             nextOffset: snapshot.rows.length > 100 ? 100 : null,
-            notice: snapshot.truncated ? 'This result is truncated at the source query limit; reading later pages does not recover omitted rows.' : 'Frozen query result; later reads and saving do not execute SQL again.' }
+            notice: snapshot.truncated ? truncatedNotice(snapshot.rows.length) : 'Frozen query result; later reads and saving do not execute SQL again.' }
         }
         if (name === 'sources.save_result') {
           const args = object(call.arguments, ['resultId','name','commandId'])

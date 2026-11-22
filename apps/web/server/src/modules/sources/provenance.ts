@@ -9,6 +9,22 @@ const text = (value: unknown, max: number): value is string => typeof value === 
  * It accepts no credential, URL or raw SQL. Never use a snapshot as an access grant.
  * Row order is evidence-significant; object property order is not.
  */
+/**
+ * Keep the leading rows whose snapshot fits maxBytes. Wide detail rows can
+ * exceed the byte budget well before the row limit; a live query then keeps a
+ * truncated prefix instead of failing. createQuerySnapshot still rechecks the
+ * exact size (stored snapshots must never be trimmed).
+ */
+export function fitSnapshotRows<T>(input: { sourceId: string; sourceVersion: number; schema: readonly QueryColumn[]; timezone: string; rows: readonly T[] }, { maxRows, maxBytes }: { maxRows: number; maxBytes: number }): { rows: T[]; truncated: boolean } {
+  // "false" is the longer literal, so the estimate never undercounts the header.
+  let bytes = Buffer.byteLength(JSON.stringify({ version: 1, sourceId: input.sourceId, sourceVersion: input.sourceVersion, schema: input.schema, timezone: input.timezone, rows: [], truncated: false, sha256: '0'.repeat(64) }), 'utf8')
+  const limit = Math.min(input.rows.length, maxRows)
+  for (let index = 0; index < limit; index++) {
+    bytes += Buffer.byteLength(JSON.stringify(input.rows[index]), 'utf8') + (index ? 1 : 0)
+    if (bytes > maxBytes) return { rows: input.rows.slice(0, index), truncated: true }
+  }
+  return { rows: [...input.rows], truncated: false }
+}
 export function createQuerySnapshot(input: unknown, { maxRows = 10_000, maxBytes = 8_000_000 }: { maxRows?: number; maxBytes?: number } = {}): QuerySnapshot {
   if (!Number.isSafeInteger(maxRows) || maxRows < 1 || maxRows > 10_000 || !Number.isSafeInteger(maxBytes) || maxBytes < 1 || maxBytes > 8_000_000) fail()
   if (!record(input) || !text(input.sourceId, 200) || !Number.isSafeInteger(input.sourceVersion) || (input.sourceVersion as number) < 1 || !text(input.timezone, 100) || typeof input.sourceTruncated !== 'boolean' || !Array.isArray(input.schema) || input.schema.length < 1 || input.schema.length > 256 || !Array.isArray(input.rows)) fail()

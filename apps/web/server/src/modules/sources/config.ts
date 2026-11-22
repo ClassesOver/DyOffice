@@ -49,8 +49,10 @@ export function sourceConfig(kind: SourceKind, input: unknown): SourceConfig {
   }
   return { ...common, statementTimeoutMs, ...(allowedSchemas === undefined ? {} : { allowedSchemas }), ...(allowedTables === undefined ? {} : { allowedTables }), ...(value.database === undefined ? {} : { database: value.database }) }
 }
+/** Frozen SQL result budget: room for up to 10,000 detail rows of moderate width (stored snapshots allow 8 MB). */
+export const SQL_RESULT_MAX_BYTES = 4_000_000
 export function executionFor(kind: SourceKind, config: SourceConfig): SourceExecution {
-  return kind === 'http' ? { maxRows: config.maxRows!, requestTimeoutMs: 10_000, maxResponseBytes: 1_000_000 } : { maxRows: config.maxRows!, statementTimeoutMs: ('statementTimeoutMs' in config ? config.statementTimeoutMs : undefined) ?? 5000, maxResponseBytes: 1_000_000 }
+  return kind === 'http' ? { maxRows: config.maxRows!, requestTimeoutMs: 10_000, maxResponseBytes: 1_000_000 } : { maxRows: config.maxRows!, statementTimeoutMs: ('statementTimeoutMs' in config ? config.statementTimeoutMs : undefined) ?? 5000, maxResponseBytes: SQL_RESULT_MAX_BYTES }
 }
 export function validateSourceSecret(kind: SourceKind, secret: unknown, config: SourceConfig): string {
   if (typeof secret !== 'string' || !secret || Buffer.byteLength(secret) > 7000 || /[\u0000-\u001f]/.test(secret)) throw sourceError()

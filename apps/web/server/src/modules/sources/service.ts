@@ -9,7 +9,7 @@ import { createCredentialVault } from './vault.ts'
 import { contentHash, executionFor, object, positiveVersion, secretHash, sourceConfig, sourceError, sourceId, sourceName, validateSourceSecret } from './config.ts'
 import { queryHttpSource } from './http.ts'
 import { querySqlSource, type SqlRows } from './sql.ts'
-import { createQuerySnapshot } from './provenance.ts'
+import { createQuerySnapshot, fitSnapshotRows } from './provenance.ts'
 
 type Row = Record<string, any>
 const userSchemaFilter = "LOWER(table_schema) NOT IN ('information_schema','mysql','sys','performance_schema') AND SUBSTRING(LOWER(table_schema), 1, 3) <> 'pg_'"
@@ -310,6 +310,10 @@ function snapshotFor(row: Row, execution: SourceExecution, sql?: SqlRows, http?:
       return raw as Record<string, QueryCell>
     })
   }
-  try { return createQuerySnapshot({ sourceId: row.source_id, sourceVersion: row.version, schema, timezone: row.config.timezone, rows, sourceTruncated: (sql?.rows.length ?? http?.length ?? 0) > maxRows }, { maxRows, maxBytes: execution.maxResponseBytes ?? 1_000_000 }) } catch { throw sourceError(502) }
+  const maxBytes = execution.maxResponseBytes ?? 1_000_000
+  const fitted = fitSnapshotRows({ sourceId: row.source_id, sourceVersion: row.version, schema, timezone: row.config.timezone, rows }, { maxRows, maxBytes })
+  rows = fitted.rows
+  const sourceTruncated = fitted.truncated || (sql?.rows.length ?? http?.length ?? 0) > maxRows
+  try { return createQuerySnapshot({ sourceId: row.source_id, sourceVersion: row.version, schema, timezone: row.config.timezone, rows, sourceTruncated }, { maxRows, maxBytes }) } catch { throw sourceError(502) }
 }
 export type SourceService = ReturnType<typeof createSourceService>

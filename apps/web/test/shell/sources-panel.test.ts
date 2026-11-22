@@ -206,6 +206,17 @@ test('friendly timezone and row-limit fields save public configuration while pre
  expect(document.querySelector('details summary')?.textContent).toContain('高级配置')
 })
 
+test('the per-connection statement timeout is editable and clearing it restores the default',async()=>{
+ const saves:SaveSourceRequest[]=[]
+ await mount(async(path,method='GET',body)=>{if(method==='PUT'){saves.push(body as SaveSourceRequest);return initial().source}return read(path)})
+ await change('查询超时毫秒数','20000')
+ await click('保存连接')
+ expect(saves.at(-1)?.config).toMatchObject({statementTimeoutMs:20000})
+ await change('查询超时毫秒数','')
+ await click('保存连接')
+ expect(saves.at(-1)?.config).not.toHaveProperty('statementTimeoutMs')
+})
+
 test('restoring original source values releases the dirty close guard',async()=>{
  let guard:(()=>boolean)|null=null
  await mount(async path=>read(path),value=>{guard=value})
