@@ -77,4 +77,12 @@ test('Office tool coverage checks a fresh trace after the Chromium suite, includ
   assert.ok(office, 'the Chromium job must collect the tool trace')
   assert.match(office, /DYOFFICE_TEST_AI_TOOL_TRACE: \$\{\{ runner\.temp \}\}/)
   assert.match(office, /: > "\$DYOFFICE_TEST_AI_TOOL_TRACE"\n.*node --import tsx --test.*writer-draft-save.*\n.*node --import tsx apps\/web\/test\/helpers\/office-tool-coverage\.mjs "\$DYOFFICE_TEST_AI_TOOL_TRACE"/)
+  assert.match(office, /set -o pipefail/)
+  assert.match(office, /office-tool-coverage\.mjs "\$DYOFFICE_TEST_AI_TOOL_TRACE" 2>&1 \| tee "\$RUNNER_TEMP\/dyoffice-office-tool-coverage\.txt"/)
+  const artifact = workflow.match(/Retain Office AI tool coverage evidence\n([\s\S]*?)(?=^      - name:)/m)?.[1]
+  assert.ok(artifact, 'tool effects must be auditable after the runner exits')
+  assert.match(artifact, /if: always\(\)/)
+  assert.match(artifact, /uses: actions\/upload-artifact@/)
+  assert.match(artifact, /name: office-ai-tool-coverage/)
+  assert.match(artifact, /path: \|\n            \$\{\{ runner\.temp \}\}\/dyoffice-office-tool-trace\.jsonl\n            \$\{\{ runner\.temp \}\}\/dyoffice-office-tool-coverage\.txt/)
 })
