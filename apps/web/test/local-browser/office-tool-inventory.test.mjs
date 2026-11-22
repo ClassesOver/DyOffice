@@ -240,6 +240,8 @@ for(const mode of ['creation','no-word','all'])test(mode==='no-word'
   await expect(panel.getByText('Office tool inventory received '+stage+' '+format,{exact:true})).toBeVisible({timeout:15000})
   assert.equal(frames.length,previous+1,format+' should send one turn')
   const absent=new Set(configured?[]:conditional[format])
+  // Query results are insertable only in read-only analysis mode, which this fixture leaves off.
+  absent.add('insert_data_result')
   // No starred files; native PDF rotates through apply_ops.
   if(format==='docx'){
    for(const name of ['read_knowledge_file','search_knowledge_base'])absent.add(name)

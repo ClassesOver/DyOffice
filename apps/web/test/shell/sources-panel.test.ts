@@ -206,6 +206,17 @@ test('friendly timezone and row-limit fields save public configuration while pre
  expect(document.querySelector('details summary')?.textContent).toContain('高级配置')
 })
 
+test('the per-connection statement timeout is editable and clearing it restores the default',async()=>{
+ const saves:SaveSourceRequest[]=[]
+ await mount(async(path,method='GET',body)=>{if(method==='PUT'){saves.push(body as SaveSourceRequest);return initial().source}return read(path)})
+ await change('查询超时毫秒数','20000')
+ await click('保存连接')
+ expect(saves.at(-1)?.config).toMatchObject({statementTimeoutMs:20000})
+ await change('查询超时毫秒数','')
+ await click('保存连接')
+ expect(saves.at(-1)?.config).not.toHaveProperty('statementTimeoutMs')
+})
+
 test('restoring original source values releases the dirty close guard',async()=>{
  let guard:(()=>boolean)|null=null
  await mount(async path=>read(path),value=>{guard=value})
@@ -954,4 +965,17 @@ test('selecting specific tables automatically loads the table picker',async()=>{
  expect(input('允许表 public.orders').checked).toBe(false)
  await act(async()=>input('允许表 public.orders').click())
  expect(input('允许表 public.orders').checked).toBe(true)
+})
+
+test('advanced connection settings follow the UI language through the sources dictionary',async()=>{
+ const {LocaleProvider}=await import('../../../shell/src/renderer/src/locale')
+ const {sourcesStrings}=await import('../../src/shell/i18n/strings-sources')
+ const host=document.createElement('div');document.body.append(host);const root=createRoot(host);roots.push(root)
+ const client=createSourcesClient((async (path:string)=>read(path)) as Request)
+ await act(async()=>root.render(h(LocaleProvider,{initial:'en'},h(SourcesPanel,{client,onClose(){}}))))
+ const row=[...host.querySelectorAll('button')].find(button=>button.textContent?.includes('营业收入'))!
+ await act(async()=>row.click())
+ for(const key of ['srcTimezone','srcMaxRowsAria','srcTimeoutAria'] as const)expect(host.querySelector(`[aria-label="${sourcesStrings.en[key]}"]`)).not.toBeNull()
+ expect(host.textContent).toContain(sourcesStrings.en.srcTimeout)
+ expect(host.textContent).not.toContain(sourcesStrings.zh.srcTimeout)
 })

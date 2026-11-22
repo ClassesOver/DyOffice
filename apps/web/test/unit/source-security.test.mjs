@@ -103,3 +103,28 @@ test('public address helpers accept only globally routable unicast',async()=>{
   for (const ip of ['127.0.0.1','10.1.1.1','100.64.0.1','::','::1','fc00::1','fd12:3456::1','fe80::1','ff02::1','::ffff:8.8.8.8','64:ff9b::808:808','2001:db8::1','2001::1','2002:808:808::1','not-an-ip']) assert.equal(publicAddress(ip),false,ip)
   assert.equal(publicIpv6('2606:4700:4700::1111%eth0'),true)
 })
+
+test('EXTRACT accepts fixed date parts only, in both dialects, and its source is still checked', () => {
+  for (const [dialect, sql] of [
+    ['postgres', 'SELECT EXTRACT(QUARTER FROM order_date)::int AS q, SUM(paid_amount) AS paid FROM sales.orders GROUP BY 1'],
+    ['postgres', 'SELECT EXTRACT(epoch FROM paid_at) AS t FROM sales.orders'],
+    ['starrocks', 'SELECT EXTRACT(year FROM order_date) AS y, COUNT(*) AS n FROM orders GROUP BY 1'],
+  ]) assert.doesNotThrow(() => validateReadOnlySql(sql, dialect, { defaultSchema: 'db' }), sql)
+  for (const sql of [
+    'SELECT EXTRACT(foo FROM order_date) AS q FROM sales.orders',
+    "SELECT EXTRACT(year FROM (SELECT pg_read_file('x'))) AS q FROM sales.orders",
+    'SELECT EXTRACT(year FROM pg_sleep(10)) AS q FROM sales.orders',
+  ]) assert.throws(() => validateReadOnlySql(sql, 'postgres', { defaultSchema: 'db' }), /approved read-only SELECT/, sql)
+})
+
+test('INTERVAL literals are accepted only as a plain duration', () => {
+  for (const [dialect, sql] of [
+    ['postgres', "SELECT order_date + INTERVAL '1 month' AS d FROM sales.orders"],
+    ['postgres', "SELECT COUNT(*) AS n FROM sales.orders WHERE order_date >= current_date - INTERVAL '7 days'"],
+    ['starrocks', 'SELECT order_date + INTERVAL 1 MONTH AS d FROM orders'],
+  ]) assert.doesNotThrow(() => validateReadOnlySql(sql, dialect, { defaultSchema: 'db' }), sql)
+  for (const sql of [
+    "SELECT order_date + INTERVAL '1 fortnight' AS d FROM sales.orders",
+    "SELECT order_date + INTERVAL '1 month; DROP TABLE x' AS d FROM sales.orders",
+  ]) assert.throws(() => validateReadOnlySql(sql, 'postgres', { defaultSchema: 'db' }), /approved read-only SELECT/, sql)
+})

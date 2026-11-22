@@ -2,6 +2,8 @@ import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 
 import './database-connections.css'
 import type { SourceDetail, SourceDescriptor, SourceDiscovery, SourceConfig, SourceKind } from '../../../../packages/web-contracts/src/sources.ts'
 import type { SourcesClient } from './sources-client'
+import { useI18n } from '../../../shell/src/renderer/src/locale'
+import { translateSources, type SourcesStringKey } from './i18n/strings-sources'
 
 function Notice({type,title,description,role}: {type:'error'|'success'|'warning'|'info';title:ReactNode;description?:ReactNode;showIcon?:boolean;role?:'status'}) {
   return <div className={`dc-notice dc-notice--${type}`} role={role??(type==='error'||type==='warning'?'alert':'status')}><strong>{title}</strong>{description&&<div>{description}</div>}</div>
@@ -31,6 +33,9 @@ const fromDetail = (detail: SourceDetail): Draft => ({ sourceId: detail.source.s
   config: JSON.stringify(detail.config, null, 2), credentialMode: 'retain', secret: '', enabled: detail.source.enabled })
 
 export function SourcesPanel({ client, onClose, presentation = 'dialog', onCloseGuardChange }: { client: SourcesClient; onClose: () => void; presentation?: 'dialog' | 'page'; onCloseGuardChange?: (guard: (() => boolean) | null) => void }) {
+  // Translate at render time; never put `s` in a hook dependency list.
+  const { lang } = useI18n()
+  const s = (key: SourcesStringKey) => translateSources(lang, key)
   const [items, setItems] = useState<SourceDescriptor[]>([]), [cursor, setCursor] = useState<string | null>(null)
   const [listState,setListState]=useState<'loading'|'ready'|'error'>('loading')
   const [listPage,setListPage]=useState(0),[pageStarts,setPageStarts]=useState<(string|undefined)[]>([undefined])
@@ -529,9 +534,10 @@ export function SourcesPanel({ client, onClose, presentation = 'dialog', onClose
       </fieldset>
       </div>
       <div className="dc-category-panel" id="dc-panel-advanced" role={isPage&&!legacyHttp?'tabpanel':undefined} aria-labelledby={isPage&&!legacyHttp?'dc-tab-advanced':undefined} hidden={isPage&&tab!=='advanced'}>
-      <fieldset disabled={busy||unknown||legacyHttp}><legend>高级配置</legend><div className="database-connections-grid">
-        <label>时区<input aria-label="时区" disabled={!publicConfig||busy||unknown||legacyHttp} placeholder="例如 Asia/Shanghai" value={typeof publicConfig?.timezone==='string'?publicConfig.timezone:''} onChange={event=>patchConfig('timezone',event.target.value)}/></label>
-        <label>最大返回行数<input aria-label="查询最大行数" disabled={!publicConfig||busy||unknown||legacyHttp} type="number" min={1} max={10000} step={1} value={typeof publicConfig?.maxRows==='number'?publicConfig.maxRows:''} onChange={event=>patchConfig('maxRows',Number(event.target.value))}/></label>
+      <fieldset disabled={busy||unknown||legacyHttp}><legend>{s('srcAdvancedLegend')}</legend><div className="database-connections-grid">
+        <label>{s('srcTimezone')}<input aria-label={s('srcTimezone')} disabled={!publicConfig||busy||unknown||legacyHttp} placeholder={s('srcTimezonePlaceholder')} value={typeof publicConfig?.timezone==='string'?publicConfig.timezone:''} onChange={event=>patchConfig('timezone',event.target.value)}/></label>
+        <label>{s('srcMaxRows')}<input aria-label={s('srcMaxRowsAria')} disabled={!publicConfig||busy||unknown||legacyHttp} type="number" min={1} max={10000} step={1} value={typeof publicConfig?.maxRows==='number'?publicConfig.maxRows:''} onChange={event=>patchConfig('maxRows',Number(event.target.value))}/></label>
+        {draft.kind!=='http'&&<label>{s('srcTimeout')}<input aria-label={s('srcTimeoutAria')} title={s('srcTimeoutHint')} disabled={!publicConfig||busy||unknown||legacyHttp} type="number" min={100} max={30000} step={100} placeholder="5000" value={typeof publicConfig?.statementTimeoutMs==='number'?publicConfig.statementTimeoutMs:''} onChange={event=>{if(event.target.value!=='')patchConfig('statementTimeoutMs',Number(event.target.value));else if(publicConfig){const {statementTimeoutMs:_,...rest}=publicConfig;patch({config:JSON.stringify(rest,null,2)})}}}/></label>}
       </div><details><summary>高级配置（公开 JSON 与字段单位）</summary><label>公开配置 JSON<textarea aria-label="公开配置 JSON" disabled={busy||unknown||legacyHttp} rows={7} spellCheck={false} value={draft.config} onChange={event=>patch({config:event.target.value})}/></label><p>只填写公开配置，连接地址与密码请使用凭据字段。</p></details></fieldset>
       </div>
       {detail&&(!isPage||tab==='connection')&&<section className="database-connections-danger" aria-label="删除连接"><h3>删除连接</h3><p>删除后不能再使用此连接，原标识不可重新创建。</p><label className="dc-check"><input type="checkbox" aria-label="确认删除此连接" disabled={busy||unknown||legacyHttp} checked={confirmDelete} onChange={event=>setConfirmDelete(event.target.checked)}/>确认删除此连接（保留不可复用的标识墓碑）</label><button className="dc-danger" disabled={busy||unknown||legacyHttp||!confirmDelete} onClick={()=>void operation(async()=>{await client.remove(detail.source.sourceId,detail.source.version);if(!alive.current)return;setDetail(null);setDraft(empty());setView('list');await reloadList()})}>删除连接</button></section>}
