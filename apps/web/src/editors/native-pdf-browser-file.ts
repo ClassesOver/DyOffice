@@ -20,9 +20,9 @@ function hasSignatureMarker(bytes:Uint8Array){
 }
 
 /** Session-bound file grant for the desktop PDF renderer in a browser. */
-export async function openNativePdfBrowserFile({fileId,fetchImpl=fetch}:{fileId:string;fetchImpl?:typeof fetch}){
+export async function openNativePdfBrowserFile({fileId,fetchImpl=fetch,expectedRevision}:{fileId:string;fetchImpl?:typeof fetch;expectedRevision?:string|undefined}){
  const client=createLocalShellClient(fetchImpl),session=await client.bindSession()
- const host=createSessionFileHost({fetchImpl})
+ const host=createSessionFileHost({fetchImpl,expectedRevision})
  let disposed=false,pending=true,chunks:Promise<Uint8Array>|undefined
  const assertActive=()=>{if(disposed)throw Error('PDF file grant is closed')}
  const assertSession=async()=>{

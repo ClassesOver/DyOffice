@@ -1,4 +1,5 @@
 import type {DocumentFormat} from './document-tabs'
+import {CitedRevisionChanged} from '../../../../packages/browser-host/src/session-files'
 /** Server capability key that says whether `format` has a native editor (PDF's is named `pdfEditor`). */
 export const editorCapabilityKey=(format:string)=>format==='pdf'?'pdfEditor':format
 export function resolvedDocument(capabilities:Record<string,string>,id:string,result:{name:string;format:string;file:{fileId:string;revision:string};downloadEndpoint:string}){
@@ -10,9 +11,12 @@ export function resolvedDocument(capabilities:Record<string,string>,id:string,re
 
 type BoundWorkspace={bound:{request:<T=unknown>(path:string,method?:string)=>Promise<T>}}
 /** Capture an authenticated workspace; never substitute its unbound client. */
-export async function readOpenDocument(workspace:BoundWorkspace,capabilities:Record<string,string>,id:string){
+export async function readOpenDocument(workspace:BoundWorkspace,capabilities:Record<string,string>,id:string,sourceRevision?:string){
  const result=await workspace.bound.request<{name:string;format:string;file:{fileId:string;revision:string};downloadEndpoint:string}>(`/api/v1/files/${encodeURIComponent(id)}`)
  const document=resolvedDocument(capabilities,id,result)
+ if(sourceRevision!==undefined&&sourceRevision!==result.file.revision)throw new CitedRevisionChanged()
  await workspace.bound.request(`/api/v1/workspace/files/${encodeURIComponent(id)}/open`,'POST')
- return document
+ if(sourceRevision===undefined)return document
+ const src=document.src.startsWith('/native-')?`${document.src}&sourceRevision=${encodeURIComponent(sourceRevision)}`:document.src
+ return {...document,src,sourceRevision}
 }

@@ -27,7 +27,7 @@ import {resolveTurnImageAttachment,SharedEditorAssistant} from './shared-editor-
 import {createEditorBridge} from '../../../../packages/browser-host/src/editor-bridge'
 import type {AnalysisDocumentTarget,AnalysisTargetCapture} from '../../../../packages/web-contracts/src/analysis-document'
 import {createEditorCloseLifecycle,installEditorCloseLifecycle} from './editor-close-lifecycle'
-import {reportDocumentLoading,type DocumentLoadingState} from './document-loading-state'
+import {reportDocumentLoading,reportDocumentOpenError,registerDisplayedRevision,type DocumentLoadingState} from './document-loading-state'
 import {createPdfCreateDocumentSkill,createPdfDocumentCreator,type PreparedAiDocumentCreator} from '../shell/pdf-create-document-skill'
 import {createNativePdfPageCopies} from './native-pdf-page-copies'
 import type {PdfRedactionReview} from './pdf-redactions'
@@ -46,8 +46,8 @@ const element=document.getElementById('root')!
 installEditorCloseLifecycle(window,{canClose:async()=>false,dispose:async()=>false})
 reportDocumentLoading('reading')
 async function mount(){
- const fileId=new URLSearchParams(location.search).get('fileId')??''
- const grant=await openNativePdfBrowserFile({fileId})
+ const params=new URLSearchParams(location.search),fileId=params.get('fileId')??''
+ const grant=await openNativePdfBrowserFile({fileId,expectedRevision:params.get('sourceRevision')??undefined})
  const prefs=await grant.getPreferences().catch(()=>undefined)
  const editRestriction=async(bytes:Uint8Array,encrypted:boolean)=>{
   grant.inspectSignatureMarker(bytes,encrypted)
@@ -127,6 +127,7 @@ async function mount(){
   const state=editor?.state()
   return !disposed&&editor?.status==='ready'&&!!state&&!state.dirty&&!state.blocked
  }
+ registerDisplayedRevision(()=>isClean()?grant.current().revision:undefined)
  const savedPageCount=()=>isClean()&&view?.canAppendReport()?view.doc?.numPages:undefined
  let review:PdfRedactionReview|undefined,selected=new Set<string>(),querySequence=0
  let confirming=false,redacting=false,recoverRedaction=false,recoverManual=false,reviewError=''
@@ -758,8 +759,8 @@ async function mount(){
   render()
  })
 }
-void mount().catch(()=>{
- reportDocumentLoading('error')
+void mount().catch(error=>{
+ reportDocumentOpenError(error)
  installEditorCloseLifecycle(window,{canClose:async()=>true,dispose:async()=>true})
  element.textContent='无法打开 PDF。'
 })

@@ -14,7 +14,7 @@ export function createEntryNavigator({tabs,resolve,allow,onStart,onError,replace
    // Even refused/newer Home navigation supersedes a pending request.
    if(!allow()){tabs.activate(selected());markRouting(false);replace(selected());return}
    onStart();markRouting(true)
-   if(target==='home'||tabs.documents().some(file=>file.id===target)){
+   if(target==='home'||(!tabs.isCitationExpired(target)&&tabs.documents().some(file=>file.id===target&&!(file.format==='docx'&&file.sourceRevision)))){
     tabs.activate(target);markRouting(false);replace(selected());return
    }
    const token=tabs.reserveOpen(target)

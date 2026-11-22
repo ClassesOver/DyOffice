@@ -576,6 +576,11 @@ test('slides bridge fences downloads and takeovers on unsaved state', {timeout: 
   assert.equal(reloads, 1, 'takeover reloads the deck through the editor handle')
   assert.equal(reopened?.slides.length, 2, 'the reopened deck is pushed through onOpened')
   assert.equal(host.getState(server.file().fileId).lease !== null, true)
+  const cited = createSlidesBridge({...host,isCurrentRevision:async()=>false},server.file().fileId,{language:'en'},{fetchImpl:server.fetchImpl})
+  t.after(()=>cited.dispose())
+  await assert.rejects(cited.takeover({isDirty:()=>false,reload:async()=>{reloads++;return true}},true),/cited revision/)
+  assert.equal(reloads,1)
+  assert.equal(host.getState(server.file().fileId).lease,null)
 })
 
 test('desktop-only slides operations reject asynchronously with an explicit unavailable error', {timeout: 30000}, async t => {

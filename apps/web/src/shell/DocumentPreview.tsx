@@ -2,6 +2,7 @@ import {useEffect,useRef,useState} from 'react'
 import {Button,Card} from 'antd'
 import JSZip from 'jszip'
 import type {SettingsRequest} from '../../../../packages/browser-host/src/preferences'
+import {CitedRevisionChanged} from '../../../../packages/browser-host/src/session-files'
 import {DocumentLoading} from '../editors/DocumentLoading'
 import {DocumentNotifications} from '../editors/document-notifications'
 
@@ -78,7 +79,7 @@ export async function parseOfficePreview(bytes:Uint8Array,format:'xlsx'|'pptx'):
  if(!pages.length)throw Error('此文档没有可预览的内容，请下载原件。')
  return pages
 }
-export function DocumentPreview({fileId,name,format,request}:{fileId:string;name:string;format:'docx'|'xlsx'|'pptx';request:SettingsRequest}){
+export function DocumentPreview({fileId,name,format,request,sourceRevision}:{fileId:string;name:string;format:'docx'|'xlsx'|'pptx';request:SettingsRequest;sourceRevision?:string|undefined}){
  const latestRequest=useRef(request)
  latestRequest.current=request
  const loading=useRef(true)
@@ -87,16 +88,18 @@ export function DocumentPreview({fileId,name,format,request}:{fileId:string;name
  const [busy,setBusy]=useState(true)
  const [url,setUrl]=useState('')
  const [error,setError]=useState('')
+ const [citationExpired,setCitationExpired]=useState(false)
  const [pages,setPages]=useState<PreviewPage[]>([])
 
  useEffect(()=>{
   const controller=new AbortController(),{signal}=controller
   loading.current=true
-  setPhase('reading');setPages([]);setUrl('');setError('');setBusy(true)
+  setPhase('reading');setPages([]);setUrl('');setError('');setCitationExpired(false);setBusy(true)
   void(async()=>{
    try{
     const metadata=await latestRequest.current<Metadata>(`/api/v1/files/${encodeURIComponent(fileId)}`)
     const endpoint=resolvePreviewContentUrl(fileId,metadata)
+    if(sourceRevision!==undefined&&metadata.file.revision!==sourceRevision)throw new CitedRevisionChanged()
     if(signal.aborted)return
     setUrl(endpoint)
     if(format==='docx')throw Error('当前 Word 编辑器未启用，请下载原件。')
@@ -105,14 +108,18 @@ export function DocumentPreview({fileId,name,format,request}:{fileId:string;name
     setPhase('rendering')
     const result=await parseOfficePreview(bytes,format)
     if(!signal.aborted)setPages(result)
-   }catch{
-    if(!signal.aborted)setError('无法生成只读预览，可下载原件查看。')
+   }catch(error){
+    if(!signal.aborted){
+     const expired=error instanceof CitedRevisionChanged
+     setCitationExpired(expired)
+     setError(expired?'引用的版本已失效，请重新检索知识库。':'无法生成只读预览，可下载原件查看。')
+    }
    }finally{
     if(!signal.aborted){loading.current=false;setBusy(false)}
    }
   })()
   return()=>controller.abort()
- },[fileId,format,attempt])
+ },[fileId,format,sourceRevision,attempt])
 
  function retry(){
   if(loading.current)return
@@ -121,7 +128,7 @@ export function DocumentPreview({fileId,name,format,request}:{fileId:string;name
   setAttempt(value=>value+1)
  }
 
- return <div className="document-loading-host">
+ return <div className="document-loading-host" data-citation-expired={citationExpired} data-preview-revision={!busy&&url?new URL(url,location.href).searchParams.get('revision'):undefined}>
   {busy&&<DocumentLoading key={`${fileId}-${attempt}`} name={name} format={format} state={phase}/>}
   <div className="document-loading-content" data-loading={busy} aria-busy={busy}>
    <div className="document-preview-layout">

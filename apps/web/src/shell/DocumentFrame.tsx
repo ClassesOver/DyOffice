@@ -31,7 +31,7 @@ export function DocumentFrame({file,registerGuard,sessionActive=()=>false,onAuto
   themeObserver.observe(workspaceRoot,{attributes:true,attributeFilter:['data-theme']})
   const receive=(event:MessageEvent)=>{
    if(event.source!==frame.current?.contentWindow||event.origin!==location.origin)return
-   if(event.data?.type==='dyoffice-document-loading'&&['reading','rendering','ready','error'].includes(event.data.state)){
+   if(event.data?.type==='dyoffice-document-loading'&&['reading','rendering','ready','error','citation-expired'].includes(event.data.state)){
     setLoadingState(event.data.state)
     if(event.data.state==='ready')syncTheme()
    }
@@ -69,7 +69,7 @@ export function DocumentFrame({file,registerGuard,sessionActive=()=>false,onAuto
   entryFailed.current=failedEntry()
   setFailed(entryFailed.current)
   const state=frame.current?.contentDocument?.documentElement?.dataset.documentLoading
-  if(state&&['reading','rendering','ready','error'].includes(state))setLoadingState(state as DocumentLoadingState)
+  if(state&&['reading','rendering','ready','error','citation-expired'].includes(state))setLoadingState(state as DocumentLoadingState)
  }
  function retry(){
   if(!entryFailed.current)return

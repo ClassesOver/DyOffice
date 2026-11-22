@@ -7,7 +7,7 @@ function source(path:string){
  const match=pinnedPath.exec(path);if(!match)throw Error('Unknown knowledge source')
  const name=decodeURIComponent(match[3]!)
  if(!name||/[\\/\u0000-\u001f\u007f]/.test(name)||encodeURIComponent(name)!==match[3]||!/[.](docx|xlsx|pptx|pdf)$/i.test(name))throw Error('Invalid knowledge source')
- return {fileId:match[1]!,name}
+ return {fileId:match[1]!,revision:match[2]!,name}
 }
 /** 使用助手现有的登录绑定请求；知识库路径只是版本引用，不是本地文件路径。 */
 export function createWebKnowledge(request?:SettingsRequest){
@@ -25,8 +25,8 @@ export function createWebKnowledge(request?:SettingsRequest){
   return files.has(canonical)?canonical:undefined
  }
  function parent(){
-  const current=window.parent as Window & {aiOffice?:{openPath:(id:string)=>Promise<void>}}
-  if(current===window||current.location.origin!==window.location.origin||typeof current.aiOffice?.openPath!=='function')throw Error('Workspace source navigation unavailable')
+  const current=window.parent as Window & {dyofficeOpenKnowledgeSource?:(id:string,revision:string)=>Promise<void>}
+  if(current===window||current.location.origin!==window.location.origin||typeof current.dyofficeOpenKnowledgeSource!=='function')throw Error('Workspace source navigation unavailable')
   return current
  }
  async function kbRead(path:string,offset:number){
@@ -59,7 +59,15 @@ export function createWebKnowledge(request?:SettingsRequest){
    if(!Array.isArray(hits)||hits.length>limit||hits.some(hit=>{const file=files.get(hit.path);return !file||typeof hit.name!=='string'||typeof hit.ext!=='string'||typeof hit.folder!=='string'||typeof hit.snippet!=='string'}))throw Error('Invalid knowledge search results')
    return hits.map(hit=>{const file=files.get(hit.path)!;return {...hit,name:file.name,ext:file.ext,folder:file.folder}})
   },kbRead,citationPath,
-  async openSourcePath(path:string){const canonical=citationPath(path);if(!canonical)throw Error('Unknown knowledge source');const host=parent();await kbRead(canonical,0);if(parent()!==host)throw Error('Workspace source navigation changed');await host.aiOffice!.openPath(source(canonical).fileId)},
+  async openSourcePath(path:string){
+   const canonical=citationPath(path)
+   if(!canonical)throw Error('Unknown knowledge source')
+   const host=parent()
+   await kbRead(canonical,0)
+   if(parent()!==host)throw Error('Workspace source navigation changed')
+   const {fileId,revision}=source(canonical)
+   await host.dyofficeOpenKnowledgeSource!(fileId,revision)
+  },
   dispose(){disposed=true;epoch++;files.clear()},
  }
 }

@@ -2,12 +2,13 @@ import { officeSignatureNotice } from './office-signature-notice'
 import {documentHandoffPeer} from './document-handoff-peer'
 import {mountDocumentHandoff} from './document-handoff'
 import {createAnalysisDocumentTarget} from '../../../../packages/browser-host/src/analysis-document-target.ts'
-import {reportDocumentLoading} from './document-loading-state'
+import {reportDocumentOpenError,reportDocumentLoading,registerDisplayedRevision} from './document-loading-state'
 import {DocumentNotifications} from './document-notifications'
 import {createEditorCloseLifecycle,installEditorCloseLifecycle} from './editor-close-lifecycle'
 import ReactDOM from 'react-dom/client'
 import {useEffect,useState} from 'react'
 import {createSessionFileHost, type SessionFileHost} from '../../../../packages/browser-host/src/files.ts'
+import {CitedRevisionChanged} from '../../../../packages/browser-host/src/session-files'
 import {createSlidesBridge} from './slides-bridge.ts'
 import {messages} from './messages.ts'
 import {mountEditorRealtime} from './editor-realtime.ts'
@@ -37,7 +38,7 @@ import './slides.css'
 import './ribbon-file-button.css'
 import './ai-dock-theme.css'
 
-export async function mountSlidesEditor(host: SessionFileHost, container: HTMLElement, fileId: string) {
+export async function mountSlidesEditor(host: SessionFileHost, container: HTMLElement, fileId: string, citationMode=false) {
   // Captured once: listeners and teardown must reach the mounting window even
   // if the embedding test harness has already restored the global.
   const stage = window
@@ -124,14 +125,16 @@ export async function mountSlidesEditor(host: SessionFileHost, container: HTMLEl
     if (dirty()) { actionError = text.takeoverDirty; changed(); return }
     takingOver = true; actionError = ''; changed()
     try {
-      if (editor) await bridge.takeover(editor)
+      if (editor) await bridge.takeover(editor,citationMode)
       else {
         // No parser session exists before the first lease. Acquire authority and
         // refresh the persisted pin before mounting the renderer for the first time.
         let acquired = false
         try {
           await host.takeoverLease(fileId); acquired = true
-          await host.refreshHead(fileId)
+          if(citationMode){
+            if(!await host.isCurrentRevision(fileId))throw new CitedRevisionChanged()
+          }else await host.refreshHead(fileId)
           if (disposed || !host.getState(fileId).lease) throw new Error('takeover authority lost')
           editorMounted = true
         } catch (error) {
@@ -141,8 +144,20 @@ export async function mountSlidesEditor(host: SessionFileHost, container: HTMLEl
       }
       initialLease = true
     }
-    catch { if (!disposed) actionError = dirty() ? text.takeoverDirty : text.takeoverFailed }
+    catch(error) {
+      if(!disposed){
+        if(error instanceof CitedRevisionChanged)reportDocumentOpenError(error)
+        else actionError = dirty() ? text.takeoverDirty : text.takeoverFailed
+      }
+    }
     finally { takingOver = false; if (!disposed) changed() }
+  }
+  function reportOpenFailure() {
+    if(!citationMode){reportDocumentLoading('error');return}
+    void host.isCurrentRevision(fileId).then(
+      current=>{if(!disposed&&!closing)reportDocumentLoading(current?'error':'citation-expired')},
+      ()=>{if(!disposed&&!closing)reportDocumentLoading('error')},
+    )
   }
   async function confirmSave() {
     if (confirming || disposed) return
@@ -205,7 +220,7 @@ export async function mountSlidesEditor(host: SessionFileHost, container: HTMLEl
       {loaded && !failed && state.status !== 'unauthorized' && <a className="dyoffice-slides-download-saved"
         href={`/api/v1/files/${fileId}/content?revision=${state.revision.revision}`} download={state.name}>{text.download}</a>}
     </>
-    const hostProps: SlidesAppHost = {saveDownload,analysisGeneration:bridge.getAnalysisGeneration,runAnalysis:(ops,check,adopt)=>bridge.guardedApply(check,async()=>{if(!check())return false;const result=await bridge.api.applyTxn({ops,isolation:'atomic'});if(!result?.applied||!result.slides)return false;adopt(result.slides);return true}),readOnly, inPlaceSave: true, assistantAvailable:Boolean(sharedAssistant?.available&&(prefs.showAssistant!==false||handoffOpen)),...(sharedAssistant?{assistant:{...sharedAssistant,mediaCapabilities:sharedAssistant.mediaCapabilities,continuation:assistantContinuation}}:{}), onDeckOpened: () => {documentLoaded=true;setLoaded(true)}, onOpenFailed: () => {setFailed(true); reportDocumentLoading('error')}, onEditorReady: handle => { editor = handle }}
+    const hostProps: SlidesAppHost = {saveDownload,analysisGeneration:bridge.getAnalysisGeneration,runAnalysis:(ops,check,adopt)=>bridge.guardedApply(check,async()=>{if(!check())return false;const result=await bridge.api.applyTxn({ops,isolation:'atomic'});if(!result?.applied||!result.slides)return false;adopt(result.slides);return true}),readOnly, inPlaceSave: true, assistantAvailable:Boolean(sharedAssistant?.available&&(prefs.showAssistant!==false||handoffOpen)),...(sharedAssistant?{assistant:{...sharedAssistant,mediaCapabilities:sharedAssistant.mediaCapabilities,continuation:assistantContinuation}}:{}), onDeckOpened: () => {documentLoaded=true;setLoaded(true)}, onOpenFailed: () => {documentLoaded=false;setFailed(true);reportOpenFailure()}, onEditorReady: handle => { editor = handle }}
     hostProps.downloadImages = async (baseName,format,pages) => {
       const {downloadSlidesImages} = await import('./slides-image-download')
       return downloadSlidesImages(baseName,format,pages,copyLifetime.signal)
@@ -248,6 +263,11 @@ export async function mountSlidesEditor(host: SessionFileHost, container: HTMLEl
     }
   }).catch(()=>{}).finally(()=>{assistantLoadFinished=true;if(!disposed)changed()})
   const closeState=()=>({dirty:dirty()||bridge.isDirty(),blocked:downloading||takingOver||confirming||bridge.needsConfirmation()||['unknown','saving'].includes(host.getState(fileId).status)})
+  registerDisplayedRevision(()=>{
+    const state=closeState(),current=host.getState(fileId)
+    const revision=current.revision.revision
+    return documentLoaded&&editor?.canContinueAssistant()&&!state.dirty&&!state.blocked&&current.status!=='unauthorized'&&bridge.cleanRevision()===revision?revision:undefined
+  })
   const beforeUnload = (event: BeforeUnloadEvent) => { if (closeState().dirty||closeState().blocked) { event.preventDefault(); event.returnValue = '' } }
   stage.addEventListener('beforeunload', beforeUnload)
   // Ctrl/Cmd+S saves in place through the renderer's own save flow (no download).
@@ -272,12 +292,13 @@ export async function mountSlidesEditor(host: SessionFileHost, container: HTMLEl
   return {save:()=>editor?.saveAndWait()??Promise.resolve(false),canClose:lifecycle.canClose,dispose:lifecycle.dispose,unload(){void host.releaseLease(fileId,true).catch(()=>{});cleanup()}}
 }
 async function bootstrap() {
-  const host = createSessionFileHost(), fileId = new URL(location.href).searchParams.get('fileId') ?? ''
+  const params=new URLSearchParams(location.search),fileId=params.get('fileId')??''
+  const host=createSessionFileHost({expectedRevision:params.get('sourceRevision')??undefined})
   installEditorCloseLifecycle(window,{canClose:async()=>false,dispose:async()=>false})
   try {
-    const mounted = await mountSlidesEditor(host, document.getElementById('root')!, fileId)
+    const mounted = await mountSlidesEditor(host, document.getElementById('root')!, fileId, params.has('sourceRevision'))
     installEditorCloseLifecycle(window,{canClose:mounted.canClose,dispose:async()=>{const closed=await mounted.dispose();if(closed)host.dispose();return closed}})
     window.addEventListener('pagehide',()=>{mounted.unload();host.dispose()},{once:true})
   } catch (error) { await host.releaseLease(fileId).catch(()=>{});host.dispose();installEditorCloseLifecycle(window,{canClose:async()=>true,dispose:async()=>true});throw error }
 }
-void bootstrap().catch(() => { reportDocumentLoading('error');document.getElementById('root')!.textContent = messages.zh.failed })
+void bootstrap().catch(error => { reportDocumentOpenError(error);document.getElementById('root')!.textContent = messages.zh.failed })

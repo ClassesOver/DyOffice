@@ -1,4 +1,5 @@
 import type {SessionFileHost} from '../../../../packages/browser-host/src/files.ts'
+import {CitedRevisionChanged} from '../../../../packages/browser-host/src/session-files'
 import {hostError} from '../../../../packages/web-contracts/src/errors.ts'
 import {mapScriptOpsForWidth} from '../../../../packages/pptx-ops/src/ops/script-map.ts'
 import {parsePageSpec} from '../../../../packages/pipelines/src/slides/page-spec-parser.ts'
@@ -1121,14 +1122,16 @@ export function createSlidesBridge(host: SessionFileHost, fileId: string, prefs:
     if (editor.isDirty() || session?.dirty || recovery || state.status !== 'idle' || !state.lease) throw hostError('CONFLICT', 'download not clean')
     return {...state.revision}
   }
-  async function takeover(editor: {reload(): Promise<boolean>; isDirty(): boolean}) {
+  async function takeover(editor: {reload(): Promise<boolean>; isDirty(): boolean}, preserveRevision=false) {
     if (disposed) throw hostError('UNAVAILABLE', 'disposed')
     if (editor.isDirty() || session?.dirty || recovery || host.getState(fileId).status === 'unknown') throw hostError('CONFLICT', 'unsaved takeover')
     let acquired = false
     try {
       await host.takeoverLease(fileId); acquired = true
       if (disposed || editor.isDirty() || session?.dirty || recovery) throw hostError('CONFLICT', 'unsaved takeover')
-      await host.refreshHead(fileId)
+      if(preserveRevision){
+        if(!await host.isCurrentRevision(fileId))throw new CitedRevisionChanged()
+      }else await host.refreshHead(fileId)
       if (disposed || editor.isDirty() || session?.dirty || recovery) throw hostError('CONFLICT', 'unsaved takeover')
       if (!await editor.reload()) throw hostError('UNAVAILABLE', 'takeover reload')
       if (disposed || !host.getState(fileId).lease) throw hostError('CONFLICT', 'takeover authority')

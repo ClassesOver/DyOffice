@@ -1,10 +1,22 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import {createDocsBridge} from '../../src/editors/docs-bridge.ts'
+import {readOpenDocument} from '../../src/shell/document-entry-reader.ts'
 const id='11111111-1111-4111-8111-111111111111',revision='22222222-2222-4222-8222-222222222222'
 const path=`/files/${id}/revisions/${revision}/${encodeURIComponent('资料.docx')}`
 const file={path,name:'资料.docx',ext:'docx',folder:'知识库',folderPath:'',sizeBytes:123}
-function fixture(t,request){const previous=globalThis.window,opened=[];globalThis.window={location:{origin:'https://office.example'},parent:{location:{origin:'https://office.example'},aiOffice:{openPath:async id=>opened.push(id)}}};t.after(()=>{globalThis.window=previous});const bridge=createDocsBridge({getState:()=>({name:'current.docx'})},id,{language:'en'},()=>{},undefined,{knowledgeRequest:request});t.after(()=>bridge.dispose());return {bridge,opened}}
+test('workspace navigation rejects a superseded citation before selecting or marking the file opened',async()=>{
+ const calls=[]
+ const workspace={bound:{request:async(url,method)=>{
+  calls.push([url,method])
+  return {name:file.name,format:'docx',file:{fileId:id,revision},downloadEndpoint:`/api/v1/files/${id}/content?revision=${revision}`}
+ }}}
+ await assert.rejects(readOpenDocument(workspace,{docx:'editable'},id,id),/cited revision/)
+ assert.deepEqual(calls,[[`/api/v1/files/${id}`,undefined]])
+ const current=await readOpenDocument(workspace,{docx:'editable'},id,revision)
+ assert.equal(new URL(current.src,'https://office.example').searchParams.get('sourceRevision'),revision)
+})
+function fixture(t,request){const previous=globalThis.window,opened=[];globalThis.window={location:{origin:'https://office.example'},parent:{location:{origin:'https://office.example'},dyofficeOpenKnowledgeSource:async (id,revision)=>opened.push({id,revision})}};t.after(()=>{globalThis.window=previous});const bridge=createDocsBridge({getState:()=>({name:'current.docx'})},id,{language:'en'},()=>{},undefined,{knowledgeRequest:request});t.after(()=>bridge.dispose());return {bridge,opened}}
 test('Word knowledge bridge uses the bound request and version-pinned corpus for search, paging and navigation',async t=>{
  const calls=[]
  const {bridge,opened}=fixture(t,async(url,method='GET',body)=>{calls.push({url,method,body});if(url.endsWith('/files'))return [file];if(url.endsWith('/search'))return [{...file,snippet:'literal match'}];return {text:'content',totalChars:24007,offset:Number(new URL(url,'https://office.example').searchParams.get('offset'))}})
@@ -14,7 +26,7 @@ test('Word knowledge bridge uses the bound request and version-pinned corpus for
  assert.deepEqual(await bridge.api.kbRead(path,24000),{text:'content',totalChars:24007,offset:24000})
  assert.equal(calls[2].url,`/api/v1/knowledge/read?path=${encodeURIComponent(path)}&offset=24000`)
  await bridge.api.openSourcePath(path)
- assert.deepEqual(opened,[id])
+ assert.deepEqual(opened,[{id,revision}])
 })
 test('a citation with mixed escaping opens only the matching canonical knowledge source',async t=>{
  const reads=[]
@@ -30,7 +42,7 @@ test('a citation with mixed escaping opens only the matching canonical knowledge
  await assert.rejects(bridge.api.openSourcePath(citation.replace('%99','%90')))
  await bridge.api.openSourcePath(citation)
  assert.deepEqual(reads,[path])
- assert.deepEqual(opened,[id])
+ assert.deepEqual(opened,[{id,revision}])
 })
 test('unknown/local/external citation paths and a foreign parent never navigate',async t=>{
  let reads=0

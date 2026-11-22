@@ -3,7 +3,7 @@ import {readHandoffSkill} from './document-handoff-spec'
 import {joinWordCollab,type WordSyncState} from './word-collab'
 import type {Editor} from '@tiptap/core'
 import {documentHandoffPeer} from './document-handoff-peer'
-import {reportDocumentLoading} from './document-loading-state'
+import {reportDocumentLoading,registerDisplayedRevision} from './document-loading-state'
 import {LocalDraftCopy} from './local-draft-copy'
 import type {DraftCopyAuthority} from './draft-copy-authority'
 import {DocumentNotifications} from './document-notifications'
@@ -43,7 +43,7 @@ import '../../../docs/src/renderer/fonts/fonts.css'
 import './docs.css'
 import './ai-dock-theme.css'
 
-export async function mountDocsEditor(host: SessionFileHost,element: HTMLElement,fileId: string,draftAuthority:DraftCopyAuthority={current:()=>false,verify:async()=>false}) {
+export async function mountDocsEditor(host: SessionFileHost,element: HTMLElement,fileId: string,draftAuthority:DraftCopyAuthority={current:()=>false,verify:async()=>false},citationMode=false) {
   element.textContent = messages.zh.opening
   if (!/^[0-9a-f-]{36}$/i.test(fileId)) throw new Error(messages.zh.failed)
   let closing=false
@@ -94,9 +94,11 @@ export async function mountDocsEditor(host: SessionFileHost,element: HTMLElement
   let wordSync:ReturnType<typeof joinWordCollab>|undefined, syncState:WordSyncState=signed?'unavailable':'joining'
   let peerSaveTimer:ReturnType<typeof setTimeout>|undefined
   let checkingWriter=false,nextWriterCheck=0,reopenToSave=false, journalAhead=false, lastSynced=-1
+  let syncedSavedRevision:string|undefined
   async function syncBody(){try{await wordSync?.checkpoint();return true}catch{return false}}
   async function checkWriter({version,savedVersion,savedRevision}:{version:number;savedVersion:number;savedRevision:string}){
     const ahead=version>savedVersion
+    syncedSavedRevision=savedRevision
     if(!disposed&&(version!==lastSynced||ahead!==journalAhead)){lastSynced=version;journalAhead=ahead;changed()}
     if(disposed||closing||version<=savedVersion||checkingWriter||host.getState(fileId).lease||Date.now()<nextWriterCheck)return
     checkingWriter=true;nextWriterCheck=Date.now()+4500
@@ -114,7 +116,9 @@ export async function mountDocsEditor(host: SessionFileHost,element: HTMLElement
     }catch{/* Another editor may have acquired the lease first. */}finally{checkingWriter=false}
   }
   function onCollabEditor(editor:Editor|null){
+    if(citationMode)return
     wordSync?.dispose();wordSync=undefined;clearTimeout(peerSaveTimer)
+    syncedSavedRevision=undefined
     if(!editor||disposed||signed)return
     syncState='joining'
     wordSync=joinWordCollab(editor,opened.file.revision,host.getEditorId()!,
@@ -124,7 +128,15 @@ export async function mountDocsEditor(host: SessionFileHost,element: HTMLElement
         peerSaveTimer=setTimeout(()=>{if(!disposed&&!closing&&host.getState(fileId).lease&&editorHandle?.isDirty())void editorHandle.save()},1200)
       },checkWriter)
   }
-  const bridge = createDocsBridge(host,fileId,prefs,() => changed(),undefined,{knowledgeRequest:assistant?.request,wordCheckpoint:async()=>wordSync?.checkpoint()})
+  const bridge = createDocsBridge(host,fileId,prefs,() => changed(),undefined,{
+    knowledgeRequest:assistant?.request,
+    wordCheckpoint:async()=>wordSync?.checkpoint(),
+    onSourceOpenFailed:()=>{
+      if(disposed)return
+      actionError=prefs.language==='en'?'The cited source is unavailable. Search the knowledge base again.':'引用的来源或版本已失效，请重新检索知识库。'
+      changed()
+    },
+  })
   let documentLoaded=false
   continuationRevision=()=>{
     if(!documentLoaded||disposed||closing||downloading||!editorHandle||!wordSync||
@@ -218,8 +230,8 @@ export async function mountDocsEditor(host: SessionFileHost,element: HTMLElement
   } : {}
   window.desktop = {...bridge.api,...assistant?.api,...imageBridge, getAiPanelPrefs: async () => ({...await bridge.api.getAiPanelPrefs(),showAiSidebar:assistantAvailable})} as unknown as DesktopApi
   applyAiPanelPrefs(panelPrefs); installScreenTips()
-  let initialLease = !signed
-  if(!signed)try { await host.acquireLease(fileId) } catch { initialLease = false }
+  let initialLease = !signed&&!citationMode
+  if(initialLease)try { await host.acquireLease(fileId) } catch { initialLease = false }
   const stop = host.startRenewal(fileId)
   const realtime = mountEditorRealtime(host, fileId, () => changed(),channels=>assistant?.channel?.observe(channels))
   async function saveAndDownload() {
@@ -421,7 +433,7 @@ export async function mountDocsEditor(host: SessionFileHost,element: HTMLElement
     const local = bridge.getState()
     const bodyFollower=loaded&&!failed&&!state.lease&&state.status!=='unauthorized'&&syncState==='active'
     const syncWarning=syncState==='offline'||syncState==='stale'?(locale==='zh'?'共同编辑暂停，保留本地草稿。': 'Collaboration paused; your local draft is preserved.'):''
-    const warning = syncWarning || (failed ? text.failed : state.status === 'unknown' ? text.unknown : state.status === 'unauthorized' ? text.unauthorized : !signed && !state.lease && loaded && !bodyFollower ? (actionError || (initialLease ? text.conflict : text.readOnly)) : actionError)
+    const warning = syncWarning || (failed ? text.failed : state.status === 'unknown' ? text.unknown : state.status === 'unauthorized' ? text.unauthorized : !citationMode && !signed && !state.lease && loaded && !bodyFollower ? (actionError || (initialLease ? text.conflict : text.readOnly)) : actionError)
     const notice = bodyFollower?(locale==='zh'?'正文共同编辑中，整文件由主编辑器保存。':'Co-editing the body; the primary editor saves the file.'):realtime.notice(locale)
     const status = signed ? officeSignatureNotice[locale].title : bodyFollower ? wordSync?.pending() ? (en?'Syncing…':'正在同步…') : journalAhead ? (en?'Synced; awaiting file save':'已同步，等待写入文件') : (en?'Saved':'已保存') : !loaded ? text.opening : downloading ? text.downloadSaving : state.status === 'saving' || local.status === 'saving' ? (locale === 'zh' ? '正在保存…' : 'Saving…') : local.dirty ? (locale === 'zh' ? '未保存' : 'Unsaved') : text.ready
     const saveStatus = <>
@@ -442,22 +454,29 @@ export async function mountDocsEditor(host: SessionFileHost,element: HTMLElement
     </>
     return <div className="dyoffice-native-docs">
       <DocumentNotifications locale={locale} items={[
+        ...(citationMode ? [{id:'citation',level:'info' as const,title:en?'Cited version':'引用版本',message:en?'The saved source is open in read-only mode.':'当前引用展示已保存的只读版本。'}] : []),
         ...(signed ? [{id:'office-signature',level:'info' as const,...officeSignatureNotice[locale]}] : []),
         ...(assistantNotice ? [{id:'assistant',level:prefs.showAssistant === false ? 'info' as const : 'warning' as const,title:locale === 'zh' ? 'AI 助手' : 'AI Assistant',message:assistantNotice}] : []),
         ...(warning ? [{id:'document-state',level:'error' as const,title:locale === 'zh' ? '文档需要处理' : 'Document needs attention',message:warning,actions:<>
-        {!signed && !state.lease && !failed && state.status !== 'unauthorized' && <button data-takeover-blockers={[!loaded && 'loading', !editorHandle && 'no-handle', local.takingOver && 'taking-over', downloading && 'downloading', local.dirty && 'dirty', local.status !== 'idle' && 'local-busy', state.status === 'unknown' && 'host-unknown', state.status === 'saving' && 'host-saving'].filter(Boolean).join(',')} disabled={!loaded || !editorHandle || local.takingOver || downloading || local.dirty || local.status !== 'idle' || state.status === 'unknown' || state.status === 'saving'} onClick={() => { void takeOver() }}>{text.takeover}</button>}
+        {!citationMode && !signed && !state.lease && !failed && state.status !== 'unauthorized' && <button data-takeover-blockers={[!loaded && 'loading', !editorHandle && 'no-handle', local.takingOver && 'taking-over', downloading && 'downloading', local.dirty && 'dirty', local.status !== 'idle' && 'local-busy', state.status === 'unknown' && 'host-unknown', state.status === 'saving' && 'host-saving'].filter(Boolean).join(',')} disabled={!loaded || !editorHandle || local.takingOver || downloading || local.dirty || local.status !== 'idle' || state.status === 'unknown' || state.status === 'saving'} onClick={() => { void takeOver() }}>{text.takeover}</button>}
         {state.status === 'unknown' && <button onClick={() => { void host.reconcile(fileId).then(() => changed()).catch(() => {}) }}>{text.retry}</button>}
       </>}] : []),
         ...(notice ? [{id:'version',level:'info' as const,title:locale === 'zh' ? '版本同步' : 'Version updates',message:notice}] : []),
         ...(copyNotice ? [{id:'named-copy',level:copyNotice.failed?'error' as const:'info' as const,title:locale==='zh'?'AI 命名':'AI file naming',message:copyNotice.message}] : []),
       ]} />
-      <App host={{ fileActions,saveStatus,setImageAttachments,desktopActionsAvailable:false,getSupportedCreateDocumentTypes:()=>bridge.supportedCreateDocumentTypes,resolveKnowledgeCitation:bridge.resolveKnowledgeCitation,namedCopy:loaded&&!failed&&assistant?.available&&state.lease&&state.status==='idle'&&!naming&&draftAuthority.current()?nameCopy:undefined,onCollabEditor,syncBody,bodyCollaboration:bodyFollower,readOnly: !loaded || failed || !state.lease || local.takingOver || !['active','unavailable'].includes(syncState),assistantAvailable:assistantAvailable||!!(job&&assistant?.available),assistant,recoveryRevision:continuationRevision(),externalAssistant,preferenceScope: fileId,onEditorReady: registerDraftEditor,onHandoffReady:registerOfficeHandoff,lifecycle: { ...bridge.lifecycle,wordSyncActive:()=>syncState==='active',documentOpened() { bridge.lifecycle.documentOpened(); documentLoaded=true; setLoaded(true) } },onDocumentEdited: bridge.lifecycle.edited,onOpenFailed: () => {documentLoaded=false; setFailed(true); reportDocumentLoading('error')} }} />
+      <App host={{ fileActions,saveStatus,setImageAttachments,desktopActionsAvailable:false,getSupportedCreateDocumentTypes:()=>bridge.supportedCreateDocumentTypes,resolveKnowledgeCitation:bridge.resolveKnowledgeCitation,namedCopy:loaded&&!failed&&assistant?.available&&state.lease&&state.status==='idle'&&!naming&&draftAuthority.current()?nameCopy:undefined,onCollabEditor,syncBody,bodyCollaboration:bodyFollower,readOnly: !loaded || failed || !state.lease || local.takingOver || !['active','unavailable'].includes(syncState),assistantAvailable:!citationMode&&(assistantAvailable||!!(job&&assistant?.available)),assistant,recoveryRevision:continuationRevision(),externalAssistant,preferenceScope: fileId,onEditorReady: registerDraftEditor,onHandoffReady:registerOfficeHandoff,lifecycle: { ...bridge.lifecycle,wordSyncActive:()=>syncState==='active',documentOpened() { bridge.lifecycle.documentOpened(); documentLoaded=true; setLoaded(true) } },onDocumentEdited: bridge.lifecycle.edited,onOpenFailed: () => {documentLoaded=false; setFailed(true); reportDocumentLoading('error')} }} />
     </div>
   }
   reportDocumentLoading('rendering')
   const root = createRoot(element)
   root.render(<LocaleProvider initial={locale}><NativeDocument /></LocaleProvider>)
   const closeState=()=>({dirty:!host.getState(fileId).lease&&syncState==='active'&&wordSync ? wordSync.pending() : !!editorHandle?.isDirty()||bridge.getState().dirty,blocked:downloading||bridge.getState().takingOver||['unknown','saving'].includes(host.getState(fileId).status)||bridge.getState().nativeSaveOutcome==='pending'})
+  registerDisplayedRevision(()=>{
+    const state=closeState(),current=host.getState(fileId)
+    const revision=current.revision.revision
+    const savedBody=citationMode||signed||syncState==='unavailable'||(syncState==='active'&&syncedSavedRevision===revision)
+    return documentLoaded&&savedBody&&!state.dirty&&!state.blocked&&!journalAhead&&current.status!=='unauthorized'?revision:undefined
+  })
   const beforeUnload = (event: BeforeUnloadEvent) => {
     if (closeState().dirty || closeState().blocked) { event.preventDefault(); event.returnValue = '' }
   }

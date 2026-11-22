@@ -1,7 +1,7 @@
 import {stubHomeHero} from '../helpers/home-hero.mjs'
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import {randomBytes} from 'node:crypto'
+import {randomBytes,randomUUID} from 'node:crypto'
 import {Readable} from 'node:stream'
 import {mkdir,readFile} from 'node:fs/promises'
 import {fileURLToPath} from 'node:url'
@@ -14,6 +14,8 @@ import {mockProviderNetwork} from '../helpers/provider-network.mjs'
 import {buildLocalApp} from '../../server/src/app.ts'
 import {createWorkspaceService} from '../../server/src/modules/workspace/service.ts'
 import {createGlobalConfigService} from '../../server/src/modules/admin/service.ts'
+import {createLeaseService} from '../../server/src/modules/leases/service.ts'
+import {createRevisionService} from '../../server/src/modules/revisions/service.ts'
 import {kbCiteHref} from '../../../../packages/agent-core/src/knowledge-base-skill.ts'
 async function document(text,extraBody=''){const zip=await JSZip.loadAsync(await docxBytes());zip.file('word/document.xml',`<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>${text}</w:t></w:r></w:p>${extraBody}<w:sectPr/></w:body></w:document>`);return zip.generateAsync({type:'nodebuffer'})}
 
@@ -256,6 +258,11 @@ test('Word searches a starred saved source, reads its actual text and opens the 
   assert.match(body,/Begin <\/w:t>[\s\S]*?<w:t[^>]*>approved<\/w:t>[\s\S]*? report<\/w:t>/)
   assert.doesNotMatch(body,/Draft block 651/)
  }
+ const openSourceWrites=[]
+ page.on('request',request=>{
+  const path=new URL(request.url()).pathname
+  if(path===`/api/v1/files/${source.fileId}/word-collab`||path===`/api/v1/files/${source.fileId}/lease`)openSourceWrites.push(path)
+ })
  await Promise.all([
   page.waitForResponse(response=>{
    const url=new URL(response.url())
@@ -266,6 +273,8 @@ test('Word searches a starred saved source, reads its actual text and opens the 
  const cited=page.frameLocator(`iframe[data-document-id="${source.fileId}"]`)
  try{
   await expect(cited.locator('.tiptap.doc-page').first()).toContainText(sourceText,{timeout:45000})
+  await expect(cited.locator('.tiptap.doc-page').first()).toHaveAttribute('contenteditable','false')
+  assert.deepEqual(openSourceWrites,[])
  }catch(error){
   const frame=page.frames().find(frame=>new URL(frame.url()).searchParams.get('fileId')===source.fileId)
   t.diagnostic(JSON.stringify({sourceFrame:!!frame,loading:await frame?.locator('html').getAttribute('data-document-loading',{timeout:2000})}))
@@ -273,4 +282,43 @@ test('Word searches a starred saved source, reads its actual text and opens the 
  }
  assert.deepEqual(await f.files.readFile(f.alice.token,draft.fileId,draft.revision),draftBytes)
  assert.deepEqual(await f.files.readFile(f.alice.token,source.fileId,source.revision),sourceBytes)
+ if(!liveConfig){
+  await page.evaluate(id=>window.aiOfficeTabs.close(id),source.fileId)
+  const sourceFrame=page.locator(`iframe[data-document-id="${source.fileId}"]`)
+  await expect(sourceFrame).toHaveCount(0)
+  await expect(link).toBeVisible()
+  const replacement=await document('Newer source revision'),editorId=randomUUID()
+  const leases=createLeaseService({transactions:f.transactions})
+  const revisions=createRevisionService({transactions:f.transactions,objects:f.objects,files:f.files})
+  const lease=await leases.acquireLease(f.alice.token,source.fileId,{editorId})
+  const staged=await revisions.stageUpload(f.alice.token,source.fileId,{size:replacement.length,baseRevision:source.revision,leaseEpoch:lease.leaseEpoch,editorId})
+  await f.files.receiveUpload(f.alice.token,staged.uploadId,replacement)
+  let newerRevision
+  const sourceContent=[]
+  page.on('request',request=>{
+   const url=new URL(request.url())
+   if(url.pathname===`/api/v1/files/${source.fileId}/content`)sourceContent.push(url.searchParams.get('revision'))
+  })
+  await page.route(`**/api/v1/files/${source.fileId}`,async route=>{
+   const response=await route.fetch()
+   try{
+    assert.equal((await response.json()).file.revision,source.revision)
+    newerRevision=(await revisions.commitRevision(f.alice.token,{fileId:source.fileId,uploadId:staged.uploadId,baseRevision:source.revision,leaseEpoch:lease.leaseEpoch,idempotencyKey:randomUUID()})).revision
+   }finally{await leases.releaseLease(f.alice.token,source.fileId,{editorId,leaseEpoch:lease.leaseEpoch})}
+   await route.fulfill({response})
+  },{times:1})
+  await link.click()
+  await expect(page.getByRole('alert').filter({hasText:'引用的版本已失效'})).toBeVisible()
+  assert.ok(newerRevision&&newerRevision!==source.revision)
+  assert.deepEqual(sourceContent,[])
+  await page.evaluate(id=>window.aiOffice.openPath(id),source.fileId)
+  await expect(cited.locator('.tiptap.doc-page').first()).toContainText('Newer source revision',{timeout:45000})
+  await expect(sourceFrame).toHaveAttribute('src',`/native-docx/?fileId=${source.fileId}`)
+  await page.evaluate(id=>window.aiOfficeTabs.close(id),source.fileId)
+  await expect(sourceFrame).toHaveCount(0)
+  await link.click()
+  await expect(page.locator('.web-notice')).toContainText('引用的版本已失效')
+  await expect(sourceFrame).toHaveCount(0)
+  assert.deepEqual(await f.files.readFile(f.alice.token,source.fileId,source.revision),sourceBytes)
+ }
 })
