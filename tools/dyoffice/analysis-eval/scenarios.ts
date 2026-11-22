@@ -8,7 +8,7 @@ export interface TrialEvidence {
   /** final assistant text per turn */
   answers: string[]
   /** tool calls in order, with name, input and whether it errored */
-  calls: { turn: number; name: string; input: Record<string, unknown>; isError: boolean }[]
+  calls: { turn: number; name: string; input: Record<string, unknown>; isError: boolean; output?: string }[]
   /** table content applied through insert_data_result */
   inserted: { rows: readonly (readonly string[])[] }[]
 }
