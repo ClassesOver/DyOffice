@@ -305,7 +305,14 @@ for(const mode of ['creation','no-word','all'])test(mode==='no-word'
    await (await chooser).setFiles({name:'pixel.png',mimeType:'image/png',buffer:PNG.sync.write(image)})
    await expect(panel.getByRole('img',{name:'pixel.png',exact:true})).toBeVisible()
   }
-  await panel.locator('textarea').fill('Office capability probe '+stage+' '+format)
+  const input=panel.locator('textarea'),prompt='Office capability probe '+stage+' '+format
+  if(direct&&format==='docx'){
+   await expect(page.locator('html')).toHaveAttribute('data-document-loading','ready',{timeout:45000})
+   await input.focus()
+   await page.evaluate(()=>window.flushDeferredDocxFocus())
+   await page.keyboard.insertText(prompt)
+   await expect(input).toHaveValue(prompt)
+  }else await input.fill(prompt)
   await expect(panel.getByRole('button',{name:'发送',exact:true})).toBeEnabled({timeout:15000})
   const previous=frames.length
   await panel.getByRole('button',{name:'发送',exact:true}).click()
@@ -405,6 +412,20 @@ for(const mode of ['creation','no-word','all'])test(mode==='no-word'
   }
   assert.equal((await f.files.openFile(f.alice.token,source.fileId)).file.revision,source.revision)
   assert.deepEqual(await f.files.readFile(f.alice.token,source.fileId,source.revision),sources.find(([format])=>format==='xlsx')[1])
+  await page.addInitScript(()=>{
+   if(location.pathname!=='/native-docx/')return
+   const requestFrame=window.requestAnimationFrame.bind(window),deferred=[]
+   // Run Tiptap's deferred editor focus after the user focuses the composer.
+   window.requestAnimationFrame=callback=>{
+    const source=callback.toString()
+    if(!source.includes('.focus()')||!source.includes('scrollIntoView'))return requestFrame(callback)
+    deferred.push(callback)
+    return requestFrame(()=>{})
+   }
+   window.flushDeferredDocxFocus=()=>{
+    for(const callback of deferred.splice(0))callback(performance.now())
+   }
+  })
   await probe('docx','direct',{direct:true})
   const directWorkbook=await probe('xlsx','direct',{direct:true})
   const downloads=[]
