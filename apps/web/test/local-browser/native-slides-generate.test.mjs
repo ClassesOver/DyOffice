@@ -27,8 +27,10 @@ async function savedSlides(bytes){
    assert.ok(target,'slide relationship resolves to a package part')
    const path=new URL(target,'https://package.invalid/ppt/presentation.xml').pathname.slice(1)
    const source=await zip.file(path).async('string')
-   const text=[...parser.parseFromString(source,'application/xml').getElementsByTagNameNS('*','t')].map(node=>node.textContent)
-   return {source,text}
+   const document=parser.parseFromString(source,'application/xml')
+   const text=[...document.getElementsByTagNameNS('*','t')].map(node=>node.textContent)
+   const pictures=document.getElementsByTagNameNS('http://schemas.openxmlformats.org/presentationml/2006/main','pic').length
+   return {source,text,pictures}
   }))
  }finally{window.close()}
 }
@@ -210,7 +212,8 @@ for(const live of [false,true])test(live?'a real model generates and redoes edit
    window.fetch=async(input,init)=>{
     const path=new URL(input instanceof Request?input.url:input,location.href).pathname
     if(init?.method!=='POST')return fetchOriginal(input,init)
-    const phase=path.endsWith('/slides/generate-page')?'create page':path.endsWith('/slides/generated-pages')?'land page':null
+    const phase=path.endsWith('/slides/generate-page')?'create page':path.endsWith('/slides/generated-pages')?'land page':
+     path.endsWith('/slides/history-batch-begin')?'begin history batch':path.endsWith('/slides/history-batch-end')?'end history batch':null
     if(phase){
      const response=await fetchOriginal(input,init)
      void window.recordSlidesTestEvent({phase,status:response.status})
@@ -220,13 +223,18 @@ for(const live of [false,true])test(live?'a real model generates and redoes edit
     const {request}=JSON.parse(init.body)
     const prompt=request.messages.findLast(message=>message.role==='user')?.text??''
     const stage=request.tools.length?'assistant':prompt.startsWith('Topic and style preferences:')?'style':prompt.startsWith('Topic: ')?'outline':'page design'
+    const turn=prompt.includes('Cobalt Review')?'redo':prompt.includes('Orchid Intake')?'initial':undefined
     const started=Date.now(),repair=prompt.includes('Your previous output was rejected:')
-    void window.recordSlidesTestEvent({stage,repair,started})
+    const offered=request.tools.map(tool=>tool.name).filter(name=>['generate_deck','read_slide','regenerate_slide'].includes(name))
+    void window.recordSlidesTestEvent({stage,turn,repair,started,offered})
     const response=await fetchOriginal(input,init)
     void response.clone().text().then(stream=>{
      const frames=[...new Set([...stream.matchAll(/^event: ([\w-]+)$/gm)].map(match=>match[1]))]
      const tools=[...stream.matchAll(/^event: tool_call\ndata: (.+)$/gm)].map(match=>JSON.parse(match[1]).name)
-     void window.recordSlidesTestEvent({stage,started,status:response.status,frames,tools,durationMs:Date.now()-started})
+     const reply=stage==='assistant'&&!tools.length
+      ? [...stream.matchAll(/^event: delta\ndata: (.+)$/gm)].map(match=>JSON.parse(match[1]).text??'').join('').slice(0,400)
+      : undefined
+     void window.recordSlidesTestEvent({stage,turn,started,status:response.status,frames,tools,reply,durationMs:Date.now()-started})
     },()=>window.recordSlidesTestEvent({stage,started,interrupted:true,durationMs:Date.now()-started}))
     return response
    }
@@ -244,6 +252,9 @@ for(const live of [false,true])test(live?'a real model generates and redoes edit
    assert.equal(slides.length,2)
    assert.ok(hasPage(slides.map(slide=>slide.text),0,title[0]),'Generated first page has the requested title')
    assert.ok(hasPage(slides.map(slide=>slide.text),1,expectedTitle),'Saved second page has the requested title')
+   assert.ok(slides.every(slide=>slide.pictures===0),'The saved pages contain no images')
+   assert.match(slides[0].text.join(' '),/Monday|周一|星期一/i)
+   assert.match(slides[1].text.join(' '),expectedTitle===redoTitle?/checklist|清单/i:/Friday|周五|星期五/i)
    return {bytes,slides}
   }
   const waitForPage=(index,text,timeout=25000)=>expect.poll(async()=>(await renderedText())?.[index]?.join(' ')??'',{timeout}).toContain(text)
@@ -255,7 +266,7 @@ for(const live of [false,true])test(live?'a real model generates and redoes edit
    return revision
   }
   const settled=()=>expect(panel.locator('.ai-stop-btn')).toHaveCount(0,{timeout:30000})
-  await send('Use generate_deck to replace this presentation with exactly two editable slides and no images. Use these exact titles, in order: "Orchid Intake" and "Cobalt Release". Slide 1 describes intake review on Monday. Slide 2 describes release approval on Friday. Use a simple editorial style for an internal review. The brief is complete, so proceed directly without questions and replace all original slides.')
+  await send('用 generate_deck 替换现有演示文稿。只做两页，可编辑，不放图片。第 1 页标题必须是 Orchid Intake，正文说明周一审核收件。第 2 页标题必须是 Cobalt Release，正文说明周五审批发布。用简洁的内部评审风格。信息齐全，请直接生成并替换全部原页面。')
   const skipSurvey=panel.getByRole('button',{name:'Skip survey',exact:true})
   // The first write waits for the batch, after the tool decision and up to two
   // design requests for a page that needs repair.
@@ -275,7 +286,12 @@ for(const live of [false,true])test(live?'a real model generates and redoes edit
   await waitForPage(1,title[1])
 
   acceptedTools.clear()
-  await send('Redo only slide 2 in place with the slide regeneration tool. Use the exact title "Cobalt Review" and give the reviewer an action: verify the release checklist. Keep slide 1 exactly as it is.')
+  const redoInstruction='用 regenerate_slide 只重做第 2 页。标题必须是 Cobalt Review，请在正文要求评审人核对发布清单。第 1 页保持原样。'
+  await Promise.all([
+   page.waitForRequest(request=>request.method()==='POST'&&new URL(request.url()).pathname==='/api/v1/ai/turns'&&
+    request.postDataJSON()?.request?.messages.some(message=>message.role==='user'&&message.text?.includes(redoInstruction)),{timeout:30000}),
+   send(redoInstruction),
+  ])
   await waitForPage(1,redoTitle,270000)
   await settled()
   assert.ok(acceptedTools.has('regenerate_slide'),'The real model requested regeneration and received a successful result')

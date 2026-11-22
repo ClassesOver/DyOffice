@@ -21,7 +21,17 @@
 | PPTX | 助手生成可编辑演示文稿并重做单页，原生备注交接可保存和追问，刷新时只恢复一次原委派 |
 | PDF | 原生助手搜索和改写文本、读写便笺及回复，真实保存回执和原生重开。外接 Harness 适配器和宿主 Codex CLI 0.169.0 分别跑通，计算结果同时写入原文和现有便笺 |
 
-上表的浏览器依据是 `89df7aa6` 的用例结果、`15a0ed5e` 的 Chromium 复跑和在 `dec77c2d` 构建上运行的新增 XLSX 公式断言。真实模型的中文指令四格式写回属于 A14。测试接口的 `gpt-6-sol` 已通过流式函数调用探测，四格式真实写入、保存和重开正在验证。[A14 验收矩阵](../acceptance-matrix.md) [GitHub 四格式浏览器验证](https://github.com/ClassesOver/DyOffice/actions/runs/45005639852/job/137156502751)
+上表的浏览器依据是 `89df7aa6` 的用例结果、`15a0ed5e` 的 Chromium 复跑和在 `dec77c2d` 构建上运行的新增 XLSX 公式断言。真实模型的中文指令四格式写回属于 A14。`gpt-6-sol` 已在四种格式各完成一项代表性原生写入、保存和重开，当前证据覆盖下述单次通过的用例及 PPTX 首轮失败。[A14 验收矩阵](../acceptance-matrix.md) [GitHub 四格式浏览器验证](https://github.com/ClassesOver/DyOffice/actions/runs/45005639852/job/137156502751)
+
+固定候选 `89df7aa6` 的真实 PDF 用例通过，耗时约 39 秒。`gpt-6-sol` 通过自定义 Chat Completions 接口接收中文任务，读取原文的两笔数值，委派宿主 Codex CLI 0.169.0 实际运行代码生成 `total.json`。模型从返回文件取得 `42`，调用 `edit_text` 和 `edit_note` 修改现有原文和便笺。保存与重开后两处内容均正确。测试记录一次委派，并核对同一保存回执和历史原件。[真实 PDF 工具成品用例](../../../apps/web/test/local-browser/native-pdf-harness.test.mjs)
+
+同一候选和模型的 DOCX、XLSX 中文端到端用例均通过。模型委派真实 Codex 计算 `143 + 298`，DOCX 写入一段 `Verified total: 441`，XLSX 将 `441` 写入指定工作表的 H2。检查通过项包括实际工具结果、成品包、历史原件和重开后的内容。两个用例分别耗时约 34 秒和 52 秒。[DOCX 与 XLSX 成品用例](../../../apps/web/test/local-browser/native-word-sheets-codex.test.mjs)
+
+PPTX 在 `89df7aa6` 的英文首轮成功生成、保存并重开两页，第二页重做请求后的标题保持原值，整个用例按失败记录。`9922e244` 重建原生 PPTX 后，中文定向用例通过，耗时约 118 秒。生成的两页含指定标题与周一、周五的正文，包内保留可编辑文本，两个页面均无图片。重做时真实模型调用 `read_slide` 和 `regenerate_slide`，第二页保存并重开后含新标题和发布清单。第一页 XML 字节一致，两个历史版本保留原样。该次生成过程中模型调用了一次澄清工具，测试跳过澄清后继续。[PPTX 成品用例](../../../apps/web/test/local-browser/native-slides-generate.test.mjs)
+
+`9922e244` 上补测了 XLSX 的中文数据分析任务。`gpt-6-sol` 从临时 PostgreSQL 的合成订单计算 2026 年 1 至 6 月实付金额，并调用 `insert_data_result`。6 个月的标签和数值均与数据库真值一致，7 项断言全部通过。该次试验耗时 14.7 秒，调用工具 5 次，输入 9,655 tokens，输出 328 tokens。评估将表格交给内存文档目标，浏览器保存和重开由独立用例覆盖。[真实模型数据分析评估](../../../tools/dyoffice/analysis-eval/README.md)
+
+同一提交的 DOCX 渠道汇总评估通过 6 项断言。模型调用 `insert_data_result`，三个渠道的订单量、金额和来源标记符合真值，耗时 18.1 秒，调用工具 7 次。评估接收表格的目标为内存文档。[真实模型数据分析评估](../../../tools/dyoffice/analysis-eval/README.md)
 
 本机通过锁文件安装依赖，使用 Node `22.23.5`、Playwright Chromium `151.0.7922.34`、隔离 PostgreSQL 夹具及主机 OCR，不使用 Docker。本轮确认助手工具清单的 159 个定义与分类一致，兼容输入基线 84 个文件无漂移。四格式后台读取和回答等基础测试 23 项通过，跳过的真实 OCR 项在安装 Tesseract 及 `eng`、`chi_sim` 数据后单独复跑，OCR 套件 3 项通过。
 
