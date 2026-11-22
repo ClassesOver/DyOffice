@@ -56,3 +56,14 @@ node tools/dyoffice/analysis-eval/editor-selection.mjs --model MODEL_ID --trials
 ```
 
 The four synthetic prompts ask for a Word comment, scattered spreadsheet cells, slide style templates and a PDF text search. Each format also sends the same prompt once without tools. The report at `test-results/editor-selection/report.json` records the selected tool names, first-turn selection rate, and the difference between provider-reported input tokens with and without the tool definitions. This sample measures selection and input cost. It does not execute editor operations.
+
+## DSH delegation and recovery
+
+With a disposable PostgreSQL administrator connection in `DYOFFICE_TEST_DATABASE_URL`, build the Word renderer and shell and run the Word sample:
+
+```sh
+npm run build:web:docs && npm run build:web:shell
+node tools/dyoffice/analysis-eval/dsh-recovery.mjs
+```
+
+The browser delegates to an external fixture process, resumes the parent conversation, recovers the delivery from history and inserts it. The test checks the saved document for the report and its hash, then reopens it. The JSON report records the outcome and any failed assertion. Use `--format xlsx|pptx|pdf` with the corresponding native test assets to select another format.
