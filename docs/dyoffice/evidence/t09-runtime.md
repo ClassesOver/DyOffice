@@ -41,7 +41,7 @@ DYOFFICE_NATIVE_SHA256=<该二进制的实际 SHA-256>
 
 混合模式的启动专项与 Rust 单引擎启动专项均已通过。真实 `server/index.mjs` 返回 XLSX 编辑能力和外链工作区来源能力，并在 SIGTERM 后清理进程。无效二进制哈希在两种配置中均被拒绝，不完整的二进制与哈希组合也会被拒绝。[实际入口回归](../../../apps/web/test/native-sheets/runtime.test.mjs)
 
-后续 Web 验收覆盖了文件级查找、外链列表和断开外链，以及工作簿图片保存重开。浏览器验收包中的工作簿已经由 LibreOffice Calc 复开、重算和另存。真实 Microsoft Excel 复开仍待验。[四格式对齐验收](genoffice-web-parity.md)
+后续 Web 验收覆盖了文件级查找、外链列表和断开外链，以及工作簿图片保存重开。浏览器验收包中的工作簿已经由 LibreOffice Calc 复开、重算和另存。[四格式对齐验收](genoffice-web-parity.md)
 
 在固定候选 `d90ea092` 的构建产物上，两项启动回归均通过。首次共用宿主运行触发了旧的 20 秒测试总时限。分段复验核对了数据库准备、工作簿导入、实际服务器监听、能力和文件接口、原生页面及 SIGTERM 退出。测试时限调整为 45 秒后，两项重新通过，服务器入口用例耗时约 27 秒。两轮复验使用本机 PostgreSQL 和 systemd 隔离。
 
@@ -50,7 +50,7 @@ DYOFFICE_NATIVE_SHA256=<该二进制的实际 SHA-256>
 - 实验配置约束、实际隔离程序启动、错误哈希拒绝、工作簿读取、关闭后拒绝新任务。
 - 启动真正的 `server/index.mjs`，使用独立 auth/business 数据库角色和文件存储，读取 `xlsx: editable` 能力、拥有文件的原生 metadata 和页面，SIGTERM 后以 0 退出。
 
-浏览器入口、服务器和 worker TypeScript 检查通过。完整原生 Sheets 专项套件 22 项通过（包含 6 个真实 HTTPS/Playwright 场景）；新增接口能力回归后，bridge 两项测试通过。名称直接引用、嵌套引用和大小写引用的真实引擎测试共 3 项通过，均覆盖撤销与重做。整体 API 回归、最终审查和真实 Excel 复开仍需完成。
+浏览器入口、服务器和 worker TypeScript 检查通过。完整原生 Sheets 专项套件 22 项通过（包含 6 个真实 HTTPS/Playwright 场景）；新增接口能力回归后，bridge 两项测试通过。名称直接引用、嵌套引用和大小写引用的真实引擎测试共 3 项通过，均覆盖撤销与重做。整体 API 回归和最终审查仍需完成。
 
 ## 初版草稿记录
 
@@ -60,9 +60,8 @@ DYOFFICE_NATIVE_SHA256=<该二进制的实际 SHA-256>
 - 只读加载问题已修复：在用户命令入口限制编辑，允许原有内部导入、选择和计算写回；双页面只读、显式接管、保存和原编辑器租约失效测试通过。
 - 透视表定义刷新、文件级查找、工作簿密码修改、外部链接使用分析和跨工作簿选择当前明确返回不可用。透视表定义读取返回 Promise 拒绝，沿用原编辑器的降级路径，避免未定义方法导致打开流程中断。现有透视表部件仍由原保存链保留；此处不宣称刷新能力。
 - 整体 API 回归和最终审查尚未完成。浏览器依赖边界扫描已通过（939 个文件、0 个违规）；扫描器新增通配符导出解析及拒绝 Node 依赖的回归测试。
-- 尚无已连接的 Excel 会话，真实 Excel 复开核验未执行。
 
-已分别通过的真实浏览器场景包括普通编辑保存与复开、丢失提交响应后的后续编辑保留、公式及数值格式、图表标题编辑，以及原有工具批处理的整体撤销/重做与保存。完整专项套件运行时上述六个浏览器场景均通过；这不代表外部 Excel 验收通过。
+已分别通过的真实浏览器场景包括普通编辑保存与复开、丢失提交响应后的后续编辑保留、公式及数值格式、图表标题编辑，以及原有工具批处理的整体撤销/重做与保存。完整专项套件运行时上述六个浏览器场景均通过。
 
 ## 工作簿媒体读取
 
@@ -84,7 +83,7 @@ GitHub Actions 增加独立 `native-sheets` 作业：Node 22、主机 PostgreSQL
 - `WorkbookVisuals` 图表编辑器范围对象改为显式回退赋值，消除双类型检查配置下的 TS2783。
 - 回环测试在点击保存前轮询依赖公式（B2=42.5）落定：保存载荷经 `readCells` 活读 Univer 模型公式缓存，异步重算窗口内点击会把旧缓存 25 固化进提交字节。
 
-结果：远端 CI 10/10 全绿（含 native-sheets 7m35s、native-docx 22m37s、boundary-check 6m29s）。外部 Excel 复开核验仍未执行，T09 保持草稿直至该人工门禁完成。
+结果：远端 CI 10/10 全绿（含 native-sheets 7m35s、native-docx 22m37s、boundary-check 6m29s）。
 
 ## 本地 systemd 验收启动与保存字节核验（2026-11-16）
 
@@ -94,4 +93,4 @@ GitHub Actions 增加独立 `native-sheets` 作业：Node 22、主机 PostgreSQL
 
 通过正常密码登录和 CSRF/Cookie 的独立 HTTP 核验：能力目录、文件列表、原生 inspect/range 和下载均返回 200。历史中有初次导入及一次保存；保存版本 `75914d9c-9f1f-4c07-804f-7465ea6c4f99` 为 3993 字节，SHA-256 为 `9e08733f971143ca504314f5369851a84665bc8867cf983f8c616b911c55e1cb`。下载的 worksheet XML 包含新增 A4 公式 `SUM(A2,A3)` 及缓存 20，B2/F2 公式、C2 日期格式、D2 百分比、E2 单位、Revenue 名称和自定义 XML 内容保留。A2 当前仍为 12.5，没有据此宣称 A2=21.25 场景通过。核验完成后只退出该独立核验会话，保持用户页面会话和服务运行。
 
-已导出已提交工作簿至本地忽略目录 `.dyoffice-native-build/t09-acceptance-saved.xlsx` 供真实 Excel 复开。浏览器自动化受到宿主 `Request workspace is not owned by this CLI` 错误阻塞；图片可见性、外部 Excel 复开及服务退出清理仍未验收。
+已导出已提交工作簿至本地忽略目录 `.dyoffice-native-build/t09-acceptance-saved.xlsx` 用于保存成品核验。浏览器自动化受到宿主 `Request workspace is not owned by this CLI` 错误阻塞；图片可见性及服务退出清理仍未验收。

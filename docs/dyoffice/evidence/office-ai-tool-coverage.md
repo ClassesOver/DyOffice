@@ -4,7 +4,7 @@
 
 范围包括 DOCX 42、XLSX 19、PPTX 20、PDF 49，共 130 个格式与工具组合，另有 9 个数据源与委派共享工具。GenOffice 清单的 159 条定义来自四格式编辑器 119 条、桌面 MCP 25 条和共享代码 15 条。重复定义保留原位置。
 
-候选用例来自工具名检索。读工具验收准确性和授权，写工具验收目标内容和对应原生文件，适用时核对保存重开、未改内容和撤销边界。条件工具按实际配置核对。
+候选用例来自工具名检索。读工具验收准确性和授权，写工具验收目标内容和对应原生文件，适用时下载成品，在 Web 编辑器或原生执行器中重开，并核对未改内容和撤销边界。条件工具按实际配置核对。
 
 首轮定向工具回归共 672 项通过，含 DOCX 71、XLSX 155、PPTX 48、PDF 299、Web 合同与工具 99 项。XLSX 的截断附件提示断言按现有工具文案修正后复跑通过，继续检查读取错误、原件保留和合并用途。[XLSX 截断附件用例](../../../apps/sheets/tests/files-skill.test.ts)
 
@@ -196,7 +196,7 @@ Office 模型收到 `sources_list`、`sources_describe`、`sources_query`、`sou
 
 ## GenOffice 桌面与共享定义
 
-Web 管理端可以连接外部 MCP 服务器并列出工具。GenOffice 桌面 MCP 的 25 个定义仍由桌面进程提供，Web 的同类能力须按各自的浏览器、授权 API 或原生任务验证。桌面入口与 SaaS 外部 MCP 客户端的端到端对齐仍待验收。[管理端 MCP 路由](../../../apps/web/server/src/modules/admin/routes.mjs) [MCP 迁移清单](../inventory/agent-mcp-migration.md)
+Web 管理端可以连接外部 MCP 服务器并列出工具。GenOffice 桌面 MCP 的 25 个定义仍由桌面进程提供，Web 的同类能力须按各自的浏览器、授权 API 或原生任务验证。SaaS 外部 MCP 客户端的发现、调用、保存和重连仍需逐工具验收。[管理端 MCP 路由](../../../apps/web/server/src/modules/admin/routes.mjs) [MCP 迁移清单](../inventory/agent-mcp-migration.md)
 
 | 定义 | 清单中的执行位置 | Web 对照 |
 | --- | --- | --- |
