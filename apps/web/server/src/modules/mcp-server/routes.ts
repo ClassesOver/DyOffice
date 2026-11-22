@@ -12,6 +12,7 @@ import { createOfficeReadTool, officeReadDescriptor } from './office-read.ts'
 import { createLegacyMcp, legacyVersions } from './legacy.ts'
 import type { SlidesSessionHost } from '../slides/service.ts'
 import { createMcpPptxNotes, parsePptxNotes } from './pptx-notes.ts'
+import { createMcpDocxParagraph, parseDocxParagraph } from './docx-paragraph.ts'
 import { createMcpReadGrants } from './read-grants.ts'
 
 export function registerMcpRoutes(app: FastifyInstance, transactions: McpPrincipalTransactions, files: FileService, csrf: ReturnType<typeof createCsrfService>, objects: ObjectStore, filePolicy?: FilePolicy, sheets?: McpSheetsSaveRuntime, slides?: SlidesSessionHost) {
@@ -19,7 +20,7 @@ export function registerMcpRoutes(app: FastifyInstance, transactions: McpPrincip
   const read = createOfficeReadTool(files)
   const saveOptions = { transactions, objects, filePolicy }
   const tools = createMcpTools({
-    read, rotate: createMcpPdfRotation(saveOptions),
+    read, replaceParagraph: createMcpDocxParagraph(saveOptions), rotate: createMcpPdfRotation(saveOptions),
     setCells: sheets && createMcpXlsxCells({ ...saveOptions, ...sheets }),
     setNotes: slides && createMcpPptxNotes(saveOptions, slides), inspect: grants.inspect,
   })
@@ -54,6 +55,12 @@ export function registerMcpRoutes(app: FastifyInstance, transactions: McpPrincip
     const session = sessionFor(request)
     const { fileId, revision, slide, text } = parsePptxNotes(request.body)
     return reply.code(201).send(await grants.issue(session, { fileId, revision }, { kind: 'pptx.notes', slide, text }))
+  })
+  app.post('/api/v1/mcp/docx-paragraph-grants', { bodyLimit: 12 * 1024 }, async (request, reply) => {
+    reply.header('Cache-Control', 'private, no-store')
+    const session = sessionFor(request)
+    const { fileId, revision, ...edit } = parseDocxParagraph(request.body)
+    return reply.code(201).send(await grants.issue(session, { fileId, revision }, { kind: 'docx.paragraph', ...edit }))
   })
   app.delete<{ Params: { id: string } }>('/api/v1/mcp/read-grants/:id', async (request, reply) => {
     reply.header('Cache-Control', 'private, no-store')

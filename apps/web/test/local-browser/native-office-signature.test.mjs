@@ -66,7 +66,9 @@ test('native Office editors render signed packages read only and download exact 
     if(format==='pptx')await expect(page.locator('.thumb.active')).toHaveCount(1)
     await page.getByRole('button',{name:'File',exact:true}).click()
     await expect(page.locator('.file-menu').getByRole('button',{name:'Save and download',exact:true})).toBeDisabled()
-    const [download]=await Promise.all([page.waitForEvent('download'),page.getByRole('link',{name:'Download saved version',exact:true}).click()])
+    const original=page.getByRole('link',{name:'Download saved version',exact:true})
+    await expect(original,format+' download uses interactive admission').toHaveAttribute('href',`/api/v1/files/${file.fileId}/content?revision=${file.revision}&download=1`)
+    const [download]=await Promise.all([page.waitForEvent('download'),original.click()])
     const failure=await download.failure()
     if(failure){
       const direct=await page.request.get(download.url())

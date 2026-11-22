@@ -2,7 +2,7 @@
 
 基准提交 29415fca。以 Web 允许名单的格式和工具名为单位，同名工具在各格式分别核对。共享工具按实际入口和权限验证。[Web 工具合同](../../../packages/web-contracts/src/assistant.ts) [GenOffice 静态清单](../inventory/agent-tools.md)
 
-范围包括 DOCX 42、XLSX 19、PPTX 20、PDF 49，共 130 个格式与工具组合，另有 9 个数据源与委派共享工具。GenOffice 清单的 159 条定义来自四格式编辑器 119 条、桌面 MCP 25 条和共享代码 15 条。重复定义保留原位置。
+范围包括 DOCX 42、XLSX 19、PPTX 20、PDF 48，共 129 个格式与工具组合，另有 9 个数据源与委派共享工具。GenOffice 清单的 159 条定义来自四格式编辑器 119 条、桌面 MCP 25 条和共享代码 15 条。重复定义保留原位置。
 
 候选用例来自工具名检索。读工具验收准确性和授权，写工具验收目标内容和对应原生文件，适用时下载成品，在 Web 编辑器或原生执行器中重开，并核对未改内容和撤销边界。条件工具按实际配置核对。
 
@@ -10,21 +10,37 @@
 
 各测试批次合并去重后，浏览器观察到 129 个组合注册，129 个已注册组合和 9 个共享工具均向模型返回过成功结果。采集仅保留格式、工具名和错误标记。下表中的工具行保留具体效果、成品和待验项，四格式真实模型用例见主报告。[注册用例](../../../apps/web/test/local-browser/office-tool-inventory.test.mjs) [四格式验收](genoffice-web-parity.md)
 
-Web 门禁在 Chromium 用例完成后，按当前工具合同核对当次运行的注册和成功执行。缺项会按格式和工具名列出并使门禁失败。PDF 旋转兼容映射的成品断言核对保存后的页面角度。正文、数值、对象、保存与重开的效果由对应的浏览器用例断言。[覆盖检查](../../../apps/web/test/helpers/office-tool-coverage.mjs) [PDF 原生效果用例](../../../apps/web/test/local-browser/native-pdf-open.test.mjs)
+Web 门禁在 Chromium 用例完成后，按当前工具合同核对当次运行的注册和成功执行。缺项会按格式和工具名列出并使门禁失败。各项效果由对应的浏览器用例断言。 CI 保留 `office-ai-tool-coverage` 工件，其中包含该次 Chromium 轨迹与门禁报告。轨迹只含工具名称、注册与执行状态及核验过的效果名称。[覆盖检查](../../../apps/web/test/helpers/office-tool-coverage.mjs) [PDF 原生效果用例](../../../apps/web/test/local-browser/native-pdf-open.test.mjs)
+
+GitHub 对 `731e5a8d` 的 Chromium 跑批上传了当次轨迹。用 `164e8804` 的门禁脚本读取下载的轨迹，确认 129 个格式工具组合和 9 个共享工具全部注册并执行，85 项保存产物效果及 56 项结果效果全部通过。[GitHub 验收工件](https://github.com/ClassesOver/DyOffice/actions/runs/45054853815/artifacts/14767877707)
+
+成品门禁要求 85 项效果证据，另加 56 项工具返回内容、导航、模板与委派效果。DOCX、XLSX 和 PPTX 分别核对冻结表格的准确数值及 Web 重开，PDF 核对 41 项原生保存效果，涉及 38 个工具。PDF 用例从提交修订的字节核对正文、插入文字的最终坐标、删除、批注回复关系、空白页、表单值、标题、旋转和分页水印，重开后继续清除水印并确认页脚仍在。[PDF 原生工具成品用例](../../../apps/web/test/local-browser/native-pdf-open.test.mjs)
+
+PDF 图片用例使用工具返回的搜索链接和生成媒体引用插入图片，核对保存包中的像素、位置、删除、旋转、裁剪、透明度与背景去除，并在 Web 重开后复采样。表单用例核对重排后的两页实际顺序、两个复选框状态及旧版本字节。[图片保存与重开](../../../apps/web/test/local-browser/pdf-media.test.mjs) [页面重排与表单](../../../apps/web/test/local-browser/native-pdf-open.test.mjs)
+
+PDF 页面工具核对提取与分卷的页序、切分结果的六页宽度、拼版保留的三页正文、裁切框、改纸张尺寸和替换页正文。中断后的副本确认核对两份成品和原修订。新建工具另生成 PDF 与 DOCX，通过各自的保存回执读取独立正文。[页面副本与替换](../../../apps/web/test/local-browser/native-pdf-page-copies.test.mjs) [新建 PDF 与 DOCX](../../../apps/web/test/local-browser/native-pdf-create-document.test.mjs)
+
+PDF 另外核对 10 项工具返回内容及导航效果。浏览器按工具调用 ID 检查正文、敏感信息匹配、页码、待保存文字、便笺与高亮、表单现值和书签。附件正文进入另建成品，图片清单返回可用于编辑的编号与坐标，跳页工具实际选中第二页。保存与结果两组证据合计覆盖 Web 合同中的 48 个 PDF 工具。[PDF 工具效果用例](../../../apps/web/test/local-browser/native-pdf-open.test.mjs) [附件成品用例](../../../apps/web/test/local-browser/native-pdf-create-document.test.mjs)
 
 | 格式 | Web 合同 | 浏览器注册 | 定向浏览器成功 |
 | --- | ---: | ---: | ---: |
 | DOCX | 42 | 42 | 42 |
 | XLSX | 19 | 19 | 19 |
 | PPTX | 20 | 20 | 20 |
-| PDF | 49 | 48 | 48 |
-| 合计 | 130 | 129 | 129 |
+| PDF | 48 | 48 | 48 |
+| 合计 | 129 | 129 | 129 |
 
-PDF 原生旋转使用 `apply_ops.rotatePages`，合同仍保留兼容名称 `rotate_pages`。已验证的成品包括保存重开的冻结数据表、Word 脚注和尾注、Excel 合并附件、PowerPoint 单页重做及图片替换、PDF 批注和分页副本。[数据写回](../../../apps/web/test/local-browser/office-source-analysis.test.mjs) [Word 脚注和尾注](../../../apps/web/test/local-browser/word-knowledge.test.mjs) [Excel 合并附件](../../../apps/web/test/local-browser/sheets-attachment-merge.test.mjs) [PPTX 生成](../../../apps/web/test/local-browser/native-slides-generate.test.mjs) [PDF 工具](../../../apps/web/test/local-browser/native-pdf-open.test.mjs)
+PDF 原生旋转使用 `apply_ops.rotatePages`。旧预览工具名已从 Web 合同移除，覆盖门禁要求当次浏览器实测保存后重开验证页角度。已验证的成品包括保存重开的冻结数据表、Word 脚注和尾注、Excel 合并附件、PowerPoint 单页重做及图片替换、PDF 批注和分页副本。[数据写回](../../../apps/web/test/local-browser/office-source-analysis.test.mjs) [Word 脚注和尾注](../../../apps/web/test/local-browser/word-knowledge.test.mjs) [Excel 合并附件](../../../apps/web/test/local-browser/sheets-attachment-merge.test.mjs) [PPTX 生成](../../../apps/web/test/local-browser/native-slides-generate.test.mjs) [PDF 工具](../../../apps/web/test/local-browser/native-pdf-open.test.mjs)
 
 Excel 已覆盖 19 个实际注册工具。稀疏工作簿的全量预加载曾让已装入网格的点读区域误报未加载。修复后同时确认定向请求是否完成和当前工作簿是否仍有效。Node 与宿主 Rust 进程均验证工作表保护、有效 AutoFilter 范围 A1:C2，以及值筛选和双条件比较。自定义工作表视图中的旧范围不覆盖当前筛选。两条路径均读取小写 A1 引用，并跳过带有未知操作符的整组比较条件。[Excel 定向读取](../../../apps/web/test/local-browser/sheets-find-cells.test.mjs) [Node 执行器](../../../apps/web/server/sheets/xlsx-node-engine.ts)
 
+XLSX 结果门禁要求 13 项读取、查找与定位效果。实际工作簿用例核对上下文中的工作表名和 ID、A1:A2 的 7 和 11、公式依赖、百分比格式、AutoFilter 范围、超出已加载范围的命中地址，并验证定位后 Audit 工作表被选中且文件修订未改变。[XLSX 工具结果](../../../apps/web/test/local-browser/sheets-find-cells.test.mjs)
+
+XLSX 的其他结果核对实际上传的附件正文，以及 Web 检索返回的供应商标题、网址和摘要。成品门禁另核对 XLSX、DOCX、PDF 和 CSV 的创建结果，复开 B2、D4、F6 的生成图、搜索图和附件图，读取混合附件合并后的全部 40 行和最后一行 CSV，并核对普通批操作保存的公式 `B2=SUM(A2:A3)` 及缓存 42。成品和结果证据覆盖 Web 合同中的 19 个 XLSX 工具。[创建、搜索与图片用例](../../../apps/web/test/local-browser/office-tool-inventory.test.mjs) [附件合并](../../../apps/web/test/local-browser/sheets-attachment-merge.test.mjs) [公式写入与重开](../../../apps/web/test/local-browser/dsh-office-handoff.test.mjs)
+
 ## DOCX
+
+DOCX 的 42 个 Web AI 工具均有门禁断言。29 项成品效果核对正文、粗体选区替换、页眉水印、A5 横向页、样式、原生图表、批注、修订、脚尾注、图片和可独立打开的新文件。13 项结果效果核对文档和附件正文、已解析的批注与修订、来源修订链接、媒体分析、搜索及交互思维导图。[正文、样式和引用](../../../apps/web/test/local-browser/word-knowledge.test.mjs) [图片和附件](../../../apps/web/test/native-docs/image-media.test.mjs) [流式写作保存](../../../apps/web/test/native-docs/writer-draft-save.test.mjs)
 
 | 工具 | 浏览器注册 | 候选用例 | 执行或效果证据 |
 | --- | --- | --- | --- |
@@ -78,9 +94,9 @@ Excel 已覆盖 19 个实际注册工具。稀疏工作簿的全量预加载曾�
 | `aggregate_range` | 观察到 | [formula-cost.test.ts](../../../apps/sheets/tests/formula-cost.test.ts)、[plan-operations-formula-guard.test.ts](../../../apps/sheets/tests/plan-operations-formula-guard.test.ts) | 浏览器从表格的 A1:A2 读取两个数值并核对合计 18。[浏览器用例](../../../apps/web/test/local-browser/sheets-find-cells.test.mjs) |
 | `create_document` | 观察到 | [native-pdf-create-document.test.mjs](../../../apps/web/test/local-browser/native-pdf-create-document.test.mjs)、[ai-create-document.test.ts](../../../apps/sheets/tests/ai-create-document.test.ts) | 浏览器从 Excel 实际生成 XLSX、DOCX、PDF 成品，原生读取核对收入表头、数值和正文。独立 CSV 下载保留预期表头，源工作簿未生成新版本。[浏览器用例](../../../apps/web/test/local-browser/office-tool-inventory.test.mjs) |
 | `find_cells` | 观察到 | [sheets-find-cells.test.mjs](../../../apps/web/test/local-browser/sheets-find-cells.test.mjs)、[redact-actions.test.ts](../../../apps/sheets/tests/redact-actions.test.ts) | 查找到未渲染的 AZ25001，按正则找到 AA1001，按公式错误找到 AB1002，原件保持原字节。[浏览器用例](../../../apps/web/test/local-browser/sheets-find-cells.test.mjs) |
-| `generate_image` | 观察到 | [pdf-media.test.mjs](../../../apps/web/test/local-browser/pdf-media.test.mjs)、[image-skill.test.ts](../../../apps/sheets/tests/image-skill.test.ts) | 浏览器实际调用成功，搜索与图像生成后的 WebP 进入原生工作簿。[实测用例](../../../apps/web/test/local-browser/office-tool-inventory.test.mjs) |
-| `get_workbook_context` | 观察到 | [dsh-office-handoff.test.mjs](../../../apps/web/test/local-browser/dsh-office-handoff.test.mjs)、[native-sheets-harness.test.mjs](../../../apps/web/test/local-browser/native-sheets-harness.test.mjs) | 浏览器实际调用成功，交接工具读到目标工作表标识。[实测用例](../../../apps/web/test/local-browser/dsh-office-handoff.test.mjs) |
-| `image_search` | 观察到 | [pdf-media.test.mjs](../../../apps/web/test/local-browser/pdf-media.test.mjs)、[image-skill.test.ts](../../../apps/sheets/tests/image-skill.test.ts) | 浏览器实际调用成功，可搜索到原始图像并进入图片写入流程。[实测用例](../../../apps/web/test/local-browser/office-tool-inventory.test.mjs) |
+| `generate_image` | 观察到 | [pdf-media.test.mjs](../../../apps/web/test/local-browser/pdf-media.test.mjs)、[image-skill.test.ts](../../../apps/sheets/tests/image-skill.test.ts) | 生成的 WebP 通过工具返回的媒体引用写入 B2，保存及重开后核对红色像素。[实测用例](../../../apps/web/test/local-browser/office-tool-inventory.test.mjs) |
+| `get_workbook_context` | 观察到 | [dsh-office-handoff.test.mjs](../../../apps/web/test/local-browser/dsh-office-handoff.test.mjs)、[native-sheets-harness.test.mjs](../../../apps/web/test/local-browser/native-sheets-harness.test.mjs) | 读取当前活动表及工作簿清单，核对 Acceptance 与 Audit 的工作表名和 Audit 的实际 ID。[实测用例](../../../apps/web/test/local-browser/dsh-office-handoff.test.mjs) |
+| `image_search` | 观察到 | [pdf-media.test.mjs](../../../apps/web/test/local-browser/pdf-media.test.mjs)、[image-skill.test.ts](../../../apps/sheets/tests/image-skill.test.ts) | 浏览器从检索结果取得图片地址，写入 D4，保存及重开后核对蓝色像素。[实测用例](../../../apps/web/test/local-browser/office-tool-inventory.test.mjs) |
 | `insert_data_result` | 观察到 | [office-source-analysis.test.mjs](../../../apps/web/test/local-browser/office-source-analysis.test.mjs)、[office-tool-inventory.test.mjs](../../../apps/web/test/local-browser/office-tool-inventory.test.mjs) | 冻结结果从 J10 选区插入。原生引擎读取保存成品及浏览器重开均核对 K11、K12 为数值 30、40。[浏览器用例](../../../apps/web/test/local-browser/office-source-analysis.test.mjs) |
 | `load_guide` | 观察到 | [workbook-skill-tools.test.ts](../../../apps/sheets/tests/workbook-skill-tools.test.ts) | 返回写入指南，包含 `set_range` 的字段说明。[浏览器用例](../../../apps/web/test/local-browser/sheets-find-cells.test.mjs) |
 | `merge_attached_workbooks` | 观察到 | [sheets-attachment-merge.test.mjs](../../../apps/web/test/local-browser/sheets-attachment-merge.test.mjs)、[merge-skill.test.ts](../../../apps/sheets/tests/merge-skill.test.ts) | 浏览器合并 BIFF XLS、预览截断的 XLSX 和 CSV。原生读取核对工作表、数值和截断文件的最后一行，重开后新表存在，旧版本保持原字节。[浏览器用例](../../../apps/web/test/local-browser/sheets-attachment-merge.test.mjs) |
@@ -88,14 +104,16 @@ Excel 已覆盖 19 个实际注册工具。稀疏工作簿的全量预加载曾�
 | `read_attachment` | 观察到 | [native-pdf-create-document.test.mjs](../../../apps/web/test/local-browser/native-pdf-create-document.test.mjs)、[files-skill.test.ts](../../../apps/sheets/tests/files-skill.test.ts) | 读取实际上传的文本附件并核对正文。截断附件另由单测验证报错与保留原件合并入口。[浏览器用例](../../../apps/web/test/local-browser/office-tool-inventory.test.mjs) |
 | `read_cells` | 观察到 | [workbook-skill-tools.test.ts](../../../apps/sheets/tests/workbook-skill-tools.test.ts)、[loop.test.ts](../../../packages/agent-core/tests/loop.test.ts) | 全量预加载期间点读 A1 和 C1，返回 7 与公式 `=A1+A2`。[浏览器用例](../../../apps/web/test/local-browser/sheets-find-cells.test.mjs) |
 | `read_formats` | 观察到 | [workbook-skill-tools.test.ts](../../../apps/sheets/tests/workbook-skill-tools.test.ts) | 读取单独设置的 B1 百分比格式。[浏览器用例](../../../apps/web/test/local-browser/sheets-find-cells.test.mjs) |
-| `read_range` | 观察到 | [dsh-office-handoff.test.mjs](../../../apps/web/test/local-browser/dsh-office-handoff.test.mjs)、[office-dock-unified.test.mjs](../../../apps/web/test/local-browser/office-dock-unified.test.mjs) | 浏览器实际调用成功，交接工具读取指定单元格。[实测用例](../../../apps/web/test/local-browser/dsh-office-handoff.test.mjs) |
-| `read_sheet_features` | 观察到 | [redact-features.test.ts](../../../apps/sheets/tests/redact-features.test.ts)、[workbook-skill-tools.test.ts](../../../apps/sheets/tests/workbook-skill-tools.test.ts) | 报告受保护的工作表。Rust 路径核对原生 AutoFilter 范围 A1:C2，Node 路径当前省略该字段。[浏览器用例](../../../apps/web/test/local-browser/sheets-find-cells.test.mjs) |
+| `read_range` | 观察到 | [dsh-office-handoff.test.mjs](../../../apps/web/test/local-browser/dsh-office-handoff.test.mjs)、[office-dock-unified.test.mjs](../../../apps/web/test/local-browser/office-dock-unified.test.mjs) | 读取 Audit!A1:A2，核对请求范围及第 1、2 行的 7 和 11。[实测用例](../../../apps/web/test/local-browser/dsh-office-handoff.test.mjs) |
+| `read_sheet_features` | 观察到 | [redact-features.test.ts](../../../apps/sheets/tests/redact-features.test.ts)、[workbook-skill-tools.test.ts](../../../apps/sheets/tests/workbook-skill-tools.test.ts) | 报告受保护的工作表，在 Node 与宿主 Rust 路径核对 AutoFilter 范围 A1:C2。[浏览器用例](../../../apps/web/test/local-browser/sheets-find-cells.test.mjs) |
 | `select_range` | 观察到 | [response-verify.test.ts](../../../apps/sheets/tests/response-verify.test.ts)、[sheet-nav.test.ts](../../../apps/sheets/tests/sheet-nav.test.ts) | 定位 Audit 工作表 A1:C2，界面选中 Audit，工作簿原版本保持原字节。[浏览器用例](../../../apps/web/test/local-browser/sheets-find-cells.test.mjs) |
 | `trace_dependents` | 观察到 | [trace-redaction.test.ts](../../../apps/sheets/tests/trace-redaction.test.ts)、[workbook-skill-tools.test.ts](../../../apps/sheets/tests/workbook-skill-tools.test.ts) | 从 A1 找到依赖公式 Audit!C1，核对值 18。[浏览器用例](../../../apps/web/test/local-browser/sheets-find-cells.test.mjs) |
 | `trace_precedents` | 观察到 | [trace-redaction.test.ts](../../../apps/sheets/tests/trace-redaction.test.ts)、[workbook-skill-tools.test.ts](../../../apps/sheets/tests/workbook-skill-tools.test.ts) | 读取 C1 的公式值 18，并核对 A1=7、A2=11 两个前置值。[浏览器用例](../../../apps/web/test/local-browser/sheets-find-cells.test.mjs) |
 | `web_search` | 观察到 | [t12-workspace-settings.test.mjs](../../../apps/web/test/local-browser/t12-workspace-settings.test.mjs)、[global-config-readiness.test.mjs](../../../apps/web/test/local-integration/global-config-readiness.test.mjs) | 测试搜索服务返回供应商目录标题和链接，浏览器核对请求参数及工具输出。[浏览器用例](../../../apps/web/test/local-browser/office-tool-inventory.test.mjs) |
 
 ## PPTX
+
+PPTX 的 20 个 Web AI 工具均有门禁断言。9 项成品效果覆盖原生文字和备注、图表、生成与重做、图片关系及冻结表格。11 项结果效果核对读取和检索输出、媒体引用、问卷选择、规划标题、操作指南和账号保存的样式模板。模板保存后直接读取数据库记录，重开并追加新页时核对其背景色及已有页面 XML。[生成、重做与模板](../../../apps/web/test/local-browser/native-slides-generate.test.mjs) [图表、文本和媒体](../../../apps/web/test/local-browser/office-tool-inventory.test.mjs) [附件图片插入与替换](../../../apps/web/test/local-browser/native-slides-attachment.test.mjs)
 
 | 工具 | 浏览器注册 | 候选用例 | 执行或效果证据 |
 | --- | --- | --- | --- |
@@ -125,37 +143,37 @@ Excel 已覆盖 19 个实际注册工具。稀疏工作簿的全量预加载曾�
 | 工具 | 浏览器注册 | 候选用例 | 执行或效果证据 |
 | --- | --- | --- | --- |
 | `add_form_mark` | 观察到 | [native-pdf-open.test.mjs](../../../apps/web/test/local-browser/native-pdf-open.test.mjs)、[ai-tools.test.ts](../../../apps/pdf/tests/ai-tools.test.ts) | 页面重排后按可见页定位。保存成品中只有对应原件的第二个复选框勾选，旧版本保持原字节。[浏览器用例](../../../apps/web/test/local-browser/native-pdf-open.test.mjs) |
-| `add_note` | 观察到 | [dsh-office-handoff.test.mjs](../../../apps/web/test/local-browser/dsh-office-handoff.test.mjs)、[native-pdf-open.test.mjs](../../../apps/web/test/local-browser/native-pdf-open.test.mjs) | 浏览器实际调用成功，追问新增便笺并写入成品。[实测用例](../../../apps/web/test/local-browser/dsh-office-handoff.test.mjs) |
+| `add_note` | 观察到 | [dsh-office-handoff.test.mjs](../../../apps/web/test/local-browser/dsh-office-handoff.test.mjs)、[native-pdf-open.test.mjs](../../../apps/web/test/local-browser/native-pdf-open.test.mjs) | 确认保存成品保留新便笺、原便笺及其回复，临时便笺已删除。[实测用例](../../../apps/web/test/local-browser/dsh-office-handoff.test.mjs) |
 | `apply_ops` | 观察到 | [dsh-office-handoff.test.mjs](../../../apps/web/test/local-browser/dsh-office-handoff.test.mjs)、[native-pdf-open.test.mjs](../../../apps/web/test/local-browser/native-pdf-open.test.mjs) | 原生浏览器检查试运行、拒绝非法批次和执行合法批次，再核对旋转、表单值和文档属性。[浏览器用例](../../../apps/web/test/local-browser/native-pdf-open.test.mjs) |
 | `confirm_pdf_copies` | 观察到 | [native-pdf-page-copies.test.mjs](../../../apps/web/test/local-browser/native-pdf-page-copies.test.mjs)、[office-tool-inventory.test.mjs](../../../apps/web/test/local-browser/office-tool-inventory.test.mjs) | 中断批次确认后恢复保存，输出可重开且源文件保持原字节，[浏览器用例](../../../apps/web/test/local-browser/native-pdf-page-copies.test.mjs) |
 | `create_document` | 观察到 | [native-pdf-create-document.test.mjs](../../../apps/web/test/local-browser/native-pdf-create-document.test.mjs)、[ai-tools.test.ts](../../../apps/pdf/tests/ai-tools.test.ts) | 单独保存 PDF 和 DOCX，读取两份成品内容并核对源文件，[浏览器用例](../../../apps/web/test/local-browser/native-pdf-create-document.test.mjs) |
 | `crop_image` | 观察到 | [pdf-affine-image-drafts.test.mjs](../../../apps/web/test/local-browser/pdf-affine-image-drafts.test.mjs)、[pdf-media.test.mjs](../../../apps/web/test/local-browser/pdf-media.test.mjs) | 裁剪左侧一半，保存后按像素核对裁剪结果。[浏览器用例](../../../apps/web/test/local-browser/pdf-media.test.mjs) |
 | `crop_pages` | 观察到 | [native-pdf-page-copies.test.mjs](../../../apps/web/test/local-browser/native-pdf-page-copies.test.mjs)、[ai-tools.test.ts](../../../apps/pdf/tests/ai-tools.test.ts) | 取消时保留原版本，确认后核验成品指定页裁切框，[浏览器用例](../../../apps/web/test/local-browser/native-pdf-page-copies.test.mjs) |
 | `delete_image` | 观察到 | [pdf-media.test.mjs](../../../apps/web/test/local-browser/pdf-media.test.mjs)、[ai-tools.test.ts](../../../apps/pdf/tests/ai-tools.test.ts) | 删除指定图，保存后的图片目录少了目标位置的图像。[浏览器用例](../../../apps/web/test/local-browser/pdf-media.test.mjs) |
-| `delete_inserted_text` | 观察到 | [native-pdf-open.test.mjs](../../../apps/web/test/local-browser/native-pdf-open.test.mjs)、[ai-tools.test.ts](../../../apps/pdf/tests/ai-tools.test.ts) | 删除后续插入的临时文字，原生工具返回删除确认。[浏览器用例](../../../apps/web/test/local-browser/native-pdf-open.test.mjs) |
+| `delete_inserted_text` | 观察到 | [native-pdf-open.test.mjs](../../../apps/web/test/local-browser/native-pdf-open.test.mjs)、[ai-tools.test.ts](../../../apps/pdf/tests/ai-tools.test.ts) | 删除后续插入的临时文字，独立提取和原生文字目录均确认成品无该草稿。[浏览器用例](../../../apps/web/test/local-browser/native-pdf-open.test.mjs) |
 | `delete_markup` | 观察到 | [native-pdf-open.test.mjs](../../../apps/web/test/local-browser/native-pdf-open.test.mjs)、[ai-tools.test.ts](../../../apps/pdf/tests/ai-tools.test.ts) | 删除下划线批注，成品下划线数为 0，高亮保留。[浏览器用例](../../../apps/web/test/local-browser/native-pdf-open.test.mjs) |
-| `delete_note` | 观察到 | [native-pdf-open.test.mjs](../../../apps/web/test/local-browser/native-pdf-open.test.mjs)、[ai-tools.test.ts](../../../apps/pdf/tests/ai-tools.test.ts) | 工具删除指定批注线程并返回回复数量，无效 ID 被拒绝，[单测](../../../apps/pdf/tests/ai-tools.test.ts) |
+| `delete_note` | 观察到 | [native-pdf-open.test.mjs](../../../apps/web/test/local-browser/native-pdf-open.test.mjs)、[ai-tools.test.ts](../../../apps/pdf/tests/ai-tools.test.ts) | 删除临时便笺后，保存成品只保留原便笺及其回复。[浏览器用例](../../../apps/web/test/local-browser/native-pdf-open.test.mjs) |
 | `edit_block` | 观察到 | [native-pdf-open.test.mjs](../../../apps/web/test/local-browser/native-pdf-open.test.mjs)、[ai-tools.test.ts](../../../apps/pdf/tests/ai-tools.test.ts) | 将第一段改写为右对齐的两行，独立 PDF 提取核对两行正文。[浏览器用例](../../../apps/web/test/local-browser/native-pdf-open.test.mjs) |
-| `edit_inserted_text` | 观察到 | [native-pdf-open.test.mjs](../../../apps/web/test/local-browser/native-pdf-open.test.mjs)、[ai-tools.test.ts](../../../apps/pdf/tests/ai-tools.test.ts) | 按工具返回的草稿 ID 更新插入文字。[浏览器用例](../../../apps/web/test/local-browser/native-pdf-open.test.mjs) |
-| `edit_note` | 观察到 | [native-pdf-harness.test.mjs](../../../apps/web/test/local-browser/native-pdf-harness.test.mjs)、[native-pdf-open.test.mjs](../../../apps/web/test/local-browser/native-pdf-open.test.mjs) | 工具更新指定批注或回复文本，并拒绝空文本和不存在的 ID，[单测](../../../apps/pdf/tests/ai-tools.test.ts) |
+| `edit_inserted_text` | 观察到 | [native-pdf-open.test.mjs](../../../apps/web/test/local-browser/native-pdf-open.test.mjs)、[ai-tools.test.ts](../../../apps/pdf/tests/ai-tools.test.ts) | 按工具返回的草稿 ID 更新插入文字，独立提取成品含 Final insert，旧草稿文字已移除。[浏览器用例](../../../apps/web/test/local-browser/native-pdf-open.test.mjs) |
+| `edit_note` | 观察到 | [native-pdf-harness.test.mjs](../../../apps/web/test/local-browser/native-pdf-harness.test.mjs)、[native-pdf-open.test.mjs](../../../apps/web/test/local-browser/native-pdf-open.test.mjs) | 成品的原便笺保留作者，内容更新为 Revised browser note。[浏览器用例](../../../apps/web/test/local-browser/native-pdf-open.test.mjs) |
 | `edit_text` | 观察到 | [dsh-office-handoff.test.mjs](../../../apps/web/test/local-browser/dsh-office-handoff.test.mjs)、[native-pdf-harness.test.mjs](../../../apps/web/test/local-browser/native-pdf-harness.test.mjs) | 真实模型成品复跑通过，[浏览器用例](../../../apps/web/test/local-browser/native-pdf-harness.test.mjs)。。浏览器实际调用成功，追问将原文改写并保存。[实测用例](../../../apps/web/test/local-browser/dsh-office-handoff.test.mjs) |
 | `extract_pages` | 观察到 | [native-pdf-page-copies.test.mjs](../../../apps/web/test/local-browser/native-pdf-page-copies.test.mjs)、[ai-tools.test.ts](../../../apps/pdf/tests/ai-tools.test.ts) | 独立读取输出 PDF 并验证页数或页面尺寸，浏览器重开成功，[浏览器用例](../../../apps/web/test/local-browser/native-pdf-page-copies.test.mjs) |
 | `find_sensitive_info` | 观察到 | [native-pdf-open.test.mjs](../../../apps/web/test/local-browser/native-pdf-open.test.mjs)、[pdf-redactions.test.mjs](../../../apps/web/test/local-browser/pdf-redactions.test.mjs) | 在第 2 页返回指定的合成电子邮件地址。[浏览器用例](../../../apps/web/test/local-browser/native-pdf-open.test.mjs) |
 | `flip_image` | 观察到 | [native-pdf-open.test.mjs](../../../apps/web/test/local-browser/native-pdf-open.test.mjs)、[pdf-affine-image-drafts.test.mjs](../../../apps/web/test/local-browser/pdf-affine-image-drafts.test.mjs) | 水平翻转后，成品像素验证左右颜色互换。[浏览器用例](../../../apps/web/test/local-browser/pdf-media.test.mjs) |
-| `generate_image` | 观察到 | [pdf-media.test.mjs](../../../apps/web/test/local-browser/pdf-media.test.mjs)、[ai-tools.test.ts](../../../apps/pdf/tests/ai-tools.test.ts) | 浏览器验证了 PNG、GIF、WebP、动态 GIF 和动态 WebP 生成后可保存为原生 PDF 图片草稿。[浏览器用例](../../../apps/web/test/local-browser/pdf-media.test.mjs) |
+| `generate_image` | 观察到 | [pdf-media.test.mjs](../../../apps/web/test/local-browser/pdf-media.test.mjs)、[ai-tools.test.ts](../../../apps/pdf/tests/ai-tools.test.ts) | 浏览器将 PNG、GIF、WebP、动态 GIF 和动态 WebP 的生成结果保存为原生 PDF 图片，逐像素核对其内容。[浏览器用例](../../../apps/web/test/local-browser/pdf-media.test.mjs) |
 | `get_outline` | 观察到 | [native-pdf-open.test.mjs](../../../apps/web/test/local-browser/native-pdf-open.test.mjs)、[ai-tools.test.ts](../../../apps/pdf/tests/ai-tools.test.ts) | 返回本次添加的 Review bookmark。[浏览器用例](../../../apps/web/test/local-browser/native-pdf-open.test.mjs) |
 | `goto_page` | 观察到 | [ai-tools.test.ts](../../../apps/pdf/tests/ai-tools.test.ts)、[document-handoff.test.mjs](../../../apps/web/test/unit/document-handoff.test.mjs) | 实际切换到第 2 页并核对该页缩略图为当前页。[浏览器用例](../../../apps/web/test/local-browser/native-pdf-open.test.mjs) |
-| `image_search` | 观察到 | [pdf-media.test.mjs](../../../apps/web/test/local-browser/pdf-media.test.mjs)、[ai-tools.test.ts](../../../apps/pdf/tests/ai-tools.test.ts) | 浏览器验证了 PNG、GIF、WebP 等图片的检索结果，并实际插入、保存图像。[浏览器用例](../../../apps/web/test/local-browser/pdf-media.test.mjs) |
-| `insert_blank_page` | 观察到 | [native-pdf-open.test.mjs](../../../apps/web/test/local-browser/native-pdf-open.test.mjs)、[native-pdf-page-copies.test.mjs](../../../apps/web/test/local-browser/native-pdf-page-copies.test.mjs) | 收到新增空白页的草稿回执，分页副本命令检查待保存修改，[浏览器用例](../../../apps/web/test/local-browser/native-pdf-page-copies.test.mjs) |
+| `image_search` | 观察到 | [pdf-media.test.mjs](../../../apps/web/test/local-browser/pdf-media.test.mjs)、[ai-tools.test.ts](../../../apps/pdf/tests/ai-tools.test.ts) | 浏览器核对检索结果的标题与 GIF、WebP 链接，使用这两个链接插入图片并验证保存成品像素。[浏览器用例](../../../apps/web/test/local-browser/pdf-media.test.mjs) |
+| `insert_blank_page` | 观察到 | [native-pdf-open.test.mjs](../../../apps/web/test/local-browser/native-pdf-open.test.mjs)、[native-pdf-page-copies.test.mjs](../../../apps/web/test/local-browser/native-pdf-page-copies.test.mjs) | 在第二页后插入空白页，保存、重开均有三页，新增页只包含本轮设置的页码和水印。[浏览器用例](../../../apps/web/test/local-browser/native-pdf-open.test.mjs) |
 | `insert_image` | 观察到 | [pdf-media.test.mjs](../../../apps/web/test/local-browser/pdf-media.test.mjs)、[ai-tools.test.ts](../../../apps/pdf/tests/ai-tools.test.ts) | 原生插入生成图和链接图，保存后核对三个目标图的像素。[浏览器用例](../../../apps/web/test/local-browser/pdf-media.test.mjs) |
 | `insert_text` | 观察到 | [dsh-office-handoff.test.mjs](../../../apps/web/test/local-browser/dsh-office-handoff.test.mjs)、[native-pdf-create-document.test.mjs](../../../apps/web/test/local-browser/native-pdf-create-document.test.mjs) | 浏览器实际调用成功，交接首次插入文字后保存。[实测用例](../../../apps/web/test/local-browser/dsh-office-handoff.test.mjs) |
 | `list_form_fields` | 观察到 | [native-pdf-open.test.mjs](../../../apps/web/test/local-browser/native-pdf-open.test.mjs)、[ai-tools.test.ts](../../../apps/pdf/tests/ai-tools.test.ts) | 工具返回当前表单字段，同时覆盖能力不可用的响应，[单测](../../../apps/pdf/tests/ai-tools.test.ts) |
 | `list_inserted_text` | 观察到 | [native-pdf-open.test.mjs](../../../apps/web/test/local-browser/native-pdf-open.test.mjs)、[ai-tools.test.ts](../../../apps/pdf/tests/ai-tools.test.ts) | 列出第二页待保存文字并返回可定位的草稿 ID。[浏览器用例](../../../apps/web/test/local-browser/native-pdf-open.test.mjs) |
 | `list_page_images` | 观察到 | [native-pdf-open.test.mjs](../../../apps/web/test/local-browser/native-pdf-open.test.mjs)、[pdf-affine-image-drafts.test.mjs](../../../apps/web/test/local-browser/pdf-affine-image-drafts.test.mjs) | 返回图片序号供下一个工具定位，后续各图像操作核对成品。[浏览器用例](../../../apps/web/test/local-browser/pdf-media.test.mjs) |
 | `markup_text` | 观察到 | [native-pdf-open.test.mjs](../../../apps/web/test/local-browser/native-pdf-open.test.mjs)、[ai-tools.test.ts](../../../apps/pdf/tests/ai-tools.test.ts) | 按文字高亮第二页匹配项，成品含一条高亮批注。[浏览器用例](../../../apps/web/test/local-browser/native-pdf-open.test.mjs) |
-| `merge_pages` | 观察到 | [native-pdf-page-copies.test.mjs](../../../apps/web/test/local-browser/native-pdf-page-copies.test.mjs)、[ai-tools.test.ts](../../../apps/pdf/tests/ai-tools.test.ts) | 独立读取合并输出页数和页面尺寸，浏览器重开成功，[浏览器用例](../../../apps/web/test/local-browser/native-pdf-page-copies.test.mjs) |
-| `move_inserted_text` | 观察到 | [native-pdf-open.test.mjs](../../../apps/web/test/local-browser/native-pdf-open.test.mjs)、[ai-tools.test.ts](../../../apps/pdf/tests/ai-tools.test.ts) | 按草稿 ID 移动文字，工具确认位置更新。[浏览器用例](../../../apps/web/test/local-browser/native-pdf-open.test.mjs) |
-| `move_text_block` | 观察到 | [native-pdf-open.test.mjs](../../../apps/web/test/local-browser/native-pdf-open.test.mjs)、[ai-tools.test.ts](../../../apps/pdf/tests/ai-tools.test.ts) | 将第一段移位 10 pt，工具返回位移结果。[浏览器用例](../../../apps/web/test/local-browser/native-pdf-open.test.mjs) |
+| `merge_pages` | 观察到 | [native-pdf-page-copies.test.mjs](../../../apps/web/test/local-browser/native-pdf-page-copies.test.mjs)、[ai-tools.test.ts](../../../apps/pdf/tests/ai-tools.test.ts) | 独立读取合并输出的两页和三段源正文，浏览器重开成功，[浏览器用例](../../../apps/web/test/local-browser/native-pdf-page-copies.test.mjs) |
+| `move_inserted_text` | 观察到 | [native-pdf-open.test.mjs](../../../apps/web/test/local-browser/native-pdf-open.test.mjs)、[ai-tools.test.ts](../../../apps/pdf/tests/ai-tools.test.ts) | 按草稿 ID 移动文字，成品原生坐标为 (34, 38) pt。[浏览器用例](../../../apps/web/test/local-browser/native-pdf-open.test.mjs) |
+| `move_text_block` | 观察到 | [native-pdf-open.test.mjs](../../../apps/web/test/local-browser/native-pdf-open.test.mjs)、[ai-tools.test.ts](../../../apps/pdf/tests/ai-tools.test.ts) | 将第一段移位 10 pt，成品保留右对齐，核对两行纵坐标 62、48。[浏览器用例](../../../apps/web/test/local-browser/native-pdf-open.test.mjs) |
 | `read_annotations` | 观察到 | [dsh-office-handoff.test.mjs](../../../apps/web/test/local-browser/dsh-office-handoff.test.mjs)、[native-pdf-harness.test.mjs](../../../apps/web/test/local-browser/native-pdf-harness.test.mjs) | 真实模型成品复跑通过，[浏览器用例](../../../apps/web/test/local-browser/native-pdf-harness.test.mjs) |
 | `read_attachment` | 观察到 | [native-pdf-create-document.test.mjs](../../../apps/web/test/local-browser/native-pdf-create-document.test.mjs)、[docs-save-download-entry.test.mjs](../../../apps/web/test/unit/docs-save-download-entry.test.mjs) | 读取实际上传的附件内容，后续生成成品保留附件正文，[浏览器用例](../../../apps/web/test/local-browser/native-pdf-create-document.test.mjs) |
 | `read_pages` | 观察到 | [dsh-office-handoff.test.mjs](../../../apps/web/test/local-browser/dsh-office-handoff.test.mjs)、[native-pdf-harness.test.mjs](../../../apps/web/test/local-browser/native-pdf-harness.test.mjs) | 真实模型成品复跑通过，[浏览器用例](../../../apps/web/test/local-browser/native-pdf-harness.test.mjs) |
@@ -164,17 +182,19 @@ Excel 已覆盖 19 个实际注册工具。稀疏工作簿的全量预加载曾�
 | `replace_pages` | 观察到 | [ai-tools.test.ts](../../../apps/pdf/tests/ai-tools.test.ts)、[assistant-client.test.mjs](../../../apps/web/test/unit/assistant-client.test.mjs) | 用户确认来源文件后仅替换第二页。新版本页宽为 400、710、600，独立读取新页正文，原文件版本保持原字节。[浏览器用例](../../../apps/web/test/local-browser/native-pdf-page-copies.test.mjs) |
 | `reply_note` | 观察到 | [dsh-office-handoff.test.mjs](../../../apps/web/test/local-browser/dsh-office-handoff.test.mjs)、[native-pdf-open.test.mjs](../../../apps/web/test/local-browser/native-pdf-open.test.mjs) | 浏览器实际调用成功，追问保存了便笺回复。[实测用例](../../../apps/web/test/local-browser/dsh-office-handoff.test.mjs) |
 | `rotate_image` | 观察到 | [pdf-media.test.mjs](../../../apps/web/test/local-browser/pdf-media.test.mjs)、[ai-tools.test.ts](../../../apps/pdf/tests/ai-tools.test.ts) | 顺时针旋转后核对保存成品的图框位置、宽和高。[浏览器用例](../../../apps/web/test/local-browser/pdf-media.test.mjs) |
-| `rotate_pages` | 未观察到 | [office-tool-inventory.test.mjs](../../../apps/web/test/local-browser/office-tool-inventory.test.mjs)、[assistant-client.test.mjs](../../../apps/web/test/unit/assistant-client.test.mjs) | 兼容名称。原生操作由 `apply_ops.rotatePages` 执行，[浏览器用例](../../../apps/web/test/local-browser/native-pdf-open.test.mjs) |
+| `apply_ops.rotatePages` | 作为 `apply_ops` 子操作 | [浏览器用例](../../../apps/web/test/local-browser/native-pdf-open.test.mjs) | 目标页保存为 90°，相邻页为 0°，原修订字节一致，Web 重开成功后记录成品验证。 |
 | `search_text` | 观察到 | [dsh-office-handoff.test.mjs](../../../apps/web/test/local-browser/dsh-office-handoff.test.mjs)、[native-pdf-open.test.mjs](../../../apps/web/test/local-browser/native-pdf-open.test.mjs) | 浏览器实际调用成功，追问读取到已保存的位置与原文。[实测用例](../../../apps/web/test/local-browser/dsh-office-handoff.test.mjs) |
 | `set_header_footer` | 观察到 | [native-pdf-open.test.mjs](../../../apps/web/test/local-browser/native-pdf-open.test.mjs)、[ai-tools.test.ts](../../../apps/pdf/tests/ai-tools.test.ts) | 从 7 开始添加页码，独立提取核对三页上的 7 / 3、8 / 3、9 / 3。[浏览器用例](../../../apps/web/test/local-browser/native-pdf-open.test.mjs) |
 | `set_image_opacity` | 观察到 | [pdf-media.test.mjs](../../../apps/web/test/local-browser/pdf-media.test.mjs)、[ai-tools.test.ts](../../../apps/pdf/tests/ai-tools.test.ts) | 成品指定区域 Alpha 为 128。[浏览器用例](../../../apps/web/test/local-browser/pdf-media.test.mjs) |
 | `set_page_size` | 观察到 | [native-pdf-page-copies.test.mjs](../../../apps/web/test/local-browser/native-pdf-page-copies.test.mjs)、[ai-tools.test.ts](../../../apps/pdf/tests/ai-tools.test.ts) | 确认保存新版本后独立检查三页尺寸均为 420 × 595，[浏览器用例](../../../apps/web/test/local-browser/native-pdf-page-copies.test.mjs) |
 | `set_watermark` | 观察到 | [native-pdf-open.test.mjs](../../../apps/web/test/local-browser/native-pdf-open.test.mjs)、[ai-tools.test.ts](../../../apps/pdf/tests/ai-tools.test.ts) | 三页均写入指定水印，独立提取核对水印文本。[浏览器用例](../../../apps/web/test/local-browser/native-pdf-open.test.mjs) |
-| `split_pages` | 观察到 | [native-pdf-page-copies.test.mjs](../../../apps/web/test/local-browser/native-pdf-page-copies.test.mjs)、[ai-tools.test.ts](../../../apps/pdf/tests/ai-tools.test.ts) | 独立读取拆分输出页数，浏览器重开成功，[浏览器用例](../../../apps/web/test/local-browser/native-pdf-page-copies.test.mjs) |
+| `split_pages` | 观察到 | [native-pdf-page-copies.test.mjs](../../../apps/web/test/local-browser/native-pdf-page-copies.test.mjs)、[ai-tools.test.ts](../../../apps/pdf/tests/ai-tools.test.ts) | 独立核对拆分输出的六页宽度为 200、200、250、250、300、300 pt，浏览器重开成功，[浏览器用例](../../../apps/web/test/local-browser/native-pdf-page-copies.test.mjs) |
 | `split_pdf` | 观察到 | [native-pdf-page-copies.test.mjs](../../../apps/web/test/local-browser/native-pdf-page-copies.test.mjs)、[ai-tools.test.ts](../../../apps/pdf/tests/ai-tools.test.ts) | 保存并打开两个独立 PDF，按原页序检查页宽与页数，源版本保持原字节；中断场景也验证了回执恢复。[浏览器用例](../../../apps/web/test/local-browser/native-pdf-page-copies.test.mjs) |
 | `transform_image` | 观察到 | [pdf-media.test.mjs](../../../apps/web/test/local-browser/pdf-media.test.mjs)、[ai-tools.test.ts](../../../apps/pdf/tests/ai-tools.test.ts) | 移动目标图片后保存，核对成品中的新坐标和图宽。[浏览器用例](../../../apps/web/test/local-browser/pdf-media.test.mjs) |
 
 ## 共享工具
+
+9 个共享工具均要求效果证据。数据源用例以隔离 PostgreSQL 核对来源元数据、可见表、实收金额和冻结结果分页，并确认委派使用原结果和实际交付的图片。频道用例使用工具返回的成员 ID 路由，核对父子任务恢复、唯一子任务和历史报告哈希。[数据源与执行器](../../../apps/web/test/local-browser/office-source-analysis.test.mjs) [频道列表与委派](../../../apps/web/test/local-browser/assistant-dsh-delegation.test.mjs)
 
 | 工具 | 浏览器注册 | 候选用例 | 执行或效果证据 |
 | --- | --- | --- | --- |
@@ -196,7 +216,7 @@ Office 模型收到 `sources_list`、`sources_describe`、`sources_query`、`sou
 
 ## GenOffice 桌面与共享定义
 
-Web 管理端可以连接外部 MCP 服务器并列出工具。GenOffice 桌面 MCP 的 25 个定义仍由桌面进程提供，Web 的同类能力须按各自的浏览器、授权 API 或原生任务验证。SaaS 外部 MCP 客户端的发现、调用、保存和重连仍需逐工具验收。[管理端 MCP 路由](../../../apps/web/server/src/modules/admin/routes.mjs) [MCP 迁移清单](../inventory/agent-mcp-migration.md)
+Web 管理端可以连接外部 MCP 服务器并列出工具。GenOffice 桌面 MCP 的 25 个定义仍由桌面进程提供，Web 的同类能力须按各自的浏览器、授权 API 或原生任务验证。SaaS 外部 MCP 已实测四格式保存修订读取，以及 PDF 页面旋转、XLSX 字面单元格写入、PPTX 讲稿备注写入和重连回执。DOCX 段落替换已在后续 PR 验证；其余外部操作按工具继续验收。[管理端 MCP 路由](../../../apps/web/server/src/modules/admin/routes.mjs) [MCP 迁移清单](../inventory/agent-mcp-migration.md) [四格式 MCP 证据](genoffice-web-parity.md#t19-外部-mcp-读取) [DOCX 写入 PR #202](https://github.com/ClassesOver/DyOffice/pull/202)
 
 | 定义 | 清单中的执行位置 | Web 对照 |
 | --- | --- | --- |
@@ -212,20 +232,20 @@ Web 管理端可以连接外部 MCP 服务器并列出工具。GenOffice 桌面 
 | [`open_in_genoffice`](../../../apps/shell/src/main/mcp/tools/document-tools.ts) | `unsupported` | 桌面专用。四格式的 Web 助手工具请求均过滤此名称，[模型转发规则单测](../../../apps/web/test/unit/assistant-client.test.mjs) |
 | [`read_blocks`](../../../apps/shell/src/main/mcp/tools/document-tools.ts) | `live` | 见 DOCX 表的 `read_blocks` |
 | [`read_document`](../../../apps/shell/src/main/mcp/tools/document-tools.ts) | `live` | Web 的活动文档读取对应 DOCX 的 `get_document_context` 与 `read_blocks` |
-| [`read_docx`](../../../apps/shell/src/main/mcp/tools/document-tools.ts) | `headless` | Web 有活动文档读取路径。对持久化文件的无界面 MCP 读取待验 |
+| [`read_docx`](../../../apps/shell/src/main/mcp/tools/document-tools.ts) | `headless` | 外部 `read_saved_document` 已验收授权 DOCX 修订的可见正文。活动文档另见 `read_blocks` |
 | [`read_docx_properties`](../../../apps/shell/src/main/mcp/tools/document-tools.ts) | `headless` | Web 的等价文件属性查询工具待验 |
 | [`replace_blocks`](../../../apps/shell/src/main/mcp/tools/document-tools.ts) | `live` | 见 DOCX 表的 `replace_blocks` |
 | [`open_documents`](../../../apps/shell/src/main/mcp/tools/open-documents-tools.ts) | `live` | Web 有按文件 ID 打开工作区文件的路径。一次打开多个文档的 MCP 工具待验 |
-| [`read_pdf`](../../../apps/shell/src/main/mcp/tools/pdf-tools.ts) | `headless` | Web 活动编辑器对应 PDF 的 `read_pages`。无界面 MCP 读取待验 |
+| [`read_pdf`](../../../apps/shell/src/main/mcp/tools/pdf-tools.ts) | `headless` | 外部 `read_saved_document` 已验收授权 PDF 修订的可见文本。活动编辑器另见 `read_pages` |
 | [`create_session`](../../../apps/shell/src/main/mcp/tools/session-tools.ts) | `live` | Web 原生编辑器会打开绑定文件的会话。MCP 会话接口待验 |
 | [`save_session`](../../../apps/shell/src/main/mcp/tools/session-tools.ts) | `live` | Web 原生编辑器有显式保存与版本回执。MCP 会话保存接口待验 |
-| [`apply_sheet_ops`](../../../apps/shell/src/main/mcp/tools/sheets-tools.ts) | `live` | 见 XLSX 表的 `propose_operations`。MCP 批操作接口待验 |
+| [`apply_sheet_ops`](../../../apps/shell/src/main/mcp/tools/sheets-tools.ts) | `live` | 外部 `set_xlsx_cells` 已验收批准的字面值及修订回执。其余批操作见 XLSX 表的 `propose_operations` |
 | [`create_xlsx`](../../../apps/shell/src/main/mcp/tools/sheets-tools.ts) | `headless` | 见 XLSX 表的 `create_document`。无界面 MCP 创建待验 |
-| [`read_sheet`](../../../apps/shell/src/main/mcp/tools/sheets-tools.ts) | `live` | Web 活动工作簿对应 XLSX 的 `read_range` 与 `read_cells`，跨入口对齐待验 |
+| [`read_sheet`](../../../apps/shell/src/main/mcp/tools/sheets-tools.ts) | `live` | 外部 `read_saved_document` 已验收授权 XLSX 修订的可见单元格文本。区域和结构化数据见 `read_range` 与 `read_cells` |
 | [`sheet_links`](../../../apps/shell/src/main/mcp/tools/sheets-tools.ts) | `headless` | 默认 Node/WASI、Rust 和混合部署均已在 Web 原生编辑器验证外链读取、换源、保存式刷新和断开。MCP 入口仍待对齐。[XLSX 验收](genoffice-web-parity.md) |
-| [`apply_slide_ops`](../../../apps/shell/src/main/mcp/tools/slides-tools.ts) | `live` | 见 PPTX 表的 `apply_ops`。MCP 批操作接口待验 |
+| [`apply_slide_ops`](../../../apps/shell/src/main/mcp/tools/slides-tools.ts) | `live` | 外部 `set_pptx_notes` 已验收批准的讲稿备注及修订回执。其他批操作见 PPTX 表的 `apply_ops` |
 | [`create_pptx`](../../../apps/shell/src/main/mcp/tools/slides-tools.ts) | `headless` | Web 助手使用 `generate_deck` 生成并在原生编辑器保存。无界面 MCP 创建待验 |
-| [`read_deck`](../../../apps/shell/src/main/mcp/tools/slides-tools.ts) | `live` | Web 活动编辑器提供 `read_slide`。整套幻灯片的 MCP 读取待验 |
+| [`read_deck`](../../../apps/shell/src/main/mcp/tools/slides-tools.ts) | `live` | 外部 `read_saved_document` 已验收授权 PPTX 修订的可见幻灯片文本。单页结构化输出见 `read_slide` |
 | [`read_attachment`](../../../packages/agent-core/src/attachments-skill.ts) | `headless` | 见 DOCX、XLSX、PPTX、PDF 表 |
 | [`load_guide`](../../../packages/agent-core/src/cli-skill.ts) | `headless` | 见 XLSX、PPTX 表 |
 | [`run_genoffice`](../../../packages/agent-core/src/cli-skill.ts) | `headless` | 四格式 Web 助手工具请求均过滤此名称。Web 任务 API 支持 `xlsx.roundtrip` 固定任务，[模型转发规则单测](../../../apps/web/test/unit/assistant-client.test.mjs) [Web 任务路由](../../../apps/web/server/src/modules/jobs/routes.ts) |

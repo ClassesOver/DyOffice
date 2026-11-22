@@ -21,7 +21,7 @@ import { escapeXmlText } from './xml-utils'
 export function patchParagraphTexts(
   entryXml: string,
   newText: string,
-  opts: { stripFirstParaLeadingSpace?: boolean } = {},
+  opts: { stripFirstParaLeadingSpace?: boolean; preserveSuffixRun?: boolean } = {},
 ): string | null {
   const paras = paragraphSlices(entryXml)
   if (paras.length === 0) return null
@@ -43,7 +43,7 @@ export function patchParagraphTexts(
       out += para.xml
     } else {
       const skipLeading = i === 0 && opts.stripFirstParaLeadingSpace === true
-      const patched = patchOneParagraph(para.xml, newParaTexts[i], skipLeading)
+      const patched = patchOneParagraph(para.xml, newParaTexts[i], skipLeading, opts.preserveSuffixRun)
       if (patched === null) return null
       out += patched
     }
@@ -127,7 +127,7 @@ function decodedTextOf(paraXml: string): string {
     .join('')
 }
 
-function patchOneParagraph(paraXml: string, newText: string, skipLeading: boolean): string | null {
+function patchOneParagraph(paraXml: string, newText: string, skipLeading: boolean, preserveSuffixRun = false): string | null {
   const slices = tSlices(paraXml)
   if (slices.length === 0) return null
   const raw = slices.map((t) => t.text).join('')
@@ -140,6 +140,7 @@ function patchOneParagraph(paraXml: string, newText: string, skipLeading: boolea
   let prefix = 0
   const maxCommon = Math.min(oldText.length, newText.length)
   while (prefix < maxCommon && oldText[prefix] === newText[prefix]) prefix++
+  if (prefix && (/[\uDC00-\uDFFF]/.test(oldText.charAt(prefix)) || /[\uDC00-\uDFFF]/.test(newText.charAt(prefix)))) prefix--
   let suffix = 0
   while (
     suffix < maxCommon - prefix &&
@@ -147,6 +148,7 @@ function patchOneParagraph(paraXml: string, newText: string, skipLeading: boolea
   ) {
     suffix++
   }
+  if (suffix && /[\uDC00-\uDFFF]/.test(oldText.charAt(oldText.length - suffix))) suffix--
   // Changed range (relative to the full raw text)
   const changeStart = lead + prefix
   const changeEnd = lead + oldText.length - suffix
@@ -178,14 +180,15 @@ function patchOneParagraph(paraXml: string, newText: string, skipLeading: boolea
     return null
   }
 
-  // Rewrite [first..last]: first takes the prefix remainder + replacement text + last's
-  // suffix remainder; the rest are emptied
+  // Body text callers can retain the suffix in its own formatted run.
   const newInner: string[] = []
   for (let i = first; i <= last; i++) {
     if (i === first) {
       const head = slices[i].text.slice(0, changeStart - bounds[i].start)
       const tail = slices[last].text.slice(changeEnd - bounds[last].start)
-      newInner.push(escapeXmlText(head + replacement + tail))
+      newInner.push(escapeXmlText(head + replacement + (first === last || !preserveSuffixRun ? tail : '')))
+    } else if (i === last && preserveSuffixRun) {
+      newInner.push(escapeXmlText(slices[last].text.slice(changeEnd - bounds[last].start)))
     } else {
       newInner.push('')
     }

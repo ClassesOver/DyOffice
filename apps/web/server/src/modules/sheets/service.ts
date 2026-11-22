@@ -1,4 +1,4 @@
-import type {BoundWorkbookSource,FindInput,RecalcInput} from '../../../../worker/src/native/xlsx.ts'
+import type {BoundWorkbookSource,FindInput,FormulaIndexSheet,RecalcInput} from '../../../../worker/src/native/xlsx.ts'
 import {createHash,randomUUID} from 'node:crypto'
 import type { createFileService } from '../files/service.ts'
 import { authError } from '../auth/sessions.ts'
@@ -13,6 +13,7 @@ export interface SheetsNative {
   convertMergeSource?(input:Buffer,format:'csv'|'tsv'|'xls',signal?:AbortSignal):Promise<Buffer>
   readMedia?(input:Uint8Array,visualId:string,signal?:AbortSignal):Promise<unknown>
   recalculate?(input: Uint8Array, request: RecalcInput, signal?: AbortSignal): Promise<unknown>
+  readFormulaIndex?(input: Uint8Array, signal?: AbortSignal): Promise<FormulaIndexSheet[]>
   readSheet?(input: Uint8Array, sheetName: string, kind: 'formulas' | 'outline', signal?: AbortSignal): Promise<unknown>
   findCells?(input:Uint8Array,sheetName:string,request:FindInput,signal?:AbortSignal):Promise<unknown>
   refreshExternalLinks?(input:Uint8Array,sources:readonly BoundWorkbookSource[],signal?:AbortSignal):Promise<unknown>

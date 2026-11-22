@@ -13,8 +13,9 @@ export type McpEditApproval =
   | Readonly<{ kind: 'pdf.rotate'; pages: readonly number[]; degrees: number }>
   | Readonly<{ kind: 'xlsx.cells'; cells: readonly McpXlsxCell[] }>
   | Readonly<{ kind: 'pptx.notes'; slide: number; text: string }>
+  | Readonly<{ kind: 'docx.paragraph'; docxIndex: number; expectedText: string; replacement: string }>
 export type McpFileGrant = McpReadScope & Readonly<{ id: string; approval?: McpEditApproval; resultRevision?: string }>
-const mcpEditKeyPrefix = { 'pdf.rotate': 'mcp_pdf_rotate_', 'xlsx.cells': 'mcp_xlsx_cells_', 'pptx.notes': 'mcp_pptx_notes_' }
+const mcpEditKeyPrefix = { 'pdf.rotate': 'mcp_pdf_rotate_', 'xlsx.cells': 'mcp_xlsx_cells_', 'pptx.notes': 'mcp_pptx_notes_', 'docx.paragraph': 'mcp_docx_paragraph_' }
 export const mcpEditKey = (kind: McpEditApproval['kind'], grantId: string) => mcpEditKeyPrefix[kind] + grantId
 type TransactionCredential = BusinessCredential | McpExternalCredential
 export type BusinessCredential = SessionCredential | JobCredential

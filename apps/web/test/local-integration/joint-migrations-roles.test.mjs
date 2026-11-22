@@ -75,11 +75,11 @@ test('divergent PR132 ledger rejects without modifying history',async t=>{
  assert.deepEqual((await probe.query('SELECT * FROM identity_migrations ORDER BY version')).rows,before)
 })
 
-test('0053 backfills a pre-existing channel cursor and removes it with its source event',async t=>{
+test('0054 backfills a pre-existing channel cursor and removes it with its source event',async t=>{
  const [deployment,owner,channel,file,event]=Array.from({length:5},()=>randomUUID())
  const f=await restrictedFixture(t,{seedAccounts:false,beforeMigrate:async pool=>{
   await pool.query('CREATE TABLE identity_migrations(version integer PRIMARY KEY,sha256 text NOT NULL)')
-  for(const m of migrations.slice(0,52)){
+  for(const m of migrations.slice(0,53)){
    await pool.query(m.sql)
    await pool.query('INSERT INTO identity_migrations VALUES($1,$2)',[m.version,m.digest])
   }
@@ -105,7 +105,7 @@ test('pre-runtime claims, Codex checkpoints and cancellation flags survive conve
  const principal=c=>c.query("SELECT set_config('dyoffice.deployment_id',$1,true),set_config('dyoffice.user_id',$2,true)",[deployment,owner])
  const f=await restrictedFixture(t,{seedAccounts:false,worker:true,beforeMigrate:async pool=>{
   await pool.query('CREATE TABLE identity_migrations(version integer PRIMARY KEY,sha256 text NOT NULL)')
-  for(const m of migrations.slice(0,54)){
+  for(const m of migrations.slice(0,55)){
    await pool.query(m.sql)
    await pool.query('INSERT INTO identity_migrations VALUES($1,$2)',[m.version,m.digest])
   }

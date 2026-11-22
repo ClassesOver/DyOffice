@@ -130,12 +130,16 @@ export function decodeNumericCharRefs(text: string): string {
 
 /** Full decode, for raw XML slices that never passed through the parser. */
 export function decodeEntities(text: string): string {
-  return decodeNumericCharRefs(text)
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&quot;/g, '"')
-    .replace(/&apos;/g, "'")
-    .replace(/&amp;/g, '&')
+  return text.replace(/&#(?:[xX][0-9a-fA-F]+|[0-9]+);|&(?:lt|gt|quot|apos|amp);/g, entity => {
+    switch (entity) {
+      case '&lt;': return '<'
+      case '&gt;': return '>'
+      case '&quot;': return '"'
+      case '&apos;': return "'"
+      case '&amp;': return '&'
+      default: return decodeNumericCharRefs(entity)
+    }
+  })
 }
 
 export const EMU_PER_PX = 9525

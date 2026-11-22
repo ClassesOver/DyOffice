@@ -61,11 +61,15 @@ async function fixture(t,{outcome='success',gate,readOnly=false,initialDirty=tru
 for(const outcome of ['success','late-edit','unknown-before','unknown-after'])test(`actual Word host download entry: ${outcome}`,async t=>{
  const f=await fixture(t,{outcome})
  const historical=f.element.querySelector('a[download]')
- assert.equal(historical.textContent,'Download saved version');assert.ok(historical.href.endsWith(f.before.revision))
+ assert.equal(historical.textContent,'Download saved version')
+ assert.deepEqual(Object.fromEntries(new URL(historical.href).searchParams),{revision:f.before.revision,download:'1'})
  assert.match(f.button.title,/may create a new version/)
  assert.equal(f.button.disabled,outcome==='unknown-before')
  await act(async()=>{f.button.click()})
- if(outcome==='success'){assert.equal(f.downloads.length,1);assert.ok(f.downloads[0].endsWith(f.after.revision))}
+ if(outcome==='success'){
+  assert.equal(f.downloads.length,1)
+  assert.deepEqual(Object.fromEntries(new URL(f.downloads[0]).searchParams),{revision:f.after.revision,download:'1'})
+ }
  else assert.deepEqual(f.downloads,[])
  assert.equal(f.counts().saves,outcome==='unknown-before'?0:1);assert.equal(f.counts().reconciles,0)
 })
