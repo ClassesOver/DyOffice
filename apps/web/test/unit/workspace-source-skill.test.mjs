@@ -42,3 +42,18 @@ test('aborted or malformed model calls cannot start a source operation', async (
   await skill.executeTool({ id: 'x', name: 'sources_query', input: {}, inputError: 'bad' })
   assert.equal(calls, 0)
 })
+
+test('a failed query returns status-specific rewrite advice and truncated results steer back to SQL aggregation', async () => {
+  const { sourceFailure } = await import('../../../../packages/browser-host/src/source-skill.ts')
+  const { truncatedNotice } = await import('../../server/src/modules/sources/tools.ts')
+  const fail = status => async () => { throw Object.assign(new Error('x'), { status }) }
+  const output = async status => (await createWorkspaceSourceSkill(fail(status), { tools: ['sources_query'], disposed: () => false }).executeTool({ id: '1', name: 'sources_query', input: { sourceId: 's', sql: 'select 1' } })).output
+  assert.match(await output(504), /statement timeout.*Do not retry the same SQL.*GROUP BY/s)
+  assert.match(await output(400), /single SELECT/)
+  assert.match(await output(403), /allowed scope/)
+  assert.match(await output(500), /did not complete/)
+  assert.equal(sourceFailure('sources.read_result', 504), sourceFailure('sources.list', undefined))
+  assert.match(truncatedNotice(1000), /first 1000 rows.*Do not compute totals.*GROUP BY.*LIMIT/s)
+  const prompt = createWorkspaceSourceSkill(async () => ({}), { tools: ['sources_query'], disposed: () => false }).systemPrompt
+  assert.match(prompt, /When sourceTruncated is true, re-query with aggregation/)
+})
