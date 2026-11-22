@@ -6,6 +6,7 @@ import { join } from 'node:path'
 import { fileFixture, docxBytes, importFile } from '../helpers/files.mjs'
 import { restrictedOrigin } from '../helpers/restricted.mjs'
 import { createCsrfService } from '../../server/src/modules/auth/csrf.ts'
+import { objectTransferAdmission } from '../../server/src/modules/files/transfer-admission.ts'
 
 const credential = token => ({ kind: 'session', token })
 const own = (f, callback) => f.transactions.withPrincipalTransaction(credential(f.alice.token), callback)
@@ -355,6 +356,44 @@ test('client disconnect retains transfer admission until real publication work s
   }
   const retry = await f.app.inject({ method: 'PUT', url: '/api/v1/uploads/' + uploads[2].uploadId + '/content', headers: { ...headers, 'content-type': 'application/octet-stream' }, payload: bytes })
   assert.equal(retry.statusCode,200)
+})
+
+test('a staged upload waits for concurrent document reads and publishes once', { timeout: 15_000 }, async t => {
+  const reading = deferred(), release = deferred(), attempted = deferred()
+  let reads = 0
+  const f = await fileFixture(t, { wrapObjects: base => ({ ...base, async readVerified(...args) {
+    if (++reads === 2) reading.resolve()
+    await release.promise
+    return base.readVerified(...args)
+  } }) })
+  const bytes = await docxBytes(), headers = signedHeaders(f)
+  const {file} = await importFile(f,f.bob.token,bytes,'source.docx')
+  const upload = await f.files.stageUpload(f.alice.token,{name:'report.docx',size:bytes.length})
+  const url = `/api/v1/uploads/${upload.uploadId}`
+  const admission = objectTransferAdmission(f.app), admit = admission.admit
+  t.mock.method(admission,'admit',(request,...args)=>{
+    try{return admit(request,...args)}
+    finally{if(request.method==='PUT')attempted.resolve()}
+  })
+  const downloads = [1,2].map(()=>f.app.inject({method:'GET',url:`/api/v1/files/${file.fileId}/content?revision=${file.revision}`,headers:signedHeaders(f,f.bob.token)}).then(response=>response))
+  let receiving
+  try {
+    await Promise.race([reading.promise,...downloads.map(result=>result.then(response=>assert.fail(`Read finished before barrier: ${response.statusCode}`)))])
+    receiving = f.app.inject({method:'PUT',url:url+'/content',headers:{...headers,'content-type':'application/octet-stream'},payload:bytes}).then(response=>response)
+    await Promise.race([attempted.promise,receiving.then(response=>assert.fail(`Upload missed admission: ${response.statusCode}`))])
+    release.resolve()
+    assert.equal((await receiving).statusCode,200)
+    const finished = await f.app.inject({method:'POST',url:url+'/finish',headers})
+    assert.equal(finished.statusCode,200)
+    const saved = finished.json().file
+    assert.equal(saved.fileId,upload.fileId)
+    assert.deepEqual(await f.files.readFile(f.alice.token,saved.fileId,saved.revision),bytes)
+    assert.equal((await f.files.listFiles(f.alice.token)).files.length,1)
+  } finally {
+    release.resolve()
+    await Promise.allSettled([...downloads,...(receiving?[receiving]:[])])
+  }
+  assert.deepEqual((await Promise.all(downloads)).map(response=>response.statusCode),[200,200])
 })
 
 test('duplicate receives have one winner and concurrent finish retries return one initial revision', async t => {

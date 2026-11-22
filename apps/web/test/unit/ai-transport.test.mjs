@@ -2,6 +2,8 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { createSseAgentTransport } from '../../../../packages/browser-host/src/ai-transport.ts'
 import { createAssistantClient } from '../../../../packages/browser-host/src/assistant.ts'
+import { AgentLoop } from '@genoffice/agent-core'
+import { createFileChat } from '../../src/editors/file-chat.ts'
 
 const stream = text => new Response(new ReadableStream({start(controller) {controller.enqueue(new TextEncoder().encode(text));controller.close()}}),{headers:{'Content-Type':'text/event-stream'}})
 const event = (name,data) => 'event: ' + name + '\ndata: ' + JSON.stringify(data) + '\n\n'
@@ -10,6 +12,40 @@ const callbackRecorder = () => {
   return {calls, callbacks:{onDelta:x=>calls.push(['delta',x]),onReasoning:x=>calls.push(['reasoning',x]),onToolCall:x=>calls.push(['tool_call',x]),onPhase:x=>calls.push(['phase',x]),onUsage:x=>calls.push(['usage',x]),onStopReason:x=>calls.push(['stop_reason',x]),onDone:()=>calls.push(['done']),onError:x=>calls.push(['error',x])}}
 }
 const delay = () => new Promise(resolve=>setTimeout(resolve,30))
+
+test('Office answers when transcript sync stalls and saves the turn after sync recovers',{timeout:9000},async t=>{
+  const answer=Promise.withResolvers(),persisted=Promise.withResolvers()
+  const deadline=setTimeout(()=>answer.reject(Error('Office never started the model turn while transcript sync stalled')),8000)
+  t.after(()=>clearTimeout(deadline))
+  const sent=[]
+  const client=await createAssistantClient({
+    request:async()=>({entries:[{id:'office-model'}],defaultId:'office-model'}),
+    format:'pdf',csrfToken:'c'.repeat(43),
+    fetchImpl:async(url,init)=>{
+      sent.push([url,JSON.parse(init.body).request.messages.at(-1).text])
+      return stream(event('delta',{text:'The page is ready to review.'})+event('done',{}))
+    },
+  })
+  let stalled=false
+  const chat=createFileChat('pdf-fixture',client.transport,async(_path,_method,{after,updates},signal)=>{
+    if(!stalled){
+      stalled=true
+      return new Promise((_,reject)=>signal.addEventListener('abort',()=>reject(signal.reason),{once:true}))
+    }
+    if(updates.some(message=>message.role==='assistant'&&message.state==='done'))persisted.resolve(updates)
+    return {cursor:after+updates.length,hasMore:false,messages:updates.map((message,index)=>({...message,order:after+index+1}))}
+  })
+  t.after(()=>{chat.dispose();client.dispose()})
+  const loop=new AgentLoop({transport:client.transport,skill:{id:'office',systemPrompt:'',tools:[],executeTool:assert.fail},events:{onDone:answer.resolve,onError:answer.reject}})
+  loop.run('Review this PDF',undefined,undefined,{text:'Review this PDF'})
+  assert.equal((await answer.promise).text,'The page is ready to review.')
+  assert.deepEqual(sent,[['/api/v1/ai/turns','Review this PDF']])
+  const updates=await persisted.promise
+  assert.equal(new Set(updates.map(message=>message.turnId)).size,1)
+  assert.deepEqual(updates.map(({role,state,text})=>[role,state,text]),[
+    ['user','done','Review this PDF'],['assistant','done','The page is ready to review.'],
+  ])
+})
 
 test('a standalone PPTX generation can finish after the normal browser deadline',async t=>{
   t.mock.timers.enable({apis:['setTimeout']})

@@ -22,10 +22,13 @@ export function createFileChat(fileId:string,transport:AgentTransport,request:Re
     clearTimeout(timer)
     active=(async()=>{
       let changed=false
+      // A stalled history sync must not keep the Office turn from reaching the model.
+      // Updates without a receipt stay queued for the next sync.
+      const signal=AbortSignal.any([lifetime.signal,AbortSignal.timeout(5000)])
       try{
         for(;;){
           const updates=Array.from(outbox.values()).slice(0,8)
-          const batch=await request<Batch>(path,'POST',{after:cursor,updates},lifetime.signal)
+          const batch=await request<Batch>(path,'POST',{after:cursor,updates},signal)
           if(closed)return
           for(const u of updates)if(outbox.get(key(u))===u)outbox.delete(key(u))
           for(const m of batch.messages){records.set(key(m),m);if(!local.has(m.turnId))changed=true}

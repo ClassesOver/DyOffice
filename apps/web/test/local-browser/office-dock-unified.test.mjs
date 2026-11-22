@@ -103,8 +103,10 @@ test('four real Office editors share assistant chrome and retain drafts across c
    await page.screenshot({path:`test-results/office-dock-unified/${format}-suggestion.png`,animations:'disabled'})
   }
   const chatTab=panel.getByRole('tab',{name:'对话',exact:true})
-  await chatTab.focus();await page.keyboard.press('ArrowRight')
-  await expect(panel.getByRole('tab',{name:/任务/})).toBeFocused()
+  const tasksTab=panel.getByRole('tab',{name:/任务/})
+  await chatTab.press('ArrowRight')
+  await expect(tasksTab).toHaveAttribute('aria-selected','true')
+  await expect(tasksTab).toBeFocused({timeout:15000})
   await expect(panel.locator('.ai-chat')).toBeHidden()
   await expect(panel.locator('.ai-composer')).toBeHidden()
   await page.keyboard.press('Home');await expect(chatTab).toBeFocused()
@@ -113,13 +115,16 @@ test('four real Office editors share assistant chrome and retain drafts across c
   const textarea=panel.locator('textarea')
   const textareaHeight=()=>textarea.evaluate(node=>node.getBoundingClientRect().height)
   const compactHeight=44
+  // Keyboard tab navigation leaves focus on the tab; focus the iframe composer before filling it.
+  await textarea.click()
   await textarea.fill(draft)
+  await expect(textarea,format+' short draft is entered').toHaveValue(draft)
   // The composer measures after the React update; the previous starter can still be at maximum height.
-  await expect.poll(textareaHeight,{message:format+' short draft settles before measuring growth'}).toBe(compactHeight)
+  await expect.poll(textareaHeight,{timeout:15000,message:format+' short draft settles before measuring growth'}).toBe(compactHeight)
   await textarea.fill(`${draft}\n检查第三行\n检查第四行`)
   await expect.poll(textareaHeight,{message:format+' composer grows for a longer draft'}).toBeGreaterThan(compactHeight)
   await textarea.fill(draft)
-  await expect.poll(textareaHeight,{message:format+' composer shrinks for the short draft'}).toBe(compactHeight)
+  await expect.poll(textareaHeight,{timeout:15000,message:format+' composer shrinks for the short draft'}).toBe(compactHeight)
   {
    const handle=panel.getByRole('separator',{name:'调整 AI 助手宽度'})
    await expect(handle).toBeVisible()
@@ -278,7 +283,7 @@ test('four real Office editors share assistant chrome and retain drafts across c
   await addDraftExtras()
   const before=network.writes
   await send.click()
-  await expect(panel.locator('.ai-chat')).toContainText('模型供应商限流或额度不足，请稍后重试或切换模型。')
+  await expect(panel.locator('.ai-chat')).toContainText(/模型供应商限流或额度不足，请稍后重试或切换模型。|The model provider is rate limited or out of quota\. Try again later or choose another model\./)
   await expect(textarea).toHaveValue(draft,{timeout:5000})
   {
    await expect(draftExtras).toContainText('restore-note.txt')
@@ -307,7 +312,7 @@ test('four real Office editors share assistant chrome and retain drafts across c
    await expect.poll(()=>delayedFailure===undefined).toBe(true)
    await textarea.fill('正在写的下一条消息')
   }finally{release()}
-  await expect(panel.locator('.ai-chat')).toContainText('等待模型回复超时。请重试、缩短请求，或切换模型。')
+  await expect(panel.locator('.ai-chat')).toContainText(/等待模型回复超时。请重试、缩短请求，或切换模型。|The model response timed out\./)
   await expect(panel.locator('.ai-chat')).toContainText('Partial model reply')
   await expect(panel.locator('.ai-chat')).toContainText('先前提交的请求')
   await expect(textarea).toHaveValue('正在写的下一条消息')

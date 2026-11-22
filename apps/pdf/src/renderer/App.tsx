@@ -6463,7 +6463,17 @@ export default function App({ hostReadOnly = false, hostEditRestriction, hostSav
           // Stale guard: a newer request for this page may have superseded this one
           // while the render ran — its result must not be overwritten by ours
           if (livePreviewKeys.current.get(pageIndex) !== key) return
-          if (!res) return
+          if (!res) {
+            // The Web host can have no patch to render after the last image edit is undone,
+            // even when text drafts keep this page in the preview job list.
+            setLivePreview((prev) => {
+              if (!prev.has(pageIndex)) return prev
+              const next = new Map(prev)
+              next.delete(pageIndex)
+              return next
+            })
+            return
+          }
           const erased = new Set<string>()
           job.text.forEach((t, i) => {
             if (res.textErased[i]) erased.add(textEraseKey(t.probe))

@@ -8,8 +8,9 @@ function fail(){throw Object.assign(Error('PDF_IMAGE_RESOURCE_UNSUPPORTED'),{cod
 const white=char=>/[\x00\t\n\f\r ]/.test(char)
 const delimiter=char=>char===undefined||white(char)||'()<>[]{}/%'.includes(char)
 /** Token offsets are retained so only real resource-name operands are rewritten. */
-export function drawingNames(source){
+export function drawingNames(source,blendForName,inheritedBlend=false){
  const draws=[];let index=0,previous,nesting=0,markedDepth=0
+ const stack=[];let blended=inheritedBlend
  while(index<source.length){
   const start=index,char=source[index]
   if(white(char)){index++;continue}
@@ -35,7 +36,12 @@ export function drawingNames(source){
   if(nesting===0&&op==='BI')fail() // Inline image data has no unambiguous token terminator.
   if(nesting===0&&['BMC','BDC'].includes(op))markedDepth++
   if(nesting===0&&op==='EMC'){if(--markedDepth<0)fail()}
-  if(nesting===0&&op==='Do'){if(!previous)fail();draws.push({...previous,markedContent:markedDepth>0})}
+  if(nesting===0&&blendForName){
+   if(op==='q'){if(stack.length>=256)fail();stack.push(blended)}
+   else if(op==='Q')blended=stack.pop()??true
+   else if(op==='gs')blended=previous?(blendForName(previous.value)??blended):true
+  }
+  if(nesting===0&&op==='Do'){if(!previous)fail();draws.push({...previous,markedContent:markedDepth>0,blended})}
   previous=undefined
  }
  if(nesting!==0)fail()
@@ -116,15 +122,16 @@ async function locateImage(bytes,pageIndex,imageOrdinal){
  const doc=await PDFDocument.load(bytes,{updateMetadata:false}),context=doc.context,page=doc.getPages()[pageIndex]
  if(!page)fail()
  let ordinal=0,target,count=0,remaining=32*1024*1024
- const walk=(contents,resources,ancestors=new Set(),inheritedUnsafe=false)=>{
+ const walk=(contents,resources,ancestors=new Set(),inheritedUnsafe=false,inheritedBlend=false)=>{
   if(!(resources instanceof PDFDict)||ancestors.size>16)fail()
   const parts=contents instanceof PDFArray?contents.asArray():contents?[contents]:[],xobjects=resources.lookupMaybe(name('XObject'),PDFDict)
-  const graphics=resources.lookupMaybe(name('ExtGState'),PDFDict)
-  const unsafe=inheritedUnsafe||!!graphics?.entries().some(([,ref])=>{
-   const state=context.lookup(ref);if(!(state instanceof PDFDict))return true
+  const graphics=new Map(resources.lookupMaybe(name('ExtGState'),PDFDict)?.entries().map(([key,ref])=>[key.decodeText(),ref]))
+  const blendForName=resource=>{
+   const state=context.lookup(graphics.get(resource));if(!(state instanceof PDFDict))return true
+   if(!state.has(name('BM')))return undefined // A partial graphics state leaves the active blend unchanged.
    const blend=state.lookup(name('BM')),values=blend instanceof PDFArray?blend.asArray().map(String):blend?[String(blend)]:[]
-   return values.some(value=>!['/Normal','/Compatible'].includes(value))
-  })
+   return !values.length||values.some(value=>!['/Normal','/Compatible'].includes(value))
+  }
   const source=parts.map(ref=>{
    const stream=context.lookup(ref);if(!(stream instanceof PDFStream))fail()
    const filter=stream.dict.get(name('Filter')),filters=filter instanceof PDFArray?filter.asArray().map(String):filter?[String(filter)]:[]
@@ -133,17 +140,17 @@ async function locateImage(bytes,pageIndex,imageOrdinal){
    const data=filters.length?inflateSync(raw,{maxOutputLength:Math.max(1,limit)}):raw
    if(data.length>limit)fail();remaining-=data.length;return Buffer.from(data).toString('latin1')
   }).join(' ')
-  for(const token of drawingNames(source)){
+  for(const token of drawingNames(source,blendForName,inheritedBlend)){
    if(++count>10000)fail()
    const ref=namedResource(xobjects,token.value),object=context.lookup(ref)
    if(!(object instanceof PDFStream))fail()
    const type=String(object.dict.get(name('Subtype')))
    // Plain Form ancestry does not itself prevent a visual raster bake. The
    // caller checks the actual occurrence's inherited clips (including BBox).
-   if(type==='/Image'){if(ordinal++===imageOrdinal)target={ref,object,rasterSafe:!unsafe&&!token.markedContent}}
+   if(type==='/Image'){if(ordinal++===imageOrdinal)target={ref,object,rasterSafe:!inheritedUnsafe&&!token.markedContent&&!token.blended}}
    else if(type==='/Form'){
     if(ancestors.has(object))fail()
-    walk(object,object.dict.lookupMaybe(name('Resources'),PDFDict)??resources,new Set(ancestors).add(object),unsafe||token.markedContent||object.dict.has(name('Group')))
+    walk(object,object.dict.lookupMaybe(name('Resources'),PDFDict)??resources,new Set(ancestors).add(object),inheritedUnsafe||token.markedContent||object.dict.has(name('Group')),token.blended)
    }else fail()
   }
  }
