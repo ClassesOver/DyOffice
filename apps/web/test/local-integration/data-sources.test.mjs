@@ -109,8 +109,9 @@ test('administrator saves and revokes data source targets without restarting', a
   const admin = f.adminSigned.token
   await call(f, 'POST', '', { sourceId: 'approval', name: 'Approval', kind: 'postgres', config: {}, secret: targets.readerDsn }, undefined, 201)
   const check = async () => (await call(f, 'POST', '/approval/test', {}, undefined, 200)).json()
-  // A database connection uses ordinary transport when no database target is configured.
-  assert.equal((await check()).ok, true)
+  // Without an approved database target, an unlisted host may reach only public
+  // addresses, so this loopback database is refused until an administrator approves it.
+  assert.equal((await check()).code, 'TARGET_NOT_APPROVED')
   assert.equal((await save(f.alice.token, targets.approvals)).statusCode, 403)
   assert.equal((await save(admin, [{ ...targets.approvals[0], addresses: ['169.254.169.254'] }])).statusCode, 400)
   const saved = await save(admin, targets.approvals)
@@ -124,7 +125,7 @@ test('administrator saves and revokes data source targets without restarting', a
   assert.equal('sourceEgressTargets' in publicSettings.json(), false)
   assert.equal((await save(admin, [])).statusCode, 409)
   assert.equal((await save(admin, [], saved.json().revision + 1)).statusCode, 200)
-  assert.equal((await check()).ok, true)
+  assert.equal((await check()).code, 'TARGET_NOT_APPROVED')
 })
 
 test('saved configuration enforces optimistic CAS and credential hygiene', async t => {
@@ -280,11 +281,13 @@ test('read-only SQL channel: AST guard, real PG denial, row cap, timeout, units'
 
   // Input values and target errors never become response diagnostics.
   const sensitiveSql = 'SELECT missing_sensitive_field_credential_probe FROM ' + targets.probeTable
-  const failed = await call(f, 'POST', '/metrics/query', { sql: sensitiveSql }, undefined, 502)
+  // The database's statement error is a fixable 400 without its text.
+  const failed = await call(f, 'POST', '/metrics/query', { sql: sensitiveSql }, undefined, 400)
   assert.equal(failed.body.includes('missing_sensitive_field'), false)
   assert.equal(failed.body.includes(targets.readerDsn), false)
+  // A 1.1 MB cell fits the 4 MB SQL result budget; one row over the whole budget still fails.
   await targets.admin.query(`UPDATE ${targets.probeTable} SET note=$1 WHERE i=1`, ['x'.repeat(1_100_000)])
-  await call(f, 'POST', '/metrics/query', { sql: `SELECT note FROM ${targets.probeTable} WHERE i=1` }, undefined, 502)
+  assert.equal((await call(f, 'POST', '/metrics/query', { sql: `SELECT note FROM ${targets.probeTable} WHERE i=1` }, undefined, 200)).json().truncated, false)
   await targets.admin.query(`UPDATE ${targets.probeTable} SET note=$1 WHERE i=1`, ['x'.repeat(4_000_000)])
   await call(f, 'POST', '/metrics/query', { sql: `SELECT note FROM ${targets.probeTable} WHERE i=1` }, undefined, 502)
   await call(f, 'POST', '/metrics/query', { sql: "SELECT label || label AS big FROM " + targets.probeTable + ' LIMIT 1' }, undefined, 200)

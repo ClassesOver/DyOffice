@@ -17,6 +17,9 @@ export function safeFailure(error: unknown, kind: SqlSourceKind): never {
   if (kind !== 'postgres' && code === 'HANDSHAKE_NO_SSL_SUPPORT') throw Object.assign(sourceError(502), { code: 'SOURCE_TLS_UNSUPPORTED' })
   if (code === '42501' || code === '25006' || ['ER_TABLEACCESS_DENIED_ERROR','ER_DBACCESS_DENIED_ERROR','ER_SPECIFIC_ACCESS_DENIED_ERROR'].includes(code ?? '')) throw sourceError(403)
   if (code === '57014' || ['PROTOCOL_SEQUENCE_TIMEOUT','ER_QUERY_TIMEOUT','ETIMEDOUT'].includes(code ?? '')) throw sourceError(504)
+  // The database refused the statement itself (syntax, unknown table/column/
+  // function, type or data error): a fixable query, not an unusable source.
+  if (/^(?:42[0-9A-Z]{3}|22[0-9A-Z]{3})$/.test(code ?? '') || ['ER_PARSE_ERROR','ER_BAD_FIELD_ERROR','ER_NO_SUCH_TABLE','ER_SP_DOES_NOT_EXIST','ER_WRONG_FIELD_WITH_GROUP','ER_TRUNCATED_WRONG_VALUE','ER_DIVISION_BY_ZERO'].includes(code ?? '')) throw sourceError(400)
   // pg emits this exact local driver error without a SQLSTATE when its
   // query deadline fires before the server cancellation response arrives.
   if (kind === 'postgres' && error instanceof Error && code === undefined && error.message === 'Query read timeout') throw sourceError(504)

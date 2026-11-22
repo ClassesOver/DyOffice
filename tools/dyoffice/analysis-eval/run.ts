@@ -165,7 +165,7 @@ async function trial(scenario: Scenario) {
     skill: composeSkills('office-analysis-eval', OFFICE_INTRO, [sources, insert]),
     maxTurns: 16,
     events: {
-      onToolExecuted: ({ call, execution }) => evidence.calls.push({ turn, name: call.name, input: (call.input ?? {}) as Record<string, unknown>, isError: !!execution.isError }),
+      onToolExecuted: ({ call, execution }) => evidence.calls.push({ turn, name: call.name, input: (call.input ?? {}) as Record<string, unknown>, isError: !!execution.isError, output: String(execution.output ?? '').slice(0, 600) }),
       onDone: result => settle?.({ text: result.text }),
       onError: error => settle?.({ text: '', error }),
     },
@@ -183,7 +183,7 @@ async function trial(scenario: Scenario) {
 
 const truthPool = new pg.Pool({ connectionString: values['truth-dsn'] })
 const selected = SCENARIOS.filter(s => !values.only || values.only.split(',').includes(s.id))
-const report: { scenario: string; title: string; trial: number; passed: boolean; checks: Check[]; toolErrors: number; calls: number; ms: number; usage: { input: number; output: number; retries: number }; errors: string; answers: string[]; sql: string[] }[] = []
+const report: { scenario: string; title: string; trial: number; passed: boolean; checks: Check[]; toolErrors: number; calls: number; ms: number; usage: { input: number; output: number; retries: number }; errors: string; answers: string[]; sql: string[]; tools: unknown[] }[] = []
 for (const scenario of selected) {
   const truth: Record<string, Record<string, unknown>[]> = {}
   for (const [key, sql] of Object.entries(scenario.truth)) truth[key] = (await truthPool.query(sql)).rows
@@ -191,7 +191,7 @@ for (const scenario of selected) {
     const { evidence, usage, ms, errors } = await trial(scenario)
     const checks = scenario.grade(evidence, truth)
     const passed = !errors && checks.every(c => c.pass)
-    report.push({ scenario: scenario.id, title: scenario.title, trial: index + 1, passed, checks, toolErrors: evidence.calls.filter(c => c.isError).length, calls: evidence.calls.length, ms, usage, errors, answers: evidence.answers, sql: evidence.calls.filter(c => c.name === 'sources_query').map(c => String(c.input.sql)) })
+    report.push({ scenario: scenario.id, title: scenario.title, trial: index + 1, passed, checks, toolErrors: evidence.calls.filter(c => c.isError).length, calls: evidence.calls.length, ms, usage, errors, answers: evidence.answers, sql: evidence.calls.filter(c => c.name === 'sources_query').map(c => String(c.input.sql)), tools: evidence.calls.map(c => ({ turn: c.turn, name: c.name, input: c.input, isError: c.isError, ...(c.isError ? { output: c.output } : {}) })) })
     console.log(`${passed ? 'PASS' : 'FAIL'} ${scenario.id} #${index + 1} ${(ms / 1000).toFixed(1)}s calls=${evidence.calls.length} toolErrors=${report.at(-1)!.toolErrors}${passed ? '' : ' :: ' + checks.filter(c => !c.pass).map(c => c.name).join('; ') + (errors ? ' :: ' + errors.trim() : '')}`)
   }
 }

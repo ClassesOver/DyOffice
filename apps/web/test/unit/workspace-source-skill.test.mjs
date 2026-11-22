@@ -49,11 +49,23 @@ test('a failed query returns status-specific rewrite advice and truncated result
   const fail = status => async () => { throw Object.assign(new Error('x'), { status }) }
   const output = async status => (await createWorkspaceSourceSkill(fail(status), { tools: ['sources_query'], disposed: () => false }).executeTool({ id: '1', name: 'sources_query', input: { sourceId: 's', sql: 'select 1' } })).output
   assert.match(await output(504), /statement timeout.*Do not retry the same SQL.*GROUP BY/s)
-  assert.match(await output(400), /single SELECT/)
+  assert.match(await output(400), /SQL was rejected.*column alias lists.*sources_describe/s)
   assert.match(await output(403), /allowed scope/)
   assert.match(await output(500), /did not complete/)
   assert.equal(sourceFailure('sources.read_result', 504), sourceFailure('sources.list', undefined))
   assert.match(truncatedNotice(1000), /first 1000 rows.*Do not compute totals.*GROUP BY.*LIMIT/s)
   const prompt = createWorkspaceSourceSkill(async () => ({}), { tools: ['sources_query'], disposed: () => false }).systemPrompt
   assert.match(prompt, /When sourceTruncated is true, re-query with aggregation/)
+})
+
+test('an empty describe of an unqualified table tells the model to use the schema-qualified name', async () => {
+  const { withDescribeHint } = await import('../../../../packages/browser-host/src/source-skill.ts')
+  const empty = { sourceId: 's', metadata: { rows: [] } }
+  assert.match(withDescribeHint('sources.describe', { sourceId: 's', table: 'orders' }, empty).hint, /schema-qualified.*sales\.orders/)
+  assert.equal(withDescribeHint('sources.describe', { sourceId: 's', table: 'sales.orders' }, empty), empty)
+  const found = { metadata: { rows: [{ column_name: 'id' }] } }
+  assert.equal(withDescribeHint('sources.describe', { sourceId: 's', table: 'orders' }, found), found)
+  const skill = createWorkspaceSourceSkill(async () => empty, { tools: ['sources_describe'], disposed: () => false })
+  const out = await skill.executeTool({ id: '1', name: 'sources_describe', input: { sourceId: 's', table: 'orders' } })
+  assert.match(out.output, /"hint":"No columns were found for \\"orders\\"/)
 })

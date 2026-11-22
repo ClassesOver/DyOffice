@@ -8,7 +8,7 @@ export interface TrialEvidence {
   /** final assistant text per turn */
   answers: string[]
   /** tool calls in order, with name, input and whether it errored */
-  calls: { turn: number; name: string; input: Record<string, unknown>; isError: boolean }[]
+  calls: { turn: number; name: string; input: Record<string, unknown>; isError: boolean; output?: string }[]
   /** table content applied through insert_data_result */
   inserted: { rows: readonly (readonly string[])[] }[]
 }
@@ -35,6 +35,27 @@ export function mentions(text: string, expected: number, tolerance = 0.005): boo
 }
 
 const num = (value: unknown) => Number(value)
+/** Some line of the text (or row of a table) carries both the label and the value. */
+const pairedLine = (lines: readonly string[], label: (line: string) => boolean, expected: number, tolerance?: number) =>
+  lines.some(line => label(line) && mentions(line, expected, tolerance))
+const linesOf = (text: string) => text.split(/\r?\n/)
+const CN_DIGITS = ['零', '一', '二', '三', '四']
+const quarterLabel = (q: number) => (line: string) =>
+  new RegExp(`Q${q}(?!\\d)|第?[${q}${CN_DIGITS[q]}]季度`, 'i').test(line)
+/**
+ * Month label in a row: a year-month (2026-01, 2026-01-01, 2026/1, 2026年1月; amounts such as 2299305.30 are not dates), or, since the
+ * scenario fixes one year, a month alone (1月, January, or a leading month-number cell).
+ */
+const MONTH_NAMES = ['january', 'february', 'march', 'april', 'may', 'june', 'july', 'august', 'september', 'october', 'november', 'december']
+const monthLabel = (month: string) => {
+  const [year, value] = month.split('-').map(Number) as [number, number]
+  return (line: string) => {
+    const dated = [...line.matchAll(/(?<![\d.])((?:19|20)\d{2})\s*[-/年]\s*(\d{1,2})(?!\d)/g)]
+    if (dated.length) return dated.some(match => Number(match[1]) === year && Number(match[2]) === value)
+    const name = MONTH_NAMES[value - 1]!
+    return new RegExp(`(?<![\\d.])0?${value}\\s*月`).test(line) || new RegExp(`\\b(?:${name}|${name.slice(0, 3)})\\b`, 'i').test(line) || Number(line.trim().split(/\s+/)[0]) === value
+  }
+}
 const queried = (evidence: TrialEvidence, turn?: number) =>
   evidence.calls.filter(call => call.name === 'sources_query' && !call.isError && (turn === undefined || call.turn === turn))
 const sqlOf = (evidence: TrialEvidence, turn?: number) => queried(evidence, turn).map(call => String(call.input.sql ?? '')).join('\n')
@@ -57,7 +78,7 @@ export const SCENARIOS: Scenario[] = [
       return [
         check('turn 1 names both tables', /orders/.test(evidence.answers[0] ?? '') && /order_items/.test(evidence.answers[0] ?? '')),
         check('turn 2 aggregates in SQL', /sum\s*\(/i.test(sqlOf(evidence, 1)) && /group\s+by/i.test(sqlOf(evidence, 1)), sqlOf(evidence, 1)),
-        ...quarters.map(row => check(`Q${row.q} total stated`, mentions(evidence.answers[1] ?? '', num(row.paid)), `expected ${row.paid}`)),
+        ...quarters.map(row => check(`Q${row.q} total stated`, pairedLine(linesOf(evidence.answers[1] ?? ''), quarterLabel(num(row.q)), num(row.paid)), `expected Q${row.q} ${row.paid} on one line`)),
       ]
     },
   },
@@ -123,7 +144,7 @@ export const SCENARIOS: Scenario[] = [
       return [
         check('turn 1 joins in SQL', /join/i.test(sqlOf(evidence, 0)), sqlOf(evidence, 0)),
         check('turn 1 top 3 in order', ranked(evidence.answers[0] ?? '', truth.all!), truth.all!.map(r => r.category).join(',')),
-        ...truth.all!.map(row => check(`turn 1 ${row.category} revenue`, mentions(evidence.answers[0] ?? '', num(row.revenue)), `expected ${row.revenue}`)),
+        ...truth.all!.map(row => check(`turn 1 ${row.category} revenue`, pairedLine(linesOf(evidence.answers[0] ?? ''), line => line.includes(String(row.category)), num(row.revenue)), `expected ${row.category} ${row.revenue} on one line`)),
         check('turn 2 keeps the paid filter and adds region', /paid/i.test(sqlOf(evidence, 1)) && /华南/.test(sqlOf(evidence, 1)), sqlOf(evidence, 1)),
         check('turn 2 top 3 in order', ranked(evidence.answers[1] ?? '', truth.south!), truth.south!.map(r => r.category).join(',')),
       ]
@@ -143,7 +164,7 @@ export const SCENARIOS: Scenario[] = [
       const table = evidence.inserted.at(-1)?.rows ?? []
       return [
         check('insert_data_result succeeded', evidence.calls.some(call => call.name === 'insert_data_result' && !call.isError)),
-        ...truth.months!.map(row => check(`${row.month} inserted`, table.some(line => mentions(line.join(' '), num(row.paid))), `expected ${row.paid}`)),
+        ...truth.months!.map(row => check(`${row.month} inserted`, pairedLine(table.map(line => line.join(' ')), monthLabel(String(row.month)), num(row.paid)), `expected ${row.month} ${row.paid} in one row`)),
       ]
     },
   },
