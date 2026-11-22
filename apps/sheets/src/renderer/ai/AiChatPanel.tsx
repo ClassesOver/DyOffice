@@ -1,11 +1,11 @@
-import { AssistantConversation, useAiPanelResize } from '@genoffice/ui'
+import { AssistantConversation, useAiPanelResize, useAssistantFocusRoot } from '@genoffice/ui'
 import { AssistantParticipants, DelegatedAgentResultCard, type AssistantParticipant, type DelegatedAgentResult } from '@genoffice/ui'
 import {
   AiPanelSideButton,
   AiModelPicker,
   type AiModelPickerBridge,
 } from '@genoffice/ui'
-import React, { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import {
   AiComposer,
   AiQueueStrip,
@@ -210,6 +210,14 @@ export function AiChatPanel({
   const stickToBottomRef = useRef(true)
   const [dragOver, setDragOver] = useState(false)
   const asideRef = useRef<HTMLElement | null>(null)
+  const focusRoot = useAssistantFocusRoot<HTMLElement>()
+  const setAside = useCallback(
+    (element: HTMLElement | null) => {
+      asideRef.current = element
+      focusRoot(element)
+    },
+    [focusRoot],
+  )
   /** data-URL previews for image attachments, keyed by path (Genspark composer thumbnails) */
   const [attachmentPreviews, setAttachmentPreviews] = useState<Record<string, string>>({})
   /** image paths with a read already issued — one readAttachmentImage per attach, even while pending */
@@ -293,7 +301,7 @@ export function AiChatPanel({
     // the sidebar setting is off: nothing to show until an explicit AI action opens the panel
     if (hideRail) return <></>
     return (
-      <aside className="copilot collapsed">
+      <aside ref={focusRoot} className="copilot collapsed">
         <button
           className="expand-copilot"
           onClick={onExpand}
@@ -370,7 +378,7 @@ export function AiChatPanel({
 
   return (
     <aside
-      ref={asideRef}
+      ref={setAside}
       className={`copilot${dragOver ? ' ai-panel-dragover' : ''}${resizing ? ' ai-panel-resizing' : ''}`}
       dir={isRtl ? 'rtl' : undefined}
       onDragOver={(e) => {

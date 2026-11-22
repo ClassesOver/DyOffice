@@ -1,7 +1,7 @@
 import {bindDocumentHandoff,createAttachmentsSkill,withAttachedSkills,ATTACHMENT_IMAGE_EXTS,type AgentImage,type AttachedSkill} from '@genoffice/agent-core'
 import {useEffect,useMemo,useRef,useState,type CSSProperties,type ReactNode} from 'react'
 import {AgentLoop,composeSkills} from '../../../../packages/agent-core/src/index'
-import {AiComposer,AiSkillChips,AiSkillsMenu,Markdown,useAiPanelResize,type MarkdownNav,type AiAttachmentLike} from '@genoffice/ui'
+import {AiComposer,AiSkillChips,AiSkillsMenu,Markdown,useAiPanelResize,useAssistantFocusRoot,type MarkdownNav,type AiAttachmentLike} from '@genoffice/ui'
 import {GensparkMark} from '../../../docs/src/renderer/components/icons'
 import type {createEditorAssistant} from './assistant'
 import '@genoffice/ui/ai-model-picker.css'
@@ -29,6 +29,7 @@ export function SharedEditorAssistant({assistant,lang,context='',dock,widthKey,o
  const [localCollapsed,setLocalCollapsed]=useState(false)
  const collapsed=dock?.collapsed??localCollapsed
  const {width,resizing,handle}=useAiPanelResize(widthKey,lang,!collapsed)
+ const focusRoot=useAssistantFocusRoot<HTMLDivElement>()
  const inputRef=useRef<HTMLTextAreaElement>(null),railRef=useRef<HTMLButtonElement>(null)
  const focusAfterToggle=useRef(false)
  const changeCollapsed=(next:boolean)=>{focusAfterToggle.current=true;(dock?.setCollapsed??setLocalCollapsed)(next)}
@@ -266,7 +267,7 @@ export function SharedEditorAssistant({assistant,lang,context='',dock,widthKey,o
   {items.map(item=><div data-sender={item.sender} className={`ai-msg ai-msg-${item.role}`} key={item.id}>{item.text?<><Markdown text={item.text} nav={item.role==='assistant'?assistantNav:undefined}/><AiSkillChips lang={lang} names={item.skills??[]}/>{!!item.files?.length&&<div className="shared-assistant-file-list">{item.files.map((name,index)=><span key={index}>{name}</span>)}</div>}</>:busy&&item.role==='assistant'?<span role="status">{lang==='zh'?'正在思考…':'Thinking…'}</span>:null}</div>)}
   {error&&<p role="alert">{error}</p>}
  </>
- return <div className={`ai-dock shared-assistant-dock${collapsed?' collapsed':''}${resizing?' ai-panel-resizing':''}`} style={widthKey?{'--ai-panel-width':`${width}px`} as CSSProperties:undefined}>
+ return <div ref={focusRoot} className={`ai-dock shared-assistant-dock${collapsed?' collapsed':''}${resizing?' ai-panel-resizing':''}`} style={widthKey?{'--ai-panel-width':`${width}px`} as CSSProperties:undefined}>
   <button ref={railRef} type="button" className="ai-rail" hidden={!collapsed} aria-label={lang==='zh'?'展开 AI 助手':'Expand AI assistant'} onClick={()=>changeCollapsed(false)}><GensparkMark size={22}/></button>
   <section hidden={collapsed} className="shared-editor-assistant ai-panel" aria-label={lang==='zh'?'Office 助手':'Office assistant'}>
   <header className="shared-editor-assistant-head ai-panel-header"><span className="ai-panel-title"><GensparkMark size={22}/>{lang==='zh'?'AI 助手':'AI Assistant'}</span><div className="ai-panel-header-actions"><button type="button" className="ai-header-btn ai-panel-collapse" aria-label={lang==='zh'?'收起 AI 助手':'Collapse AI assistant'} onClick={()=>changeCollapsed(true)}><svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true"><rect x="2" y="3" width="16" height="14" rx="2"/><path d="M7 3v14m6-10-3 3 3 3"/></svg></button></div></header>
