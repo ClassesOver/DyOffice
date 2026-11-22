@@ -12,6 +12,8 @@ export interface ChannelSnapshot {
  tasks:ChannelTask[]
 }
 const base='/api/v1/assistant-channels'
+export const REFRESH_GIVE_UP_MS=25_000
+const REFRESH_RETRY_MAX_MS=8_000
 /** Optional collaboration uses the existing editor's notification channel and
  * executor. Native messages never wait for pairing, snapshots or peer tasks. */
 export function createAssistantChannelClient(options:{request:SettingsRequest;fileId:string;editorId:string;conversationId?:string;generation:()=>number}) {
@@ -110,26 +112,44 @@ export function createAssistantChannelClient(options:{request:SettingsRequest;fi
   } catch {if(!disposed&&taskGeneration===localGeneration){error='Collaboration task unavailable; refresh its durable status.';notify()}}
   finally {if(taskGeneration===localGeneration){running=undefined;pumping=false;if(!disposed)void refresh()}}
  }
+ // A refresh requested while one is in flight runs once more afterwards: the
+ // in-flight read may predate the change that asked for it.
+ let refreshAgain=false,refreshFailingSince=0,refreshFailures=0,refreshRetry:ReturnType<typeof setTimeout>|undefined
+ function clearRefreshRetry(){if(refreshRetry){clearTimeout(refreshRetry);refreshRetry=undefined}}
  async function refresh():Promise<void> {
   if(disposed||!snapshot)return
-  if(refreshing)return refreshing
+  if(refreshing){refreshAgain=true;return refreshing}
   const channelId=snapshot.conversationId,generation=localGeneration
   refreshing=(async()=>{
    try {
     const next=await request<ChannelSnapshot>(base+'/channels/'+channelId)
     if(disposed||generation!==localGeneration||snapshot?.conversationId!==channelId)return
     if(next.fileId!==options.fileId)throw Error('Channel file changed')
-   snapshot=next;error='';flushContinuations()
+    snapshot=next;error='';refreshFailingSince=0;refreshFailures=0;clearRefreshRetry();flushContinuations()
     if(nativeRun?.parent){const parent=next.tasks.find(task=>task.taskId===nativeRun!.parent!.taskId);if(next.paused||!parent||parent.state!=='running'||parent.claimId!==nativeRun.parent.claimId)cancelParentRun()}
     if(running&&!next.tasks.some(task=>task.taskId===running!.task.taskId&&task.state==='running'))running.controller.abort()
     notify();void pump()
    } catch (cause) {
     if(!disposed&&generation===localGeneration){
-     if((cause as {status?:number})?.status===404)resetConversation()
-     error='Collaboration unavailable';running?.controller.abort();cancelParentRun();notify()
+     const status=typeof cause==='object'&&cause!==null?((cause as {status?:unknown}).status??(cause as {statusCode?:unknown}).statusCode):undefined
+     if(status===404)resetConversation()
+     error='Collaboration unavailable'
+     // Work in progress is stopped only when the channel is gone, access is
+     // refused or refreshes have failed for longer than a peer stays online
+     // (45 s server side). A single network blip must not fail a running
+     // Office task; retry with backoff instead.
+     const now=Date.now();refreshFailingSince||=now;refreshFailures++
+     if(status===401||status===403||status===404||now-refreshFailingSince>=REFRESH_GIVE_UP_MS){running?.controller.abort();cancelParentRun()}
+     if(snapshot&&!refreshRetry)refreshRetry=setTimeout(()=>{refreshRetry=undefined;void refresh()},Math.min(REFRESH_RETRY_MAX_MS,1000*2**(refreshFailures-1)))
+     notify()
     }
    }
-   finally{if(generation===localGeneration)refreshing=undefined}
+   finally{
+    if(generation===localGeneration){
+     refreshing=undefined
+     if(refreshAgain){refreshAgain=false;if(!disposed&&snapshot)void refresh()}
+    }
+   }
   })()
   return refreshing
  }
@@ -137,7 +157,7 @@ export function createAssistantChannelClient(options:{request:SettingsRequest;fi
  function resetConversation(){
   cancelParentRun()
   const previous=snapshot,previousConnection=connection
-  running?.controller.abort();snapshot=null;connection=undefined;attempted.clear();delegated.clear();yieldedBatches.length=0;continued.clear();parentContinuations.clear();settlingRuns.clear();nativeRun=undefined;localGeneration++;running=undefined;pumping=false;refreshing=undefined;starting=undefined;error=''
+  running?.controller.abort();snapshot=null;connection=undefined;attempted.clear();delegated.clear();yieldedBatches.length=0;continued.clear();parentContinuations.clear();settlingRuns.clear();nativeRun=undefined;localGeneration++;running=undefined;pumping=false;refreshing=undefined;refreshAgain=false;refreshFailingSince=0;refreshFailures=0;clearRefreshRetry();starting=undefined;error=''
   if(schedule){clearInterval(schedule);schedule=undefined}
   try{sessionStorage.removeItem('dyoffice-assistant-channel:'+options.fileId)}catch{/* Storage is optional. */}
   if(previous&&previousConnection)void request(base+'/channels/'+previous.conversationId+'/disconnect','POST',{connectionId:previousConnection.id,connectionEpoch:previousConnection.epoch}).catch(()=>{})
@@ -242,7 +262,7 @@ export function createAssistantChannelClient(options:{request:SettingsRequest;fi
   async pause(paused:boolean){await request(base+'/channels/'+snapshot!.conversationId+'/pause','POST',{paused});await refresh()},
   async send(to:string,instruction:string){const receipt=await sendAction(to,{kind:'delegate',instruction}) as AgentReceipt;await refresh();return receipt},
   async cancel(taskId:string){await sendAction('office',{kind:'cancel',taskId});await refresh()},
-  dispose(){if(disposed)return;cancelParentRun();disposed=true;running?.controller.abort();if(schedule)clearInterval(schedule);
+  dispose(){if(disposed)return;cancelParentRun();disposed=true;clearRefreshRetry();running?.controller.abort();if(schedule)clearInterval(schedule);
    if(snapshot&&connection)void request(base+'/channels/'+snapshot.conversationId+'/disconnect','POST',{connectionId:connection.id,connectionEpoch:connection.epoch}).catch(()=>{})
    listeners.clear()},
  }

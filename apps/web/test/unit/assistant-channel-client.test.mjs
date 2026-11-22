@@ -408,7 +408,7 @@ for(const failure of ['cancel_requested','unauthorized'])test(`related parent na
  await f.client.refresh();await tick()
  const token=f.client.control.beginRun(f.continuations[0],f.continuationTokens[0]);assert.ok(token)
  if(failure==='cancel_requested'){f.setSnapshot({tasks:[{...task('parent','cancel_requested'),from:'office'}]});await f.client.refresh()}
- else {const gate=f.holdRefresh(),refresh=f.client.refresh();gate.reject(Error('Session revoked'));await refresh}
+ else {const gate=f.holdRefresh(),refresh=f.client.refresh();gate.reject(Object.assign(Error('Session revoked'),{status:401}));await refresh}
  assert.deepEqual(f.cancellations,[token])
  f.client.control.endRun(token,{text:'Stopped',cancelled:true});await tick();await tick()
  const unrelated=f.client.control.beginRun('Unrelated user work');assert.ok(unrelated)
@@ -462,4 +462,51 @@ test('explicit HTTP 503 claim failure recovers with one same-key attempt',async 
  const f=fixture(t);f.failClaims(Object.assign(Error('Service unavailable'),{status:503}));f.setSnapshot({tasks:[task('read')]});f.register()
  await f.client.start();await tick();await tick()
  const claims=f.calls.filter(c=>c.path.endsWith('/claim'));assert.equal(claims.length,2);assert.equal(claims[0].body.requestId,claims[1].body.requestId);assert.equal(f.executions.length,1)
+})
+
+test('a transient refresh failure keeps the running Office task; persistent failure stops it',async t=>{
+ const f=fixture(t),completion=deferred()
+ f.setSnapshot({tasks:[task('task-1')]})
+ f.register(()=>completion.promise)
+ await f.client.start();await tick()
+ const signal=f.executions[0].signal
+ for(const failure of [new TypeError('Failed to fetch'),Object.assign(Error('Bad gateway'),{status:502})]){
+  const gate=f.holdRefresh(),refresh=f.client.refresh();gate.reject(failure);await refresh
+ }
+ assert.equal(signal.aborted,false)
+ assert.equal(f.client.error(),'Collaboration unavailable')
+ const realNow=Date.now;t.after(()=>{Date.now=realNow})
+ Date.now=()=>realNow()+26_000
+ const gate=f.holdRefresh(),refresh=f.client.refresh();gate.reject(new TypeError('Failed to fetch'));await refresh
+ assert.equal(signal.aborted,true)
+ completion.resolve({text:'',cancelled:true});await tick();await tick()
+})
+
+test('a refresh failure followed by success clears the failure window',async t=>{
+ const f=fixture(t),completion=deferred()
+ f.setSnapshot({tasks:[task('task-1')]})
+ f.register(()=>completion.promise)
+ await f.client.start();await tick()
+ const signal=f.executions[0].signal,realNow=Date.now;t.after(()=>{Date.now=realNow})
+ let gate=f.holdRefresh(),refresh=f.client.refresh();gate.reject(new TypeError('Failed to fetch'));await refresh
+ f.setSnapshot({tasks:[task('task-1','running')]});await f.client.refresh()
+ assert.equal(f.client.error(),'')
+ Date.now=()=>realNow()+26_000
+ gate=f.holdRefresh();refresh=f.client.refresh();gate.reject(new TypeError('Failed to fetch'));await refresh
+ assert.equal(signal.aborted,false)
+ completion.resolve({text:'done',cancelled:false});await tick();await tick()
+})
+
+test('a change notified while a refresh is in flight is read by one follow-up refresh',async t=>{
+ const f=fixture(t);f.register();await f.client.start();await tick()
+ const reads=()=>f.calls.filter(call=>call.path.endsWith('/channels/channel-1')&&call.method===undefined).length
+ const before=reads()
+ const gate=f.holdRefresh(),first=f.client.refresh()
+ f.setSnapshot({sequence:5})
+ f.client.observe([{conversationId:'channel-1',sequence:5}])
+ f.client.observe([{conversationId:'channel-1',sequence:5}])
+ gate.resolve({conversationId:'channel-1',fileId:'file-1',paused:false,sequence:1,members:[],applications:[],tasks:[]})
+ await first;await tick();await tick()
+ assert.equal(reads(),before+2)
+ assert.equal(f.client.snapshot().sequence,5)
 })
