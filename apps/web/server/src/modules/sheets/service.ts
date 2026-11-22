@@ -1,4 +1,4 @@
-import type {FindInput,RecalcInput} from '../../../../worker/src/native/xlsx.ts'
+import type {BoundWorkbookSource,FindInput,RecalcInput} from '../../../../worker/src/native/xlsx.ts'
 import {createHash,randomUUID} from 'node:crypto'
 import type { createFileService } from '../files/service.ts'
 import { authError } from '../auth/sessions.ts'
@@ -6,6 +6,7 @@ import type {WorkbookPackageQuery} from '../../../../worker/src/native/gateway.t
 
 type Files = ReturnType<typeof createFileService>
 export interface SheetRange { startRow: number; endRow: number; startColumn: number; endColumn: number }
+export interface ExternalLinkBinding { index: number; fileId: string; revision: string }
 export type SheetsPackageReader = (bytes: Buffer, signal?: AbortSignal, query?: WorkbookPackageQuery) => Promise<unknown>
 export interface SheetsNative {
   convertMergeSource?(input:Buffer,format:'csv'|'tsv'|'xls',signal?:AbortSignal):Promise<Buffer>
@@ -13,6 +14,7 @@ export interface SheetsNative {
   recalculate?(input: Uint8Array, request: RecalcInput, signal?: AbortSignal): Promise<unknown>
   readSheet?(input: Uint8Array, sheetName: string, kind: 'formulas' | 'outline', signal?: AbortSignal): Promise<unknown>
   findCells?(input:Uint8Array,sheetName:string,request:FindInput,signal?:AbortSignal):Promise<unknown>
+  refreshExternalLinks?(input:Uint8Array,sources:readonly BoundWorkbookSource[],signal?:AbortSignal):Promise<unknown>
   inspect(input: Uint8Array, signal?: AbortSignal): Promise<unknown>
   readRange(input: Uint8Array, sheetName: string, range: SheetRange, signal?: AbortSignal): Promise<unknown>
 }
@@ -64,6 +66,28 @@ export function createSheetsService({ files, native, readPackage, maxConcurrent 
     listExternalLinks: (token:string,fileId:string,revision:string,signal?:AbortSignal)=>read(token,fileId,revision,bytes=>{
       if(!readPackage)throw authError(501)
       return readPackage(bytes,signal,{externalLinks:true})
+    },signal),
+    previewExternalLinkRefresh: (token:string,fileId:string,revision:string,bindings:readonly ExternalLinkBinding[],signal?:AbortSignal)=>read(token,fileId,revision,async bytes=>{
+      if(!native.refreshExternalLinks)throw authError(501)
+      const indices=new Set(bindings.map(binding=>binding.index))
+      if(bindings.length>256||indices.size!==bindings.length||
+        bindings.some(({index})=>!Number.isInteger(index)||index<1||index>256))throw authError(400)
+      let remaining=32*1024*1024-bytes.length
+      const sources:BoundWorkbookSource[]=[]
+      for(const binding of bindings){
+        signal?.throwIfAborted()
+        const source=await files.download(token,binding.fileId,binding.revision,remaining)
+        if(source.format!=='xlsx')throw authError(415)
+        remaining-=source.bytes.length
+        sources.push({index:binding.index,bytes:source.bytes})
+      }
+      signal?.throwIfAborted()
+      const report=await native.refreshExternalLinks(bytes,sources,signal)
+      for(const sourceFileId of new Set(bindings.map(binding=>binding.fileId))){
+        signal?.throwIfAborted()
+        await files.openFile(token,sourceFileId)
+      }
+      return report
     },signal),
     readPackage: (token: string, fileId: string, revision: string, signal?: AbortSignal) => read(token,fileId,revision,bytes => { if (!readPackage) throw authError(501); return readPackage(bytes,signal) },signal),
     inspect: (token: string, fileId: string, revision: string, signal?: AbortSignal) => read(token, fileId, revision, bytes => native.inspect(bytes, signal), signal),

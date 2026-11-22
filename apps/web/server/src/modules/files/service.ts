@@ -217,11 +217,12 @@ export function createFileService({ transactions, objects, quotaBytes = 1024 ** 
     },
     syncAssistantChat:(token:string,fileId:string,input:Parameters<typeof syncFileAssistantChat>[3])=>syncFileAssistantChat(transactions,token,fileId,input),
     openFile: (token: FileCredential, fileId: string) => run(token, 'files:read', async (connection, principal) => openResult(await loadFile(connection, principal, uuid(fileId)))),
-    download: (token: FileCredential, fileId: string, revision: string) => run(token, 'files:read', async (connection, principal) => {
+    download: (token: FileCredential, fileId: string, revision: string, maxBytes?: number) => run(token, 'files:read', async (connection, principal) => {
       const row = await loadFile(connection, principal, uuid(fileId))
       if (principal.job && uuid(revision)!==principal.job.baseRevision) throw authError(404)
       const historical = (await connection.query('SELECT object_key,size,sha256 FROM file_revisions WHERE deployment_id=$1 AND owner_id=$2 AND file_id=$3 AND id=$4', [...scope(principal),row.id,uuid(revision)])).rows[0]
       if (!historical) throw authError(404)
+      if (maxBytes !== undefined && historical.size > maxBytes) throw authError(413)
       const bytes = await objects.readVerified({ key: historical.object_key, size: historical.size, sha256: historical.sha256 })
       return { bytes, name: row.name, format: row.format }
     }),

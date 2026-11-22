@@ -38,7 +38,7 @@ export async function configuredSheetsRuntime(environment: NodeJS.ProcessEnv = p
   const allowedEngineCommands=['open','close','read_range','read_formula_cells','read_row_outline','read_media','find_cells','recalc_cells','save_archive'] as const
   const sandbox=nodeEngine
     ? createProcess({binary:process.execPath,sha256:execSha,deploymentId,script:{path:resolve(nodeEngine),sha256:await executableHash(resolve(nodeEngine),32*1024*1024)},allowedCommands:allowedEngineCommands})
-    : createProcess({binary:binary!,sha256:sha256!,deploymentId,allowedCommands:allowedEngineCommands})
+    : createProcess({binary:binary!,sha256:sha256!,deploymentId,allowedCommands:[...allowedEngineCommands,'refresh_bound_external_links']})
   if(environment.DYOFFICE_XLSX_GATEWAY_MODULE)throw new Error('In-process gateway configuration is not supported; build the isolated gateway runner')
   const gatewayPath=resolve(environment.DYOFFICE_XLSX_GATEWAY_RUNNER ?? fileURLToPath(new URL('../../../../dist-sheets-server/gateway-process.mjs',import.meta.url)))
   const gatewaySandbox=createProcess({binary:process.execPath,sha256:execSha,deploymentId,script:{path:gatewayPath,sha256:await executableHash(gatewayPath,32*1024*1024)},allowedCommands:['gateway_package','gateway_plan','gateway_convert_merge_source']})
@@ -55,8 +55,9 @@ export async function configuredSheetsRuntime(environment: NodeJS.ProcessEnv = p
     },
   })
   const gateway=createGatewayAdapter(tracked(gatewaySandbox))
+  const native=createXlsxNativeWorker(tracked(sandbox))
   return {
-    sheetsNative:{...createXlsxNativeWorker(tracked(sandbox)),convertMergeSource:gateway.convertMergeSource},sheetsPlanner:gateway.planWorkbookSave as SheetsPlanner,sheetsWorkbookPlanner:gateway.planFromWorkbook,sheetsPackageReader:gateway.readWorkbookPackage as SheetsPackageReader,
+    sheetsNative:{...native,refreshExternalLinks:nodeEngine?undefined:native.refreshExternalLinks,convertMergeSource:gateway.convertMergeSource},sheetsPlanner:gateway.planWorkbookSave as SheetsPlanner,sheetsWorkbookPlanner:gateway.planFromWorkbook,sheetsPackageReader:gateway.readWorkbookPackage as SheetsPackageReader,
     nativeSheetsDirectory:resolve(environment.DYOFFICE_NATIVE_XLSX_DIRECTORY ?? fileURLToPath(new URL('../../../../dist-sheets/',import.meta.url))),
     async close(){controller.abort();await Promise.allSettled([...active])},
   }
