@@ -8,15 +8,15 @@
 
 首轮定向工具回归共 672 项通过，含 DOCX 71、XLSX 155、PPTX 48、PDF 299、Web 合同与工具 99 项。XLSX 的截断附件提示断言按现有工具文案修正后复跑通过，继续检查读取错误、原件保留和合并用途。[XLSX 截断附件用例](../../../apps/sheets/tests/files-skill.test.ts)
 
-各测试批次合并去重后，浏览器观察到 129 个组合注册，123 个组合向模型返回成功结果。采集仅保留格式、工具名和错误标记。下表中的工具行保留具体效果、成品和待验项，四格式真实模型用例见主报告。[注册用例](../../../apps/web/test/local-browser/office-tool-inventory.test.mjs) [四格式验收](genoffice-web-parity.md)
+各测试批次合并去重后，浏览器观察到 129 个组合注册，126 个组合向模型返回成功结果。采集仅保留格式、工具名和错误标记。下表中的工具行保留具体效果、成品和待验项，四格式真实模型用例见主报告。[注册用例](../../../apps/web/test/local-browser/office-tool-inventory.test.mjs) [四格式验收](genoffice-web-parity.md)
 
 | 格式 | Web 合同 | 浏览器注册 | 定向浏览器成功 |
 | --- | ---: | ---: | ---: |
-| DOCX | 42 | 42 | 37 |
+| DOCX | 42 | 42 | 40 |
 | XLSX | 19 | 19 | 19 |
 | PPTX | 20 | 20 | 19 |
 | PDF | 49 | 48 | 48 |
-| 合计 | 130 | 129 | 123 |
+| 合计 | 130 | 129 | 126 |
 
 PDF 原生旋转使用 `apply_ops.rotatePages`，合同仍保留兼容名称 `rotate_pages`。已验证的成品包括保存重开的冻结数据表、Word 脚注和尾注、Excel 合并附件、PowerPoint 单页重做及图片替换、PDF 批注和分页副本。[数据写回](../../../apps/web/test/local-browser/office-source-analysis.test.mjs) [Word 脚注和尾注](../../../apps/web/test/local-browser/word-knowledge.test.mjs) [Excel 合并附件](../../../apps/web/test/local-browser/sheets-attachment-merge.test.mjs) [PPTX 生成](../../../apps/web/test/local-browser/native-slides-generate.test.mjs) [PDF 工具](../../../apps/web/test/local-browser/native-pdf-open.test.mjs)
 
@@ -39,7 +39,7 @@ Excel 已覆盖 19 个实际注册工具。稀疏工作簿的全量预加载曾�
 | `generate_image` | 观察到 | [pdf-media.test.mjs](../../../apps/web/test/local-browser/pdf-media.test.mjs)、[ai-generate-image.test.ts](../../../apps/docs/tests/ai-generate-image.test.ts) | 浏览器调用后将生成的 WebP 转成 PNG 并写入 DOCX，检查保存包内的图像部件。[浏览器用例](../../../apps/web/test/native-docs/image-media.test.mjs) |
 | `generate_mindmap` | 观察到 | [mind-map.test.ts](../../../apps/docs/tests/mind-map.test.ts)、[office-tool-inventory.test.mjs](../../../apps/web/test/local-browser/office-tool-inventory.test.mjs) | 浏览器实际调用成功，交互式思维导图可呈现，原文档未生成修订。[实测用例](../../../apps/web/test/local-browser/office-tool-inventory.test.mjs) |
 | `get_document_context` | 观察到 | [agent-docs.test.ts](../../../apps/docs/tests/agent-docs.test.ts)、[ai-page-setup.test.ts](../../../apps/docs/tests/ai-page-setup.test.ts) | 读取当前 Word 文档的正文预览。[浏览器用例](../../../apps/web/test/local-browser/word-knowledge.test.mjs) |
-| `image_search` | 观察到 | [pdf-media.test.mjs](../../../apps/web/test/local-browser/pdf-media.test.mjs)、[global-config-readiness.test.mjs](../../../apps/web/test/local-integration/global-config-readiness.test.mjs) | 待逐项核验 |
+| `image_search` | 观察到 | [pdf-media.test.mjs](../../../apps/web/test/local-browser/pdf-media.test.mjs)、[global-config-readiness.test.mjs](../../../apps/web/test/local-integration/global-config-readiness.test.mjs) | 浏览器返回合成图片检索的地址。[浏览器用例](../../../apps/web/test/native-docs/image-media.test.mjs) |
 | `insert_analysis_image` | 观察到 | [分析插入工具测试](../../../apps/web/test/unit/analysis-insert-skill.test.mjs) | DOCX 和 PPTX 工具单测均通过，核对验证过的图像字节、来源标记及目标写入；原生成品保存重开待核验 |
 | `insert_chart` | 观察到 | [ai-chart-tools.test.ts](../../../apps/docs/tests/ai-chart-tools.test.ts)、[ai-read-only-tools.test.ts](../../../apps/docs/tests/ai-read-only-tools.test.ts) | 创建两类的原生柱状图，保存后核对更新过的图表部件。[浏览器用例](../../../apps/web/test/local-browser/word-knowledge.test.mjs) |
 | `insert_content` | 观察到 | [native-docx-harness.test.mjs](../../../apps/web/test/local-browser/native-docx-harness.test.mjs)、[native-word-sheets-codex.test.mjs](../../../apps/web/test/local-browser/native-word-sheets-codex.test.mjs) | 真实模型成品复跑通过，独立的浏览器回归验证换标签页后续接委派并写入 Word。[真实模型用例](../../../apps/web/test/local-browser/native-word-sheets-codex.test.mjs) [浏览器续接用例](../../../apps/web/test/local-browser/native-docx-harness.test.mjs) |
@@ -51,7 +51,7 @@ Excel 已覆盖 19 个实际注册工具。稀疏工作簿的全量预加载曾�
 | `insert_section_break` | 观察到 | [ai-page-setup.test.ts](../../../apps/docs/tests/ai-page-setup.test.ts)、[ai-read-only-tools.test.ts](../../../apps/docs/tests/ai-read-only-tools.test.ts) | 在第一段后插入连续分节，保存后核对 document.xml 中的分节类型。[浏览器用例](../../../apps/web/test/local-browser/word-knowledge.test.mjs) |
 | `insert_text_box` | 观察到 | [ai-read-only-tools.test.ts](../../../apps/docs/tests/ai-read-only-tools.test.ts)、[ai-style-floating-tools.test.ts](../../../apps/docs/tests/ai-style-floating-tools.test.ts) | 在指定块后插入浮动文本框，保存后核对原生文本框包含指定正文。[浏览器用例](../../../apps/web/test/local-browser/word-knowledge.test.mjs) |
 | `list_styles` | 观察到 | [ai-read-only-tools.test.ts](../../../apps/docs/tests/ai-read-only-tools.test.ts)、[assistant-client.test.mjs](../../../apps/web/test/unit/assistant-client.test.mjs) | 列出当前样式，并返回同一轮创建的 AuditCallout。[浏览器用例](../../../apps/web/test/local-browser/word-knowledge.test.mjs) |
-| `read_attachment` | 观察到 | [native-pdf-create-document.test.mjs](../../../apps/web/test/local-browser/native-pdf-create-document.test.mjs)、[ai-web-drop-attachments.test.ts](../../../apps/docs/tests/ai-web-drop-attachments.test.ts) | 浏览器传输适配单测以拖放附件返回解析出的正文，[单测](../../../apps/docs/tests/ai-web-drop-attachments.test.ts) |
+| `read_attachment` | 观察到 | [native-pdf-create-document.test.mjs](../../../apps/web/test/local-browser/native-pdf-create-document.test.mjs)、[ai-web-drop-attachments.test.ts](../../../apps/docs/tests/ai-web-drop-attachments.test.ts) | 根据模型上下文编号读取上传的文本，返回该附件的正文标记。[浏览器用例](../../../apps/web/test/native-docs/image-media.test.mjs) |
 | `read_blocks` | 观察到 | [agent-docs.test.ts](../../../apps/docs/tests/agent-docs.test.ts)、[ai-deleted-revision-context.test.ts](../../../apps/docs/tests/ai-deleted-revision-context.test.ts) | 按块范围读取现有第一段的正文。[浏览器用例](../../../apps/web/test/local-browser/word-knowledge.test.mjs) |
 | `read_comments` | 观察到 | [ai-comment-tools.test.ts](../../../apps/docs/tests/ai-comment-tools.test.ts) | 返回已解决的批注线程与回复，临时批注已移除。[浏览器用例](../../../apps/web/test/local-browser/word-knowledge.test.mjs) |
 | `read_knowledge_file` | 观察到 | [word-knowledge.test.mjs](../../../apps/web/test/local-browser/word-knowledge.test.mjs)、[coding-model-bridge.test.mjs](../../../apps/web/test/unit/coding-model-bridge.test.mjs) | 返回星标知识库文件的实际正文，引用可打开原文件，[浏览器用例](../../../apps/web/test/local-browser/word-knowledge.test.mjs) |
@@ -66,7 +66,7 @@ Excel 已覆盖 19 个实际注册工具。稀疏工作簿的全量预加载曾�
 | `set_header_footer` | 观察到 | [native-pdf-open.test.mjs](../../../apps/web/test/local-browser/native-pdf-open.test.mjs)、[ai-hf-tool.test.ts](../../../apps/docs/tests/ai-hf-tool.test.ts) | 写入默认页眉，保存后核对原生页眉部件的文字。[浏览器用例](../../../apps/web/test/local-browser/word-knowledge.test.mjs) |
 | `set_page_setup` | 观察到 | [ai-page-setup.test.ts](../../../apps/docs/tests/ai-page-setup.test.ts)、[ai-read-only-tools.test.ts](../../../apps/docs/tests/ai-read-only-tools.test.ts) | 连续分节后将页面改为 A5 横向，等待最终修订并核对纸张方向。[浏览器用例](../../../apps/web/test/local-browser/word-knowledge.test.mjs) |
 | `set_watermark` | 观察到 | [native-pdf-open.test.mjs](../../../apps/web/test/local-browser/native-pdf-open.test.mjs)、[ai-read-only-tools.test.ts](../../../apps/docs/tests/ai-read-only-tools.test.ts) | 设置文本水印，保存后核对页眉部件中的水印内容。[浏览器用例](../../../apps/web/test/local-browser/word-knowledge.test.mjs) |
-| `web_search` | 观察到 | [t12-workspace-settings.test.mjs](../../../apps/web/test/local-browser/t12-workspace-settings.test.mjs)、[agent-docs.test.ts](../../../apps/docs/tests/agent-docs.test.ts) | 后端不可用时工具返回失败，真实检索质量待复验，[单测](../../../apps/docs/tests/agent-docs.test.ts) |
+| `web_search` | 观察到 | [t12-workspace-settings.test.mjs](../../../apps/web/test/local-browser/t12-workspace-settings.test.mjs)、[agent-docs.test.ts](../../../apps/docs/tests/agent-docs.test.ts) | 浏览器返回合成检索结果中的标题和来源链接。[浏览器用例](../../../apps/web/test/native-docs/image-media.test.mjs) |
 | `write_document` | 观察到 | [ai-doc-writer.test.ts](../../../apps/docs/tests/ai-doc-writer.test.ts)、[assistant-channel-bidirectional.test.mjs](../../../apps/web/test/local-integration/assistant-channel-bidirectional.test.mjs) | 流式草稿保持在编辑器中，最终正文在显式保存后落盘，重开仍可读。[浏览器用例](../../../apps/web/test/native-docs/writer-draft-save.test.mjs) |
 
 ## XLSX
