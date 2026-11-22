@@ -15,7 +15,7 @@ import {launchTestBrowser} from '../helpers/browser.mjs'
 import {fileFixture,importFile} from '../helpers/files.mjs'
 import {password} from '../helpers/identity.mjs'
 
-test('PPTX File menu downloads PNG and JPEG archives of visible slides without committing', {timeout:90000}, async t => {
+test('PPTX exports the same visible-slide PNG and JPEG images in both UI themes without committing', {timeout:120000}, async t => {
   const directory = await mkdtemp(join(tmpdir(),'dyoffice-slide-image-export-'))
   execFileSync('openssl',['req','-x509','-newkey','rsa:2048','-nodes','-keyout',join(directory,'key.pem'),'-out',join(directory,'cert.pem'),'-days','1','-subj','/CN=localhost'],{stdio:'pipe'})
   let app,browser
@@ -37,30 +37,37 @@ test('PPTX File menu downloads PNG and JPEG archives of visible slides without c
   const page = await context.newPage()
   const csrf = await (await context.request.get(origin+'/api/v1/auth/csrf')).json()
   assert.equal((await context.request.post(origin+'/api/v1/auth/login',{headers:{origin,'x-csrf-token':csrf.csrfToken},data:{username:'alice',password}})).status(),200)
-  await page.goto(origin+'/native-pptx/?fileId='+initial.fileId)
-  await expect(page.locator('.app-main')).toBeVisible({timeout:45000})
-  await expect.poll(()=>page.evaluate(async()=> (await window.slidesApi?.getRenderSlides())?.length ?? 0),{timeout:30000}).toBe(2)
-  const visible = await page.evaluate(async()=>{
-    const slides = await window.slidesApi.getRenderSlides()
-    return slides.filter(slide=>!slide.hidden).map(({widthPx,heightPx})=>({widthPx,heightPx}))
-  })
-  assert.equal(visible.length,1,'fixture must have one visible and one hidden slide')
+  const lightImages = new Map()
+  for (const theme of ['light','dark']) {
+    await f.preferences.update(f.alice.token,{theme})
+    await page.goto(origin+'/native-pptx/?fileId='+initial.fileId)
+    await expect(page.locator('html')).toHaveAttribute('data-theme',theme)
+    await expect(page.locator('.app-main')).toBeVisible({timeout:45000})
+    await expect.poll(()=>page.evaluate(async()=> (await window.slidesApi?.getRenderSlides())?.length ?? 0),{timeout:30000}).toBe(2)
+    const visible = await page.evaluate(async()=>{
+      const slides = await window.slidesApi.getRenderSlides()
+      return slides.filter(slide=>!slide.hidden).map(({widthPx,heightPx})=>({widthPx,heightPx}))
+    })
+    assert.equal(visible.length,1,'fixture must have one visible and one hidden slide')
 
-  for (const format of ['png','jpg']) {
-    await page.locator('.ribbon-tab-file').click()
-    const [download] = await Promise.all([
-      page.waitForEvent('download',{timeout:12000}),
-      page.getByRole('button',{name:new RegExp('^Export as '+format.toUpperCase())}).click(),
-    ])
-    assert.equal(download.suggestedFilename(),'Quarterly deck-'+format+'.zip')
-    const images = await JSZip.loadAsync(await readFile(await download.path()))
-    const name = 'Quarterly deck-01.'+format
-    assert.deepEqual(Object.keys(images.files),[name])
-    const payload = await images.file(name).async('uint8array')
-    assert.equal(payload[0],format==='png'?0x89:0xff)
-    const size = imageSizeFromBytes(payload)
-    assert.equal(size.w,Math.round(visible[0].widthPx*2))
-    assert.equal(size.h,Math.round(visible[0].heightPx*2))
+    for (const format of ['png','jpg']) {
+      await page.locator('.ribbon-tab-file').click()
+      const [download] = await Promise.all([
+        page.waitForEvent('download',{timeout:12000}),
+        page.getByRole('button',{name:new RegExp('^Export as '+format.toUpperCase())}).click(),
+      ])
+      assert.equal(download.suggestedFilename(),'Quarterly deck-'+format+'.zip')
+      const images = await JSZip.loadAsync(await readFile(await download.path()))
+      const name = 'Quarterly deck-01.'+format
+      assert.deepEqual(Object.keys(images.files),[name])
+      const payload = await images.file(name).async('uint8array')
+      assert.equal(payload[0],format==='png'?0x89:0xff)
+      const size = imageSizeFromBytes(payload)
+      assert.equal(size.w,Math.round(visible[0].widthPx*2))
+      assert.equal(size.h,Math.round(visible[0].heightPx*2))
+      if (theme==='light') lightImages.set(format,payload)
+      else assert.deepEqual(payload,lightImages.get(format),format+' export changed with the UI theme')
+    }
   }
   assert.equal((await f.files.openFile(f.alice.token,initial.fileId)).file.revision,initial.revision)
   assert.deepEqual(await f.files.readFile(f.alice.token,initial.fileId,initial.revision),original)

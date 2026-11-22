@@ -68,6 +68,8 @@ PPTX 的 View → Slide Master 已接入原 GenOffice 母版与版式编辑，�
 
 PPTX 文件菜单已支持 PNG/JPG 导出。Web 使用同一套 GenOffice 画布逐页渲染，下载保留原命名顺序的 ZIP。Chromium 验证两种图像格式、隐藏页排除、两倍渲染尺寸、ZIP 条目名和源文档版本及字节保持不变。原图片命名测试 5 项、PPTX 类型检查和 Web 依赖边界检查通过，新增用例已接入 Web CI。
 
+固定候选 `d90ea092` 的 F15 PPTX 导出复验通过。分别在浅色和深色 UI 导出同一文稿，两个 ZIP 中同格式的可见页图片逐字节一致，隐藏页均被排除，下载没有生成文件修订。该用例覆盖图片导出，主题切换下的 PPTX 编辑保存另外核验。[PPTX 图片导出回归](../../../apps/web/test/native-slides/image-export.test.mjs)
+
 合入上游 `6e92710c` 后，PPTX 功能区可以选择 TIFF。Web 原生会话复用 GenOffice 解码器生成 PNG 预览，限制解码为 16,777,216 像素、单张 PNG 输出为 8 MiB。Chromium 通过功能区插入 TIFF，核对预览尺寸和像素、下载包中的 TIFF 原始字节和重开结果。同次 Chromium 复跑通过 TIFF 原生往返和 PNG/JPG 导出两项。PPTX 原生会话、解码和识别共 42 项，独立 PPTX CI 夹具本地运行 56 项，Web 桥接及测试子进程共 66 项全部通过。完整 SaaS 构建、服务端及 Web PPTX 类型检查也通过。
 
 固定候选 `d90ea092` 的 `bridge`、`service` 与 `session-host` 套件共 74 项全部通过，覆盖保存身份、母版和原生对象、历史批次及撤销、范围检查、代数与会话限制。该组结果来自 Web 适配和测试宿主，正式执行后端及 PowerPoint 复开另行验收。
