@@ -282,6 +282,7 @@ print(json.dumps(dict(series=line.get_ydata().tolist(), total=sum(line.get_ydata
  await turn('销售数据源有哪些表？',liveConfig?'orders':'可见表 sales.orders')
  if(!liveConfig){
   for (const name of assistantSourceTools('read-only-analysis')) assert.equal(toolFrames[0].filter(n=>n===name).length,1)
+  assert.equal(toolFrames[0].filter(name=>name==='insert_data_result').length,1)
   assert.ok(!toolFrames[0].includes('sources_save_result'))
  }
  await turn('订单表有哪些字段？',liveConfig?'paid_amount':'paid_at, order_amount, paid_amount')
@@ -338,6 +339,7 @@ print(json.dumps(dict(series=line.get_ydata().tolist(), total=sum(line.get_ydata
   await expect(panel.getByText('可见表 sales.orders',{exact:true})).toBeVisible({timeout:25000})
   const names=toolFrames[start]
   for(const name of assistantSourceTools('read-only-analysis'))assert.equal(names.filter(offered=>offered===name).length,1,format+': '+name)
+  assert.equal(names.filter(name=>name==='insert_data_result').length,format==='pdf'?0:1)
   assert.ok(!names.includes('sources_save_result'),format+' must not offer saving a source snapshot')
  }
 })
