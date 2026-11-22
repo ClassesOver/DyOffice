@@ -207,10 +207,29 @@ for(const format of ['docx','xlsx','pptx','pdf'])test(format+' resumes after '+(
    await page.evaluate(()=>window.__genofficeDebug.univerAPI.executeCommand('formula.mutation.set-formula-calculation-notification',{}))
    await route.continue()
   },{times:1})
+  await page.evaluate(()=>{
+   const commands=[]
+   window.__dyofficeInsertionCommands=commands
+   window.__genofficeDebug.univerAPI.onCommandExecuted(({id},options)=>{
+    if(commands.length<100)commands.push([id,options?.fromFormula===true])
+   })
+  })
  }
  const insert={docx:'插入文档',xlsx:'写入当前选区',pptx:'插入当前幻灯片',pdf:'追加到 PDF'}[format]
  await report.getByRole('button',{name:insert,exact:true}).click()
  const save=report.getByRole('button',{name:'保存文档',exact:true})
+ try{
+  await expect(deliveries.getByRole('status')).toBeVisible({timeout:15000})
+  await expect(deliveries.getByRole('status')).toHaveText('已插入，尚未保存',{timeout:1000})
+ }catch(error){
+  if(format==='xlsx')t.diagnostic(JSON.stringify(await page.evaluate(expected=>{
+   const workbook=window.__genofficeDebug?.univerAPI.getActiveWorkbook()
+   const range=workbook?.getActiveRange()
+   return {commands:window.__dyofficeInsertionCommands,selection:range?[range.getRow(),range.getColumn()]:null,
+    reportWritten:workbook?.getActiveSheet()?.getRange('J10').getValue()===expected}
+  },summary).catch(()=>({editorUnavailable:true}))))
+  throw error
+ }
  await expect(save).toBeVisible()
  assert.equal(await head(),file.revision)
  await save.click()

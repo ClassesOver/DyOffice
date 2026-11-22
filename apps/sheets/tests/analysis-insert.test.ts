@@ -1,5 +1,5 @@
 import {it,expect} from 'vitest'
-import {analysisCellOperations} from '../src/renderer/analysis-insert'
+import {analysisCellOperations,captureSheetAnalysis,invalidatesAnalysisCapture} from '../src/renderer/analysis-insert'
 import {planFromOps} from '../src/renderer/op-executor'
 it('analysis table remains string values through the original workbook planner',()=>{
  const ops=analysisCellOperations({kind:'table',rows:[['=1+1','0012'],['<script>x</script>','@SUM(A1)']]},'s',1,2)
@@ -40,6 +40,20 @@ it('unchanged native capture enters the original operation queue without saving'
  const capture=captureSheetAnalysis({current:()=>current,hold:()=>{},run:async(ops,check)=>{expect(check()).toBe(true);applied=ops;return true}})
  expect(await capture.apply({kind:'text',text:'=HYPERLINK("x")'},()=>true)).toBe(true)
  expect(applied).toEqual([{op:'set_cell',sheetId:'s',address:'B2',value:'=HYPERLINK("x")'}])
+})
+
+it('file viewport hydration does not cancel a queued analysis insertion',async()=>{
+ const current={identity:{},runtime:{},workbookId:'book',sheetId:'s',row:9,column:9,selection:'J10',epoch:0,fingerprint:'clean'}
+ const capture=captureSheetAnalysis({current:()=>current,hold:()=>{},run:async(_ops,check)=>{
+  for(const command of ['sheet.mutation.set-range-values','sheet.command.set-range-values']){
+   if(invalidatesAnalysisCapture(command,false,true))current.epoch++
+  }
+  return check()
+ }})
+ expect(await capture.apply({kind:'text',text:'Report'},()=>true)).toBe(true)
+ expect(invalidatesAnalysisCapture('sheet.mutation.set-range-values',false,false)).toBe(true)
+ expect(invalidatesAnalysisCapture('sheet.operation.set-selections',false,false)).toBe(true)
+ expect(invalidatesAnalysisCapture('sheet.mutation.set-range-values',true,false)).toBe(false)
 })
 
 it('real Univer core write keeps the original executor literal payload non-formula',async()=>{
