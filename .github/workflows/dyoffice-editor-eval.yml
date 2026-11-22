@@ -1,0 +1,44 @@
+name: DyOffice editor tool selection
+
+on:
+  schedule:
+    - cron: '27 6 * * 1'
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'tools/dyoffice/analysis-eval/**'
+      - 'tools/dyoffice/runtime-lock*'
+      - '.github/workflows/dyoffice-editor-eval.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  editor-selection:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: '22.23.5'
+      - name: Verify immutable Node runtime
+        run: node tools/dyoffice/runtime-lock.mjs --runtime
+      - run: npm ci --ignore-scripts --include=dev
+      - run: node_modules/.bin/playwright install chromium --with-deps
+      - name: Load the four native catalogs
+        run: node tools/dyoffice/analysis-eval/editor-selection.mjs --check-catalog
+      - name: Measure the weekly real-model sample
+        if: github.event_name != 'pull_request'
+        env:
+          DYOFFICE_EVAL_API_KEY: ${{ secrets.DYOFFICE_EVAL_API_KEY }}
+          DYOFFICE_EVAL_BASE_URL: ${{ vars.DYOFFICE_EVAL_BASE_URL }}
+          DYOFFICE_EVAL_MODEL: ${{ vars.DYOFFICE_EVAL_MODEL }}
+        run: node tools/dyoffice/analysis-eval/editor-selection.mjs --model "$DYOFFICE_EVAL_MODEL" --trials 1
+      - name: Retain measured input cost and selection results
+        if: github.event_name != 'pull_request' && !cancelled()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: editor-selection-report
+          path: test-results/editor-selection/report.json
+          if-no-files-found: error

@@ -44,3 +44,15 @@ that must keep the same definition, and monthly values written into Excel.
 
 StarRocks is not covered: it needs a reachable StarRocks endpoint and a
 read-only account; the harness only drives PostgreSQL today.
+
+## Native editor tool selection
+
+Run `node tools/dyoffice/analysis-eval/editor-selection.mjs --check-catalog` to load the four renderer tool-definition arrays in an offline Chromium page. The measurement covers native tools from these arrays. Shared channel, source and attachment skills are outside this sample.
+
+With `DYOFFICE_EVAL_BASE_URL` and the gateway's `DYOFFICE_EVAL_API_KEY` configured, run:
+
+```sh
+node tools/dyoffice/analysis-eval/editor-selection.mjs --model MODEL_ID --trials 3
+```
+
+The four synthetic prompts ask for a Word comment, scattered spreadsheet cells, slide style templates and a PDF text search. Each format also sends the same prompt once without tools. The report at `test-results/editor-selection/report.json` records the selected tool names, first-turn selection rate, and the difference between provider-reported input tokens with and without the tool definitions. This sample measures selection and input cost. It does not execute editor operations.
