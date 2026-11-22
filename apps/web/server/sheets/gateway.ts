@@ -30,6 +30,8 @@ export async function planWorkbookSave(
 export async function planFromWorkbook(bytes: Buffer, input: unknown) {
   try {
     const source = await createBufferEntrySource(bytes)
+    const request = workbookSaveRequestSchema.parse(input)
+    const editedSheets = new Set(request.edits.map(edit => edit.sheetId))
     const workbook = await source.readText('xl/workbook.xml')
     // The existing text-based sheet planner cannot safely interpret these XML
     // constructs. Reject ambiguity instead of letting a comment forge a sheet.
@@ -44,6 +46,7 @@ export async function planFromWorkbook(bytes: Buffer, input: unknown) {
     if (ambiguous(relationshipsXml)) throw new Error('Ambiguous relationships')
     const relationships = parseRelationships(relationshipsXml)
     const ids = new Set<string>(), names = new Set<string>()
+    const worksheetPaths = new Set<string>()
     if (elements.length < 1 || elements.length > 256) throw new Error('Invalid sheets')
     const sheets = []
     for (const element of elements) {
@@ -58,10 +61,13 @@ export async function planFromWorkbook(bytes: Buffer, input: unknown) {
       const rel = rels[0]
       if (rels.length !== 1 || !rel || rel.external || !rel.type.endsWith('/worksheet')) throw new Error('Invalid worksheet relationship')
       const path = resolveRelTarget('xl/workbook.xml', rel.target.replace(/^\/?xl\//, ''))
+      if (worksheetPaths.has(path)) throw new Error('Ambiguous worksheet parts')
       if (!await source.has(path)) throw new Error('Missing worksheet')
+      if (editedSheets.has(id) && ambiguous(await source.readText(path))) throw new Error('Ambiguous worksheet')
+      worksheetPaths.add(path)
       ids.add(id); names.add(name); sheets.push({ id, name })
     }
-    return await planSave(source, sheets, input)
+    return await planSave(source, sheets, request)
   } catch {
     throw Object.assign(new Error('Invalid workbook edits'), { statusCode: 400 })
   }

@@ -275,7 +275,11 @@ export async function buildLocalApp(config: LocalWebConfig): Promise<FastifyInst
       const leases = createLeaseService({ transactions, assertOfficeWritable:files.assertOfficeWritable })
       const revisions = createRevisionService({ transactions, objects: config.objectStore, files, ...config.filePolicy })
       registerFileRoutes(app,files,sessions,csrf,{ leases, revisions, wordCollaboration:config.wordCollaboration })
-      registerMcpRoutes(app,transactions,files,csrf,config.objectStore,config.filePolicy)
+      registerMcpRoutes(app,transactions,files,csrf,config.objectStore,config.filePolicy,
+        config.sheetsPlanner && config.sheetsWorkbookPlanner && config.sheetsNative?.savePlan ? {
+          native: config.sheetsNative as SheetsSaveNative,
+          plan: config.sheetsPlanner, planFromWorkbook: config.sheetsWorkbookPlanner,
+        } : undefined)
       registerKnowledgeRoutes(app,createKnowledgeService({transactions,files}),sessions,csrf)
       registerPdfRoutes(app,createPdfService({ files, leases, revisions }),sessions,csrf)
       // T17 notification/reconciliation only; preClose terminates upgraded

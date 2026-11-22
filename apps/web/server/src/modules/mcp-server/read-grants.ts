@@ -1,27 +1,27 @@
 import { randomBytes, randomUUID } from 'node:crypto'
-import type { McpReadScope, McpPrincipalTransactions, McpPdfRotation } from '../../db/context.ts'
+import type { McpReadScope, McpPrincipalTransactions, McpEditApproval } from '../../db/context.ts'
 import { authError, tokenHash } from '../auth/sessions.ts'
 import { uuid, loadFile } from '../files/queries.ts'
 import type { McpExternalCredential } from './credential.ts'
 
 export function createMcpReadGrants(transactions: McpPrincipalTransactions) {
   return {
-    async issue(session: string, target: McpReadScope, rotation?: McpPdfRotation) {
+    async issue(session: string, target: McpReadScope, approval?: McpEditApproval) {
       const fileId = uuid(target.fileId)
       const revision = uuid(target.revision)
       const id = randomUUID()
       const token = randomBytes(32).toString('base64url')
       const expiresAt = await transactions.withPrincipalTransaction({ kind: 'session', token: session }, async (connection, principal) => {
-        if (rotation) {
+        if (approval) {
           const file = await loadFile(connection, principal, fileId)
-          if (file.format !== 'pdf') throw authError(415)
+          if (file.format !== (approval.kind === 'pdf.rotate' ? 'pdf' : 'xlsx')) throw authError(415)
           if (file.current_revision !== revision) throw authError(409)
         }
         const parameters = [principal.deploymentId, tokenHash(session), transactions.sessionIdleMs, id, tokenHash(token), fileId, revision]
-        const { rows: [row] } = rotation
+        const { rows: [row] } = approval
           ? await connection.query<{ expires_at: Date | null }>(
-            'SELECT issue_mcp_pdf_rotation_grant($1,$2,$3,$4,$5,$6,$7,$8,$9) AS expires_at',
-            [...parameters, rotation.pages, rotation.degrees],
+            'SELECT issue_mcp_edit_grant($1,$2,$3,$4,$5,$6,$7,$8::jsonb) AS expires_at',
+            [...parameters, JSON.stringify(approval)],
           )
           : await connection.query<{ expires_at: Date | null }>(
             'SELECT issue_mcp_read_grant($1,$2,$3,$4,$5,$6,$7) AS expires_at',

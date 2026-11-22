@@ -39,8 +39,9 @@ export async function configuredSheetsRuntime(environment: NodeJS.ProcessEnv = p
   const createGatewayProcess=nodeEngine ? createCrossPlatformProcess : createCalculationProcess
   const execSha=await executableHash(process.execPath,160*1024*1024)
   const allowedEngineCommands=['open','close','read_range','read_formula_cells','read_row_outline','read_media','find_cells','recalc_cells','save_archive'] as const
+  const calculationCommands=['open','close','recalc_cells','refresh_bound_external_links'] as const
   const rustSandbox=rust&&createCalculationProcess({...rust,deploymentId,
-    allowedCommands:nodeEngine?['refresh_bound_external_links']:[...allowedEngineCommands,'refresh_bound_external_links'],
+    allowedCommands:nodeEngine?calculationCommands:[...allowedEngineCommands,'refresh_bound_external_links'],
   })
   const sandbox=nodeEngine
     ? createCrossPlatformProcess({binary:process.execPath,sha256:execSha,deploymentId,script:{path:resolve(nodeEngine),sha256:await executableHash(resolve(nodeEngine),32*1024*1024)},allowedCommands:allowedEngineCommands})
@@ -48,7 +49,7 @@ export async function configuredSheetsRuntime(environment: NodeJS.ProcessEnv = p
   const refreshSandbox=rustSandbox ?? (wasiRunner ? createCalculationProcess({
     binary:process.execPath,sha256:execSha,deploymentId,
     script:{path:resolve(wasiRunner),sha256:await executableHash(resolve(wasiRunner),32*1024*1024)},
-    allowedCommands:['refresh_bound_external_links'],
+    allowedCommands:calculationCommands,
   }) : undefined)
   if(environment.DYOFFICE_XLSX_GATEWAY_MODULE)throw new Error('In-process gateway configuration is not supported; build the isolated gateway runner')
   const gatewayPath=resolve(environment.DYOFFICE_XLSX_GATEWAY_RUNNER ?? fileURLToPath(new URL('../../../../dist-sheets-server/gateway-process.mjs',import.meta.url)))
@@ -70,7 +71,13 @@ export async function configuredSheetsRuntime(environment: NodeJS.ProcessEnv = p
   const native=createXlsxNativeWorker(tracked(sandbox))
   const refresh=refreshSandbox===sandbox?native:refreshSandbox?createXlsxNativeWorker(tracked(refreshSandbox)):undefined
   return {
-    sheetsNative:{...native,refreshExternalLinks:refresh?.refreshExternalLinks,convertMergeSource:gateway.convertMergeSource},sheetsPlanner:gateway.planWorkbookSave as SheetsPlanner,sheetsWorkbookPlanner:gateway.planFromWorkbook,sheetsPackageReader:gateway.readWorkbookPackage as SheetsPackageReader,
+    sheetsNative:{
+      ...native,
+      // The Node reader returns stored values; it cannot evaluate formulas.
+      recalculate:refresh?.recalculate ?? (!nodeEngine ? native.recalculate : undefined),
+      refreshExternalLinks:refresh?.refreshExternalLinks,
+      convertMergeSource:gateway.convertMergeSource,
+    },sheetsPlanner:gateway.planWorkbookSave as SheetsPlanner,sheetsWorkbookPlanner:gateway.planFromWorkbook,sheetsPackageReader:gateway.readWorkbookPackage as SheetsPackageReader,
     nativeSheetsDirectory:resolve(environment.DYOFFICE_NATIVE_XLSX_DIRECTORY ?? fileURLToPath(new URL('../../../../dist-sheets/',import.meta.url))),
     async close(){controller.abort();await Promise.allSettled([...active])},
   }

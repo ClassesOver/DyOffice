@@ -93,7 +93,7 @@ test('a browser save using the same idempotency key cannot manufacture an MCP re
   const grant = (await issue(f, f.alice.token, args)).json()
   assert.ok(grant.token)
   const { createLeaseService } = await import('../../server/src/modules/leases/service.ts')
-  const { mcpPdfRotationKey } = await import('../../server/src/db/context.ts')
+  const { mcpEditKey } = await import('../../server/src/db/context.ts')
   const editorId = randomUUID()
   const leases = createLeaseService(f)
   const { leaseEpoch } = await leases.acquireLease(f.alice.token, args.fileId, { editorId })
@@ -102,7 +102,7 @@ test('a browser save using the same idempotency key cannot manufacture an MCP re
     headers: session(f, f.alice.token),
     payload: {
       baseRevision: args.revision, editorId, leaseEpoch,
-      idempotencyKey: mcpPdfRotationKey(grant.id),
+      idempotencyKey: mcpEditKey('pdf.rotate', grant.id),
       operations: [{ op: 'rotatePages', pages: [1], dir: 180 }],
     },
   })

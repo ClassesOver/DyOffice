@@ -253,7 +253,7 @@ export function createFileService({ transactions, objects, quotaBytes = 1024 ** 
       const bytes = await objects.readVerified({ key: reference.object_key, size: reference.size, sha256: reference.sha256 }, signal)
       return { bytes, name: file.name, format: file.format }
     }),
-    async readFile(token: FileCredential, fileId: string, revision: string): Promise<Buffer> { return (await service.download(token,fileId,revision)).bytes },
+    async readFile(token: FileCredential, fileId: string, revision: string, signal?: AbortSignal): Promise<Buffer> { return (await service.download(token,fileId,revision,undefined,signal)).bytes },
     listFiles: async (token: FileCredential, { trash = false, cursor, limit = 50 }: { trash?: boolean; cursor?: string; limit?: number } = {}) => {
       if (typeof trash !== 'boolean' || !Number.isSafeInteger(limit) || limit < 1 || limit > 100) throw authError(400)
       const after = cursor === undefined ? null : uuid(cursor)

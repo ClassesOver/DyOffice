@@ -56,6 +56,13 @@ for(const mode of runtimeModes)test(`actual ${mode} server entry enables owned S
  const links=await fetch(address+'/api/v1/files/'+file.fileId+'/sheets/external-links',{method:'POST',headers,body:JSON.stringify({revision:file.revision})})
  assert.equal(links.status,200)
  assert.deepEqual(await links.json(),{links:[],workspaceSources:true})
+ const computed=await fetch(address+'/api/v1/files/'+file.fileId+'/sheets/recalculate',{method:'POST',headers,body:JSON.stringify({
+  revision:file.revision,edits:[{sheetName:'Acceptance',row:1,column:0,input:'21.25'}],
+  reads:[{sheetName:'Acceptance',range:{startRow:1,endRow:1,startColumn:1,endColumn:1}}],
+ })})
+ assert.equal(computed.status,200)
+ assert.ok((await computed.json()).cells.some(cell=>cell.row===1&&cell.column===1&&cell.number===42.5))
+
  const entry=await fetch(address+'/native-xlsx/?fileId='+file.fileId,{headers});assert.equal(entry.status,200)
  child.kill('SIGTERM');assert.deepEqual(await exited,[0,null])
 })

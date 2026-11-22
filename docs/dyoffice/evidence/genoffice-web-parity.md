@@ -254,3 +254,11 @@ F16 的 T12 Chromium 用例在固定候选 `d8392ce2` 上通过，覆盖文件�
 本地测试下载并重新打开成品，核对目标页旋转、其他页角度和旧修订原始字节。测试还覆盖跨账户授权、参数越权、活跃编辑租约、同名幂等键冒充回执、并发重试以及提交前取消。现代请求断线和旧协议显式取消均在对象验证阶段触发回滚。官方 SDK 1.32.1 和 2.4.0 实测保存与重连取回回执。[PDF MCP 集成测试](../../../apps/web/test/local-integration/mcp-pdf-rotation.test.mjs)
 
 Codex App Server 0.169.0 实际使用 `2025-06-18` 握手。服务端把协商版本固定到对应会话，每次请求继续校验 Bearer。通过 Codex 的 `mcpServer/tool/call` 实测授权旋转、保存、读取和客户端重启后恢复同一回执，下载成品复开确认旋转 90 度。付费模型驱动的 CLI 尝试未产生已完成的工具调用。[协议会话回归](../../../apps/web/test/local-integration/mcp-http.test.mjs)
+
+### MCP 原生 XLSX 单元格写入
+
+文档所有者通过 `POST /api/v1/mcp/xlsx-cell-grants` 批准指定保存修订的工作表 ID、零基行列和字面值。外部工具 `set_xlsx_cells` 支持数字、文本、布尔值和清空。服务端复用 XLSX 保存引擎及 T06 修订流程，提交保存文件和同一事务的回执。重复相同授权操作返回原回执。部署需应用迁移 0050 并同步运行角色权限。升级回归保留此前签发的 PDF 授权及回执。[XLSX MCP 集成测试](../../../apps/web/test/local-integration/mcp-xlsx-cells.test.mjs) [数据库升级回归](../../../apps/web/test/local-integration/joint-migrations-roles.test.mjs)
+
+实际保存成品复开读到 `A2=21.25`，公式形态的新增文字仍是字面量，布尔值及清空已写入，`B2` 的原公式和自定义 XML 保留。文件标记为打开时重算，字面值保存沿用原有公式缓存。WASI 在已保存的成品上实算得 `B2=42.5`。只配置 Node 工作簿读取器的部署关闭重算接口。含歧义工作表 XML 及多个工作表共用同一部件的样本均拒绝保存，未生成新修订。Microsoft Excel 桌面复开仍待验。[引擎入口回归](../../../apps/web/test/native-sheets/runtime.test.mjs)
+
+Codex App Server 0.169.0 通过真实 MCP 客户端执行写入与读取。重启客户端后重复操作获得同一修订回执，下载成品核对 `A2=21.25`。断网环境中的 LibreOffice Calc 24.2.7.2 打开并另存该成品。默认配置保留旧缓存 `B2=999`，打开时显式启用 OOXML 重算后另存得到 `B2=42.5`，原公式仍为 `A2*2`，原文件哈希保持一致。

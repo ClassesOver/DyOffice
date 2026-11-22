@@ -197,6 +197,8 @@ jobs:
           path: test-results/local-shell-*.png
           if-no-files-found: warn
       - name: Test isolated local account and revision runtime
+        env:
+          DYOFFICE_TEST_XLSX_WASI_REFRESH_RUNNER: ${{ github.workspace }}/apps/web/dist-sheets-server/xlsx-refresh-wasi.mjs
         run: npm run test:web:integration:local
       - name: Test durable PostgreSQL jobs and real BullMQ recovery
         run: npm run test:web:jobs

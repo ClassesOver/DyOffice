@@ -5,16 +5,21 @@ import type { FilePolicy, FileService } from '../files/service.ts'
 import type { McpPrincipalTransactions } from '../../db/context.ts'
 import { createMcpCredentialReader } from './credential.ts'
 import type { ObjectStore } from '../../storage/object-store.ts'
+import { createMcpXlsxCells, parseXlsxCells, type McpSheetsSaveRuntime } from './xlsx-cells.ts'
 import { createMcpPdfRotation, parsePdfRotation, pdfRotationDescriptor } from './pdf-rotation.ts'
 import { createMcpTools, handleModernMcp, isVersionedMessage, modernVersion, object } from './handler.ts'
 import { createOfficeReadTool, officeReadDescriptor } from './office-read.ts'
 import { createLegacyMcp, legacyVersions } from './legacy.ts'
 import { createMcpReadGrants } from './read-grants.ts'
 
-export function registerMcpRoutes(app: FastifyInstance, transactions: McpPrincipalTransactions, files: FileService, csrf: ReturnType<typeof createCsrfService>, objects: ObjectStore, filePolicy?: FilePolicy) {
+export function registerMcpRoutes(app: FastifyInstance, transactions: McpPrincipalTransactions, files: FileService, csrf: ReturnType<typeof createCsrfService>, objects: ObjectStore, filePolicy?: FilePolicy, sheets?: McpSheetsSaveRuntime) {
   const grants = createMcpReadGrants(transactions)
   const read = createOfficeReadTool(files)
-  const tools = createMcpTools({ read, rotate: createMcpPdfRotation({ transactions, objects, filePolicy }), inspect: grants.inspect })
+  const saveOptions = { transactions, objects, filePolicy }
+  const tools = createMcpTools({
+    read, rotate: createMcpPdfRotation(saveOptions),
+    setCells: sheets && createMcpXlsxCells({ ...saveOptions, ...sheets }), inspect: grants.inspect,
+  })
   const legacy = createLegacyMcp(app, tools)
   const readCredential = createMcpCredentialReader({ environment: process.env.NODE_ENV ?? 'production' })
   const sessionFor = (request: FastifyRequest) => {
@@ -33,7 +38,13 @@ export function registerMcpRoutes(app: FastifyInstance, transactions: McpPrincip
     reply.header('Cache-Control', 'private, no-store')
     const session = sessionFor(request)
     const { fileId, revision, pages, degrees } = parsePdfRotation(request.body)
-    return reply.code(201).send(await grants.issue(session, { fileId, revision }, { pages, degrees }))
+    return reply.code(201).send(await grants.issue(session, { fileId, revision }, { kind: 'pdf.rotate', pages, degrees }))
+  })
+  if (sheets) app.post('/api/v1/mcp/xlsx-cell-grants', { bodyLimit: 12 * 1024 }, async (request, reply) => {
+    reply.header('Cache-Control', 'private, no-store')
+    const session = sessionFor(request)
+    const { fileId, revision, cells } = parseXlsxCells(request.body)
+    return reply.code(201).send(await grants.issue(session, { fileId, revision }, { kind: 'xlsx.cells', cells }))
   })
   app.delete<{ Params: { id: string } }>('/api/v1/mcp/read-grants/:id', async (request, reply) => {
     reply.header('Cache-Control', 'private, no-store')

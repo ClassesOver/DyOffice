@@ -8,9 +8,13 @@ export interface JobCredential { kind: 'job'; jobId: string; epoch: number; toke
 export type FileCredential = string | JobCredential
 export type OfficeReadCredential = FileCredential | McpExternalCredential
 export type McpReadScope = Readonly<{ fileId: string; revision: string }>
-export type McpPdfRotation = Readonly<{ pages: readonly number[]; degrees: number }>
-export type McpFileGrant = McpReadScope & Readonly<{ id: string; pdfRotation?: McpPdfRotation; resultRevision?: string }>
-export const mcpPdfRotationKey = (grantId: string) => 'mcp_pdf_rotate_' + grantId
+export type McpXlsxCell = Readonly<{ sheetId: string; row: number; column: number; value: string | number | boolean | null }>
+export type McpEditApproval =
+  | Readonly<{ kind: 'pdf.rotate'; pages: readonly number[]; degrees: number }>
+  | Readonly<{ kind: 'xlsx.cells'; cells: readonly McpXlsxCell[] }>
+export type McpFileGrant = McpReadScope & Readonly<{ id: string; approval?: McpEditApproval; resultRevision?: string }>
+export const mcpEditKey = (kind: McpEditApproval['kind'], grantId: string) =>
+  (kind === 'pdf.rotate' ? 'mcp_pdf_rotate_' : 'mcp_xlsx_cells_') + grantId
 type TransactionCredential = BusinessCredential | McpExternalCredential
 export type BusinessCredential = SessionCredential | JobCredential
 export type BusinessPrincipal = Principal & { roles: readonly string[]; authVersion: number; job?: Readonly<{ id: string; epoch: number; fileId: string; baseRevision: string }>; mcpRead?: McpFileGrant }
@@ -65,10 +69,8 @@ export function createPrincipalTransactions({ pool, deploymentId, idleMs = 8 * 3
           id: locked.grant_id,
           fileId: locked.file_id,
           revision: locked.revision_id,
-          ...(locked.committed_pdf_revision && { resultRevision: locked.committed_pdf_revision }),
-          ...(locked.approved_pdf_pages && { pdfRotation: Object.freeze({
-            pages: Object.freeze(locked.approved_pdf_pages), degrees: locked.approved_pdf_degrees,
-          }) }),
+          ...(locked.committed_edit_revision && { resultRevision: locked.committed_edit_revision }),
+          ...(locked.approved_edit && { approval: locked.approved_edit as McpEditApproval }),
         }) }),
       })
       await connection.query("SELECT set_config('dyoffice.deployment_id',$1,true),set_config('dyoffice.user_id',$2,true),set_config('dyoffice.session_id',$3,true)", [deploymentId, principal.userId, principal.sessionId])
@@ -100,12 +102,12 @@ export function createPrincipalTransactions({ pool, deploymentId, idleMs = 8 * 3
         return operation(connection, principal)
       })
     },
-    async withMcpPdfRotationTransaction<T>(credential: McpExternalCredential, target: McpFileGrant, operation: (connection: PoolClient, principal: BusinessPrincipal) => Promise<T>, options: { signal?: AbortSignal; publishingGrant?: boolean } = {}) {
+    async withMcpEditTransaction<T>(credential: McpExternalCredential, target: McpFileGrant, operation: (connection: PoolClient, principal: BusinessPrincipal) => Promise<T>, options: { signal?: AbortSignal; publishingGrant?: boolean } = {}) {
       if (credential?.kind !== 'external-token') throw authError()
       const { id, fileId, revision } = target
       return transact(credential, (connection, principal) => {
         const grant = principal.mcpRead!
-        if (grant.id !== id || grant.fileId !== fileId || grant.revision !== revision || !grant.pdfRotation) throw authError(404)
+        if (grant.id !== id || grant.fileId !== fileId || grant.revision !== revision || !grant.approval || grant.approval.kind !== target.approval?.kind) throw authError(404)
         options.signal?.throwIfAborted()
         return operation(connection, Object.freeze({ ...principal, scopes: Object.freeze(['files:read', 'files:write']) }))
       }, { signal: options.signal, grantMode: options.publishingGrant ? 'publish' : 'read' })
