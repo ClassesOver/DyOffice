@@ -20,7 +20,7 @@
 
 PDF 原生旋转使用 `apply_ops.rotatePages`，合同仍保留兼容名称 `rotate_pages`。已验证的成品包括保存重开的冻结数据表、Word 脚注和尾注、Excel 合并附件、PowerPoint 单页重做及图片替换、PDF 批注和分页副本。[数据写回](../../../apps/web/test/local-browser/office-source-analysis.test.mjs) [Word 脚注和尾注](../../../apps/web/test/local-browser/word-knowledge.test.mjs) [Excel 合并附件](../../../apps/web/test/local-browser/sheets-attachment-merge.test.mjs) [PPTX 生成](../../../apps/web/test/local-browser/native-slides-generate.test.mjs) [PDF 工具](../../../apps/web/test/local-browser/native-pdf-open.test.mjs)
 
-Excel 已覆盖 19 个实际注册工具。稀疏工作簿的全量预加载曾让已装入网格的点读区域误报未加载。修复后同时确认定向请求是否完成和当前工作簿是否仍有效。Node 与宿主 Rust 进程均验证工作表保护、有效 AutoFilter 范围 A1:C2，以及值筛选和双条件比较。自定义工作表视图中的旧范围不覆盖当前筛选。[Excel 定向读取](../../../apps/web/test/local-browser/sheets-find-cells.test.mjs) [Node 执行器](../../../apps/web/server/sheets/xlsx-node-engine.ts)
+Excel 已覆盖 19 个实际注册工具。稀疏工作簿的全量预加载曾让已装入网格的点读区域误报未加载。修复后同时确认定向请求是否完成和当前工作簿是否仍有效。Node 与宿主 Rust 进程均验证工作表保护、有效 AutoFilter 范围 A1:C2，以及值筛选和双条件比较。自定义工作表视图中的旧范围不覆盖当前筛选。两条路径均读取小写 A1 引用，并跳过带有未知操作符的整组比较条件。[Excel 定向读取](../../../apps/web/test/local-browser/sheets-find-cells.test.mjs) [Node 执行器](../../../apps/web/server/sheets/xlsx-node-engine.ts)
 
 ## DOCX
 

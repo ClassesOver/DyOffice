@@ -130,8 +130,8 @@ type AutoFilterXml=XmlElement & {filterColumn?:Array<XmlElement & {
 function readAutoFilter(element:AutoFilterXml|undefined):Pick<SheetMetadata,'autoFilter'|'autoFilterColumns'> {
   const ref=attribute(element,'ref')
   let autoFilter:SheetMetadata['autoFilter']=null
-  if(ref&&/^\$?[A-Z]{1,3}\$?[1-9]\d{0,6}(?::\$?[A-Z]{1,3}\$?[1-9]\d{0,6})?$/.test(ref)){
-    const area=parseRef(ref)
+  if(ref&&/^\$?[A-Z]{1,3}\$?[1-9]\d{0,6}(?::\$?[A-Z]{1,3}\$?[1-9]\d{0,6})?$/i.test(ref)){
+    const area=parseRef(ref.toUpperCase())
     if(area.startRow<=area.endRow&&area.endRow<1_048_576&&area.startColumn<=area.endColumn&&area.endColumn<16_384)autoFilter=area
   }
   const autoFilterColumns:FilterColumn[]=[]
@@ -146,14 +146,17 @@ function readAutoFilter(element:AutoFilterXml|undefined):Pick<SheetMetadata,'aut
       const val=attribute(filter,'val')
       return val!==undefined&&val.length<=32_767?[val]:[]
     }).slice(0,10_000)
-    const comparisons=custom?.customFilter?.flatMap(filter=>{
-      const val=attribute(filter,'val'),name=attribute(filter,'operator')
-      const operator=filterOperators.find(item=>item===name)
-      return val===undefined||val.length>32_767||(name&&name!=='equal'&&!operator)?[]:[{val,...(operator?{operator}:{})}]
+    const comparisonInputs=custom?.customFilter?.flatMap(filter=>{
+      const val=attribute(filter,'val')
+      return val===undefined?[]:[{val,name:attribute(filter,'operator')}]
     }).slice(0,2)
-    if(filters===undefined&&!comparisons?.length)continue
+    const comparisons=comparisonInputs?.map(({val,name})=>({val,name,operator:filterOperators.find(item=>item===name)}))
+    const validComparisons=comparisons?.length&&comparisons.every(({val,name,operator})=>
+      val.length<=32_767&&(name===undefined||name==='equal'||operator!==undefined))
+      ?comparisons.map(({val,operator})=>({val,...(operator?{operator}:{})})):undefined
+    if(filters===undefined&&!validComparisons)continue
     autoFilterColumns.push({colId,...(filters!==undefined?{values:values??[],...(enabled(attribute(filters,'blank'))?{blank:true}:{})}:{}),
-      ...(comparisons?.length?{customs:{filters:comparisons,...(enabled(attribute(custom,'and'))?{and:true}:{})}}:{})})
+      ...(validComparisons?{customs:{filters:validComparisons,...(enabled(attribute(custom,'and'))?{and:true}:{})}}:{})})
     if(autoFilterColumns.length===1_000)break
   }
   return {autoFilter,autoFilterColumns}

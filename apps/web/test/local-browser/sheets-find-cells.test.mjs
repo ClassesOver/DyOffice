@@ -65,9 +65,10 @@ for(const live of [false,true])test((live?'Live model':'Fixture model')+' finds 
    <row r="1002"><c r="AB1002" t="e"><f>1/0</f><v>#DIV/0!</v></c></row>
   </sheetData>
   <sheetProtection sheet="1"/>
-  <autoFilter ref="A1:C2">
+  <autoFilter ref="a1:c2">
    <filterColumn colId="0"><filters><filter val="11"/></filters></filterColumn>
    <filterColumn colId="1"><customFilters and="1"><customFilter operator="greaterThan" val="0"/><customFilter val="0.25"/></customFilters></filterColumn>
+   <filterColumn colId="2"><customFilters><customFilter operator="vendorRule" val="0"/><customFilter val="18"/></customFilters></filterColumn>
   </autoFilter>
   <customSheetViews><customSheetView guid="{11111111-1111-1111-1111-111111111111}"><autoFilter ref="A1:A2"/></customSheetView></customSheetViews>
  </worksheet>`)
