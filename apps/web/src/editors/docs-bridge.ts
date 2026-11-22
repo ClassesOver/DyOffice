@@ -23,7 +23,7 @@ type ParentTabsWindow = Window & {
 
 /** A narrow compatibility bridge for the existing renderer. Opaque paths are
  * aliases only; they never become filesystem paths or server authorization. */
-export function createDocsBridge(host: SessionFileHost, fileId: string, prefs: Awaited<ReturnType<SessionFileHost['getPreferences']>>, onChange: () => void, consumeAiDocContent?: () => Promise<{title:string;html:string}|null>,options:{knowledgeRequest?:SettingsRequest;wordCheckpoint?:()=>Promise<number|undefined>}={}) {
+export function createDocsBridge(host: SessionFileHost, fileId: string, prefs: Awaited<ReturnType<SessionFileHost['getPreferences']>>, onChange: () => void, consumeAiDocContent?: () => Promise<{title:string;html:string}|null>,options:{knowledgeRequest?:SettingsRequest;wordCheckpoint?:()=>Promise<number|undefined>;onSourceOpenFailed?:()=>void}={}) {
   const locale = prefs.language === 'en' ? 'en' : 'zh', text = messages[locale], state = host.getState(fileId)
   const alias = `/files/${fileId}/${state.name}`, guard = createSaveGenerationGuard(), urls = new Set<string>()
   let disposed = false, downloading = false, takingOver = false
@@ -91,7 +91,8 @@ export function createDocsBridge(host: SessionFileHost, fileId: string, prefs: A
     catch { return undefined }
   }
   const api = {
-    kbList:knowledge.kbList,kbSearch:knowledge.kbSearch,kbRead:knowledge.kbRead,openSourcePath:knowledge.openSourcePath,
+    kbList:knowledge.kbList,kbSearch:knowledge.kbSearch,kbRead:knowledge.kbRead,
+    openSourcePath: options.onSourceOpenFailed ? (path:string)=>knowledge.openSourcePath(path).catch(options.onSourceOpenFailed!) : knowledge.openSourcePath,
     getLanguage: async () => locale,
     getSystemLocale: async () => navigator.language,
     getTheme: async () => prefs.theme,
@@ -236,5 +237,5 @@ export function createDocsBridge(host: SessionFileHost, fileId: string, prefs: A
     }catch(error){if(acquired)await host.releaseLease(fileId).catch(()=>{});throw error}
     finally{takingOver=false;if(!disposed)onChange()}
   }
-  return { api,lifecycle,get supportedCreateDocumentTypes() {return typeof createInWorkspace() === 'function' ? ['docx', 'pdf'] as const : []},guardedSave,takeover,prepareDownload,getReceipt:()=>committed,getState: () => ({...guard.getState(), nativeSaveOutcome, nativeSaveReasons, takingOver}),dispose() { knowledge.dispose(); completeGeneratedContent(false); disposed = true; panelListeners.clear(); for (const url of urls) URL.revokeObjectURL(url); urls.clear() } }
+  return { api,lifecycle,resolveKnowledgeCitation:knowledge.citationPath,get supportedCreateDocumentTypes() {return typeof createInWorkspace() === 'function' ? ['docx', 'pdf'] as const : []},guardedSave,takeover,prepareDownload,getReceipt:()=>committed,getState: () => ({...guard.getState(), nativeSaveOutcome, nativeSaveReasons, takingOver}),dispose() { knowledge.dispose(); completeGeneratedContent(false); disposed = true; panelListeners.clear(); for (const url of urls) URL.revokeObjectURL(url); urls.clear() } }
 }

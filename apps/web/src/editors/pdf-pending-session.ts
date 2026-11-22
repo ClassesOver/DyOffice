@@ -1,7 +1,7 @@
 import type {DrawingInput,MarkupInput,TextInsertInput,ImageEditInput} from '../../../pdf/src/shared/ipc'
 import type {PdfImageDraftInfo} from './pdf-image-drafts'
 import {base64ByteSize,inspectPdfImageDraftBytes} from './pdf-image-draft-pixels'
-import type {PdfImageBytes,PdfTextInsert,PdfTextDraftInfo} from '../shell/pdf-preview-skill'
+import type {PdfImageBytes,PdfTextInsert,PdfTextDraftInfo} from './pdf-types'
 import {createEmptyPdfPendingSnapshot,freeze,planPdfPendingOps,type PdfPendingContext,type PdfPendingSnapshot} from './pdf-pending-ops'
 
 export type PdfPendingToken=Pick<PdfPendingSnapshot,'fileId'|'baseRevision'|'generation'>

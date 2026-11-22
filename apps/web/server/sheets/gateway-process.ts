@@ -62,6 +62,7 @@ async function execute(packet:Record<string,unknown>) {
     }catch{throw invalidInput()}
   }else if(packet.command==='gateway_package') {
     if(Object.keys(request).length===0) result=await readWorkbookPackage(bytes)
+    else if(Object.keys(request).join(',')==='externalLinks'&&request.externalLinks===true) result=await readWorkbookPackage(bytes,undefined,{externalLinks:true})
     else {
       if(Object.keys(request).sort().join(',')!=='cachePath,path'||typeof request.path!=='string'||typeof request.cachePath!=='string')throw invalidInput()
       result=await readWorkbookPackage(bytes,undefined,{path:request.path,cachePath:request.cachePath})

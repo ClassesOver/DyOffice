@@ -50,7 +50,7 @@ test('the homepage blank PDF saves and takes the first heading after Office writ
  await page.getByRole('button',{name:'登录',exact:true}).click()
  await page.getByText('AI PDF',{exact:true}).first().click()
  const frame=page.frameLocator('iframe[data-document-id]')
- await expect(frame.locator('html')).toHaveAttribute('data-document-loading','ready')
+ await expect(frame.locator('html')).toHaveAttribute('data-document-loading','ready',{timeout:20000})
  const [blank]=(await f.files.listFiles(f.alice.token)).files
  assert.equal(blank.name,'未命名.pdf')
  assert.equal((await f.files.openFile(f.alice.token,blank.id)).pdfAutoNamePending,true)

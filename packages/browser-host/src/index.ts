@@ -58,6 +58,7 @@ export function createBrowserHost(adapter: Partial<BrowserHost> = {}): BrowserHo
       return {
         ...(result.name === undefined ? {} : { name: result.name }),
         ...(result.format === 'pdf' && result.pdfAutoNamePending === true ? { pdfAutoNamePending: true as const } : {}),
+        ...(result.format !== 'pdf' && result.officeSignatureProtected === true ? { officeSignatureProtected: true as const } : {}),
         file: publicRevision(result.file),
         format: result.format,
         downloadEndpoint: result.downloadEndpoint,

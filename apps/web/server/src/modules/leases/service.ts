@@ -1,16 +1,17 @@
 import type { PrincipalTransactions, FileCredential } from '../../db/context.ts'
 import type { BusinessPrincipal } from '../../db/context.ts'
-import { uuid, scope, loadFile, runFileTransaction } from '../files/queries.ts'
+import { uuid, scope, loadFile, runFileTransaction, type FileRow } from '../files/queries.ts'
 import { assertLiveLease, lockLease, databaseTime, leaseEpoch, type LeaseRow } from './queries.ts'
 import { authError } from '../auth/sessions.ts'
 
 const dto = (row: LeaseRow) => ({ leaseEpoch: Number(row.lease_epoch), editorId: row.editor_id, expiresAt: row.expires_at.toISOString() })
 const shape = (value: object, fields: string[]) => { if (!value || typeof value !== 'object' || Array.isArray(value) || Object.keys(value).some(key => !fields.includes(key))) throw authError(400) }
 const nextEpoch = (epoch: number) => { if (!Number.isSafeInteger(epoch + 1)) throw authError(409); return epoch + 1 }
-export function createLeaseService({ transactions, ttlMs = 45_000 }: { transactions: PrincipalTransactions; ttlMs?: number }) {
+export function createLeaseService({ transactions, ttlMs = 45_000, assertOfficeWritable }: { transactions: PrincipalTransactions; ttlMs?: number; assertOfficeWritable?: (file:FileRow)=>Promise<void> }) {
   if (!Number.isSafeInteger(ttlMs) || ttlMs < 1 || ttlMs > 300_000) throw new Error('Invalid lease lifetime')
-  const run = <T>(token: FileCredential, fileId: string, operation: (connection: import('pg').PoolClient, principal: BusinessPrincipal) => Promise<T>) => runFileTransaction(transactions,token,'files:write',async (connection, principal) => {
-    await loadFile(connection,principal,fileId,false,'UPDATE')
+  const run = <T>(token: FileCredential, fileId: string, operation: (connection: import('pg').PoolClient, principal: BusinessPrincipal) => Promise<T>, edit = false) => runFileTransaction(transactions,token,'files:write',async (connection, principal) => {
+    const file=await loadFile(connection,principal,fileId,false,'UPDATE')
+    if(edit)await assertOfficeWritable?.(file)
     return operation(connection,principal)
   })
   const editorAuthority = (p: BusinessPrincipal,id: string) => { if (p.job && id!==p.job.id) throw authError(404) }
@@ -43,7 +44,7 @@ export function createLeaseService({ transactions, ttlMs = 45_000 }: { transacti
           return dto(row)
         }
         return install(connection,principal,id,editor,nextEpoch(Number(row.lease_epoch)))
-      })
+      },true)
     },
     async renewLease(token: FileCredential, fileId: string, input: { editorId: string; leaseEpoch: number }) {
       shape(input,['editorId','leaseEpoch'])
@@ -51,7 +52,7 @@ export function createLeaseService({ transactions, ttlMs = 45_000 }: { transacti
       return run(token,id,async (connection, principal) => {
         await assertLiveLease(connection,principal,id,epoch,editor)
         return install(connection,principal,id,editor,epoch)
-      })
+      },true)
     },
     async takeoverLease(token: FileCredential, fileId: string, input: { editorId: string; expectedEpoch: number }) {
       shape(input,['editorId','expectedEpoch'])
@@ -61,7 +62,7 @@ export function createLeaseService({ transactions, ttlMs = 45_000 }: { transacti
         const row = await lockLease(connection,principal,id)
         if (!row || Number(row.lease_epoch) !== expected) throw authError(409)
         return install(connection,principal,id,editor,nextEpoch(expected))
-      })
+      },true)
     },
     async releaseLease(token: FileCredential, fileId: string, input: { editorId: string; leaseEpoch: number }) {
       shape(input,['editorId','leaseEpoch'])

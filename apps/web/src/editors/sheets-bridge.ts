@@ -4,7 +4,7 @@ import {messages} from './messages.ts'
 import {createAiPdf} from './create-ai-pdf.ts'
 import {
   workbookMediaRequestSchema,workbookMediaResultSchema,
-  workbookPivotRequestSchema,workbookPivotDefinitionSchema,
+  workbookPivotRequestSchema,workbookPivotDefinitionSchema,externalLinksRequestSchema,externalLinksResultSchema,externalLinksUpdateResultSchema,
   workbookFileSchema, workbookRangeRequestSchema, workbookRangeResultSchema,
   workbookFormulaCellsRequestSchema, workbookFormulaCellsResultSchema, workbookRowOutlineResultSchema,
   workbookRedactionsResultSchema, workbookSlicerStateResultSchema, workbookQueriesResultSchema,
@@ -22,6 +22,8 @@ type ParentAiWindow = Window & {
 type SaveResult = {canceled: false; file: WorkbookFile; touchedEntries: string[]}
 type Recovery = {saved?: Awaited<ReturnType<SessionFileHost['saveSheets']>>; resolve(value: SaveResult): void; reject(error: unknown): void}
 type Session = {revision: string; file: WorkbookFile; attachment?: boolean; extras?: Promise<Record<string,unknown>>}
+type WorkspaceWorkbook = {id:string;name:string;revision:string}
+const workbookId=/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/
 export function createSheetsBridge(host: SessionFileHost, fileId: string, prefs: Preferences, {fetchImpl = fetch, onChange = () => {},getAttachmentFile,docxCreationAvailable=false}: {fetchImpl?: typeof fetch; onChange?: () => void; getAttachmentFile?:(path:string)=>Promise<File|null>; docxCreationAvailable?:boolean} = {}) {
   let saveFence:(()=>boolean)|null=null
   async function guardedSave(check:()=>boolean,action:()=>Promise<boolean>){
@@ -119,6 +121,77 @@ export function createSheetsBridge(host: SessionFileHost, fileId: string, prefs:
   function extras(id: string) {
     const current = session(id)
     return current.extras ??= call(current.revision,'package').catch(error => { delete current.extras; throw error })
+  }
+  function workspaceSourceId(target: string) {
+    try {
+      const url=new URL(target)
+      if(url.origin!==location.origin||url.username||url.password||url.hash||
+        !/^\?revision=[a-f0-9-]+$/.test(url.search)||!workbookId.test(url.searchParams.get('revision')??''))return undefined
+      const id=/^\/api\/v1\/files\/([^/]+)\/content$/.exec(url.pathname)?.[1]
+      if(id&&workbookId.test(id))return id
+    }catch { /* Imported desktop paths stay unbound. */ }
+  }
+  async function listWorkspaceWorkbooks():Promise<WorkspaceWorkbook[]> {
+    if(disposed)throw hostError('UNAVAILABLE','disposed')
+    const controller=new AbortController()
+    controllers.add(controller)
+    try {
+      const workbooks:WorkspaceWorkbook[]=[], seen=new Set<string>()
+      let cursor:string|null=null
+      do {
+        const response:Response=await fetchImpl('/api/v1/files?limit=100'+(cursor?'&cursor='+encodeURIComponent(cursor):''),
+          {credentials:'same-origin',cache:'no-store',signal:controller.signal})
+        if(!response.ok)throw hostError('UNAVAILABLE','workspace workbooks')
+        const body:{files?:unknown;nextCursor?:unknown}=await response.json()
+        if(!Array.isArray(body?.files))throw hostError('INVALID_RESPONSE','workspace workbooks')
+        for(const item of body.files) {
+          if(item?.format==='xlsx'&&item.id!==fileId&&typeof item.name==='string'&&
+            typeof item.id==='string'&&workbookId.test(item.id)&&typeof item.revision==='string'&&workbookId.test(item.revision)){
+            workbooks.push({id:item.id,name:item.name,revision:item.revision})
+          }
+        }
+        const next=body.nextCursor
+        if(next!==null){
+          if(typeof next!=='string'||!workbookId.test(next)||seen.has(next))throw hostError('INVALID_RESPONSE','workspace workbooks cursor')
+          seen.add(next)
+        }
+        cursor=next
+      }while(cursor)
+      return workbooks.sort((a,b)=>a.name.localeCompare(b.name)||a.id.localeCompare(b.id))
+    }finally{controllers.delete(controller)}
+  }
+  async function workspaceLinkMetadata(current:Session) {
+    return externalLinksResultSchema.parse(await call(current.revision,'external-links'))
+  }
+  function workspaceSourceTarget(id:string,revision:string){
+    if(!workbookId.test(id)||!workbookId.test(revision))throw hostError('INVALID_REVISION','workspace source')
+    const url=new URL('/api/v1/files/'+id+'/content',location.origin)
+    url.searchParams.set('revision',revision)
+    return url.href
+  }
+  const workspaceLinks = {
+    listSources:listWorkspaceWorkbooks,
+    sourceTarget:workspaceSourceTarget,
+    async refresh(sessionId:string){
+      const current=session(sessionId)
+      if(current.attachment||current.revision!==host.getState(fileId).revision.revision)throw hostError('CONFLICT','external links')
+      const links=await workspaceLinkMetadata(current)
+      if(!links.workspaceSources)throw hostError('UNAVAILABLE','workspace sources')
+      const workbooks=new Map((await listWorkspaceWorkbooks()).map(file=>[file.id,file]))
+      const sources=links.links.flatMap(link=>{
+        const id=workspaceSourceId(link.rawTarget)
+        const source=id&&workbooks.get(id)
+        return source?[{index:link.index,fileId:source.id,revision:source.revision}]:[]
+      })
+      const report=externalLinksUpdateResultSchema.parse(await call(current.revision,'external-links/preview',{sources}))
+      const savedLinks=report.links.map(link=>{
+        const id=workspaceSourceId(link.rawTarget)
+        const source=id?workbooks.get(id):undefined
+        if(!source||!link.reachable)return link
+        return {...link,displayName:source.name}
+      })
+      return {...report,links:savedLinks}
+    },
   }
   const parentWindow = () => typeof window === 'undefined' ? undefined : window.parent as ParentAiWindow
   const api = {
@@ -242,7 +315,20 @@ export function createSheetsBridge(host: SessionFileHost, fileId: string, prefs:
       }catch(error){await Promise.allSettled(opened.map(async file=>{const current=sessions.get(file.sessionId);sessions.delete(file.sessionId);if(current)await call(current.revision,'merge-sources/close',{sessionId:file.sessionId})}));throw error}
     },
     openEncryptedWorkbook:unavailable,reopenWorkbook:unavailable,
-    listExternalLinks:unavailable,refreshWorkbookConnection:unavailable,readLocalImage:unavailable,
+    async listExternalLinks(input){
+      const {sessionId}=externalLinksRequestSchema.parse(input)
+      const current=session(sessionId)
+      if(current.attachment)throw hostError('INVALID_REVISION','external links')
+      const result=await workspaceLinkMetadata(current)
+      if(!result.workspaceSources||!result.links.some(link=>workspaceSourceId(link.rawTarget)))return result
+      const names=new Map((await listWorkspaceWorkbooks()).map(file=>[file.id,file.name]))
+      return {...result,links:result.links.map(link=>{
+        const id=workspaceSourceId(link.rawTarget)
+        const displayName=id?names.get(id):undefined
+        return displayName?{...link,displayName}:link
+      })}
+    },
+    refreshWorkbookConnection:unavailable,readLocalImage:unavailable,
     async readPivotDefinition(input){
       const request=workbookPivotRequestSchema.parse(input),current=session(request.sessionId)
       if(current.attachment||!current.file.sheets.some(sheet=>sheet.pivotTables.some(pivot=>pivot.path===request.path&&pivot.cachePath===request.cachePath)))throw hostError('INVALID_REVISION','pivot parts')
@@ -332,5 +418,5 @@ export function createSheetsBridge(host: SessionFileHost, fileId: string, prefs:
       }
     },
     supportedMergeExtensions: ['xlsx','xlsm','xls','csv','tsv'] as const,
-    api,guardedSave,getReceipt:()=>committed,getWorkbookRevision:(id:string)=>sessions.get(id)?.revision,confirmSave,prepareDownload,exportDraftCopy,takeover,needsConfirmation:()=>recovery!==null,isDirty:()=>pendingEdits>0,dispose(){disposed=true;recovery?.reject(hostError('UNAVAILABLE','disposed'));recovery=null;for(const controller of controllers)controller.abort();controllers.clear();sessions.clear();csrf=undefined}}
+    api,workspaceLinks,guardedSave,getReceipt:()=>committed,getWorkbookRevision:(id:string)=>sessions.get(id)?.revision,confirmSave,prepareDownload,exportDraftCopy,takeover,needsConfirmation:()=>recovery!==null,isDirty:()=>pendingEdits>0,dispose(){disposed=true;recovery?.reject(hostError('UNAVAILABLE','disposed'));recovery=null;for(const controller of controllers)controller.abort();controllers.clear();sessions.clear();csrf=undefined}}
 }

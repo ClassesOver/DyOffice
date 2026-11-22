@@ -153,10 +153,11 @@ test('real File menu drops pending snapshot across detach/rebind of the same edi
 })
 
 test('Word entry injects the existing assistant bound request into its knowledge bridge',async t=>{
- const requests=[],corpus=[{path:'/files/11111111-1111-4111-8111-111111111111/revisions/22222222-2222-4222-8222-222222222222/source.docx',name:'source.docx',ext:'docx',folder:'',folderPath:'',sizeBytes:1}]
+ const reference='/files/11111111-1111-4111-8111-111111111111/revisions/22222222-2222-4222-8222-222222222222'
+ const requests=[],corpus=[{path:reference+'/source.docx',name:'source.docx',ext:'docx',folder:'',folderPath:'',sizeBytes:1}]
  const assistant={available:false,api:{},documents:{register:()=>()=>{}},request:async path=>{requests.push(path);return corpus},dispose(){}}
  const f=await fixture(t,{assistant})
- assert.deepEqual(await window.desktop.kbList(),corpus)
+ assert.deepEqual(await window.desktop.kbList(),[{...corpus[0],path:reference}])
  assert.deepEqual(requests,['/api/v1/knowledge/files'])
  await f.dispose();await assert.rejects(window.desktop.kbList())
 })

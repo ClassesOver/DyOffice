@@ -81,6 +81,9 @@
       "utif2": [
         "./node_modules/utif2"
       ],
+      "pngjs": [
+        "./node_modules/@types/pngjs/index.d.ts"
+      ],
       "opentype.js": [
         "./node_modules/opentype.js"
       ],
@@ -99,6 +102,7 @@
     }
   },
   "include": [
+    "src/native/jpeg-image-decoder.d.ts",
     "src/native/pptx-session.ts",
     "src/native/pptx-job.ts",
     "src/native/pptx-session-child.ts",

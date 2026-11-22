@@ -62,14 +62,19 @@ async function configuredApplication() {
     const nativeDocsDirectory=storage.objectStore && existsSync(join(defaultDocsDir,'.vite/manifest.json')) ? defaultDocsDir : undefined;
     const defaultSlidesDir=resolve(process.env.DYOFFICE_NATIVE_PPTX_DIRECTORY||fileURLToPath(new URL('../dist-slides/',import.meta.url)));
     const nativeSlidesDirectory=storage.objectStore && existsSync(join(defaultSlidesDir,'.vite/manifest.json')) ? defaultSlidesDir : undefined;
-    const slidesHost=nativeSlidesDirectory ? {openSession:(input)=>openIsolatedPptxSession({fileId:input.fileId,revision:input.revision,bytes:input.bytes},{timeoutMs:60000,experimental:true})} : undefined;
+    const slidesHost=nativeSlidesDirectory ? {openSession:(input,signal)=>openIsolatedPptxSession(input,{timeoutMs:60000,experimental:true,signal})} : undefined;
     const legacyDistDir=resolve(fileURLToPath(new URL('../dist/',import.meta.url)));
     const effectiveShellDirectory=(shellDirectory && shellDirectory!==legacyDistDir) ? shellDirectory : (storage.objectStore && hasBuiltShell ? defaultShellDir : shellDirectory);
     const defaultSheetsDir=resolve(process.env.DYOFFICE_NATIVE_XLSX_DIRECTORY||fileURLToPath(new URL('../dist-sheets/',import.meta.url)));
     const defaultGatewayPath=resolve(process.env.DYOFFICE_XLSX_GATEWAY_RUNNER||fileURLToPath(new URL('../dist-sheets-server/gateway-process.mjs',import.meta.url)));
     const defaultNodeEnginePath=resolve(fileURLToPath(new URL('../dist-sheets-server/xlsx-node-engine.mjs',import.meta.url)));
+    const defaultWasiRefreshPath=fileURLToPath(new URL('../dist-sheets-server/xlsx-refresh-wasi.mjs',import.meta.url));
     if(storage.objectStore && existsSync(join(defaultSheetsDir,'.vite/manifest.json')) && existsSync(defaultGatewayPath) && (process.env.DYOFFICE_NATIVE_BINARY || existsSync(defaultNodeEnginePath))){
-      sheets=await configuredSheetsRuntime({...process.env,DYOFFICE_AUTH_MODE:mode,...(process.env.DYOFFICE_NATIVE_BINARY ? {} : {DYOFFICE_XLSX_NODE_ENGINE:process.env.DYOFFICE_XLSX_NODE_ENGINE||defaultNodeEnginePath})},{enabled:true});
+      sheets=await configuredSheetsRuntime({
+        ...process.env,DYOFFICE_AUTH_MODE:mode,
+        ...(process.env.DYOFFICE_NATIVE_BINARY ? {} : {DYOFFICE_XLSX_NODE_ENGINE:process.env.DYOFFICE_XLSX_NODE_ENGINE||defaultNodeEnginePath}),
+        DYOFFICE_XLSX_WASI_REFRESH_RUNNER:process.env.DYOFFICE_XLSX_WASI_REFRESH_RUNNER??(existsSync(defaultWasiRefreshPath)?defaultWasiRefreshPath:undefined),
+      },{enabled:true});
     }
     const {close:closeSheets,...sheetsConfig}=sheets ?? {};
     const defaultPdfDir=resolve(process.env.DYOFFICE_NATIVE_PDF_DIRECTORY||fileURLToPath(new URL('../dist-pdf/',import.meta.url)));

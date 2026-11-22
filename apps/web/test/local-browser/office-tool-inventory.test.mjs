@@ -26,7 +26,7 @@ import {ASSISTANT_FORMAT_TOOLS} from '../../../../packages/web-contracts/src/ass
 for(const mode of ['creation','no-word','all'])test(mode==='no-word'
  ? 'Excel offers workspace creation formats without DOCX when native Word is unavailable'
  : mode==='creation'?'Word and Excel expose only executable creation formats, including standalone CSV download'
- : 'native Office editors scope model tools, save WebP images in Excel and complete Harness delegation',{timeout:180000},async t=>{
+ : 'native Office editors scope model tools, verify media and complete Harness delegation',{timeout:240000},async t=>{
  const creationOnly=mode!=='all',noWord=mode==='no-word'
  const directory=await mkdtemp(join(tmpdir(),'dyoffice-office-tools-'))
  let app,browser,server
@@ -51,7 +51,18 @@ for(const mode of ['creation','no-word','all'])test(mode==='no-word'
  if(!creationOnly){
   const pdf=await PDFDocument.create();pdf.addPage([400,300]).drawText('Office assistant tools')
   const pdfBytes=Buffer.from(await pdf.save())
-  sources.push(['pptx',await readFile(new URL('../fixtures/slides/acceptance.pptx',import.meta.url))],['pdf',pdfBytes])
+  const deck=await JSZip.loadAsync(await readFile(new URL('../fixtures/slides/acceptance.pptx',import.meta.url)))
+  const slidePart='ppt/slides/slide1.xml',slide=await deck.file(slidePart).async('string')
+  const titleShape=slide.match(/<p:sp>[\s\S]*?<\/p:sp>/)?.[0]
+  assert.match(titleShape,/Acceptance title/)
+  // An existing slide with several text elements qualifies for chart insertion.
+  const contextShapes=['Regional review','Approved sample figures'].map((label,index)=>titleShape
+   .replace('id="2" name="TextBox 2"',`id="${101+index}" name="Context ${index+1}"`)
+   .replace(/<a:extLst>[\s\S]*?<\/a:extLst>/,'')
+   .replace('y="914400"',`y="${3657600+index*914400}"`)
+   .replace('Acceptance title',label)).join('')
+  deck.file(slidePart,slide.replace('</p:spTree>',contextShapes+'</p:spTree>'))
+  sources.push(['pptx',await deck.generateAsync({type:'nodebuffer'})],['pdf',pdfBytes])
   directPdf=(await importFile(f,f.alice.token,pdfBytes,'Direct tools.pdf')).file
  }
  const files={},directFiles={}
@@ -126,6 +137,55 @@ for(const mode of ['creation','no-word','all'])test(mode==='no-word'
     assert.deepEqual(create.function.parameters.properties.type.enum,['csv'])
     delta=toolCall('create_document',{title:'Office CSV probe'})
    }
+  }else if(prompt?.includes('Word workspace creation probe')){
+   const afterUser=messages.slice(messages.findLastIndex(message=>message.role==='user')+1)
+   const result=afterUser.find(message=>message.role==='tool')
+   if(result){
+    const {output,isError}=JSON.parse(result.content)
+    assert.ok(!isError,output)
+    assert.match(output,/Created the new document "Word creation 719\.docx" in the workspace/)
+    delta={content:'Word created a native document'}
+   }else delta=toolCall('create_document',{type:'docx',title:'Word creation 719',content:'<p>New Word draft marker 719</p>'},'word-create-docx')
+  }else if(prompt?.includes('Excel reference attachment probe')||prompt?.includes('Excel web citation probe')){
+   const attachment=prompt.includes('Excel reference attachment probe')
+   const user=messages.findLastIndex(message=>message.role==='user')
+   const result=messages.slice(user+1).find(message=>message.role==='tool')
+   if(result){
+    const {output,isError}=JSON.parse(result.content)
+    assert.ok(!isError,output)
+    assert.match(output,attachment?/Audit attachment 712/:/Synthetic supplier registry/)
+    if(!attachment)assert.match(output,/https:\/\/results.example\/registry/)
+    delta={content:attachment?'Excel read the reference attachment':'Excel returned the web citation'}
+   }else{
+    const name=attachment?'read_attachment':'web_search'
+    assert.ok(tools.some(tool=>tool.function.name===name))
+    delta=toolCall(name,attachment?{index:0}:{query:'supplier registry',maxResults:1})
+   }
+  }else if(prompt?.includes('Slides media and script probe')){
+   const results=messages.slice(messages.findLastIndex(message=>message.role==='user')+1)
+    .filter(message=>message.role==='tool').map(message=>JSON.parse(message.content))
+   const generatedUrl=results[3]?.output.match(/https:\/\/generated-image\.invalid\/[A-Za-z0-9-]+/)?.[0]
+   const chartId=results[7]?.output.match(/New element ids: ([\w-]+)\./)?.[1]
+   const cases=[
+    ['read_attachment',{index:0},/Slides reference 651/],
+    ['web_search',{query:'slide source',maxResults:1},/Slide source citation/],
+    ['image_search',{query:'slide reference image',maxResults:1},/https:\/\/images\.example\/blue\.webp/],
+    ['generate_image',{prompt:'Synthetic WebP'},/Image generated, URL/],
+    ['analyze_media',{mediaUrls:[generatedUrl],requirements:'Describe the image'},/Solid red reference image/],
+    ['load_guide',{groups:['insert']},/insert/i],
+    ['execute_slide_script',{slideIndex:0,code:'const title = els.find(e => e.text && e.text.includes("Acceptance title")); setText(title.id, "Evidence script title"); return "Updated the title";'},/Updated the title/],
+    ['apply_ops',{ops:[{op:'addChart',target:{slide:0},kind:'bar',categories:['North','South'],series:[{name:'Sample',values:[8,13]}],offset:{x:100,y:100,cx:340,cy:240},dataSource:'sample'}]},/New element ids/],
+    ['edit_chart',{slideIndex:0,sourceId:chartId,kind:'line',title:'Evidence chart',categories:['East','West'],series:[{name:'Fixture series',values:[21,34]}],dataSource:'sample'},/Updated chart/],
+   ]
+   if(results.length){
+    const {output,isError}=results.at(-1),[name,,expected]=cases[results.length-1]
+    assert.ok(!isError,name+': '+output)
+    assert.match(output,expected,name+': '+output)
+   }
+   if(results.length===4)assert.ok(generatedUrl)
+   if(results.length===8)assert.ok(chartId)
+   const next=cases[results.length]
+   delta=next?toolCall(next[0],next[1],'slides-'+next[0]):{content:'Slides media and script verified'}
   }else if(/Excel workspace export (xlsx|docx|pdf)/.test(prompt??'')){
    const type=prompt.match(/Excel workspace export (xlsx|docx|pdf)/)[1]
    const result=messages.at(-1)
@@ -280,7 +340,21 @@ for(const mode of ['creation','no-word','all'])test(mode==='no-word'
   return
  }
  if(creationOnly){
-  await probe('docx','chat-only')
+  const word=await probe('docx','chat-only')
+  await word.locator('textarea').fill('Word workspace creation probe')
+  await word.getByRole('button',{name:'发送',exact:true}).click()
+  const createdWord=async()=>(await f.files.listFiles(f.alice.token)).files.find(entry=>entry.name==='Word creation 719.docx')?.id
+  await expect.poll(createdWord,{timeout:30000}).toBeTruthy()
+  const createdWordId=await createdWord()
+  await expect(page).toHaveURL(url=>url.origin===origin&&url.hash==='#/file/'+createdWordId)
+  const wordCopy=page.frameLocator(`iframe[data-document-id="${createdWordId}"]`)
+  await expect(wordCopy.locator('.tiptap.doc-page').first()).toContainText('New Word draft marker 719')
+  await expect.poll(async()=>{
+   const {file:wordCopyFile}=await f.files.openFile(f.alice.token,createdWordId)
+   const wordCopyZip=await JSZip.loadAsync(await f.files.readFile(f.alice.token,createdWordId,wordCopyFile.revision))
+   return wordCopyZip.file('word/document.xml').async('string')
+  },{timeout:30000}).toMatch(/New Word draft marker 719/)
+  await expect(word.getByText('Word created a native document',{exact:true})).toBeAttached({timeout:30000})
   const workbook=await probe('xlsx','chat-only')
   const source=files.xlsx
   for(const type of ['xlsx','docx','pdf']){
@@ -337,6 +411,32 @@ for(const mode of ['creation','no-word','all'])test(mode==='no-word'
   assert.equal(csv.suggestedFilename(),'Office CSV probe.csv')
   assert.match(await readFile(await csv.path(),'utf8'),/^Revenue,Formula,Date,Percent,Mass,Named formula/)
   await expect(directWorkbook.getByText('Standalone worksheet downloaded',{exact:true})).toBeVisible({timeout:30000})
+  if(!noWord){
+   await directWorkbook.locator('.ai-plus-btn').click()
+   const chooser=page.waitForEvent('filechooser')
+   await directWorkbook.getByRole('menuitem',{name:'添加文件',exact:true}).click()
+   const parse=page.waitForResponse(response=>new URL(response.url()).pathname==='/api/v1/ai/attachments/parse')
+   await (await chooser).setFiles({name:'reference.txt',mimeType:'text/plain',buffer:Buffer.from('Audit attachment 712')})
+   assert.ok((await parse).ok())
+   await expect(directWorkbook.locator('.ai-attachments').getByText('reference.txt',{exact:true})).toBeVisible()
+   await directWorkbook.locator('textarea').fill('Excel reference attachment probe')
+   await directWorkbook.getByRole('button',{name:'发送',exact:true}).click()
+   await expect(directWorkbook.getByText('Excel read the reference attachment',{exact:true})).toBeVisible({timeout:30000})
+
+   await configs.saveGlobalConfig(f.adminSigned.token,baseline.revision,{
+    upserts:[{id:'web-search',kind:'web_search',providerId:'serper',label:'Test Web Search',model:'',baseUrl:'https://google.serper.dev',enabled:true,apiKey:'test-key'}],
+    defaults:{chat:'chat',web_search:'web-search'},
+   })
+   await page.route('**/api/v1/ai/search',async route=>{
+    assert.deepEqual(route.request().postDataJSON(),{kind:'web_search',query:'supplier registry',maxResults:1})
+    await route.fulfill({json:{method:'serper',results:[{title:'Synthetic supplier registry',url:'https://results.example/registry',snippet:'Supplier A: 712 records'}]}})
+   })
+   const searchable=await openAssistant('xlsx','with-web-search',true)
+   await searchable.locator('textarea').fill('Excel web citation probe')
+   await searchable.getByRole('button',{name:'发送',exact:true}).click()
+   await expect(searchable.getByText('Excel returned the web citation',{exact:true})).toBeVisible({timeout:30000})
+   assert.equal((await f.files.openFile(f.alice.token,directFiles.xlsx.fileId)).file.revision,directFiles.xlsx.revision)
+  }
   return
  }
  for(const format of formats)await probe(format,'chat-only')
@@ -372,8 +472,15 @@ for(const mode of ['creation','no-word','all'])test(mode==='no-word'
   const request=route.request().postDataJSON()
   imageRequests.push(request.action)
   if(request.action==='generate_image'){
-   assert.deepEqual(request,{action:'generate_image',prompt:'Synthetic WebP'})
+   const {transparentBackground,...imageRequest}=request
+   assert.ok(transparentBackground===undefined||transparentBackground===false)
+   assert.deepEqual(imageRequest,{action:'generate_image',prompt:'Synthetic WebP'})
    return route.fulfill({json:{url:'data:image/webp;base64,UklGRhwAAABXRUJQVlA4TA8AAAAvA8AAAAcQ/Y/+ByKi/wEA'}})
+  }
+  if(request.action==='analyze_media'){
+   assert.equal(request.requirements,'Describe the image')
+   assert.match(request.mediaUrls[0],/^data:image\/png;base64,/)
+   return route.fulfill({json:{text:'Solid red reference image'}})
   }
   if(request.url!==remoteImage)return route.abort()
   return route.fulfill({json:{mime:'image/webp',base64:'UklGRhwAAABXRUJQVlA4TA8AAAAvAkAAAAcQ0f/+ByKi/wEA'}})
@@ -442,7 +549,37 @@ for(const mode of ['creation','no-word','all'])test(mode==='no-word'
  }
  assert.equal(await head(),revision)
  assert.deepEqual(await f.files.readFile(f.alice.token,source.fileId,source.revision),original)
- await probe('pptx','configured',{configured:true})
+ const slides=await probe('pptx','configured',{configured:true})
+ await page.route('**/api/v1/ai/search',route=>{
+  const request=route.request().postDataJSON()
+  if(request.kind==='web_search'){
+   assert.deepEqual(request,{kind:'web_search',query:'slide source',maxResults:1})
+   return route.fulfill({json:{method:'serper',results:[{title:'Slide source citation',url:'https://results.example/slide',snippet:'Source excerpt'}]}})
+  }
+  assert.deepEqual(request,{kind:'image_search',query:'slide reference image',maxResults:1})
+  return route.fulfill({json:{method:'serper',images:[{title:'Blue',imageUrl:remoteImage,sourceUrl:'https://images.example',source:'Test'}]}})
+ })
+ await slides.locator('.ai-plus-btn').click()
+ const slidesChooser=page.waitForEvent('filechooser')
+ await slides.getByRole('menuitem',{name:'添加文件',exact:true}).click()
+ const slidesParse=page.waitForResponse(response=>new URL(response.url()).pathname==='/api/v1/ai/attachments/parse')
+ await (await slidesChooser).setFiles({name:'slides-reference.txt',mimeType:'text/plain',buffer:Buffer.from('Slides reference 651')})
+ assert.ok((await slidesParse).ok())
+ await expect(slides.locator('.ai-attachments').getByText('slides-reference.txt',{exact:true})).toBeVisible()
+ await slides.locator('textarea').fill('Slides media and script probe')
+ await slides.getByRole('button',{name:'发送',exact:true}).click()
+ await expect(slides.getByText('Slides media and script verified',{exact:true})).toBeVisible({timeout:45000})
+ const slidesHead=async()=>(await f.files.openFile(f.alice.token,files.pptx.fileId)).file.revision
+ assert.equal(await slidesHead(),files.pptx.revision)
+ await page.keyboard.press('Control+s')
+ await expect.poll(slidesHead,{timeout:30000}).not.toBe(files.pptx.revision)
+ const savedSlides=await JSZip.loadAsync(await f.files.readFile(f.alice.token,files.pptx.fileId,await slidesHead()))
+ assert.match(await savedSlides.file('ppt/slides/slide1.xml').async('string'),/Evidence script title/)
+ const [chart]=await Promise.all(savedSlides.file(/^ppt\/charts\/chart\d+\.xml$/).map(part=>part.async('string')))
+ assert.match(chart,/<c:lineChart\b/)
+ assert.match(chart,/Evidence chart/)
+ assert.match(chart,/Fixture series/)
+ assert.match(chart,/<c:v>21<\/c:v>[\s\S]*<c:v>34<\/c:v>/)
  const panel=await probe('pdf','configured',{configured:true})
  await panel.locator('textarea').fill('Office Harness probe pdf')
  await panel.getByRole('button',{name:'发送',exact:true}).click()

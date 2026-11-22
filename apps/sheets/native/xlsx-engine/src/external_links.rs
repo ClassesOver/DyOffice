@@ -116,6 +116,15 @@ pub struct ExternalLinksReport {
     pub cells: Vec<ExternalLinkCell>,
 }
 
+/// The service stages workbook bytes beside the dependent workbook and sends
+/// the staging name with the corresponding OOXML link index.
+#[derive(Debug, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BoundExternalLinkSource {
+    pub index: usize,
+    pub part: String,
+}
+
 /// A link's parsed identity, kept private: the report carries the flattened
 /// status, the update pass needs nothing beyond the resolved source.
 struct LinkEntry {
@@ -179,7 +188,7 @@ impl RefSpan {
 const MAX_INLINE_CELLS: u64 = 65_536;
 
 /// Parses the workbook's external links in `[n]` index order.
-fn parse_external_links(workbook: &Path) -> Result<Vec<LinkEntry>, SidecarError> {
+fn parse_external_links(workbook: &Path, resolve_targets: bool) -> Result<Vec<LinkEntry>, SidecarError> {
     let mut links = Vec::new();
     let file = match std::fs::File::open(workbook) {
         Ok(file) => file,
@@ -219,7 +228,11 @@ fn parse_external_links(workbook: &Path) -> Result<Vec<LinkEntry>, SidecarError>
         };
         let sheet_names = external_sheet_names(&part_xml);
         let raw_target = external_link_path(&mut archive, &part).unwrap_or_default();
-        let source = resolve_external_path(workbook, &raw_target);
+        let source = if resolve_targets {
+            resolve_external_path(workbook, &raw_target)
+        } else {
+            None
+        };
         links.push(LinkEntry {
             index,
             raw_target,
@@ -378,7 +391,7 @@ fn join_package_path(base: &str, target: &str) -> String {
 pub(crate) fn read_external_link_statuses(
     workbook: &Path,
 ) -> Result<Vec<ExternalLinkStatus>, SidecarError> {
-    Ok(parse_external_links(workbook)?
+    Ok(parse_external_links(workbook, true)?
         .iter()
         .map(LinkEntry::status)
         .collect())
@@ -391,7 +404,7 @@ pub(crate) fn list_external_link_statuses(
     workbook: &Path,
 ) -> Result<ExternalLinksListing, SidecarError> {
     Ok(ExternalLinksListing {
-        links: parse_external_links(workbook)?
+        links: parse_external_links(workbook, true)?
             .iter()
             .map(LinkEntry::read_status)
             .collect(),
@@ -404,7 +417,7 @@ pub(crate) fn list_external_link_statuses(
 pub(crate) fn update_external_link_values(
     workbook: &Path,
 ) -> Result<ExternalLinksReport, SidecarError> {
-    let links = parse_external_links(workbook)?;
+    let links = parse_external_links(workbook, true)?;
     let statuses: Vec<ExternalLinkStatus> = links.iter().map(LinkEntry::status).collect();
 
     // One live source model per reachable link, loaded lazily: an update of
@@ -417,7 +430,65 @@ pub(crate) fn update_external_link_values(
             None
         });
     }
+    compute_external_link_values(workbook, statuses, sources)
+}
 
+pub(crate) fn refresh_bound_external_links(
+    workbook: &Path,
+    bindings: &[BoundExternalLinkSource],
+) -> Result<ExternalLinksReport, SidecarError> {
+    const MAX_BINDINGS: usize = 256;
+    let invalid_binding =
+        || SidecarError::InvalidRequest("Invalid external workbook source binding.".into());
+    if bindings.len() > MAX_BINDINGS {
+        return Err(invalid_binding());
+    }
+    let links = parse_external_links(workbook, false)?;
+    let directory = workbook.parent().ok_or_else(invalid_binding)?;
+    let mut parts = HashMap::new();
+    for binding in bindings {
+        let id = binding
+            .part
+            .strip_prefix("part-")
+            .and_then(|id| uuid::Uuid::parse_str(id).ok())
+            .ok_or_else(invalid_binding)?;
+        if binding.part != format!("part-{id}")
+            || !links.iter().any(|link| link.index == binding.index)
+            || parts.insert(binding.index, directory.join(&binding.part)).is_some()
+        {
+            return Err(invalid_binding());
+        }
+    }
+
+    let mut statuses = Vec::with_capacity(links.len());
+    let mut sources = Vec::with_capacity(links.len());
+    for link in links {
+        let source = if let Some(path) = parts.get(&link.index) {
+            let is_file = std::fs::symlink_metadata(path).is_ok_and(|entry| entry.is_file());
+            if !is_file {
+                return Err(invalid_binding());
+            }
+            Some(load_model(path)?)
+        } else {
+            None
+        };
+        statuses.push(ExternalLinkStatus {
+            index: link.index,
+            raw_target: link.raw_target,
+            source: None,
+            reachable: source.is_some(),
+            sheet_names: link.sheet_names,
+        });
+        sources.push(source);
+    }
+    compute_external_link_values(workbook, statuses, sources)
+}
+
+fn compute_external_link_values(
+    workbook: &Path,
+    statuses: Vec<ExternalLinkStatus>,
+    mut sources: Vec<Option<Model<'static>>>,
+) -> Result<ExternalLinksReport, SidecarError> {
     let mut model = load_model(workbook)?;
     // External formula cells with their file-cached values, collected before
     // anything mutates the model: cells left on their cache report these.

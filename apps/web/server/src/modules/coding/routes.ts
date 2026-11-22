@@ -30,6 +30,7 @@ const publicCodingFailures = new Map<string,{message:string;outcome?:'failed'}>(
   ['OFFICE_MODEL_GATEWAY_REQUIRED',{message:'The Harness could not connect to the Office model gateway. Ask an administrator to check its configuration.',outcome:'failed'}],
   ['CODEX_CLI_NOT_FOUND',{message:'Codex is not installed or configured on the server. Ask an administrator to check the Codex installation.',outcome:'failed'}],
   ['HARNESS_BUSY',{message:'Coding agents are busy. Wait for the active task to finish before trying again.',outcome:'failed'}],
+  ['HARNESS_DATA_HELPER_UNAVAILABLE',{message:'The Harness data helper is unavailable on the server. Ask an administrator to rebuild the Web server assets.',outcome:'failed'}],
   ['CODEX_TIMEOUT',{message:'The Codex task timed out. Check for any saved delivery before retrying.'}],
 ])
 

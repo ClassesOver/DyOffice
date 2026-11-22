@@ -37,7 +37,7 @@ export async function renderSlidesToPngBase64(
 export async function renderSlidesToImageBase64(
   slides: RenderSlide[],
   images: Map<string, HTMLImageElement>,
-  opts: { format?: 'png' | 'jpg'; pixelRatio?: number } = {},
+  opts: { format?: 'png' | 'jpg'; pixelRatio?: number; maxOutputChars?: number } = {},
 ): Promise<string[]> {
   const format = opts.format ?? 'png'
   const pixelRatio = opts.pixelRatio ?? EXPORT_PIXEL_RATIO
@@ -47,6 +47,7 @@ export async function renderSlidesToImageBase64(
   document.body.appendChild(container)
   const root = createRoot(container)
   const out: string[] = []
+  let encodedChars = 0
   try {
     for (const slide of slides) {
       const stage = await new Promise<Konva.Stage>((resolve) => {
@@ -76,6 +77,10 @@ export async function renderSlidesToImageBase64(
       } else {
         const dataUrl = stage.toDataURL({ mimeType: 'image/png', pixelRatio })
         out.push(dataUrl.replace(/^data:image\/png;base64,/, ''))
+      }
+      encodedChars += out[out.length - 1]!.length
+      if (opts.maxOutputChars !== undefined && encodedChars > opts.maxOutputChars) {
+        throw new Error('Slide image export exceeds the download size limit')
       }
     }
   } finally {

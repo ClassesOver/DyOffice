@@ -5,16 +5,24 @@ import {createLocalShellClient} from '../shell/local-client'
 import {createNativePdfSave} from './native-pdf-save'
 import {isRevisionRef,type OpenFileResult,type RevisionRef} from '../../../../packages/web-contracts/src/api'
 import {queryPdfPendingPreview} from './pdf-pending-preview'
-import type {PdfImageInfo} from '../shell/pdf-preview-skill'
-import type {PdfHostImageBake,PdfOcrLine} from '../../../pdf/src/shared/ipc'
+import type {PdfImageInfo} from './pdf-types'
+import type {PdfHostImageBake,PdfOcrLine,PdfSignatureInfo} from '../../../pdf/src/shared/ipc'
 import type {PreparedAiDocumentCreator} from '../shell/pdf-create-document-skill'
 import {createPdfExtraction} from './pdf-extraction'
 import {queryPdfRedactions} from './pdf-redactions'
 
+const byteRangeMarker=new TextEncoder().encode('/ByteRange')
+function hasSignatureMarker(bytes:Uint8Array){
+ for(let index=bytes.indexOf(byteRangeMarker[0]!);index!==-1;index=bytes.indexOf(byteRangeMarker[0]!,index+1)){
+  if(byteRangeMarker.every((byte,offset)=>bytes[index+offset]===byte))return true
+ }
+ return false
+}
+
 /** Session-bound file grant for the desktop PDF renderer in a browser. */
-export async function openNativePdfBrowserFile({fileId,fetchImpl=fetch}:{fileId:string;fetchImpl?:typeof fetch}){
+export async function openNativePdfBrowserFile({fileId,fetchImpl=fetch,expectedRevision}:{fileId:string;fetchImpl?:typeof fetch;expectedRevision?:string|undefined}){
  const client=createLocalShellClient(fetchImpl),session=await client.bindSession()
- const host=createSessionFileHost({fetchImpl})
+ const host=createSessionFileHost({fetchImpl,expectedRevision})
  let disposed=false,pending=true,chunks:Promise<Uint8Array>|undefined
  const assertActive=()=>{if(disposed)throw Error('PDF file grant is closed')}
  const assertSession=async()=>{
@@ -28,6 +36,8 @@ export async function openNativePdfBrowserFile({fileId,fetchImpl=fetch}:{fileId:
   if(opened.format!=='pdf')throw Error('Expected a PDF document')
   const revision=Object.freeze({...opened.file})
   let current=revision,pageCount=0
+  let signatureRevision:RevisionRef|undefined
+  const signatureRequests=new AbortController()
   let bakePreview:{base:RevisionRef;key:string;bytes:Uint8Array}|undefined
   // The renderer needs a basename for its title. This path is never sent to the server.
   const name=opened.name?.trim()&&!/[\\/\u0000-\u001f\u007f]/.test(opened.name)?opened.name:'document.pdf'
@@ -70,7 +80,16 @@ export async function openNativePdfBrowserFile({fileId,fetchImpl=fetch}:{fileId:
    if(current!==base||response.revision!==base.revision)throw Error('The PDF revision changed during image preview')
    return response.result
   }
-  const api:Pick<PdfApi,'consumePending'|'readFile'|'readFileChunk'|'validateTextEdits'|'listPageImages'|'pageImagePng'|'pagePreviewPng'>={
+  const api:Pick<PdfApi,'consumePending'|'readFile'|'readFileChunk'|'validateTextEdits'|'listPageImages'|'pageImagePng'|'pagePreviewPng'|'listDigitalSignatures'>={
+   async listDigitalSignatures(candidate){
+    assertPath(candidate)
+    const base=current
+    if(signatureRevision!==base)return []
+    const result=await session.request<{revision:string;signatures:PdfSignatureInfo[]}>(`/api/v1/files/${fileId}/pdf/signatures/query`,'POST',{revision:base.revision},signatureRequests.signal)
+    assertActive()
+    if(current!==base||result.revision!==base.revision||!Array.isArray(result.signatures))throw Error('Invalid PDF signature report')
+    return result.signatures
+   },
    listPageImages:candidate=>imagePreview<PageImageRef[]>(candidate,{kind:'list'}),
    pageImagePng:({path:candidate,pageIndex,rect,scale=1})=>imagePreview<string|null>(candidate,{kind:'source',pageIndex,rect,scale}),
    pagePreviewPng:({path:candidate,pageIndex,excludeRects,clip,pxWidth,rotate,imageBakes})=>excludeRects.length
@@ -113,7 +132,9 @@ export async function openNativePdfBrowserFile({fileId,fetchImpl=fetch}:{fileId:
     }
    },
   }
-  return {path,revision,api,current:()=>current,async recognizeOcr(png:string,signal?:AbortSignal){
+  return {path,revision,api,current:()=>current,inspectSignatureMarker(bytes:Uint8Array,encrypted:boolean){
+   signatureRevision=!encrypted&&hasSignatureMarker(bytes)?current:undefined
+  },async recognizeOcr(png:string,signal?:AbortSignal){
    const base=current
    const reply=await session.request<{revision:string;lines:PdfOcrLine[]|null}>(`/api/v1/files/${fileId}/pdf/ocr`,'POST',{revision:base.revision,png},signal)
    assertActive()
@@ -196,7 +217,7 @@ export async function openNativePdfBrowserFile({fileId,fetchImpl=fetch}:{fileId:
    const {user}=await session.request<{user:{username:string;displayName?:string}}>('/api/v1/auth/me')
    return user.displayName||user.username
   },dispose(){
-   disposed=true;chunks=undefined;bakePreview=undefined;client.invalidateSession();host.dispose()
+   disposed=true;signatureRequests.abort();chunks=undefined;bakePreview=undefined;client.invalidateSession();host.dispose()
   }}
  }catch(error){
   host.dispose()

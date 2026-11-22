@@ -13,6 +13,7 @@ import { password } from '../helpers/identity.mjs'
 import { phaseDiagnostics, observeFirstRequest } from '../helpers/phase-diagnostics.mjs'
 import { withInputDiagnostics } from '../helpers/input-diagnostics.mjs'
 import { holdFirstResponseEnd } from '../helpers/delayed-http-response.mjs'
+import { hashProtectionPassword, parseDocx, saveDocx } from '../../../../packages/docx-engine/src/index.ts'
 
 const docsDirectory = fileURLToPath(new URL('../../dist-docs/',import.meta.url))
 async function fixture(t, {beforeCleanup = () => {}, beforeHttpRequest = () => {}, assistantChannels = false} = {}) {
@@ -390,6 +391,134 @@ test('native DyOffice DOCX renders, edits, commits, refreshes and preserves unre
   assert.deepEqual(errors,[])
 })
 
+test('native Word saves a styled paragraph and an anchored review comment', {timeout:120_000}, async t => {
+  const f = await fixture(t), {page} = f
+  const original = await readFile(new URL('../../../shell/build/shell-new/blank.docx',import.meta.url))
+  const {file} = await importFile(f,f.alice.token,original,'styled-review.docx')
+  const title = 'F01 review heading', comment = 'Review the native heading before release.'
+  await page.goto(f.origin+'/native-docx/?fileId='+file.fileId)
+  const editor = page.locator('.tiptap.doc-page[contenteditable="true"]')
+  await editor.waitFor({timeout:45_000})
+  await editor.click()
+  await page.keyboard.type(title)
+  await page.getByRole('button',{name:'Styles',exact:true}).click()
+  await page.locator('.style-gallery-menu [data-style-id="Heading1"]').click()
+  await expect(editor.getByRole('heading',{name:title,level:1})).toBeVisible()
+
+  await page.getByRole('button',{name:'Review',exact:true}).click()
+  await editor.getByRole('heading',{name:title,level:1}).click()
+  await page.keyboard.press('Home')
+  await page.keyboard.press('Shift+End')
+  await expect.poll(()=>page.evaluate(()=>window.getSelection()?.toString())).toBe(title)
+  await page.getByRole('button',{name:'New Comment',exact:true}).click()
+  await page.getByPlaceholder('Type a comment…').fill(comment)
+  await page.locator('.comment-compose').getByRole('button',{name:'Comment',exact:true}).click()
+  const commentsPane = page.locator('.comments-pane')
+  await expect(commentsPane.locator('.comment-text')).toHaveText(comment)
+
+  const committed = page.waitForResponse(reply=>reply.url().endsWith('/commits')&&reply.request().method()==='POST'&&reply.status()===200)
+  await page.keyboard.press('Control+s')
+  await committed
+  await expectCleanPersistence(page)
+  const current = (await f.files.openFile(f.alice.token,file.fileId)).file
+  assert.notEqual(current.revision,file.revision)
+  await page.getByRole('button',{name:'File',exact:true}).click()
+  const [download] = await Promise.all([
+    page.waitForEvent('download'),
+    page.getByRole('link',{name:'Download saved version',exact:true}).click(),
+  ])
+  const bytes = await readFile(await download.path())
+  assert.deepEqual(bytes,await f.files.readFile(f.alice.token,file.fileId,current.revision))
+  assert.deepEqual(await f.files.readFile(f.alice.token,file.fileId,file.revision),original)
+  const archive = await JSZip.loadAsync(bytes)
+  const commentsXml = await archive.file('word/comments.xml').async('string')
+  assert.ok(commentsXml.includes(comment))
+  const commentId = commentsXml.match(/<w:comment\b[^>]*\bw:id="(\d+)"/)?.[1]
+  assert.ok(commentId)
+  const documentXml = await archive.file('word/document.xml').async('string')
+  const headingXml = [...documentXml.matchAll(/<w:p(?:\s[^>]*)?>[\s\S]*?<\/w:p>/g)].find(([xml])=>xml.includes(title))?.[0]
+  assert.ok(headingXml)
+  assert.match(headingXml,/<w:pStyle\s+w:val="Heading1"/)
+  const start = headingXml.indexOf(`<w:commentRangeStart w:id="${commentId}"`)
+  const end = headingXml.indexOf(`<w:commentRangeEnd w:id="${commentId}"`)
+  const content = headingXml.indexOf(title)
+  assert.ok(start>=0&&start<content&&content<end,'comment must anchor the saved heading text')
+  assert.ok(headingXml.includes(`<w:commentReference w:id="${commentId}"`))
+  assert.match(await archive.file('word/_rels/document.xml.rels').async('string'),/Target="comments\.xml"/)
+  assert.match(await archive.file('[Content_Types].xml').async('string'),/PartName="\/word\/comments\.xml"/)
+
+  await page.reload()
+  await expect(editor.getByRole('heading',{name:title,level:1})).toBeVisible({timeout:45_000})
+  await page.locator('.ribbon-mode-split .mode-menu-wrap').getByRole('button',{name:'Show Comments',exact:true}).click()
+  await page.getByRole('menuitemradio',{name:'List',exact:true}).click()
+  await expect(commentsPane.locator('.comment-card')).toContainText(comment)
+  await expect(commentsPane.locator('.comment-anchor')).toContainText(title)
+})
+
+test('native Word preserves modify-password protection across read-only open, edit and save',{timeout:120_000},async t=>{
+  const f=await fixture(t),{page}=f
+  const modifyPassword='Synthetic acceptance password'
+  const document=await parseDocx(f.original)
+  const originalBlocks=document.blocks.filter(block=>!block.hidden&&block.docxIndex!==null)
+    .map(block=>({kind:'original',docxIndex:block.docxIndex}))
+  const original=Buffer.from(await saveDocx(document,originalBlocks,{
+    writeProtection:await hashProtectionPassword(modifyPassword,1000),
+  }))
+  const {file}=await importFile(f,f.alice.token,original,'write-protected.docx')
+  const revision=async()=>(await f.files.openFile(f.alice.token,file.fileId)).file.revision
+  await page.goto(f.origin+'/native-docx/?fileId='+file.fileId)
+  const dialog=page.getByRole('dialog').filter({hasText:'Write-Protected'})
+  const editor=page.locator('.tiptap.doc-page')
+  await expect(dialog).toBeVisible({timeout:45000})
+  await dialog.locator('input').fill('Incorrect fixture password')
+  await dialog.getByRole('button',{name:'OK',exact:true}).click()
+  await expect(dialog.getByText('The password is incorrect. Try again.')).toBeVisible()
+  await dialog.getByRole('button',{name:'Open Read-Only',exact:true}).click()
+  await expect(editor).toHaveAttribute('contenteditable','false')
+  await editor.click()
+  await page.keyboard.type('This edit must be blocked')
+  await expect(editor).not.toContainText('This edit must be blocked')
+  await expect(page.getByRole('button',{name:/^Save \(/})).toBeDisabled()
+  assert.equal(await revision(),file.revision)
+  await page.getByRole('button',{name:'File',exact:true}).click()
+  const [download]=await Promise.all([
+    page.waitForEvent('download'),
+    page.getByRole('link',{name:'Download saved version',exact:true}).click(),
+  ])
+  assert.deepEqual(await readFile(await download.path()),original)
+
+  await page.reload()
+  await expect(dialog).toBeVisible({timeout:45000})
+  await dialog.locator('input').fill(modifyPassword)
+  await dialog.getByRole('button',{name:'OK',exact:true}).click()
+  await expect(dialog).toHaveCount(0)
+  await expect(editor).toHaveAttribute('contenteditable','true')
+  await editor.click()
+  await page.keyboard.press('Control+End')
+  await page.keyboard.press('Enter')
+  const marker='The authorized edit survived the save.'
+  await page.keyboard.type(marker)
+  await expect(editor).toContainText(marker)
+  const committed=page.waitForResponse(reply=>reply.url().endsWith('/commits')&&reply.request().method()==='POST'&&reply.status()===200)
+  await page.keyboard.press('Control+s')
+  await committed
+  await expectCleanPersistence(page)
+  const savedRevision=await revision()
+  assert.notEqual(savedRevision,file.revision)
+  const saved=await f.files.readFile(f.alice.token,file.fileId,savedRevision)
+  const [before,after]=await Promise.all([JSZip.loadAsync(original),JSZip.loadAsync(saved)])
+  const protection=(zip)=>zip.file('word/settings.xml').async('string').then(xml=>xml.match(/<w:writeProtection\b[^>]*\/>/)?.[0])
+  const expected=await protection(before)
+  assert.ok(expected)
+  assert.equal(await protection(after),expected)
+  assert.deepEqual(await f.files.readFile(f.alice.token,file.fileId,file.revision),original)
+  await page.reload()
+  await expect(dialog).toBeVisible({timeout:45000})
+  await dialog.getByRole('button',{name:'Open Read-Only',exact:true}).click()
+  await expect(editor).toHaveAttribute('contenteditable','false')
+  await expect(editor).toContainText(marker)
+})
+
 test('editing during a delayed native save keeps the newer draft dirty and saves a later child revision', { timeout: 120_000 },async t => {
   const diagnostic = phaseDiagnostics(t.signal)
   t.after(() => diagnostic.dispose())
@@ -454,15 +583,16 @@ test('editing during a delayed native save keeps the newer draft dirty and saves
   try {
     assert.equal(await requestDiagnostic.finished(releasedResponse),null)
   } catch (error) {
-    // Chromium's network event can arrive before the editor settles the save.
-    // Record the editor's own verdict without converting a failed request into a pass.
+    // Chromium can report an abort for the held response after the editor has
+    // consumed its receipt. Require that same receipt to settle the draft.
+    if (firstRequest.failure()?.errorText !== 'net::ERR_ABORTED') throw error
     const state = f.page.locator('.dyoffice-docs-persistence-state')
     const acknowledged = await expect.poll(() => state.evaluate(element =>
       element.textContent === 'Unsaved' && element.getAttribute('data-native-save') === 'incomplete' &&
       (element.getAttribute('data-incomplete-reasons') ?? '').split(',').includes('document'),
     undefined,{ timeout: 500 }),{ timeout: 3000 }).toBe(true).then(() => true,() => false)
     console.error('first-native-save-receipt',JSON.stringify({acknowledged}))
-    throw error
+    if (!acknowledged) throw error
   }
   diagnostic.stage('native-incomplete')
   await expect(f.page.locator('.dyoffice-docs-persistence-state')).toHaveAttribute('data-native-save','incomplete')
@@ -541,7 +671,65 @@ test('native lost-response warning keeps the draft until the original commit rec
   })
 })
 
-test('actual server entry serves built native DOCX without a format flag and rejects invalid storage settings', { timeout: 30_000 },async t => {
+test('native Word preserves the unsaved draft through an offline save and reconnect, then retries a canceled download', {timeout:120_000},async t=>{
+  let downloadPath,downloadResponse
+  const interrupted=holdFirstResponseEnd(req=>req.method==='GET'&&req.url===downloadPath,()=>downloadResponse.flushHeaders())
+  const f=await fixture(t,{
+    beforeCleanup:interrupted.release,
+    beforeHttpRequest(req,res){if(interrupted.intercept(req,res))downloadResponse=res},
+  })
+  const {fileId,revision}=f.opened.file
+  const head=async()=>(await f.files.openFile(f.alice.token,fileId)).file.revision
+  const marker='Draft saved after reconnect'
+  await f.page.goto(f.origin+'/native-docx/?fileId='+fileId)
+  const editor=f.page.locator('.tiptap.doc-page[contenteditable="true"]')
+  const status=f.page.locator('.dyoffice-docs-persistence-state')
+  await editor.click()
+  await f.page.keyboard.press('Control+End')
+  await f.page.keyboard.type(marker)
+  await expect(status).toHaveAttribute('data-dirty','true')
+  await f.context.setOffline(true)
+  try{
+    const failed=f.page.waitForEvent('requestfailed',{predicate:request=>request.method()==='POST'&&request.url().endsWith(`/files/${fileId}/uploads`),timeout:15000})
+    await f.page.keyboard.press('Control+s')
+    assert.match((await failed).failure()?.errorText??'',/ERR_INTERNET_DISCONNECTED/)
+    await expect(status).toHaveAttribute('data-native-save','incomplete')
+    await expect(status).toHaveAttribute('data-dirty','true')
+    await expect(editor).toContainText(marker)
+    assert.equal(await head(),revision)
+  }finally{await f.context.setOffline(false)}
+  const committed=f.page.waitForResponse(response=>response.url().endsWith(`/files/${fileId}/commits`)&&response.request().method()==='POST'&&response.ok(),{timeout:30000})
+  await f.page.keyboard.press('Control+s')
+  await committed
+  await expectCleanPersistence(f.page)
+  const savedRevision=await head()
+  assert.notEqual(savedRevision,revision)
+  assert.deepEqual(await f.files.readFile(f.alice.token,fileId,revision),f.original)
+  downloadPath=`/api/v1/files/${fileId}/content?revision=${savedRevision}`
+  const fileMenu=f.page.getByRole('button',{name:'File',exact:true})
+  const downloadLink=f.page.getByRole('link',{name:'Download saved version',exact:true})
+  await fileMenu.click()
+  const canceled=f.page.waitForEvent('download',{timeout:15000})
+  await downloadLink.click()
+  const first=await canceled
+  assert.equal(await interrupted.started,200)
+  await first.cancel()
+  assert.equal(await first.failure(),'canceled')
+  interrupted.release()
+  await expectCleanPersistence(f.page)
+  await f.page.keyboard.press('Escape')
+  await fileMenu.click()
+  const retried=f.page.waitForEvent('download',{timeout:15000})
+  await downloadLink.click()
+  const savedBytes=await f.files.readFile(f.alice.token,fileId,savedRevision)
+  assert.deepEqual(await readFile(await (await retried).path()),savedBytes)
+  assert.equal(await head(),savedRevision)
+  await f.page.reload()
+  await expect(f.page.locator('.tiptap.doc-page')).toContainText(marker,{timeout:45000})
+})
+
+// The total deadline covers database setup and three actual server processes.
+test('actual server entry serves built native DOCX without a format flag and rejects invalid storage settings', { timeout: 60_000 },async t => {
   const { spawn,execFile } = await import('node:child_process')
   const { once } = await import('node:events'), { promisify } = await import('node:util')
   const f = await fileFixture(t), opened = await importFile(f,f.alice.token,await docxBytes())
@@ -601,9 +789,11 @@ test('page-color edits during a delayed native commit remain dirty and persist o
   await expect(f.page.locator('.doc-zoom').first()).toHaveCSS('--page-bg','#FF0000',{ timeout: 45_000 })
 })
 
-test('a standalone Word metadata edit reports unsaved before saving and reopening its actual bytes', { timeout: 120_000 }, async t => {
+for (const theme of ['light', 'dark']) test(`Word saves and downloads the authored page color with the ${theme} UI theme`, { timeout: 120_000 }, async t => {
   const f = await fixture(t)
+  await f.preferences.update(f.alice.token, { theme })
   await f.page.goto(f.origin + '/native-docx/?fileId=' + f.opened.file.fileId)
+  await expect(f.page.locator('html')).toHaveAttribute('data-theme', theme)
   await f.page.locator('.tiptap.doc-page[contenteditable="true"]').waitFor({ timeout: 45_000 })
   await expectCleanPersistence(f.page)
   await f.page.getByRole('button', { name: 'Design', exact: true }).click()
@@ -619,8 +809,17 @@ test('a standalone Word metadata edit reports unsaved before saving and reopenin
   await expectCleanPersistence(f.page)
   const current = await f.files.openFile(f.alice.token, f.opened.file.fileId)
   assert.notEqual(current.file.revision, f.opened.file.revision)
-  const zip = await JSZip.loadAsync(await f.files.readFile(f.alice.token, current.file.fileId, current.file.revision))
+  const bytes = await f.files.readFile(f.alice.token, current.file.fileId, current.file.revision)
+  await f.page.getByRole('button', { name: 'File', exact: true }).click()
+  const [download] = await Promise.all([
+    f.page.waitForEvent('download'),
+    f.page.getByRole('link', { name: 'Download saved version', exact: true }).click(),
+  ])
+  const downloadedBytes = await readFile(await download.path())
+  assert.deepEqual(downloadedBytes, bytes)
+  const zip = await JSZip.loadAsync(downloadedBytes)
   assert.match(await zip.file('word/document.xml').async('string'), /w:background[^>]*w:color="FF0000"/)
+  assert.equal(await zip.file('customXml/dyoffice-preserve.xml').async('string'), '<probe>Untouched custom part</probe>')
   await f.page.reload()
   await expect(f.page.locator('.doc-zoom').first()).toHaveCSS('--page-bg', '#FF0000', { timeout: 45_000 })
   await expectCleanPersistence(f.page)

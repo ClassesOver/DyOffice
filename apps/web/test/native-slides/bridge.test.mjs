@@ -576,21 +576,24 @@ test('slides bridge fences downloads and takeovers on unsaved state', {timeout: 
   assert.equal(reloads, 1, 'takeover reloads the deck through the editor handle')
   assert.equal(reopened?.slides.length, 2, 'the reopened deck is pushed through onOpened')
   assert.equal(host.getState(server.file().fileId).lease !== null, true)
+  const cited = createSlidesBridge({...host,isCurrentRevision:async()=>false},server.file().fileId,{language:'en'},{fetchImpl:server.fetchImpl})
+  t.after(()=>cited.dispose())
+  await assert.rejects(cited.takeover({isDirty:()=>false,reload:async()=>{reloads++;return true}},true),/cited revision/)
+  assert.equal(reloads,1)
+  assert.equal(host.getState(server.file().fileId).lease,null)
 })
 
 test('desktop-only slides operations reject asynchronously with an explicit unavailable error', {timeout: 30000}, async t => {
   const createSlidesBridge = await bundleBridge(t)
   const server = createSlidesMockServer({slideCount: 1})
   const {bridge} = await openBridge(createSlidesBridge, server, t)
-  const desktopOnly = ['printSlides', 'exportPdf', 'exportImages', 'pickExportDir', 'pickExportPdfPath', 'pickExportVideoPath', 'videoFileOpen', 'savePicture', 'listPrinters', 'printerOptions', 'fontInstallLocal', 'fontCatalog', 'fontDownload', 'insertMedia', 'addMediaBytes', 'pickModel3d', 'addModel3d', 'insertImage', 'pickPictureFile',   'openPptxPath', 'newBlank', 'saveAs', 'presenterStart', 'aiStream', 'webSearch', 'masterEnter']
+  const desktopOnly = ['printSlides', 'exportPdf', 'exportImages', 'pickExportDir', 'pickExportPdfPath', 'pickExportVideoPath', 'videoFileOpen', 'savePicture', 'listPrinters', 'printerOptions', 'fontInstallLocal', 'fontCatalog', 'fontDownload', 'insertMedia', 'addMediaBytes', 'pickModel3d', 'addModel3d', 'openPptxPath', 'newBlank', 'saveAs', 'presenterStart', 'aiStream', 'webSearch']
   for (const method of desktopOnly) {
     assert.equal(typeof bridge.api[method], 'function', method)
     let operation
     assert.doesNotThrow(() => { operation = bridge.api[method]({}) }, method)
     await assert.rejects(operation, error => error.message.length > 0 && !/is not a function/.test(error.message), method)
   }
-  const localImage = await bridge.api.insertImage(0, 1280).then(() => 'resolved', error => error.message)
-  assert.match(localImage, /unavailable|不可用/i)
 })
 
 test('slides bridge serves renderer boot reads without desktop facilities', {timeout: 30000}, async t => {
@@ -928,4 +931,53 @@ test('chart data and theme color reads use the fenced native routes and localize
  assert.deepEqual(await bridge.api.getChartData(0,'e_chart'),data)
  assert.deepEqual(await bridge.api.getChartColorSchemes(),[{key:'default',label:'主题默认',colors:[]},{key:'mono-accent1',label:'单色 1',colors:['#123456']}])
  assert.equal(calls[0].sourceId,'e_chart');assert.equal(calls[0].index,0);assert.equal(calls[0].generation,0);assert.equal(calls[0].editorId,host.getState(server.file().fileId).lease.editorId)
+})
+
+test('local PPTX pictures use native image mutations and reject a stale file selection', async t => {
+  const createSlidesBridge = await bundleBridge(t)
+  const server = createSlidesMockServer({slideCount: 1})
+  const fileId = server.file().fileId
+  const host = createSessionFileHost({fetchImpl: server.fetchImpl})
+  t.after(() => host.dispose())
+  await host.open(fileId)
+  await host.acquireLease(fileId)
+  const png = PNG.sync.write(new PNG({width: 160, height: 90}))
+  const choose = () => new File([png], 'picture.png', {type: 'image/png'})
+  let pick = async () => choose()
+  const requests = []
+  const bridge = createSlidesBridge(host, fileId, {language: 'en', theme: 'light'}, {
+    pickPicture: () => pick(),
+    fetchImpl(url, init) {
+      if (String(url).endsWith('/media')) requests.push(JSON.parse(init.body))
+      return server.fetchImpl(url, init)
+    },
+  })
+  t.after(() => bridge.dispose())
+  await bridge.api.openPptx(960)
+  const inserted = await bridge.api.insertImage(0, 960)
+  assert.ok(inserted.sourceId)
+  assert.ok(inserted.slide.nodes.some(node => node.sourceId === inserted.sourceId && node.type === 'picture'))
+  const picked = await bridge.api.pickPictureFile()
+  const updated = await bridge.api.replacePictureBytes({slideIndex: 0, sourceId: inserted.sourceId, ...picked})
+  assert.ok(updated.nodes.some(node => node.sourceId === inserted.sourceId && node.type === 'picture'))
+  assert.deepEqual(requests.map(({mode, generation}) => [mode, generation]), [['insert', 0], ['replace', 1]])
+  assert.deepEqual(Buffer.from(requests[0].bytesBase64, 'base64'), png)
+  assert.equal(requests[0].wPx / requests[0].hPx, 160 / 90)
+  assert.equal(requests[0].xPx * 2 + requests[0].wPx, 960)
+  assert.equal(await bridge.api.isDirty(), true)
+
+  let completePick
+  pick = () => new Promise(resolve => { completePick = resolve })
+  const stale = bridge.api.insertImage(0, 960)
+  await bridge.api.editText({slideIndex: 0, sourceId: 'e1-title', paragraphs: [{runs: [{text: 'new generation'}]}]})
+  completePick(choose())
+  assert.equal(await stale, null)
+  pick = async () => null
+  assert.equal(await bridge.api.insertImage(0, 960), null)
+  pick = async () => new File(['invalid image'], 'picture.png', {type: 'image/png'})
+  assert.deepEqual(await bridge.api.insertImage(0, 960), {error:'unsupported', ext:'png'})
+  await host.releaseLease(fileId)
+  pick = async () => { throw new Error('A read-only editor must not open a picker') }
+  assert.equal(await bridge.api.insertImage(0, 960), null)
+  assert.equal(requests.length, 2)
 })

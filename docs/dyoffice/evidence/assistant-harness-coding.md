@@ -13,6 +13,7 @@
 - 取消/超时终止任务进程组，TERM 后 KILL，测试覆盖持有 stdout 的顽固孙进程。每次任务最终清理 scratch 目录。
 - Python 3.12 分析运行包：46 项直接依赖；当前 Linux x64 构建出 77 个 wheel。uv.lock、requirements.lock、离线构建/安装/验收脚本纳入源码，生成 wheel/venv 不入 Git。
 - 内置 harness 默认发现 `.dyoffice-analysis-build/runtime/bin/python`，也接受服务端 `DYOFFICE_ANALYSIS_PYTHON`。venv 只读；`PIP_NO_INDEX=1`、`UV_OFFLINE=1`，绘图和缓存仅写任务目录。
+- `npm run build:saas` 同时生成 `.dyoffice-analysis-build/harness-data.mjs`。仅构建数据助手可用 `npm run build:harness-data-helper`，离线 Python 仍按独立分析运行时安装。缺少数据助手时，任务在启动 Codex 前报告 `HARNESS_DATA_HELPER_UNAVAILABLE`。
 
 ## 已验证
 

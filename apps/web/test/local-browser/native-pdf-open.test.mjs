@@ -1,5 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import {execFileSync} from 'node:child_process'
 import {PDFDocument,PDFName,PDFString,rgb} from 'pdf-lib'
 import {expect} from '@playwright/test'
 import {fileFixture,importFile} from '../helpers/files.mjs'
@@ -114,6 +115,7 @@ test('native PDF form marks address visible pages after an unsaved reorder',{ski
  await stubHomeHero(page)
  await page.route('**/api/v1/ai/catalog',route=>route.fulfill({json:{entries:[{id:'mock',label:'Office test model'}],defaultId:'mock'}}))
  const calls=[
+  ['goto_page',{page:2}],
   ['apply_ops',{ops:[{op:'setPageOrder',order:[2,1]}]}],
   ['add_form_mark',{page:1,kind:'check',x:40,y:84}],
  ]
@@ -137,14 +139,15 @@ test('native PDF form marks address visible pages after an unsaved reorder',{ski
  await expect(page.locator('html')).toHaveAttribute('data-document-loading','ready')
  await page.getByRole('button',{name:'AI 助手',exact:true}).click()
  const assistant=page.locator('.shared-editor-assistant')
- for(const step of [0,1]){
+ for(const step of calls.keys()){
   await assistant.getByRole('textbox',{name:'消息'}).fill('Apply form step '+step)
   await assistant.getByRole('button',{name:'发送',exact:true}).click()
   await expect(assistant.getByText('Form step '+step,{exact:true})).toBeVisible({timeout:15000})
+  if(step===0)await expect(page.locator('.pdf-thumb').nth(1)).toHaveClass(/pdf-thumb-active/)
  }
- assert.ok(!results[0].isError,results[0].output)
- assert.ok(!results[1].isError,results[1].output)
- assert.match(results[1].output,/OriginalSecond/)
+ for(const result of results)assert.ok(!result.isError,result.output)
+ assert.match(results[0].output,/Navigated to page 2/)
+ assert.match(results[2].output,/OriginalSecond/)
  const head=async()=>(await f.files.openFile(f.alice.token,file.fileId)).file.revision
  assert.equal(await head(),file.revision)
  await page.getByRole('button',{name:'保存',exact:true}).click()
@@ -169,6 +172,8 @@ test('native PDF model receives visible page and selection context, and cites na
  await app.listen({port:4268,host:'127.0.0.1'})
  const browser=await launchTestBrowser();f.cleanup.unshift(()=>browser.close())
  const page=await browser.newPage()
+ const fontPath='/native-pdf/assets/pdfjs/standard_fonts/LiberationSans-Regular.ttf'
+ assert.equal((await page.request.get(origin+fontPath)).status(),401)
  await stubHomeHero(page)
  await page.route('**/api/v1/ai/catalog',route=>route.fulfill({json:{entries:[{id:'mock',label:'Office test model'}],defaultId:'mock'}}))
  const requests=[]
@@ -185,6 +190,11 @@ test('native PDF model receives visible page and selection context, and cites na
  await page.getByLabel('密码',{exact:true}).fill(password)
  await page.getByRole('button',{name:'登录',exact:true}).click()
  await expect(page.locator('.home')).toBeVisible()
+ assert.equal((await page.request.get(origin+'/pdfjs/standard_fonts/LiberationSans-Regular.ttf')).status(),404)
+ const font=await page.request.get(origin+fontPath)
+ assert.equal(font.status(),200)
+ assert.match(font.headers()['content-type'],/font\/ttf/)
+ assert.ok((await font.body()).length>1000)
  await page.goto(origin+'/native-pdf/?fileId='+file.fileId)
  await expect(page.locator('html')).toHaveAttribute('data-document-loading','ready')
  await page.getByRole('button',{name:'AI 助手',exact:true}).click()
@@ -226,11 +236,13 @@ test('native PDF model receives visible page and selection context, and cites na
  assert.equal((await f.files.openFile(f.alice.token,file.fileId)).file.revision,file.revision)
 })
 
-test('native PDF saves an assistant mark on a printed checkbox and can select it after reopening',{skip:!directory,timeout:60000},async t=>{
+for (const theme of ['light','dark']) test(`native PDF saves and reopens an assistant mark without changing other page colors in the ${theme} UI theme`,{skip:!directory,timeout:90000},async t=>{
  const origin='http://localhost:4267',f=await fileFixture(t,{origin,buildApp:false})
+ await f.preferences.update(f.alice.token,{theme})
  const source=await PDFDocument.create(),sheet=source.addPage([300,240])
  sheet.drawRectangle({x:40,y:140,width:16,height:16,borderWidth:1,borderColor:rgb(0,0,0)})
  sheet.drawText('Consent',{x:64,y:141,size:12})
+ source.addPage([300,240]).drawRectangle({x:24,y:30,width:180,height:120,color:rgb(0.15,0.45,0.85)})
  const original=Buffer.from(await source.save()),{file}=await importFile(f,f.alice.token,original,'printed-check.pdf')
  const app=await buildLocalApp({db:f.db,businessPool:f.businessPool,passwords:f.passwords,deploymentId:f.deploymentId,origin,csrfKey:f.csrfKey,objectStore:f.objects,
   nativePdfDirectory:directory,localShellDirectory:process.env.DYOFFICE_TEST_LOCAL_SHELL_DIRECTORY??fileURLToPath(new URL('../../dist-local-shell',import.meta.url))})
@@ -259,11 +271,18 @@ test('native PDF saves an assistant mark on a printed checkbox and can select it
  await expect(page.locator('.home')).toBeVisible()
  await page.goto(origin+'/native-pdf/?fileId='+file.fileId)
  await expect(page.locator('html')).toHaveAttribute('data-document-loading','ready')
+ await expect(page.locator('html')).toHaveAttribute('data-theme',theme)
  await page.getByRole('button',{name:'AI 助手',exact:true}).click()
  const assistant=page.locator('.shared-editor-assistant')
  await assistant.getByRole('textbox',{name:'消息'}).fill('Check the printed Consent box.')
  await assistant.getByRole('button',{name:'发送',exact:true}).click()
- await expect(assistant.getByText('Printed mark queued',{exact:true})).toBeVisible({timeout:15000})
+ try{
+  await expect(assistant.getByText('Printed mark queued',{exact:true})).toBeVisible({timeout:15000})
+ }catch(error){
+  t.diagnostic(JSON.stringify({theme,turns:turn,toolResult:result?.summary??null,toolError:result?.isError??null,
+   assistantText:(await assistant.innerText({timeout:2000}).catch(()=>'' )).slice(-800)}))
+  throw error
+ }
  assert.ok(!result.isError,result.output)
  const head=async()=>(await f.files.openFile(f.alice.token,file.fileId)).file.revision
  assert.equal(await head(),file.revision)
@@ -274,9 +293,19 @@ test('native PDF saves an assistant mark on a printed checkbox and can select it
  assert.notEqual(revision,file.revision)
  assert.equal(commits,1)
  const bytes=await f.files.readFile(f.alice.token,file.fileId,revision)
- const leaves=await readPdfLeafObjects(bytes)
+ await page.getByRole('button',{name:'文件',exact:true}).click()
+ const [download]=await Promise.all([
+  page.waitForEvent('download'),
+  page.getByRole('link',{name:'下载已保存版本',exact:true}).click(),
+ ])
+ const downloadedBytes=await readFile(await download.path())
+ assert.deepEqual(downloadedBytes,bytes)
+ const leaves=await readPdfLeafObjects(downloadedBytes)
  assert.deepEqual(leaves.filter(item=>item.type===3).map(item=>[item.page,...item.bounds]),[[0,40,140,56,156]])
  assert.ok(leaves.some(item=>item.text==='Consent'))
+ const before=await renderPdfPages(original),after=await renderPdfPages(downloadedBytes)
+ assert.notEqual(after.pages[0].pixels,before.pages[0].pixels)
+ assert.equal(after.pages[1].pixels,before.pages[1].pixels)
  assert.deepEqual(await f.files.readFile(f.alice.token,file.fileId,file.revision),original)
  await page.reload()
  await expect(page.locator('html')).toHaveAttribute('data-document-loading','ready')
@@ -343,6 +372,7 @@ test('GenOffice PDF assistant and ribbon edits preview and save, including recov
  await page.getByRole('button',{name:'登录',exact:true}).click()
  await expect(page.locator('.home')).toBeVisible()
  if(shell){
+  assert.equal((await page.request.get(origin+'/pdf.html')).status(),404)
   await page.goto(origin+'/?entry=pdf-test#/file/'+file.fileId)
   const frame=page.locator('iframe.workspace-document-frame')
   await expect(frame).toHaveAttribute('src','/native-pdf/?fileId='+file.fileId)
@@ -577,6 +607,15 @@ test('GenOffice PDF assistant and ribbon edits preview and save, including recov
  assert.equal(commits.length,3)
  assert.deepEqual(commits,[commits[0],commits[0],commits[0]])
  const savedBytes=await f.files.readFile(f.alice.token,file.fileId,revision)
+ const externalText=(bytes,page)=>execFileSync('pdftotext',['-f',String(page),'-l',String(page),'-','-'],{input:bytes,encoding:'utf8'})
+ assert.match(externalText(original,1),/Native first page/)
+ assert.match(externalText(original,1),/Original paragraph starts here/)
+ const externalFirstPage=externalText(savedBytes,1)
+ for(const text of ['Manual updated page','Revised paragraph begins.','Revised paragraph ends.']){
+  assert.ok(externalFirstPage.includes(text),externalFirstPage)
+ }
+ assert.doesNotMatch(externalFirstPage,/Native first page|Original paragraph starts here|Original paragraph ends here/)
+ assert.match(externalText(savedBytes,2),/Native revised/)
  const savedImage=await readImageSource(savedBytes,0,[192,148,228,196])
  assert.deepEqual([...savedImage.bgra.subarray(0,4)],[255,0,0,128])
  const savedCutout=await readImageSource(savedBytes,0,[244,148,284,188])
@@ -666,8 +705,15 @@ test('GenOffice PDF assistant and ribbon edits preview and save, including recov
  await expect(hits).toHaveCount(3)
  for(const x of [60,200]){
   await (x===60?hits.first():hits.last()).click()
+  const erasePreview=page.waitForResponse(response=>{
+   if(!response.url().endsWith('/pdf/image-previews/query'))return false
+   const {operation}=response.request().postDataJSON()
+   return operation.kind==='erase'&&operation.excludeRects.some(rect=>rect[0]===x)
+  },{timeout:20000})
   await page.getByRole('button',{name:'水平翻转',exact:true}).click()
-  await expect.poll(()=>pixel(x+8,65)).toEqual([0,0,255])
+  const preview=await erasePreview
+  assert.ok(preview.ok(),await preview.text())
+  await expect.poll(()=>pixel(x+8,65),{timeout:10000}).toEqual([0,0,255])
  }
  await editImages.click()
  await page.getByRole('button',{name:'开始',exact:true}).click()
@@ -703,6 +749,15 @@ test('GenOffice PDF assistant and ribbon edits preview and save, including recov
  for(const x of lefts){
   const image=await readImageSource(mixedBytes,0,[x,148,x+40,188])
   assert.deepEqual([...image.bgra.subarray(0,4)],[255,0,0,255])
+ }
+ const renderFirstPage=bytes=>PNG.sync.read(execFileSync('pdftoppm',['-png','-r','72','-f','1','-l','1','-singlefile','-'],{input:bytes}))
+ const originalRaster=renderFirstPage(mixedOriginal),savedRaster=renderFirstPage(mixedBytes)
+ assert.deepEqual([originalRaster.width,originalRaster.height,savedRaster.width,savedRaster.height],[300,240,300,240])
+ for(const x of lefts){
+  const index=(65*savedRaster.width+x+8)*4
+  assert.deepEqual([...originalRaster.data.subarray(index,index+4)],[255,0,0,255])
+  const [red,green,blue,alpha]=savedRaster.data.subarray(index,index+4)
+  assert.ok(red<=2&&green<=2&&blue>=253&&alpha===255,`Poppler pixel at ${x+8},65: ${[red,green,blue,alpha]}`)
  }
  assert.equal(pdfInsertFormState(await PDFDocument.load(mixedBytes)),pdfInsertFormState(await PDFDocument.load(mixedOriginal)))
  assert.deepEqual(await f.files.readFile(f.alice.token,mixedFile.fileId,mixedFile.revision),mixedOriginal)

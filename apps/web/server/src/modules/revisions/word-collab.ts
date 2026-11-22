@@ -1,7 +1,7 @@
 import type { PoolClient } from 'pg'
 import type { BusinessPrincipal, PrincipalTransactions } from '../../db/context.ts'
 import { authError } from '../auth/sessions.ts'
-import { loadFile, runFileTransaction, scope, uuid } from '../files/queries.ts'
+import { loadFile, runFileTransaction, scope, uuid, type FileRow } from '../files/queries.ts'
 
 type Input = {revision:string;clientId:string;version?:number;steps?:Record<string,unknown>[]}
 const range = 'deployment_id=$1 AND owner_id=$2 AND file_id=$3 AND epoch=$4'
@@ -33,7 +33,7 @@ async function head(c:PoolClient,keys:string[],checkpoint:number){
 }
 
 // The file row serializes this short transaction with both other appends and DOCX saves.
-export function syncWord(transactions:PrincipalTransactions,token:string,fileId:string,input:Input){
+export function syncWord(transactions:PrincipalTransactions,token:string,fileId:string,input:Input,assertOfficeWritable:(file:FileRow)=>Promise<void>){
   const file=uuid(fileId),revision=uuid(input.revision),client=uuid(input.clientId),steps=input.steps??[]
   if((input.version!==undefined&&!versionOk(input.version)) || !Array.isArray(steps) || steps.length>64 ||
     !steps.every(validStep) ||
@@ -41,6 +41,7 @@ export function syncWord(transactions:PrincipalTransactions,token:string,fileId:
   return runFileTransaction(transactions,token,'files:write',async(c,p)=>{
     const current=await loadFile(c,p,file,false,steps.length?'UPDATE':'SHARE')
     if(current.format!=='docx')throw authError(415)
+    if(steps.length)await assertOfficeWritable(current)
     const start=await baseline(c,p,file,revision)
     const latest=revision===current.current_revision?start:await baseline(c,p,file,current.current_revision)
     if(start.epoch!==latest.epoch)throw authError(409)

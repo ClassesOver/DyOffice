@@ -8,7 +8,7 @@ const MAX_BYTES=64*1024*1024
 /** Shared killable process boundary for the fixed PDF edit actions. Caps
  * V8 old-space and wall time, not OS filesystem/network access or WASM RSS. */
 export function createPdfProcessJob(action,parseRequest,safetyCodes){
- if(!['applyOpsQuery','annotationsQuery','textEditsQuery','imagePreviewQuery','applyOps','editText','annotateText','deleteAnnotations','updateNotes','pageOps','extractPages','splitPdf','pageLayout','formValues','formFields','textInserts','blockEdits','blockMoves','imageEdits','imageQuery','imageContent','imageBakes','stamps','replacePages','redactionsQuery','redactedCopy','textInsertsQuery','imageInsertsQuery','draftInserts','draftInsertsQuery'].includes(action))fail('INVALID_REQUEST')
+ if(!['applyOpsQuery','annotationsQuery','signaturesQuery','textEditsQuery','imagePreviewQuery','applyOps','editText','annotateText','deleteAnnotations','updateNotes','pageOps','extractPages','splitPdf','pageLayout','formValues','formFields','textInserts','blockEdits','blockMoves','imageEdits','imageQuery','imageContent','imageBakes','stamps','replacePages','redactionsQuery','redactedCopy','textInsertsQuery','imageInsertsQuery','draftInserts','draftInsertsQuery'].includes(action))fail('INVALID_REQUEST')
  let busy=false
  return {async execute(input,raw,signal){
   if(signal?.aborted)fail('ABORTED')

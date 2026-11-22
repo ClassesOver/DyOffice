@@ -9,6 +9,8 @@ import { createBufferEntrySource, type EntrySource } from '../../../../packages/
 import { parseSheetElements, readAttribute, decodeAttribute, parseRelationships } from '../../../../packages/xlsx-gateway/src/gateway/xlsx-sheets'
 import { resolveRelTarget } from '../../../../packages/xlsx-gateway/src/gateway/xlsx-drawing-add'
 import { planWorkbookMutation } from '../../../../packages/xlsx-gateway/src/gateway/xlsx-package-io'
+import {readWorkbookExternalLinks} from './external-links.ts'
+import type {WorkbookPackageQuery} from '../../worker/src/native/gateway.ts'
 
 /** Bundled for the server; no Node gateway code enters the browser build. */
 export async function planWorkbookSave(
@@ -28,6 +30,8 @@ export async function planWorkbookSave(
 export async function planFromWorkbook(bytes: Buffer, input: unknown) {
   try {
     const source = await createBufferEntrySource(bytes)
+    const request = workbookSaveRequestSchema.parse(input)
+    const editedSheets = new Set(request.edits.map(edit => edit.sheetId))
     const workbook = await source.readText('xl/workbook.xml')
     // The existing text-based sheet planner cannot safely interpret these XML
     // constructs. Reject ambiguity instead of letting a comment forge a sheet.
@@ -42,6 +46,7 @@ export async function planFromWorkbook(bytes: Buffer, input: unknown) {
     if (ambiguous(relationshipsXml)) throw new Error('Ambiguous relationships')
     const relationships = parseRelationships(relationshipsXml)
     const ids = new Set<string>(), names = new Set<string>()
+    const worksheetPaths = new Set<string>()
     if (elements.length < 1 || elements.length > 256) throw new Error('Invalid sheets')
     const sheets = []
     for (const element of elements) {
@@ -56,10 +61,13 @@ export async function planFromWorkbook(bytes: Buffer, input: unknown) {
       const rel = rels[0]
       if (rels.length !== 1 || !rel || rel.external || !rel.type.endsWith('/worksheet')) throw new Error('Invalid worksheet relationship')
       const path = resolveRelTarget('xl/workbook.xml', rel.target.replace(/^\/?xl\//, ''))
+      if (worksheetPaths.has(path)) throw new Error('Ambiguous worksheet parts')
       if (!await source.has(path)) throw new Error('Missing worksheet')
+      if (editedSheets.has(id) && ambiguous(await source.readText(path))) throw new Error('Ambiguous worksheet')
+      worksheetPaths.add(path)
       ids.add(id); names.add(name); sheets.push({ id, name })
     }
-    return await planSave(source, sheets, input)
+    return await planSave(source, sheets, request)
   } catch {
     throw Object.assign(new Error('Invalid workbook edits'), { statusCode: 400 })
   }
@@ -91,8 +99,13 @@ async function planSave(source: EntrySource, sheets: readonly { id: string; name
 
 /** Read preserved package metadata using the same parsers as desktop. This
  * enumerates connections; it never fetches any linked workbook or URL. */
-export async function readWorkbookPackage(bytes: Buffer, _signal?: AbortSignal, pivot?: {path:string;cachePath:string}) {
+export async function readWorkbookPackage(bytes: Buffer, _signal?: AbortSignal, query?: WorkbookPackageQuery) {
   const source = await createBufferEntrySource(bytes)
+  if (query && 'externalLinks' in query) {
+    try { return await readWorkbookExternalLinks(source) }
+    catch { throw Object.assign(new Error('Invalid external link metadata'), {statusCode:400}) }
+  }
+  const pivot=query
   if (pivot) {
     if (!/^xl\/pivotTables\/[A-Za-z0-9._-]+\.xml$/.test(pivot.path) || !/^xl\/pivotCache\/[A-Za-z0-9._-]+\.xml$/.test(pivot.cachePath)) throw Object.assign(new Error('Invalid pivot parts'), {statusCode:400})
     try {

@@ -3,11 +3,68 @@ import assert from 'node:assert/strict'
 import {readFile} from 'node:fs/promises'
 import {openIsolatedPptxSession} from '../../worker/src/native/pptx-session-host.ts'
 import {execFileSync,spawn} from 'node:child_process'
+import {crc32} from 'node:zlib'
 import JSZip from 'jszip'
+import { PNG } from 'pngjs'
 
 
 const bytes=()=>readFile(new URL('../fixtures/slides/acceptance.pptx',import.meta.url))
+
+test('aborting a pending native PPTX open closes the child before returning a handle', async () => {
+ const controller=new AbortController()
+ const pending=openIsolatedPptxSession({fileId:'aborted-open',revision:'r1',bytes:await bytes()},
+  {timeoutMs:60000,unsafeTestOnly:true,signal:controller.signal})
+ controller.abort()
+ await assert.rejects(pending,{message:'ABORTED'})
+})
 const pixel=()=>new Uint8Array(Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=','base64'))
+
+test('native analysis picture and provenance commit atomically with bounded image validation',async t=>{
+ const session=await openIsolatedPptxSession({fileId:'f-analysis-picture',revision:'r-1',bytes:await bytes()},{timeoutMs:60000,unsafeTestOnly:true})
+ t.after(()=>session.close())
+ const imageBytes=PNG.sync.write({width:1,height:1,data:Buffer.from([255,0,0,255])})
+ const base64=imageBytes.toString('base64')
+ const target={slide:0},offset={x:0,y:0,cx:952500,cy:952500}
+ const picture={op:'addPicture',target,offset,ext:'png',bytes:'data:image/png;base64,'+base64,descr:'Analysis chart'}
+ const provenance={op:'addElement',target,offset,kind:'textbox',paragraphs:[{runs:[{text:'Frozen input provenance'}]}]}
+ await assert.rejects(()=>session.apply(0,[picture,picture]),{message:'INVALID_MEDIA'})
+ await assert.rejects(()=>session.apply(0,[{...picture,bytes:'data:image/jpeg;base64,'+base64,ext:'jpg'}]),{message:'INVALID_MEDIA'})
+ await assert.rejects(()=>session.apply(0,[{...picture,bytes:picture.bytes+'!'}]),{message:'INVALID_MEDIA'})
+ const truncated=imageBytes.subarray(0,24).toString('base64')
+ await assert.rejects(()=>session.apply(0,[{...picture,bytes:'data:image/png;base64,'+truncated},provenance]),{message:'INVALID_MEDIA'})
+ const corrupt=Buffer.from(imageBytes);corrupt[corrupt.length-1]^=1
+ await assert.rejects(()=>session.apply(0,[{...picture,bytes:'data:image/png;base64,'+corrupt.toString('base64')},provenance]),{message:'INVALID_MEDIA'})
+ const unreadable=Buffer.from(imageBytes),idat=unreadable.indexOf('IDAT')
+ const idatEnd=idat+4+unreadable.readUInt32BE(idat-4)
+ unreadable[idat+4]=0
+ unreadable.writeUInt32BE(crc32(unreadable.subarray(idat,idatEnd)),idatEnd)
+ await assert.rejects(()=>session.apply(0,[{...picture,bytes:'data:image/png;base64,'+unreadable.toString('base64')},provenance]),{message:'INVALID_MEDIA'})
+ await assert.rejects(()=>session.apply(0,[picture,{...provenance,paragraphs:[{runs:[{text:' '}]}]}]),{message:'INVALID_MEDIA'})
+ await assert.rejects(()=>session.apply(0,[picture,provenance],undefined,{isolation:'per_op'}),{message:'INVALID_MEDIA'})
+ await assert.rejects(()=>session.apply(0,[picture,{...provenance,target:{slide:1}}]),{message:'INVALID_MEDIA'})
+ const nonexistent={slide:99}
+ const rejected=await session.apply(0,[{...picture,target:nonexistent},{...provenance,target:nonexistent}])
+ assert.equal(rejected.transaction.applied,false)
+ assert.equal(rejected.generation,0)
+ const applied=await session.apply(0,[picture,provenance])
+ assert.equal(applied.generation,1)
+ assert.deepEqual(applied.records[0].op,{op:'addPicture'})
+ const rendered=await session.render(1,0)
+ assert.equal(rendered.nodes.filter(node=>node.type==='picture').length,1)
+ const archive=await JSZip.loadAsync((await session.exportBytes(1)).bytes)
+ const imageParts=await Promise.all(archive.file(/^ppt\/media\/.+\.png$/).map(part=>part.async('nodebuffer')))
+ assert.ok(imageParts.some(image=>image.equals(imageBytes)))
+ assert.match(await archive.file('ppt/slides/slide1.xml').async('string'),/Frozen input provenance/)
+ const undone=await session.undo(1)
+ assert.equal(undone.stateGeneration,0)
+ assert.equal(undone.slides[0].nodes.filter(node=>node.type==='picture').length,0)
+ const jpeg=Buffer.from('/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkSEw8UHRofHh0aHBwgJC4nICIsIxwcKDcpLDAxNDQ0Hyc5PTgyPC4zNDL/wAALCAABAAEBAREA/8QAFAABAAAAAAAAAAAAAAAAAAAAAP/EABQQAQAAAAAAAAAAAAAAAAAAAAD/2gAIAQEAAD8AP//Z','base64')
+ const asJpeg=bytes=>({...picture,ext:'jpg',bytes:'data:image/jpeg;base64,'+bytes.toString('base64')})
+ await assert.rejects(()=>session.apply(undone.generation,[asJpeg(jpeg.subarray(0,-2)),provenance]),{message:'INVALID_MEDIA'})
+ const withoutHuffmanTables=Buffer.concat([jpeg.subarray(0,jpeg.indexOf(Buffer.from([0xff,0xc4]))),jpeg.subarray(jpeg.indexOf(Buffer.from([0xff,0xda])))])
+ await assert.rejects(()=>session.apply(undone.generation,[asJpeg(withoutHuffmanTables),provenance]),{message:'INVALID_MEDIA'})
+ assert.equal((await session.apply(undone.generation,[asJpeg(jpeg),provenance])).transaction.applied,true)
+})
 
 test('isolated AI history batches restore the exact pre-run deck and remain undoable',async t=>{
  const session=await openIsolatedPptxSession({fileId:'f-ai-history',revision:'r-1',bytes:await bytes()},{timeoutMs:60000,unsafeTestOnly:true})

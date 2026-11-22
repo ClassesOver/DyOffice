@@ -28,11 +28,51 @@ async function waitForSheet(io: SandboxSession, sessionId: string, sheetId: stri
 export interface XlsxMutationPlan {
   replaced: ReadonlyMap<string,string>; added: ReadonlyMap<string,string>; addedBinary: ReadonlyMap<string,Uint8Array>; removedEntries: readonly string[]
 }
+
+export interface BoundWorkbookSource {
+  index: number
+  bytes: Uint8Array
+}
 /** Uses the original sidecar's archive writer. This is an archive roundtrip,
  * not an editor or persisted recalculation implementation. */
 export function createXlsxNativeWorker(process: NativeProcess) {
   const native = createNativeAdmission(process)
+  let refreshing = false
   return {
+    async refreshExternalLinks(input: Uint8Array, sources: readonly BoundWorkbookSource[], signal?: AbortSignal) {
+      if (!(input instanceof Uint8Array) || !Array.isArray(sources) || sources.length > 256) {
+        throw new SandboxError('INPUT_LIMIT')
+      }
+      let total = input.byteLength
+      const indices = new Set<number>()
+      for (const source of sources) {
+        if (!Number.isInteger(source?.index) || source.index < 1 || source.index > 256 ||
+            indices.has(source.index) || !(source.bytes instanceof Uint8Array) || !source.bytes.byteLength) {
+          throw new SandboxError('INVALID_REQUEST')
+        }
+        indices.add(source.index)
+        total += source.bytes.byteLength
+      }
+      if (total > 32 * 1024 * 1024) throw new SandboxError('INPUT_LIMIT')
+      if (signal?.aborted) throw new SandboxError('ABORTED')
+      // Source snapshots also wait for native admission. Only one refresh may
+      // hold these extra captured bytes across the normal worker queue.
+      if (refreshing) throw Object.assign(new SandboxError('SANDBOX_BUSY'), {statusCode:429,retryAfter:1})
+      refreshing = true
+      try {
+        const captured = sources.map(({index, bytes}) => ({index, bytes: Buffer.from(bytes)}))
+        return await native.run(input, async io => {
+          const bindings: {index: number; part: string}[] = []
+          for (const {index, bytes} of captured) {
+            const path = await io.writePart(bytes)
+            bindings.push({index, part: path.slice('/work/'.length)})
+          }
+          return io.request('refresh_bound_external_links', {path:'/work/input.xlsx', sources:bindings})
+        }, {signal})
+      } finally {
+        refreshing = false
+      }
+    },
     readMedia(input: Uint8Array,visualId:string,signal?:AbortSignal) {
       if(typeof visualId!=='string'||visualId.length<1||visualId.length>512||visualId.includes('/')||visualId.includes('\\'))return Promise.reject(new SandboxError('INPUT_LIMIT'))
       return native.run(input,async io=>{

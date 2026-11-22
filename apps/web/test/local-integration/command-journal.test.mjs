@@ -482,13 +482,15 @@ test('process exit before T06 commit rolls back file and command receipt togethe
   const code = `
  import {Pool} from 'pg';
  import {createPrincipalTransactions} from './server/src/db/context.ts';
+ import {createFileService} from './server/src/modules/files/service.ts';
  import {createRevisionService} from './server/src/modules/revisions/service.ts';
  import {createLocalObjectStore} from './server/src/storage/local-dev.ts';
  const pool=new Pool({connectionString:process.env.COMMAND_TEST_DB});
  const base=createPrincipalTransactions({pool,deploymentId:process.env.COMMAND_TEST_DEPLOYMENT});
  const transactions={withPrincipalTransaction:(credential,fn)=>base.withPrincipalTransaction(credential,async(c,p)=>{await fn(c,p);process.exit(81)})};
  const objects=await createLocalObjectStore({directory:process.env.COMMAND_TEST_DIRECTORY});
- await createRevisionService({transactions,objects,files:{}}).commitRevision(process.env.COMMAND_TEST_TOKEN,JSON.parse(process.env.COMMAND_TEST_INPUT));
+ const files=createFileService({transactions:base,objects});
+ await createRevisionService({transactions,objects,files}).commitRevision(process.env.COMMAND_TEST_TOKEN,JSON.parse(process.env.COMMAND_TEST_INPUT));
  `
   const child = spawn(process.execPath, ['--import', 'tsx', '--input-type=module', '-e', code], {
     cwd: new URL('../..', import.meta.url),

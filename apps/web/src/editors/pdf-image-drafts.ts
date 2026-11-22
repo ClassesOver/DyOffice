@@ -3,7 +3,7 @@ import type {createPdfPendingSession,PdfSessionImageDraft} from './pdf-pending-s
 import {pdfToView,viewToPdf,type PageGeom} from '../../../pdf/src/renderer/annotations'
 import type {PdfPendingSnapshot} from './pdf-pending-ops'
 import type {SettingsRequest} from '../../../../packages/browser-host/src/preferences'
-import type {PdfImageBytes} from '../shell/pdf-preview-skill'
+import type {PdfImageBytes} from './pdf-types'
 import {base64ByteSize,getPdfImageDraftCrop,inspectPdfImageDraftBytes,transformPdfImageDraftPixels,validatePdfImageDraftBake,type PdfImageDraftBakeOperation,type TransformPdfImageDraftPixels} from './pdf-image-draft-pixels'
 export type {PdfImageDraftBakeOperation,TransformPdfImageDraftPixels} from './pdf-image-draft-pixels'
 export type PendingImageInsert={page:number;image:PdfImageBytes;anchor_text?:string;placement?:'above'|'below'|'left'|'right';x?:number;y?:number;width?:number;height?:number;layer?:'above_text'|'below_text'}

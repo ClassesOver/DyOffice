@@ -3,6 +3,11 @@ import {literalRows} from '../../../../packages/browser-host/src/analysis-litera
 import {formatAddress} from '@genoffice/xlsx-gateway/domain/cell-address'
 import type {WorkbookOperation} from '@genoffice/xlsx-gateway/domain/workbook-dsl'
 const NUMBER_TEXT=/^-?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?$/i
+
+export function invalidatesAnalysisCapture(id:string,fromFormula:boolean,journalSuppressed:boolean):boolean {
+ return !journalSuppressed&&!fromFormula&&!id.startsWith('formula.mutation.set-formula-calculation-')&&
+  id!=='formula.mutation.set-formula-data'&&id!=='formula.mutation.set-array-formula-data'
+}
 /** Typed cell for a frozen query result: numeric/boolean columns become real
  * numbers/booleans (so they sum and chart); headers, notes and anything that is
  * not a canonical literal stay text. Plain CSV/report content stays text. */

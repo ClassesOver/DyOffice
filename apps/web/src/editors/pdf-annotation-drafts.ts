@@ -1,6 +1,6 @@
 import type {SettingsRequest} from '../../../../packages/browser-host/src/preferences'
 import type {DrawingInput,MarkupInput} from '../../../pdf/src/shared/ipc'
-import type {PdfAnnotation} from '../shell/pdf-preview-skill'
+import type {PdfAnnotation} from './pdf-types'
 import type {createPdfPendingSession} from './pdf-pending-session'
 
 type QueryResult={revision:string;markups:MarkupInput[];notes:Extract<DrawingInput,{kind:'note'}>[]}

@@ -55,9 +55,12 @@ export function notesPathForSlide(archive: PackageArchive, slidePath: string): s
   return null
 }
 
-/** Find the body placeholder sp block in the notesSlide xml. */
+const notesTextBody = /<p:txBody\s*>([\s\S]*?)<\/p:txBody\s*>/
+const xmlComment = /<!--[\s\S]*?-->/g
+
+/** Find the body placeholder sp block in the notesSlide XML. */
 function findBodySp(xml: string): { xml: string; start: number; end: number } | null {
-  for (const m of xml.matchAll(/<p:sp>[\s\S]*?<\/p:sp>/g)) {
+  for (const m of xml.matchAll(/<p:sp\s*>[\s\S]*?<\/p:sp\s*>/g)) {
     // quote-agnostic: a deck written with type='body' is still a body placeholder
     if (/<p:ph\b[^>]*\btype=["']body["']/.test(m[0])) {
       return { xml: m[0], start: m.index!, end: m.index! + m[0].length }
@@ -72,9 +75,9 @@ export function getSlideNotes(archive: PackageArchive, slidePath: string): strin
   if (!notesPath) return ''
   const xml = archive.readText(notesPath)
   if (!xml) return ''
-  const body = findBodySp(xml)
+  const body = findBodySp(xml.replace(xmlComment, ''))
   if (!body) return ''
-  const tx = /<p:txBody>([\s\S]*?)<\/p:txBody>/.exec(body.xml)?.[1]
+  const tx = notesTextBody.exec(body.xml)?.[1]
   if (!tx) return ''
   const paras = [...tx.matchAll(/<a:p>([\s\S]*?)<\/a:p>/g)].map((p) =>
     [...p[1]!.matchAll(/<a:t(?:\s[^>]*[^/>])?>([\s\S]*?)<\/a:t>/g)]
@@ -114,19 +117,41 @@ export function setSlideNotes(opened: OpenedPptx, slideIndex: number, text: stri
   const slide = opened.deck.slides[slideIndex]
   if (!slide) return false
   const { archive } = opened
-  const notesPath = notesPathForSlide(archive, slide.path) ?? createNotesSlide(opened, slide.path)
+  const relationships = [...archive.readRels(slide.path).values()].filter(rel => rel.type === NOTES_SLIDE_REL)
+  const relationship = relationships[0]
+  if (relationships.length > 1 || (relationship?.targetMode && relationship.targetMode !== 'Internal')) return false
+  const existingPath = relationship && resolveTarget(slide.path, relationship.target)
+  if (relationship && !existingPath) return false
+  // A notes slide belongs to one presentation slide. Replacing a shared part
+  // would also alter the other slide's speaker notes.
+  for (const [index, other] of opened.deck.slides.entries()) {
+    if (index === slideIndex) continue
+    if (other.path === slide.path) return false
+    if (existingPath && [...archive.readRels(other.path).values()].some(rel =>
+      rel.type === NOTES_SLIDE_REL && resolveTarget(other.path, rel.target) === existingPath,
+    )) return false
+  }
+  const notesPath = existingPath ?? createNotesSlide(opened, slide.path)
   if (!notesPath) return false
   const xml = archive.readText(notesPath)
   if (!xml) return false
+  // Keep offsets into the original part while ignoring markup inside comments.
+  const markup = xml.replace(xmlComment, comment => ' '.repeat(comment.length))
+  if (!/^\s*(?:<\?xml\s[^?]*\?>\s*)?<p:notes(?=[\s>])/.test(markup) ||
+    /<!\[CDATA\[|<!DOCTYPE|<!ENTITY|<\?(?!xml\s)/i.test(markup)) return false
 
   const txBody = buildNotesTxBody(text)
-  const body = findBodySp(xml)
+  const body = findBodySp(markup)
   let next: string
   if (body) {
-    const patched = body.xml.replace(/<p:txBody>[\s\S]*?<\/p:txBody>/, () => txBody)
-    next = xml.slice(0, body.start) + patched + xml.slice(body.end)
+    const existing = notesTextBody.exec(body.xml)
+    if (!existing) return false
+    const start = body.start + existing.index
+    next = xml.slice(0, start) + txBody + xml.slice(start + existing[0].length)
   } else {
-    next = xml.replace('</p:spTree>', () => `${NOTES_BODY_SP_OPEN}${txBody}</p:sp></p:spTree>`)
+    const end = /<\/p:spTree\s*>/.exec(markup)
+    if (!end) return false
+    next = xml.slice(0, end.index) + `${NOTES_BODY_SP_OPEN}${txBody}</p:sp>` + xml.slice(end.index)
   }
   setEntry(archive, notesPath, next)
   return true

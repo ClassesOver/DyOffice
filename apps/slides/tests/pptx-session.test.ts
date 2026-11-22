@@ -1,9 +1,11 @@
 // @vitest-environment node
 import { describe, it, expect } from 'vitest'
 import JSZip from 'jszip'
+import UTIF from 'utif2'
+import { PNG } from 'pngjs'
 import {createHash} from 'node:crypto'
 import {elementDurableId} from '@genoffice/pptx-ops'
-import { addElement, createBlankPptx, openPptx, savePptx } from '@genoffice/pptx-engine'
+import { addElement, addPicture, createBlankPptx, openPptx, savePptx } from '@genoffice/pptx-engine'
 import { createPptxSession } from '../../web/worker/src/native/pptx-session'
 async function fixture() {
   const opened = await openPptx(await createBlankPptx())
@@ -464,4 +466,81 @@ it('supports shape geometry, table creation/editing, and slide visibility operat
   const savedTable=reopened.deck.slides[0]!.elements.find(element=>element.type==='table')
   expect(savedTable?.rows[0]?.[0]?.text?.paragraphs[0]?.runs.map(run=>run.text).join('')).toBe('Cell A1')
   s.close()
+})
+
+describe('PPTX session master and layout editing', () => {
+  it('updates an inherited decoration, journals history and writes only the edited master part', async () => {
+    const {bytes} = await fixture()
+    const session = await createPptxSession(bytes)
+    try {
+      const before = (await session.exportBytes(0)).bytes
+      const items = await session.masterParts(0, 960)
+      const master = items.find(item => item.kind === 'master')!
+      expect(master.partPath).toMatch(/^ppt\/slideMasters\/slideMaster\d+\.xml$/)
+      expect(items.some(item => item.kind === 'layout')).toBe(true)
+      const mutation = {
+        op: 'addElement', kind: 'textbox', offset: {x: 100000, y: 300000, cx: 5000000, cy: 400000},
+        paragraphs: [{runs: [{text: 'WebMasterRoundTrip'}]}],
+      }
+      const result = await session.applyMaster(0, master.partPath, mutation, 960)
+      expect(result).toMatchObject({generation: 1, stateGeneration: 1, canUndo: true})
+      expect(result.sourceId).toBeTruthy()
+      expect(JSON.stringify(result.slide)).toContain('WebMasterRoundTrip')
+      expect(JSON.stringify(await session.render(1, 0))).toContain('WebMasterRoundTrip')
+      const saved = (await session.exportBytes(1)).bytes
+      const original = await JSZip.loadAsync(before), modified = await JSZip.loadAsync(saved)
+      const names = Object.keys(original.files).filter(name => !original.files[name]!.dir)
+      expect(Object.keys(modified.files).filter(name => !modified.files[name]!.dir).sort()).toEqual([...names].sort())
+      const changed: string[] = []
+      for (const name of names) {
+        if (await original.file(name)!.async('base64') !== await modified.file(name)!.async('base64')) changed.push(name)
+      }
+      expect(changed).toEqual([master.partPath])
+      const reopened = await createPptxSession(saved)
+      try { expect(JSON.stringify(await reopened.render(0, 0))).toContain('WebMasterRoundTrip') }
+      finally { reopened.close() }
+      await expect(session.applyMaster(0, master.partPath, mutation, 960)).rejects.toThrow('GENERATION_CONFLICT')
+      await expect(session.applyMaster(1, 'ppt/slides/slide1.xml', mutation, 960)).rejects.toThrow('INVALID_MASTER_PART')
+      await expect(session.applyMaster(1, master.partPath, {...mutation, target:{slide:0}}, 960)).rejects.toThrow('INVALID_TARGET')
+      expect(JSON.stringify((await session.undo(1)).slides)).not.toContain('WebMasterRoundTrip')
+      expect(JSON.stringify((await session.redo(2)).slides)).toContain('WebMasterRoundTrip')
+      const edited = await session.applyMaster(3, master.partPath, {
+        op: 'setText', target: {el: result.sourceId}, paragraphs: [{runs: [{text: 'UpdatedMasterText'}]}],
+      }, 960)
+      expect(JSON.stringify(edited.slide)).toContain('UpdatedMasterText')
+    } finally { session.close() }
+  })
+})
+
+it('renders imported TIFF as PNG and preserves native TIFF bytes across insertion and reopen', async () => {
+  const pixels = new Uint8Array(20*12*4)
+  for (let i=0; i<pixels.length; i+=4) pixels.set([200,100,50,255],i)
+  const tiff = new Uint8Array(UTIF.encodeImage(pixels,20,12))
+  const deck = await openPptx(await createBlankPptx())
+  const offset = {x:100000,y:100000,cx:190500,cy:114300}
+  expect(addPicture(deck,deck.deck.slides[0]!,{bytes:tiff,ext:'tif',offset})).not.toBeNull()
+  const source = await savePptx(deck)
+  const session = await createPptxSession(source)
+  function verifyPicture(slide:Awaited<ReturnType<typeof session.render>>, count:number) {
+    const pictures = slide.nodes.filter(node=>node.type==='picture')
+    expect(pictures).toHaveLength(count)
+    for(const picture of pictures) {
+      expect(picture.dataUrl).toMatch(/^data:image\/png;base64,/)
+      const bitmap = PNG.sync.read(Buffer.from(picture.dataUrl!.split(',')[1]!,'base64'))
+      expect([bitmap.width,bitmap.height,...bitmap.data.subarray(0,4)]).toEqual([20,12,200,100,50,255])
+    }
+  }
+  try {
+    verifyPicture(await session.render(0,0),1)
+    const edit = await session.applyImage(0,{mode:'insert',slide:0,placement:'natural',bytes:tiff,ext:'tiff'})
+    expect(edit.generation).toBe(1)
+    verifyPicture(await session.render(1,0),2)
+    const saved = (await session.exportBytes(1)).bytes
+    const zip = await JSZip.loadAsync(saved)
+    const nativeImages = zip.file(/^ppt\/media\/[^/]+\.tiff?$/)
+    expect(nativeImages.length).toBeGreaterThanOrEqual(1)
+    for(const entry of nativeImages) expect(await entry.async('uint8array')).toEqual(tiff)
+    const fresh = await createPptxSession(saved)
+    try { verifyPicture(await fresh.render(0,0),2) } finally { fresh.close() }
+  } finally { session.close() }
 })

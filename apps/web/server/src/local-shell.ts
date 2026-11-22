@@ -2,7 +2,6 @@ import type {FastifyInstance} from 'fastify'
 import {stat} from 'node:fs/promises'
 import {join} from 'node:path'
 import {createStaticAssets} from '../static-assets.mjs'
-import {servePdfFonts} from '../src/pdf/fonts.mjs'
 import {authError} from './modules/auth/sessions.ts'
 export function dshEmbedOrigin(value?:string) {
  if(!value)return undefined
@@ -28,7 +27,6 @@ export async function registerLocalShell(app:FastifyInstance,directory:string,em
   })()
   try{await refreshing}finally{refreshing=undefined}
  }
- app.route({method:['GET','HEAD'],url:'/pdfjs/*',handler:async(request,reply)=>{if(!await servePdfFonts(request.raw,reply.raw,new URL(request.url,'http://localhost').pathname))throw authError(404);reply.hijack()}})
  for(const url of ['/','/index.html','/assets/*'])app.route({method:['GET','HEAD'],url,handler:async(request,reply)=>{
   const target=new URL(request.url,'http://localhost'),path=target.pathname
   const ancestor=allowed&&(path==='/'||path==='/index.html')&&target.searchParams.get('dshEmbed')==='1'?allowed:"'none'"

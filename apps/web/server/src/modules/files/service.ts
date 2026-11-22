@@ -4,10 +4,10 @@ import { UNSUPPORTED_CAPABILITIES, type CapabilityCatalog } from '../../../../..
 import { randomUUID } from 'node:crypto'
 import { PDFDocument, PageSizes } from 'pdf-lib'
 import type { PoolClient } from 'pg'
-import type { BusinessPrincipal, PrincipalTransactions, FileCredential } from '../../db/context.ts'
+import type { BusinessPrincipal, McpPrincipalTransactions, PrincipalTransactions, FileCredential, OfficeReadCredential } from '../../db/context.ts'
 import type { ObjectStore } from '../../storage/object-store.ts'
 import { MAX_OBJECT_BYTES } from '../../storage/object-store.ts'
-import { validateFileName, validateUpload } from './validation.ts'
+import { createFileValidator, validateFileName, validateUpload } from './validation.ts'
 import { uuid, scope, objectKey, openResult as unsupportedOpenResult, fileDto, lockAccount, lockUpload, loadFile, releaseReservation, runFileTransaction, type FileRow, type Upload } from './queries.ts'
 import { assertLiveLease } from '../leases/queries.ts'
 import { authError } from '../auth/sessions.ts'
@@ -15,7 +15,7 @@ import { reclaimAbandonedUploads } from './reclamation.ts'
 
 export interface FilePolicy { quotaBytes?: number; maxUploads?: number; uploadTtlMs?: number }
 
-export function createFileService({ transactions, objects, quotaBytes = 1024 ** 3, maxUploads = 16, uploadTtlMs = 15 * 60_000, capabilities = UNSUPPORTED_CAPABILITIES }: { capabilities?: CapabilityCatalog; transactions: PrincipalTransactions; objects: ObjectStore } & FilePolicy) {
+export function createFileService({ transactions, objects, quotaBytes = 1024 ** 3, maxUploads = 16, uploadTtlMs = 15 * 60_000, capabilities = UNSUPPORTED_CAPABILITIES }: { capabilities?: CapabilityCatalog; transactions: PrincipalTransactions & Partial<Pick<McpPrincipalTransactions, 'withMcpReadTransaction'>>; objects: ObjectStore } & FilePolicy) {
   if (![quotaBytes,maxUploads,uploadTtlMs].every(value => Number.isSafeInteger(value) && value > 0) || quotaBytes > Number.MAX_SAFE_INTEGER / 2 || maxUploads > 1000 || uploadTtlMs > 24 * 3600_000) throw new Error('Invalid file policy')
   const run = <T>(token: FileCredential, action: 'files:read' | 'files:write', fn: (connection: PoolClient, principal: BusinessPrincipal) => Promise<T>) => runFileTransaction(transactions,token,action,fn)
   const personal: typeof run = (token,action,fn) => run(token,action,(connection,principal) => {
@@ -23,14 +23,67 @@ export function createFileService({ transactions, objects, quotaBytes = 1024 ** 
     return fn(connection,principal)
   })
   const catalog = Object.freeze({ ...capabilities })
-  const openResult = (row: FileRow) => ({ ...unsupportedOpenResult(row),capabilities: catalog })
+  function readRevision<T>(credential: OfficeReadCredential, fileId: string, revision: string, operation: (connection: PoolClient, principal: BusinessPrincipal) => Promise<T>) {
+    if (typeof credential !== 'string' && credential.kind === 'external-token') {
+      if (!transactions.withMcpReadTransaction) throw authError()
+      return transactions.withMcpReadTransaction(credential, { fileId: uuid(fileId), revision: uuid(revision) }, operation)
+    }
+    return run(credential, 'files:read', operation)
+  }
+  async function requireReadableRevision(connection: PoolClient, principal: BusinessPrincipal, fileId: string, revision: string) {
+    const file = await loadFile(connection, principal, uuid(fileId))
+    const requestedRevision = uuid(revision)
+    if (principal.job && requestedRevision !== principal.job.baseRevision) throw authError(404)
+    const reference = (await connection.query<{ object_key: string; size: number; sha256: string }>(
+      'SELECT object_key,size,sha256 FROM file_revisions WHERE deployment_id=$1 AND owner_id=$2 AND file_id=$3 AND id=$4',
+      [...scope(principal),file.id,requestedRevision],
+    )).rows[0]
+    if (!reference) throw authError(404)
+    return { file, reference }
+  }
+  const legacySignatureResults = new Map<string, boolean>()
+  const legacyInspections = new Map<string, Promise<boolean>>()
+  const validateLegacyOffice = createFileValidator({maxConcurrent:1})
+  let nextLegacyInspection = Promise.resolve()
+  async function signatureProtected(row: FileRow) {
+    if (row.format === 'pdf') return false
+    if (typeof row.office_signature_protected === 'boolean') return row.office_signature_protected
+    const key = `${row.format}:${row.sha256}:${row.size}`
+    const cached = legacySignatureResults.get(key)
+    if (cached !== undefined) return cached
+    const pending = legacyInspections.get(key)
+    if (pending) return pending
+    // Keep cold legacy reads on their own bounded queue so they do not consume upload slots.
+    if (legacyInspections.size >= 16) throw Object.assign(authError(503), {retryAfter:1})
+    const inspection = nextLegacyInspection.then(async () => {
+      const bytes = await objects.readVerified({ key: row.object_key, sha256: row.sha256, size: row.size })
+      const result = await validateLegacyOffice(bytes, row.name)
+      if (result.sha256 !== row.sha256 || result.format !== row.format) throw authError(503)
+      if (legacySignatureResults.size >= 256) legacySignatureResults.delete(legacySignatureResults.keys().next().value!)
+      legacySignatureResults.set(key, result.officeSignatureProtected)
+      return result.officeSignatureProtected
+    })
+    legacyInspections.set(key, inspection)
+    nextLegacyInspection = inspection.then(() => undefined, () => undefined)
+    try { return await inspection } finally { legacyInspections.delete(key) }
+  }
+  const openResult = async (row: FileRow) => ({ ...unsupportedOpenResult(row),capabilities: catalog,
+    ...(await signatureProtected(row) ? {officeSignatureProtected:true as const} : {}) })
   const service = {
     capabilities: catalog,
+    async assertOfficeWritable(row: FileRow) {
+      if (await signatureProtected(row)) throw authError(423)
+    },
     async reclaimAbandonedUploads(token: FileCredential) {
       if (!objects.removeUnreferenced) return { reclaimedBytes: 0, reclaimedUploads: 0 }
       // Commit expiry first; physical deletion cannot roll back. The collector
       // only locks already-terminal rows and never terminalizes new rows.
-      await personal(token, 'files:write', (connection,principal) => lockAccount(connection,principal))
+      const canReclaim = await personal(token, 'files:write', async (connection, principal) => {
+        if (principal.mcpRead) return false
+        await lockAccount(connection, principal)
+        return true
+      })
+      if (!canReclaim) return { reclaimedBytes: 0, reclaimedUploads: 0 }
       return personal(token, 'files:write', (connection,principal) => reclaimAbandonedUploads(connection,principal,objects))
     },
     async stageUpload(token: FileCredential, metadata: { name: string; size: number }) {
@@ -94,7 +147,7 @@ export function createFileService({ transactions, objects, quotaBytes = 1024 ** 
             await loadFile(connection,principal,row.file_id)
             await assertLiveLease(connection,principal,row.file_id,Number(row.lease_epoch),row.editor_id!)
           }
-          await connection.query("UPDATE uploads SET state='ready',sha256=$4 WHERE deployment_id=$1 AND owner_id=$2 AND id=$3", [...scope(principal),id,validated.sha256])
+          await connection.query("UPDATE uploads SET state='ready',sha256=$4,office_signature_protected=$5 WHERE deployment_id=$1 AND owner_id=$2 AND id=$3", [...scope(principal),id,validated.sha256,validated.officeSignatureProtected])
           return { uploadId: id, sha256: validated.sha256, size: validated.size }
         })
       } catch (error) {
@@ -158,15 +211,15 @@ export function createFileService({ transactions, objects, quotaBytes = 1024 ** 
         if (row.kind !== 'import') throw authError(409)
         if (row.state === 'committed') {
           const file = await loadFile(connection,principal,row.file_id)
-          return openResult({ ...file, current_revision: row.revision_id, sha256: row.sha256!, size: row.expected_size })
+          return openResult({ ...file, current_revision: row.revision_id, object_key:objectKey(principal,row.revision_id), sha256: row.sha256!, size: row.expected_size, office_signature_protected:row.office_signature_protected })
         }
         if (row.state !== 'ready' || !row.sha256) throw authError(409)
         await objects.verifyObject({ key: objectKey(principal,row.revision_id), size: row.expected_size, sha256: row.sha256 })
         await connection.query('INSERT INTO files(id,deployment_id,owner_id,workspace_id,name,format,current_revision,pdf_auto_name_pending) VALUES($1,$2,$3,$4,$5,$6,$7,$8)', [row.file_id,...scope(principal),row.workspace_id,row.name,row.format,row.revision_id,blankPdf])
-        await connection.query('INSERT INTO file_revisions(id,deployment_id,owner_id,file_id,object_key,sha256,size) VALUES($1,$2,$3,$4,$5,$6,$7)', [row.revision_id,...scope(principal),row.file_id,objectKey(principal,row.revision_id),row.sha256,row.expected_size])
+        await connection.query('INSERT INTO file_revisions(id,deployment_id,owner_id,file_id,object_key,sha256,size,office_signature_protected) VALUES($1,$2,$3,$4,$5,$6,$7,$8)', [row.revision_id,...scope(principal),row.file_id,objectKey(principal,row.revision_id),row.sha256,row.expected_size,row.office_signature_protected])
         await connection.query("UPDATE uploads SET state='committed',completed_file_id=file_id WHERE deployment_id=$1 AND owner_id=$2 AND id=$3", [...scope(principal),id])
         await connection.query('UPDATE storage_accounts SET reserved_bytes=reserved_bytes-$3,stored_bytes=stored_bytes+$3 WHERE deployment_id=$1 AND owner_id=$2', [...scope(principal),row.expected_size])
-        const result = openResult(await loadFile(connection, principal, row.file_id))
+        const result = await openResult(await loadFile(connection, principal, row.file_id))
         // A locked row does not freeze time. Recheck after object I/O and all
         // metadata writes; an expired initial finish rolls the whole txn back.
         await lockUpload(connection, principal, id, true)
@@ -187,15 +240,20 @@ export function createFileService({ transactions, objects, quotaBytes = 1024 ** 
     },
     syncAssistantChat:(token:string,fileId:string,input:Parameters<typeof syncFileAssistantChat>[3])=>syncFileAssistantChat(transactions,token,fileId,input),
     openFile: (token: FileCredential, fileId: string) => run(token, 'files:read', async (connection, principal) => openResult(await loadFile(connection, principal, uuid(fileId)))),
-    download: (token: FileCredential, fileId: string, revision: string) => run(token, 'files:read', async (connection, principal) => {
-      const row = await loadFile(connection, principal, uuid(fileId))
-      if (principal.job && uuid(revision)!==principal.job.baseRevision) throw authError(404)
-      const historical = (await connection.query('SELECT object_key,size,sha256 FROM file_revisions WHERE deployment_id=$1 AND owner_id=$2 AND file_id=$3 AND id=$4', [...scope(principal),row.id,uuid(revision)])).rows[0]
-      if (!historical) throw authError(404)
-      const bytes = await objects.readVerified({ key: historical.object_key, size: historical.size, sha256: historical.sha256 })
-      return { bytes, name: row.name, format: row.format }
+    assertReadableRevision: (token: OfficeReadCredential, fileId: string, revision: string, signal: AbortSignal) =>
+      readRevision(token, fileId, revision, async (connection, principal) => {
+        signal.throwIfAborted()
+        await requireReadableRevision(connection, principal, fileId, revision)
+      }),
+    download: (token: OfficeReadCredential, fileId: string, revision: string, maxBytes?: number, signal?: AbortSignal) => readRevision(token, fileId, revision, async (connection, principal) => {
+      signal?.throwIfAborted()
+      const { file, reference } = await requireReadableRevision(connection, principal, fileId, revision)
+      if (maxBytes !== undefined && reference.size > maxBytes) throw authError(413)
+      signal?.throwIfAborted()
+      const bytes = await objects.readVerified({ key: reference.object_key, size: reference.size, sha256: reference.sha256 }, signal)
+      return { bytes, name: file.name, format: file.format }
     }),
-    async readFile(token: FileCredential, fileId: string, revision: string): Promise<Buffer> { return (await service.download(token,fileId,revision)).bytes },
+    async readFile(token: FileCredential, fileId: string, revision: string, signal?: AbortSignal): Promise<Buffer> { return (await service.download(token,fileId,revision,undefined,signal)).bytes },
     listFiles: async (token: FileCredential, { trash = false, cursor, limit = 50 }: { trash?: boolean; cursor?: string; limit?: number } = {}) => {
       if (typeof trash !== 'boolean' || !Number.isSafeInteger(limit) || limit < 1 || limit > 100) throw authError(400)
       const after = cursor === undefined ? null : uuid(cursor)

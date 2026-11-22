@@ -84,6 +84,15 @@ describe('external links panel', () => {
     expect(host.querySelectorAll('[data-tip="\u5b9a\u4f4d\u6e90\u6587\u4ef6"]')).toHaveLength(0)
   })
 
+  it('keeps saved links visible without write actions in a read-only Web workbook', async () => {
+    const host = await mount(panel(UPDATED, { sourceActions: false, canBreak: false }))
+
+    expect(host.textContent).toContain('source.xlsx')
+    expect(host.textContent).toContain('Sheet1, Extra')
+    expect(host.querySelectorAll('button')).toHaveLength(1)
+    expect(host.querySelector('button')?.classList.contains('watch-close')).toBe(true)
+  })
+
   it('shows the reachability the update answered', async () => {
     const host = await mount(panel(UPDATED))
     expect(host.textContent).toContain('\u53ef\u7528')

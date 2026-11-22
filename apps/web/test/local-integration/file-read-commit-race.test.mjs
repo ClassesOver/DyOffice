@@ -17,7 +17,7 @@ for(const lock of ['SHARE','UPDATE']) for(const change of ['revision','trash','p
  try {
   await c.query('BEGIN')
   await c.query('SELECT 1 FROM files WHERE id=$1 FOR UPDATE',[original.fileId])
-  await c.query("INSERT INTO file_revisions(id,deployment_id,owner_id,file_id,object_key,sha256,size,source,parent_revision) SELECT $1::uuid,deployment_id,owner_id,file_id,deployment_id::text||'/'||owner_id::text||'/objects/'||($1::uuid)::text,sha256,size,'save',id FROM file_revisions WHERE id=$2",[next,original.revision])
+  await c.query("INSERT INTO file_revisions(id,deployment_id,owner_id,file_id,object_key,sha256,size,source,parent_revision,office_signature_protected) SELECT $1::uuid,deployment_id,owner_id,file_id,deployment_id::text||'/'||owner_id::text||'/objects/'||($1::uuid)::text,sha256,size,'save',id,office_signature_protected FROM file_revisions WHERE id=$2",[next,original.revision])
   await c.query('UPDATE files SET current_revision=$1 WHERE id=$2',[next,original.fileId])
   if(change==='trash')await c.query('UPDATE files SET deleted_at=clock_timestamp() WHERE id=$1',[original.fileId])
   if(change==='purge')await c.query('UPDATE files SET deleted_at=clock_timestamp(),purge_started_at=clock_timestamp() WHERE id=$1',[original.fileId])

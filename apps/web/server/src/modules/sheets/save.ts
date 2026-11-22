@@ -42,7 +42,7 @@ export function createSheetsSaveService({ files, leases, revisions, native, plan
       try {
         signal?.throwIfAborted()
         await assertSource(token, fileId, input)
-        let bytes = await files.readFile(token, fileId, input.baseRevision)
+        let bytes = await files.readFile(token, fileId, input.baseRevision, signal)
         for (const phase of input.phases) {
           signal?.throwIfAborted()
           const mutation = await planDraft(bytes, phase, signal)
@@ -62,7 +62,7 @@ export function createSheetsSaveService({ files, leases, revisions, native, plan
       try {
         signal?.throwIfAborted()
         await assertSource(token, fileId, input)
-        const bytes = await files.readFile(token, fileId, input.baseRevision)
+        const bytes = await files.readFile(token, fileId, input.baseRevision, signal)
         signal?.throwIfAborted()
         const mutation = await planDraft(bytes, input.request, signal)
         signal?.throwIfAborted()

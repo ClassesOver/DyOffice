@@ -1,5 +1,12 @@
 import {DocumentContractError} from './document-profiles.ts'
-export interface PptxOutline {readonly count:number;readonly size:Readonly<{cx:number;cy:number}>;readonly slideIds:readonly string[];readonly paths:readonly string[];readonly defaultFont?:string}
+export interface PptxOutline {
+ readonly count:number
+ readonly size:Readonly<{cx:number;cy:number}>
+ readonly slideIds:readonly string[]
+ readonly paths:readonly string[]
+ readonly defaultFont?:string
+ readonly writeProtected?:true
+}
 /** Conservative NEW wire limits; the old outline method does not enforce these bounds. */
 export const PPTX_OUTLINE_LIMITS=Object.freeze({slides:1500,emu:2147483647,pathChars:1024,fontChars:256})
 function bad():never {throw new DocumentContractError('INVALID_PPTX_OUTLINE')}
@@ -18,7 +25,7 @@ function strings(value:unknown,count:number):string[]{
  return out
 }
 export function validatePptxOutline(value:unknown):PptxOutline{
- const v=record(value,['count','size','slideIds','paths'],['defaultFont'])
+ const v=record(value,['count','size','slideIds','paths'],['defaultFont','writeProtected'])
  if(!Number.isSafeInteger(v.count)||(v.count as number)<0||(v.count as number)>PPTX_OUTLINE_LIMITS.slides)bad()
  const count=v.count as number,size=record(v.size,['cx','cy'])
  for(const k of ['cx','cy'])if(!Number.isSafeInteger(size[k])||(size[k] as number)<1||(size[k] as number)>PPTX_OUTLINE_LIMITS.emu)bad()
@@ -34,5 +41,10 @@ export function validatePptxOutline(value:unknown):PptxOutline{
  if(new Set(paths).size!==count||new Set(slideIds).size!==count)bad()
  let font:string|undefined
  if(Object.hasOwn(v,'defaultFont')){if(typeof v.defaultFont!=='string'||v.defaultFont.length>PPTX_OUTLINE_LIMITS.fontChars||/[\u0000-\u001f\u007f]/.test(v.defaultFont))bad();font=v.defaultFont}
- return Object.freeze({count,size:Object.freeze({cx:size.cx as number,cy:size.cy as number}),slideIds:Object.freeze(slideIds),paths:Object.freeze(paths),...(font===undefined?{}:{defaultFont:font})})
+ if(Object.hasOwn(v,'writeProtected')&&v.writeProtected!==true)bad()
+ return Object.freeze({
+  count,size:Object.freeze({cx:size.cx as number,cy:size.cy as number}),slideIds:Object.freeze(slideIds),paths:Object.freeze(paths),
+  ...(font===undefined?{}:{defaultFont:font}),
+  ...(v.writeProtected===true?{writeProtected:true as const}:{}),
+ })
 }

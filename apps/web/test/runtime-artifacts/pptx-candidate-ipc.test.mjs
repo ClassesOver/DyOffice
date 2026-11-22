@@ -8,6 +8,7 @@ import {createRequire} from 'node:module'
 import {spawnSync,fork} from 'node:child_process'
 import {preparePptxCandidate} from '../../scripts/prepare-pptx-runtime-candidate.mjs'
 import {openGeneratedPptxCandidateFixture} from '../helpers/pptx-candidate-fixture.mjs'
+import {hashProtectionPassword} from '../../../../packages/docx-engine/src/protection.ts'
 import JSZip from 'jszip'
 const PptxGenJS=createRequire(import.meta.url)('pptxgenjs')
 test('actual minified candidate edits, exports and reopens a generated PPTX over existing IPC',async()=>{
@@ -62,6 +63,22 @@ test('actual minified candidate edits, exports and reopens a generated PPTX over
   session=await openGeneratedPptxCandidateFixture({...candidate,bytes,unsafeGeneratedFixtureOnly:true})
   await assert.rejects(session.outline(0,{fileId:'wrong',revision:'wrong'}),/BINDING_CONFLICT/)
   await assert.rejects(session.outline(0),/CLOSED/)
+  session=undefined
+  const lockedPackage=await JSZip.loadAsync(bytes)
+  const presentationPath='ppt/presentation.xml'
+  const presentation=await lockedPackage.file(presentationPath).async('string')
+  assert.match(presentation,/<\/p:presentation>/)
+  const {hash,salt,spinCount}=await hashProtectionPassword('Synthetic PPTX modify password',1000)
+  lockedPackage.file(presentationPath,presentation.replace('</p:presentation>',
+   `<p:modifyVerifier algorithmName="SHA-512" hashValue="${hash}" saltValue="${salt}" spinCount="${spinCount}"/></p:presentation>`))
+  const lockedBytes=await lockedPackage.generateAsync({type:'nodebuffer'})
+  session=await openGeneratedPptxCandidateFixture({...candidate,bytes:lockedBytes,unsafeGeneratedFixtureOnly:true})
+  assert.equal((await session.outline(0)).writeProtected,true)
+  await assert.rejects(session.apply(0,[{op:'setNotes',target:{slide:0},text:marker}]),/PPTX_WRITE_PROTECTED/)
+  await session.dispose()
+  session=await openGeneratedPptxCandidateFixture({...candidate,bytes:lockedBytes,unsafeGeneratedFixtureOnly:true})
+  await assert.rejects(session.exportBytes(0),/PPTX_WRITE_PROTECTED/)
+  await session.dispose()
   session=undefined
   await writeFile(join(candidate.directory,'session.cjs'),'replaced artifact')
   await assert.rejects(openGeneratedPptxCandidateFixture({...candidate,bytes,unsafeGeneratedFixtureOnly:true}))

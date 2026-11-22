@@ -17,9 +17,9 @@ import {catalog} from '../../server/src/pdf/image-edits-job.mjs'
 import {readPdfLeafObjects} from '../../../pdf/src/main/text-edit.ts'
 
 const nativePdfDirectory=process.env.DYOFFICE_TEST_NATIVE_PDF_DIST
-for(const native of [false,...(nativePdfDirectory?[true]:[])])test(`${native?'Native PDF':'PDF preview'} assistant flips and crops affine images, then saves and reopens`,{timeout:180000},async t=>{
+test('Native PDF assistant flips and crops affine images, then saves and reopens',{skip:!nativePdfDirectory,timeout:180000},async t=>{
  let app,browser,tab,turn=0
- const review='/tmp/dyoffice-pdf-affine-drafts-review/'+(native?'native':'preview');await mkdir(review,{recursive:true})
+ const review='/tmp/dyoffice-pdf-affine-drafts-review/native';await mkdir(review,{recursive:true})
  t.after(async()=>{if(tab)await tab.screenshot({path:review+'/latest.png',fullPage:true}).catch(()=>{});await browser?.close();app?.server.closeAllConnections();await app?.close()})
  const port=43789,origin='http://127.0.0.1:'+port,f=await fileFixture(t,{origin,buildApp:false}),keyring={activeKeyId:'affine',keys:{affine:new Uint8Array(32).fill(63)}}
  const calls=[['list_page_images',{}],['flip_image',{page:1,image_number:1,axis:'horizontal'}],['list_page_images',{}],['crop_image',{page:1,image_number:1,left:.25}],['list_page_images',{}],['crop_image',{page:1,image_number:2,left:.25}],['insert_text',{page:1,text:'Affine browser saved',x:80,y:100,font_size:16}]]
@@ -34,19 +34,14 @@ for(const native of [false,...(nativePdfDirectory?[true]:[])])test(`${native?'Na
  p.pushOperators(popGraphicsState());p.drawText('Affine original',{x:30,y:30})
  const outer=await PDFDocument.create(),page=outer.addPage([600,600]);page.drawPage(await outer.embedPage((await PDFDocument.load(await inner.save())).getPage(0)),{x:40,y:50,xScale:.8,yScale:.9})
  const original=Buffer.from(await outer.save()),source=(await importFile(f,f.alice.token,original,'affine-drafts.pdf')).file
- app=await buildLocalApp({db:f.db,businessPool:f.businessPool,passwords:f.passwords,deploymentId:f.deploymentId,origin,csrfKey:f.csrfKey,objectStore:f.objects,globalConfigKeyring:keyring,providerGateway:{mode:'shared'},codingHarnesses:false,nativePdfDirectory:native?nativePdfDirectory:undefined,localShellDirectory:process.env.DYOFFICE_TEST_LOCAL_SHELL_DIRECTORY??fileURLToPath(new URL('../../dist-local-shell',import.meta.url))})
+ app=await buildLocalApp({db:f.db,businessPool:f.businessPool,passwords:f.passwords,deploymentId:f.deploymentId,origin,csrfKey:f.csrfKey,objectStore:f.objects,globalConfigKeyring:keyring,providerGateway:{mode:'shared'},codingHarnesses:false,nativePdfDirectory,localShellDirectory:process.env.DYOFFICE_TEST_LOCAL_SHELL_DIRECTORY??fileURLToPath(new URL('../../dist-local-shell',import.meta.url))})
  await app.listen({host:'127.0.0.1',port});browser=await launchTestBrowser();tab=await browser.newPage({viewport:{width:1600,height:1100}});await stubHomeHero(tab)
  const errors=[];tab.on('pageerror',error=>errors.push(error.message))
  await tab.goto(origin);await tab.getByLabel('用户名',{exact:true}).fill('alice');await tab.getByLabel('密码',{exact:true}).fill(password);await tab.getByRole('button',{name:'登录',exact:true}).click();await expect(tab.locator('.home')).toBeVisible();await tab.goto(origin+'/#/file/'+source.fileId)
- const surface=native?tab.frameLocator(`iframe[data-document-id="${source.fileId}"]`):tab
- const pages=surface.getByRole('region',{name:'PDF 页面',exact:true})
- if(native){
-  await expect(surface.locator('html')).toHaveAttribute('data-document-loading','ready')
-  await surface.getByRole('button',{name:'AI 助手',exact:true}).click()
- }else{
-  await expect(pages.locator('figure')).toHaveCount(1);await expect(tab.locator('.workspace-document:not([hidden]) .ant-spin-spinning')).toHaveCount(0)
- }
- const canvas=native?surface.locator('.pdf-page-content canvas').first():pages.locator('canvas.pdf-page')
+ const surface=tab.frameLocator(`iframe[data-document-id="${source.fileId}"]`)
+ await expect(surface.locator('html')).toHaveAttribute('data-document-loading','ready')
+ await surface.getByRole('button',{name:'AI 助手',exact:true}).click()
+ const canvas=surface.locator('.pdf-page-content canvas').first()
  const preview=()=>canvas.evaluate(element=>{
   const context=element.getContext('2d'),pixels=[]
   for(const [left,top]of [[172,250],[250,412]])for(let dy=0;dy<96;dy+=8)for(let dx=0;dx<80;dx+=8)
@@ -58,19 +53,36 @@ for(const native of [false,...(nativePdfDirectory?[true]:[])])test(`${native?'Na
  const initialPreview=await preview()
  let stages=0,commits=0
  tab.on('request',request=>{const path=new URL(request.url()).pathname;if(path.endsWith('/uploads')&&path.includes('/pdf/'))stages++;if(path.endsWith('/commits'))commits++})
- const failedPreviews=[]
- tab.on('response',response=>{const path=new URL(response.url()).pathname;if(path.includes('/pdf/')&&path.endsWith('/query')&&!response.ok())failedPreviews.push(response.text().catch(()=>''))})
- const assistant=surface.locator('.shared-editor-assistant'),region=surface.getByRole('region',{name:'已有图片待保存编辑',exact:true}),save=surface.getByRole('button',{name:native?'保存':'保存新版本',exact:true})
- const expectDrafts=async count=>{if(!native)await expect(region.locator('li')).toHaveCount(count)}
- const send=async(index,editing=true)=>{await assistant.getByRole('textbox',{name:'消息',exact:true}).fill('Run affine step '+index);await assistant.getByRole('button',{name:'发送',exact:true}).click();await expect(assistant.getByText('Affine result '+index,{exact:true})).toBeVisible({timeout:30000});if(!native)await expect(tab.getByRole('status').filter({hasText:'正在生成图片与文字的页面预览'})).toHaveCount(0);const result=JSON.parse(JSON.parse(network.wire.toString()).messages.filter(message=>message.role==='tool').at(-1).content);if(result.isError)assert.fail(`Step ${index}: ${result.output} ${(await Promise.all(failedPreviews)).join(' ')}`);if(editing)await expect(save).toBeEnabled()}
+ const failedPreviews=[],saveResponses=[]
+ tab.on('response',response=>{
+  const path=new URL(response.url()).pathname
+  if(path.includes('/pdf/')&&path.endsWith('/query')&&!response.ok())failedPreviews.push(response.text().catch(()=>''))
+  if(response.request().method()!=='POST')return
+  const phase=path.includes('/pdf/')&&path.endsWith('/uploads')?'prepare':path.endsWith('/commits')?'commit':path.endsWith('/lease')?'lease':null
+  if(phase)saveResponses.push({phase,status:response.status(),error:response.ok()?null:response.json().catch(()=>null)})
+ })
+ const assistant=surface.locator('.shared-editor-assistant'),save=surface.getByRole('button',{name:'保存',exact:true})
+ const send=async(index,editing=true)=>{await assistant.getByRole('textbox',{name:'消息',exact:true}).fill('Run affine step '+index);await assistant.getByRole('button',{name:'发送',exact:true}).click();await expect(assistant.getByText('Affine result '+index,{exact:true})).toBeVisible({timeout:30000});const result=JSON.parse(JSON.parse(network.wire.toString()).messages.filter(message=>message.role==='tool').at(-1).content);if(result.isError)assert.fail(`Step ${index}: ${result.output} ${(await Promise.all(failedPreviews)).join(' ')}`);if(editing)await expect(save).toBeEnabled()}
  const unchanged=async()=>{assert.equal(stages,0);assert.equal(commits,0);assert.equal((await f.files.openFile(f.alice.token,source.fileId)).file.revision,source.revision)}
- await send(0,false);await send(1);await expectDrafts(1);await expect.poll(()=>difference(initialPreview)).toBeGreaterThan(1.5);await unchanged()
- await surface.getByRole('button',{name:/^撤销/}).click();await expectDrafts(0);await expect.poll(()=>difference(initialPreview)).toBeLessThan(1.5)
- await send(2,false);await send(3);await expectDrafts(1);await expect.poll(()=>difference(initialPreview)).toBeGreaterThan(1.5)
+ await send(0,false);await send(1);await expect.poll(()=>difference(initialPreview)).toBeGreaterThan(1.5);await unchanged()
+ await surface.getByRole('button',{name:/^撤销/}).click();await expect.poll(()=>difference(initialPreview)).toBeLessThan(1.5)
+ await send(2,false);await send(3);await expect.poll(()=>difference(initialPreview)).toBeGreaterThan(1.5)
  const firstCropPreview=await preview()
- await send(4,false);await send(5);await expectDrafts(2);await expect.poll(()=>difference(firstCropPreview)).toBeGreaterThan(1.5)
+ await send(4,false);await send(5);await expect.poll(()=>difference(firstCropPreview)).toBeGreaterThan(1.5)
  await send(6);await unchanged();await tab.screenshot({path:review+'/pending.png',fullPage:true})
- await save.click();await expect.poll(async()=>(await f.files.openFile(f.alice.token,source.fileId)).file.revision,{timeout:30000}).not.toBe(source.revision);await expectDrafts(0);assert.equal(stages,1);assert.equal(commits,1)
+ try{
+  await save.click()
+  await expect.poll(async()=>(await f.files.openFile(f.alice.token,source.fileId)).file.revision,{timeout:30000}).not.toBe(source.revision)
+ }catch(error){
+  const responses=await Promise.all(saveResponses.map(async({phase,status,error:result})=>{
+   const body=await result
+   return {phase,status,code:body?.error?.code??body?.code??null}
+  }))
+  const status=await surface.locator('.dyoffice-pdf-persistence-state').textContent({timeout:2000}).catch(()=>null)
+  t.diagnostic(JSON.stringify({stages,commits,responses,status}))
+  throw error
+ }
+ assert.equal(stages,1);assert.equal(commits,1)
  const saved=(await f.files.openFile(f.alice.token,source.fileId)).file;assert.notEqual(saved.revision,source.revision)
  const output=await f.files.readFile(f.alice.token,source.fileId,saved.revision),before=(await catalog(original)).entries.map(entry=>entry.image),after=(await catalog(output)).entries.map(entry=>entry.image),objects=await readPdfLeafObjects(output)
  assert.equal(after.length,before.length);assert.equal(after.length,2)
@@ -80,12 +92,8 @@ for(const native of [false,...(nativePdfDirectory?[true]:[])])test(`${native?'Na
  }
  assert.ok(objects.some(o=>o.text==='Affine original'));assert.ok(objects.some(o=>o.text==='Affine browser saved'));assert.deepEqual(await f.files.readFile(f.alice.token,source.fileId,source.revision),original)
  await writeFile(review+'/saved.pdf',output);await writeFile(review+'/geometry.json',JSON.stringify({before,after,stages,commits},null,2));await tab.reload()
- if(native){
-  await expect(surface.locator('html')).toHaveAttribute('data-document-loading','ready')
-  await expect(surface.getByText('Affine browser saved',{exact:true}).first()).toBeAttached({timeout:30000})
-  await expect(save).toBeDisabled()
- }else{
-  await expect(pages).toContainText('Affine browser saved',{timeout:30000});await expectDrafts(0)
- }
+ await expect(surface.locator('html')).toHaveAttribute('data-document-loading','ready')
+ await expect(surface.getByText('Affine browser saved',{exact:true}).first()).toBeAttached({timeout:30000})
+ await expect(save).toBeDisabled()
  await tab.screenshot({path:review+'/saved.png',fullPage:true});assert.deepEqual(errors,[])
 })

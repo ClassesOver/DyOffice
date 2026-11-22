@@ -84,6 +84,7 @@ import { registerWorkspaceSourceToolRoutes } from './modules/sources/tool-routes
 import type { SourceEgressTarget } from './security/egress.ts'
 import { createPdfService } from './modules/pdf/service.ts'
 import { registerPdfRoutes } from './modules/pdf/routes.ts'
+import { registerMcpRoutes } from './modules/mcp-server/routes.ts'
 
 export async function buildApp(config: WebConfig): Promise<FastifyInstance> {
   if (process.env.NODE_ENV === 'production') throw new Error('Development token server is not allowed in production')
@@ -271,9 +272,14 @@ export async function buildLocalApp(config: LocalWebConfig): Promise<FastifyInst
     registerStyleTemplateRoutes(app,createStyleTemplateService(transactions),sessions,csrf)
     registerGlobalConfigRoutes(app, createGlobalConfigService({transactions, keyring: config.globalConfigKeyring}), sessions, csrf)
     if (config.objectStore && files) {
-      const leases = createLeaseService({ transactions })
+      const leases = createLeaseService({ transactions, assertOfficeWritable:files.assertOfficeWritable })
       const revisions = createRevisionService({ transactions, objects: config.objectStore, files, ...config.filePolicy })
       registerFileRoutes(app,files,sessions,csrf,{ leases, revisions, wordCollaboration:config.wordCollaboration })
+      registerMcpRoutes(app,transactions,files,csrf,config.objectStore,config.filePolicy,
+        config.sheetsPlanner && config.sheetsWorkbookPlanner && config.sheetsNative?.savePlan ? {
+          native: config.sheetsNative as SheetsSaveNative,
+          plan: config.sheetsPlanner, planFromWorkbook: config.sheetsWorkbookPlanner,
+        } : undefined, config.slidesHost)
       registerKnowledgeRoutes(app,createKnowledgeService({transactions,files}),sessions,csrf)
       registerPdfRoutes(app,createPdfService({ files, leases, revisions }),sessions,csrf)
       // T17 notification/reconciliation only; preClose terminates upgraded
@@ -288,7 +294,7 @@ export async function buildLocalApp(config: LocalWebConfig): Promise<FastifyInst
       }
       if (config.slidesHost) {
         const slides = createSlidesService({files,leases,revisions,host:config.slidesHost})
-        app.addHook('onClose', () => slides.closeAll())
+        app.addHook('onClose', () => slides.dispose())
         registerSlidesRoutes(app,slides,sessions,csrf,createSlidesSaveService({files,leases,revisions,sessions:slides}))
       }
       if (config.nativeJobs) registerJobRoutes(app,createJobService({ transactions,enabledTypes: ['xlsx.roundtrip'] }),sessions,csrf)
