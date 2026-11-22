@@ -66,6 +66,12 @@ for(const live of [false,true])test(live?'a real model generates, redoes and reu
  const page=await browser.newPage({viewport:{width:1360,height:900}})
  // Keep this test focused on generation, independently of the optional post-generation QC model pass.
  await page.addInitScript(()=>localStorage.setItem('ai-slides-qc','0'))
+ if(!live)await page.addInitScript(()=>{
+  window.testSlidesSendEvents=[]
+  for(const type of ['pointerdown','pointerup','click'])window.addEventListener(type,event=>{
+   if(event.target instanceof Element&&event.target.closest('button[aria-label="Send"]'))window.testSlidesSendEvents.push(type)
+  },true)
+ })
  const {csrfToken}=await (await page.request.get(origin+'/api/v1/auth/csrf')).json()
  assert.equal((await page.request.post(origin+'/api/v1/auth/login',{headers:{origin,'x-csrf-token':csrfToken},data:{username:'alice',password}})).status(),200)
 
@@ -216,9 +222,17 @@ for(const live of [false,true])test(live?'a real model generates, redoes and reu
   (await connection.query('SELECT id FROM file_revisions WHERE file_id=$1 ORDER BY created_at',[file.fileId])).rows.map(row=>row.id))
 
  const acceptedTools=new Map()
+ const styleRequests=[]
+ let observingStyleReuse=false
  page.on('request',request=>{
   if(request.method()!=='POST'||new URL(request.url()).pathname!=='/api/v1/ai/turns')return
-  for(const message of request.postDataJSON()?.request?.messages??[]){
+  const messages=request.postDataJSON()?.request?.messages??[]
+  if(observingStyleReuse){
+   const turn={status:'pending',matchesPrompt:messages.findLast(message=>message.role==='user')?.text?.split('\n\n',1)[0]===reuseStyle}
+   styleRequests.push(turn)
+   void request.response().then(response=>{turn.status=response?.status()??request.failure()?.errorText??'no response'},()=>{turn.status='no response'})
+  }
+  for(const message of messages){
    for(const result of message.results??[])if(!result.isError)acceptedTools.set(result.name,result.output)
   }
  })
@@ -423,6 +437,9 @@ for(const live of [false,true])test(live?'a real model generates, redoes and reu
  assert.deepEqual(await renderedText(),contents)
  assert.equal(await head(),saved)
  assert.deepEqual(await revisions(),[file.revision,saved])
+ for(const effect of ['ask_clarification','plan_deck','generate_deck','save_style_template']){
+  recordVerifiedOfficeEffect('pptx',effect)
+ }
 
  await send(revise)
  await expect(panel.getByText(revisedAnswer,{exact:true})).toBeVisible({timeout:30000})
@@ -448,8 +465,17 @@ for(const live of [false,true])test(live?'a real model generates, redoes and reu
  await page.reload()
  await requireReady()
  await expect.poll(renderedText).toEqual(revisedDeck)
+ recordVerifiedOfficeEffect('pptx','read_slide')
+ recordVerifiedOfficeEffect('pptx','regenerate_slide')
+ observingStyleReuse=true
  await send(reuseStyle)
- await expect(panel.getByText(styleReused,{exact:true})).toBeVisible({timeout:30000})
+ try{
+  await expect(panel.getByText(styleReused,{exact:true})).toBeVisible({timeout:30000})
+ }catch(error){
+  const sendEvents=await page.evaluate(()=>window.testSlidesSendEvents)
+  t.diagnostic(JSON.stringify({styleRequests,phases,sendEvents,composerRetainedPrompt:await composer.inputValue()===reuseStyle}))
+  throw error
+ }
  await expect.poll(renderedText).toEqual([...revisedDeck,followUp])
  assert.deepEqual(phases.slice(10),['template page'])
  assert.deepEqual(await revisions(),[file.revision,saved,updated])
@@ -463,7 +489,5 @@ for(const live of [false,true])test(live?'a real model generates, redoes and reu
  await page.reload()
  await requireReady()
  await expect.poll(renderedText).toEqual([...revisedDeck,followUp])
- for(const effect of ['ask_clarification','plan_deck','generate_deck','read_slide','regenerate_slide','save_style_template','list_style_templates']){
-  recordVerifiedOfficeEffect('pptx',effect)
- }
+ recordVerifiedOfficeEffect('pptx','list_style_templates')
 })
