@@ -8,7 +8,7 @@ import type { ObjectStore } from '../../storage/object-store.ts'
 import { createMcpPdfRotation, parsePdfRotation, pdfRotationDescriptor } from './pdf-rotation.ts'
 import { createMcpTools, handleModernMcp, isVersionedMessage, modernVersion, object } from './handler.ts'
 import { createOfficeReadTool, officeReadDescriptor } from './office-read.ts'
-import { createLegacyMcp, legacyVersion } from './legacy.ts'
+import { createLegacyMcp, legacyVersions } from './legacy.ts'
 import { createMcpReadGrants } from './read-grants.ts'
 
 export function registerMcpRoutes(app: FastifyInstance, transactions: McpPrincipalTransactions, files: FileService, csrf: ReturnType<typeof createCsrfService>, objects: ObjectStore, filePolicy?: FilePolicy) {
@@ -60,7 +60,7 @@ export function registerMcpRoutes(app: FastifyInstance, transactions: McpPrincip
         }
         if (modern) {
           if (request.method !== 'POST') return reply.header('Allow', 'POST').code(405).send()
-          return handleModernMcp(request, reply, credential, tools, [modernVersion, legacyVersion])
+          return handleModernMcp(request, reply, credential, tools, [modernVersion, ...legacyVersions])
         }
         return legacy(request, reply, credential)
       } catch (error) {

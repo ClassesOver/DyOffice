@@ -229,3 +229,29 @@ test('the legacy MCP SDK cancels a verified object read in flight', { timeout: 2
   assert.ok((await client.callTool({ name: readName, arguments: args })).structuredContent.text)
   await transport.terminateSession()
 })
+
+test('legacy Streamable HTTP negotiates 2025-06-18 and pins each request to that session version', async t => {
+  const f = await fileFixture(t)
+  const { file: { fileId, revision } } = await importFile(f, f.alice.token, await backgroundDocumentBytes('docx'))
+  const { token } = (await f.app.inject({ method: 'POST', url: management, headers: ownerHeaders(f, f.alice.token), payload: { fileId, revision } })).json()
+  assert.ok(token)
+  const suppliedVersion = '2025-06-18'
+  const headers = { authorization: 'Bearer ' + token, accept }
+  const initialized = await f.app.inject({
+    method: 'POST', url: '/mcp', headers,
+    payload: { jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: suppliedVersion, capabilities: {}, clientInfo: { name: 'legacy fixture', version: '1' } } },
+  })
+  assert.equal(initialized.statusCode, 200, initialized.body)
+  const data = reply => JSON.parse(reply.body.split('\n').find(line => line.startsWith('data: ')).slice(6))
+  assert.equal(data(initialized).result.protocolVersion, suppliedVersion)
+  const session = initialized.headers['mcp-session-id']
+  assert.ok(session)
+  const send = (method, negotiated, id) => f.app.inject({
+    method: 'POST', url: '/mcp', headers: { ...headers, 'mcp-session-id': session, 'mcp-protocol-version': negotiated },
+    payload: { jsonrpc: '2.0', ...(id !== undefined && { id }), method },
+  })
+  assert.equal((await send('notifications/initialized', suppliedVersion)).statusCode, 202)
+  assert.equal((await send('tools/list', '2025-11-25', 2)).statusCode, 400)
+  const listed = await send('tools/list', suppliedVersion, 3)
+  assert.deepEqual(data(listed).result.tools.map(tool => tool.name), ['read_saved_document'])
+})

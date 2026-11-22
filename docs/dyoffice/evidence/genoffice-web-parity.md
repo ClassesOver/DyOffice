@@ -252,3 +252,5 @@ F16 的 T12 Chromium 用例在固定候选 `d8392ce2` 上通过，覆盖文件�
 已登录的文档所有者可通过 `POST /api/v1/mcp/pdf-rotation-grants` 批准当前保存修订的 `fileId`、`revision`、`pages` 和 `degrees`。外部工具 `rotate_pdf_pages` 使用这一组参数在原生 PDF 子进程中执行，并通过 T06 保存链路发布一条新修订。回执与新修订在同一事务中提交。相同授权及参数重试时返回原回执，凭据可读取原修订和该操作生成的修订。应用迁移 0049 后需同步数据库运行角色权限。
 
 本地测试下载并重新打开成品，核对目标页旋转、其他页角度和旧修订原始字节。测试还覆盖跨账户授权、参数越权、活跃编辑租约、同名幂等键冒充回执、并发重试以及提交前取消。现代请求断线和旧协议显式取消均在对象验证阶段触发回滚。官方 SDK 1.32.1 和 2.4.0 实测保存与重连取回回执。[PDF MCP 集成测试](../../../apps/web/test/local-integration/mcp-pdf-rotation.test.mjs)
+
+Codex App Server 0.169.0 实际使用 `2025-06-18` 握手。服务端把协商版本固定到对应会话，每次请求继续校验 Bearer。通过 Codex 的 `mcpServer/tool/call` 实测授权旋转、保存、读取和客户端重启后恢复同一回执，下载成品复开确认旋转 90 度。付费模型驱动的 CLI 尝试未产生已完成的工具调用。[协议会话回归](../../../apps/web/test/local-integration/mcp-http.test.mjs)

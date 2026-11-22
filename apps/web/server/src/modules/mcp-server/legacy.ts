@@ -8,7 +8,7 @@ import { uniqueHeader } from '../auth/csrf.ts'
 import type { McpExternalCredential } from './credential.ts'
 import { mcpError, mcpServerInfo, object, type McpTools } from './handler.ts'
 
-export const legacyVersion = '2025-11-25'
+export const legacyVersions = ['2025-11-25', '2025-06-18'] as const
 const MAX_SESSIONS = 64
 const MAX_SESSIONS_PER_GRANT = 4
 const SESSION_TTL_MS = 10 * 60_000
@@ -16,6 +16,7 @@ const SESSION_TTL_MS = 10 * 60_000
 export function createLegacyMcp(app: FastifyInstance, tools: McpTools) {
   const sessions = new Map<string, {
     ownerHash: string
+    version: string
     expiresAt: number
     transport: WebStandardStreamableHTTPServerTransport
   }>()
@@ -38,8 +39,12 @@ export function createLegacyMcp(app: FastifyInstance, tools: McpTools) {
     // The optional standalone GET stream carries no events for this tool.
     if (request.method === 'GET') return reply.header('Allow', 'POST, DELETE').code(405).send()
     const initialize = request.method === 'POST' && isInitializeRequest(body)
-    if (initialize ? body.params.protocolVersion !== legacyVersion || (version !== undefined && version !== legacyVersion) : version !== legacyVersion) {
+    const requestedVersion = initialize ? body.params.protocolVersion : version
+    if (!legacyVersions.some(supported => supported === requestedVersion)) {
       return mcpError(reply, 400, id, -32602, 'Unsupported legacy protocol version')
+    }
+    if (initialize && version !== undefined && version !== requestedVersion) {
+      return mcpError(reply, 400, id, -32602, 'Inconsistent legacy protocol version')
     }
     if (request.method === 'POST' && !body) return mcpError(reply, 400, id, -32600, 'Expected one JSON-RPC message')
     if (initialize && sessionId !== undefined) return mcpError(reply, 400, id, -32600, 'Initialize requires a new session')
@@ -51,6 +56,9 @@ export function createLegacyMcp(app: FastifyInstance, tools: McpTools) {
     let session = sessionId ? sessions.get(sessionId) : undefined
     if (sessionId && session?.ownerHash !== ownerHash) {
       return mcpError(reply, 404, id, -32602, 'MCP session unavailable')
+    }
+    if (session && session.version !== requestedVersion) {
+      return mcpError(reply, 400, id, -32602, 'Legacy session protocol version changed')
     }
 
     if (!session && initialize) {
@@ -71,7 +79,7 @@ export function createLegacyMcp(app: FastifyInstance, tools: McpTools) {
           if (context.signal.aborted) transport.closeSSEStream(context.requestId)
         }
       })
-      session = { ownerHash, expiresAt: now + SESSION_TTL_MS, transport }
+      session = { ownerHash, version: body.params.protocolVersion, expiresAt: now + SESSION_TTL_MS, transport }
       sessions.set(newId, session)
       try { await server.connect(transport) } catch (error) {
         await transport.close()
