@@ -17,6 +17,7 @@ const login = async (page, username) => {
   await page.getByRole('button', {name: '登录', exact: true}).click()
   await expect(page.locator('.home')).toBeVisible()
 }
+const nativePdfDirectory = process.env.DYOFFICE_TEST_NATIVE_PDF_DIST
 const account = accountAction
 const row = (page, name) => page.locator('.recent-row').filter({has: page.locator('.recent-name').filter({hasText: new RegExp('^' + name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '$')})})
 const panel = page => page.getByRole('dialog', {name: '全局配置', exact: true})
@@ -28,10 +29,10 @@ async function openDetails(section, className) {
   const details = section.locator(className)
   if (await details.getAttribute('open') === null) await details.locator(':scope > summary').click()
 }
-async function serve(t, port, keyring) {
+async function serve(t, port, keyring, nativePdf) {
   const origin = `http://localhost:${port}`, f = await fileFixture(t, {origin})
   // The four-format round trip drives many navigation and preference reads from one test IP.
-  const app = await buildLocalApp({db: f.db, businessPool: f.businessPool, passwords: f.passwords, deploymentId: f.deploymentId, origin, csrfKey: f.csrfKey, objectStore: f.objects, rateLimit: {max: 5000, windowMs: 60_000}, globalConfigKeyring: keyring, localShellDirectory: fileURLToPath(new URL('../../dist-local-shell', import.meta.url))})
+  const app = await buildLocalApp({db: f.db, businessPool: f.businessPool, passwords: f.passwords, deploymentId: f.deploymentId, origin, csrfKey: f.csrfKey, objectStore: f.objects, rateLimit: {max: 5000, windowMs: 60_000}, globalConfigKeyring: keyring, nativePdfDirectory: nativePdf, localShellDirectory: fileURLToPath(new URL('../../dist-local-shell', import.meta.url))})
   f.cleanup.push(() => app.close()); await app.listen({port, host: '127.0.0.1'})
   const browser = await launchTestBrowser()
   const errors = []
@@ -45,8 +46,8 @@ async function serve(t, port, keyring) {
 }
 
 // Actual Cookie/CSRF, PostgreSQL, local object store and Chromium. No API mocks.
-test('T12 original Home persists folders stars recents and trash while themes preserve four original files', {timeout: 180_000}, async t => {
-  const {f, context, page, origin, errors} = await serve(t, 4204)
+test('T12 original Home persists folders stars recents and trash while themes preserve four original files', {skip: !nativePdfDirectory, timeout: 180_000}, async t => {
+  const {f, context, page, origin, errors} = await serve(t, 4204, undefined, nativePdfDirectory)
   await login(page, 'alice')
   const fixtures = [
     ['packages/docx-engine/tests/fixtures/truths/render-sectafter-no-blank/probe.docx', 'workspace.docx'],
@@ -134,7 +135,19 @@ test('T12 original Home persists folders stars recents and trash while themes pr
     await closeDialog(settings, '关闭个人设置')
     for (const [name, bytes] of originals) {
       await row(page, name).locator('.recent-item').click()
-      const downloadLink = page.getByRole('link',{name:'下载原件',exact:true}).filter({visible:true})
+      let downloadLink
+      if (name.endsWith('.pdf')) {
+        const id = files.find(file => file.name === name).id
+        const frame = page.locator(`iframe[data-document-id="${id}"]`)
+        await expect(frame).toHaveAttribute('src', '/native-pdf/?fileId='+id)
+        const editor = frame.contentFrame()
+        await expect(editor.locator('html')).toHaveAttribute('data-document-loading', 'ready')
+        await expect(editor.locator('html')).toHaveAttribute('data-theme', theme)
+        await editor.getByRole('button', {name: '文件', exact: true}).click()
+        downloadLink = editor.getByRole('link', {name: '下载已保存版本', exact: true})
+      } else {
+        downloadLink = page.getByRole('link',{name:'下载原件',exact:true}).filter({visible:true})
+      }
       await expect(downloadLink).toBeVisible()
       const downloading = page.waitForEvent('download')
       await downloadLink.click()

@@ -19,16 +19,32 @@ export function DocumentFrame({file,registerGuard,sessionActive=()=>false,onAuto
  const [loadingState,setLoadingState]=useState<DocumentLoadingState>('reading')
  const retrying=useRef(false)
  useEffect(()=>{
+  const workspaceRoot=document.documentElement
+  const syncTheme=()=>{
+   const editorRoot=frame.current?.contentDocument?.documentElement
+   if(!editorRoot)return
+   const theme=workspaceRoot.dataset.theme
+   if(theme==='light'||theme==='dark')editorRoot.dataset.theme=theme
+   else delete editorRoot.dataset.theme
+  }
+  const themeObserver=new MutationObserver(syncTheme)
+  themeObserver.observe(workspaceRoot,{attributes:true,attributeFilter:['data-theme']})
   const receive=(event:MessageEvent)=>{
    if(event.source!==frame.current?.contentWindow||event.origin!==location.origin)return
-   if(event.data?.type==='dyoffice-document-loading'&&['reading','rendering','ready','error'].includes(event.data.state))setLoadingState(event.data.state)
+   if(event.data?.type==='dyoffice-document-loading'&&['reading','rendering','ready','error'].includes(event.data.state)){
+    setLoadingState(event.data.state)
+    if(event.data.state==='ready')syncTheme()
+   }
    if(event.data?.type==='dyoffice-pdf-auto-name'&&file.format==='pdf'&&session.current()&&
       typeof event.data.previous==='string'&&typeof event.data.name==='string'&&event.data.name.length<=255){
     onAutoPdfName?.(file.id,event.data.previous,event.data.name)
    }
   }
   window.addEventListener('message',receive)
-  return()=>window.removeEventListener('message',receive)
+  return()=>{
+   themeObserver.disconnect()
+   window.removeEventListener('message',receive)
+  }
  },[file.id,file.format,onAutoPdfName])
  async function retryEditor(){
   if(retrying.current)return
