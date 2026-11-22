@@ -285,7 +285,7 @@ test('read-only SQL channel: AST guard, real PG denial, row cap, timeout, units'
   const failed = await call(f, 'POST', '/metrics/query', { sql: sensitiveSql }, undefined, 400)
   assert.equal(failed.body.includes('missing_sensitive_field'), false)
   assert.equal(failed.body.includes(targets.readerDsn), false)
-  // A 1.1 MB cell fits the 4 MB SQL result budget; one row over the whole budget still fails.
+  // A 1.1 MB cell fits the 4 MB result budget; one row over the whole budget still fails.
   await targets.admin.query(`UPDATE ${targets.probeTable} SET note=$1 WHERE i=1`, ['x'.repeat(1_100_000)])
   assert.equal((await call(f, 'POST', '/metrics/query', { sql: `SELECT note FROM ${targets.probeTable} WHERE i=1` }, undefined, 200)).json().truncated, false)
   await targets.admin.query(`UPDATE ${targets.probeTable} SET note=$1 WHERE i=1`, ['x'.repeat(4_000_000)])

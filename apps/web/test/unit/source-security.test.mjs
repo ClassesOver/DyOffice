@@ -99,8 +99,8 @@ test('ordinary database transport is the default without a configured database t
 
 test('public address helpers accept only globally routable unicast',async()=>{
   const {publicAddress,publicIpv6}=await import('../../server/src/security/ip-ranges.ts')
-  for (const ip of ['8.8.8.8','203.208.40.1','192.30.255.112','2606:4700:4700::1111','2400:3200::1','2001:4860:4860::8888']) assert.equal(publicAddress(ip),true,ip)
-  for (const ip of ['127.0.0.1','10.1.1.1','100.64.0.1','::','::1','fc00::1','fd12:3456::1','fe80::1','ff02::1','::ffff:8.8.8.8','64:ff9b::808:808','2001:db8::1','2001::1','2002:808:808::1','not-an-ip']) assert.equal(publicAddress(ip),false,ip)
+  for (const ip of ['8.8.8.8','203.208.40.1','192.30.255.112','2606:4700:4700::1111','2400:3200::1','2001:4860:4860::8888','2001:200::1','3fff:1000::1']) assert.equal(publicAddress(ip),true,ip)
+  for (const ip of ['127.0.0.1','10.1.1.1','100.64.0.1','::','::1','fc00::1','fd12:3456::1','fe80::1','ff02::1','::ffff:8.8.8.8','64:ff9b::808:808','2001:db8::1','2001::1','2002:808:808::1','2001:2::5','2001:10::1','2001:20::1','2001:1ff::1','3fff::1','3fff:fff::1','not-an-ip']) assert.equal(publicAddress(ip),false,ip)
   assert.equal(publicIpv6('2606:4700:4700::1111%eth0'),true)
 })
 

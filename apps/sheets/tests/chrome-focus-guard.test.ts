@@ -17,7 +17,7 @@ const bridge = {
 }
 
 beforeEach(() => {
-  document.body.innerHTML = '<div id="univer-container"><div id="cell-editor" tabindex="0"></div></div><aside><button id="tab">Tasks</button></aside>'
+  document.body.innerHTML = '<div id="univer-container"><div id="cell-editor" tabindex="0"></div></div><aside class="copilot"><button id="tab">Tasks</button></aside><div class="ribbon"><button id="ribbon">Sort</button></div>'
   grid = document.getElementById('univer-container') as HTMLDivElement
   editor = document.getElementById('cell-editor') as HTMLDivElement
   tab = document.getElementById('tab') as HTMLButtonElement
@@ -66,4 +66,13 @@ describe('chrome focus guard', () => {
     expect(document.activeElement).toBe(editor)
     guard.dispose()
   })
+})
+
+it('leaves ribbon buttons to their own hand-back so commands that move the selection reach the grid', () => {
+  const guard = guardEditorBridge(bridge, { container: () => grid, now: () => clock })
+  const ribbon = document.getElementById('ribbon') as HTMLButtonElement
+  ribbon.focus()
+  bridge.setEditCell()
+  expect(document.activeElement).toBe(editor)
+  guard.dispose()
 })

@@ -3,8 +3,8 @@ import type { AgentToolDef, ToolExecution } from '../../agent-core/src/types.ts'
 import type { AnalysisDocumentTarget, PreparedAnalysisContent } from '../../web-contracts/src/analysis-document.ts'
 import type { createAnalysisDeliveryClient } from './analysis-delivery-client.ts'
 import { withAnalysisProvenance } from './analysis-insert-provenance.ts'
-import { prepareImageContent } from './analysis-image.ts'
-import { queryResultTable, type QueryResultPage } from './query-result-content.ts'
+import { imageAltText, prepareImageContent } from './analysis-image.ts'
+import { QUERY_RESULT_MAX_BODY_ROWS, queryResultTable, type QueryResultPage } from './query-result-content.ts'
 
 type Request = <T>(path: string, method?: string, body?: unknown) => Promise<T>
 type Deliveries = Pick<ReturnType<typeof createAnalysisDeliveryClient>, 'snapshot' | 'download'>
@@ -13,7 +13,8 @@ type Documents = { current(): AnalysisDocumentTarget | undefined }
 export const ANALYSIS_INSERT_TOOLS = Object.freeze({ data: 'insert_data_result', image: 'insert_analysis_image' })
 const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i
 const IMAGE_TYPES = new Set(['image/png', 'image/jpeg'])
-const MAX_READ_ROWS = 500
+/** The schema maximum is what every format can actually take (header and notes count against the row limit). */
+const MAX_READ_ROWS = QUERY_RESULT_MAX_BODY_ROWS
 const uuid = { type: 'string', pattern: '^[0-9a-fA-F-]{36}$' }
 
 const DATA_TOOL: AgentToolDef = {
@@ -134,7 +135,7 @@ export function createAnalysisInsertSkill(o: {
         const outcome = await insert(signal, summary, async format => {
           const file = await o.deliveries!.download(chosen.commandId, chosen.file.artifactId)
           if (!file.current() || file.artifact.artifactId !== chosen.file.artifactId || file.artifact.sha256 !== chosen.file.sha256) throw new Error('The delivery changed; nothing was inserted.')
-          const image = prepareImageContent(file.bytes, file.artifact.mediaType, alt || file.artifact.name)
+          const image = prepareImageContent(file.bytes, file.artifact.mediaType, imageAltText(alt) || imageAltText(file.artifact.name) || 'Analysis chart')
           return { content: withAnalysisProvenance(image, file.receipt, file.artifact, format), artifact: { artifactId: chosen.file.artifactId, sha256: chosen.file.sha256 } }
         })
         return outcome.isError ? outcome : { ...outcome, output: `Inserted the image ${chosen.file.name}. It is not saved yet; the document's normal save applies.` }

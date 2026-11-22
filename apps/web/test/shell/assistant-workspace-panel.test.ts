@@ -257,3 +257,46 @@ test.each(['running','succeeded','failed','unknown_outcome'] as const)('channel 
   }
  }finally{await act(async()=>root.unmount());client.dispose();host.remove();vi.unstubAllGlobals()}
 })
+
+test('opening a task focuses its card once; later tab and filter changes keep the focus the user moved', async () => {
+  const task = {
+    id: 't1',
+    agent: { id: 'codex', name: 'Codex', origin: 'builtin' as const, capabilities: ['coding'] },
+    instruction: 'Calculate',
+    state: 'succeeded' as const,
+    initiator: 'office' as const,
+    summary: 'Calculated',
+  }
+  const client = createAssistantWorkspace({
+    agents: [],
+    coding: { run: vi.fn(), cancel: vi.fn(), snapshot: () => [task], subscribe: () => () => {} },
+  })
+  const host = document.createElement('div')
+  document.body.append(host)
+  const root = createRoot(host)
+  const card = () => host.querySelector<HTMLElement>('.assistant-workspace [data-team-task]')
+  const tab = (name: string) => [...host.querySelectorAll<HTMLButtonElement>('[role=tab]')].find((node) => node.textContent?.startsWith(name))!
+  try {
+    await act(async () => root.render(h('div', { className: 'ai-chat' }, h(AssistantWorkspacePanel, { client, lang: 'en' }), h(AssistantTeamConversation, { client, lang: 'en' }, []))))
+    const id = client.snapshot().teamTasks[0]!.id
+    await act(async () => client.openTask(id))
+    expect(card()).not.toBeNull()
+    expect(document.activeElement).toBe(card())
+    // Keyboard: back to Chat, then ArrowRight to Tasks; focus stays on the tab.
+    await act(async () => tab('Chat').dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowLeft', bubbles: true })))
+    await act(async () => tab('Chat').dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true })))
+    expect(client.snapshot().view).toBe('tasks')
+    expect(document.activeElement).toBe(tab('Tasks'))
+    const filter = [...host.querySelectorAll<HTMLButtonElement>('.assistant-task-filters button')].find((node) => node.textContent?.startsWith('Completed'))!
+    filter.focus()
+    await act(async () => filter.click())
+    expect(document.activeElement).toBe(filter)
+    // A new explicit request focuses the card again.
+    await act(async () => client.openTask(id))
+    expect(document.activeElement).toBe(card())
+  } finally {
+    await act(async () => root.unmount())
+    client.dispose()
+    host.remove()
+  }
+})

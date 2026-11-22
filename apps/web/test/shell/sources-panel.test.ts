@@ -215,6 +215,12 @@ test('the per-connection statement timeout is editable and clearing it restores 
  await change('查询超时毫秒数','')
  await click('保存连接')
  expect(saves.at(-1)?.config).not.toHaveProperty('statementTimeoutMs')
+ // Out of range is caught before the request, with the field's own hint.
+ const count=saves.length
+ await change('查询超时毫秒数','60000')
+ await click('保存连接')
+ expect(saves.length).toBe(count)
+ expect(document.body.textContent).toContain('100–30000 毫秒')
 })
 
 test('restoring original source values releases the dirty close guard',async()=>{
@@ -975,7 +981,12 @@ test('advanced connection settings follow the UI language through the sources di
  await act(async()=>root.render(h(LocaleProvider,{initial:'en'},h(SourcesPanel,{client,onClose(){}}))))
  const row=[...host.querySelectorAll('button')].find(button=>button.textContent?.includes('营业收入'))!
  await act(async()=>row.click())
- for(const key of ['srcTimezone','srcMaxRowsAria','srcTimeoutAria'] as const)expect(host.querySelector(`[aria-label="${sourcesStrings.en[key]}"]`)).not.toBeNull()
+ for(const key of ['srcTimezone','srcMaxRowsAria','srcTimeoutAria','srcConnectionName','srcCredentialActions','srcSchemaScope','srcTableVisibility'] as const)expect(host.querySelector(`[aria-label="${sourcesStrings.en[key]}"]`),key).not.toBeNull()
  expect(host.textContent).toContain(sourcesStrings.en.srcTimeout)
- expect(host.textContent).not.toContain(sourcesStrings.zh.srcTimeout)
+ expect(host.textContent).toContain(sourcesStrings.en.srcSaveConnection)
+ // Apart from fixture data (the connection name and a unit in the public JSON), no Chinese UI text remains.
+ const visible=(host.textContent??'').replaceAll('营业收入','').replaceAll('元','')
+ expect(visible.match(/[\u4e00-\u9fff]+/g)).toBeNull()
+ const labels=[...host.querySelectorAll('[aria-label],[placeholder],[title]')].flatMap(node=>['aria-label','placeholder','title'].map(name=>node.getAttribute(name)??'')).join(' ').replaceAll('营业收入','')
+ expect(labels.match(/[\u4e00-\u9fff]+/g)).toBeNull()
 })

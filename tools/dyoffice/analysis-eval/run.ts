@@ -32,7 +32,7 @@ import { SCENARIOS, type Check, type Scenario, type TrialEvidence } from './scen
 
 const { values } = parseArgs({ options: {
   model: { type: 'string' },
-  'base-url': { type: 'string', default: process.env.DYOFFICE_EVAL_BASE_URL ?? 'https://www.cctq.ai/v1' },
+  'base-url': { type: 'string', default: process.env.DYOFFICE_EVAL_BASE_URL },
   'api-key': { type: 'string', default: process.env.DYOFFICE_EVAL_API_KEY ?? 'proxy-injected' },
   trials: { type: 'string', default: '3' },
   only: { type: 'string' },
@@ -41,6 +41,7 @@ const { values } = parseArgs({ options: {
   out: { type: 'string', default: 'test-results/analysis-eval' },
 } })
 if (!values.model) throw new Error('--model is required')
+if (!values['base-url']) throw new Error('--base-url (or DYOFFICE_EVAL_BASE_URL) is required: the OpenAI-compatible endpoint that receives the prompts')
 const MODEL = values.model, TRIALS = Number(values.trials)
 
 // ---- source backend: production query path against the disposable database ----
