@@ -200,4 +200,5 @@ test('native PDF assistant creates saved PDF and DOCX separately from the source
  assert.equal((await f.files.openFile(f.alice.token,file.fileId)).file.revision,file.revision)
  assert.deepEqual(await f.files.readFile(f.alice.token,file.fileId,file.revision),original)
  recordVerifiedOfficeEffect('pdf','create_document')
+ recordVerifiedOfficeEffect('pdf','read_attachment')
 })

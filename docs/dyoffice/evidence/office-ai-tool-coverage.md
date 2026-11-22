@@ -12,11 +12,13 @@
 
 Web 门禁在 Chromium 用例完成后，按当前工具合同核对当次运行的注册和成功执行。缺项会按格式和工具名列出并使门禁失败。各项效果由对应的浏览器用例断言。[覆盖检查](../../../apps/web/test/helpers/office-tool-coverage.mjs) [PDF 原生效果用例](../../../apps/web/test/local-browser/native-pdf-open.test.mjs)
 
-成品门禁要求 43 项效果证据。DOCX、XLSX 和 PPTX 分别核对冻结表格的准确数值及 Web 重开，PDF 核对 40 项原生保存效果，涉及 37 个工具。PDF 用例从提交修订的字节核对正文、插入文字的最终坐标、删除、批注回复关系、空白页、表单值、标题、旋转和分页水印，重开后继续清除水印并确认页脚仍在。[PDF 原生工具成品用例](../../../apps/web/test/local-browser/native-pdf-open.test.mjs)
+成品门禁要求 44 项效果证据。DOCX、XLSX 和 PPTX 分别核对冻结表格的准确数值及 Web 重开，PDF 核对 41 项原生保存效果，涉及 38 个工具。PDF 用例从提交修订的字节核对正文、插入文字的最终坐标、删除、批注回复关系、空白页、表单值、标题、旋转和分页水印，重开后继续清除水印并确认页脚仍在。[PDF 原生工具成品用例](../../../apps/web/test/local-browser/native-pdf-open.test.mjs)
 
 PDF 图片用例使用工具返回的搜索链接和生成媒体引用插入图片，核对保存包中的像素、位置、删除、旋转、裁剪、透明度与背景去除，并在 Web 重开后复采样。表单用例核对重排后的两页实际顺序、两个复选框状态及旧版本字节。[图片保存与重开](../../../apps/web/test/local-browser/pdf-media.test.mjs) [页面重排与表单](../../../apps/web/test/local-browser/native-pdf-open.test.mjs)
 
 PDF 页面工具核对提取与分卷的页序、切分结果的六页宽度、拼版保留的三页正文、裁切框、改纸张尺寸和替换页正文。中断后的副本确认核对两份成品和原修订。新建工具另生成 PDF 与 DOCX，通过各自的保存回执读取独立正文。[页面副本与替换](../../../apps/web/test/local-browser/native-pdf-page-copies.test.mjs) [新建 PDF 与 DOCX](../../../apps/web/test/local-browser/native-pdf-create-document.test.mjs)
+
+PDF 另外核对 10 项工具返回内容及导航效果。浏览器按工具调用 ID 检查正文、敏感信息匹配、页码、待保存文字、便笺与高亮、表单现值和书签。附件正文进入另建成品，图片清单返回可用于编辑的编号与坐标，跳页工具实际选中第二页。保存与结果两组证据合计覆盖 Web 合同中的 48 个 PDF 工具。[PDF 工具效果用例](../../../apps/web/test/local-browser/native-pdf-open.test.mjs) [附件成品用例](../../../apps/web/test/local-browser/native-pdf-create-document.test.mjs)
 
 | 格式 | Web 合同 | 浏览器注册 | 定向浏览器成功 |
 | --- | ---: | ---: | ---: |
@@ -29,6 +31,8 @@ PDF 页面工具核对提取与分卷的页序、切分结果的六页宽度、�
 PDF 原生旋转使用 `apply_ops.rotatePages`。旧预览工具名已从 Web 合同移除，覆盖门禁要求当次浏览器实测保存后重开验证页角度。已验证的成品包括保存重开的冻结数据表、Word 脚注和尾注、Excel 合并附件、PowerPoint 单页重做及图片替换、PDF 批注和分页副本。[数据写回](../../../apps/web/test/local-browser/office-source-analysis.test.mjs) [Word 脚注和尾注](../../../apps/web/test/local-browser/word-knowledge.test.mjs) [Excel 合并附件](../../../apps/web/test/local-browser/sheets-attachment-merge.test.mjs) [PPTX 生成](../../../apps/web/test/local-browser/native-slides-generate.test.mjs) [PDF 工具](../../../apps/web/test/local-browser/native-pdf-open.test.mjs)
 
 Excel 已覆盖 19 个实际注册工具。稀疏工作簿的全量预加载曾让已装入网格的点读区域误报未加载。修复后同时确认定向请求是否完成和当前工作簿是否仍有效。Node 与宿主 Rust 进程均验证工作表保护、有效 AutoFilter 范围 A1:C2，以及值筛选和双条件比较。自定义工作表视图中的旧范围不覆盖当前筛选。两条路径均读取小写 A1 引用，并跳过带有未知操作符的整组比较条件。[Excel 定向读取](../../../apps/web/test/local-browser/sheets-find-cells.test.mjs) [Node 执行器](../../../apps/web/server/sheets/xlsx-node-engine.ts)
+
+XLSX 结果门禁要求 11 项读、查找和定位效果。实际工作簿用例核对上下文中的工作表名和 ID、A1:A2 的 7 和 11、公式依赖、百分比格式、AutoFilter 范围、超出已加载范围的命中地址，并验证定位后 Audit 工作表被选中且文件修订未改变。[XLSX 工具结果](../../../apps/web/test/local-browser/sheets-find-cells.test.mjs)
 
 ## DOCX
 
@@ -85,7 +89,7 @@ Excel 已覆盖 19 个实际注册工具。稀疏工作簿的全量预加载曾�
 | `create_document` | 观察到 | [native-pdf-create-document.test.mjs](../../../apps/web/test/local-browser/native-pdf-create-document.test.mjs)、[ai-create-document.test.ts](../../../apps/sheets/tests/ai-create-document.test.ts) | 浏览器从 Excel 实际生成 XLSX、DOCX、PDF 成品，原生读取核对收入表头、数值和正文。独立 CSV 下载保留预期表头，源工作簿未生成新版本。[浏览器用例](../../../apps/web/test/local-browser/office-tool-inventory.test.mjs) |
 | `find_cells` | 观察到 | [sheets-find-cells.test.mjs](../../../apps/web/test/local-browser/sheets-find-cells.test.mjs)、[redact-actions.test.ts](../../../apps/sheets/tests/redact-actions.test.ts) | 查找到未渲染的 AZ25001，按正则找到 AA1001，按公式错误找到 AB1002，原件保持原字节。[浏览器用例](../../../apps/web/test/local-browser/sheets-find-cells.test.mjs) |
 | `generate_image` | 观察到 | [pdf-media.test.mjs](../../../apps/web/test/local-browser/pdf-media.test.mjs)、[image-skill.test.ts](../../../apps/sheets/tests/image-skill.test.ts) | 浏览器实际调用成功，搜索与图像生成后的 WebP 进入原生工作簿。[实测用例](../../../apps/web/test/local-browser/office-tool-inventory.test.mjs) |
-| `get_workbook_context` | 观察到 | [dsh-office-handoff.test.mjs](../../../apps/web/test/local-browser/dsh-office-handoff.test.mjs)、[native-sheets-harness.test.mjs](../../../apps/web/test/local-browser/native-sheets-harness.test.mjs) | 浏览器实际调用成功，交接工具读到目标工作表标识。[实测用例](../../../apps/web/test/local-browser/dsh-office-handoff.test.mjs) |
+| `get_workbook_context` | 观察到 | [dsh-office-handoff.test.mjs](../../../apps/web/test/local-browser/dsh-office-handoff.test.mjs)、[native-sheets-harness.test.mjs](../../../apps/web/test/local-browser/native-sheets-harness.test.mjs) | 读取当前活动表及工作簿清单，核对 Acceptance 与 Audit 的工作表名和 Audit 的实际 ID。[实测用例](../../../apps/web/test/local-browser/dsh-office-handoff.test.mjs) |
 | `image_search` | 观察到 | [pdf-media.test.mjs](../../../apps/web/test/local-browser/pdf-media.test.mjs)、[image-skill.test.ts](../../../apps/sheets/tests/image-skill.test.ts) | 浏览器实际调用成功，可搜索到原始图像并进入图片写入流程。[实测用例](../../../apps/web/test/local-browser/office-tool-inventory.test.mjs) |
 | `insert_data_result` | 观察到 | [office-source-analysis.test.mjs](../../../apps/web/test/local-browser/office-source-analysis.test.mjs)、[office-tool-inventory.test.mjs](../../../apps/web/test/local-browser/office-tool-inventory.test.mjs) | 冻结结果从 J10 选区插入。原生引擎读取保存成品及浏览器重开均核对 K11、K12 为数值 30、40。[浏览器用例](../../../apps/web/test/local-browser/office-source-analysis.test.mjs) |
 | `load_guide` | 观察到 | [workbook-skill-tools.test.ts](../../../apps/sheets/tests/workbook-skill-tools.test.ts) | 返回写入指南，包含 `set_range` 的字段说明。[浏览器用例](../../../apps/web/test/local-browser/sheets-find-cells.test.mjs) |
@@ -94,8 +98,8 @@ Excel 已覆盖 19 个实际注册工具。稀疏工作簿的全量预加载曾�
 | `read_attachment` | 观察到 | [native-pdf-create-document.test.mjs](../../../apps/web/test/local-browser/native-pdf-create-document.test.mjs)、[files-skill.test.ts](../../../apps/sheets/tests/files-skill.test.ts) | 读取实际上传的文本附件并核对正文。截断附件另由单测验证报错与保留原件合并入口。[浏览器用例](../../../apps/web/test/local-browser/office-tool-inventory.test.mjs) |
 | `read_cells` | 观察到 | [workbook-skill-tools.test.ts](../../../apps/sheets/tests/workbook-skill-tools.test.ts)、[loop.test.ts](../../../packages/agent-core/tests/loop.test.ts) | 全量预加载期间点读 A1 和 C1，返回 7 与公式 `=A1+A2`。[浏览器用例](../../../apps/web/test/local-browser/sheets-find-cells.test.mjs) |
 | `read_formats` | 观察到 | [workbook-skill-tools.test.ts](../../../apps/sheets/tests/workbook-skill-tools.test.ts) | 读取单独设置的 B1 百分比格式。[浏览器用例](../../../apps/web/test/local-browser/sheets-find-cells.test.mjs) |
-| `read_range` | 观察到 | [dsh-office-handoff.test.mjs](../../../apps/web/test/local-browser/dsh-office-handoff.test.mjs)、[office-dock-unified.test.mjs](../../../apps/web/test/local-browser/office-dock-unified.test.mjs) | 浏览器实际调用成功，交接工具读取指定单元格。[实测用例](../../../apps/web/test/local-browser/dsh-office-handoff.test.mjs) |
-| `read_sheet_features` | 观察到 | [redact-features.test.ts](../../../apps/sheets/tests/redact-features.test.ts)、[workbook-skill-tools.test.ts](../../../apps/sheets/tests/workbook-skill-tools.test.ts) | 报告受保护的工作表。Rust 路径核对原生 AutoFilter 范围 A1:C2，Node 路径当前省略该字段。[浏览器用例](../../../apps/web/test/local-browser/sheets-find-cells.test.mjs) |
+| `read_range` | 观察到 | [dsh-office-handoff.test.mjs](../../../apps/web/test/local-browser/dsh-office-handoff.test.mjs)、[office-dock-unified.test.mjs](../../../apps/web/test/local-browser/office-dock-unified.test.mjs) | 读取 Audit!A1:A2，核对请求范围及第 1、2 行的 7 和 11。[实测用例](../../../apps/web/test/local-browser/dsh-office-handoff.test.mjs) |
+| `read_sheet_features` | 观察到 | [redact-features.test.ts](../../../apps/sheets/tests/redact-features.test.ts)、[workbook-skill-tools.test.ts](../../../apps/sheets/tests/workbook-skill-tools.test.ts) | 报告受保护的工作表，在 Node 与宿主 Rust 路径核对 AutoFilter 范围 A1:C2。[浏览器用例](../../../apps/web/test/local-browser/sheets-find-cells.test.mjs) |
 | `select_range` | 观察到 | [response-verify.test.ts](../../../apps/sheets/tests/response-verify.test.ts)、[sheet-nav.test.ts](../../../apps/sheets/tests/sheet-nav.test.ts) | 定位 Audit 工作表 A1:C2，界面选中 Audit，工作簿原版本保持原字节。[浏览器用例](../../../apps/web/test/local-browser/sheets-find-cells.test.mjs) |
 | `trace_dependents` | 观察到 | [trace-redaction.test.ts](../../../apps/sheets/tests/trace-redaction.test.ts)、[workbook-skill-tools.test.ts](../../../apps/sheets/tests/workbook-skill-tools.test.ts) | 从 A1 找到依赖公式 Audit!C1，核对值 18。[浏览器用例](../../../apps/web/test/local-browser/sheets-find-cells.test.mjs) |
 | `trace_precedents` | 观察到 | [trace-redaction.test.ts](../../../apps/sheets/tests/trace-redaction.test.ts)、[workbook-skill-tools.test.ts](../../../apps/sheets/tests/workbook-skill-tools.test.ts) | 读取 C1 的公式值 18，并核对 A1=7、A2=11 两个前置值。[浏览器用例](../../../apps/web/test/local-browser/sheets-find-cells.test.mjs) |
@@ -131,7 +135,7 @@ Excel 已覆盖 19 个实际注册工具。稀疏工作簿的全量预加载曾�
 | 工具 | 浏览器注册 | 候选用例 | 执行或效果证据 |
 | --- | --- | --- | --- |
 | `add_form_mark` | 观察到 | [native-pdf-open.test.mjs](../../../apps/web/test/local-browser/native-pdf-open.test.mjs)、[ai-tools.test.ts](../../../apps/pdf/tests/ai-tools.test.ts) | 页面重排后按可见页定位。保存成品中只有对应原件的第二个复选框勾选，旧版本保持原字节。[浏览器用例](../../../apps/web/test/local-browser/native-pdf-open.test.mjs) |
-| `add_note` | 观察到 | [dsh-office-handoff.test.mjs](../../../apps/web/test/local-browser/dsh-office-handoff.test.mjs)、[native-pdf-open.test.mjs](../../../apps/web/test/local-browser/native-pdf-open.test.mjs) | 浏览器实际调用成功，追问新增便笺并写入成品。[实测用例](../../../apps/web/test/local-browser/dsh-office-handoff.test.mjs) |
+| `add_note` | 观察到 | [dsh-office-handoff.test.mjs](../../../apps/web/test/local-browser/dsh-office-handoff.test.mjs)、[native-pdf-open.test.mjs](../../../apps/web/test/local-browser/native-pdf-open.test.mjs) | 确认保存成品保留新便笺、原便笺及其回复，临时便笺已删除。[实测用例](../../../apps/web/test/local-browser/dsh-office-handoff.test.mjs) |
 | `apply_ops` | 观察到 | [dsh-office-handoff.test.mjs](../../../apps/web/test/local-browser/dsh-office-handoff.test.mjs)、[native-pdf-open.test.mjs](../../../apps/web/test/local-browser/native-pdf-open.test.mjs) | 原生浏览器检查试运行、拒绝非法批次和执行合法批次，再核对旋转、表单值和文档属性。[浏览器用例](../../../apps/web/test/local-browser/native-pdf-open.test.mjs) |
 | `confirm_pdf_copies` | 观察到 | [native-pdf-page-copies.test.mjs](../../../apps/web/test/local-browser/native-pdf-page-copies.test.mjs)、[office-tool-inventory.test.mjs](../../../apps/web/test/local-browser/office-tool-inventory.test.mjs) | 中断批次确认后恢复保存，输出可重开且源文件保持原字节，[浏览器用例](../../../apps/web/test/local-browser/native-pdf-page-copies.test.mjs) |
 | `create_document` | 观察到 | [native-pdf-create-document.test.mjs](../../../apps/web/test/local-browser/native-pdf-create-document.test.mjs)、[ai-tools.test.ts](../../../apps/pdf/tests/ai-tools.test.ts) | 单独保存 PDF 和 DOCX，读取两份成品内容并核对源文件，[浏览器用例](../../../apps/web/test/local-browser/native-pdf-create-document.test.mjs) |
