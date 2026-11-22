@@ -108,3 +108,17 @@ test('committed deliveries are reclaimed oldest first when a new task needs room
  await f.stage(next,bytes,{name:'big.bin'})
  await assert.rejects(f.stage(binding(),bytes,{name:'third.bin'}),{statusCode:413})
 })
+
+test('reclamation that cannot free enough fails with 413 and leaves committed files downloadable',async t=>{
+ const f=await fixture(t),mib=1024*1024
+ const done=binding(),small=Buffer.alloc(mib,3)
+ const kept=await f.stage(done,small,{name:'kept.bin'})
+ await f.service.commit(f.alice.token,f.commit(done,[kept.artifactId]))
+ const live=binding()
+ await f.stage(live,Buffer.alloc(8*mib,4),{name:'a.bin'})
+ await f.stage(live,Buffer.alloc(7*mib,5),{name:'b.bin'})
+ assert.equal(await f.account(),16*mib)
+ await assert.rejects(f.stage(binding(),Buffer.alloc(8*mib,6),{name:'too-big.bin'}),{statusCode:413})
+ assert.equal(await f.account(),16*mib)
+ assert.deepEqual((await f.service.download(f.alice.token,kept.artifactId)).bytes,small)
+})
