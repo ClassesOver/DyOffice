@@ -53,12 +53,15 @@ async function fixture(t) {
   return { ...f, original, opened, browser, context, page, origin, errors }
 }
 
-test('native Sheets edits, saves and reopens the hashed acceptance workbook through original Univer',{timeout:90000},async t=>{
+for (const theme of ['light','dark']) test(`native Sheets saves and downloads formulas and chart colors with the ${theme} UI theme`,{timeout:90000},async t=>{
  const f=await fixture(t)
+ await f.preferences.update(f.alice.token,{theme})
  const response=await f.page.goto(f.origin+'/native-xlsx/?fileId='+f.opened.file.fileId)
  assert.equal(response.status(),200,'Native Sheets entry must exist and authorize the owned workbook')
+ await expect(f.page.locator('html')).toHaveAttribute('data-theme',theme)
  await f.page.locator('#univer-container canvas').first().waitFor({timeout:45000})
- await expect(f.page.locator('.dyoffice-sheets-download')).toBeEnabled()
+ const saveDownload=f.page.locator('.dyoffice-sheets-download')
+ await expect(saveDownload).toBeEnabled()
  await expect(f.page.locator('.dyoffice-sheets-state')).toHaveCount(0)
  await expect.poll(()=>f.page.evaluate(()=>window.__genofficeDebug?.univerAPI.getActiveWorkbook()?.getActiveSheet()?.getRange('A2').getValue()),{timeout:30000}).toBe(12.5)
  await expect.poll(()=>f.page.evaluate(()=>window.__genofficeDebug.univerAPI.getActiveWorkbook().getActiveSheet().getRange('B2').getValue()),{timeout:30000}).toBe(25)
@@ -77,13 +80,13 @@ test('native Sheets edits, saves and reopens the hashed acceptance workbook thro
  await f.page.evaluate(()=>{window.__genofficeDebug.univerAPI.getActiveWorkbook().getActiveSheet().getRange('A2').setValue(21.25)})
  // Save immediately: formula and chart synchronization belong to the save
  // pipeline, not an acceptance-test delay that hides stale cache races.
- const save=f.page.locator('.qa-btn').first()
- await expect(save).toBeEnabled()
- await save.click()
+ const [download]=await Promise.all([f.page.waitForEvent('download'),saveDownload.click()])
  await expect.poll(async()=>(await f.files.openFile(f.alice.token,f.opened.file.fileId)).file.revision,{timeout:30000}).not.toBe(f.opened.file.revision)
  const saved=await f.files.openFile(f.alice.token,f.opened.file.fileId)
  const bytes=await f.files.readFile(f.alice.token,saved.file.fileId,saved.file.revision)
- const before=await JSZip.loadAsync(f.original),after=await JSZip.loadAsync(bytes)
+ const downloadedBytes=await readFile(await download.path())
+ assert.deepEqual(downloadedBytes,bytes)
+ const before=await JSZip.loadAsync(f.original),after=await JSZip.loadAsync(downloadedBytes)
  assert.deepEqual(await before.file('customXml/t09-preserve.xml').async('nodebuffer'),await after.file('customXml/t09-preserve.xml').async('nodebuffer'))
  const savedXml=await after.file('xl/worksheets/sheet1.xml').async('string')
  assert.match(savedXml,/<v>21\.25<\/v>/)

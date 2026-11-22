@@ -20,6 +20,8 @@
 
 固定候选 `d90ea092` 补测 F15 的 DOCX 保存与下载。Chromium 在浅色和深色 UI 下分别通过原生设计功能区设置相同页面背景色并保存。两次下载分别与该次提交的文件字节相同，包内 `w:background` 都是 `FF0000`，未修改的 Custom XML 保留，重开后页面背景色仍正确。两项用例均通过。[DOCX 原生浏览器回归](../../../apps/web/test/native-docs/roundtrip.test.mjs)
 
+同一候选的 XLSX 主题用例两项通过。浅色和深色 UI 均经原生 Univer 编辑并用“保存并下载”提交，下载字节与对应修订一致。两份成品均保留 `B2` 公式 `A2*2`、重算缓存 `42.5`、Revenue 名称、图表数列和原填充色 `4472C4`，未修改的绘图和 Custom XML 部件也保持原样。刷新后原生工作簿读到已保存的 `A2=21.25`。[XLSX 原生浏览器回归](../../../apps/web/test/native-sheets/entry.test.mjs)
+
 固定候选 `ab22f217` 的 DOCX 补跑验证了成品 OOXML、未编辑部件、租约接管和回执丢失恢复。延迟保存用例在补跑中收到 Chromium 对首个 HTTP 请求的 `ERR_ABORTED`，同时编辑器已确认该回执并保留后续草稿。同一构建的定向复验通过，检查第一版只包含保存时的快照，后续编辑保持未保存并提交为子修订。初次网络事件失败单独保留。
 
 同一提交的 GitHub Actions 已完成 [DOCX 原生浏览器与原引擎回归](https://github.com/ClassesOver/DyOffice/actions/runs/44972164512/job/137054101707)、[XLSX 原生浏览器、隔离 Worker 与 gateway 回归](https://github.com/ClassesOver/DyOffice/actions/runs/44972164512/job/137054101587)和 [PPTX 原生会话与包重开回归](https://github.com/ClassesOver/DyOffice/actions/runs/44972164426/job/137054101419)。PPTX 该作业覆盖原生包操作；四格式 Chromium 共用作业随后失败，三个失败均来自同一个工具清单测试文件。无数据源分析的夹具仍把依赖数据源的 `insert_data_result` 计入预期。
