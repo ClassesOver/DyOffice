@@ -22,6 +22,8 @@ Word 脚注和尾注的浏览器批次新增 5 个成功组合，累计 31 个�
 
 追加浏览器测试确认跳页、表单标记和完整的分割副本流程。PDF 的 48 个实际注册工具均已有成功结果，另验证原生 `apply_ops.rotatePages` 对应合同中的兼容名称。累计 76 个成功组合。[PDF 跳页与表单](../../../apps/web/test/local-browser/native-pdf-open.test.mjs) [PDF 分割与替换](../../../apps/web/test/local-browser/native-pdf-page-copies.test.mjs)
 
+Excel 的成品生成、文本附件读取和网页搜索也通过浏览器验证。模型读取实际上传的附件正文，收到测试搜索服务返回的标题和链接，工作簿保持原版本。累计 79 个成功组合。[Excel 浏览器用例](../../../apps/web/test/local-browser/office-tool-inventory.test.mjs)
+
 ## DOCX
 
 | 工具 | 浏览器注册 | 候选用例 | 执行或效果证据 |
@@ -74,7 +76,7 @@ Word 脚注和尾注的浏览器批次新增 5 个成功组合，累计 31 个�
 | 工具 | 浏览器注册 | 候选用例 | 执行或效果证据 |
 | --- | --- | --- | --- |
 | `aggregate_range` | 观察到 | [formula-cost.test.ts](../../../apps/sheets/tests/formula-cost.test.ts)、[plan-operations-formula-guard.test.ts](../../../apps/sheets/tests/plan-operations-formula-guard.test.ts) | 通过的单测包含本工具用例；Web 路径待逐项核验，[单测](../../../apps/sheets/tests/workbook-skill-tools.test.ts) |
-| `create_document` | 观察到 | [native-pdf-create-document.test.mjs](../../../apps/web/test/local-browser/native-pdf-create-document.test.mjs)、[ai-create-document.test.ts](../../../apps/sheets/tests/ai-create-document.test.ts) | 通过的单测包含本工具用例；Web 路径待逐项核验，[单测](../../../apps/sheets/tests/ai-create-document.test.ts) |
+| `create_document` | 观察到 | [native-pdf-create-document.test.mjs](../../../apps/web/test/local-browser/native-pdf-create-document.test.mjs)、[ai-create-document.test.ts](../../../apps/sheets/tests/ai-create-document.test.ts) | 浏览器从 Excel 实际生成 XLSX、DOCX、PDF 成品，原生读取核对收入表头、数值和正文。独立 CSV 下载保留预期表头，源工作簿未生成新版本。[浏览器用例](../../../apps/web/test/local-browser/office-tool-inventory.test.mjs) |
 | `find_cells` | 观察到 | [sheets-find-cells.test.mjs](../../../apps/web/test/local-browser/sheets-find-cells.test.mjs)、[redact-actions.test.ts](../../../apps/sheets/tests/redact-actions.test.ts) | 查找到未渲染的 AZ25001，按正则找到 AA1001，按公式错误找到 AB1002，原件保持原字节。[浏览器用例](../../../apps/web/test/local-browser/sheets-find-cells.test.mjs) |
 | `generate_image` | 观察到 | [pdf-media.test.mjs](../../../apps/web/test/local-browser/pdf-media.test.mjs)、[image-skill.test.ts](../../../apps/sheets/tests/image-skill.test.ts) | 浏览器实际调用成功，搜索与图像生成后的 WebP 进入原生工作簿。[实测用例](../../../apps/web/test/local-browser/office-tool-inventory.test.mjs) |
 | `get_workbook_context` | 观察到 | [dsh-office-handoff.test.mjs](../../../apps/web/test/local-browser/dsh-office-handoff.test.mjs)、[native-sheets-harness.test.mjs](../../../apps/web/test/local-browser/native-sheets-harness.test.mjs) | 浏览器实际调用成功，交接工具读到目标工作表标识。[实测用例](../../../apps/web/test/local-browser/dsh-office-handoff.test.mjs) |
@@ -83,7 +85,7 @@ Word 脚注和尾注的浏览器批次新增 5 个成功组合，累计 31 个�
 | `load_guide` | 观察到 | [workbook-skill-tools.test.ts](../../../apps/sheets/tests/workbook-skill-tools.test.ts) | 通过的单测包含本工具用例；Web 路径待逐项核验，[单测](../../../apps/sheets/tests/workbook-skill-tools.test.ts) |
 | `merge_attached_workbooks` | 观察到 | [sheets-attachment-merge.test.mjs](../../../apps/web/test/local-browser/sheets-attachment-merge.test.mjs)、[merge-skill.test.ts](../../../apps/sheets/tests/merge-skill.test.ts) | 浏览器合并 BIFF XLS、预览截断的 XLSX 和 CSV。原生读取核对工作表、数值和截断文件的最后一行，重开后新表存在，旧版本保持原字节。[浏览器用例](../../../apps/web/test/local-browser/sheets-attachment-merge.test.mjs) |
 | `propose_operations` | 观察到 | [dsh-office-handoff.test.mjs](../../../apps/web/test/local-browser/dsh-office-handoff.test.mjs)、[native-sheets-harness.test.mjs](../../../apps/web/test/local-browser/native-sheets-harness.test.mjs) | 真实模型成品复跑通过，[浏览器用例](../../../apps/web/test/local-browser/native-word-sheets-codex.test.mjs)。。浏览器实际调用成功，交接写入真实公式，保存重开后公式与结果 42 正确。[实测用例](../../../apps/web/test/local-browser/dsh-office-handoff.test.mjs) |
-| `read_attachment` | 观察到 | [native-pdf-create-document.test.mjs](../../../apps/web/test/local-browser/native-pdf-create-document.test.mjs)、[files-skill.test.ts](../../../apps/sheets/tests/files-skill.test.ts) | 解析截断时工具报错，原附件继续可用于合并，[单测](../../../apps/sheets/tests/files-skill.test.ts) |
+| `read_attachment` | 观察到 | [native-pdf-create-document.test.mjs](../../../apps/web/test/local-browser/native-pdf-create-document.test.mjs)、[files-skill.test.ts](../../../apps/sheets/tests/files-skill.test.ts) | 读取实际上传的文本附件并核对正文。截断附件另由单测验证报错与保留原件合并入口。[浏览器用例](../../../apps/web/test/local-browser/office-tool-inventory.test.mjs) |
 | `read_cells` | 观察到 | [workbook-skill-tools.test.ts](../../../apps/sheets/tests/workbook-skill-tools.test.ts)、[loop.test.ts](../../../packages/agent-core/tests/loop.test.ts) | 通过的单测包含本工具用例；Web 路径待逐项核验，[单测](../../../apps/sheets/tests/workbook-skill-tools.test.ts) |
 | `read_formats` | 观察到 | [workbook-skill-tools.test.ts](../../../apps/sheets/tests/workbook-skill-tools.test.ts) | 通过的单测包含本工具用例；Web 路径待逐项核验，[单测](../../../apps/sheets/tests/workbook-skill-tools.test.ts) |
 | `read_range` | 观察到 | [dsh-office-handoff.test.mjs](../../../apps/web/test/local-browser/dsh-office-handoff.test.mjs)、[office-dock-unified.test.mjs](../../../apps/web/test/local-browser/office-dock-unified.test.mjs) | 浏览器实际调用成功，交接工具读取指定单元格。[实测用例](../../../apps/web/test/local-browser/dsh-office-handoff.test.mjs) |
@@ -91,7 +93,7 @@ Word 脚注和尾注的浏览器批次新增 5 个成功组合，累计 31 个�
 | `select_range` | 观察到 | [response-verify.test.ts](../../../apps/sheets/tests/response-verify.test.ts)、[sheet-nav.test.ts](../../../apps/sheets/tests/sheet-nav.test.ts) | 通过的单测包含本工具用例；Web 路径待逐项核验，[单测](../../../apps/sheets/tests/workbook-skill-tools.test.ts) |
 | `trace_dependents` | 观察到 | [trace-redaction.test.ts](../../../apps/sheets/tests/trace-redaction.test.ts)、[workbook-skill-tools.test.ts](../../../apps/sheets/tests/workbook-skill-tools.test.ts) | 通过的单测包含本工具用例；Web 路径待逐项核验，[单测](../../../apps/sheets/tests/workbook-skill-tools.test.ts) |
 | `trace_precedents` | 观察到 | [trace-redaction.test.ts](../../../apps/sheets/tests/trace-redaction.test.ts)、[workbook-skill-tools.test.ts](../../../apps/sheets/tests/workbook-skill-tools.test.ts) | 通过的单测包含本工具用例；Web 路径待逐项核验，[单测](../../../apps/sheets/tests/workbook-skill-tools.test.ts) |
-| `web_search` | 观察到 | [t12-workspace-settings.test.mjs](../../../apps/web/test/local-browser/t12-workspace-settings.test.mjs)、[global-config-readiness.test.mjs](../../../apps/web/test/local-integration/global-config-readiness.test.mjs) | 待逐项核验 |
+| `web_search` | 观察到 | [t12-workspace-settings.test.mjs](../../../apps/web/test/local-browser/t12-workspace-settings.test.mjs)、[global-config-readiness.test.mjs](../../../apps/web/test/local-integration/global-config-readiness.test.mjs) | 测试搜索服务返回供应商目录标题和链接，浏览器核对请求参数及工具输出。[浏览器用例](../../../apps/web/test/local-browser/office-tool-inventory.test.mjs) |
 
 ## PPTX
 

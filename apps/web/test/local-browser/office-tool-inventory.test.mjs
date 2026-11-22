@@ -126,6 +126,21 @@ for(const mode of ['creation','no-word','all'])test(mode==='no-word'
     assert.deepEqual(create.function.parameters.properties.type.enum,['csv'])
     delta=toolCall('create_document',{title:'Office CSV probe'})
    }
+  }else if(prompt?.includes('Excel reference attachment probe')||prompt?.includes('Excel web citation probe')){
+   const attachment=prompt.includes('Excel reference attachment probe')
+   const user=messages.findLastIndex(message=>message.role==='user')
+   const result=messages.slice(user+1).find(message=>message.role==='tool')
+   if(result){
+    const {output,isError}=JSON.parse(result.content)
+    assert.ok(!isError,output)
+    assert.match(output,attachment?/Audit attachment 712/:/Synthetic supplier registry/)
+    if(!attachment)assert.match(output,/https:\/\/results.example\/registry/)
+    delta={content:attachment?'Excel read the reference attachment':'Excel returned the web citation'}
+   }else{
+    const name=attachment?'read_attachment':'web_search'
+    assert.ok(tools.some(tool=>tool.function.name===name))
+    delta=toolCall(name,attachment?{index:0}:{query:'supplier registry',maxResults:1})
+   }
   }else if(/Excel workspace export (xlsx|docx|pdf)/.test(prompt??'')){
    const type=prompt.match(/Excel workspace export (xlsx|docx|pdf)/)[1]
    const result=messages.at(-1)
@@ -337,6 +352,32 @@ for(const mode of ['creation','no-word','all'])test(mode==='no-word'
   assert.equal(csv.suggestedFilename(),'Office CSV probe.csv')
   assert.match(await readFile(await csv.path(),'utf8'),/^Revenue,Formula,Date,Percent,Mass,Named formula/)
   await expect(directWorkbook.getByText('Standalone worksheet downloaded',{exact:true})).toBeVisible({timeout:30000})
+  if(!noWord){
+   await directWorkbook.locator('.ai-plus-btn').click()
+   const chooser=page.waitForEvent('filechooser')
+   await directWorkbook.getByRole('menuitem',{name:'添加文件',exact:true}).click()
+   const parse=page.waitForResponse(response=>new URL(response.url()).pathname==='/api/v1/ai/attachments/parse')
+   await (await chooser).setFiles({name:'reference.txt',mimeType:'text/plain',buffer:Buffer.from('Audit attachment 712')})
+   assert.ok((await parse).ok())
+   await expect(directWorkbook.locator('.ai-attachments').getByText('reference.txt',{exact:true})).toBeVisible()
+   await directWorkbook.locator('textarea').fill('Excel reference attachment probe')
+   await directWorkbook.getByRole('button',{name:'发送',exact:true}).click()
+   await expect(directWorkbook.getByText('Excel read the reference attachment',{exact:true})).toBeVisible({timeout:30000})
+
+   await configs.saveGlobalConfig(f.adminSigned.token,baseline.revision,{
+    upserts:[{id:'web-search',kind:'web_search',providerId:'serper',label:'Test Web Search',model:'',baseUrl:'https://google.serper.dev',enabled:true,apiKey:'test-key'}],
+    defaults:{chat:'chat',web_search:'web-search'},
+   })
+   await page.route('**/api/v1/ai/search',async route=>{
+    assert.deepEqual(route.request().postDataJSON(),{kind:'web_search',query:'supplier registry',maxResults:1})
+    await route.fulfill({json:{method:'serper',results:[{title:'Synthetic supplier registry',url:'https://results.example/registry',snippet:'Supplier A: 712 records'}]}})
+   })
+   const searchable=await openAssistant('xlsx','with-web-search',true)
+   await searchable.locator('textarea').fill('Excel web citation probe')
+   await searchable.getByRole('button',{name:'发送',exact:true}).click()
+   await expect(searchable.getByText('Excel returned the web citation',{exact:true})).toBeVisible({timeout:30000})
+   assert.equal((await f.files.openFile(f.alice.token,directFiles.xlsx.fileId)).file.revision,directFiles.xlsx.revision)
+  }
   return
  }
  for(const format of formats)await probe(format,'chat-only')
