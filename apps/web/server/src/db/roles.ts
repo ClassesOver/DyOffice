@@ -41,13 +41,13 @@ async function grantRuntimePrivileges(connection: Queryable, { authRole, busines
   await connection.query(`GRANT CONNECT ON DATABASE ${quoted(location.database)} TO ${runtime}`)
   await connection.query(`REVOKE CREATE ON SCHEMA ${quoted(schema)} FROM PUBLIC`)
   await connection.query(`GRANT USAGE ON SCHEMA ${quoted(schema)} TO ${runtime}`)
-  for (const name of [...authTables,...personalTables,...globalTables,...privateTables]) await connection.query(`REVOKE ALL ON ${table(schema,name)} FROM ${runtime}`)
+  for (const name of [...authTables,...personalTables,...globalTables,...privateTables,'task_runtime_status']) await connection.query(`REVOKE ALL ON ${table(schema,name)} FROM ${runtime}`)
   for (const name of ['users','sessions','password_action_tokens']) await connection.query(`GRANT SELECT,INSERT,UPDATE ON ${table(schema,name)} TO ${auth}`)
   await connection.query(`GRANT SELECT,INSERT,DELETE ON ${table(schema,'user_roles')} TO ${auth}`)
   for (const name of ['login_challenges','login_throttles']) await connection.query(`GRANT SELECT,INSERT,UPDATE,DELETE ON ${table(schema,name)} TO ${auth}`)
   for (const name of ['deployments','identity_migrations']) await connection.query(`GRANT SELECT ON ${table(schema,name)} TO ${auth}`)
   await connection.query(`GRANT INSERT ON ${table(schema,'auth_security_events')},${table(schema,'workspaces')} TO ${auth}`)
-  await connection.query(`GRANT SELECT ON ${table(schema,'workspaces')} TO ${business}`)
+  await connection.query(`GRANT SELECT ON ${table(schema,'task_runtime_status')},${table(schema,'workspaces')} TO ${business}`)
   await connection.query(`GRANT SELECT,INSERT,UPDATE,DELETE ON ${table(schema,'personal_preferences')} TO ${business}`)
   await connection.query(`GRANT SELECT,INSERT,UPDATE,DELETE ON ${table(schema,'user_skills')} TO ${business}`)
   await connection.query(`GRANT SELECT,INSERT,UPDATE,DELETE ON ${table(schema,'user_style_templates')} TO ${business}`)
@@ -124,14 +124,18 @@ export async function assertRuntimePool(pool: Pool, kind: 'auth' | 'business' | 
     : kind === 'worker' ? {} : { users: ['SELECT','INSERT','UPDATE'], user_roles: ['SELECT','INSERT','DELETE'], sessions: ['SELECT','INSERT','UPDATE'], password_action_tokens: ['SELECT','INSERT','UPDATE'], login_challenges: ['SELECT','INSERT','UPDATE','DELETE'], login_throttles: ['SELECT','INSERT','UPDATE','DELETE'], auth_security_events: ['INSERT'], identity_migrations: ['SELECT'], deployments: ['SELECT'], workspaces: ['INSERT'] }
   if(kind==='business')for(const name of ['assistant_channels','assistant_invites','assistant_applications','assistant_members','assistant_tasks','assistant_events','assistant_requests','assistant_background_queue'])required[name]=['SELECT','INSERT','DELETE']
   if (kind === 'business') for (const name of ['file_assistant_messages','harness_task_recovery']) required[name] = ['SELECT','INSERT','UPDATE','DELETE']
+  if (kind === 'business') required.task_runtime_status = ['SELECT']
   if (kind === 'business') required.word_collab_steps = ['SELECT','INSERT','DELETE']
   if (kind === 'business') required.harness_task_events = ['SELECT','INSERT','DELETE']
   if (kind === 'business') required.user_style_templates = ['SELECT','INSERT','UPDATE','DELETE']
   if (kind === 'business') Object.assign(required, { harness_artifact_accounts: ['SELECT','INSERT'], harness_artifact_tasks: ['SELECT','INSERT'], harness_artifacts: ['SELECT','INSERT','DELETE'], harness_analysis_deliveries: ['SELECT','INSERT'] })
-  for (const name of [...authTables,...personalTables,...globalTables,...privateTables]) {
+  for (const name of [...authTables,...personalTables,...globalTables,...privateTables,'task_runtime_status']) {
     const relation = table(role.schema, name)
     const flags = (await pool.query("SELECT c.relowner=r.oid AS owned,c.relrowsecurity,c.relforcerowsecurity,has_table_privilege(current_user,c.oid,'TRUNCATE') AS truncate,EXISTS(SELECT 1 FROM aclexplode(COALESCE(c.relacl,acldefault('r',c.relowner))) a WHERE a.grantee=r.oid AND a.is_grantable) AS table_delegatable,EXISTS(SELECT 1 FROM pg_attribute att CROSS JOIN LATERAL aclexplode(att.attacl) a WHERE att.attrelid=c.oid AND a.grantee=r.oid AND a.is_grantable) AS column_delegatable FROM pg_class c JOIN pg_roles r ON r.rolname=current_user WHERE c.oid=$1::regclass", [relation])).rows[0]
     if (!flags || flags.owned || flags.truncate || (flags.table_delegatable || flags.column_delegatable)) throw new Error('Runtime role must not own or truncate application tables')
+    if (name === 'task_runtime_status' && !(await pool.query(
+      "SELECT 1 FROM pg_class WHERE oid=$1::regclass AND relkind='v' AND 'security_invoker=true'=ANY(reloptions)", [relation],
+    )).rowCount) throw new Error('Task status must enforce caller row security')
     if (personalTables.includes(name) && (!flags.relrowsecurity || !flags.relforcerowsecurity)) throw new Error('Personal tables require FORCE RLS')
     if (globalTables.includes(name) && (!flags.relrowsecurity || !flags.relforcerowsecurity)) throw new Error('Global tables require FORCE RLS')
     for (const permission of ['SELECT','INSERT','UPDATE','DELETE','REFERENCES','TRIGGER','MAINTAIN']) {

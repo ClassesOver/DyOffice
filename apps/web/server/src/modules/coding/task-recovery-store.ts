@@ -44,9 +44,9 @@ export function createCodingTaskRecoveryStore(transactions:PrincipalTransactions
     async listTaskIds(token:string,documentId:string){
       return runFileTransaction(transactions,token,'files:read',async(c,p)=>{
         await loadFile(c,p,documentId)
-        const {rows}=await c.query<{turn_id:string}>(`SELECT turn_id FROM harness_task_recovery
-          WHERE ${own} AND session_id=$3 AND file_id=$4 AND expires_at>clock_timestamp()
-          ORDER BY (${validLease}) DESC,expires_at DESC,turn_id LIMIT 8`,[...scope(p),p.sessionId,documentId])
+        const {rows}=await c.query<{turn_id:string}>(`SELECT task_id AS turn_id FROM task_runtime_status
+          WHERE executor='codex' AND ${own} AND session_id=$3 AND file_id=$4 AND expires_at>clock_timestamp()
+          ORDER BY (state IN ('running','cancel_requested')) DESC,expires_at DESC,task_id LIMIT 8`,[...scope(p),p.sessionId,documentId])
         return rows.map(row=>row.turn_id)
       })
     },
@@ -79,13 +79,12 @@ export function createCodingTaskRecoveryStore(transactions:PrincipalTransactions
     /** Events after a sequence number plus the task's effective state. */
     async events(token:string,documentId:string,turnId:string,after:number){
       return withFile(token,documentId,turnId,async(c,args)=>{
-        const {rows:[row]}=await c.query<{state:TaskState;live:boolean}>(`SELECT state,lease_until>clock_timestamp() AS live
-          FROM harness_task_recovery WHERE ${where} AND expires_at>clock_timestamp()`,args)
+        const {rows:[row]}=await c.query<{state:TaskState}>(`SELECT state FROM task_runtime_status
+          WHERE executor='codex' AND ${own} AND session_id=$3 AND task_id=$4 AND file_id=$5 AND expires_at>clock_timestamp()`,args)
         if(!row)throw authError(404)
         const {rows}=await c.query<{sequence:number;kind:TaskEventKind;payload:string}>(`SELECT sequence,kind,payload FROM harness_task_events
           WHERE ${key} AND sequence>$5 ORDER BY sequence LIMIT 256`,[...args.slice(0,4),after])
-        const interrupted=!row.live&&(row.state==='running'||row.state==='cancel_requested')
-        return {state:interrupted?'unknown_outcome' as TaskState:row.state,
+        return {state:row.state,
           events:rows.map(event=>({sequence:event.sequence,kind:event.kind,payload:JSON.parse(event.payload) as Record<string,unknown>}))}
       })
     },

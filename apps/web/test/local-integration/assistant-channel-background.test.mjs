@@ -7,6 +7,7 @@ import {fileFixture,docxBytes,importFile} from '../helpers/files.mjs'
 import {backgroundDocumentBytes} from '../helpers/background-documents.mjs'
 import {restrictedOrigin} from '../helpers/restricted.mjs'
 import {createAssistantChannelService} from '../../server/src/modules/assistant-channel/service.ts'
+import {createCodingTaskRecoveryStore} from '../../server/src/modules/coding/task-recovery-store.ts'
 import {createCsrfService} from '../../server/src/modules/auth/csrf.ts'
 import {registerAssistantChannelRoutes} from '../../server/src/modules/assistant-channel/routes.ts'
 
@@ -248,6 +249,25 @@ async function queued(t){
  const runner=answer=>createAssistantBackgroundRunner({store:store(),service:f.service,objects:f.objects,answer})
  return {...f,file,conversationId,member,taskId,store,runner}
 }
+test('task runtime status distinguishes executors with colliding IDs and enforces owner visibility',async t=>{
+ const f=await queued(t)
+ const coding=createCodingTaskRecoveryStore(f.transactions)
+ await coding.start(f.alice.token,f.file.fileId,f.taskId,{modelId:'fixture'},undefined)
+ const channel=await f.service.submit(f.member,{requestId:randomUUID(),conversationId:f.conversationId,to:'office',action:{kind:'delegate',instruction:'Read the active document'}})
+ const query=token=>f.transactions.withPrincipalTransaction({kind:'session',token},async c=>
+  (await c.query('SELECT executor,task_id,state FROM task_runtime_status ORDER BY executor')).rows)
+ assert.deepEqual(await query(f.alice.token),[
+  {executor:'background',task_id:f.taskId,state:'queued'},
+  {executor:'channel',task_id:channel.taskId,state:'queued'},
+  {executor:'codex',task_id:f.taskId,state:'running'},
+ ])
+ assert.deepEqual(await query(f.bob.token),[])
+ await assert.rejects(f.workerPool.query('SELECT * FROM task_runtime_status'),{code:'42501'})
+ await f.transactions.withPrincipalTransaction({kind:'session',token:f.alice.token},c=>
+  c.query("UPDATE harness_task_recovery SET lease_until=clock_timestamp()-interval '1 second' WHERE turn_id=$1",[f.taskId]))
+ assert.equal((await coding.events(f.alice.token,f.file.fileId,f.taskId,0)).state,'unknown_outcome')
+ assert.equal((await query(f.alice.token))[0].state,'queued')
+})
 test('two server instances execute a durable queued task once',async t=>{
  const f=await queued(t);let calls=0
  const answer=async()=>{calls++;return 'one result'}

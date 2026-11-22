@@ -191,7 +191,7 @@ export function createAssistantChannelService({transactions,credentialKey,backgr
   if(parent.state!=='waiting_peer')return
   const children=parent.child_task_ids as string[]
   if(!children.length)return
-  const rows=(await c.query('SELECT state FROM assistant_tasks WHERE deployment_id=$1 AND owner_id=$2 AND conversation_id=$3 AND task_id=ANY($4::uuid[])',[...scope(p),id,children])).rows
+  const rows=(await c.query('SELECT state FROM task_runtime_status WHERE deployment_id=$1 AND owner_id=$2 AND conversation_id=$3 AND task_id=ANY($4::text[])',[...scope(p),id,children])).rows
   if(rows.length===children.length&&rows.every(r=>terminal(r.state)))await state(c,p,id,parent,'queued')
  }
  async function claimDto(c:PoolClient,p:BusinessPrincipal,conversationId:string,row:Record<string,any>):Promise<ChannelTask> {
