@@ -276,7 +276,13 @@ for (const theme of ['light','dark']) test(`native PDF saves and reopens an assi
  const assistant=page.locator('.shared-editor-assistant')
  await assistant.getByRole('textbox',{name:'消息'}).fill('Check the printed Consent box.')
  await assistant.getByRole('button',{name:'发送',exact:true}).click()
- await expect(assistant.getByText('Printed mark queued',{exact:true})).toBeVisible({timeout:15000})
+ try{
+  await expect(assistant.getByText('Printed mark queued',{exact:true})).toBeVisible({timeout:15000})
+ }catch(error){
+  t.diagnostic(JSON.stringify({theme,turns:turn,toolResult:result?.summary??null,toolError:result?.isError??null,
+   assistantText:(await assistant.innerText({timeout:2000}).catch(()=>'' )).slice(-800)}))
+  throw error
+ }
  assert.ok(!result.isError,result.output)
  const head=async()=>(await f.files.openFile(f.alice.token,file.fileId)).file.revision
  assert.equal(await head(),file.revision)
