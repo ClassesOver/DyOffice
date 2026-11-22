@@ -55,6 +55,8 @@ Word 的 D05 浏览器回归核对同版本引用以只读方式打开保存原�
 
 Web Word 知识库把文件名保留为来源标签，模型收到的引用路径只包含文件和修订 ID。点击仍通过当前收藏目录映射回服务端授权路径。单元回归覆盖同修订改名、更新后旧引用失效，以及拒绝目录外路径和伪造搜索结果。脚本化 Chromium 核对上下文和搜索结果给出的引用，以及点击后的原件和版本失效行为。同一构建使用 `gpt-6-sol` 连续运行三次，分别耗时 25.7、22.9、20.1 秒，三次都用搜索和读取工具核对了独有记录编号，返回精确链接并打开了含该编号的只读原件。[浏览器回归](../../../apps/web/test/local-browser/word-knowledge.test.mjs) [知识库桥接回归](../../../apps/web/test/unit/docs-knowledge.test.mjs)
 
+以 `aa213156` 的原生构建补测跨格式知识库引用。脚本化 Chromium 和真实模型均从已收藏的 XLSX、PPTX 和 PDF 读取原文，返回独有记录编号和版本链接。首轮真实模型跟踪记录包含一次搜索和三次成功读取。`gpt-6-sol` 连续三轮通过原生复开，补上逐条编号与引用配对断言后，脚本和真实模型各复跑一次通过。点击后在各自原生编辑器的 A1 单元格、首张幻灯片文字和 PDF 文本层核对编号，并确认文件修订及字节与保存原件一致。取消收藏 PDF 后再次点击，重新授权返回 404，来源编辑器未打开。[跨格式引用回归](../../../apps/web/test/local-browser/office-knowledge-cross-format.test.mjs)
+
 使用 `4f0ad52c` 的四种原生编辑器和同一真实模型复验写回。首轮 PDF、PPTX 和 XLSX 通过，Word 在委派执行阶段报 `ENOENT` 并失败。同一产品构建单独重跑 Word 通过，首次错误的具体缺失路径未记录。Excel 保存重开后 H2 为 441，Word 重跑后正文为 441，PDF 原文和现有便笺均为 42，PPTX 第二页重做后第一页 XML 字节一致。[Word 与 Excel 写回](../../../apps/web/test/local-browser/native-word-sheets-codex.test.mjs) [PowerPoint 写回](../../../apps/web/test/local-browser/native-slides-generate.test.mjs) [PDF 写回](../../../apps/web/test/local-browser/native-pdf-harness.test.mjs)
 
 后续复现了带数据授权的委派在缺少 `harness-data.mjs` 时于 `realpath` 报 `ENOENT`。当前 SaaS 构建会生成该文件，本机完成了带此步骤的全量构建。缺件时界面收到明确失败，服务端日志保留专用错误码，路径不进入客户端响应。实际安装的 Codex 通过了普通执行和受授权数据邮箱测试，独立 Harness 的 PostgreSQL 集成核对了一次源查询、冻结结果和持久交付回执。真实模型曾在普通算术请求中提交 `dataInputs`，因此工具定义明确了普通文本文件与已提交分析产物两种交付方式。使用新版定义复跑 Word 和 Excel，两项均省略该字段，返回代码执行产生的 `total.json`，保存重开后在 Word 正文和 Excel H2 读回 441。[Harness 回归](../../../apps/web/test/unit/coding-harness.test.mjs) [数据交付回归](../../../apps/web/test/local-integration/harness-data-flow.test.mjs)
