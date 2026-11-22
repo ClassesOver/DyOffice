@@ -185,8 +185,8 @@ jobs:
         # Some editor fixtures bind the same loopback port.
         run: |
           umask 077
-          : > "$DYOFFICE_TEST_AI_TOOL_TRACE"
           node --import tsx --test --test-name-pattern='actual wasi server entry' apps/web/test/native-sheets/runtime.test.mjs
+          : > "$DYOFFICE_TEST_AI_TOOL_TRACE"
           node --import tsx --test --test-concurrency=1 apps/web/test/local-browser/*.test.mjs apps/web/test/native-docs/{attachment-media,image-media,writer-draft-save}.test.mjs apps/web/test/native-slides/{size-roundtrip,image-export}.test.mjs
           node --import tsx apps/web/test/helpers/office-tool-coverage.mjs "$DYOFFICE_TEST_AI_TOOL_TRACE"
       - name: Retain real local-account Home and Settings screenshots
