@@ -117,6 +117,13 @@ for(const format of ['xlsx','pptx','pdf'])test('DSH writes, saves and follows up
   assert.equal(total?.f,'SUM(A2:A3)')
   assert.equal(total?.v,42)
  }
+ if(format==='pptx'){
+  const deck=await JSZip.loadAsync(bytes)
+  const notes=await deck.file('ppt/notesSlides/notesSlide1.xml').async('string')
+  assert.match(notes,/Handoff example/)
+  assert.ok(calls.some(tools=>tools.includes('apply_ops')))
+  recordVerifiedOfficeEffect('pptx','apply_ops')
+ }
  await page.evaluate(question=>{window.question={id:crypto.randomUUID(),question}},question)
  await expect.poll(()=>page.evaluate(()=>window.receipt?.followup?.state),{timeout:15000}).toMatch(/^(ready|failed)$/)
  assert.deepEqual(await page.evaluate(()=>({state:window.receipt.followup.state,answer:window.receipt.followup.answer})),{state:'ready',answer:'Office replied'})

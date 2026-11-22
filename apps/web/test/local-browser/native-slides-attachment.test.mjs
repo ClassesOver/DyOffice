@@ -7,7 +7,7 @@ import {JSDOM} from 'jsdom'
 import {PNG} from 'pngjs'
 import {buildLocalApp} from '../../server/src/app.ts'
 import {openIsolatedPptxSession} from '../../worker/src/native/pptx-session-host.ts'
-import {launchTestBrowser} from '../helpers/browser.mjs'
+import {launchTestBrowser,recordVerifiedOfficeEffect} from '../helpers/browser.mjs'
 import {fileFixture,importFile} from '../helpers/files.mjs'
 import {password} from '../helpers/identity.mjs'
 
@@ -53,7 +53,7 @@ test('PPTX image replacement uses the current attachment, with queued images ava
   return route.fulfill({contentType:'text/event-stream',body:'event: '+event[0]+'\ndata: '+JSON.stringify(event[1])+'\n\nevent: done\ndata: {}\n\n'})
  })
  await page.goto(origin+'/native-pptx/?fileId='+file.fileId)
- await expect(page.locator('html')).toHaveAttribute('data-document-loading','ready')
+ await expect(page.locator('html')).toHaveAttribute('data-document-loading','ready',{timeout:30000})
  const panel=page.locator('.ai-panel'),composer=panel.locator('textarea')
  const rail=page.getByRole('button',{name:'Expand AI assistant',exact:true})
  await expect(composer.or(rail)).toBeVisible()
@@ -125,10 +125,20 @@ test('PPTX image replacement uses the current attachment, with queued images ava
   assert.ok(!results[3].isError,results[3].output)
   assert.deepEqual(attachments[3].images.map(item=>item.base64),[pending.toString('base64')])
   assert.equal(await head(),prior)
-  const saved=await picture(await save(prior))
+  prior=await save(prior)
+  const saved=await picture(prior)
   assert.deepEqual([...PNG.sync.read(saved.bytes).data.subarray(0,4)],green)
   assert.equal(saved.frame,frame)
  }finally{release()}
  assert.equal(remoteFetches,0)
  assert.deepEqual(await f.files.readFile(f.alice.token,file.fileId,file.revision),original)
+ const reopened=page.waitForResponse(response=>response.ok()&&
+  response.url().endsWith(`/api/v1/files/${file.fileId}/slides/open`)&&
+  response.request().postDataJSON().revision===prior)
+ await page.reload()
+ await reopened
+ await expect(page.locator('html')).toHaveAttribute('data-document-loading','ready',{timeout:30000})
+ assert.equal(await head(),prior)
+ recordVerifiedOfficeEffect('pptx','insert_web_image')
+ recordVerifiedOfficeEffect('pptx','replace_image')
 })

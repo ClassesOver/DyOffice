@@ -12,7 +12,7 @@
 
 Web 门禁在 Chromium 用例完成后，按当前工具合同核对当次运行的注册和成功执行。缺项会按格式和工具名列出并使门禁失败。各项效果由对应的浏览器用例断言。[覆盖检查](../../../apps/web/test/helpers/office-tool-coverage.mjs) [PDF 原生效果用例](../../../apps/web/test/local-browser/native-pdf-open.test.mjs)
 
-成品门禁要求 49 项效果证据。DOCX、XLSX 和 PPTX 分别核对冻结表格的准确数值及 Web 重开，PDF 核对 41 项原生保存效果，涉及 38 个工具。PDF 用例从提交修订的字节核对正文、插入文字的最终坐标、删除、批注回复关系、空白页、表单值、标题、旋转和分页水印，重开后继续清除水印并确认页脚仍在。[PDF 原生工具成品用例](../../../apps/web/test/local-browser/native-pdf-open.test.mjs)
+成品门禁要求 57 项效果证据。DOCX、XLSX 和 PPTX 分别核对冻结表格的准确数值及 Web 重开，PDF 核对 41 项原生保存效果，涉及 38 个工具。PDF 用例从提交修订的字节核对正文、插入文字的最终坐标、删除、批注回复关系、空白页、表单值、标题、旋转和分页水印，重开后继续清除水印并确认页脚仍在。[PDF 原生工具成品用例](../../../apps/web/test/local-browser/native-pdf-open.test.mjs)
 
 PDF 图片用例使用工具返回的搜索链接和生成媒体引用插入图片，核对保存包中的像素、位置、删除、旋转、裁剪、透明度与背景去除，并在 Web 重开后复采样。表单用例核对重排后的两页实际顺序、两个复选框状态及旧版本字节。[图片保存与重开](../../../apps/web/test/local-browser/pdf-media.test.mjs) [页面重排与表单](../../../apps/web/test/local-browser/native-pdf-open.test.mjs)
 
@@ -108,6 +108,8 @@ XLSX 的其他结果核对实际上传的附件正文，以及 Web 检索返回�
 | `web_search` | 观察到 | [t12-workspace-settings.test.mjs](../../../apps/web/test/local-browser/t12-workspace-settings.test.mjs)、[global-config-readiness.test.mjs](../../../apps/web/test/local-integration/global-config-readiness.test.mjs) | 测试搜索服务返回供应商目录标题和链接，浏览器核对请求参数及工具输出。[浏览器用例](../../../apps/web/test/local-browser/office-tool-inventory.test.mjs) |
 
 ## PPTX
+
+PPTX 的 20 个 Web AI 工具均有门禁断言。9 项成品效果覆盖原生文字和备注、图表、生成与重做、图片关系及冻结表格。11 项结果效果核对读取和检索输出、媒体引用、问卷选择、规划标题、操作指南和账号保存的样式模板。模板保存后直接读取数据库记录，重开并追加新页时核对其背景色及已有页面 XML。[生成、重做与模板](../../../apps/web/test/local-browser/native-slides-generate.test.mjs) [图表、文本和媒体](../../../apps/web/test/local-browser/office-tool-inventory.test.mjs) [附件图片插入与替换](../../../apps/web/test/local-browser/native-slides-attachment.test.mjs)
 
 | 工具 | 浏览器注册 | 候选用例 | 执行或效果证据 |
 | --- | --- | --- | --- |

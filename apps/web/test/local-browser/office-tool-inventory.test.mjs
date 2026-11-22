@@ -183,7 +183,14 @@ for(const mode of ['creation','no-word','all'])test(mode==='no-word'
    if(results.length){
     const {output,isError}=results.at(-1),[name,,expected]=cases[results.length-1]
     assert.ok(!isError,name+': '+output)
+    assert.equal(messages.filter(message=>message.role==='tool').at(-1).tool_call_id,'slides-'+name)
     assert.match(output,expected,name+': '+output)
+    if(name==='web_search'){
+     assert.match(output,/https:\/\/results\.example\/slide/)
+     assert.match(output,/Source excerpt/)
+    }
+    if(name==='image_search')assert.match(output,/Blue/)
+    if(name==='load_guide')assert.match(output,/addElement|addTable/)
    }
    if(results.length===4)assert.ok(generatedUrl)
    if(results.length===8)assert.ok(chartId)
@@ -583,12 +590,17 @@ for(const mode of ['creation','no-word','all'])test(mode==='no-word'
  await page.keyboard.press('Control+s')
  await expect.poll(slidesHead,{timeout:30000}).not.toBe(files.pptx.revision)
  const savedSlides=await JSZip.loadAsync(await f.files.readFile(f.alice.token,files.pptx.fileId,await slidesHead()))
- assert.match(await savedSlides.file('ppt/slides/slide1.xml').async('string'),/Evidence script title/)
+ const slideXml=await savedSlides.file('ppt/slides/slide1.xml').async('string')
+ assert.match(slideXml,/Evidence script title/)
+ assert.doesNotMatch(slideXml,/Acceptance title/)
  const [chart]=await Promise.all(savedSlides.file(/^ppt\/charts\/chart\d+\.xml$/).map(part=>part.async('string')))
  assert.match(chart,/<c:lineChart\b/)
  assert.match(chart,/Evidence chart/)
  assert.match(chart,/Fixture series/)
  assert.match(chart,/<c:v>21<\/c:v>[\s\S]*<c:v>34<\/c:v>/)
+ for(const effect of ['read_attachment','web_search','image_search','generate_image','analyze_media','load_guide','execute_slide_script','edit_chart']){
+  recordVerifiedOfficeEffect('pptx',effect)
+ }
  const panel=await probe('pdf','configured',{configured:true})
  await panel.locator('textarea').fill('Office Harness probe pdf')
  await panel.getByRole('button',{name:'发送',exact:true}).click()

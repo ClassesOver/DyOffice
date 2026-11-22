@@ -9,7 +9,10 @@ const requiredEffects = new Map([
     'insert_data_result', 'create_document', 'generate_image', 'image_search',
     'merge_attached_workbooks', 'propose_operations',
   ])],
-  ['pptx', new Set(['insert_data_result'])],
+  ['pptx', new Set([
+    'apply_ops', 'edit_chart', 'execute_slide_script', 'generate_deck', 'insert_analysis_image',
+    'insert_data_result', 'insert_web_image', 'regenerate_slide', 'replace_image',
+  ])],
   ['pdf', new Set([
     'apply_ops.rotatePages', 'apply_ops.setFormValue', 'apply_ops.setMetadata',
     'edit_block', 'move_text_block', 'edit_text', 'insert_text', 'edit_inserted_text',
@@ -23,6 +26,10 @@ const requiredEffects = new Map([
   ])],
 ])
 const requiredResults = new Map([
+  ['pptx', new Set([
+    'analyze_media', 'ask_clarification', 'generate_image', 'image_search', 'list_style_templates',
+    'load_guide', 'plan_deck', 'read_attachment', 'read_slide', 'save_style_template', 'web_search',
+  ])],
   ['xlsx', new Set([
     'find_cells', 'get_workbook_context', 'read_range', 'read_cells', 'aggregate_range',
     'read_formats', 'trace_precedents', 'trace_dependents', 'load_guide', 'select_range',

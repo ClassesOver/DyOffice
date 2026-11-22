@@ -10,7 +10,7 @@ import {buildLocalApp} from '../../server/src/app.ts'
 import {createGlobalConfigService} from '../../server/src/modules/admin/service.ts'
 import {createStyleTemplateService} from '../../server/src/modules/style-templates/service.ts'
 import {openIsolatedPptxSession} from '../../worker/src/native/pptx-session-host.ts'
-import {launchTestBrowser} from '../helpers/browser.mjs'
+import {launchTestBrowser,recordVerifiedOfficeEffect} from '../helpers/browser.mjs'
 import {fileFixture,importFile} from '../helpers/files.mjs'
 import {password} from '../helpers/identity.mjs'
 import {mockProviderNetwork} from '../helpers/provider-network.mjs'
@@ -139,6 +139,8 @@ for(const live of [false,true])test(live?'a real model generates, redoes and reu
     const execution=JSON.parse(read.content)
     assert.ok(!execution.isError,execution.output)
     assert.ok(execution.output.includes(contents[1][0]),execution.output)
+    assert.ok(execution.output.includes(contents[1][1]),execution.output)
+    assert.ok(!execution.output.includes(contents[0][0]),execution.output)
     assert.ok(tools?.some(tool=>tool.function.name==='regenerate_slide'))
     phases.push('redo tool')
     delta=call('redo-page','regenerate_slide',{slideIndex:1,title:revisedPage[0],brief:revisedPage[1]})
@@ -408,6 +410,11 @@ for(const live of [false,true])test(live?'a real model generates, redoes and reu
  assert.deepEqual(await f.files.readFile(f.alice.token,file.fileId,file.revision),original)
  await send(saveStyle)
  await expect(panel.getByText(styleSaved,{exact:true})).toBeVisible({timeout:15000})
+ const persistedTemplate=await createStyleTemplateService(f.transactions).load(f.alice.token,template)
+ assert.equal(persistedTemplate.ok,true)
+ assert.equal(persistedTemplate.topic,topic)
+ assert.ok(persistedTemplate.styleSkill.includes(style))
+ assert.equal(persistedTemplate.layout?.cover?.background?.toUpperCase(),'#FFF8E7')
  assert.deepEqual(await revisions(),[file.revision,saved])
 
  await page.reload()
@@ -456,4 +463,7 @@ for(const live of [false,true])test(live?'a real model generates, redoes and reu
  await page.reload()
  await requireReady()
  await expect.poll(renderedText).toEqual([...revisedDeck,followUp])
+ for(const effect of ['ask_clarification','plan_deck','generate_deck','read_slide','regenerate_slide','save_style_template','list_style_templates']){
+  recordVerifiedOfficeEffect('pptx',effect)
+ }
 })

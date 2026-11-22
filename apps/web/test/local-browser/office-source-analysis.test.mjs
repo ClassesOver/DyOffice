@@ -462,6 +462,7 @@ print(json.dumps(dict(series=line.get_ydata().tolist(), total=sum(line.get_ydata
    assert.ok(tables.some(table=>['2026-01','>30<','2026-02','>40<'].every(value=>table.includes(value))))
    const notes=await Promise.all(deck.file(/^ppt\/notesSlides\/notesSlide\d+\.xml$/).map(part=>part.async('string')))
    await assertSavedChart(deck,/^ppt\/media\/.+\.png$/,slide+notes.join(''))
+   recordVerifiedOfficeEffect('pptx','insert_analysis_image')
    await reopenNative()
    await expect.poll(()=>page.evaluate(async()=>{
     const [slide]=await window.slidesApi.getRenderSlides()
