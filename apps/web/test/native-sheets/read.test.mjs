@@ -23,7 +23,7 @@ test('native read adapter reopens captured bytes and resolves sheet names inside
  await assert.rejects(()=>native.readRange(input,'Acceptance',{...range,endRow:1000000}),{code:'INPUT_LIMIT'})
 })
 
-test('Node XLSX inspection and range reads retain built-in and custom number formats',async t=>{
+async function nodeRuntime(t){
  const directory=await mkdtemp(join(tmpdir(),'dyoffice-node-xlsx-styles-'))
  t.after(()=>rm(directory,{recursive:true,force:true}))
  await buildSheetsGateway(join(directory,'gateway.mjs'))
@@ -33,13 +33,43 @@ test('Node XLSX inspection and range reads retain built-in and custom number for
   DYOFFICE_XLSX_GATEWAY_RUNNER:join(directory,'gateway-process.mjs'),
  },{enabled:true})
  t.after(()=>runtime.close())
+ return runtime.sheetsNative
+}
+
+test('Node XLSX inspection and range reads retain built-in and custom number formats',async t=>{
+ const native=await nodeRuntime(t)
  const zip=await JSZip.loadAsync(await readFile(new URL('../fixtures/sheets/acceptance.xlsx',import.meta.url)))
  zip.file('xl/styles.xml','<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><numFmts count="1"><numFmt numFmtId="164" formatCode="&quot;$&quot;#,##0.0000"/></numFmts><fonts count="1"><font/></fonts><fills count="1"><fill><patternFill patternType="none"/></fill></fills><borders count="1"><border/></borders><cellStyleXfs count="1"><xf/></cellStyleXfs><cellXfs count="3"><xf numFmtId="0"/><xf numFmtId="10"/><xf numFmtId="164"/></cellXfs></styleSheet>')
  zip.file('xl/worksheets/sheet1.xml','<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><dimension ref="A1:B1"/><sheetData><row r="1"><c r="A1" s="1"><v>0.125</v></c><c r="B1" s="2"><v>1234.5</v></c></row></sheetData></worksheet>')
  const bytes=await zip.generateAsync({type:'nodebuffer'})
- const workbook=await runtime.sheetsNative.inspect(bytes)
+ const workbook=await native.inspect(bytes)
  assert.equal(workbook.styles[1].numberFormat,'0.00%')
  assert.equal(workbook.styles[2].numberFormat,'"$"#,##0.0000')
- const range=await runtime.sheetsNative.readRange(bytes,'Acceptance',{startRow:0,endRow:0,startColumn:0,endColumn:1})
+ const range=await native.readRange(bytes,'Acceptance',{startRow:0,endRow:0,startColumn:0,endColumn:1})
  assert.deepEqual(range.cells.map(cell=>cell.styleIndex),[1,2])
+})
+
+test('Node XLSX reports the same workbook, worksheet and cell protection as Rust',async t=>{
+ const node=await nodeRuntime(t),rust=createXlsxNativeWorker(await sandboxFixture('native'))
+ const zip=await JSZip.loadAsync(await readFile(new URL('../fixtures/sheets/acceptance.xlsx',import.meta.url)))
+ const workbook=await zip.file('xl/workbook.xml').async('string')
+ zip.file('xl/workbook.xml',workbook.replace('<sheets>',"<workbookProtection lockStructure='1' workbookPassword='CBEB'/><sheets>"))
+ zip.file('xl/styles.xml','<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><fonts count="1"><font/></fonts><fills count="1"><fill><patternFill patternType="none"/></fill></fills><borders count="1"><border/></borders><cellStyleXfs count="2"><xf/><xf><protection hidden="1"/></xf></cellStyleXfs><cellXfs count="3"><xf/><xf applyProtection="1"><protection locked="0"/></xf><xf xfId="1"/></cellXfs></styleSheet>')
+ zip.file('xl/worksheets/sheet1.xml',`<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:x="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData><row r="1"><c r="A1"><v>12</v></c><c r="B1" s="1"><v>18</v></c><c r="C1" s="2"><f>1+2</f><v>3</v></c></row></sheetData><x:sheetProtection sheet='1' password='CBEB' formatCells='0'/><x:protectedRanges><x:protectedRange name='Open &amp; editable' sqref='D1:D2'/><x:protectedRange name='Restricted' sqref='E1:E2' password='CBEB'/></x:protectedRanges></worksheet>`)
+ const bytes=await zip.generateAsync({type:'nodebuffer'})
+ const bounds={startRow:0,endRow:0,startColumn:0,endColumn:2}
+ const expected=await rust.inspect(bytes),actual=await node.inspect(bytes)
+ assert.deepEqual(expected.workbookProtection,{lockStructure:true,hasPassword:true})
+ assert.equal(expected.styles[1].locked,false)
+ assert.equal(expected.styles[2].hidden,true)
+ assert.deepEqual(actual.workbookProtection,expected.workbookProtection)
+ assert.equal(actual.styles[1].locked,expected.styles[1].locked)
+ assert.equal(actual.styles[2].hidden,expected.styles[2].hidden)
+ const fromRust=await rust.readRange(bytes,'Acceptance',bounds),fromNode=await node.readRange(bytes,'Acceptance',bounds)
+ assert.equal(fromRust.sheetProtection.protected,true)
+ assert.equal(fromRust.sheetProtection.allow.formatCells,true)
+ assert.deepEqual(fromRust.protectedRanges,[{name:'Open & editable',sqref:'D1:D2',hasPassword:false},{name:'Restricted',sqref:'E1:E2',hasPassword:true}])
+ assert.deepEqual(fromNode.sheetProtection,fromRust.sheetProtection)
+ assert.deepEqual(fromNode.protectedRanges,fromRust.protectedRanges)
+ assert.equal(fromNode.cells.find(cell=>cell.column===1).styleIndex,1)
 })
