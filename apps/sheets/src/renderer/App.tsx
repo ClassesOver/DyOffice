@@ -1146,13 +1146,13 @@ export function App({
   }, [linksOpen])
   /// Re-reads the panel's rows from the session that is open *now*: a save
   /// reopens the workbook, so the session id captured before it is gone.
-  function refreshLinkStatuses(): void {
+  async function refreshLinkStatuses(): Promise<void> {
     const sessionId = lazyWorkbookRef.current?.file.sessionId
     if (sessionId === undefined) {
       setLinkStatuses([])
       return
     }
-    void window.desktopApi
+    await window.desktopApi
       .listExternalLinks({ sessionId })
       .then((fresh) => {
         setLinksNotice(null)
@@ -6591,7 +6591,7 @@ export function App({
         onSaveAs={() => void handleSave('save-as')}
         saveDownload={host?.saveDownload}
         fileMenu={host?.fileMenu}
-        externalLinkListOnly={Boolean(host?.inPlaceSave)}
+        externalLinkSourceActions={!host?.inPlaceSave}
         onNameWithAi={() => void nameWithAi()}
         onRedo={handleRedo}
         autoSave={autoSave}
@@ -6852,7 +6852,8 @@ export function App({
         <ExternalLinksPanel
           links={linkStatuses}
           busy={linksBusy}
-          listOnly={Boolean(host?.inPlaceSave)}
+          sourceActions={!host?.inPlaceSave}
+          canBreak={!host?.readOnly}
           notice={linksNotice}
           onUpdate={() => {
             void (async () => {
@@ -6898,6 +6899,24 @@ export function App({
               if (sessionId === null || linksBusy) return
               setLinksBusy(true)
               try {
+                if (hostRef.current?.inPlaceSave) {
+                  await saveGateRef.current.run(async () => {
+                    if (hostRef.current?.readOnly || !userMutationAllowed() ||
+                        !analysisSaveConsent.current.allowed(false) || !(await commitActiveEditor())) return
+                    if (editorIsDirty()) {
+                      const saved = await handleSaveImpl(saveContext(), 'save', true)
+                      if ((!saved.ok && saved.reason !== 'no-edits') || editorIsDirty()) return
+                    }
+                    pendingExternalLinkOpsRef.current = {broken:[index],retargets:[]}
+                    try {
+                      const saved = await handleSaveImpl(saveContext(), 'save')
+                      if (saved.ok) analysisSaveConsent.current.confirmClean()
+                    } finally {
+                      pendingExternalLinkOpsRef.current = null
+                    }
+                  })
+                  return
+                }
                 await breakExternalLinkFlow({
                   index,
                   readUsage: () => window.desktopApi.readExternalLinkUsage({ sessionId }),
@@ -6926,8 +6945,8 @@ export function App({
                   save: () => handleSave('save'),
                 })
               } finally {
+                await refreshLinkStatuses()
                 setLinksBusy(false)
-                refreshLinkStatuses()
               }
             })()
           }}

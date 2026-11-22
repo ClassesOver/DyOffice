@@ -16,8 +16,9 @@ import {stubHomeHero} from '../helpers/home-hero.mjs'
 import {createCsrfService,SESSION_COOKIE} from '../../server/src/modules/auth/csrf.ts'
 
 const sheetsDirectory=process.env.DYOFFICE_TEST_SHEETS_DIST
+const hostManifest=process.env.DYOFFICE_TEST_HOST_MANIFEST
 
-test('XLSX lists and preserves external workbook links without fetching the source',{skip:!sheetsDirectory,timeout:120000},async t=>{
+test('XLSX lists, preserves and breaks external workbook links without fetching the source',{skip:!sheetsDirectory,timeout:150000},async t=>{
  let app,externalRequests=0
  const server=createServer((request,response)=>{
   if(request.url?.split('?')[0]==='/linked-source.xlsx'){
@@ -37,9 +38,15 @@ test('XLSX lists and preserves external workbook links without fetching the sour
  const directory=await mkdtemp(join(tmpdir(),'dyoffice-external-xlsx-'))
  f.cleanup.push(()=>rm(directory,{recursive:true,force:true}))
  await buildSheetsGateway(join(directory,'gateway.mjs'))
+ const native=hostManifest ? JSON.parse(await readFile(hostManifest,'utf8')) : null
+ if(native)assert.ok(native.nativeBinary&&native.nativeSha256,'The host manifest must describe a native XLSX binary')
  const runtime=await configuredSheetsRuntime({
-  DYOFFICE_AUTH_MODE:'local',DYOFFICE_SANDBOX_MODE:'subprocess',DYOFFICE_DEPLOYMENT_ID:f.deploymentId,
-  DYOFFICE_XLSX_NODE_ENGINE:join(directory,'xlsx-node-engine.mjs'),
+  DYOFFICE_AUTH_MODE:'local',DYOFFICE_DEPLOYMENT_ID:f.deploymentId,
+  ...(native ? {
+   DYOFFICE_NATIVE_BINARY:native.nativeBinary,DYOFFICE_NATIVE_SHA256:native.nativeSha256,
+  } : {
+   DYOFFICE_SANDBOX_MODE:'subprocess',DYOFFICE_XLSX_NODE_ENGINE:join(directory,'xlsx-node-engine.mjs'),
+  }),
   DYOFFICE_XLSX_GATEWAY_RUNNER:join(directory,'gateway-process.mjs'),
   DYOFFICE_NATIVE_XLSX_DIRECTORY:sheetsDirectory,
  },{enabled:true})
@@ -128,6 +135,46 @@ test('XLSX lists and preserves external workbook links without fetching the sour
  assert.deepEqual(original,await f.files.readFile(f.alice.token,initial.fileId,initial.revision))
  await page.reload()
  await expect.poll(localAmount,{timeout:30000}).toBe(21.25)
- await openExternalLinks()
+ const reopenedPanel=await openExternalLinks()
+ const revisionCount=()=>f.transactions.withPrincipalTransaction({kind:'session',token:f.alice.token},async connection=>
+  (await connection.query('SELECT count(*)::int AS count FROM file_revisions WHERE file_id=$1',[initial.fileId])).rows[0].count)
+ const countBeforeBreak=await revisionCount()
+ await reopenedPanel.getByRole('button',{name:'Break Link',exact:true}).click()
+ assert.equal((await f.files.openFile(f.alice.token,initial.fileId)).file.revision,head.revision)
+ const saveResponses=[]
+ page.on('response',response=>{
+  const path=new URL(response.url()).pathname
+  const route=path.endsWith('/sheets/uploads')?'prepare':path.endsWith('/commits')?'commit':null
+  if(route&&response.request().method()==='POST')saveResponses.push([route,response.status()])
+ })
+ const commit=page.waitForResponse(response=>response.request().method()==='POST'&&
+   response.url().endsWith(`/files/${initial.fileId}/commits`),{timeout:30000})
+ const [result]=await Promise.all([
+  commit,
+  reopenedPanel.getByRole('button',{name:'Confirm break',exact:true}).click(),
+ ]).catch(error=>{
+  t.diagnostic(`Break Link save responses: ${JSON.stringify(saveResponses)}`)
+  throw error
+ })
+ assert.ok(result.ok(),await result.text())
+ const {revision}=await result.json()
+ assert.notEqual(revision,head.revision)
+ await expect(reopenedPanel.getByText('This workbook has no links to other workbooks.',{exact:true})).toBeVisible({timeout:30000})
+ const readExternalCell=()=>page.evaluate(()=>{
+  const cell=window.__genofficeDebug?.univerAPI.getActiveWorkbook()?.getActiveSheet()?.getRange('G3')
+  return {value:cell?.getValue(),formula:cell?.getFormula()??''}
+ })
+ await expect.poll(readExternalCell,{timeout:30000}).toEqual({value:84,formula:''})
+ const broken=await JSZip.loadAsync(await f.files.readFile(f.alice.token,initial.fileId,revision))
+ assert.equal(broken.file(link),null)
+ assert.equal(broken.file(linkRelationships),null)
+ assert.ok(!(await broken.file(book).async('string')).includes(reference))
+ assert.ok(!(await broken.file(bookRelationships).async('string')).includes(relationship))
+ assert.match(await broken.file(worksheet).async('string'),/<c r="G3"><v>84<\/v><\/c>/)
+ assert.deepEqual(bytes,await f.files.readFile(f.alice.token,initial.fileId,head.revision))
+ assert.equal(await revisionCount(),countBeforeBreak+1)
+ await page.reload()
+ await expect.poll(localAmount,{timeout:30000}).toBe(21.25)
+ await expect.poll(readExternalCell,{timeout:30000}).toEqual({value:84,formula:''})
  assert.equal(externalRequests,0)
 })

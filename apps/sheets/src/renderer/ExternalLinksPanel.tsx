@@ -16,7 +16,8 @@ import type { ExternalLinkRow } from '../shared/desktop-api'
 export function ExternalLinksPanel({
   links,
   busy,
-  listOnly = false,
+  sourceActions = true,
+  canBreak = true,
   notice,
   onUpdate,
   onReveal,
@@ -26,7 +27,8 @@ export function ExternalLinksPanel({
 }: {
   readonly links: readonly ExternalLinkRow[]
   readonly busy: boolean
-  readonly listOnly?: boolean
+  readonly sourceActions?: boolean
+  readonly canBreak?: boolean
   /** why the listing is empty when it is not simply "no links" */
   readonly notice?: 'unsaved' | 'unavailable' | null
   readonly onUpdate: () => void
@@ -42,7 +44,7 @@ export function ExternalLinksPanel({
     <section className="watch-window" role="dialog" aria-label={t('appLinksPanel')}>
       <header>
         <span className="watch-title">{t('appLinksPanel')}</span>
-        {!listOnly && (
+        {sourceActions && (
           <button className="watch-add" disabled={busy} onClick={onUpdate}>
             {t('appLinksUpdate')}
           </button>
@@ -62,9 +64,9 @@ export function ExternalLinksPanel({
           <thead>
             <tr>
               <th>{t('appLinksSource')}</th>
-              {!listOnly && <th>{t('appLinksStatus')}</th>}
+              {sourceActions && <th>{t('appLinksStatus')}</th>}
               <th>{t('appLinksSheets')}</th>
-              {!listOnly && <th />}
+              {(sourceActions || canBreak) && <th />}
             </tr>
           </thead>
           <tbody>
@@ -76,7 +78,7 @@ export function ExternalLinksPanel({
                     <span className="watch-gone"> → {link.source}</span>
                   ) : null}
                 </td>
-                {!listOnly && (
+                {sourceActions && (
                   <td>
                     {link.reachable === undefined
                       ? '—'
@@ -86,9 +88,9 @@ export function ExternalLinksPanel({
                   </td>
                 )}
                 <td>{link.sheetNames.join(', ')}</td>
-                {!listOnly && (
+                {(sourceActions || canBreak) && (
                   <td>
-                    {link.reachable === true && link.source !== null ? (
+                    {sourceActions && link.reachable === true && link.source !== null ? (
                       <button
                         className="watch-remove"
                         data-tip={t('appLinksLocate')}
@@ -97,7 +99,7 @@ export function ExternalLinksPanel({
                         📂
                       </button>
                     ) : null}
-                    {link.source !== null ? (
+                    {sourceActions && link.source !== null ? (
                       <button
                         className="watch-remove"
                         data-tip={t('appLinksChangeSource')}
@@ -107,7 +109,7 @@ export function ExternalLinksPanel({
                         🔗
                       </button>
                     ) : null}
-                    {confirming === link.index ? (
+                    {canBreak && (confirming === link.index ? (
                       <button
                         className="watch-remove"
                         disabled={busy}
@@ -122,12 +124,13 @@ export function ExternalLinksPanel({
                       <button
                         className="watch-remove"
                         data-tip={t('appLinksBreak')}
+                        aria-label={t('appLinksBreak')}
                         disabled={busy}
                         onClick={() => setConfirming(link.index)}
                       >
                         ✂
                       </button>
-                    )}
+                    ))}
                   </td>
                 )}
               </tr>

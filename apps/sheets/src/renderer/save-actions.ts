@@ -467,6 +467,7 @@ function canSaveInPlace(ctx: SaveContext, state: LazyWorkbookState): boolean {
   const slicerState = ctx.slicerState?.() ?? null
   return Boolean(
     ctx.applySavedWorkbook &&
+    !ctx.externalLinkOps?.()?.broken.length &&
     structuralOps.length === 0 &&
     sheetOps.length === 0 &&
     visualAdditions.length === 0 &&
@@ -623,12 +624,55 @@ async function handlePreparedSave(
     return { ok: false, error }
   }
   if (ctx.lazyWorkbookRef.current !== state) return { ok: false }
+  // Web break writes the confirmed revision's cached values. The live journal
+  // can retain already-saved entries for undo, so send only the link operation.
+  const externalLinkOps = ctx.externalLinkOps?.() ?? null
+  if (ctx.applySavedWorkbook && externalLinkOps?.broken.length) {
+    if (journalSize(state.editJournal) > 0 || ctx.redactionStates?.() || ctx.slicerState?.()) {
+      ctx.setMessage(t('appSaveFailed'))
+      return { ok: false }
+    }
+    try {
+      const cellsAtSave = snapshotJournalCells(state.editJournal)
+      const journalAtSave = snapshotJournal(state.editJournal)
+      ctx.setMessage(t('appSavingEdits', { count: 1 }))
+      const result = await window.desktopApi.saveWorkbookEdits({
+        sessionId: state.file.sessionId, mode: 'save', externalLinkOps,
+        edits: [], structuralOps: [], chartEdits: [], visualEdits: [], visualAdditions: [],
+        tableAdditions: [], pivotAdditions: [], sheetOps: [], sheetOrder: [], filterStates: [],
+        hyperlinkEdits: [], cfStates: [], dvStates: [], pageSetupStates: [], noteStates: [],
+        formulaValues: [], pivotCacheRefreshPaths: [], pivotRefreshUpdates: [], sheetProtections: [],
+        definedNamesState: null, themeState: null, workbookProtectionState: null,
+        protectedRangeStates: [], sparklineAdditions: [], slicerState: null, redactionStates: null,
+      })
+      if (ctx.lazyWorkbookRef.current !== state) return { ok: false }
+      if (result.canceled) {
+        ctx.setMessage(t('appSaveCanceled'))
+        return { ok: false }
+      }
+      stashUndoCarry(null)
+      ctx.stashViewRestore(viewAtSave)
+      if (!(await reopenCarryingLateEdits(ctx, state, cellsAtSave, journalAtSave, result.file))) {
+        return { ok: false }
+      }
+      const saved = t('appSaved')
+      ctx.setMessage(saved)
+      showToast(saved)
+      return { ok: true }
+    } catch (error: unknown) {
+      const message = stripIpcErrorWrapper(error instanceof Error ? error.message : '')
+      const failed = localizeSaveError(message) ?? (message || t('appSaveFailed'))
+      ctx.setMessage(failed)
+      showToast(failed, 'error')
+      return { ok: false, error: message || failed }
+    }
+  }
   if (
     ctx.applySavedWorkbook &&
     journalSize(state.editJournal) === 0 &&
     !ctx.redactionStates?.() &&
     !ctx.slicerState?.() &&
-    !ctx.externalLinkOps?.() &&
+    !externalLinkOps &&
     mode === 'save' &&
     !state.file.restoredFromRecovery &&
     !state.file.unsavedNew &&
@@ -746,9 +790,6 @@ async function handlePreparedSave(
   // Slicer panels only ride the save when the session changed something
   // slicer-related (create/edit/delete); null keeps every file part raw.
   const slicerState = ctx.slicerState?.() ?? null
-  // External-link breaks/retargets are one-shot: the panel sets them, this
-  // save carries them, and the caller clears them once it settles.
-  const externalLinkOps = ctx.externalLinkOps?.() ?? null
   // The gateway fails closed when these additions ride with structural or
   // sheet changes (their coordinates entangle). Instead of bouncing the
   // user, hold them back and save in two sequential phases: structure
