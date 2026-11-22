@@ -22,6 +22,10 @@ export function withAnalysisProvenance(content:PreparedAnalysisContent,receipt:A
  for(const line of receipt.limitations)notes.push('Model-supplied limitation: '+line)
  if(!receipt.limitations.length)notes.push('No model limitations supplied; this is not a completeness guarantee.')
  if(notes.some(line=>/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/u.test(line)))return fail()
+ if(content.kind==='image'){
+  if(notes.length>limits.maxRows||notes.some(line=>line.length>limits.maxCellUnits))return fail()
+  return {...content,provenance:notes}
+ }
  if(content.kind==='text'){
   const text=content.text+'\n\n[Analysis provenance]\n'+notes.join('\n')
   if(text.length>limits.maxTextUnits||new TextEncoder().encode(text).length>limits.maxBytes||text.split(/\r\n|\r|\n/).length>limits.maxRows||text.split(/\r\n|\r|\n/).some(line=>line.length>limits.maxCellUnits))return fail()

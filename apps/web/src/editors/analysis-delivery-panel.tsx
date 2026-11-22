@@ -2,6 +2,7 @@ import {useEffect,useRef,useState} from 'react'
 import type {createAnalysisDeliveryClient} from '../../../../packages/browser-host/src/analysis-delivery-client.ts'
 import {withAnalysisProvenance} from '../../../../packages/browser-host/src/analysis-insert-provenance.ts'
 import {prepareAnalysisInsertContent} from '../../../../packages/browser-host/src/analysis-insert-content.ts'
+import {prepareImageContent} from '../../../../packages/browser-host/src/analysis-image.ts'
 import type {createAnalysisDocumentRegistry} from '../../../../packages/browser-host/src/analysis-document-registry.ts'
 import type {AnalysisDocumentTarget} from '../../../../packages/web-contracts/src/analysis-document.ts'
 import './analysis-delivery-panel.css'
@@ -12,6 +13,7 @@ function offerDownload(file:Awaited<ReturnType<Client['download']>>) {
  try {if(!file.current())return;const link=document.createElement('a');link.href=url;link.download=file.name;link.click()}
  finally{setTimeout(()=>URL.revokeObjectURL(url),0)}
 }
+const isImage=(file:{mediaType:string})=>file.mediaType==='image/png'||file.mediaType==='image/jpeg'
 type Applied={target:AnalysisDocumentTarget;applicationId:string;commandId:string;artifactId:string;sha256:string;baseRevision:string;state:'applied'|'saved'|'unknown';revision?:string}
 export function AnalysisDeliveryPanel({client,lang,documents}:{client:Client;lang:'en'|'zh';documents?:Pick<ReturnType<typeof createAnalysisDocumentRegistry>,'current'|'subscribe'>}) {
  const [items,setItems]=useState(()=>client.snapshot()),[error,setError]=useState(()=>client.error()),[busy,setBusy]=useState('')
@@ -34,7 +36,8 @@ export function AnalysisDeliveryPanel({client,lang,documents}:{client:Client;lan
    const file=await client.download(commandId,artifactId)
    const authorized=()=>active(stamp)&&documents?.current()===selected&&file.current()
    if(!authorized()||file.artifact.artifactId!==artifactId)throw Error()
-   const content=withAnalysisProvenance(prepareAnalysisInsertContent({...file.artifact,bytes:file.bytes}),file.receipt,file.artifact,capture.format)
+   const prepared=isImage(file.artifact)?prepareImageContent(file.bytes,file.artifact.mediaType,file.artifact.name):prepareAnalysisInsertContent({...file.artifact,bytes:file.bytes})
+   const content=withAnalysisProvenance(prepared,file.receipt,file.artifact,capture.format)
    if(!authorized())throw Error()
    setBlocked(old=>new Set(old).add(id))
    const result=await selected.apply(capture,content,{artifactId,sha256:file.artifact.sha256},authorized)
@@ -60,7 +63,7 @@ export function AnalysisDeliveryPanel({client,lang,documents}:{client:Client;lan
   }catch{if(active(stamp))setNotice(en?'Save not confirmed. Check the document before retrying.':'保存结果未确认，请先核对文档，勿重复提交。')}
   finally{if(active(stamp))finish(token)}
  }
- const insertable=(file:{role:string;mediaType:string})=>target&&((file.role==='report'&&['text/plain','text/markdown'].includes(file.mediaType))||(target.format!=='pdf'&&file.role==='table'&&file.mediaType==='text/csv'))
+ const insertable=(file:{role:string;mediaType:string})=>target&&((file.role==='report'&&['text/plain','text/markdown'].includes(file.mediaType))||(target.format!=='pdf'&&file.role==='table'&&file.mediaType==='text/csv')||((target.format==='docx'||target.format==='pptx')&&isImage(file)))
  const insertLabel=target?.format==='pdf'?(en?'Append to PDF':'追加到 PDF'):target?.format==='pptx'?(en?'Insert into current slide':'插入当前幻灯片'):target?.format==='xlsx'?(en?'Write to selection':'写入当前选区'):(en?'Insert into document':'插入文档')
  return <details className="analysis-deliveries" onToggle={event=>{if(event.currentTarget.open)void client.restore()}}><summary>{en?'Analysis deliveries':'分析交付'} ({items.length})</summary>
   <p>{en?'Server-confirmed references and file integrity, not verified conclusions. Automatically generated content remains unverified. Committed does not mean inserted into or saved in your document. Supported text and CSV may be inserted only on request; saving is separate.':'服务端仅确认提交记录与文件完整性，不保证结论正确。自动生成内容尚未核验；已提交不代表已插入或保存到文档。支持的文本与CSV仅在明确操作后插入，保存需单独确认；文件不执行或预览。'}</p>

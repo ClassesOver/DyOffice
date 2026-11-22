@@ -1796,7 +1796,8 @@ function SettingsFields({ web, disabled, children }: { web: boolean; disabled: b
   return web ? <fieldset disabled={disabled} className="set-web-fields">{children}</fieldset> : <>{children}</>
 }
 function SettingsCapability({ unavailable, children }: { unavailable: boolean; children: ReactNode }) {
-  return unavailable ? <fieldset disabled className="set-web-unavailable"><legend>此 Web 版本尚未提供</legend>{children}</fieldset> : <>{children}</>
+  const { t } = useI18n()
+  return unavailable ? <fieldset disabled className="set-web-unavailable"><legend>{t('setWebUnavailable')}</legend>{children}</fieldset> : <>{children}</>
 }
 export interface SettingsModalProps {
   /** Optional Web-only capability adapter; desktop behavior remains the default. */
@@ -1919,12 +1920,12 @@ export function SettingsModal({
       if (prefs.theme === 'system') document.documentElement.removeAttribute('data-theme')
       else document.documentElement.setAttribute('data-theme', prefs.theme)
     } catch (error) {
-      if (webMounted.current) setWebError(error instanceof Error ? error.message : '设置未保存')
+      if (webMounted.current) setWebError(error instanceof Error ? error.message : t('setWebSaveFailed'))
     } finally { webSaving.current = false; if (webMounted.current) setWebBusy(false) }
   }
   const reloadWebPreferences = async () => {
     if (!web || webSaving.current || webBusy) return
-    if (webDirty && !window.confirm('重新读取会放弃未保存的个人偏好，是否继续？')) return
+    if (webDirty && !window.confirm(t('setWebConfirmReload'))) return
     webSaving.current = true
     setWebBusy(true)
     setWebError('')
@@ -1935,20 +1936,20 @@ export function SettingsModal({
       setWebReady(true)
       setWebSaved(false)
     } catch (error) {
-      if (webMounted.current) setWebError(error instanceof Error ? error.message : '设置加载失败')
+      if (webMounted.current) setWebError(error instanceof Error ? error.message : t('setWebLoadFailed'))
     } finally { webSaving.current = false; if (webMounted.current) setWebBusy(false) }
   }
   const closeSettings = () => {
-    if (web && webSaving.current) { setWebError('正在保存或读取个人偏好，请稍候。'); return }
+    if (web && webSaving.current) { setWebError(t('setWebBusyWait')); return }
     if (web && webDraft.current && JSON.stringify(webDraft.current) !== JSON.stringify(webBaseline.current)
-      && !window.confirm('个人偏好尚未保存，是否放弃更改并关闭？')) return
+      && !window.confirm(t('setWebConfirmClose'))) return
     onClose()
   }
   useEffect(() => {
     let alive = true
     if (web) {
       void web.load().then(prefs => { if (alive) { resetWebPreferences(prefs); setWebReady(true) } })
-        .catch(error => { if (alive) setWebError(error instanceof Error ? error.message : '设置加载失败') })
+        .catch(error => { if (alive) setWebError(error instanceof Error ? error.message : t('setWebLoadFailed')) })
         .finally(() => { if (alive) setWebBusy(false) })
       return () => { alive = false }
     }
@@ -2145,7 +2146,7 @@ export function SettingsModal({
                 className={`set-nav-item${section === s.id ? ' active' : ''}`}
                 aria-current={section === s.id}
                 disabled={Boolean(web && s.id !== 'general' && s.id !== 'account' && !(s.id === 'skills' && web.skills))}
-                title={web && s.id !== 'general' && s.id !== 'account' && !(s.id === 'skills' && web.skills) ? '此 Web 版本尚未提供' : undefined}
+                title={web && s.id !== 'general' && s.id !== 'account' && !(s.id === 'skills' && web.skills) ? t('setWebUnavailable') : undefined}
                 onClick={() => setSection(s.id)}
               >
                 <SectionIcon id={s.id} />
@@ -2166,7 +2167,7 @@ export function SettingsModal({
                   {authorName.value || authorName.fallback || t('setSecAccount')}
                 </span>
                 <span className="set-nav-account-email">
-                  {web ? (web.accountLabel ?? '个人工作区 · 开发访问') : loggedIn ? email : t('setNotLoggedIn')}
+                  {web ? (web.accountLabel ?? t('setWebAccountSub')) : loggedIn ? email : t('setNotLoggedIn')}
                 </span>
               </span>
             </button>
@@ -2178,9 +2179,9 @@ export function SettingsModal({
           >
             {webError && <p role="alert" className="set-web-error">{webError}</p>}
             {web && <div className="set-pane-footer">
-              <span role="status">{webBusy ? '保存或读取中…' : webDirty ? '个人偏好未保存' : webSaved ? '个人偏好已保存；语言刷新后生效' : '语言更改保存后刷新生效'}</span>
-              <button type="button" className="set-btn primary" disabled={webBusy || !webReady || !webDirty} onClick={() => void saveWebPreferences()}>保存个人偏好</button>
-              <button type="button" className="set-btn" disabled={webBusy} onClick={() => void reloadWebPreferences()}>重新读取</button>
+              <span role="status">{webBusy ? t('setWebStatusBusy') : webDirty ? t('setWebStatusDirty') : webSaved ? t('setWebStatusSaved') : t('setWebStatusIdle')}</span>
+              <button type="button" className="set-btn primary" disabled={webBusy || !webReady || !webDirty} onClick={() => void saveWebPreferences()}>{t('setWebSave')}</button>
+              <button type="button" className="set-btn" disabled={webBusy} onClick={() => void reloadWebPreferences()}>{t('setWebReload')}</button>
             </div>}
             {web && section === 'account' && web.account}
             {!web && section === 'account' && (
@@ -2249,7 +2250,7 @@ export function SettingsModal({
               <SettingsFields web={Boolean(web)} disabled={webBusy || !webReady}>
                 <h3 className="set-pane-title">{t('setSecGeneral')}</h3>
                 <p className="set-pane-desc">{t('setGeneralSub')}</p>
-                {web && <p className="set-pane-desc">作者、自动保存与助手设置保存为个人偏好；已打开的编辑器不会热更新，助手面板尚未接入。灰色项目尚未适配 Web。</p>}
+                {web && <p className="set-pane-desc">{t('setWebGeneralNote')}</p>}
                 <h4 className="set-pane-subtitle">{t('setGrpInterface')}</h4>
                 <div className="set-field">
                   <div className="set-field-text">

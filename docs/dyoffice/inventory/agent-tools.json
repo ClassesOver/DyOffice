@@ -1081,6 +1081,20 @@
       "rationale": "Validates cited blocks against the active document and renders a card without editing. Only the explicit insert action adds it to the document draft."
     },
     {
+      "id": "packages/browser-host/src/analysis-insert-skill.ts#insert_analysis_image",
+      "placement": "live",
+      "web": "Verified analysis delivery download applied through the open editor's fenced AnalysisDocumentTarget",
+      "verifyIn": "T14",
+      "rationale": "Inserts a committed PNG/JPEG Coding artifact (size and SHA-256 re-verified, header dimensions checked) into the open Word or PowerPoint document with provenance. Unsaved until the normal document save; refused if the document changed after capture."
+    },
+    {
+      "id": "packages/browser-host/src/analysis-insert-skill.ts#insert_data_result",
+      "placement": "live",
+      "web": "Session-bound frozen data-result API applied through the open editor's fenced AnalysisDocumentTarget",
+      "verifyIn": "T14",
+      "rationale": "Inserts rows read from the server's frozen query snapshot (hash-checked across pages, bounded by analysis insert limits) as a native table; values never come from model text. Unsaved until the normal document save; refused if the document changed after capture."
+    },
+    {
       "id": "packages/browser-host/src/assistant-channel.ts#delegate_channel_task",
       "placement": "live",
       "web": "Session-bound current-document channel task API",

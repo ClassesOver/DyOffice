@@ -67,3 +67,10 @@ it('save-owned readonly/queue state permits only unchanged-content receipt recov
  locked=true;expect(capture.matches()).toBe(false);expect(capture.matchesForSave()).toBe(true)
  state.fingerprint='newer';expect(capture.matchesForSave()).toBe(false)
 })
+it('frozen query results write numeric and boolean columns as typed cells, keeping header and notes as text',()=>{
+ const ops=analysisCellOperations({kind:'table',headerRows:1,columnTypes:['string','number','boolean'],rows:[['month','paid (CNY)','closed'],['2026-01','30','TRUE'],['2026-02','-1.5e3','FALSE'],['Source: s v1','','']]},'s',0,0)
+ expect(ops.map(op=>(op as {value:unknown}).value)).toEqual(['month','paid (CNY)','closed','2026-01',30,true,'2026-02',-1500,false,'Source: s v1','',''])
+})
+it('refuses images instead of writing them into cells',()=>{
+ expect(()=>analysisCellOperations({kind:'image',mediaType:'image/png',base64:'',width:1,height:1,alt:''},'s',0,0)).toThrow(/native chart/)
+})

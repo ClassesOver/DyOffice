@@ -3,6 +3,7 @@ import {DocumentHandoffMessages} from './document-handoff'
 import {Children,Fragment,isValidElement,useCallback,useEffect,useState,useSyncExternalStore,type ReactNode} from 'react'
 import {createAnalysisDocumentRegistry} from '../../../../packages/browser-host/src/analysis-document-registry.ts'
 import {createAnalysisDeliveryClient} from '../../../../packages/browser-host/src/analysis-delivery-client.ts'
+import {ANALYSIS_INSERT_TOOLS,createAnalysisInsertSkill} from '../../../../packages/browser-host/src/analysis-insert-skill.ts'
 import {AnalysisDeliveryPanel} from './analysis-delivery-panel.tsx'
 import {createAssistantChannelClient} from '../../../../packages/browser-host/src/assistant-channel.ts'
 import {createAssistantWorkspace} from '../../../../packages/browser-host/src/assistant-workspace.ts'
@@ -50,7 +51,9 @@ export async function createEditorAssistant(channelOptions?:{fileId:string;edito
   const baseTools=format==='pdf'?new Set([...(nativeToolNames??[]),'read_attachment']):nativeToolNames??new Set<string>()
   let publicSettings:PublicGlobalSettings|undefined
   try{publicSettings=await bound.request<PublicGlobalSettings>('/api/v1/settings/public')}catch{}
-  const configuredTools=officeToolsWithConfiguredAiTools(baseTools,publicSettings??{},format)
+  const insertFormat=!readOnly&&(format==='docx'||format==='xlsx'||format==='pptx')?format:undefined
+  // Analysis insertion runs through the editor's own fenced AnalysisDocumentTarget.
+  const configuredTools=officeToolsWithConfiguredAiTools(insertFormat?new Set([...baseTools,...Object.values(ANALYSIS_INSERT_TOOLS)]):baseTools,publicSettings??{},format)
   const searchApi=createWebAiSearchApi(bound.request)
   const remoteMediaApi=createWebAiMediaApi(bound.request)
   const pdfImages=format==='pdf'?createDocumentImageApi({...remoteMediaApi,async generateImage(input,signal){
@@ -76,6 +79,9 @@ export async function createEditorAssistant(channelOptions?:{fileId:string;edito
   try{taskStorage=window.sessionStorage}catch{/* storage may be unavailable in an embedded editor */}
   const assistant = await createAssistantClient({format,nativeToolNames:configuredTools,mediaAnalysis,nativeDocumentEditing:!readOnly&&(format==='docx'||format==='pdf'),request: bound.request, csrfToken: bound.proof,
     ...(channelOptions?{documentId:channelOptions.fileId}:{}),...(taskStorage?{taskStorage}:{}),...(channelOptions?.continuationRevision?{continuationRevision:channelOptions.continuationRevision}:{}),onDelivery:(hint,agent)=>deliveries.observe(hint,agent)})
+  let insertDisposed=false
+  const analysisInsert=insertFormat?createAnalysisInsertSkill({format:insertFormat,request:bound.request,documents,deliveries,disposed:()=>insertDisposed,
+    dataResults:()=>assistant.catalog.sourceMode==='read-only-analysis',images:()=>!!assistant.coding}):undefined
   const fileChat=channelOptions?createFileChat(channelOptions.fileId,assistant.transport,bound.request):undefined
   const conversationId=channelOptions?.conversationId??new URLSearchParams(location.search).get('channel')??undefined
   const channel=assistant.catalog.assistantChannels&&channelOptions&&conversationId
@@ -141,7 +147,7 @@ export async function createEditorAssistant(channelOptions?:{fileId:string;edito
     request:bound.request,sessionProof:bound.proof,
     ...assistant,agents:assistant.catalog.agents??[],modelPicker:<ModelPicker/>,fileChat,continuationRevision:channelOptions?.continuationRevision,
     workspace:{conversation:(children:ReactNode)=><Conversation>{children}</Conversation>,isOffice:workspace.isOffice,submit:workspace.submit,panel:<WorkspacePanel/>},
-    documents,channel,searchApi,mediaApi,mediaCapabilities:{imageGeneration:configuredTools.has('generate_image'),mediaAnalysis:configuredTools.has('analyze_media'),imageAnalysis:mediaAnalysis.image},control:channel?.control,extraSkills:[...assistant.extraSkills,...additionalSkills,...(pdfMediaSkill?[pdfMediaSkill]:[]),...(channel?[channel.skill]:[])],
+    documents,channel,searchApi,mediaApi,mediaCapabilities:{imageGeneration:configuredTools.has('generate_image'),mediaAnalysis:configuredTools.has('analyze_media'),imageAnalysis:mediaAnalysis.image},control:channel?.control,extraSkills:[...assistant.extraSkills,...additionalSkills,...(pdfMediaSkill?[pdfMediaSkill]:[]),...(analysisInsert?[analysisInsert]:[]),...(channel?[channel.skill]:[])],
     api: {
       // Local compatibility projection only. Full desktop settings and global
       // credentials never travel over HTTP or enter this renderer.
@@ -163,6 +169,6 @@ export async function createEditorAssistant(channelOptions?:{fileId:string;edito
       openSkillsSettings: () => openSettings('skills'),
       openAiModelSettings: () => openSettings('models'),
     },
-    dispose() {fileChat?.dispose();pdfImages?.dispose();attachments.dispose();workspace.dispose();documents.dispose();deliveries.dispose();channel?.dispose();assistant.dispose(); client.invalidateSession()},
+    dispose() {insertDisposed=true;fileChat?.dispose();pdfImages?.dispose();attachments.dispose();workspace.dispose();documents.dispose();deliveries.dispose();channel?.dispose();assistant.dispose(); client.invalidateSession()},
   }
 }

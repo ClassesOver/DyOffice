@@ -41,7 +41,7 @@ test('Word and Sheets host-specific schema filtering does not declare additional
   }
 })
 test('repository tool definitions and reviewed generated inventory remain in sync', async () => {
-  assert.equal((await checkInventory()).count,157)
+  assert.equal((await checkInventory()).count,159)
 })
 
 test('shadowed or mutable tool-name bindings fail closed and shorthand schemas are inventoried', () => {
