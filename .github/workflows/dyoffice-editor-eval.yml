@@ -8,6 +8,15 @@ on:
     paths:
       - 'tools/dyoffice/analysis-eval/**'
       - 'tools/dyoffice/runtime-lock*'
+      - 'apps/docs/src/renderer/ai/**'
+      - 'apps/sheets/src/renderer/ai/**'
+      - 'apps/slides/src/renderer/ai/**'
+      - 'apps/pdf/src/renderer/ai/**'
+      - 'packages/agent-core/src/**'
+      - 'packages/browser-host/src/**'
+      - 'apps/web/server/src/modules/assistant-channel/**'
+      - 'apps/web/server/src/modules/coding/**'
+      - 'apps/web/server/src/modules/tasks/**'
       - '.github/workflows/dyoffice-editor-eval.yml'
 
 permissions:
@@ -29,8 +38,9 @@ jobs:
       - name: Load the four native catalogs
         run: node tools/dyoffice/analysis-eval/editor-selection.mjs --check-catalog
       - name: Verify table, style and comment changes in the Word editor
+        id: word_fixture
         run: node tools/dyoffice/analysis-eval/word-effects.mjs --fixture --out test-results/word-fixture
-      - name: Measure the weekly real-model sample
+      - name: Measure weekly real-model tool selection
         if: github.event_name != 'pull_request'
         env:
           DYOFFICE_EVAL_API_KEY: ${{ secrets.DYOFFICE_EVAL_API_KEY }}
@@ -38,7 +48,13 @@ jobs:
           DYOFFICE_EVAL_MODEL: ${{ vars.DYOFFICE_EVAL_MODEL }}
         run: |
           node tools/dyoffice/analysis-eval/editor-selection.mjs --model "$DYOFFICE_EVAL_MODEL" --trials 1
-          node tools/dyoffice/analysis-eval/word-effects.mjs --model "$DYOFFICE_EVAL_MODEL"
+      - name: Measure weekly real-model Word edits
+        if: ${{ !cancelled() && github.event_name != 'pull_request' && steps.word_fixture.outcome == 'success' }}
+        env:
+          DYOFFICE_EVAL_API_KEY: ${{ secrets.DYOFFICE_EVAL_API_KEY }}
+          DYOFFICE_EVAL_BASE_URL: ${{ vars.DYOFFICE_EVAL_BASE_URL }}
+          DYOFFICE_EVAL_MODEL: ${{ vars.DYOFFICE_EVAL_MODEL }}
+        run: node tools/dyoffice/analysis-eval/word-effects.mjs --model "$DYOFFICE_EVAL_MODEL"
       - name: Retain measured input cost and selection results
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
@@ -69,7 +85,8 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
           node-version: '22.23.5'
-      - run: node tools/dyoffice/runtime-lock.mjs --runtime
+      - name: Verify immutable Node runtime
+        run: node tools/dyoffice/runtime-lock.mjs --runtime
       - run: npm ci --ignore-scripts --include=dev
       - run: npm ci --prefix apps/web --workspaces=false --ignore-scripts --include=dev
       - run: npm --prefix apps/web exec -- playwright install chromium --with-deps

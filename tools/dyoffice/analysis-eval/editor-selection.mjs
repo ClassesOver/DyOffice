@@ -30,12 +30,17 @@ if (!values['check-catalog']) {
   const headers = { 'content-type': 'application/json' }
   if (process.env.DYOFFICE_EVAL_API_KEY) headers.authorization = 'Bearer ' + process.env.DYOFFICE_EVAL_API_KEY
   async function sample(prompt, tools) {
-    const response = await fetch(base.replace(/\/$/, '') + '/chat/completions', { method: 'POST', headers, redirect: 'error',
-      signal: AbortSignal.timeout(120000), body: JSON.stringify({ model: values.model, messages: [{role:'user',content:prompt}], ...(tools && { tools }) }) })
-    if (!response.ok) throw Error('Model endpoint returned HTTP ' + response.status)
-    const data = await response.json()
-    if (!Number.isSafeInteger(data.usage?.prompt_tokens) || !data.choices?.[0]?.message) throw Error('Missing model response or input token count')
-    return { tokens: data.usage.prompt_tokens, calls: (data.choices[0].message.tool_calls ?? []).map(call => call.function.name) }
+    try {
+      const response = await fetch(base.replace(/\/$/, '') + '/chat/completions', { method: 'POST', headers, redirect: 'error',
+        signal: AbortSignal.timeout(120000), body: JSON.stringify({ model: values.model, messages: [{role:'user',content:prompt}], ...(tools && { tools }) }) })
+      if (!response.ok) throw Error('Model endpoint returned HTTP ' + response.status)
+      const data = await response.json()
+      const message = data.choices?.[0]?.message
+      const tokens = data.usage?.prompt_tokens
+      if (!message || typeof message !== 'object' || Array.isArray(message)) return { error:'Missing model response' }
+      if (!Number.isSafeInteger(tokens) || tokens < 0) return { error:'Missing input token count', message }
+      return { tokens, message }
+    } catch (error) { return { error:error.message } }
   }
   const report = { model: values.model, trials, results: [], byFormat: {} }
   await mkdir(values.out, { recursive: true })
@@ -43,13 +48,27 @@ if (!values['check-catalog']) {
     const tools = catalogs[format].map(def => ({ type:'function', function:{name:def.name,description:def.description,parameters:def.inputSchema} }))
     const baseline = await sample(prompt)
     for (let trial = 1; trial <= trials; trial++) {
-      const result = await sample(prompt, tools)
-      report.results.push({ format, prompt, trial, expected:tool, calls:result.calls, correct:result.calls.length===1 && result.calls[0]===tool, promptTokens:result.tokens, baselineTokens:baseline.tokens, toolTokens:result.tokens-baseline.tokens })
-      const completed = report.results.filter(row => row.format === format)
+      const sampleResult = await sample(prompt, tools)
+      const calls = sampleResult.message?.tool_calls
+      const row = { format, prompt, trial, expected:tool, baselineTokens:baseline.tokens ?? null, promptTokens:sampleResult.tokens ?? null }
+      if (sampleResult.error || baseline.error) {
+        row.errors = { baseline:baseline.error, withTools:sampleResult.error }
+        process.exitCode = 1
+      }
+      if (sampleResult.message) {
+        row.calls = Array.isArray(calls) ? calls.map(call => call?.function?.name ?? null) : []
+        row.correct = row.calls.length === 1 && row.calls[0] === tool
+      }
+      if (row.correct !== true || sampleResult.error) row.response = sampleResult.message
+      if (baseline.error) row.baselineResponse = baseline.message
+      if (row.promptTokens !== null && row.baselineTokens !== null) row.toolTokens = row.promptTokens - row.baselineTokens
+      report.results.push(row)
+      const completed = report.results.filter(item => item.format === format && item.correct !== undefined)
+      const measured = completed.filter(item => item.toolTokens !== undefined)
       report.byFormat[format] = {
-        completed: completed.length,
-        selectionRate: completed.filter(row => row.correct).length / completed.length,
-        meanToolTokens: completed.reduce((sum,row) => sum + row.toolTokens, 0) / completed.length,
+        completed: completed.length, measured: measured.length,
+        selectionRate: completed.length ? completed.filter(item => item.correct).length / completed.length : null,
+        meanToolTokens: measured.length ? measured.reduce((sum,item) => sum + item.toolTokens, 0) / measured.length : null,
       }
       await writeFile(join(values.out,'report.json'),JSON.stringify(report,null,2)+'\n')
     }

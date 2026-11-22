@@ -130,6 +130,9 @@ export async function assertRuntimePool(pool: Pool, kind: 'auth' | 'business' | 
   if (kind === 'business') required.harness_task_events = ['SELECT','INSERT','DELETE']
   if (kind === 'business') required.user_style_templates = ['SELECT','INSERT','UPDATE','DELETE']
   if (kind === 'business') Object.assign(required, { harness_artifact_accounts: ['SELECT','INSERT'], harness_artifact_tasks: ['SELECT','INSERT'], harness_artifacts: ['SELECT','INSERT','DELETE'], harness_analysis_deliveries: ['SELECT','INSERT'] })
+  const permissions = ['SELECT','INSERT','UPDATE','DELETE','REFERENCES','TRIGGER']
+  const { rows: [version] } = await pool.query("SELECT current_setting('server_version_num')::integer AS number")
+  if (version.number >= 170000) permissions.push('MAINTAIN')
   for (const name of [...authTables,...personalTables,...globalTables,...privateTables,...runtimeViews]) {
     const relation = table(role.schema, name)
     const flags = (await pool.query("SELECT c.relowner=r.oid AS owned,c.relrowsecurity,c.relforcerowsecurity,has_table_privilege(current_user,c.oid,'TRUNCATE') AS truncate,EXISTS(SELECT 1 FROM aclexplode(COALESCE(c.relacl,acldefault('r',c.relowner))) a WHERE a.grantee=r.oid AND a.is_grantable) AS table_delegatable,EXISTS(SELECT 1 FROM pg_attribute att CROSS JOIN LATERAL aclexplode(att.attacl) a WHERE att.attrelid=c.oid AND a.grantee=r.oid AND a.is_grantable) AS column_delegatable FROM pg_class c JOIN pg_roles r ON r.rolname=current_user WHERE c.oid=$1::regclass", [relation])).rows[0]
@@ -139,7 +142,7 @@ export async function assertRuntimePool(pool: Pool, kind: 'auth' | 'business' | 
     )).rowCount) throw new Error('Task status must enforce caller row security')
     if (personalTables.includes(name) && (!flags.relrowsecurity || !flags.relforcerowsecurity)) throw new Error('Personal tables require FORCE RLS')
     if (globalTables.includes(name) && (!flags.relrowsecurity || !flags.relforcerowsecurity)) throw new Error('Global tables require FORCE RLS')
-    for (const permission of ['SELECT','INSERT','UPDATE','DELETE','REFERENCES','TRIGGER','MAINTAIN']) {
+    for (const permission of permissions) {
       if (required[name]?.includes(permission)) continue
       const channelColumns:Record<string,string[]>={task_runtime:['state','cancel_requested'],assistant_channels:['file_id','background_enabled','paused','sequence','office_connection_id','office_epoch','editor_id','editor_generation'],assistant_invites:['consumed_at'],assistant_applications:['state','membership_id'],assistant_members:['dsh_token_issued_at','dsh_token_session_id','dsh_token_envelope','token_hash','revoked_at','connection_id','connection_epoch','last_seen_at'],task_background_claims:['credential','claim_id','claim_hash'],task_runtime_channel:['lease_until','renewed_at','execution','saved_revision','saved_sha256','saved_size','state','claim_id','connection_id','connection_epoch','child_task_ids','summary','outcome','cancel_requested']}
       const lifecycleColumns = channelColumns[name] ?? (name === 'harness_artifact_accounts' ? ['used_bytes'] : ['harness_artifact_tasks','harness_artifacts'].includes(name) ? ['state'] : name === 'file_revisions' ? ['reclaimed_at'] : name === 'revision_outbox' ? ['retired_at','delivery_epoch','delivery_hash','delivery_until'] : name === 'workspace_source_results' ? ['state','session_id','name','save_command_id','save_params_hash','expires_at','saved_at'] : null)

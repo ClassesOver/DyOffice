@@ -55,7 +55,7 @@ With `DYOFFICE_EVAL_BASE_URL` and the gateway's `DYOFFICE_EVAL_API_KEY` configur
 node tools/dyoffice/analysis-eval/editor-selection.mjs --model MODEL_ID --trials 3
 ```
 
-The four synthetic prompts ask for a Word comment, scattered spreadsheet cells, slide style templates and a PDF text search. Each format also sends the same prompt once without tools. The report at `test-results/editor-selection/report.json` records the selected tool names, first-turn selection rate, and the difference between provider-reported input tokens with and without the tool definitions. This sample measures selection and input cost. It does not execute editor operations.
+The four synthetic prompts ask for a Word comment, scattered spreadsheet cells, slide style templates and a PDF text search. Each format also sends the same prompt once without tools. The report at `test-results/editor-selection/report.json` records the selected tool names, first-turn selection rate, and the difference between provider-reported input tokens with and without the tool definitions. An incorrect selection includes the model response for diagnosis. Each format reports how many trials returned a model answer and how many had both token counts. A failed gateway call is recorded and makes the command exit unsuccessfully after the remaining scenarios run.
 
 ## DSH delegation and recovery
 
