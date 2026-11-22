@@ -153,7 +153,7 @@ jobs:
         run: npm run test:web:build
       - name: Install browser fixture dependencies
         run: |
-          rustup toolchain install 1.93.0 --profile minimal
+          rustup toolchain install 1.93.0 --profile minimal --target wasm32-wasip1
           sudo apt-get update
           sudo apt-get install -y poppler-utils python3-matplotlib tesseract-ocr tesseract-ocr-eng tesseract-ocr-chi-sim fonts-noto-cjk fonts-liberation fonts-dejavu-core
       - name: Verify the real PDF OCR engine and language data
@@ -177,6 +177,7 @@ jobs:
           DYOFFICE_TEST_SLIDES_DIST: ${{ github.workspace }}/apps/web/dist-slides
           DYOFFICE_TEST_NATIVE_PDF_DIST: ${{ github.workspace }}/apps/web/dist-pdf
           DYOFFICE_TEST_HOST_MANIFEST: ${{ github.workspace }}/.dyoffice-native-build/host-manifest.json
+          DYOFFICE_TEST_XLSX_WASI_REFRESH_RUNNER: ${{ github.workspace }}/apps/web/dist-sheets-server/xlsx-refresh-wasi.mjs
           DYOFFICE_TEST_ANALYSIS_PYTHON: /usr/bin/python3
           DYOFFICE_TEST_PDF_OCR: '1'
           DYOFFICE_DSH_FIXTURE: 'on'
@@ -185,6 +186,7 @@ jobs:
         run: |
           umask 077
           : > "$DYOFFICE_TEST_AI_TOOL_TRACE"
+          node --import tsx --test --test-name-pattern='actual wasi server entry' apps/web/test/native-sheets/runtime.test.mjs
           node --import tsx --test --test-concurrency=1 apps/web/test/local-browser/*.test.mjs apps/web/test/native-docs/{attachment-media,image-media,writer-draft-save}.test.mjs apps/web/test/native-slides/{size-roundtrip,image-export}.test.mjs
           node --import tsx apps/web/test/helpers/office-tool-coverage.mjs "$DYOFFICE_TEST_AI_TOOL_TRACE"
       - name: Retain real local-account Home and Settings screenshots

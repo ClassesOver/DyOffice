@@ -19,10 +19,15 @@ import {objectTransferAdmission} from '../../server/src/modules/files/transfer-a
 
 const sheetsDirectory=process.env.DYOFFICE_TEST_SHEETS_DIST
 const hostManifest=process.env.DYOFFICE_TEST_HOST_MANIFEST
+const wasiRunner=process.env.DYOFFICE_TEST_XLSX_WASI_REFRESH_RUNNER
 const engine=process.env.DYOFFICE_TEST_XLSX_EXTERNAL_ENGINE
-const modes=hostManifest ? engine?[engine]:['rust','hybrid'] : ['node']
+const modes=engine ? [engine] : [
+ ...(hostManifest?['rust','hybrid']:[]),
+ ...(wasiRunner?['wasi']:[]),
+ ...(!hostManifest&&!wasiRunner?['node']:[]),
+]
 
-for(const mode of modes)test(hostManifest
+for(const mode of modes)test(mode!=='node'
  ?`XLSX (${mode}) preserves external formulas while relinking, refreshing and breaking workbook links`
  :'XLSX lists, preserves and breaks workbook links without fetching the source',
 {skip:!sheetsDirectory,timeout:180000},async t=>{
@@ -50,16 +55,19 @@ for(const mode of modes)test(hostManifest
  const directory=await mkdtemp(join(tmpdir(),'dyoffice-external-xlsx-'))
  f.cleanup.push(()=>rm(directory,{recursive:true,force:true}))
  await buildSheetsGateway(join(directory,'gateway.mjs'))
- const native=hostManifest ? JSON.parse(await readFile(hostManifest,'utf8')) : null
+ const native=mode==='rust'||mode==='hybrid' ? JSON.parse(await readFile(hostManifest,'utf8')) : null
  if(native)assert.ok(native.nativeBinary&&native.nativeSha256,'The host manifest must describe a native XLSX binary')
+ const refreshAvailable=Boolean(native||mode==='wasi')
  const runtime=await configuredSheetsRuntime({
   DYOFFICE_AUTH_MODE:'local',DYOFFICE_DEPLOYMENT_ID:f.deploymentId,
   ...(native && {
    DYOFFICE_NATIVE_BINARY:native.nativeBinary,DYOFFICE_NATIVE_SHA256:native.nativeSha256,
   }),
-  ...(mode==='node'||mode==='hybrid' ? {
-   DYOFFICE_SANDBOX_MODE:'subprocess',DYOFFICE_XLSX_NODE_ENGINE:join(directory,'xlsx-node-engine.mjs'),
+  ...(mode!=='rust' ? {
+   DYOFFICE_XLSX_NODE_ENGINE:join(directory,'xlsx-node-engine.mjs'),
   } : {}),
+  ...(mode==='hybrid'?{DYOFFICE_SANDBOX_MODE:'subprocess'}:{}),
+  ...(mode==='wasi'?{DYOFFICE_XLSX_WASI_REFRESH_RUNNER:wasiRunner}:{}),
   DYOFFICE_XLSX_GATEWAY_RUNNER:join(directory,'gateway-process.mjs'),
   DYOFFICE_NATIVE_XLSX_DIRECTORY:sheetsDirectory,
  },{enabled:true})
@@ -132,7 +140,7 @@ for(const mode of modes)test(hostManifest
   const panel=page.getByRole('dialog',{name:'External Links',exact:true})
   await expect(panel.getByRole('cell',{name:externalTarget,exact:true})).toBeVisible({timeout:12000})
   await expect(panel.getByRole('cell',{name:'Catalog',exact:true})).toBeVisible()
-  await expect(panel.getByRole('button',{name:'Update Values',exact:true})).toHaveCount(native?1:0)
+  await expect(panel.getByRole('button',{name:'Update Values',exact:true})).toHaveCount(refreshAvailable?1:0)
   return panel
  }
  const panel=await openExternalLinks()
@@ -158,7 +166,7 @@ for(const mode of modes)test(hostManifest
  const revisionCount=()=>f.transactions.withPrincipalTransaction({kind:'session',token:f.alice.token},async connection=>
   (await connection.query('SELECT count(*)::int AS count FROM file_revisions WHERE file_id=$1',[initial.fileId])).rows[0].count)
  let beforeBreak=head,expectedValue=84
- if(native){
+ if(refreshAvailable){
   const beforeSourceChange=await revisionCount()
   await reopenedPanel.getByRole('button',{name:'Change Source',exact:true}).click()
   await reopenedPanel.getByRole('combobox',{name:'Source',exact:true}).selectOption({label:'Source catalog.xlsx'})

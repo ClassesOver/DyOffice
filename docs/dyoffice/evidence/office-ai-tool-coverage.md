@@ -222,7 +222,7 @@ Web 管理端可以连接外部 MCP 服务器并列出工具。GenOffice 桌面 
 | [`apply_sheet_ops`](../../../apps/shell/src/main/mcp/tools/sheets-tools.ts) | `live` | 见 XLSX 表的 `propose_operations`。MCP 批操作接口待验 |
 | [`create_xlsx`](../../../apps/shell/src/main/mcp/tools/sheets-tools.ts) | `headless` | 见 XLSX 表的 `create_document`。无界面 MCP 创建待验 |
 | [`read_sheet`](../../../apps/shell/src/main/mcp/tools/sheets-tools.ts) | `live` | Web 活动工作簿对应 XLSX 的 `read_range` 与 `read_cells`，跨入口对齐待验 |
-| [`sheet_links`](../../../apps/shell/src/main/mcp/tools/sheets-tools.ts) | `headless` | Web 在 Rust 及 Node 读写配合 Rust 刷新两种配置下已验证外链读取、换源、保存式刷新和断开。纯 Node 刷新、换源和 MCP 入口仍待对齐。[XLSX 验收](genoffice-web-parity.md) |
+| [`sheet_links`](../../../apps/shell/src/main/mcp/tools/sheets-tools.ts) | `headless` | 默认 Node/WASI、Rust 和混合部署均已在 Web 原生编辑器验证外链读取、换源、保存式刷新和断开。MCP 入口仍待对齐。[XLSX 验收](genoffice-web-parity.md) |
 | [`apply_slide_ops`](../../../apps/shell/src/main/mcp/tools/slides-tools.ts) | `live` | 见 PPTX 表的 `apply_ops`。MCP 批操作接口待验 |
 | [`create_pptx`](../../../apps/shell/src/main/mcp/tools/slides-tools.ts) | `headless` | Web 助手使用 `generate_deck` 生成并在原生编辑器保存。无界面 MCP 创建待验 |
 | [`read_deck`](../../../apps/shell/src/main/mcp/tools/slides-tools.ts) | `live` | Web 活动编辑器提供 `read_slide`。整套幻灯片的 MCP 读取待验 |

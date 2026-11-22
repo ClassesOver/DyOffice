@@ -4,7 +4,14 @@ T09 仍在验收中。以下记录启动接线及已执行的检查，不代表�
 
 ## 构建和启用
 
-在仓库根目录用 Node 22 构建浏览器和服务器 gateway，再构建原生执行器。
+默认 SaaS 构建将同一套工作簿计算引擎编译为 WASI，并独立放入 `apps/web/dist-sheets-server`。部署时用 Node 22 启动，服务器自动选用该产物。
+
+```sh
+rustup target add wasm32-wasip1
+npm run build:saas
+```
+
+也可单独构建浏览器和服务器 gateway，再使用宿主原生执行器。
 
 ```sh
 npm run build:sheets --workspace=@dyoffice/web
@@ -20,7 +27,7 @@ DYOFFICE_NATIVE_BINARY=/absolute/path/to/xlsx-sidecar
 DYOFFICE_NATIVE_SHA256=<该二进制的实际 SHA-256>
 ```
 
-原生构建将二进制路径和 SHA-256 写入 `.dyoffice-native-build/host-manifest.json`。需要保留 Node 工作簿读写时，在同一组配置里增加 `DYOFFICE_XLSX_NODE_ENGINE=/absolute/path/to/apps/web/dist-sheets-server/xlsx-node-engine.mjs`。混合模式继续用 Node 读取和保存工作簿，Rust 子进程只接受已授权外链的刷新计算。仅配置 Node 执行器时可查看和断开外链。
+原生构建将二进制路径和 SHA-256 写入 `.dyoffice-native-build/host-manifest.json`。需要保留 Node 工作簿读写时，在同一组配置里增加 `DYOFFICE_XLSX_NODE_ENGINE=/absolute/path/to/apps/web/dist-sheets-server/xlsx-node-engine.mjs`。混合模式继续用 Node 读取和保存工作簿，Rust 子进程只接受已授权外链的刷新计算。仅构建编辑器与 gateway 的 Node 部署仍可查看和断开外链。
 
 该本地运行时仅在 `DYOFFICE_AUTH_MODE=local` 且 `NODE_ENV` 为非 production 时可用。在 Linux 上，服务以 UID 0 运行、存在 `/usr/bin/systemd-run` 且未选择 `DYOFFICE_SANDBOX_MODE=subprocess` 时，原生二进制由 T08 的 systemd 主机沙箱运行。该路径需要相应的 systemd 权限与 cgroup 支持，文档执行无 Docker 依赖。
 
@@ -29,6 +36,8 @@ DYOFFICE_NATIVE_SHA256=<该二进制的实际 SHA-256>
 打开 `/native-xlsx/?fileId=<拥有的 XLSX 文件 UUID>`。入口使用 Cookie 登录和文件所有权校验；原生请求使用文件版本引用，不接受服务器路径。保存通过 T06 上传暂存、租约和幂等提交。关闭服务器会取消并等待该运行时的原生调用。
 
 ## 当前证据
+
+默认 Node/WASI 模式使用真实 `server/index.mjs` 启动。未配置原生可执行文件时，服务器自动发现 WASI 产物，返回 XLSX 编辑能力和外链工作区来源能力，并在 SIGTERM 后清理进程。WASI 产物通过已有子进程的完整脚本摘要校验。在支持的 Linux 宿主配置下沿用 systemd 隔离。WASI 接口本身的文件系统边界见 Node 文档。[实际入口回归](../../../apps/web/test/native-sheets/runtime.test.mjs) [Node WASI 文档](https://github.com/nodejs/node/blob/v22.23.1/doc/api/wasi.md)
 
 混合模式的启动专项与 Rust 单引擎启动专项均已通过。真实 `server/index.mjs` 返回 XLSX 编辑能力和外链工作区来源能力，并在 SIGTERM 后清理进程。无效二进制哈希在两种配置中均被拒绝，不完整的二进制与哈希组合也会被拒绝。[实际入口回归](../../../apps/web/test/native-sheets/runtime.test.mjs)
 
