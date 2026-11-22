@@ -57,3 +57,15 @@ test('a failed query returns status-specific rewrite advice and truncated result
   const prompt = createWorkspaceSourceSkill(async () => ({}), { tools: ['sources_query'], disposed: () => false }).systemPrompt
   assert.match(prompt, /When sourceTruncated is true, re-query with aggregation/)
 })
+
+test('an empty describe of an unqualified table tells the model to use the schema-qualified name', async () => {
+  const { withDescribeHint } = await import('../../../../packages/browser-host/src/source-skill.ts')
+  const empty = { sourceId: 's', metadata: { rows: [] } }
+  assert.match(withDescribeHint('sources.describe', { sourceId: 's', table: 'orders' }, empty).hint, /schema-qualified.*sales\.orders/)
+  assert.equal(withDescribeHint('sources.describe', { sourceId: 's', table: 'sales.orders' }, empty), empty)
+  const found = { metadata: { rows: [{ column_name: 'id' }] } }
+  assert.equal(withDescribeHint('sources.describe', { sourceId: 's', table: 'orders' }, found), found)
+  const skill = createWorkspaceSourceSkill(async () => empty, { tools: ['sources_describe'], disposed: () => false })
+  const out = await skill.executeTool({ id: '1', name: 'sources_describe', input: { sourceId: 's', table: 'orders' } })
+  assert.match(out.output, /"hint":"No columns were found for \\"orders\\"/)
+})

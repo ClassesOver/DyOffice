@@ -6,6 +6,18 @@ const names = new Map(SOURCE_AGENT_TOOLS.map(tool => [tool.name.replaceAll('.', 
 
 const GENERIC_FAILURE = 'The workspace source operation did not complete. Check source assignment, read-only access, limits and session state; do not invent a result. If an earlier result cannot be read, explain that it is unavailable before proposing a refresh.'
 
+/**
+ * An unqualified table name is looked up in the default schema only (public on
+ * PostgreSQL), so `orders` describes nothing when the table is `sales.orders`.
+ * Say so instead of letting the model conclude the table has no columns.
+ */
+export function withDescribeHint(name: SourceToolName, args: Record<string, unknown>, result: unknown): unknown {
+  if (name !== 'sources.describe' || typeof args.table !== 'string' || args.table.includes('.')) return result
+  const rows = (result as { metadata?: { rows?: unknown[] } | null } | null)?.metadata?.rows
+  if (!Array.isArray(rows) || rows.length) return result
+  return { ...(result as object), hint: `No columns were found for "${args.table}" in the default schema. Call sources_describe without a table to list tables, then pass the schema-qualified name it returns (for example sales.${args.table}).` }
+}
+
 /** Status-specific recovery advice so the model rewrites the query instead of retrying it unchanged. */
 export function sourceFailure(name: SourceToolName, status: number | undefined): string {
   if (name === 'sources.query' && status === 504) return "The query exceeded this connection's statement timeout and returned nothing. Do not retry the same SQL. Push the work into a cheaper query: aggregate with GROUP BY instead of fetching rows, filter to a shorter time range on an indexed column, select fewer columns, avoid functions on filtered columns, and pre-aggregate before joins. If a full-history answer is required, split it into smaller time ranges and combine the aggregated results. The owner can raise the timeout on the connection's advanced settings."
@@ -27,7 +39,7 @@ export function createWorkspaceSourceSkill(request: Request, options?: { tools: 
       'sources_query returns a frozen, bounded result and a resultId. Inspect sourceTruncated, units, timezone and hash before drawing conclusions; partial rows do not establish full-dataset totals.',
       ...(options ? [
         'Describe only the source and tables needed. Use the table_schema and table_name returned by metadata to qualify table names. An HTTP source has extraction metadata, not SQL tables.',
-        'Use read-only SQL for known aggregations. Ask a brief question if the metric definition is ambiguous. Report the measure, time range and units. Aggregate in SQL (GROUP BY, SUM/COUNT/AVG, date buckets) before retrieving rows; each connection keeps at most its configured row limit, so detail queries over large tables are truncated. When sourceTruncated is true, re-query with aggregation instead of reasoning over the partial rows.',
+        'Use read-only SQL for known aggregations. Ask a brief question if the metric definition is ambiguous. When a text filter matches no rows, look up the distinct values of that column; if the wording of the user clearly maps to one value (for example 华南区 to 华南), use it and state the mapping, and ask only when several values could match. Report the measure, time range and units. Aggregate in SQL (GROUP BY, SUM/COUNT/AVG, date buckets) before retrieving rows; each connection keeps at most its configured row limit, so detail queries over large tables are truncated. When sourceTruncated is true, re-query with aggregation instead of reasoning over the partial rows.',
         'Use the same artifact.resultId for follow-up checks. Only run a new query when the user requests a refresh or explicitly requests different data. If the old result has expired or is ambiguous, explain or ask which one to use.',
       ] : []),
       ...(!options ? ['To store data in the workspace, call sources_save_result with that resultId. Do not fabricate rows, identifiers, query outcomes or save receipts. Retry an uncertain save only with the exact same commandId, resultId and name.'] : []),
@@ -44,7 +56,7 @@ export function createWorkspaceSourceSkill(request: Request, options?: { tools: 
         if (['ownerId','userId','workspaceId','token','secret','dsn','url','path'].some(key => Object.hasOwn(args, key))) throw Error('Invalid public arguments')
         const result = await request<unknown>(options ? '/api/v1/ai/sources/execute' : '/api/v1/workspace/source-tools/execute', 'POST', { name, arguments: args })
         if (options?.disposed() || signal?.aborted) return { output: name === 'sources.save_result' ? 'The tool response was interrupted. A save may have completed; reconcile the exact same commandId before claiming success or repeating it.' : 'The tool response was interrupted.', isError: true, summary: call.name }
-        return { output: JSON.stringify(result), isError: false, summary: call.name }
+        return { output: JSON.stringify(withDescribeHint(name, args, result)), isError: false, summary: call.name }
       } catch (error) {
         return { output: name === 'sources.save_result'
           ? 'The result save was not confirmed. Do not claim it was saved. Verify permission and retry only the same commandId, resultId and name.'
