@@ -1,0 +1,101 @@
+# Office 助手 P2 架构改进方案
+
+2026-11-22。P0（Codex harness 稳健性）和 P1（公开错误码、数据结果删除）已在 #201 实施。本文是 P2 的设计与分阶段计划，实施前需评审；每一阶段都可单独合并和回滚。
+
+## 1. 统一任务运行时
+
+### 现状
+
+| | Codex harness | DSH 频道 | 后台任务 |
+|---|---|---|---|
+| 状态表 | `harness_task_recovery`（5 种状态） | `assistant_tasks`（8 种状态） | `assistant_background_queue` |
+| 租约/续租 | 进程内心跳，30 s 租约 | 频道连接 epoch | 队列认领 |
+| 浏览器获知进度 | SSE；断线后 `coding-recovery` 每秒轮询 | `assistant-channel` 每 400 ms `pump()` | 主页列表刷新 |
+| 结果回到 Office 对话 | continuation + `harnessResume` | 父任务 continuation | 无 |
+
+三套实现各自处理状态、重试、恢复、取消和授权。P0 修掉的六个缺陷（轮询叠加、续租过脆、授权早于超时过期、邮箱重复处理等）都出在这些各自实现的边界上；DSH 频道仍有同类风险，尚未审查。
+
+### 目标
+
+一个服务端任务运行时（`modules/tasks`），提供：
+
+1. **统一状态机**：`queued → running → (waiting_peer) → succeeded | failed | cancelled | unknown_outcome`，`cancel_requested` 为附加标记。三类任务都映射到这一套状态，任何状态转换都只能用条件 UPDATE 完成（`WHERE state=$expected`）。
+2. **统一租约**：`lease_until` 和 `renewed_at` 两列。续租出错时容忍到租约到期前（规则同 P0 的修复），过期由服务端统一回收为 `unknown_outcome`。
+3. **统一事件流**：每个任务一个单调递增的 `sequence`，事件包括 progress、activity、state、result；浏览器用同一个 SSE 端点按 `afterSequence` 续读，替代 `coding-recovery` 的轮询和频道的 `pump()`。
+4. **统一 continuation**：任务完成后由运行时判断是否回到原 Office 对话，接口沿用现有的 `harnessResume` 校验（文档 revision、模型、调用 ID）。
+5. **统一授权和资源**：数据授权的有效期跟随任务租约自动续期，任务结束即撤销；产物配额按"在用"计算（P0 已为 Codex 产物做到）。
+
+### 分阶段
+
+| 阶段 | 内容 | 风险控制 |
+|---|---|---|
+| T1 | 新建 `assistant_task_events`（task_id, sequence, kind, payload），Codex harness 同时写入新表，旧接口不变 | 只增不改，双写可比对 |
+| T2 | 新 SSE 端点 `/api/v1/assistant/tasks/:id/events?after=`，`coding-recovery` 改为订阅它；轮询保留为降级路径 | 浏览器侧有开关，可回退 |
+| T3 | DSH 频道任务接入同一事件表，`pump()` 改为订阅 | 先审查 DSH 频道 harness（P0 遗留项） |
+| T4 | 后台任务接入；旧状态表改为视图或只读 | 一个版本周期后删除旧表 |
+
+每一阶段的验收：现有 harness/频道集成测试全部通过，再加一个"API 进程被杀后恢复"的用例（参照 `harness-task-recovery` 中已有的用例）。
+
+## 2. 工具动态加载
+
+### 现状
+
+每轮请求都会把该格式的全部工具 schema 发给模型：Word 42 个、Excel 19 个、PPT 20 个、PDF 49 个，此外还有数据源、插入和委派工具。成本按轮计算；工具越多，选错的概率越高，但目前没有数据。
+
+### 方案
+
+先测量，再决定是否改造。
+
+1. **测量（D1）**：扩展 `tools/dyoffice/analysis-eval`，增加"工具选择"场景集。用各格式真实的工具定义（只用定义，执行用桩代替），统计不同模型选对工具的比例，以及每轮的工具 token 数。
+2. **按意图分组（D2，仅在 D1 显示有问题时做）**：
+   - 把工具分为三组。
+     - 常驻：读取上下文、基本编辑、数据源。
+     - 按需：样式、页面设置、图表、批注等。
+     - 罕用：导出、签名等。
+   - 首轮只发常驻工具，外加一个 `load_tools(group)` 元工具；模型调用它后，下一轮再附上对应分组。
+   - 现有的 `composeSkills` 和网关的工具裁剪（`scopeAssistantRequest`）都按工具名过滤，只需在两处同时加入分组，不改变执行路径。
+3. **验收**：D1 场景成功率不下降，平均每轮工具 token 下降。
+
+## 3. 评测扩展
+
+现有 `analysis-eval` 只覆盖 PostgreSQL 数据分析的 5 个场景（真实模型成功率：gpt-5.6-luna 13/15，gpt-6.1-sol 15/15）。
+
+| 扩展 | 内容 | 前提 |
+|---|---|---|
+| E1 编辑器工具 | 以真实工具定义加内存文档目标，覆盖插入表格、改样式、批注等常见请求 | 工具定义可脱离 DOM 导入（docs 的 `tools.ts` 目前依赖编辑器，需要先拆出纯定义文件） |
+| E2 Codex 委派 | 委派 Python 画图、交付、插入文档，检查产物哈希和插入内容 | 评测环境装 Codex CLI 和分析 Python（CI 中已有 `DYOFFICE_TEST_ANALYSIS_PYTHON`） |
+| E3 DSH 协作 | 用现有 DSH fixture 跑委派到恢复的流程 | 复用 `assistant-dsh-delegation` 的 fixture |
+| E4 定期运行 | CI 每周用一个小样本跑一次，结果写入验收记录 | 模型网关凭据由 CI secret 提供 |
+
+报告格式沿用 `report.json`：每次调用的输入和失败输出都已记录（#199）。
+
+## 4. 焦点契约
+
+### 现状
+
+共享的助手面板嵌在四种编辑器宿主里，各宿主都有自己的焦点逻辑：Univer 的单元格编辑器、Tiptap、幻灯片画布、PDF 视图。本轮修了三类焦点问题：
+
+- Excel 在延迟渲染时抢走焦点（chrome focus guard）；
+- 输入框在面板展开动画中测量高度；
+- 任务卡片在切换标签时抢焦点（一次性 focusRequest）。
+
+每一处都是在宿主里单独打补丁。
+
+### 方案
+
+1. 在 `packages/browser-host` 定义 `AssistantFocusScope`：
+   - 助手面板挂载时注册自己的根元素；
+   - 宿主通过 `scope.holdsKeyboard()` 判断键盘是否属于助手；
+   - 宿主在需要重新聚焦编辑器时调用 `scope.yieldTo(editor)`。
+2. 宿主只在 `!scope.holdsKeyboard()` 时才允许自动聚焦编辑器。Excel 的 focus guard 改为查询这个接口，不再自己维护选择器列表（目前是 `.copilot, .ai-panel, .ai-dock, input, textarea…`）。
+3. 助手面板内部的焦点移动（卡片、标签、输入框）只响应显式请求，沿用 #200 的一次性 focusRequest 规则。
+4. 用一个跨四种编辑器的浏览器用例做验收：在面板里输入时触发编辑器重渲染，焦点保持不变；点击编辑器区域，焦点进入编辑器。
+
+## 实施顺序建议
+
+1. T1、T2：Codex 事件流，收益最直接，能替换掉 P0 刚修过的轮询。
+2. 审查 DSH 频道 harness（P0 遗留），再做 T3。
+3. 焦点契约：范围小，可与 T1、T2 并行。
+4. D1、E1：先测量；工具动态加载是否实施，以数据为准。
+
+涉及 #197 正在修改的文件（`apps/web/server/src/app.ts`、`db/roles.ts`、`db/migration-manifest.ts`、`coding/routes.ts` 等）的阶段，等 #197 合并后再开始；迁移编号从 0050 起。
