@@ -8,15 +8,15 @@
 
 首轮定向工具回归共 672 项通过，含 DOCX 71、XLSX 155、PPTX 48、PDF 299、Web 合同与工具 99 项。XLSX 的截断附件提示断言按现有工具文案修正后复跑通过，继续检查读取错误、原件保留和合并用途。[XLSX 截断附件用例](../../../apps/sheets/tests/files-skill.test.ts)
 
-各测试批次合并去重后，浏览器观察到 129 个组合注册，89 个组合向模型返回成功结果。采集仅保留格式、工具名和错误标记。下表中的工具行保留具体效果、成品和待验项，四格式真实模型用例见主报告。[注册用例](../../../apps/web/test/local-browser/office-tool-inventory.test.mjs) [四格式验收](genoffice-web-parity.md)
+各测试批次合并去重后，浏览器观察到 129 个组合注册，96 个组合向模型返回成功结果。采集仅保留格式、工具名和错误标记。下表中的工具行保留具体效果、成品和待验项，四格式真实模型用例见主报告。[注册用例](../../../apps/web/test/local-browser/office-tool-inventory.test.mjs) [四格式验收](genoffice-web-parity.md)
 
 | 格式 | Web 合同 | 浏览器注册 | 定向浏览器成功 |
 | --- | ---: | ---: | ---: |
 | DOCX | 42 | 42 | 13 |
 | XLSX | 19 | 19 | 19 |
-| PPTX | 20 | 20 | 9 |
+| PPTX | 20 | 20 | 16 |
 | PDF | 49 | 48 | 48 |
-| 合计 | 130 | 129 | 89 |
+| 合计 | 130 | 129 | 96 |
 
 PDF 原生旋转使用 `apply_ops.rotatePages`，合同仍保留兼容名称 `rotate_pages`。已验证的成品包括保存重开的冻结数据表、Word 脚注和尾注、Excel 合并附件、PowerPoint 单页重做及图片替换、PDF 批注和分页副本。[数据写回](../../../apps/web/test/local-browser/office-source-analysis.test.mjs) [Word 脚注和尾注](../../../apps/web/test/local-browser/word-knowledge.test.mjs) [Excel 合并附件](../../../apps/web/test/local-browser/sheets-attachment-merge.test.mjs) [PPTX 生成](../../../apps/web/test/local-browser/native-slides-generate.test.mjs) [PDF 工具](../../../apps/web/test/local-browser/native-pdf-open.test.mjs)
 
@@ -97,26 +97,26 @@ Excel 已覆盖 19 个实际注册工具。稀疏工作簿的全量预加载曾�
 
 | 工具 | 浏览器注册 | 候选用例 | 执行或效果证据 |
 | --- | --- | --- | --- |
-| `analyze_media` | 观察到 | [attachment-media.test.mjs](../../../apps/web/test/native-docs/attachment-media.test.mjs)、[ai-media-routes.test.mjs](../../../apps/web/test/unit/ai-media-routes.test.mjs) | 待逐项核验 |
+| `analyze_media` | 观察到 | [attachment-media.test.mjs](../../../apps/web/test/native-docs/attachment-media.test.mjs)、[ai-media-routes.test.mjs](../../../apps/web/test/unit/ai-media-routes.test.mjs) | 浏览器读取本轮生成的媒体引用并收到测试图像描述。[浏览器用例](../../../apps/web/test/local-browser/office-tool-inventory.test.mjs) |
 | `apply_ops` | 观察到 | [dsh-office-handoff.test.mjs](../../../apps/web/test/local-browser/dsh-office-handoff.test.mjs)、[native-pdf-open.test.mjs](../../../apps/web/test/local-browser/native-pdf-open.test.mjs) | 浏览器实际调用成功，交接修改备注，成品包含指定文本。[实测用例](../../../apps/web/test/local-browser/dsh-office-handoff.test.mjs) |
 | `ask_clarification` | 观察到 | [浏览器用例](../../../apps/web/test/local-browser/native-slides-generate.test.mjs) | 真实模型调用，界面跳过后继续生成，[浏览器用例](../../../apps/web/test/local-browser/native-slides-generate.test.mjs) |
 | `edit_chart` | 观察到 | [data-source-gate.test.ts](../../../apps/slides/tests/data-source-gate.test.ts)、[assistant-client.test.mjs](../../../apps/web/test/unit/assistant-client.test.mjs) | 序列值变更需要注明数据来源，单测核对签核边界，[单测](../../../apps/slides/tests/data-source-gate.test.ts) |
-| `execute_slide_script` | 观察到 | [native-slides-harness.test.mjs](../../../apps/web/test/local-browser/native-slides-harness.test.mjs)、[slide-qc.test.ts](../../../apps/slides/tests/slide-qc.test.ts) | 按对象 ID 更新布局与文字，未知对象和非法输入被拒绝，[单测](../../../apps/slides/tests/slide-script.test.ts) |
+| `execute_slide_script` | 观察到 | [native-slides-harness.test.mjs](../../../apps/web/test/local-browser/native-slides-harness.test.mjs)、[slide-qc.test.ts](../../../apps/slides/tests/slide-qc.test.ts) | 通过对象 ID 更新标题。保存后核对幻灯片 XML 中的新标题及旧标题的移除。[浏览器用例](../../../apps/web/test/local-browser/office-tool-inventory.test.mjs) |
 | `generate_deck` | 观察到 | [native-slides-generate.test.mjs](../../../apps/web/test/local-browser/native-slides-generate.test.mjs)、[apply-ops-tool.test.ts](../../../apps/slides/tests/apply-ops-tool.test.ts) | 真实模型成品复跑通过，[浏览器用例](../../../apps/web/test/local-browser/native-slides-generate.test.mjs) |
-| `generate_image` | 观察到 | [pdf-media.test.mjs](../../../apps/web/test/local-browser/pdf-media.test.mjs)、[image-media.test.mjs](../../../apps/web/test/native-docs/image-media.test.mjs) | 浏览器桥接测试将生成的 WebP 转成 PNG，像素核对后用于插图。模型调用与原生成品仍待专门检查。[桥接测试](../../../apps/web/test/local-browser/slides-webp.test.mjs) |
-| `image_search` | 观察到 | [pdf-media.test.mjs](../../../apps/web/test/local-browser/pdf-media.test.mjs)、[global-config-readiness.test.mjs](../../../apps/web/test/local-integration/global-config-readiness.test.mjs) | 待逐项核验 |
+| `generate_image` | 观察到 | [pdf-media.test.mjs](../../../apps/web/test/local-browser/pdf-media.test.mjs)、[image-media.test.mjs](../../../apps/web/test/native-docs/image-media.test.mjs) | 浏览器收到生成图片的媒体引用，后续分析工具成功读取同一张合成 PNG。[浏览器用例](../../../apps/web/test/local-browser/office-tool-inventory.test.mjs) |
+| `image_search` | 观察到 | [pdf-media.test.mjs](../../../apps/web/test/local-browser/pdf-media.test.mjs)、[global-config-readiness.test.mjs](../../../apps/web/test/local-integration/global-config-readiness.test.mjs) | 浏览器返回合成搜索结果中的标题和图片地址。[浏览器用例](../../../apps/web/test/local-browser/office-tool-inventory.test.mjs) |
 | `insert_analysis_image` | 观察到 | [分析插入工具测试](../../../apps/web/test/unit/analysis-insert-skill.test.mjs) | DOCX 和 PPTX 工具单测均通过，核对验证过的图像字节、来源标记及目标写入；原生成品保存重开待核验 |
 | `insert_data_result` | 观察到 | [office-source-analysis.test.mjs](../../../apps/web/test/local-browser/office-source-analysis.test.mjs)、[office-tool-inventory.test.mjs](../../../apps/web/test/local-browser/office-tool-inventory.test.mjs) | 在当前幻灯片插入原生表格。保存后检查 PPTX 表格 XML，重开后核对日期栏和金额栏是 2026-01 / 30、2026-02 / 40。[浏览器用例](../../../apps/web/test/local-browser/office-source-analysis.test.mjs) |
 | `insert_web_image` | 观察到 | [native-slides-attachment.test.mjs](../../../apps/web/test/local-browser/native-slides-attachment.test.mjs)、[ai-picture-tools.test.ts](../../../apps/slides/tests/ai-picture-tools.test.ts) | 浏览器使用当前消息上传的 PNG 插入图片，保存后从幻灯片关系部件读取像素。[浏览器用例](../../../apps/web/test/local-browser/native-slides-attachment.test.mjs) |
 | `list_style_templates` | 观察到 | [native-slides-generate.test.mjs](../../../apps/web/test/local-browser/native-slides-generate.test.mjs)、[generate-deck.test.ts](../../../apps/slides/tests/generate-deck.test.ts) | 浏览器列出已保存的样式模板。[浏览器用例](../../../apps/web/test/local-browser/native-slides-generate.test.mjs) |
-| `load_guide` | 观察到 | [PPTX 批处理工具测试](../../../apps/slides/tests/apply-ops-tool.test.ts) | 单测通过。返回插入操作说明并拒绝未知分组，幻灯片保持原样；Web 浏览器待核验 |
+| `load_guide` | 观察到 | [PPTX 批处理工具测试](../../../apps/slides/tests/apply-ops-tool.test.ts) | 浏览器按分组返回插入操作说明。[浏览器用例](../../../apps/web/test/local-browser/office-tool-inventory.test.mjs) |
 | `plan_deck` | 观察到 | [slide-progress.test.ts](../../../apps/slides/tests/slide-progress.test.ts) | 规划五页后，进度将五页全部标为未生成，[单测](../../../apps/slides/tests/slide-progress.test.ts) |
-| `read_attachment` | 观察到 | [native-pdf-create-document.test.mjs](../../../apps/web/test/local-browser/native-pdf-create-document.test.mjs)、[files-skill.test.ts](../../../apps/slides/tests/files-skill.test.ts) | 单测核对可用附件正文、无效索引和重复读取，[单测](../../../apps/slides/tests/files-skill.test.ts) |
+| `read_attachment` | 观察到 | [native-pdf-create-document.test.mjs](../../../apps/web/test/local-browser/native-pdf-create-document.test.mjs)、[files-skill.test.ts](../../../apps/slides/tests/files-skill.test.ts) | 浏览器读取本轮上传的文本附件并核对正文标记。[浏览器用例](../../../apps/web/test/local-browser/office-tool-inventory.test.mjs) |
 | `read_slide` | 观察到 | [native-slides-generate.test.mjs](../../../apps/web/test/local-browser/native-slides-generate.test.mjs)、[layout-tools.test.ts](../../../apps/slides/tests/layout-tools.test.ts) | 真实模型成品复跑通过，[浏览器用例](../../../apps/web/test/local-browser/native-slides-generate.test.mjs) |
 | `regenerate_slide` | 观察到 | [native-slides-generate.test.mjs](../../../apps/web/test/local-browser/native-slides-generate.test.mjs)、[data-source-gate.test.ts](../../../apps/slides/tests/data-source-gate.test.ts) | 真实模型成品复跑通过，[浏览器用例](../../../apps/web/test/local-browser/native-slides-generate.test.mjs) |
 | `replace_image` | 观察到 | [native-slides-attachment.test.mjs](../../../apps/web/test/local-browser/native-slides-attachment.test.mjs)、[pdf-media.test.mjs](../../../apps/web/test/local-browser/pdf-media.test.mjs) | 替换为新消息上传的 PNG，保存后像素正确，原图框 XML 保持一致，未送达的附件索引被拒绝。[浏览器用例](../../../apps/web/test/local-browser/native-slides-attachment.test.mjs) |
 | `save_style_template` | 观察到 | [native-slides-generate.test.mjs](../../../apps/web/test/local-browser/native-slides-generate.test.mjs)、[generate-deck.test.ts](../../../apps/slides/tests/generate-deck.test.ts) | 保存了本轮实际生成的样式模板。[浏览器用例](../../../apps/web/test/local-browser/native-slides-generate.test.mjs) |
-| `web_search` | 观察到 | [t12-workspace-settings.test.mjs](../../../apps/web/test/local-browser/t12-workspace-settings.test.mjs)、[data-source-gate.test.ts](../../../apps/slides/tests/data-source-gate.test.ts) | 搜索结果进入图表数据来源校验，缺少检索记录的来源声明被拒绝，[单测](../../../apps/slides/tests/data-source-gate.test.ts) |
+| `web_search` | 观察到 | [t12-workspace-settings.test.mjs](../../../apps/web/test/local-browser/t12-workspace-settings.test.mjs)、[data-source-gate.test.ts](../../../apps/slides/tests/data-source-gate.test.ts) | 浏览器返回合成搜索服务提供的标题和摘要。[浏览器用例](../../../apps/web/test/local-browser/office-tool-inventory.test.mjs) |
 
 ## PDF
 

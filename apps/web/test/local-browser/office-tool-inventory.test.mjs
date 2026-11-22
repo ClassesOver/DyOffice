@@ -26,7 +26,7 @@ import {ASSISTANT_FORMAT_TOOLS} from '../../../../packages/web-contracts/src/ass
 for(const mode of ['creation','no-word','all'])test(mode==='no-word'
  ? 'Excel offers workspace creation formats without DOCX when native Word is unavailable'
  : mode==='creation'?'Word and Excel expose only executable creation formats, including standalone CSV download'
- : 'native Office editors scope model tools, save WebP images in Excel and complete Harness delegation',{timeout:180000},async t=>{
+ : 'native Office editors scope model tools, verify media and complete Harness delegation',{timeout:240000},async t=>{
  const creationOnly=mode!=='all',noWord=mode==='no-word'
  const directory=await mkdtemp(join(tmpdir(),'dyoffice-office-tools-'))
  let app,browser,server
@@ -141,6 +141,27 @@ for(const mode of ['creation','no-word','all'])test(mode==='no-word'
     assert.ok(tools.some(tool=>tool.function.name===name))
     delta=toolCall(name,attachment?{index:0}:{query:'supplier registry',maxResults:1})
    }
+  }else if(prompt?.includes('Slides media and script probe')){
+   const results=messages.slice(messages.findLastIndex(message=>message.role==='user')+1)
+    .filter(message=>message.role==='tool').map(message=>JSON.parse(message.content))
+   const generatedUrl=results[3]?.output.match(/https:\/\/generated-image\.invalid\/[A-Za-z0-9-]+/)?.[0]
+   const cases=[
+    ['read_attachment',{index:0},/Slides reference 651/],
+    ['web_search',{query:'slide source',maxResults:1},/Slide source citation/],
+    ['image_search',{query:'slide reference image',maxResults:1},/https:\/\/images\.example\/blue\.webp/],
+    ['generate_image',{prompt:'Synthetic WebP'},/Image generated, URL/],
+    ['analyze_media',{mediaUrls:[generatedUrl],requirements:'Describe the image'},/Solid red reference image/],
+    ['load_guide',{groups:['insert']},/insert/i],
+    ['execute_slide_script',{slideIndex:0,code:'const title = els.find(e => e.text && e.text.includes("Acceptance title")); setText(title.id, "Evidence script title"); return "Updated the title";'},/Updated the title/],
+   ]
+   if(results.length){
+    const {output,isError}=results.at(-1),[name,,expected]=cases[results.length-1]
+    assert.ok(!isError,name+': '+output)
+    assert.match(output,expected,name+': '+output)
+   }
+   if(results.length===4)assert.ok(generatedUrl)
+   const next=cases[results.length]
+   delta=next?toolCall(next[0],next[1],'slides-'+next[0]):{content:'Slides media and script verified'}
   }else if(/Excel workspace export (xlsx|docx|pdf)/.test(prompt??'')){
    const type=prompt.match(/Excel workspace export (xlsx|docx|pdf)/)[1]
    const result=messages.at(-1)
@@ -413,8 +434,15 @@ for(const mode of ['creation','no-word','all'])test(mode==='no-word'
   const request=route.request().postDataJSON()
   imageRequests.push(request.action)
   if(request.action==='generate_image'){
-   assert.deepEqual(request,{action:'generate_image',prompt:'Synthetic WebP'})
+   const {transparentBackground,...imageRequest}=request
+   assert.ok(transparentBackground===undefined||transparentBackground===false)
+   assert.deepEqual(imageRequest,{action:'generate_image',prompt:'Synthetic WebP'})
    return route.fulfill({json:{url:'data:image/webp;base64,UklGRhwAAABXRUJQVlA4TA8AAAAvA8AAAAcQ/Y/+ByKi/wEA'}})
+  }
+  if(request.action==='analyze_media'){
+   assert.equal(request.requirements,'Describe the image')
+   assert.match(request.mediaUrls[0],/^data:image\/png;base64,/)
+   return route.fulfill({json:{text:'Solid red reference image'}})
   }
   if(request.url!==remoteImage)return route.abort()
   return route.fulfill({json:{mime:'image/webp',base64:'UklGRhwAAABXRUJQVlA4TA8AAAAvAkAAAAcQ0f/+ByKi/wEA'}})
@@ -483,7 +511,32 @@ for(const mode of ['creation','no-word','all'])test(mode==='no-word'
  }
  assert.equal(await head(),revision)
  assert.deepEqual(await f.files.readFile(f.alice.token,source.fileId,source.revision),original)
- await probe('pptx','configured',{configured:true})
+ const slides=await probe('pptx','configured',{configured:true})
+ await page.route('**/api/v1/ai/search',route=>{
+  const request=route.request().postDataJSON()
+  if(request.kind==='web_search'){
+   assert.deepEqual(request,{kind:'web_search',query:'slide source',maxResults:1})
+   return route.fulfill({json:{method:'serper',results:[{title:'Slide source citation',url:'https://results.example/slide',snippet:'Source excerpt'}]}})
+  }
+  assert.deepEqual(request,{kind:'image_search',query:'slide reference image',maxResults:1})
+  return route.fulfill({json:{method:'serper',images:[{title:'Blue',imageUrl:remoteImage,sourceUrl:'https://images.example',source:'Test'}]}})
+ })
+ await slides.locator('.ai-plus-btn').click()
+ const slidesChooser=page.waitForEvent('filechooser')
+ await slides.getByRole('menuitem',{name:'添加文件',exact:true}).click()
+ const slidesParse=page.waitForResponse(response=>new URL(response.url()).pathname==='/api/v1/ai/attachments/parse')
+ await (await slidesChooser).setFiles({name:'slides-reference.txt',mimeType:'text/plain',buffer:Buffer.from('Slides reference 651')})
+ assert.ok((await slidesParse).ok())
+ await expect(slides.locator('.ai-attachments').getByText('slides-reference.txt',{exact:true})).toBeVisible()
+ await slides.locator('textarea').fill('Slides media and script probe')
+ await slides.getByRole('button',{name:'发送',exact:true}).click()
+ await expect(slides.getByText('Slides media and script verified',{exact:true})).toBeVisible({timeout:45000})
+ const slidesHead=async()=>(await f.files.openFile(f.alice.token,files.pptx.fileId)).file.revision
+ assert.equal(await slidesHead(),files.pptx.revision)
+ await page.keyboard.press('Control+s')
+ await expect.poll(slidesHead,{timeout:30000}).not.toBe(files.pptx.revision)
+ const savedSlides=await JSZip.loadAsync(await f.files.readFile(f.alice.token,files.pptx.fileId,await slidesHead()))
+ assert.match(await savedSlides.file('ppt/slides/slide1.xml').async('string'),/Evidence script title/)
  const panel=await probe('pdf','configured',{configured:true})
  await panel.locator('textarea').fill('Office Harness probe pdf')
  await panel.getByRole('button',{name:'发送',exact:true}).click()
