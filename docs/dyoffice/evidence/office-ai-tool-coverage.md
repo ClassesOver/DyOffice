@@ -8,15 +8,15 @@
 
 首轮定向工具回归共 672 项通过，含 DOCX 71、XLSX 155、PPTX 48、PDF 299、Web 合同与工具 99 项。XLSX 的截断附件提示断言按现有工具文案修正后复跑通过，继续检查读取错误、原件保留和合并用途。[XLSX 截断附件用例](../../../apps/sheets/tests/files-skill.test.ts)
 
-各测试批次合并去重后，浏览器观察到 129 个组合注册，126 个组合向模型返回成功结果。采集仅保留格式、工具名和错误标记。下表中的工具行保留具体效果、成品和待验项，四格式真实模型用例见主报告。[注册用例](../../../apps/web/test/local-browser/office-tool-inventory.test.mjs) [四格式验收](genoffice-web-parity.md)
+各测试批次合并去重后，浏览器观察到 129 个组合注册，129 个已注册组合均向模型返回过成功结果。采集仅保留格式、工具名和错误标记。下表中的工具行保留具体效果、成品和待验项，四格式真实模型用例见主报告。[注册用例](../../../apps/web/test/local-browser/office-tool-inventory.test.mjs) [四格式验收](genoffice-web-parity.md)
 
 | 格式 | Web 合同 | 浏览器注册 | 定向浏览器成功 |
 | --- | ---: | ---: | ---: |
-| DOCX | 42 | 42 | 40 |
+| DOCX | 42 | 42 | 42 |
 | XLSX | 19 | 19 | 19 |
-| PPTX | 20 | 20 | 19 |
+| PPTX | 20 | 20 | 20 |
 | PDF | 49 | 48 | 48 |
-| 合计 | 130 | 129 | 126 |
+| 合计 | 130 | 129 | 129 |
 
 PDF 原生旋转使用 `apply_ops.rotatePages`，合同仍保留兼容名称 `rotate_pages`。已验证的成品包括保存重开的冻结数据表、Word 脚注和尾注、Excel 合并附件、PowerPoint 单页重做及图片替换、PDF 批注和分页副本。[数据写回](../../../apps/web/test/local-browser/office-source-analysis.test.mjs) [Word 脚注和尾注](../../../apps/web/test/local-browser/word-knowledge.test.mjs) [Excel 合并附件](../../../apps/web/test/local-browser/sheets-attachment-merge.test.mjs) [PPTX 生成](../../../apps/web/test/local-browser/native-slides-generate.test.mjs) [PDF 工具](../../../apps/web/test/local-browser/native-pdf-open.test.mjs)
 
@@ -30,7 +30,7 @@ Excel 已覆盖 19 个实际注册工具。稀疏工作簿的全量预加载曾�
 | `add_comment` | 观察到 | [ai-comment-tools.test.ts](../../../apps/docs/tests/ai-comment-tools.test.ts)、[ai-read-only-tools.test.ts](../../../apps/docs/tests/ai-read-only-tools.test.ts) | 为第一段精确选词添加批注，保存成品包含其正文与原生批注标记。[浏览器用例](../../../apps/web/test/local-browser/word-knowledge.test.mjs) |
 | `analyze_media` | 观察到 | [attachment-media.test.mjs](../../../apps/web/test/native-docs/attachment-media.test.mjs)、[ai-media-routes.test.mjs](../../../apps/web/test/unit/ai-media-routes.test.mjs) | 当前消息的 PNG 按预期转交分析工具并返回结果，过期附件索引被拒绝。[浏览器用例](../../../apps/web/test/native-docs/attachment-media.test.mjs) |
 | `apply_ops` | 观察到 | [dsh-office-handoff.test.mjs](../../../apps/web/test/local-browser/dsh-office-handoff.test.mjs)、[native-pdf-open.test.mjs](../../../apps/web/test/local-browser/native-pdf-open.test.mjs) | 将自定义样式应用到指定段落，成品正文保留对应的段落样式引用。[浏览器用例](../../../apps/web/test/local-browser/word-knowledge.test.mjs) |
-| `create_document` | 观察到 | [native-pdf-create-document.test.mjs](../../../apps/web/test/local-browser/native-pdf-create-document.test.mjs)、[ai-create-document.test.ts](../../../apps/docs/tests/ai-create-document.test.ts) | 通过的单测包含本工具用例；Web 路径待逐项核验，[单测](../../../apps/docs/tests/ai-create-document.test.ts) |
+| `create_document` | 观察到 | [office-tool-inventory.test.mjs](../../../apps/web/test/local-browser/office-tool-inventory.test.mjs)、[ai-create-document.test.ts](../../../apps/docs/tests/ai-create-document.test.ts) | 在工作区创建并打开独立 DOCX。等待最终保存后，从成品读取指定正文。[浏览器用例](../../../apps/web/test/local-browser/office-tool-inventory.test.mjs) |
 | `define_style` | 观察到 | [ai-read-only-tools.test.ts](../../../apps/docs/tests/ai-read-only-tools.test.ts)、[ai-style-floating-tools.test.ts](../../../apps/docs/tests/ai-style-floating-tools.test.ts) | 新增段落样式 AuditCallout，保存后在 styles.xml 核对样式 ID。[浏览器用例](../../../apps/web/test/local-browser/word-knowledge.test.mjs) |
 | `delete_comment` | 观察到 | [ai-comment-tools.test.ts](../../../apps/docs/tests/ai-comment-tools.test.ts)、[ai-read-only-tools.test.ts](../../../apps/docs/tests/ai-read-only-tools.test.ts) | 删除临时批注，读取结果和成品均省略该批注。[浏览器用例](../../../apps/web/test/local-browser/word-knowledge.test.mjs) |
 | `delete_note` | 观察到 | [native-pdf-open.test.mjs](../../../apps/web/test/local-browser/native-pdf-open.test.mjs)、[ai-read-only-tools.test.ts](../../../apps/docs/tests/ai-read-only-tools.test.ts) | 删除临时脚注，保存成品排除该正文与多余引用，同时保留尾注。[浏览器用例](../../../apps/web/test/local-browser/word-knowledge.test.mjs) |
@@ -40,7 +40,7 @@ Excel 已覆盖 19 个实际注册工具。稀疏工作簿的全量预加载曾�
 | `generate_mindmap` | 观察到 | [mind-map.test.ts](../../../apps/docs/tests/mind-map.test.ts)、[office-tool-inventory.test.mjs](../../../apps/web/test/local-browser/office-tool-inventory.test.mjs) | 浏览器实际调用成功，交互式思维导图可呈现，原文档未生成修订。[实测用例](../../../apps/web/test/local-browser/office-tool-inventory.test.mjs) |
 | `get_document_context` | 观察到 | [agent-docs.test.ts](../../../apps/docs/tests/agent-docs.test.ts)、[ai-page-setup.test.ts](../../../apps/docs/tests/ai-page-setup.test.ts) | 读取当前 Word 文档的正文预览。[浏览器用例](../../../apps/web/test/local-browser/word-knowledge.test.mjs) |
 | `image_search` | 观察到 | [pdf-media.test.mjs](../../../apps/web/test/local-browser/pdf-media.test.mjs)、[global-config-readiness.test.mjs](../../../apps/web/test/local-integration/global-config-readiness.test.mjs) | 浏览器返回合成图片检索的地址。[浏览器用例](../../../apps/web/test/native-docs/image-media.test.mjs) |
-| `insert_analysis_image` | 观察到 | [分析插入工具测试](../../../apps/web/test/unit/analysis-insert-skill.test.mjs) | DOCX 和 PPTX 工具单测均通过，核对验证过的图像字节、来源标记及目标写入；原生成品保存重开待核验 |
+| `insert_analysis_image` | 观察到 | [分析插入工具测试](../../../apps/web/test/unit/analysis-insert-skill.test.mjs) | 浏览器调用把 Coding 交付的 PNG 写入当前文件。成品内嵌字节与交付一致，并核对图像哈希和来源快照。[浏览器用例](../../../apps/web/test/local-browser/office-source-analysis.test.mjs) |
 | `insert_chart` | 观察到 | [ai-chart-tools.test.ts](../../../apps/docs/tests/ai-chart-tools.test.ts)、[ai-read-only-tools.test.ts](../../../apps/docs/tests/ai-read-only-tools.test.ts) | 创建两类的原生柱状图，保存后核对更新过的图表部件。[浏览器用例](../../../apps/web/test/local-browser/word-knowledge.test.mjs) |
 | `insert_content` | 观察到 | [native-docx-harness.test.mjs](../../../apps/web/test/local-browser/native-docx-harness.test.mjs)、[native-word-sheets-codex.test.mjs](../../../apps/web/test/local-browser/native-word-sheets-codex.test.mjs) | 真实模型成品复跑通过，独立的浏览器回归验证换标签页后续接委派并写入 Word。[真实模型用例](../../../apps/web/test/local-browser/native-word-sheets-codex.test.mjs) [浏览器续接用例](../../../apps/web/test/local-browser/native-docx-harness.test.mjs) |
 | `insert_data_result` | 观察到 | [office-source-analysis.test.mjs](../../../apps/web/test/local-browser/office-source-analysis.test.mjs)、[office-tool-inventory.test.mjs](../../../apps/web/test/local-browser/office-tool-inventory.test.mjs) | 工具从冻结结果写入原生表格。显式保存后解析 DOCX，两行分别核对为 30 和 40，重开后表格仍正确。[浏览器用例](../../../apps/web/test/local-browser/office-source-analysis.test.mjs) |
@@ -105,7 +105,7 @@ Excel 已覆盖 19 个实际注册工具。稀疏工作簿的全量预加载曾�
 | `generate_deck` | 观察到 | [native-slides-generate.test.mjs](../../../apps/web/test/local-browser/native-slides-generate.test.mjs)、[apply-ops-tool.test.ts](../../../apps/slides/tests/apply-ops-tool.test.ts) | 真实模型成品复跑通过，[浏览器用例](../../../apps/web/test/local-browser/native-slides-generate.test.mjs) |
 | `generate_image` | 观察到 | [pdf-media.test.mjs](../../../apps/web/test/local-browser/pdf-media.test.mjs)、[image-media.test.mjs](../../../apps/web/test/native-docs/image-media.test.mjs) | 浏览器收到生成图片的媒体引用，后续分析工具成功读取同一张合成 PNG。[浏览器用例](../../../apps/web/test/local-browser/office-tool-inventory.test.mjs) |
 | `image_search` | 观察到 | [pdf-media.test.mjs](../../../apps/web/test/local-browser/pdf-media.test.mjs)、[global-config-readiness.test.mjs](../../../apps/web/test/local-integration/global-config-readiness.test.mjs) | 浏览器返回合成搜索结果中的标题和图片地址。[浏览器用例](../../../apps/web/test/local-browser/office-tool-inventory.test.mjs) |
-| `insert_analysis_image` | 观察到 | [分析插入工具测试](../../../apps/web/test/unit/analysis-insert-skill.test.mjs) | DOCX 和 PPTX 工具单测均通过，核对验证过的图像字节、来源标记及目标写入；原生成品保存重开待核验 |
+| `insert_analysis_image` | 观察到 | [分析插入工具测试](../../../apps/web/test/unit/analysis-insert-skill.test.mjs) | 浏览器调用把 Coding 交付的 PNG 写入当前文件。成品内嵌字节与交付一致，并核对图像哈希和来源快照。[浏览器用例](../../../apps/web/test/local-browser/office-source-analysis.test.mjs) |
 | `insert_data_result` | 观察到 | [office-source-analysis.test.mjs](../../../apps/web/test/local-browser/office-source-analysis.test.mjs)、[office-tool-inventory.test.mjs](../../../apps/web/test/local-browser/office-tool-inventory.test.mjs) | 在当前幻灯片插入原生表格。保存后检查 PPTX 表格 XML，重开后核对日期栏和金额栏是 2026-01 / 30、2026-02 / 40。[浏览器用例](../../../apps/web/test/local-browser/office-source-analysis.test.mjs) |
 | `insert_web_image` | 观察到 | [native-slides-attachment.test.mjs](../../../apps/web/test/local-browser/native-slides-attachment.test.mjs)、[ai-picture-tools.test.ts](../../../apps/slides/tests/ai-picture-tools.test.ts) | 浏览器使用当前消息上传的 PNG 插入图片，保存后从幻灯片关系部件读取像素。[浏览器用例](../../../apps/web/test/local-browser/native-slides-attachment.test.mjs) |
 | `list_style_templates` | 观察到 | [native-slides-generate.test.mjs](../../../apps/web/test/local-browser/native-slides-generate.test.mjs)、[generate-deck.test.ts](../../../apps/slides/tests/generate-deck.test.ts) | 浏览器列出已保存的样式模板。[浏览器用例](../../../apps/web/test/local-browser/native-slides-generate.test.mjs) |

@@ -82,6 +82,7 @@ const DECK_LINK_PROTOCOLS=['http:','https:','mailto:'] as const
 const MAX_INPUT = 32 * 1024 * 1024
 const MAX_PAYLOAD = 256 * 1024
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024
+const MAX_IMAGE_DATA_URL = 'data:image/jpeg;base64,'.length + Math.ceil(MAX_IMAGE_BYTES / 3) * 4
 const MAX_TIFF_PIXELS = 16 * 1024 * 1024
 const MAX_RENDER_IMAGE_BYTES = 8 * 1024 * 1024
 const ZIP_LIMITS = {maxParts:1500, maxPartBytes:8*1024*1024, maxTotalBytes:64*1024*1024}
@@ -117,13 +118,14 @@ function imageContent(input:SlidesImageCommand){
   if(!size||size.w<1||size.h<1||size.w>100_000||size.h>100_000||size.w*size.h>100_000_000)throw new Error('INVALID_MEDIA')
   return {bytes,ext,size}
 }
-/** JSON-only surface for GenOffice's AI-callable ops. Media-bearing and explicitly
- * non-AI-callable ops stay out; every accepted op is revalidated by the op registry. */
+/** JSON command fields for native Web operations. Each accepted op is also
+ * revalidated by the op registry. */
 const OP_FIELDS: Record<string, readonly string[]> = {
   setText: ['op','target','paragraphs','group'],
   setFill: ['op','target','fill','group'],
   setStroke: ['op','target','stroke','group'],
   addElement: ['op','target','offset','kind','paragraphs','fill','stroke','bodyPr','adjustments'],
+  addPicture: ['op','target','offset','bytes','ext','descr'],
   deleteElement: ['op','target'],
   setTransform: ['op','target','box','absBox','rotDeg','group','resizeTableGrid'],
   reorderElement: ['op','target','dir'],
@@ -327,15 +329,16 @@ function checkLayoutRef(value: unknown) {
   if (typeof value === 'string' && value.length > 0 && value.length <= 512 && /^[\w./ -]+$/.test(value)) return
   throw new Error('INVALID_LAYOUT')
 }
-/** JSON-only command surface. Never forward TxnRequest.parts, master-part targets, media bytes
- * or arbitrary op names: each op is field-checked against the whitelist above, then re-validated
- * and journaled by the op registry inside the selected transaction mode. */
+/** Copy the batch and validate its fields before scheduling a mutation. One inline
+ * PNG or JPEG can share the transaction with its provenance text box. */
 function captureOps(input: unknown): Op[] {
   if (!Array.isArray(input) || input.length === 0 || input.length > 100) throw new Error('OPS_LIMIT')
   let json: string
   try { json=JSON.stringify(input) } catch { throw new Error('INVALID_OPS') }
-  if (new TextEncoder().encode(json).byteLength > MAX_PAYLOAD) throw new Error('PAYLOAD_LIMIT')
+  const payloadBytes = Buffer.byteLength(json)
+  if (payloadBytes > MAX_PAYLOAD + MAX_IMAGE_DATA_URL) throw new Error('PAYLOAD_LIMIT')
   const captured: unknown[]=JSON.parse(json)
+  let pictureBytes = 0
   for (const value of captured) {
     if (!record(value) || typeof value.op !== 'string') throw new Error('UNSUPPORTED_OP')
     const fields = OP_FIELDS[value.op]
@@ -372,6 +375,20 @@ function captureOps(input: unknown): Op[] {
       case 'setStroke':
         checkStrokePatch(value.stroke, true)
         break
+      case 'addPicture': {
+        geometry(value.offset, 'INVALID_GEOMETRY')
+        if (pictureBytes || (value.ext !== 'png' && value.ext !== 'jpg') ||
+            typeof value.bytes !== 'string' || value.bytes.length > MAX_IMAGE_DATA_URL ||
+            (value.descr !== undefined && (typeof value.descr !== 'string' || value.descr.length > 500))) throw new Error('INVALID_MEDIA')
+        const prefix = value.ext === 'png' ? 'data:image/png;base64,' : 'data:image/jpeg;base64,'
+        if (!value.bytes.startsWith(prefix)) throw new Error('INVALID_MEDIA')
+        const encoded = value.bytes.slice(prefix.length)
+        const bytes = Buffer.from(encoded, 'base64')
+        if (bytes.toString('base64') !== encoded) throw new Error('INVALID_MEDIA')
+        pictureBytes = value.bytes.length
+        value.bytes = imageContent({mode:'insert',slide:0,placement:'natural',bytes,ext:value.ext}).bytes
+        break
+      }
       case 'addElement':
         geometry(value.offset, 'INVALID_GEOMETRY')
         if (typeof value.kind !== 'string' || !/^[A-Za-z][A-Za-z0-9]{0,63}$/.test(value.kind)) throw new Error('INVALID_KIND')
@@ -436,6 +453,7 @@ function captureOps(input: unknown): Op[] {
         break
     }
   }
+  if (payloadBytes - pictureBytes > MAX_PAYLOAD) throw new Error('PAYLOAD_LIMIT')
   return captured as Op[]
 }
 function fitWidth(fitWidthPx?: number): number {
@@ -725,7 +743,8 @@ export async function createPptxSession(bytes: Uint8Array, signal?: AbortSignal)
           stateGeneration=generation
         }
         const journal=(result.records ?? []).map(record=>({op:{op:record.op.op},...(record.slideId ? {slideId:record.slideId} : {}),...(record.created ? {created:record.created} : {})}))
-        return {generation,stateGeneration,...history(),records:result.records ?? [],...outlineOf(state),created:createdOf(state,result.records ?? []),transaction:{applied:result.applied,...(result.dryRun ? {dryRun:true} : {}),...(result.plan ? {plan:result.plan} : {}),...(result.failures ? {failures:result.failures.map(({index,error})=>({index,error}))} : {}),...(result.records ? {records:journal} : {})}}
+        const records=(result.records??[]).map((record,index)=>record.op.op==='addPicture'?journal[index]!:record)
+        return {generation,stateGeneration,...history(),records,...outlineOf(state),created:createdOf(state,result.records ?? []),transaction:{applied:result.applied,...(result.dryRun ? {dryRun:true} : {}),...(result.plan ? {plan:result.plan} : {}),...(result.failures ? {failures:result.failures.map(({index,error})=>({index,error}))} : {}),...(result.records ? {records:journal} : {})}}
       })
     },
     async editChart(expected,slideIndex,sourceId,patch,signal) {

@@ -9,6 +9,33 @@ import JSZip from 'jszip'
 const bytes=()=>readFile(new URL('../fixtures/slides/acceptance.pptx',import.meta.url))
 const pixel=()=>new Uint8Array(Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=','base64'))
 
+test('native analysis picture and provenance commit atomically with bounded image validation',async t=>{
+ const session=await openIsolatedPptxSession({fileId:'f-analysis-picture',revision:'r-1',bytes:await bytes()},{timeoutMs:60000,unsafeTestOnly:true})
+ t.after(()=>session.close())
+ const base64=Buffer.from(pixel()).toString('base64')
+ const target={slide:0},offset={x:0,y:0,cx:952500,cy:952500}
+ const picture={op:'addPicture',target,offset,ext:'png',bytes:'data:image/png;base64,'+base64,descr:'Analysis chart'}
+ const provenance={op:'addElement',target,offset,kind:'textbox',paragraphs:[{runs:[{text:'Frozen input provenance'}]}]}
+ await assert.rejects(()=>session.apply(0,[picture,picture]),{message:'INVALID_MEDIA'})
+ await assert.rejects(()=>session.apply(0,[{...picture,bytes:'data:image/jpeg;base64,'+base64,ext:'jpg'}]),{message:'INVALID_MEDIA'})
+ await assert.rejects(()=>session.apply(0,[{...picture,bytes:picture.bytes+'!'}]),{message:'INVALID_MEDIA'})
+ const rejected=await session.apply(0,[picture,{...provenance,target:{slide:99}}])
+ assert.equal(rejected.transaction.applied,false)
+ assert.equal(rejected.generation,0)
+ const applied=await session.apply(0,[picture,provenance])
+ assert.equal(applied.generation,1)
+ assert.deepEqual(applied.records[0].op,{op:'addPicture'})
+ const rendered=await session.render(1,0)
+ assert.equal(rendered.nodes.filter(node=>node.type==='picture').length,1)
+ const archive=await JSZip.loadAsync((await session.exportBytes(1)).bytes)
+ const imageParts=await Promise.all(archive.file(/^ppt\/media\/.+\.png$/).map(part=>part.async('nodebuffer')))
+ assert.ok(imageParts.some(image=>image.equals(Buffer.from(pixel()))))
+ assert.match(await archive.file('ppt/slides/slide1.xml').async('string'),/Frozen input provenance/)
+ const undone=await session.undo(1)
+ assert.equal(undone.stateGeneration,0)
+ assert.equal(undone.slides[0].nodes.filter(node=>node.type==='picture').length,0)
+})
+
 test('isolated AI history batches restore the exact pre-run deck and remain undoable',async t=>{
  const session=await openIsolatedPptxSession({fileId:'f-ai-history',revision:'r-1',bytes:await bytes()},{timeoutMs:60000,unsafeTestOnly:true})
  t.after(()=>session.close())

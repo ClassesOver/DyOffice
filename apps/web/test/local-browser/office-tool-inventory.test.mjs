@@ -137,6 +137,15 @@ for(const mode of ['creation','no-word','all'])test(mode==='no-word'
     assert.deepEqual(create.function.parameters.properties.type.enum,['csv'])
     delta=toolCall('create_document',{title:'Office CSV probe'})
    }
+  }else if(prompt?.includes('Word workspace creation probe')){
+   const afterUser=messages.slice(messages.findLastIndex(message=>message.role==='user')+1)
+   const result=afterUser.find(message=>message.role==='tool')
+   if(result){
+    const {output,isError}=JSON.parse(result.content)
+    assert.ok(!isError,output)
+    assert.match(output,/Created the new document "Word creation 719\.docx" in the workspace/)
+    delta={content:'Word created a native document'}
+   }else delta=toolCall('create_document',{type:'docx',title:'Word creation 719',content:'<p>New Word draft marker 719</p>'},'word-create-docx')
   }else if(prompt?.includes('Excel reference attachment probe')||prompt?.includes('Excel web citation probe')){
    const attachment=prompt.includes('Excel reference attachment probe')
    const user=messages.findLastIndex(message=>message.role==='user')
@@ -331,7 +340,21 @@ for(const mode of ['creation','no-word','all'])test(mode==='no-word'
   return
  }
  if(creationOnly){
-  await probe('docx','chat-only')
+  const word=await probe('docx','chat-only')
+  await word.locator('textarea').fill('Word workspace creation probe')
+  await word.getByRole('button',{name:'发送',exact:true}).click()
+  const createdWord=async()=>(await f.files.listFiles(f.alice.token)).files.find(entry=>entry.name==='Word creation 719.docx')?.id
+  await expect.poll(createdWord,{timeout:30000}).toBeTruthy()
+  const createdWordId=await createdWord()
+  await expect(page).toHaveURL(url=>url.origin===origin&&url.hash==='#/file/'+createdWordId)
+  const wordCopy=page.frameLocator(`iframe[data-document-id="${createdWordId}"]`)
+  await expect(wordCopy.locator('.tiptap.doc-page').first()).toContainText('New Word draft marker 719')
+  await expect.poll(async()=>{
+   const {file:wordCopyFile}=await f.files.openFile(f.alice.token,createdWordId)
+   const wordCopyZip=await JSZip.loadAsync(await f.files.readFile(f.alice.token,createdWordId,wordCopyFile.revision))
+   return wordCopyZip.file('word/document.xml').async('string')
+  },{timeout:30000}).toMatch(/New Word draft marker 719/)
+  await expect(word.getByText('Word created a native document',{exact:true})).toBeAttached({timeout:30000})
   const workbook=await probe('xlsx','chat-only')
   const source=files.xlsx
   for(const type of ['xlsx','docx','pdf']){

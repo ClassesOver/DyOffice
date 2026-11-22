@@ -169,6 +169,14 @@ print(json.dumps(dict(series=line.get_ydata().tolist(), total=sum(line.get_ydata
     assert.match(result.output,/2 rows in the frozen result/)
     answer='已插入汇总表'
    }
+  }else if(prompt.includes('插入已交付的分析图')){
+   if(!results.length)action=['insert_analysis_image',{artifactId:committed.artifacts[0].artifactId,alt:'Frozen monthly sales'}]
+   else {
+    const result=JSON.parse(results.at(-1).content)
+    assert.notEqual(result.isError,true,result.output)
+    assert.match(result.output,/Inserted the image monthly-sales\.png/)
+    answer='已插入原始分析图'
+   }
   }else if(prompt.includes('Python')){
    if(!results.length)action=['delegate_agent_task',{instruction:'Plot the previous result and sum it',agentId:'test-python',dataInputs:{sourceIds:[],resultIds:[first.artifact.resultId]}}]
    else {assert.match(results.at(-1).content,/Python total 70/);answer='Python total 70'}
@@ -341,6 +349,7 @@ print(json.dumps(dict(series=line.get_ydata().tolist(), total=sum(line.get_ydata
  assert.equal(chart.mediaType,'image/png')
  assert.deepEqual(chartResponse.rawPayload,plotBytes)
  assert.equal(plotBytes.subarray(1,4).toString(),'PNG')
+ if(!liveConfig)await turn('插入已交付的分析图','已插入原始分析图')
  await turn('刷新汇总','75')
  if(liveConfig){
   await expect.poll(()=>monthlyResults().length).toBe(2)
@@ -356,7 +365,8 @@ print(json.dumps(dict(series=line.get_ydata().tolist(), total=sum(line.get_ydata
  async function saveNative(entry,format){
   const head=async()=>(await f.files.openFile(token,entry.fileId)).file.revision
   assert.equal(await head(),entry.revision)
-  if(format==='xlsx')await page.getByRole('button',{name:/^保存（(?:Ctrl\+S|⌘S)）$/}).click()
+  if(format==='docx')await page.locator('.qa-btn[aria-label^="保存"]').click()
+  else if(format==='xlsx')await page.getByRole('button',{name:/^保存（(?:Ctrl\+S|⌘S)）$/}).click()
   else await page.keyboard.press('Control+s')
   await expect.poll(head,{timeout:30000}).not.toBe(entry.revision)
   return f.files.readFile(token,entry.fileId,await head())
@@ -365,11 +375,18 @@ print(json.dumps(dict(series=line.get_ydata().tolist(), total=sum(line.get_ydata
   await page.reload({waitUntil:'commit'})
   await expect(page.locator('html')).toHaveAttribute('data-document-loading','ready',{timeout:30000})
  }
+ async function assertSavedChart(zip,mediaPaths,provenanceXml){
+  const images=await Promise.all(zip.file(mediaPaths).map(part=>part.async('nodebuffer')))
+  assert.ok(images.some(image=>image.equals(plotBytes)),'The saved document embeds the exact committed PNG')
+  assert.ok(provenanceXml.includes(committed.artifacts[0].sha256),'The saved document records the delivered image hash')
+  assert.ok(provenanceXml.includes(first.artifact.resultId),'The saved document records the frozen input')
+ }
  const saved=await JSZip.loadAsync(await saveNative(file,'docx'))
  const docx=await saved.file('word/document.xml').async('string')
  const rows=[...docx.matchAll(/<w:tr[\s>][\s\S]*?<\/w:tr>/g)].map(match=>match[0])
  assert.ok(rows.some(row=>row.includes('2026-01')&&row.includes('>30<')))
  assert.ok(rows.some(row=>row.includes('2026-02')&&row.includes('>40<')))
+ await assertSavedChart(saved,/^word\/media\/.+\.png$/,docx)
  await reopenNative()
  await expectFrozenTable()
  for(const [format,entry] of Object.entries(siblings)){
@@ -402,6 +419,12 @@ print(json.dumps(dict(series=line.get_ydata().tolist(), total=sum(line.get_ydata
   }
   await input.fill('把上次汇总插入当前文件');await input.press('Enter')
   await expect(panel.getByText('已插入汇总表',{exact:true})).toBeVisible({timeout:30000})
+  if(format==='pptx'){
+   await input.fill('用 Python fixture 从冻结结果生成分析图');await input.press('Enter')
+   await expect(panel.getByText('Python total 70',{exact:true}).last()).toBeVisible({timeout:30000})
+   await input.fill('插入已交付的分析图');await input.press('Enter')
+   await expect(panel.getByText('已插入原始分析图',{exact:true})).toBeVisible({timeout:30000})
+  }
   const bytes=await saveNative(entry,format)
   if(format==='xlsx'){
    const {cells}=await sheetsNative.readRange(bytes,'Acceptance',{startRow:10,endRow:11,startColumn:10,endColumn:10})
@@ -416,6 +439,8 @@ print(json.dumps(dict(series=line.get_ydata().tolist(), total=sum(line.get_ydata
    const slide=await deck.file('ppt/slides/slide1.xml').async('string')
    const tables=[...slide.matchAll(/<a:tbl[\s>][\s\S]*?<\/a:tbl>/g)].map(match=>match[0])
    assert.ok(tables.some(table=>['2026-01','>30<','2026-02','>40<'].every(value=>table.includes(value))))
+   const notes=await Promise.all(deck.file(/^ppt\/notesSlides\/notesSlide\d+\.xml$/).map(part=>part.async('string')))
+   await assertSavedChart(deck,/^ppt\/media\/.+\.png$/,slide+notes.join(''))
    await reopenNative()
    await expect.poll(()=>page.evaluate(async()=>{
     const [slide]=await window.slidesApi.getRenderSlides()
