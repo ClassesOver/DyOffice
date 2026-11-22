@@ -2,7 +2,7 @@ import {useEffect,useRef,useState} from 'react'
 import type {createAnalysisDeliveryClient} from '../../../../packages/browser-host/src/analysis-delivery-client.ts'
 import {withAnalysisProvenance} from '../../../../packages/browser-host/src/analysis-insert-provenance.ts'
 import {prepareAnalysisInsertContent} from '../../../../packages/browser-host/src/analysis-insert-content.ts'
-import {prepareImageContent} from '../../../../packages/browser-host/src/analysis-image.ts'
+import {imageAltText,prepareImageContent} from '../../../../packages/browser-host/src/analysis-image.ts'
 import type {createAnalysisDocumentRegistry} from '../../../../packages/browser-host/src/analysis-document-registry.ts'
 import type {AnalysisDocumentTarget} from '../../../../packages/web-contracts/src/analysis-document.ts'
 import './analysis-delivery-panel.css'
@@ -36,7 +36,7 @@ export function AnalysisDeliveryPanel({client,lang,documents}:{client:Client;lan
    const file=await client.download(commandId,artifactId)
    const authorized=()=>active(stamp)&&documents?.current()===selected&&file.current()
    if(!authorized()||file.artifact.artifactId!==artifactId)throw Error()
-   const prepared=isImage(file.artifact)?prepareImageContent(file.bytes,file.artifact.mediaType,file.artifact.name):prepareAnalysisInsertContent({...file.artifact,bytes:file.bytes})
+   const prepared=isImage(file.artifact)?prepareImageContent(file.bytes,file.artifact.mediaType,imageAltText(file.artifact.name)||'Analysis chart'):prepareAnalysisInsertContent({...file.artifact,bytes:file.bytes})
    const content=withAnalysisProvenance(prepared,file.receipt,file.artifact,capture.format)
    if(!authorized())throw Error()
    setBlocked(old=>new Set(old).add(id))
