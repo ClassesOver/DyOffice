@@ -1,3 +1,4 @@
+import { assistantHoldsKeyboard } from '@genoffice/ui'
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { handlePdfControl, type ControlRequest } from './control'
 import type { CSSProperties, MouseEvent as ReactMouseEvent, ReactNode } from 'react'
@@ -2225,6 +2226,7 @@ export default function App({ hostReadOnly = false, hostEditRestriction, hostSav
     setPageInput(String(visibleIndex + 1))
     let attempts = 0
     const focusWhenMounted = () => {
+      if (assistantHoldsKeyboard()) return
       const control = formControlRefs.current.get(widget.id)
       if (control) {
         control.focus()
@@ -7721,7 +7723,7 @@ export default function App({ hostReadOnly = false, hostEditRestriction, hostSav
   // Shortcuts: ⌘S/⌘F/⌘P/⌘±/⌘0 + page navigation (only ⌘ combos kept while an input control is focused)
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (redactionRequestInFlightRef.current) return
+      if (redactionRequestInFlightRef.current || assistantHoldsKeyboard()) return
       const target = e.target as HTMLElement | null
       const inEditable =
         !!target &&

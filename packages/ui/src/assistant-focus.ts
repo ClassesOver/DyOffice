@@ -31,10 +31,11 @@ export function assistantHoldsKeyboard(active: Element | null = globalThis.docum
 }
 
 /** React ref callback that keeps the element registered while it is mounted. */
-export function useAssistantFocusRoot<T extends Element>(): (element: T | null) => void {
+export function useAssistantFocusRoot<T extends Element>(hostRef?: { current: T | null }): (element: T | null) => void {
   const release = useRef<(() => void) | undefined>(undefined)
   return useCallback((element: T | null) => {
+    if (hostRef) hostRef.current = element
     release.current?.()
     release.current = element ? registerAssistantFocusRoot(element) : undefined
-  }, [])
+  }, [hostRef])
 }

@@ -1,3 +1,4 @@
+import { assistantHoldsKeyboard } from '@genoffice/ui'
 import {completeCreatedDocumentBoot} from './ai/created-document-boot'
 import { PHASED_APPEND } from './editor/streaming-tail-guard'
 import {createAnalysisSaveConsent} from '../../../../packages/browser-host/src/analysis-save-consent'
@@ -1912,7 +1913,7 @@ export function App({ host }: { host?: { fileActions?: React.ReactNode; saveStat
         // kick used to make the re-enable return silently, so existing typos
         // were never re-marked (one "the toggle worked only once" path).
         // Retry for a few seconds instead of dropping the kick.
-        if (view.composing || respellKickBusy.current) {
+        if (view.composing || respellKickBusy.current || assistantHoldsKeyboard()) {
           spellDiag(
             `kick deferred composing=${view.composing} busy=${respellKickBusy.current} attempt=${attempts}`,
           )
@@ -2036,7 +2037,7 @@ export function App({ host }: { host?: { fileActions?: React.ReactNode; saveStat
               // re-toggle (cancelled) — or the user is left typing in the body
               // with a dropped selection. Only a detached/destroyed view (where
               // focus would throw) is skipped.
-              if (dom.isConnected) {
+              if (dom.isConnected && !assistantHoldsKeyboard()) {
                 view.focus() // resync the DOM selection from PM state
                 // ribbon toggle during textbox editing: keep the routing and
                 // hand the keyboard back where it was — typing must not replace
@@ -6337,6 +6338,7 @@ export function App({ host }: { host?: { fileActions?: React.ReactNode; saveStat
       return !!(el as HTMLElement).closest('.ProseMirror, td[contenteditable]')
     }
     const handler = (e: KeyboardEvent) => {
+      if (assistantHoldsKeyboard()) return
       const canEdit = !!editor?.isEditable && focusInEditor()
       if ((e.metaKey || e.ctrlKey) && isCommandLetter(e, 'o')) {
         e.preventDefault()

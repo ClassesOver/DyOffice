@@ -1,5 +1,5 @@
 import {
-  useAiPanelResize,
+  useAssistantFocusRoot, useAiPanelResize,
   AiPanelSideButton,
   AiModelPicker,
   type AiModelPickerBridge,
@@ -266,6 +266,7 @@ export function AiPanel({
   }, [filePath])
   const { width, resizing, handle } = useAiPanelResize(PANEL_WIDTH_KEY, lang, !collapsed)
   const asideRef = useRef<HTMLElement>(null)
+  const focusRoot = useAssistantFocusRoot(asideRef)
   useLayoutEffect(() => {
     const dock = asideRef.current?.closest<HTMLElement>('.ai-dock')
     dock?.style.setProperty('--ai-panel-width', `${width}px`)
@@ -646,7 +647,7 @@ export function AiPanel({
 
   return (
     <aside
-      ref={asideRef}
+      ref={focusRoot}
       className={`copilot${resizing ? ' ai-panel-resizing' : ''}`}
       style={{ width: '100%' }}
       dir={lang === 'ar' || lang === 'he' ? 'rtl' : undefined}
