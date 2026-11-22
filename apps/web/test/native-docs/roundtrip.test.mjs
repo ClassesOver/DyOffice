@@ -390,6 +390,70 @@ test('native DyOffice DOCX renders, edits, commits, refreshes and preserves unre
   assert.deepEqual(errors,[])
 })
 
+test('native Word saves a styled paragraph and an anchored review comment', {timeout:120_000}, async t => {
+  const f = await fixture(t), {page} = f
+  const original = await readFile(new URL('../../../shell/build/shell-new/blank.docx',import.meta.url))
+  const {file} = await importFile(f,f.alice.token,original,'styled-review.docx')
+  const title = 'F01 review heading', comment = 'Review the native heading before release.'
+  await page.goto(f.origin+'/native-docx/?fileId='+file.fileId)
+  const editor = page.locator('.tiptap.doc-page[contenteditable="true"]')
+  await editor.waitFor({timeout:45_000})
+  await editor.click()
+  await page.keyboard.type(title)
+  await page.getByRole('button',{name:'Styles',exact:true}).click()
+  await page.locator('.style-gallery-menu [data-style-id="Heading1"]').click()
+  await expect(editor.getByRole('heading',{name:title,level:1})).toBeVisible()
+
+  await page.getByRole('button',{name:'Review',exact:true}).click()
+  await editor.getByRole('heading',{name:title,level:1}).click()
+  await page.keyboard.press('Home')
+  await page.keyboard.press('Shift+End')
+  await expect.poll(()=>page.evaluate(()=>window.getSelection()?.toString())).toBe(title)
+  await page.getByRole('button',{name:'New Comment',exact:true}).click()
+  await page.getByPlaceholder('Type a comment…').fill(comment)
+  await page.locator('.comment-compose').getByRole('button',{name:'Comment',exact:true}).click()
+  const commentsPane = page.locator('.comments-pane')
+  await expect(commentsPane.locator('.comment-text')).toHaveText(comment)
+
+  const committed = page.waitForResponse(reply=>reply.url().endsWith('/commits')&&reply.request().method()==='POST'&&reply.status()===200)
+  await page.keyboard.press('Control+s')
+  await committed
+  await expectCleanPersistence(page)
+  const current = (await f.files.openFile(f.alice.token,file.fileId)).file
+  assert.notEqual(current.revision,file.revision)
+  await page.getByRole('button',{name:'File',exact:true}).click()
+  const [download] = await Promise.all([
+    page.waitForEvent('download'),
+    page.getByRole('link',{name:'Download saved version',exact:true}).click(),
+  ])
+  const bytes = await readFile(await download.path())
+  assert.deepEqual(bytes,await f.files.readFile(f.alice.token,file.fileId,current.revision))
+  assert.deepEqual(await f.files.readFile(f.alice.token,file.fileId,file.revision),original)
+  const archive = await JSZip.loadAsync(bytes)
+  const commentsXml = await archive.file('word/comments.xml').async('string')
+  assert.ok(commentsXml.includes(comment))
+  const commentId = commentsXml.match(/<w:comment\b[^>]*\bw:id="(\d+)"/)?.[1]
+  assert.ok(commentId)
+  const documentXml = await archive.file('word/document.xml').async('string')
+  const headingXml = [...documentXml.matchAll(/<w:p(?:\s[^>]*)?>[\s\S]*?<\/w:p>/g)].find(([xml])=>xml.includes(title))?.[0]
+  assert.ok(headingXml)
+  assert.match(headingXml,/<w:pStyle\s+w:val="Heading1"/)
+  const start = headingXml.indexOf(`<w:commentRangeStart w:id="${commentId}"`)
+  const end = headingXml.indexOf(`<w:commentRangeEnd w:id="${commentId}"`)
+  const content = headingXml.indexOf(title)
+  assert.ok(start>=0&&start<content&&content<end,'comment must anchor the saved heading text')
+  assert.ok(headingXml.includes(`<w:commentReference w:id="${commentId}"`))
+  assert.match(await archive.file('word/_rels/document.xml.rels').async('string'),/Target="comments\.xml"/)
+  assert.match(await archive.file('[Content_Types].xml').async('string'),/PartName="\/word\/comments\.xml"/)
+
+  await page.reload()
+  await expect(editor.getByRole('heading',{name:title,level:1})).toBeVisible({timeout:45_000})
+  await page.locator('.ribbon-mode-split .mode-menu-wrap').getByRole('button',{name:'Show Comments',exact:true}).click()
+  await page.getByRole('menuitemradio',{name:'List',exact:true}).click()
+  await expect(commentsPane.locator('.comment-card')).toContainText(comment)
+  await expect(commentsPane.locator('.comment-anchor')).toContainText(title)
+})
+
 test('editing during a delayed native save keeps the newer draft dirty and saves a later child revision', { timeout: 120_000 },async t => {
   const diagnostic = phaseDiagnostics(t.signal)
   t.after(() => diagnostic.dispose())
