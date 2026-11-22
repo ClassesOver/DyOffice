@@ -966,3 +966,16 @@ test('selecting specific tables automatically loads the table picker',async()=>{
  await act(async()=>input('允许表 public.orders').click())
  expect(input('允许表 public.orders').checked).toBe(true)
 })
+
+test('advanced connection settings follow the UI language through the sources dictionary',async()=>{
+ const {LocaleProvider}=await import('../../../shell/src/renderer/src/locale')
+ const {sourcesStrings}=await import('../../src/shell/i18n/strings-sources')
+ const host=document.createElement('div');document.body.append(host);const root=createRoot(host);roots.push(root)
+ const client=createSourcesClient((async (path:string)=>read(path)) as Request)
+ await act(async()=>root.render(h(LocaleProvider,{initial:'en'},h(SourcesPanel,{client,onClose(){}}))))
+ const row=[...host.querySelectorAll('button')].find(button=>button.textContent?.includes('营业收入'))!
+ await act(async()=>row.click())
+ for(const key of ['srcTimezone','srcMaxRowsAria','srcTimeoutAria'] as const)expect(host.querySelector(`[aria-label="${sourcesStrings.en[key]}"]`)).not.toBeNull()
+ expect(host.textContent).toContain(sourcesStrings.en.srcTimeout)
+ expect(host.textContent).not.toContain(sourcesStrings.zh.srcTimeout)
+})
