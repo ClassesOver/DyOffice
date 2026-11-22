@@ -3,6 +3,7 @@ import { Editor } from '@tiptap/core'
 import { editorExtensions } from '../src/renderer/editor/extensions'
 import { createDocsSkill } from '../src/renderer/ai/docs-skill'
 import { executeTool, type AiCommentsAccess } from '../src/renderer/ai/tools'
+import type { AiNotesAccess } from '../src/renderer/ai/note-ops'
 
 const editors: Editor[] = []
 afterEach(() => editors.splice(0).forEach(editor => editor.destroy()))
@@ -12,6 +13,24 @@ function readOnlyEditor() {
   editors.push(editor); editor.setEditable(false)
   return editor
 }
+
+it('read_notes lists footnotes and endnotes in a read-only Word document', async () => {
+  const editor = readOnlyEditor(), before = editor.state.doc
+  const notes: AiNotesAccess = {
+    list: kind => kind === 'footnote' ? [{id:'4', text:'Intake source'}] : [{id:'9', text:'Release source'}],
+    protectedMarkBlock: (kind, id) => kind === 'footnote' && id === '4' ? 2 : null,
+    add: () => { throw new Error('read_notes must not add a note') },
+    remove: () => { throw new Error('read_notes must not remove a note') },
+    replace: () => { throw new Error('read_notes must not change a note') },
+  }
+  const result = await executeTool(editor, {id:'notes', name:'read_notes', input:{}}, {bullet:null, ordered:null},
+    undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, notes)
+  expect(result.isError).not.toBe(true)
+  expect(result.mutated).toBe(false)
+  expect(result.output).toContain('id 4 (mark in protected block 2, cannot be deleted here): Intake source')
+  expect(result.output).toContain('id 9 (no reference mark in the text): Release source')
+  expect(editor.state.doc.eq(before)).toBe(true)
+})
 
 it('hides every current-document mutation when Word editing authority is unavailable', () => {
   const editor = readOnlyEditor()

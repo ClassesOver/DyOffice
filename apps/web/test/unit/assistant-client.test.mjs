@@ -239,6 +239,17 @@ test('format-scoped provider rejects tools that were not offered in this turn',(
  assert.equal(scoped.tools.has('edit_text'),false)
 })
 
+test('the Web Office assistant never forwards desktop-only launch or CLI tools',()=>{
+ const desktopNames=['get_app_info','open_in_genoffice','run_cli','run_genoffice']
+ for(const format of ['docx','xlsx','pptx','pdf']){
+  const [nativeName]=assistantToolsForFormat(format)
+  const requested=[nativeName,...desktopNames].map(name=>({name}))
+  const scoped=scopeAssistantRequest({format,system:'',messages:[],tools:requested},new Set())
+  assert.deepEqual(scoped.request.tools.map(tool=>tool.name),[nativeName],format)
+  assert.deepEqual([...scoped.tools],[nativeName],format)
+ }
+})
+
 test('SaaS format allowlists include every declared PC document tool except local CLI execution',async()=>{
  const rows=await inventory()
  for(const [app,format] of [['docs','docx'],['sheets','xlsx'],['slides','pptx'],['pdf','pdf']]){

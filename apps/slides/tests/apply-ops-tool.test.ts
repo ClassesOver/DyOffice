@@ -89,6 +89,19 @@ beforeEach(() => {
   ;(globalThis as any).window = { slidesApi: {} }
 })
 
+it('load_guide returns native insertion instructions and refuses an unknown group', async () => {
+  const skill = createSlidesSkill(access())
+  const read = await skill.executeTool({id:'guide', name:'load_guide', input:{groups:['insert','insert']}})
+  expect(read.isError).not.toBe(true)
+  expect(read.mutated).toBe(false)
+  expect(read.output).toContain('addElement')
+  expect(read.output).not.toContain('\n\n---\n\n')
+  const missing = await skill.executeTool({id:'missing-guide', name:'load_guide', input:{groups:['nonexistent']}})
+  expect(missing.isError).toBe(true)
+  expect(missing.output).toContain('Unknown guide group(s): nonexistent')
+  expect(deckApplied).toBeNull()
+})
+
 describe('apply_ops', () => {
   it('dry run echoes the plan and rejected ops without mutating', async () => {
     ;(globalThis as any).window.slidesApi.applyTxn = vi.fn(async () => ({

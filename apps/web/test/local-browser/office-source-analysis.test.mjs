@@ -11,6 +11,7 @@ import {fileURLToPath} from 'node:url'
 import {officeBrowserAsset as dist} from '../helpers/office-browser-assets.mjs'
 import {Pool} from 'pg'
 import {PDFDocument} from 'pdf-lib'
+import JSZip from 'jszip'
 import {createCrossPlatformProcess} from '../../worker/src/sandbox/cross-platform-process.ts'
 import {createXlsxNativeWorker} from '../../worker/src/native/xlsx.ts'
 import {openIsolatedPptxSession} from '../../worker/src/native/pptx-session-host.ts'
@@ -66,7 +67,7 @@ test('Office reads an allowed PostgreSQL schema and Coding plots the frozen resu
   : {id:'chat',kind:'chat',providerId:'deepseek',label:'Office model',model:'fixture',baseUrl:'https://provider.example/v1',enabled:true,apiKey:'fixture'}
  if(liveConfig)assert.ok(model?.enabled&&model?.kind==='chat'&&model?.apiKey,'An enabled real-model entry is required')
  await createGlobalConfigService({transactions:f.transactions,keyring}).saveGlobalConfig(f.adminSigned.token,0,{upserts:[model],defaults:{chat:model.id}})
- await f.preferences.update(f.adminSigned.token,{language:'zh',showAssistant:true})
+ await f.preferences.update(f.adminSigned.token,{language:'zh',showAssistant:true,autoSave:false})
  const file=(await importFile(f,f.adminSigned.token,await docxBytes(),'Source analysis.docx')).file
  const pdf=await PDFDocument.create()
  pdf.addPage([400,300]).drawText('Source analysis')
@@ -151,6 +152,23 @@ print(json.dumps(dict(series=line.get_ydata().tolist(), total=sum(line.get_ydata
   }else if(prompt.includes('有哪些字段')){
    if(!results.length)action=['sources_describe',{sourceId:'sales-db',table:'sales.orders'}]
    else answer=output().metadata.rows.map(r=>r.column_name).join(', ')
+  }else if(prompt.includes('读取上次汇总的第二行')){
+   if(!results.length)action=['sources_read_result',{resultId:first.artifact.resultId,offset:1,limit:1}]
+   else {
+    const page=output()
+    assert.equal(page.sha256,first.sha256)
+    assert.deepEqual(page.rows,[{month:'2026-02',amount:40}])
+    assert.equal(page.nextOffset,null)
+    answer='冻结结果第二行 2026-02：40 CNY'
+   }
+  }else if(prompt.includes('把上次汇总插入正文')){
+   if(!results.length)action=['insert_data_result',{resultId:first.artifact.resultId}]
+   else {
+    const result=JSON.parse(results.at(-1).content)
+    assert.notEqual(result.isError,true,result.output)
+    assert.match(result.output,/2 rows in the frozen result/)
+    answer='已插入汇总表'
+   }
   }else if(prompt.includes('Python')){
    if(!results.length)action=['delegate_agent_task',{instruction:'Plot the previous result and sum it',agentId:'test-python',dataInputs:{sourceIds:[],resultIds:[first.artifact.resultId]}}]
    else {assert.match(results.at(-1).content,/Python total 70/);answer='Python total 70'}
@@ -296,6 +314,17 @@ print(json.dumps(dict(series=line.get_ydata().tolist(), total=sum(line.get_ydata
  const queriesBeforeCoding=queries
  if(!liveConfig)assert.equal(queriesBeforeCoding,1)
  await owner.query("INSERT INTO sales.orders VALUES ('2026-01-14', 7, 5)")
+ const expectFrozenTable=async()=>{
+  const table=page.locator('.tiptap.doc-page table')
+  await expect(table.getByRole('row').filter({hasText:'2026-01'})).toContainText('30')
+  await expect(table.getByRole('row').filter({hasText:'2026-02'})).toContainText('40')
+ }
+ if(!liveConfig){
+  await turn('读取上次汇总的第二行','冻结结果第二行 2026-02：40 CNY')
+  await turn('把上次汇总插入正文','已插入汇总表')
+  await expectFrozenTable()
+  assert.equal(queries,queriesBeforeCoding,'Reading and inserting the frozen result must not repeat the query')
+ }
  await turn('用 Python fixture 复核刚才按月汇总的两行结果，并画折线图。不重查库。',liveConfig?'70':'Python total 70')
  await expect.poll(()=>Boolean(committed?.artifacts?.length),{message:'Python must commit a downloadable chart',timeout:10000}).toBe(true)
  assert.equal(queries,queriesBeforeCoding);assert.deepEqual(actualSeries,[30,40])
@@ -322,6 +351,19 @@ print(json.dumps(dict(series=line.get_ydata().tolist(), total=sum(line.get_ydata
   return
  }
  assert.equal(queries,2)
+ const token=f.adminSigned.token
+ const head=async()=>(await f.files.openFile(token,file.fileId)).file.revision
+ assert.equal(await head(),file.revision)
+ await page.keyboard.press('Control+s')
+ await expect.poll(head,{timeout:30000}).not.toBe(file.revision)
+ const saved=await JSZip.loadAsync(await f.files.readFile(token,file.fileId,await head()))
+ const docx=await saved.file('word/document.xml').async('string')
+ const rows=[...docx.matchAll(/<w:tr[\s>][\s\S]*?<\/w:tr>/g)].map(match=>match[0])
+ assert.ok(rows.some(row=>row.includes('2026-01')&&row.includes('>30<')))
+ assert.ok(rows.some(row=>row.includes('2026-02')&&row.includes('>40<')))
+ await page.reload({waitUntil:'commit'})
+ await expect(page.locator('html')).toHaveAttribute('data-document-loading','ready',{timeout:30000})
+ await expectFrozenTable()
  for(const [format,entry] of Object.entries(siblings)){
   const start=toolFrames.length
   const errors=[]

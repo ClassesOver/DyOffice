@@ -14,6 +14,10 @@
 
 逐工具验收以格式和工具名为单位，保留注册、执行与成品证据。首轮核对涵盖 130 个格式与工具组合、9 个共享工具和桌面 MCP 清单的 Web 对照。[逐工具验收表](office-ai-tool-coverage.md)
 
+在 `29415fca` 的原生编辑器产物上，浏览器观察到 129 个格式与工具组合注册，定向批次有 23 个组合返回成功结果。PDF 兼容名称 `rotate_pages` 由原生 `apply_ops.rotatePages` 覆盖。工作区数据工具覆盖 5 项，Word 冻结结果写入验证了原生表格、显式保存和重开。[逐工具结果](office-ai-tool-coverage.md)
+
+`29415fca` 的 CI 本地集成阶段报出 3 项失败，源于事务崩溃夹具缺少文件服务、元数据并发夹具缺少签名状态、PPTX 签名夹具缺少测试环境。补齐夹具后，在独立 PostgreSQL 上复跑 10 项全部通过，覆盖事务回滚、读取竞态及三格式签名文件原件保护。[原 CI 失败](https://github.com/ClassesOver/DyOffice/actions/runs/45009917486/job/137169747167)
+
 `dec77c2d` 的工具清单检查匹配 159 项定义。按四个 GenOffice 编辑器的静态定义核对 Web 策略，DOCX、XLSX、PPTX、PDF 的 Web 允许名单分别为 42、19、20、49 个名称，包含 Web 专用和条件注册的工具。原编辑器定义里唯一被排除的是 DOCX 通用桌面命令 `run_cli`。当前轮实际向模型提供的工具继续按格式、编辑器能力、附件和配置收窄。模型调用未提供的工具会被拒绝。服务端、传输、后台阅读与交接合同共 105 项通过。[GenOffice 工具清单](../inventory/agent-tools.md) [模型工具传输与策略](../../../apps/web/test/unit/assistant-client.test.mjs) [浏览器实际工具注册](../../../apps/web/test/local-browser/office-tool-inventory.test.mjs)
 
 | 格式 | 已通过的代表性浏览器场景，使用测试模型响应 |

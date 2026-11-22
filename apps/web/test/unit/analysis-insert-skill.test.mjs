@@ -110,8 +110,8 @@ test('insert_data_result reads the frozen snapshot from the server and applies i
   assert.equal(bad.isError, true)
 })
 
-test('insert_analysis_image inserts the verified latest chart with provenance', async () => {
-  const h = harness({ format: 'pptx' })
+for (const format of ['docx', 'pptx']) test(`insert_analysis_image inserts the verified latest chart with provenance in ${format}`, async () => {
+  const h = harness({ format })
   const out = await h.skill.executeTool({ id: '1', name: ANALYSIS_INSERT_TOOLS.image, input: {} })
   assert.equal(out.isError, undefined, out.output)
   const { content, artifact } = h.applied[0]
