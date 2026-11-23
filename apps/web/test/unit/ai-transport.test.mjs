@@ -390,3 +390,26 @@ test('an error event with an empty message still fails the turn exactly once',as
   assert.deepEqual(calls,[['delta','partial'],['error','AI stream failed'],['done']])
  }
 })
+
+test('default browser deadline allows 1800 seconds and then cancels the request',t=>{
+  t.mock.timers.enable({apis:['setTimeout']})
+  const requests=[]
+  let signal
+  const transport=createSseAgentTransport({createTurnId:()=> 'long-turn',fetchImpl:async(url,init)=>{
+    requests.push(url)
+    if(url.endsWith('/cancel'))return new Response(null,{status:204})
+    signal=init.signal
+    return new Promise(()=>{})
+  }})
+  const {calls,callbacks}=callbackRecorder()
+  const handle=transport.stream({system:'',messages:[],tools:[]},callbacks)
+  try{
+    t.mock.timers.tick(1799000)
+    assert.deepEqual(calls,[])
+    assert.equal(signal.aborted,false)
+    t.mock.timers.tick(1000)
+    assert.equal(signal.aborted,true)
+    assert.deepEqual(calls.map(x=>x[0]),['error','done'])
+    assert.deepEqual(requests,['/api/v1/ai/turns','/api/v1/ai/turns/long-turn/cancel'])
+  }finally{handle.cancel();t.mock.timers.reset()}
+})

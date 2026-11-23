@@ -2,7 +2,7 @@ import {createHash,randomBytes,randomUUID,timingSafeEqual} from 'node:crypto'
 import type {HarnessDataGrant,HarnessDataInputs} from '../../../../../../packages/web-contracts/src/harness-data.ts'
 import type {WorkspaceSourceResultDownload} from '../../../../../../packages/web-contracts/src/source-results.ts'
 import type {SessionService,SessionPrincipal} from '../auth/sessions.ts'
-import type {WorkspaceSourceTools} from '../sources/tools.ts'
+import {runQueryBatch,type WorkspaceSourceTools} from '../sources/tools.ts'
 import type {WorkspaceSourceResults} from '../sources/results.ts'
 import type {createHarnessArtifacts,AnalysisDelivery} from './artifacts.ts'
 
@@ -178,16 +178,22 @@ export function createHarnessDataAccess(options:{
           throw unavailable()
         }
         if(operation==='sources.describe'||operation==='sources.query') {
-          const input=object(args,operation==='sources.describe'?['sourceId','table']:['sourceId','sql','sourceVersion']),id=sourceId(input.sourceId)
+          const input=object(args,operation==='sources.describe'?['sourceId','table','tables','schema','tablePrefix']:['sourceId','sql','queries','sourceVersion']),id=sourceId(input.sourceId)
           if(!entry.sourceIds.has(id))throw unavailable()
-          if(operation==='sources.query'&&entry.resultIds.size>=64)throw unavailable(429)
-          const result=await options.tools.execute(entry.token,{name:operation,arguments:input},entry.documentId)
-          if(operation==='sources.describe')return result
-          await validate(entry)
-          const query=result as {artifact:{resultId:string};schema:unknown;timezone:string;totalRows:number;sourceTruncated:boolean;sha256:string;notice:string}
-          const idResult=uuid(query.artifact?.resultId)
-          entry.resultIds.add(idResult)
-          return {artifact:query.artifact,schema:query.schema,timezone:query.timezone,totalRows:query.totalRows,sourceTruncated:query.sourceTruncated,sha256:query.sha256,notice:query.notice}
+          if(operation==='sources.describe')return options.tools.execute(entry.token,{name:operation,arguments:input},entry.documentId)
+          const batch=input.queries!==undefined
+          if(batch&&(input.sql!==undefined||input.sourceVersion!==undefined))throw unavailable(400)
+          const count=batch&&Array.isArray(input.queries)?input.queries.length:1
+          if(entry.resultIds.size+count>64)throw unavailable(429)
+          const queryOne=async(sql?:string)=>{
+            if(batch)await validate(entry)
+            const result=await options.tools.execute(entry.token,{name:operation,arguments:batch?{sourceId:id,sql}:input},entry.documentId)
+            await validate(entry)
+            const query=result as {artifact:{resultId:string};schema:unknown;timezone:string;totalRows:number;sourceTruncated:boolean;sha256:string;notice:string}
+            entry.resultIds.add(uuid(query.artifact?.resultId))
+            return {artifact:query.artifact,schema:query.schema,timezone:query.timezone,totalRows:query.totalRows,sourceTruncated:query.sourceTruncated,sha256:query.sha256,notice:query.notice}
+          }
+          return batch?runQueryBatch(input.queries,queryOne):queryOne()
         }
         if(operation==='results.get_manifest') {
           const input=object(args,['resultId']),id=resultId(entry,input.resultId)

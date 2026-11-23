@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto'
 import type { SourceService } from './service.ts'
 import type { createWorkspaceSourceResults } from './results.ts'
-import { SOURCE_AGENT_TOOLS, type SourceToolName } from '../../../../../../packages/web-contracts/src/source-tools.ts'
+import { MAX_BATCH_QUERIES, SOURCE_AGENT_TOOLS, type SourceToolName } from '../../../../../../packages/web-contracts/src/source-tools.ts'
 import { object, sourceError } from './config.ts'
 import { isAssistantErrorCode, type AssistantErrorCode } from '../../../../../../packages/web-contracts/src/assistant-errors.ts'
 
@@ -15,6 +15,23 @@ const safeError = (error: unknown) => {
   const code: AssistantErrorCode | undefined = isAssistantErrorCode(tagged) ? tagged
     : status === 502 ? 'SOURCE_RESULT_UNUSABLE' : status === 503 ? 'SOURCE_UNAVAILABLE' : status === 504 ? 'SOURCE_TIMEOUT' : undefined
   return Object.assign(new Error('Workspace source tool unavailable'), { statusCode: status, ...(code ? { code } : {}) })
+}
+
+export async function runQueryBatch<T>(queries: unknown, execute: (sql: string) => Promise<T>) {
+  if (!Array.isArray(queries) || queries.length < 1 || queries.length > MAX_BATCH_QUERIES ||
+      queries.some(sql => typeof sql !== 'string' || !sql.trim()) ||
+      queries.reduce((bytes, sql) => bytes + Buffer.byteLength(sql), 0) > 32768) throw sourceError()
+  const items = []
+  for (const sql of queries) {
+    try {
+      items.push({ ok: true as const, result: await execute(sql) })
+    } catch (cause) {
+      const error = safeError(cause)
+      if (![400,502,504].includes(error.statusCode)) throw error
+      items.push({ ok: false as const, status: error.statusCode, code: error.code })
+    }
+  }
+  return { items }
 }
 
 /** Steers the model back to database-side aggregation instead of reasoning over a partial row set. */
@@ -39,19 +56,25 @@ export function createWorkspaceSourceTools({ sources, results }: { sources: Sour
           return sources.listSavedMetadata(token, args)
         }
         if (name === 'sources.describe') {
-          const args = object(call.arguments, ['sourceId','table'])
-          return sources.describe(token, args.sourceId, args.table === undefined ? {} : { table: args.table })
+          const { sourceId, ...filters } = object(call.arguments, ['sourceId','table','tables','schema','tablePrefix'])
+          return sources.describe(token, sourceId, filters)
         }
         if (name === 'sources.query') {
-          const args = object(call.arguments, ['sourceId','sql'])
-          const query = { ...(args.sql === undefined ? {} : { sql: args.sql }) }
-          const snapshot = await sources.querySource(token, args.sourceId, query)
-          const queryHash = createHash('sha256').update(JSON.stringify({ sourceId: snapshot.sourceId, sourceVersion: snapshot.sourceVersion, sql: args.sql ?? null })).digest('hex')
-          const artifact = await results.capture(token, snapshot, queryHash, documentId)
-          return { artifact, schema: snapshot.schema, timezone: snapshot.timezone, preview: snapshot.rows.slice(0, 100),
-            totalRows: snapshot.rows.length, sourceTruncated: snapshot.truncated, sha256: snapshot.sha256,
-            nextOffset: snapshot.rows.length > 100 ? 100 : null,
-            notice: snapshot.truncated ? truncatedNotice(snapshot.rows.length) : 'Frozen query result; later reads and saving do not execute SQL again.' }
+          const args = object(call.arguments, ['sourceId','sql','queries'])
+          const batch = args.queries !== undefined
+          if (batch && args.sql !== undefined) throw sourceError()
+          const query = async (sql?: string) => {
+            const snapshot = await sources.querySource(token, args.sourceId, sql === undefined ? {} : { sql })
+            const queryHash = createHash('sha256').update(JSON.stringify({ sourceId: snapshot.sourceId, sourceVersion: snapshot.sourceVersion, sql: sql ?? null })).digest('hex')
+            const artifact = await results.capture(token, snapshot, queryHash, documentId)
+            const preview = snapshot.rows.slice(0, batch ? 3 : 100)
+            if (batch && Buffer.byteLength(JSON.stringify(preview)) > 2048) preview.length = 0
+            return { artifact, schema: snapshot.schema, timezone: snapshot.timezone, preview,
+              totalRows: snapshot.rows.length, sourceTruncated: snapshot.truncated, sha256: snapshot.sha256,
+              nextOffset: snapshot.rows.length > preview.length ? preview.length : null,
+              notice: snapshot.truncated ? truncatedNotice(snapshot.rows.length) : 'Frozen query result; later reads and saving do not execute SQL again.' }
+          }
+          return batch ? await runQueryBatch(args.queries, query) : await query(args.sql)
         }
         if (name === 'sources.save_result') {
           const args = object(call.arguments, ['resultId','name','commandId'])

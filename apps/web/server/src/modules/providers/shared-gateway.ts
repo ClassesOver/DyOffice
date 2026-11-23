@@ -11,7 +11,7 @@ import {resolveLiveProviderProfile} from './live-profile.ts'
 import {createPinnedProviderTransport} from './pinned-egress.ts'
 import {buildOpenAiChatRequest} from './openai-request.ts'
 import {parseOpenAiChatStream} from './openai-stream.ts'
-import {assistantReadTools,ASSISTANT_DOCUMENT_TOOLS,ASSISTANT_DELEGATION_TOOLS,PPTX_GENERATION_DEADLINE_MS,scopeAssistantRequest,type AssistantSourceMode} from '../../../../../../packages/web-contracts/src/assistant.ts'
+import {assistantReadTools,ASSISTANT_DOCUMENT_TOOLS,ASSISTANT_DELEGATION_TOOLS,ASSISTANT_MODEL_DEADLINE_MS,scopeAssistantRequest,type AssistantSourceMode} from '../../../../../../packages/web-contracts/src/assistant.ts'
 import {openAiEffortFor} from '../../../../../../packages/ai-provider/src/thinking-effort.ts'
 import {CODING_MODEL_TOOLS} from '../coding/model-bridge.ts'
 import type {HarnessRegistry} from '../coding/registry.ts'
@@ -131,7 +131,7 @@ export function registerSharedProviderGateway(app:FastifyInstance,options:{trans
      throw error
     }finally{control?.abort();bytes?.close(true);await producer?.catch(()=>{});built?.body.fill(0);detach?.();if(control){active.delete(control)}}
    },
-  },{timeoutMs:request=>audience==='coding'?90_000:isSlidesGeneration(request)?PPTX_GENERATION_DEADLINE_MS:30_000,maxActive:8})
+  },{timeoutMs:ASSISTANT_MODEL_DEADLINE_MS,maxActive:8})
  }
  const tools=new Set([...assistantReadTools(options.sourceMode),...ASSISTANT_DOCUMENT_TOOLS,...((options.harnesses||options.assistantChannels)?ASSISTANT_DELEGATION_TOOLS:[])])
  const turns=pipeline(tools,'office')

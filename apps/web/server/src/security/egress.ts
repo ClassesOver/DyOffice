@@ -36,7 +36,8 @@ export function validateSourceEgressTargets(input: unknown): SourceEgressTarget[
   try {
     if (!Array.isArray(targets) || targets.length > 256) throw unavailable()
     approved = targets.map(target => {
-      if (!target || Object.keys(target).some(k => !['kind','endpoint','addresses','username','database','allowInsecure','ca'].includes(k)) || !['http','postgres','mysql','starrocks'].includes(target.kind) || typeof target.endpoint !== 'string' || target.endpoint.length > 8192 || !Array.isArray(target.addresses) || !target.addresses.length || target.addresses.length > 32 || target.allowInsecure !== undefined && typeof target.allowInsecure !== 'boolean' || target.ca !== undefined && typeof target.ca !== 'string') throw unavailable()
+      if (!target || Object.keys(target).some(k => !['kind','endpoint','addresses','username','database','allowInsecure','allowPrivilegedAccount','ca'].includes(k)) || !['http','postgres','mysql','starrocks'].includes(target.kind) || typeof target.endpoint !== 'string' || target.endpoint.length > 8192 || !Array.isArray(target.addresses) || !target.addresses.length || target.addresses.length > 32 || target.allowInsecure !== undefined && typeof target.allowInsecure !== 'boolean' || target.ca !== undefined && typeof target.ca !== 'string') throw unavailable()
+      if (target.allowPrivilegedAccount !== undefined && (target.kind !== 'starrocks' || typeof target.allowPrivilegedAccount !== 'boolean')) throw unavailable()
       if (target.addresses.some((ip: unknown) => typeof ip !== 'string')) throw unavailable()
       const addresses = target.addresses.map(normalizePinnedAddress)
       if (addresses.some(forbiddenPinnedAddress) || new Set(addresses).size !== addresses.length) throw unavailable()
@@ -85,12 +86,12 @@ export function createSourceEgressPolicy(targets: readonly SourceEgressTarget[] 
     async sql(kind: SqlSourceKind, secret: string) {
       const parsed = parseSourceDsn(kind, secret)
       if (allowUnlistedSql && approved.every(target => target.kind === 'http')) {
-        return { ...parsed, ...await resolve(parsed.hostname, undefined, true), tls: false, ca: undefined }
+        return { ...parsed, ...await resolve(parsed.hostname, undefined, true), tls: false, ca: undefined, allowPrivilegedAccount: false }
       }
       const matches = approved.filter(p => p.kind === kind && p.endpoint === parsed.endpoint && p.username === parsed.username && p.database === parsed.database)
       if (matches.length !== 1) throw unavailable()
       const target = matches[0], pinned = await resolve(parsed.hostname, target.addresses)
-      return { ...parsed, ...pinned, tls: target.allowInsecure !== true, ca: target.ca }
+      return { ...parsed, ...pinned, tls: target.allowInsecure !== true, ca: target.ca, allowPrivilegedAccount: target.allowPrivilegedAccount === true }
     },
   })
 }

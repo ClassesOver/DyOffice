@@ -23,7 +23,8 @@ export type AssistantDocumentFormat = 'docx' | 'xlsx' | 'pptx' | 'pdf'
 export const ASSISTANT_MAX_REQUEST_BYTES=10*1024*1024
 export const AI_TURN_TIMED_OUT='AI_TURN_TIMED_OUT'
 // Separate the bounded Web turn lifetime from the editor's silence watchdog.
-export const PPTX_GENERATION_DEADLINE_MS=240_000
+export const ASSISTANT_MODEL_DEADLINE_MS=1_800_000
+export const PPTX_GENERATION_DEADLINE_MS=ASSISTANT_MODEL_DEADLINE_MS
 export const ASSISTANT_FORMAT_TOOLS: Readonly<Record<AssistantDocumentFormat, ReadonlySet<string>>> = {
   docx: new Set([
     'get_document_context','read_blocks','read_attachment','read_knowledge_file','search_knowledge_base','insert_content','write_document','replace_blocks','replace_selection','apply_ops',

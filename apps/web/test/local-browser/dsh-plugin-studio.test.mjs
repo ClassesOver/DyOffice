@@ -6,7 +6,7 @@ import { build } from 'esbuild'
 import { expect } from '@playwright/test'
 import { launchTestBrowser } from '../helpers/browser.mjs'
 
-test('DSH command card defaults to a rendered DyOffice page and keeps text and sync status available',async t=>{
+for(const unrestricted of [false,true])test(`DSH command card runs an interactive Office page (cross-origin embedding: ${unrestricted})`,async t=>{
  const browser=await launchTestBrowser()
  t.after(()=>browser.close())
  const page=await browser.newPage({viewport:{width:800,height:620},deviceScaleFactor:1})
@@ -19,11 +19,11 @@ test('DSH command card defaults to a rendered DyOffice page and keeps text and s
  const writing={id:'writing-1',topic:'拟一份社区阅读日活动策划，包含时间和流程。',review:{state:'ready',text:'活动流程已齐全，建议补充报名截止时间。'}}
  await page.route(dshOrigin+'/**',route=>{
   const url=new URL(route.request().url())
-  if(url.pathname.endsWith('dyoffice-preview'))return route.fulfill({json:url.searchParams.has('draftSync')?{ticket:'fixture'}:{origin:officeOrigin,dshEditorOrigin:dshOrigin,preview,writing}})
+  if(url.pathname.endsWith('dyoffice-preview'))return route.fulfill({json:url.searchParams.has('draftSync')?{ticket:'fixture'}:{origin:officeOrigin,...(unrestricted?{dshEditorOrigins:['http://localhost:3080',dshOrigin]}:{dshEditorOrigin:dshOrigin}),preview,writing}})
   return route.fulfill({contentType:'text/html',body:'<!doctype html><html lang="zh"><meta charset="utf-8"><style>body{margin:16px;font:14px/1.5 system-ui,sans-serif;color:#243048;background:#fafbfe;--dsw-alias-label-secondary:#536274;--dsw-alias-bg-layer-1:white}</style><main></main></html>'})
  })
- await page.route(officeOrigin+'/**',route=>route.fulfill({contentType:'text/html',body:`<!doctype html>
- <h1>DyOffice document</h1>
+ await page.context().route(officeOrigin+'/**',route=>route.fulfill({contentType:'text/html',body:`<!doctype html>
+ <h1>DyOffice document</h1><label>Document text<input aria-label="Document text"></label>
  <script>
  window.addEventListener('message',e=>{
   if(!window.stalled&&e.data.type==='dsh-dyoffice:draft-request')e.source.postMessage({type:'dsh-dyoffice:draft',fileId:e.data.fileId,draft:null,writing:{id:'writing-1',state:'saved',revision:'${revision}'}},'${dshOrigin}')
@@ -60,15 +60,26 @@ test('DSH command card defaults to a rendered DyOffice page and keeps text and s
  await expect(frame).toBeVisible()
  await expect(frame).toHaveAttribute('src',officeOrigin+'/?dshEmbed=1#/file/'+fileId)
  await expect(frame.contentFrame().getByRole('heading',{name:'DyOffice document'})).toBeVisible()
+ const input=frame.contentFrame().getByRole('textbox',{name:'Document text'})
+ const inputBounds=await input.boundingBox()
+ await page.mouse.click(inputBounds.x+10,inputBounds.y+10)
+ await page.keyboard.type('Edit inside DSH')
+ await expect(input).toHaveValue('Edit inside DSH',{timeout:2000})
  const paper=card.locator('.dsh-office-canvas'),log=card.getByRole('region',{name:'DSH 与 DyOffice 的消息'})
  await expect(log.getByRole('heading')).toHaveCount(0)
- assert.ok((await log.boundingBox()).x>(await paper.boundingBox()).x)
+ assert.ok((await log.boundingBox()).y>=(await paper.boundingBox()).y+(await paper.boundingBox()).height-1)
+ const popupPromise=page.waitForEvent('popup')
+ await card.getByRole('button',{name:'在新窗口打开 DyOffice',exact:false}).click()
+ const popup=await popupPromise
+ await popup.waitForLoadState()
+ assert.equal(popup.url(),officeOrigin+'/#/file/'+fileId)
+ await popup.close()
  await mkdir('test-results/dsh-studio',{recursive:true})
  await card.screenshot({path:'test-results/dsh-studio/command.jpg',type:'jpeg',quality:64})
  await card.getByRole('button',{name:'正文',exact:true}).click()
  await expect(card.getByText('社区阅读日',{exact:true})).toBeVisible()
  await expect(frame).toBeHidden()
- await card.getByRole('button',{name:'网页预览',exact:true}).click()
+ await card.getByRole('button',{name:'Office 网页',exact:true}).click()
  await expect(frame).toBeVisible()
  const editor=page.frames().find(frame=>frame.url().startsWith(officeOrigin+'/'))
  await editor.evaluate(()=>window.stalled=true)

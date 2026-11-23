@@ -13,8 +13,8 @@ function fixture(t,artifacts) {
   const artifact=(id,owner)=>({resultId:id,workspaceId:owner,sourceId:'sales',sourceVersion:1,queryHash:'a'.repeat(64),sha256:'b'.repeat(64),rowCount:1,truncated:false,sizeBytes:10,state:'saved',name:'data',createdAt:new Date().toISOString(),savedAt:new Date().toISOString(),expiresAt:null})
   records.set(resultId,{token:alice,artifact:artifact(resultId,'alice')});records.set(foreignId,{token:bob,artifact:artifact(foreignId,'bob')})
   const sessions={async authenticate(token){calls.push(['auth',token]);if(revoked.has(token)||!identities.has(token))throw Error('secret session detail');return {...identities.get(token)}}}
-  const tools={async execute(token,input){
-    calls.push(['tool',token,input]);const args=input.arguments
+  const tools={async execute(token,input,documentId){
+    calls.push(['tool',token,input,documentId]);const args=input.arguments
     if(input.name==='sources.list')return {items:[{sourceId:'sales',name:'Sales'},{sourceId:'other',name:'Private unrelated'}],nextCursor:null}
     if(token!==alice||args.sourceId!=='sales')throw Error('private source denial')
     if(input.name==='sources.describe')return {sourceId:'sales',schema:[{name:'revenue'}]}
@@ -295,4 +295,21 @@ test('a data grant follows confirmed lease renewals and stops at the last confir
   await new Promise(resolve=>setImmediate(resolve))
   until+=30000
   await assert.rejects(f.access.authorize(grant.taskId,grant.credential),{statusCode:403})
+})
+
+test('batch SQL registers each frozen result in order without exposing rows and rechecks task access',async t=>{
+  const f=fixture(t),documentId=randomUUID(),grant=await f.issue(undefined,{documentId})
+  const run=queries=>f.access.execute(grant.taskId,grant.credential,'sources.query',{sourceId:'sales',queries})
+  const {items}=await run(['SELECT 1','SELECT 2'])
+  assert.equal(items.length,2)
+  for(const item of items){
+    assert.equal(item.ok,true)
+    assert.equal('preview' in item.result,false)
+    assert.ok(await f.access.download(grant.taskId,grant.credential,item.result.artifact.resultId))
+  }
+  const original=f.tools.execute
+  f.tools.execute=async(...args)=>{const value=await original(...args); f.access.revoke(grant.taskId);return value}
+  await assert.rejects(run(['SELECT 3','SELECT 4']))
+  assert.deepEqual(f.calls.filter(c=>c[2]?.name==='sources.query').map(c=>c[2].arguments.sql),['SELECT 1','SELECT 2','SELECT 3'])
+  assert.ok(f.calls.filter(c=>c[0]==='tool').every(c=>c[3]===documentId))
 })

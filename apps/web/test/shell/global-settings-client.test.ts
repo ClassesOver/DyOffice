@@ -151,3 +151,31 @@ test.each([408,503].flatMap(status=>(['save','remove','rotate'] as const).map(op
  readMode='valid';await client.load({reconcile:true});expect(client.getState().unknownWrite).toBe(false);expect(writes).toBe(1)
  timeout=false;await mutate();expect(writes).toBe(2)
 })
+
+test('embed origins survive load/save and reject paths before sending', async () => {
+ const officeEmbedOrigins = ['http://localhost:3080', 'http://127.0.0.1:3080', 'https://dsh.example']
+ const calls: unknown[] = []
+ const client = createGlobalSettingsClient(requestFrom(async (_path, method, body) => {
+  calls.push(body)
+  return {...snapshot(method === 'PUT' ? 4 : 3), officeEmbedOrigins}
+ }))
+ expect((await client.load()).officeEmbedOrigins).toEqual(officeEmbedOrigins)
+ expect((await client.save(3, {officeEmbedOrigins})).officeEmbedOrigins).toEqual(officeEmbedOrigins)
+ expect(calls[1]).toEqual({expectedRevision: 3, patch: {officeEmbedOrigins}})
+ await expect(client.save(4, {officeEmbedOrigins: ['https://dsh.example/path']})).rejects.toMatchObject({code: 'invalid_request'})
+ expect(calls).toHaveLength(2)
+})
+
+
+test('StarRocks privileged-account opt-in survives loading and saving source targets', async () => {
+ const sourceEgressTargets = [{kind: 'starrocks' as const, endpoint: 'starrocks://db.example:9030/rj', addresses: ['192.0.2.10'], username: 'root', database: 'rj', allowPrivilegedAccount: true}]
+ const calls: unknown[] = []
+ const client = createGlobalSettingsClient(requestFrom(async (_path, method, body) => {
+  calls.push(body)
+  return {...snapshot(method === 'PUT' ? 4 : 3), sourceEgressTargets}
+ }))
+ const loaded = await client.load()
+ expect(loaded.sourceEgressTargets).toEqual(sourceEgressTargets)
+ await client.save(3, {sourceEgressTargets: loaded.sourceEgressTargets})
+ expect(calls[1]).toEqual({expectedRevision: 3, patch: {sourceEgressTargets}})
+})

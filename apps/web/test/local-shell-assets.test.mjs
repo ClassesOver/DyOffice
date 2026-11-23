@@ -39,7 +39,7 @@ test('local shell reloads its allowlist after a rebuild without restarting the s
  assert.equal((await app.inject('/assets/third-build.js')).statusCode,200)
 })
 
-test('only the explicit embed page allows the configured DSH origin',async t=>{
+for(const embedOrigin of ['http://localhost:3080','http://127.0.0.1:3080'])test(`only the explicit embed page allows DSH embedding: ${embedOrigin}`,async t=>{
  const directory=await mkdtemp(join(tmpdir(),'local-shell-dsh-'));t.after(()=>rm(directory,{recursive:true,force:true}))
  await mkdir(join(directory,'.vite'))
  await mkdir(join(directory,'assets'))
@@ -47,10 +47,15 @@ test('only the explicit embed page allows the configured DSH origin',async t=>{
  await writeFile(join(directory,'assets/app.js'),'export {}')
  await writeFile(join(directory,'.vite/manifest.json'),JSON.stringify({'index.html':{file:'assets/app.js'}}))
  const app=await createApiShell();t.after(()=>app.close())
- await registerLocalShell(app,directory,'http://localhost:3080')
+ let allowed=[embedOrigin]
+ await registerLocalShell(app,directory,async()=>allowed)
  const ancestors=async url=>(await app.inject(url)).headers['content-security-policy']?.split('; ').at(-1)
  assert.equal(await ancestors('/'),'frame-ancestors \'none\'')
  assert.equal(await ancestors('/?dshEmbed=0'),'frame-ancestors \'none\'')
- assert.equal(await ancestors('/?dshEmbed=1'),'frame-ancestors http://localhost:3080')
- assert.equal(await ancestors('/?dshEmbed=1&origin=https://other.test'),'frame-ancestors http://localhost:3080')
+ assert.equal(await ancestors('/?dshEmbed=1'),'frame-ancestors '+embedOrigin)
+ assert.equal(await ancestors('/?dshEmbed=1&origin=https://other.test'),'frame-ancestors '+embedOrigin)
+ allowed=['http://localhost:3080','http://127.0.0.1:3080']
+ assert.equal(await ancestors('/?dshEmbed=1'),'frame-ancestors '+allowed.join(' '))
+ allowed=[]
+ assert.equal(await ancestors('/?dshEmbed=1'),"frame-ancestors 'none'")
 })

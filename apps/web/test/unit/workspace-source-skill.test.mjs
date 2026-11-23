@@ -2,6 +2,21 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { createWorkspaceSourceSkill } from '../../../../packages/browser-host/src/source-skill.ts'
 
+test('batch source queries capture every result in the requesting document', async () => {
+  const { createWorkspaceSourceTools } = await import('../../server/src/modules/sources/tools.ts')
+  const documentId = '11111111-1111-4111-8111-111111111111', captured = []
+  const tools = createWorkspaceSourceTools({
+    sources: { querySource: async (_token, sourceId) => ({ sourceId, sourceVersion: 1, schema: [], timezone: 'UTC', rows: [{ n: 1 }], truncated: false, sha256: 'a'.repeat(64) }) },
+    results: {
+      requireDocument: async (token, id) => assert.deepEqual([token, id], ['session', documentId]),
+      capture: async (token, _snapshot, _hash, id) => { captured.push([token, id]); return { resultId: String(captured.length) } },
+    },
+  })
+  const result = await tools.execute('session', { name: 'sources.query', arguments: { sourceId: 'reporting', queries: ['SELECT 1', 'SELECT 2'] } }, documentId)
+  assert.deepEqual(result.items.map(item => item.ok), [true, true])
+  assert.deepEqual(captured, [['session', documentId], ['session', documentId]])
+})
+
 test('personal source skill exposes provider-compatible public tools and delegates through a session-bound request', async () => {
   const calls = []
   const skill = createWorkspaceSourceSkill(async (path, method, body) => { calls.push({ path, method, body }); return { items: [] } })
@@ -104,4 +119,43 @@ test('a saved-result quota failure from an older server gives recovery guidance 
   assert.equal(result.isError, true)
   assert.match(result.output, /Data results.*delete/i)
   assert.doesNotMatch(result.output, /Tell the user|private/)
+})
+
+test('model preview stays small without changing frozen result evidence or skipping rows', async () => {
+  const rows = Array.from({ length: 100 }, (_, id) => ({ id, value: '数据'.repeat(100) }))
+  const artifact = { resultId: 'frozen', rowCount: 200, truncated: false }
+  const data = { artifact, schema: [{ name: 'id', type: 'number' }], timezone: 'UTC', totalRows: 200, sourceTruncated: false, sha256: 'original' }
+  const skill = createWorkspaceSourceSkill(async (_path, _method, call) => call.name === 'sources.query'
+    ? { ...data, preview: rows, nextOffset: 100 }
+    : { ...data, rows, offset: 100, nextOffset: null })
+  const query = JSON.parse((await skill.executeTool({ id: 'q', name: 'sources_query', input: { sourceId: 'sales' } })).output)
+  assert.ok(query.preview.length > 0 && query.preview.length < rows.length)
+  assert.equal(query.nextOffset, query.preview.length)
+  assert.deepEqual(query.artifact, artifact)
+  assert.equal(query.sha256, 'original')
+  assert.equal(query.sourceTruncated, false)
+  const page = JSON.parse((await skill.executeTool({ id: 'r', name: 'sources_read_result', input: { resultId: 'frozen', offset: 100 } })).output)
+  assert.deepEqual(page.rows, rows.slice(0, page.rows.length))
+  assert.ok(page.rows.length > 0)
+  assert.equal(page.nextOffset, 100 + page.rows.length)
+})
+
+test('oversized rows are identified explicitly and are never presented as complete values', async () => {
+  const row = { text: 'x'.repeat(20_000) }
+  const skill = createWorkspaceSourceSkill(async () => ({ rows: [row, { text: 'next' }], offset: 4, nextOffset: null }))
+  const output = JSON.parse((await skill.executeTool({ id: 'r', name: 'sources_read_result', input: {} })).output)
+  assert.deepEqual(output.rows, [])
+  assert.equal(output.omittedOversizedRowOffset, 4)
+  assert.equal(output.nextOffset, 5)
+})
+
+test('large catalog responses use compact metadata with an explicit scope refinement hint', async () => {
+  const rows = Array.from({ length: 1000 }, (_, id) => ({ table_schema: 'sales', table_name: 'orders_' + id }))
+  const skill = createWorkspaceSourceSkill(async () => ({ sourceId: 'sales', kind: 'postgres', config: { allowedTables: ['private_config'], timezone: 'UTC' }, metadata: { rows, truncated: true, sha256: 'catalog-hash' } }))
+  const output = JSON.parse((await skill.executeTool({ id: 'd', name: 'sources_describe', input: { sourceId: 'sales' } })).output)
+  assert.ok(output.metadata.rows.length > 0 && output.metadata.rows.length < rows.length)
+  assert.equal(output.metadata.truncated, true)
+  assert.match(output.metadata.notice, /tablePrefix/)
+  assert.equal(output.config.allowedTables, undefined)
+  assert.equal(output.metadata.sha256, undefined)
 })

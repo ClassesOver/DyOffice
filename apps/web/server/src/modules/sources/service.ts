@@ -12,6 +12,8 @@ import { querySqlSource, type SqlRows } from './sql.ts'
 import { createQuerySnapshot, fitSnapshotRows } from './provenance.ts'
 import { withAssistantErrorCode } from '../../../../../../packages/web-contracts/src/assistant-errors.ts'
 
+import { MAX_DESCRIBE_TABLES } from '../../../../../../packages/web-contracts/src/source-tools.ts'
+
 type Row = Record<string, any>
 const userSchemaFilter = "LOWER(table_schema) NOT IN ('information_schema','mysql','sys','performance_schema') AND SUBSTRING(LOWER(table_schema), 1, 3) <> 'pg_'"
 const scope = (p: BusinessPrincipal, id: string) => [p.deploymentId, p.userId, id]
@@ -199,14 +201,23 @@ export function createSourceService({ transactions, credentialKeys = '', egressT
       })
     },
     async describe(token: string, input: unknown, payload: unknown = {}) {
-      const id = sourceId(input), request = object(payload, ['table'])
-      if (request.table !== undefined && (typeof request.table !== 'string' || !/^[A-Za-z_][A-Za-z0-9_$]{0,127}(?:\.[A-Za-z_][A-Za-z0-9_$]{0,127})?$/.test(request.table))) throw sourceError()
+      const id = sourceId(input), request = object(payload, ['table','tables','schema','tablePrefix'])
+      const batch = request.tables !== undefined
+      if (batch && (request.table !== undefined || !Array.isArray(request.tables) || !request.tables.length || request.tables.length > MAX_DESCRIBE_TABLES)) throw sourceError()
+      const names: string[] = batch ? request.tables : request.table === undefined ? [] : [request.table]
+      if (names.some(table => typeof table !== 'string' || !/^[A-Za-z_][A-Za-z0-9_$]{0,127}(?:\.[A-Za-z_][A-Za-z0-9_$]{0,127})?$/.test(table))) throw sourceError()
+      const { schema, tablePrefix } = request
+      for (const filter of [schema, tablePrefix]) {
+        if (filter !== undefined && (typeof filter !== 'string' || !/^[A-Za-z_][A-Za-z0-9_$]{0,127}$/.test(filter))) throw sourceError()
+      }
+      if (names.length && (schema !== undefined || tablePrefix !== undefined)) throw sourceError()
       const prepared = await access(token, async (c, p) => {
         const source = await get(c, p, id)
         if (!source.enabled) throw sourceError(409)
         const row: Row = { ...source, execution: executionFor(source.kind, source.config) }
         return { row, secret: await readCredential(c, p, id, row), policy: await sourcePolicy(c, p, token) }
       })
+      if (batch && prepared.row.kind === 'http') throw sourceError()
       let metadata: QuerySnapshot | null = null
       if (prepared.row.kind !== 'http') {
         const database = prepared.row.kind === 'postgres' ? 'public' : parseSourceDsn(prepared.row.kind, prepared.secret).database
@@ -214,8 +225,10 @@ export function createSourceService({ transactions, credentialKeys = '', egressT
         const schemaAllowed = (table: string) => !schemas || schemas.includes(table.slice(0, table.indexOf('.')))
         const allowed: string[] | undefined = prepared.row.config.allowedTables
           ?.map((table: string) => table.includes('.') ? table : `${database}.${table}`).filter(schemaAllowed)
-        const requested = request.table === undefined ? undefined : request.table.includes('.') ? request.table : `${database}.${request.table}`
-        if (requested !== undefined && (!schemaAllowed(requested) || (allowed ? !allowed.includes(requested) : /^(?:pg_|information_schema\.|mysql\.|sys\.|performance_schema\.)/i.test(requested)))) throw withAssistantErrorCode(sourceError(403), 'SOURCE_SCOPE_DENIED')
+        const requested = [...new Set(names.map(table => table.includes('.') ? table : `${database}.${table}`))]
+        for (const table of requested) {
+          if (!schemaAllowed(table) || (allowed ? !allowed.includes(table) : /^(?:pg_|information_schema\.|mysql\.|sys\.|performance_schema\.)/i.test(table))) throw withAssistantErrorCode(sourceError(403), 'SOURCE_SCOPE_DENIED')
+        }
         const literal = (value: string) => "'" + value.replaceAll("'", "''") + "'"
         const predicate = (table: string) => {
           const dot = table.indexOf('.')
@@ -223,16 +236,20 @@ export function createSourceService({ transactions, credentialKeys = '', egressT
         }
         // Filter inside the fixed metadata projection so unrelated names never
         // leave the target. Only this internal query can read information_schema.
-        const where = requested !== undefined ? predicate(requested)
+        const where = requested.length ? requested.map(predicate).join(' OR ')
           : allowed ? allowed.length ? allowed.map(predicate).join(' OR ') : '1 = 0'
           : schemas ? schemas.length ? `table_schema IN (${schemas.map(literal).join(', ')})` : '1 = 0'
           : prepared.row.kind === 'postgres' ? userSchemaFilter : `table_schema = ${literal(database)}`
-        const sql = request.table === undefined
-          ? `SELECT table_schema, table_name, table_type FROM information_schema.tables WHERE ${where} ORDER BY table_name, table_schema`
-          : `SELECT column_name, data_type, is_nullable FROM information_schema.columns WHERE ${where} ORDER BY ordinal_position`
+        const filters = [
+          schema === undefined ? '' : ` AND table_schema = ${literal(schema)}`,
+          tablePrefix === undefined ? '' : ` AND SUBSTRING(LOWER(table_name), 1, ${tablePrefix.length}) = ${literal(tablePrefix.toLowerCase())}`,
+        ].join('')
+        const sql = !requested.length
+          ? `SELECT table_schema, table_name, table_type FROM information_schema.tables WHERE (${where})${filters} ORDER BY table_name, table_schema`
+          : `SELECT ${batch ? 'table_schema, table_name, ' : ''}column_name, data_type, is_nullable FROM information_schema.columns WHERE ${where} ORDER BY ${batch ? 'table_schema, table_name, ' : ''}ordinal_position`
         const row = { ...prepared.row, config: { ...prepared.row.config, units: {} }, execution: { ...prepared.row.execution, maxRows: 1000 } }
         const execution = row.execution
-        const result = { execution, sql: await querySqlSource(prepared.policy, prepared.row.kind, prepared.secret, sql, execution, { defaultSchema: database, allowedTables: [request.table === undefined ? 'information_schema.tables' : 'information_schema.columns'] }) }
+        const result = { execution, sql: await querySqlSource(prepared.policy, prepared.row.kind, prepared.secret, sql, execution, { defaultSchema: database, allowedTables: [!requested.length ? 'information_schema.tables' : 'information_schema.columns'] }) }
         metadata = snapshotFor(row, result.execution, result.sql)
       }
       return access(token, async (c, p) => {

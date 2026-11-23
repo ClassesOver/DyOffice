@@ -66,8 +66,8 @@ test('lease lost during native work discards the draft and returns no success',a
 })
 test('deployment assembly rejects incomplete slides configuration without File API',async()=>{
  const {buildLocalApp}=await import('../../server/src/app.ts')
- await assert.rejects(()=>buildLocalApp({slidesHost:{openSession(){throw Error('must not execute')}}}),/Cannot read properties|File API/)
- await assert.rejects(()=>buildLocalApp({nativeSlidesDirectory:'/tmp/test'}),/Cannot read properties|File API/)
+ await assert.rejects(()=>buildLocalApp({origin:'https://office.test',slidesHost:{openSession(){throw Error('must not execute')}}}),/Cannot read properties|File API/)
+ await assert.rejects(()=>buildLocalApp({origin:'https://office.test',nativeSlidesDirectory:'/tmp/test'}),/Cannot read properties|File API/)
 })
 test('delayed old-pin apply after own export commit cannot mutate or destroy live draft',async t=>{
  const {createHash}=await import('node:crypto');let head=revision,sha='original',applied=0,closed=0

@@ -1,5 +1,5 @@
 import React, {useCallback, useEffect, useId, useRef, useState, type ReactNode} from 'react'
-import {GLOBAL_SETTING_KINDS} from '../../../../packages/web-contracts/src/settings'
+import {DEFAULT_OFFICE_EMBED_ORIGINS, GLOBAL_SETTING_KINDS} from '../../../../packages/web-contracts/src/settings'
 import type {AdminGlobalConfig, AdminGlobalEntry, GlobalConfigCheck, GlobalConfigPatch, GlobalEntryUpsert, GlobalSettingKind, ModelConnectionFailure, SourceEgressTarget} from '../../../../packages/web-contracts/src/settings'
 import {GlobalSettingsError, type GlobalSettingsClient} from './global-settings-client'
 import './global-settings.css'
@@ -25,7 +25,7 @@ const modelConnectionGuidance: Record<ModelConnectionFailure,string> = {
   PROVIDER_RATE_LIMITED: '供应商限流或额度不足，请检查供应商额度，或稍后重试。',
   PROVIDER_TEMPORARILY_UNAVAILABLE: '供应商服务暂时不可用，请稍后重试。',
 }
-type ConfigGroup = 'ai' | 'media' | 'sources'
+type ConfigGroup = 'ai' | 'media' | 'sources' | 'embed'
 const groupFor = (kind: GlobalSettingKind): ConfigGroup => kind === 'chat' ? 'ai' : 'media'
 const mediaKinds: GlobalSettingKind[] = ['image_generation', 'image_analysis', 'video_analysis', 'web_search', 'image_search']
 type EntryDraft = Omit<AdminGlobalEntry, 'hasKey'>
@@ -69,6 +69,8 @@ export function GlobalSettingsPanel({client, onClose, presentation = 'dialog', o
   const [defaults, setDefaults] = useState<DefaultDraft>({}), [clearKeys, setClearKeys] = useState<string[]>([])
   const [group, setGroup] = useState<ConfigGroup>('ai')
   const [sourceTargets, setSourceTargets] = useState<SourceEgressTarget[] | null>(null)
+  const [embedOrigins, setEmbedOrigins] = useState<string | null>(null)
+  const embedOpen = group === 'embed'
   const sourcesOpen = group === 'sources'
   const [configSearch,setConfigSearch]=useState('')
   const [selected, setSelected] = useState(''), [filter, setFilter] = useState<GlobalSettingKind | ''>('')
@@ -87,10 +89,10 @@ export function GlobalSettingsPanel({client, onClose, presentation = 'dialog', o
   ] : []
   const groupKinds = group === 'ai' ? ['chat'] as GlobalSettingKind[] : [...mediaKinds, ...GLOBAL_SETTING_KINDS.filter(kind => !mediaKinds.includes(kind) && kind !== 'chat' && entries.some(entry => entry.kind === kind))]
   const filtered = entries.filter(entry => groupKinds.includes(entry.kind) && (!filter || entry.kind === filter))
-  const current = filtered.find(entry => entry.id === selected) ?? filtered[0]
+  const current = (sourcesOpen || embedOpen) ? undefined : (filtered.find(entry => entry.id === selected) ?? filtered[0])
   const provider = current && saved?.providerCatalog.find(item => item.id === current.providerId && item.kinds.includes(current.kind))
   const patch = draftPatch(saved, drafts, removed, defaults, keys.current, clearKeys)
-  const dirty = !!(patch.upserts?.length || patch.removes?.length || Object.keys(patch.defaults ?? {}).length || sourceTargets)
+  const dirty = !!(patch.upserts?.length || patch.removes?.length || Object.keys(patch.defaults ?? {}).length || sourceTargets || embedOrigins !== null)
   const busy = clientState.pending !== null, blocked = busy || clientState.unknownWrite || needsReload || !saved
   useEffect(() => {
     if (!dirty && !clientState.unknownWrite && (!busy || clientState.pending === 'load')) return
@@ -104,7 +106,7 @@ export function GlobalSettingsPanel({client, onClose, presentation = 'dialog', o
     scrubPassword(keyInput.current)
     if (alive.current) renderKeys(version => version + 1)
   }, [])
-  const resetDrafts = useCallback(() => {setDrafts({}); setRemoved([]); setDefaults({}); setClearKeys([]); setSourceTargets(null); setConfirmation(null); clearSecrets()}, [clearSecrets])
+  const resetDrafts = useCallback(() => {setDrafts({}); setRemoved([]); setDefaults({}); setClearKeys([]); setSourceTargets(null); setEmbedOrigins(null); setConfirmation(null); clearSecrets()}, [clearSecrets])
   const report = useCallback((cause: unknown) => {
     const failure = cause instanceof GlobalSettingsError ? cause : new GlobalSettingsError('request_failed')
     setError(failure.message)
@@ -164,11 +166,12 @@ export function GlobalSettingsPanel({client, onClose, presentation = 'dialog', o
   async function save() {
     if (blocked || !dirty || locked.current || !saved) return
     const outgoing = draftPatch(saved, drafts, removed, defaults, keys.current, clearKeys)
-    if (sourceTargets) outgoing.sourceEgressTargets = sourceTargets.map(({kind, endpoint, addresses, username, database, allowInsecure, ca}) => ({
+    if (sourceTargets) outgoing.sourceEgressTargets = sourceTargets.map(({kind, endpoint, addresses, username, database, allowInsecure, allowPrivilegedAccount, ca}) => ({
       kind, endpoint: endpoint.trim(), addresses: addresses.map(ip => ip.trim()).filter(Boolean),
       ...(kind === 'http' ? {} : {username: username?.trim(), database: database?.trim()}),
-      ...(allowInsecure !== undefined ? {allowInsecure} : {}), ...(!allowInsecure && ca?.trim() ? {ca: ca.trim()} : {}),
+      ...(allowInsecure !== undefined ? {allowInsecure} : {}), ...(allowPrivilegedAccount !== undefined ? {allowPrivilegedAccount} : {}), ...(!allowInsecure && ca?.trim() ? {ca: ca.trim()} : {}),
     }))
+    if (embedOrigins !== null) outgoing.officeEmbedOrigins = embedOrigins.split(/\r?\n/).map(value => value.trim()).filter(Boolean)
     clearSecrets()
     await perform(() => api.save(saved.revision, outgoing), result => {setSaved(result); resetDrafts(); setNotice('配置已保存。')})
   }
@@ -214,11 +217,11 @@ export function GlobalSettingsPanel({client, onClose, presentation = 'dialog', o
     <div className="global-settings-layout">
       <aside className="global-settings-navigation">
         <span className="global-settings-nav-caption">平台设置</span>
-        <nav className="global-settings-groups" role="tablist" aria-label="全局配置分类">{([{key:'ai',label:'AI 模型',icon:'model'},{key:'media',label:'生图、媒体与搜索',icon:'picture'},{key:'sources',label:'数据源白名单',icon:'link'}] as const).map(item=><button type="button" role="tab" aria-selected={group===item.key} disabled={busy} key={item.key} onClick={()=>{setGroup(item.key);setFilter('');setSelected('');setConfigSearch('');setConfirmation(null)}}><ConfigIcon kind={item.icon}/>{item.label}</button>)}</nav>
+        <nav className="global-settings-groups" role="tablist" aria-label="全局配置分类">{([{key:'ai',label:'AI 模型',icon:'model'},{key:'media',label:'生图、媒体与搜索',icon:'picture'},{key:'sources',label:'数据源白名单',icon:'link'},{key:'embed',label:'跨域嵌入',icon:'link'}] as const).map(item=><button type="button" role="tab" aria-selected={group===item.key} disabled={busy} key={item.key} onClick={()=>{setGroup(item.key);setFilter('');setSelected('');setConfigSearch('');setConfirmation(null)}}><ConfigIcon kind={item.icon}/>{item.label}</button>)}</nav>
       </aside>
       <div className="global-settings-content">
         <header className="global-settings-content-head">
-          <div><h2>{sourcesOpen ? '数据源白名单' : group === 'ai' ? 'AI 模型' : '生图、媒体与搜索'}</h2>{!sourcesOpen && <p className="global-settings-intro">{group === 'ai' ? '为文档、表格、演示和 PDF 的 AI 助手配置共享模型。' : '为团队配置生图、媒体解析及搜索服务。'}</p>}</div>
+          <div><h2>{embedOpen ? '跨域嵌入' : sourcesOpen ? '数据源白名单' : group === 'ai' ? 'AI 模型' : '生图、媒体与搜索'}</h2>{!sourcesOpen && !embedOpen && <p className="global-settings-intro">{group === 'ai' ? '为文档、表格、演示和 PDF 的 AI 助手配置共享模型。' : '为团队配置生图、媒体解析及搜索服务。'}</p>}</div>
           <div className="global-settings-primary-actions">
             {dirty && <button type="button" disabled={blocked} onClick={() => setConfirmation({kind: 'discard'})}>放弃更改</button>}
             {current?.kind === 'chat' && <button type="button" disabled={blocked || dirty || !current.enabled || !current.hasKey} title={dirty ? '请先保存，再测试连接。' : '使用已保存的模型发送简短测试消息'} onClick={() => void perform(() => api.testConnection(current.id), result => {
@@ -230,7 +233,7 @@ export function GlobalSettingsPanel({client, onClose, presentation = 'dialog', o
         </header>
         <div className="global-settings-status" aria-label="配置状态摘要">
           <span className={`global-settings-save-state${dirty ? ' is-dirty' : ''}`}>{clientState.unknownWrite ? '写入结果待核对' : needsReload ? '需要读取最新配置' : dirty ? '有未保存更改' : saved ? '已保存配置' : '正在读取配置'}</span>
-          {sourcesOpen ? saved && <span>{(saved.sourceEgressTargets ?? []).some(target => target.kind !== 'http') ? '数据库白名单已启用' : '数据库目标不受白名单限制'}</span> : <span>服务配置 {saved ? entries.length : '—'} · 已启用 {saved ? entries.filter(entry => entry.enabled).length : '—'}</span>}
+          {embedOpen ? <span>保存后生效</span> : sourcesOpen ? saved && <span>{(saved.sourceEgressTargets ?? []).some(target => target.kind !== 'http') ? '数据库白名单已启用' : '数据库目标不受白名单限制'}</span> : <span>服务配置 {saved ? entries.length : '—'} · 已启用 {saved ? entries.filter(entry => entry.enabled).length : '—'}</span>}
           {dirty && current?.kind === 'chat' && <span>请先保存，再测试连接。</span>}
         </div>
         {busy && <p className="set-field-desc" aria-live="polite">{clientState.pending === 'load' ? '正在读取配置…' : '正在处理…'}</p>}
@@ -247,7 +250,11 @@ export function GlobalSettingsPanel({client, onClose, presentation = 'dialog', o
           <button type="button" disabled={busy} onClick={() => setConfirmation(null)}>取消</button>
         </div>}
         {saved && <form id={formId} aria-label="全局配置表单" onSubmit={event => {event.preventDefault(); void save()}}>
-          {sourcesOpen ? <SourceEgressSettings targets={sourceTargets ?? saved.sourceEgressTargets ?? []} onChange={setSourceTargets} disabled={blocked}/> : <>
+          {embedOpen ? <div>
+            <p className="global-settings-intro">允许以下应用来源嵌入 Office 网页。每行填写一个 http:// 或 https:// 地址（含端口，不含路径）。留空关闭跨域嵌入。</p>
+            <label className="global-settings-field"><span>允许的来源</span><textarea aria-label="Office 跨域嵌入来源" rows={7} disabled={blocked} value={embedOrigins ?? (saved.officeEmbedOrigins ?? [...DEFAULT_OFFICE_EMBED_ORIGINS]).join('\n')} onChange={event => setEmbedOrigins(event.target.value)}/></label>
+            <button type="button" disabled={blocked} onClick={() => setEmbedOrigins(DEFAULT_OFFICE_EMBED_ORIGINS.join('\n'))}>恢复本地回环地址</button>
+          </div> : sourcesOpen ? <SourceEgressSettings targets={sourceTargets ?? saved.sourceEgressTargets ?? []} onChange={setSourceTargets} disabled={blocked}/> : <>
           <div className="global-settings-config-picker">
             {group === 'media' && <ConfigSelect aria-label="配置类型筛选" value={filter} disabled={busy} onChange={value => {setFilter(value); setSelected(''); setConfirmation(null)}} options={[{value: '', label: '全部服务'}, ...groupKinds.map(kind => ({value: kind, label: kindLabels[kind]}))]}/>}
             <div className="global-settings-choice"><input type="search" aria-label="搜索服务配置" placeholder="搜索服务配置" value={configSearch} disabled={busy} onChange={event=>setConfigSearch(event.target.value)}/><ConfigSelect className="global-settings-config-select" aria-label="选择服务配置" value={current?.id} placeholder="选择服务配置" disabled={busy || !filtered.length} onChange={value => {setSelected(value); setConfirmation(null)}} options={filtered.filter(entry=>entry.label.toLocaleLowerCase().includes(configSearch.trim().toLocaleLowerCase())||entry.id===current?.id).map(entry => ({value: entry.id, label: `${entry.label || '未命名配置'}${entry.enabled ? '' : ' · 已停用'}`, hidden:!entry.label.toLocaleLowerCase().includes(configSearch.trim().toLocaleLowerCase())}))}/>{configSearch&&!filtered.some(entry=>entry.label.toLocaleLowerCase().includes(configSearch.trim().toLocaleLowerCase()))&&<span role="status">没有匹配的配置</span>}</div>
