@@ -442,7 +442,15 @@ for(const live of [false,true])test(live?'a real model generates, redoes and reu
  }
 
  await send(revise)
- await expect(panel.getByText(revisedAnswer,{exact:true})).toBeVisible({timeout:30000})
+ const reply=panel.locator('.ai-chat .ai-msg-assistant').filter({hasText:revisedAnswer})
+ await expect(reply).toBeVisible({timeout:30000})
+ const turns=await panel.locator('.ai-chat .ai-msg').evaluateAll(nodes=>nodes.map(node=>({
+  user:node.classList.contains('ai-msg-user'),text:node.textContent?.trim(),
+ })))
+ const revisedRequest=turns.findLastIndex(turn=>turn.user&&turn.text===revise)
+ assert.ok(revisedRequest>=0)
+ assert.equal(turns.slice(revisedRequest+1).filter(turn=>!turn.user).length,1)
+ await expect(reply.locator('.ai-work-group-summary')).toHaveText(/2 steps/)
  assert.deepEqual(phases.slice(6),['read page 2','redo tool','redesign page 2','redo complete'])
  assert.ok(acceptedTools.has('regenerate_slide'))
  await expect.poll(renderedText).toEqual(revisedDeck)

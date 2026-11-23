@@ -173,6 +173,7 @@ export interface SlidesAssistantContinuation {
 }
 
 interface AiPanelProps {
+  groupByRequest?: boolean
   transport?: AgentTransport
   modelPicker?: React.ReactNode
   assistantWorkspace?: AssistantWorkspace
@@ -288,6 +289,7 @@ const MODEL_BRIDGE: AiModelPickerBridge = {
 }
 
 export function AiPanel({
+  groupByRequest = false,
   transport: sharedTransport,
   modelPicker,
   assistantWorkspace,
@@ -1376,7 +1378,7 @@ export function AiPanel({
         onTurnEnd: () => {
           lastTurnToolsRef.current = []
           // The resumed turn is already rendered by the persisted transcript.
-          if (resumedHarnessRun.current) return
+          if (groupByRequest || resumedHarnessRun.current) return
           patchLastAssistant({ streaming: false })
           setChat((prev) => [...prev, { role: 'assistant', text: '', streaming: true }])
         },
@@ -2378,7 +2380,7 @@ export function AiPanel({
               {entry.role === 'user' && entry.skills && (
                 <AiSkillChips lang={lang} names={entry.skills} />
               )}
-              {entry.role === 'assistant' && !entry.text && entry.streaming ? (
+              {entry.role === 'assistant' && !entry.text && entry.streaming && (!groupByRequest || !entry.tools?.length) ? (
                 <span className="ai-typing-row">
                   <AiTypingIndicator
                     label={entry.tools?.length ? t('aiContinuing') : t('aiThinking')}
@@ -2391,7 +2393,7 @@ export function AiPanel({
               ) : (
                 <span dir="auto">{entry.text}</span>
               )}
-              {entry.tools && entry.tools.length > 0 && <ToolChipList tools={entry.tools} />}
+              {entry.tools && entry.tools.length > 0 && <ToolChipList tools={entry.tools} requestRunning={groupByRequest ? !!entry.streaming : undefined} />}
               {entry.role === 'assistant' && entry.usage && (
                 <div className="ai-message-usage">
                   <AiUsageChip usage={entry.usage} lang={lang} />
@@ -2890,7 +2892,7 @@ function RollbackButton({ disabled, onClick }: { disabled: boolean; onClick: () 
 /** Tool activity group: a single quiet summary row
  *  that auto-opens while tools run, auto-collapses into "Worked · N steps" when they finish,
  *  and a manual toggle that always wins. Rows inside are step rows with 1px connectors. */
-function ToolChipList({ tools }: { tools: ToolActivity[] }) {
+function ToolChipList({ tools, requestRunning }: { tools: ToolActivity[]; requestRunning?: boolean | undefined }) {
   const { t: tr } = useI18n()
   const [expanded, setExpanded] = useState<Set<number>>(new Set())
   const [userOpen, setUserOpen] = useState<boolean | null>(null)
@@ -2904,16 +2906,20 @@ function ToolChipList({ tools }: { tools: ToolActivity[] }) {
     })
   }, [])
 
-  const anyRunning = tools.some((tool) => tool.running)
-  const open = userOpen ?? anyRunning
-  const label = anyRunning ? tr('aiGroupWorking') : tr('aiWorkedSteps', { n: tools.length })
+  const runningTool = tools.find((tool) => tool.running)
+  const anyRunning = requestRunning ?? !!runningTool
+  const open = userOpen ?? (requestRunning === undefined && !!runningTool)
+  const label = anyRunning
+    ? [tr('aiGroupWorking'), requestRunning && runningTool?.name].filter(Boolean).join(' · ')
+    : tr('aiWorkedSteps', { n: tools.length })
 
   return (
-    <div className="ai-work-group">
+    <div className="ai-work-group" data-manual-toggle={requestRunning !== undefined && userOpen !== null ? true : undefined}>
       <button
         type="button"
         className={`ai-work-group-summary${anyRunning ? ' running' : ''}`}
         aria-expanded={open}
+        title={requestRunning && runningTool ? label : undefined}
         onClick={() => setUserOpen(!open)}
       >
         {anyRunning && !open && <span className="ai-tool-chip-spinner" aria-hidden />}

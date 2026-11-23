@@ -3763,6 +3763,7 @@ export function App({ host }: { host?: SlidesAppHost } = {}) {
             {/* always mounted once settings load: collapse must not drop state or in-flight runs */}
             {aiSettings ? (
               <AiPanel
+                groupByRequest={!!host}
                 transport={host?.assistant?.transport}
                 modelPicker={host?.assistant?.modelPicker}
                 assistantWorkspace={host?.assistant?.workspace}

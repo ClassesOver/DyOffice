@@ -496,7 +496,7 @@ export function AiChatPanel({
               </>
             ) : (
               <>
-                {entry.tools.length > 0 && <ToolChipList tools={entry.tools} />}
+                {entry.tools.length > 0 && <ToolChipList tools={entry.tools} requestRunning={assistantWorkspace ? !!entry.streaming : undefined} />}
                 {entry.usage && (
                   <div className="ai-message-usage">
                     <AiUsageChip usage={entry.usage} lang={lang} />
@@ -507,7 +507,7 @@ export function AiChatPanel({
                     <Markdown text={entry.text} navs={[citationNav, fileNav]} />
                   </div>
                 ) : (
-                  entry.streaming && (
+                  entry.streaming && (!assistantWorkspace || !entry.tools.length) && (
                     <span className="ai-typing-row">
                       <AiTypingIndicator
                         label={entry.tools.length > 0 ? t('aiWorking') : t('aiThinking')}
@@ -868,7 +868,7 @@ function StepIcon({ status }: { status: 'running' | 'done' | 'error' }) {
 /** Tool activity group: a single quiet summary row
  *  that auto-opens while tools run, auto-collapses into "Worked · N steps" when they finish,
  *  and a manual toggle that always wins. Rows inside are step rows with 1px connectors. */
-function ToolChipList({ tools }: { tools: readonly AiToolChip[] }): React.JSX.Element {
+function ToolChipList({ tools, requestRunning }: { tools: readonly AiToolChip[]; requestRunning?: boolean | undefined }): React.JSX.Element {
   const { t: tr, lang } = useI18n()
   const [expanded, setExpanded] = useState<Set<number>>(new Set())
   const [userOpen, setUserOpen] = useState<boolean | null>(null)
@@ -882,16 +882,20 @@ function ToolChipList({ tools }: { tools: readonly AiToolChip[] }): React.JSX.El
     })
   }
 
-  const anyRunning = tools.some((tool) => tool.running)
-  const open = userOpen ?? anyRunning
-  const label = anyRunning ? tr('aiGroupWorking') : tr('aiWorkedSteps', { n: tools.length })
+  const runningTool = tools.find((tool) => tool.running)
+  const anyRunning = requestRunning ?? !!runningTool
+  const open = userOpen ?? (requestRunning === undefined && !!runningTool)
+  const label = anyRunning
+    ? [tr('aiGroupWorking'), requestRunning && runningTool?.name].filter(Boolean).join(' · ')
+    : tr('aiWorkedSteps', { n: tools.length })
 
   return (
-    <div className="ai-work-group">
+    <div className="ai-work-group" data-manual-toggle={requestRunning !== undefined && userOpen !== null ? true : undefined}>
       <button
         type="button"
         className={`ai-work-group-summary${anyRunning ? ' running' : ''}`}
         aria-expanded={open}
+        title={requestRunning && runningTool ? label : undefined}
         onClick={() => setUserOpen(!open)}
       >
         {anyRunning && !open && <span className="ai-tool-chip-spinner" aria-hidden />}

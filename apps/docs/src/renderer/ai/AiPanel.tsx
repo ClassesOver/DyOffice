@@ -978,7 +978,8 @@ export function AiPanel({
           })
         },
         onTurnEnd: () => {
-          if (resumedRun.current) return
+          // Web keeps all model rounds of a user request in the same reply.
+          if (transport || resumedRun.current) return
           patchLastAssistant({ streaming: false })
           setChat((prev) =>
             boundChatHistory([...prev, { role: 'assistant', text: '', streaming: true }]),
@@ -1798,7 +1799,7 @@ export function AiPanel({
               {entry.role === 'user' && entry.skills && (
                 <AiSkillChips lang={lang} names={entry.skills} />
               )}
-              {entry.role === 'assistant' && !entry.text && entry.streaming ? (
+              {entry.role === 'assistant' && !entry.text && entry.streaming && (!transport || !entry.tools?.length) ? (
                 <span className="ai-typing-row">
                   <AiTypingIndicator
                     label={entry.tools?.length ? t('aiWorking') : t('aiThinking')}
@@ -1816,7 +1817,7 @@ export function AiPanel({
                   <AiUsageChip usage={entry.usage} lang={lang} />
                 </div>
               )}
-              {entry.tools && entry.tools.length > 0 && <ToolChipList tools={entry.tools} />}
+              {entry.tools && entry.tools.length > 0 && <ToolChipList tools={entry.tools} requestRunning={transport ? !!entry.streaming : undefined} />}
               {entry.mindmap && (
                 <MindMapCard
                   tree={entry.mindmap}
@@ -2294,7 +2295,7 @@ function RollbackButton({ disabled, onClick }: { disabled: boolean; onClick: () 
 /** Tool activity group: a single quiet summary row
  *  that auto-opens while tools run, auto-collapses into "Worked · N steps" when they finish,
  *  and a manual toggle that always wins. Rows inside are step rows with 1px connectors. */
-function ToolChipList({ tools }: { tools: ToolActivity[] }) {
+function ToolChipList({ tools, requestRunning }: { tools: ToolActivity[]; requestRunning?: boolean | undefined }) {
   const { t: tr, lang } = useI18n()
   const [expanded, setExpanded] = useState<Set<number>>(new Set())
   const [userOpen, setUserOpen] = useState<boolean | null>(null)
@@ -2308,16 +2309,20 @@ function ToolChipList({ tools }: { tools: ToolActivity[] }) {
     })
   }
 
-  const anyRunning = tools.some((tool) => tool.running)
-  const open = userOpen ?? anyRunning
-  const label = anyRunning ? tr('aiGroupWorking') : tr('aiWorkedSteps', { n: tools.length })
+  const runningTool = tools.find((tool) => tool.running)
+  const anyRunning = requestRunning ?? !!runningTool
+  const open = userOpen ?? (requestRunning === undefined && !!runningTool)
+  const label = anyRunning
+    ? [tr('aiGroupWorking'), requestRunning && runningTool?.name].filter(Boolean).join(' · ')
+    : tr('aiWorkedSteps', { n: tools.length })
 
   return (
-    <div className="ai-work-group">
+    <div className="ai-work-group" data-manual-toggle={requestRunning !== undefined && userOpen !== null ? true : undefined}>
       <button
         type="button"
         className={`ai-work-group-summary${anyRunning ? ' running' : ''}`}
         aria-expanded={open}
+        title={requestRunning && runningTool ? label : undefined}
         onClick={() => setUserOpen(!open)}
       >
         {anyRunning && !open && <span className="ai-tool-chip-spinner" aria-hidden />}

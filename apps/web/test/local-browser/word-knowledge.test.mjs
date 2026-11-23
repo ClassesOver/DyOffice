@@ -169,6 +169,8 @@ test('Word searches a starred saved source, reads its actual text and opens the 
   await expect(editor.locator('.ai-msg-error')).toHaveCount(0)
  }else{
  assert.equal(wire.length,3)
+ await expect(editor.locator('.ai-chat .ai-msg-assistant')).toHaveCount(1)
+ await expect(answer.locator('.ai-work-group-summary')).toHaveText(/2 个步骤/)
  const offered=wire[0].tools.map(tool=>tool.function?.name??tool.name);assert.ok(offered.includes('search_knowledge_base'));assert.ok(offered.includes('read_knowledge_file'))
  assert.ok(JSON.stringify(wire[0].messages).includes(cite))
  const search=wire[1].messages.filter(message=>message.role==='tool').at(-1).content

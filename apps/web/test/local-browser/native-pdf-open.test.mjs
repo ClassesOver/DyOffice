@@ -42,6 +42,8 @@ test('native PDF assistant saves a rotation and reopens the new revision',{skip:
   calls.push(route.request().postDataJSON().request)
   const body=calls.length===1
    ? 'event: tool_call\ndata: '+JSON.stringify({id:'native-rotation',name:'apply_ops',input:{ops:[{op:'rotatePages',pages:[2],dir:90}]}})
+   : calls.length===2
+   ? 'event: tool_call\ndata: '+JSON.stringify({id:'native-read',name:'read_pages',input:{start:2}})
    : 'event: delta\ndata: {"text":"Rotation queued"}'
   return route.fulfill({contentType:'text/event-stream',body:body+'\n\nevent: done\ndata: {}\n\n'})
  })
@@ -58,6 +60,15 @@ test('native PDF assistant saves a rotation and reopens the new revision',{skip:
  await assistant.getByRole('textbox',{name:'消息'}).fill('把第二页顺时针旋转九十度')
  await assistant.getByRole('button',{name:'发送',exact:true}).click()
  await expect(assistant.getByText('Rotation queued',{exact:true})).toBeVisible({timeout:20000})
+ const reply=assistant.locator('.ai-msg-assistant')
+ await expect(reply).toHaveCount(1)
+ const steps=reply.locator('.ai-work-group-summary')
+ await expect(steps).toHaveText(/2 个步骤/)
+ await expect(steps).toHaveAttribute('aria-expanded','false')
+ await steps.click()
+ await expect(steps).toHaveAttribute('aria-expanded','true')
+ await expect(reply.locator('.ai-work-group-body')).toHaveCSS('transition-duration','0.25s')
+ await expect(reply.locator('.ai-step-row').last()).toBeVisible()
  assert.ok(calls[0].tools.some(tool=>tool.name==='apply_ops'))
  assert.ok(!calls[0].tools.some(tool=>tool.name==='rotate_pages'))
  const results=calls[1].messages.filter(message=>message.role==='tool').flatMap(message=>message.results)

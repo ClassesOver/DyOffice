@@ -87,7 +87,9 @@
 :is(.ai-panel,.copilot) .ai-msg-assistant{max-width:100%;margin:0;padding:0;border-radius:0;background:transparent;color:var(--text-primary)}
 :is(.ai-panel,.copilot) .ai-work-group-summary{box-sizing:border-box;min-height:32px;max-width:100%;padding:5px 8px;border-radius:6px;font-size:12px;line-height:20px;color:var(--text-secondary);text-align:start}
 :is(.ai-panel,.copilot) .ai-work-group-summary:hover{color:var(--accent);background:var(--accent-soft)}
-:is(.ai-panel,.copilot) .ai-work-group-label{min-width:0;overflow-wrap:anywhere}
+:is(.ai-panel,.copilot) .ai-work-group-label{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+:is(.ai-panel,.copilot) .ai-work-group:not([data-manual-toggle]) :is(.ai-work-group-body,.ai-work-group-body-inner){transition:none}
+:is(.ai-panel,.copilot) .ai-work-group :is(.ai-work-group-label,.ai-step-row){animation:none}
 :is(.ai-panel,.copilot) .ai-step-title{font-size:12px;line-height:1.7;overflow-wrap:anywhere}
 :is(.ai-panel,.copilot) :is(.ai-work-group-summary,.ai-step-title.clickable):focus-visible{outline:2px solid var(--accent);outline-offset:2px;box-shadow:none}
 :is(.ai-panel,.copilot) .ai-tool-output{max-width:100%;border:1px solid var(--border-subtle);border-radius:8px;background:var(--surface-subtle);font-size:12px;scrollbar-width:thin;overscroll-behavior:contain}
@@ -405,3 +407,7 @@
  :is(.ai-panel,.copilot) :is(.ai-chat,.ai-composer){padding-inline:12px}
 }
 @media(prefers-reduced-motion:reduce){.shared-assistant-dock,:is(.ai-panel,.copilot) :is(.ai-header-btn,.ai-input-box,.ai-starter){transition:none}}
+
+@media (prefers-reduced-motion: reduce) {
+  :is(.ai-panel,.copilot) .ai-work-group :is(.ai-work-group-body,.ai-work-group-body-inner){transition:none}
+}
