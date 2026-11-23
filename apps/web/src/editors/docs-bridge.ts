@@ -81,7 +81,7 @@ export function createDocsBridge(host: SessionFileHost, fileId: string, prefs: A
       onChange()
     },
   }
-  let panelPrefs = {side:'left' as 'left'|'right',fontSize:'default' as 'default'|'xlarge'|'large'|'custom',customFontSize:14,spellcheck:true,openInNewDocs:false,showAiSidebar:false,showAiAskTrigger:false}
+  let panelPrefs = {side:'left' as 'left'|'right',fontSize:'default' as 'default'|'xlarge'|'large'|'custom',customFontSize:14,spellcheck:true,openInNewDocs:false,showAiSidebar:false,showAiAskTrigger:true}
   const panelListeners = new Set<(value:typeof panelPrefs)=>void>()
   function download(blob:Blob,name:string){const url=URL.createObjectURL(blob);try{const link=document.createElement('a');link.href=url;link.download=name;link.click()}finally{setTimeout(()=>URL.revokeObjectURL(url),0)}}
   async function imageBlob(src:string){if(!src.startsWith('data:image/')&&!src.startsWith('blob:'))throw Error(text.unavailable);const response=await fetch(src);if(!response.ok)throw Error(text.unavailable);const blob=await response.blob();if(!['image/png','image/jpeg','image/gif'].includes(blob.type)||blob.size>16*1024*1024)throw Error(text.unavailable);return blob}
