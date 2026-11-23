@@ -1,3 +1,4 @@
+import { compactExecutionOutput } from '@genoffice/ui'
 import {bindDocumentHandoff} from '@genoffice/agent-core'
 import {createAnalysisSaveConsent} from '../../../../packages/browser-host/src/analysis-save-consent'
 import {captureSheetAnalysis,invalidatesAnalysisCapture} from './analysis-insert'
@@ -1790,7 +1791,8 @@ export function App({
                 delegation: delegatedAgentResult(t.name, t.output),
                 isError: !!t.isError,
                 ...(t.name ? { name: t.name } : {}),
-                ...(t.output ? { output: t.output.slice(0, 2000) } : {}),
+                ...(t.input ? { input: t.input } : {}),
+                ...(t.output ? { output: compactExecutionOutput(t.name, t.output, 2000) } : {}),
               })) ?? [],
             // stored metadata only: no thumbnail read for history, the chips render name/size
             ...(m.attachments && m.attachments.length > 0
@@ -1952,6 +1954,7 @@ export function App({
                 summary: call.name.replace(/[_-]+/g, ' '),
                 isError: false,
                 name: call.name,
+                input: safeJsonInput(call.input),
                 running: true,
               },
             ],
@@ -1961,7 +1964,7 @@ export function App({
           if (execution.mutated) runMutatedRef.current = true
           const input = safeJsonInput(call.input)
           const output = execution.output
-            ? compactDelegatedTranscript(call.name, execution.output, PERSIST_TOOL_FIELD_MAX)
+            ? compactExecutionOutput(call.name, execution.output, PERSIST_TOOL_FIELD_MAX)
             : undefined
           runToolsRef.current.push({
             name: call.name,
@@ -1983,7 +1986,8 @@ export function App({
                   delegation: delegatedAgentResult(call.name, execution.output),
                   isError: !!execution.isError,
                   name: call.name,
-                  ...(execution.output ? { output: execution.output.slice(0, 2000) } : {}),
+                  input,
+                  ...(execution.output ? { output: compactExecutionOutput(call.name, execution.output, 2000) } : {}),
                 },
               ],
             }

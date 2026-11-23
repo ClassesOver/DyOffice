@@ -1,3 +1,4 @@
+import { AiExecutionRecord, compactExecutionOutput, delegatedAgentResult, type ExecutionTool } from '@genoffice/ui'
 import {bindDocumentHandoff,createAttachmentsSkill,withAttachedSkills,ATTACHMENT_IMAGE_EXTS,type AgentImage,type AttachedSkill} from '@genoffice/agent-core'
 import {useEffect,useLayoutEffect,useMemo,useRef,useState,type CSSProperties,type ReactNode} from 'react'
 import {AgentLoop,composeSkills} from '../../../../packages/agent-core/src/index'
@@ -11,7 +12,7 @@ import './ai-dock-theme.css'
 type Assistant=Awaited<ReturnType<typeof createEditorAssistant>>
 type DraftFile=AiAttachmentLike&{image?:AgentImage}
 type ComposerDraft={text:string;files:DraftFile[];skills:string[];version:number}
-type ChatItem={id:number;role:'user'|'assistant';text:string;sender?:'dsh';files?:string[];skills?:string[]}
+type ChatItem={id:number;role:'user'|'assistant';text:string;sender?:'dsh';files?:string[];skills?:string[];tools?:ExecutionTool[]}
 type ImageAttachments=ReadonlyMap<string,{name:string;image:AgentImage}>
 const toolImageAttachments=new WeakMap<AbortSignal,ImageAttachments>()
 export function resolveTurnImageAttachment(reference:string,signal?:AbortSignal){
@@ -76,8 +77,22 @@ export function SharedEditorAssistant({assistant,lang,context='',dock,widthKey,o
    canCheckpointHarness:()=>!activeFiles.current.length,
    events:{
     onText:text=>{if(text)recoverableDraft.current=undefined;setItems(current=>{const next=[...current];const last=next.at(-1);if(last?.role==='assistant')last.text=text;return next})},
-    onToolStart:()=>{recoverableDraft.current=undefined},
-    onToolExecuted:({execution})=>{if(localEdit.current==='local'&&execution.mutated&&!execution.isError)localEdit.current='edited'},
+    onToolStart:call=>{
+     recoverableDraft.current=undefined
+     setItems(current=>current.map((item,index)=>index===current.length-1&&item.role==='assistant'
+      ?{...item,tools:[...(item.tools??[]),{name:call.name,summary:call.name,input:JSON.stringify(call.input),running:true}]}:item))
+    },
+    onToolExecuted:({call,execution})=>{
+     if(localEdit.current==='local'&&execution.mutated&&!execution.isError)localEdit.current='edited'
+     setItems(current=>current.map((item,index)=>{
+      if(index!==current.length-1||item.role!=='assistant')return item
+      const tools=[...(item.tools??[])]
+      if(tools.at(-1)?.running)tools.pop()
+      return {...item,tools:[...tools,{name:call.name,summary:execution.summary,input:JSON.stringify(call.input),
+       output:compactExecutionOutput(call.name,execution.output,2000),isError:execution.isError,
+       delegation:delegatedAgentResult(call.name,execution.output)}]}
+     }))
+    },
     onDone:result=>{
      recoverableDraft.current=undefined
      clearActiveAttachments()
@@ -89,6 +104,7 @@ export function SharedEditorAssistant({assistant,lang,context='',dock,widthKey,o
      if(notice)setError(notice)
      if(token)assistant.control?.endRun?.(token,{text:[result.text,notice].filter(Boolean).join('\n\n'),cancelled:result.cancelled,failed:result.turnLimit||result.truncated,yielded:result.yielded})
      else if(result.yielded)assistant.control?.reportYield(result.yielded.taskIds)
+     setItems(current=>current.map(item=>item.tools?.some(tool=>tool.running)?{...item,tools:item.tools.filter(tool=>!tool.running)}:item))
      setBusy(false)
      if(edited&&!result.cancelled&&!result.turnLimit&&!result.truncated&&!result.yielded)editDone.current?.()
     },
@@ -102,6 +118,7 @@ export function SharedEditorAssistant({assistant,lang,context='',dock,widthKey,o
      clearActiveAttachments()
      const token=runToken.current;runToken.current=undefined
      if(token)assistant.control?.endRun?.(token,{text:message,cancelled:false,failed:true})
+     setItems(current=>current.map(item=>item.tools?.some(tool=>tool.running)?{...item,tools:item.tools.filter(tool=>!tool.running)}:item))
      setError(message);setBusy(false)
     },
    },
@@ -272,7 +289,7 @@ export function SharedEditorAssistant({assistant,lang,context='',dock,widthKey,o
  }
  const conversation=assistant.workspace.conversation
  const messages:ReactNode=<>
-  {items.map(item=><div data-sender={item.sender} className={`ai-msg ai-msg-${item.role}`} key={item.id}>{item.text?<><Markdown text={item.text} nav={item.role==='assistant'?assistantNav:undefined}/><AiSkillChips lang={lang} names={item.skills??[]}/>{!!item.files?.length&&<div className="shared-assistant-file-list">{item.files.map((name,index)=><span key={index}>{name}</span>)}</div>}</>:busy&&item.role==='assistant'?<span role="status">{lang==='zh'?'正在思考…':'Thinking…'}</span>:null}</div>)}
+  {items.map(item=><div data-sender={item.sender} className={`ai-msg ai-msg-${item.role}`} key={item.id}>{item.text?<><Markdown text={item.text} nav={item.role==='assistant'?assistantNav:undefined}/><AiSkillChips lang={lang} names={item.skills??[]}/>{!!item.files?.length&&<div className="shared-assistant-file-list">{item.files.map((name,index)=><span key={index}>{name}</span>)}</div>}</>:busy&&item.role==='assistant'?<span role="status">{lang==='zh'?'正在思考…':'Thinking…'}</span>:null}{!!item.tools?.length&&<AiExecutionRecord tools={item.tools} lang={lang}/>}</div>)}
   {error&&<p role="alert">{error}</p>}
  </>
  return <div ref={focusRoot} className={`ai-dock shared-assistant-dock${collapsed?' collapsed':''}${resizing?' ai-panel-resizing':''}`} style={widthKey?{'--ai-panel-width':`${width}px`} as CSSProperties:undefined}>

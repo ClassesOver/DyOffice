@@ -1,3 +1,4 @@
+import { AiExecutionRecord, withExecutionRecords, compactExecutionOutput } from '@genoffice/ui'
 import {bindDocumentHandoff} from '@genoffice/agent-core'
 import { AssistantSendButton, useAssistantFocusRoot, useAiPanelResize } from '@genoffice/ui'
 import {
@@ -87,6 +88,7 @@ import { IconNewChat, IconSidebarCollapseLeft } from '../components/icons'
 
 interface ToolActivity {
   name: string
+  input?: string
   summary: string
   /** still executing: rendered as a spinner chip, replaced in place when the tool finishes */
   running?: boolean
@@ -346,6 +348,7 @@ export function AiPanel({
     },
   })
   const [chat, setChat] = useState<ChatEntry[]>([])
+  const executionRecords = withExecutionRecords(chat)
   /** Past conversation restored from JSONL (read-only transcript, not fed to the model) */
   const [historicChat, setHistoricChat] = useState<ChatEntry[]>([])
   const [copiedIdx, setCopiedIdx] = useState<number | null>(null)
@@ -535,7 +538,8 @@ export function AiPanel({
               name: t.name,
               summary: t.summary,
               isError: t.isError,
-              output: t.output ? t.output.slice(0, TOOL_OUTPUT_MAX_CHARS) : undefined,
+              input: t.input,
+              output: t.output ? compactExecutionOutput(t.name, t.output, TOOL_OUTPUT_MAX_CHARS) : undefined,
             })),
             // stored metadata only: no thumbnail read for history, the chips render name/size
             attachments: m.attachments
@@ -1336,6 +1340,7 @@ export function AiPanel({
           // Live "running" chip: replaced in place by onToolExecuted
           const activity: ToolActivity = {
             name: call.name,
+            input: safeJsonInput(call.input),
             summary: call.name.replace(/[_-]+/g, ' '),
             running: true,
           }
@@ -1344,9 +1349,10 @@ export function AiPanel({
         onToolExecuted: ({ call, execution }) => {
           const activity: ToolActivity = {
             name: call.name,
+            input: safeJsonInput(call.input),
             summary: execution.summary,
             isError: execution.isError,
-            output: execution.output ? execution.output.slice(0, TOOL_OUTPUT_MAX_CHARS) : undefined,
+            output: execution.output ? compactExecutionOutput(call.name, execution.output, TOOL_OUTPUT_MAX_CHARS) : undefined,
             // Side channel: display comes from tools, not into LLM context, UI only
             display: execution.display,
           }
@@ -1358,7 +1364,7 @@ export function AiPanel({
               isError: execution.isError,
               input: safeJsonInput(call.input),
               output: execution.output
-                ? execution.output.slice(0, PERSIST_TOOL_FIELD_MAX)
+                ? compactExecutionOutput(call.name, execution.output, PERSIST_TOOL_FIELD_MAX)
                 : undefined,
             })
           }
@@ -2381,7 +2387,7 @@ export function AiPanel({
               ) : (
                 <span dir="auto">{entry.text}</span>
               )}
-              {entry.tools && entry.tools.length > 0 && <ToolChipList tools={entry.tools} />}
+              {!!executionRecords[i].tools?.length && <ToolChipList tools={executionRecords[i].tools!} />}
               {entry.role === 'assistant' && entry.usage && (
                 <div className="ai-message-usage">
                   <AiUsageChip usage={entry.usage} lang={lang} />
@@ -2797,61 +2803,6 @@ function ImageThumb({ url, title }: { url: string; title?: string }) {
   )
 }
 
-/** Step-row status icons (timeline glyphs: 14px in a 20px slot, 1.6 stroke) */
-function StepIcon({ status }: { status: 'running' | 'done' | 'error' }) {
-  if (status === 'running') {
-    return (
-      <svg
-        viewBox="0 0 24 24"
-        width="14"
-        height="14"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="1.6"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        aria-hidden
-      >
-        <path d="M6.5 3.5h11M6.5 20.5h11M8 3.5v3.2c0 2.6 4 4.2 4 5.3 0 1.1 4 2.7 4 5.3v3.2M16 3.5v3.2c0 2.6-4 4.2-4 5.3 0 1.1-4 2.7-4 5.3v3.2" />
-      </svg>
-    )
-  }
-  if (status === 'error') {
-    return (
-      <svg
-        viewBox="0 0 24 24"
-        width="14"
-        height="14"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="1.6"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        aria-hidden
-      >
-        <circle cx="12" cy="12" r="9" />
-        <path d="m9.2 9.2 5.6 5.6M14.8 9.2l-5.6 5.6" />
-      </svg>
-    )
-  }
-  return (
-    <svg
-      viewBox="0 0 24 24"
-      width="14"
-      height="14"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.6"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden
-    >
-      <circle cx="12" cy="12" r="9" />
-      <path d="m8.5 12.4 2.4 2.4 4.6-5" />
-    </svg>
-  )
-}
-
 /** Quiet roll-back action in the message toolbar: restores the deck to before the run's edits */
 function RollbackButton({ disabled, onClick }: { disabled: boolean; onClick: () => void }) {
   const { t: tr } = useI18n()
@@ -2877,89 +2828,9 @@ function RollbackButton({ disabled, onClick }: { disabled: boolean; onClick: () 
   )
 }
 
-/** Tool activity group: a single quiet summary row
- *  that auto-opens while tools run, auto-collapses into "Worked · N steps" when they finish,
- *  and a manual toggle that always wins. Rows inside are step rows with 1px connectors. */
 function ToolChipList({ tools }: { tools: ToolActivity[] }) {
-  const { t: tr } = useI18n()
-  const [expanded, setExpanded] = useState<Set<number>>(new Set())
-  const [userOpen, setUserOpen] = useState<boolean | null>(null)
-
-  const toggle = useCallback((j: number) => {
-    setExpanded((prev) => {
-      const next = new Set(prev)
-      if (next.has(j)) next.delete(j)
-      else next.add(j)
-      return next
-    })
-  }, [])
-
-  const anyRunning = tools.some((tool) => tool.running)
-  const open = userOpen ?? anyRunning
-  const label = anyRunning ? tr('aiGroupWorking') : tr('aiWorkedSteps', { n: tools.length })
-
-  return (
-    <div className="ai-work-group">
-      <button
-        type="button"
-        className={`ai-work-group-summary${anyRunning ? ' running' : ''}`}
-        aria-expanded={open}
-        onClick={() => setUserOpen(!open)}
-      >
-        {anyRunning && !open && <span className="ai-tool-chip-spinner" aria-hidden />}
-        <span className="ai-work-group-label">{label}</span>
-        <span className={`ai-tool-chip-caret${open ? ' open' : ''}`} aria-hidden>
-          ›
-        </span>
-      </button>
-      <div className={`ai-work-group-body${open ? ' open' : ''}`}>
-        <div className="ai-work-group-body-inner">
-          {tools.map((tool, j) => {
-            const hasDisplayData = !!(
-              tool.display?.items?.length ||
-              (tool.display?.kind === 'text' && tool.display.text)
-            )
-            const hasOutput = !tool.running && (!!tool.output || hasDisplayData)
-            const isOpen = expanded.has(j)
-            const stepStatus = tool.running ? 'running' : tool.isError ? 'error' : 'done'
-            return (
-              <div key={j} className="ai-step-row">
-                <span className={`ai-step-icon ${stepStatus}`} aria-hidden>
-                  <StepIcon status={stepStatus} />
-                </span>
-                <div className="ai-step-content">
-                  {hasOutput ? (
-                    <button
-                      type="button"
-                      className="ai-step-title clickable"
-                      data-tip={tool.name}
-                      aria-expanded={isOpen}
-                      onClick={() => toggle(j)}
-                    >
-                      {tool.summary}
-                    </button>
-                  ) : (
-                    <span className="ai-step-title" data-tip={tool.name}>
-                      {tool.summary}
-                    </span>
-                  )}
-                  {hasOutput && isOpen && (
-                    <div className="ai-step-detail">
-                      <ToolOutputPanel
-                        name={tool.name}
-                        output={tool.output ?? ''}
-                        display={tool.display}
-                      />
-                    </div>
-                  )}
-                </div>
-              </div>
-            )
-          })}
-        </div>
-      </div>
-    </div>
-  )
+  const { lang } = useI18n()
+  return <AiExecutionRecord tools={tools} lang={lang} renderOutput={(tool) => <ToolOutputPanel name={tool.name} output={tool.output ?? ''} display={tool.display} />} />
 }
 
 /** Generation progress card: structured step archive (style → plan → images → pages → done) */
