@@ -54,6 +54,7 @@ export async function mountDocsEditor(host: SessionFileHost,element: HTMLElement
   type Review = {state:'reviewing'|'ready'|'failed'|'noModel';text?:string}
   type Followup = {id:string;question:string;state:'answering'|'ready'|'failed';answer:string}
   let externalWriting: {id:string;topic:string;state:WriteState;reply?:string;tool?:'running'|'done'|'failed';revision?:string;review?:Review} | undefined
+  const followupScope=crypto.randomUUID()
   const followups:Followup[] = []
   let stopFollowup: (()=>void) | undefined
   let grantExpiry:ReturnType<typeof setTimeout>|undefined
@@ -293,9 +294,11 @@ export async function mountDocsEditor(host: SessionFileHost,element: HTMLElement
       } catch {if(!disposed&&!closing)report('failed')}
     }
   }
-  function followUp(id:string,question:string) {
+  function followUp(id:string,question:unknown) {
     const previous=followups.find(turn=>turn.id===id)
     if(previous)return previous
+    if(question===undefined)return {id,state:'unknown',answer:''}
+    if(typeof question!=='string'||!question.trim()||question.length>4000)return
     if(followups.at(-1)?.state==='answering')return
     const run=officeHandoff
     const turn:Followup={id,question,state:'answering',answer:''}
@@ -397,15 +400,15 @@ export async function mountDocsEditor(host: SessionFileHost,element: HTMLElement
             }
             writing = {id:job.id,state:job.state,revision:job.revision,reply:job.reply}
             const ask=event.data.followup
-            if(job.state==='saved' && typeof ask?.id==='string' && /^[a-f\d-]{36}$/u.test(ask.id) &&
-                typeof ask.question==='string' && ask.question.length<=4000 && ask.question.trim()) {
-              const answer=followUp(ask.id,ask.question)
+            if(typeof ask?.id==='string' && /^[a-f\d-]{36}$/u.test(ask.id) && (job.state==='saved'||ask.question===undefined)) {
+              const answer=ask.scope!==undefined&&ask.scope!==followupScope
+                ? {id:ask.id,state:'unknown',answer:''} : followUp(ask.id,ask.question)
               if(answer)followup={id:answer.id,state:answer.state,answer:answer.answer}
             }
           }
         }
         const draft=editorHandle?.readDraftText?.(false,externalWriting?.tool==='running')??null
-        peer.postMessage({type:'dsh-dyoffice:draft',fileId,draft,writing,followup}, event.origin)
+        peer.postMessage({type:'dsh-dyoffice:draft',fileId,draft,writing,followup,followupScope}, event.origin)
       }
       shell.addEventListener('message',onRequest)
       return () => {controller.abort();shell.removeEventListener('message',onRequest)}
