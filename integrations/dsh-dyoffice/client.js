@@ -236,6 +236,15 @@ window.__ModuleLoader__.load({
           t(busy ? 'connecting' : 'authorization')))
     }
 
+    function endedChatKey(receipt) {
+      return id + ':ended:' + receipt.href
+    }
+    function initialCollaboration(receipt,sessionId) {
+      let ended=false
+      try { ended=window.sessionStorage.getItem(endedChatKey(receipt))==='1' } catch {}
+      return {sessionId,turns:[],ended}
+    }
+
     function finishInterruptedTurn(turns) {
       const turn=turns.at(-1)
       if(turn?.state!=='pending'&&turn?.state!=='answering')return turns
@@ -339,7 +348,12 @@ window.__ModuleLoader__.load({
         let expiry, renewal, ticket, reviewRequested
         function clearLiveDraft() {
           setLiveDraft(null)
-          updateCollaboration(editing.fileId,entry=>entry.draft===undefined&&entry.syncState!=='live'?entry:{...entry,draft:undefined,syncState:entry.syncState==='live'?'stale':entry.syncState})
+          setWritingReceipt(null)
+          updateCollaboration(editing.fileId,entry=>{
+            if(entry.syncState!=='live')return entry
+            if(entry.ended||entry.disconnected)return {...entry,draft:undefined,syncState:'stale'}
+            return {...entry,draft:undefined,syncState:'stale',state:undefined,turns:finishInterruptedTurn(entry.turns)}
+          })
         }
         async function authorize() {
           const url = previewUrl()
@@ -377,6 +391,10 @@ window.__ModuleLoader__.load({
               void fetch(url,{method:'POST',headers:{'X-DyOffice-Draft':'1'},signal:controller.signal})
                 .then(response=>{if(!response.ok)reviewRequested=undefined},()=>{reviewRequested=undefined})
             }
+          } else if(editing.automatic) {
+            setWritingReceipt(null)
+            updateCollaboration(editing.fileId,entry=>entry.state===undefined?entry:
+              {...entry,state:undefined,turns:finishInterruptedTurn(entry.turns)})
           }
           const answer = event.data.followup
           if (answer && ['answering','ready','failed'].includes(answer.state) &&
@@ -637,9 +655,11 @@ window.__ModuleLoader__.load({
           const receipt=creationReceipt(result.text)
           if(!receipt)return
           const entries=collaboration.read()??new Map()
+          const entry=entries.get(receipt.fileId)??initialCollaboration(receipt,sessionId)
+          if(!entries.has(receipt.fileId))collaboration.set(new Map(entries).set(receipt.fileId,entry))
+          if(entry.ended)return
           startRunner(receipt,true)
           officeSessions.set(sessionId,receipt.fileId)
-          if(!entries.has(receipt.fileId))collaboration.set(new Map(entries).set(receipt.fileId,{turns:[],sessionId}))
         })
         ctx.effect(() => ctx.sidebarRightTabs.register({
           id, kind: 'dyoffice-preview', title: () => t('title'), keepMounted:true,
@@ -695,7 +715,7 @@ window.__ModuleLoader__.load({
               const {preview,writing}=payload??{}
               if(controller.signal.aborted)return
               const entries=collaboration.read()??new Map()
-              const current=entries.get(fileId)??{turns:[],sessionId}
+              const current=entries.get(fileId)??initialCollaboration(receipt,sessionId)
               const snapshot=preview?.fileId===fileId&&uuid.test(preview?.revision??'')?{revision:preview.revision,text:preview.text}:undefined
               collaboration.set(new Map(entries).set(fileId,{...current,snapshot:current.snapshot??snapshot,topic:current.topic??writing?.topic,inlineChecked:true}))
             }
@@ -727,7 +747,8 @@ window.__ModuleLoader__.load({
           },[fileId,remote,liveFrame])
           const external=useRef(null)
           const openWindow=()=>{
-            if(entry?.ended || remote&&editor?.embedded&&opening){
+            const current=collaboration.read()?.get(fileId)??initialCollaboration(receipt,sessionId)
+            if(current.ended || remote&&editor?.embedded&&opening){
               if(external.current&&!external.current.closed){external.current.focus();return}
               external.current=window.open(receipt.href,'_blank','popup,width=1200,height=850')
               updateCollaboration(fileId,e=>({...e,popupBlocked:!external.current}))
@@ -737,8 +758,7 @@ window.__ModuleLoader__.load({
             const popup=window.open(receipt.href,'_blank','popup,width=1200,height=850')
             if(!popup){updateCollaboration(fileId,e=>({...e,popupBlocked:true}));return}
             const entries=collaboration.read()??new Map()
-            const current=entries.get(fileId)
-            collaboration.set(new Map(entries).set(fileId,{...current,sessionId,turns:finishInterruptedTurn(current?.turns??[]),
+            collaboration.set(new Map(entries).set(fileId,{...current,sessionId,turns:finishInterruptedTurn(current.turns),
               popupBlocked:false,disconnected:false,state:undefined,draft:undefined,syncState:undefined}))
             officeSessions.set(sessionId,fileId)
             startRunner(receipt,false,popup)
@@ -795,6 +815,7 @@ window.__ModuleLoader__.load({
               entry?.skillName&&h('small',null,t('skillLabel'),' · ',entry.skillName),
               canChat&&h('span',null,t('destination'),' · DyOffice'),
               canEnd&&h('button',{type:'button',onClick:()=>{
+                try { window.sessionStorage.setItem(endedChatKey(receipt),'1') } catch {}
                 officeSessions.delete(entry.sessionId)
                 stopRunner(receipt.fileId)
                 updateCollaboration(receipt.fileId,current=>({...current,ended:true}))
