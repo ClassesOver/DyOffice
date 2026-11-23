@@ -6,7 +6,7 @@ import { build } from 'esbuild'
 import { expect } from '@playwright/test'
 import { launchTestBrowser } from '../helpers/browser.mjs'
 
-async function mountCard(t, embedOrigins) {
+async function mountCard(t, embedOrigins, writingState='saved') {
  const browser=await launchTestBrowser()
  t.after(()=>browser.close())
  const page=await browser.newPage({viewport:{width:800,height:620},deviceScaleFactor:1})
@@ -26,7 +26,7 @@ async function mountCard(t, embedOrigins) {
  <h1>DyOffice document</h1><label>Document text<input aria-label="Document text"></label>
  <script>
  window.addEventListener('message',e=>{
-  if(!window.stalled&&e.data.type==='dsh-dyoffice:draft-request')e.source.postMessage({type:'dsh-dyoffice:draft',fileId:e.data.fileId,draft:null,writing:{id:'writing-1',state:'saved',revision:'${revision}'}},'${dshOrigin}')
+  if(!window.stalled&&e.data.type==='dsh-dyoffice:draft-request')e.source.postMessage({type:'dsh-dyoffice:draft',fileId:e.data.fileId,draft:null,writing:{id:'writing-1',state:'${writingState}',revision:'${revision}'}},'${dshOrigin}')
  })
  </script>`}))
  await page.goto(dshOrigin+'/app/')
@@ -47,7 +47,9 @@ async function mountCard(t, embedOrigins) {
    listeners['command/executed']('studio-session','dyoffice',outcome)
    const h=React.createElement
    createRoot(document.querySelector('main')).render(h(React.Fragment,null,
-    h(slots['shell.overlay'],{t}),h(slots['conversation.chat.commandview'],{t,sessionId:'studio-session',node:{time:Date.now(),outcome}})))
+    h(slots['shell.overlay'],{t}),
+    h('div',{id:'chat-viewport',style:{overflow:'auto'}},
+     h(slots['conversation.chat.commandview'],{t,sessionId:'studio-session',node:{time:Date.now(),outcome}}))))
   }
  },officeOrigin)
  await page.addScriptTag({path:fileURLToPath(new URL('../../../../integrations/dsh-dyoffice/client.js',import.meta.url))})
@@ -132,4 +134,42 @@ test('the interactive frame follows a message expanding above the card',async t=
  await page.evaluate(()=>{const message=document.createElement('div');message.style.height='64px';document.body.prepend(message)})
  assert.equal((await anchor.boundingBox()).y,initial.y+64)
  await expect.poll(async()=>Math.abs((await frame.boundingBox()).y-(await anchor.boundingBox()).y)).toBeLessThan(1)
+})
+
+for(const state of ['planning','writing','saved'])test(`closing the Office popup during ${state} releases chat and allows ending the conversation`,async t=>{
+ const {page,card}=await mountCard(t,{dshEditorOrigins:[]},state)
+ const opened=page.waitForEvent('popup')
+ await card.getByRole('button',{name:/在新窗口打开/}).click()
+ const popup=await opened
+ await expect(card.getByText('消息同步中',{exact:true})).toBeVisible()
+ await popup.close()
+ await expect(card.getByText('同步中断',{exact:true})).toBeVisible()
+ assert.equal(await page.evaluate(()=>window.routeMessage()),undefined)
+ await expect(card.getByText('消息接收方 · DyOffice')).toHaveCount(0)
+ await card.getByRole('button',{name:'结束 Office 对话'}).click()
+ await expect(card.getByText('对话已结束',{exact:true})).toBeVisible()
+ await expect(card.getByText(/可结束 Office 对话或重新发起/)).toHaveCount(0)
+ assert.equal(await page.evaluate(()=>window.routeMessage()),undefined)
+})
+
+test('a resized chat viewport clips the interactive frame and restores it when expanded',async t=>{
+ const {page,card}=await mountCard(t,{dshEditorOrigin:'https://localhost:4681'})
+ await page.setViewportSize({width:900,height:1100})
+ await expect(card.getByText('消息同步中',{exact:true})).toBeVisible()
+ const viewport=page.locator('#chat-viewport')
+ const bounds=await card.locator('.dsh-office-frame').boundingBox()
+ const viewportTop=(await viewport.boundingBox()).y
+ const x=bounds.x+20,y=bounds.y+bounds.height*0.75
+ const hit=()=>page.evaluate(([x,y])=>document.elementFromPoint(x,y)?.tagName,[x,y])
+ await expect.poll(hit).toBe('IFRAME')
+ await viewport.evaluate((el,height)=>{
+  el.style.height=height+'px'
+  el.style.borderBottom='8px solid black'
+ },bounds.y-viewportTop+bounds.height/2)
+ await expect.poll(hit).not.toBe('IFRAME')
+ const clipped=await viewport.boundingBox()
+ const borderY=clipped.y+clipped.height-4
+ await expect.poll(()=>page.evaluate(([x,y])=>document.elementFromPoint(x,y)?.id,[x,borderY])).toBe('chat-viewport')
+ await viewport.evaluate(el=>el.style.removeProperty('height'))
+ await expect.poll(hit).toBe('IFRAME')
 })

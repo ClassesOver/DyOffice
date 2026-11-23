@@ -245,10 +245,20 @@ window.__ModuleLoader__.load({
         const place=r=>{
           lastBounds=r
           let top=Math.max(0,r.top),left=Math.max(0,r.left),bottom=Math.min(window.innerHeight,r.bottom),right=Math.min(window.innerWidth,r.right)
-          for(let parent=target.parentElement;parent;parent=parent.parentElement){
+          for(let parent=target.parentElement;parent&&parent!==document.documentElement;parent=parent.parentElement){
             const style=getComputedStyle(parent),bounds=parent.getBoundingClientRect()
-            if(style.overflowY!=='visible'){top=Math.max(top,bounds.top);bottom=Math.min(bottom,bounds.bottom)}
-            if(style.overflowX!=='visible'){left=Math.max(left,bounds.left);right=Math.min(right,bounds.right)}
+            if(style.overflowY!=='visible'){
+              const scale=parent.offsetHeight?bounds.height/parent.offsetHeight:1
+              const innerTop=bounds.top+parent.clientTop*scale
+              top=Math.max(top,innerTop)
+              bottom=Math.min(bottom,innerTop+parent.clientHeight*scale)
+            }
+            if(style.overflowX!=='visible'){
+              const scale=parent.offsetWidth?bounds.width/parent.offsetWidth:1
+              const innerLeft=bounds.left+parent.clientLeft*scale
+              left=Math.max(left,innerLeft)
+              right=Math.min(right,innerLeft+parent.clientWidth*scale)
+            }
           }
           Object.assign(el.style,{left:r.left+'px',top:r.top+'px',width:r.width+'px',height:r.height+'px',
             visibility:target.isConnected&&bottom>top&&right>left?'visible':'hidden',
@@ -267,10 +277,14 @@ window.__ModuleLoader__.load({
           if(entries[entries.length-1].isIntersecting)animation=requestAnimationFrame(followPosition)
         })
         const resize=new ResizeObserver(refresh)
-        observer.observe(target);resize.observe(target);refresh()
+        // The visible portion also changes when a surrounding scroll pane resizes.
+        for(let element=target;element;element=element.parentElement)resize.observe(element)
+        observer.observe(target);refresh()
+        window.addEventListener('resize',refresh)
         window.addEventListener('scroll',refresh,true)
         return ()=>{
           observer.disconnect();resize.disconnect();cancelAnimationFrame(animation)
+          window.removeEventListener('resize',refresh)
           window.removeEventListener('scroll',refresh,true)
           el.style.visibility='hidden'
         }
@@ -375,7 +389,8 @@ window.__ModuleLoader__.load({
         }
         const request = () => {
           if (editing.popup.closed) {
-            if (editorWindows.read() === editing) editorWindows.set(null)
+            if (editorWindows.read() !== editing) return
+            editorWindows.set(null)
             updateCollaboration(editing.fileId,entry=>{
               const turn=entry.turns.at(-1)
               const pending=turn&&['pending','answering'].includes(turn.state)
@@ -597,15 +612,13 @@ window.__ModuleLoader__.load({
         }
         ctx.on('conversation/route-message', ({sessionId,text,attachmentCount})=>{
           const fileId=officeSessions.get(sessionId), entry=collaboration.read()?.get(fileId)
-          if(!entry?.topic || entry.ended)return
+          if(!entry?.topic || entry.ended || entry.disconnected)return
           if(!['saved','planning','writing','saving'].includes(entry.state))return
+          const editor=runners.read()?.get(fileId)?.editor.read()
+          if(editor?.fileId!==fileId || editor.popup.closed)return
           const reject=message=>({kind:'error',text:t(message)})
           if(entry.state==='planning')return reject('officeBusy')
           if(attachmentCount || !text.trim() || text.length>4000)return reject('officeTextOnly')
-          const editor=runners.read()?.get(fileId)?.editor.read()
-          if(editor?.fileId!==fileId || editor.popup.closed) {
-            return reject('reopenForChat')
-          }
           if(entry.state!=='saved' || ['pending','answering'].includes(entry.turns.at(-1)?.state))return reject('officeBusy')
           const id=crypto.randomUUID()
           updateCollaboration(fileId,current=>({...current,turns:[...current.turns.slice(-19),{id,question:text,state:'pending'}]}))
@@ -734,18 +747,21 @@ window.__ModuleLoader__.load({
           const syncLabel=entry?.ended?'syncEnded':entry?.disconnected||entry?.syncState==='stale'?'syncStale':entry?.syncState==='live'?'syncLive':null
           const revision=entry?.snapshot?.revision
           const ownsSession=entry&&!entry.ended&&officeSessions.get(entry.sessionId)===fileId
-          const canChat=ownsSession&&entry.state==='saved'
+          const canChat=ownsSession&&opening&&!entry.disconnected&&entry.state==='saved'
           const needsWindow=remote&&entry?.checked&&entry.topic&&!stage&&!opening&&!allowsEmbed(connection,receipt.origin)
-          const canEnd=canChat||(ownsSession&&needsWindow)
+          const canEnd=canChat||(ownsSession&&(needsWindow||entry.disconnected))
           let waitingMessage
           if(job&&entry?.topic&&!stage&&!entry.ended){
             if(entry.disconnected)waitingMessage=h('span',{role:'status'},t('reopenForChat'))
             else if(needsWindow)waitingMessage=t('openToWrite')
             else waitingMessage=inProgress('waitingWriter')
           }
+          // An ended conversation no longer needs directions for reconnecting.
+          const interrupted=entry?.disconnected&&entry.state!=='saved'
+          const showStage=stage&&!(interrupted&&entry.ended)
           const messages=[
             entry?.topic&&row('DSH',t('requestDraft')+' '+entry.topic,'request'),
-            stage&&row('DyOffice',active?inProgress(stage):h('span',{role:'status'},t(entry.disconnected&&entry.state!=='saved'?'reopenForChat':stage)),'writing'),
+            showStage&&row('DyOffice',active?inProgress(stage):h('span',{role:'status'},t(interrupted?'reopenForChat':stage)),'writing'),
             waitingMessage&&row('DyOffice',waitingMessage,'waiting'),
             receipt&&entry?.checked&&!entry.topic&&!stage&&row('DyOffice',t('created'),'created'),
             entry?.reply&&row('DyOffice',entry.reply,'office-reply'),
