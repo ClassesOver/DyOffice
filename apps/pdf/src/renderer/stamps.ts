@@ -31,9 +31,9 @@ export interface HeaderFooterConfig {
 export const DEFAULT_WATERMARK: WatermarkConfig = {
   text: '',
   angle: 35,
-  opacity: 0.18,
-  color: '#d0342c',
-  sizeRatio: 0.11,
+  opacity: 0.22,
+  color: '#64748b',
+  sizeRatio: 0.055,
 }
 
 export const DEFAULT_HEADER_FOOTER: HeaderFooterConfig = {

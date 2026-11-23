@@ -1,5 +1,6 @@
 import type { Editor, JSONContent } from '@tiptap/core'
 import {
+  DEFAULT_TEXT_WATERMARK_STYLE,
   buildAnchoredTextboxParagraphXml,
   type ImageWrap,
   type NewImage,
@@ -36,8 +37,14 @@ export const SET_WATERMARK_TOOL: AgentToolDef = {
     properties: {
       text: { type: ['string', 'null'], description: 'watermark text; null removes the watermark' },
       fontFamily: { type: 'string', description: 'font face (default the document theme face)' },
-      color: { type: 'string', description: '"#RRGGBB" (default silver)' },
-      opacity: { type: 'number', description: '0-1 (default 0.5)' },
+      color: {
+        type: 'string',
+        description: `"#RRGGBB" (default #${DEFAULT_TEXT_WATERMARK_STYLE.colorHex})`,
+      },
+      opacity: {
+        type: 'number',
+        description: `0-1 (default ${DEFAULT_TEXT_WATERMARK_STYLE.opacity})`,
+      },
       diagonal: { type: 'boolean', description: 'diagonal (default) or horizontal layout' },
       bold: { type: 'boolean' },
       italic: { type: 'boolean' },

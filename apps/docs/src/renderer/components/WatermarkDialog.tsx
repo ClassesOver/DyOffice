@@ -6,7 +6,9 @@
 import { useImeEnterGuard } from '@genoffice/ui'
 import { useEffect, useState } from 'react'
 import {
+  DEFAULT_TEXT_WATERMARK_STYLE,
   pictureWatermarkPreviewImage,
+  textWatermarkBoxPt,
   textWatermarkPreviewImage,
   type HfImage,
   type PictureWatermarkSpec,
@@ -23,7 +25,6 @@ type Mode = 'none' | 'picture' | 'text'
 
 const SCALES = [500, 200, 150, 100, 50]
 const SIZES = [36, 40, 44, 48, 54, 60, 66, 72, 80, 90, 96, 105, 120, 144]
-const DEFAULT_COLOR = 'C0C0C0'
 const DEFAULT_FONT = 'Calibri'
 const PICKABLE_MIME = new Set(['image/png', 'image/jpeg', 'image/gif'])
 
@@ -89,7 +90,11 @@ function textFromDocImage(img: HfImage): WatermarkSpec | null {
     ...(wa.italic ? { italic: true } : {}),
   }
   const heightPt = (img.heightPx ?? 0) * 0.75
-  const size = heightPt > 0 ? sizeOfBox(spec, heightPt) : 'auto'
+  const autoBox = textWatermarkBoxPt(spec)
+  const matchesAuto =
+    Math.abs((img.widthPx ?? 0) * 0.75 - autoBox.widthPt) < 0.5 &&
+    Math.abs(heightPt - autoBox.heightPt) < 0.5
+  const size = heightPt > 0 && !matchesAuto ? sizeOfBox(spec, heightPt) : 'auto'
   if (size !== 'auto') {
     spec.sizePt = size
     spec.boxPt = inkBoxPt(spec, size)
@@ -178,8 +183,12 @@ export function WatermarkDialog({
   const [size, setSize] = useState<number | 'auto'>(cur.sizePt ?? 'auto')
   const [bold, setBold] = useState(cur.bold ?? false)
   const [italic, setItalic] = useState(cur.italic ?? false)
-  const [transparency, setTransparency] = useState(Math.round((1 - (cur.opacity ?? 0.5)) * 100))
-  const [color, setColor] = useState((cur.colorHex ?? DEFAULT_COLOR).replace(/^#/, ''))
+  const [transparency, setTransparency] = useState(
+    Math.round((1 - (cur.opacity ?? DEFAULT_TEXT_WATERMARK_STYLE.opacity)) * 100),
+  )
+  const [color, setColor] = useState(
+    (cur.colorHex ?? DEFAULT_TEXT_WATERMARK_STYLE.colorHex).replace(/^#/, ''),
+  )
   const [diagonal, setDiagonal] = useState(cur.diagonal !== false)
   const [pickError, setPickError] = useState(false)
 
