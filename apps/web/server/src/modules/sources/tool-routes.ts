@@ -20,9 +20,11 @@ export function registerWorkspaceSourceToolRoutes(app: FastifyInstance, { tools,
     for (const path of ['/api/v1/workspace/source-tools/execute','/api/v1/files/:documentId/source-tools/execute']) api.post(path, { bodyLimit: 40_000 }, request => tools.execute(cookies(request).session ?? '', request.body,(request.params as {documentId?:string}).documentId))
     for (const base of ['/api/v1/workspace/data-results','/api/v1/files/:documentId/data-results']) {
       api.get(base, request => {
-        const query = object(request.query, ['after','limit'])
+        const {documentId} = request.params as {documentId?:string}
+        const query = object(request.query, documentId ? ['after','limit','includePending'] : ['after','limit'])
+        if (query.includePending !== undefined && query.includePending !== 'true') throw sourceError()
         if (query.limit !== undefined && (typeof query.limit !== 'string' || !/^(?:[1-9][0-9]?|100)$/.test(query.limit))) throw sourceError()
-        return results.list(cookies(request).session ?? '', { ...(query.after === undefined ? {} : { after: query.after }), ...(query.limit === undefined ? {} : { limit: Number(query.limit) }) }, (request.params as {documentId?:string}).documentId)
+        return results.list(cookies(request).session ?? '', { ...(query.after === undefined ? {} : { after: query.after }), ...(query.limit === undefined ? {} : { limit: Number(query.limit) }) }, documentId, query.includePending === 'true')
       })
       api.get(base+'/:id', request => {
         const query = object(request.query, ['offset','limit'])

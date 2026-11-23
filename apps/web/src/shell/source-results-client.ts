@@ -14,7 +14,12 @@ export function createSourceResultsClient(request: Request, documentId?:string) 
     query(sourceId: string, input: { sql?: string }) { return tool<SourceToolQueryOutcome>('sources.query', { sourceId, ...input }) },
     save(resultId: string, name: string, commandId: string) { return tool<WorkspaceSourceResultArtifact>('sources.save_result', { resultId, name, commandId }) },
     read(resultId: string, offset = 0) { return tool<WorkspaceSourceResultPage>('sources.read_result', { resultId, offset, limit: 1000 }) },
-    list(after?: string) { return request<WorkspaceSourceResultList>(base+'/data-results' + (after ? '?after=' + encodeURIComponent(after) : '')) },
+    list(after?: string) {
+      const query = new URLSearchParams()
+      if (after) query.set('after', after)
+      if (documentId) query.set('includePending', 'true')
+      return request<WorkspaceSourceResultList>(base+'/data-results'+(query.size ? '?'+query : ''))
+    },
     /** Removes a saved result and frees its share of the workspace quota. */
     async remove(resultId: string) {
       if (!validId(resultId)) throw invalidId()

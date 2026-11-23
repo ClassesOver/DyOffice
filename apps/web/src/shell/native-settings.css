@@ -88,6 +88,8 @@
 .dr-checksum summary { cursor: pointer; width: fit-content; }
 .dr-checksum code { display: block; margin-block-start: 6px; user-select: all; }
 
+.dr-save-form { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; max-width: 100%; }
+.dr-save-form input { width: 17em; max-width: 100%; min-width: 0; }
 .dr-row-actions { max-width: 100%; }
 .dr-row-actions > summary { cursor: pointer; padding: 6px 8px; color: var(--text-secondary); font-size: 13px; }
 .dr-actions { margin-block-start: 4px; }

@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto'
 import type { PoolClient } from 'pg'
 import type { BusinessPrincipal, PrincipalTransactions } from '../../db/context.ts'
+import { isSourceResultName } from '../../../../../../packages/web-contracts/src/source-results.ts'
 import type { QuerySnapshot } from '../../../../../../packages/web-contracts/src/sources.ts'
 import type {
   WorkspaceSourceResultArtifact, WorkspaceSourceResultCapture, WorkspaceSourceResultList,
@@ -39,8 +40,7 @@ function uuid(input: unknown): string {
 function filename(input: unknown): string {
   // JSON literals need no formula escaping. The filename itself must be a
   // portable leaf, safe even if a later HTTP facade uses Content-Disposition.
-  if (typeof input !== 'string' || input.length < 1 || input.length > 200 || Buffer.byteLength(input) > 240 || input !== input.trim()
-    || /[\u0000-\u001f\u007f-\u009f/\\:*?"<>|]/u.test(input) || /[. ]$/.test(input) || /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(input)) throw error()
+  if (!isSourceResultName(input)) throw error()
   return input
 }
 function integer(input: unknown, fallback: number, min: number, max: number): number {
@@ -190,10 +190,17 @@ export function createWorkspaceSourceResults(options: WorkspaceSourceResultsOpti
         if (!removed.rowCount) throw error(404)
       })
     },
-    async list(token: string, input: unknown = {}, documentId?: string): Promise<WorkspaceSourceResultList> {
+    async list(token: string, input: unknown = {}, documentId?: string, includePending = false): Promise<WorkspaceSourceResultList> {
       const value = object(input, ['limit','after']), limit = integer(value.limit, 50, 1, 100), after = value.after === undefined ? null : uuid(value.after)
       return access(token, documentId, async (c, p, workspaceId) => {
-        const rows = (await c.query<Row>(`SELECT ${metadata} FROM workspace_source_results WHERE deployment_id=$1 AND owner_id=$2 AND workspace_id=$3 AND state='saved' AND document_id IS NOT DISTINCT FROM $6::uuid AND ($4::uuid IS NULL OR result_id>$4) ORDER BY result_id LIMIT $5`, [...scope(p, workspaceId), after, limit + 1, documentId??null])).rows
+        const rows = (await c.query<Row>(`SELECT ${metadata} FROM workspace_source_results r
+          WHERE deployment_id=$1 AND owner_id=$2 AND workspace_id=$3 AND document_id IS NOT DISTINCT FROM $6::uuid
+            AND ($4::uuid IS NULL OR result_id>$4)
+            AND (state='saved' OR (state='pending' AND session_id=$7 AND expires_at>clock_timestamp()
+              AND EXISTS (SELECT 1 FROM data_sources s WHERE s.deployment_id=r.deployment_id AND s.owner_id=r.owner_id
+                AND s.source_id=r.source_id AND s.enabled AND s.deleted_at IS NULL AND s.draft_version=r.source_version)))
+          ORDER BY result_id LIMIT $5`, [...scope(p, workspaceId), after, limit + 1, documentId??null,
+          documentId && includePending ? p.sessionId : null])).rows
         return { items: rows.slice(0, limit).map(artifact), nextCursor: rows.length > limit ? rows[limit - 1].result_id : null }
       })
     },

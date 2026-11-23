@@ -3,6 +3,7 @@ import {createServer} from 'node:http'
 import assert from 'node:assert/strict'
 import {randomUUID,randomBytes} from 'node:crypto'
 import {fileFixture,docxBytes,importFile} from '../helpers/files.mjs'
+import {password} from '../helpers/identity.mjs'
 import {restrictedOrigin} from '../helpers/restricted.mjs'
 import {createCsrfService} from '../../server/src/modules/auth/csrf.ts'
 import {createSourceService} from '../../server/src/modules/sources/service.ts'
@@ -38,12 +39,21 @@ test('two documents owned by the same user and Home partition frozen results thr
  assert.equal(query.statusCode,200,query.body)
  const captured=query.json().artifact
  const resultId=captured.resultId, args={resultId,name:'Report',commandId:randomUUID()}
+ const temporary=await request(docA,'GET','/data-results?includePending=true')
+ assert.equal(temporary.statusCode,200,temporary.body)
+ assert.deepEqual(temporary.json().items.map(row=>[row.resultId,row.state]),[[resultId,'pending']])
+ assert.deepEqual((await request(docB,'GET','/data-results?includePending=true')).json().items,[])
+ assert.deepEqual((await request(docA,'GET','/data-results')).json().items,[])
+ assert.equal((await request(workspace,'GET','/data-results?includePending=true')).statusCode,400)
+ const otherSession=await f.sessions.login('alice',password)
+ assert.deepEqual((await results.list(otherSession.token,{},a,true)).items,[])
  const home=await results.capture(token,snapshot,'a'.repeat(64))
  await results.save(token,{...args,resultId:home.resultId})
  const save=base=>request(base,'POST','/source-tools/execute',{name:'sources.save_result',arguments:args})
  for(const base of [docB,workspace])assert.equal((await save(base)).statusCode,404)
  assert.equal((await save(docA)).statusCode,200)
  assert.equal((await save(docA)).statusCode,200)
+ assert.deepEqual((await results.list(otherSession.token,{},a,true)).items.map(row=>row.resultId),[resultId])
  for(const [base,expected] of [[docA,[resultId]],[docB,[]],[workspace,[home.resultId]]]){
   const list=await request(base,'GET','/data-results')
   assert.equal(list.statusCode,200,list.body)
