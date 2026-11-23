@@ -106,8 +106,8 @@ export function openAiContentText(content: unknown): string {
 export async function* sseLines(
   body: NodeJS.ReadableStream | ReadableStream<Uint8Array>,
   onBytes?: () => void,
+  decoder = new TextDecoder(),
 ): AsyncGenerator<string> {
-  const decoder = new TextDecoder()
   let buffer = ''
   let lineBytes = 0
   const stream = body as ReadableStream<Uint8Array>
@@ -177,6 +177,7 @@ export interface SseDataEvent {
 export async function* sseDataEvents(
   body: NodeJS.ReadableStream | ReadableStream<Uint8Array>,
   onBytes?: () => void,
+  decoder?: TextDecoder,
 ): AsyncGenerator<SseDataEvent> {
   let parts: string[] = []
   const flush = (): SseDataEvent | undefined => {
@@ -185,7 +186,7 @@ export async function* sseDataEvents(
     parts = []
     return { raw, json: parseJson(raw) }
   }
-  for await (const line of sseLines(body, onBytes)) {
+  for await (const line of sseLines(body, onBytes, decoder)) {
     if (!line.startsWith('data:')) {
       const held = flush()
       if (held) yield held

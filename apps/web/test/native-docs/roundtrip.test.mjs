@@ -214,6 +214,12 @@ test('native Word streams DyOffice writing and shows the returned DSH review', {
     await f.page.evaluate(question=>{window.officeQuestion={id:crypto.randomUUID(),question}},question)
     await expect(conversation.getByText('收到：'+question,{exact:true})).toBeVisible()
   }
+  await f.page.evaluate(()=>{delete window.officeQuestion.question;window.officeAnswer=null})
+  await expect.poll(()=>f.page.evaluate(()=>window.officeAnswer?.answer)).toBe('收到：再简短说明一下')
+  await f.page.evaluate(()=>{window.officeQuestion={id:crypto.randomUUID()};window.officeAnswer=null})
+  await expect.poll(()=>f.page.evaluate(()=>window.officeAnswer?.state)).toBe('unknown')
+  await f.page.evaluate(()=>{window.officeQuestion={id:crypto.randomUUID(),scope:'previous-editor',question:'Old instruction'};window.officeAnswer=null})
+  await expect.poll(()=>f.page.evaluate(()=>window.officeAnswer?.state)).toBe('unknown')
   const requests=await popup.evaluate(()=>window.officeDraftRequests)
   assert.equal(requests.length,5)
   const handoffReport=requests[2].request

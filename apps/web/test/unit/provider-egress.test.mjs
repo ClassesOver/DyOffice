@@ -67,8 +67,18 @@ test('wrong digest rejects before DNS and request',async t=>{
 for(const bad of [{peer:'8.8.4.4'},{authorized:false},{port:444}])test('rejects TLS peer before body '+JSON.stringify(bad),async t=>{
  const n=network(t,bad);await assert.rejects(createPinnedProviderTransport({profiles:[profile]}).send(scope(),body,()=>{}));assert.equal(n.written,undefined)
 })
-for(const headers of [{'content-type':'text/event-stream-evil'},{'content-type':'text/event-stream','content-encoding':'gzip'}])test('rejects response headers '+JSON.stringify(headers),async t=>{
+for(const headers of [{'content-type':'text/event-stream-evil'},{'content-type':'application/json'},{'content-type':'text/event-stream','content-encoding':'gzip'}])test('rejects response headers '+JSON.stringify(headers),async t=>{
  network(t,{headers});let calls=0;await assert.rejects(createPinnedProviderTransport({profiles:[profile]}).send(scope(),body,()=>{calls++}));assert.equal(calls,0)
+})
+test('a Responses transport reports the negotiated JSON content type and enforces its byte limit',async t=>{
+ const p={...profile,endpoint:profile.baseUrl+'/responses'}
+ const chunks=[Buffer.from('{"status":'),Buffer.from('"completed"}')]
+ const n=network(t,{headers:{'content-type':'Application/JSON; charset=utf-8'},chunks})
+ const tr=createPinnedProviderTransport({profiles:[p],acceptResponsesJson:true,maxResponseBytes:chunks[0].length+1})
+ const received=[]
+ await assert.rejects(tr.sendAuthorized({...scope(),...p},body,write=>write(Buffer.from('synthetic-key')),(chunk,type)=>{received.push([chunk.toString(),type])}))
+ assert.deepEqual(received,[['{"status":','application/json']])
+ assert.match(n.options.headers.accept,/application\/json/)
 })
 const deferred=()=>{let resolve;const promise=new Promise(r=>resolve=r);return {promise,resolve}}
 const tick=()=>new Promise(r=>setImmediate(r))
