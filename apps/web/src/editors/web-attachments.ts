@@ -8,26 +8,25 @@ type Metadata={path:string;name:string;ext:string;sizeBytes:number}
 type Parsed={ok:boolean;kind:'text'|'image'|'unsupported';text?:string;error?:string;truncated?:boolean}
 type WebAttachment={file:File;metadata:Metadata;text?:string;truncated?:boolean}
 type AddResult={accepted:Metadata[];rejected:string[]}
-type Request=<T=unknown>(path:string,method?:string,body?:unknown)=>Promise<T>
+type Request=<T=unknown>(path:string,method?:string,body?:unknown,signal?:AbortSignal)=>Promise<T>
 
 export function createWebAttachments(request:Request,format?:string){
  const pending=new Map<string,Promise<WebAttachment>>(),filePaths=new WeakMap<File,string>()
+ const lifetime=new AbortController()
  function register(file:File){
-  const known=filePaths.get(file);if(known)return known
+  if(lifetime.signal.aborted)return ''
+  const known=filePaths.get(file);if(known&&pending.has(known))return known
   const ext=file.name.split('.').at(-1)?.toLowerCase()??''
   const path='web-attachment:'+crypto.randomUUID()
   filePaths.set(file,path)
-  if(!SUPPORTED.has(ext)){
-   pending.set(path,Promise.reject(new Error(`${file.name}: unsupported file type`)))
-   return path
-  }
-  if(file.size<1||file.size>MAX_BYTES){pending.set(path,Promise.reject(new Error(`${file.name}: file exceeds the 50 MiB limit`)));return path}
-  if(IMAGE_MIME[ext]&&file.size>MAX_IMAGE_BYTES){pending.set(path,Promise.reject(new Error(`${file.name}: image exceeds the 5 MiB limit`)));return path}
   const metadata={path,name:file.name,ext,sizeBytes:file.size}
   const result=(async()=>{
+   if(!SUPPORTED.has(ext))throw new Error(`${file.name}: unsupported file type`)
+   if(file.size<1||file.size>MAX_BYTES)throw new Error(`${file.name}: file exceeds the 50 MiB limit`)
+   if(IMAGE_MIME[ext]&&file.size>MAX_IMAGE_BYTES)throw new Error(`${file.name}: image exceeds the 5 MiB limit`)
    const attachment:WebAttachment={file,metadata}
    if(!IMAGE_MIME[ext]){
-    const parsed=await request<Parsed>(`/api/v1/ai/attachments/parse?name=${encodeURIComponent(file.name)}`,'POST',file)
+    const parsed=await request<Parsed>(`/api/v1/ai/attachments/parse?name=${encodeURIComponent(file.name)}`,'POST',file,lifetime.signal)
     if(!parsed.ok||parsed.kind!=='text'||typeof parsed.text!=='string')throw new Error(parsed.error??`${file.name}: text extraction failed`)
     // Excel merges the original file, independently of the extracted preview.
     if(parsed.truncated&&ext!=='xlsx'&&!(format==='xlsx'&&SPREADSHEET_ATTACHMENT_EXTS.has(ext)))
@@ -37,22 +36,28 @@ export function createWebAttachments(request:Request,format?:string){
    }
    return attachment
   })()
+  // A drop registers every path before the editor awaits the individual results.
+  void result.catch(()=>{})
   pending.set(path,result)
   return path
  }
- async function addFiles(files:readonly File[]):Promise<AddResult>{
+ async function collect<T>(items:readonly T[],pathFor:(item:T)=>string):Promise<AddResult>{
   const accepted:Metadata[]=[],rejected:string[]=[]
-  for(const file of files){
-   const path=register(file)
-   try{accepted.push((await pending.get(path)!).metadata)}catch(error){pending.delete(path);rejected.push(error instanceof Error?error.message:String(error))}
+  for(const item of items){
+   if(lifetime.signal.aborted)break
+   const path=pathFor(item),task=pending.get(path)
+   if(!task){rejected.push('Attachment is no longer available.');continue}
+   try{
+    accepted.push((await task).metadata)
+   }catch(error){
+    pending.delete(path)
+    rejected.push(error instanceof Error?error.message:String(error))
+   }
   }
-  return {accepted,rejected}
+  return lifetime.signal.aborted?{accepted:[],rejected:[]}:{accepted,rejected}
  }
- async function addAttachmentPaths(paths:readonly string[]){
-  const accepted:Metadata[]=[],rejected:string[]=[]
-  for(const path of paths){const task=pending.get(path);if(!task){rejected.push('Attachment is no longer available.');continue}try{accepted.push((await task).metadata)}catch(error){pending.delete(path);rejected.push(error instanceof Error?error.message:String(error))}}
-  return {accepted,rejected}
- }
+ const addFiles=(files:readonly File[])=>collect(files,register)
+ const addAttachmentPaths=(paths:readonly string[])=>collect(paths,path=>path)
  function pickAttachments():Promise<AddResult>{
   return new Promise(resolve=>{
    const input=document.createElement('input');input.type='file';input.multiple=true;input.accept=[...SUPPORTED].map(ext=>'.'+ext).join(',');input.hidden=true
@@ -83,5 +88,5 @@ export function createWebAttachments(request:Request,format?:string){
   if(!mime)return {accepted:[],rejected:[`Unsupported image type: ${ext}`]}
   return addFiles([new File([data],`pasted.${normalized}`,{type:mime})])
  }
- return {pickAttachments,addFiles,getPathForFile(file:File){return file instanceof File?register(file):''},async getFileForPath(path:string){const attachment=await pending.get(path);return attachment?.file??null},addAttachmentPaths,addPastedImage,readAttachment,readAttachmentImage,dispose(){pending.clear()}}
+ return {pickAttachments,addFiles,getPathForFile(file:File){return file instanceof File?register(file):''},async getFileForPath(path:string){const attachment=await pending.get(path);return attachment?.file??null},addAttachmentPaths,addPastedImage,readAttachment,readAttachmentImage,dispose(){lifetime.abort();pending.clear()}}
 }
