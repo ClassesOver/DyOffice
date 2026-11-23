@@ -2,6 +2,7 @@ name: Docker Web development image
 on:
   pull_request:
     paths:
+      - 'tools/dyoffice/runtime-lock*'
       - 'deploy/docker/**'
       - 'apps/sheets/native/xlsx-engine/**'
       - 'tools/dyoffice/build-xlsx-refresh-wasi.mjs'
@@ -15,27 +16,51 @@ jobs:
   compose:
     runs-on: ubuntu-24.04
     timeout-minutes: 35
-    defaults:
-      run:
-        working-directory: deploy/docker
     env:
-      NODE_IMAGE: node:22.23.5-bookworm-slim
-      RUST_IMAGE: rust:1.93.0-slim-bookworm
-      POSTGRES_IMAGE: postgres:17-alpine
+      NODE_IMAGE: node:22.23.5-bookworm-slim@sha256:e9f565d32859f0cbfb52125eafe8be39390f24dac302dc3cdf566e8ba3ab21ee
+      RUST_IMAGE: rust:1.93.0-slim-bookworm@sha256:776861219cd851131c1cec3bbd7cbeb16b99a794048097eb69ad9682a8ed0d57
+      POSTGRES_IMAGE: postgres:17-alpine@sha256:a77aa70e641402a21411b92b721c58d10f23b50ae5fdd2333efd22d166e1e5f7
       NPM_REGISTRY: https://registry.npmjs.org/
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22.23.5'
+      - name: Verify immutable Node runtime
+        run: node tools/dyoffice/runtime-lock.mjs --runtime
+      - name: Check the deployment and build contracts
+        run: node --test deploy/docker/test/*.test.mjs tools/test/saas-entrypoints.test.mjs
       - name: Build and start the merged Compose application
+        working-directory: deploy/docker
         run: |
           python3 generate-secrets.py
           docker compose config --quiet
           docker compose build web
           docker compose up -d --wait db
           docker compose run --rm provision
+          sudo apt-get install -y python3-pexpect
+          /usr/bin/python3 - <<'PYTHON'
+          import secrets
+          import pexpect
+
+          password = secrets.token_urlsafe(36)
+          with pexpect.spawn("docker", ["compose", "run", "--rm", "admin"], encoding="utf-8", timeout=60) as admin:
+              admin.expect_exact("Administrator username: ")
+              admin.sendline("ciadmin")
+              admin.expect_exact("Password (hidden, at least 15 characters): ")
+              admin.sendline(password)
+              admin.expect_exact("Confirm password (hidden): ")
+              admin.sendline(password)
+              admin.expect_exact("Administrator created")
+              admin.expect(pexpect.EOF)
+              admin.close()
+              assert admin.exitstatus == 0
+          PYTHON
           docker compose up --no-build -d web
           curl --fail --retry 25 --retry-delay 2 --retry-all-errors http://localhost:3080/api/v1/health/ready | jq -e '.state == "ready"'
           curl --fail --silent http://localhost:3080/ > /dev/null
       - name: Open a fixture with the packaged WASI runner
+        working-directory: deploy/docker
         run: |
           docker compose exec -T -w /app/apps/web/test/fixtures/sheets web sh -ec '
             test "$(id -un)" = node
@@ -44,6 +69,11 @@ jobs:
           {"version":1,"requestId":"smoke","command":"open","path":"/work/acceptance.xlsx"}
           REQUEST
           ' | jq -e '.ok == true and .requestId == "smoke"'
+      - name: Show Web startup diagnostics
+        if: failure()
+        working-directory: deploy/docker
+        run: docker compose logs --tail 30 web
       - name: Remove disposable CI deployment
         if: always()
+        working-directory: deploy/docker
         run: docker compose down --volumes
