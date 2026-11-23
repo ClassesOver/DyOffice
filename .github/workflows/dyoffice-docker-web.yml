@@ -62,9 +62,13 @@ jobs:
       - name: Open a fixture with the packaged WASI runner
         working-directory: deploy/docker
         run: |
-          docker compose exec -T -w /app/apps/web/test/fixtures/sheets web sh -ec '
+          set -o pipefail
+          docker compose exec -T web sh -ec '
             test "$(id -un)" = node
             if command -v cargo; then exit 1; fi
+            work=$(mktemp -d)
+            cp /app/apps/web/test/fixtures/sheets/acceptance.xlsx "$work/"
+            cd "$work"
             node /app/apps/web/dist-sheets-server/xlsx-refresh-wasi.mjs <<REQUEST
           {"version":1,"requestId":"smoke","command":"open","path":"/work/acceptance.xlsx"}
           REQUEST
