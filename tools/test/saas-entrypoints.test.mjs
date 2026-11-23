@@ -17,9 +17,10 @@ test('root product commands cannot launch or package the retired desktop shell',
   for (const key of ['dev', 'start', 'build', 'build:all', 'build:saas']) assert.doesNotMatch(pkg.scripts[key], /electron|preload|@genoffice\/shell/)
 })
 test('SaaS build includes all reused Office browser renderers without desktop builds', () => {
-  assert.equal(pkg.scripts['build:saas'], [
+  assert.equal(pkg.scripts['build:saas'], 'npm run build:saas:assets && npm run build:web:sheets:wasi')
+  assert.equal(pkg.scripts['build:saas:assets'], [
     'build:harness-data-helper', 'build:web', 'build:web:docs', 'build:web:sheets',
-    'build:web:sheets:wasi', 'build:web:slides', 'build:web:pdf',
+    'build:web:slides', 'build:web:pdf',
   ].map(script => 'npm run '+script).join(' && '))
   assert.equal(pkg.scripts['build:web:sheets'], 'npm run build:sheets --prefix apps/web --workspaces=false')
   assert.equal(pkg.scripts['build:web:slides'], 'npm run build:slides --prefix apps/web --workspaces=false')

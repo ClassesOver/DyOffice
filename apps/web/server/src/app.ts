@@ -64,7 +64,7 @@ import type { IdentityStore } from './db/identity.ts'
 import { createPasswordService, loadPasswordBlocklist, type PasswordService } from './modules/auth/passwords.ts'
 import { createAccountService } from './modules/auth/service.ts'
 import { createSessionService, authError } from './modules/auth/sessions.ts'
-import { createCsrfService, cookies } from './modules/auth/csrf.ts'
+import { createCsrfService, cookies, assertHttpDevelopmentMode } from './modules/auth/csrf.ts'
 import { createLoginThrottle, type LoginLimits } from './modules/auth/throttle.ts'
 import { registerAuthRoutes } from './modules/auth/routes.ts'
 import { createUserService } from './modules/admin/users/service.ts'
@@ -104,7 +104,7 @@ export async function buildApp(config: WebConfig): Promise<FastifyInstance> {
 
 export interface LocalWebConfig {
   rateLimit?: { max: number; windowMs: number };
-  db: IdentityStore; businessPool?: Pool; deploymentId: string; origin: string; csrfKey: string; passwords?: PasswordService;
+  db: IdentityStore; businessPool?: Pool; deploymentId: string; origin: string; csrfKey: string; insecureHttpDev?: boolean; passwords?: PasswordService;
   objectStore?: ObjectStore; filePolicy?: FilePolicy; nativeDocsDirectory?: string; nativeSheetsDirectory?: string; nativeSlidesDirectory?: string; slidesHost?: SlidesSessionHost; nativePdf?: boolean; nativePdfDirectory?: string; nativeJobs?: boolean; sheetsNative?: SheetsNative & Partial<SheetsSaveNative>; sheetsPlanner?: SheetsPlanner; sheetsWorkbookPlanner?: SheetsWorkbookPlanner; sheetsPackageReader?: SheetsPackageReader; localShellDirectory?: string; dshEditorOrigin?: string;
   globalConfigKeyring?: SecretKeyring;
   sourcesCredentialKeys?: string;
@@ -132,6 +132,7 @@ export interface LocalWebConfig {
   passwordBlocklistFile?: string; loginLimits?: LoginLimits; idleMs?: number; absoluteMs?: number; closeDb?: () => Promise<void>
 }
 export async function buildLocalApp(config: LocalWebConfig): Promise<FastifyInstance> {
+  assertHttpDevelopmentMode(config.insecureHttpDev, config.origin)
   if (process.env.NODE_ENV === 'production') throw new Error('Local runtime is not allowed in production before enterprise release gates')
   if (config.adminAiSyntheticProbe !== undefined && typeof config.adminAiSyntheticProbe !== 'boolean') throw new Error('Invalid synthetic probe configuration')
   if (config.adminAiSyntheticProbe && !config.businessPool) throw new Error('Synthetic probe requires restricted business pool')
@@ -175,8 +176,8 @@ export async function buildLocalApp(config: LocalWebConfig): Promise<FastifyInst
   const [nativeSheets, nativeSlides, nativePdf, nativeDocs] = await Promise.all([config.nativeSheetsDirectory, config.nativeSlidesDirectory, config.nativePdfDirectory, config.nativeDocsDirectory].map(nativeEditorAssets))
   const passwords = config.passwords ?? await createPasswordService({ blockedPasswords: await loadPasswordBlocklist(config.passwordBlocklistFile) })
   const accounts = createAccountService({ db: config.db, passwords, deploymentId: config.deploymentId })
-  const sessions = createSessionService({ db: config.db, accounts, deploymentId: config.deploymentId, idleMs: config.idleMs, absoluteMs: config.absoluteMs })
-  const csrf = createCsrfService({ db: config.db, deploymentId: config.deploymentId, origin: config.origin, key: config.csrfKey })
+  const csrf = createCsrfService({ db: config.db, deploymentId: config.deploymentId, origin: config.origin, key: config.csrfKey, insecureHttpDev: config.insecureHttpDev })
+  const sessions = createSessionService({ db: config.db, accounts, deploymentId: config.deploymentId, idleMs: config.idleMs, absoluteMs: config.absoluteMs, credentials: csrf.sessionCredentials })
   // Explicit same-origin WS source is required by browsers that do not include
   // wss in connect-src 'self'. Never grant the unrestricted wss: scheme.
   const realtimeSource = new URL(config.origin)
@@ -185,6 +186,7 @@ export async function buildLocalApp(config: LocalWebConfig): Promise<FastifyInst
   const throttle = createLoginThrottle(config.db, config.deploymentId, config.csrfKey, config.loginLimits)
   const app = await createApiShell(config.rateLimit?{max:config.rateLimit.max,timeWindow:config.rateLimit.windowMs}:undefined)
   try {
+  app.addHook('onRequest', async request => { csrf.bindRequest(request) })
   const legacyEmbedOrigin=dshEmbedOrigin(config.dshEditorOrigin)
   const officeEmbedOrigins=async()=>{
     if(!config.businessPool)return legacyEmbedOrigin?[legacyEmbedOrigin]:[...DEFAULT_OFFICE_EMBED_ORIGINS]
@@ -210,7 +212,7 @@ export async function buildLocalApp(config: LocalWebConfig): Promise<FastifyInst
   registerAuthRoutes(app, { sessions, csrf, throttle, users })
   registerUserRoutes(app, users, csrf)
   if (config.businessPool) {
-    const transactions = createPrincipalTransactions({ pool: config.businessPool, deploymentId: config.deploymentId, idleMs: config.idleMs })
+    const transactions = createPrincipalTransactions({ pool: config.businessPool, deploymentId: config.deploymentId, idleMs: config.idleMs, sessionCredentials: csrf.sessionCredentials })
     const sources = createSourceService({ transactions, credentialKeys: config.sourcesCredentialKeys, egressTargets: config.sourcesEgressTargets })
     const sourceResults = createWorkspaceSourceResults({ transactions })
     const sourceTools = createWorkspaceSourceTools({ sources, results: sourceResults })

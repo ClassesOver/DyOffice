@@ -17,6 +17,13 @@ import { parseConfigKeyring } from './src/modules/admin/keyring-config.ts';
 async function configuredApplication() {
   assertDocumentBackendPolicy(process.env);
   const mode=process.env.DYOFFICE_AUTH_MODE||(process.env.DYOFFICE_AUTH_DATABASE_URL?'local':'development');
+  const httpDevFlag=process.env.DYOFFICE_INSECURE_HTTP_DEV;
+  if(httpDevFlag!==undefined && !['0','1'].includes(httpDevFlag))throw new Error('Invalid HTTP development flag');
+  const insecureHttpDev=httpDevFlag==='1';
+  if(insecureHttpDev && (process.env.DYOFFICE_AUTH_MODE!=='local'||process.env.NODE_ENV!=='development'))throw new Error('Insecure HTTP requires explicit local development mode');
+  const editorProfile=process.env.DYOFFICE_LOCAL_EDITOR_PROFILE;
+  if(editorProfile!==undefined && editorProfile!=='docx-only')throw new Error('Invalid local editor profile');
+  const docxOnly=editorProfile==='docx-only';
   const shellDirectory=localShellDirectory({...process.env,DYOFFICE_AUTH_MODE:mode});
   const profilesFile=process.env.DYOFFICE_PROVIDER_GATEWAY_PROFILES;
   if(profilesFile && mode!=='local') throw new Error('Provider Gateway requires local mode');
@@ -61,7 +68,7 @@ async function configuredApplication() {
     const defaultDocsDir=resolve(process.env.DYOFFICE_NATIVE_DOCX_DIRECTORY||fileURLToPath(new URL('../dist-docs/',import.meta.url)));
     const nativeDocsDirectory=storage.objectStore && existsSync(join(defaultDocsDir,'.vite/manifest.json')) ? defaultDocsDir : undefined;
     const defaultSlidesDir=resolve(process.env.DYOFFICE_NATIVE_PPTX_DIRECTORY||fileURLToPath(new URL('../dist-slides/',import.meta.url)));
-    const nativeSlidesDirectory=storage.objectStore && existsSync(join(defaultSlidesDir,'.vite/manifest.json')) ? defaultSlidesDir : undefined;
+    const nativeSlidesDirectory=!docxOnly && storage.objectStore && existsSync(join(defaultSlidesDir,'.vite/manifest.json')) ? defaultSlidesDir : undefined;
     const slidesHost=nativeSlidesDirectory ? {openSession:(input,signal)=>openIsolatedPptxSession(input,{timeoutMs:60000,experimental:true,signal})} : undefined;
     const legacyDistDir=resolve(fileURLToPath(new URL('../dist/',import.meta.url)));
     const effectiveShellDirectory=(shellDirectory && shellDirectory!==legacyDistDir) ? shellDirectory : (storage.objectStore && hasBuiltShell ? defaultShellDir : shellDirectory);
@@ -69,7 +76,7 @@ async function configuredApplication() {
     const defaultGatewayPath=resolve(process.env.DYOFFICE_XLSX_GATEWAY_RUNNER||fileURLToPath(new URL('../dist-sheets-server/gateway-process.mjs',import.meta.url)));
     const defaultNodeEnginePath=resolve(fileURLToPath(new URL('../dist-sheets-server/xlsx-node-engine.mjs',import.meta.url)));
     const defaultWasiRefreshPath=fileURLToPath(new URL('../dist-sheets-server/xlsx-refresh-wasi.mjs',import.meta.url));
-    if(storage.objectStore && existsSync(join(defaultSheetsDir,'.vite/manifest.json')) && existsSync(defaultGatewayPath) && (process.env.DYOFFICE_NATIVE_BINARY || existsSync(defaultNodeEnginePath))){
+    if(!docxOnly && storage.objectStore && existsSync(join(defaultSheetsDir,'.vite/manifest.json')) && existsSync(defaultGatewayPath) && (process.env.DYOFFICE_NATIVE_BINARY || existsSync(defaultNodeEnginePath))){
       sheets=await configuredSheetsRuntime({
         ...process.env,DYOFFICE_AUTH_MODE:mode,
         ...(process.env.DYOFFICE_NATIVE_BINARY ? {} : {DYOFFICE_XLSX_NODE_ENGINE:process.env.DYOFFICE_XLSX_NODE_ENGINE||defaultNodeEnginePath}),
@@ -78,9 +85,9 @@ async function configuredApplication() {
     }
     const {close:closeSheets,...sheetsConfig}=sheets ?? {};
     const defaultPdfDir=resolve(process.env.DYOFFICE_NATIVE_PDF_DIRECTORY||fileURLToPath(new URL('../dist-pdf/',import.meta.url)));
-    const nativePdfDirectory=storage.objectStore && existsSync(join(defaultPdfDir,'.vite/manifest.json')) ? defaultPdfDir : undefined;
-    const nativePdf=Boolean(nativePdfDirectory || nativeDocsDirectory || nativeSlidesDirectory || sheets);
-    return await buildLocalApp({db,businessPool,...storage,...sheetsConfig,nativeDocsDirectory,nativeSlidesDirectory,slidesHost,nativePdf,nativePdfDirectory,localShellDirectory:effectiveShellDirectory,dshEditorOrigin:process.env.DYOFFICE_DSH_EMBED_ORIGIN,nativeJobs:jobFlag==='experimental',deploymentId,origin,csrfKey,globalConfigKeyring,providerGateway,assistantSourceMode,assistantChannels:process.env.DYOFFICE_ASSISTANT_CHANNELS==='on',assistantBackground:backgroundPool?{pool:backgroundPool}:undefined,codingHarnesses:codingHarnessConfig(process.env),sourcesCredentialKeys,sourcesEgressTargets,wordCollaboration:process.env.DYOFFICE_WORD_COLLAB==='experimental',passwordBlocklistFile:process.env.DYOFFICE_PASSWORD_BLOCKLIST_FILE,closeDb:async()=>{await closeSheets?.();storage.close();await Promise.all([close(),businessPool.end(),backgroundPool?.end()]);}});
+    const nativePdfDirectory=!docxOnly && storage.objectStore && existsSync(join(defaultPdfDir,'.vite/manifest.json')) ? defaultPdfDir : undefined;
+    const nativePdf=!docxOnly && Boolean(nativePdfDirectory || nativeDocsDirectory || nativeSlidesDirectory || sheets);
+    return await buildLocalApp({db,businessPool,...storage,...sheetsConfig,nativeDocsDirectory,nativeSlidesDirectory,slidesHost,nativePdf,nativePdfDirectory,localShellDirectory:effectiveShellDirectory,dshEditorOrigin:process.env.DYOFFICE_DSH_EMBED_ORIGIN,nativeJobs:jobFlag==='experimental',deploymentId,origin,csrfKey,insecureHttpDev,globalConfigKeyring,providerGateway,assistantSourceMode,assistantChannels:process.env.DYOFFICE_ASSISTANT_CHANNELS==='on',assistantBackground:backgroundPool?{pool:backgroundPool}:undefined,codingHarnesses:codingHarnessConfig(process.env),sourcesCredentialKeys,sourcesEgressTargets,wordCollaboration:process.env.DYOFFICE_WORD_COLLAB==='experimental',passwordBlocklistFile:process.env.DYOFFICE_PASSWORD_BLOCKLIST_FILE,closeDb:async()=>{await closeSheets?.();storage.close();await Promise.all([close(),businessPool.end(),backgroundPool?.end()]);}});
   } catch(error) { await sheets?.close();storage?.close();await Promise.allSettled([close(),businessPool?.end(),backgroundPool?.end()]); throw error; }
 }
 

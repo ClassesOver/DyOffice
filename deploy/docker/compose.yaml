@@ -1,0 +1,120 @@
+# Isolated HTTP development; loopback and Secure-cookie mode remain the defaults.
+name: dyoffice-lab
+x-app:
+  image: dyoffice-lab:local
+  build: &id001
+    context: ../..
+    dockerfile: deploy/docker/Dockerfile
+    args:
+      NODE_IMAGE: ${NODE_IMAGE:?Set your mirrored Node 22.23.5 bookworm-slim image}
+      RUST_IMAGE: ${RUST_IMAGE:?Set your mirrored Rust 1.93.0 slim-bookworm image}
+      NPM_REGISTRY: ${NPM_REGISTRY:-https://repo.huaweicloud.com/repository/npm/}
+  init: true
+  networks: &id002
+  - backend
+services:
+  db:
+    image: ${POSTGRES_IMAGE:?Set your mirrored official PostgreSQL 17 image}
+    environment:
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+      POSTGRES_DB: postgres
+    secrets:
+    - postgres_password
+    - owner_password
+    - auth_password
+    - business_password
+    volumes:
+    - database:/var/lib/postgresql/data
+    - ./init-db.sh:/docker-entrypoint-initdb.d/10-dyoffice.sh:ro
+    healthcheck:
+      test:
+      - CMD-SHELL
+      - pg_isready -h 127.0.0.1 -U postgres -d postgres
+      interval: 5s
+      timeout: 5s
+      retries: 30
+    networks:
+    - backend
+    restart: unless-stopped
+  provision:
+    image: dyoffice-lab:local
+    build: *id001
+    init: true
+    networks: *id002
+    profiles:
+    - setup
+    command:
+    - provision
+    secrets:
+    - owner_password
+    depends_on:
+      db:
+        condition: service_healthy
+  admin:
+    image: dyoffice-lab:local
+    build: *id001
+    init: true
+    networks: *id002
+    profiles:
+    - setup
+    command:
+    - admin
+    environment:
+      DYOFFICE_DEPLOYMENT_ID: ${DYOFFICE_DEPLOYMENT_ID:?Run generate-secrets.py}
+    secrets:
+    - owner_password
+    stdin_open: true
+    tty: true
+    depends_on:
+      db:
+        condition: service_healthy
+  web:
+    image: dyoffice-lab:local
+    build: *id001
+    init: true
+    networks: *id002
+    command:
+    - web
+    environment:
+      NODE_ENV: development
+      HOST: 0.0.0.0
+      PORT: '3080'
+      DYOFFICE_AUTH_MODE: local
+      DYOFFICE_DEPLOYMENT_ID: ${DYOFFICE_DEPLOYMENT_ID:?Run generate-secrets.py}
+      DYOFFICE_ORIGIN: ${DYOFFICE_ORIGIN:-http://localhost:3080}
+      DYOFFICE_INSECURE_HTTP_DEV: ${DYOFFICE_INSECURE_HTTP_DEV:-0}
+      DYOFFICE_FILE_API: experimental
+      DYOFFICE_OBJECT_STORE: local-dev
+      DYOFFICE_OBJECT_DIRECTORY: /data/objects
+      DYOFFICE_LOCAL_SHELL: experimental
+      DYOFFICE_LOCAL_SHELL_DIR: /app/apps/web/dist-local-shell
+      DYOFFICE_LOCAL_EDITOR_PROFILE: docx-only
+      DYOFFICE_CODING_AGENT: 'off'
+    secrets:
+    - auth_password
+    - business_password
+    - csrf_key
+    volumes:
+    - objects:/data/objects
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+    ports:
+    - ${BIND_IP:-127.0.0.1}:${HTTP_PORT:-3080}:3080
+networks:
+  backend: {}
+volumes:
+  database: {}
+  objects: {}
+secrets:
+  postgres_password:
+    file: ./secrets/postgres_password
+  owner_password:
+    file: ./secrets/owner_password
+  auth_password:
+    file: ./secrets/auth_password
+  business_password:
+    file: ./secrets/business_password
+  csrf_key:
+    file: ./secrets/csrf_key

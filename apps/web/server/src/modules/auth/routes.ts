@@ -1,6 +1,6 @@
 import type { FastifyInstance } from 'fastify'
 import { authError, type SessionService } from './sessions.ts'
-import { cookies, serializeCookie, SESSION_COOKIE, LOGIN_COOKIE, type createCsrfService } from './csrf.ts'
+import { cookies, SESSION_COOKIE, LOGIN_COOKIE, type createCsrfService } from './csrf.ts'
 import type { createLoginThrottle } from './throttle.ts'
 import type { UserService } from '../admin/users/service.ts'
 
@@ -8,6 +8,7 @@ type Dependencies = { users: UserService; sessions: SessionService; csrf: Return
 const loginSchema = { type: 'object', additionalProperties: false, required: ['username', 'password'], properties: { username: { type: 'string', maxLength: 256 }, password: { type: 'string', maxLength: 1024 } } } as const
 const passwordSchema = { type: 'object', additionalProperties: false, required: ['password'], properties: { password: { type: 'string', maxLength: 1024 } } } as const
 export function registerAuthRoutes(app: FastifyInstance, { sessions, csrf, throttle, users }: Dependencies) {
+  const serializeCookie = csrf.serializeCookie
   app.addHook('onRequest', async (_request, reply) => { reply.header('Cache-Control', 'no-store') })
   app.get('/api/v1/auth/csrf', async (request, reply) => {
     csrf.originCheck(request, false)

@@ -26,16 +26,18 @@ export interface AuthorityContext {
   users: Map<string, AuthorityUser>
 }
 
-export function createSessionService({ db, accounts, deploymentId, idleMs = 8 * 3600_000, absoluteMs = 24 * 3600_000 }: {
-  db: IdentityStore; accounts: ReturnType<typeof createAccountService>; deploymentId: string; idleMs?: number; absoluteMs?: number
+export function createSessionService({ db, accounts, deploymentId, idleMs = 8 * 3600_000, absoluteMs = 24 * 3600_000, credentials }: {
+  db: IdentityStore; accounts: ReturnType<typeof createAccountService>; deploymentId: string; idleMs?: number; absoluteMs?: number; credentials?: { issue: () => string; verify: (token: string) => void }
 }) {
   if (!Number.isSafeInteger(idleMs) || idleMs < 1 || !Number.isSafeInteger(absoluteMs) || absoluteMs < idleMs || absoluteMs > 30 * 24 * 3600_000) throw new Error('Invalid session lifetime')
   async function roles(connection: PoolClient, userId: string): Promise<string[]> {
     const result = await connection.query('SELECT role FROM user_roles WHERE deployment_id=$1 AND user_id=$2 ORDER BY role', [deploymentId, userId])
     return result.rows.map(row => row.role)
   }
+  const issueToken = () => credentials ? credentials.issue() : randomBytes(32).toString('base64url')
   async function actor(token: string) {
-    if (!/^[A-Za-z0-9_-]{43}$/.test(token)) throw authError()
+    credentials?.verify(token)
+    if (!credentials && !/^[A-Za-z0-9_-]{43}$/.test(token)) throw authError()
     const { rows: [session] } = await db.pool.query("SELECT s.id,s.user_id FROM sessions s JOIN users u ON u.id=s.user_id AND u.deployment_id=s.deployment_id WHERE s.deployment_id=$1 AND s.token_hash=$2 AND s.revoked_at IS NULL AND s.auth_version=u.auth_version AND u.status='active' AND NOT u.password_reset_required AND s.expires_at>clock_timestamp() AND s.last_seen_at>clock_timestamp()-$3*interval '1 millisecond'", [deploymentId, tokenHash(token), idleMs])
     if (!session) throw authError()
     return session as { id: string; user_id: string }
@@ -93,14 +95,14 @@ export function createSessionService({ db, accounts, deploymentId, idleMs = 8 * 
     return withAuthority(token, { sessionIds: extraIds }, ({ connection, principal, session, now }) => operation(connection, principal, session, now))
   }
   return {
-    withAuthority, absoluteMs,
+    withAuthority, absoluteMs, issueToken,
     async login(username: unknown, password: unknown, context: AuthContext = {}) {
       const candidate = await accounts.verifyCredentials(username, password)
       if (!candidate) { await db.transaction(connection => appendLoginAttempt(connection, deploymentId, 'login_failed', username, context)); throw authError() }
       return db.transaction(async connection => {
         const { rows: [user] } = await connection.query('SELECT * FROM users WHERE deployment_id=$1 AND id=$2 FOR SHARE', [deploymentId, candidate.userId])
         if (!user || user.status !== 'active' || user.password_reset_required || user.auth_version !== candidate.authVersion) throw authError()
-        const token = randomBytes(32).toString('base64url'), sessionId = randomUUID()
+        const token = issueToken(), sessionId = randomUUID()
         await connection.query('INSERT INTO sessions(id,deployment_id,user_id,token_hash,auth_version,expires_at) VALUES($1,$2,$3,$4,$5,clock_timestamp()+$6*interval \'1 millisecond\')', [sessionId, deploymentId, user.id, tokenHash(token), user.auth_version, absoluteMs])
         await appendAuthEvent(connection, deploymentId, 'login_succeeded', { ...context, actorId: user.id, sessionId })
         return { token, sessionId, user: { id: user.id, username: user.username_normalized, displayName: user.display_name, roles: await roles(connection, user.id) } }
@@ -165,7 +167,7 @@ export function createSessionService({ db, accounts, deploymentId, idleMs = 8 * 
       if (!candidate || candidate.userId !== initial.userId) { await appendAuthEvent(db.pool, deploymentId, 'login_failed', { ...context, actorId: initial.userId, sessionId: initial.sessionId }); throw authError() }
       return withSession(token, [], async (connection, principal, _session, now) => {
         if (candidate.authVersion !== principal.authVersion) throw authError()
-        const replacement = randomBytes(32).toString('base64url')
+        const replacement = issueToken()
         await connection.query('UPDATE sessions SET token_hash=$1,reauthenticated_at=$2 WHERE id=$3', [tokenHash(replacement), now, principal.sessionId])
         await appendAuthEvent(connection, deploymentId, 'reauthenticated', { ...context, actorId: principal.userId, sessionId: principal.sessionId })
         return replacement
