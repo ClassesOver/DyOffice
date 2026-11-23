@@ -5,7 +5,7 @@ import {createAiDocCreationQueue,type AiDocCreationResult} from './ai-doc-creati
 import {isRevisionRef,type RevisionRef} from '../../../../packages/web-contracts/src/api'
 import {AssistantChannelsPage} from './AssistantChannelsPage'
 import {BackgroundTasksPage} from './BackgroundTasksPage'
-import React,{useEffect,useState,useCallback,useRef} from 'react'
+import React,{useEffect,useState,useCallback,useMemo,useRef} from 'react'
 import {createRoot} from 'react-dom/client'
 import {WorkspaceSettings} from './WorkspaceSettings'
 import {NativeSettingsDialog} from './NativeSettingsDialog'
@@ -33,6 +33,7 @@ import {WorkspaceTrash} from './WorkspaceTrash'
 import {createUserSkillsClient} from './user-skills-client'
 import {UserSkillsPanel} from './UserSkillsPanel'
 import {SourcesPanel} from './SourcesPanel'
+import {createSourceResultsClient} from './source-results-client'
 import {WorkspaceDataResults} from './WorkspaceDataResults'
 import {createSourceWorkspaceSession} from './source-workspace-session'
 import blankDocx from '../../../shell/build/shell-new/blank.docx?url'
@@ -49,7 +50,7 @@ import {createLoginHistoryClient} from './local-login-history-client'
 import {ConfigProvider,theme as antdTheme,Dropdown,Button,Alert,Form,Input,Card,Typography} from 'antd'
 import logo from '../../../shell/src/renderer/src/assets/dyoffice-logo.svg'
 import zhCN from 'antd/locale/zh_CN'
-const workspacePages={channels:'频道分享',tasks:'后台任务',settings:'个人设置',trash:'回收站',results:'数据结果',sources:'数据连接',global:'全局配置',users:'用户管理'} as const
+const workspacePages={channels:'频道分享',tasks:'后台任务',settings:'个人设置',trash:'回收站',results:'数据结果',documentResults:'文档数据结果',sources:'数据连接',global:'全局配置',users:'用户管理'} as const
 type WorkspacePage=keyof typeof workspacePages
 import {AccountMenu} from './AccountMenu'
 import {CitationTabUnverified,createDocumentTabs,type DocumentFormat} from './document-tabs'
@@ -264,8 +265,10 @@ async function logout(){
   if(!leaving){resumeEntries();if(app)app.inert=wasInert;logoutPending=false}
  }
 }
-function WorkspacePageContent({page,onClose,onCloseGuardChange,settingsTab,onSettingsTabChange,channelId,onOpenChannel}:{channelId?:string;onOpenChannel:(id:string)=>void;settingsTab?:string;onSettingsTabChange?:(tab:string)=>void;page:WorkspacePage;onClose:()=>void;onCloseGuardChange:(guard:(()=>boolean)|null)=>void}){
+function WorkspacePageContent({page,documentId,onClose,onCloseGuardChange,settingsTab,onSettingsTabChange,channelId,onOpenChannel}:{documentId?:string;channelId?:string;onOpenChannel:(id:string)=>void;settingsTab?:string;onSettingsTabChange?:(tab:string)=>void;page:WorkspacePage;onClose:()=>void;onCloseGuardChange:(guard:(()=>boolean)|null)=>void}){
  const [sessionVersion,setSessionVersion]=useState(0)
+ const bound=sourceWorkspace?.bound
+ const documentResults=useMemo(()=>documentId&&bound?createSourceResultsClient(bound.request,documentId):undefined,[bound,documentId])
  const registerGuard=onCloseGuardChange
  async function updateSession(proof:string){
   const workspace=await createSourceWorkspaceSession(client,proof)
@@ -293,6 +296,7 @@ function WorkspacePageContent({page,onClose,onCloseGuardChange,settingsTab,onSet
  if(page==='users'&&user?.roles.includes('config_admin'))return <section className="workspace-panel"><LocalAdminPanel client={adminClient} presentation="page" currentUserId={user.id} onSessionRotated={proof=>{client.invalidateCsrf();if(proof)void updateSession(proof).catch(e=>notice(e.message))}} onOwnAuthorityChanged={()=>client.endSession('expired')} onClose={onClose} onCloseGuardChange={registerGuard}/></section>
  if(page==='global'&&user?.roles.includes('config_admin'))return <GlobalSettingsPanel client={globalSettings} onClose={onClose} presentation="page" onCloseGuardChange={registerGuard}/>
  if(page==='sources'&&sourceWorkspace)return <SourcesPanel key={sessionVersion} client={sourceWorkspace.sources} onClose={onClose} presentation="page" onCloseGuardChange={registerGuard}/>
+ if(page==='documentResults'&&documentResults)return <WorkspaceDataResults key={documentId} client={documentResults} onClose={onClose} presentation="page"/>
  if(page==='results'&&sourceWorkspace)return <WorkspaceDataResults key={sessionVersion} client={sourceWorkspace.results} onClose={onClose} presentation="page"/>
  if(page==='trash'&&sourceWorkspace)return <WorkspaceTrash request={sourceWorkspace.bound.request} onChanged={notifyFilesChanged} onClose={onClose} presentation="page" onCloseGuardChange={registerGuard}/>
  return null
@@ -301,6 +305,7 @@ function Account({onOpen}:{onOpen:(page:WorkspacePage)=>void}){return <div class
 
 function Shell({recovery=false}:{recovery?:boolean}){
  const [message,setMessage]=useState(entryRecoveryNotice),[page,setPage]=useState<WorkspacePage|null>(()=>new URLSearchParams(location.search).get('panel')==='channels'?'channels':null)
+ const [resultFileId,setResultFileId]=useState<string>()
  const [channelId,setChannelId]=useState<string|undefined>(undefined)
  const [tabs,setTabs]=useState(documentTabs.list())
  const [uploadFiles,setUploadFiles]=useState<File[]|null>(null)
@@ -375,9 +380,9 @@ function Shell({recovery=false}:{recovery?:boolean}){
  notice=setMessage;showTrash=()=>setPage('trash')
  return <>
   <AppFrame hideAppMenu hideSingleTabList initialOnboardingSeen={true} homeProps={{renderHero:({language,...fallback})=><HomeHero key={sourceWorkspace?.bound.proof} fallback={fallback} language={language} request={sourceWorkspace?.bound.request??client.request} csrfToken={sourceWorkspace?.bound.proof??''} enabled={!recovery}/>,capabilities:{localFolders:false,copyPath:false,duplicateFile:false,starredGroups:false,cloudProjects:false,semanticRanking:false,serverFileSort:true},supportedFormats:['docx','xlsx','pptx','pdf'],supportedNewFormats:localNewFormats(capabilities),accountEntry:<Account onOpen={setPage}/>,folderDeleteDescription:name=>`仅可删除空文件夹「${name}」。请先移出文件和子文件夹；回收站中仍属于此目录的文件需先恢复并移出。`}} editorContent={<>{documentTabs.renderedDocuments().map(file=><div key={file.id} data-file-id={file.id} className="workspace-document" hidden={!tabs.find(tab=>tab.id===file.id)?.active}>{file.format==='pdf'||file.src.startsWith('/native-')?<DocumentFrame key={file.src} file={file} registerGuard={documentTabs.setGuard} onAutoPdfName={updateAutoPdfTab} sessionActive={()=>!recoveryBlocked.current}/>:<DocumentPreview key={file.src} fileId={file.id} name={file.name} format={file.format} sourceRevision={file.sourceRevision} request={sourceWorkspace?.bound.request??client.request}/>}</div>)}</>}/>
-  {page&&<NativeSettingsDialog title={workspacePages[page]} onClose={close}><WorkspacePageContent key={page} page={page} channelId={channelId} onOpenChannel={id=>{setChannelId(id);setPage('channels')}} settingsTab={settingsTab} onSettingsTabChange={setSettingsTab} onClose={()=>setPage(null)} onCloseGuardChange={registerGuard}/></NativeSettingsDialog>}
+  {page&&<NativeSettingsDialog title={page==='documentResults'?workspacePages[page]+' · '+(tabs.find(tab=>tab.id===resultFileId)?.title??''):workspacePages[page]} onClose={close}><WorkspacePageContent key={page} documentId={page==='documentResults'?resultFileId:undefined} page={page} channelId={channelId} onOpenChannel={id=>{setChannelId(id);setPage('channels')}} settingsTab={settingsTab} onSettingsTabChange={setSettingsTab} onClose={()=>setPage(null)} onCloseGuardChange={registerGuard}/></NativeSettingsDialog>}
   {uploadFiles!==null&&<WorkspaceUploadDialog open initialFiles={uploadFiles} upload={upload} onClose={()=>setUploadFiles(null)}/>}
-  {chromeMenu&&<Dropdown open trigger={['click']} onOpenChange={open=>{if(!open)setChromeMenu(null)}} menu={{items:chromeMenu.kind==='tabs'?tabs.map(tab=>({key:tab.id,label:tab.title})):chromeMenu.kind==='tab'?[{key:'close',label:'关闭文档',danger:true}]:chromeMenu.kind==='new'?[...(capabilities.docx==='editable'?[{key:'word',label:'新建 Word 文档'}]:[]),...(capabilities.xlsx==='editable'?[{key:'sheet',label:'新建 Excel 表格'}]:[]),...(capabilities.pptx==='editable'?[{key:'slide',label:'新建 PPT 演示文稿'}]:[]),...(capabilities.pdfEditor==='editable'?[{key:'pdf',label:'新建 PDF'}]:[]),{key:'import',label:'打开文件…'}]:[{key:'home',label:'首页'},{key:'import',label:'打开文件…'},{key:'settings',label:'个人设置'}],onClick:({key})=>{const target=chromeMenu;setChromeMenu(null);if(target.kind==='tabs')documentTabs.activate(key);else if(key==='close'&&target.id)void documentTabs.close(target.id).catch(e=>notice(e.message));else if(key==='word')void window.aiOffice.newDoc().catch(e=>notice(e.message));else if(key==='sheet')void window.aiOffice.newSheet().catch(e=>notice(e.message));else if(key==='slide')void window.aiOffice.newSlide().catch(e=>notice(e.message));else if(key==='pdf')void window.aiOffice.newPdf().catch(e=>notice(e.message));else if(key==='import')void browse().catch(e=>notice(e.message));else if(key==='home')documentTabs.activate('home');else if(key==='settings')setPage('settings')}}}><span style={{position:'fixed',left:Math.min(chromeMenu.x,window.innerWidth-200),top:chromeMenu.y,width:1,height:1}}/></Dropdown>}
+  {chromeMenu&&<Dropdown open trigger={['click']} onOpenChange={open=>{if(!open)setChromeMenu(null)}} menu={{items:chromeMenu.kind==='tabs'?tabs.map(tab=>({key:tab.id,label:tab.title})):chromeMenu.kind==='tab'?[...(chromeMenu.id&&chromeMenu.id!=='home'&&user?.roles.includes('personal')?[{key:'documentResults',label:workspacePages.documentResults}]:[]),{key:'close',label:'关闭文档',danger:true}]:chromeMenu.kind==='new'?[...(capabilities.docx==='editable'?[{key:'word',label:'新建 Word 文档'}]:[]),...(capabilities.xlsx==='editable'?[{key:'sheet',label:'新建 Excel 表格'}]:[]),...(capabilities.pptx==='editable'?[{key:'slide',label:'新建 PPT 演示文稿'}]:[]),...(capabilities.pdfEditor==='editable'?[{key:'pdf',label:'新建 PDF'}]:[]),{key:'import',label:'打开文件…'}]:[{key:'home',label:'首页'},{key:'import',label:'打开文件…'},{key:'settings',label:'个人设置'}],onClick:({key})=>{const target=chromeMenu;setChromeMenu(null);if(target.kind==='tabs')documentTabs.activate(key);else if(key==='documentResults'&&target.id){setResultFileId(target.id);setPage('documentResults')}else if(key==='close'&&target.id)void documentTabs.close(target.id).catch(e=>notice(e.message));else if(key==='word')void window.aiOffice.newDoc().catch(e=>notice(e.message));else if(key==='sheet')void window.aiOffice.newSheet().catch(e=>notice(e.message));else if(key==='slide')void window.aiOffice.newSlide().catch(e=>notice(e.message));else if(key==='pdf')void window.aiOffice.newPdf().catch(e=>notice(e.message));else if(key==='import')void browse().catch(e=>notice(e.message));else if(key==='home')documentTabs.activate('home');else if(key==='settings')setPage('settings')}}}><span style={{position:'fixed',left:Math.min(chromeMenu.x,window.innerWidth-200),top:chromeMenu.y,width:1,height:1}}/></Dropdown>}
   {message&&<div className="web-notice" role="alert">{message}<button onClick={()=>setMessage('')}>关闭</button></div>}
  </>
 }

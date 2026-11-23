@@ -1,3 +1,4 @@
+import {sourceResultBase} from '../../web-contracts/src/source-results.ts'
 import type {AgentTransport,AgentStreamRequest,AgentToolDef} from '@genoffice/agent-core'
 import {createSseAgentTransport,serializeTurnRequest} from './ai-transport.ts'
 import type {SettingsRequest} from './preferences.ts'
@@ -30,7 +31,7 @@ export async function createAssistantClient({request, fetchImpl, csrfToken, onDe
   const sourceMode = catalog.sourceMode ?? (catalog.sourceCatalog === true ? 'metadata-only' : 'off')
   const sourceTools = assistantSourceTools(sourceMode)
   const sourceSkill = sourceMode === 'read-only-analysis'
-    ? createWorkspaceSourceSkill(request, {tools:sourceTools, disposed:() => disposed})
+    ? createWorkspaceSourceSkill(request, {tools:sourceTools, documentId, disposed:() => disposed})
     : sourceMode === 'metadata-only' ? createSourceCatalogSkill(request, () => disposed) : undefined
   const formatTools=format?assistantToolsForFormat(format):undefined
   const allowedTools = new Set(format
@@ -41,8 +42,8 @@ export async function createAssistantClient({request, fetchImpl, csrfToken, onDe
     ? createCodingClient({agents: catalog.agents, defaultId: catalog.defaultAgentId, csrfToken: csrf, getModelId: () => runModel,
       ...(documentId!==undefined?{documentId}:{}),...(taskStorage?{storage:taskStorage}:{}),...(continuationRevision?{continuationRevision}:{}), ...(onDelivery ? {onDelivery} : {}), dataCatalog:async input=>{
       const [sources,results]=await Promise.all([
-        request('/api/v1/workspace/source-tools/execute','POST',{name:'sources.list',arguments:input.sourcesAfter?{after:input.sourcesAfter}:{}}),
-        request('/api/v1/workspace/data-results'+(input.resultsAfter?'?after='+encodeURIComponent(input.resultsAfter):'')),
+        request(sourceResultBase(documentId)+'/source-tools/execute','POST',{name:'sources.list',arguments:input.sourcesAfter?{after:input.sourcesAfter}:{}}),
+        request(sourceResultBase(documentId)+'/data-results'+(input.resultsAfter?'?after='+encodeURIComponent(input.resultsAfter):'')),
       ])
       return {sources,results}
     }, ...(fetchImpl ? {fetchImpl} : {})}) : undefined

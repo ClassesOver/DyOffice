@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
-import { buildApp } from '../server/src/app.mjs'
+import { buildApp } from './helpers/prototype-app.mjs'
 
 const origin = 'http://127.0.0.1:3080'
 const targetId = randomUUID()

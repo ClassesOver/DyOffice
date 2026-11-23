@@ -160,7 +160,7 @@ export function registerAssistantChannelRoutes(app:FastifyInstance,service:Retur
    const binding=await service.authorizeDataClaim(token,input)
    const ttlMs=Math.min(600000,Date.parse(binding.deadlineAt)-Date.now())
    if(ttlMs<1)throw Object.assign(Error('Channel data unavailable'),{statusCode:403})
-   const grant=await dataOptions.data.issue({token:binding.ownerToken,agentId:binding.agentId,inputs:binding.inputs,
+   const grant=await dataOptions.data.issue({token:binding.ownerToken,documentId:binding.documentId,agentId:binding.agentId,inputs:binding.inputs,
     signal:AbortSignal.timeout(ttlMs),ttlMs,leaseUntil:async()=>(await service.authorizeDataClaim(token,input,false)).leaseUntil})
    return {baseUrl:dataOptions.baseUrl,grant}
   })

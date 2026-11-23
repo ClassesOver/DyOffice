@@ -8,7 +8,7 @@ test('Fastify shell serves legacy preference and admin contracts when a workspac
   let buildApp
   let createLegacyContext
   try {
-    ;({ buildApp } = await import('../../server/src/app.mjs'))
+    ;({ buildApp } = await import('../helpers/prototype-app.mjs'))
     ;({ createLegacyContext } = await import('../../server/src/legacy-context.mjs'))
   } catch (error) {
     assert.fail(`T02 route cutover is not implemented (${error.code ?? error.name}: ${error.message})`)

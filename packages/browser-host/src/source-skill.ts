@@ -1,3 +1,4 @@
+import {sourceResultBase} from '../../web-contracts/src/source-results.ts'
 import type { AgentSkill } from '../../agent-core/src/skill.ts'
 import { SOURCE_AGENT_TOOLS, type SourceToolName } from '../../web-contracts/src/source-tools.ts'
 import { isAssistantErrorCode, type AssistantErrorCode } from '../../web-contracts/src/assistant-errors.ts'
@@ -92,7 +93,9 @@ export function sourceFailure(name: SourceToolName, status: number | undefined, 
 
 /** Uses the existing cookie/session-fenced request adapter. The model sees
  * provider-compatible names and public arguments, never a token or DSN. */
-export function createWorkspaceSourceSkill(request: Request, options?: { tools: readonly string[]; disposed: () => boolean }): AgentSkill {
+export function createWorkspaceSourceSkill(request: Request, options?: { tools: readonly string[]; documentId?:string; disposed: () => boolean }): AgentSkill {
+  const endpoint = options?.documentId !== undefined ? sourceResultBase(options.documentId)+'/ai/sources/execute'
+    : options ? '/api/v1/ai/sources/execute' : '/api/v1/workspace/source-tools/execute'
   const tools = SOURCE_AGENT_TOOLS.map(tool => ({ ...tool, name: tool.name.replaceAll('.', '_') }))
     .filter(tool => !options || options.tools.includes(tool.name))
   return {
@@ -118,7 +121,7 @@ export function createWorkspaceSourceSkill(request: Request, options?: { tools: 
       try {
         const args = structuredClone(call.input)
         if (['ownerId','userId','workspaceId','token','secret','dsn','url','path'].some(key => Object.hasOwn(args, key))) throw Error('Invalid public arguments')
-        const result = await request<unknown>(options ? '/api/v1/ai/sources/execute' : '/api/v1/workspace/source-tools/execute', 'POST', { name, arguments: args })
+        const result = await request<unknown>(endpoint, 'POST', { name, arguments: args })
         if (options?.disposed() || signal?.aborted) return { output: name === 'sources.save_result' ? 'The tool response was interrupted. A save may have completed; reconcile the exact same commandId before claiming success or repeating it.' : 'The tool response was interrupted.', isError: true, summary: call.name }
         return { output: JSON.stringify(compactSourceResult(name, args, withDescribeHint(name, args, result))), isError: false, summary: call.name }
       } catch (error) {

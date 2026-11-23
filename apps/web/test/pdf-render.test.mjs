@@ -6,7 +6,7 @@ import { join } from 'node:path'
 import { PDFDocument, StandardFonts } from 'pdf-lib'
 import { renderPdfPages } from '../server/src/pdf/raster.mjs'
 import { inspectPdf, requestPdfOperation } from '../server/src/pdf/capabilities.mjs'
-import { createApplication } from '../server/application.mjs'
+import { createApplication } from './helpers/prototype-http.mjs'
 
 async function sample(text) {
   const doc = await PDFDocument.create()

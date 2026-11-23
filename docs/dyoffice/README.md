@@ -126,19 +126,16 @@ WS 断线后手工编辑、HTTP 保存和普通 AI 流应继续可用；依赖�
 | --- | --- | --- |
 | T00 浏览器依赖边界与宿主盘点 | 部分实现；完整四格式适配审计待完成 | [宿主清单](inventory/host-dependencies.md) |
 | T01 BrowserHost 和 Agent SSE 客户端契约 | 基础契约/适配器已提交；尚未接入真实编辑器 | [T01 记录](evidence/t01-browser-host-checkpoint.md) |
-| T02 版本化 HTTP 与模块化 API | 默认开发 Token 入口已切到模块化 Fastify；独立 local 实验工厂另行挂载 Cookie/RLS API，均拒绝 production | [模块化 API](evidence/t02-modular-api.md) · [local 接缝历史](evidence/t02-fastify-checkpoint.md) |
-| T03 模块化账号、会话与管理员接口 | `.mjs` 服务及可选 `buildApp({ localAuth })` 已实现；默认开发文件入口仍用 Token，尚未接入账号 RLS | [T03 收口](evidence/t03-closeout.md) · [模块化 T03c](evidence/t03c-account-lifecycle.md#modular-auth-runtime) |
+| T02 版本化 HTTP 与模块化 API | Web 入口使用 Fastify 和 PostgreSQL 账号会话 | [运行配置](../../apps/web/README.md#run-dyoffice-web) |
 | T03 local 实验账号与会话 | `.ts` API、真实数据库/浏览器检查点已实施；完整账号 UI 与生产未开放 | [T03a](evidence/t03a-account-bootstrap.md) · [T03b](evidence/t03b-local-sessions.md) · [local T03c](evidence/t03c-account-lifecycle.md#local-experimental-runtime) |
 | T04 local 受限连接与隔离 | 专用数据库的 auth/business 连接、工作区/偏好 FORCE RLS、撤销写入顺序及权限检查已实施；文件、版本和任务见其所属模块 | [T04](evidence/t04-rls-checkpoint.md) |
-| T05 对象存储与上传 | 默认开发入口的对象生命周期与 local 实验入口的 PostgreSQL/S3 配额和文件 API 分别实现，不共享账号或元数据 | [开发对象存储](evidence/t05-local-object-store.md) · [local T05a](evidence/t05a-object-storage.md) · [local T05b](evidence/t05b-file-lifecycle.md) |
-| T06 保存、历史与租约 | 默认入口使用单进程账本；local 实验入口使用 PostgreSQL 事务、CAS、幂等回执与租约 fencing | [开发保存](evidence/t06-revision-commit.md) · [local 保存](evidence/t06-revision-transactions.md) |
-| T07 DOCX 浏览器挂载 | 默认入口提供段落编辑器与原始工作区 shell；local 实验入口可显式启用原始 Docs 渲染器，完整四格式与外部 Word 验收未完成 | [开发挂载](evidence/t07-docs-browser-mount.md) · [local 原生 DOCX](evidence/t07-native-docx.md) |
+| T05 对象存储与上传 | PostgreSQL 配额和文件 API 支持本地对象目录或 S3 | [文件生命周期](evidence/t05b-file-lifecycle.md) |
+| T06 保存、历史与租约 | PostgreSQL 事务、CAS、幂等回执和租约 | [保存事务](evidence/t06-revision-transactions.md) |
+| T07 DOCX 浏览器挂载 | Web 工作区使用原生 Docs 渲染器 | [原生 DOCX](evidence/t07-native-docx.md) |
 | T08 local 原生任务 | PostgreSQL/BullMQ、Linux/systemd 受限 XLSX 执行及事务输出已有历史验证，显式实验开关启用；不等于生产或完整四格式完成 | [T08 闭环](evidence/t08-docker-free-closure.md) |
 | T07–T26 企业完整交付 | 尚未验收；各模块实测与完整交付范围分别记录 | [任务列表](implementation-plan.md) 与 [验收矩阵](acceptance-matrix.md) |
 
-默认开发入口中，DOCX 已能在浏览器中编辑并保存段落文本。保存先写入不可变对象，再由单进程版本账本提交基线、租约和幂等记录；PostgreSQL 表形在迁移 `0004_revisions.sql`，当前进程不连接数据库做版本提交。这不是完整 Docs 功能。XLSX、PPTX、PDF 仍只导入下载。既有单用户 Bearer + JSON 文件原型不允许用于生产。新客户端不得把 AI 写入或四格式原生编辑显示为已支持。
-
-两套账号数据库、迁移日志和 bootstrap 命令必须区分，见 [运行配置](../../apps/web/README.md#runtime-and-database-boundaries) 和 [认证现状](local-account-auth.md)。`server/db/migrations` 与 `server/src/db/migrations` 保留各自版本与校验和，不重编号已应用迁移，也不自动导入对方数据。local 实验库必须专用；两种 Web 入口均拒绝 production。表中的证据是各提交的历史结果，不是本次合并新增的验证声明。
+Web 账号服务使用专用 PostgreSQL 数据库。见[运行配置](../../apps/web/README.md#database-roles)。
 
 ## 10. Web SaaS 当前实现快照（2026-11-20）
 
@@ -150,7 +147,7 @@ WS 断线后手工编辑、HTTP 保存和普通 AI 流应继续可用；依赖�
 | XLSX | 原生工作簿编辑、服务端保存适配器、共享 Office 助手 | 公式和图表的完整样本验收、性能与恢复门槛 |
 | PPTX | 原生幻灯片编辑与版本保存。共享助手支持图表编辑、生成整套和重做单页，生成页可写入当前草稿并撤销 | 母版、嵌入对象和客户样本的完整兼容验收，以及真实模型发起生成后的保存和复开 |
 | PDF | 原生 GenOffice 编辑器和共享助手已接正文改写、批注、表单、页面操作及脱敏副本；浏览器用例核对了保存后重开和历史原件 | 签名结构、XFA 和既有密码文件的只读边界已通过浏览器回归；客户样本、签名有效性与正式环境仍待验收，F04 不标记通过 |
-| 身份与部署 | 本地账号、隔离和版本服务已有独立实现与历史集成证据；默认开发入口仍是开发令牌 | 两个 Web 启动入口都拒绝 `NODE_ENV=production`；生产部署、备份恢复、客户 UAT 未验收 |
+| 身份与部署 | PostgreSQL 本地账号、会话和受限数据库角色 | 生产部署、备份恢复和客户 UAT 待验收 |
 
 本轮用独立 PostgreSQL 库复现并修复了 PPTX 风格模板迁移后的 SaaS 启动失败。业务角色的权限声明现与迁移授权一致，模板行级权限同时检查当前会话。迁移、角色与个人数据集成 9 项通过，PPTX 接口与服务集成 12 项通过，共享模型与 SSE 网关集成 26 项通过。模型调用使用测试替身。Web 主测试 433 项通过、1 项跳过，Web 单元测试 798 项通过、4 项跳过。真实 Chromium 的助手界面在 320、360、400 像素及浅色、深色组合下通过了交互检查，任务执行使用测试适配器。
 

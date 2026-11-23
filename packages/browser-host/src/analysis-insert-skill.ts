@@ -1,3 +1,4 @@
+import {sourceResultBase} from '../../web-contracts/src/source-results.ts'
 import type { AgentSkill } from '../../agent-core/src/skill.ts'
 import type { AgentToolDef, ToolExecution } from '../../agent-core/src/types.ts'
 import type { AnalysisDocumentTarget, PreparedAnalysisContent } from '../../web-contracts/src/analysis-document.ts'
@@ -62,7 +63,7 @@ export function createAnalysisInsertSkill(o: {
   const imageOffered = () => o.format !== 'xlsx' && !!o.deliveries && o.images()
 
   /** prepare returns the content and the artifact identity it was built from (known only after the read). */
-  async function insert(signal: AbortSignal | undefined, summary: string, prepare: (format: 'docx' | 'xlsx' | 'pptx') => Promise<{ content: PreparedAnalysisContent; artifact: { artifactId: string; sha256: string } }>): Promise<ToolExecution> {
+  async function insert(signal: AbortSignal | undefined, summary: string, prepare: (format: 'docx' | 'xlsx' | 'pptx',fileId:string) => Promise<{ content: PreparedAnalysisContent; artifact: { artifactId: string; sha256: string } }>): Promise<ToolExecution> {
     const target = o.documents.current()
     if (!target || target.format === 'pdf' || target.format !== o.format) return failed(summary, 'No editable document is open for insertion.')
     const authorized = () => !o.disposed() && !signal?.aborted && o.documents.current() === target
@@ -70,7 +71,7 @@ export function createAnalysisInsertSkill(o: {
     // Pin the document revision and selection before any network read.
     try { capture = target.capture() } catch { return failed(summary, 'The document is busy, read-only or being saved; try again when it is idle.') }
     let prepared: Awaited<ReturnType<typeof prepare>>
-    try { prepared = await prepare(o.format) } catch (error) { return failed(summary, message(error)) }
+    try { prepared = await prepare(o.format,capture.fileId) } catch (error) { return failed(summary, message(error)) }
     if (!authorized()) return failed(summary, 'Stopped or the document changed; nothing was inserted.')
     try {
       const result = await target.apply(capture, prepared.content, prepared.artifact, authorized)
@@ -109,11 +110,11 @@ export function createAnalysisInsertSkill(o: {
         if (input.columns !== undefined && (!Array.isArray(input.columns) || input.columns.some(name => typeof name !== 'string'))) return failed(summary, 'columns must be a list of column names.')
         if (input.maxRows !== undefined && (!Number.isInteger(input.maxRows) || (input.maxRows as number) < 1 || (input.maxRows as number) > MAX_READ_ROWS)) return failed(summary, `maxRows must be between 1 and ${MAX_READ_ROWS}.`)
         let inserted = ''
-        const outcome = await insert(signal, summary, async format => {
+        const outcome = await insert(signal, summary, async (format,fileId) => {
           const pages: QueryResultPage[] = []
           const want = (input.maxRows as number | undefined) ?? MAX_READ_ROWS + 1
           for (let offset: number | null = 0; offset !== null && pages.reduce((n, page) => n + page.rows.length, 0) < want;) {
-            const page: QueryResultPage = await o.request(`/api/v1/workspace/data-results/${encodeURIComponent(resultId)}?offset=${offset}&limit=${Math.min(1000, want)}`)
+            const page: QueryResultPage = await o.request(`${sourceResultBase(fileId)}/data-results/${encodeURIComponent(resultId)}?offset=${offset}&limit=${Math.min(1000, want)}`)
             if (signal?.aborted || o.disposed()) throw new Error('Stopped; nothing was inserted.')
             pages.push(page)
             offset = page.nextOffset

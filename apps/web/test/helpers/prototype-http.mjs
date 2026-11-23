@@ -1,5 +1,5 @@
-import { buildApp } from './src/app.mjs'
-import { createLegacyContext } from './src/legacy-context.mjs'
+import { buildApp } from './prototype-app.mjs'
+import { createLegacyContext } from '../../server/src/legacy-context.mjs'
 
 const DEV_LIMIT = { max: 5000, windowMs: 60_000 }
 

@@ -10,13 +10,14 @@ import { localShellDirectory } from './local-shell-config.mjs';
 import { fileURLToPath } from 'node:url';
 import { Pool } from 'pg';
 import { configuredObjectStore } from './src/storage/config.ts';
-import { buildApp, buildLocalApp } from './src/app.ts';
+import { buildLocalApp } from './src/app.ts';
 import { connectIdentityStore } from './src/db/identity.ts';
 import { parseConfigKeyring } from './src/modules/admin/keyring-config.ts';
 
 async function configuredApplication() {
   assertDocumentBackendPolicy(process.env);
-  const mode=process.env.DYOFFICE_AUTH_MODE||(process.env.DYOFFICE_AUTH_DATABASE_URL?'local':'development');
+  const mode = process.env.DYOFFICE_AUTH_MODE ?? 'local';
+  if (mode !== 'local') throw new Error('Unsupported authentication mode');
   const httpDevFlag=process.env.DYOFFICE_INSECURE_HTTP_DEV;
   if(httpDevFlag!==undefined && !['0','1'].includes(httpDevFlag))throw new Error('Invalid HTTP development flag');
   const insecureHttpDev=httpDevFlag==='1';
@@ -26,18 +27,9 @@ async function configuredApplication() {
   const docxOnly=editorProfile==='docx-only';
   const shellDirectory=localShellDirectory({...process.env,DYOFFICE_AUTH_MODE:mode});
   const profilesFile=process.env.DYOFFICE_PROVIDER_GATEWAY_PROFILES;
-  if(profilesFile && mode!=='local') throw new Error('Provider Gateway requires local mode');
   const assistantSourceMode=resolveAssistantSourceMode(process.env,{authMode:mode});
   const jobFlag=process.env.DYOFFICE_NATIVE_JOBS;
-  if(jobFlag && (jobFlag!=='experimental'||mode!=='local')) throw new Error('Native jobs require explicit experimental local mode');
-  if(mode==='development') return buildApp({
-    directory:resolve(process.env.DYOFFICE_DATA_DIR||'.dyoffice'),
-    userToken:process.env.DYOFFICE_USER_TOKEN,
-    adminToken:process.env.DYOFFICE_ADMIN_TOKEN,
-    encryptionKey:process.env.DYOFFICE_ENCRYPTION_KEY,
-    assetMode:process.env.DYOFFICE_ASSET_MODE||'built',
-  });
-  if(mode!=='local') throw new Error('Unknown authentication mode');
+  if (jobFlag && jobFlag !== 'experimental') throw new Error('Invalid native jobs configuration');
   if(process.env.NODE_ENV==='production') throw Object.assign(new Error('Production local document runtime is unavailable'),{code:'PRODUCTION_DOCUMENT_RUNTIME_UNAVAILABLE'});
   if(process.env.DYOFFICE_USER_TOKEN||process.env.DYOFFICE_ADMIN_TOKEN) throw new Error('Local mode rejects development tokens');
   if(process.env.DYOFFICE_DATABASE_URL) throw new Error('Migration credentials are not accepted by the runtime');
@@ -70,8 +62,7 @@ async function configuredApplication() {
     const defaultSlidesDir=resolve(process.env.DYOFFICE_NATIVE_PPTX_DIRECTORY||fileURLToPath(new URL('../dist-slides/',import.meta.url)));
     const nativeSlidesDirectory=!docxOnly && storage.objectStore && existsSync(join(defaultSlidesDir,'.vite/manifest.json')) ? defaultSlidesDir : undefined;
     const slidesHost=nativeSlidesDirectory ? {openSession:(input,signal)=>openIsolatedPptxSession(input,{timeoutMs:60000,experimental:true,signal})} : undefined;
-    const legacyDistDir=resolve(fileURLToPath(new URL('../dist/',import.meta.url)));
-    const effectiveShellDirectory=(shellDirectory && shellDirectory!==legacyDistDir) ? shellDirectory : (storage.objectStore && hasBuiltShell ? defaultShellDir : shellDirectory);
+    const effectiveShellDirectory=shellDirectory ?? (storage.objectStore && hasBuiltShell ? defaultShellDir : undefined);
     const defaultSheetsDir=resolve(process.env.DYOFFICE_NATIVE_XLSX_DIRECTORY||fileURLToPath(new URL('../dist-sheets/',import.meta.url)));
     const defaultGatewayPath=resolve(process.env.DYOFFICE_XLSX_GATEWAY_RUNNER||fileURLToPath(new URL('../dist-sheets-server/gateway-process.mjs',import.meta.url)));
     const defaultNodeEnginePath=resolve(fileURLToPath(new URL('../dist-sheets-server/xlsx-node-engine.mjs',import.meta.url)));

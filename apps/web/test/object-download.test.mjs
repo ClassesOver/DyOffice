@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { createApplication } from '../server/application.mjs'
+import { createApplication } from './helpers/prototype-http.mjs'
 import { createLocalObjectStore } from '../server/src/storage/local-dev.mjs'
 import { DEV_PERSONAL_OWNER, objectStoreDirectory } from '../server/src/modules/objects/routes.mjs'
 

@@ -494,7 +494,7 @@ export function createAssistantChannelService({transactions,credentialKey,backgr
       (row.lease_until && row.lease_until.getTime()<=Date.now())||row.sender!=='office'||row.recipient!==actor.id||!row.data_inputs||row.claim_id!==uuid(input.claimId)||
       row.connection_epoch!==input.connectionEpoch||actor.member!.connection_epoch!==input.connectionEpoch||
       !actor.member!.connection_id||row.connection_id!==actor.member!.connection_id)throw fail(403)
-    return {ownerToken:sealed.session,agentId:actor.member!.agent_id as string,inputs:decodeChannelDataInputs(row.data_inputs),deadlineAt:row.deadline_at.toISOString(),leaseUntil:Math.min(row.deadline_at.getTime(),row.lease_until?.getTime()??actor.member!.last_seen_at.getTime()+45_000)}
+    return {ownerToken:sealed.session,documentId:ch.file_id??undefined,agentId:actor.member!.agent_id as string,inputs:decodeChannelDataInputs(row.data_inputs),deadlineAt:row.deadline_at.toISOString(),leaseUntil:Math.min(row.deadline_at.getTime(),row.lease_until?.getTime()??actor.member!.last_seen_at.getTime()+45_000)}
    },renewPresence)
   },
   async ownerEventPage(token:string,conversationId:string,after:number,taskId?:string) {

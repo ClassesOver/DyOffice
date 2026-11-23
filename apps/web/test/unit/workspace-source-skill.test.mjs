@@ -2,6 +2,21 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { createWorkspaceSourceSkill } from '../../../../packages/browser-host/src/source-skill.ts'
 
+test('batch source queries capture every result in the requesting document', async () => {
+  const { createWorkspaceSourceTools } = await import('../../server/src/modules/sources/tools.ts')
+  const documentId = '11111111-1111-4111-8111-111111111111', captured = []
+  const tools = createWorkspaceSourceTools({
+    sources: { querySource: async (_token, sourceId) => ({ sourceId, sourceVersion: 1, schema: [], timezone: 'UTC', rows: [{ n: 1 }], truncated: false, sha256: 'a'.repeat(64) }) },
+    results: {
+      requireDocument: async (token, id) => assert.deepEqual([token, id], ['session', documentId]),
+      capture: async (token, _snapshot, _hash, id) => { captured.push([token, id]); return { resultId: String(captured.length) } },
+    },
+  })
+  const result = await tools.execute('session', { name: 'sources.query', arguments: { sourceId: 'reporting', queries: ['SELECT 1', 'SELECT 2'] } }, documentId)
+  assert.deepEqual(result.items.map(item => item.ok), [true, true])
+  assert.deepEqual(captured, [['session', documentId], ['session', documentId]])
+})
+
 test('personal source skill exposes provider-compatible public tools and delegates through a session-bound request', async () => {
   const calls = []
   const skill = createWorkspaceSourceSkill(async (path, method, body) => { calls.push({ path, method, body }); return { items: [] } })
