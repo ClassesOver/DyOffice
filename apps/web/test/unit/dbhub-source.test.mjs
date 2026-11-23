@@ -25,3 +25,11 @@ test('DBHub array rows receive stable column names', () => {
   const rows = statementsToRows({ statements: [{ rows: [[1, null], [2, 'x']] }] })
   assert.deepEqual(rows, { names: ['column_1', 'column_2'], rows: [[1, null], [2, 'x']], types: ['number', 'string'] })
 })
+
+test('StarRocks rejects writes and out-of-scope reads before DBHub connects', async () => {
+  const { queryDbhubSource } = await import('../../server/src/modules/sources/dbhub.ts')
+  const policy = { sql: () => assert.fail('must reject before egress') }
+  for (const sql of ['DELETE FROM orders', 'SELECT * FROM private_table']) {
+    await assert.rejects(queryDbhubSource(policy, 'starrocks', '', sql, {maxRows: 2}, {defaultSchema: 'sales', allowedTables: ['sales.orders']}), e => [400,403].includes(e.statusCode))
+  }
+})

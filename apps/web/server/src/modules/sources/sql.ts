@@ -1,7 +1,7 @@
 import type { SourceExecution } from '../../../../../../packages/web-contracts/src/sources.ts'
 import type { SourceEgressPolicy, SqlSourceKind } from '../../security/egress.ts'
 import { sourceConnectionFailure, sourceError } from './config.ts'
-import { validateReadOnlySql, type SqlTableScope } from './sql-policy.ts'
+import type { SqlTableScope } from './sql-policy.ts'
 import { queryDbhubSource } from './dbhub.ts'
 import type { SqlRows } from './sql-types.ts'
 
@@ -9,8 +9,7 @@ export type { SqlRows }
 
 /** Execute every SQL source through the default DBHub MCP server. */
 export async function querySqlSource(policy: SourceEgressPolicy, kind: SqlSourceKind, secret: string, sql: unknown, execution: SourceExecution, scope?: SqlTableScope): Promise<SqlRows> {
-  const normalized = validateReadOnlySql(sql, kind, scope)
-  return queryDbhubSource(policy, kind, secret, normalized, execution)
+  return queryDbhubSource(policy, kind, secret, sql, execution, scope)
 }
 
 export function safeFailure(error: unknown, _kind: SqlSourceKind, _executingStatement = true): never {
