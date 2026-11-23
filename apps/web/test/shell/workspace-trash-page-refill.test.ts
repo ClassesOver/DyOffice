@@ -2,6 +2,7 @@ import {afterEach,expect,test,vi} from 'vitest'
 import {act,createElement as h} from 'react'
 import {createRoot,type Root} from 'react-dom/client'
 import {WorkspaceTrash} from '../../src/shell/WorkspaceTrash'
+Object.defineProperties(HTMLDialogElement.prototype,{showModal:{configurable:true,value:function(){this.setAttribute('open','')}},close:{configurable:true,value:function(){this.removeAttribute('open')}}})
 import type {SettingsRequest} from '../../../../packages/browser-host/src/preferences'
 let root:Root
 const file=(index:number)=>({id:`file-${index}`,name:`report-${index}.pdf`,format:'pdf' as const,size:100,updatedAt:'2026-01-01',starred:false,folderId:null,lastOpenedAt:null})
@@ -19,7 +20,7 @@ for(const action of ['restore','purge'] as const){
   await mount((async(path:string,method?:string)=>{if(method==='POST'){writes.push(path);rows=rows.filter(row=>row.id!=='file-0');return action==='purge'?{state:'purged'}:undefined}const offset=Number(new URL(path,'http://local').searchParams.get('offset'));offsets.push(offset);return {files:rows.slice(offset,offset+10),total:rows.length}}) as SettingsRequest)
   await mutate('file-0',action)
   expect(document.querySelector('[data-row-key="file-10"]')).not.toBeNull()
-  expect(document.querySelectorAll('.ant-table-body [data-row-key]')).toHaveLength(10)
+  expect(document.querySelectorAll('tbody [data-row-key]')).toHaveLength(10)
   expect(document.querySelector('[data-row-key="file-0"]')).toBeNull()
   expect(document.querySelector<HTMLButtonElement>('[aria-label="下一页回收站"]')?.disabled).toBe(true)
   expect(offsets).toEqual([0,0]);expect(writes).toEqual([`/api/v1/files/file-0/${action}`])
@@ -40,7 +41,7 @@ for(const action of ['restore','purge'] as const){
   await mount((async(path:string,method?:string)=>{if(method==='POST'){writes.push(path);rows=rows.slice(0,5);return action==='purge'?{state:'purged'}:undefined}const offset=Number(new URL(path,'http://local').searchParams.get('offset'));offsets.push(offset);return {files:rows.slice(offset,offset+10),total:rows.length}}) as SettingsRequest)
   await act(async()=>document.querySelector<HTMLButtonElement>('[aria-label="下一页回收站"]')!.click());await mutate('file-10',action)
   expect(document.querySelector('.settings-list-page-status')?.textContent).toBe('1–5 / 5')
-  expect(document.querySelectorAll('.ant-table-body [data-row-key]')).toHaveLength(5)
+  expect(document.querySelectorAll('tbody [data-row-key]')).toHaveLength(5)
   expect(offsets).toEqual([0,10,10,0]);expect(writes).toEqual([`/api/v1/files/file-10/${action}`])
  })
 }

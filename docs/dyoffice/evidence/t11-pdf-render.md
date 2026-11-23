@@ -2,6 +2,8 @@
 
 > 2026-11-16 · PDF.js viewer with a strict content security policy. PDFium WASM checks pixels. Annotation writing is not in this slice.
 
+> Historical implementation record. The `/pdf.html` viewer documented here was removed. For the current GenOffice editor at `/native-pdf/`, see [Web parity evidence](genoffice-web-parity.md).
+
 ## Why this slice
 
 The capability gate can classify a PDF, but it does not draw one. This slice mounts a reader and checks that exporting the unchanged bytes reopens to the same picture and the same text.

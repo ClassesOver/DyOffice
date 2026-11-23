@@ -5,7 +5,7 @@ import {fileURLToPath} from 'node:url'
 import {mkdir} from 'node:fs/promises'
 import {expect} from '@playwright/test'
 import {launchTestBrowser} from '../helpers/browser.mjs'
-import {accountAction, selectOption} from '../helpers/workspace-ui.mjs'
+import {accountAction} from '../helpers/workspace-ui.mjs'
 import {fileFixture} from '../helpers/files.mjs'
 import {password} from '../helpers/identity.mjs'
 import {captureRecoveryState,expectRecoveryThenReload} from '../helpers/account-recovery.mjs'
@@ -30,10 +30,10 @@ test('administrator UI creates activates resets and manages roles with authorita
   const response=p.waitForResponse(r=>r.url().includes(path)&&['POST','PATCH'].includes(r.request().method()))
   await form.getByRole('button',{name:'验证并确认',exact:true}).click();const result=await response;assert.equal(result.status(),expected);return result
  }
- const redeem=async(p,token,purpose,secret)=>{
-  await p.goto(origin);await p.getByRole('button',{name:'激活或重置密码',exact:true}).click()
-  const form=p.locator('section[aria-label="激活或重置密码"]')
-  await selectOption(p,form,'用途',purpose==='activate'?'激活账号':'重置密码')
+ const redeem=async(p,token,secret)=>{
+  await p.goto(origin);await p.getByRole('button',{name:'设置密码',exact:true}).click()
+  const form=p.getByRole('region',{name:'设置密码',exact:true})
+  await expect(form.getByRole('combobox')).toHaveCount(0)
   await form.getByLabel('一次性码',{exact:true}).fill(token);await form.getByLabel('新密码',{exact:true}).fill(secret);await form.getByLabel('再次输入密码',{exact:true}).fill(secret)
   const response=p.waitForResponse(r=>r.url().endsWith('/auth/password-action'))
   await form.getByRole('button',{name:'设置密码',exact:true}).click();assert.equal((await response).status(),204)
@@ -58,7 +58,7 @@ test('administrator UI creates activates resets and manages roles with authorita
  await panel(owner).getByRole('button',{name:'创建账号',exact:true}).click()
  await confirm(owner,'/api/v1/admin/users',201)
  const activate=await readAction(owner)
- await redeem(user,activate,'activate',password);await login(user,'carol')
+ await redeem(user,activate,password);await login(user,'carol')
  const carolCookie=(await userContext.cookies()).find(c=>c.name==='__Host-dyoffice-session').value
  await panel(owner).getByRole('button',{name:'刷新列表',exact:true}).click()
  await expect(row(owner,'Carol')).toContainText('已启用')
@@ -68,6 +68,14 @@ test('administrator UI creates activates resets and manages roles with authorita
  await confirm(owner,'/api/v1/admin/users/')
  assert.equal((await me(carolCookie)).statusCode,401)
  await user.reload();await login(user,'carol');await openAdmin(user)
+ // Reset immediately invalidates the target's old session/password, then redeem/re-login.
+ await row(user,'alice').getByRole('button',{name:'重置密码',exact:true}).click()
+ await confirm(user,'/api/v1/admin/users/'+f.alice.user.id+'/password-reset')
+ const reset=await readAction(user);assert.equal((await me(f.alice.token)).statusCode,401)
+ assert.equal(await f.accounts.verifyCredentials('alice',password),null)
+ const resetContext=await browser.newContext(),resetPage=await resetContext.newPage()
+ await redeem(resetPage,reset,newPassword);await login(resetPage,'alice',newPassword)
+ assert.ok(await f.accounts.verifyCredentials('alice',newPassword))
  // Self-demotion invalidates authority immediately, but preserves the renderer until explicit reload.
  const ownerState=await captureRecoveryState(owner)
  await row(owner,'owner').getByRole('button',{name:'编辑角色',exact:true}).click()
@@ -78,14 +86,6 @@ test('administrator UI creates activates resets and manages roles with authorita
  assert.ok(revokedOwnerToken);assert.equal((await me(revokedOwnerToken)).statusCode,401)
  await expectRecoveryThenReload(owner,ownerState)
  await login(owner,'owner');await owner.locator('.account-btn').click();await expect(owner.getByRole('menuitem',{name:'用户管理',exact:true})).toHaveCount(0)
- // Reset immediately invalidates the target's old session/password, then redeem/re-login.
- await row(user,'alice').getByRole('button',{name:'重置密码',exact:true}).click()
- await confirm(user,'/api/v1/admin/users/'+f.alice.user.id+'/password-reset')
- const reset=await readAction(user);assert.equal((await me(f.alice.token)).statusCode,401)
- assert.equal(await f.accounts.verifyCredentials('alice',password),null)
- const resetContext=await browser.newContext(),resetPage=await resetContext.newPage()
- await redeem(resetPage,reset,'reset',newPassword);await login(resetPage,'alice',newPassword)
- assert.ok(await f.accounts.verifyCredentials('alice',newPassword))
  // Disable/re-enable preserves credentials but revokes existing sessions.
  await row(user,'bob').getByRole('button',{name:'禁用账号',exact:true}).click()
  await confirm(user,'/api/v1/admin/users/'+f.bob.user.id)

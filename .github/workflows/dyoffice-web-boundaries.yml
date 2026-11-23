@@ -80,8 +80,10 @@ jobs:
           printf '%s\n' '## Diagnostic regression only' 'Static contracts and synthetic evidence tests; not Ubuntu/Docker isolation acceptance.' 'No Docker build/up, systemd unit launch, production runtime grant or business document execution occurred in this job.' >> "$GITHUB_STEP_SUMMARY"
   boundary-check:
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    # The serial four-editor Chromium suite alone can take about 40 minutes.
+    timeout-minutes: 75
     env:
+      RUSTUP_TOOLCHAIN: 1.93.0
       DYOFFICE_TEST_REDIS_URL: redis://127.0.0.1:16379/15
       DYOFFICE_TEST_S3_ENDPOINT: http://127.0.0.1:19000
       DYOFFICE_TEST_S3_ACCESS_KEY: dyoffice-ci-s3-test
@@ -119,12 +121,14 @@ jobs:
         run: node tools/dyoffice/compatibility-baseline.mjs --check
       - name: Test browser dependency gate
         run: node --test tools/check-web-boundaries.test.mjs
-      - name: Test BrowserHost contracts
-        run: npm run test:web:unit -- host-contract.test.mjs
+      - name: Test BrowserHost contracts and PDF form routes
+        run: npm run test:web:unit -- host-contract.test.mjs pdf-form-fields-routes.test.mjs office-tool-coverage.test.mjs
+      - name: Test account session transitions
+        run: npm run test:shell --workspace @dyoffice/web -- account-lifecycle.test.ts
       - name: Test Argon2 password policy and bounded work
         run: node --experimental-strip-types --test apps/web/test/unit/passwords.test.mjs
       - name: Test SSE AgentTransport adapter
-        run: node --experimental-strip-types --test apps/web/test/unit/ai-transport.test.mjs
+        run: node --import tsx --test apps/web/test/unit/ai-transport.test.mjs
       - name: Test HTTP BrowserHost read adapter
         run: node --experimental-strip-types --test apps/web/test/unit/http-files.test.mjs
       - name: Test save generation guard
@@ -147,18 +151,64 @@ jobs:
         run: npm run typecheck:web
       - name: Build and HTTP smoke test the Web prototype
         run: npm run test:web:build
-      - name: Build the original Home and Settings local-account entry
-        run: cd apps/web && npx --no-install vite build --config vite.local-shell.config.mjs
-      - name: Verify local login Home Settings and ownership in Chromium
-        run: cd apps/web && node --import tsx --test test/local-browser/*.test.mjs
+      - name: Install browser fixture dependencies
+        run: |
+          rustup toolchain install 1.93.0 --profile minimal --target wasm32-wasip1
+          sudo apt-get update
+          sudo apt-get install -y poppler-utils python3-matplotlib tesseract-ocr tesseract-ocr-eng tesseract-ocr-chi-sim fonts-noto-cjk fonts-liberation fonts-dejavu-core
+      - name: Verify the real PDF OCR engine and language data
+        env:
+          DYOFFICE_TEST_PDF_OCR: '1'
+        run: |
+          languages=$(tesseract --list-langs)
+          grep -Fx eng <<< "$languages"
+          grep -Fx chi_sim <<< "$languages"
+          node --import tsx --test apps/web/test/unit/pdf-ocr.test.mjs
+      - name: Build the four native Web editors and local workspace
+        run: npm run build:saas
+      - name: Build the XLSX engine for browser file verification
+        run: npm run build:web:native
+      - name: Verify the local workspace and four native editors in Chromium
+        env:
+          NODE_ENV: test
+          DYOFFICE_TEST_LOCAL_SHELL_DIRECTORY: ${{ github.workspace }}/apps/web/dist-local-shell
+          DYOFFICE_TEST_NATIVE_DOCS_DIST: ${{ github.workspace }}/apps/web/dist-docs
+          DYOFFICE_TEST_SHEETS_DIST: ${{ github.workspace }}/apps/web/dist-sheets
+          DYOFFICE_TEST_SLIDES_DIST: ${{ github.workspace }}/apps/web/dist-slides
+          DYOFFICE_TEST_NATIVE_PDF_DIST: ${{ github.workspace }}/apps/web/dist-pdf
+          DYOFFICE_TEST_HOST_MANIFEST: ${{ github.workspace }}/.dyoffice-native-build/host-manifest.json
+          DYOFFICE_TEST_XLSX_WASI_REFRESH_RUNNER: ${{ github.workspace }}/apps/web/dist-sheets-server/xlsx-refresh-wasi.mjs
+          DYOFFICE_TEST_ANALYSIS_PYTHON: /usr/bin/python3
+          DYOFFICE_TEST_PDF_OCR: '1'
+          DYOFFICE_DSH_FIXTURE: 'on'
+          DYOFFICE_TEST_AI_TOOL_TRACE: ${{ runner.temp }}/dyoffice-office-tool-trace.jsonl
+        # Some editor fixtures bind the same loopback port.
+        run: |
+          set -o pipefail
+          umask 077
+          node --import tsx --test --test-name-pattern='actual wasi server entry' apps/web/test/native-sheets/runtime.test.mjs
+          : > "$DYOFFICE_TEST_AI_TOOL_TRACE"
+          node --import tsx --test --test-concurrency=1 apps/web/test/local-browser/*.test.mjs apps/web/test/native-docs/{attachment-media,image-media,writer-draft-save}.test.mjs apps/web/test/native-slides/{size-roundtrip,image-export}.test.mjs
+          node --import tsx apps/web/test/helpers/office-tool-coverage.mjs "$DYOFFICE_TEST_AI_TOOL_TRACE" 2>&1 | tee "$RUNNER_TEMP/dyoffice-office-tool-coverage.txt"
+      - name: Retain Office AI tool coverage evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: office-ai-tool-coverage
+          path: |
+            ${{ runner.temp }}/dyoffice-office-tool-trace.jsonl
+            ${{ runner.temp }}/dyoffice-office-tool-coverage.txt
+          if-no-files-found: warn
       - name: Retain real local-account Home and Settings screenshots
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: local-account-original-shell
-          path: apps/web/test-results/local-shell-*.png
+          path: test-results/local-shell-*.png
           if-no-files-found: warn
       - name: Test isolated local account and revision runtime
+        env:
+          DYOFFICE_TEST_XLSX_WASI_REFRESH_RUNNER: ${{ github.workspace }}/apps/web/dist-sheets-server/xlsx-refresh-wasi.mjs
         run: npm run test:web:integration:local
       - name: Test durable PostgreSQL jobs and real BullMQ recovery
         run: npm run test:web:jobs
@@ -216,7 +266,9 @@ jobs:
       - name: Install Chromium
         run: node_modules/.bin/playwright install chromium --with-deps
       - name: Regress native save generation and Web bridge state
-        run: node --experimental-strip-types --test apps/web/test/unit/save-generation.test.mjs apps/web/test/unit/docs-bridge-save.test.mjs
+        run: node --import tsx --test apps/web/test/unit/save-generation.test.mjs apps/web/test/unit/docs-bridge-save.test.mjs
+      - name: Regress phased DOCX loading, concurrent edits and draft-copy entry
+        run: node --import tsx --test --test-concurrency=1 apps/web/test/unit/docs-phased-load-dirty.test.mjs apps/web/test/unit/docs-save-download-entry.test.mjs
       - name: Check native Web host types
         run: npm run typecheck:web:docs
       - name: Build real DOCX renderer and test native edits over TLS

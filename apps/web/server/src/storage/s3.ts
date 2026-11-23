@@ -6,18 +6,23 @@ import { assertObjectKey, assertObjectReference, collectVerified, verifyStream, 
 // precreated and dedicated; no public or presigned download URL is issued here.
 export function createS3ObjectStore({ client, bucket }: { client: S3Client; bucket: string }): ObjectStore {
   if (!/^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$/.test(bucket)) throw storageError(400)
-  async function read<T>(reference: ObjectRef, consume: (source: AsyncIterable<Uint8Array>, reference: ObjectRef) => Promise<T>): Promise<T> {
+  async function read<T>(reference: ObjectRef, consume: (source: AsyncIterable<Uint8Array>, reference: ObjectRef) => Promise<T>, signal?: AbortSignal): Promise<T> {
     assertObjectReference(reference)
     let body: Readable | undefined
+    const timeout=AbortSignal.timeout(30_000),abortSignal=signal?AbortSignal.any([signal,timeout]):timeout
+    const abort=()=>body?.destroy(storageError())
     try {
-      const result = await client.send(new GetObjectCommand({ Bucket: bucket, Key: reference.key }), { abortSignal: AbortSignal.timeout(30_000) })
+      abortSignal.throwIfAborted()
+      const result = await client.send(new GetObjectCommand({ Bucket: bucket, Key: reference.key }), { abortSignal })
       if (!(result.Body instanceof Readable)) throw storageError()
       body = result.Body
+      abortSignal.throwIfAborted()
+      abortSignal.addEventListener('abort',abort,{once:true})
       if (result.ContentLength !== reference.size) throw storageError()
       // Never trust ETag or stored user metadata as a content hash.
       return await consume(body, reference)
     } catch { throw storageError() }
-    finally { body?.destroy() }
+    finally { abortSignal.removeEventListener('abort',abort);body?.destroy() }
   }
   return {
     async checkReady() {
@@ -51,7 +56,7 @@ export function createS3ObjectStore({ client, bucket }: { client: S3Client; buck
         if (result.DeleteMarker || result.VersionId !== undefined) throw storageError()
       } catch { throw storageError() }
     },
-    readVerified: reference => read(reference, collectVerified),
+    readVerified: (reference, signal) => read(reference, collectVerified, signal),
     verifyObject: reference => read(reference, verifyStream),
   }
 }

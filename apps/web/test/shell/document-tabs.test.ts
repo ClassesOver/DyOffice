@@ -3,6 +3,36 @@ import {createDocumentTabs} from '../../src/shell/document-tabs'
 const a={id:'file-a',format:'docx' as const,name:'合同.docx',src:'/native-docx/?fileId=file-a'}
 const b={id:'file-b',format:'xlsx' as const,name:'预算.xlsx',src:'/native-xlsx/?fileId=file-b'}
 
+test('a citation only reuses a mounted editor if it proves that it displays the cited saved revision',()=>{
+ let displayed:string|undefined
+ const tabs=createDocumentTabs({displayedRevision:()=>displayed})
+ const citation={...a,src:`${a.src}&sourceRevision=r1`,sourceRevision:'r1'}
+ tabs.open(a);tabs.open(b)
+ expect(()=>tabs.open(citation)).toThrow('cited revision')
+ expect(tabs.list().find(t=>t.active)?.id).toBe(b.id)
+ displayed='r1';tabs.open(citation)
+ expect(tabs.renderedDocuments().find(file=>file.id===a.id)?.src).toBe(a.src)
+ expect(tabs.list().find(t=>t.active)?.id).toBe(a.id)
+})
+
+test('ordinary opens recover an expired citation without replacing live drafts',()=>{
+ let expired=false
+ const tabs=createDocumentTabs({isCitationExpired:()=>expired})
+ const citation={...b,src:`${b.src}&sourceRevision=r1`,sourceRevision:'r1'}
+ tabs.open(citation);tabs.open(b)
+ expect(tabs.documents()).toEqual([citation])
+ expired=true;tabs.open(b)
+ expect(tabs.documents()).toEqual([b])
+})
+
+test('a citation superseded by a later navigation leaves no dormant tab',()=>{
+ const tabs=createDocumentTabs()
+ const token=tabs.reserveOpen(b.id)
+ tabs.open(a)
+ tabs.open({...b,src:b.src+'&sourceRevision=r1',sourceRevision:'r1'},token)
+ expect(tabs.documents()).toEqual([a])
+})
+
 test('home is permanent and opening a file deduplicates and activates its original document',async()=>{
  const tabs=createDocumentTabs(),changed=vi.fn(),stop=tabs.subscribe(changed)
  expect(tabs.list()).toEqual([{id:'home',kind:'home',title:'首页',closable:false,active:true}])

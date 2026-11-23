@@ -1,0 +1,20 @@
+/* Intentionally scoped: global configuration is not part of this presentation. */
+.workspace-config-modal .local-admin-panel{--config-radius:8px}
+.workspace-config-modal .local-admin-panel .ant-table-thead>tr>th{background:var(--surface-subtle);font-size:12px;color:var(--text-secondary);font-weight:600}
+.workspace-config-modal .local-admin-panel .ant-table-tbody>tr>td{padding-top:13px;padding-bottom:13px}
+.workspace-config-modal .local-admin-panel .management-list{border-radius:var(--config-radius);border:1px solid var(--border-subtle);background:var(--surface);overflow:hidden}
+.workspace-config-modal .local-admin-panel .management-list-heading{padding:20px 20px 0}
+.workspace-config-modal .local-admin-panel .management-list-heading h3{font-size:18px;margin:0 0 8px}
+.workspace-config-modal .local-admin-panel .management-list-summary{padding:12px 20px;color:var(--text-secondary)}
+.workspace-config-modal .local-admin-panel .management-list-toolbar{padding:12px 20px;background:var(--surface-subtle);border-block:1px solid var(--border-subtle)}
+.workspace-config-modal .local-admin-panel :is(.admin-create,.admin-confirm,.admin-secret){border:1px solid var(--border-subtle);border-radius:var(--config-radius);padding:18px;margin-top:16px;background:var(--surface-subtle)}
+.workspace-config-modal .local-admin-panel .admin-field-hint{font-size:12px;line-height:1.6}
+@media(max-width:700px){
+ .workspace-config-modal .local-admin-panel .management-list-toolbar{padding:12px;flex-wrap:wrap;gap:8px}
+}
+
+/* Match the global settings' flat sections and compact controls. */
+.workspace-config-modal .local-admin-panel .ant-btn{border-radius:7px;font-size:12px}
+.workspace-config-modal .local-admin-panel :is(.ant-input,.ant-select){font-size:13px}
+.workspace-config-modal .local-admin-panel .management-list{border:0;border-radius:0}
+.workspace-config-modal .local-admin-panel .management-list-heading h3{font-size:20px;font-weight:600;letter-spacing:-.4px}

@@ -98,6 +98,16 @@ test('runtime admission rejects missing business grants and table grant options'
   await assert.rejects(() => assertRuntimePool(f.businessPool, 'business'))
 })
 
+test('runtime admission accepts restricted roles and rejects MAINTAIN where PostgreSQL supports it', async t => {
+  const f = await restrictedFixture(t)
+  await assertRuntimePool(f.businessPool, 'business')
+  const { rows: [version] } = await f.ownerPool.query("SELECT current_setting('server_version_num')::integer AS number")
+  if (version.number >= 170000) {
+    await f.ownerPool.query('GRANT MAINTAIN ON workspaces TO ' + f.names.business)
+    await assert.rejects(() => assertRuntimePool(f.businessPool, 'business'), /privileges outside its boundary/)
+  }
+})
+
 test('runtime admission rejects table privilege delegation rights', async t => {
   const f = await restrictedFixture(t)
   await f.ownerPool.query('GRANT SELECT ON users TO ' + f.names.auth + ' WITH GRANT OPTION')

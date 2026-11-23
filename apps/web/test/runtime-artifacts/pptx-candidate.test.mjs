@@ -31,7 +31,8 @@ test('actual fixed PPTX build has repeatable content identity and rejects tamper
   // not this isolated script's node_modules. Exercise actual CLI prepare.
   const isolated=join(root,'nonhoisted');await mkdir(isolated)
   const workspacePaths=good.manifest.inputs.filter(i=>i.id.startsWith('workspace:')).map(i=>i.id.slice(10))
-  const manifests=new Set(['apps/web/package.json',...workspacePaths.filter(p=>p.startsWith('packages/')).map(p=>p.split('/').slice(0,2).join('/')+'/package.json')])
+  const manifests=new Set(workspacePaths.filter(path=>path.startsWith('apps/')||path.startsWith('packages/'))
+   .map(path=>path.split('/').slice(0,2).join('/')+'/package.json'))
   for(const path of [...workspacePaths,...manifests]){
    await mkdir(dirname(join(isolated,path)),{recursive:true})
    await copyFile(join(sourceRoot,path),join(isolated,path))

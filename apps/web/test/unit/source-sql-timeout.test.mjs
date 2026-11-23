@@ -4,6 +4,11 @@ import {createServer} from 'node:net'
 import {Client} from 'pg'
 import {safeFailure} from '../../server/src/modules/sources/sql.ts'
 
+test('StarRocks without TLS has a specific safe connection failure', () => {
+ assert.throws(() => safeFailure({code:'HANDSHAKE_NO_SSL_SUPPORT',message:'private connection details'}, 'starrocks'),
+  error => error.statusCode === 502 && error.code === 'SOURCE_TLS_UNSUPPORTED' && !error.message.includes('private'))
+})
+
 // Use the actual installed pg driver against a synthetic local protocol peer.
 // The peer authenticates but never answers a query, exercising its own timer.
 test('real pg query read timeout is a gateway timeout, without exposing query or target', async t => {
@@ -36,4 +41,11 @@ test('SQL failure classification preserves permission denial and unknown failure
 
 test('pg-specific driver timeout is not applied to other SQL connectors',()=>{
  for(const kind of ['mysql','starrocks'])assert.throws(()=>safeFailure(new Error('Query read timeout'),kind),e=>e.statusCode===502)
+})
+
+test('statement errors reported by the database map to a fixable 400, not an unusable source', () => {
+ for(const [kind,code] of [['postgres','42P01'],['postgres','42703'],['postgres','42883'],['postgres','22012'],['mysql','ER_BAD_FIELD_ERROR'],['starrocks','ER_PARSE_ERROR']])
+  assert.throws(()=>safeFailure({code,message:'relation "secret_table" does not exist'},kind),e=>e.statusCode===400&&!e.message.includes('secret_table'),code)
+ // Privilege errors keep their own mapping.
+ assert.throws(()=>safeFailure({code:'42501'},'postgres'),e=>e.statusCode===403)
 })

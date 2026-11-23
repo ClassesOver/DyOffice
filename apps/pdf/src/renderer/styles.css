@@ -223,6 +223,71 @@ button {
   flex: 1;
 }
 
+.pdf-web-file-tab-wrap { position: relative; flex: none; }
+.pdf-web-file-tab-wrap .ribbon-tab-file {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 9%, var(--chrome-bg));
+  border-radius: 4px;
+  padding: 6px 16px;
+  margin-right: 6px;
+  white-space: nowrap;
+}
+.pdf-web-file-tab-wrap .ribbon-tab-file:hover,
+.pdf-web-file-tab-wrap .ribbon-tab-file.open {
+  background: color-mix(in srgb, var(--accent) 16%, var(--chrome-bg));
+}
+.pdf-web-file-tab-wrap .file-menu {
+  position: absolute;
+  top: calc(100% + 2px);
+  left: 0;
+  z-index: 60;
+  min-width: 210px;
+  padding: 5px;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  box-shadow: 0 4px 16px #0003;
+}
+.pdf-web-file-tab-wrap .file-menu :is(button, a) {
+  display: block;
+  width: 100%;
+  border: 0;
+  border-radius: 4px;
+  padding: 8px 12px;
+  background: none;
+  color: inherit;
+  text-align: left;
+  text-decoration: none;
+  font: inherit;
+  cursor: pointer;
+}
+.pdf-web-file-tab-wrap .file-menu :is(button, a):hover:not(:disabled) { background: var(--hover); }
+.pdf-web-file-tab-wrap .file-menu button:disabled { opacity: .4; cursor: default; }
+.dyoffice-pdf-persistence-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 220px;
+  padding: 0 12px;
+  white-space: nowrap;
+  color: var(--text-secondary);
+  font: 12px/1.5 var(--gs-font-sans);
+}
+.dyoffice-pdf-persistence-state::before {
+  content: '';
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--text-tertiary);
+}
+.dyoffice-pdf-persistence-state:empty { visibility: hidden; }
+.dyoffice-pdf-persistence-state[data-dirty='true']::before { background: var(--accent); }
+.dyoffice-pdf-persistence-state[data-attention='true']::before { background: #c42b1c; }
+@media (max-width: 600px) {
+  .dyoffice-pdf-persistence-state { padding: 0 6px; }
+}
+
 .qa-btn {
   width: 30px;
   height: 28px;
@@ -3923,18 +3988,6 @@ button {
   background: var(--surface);
   font-family: var(--gs-font-sans);
   color: var(--color-text-primary);
-}
-
-/* drag handle on the panel's right edge — resize the panel horizontally */
-.ai-panel-resizer {
-  position: absolute;
-  right: 0;
-  top: 0;
-  bottom: 0;
-  width: 6px;
-  cursor: col-resize;
-  z-index: 20;
-  background: transparent;
 }
 
 /* while dragging: keep the col-resize cursor everywhere, no text selection */

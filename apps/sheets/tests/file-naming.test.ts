@@ -196,6 +196,18 @@ describe('the name the reader asked for', () => {
     expect(JSON.stringify(sent[0])).not.toContain('13800138')
   })
 
+  it('gives the Web naming provider the same projected text', async () => {
+    let excerpt = ''
+    const stem = await modelSaveAsName(context(true), async content => {
+      excerpt = content
+      return 'Reviewed customers'
+    })
+    expect(stem).toBe('Reviewed customers')
+    expect(excerpt).toContain(`{{${LABEL}}}`)
+    expect(excerpt).not.toContain(SECRET)
+    expect(sent).toHaveLength(0)
+  })
+
   it('sends the marker the reader chose, so the model can still read the sheet', async () => {
     await modelSaveAsName(context(true))
     expect(sent[0]).toContain(`{{${LABEL}}}`)

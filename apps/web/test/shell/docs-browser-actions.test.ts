@@ -35,3 +35,28 @@ test('Word switch-tabs fails explicitly when the parent application bridge is un
  const previous=window.aiOfficeTabs;window.aiOfficeTabs=undefined as never
  try{const api=fixture().api;await expect(api.listDocsTabs()).rejects.toThrow('当前')}finally{window.aiOfficeTabs=previous}
 })
+test('saveDocxAs and exportMarkdown download browser blobs and open settings via parent shell',async()=>{
+ const filenames:string[]=[]
+ const create=vi.spyOn(URL,'createObjectURL').mockReturnValue('blob:download'),revoke=vi.spyOn(URL,'revokeObjectURL').mockImplementation(()=>{}),click=vi.spyOn(HTMLAnchorElement.prototype,'click').mockImplementation(function(this:HTMLAnchorElement){filenames.push(this.download)})
+ const openSettings=vi.fn().mockResolvedValue(undefined)
+ const previous=(window as unknown as {dyofficeOpenEditorSettings?:unknown}).dyofficeOpenEditorSettings
+ ;(window as unknown as {dyofficeOpenEditorSettings?:unknown}).dyofficeOpenEditorSettings=openSettings
+ try{
+  const api=fixture().api
+  expect(await api.saveDocxAs('copy.docx',new Uint8Array([80,75,3,4]).buffer)).toEqual({ok:true,path:'/files/file/report.docx',name:'report.docx'})
+  expect(await api.exportMarkdown('notes','# Title')).toEqual({ok:true})
+  expect(filenames).toEqual(['report.docx','notes.md']);expect(click).toHaveBeenCalledTimes(2)
+  expect(create.mock.calls.map(([blob])=>({type:blob.type,size:blob.size}))).toEqual([
+   {type:'application/vnd.openxmlformats-officedocument.wordprocessingml.document',size:4},
+   {type:'text/markdown;charset=utf-8',size:7},
+  ])
+  await api.openAiModelSettings();await api.openSkillsSettings()
+  expect(openSettings).toHaveBeenCalledWith('models',window)
+  expect(openSettings).toHaveBeenCalledWith('skills',window)
+  await new Promise(resolve=>setTimeout(resolve,5))
+  expect(revoke).toHaveBeenCalledWith('blob:download')
+ }finally{
+  ;(window as unknown as {dyofficeOpenEditorSettings?:unknown}).dyofficeOpenEditorSettings=previous
+  vi.restoreAllMocks()
+ }
+})

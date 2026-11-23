@@ -2,6 +2,8 @@
 
 > 2026-11-16 · Capability gate. The browser mount and pixel reopen check are in [t11-pdf-render.md](t11-pdf-render.md).
 
+> Historical implementation record. For the current GenOffice editor at `/native-pdf/` and its supported operations, see [Web parity evidence](genoffice-web-parity.md).
+
 ## Why this slice
 
 T07 is owned by the DOCX browser pull request. T09 is XLSX and is out of scope. T03/T04 auth and row-level security are owned elsewhere. T08's worker is also in another pull request. T10 already has a Node session seam. The next dependency-safe slice is an explicit PDF capability gate that refuses operations this repository does not yet perform.

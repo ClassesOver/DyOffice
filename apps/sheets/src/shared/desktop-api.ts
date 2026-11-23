@@ -1,4 +1,7 @@
 import { z } from 'zod'
+import type { ExternalLinkListStatus, ExternalLinksResult } from './external-links-contract'
+export { externalLinkListStatusSchema, externalLinksResultSchema } from './external-links-contract'
+export type { ExternalLinkListStatus, ExternalLinksResult } from './external-links-contract'
 import { normalizeCustomProfile } from '@genoffice/ai-provider/browser'
 
 import {
@@ -2455,7 +2458,8 @@ export const workbookSaveRequestSchema = z
       request.pivotAdditions.length > 0 ||
       request.sparklineAdditions.length > 0 ||
       request.slicerState !== null ||
-      (request.redactionStates?.length ?? 0) > 0 ||
+      request.redactionStates !== null ||
+      request.formulaValues.length > 0 ||
       request.externalLinkOps !== null,
     { message: 'A save needs at least one edit.' },
   )
@@ -2820,23 +2824,9 @@ export const externalLinkRevealRequestSchema = z
   .strict()
 export type ExternalLinkRevealRequest = z.infer<typeof externalLinkRevealRequestSchema>
 
-/// One link as the read-only listing carries it. Deliberately no `reachable`:
-/// listing the links must not probe the targets on disk (a dead network share
-/// can block the open), so reachability is answered only by the explicit
-/// update.
-export const externalLinkListStatusSchema = z
-  .object({
-    index: z.number().int().positive(),
-    rawTarget: z.string(),
-    source: z.string().nullable(),
-    sheetNames: z.array(z.string()),
-  })
-  .strict()
-export type ExternalLinkListStatus = z.infer<typeof externalLinkListStatusSchema>
-
 /// One row of the links panel: the listing's fields, plus the update's
 /// reachability verdict once it has run.
-export type ExternalLinkRow = ExternalLinkListStatus & { readonly reachable?: boolean }
+export type ExternalLinkRow = ExternalLinkListStatus & { readonly reachable?: boolean; readonly displayName?: string }
 
 export const externalLinkStatusSchema = z
   .object({
@@ -2848,12 +2838,6 @@ export const externalLinkStatusSchema = z
   })
   .strict()
 export type ExternalLinkStatus = z.infer<typeof externalLinkStatusSchema>
-
-/// The panel's non-probing listing (the sidecar's `list_external_links`).
-export const externalLinksResultSchema = z
-  .object({ links: z.array(externalLinkListStatusSchema) })
-  .strict()
-export type ExternalLinksResult = z.infer<typeof externalLinksResultSchema>
 
 /// The kinds an external-formula cell's value can have: the save path writes a
 /// boolean as `t="b"` and an error as `t="e"` instead of spelling them as a
@@ -3322,6 +3306,7 @@ export const workbookCreateDocumentResultSchema = z
   .object({
     ok: z.boolean(),
     path: z.string().min(1).optional(),
+    downloaded: z.boolean().optional(),
     error: z.string().optional(),
   })
   .strict()

@@ -1,12 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { handleSave, type SaveContext } from '../src/renderer/save-actions'
 import {
+  acknowledgeJournal,
   createEditJournal,
   journalSize,
   recordPageSetup,
   recordSetRangeValues,
   recordStructuralOp,
   recordVisualAdd,
+  snapshotJournal,
 } from '../src/renderer/edit-journal'
 import { mutationAdmission } from '../src/renderer/mutation-admission'
 
@@ -65,6 +67,47 @@ beforeEach(() => {
 })
 
 describe('structural save admission', () => {
+  it('reopens a workbook after breaking a saved link and omits live formula caches', async () => {
+    const { ctx, gate, journal, open, state } = setup(false)
+    acknowledgeJournal(journal, snapshotJournal(journal))
+    state.recalc.overlay.set('sheet-1', new Map([['2:6', { v: 999 }]]))
+    ctx.externalLinkOps = () => ({ broken: [1], retargets: [] })
+    save.mockImplementationOnce(async () => {
+      expect(gate.phase).toBe('frozen')
+      return { canceled: false, file: { ...state.file, sessionId: 'new', sha256: 'new' } }
+    })
+
+    await expect(handleSave(ctx, 'save')).resolves.toMatchObject({ ok: true })
+
+    expect(save).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+      edits: [], formulaValues: [], externalLinkOps: { broken: [1], retargets: [] },
+    }))
+    expect(open).toHaveBeenCalledTimes(1)
+    expect(ctx.applySavedWorkbook).not.toHaveBeenCalled()
+    expect(gate.phase).toBe('open')
+  })
+
+  it('preserves an edit that drains while a saved link break is preparing', async () => {
+    const { ctx, gate, journal, open } = setup(false)
+    acknowledgeJournal(journal, snapshotJournal(journal))
+    ctx.externalLinkOps = () => ({ broken: [1], retargets: [] })
+    const read = deferred()
+    const task = gate.run(async () => {
+      await read.promise
+      recordSetRangeValues(journal, 'sheet-1', { 0: { 0: { v: 'late edit' } } })
+    })
+    const saving = handleSave(ctx, 'save')
+    await vi.waitFor(() => expect(gate.phase).toBe('draining'))
+    read.resolve()
+    await task
+
+    await expect(saving).resolves.toMatchObject({ ok: false })
+    expect(save).not.toHaveBeenCalled()
+    expect(open).not.toHaveBeenCalled()
+    expect(journal.cells.get('sheet-1')?.get('0:0')?.value).toBe('late edit')
+    expect(gate.phase).toBe('open')
+  })
+
   it('drains an already-started direct chart write before taking the snapshot', async () => {
     const { ctx, gate, journal, open } = setup()
     const read = deferred()

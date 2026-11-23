@@ -1,3 +1,6 @@
+import {flushSync} from 'react-dom'
+import {captureSlideAnalysis} from './analysis-insert'
+import {createAnalysisSaveConsent} from '../../../../packages/browser-host/src/analysis-save-consent'
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type {
   GroupRenderNode,
@@ -118,7 +121,7 @@ import { GensparkMark, IconAiBeautify, IconAiFactCheck, IconAiImage } from './co
 import { ToastHost } from './components/toast'
 import { showToast } from './components/toast-bus'
 import { t, useI18n } from './i18n/locale'
-import { AiPanel } from './ai/AiPanel'
+import { AiPanel, type SlidesAssistantContinuation } from './ai/AiPanel'
 import { ChartDataDialog } from './components/ChartDataDialog'
 import type { BrushFormat } from './format-brush'
 import { isTextUndoTarget, shouldRouteHistoryToDeck } from './undo-routing'
@@ -362,22 +365,41 @@ function thumbBox(slide: RenderSlide, width: number) {
 
 /** Save/dirty/reopen cycle the Web host entry drives (T10) — mirrors the sheets editor handle. */
 export interface SlidesEditorHandle {
+  analysis?:import('../../../../packages/web-contracts/src/analysis-document').NativeAnalysisEditor
   /** Run the renderer's full save flow (flush the edit overlay + notes, then save in place). */
   saveAndWait(): Promise<boolean>
   /** Session-authoritative dirty flag, updated from every slidesApi round trip. */
   isDirty(): boolean
+  /** A background continuation may use this saved deck without flushing any local drafts. */
+  canContinueAssistant(): boolean
   /** Re-fetch the deck from the session (takeover/refresh path); false when the session is unreachable. */
   reload(): Promise<boolean>
 }
 
 /** Optional host seam: everything keeps desktop-IPC behavior when absent. */
 export interface SlidesAppHost {
+  saveDownload?: React.ReactNode
+  downloadImages?: fileActions.SlideImageDownload
+  namedCopy?: fileActions.SlidesNamedCopy
+  analysisGeneration?:()=>number|null
+  runAnalysis?:(ops:unknown[],check:()=>boolean,adopt:(slides:RenderSlide[])=>void)=>Promise<boolean>
   /** Another editor holds the document: block text-edit entry and mutating chords (the API layer fences everything else). */
   readOnly?: boolean
   /** Saves commit in place without dialogs (the Web workspace). */
   inPlaceSave?: boolean
   /** false hides the AI dock and rail entirely. */
   assistantAvailable?: boolean
+  assistant?: {
+    transport: import('@genoffice/agent-core').AgentTransport
+    modelPicker: React.ReactNode
+    workspace?: import('@genoffice/ui').AssistantWorkspace
+    extraSkills?: readonly import('@genoffice/agent-core').AgentSkill[]
+    agents?: readonly import('@genoffice/ui').AssistantParticipant[]
+    mediaCapabilities?: {imageGeneration:boolean;mediaAnalysis:boolean}
+    onManageAgents?: () => void
+    control?: import('@genoffice/ui').AssistantControl
+    continuation?: SlidesAssistantContinuation
+  }
   /** The pending-open deck was applied. */
   onDeckOpened?: () => void
   /** The pending-open failed and no blank-deck fallback ran. */
@@ -462,7 +484,14 @@ export function App({ host }: { host?: SlidesAppHost } = {}) {
   const stageRelRef = useRef<HTMLDivElement | null>(null)
   const zoomBoxRef = useRef<HTMLDivElement | null>(null)
   const [scaleBox, setScaleBox] = useState<{ w: number; h: number } | null>(null)
-  const [dirty, setDirty] = useState(false)
+  const [dirty, setDirtyState] = useState(false)
+  const dirtyRef = useRef(false)
+  // 保存后的下载和关闭检查先于 React 渲染，必须同步更新实际脏状态。
+  const setDirty = useCallback<React.Dispatch<React.SetStateAction<boolean>>>((value) => {
+    const next = typeof value === 'function' ? value(dirtyRef.current) : value
+    dirtyRef.current = next
+    setDirtyState(next)
+  }, [])
   const [status, setStatus] = useState('')
   // Status messages auto-dismiss after 4s: operation feedback needs only a brief showing; persistent info (page number/file name) lives on the left and in the title bar
   useEffect(() => {
@@ -520,6 +549,11 @@ export function App({ host }: { host?: SlidesAppHost } = {}) {
   // Copilot-pane model): an explicit Ask-AI action still opens the panel for
   // this deck, and closing it returns to hidden. The dock stays mounted; the
   // hook closes it when the switch itself goes off.
+  useEffect(()=>{
+    const show=()=>setShowAi(true)
+    window.addEventListener('dyoffice:open-handoff-assistant',show)
+    return ()=>window.removeEventListener('dyoffice:open-handoff-assistant',show)
+  },[])
   const aiSidebarEnabled = useAiSidebarEnabled(setShowAi)
   const [showFormat, setShowFormat] = useState(false)
   const [showBgFormat, setShowBgFormat] = useState(false)
@@ -979,11 +1013,15 @@ export function App({ host }: { host?: SlidesAppHost } = {}) {
   editingActiveRef.current = !!editing || !!editingCell
   /** Set while the AI annotation popover is open (assigned below, next to askState) */
   const askOpenRef = useRef(false)
-  const dirtyRef = useRef(false)
-  dirtyRef.current = dirty
 
+  const analysisConsent=useRef(createAnalysisSaveConsent())
+  const analysisApplying=useRef(false),analysisSaving=useRef(0)
   const save = useCallback(
-    (quiet = false): Promise<boolean> => fileActions.save(() => ctxRef.current, quiet),
+    async (quiet = false,automatic=false): Promise<boolean> => {
+      if(analysisApplying.current)return false
+      analysisSaving.current++
+      try{return await analysisConsent.current.run(automatic,()=>fileActions.save(() => ctxRef.current, quiet),ok=>ok,false)}finally{analysisSaving.current--}
+    },
     [],
   )
 
@@ -996,7 +1034,15 @@ export function App({ host }: { host?: SlidesAppHost } = {}) {
   useEffect(() => {
     host?.onEditorReady?.({
       saveAndWait: () => saveRef.current(true),
+      analysis:{captureAnalysis:()=>captureSlideAnalysis({current:(forSave=false)=>{
+        const ctx=ctxRef.current,generation=hostRef.current?.analysisGeneration?.()
+        if(!ctx.slide||generation==null||(!forSave&&(hostRef.current?.readOnly||analysisSaving.current>0))||ctx.editingActiveRef.current||notesDraftRef.current||ctx.masterItems||effectsInFlight.current||mouseDownRef.current)return null
+        return {identity:ctx.slides,slideId:ctx.slide.partPath??'',index:ctx.current,selection:JSON.stringify(ctx.selectedIds),generation,width:ctx.slide.widthPx,height:ctx.slide.heightPx,scale:ctx.slide.scale}
+      },hold:()=>analysisConsent.current.hold(),run:async(ops,check)=>{analysisApplying.current=true;try{return await (hostRef.current?.runAnalysis?.(ops,check,all=>flushSync(()=>ctxRef.current.applyDeck(all,ctxRef.current.current)))??false)}finally{analysisApplying.current=false}}})},
       isDirty: () => dirtyRef.current,
+      canContinueAssistant: () => !dirtyRef.current && !editingActiveRef.current && !notesDraftRef.current &&
+        !ctxRef.current.masterItems && !effectsInFlight.current && !mouseDownRef.current &&
+        !analysisSaving.current && !analysisApplying.current,
       reload: async () => {
         try {
           const r = await window.slidesApi.openPptx(FIT_WIDTH)
@@ -1081,7 +1127,7 @@ export function App({ host }: { host?: SlidesAppHost } = {}) {
       void window.slidesApi.isDirty().then((d) => {
         if (!d || saving) return
         saving = true
-        void save(true).finally(() => {
+        void save(true,true).finally(() => {
           saving = false
         })
       })
@@ -1095,11 +1141,14 @@ export function App({ host }: { host?: SlidesAppHost } = {}) {
   }, [autoSave, path, editing, editingCell, save])
 
   const saveAs = useCallback(() => fileActions.saveAs(() => ctxRef.current), [])
-  const nameWithAi = useCallback(() => fileActions.nameWithAi(() => ctxRef.current), [])
-  const exportImages = useCallback(
-    (format: 'png' | 'jpg' = 'png') => fileActions.exportImages(ctxRef.current, format),
-    [],
-  )
+  const nameWithAi = useCallback(() => fileActions.nameWithAi(() => ctxRef.current, hostRef.current?.namedCopy), [])
+  const exportingImages = useRef(false)
+  const exportImages = useCallback(async (format: 'png' | 'jpg' = 'png') => {
+    if (exportingImages.current) return
+    exportingImages.current = true
+    try { await fileActions.exportImages(ctxRef.current, format, hostRef.current?.downloadImages) }
+    finally { exportingImages.current = false }
+  }, [])
   const exportPdf = useCallback(() => void fileActions.exportPdf(ctxRef.current), [])
   const [videoDlgOpen, setVideoDlgOpen] = useState(false)
 
@@ -1844,6 +1893,8 @@ export function App({ host }: { host?: SlidesAppHost } = {}) {
     let cancelled = false
     void window.slidesApi.getAnimations(current).then((items) => {
       if (!cancelled) setAnimations(items)
+    }).catch((error: unknown) => {
+      if (!cancelled) setStatus(error instanceof Error ? error.message : String(error))
     })
     return () => {
       cancelled = true
@@ -3385,6 +3436,7 @@ export function App({ host }: { host?: SlidesAppHost } = {}) {
         onUndo={() => void undo()}
         onRedo={() => void redo()}
         onSaveAs={() => void saveAs()}
+        saveDownload={host?.saveDownload}
         onNameWithAi={() => void nameWithAi()}
         onExportPdf={() => void exportPdf()}
         onPrint={() => setPrintDlgOpen(true)}
@@ -3397,6 +3449,7 @@ export function App({ host }: { host?: SlidesAppHost } = {}) {
         showThumbs={showThumbs}
         onToggleThumbs={() => setShowThumbs((v) => !v)}
         aiOpen={showAi}
+        aiAvailable={aiAvailable}
         onToggleAi={toggleAi}
         onAiPreset={(text, opts) => pushAiPreset(text, true, undefined, undefined, opts?.slideShot)}
         onPickShape={pickShape}
@@ -3709,6 +3762,15 @@ export function App({ host }: { host?: SlidesAppHost } = {}) {
             {/* always mounted once settings load: collapse must not drop state or in-flight runs */}
             {aiSettings ? (
               <AiPanel
+                transport={host?.assistant?.transport}
+                modelPicker={host?.assistant?.modelPicker}
+                assistantWorkspace={host?.assistant?.workspace}
+                assistantControl={host?.assistant?.control}
+                assistantContinuation={host?.assistant?.continuation}
+                assistantAgents={host?.assistant?.agents}
+                extraSkills={host?.assistant?.extraSkills}
+                mediaCapabilities={host?.assistant?.mediaCapabilities}
+                onManageAgents={host?.assistant?.onManageAgents}
                 key={aiPanelKey}
                 slides={slides}
                 current={current}
@@ -4096,7 +4158,7 @@ export function App({ host }: { host?: SlidesAppHost } = {}) {
                                 onClick={toggleAi}
                               >
                                 <GensparkMark size={14} />
-                                <span>Genspark AI</span>
+                                <span>AI 助手</span>
                               </button>
                             )}
                             {/* Same one-click presets as the Home tab; hidden instead of

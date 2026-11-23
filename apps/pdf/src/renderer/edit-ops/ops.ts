@@ -453,6 +453,7 @@ register({
       ...(typeof op.origAbove === 'boolean' ? { origAbove: op.origAbove } : {}),
       ...(op.staticFill ? { staticFill: op.staticFill as StaticFormFillRecord } : {}),
       ...(typeof op.opacityBase === 'string' ? { opacityBase: op.opacityBase } : {}),
+      ...(op.hostBake ? { hostBake: op.hostBake as LocalImageEdit['hostBake'] } : {}),
     }
     return { imageEdits: [...s.imageEdits, added] }
   },
@@ -904,7 +905,7 @@ register({
   apply(op) {
     const cfg = op.cfg as StampConfig | null
     // A config with neither layer is the cleared state, not a pending edit
-    return { stampCfg: cfg && (cfg.wm || cfg.hf) ? cfg : null }
+    return { stampCfg: cfg && (cfg.wm || cfg.hf || cfg.clearWatermark || cfg.clearHeaderFooter) ? cfg : null }
   },
 })
 

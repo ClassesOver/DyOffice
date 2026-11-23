@@ -7,7 +7,7 @@ import {join, relative, dirname, isAbsolute} from 'node:path'
 import {fileURLToPath} from 'node:url'
 import {resolveCodexCliPath, attachBoundedRpcStdout} from '../../../../../../packages/ai-provider/src/codex-app-server.ts'
 import type {HarnessDataGrant} from '../../../../../../packages/web-contracts/src/harness-data.ts'
-import type {CodingTask,CodingResult} from '../../../../../../packages/agent-core/src/coding-skill.ts'
+import type {CodingTask,CodingResult,CodingProgress} from '../../../../../../packages/agent-core/src/coding-skill.ts'
 
 export interface CodingHarnessModel {baseUrl:string;apiKey:string;modelId:string}
 export interface CodingHarnessOptions {cliPath?:string;analysisPython?:string;workspaceRoot?:string;timeoutMs?:number;dataHelper?:string}
@@ -15,15 +15,23 @@ const defaultAnalysisPython=fileURLToPath(new URL('../../../../../../.dyoffice-a
 const defaultDataHelper=fileURLToPath(new URL('../../../../../../.dyoffice-analysis-build/harness-data.mjs',import.meta.url))
 export interface CodingHarnessData {baseUrl:string;grant:HarnessDataGrant;socketPath?:string;mailboxDirectory?:string}
 const aborted=()=>Object.assign(new Error('Coding task cancelled'),{name:'AbortError'})
+async function resolveDataHelper(path:string){
+  try {
+    const resolved=await realpath(path)
+    if((await stat(resolved)).isFile())return resolved
+  }catch{/* Only a bounded diagnostic crosses the Harness transport. */}
+  throw Object.assign(Error('Harness data helper unavailable'),{code:'HARNESS_DATA_HELPER_UNAVAILABLE'})
+}
 /** Separate scratch workspace and restricted reads; inference is Office-owned. */
 export function createCodingHarness(options:CodingHarnessOptions={}) {
   if(options.timeoutMs!==undefined&&(!Number.isSafeInteger(options.timeoutMs)||options.timeoutMs<1||options.timeoutMs>600000))throw Error('Invalid coding timeout')
-  return {async run(input:CodingTask,signal:AbortSignal,model:CodingHarnessModel,data?:CodingHarnessData):Promise<CodingResult> {
+  return {async run(input:CodingTask,signal:AbortSignal,model:CodingHarnessModel,data?:CodingHarnessData,onProgress?:(event:CodingProgress)=>void):Promise<CodingResult> {
     if(!model||!/^http:\/\/127\.0\.0\.1:[0-9]+\/v1$/.test(model.baseUrl)||!model.apiKey||!model.modelId)throw Error('Office model gateway required')
     if(process.platform==='win32')throw Error('Coding process-tree isolation unavailable on this platform')
     if(signal.aborted)throw aborted()
     if(typeof input.instruction!=='string'||!input.instruction.trim()||input.instruction.length>16000||
       (input.context!==undefined&&(typeof input.context!=='string'||input.context.length>32000)))throw Error('Invalid coding task')
+    onProgress?.({kind:'status',text:'Preparing Codex workspace'})
     const cli=await resolveCodexCliPath(options.cliPath)
     if(signal.aborted)throw aborted()
     const executable=await realpath(cli)
@@ -36,7 +44,7 @@ export function createCodingHarness(options:CodingHarnessOptions={}) {
     const runtimeManifest=analysisRoot?join(dirname(analysisRoot),'manifest.json'):undefined
     const runtimeManifestBytes=runtimeManifest?await readFile(runtimeManifest).catch(()=>undefined):undefined
     const runtimeManifestSha256=runtimeManifestBytes?createHash('sha256').update(runtimeManifestBytes).digest('hex'):undefined
-    const dataHelper=data?await realpath(options.dataHelper??defaultDataHelper):undefined
+    const dataHelper=data?await resolveDataHelper(options.dataHelper??defaultDataHelper):undefined
     const nodeExecutable=data?await realpath(process.execPath):undefined
     if(data&&(!data.grant?.credential||!data.grant.taskId||!data.baseUrl||data.socketPath&&!isAbsolute(data.socketPath)||data?.mailboxDirectory&&!isAbsolute(data.mailboxDirectory)))throw Error('Invalid task data grant')
     const cwd=await mkdtemp(join(options.workspaceRoot??tmpdir(),'office-coding-'))
@@ -90,6 +98,9 @@ export function createCodingHarness(options:CodingHarnessOptions={}) {
           try {
             const event=JSON.parse(line)
             if(event.type==='item.completed'&&event.item?.type==='agent_message'&&typeof event.item.text==='string')final=event.item.text.slice(0,32000)
+            if(event.type==='item.started'&&event.item?.type==='command_execution')onProgress?.({kind:'status',text:'Executing command'})
+            if(event.type==='item.completed'&&event.item?.type==='command_execution')onProgress?.({kind:'status',text:'Command finished'})
+            if(event.type==='item.started'&&event.item?.type==='file_change')onProgress?.({kind:'status',text:'Updating workspace files'})
             if(event.type==='turn.completed')completed=true
             if(event.type==='turn.failed'||event.type==='error')stop(Error('Codex coding task failed'))
           } catch {stop(Error('Invalid Codex event'))}
@@ -107,6 +118,7 @@ export function createCodingHarness(options:CodingHarnessOptions={}) {
           (data?'Task-scoped Office data helper: '+JSON.stringify(nodeExecutable)+' '+JSON.stringify(dataHelper)+'. Commands: execute <operation> --args <JSON> (or --args-file <localJSONFile> for artifacts and large payloads), manifest <resultId>, receipt <commandId>, download <resultId> --out <localFile>. If a commit response is lost, recover with receipt and the original commandId; do not requery or repeat artifacts.commit. Authorization is already in environment; never print it. Use only these APIs for sources.list, sources.describe, sources.query, results.get_manifest. Download and verify frozen results before local processing; never put data rows in chat. Check truncated, row count, column units and timezone before analysis. Never infer full-dataset totals or completeness from truncated inputs; repeat these scope limits, units and timezone in every generated report/table. If a frozen input expires, report input expired; do not silently requery and replace it. A separately authorized bounded aggregate query may create a new input with its own provenance, never overwrite or represent it as the expired snapshot. Submit generated artifacts using artifacts.stage (name, mediaType, role, sha256, inputResultIds, bytesBase64), then artifacts.commit (commandId, summary, artifactIds, inputs, runtimeManifestSha256, limitations) with their ids and exact input provenance from manifest.artifact. Do not write Office documents directly; return conclusions and committed artifact references. Runtime manifest SHA-256: '+(runtimeManifestSha256??'unavailable; report missing runtime evidence')+'. Allowed inputs: '+JSON.stringify(data.grant.inputs)+'.\n':'')+
           JSON.stringify({instruction:input.instruction,context:input.context??'',...(input.dataInputs?{dataInputs:input.dataInputs}:{})}))
       })
+      onProgress?.({kind:'status',text:'Collecting task results'})
       const outputs:string[]=[]
       let bytes=0
       async function collect(dir:string,depth=0):Promise<void> {

@@ -4,7 +4,7 @@ import {fileURLToPath} from 'node:url'
 import {mkdir} from 'node:fs/promises'
 import {expect} from '@playwright/test'
 import {launchTestBrowser} from '../helpers/browser.mjs'
-import {accountAction, settingsTab, closeWorkspaceDialog} from '../helpers/workspace-ui.mjs'
+import {accountAction, settingsTab} from '../helpers/workspace-ui.mjs'
 import {fileFixture} from '../helpers/files.mjs'
 import {password} from '../helpers/identity.mjs'
 import {buildLocalApp} from '../../server/src/app.ts'
@@ -18,9 +18,7 @@ test('original Settings changes password with real session rotation and revokes 
  await page.goto(origin);await login(password);await expect(page.locator('.home')).toBeVisible()
  const oldCookie=(await context.cookies()).find(c=>c.name==='__Host-dyoffice-session').value
  await accountAction(page,'个人设置');const dialog=page.getByRole('dialog')
- // Real layout assertion: labels of different lengths share the original flexible label column.
- // Keep the original entrance motion. Sequential boundingBox reads sample different
- // scale(.99)->scale(1) frames; await finite animations and read all rectangles atomically.
+ // Labels of different lengths must leave the stacked inputs aligned and equally wide.
  for(const label of ['当前密码','新密码','确认新密码'])await expect(dialog.getByLabel(label,{exact:true})).toBeVisible()
  await dialog.evaluate(async element=>{await document.fonts.ready;await Promise.all(element.getAnimations({subtree:true}).filter(animation=>Number.isFinite(animation.effect?.getComputedTiming().endTime)).map(animation=>animation.finished.catch(()=>{})))})
  const boxes=await dialog.locator('#local-current-password, #local-new-password, #local-confirm-password').evaluateAll(inputs=>inputs.map(input=>{const {x,width}=input.getBoundingClientRect();return {x,width}}))
@@ -39,7 +37,7 @@ test('original Settings changes password with real session rotation and revokes 
  // The retained original settings UI can still write with the replacement CSRF.
  await settingsTab(dialog, '通用偏好');await expect(dialog.getByLabel('文档作者', {exact:true})).toBeEnabled();await dialog.getByLabel('文档作者', {exact:true}).fill('After password rotation')
  const saved=page.waitForResponse(r=>r.url().endsWith('/api/v1/preferences')&&r.request().method()==='PUT');await dialog.getByRole('button',{name:'保存个人偏好',exact:true}).click();assert.equal((await saved).status(),200)
- await closeWorkspaceDialog(dialog);await accountAction(page,'退出登录');await expect(page.getByLabel('用户名',{exact:true})).toBeVisible()
+ await dialog.getByRole('button',{name:'关闭个人设置',exact:true}).click();await expect(dialog).not.toBeVisible();await accountAction(page,'退出登录');await expect(page.getByLabel('用户名',{exact:true})).toBeVisible()
  await login(next);await expect(page.locator('.home')).toBeVisible()
  assert.deepEqual(await page.evaluate(()=>[...Object.keys(localStorage),...Object.keys(sessionStorage)].filter(k=>/password|token|session/i.test(k))),[])
 })

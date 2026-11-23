@@ -98,7 +98,7 @@ export interface ImageSize {
   h: number
 }
 
-/** Pixel size from a PNG IHDR or the first JPEG SOF frame header; undefined for other formats. */
+/** Pixel size from PNG, JPEG or BMP headers. */
 export function imageSizeFromBytes(b: Uint8Array): ImageSize | undefined {
   if (b.length < 24) return undefined
   if (b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47) {
@@ -106,6 +106,21 @@ export function imageSizeFromBytes(b: Uint8Array): ImageSize | undefined {
     return sizeOrUndefined(u32(b, 16), u32(b, 20))
   }
   if (b[0] === 0xff && b[1] === 0xd8) return jpegSize(b)
+  if (b[0] === 0x42 && b[1] === 0x4d) return bmpSize(b)
+  return undefined
+}
+
+function bmpSize(b: Uint8Array): ImageSize | undefined {
+  const view = new DataView(b.buffer, b.byteOffset, b.byteLength)
+  const headerSize = view.getUint32(14, true)
+  const pixelOffset = view.getUint32(10, true)
+  if (pixelOffset < 14 + headerSize || pixelOffset >= b.byteLength) return undefined
+  if (headerSize === 12 && view.getUint16(22, true) === 1) {
+    return sizeOrUndefined(view.getUint16(18, true), view.getUint16(20, true))
+  }
+  if (headerSize >= 40 && view.getUint16(26, true) === 1) {
+    return sizeOrUndefined(view.getInt32(18, true), Math.abs(view.getInt32(22, true)))
+  }
   return undefined
 }
 

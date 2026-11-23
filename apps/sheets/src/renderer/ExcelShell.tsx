@@ -240,6 +240,7 @@ function ToolSymbol({ symbol }: { readonly symbol: string }): React.JSX.Element 
 }
 
 interface ExcelShellProps {
+  readonly assistantWorkspace?: import('@genoffice/ui').AssistantWorkspace | undefined
   readonly modelPicker?: React.ReactNode
   readonly assistantAgents?: readonly import('@genoffice/ui').AssistantParticipant[] | undefined
   readonly onManageAgents?: (() => void) | undefined
@@ -314,7 +315,11 @@ interface ExcelShellProps {
   /// Save As remains available for a clean workbook, but requires a real
   /// file-backed session (the in-memory demo workbook has nowhere to copy).
   readonly canSaveAs: boolean
+  readonly canNameWithAi?: boolean
   readonly onSaveAs: () => void
+  readonly saveDownload?: React.ReactNode
+  readonly fileMenu?: React.ReactNode
+  readonly externalLinkSourceActions?: boolean
   /** Ask the model for a name, then open Save As with it prefilled */
   readonly onNameWithAi: () => void
   /// QAT redo (workbook history, same path as the app menu's ⇧⌘Z); undo
@@ -487,6 +492,7 @@ const PIVOT_MODEL_ERRORS: Record<PivotModelError, StringKey> = {
 }
 
 export function ExcelShell({
+  assistantWorkspace,
   modelPicker,
   assistantAgents,
   onManageAgents,
@@ -572,7 +578,11 @@ export function ExcelShell({
   canSave,
   onSave,
   canSaveAs,
+  canNameWithAi = canSaveAs,
   onSaveAs,
+  saveDownload,
+  fileMenu,
+  externalLinkSourceActions = true,
   onNameWithAi,
   onRedo,
   canUndo,
@@ -610,6 +620,11 @@ export function ExcelShell({
     assistantAvailable && aiPanelInitiallyOpen('ai-sheets-show-ai'),
   )
   // the sidebar switch is a soft hide; it closes the panel when it turns off
+  useEffect(()=>{
+    const show=()=>setIsCopilotOpen(true)
+    window.addEventListener('dyoffice:open-handoff-assistant',show)
+    return ()=>window.removeEventListener('dyoffice:open-handoff-assistant',show)
+  },[])
   const aiSidebarEnabled = useAiSidebarEnabled(setIsCopilotOpen)
   // Native listener, delegated because each ribbon tab mounts its own `.ribbon`,
   // and because React registers wheel as passive, which forbids preventDefault.
@@ -914,6 +929,7 @@ export function ExcelShell({
           aria-label={t('appScopeWorkbook')}
           onDoubleClick={collapse.onTabsDoubleClick}
         >
+          {fileMenu}
           <button
             type="button"
             className="qa-btn"
@@ -924,7 +940,7 @@ export function ExcelShell({
           >
             <SaveIcon />
           </button>
-          <button
+          {saveDownload ?? <button
             type="button"
             className="qa-btn"
             data-tip={saveAsTitle}
@@ -933,13 +949,13 @@ export function ExcelShell({
             onClick={onSaveAs}
           >
             <SaveAsIcon />
-          </button>
+          </button>}
           <button
             type="button"
             className="qa-btn qa-name-with-ai"
             data-tip={t('aiNameFile')}
             aria-label={t('aiNameFile')}
-            disabled={!canSaveAs}
+            disabled={!canNameWithAi}
             onClick={onNameWithAi}
           >
             <GensparkMark />
@@ -997,6 +1013,7 @@ export function ExcelShell({
         </nav>
 
         <Ribbon
+          externalLinkSourceActions={externalLinkSourceActions}
           activeTab={activeTab}
           selectionFormat={selectionFormat}
           formatPainterActive={formatPainterActive}
@@ -1041,6 +1058,7 @@ export function ExcelShell({
       {/* AI panel docks on the left, full height under the ribbon (unified with docs) */}
       <div className="sheet-body">
         {assistantAvailable && <AiChatPanel
+          assistantWorkspace={assistantWorkspace}
           modelPicker={modelPicker}
           assistantAgents={assistantAgents}
           onManageAgents={onManageAgents}
@@ -1990,6 +2008,7 @@ function LinkDialog({
 
 function Ribbon({
   activeTab,
+  externalLinkSourceActions,
   selectionFormat,
   formatPainterActive,
   sheetHasContent,
@@ -2017,6 +2036,7 @@ function Ribbon({
   onIsSelectionInPivot,
 }: {
   readonly activeTab: RibbonTab
+  readonly externalLinkSourceActions?: boolean
   readonly selectionFormat: SelectionFormat | null
   readonly formatPainterActive: boolean
   readonly sheetHasContent: boolean
@@ -3062,7 +3082,7 @@ function Ribbon({
           <RibbonButton
             large
             label={t('appLinksPanel')}
-            detail={t('appLinksPanelDetail')}
+            detail={externalLinkSourceActions ? t('appLinksPanelDetail') : ''}
             symbol="🔗"
             onClick={() => onCommand('external-links-panel')}
           />
@@ -3556,7 +3576,7 @@ function Ribbon({
             <GensparkMark size={26} />
           </span>
           <span>
-            <strong>Genspark AI</strong>
+            <strong>AI 助手</strong>
           </span>
         </button>
         <button

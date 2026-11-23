@@ -13,11 +13,14 @@ export async function createHarnessDataMailbox(app:FastifyInstance,taskId:string
   const directory=await mkdtemp(join(tmpdir(),'office-data-'))
   const prefix='/api/v1/agents/tasks/'+taskId+'/data/'
   let stopped=false,polling=false
-  const active=new Set<Promise<void>>()
+  const active=new Set<Promise<void>>(),inFlight=new Set<string>()
   async function processRequest(name:string) {
     const id=name.slice(0,-8),processing=join(directory,id+'.processing')
+    // Claim the request; if it is already gone another worker owns it, so do not
+    // answer for it or remove its .processing file.
+    try {await rename(join(directory,name),processing)}
+    catch {return}
     try {
-      await rename(join(directory,name),processing)
       const file=await open(processing,constants.O_RDONLY|constants.O_NOFOLLOW)
       let envelope:{path:string;method:string;headers:Record<string,string>;body?:string}
       try {
@@ -58,10 +61,12 @@ export async function createHarnessDataMailbox(app:FastifyInstance,taskId:string
     polling=true
     void readdir(directory).then(names=>{
       if(stopped)return
-      for(const name of names.filter(name=>/^[0-9a-f-]{36}\.request$/.test(name)).slice(0,16)) {
+      for(const name of names.filter(name=>/^[0-9a-f-]{36}\.request$/.test(name)&&!inFlight.has(name)).slice(0,16)) {
         if(active.size>=2)break
+        // A later scan can still list a request whose rename has not finished.
+        inFlight.add(name)
         const operation=processRequest(name);active.add(operation)
-        void operation.finally(()=>active.delete(operation))
+        void operation.finally(()=>{active.delete(operation);inFlight.delete(name)})
       }
     }).catch(()=>{}).finally(()=>{polling=false})
   },25)

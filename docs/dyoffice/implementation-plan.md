@@ -269,11 +269,13 @@ docs/dyoffice/               当前计划及 inventory/ evidence/ adr/
 - [x] 测试公式而非缓存值、日期/百分比、原始数值及单位、命名区域、图表、批量 AI 撤销、未知部件保留。
 - [x] E2E RED，并保存 fixture 原件哈希。
 - [x] 浏览器复用 Univer 与已有工具；必须的原生操作走 T08，禁止用不同库偷偷替代保真链。
-- [ ] E2E 与 `@genoffice/xlsx-gateway`、受影响 sheets/native 回归 GREEN；外部 Excel 复开核验。
+- [ ] E2E 与 `@genoffice/xlsx-gateway`、受影响 sheets/native 回归 GREEN，下载成品并在 Web 重开核验。
 - [ ] 提交 `feat(sheets): adapt native workbook editing to web`。
 
 
-当前草稿 PR：[#30](https://github.com/ClassesOver/DyOffice/pull/30)。六个真实浏览器场景与完整原生专项套件已通过；最终审查和外部 Excel 复开仍未完成，T09 不标记闭环。启动与证据见 [T09 runtime](evidence/t09-runtime.md)。
+当前草稿 PR：[#30](https://github.com/ClassesOver/DyOffice/pull/30)。六个真实浏览器场景与完整原生专项套件已通过；最终审查仍未完成，T09 暂保留待办状态。启动与证据见 [T09 runtime](evidence/t09-runtime.md)。
+
+后续复验覆盖无 Docker 的 systemd 原生保存、外链断开和回执恢复。独立 Calc 可重开样本并另存，核对了公式和值。详见 [四格式对齐验收](evidence/genoffice-web-parity.md)。
 
 ### T10 PPTX 原生 Web 适配
 
@@ -284,8 +286,10 @@ docs/dyoffice/               当前计划及 inventory/ evidence/ adr/
 - [ ] 测试文本框、图片、原生图形、页序、母版关系、可编辑对象以及多步撤销。
 - [ ] E2E RED，拒绝截图拼接或 HTML 替代原生 PPTX 的假通过。
 - [ ] 复用画布和操作链，隔离字体/预览/导出依赖，接入 T06 保存。
-- [ ] 原生下载、重开、上游受影响回归 GREEN，外部 PowerPoint 复开。
+- [ ] 核对原生下载与 Web 重开，上游受影响回归 GREEN。
 - [ ] 提交 `feat(slides): preserve native deck editing in browser`。
+
+固定候选 `d90ea092` 的 PPTX 桥接、保存服务和隔离原生会话专项共 74 项通过，覆盖原生对象、结构调整、撤销和成品重开。浏览器成品已通过 LibreOffice Impress 复开与另存。正式运行时资质仍待验。详见 [四格式对齐验收](evidence/genoffice-web-parity.md)。
 
 ### T11 PDF 原生 Web 适配
 
@@ -293,7 +297,9 @@ docs/dyoffice/               当前计划及 inventory/ evidence/ adr/
 
 **接口：** `mountPdfEditor()`，能力区分阅读、批注、文本修改、页操作和导出。
 
-**状态（2026-11-16）：** 能力门已区分文本页、扫描页和空白页，并报告未嵌入字体与未验证签名，见 [t11-pdf-capabilities.md](evidence/t11-pdf-capabilities.md)。PDF 页签挂载 PDF.js 阅读页，CSP 不允许 eval 或内联脚本；PDFium WASM 对未改动的导出字节做像素重开校验，见 [t11-pdf-render.md](evidence/t11-pdf-render.md)。批注、改字、调页、脱敏仍被拒绝；覆盖文字不是删除原文；加密文件不栅格化。真实改字和批注写入仍延期。不依赖 T07 的 DOCX 挂载，也不走 T08 worker。
+**当前 Web 入口（2026-11-22）：** 工作区 PDF 统一走 GenOffice 原生编辑器 `/native-pdf/`，原工作区预览及开发原型 `/pdf.html` 已移除。现有 Chromium 定向证据覆盖原文与批注修改、页序和表单、OCR、保存重开，以及经人工确认写入独立脱敏副本。受保护结构的只读行为已有回归。原生签名面板已接入 GenOffice 验证器，验证了自签样本和签名覆盖内容被更改后的结果。Poppler 已复开成品并核对文本、图片像素、导入页和脱敏副本。证书签署及其他外部阅读器样本仍待验，详见 [四格式对齐验收](evidence/genoffice-web-parity.md)。
+
+**历史状态（2026-11-16）：** 能力门已区分文本页、扫描页和空白页，并报告未嵌入字体与未验证签名，见 [t11-pdf-capabilities.md](evidence/t11-pdf-capabilities.md)。PDF 页签挂载 PDF.js 阅读页，CSP 不允许 eval 或内联脚本；PDFium WASM 对未改动的导出字节做像素重开校验，见 [t11-pdf-render.md](evidence/t11-pdf-render.md)。批注、改字、调页、脱敏仍被拒绝；覆盖文字不是删除原文；加密文件不栅格化。真实改字和批注写入仍延期。不依赖 T07 的 DOCX 挂载，也不走 T08 worker。
 
 - [ ] 测试真实文本流修改、批注、页序、密码文件、签名失效提示、缺字/字体、扫描页能力限制。
 - [ ] E2E RED；覆盖文字不等同于删除原文的安全性，脱敏能力单独标记。

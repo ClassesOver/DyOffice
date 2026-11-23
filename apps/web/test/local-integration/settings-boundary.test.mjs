@@ -51,7 +51,7 @@ test('local settings routes enforce cookies, admin authority, CSRF and public sa
   const saved = await f.configApp.inject({ method: 'PUT', url: '/api/v1/admin/config', headers: { ...f.headers(), 'if-match': '"0"' }, payload: { patch: { upserts: [{ ...entry, apiKey: sentinel }], defaults: { chat: entry.id } } } })
   assert.equal(saved.statusCode, 200); assert.equal(saved.headers.etag, '"1"'); assert.equal(saved.json().entries[0].hasKey, true)
   const publicResult = await f.configApp.inject({ method: 'GET', url: '/api/v1/settings/public', headers: f.headers(f.alice.token) })
-  assert.deepEqual(publicResult.json(), { revision: 1, catalog: [{ id: 'primary', kind: 'chat', providerId: 'openai', label: 'Primary', model: 'gpt-6-luna' }], defaults: { chat: 'primary' } })
+  assert.deepEqual(publicResult.json(), { revision: 1, catalog: [{ id: 'primary', kind: 'chat', providerId: 'openai', label: 'Primary', model: 'gpt-6-luna', ready: true }], defaults: { chat: 'primary' } })
   assert.equal(publicResult.headers['cache-control'], 'private, no-store')
   assert.doesNotMatch(saved.body + publicResult.body, new RegExp(sentinel + '|ciphertext'))
   assert.doesNotMatch(publicResult.body, /provider\.example/)

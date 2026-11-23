@@ -7,9 +7,11 @@ import type {
   WorkspaceSourceResultPage, WorkspaceSourceResultDownload,
 } from '../../../../../../packages/web-contracts/src/source-results.ts'
 import { createQuerySnapshot } from './provenance.ts'
+import { SQL_RESULT_MAX_BYTES } from './config.ts'
+import { withAssistantErrorCode } from '../../../../../../packages/web-contracts/src/assistant-errors.ts'
 
 const error = (statusCode = 400) => Object.assign(new Error('Workspace source result unavailable'), { statusCode })
-const hardLimits = Object.freeze({ maxSavedBytes: 64 * 1024 * 1024, maxSavedResults: 64, maxPendingBytes: 8 * 1024 * 1024, maxPendingResults: 8, maxSnapshotBytes: 1_000_000, pendingTtlMs: 15 * 60_000 })
+const hardLimits = Object.freeze({ maxSavedBytes: 256 * 1024 * 1024, maxSavedResults: 64, maxPendingBytes: 32 * 1024 * 1024, maxPendingResults: 8, maxSnapshotBytes: SQL_RESULT_MAX_BYTES, pendingTtlMs: 15 * 60_000 })
 export interface WorkspaceSourceResultsOptions {
   transactions: PrincipalTransactions
   maxSavedBytes?: number
@@ -90,9 +92,11 @@ function storedSnapshot(row: Row) {
  * Explicit save freezes one command receipt permanently. Saved evidence is
  * personal workspace data even after the source is disabled/logically deleted;
  * every operation still requires a live owner session. Pending evidence also
- * requires its original session and an enabled, nondeleted published source.
+ * requires its original session and an enabled, nondeleted saved source.
  * This service never calls a connector, executes SQL from input, or charges T05
- * object storage bytes. No remove/rename API: no reuse of result/command IDs.
+ * object storage bytes. Saved results can be removed by their owner to free the
+ * workspace quota; there is no rename, and result IDs are random UUIDs, so a
+ * removed ID is never reused (a replayed save command then answers 404).
  */
 export function createWorkspaceSourceResults(options: WorkspaceSourceResultsOptions) {
   const { transactions } = options
@@ -120,10 +124,13 @@ export function createWorkspaceSourceResults(options: WorkspaceSourceResultsOpti
     const keys = [p.deploymentId, p.userId, sourceId]
     // Source mutations take UPDATE on this permanent root. Hold SHARE through
     // commit so disabled/deleted state cannot race capture/save/pending access.
-    const source = (await c.query('SELECT enabled,published_revision FROM data_sources WHERE deployment_id=$1 AND owner_id=$2 AND source_id=$3 AND deleted_at IS NULL FOR SHARE', keys)).rows[0]
+    const source = (await c.query('SELECT enabled,draft_version FROM data_sources WHERE deployment_id=$1 AND owner_id=$2 AND source_id=$3 AND deleted_at IS NULL FOR SHARE', keys)).rows[0]
     if (!source) throw error(404)
     if (!source.enabled) throw error(409)
-    if (source.published_revision === null || !(await c.query('SELECT 1 FROM data_source_versions WHERE deployment_id=$1 AND owner_id=$2 AND source_id=$3 AND revision=$4', [...keys, sourceVersion])).rowCount) throw error(404)
+    if (sourceVersion > source.draft_version) throw error(404)
+    // A pending snapshot is tied to the connection scope at query time.
+    // Saved materializations have their own owner authorization.
+    if (sourceVersion !== source.draft_version) throw error(409)
   }
   async function readable(c: PoolClient, p: BusinessPrincipal, workspaceId: string, id: string): Promise<Row> {
     const row = (await c.query<Row>(`SELECT ${metadata},snapshot FROM workspace_source_results WHERE deployment_id=$1 AND owner_id=$2 AND workspace_id=$3 AND result_id=$4 AND (state='saved' OR (state='pending' AND session_id=$5 AND expires_at>clock_timestamp()))`, [...scope(p, workspaceId), id, p.sessionId])).rows[0]
@@ -141,7 +148,7 @@ export function createWorkspaceSourceResults(options: WorkspaceSourceResultsOpti
     const used = (await c.query('SELECT count(*) AS count,COALESCE(sum(size_bytes),0) AS bytes FROM workspace_source_results WHERE deployment_id=$1 AND owner_id=$2 AND workspace_id=$3 AND state=$4', [...scope(p, workspaceId), state])).rows[0]
     const maxCount = state === 'saved' ? limits.maxSavedResults : limits.maxPendingResults
     const maxBytes = state === 'saved' ? limits.maxSavedBytes : limits.maxPendingBytes
-    if (Number(used.count) >= maxCount || Number(used.bytes) + bytes > maxBytes) throw error(413)
+    if (Number(used.count) >= maxCount || Number(used.bytes) + bytes > maxBytes) throw withAssistantErrorCode(error(413), 'RESULT_QUOTA_EXCEEDED')
   }
   return Object.freeze({
     async capture(token: string, input: QuerySnapshot, queryHash: string): Promise<WorkspaceSourceResultCapture> {
@@ -181,6 +188,15 @@ export function createWorkspaceSourceResults(options: WorkspaceSourceResultsOpti
           WHERE deployment_id=$1 AND owner_id=$2 AND workspace_id=$3 AND result_id=$4 AND state='pending' AND session_id=$8 AND expires_at>clock_timestamp() RETURNING ${metadata}`, [...keys, id, name, commandId, paramsHash, p.sessionId])).rows[0]
         if (!updated) throw error(404)
         return artifact(updated)
+      })
+    },
+    /** Delete one saved result of the caller's workspace; it no longer counts against the saved quota. */
+    async remove(token: string, input: unknown): Promise<void> {
+      const value = object(input, ['resultId']), id = uuid(value.resultId)
+      return access(token, async (c, p, workspaceId) => {
+        await lockWorkspace(c, p, workspaceId)
+        const removed = await c.query(`DELETE FROM workspace_source_results WHERE deployment_id=$1 AND owner_id=$2 AND workspace_id=$3 AND result_id=$4 AND state='saved'`, [...scope(p, workspaceId), id])
+        if (!removed.rowCount) throw error(404)
       })
     },
     async list(token: string, input: unknown = {}): Promise<WorkspaceSourceResultList> {

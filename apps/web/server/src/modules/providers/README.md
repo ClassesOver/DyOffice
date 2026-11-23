@@ -1,5 +1,30 @@
 # Provider turn coordinator and opt-in HTTP adapter
 
+## SaaS shared models
+
+The local account entry point now uses `{mode: 'shared'}` by default. SaaS
+administrators save provider, model, API key and base URL in global settings;
+authorized personal accounts use that same configuration. No external profile
+file or per-user/per-revision credit provisioning is required for this mode.
+Configuration revisions remain internal concurrency and revocation fences.
+
+`shared_provider_catalog()` returns current enabled chat entries with saved
+credentials. `shared_provider_dispatch()` commits a session-bound, unique turn
+receipt before networking; `shared_provider_secret()` releases the encrypted
+credential once for that receipt. Runtime roles receive only function EXECUTE,
+and cannot read or change the dispatch table directly. A failed/ambiguous turn
+is never automatically retried. Shared mode does not represent per-user billing.
+
+The server resolves a public HTTPS destination from administrator-saved metadata
+and uses the existing DNS-pinned TLS transport. This path currently implements
+OpenAI-compatible Chat Completions (including DeepSeek); native Anthropic,
+Gemini and Responses protocols require their corresponding transport adapters.
+The administrator's **测试连接** action sends a short real request through this
+same path and returns only success/failure. Browser code never receives API keys.
+
+The older explicitly supplied `{profiles: [...]}` mode below retains its existing
+separate per-user budget and deployment provisioning behavior.
+
 The local account runtime mounts personal assistant routes only when explicitly
 given a trusted profile list. The synthetic and fixed administrator probes remain
 separate. Tests use synthetic credentials and a simulated upstream.

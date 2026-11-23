@@ -47,3 +47,10 @@ test('entry reader validates metadata before recording open and rechecks bound s
  revoked=true;await expect(readOpenDocument(workspace,{docx:'editable'},id)).rejects.toMatchObject({code:'stale_session'})
  metadata.file.fileId='foreign';calls.length=0;await expect(readOpenDocument(workspace,{},id)).rejects.toThrow();expect(calls).toEqual(['GET'])
 })
+test('PDF opens the native editor only when the workspace enables it',async()=>{
+ const {resolvedDocument}=await import('../../src/shell/document-entry-reader')
+ const id='11111111-1111-4111-8111-111111111111',revision='revision-1'
+ const metadata={name:'A.pdf',format:'pdf',file:{fileId:id,revision},downloadEndpoint:`/api/v1/files/${id}/content?revision=${revision}`}
+ expect(()=>resolvedDocument({pdf:'editable'},id,metadata)).toThrow('当前 PDF 编辑器未启用')
+ expect(resolvedDocument({pdf:'editable',pdfEditor:'editable'},id,metadata).src).toBe(`/native-pdf/?fileId=${id}`)
+})

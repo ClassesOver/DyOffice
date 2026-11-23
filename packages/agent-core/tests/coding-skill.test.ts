@@ -1,7 +1,19 @@
 import {describe, expect, it} from 'vitest'
 import {createCodingSkill} from '../src/coding-skill'
 
-describe('optional coding delegation', () => {
+describe('Office team delegation', () => {
+  it('explains the delivery mode on the optional dataInputs parameter',async()=>{
+    const seen:unknown[]=[]
+    const skill=createCodingSkill({run:async input=>{seen.push(input);return {summary:'ok',output:''}}})
+    const tool=skill.tools.find(item=>item.name==='delegate_agent_task')
+    expect(tool?.inputSchema).toMatchObject({required:['instruction'],properties:{
+      dataInputs:{description:expect.stringMatching(/even with empty arrays.*committed/i)},
+    }})
+    for(const input of [{instruction:'write parser'},{instruction:'publish a saved chart',dataInputs:{sourceIds:[],resultIds:[]}}]) {
+      await skill.executeTool({id:'a',name:'delegate_agent_task',input})
+    }
+    expect(seen).toEqual([{instruction:'write parser'},{instruction:'publish a saved chart',dataInputs:{sourceIds:[],resultIds:[]}}])
+  })
   it('delegates only when invoked and returns errors as tool results', async () => {
     let calls = 0
     const skill = createCodingSkill({run: async input => {calls++; expect(input).toEqual({instruction:'write parser',context:'CSV columns'}); return {summary:'Parser tested',output:'parse.ts'}}})
@@ -31,4 +43,12 @@ describe('optional coding delegation', () => {
     const result=await skill.executeTool({id:'a',name:'delegate_agent_task',input:{instruction:'code'}},controller.signal)
     expect(result.isError).toBe(true)
   })
+})
+
+it('runtime failures do not claim that an available agent is unavailable',async()=>{
+ const skill=createCodingSkill({run:async()=>{throw Error('Harness task failed. Check server diagnostics.')}})
+ const result=await skill.executeTool({id:'failure',name:'delegate_agent_task',input:{instruction:'Analyze'}})
+ expect(result.isError).toBe(true)
+ expect(result.output).toBe('Harness task failed. Check server diagnostics.')
+ expect(result.summary).toBe('Delegated task did not complete')
 })

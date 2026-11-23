@@ -41,4 +41,10 @@ The test-connection endpoint now reports `READONLY_ROLE_REQUIRED` for a 403 and 
 | Safe inherited read-only role expansion | Not implemented; unresolved roles fail closed |
 | Production release acceptance | Not claimed |
 
+## 2026-11-20 recheck through DyOffice HTTP routes
+
+The supplied StarRocks connection for `rj` was saved in two disposable local DyOffice test deployments. With TLS required, the connection test returned `SOURCE_TLS_UNSUPPORTED` and directory discovery returned HTTP 502. With an exact, temporary plaintext allowance for the same private target, the connection test returned `READONLY_ROLE_REQUIRED` and discovery returned HTTP 403. No source data was read, no customer settings or privileges were changed, and no persistent plaintext allowance was added. This recheck validates rejection; it does not validate selecting tables on the customer database.
+
+After the connection defaults changed, another disposable deployment with no database targets configured reached the same StarRocks server over the default ordinary connection. The test route returned `READONLY_ROLE_REQUIRED` and directory discovery returned HTTP 403. At this default, the read-only login remains the blocker for testing table selection. Targets previously configured for TLS still require it.
+
 References used to verify the server dialect: StarRocks official `branch-3.5` documentation, `docs/en/sql-reference/sql-statements/account-management/SHOW_GRANTS.md`; official generate_series documentation. Customer acceptance remains conditional on a properly scoped source account and an approved transport configuration.

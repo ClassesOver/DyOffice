@@ -1865,7 +1865,7 @@ export interface SlidesApi {
     aspectRatio?: string
     imageSize?: string
     transparentBackground?: boolean
-  }) => Promise<{ url?: string; error?: string }>
+  }) => Promise<{ url?: string; previewUrl?: string; error?: string }>
   /** gsk (Genspark) media analysis: image/audio/video content understanding, returns analysis text */
   analyzeMedia: (op: {
     mediaUrls: string[]

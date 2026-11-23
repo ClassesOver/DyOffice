@@ -121,13 +121,13 @@ test('ordinary File API configuration retains local-dev storage for one service 
   const { configuredObjectStore } = await import('../../server/src/storage/config.ts')
   const directory = await mkdtemp(join(tmpdir(), 'dyoffice-local-config-'))
   t.after(() => rm(directory, { recursive: true, force: true }))
-  const storage = await configuredObjectStore({ DYOFFICE_FILE_API: 'experimental', DYOFFICE_OBJECT_STORE: 'local-dev', DYOFFICE_OBJECT_DIRECTORY: directory })
+  const storage = await configuredObjectStore({ DYOFFICE_OBJECT_STORE: 'local-dev', DYOFFICE_OBJECT_DIRECTORY: directory })
   t.after(() => storage.close())
   const reference = await storage.objectStore.putImmutable(key(), hello)
   assert.deepEqual(await storage.objectStore.readVerified(reference), hello)
 })
 
-test('file storage configuration requires explicit experimental backend and refuses unsafe endpoints', async () => {
+test('file storage configuration requires a backend and refuses unsafe endpoints', async () => {
   const { configuredObjectStore } = await import('../../server/src/storage/config.ts')
   assert.equal((await configuredObjectStore({})).objectStore,undefined)
   for (const environment of [

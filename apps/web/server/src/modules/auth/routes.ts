@@ -85,16 +85,16 @@ export function registerAuthRoutes(app: FastifyInstance, { sessions, csrf, throt
     reply.header('Set-Cookie', [serializeCookie(SESSION_COOKIE, replacement)])
     return { csrfToken: csrf.sessionToken(replacement) }
   })
-  app.post<{ Body: { token: string; purpose: 'activate' | 'reset'; password: string } }>('/api/v1/auth/password-action', {
+  app.post<{ Body: { token: string; purpose?: 'activate' | 'reset'; password: string } }>('/api/v1/auth/password-action', {
     bodyLimit: 4096, config: { rateLimit: { max: 60, timeWindow: 60_000 } },
-    schema: { body: { type: 'object', additionalProperties: false, required: ['token', 'purpose', 'password'], properties: { token: { type: 'string', pattern: '^[A-Za-z0-9_-]{43}$' }, purpose: { type: 'string', enum: ['activate', 'reset'] }, password: { type: 'string', maxLength: 1024 } } } },
+    schema: { body: { type: 'object', additionalProperties: false, required: ['token', 'password'], properties: { token: { type: 'string', pattern: '^[A-Za-z0-9_-]{43}$' }, purpose: { type: 'string', enum: ['activate', 'reset'] }, password: { type: 'string', maxLength: 1024 } } } },
   }, async (request, reply) => {
     const auth = cookies(request)
     if (auth.session) throw authError(409)
     await csrf.consumeLogin(request, auth.login)
-    const ownerId = await users.actionIdentity(request.body.token, request.body.purpose)
-    const admission = await throttle.reserve(ownerId, request.ip, { requestId: request.id })
-    await users.redeemAction(request.body.token, request.body.purpose, request.body.password, { requestId: request.id, ...admission })
+    const action = await users.resolveAction(request.body.token, request.body.purpose)
+    const admission = await throttle.reserve(action.user_id, request.ip, { requestId: request.id })
+    await users.redeemAction(request.body.token, action.purpose, request.body.password, { requestId: request.id, ...admission })
     reply.header('Set-Cookie', [serializeCookie(LOGIN_COOKIE, '', 0)])
     return reply.code(204).send()
   })

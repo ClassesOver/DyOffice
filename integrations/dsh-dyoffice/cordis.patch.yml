@@ -1,0 +1,3 @@
+- insert:
+    - id: dyoffice-preview
+      name: '@local/dsh-dyoffice'

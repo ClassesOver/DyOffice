@@ -12,6 +12,7 @@ export const ms = {
   aiQcPageOk: 'Halaman {n}: susun atur baik',
   aiQcPageFixed: 'Halaman {n}: {summary}',
   aiQcPageFixedDefault: 'masalah susun atur dibaiki',
+  aiQcPageRollbackFailed: "Halaman {n}: pembetulan memburukkan susun atur; pemulihan belum disahkan. Semak halaman atau buat asal perubahan.",
   aiQcPageReverted: 'Halaman {n}: pembaikan automatik memburukkan hasil — diundurkan',
   aiQcPageFailed: 'Halaman {n}: semakan gagal ({error})',
   aiQcPageSkipped: 'Halaman {n}: semakan susun atur automatik dilangkau',

@@ -1,4 +1,4 @@
-import type { AiPanelPrefs } from '@genoffice/ui'
+import type { AiPanelPrefs } from '@genoffice/ui/ai-panel-prefs'
 import type { Lang } from '@genoffice/i18n'
 import type { AiSettings, AiStreamChunk, AiStreamRequest } from '@genoffice/ai-provider'
 import type { PrintDuplex, PrintJobOptions, PrinterInfo } from '@genoffice/electron-utils/print-job'
@@ -642,11 +642,20 @@ export interface PdfOcrLine {
 }
 
 /** Live-preview render request: a page region with some images removed */
+export type PdfHostImageBake = { page: number; image_number: number } & (
+  | { op: 'flip_image'; axis: 'horizontal' | 'vertical' }
+  | { op: 'crop_image'; left?: number; top?: number; right?: number; bottom?: number }
+  | { op: 'set_image_opacity'; opacity: number }
+  | { op: 'remove_image_background'; tolerance?: number }
+)
+
 export interface PagePreviewRequest {
   path: string
   pageIndex: number
   /** Images to erase, addressed by their listed rects (PDF user space) */
   excludeRects: [number, number, number, number][]
+  /** Web assistant drafts on this page, applied before drawing the erase patch. */
+  imageBakes?: readonly PdfHostImageBake[]
   /** Saved annotations to erase. Full identity data is required because object numbers
       may be stale after a save rewrites the PDF. */
   excludeAnnots?: AnnotDeleteInput[]
@@ -760,6 +769,10 @@ export interface PdfAttachmentOps {
   remove?: string[]
 }
 
+export type PdfPageGeometryOperation =
+  | { op: 'setPageSize'; width: number; height: number }
+  | { op: 'cropPages'; pages: readonly number[]; left: number; top: number; right: number; bottom: number }
+
 export interface SavePdfRequest {
   path: string
   /**
@@ -864,7 +877,7 @@ export type SavePdfResult =
       skippedTextInserts?: TextInsertFailure[]
       skippedImageEdits?: ImageEditFailure[]
     }
-  | { ok: false; error: string }
+  | { ok: false; error: string; unconfirmed?: boolean }
 
 /** Dry-run matching for pending text edits against the file on disk (no mutation) */
 export interface ValidateTextEditsRequest {

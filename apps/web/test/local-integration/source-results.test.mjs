@@ -39,11 +39,10 @@ async function fixture(t, limits = {}) {
       return result
     } catch (error) { await c.query('ROLLBACK'); throw error } finally { c.release() }
   }
-  f.publish = async (token = f.alice.token, sourceId = 'metrics') => {
+  f.createSource = async (token = f.alice.token, sourceId = 'metrics') => {
     await f.sources.create(token, { sourceId, name: 'Metrics', kind: 'http', config: { timezone: 'Asia/Shanghai' }, secret: 'https://results.example.invalid/data' })
-    await f.sources.publish(token, sourceId, { expectedVersion: 1 })
   }
-  await f.publish()
+  await f.createSource()
   return f
 }
 
@@ -78,7 +77,7 @@ test('pending capture/read is owner/workspace/source/session scoped, defaults to
   }
   await assert.rejects(f.results.capture(f.bob.token, s, queryHash), status(404))
   await assert.rejects(f.results.capture(f.adminSigned.token, s, queryHash), status(404))
-  await f.publish(f.bob.token)
+  await f.createSource(f.bob.token)
   const bob = await f.results.capture(f.bob.token, snapshot({ count: 1 }), queryHash)
   assert.notEqual(bob.workspaceId, captured.workspaceId)
   const rawBob = await f.transactions.withPrincipalTransaction({ kind: 'session', token: f.bob.token }, c => c.query('SELECT result_id FROM workspace_source_results WHERE result_id=$1', [captured.resultId]))
@@ -90,7 +89,7 @@ test('pending capture/read is owner/workspace/source/session scoped, defaults to
   await assert.rejects(f.results.read(f.alice.token, { resultId: captured.resultId, offset: -1 }), status(400))
 })
 
-test('expired or disabled pending results reject read/save; capture verifies current source and published version', async t => {
+test('expired or disabled pending results reject read/save; capture verifies current source and provenance counter', async t => {
   const f = await fixture(t)
   const expired = await f.results.capture(f.alice.token, snapshot({ count: 1 }), queryHash)
   await f.scoped("UPDATE workspace_source_results SET expires_at=clock_timestamp()-interval '1 second' WHERE result_id=$1", [expired.resultId])
@@ -100,10 +99,15 @@ test('expired or disabled pending results reject read/save; capture verifies cur
   await f.sources.save(f.alice.token, 'metrics', { expectedVersion: 1, enabled: false })
   for (const action of [() => f.results.read(f.alice.token, { resultId: active.resultId }), () => f.results.save(f.alice.token, { resultId: active.resultId, name: 'Disabled', commandId: randomUUID() }), () => f.results.capture(f.alice.token, snapshot({ count: 1 }), queryHash)]) await assert.rejects(action(), status(409))
   await f.sources.save(f.alice.token, 'metrics', { expectedVersion: 2, enabled: true })
+  await assert.rejects(f.results.read(f.alice.token, { resultId: active.resultId }), status(409))
+  await assert.rejects(f.results.capture(f.alice.token, snapshot({ count: 1 }), queryHash), status(409))
+  const current = await f.results.capture(f.alice.token, snapshot({sourceVersion:3,count:1}), queryHash)
+  assert.equal(current.sourceVersion,3)
+
   await assert.rejects(f.results.capture(f.alice.token, snapshot({ sourceVersion: 99, count: 1 }), queryHash), status(404))
   await assert.rejects(f.results.capture(f.alice.token, snapshot({ sourceId: 'missing', count: 1 }), queryHash), status(404))
   await f.sources.create(f.alice.token, { sourceId: 'draft-only', name: 'Draft', kind: 'http', config: {}, secret: 'https://results.example.invalid/data' })
-  await assert.rejects(f.results.capture(f.alice.token, snapshot({ sourceId: 'draft-only', count: 1 }), queryHash), status(404))
+  assert.equal((await f.results.capture(f.alice.token, snapshot({ sourceId: 'draft-only', count: 1 }), queryHash)).sourceId, 'draft-only')
 })
 
 test('save is durable across owner sessions, idempotent with frozen receipt and bounded quota, and retains data after source tombstone', async t => {
@@ -122,7 +126,7 @@ test('save is durable across owner sessions, idempotent with frozen receipt and 
   assert.deepEqual(await rowCounts(f), [{ state: 'saved', count: 1, bytes }])
   const other = await f.results.capture(f.alice.token, s, queryHash)
   await assert.rejects(f.results.save(f.alice.token, { ...command, resultId: other.resultId }), status(409))
-  await assert.rejects(f.results.save(f.alice.token, { resultId: other.resultId, name: 'Over quota', commandId: randomUUID() }), status(413))
+  await assert.rejects(f.results.save(f.alice.token, { resultId: other.resultId, name: 'Over quota', commandId: randomUUID() }), error => error.statusCode === 413 && error.code === 'RESULT_QUOTA_EXCEEDED')
   await f.sources.remove(f.alice.token, 'metrics', { expectedVersion: 1 })
   const page = await f.results.read(login.token, { resultId: saved.resultId })
   assert.deepEqual(page.rows, s.rows); assert.equal(page.artifact.state, 'saved')
@@ -138,6 +142,14 @@ test('save is durable across owner sessions, idempotent with frozen receipt and 
   await assert.rejects(f.results.read(f.alice.token, { resultId: other.resultId }), status(404))
   // Data JSONB has an independent logical quota, never T05 object physical bytes.
   assert.equal((await f.scoped('SELECT COALESCE(sum(stored_bytes),0)::integer AS bytes FROM storage_accounts')).rows[0].bytes, 0)
+  // A full quota names its cause, and the owner (only) can free it by removing a saved result.
+  await assert.rejects(f.results.remove(f.bob.token, { resultId: saved.resultId }), status(404))
+  await f.results.remove(login.token, { resultId: saved.resultId })
+  await assert.rejects(f.results.remove(login.token, { resultId: saved.resultId }), status(404))
+  assert.equal((await f.results.list(login.token)).items.length, 0)
+  await assert.rejects(f.results.save(login.token, command), status(404))
+  // The saved quota is free again (saving a pending result needs the source, deleted above).
+  assert.equal((await rowCounts(f)).some(row => row.state === 'saved'), false)
 })
 
 test('parallel capture and save serialize workspace count/byte quotas, duplicate command makes one artifact', async t => {
@@ -204,7 +216,7 @@ test('canonical reconstruction preserves schema order, units, timezone, literal 
   for (let i = 0; i < 2; i++) {
     // Already saved data remains listable after source disabled; make more with
     // another enabled source to prove native keyset paging.
-    if (i === 0) await f.publish(f.alice.token, 'paging')
+    if (i === 0) await f.createSource(f.alice.token, 'paging')
     const result = await f.results.capture(f.alice.token, snapshot({ sourceId: 'paging', count: 1 }), queryHash)
     ids.push((await f.results.save(f.alice.token, { resultId: result.resultId, name: 'Page ' + i, commandId: randomUUID() })).resultId)
   }
@@ -222,7 +234,7 @@ test('capture rejects forged snapshots, oversized snapshots, raw query text and 
   await assert.rejects(f.results.capture(f.alice.token, { ...s, rows: [{ ...s.rows[0], zz_amount: 'wrong type' }] }, queryHash), status(400))
   await assert.rejects(f.results.capture(f.alice.token, { ...s, secret: 'dsn' }, queryHash), status(400))
   await assert.rejects(f.results.capture(f.alice.token, s, 'SELECT * FROM private_table'), status(400))
-  await assert.rejects(f.results.capture(f.alice.token, snapshot({ count: 1, text: 'x'.repeat(1_000_000) }), queryHash), status(413))
+  await assert.rejects(f.results.capture(f.alice.token, snapshot({ count: 1, text: 'x'.repeat(4_000_000) }), queryHash), status(413))
   assert.deepEqual(await rowCounts(f), [])
   const captured = await f.results.capture(f.alice.token, s, queryHash)
   for (const name of ['../escape', '/tmp/x', 'a\\b', '..', 'line\nbreak', 'NUL', 'bad:name', 'x'.repeat(256)]) await assert.rejects(f.results.save(f.alice.token, { resultId: captured.resultId, name, commandId: randomUUID() }), status(400))
@@ -235,7 +247,7 @@ test('capture rejects forged snapshots, oversized snapshots, raw query text and 
 
 test('limits are downward-configurable, capture detaches evidence, and runtime cannot rewrite its snapshot', async t => {
   const f = await fixture(t), s = snapshot({ count: 1 }), bytes = Buffer.byteLength(canonical(s))
-  for (const options of [{ maxSavedBytes: 64 * 1024 * 1024 + 1 }, { maxSavedResults: 65 }, { maxPendingBytes: 8 * 1024 * 1024 + 1 }, { maxPendingResults: 9 }, { maxSnapshotBytes: 1_000_001 }, { pendingTtlMs: 900_001 }, { maxPendingResults: 0 }]) {
+  for (const options of [{ maxSavedBytes: 256 * 1024 * 1024 + 1 }, { maxSavedResults: 65 }, { maxPendingBytes: 32 * 1024 * 1024 + 1 }, { maxPendingResults: 9 }, { maxSnapshotBytes: 4_000_001 }, { pendingTtlMs: 900_001 }, { maxPendingResults: 0 }]) {
     assert.throws(() => createWorkspaceSourceResults({ transactions: f.transactions, ...options }), /Invalid workspace source result limit/)
   }
   const small = createWorkspaceSourceResults({ transactions: f.transactions, maxSnapshotBytes: bytes - 1 })
@@ -250,14 +262,15 @@ test('limits are downward-configurable, capture detaches evidence, and runtime c
   await assert.rejects(f.transactions.withPrincipalTransaction({ kind: 'session', token: f.alice.token }, c => c.query("UPDATE workspace_source_results SET snapshot='{}'::jsonb WHERE result_id=$1", [captured.resultId])), error => error.code === '42501')
   const commandId = randomUUID()
   await exact.save(f.alice.token, { resultId: captured.resultId, name: 'Alice', commandId })
-  await f.publish(f.bob.token)
+  await f.createSource(f.bob.token)
   const bob = await exact.capture(f.bob.token, s, queryHash)
   const saved = await exact.save(f.bob.token, { resultId: bob.resultId, name: 'Bob', commandId })
   assert.equal(saved.name, 'Bob'); assert.notEqual(saved.workspaceId, captured.workspaceId)
   const fks = (await f.ownerPool.query("SELECT pg_get_constraintdef(oid) AS def FROM pg_constraint WHERE conrelid='workspace_source_results'::regclass AND contype='f'")).rows.map(row => row.def)
   assert.ok(fks.some(def => def.includes('REFERENCES users(deployment_id, id)')))
   assert.ok(fks.some(def => def.includes('REFERENCES workspaces(deployment_id, owner_id, id)')))
-  assert.ok(fks.some(def => def.includes('REFERENCES data_source_versions(deployment_id, owner_id, source_id, revision)')))
+  assert.ok(fks.some(def => def.includes('REFERENCES data_sources(deployment_id, owner_id, source_id)')))
+  assert.equal(fks.some(def => def.includes('REFERENCES data_source_versions')), false)
 })
 
 test('logout/revocation stops every read, save, list, download and capture even for saved materialized data', async t => {

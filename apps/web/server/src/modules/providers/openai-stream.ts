@@ -6,7 +6,8 @@ const record = (value: unknown): value is Record<string,unknown> => Boolean(valu
 interface PendingTool { id: string; name: string; json: string; bytes: number }
 /** Pure, strict OpenAI chat-completions SSE decoder. No fetch, secrets, authority or tool execution.
  * The caller owns authorized/pinned egress and its absolute request deadline.
- * Requires [DONE]; emits tool candidates only after the entire turn validates.
+ * Accepts [DONE] or a complete finish frame followed by clean EOF.
+ * Emits tool candidates only after the entire turn validates.
  */
 export async function* parseOpenAiChatStream(source: AsyncIterable<Uint8Array>, options: {
   signal?: AbortSignal; maxBytes?: number; maxFrameBytes?: number
@@ -50,7 +51,7 @@ export async function* parseOpenAiChatStream(source: AsyncIterable<Uint8Array>, 
       for(const call of delta.tool_calls){
         if(!record(call)||!Number.isSafeInteger(call.index)||(call.index as number)<0||(call.index as number)>=64||!record(call.function))throw invalid()
         const index=call.index as number,p=tools.get(index)??{id:'',name:'',json:'',bytes:0}
-        if(call.id!==undefined){if(!identifier(call.id)||(p.id&&p.id!==call.id))throw invalid();p.id=call.id}
+        if(call.id!==undefined&&!(call.id===''&&p.id)){if(!identifier(call.id)||(p.id&&p.id!==call.id))throw invalid();p.id=call.id}
         if(call.function.name!==undefined){
           if(typeof call.function.name!=='string')throw invalid()
           p.name+=call.function.name
@@ -91,10 +92,13 @@ export async function* parseOpenAiChatStream(source: AsyncIterable<Uint8Array>, 
       }
       if(!completed && frameBytes+encoder.encode(pending).byteLength>maxFrameBytes)throw invalid()
     }
-    if(!completed||options.signal?.aborted||(finish==='length'&&tools.size))throw invalid()
+    if(!completed && (!finish || pending || frameBytes))throw invalid()
+    if(finish && finish!=='length' && (finish==='tool_calls')!==(tools.size>0))throw invalid()
+    if(options.signal?.aborted)throw invalid()
     // Validate the complete collection before exposing any candidate to T14.
+    // A length-limited batch cannot execute, even if some tool arguments parse.
     const calls:TurnEvent[]=[], ids=new Set<string>()
-    for(const [,tool] of [...tools].sort(([a],[b])=>a-b)){
+    if(finish!=='length')for(const [,tool] of [...tools].sort(([a],[b])=>a-b)){
       if(!identifier(tool.id)||!identifier(tool.name)||ids.has(tool.id))throw invalid()
       ids.add(tool.id)
       const input:unknown=JSON.parse(tool.json);if(!record(input))throw invalid()

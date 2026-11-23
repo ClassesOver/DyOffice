@@ -98,7 +98,37 @@ async function jsonServer(t, handler) {
 }
 const rowsBody = rows => (req, res) => { res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify({ rows })) }
 
-test('draft lifecycle enforces optimistic CAS, publish history, and credential hygiene', async t => {
+test('administrator saves and revokes data source targets without restarting', async t => {
+  const f = await fixture(t)
+  const targets = await postgresTargets(t, f)
+  const csrf = createCsrfService({ db: f.db, deploymentId: f.deploymentId, origin: restrictedOrigin, key: f.csrfKey })
+  const config = (method, path, token, payload) => f.app.inject({ method, url: '/api/v1/' + path, payload, headers: {
+    origin: restrictedOrigin, cookie: '__Host-dyoffice-session=' + token, 'x-csrf-token': csrf.sessionToken(token),
+  } })
+  const save = (token, sourceEgressTargets, expectedRevision = 0) => config('PUT', 'admin/config', token, { expectedRevision, patch: { sourceEgressTargets } })
+  const admin = f.adminSigned.token
+  await call(f, 'POST', '', { sourceId: 'approval', name: 'Approval', kind: 'postgres', config: {}, secret: targets.readerDsn }, undefined, 201)
+  const check = async () => (await call(f, 'POST', '/approval/test', {}, undefined, 200)).json()
+  // Without an approved database target, an unlisted host may reach only public
+  // addresses, so this loopback database is refused until an administrator approves it.
+  assert.equal((await check()).code, 'TARGET_NOT_APPROVED')
+  assert.equal((await save(f.alice.token, targets.approvals)).statusCode, 403)
+  assert.equal((await save(admin, [{ ...targets.approvals[0], addresses: ['169.254.169.254'] }])).statusCode, 400)
+  const saved = await save(admin, targets.approvals)
+  assert.equal(saved.statusCode, 200, saved.body)
+  assert.deepEqual(saved.json().sourceEgressTargets, targets.approvals)
+  assert.equal((await check()).ok, true)
+  assert.equal((await save(admin, [targets.approvals[1]], saved.json().revision)).statusCode, 200)
+  assert.equal((await check()).code, 'TARGET_NOT_APPROVED')
+  const publicSettings = await config('GET', 'settings/public', f.alice.token)
+  assert.equal(publicSettings.statusCode, 200, publicSettings.body)
+  assert.equal('sourceEgressTargets' in publicSettings.json(), false)
+  assert.equal((await save(admin, [])).statusCode, 409)
+  assert.equal((await save(admin, [], saved.json().revision + 1)).statusCode, 200)
+  assert.equal((await check()).code, 'TARGET_NOT_APPROVED')
+})
+
+test('saved configuration enforces optimistic CAS and credential hygiene', async t => {
   const f = await fixture(t, { sourcesCredentialKeys: credentialKeys() })
   const targets = await postgresTargets(t, f)
   await f.approve(targets.approvals)
@@ -106,8 +136,8 @@ test('draft lifecycle enforces optimistic CAS, publish history, and credential h
   const created = await call(f, 'POST', '', { sourceId: 'sales-db', name: 'Sales DB', kind: 'postgres', config: { timezone: 'Asia/Shanghai', maxRows: 10 }, secret }, undefined, 201)
   const draft = created.json()
   assert.equal(draft.sourceId, 'sales-db'); assert.equal(draft.version, 1)
-  assert.equal(draft.hasCredential, true); assert.equal(draft.publishedRevision, null)
-  assert.equal(draft.hasUnpublishedChanges, false)
+  assert.equal(draft.hasCredential, true)
+  assert.equal('publishedRevision' in draft, false)
 
   const detail = (await call(f, 'GET', '/sales-db', undefined, undefined, 200)).json()
   assert.equal(detail.source.hasCredential, true)
@@ -123,22 +153,11 @@ test('draft lifecycle enforces optimistic CAS, publish history, and credential h
   await call(f, 'PUT', '/sales-db', { expectedVersion: 1, name: 'Sales DB v2' }, undefined, 200)
   await call(f, 'PUT', '/sales-db', { expectedVersion: 1, name: 'Stale save' }, undefined, 409)
 
-  const first = (await call(f, 'POST', '/sales-db/publish', { expectedVersion: 2 }, undefined, 200)).json()
-  assert.equal(first.revision, 1); assert.match(first.contentHash, /^[0-9a-f]{64}$/)
-  let state = (await call(f, 'GET', '/sales-db', undefined, undefined, 200)).json()
-  assert.equal(state.source.publishedRevision, 1)
-  assert.equal(state.source.hasUnpublishedChanges, false)
-
-  // Draft edits after publishing flip hasUnpublishedChanges until republished.
+  // Each save updates the only active configuration immediately.
   await call(f, 'PUT', '/sales-db', { expectedVersion: 2, name: 'Sales DB v3' }, undefined, 200)
-  state = (await call(f, 'GET', '/sales-db', undefined, undefined, 200)).json()
-  assert.equal(state.source.hasUnpublishedChanges, true)
-  assert.equal(state.published.name, 'Sales DB v2')
-  const second = (await call(f, 'POST', '/sales-db/publish', { expectedVersion: 3 }, undefined, 200)).json()
-  assert.equal(second.revision, 2)
-  assert.notEqual(second.contentHash, first.contentHash)
-  state = (await call(f, 'GET', '/sales-db', undefined, undefined, 200)).json()
-  assert.equal(state.source.hasUnpublishedChanges, false)
+  const state = (await call(f, 'GET', '/sales-db', undefined, undefined, 200)).json()
+  assert.equal(state.source.name, 'Sales DB v3')
+  assert.equal('published' in state, false)
 
   // Stored credentials are ciphertext commitments, never the DSN itself.
   const vault = (await f.inspect('SELECT key_id,ciphertext,secret_hash FROM data_source_credentials WHERE source_id=$1', ['sales-db'])).rows
@@ -147,7 +166,7 @@ test('draft lifecycle enforces optimistic CAS, publish history, and credential h
   assert.ok(!JSON.stringify(vault).includes(secret))
   assert.equal(vault[0].secret_hash, createHash('sha256').update(secret).digest('hex'))
   const audit = (await f.inspect('SELECT action FROM data_source_audit WHERE source_id=$1 ORDER BY created_at', ['sales-db'])).rows.map(row => row.action)
-  assert.ok(audit.includes('source_created') && audit.includes('source_published'))
+  assert.ok(audit.includes('source_created') && audit.includes('source_saved'))
 
   await call(f, 'DELETE', '/sales-db', { expectedVersion: 3 }, undefined, 204)
   await call(f, 'GET', '/sales-db', undefined, undefined, 404)
@@ -161,7 +180,6 @@ test('cross-tenant source access is invisible and unmodifiable (RLS)', async t =
   // Bob must see neither existence nor a distinguishable authorization error.
   await call(f, 'GET', '/private-db', undefined, f.bob.token, 404)
   await call(f, 'PUT', '/private-db', { expectedVersion: 1, name: 'Hijack' }, f.bob.token, 404)
-  await call(f, 'POST', '/private-db/publish', { expectedVersion: 1 }, f.bob.token, 404)
   await call(f, 'POST', '/private-db/query', { sql: 'SELECT 1' }, f.bob.token, 404)
   await call(f, 'DELETE', '/private-db', { expectedVersion: 1 }, f.bob.token, 404)
   const bobList = (await call(f, 'GET', '', undefined, f.bob.token, 200)).json()
@@ -176,9 +194,8 @@ test('read-only SQL channel: AST guard, real PG denial, row cap, timeout, units'
   const targets = await postgresTargets(t, f)
   await f.approve(targets.approvals)
   await call(f, 'POST', '', { sourceId: 'metrics', name: 'Metrics', kind: 'postgres', config: { timezone: 'UTC', maxRows: 3, statementTimeoutMs: 1000, units: { i: 'items' } }, secret: targets.readerDsn }, undefined, 201)
-  await call(f, 'POST', '/metrics/publish', { expectedVersion: 1 }, undefined, 200)
 
-  // Assistant metadata uses the same published source, egress and role boundary.
+  // Assistant metadata uses the same saved source, egress and role boundary.
   const described = await f.app.inject({ method: 'POST', url: '/api/v1/workspace/source-tools/execute',
     headers: { origin: restrictedOrigin, cookie: '__Host-dyoffice-session=' + f.alice.token,
       'x-csrf-token': createCsrfService({ db: f.db, deploymentId: f.deploymentId, origin: restrictedOrigin, key: f.csrfKey }).sessionToken(f.alice.token) },
@@ -235,7 +252,6 @@ test('read-only SQL channel: AST guard, real PG denial, row cap, timeout, units'
 
   // A role without CONNECT cannot even establish the session (real PG refusal).
   await call(f, 'POST', '', { sourceId: 'no-connect', name: 'No connect', kind: 'postgres', config: {}, secret: targets.deniedDsn }, undefined, 201)
-  await call(f, 'POST', '/no-connect/publish', { expectedVersion: 1 }, undefined, 200)
   await call(f, 'POST', '/no-connect/query', { sql: 'SELECT 1' }, undefined, 403)
 
   // Read-only transactions reject writes that pass the token guard but not PG.
@@ -265,11 +281,15 @@ test('read-only SQL channel: AST guard, real PG denial, row cap, timeout, units'
 
   // Input values and target errors never become response diagnostics.
   const sensitiveSql = 'SELECT missing_sensitive_field_credential_probe FROM ' + targets.probeTable
-  const failed = await call(f, 'POST', '/metrics/query', { sql: sensitiveSql }, undefined, 502)
+  // The database's statement error is a fixable 400 without its text, classified for the client.
+  const failed = await call(f, 'POST', '/metrics/query', { sql: sensitiveSql }, undefined, 400)
+  assert.equal(failed.json().code, 'SQL_DATABASE_ERROR')
+  assert.equal((await call(f, 'POST', '/metrics/query', { sql: 'DELETE FROM ' + targets.probeTable }, undefined, 400)).json().code, 'SQL_POLICY_REJECTED')
   assert.equal(failed.body.includes('missing_sensitive_field'), false)
   assert.equal(failed.body.includes(targets.readerDsn), false)
+  // A 1.1 MB cell fits the 4 MB result budget; one row over the whole budget still fails.
   await targets.admin.query(`UPDATE ${targets.probeTable} SET note=$1 WHERE i=1`, ['x'.repeat(1_100_000)])
-  await call(f, 'POST', '/metrics/query', { sql: `SELECT note FROM ${targets.probeTable} WHERE i=1` }, undefined, 502)
+  assert.equal((await call(f, 'POST', '/metrics/query', { sql: `SELECT note FROM ${targets.probeTable} WHERE i=1` }, undefined, 200)).json().truncated, false)
   await targets.admin.query(`UPDATE ${targets.probeTable} SET note=$1 WHERE i=1`, ['x'.repeat(4_000_000)])
   await call(f, 'POST', '/metrics/query', { sql: `SELECT note FROM ${targets.probeTable} WHERE i=1` }, undefined, 502)
   await call(f, 'POST', '/metrics/query', { sql: "SELECT label || label AS big FROM " + targets.probeTable + ' LIMIT 1' }, undefined, 200)
@@ -288,7 +308,6 @@ test('http connector maps JSON rows with unit metadata and egress guard', async 
 
   await f.approve([httpApproval(origin.url + '/data'), httpApproval(nested.url + '/items')])
   await call(f, 'POST', '', { sourceId: 'feed', name: 'Feed', kind: 'http', config: { timezone: 'Europe/Berlin', maxRows: 1, units: { amount: 'EUR' } }, secret: origin.url + '/data' }, undefined, 201)
-  await call(f, 'POST', '/feed/publish', { expectedVersion: 1 }, undefined, 200)
   const snapshot = (await call(f, 'POST', '/feed/query', {}, undefined, 200)).json()
   assert.equal(snapshot.sourceId, 'feed'); assert.equal(snapshot.sourceVersion, 1)
   assert.equal(snapshot.timezone, 'Europe/Berlin')
@@ -299,7 +318,6 @@ test('http connector maps JSON rows with unit metadata and egress guard', async 
 
   // rowPath navigation into a nested JSON document.
   await call(f, 'POST', '', { sourceId: 'nested-feed', name: 'Nested', kind: 'http', config: { rowPath: 'payload.items', maxRows: 10 }, secret: nested.url + '/items' }, undefined, 201)
-  await call(f, 'POST', '/nested-feed/publish', { expectedVersion: 1 }, undefined, 200)
   const nestedSnapshot = (await call(f, 'POST', '/nested-feed/query', {}, undefined, 200)).json()
   assert.equal(nestedSnapshot.truncated, false)
   assert.deepEqual(nestedSnapshot.rows, [{ amount: 3, region: 'east', active: null }])
@@ -309,7 +327,6 @@ test('http connector maps JSON rows with unit metadata and egress guard', async 
   for (const [index, target] of [origin.url + '/data', 'http://localhost:' + new URL(origin.url).port + '/x', 'http://169.254.169.254/latest/meta-data/', 'http://[::1]:9/x', redirect.url + '/go'].entries()) {
     const sourceId = 'blocked-' + index
     await call(f, 'POST', '', { sourceId, name: 'Blocked', kind: 'http', config: {}, secret: target }, undefined, 201)
-    await call(f, 'POST', '/' + sourceId + '/publish', { expectedVersion: 1 }, undefined, 200)
     await call(f, 'POST', '/' + sourceId + '/query', {}, undefined, 400)
     const check = (await call(f, 'POST', '/' + sourceId + '/test', {}, undefined, 200)).json()
     assert.equal(check.ok, false, target)
@@ -326,7 +343,6 @@ test('egress allowlist admits pinned addresses and revalidates every redirect ho
   await f.approve([data.url + '/final', viaData.url + '/start', metaHop.url + '/go', loop.url + '/chain', loop.url + '/chainx', loop.url + '/chainxx'].map(httpApproval))
   const publishQuery = async (sourceId, secret, payload) => {
     await call(f, 'POST', '', { sourceId, name: sourceId, kind: 'http', config: { maxRows: 10 }, secret }, undefined, 201)
-    await call(f, 'POST', '/' + sourceId + '/publish', { expectedVersion: 1 }, undefined, 200)
     return call(f, 'POST', '/' + sourceId + '/query', payload, undefined, 200).then(response => response.json())
   }
 
@@ -341,22 +357,19 @@ test('egress allowlist admits pinned addresses and revalidates every redirect ho
 
   // A redirect into the metadata address is refused on the second hop.
   await call(f, 'POST', '', { sourceId: 'meta-hop', name: 'meta', kind: 'http', config: {}, secret: metaHop.url + '/go' }, undefined, 201)
-  await call(f, 'POST', '/meta-hop/publish', { expectedVersion: 1 }, undefined, 200)
   await call(f, 'POST', '/meta-hop/query', {}, undefined, 400)
 
   // Redirect chains beyond two hops are refused even when every hop is allowed.
   await call(f, 'POST', '', { sourceId: 'chain', name: 'chain', kind: 'http', config: {}, secret: loop.url + '/chain' }, undefined, 201)
-  await call(f, 'POST', '/chain/publish', { expectedVersion: 1 }, undefined, 200)
   await call(f, 'POST', '/chain/query', {}, undefined, 400)
 })
 
-test('credential rotation keeps previously published versions resolvable', async t => {
+test('credential replacement immediately uses only the current connection', async t => {
   const f = await fixture(t, { sourcesCredentialKeys: credentialKeys() })
   const oldFeed = await jsonServer(t, rowsBody([{ v: 1 }]))
   const newFeed = await jsonServer(t, rowsBody([{ v: 2 }]))
   await f.approve([httpApproval(oldFeed.url + '/v1'), httpApproval(newFeed.url + '/v2')])
   await call(f, 'POST', '', { sourceId: 'rotating', name: 'Rotating', kind: 'http', config: { maxRows: 10 }, secret: oldFeed.url + '/v1' }, undefined, 201)
-  await call(f, 'POST', '/rotating/publish', { expectedVersion: 1 }, undefined, 200)
   assert.equal((await call(f, 'POST', '/rotating/query', {}, undefined, 200)).json().rows[0].v, 1)
 
   // Rotating the credential keeps the old vault row and bumps the revision.
@@ -366,13 +379,9 @@ test('credential rotation keeps previously published versions resolvable', async
   assert.notEqual(vault[0].credential_ref, vault[1].credential_ref)
   assert.equal((await f.inspect('SELECT credential_revision FROM data_source_drafts WHERE source_id=$1', ['rotating'])).rows[0].credential_revision, 2)
 
-  // The still-published revision 1 resolves with its original credential.
-  assert.equal((await call(f, 'POST', '/rotating/query', {}, undefined, 200)).json().rows[0].v, 1)
-  await call(f, 'POST', '/rotating/publish', { expectedVersion: 2 }, undefined, 200)
   assert.equal((await call(f, 'POST', '/rotating/query', {}, undefined, 200)).json().rows[0].v, 2)
-  const pinned = (await call(f, 'POST', '/rotating/query', { sourceVersion: 1 }, undefined, 200)).json()
-  assert.equal(pinned.sourceVersion, 1); assert.equal(pinned.rows[0].v, 1)
-  await call(f, 'POST', '/rotating/query', { sourceVersion: 9 }, undefined, 404)
+  await call(f, 'POST', '/rotating/query', { sourceVersion: 1 }, undefined, 400)
+  await call(f, 'POST', '/rotating/query', { sourceVersion: 9 }, undefined, 400)
 })
 
 test('missing credential keys fail closed with explicit 503 while routes stay mounted', async t => {
@@ -383,4 +392,62 @@ test('missing credential keys fail closed with explicit 503 while routes stay mo
   assert.equal(httpAttempt.statusCode, 503)
   assert.deepEqual((await call(f, 'GET', '', undefined, undefined, 200)).json(), { items: [], nextCursor: null })
   await call(f, 'GET', '/vaultless', undefined, undefined, 404)
+})
+
+test('saved table scope restricts queries and AI metadata, and an empty scope still tests the connection', async t => {
+  const f = await fixture(t)
+  const targets = await postgresTargets(t, f)
+  const hidden = targets.probeTable + '_hidden'
+  await targets.admin.query(`CREATE TABLE ${hidden}(private_value text)`)
+  await targets.admin.query(`INSERT INTO ${hidden} VALUES ('restricted-value')`)
+  await targets.admin.query(`GRANT SELECT ON ${hidden} TO "${new URL(targets.readerDsn).username}"`)
+  f.cleanup.unshift(() => targets.admin.query(`DROP TABLE ${hidden}`))
+  await f.approve(targets.approvals)
+  await call(f, 'POST', '', {sourceId:'limited',name:'Limited',kind:'postgres',config:{allowedTables:[targets.probeTable]},secret:targets.readerDsn},undefined,201)
+  const describe = async (table, status=200) => {
+    const response=await f.app.inject({method:'POST',url:'/api/v1/workspace/source-tools/execute',headers:{origin:restrictedOrigin,cookie:'__Host-dyoffice-session='+f.alice.token,'x-csrf-token':createCsrfService({db:f.db,deploymentId:f.deploymentId,origin:restrictedOrigin,key:f.csrfKey}).sessionToken(f.alice.token)},payload:{name:'sources.describe',arguments:{sourceId:'limited',...(table===undefined?{}:{table})}}})
+    assert.equal(response.statusCode,status,response.body)
+    return response.json()
+  }
+  assert.deepEqual((await describe()).metadata.rows.map(row=>row.table_name),[targets.probeTable])
+  assert.ok((await describe('public.'+targets.probeTable)).metadata.rows.some(row=>row.column_name==='i'))
+  await describe(hidden,403)
+  await call(f,'POST','/limited/query',{sql:`WITH x AS (SELECT * FROM ${targets.probeTable}) SELECT * FROM x`},undefined,200)
+  for(const sql of [`SELECT * FROM ${hidden}`,'SELECT * FROM information_schema.tables',`SELECT * FROM ${targets.probeTable} UNION ALL SELECT * FROM ${hidden}`]) await call(f,'POST','/limited/query',{sql},undefined,400)
+  await call(f,'PUT','/limited',{expectedVersion:1,config:{allowedTables:[]}},undefined,200)
+  assert.deepEqual((await describe()).metadata.rows,[])
+  await describe(targets.probeTable,403)
+  await call(f,'POST','/limited/query',{sql:`SELECT * FROM ${targets.probeTable}`},undefined,400)
+  assert.equal((await call(f,'POST','/limited/test',{},undefined,200)).json().ok,true)
+  await call(f,'PUT','/limited',{expectedVersion:2,config:{}},undefined,200)
+  await call(f,'POST','/limited/query',{sql:`SELECT * FROM ${targets.probeTable}`},undefined,200)
+  assert.deepEqual((await call(f,'POST','/limited/query',{sql:`SELECT * FROM ${hidden}`},undefined,200)).json().rows,[{private_value:'restricted-value'}])
+  const schema = targets.probeTable + '_area', reader = new URL(targets.readerDsn).username
+  await targets.admin.query(`CREATE SCHEMA "${schema}"; CREATE TABLE "${schema}".orders(total integer);
+    INSERT INTO "${schema}".orders VALUES (42); GRANT USAGE ON SCHEMA "${schema}" TO "${reader}";
+    GRANT SELECT ON "${schema}".orders TO "${reader}"`)
+  f.cleanup.unshift(()=>targets.admin.query(`DROP SCHEMA "${schema}" CASCADE`))
+  assert.deepEqual((await describe()).metadata.rows.map(row=>row.table_name),['orders',targets.probeTable,hidden])
+  await call(f,'PUT','/limited',{expectedVersion:3,config:{allowedSchemas:[schema]}},undefined,200)
+  assert.deepEqual((await describe()).metadata.rows,[{table_schema:schema,table_name:'orders',table_type:'BASE TABLE'}])
+  const discover = async (body, status = 200, token = f.alice.token) =>
+    (await call(f,'POST','/limited/discover',body,token,status)).json()
+  const directories=await discover({expectedVersion:4})
+  assert.deepEqual(directories,{items:['public',schema],truncated:false})
+  assert.deepEqual(await discover({expectedVersion:4,directory:'public'}),{items:[targets.probeTable,hidden],truncated:false})
+  assert.deepEqual(await discover({expectedVersion:4,directory:schema}),{items:['orders'],truncated:false})
+  await discover({expectedVersion:3},409)
+  await discover({expectedVersion:4},404,f.bob.token)
+  await discover({expectedVersion:4,directory:'pg_catalog'},400)
+  await discover({expectedVersion:4,sql:'SELECT 1'},400)
+
+  assert.ok((await describe(schema+'.orders')).metadata.rows.some(row=>row.column_name==='total'))
+  await describe('public.'+targets.probeTable,403)
+  assert.deepEqual((await call(f,'POST','/limited/query',{sql:`SELECT * FROM ${schema}.orders`},undefined,200)).json().rows,[{total:42}])
+  await call(f,'POST','/limited/query',{sql:`SELECT * FROM ${targets.probeTable}`},undefined,400)
+  await call(f,'PUT','/limited',{expectedVersion:4,config:{allowedSchemas:[schema],allowedTables:[targets.probeTable]}},undefined,200)
+  assert.deepEqual((await describe()).metadata.rows,[])
+  await describe(schema+'.orders',403)
+  await call(f,'POST','/limited/query',{sql:`SELECT * FROM ${schema}.orders`},undefined,400)
+
 })

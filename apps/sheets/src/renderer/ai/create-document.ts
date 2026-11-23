@@ -90,6 +90,7 @@ export async function createAiDocument(
     name: `${title}.${request.type}`,
     sheetName,
     hadFormulas: sheetHasFormulas(sheet),
+    ...(result.downloaded ? { downloaded: true } : {}),
     ...(result.path ? { path: result.path } : {}),
   }
 }

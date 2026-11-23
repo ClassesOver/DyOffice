@@ -1,9 +1,7 @@
-import {createHash} from 'node:crypto'
 import {uuid} from '../modules/files/queries.ts'
 import {authError} from '../modules/auth/sessions.ts'
+import {fail,hash} from './job-common.mjs'
 
-const hash=bytes=>createHash('sha256').update(bytes).digest('hex')
-function fail(code){throw Object.assign(new Error(code),{code})}
 const check=signal=>{if(signal?.aborted)fail('ABORTED')}
 
 /** Trusted session-side preparation only, not registered as an HTTP route.
@@ -13,7 +11,7 @@ const check=signal=>{if(signal?.aborted)fail('ABORTED')}
  * recovery if commit has an unknown outcome; never rerun preparation to retry it.
  */
 export function createPdfSavePreparation({files,leases,revisions,processor}){
-  return {async prepare(input,{signal}={}){
+  return {async prepare(input,{signal,autoPdfName}={}){
     if(!input||typeof input!=='object'||Array.isArray(input)
       ||Object.keys(input).sort().join(',')!=='baseRevision,editorId,fileId,idempotencyKey,leaseEpoch,request,token')throw authError(400)
     const {token,request,idempotencyKey,leaseEpoch}=input
@@ -27,7 +25,7 @@ export function createPdfSavePreparation({files,leases,revisions,processor}){
     const current=await files.openFile(token,fileId);check(signal)
     if(current.format!=='pdf')fail('PDF_FORMAT_REQUIRED')
     if(current.file.revision!==baseRevision)throw authError(409)
-    const source=await files.download(token,fileId,baseRevision);check(signal)
+    const source=await files.download(token,fileId,baseRevision,undefined,signal);check(signal)
     if(source.format!=='pdf')fail('PDF_FORMAT_REQUIRED')
     const inputSha256=hash(source.bytes)
     if(inputSha256!==current.file.sha256)fail('PDF_OUTPUT_BINDING')
@@ -48,7 +46,7 @@ export function createPdfSavePreparation({files,leases,revisions,processor}){
     let upload
     try{
       // Authoritative fresh revision/lease/auth checks occur again inside T06.
-      upload=await revisions.stageUpload(token,fileId,{size:output.length,baseRevision,leaseEpoch,editorId});check(signal)
+      upload=await revisions.stageUpload(token,fileId,{size:output.length,baseRevision,leaseEpoch,editorId},autoPdfName);check(signal)
       await files.receiveUpload(token,upload.uploadId,output);check(signal)
       return Object.freeze({commitInput:Object.freeze({fileId,uploadId:upload.uploadId,baseRevision,leaseEpoch,idempotencyKey}),sha256,size:output.length})
     }catch(error){

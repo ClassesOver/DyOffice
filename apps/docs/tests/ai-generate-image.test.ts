@@ -115,4 +115,41 @@ describe('generate_image', () => {
     )
     expect(received).toEqual({ prompt: 'a watercolor fox', aspectRatio: '16:9' })
   })
+
+  it('inserts a generated data URL without sending it to the remote image fetcher', async () => {
+    let fetched = false
+    const originalImage = window.Image
+    class LoadedImage {
+      naturalWidth = 4
+      naturalHeight = 2
+      onload: (() => void) | null = null
+      onerror: (() => void) | null = null
+      set src(_value: string) {
+        queueMicrotask(() => this.onload?.())
+      }
+    }
+    window.Image = LoadedImage as unknown as typeof Image
+    try {
+      const { exec, editor } = await runWithDesktop(
+        {
+          aiGenerateImage: () => Promise.resolve({ url: 'data:image/png;base64,iVBORw0KGgo=' }),
+          fetchImage: () => {
+            fetched = true
+            return Promise.resolve(null)
+          },
+        },
+        { prompt: 'a watercolor fox' },
+      )
+      expect(exec.isError).not.toBe(true)
+      expect(exec.mutated).toBe(true)
+      expect(fetched).toBe(false)
+      const image = editor.state.doc.toJSON().content?.find(
+        node => node.type === 'docProtected' && node.attrs?.blockType === 'image',
+      )
+      expect(image?.attrs).toMatchObject({ imageWidthPx: 4, imageHeightPx: 2 })
+      expect(image?.attrs?.genImage).toMatchObject({ base64: 'iVBORw0KGgo=', mime: 'image/png' })
+    } finally {
+      window.Image = originalImage
+    }
+  })
 })

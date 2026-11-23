@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { createQuerySnapshot } from '../../server/src/modules/sources/provenance.ts'
+import { createQuerySnapshot, fitSnapshotRows } from '../../server/src/modules/sources/provenance.ts'
 const input = () => ({ sourceId:'source-a', sourceVersion:1, schema:[{name:'amount', type:'number', unit:'元'}, {name:'period',type:'string'}], timezone:'Asia/Shanghai', rows:[{amount:12.5,period:'2026-11'}], sourceTruncated:false })
 test('preserves values, unit, timezone and deterministic evidence hash', () => {
  const a=createQuerySnapshot(input()), b=createQuerySnapshot({...input(), rows:[{period:'2026-11',amount:12.5}]})
@@ -32,4 +32,31 @@ test('byte budget includes hash envelope and counts UTF-8 bytes', () => {
  assert.ok(size>JSON.stringify(snap).length)
  assert.throws(()=>createQuerySnapshot(value,{maxBytes:size-1}),/Invalid source snapshot/)
  assert.equal(createQuerySnapshot(value,{maxBytes:size}).sha256,snap.sha256)
+})
+test('live rows are trimmed to the byte budget as a truncated prefix that the snapshot accepts', () => {
+ const wide = Array.from({ length: 50 }, (_, i) => ({ amount: i, period: 'x'.repeat(200) }))
+ const base = { ...input(), rows: wide }
+ const full = createQuerySnapshot(base)
+ const size = Buffer.byteLength(JSON.stringify({ version:1, sourceId:full.sourceId, sourceVersion:full.sourceVersion, schema:full.schema, timezone:full.timezone, rows:full.rows, truncated:full.truncated, sha256:full.sha256 }))
+ const budget = Math.floor(size / 2)
+ const fitted = fitSnapshotRows(base, { maxRows: 1000, maxBytes: budget })
+ assert.equal(fitted.truncated, true)
+ assert.ok(fitted.rows.length > 0 && fitted.rows.length < wide.length)
+ assert.deepEqual(fitted.rows, wide.slice(0, fitted.rows.length))
+ const snapshot = createQuerySnapshot({ ...base, rows: fitted.rows, sourceTruncated: true }, { maxRows: 1000, maxBytes: budget })
+ assert.equal(snapshot.truncated, true)
+ // One more row would not have fitted.
+ assert.throws(() => createQuerySnapshot({ ...base, rows: wide.slice(0, fitted.rows.length + 1), sourceTruncated: true }, { maxRows: 1000, maxBytes: budget }), /Invalid source snapshot/)
+ // Within budget nothing is trimmed; the row limit is left to createQuerySnapshot.
+ assert.deepEqual(fitSnapshotRows(base, { maxRows: 10, maxBytes: 8_000_000 }), { rows: wide, truncated: false })
+})
+test('a live SQL snapshot trimmed to the result budget always fits the frozen-result capture limit', async () => {
+ const { SQL_RESULT_MAX_BYTES } = await import('../../server/src/modules/sources/config.ts')
+ const wide = Array.from({ length: 1000 }, (_, i) => ({ amount: i, period: 'x'.repeat(5000) }))
+ const base = { ...input(), rows: wide }
+ const fitted = fitSnapshotRows(base, { maxRows: 1000, maxBytes: SQL_RESULT_MAX_BYTES })
+ assert.equal(fitted.truncated, true)
+ const snapshot = createQuerySnapshot({ ...base, rows: fitted.rows, sourceTruncated: true }, { maxRows: 1000, maxBytes: SQL_RESULT_MAX_BYTES })
+ // results.ts verifiedSnapshot measures exactly this serialisation against maxSnapshotBytes.
+ assert.ok(Buffer.byteLength(JSON.stringify(snapshot)) <= SQL_RESULT_MAX_BYTES)
 })

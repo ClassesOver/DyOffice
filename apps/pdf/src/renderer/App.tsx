@@ -1,6 +1,7 @@
+import { assistantHoldsKeyboard } from '@genoffice/ui'
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { handlePdfControl, type ControlRequest } from './control'
-import type { CSSProperties, MouseEvent as ReactMouseEvent } from 'react'
+import type { CSSProperties, MouseEvent as ReactMouseEvent, ReactNode } from 'react'
 // legacy build: the modern build relies on new APIs like Math.sumPrecise that the current
 // Electron V8 lacks, making embedded font parsing fail and whole pages render as garbled raw char codes
 import { GlobalWorkerOptions } from 'pdfjs-dist/legacy/build/pdf.mjs'
@@ -15,14 +16,18 @@ import {
 } from './annotation-catalog'
 import {
   AUTO_OCR_PAGE_CAP,
+  buildOcrPageData,
   OcrTextLayer,
+  recognizeWebOcrPage,
   renderPageForOcr,
   runAutoOcr,
   type AutoOcrResult,
   type AutoOcrStop,
   type OcrPageData,
 } from './ocr-layer'
-import type { CropRect, FileOpCanceled, FileOpResult, PdfAppDeps, RotateDelta } from './ai/tools'
+import type { PdfOcrLine } from '../shared/ipc'
+import { MAX_PDF_OCR_INSERTS } from '../../../../packages/web-contracts/src/pdf-ocr-bake'
+import { addFormMarkTool, type CropRect, type FileOpCanceled, type FileOpResult, type PdfAppDeps, type RotateDelta } from './ai/tools'
 import {
   MARKUP_COLORS,
   geomDispSize,
@@ -143,7 +148,7 @@ import {
   remapOutlineTree,
 } from './heading-outline'
 import { readFileBytes } from './file-bytes'
-import type { PdfEncryptionInput, PdfPermissions } from '../shared/ipc'
+import type { PdfEncryptionInput, PdfHostImageBake, PdfPermissions, RedactionInput, SavePdfRequest, SavePdfResult } from '../shared/ipc'
 import { mayChangeProtection } from './protection-gate'
 import { MAX_REDACTION_REGIONS } from '../shared/ipc'
 import { usePrintJob } from './usePrintJob'
@@ -424,7 +429,66 @@ interface WrittenSteps {
 /** Each step holds the whole file twice: a long history of them would hold that much memory */
 const MAX_WRITTEN_STEPS = 10
 
-export default function App() {
+export type PdfAssistantView = {
+  editRestriction: string | null
+  doc: PDFDocumentProxy | null
+  pages: readonly number[]
+  currentPage: number
+  selection: { pages: readonly number[]; text: string } | null
+  recognizeText(page: number, signal?: AbortSignal): Promise<string | null>
+  searchIndex: PdfAppDeps['searchIndex']
+  sourceTextIndex: PdfAppDeps['searchIndex']
+  addMarkup: PdfAppDeps['addMarkup']
+  annotationApi: Pick<PdfAppDeps, 'annotationsOn' | 'addNote' | 'findNoteRoot' | 'replyToThread' | 'editNote' | 'deleteNoteThread'>
+  batchApi: Pick<PdfAppDeps, 'doc' | 'pageCount' | 'isDeleted' | 'pageOrder' | 'metadata' | 'pageGeom' | 'applyOps' | 'gotoPage' | 'formEdits' | 'insertBlankPage' | 'outline'>
+  addFormMark(input: Record<string, unknown>, signal: AbortSignal | undefined, canEdit: () => boolean): ReturnType<typeof addFormMarkTool>
+  deleteMarkups(page: number, keys: string[], check?: () => void): Promise<void>
+  editText(input: TextEditInput, preflight: (edit: TextEditInput) => Promise<void>, current: () => boolean): Promise<string | null>
+  pageGeom: PdfAppDeps['pageGeom']
+  textInsertApi: Pick<PdfAppDeps, 'insertText' | 'textInserts' | 'updateTextInsert' | 'moveTextInsert' | 'deleteTextInsert'>
+  stampApi: Pick<PdfAppDeps, 'stamps' | 'setStamps'>
+  insertImage: PdfAppDeps['insertImage']
+  existingImageApi: Pick<PdfAppDeps, 'isImageClaimed' | 'transformImage' | 'replaceImage' | 'deleteImage'>
+  imageBakes(): PdfHostImageBake[]
+  queueImageBake(ref: PageImageRef, operation: PdfHostImageBake): boolean
+  moveTextBlock(
+    ...args: [...Parameters<PdfAppDeps['moveTextBlock']>, preflight?: (edit: TextEditInput) => Promise<void>, current?: () => boolean]
+  ): ReturnType<PdfAppDeps['moveTextBlock']>
+  canEdit(): boolean
+  gotoPage(page: number): void
+  collapsed: boolean
+  setCollapsed(value: boolean): void
+  canAppendReport(): boolean
+  savePageRewrite(write: () => Promise<SavePdfResult>, check: () => boolean): Promise<boolean>
+  appendReport(sections: readonly string[]): (() => boolean) | null
+  saveReport(check: () => boolean): Promise<boolean>
+}
+
+export type PdfHostLifecycle = {
+  status: 'loading' | 'error' | 'empty' | 'password' | 'ready'
+  state(): { dirty: boolean; blocked: boolean }
+  save(): Promise<boolean>
+  gotoPage(page: number): void
+}
+
+export default function App({ hostReadOnly = false, hostEditRestriction, hostSave, hostAssistant, hostLifecycle, hostDownloadUrl, hostReview, hostPageOverlay, hostFindSensitive, hostRedact, hostRedactionPending, hostImageBakePreview, hostOcr }: {
+  hostReadOnly?: boolean
+  hostEditRestriction?: (bytes: Uint8Array, encrypted: boolean) => Promise<string | null>
+  hostLifecycle?: (editor: PdfHostLifecycle | null) => void
+  hostAssistant?: (view: PdfAssistantView) => ReactNode
+  hostDownloadUrl?: () => string
+  hostReview?: ReactNode
+  hostPageOverlay?: (pageIndex: number, width: number, height: number) => ReactNode
+  hostFindSensitive?: (patterns: readonly RedactPattern[]) => Promise<unknown>
+  hostRedact?: (regions: RedactionInput[]) => Promise<boolean>
+  hostRedactionPending?: string
+  hostImageBakePreview?: (operations: readonly PdfHostImageBake[], signal: AbortSignal) => Promise<Uint8Array>
+  hostOcr?: (png: string, signal?: AbortSignal) => Promise<PdfOcrLine[] | null>
+  hostSave?: {
+    save(draft: SavePdfRequest, pageCount: number, check?: () => boolean, stamps?: StampConfig | null, imageBakes?: PdfHostImageBake[]): Promise<SavePdfResult>
+    confirm(): Promise<SavePdfResult>
+  }
+} = {}) {
   const { lang, t } = useI18n()
   const collapse = useRibbonCollapse('genoffice-pdf-ribbon-collapsed', {
     collapse: t('ribbonCollapse'),
@@ -433,6 +497,7 @@ export default function App() {
     compact: t('ribbonCompact'),
     expandFull: t('ribbonExpand'),
   })
+  const [editRestriction, setEditRestriction] = useState<string | null>(null)
   const [doc, setDoc] = useState<PDFDocumentProxy | null>(null)
   const [filePath, setFilePath] = useState('')
   const [status, setStatus] = useState<'loading' | 'error' | 'empty' | 'password' | 'ready'>(
@@ -522,15 +587,20 @@ export default function App() {
   }
   // Persisted so a closed AI panel stays closed on next launch (docs/slides parity)
   const [aiCollapsed, setAiCollapsed] = useState(
-    () => !aiPanelInitiallyOpen('genoffice-pdf-show-ai'),
+    () => !!hostSave || !aiPanelInitiallyOpen('genoffice-pdf-show-ai'),
   )
   /** the panel setter in the "true = visible" sense the sidebar hook expects */
   const setAiOpen = useCallback((open: boolean) => setAiCollapsed(!open), [])
   // the sidebar switch is a soft hide; it closes the panel when it turns off
   const aiSidebarEnabled = useAiSidebarEnabled(setAiOpen)
+  useEffect(()=>{
+    const show=()=>setAiCollapsed(false)
+    window.addEventListener('dyoffice:open-handoff-assistant',show)
+    return ()=>window.removeEventListener('dyoffice:open-handoff-assistant',show)
+  },[])
   useEffect(() => {
-    rememberAiPanelOpen('genoffice-pdf-show-ai', !aiCollapsed)
-  }, [aiCollapsed])
+    if (!hostSave) rememberAiPanelOpen('genoffice-pdf-show-ai', !aiCollapsed)
+  }, [aiCollapsed, hostSave])
   /** One-shot prompt pushed by the ribbon AI buttons; the panel auto-runs it (docs preset pattern) */
   const [aiPreset, setAiPreset] = useState<{ text: string; nonce: number } | null>(null)
   const [ribbonTab, setRibbonTab] = useState<RibbonTab>('home')
@@ -1046,6 +1116,7 @@ export default function App() {
   const [aiSelection, setAiSelection] = useState<{
     page: number
     lastPage: number
+    originalPages: readonly number[]
     text: string
   } | null>(null)
   /** Ask-AI popover opened from the markup bar; the anchor rect is captured at open */
@@ -1094,6 +1165,9 @@ export default function App() {
   const toastTimerRef = useRef<number | null>(null)
   const [thumbMenu, setThumbMenu] = useState<ThumbMenu | null>(null)
   const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle')
+  const [hostFileMenu, setHostFileMenu] = useState(false)
+  const hostFileTab = useRef<HTMLButtonElement>(null)
+  const [geometryLocked, setGeometryLocked] = useState(false)
   const [saveError, setSaveError] = useState('')
   /** Transient message toast (save failures, skipped/rejected text edits) */
   const [notice, setNotice] = useState<string | null>(null)
@@ -1218,20 +1292,24 @@ export default function App() {
   /** Latest geometry for async pipelines that must not rebind on rotation (OCR) */
   const pageGeomRef = useRef(pageGeom)
   pageGeomRef.current = pageGeom
-  /** the auto-OCR's words as white text inserts: baked into every save while the
+  /** the auto-OCR's words as invisible text inserts: baked on save while the
       recognition data is in the session (the post-save reload finds a text layer,
       so the pass never re-runs and the bake never doubles) */
   const ocrBakeInserts = useMemo(() => {
     const out: LocalTextInsert[] = []
     for (const [origIdx, data] of ocrPages) {
-      const geom = pageGeomRef.current(origIdx)
-      if (!geom) continue
-      for (const input of buildOcrBakeInserts(origIdx, data.words, geom)) {
+      const geom = pageGeom(origIdx)
+      if (!geom || deleted.has(origIdx)) continue
+      const inserts = buildOcrBakeInserts(origIdx, data.words, geom)
+      // Never save part of a page: after reopening, that page would look
+      // searchable and the missing lines would no longer be recognized.
+      if (hostOcr && out.length + inserts.length > MAX_PDF_OCR_INSERTS) continue
+      for (const input of inserts) {
         out.push({ id: `ocr-bake-${origIdx}-${out.length}`, input })
       }
     }
     return out
-  }, [ocrPages])
+  }, [ocrPages, hostOcr, deleted, pageGeom])
   /** Current original page index, readable without rebinding the OCR pass on scroll */
   const currentOrigIdxRef = useRef(0)
   currentOrigIdxRef.current = visList[currentPage - 1] ?? 0
@@ -1353,7 +1431,9 @@ export default function App() {
         const formFeatures = documentFormFeatures(documentInfo, bytes)
         setFormHasXfa(formFeatures.hasXfa)
         setDocumentEncrypted(formFeatures.encrypted)
-        if (formFeatures.encrypted) {
+        const restriction = await hostEditRestriction?.(bytes, formFeatures.encrypted) ?? null
+        setEditRestriction(restriction)
+        if (formFeatures.encrypted && !restriction) {
           // pdf.js already accepted this password for rendering; the session's own
           // handler must accept it too before the document counts as editable
           const password = passwordRef.current ?? ''
@@ -1712,7 +1792,7 @@ export default function App() {
       if (previous) void previous.loadingTask.destroy()
       return loaded.numPages
     },
-    [],
+    [hostEditRestriction],
   )
 
   /** A fit mode is recomputed at 'ready'; a custom zoom must be in place before it so
@@ -1789,7 +1869,7 @@ export default function App() {
       protected bytes from disk, which pdf-lib alone cannot). A session holding only
       the user password — or the empty one of an owner-only file — is additionally
       bound by the /P the file carries: modifying denied means read-only. */
-  const readOnly =
+  const readOnly = hostReadOnly || editRestriction !== null || geometryLocked ||
     status === 'ready' &&
     documentEncrypted &&
     (!sessionUnlocked || (diskLock !== null && !diskLock.unlockedAsOwner && !diskLock.modifying))
@@ -2146,6 +2226,7 @@ export default function App() {
     setPageInput(String(visibleIndex + 1))
     let attempts = 0
     const focusWhenMounted = () => {
+      if (assistantHoldsKeyboard()) return
       const control = formControlRefs.current.get(widget.id)
       if (control) {
         control.focus()
@@ -2246,6 +2327,7 @@ export default function App() {
   const ordinaryDirty = dirtyBesidesFormFields || formFields.length > 0
   const savableDirty = dirtyBesidesFormFields || savableFormFields.length > 0
   const dirty = redactions.length > 0 || ordinaryDirty
+  const canSaveOcr = !!hostOcr && !readOnly && ocrBakeInserts.length > 0
 
   // Mirror dirty state to the main process (close-tab/close-window guard)
   useEffect(() => {
@@ -2555,9 +2637,13 @@ export default function App() {
             ...(pending === null ? {} : { pending }),
             signal: controller.signal,
             geom: (origIdx) => pageGeomRef.current(origIdx),
-            render: renderPageForOcr,
-            ocrPage: (png) => window.pdfApi.ocrPage(png),
-            onPage: (origIdx, data) => setOcrPages((prev) => new Map(prev).set(origIdx, data)),
+            render: (source, page, geom) => renderPageForOcr(source, page, geom, hostOcr ? 2048 : undefined),
+            ocrPage: (png, page, geom) => hostOcr
+              ? recognizeWebOcrPage(doc, page, geom, png, hostOcr, controller.signal)
+              : window.pdfApi.ocrPage(png),
+            onPage: (origIdx, data) => {
+              if (ocrAbortRef.current === controller) setOcrPages((prev) => new Map(prev).set(origIdx, data))
+            },
             onProgress: (done, total) =>
               setOcrRun({ done: doneBefore + done, total, stop: null, pending: null }),
           })
@@ -2579,8 +2665,24 @@ export default function App() {
         )
       })()
     },
-    [doc, searchIndexCache],
+    [doc, searchIndexCache, hostOcr],
   )
+
+  async function recognizeText(origIdx: number, signal?: AbortSignal) {
+    const cached = ocrPages.get(origIdx)
+    if (cached) return cached.entry.text
+    const geom = pageGeomRef.current(origIdx), lifecycle = ocrAbortRef.current
+    if (!doc || !hostOcr || !geom || !lifecycle) return null
+    const png = await renderPageForOcr(doc, origIdx, geom, 2048)
+    signal?.throwIfAborted()
+    if (!png || ocrAbortRef.current !== lifecycle) return null
+    const lines = await recognizeWebOcrPage(doc, origIdx, geom, png, hostOcr, signal)
+    signal?.throwIfAborted()
+    if (!lines || ocrAbortRef.current !== lifecycle) return null
+    const data = buildOcrPageData(lines, geom)
+    if (data) setOcrPages((prev) => new Map(prev).set(origIdx, data))
+    return data?.entry.text ?? null
+  }
 
   /** The pages the toast's Continue resumes over: only a capped pass has any,
       and a scan that ran out has nothing left to resume. */
@@ -2801,6 +2903,7 @@ export default function App() {
         setAiSelection({
           page: Math.min(...pages) + 1,
           lastPage: Math.max(...pages) + 1,
+          originalPages: pages,
           text: selText,
         })
       }
@@ -4612,6 +4715,7 @@ export default function App() {
     edits: LocalTextEdit[] = textEdits,
     noteFlush?: { drawings: LocalDrawing[]; noteEdits: LocalNoteEdit[] },
     fields: LocalFormField[] = savableFormFields,
+    includeOcr = !hostOcr,
   ) => ({
     markups: markups.map(({ id: _id, ...rest }) => rest),
     ...(noteAuthor ? { annotationAuthor: noteAuthor } : {}),
@@ -4634,11 +4738,11 @@ export default function App() {
     textEdits: edits.map((e) => e.input),
     textInserts: [
       ...textInserts.map((insert) => insert.input),
-      ...ocrBakeInserts.map((insert) => insert.input),
+      ...(includeOcr ? ocrBakeInserts.map((insert) => insert.input) : []),
     ],
-    imageEdits: imageEdits.map((e) => e.input),
+    imageEdits: imageEdits.filter(e => !e.hostBake).map((e) => e.input),
     staticFormFills,
-    stamps: stampCfg ? renderStamps(stampCfg, visList) : [],
+    stamps: !hostSave && stampCfg ? renderStamps(stampCfg, visList) : [],
     formValues: [...formEdits.values()],
     formFields: fields.map((f) => f.input),
     blankPages: blankPages.map((b) => b.input),
@@ -4661,6 +4765,7 @@ export default function App() {
 
   /** Resolved when the running save() lands; queued saves and Save As serialize behind it */
   const saveInFlightRef = useRef<Promise<boolean> | null>(null)
+  const confirmSaveRef = useRef<(() => Promise<boolean>) | null>(null)
   /** objNum → /Contents the in-flight save is writing via noteEdits. appliedNoteEdit
       consults it so a re-edit during the write compares against what the file is about
       to say, not the pre-save text (dropping on the wrong compare loses the edit). */
@@ -4673,13 +4778,28 @@ export default function App() {
       promise would reuse the pre-reload render's closure — dirty still true, the saved
       edits still listed — and write them onto the file a second time. */
   const queuedSavesRef = useRef<
-    { autosave: boolean; flushAll: boolean; resolve: (ok: boolean) => void }[]
+    { autosave: boolean; flushAll: boolean; explicitOcr: boolean; resolve: (ok: boolean) => void }[]
   >([])
+
+  const trackSave = (run: Promise<boolean>): Promise<boolean> => {
+    const tracked = run.finally(() => {
+      if (saveInFlightRef.current === tracked) {
+        saveInFlightRef.current = null
+        if (!confirmSaveRef.current) {
+          inFlightNoteWritesRef.current = new Map()
+          inFlightPageMapRef.current = null
+        }
+      }
+    })
+    saveInFlightRef.current = tracked
+    return tracked
+  }
 
   // flushAll also writes the field whose card is open: callers that treat success as
   // "everything is in the file" (close-tab Save, flushThen) must not leave it behind
-  const save = (autosave = false, flushAll = false): Promise<boolean> => {
-    if (redactionRequestInFlightRef.current) return Promise.resolve(false)
+  const save = (autosave = false, flushAll = false, check?: () => boolean, rewrite?: () => Promise<SavePdfResult>, explicitOcr = false): Promise<boolean> => {
+    if (editRestriction || redactionRequestInFlightRef.current) return Promise.resolve(false)
+    if (check && (!check() || saveInFlightRef.current || confirmSaveRef.current)) return Promise.resolve(false)
     // A save is already writing: queue behind it instead of reporting failure — the
     // close prompt's "Save" and ⌘S regularly collide with the blur-triggered autosave
     // (the prompt itself blurs the window). The ref is set synchronously, so this also
@@ -4687,8 +4807,11 @@ export default function App() {
     // still reads 'idle' for both.
     if (saveInFlightRef.current !== null) {
       return new Promise<boolean>((resolve) =>
-        queuedSavesRef.current.push({ autosave, flushAll, resolve }),
+        queuedSavesRef.current.push({ autosave, flushAll, explicitOcr, resolve }),
       )
+    }
+    if (confirmSaveRef.current) {
+      return autosave ? Promise.resolve(false) : trackSave(confirmSaveRef.current())
     }
     // Fold an open floating-editor draft in first: keyboard save and autosave can land
     // mid-typing, and the post-save reload closes the editor — without this the
@@ -4701,13 +4824,15 @@ export default function App() {
     const pending = formFieldsRef.current
     const fields =
       flushAll || !heldFormFieldId ? pending : pending.filter((f) => f.id !== heldFormFieldId)
+    const bakeOcr = !hostOcr || (canSaveOcr && explicitOcr)
     const anythingToSave =
       (flushAll ? ordinaryDirty : savableDirty) ||
       edits !== textEdits ||
       noteFlush.drawings !== drawings ||
       noteFlush.noteEdits !== noteEdits ||
-      ocrBakeInserts.length > 0
-    if (!anythingToSave || !filePath) return Promise.resolve(!anythingToSave)
+      (bakeOcr && ocrBakeInserts.length > 0)
+    if (rewrite && (anythingToSave || !hostSave)) return Promise.resolve(false)
+    if ((!anythingToSave && !rewrite) || !filePath) return Promise.resolve(!anythingToSave && !rewrite)
     // Writing a protection with no owner password would hand ownership to
     // anyone, so a protection change with both passwords empty is refused. An
     // unchanged owner-only file is not affected: its own /Encrypt entries are
@@ -4746,13 +4871,18 @@ export default function App() {
     }
     inFlightNoteWritesRef.current = snapshot.noteEditWritten
     inFlightPageMapRef.current = snapshot.pageMap
-    const run = (async (): Promise<boolean> => {
+    const payload = { path: filePath, ...editsPayload(edits, noteFlush, fields, bakeOcr) }
+    const imageBakes = imageEdits.flatMap(e => e.hostBake ? [e.hostBake] : [])
+    const run = async (confirm = false): Promise<boolean> => {
       setSaveState('saving')
-      const result = await window.pdfApi.save({
-        path: filePath,
-        ...editsPayload(edits, noteFlush, fields),
-      })
+      const result = hostSave
+        ? await (confirm ? hostSave.confirm() : rewrite ? rewrite()
+          : hostSave.save(payload, doc?.numPages ?? 0, check, snapshot.stampCfg, imageBakes))
+        : await window.pdfApi.save(payload)
+      // A retry must finish the original snapshot, not acknowledge newer edits.
+      confirmSaveRef.current = !result.ok && result.unconfirmed && hostSave ? () => run(true) : null
       if (!result.ok) {
+        if (rewrite && !confirmSaveRef.current) setGeometryLocked(false)
         opFailed(result.error)
         return false
       }
@@ -4777,7 +4907,7 @@ export default function App() {
         const scrollTop = el?.scrollTop ?? 0
         // Page structure/rotation changes cannot retain their old overlays because
         // their geometry or page numbers no longer match the newly saved document.
-        const canRetainPreview = rotations.size === 0 && deleted.size === 0 && order === null
+        const canRetainPreview = !rewrite && rotations.size === 0 && deleted.size === 0 && order === null
         const renderedPageNos = canRetainPreview
           ? [...visibleRows].flatMap((rowIdx) => (rows[rowIdx] ?? []).map((origIdx) => origIdx + 1))
           : []
@@ -4798,7 +4928,7 @@ export default function App() {
         )[0]
         ?.input.text.split('\n')[0]
         ?.trim()
-      if (nameCandidate) {
+      if (nameCandidate && !hostSave) {
         try {
           const renamed = await window.pdfApi.autoRename(filePath, nameCandidate)
           if (renamed.renamed && renamed.path) setFilePath(renamed.path)
@@ -4807,19 +4937,28 @@ export default function App() {
         }
       }
       setSaveState('saved')
+      if (rewrite) setGeometryLocked(false)
       setTimeout(() => setSaveState((s) => (s === 'saved' ? 'idle' : s)), 2000)
       return true
-    })()
-    const tracked = run.finally(() => {
-      if (saveInFlightRef.current === tracked) {
-        saveInFlightRef.current = null
-        inFlightNoteWritesRef.current = new Map()
-        inFlightPageMapRef.current = null
-      }
-    })
-    saveInFlightRef.current = tracked
-    return tracked
+    }
+    if (rewrite) setGeometryLocked(true)
+    return trackSave(run())
   }
+
+  const saveFromToolbar = () => save(false, false, undefined, undefined, true)
+
+  useLayoutEffect(() => {
+    hostLifecycle?.({
+      status,
+      state: () => ({
+        dirty: dirty || !!textDraftRef.current || !!noteDraft,
+        blocked: !!saveInFlightRef.current || !!confirmSaveRef.current || redactionRequestInFlightRef.current,
+      }),
+      save: () => save(false, true),
+      gotoPage: scrollToPage,
+    })
+    return () => hostLifecycle?.(null)
+  })
 
   // Drain queued saves. This effect runs after every commit, so by the time it fires
   // the in-flight save's reload has rendered and `save` reads post-reload state: the
@@ -4832,7 +4971,7 @@ export default function App() {
     // One explicit request makes the whole drained batch explicit (autosave opt-in)
     const autosaveOnly = queued.every((q) => q.autosave)
     const flushAll = queued.some((q) => q.flushAll)
-    void save(autosaveOnly, flushAll).then((ok) => {
+    void save(autosaveOnly, flushAll, undefined, undefined, queued.some((q) => q.explicitOcr)).then((ok) => {
       for (const q of queued) q.resolve(ok)
     })
   })
@@ -5004,6 +5143,12 @@ export default function App() {
 
   const runRedactFind = (patterns: readonly RedactPattern[]) => {
     setRedactFindOpen(false)
+    if (hostFindSensitive) {
+      void hostFindSensitive(patterns).catch((err: unknown) =>
+        opFailed(err instanceof Error ? err.message : String(err)),
+      )
+      return
+    }
     void markSensitive(patterns).then(
       (r) => {
         if (!r) return
@@ -5038,16 +5183,20 @@ export default function App() {
       deleted.size > 0 ||
       order !== null ||
       metadata !== null
-    if (otherPending) {
+    if (!hostRedactionPending && (otherPending || (hostRedact && (ordinaryDirty || confirmSaveRef.current)))) {
       showNotice(t('redactSaveFirst'))
       return
     }
-    if (!window.confirm(t('redactConfirm'))) return
+    if (!hostRedactionPending && !window.confirm(t('redactConfirm'))) return
     redactionApplyConfirmedRef.current = true
     redactionRequestInFlightRef.current = true
     setRedactionCopyInFlight(true)
-    void window.pdfApi
-      .requestRedactionCopy(filePath)
+    const publish = hostRedact
+      ? hostRedact(redactions.map(({ pageIndex, rect }) => ({ pageIndex, rect }))).then((ok) => {
+          if (ok) setRedactions([])
+        })
+      : window.pdfApi.requestRedactionCopy(filePath)
+    void publish
       .catch((err: unknown) => opFailed(err instanceof Error ? err.message : String(err)))
       .finally(() => {
         redactionRequestInFlightRef.current = false
@@ -5068,6 +5217,7 @@ export default function App() {
   // toolbar button / File ▸ Save) is what opts this file into unattended writes.
   useAutosave(
     () =>
+      !hostSave &&
       savedOnceRef.current &&
       ordinaryDirty &&
       saveInFlightRef.current === null &&
@@ -5085,6 +5235,24 @@ export default function App() {
     if (formDesignDoneSave > 0) void save()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [formDesignDoneSave])
+
+  const canAppendReport = () => !!doc && status === 'ready' && !readOnly && !dirty &&
+    !textDraft && !noteDraft && !saveInFlightRef.current && !confirmSaveRef.current
+
+  const appendReport = (sections: readonly string[]) => {
+    if (!canAppendReport() || !sections.length || !doc || doc.numPages + sections.length > 100) return null
+    const ops: Op[] = []
+    let after = visList.at(-1) ?? null
+    sections.forEach((text, index) => {
+      const pageIndex = doc.numPages + index
+      ops.push({ op: 'insertBlankPage', after, pageIndex, width: 612, height: 792 })
+      ops.push({ op: 'addTextInsert', input: { pageIndex, text, origin: [36, 756], fontSize: 11, lineLeading: 15, color: [0, 0, 0] } })
+      after = pageIndex
+    })
+    if (applyEditOps(ops).failures.length) return null
+    const applied = snapshot()
+    return () => !textDraft && !noteDraft && Object.entries(snapshot()).every(([key, value]) => applied[key as keyof EditSnapshot] === value)
+  }
 
   // ── Page operations ──
 
@@ -5172,7 +5340,13 @@ export default function App() {
   const applyStamps = (wm: WatermarkConfig | null, hf: HeaderFooterConfig | null) => {
     setStampDlg(false)
     if (!wm && !hf) return
-    applyEditOps([{ op: 'setStamps', cfg: { wm, hf } }])
+    const previous = stampRef.current
+    applyEditOps([{ op: 'setStamps', cfg: hostSave ? {
+      wm: wm ?? previous?.wm ?? null,
+      hf: hf ?? previous?.hf ?? null,
+      clearWatermark: !wm && previous?.clearWatermark,
+      clearHeaderFooter: !hf && previous?.clearHeaderFooter,
+    } : { wm, hf } }])
   }
 
   /** Stamp preview for visible pages (only pages in rendered rows, so large docs don't render every canvas) */
@@ -6088,6 +6262,41 @@ export default function App() {
     [imageEdits],
   )
 
+  // The host compiles image drafts against the saved PDF. Use it as the base
+  // raster only; page order, pending rotations and other overlays stay local.
+  const hostImageBakes = useMemo(() => imageEdits.flatMap(e => e.hostBake ? [e.hostBake] : []), [imageEdits])
+  const bakePreviewKey = JSON.stringify(hostImageBakes)
+  const [bakePreview, setBakePreview] = useState<{
+    base: PDFDocumentProxy; key: string; rendered: PDFDocumentProxy; pages: Set<number>
+  } | null>(null)
+  useEffect(() => {
+    setBakePreview(null)
+    if (!doc || !hostImageBakePreview || bakePreviewKey === '[]') return
+    const controller = new AbortController()
+    const operations = JSON.parse(bakePreviewKey) as PdfHostImageBake[]
+    let task: ReturnType<typeof loadPdfForView> | undefined
+    void (async () => {
+      try {
+        const bytes = await hostImageBakePreview(operations, controller.signal)
+        if (controller.signal.aborted) return
+        task = loadPdfForView(bytes)
+        const rendered = await task.promise
+        if (!controller.signal.aborted && rendered.numPages === doc.numPages) {
+          setBakePreview({base: doc, key: bakePreviewKey, rendered, pages: new Set(operations.map(op => op.page - 1))})
+        }
+      } catch {
+        if (!controller.signal.aborted) setBakePreview(null)
+      }
+    })()
+    return () => {
+      controller.abort()
+      void task?.destroy().catch(() => {})
+    }
+  }, [doc, hostImageBakePreview, bakePreviewKey])
+  const rasterFor = (pageIndex: number, original: PDFDocumentProxy) =>
+    bakePreview?.base === original && bakePreview.key === bakePreviewKey && bakePreview.pages.has(pageIndex)
+      ? bakePreview.rendered : original
+
   // ── Live page preview: pdfium re-renders the touched region without the moved/
   // resized/deleted images, without deleted saved annotations and without the text
   // runs being edited, so the original vanishes immediately instead of at save ──
@@ -6142,7 +6351,7 @@ export default function App() {
       return job
     }
     for (const e of imageEdits) {
-      if (e.input.kind !== 'insertImage') jobFor(e.input.pageIndex).rects.push(e.input.oldRect)
+      if (!e.hostBake && e.input.kind !== 'insertImage') jobFor(e.input.pageIndex).rects.push(e.input.oldRect)
     }
     for (const d of annotDeletes) jobFor(d.annot.pageIndex).annots.push(d.annot)
     // The draft goes first: a reopened edit's run must be claimed by the draft's probe
@@ -6236,7 +6445,8 @@ export default function App() {
       // The clip is part of the key: a run's ink bounds arrive after its draft opens and
       // widen the region, and the same probes must then render again
       const clipKey = [clip.x, clip.y, clip.width, clip.height].map(Math.round).join(',')
-      const key = `${job.rects.map(imageRectKey).join(';')}|${annotKey}|${textKey}|${clipKey}|${pxWidth}|${rotIdx}`
+      const imageBakes = hostImageBakes.filter(op => op.page === pageIndex + 1)
+      const key = `${job.rects.map(imageRectKey).join(';')}|${annotKey}|${textKey}|${clipKey}|${pxWidth}|${rotIdx}|${JSON.stringify(imageBakes)}`
       if (livePreviewKeys.current.get(pageIndex) === key) continue
       livePreviewKeys.current.set(pageIndex, key)
       void window.pdfApi
@@ -6244,6 +6454,7 @@ export default function App() {
           path: filePath,
           pageIndex,
           excludeRects: job.rects,
+          ...(imageBakes.length > 0 ? { imageBakes } : {}),
           ...(excludedAnnots.length > 0 ? { excludeAnnots: excludedAnnots } : {}),
           ...(job.text.length > 0 ? { excludeText: job.text.map((t) => t.probe) } : {}),
           clip,
@@ -6254,7 +6465,17 @@ export default function App() {
           // Stale guard: a newer request for this page may have superseded this one
           // while the render ran — its result must not be overwritten by ours
           if (livePreviewKeys.current.get(pageIndex) !== key) return
-          if (!res) return
+          if (!res) {
+            // The Web host can have no patch to render after the last image edit is undone,
+            // even when text drafts keep this page in the preview job list.
+            setLivePreview((prev) => {
+              if (!prev.has(pageIndex)) return prev
+              const next = new Map(prev)
+              next.delete(pageIndex)
+              return next
+            })
+            return
+          }
           const erased = new Set<string>()
           job.text.forEach((t, i) => {
             if (res.textErased[i]) erased.add(textEraseKey(t.probe))
@@ -6269,7 +6490,7 @@ export default function App() {
           }
         })
     }
-  }, [livePreviewRects, scale, pageGeom, rotDelta, filePath])
+  }, [livePreviewRects, hostImageBakes, scale, pageGeom, rotDelta, filePath])
 
   /** Export PNG or JPG: current page or all visible pages, 150dpi equivalent */
   const exportImages = (allPages: boolean, format: 'png' | 'jpg' = 'png') =>
@@ -6384,7 +6605,7 @@ export default function App() {
   const noteThreadsFor = async (origIdx: number): Promise<NoteThreadItem[]> => {
     const cached = savedNotes.get(origIdx)
     if (cached) return threadsFromSaved(origIdx, cached)
-    if (!doc) return threadsFromSaved(origIdx, [])
+    if (!doc || origIdx >= doc.numPages) return threadsFromSaved(origIdx, [])
     return threadsFromSaved(origIdx, (await loadSavedAnnots(doc, origIdx)).notes)
   }
 
@@ -6907,7 +7128,36 @@ export default function App() {
     return `The document has ${bits.join(' and ')}; use read_annotations to read them.`
   }
 
-  const aiApi: PdfAppDeps = {
+  const queueAiTextEdit = async (raw: TextEditInput, preflight?: (edit: TextEditInput) => Promise<void>, current?: () => boolean) => {
+    const before = textEditsRef.current
+    const resolved = resolveTextEdit(before, raw)
+    if ('reason' in resolved) return resolved.reason
+    const { input, replaces, moveBy } = resolved
+    let cover: [number, number, number, number] | undefined
+    if (preflight) {
+      try {
+        await preflight(input)
+      } catch {
+        return 'The PDF edit could not be verified against the current saved revision.'
+      }
+      if (!current?.() || textEditsRef.current !== before) return 'The PDF changed while the edit was being verified.'
+    } else if (filePath) {
+      try {
+        const [v] = await window.pdfApi.validateTextEdits({ path: filePath, edits: [input] })
+        if (v?.reason) return v.reason
+        cover = v?.bounds
+      } catch {
+        /* best-effort: the save path skips-and-reports unmatched edits anyway */
+      }
+    }
+    const te: LocalTextEdit = { id: newId(), input, cover, moveBy }
+    const gone = new Set(replaces.map((e) => e.id))
+    const prev = textEditsRef.current
+    const plan = applyEditOpsRef.current(textEditListOps(prev, patchPendingEdits(prev, te, gone)))
+    return plan.failures[0]?.error ?? null
+  }
+
+  const aiApi: PdfAppDeps & Pick<PdfAssistantView, 'moveTextBlock' | 'deleteMarkups'> = {
     doc: () => doc,
     fileName: () => fileName,
     pageCount: pageCountNow,
@@ -6921,7 +7171,7 @@ export default function App() {
       // one pdf.js pass per uncached page: notes and markups come from the same load
       let notes = savedNotes.get(origIdx)
       let savedList = savedMarkups.get(origIdx)
-      if ((!notes || !savedList) && doc) {
+    if ((!notes || !savedList) && doc && origIdx < doc.numPages) {
         const loaded = await loadSavedAnnots(doc, origIdx)
         notes ??= loaded.notes
         savedList ??= loaded.markups
@@ -6933,17 +7183,18 @@ export default function App() {
           ...(savedList ?? [])
             .filter((a) => !pendingDeleted.has(a.objNum))
             .map((a) => ({ key: `S${a.objNum}`, type: a.type, quads: a.quads, saved: true })),
-          ...markups
+          ...markupsRef.current
             .filter((m) => m.pageIndex === origIdx)
             .map((m) => ({ key: `P${m.id}`, type: m.type, quads: m.quads, saved: false })),
         ],
       }
     },
-    deleteMarkups: async (origIdx, keys) => {
+    deleteMarkups: async (origIdx, keys, check?: () => void) => {
       const pendingIds = new Set(keys.filter((k) => k[0] === 'P').map((k) => k.slice(1)))
       const savedNums = new Set(keys.filter((k) => k[0] === 'S').map((k) => Number(k.slice(1))))
       let savedList = savedMarkups.get(origIdx)
-      if (!savedList && doc) savedList = (await loadSavedAnnots(doc, origIdx)).markups
+      if (!savedList && doc && origIdx < doc.numPages) savedList = (await loadSavedAnnots(doc, origIdx)).markups
+      check?.()
       const pendingDeleted = new Set(annotDeletesRef.current.map((d) => d.annot.objNum))
       const saved = (savedList ?? []).filter(
         (a) => savedNums.has(a.objNum) && !pendingDeleted.has(a.objNum),
@@ -7017,28 +7268,10 @@ export default function App() {
         },
       ])
     },
-    editText: async (raw) => {
-      const resolved = resolveTextEdit(textEditsRef.current, raw)
-      if ('reason' in resolved) return resolved.reason
-      const { input, replaces, moveBy } = resolved
-      let cover: [number, number, number, number] | undefined
-      if (filePath) {
-        try {
-          const [v] = await window.pdfApi.validateTextEdits({ path: filePath, edits: [input] })
-          if (v?.reason) return v.reason
-          cover = v?.bounds
-        } catch {
-          /* best-effort: the save path skips-and-reports unmatched edits anyway */
-        }
-      }
-      const te: LocalTextEdit = { id: newId(), input, cover, moveBy }
-      const gone = new Set(replaces.map((e) => e.id))
-      const prev = textEditsRef.current
-      const plan = applyEditOpsRef.current(textEditListOps(prev, patchPendingEdits(prev, te, gone)))
-      return plan.failures[0]?.error ?? null
-    },
-    moveTextBlock: async (origIdx, block, d) => {
-      const plan = planBlockMove(origIdx, block, d, textEditsRef.current)
+    editText: queueAiTextEdit,
+    moveTextBlock: async (origIdx, block, d, preflight?: (edit: TextEditInput) => Promise<void>, current?: () => boolean) => {
+      const before = textEditsRef.current
+      const plan = planBlockMove(origIdx, block, d, before)
       if (plan === 'overflow') {
         return { reason: 'the moved paragraph would overlap the content below it' }
       }
@@ -7052,7 +7285,16 @@ export default function App() {
       // Shifting a block-level edit of this block re-uses objects validated when it was
       // queued; anything else is dry-run like a fresh move so the model learns of a
       // rejection now instead of at save
-      if (filePath && !(plan.kind === 'shift' && isBlockEditOf(te, block))) {
+      if (preflight) {
+        try {
+          await preflight(te.input)
+        } catch {
+          return { reason: 'The PDF move could not be verified against the current saved revision.' }
+        }
+        if (!current?.() || textEditsRef.current !== before) {
+          return { reason: 'The PDF changed while the move was being verified.' }
+        }
+      } else if (filePath && !(plan.kind === 'shift' && isBlockEditOf(te, block))) {
         try {
           const [v] = await window.pdfApi.validateTextEdits({ path: filePath, edits: [te.input] })
           if (v?.reason) return { reason: v.reason }
@@ -7482,6 +7724,16 @@ export default function App() {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (redactionRequestInFlightRef.current) return
+      // In the assistant only document-wide ⌘ commands apply (save, find,
+      // print, zoom); undo, form-field clipboard and page keys stay with it.
+      if (assistantHoldsKeyboard()) {
+        const k = e.key.toLowerCase()
+        const documentCommand =
+          (e.metaKey || e.ctrlKey) &&
+          !e.altKey &&
+          (k === 's' || k === 'f' || (k === 'p' && !e.shiftKey) || ['=', '+', '-', '0'].includes(e.key))
+        if (!documentCommand) return
+      }
       const target = e.target as HTMLElement | null
       const inEditable =
         !!target &&
@@ -7519,7 +7771,7 @@ export default function App() {
         }
         if (k === 's') {
           e.preventDefault()
-          void save()
+          void saveFromToolbar()
         } else if (k === 'z') {
           e.preventDefault()
           if (e.shiftKey) redo()
@@ -8163,12 +8415,33 @@ export default function App() {
     <div className="app" inert={redactionCopyInFlight} aria-busy={redactionCopyInFlight}>
       <div className={`ribbon ${collapse.rootClass}`} ref={collapse.rootRef}>
         <div className="ribbon-tabs" onDoubleClick={collapse.onTabsDoubleClick}>
+          {hostDownloadUrl && <div className="pdf-web-file-tab-wrap" onBlur={event => {
+            if (!event.currentTarget.contains(event.relatedTarget)) setHostFileMenu(false)
+          }} onKeyDown={event => {
+            if (event.key !== 'Escape' || !hostFileMenu) return
+            event.stopPropagation()
+            setHostFileMenu(false)
+            hostFileTab.current?.focus()
+          }}>
+            <button ref={hostFileTab} type="button" className={`ribbon-tab ribbon-tab-file${hostFileMenu ? ' open' : ''}`}
+              aria-expanded={hostFileMenu} aria-controls="pdf-web-file-menu" onClick={() => setHostFileMenu(open => !open)}>
+              {lang === 'zh' ? '文件' : 'File'}
+            </button>
+            {hostFileMenu && <div id="pdf-web-file-menu" className="file-menu">
+              <button type="button" disabled={(!dirty && !canSaveOcr && !confirmSaveRef.current) || saveState === 'saving'}
+                onClick={() => { setHostFileMenu(false); hostFileTab.current?.focus(); void saveFromToolbar() }}>{t('save')}</button>
+              {status === 'ready' && <a href={hostDownloadUrl()} download
+                onClick={() => { setHostFileMenu(false); hostFileTab.current?.focus() }}>
+                {lang === 'zh' ? '下载已保存版本' : 'Download saved version'}
+              </a>}
+            </div>}
+          </div>}
           <button
             className="qa-btn"
             data-tip={`${t('save')} (${platformShortcuts('⌘S')})`}
             aria-label={t('save')}
-            disabled={!dirty || saveState === 'saving'}
-            onClick={() => void save()}
+            disabled={(!dirty && !canSaveOcr && !confirmSaveRef.current) || saveState === 'saving'}
+            onClick={() => void saveFromToolbar()}
           >
             <IconSave />
           </button>
@@ -8229,9 +8502,13 @@ export default function App() {
             </button>
           )}
           <span className="ribbon-tabs-spacer" />
-          {readOnly && <span className="tb-readonly">{t('roEncrypted')}</span>}
+          {readOnly && <span className="tb-readonly">{editRestriction ?? (hostReadOnly?(lang==='zh'?'只读':'Read only'):t('roEncrypted'))}</span>}
           {/* The file on disk is only touched by an explicit save until then. */}
-          {saveState === 'saving' ? (
+          {hostDownloadUrl ? <span className="dyoffice-pdf-persistence-state" role="status"
+            data-dirty={dirty} data-attention={saveState === 'error'} title={saveError || undefined}>
+            {saveState === 'saving' ? t('saving') : saveState === 'error' ? t('saveFailed') : dirty ? t('unsaved')
+              : status === 'ready' ? t('savedOk') : ''}
+          </span> : <>{saveState === 'saving' ? (
             <span className="tb-save-pending">{t('saving')}</span>
           ) : (
             dirty &&
@@ -8242,7 +8519,7 @@ export default function App() {
               {t('saveFailed')}
             </span>
           )}
-          {saveState === 'saved' && <span className="tb-save-ok">{t('savedOk')}</span>}
+          {saveState === 'saved' && <span className="tb-save-ok">{t('savedOk')}</span>}</>}
           {formHasXfa && (
             <span className="tb-form-warning" data-tip={t('formXfaWarning')}>
               XFA
@@ -8258,14 +8535,15 @@ export default function App() {
                   <button
                     className={`rb-big ai-entry${aiCollapsed ? '' : ' active'}`}
                     data-tip={t('aiOpenAssistant')}
+                    disabled={!!hostSave && !hostAssistant}
                     onClick={() => setAiCollapsed((v) => !v)}
                   >
                     <span className="rb-big-icon">
                       <GensparkMark size={26} />
                     </span>
-                    <span>Genspark AI</span>
+                    <span>AI 助手</span>
                   </button>
-                  <button
+                  {!hostSave && <><button
                     className="rb-big ai-entry"
                     data-tip={t('aiSummarizeBtn')}
                     onClick={() =>
@@ -8296,7 +8574,7 @@ export default function App() {
                       </span>
                     </span>
                     <span>{t('aiKeyPointsBtn')}</span>
-                  </button>
+                  </button></>}
                 </div>
               </div>
               <div className="ribbon-sep" />
@@ -8458,7 +8736,7 @@ export default function App() {
                   ))}
                   <button
                     className={`rb-big${drawTool === 'redact' ? ' active' : ''}`}
-                    disabled={readOnly}
+                    disabled={readOnly || (!!hostSave && !hostRedact) || !!hostRedactionPending}
                     data-tip={t('redactHint')}
                     onClick={() => {
                       setEditTextMode(false)
@@ -8475,7 +8753,7 @@ export default function App() {
                   <div className="rb-drop-wrap" ref={redactFindWrapRef}>
                     <button
                       className={`rb-big${redactFindOpen ? ' active' : ''}`}
-                      disabled={readOnly || redactionCopyInFlight}
+                      disabled={readOnly || redactionCopyInFlight || (!!hostSave && !hostFindSensitive)}
                       data-tip={t('redactFindHint')}
                       onClick={() => setRedactFindOpen((v) => !v)}
                     >
@@ -8504,6 +8782,7 @@ export default function App() {
                       <button
                         className="rb-big"
                         data-tip={t('redactClear')}
+                        disabled={!!hostRedactionPending}
                         onClick={() => setRedactions([])}
                       >
                         {t('redactClear')}
@@ -8513,7 +8792,7 @@ export default function App() {
                         data-tip={t('redactApply')}
                         onClick={requestRedactionSaveAs}
                       >
-                        {t('redactApply')}
+                        {hostRedactionPending ?? t('redactApply')}
                       </button>
                     </>
                   )}
@@ -9176,10 +9455,49 @@ export default function App() {
           if (f) void onImageFilePicked(f)
         }}
       />
+      {hostReview}
       <div className="app-main">
+        {hostAssistant?.({doc, editRestriction, pages: visList, currentPage, recognizeText,
+          selection: aiSelection ? { pages: aiSelection.originalPages, text: aiSelection.text } : null,
+          gotoPage: scrollToPage, collapsed: aiCollapsed, setCollapsed: setAiCollapsed,
+          searchIndex: aiApi.searchIndex, sourceTextIndex: () => doc ? searchIndexCache.get(doc) : null,
+          addMarkup: aiApi.addMarkup, editText: queueAiTextEdit,
+          annotationApi: aiApi, deleteMarkups: aiApi.deleteMarkups, batchApi: aiApi,
+          addFormMark: (input, signal, canEdit) => {
+            const original = (page: number) => visList[page]!
+            const check = () => {
+              if (!canEdit()) throw new Error('The PDF changed before the form mark could be added.')
+            }
+            return addFormMarkTool({
+              readOnly: () => !canEdit(),
+              pageCount: () => visList.length,
+              isDeleted: () => false,
+              pageGeom: (page) => aiApi.pageGeom(original(page)),
+              searchIndex: async () => {
+                const index = await aiApi.searchIndex()
+                return visList.map((page) => index?.[page] ?? { text: '', lower: '', items: [] })
+              },
+              formWidgets: (page) => aiApi.formWidgets(original(page)),
+              pageBoxes: (page) => aiApi.pageBoxes(original(page)),
+              applyOps(ops, opts) { check(); return aiApi.applyOps(ops, opts) },
+              addFormMark(page, kind, rect) { check(); aiApi.addFormMark(original(page), kind, rect) },
+              gotoPage(page) { check(); scrollToPage(page); return true },
+            }, input, signal)
+          },
+          pageGeom: aiApi.pageGeom, moveTextBlock: aiApi.moveTextBlock,
+          textInsertApi: aiApi, stampApi: aiApi, insertImage: aiApi.insertImage, existingImageApi: aiApi,
+          imageBakes: () => imageEditsRef.current.flatMap(e => e.hostBake ? [e.hostBake] : []),
+          queueImageBake: (ref, operation) => applyEditOpsRef.current([{
+            op: 'addImageEdit', hostBake: operation, input: {
+              kind: 'transformImage', pageIndex: ref.pageIndex, oldRect: ref.rect, rect: ref.rect,
+            },
+          }]).failures.length === 0,
+          canEdit: () => !readOnly && !textDraft && !noteDraft && !saveInFlightRef.current && !confirmSaveRef.current,
+          canAppendReport, appendReport, saveReport: check => !readOnly && !textDraft && !noteDraft ? save(false, false, check) : Promise.resolve(false),
+          savePageRewrite: (write, check) => canAppendReport() ? save(false, true, check, write) : Promise.resolve(false)})}
         {/* dock wrapper animates the width between panel and rail (docs-style 180ms ease);
               the panel stays mounted while collapsed so the chat history survives */}
-        <div
+        {!hostReadOnly && !hostSave && <div
           className={`ai-dock${aiCollapsed ? ' collapsed' : ''}${
             !aiSidebarEnabled && aiCollapsed ? ' ai-dock-off' : ''
           }`}
@@ -9198,11 +9516,12 @@ export default function App() {
             api={aiApi}
             filePath={filePath}
             preset={aiPreset}
+            collapsed={aiCollapsed}
             onCollapse={() => setAiCollapsed(true)}
             onRunDone={() => void autoSaveAfterAiRun()}
             onClearSelection={() => setAiSelection(null)}
           />
-        </div>
+        </div>}
         <div className="app-content">
           {digitalSignatures.length > 0 && (
             <div className={`pdf-sig-banner ${overallSignatureStatus(digitalSignatures)}`}>
@@ -9455,7 +9774,7 @@ export default function App() {
                       >
                         {!isBlankPage(origIdx) && (
                           <PdfThumb
-                            doc={doc}
+                            doc={rasterFor(origIdx, doc)}
                             pageNo={origIdx + 1}
                             rotationDelta={rotDelta(origIdx)}
                             visible={visibleThumbs.has(v)}
@@ -9667,7 +9986,7 @@ export default function App() {
                               </div>
                             ) : (
                               <PdfPage
-                                doc={doc}
+                                doc={rasterFor(origIdx, doc)}
                                 pageNo={origIdx + 1}
                                 scale={scale}
                                 rotationDelta={rotDelta(origIdx)}
@@ -10610,7 +10929,7 @@ export default function App() {
                               />
                               <RedactionLayer
                                 active={
-                                  !readOnly && !redactionCopyInFlight && drawTool === 'redact'
+                                  !readOnly && !redactionCopyInFlight && !hostRedactionPending && drawTool === 'redact'
                                 }
                                 geom={geom}
                                 scale={scale}
@@ -10626,6 +10945,7 @@ export default function App() {
                                 }
                                 onTooSmall={() => showNotice(t('redactHint'))}
                               />
+                              {!dirty && hostPageOverlay?.(origIdx, size.width, size.height)}
                               <FormDesignLayer
                                 designing={
                                   ribbonTab === 'formDesign' && !readOnly && !formDesignPreview
@@ -11452,6 +11772,7 @@ export default function App() {
               <SignaturesDialog
                 t={t}
                 signatures={digitalSignatures}
+                webHost={Boolean(hostSave)}
                 onClose={() => setSignaturesDlg(false)}
                 onGoToPage={(pageIndex) => scrollToPage(pageIndex + 1)}
               />

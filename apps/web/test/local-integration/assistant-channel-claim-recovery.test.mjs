@@ -25,7 +25,7 @@ async function expireFixtureTask(f,taskId){
  // Test-only time boundary setup through the migration owner; runtime roles
  // intentionally cannot alter deadlines. Do not broaden runtime privileges.
  const c=await f.ownerPool.connect()
- try{await c.query('BEGIN');await c.query("SELECT set_config('dyoffice.deployment_id',$1,true),set_config('dyoffice.user_id',$2,true)",[f.deploymentId,f.alice.user.id]);await c.query("UPDATE assistant_tasks SET deadline_at=clock_timestamp()-interval '1 second' WHERE task_id=$1",[taskId]);await c.query('COMMIT')}catch(error){await c.query('ROLLBACK');throw error}finally{c.release()}
+ try{await c.query('BEGIN');await c.query("SELECT set_config('dyoffice.deployment_id',$1,true),set_config('dyoffice.user_id',$2,true)",[f.deploymentId,f.alice.user.id]);await c.query("UPDATE task_runtime_channel SET deadline_at=clock_timestamp()-interval '1 second' WHERE task_id=$1",[taskId]);await c.query('COMMIT')}catch(error){await c.query('ROLLBACK');throw error}finally{c.release()}
 }
 test('lost claim receipt can be retrieved with the same request ID only while its live claim remains current',async t=>{
  const f=await fixture(t),id=f.channel.conversationId,m=await f.join(),connectionId=randomUUID()

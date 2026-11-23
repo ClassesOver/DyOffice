@@ -2,12 +2,70 @@ import {afterEach,expect,test,vi} from 'vitest'
 import {act,createElement as h} from 'react'
 import {createRoot,type Root} from 'react-dom/client'
 import {WorkspaceTrash} from '../../src/shell/WorkspaceTrash'
+Object.defineProperties(HTMLDialogElement.prototype,{showModal:{configurable:true,value:function(){this.setAttribute('open','')}},close:{configurable:true,value:function(){this.removeAttribute('open')}}})
 ;(globalThis as typeof globalThis & {IS_REACT_ACT_ENVIRONMENT:boolean}).IS_REACT_ACT_ENVIRONMENT=true
 let root:Root
 const row={id:'file-a',name:'report.docx',format:'docx',size:1024,updatedAt:'2026-01-01',starred:false,folderId:null,lastOpenedAt:null}
 afterEach(async()=>{if(root)await act(async()=>root.unmount());document.body.innerHTML=''})
 async function mount(request:any){document.body.innerHTML='<div id="trash"></div>';root=createRoot(document.getElementById('trash')!);await act(async()=>root.render(h(WorkspaceTrash,{request,presentation:'page',onClose(){},onChanged(){}})))}
 const button=(text:string)=>[...document.querySelectorAll<HTMLButtonElement>('button')].find(b=>b.textContent===text)!
+test('batch purge confirms the filtered selection, keeps conflicts and refreshes once',async()=>{
+ const writes:string[]=[];let reads=0
+ let files=[row,{...row,id:'file-b',name:'report.pdf'},{...row,id:'file-c',name:'notes.pdf'}]
+ await mount(async(path:string,method?:string)=>{
+  if(method!=='POST'){reads++;return {files,total:files.length}}
+  writes.push(path)
+  if(path.includes('file-a'))throw Object.assign(Error('冲突'),{status:409})
+  files=files.filter(file=>file.id!=='file-b')
+  return {state:'pending'}
+ })
+ await act(async()=>{const input=document.querySelector<HTMLInputElement>('[type=search]')!;Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value')!.set!.call(input,'report');input.dispatchEvent(new Event('input',{bubbles:true}))})
+ const pickAll=document.querySelector<HTMLInputElement>('[aria-label="全选当前筛选结果"]')
+ expect(pickAll).not.toBeNull()
+ await act(async()=>pickAll!.click())
+ await act(async()=>button('批量永久删除').click())
+ expect(writes).toEqual([])
+ expect(document.querySelector('dialog')?.textContent).toContain('report.pdf')
+ expect(document.querySelector('dialog')?.textContent).not.toContain('notes.pdf')
+ await act(async()=>button('确认永久删除').click())
+ expect(writes).toEqual(['/api/v1/files/file-a/purge','/api/v1/files/file-b/purge'])
+ expect(reads).toBe(2)
+ expect(document.querySelector('[role=alert]')?.textContent).toContain('report.docx')
+ expect(document.querySelector('.management-list-panel [role=status]')?.textContent).toContain('后台回收')
+ expect(document.querySelector('[data-row-key="file-b"]')).toBeNull()
+})
+
+test('batch purge stops on an unconfirmed result and requires a reload',async()=>{
+ const writes:string[]=[]
+ await mount(async(path:string,method?:string)=>{
+  if(method==='POST'){writes.push(path);throw Error('lost response')}
+  return {files:[row,{...row,id:'file-b'}],total:2}
+ })
+ await act(async()=>document.querySelector<HTMLInputElement>('[aria-label="全选当前筛选结果"]')!.click())
+ await act(async()=>button('批量永久删除').click())
+ await act(async()=>button('确认永久删除').click())
+ expect(writes).toEqual(['/api/v1/files/file-a/purge'])
+ expect(button('批量永久删除').disabled).toBe(true)
+ expect(document.querySelector('[role=alert]')?.textContent).toContain('无法确认')
+})
+
+test('batch purging the last page returns to the previous page and clears the selection',async()=>{
+ let files=Array.from({length:12},(_,index)=>({...row,id:`file-${index}`}))
+ const offsets:number[]=[]
+ await mount(async(path:string,method?:string)=>{
+  if(method==='POST'){files=files.filter(file=>!path.includes(`/${file.id}/`));return {state:'purged'}}
+  const offset=Number(new URL(path,'http://local').searchParams.get('offset'))
+  offsets.push(offset)
+  return {files:files.slice(offset,offset+10),total:files.length}
+ })
+ await act(async()=>document.querySelector<HTMLButtonElement>('[aria-label="下一页回收站"]')!.click())
+ await act(async()=>document.querySelector<HTMLInputElement>('[aria-label="全选当前筛选结果"]')!.click())
+ await act(async()=>button('批量永久删除').click())
+ await act(async()=>button('确认永久删除').click())
+ expect(offsets).toEqual([0,10,0])
+ expect(document.querySelector('.settings-list-page-status')?.textContent).toBe('1–10 / 10')
+ expect(button('批量永久删除').disabled).toBe(true)
+})
 test('trash page renders one server page, honest metadata and local search without duplicate modal header',async()=>{
  const paths:string[]=[];await mount(async(path:string)=>{paths.push(path);return {files:[row],total:21}})
  expect(paths).toEqual(['/api/v1/workspace/files?view=trash&limit=10&offset=0'])
@@ -18,6 +76,9 @@ test('trash page renders one server page, honest metadata and local search witho
  await act(async()=>{const input=document.querySelector<HTMLInputElement>('[aria-label="搜索当前页文件"]')!;Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value')!.set!.call(input,'missing');input.dispatchEvent(new Event('input',{bubbles:true}))})
  expect(document.body.textContent).toContain('当前页没有匹配文件')
  expect(paths).toHaveLength(1)
+ expect(document.querySelector('.workspace-trash-panel [class*="ant-"]')).toBeNull()
+ await act(async()=>document.querySelector<HTMLButtonElement>('[aria-label="清空搜索当前页文件"]')!.click())
+ expect(document.querySelector('[data-row-key="file-a"]')).not.toBeNull();expect(paths).toHaveLength(1)
  await act(async()=>document.querySelector<HTMLButtonElement>('[aria-label="下一页回收站"]')!.click())
  expect(paths.at(-1)).toBe('/api/v1/workspace/files?view=trash&limit=10&offset=10')
 })
@@ -74,7 +135,7 @@ for(const action of ['restore','purge'] as const)test(`successful ${action} of t
  await act(async()=>button(action==='restore'?'恢复':'确认永久删除').click())
  expect(writes).toEqual([`/api/v1/files/file-10/${action}`])
  expect(offsets).toEqual([0,10,0])
- expect(document.querySelectorAll('.ant-table-body [data-row-key]').length).toBe(10)
+ expect(document.querySelectorAll('tbody [data-row-key]').length).toBe(10)
  expect(document.querySelector('.settings-list-page-status')?.textContent).toBe('1–10 / 10')
  expect(document.body.textContent).not.toContain('回收站为空。')
  await act(async()=>button('重新加载').click());expect(offsets.at(-1)).toBe(0)

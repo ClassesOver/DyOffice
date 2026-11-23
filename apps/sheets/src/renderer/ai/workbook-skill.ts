@@ -33,9 +33,38 @@ export function createWorkbookSkill(deps: SheetsSkillDeps): AgentSkill {
         ? []
         : (deps.getActiveSheetInfo().sheets.flatMap((sheet) => index?.labelsFor(sheet.id) ?? []) ??
           [])
-      return labels.length > 0 ? `${basePrompt}\n\n${placeholderInstruction(labels)}` : basePrompt
+      const prompt = labels.length > 0 ? `${basePrompt}\n\n${placeholderInstruction(labels)}` : basePrompt
+      const supported = deps.supportedCreateDocumentTypes?.()
+      return supported === undefined ? prompt : `${prompt}\n\nHost capabilities: create_document only supports ${supported.join(', ') || 'no file types'}. Do not offer other formats. Follow its tool result for storage and delivery; do not assume a local default save folder.`
     },
-    tools: WORKBOOK_TOOLS,
+    get tools() {
+      const supported = deps.supportedCreateDocumentTypes?.()
+      if (supported === undefined) return WORKBOOK_TOOLS
+      if (!supported.length) return WORKBOOK_TOOLS.filter(tool => tool.name !== 'create_document')
+      return WORKBOOK_TOOLS.map(tool => {
+        if (tool.name !== 'create_document') return tool
+        const schema = tool.inputSchema as {properties: Record<string, unknown>}
+        const filteredTool = { ...tool }
+        const sheetTypes = supported.filter(type => type === 'xlsx' || type === 'csv')
+        const reportTypes = supported.filter(type => type === 'docx' || type === 'pdf')
+        filteredTool.description = [
+          'Create a standalone file; the current workbook is unchanged.',
+          `Supported types on this host: ${supported.join(', ')}.`,
+          ...(sheetTypes.length ? [`${sheetTypes.join('/')} export one worksheet (sheetId, optional title; omit content).`] : []),
+          ...(reportTypes.length ? [`${reportTypes.join('/')} take a title and simple HTML content for a new report or summary.`] : []),
+        ].join(' ')
+        filteredTool.inputSchema = {
+          ...schema,
+          properties: {
+            ...schema.properties,
+            type: {type: 'string', enum: [...supported], description: `target file type (default '${supported[0]}')`},
+            title: {type: 'string', description: 'File name without extension; required for authored documents, optional for worksheet exports'},
+            content: {type: 'string', description: 'Simple HTML for authored documents. Omit for xlsx/csv worksheet exports'},
+          },
+        }
+        return filteredTool
+      })
+    },
     buildContext: () => buildWorkbookContext(deps),
     executeTool: (call) => executeWorkbookTool(call, deps),
     executeScopedTool: (call) => executeWorkbookTool(call, {

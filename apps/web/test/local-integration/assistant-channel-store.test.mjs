@@ -156,7 +156,7 @@ test('long task history returns bounded previews with active tasks first and aut
  await f.transactions.withPrincipalTransaction({kind:'session',token:f.alice.token},async c=>{
   for(let i=0;i<70;i++) {
    const taskId=randomUUID();firstId??=taskId
-   await c.query("INSERT INTO assistant_tasks(task_id,deployment_id,owner_id,conversation_id,root_task_id,depth,sender,recipient,instruction,summary,state,deadline_at) VALUES($1,$2,$3,$4,$1,0,'office',$5,$6,$7,'succeeded',clock_timestamp()+interval '10 minutes')",[taskId,f.deploymentId,f.alice.user.id,id,m.member.membershipId,instruction,summary])
+   await c.query("INSERT INTO task_runtime_channel(task_id,deployment_id,owner_id,conversation_id,root_task_id,depth,sender,recipient,instruction,summary,state,deadline_at) VALUES($1,$2,$3,$4,$1,0,'office',$5,$6,$7,'succeeded',clock_timestamp()+interval '10 minutes')",[taskId,f.deploymentId,f.alice.user.id,id,m.member.membershipId,instruction,summary])
   }
  })
  const active=await f.submit(m.member.membershipId,{kind:'delegate',instruction})
@@ -197,4 +197,38 @@ test('only Office can attach data scope; live recipient claims fence task data a
  await f.submit(a.member.membershipId,{kind:'cancel',taskId:claim.taskId});await assert.rejects(check())
  await f.service.connect(a.credential,id,{connectionId:randomUUID()});await assert.rejects(check())
  await f.service.revoke(f.alice.token,id,a.member.membershipId);await assert.rejects(check())
+})
+
+test('a second API reads only durable channel event metadata after the snapshot cursor',async t=>{
+ const f=await fixture(t),id=f.channel.conversationId,m=await f.join()
+ const {sequence}=await f.service.snapshot(f.alice.token,id)
+ const task=await f.submit(m.member.membershipId,{kind:'delegate',instruction:'Private review instruction'})
+ const second=createAssistantChannelService({transactions:f.transactions,credentialKey:f.csrfKey})
+ const another=await f.submit(m.member.membershipId,{kind:'delegate',instruction:'Separate task'})
+ const scoped=await second.ownerEventPage(f.alice.token,id,sequence,task.taskId)
+ assert.equal(scoped.state,'queued')
+ assert.ok(scoped.events.some(e=>e.kind==='state'&&e.payload.state==='queued'))
+ assert.ok(scoped.events.every(e=>e.taskId===task.taskId&&e.sequence>sequence))
+ assert.ok(!JSON.stringify(scoped).includes('Private review'))
+ assert.deepEqual((await second.ownerEventPage(f.alice.token,id,scoped.events.at(-1).sequence,task.taskId)).events,[])
+ await assert.rejects(second.ownerEventPage(f.bob.token,id,0,another.taskId),{statusCode:404})
+ await assert.rejects(second.ownerEventPage(f.alice.token,id,0,randomUUID()),{statusCode:404})
+ const connectionId=randomUUID()
+ const connection=await f.service.connect(m.credential,id,{connectionId})
+ const claim=await f.service.claim(m.credential,id,{taskId:task.taskId,connectionId,...connection})
+ await f.submit('office',{kind:'result',taskId:task.taskId,claimId:claim.claimId,connectionEpoch:claim.connectionEpoch,summary:'Private answer',outcome:'succeeded'},m.credential)
+ const finished=await second.ownerEventPage(f.alice.token,id,scoped.events.at(-1).sequence,task.taskId)
+ assert.equal(finished.state,'succeeded')
+ assert.ok(finished.events.some(e=>e.kind==='result'&&e.payload.taskId===task.taskId))
+ assert.ok(!JSON.stringify(finished).includes('Private answer'))
+ const page=await second.ownerEventPage(f.alice.token,id,sequence)
+ assert.ok(page.events.some(event=>event.taskId===task.taskId))
+ for(const event of page.events){
+  assert.ok(event.sequence>sequence)
+  assert.deepEqual(Object.keys(event).sort(),['kind','sequence','taskId'])
+ }
+ assert.deepEqual(await second.ownerEventPage(f.alice.token,id,page.events.at(-1).sequence),{events:[]})
+ await assert.rejects(second.ownerEventPage(f.bob.token,id,0),{statusCode:404})
+ await f.files.trashFile(f.alice.token,f.file.fileId)
+ await assert.rejects(second.ownerEventPage(f.alice.token,id,0),{statusCode:404})
 })

@@ -1,6 +1,9 @@
 import {SandboxError} from '../sandbox/contracts.ts'
 import {createNativeAdmission,type NativeProcess} from './admission.ts'
 import type {XlsxMutationPlan} from './xlsx.ts'
+import {externalLinksResultSchema} from '../../../../sheets/src/shared/external-links-contract.ts'
+
+export type WorkbookPackageQuery={path:string;cachePath:string}|{externalLinks:true}
 
 const MAX=32*1024*1024,REQUEST_MAX=4*1024*1024
 type WirePlan={replaced:[string,string][];added:[string,string][];addedBinary:[string,string][];removedEntries:string[]}
@@ -37,7 +40,7 @@ export function encodeGatewayPlan(plan:XlsxMutationPlan):WirePlan {
 }
 export function createGatewayAdapter(process:NativeProcess) {
   const native=createNativeAdmission(process)
-  async function run(bytes:Buffer,command:'gateway_package'|'gateway_plan',request:unknown,signal?:AbortSignal):Promise<unknown> {
+  async function run(bytes:Buffer,command:'gateway_package'|'gateway_plan'|'gateway_convert_merge_source',request:unknown,signal?:AbortSignal):Promise<unknown> {
     if(signal?.aborted)throw new SandboxError('ABORTED')
     if(!Buffer.isBuffer(bytes)||bytes.length<1||bytes.length>MAX)throw new SandboxError('INPUT_LIMIT')
     let encoded:Buffer
@@ -53,8 +56,21 @@ export function createGatewayAdapter(process:NativeProcess) {
       if(!record(reply)||Object.keys(reply).join(',')!=='written'||reply.written!==true)throw new SandboxError('INVALID_PROTOCOL')
       const output=await io.readOutput();check()
       if(output.length>MAX)throw new SandboxError('OUTPUT_LIMIT')
+      if(command==='gateway_convert_merge_source'){
+        if(output.length<4||output.readUInt32LE(0)!==0x04034b50)throw invalid()
+        return output
+      }
       let value:unknown;try{value=JSON.parse(output.toString('utf8'))}catch{throw invalid()}
       if(command==='gateway_plan')return decodeGatewayPlan(value)
+      if(record(request)&&request.externalLinks===true){
+        const parsed=externalLinksResultSchema.safeParse(value)
+        if(!parsed.success||parsed.data.links.some(link=>link.source!==null))throw invalid()
+        return parsed.data
+      }
+      if(record(request)&&typeof request.path==='string'){
+        if(!record(value)||typeof value.outputRef!=='string'||typeof value.sourceSheet!=='string'||typeof value.sourceRef!=='string'||!Array.isArray(value.fields)||!Array.isArray(value.unsupported))throw invalid()
+        return value
+      }
       if(!record(value)||Object.keys(value).sort().join(',')!=='connections,queries,redactions,slicers')throw invalid()
       return value
     },{signal})
@@ -66,6 +82,7 @@ export function createGatewayAdapter(process:NativeProcess) {
   return {
     planWorkbookSave:(bytes:Buffer,sheets:readonly {id:string;name:string}[],request:unknown,signal?:AbortSignal)=>run(bytes,'gateway_plan',{sheets:sheets.map(({id,name})=>({id,name})),request},signal) as Promise<XlsxMutationPlan>,
     planFromWorkbook:(bytes:Buffer,request:unknown,signal?:AbortSignal)=>run(bytes,'gateway_plan',{request},signal) as Promise<XlsxMutationPlan>,
-    readWorkbookPackage:(bytes:Buffer,signal?:AbortSignal)=>run(bytes,'gateway_package',{},signal),
+    readWorkbookPackage:(bytes:Buffer,signal?:AbortSignal,query?:WorkbookPackageQuery)=>run(bytes,'gateway_package',query??{},signal),
+    convertMergeSource:(bytes:Buffer,format:'csv'|'tsv'|'xls',signal?:AbortSignal)=>run(bytes,'gateway_convert_merge_source',{format},signal) as Promise<Buffer>,
   }
 }

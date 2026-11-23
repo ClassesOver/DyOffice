@@ -43,3 +43,12 @@ test('outline rejects getters sparse arrays and duplicate IDs without evaluation
 test('pending outline gate snapshots context and consumes only one validated timely reply',()=>{const expected=outlineContext();const gate=control.createPendingOutlineReply(expected,new Date('2026-11-17T00:00:10.000Z'));expected.generation=99;assert.throws(()=>gate.accept({...outlineReply(),generation:3},now));assert.equal(gate.accept(outlineReply(),now).value.count,1);assert.throws(()=>gate.accept(outlineReply(),now),e=>e.code==='DOCUMENT_REPLY_CONSUMED');const expired=control.createPendingOutlineReply(outlineContext(),new Date('2026-11-17T00:00:00.000Z'));assert.throws(()=>expired.accept(outlineReply(),now),e=>e.code==='DOCUMENT_REPLY_EXPIRED');assert.throws(()=>control.createPendingOutlineReply(outlineContext(),new Date(NaN)))})
 test('outline deadline boundary is inclusive and expired gates cannot revive after clock rollback',()=>{const end=new Date('2026-11-17T00:00:10.000Z');const gate=control.createPendingOutlineReply(outlineContext(),end);assert.equal(gate.accept(outlineReply(),new Date(end.getTime()-1)).value.count,1);const stale=control.createPendingOutlineReply(outlineContext(),end);assert.throws(()=>stale.accept(outlineReply(),end),e=>e.code==='DOCUMENT_REPLY_EXPIRED');assert.throws(()=>stale.accept(outlineReply(),now),e=>e.code==='DOCUMENT_REPLY_EXPIRED')})
 test('outline accepts source-derived durable identity for a bounded nonstandard slide path',()=>{const value={...outlineValue(),paths:['ppt/slides/custom.xml'],slideIds:['s_ppt_slides_custom_xml']};assert.equal(control.validateCommandResult({...outlineReply(),value},outlineContext()).value.slideIds[0],'s_ppt_slides_custom_xml')})
+test('PPTX outline carries only a literal read-only flag',()=>{
+ const validate=value=>control.validateCommandResult({...outlineReply(),value},outlineContext()).value
+ assert.equal(Object.hasOwn(validate(outlineValue()),'writeProtected'),false)
+ assert.equal(validate({...outlineValue(),writeProtected:true}).writeProtected,true)
+ for(const writeProtected of [false,'true',1,null,undefined]){
+  assert.throws(()=>validate({...outlineValue(),writeProtected}),{code:'INVALID_PPTX_OUTLINE'})
+ }
+ assert.throws(()=>validate({...outlineValue(),writeProtected:true,modifyVerifier:{}}),{code:'INVALID_PPTX_OUTLINE'})
+})

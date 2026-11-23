@@ -70,15 +70,10 @@ async function fixture(t, datasets = { alice: rows(1203) }) {
   f.execute = (name, args = {}, options = {}) => f.call('POST', workspacePath + '/source-tools/execute', { name, arguments: args }, options)
   f.home = (query = '', options = {}) => f.call('GET', workspacePath + '/data-results' + query, undefined, options)
   f.page = (resultId, query = '', options = {}) => f.call('GET', workspacePath + '/data-results/' + resultId + query, undefined, options)
-  f.createSource = async ({ sourceId = 'metrics', name = 'Personal metrics', endpointName = 'alice', config = {}, publish = true, token = f.alice.token } = {}) => {
+  f.createSource = async ({ sourceId = 'metrics', name = 'Personal metrics', endpointName = 'alice', config = {}, token = f.alice.token } = {}) => {
     const created = await f.call('POST', '/api/v1/sources', {
       sourceId, name, kind: 'http', config: { timezone, rowPath: 'payload.rows', units, ...config }, secret: endpoint(endpointName),
     }, { token, status: 201 })
-    if (publish) {
-      const published = await f.call('POST', '/api/v1/sources/' + sourceId + '/publish', { expectedVersion: 1 }, { token })
-      assert.equal(published.execution.maxResponseBytes, 1_000_000)
-      return published
-    }
     return created
   }
   f.counts = async (token = f.alice.token) => {
@@ -136,10 +131,11 @@ test('tool definitions expose the five bounded tools with no caller-selectable o
   assert.equal(f.http.requests.length, 0)
 })
 
-test('sources.list exposes only the cookie owner enabled published assignments, excluding drafts, disabled and deleted sources', async t => {
+test('sources.list exposes only the cookie owner enabled saved connections, excluding missing credentials, disabled and deleted sources', async t => {
   const f = await fixture(t, { alice: rows(2), bob: rows(3, 'Bob') })
   await f.createSource({ sourceId: 'a-enabled' })
-  await f.createSource({ sourceId: 'b-draft', publish: false })
+  await f.createSource({ sourceId: 'b-empty' })
+  await f.call('PUT', '/api/v1/sources/b-empty', { expectedVersion: 1, secret: null })
   await f.createSource({ sourceId: 'c-disabled' })
   await f.call('PUT', '/api/v1/sources/c-disabled', { expectedVersion: 1, enabled: false })
   await f.createSource({ sourceId: 'd-deleted' })
@@ -153,25 +149,39 @@ test('sources.list exposes only the cookie owner enabled published assignments, 
   ], nextCursor: null })
   assert.deepEqual(await f.execute('sources.list', { after: 'a-enabled' }), { items: [listed.items[1]], nextCursor: null })
   assert.deepEqual((await f.execute('sources.list', {}, { token: f.bob.token })).items.map(item => item.sourceId), ['bob-only'])
-  for (const sourceId of ['b-draft', 'c-disabled']) {
+  for (const sourceId of ['c-disabled']) {
     await f.execute('sources.describe', { sourceId }, { status: 409 })
     await f.execute('sources.query', { sourceId }, { status: 409 })
   }
+  await f.execute('sources.query', { sourceId: 'b-empty' }, { status: 503 })
   await f.execute('sources.describe', { sourceId: 'd-deleted' }, { status: 404 })
   await f.execute('sources.query', { sourceId: 'd-deleted' }, { status: 404 })
   noSecrets(listed, f)
   assert.equal(f.http.requests.length, 0)
 })
 
-test('HTTP describe returns published extraction metadata and units without revealing or fetching the credential', async t => {
+test('sources.list filters unavailable connections before paging without empty leading pages',async t=>{
+ const f=await fixture(t,{alice:rows(1)})
+ for(let i=0;i<51;i++){
+  const sourceId='hidden-'+String(i).padStart(2,'0')
+  await f.createSource({sourceId})
+  await f.call('PUT','/api/v1/sources/'+sourceId,{expectedVersion:1,enabled:false})
+ }
+ await f.createSource({sourceId:'visible'})
+ const listed=await f.execute('sources.list')
+ assert.deepEqual(listed.items.map(item=>item.sourceId),['visible'])
+ assert.equal(listed.nextCursor,null)
+ assert.equal(f.http.requests.length,0)
+})
+
+test('HTTP describe returns current saved extraction metadata and units without revealing or fetching the credential', async t => {
   const f = await fixture(t)
-  const published = await f.createSource()
-  assert.equal(published.execution.maxRows, 1000)
+  await f.createSource()
   await f.call('PUT', '/api/v1/sources/metrics', { expectedVersion: 1, config: { timezone: 'UTC', rowPath: 'draft.rows', units: { zz_amount: 'USD' } } })
   const described = await f.execute('sources.describe', { sourceId: 'metrics' })
   assert.deepEqual(described, {
-    sourceId: 'metrics', sourceVersion: 1, kind: 'http',
-    config: { timezone, maxRows: 1000, rowPath: 'payload.rows', units }, metadata: null,
+    sourceId: 'metrics', sourceVersion: 2, kind: 'http',
+    config: { timezone:'UTC', maxRows: 1000, rowPath: 'draft.rows', units: {zz_amount:'USD'} }, metadata: null,
   })
   noSecrets(described, f)
   assert.equal(f.http.requests.length, 0)
@@ -182,7 +192,7 @@ test('query freezes 1000 rows with a 100-row preview; save retries, Home, paging
   const original = rows(1203), frozenRows = original.slice(0, 1000)
   const f = await fixture(t, { alice: original })
   await f.createSource()
-  const queried = await f.execute('sources.query', { sourceId: 'metrics', sourceVersion: 1 })
+  const queried = await f.execute('sources.query', { sourceId: 'metrics' })
   const artifact = queried.artifact
   assert.match(artifact.resultId, /^[a-f0-9-]{36}$/)
   assert.equal(artifact.state, 'pending')
@@ -302,7 +312,7 @@ test('Bob and Admin guesses of another owner source or pending/saved result retu
     for (const token of [f.bob.token, f.adminSigned.token]) {
       for (const [name, args] of [
         ['sources.describe', { sourceId: 'alice-private' }],
-        ['sources.query', { sourceId: 'alice-private', sourceVersion: 1 }],
+        ['sources.query', { sourceId: 'alice-private' }],
         ['sources.read_result', { resultId }],
         ['sources.save_result', command],
       ]) {
@@ -464,13 +474,11 @@ test('pending results are session-bound; saved results and the same save receipt
   assert.equal(f.http.requests.length, 2)
 })
 
-test('HTTP source refuses responses beyond its published 1 MB budget without persisting an artifact or success query audit', async t => {
+test('HTTP source refuses responses beyond its fixed 1 MB budget without persisting an artifact or success query audit', async t => {
   const oversized = rows(1)
   oversized[0].literal = 'x'.repeat(1_000_001)
   const f = await fixture(t, { alice: oversized })
-  const published = await f.createSource()
-  assert.equal(published.execution.maxRows, 1000)
-  assert.equal(published.execution.maxResponseBytes, 1_000_000)
+  await f.createSource()
   const denied = await f.execute('sources.query', { sourceId: 'metrics' }, { status: 502 })
   assert.equal(JSON.stringify(denied).includes('x'.repeat(100)), false)
   assert.deepEqual(await f.counts(), { artifacts: [], queries: 0 })

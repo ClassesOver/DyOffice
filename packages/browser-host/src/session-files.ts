@@ -11,7 +11,12 @@ function errorFor(status: number) {
   const code = status === 401 || status === 403 ? 'UNAUTHORIZED' : status === 409 || status === 410 ? 'CONFLICT' : status === 413 ? 'PAYLOAD_TOO_LARGE' : status >= 500 || status === 408 ? 'UNAVAILABLE' : 'INVALID_RESPONSE'
   return Object.assign(hostError(code,'request'),{ status })
 }
-export function createSessionFileHost({ fetchImpl = fetch, editorId = crypto.randomUUID(), onState, leaseRetryDelayMs = 150 }: { fetchImpl?: typeof fetch; editorId?: string; onState?: () => void; leaseRetryDelayMs?: number } = {}) {
+export class CitedRevisionChanged extends HostError {
+  constructor() { super('CONFLICT', 'The cited revision is no longer the current document revision.') }
+}
+
+export function createSessionFileHost({ fetchImpl = fetch, editorId = crypto.randomUUID(), onState, leaseRetryDelayMs = 150, expectedRevision }: { fetchImpl?: typeof fetch; editorId?: string; onState?: () => void; leaseRetryDelayMs?: number; expectedRevision?: string | undefined } = {}) {
+  let citedRevision = expectedRevision
   const editor = uuid(editorId), contexts = new Map<string,Context>(), references = new Map<string,RevisionRef>(), timers = new Map<string,ReturnType<typeof setInterval>>()
   const expirations = new Map<string,ReturnType<typeof setTimeout>>()
   const renewals = new Map<string,{context: Context; operation: number; promise: Promise<Lease>}>()
@@ -187,9 +192,12 @@ export function createSessionFileHost({ fetchImpl = fetch, editorId = crypto.ran
     async open(fileId) {
       const id = uuid(fileId)
       if (contexts.get(id)?.pending || contexts.get(id)?.preparing) throw hostError('UNAVAILABLE','unconfirmed commit')
+      const initialCitation = citedRevision === undefined ? undefined : uuid(citedRevision)
       const result = await get(`/api/v1/files/${id}`) as OpenFileResult & { name?: string }
       assertActive()
       if (!isRevisionRef(result?.file) || result.file.fileId !== id) throw hostError('INVALID_RESPONSE','open')
+      if (initialCitation && initialCitation !== result.file.revision) throw new CitedRevisionChanged()
+      citedRevision = undefined
       const name = typeof result.name === 'string' && result.name.length <= 255 ? result.name : id + '.' + result.format
       contexts.set(id,{ preparing: false,leaseOperation: 0,exclusiveLease: null,revision: { ...result.file },name,lease: null,pending: null,status: 'idle',staged: new Map() }); remember(result.file); emit()
       return result
@@ -277,6 +285,14 @@ export function createSessionFileHost({ fetchImpl = fetch, editorId = crypto.ran
       ++ctx.leaseOperation; ctx.lease=null; clearExpiration(id); emit()
       if (lease) await mutation(`/api/v1/files/${id}/lease`,'DELETE',{ editorId: editor,leaseEpoch: lease.leaseEpoch },false,keepalive)
     },
+    // Read-only comparison: never bind an old editor model to a newer base.
+    async isCurrentRevision(fileId: string) {
+      const id=uuid(fileId),ctx=context(id),base={...ctx.revision}
+      const result=await get(`/api/v1/files/${id}`) as OpenFileResult
+      if(!isRevisionRef(result?.file)||result.file.fileId!==id)throw hostError('INVALID_RESPONSE','head')
+      if(context(id)!==ctx || ctx.revision.revision!==base.revision)throw hostError('CONFLICT','changed head')
+      return result.file.revision===base.revision && result.file.sha256===base.sha256 && result.file.size===base.size
+    },
     async refreshHead(fileId: string) {
       const id=uuid(fileId),ctx=context(id),base=ctx.revision.revision
       if(ctx.pending || ctx.preparing)throw hostError('UNAVAILABLE','unconfirmed save')
@@ -332,7 +348,8 @@ export function createSessionFileHost({ fetchImpl = fetch, editorId = crypto.ran
     // request is the renderer session pointer {revision, generation}; the
     // server resolves it against its in-process session and returns the
     // prepared draft receipt. Never replays while a receipt is unconfirmed.
-    async saveSlides(fileId: string, request: unknown) {
+    async saveSlides(fileId: string, request: unknown, authorized:()=>boolean=()=>true) {
+      if(!authorized())throw hostError('UNAVAILABLE','save authorization changed')
       const id = uuid(fileId), ctx = liveContext(id), lease = ctx.lease, base = ctx.revision.revision
       if (ctx.pending || ctx.preparing) throw hostError('UNAVAILABLE','unconfirmed save')
       if (!lease) throw hostError('CONFLICT','lease')
@@ -347,8 +364,9 @@ export function createSessionFileHost({ fetchImpl = fetch, editorId = crypto.ran
         // Changed zip parts are optional (the slides save service does not diff them yet);
         // the receipt itself stays the T06 idempotent commit.
         const touchedEntries = Array.isArray(draft.touchedEntries) && draft.touchedEntries.length <= 256 && draft.touchedEntries.every((name: unknown) => typeof name === 'string' && name.length <= 1024) ? [...draft.touchedEntries as string[]] : []
+        if(!authorized())throw hostError('UNAVAILABLE','save authorization changed')
         committing = true
-        const saved = await commit(id,ctx,{ touchedEntries, input: Object.freeze({fileId: id,uploadId,baseRevision: base,leaseEpoch: lease.leaseEpoch,idempotencyKey: crypto.randomUUID()}),sha256: draft.sha256,size: draft.size })
+        const saved = await commit(id,ctx,{ touchedEntries, input: Object.freeze({fileId: id,uploadId,baseRevision: base,leaseEpoch: lease.leaseEpoch,idempotencyKey: crypto.randomUUID()}),sha256: draft.sha256,size: draft.size },authorized)
         return {...saved,touchedEntries}
       } catch (error) {
         if (!committing) {
@@ -365,13 +383,17 @@ export function createSessionFileHost({ fetchImpl = fetch, editorId = crypto.ran
       const saved = await commit(id,ctx,pending)
       return {...saved,touchedEntries:[...(pending.touchedEntries ?? [])]}
     },
-    async save(fileId: string, bytes: Uint8Array, authorized:()=>boolean = ()=>true) {
+    async wordLeaseActive(fileId:string) {return (await get('/api/v1/files/'+uuid(fileId)+'/lease')).active===true},
+    async wordCollab(fileId:string,body:{revision:string;version?:number;steps?:unknown[]}) {
+      return mutation('/api/v1/files/'+uuid(fileId)+'/word-collab','POST',{...body,clientId:editor})
+    },
+    async save(fileId: string, bytes: Uint8Array, authorized:()=>boolean = ()=>true,wordVersion?:number) {
       if(!authorized())throw hostError('UNAVAILABLE','save authorization changed')
       const id = uuid(fileId), ctx = context(id)
       if (ctx.pending) { const prior = ctx.pending; const recovered = await commit(id,ctx,prior,authorized); if (await digest(bytes) === prior.sha256) return recovered }
       const { uploadId } = await host.stageSave(bytes,id), staged = ctx.staged.get(uploadId)!
       if(!authorized())throw hostError('UNAVAILABLE','save authorization changed')
-      return commitStaged({fileId:id,uploadId,baseRevision:staged.base,leaseEpoch:staged.epoch,idempotencyKey:crypto.randomUUID()},authorized)
+      return commitStaged({fileId:id,uploadId,baseRevision:staged.base,leaseEpoch:staged.epoch,idempotencyKey:crypto.randomUUID(),...(wordVersion===undefined?{}:{wordVersion})},authorized)
     },
     startRenewal(fileId: string) {
       const id = uuid(fileId)

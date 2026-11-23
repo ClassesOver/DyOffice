@@ -13,6 +13,7 @@ import {
   addPicture,
   addSmartArt,
   addTable,
+  editTableCellText,
   clearNarration,
   MAX_INSERT_TABLE_DIM,
   pasteElements,
@@ -194,6 +195,7 @@ register({
         `op "addTable" needs integer "rows" and "cols" (1..${MAX_INSERT_TABLE_DIM}).`,
       )
     }
+    if (op.cells !== undefined && (!Array.isArray(op.cells) || op.cells.length !== op.rows || op.cells.some(row => !Array.isArray(row) || row.length !== op.cols || row.some(value => typeof value !== 'string')))) throw new GuidedError('addTable: cells must be a rectangular matrix of literal strings matching rows and cols.')
     const reqEmuList = (key: 'colWidthsEmu' | 'rowHeightsEmu', count: number, dim: string) => {
       const v = op[key]
       if (v === undefined) return
@@ -214,18 +216,32 @@ register({
         'op "addTable": "cellProps" must be a row-major array of per-cell {gridSpan?,rowSpan?,hMerge?,vMerge?,anchor?}.',
       )
     }
+    const cellProps = op.cellProps as NewTableOptions['cellProps']
+    if ((op.cells as string[][] | undefined)?.some((row, r) =>
+      row.some((value, c) => value !== '' && (cellProps?.[r]?.[c]?.hMerge || cellProps?.[r]?.[c]?.vMerge)),
+    )) throw new GuidedError('addTable: merged placeholders must be empty; put text in the merge anchor.')
   },
   apply(op, ctx): OpRecord {
     const { index } = resolveSlide(ctx, op)
+    const cellProps = op.cellProps as NewTableOptions['cellProps']
     const r = addTable(ctx.opened, index, {
       rows: op.rows as number,
       cols: op.cols as number,
       offset: reqRect(op),
       ...(op.colWidthsEmu ? { colWidthsEmu: op.colWidthsEmu as number[] } : {}),
       ...(op.rowHeightsEmu ? { rowHeightsEmu: op.rowHeightsEmu as number[] } : {}),
-      ...(op.cellProps ? { cellProps: op.cellProps as NewTableOptions['cellProps'] } : {}),
+      ...(cellProps ? { cellProps } : {}),
     })
     if (!r) throw new GuidedError('op "addTable": the table could not be inserted.')
+    if (Array.isArray(op.cells)) for (let row = 0; row < op.cells.length; row++) {
+      const values = op.cells[row] as string[]
+      for (let col = 0; col < values.length; col++) {
+        const props = cellProps?.[row]?.[col]
+        if (props?.hMerge || props?.vMerge) continue
+        const paragraphs = values[col]!.split(/\r\n|\r|\n/).map(text => ({runs: [{text}]})) as Paragraph[]
+        if (!editTableCellText(ctx.opened.deck.slides[index]!, r.elementId, row, col, paragraphs)) throw new GuidedError('addTable: initial cell text could not be written.')
+      }
+    }
     return { op, created: [r.elementId] }
   },
 })

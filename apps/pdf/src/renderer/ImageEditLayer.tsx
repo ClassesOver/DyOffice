@@ -2,7 +2,7 @@ import { useRef, useState } from 'react'
 import type { CSSProperties, PointerEvent as ReactPointerEvent, ReactElement } from 'react'
 import { pdfRectToCss, viewToPdf } from './annotations'
 import type { PageGeom } from './annotations'
-import type { ImageEditInput, PageImageRef, StaticFormFillRecord } from '../shared/ipc'
+import type { ImageEditInput, PageImageRef, PdfHostImageBake, StaticFormFillRecord } from '../shared/ipc'
 
 type Rect = [number, number, number, number]
 
@@ -19,6 +19,7 @@ export interface LocalImageEdit {
       from this so they set an absolute level instead of compounding. Cleared by any
       other pixel edit (flip/crop/cutout/replace/insert-rotate). */
   opacityBase?: string
+  hostBake?: PdfHostImageBake
 }
 
 /** Existing images are addressed by their listed rect; stable across renders, not saves */
@@ -262,6 +263,7 @@ export function ImageEditLayer({
   const existingEls: ReactElement[] = []
   const mainEls: ReactElement[] = []
   for (const e of edits) {
+    if (e.hostBake) continue
     const sel = e.id === selectedId
     const target: DragTarget = { kind: 'edit', id: e.id }
     // Deleted images vanish via the live page preview (Acrobat/WPS behavior):

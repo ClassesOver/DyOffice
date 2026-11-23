@@ -12,14 +12,15 @@ test('management list resizes only its table viewport and keeps toolbar and pagi
  await act(async()=>root.render(h(ManagementList<{id:string}>,{rowKey:'id',summary:'20 项',toolbar:h('button',null,'刷新'),dataSource:Array.from({length:20},(_,i)=>({id:String(i)})),columns:[{title:'名称',dataIndex:'id'}],pagination:{current:1,pageSize:10,total:20}})))
  const region=document.querySelector('.management-list-table-region')!
  await act(async()=>{for(const callback of callbacks)callback([{target:region,contentRect:{height:320}}] as never,{} as ResizeObserver)})
- expect(document.querySelector<HTMLElement>('.ant-table-body')?.style.maxHeight).toBe('260px')
+ expect(document.querySelector<HTMLElement>('.management-list-table-scroll')?.style.maxHeight).toBe('318px')
  expect(region.contains(document.querySelector('.management-list-toolbar'))).toBe(false)
- expect(region.contains(document.querySelector('.ant-pagination'))).toBe(false)
+ expect(document.querySelector('table thead th')?.getAttribute('scope')).toBe('col')
+ expect(region.contains(document.querySelector('.settings-list-pager'))).toBe(false)
  await act(async()=>{for(const callback of callbacks)callback([{target:region,contentRect:{height:200}}] as never,{} as ResizeObserver)})
- expect(document.querySelector<HTMLElement>('.ant-table-body')?.style.maxHeight).toBe('140px')
+ expect(document.querySelector<HTMLElement>('.management-list-table-scroll')?.style.maxHeight).toBe('198px')
 })
 
-test('B management heading labels its data region without moving toolbar or pagination into it',async()=>{
+test('native management heading labels its data region without moving toolbar or pagination into it',async()=>{
  vi.stubGlobal('ResizeObserver',class{observe(){}unobserve(){}disconnect(){}})
  document.body.innerHTML='<div id="list"></div>';root=createRoot(document.getElementById('list')!)
  await act(async()=>root.render(h(ManagementList<{id:string}>,{heading:'成员与权限',description:'管理当前部署的成员与访问权限。',rowKey:'id',summary:'当前页 2 位成员',toolbar:h('button',null,'刷新'),dataSource:[{id:'alice'}],columns:[{title:'名称',dataIndex:'id'}],pagination:{current:1,pageSize:10,total:20}})))
@@ -31,5 +32,6 @@ test('B management heading labels its data region without moving toolbar or pagi
  expect(region.getAttribute('role')).toBe('region')
  expect(region.contains(title)).toBe(false)
  expect(region.contains(document.querySelector('.management-list-toolbar'))).toBe(false)
- expect(region.contains(document.querySelector('.ant-pagination'))).toBe(false)
+ expect(document.querySelector('table thead th')?.getAttribute('scope')).toBe('col')
+ expect(region.contains(document.querySelector('.settings-list-pager'))).toBe(false)
 })

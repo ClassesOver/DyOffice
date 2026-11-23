@@ -65,9 +65,18 @@ function tooltipOf(tag: string | undefined): string | undefined {
   return raw === undefined ? undefined : unescapeXml(raw)
 }
 
-/** Strip the hlinkClick inside the element XML's first cNvPr (keeping other children). */
-function stripHlink(xml: string): string {
-  return xml.replace(/<a:hlinkClick\b[^>]*\/>|<a:hlinkClick\b[^>]*>[\s\S]*?<\/a:hlinkClick>/, '')
+const elementPropertiesTag = /<p:cNvPr\b((?:"[^"]*"|'[^']*'|[^"'>])*?)(\/?)>/
+const clickLinkTag = /<a:hlinkClick\b[^>]*\/>|<a:hlinkClick\b[^>]*>[\s\S]*?<\/a:hlinkClick>/
+
+/** Only the element's own properties can contain its link; text runs have their own. */
+function elementClickLink(xml: string) {
+  const props = elementPropertiesTag.exec(xml)
+  if (!props || props[2] === '/') return null
+  const start = props.index + props[0].length
+  const end = xml.indexOf('</p:cNvPr>', start)
+  if (end < 0) return null
+  const link = clickLinkTag.exec(xml.slice(start, end))
+  return link ? { tag: link[0], index: start + link.index } : null
 }
 
 /**
@@ -88,12 +97,15 @@ export function setElementLink(
 
   const previousXml = patchSlideXml(slide)
   const existingXml = patchedElementXml(el)
-  let xml = stripHlink(existingXml)
+  const priorLink = elementClickLink(existingXml)
+  let xml = priorLink
+    ? existingXml.slice(0, priorLink.index) + existingXml.slice(priorLink.index + priorLink.tag.length)
+    : existingXml
 
   if (target) {
     let hlink: string
     // The UI edits the target only; keep PowerPoint's ScreenTip unless the caller sets one
-    const tooltip = target.tooltip ?? tooltipOf(/<a:hlinkClick\b[^>]*>/.exec(existingXml)?.[0])
+    const tooltip = target.tooltip ?? tooltipOf(priorLink?.tag)
     const tip = tooltip ? ` tooltip="${escapeXmlAttr(tooltip)}"` : ''
     if (target.kind === 'url') {
       const rid = appendRel(opened, slide, HYPERLINK_REL_TYPE, target.url, true)
@@ -109,7 +121,7 @@ export function setElementLink(
       hlink = `<a:hlinkClick xmlns:r="${R_NS}" r:id="${rid}" action="${SLDJUMP_ACTION}"${tip}/>`
     }
     // Insert into the first cNvPr (hlinkClick is cNvPr's first valid child)
-    const cNvPr = /<p:cNvPr\b((?:"[^"]*"|'[^']*'|[^"'>])*?)(\/?)>/.exec(xml)
+    const cNvPr = elementPropertiesTag.exec(xml)
     if (!cNvPr) return null
     if (cNvPr[2] === '/') {
       // Self-closing → expand into a tag pair
@@ -252,7 +264,7 @@ export function getRunLinks(
 
 /** Resolve the hlinkClick rId in an element fragment against the slide rels; null if none/unresolvable. */
 function resolveLinkInXml(opened: OpenedPptx, slide: Slide, xml: string): LinkTarget | null {
-  const tag = /<a:hlinkClick\b[^>]*>/.exec(xml)?.[0]
+  const tag = elementClickLink(xml)?.tag
   if (!tag) return null
   const tooltip = tooltipOf(tag)
   const tip = tooltip ? { tooltip } : {}

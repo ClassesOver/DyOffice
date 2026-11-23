@@ -2,6 +2,7 @@ import {test,expect,vi} from 'vitest'
 import {createElement as h} from 'react'
 import {createRoot} from 'react-dom/client'
 import {WorkspaceTrash} from '../../src/shell/WorkspaceTrash'
+Object.defineProperties(HTMLDialogElement.prototype,{showModal:{configurable:true,value:function(){this.setAttribute('open','')}},close:{configurable:true,value:function(){this.removeAttribute('open')}}})
 
 test('recycle bin retains failed restoration and prevents duplicate clicks until explicit reconciliation',async()=>{
  document.body.innerHTML='<div id="trash-test"></div>'
@@ -22,7 +23,7 @@ test('recycle bin retains failed restoration and prevents duplicate clicks until
  root.unmount()
 })
 
-test('permanent deletion uses the shared B dialog portal and cancel never mutates',async()=>{
+test('permanent deletion uses the compact native dialog and cancel never mutates',async()=>{
  const host=document.createElement('div');document.body.append(host)
  const row={id:'file-a',name:'report.docx',format:'docx',size:12,updatedAt:'2026-01-01',starred:false,folderId:null,lastOpenedAt:null}
  const request=vi.fn(async()=>({files:[row],total:1})),root=createRoot(host)
@@ -32,11 +33,10 @@ test('permanent deletion uses the shared B dialog portal and cancel never mutate
   ;([...host.querySelectorAll<HTMLButtonElement>('button')].find(b=>b.textContent==='永久删除')!).click()
   await vi.waitFor(()=>expect(document.querySelector('[role=dialog]')).not.toBeNull())
   const dialog=document.querySelector('[role=dialog]')!
-  expect(dialog.classList.contains('settings-dialog-b')).toBe(true)
+  expect(dialog.tagName).toBe('DIALOG');expect(dialog.classList.contains('is-compact')).toBe(true);expect(dialog.hasAttribute('open')).toBe(true)
   expect(dialog.textContent).toContain('此操作无法恢复')
   ;([...dialog.querySelectorAll<HTMLButtonElement>('button')].find(b=>b.textContent==='取消')!).click()
-  // AntD keeps the portal for its leave animation; verify closing starts.
-  await vi.waitFor(()=>expect(dialog.className).toContain('ant-zoom-leave'))
+  await vi.waitFor(()=>expect(dialog.isConnected).toBe(false))
   expect(request.mock.calls).toHaveLength(1)
  }finally{root.unmount();host.remove()}
 })

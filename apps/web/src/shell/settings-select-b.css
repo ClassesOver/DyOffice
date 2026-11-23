@@ -1,0 +1,10 @@
+/* Body-portalled settings lists share B chrome without affecting other menus. */
+.settings-select-b.ant-select-dropdown{max-width:calc(100vw - 32px);padding:6px;border:1px solid var(--border-subtle);border-radius:10px;background:var(--surface);color:var(--text);box-shadow:var(--shadow-menu)}
+.settings-select-b .ant-select-item{min-height:36px;padding:8px 10px;border-radius:6px;font-size:14px;line-height:1.5;color:var(--text)}
+.settings-select-b .ant-select-item-option-content{white-space:normal;overflow-wrap:anywhere;min-width:0}
+.settings-select-b .ant-select-item-option-active:not(.ant-select-item-option-disabled){background:var(--surface-subtle);box-shadow:inset 2px 0 0 var(--accent)}
+.settings-select-b .ant-select-item-option-selected:not(.ant-select-item-option-disabled){background:var(--accent-soft);color:var(--accent);font-weight:600}
+.settings-select-b .ant-select-item-option-disabled{color:var(--text-secondary);opacity:.6;cursor:not-allowed}
+.settings-select-b .ant-select-item-option-state{color:var(--accent)}
+.settings-select-b .rc-virtual-list-holder{scrollbar-width:thin;scrollbar-color:var(--border) var(--surface)}
+@media(max-width:680px){.settings-select-b.ant-select-dropdown{padding:4px}.settings-select-b .ant-select-item{min-height:40px}}

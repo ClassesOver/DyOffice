@@ -29,18 +29,18 @@ DYOFFICE_INSECURE_HTTP_DEV=1
 
 | 路径 | 依赖及支持范围 |
 |---|---|
-| Docker Web 基线 | Node 22.23.5 bookworm-slim、root npm lockfile 全 workspace/dev/optional 依赖、PostgreSQL 17、迁移与受限账号、本地对象卷、工作区和 DOCX 前端 |
+| Docker Web 基线 | Node 22.23.5 bookworm-slim、构建用 Rust 1.93.0 slim-bookworm、root npm lockfile 全 workspace/dev/optional 依赖、PostgreSQL 17、迁移与受限账号、本地对象卷、工作区和 DOCX 前端 |
 | AI 可选 overlay | 现有 provider gateway、keyring、匹配真实 DB 配置的 profiles、供应商凭据/预算；见 EXTENSIONS |
 | 原生 XLSX / jobs | 现有实现依赖宿主 API/worker；与全容器目标不符，当前 Compose 不提供此能力。须完成容器内受限 broker/runtime 后再接线，不安装宿主模板补齐 |
-| PPTX/PDF | PPTX 无受支持隔离 runtime，代码拒绝；PDF 本地 capability 为 unsupported；不假装可启用 |
+| PPTX/PDF | 此 Compose 使用 `DYOFFICE_LOCAL_EDITOR_PROFILE=docx-only`，只注册 DOCX；其他部署继续使用其原有的编辑器发现规则 |
 
 普通 Web 不需要 Redis；本地对象卷不需要 MinIO。只有原生路径需要 Redis 和 S3，所以不默认堆砌无消费者服务。代码执行器关闭，不安装/启用外部 agent CLI。原生解析隔离不通过 privileged 容器绕过。
 
 ## 默认华为源
 
-- npm 默认 `https://repo.huaweicloud.com/repository/npm/`，可通过 `NPM_REGISTRY` 覆盖。构建副本中重写 npmjs/npmmirror 的锁定下载地址，保留版本与 integrity；未知外链拒绝，绝不静默回源。本次 Docker 构建重写了 1087 个锁定地址，并使用默认镜像完成了目标平台的 npm 安装。
-- Node/PostgreSQL（宿主依赖另有 Redis）需用户提前同步官方兼容镜像到**自己的华为 SWR**，填真实镜像地址，建议固定 digest。没有虚构公共镜像或发布好的 DyOffice image。私有 SWR 需预先登录。
-- 本草稿分支的 Docker build 不运行 apt、Cargo 或 rustup；OS 依赖在基础镜像中提供。宿主可选路径的华为 Ubuntu apt 参考及 Rust 镜像未核实阻塞见 EXTENSIONS。不能声称全部原生依赖已可从华为拉取。
+- npm 默认 `https://repo.huaweicloud.com/repository/npm/`，可通过 `NPM_REGISTRY` 覆盖。构建副本中重写 npmjs/npmmirror 的锁定下载地址，保留版本与 integrity；未知外链拒绝，绝不静默回源。下载内容通过锁文件的 SHA-512 校验。
+- Node/Rust/PostgreSQL（宿主依赖另有 Redis）需用户提前同步官方兼容镜像到**自己的华为 SWR**，填真实镜像地址，建议固定 digest。没有虚构公共镜像或发布好的 DyOffice image。私有 SWR 需预先登录。
+- Rust 构建阶段需要 `rustup target add wasm32-wasip1` 和锁定的 Cargo 依赖。默认 Rust 官方镜像从上游下载目标和 crates。限制外网的环境应使用已预装该目标并配置可信 crate 缓存或镜像的 SWR 构建镜像。最终 Node 镜像只接收生成的 XLSX runner。
 - 官方 npm 说明：https://www.huaweicloud.com/zhishi/npm.html
 - 镜像加速适用限制：https://support.huaweicloud.com/bulletin-swr/swr_bulletin_0003.html
 
@@ -49,7 +49,7 @@ DYOFFICE_INSECURE_HTTP_DEV=1
 ```sh
 cd deploy/docker
 python3 generate-secrets.py
-# 编辑 .env 的 NODE_IMAGE / POSTGRES_IMAGE，填写已同步的真实 SWR 地址
+# 编辑 .env 的 NODE_IMAGE / RUST_IMAGE / POSTGRES_IMAGE，填写已同步的真实 SWR 地址
 # 需要 Docker Engine、Compose v2 和足够磁盘；不要复制其他仓库/秘密到构建上下文
 docker compose config --quiet
 docker compose build web
@@ -83,4 +83,4 @@ docker compose logs --tail=100 web
 - Compose 基线与 AI overlay 配置解析、完整镜像构建、独立数据库初始化、运行时角色授权、交互式创建管理员、Web 就绪探针。
 - 默认 Secure cookie 模式下，Chromium 在 localhost 登录真实 PostgreSQL 账号并刷新后仍能读取当前会话。
 
-以上验收覆盖草稿分支。目标分支的 `build:saas` 另需 Cargo 和 `wasm32-wasip1`；同步目标分支后必须重新构建并验收。私有 SWR、AI 供应商和四格式隔离运行时未纳入本次验证。
+CI 在 PR 的合并结果上构建 Compose 服务、执行数据库迁移、查询就绪状态，并用镜像内的 WASI runner 打开 XLSX 测试工作簿。私有 SWR、AI 供应商和四格式隔离运行时未纳入本次验证。

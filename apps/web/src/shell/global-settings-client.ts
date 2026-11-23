@@ -1,5 +1,5 @@
-import {GLOBAL_SETTING_KINDS} from '../../../../packages/web-contracts/src/settings'
-import type {AdminGlobalConfig, AdminGlobalEntry, GlobalConfigCheck, GlobalConfigPatch, GlobalDefaults, GlobalEntryUpsert, GlobalSettingKind, ProviderCatalogEntry} from '../../../../packages/web-contracts/src/settings'
+import {GLOBAL_SETTING_KINDS, MODEL_CONNECTION_FAILURES} from '../../../../packages/web-contracts/src/settings'
+import type {AdminGlobalConfig, AdminGlobalEntry, GlobalConfigCheck, GlobalConfigPatch, GlobalDefaults, GlobalEntryUpsert, GlobalSettingKind, ModelConnectionResult, ProviderCatalogEntry, SourceEgressTarget} from '../../../../packages/web-contracts/src/settings'
 
 /** The caller owns cookie authentication, CSRF and session-generation fencing. */
 export type GlobalSettingsRequest = <T>(path: string, method?: string, body?: unknown) => Promise<T>
@@ -7,7 +7,7 @@ export type GlobalSettingsState = {pending: null | 'load' | 'save' | 'check' | '
 const messages = {
   busy: '配置操作正在进行中，请等待完成。',
   write_unknown: '无法确认上次写入结果。请先读取最新配置并核对，系统不会自动重复提交。',
-  invalid_request: '配置输入无效，请检查名称、服务地址、版本和密钥操作。非密钥草稿已保留。',
+  invalid_request: '配置输入无效，请检查已修改的字段。非密钥草稿已保留。',
   invalid_response: '无法确认服务器返回的配置，请读取最新配置后核对。',
   conflict: '配置已被其他管理员更新。当前非密钥草稿已保留，请读取最新配置后核对。',
   unavailable: '配置服务或密钥存储暂不可用。非密钥草稿已保留，请检查服务器配置后重试。',
@@ -28,6 +28,21 @@ const record = (value: unknown): value is Record<string, unknown> => !!value && 
 const validId = (value: unknown): value is string => typeof value === 'string' && idPattern.test(value)
 const validText = (value: unknown, max: number, empty = false): value is string => typeof value === 'string' && value.length <= max && (empty || !!value.trim()) && ![...value].some(character => character.charCodeAt(0) < 32 || character.charCodeAt(0) === 127)
 const validRevision = (value: unknown): value is number => Number.isSafeInteger(value) && (value as number) >= 0 && (value as number) <= 2147483647
+
+function sourceTargets(value: unknown, code: 'invalid_request' | 'invalid_response'): SourceEgressTarget[] {
+  if (!Array.isArray(value) || value.length > 256) throw fail(code)
+  return value.map(raw => {
+    if (!record(raw) || !['http','postgres','mysql','starrocks'].includes(raw.kind as string) ||
+      !validText(raw.endpoint, 8192) || !Array.isArray(raw.addresses) || !raw.addresses.length ||
+      raw.addresses.length > 32 || raw.addresses.some(address => !validText(address, 64)) ||
+      (raw.kind !== 'http' && (!validText(raw.username, 128) || !validText(raw.database, 128))) ||
+      (raw.allowInsecure !== undefined && typeof raw.allowInsecure !== 'boolean') ||
+      (raw.ca !== undefined && (typeof raw.ca !== 'string' || raw.ca.length > 65536))) throw fail(code)
+    return { kind: raw.kind as SourceEgressTarget['kind'], endpoint: raw.endpoint, addresses: [...raw.addresses],
+      ...(raw.kind !== 'http' ? { username: raw.username as string, database: raw.database as string } : {}),
+      ...(typeof raw.allowInsecure === 'boolean' ? { allowInsecure: raw.allowInsecure } : {}), ...(typeof raw.ca === 'string' ? { ca: raw.ca } : {}) }
+  })
+}
 
 function entry(value: unknown, code: 'invalid_request' | 'invalid_response'): Omit<AdminGlobalEntry, 'hasKey'> {
   if (!record(value) || !validId(value.id) || !kinds.has(value.kind as string) || !validId(value.providerId) || !validText(value.label, 200) || !validText(value.model, 256, true) || !validText(value.baseUrl, 2048, true) || typeof value.enabled !== 'boolean') throw fail(code)
@@ -51,7 +66,8 @@ function snapshot(value: unknown, expectedRevision?: number): AdminGlobalConfig 
     if (!record(raw) || !validId(raw.id) || !validText(raw.label, 200) || !Array.isArray(raw.kinds) || raw.kinds.some(kind => typeof kind !== 'string' || !kinds.has(kind)) || !Array.isArray(raw.models) || raw.models.some(model => !validText(model, 256, true)) || !validText(raw.defaultBaseUrl, 2048, true) || typeof raw.available !== 'boolean' || (raw.unavailableReason !== undefined && !validText(raw.unavailableReason, 1000, true))) throw fail('invalid_response')
     return {id: raw.id, label: raw.label, kinds: [...raw.kinds] as GlobalSettingKind[], models: [...raw.models] as string[], defaultBaseUrl: raw.defaultBaseUrl, available: raw.available, ...(typeof raw.unavailableReason === 'string' ? {unavailableReason: raw.unavailableReason} : {})}
   })
-  return {revision: value.revision, entries, defaults, providerCatalog, keyStorageAvailable: value.keyStorageAvailable}
+  return {revision: value.revision, entries, defaults, providerCatalog, keyStorageAvailable: value.keyStorageAvailable,
+    ...(value.sourceEgressTargets === undefined ? {} : {sourceEgressTargets: sourceTargets(value.sourceEgressTargets, 'invalid_response')})}
 }
 
 function safePatch(value: GlobalConfigPatch): GlobalConfigPatch {
@@ -84,7 +100,8 @@ function safePatch(value: GlobalConfigPatch): GlobalConfigPatch {
       patch.defaults[kind as GlobalSettingKind] = id
     }
   }
-  if (!(patch.upserts?.length || patch.removes?.length || Object.keys(patch.defaults ?? {}).length)) throw fail('invalid_request')
+  if (value.sourceEgressTargets !== undefined) patch.sourceEgressTargets = sourceTargets(value.sourceEgressTargets, 'invalid_request')
+  if (!(patch.upserts?.length || patch.removes?.length || Object.keys(patch.defaults ?? {}).length || patch.sourceEgressTargets)) throw fail('invalid_request')
   return patch
 }
 
@@ -141,6 +158,16 @@ export function createGlobalSettingsClient(request: GlobalSettingsRequest) {
     async rotate(expectedRevision: number): Promise<AdminGlobalConfig> {
       revision(expectedRevision)
       return run('rotate', async () => snapshot(await request('/api/v1/admin/config/rotate-key', 'POST', {expectedRevision}), expectedRevision + 1))
+    },
+    async testConnection(entryId: string): Promise<ModelConnectionResult> {
+      if (!validId(entryId)) throw fail('invalid_request')
+      return run('check', async () => {
+        const value = await request<unknown>('/api/v1/admin/config/test-model', 'POST', {entryId})
+        if (!record(value) || typeof value.ok !== 'boolean') throw fail('invalid_response')
+        if (value.ok) return {ok:true}
+        const reason = MODEL_CONNECTION_FAILURES.find(code => code === value.reason)
+        return reason ? {ok:false,reason} : {ok:false}
+      })
     },
     getState: (): GlobalSettingsState => ({pending, unknownWrite}),
     subscribe(listener: () => void) {listeners.add(listener); return () => {listeners.delete(listener)}},

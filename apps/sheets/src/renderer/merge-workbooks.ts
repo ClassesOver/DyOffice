@@ -19,8 +19,8 @@ import { t } from './i18n/locale'
 import type { LazyWorkbookState, UniverRuntime } from './univer-state'
 import { characterWidthToPixels, toUniverStyle, workbookStructureLocked } from './univer-sync'
 
-/// Stay under the IPC schema's MAX_RANGE_CELLS (100k) with headroom.
-const READ_CHUNK_CELLS = 90_000
+/// Stay under the Web native reader's 20k-cell limit with protocol headroom.
+const READ_CHUNK_CELLS = 16_000
 const SET_RANGE_VALUES_COMMAND = 'sheet.command.set-range-values'
 const SET_COL_WIDTH_COMMAND = 'sheet.command.set-worksheet-col-width'
 const SET_ROW_HEIGHT_COMMAND = 'sheet.command.set-row-height'
@@ -220,7 +220,8 @@ export async function mergeSourcesIntoCurrent(
         taken.add(name)
         sheetNames.push(name)
         const sheetId = `merge-${Date.now().toString(36)}-${Math.floor(Math.random() * 1e9).toString(36)}`
-        const inserted = await commandService.executeCommand(InsertSheetCommand.id, {
+        const activeSheet = workbook.getActiveSheet()
+        const inserted = commandService.syncExecuteCommand(InsertSheetCommand.id, {
           unitId,
           index: workbook.getSheets().length,
           sheet: {
@@ -231,6 +232,11 @@ export async function mergeSourcesIntoCurrent(
           },
         })
         if (!inserted) throw new Error(t('appMergeWorkbooksInsertFailed', { sheet: name }))
+        // Univer activates a new tab on insertion. Keep the current sheet in
+        // view so the editor and canvas do not lay out the import as it lands.
+        if (workbook.getActiveSheet().getSheetId() === sheetId) {
+          workbook.setActiveSheet(activeSheet)
+        }
         const bandRows = chunkRowsFor(Math.max(1, imported.columnCount))
         for (const band of matrixBands(imported.matrix, bandRows)) {
           const bounds = boundsOf(band)

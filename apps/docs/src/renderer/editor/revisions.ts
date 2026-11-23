@@ -37,6 +37,7 @@ import {
   trPrRestoreAttrs,
 } from './prop-change-restore'
 import { columnWidthsPx, pctOf, reflowColumns } from '../ai/table-ops'
+import { TRACK_IGNORE } from '../../shared/track-meta'
 
 export interface RevisionRange {
   from: number
@@ -76,7 +77,7 @@ export interface RevisionRange {
 }
 
 /** transactions carrying this meta are never recorded as revisions */
-export const TRACK_IGNORE = 'trackIgnore'
+export { TRACK_IGNORE }
 /** meta: record this transaction's edits under the given author instead of the user */
 export const TRACK_AUTHOR = 'trackAuthor'
 

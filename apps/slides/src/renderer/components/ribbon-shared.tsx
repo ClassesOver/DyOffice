@@ -293,6 +293,7 @@ export interface Props {
   onUndo: () => void
   onRedo: () => void
   onSaveAs: () => void
+  saveDownload?: React.ReactNode
   /** Ask the model for a name, then open Save As with it prefilled */
   onNameWithAi: () => void
   /** Export as PDF (hidden slides skipped) */
@@ -310,6 +311,7 @@ export interface Props {
   showThumbs: boolean
   onToggleThumbs: () => void
   aiOpen: boolean
+  aiAvailable?: boolean
   onToggleAi: () => void
   /** Push a preset instruction to the AI panel and expand it (autoRun executes immediately) */
   /** slideShot: attach the current slide's rendering so the model sees the page (AI Beautify) */
@@ -592,6 +594,7 @@ export interface Props {
 export interface RibbonTabCtx extends Pick<
   Props,
   | 'aiOpen'
+  | 'aiAvailable'
   | 'brushMode'
   | 'canDistribute'
   | 'canPaste'

@@ -1,6 +1,7 @@
 import {createSheetsBridge} from '../../web/src/editors/sheets-bridge'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { handleSave, type SaveContext } from '../src/renderer/save-actions'
+import { workbookSaveRequestSchema } from '../src/shared/desktop-api'
 import {
   acknowledgeJournal,
   createEditJournal,
@@ -11,6 +12,7 @@ import {
   recordSetRangeValues,
   recordSheetTabColor,
   recordStructuralOp,
+  recordTableAdd,
   snapshotJournal,
 } from '../src/renderer/edit-journal'
 
@@ -52,6 +54,42 @@ beforeEach(() => {
     file: { sessionId: 'new', sha256: 'new', path: '/tmp/a.xlsx', visuals: [], sheets: [] },
   })
   vi.stubGlobal('window', { desktopApi: { saveWorkbookEdits: save } })
+})
+
+it('exports an unsaved structural and table edit together without acknowledging the source journal', async () => {
+  const { state, ctx, journal, applySavedWorkbook, openLazyWorkbook } = setup()
+  recordStructuralOp(journal, 'sheet-1', { kind: 'insert-rows', index: 0, count: 1 })
+  recordTableAdd(journal, {
+    sheetId: 'sheet-1', name: 'DraftTable', columnNames: ['Item'], bandedRows: true,
+    area: { startRow: 0, endRow: 1, startColumn: 0, endColumn: 0 },
+  })
+  const exportCopy = vi.fn(async () => {})
+  const { exportWorkbookDraft } = await import('../src/renderer/save-actions')
+  await expect(exportWorkbookDraft(ctx, exportCopy)).resolves.toMatchObject({ ok: true })
+  expect(exportCopy).toHaveBeenCalledExactlyOnceWith('old', [
+    expect.objectContaining({ edits: [expect.objectContaining({ value: 'saved' })], structuralOps: [expect.objectContaining({ kind: 'insert-rows' })], tableAdditions: [] }),
+    expect.objectContaining({ edits: [], structuralOps: [], tableAdditions: [expect.objectContaining({ name: 'DraftTable' })] }),
+  ])
+  expect(state.file.sessionId).toBe('old')
+  expect(journalSize(journal)).toBe(3)
+  expect(save).not.toHaveBeenCalled()
+  expect(openLazyWorkbook).not.toHaveBeenCalled()
+  expect(applySavedWorkbook).not.toHaveBeenCalled()
+})
+
+it('exports removal of the last redaction even when the cell journal is empty', async () => {
+  const { ctx, journal, state } = setup()
+  acknowledgeJournal(journal, snapshotJournal(journal))
+  state.file.sessionId = crypto.randomUUID()
+  ctx.redactionStates = () => []
+  const { exportWorkbookDraft } = await import('../src/renderer/save-actions')
+  const exportCopy = vi.fn(async (_sessionId: string, phases: unknown[]) => {
+    expect(phases).toHaveLength(1)
+    expect(workbookSaveRequestSchema.parse(phases[0]).redactionStates).toEqual([])
+  })
+  await expect(exportWorkbookDraft(ctx, exportCopy)).resolves.toMatchObject({ok:true})
+  expect(exportCopy).toHaveBeenCalledTimes(1)
+  expect(save).not.toHaveBeenCalled()
 })
 
 describe('T09 in-place save acknowledgment', () => {

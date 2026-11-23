@@ -15,15 +15,16 @@ export async function createLocalObjectStore({ directory }: { directory: string 
   }
   await assertDirectory()
   const path = (key: string) => join(root, key.replaceAll('/', '_'))
-  async function read<T>(reference: ObjectRef, consume: (source: AsyncIterable<Uint8Array>, reference: ObjectRef) => Promise<T>): Promise<T> {
+  async function read<T>(reference: ObjectRef, consume: (source: AsyncIterable<Uint8Array>, reference: ObjectRef) => Promise<T>, signal?: AbortSignal): Promise<T> {
     assertObjectReference(reference)
     try {
+      signal?.throwIfAborted()
       await assertDirectory()
       const handle = await open(path(reference.key), constants.O_RDONLY | constants.O_NOFOLLOW)
       try {
         const stat = await handle.stat()
         if (!stat.isFile() || stat.size !== reference.size) throw storageError()
-        return await consume(handle.createReadStream({ autoClose: false }), reference)
+        return await consume(handle.createReadStream({ autoClose: false, signal }), reference)
       } finally { await handle.close() }
     } catch { throw storageError() }
   }
@@ -61,7 +62,7 @@ export async function createLocalObjectStore({ directory }: { directory: string 
         try { await parent.sync() } finally { await parent.close() }
       } catch { throw storageError() }
     },
-    readVerified: reference => read(reference, collectVerified),
+    readVerified: (reference, signal) => read(reference, collectVerified, signal),
     verifyObject: reference => read(reference, verifyStream),
   }
 }

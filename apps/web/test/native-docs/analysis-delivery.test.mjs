@@ -13,7 +13,7 @@ import JSZip from 'jszip'
 import {password} from '../helpers/identity.mjs'
 
 test('native DOCX inserts a verified synthetic artifact explicitly and saves a separate real revision', {timeout: 120_000}, async t => {
-  const origin = 'http://localhost:4216', f = await fileFixture(t, {origin})
+  const origin = 'http://localhost:4251', f = await fileFixture(t, {origin})
   const keyring = {activeKeyId: 'test', keys: {test: new Uint8Array(32).fill(25)}}
   const profile = {deploymentId: f.deploymentId, entryId: 'primary', revision: 1, providerId: 'openai', model: 'synthetic', baseUrl: 'https://provider.example/v1', endpoint: 'https://provider.example/v1/chat/completions', allowedIpv4: ['8.8.8.8'], maxOutputTokens: 128}
   const settings = createGlobalConfigService({transactions: f.transactions, keyring})
@@ -27,7 +27,7 @@ test('native DOCX inserts a verified synthetic artifact explicitly and saves a s
   let app
   const adapter=syntheticAnalysisAdapter(()=>app)
   app = await buildLocalApp({db: f.db, businessPool: f.businessPool, passwords: f.passwords, deploymentId: f.deploymentId, origin, csrfKey: f.csrfKey, objectStore: f.objects, globalConfigKeyring: keyring, providerGateway: {profiles: [profile]}, codingHarnesses:{adapters:[adapter],defaultId:adapter.descriptor.id}, nativeDocsDirectory: fileURLToPath(new URL('../../dist-docs', import.meta.url))})
-  f.cleanup.push(() => app.close()); await app.listen({host: '127.0.0.1', port: 4216})
+  f.cleanup.push(() => app.close()); await app.listen({host: '127.0.0.1', port: 4251})
   const browser = await launchTestBrowser(); t.after(() => browser.close())
   const page = await browser.newPage(), errors = []
   page.on('pageerror', error => errors.push(error.message))
@@ -44,17 +44,29 @@ test('native DOCX inserts a verified synthetic artifact explicitly and saves a s
   await expect(page.locator('.ai-dock')).toBeAttached()
   assert.deepEqual(errors, [])
   if (await page.locator('.ai-rail').isVisible()) await page.locator('.ai-rail').click()
-  await expect(page.getByLabel('助手模型')).toHaveValue('primary')
+  await expect(page.getByRole('button',{name:'Model: synthetic',exact:true})).toBeVisible()
+  await page.locator('.ai-panel').evaluate(panel=>{
+    const file=new File(['Word dropped attachment marker'],'word-drop-probe.txt',{type:'text/plain'})
+    window.wordDropProbe=file
+    const dataTransfer=new DataTransfer();dataTransfer.items.add(file)
+    panel.dispatchEvent(new DragEvent('dragover',{bubbles:true,cancelable:true,dataTransfer}))
+    panel.dispatchEvent(new DragEvent('drop',{bubbles:true,cancelable:true,dataTransfer}))
+  })
+  await expect(page.locator('.ai-attachments')).toContainText('word-drop-probe.txt')
+  const dropped=await page.evaluate(()=>window.desktop.readAttachment(window.desktop.getPathForFile(window.wordDropProbe),0,24000))
+  assert.equal(dropped.ok,true);assert.match(dropped.text,/Word dropped attachment marker/)
+  await page.locator('.ai-attachments button').click()
   const composer=page.locator('.ai-panel textarea')
   await composer.fill('Create the local synthetic analysis artifact')
   await composer.press('Enter')
   const deliveries=page.locator('.analysis-deliveries')
-  await expect(deliveries.locator('summary')).toContainText('(1)',{timeout:30_000})
-  await deliveries.locator('summary').click()
-  await expect(deliveries.getByText('Synthetic literal content; not a real model result',{exact:true})).toBeVisible()
   // Artifact commit precedes the delegate return and the provider's second turn.
   // Require the final second-turn response, not just artifact availability.
   await expect(page.locator('.ai-panel').getByText('Synthetic artifact ready. Insert and save are separate user actions.', {exact:true})).toBeVisible({timeout:30_000})
+  await page.getByRole('tab',{name:/^(?:Tasks|任务)(?:\s*\d+)?$/}).click()
+  await expect(deliveries.locator('summary')).toContainText('(1)',{timeout:30_000})
+  await deliveries.locator('summary').click()
+  await expect(deliveries.getByText('Synthetic literal content; not a real model result',{exact:true})).toBeVisible()
   assert.equal(adapter.runs,1);assert.equal(net.writes,2)
   assert.equal((await f.files.openFile(f.alice.token,opened.file.fileId)).file.revision,opened.file.revision)
   await deliveries.getByRole('button',{name:'Insert into document',exact:true}).click()
@@ -62,7 +74,7 @@ test('native DOCX inserts a verified synthetic artifact explicitly and saves a s
   await expect(page.locator('.tiptap.doc-page').first()).toContainText('Analysis literal <script>not executable</script>')
   await expect(page.locator('.tiptap.doc-page').first()).toContainText('Unverified analysis')
   // A normal blur must not persist analysisPending even with autosave enabled.
-  await composer.focus();await page.evaluate(()=>window.dispatchEvent(new Event('blur')))
+  await page.locator('.tiptap.doc-page').first().click();await page.evaluate(()=>window.dispatchEvent(new Event('blur')))
   await page.waitForTimeout(1100)
   assert.equal((await f.files.openFile(f.alice.token,opened.file.fileId)).file.revision,opened.file.revision)
   await deliveries.getByRole('button',{name:'Save document',exact:true}).click()

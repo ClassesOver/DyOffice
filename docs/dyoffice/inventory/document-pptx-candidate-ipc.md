@@ -15,11 +15,14 @@ The test parent serializes these existing messages:
 - open: id, m, binding(fileId/revision), Uint8Array bytes; reply count and EMU size.
 - outline: id, m, expected generation, binding; reply is validated with the
   existing source-backed validatePptxOutline schema.
+- apply: expected generation, binding, and fixture operations. The test verifies
+  the reported transaction outcome and generation changes.
+- export: expected generation and binding; the reply must carry that generation
+  and a nonempty byte array of at most 1 MiB.
 - close: id, m, binding; success requires an actual correlated reply with true.
 
-Exit code zero is not substituted for close acknowledgement. The old dispatcher
-has additional apply/render/export capabilities; the parent test only exposes
-the three operations above. This is not a newly secured narrow child endpoint.
+Exit code zero is not substituted for close acknowledgement. The parent test
+only exposes the operations above. This is not a newly secured child endpoint.
 No second stdio wire schema or fake ExecutionHandle/ArtifactResult is introduced.
 
 ## Test-only process and bounds
@@ -39,7 +42,7 @@ are trusted test configuration, not user request paths or executable arguments.
 One copied input is limited to 1 MiB, one request may be pending, at most eight
 requests are permitted, and the process has a 10-second overall deadline.
 stdout and stderr are each limited to 64 KiB of observed data. Correlated IPC
-replies must be exact-shape, bounded and match the outstanding id; existing
+replies must have an exact envelope, satisfy method-specific bounds and match the outstanding id; existing
 generation/binding errors terminate the fixture session. Error paths and explicit
 disposal kill the test child and wait at most one second for its exit.
 Cleanup failure is reported, never treated as a successful session.
@@ -53,8 +56,11 @@ cannot release a production reservation or permit a save.
 
 ## Evidence and remaining gaps
 
-The test opens the actual minified candidate, checks one-slide outline, and
-receives close acknowledgement. Separate fresh child sessions reject wrong
+The test opens the actual minified candidate and verifies that a batch cannot
+create a slide and reference its new index in the same call. It then adds a
+slide, reads the updated outline and writes a Chinese speaker note in a later
+transaction. Exported bytes contain both the original slide text and the new
+note; a new process reopens the export and sees both slides. Separate fresh child sessions reject wrong
 generation and wrong binding and cannot be reused afterward. Wrong external
 digest, replaced/missing candidate files and absent test gates are rejected.
 Missing/replaced cases fail the pre-fork verifier; no alternative engine is used.

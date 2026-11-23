@@ -1,0 +1,18 @@
+.assistant-send-button {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 36px;
+  height: 36px;
+  margin-inline-start: auto;
+  padding: 0;
+  border: 0;
+  border-radius: 12px;
+  background: transparent;
+  cursor: pointer;
+}
+.assistant-send-button img { display: block; width: 100%; height: 100%; }
+.assistant-send-button-glyph { display: none; }
+.assistant-send-button:disabled { cursor: default; }
+.assistant-send-button:enabled:hover { opacity: .85; }
+.assistant-send-button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }

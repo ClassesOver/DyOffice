@@ -1,5 +1,5 @@
 import {it,expect} from 'vitest'
-import {analysisCellOperations} from '../src/renderer/analysis-insert'
+import {analysisCellOperations,captureSheetAnalysis,invalidatesAnalysisCapture} from '../src/renderer/analysis-insert'
 import {planFromOps} from '../src/renderer/op-executor'
 it('analysis table remains string values through the original workbook planner',()=>{
  const ops=analysisCellOperations({kind:'table',rows:[['=1+1','0012'],['<script>x</script>','@SUM(A1)']]},'s',1,2)
@@ -42,6 +42,20 @@ it('unchanged native capture enters the original operation queue without saving'
  expect(applied).toEqual([{op:'set_cell',sheetId:'s',address:'B2',value:'=HYPERLINK("x")'}])
 })
 
+it('file viewport hydration does not cancel a queued analysis insertion',async()=>{
+ const current={identity:{},runtime:{},workbookId:'book',sheetId:'s',row:9,column:9,selection:'J10',epoch:0,fingerprint:'clean'}
+ const capture=captureSheetAnalysis({current:()=>current,hold:()=>{},run:async(_ops,check)=>{
+  for(const command of ['sheet.mutation.set-range-values','sheet.command.set-range-values']){
+   if(invalidatesAnalysisCapture(command,false,true))current.epoch++
+  }
+  return check()
+ }})
+ expect(await capture.apply({kind:'text',text:'Report'},()=>true)).toBe(true)
+ expect(invalidatesAnalysisCapture('sheet.mutation.set-range-values',false,false)).toBe(true)
+ expect(invalidatesAnalysisCapture('sheet.operation.set-selections',false,false)).toBe(true)
+ expect(invalidatesAnalysisCapture('sheet.mutation.set-range-values',true,false)).toBe(false)
+})
+
 it('real Univer core write keeps the original executor literal payload non-formula',async()=>{
  const {Univer,UniverInstanceType,LocaleType,LogLevel,ICommandService}=await import('@univerjs/core')
  const {UniverSheetsPlugin}=await import('@univerjs/sheets')
@@ -66,4 +80,11 @@ it('save-owned readonly/queue state permits only unchanged-content receipt recov
  const capture=captureSheetAnalysis({current:forSave=>locked&&!forSave?null:state,hold:()=>{},run:async()=>true})
  locked=true;expect(capture.matches()).toBe(false);expect(capture.matchesForSave()).toBe(true)
  state.fingerprint='newer';expect(capture.matchesForSave()).toBe(false)
+})
+it('frozen query results write numeric and boolean columns as typed cells, keeping header and notes as text',()=>{
+ const ops=analysisCellOperations({kind:'table',headerRows:1,columnTypes:['string','number','boolean'],rows:[['month','paid (CNY)','closed'],['2026-01','30','TRUE'],['2026-02','-1.5e3','FALSE'],['Source: s v1','','']]},'s',0,0)
+ expect(ops.map(op=>(op as {value:unknown}).value)).toEqual(['month','paid (CNY)','closed','2026-01',30,true,'2026-02',-1500,false,'Source: s v1','',''])
+})
+it('refuses images instead of writing them into cells',()=>{
+ expect(()=>analysisCellOperations({kind:'image',mediaType:'image/png',base64:'',width:1,height:1,alt:''},'s',0,0)).toThrow(/native chart/)
 })

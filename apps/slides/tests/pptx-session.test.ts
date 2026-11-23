@@ -1,9 +1,11 @@
 // @vitest-environment node
 import { describe, it, expect } from 'vitest'
 import JSZip from 'jszip'
+import UTIF from 'utif2'
+import { PNG } from 'pngjs'
 import {createHash} from 'node:crypto'
 import {elementDurableId} from '@genoffice/pptx-ops'
-import { addElement, createBlankPptx, openPptx, savePptx } from '@genoffice/pptx-engine'
+import { addElement, addPicture, createBlankPptx, openPptx, savePptx } from '@genoffice/pptx-engine'
 import { createPptxSession } from '../../web/worker/src/native/pptx-session'
 async function fixture() {
   const opened = await openPptx(await createBlankPptx())
@@ -49,7 +51,12 @@ describe('transport-free PPTX session, local generation only', () => {
   it('rejects a bad native batch without changing generation or package parts', async () => {
     const {bytes,id}=await fixture();const s=await createPptxSession(bytes)
     const before=await s.exportBytes(0)
-    await expect(s.apply(0,[op(id,'not saved'),{...op('missing','bad'),target:{slide:999,el:'missing'}}])).rejects.toThrow('OP_REJECTED')
+    const rejected=await s.apply(0,[{op:'deleteElement',target:{slide:0,el:id}},op(id,'not saved')])
+    expect(rejected).toMatchObject({
+      generation:0,stateGeneration:0,canUndo:false,canRedo:false,
+      transaction:{applied:false,failures:[{index:1,error:expect.stringContaining('no element')}]},
+    })
+    expect(rejected.records).toEqual([])
     await expectSameParts((await s.exportBytes(0)).bytes, before.bytes)
     await expect(s.apply(0,[{op:'removeSlide',target:{slide:0}}])).rejects.toThrow('UNSUPPORTED_OP')
     s.close()
@@ -128,7 +135,9 @@ describe('T10 op whitelist: slide lifecycle, element add/delete/transform, fill/
     await expect(s.apply(4,[{op:'setFill',target:{slide:0,el:shape},fill:{stops:[{pos:0,color:'#112233'},{pos:1,color:'#445566'}],angle:45}}])).resolves.toMatchObject({generation:5})
     await expect(s.apply(5,[{op:'setStroke',target:{slide:0,el:shape},stroke:null}])).resolves.toMatchObject({generation:6})
     await expect(s.apply(6,[{op:'deleteElement',target:{slide:0,el:shape}}])).resolves.toMatchObject({generation:7})
-    await expect(s.apply(7,[{op:'deleteElement',target:{slide:0,el:shape}}])).rejects.toThrow('OP_REJECTED')
+    await expect(s.apply(7,[{op:'deleteElement',target:{slide:0,el:shape}}])).resolves.toMatchObject({
+      generation:7,transaction:{applied:false,failures:[{index:0,error:expect.stringContaining('no element')}]},
+    })
     expect((await s.outline(7)).count).toBe(1)
     expect(JSON.stringify(await s.render(7,0))).toContain('original')
     s.close()
@@ -146,7 +155,9 @@ describe('T10 op whitelist: slide lifecycle, element add/delete/transform, fill/
     expect(outline.count).toBe(4);expect(outline.slideIds).toHaveLength(4)
     await expect(s.apply(4,[{op:'deleteSlide',target:{slide:3}}])).resolves.toMatchObject({generation:5})
     expect((await s.outline(5)).count).toBe(3)
-    await expect(s.apply(5,[{op:'moveSlide',target:{slide:9},to:0}])).rejects.toThrow('OP_REJECTED')
+    await expect(s.apply(5,[{op:'moveSlide',target:{slide:9},to:0}])).resolves.toMatchObject({
+      generation:5,transaction:{applied:false,failures:[{index:0,error:expect.stringContaining('slide index 9 is out of range')}]},
+    })
     s.close()
   })
   it('exposes deck paths, default font, full render sets and history state for the route contract', async () => {
@@ -179,9 +190,9 @@ describe('T10 op whitelist: slide lifecycle, element add/delete/transform, fill/
     const {bytes,id}=await fixture();const s=await createPptxSession(bytes)
     for (const rejected of [
       {op:'addPicture',target:{slide:0},offset:{x:0,y:0,cx:914400,cy:914400},ext:'png',bytes:'aGk='},
-      {op:'setBackground',target:{slide:0},kind:'solid',color:'#000000'},
-      {op:'setText',target:{slide:0,el:id},paragraphs:[{runs:[{text:'x',link:{kind:'url',url:'https://x.example'}}]}]},
-      {op:'addElement',target:{slide:0},kind:'textbox',offset:{x:0,y:0,cx:914400,cy:914400},adjustments:{adj:1}},
+      {op:'setBackground',target:{slide:0},kind:'solid',color:'#000000',image:'aGk='},
+      {op:'setText',target:{slide:0,el:id},paragraphs:[{runs:[{text:'x',link:{kind:'url',url:'file:///local.txt'}}]}]},
+      {op:'addElement',target:{slide:0},kind:'roundRect',offset:{x:0,y:0,cx:914400,cy:914400},adjustments:{adj:'1000'}},
       {op:'addElement',target:{slide:0},kind:'roundRect',offset:{x:NaN,y:0,cx:914400,cy:914400}},
       {op:'addElement',target:{slide:0},kind:'../../etc',offset:{x:0,y:0,cx:914400,cy:914400}},
       {op:'setFill',target:{slide:0,el:id},fill:'#zzzzzz'},
@@ -342,7 +353,10 @@ describe('bounded local history and structured selection', () => {
     const {bytes,id}=await fixture(); const s=await createPptxSession(bytes)
     await expect(s.undo(0)).rejects.toThrow('NOTHING_TO_UNDO')
     await s.apply(0,[op(id,'one')]); await s.undo(1)
-    await expect(s.apply(2,[op('missing','bad')])).rejects.toThrow('OP_REJECTED')
+    await expect(s.apply(2,[op('missing','bad')])).resolves.toMatchObject({
+      generation:2,stateGeneration:0,canUndo:false,canRedo:true,
+      transaction:{applied:false,failures:[{index:0,error:expect.stringContaining('no element "missing"')}]},
+    })
     await s.redo(2); await s.undo(3); await s.apply(4,[op(id,'different')])
     await expect(s.redo(5)).rejects.toThrow('NOTHING_TO_REDO'); s.close()
   })
@@ -431,4 +445,102 @@ it('rejects a canonical ID colliding with another element alias before any batch
   await expectSameParts((await s.exportBytes(0)).bytes,bytes)
   await expect(s.apply(0,[op('e_87654321','unique')])).resolves.toMatchObject({generation:1})
   s.close()
+})
+
+it('supports shape geometry, table creation/editing, and slide visibility operations', async () => {
+  const {bytes}=await fixture();const s=await createPptxSession(bytes)
+  const addedShape=await s.apply(0,[{op:'addElement',target:{slide:0},kind:'rect',offset:{x:914400,y:914400,cx:1828800,cy:914400}}])
+  const shapeId=addedShape.created[0]!.id
+  await expect(s.apply(1,[{op:'setShapeGeometry',target:{slide:0,el:shapeId},prst:'roundRect'}])).resolves.toMatchObject({generation:2})
+  await expect(s.apply(2,[{op:'flipElements',target:{slide:0},els:[shapeId],axis:'h'}])).resolves.toMatchObject({generation:3})
+  const addedTable=await s.apply(3,[{op:'addTable',target:{slide:0},offset:{x:914400,y:2743200,cx:3657600,cy:1828800},rows:2,cols:2}])
+  const tableId=addedTable.created[0]!.id
+  await expect(s.apply(4,[{op:'setTableCell',target:{slide:0,el:tableId},row:0,col:0,paragraphs:[{runs:[{text:'Cell A1'}]}]}])).resolves.toMatchObject({generation:5})
+  await expect(s.apply(5,[{op:'setHidden',target:{slide:0},hidden:true}])).resolves.toMatchObject({generation:6})
+  const render=await s.render(6,0)
+  expect(render.hidden).toBe(true)
+  const table=render.nodes.find(node=>node.type==='table')
+  const cell=table?.cells.find(cell=>cell.row===0&&cell.col===0)
+  expect(cell?.text?.lines.flatMap(line=>line.runs.map(run=>run.text)).join('')).toBe('Cell A1')
+  const reopened=await openPptx((await s.exportBytes(6)).bytes)
+  const savedTable=reopened.deck.slides[0]!.elements.find(element=>element.type==='table')
+  expect(savedTable?.rows[0]?.[0]?.text?.paragraphs[0]?.runs.map(run=>run.text).join('')).toBe('Cell A1')
+  s.close()
+})
+
+describe('PPTX session master and layout editing', () => {
+  it('updates an inherited decoration, journals history and writes only the edited master part', async () => {
+    const {bytes} = await fixture()
+    const session = await createPptxSession(bytes)
+    try {
+      const before = (await session.exportBytes(0)).bytes
+      const items = await session.masterParts(0, 960)
+      const master = items.find(item => item.kind === 'master')!
+      expect(master.partPath).toMatch(/^ppt\/slideMasters\/slideMaster\d+\.xml$/)
+      expect(items.some(item => item.kind === 'layout')).toBe(true)
+      const mutation = {
+        op: 'addElement', kind: 'textbox', offset: {x: 100000, y: 300000, cx: 5000000, cy: 400000},
+        paragraphs: [{runs: [{text: 'WebMasterRoundTrip'}]}],
+      }
+      const result = await session.applyMaster(0, master.partPath, mutation, 960)
+      expect(result).toMatchObject({generation: 1, stateGeneration: 1, canUndo: true})
+      expect(result.sourceId).toBeTruthy()
+      expect(JSON.stringify(result.slide)).toContain('WebMasterRoundTrip')
+      expect(JSON.stringify(await session.render(1, 0))).toContain('WebMasterRoundTrip')
+      const saved = (await session.exportBytes(1)).bytes
+      const original = await JSZip.loadAsync(before), modified = await JSZip.loadAsync(saved)
+      const names = Object.keys(original.files).filter(name => !original.files[name]!.dir)
+      expect(Object.keys(modified.files).filter(name => !modified.files[name]!.dir).sort()).toEqual([...names].sort())
+      const changed: string[] = []
+      for (const name of names) {
+        if (await original.file(name)!.async('base64') !== await modified.file(name)!.async('base64')) changed.push(name)
+      }
+      expect(changed).toEqual([master.partPath])
+      const reopened = await createPptxSession(saved)
+      try { expect(JSON.stringify(await reopened.render(0, 0))).toContain('WebMasterRoundTrip') }
+      finally { reopened.close() }
+      await expect(session.applyMaster(0, master.partPath, mutation, 960)).rejects.toThrow('GENERATION_CONFLICT')
+      await expect(session.applyMaster(1, 'ppt/slides/slide1.xml', mutation, 960)).rejects.toThrow('INVALID_MASTER_PART')
+      await expect(session.applyMaster(1, master.partPath, {...mutation, target:{slide:0}}, 960)).rejects.toThrow('INVALID_TARGET')
+      expect(JSON.stringify((await session.undo(1)).slides)).not.toContain('WebMasterRoundTrip')
+      expect(JSON.stringify((await session.redo(2)).slides)).toContain('WebMasterRoundTrip')
+      const edited = await session.applyMaster(3, master.partPath, {
+        op: 'setText', target: {el: result.sourceId}, paragraphs: [{runs: [{text: 'UpdatedMasterText'}]}],
+      }, 960)
+      expect(JSON.stringify(edited.slide)).toContain('UpdatedMasterText')
+    } finally { session.close() }
+  })
+})
+
+it('renders imported TIFF as PNG and preserves native TIFF bytes across insertion and reopen', async () => {
+  const pixels = new Uint8Array(20*12*4)
+  for (let i=0; i<pixels.length; i+=4) pixels.set([200,100,50,255],i)
+  const tiff = new Uint8Array(UTIF.encodeImage(pixels,20,12))
+  const deck = await openPptx(await createBlankPptx())
+  const offset = {x:100000,y:100000,cx:190500,cy:114300}
+  expect(addPicture(deck,deck.deck.slides[0]!,{bytes:tiff,ext:'tif',offset})).not.toBeNull()
+  const source = await savePptx(deck)
+  const session = await createPptxSession(source)
+  function verifyPicture(slide:Awaited<ReturnType<typeof session.render>>, count:number) {
+    const pictures = slide.nodes.filter(node=>node.type==='picture')
+    expect(pictures).toHaveLength(count)
+    for(const picture of pictures) {
+      expect(picture.dataUrl).toMatch(/^data:image\/png;base64,/)
+      const bitmap = PNG.sync.read(Buffer.from(picture.dataUrl!.split(',')[1]!,'base64'))
+      expect([bitmap.width,bitmap.height,...bitmap.data.subarray(0,4)]).toEqual([20,12,200,100,50,255])
+    }
+  }
+  try {
+    verifyPicture(await session.render(0,0),1)
+    const edit = await session.applyImage(0,{mode:'insert',slide:0,placement:'natural',bytes:tiff,ext:'tiff'})
+    expect(edit.generation).toBe(1)
+    verifyPicture(await session.render(1,0),2)
+    const saved = (await session.exportBytes(1)).bytes
+    const zip = await JSZip.loadAsync(saved)
+    const nativeImages = zip.file(/^ppt\/media\/[^/]+\.tiff?$/)
+    expect(nativeImages.length).toBeGreaterThanOrEqual(1)
+    for(const entry of nativeImages) expect(await entry.async('uint8array')).toEqual(tiff)
+    const fresh = await createPptxSession(saved)
+    try { verifyPicture(await fresh.render(0,0),2) } finally { fresh.close() }
+  } finally { session.close() }
 })

@@ -1,6 +1,18 @@
 # Build context must be the repository root. No published DyOffice image is assumed.
 ARG NODE_IMAGE
-FROM ${NODE_IMAGE}
+ARG RUST_IMAGE
+FROM ${NODE_IMAGE} AS node-base
+FROM ${RUST_IMAGE} AS wasi-build
+WORKDIR /src
+COPY --from=node-base /usr/local/bin/node /usr/local/bin/node
+COPY apps/sheets/native/xlsx-engine/ apps/sheets/native/xlsx-engine/
+COPY tools/dyoffice/build-xlsx-refresh-wasi.mjs tools/dyoffice/
+RUN rustc --version | grep -q '^rustc 1\.93\.0 ' \
+ && rustup target add wasm32-wasip1 \
+ && CARGO_TARGET_DIR=/tmp/wasi-target node tools/dyoffice/build-xlsx-refresh-wasi.mjs \
+ && rm -rf /tmp/wasi-target "$CARGO_HOME/registry"
+
+FROM node-base
 ARG NPM_REGISTRY=https://repo.huaweicloud.com/repository/npm/
 WORKDIR /app
 COPY . .
@@ -11,10 +23,11 @@ RUN test "$(node -p 'process.versions.node')" = "$(cat .nvmrc)" \
  && npm cache clean --force
 # The Sheets bundle exceeds Node's automatic heap limit on small build hosts.
 ARG BUILD_HEAP_MIB=2800
-RUN NODE_OPTIONS="--max-old-space-size=${BUILD_HEAP_MIB}" npm run build:saas \
+RUN NODE_OPTIONS="--max-old-space-size=${BUILD_HEAP_MIB}" npm run build:saas:assets \
  && mkdir -p /data/objects && chown node:node /data/objects
 # Asset availability does not enable native runtimes; their safety gates remain unchanged.
 # tsx is a runtime dependency of the existing start script, so dev deps are retained.
+COPY --from=wasi-build /src/apps/web/dist-sheets-server/xlsx-refresh-wasi.mjs /app/apps/web/dist-sheets-server/
 USER node
 ENTRYPOINT ["sh", "/app/deploy/docker/entrypoint.sh"]
 CMD ["web"]

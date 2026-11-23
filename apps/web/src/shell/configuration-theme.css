@@ -1,0 +1,606 @@
+/* Shared appearance for the four native configuration pages. */
+.workspace-native-dialog :is(.personal-settings-page,.local-admin-panel,.workspace-trash-panel,.global-settings-refined){
+ --config-control-height:38px;
+ --config-control-radius:8px;
+ --config-panel-radius:10px;
+ font-size:13px;
+ color:var(--text-primary);
+}
+.workspace-native-dialog :is(.personal-settings-page,.local-admin-panel,.workspace-trash-panel,.global-settings-refined) button{
+ min-height:var(--config-control-height);
+ border-radius:var(--config-control-radius);
+ font-size:13px;
+ font-weight:500;
+ transition:background-color .15s,border-color .15s,color .15s;
+}
+.workspace-native-dialog :is(.personal-settings-page,.local-admin-panel,.workspace-trash-panel,.global-settings-refined) button:is(.is-primary,[data-variant=primary]){
+ background:var(--accent);
+ border-color:var(--accent);
+ color:var(--color-text-inverse,#fff);
+}
+.workspace-native-dialog :is(.personal-settings-page,.local-admin-panel,.workspace-trash-panel,.global-settings-refined) button:is(.is-primary,[data-variant=primary]):hover:enabled{
+ background:color-mix(in srgb,var(--accent) 88%,var(--text-primary));
+ border-color:var(--accent);
+ color:var(--color-text-inverse,#fff);
+ filter:none;
+}
+.workspace-native-dialog .local-admin-panel button.is-primary[data-danger=true]{background:var(--danger);border-color:var(--danger)}
+.workspace-native-dialog :is(.personal-settings-page,.local-admin-panel,.workspace-trash-panel,.global-settings-refined) :is(input:not([type=checkbox]):not([type=radio]):not([type=file]),select,textarea){
+ min-height:var(--config-control-height);
+ border-radius:var(--config-control-radius);
+ border-color:var(--border-subtle);
+ font-size:13px;
+ line-height:1.6;
+ transition:border-color .15s,box-shadow .15s;
+}
+.workspace-native-dialog :is(.personal-settings-page,.local-admin-panel,.workspace-trash-panel,.global-settings-refined) :is(input,select,textarea):hover:enabled{border-color:color-mix(in srgb,var(--accent) 45%,var(--border-subtle))}
+.workspace-native-dialog :is(.personal-settings-page,.local-admin-panel,.workspace-trash-panel,.global-settings-refined) :is(input,select,textarea)[aria-invalid=true]{border-color:var(--danger)}
+.workspace-native-dialog :is(.personal-settings-page,.local-admin-panel,.workspace-trash-panel,.global-settings-refined) :is(button,input,select,textarea,summary):focus-visible{outline:2px solid var(--accent);outline-offset:3px}
+.workspace-native-dialog :is(.personal-settings-page,.local-admin-panel,.workspace-trash-panel,.global-settings-refined) :is(.personal-page-heading h2,.management-list-heading h3,.global-settings-content-head h2){font-size:20px;line-height:1.4;font-weight:600;letter-spacing:-.3px}
+.workspace-native-dialog :is(.personal-page-heading,.management-list-heading,.global-settings-content-head) p{font-size:13px;line-height:1.7;color:var(--text-secondary)}
+.workspace-native-dialog :is(.local-admin-panel,.workspace-trash-panel) .management-list-summary{
+ padding:12px 16px;
+ margin-bottom:16px;
+ border:1px solid var(--border-subtle);
+ border-radius:var(--config-panel-radius);
+ background:var(--surface-subtle);
+}
+.workspace-native-dialog :is(.local-admin-panel,.workspace-trash-panel) .management-list-toolbar{
+ padding:0 0 18px;
+ border-bottom:0;
+ gap:12px;
+}
+.workspace-native-dialog :is(.local-admin-panel,.workspace-trash-panel) .management-list-table-region{border-radius:var(--config-panel-radius)}
+.workspace-native-dialog :is(.local-admin-panel,.workspace-trash-panel) .management-list-table th{padding:13px 16px;font-weight:500;letter-spacing:0;white-space:nowrap}
+.workspace-native-dialog :is(.local-admin-panel,.workspace-trash-panel) .management-list-table td{padding:16px}
+.workspace-native-dialog :is(.local-admin-panel,.workspace-trash-panel) .management-list-table tbody tr:not(:has(.management-list-empty)):hover{background:color-mix(in srgb,var(--accent) 3%,var(--surface))}
+.workspace-native-dialog :is(.local-admin-panel,.workspace-trash-panel) .management-list-table tbody tr:focus-within{background:var(--accent-soft)}
+.workspace-native-dialog :is(.local-admin-panel,.workspace-trash-panel) .management-list-footer{padding-top:16px;border-top:0}
+.workspace-native-dialog .workspace-trash-panel .workspace-panel-body{padding:24px 28px}
+.workspace-native-dialog .local-admin-panel .admin-row-actions button{min-height:30px;padding:4px 8px;border-radius:5px;font-size:12px}
+.workspace-native-dialog .local-admin-panel :is(.admin-create,.admin-confirm,.admin-secret){padding:20px;border-radius:var(--config-panel-radius);background:var(--surface)}
+.workspace-native-dialog .personal-settings-page .personal-page-content{background:var(--surface-subtle)}
+.workspace-native-dialog .personal-settings-page .personal-page-tabs{gap:8px;padding:10px 28px;background:var(--surface);overflow:auto}
+.workspace-native-dialog .personal-settings-page .personal-page-tabs>[role=tab]{min-height:38px;padding:9px 16px;border-radius:7px;font-size:13px}
+.workspace-native-dialog .personal-settings-page .personal-page-tabs>[aria-selected=true] {
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-weight: 600;
+}
+.workspace-native-dialog .personal-settings-page .personal-page-tabs>[role=tab]:focus-visible {
+  outline-offset: -2px;
+}
+.workspace-native-dialog .personal-settings-page .personal-page-tabs>[aria-selected=true]::after{display:none}
+.workspace-native-dialog .personal-settings-page .personal-page-category{padding:24px 28px 28px}
+.workspace-native-dialog .personal-settings-page .personal-page-heading{margin-bottom:24px}
+.workspace-native-dialog .personal-settings-page .personal-page-panel{padding:24px;border-radius:var(--config-panel-radius);background:var(--surface)}
+.workspace-native-dialog .personal-settings-page .personal-page-panel>h3{font-size:15px;line-height:24px;margin-bottom:18px}
+.workspace-native-dialog .personal-settings-page .personal-page-profile-details{gap:0}
+.workspace-native-dialog .personal-settings-page .personal-page-profile-details>div{padding:14px 0;border-bottom:1px solid var(--border-subtle)}
+.workspace-native-dialog .personal-settings-page .personal-page-profile-details>div:first-child{padding-top:0}
+.workspace-native-dialog .personal-settings-page .personal-page-profile-details>div:last-child{border-bottom:0;padding-bottom:0}
+.workspace-native-dialog .personal-settings-page .personal-page-logout{padding:18px 20px;background:var(--surface);border:1px solid var(--border-subtle);border-radius:var(--config-panel-radius)}
+.workspace-native-dialog .personal-settings-page .personal-page-logout strong{line-height:20px;font-weight:600}
+.workspace-native-dialog .personal-settings-page .personal-page-logout button{flex:none}
+.workspace-native-dialog .personal-settings-page .personal-page-logout button:hover:enabled{color:var(--danger);border-color:var(--danger);background:var(--danger-bg)}
+.workspace-native-dialog .personal-settings-page .personal-page-logout button:focus-visible{outline-color:var(--danger)}
+.workspace-native-dialog .personal-settings-page .personal-account-password .set-field:first-child {
+  margin-block-end: 18px;
+  padding-block-end: 16px;
+  border-block-end: 1px solid var(--border-subtle);
+}
+.workspace-native-dialog .personal-settings-page .personal-account-password .set-field:focus-within label {
+  color: var(--accent);
+}
+.workspace-native-dialog .personal-settings-page .personal-account-password .set-field:has(input[aria-invalid=true]) label {
+  color: var(--danger);
+}
+.workspace-native-dialog .personal-settings-page .personal-page-general{max-width:none;padding:24px;border:1px solid var(--border-subtle);border-radius:var(--config-panel-radius);background:var(--surface)}
+.workspace-native-dialog .personal-settings-page .personal-page-general>fieldset{max-width:780px}
+.workspace-native-dialog .personal-settings-page .personal-page-skills{padding:24px;border:1px solid var(--border-subtle);border-radius:var(--config-panel-radius);background:var(--surface)}
+.workspace-native-dialog .personal-settings-page .personal-page-save-state{display:flex;align-items:center;gap:8px;margin:0 0 18px;padding:10px 13px;border:1px solid var(--border-subtle);border-radius:7px;background:var(--surface)}
+.workspace-native-dialog .personal-settings-page .personal-page-save-state::before{content:'';width:6px;height:6px;border-radius:50%;background:var(--success);flex-shrink:0}
+.workspace-native-dialog .personal-settings-page .personal-page-save-state.is-dirty::before{background:currentColor}
+.workspace-native-dialog .personal-settings-page .personal-page-save-state.is-dirty {
+  border-color: color-mix(in srgb, currentColor 28%, var(--border-subtle));
+  background: color-mix(in srgb, currentColor 6%, var(--surface));
+}
+.workspace-native-dialog .personal-settings-page .personal-page-save-state[data-operation] {
+  color: var(--accent);
+  border-color: var(--border-subtle);
+  background: var(--surface);
+}
+.workspace-native-dialog .personal-settings-page .personal-page-save-state[data-operation]::before {
+  background: currentColor;
+}
+.workspace-native-dialog .personal-settings-page .personal-page-save-state[data-load-failed=true] {
+  color: var(--danger);
+  border-color: var(--danger-border);
+  background: var(--danger-bg);
+}
+.workspace-native-dialog .personal-settings-page .personal-page-save-state[data-load-failed=true]::before {
+  background: currentColor;
+}
+.workspace-native-dialog .global-settings-refined .global-settings-config-picker{padding:14px;border:1px solid var(--border-subtle);border-radius:var(--config-panel-radius);background:var(--surface-subtle);gap:12px}
+.workspace-native-dialog .global-settings-refined .global-settings-editor{margin-top:20px;padding:20px;border:1px solid var(--border-subtle);border-radius:var(--config-panel-radius);background:var(--surface)}
+.workspace-native-dialog .global-settings-refined .global-settings-current-status{padding-bottom:16px;margin-bottom:4px}
+.workspace-native-dialog .global-settings-refined .global-settings-field{padding:16px 0}
+.workspace-native-dialog .global-settings-refined .global-settings-maintenance{margin-top:24px;padding:16px;border:1px solid var(--border-subtle);border-radius:var(--config-panel-radius);background:var(--surface-subtle)}
+.workspace-native-dialog .global-settings-refined .global-settings-groups button{min-height:42px;border-radius:8px}
+@media(max-width:760px){
+ .workspace-native-dialog .local-admin-panel,.workspace-native-dialog .workspace-trash-panel .workspace-panel-body{padding:20px 16px}
+ .workspace-native-dialog .personal-settings-page .personal-page-tabs {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(max-content, 1fr));
+  padding: 8px 12px;
+  gap: 4px;
+ }
+ .workspace-native-dialog .personal-settings-page .personal-page-tabs>[role=tab]{padding:8px 6px;font-size:12px;min-height:36px;text-align:center}
+ .workspace-native-dialog .personal-settings-page .personal-page-category{padding:20px 16px}
+ .workspace-native-dialog .personal-settings-page :is(.personal-page-panel,.personal-page-general,.personal-page-skills){padding:16px}
+ .workspace-native-dialog .personal-settings-page .personal-page-logout{padding:16px}
+ .workspace-native-dialog .personal-settings-page .personal-page-heading{margin-bottom:20px}
+ .workspace-native-dialog :is(.local-admin-panel,.workspace-trash-panel) .management-list-table td{padding:13px 14px}
+ .workspace-native-dialog .global-settings-refined .global-settings-editor{padding:16px}
+ .workspace-native-dialog .global-settings-refined .global-settings-choice{flex-direction:column}
+ .workspace-native-dialog .global-settings-refined .global-settings-choice>:is(input,select){width:100%}
+}
+@media(prefers-reduced-motion:reduce){.workspace-native-dialog :is(.personal-settings-page,.local-admin-panel,.workspace-trash-panel,.global-settings-refined) :is(button,input,select,textarea){transition:none}}
+
+/* Keep list viewports attached to the dialog height rather than their contents. */
+.workspace-native-dialog .native-dialog-body>.workspace-panel{height:100%;min-height:0;display:flex;flex-direction:column}
+.workspace-native-dialog .native-dialog-body>.workspace-panel-host{height:100%;min-height:0}
+.workspace-native-dialog :is(.local-admin-panel,.workspace-trash-panel) .management-list-table-scroll{height:100%}
+.workspace-native-dialog :is(.local-admin-panel,.workspace-trash-panel) .management-list-empty{height:180px}
+
+/* Align dialog chrome and connection controls with the same configuration rhythm. */
+.workspace-native-dialog{border-radius:16px}
+.workspace-native-dialog .native-dialog-heading{padding:18px 28px}
+.workspace-native-dialog .native-dialog-heading h2{font-size:16px;line-height:24px}
+.workspace-native-dialog .native-dialog-close{width:34px;height:34px;border:1px solid transparent;border-radius:8px;transition:background-color .15s,border-color .15s}
+.workspace-native-dialog .native-dialog-close:hover{border-color:var(--border-subtle)}
+.workspace-native-dialog:has(.personal-settings-page) .native-dialog-close {
+  border-color: var(--border-subtle);
+  background: var(--surface-subtle);
+}
+.workspace-native-dialog:has(.personal-settings-page) .native-dialog-close:hover {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+@media (max-width: 760px) {
+  .workspace-native-dialog:has(.personal-settings-page) .native-dialog-close {
+    width: 38px;
+    height: 38px;
+  }
+}
+.workspace-native-dialog .database-connections .database-connections-header{padding:24px 28px 20px}
+.workspace-native-dialog .database-connections .database-connections-header h2{font-size:20px;line-height:1.4;letter-spacing:-.3px}
+.workspace-native-dialog .database-connections .database-connections-list{padding:24px 28px}
+.workspace-native-dialog .database-connections :is(button,input:not([type=checkbox]),select){min-height:38px;border-radius:8px}
+.workspace-native-dialog .database-connections button.dc-primary{background:var(--accent);border-color:var(--accent);color:var(--accent-text)}
+.workspace-native-dialog .database-connections button.dc-primary:hover:enabled{background:var(--accent-hover);border-color:var(--accent-hover)}
+.workspace-native-dialog .database-connections .database-connection-row{transition:background-color .15s}
+.workspace-native-dialog .database-connections .database-connection-row:hover{background:color-mix(in srgb,var(--accent) 3%,var(--surface))}
+.workspace-native-dialog .database-connections .database-connections-empty{padding:56px 24px;font-size:13px;line-height:1.7}
+.workspace-native-dialog .workspace-trash-panel .management-list-table:has(.management-list-empty) th{width:auto!important}
+.workspace-native-dialog .personal-settings-page .personal-page-tabs>[role=tab]:hover{background:var(--surface-subtle);color:var(--accent)}
+.workspace-native-dialog .personal-settings-page .personal-page-tabs>[aria-selected=true]:hover{background:var(--accent-soft)}
+.workspace-native-dialog .personal-settings-page .personal-page-profile-details dd{line-height:1.7;overflow-wrap:anywhere}
+@media(max-width:760px){
+ .workspace-native-dialog{border-radius:12px}
+ .workspace-native-dialog .native-dialog-heading{padding:14px 16px}
+ .workspace-native-dialog .database-connections .database-connections-header{padding:20px 16px 18px}
+ .workspace-native-dialog .database-connections .database-connections-list{padding:20px 16px}
+ .workspace-native-dialog .workspace-trash-panel .management-list-table:has(.management-list-empty) th{padding-inline:12px}
+ .workspace-native-dialog .global-settings-refined .global-settings-content{padding:20px 16px}
+ .workspace-native-dialog .global-settings-refined .global-settings-content-head{gap:16px}
+}
+@media(prefers-reduced-motion:reduce){.workspace-native-dialog :is(.native-dialog-close,.database-connection-row){transition:none}}
+
+/* Channel and task pages share the spacing and native controls of settings. */
+.workspace-native-dialog .background-workspace{min-height:100%;padding:24px 28px;background:var(--surface-subtle)}
+.workspace-native-dialog .background-workspace>header{padding-bottom:20px;gap:20px}
+.workspace-native-dialog .background-workspace>header h2{font-size:20px;line-height:1.4;font-weight:600;letter-spacing:-.3px}
+.workspace-native-dialog .background-workspace>header p{font-size:13px;line-height:1.7;margin-top:6px}
+.workspace-native-dialog .background-workspace button{min-height:38px;border-radius:8px;padding:8px 13px}
+.workspace-native-dialog .background-workspace select{min-height:38px;padding:8px 12px;border:1px solid var(--border-subtle)}
+.workspace-native-dialog .background-filter{margin-top:20px;padding:12px 16px;background:var(--surface);gap:16px}
+.workspace-native-dialog .background-empty{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;min-height:220px;padding:32px 24px;border:1px solid var(--border-subtle);border-radius:10px;background:var(--surface);line-height:1.8;text-align:center;color:var(--text-secondary)}
+.workspace-native-dialog .background-empty::before{content:'';display:block;width:32px;height:32px;border:1px solid var(--border-subtle);border-radius:12px;padding:12px;background:var(--surface-subtle) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23808b98' stroke-width='1.5'%3E%3Crect x='5' y='3' width='14' height='18' rx='2'/%3E%3Cpath d='M9 8h6M9 12h6M9 16h3'/%3E%3C/svg%3E") center/28px no-repeat}
+.workspace-native-dialog .background-columns{margin-top:20px;gap:20px}
+.workspace-native-dialog .background-columns nav{background:var(--surface)}
+.workspace-native-dialog .background-columns article{border-radius:10px}
+.workspace-native-dialog .background-columns article>p{color:var(--text-secondary);line-height:1.8}
+@media(max-width:680px){
+ .workspace-native-dialog .background-workspace{padding:20px 16px}
+ .workspace-native-dialog .background-workspace>header{gap:14px;padding-bottom:18px}
+ .workspace-native-dialog .background-empty{min-height:200px;padding:28px 20px}
+ .workspace-native-dialog .background-columns{gap:16px}
+}
+
+/* Mobile members keep account actions alongside their identity. */
+@media(min-width:761px){
+ .workspace-native-dialog .personal-settings-page .personal-page-account-grid{row-gap:20px}
+ .workspace-native-dialog .personal-settings-page .personal-page-password{grid-column:2;grid-row:1/span 2}
+ .workspace-native-dialog .personal-settings-page .personal-page-logout{grid-column:1;grid-row:2}
+}
+@media(max-width:680px){
+ .workspace-native-dialog .personal-settings-page .personal-page-logout{align-items:center;padding:16px;gap:14px}
+ .workspace-native-dialog .personal-settings-page .personal-page-profile-details>div{display:grid;grid-template-columns:76px minmax(0,1fr);gap:12px;padding:12px 0;align-items:baseline}
+ .workspace-native-dialog .personal-settings-page .personal-page-profile-details dt{margin:0;line-height:1.7}
+ .workspace-native-dialog .personal-settings-page .personal-page-profile-details dd{font-size:13px}
+ .workspace-native-dialog .local-admin-panel .management-list-table{min-width:0!important}
+ .workspace-native-dialog .local-admin-panel .management-list-table thead{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
+ .workspace-native-dialog .local-admin-panel .management-list-table tbody{display:grid;gap:12px;padding:12px;background:var(--surface-subtle)}
+ .workspace-native-dialog .local-admin-panel .management-list-table tbody tr{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:12px;padding:14px;border:1px solid var(--border-subtle);border-radius:8px;background:var(--surface)}
+ .workspace-native-dialog .local-admin-panel .management-list-table td{padding:0;border:0;min-width:0}
+ .workspace-native-dialog .local-admin-panel .management-list-table td:first-child{grid-column:1;grid-row:1}
+ .workspace-native-dialog .local-admin-panel .management-list-table td:nth-child(2){grid-column:1/-1;grid-row:2}
+ .workspace-native-dialog .local-admin-panel .management-list-table td:nth-child(3){grid-column:2;grid-row:1;align-self:start}
+ .workspace-native-dialog .local-admin-panel .management-list-table td:nth-child(4){grid-column:1/-1;grid-row:3;padding-top:10px;border-top:1px solid var(--border-subtle)}
+ .workspace-native-dialog .local-admin-panel .management-list-table .management-list-empty{grid-column:1/-1;grid-row:auto;height:auto;min-height:150px;display:grid;place-items:center}
+ .workspace-native-dialog .local-admin-panel .admin-member{gap:9px;min-width:0}
+ .workspace-native-dialog .local-admin-panel .admin-member>div{min-width:0}
+ .workspace-native-dialog .local-admin-panel .admin-member strong{font-size:13px;overflow-wrap:anywhere}
+ .workspace-native-dialog .local-admin-panel .admin-tag.is-current{display:block;width:fit-content;margin:4px 0}
+ .workspace-native-dialog .local-admin-panel .admin-row-actions{gap:4px;display:flex;flex-wrap:wrap}
+ .workspace-native-dialog .local-admin-panel .admin-row-actions button{min-height:32px;padding:5px 8px;background:var(--surface-subtle)}
+}
+
+/* Finish native form surfaces and keep related controls visually grouped. */
+.workspace-native-dialog .personal-settings-page .personal-page-content{scroll-padding-block:24px;scrollbar-width:thin}
+.workspace-native-dialog .personal-settings-page .personal-page-switch-row {
+  padding: 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px 8px 0 0;
+  background: var(--surface-subtle);
+}
+.workspace-native-dialog .personal-settings-page .personal-page-switch-row + .personal-page-switch-row {
+  border-top: 0;
+  border-radius: 0 0 8px 8px;
+}
+.workspace-native-dialog .personal-settings-page .personal-page-switch-row > label {
+  cursor: pointer;
+}
+.workspace-native-dialog .personal-settings-page .personal-page-switch-row + .personal-page-field-hint {
+  margin-top: 10px;
+}
+.workspace-native-dialog .personal-settings-page .personal-page-preference-actions{gap:8px}
+.workspace-native-dialog .personal-settings-page .personal-page-preference-actions .is-primary {
+  font-weight: 600;
+}
+.workspace-native-dialog .personal-settings-page .personal-page-preference-actions .is-primary:disabled {
+  border-color: var(--border-subtle);
+  background: var(--surface-subtle);
+  color: var(--text-secondary);
+}
+.workspace-native-dialog .personal-settings-page .personal-page-theme-preview{transition:border-color .15s,box-shadow .15s}
+.workspace-native-dialog .personal-settings-page .personal-page-theme-choice:hover .personal-page-theme-preview{border-color:color-mix(in srgb,var(--accent) 50%,var(--border-subtle))}
+.workspace-native-dialog .personal-settings-page .personal-page-theme-choice input:checked+.personal-page-theme-preview{border-color:var(--accent);box-shadow:0 0 0 3px color-mix(in srgb,var(--accent) 10%,transparent)}
+.workspace-native-dialog .personal-settings-page .personal-page-theme-choice > span:last-child {
+  padding: 2px 8px;
+  border-radius: 5px;
+  line-height: 18px;
+  color: var(--text-secondary);
+}
+.workspace-native-dialog .personal-settings-page .personal-page-theme-choice input:checked ~ span:last-child {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+.workspace-native-dialog :is(.personal-settings-page,.database-connections,.local-admin-panel) :is(input:not([type=checkbox]):not([type=radio]),select,textarea):focus-visible{border-color:var(--accent);outline:0;box-shadow:0 0 0 3px color-mix(in srgb,var(--accent) 14%,transparent)}
+.workspace-native-dialog .database-connections .database-connections-table{border-radius:10px}
+.workspace-native-dialog .database-connections .database-connections-columns{padding:13px 18px;font-weight:500;letter-spacing:0}
+.workspace-native-dialog .database-connections .database-connection-row{padding:16px 18px}
+.workspace-native-dialog .database-connections button.database-connection-name{min-height:0;line-height:1.6;border-radius:3px;overflow-wrap:anywhere}
+.workspace-native-dialog .database-connections .database-connection-row:focus-within{background:var(--accent-soft)}
+.workspace-native-dialog .database-connections .dc-pagination{gap:12px;font-variant-numeric:tabular-nums}
+.workspace-native-dialog .database-connections .dc-pagination button{min-height:34px;font-size:12px}
+.workspace-native-dialog :is(.local-admin-panel,.workspace-trash-panel) .management-list-footer{font-size:12px;font-variant-numeric:tabular-nums}
+.workspace-native-dialog .local-admin-panel .admin-row-actions button:hover:enabled{background:var(--accent-soft)}
+@media(max-width:760px){
+ .workspace-native-dialog .personal-settings-page .personal-page-preference-actions{width:100%;display:grid;grid-template-columns:repeat(2,minmax(0,1fr)) minmax(0,1.25fr)}
+ .workspace-native-dialog .personal-settings-page .personal-page-preference-actions button{padding-inline:10px}
+ .workspace-native-dialog .database-connections .database-connections-toolbar>.dc-inline{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+ .workspace-native-dialog .database-connections .database-connections-toolbar>input{max-width:none}
+ .workspace-native-dialog .database-connections .database-connection-row{padding:16px}
+ .workspace-native-dialog .database-connections .database-connection-row>[role=cell]:first-child {
+  padding-block-end: 10px;
+  border-block-end: 1px solid var(--border-subtle);
+ }
+ .workspace-native-dialog .database-connections .database-connection-row>[role=cell]:is(:nth-child(3),:last-child) {
+  justify-self: end;
+ }
+ .workspace-native-dialog .database-connections .database-connection-row>[role=cell]:nth-child(4) {
+  color: var(--text-secondary);
+ }
+ .workspace-native-dialog .database-connections .dc-pagination{justify-content:space-between;padding-top:4px}
+ .workspace-native-dialog .database-connections .dc-pagination button{min-height:38px}
+}
+@media(prefers-reduced-motion:reduce){.workspace-native-dialog .personal-settings-page .personal-page-theme-preview{transition:none}}
+@media(max-width:360px){
+ .workspace-native-dialog .personal-settings-page .personal-page-preference-actions{grid-template-columns:repeat(2,minmax(0,1fr))}
+ .workspace-native-dialog .personal-settings-page .personal-page-preference-actions .is-primary{grid-column:1/-1}
+}
+
+/* Channel authorization controls stay grouped at every viewport width. */
+.workspace-native-dialog .background-access-controls{display:flex;flex-wrap:wrap;align-items:center;gap:10px;margin-top:16px}
+.workspace-native-dialog .background-access-controls select{flex:1;min-width:180px;max-width:360px;min-height:38px;border-radius:8px}
+.workspace-native-dialog .background-columns article>p:first-of-type>code{display:inline-block;max-width:100%;padding:6px 10px;border:1px solid var(--border-subtle);border-radius:6px;background:var(--surface-subtle);font-size:12px;line-height:1.6;vertical-align:middle}
+.workspace-native-dialog .background-columns nav button{line-height:1.6;overflow-wrap:anywhere}
+.workspace-native-dialog .background-columns nav button[aria-current=true]{box-shadow:inset 3px 0 var(--accent)}
+.workspace-native-dialog .background-workspace :is(.background-invitation,.background-task-detail):focus-visible{outline:2px solid var(--accent);outline-offset:3px}
+.workspace-native-dialog .background-workspace :is(input,textarea):focus-visible{border-color:var(--accent);outline:0;box-shadow:0 0 0 3px color-mix(in srgb,var(--accent) 14%,transparent)}
+.workspace-native-dialog :is(.background-task-list,.background-task-detail) :is(strong,h3,p,small){overflow-wrap:anywhere}
+.workspace-native-dialog .background-state{flex-shrink:0;line-height:1.6;font-variant-numeric:tabular-nums}
+.workspace-native-dialog .background-task-list article{margin-top:0}
+.workspace-native-dialog .background-task-list article>p{line-height:1.8}
+.workspace-native-dialog .personal-settings-page .personal-page-tabs{scrollbar-width:thin}
+@media(max-width:680px){
+ .workspace-native-dialog .background-access-controls{display:grid;grid-template-columns:minmax(0,1fr)}
+ .workspace-native-dialog .background-access-controls :is(button,select){width:100%;min-width:0;max-width:none}
+ .workspace-native-dialog .background-workspace>header>.background-actions{width:100%}
+ .workspace-native-dialog .background-workspace>header>.background-actions>button{flex:1}
+ .workspace-native-dialog .background-invitation>.background-actions{display:grid;grid-template-columns:minmax(0,1fr)}
+}
+
+/* Keep login metadata and its paging controls visually separated. */
+.workspace-native-dialog .personal-settings-page .personal-account-list-footer{margin-top:14px;padding-top:14px;border-top:1px solid var(--border-subtle);font-variant-numeric:tabular-nums}
+@media (max-width: 680px) {
+  .workspace-native-dialog .personal-settings-page .personal-account-list-footer .native-settings-pager {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+    width: 100%;
+  }
+  .workspace-native-dialog .personal-settings-page .personal-account-list-footer .settings-list-page-status {
+    padding: 3px 8px;
+    border-radius: 6px;
+    background: var(--surface-subtle);
+    color: var(--text-primary);
+    text-align: center;
+    white-space: nowrap;
+  }
+}
+.workspace-native-dialog .personal-settings-page .personal-history-list {
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+}
+.workspace-native-dialog .personal-settings-page .personal-history-list li {
+  min-height: 42px;
+  border-radius: 0;
+}
+.workspace-native-dialog .personal-settings-page .personal-history-list li + li {
+  border-block-start: 1px solid var(--border-subtle);
+}
+.workspace-native-dialog .personal-settings-page .personal-history-list time {
+  margin-inline-start: auto;
+}
+.workspace-native-dialog .personal-settings-page .personal-account-disclosure{padding:8px 10px;border:1px solid var(--border-subtle);border-radius:7px;background:var(--surface-subtle)}
+.workspace-native-dialog .personal-settings-page .personal-account-disclosure summary{width:auto}
+.workspace-native-dialog .personal-settings-page .personal-account-disclosure[open] summary {
+  color: var(--text-primary);
+  font-weight: 500;
+}
+.workspace-native-dialog .personal-settings-page .personal-account-disclosure[open] p {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border-subtle);
+}
+.workspace-native-dialog .personal-settings-page .personal-account-confirm{border-color:var(--danger-border);background:var(--danger-bg)}
+
+@media (min-width: 900px) {
+  .workspace-native-dialog:has(> .native-dialog-body :is(.personal-settings-page,.local-admin-panel,.workspace-trash-panel,.database-connections--page,.background-workspace)) > .native-dialog-heading h2 {
+    padding-inline-start: 12px;
+    border-inline-start: 3px solid var(--accent);
+    font-weight: 650;
+  }
+  .workspace-native-dialog:has(> .native-dialog-body :is(.local-admin-panel,.workspace-trash-panel,.database-connections--page,.background-workspace)) > .native-dialog-heading .native-dialog-close {
+    border-color: var(--border-subtle);
+    background: var(--surface-subtle);
+  }
+  .workspace-native-dialog:has(> .native-dialog-body :is(.local-admin-panel,.workspace-trash-panel,.database-connections--page,.background-workspace)) > .native-dialog-heading .native-dialog-close:is(:hover,:focus-visible) {
+    border-color: var(--accent);
+    background: var(--accent-soft);
+    color: var(--accent);
+  }
+  .workspace-native-dialog .personal-settings-page .personal-page-category { padding-block: 22px 28px; }
+  .workspace-native-dialog .personal-settings-page .personal-page-heading { margin-bottom: 18px; }
+  .workspace-native-dialog :is(.local-admin-panel,.workspace-trash-panel) .management-list-table td { padding-block: 12px; }
+  .workspace-native-dialog :is(.local-admin-panel,.workspace-trash-panel) .management-list-toolbar { padding-bottom: 14px; }
+  .workspace-native-dialog .database-connections--page :is(.database-connections-header,.database-connections-list,.database-connections-notices) { padding-inline: 28px; }
+  .workspace-native-dialog .database-connections--page .database-connections-list { gap: 16px; }
+  .workspace-native-dialog .database-connections--page .database-connection-row { padding-block: 12px; }
+  .workspace-native-dialog .background-workspace { padding: 24px 28px; }
+  .workspace-native-dialog .background-workspace > header {
+    padding: 12px 16px;
+    border: 1px solid var(--border-subtle);
+    border-radius: 10px;
+    background: var(--surface);
+  }
+  .workspace-native-dialog .background-workspace > header :is(.background-actions, button) {
+    flex-shrink: 0;
+  }
+  .workspace-native-dialog :is(.background-workspace > header, .database-connections--page .database-connections-header) button {
+    min-inline-size: 72px;
+  }
+  .workspace-native-dialog .personal-settings-page .personal-page-preference-actions button {
+    min-inline-size: 82px;
+  }
+  .workspace-native-dialog .background-workspace .background-empty {
+    border: 1px dashed var(--border-subtle);
+    border-radius: 10px;
+    background: var(--surface);
+  }
+  .workspace-native-dialog .database-connections--page div.database-connections-empty {
+    display: grid;
+    justify-items: center;
+    place-content: center;
+    gap: 12px;
+    min-block-size: 180px;
+    box-sizing: border-box;
+    padding: 24px;
+  }
+  .workspace-native-dialog .database-connections--page .database-connections-empty > p { margin: 0; }
+  .workspace-native-dialog .workspace-trash-panel .management-list-table .management-list-empty {
+    background: var(--surface-subtle);
+  }
+  .workspace-native-dialog .background-workspace .background-task-list { gap: 10px; }
+  .workspace-native-dialog .background-workspace .background-task-list article { margin-top: 0; }
+  .workspace-native-dialog :is(.local-admin-panel .admin-tag,.database-connections--page .dc-badge,.background-workspace .background-state) {
+    padding: 2px 8px;
+    border: 1px solid var(--border-subtle);
+    border-radius: 5px;
+    font-size: 12px;
+    line-height: 18px;
+    white-space: nowrap;
+  }
+}
+
+@media (min-width: 900px) {
+  .workspace-native-dialog .background-workspace > header h2,
+  .workspace-native-dialog .database-connections--page:has(.database-connections-list) .database-connections-header h2 {
+    display: none;
+  }
+  .workspace-native-dialog .background-workspace > header p { margin-top: 0; }
+  .workspace-native-dialog .database-connections--page:has(.database-connections-list) .database-connections-header {
+    padding-block: 16px;
+  }
+  .workspace-native-dialog .database-connections--page .database-connection-row:hover {
+    background: color-mix(in srgb, var(--accent) 4%, var(--surface));
+  }
+  .workspace-native-dialog .database-connections--page .database-connection-row:focus-within {
+    background: var(--accent-soft);
+  }
+}
+
+@media (min-width: 900px) {
+  .workspace-native-dialog .personal-settings-page .personal-page-tabs {
+    gap: 4px;
+    padding-block: 0;
+  }
+  .workspace-native-dialog .personal-settings-page .personal-page-tabs > [role=tab] {
+    min-block-size: 44px;
+    border-radius: 0;
+  }
+  .workspace-native-dialog .personal-settings-page .personal-page-tabs>[aria-selected=true] {
+    box-shadow: inset 0 -2px var(--accent);
+  }
+  .workspace-native-dialog .personal-settings-page .personal-page-content:has(.personal-page-category:not([hidden]) .personal-page-preference-actions) {
+    scroll-padding-block-start: 88px;
+  }
+  .workspace-native-dialog .personal-settings-page .personal-page-heading:has(.personal-page-preference-actions) {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    align-items: center;
+    padding-block: 10px;
+    border-bottom: 1px solid var(--border-subtle);
+    background: var(--surface-subtle);
+  }
+  .workspace-native-dialog :is(.local-admin-panel,.workspace-trash-panel) .management-list-footer {
+    margin-top: 12px;
+    padding-top: 8px;
+    border-top: 1px solid var(--border-subtle);
+  }
+  .workspace-native-dialog :is(.local-admin-panel,.workspace-trash-panel) .management-list-summary { margin-bottom: 12px; }
+  .workspace-native-dialog :is(.local-admin-panel,.workspace-trash-panel) .management-list-footer > .native-settings-pager {
+    margin-inline-start: auto;
+  }
+  .workspace-native-dialog :is(.local-admin-panel,.workspace-trash-panel) .management-list-table th {
+    font-weight: 600;
+  }
+  .workspace-native-dialog .database-connections--page .dc-pagination {
+    padding-block: 8px;
+    gap: 12px;
+    font-variant-numeric: tabular-nums;
+  }
+  .workspace-native-dialog .database-connections--page .dc-pagination button { min-width: 64px; }
+  .workspace-native-dialog .database-connections--page .database-connections-columns {
+    font-weight: 600;
+  }
+}
+
+@media (min-width: 900px) and (max-height: 720px) {
+  .workspace-native-dialog:has(> .native-dialog-body :is(.personal-settings-page,.local-admin-panel,.workspace-trash-panel,.database-connections--page,.background-workspace)) > .native-dialog-heading {
+    padding-block: 12px;
+  }
+  .workspace-native-dialog .personal-settings-page .personal-page-tabs > [role=tab] { min-block-size: 40px; }
+  .workspace-native-dialog .personal-settings-page .personal-page-category { padding-top: 16px; }
+  .workspace-native-dialog .personal-settings-page .personal-page-heading { margin-bottom: 12px; }
+  .workspace-native-dialog .database-connections--page .database-connections-list { padding-top: 16px; }
+  .workspace-native-dialog .background-workspace { padding-top: 16px; }
+  .workspace-native-dialog .background-workspace .background-empty {
+    box-sizing: border-box;
+    min-height: 180px;
+    padding-block: 20px;
+  }
+  .workspace-native-dialog :is(.local-admin-panel,.workspace-trash-panel) .management-list-heading { margin-bottom: 12px; }
+  .workspace-native-dialog :is(.local-admin-panel,.workspace-trash-panel) .management-list-summary {
+    margin-bottom: 8px;
+    padding-block: 8px;
+  }
+  .workspace-native-dialog :is(.local-admin-panel,.workspace-trash-panel) .management-list-footer {
+    margin-top: 8px;
+    padding-top: 6px;
+  }
+  .workspace-native-dialog :is(.local-admin-panel,.workspace-trash-panel) .management-list-table :is(th,td) { padding-block: 8px; }
+  .workspace-native-dialog .database-connections--page :is(.database-connections-columns,.database-connection-row) { padding-block: 9px; }
+}
+
+@media (min-width: 1100px) {
+  .workspace-native-dialog .personal-settings-page .personal-page-preference-actions { align-items: center; }
+  .workspace-native-dialog :is(.local-admin-panel,.workspace-trash-panel) .management-list-summary {
+    gap: 8px 16px;
+    font-variant-numeric: tabular-nums;
+  }
+  .workspace-native-dialog :is(.local-admin-panel,.workspace-trash-panel) .management-list-summary > span + span {
+    margin-inline-start: auto;
+  }
+  .workspace-native-dialog .database-connections--page .database-connections-header { align-items: center; }
+  .workspace-native-dialog .background-workspace .background-columns {
+    grid-template-columns: clamp(220px, 23%, 280px) minmax(0, 1fr);
+    align-items: start;
+  }
+  .workspace-native-dialog .background-columns nav {
+    max-block-size: min(50vh, 440px);
+    overflow-y: auto;
+    scrollbar-width: thin;
+    overscroll-behavior: contain;
+  }
+  .workspace-native-dialog .background-columns nav button {
+    min-block-size: 44px;
+    background: var(--surface-subtle);
+  }
+  .workspace-native-dialog .background-columns nav button[aria-current=true] {
+    background: var(--accent-soft);
+    color: var(--accent);
+  }
+  .workspace-native-dialog .personal-settings-page .personal-page-preference-actions {
+    flex-shrink: 0;
+    gap: 6px;
+  }
+  .workspace-native-dialog :is(.local-admin-panel,.workspace-trash-panel) .management-list-table-scroll {
+    scroll-padding-block-start: 48px;
+  }
+  .workspace-native-dialog .database-connections--page .database-connections-columns {
+    color: var(--text-primary);
+  }
+  .workspace-native-dialog :is(.local-admin-panel,.workspace-trash-panel) .management-list-toolbar,
+  .workspace-native-dialog .database-connections--page .database-connections-toolbar,
+  .workspace-native-dialog .background-workspace .background-filter {
+    min-height: 52px;
+    box-sizing: border-box;
+    padding: 6px 12px;
+    border: 1px solid var(--border-subtle);
+    border-radius: 8px;
+    background: var(--surface);
+  }
+  .workspace-native-dialog :is(.local-admin-panel,.workspace-trash-panel) .management-list-toolbar {
+    margin-bottom: 12px;
+  }
+  .workspace-native-dialog .database-connections--page .database-connections-toolbar > input {
+    flex: 0 1 360px;
+    min-width: 0;
+  }
+  .workspace-native-dialog .background-workspace .background-filter > select { min-width: 144px; }
+}

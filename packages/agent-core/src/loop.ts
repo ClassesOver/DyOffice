@@ -1,3 +1,5 @@
+import {startFileChat,type VisibleChatMessage,type FileChatTurn} from './file-chat'
+import { DELEGATE_AGENT_TOOL, HarnessContinuationUnavailable } from './coding-skill'
 import type { AgentSkill, ExecutedToolCall } from './skill'
 import { addTokenUsage } from './types'
 import type {
@@ -36,6 +38,13 @@ export interface AgentRunResult {
   yielded?: { taskIds: string[] }
 }
 
+export interface DocumentHandoffOptions {
+  skill?: {name:string;content:string}
+  signal:AbortSignal; check:()=>boolean; tools:readonly string[]
+  onTool:(name:string,state:'running'|'done'|'failed',mutated:boolean)=>void
+  onText:(text:string)=>void
+}
+
 export interface AgentLoopEvents<TSnapshot> {
   /** cumulative assistant text of the current turn (call per delta) */
   onText?(text: string): void
@@ -68,6 +77,10 @@ export interface AgentLoopOptions<TSnapshot = unknown> {
   maxTurns?: number
   /** Allow explicitly delegated runs to stop after their tool results are recorded. Defaults to false. */
   allowDelegationYield?: boolean
+  /** Let the host capture and resume a foreground run waiting on one Harness task. */
+  allowHarnessResume?: boolean
+  /** Host-local inputs, such as browser attachments, may make a turn non-recoverable. */
+  canCheckpointHarness?: () => boolean
   /** history cap in messages, trimmed at user-turn boundaries (default 200) */
   maxHistory?: number
   /** Context compaction; false disables it (enabled by default with default thresholds) */
@@ -81,6 +94,20 @@ export interface AgentLoopOptions<TSnapshot = unknown> {
   now?(): number
   /** appended to the system prompt each turn (e.g. reply-language directive following the UI language) */
   systemSuffix?(): string
+}
+
+export interface HarnessCheckpoint {
+  chatTurnId?: string
+  consumedChatTurnIds?: readonly string[]
+  messages: readonly AgentMessage[]
+  userIndex: number
+  turns: number
+  executedCalls: readonly ExecutedToolCall[]
+}
+
+const harnessCheckpoints = new WeakMap<AbortSignal, HarnessCheckpoint>()
+export function getHarnessCheckpoint(signal?: AbortSignal): HarnessCheckpoint | undefined {
+  return signal && !signal.aborted ? harnessCheckpoints.get(signal) : undefined
 }
 
 const COMPACT_MAX_BYTES = 256 * 1024
@@ -509,6 +536,7 @@ function mechanicalDigest(dropped: readonly AgentMessage[]): string {
  */
 export class AgentLoop<TSnapshot = unknown> {
   private options: AgentLoopOptions<TSnapshot>
+  private handoffReset: (() => void) | undefined
   private scopedReset: (() => void) | undefined
   private nativeModelResetPending = false
   private history: AgentMessage[] = []
@@ -555,9 +583,17 @@ export class AgentLoop<TSnapshot = unknown> {
   /** per-run abort: aborted on cancel(); long tools (e.g. generate_deck) use it to break internal loops */
   private abortController: AbortController | null = null
   private pendingYield: string[] | null = null
+  private resumedHarness = false
+  private resumeGuard: (() => boolean) | undefined
 
+  private fileTurn:FileChatTurn|undefined
   constructor(options: AgentLoopOptions<TSnapshot>) {
-    this.options = options
+    const events=options.events
+    this.options={...options,events:{...events,
+      onText:text=>{this.fileTurn?.text(text);events?.onText?.(text)},
+      onDone:result=>{this.fileTurn?.finish(result.text,result.cancelled||result.turnLimit||!!result.truncated);this.fileTurn=undefined;events?.onDone?.(result)},
+      onError:error=>{this.fileTurn?.finish('',true);this.fileTurn=undefined;events?.onError?.(error)},
+    }}
   }
 
   get busy(): boolean {
@@ -566,6 +602,40 @@ export class AgentLoop<TSnapshot = unknown> {
 
   get messages(): readonly AgentMessage[] {
     return this.history
+  }
+
+  /** Continue from an authorized checkpoint with its original, already executed tool result. */
+  resumeHarness(checkpoint: HarnessCheckpoint, result: AgentToolResult, options?:{chat:FileChatTurn;modelId:string;canContinue?:()=>boolean}): boolean {
+    if (!this.options.allowHarnessResume || this.running || this.history.length || this.scopedReset || this.handoffReset) return false
+    const { messages, userIndex, turns, executedCalls } = checkpoint
+    const tail = messages.at(-1)
+    const call = tail?.role === 'assistant' && tail.toolCalls?.length === 1 ? tail.toolCalls[0] : undefined
+    const maxTurns = this.options.maxTurns ?? DEFAULT_MAX_TURNS
+    if (call?.name !== DELEGATE_AGENT_TOOL || result.id !== call.id || result.name !== call.name ||
+      messages[userIndex]?.role !== 'user' || userIndex >= messages.length - 1 ||
+      !Number.isSafeInteger(turns) || turns < 0 || turns >= maxTurns) return false
+    const history = structuredClone([...messages])
+    this.prepareRun()
+    this.fileTurn = options?.chat
+    if(checkpoint.consumedChatTurnIds)this.fileTurn?.restoreConsumedTurns?.(checkpoint.consumedChatTurnIds)
+    this.resumedHarness = true
+    this.resumeGuard = options?.canContinue
+    this.history = history
+    this.runUserMsg = history[userIndex]!
+    this.executedCalls = [...executedCalls, { name: call.name, ok: !result.isError }]
+    this.history.push({ role: 'tool', results: [{ ...result }] })
+    this.turns = turns + 1
+    if (this.turns >= maxTurns) {
+      this.finalizing = true
+      this.history.push({ role: 'user', text: TURN_LIMIT_NOTE })
+    }
+    try {
+      this.options.transport.beginRun?.(options?.modelId)
+      this.startTurn()
+    } catch (err) {
+      this.failRun(err instanceof Error ? err.message : String(err))
+    }
+    return true
   }
 
   /** Stop an enabled run after its current tool batch, once the tool results are paired in history. */
@@ -586,24 +656,70 @@ export class AgentLoop<TSnapshot = unknown> {
   /** Execute an explicitly authorized peer read without exposing chat history,
    * draft context, attached skills or the native panel's event callbacks. */
   async runScoped(instruction:string,input:{signal?:AbortSignal;allowedTools:readonly string[]}):Promise<AgentRunResult> {
+    const allowed=new Set(input.allowedTools),skill=this.options.skill
+    return this.runIsolated(instruction,{
+      signal:input.signal,
+      skill:{
+        id:'peer-read',systemPrompt:'You are the Office assistant handling a delegated read-only task for this document. Use only the offered read tools. Do not modify or save the document, run code, delegate further, access unrelated files, or claim such actions. Return only the requested findings and limitations.',
+        tools:skill.tools.filter(tool=>allowed.has(tool.name)),
+        executeTool(call,signal){
+          if(!allowed.has(call.name))throw new Error('Office task tool unavailable')
+          return skill.executeScopedTool ? skill.executeScopedTool(call,signal) : skill.executeTool(call,signal)
+        },
+      },
+    })
+  }
+
+  /** Submit through the foreground conversation, retaining its history, context
+   * and UI callbacks. The peer grant still limits tools to this document. */
+  async runDocumentHandoff(instruction:string,input:DocumentHandoffOptions):Promise<AgentRunResult> {
+    if(this.running||this.scopedReset||this.handoffReset||!instruction.trim()||!input.check()||input.signal.aborted)
+      throw new Error('Office conversation unavailable')
+    const original=this.options,native=original.skill,events=original.events,allowed=new Set(input.tools)
+    const abort=()=>this.cancel()
+    return new Promise<AgentRunResult>((resolve,reject)=>{
+      const restore=()=>{
+        input.signal.removeEventListener('abort',abort)
+        this.handoffReset=undefined
+        this.options=original
+      }
+      this.handoffReset=()=>{restore();reject(new Error('Office document changed'))}
+      this.options={...original,allowDelegationYield:false,skill:{
+        ...native,get tools(){return native.tools.filter(t=>allowed.has(t.name))},
+        executeTool(call,signal){
+          if(!allowed.has(call.name)||input.signal.aborted||!input.check())throw new Error('Document tool unavailable')
+          return native.executeTool(call,signal)
+        },
+      },events:{...events,
+        onText:text=>{events?.onText?.(text);input.onText(text)},
+        onToolStart:call=>{events?.onToolStart?.(call);input.onTool(call.name,'running',false)},
+        onToolExecuted:event=>{events?.onToolExecuted?.(event);input.onTool(event.call.name,event.execution.isError?'failed':'done',!!event.execution.mutated&&!event.execution.isError)},
+        onDone:result=>{restore();try{events?.onDone?.(result)}finally{resolve(result)}},
+        onError:message=>{restore();try{events?.onError?.(message)}finally{reject(new Error(message))}},
+      }}
+      input.signal.addEventListener('abort',abort,{once:true})
+      const prompt=input.skill ? instruction+'\n\nDSH task reference ('+input.skill.name+'). Use only the current Office document tools:\n'+input.skill.content : instruction
+      this.run(prompt,undefined,input.skill?instruction:undefined,{text:instruction,sender:'dsh'})
+    })
+  }
+
+  /** Reuse the native loop without sharing the local user's history or UI events. */
+  async runIsolated(instruction:string,input:{
+    signal?:AbortSignal|undefined
+    skill:AgentSkill
+    events?: Pick<AgentLoopEvents<TSnapshot>,'onText'|'onToolStart'|'onToolExecuted'>
+  }):Promise<AgentRunResult> {
     if(this.running||this.scopedReset)throw new Error('Office assistant is busy')
     if(!instruction.trim()||input.signal?.aborted)throw new Error('Office task cancelled')
     const original=this.options,history=this.history,contexts=this.staleContexts,transient=this.transientInstruction,lastRequest=this.lastRequestAt
-    const allowed=new Set(input.allowedTools),skill=original.skill
     let invalidated=false
     const abort=()=>this.cancel()
     try {
       this.history=[];this.staleContexts=[];this.transientInstruction=null;this.lastRequestAt=0
       return await new Promise<AgentRunResult>((resolve,reject)=>{
         this.scopedReset=()=>{invalidated=true;this.options=original;reject(new Error('Office task editor changed'))}
-        this.options={...original,compaction:false,skill:{
-          id:'peer-read',systemPrompt:'You are the Office assistant handling a delegated read-only task for this document. Use only the offered read tools. Do not modify or save the document, run code, delegate further, access unrelated files, or claim such actions. Return only the requested findings and limitations.',
-          tools:skill.tools.filter(tool=>allowed.has(tool.name)),
-          executeTool(call,signal){
-            if(!allowed.has(call.name))throw new Error('Office task tool unavailable')
-            return skill.executeScopedTool ? skill.executeScopedTool(call,signal) : skill.executeTool(call,signal)
-          },
-        },events:{onDone:resolve,onError:message=>reject(new Error(message))}}
+        this.options={...original,compaction:false,allowDelegationYield:false,skill:input.skill,
+          events:{...input.events,onDone:resolve,onError:message=>reject(new Error(message))}}
         delete this.options.captureSnapshot
         delete this.options.formatUserMessage
         input.signal?.addEventListener('abort',abort,{once:true})
@@ -684,11 +800,11 @@ export class AgentLoop<TSnapshot = unknown> {
     this.trimHistory()
   }
 
-  /** images: inline attachments for this user turn (vision input; see AgentImage) */
-  run(instruction: string, images?: AgentImage[], historyInstruction?: string): void {
-    if (this.running || !instruction) return
+  private prepareRun(): void {
+    this.resumeGuard = undefined
     this.running = true
     this.cancelled = false
+    this.resumedHarness = false
     this.pendingYield = null
     this.turns = 0
     this.finalizing = false
@@ -703,7 +819,16 @@ export class AgentLoop<TSnapshot = unknown> {
     this.redundantReadTurns = 0
     this.executedCalls = []
     this.verifyRetryUsed = false
+    this.runUsage = null
+    this.turnUsage = null
     this.abortController = new AbortController()
+  }
+
+  /** images: inline attachments for this user turn (vision input; see AgentImage) */
+  run(instruction: string, images?: AgentImage[], historyInstruction?: string,visible?:VisibleChatMessage): void {
+    if (this.running || !instruction) return
+    this.fileTurn=visible?startFileChat(this.options.transport,visible,this):undefined
+    this.prepareRun()
     // buildContext and formatUserMessage are consumer-supplied and run before any
     // turn exists, so a throw here would escape run() with `running` still true:
     // the guard at the top then drops every later message silently, cancel()
@@ -789,6 +914,12 @@ export class AgentLoop<TSnapshot = unknown> {
     // reset before compaction so the summary turn's billing folds into this run
     this.runUsage = null
     try {
+      if(this.fileTurn){
+        // The history fetch has no timeout of its own; Stop must still settle the run promptly.
+        const older=await untilAborted(this.fileTurn.history(),this.abortController?.signal,[])
+        if(generation!==this.generation)return
+        this.history.push(...older)
+      }
       await this.maybeCompact()
     } catch {
       // Proceed with the run even if compaction fails (an over-budget history only costs more, it's still correct)
@@ -1023,6 +1154,8 @@ export class AgentLoop<TSnapshot = unknown> {
 
   /** drop the conversation (e.g. when a different document is opened) */
   reset(): void {
+    this.fileTurn?.finish('',true);this.fileTurn=undefined
+    this.handoffReset?.()
     this.scopedReset?.()
     this.generation++
     this.clearRetryTimer()
@@ -1062,7 +1195,7 @@ export class AgentLoop<TSnapshot = unknown> {
    * behind, then report. onError is the consumer's last callback, so a throw
    * from it must not escape and wedge the loop a second time.
    */
-  private failRun(message: string): void {
+  private failRun(message: string, persistError = false): void {
     // the request that threw may still be streaming: retire its generation and
     // cancel it so a later run() cannot overlap with it
     this.generation++
@@ -1074,6 +1207,11 @@ export class AgentLoop<TSnapshot = unknown> {
     this.turnUsage = null
     this.rollbackFailedRun()
     try {
+      if (persistError) {
+        const fileTurn = this.fileTurn
+        this.fileTurn = undefined
+        fileTurn?.finish(message, true)
+      }
       this.options.events?.onError?.(message)
     } catch {
       // nothing left to notify
@@ -1141,7 +1279,9 @@ export class AgentLoop<TSnapshot = unknown> {
             this.options.skill.systemPrompt +
             (this.options.systemSuffix?.() ?? ''),
           messages: [...this.history],
-          tools: this.finalizing ? [] : this.options.skill.tools,
+          tools: this.finalizing ? [] : this.resumedHarness
+            ? this.options.skill.tools.filter(tool => tool.name !== DELEGATE_AGENT_TOOL)
+            : this.options.skill.tools,
         },
         {
           onDelta: (text) => {
@@ -1188,14 +1328,17 @@ export class AgentLoop<TSnapshot = unknown> {
               this.failRun(err instanceof Error ? err.message : String(err))
             }
           },
-          onDone: () => {
+          onDone: (disposition) => {
             if (generation !== this.generation || settled) return
             settled = true
+            if (disposition === 'harness-admission-unconfirmed') this.fileTurn = undefined
             this.settleTurn()
           },
-          onError: (error) => {
+          onError: (error, disposition) => {
             if (generation !== this.generation || settled) return
             settled = true
+            // A competing window may own this chat now. Leave its persisted turn alone.
+            if (disposition === 'harness-admission-unconfirmed') this.fileTurn = undefined
             // The no-partial-output guard keeps the empty-stream retry idempotent (an
             // empty stream never emits deltas, but a mislabeled error must not replay
             // a turn whose text/tool calls the UI already saw). A dropped tool-argument
@@ -1338,6 +1481,12 @@ export class AgentLoop<TSnapshot = unknown> {
         })
         continue
       }
+      if (this.resumedHarness && call.name === DELEGATE_AGENT_TOOL) {
+        const output = 'This run already received its delegated result. Start a new request to delegate another task.'
+        results.push({ id: call.id, name: call.name, output, isError: true })
+        events?.onToolExecuted?.({ call, execution: { output, summary: call.name, isError: true } })
+        continue
+      }
       // Unusable input (truncated by the token limit, or JSON that failed to parse):
       // don't execute; feed a targeted error back so the model retries correctly
       const unreadable = call.truncated || call.inputError
@@ -1362,21 +1511,50 @@ export class AgentLoop<TSnapshot = unknown> {
         })
         continue
       }
+      // The user can edit while the resumed model is streaming a tool request.
+      if (!this.mutationSeen && this.resumeGuard && !this.resumeGuard()) {
+        // The admitted reply belongs to the original, server-backed chat turn.
+        this.failRun('The document changed while Office was continuing the Harness task. Check the task card before retrying.', true)
+        return
+      }
       executedInTurn = true
       events?.onToolStart?.(call)
       const snapshot = !this.mutationSeen ? captureSnapshot?.() : undefined
+      const signal = this.abortController?.signal
       let raced: ToolExecution | typeof TOOL_ABORTED
       try {
+        if (signal && !signal.aborted && this.options.allowHarnessResume && this.options.canCheckpointHarness?.() !== false && !this.mutationSeen &&
+          !this.scopedReset && !this.handoffReset && !this.pendingYield && toolCalls.length === 1 &&
+          call.name === DELEGATE_AGENT_TOOL && this.runUserMsg && historySize(this.history) <= COMPACT_MAX_BYTES &&
+          !this.history.some(message => message.role === 'user' && message.images?.length)) {
+          // A checkpoint is optional; serialization must never block the original task.
+          try {
+            const consumedChatTurnIds = this.fileTurn?.consumedTurns?.()
+            const encoded = JSON.stringify({
+              ...(this.fileTurn?.turnId ? {chatTurnId:this.fileTurn.turnId} : {}),
+              ...(consumedChatTurnIds ? { consumedChatTurnIds } : {}),
+              messages: this.history, userIndex: this.history.indexOf(this.runUserMsg),
+              turns: this.turns, executedCalls: this.executedCalls,
+            } satisfies HarnessCheckpoint)
+            if (utf8Size(encoded) <= COMPACT_MAX_BYTES) harnessCheckpoints.set(signal, JSON.parse(encoded))
+          } catch { /* Continue without recovery. */ }
+        }
         raced = await awaitToolOrAbort(
-          skill.executeTool(call, this.abortController?.signal),
-          this.abortController?.signal,
+          skill.executeTool(call, signal),
+          signal,
         )
       } catch (e) {
-        raced = {
+        if (e instanceof HarnessContinuationUnavailable) {
+          if (generation !== this.generation) return
+          if (!this.cancelled) { this.failRun(e.message); return }
+          raced = TOOL_ABORTED
+        } else raced = {
           output: e instanceof Error ? e.message : String(e),
           isError: true,
           summary: call.name,
         }
+      } finally {
+        if (signal) harnessCheckpoints.delete(signal)
       }
       if (generation !== this.generation) return // reset while a tool was running
       if (raced === TOOL_ABORTED) {
@@ -1576,4 +1754,15 @@ export function sanitizeAgentPayload(payload: string): string {
         '$1$2[REDACTED_SECURE_TOKEN]',
       )
   )
+}
+
+/** Resolves with `fallback` as soon as `signal` aborts, otherwise with `work`'s result. */
+function untilAborted<T>(work:Promise<T>,signal:AbortSignal|undefined,fallback:T):Promise<T>{
+  if(!signal)return work
+  if(signal.aborted){work.catch(()=>{});return Promise.resolve(fallback)}
+  return new Promise<T>((resolve,reject)=>{
+    const onAbort=()=>{work.catch(()=>{});resolve(fallback)}
+    signal.addEventListener('abort',onAbort,{once:true})
+    work.then(value=>{signal.removeEventListener('abort',onAbort);resolve(value)},error=>{signal.removeEventListener('abort',onAbort);reject(error)})
+  })
 }

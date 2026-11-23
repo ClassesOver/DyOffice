@@ -12,6 +12,7 @@ export const de = {
   aiQcPageOk: 'Seite {n}: Layout in Ordnung',
   aiQcPageFixed: 'Seite {n}: {summary}',
   aiQcPageFixedDefault: 'Layoutprobleme behoben',
+  aiQcPageRollbackFailed: "Seite {n}: Die Korrektur hat das Layout verschlechtert; Wiederherstellung unbestätigt. Bitte prüfen oder rückgängig machen.",
   aiQcPageReverted:
     'Seite {n}: automatische Korrektur verschlechterte das Ergebnis — zurückgesetzt',
   aiQcPageFailed: 'Seite {n}: Prüfung fehlgeschlagen ({error})',

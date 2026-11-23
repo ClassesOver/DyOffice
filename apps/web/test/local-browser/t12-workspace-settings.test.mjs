@@ -6,7 +6,7 @@ import {mkdir, readFile} from 'node:fs/promises'
 import {randomBytes} from 'node:crypto'
 import {expect} from '@playwright/test'
 import {launchTestBrowser} from '../helpers/browser.mjs'
-import {accountAction, settingsTab, closeWorkspaceDialog, selectOption} from '../helpers/workspace-ui.mjs'
+import {accountAction, settingsTab} from '../helpers/workspace-ui.mjs'
 import {fileFixture, docxBytes, importFile} from '../helpers/files.mjs'
 import {password} from '../helpers/identity.mjs'
 import {buildLocalApp} from '../../server/src/app.ts'
@@ -17,12 +17,22 @@ const login = async (page, username) => {
   await page.getByRole('button', {name: '登录', exact: true}).click()
   await expect(page.locator('.home')).toBeVisible()
 }
+const nativePdfDirectory = process.env.DYOFFICE_TEST_NATIVE_PDF_DIST
 const account = accountAction
 const row = (page, name) => page.locator('.recent-row').filter({has: page.locator('.recent-name').filter({hasText: new RegExp('^' + name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '$')})})
 const panel = page => page.getByRole('dialog', {name: '全局配置', exact: true})
-async function serve(t, port, keyring) {
+async function closeDialog(dialog, name) {
+  await dialog.getByRole('button', {name, exact: true}).click()
+  await expect(dialog).not.toBeVisible()
+}
+async function openDetails(section, className) {
+  const details = section.locator(className)
+  if (await details.getAttribute('open') === null) await details.locator(':scope > summary').click()
+}
+async function serve(t, port, keyring, nativePdf) {
   const origin = `http://localhost:${port}`, f = await fileFixture(t, {origin})
-  const app = await buildLocalApp({db: f.db, businessPool: f.businessPool, passwords: f.passwords, deploymentId: f.deploymentId, origin, csrfKey: f.csrfKey, objectStore: f.objects, globalConfigKeyring: keyring, localShellDirectory: fileURLToPath(new URL('../../dist-local-shell', import.meta.url))})
+  // The four-format round trip drives many navigation and preference reads from one test IP.
+  const app = await buildLocalApp({db: f.db, businessPool: f.businessPool, passwords: f.passwords, deploymentId: f.deploymentId, origin, csrfKey: f.csrfKey, objectStore: f.objects, rateLimit: {max: 5000, windowMs: 60_000}, globalConfigKeyring: keyring, nativePdfDirectory: nativePdf, localShellDirectory: fileURLToPath(new URL('../../dist-local-shell', import.meta.url))})
   f.cleanup.push(() => app.close()); await app.listen({port, host: '127.0.0.1'})
   const browser = await launchTestBrowser()
   const errors = []
@@ -36,8 +46,8 @@ async function serve(t, port, keyring) {
 }
 
 // Actual Cookie/CSRF, PostgreSQL, local object store and Chromium. No API mocks.
-test('T12 original Home persists folders stars recents and trash while themes preserve four original files', {timeout: 180_000}, async t => {
-  const {f, context, page, origin, errors} = await serve(t, 4204)
+test('T12 original Home persists folders stars recents and trash while themes preserve four original files', {skip: !nativePdfDirectory, timeout: 180_000}, async t => {
+  const {f, context, page, origin, errors} = await serve(t, 4204, undefined, nativePdfDirectory)
   await login(page, 'alice')
   const fixtures = [
     ['packages/docx-engine/tests/fixtures/truths/render-sectafter-no-blank/probe.docx', 'workspace.docx'],
@@ -104,7 +114,7 @@ test('T12 original Home persists folders stars recents and trash while themes pr
   await expect(deletedRow).toHaveCount(0)
   assert.ok((await f.files.listFiles(f.alice.token)).files.some(file => file.id === deleted.id))
   await expect(trash).toContainText('回收站为空')
-  await closeWorkspaceDialog(trash)
+  await closeDialog(trash, '关闭回收站')
   await expect(row(page, 'workspace.docx').getByRole('button', {name: '取消收藏', exact: true})).toBeVisible()
   for (const [theme, title] of [['light', '浅色'], ['dark', '深色']]) {
     await account(page, '个人设置')
@@ -122,10 +132,22 @@ test('T12 original Home persists folders stars recents and trash while themes pr
     ])
     assert.equal(saved.status(), 200)
     await expect(page.locator('html')).toHaveAttribute('data-theme', theme)
-    await closeWorkspaceDialog(settings)
+    await closeDialog(settings, '关闭个人设置')
     for (const [name, bytes] of originals) {
       await row(page, name).locator('.recent-item').click()
-      const downloadLink = page.getByRole('link',{name:'下载原件',exact:true}).filter({visible:true})
+      let downloadLink
+      if (name.endsWith('.pdf')) {
+        const id = files.find(file => file.name === name).id
+        const frame = page.locator(`iframe[data-document-id="${id}"]`)
+        await expect(frame).toHaveAttribute('src', '/native-pdf/?fileId='+id)
+        const editor = frame.contentFrame()
+        await expect(editor.locator('html')).toHaveAttribute('data-document-loading', 'ready')
+        await expect(editor.locator('html')).toHaveAttribute('data-theme', theme)
+        await editor.getByRole('button', {name: '文件', exact: true}).click()
+        downloadLink = editor.getByRole('link', {name: '下载已保存版本', exact: true})
+      } else {
+        downloadLink = page.getByRole('link',{name:'下载原件',exact:true}).filter({visible:true})
+      }
       await expect(downloadLink).toBeVisible()
       const downloading = page.waitForEvent('download')
       await downloadLink.click()
@@ -148,6 +170,7 @@ test('T12 original Home persists folders stars recents and trash while themes pr
   assert.equal((await context.request.get(origin + '/api/v1/files/' + files[0].id)).status(), 404)
   await page.locator('.account-btn').click()
   await account(page, '退出登录'); await login(page, 'alice')
+  await page.getByRole('button', {name: /^收藏 \d+$/}).click()
   await expect(row(page, 'workspace.docx').getByRole('button', {name: '取消收藏', exact: true})).toBeVisible()
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark')
   assert.deepEqual(errors, [])
@@ -158,15 +181,21 @@ test('T12 global settings UI keeps secrets private and reconciles real revision 
   const {f, context, page, origin, errors} = await serve(t, 4205, {activeKeyId: 'test-v1', keys: {'test-v1': randomBytes(32)}})
   const responses = []
   context.on('response', response => {if (/\/api\/v1\/(admin\/config|settings\/public)/.test(response.url())) responses.push(response.text().then(text => text.includes(sentinel)).catch(() => false))})
-  await login(page, 'owner'); await account(page, '全局配置')
-  await expect(panel(page)).toContainText('已保存版本 0')
-  const second = await context.newPage(); await second.goto(origin); await expect(second.locator('.home')).toBeVisible(); await account(second, '全局配置')
-  await expect(panel(second)).toContainText('已保存版本 0')
+  const readConfig = target => target.waitForResponse(r => r.url().endsWith('/admin/config') && r.request().method() === 'GET')
+  const openConfig = async target => {
+    const read = readConfig(target)
+    await account(target, '全局配置')
+    assert.equal((await (await read).json()).revision, 0)
+    await expect(panel(target).getByText('添加团队的第一个 AI 模型', {exact: true})).toBeVisible()
+  }
+  await login(page, 'owner'); await openConfig(page)
+  const second = await context.newPage(); await second.goto(origin); await expect(second.locator('.home')).toBeVisible(); await openConfig(second)
   const add = async (target, name, key) => {
     const form = panel(target)
     await form.getByRole('button', {name: '添加配置', exact: true}).click()
+    await openDetails(form, '.global-settings-advanced')
     await form.getByLabel('配置名称', {exact: true}).fill(name)
-    await selectOption(target,form,'服务商','OpenAI')
+    await form.getByLabel('服务商', {exact: true}).selectOption({label: 'OpenAI'})
     await form.getByLabel('模型标识', {exact: true}).fill('gpt-6-luna')
     await form.getByLabel('服务地址', {exact: true}).fill('https://provider.example/v1')
     await form.getByLabel('启用配置', {exact: true}).check()
@@ -179,18 +208,26 @@ test('T12 global settings UI keeps secrets private and reconciles real revision 
   }
   await add(page, 'Primary T12', sentinel)
   assert.ok((await panel(page).locator('.global-settings-editor').boundingBox()).width > 400, 'desktop editor must use the available dialog width')
-  await selectOption(page,panel(page),'默认对话配置','Primary T12')
+  await panel(page).getByLabel('默认对话配置', {exact: true}).selectOption({label: 'Primary T12'})
   const v1 = await save(page); assert.equal(v1.revision, 1); assert.equal(v1.entries[0].hasKey, true); assert.equal(v1.entries[0].providerId, 'openai')
   await expect(panel(page).getByLabel('API 密钥', {exact: true})).toHaveValue('')
   await add(second, 'Retained draft T12')
   await save(second, 409)
   await expect(panel(second).getByLabel('配置名称', {exact: true})).toHaveValue('Retained draft T12')
-  await expect(panel(second).getByRole('alert')).toContainText('草稿已保留')
-  await panel(second).getByRole('button', {name: '读取最新配置', exact: true}).click()
-  await expect(panel(second)).toContainText('已读取版本 1')
+  const conflict = panel(second).getByRole('alert').filter({hasText: '草稿已保留'})
+  await expect(conflict).toBeVisible()
+  const secondRead = readConfig(second)
+  await conflict.getByRole('button', {name: '读取最新配置', exact: true}).click()
+  assert.equal((await (await secondRead).json()).revision, 1)
+  await expect(panel(second)).toContainText('已读取最新配置。非密钥草稿已保留')
+  await expect(panel(second).getByLabel('配置名称', {exact: true})).toHaveValue('Retained draft T12')
   const v2 = await save(second); assert.equal(v2.entries.length, 2); assert.equal(v2.revision, 2)
+  await openDetails(panel(page), '.global-settings-maintenance')
+  const firstRead = readConfig(page)
   await panel(page).getByRole('button', {name: '读取最新配置', exact: true}).click()
-  await expect(panel(page)).toContainText('已读取版本 2')
+  assert.equal((await (await firstRead).json()).revision, 2)
+  await expect(panel(page)).toContainText('已读取最新配置。非密钥草稿已保留')
+  await panel(page).getByLabel('选择服务配置', {exact: true}).selectOption({label: 'Primary T12'})
   await panel(page).getByLabel('启用配置', {exact: true}).uncheck()
   const v3 = await save(page); assert.equal(v3.revision, 3)
   assert.equal(v3.entries.find(entry => entry.label === 'Primary T12').hasKey, true)
@@ -201,12 +238,15 @@ test('T12 global settings UI keeps secrets private and reconciles real revision 
   const checked = page.waitForResponse(r => r.url().endsWith('/config/check'))
   await panel(page).getByRole('button', {name: '检查已保存配置', exact: true}).click()
   assert.equal((await (await checked).json()).connection, 'not_run')
-  await expect(panel(page).getByRole('status')).toContainText('未进行模型或服务连通测试')
+  await expect(panel(page).getByRole('status').filter({hasText:'未进行模型或服务连通测试'})).toBeVisible()
   await panel(page).getByRole('button', {name: '轮换加密密钥', exact: true}).click()
   const rotated = page.waitForResponse(r => r.url().endsWith('/rotate-key'))
   await panel(page).getByRole('button', {name: '确认重新加密', exact: true}).click()
-  assert.equal((await rotated).status(), 200)
-  await expect(panel(page)).toContainText('当前版本 4')
+  const rotation = await rotated
+  assert.equal(rotation.status(), 200)
+  assert.equal((await rotation.json()).revision, 4)
+  await expect(panel(page)).toContainText('已重新加密保存的密钥')
+  await openDetails(panel(page), '.global-settings-advanced')
   await panel(page).getByRole('button', {name: '清空密钥', exact: true}).click()
   await panel(page).getByRole('button', {name: '确认清空密钥', exact: true}).click()
   const cleared = await save(page)
@@ -224,14 +264,28 @@ test('T12 global settings UI keeps secrets private and reconciles real revision 
   await panel(page).getByLabel('配置名称', {exact: true}).scrollIntoViewIfNeeded()
   await page.screenshot({path: 'test-results/t12-global-settings-mobile.png', fullPage: true})
   await page.setViewportSize({width: 1440, height: 1100})
-  for (const [kind, name] of [['image_generation', 'Image media'], ['web_search', 'Web search'], ['rerank', 'Rerank']]) {
-    await selectOption(page,panel(page),'配置类型筛选',({image_generation:'图像生成',web_search:'网页搜索',rerank:'重排'})[kind])
+  // The current UI can edit an existing rerank entry but does not offer it in an empty catalog.
+  const {csrfToken} = await (await context.request.get(origin + '/api/v1/auth/session-proof')).json()
+  const seededRerank = await context.request.put(origin + '/api/v1/admin/config', {
+    headers: {origin, 'x-csrf-token': csrfToken},
+    data: {expectedRevision: cleared.revision, patch: {upserts: [{id: 'existing-rerank', kind: 'rerank', providerId: 'openai', label: 'Rerank', model: 'synthetic', baseUrl: 'https://provider.example/v1', enabled: false}]}},
+  })
+  assert.equal(seededRerank.status(), 200)
+  await panel(page).getByRole('button', {name: '读取最新配置', exact: true}).click()
+  await expect(panel(page)).toContainText('已读取最新配置。非密钥草稿已保留')
+  await settingsTab(panel(page), '生图、媒体与搜索')
+  for (const [kind, name] of [['image_generation', 'Image media'], ['web_search', 'Web search']]) {
+    await panel(page).getByLabel('配置类型筛选', {exact: true}).selectOption(kind)
     await panel(page).getByRole('button', {name: '添加配置', exact: true}).click()
+    await openDetails(panel(page), '.global-settings-advanced')
     await panel(page).getByLabel('配置名称', {exact: true}).fill(name)
     await panel(page).getByLabel('模型标识', {exact: true}).fill('synthetic')
     await panel(page).getByLabel('服务地址', {exact: true}).fill('https://provider.example/v1')
     await panel(page).getByLabel('启用配置', {exact: true}).check()
   }
+  await panel(page).getByLabel('配置类型筛选', {exact: true}).selectOption('rerank')
+  await panel(page).getByLabel('选择服务配置', {exact: true}).selectOption('existing-rerank')
+  await panel(page).getByLabel('启用配置', {exact: true}).check()
   await save(page)
   const categories = (await (await context.request.get(origin + '/api/v1/settings/public')).json()).catalog
   assert.deepEqual(categories.map(entry => entry.kind).sort(), ['chat', 'image_generation', 'rerank', 'web_search'])
@@ -256,9 +310,9 @@ test('personal Settings imports and reads a private SKILL.md and an old tab cann
   await card.getByRole('button',{name:'查看',exact:true}).click()
   const skillDialog=page.getByRole('dialog',{name:'Skill：personal-report',exact:true})
   await expect(skillDialog.getByLabel('Skill 内容',{exact:true})).toHaveValue('Alice private instruction for DOCX documents')
-  await closeWorkspaceDialog(skillDialog)
+  await closeDialog(skillDialog, '关闭')
   const settings = page.getByRole('dialog',{name:'个人设置',exact:true})
-  await settingsTab(settings,'账户与安全')
+  await settingsTab(settings,'资料与安全')
   await settings.getByLabel('当前密码', {exact: true}).fill(password)
   await settings.getByLabel('新密码', {exact: true}).fill('amber forest river lanterns 9372')
   await settings.getByLabel('确认新密码', {exact: true}).fill('amber forest river lanterns 9372')

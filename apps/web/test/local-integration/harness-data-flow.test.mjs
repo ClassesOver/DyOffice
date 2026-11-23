@@ -56,7 +56,6 @@ for(const origin of ['external','builtin'])test(origin+' harness queries once, c
   const app=Fastify();registerHarnessDataRoutes(app,data)
   await app.listen({host:'127.0.0.1',port:0});t.after(()=>app.close())
   await sources.create(f.alice.token,{sourceId:'metrics',name:'Metrics',kind:'http',config:{timezone:'UTC',rowPath:'rows',units:{amount:'CNY'}},secret:endpoint})
-  await sources.publish(f.alice.token,'metrics',{expectedVersion:1})
   const grant=await data.issue({token:f.alice.token,agentId:origin+'-fixture',inputs:{sourceIds:['metrics'],resultIds:[]},signal:new AbortController().signal})
   const bob=await data.issue({token:f.bob.token,agentId:'peer',inputs:{sourceIds:[],resultIds:[]},signal:new AbortController().signal})
   assert.doesNotMatch(JSON.stringify(grant),/private-fixture-key|credential=|https?:/)

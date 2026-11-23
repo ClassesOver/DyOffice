@@ -1,4 +1,3 @@
-import { nativeImage } from 'electron'
 import {
   FPDF_PAGEOBJ_TEXT,
   chainPdfium,
@@ -14,6 +13,7 @@ import {
   formDrawTree,
   liftOutOfForms,
   transformRect,
+  concatMat,
   walkPageText,
 } from './form-text'
 import type { FormChain, FormDrawTree } from './form-text'
@@ -27,6 +27,12 @@ import type {
 
 const FPDF_PAGEOBJ_IMAGE = 3
 const FPDF_BITMAP_BGRA = 4
+
+export type ImageDecoder = (base64: string) => { width: number; height: number; bgra: Buffer }
+type ImageEncoder = (bgra: Buffer, width: number, height: number) => Buffer
+async function decodeBitmap(base64: string, decoder?: ImageDecoder) {
+  return decoder ? decoder(base64) : (await import('./image-codec')).decodeImage(base64)
+}
 
 type Rect = readonly [number, number, number, number]
 
@@ -68,6 +74,14 @@ function collectObjects(m: Pdfium, page: number): PageObj[] {
   return out
 }
 
+function imageObjectMatrix(m: Pdfium, object: number): readonly [number,number,number,number,number,number] {
+  const ptr = m._malloc(24)
+  try {
+    if (!m._FPDFPageObj_GetMatrix(object, ptr)) throw new Error('image matrix unavailable')
+    return Array.from(m.HEAPF32.subarray(ptr >> 2, (ptr >> 2) + 6)) as [number,number,number,number,number,number]
+  } finally { m._free(ptr) }
+}
+
 function collectImages(m: Pdfium, page: number): ImageObj[] {
   const out: ImageObj[] = []
   const bl = m._malloc(4)
@@ -76,16 +90,10 @@ function collectImages(m: Pdfium, page: number): ImageObj[] {
   const bt = m._malloc(4)
   walkPageText(m, page, FPDF_PAGEOBJ_IMAGE, ({ obj, chain, ordinals, topIndex, toPage }) => {
     if (!m._FPDFPageObj_GetBounds(obj, bl, bb, br, bt)) return
-    const local: [number, number, number, number] = [
-      m.HEAPF32[bl >> 2]!,
-      m.HEAPF32[bb >> 2]!,
-      m.HEAPF32[br >> 2]!,
-      m.HEAPF32[bt >> 2]!,
-    ]
     out.push({
       obj,
       index: topIndex,
-      bounds: chain.length > 0 ? transformRect(local, toPage) : local,
+      bounds: transformRect([0, 0, 1, 1], concatMat(imageObjectMatrix(m, obj), toPage)),
       chain,
       ordinals,
     })
@@ -157,28 +165,9 @@ async function resolveImage(
   return target
 }
 
-/** Decode a PNG/JPEG into straight-alpha BGRA (pdfium splits alpha into an SMask itself) */
-function decodeImage(b64: string): { width: number; height: number; bgra: Buffer } {
-  const img = nativeImage.createFromBuffer(Buffer.from(b64, 'base64'))
-  if (img.isEmpty()) throw new Error('could not decode the image data')
-  const { width, height } = img.getSize()
-  // toBitmap() hands back premultiplied BGRA; un-premultiply so translucent pixels
-  // keep their color once pdfium separates them into image + SMask
-  const bgra = Buffer.from(img.toBitmap())
-  for (let i = 0; i < bgra.length; i += 4) {
-    const a = bgra[i + 3]!
-    if (a > 0 && a < 255) {
-      bgra[i] = Math.min(255, Math.round((bgra[i]! * 255) / a))
-      bgra[i + 1] = Math.min(255, Math.round((bgra[i + 1]! * 255) / a))
-      bgra[i + 2] = Math.min(255, Math.round((bgra[i + 2]! * 255) / a))
-    }
-  }
-  return { width, height, bgra }
-}
-
 /** Content matrix for a footprint rect, counter-rotated against the page's display
     rotation so the image shows upright (same table as save-pdf's addImageStamp) */
-function imageMatrix(rect: Rect, rotate: number): number[] {
+export function imageMatrix(rect: Rect, rotate: number): number[] {
   const [x1, y1, x2, y2] = rect
   const w = x2 - x1
   const h = y2 - y1
@@ -194,9 +183,9 @@ function imageMatrix(rect: Rect, rotate: number): number[] {
   }
 }
 
-function insertImage(m: Pdfium, doc: number, page: number, edit: ImageEditInput): void {
+async function insertImage(m: Pdfium, doc: number, page: number, edit: ImageEditInput, decoder?: ImageDecoder): Promise<void> {
   if (edit.kind !== 'insertImage') return
-  const { width, height, bgra } = decodeImage(edit.image)
+  const { width, height, bgra } = await decodeBitmap(edit.image, decoder)
   const bufPtr = m._malloc(bgra.length)
   m.HEAPU8.set(bgra, bufPtr)
   const bmp = m._FPDFBitmap_CreateEx(width, height, FPDF_BITMAP_BGRA, bufPtr, width * 4)
@@ -305,11 +294,12 @@ async function replaceImage(
   page: number,
   edit: ImageEditInput,
   guard: EditGuard,
+  decoder?: ImageDecoder,
 ): Promise<void> {
   if (edit.kind !== 'replaceImage') return
   const target = await resolveImage(m, page, edit.oldRect, guard)
   if (edit.layer) moveToLayer(m, page, target.obj, edit.layer)
-  const { width, height, bgra } = decodeImage(edit.image)
+  const { width, height, bgra } = await decodeBitmap(edit.image, decoder)
   const bufPtr = m._malloc(bgra.length)
   m.HEAPU8.set(bgra, bufPtr)
   const bmp = m._FPDFBitmap_CreateEx(width, height, FPDF_BITMAP_BGRA, bufPtr, width * 4)
@@ -349,6 +339,7 @@ export interface ImageEditsResult {
 export function applyImageEdits(
   bytes: Uint8Array,
   edits: ImageEditInput[],
+  decoder?: ImageDecoder,
 ): Promise<ImageEditsResult> {
   return chainPdfium(async () => {
     const m = await loadPdfium()
@@ -374,9 +365,9 @@ export function applyImageEdits(
           // Objects are re-collected inside each op: every mutation shifts indices
           for (const { edit, editIndex } of pageEdits) {
             try {
-              if (edit.kind === 'insertImage') insertImage(m, doc, page, edit)
+              if (edit.kind === 'insertImage') await insertImage(m, doc, page, edit, decoder)
               else if (edit.kind === 'transformImage') await transformImage(m, page, edit, guard)
-              else if (edit.kind === 'replaceImage') await replaceImage(m, page, edit, guard)
+              else if (edit.kind === 'replaceImage') await replaceImage(m, page, edit, guard, decoder)
               else await deleteImage(m, page, edit, guard)
               applied++
             } catch (err) {
@@ -442,6 +433,7 @@ export function renderImagePng(
   pageIndex: number,
   rect: Rect,
   scale = 1,
+  encoder?: ImageEncoder,
 ): Promise<string | null> {
   return chainPdfium(async () => {
     const m = await loadPdfium()
@@ -455,6 +447,7 @@ export function renderImagePng(
           target.bounds[2] - target.bounds[0],
           target.bounds[3] - target.bounds[1],
         )
+        if (encoder && side > RENDER_MAX_PX) return null
         const k = Math.min(Math.max(1, scale), side > 0 ? RENDER_MAX_PX / side : 1)
         if (k > 1) m._FPDFPageObj_Transform(target.obj, k, 0, 0, k, 0, 0)
         const bmp = m._FPDFImageObj_GetRenderedBitmap(doc, page, target.obj)
@@ -464,7 +457,7 @@ export function renderImagePng(
           const h = m._FPDFBitmap_GetHeight(bmp)
           const stride = m._FPDFBitmap_GetStride(bmp)
           const buf = m._FPDFBitmap_GetBuffer(bmp)
-          if (!w || !h || !buf) return null
+          if (!w || !h || !buf || (encoder && w * h > RENDER_MAX_PX ** 2)) return null
           const tight = Buffer.alloc(w * h * 4)
           for (let row = 0; row < h; row++) {
             tight.set(
@@ -472,7 +465,8 @@ export function renderImagePng(
               row * w * 4,
             )
           }
-          const png = nativeImage.createFromBitmap(tight, { width: w, height: h }).toPNG()
+          const encodeBitmapPng = encoder ?? (await import('./image-codec')).encodeBitmapPng
+          const png = encodeBitmapPng(tight, w, h)
           return png.toString('base64')
         } finally {
           m._FPDFBitmap_Destroy(bmp)
@@ -493,6 +487,7 @@ export function renderImagePng(
 export function renderPagePreviewPng(
   bytes: Uint8Array,
   request: Omit<PagePreviewRequest, 'path'>,
+  encoder?: ImageEncoder,
 ): Promise<PagePreviewResult | null> {
   const { pageIndex, excludeRects, excludeAnnots, excludeText, clip, pxWidth, rotate } = request
   return chainPdfium(async () => {
@@ -548,7 +543,8 @@ export function renderPagePreviewPng(
             flags,
           )
           const tight = Buffer.from(m.HEAPU8.subarray(bufPtr, bufPtr + w * h * 4))
-          const png = nativeImage.createFromBitmap(tight, { width: w, height: h }).toPNG()
+          const encodeBitmapPng = encoder ?? (await import('./image-codec')).encodeBitmapPng
+          const png = encodeBitmapPng(tight, w, h)
           return { png: png.toString('base64'), textErased }
         } finally {
           m._FPDFBitmap_Destroy(bmp)
@@ -611,5 +607,114 @@ export function verifyImageEdits(
       },
       password,
     )
+  })
+}
+
+/** Read intrinsic pixels including the soft mask on an ephemeral document copy. */
+export function readImageBitmap(bytes: Uint8Array, pageIndex: number, rect: Rect, width: number, height: number): Promise<Buffer> {
+  return readImageSource(bytes, pageIndex, rect).then(source => {
+    if (source.width !== width || source.height !== height) throw new Error('image pixels mismatch')
+    return source.bgra
+  })
+}
+
+/** Check native metadata before allocating decoded pixels; strip placement only on a copy. */
+export function readImageSource(bytes: Uint8Array, pageIndex: number, rect: Rect): Promise<{width:number;height:number;bgra:Buffer}> {
+  return chainPdfium(async () => {
+    const m = await loadPdfium()
+    return withDocument(m, bytes, async doc => {
+      const page = m._FPDF_LoadPage(doc, pageIndex)
+      if (!page) throw new Error('page unavailable')
+      const ptr = m._malloc(24)
+      try {
+        const target = await resolveImage(m, page, rect)
+        if (!m._FPDFImageObj_GetImagePixelSize(target.obj, ptr, ptr + 4)) throw new Error('image dimensions unavailable')
+        const width = m.HEAP32[ptr >> 2]!, height = m.HEAP32[(ptr + 4) >> 2]!
+        if (width < 1 || height < 1 || width > 8192 || height > 8192 || width * height * 4 > 32 * 1024 * 1024) throw new Error('image pixels limit')
+        m.HEAPF32.set([width, 0, 0, height, 0, 0], ptr >> 2)
+        if (!m._FPDFPageObj_SetMatrix(target.obj, ptr)) throw new Error('image matrix unavailable')
+        const bitmap = m._FPDFImageObj_GetRenderedBitmap(doc, page, target.obj)
+        if (!bitmap) throw new Error('image pixels unavailable')
+        try {
+          const actualWidth = m._FPDFBitmap_GetWidth(bitmap), actualHeight = m._FPDFBitmap_GetHeight(bitmap)
+          const stride = m._FPDFBitmap_GetStride(bitmap), data = m._FPDFBitmap_GetBuffer(bitmap)
+          if (actualWidth !== width || actualHeight !== height || m._FPDFBitmap_GetFormat(bitmap) !== 4 || stride < width * 4 || stride * height > 64 * 1024 * 1024 || !data) throw new Error('image pixels mismatch')
+          const pixels = Buffer.alloc(width * height * 4)
+          for (let row = 0; row < height; row++) pixels.set(m.HEAPU8.subarray(data + row * stride, data + row * stride + width * 4), row * width * 4)
+          return {width,height,bgra:pixels}
+        } finally { m._FPDFBitmap_Destroy(bitmap) }
+      } finally { m._free(ptr); m._FPDF_ClosePage(page) }
+    })
+  })
+}
+
+/** Render only one occurrence, preserving its form ancestry, clipping and graphics state. */
+export function renderImageOccurrence(bytes: Uint8Array, pageIndex: number, rect: Rect, width: number, height: number, matrix: readonly number[]): Promise<Buffer> {
+  if (!Number.isSafeInteger(width) || !Number.isSafeInteger(height) || width < 1 || height < 1 || width > 8192 || height > 8192 || width * height * 4 > 32 * 1024 * 1024) return Promise.reject(new Error('image pixels limit'))
+  return chainPdfium(async () => {
+    const m = await loadPdfium()
+    return withDocument(m, bytes, async doc => {
+      const page = m._FPDF_LoadPage(doc, pageIndex)
+      if (!page) throw new Error('page unavailable')
+      const ptr = m._malloc(40), data = m._malloc(width * height * 4)
+      let bitmap = 0
+      try {
+        const target = matchImage(collectImages(m, page), rect)
+        if (!target) throw new Error('image unavailable')
+        const keep = new Set([...target.chain, target.obj])
+        const prune = (parent: number, form: boolean) => {
+          const count = form ? m._FPDFFormObj_CountObjects(parent) : m._FPDFPage_CountObjects(parent)
+          for (let index = count - 1; index >= 0; index--) {
+            const object = form ? m._FPDFFormObj_GetObject(parent, index) : m._FPDFPage_GetObject(parent, index)
+            if (!keep.has(object)) {
+              const removed = form ? m._FPDFFormObj_RemoveObject(parent, object) : m._FPDFPage_RemoveObject(parent, object)
+              if (!removed) throw new Error('image isolation failed')
+              m._FPDFPageObj_Destroy(object)
+            } else if (m._FPDFPageObj_GetType(object) === 5) prune(object, true)
+          }
+        }
+        prune(page, false)
+        // RenderPageBitmapWithMatrix prepends PDFium's own page display matrix
+        // (CropBox + Rotate + y-flip). Cancel it before our PDF-space transform.
+        const { PDFDocument } = await import('pdf-lib')
+        const { pdfToView } = await import('../renderer/annotations')
+        const parsed = await PDFDocument.load(bytes, { updateMetadata: false }), parsedPage = parsed.getPage(pageIndex)
+        const crop = parsedPage.getCropBox(), media = parsedPage.getMediaBox()
+        const x0 = Math.max(crop.x, media.x), y0 = Math.max(crop.y, media.y)
+        const x1 = Math.min(crop.x + crop.width, media.x + media.width), y1 = Math.min(crop.y + crop.height, media.y + media.height)
+        const geom = { pw:x1-x0, ph:y1-y0, x0, y0, rot:parsedPage.getRotation().angle, userUnit:1 }
+        const o=pdfToView(geom,0,0), x=pdfToView(geom,1,0), y=pdfToView(geom,0,1)
+        const [a,b,c,d,e,f]=[x[0]-o[0],x[1]-o[1],y[0]-o[0],y[1]-o[1],...o], det=a*d-b*c
+        const inverse=[d/det,-b/det,-c/det,a/det,(c*f-d*e)/det,(b*e-a*f)/det] as const
+        m.HEAPF32.set(concatMat(inverse, matrix as readonly [number,number,number,number,number,number]), ptr >> 2)
+        m.HEAPF32.set([0, 0, width, height], (ptr + 24) >> 2)
+        bitmap = m._FPDFBitmap_CreateEx(width, height, FPDF_BITMAP_BGRA, data, width * 4)
+        if (!bitmap) throw new Error('image render allocation failed')
+        m._FPDFBitmap_FillRect(bitmap, 0, 0, width, height, 0)
+        m._FPDF_RenderPageBitmapWithMatrix(bitmap, page, ptr, ptr + 24, 0)
+        return Buffer.from(m.HEAPU8.subarray(data, data + width * height * 4))
+      } finally {
+        if (bitmap) m._FPDFBitmap_Destroy(bitmap)
+        m._free(data); m._free(ptr); m._FPDF_ClosePage(page)
+      }
+    })
+  })
+}
+
+export function imageOccurrenceHasClip(bytes: Uint8Array, pageIndex: number, rect: Rect): Promise<boolean> {
+  return chainPdfium(async () => {
+    const m = await loadPdfium()
+    return withDocument(m, bytes, async doc => {
+      const page = m._FPDF_LoadPage(doc, pageIndex)
+      if (!page) throw new Error('page unavailable')
+      try {
+        const target = matchImage(collectImages(m, page), rect)
+        if (!target) throw new Error('image unavailable')
+        return [...target.chain, target.obj].some(object => {
+          const clip = m._FPDFPageObj_GetClipPath(object)
+          return !!clip && m._FPDFClipPath_CountPaths(clip) > 0
+        })
+      } finally { m._FPDF_ClosePage(page) }
+    })
   })
 }

@@ -12,6 +12,7 @@ export const hi = {
   aiQcPageOk: 'पेज {n}: लेआउट ठीक है',
   aiQcPageFixed: 'पेज {n}: {summary}',
   aiQcPageFixedDefault: 'लेआउट की समस्याएँ ठीक कीं',
+  aiQcPageRollbackFailed: "पृष्ठ {n}: सुधार से लेआउट बिगड़ गया; बहाली की पुष्टि नहीं हुई। पृष्ठ जाँचें या बदलाव पूर्ववत करें।",
   aiQcPageReverted: 'पेज {n}: स्वचालित सुधार से स्थिति बिगड़ी — वापस लिया गया',
   aiQcPageFailed: 'पेज {n}: जाँच विफल ({error})',
   aiQcPageSkipped: 'पेज {n}: स्वचालित लेआउट जाँच छोड़ दी गई',

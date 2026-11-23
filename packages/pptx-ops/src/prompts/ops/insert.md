@@ -115,15 +115,18 @@ Swaps a picture's bytes in place. The model uses `replace_image` with a URL.
 
 ### addTable
 
-`{rows,cols,offset:{x,y,cx,cy},colWidthsEmu?,rowHeightsEmu?,cellProps?:[[{gridSpan?,rowSpan?,hMerge?,vMerge?,anchor?}]]}`
+`{rows,cols,offset:{x,y,cx,cy},cells?:string[][],colWidthsEmu?,rowHeightsEmu?,cellProps?:[[{gridSpan?,rowSpan?,hMerge?,vMerge?,anchor?}]]}`
 
-Inserts a native table with PowerPoint's default style and empty cells. Fill
-cells afterwards with `setTableCell` (one op per cell, same transaction is
-fine once you know the table id from the first result).
+Inserts a native table with PowerPoint's default style. Optional `cells` supplies
+a rectangular matrix of literal strings matching `rows` and `cols`; creation
+and all initial text are one atomic operation. Values are never formulas or HTML.
+Without `cells`, the cells are empty; later edits use `setTableCell` with the
+returned table id.
 
 | Field         | Type                                                                | Notes                                                                    |
 | ------------- | ------------------------------------------------------------------- | ------------------------------------------------------------------------ |
-| rows, cols    | integer >= 1                                                        |                                                                          |
+| rows, cols    | integer 1..75                                                        |                                                                          |
+| cells         | string[][]                                                          | Optional initial literal text; exactly `rows` arrays, each with `cols` strings |
 | offset        | `{x, y, cx, cy}` EMU                                                | Columns and rows split the frame equally unless widths/heights are given |
 | colWidthsEmu  | number[]                                                            | Exactly `cols` positive values                                           |
 | rowHeightsEmu | number[]                                                            | Exactly `rows` positive values                                           |
@@ -157,7 +160,7 @@ fine once you know the table id from the first result).
 Common mistakes
 
 - `colWidthsEmu` with the wrong count: it must list exactly one width per column.
-- Passing cell text here: the op creates empty cells; write text with `setTableCell`.
+- Passing a ragged or non-string `cells` matrix: dimensions must match `rows` and `cols`. Omit it for empty cells.
 
 ### addChart
 

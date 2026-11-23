@@ -257,7 +257,7 @@ export interface ClarifyQuestion {
   multi?: boolean
 }
 
-const TOOLS: AgentToolDef[] = [
+export const SLIDES_TOOLS: AgentToolDef[] = [
   {
     name: 'read_slide',
     description:
@@ -698,6 +698,17 @@ const TOOLS: AgentToolDef[] = [
         },
         dataLabels: { type: 'boolean', description: 'Data labels toggle (optional)' },
         gridlines: { type: 'boolean', description: 'Value-axis gridlines toggle (optional)' },
+        catAxisTitle: { type: 'string', description: 'Category-axis title; an empty string clears it (optional)' },
+        valAxisTitle: { type: 'string', description: 'Value-axis title; an empty string clears it (optional)' },
+        gapWidthPct: { type: 'number', minimum: 0, maximum: 500, description: 'Bar gap width percentage (optional)' },
+        pointColors: {
+          type: 'object',
+          description: 'Per-series point color overrides; use null to clear a point override (optional)',
+          additionalProperties: {
+            type: 'object',
+            additionalProperties: { type: ['string', 'null'] },
+          },
+        },
         switchRowCol: {
           type: 'boolean',
           description: 'Switch rows/columns: categories ↔ series (optional)',
@@ -711,6 +722,7 @@ const TOOLS: AgentToolDef[] = [
     description:
       '[Canonical edit surface] Apply a list of canonical edit ops as ONE transaction — atomic by default: any failure rolls everything back, nothing is half-applied. Set dry_run:true to validate the plan without touching the deck (rehearse risky batches). This is THE tool for every edit without a dedicated tool (fill, stroke, transform, delete, z-order, grouping, crop, opacity, effects, links, table cells, structure and styling, page background, speaker notes, page delete/move/duplicate, transitions, sections, theme) and for multi-page or many-element batches; a single op is a perfectly fine batch. For one-page layout math prefer execute_slide_script.\n' +
       'Addressing: every op takes target:{slide, el?} — slide = 0-based index or durable "s_<n>"; el = an element id from the outline/read_slide (e_* ids are durable). Group children: put the child id in target.el and add group:"<group id>".\n' +
+      'Targets are validated against the deck before the batch runs. To edit a slide or element you are about to add, create it in one call, refresh the outline or read_slide, then edit it in a later call.\n' +
       'Units are document-space EMU. read_slide reports px and its exact "1 px = N EMU" factor — convert with that N (9525 only on a standard 16:9 deck; other page sizes differ). Font sizes are pt. setText on an existing element: runs with only `text` inherit the original run formatting (size, color, font) — leave fontSize/color/fontFamily out unless the user asked to change the style.\n' +
       'Full op reference (the same executor every editing surface uses), one signature per op; ? marks optional fields:\n' +
       opSignatureIndex() +
@@ -1080,7 +1092,7 @@ export function createSlidesSkill(access: DeckAccess): AgentSkill {
     // live view: the predicates are re-read before every model request
     get tools() {
       const hidden = hiddenMediaTools(access)
-      return hidden.size ? TOOLS.filter((t) => !hidden.has(t.name)) : TOOLS
+      return hidden.size ? SLIDES_TOOLS.filter((t) => !hidden.has(t.name)) : SLIDES_TOOLS
     },
     buildContext: () => {
       const outline = `<deck outline>\n${buildDeckOutline(access.getSlides(), access.getCurrent(), access.getSelectedIds())}\n</deck outline>`
@@ -1315,6 +1327,9 @@ function preflightOps(
     }
     const op = { ...(raw as Record<string, unknown>) }
     const name = op.op as string
+    if (name === 'addPicture') {
+      return fail(t('aiFailApplyOps'), `ops[${i}] ${name}: use insert_web_image for source images or insert_analysis_image for a verified analysis delivery.`)
+    }
     // A span withheld from the model is a mark over real words, so an edit that
     // rewrites or drops those words costs the reader data they chose to keep.
     // Checked here, before anything is dispatched — apply_ops is atomic, so a
@@ -1421,7 +1436,7 @@ async function executeTool(
       //   executor (any failure rolls the deck back there and returns a guided error).
       const applied = await window.slidesApi.applyEditScript({
         slideIndex: idx,
-        fitWidthPx: access.fitWidthPx,
+        fitWidthPx: slide.widthPx,
         boxes: r.ops,
         edits: r.edits,
       })
@@ -1530,7 +1545,7 @@ async function executeTool(
       if (!r.url) return fail(t('aiFailGenImage'), r.error ?? 'Generation failed')
       const display: ToolDisplay = {
         kind: 'images',
-        items: [{ url: r.url, title: prompt.slice(0, 60) }],
+        items: [{ url: r.previewUrl ?? r.url, title: prompt.slice(0, 60) }],
       }
       return {
         output:
@@ -1565,7 +1580,8 @@ async function executeTool(
 
     case 'insert_web_image': {
       const idx = Number(call.input.slideIndex)
-      if (!slides[idx])
+      const slide = slides[idx]
+      if (!slide)
         return fail(t('aiFailInsertImage'), `slideIndex out of range (0-${slides.length - 1})`)
       const url = String(call.input.url ?? '')
       const attachmentName = attachmentRefName(url)
@@ -1588,7 +1604,7 @@ async function executeTool(
         yPx: Number(call.input.y),
         wPx: Number(call.input.w),
         hPx: Number(call.input.h),
-        fitWidthPx: access.fitWidthPx,
+        fitWidthPx: slide.widthPx,
       })
       if (!r)
         return fail(
@@ -2447,6 +2463,12 @@ async function executeTool(
         ) as import('../../shared/ipc').EditChartOp['legendPos']
       if (typeof call.input.dataLabels === 'boolean') op.dataLabels = call.input.dataLabels
       if (typeof call.input.gridlines === 'boolean') op.gridlines = call.input.gridlines
+      if (call.input.catAxisTitle != null) op.catAxisTitle = String(call.input.catAxisTitle)
+      if (call.input.valAxisTitle != null) op.valAxisTitle = String(call.input.valAxisTitle)
+      if (typeof call.input.gapWidthPct === 'number') op.gapWidthPct = call.input.gapWidthPct
+      if (call.input.pointColors && typeof call.input.pointColors === 'object' && !Array.isArray(call.input.pointColors)) {
+        op.pointColors = call.input.pointColors as import('../../shared/ipc').EditChartOp['pointColors']
+      }
       if (call.input.switchRowCol === true) op.switchRowCol = true
       const updated = await window.slidesApi.editChart(op)
       if (!updated)

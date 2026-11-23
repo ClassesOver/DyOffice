@@ -143,7 +143,11 @@ export async function saveAs(getCtx: () => ActionCtx): Promise<void> {
  * leaves the dialog on the deck's current name, so this is a no-op rather than
  * a failure.
  */
-export async function nameWithAi(getCtx: () => ActionCtx): Promise<void> {
+export type SlidesNamedCopy = {
+  suggest(input: {content:string}): Promise<string>
+  save(stem:string): Promise<void>
+}
+export async function nameWithAi(getCtx: () => ActionCtx, copy?: SlidesNamedCopy): Promise<void> {
   const ctx = getCtx()
   // the model reads the deck, so an edit still being typed has to land first
   const editing = ctx.editingActiveRef.current
@@ -151,8 +155,17 @@ export async function nameWithAi(getCtx: () => ActionCtx): Promise<void> {
   // that commit can replace the deck, so read it again rather than from the
   // snapshot taken before the flush
   const deck = editing ? getCtx() : ctx
-  const stem = await modelSaveAsName(deck.slides)
+  const stem = await modelSaveAsName(deck.slides, copy?.suggest)
   if (!stem) return
+  if (copy) {
+    await runSerialized(async () => {
+      const current = getCtx()
+      if (!await flushActiveEdit(current)) return
+      await current.flushNotes()
+      await copy.save(stem)
+    })
+    return
+  }
   await saveAsWithName(getCtx, `${stem}.pptx`)
 }
 
@@ -193,17 +206,29 @@ export function exportBaseName(ctx: ActionCtx): string {
   return (baseName(ctx.path ?? '') || t('appUntitledPresentation')).replace(/\.pptx$/i, '')
 }
 
-/** Export as images: each page (skipping hidden ones) rendered offscreen to 2x PNG or JPG, written to disk by the main process */
-export async function exportImages(ctx: ActionCtx, format: 'png' | 'jpg' = 'png'): Promise<void> {
+export type SlideImageDownload = (baseName: string, format: 'png' | 'jpg', pages: string[]) => Promise<string>
+
+/** Render visible slides at 2x, then hand the output to the host. */
+export async function exportImages(ctx: ActionCtx, format: 'png' | 'jpg' = 'png', download?: SlideImageDownload): Promise<void> {
   const visible = ctx.slides.filter((s) => !s.hidden)
   if (visible.length === 0) {
     ctx.setStatus(t('appExportNoSlides'))
     return
   }
-  const dir = await window.slidesApi.pickExportDir()
-  if (!dir) return
-  ctx.setStatus(t('appExportImagesProgress', { count: visible.length }))
   try {
+    if (download) {
+      if (visible.some(slide => slide.widthPx > 4096 || slide.heightPx > 4096 || slide.widthPx * slide.heightPx > 4 * 1024 * 1024)) {
+        throw new Error('Slide dimensions exceed the image export limit')
+      }
+      ctx.setStatus(t('appExportImagesProgress', { count: visible.length }))
+      const pages = await renderSlidesToImageBase64(visible, ctx.images, {format, maxOutputChars:64 * 1024 * 1024})
+      const archive = await download(exportBaseName(ctx), format, pages)
+      ctx.setStatus(t('appExportImagesDone', {count:pages.length, dir:archive}))
+      return
+    }
+    const dir = await window.slidesApi.pickExportDir()
+    if (!dir) return
+    ctx.setStatus(t('appExportImagesProgress', { count: visible.length }))
     const pages = await renderSlidesToImageBase64(visible, ctx.images, { format })
     const r = await window.slidesApi.exportImages({
       dir,

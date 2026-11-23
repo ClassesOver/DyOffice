@@ -2,8 +2,12 @@ import dns from 'node:dns/promises'
 import https from 'node:https'
 import {isIP} from 'node:net'
 import {createHash} from 'node:crypto'
+import {ASSISTANT_MAX_REQUEST_BYTES,PPTX_GENERATION_DEADLINE_MS} from '../../../../../../packages/web-contracts/src/assistant.ts'
 import type {ClientRequest,IncomingMessage} from 'node:http'
 import type {TLSSocket} from 'node:tls'
+import {ProviderResponseFailure,providerResponseFailure} from './response-failure.ts'
+import {publicIpv4} from '../../security/ip-ranges.ts'
+export {publicIpv4}
 
 export interface EgressProfile {
  deploymentId:string;entryId:string;revision:number;providerId:string;model:string;baseUrl:string;endpoint:string;allowedIpv4:readonly string[]
@@ -13,12 +17,6 @@ export interface EgressScope extends Omit<EgressProfile,'allowedIpv4'> {
 }
 const fail=()=>new Error('Provider transport unavailable')
 const profileFields=['deploymentId','entryId','revision','providerId','model','baseUrl','endpoint'] as const
-function publicIpv4(address:string):boolean {
- if(isIP(address)!==4)return false
- const [first=0,second=0]=address.split('.').map(Number)
- return first>0&&first<224&&![10,100,127,169,192,198,203].includes(first)
-   && !(first===172&&second>=16&&second<=31)
-}
 function url(value:string):URL {
  const u=new URL(value)
  if(u.href!==value||u.protocol!=='https:'||u.port||u.username||u.password||u.search||u.hash||isIP(u.hostname)||u.hostname.includes(':'))throw fail()
@@ -34,7 +32,7 @@ export function createPinnedProviderTransport({profiles,timeoutMs=30_000,maxConc
 }) {
  let approved:Readonly<EgressProfile>[]
  try{
-  if(!Array.isArray(profiles)||profiles.length>256||![timeoutMs,maxConcurrent,maxResponseBytes,authorizationTimeoutMs].every(Number.isSafeInteger)||authorizationTimeoutMs<1||authorizationTimeoutMs>5000||timeoutMs<1||timeoutMs>120_000||maxConcurrent<1||maxConcurrent>64||maxResponseBytes<1||maxResponseBytes>32*1024*1024)throw fail()
+  if(!Array.isArray(profiles)||profiles.length>256||![timeoutMs,maxConcurrent,maxResponseBytes,authorizationTimeoutMs].every(Number.isSafeInteger)||authorizationTimeoutMs<1||authorizationTimeoutMs>5000||timeoutMs<1||timeoutMs>PPTX_GENERATION_DEADLINE_MS||maxConcurrent<1||maxConcurrent>64||maxResponseBytes<1||maxResponseBytes>32*1024*1024)throw fail()
   approved=profiles.map((p:EgressProfile)=>{
    if(!p||Object.keys(p).length!==8||Object.keys(p).some(k=>![...profileFields,'allowedIpv4'].includes(k as typeof profileFields[number]))||
       profileFields.some(k=>k==='revision'?!Number.isSafeInteger(p[k])||p[k]<0:typeof p[k]!=='string'||!p[k]||p[k].length>2048))throw fail()
@@ -66,7 +64,7 @@ export function createPinnedProviderTransport({profiles,timeoutMs=30_000,maxConc
     const suppliedSignal=scope?.signal
     if(!(suppliedSignal instanceof AbortSignal))throw fail()
     externalSignal=suppliedSignal
-    if(!scope||![scope.reservationId,scope.claimId,scope.turnId].every(v=>typeof v==='string'&&/^[A-Za-z0-9_-]{1,128}$/.test(v))||!(body instanceof Uint8Array)||body.byteLength>1024*1024||!body.byteLength||typeof onChunk!=='function'||typeof authorize!=='function'||externalSignal.aborted||active>=maxConcurrent)throw fail()
+    if(!scope||![scope.reservationId,scope.claimId,scope.turnId].every(v=>typeof v==='string'&&/^[A-Za-z0-9_-]{1,128}$/.test(v))||!(body instanceof Uint8Array)||body.byteLength>ASSISTANT_MAX_REQUEST_BYTES||!body.byteLength||typeof onChunk!=='function'||typeof authorize!=='function'||externalSignal.aborted||active>=maxConcurrent)throw fail()
     // Only primitives/private snapshots survive the first await.
     const matches=approved.filter(p=>profileFields.every(k=>p[k]===scope[k]))
     if(matches.length!==1||!/^[a-f0-9]{64}$/.test(scope.requestDigest))throw fail()
@@ -138,7 +136,8 @@ export function createPinnedProviderTransport({profiles,timeoutMs=30_000,maxConc
       })
      })
     }))
-    if(response.statusCode!==200||typeof response.headers['content-type']!=='string'||
+    if(response.statusCode!==200)throw providerResponseFailure(response.statusCode)??fail()
+    if(typeof response.headers['content-type']!=='string'||
        response.headers['content-type'].split(';',1)[0]!.trim().toLowerCase()!=='text/event-stream'||
        response.headers['content-encoding']!==undefined&&response.headers['content-encoding']!=='identity')throw fail()
     const iterator=response[Symbol.asyncIterator]()
@@ -152,7 +151,7 @@ export function createPinnedProviderTransport({profiles,timeoutMs=30_000,maxConc
      const chunk=Buffer.from(result.value)
      await step(async()=>{await onChunk(chunk)})
     }
-   }catch{throw fail()}
+   }catch(error){throw error instanceof ProviderResponseFailure?error:fail()}
    finally{
     if(deadline)clearTimeout(deadline)
     externalSignal?.removeEventListener('abort',stop)

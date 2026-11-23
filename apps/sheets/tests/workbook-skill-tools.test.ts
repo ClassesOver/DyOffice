@@ -1312,3 +1312,37 @@ it('scoped workbook reads omit selection while native context retains it', async
   expect(scoped.output).not.toContain('Current selection:')
   expect(scoped.output).toContain('Sheet1')
 })
+
+it('offers only host-supported standalone document types while retaining desktop defaults', async () => {
+  const { createWorkbookSkill } = await import('../src/renderer/ai/workbook-skill')
+  const web = createWorkbookSkill(fakeDeps({ supportedCreateDocumentTypes: () => ['xlsx', 'csv', 'docx', 'pdf'] }))
+  const tool = web.tools.find(tool => tool.name === 'create_document')!
+  const schema = tool.inputSchema as {properties: {type: {enum: string[]}}}
+  expect(schema.properties.type.enum).toEqual(['xlsx', 'csv', 'docx', 'pdf'])
+  expect(web.systemPrompt).toContain('create_document only supports xlsx, csv, docx, pdf')
+  expect(tool.description).not.toContain("type 'md'")
+  expect(tool.description).not.toContain("type 'html'")
+  const desktop = createWorkbookSkill(fakeDeps()).tools.find(tool => tool.name === 'create_document')!
+  expect((desktop.inputSchema as typeof schema).properties.type.enum).toEqual(['xlsx', 'csv', 'docx', 'pdf', 'md', 'html'])
+})
+
+it('rejects unavailable host document types before invoking their creator', async () => {
+  const createDocument = vi.fn(async () => ({ok: true as const, name: 'Unsupported'}))
+  const deps = fakeDeps({supportedCreateDocumentTypes: () => ['xlsx', 'csv', 'docx', 'pdf'], createDocument})
+  for (const type of ['md', 'html']) {
+    const result = await executeWorkbookTool(call('create_document', {type, title: 'Unsupported', content: 'Body'}), deps)
+    expect(result.isError).toBe(true)
+  }
+  expect(createDocument).not.toHaveBeenCalled()
+})
+
+it('standalone workbook offers CSV and uses it for calls with no explicit type', async () => {
+  const { createWorkbookSkill } = await import('../src/renderer/ai/workbook-skill')
+  const createDocument = vi.fn(async () => ({ok: true as const, name: 'Sheet1.csv', downloaded: true}))
+  const skill = createWorkbookSkill(fakeDeps({supportedCreateDocumentTypes: () => ['csv'], createDocument}))
+  const tool = skill.tools.find(tool => tool.name === 'create_document')!
+  expect(tool.inputSchema).toMatchObject({properties: {type: {enum: ['csv'], description: "target file type (default 'csv')"}}})
+  const result = await skill.executeTool(call('create_document', {}))
+  expect(result.output).toContain('Downloaded Sheet1.csv')
+  expect(createDocument).toHaveBeenCalledWith({type: 'csv', sheetId: undefined})
+})

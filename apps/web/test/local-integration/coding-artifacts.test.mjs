@@ -17,7 +17,13 @@ async function fixture(t,wrap=objects=>objects) {
  const stage=(b,bytes=Buffer.from('print(42)'),extra={})=>service.stage(f.alice.token,{...b,name:'analysis.py',mediaType:'text/x-python',role:'code',inputResultIds:[],sha256:hash(bytes),...extra},bytes)
  const commit=(b,artifactIds,extra={})=>({...b,commandId:randomUUID(),summary:'Implemented and tested',artifactIds,inputs:[],runtimeManifestSha256:'a'.repeat(64),limitations:[],...extra})
  const account=()=>f.transactions.withPrincipalTransaction({kind:'session',token:f.alice.token},async c=>Number((await c.query('SELECT used_bytes FROM harness_artifact_accounts')).rows[0]?.used_bytes??0))
- return {...f,directory,objects,service,stage,commit,account}
+ // Deliveries younger than the reclaim grace window are protected; tests that
+ // exercise reclamation age them as if their editors were long done.
+ const age=()=>f.ownerDb.transaction(async c=>{
+  await c.query("SELECT set_config('dyoffice.deployment_id',$1,true),set_config('dyoffice.user_id',$2,true)",[f.deploymentId,f.alice.user.id])
+  await c.query("UPDATE harness_analysis_deliveries SET created_at=created_at-interval '1 hour'")
+ })
+ return {...f,directory,objects,service,stage,commit,account,age}
 }
 
 test('durable receipt and owned bytes survive runner deletion and service reconstruction; replay is exact',async t=>{
@@ -87,4 +93,68 @@ test('committed lineage must include every result referenced by an artifact',asy
  const input={resultId,sha256:'b'.repeat(64),sourceId:'ledger',sourceVersion:1,queryHash:'c'.repeat(64),rowCount:1,truncated:false}
  const receipt=await f.service.commit(f.alice.token,{...command,inputs:[input]})
  assert.deepEqual(receipt.inputs,[input]);assert.deepEqual(receipt.artifacts[0].inputResultIds,[resultId])
+})
+
+test('committed deliveries are reclaimed oldest first when a new task needs room; the budget is not a lifetime total',async t=>{
+ const f=await fixture(t),bytes=Buffer.alloc(8*1024*1024,2)
+ const older=binding(),newer=binding()
+ const first=await f.stage(older,bytes,{name:'older.bin'})
+ await f.service.commit(f.alice.token,f.commit(older,[first.artifactId]))
+ const second=await f.stage(newer,bytes,{name:'newer.bin'})
+ await f.service.commit(f.alice.token,f.commit(newer,[second.artifactId]))
+ assert.equal(await f.account(),16*1024*1024)
+ await f.age()
+ // Before the fix this was a permanent 413 for the owner.
+ const next=binding(),small=Buffer.from('fresh chart')
+ const fresh=await f.stage(next,small,{name:'fresh.txt'})
+ assert.equal(await f.account(),8*1024*1024+small.length)
+ await assert.rejects(f.service.download(f.alice.token,first.artifactId),{statusCode:404})
+ assert.equal((await f.service.download(f.alice.token,second.artifactId)).bytes.length,bytes.length)
+ assert.ok(fresh.artifactId)
+ // Staged files of a live task are never reclaimed for another task.
+ await f.stage(next,bytes,{name:'big.bin'})
+ await assert.rejects(f.stage(binding(),bytes,{name:'third.bin'}),{statusCode:413})
+})
+
+test('reclamation that cannot free enough fails with 413 and leaves committed files downloadable',async t=>{
+ const f=await fixture(t),mib=1024*1024
+ const done=binding(),small=Buffer.alloc(mib,3)
+ const kept=await f.stage(done,small,{name:'kept.bin'})
+ await f.service.commit(f.alice.token,f.commit(done,[kept.artifactId]))
+ await f.age()
+ const live=binding()
+ await f.stage(live,Buffer.alloc(8*mib,4),{name:'a.bin'})
+ await f.stage(live,Buffer.alloc(7*mib,5),{name:'b.bin'})
+ assert.equal(await f.account(),16*mib)
+ await assert.rejects(f.stage(binding(),Buffer.alloc(8*mib,6),{name:'too-big.bin'}),{statusCode:413})
+ assert.equal(await f.account(),16*mib)
+ assert.deepEqual((await f.service.download(f.alice.token,kept.artifactId)).bytes,small)
+})
+
+test('a just-committed delivery is not reclaimed before its editor can insert it',async t=>{
+ const f=await fixture(t),bytes=Buffer.alloc(8*1024*1024,7)
+ const first=binding(),second=binding()
+ const a=await f.stage(first,bytes,{name:'a.bin'});await f.service.commit(f.alice.token,f.commit(first,[a.artifactId]))
+ const b=await f.stage(second,bytes,{name:'b.bin'});await f.service.commit(f.alice.token,f.commit(second,[b.artifactId]))
+ await assert.rejects(f.stage(binding(),Buffer.from('chart')),{statusCode:413})
+ assert.equal((await f.service.download(f.alice.token,a.artifactId)).bytes.length,bytes.length)
+ await f.age()
+ await f.stage(binding(),Buffer.from('chart'),{name:'chart.txt'})
+ await assert.rejects(f.service.download(f.alice.token,a.artifactId),{statusCode:404})
+})
+
+test('a failed object removal keeps the delivery row and its bytes charged',async t=>{
+ let failRemoval=false
+ const f=await fixture(t,objects=>({...objects,async removeUnreferenced(key){if(failRemoval)throw Error('storage unavailable');return objects.removeUnreferenced(key)}}))
+ const bytes=Buffer.alloc(8*1024*1024,8),first=binding(),second=binding()
+ const a=await f.stage(first,bytes,{name:'a.bin'});await f.service.commit(f.alice.token,f.commit(first,[a.artifactId]))
+ const b=await f.stage(second,bytes,{name:'b.bin'});await f.service.commit(f.alice.token,f.commit(second,[b.artifactId]))
+ await f.age()
+ failRemoval=true
+ await assert.rejects(f.stage(binding(),Buffer.from('chart')),{statusCode:413})
+ assert.equal(await f.account(),16*1024*1024)
+ assert.equal((await f.service.download(f.alice.token,a.artifactId)).bytes.length,bytes.length)
+ failRemoval=false
+ await f.stage(binding(),Buffer.from('chart'),{name:'chart.txt'})
+ assert.equal(await f.account(),8*1024*1024+5)
 })

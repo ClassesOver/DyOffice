@@ -13,6 +13,7 @@ export const cs = {
   aiQcPageOk: 'Stránka {n}: rozložení v pořádku',
   aiQcPageFixed: 'Stránka {n}: {summary}',
   aiQcPageFixedDefault: 'opraveny problémy s rozložením',
+  aiQcPageRollbackFailed: "Stránka {n}: oprava zhoršila rozložení; obnovení nebylo potvrzeno. Zkontrolujte stránku nebo vraťte změny.",
   aiQcPageReverted: 'Stránka {n}: automatická oprava výsledek zhoršila — vráceno zpět',
   aiQcPageFailed: 'Stránka {n}: kontrola se nezdařila ({error})',
   aiQcPageSkipped: 'Stránka {n}: automatická kontrola rozložení přeskočena',

@@ -82,8 +82,8 @@ export function PdfPage({
     let cancelled = false
     let renderTask: RenderTask | null = null
     void (async () => {
-      const page = await doc.getPage(pageNo)
-      if (cancelled) return
+      const page = await doc.getPage(pageNo).catch(() => null)
+      if (!page || cancelled) return
       const viewport = page.getViewport({ scale, rotation: (page.rotate + rotationDelta) % 360 })
       // Cap at 2x: on hi-dpi screens a 3x-dpr full-page bitmap doubles memory with no visible gain.
       // Deep zoom trades dpr for the pixel budget instead — the page is already magnified.

@@ -151,8 +151,8 @@ export interface AgentStreamCallbacks {
   onStopReason?(reason: string): void
   /** tokens the provider billed for this turn; transports whose provider does not report usage omit this */
   onUsage?(usage: AgentTokenUsage): void
-  onDone(): void
-  onError(error: string): void
+  onDone(disposition?: 'harness-admission-unconfirmed'): void
+  onError(error: string, disposition?: 'harness-admission-unconfirmed'): void
 }
 
 export interface AgentStreamHandle {
@@ -162,6 +162,6 @@ export interface AgentStreamHandle {
 
 export interface AgentTransport {
   /** Pin the endpoint for this run. Return true if prior history must stay on the previous endpoint. */
-  beginRun?(): boolean
+  beginRun?(resumeModelId?: string): boolean
   stream(request: AgentStreamRequest, callbacks: AgentStreamCallbacks): AgentStreamHandle
 }

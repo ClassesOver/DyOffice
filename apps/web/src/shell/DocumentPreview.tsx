@@ -1,8 +1,21 @@
-import {DocumentNotifications} from '../editors/document-notifications'
 import {useEffect,useRef,useState} from 'react'
-import {Button,Card,Spin} from 'antd'
+import {Button,Card} from 'antd'
 import JSZip from 'jszip'
 import type {SettingsRequest} from '../../../../packages/browser-host/src/preferences'
+import {CitedRevisionChanged} from '../../../../packages/browser-host/src/session-files'
+import {DocumentLoading} from '../editors/DocumentLoading'
+import {DocumentNotifications} from '../editors/document-notifications'
+
+async function previewBytes(endpoint:string,limit:number,signal?:AbortSignal){
+ const response=await fetch(endpoint,{credentials:'same-origin',signal,redirect:'error'})
+ if(!response.ok){await response.body?.cancel();throw Error('文件读取失败。')}
+ if(Number(response.headers.get('content-length'))>limit){await response.body?.cancel();throw Error('文件超过预览大小限制。')}
+ const reader=response.body?.getReader();if(!reader)throw Error('文件内容不可读取。')
+ const chunks:Uint8Array[]=[];let size=0
+ while(true){const {done,value}=await reader.read();if(done)break;size+=value.byteLength;if(size>limit){await reader.cancel();throw Error('文件超过预览大小限制。')}chunks.push(value)}
+ const bytes=new Uint8Array(size);let offset=0;for(const chunk of chunks){bytes.set(chunk,offset);offset+=chunk.byteLength}
+ return bytes
+}
 
 // XML prefixes are aliases. Accept the two OOXML namespace families, never a
 // same-local-name element or relationship attribute from an unrelated namespace.
@@ -66,36 +79,71 @@ export async function parseOfficePreview(bytes:Uint8Array,format:'xlsx'|'pptx'):
  if(!pages.length)throw Error('此文档没有可预览的内容，请下载原件。')
  return pages
 }
-export function DocumentPreview({fileId,name,format,request}:{fileId:string;name:string;format:'docx'|'xlsx'|'pptx'|'pdf';request:SettingsRequest}){
- const [pages,setPages]=useState<PreviewPage[]>([]),[url,setUrl]=useState(''),[error,setError]=useState(''),[busy,setBusy]=useState(true)
- const host=useRef<HTMLDivElement>(null),loading=useRef(true)
+export function DocumentPreview({fileId,name,format,request,sourceRevision}:{fileId:string;name:string;format:'docx'|'xlsx'|'pptx';request:SettingsRequest;sourceRevision?:string|undefined}){
+ const latestRequest=useRef(request)
+ latestRequest.current=request
+ const loading=useRef(true)
  const [attempt,setAttempt]=useState(0)
- function retry(){if(loading.current)return;loading.current=true;setBusy(true);setAttempt(value=>value+1)}
- useEffect(()=>{let alive=true;const abort=new AbortController();const target=host.current;loading.current=true;setPages([]);setUrl('');setError('');setBusy(true)
- void(async()=>{try{
-  const metadata=await request<Metadata>(`/api/v1/files/${encodeURIComponent(fileId)}`)
-  const endpoint=resolvePreviewContentUrl(fileId,metadata);if(!alive)return;setUrl(endpoint)
-  if(format==='docx')throw Error('当前 Word 编辑器未启用，请下载原件。')
-  const response=await fetch(endpoint,{credentials:'same-origin',signal:abort.signal,redirect:'error'})
-  if(!response.ok){await response.body?.cancel();throw Error('文件读取失败。')}
-  const limit=format==='pdf'?64*1024*1024:16*1024*1024
-  if(Number(response.headers.get('content-length'))>limit){await response.body?.cancel();throw Error('文件超过预览大小限制。')}
-  const reader=response.body?.getReader();if(!reader)throw Error('文件内容不可读取。')
-  const chunks:Uint8Array[]=[];let size=0
-  while(true){const {done,value}=await reader.read();if(done)break;size+=value.byteLength;if(size>limit){await reader.cancel();throw Error('文件超过预览大小限制。')}chunks.push(value)}
-  const bytes=new Uint8Array(size);let offset=0;for(const chunk of chunks){bytes.set(chunk,offset);offset+=chunk.byteLength}
-  if(!alive)return
-  if(format==='pdf'){const {mountPdfEditor}=await import('../editors/pdf-viewer');if(alive&&target)await mountPdfEditor(target,bytes,abort.signal)}
-  else {const result=await parseOfficePreview(bytes,format);if(alive)setPages(result)}
- }catch{if(alive)setError('无法生成只读预览，可下载原件查看。')}finally{if(alive){loading.current=false;setBusy(false)}}})()
- return()=>{alive=false;abort.abort();target?.replaceChildren()}
- },[fileId,format,request,attempt])
- return <section style={{height:'100%',overflow:'auto',padding:24}}><Card title={name} extra={url&&<Button href={url} download={name}>下载原件</Button>}>
- <DocumentNotifications key={fileId} items={[
- {id:'preview-mode',level:'info',title:'只读预览',message:format==='pdf'?'仅显示原始 PDF 页面，不提供编辑。':'仅提取文本与缓存数值，不执行公式或外部连接，不保证原始排版。每张工作表最多显示 200 行、200 列。'},
- ...(error?[{id:'preview-error',level:'error' as const,title:'预览未完成',message:error,actions:<Button disabled={busy} onClick={retry}>重新加载预览</Button>}]:[]),
- ]}/>
- {busy&&<Spin tip="正在读取文档"/>}
- <div ref={host} role={format==='pdf'?'region':undefined} aria-label={format==='pdf'?'PDF 页面':undefined} tabIndex={format==='pdf'?0:undefined} style={{maxWidth:'100%',overflowX:'auto'}}/>{pages.map((page,index)=><Card key={index} title={page.name} style={{marginTop:16}}><div style={{overflow:'auto'}}><table><tbody>{page.rows.map((row,i)=><tr key={i}>{row.map((value,j)=><td key={j} style={{border:'1px solid var(--border)',padding:'6px 10px',whiteSpace:'pre-wrap'}}>{value}</td>)}</tr>)}</tbody></table></div></Card>)}
- </Card></section>
+ const [phase,setPhase]=useState<'reading'|'rendering'>('reading')
+ const [busy,setBusy]=useState(true)
+ const [url,setUrl]=useState('')
+ const [error,setError]=useState('')
+ const [citationExpired,setCitationExpired]=useState(false)
+ const [pages,setPages]=useState<PreviewPage[]>([])
+
+ useEffect(()=>{
+  const controller=new AbortController(),{signal}=controller
+  loading.current=true
+  setPhase('reading');setPages([]);setUrl('');setError('');setCitationExpired(false);setBusy(true)
+  void(async()=>{
+   try{
+    const metadata=await latestRequest.current<Metadata>(`/api/v1/files/${encodeURIComponent(fileId)}`)
+    const endpoint=resolvePreviewContentUrl(fileId,metadata)
+    if(sourceRevision!==undefined&&metadata.file.revision!==sourceRevision)throw new CitedRevisionChanged()
+    if(signal.aborted)return
+    setUrl(endpoint)
+    if(format==='docx')throw Error('当前 Word 编辑器未启用，请下载原件。')
+    const bytes=await previewBytes(endpoint,16*1024*1024,signal)
+    if(signal.aborted)return
+    setPhase('rendering')
+    const result=await parseOfficePreview(bytes,format)
+    if(!signal.aborted)setPages(result)
+   }catch(error){
+    if(!signal.aborted){
+     const expired=error instanceof CitedRevisionChanged
+     setCitationExpired(expired)
+     setError(expired?'引用的版本已失效，请重新检索知识库。':'无法生成只读预览，可下载原件查看。')
+    }
+   }finally{
+    if(!signal.aborted){loading.current=false;setBusy(false)}
+   }
+  })()
+  return()=>controller.abort()
+ },[fileId,format,sourceRevision,attempt])
+
+ function retry(){
+  if(loading.current)return
+  loading.current=true
+  setBusy(true)
+  setAttempt(value=>value+1)
+ }
+
+ return <div className="document-loading-host" data-citation-expired={citationExpired} data-preview-revision={!busy&&url?new URL(url,location.href).searchParams.get('revision'):undefined}>
+  {busy&&<DocumentLoading key={`${fileId}-${attempt}`} name={name} format={format} state={phase}/>}
+  <div className="document-loading-content" data-loading={busy} aria-busy={busy}>
+   <div className="document-preview-layout">
+   <section className="document-preview-main" style={{height:'100%',overflow:'auto',padding:24}}>
+    <Card title={name} extra={url&&<Button href={url} download={name}>下载原件</Button>}>
+     <DocumentNotifications key={fileId} items={[
+      {id:'preview-mode',level:'info',title:'只读预览',message:'仅提取文本与缓存数值，不执行公式或外部连接，不保证原始排版。每张工作表最多显示 200 行、200 列。'},
+      ...(error?[{id:'preview-error',level:'error' as const,title:'预览未完成',message:error,actions:<Button disabled={busy} onClick={retry}>重新加载预览</Button>}]:[]),
+     ]}/>
+     {pages.map((page,index)=><Card key={index} title={page.name} style={{marginTop:16}}>
+      <div style={{overflow:'auto'}}><table><tbody>{page.rows.map((row,rowIndex)=><tr key={rowIndex}>{row.map((value,columnIndex)=><td key={columnIndex} style={{border:'1px solid var(--border)',padding:'6px 10px',whiteSpace:'pre-wrap'}}>{value}</td>)}</tr>)}</tbody></table></div>
+     </Card>)}
+    </Card>
+   </section>
+   </div>
+  </div>
+ </div>
 }

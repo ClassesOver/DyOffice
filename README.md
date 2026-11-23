@@ -638,6 +638,10 @@ The sheets app additionally needs a Rust toolchain for its xlsx sidecar
 automatically. See [CONTRIBUTING.md](CONTRIBUTING.md) for the checks every
 change must pass and how pull requests land.
 
+The full SaaS build also needs the Rust `wasm32-wasip1` target. With rustup,
+run `rustup target add wasm32-wasip1` before `npm run build:saas`. The resulting
+SaaS deployment can use Node to run the bundled workbook calculation engine.
+
 ## Community
 
 DyOffice is in active development and your feedback shapes it.

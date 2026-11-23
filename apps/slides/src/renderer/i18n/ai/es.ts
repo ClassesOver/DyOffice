@@ -12,6 +12,7 @@ export const es = {
   aiQcPageOk: 'Página {n}: diseño correcto',
   aiQcPageFixed: 'Página {n}: {summary}',
   aiQcPageFixedDefault: 'problemas de diseño corregidos',
+  aiQcPageRollbackFailed: "Página {n}: la corrección empeoró el diseño; no se confirmó la restauración. Revisa la página o deshaz los cambios.",
   aiQcPageReverted: 'Página {n}: la corrección automática empeoró el resultado — revertida',
   aiQcPageFailed: 'Página {n}: comprobación fallida ({error})',
   aiQcPageSkipped: 'Página {n}: comprobación automática de diseño omitida',

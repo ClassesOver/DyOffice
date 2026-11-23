@@ -1,15 +1,21 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import {scopeAssistantRequest} from '../../../../packages/web-contracts/src/assistant.ts'
 import {createHash} from 'node:crypto'
 const m=await import('../../server/src/modules/providers/openai-request.ts').catch(e=>{if(e.code==='ERR_MODULE_NOT_FOUND')return {};throw e})
 const profile={model:'gpt-test',maxOutputTokens:1024}
 const tool={name:'read_doc',description:'Read document',inputSchema:{type:'object',properties:{b:{type:'number'},a:{type:'string'}}}}
 const base=()=>({system:'Be helpful',messages:[{role:'user',text:'你好'}],tools:[]})
-const build=(request=base(),p=profile)=>{assert.equal(typeof m.buildOpenAiChatRequest,'function');return m.buildOpenAiChatRequest(request,p)}
+const build=(request=base(),p=profile,historicalTools)=>{assert.equal(typeof m.buildOpenAiChatRequest,'function');return m.buildOpenAiChatRequest(request,p,historicalTools)}
 test('builds exact compact UTF8 bytes and their only SHA256 from trusted model and limit',()=>{
  const r=build();const payload=JSON.parse(r.body.toString('utf8'))
  assert.deepEqual(payload,{model:'gpt-test',max_tokens:1024,stream:true,stream_options:{include_usage:true},messages:[{role:'system',content:'Be helpful'},{role:'user',content:'你好'}]})
  assert.equal(r.digest,createHash('sha256').update(r.body).digest('hex'));assert.ok(Object.isFrozen(r));assert.equal(r.body.toString(),JSON.stringify(payload))
+})
+test('sends bounded supported image attachments as OpenAI multimodal user content',()=>{
+ const image={base64:Buffer.from('image bytes').toString('base64'),mime:'image/png'}
+ const wire=JSON.parse(build({...base(),messages:[{role:'user',text:'Describe this',images:[image]}]}).body)
+ assert.deepEqual(wire.messages[1].content,[{type:'text',text:'Describe this'},{type:'image_url',image_url:{url:`data:image/png;base64,${image.base64}`}}])
 })
 test('canonical nested JSON key ordering yields identical wire bytes and digest',()=>{
  const a={...base(),tools:[tool]},b={...base(),tools:[{...tool,inputSchema:{properties:{a:{type:'string'},b:{type:'number'}},type:'object'}}]}
@@ -59,7 +65,7 @@ test('strict model/output-token settings and byte/count budgets fail closed',()=
  for(const p of [{...profile,maxOutputTokens:0},{...profile,maxOutputTokens:Infinity},{...profile,maxOutputTokens:32769},{...profile,model:'model\nsecret'},{...profile,headers:{}}])assert.throws(()=>build(base(),p),{message:'Invalid provider request'})
  assert.throws(()=>build({...base(),system:'x'.repeat(256*1024+1)}),{message:'Invalid provider request'})
  assert.throws(()=>build({...base(),messages:Array.from({length:513},()=>({role:'user',text:'a'}))}),{message:'Invalid provider request'})
- assert.throws(()=>build({...base(),messages:Array.from({length:5},()=>({role:'user',text:'x'.repeat(256*1024)}))}),{message:'Invalid provider request'})
+ assert.throws(()=>build({...base(),messages:Array.from({length:41},()=>({role:'user',text:'x'.repeat(256*1024)}))}),{message:'Invalid provider request'})
 })
 test('built body is detached from caller mutation; metadata is frozen, Buffer remains explicitly mutable',()=>{
  const r=base();const p=build(r);const before=p.body.toString();r.messages[0].text='changed';assert.equal(p.body.toString(),before)
@@ -68,7 +74,7 @@ test('built body is detached from caller mutation; metadata is frozen, Buffer re
 
 test('UTF8 size, final escaping expansion and recursive structure limits are enforced',()=>{
  assert.throws(()=>build({...base(),system:'好'.repeat(87382)}),{message:'Invalid provider request'})
- assert.throws(()=>build({...base(),messages:[{role:'user',text:'\u0000'.repeat(200000)}]}),{message:'Invalid provider request'})
+ assert.throws(()=>build({...base(),messages:Array.from({length:9},()=>({role:'user',text:'\u0000'.repeat(250000)}))}),{message:'Invalid provider request'})
  let deep={};for(let i=0;i<26;i++)deep={child:deep}
  assert.throws(()=>build({...base(),tools:[{...tool,inputSchema:deep}]}),{message:'Invalid provider request'})
  const sparse=[];sparse.length=1
@@ -81,4 +87,15 @@ test('absent versus explicit false error flags retain distinct tool-result conte
  assert.equal(JSON.parse(build(r({})).body).messages[2].content,'{"output":"ok"}')
  assert.equal(JSON.parse(build(r({isError:false})).body).messages[2].content,'{"output":"ok","isError":false}')
  assert.throws(()=>build(r({isError:'false'})),{message:'Invalid provider request'})
+})
+test('a resumed Office request can replay the paired Harness result without offering a new delegation',()=>{
+ const tool='delegate_agent_task',id='original-call'
+ const request={format:'pdf',system:'',tools:[],messages:[{role:'user',text:'Compute'},{role:'assistant',text:'',toolCalls:[{id,name:tool,input:{instruction:'Compute'}}]},{role:'tool',results:[{id,name:tool,output:'42'}]}]}
+ const scoped=scopeAssistantRequest(request,new Set([tool]))
+ assert.equal(scoped.tools.has(tool),false)
+ const wire=JSON.parse(build(scoped.request,profile,scoped.historicalTools).body)
+ assert.equal(wire.tools,undefined)
+ assert.equal(wire.messages.at(-1).tool_call_id,id)
+ const unavailable=scopeAssistantRequest(request,new Set())
+ assert.throws(()=>build(unavailable.request,profile,unavailable.historicalTools),/Invalid provider request/)
 })

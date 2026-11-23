@@ -1,0 +1,49 @@
+name: Docker Web development image
+on:
+  pull_request:
+    paths:
+      - 'deploy/docker/**'
+      - 'apps/sheets/native/xlsx-engine/**'
+      - 'tools/dyoffice/build-xlsx-refresh-wasi.mjs'
+      - 'package.json'
+      - 'package-lock.json'
+      - '.github/workflows/dyoffice-docker-web.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  compose:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    defaults:
+      run:
+        working-directory: deploy/docker
+    env:
+      NODE_IMAGE: node:22.23.5-bookworm-slim
+      RUST_IMAGE: rust:1.93.0-slim-bookworm
+      POSTGRES_IMAGE: postgres:17-alpine
+      NPM_REGISTRY: https://registry.npmjs.org/
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Build and start the merged Compose application
+        run: |
+          python3 generate-secrets.py
+          docker compose config --quiet
+          docker compose build web
+          docker compose up -d --wait db
+          docker compose run --rm provision
+          docker compose up --no-build -d web
+          curl --fail --retry 25 --retry-delay 2 --retry-all-errors http://localhost:3080/api/v1/health/ready | jq -e '.state == "ready"'
+          curl --fail --silent http://localhost:3080/ > /dev/null
+      - name: Open a fixture with the packaged WASI runner
+        run: |
+          docker compose exec -T -w /app/apps/web/test/fixtures/sheets web sh -ec '
+            test "$(id -un)" = node
+            if command -v cargo; then exit 1; fi
+            node /app/apps/web/dist-sheets-server/xlsx-refresh-wasi.mjs <<REQUEST
+          {"version":1,"requestId":"smoke","command":"open","path":"/work/acceptance.xlsx"}
+          REQUEST
+          ' | jq -e '.ok == true and .requestId == "smoke"'
+      - name: Remove disposable CI deployment
+        if: always()
+        run: docker compose down --volumes

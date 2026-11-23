@@ -40,7 +40,7 @@ Cargo.lock 的完整离线缓存，目前不是已交付的公共镜像。构建
 ## 离线配置预检
 
 已有 Docker Compose 工具的授权环境可以只做 config 渲染；不要接 up/build：
-    
+
     (
       umask 077
       private_dir=$(mktemp -d "${TMPDIR:-/tmp}/dyoffice-compose.XXXXXXXX") || exit 1

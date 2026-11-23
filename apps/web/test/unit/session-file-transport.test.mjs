@@ -4,7 +4,7 @@ import { randomUUID, createHash } from 'node:crypto'
 import { createSessionFileHost } from '../../../../packages/browser-host/src/session-files.ts'
 const json = (x, status = 200) => Response.json(x, { status })
 const capabilities = { docx: 'editable', xlsx: 'editable', pptx: 'read_only', pdf: 'read_only' }
-function fixture(t, intercept = () => undefined) {
+function fixture(t, intercept = () => undefined, expectedRevision) {
   const fileId = randomUUID(),
     editorId = randomUUID(),
     uploadId = randomUUID(),
@@ -18,6 +18,7 @@ function fixture(t, intercept = () => undefined) {
     calls = []
   const host = createSessionFileHost({
     editorId,
+    expectedRevision: expectedRevision?.(ref),
     fetchImpl: async (path, init = {}) => {
       calls.push({ path, init })
       const hit = await intercept(path, init)
@@ -52,6 +53,15 @@ function fixture(t, intercept = () => undefined) {
   t.after(() => host.dispose())
   return { host, fileId, ref, bytes, calls }
 }
+test('an editor opened from a citation rejects a newer head before reading or editing it', async (t) => {
+  const f = fixture(t, undefined, () => randomUUID())
+  await assert.rejects(f.host.open(f.fileId), {code:'CONFLICT',message:/cited revision/})
+  assert.deepEqual(f.calls.map(({path})=>path), [`/api/v1/files/${f.fileId}`])
+  const current = fixture(t, undefined, ref=>ref.revision)
+  assert.deepEqual((await current.host.open(current.fileId)).file, current.ref)
+  current.ref.revision = randomUUID()
+  assert.deepEqual((await current.host.open(current.fileId)).file, current.ref)
+})
 test('all session requests fix origin, forbid redirects, including CSRF bytes PUT commit and keepalive', async (t) => {
   const f = fixture(t)
   await f.host.getCapabilities()

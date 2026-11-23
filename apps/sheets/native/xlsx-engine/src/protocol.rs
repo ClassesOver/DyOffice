@@ -13,6 +13,7 @@ use crate::archive::{
     EntryContent, StreamPatchEntry, archive_manifest, read_entries_to_dir, save_archive,
     scan_entries_for_text,
 };
+use crate::external_links::BoundExternalLinkSource;
 use crate::find::FindCellsRequest;
 use crate::recalc::{RecalcCache, RecalcEdit, RecalcRead, recalc_cells_reporting};
 use crate::{CellRange, SidecarError, THREADS, WorkbookSessions};
@@ -119,6 +120,10 @@ pub enum Command {
     #[serde(rename_all = "camelCase")]
     UpdateExternalLinks {
         path: PathBuf,
+    },
+    RefreshBoundExternalLinks {
+        path: PathBuf,
+        sources: Vec<BoundExternalLinkSource>,
     },
     #[serde(rename_all = "camelCase")]
     ReadExternalLinks {
@@ -656,6 +661,10 @@ pub fn handle_request(
         Command::UpdateExternalLinks { path } => {
             crate::external_links::update_external_link_values(&path).and_then(to_json_value)
         }
+        Command::RefreshBoundExternalLinks { path, sources } => {
+            crate::external_links::refresh_bound_external_links(&path, &sources)
+                .and_then(to_json_value)
+        }
         Command::ReadExternalLinks { path } => {
             crate::external_links::read_external_link_statuses(&path).and_then(to_json_value)
         }
@@ -815,6 +824,48 @@ mod tests {
         let links = result["links"].as_array().unwrap();
         assert_eq!(links[0]["index"], serde_json::json!(1));
         assert_eq!(links[0]["cells"][0]["sheet"], serde_json::json!("Sheet1"));
+    }
+
+    #[test]
+    fn bound_external_link_refresh_only_reads_explicit_parts() {
+        use crate::external_links::tests::{write_dependent_fixture, write_source_fixture};
+
+        let dir = tempfile::tempdir().unwrap();
+        let book = dir.path().join("input.xlsx");
+        let part = format!("part-{}", uuid::Uuid::new_v4());
+        write_dependent_fixture(&book, "unbound.xlsx");
+        write_source_fixture(&dir.path().join("unbound.xlsx"));
+        write_source_fixture(&dir.path().join(&part));
+        let original = std::fs::read(&book).unwrap();
+
+        let mut engine = Engine::new();
+        let mut refresh = |sources| {
+            let request = serde_json::json!({
+                "version": 1, "requestId": "refresh", "command": "refresh_bound_external_links",
+                "path": book, "sources": sources,
+            });
+            let line = engine.handle_line(&request.to_string()).unwrap();
+            serde_json::from_str::<Value>(&line).unwrap()
+        };
+        let unbound = refresh(serde_json::json!([]));
+        assert_eq!(unbound["result"]["links"][0]["reachable"], false, "{unbound}");
+        assert_eq!(unbound["result"]["cells"][0]["number"], 84.0);
+
+        let bound = refresh(serde_json::json!([{ "index": 1, "part": part }]));
+        assert_eq!(bound["result"]["links"][0]["reachable"], true, "{bound}");
+        assert!(bound["result"]["links"][0]["source"].is_null());
+        assert_eq!(bound["result"]["cells"][0]["number"], 20.0);
+        assert_eq!(bound["result"]["cells"][0]["formula"], "=[1]Sheet1!A1*2");
+        assert_eq!(std::fs::read(&book).unwrap(), original);
+
+        for sources in [
+            serde_json::json!([{ "index": 2, "part": part }]),
+            serde_json::json!([{ "index": 1, "part": "../unbound.xlsx" }]),
+            serde_json::json!([{ "index": 1, "part": part }, { "index": 1, "part": part }]),
+        ] {
+            let rejected = refresh(sources);
+            assert!(rejected["error"].is_object(), "{rejected}");
+        }
     }
 
     /// A cancel marks its target; the target is then skipped unexecuted, and

@@ -6,12 +6,13 @@ import { tmpdir } from 'node:os'
 import { randomUUID } from 'node:crypto'
 import { execFile,spawn } from 'node:child_process'
 import { promisify } from 'node:util'
+import JSZip from 'jszip'
 const exec=promisify(execFile)
 async function fixture(kind='probe',limits={}) {
   const { createHostProcess }=await import('../../worker/src/sandbox/host-process.ts')
   const meta=JSON.parse(await readFile(process.env.DYOFFICE_TEST_HOST_MANIFEST,'utf8'))
   const deploymentId=randomUUID()
-  const runner=createHostProcess({ deploymentId,binary: kind==='native' ? meta.nativeBinary : meta.probeBinary,sha256: kind==='native' ? meta.nativeSha256 : meta.probeSha256,allowedCommands: kind==='native' ? ['open','close','save_archive','read_range','recalc_cells'] : ['probe','network','pids','sleep','busy','allocate','flood','output','symlink','park'],limits })
+  const runner=createHostProcess({ deploymentId,binary: kind==='native' ? meta.nativeBinary : meta.probeBinary,sha256: kind==='native' ? meta.nativeSha256 : meta.probeSha256,allowedCommands: kind==='native' ? ['open','close','save_archive','read_range','recalc_cells','refresh_bound_external_links'] : ['probe','network','pids','sleep','busy','allocate','flood','output','symlink','park'],limits })
   return { runner,deploymentId }
 }
 async function empty(scope) {
@@ -38,6 +39,34 @@ test('host output is a bounded regular file and original Rust opens and saves ac
   const input=await readFile(new URL('../../../shell/build/shell-new/blank.xlsx',import.meta.url))
   const result=await createXlsxNativeWorker(native.runner).roundtrip(input)
   assert.equal(result.sheetCount,1); assert.ok(result.bytes.length>0); await empty(native.deploymentId)
+})
+test('isolated XLSX refresh computes from staged bytes and leaves unbound formula caches untouched',{timeout:25000},async()=>{
+  const native=await fixture('native'),{createXlsxNativeWorker}=await import('../../worker/src/native/xlsx.ts')
+  const source=await readFile(new URL('../fixtures/sheets/acceptance.xlsx',import.meta.url))
+  const zip=await JSZip.loadAsync(source)
+  const update=async(part,token,replacement)=>{
+    const xml=await zip.file(part).async('string')
+    assert.ok(xml.includes(token))
+    zip.file(part,xml.replace(token,replacement))
+  }
+  const relationshipNamespace='http://schemas.openxmlformats.org/officeDocument/2006/relationships'
+  const link='xl/externalLinks/externalLink1.xml'
+  await update('xl/workbook.xml','</sheets>','</sheets><externalReferences><externalReference r:id="rIdBound"/></externalReferences>')
+  await update('xl/_rels/workbook.xml.rels','</Relationships>',`<Relationship Id="rIdBound" Type="${relationshipNamespace}/externalLink" Target="externalLinks/externalLink1.xml"/></Relationships>`)
+  await update('[Content_Types].xml','</Types>',`<Override PartName="/${link}" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.externalLink+xml"/></Types>`)
+  await update('xl/worksheets/sheet1.xml','<v>7.5</v>','<f>[1]Acceptance!A2*2</f><v>84</v>')
+  zip.file(link,`<externalLink xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="${relationshipNamespace}"><externalBook r:id="rId1"><sheetNames><sheetName val="Acceptance"/></sheetNames></externalBook></externalLink>`)
+  zip.file('xl/externalLinks/_rels/externalLink1.xml.rels',`<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="${relationshipNamespace}/externalLinkPath" Target="file:///work/output.xlsx" TargetMode="External"/></Relationships>`)
+  const input=await zip.generateAsync({type:'nodebuffer'})
+  const worker=createXlsxNativeWorker(native.runner)
+  const cached=await worker.refreshExternalLinks(input,[])
+  const fresh=await worker.refreshExternalLinks(input,[{index:1,bytes:source}])
+  assert.deepEqual(cached.links.map(({reachable,source})=>({reachable,source})),[{reachable:false,source:null}])
+  assert.deepEqual(fresh.links.map(({reachable,source})=>({reachable,source})),[{reachable:true,source:null}])
+  assert.equal(cached.cells[0].number,84)
+  assert.equal(fresh.cells[0].number,25)
+  assert.equal(fresh.cells[0].formula,cached.cells[0].formula)
+  await empty(native.deploymentId)
 })
 test('live native snapshot and libraries keep independent inodes after host mutation', {timeout:20_000}, async t=>{
   const directory=await mkdtemp(join(tmpdir(),'host-live-snapshot-'))

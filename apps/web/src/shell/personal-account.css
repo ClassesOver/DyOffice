@@ -281,3 +281,5 @@
 .personal-account-confirm .ant-btn + .ant-btn {
   margin-left: 8px;
 }
+.personal-account-password .ant-input-affix-wrapper:has(input[aria-invalid='true']){border-color:var(--danger)}
+.personal-account-password .personal-account-actions{align-items:center}

@@ -380,7 +380,16 @@ export function proposeOperations(
           }
           for (const pivot of sheetMeta.pivotTables) {
             const definition = state.pivotDefinitions.get(pivot.path)
-            if (definition && definition.unsupported.length > 0) {
+            if (!definition) {
+              return {
+                ok: false,
+                error: `Pivot definition ${pivot.path} is not loaded yet. Wait for loading or reopen the workbook, then retry.`,
+              }
+            }
+            if (!workbook.getSheets().some((sheet) => sheet.getSheetName() === definition.sourceSheet)) {
+              return { ok: false, error: `Pivot source sheet is missing: ${definition.sourceSheet}` }
+            }
+            if (definition.unsupported.length > 0) {
               return {
                 ok: false,
                 error: `Pivot table ${pivot.path} does not support recompute: ${definition.unsupported.join('; ')}`,

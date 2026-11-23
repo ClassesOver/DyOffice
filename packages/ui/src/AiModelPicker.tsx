@@ -1,10 +1,12 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { Lang } from '@genoffice/i18n'
 import type { AiSettings } from '@genoffice/ai-provider/browser'
+import { AI_PROVIDERS, type AiProviderId } from '@genoffice/ai-provider/browser'
 import {
   aiModelPickerGroups,
   aiModelPickerSelection,
   withAiModelSelection,
+  type AiModelPickerGroup,
   type AiModelPickerSelection,
 } from './ai-model-picker-options'
 import { ProviderLogo } from './provider-logos'
@@ -31,9 +33,15 @@ export interface AiModelPickerBridge {
 export function AiModelPicker({
   bridge,
   lang,
+  catalogEntries,
+  selectedId,
+  onCatalogSelect,
 }: {
   readonly bridge: AiModelPickerBridge
   readonly lang: Lang
+  readonly catalogEntries?: readonly { id: string; label: string; model: string; providerId?: string }[]
+  readonly selectedId?: string
+  readonly onCatalogSelect?: (id: string) => void
 }): React.JSX.Element | null {
   const strings = AI_MODEL_PICKER_STRINGS[lang] ?? AI_MODEL_PICKER_STRINGS.en
   const [settings, setSettings] = useState<AiSettings | null>(null)
@@ -54,6 +62,7 @@ export function AiModelPicker({
   }, [bridge])
 
   useEffect(() => {
+    if (catalogEntries) return
     refresh()
     window.addEventListener('focus', refresh)
     let off: (() => void) | undefined
@@ -66,18 +75,26 @@ export function AiModelPicker({
       window.removeEventListener('focus', refresh)
       off?.()
     }
-  }, [bridge, refresh])
+  }, [bridge, refresh, catalogEntries])
 
   const close = useCallback(() => setOpen(false), [])
   useDismissablePopover(open, close, {
     inside: () => [chipRef.current, popRef.current],
   })
 
-  const groups = useMemo(
-    () => (settings ? aiModelPickerGroups(settings, loggedIn) : []),
-    [settings, loggedIn],
+  const groups = useMemo<AiModelPickerGroup[]>(
+    () => catalogEntries
+      ? Array.from(new Map(catalogEntries.map(entry => [entry.providerId ?? 'custom', entry])).keys()).map(providerId => ({
+          id: providerId as AiProviderId,
+          label: AI_PROVIDERS.find(provider => provider.id === providerId)?.label ?? providerId,
+          models: catalogEntries.filter(entry => (entry.providerId ?? 'custom') === providerId).map(entry => entry.model || entry.label),
+        }))
+      : (settings ? aiModelPickerGroups(settings, loggedIn) : []),
+    [catalogEntries, settings, loggedIn],
   )
-  const current = settings ? aiModelPickerSelection(settings) : null
+  const current = catalogEntries
+    ? { provider: (catalogEntries.find(entry => entry.id === selectedId)?.providerId ?? 'custom') as AiProviderId, model: catalogEntries.find(entry => entry.id === selectedId)?.model ?? '' }
+    : (settings ? aiModelPickerSelection(settings) : null)
   const sameGroup = (g: { id: string; endpoint?: string | undefined }) =>
     g.id === current?.provider && (g.id !== 'custom' || g.endpoint === current?.endpoint)
   const currentUsable = groups.some(sameGroup)
@@ -93,6 +110,11 @@ export function AiModelPicker({
 
   const pick = (sel: AiModelPickerSelection) => {
     setOpen(false)
+    if (catalogEntries) {
+      const entry = catalogEntries.find(item => (item.providerId ?? 'custom') === sel.provider && (item.model || item.label) === sel.model)
+      if (entry) onCatalogSelect?.(entry.id)
+      return
+    }
     if (!settings) return
     const next = withAiModelSelection(settings, sel)
     setSettings(next)
@@ -104,7 +126,7 @@ export function AiModelPicker({
     void bridge.openModelSettings?.()
   }
 
-  if (!settings) return null
+  if (!settings && !catalogEntries) return null
   const chipText =
     currentUsable && current
       ? current.model || (groups.find(sameGroup)?.label ?? '')

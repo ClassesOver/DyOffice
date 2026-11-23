@@ -3,8 +3,8 @@ export type Principal = Readonly<{ userId: string; sessionId: string; deployment
 /** Stable job identity only; endpoint-specific status DTOs belong to T08. */
 export type JobRef = Readonly<{ id: string }>
 export type RevisionRef = Readonly<{ fileId: string; revision: string; sha256: string; size: number }>
-export type SaveInput = Readonly<{ fileId: string; uploadId: string; baseRevision: string; idempotencyKey: string; leaseEpoch: number; sourceCommandId?: string }>
-export type OpenFileResult = Readonly<{ name?: string; file: RevisionRef; format: OfficeFormat; downloadEndpoint: string; capabilities: import('./host.ts').CapabilityCatalog }>
+export type SaveInput = Readonly<{ fileId: string; uploadId: string; baseRevision: string; idempotencyKey: string; leaseEpoch: number; wordVersion?: number; sourceCommandId?: string }>
+export type OpenFileResult = Readonly<{ name?: string; pdfAutoNamePending?: true; officeSignatureProtected?: true; file: RevisionRef; format: OfficeFormat; downloadEndpoint: string; capabilities: import('./host.ts').CapabilityCatalog }>
 export type PublicSettings = Readonly<{ theme: 'light' | 'dark' | 'system'; language: string; authorName?: string; autoSave?: boolean; showAssistant?: boolean }>
 
 export function isRevisionRef(value: unknown): value is RevisionRef {
@@ -21,5 +21,6 @@ export function isSaveInput(value: unknown): value is SaveInput {
   const v = value as Record<string, unknown>
   return ['fileId', 'uploadId', 'baseRevision', 'idempotencyKey'].every(k => typeof v[k] === 'string' && (v[k] as string).length > 0) &&
     typeof v.leaseEpoch === 'number' && Number.isSafeInteger(v.leaseEpoch) && v.leaseEpoch >= 0 &&
+    (v.wordVersion === undefined || (typeof v.wordVersion === 'number' && Number.isSafeInteger(v.wordVersion) && v.wordVersion >= 0)) &&
     (v.sourceCommandId === undefined || (typeof v.sourceCommandId === 'string' && v.sourceCommandId.length > 0))
 }

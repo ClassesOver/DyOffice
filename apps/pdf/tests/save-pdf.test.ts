@@ -252,6 +252,31 @@ describe('mergeGrid', () => {
 })
 
 describe('mergePagesBytes', () => {
+  it.each([0, 90])('clips each embedded page to its visible box with rotation %s', async (rotation) => {
+    for (const [crop, visible] of [
+      [[100, 50, 200, 100], [100, 50, 200, 100]],
+      [[0, 0, 200, 100], [50, 30, 150, 70]],
+      [[500, 400, 20, 20], [50, 30, 400, 300]],
+    ]) {
+      const doc = await PDFDocument.create()
+      const page = doc.addPage([400, 300])
+      page.setMediaBox(50, 30, 400, 300)
+      page.setCropBox(crop[0], crop[1], crop[2], crop[3])
+      page.setRotation(degrees(rotation))
+      page.drawText('Visible content', { x: 110, y: 80, size: 12 })
+      const out = await PDFDocument.load(await mergePagesBytes(await doc.save(), mergeOpts(2)))
+      const [x, y, width, height] = visible
+      expect(out.getPage(0).getSize()).toEqual(rotation === 90
+        ? { width, height } : { width: height, height: width })
+      const objects = out.getPage(0).node.Resources()!.lookup(PDFName.of('XObject'), PDFDict)
+      const embedded = out.context.lookup(objects.values()[0], PDFRawStream)
+      expect(embedded.dict.lookup(PDFName.of('BBox'), PDFArray).asArray().map(Number))
+        .toEqual([x, y, x + width, y + height])
+      expect(embedded.dict.lookup(PDFName.of('Matrix'), PDFArray).asArray().map(Number))
+        .toEqual([1, 0, 0, 1, -x, -y])
+    }
+  })
+
   it('puts every perSheet pages onto one sheet sized like the first page', async () => {
     const bytes = await makePdf([
       [100, 200],
@@ -411,6 +436,17 @@ describe('setPageSizeBytes', () => {
 })
 
 describe('splitPagesBytes', () => {
+  it.each([0, 90])('splits only the visible media/crop intersection with rotation %s', async (rotation) => {
+    const doc = await PDFDocument.create(), page = doc.addPage([400, 300])
+    page.setMediaBox(50, 30, 400, 300)
+    page.setCropBox(0, 0, 200, 100)
+    page.setRotation(degrees(rotation))
+    const out = await PDFDocument.load(await splitPagesBytes(await doc.save(), 2))
+    expect(out.getPage(0).getMediaBox()).toEqual(rotation === 90
+      ? { x: 50, y: 30, width: 150, height: 35 }
+      : { x: 50, y: 30, width: 75, height: 70 })
+  })
+
   it('splits each page into side-by-side halves for 2', async () => {
     const bytes = await makePdf([[200, 100]])
     const out = await PDFDocument.load(await splitPagesBytes(bytes, 2))

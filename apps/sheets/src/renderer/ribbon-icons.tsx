@@ -184,6 +184,14 @@ export function SaveAsIcon(): ReactElement {
   )
 }
 
+export function DownloadCsvIcon(): ReactElement {
+  return (
+    <Icon>
+      <path d="M12 3v12m-4-4 4 4 4-4M5 16v4h14v-4" />
+    </Icon>
+  )
+}
+
 /// Quick-access undo/redo — design-supplied geometry shared with the docs
 /// and slides ribbons, so the three apps' tab-row arrows read identically.
 export function UndoIcon(): ReactElement {

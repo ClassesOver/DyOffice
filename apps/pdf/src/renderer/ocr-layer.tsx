@@ -171,9 +171,11 @@ export async function renderPageForOcr(
   doc: PDFDocumentProxy,
   origIdx: number,
   geom: PageGeom,
+  maxEdge = Infinity,
 ): Promise<string | null> {
   const disp = geomDispSize(geom)
-  const scale = Math.min(4, Math.max(1.5, 2048 / Math.max(disp.width, disp.height, 1)))
+  const edge = Math.max(disp.width, disp.height, 1)
+  const scale = Math.min(4, maxEdge / edge, Math.max(1.5, 2048 / edge))
   try {
     const page = await doc.getPage(origIdx + 1)
     const viewport = page.getViewport({ scale, rotation: ((geom.rot % 360) + 360) % 360 })
@@ -186,6 +188,29 @@ export async function renderPageForOcr(
   } catch {
     return null
   }
+}
+
+/** Keep the detailed raster for small text, but retry large glyphs without upscaling. */
+export async function recognizeWebOcrPage(
+  doc: PDFDocumentProxy,
+  origIdx: number,
+  geom: PageGeom,
+  png: string,
+  ocrPage: (png: string, signal?: AbortSignal) => Promise<PdfOcrLine[] | null>,
+  signal?: AbortSignal,
+): Promise<PdfOcrLine[] | null> {
+  const first = await ocrPage(png, signal)
+  if (!first || signal?.aborted) return first
+  const confidence = (lines: PdfOcrLine[]) =>
+    lines.reduce((sum, line) => sum + line.confidence, 0) / Math.max(lines.length, 1)
+  const firstConfidence = confidence(first)
+  if (firstConfidence >= 0.6) return first
+  const { width, height } = geomDispSize(geom)
+  const smaller = await renderPageForOcr(doc, origIdx, geom, Math.min(1024, Math.max(width, height)))
+  if (!smaller || signal?.aborted) return first
+  // A failed optional retry must not discard usable text from the first pass.
+  const second = await ocrPage(smaller, signal).catch(() => null)
+  return second && !signal?.aborted && confidence(second) > firstConfidence ? second : first
 }
 
 /** Recognition costs a bitmap render plus a platform engine call per page, so an
@@ -232,7 +257,7 @@ export async function runAutoOcr(opts: {
   limit?: number
   geom: (origIdx: number) => PageGeom
   render: (doc: PDFDocumentProxy, origIdx: number, geom: PageGeom) => Promise<string | null>
-  ocrPage: (png: string) => Promise<PdfOcrLine[] | null>
+  ocrPage: (png: string, origIdx: number, geom: PageGeom) => Promise<PdfOcrLine[] | null>
   onPage: (origIdx: number, data: OcrPageData) => void
   onProgress: (done: number, total: number) => void
 }): Promise<AutoOcrResult> {
@@ -282,7 +307,7 @@ export async function runAutoOcr(opts: {
     }
     let lines: PdfOcrLine[] | null
     try {
-      lines = await opts.ocrPage(png)
+      lines = await opts.ocrPage(png, queue[at]!, geom)
     } catch {
       attempted += 1
       continue // this page failed; the rest may still recognize

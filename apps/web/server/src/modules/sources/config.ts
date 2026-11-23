@@ -12,7 +12,7 @@ export function positiveVersion(value: unknown): number { if (!Number.isSafeInte
 export function sourceName(value: unknown): string { if (typeof value !== 'string' || !value.trim() || value.trim().length > 200 || Buffer.byteLength(value.trim()) > 600 || /[\u0000-\u001f]/.test(value)) throw sourceError(); return value.trim() }
 export function sourceConfig(kind: SourceKind, input: unknown): SourceConfig {
   const http = kind === 'http'
-  const value = object(input, http ? ['timezone','maxRows','units','rowPath'] : ['timezone','maxRows','units','database','statementTimeoutMs'])
+  const value = object(input, http ? ['timezone','maxRows','units','rowPath'] : ['timezone','maxRows','units','database','statementTimeoutMs','allowedTables','allowedSchemas'])
   const timezone = value.timezone ?? 'UTC'
   if (typeof timezone !== 'string' || timezone.length > 100) throw sourceError()
   try { new Intl.DateTimeFormat('en', { timeZone: timezone }) } catch { throw sourceError() }
@@ -33,10 +33,31 @@ export function sourceConfig(kind: SourceKind, input: unknown): SourceConfig {
   }
   const statementTimeoutMs = value.statementTimeoutMs ?? 5000
   if (!Number.isSafeInteger(statementTimeoutMs) || statementTimeoutMs < 100 || statementTimeoutMs > 30_000 || value.database !== undefined && (typeof value.database !== 'string' || !/^[A-Za-z_][A-Za-z0-9_$.-]{0,127}$/.test(value.database))) throw sourceError()
-  return { ...common, statementTimeoutMs, ...(value.database === undefined ? {} : { database: value.database }) }
+  let allowedTables: string[] | undefined
+  if (value.allowedTables !== undefined) {
+    if (!Array.isArray(value.allowedTables) || value.allowedTables.length > 256) throw sourceError()
+    for (const table of value.allowedTables) {
+      if (typeof table !== 'string' || !/^[A-Za-z_][A-Za-z0-9_$]{0,127}(?:\.[A-Za-z_][A-Za-z0-9_$]{0,127})?$/.test(table) || /^(?:pg_|information_schema\.|mysql\.|sys\.|performance_schema\.)/i.test(table)) throw sourceError()
+    }
+    allowedTables = [...new Set<string>(value.allowedTables)]
+  }
+  let allowedSchemas: string[] | undefined
+  if (value.allowedSchemas !== undefined) {
+    if (!Array.isArray(value.allowedSchemas) || value.allowedSchemas.length > 256 ||
+        value.allowedSchemas.some(schema => typeof schema !== 'string' || !/^[A-Za-z_][A-Za-z0-9_$]{0,127}$/.test(schema) || /^(?:pg_|information_schema$|mysql$|sys$|performance_schema$)/i.test(schema))) throw sourceError()
+    allowedSchemas = [...new Set<string>(value.allowedSchemas)]
+  }
+  return { ...common, statementTimeoutMs, ...(allowedSchemas === undefined ? {} : { allowedSchemas }), ...(allowedTables === undefined ? {} : { allowedTables }), ...(value.database === undefined ? {} : { database: value.database }) }
 }
+/**
+ * Frozen SQL result budget, also the capture limit for one stored result
+ * (results.ts maxSnapshotBytes, migration 0046): room for up to 10,000
+ * moderate-width detail rows. Rows past it are kept as a truncated prefix
+ * rather than failing the query.
+ */
+export const SQL_RESULT_MAX_BYTES = 4_000_000
 export function executionFor(kind: SourceKind, config: SourceConfig): SourceExecution {
-  return kind === 'http' ? { maxRows: config.maxRows!, requestTimeoutMs: 10_000, maxResponseBytes: 1_000_000 } : { maxRows: config.maxRows!, statementTimeoutMs: ('statementTimeoutMs' in config ? config.statementTimeoutMs : undefined) ?? 5000, maxResponseBytes: 1_000_000 }
+  return kind === 'http' ? { maxRows: config.maxRows!, requestTimeoutMs: 10_000, maxResponseBytes: 1_000_000 } : { maxRows: config.maxRows!, statementTimeoutMs: ('statementTimeoutMs' in config ? config.statementTimeoutMs : undefined) ?? 5000, maxResponseBytes: SQL_RESULT_MAX_BYTES }
 }
 export function validateSourceSecret(kind: SourceKind, secret: unknown, config: SourceConfig): string {
   if (typeof secret !== 'string' || !secret || Buffer.byteLength(secret) > 7000 || /[\u0000-\u001f]/.test(secret)) throw sourceError()

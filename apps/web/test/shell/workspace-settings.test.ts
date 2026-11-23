@@ -10,7 +10,7 @@ test('preference labels associate with their controls and switch labels toggle o
  const root=createRoot(document.getElementById('labels-test')!),save=vi.fn(async()=>initial)
  try{
   await act(async()=>root.render(h(WorkspaceSettings,{user:{username:'alice',displayName:'Alice',roles:['personal']},load:async()=>initial,save,sessionsClient:{listPage:async()=>({sessions:[],nextCursor:null}),list:async()=>[],revoke:async()=>{},revokeOthers:async()=>{}},historyClient:{list:async()=>[],listPage:async()=>({events:[],nextCursor:null})},security:{changePassword:async()=>{},onCurrentRevoked:()=>{}},skills:h('p',null,'skills'),onClose:()=>{},onLogout:()=>{},onCloseGuardChange:()=>{},activeTab:'general'})))
-  const pane=document.querySelector('.personal-settings-general')!
+  const pane=document.querySelector('.personal-page-general')!
   const label=(name:string)=>[...pane.querySelectorAll<HTMLLabelElement>('label')].find(element=>element.textContent===name)!
   for(const name of ['语言','文档作者','自动保存','显示 AI 助手']){
    const control=pane.querySelector<HTMLElement>(`[aria-label="${name}"]`)!
@@ -30,8 +30,8 @@ test('preferences remain drafts until explicit save and pending save prevents ta
  const save=vi.fn(()=>new Promise<typeof initial>(resolve=>{finish=resolve}))
  root.render(h(WorkspaceSettings,{user:{username:'admin',displayName:'Admin',roles:['personal']},load:async()=>initial,save,security:{changePassword:async()=>{},onCurrentRevoked:()=>{}},skills:h('p',null,'skills'),onClose:()=>{},onLogout:()=>{},onCloseGuardChange:g=>{guard=g}}))
  try{
- await vi.waitFor(()=>expect([...document.querySelectorAll('[role=tab]')].some(t=>t.textContent==='通用偏好')).toBe(true))
- ;([...document.querySelectorAll<HTMLElement>('[role=tab]')].find(t=>t.textContent==='通用偏好')!).click()
+ await vi.waitFor(()=>expect([...document.querySelectorAll('[role="tab"]')].some(t=>t.textContent==='通用偏好')).toBe(true))
+ ;([...document.querySelectorAll<HTMLElement>('[role="tab"]')].find(t=>t.textContent==='通用偏好')!).click()
  await vi.waitFor(()=>expect(document.querySelector('[aria-label="自动保存"]')).not.toBeNull())
  ;(document.querySelector('[aria-label="自动保存"]') as HTMLButtonElement).click()
  await vi.waitFor(()=>expect((document.querySelector('[aria-label="自动保存"]') as HTMLElement).getAttribute('aria-checked')).toBe('true'))
@@ -57,7 +57,9 @@ test('successful password rotation reloads current sessions without losing the p
  const root=createRoot(document.getElementById('rotation-test')!)
  try{
   await act(async()=>root.render(h(WorkspaceSettings,{user:{username:'alice',displayName:'Alice',roles:['personal']},load:async()=>initial,save:async()=>initial,security:{changePassword:async()=>{rotated=true},onCurrentRevoked:()=>{}},skills:h('p',null,'skills'),onClose:()=>{},onLogout:()=>{},onCloseGuardChange:()=>{}})))
+  await act(async()=>[...document.querySelectorAll<HTMLButtonElement>('[role=tab]')].find(tab=>tab.textContent==='登录活动')!.click())
   expect(document.querySelector('[data-session-id="old-session"]')).not.toBeNull()
+  await act(async()=>[...document.querySelectorAll<HTMLButtonElement>('[role=tab]')].find(tab=>tab.textContent==='资料与安全')!.click())
   const current=document.querySelector<HTMLInputElement>('#local-current-password')!,next=document.querySelector<HTMLInputElement>('#local-new-password')!,confirm=document.querySelector<HTMLInputElement>('#local-confirm-password')!
   current.value='existing long password';next.value=confirm.value='new long password phrase'
   await act(async()=>current.form!.dispatchEvent(new Event('submit',{bubbles:true,cancelable:true})))
@@ -83,10 +85,12 @@ for(const outcome of ['success','unknown','current'] as const)test(`password rot
  const button=(text:string)=>[...document.querySelectorAll<HTMLButtonElement>('button')].find(b=>b.textContent===text)!
  try{
   await act(async()=>root.render(h(WorkspaceSettings,{user:{username:'alice',displayName:'Alice',roles:['personal']},load:async()=>initial,save:async()=>initial,sessionsClient:client,historyClient:{list:async()=>[],listPage:async()=>({events:[],nextCursor:null})},security:{changePassword:async()=>{},onCurrentRevoked},skills:h('p',null,'skills'),onClose:()=>{},onLogout:()=>{},onCloseGuardChange:g=>{guard=g}})))
+  await act(async()=>button('登录活动').click())
   await act(async()=>button(outcome==='current'?'撤销当前会话':'撤销此会话').click())
   await act(async()=>button('确认撤销').click())
   expect(revoke).toHaveBeenCalledOnce()
   expect(guard?.()).toBe(false)
+  await act(async()=>button('资料与安全').click())
   const current=document.querySelector<HTMLInputElement>('#local-current-password')!,next=document.querySelector<HTMLInputElement>('#local-new-password')!,confirm=document.querySelector<HTMLInputElement>('#local-confirm-password')!
   current.value='existing long password';next.value=confirm.value='new long password phrase'
   await act(async()=>current.form!.dispatchEvent(new Event('submit',{bubbles:true,cancelable:true})))
@@ -111,5 +115,56 @@ for(const outcome of ['success','unknown','current'] as const)test(`password rot
    const confirm=vi.spyOn(window,'confirm').mockReturnValue(false)
    try{expect(guard?.()).toBe(false)}finally{confirm.mockRestore()}
   }
+ }finally{await act(async()=>root.unmount());document.body.innerHTML=''}
+})
+
+test('native category tabs support keyboard navigation and preserve visited activity and password drafts',async()=>{
+ const {act}=await import('react')
+ document.body.innerHTML='<div id="native-settings-tabs"></div>'
+ const root=createRoot(document.getElementById('native-settings-tabs')!)
+ let guard:(()=>boolean)|null=null
+ const listPage=vi.fn(async()=>({sessions:[],nextCursor:null}))
+ const confirm=vi.spyOn(window,'confirm').mockReturnValue(false)
+ const tab=(name:string)=>[...document.querySelectorAll<HTMLButtonElement>('[role=tab]')].find(node=>node.textContent===name)!
+ try{
+  await act(async()=>root.render(h(WorkspaceSettings,{user:{username:'alice',displayName:'Alice',roles:['personal']},load:async()=>initial,save:async()=>initial,sessionsClient:{listPage,list:async()=>[],revoke:async()=>{},revokeOthers:async()=>{}},historyClient:{list:async()=>[],listPage:async()=>({events:[],nextCursor:null})},security:{changePassword:async()=>{},onCurrentRevoked:()=>{}},skills:h('p',null,'native skill content'),onClose:()=>{},onLogout:()=>{},onCloseGuardChange:next=>{guard=next}})))
+  expect([...document.querySelectorAll('[role=tab]')].map(node=>node.textContent)).toEqual(['资料与安全','登录活动','通用偏好','个人技能'])
+  expect(listPage).not.toHaveBeenCalled()
+  const input=document.querySelector<HTMLInputElement>('#local-current-password')!
+  await act(async()=>{Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value')!.set!.call(input,'password draft');input.dispatchEvent(new Event('input',{bubbles:true}))})
+  await act(async()=>tab('资料与安全').dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowRight',bubbles:true})))
+  expect(tab('登录活动').getAttribute('aria-selected')).toBe('true')
+  expect(document.activeElement).toBe(tab('登录活动'))
+  expect(listPage).toHaveBeenCalledOnce()
+  expect(document.querySelector('[role=tabpanel]:not([hidden]) .personal-page-sessions')).not.toBeNull()
+  expect(document.querySelector('[role=tabpanel]:not([hidden]) #local-current-password')).toBeNull()
+  expect(guard?.()).toBe(false)
+  await act(async()=>tab('登录活动').dispatchEvent(new KeyboardEvent('keydown',{key:'End',bubbles:true})))
+  expect(tab('个人技能').getAttribute('aria-selected')).toBe('true')
+  await act(async()=>tab('个人技能').dispatchEvent(new KeyboardEvent('keydown',{key:'Home',bubbles:true})))
+  expect(tab('资料与安全').getAttribute('aria-selected')).toBe('true')
+  expect(document.querySelector<HTMLInputElement>('#local-current-password')).toBe(input)
+  expect(input.value).toBe('password draft')
+  await act(async()=>tab('资料与安全').dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowLeft',bubbles:true})))
+  expect(tab('个人技能').getAttribute('aria-selected')).toBe('true')
+  await act(async()=>tab('登录活动').click())
+  expect(listPage).toHaveBeenCalledOnce()
+  expect(document.querySelector('.personal-settings-b,.ant-tabs,.ant-input,.ant-btn')).toBeNull()
+ }finally{await act(async()=>root.unmount());confirm.mockRestore();document.body.innerHTML=''}
+})
+
+test('changing personal categories returns to the heading while preserving mounted drafts',async()=>{
+ const {act}=await import('react')
+ document.body.innerHTML='<div id="category-scroll-test"></div>'
+ const root=createRoot(document.getElementById('category-scroll-test')!)
+ try{
+  await act(async()=>root.render(h(WorkspaceSettings,{user:{username:'alice',displayName:'Alice',roles:['personal']},load:async()=>initial,save:async()=>initial,security:{changePassword:async()=>{},onCurrentRevoked:()=>{}},skills:h('p',null,'skills'),onClose:()=>{},onLogout:()=>{},onCloseGuardChange:()=>{}})))
+  const content=document.querySelector<HTMLElement>('.personal-page-content')!
+  content.scrollTop=300
+  await act(async()=>[...document.querySelectorAll<HTMLButtonElement>('[role=tab]')].find(tab=>tab.textContent==='通用偏好')!.click())
+  expect(content.scrollTop).toBe(0)
+  content.scrollTop=180
+  await act(async()=>[...document.querySelectorAll<HTMLButtonElement>('[role=tab]')].find(tab=>tab.textContent==='个人技能')!.click())
+  expect(content.scrollTop).toBe(0)
  }finally{await act(async()=>root.unmount());document.body.innerHTML=''}
 })

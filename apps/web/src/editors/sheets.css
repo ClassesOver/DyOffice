@@ -1,14 +1,2 @@
 .dyoffice-native-sheets { height: 100vh; display: flex; flex-direction: column; color: var(--text); background: var(--surface); }
 .dyoffice-native-sheets > .app-shell { flex: 1; min-height: 0; }
-.dyoffice-sheets-state { flex: none; min-height: 1.5rem; padding: 0.25rem 0.75rem; font: 0.8rem sans-serif; background: var(--surface); color: var(--text); border-bottom: 1px solid var(--border); }
-.dyoffice-sheets-state button { margin-inline-start: 0.75rem; color: var(--text); background: var(--surface); border: 1px solid var(--border); border-radius: 0.25rem; padding: 0.15rem 0.5rem; cursor: pointer; }
-
-.dyoffice-sheets-state a { margin-inline-start: 0.75rem; color: var(--text); }
-.dyoffice-sheets-state button:disabled { opacity: 0.55; cursor: default; }
-.dyoffice-sheets-state .dyoffice-sheets-action-error { margin-inline-start: 0.75rem; color: var(--danger, #b42318); }
-.dyoffice-sheets-state .dyoffice-sheets-download { font-weight: 600; }
-
-/* Saving and permission changes update content without resizing the editor. */
-.dyoffice-sheets-state { display: flex; align-items: center; gap: 12px; height: 36px; min-height: 36px; box-sizing: border-box; white-space: nowrap; overflow-x: auto; }
-.dyoffice-sheets-state > span:first-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-.dyoffice-sheets-state button, .dyoffice-sheets-state a { flex: none; margin-inline-start: 0; }

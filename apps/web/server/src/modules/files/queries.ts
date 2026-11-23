@@ -4,12 +4,12 @@ import { authorize } from '../policy/authorize.ts'
 import { authError } from '../auth/sessions.ts'
 import { UNSUPPORTED_CAPABILITIES } from '../../../../../../packages/web-contracts/src/host.ts'
 import type { OfficeFormat, OpenFileResult } from '../../../../../../packages/web-contracts/src/api.ts'
-export type Upload = { id: string; file_id: string; revision_id: string; workspace_id: string; name: string; format: OfficeFormat; expected_size: number; auth_version: number; state: string; sha256: string | null; attempt_id: string | null; expires_at: Date; kind: 'import' | 'revision'; base_revision: string | null; lease_epoch: string | null; editor_id: string | null; session_id: string | null; restored_from: string | null; job_id: string | null; job_epoch: string | null }
-export type FileRow = { id: string; workspace_id: string; name: string; format: OfficeFormat; current_revision: string; deleted_at: Date | null; created_at: Date; updated_at: Date; object_key: string; sha256: string; size: number }
+export type Upload = { id: string; file_id: string; revision_id: string; workspace_id: string; name: string; format: OfficeFormat; expected_size: number; auth_version: number; state: string; sha256: string | null; attempt_id: string | null; expires_at: Date; kind: 'import' | 'revision'; base_revision: string | null; lease_epoch: string | null; editor_id: string | null; session_id: string | null; restored_from: string | null; job_id: string | null; job_epoch: string | null; pdf_auto_name: string | null; office_signature_protected: boolean | null }
+export type FileRow = { id: string; workspace_id: string; name: string; format: OfficeFormat; current_revision: string; deleted_at: Date | null; created_at: Date; updated_at: Date; object_key: string; sha256: string; size: number; pdf_auto_name_pending: boolean; office_signature_protected: boolean | null }
 export const uuid = (id: string) => { if (typeof id !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) throw authError(400); return id.toLowerCase() }
 export const scope = (p: BusinessPrincipal) => [p.deploymentId,p.userId]
 export const objectKey = (p: BusinessPrincipal, revisionId: string) => `${p.deploymentId}/${p.userId}/objects/${revisionId}`
-export const openResult = (row: FileRow): OpenFileResult => ({ name: row.name, file: { fileId: row.id, revision: row.current_revision, sha256: row.sha256, size: row.size }, format: row.format,
+export const openResult = (row: FileRow): OpenFileResult => ({ name: row.name, ...(row.pdf_auto_name_pending?{pdfAutoNamePending:true as const}:{}), file: { fileId: row.id, revision: row.current_revision, sha256: row.sha256, size: row.size }, format: row.format,
   downloadEndpoint: `/api/v1/files/${row.id}/content?revision=${row.current_revision}`, capabilities: UNSUPPORTED_CAPABILITIES })
 export const fileDto = (row: FileRow) => ({ id: row.id, name: row.name, format: row.format, revision: row.current_revision, size: row.size, sha256: row.sha256, createdAt: row.created_at.toISOString(), updatedAt: row.updated_at.toISOString(), deletedAt: row.deleted_at?.toISOString() ?? null })
 
@@ -46,13 +46,14 @@ export async function lockUpload(connection: PoolClient, principal: BusinessPrin
 }
 export async function loadFile(connection: PoolClient, principal: BusinessPrincipal, id: string, includeTrash = false, lock = 'SHARE') {
   if (principal.job && (id!==principal.job.fileId || includeTrash)) throw authError(404)
+  if (principal.mcpRead && (id !== principal.mcpRead.fileId || includeTrash)) throw authError(404)
   // Lock the owner-scoped file before joining its head revision. A single
   // locking join can follow a concurrently updated file via EvalPlanQual while
   // its statement snapshot cannot see that transaction's newly inserted revision.
   // A fresh statement after the lock sees the matching committed revision.
   const locked = await connection.query(`SELECT id FROM files WHERE deployment_id=$1 AND owner_id=$2 AND id=$3 AND purge_started_at IS NULL ${includeTrash ? '' : 'AND deleted_at IS NULL'} FOR ${lock}`, [...scope(principal),id])
   if (!locked.rowCount) throw authError(404)
-  const row = (await connection.query<FileRow>(`SELECT f.*,r.object_key,r.sha256,r.size FROM files f JOIN file_revisions r ON r.deployment_id=f.deployment_id AND r.owner_id=f.owner_id AND r.file_id=f.id AND r.id=f.current_revision WHERE f.deployment_id=$1 AND f.owner_id=$2 AND f.id=$3 AND f.purge_started_at IS NULL ${includeTrash ? '' : 'AND f.deleted_at IS NULL'} FOR ${lock} OF f`, [...scope(principal),id])).rows[0]
+  const row = (await connection.query<FileRow>(`SELECT f.*,r.object_key,r.sha256,r.size,r.office_signature_protected FROM files f JOIN file_revisions r ON r.deployment_id=f.deployment_id AND r.owner_id=f.owner_id AND r.file_id=f.id AND r.id=f.current_revision WHERE f.deployment_id=$1 AND f.owner_id=$2 AND f.id=$3 AND f.purge_started_at IS NULL ${includeTrash ? '' : 'AND f.deleted_at IS NULL'} FOR ${lock} OF f`, [...scope(principal),id])).rows[0]
   if (!row) throw authError(404)
   return row
 }

@@ -78,18 +78,27 @@ export function wrapText(
   cssFamily: string,
   cssStyle = '',
 ): string[] {
-  const w = (s: string) => measurePt(s, fontSizePt, cssFamily, cssStyle)
+  return wrapTextMeasured(text, widthPt, (s) => measurePt(s, fontSizePt, cssFamily, cssStyle))
+}
+
+/** The same line-breaking rules with a caller-provided measurement of the actual face. */
+export function wrapTextMeasured(text: string, widthPt: number, w: (s: string, start: number) => number): string[] {
   const units = tokenize(text.trim())
   const lines: string[] = []
   let line = ''
+  let lineStart = 0
+  let unitStart = 0
   const push = () => {
     if (line.trim()) lines.push(line.trim())
     line = ''
   }
   for (let i = 0; i < units.length; i++) {
     let u = units[i]!
-    if (u === ' ' && !line) continue
-    if (line && w(line + u) > widthPt && u !== ' ') {
+    let currentStart = unitStart
+    unitStart += u.length
+    if (u === ' ' && !line) { lineStart = unitStart; continue }
+    if (!line) lineStart = currentStart
+    if (line && w(line + u, lineStart) > widthPt && u !== ' ') {
       if (NO_LINE_START.has(u)) {
         // Pull the last unit down with the punctuation instead of starting a line with it
         const m = /^(.*?)(\S)$/.exec(line)
@@ -97,7 +106,8 @@ export function wrapText(
           line = m[1]!
           push()
           line = m[2]!
-        } else push()
+          lineStart = currentStart - line.length
+        } else { push(); lineStart = currentStart }
       } else {
         // Never leave an opening bracket dangling at the line end
         const last = line.trimEnd()
@@ -105,16 +115,19 @@ export function wrapText(
           line = last.slice(0, -1)
           push()
           line = last[last.length - 1]!
-        } else push()
+          lineStart = currentStart - 1
+        } else { push(); lineStart = currentStart }
       }
     }
     // Hard-break a single unit wider than the block (URLs, very narrow blocks)
-    while (w(u) > widthPt && u.length > 1) {
+    while (w(u, currentStart) > widthPt && u.length > 1) {
       let k = 1
-      while (k < u.length && w(line + u.slice(0, k + 1)) <= widthPt) k++
+      while (k < u.length && w(line + u.slice(0, k + 1), lineStart) <= widthPt) k++
       line += u.slice(0, k)
       push()
       u = u.slice(k)
+      currentStart += k
+      lineStart = currentStart
     }
     line += u
   }

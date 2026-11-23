@@ -6,7 +6,7 @@ import type { FilePolicy } from '../modules/files/service.ts'
 
 export async function configuredObjectStore(environment: NodeJS.ProcessEnv): Promise<{ objectStore?: ObjectStore; filePolicy?: FilePolicy; close: () => void }> {
   if (!environment.DYOFFICE_FILE_API && !environment.DYOFFICE_OBJECT_STORE) return { close() {} }
-  if (environment.DYOFFICE_FILE_API !== 'experimental') throw new Error('Explicit experimental file API configuration required')
+  if (environment.DYOFFICE_FILE_API !== undefined && environment.DYOFFICE_FILE_API !== 'experimental') throw new Error('Invalid file API configuration')
   const quota = environment.DYOFFICE_FILE_QUOTA_BYTES
   if (quota !== undefined && (!/^[1-9][0-9]*$/.test(quota) || !Number.isSafeInteger(Number(quota)))) throw new Error('Invalid file quota')
   const filePolicy = quota === undefined ? undefined : { quotaBytes: Number(quota) }

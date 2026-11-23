@@ -18,7 +18,8 @@ if (args.length > 0) {
   process.exit(2)
 }
 
-const CSS_SCOPE = /^apps\/[^/]+\/src\/renderer\/.+\.css$/
+// Desktop renderers, the web shell/editors, and the shared UI package all ship chrome CSS.
+const CSS_SCOPE = /^(?:apps\/[^/]+\/src\/renderer|apps\/web\/src|packages\/ui\/src)\/.+\.css$/
 const RAW_COLOR = /#[0-9a-fA-F]{3,8}\b|\b(?:rgb|rgba|hsl|hsla)\(/
 const TOKEN_DEF = /^\s*--[\w-]+:/
 const COMMENT_LINE = /^\s*(\/\*|\*)/

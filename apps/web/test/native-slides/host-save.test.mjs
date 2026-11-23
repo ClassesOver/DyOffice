@@ -99,3 +99,17 @@ test('saveSlides requires an active lease and rejects without one', async t => {
   await assert.rejects(() => host.saveSlides(base.fileId, {revision: base.revision, generation: 0}), {code: 'CONFLICT'})
   assert.equal(server.preparations(), 0, 'no export may start without lease authority')
 })
+
+test('saveSlides rechecks authorization after export staging before dispatching commit',async t=>{
+ const server=createSlidesMockServer({slideCount:1});let allowed=true,commits=0
+ const host=await leasedHost(t,server,async(path,init)=>{
+  const response=await server.fetchImpl(path,init)
+  if(String(path).endsWith('/slides/uploads'))allowed=false
+  if(String(path).endsWith('/commits'))commits++
+  return response
+ })
+ await server.fetchImpl(`/api/v1/files/${server.file().fileId}/slides/open`,{method:'POST',headers:{'content-type':'application/json','x-csrf-token':server.csrfToken},body:JSON.stringify({revision:server.file().revision,generation:0})})
+ await assert.rejects(host.saveSlides(server.file().fileId,{revision:server.file().revision,generation:0},()=>allowed),{code:'UNAVAILABLE'})
+ assert.equal(commits,0)
+ assert.equal(host.getState(server.file().fileId).status,'idle')
+})

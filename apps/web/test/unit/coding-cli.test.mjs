@@ -13,6 +13,7 @@ test('installed Codex executes code through the Office model bridge without its 
   assert.equal(input.token,'synthetic-office-session');assert.equal(input.modelId,'office-selected');rounds++
   if(rounds===1)await emit({type:'tool_call',id:'call_verify',name:'exec_command',input:{cmd:"python3 -c \"from pathlib import Path; assert 2+3==5; Path('verified.txt').write_text('python assertion passed')\"",max_output_tokens:100}})
   else await emit({type:'delta',text:'Implemented and tested with the Office-selected model.'})
+  await emit({type:'usage',inputTokens:120,outputTokens:30})
  }}})
  try {
   const result=await createCodingHarness({timeoutMs:30000}).run({instruction:'Write code and test it in the provided directory.'},controller.signal,{baseUrl:bridge.baseUrl,apiKey:bridge.apiKey,modelId:'office-selected'})

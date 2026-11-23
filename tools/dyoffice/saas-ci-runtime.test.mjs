@@ -13,8 +13,9 @@ test('SaaS Node entrypoints transform parameter properties before tests or worke
  try {
   const file=join(dir,'fixture.ts');await writeFile(file,"class Example {constructor(readonly value:number){}};if(new Example(7).value!==7)throw Error('value');")
   for(const command of scripts){
-   assert.match(command,/^node --experimental-transform-types /)
-   const run=spawnSync(process.execPath,[command.split(' ')[1],file],{encoding:'utf8',timeout:10000})
+   const flags=/^node (--experimental-transform-types(?: --import tsx)?|--import tsx) /.exec(command)
+   assert.ok(flags,command)
+   const run=spawnSync(process.execPath,[...flags[1].split(' '),file],{encoding:'utf8',timeout:10000})
    assert.equal(run.status,0,run.stderr)
   }
  }finally{await rm(dir,{recursive:true,force:true})}
@@ -29,8 +30,8 @@ test('native worker CI installs the no-Electron shared workspace required by the
  assert.ok(root.workspaces.includes('apps/sheets'))
 })
 
-test('native Sheets server child uses the same TypeScript transform mode as its parent',async()=>{
+test('native Sheets server child uses the same TypeScript transform and resolution as its parent',async()=>{
  const source=await readFile(new URL('../../apps/web/test/native-sheets/runtime.test.mjs',import.meta.url),'utf8')
- assert.match(source,/spawn\(process\.execPath,\['--experimental-transform-types','server\/index\.mjs'\]/)
+ assert.match(source,/spawn\(process\.execPath,\['--experimental-transform-types','--import','tsx','server\/index\.mjs'\]/)
  assert.doesNotMatch(source,/--experimental-strip-types/)
 })

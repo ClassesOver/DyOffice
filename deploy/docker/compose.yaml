@@ -7,6 +7,7 @@ x-app:
     dockerfile: deploy/docker/Dockerfile
     args:
       NODE_IMAGE: ${NODE_IMAGE:?Set your mirrored Node 22.23.5 bookworm-slim image}
+      RUST_IMAGE: ${RUST_IMAGE:?Set your mirrored Rust 1.93.0 slim-bookworm image}
       NPM_REGISTRY: ${NPM_REGISTRY:-https://repo.huaweicloud.com/repository/npm/}
   init: true
   networks: &id002
@@ -86,8 +87,8 @@ services:
       DYOFFICE_OBJECT_STORE: local-dev
       DYOFFICE_OBJECT_DIRECTORY: /data/objects
       DYOFFICE_LOCAL_SHELL: experimental
-      DYOFFICE_LOCAL_SHELL_DIR: /app/apps/web/dist
-      DYOFFICE_NATIVE_DOCX: experimental
+      DYOFFICE_LOCAL_SHELL_DIR: /app/apps/web/dist-local-shell
+      DYOFFICE_LOCAL_EDITOR_PROFILE: docx-only
       DYOFFICE_CODING_AGENT: 'off'
     secrets:
     - auth_password

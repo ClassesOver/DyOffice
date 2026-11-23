@@ -1,0 +1,73 @@
+:is(.dyoffice-native-sheets,.dyoffice-native-slides) .file-tab-wrap {
+  position: relative;
+  flex: none;
+}
+:is(.dyoffice-native-sheets,.dyoffice-native-slides) .file-tab-wrap > .ribbon-tab-file {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-width: 68px;
+  min-height: 32px;
+  margin-inline-end: 6px;
+  padding: 4px 10px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: var(--accent);
+  color: var(--color-btn-primary-text);
+  font: 600 13px/20px var(--gs-font-sans);
+  cursor: pointer;
+}
+:is(.dyoffice-native-sheets,.dyoffice-native-slides) .ribbon-tab-file::after {
+  content: '';
+  width: 5px;
+  height: 5px;
+  border-inline-end: 1px solid;
+  border-block-end: 1px solid;
+  transform: translateY(-1px) rotate(45deg);
+}
+:is(.dyoffice-native-sheets,.dyoffice-native-slides) .file-tab-wrap > .ribbon-tab-file:is(:hover,[aria-expanded=true]) {
+  background: color-mix(in srgb, var(--accent) 85%, var(--color-btn-primary-text));
+  color: var(--color-btn-primary-text);
+}
+:is(.dyoffice-native-sheets,.dyoffice-native-slides) .ribbon-tab-file[aria-expanded=true]::after {
+  transform: translateY(2px) rotate(225deg);
+}
+:is(.dyoffice-native-sheets,.dyoffice-native-slides) .file-tab-wrap > .file-menu {
+  position: absolute;
+  inset: calc(100% + 5px) auto auto 0;
+  z-index: 60;
+  min-width: 230px;
+  padding: 6px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  box-shadow: 0 8px 24px color-mix(in srgb, var(--text-primary) 14%, transparent);
+}
+:is(.dyoffice-native-sheets,.dyoffice-native-slides) .file-tab-wrap .file-menu :is(button,a) {
+  min-height: 34px;
+  border-radius: 6px;
+}
+:is(.dyoffice-native-sheets,.dyoffice-native-slides) .file-tab-wrap .file-menu :is(button:enabled,a):is(:hover,:focus-visible) {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+:is(.dyoffice-native-sheets,.dyoffice-native-slides) .file-tab-wrap :is(button,a):focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.dyoffice-native-sheets .file-menu > button {
+  display: block;
+  width: 100%;
+  padding: 6px 10px;
+  border: 0;
+  background: transparent;
+  color: var(--text-primary);
+  font: 13px/20px var(--gs-font-sans);
+  text-align: start;
+  cursor: pointer;
+}
+.dyoffice-native-sheets .file-menu > button:disabled {
+  color: var(--text-tertiary);
+  cursor: not-allowed;
+}

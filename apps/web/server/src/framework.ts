@@ -3,6 +3,7 @@ import { METHODS } from 'node:http'
 import rateLimit from '@fastify/rate-limit'
 import { randomUUID } from 'node:crypto'
 import { sendJson } from '../http-response.mjs'
+import { isAssistantErrorCode } from '../../../../packages/web-contracts/src/assistant-errors.ts'
 
 function sendSafeError(error: unknown, request: FastifyRequest, reply: FastifyReply) {
   const errorStatus = (error as { statusCode?: number } | null)?.statusCode
@@ -16,7 +17,10 @@ function sendSafeError(error: unknown, request: FastifyRequest, reply: FastifyRe
   reply.raw.setHeader('X-Request-ID', request.id)
   reply.raw.setHeader('Referrer-Policy', 'no-referrer')
   reply.hijack()
-  sendJson(reply.raw, status, { error: status >= 500 ? '服务暂时不可用' : '请求无效' })
+  // A public classification (assistant-errors.ts) may accompany the generic
+  // text so clients can act on it; the original message never does.
+  const code = (error as { code?: unknown } | null)?.code
+  sendJson(reply.raw, status, { error: status >= 500 ? '服务暂时不可用' : '请求无效', ...(isAssistantErrorCode(code) ? { code } : {}) })
 }
 
 

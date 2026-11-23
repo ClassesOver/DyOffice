@@ -1,3 +1,5 @@
+import {matchesContinuation} from '../../web-contracts/src/task-continuation.ts'
+import {followChannelEvents} from './channel-event-stream.ts'
 import type {SettingsRequest} from './preferences.ts'
 import type {AgentSkill} from '../../agent-core/src/skill.ts'
 import type {AssistantControl} from '../../ui/src/assistant-control.ts'
@@ -5,18 +7,23 @@ import {decodeChannelDataInputs,type AgentReceipt,type ChannelTask} from '../../
 import {ASSISTANT_READ_TOOLS} from '../../web-contracts/src/assistant.ts'
 
 export interface ChannelSnapshot {
- conversationId:string;fileId:string;paused:boolean;sequence:number
- members:{membershipId:string;displayName:string;kind:string;online:boolean;revoked:boolean}[]
+ conversationId:string;fileId:string|null;paused:boolean;sequence:number
+ backgroundEnabled?:boolean;backgroundAvailable?:boolean
+ members:{membershipId:string;displayName:string;kind:string;online:boolean;previewActive?:boolean;revoked:boolean;expiresAt:string;issuedAt?:string|null;canRevealDshToken?:boolean;dshTokenFromOtherSession?:boolean}[]
  applications:{applicationId:string;displayName:string;kind:string}[]
  tasks:ChannelTask[]
 }
 const base='/api/v1/assistant-channels'
+export const REFRESH_GIVE_UP_MS=25_000
+const REFRESH_RETRY_MAX_MS=8_000
 /** Optional collaboration uses the existing editor's notification channel and
  * executor. Native messages never wait for pairing, snapshots or peer tasks. */
-export function createAssistantChannelClient(options:{request:SettingsRequest;fileId:string;editorId:string;generation:()=>number}) {
+export function createAssistantChannelClient(options:{request:SettingsRequest;csrfToken?:string;fileId:string;editorId:string;conversationId?:string;generation:()=>number;continuationRevision?:()=>string|undefined;currentRunModel?:()=>string|null|undefined;selectedModel?:()=>string|null|undefined}) {
  let snapshot:ChannelSnapshot|null=null,disposed=false,error='',executor:Parameters<AssistantControl['register']>[0]|undefined
  let connection:{id:string;epoch:number}|undefined,refreshing:Promise<void>|undefined,starting:Promise<void>|undefined
  let localGeneration=0
+ let stopEvents:(()=>void)|undefined,idleRetry:ReturnType<typeof setTimeout>|undefined
+ function stopScheduling(){stopEvents?.();stopEvents=undefined;clearTimeout(idleRetry);idleRetry=undefined}
  let running:{task:ChannelTask;controller:AbortController}|undefined,pumping=false
  type NativeRun={token:string;instruction:string;generation:number;cancel:()=>void;cancelRequested?:boolean;channelId?:string;parent?:ChannelTask;pending?:Promise<ChannelTask>}
  let nativeRun:NativeRun|undefined
@@ -37,7 +44,12 @@ export function createAssistantChannelClient(options:{request:SettingsRequest;fi
    }
    if(run.generation===localGeneration)await refresh()
   }catch{if(!disposed&&run.generation===localGeneration){error='Office task receipt unavailable; refresh its durable status.';notify()}}
-  finally{settlingRuns.delete(run.token);if(!disposed&&run.generation===localGeneration&&(run.parent||run.pending))void refresh()}
+  finally{
+   settlingRuns.delete(run.token)
+   // pump() skips work while a run settles and nothing else re-arms it for a
+   // plain run, so look for queued Office tasks again now.
+   if(!disposed&&run.generation===localGeneration){if(run.parent||run.pending)void refresh();else void pump()}
+  }
  }
  const delegated=new Map<string,string>(),yieldedBatches:string[][]=[],continued=new Set<string>()
  const listeners=new Set<()=>void>(),attempted=new Set<string>()
@@ -57,16 +69,51 @@ export function createAssistantChannelClient(options:{request:SettingsRequest;fi
   }
  }
  const sendAction=(to:string,action:unknown,requestId=crypto.randomUUID())=>request(base+'/actions','POST',{requestId,conversationId:snapshot!.conversationId,to,action})
+ function canResume(task:ChannelTask){
+  const origin=task.continuationOrigin
+  return !origin||matchesContinuation(origin,{revision:options.continuationRevision?.(),modelId:options.selectedModel?.(),callId:origin.callId})
+ }
+ async function releaseUnstarted(parent:ChannelTask,generation:number){
+  try{
+   await request(base+'/channels/'+parent.conversationId+'/yield','POST',{taskId:parent.taskId,claimId:parent.claimId,connectionEpoch:parent.connectionEpoch,childTaskIds:parent.continuation!.children.map(child=>child.taskId)})
+   if(localGeneration===generation){attempted.delete(parent.taskId);void refresh()}
+  }catch{if(!disposed&&localGeneration===generation){error='Office continuation could not be released; refresh its durable status.';notify()}}
+ }
+ // A queued continuation that no longer matches this editor is never left
+ // waiting silently. A newer document revision can never match again, so it
+ // is cancelled; a different model only needs the user to switch back.
+ const blockedReported=new Set<string>()
+ let notice=''
+ function reportBlocked(task:ChannelTask){
+  const origin=task.continuationOrigin!,revision=options.continuationRevision?.()
+  if(revision!==undefined&&origin.revision!==revision){
+   if(blockedReported.has(task.taskId))return
+   blockedReported.add(task.taskId)
+   // Kept past the next refresh (which clears error) until the user starts new work.
+   notice='The delegated Office task was cancelled because the document changed before its results returned.'
+   void sendAction('office',{kind:'cancel',taskId:task.taskId}).then(()=>refresh(),()=>{blockedReported.delete(task.taskId)})
+   notify()
+   return
+  }
+  const message='Select the model that started the delegated Office task to continue it.'
+  if(error!==message){error=message;notify()}
+ }
  async function pump() {
-  if(disposed||pumping||running||settlingRuns.size||!snapshot||snapshot.paused||!connection||!executor||executor.isBusy())return
-  const task=snapshot.tasks.find(task=>task.to==='office'&&task.state==='queued'&&!attempted.has(task.taskId))
+  if(disposed||pumping||running||settlingRuns.size||!snapshot||snapshot.paused||!connection||!executor)return
+  const queued=snapshot.tasks.filter(task=>task.to==='office'&&!task.execution&&task.state==='queued'&&!attempted.has(task.taskId))
+  for(const blocked of queued.filter(task=>!canResume(task)))reportBlocked(blocked)
+  const task=queued.find(canResume)
   if(!task)return
+  if(executor.isBusy()){
+   idleRetry??=setTimeout(()=>{idleRetry=undefined;void pump()},400)
+   return
+  }
   pumping=true
   const taskGeneration=localGeneration
   try {
    attempted.add(task.taskId)
    const target=executor,channelId=snapshot.conversationId,runConnection=connection
-   const claimInput={requestId:crypto.randomUUID(),taskId:task.taskId,connectionId:runConnection.id,connectionEpoch:runConnection.epoch}
+   const claimInput={...(task.continuationOrigin?{origin:task.continuationOrigin}:{}),requestId:crypto.randomUUID(),taskId:task.taskId,connectionId:runConnection.id,connectionEpoch:runConnection.epoch}
    const claimPath=base+'/channels/'+channelId+'/claim'
    let claim:ChannelTask
    try {claim=await request<ChannelTask>(claimPath,'POST',claimInput)}
@@ -85,6 +132,7 @@ export function createAssistantChannelClient(options:{request:SettingsRequest;fi
    if(!current||!['queued','running'].includes(current.state))return
    if(claim.from==='office'&&!claim.parentTaskId){
     if(!claim.continuation)throw Error('Missing Office continuation evidence')
+    if(!canResume(claim)){await releaseUnstarted(claim,taskGeneration);return}
     const token=crypto.randomUUID()
     parentContinuations.set(token,{parent:claim,generation:taskGeneration})
     snapshot={...snapshot,tasks:snapshot.tasks.map(item=>item.taskId===claim.taskId?claim:item)}
@@ -96,8 +144,11 @@ export function createAssistantChannelClient(options:{request:SettingsRequest;fi
    let summary='',outcome:'succeeded'|'failed'='succeeded'
    try {
     const result=await target.execute(claim.instruction,controller.signal)
-    summary=result.cancelled?'Office task cancelled':result.text||'Office task completed without findings'
-    if(result.cancelled)outcome='failed'
+    const failure=result.cancelled?'Office task cancelled'
+     :result.truncated?'Office model reached the output length limit'
+     :result.turnLimit?'Office task reached the step limit':''
+    summary=failure||result.text||'Office task completed without findings'
+    if(failure)outcome='failed'
    } catch {summary='Office delegated read could not complete';outcome='failed'}
    if(disposed||localGeneration!==taskGeneration||snapshot?.conversationId!==channelId)return
    // Persist a result once. A lost response is reconciled from the durable
@@ -106,36 +157,59 @@ export function createAssistantChannelClient(options:{request:SettingsRequest;fi
   } catch {if(!disposed&&taskGeneration===localGeneration){error='Collaboration task unavailable; refresh its durable status.';notify()}}
   finally {if(taskGeneration===localGeneration){running=undefined;pumping=false;if(!disposed)void refresh()}}
  }
+ // A refresh requested while one is in flight runs once more afterwards: the
+ // in-flight read may predate the change that asked for it.
+ let refreshAgain=false,refreshFailingSince=0,refreshFailures=0,refreshRetry:ReturnType<typeof setTimeout>|undefined
+ function clearRefreshRetry(){if(refreshRetry){clearTimeout(refreshRetry);refreshRetry=undefined}}
  async function refresh():Promise<void> {
   if(disposed||!snapshot)return
-  if(refreshing)return refreshing
+  if(refreshing){refreshAgain=true;return refreshing}
   const channelId=snapshot.conversationId,generation=localGeneration
   refreshing=(async()=>{
    try {
     const next=await request<ChannelSnapshot>(base+'/channels/'+channelId)
     if(disposed||generation!==localGeneration||snapshot?.conversationId!==channelId)return
     if(next.fileId!==options.fileId)throw Error('Channel file changed')
-   snapshot=next;error='';flushContinuations()
+    snapshot=next;error='';refreshFailingSince=0;refreshFailures=0;clearRefreshRetry();flushContinuations()
     if(nativeRun?.parent){const parent=next.tasks.find(task=>task.taskId===nativeRun!.parent!.taskId);if(next.paused||!parent||parent.state!=='running'||parent.claimId!==nativeRun.parent.claimId)cancelParentRun()}
     if(running&&!next.tasks.some(task=>task.taskId===running!.task.taskId&&task.state==='running'))running.controller.abort()
     notify();void pump()
-   } catch {if(!disposed&&generation===localGeneration){error='Collaboration unavailable';running?.controller.abort();cancelParentRun();notify()}}
-   finally{if(generation===localGeneration)refreshing=undefined}
+   } catch (cause) {
+    if(!disposed&&generation===localGeneration){
+     const status=typeof cause==='object'&&cause!==null?((cause as {status?:unknown}).status??(cause as {statusCode?:unknown}).statusCode):undefined
+     if(status===404)resetConversation()
+     error='Collaboration unavailable'
+     // Work in progress is stopped only when the channel is gone, access is
+     // refused or refreshes have failed for longer than a peer stays online
+     // (45 s server side). A single network blip must not fail a running
+     // Office task; retry with backoff instead.
+     const now=Date.now();refreshFailingSince||=now;refreshFailures++
+     if(status===401||status===403||status===404||now-refreshFailingSince>=REFRESH_GIVE_UP_MS){running?.controller.abort();cancelParentRun()}
+     if(snapshot&&!refreshRetry)refreshRetry=setTimeout(()=>{refreshRetry=undefined;void refresh()},Math.min(REFRESH_RETRY_MAX_MS,1000*2**(refreshFailures-1)))
+     notify()
+    }
+   }
+   finally{
+    if(generation===localGeneration){
+     refreshing=undefined
+     if(refreshAgain){refreshAgain=false;if(!disposed&&snapshot)void refresh()}
+    }
+   }
   })()
   return refreshing
  }
- let schedule:ReturnType<typeof setInterval>|undefined
  function resetConversation(){
   cancelParentRun()
   const previous=snapshot,previousConnection=connection
-  running?.controller.abort();snapshot=null;connection=undefined;attempted.clear();delegated.clear();yieldedBatches.length=0;continued.clear();parentContinuations.clear();settlingRuns.clear();nativeRun=undefined;localGeneration++;running=undefined;pumping=false;refreshing=undefined;starting=undefined;error=''
-  if(schedule){clearInterval(schedule);schedule=undefined}
+  running?.controller.abort();snapshot=null;connection=undefined;attempted.clear();blockedReported.clear();delegated.clear();yieldedBatches.length=0;continued.clear();parentContinuations.clear();settlingRuns.clear();nativeRun=undefined;localGeneration++;running=undefined;pumping=false;refreshing=undefined;refreshAgain=false;refreshFailingSince=0;refreshFailures=0;clearRefreshRetry();starting=undefined;error='';notice=''
+  stopScheduling()
   try{sessionStorage.removeItem('dyoffice-assistant-channel:'+options.fileId)}catch{/* Storage is optional. */}
   if(previous&&previousConnection)void request(base+'/channels/'+previous.conversationId+'/disconnect','POST',{connectionId:previousConnection.id,connectionEpoch:previousConnection.epoch}).catch(()=>{})
   notify()
  }
  const control:AssistantControl={allowedTools:[...ASSISTANT_READ_TOOLS],resetConversation,
  beginRun(instruction,continuationToken){
+  if(notice){notice="";notify()}
   if(disposed||nativeRun)return undefined
   let parent:ChannelTask|undefined
   if(continuationToken){
@@ -143,6 +217,7 @@ export function createAssistantChannelClient(options:{request:SettingsRequest;fi
    parentContinuations.delete(continuationToken)
    const current=snapshot?.tasks.find(task=>task.taskId===pending?.parent.taskId)
    if(!pending||pending.generation!==localGeneration||snapshot?.paused||current?.state!=='running'||current.claimId!==pending.parent.claimId)return undefined
+   if(!canResume(pending.parent)){void releaseUnstarted(pending.parent,localGeneration);return undefined}
    parent=pending.parent
   }
   const token=crypto.randomUUID()
@@ -159,19 +234,22 @@ export function createAssistantChannelClient(options:{request:SettingsRequest;fi
   return ()=>{if(executor===value){executor=undefined;running?.controller.abort()}}
  }}
  const skill:AgentSkill={id:'channel-delegation',systemPrompt:'Optional channel peers: use list_channel_agents and delegate_channel_task to delegate to an explicitly connected external peer. The task ID is an acknowledgement, not completion. Results and reverse Office reads are scoped to this document and have their own task cards. Never claim an acknowledged task succeeded. For data processing and analysis, pass explicit dataInputs sourceIds/resultIds discovered through Office data metadata tools; never include raw rows or credentials. The harness performs analysis. Do not wait synchronously for peer results.',tools:[
-  {name:'list_channel_agents',description:'List authorized channel peers and their durable task states.',inputSchema:{type:'object',properties:{},additionalProperties:false}},
-  {name:'delegate_channel_task',description:'Delegate to a connected external channel agent. Returns a durable task acknowledgement.',inputSchema:{type:'object',properties:{agentId:{type:'string'},instruction:{type:'string',maxLength:16000},dataInputs:{type:'object',properties:{sourceIds:{type:'array',items:{type:'string'},maxItems:32},resultIds:{type:'array',items:{type:'string'},maxItems:32}},required:['sourceIds','resultIds'],additionalProperties:false}},required:['agentId','instruction'],additionalProperties:false}},
+  {name:'list_channel_agents',description:'List authorized channel peers with their delegation agentId and durable task states.',inputSchema:{type:'object',properties:{},additionalProperties:false}},
+  {name:'delegate_channel_task',description:'Delegate to a connected external channel agent. Returns a durable task acknowledgement.',inputSchema:{type:'object',properties:{agentId:{type:'string',description:'Use the agentId returned by list_channel_agents.'},instruction:{type:'string',maxLength:16000},dataInputs:{type:'object',properties:{sourceIds:{type:'array',items:{type:'string'},maxItems:32},resultIds:{type:'array',items:{type:'string'},maxItems:32}},required:['sourceIds','resultIds'],additionalProperties:false}},required:['agentId','instruction'],additionalProperties:false}},
  ],async executeTool(call){
   try {
    if(!snapshot||disposed)throw Error('No active channel')
-   if(call.name==='list_channel_agents'&&!Object.keys(call.input).length)return {output:JSON.stringify({agents:snapshot.members.filter(member=>!member.revoked),tasks:snapshot.tasks.map(task=>({taskId:task.taskId,state:task.state,summary:task.summary}))}),summary:'Channel agents'}
+   if(call.name==='list_channel_agents'&&!Object.keys(call.input).length){
+    const agents=snapshot.members.filter(member=>!member.revoked).map(({membershipId,displayName,kind,online})=>({agentId:membershipId,displayName,kind,online}))
+    return {output:JSON.stringify({agents,tasks:snapshot.tasks.map(task=>({taskId:task.taskId,state:task.state,summary:task.summary}))}),summary:'Channel agents'}
+   }
    if(call.name!=='delegate_channel_task'||Object.keys(call.input).some(key=>!['agentId','instruction','dataInputs'].includes(key))||typeof call.input.agentId!=='string'||typeof call.input.instruction!=='string'||!call.input.instruction.trim()||call.input.instruction.length>16000||!snapshot.members.some(member=>member.membershipId===call.input.agentId&&!member.revoked))throw Error('Invalid channel task')
    const dataInputs=call.input.dataInputs===undefined?undefined:decodeChannelDataInputs(call.input.dataInputs)
    const taskGeneration=localGeneration,channelId=snapshot.conversationId,target=executor,run=nativeRun
    if(run){
     if(!connection)throw Error('No Office connection')
     run.channelId=channelId
-    run.pending??=run.parent?Promise.resolve(run.parent):request<ChannelTask>(base+'/channels/'+channelId+'/office-task','POST',{requestId:run.token,connectionId:connection.id,connectionEpoch:connection.epoch,instruction:run.instruction})
+    run.pending??=run.parent?Promise.resolve(run.parent):request<ChannelTask>(base+'/channels/'+channelId+'/office-task','POST',{requestId:run.token,connectionId:connection.id,connectionEpoch:connection.epoch,instruction:run.instruction,...(options.currentRunModel?{origin:{revision:options.continuationRevision?.()??null,modelId:options.currentRunModel(),callId:call.id}}:{})})
     run.parent=await run.pending
     if(disposed||taskGeneration!==localGeneration||nativeRun!==run||snapshot?.conversationId!==channelId||executor!==target)throw Error('Office run changed')
    }
@@ -186,7 +264,7 @@ export function createAssistantChannelClient(options:{request:SettingsRequest;fi
  }}
  return {
   control,skill,
-  snapshot:()=>snapshot,error:()=>error,
+  snapshot:()=>snapshot,error:()=>error||notice,connected:()=>!!connection,
   subscribe(listener:()=>void){listeners.add(listener);return ()=>{listeners.delete(listener)}},
   async start(){
    if(disposed)throw Error('Channel disposed')
@@ -196,9 +274,12 @@ export function createAssistantChannelClient(options:{request:SettingsRequest;fi
    starting=(async()=>{
    if(!snapshot){
     const key='dyoffice-assistant-channel:'+options.fileId
-    let conversationId:string|undefined
-    try{const stored=sessionStorage.getItem(key);if(stored&&/^[a-f0-9-]{36}$/.test(stored))conversationId=stored}catch{/* Storage is optional. */}
-    const created=await request<{conversationId:string;fileId:string;paused:boolean}>(base+'/channels','POST',{fileId:options.fileId,...(conversationId?{conversationId}:{})})
+    let conversationId=options.conversationId
+    try{const selected=new URLSearchParams(location.search).get('channel');if(!conversationId&&selected&&/^[a-f0-9-]{36}$/.test(selected))conversationId=selected}catch{/* Host may have no location. */}
+    try{const stored=sessionStorage.getItem(key);if(!conversationId&&stored&&/^[a-f0-9-]{36}$/.test(stored))conversationId=stored}catch{/* Storage is optional. */}
+    const created=options.conversationId
+     ?await request<ChannelSnapshot>(base+'/channels/'+encodeURIComponent(options.conversationId))
+     :await request<{conversationId:string;fileId:string;paused:boolean}>(base+'/channels','POST',{fileId:options.fileId,...(conversationId?{conversationId}:{})})
     if(disposed)throw Error('Channel disposed')
     if(startGeneration!==localGeneration)throw Error('Channel changed')
     if(created.fileId!==options.fileId||typeof created.conversationId!=='string')throw Error('Channel file changed')
@@ -212,22 +293,22 @@ export function createAssistantChannelClient(options:{request:SettingsRequest;fi
     throw Error(disposed?'Channel disposed':'Channel changed')
    }
    connection={id,epoch:reply.connectionEpoch}
-   // Local scheduling only: data/status refresh comes from the existing T17
-   // channel, not a second browser server-polling transport.
-   schedule??=setInterval(()=>void pump(),400)
    await refresh()
+   if(!disposed&&startGeneration===localGeneration&&snapshot&&options.csrfToken){
+    stopEvents=followChannelEvents('/api/v1/assistant/tasks/'+channelId+'/events?feed=channel',options.csrfToken,()=>snapshot?.sequence??0,()=>{void refresh()})
+   }
    })()
    try {await starting} finally {if(startGeneration===localGeneration)starting=undefined}
   },
   refresh,
-  observe(channels:readonly {conversationId:string;sequence:number}[]){if(snapshot&&channels.some(channel=>channel.conversationId===snapshot!.conversationId&&channel.sequence!==snapshot!.sequence))void refresh()},
+  observe(channels:readonly {conversationId:string;sequence:number}[]){if(snapshot&&channels.find(channel=>channel.conversationId===snapshot!.conversationId)?.sequence!==snapshot.sequence)void refresh()},
   async invite(){if(!snapshot)throw Error('No active channel');return request<{inviteToken:string;expiresAt:string}>(base+'/channels/'+snapshot.conversationId+'/invitations','POST',{})},
   async approve(id:string,approved:boolean){await request(base+'/channels/'+snapshot!.conversationId+'/applications/'+encodeURIComponent(id)+'/approve','POST',{approved});await refresh()},
   async remove(id:string){await request(base+'/channels/'+snapshot!.conversationId+'/members/'+encodeURIComponent(id)+'/revoke','POST',{});await refresh()},
   async pause(paused:boolean){await request(base+'/channels/'+snapshot!.conversationId+'/pause','POST',{paused});await refresh()},
-  async send(to:string,instruction:string){const receipt=await sendAction(to,{kind:'delegate',instruction});await refresh();return receipt},
+  async send(to:string,instruction:string){const receipt=await sendAction(to,{kind:'delegate',instruction}) as AgentReceipt;await refresh();return receipt},
   async cancel(taskId:string){await sendAction('office',{kind:'cancel',taskId});await refresh()},
-  dispose(){if(disposed)return;cancelParentRun();disposed=true;running?.controller.abort();if(schedule)clearInterval(schedule);
+  dispose(){if(disposed)return;cancelParentRun();disposed=true;clearRefreshRetry();running?.controller.abort();stopScheduling();
    if(snapshot&&connection)void request(base+'/channels/'+snapshot.conversationId+'/disconnect','POST',{connectionId:connection.id,connectionEpoch:connection.epoch}).catch(()=>{})
    listeners.clear()},
  }

@@ -28,7 +28,7 @@ for(const mode of ['admin','password-action'] as const)test(`${mode} preserves l
   expect(document.body.textContent).toContain('个人用户')
  }else{
   expect(names).toEqual(['token','password','confirm'])
-  expect(document.querySelector('[aria-label="用途"]')?.getAttribute('role')).toBe('combobox')
+  expect(document.querySelector('[aria-label="用途"]')).toBeNull()
   expect(form.querySelector<HTMLInputElement>('[name=password]')?.type).toBe('password')
   expect(form.querySelector<HTMLInputElement>('[name=confirm]')?.autocomplete).toBe('new-password')
   const close=[...document.querySelectorAll('button')].find(button=>button.textContent==='返回登录')!

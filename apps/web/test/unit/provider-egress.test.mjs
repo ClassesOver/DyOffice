@@ -34,6 +34,16 @@ test('pins lookup and authenticated TLS peer before exact hashed body is sent',a
  const lookup=await new Promise((resolve,reject)=>n.options.lookup('provider.example',{},(e,a,f)=>e?reject(e):resolve([a,f])))
  assert.deepEqual(lookup,['8.8.8.8',4]);assert.equal(tr.activeCount(),0)
 })
+test('accepts multimodal-sized requests above 1 MiB but rejects requests over 10 MiB',async t=>{
+ const n=network(t),large=Buffer.from(JSON.stringify({model:'synthetic',stream:true,padding:'x'.repeat(1024*1024)}))
+ const largeScope={...scope(),requestDigest:createHash('sha256').update(large).digest('hex')}
+ await createPinnedProviderTransport({profiles:[profile]}).send(largeScope,large,()=>{})
+ assert.deepEqual(n.written,large)
+ const oversized=Buffer.alloc(10*1024*1024+1),oversizedScope={...scope(),requestDigest:createHash('sha256').update(oversized).digest('hex')}
+ const blocked=network(t)
+ await assert.rejects(createPinnedProviderTransport({profiles:[profile]}).send(oversizedScope,oversized,()=>{}),{message:'Provider transport unavailable'})
+ assert.equal(blocked.requests,0)
+})
 test('pins public IPv4 addresses in 172/8 and asks the resolver only for IPv4',async t=>{
  const address='172.67.156.25',p={...profile,allowedIpv4:[address]}
  const n=network(t,{peer:address})
@@ -159,4 +169,15 @@ test('writer refuses a replaced or closed socket after authorization began',asyn
  const n=network(t),tr=createPinnedProviderTransport({profiles:[profile]})
  await assert.rejects(tr.sendAuthorized(scope(),body,async write=>{n.sockets[0].destroyed=true;await write(Buffer.from('synthetic-key'))},()=>{}))
  assert.equal(n.written,undefined)
+})
+
+test('publicIpv4 rejects every IPv4 special-purpose range but not ordinary public neighbours',async()=>{
+  const {publicIpv4}=await import('../../server/src/modules/providers/pinned-egress.ts')
+  const reserved=['0.0.0.1','10.1.2.3','100.64.0.1','100.100.100.200','100.127.255.255','127.0.0.1','169.254.0.1','169.254.169.254','172.16.0.1','172.31.255.254',
+    '192.0.0.8','192.0.2.1','192.31.196.1','192.52.193.1','192.88.99.1','192.168.1.1','192.175.48.1','198.18.0.1','198.19.255.255','198.51.100.7','203.0.113.1',
+    '224.0.0.1','239.255.255.250','240.0.0.1','255.255.255.255','::ffff:8.8.8.8','1.2.3','01.2.3.4']
+  for(const address of reserved)assert.equal(publicIpv4(address),false,address)
+  // Same first octet as a reserved block, but globally routable.
+  const routable=['8.8.8.8','100.1.1.1','100.128.0.1','169.1.2.3','172.15.255.255','172.32.0.1','172.217.112.4','192.30.255.112','192.169.0.1','198.17.255.255','198.20.0.1','198.41.0.4','203.0.114.1','203.208.40.1','223.255.255.255']
+  for(const address of routable)assert.equal(publicIpv4(address),true,address)
 })

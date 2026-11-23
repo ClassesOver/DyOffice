@@ -32,8 +32,12 @@ test('DOCX opens a native editor tab',async()=>{
 for(const capability of ['unsupported','readonly',undefined])test(`noneditable XLSX opens a readonly preview tab (${capability})`,async()=>{
  const f=fixture({capability,missingCapability:capability===undefined});await f.api.open('file');assert.equal(f.navigated.length,0);assert.equal(f.downloads.length,0);assert.equal(f.opened[0].src,'/api/v1/files/file/content?revision=rev')
 })
-for(const format of ['pptx','pdf'])test(`${format} opens readonly preview in-app`,async()=>{
- const f=fixture({format});await f.api.open('file');assert.equal(f.navigated.length,0);assert.equal(f.downloads.length,0);assert.equal(f.opened[0].src,'/api/v1/files/file/content?revision=rev')
+test('noneditable PPTX opens readonly preview in-app',async()=>{
+ const f=fixture({format:'pptx'});await f.api.open('file');assert.equal(f.navigated.length,0);assert.equal(f.downloads.length,0);assert.equal(f.opened[0].src,'/api/v1/files/file/content?revision=rev')
+})
+test('PDF opening reports unavailable editing without recording an open or starting a download',async()=>{
+ const f=fixture({format:'pdf'});await assert.rejects(f.api.open('file'),/当前 PDF 编辑器未启用，请下载原件/)
+ assert.deepEqual(f.calls,[['/api/v1/files/file',undefined]]);assert.equal(f.opened.length,0);assert.equal(f.navigated.length,0);assert.equal(f.downloads.length,0)
 })
 for(const fail of ['read','activity'])test(`failed ${fail} authorization cannot navigate or download`,async()=>{
  const f=fixture({fail});await assert.rejects(f.api.open('file'),/Forbidden/);assert.equal(f.navigated.length,0);assert.equal(f.downloads.length,0)

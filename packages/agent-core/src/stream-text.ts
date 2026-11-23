@@ -22,6 +22,8 @@ export interface StreamTextOptions {
   extract(raw: string): { text: string; complete?: boolean }
   /** cumulative extracted text; throttle on the caller's side */
   onProgress?(text: string): void
+  /** Model text or reasoning arrived; suitable for a silence watchdog. */
+  onActivity?(): void
 }
 
 export type StreamTextOutcome =
@@ -71,6 +73,10 @@ export function streamText(opts: StreamTextOptions): Promise<StreamTextOutcome> 
       cancelRequested = true
       handle?.cancel()
     }
+    const activity = () => {
+      if (settled) return
+      try { opts.onActivity?.() } catch { /* optional observer */ }
+    }
     onAbort = () => {
       if (settled) return
       finish(partialOrEmpty('stopped'))
@@ -85,6 +91,7 @@ export function streamText(opts: StreamTextOptions): Promise<StreamTextOutcome> 
       {
         onDelta: (delta) => {
           if (settled) return
+          activity()
           raw += delta
           if (raw.length > maxChars) {
             finish(partialOrEmpty('max_tokens', `output exceeded ${maxChars} chars`))
@@ -97,6 +104,7 @@ export function streamText(opts: StreamTextOptions): Promise<StreamTextOutcome> 
             // Ignore progress listener failures so the stream can still settle.
           }
         },
+        onReasoning: activity,
         onToolCall: () => undefined,
         onStopReason: (reason) => {
           stopReason = reason

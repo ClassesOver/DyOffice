@@ -9,12 +9,13 @@ import {createLeaseService} from '../../server/src/modules/leases/service.ts'
 import {createRevisionService} from '../../server/src/modules/revisions/service.ts'
 import {createSlidesService} from '../../server/src/modules/slides/service.ts'
 import {createSlidesSaveService} from '../../server/src/modules/slides/save.ts'
+import {hashProtectionPassword} from '../../../../packages/docx-engine/src/protection.ts'
 const bytes=()=>readFile(new URL('../fixtures/slides/acceptance.pptx',import.meta.url))
 const host={openSession(input,_signal){return openIsolatedPptxSession({fileId:input.fileId,revision:input.revision,bytes:input.bytes},{timeoutMs:60000,unsafeTestOnly:true})}}
 const ops=(el,text)=>[{op:'setText',target:{slide:0,el},paragraphs:[{runs:[{text}]}]}]
 
-async function fixture(t){
- const f=await fileFixture(t),file=await importFile(f,f.alice.token,await bytes(),'acceptance.pptx')
+async function fixture(t,input){
+ const f=await fileFixture(t),file=await importFile(f,f.alice.token,input??await bytes(),'acceptance.pptx')
  const leases=createLeaseService({transactions:f.transactions})
  const revisions=createRevisionService({transactions:f.transactions,objects:f.objects,files:f.files})
  const sessions=createSlidesService({files:f.files,leases,revisions,host})
@@ -23,6 +24,27 @@ async function fixture(t){
  const editorId=randomUUID(),lease=await leases.acquireLease(f.alice.token,file.file.fileId,{editorId})
  return {...f,file,leases,revisions,sessions,saves,editorId,input:{baseRevision:file.file.revision,leaseEpoch:lease.leaseEpoch,editorId}}
 }
+
+test('a PPTX with a modification verifier renders and retains its original while edit and save are refused',async t=>{
+ const input=await JSZip.loadAsync(await bytes()),part='ppt/presentation.xml'
+ const xml=await input.file(part).async('string')
+ const {hash,salt,spinCount}=await hashProtectionPassword('Synthetic PPTX modify password',1000)
+ const marker=`<p:modifyVerifier algorithmName="SHA-512" hashValue="${hash}" saltValue="${salt}" spinCount="${spinCount}"/>`
+ assert.match(xml,/<\/p:presentation>/)
+ input.file(part,xml.replace('</p:presentation>',marker+'</p:presentation>'))
+ const original=await input.generateAsync({type:'nodebuffer'})
+ const f=await fixture(t,original),fileId=f.file.file.fileId
+ const request={editorId:f.editorId,leaseEpoch:f.input.leaseEpoch,revision:f.input.baseRevision,generation:0}
+ const opened=await f.sessions.open(f.alice.token,fileId,request)
+ assert.equal(opened.writeProtected,true)
+ assert.equal(opened.slides.length,2)
+ await assert.rejects(()=>f.sessions.apply(f.alice.token,fileId,{...request,ops:ops('e_904989a1','blocked edit')}),{statusCode:403})
+ const reserved=(await f.files.usage(f.alice.token)).reservedBytes
+ await assert.rejects(()=>f.saves.prepare(f.alice.token,fileId,{...f.input,request:{revision:f.input.baseRevision,generation:0}}),{statusCode:403})
+ assert.equal((await f.files.usage(f.alice.token)).reservedBytes,reserved)
+ assert.equal((await f.files.openFile(f.alice.token,fileId)).file.revision,f.input.baseRevision)
+ assert.deepEqual(await f.files.readFile(f.alice.token,fileId,f.input.baseRevision),original)
+})
 
 test('a session export stages a T06 upload and commits exactly once, preserving unrelated parts',async t=>{
  const f=await fixture(t),fileId=f.file.file.fileId
@@ -76,4 +98,75 @@ test('lease takeover while the export runs fences the output before staging',asy
  await assert.rejects(pending,{statusCode:409})
  assert.equal((await f.files.usage(f.alice.token)).reservedBytes,0)
  assert.equal((await f.files.openFile(f.alice.token,fileId)).file.revision,f.input.baseRevision)
+})
+
+test('analysis native table and text survive isolated slide apply and an explicit PostgreSQL revision commit',async t=>{
+ const {analysisSlideOperations}=await import('../../../slides/src/renderer/analysis-insert.ts')
+ const f=await fixture(t),fileId=f.file.file.fileId
+ await f.sessions.open(f.alice.token,fileId,{editorId:f.editorId,leaseEpoch:f.input.leaseEpoch,revision:f.input.baseRevision,generation:0})
+ const transaction=await f.sessions.apply(f.alice.token,fileId,{editorId:f.editorId,leaseEpoch:f.input.leaseEpoch,revision:f.input.baseRevision,generation:0,ops:[...analysisSlideOperations({kind:'text',text:'<b>literal</b> =1+1'},0,960,540),...analysisSlideOperations({kind:'table',rows:[['=SUM(A1)','<script>literal</script>'],['001','42']]},0,960,540)]})
+ assert.equal(transaction.transaction.applied,true)
+ assert.equal((await f.files.openFile(f.alice.token,fileId)).file.revision,f.input.baseRevision,'insertion is not a commit')
+ const draft=await f.saves.prepare(f.alice.token,fileId,{...f.input,request:{revision:f.input.baseRevision,generation:transaction.generation}})
+ const saved=await f.revisions.commitRevision(f.alice.token,{fileId,uploadId:draft.uploadId,baseRevision:f.input.baseRevision,leaseEpoch:f.input.leaseEpoch,idempotencyKey:randomUUID()})
+ assert.notEqual(saved.revision,f.input.baseRevision)
+ const archive=await JSZip.loadAsync(await f.files.readFile(f.alice.token,fileId,saved.revision)),xml=await archive.file('ppt/slides/slide1.xml').async('string')
+ assert.match(xml,/<a:tbl>/);assert.match(xml,/=SUM\(A1\)/);assert.match(xml,/&lt;script&gt;literal&lt;\/script&gt;/);assert.match(xml,/&lt;b&gt;literal&lt;\/b&gt; =1\+1/)
+})
+
+test('Ribbon size op survives native export, PostgreSQL commit and a fresh isolated reopen',async t=>{
+ const f=await fixture(t),fileId=f.file.file.fileId
+ const opened=await f.sessions.open(f.alice.token,fileId,{...f.input,revision:f.input.baseRevision,generation:0})
+ const changed=await f.sessions.apply(f.alice.token,fileId,{...f.input,revision:f.input.baseRevision,generation:0,ops:[{op:'setSlideSize',cx:9144000,cy:6858000}]})
+ assert.deepEqual(changed.size,{cx:9144000,cy:6858000})
+ const draft=await f.saves.prepare(f.alice.token,fileId,{...f.input,request:{revision:f.input.baseRevision,generation:changed.generation}})
+ const saved=await f.revisions.commitRevision(f.alice.token,{fileId,uploadId:draft.uploadId,baseRevision:f.input.baseRevision,leaseEpoch:f.input.leaseEpoch,idempotencyKey:randomUUID()})
+ const output=await f.files.readFile(f.alice.token,fileId,saved.revision)
+ const archive=await JSZip.loadAsync(output)
+ assert.match(await archive.file('ppt/presentation.xml').async('string'),/<p:sldSz[^>]*cx="9144000"[^>]*cy="6858000"/)
+ assert.deepEqual(await f.files.readFile(f.alice.token,fileId,f.input.baseRevision),await bytes())
+ f.sessions.closeAll()
+ const fresh=await f.sessions.open(f.alice.token,fileId,{...f.input,revision:saved.revision,generation:0})
+ assert.deepEqual(fresh.size,{cx:9144000,cy:6858000})
+ assert.equal(fresh.slides.length,opened.slides.length)
+ assert.ok(fresh.slides.every(slide=>Math.abs(slide.widthPx/slide.heightPx-4/3)<0.001))
+})
+
+test('links and animations preserve both entries across a real PostgreSQL save and fresh native reopen',async t=>{
+ const f=await fixture(t),fileId=f.file.file.fileId,request={...f.input,revision:f.input.baseRevision,generation:0}
+ await f.sessions.open(f.alice.token,fileId,request)
+ const items=[{sourceId:'e_904989a1',effect:'fade',trigger:'onClick',durationMs:700,delayMs:120},{sourceId:'e_904989a1',effect:'wipe',trigger:'afterPrev',durationMs:900,delayMs:40,direction:'top'}],link={kind:'url',url:'https://example.com/presentation'}
+ const applied=await f.sessions.apply(f.alice.token,fileId,{...request,ops:[{op:'setLink',target:{slide:0,el:'e_904989a1'},link},{op:'setAnimations',target:{slide:0},items}]})
+ const current={...request,generation:applied.generation,index:0}
+ assert.equal((await f.sessions.animations(f.alice.token,fileId,current)).length,2)
+ await assert.rejects(()=>f.sessions.animations(f.bob.token,fileId,current),{statusCode:404})
+ await assert.rejects(()=>f.sessions.links(f.alice.token,fileId,{...current,generation:0}),{statusCode:409})
+ const draft=await f.saves.prepare(f.alice.token,fileId,{...f.input,request:{revision:request.revision,generation:applied.generation}})
+ const saved=await f.revisions.commitRevision(f.alice.token,{fileId,uploadId:draft.uploadId,baseRevision:f.input.baseRevision,leaseEpoch:f.input.leaseEpoch,idempotencyKey:randomUUID()})
+ f.sessions.closeAll()
+ const reopened={...request,revision:saved.revision,generation:0,index:0}
+ await f.sessions.open(f.alice.token,fileId,reopened)
+ const actual=await f.sessions.animations(f.alice.token,fileId,reopened)
+ assert.deepEqual(actual.map(({sourceId,targetName,...item})=>item),items.map(({sourceId,...item})=>item))
+ assert.ok((await f.sessions.links(f.alice.token,fileId,reopened)).some(item=>item.target.url===link.url))
+ assert.deepEqual(await f.files.readFile(f.alice.token,fileId,f.input.baseRevision),await bytes())
+})
+
+
+test('chart read data survives PostgreSQL commit and a fresh native session',async t=>{
+ const f=await fixture(t),id=f.file.file.fileId,request={revision:f.input.baseRevision,generation:0,editorId:f.editorId,leaseEpoch:f.input.leaseEpoch}
+ await f.sessions.open(f.alice.token,id,request)
+ const added=await f.sessions.apply(f.alice.token,id,{...request,ops:[{op:'addChart',target:{slide:0},kind:'bar',title:'Before',categories:['Q1'],series:[{name:'Sales',values:[8]}],offset:{x:95250,y:95250,cx:3000000,cy:2000000}}]})
+ const chart=(await f.sessions.slides(f.alice.token,id,{...request,generation:added.generation})).slides[0].nodes.find(node=>node.type==='chart')
+ const edit=await f.sessions.editChart(f.alice.token,id,{...request,generation:added.generation,slide:0,sourceId:chart.sourceId,patch:{title:'After',series:[{name:'Sales',values:[42]}],colorScheme:'colorful2'}})
+ const current={...request,generation:edit.generation,index:0,sourceId:edit.sourceId},expected=await f.sessions.chartData(f.alice.token,id,current)
+ assert.equal(expected.title,'After');assert.deepEqual(expected.series,[{name:'Sales',values:[42]}])
+ const schemes=await f.sessions.chartColorSchemes(f.alice.token,id,current)
+ const draft=await f.saves.prepare(f.alice.token,id,{...f.input,request:{revision:request.revision,generation:edit.generation}})
+ const saved=await f.revisions.commitRevision(f.alice.token,{fileId:id,uploadId:draft.uploadId,baseRevision:f.input.baseRevision,leaseEpoch:f.input.leaseEpoch,idempotencyKey:randomUUID()})
+ f.sessions.closeAll();const reopened={...request,revision:saved.revision,generation:0};await f.sessions.open(f.alice.token,id,reopened)
+ const savedChart=(await f.sessions.slides(f.alice.token,id,reopened)).slides[0].nodes.find(node=>node.type==='chart')
+ assert.deepEqual(await f.sessions.chartData(f.alice.token,id,{...reopened,index:0,sourceId:savedChart.sourceId}),expected)
+ assert.deepEqual(await f.sessions.chartColorSchemes(f.alice.token,id,reopened),schemes)
+ assert.deepEqual(await f.files.readFile(f.alice.token,id,f.input.baseRevision),await bytes())
 })

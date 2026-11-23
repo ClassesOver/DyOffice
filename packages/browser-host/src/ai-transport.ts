@@ -1,28 +1,46 @@
-import type { AgentTransport, AgentStreamRequest, AgentStreamCallbacks, AgentToolCall, AgentTokenUsage } from '@genoffice/agent-core'
+import type {CodingProgress} from '../../agent-core/src/coding-skill.ts'
+import type {HarnessCheckpoint} from '../../agent-core/src/loop.ts'
+import type { AgentStreamRequest, AgentStreamCallbacks, AgentToolCall, AgentTokenUsage } from '@genoffice/agent-core'
+import {MODEL_CONNECTION_FAILURES,type ModelConnectionFailure} from '../../web-contracts/src/settings.ts'
+import {AI_TURN_TIMED_OUT} from '../../web-contracts/src/assistant.ts'
 
 const MAX_SSE_EVENT_BYTES = 256 * 1024
+const OFFICE_TURNS_ENDPOINT = '/api/v1/ai/turns'
+const modelTimeoutZh = '等待模型回复超时。请重试、缩短请求，或切换模型。'
+const isChinese = () => globalThis.document?.documentElement.lang.toLowerCase().startsWith('zh')
+const providerFailureZh: Record<ModelConnectionFailure,string> = {
+  PROVIDER_AUTH_REJECTED: '模型供应商拒绝了访问，请联系管理员检查模型配置。',
+  PROVIDER_RATE_LIMITED: '模型供应商限流或额度不足，请稍后重试或切换模型。',
+  PROVIDER_TEMPORARILY_UNAVAILABLE: '模型供应商服务暂时不可用，请稍后重试或切换模型。',
+}
 
 export interface SseTransportOptions {
   /** Origin-relative path only: no query, fragment, controls or redirects. */
   endpoint?: string
   /** Server configuration identifier only, never a provider URL or secret. */
   modelId?: string
+  format?: 'docx' | 'xlsx' | 'pptx' | 'pdf'
+  documentId?:string
+  continuation?:{revision:string;checkpoint:HarnessCheckpoint}
+  harnessResume?:{taskId:string;documentId:string;revision:string}
   /** Session CSRF proof from the same-origin authenticated session. */
   getCsrfToken?: () => Promise<string>
   /** Absolute turn deadline, including headers and body. */
   timeoutMs?: number
+  onProgress?:(event:CodingProgress)=>void
+  onConfirmedFailure?:()=>void
   fetchImpl?: typeof fetch
   createTurnId?: () => string
 }
 
 /** Shared wire encoding keeps client-side admission aligned with the sent envelope. */
-export function serializeTurnRequest(turnId:string,modelId:string|undefined,request:AgentStreamRequest){
-  return JSON.stringify({turnId,...(modelId===undefined?{}:{modelId}),request:{system:request.system,messages:request.messages,tools:request.tools}})
+export function serializeTurnRequest(turnId:string,modelId:string|undefined,request:AgentStreamRequest,format?:SseTransportOptions['format'],documentId?:string,continuation?:SseTransportOptions['continuation'],harnessResume?:SseTransportOptions['harnessResume']){
+  return JSON.stringify({turnId,...(modelId===undefined?{}:{modelId}),...(documentId?{documentId}:{}),...(continuation?{continuation}:{}),...(harnessResume?{harnessResume}:{}),request:{...(format?{format}:{}),system:request.system,messages:request.messages,tools:request.tools}})
 }
 
 /** Browser-side adapter for server-mediated model streams; never holds provider secrets. */
-export function createSseAgentTransport(options: SseTransportOptions = {}): AgentTransport {
-  const endpoint = options.endpoint ?? '/api/v1/ai/turns'
+export function createSseAgentTransport(options: SseTransportOptions = {}) {
+  const endpoint = options.endpoint ?? OFFICE_TURNS_ENDPOINT
   if (!endpoint.startsWith('/') || endpoint.startsWith('//') || endpoint.includes('\\') || /[\u0000-\u0020\u007f?#]/.test(endpoint) ||
       new URL(endpoint, 'https://dyoffice.invalid').origin !== 'https://dyoffice.invalid') {
     throw new Error('AI stream endpoint must be an origin-relative path')
@@ -43,6 +61,7 @@ export function createSseAgentTransport(options: SseTransportOptions = {}): Agen
       let cancellationSent = false
       let csrfProof: string | undefined
       let dispatched = false
+      let accepted = false
       const requestCancellation = () => {
         if (cancellationSent || !dispatched) return
         cancellationSent = true
@@ -56,9 +75,10 @@ export function createSseAgentTransport(options: SseTransportOptions = {}): Agen
         if (finished) return
         finished = true
         clearTimeout(deadline)
+        const disposition = options.harnessResume && !accepted ? 'harness-admission-unconfirmed' : undefined
         // Observer failures cannot suppress terminal delivery or stream cleanup.
-        try { if (error && !cancelled) callbacks.onError(error) } catch { /* UI observer */ }
-        try { callbacks.onDone() } catch { /* UI observer */ }
+        try { if (error && !cancelled) callbacks.onError(error, disposition) } catch { /* UI observer */ }
+        try { callbacks.onDone(disposition) } catch { /* UI observer */ }
       }
       const emit = (event: string, raw: string) => {
         if (finished) return
@@ -66,6 +86,7 @@ export function createSseAgentTransport(options: SseTransportOptions = {}): Agen
         const value = raw.length ? JSON.parse(raw) as unknown : {}
         const data = value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {}
         if (event === 'delta' && typeof data.text === 'string') callbacks.onDelta(data.text)
+        else if(event==='progress' && (data.kind==='status'||data.kind==='output') && typeof data.text==='string') options.onProgress?.({kind:data.kind,text:data.text})
         else if (event === 'reasoning' && typeof data.text === 'string') callbacks.onReasoning?.(data.text)
         else if (event === 'tool_call') {
           if (typeof data.id !== 'string' || typeof data.name !== 'string' || !data.input || typeof data.input !== 'object' || Array.isArray(data.input)) throw new Error('Invalid complete tool call')
@@ -81,7 +102,14 @@ export function createSseAgentTransport(options: SseTransportOptions = {}): Agen
           callbacks.onUsage?.(usage)
         }
         else if (event === 'stop_reason' && typeof data.reason === 'string') callbacks.onStopReason?.(data.reason)
-        else if (event === 'error') finish(typeof data.message === 'string' ? data.message : 'AI stream failed')
+        else if (event === 'error') {
+          if(data.outcome==='failed')try{options.onConfirmedFailure?.()}catch{/* UI observer */}
+          const reason=MODEL_CONNECTION_FAILURES.find(code=>code===data.reason)
+          const localized = isChinese()
+            ? data.reason === AI_TURN_TIMED_OUT ? modelTimeoutZh : reason && providerFailureZh[reason]
+            : undefined
+          finish(localized ?? (typeof data.message === 'string' && data.message.trim() ? data.message : 'AI stream failed'))
+        }
         else if (event === 'done') finish()
       }
       deadline = setTimeout(() => {
@@ -89,7 +117,7 @@ export function createSseAgentTransport(options: SseTransportOptions = {}): Agen
         controller.abort()
         void reader?.cancel().catch(() => {})
         requestCancellation()
-        finish('AI stream timed out')
+        finish(endpoint === OFFICE_TURNS_ENDPOINT && isChinese() ? modelTimeoutZh : 'AI stream timed out')
       }, timeoutMs)
       void (async () => {
         try {
@@ -103,11 +131,12 @@ export function createSseAgentTransport(options: SseTransportOptions = {}): Agen
             method: 'POST',
             credentials: 'same-origin', mode: 'same-origin', referrerPolicy: 'same-origin', redirect: 'error',
             headers: { Accept: 'text/event-stream', 'Content-Type': 'application/json', ...(csrfProof ? { 'x-csrf-token': csrfProof } : {}) },
-            body: serializeTurnRequest(turnId, options.modelId, request),
+            body: serializeTurnRequest(turnId, options.modelId, request, options.format, options.documentId,options.continuation,options.harnessResume),
             signal: controller.signal,
           })
           if (!response.ok) throw new Error('AI stream HTTP ' + response.status)
           if (!response.headers.get('content-type')?.toLowerCase().includes('text/event-stream') || !response.body) throw new Error('AI stream response is not SSE')
+          accepted = true
           reader = response.body.getReader()
           const decoder = new TextDecoder()
           let pending = ''
@@ -149,17 +178,16 @@ export function createSseAgentTransport(options: SseTransportOptions = {}): Agen
           if (reader) await reader.cancel().catch(() => {})
         }
       })()
-      return {
-        cancel() {
+      function stop(remote:boolean) {
           if (finished) return
           cancelled = true
           controller.abort()
           finish()
           // Aborting the response alone does not guarantee the server stopped the model.
           void reader?.cancel().catch(() => {})
-          requestCancellation()
-        },
+          if(remote)requestCancellation()
       }
+      return {cancel:()=>stop(true),detach:()=>stop(false)}
     },
   }
 }

@@ -12,6 +12,7 @@ export const ko = {
   aiQcPageOk: '{n}페이지: 레이아웃 정상',
   aiQcPageFixed: '{n}페이지: {summary}',
   aiQcPageFixedDefault: '레이아웃 문제를 수정했습니다',
+  aiQcPageRollbackFailed: "{n}페이지: 자동 수정 후 문제가 늘었으며 복원을 확인하지 못했습니다. 페이지를 확인하거나 변경을 취소하세요.",
   aiQcPageReverted: '{n}페이지: 자동 수정이 개선되지 않아 되돌렸습니다',
   aiQcPageFailed: '{n}페이지: 검사 실패({error})',
   aiQcPageSkipped: '{n}페이지: 자동 레이아웃 검사 건너뜀',

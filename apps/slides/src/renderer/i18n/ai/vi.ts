@@ -12,6 +12,7 @@ export const vi = {
   aiQcPageOk: 'Trang {n}: bố cục ổn',
   aiQcPageFixed: 'Trang {n}: {summary}',
   aiQcPageFixedDefault: 'đã khắc phục lỗi bố cục',
+  aiQcPageRollbackFailed: "Trang {n}: sửa tự động làm bố cục xấu hơn; chưa xác nhận khôi phục. Hãy kiểm tra trang hoặc hoàn tác.",
   aiQcPageReverted: 'Trang {n}: tự động khắc phục không đạt hiệu quả — đã hoàn tác',
   aiQcPageFailed: 'Trang {n}: kiểm tra thất bại ({error})',
   aiQcPageSkipped: 'Trang {n}: đã bỏ qua kiểm tra bố cục tự động',

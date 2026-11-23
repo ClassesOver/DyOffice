@@ -7,9 +7,9 @@
 |层级|当前配置|状态/缺口|
 |---|---|---|
 |npm|`NPM_REGISTRY` 默认 `https://repo.huaweicloud.com/repository/npm/`，可显式配置 HTTPS 镜像|锁文件 1024 个远端包均有 SHA-512；只改构建副本 URL，不改版本或 integrity。保留 `npm ci --ignore-scripts`。没有完整下载或镜像构建证据。|
-|基础镜像|`NODE_IMAGE` / `POSTGRES_IMAGE` 由部署者提供已同步 SWR 地址|没有已验证的公共镜像或 digest。必须记录源镜像、平台、目标 SWR 的实际 `@sha256:…`，不得用伪造 digest 或浮动 tag 宣称可复现。|
+|基础镜像|`NODE_IMAGE` / `RUST_IMAGE` / `POSTGRES_IMAGE` 由部署者提供已同步 SWR 地址|没有已验证的公共镜像或 digest。必须记录源镜像、平台、目标 SWR 的实际 `@sha256:…`，不得用伪造 digest 或浮动 tag 宣称可复现。|
 |APT|已有 `host/ubuntu-noble.sources.example` 保留 Ubuntu 官方签名 keyring|只是旧宿主配置示例，当前 Node bookworm-slim Dockerfile 不运行 APT；不能把 Ubuntu noble 源应用到 Debian bookworm。尚无 Ubuntu 容器依赖安装阶段。|
-|Rust/Cargo|旧模板留空/REPLACE，保留 Cargo.lock|没有经验证的华为 rustup 工具链、Cargo index 和 crate tarball 完整镜像，当前 Dockerfile 也不编译 Rust。不能只配置 index 就称为全华为。|
+|Rust/Cargo|旧模板留空/REPLACE，保留 Cargo.lock|没有经验证的华为 rustup 工具链、Cargo index 和 crate tarball 完整镜像，Dockerfile 使用 Rust 1.93.0 单独编译 WASI runner。不能只配置 index 就称为全华为。|
 |原生业务|Dockerfile 调用现有 `build:saas`：Web/PDF 页面、DOCX/XLSX/PPTX 静态资源及 XLSX gateway JavaScript bundle|这些构建产物不等于原生业务运行时。缺少正式 Ubuntu 容器内 zbus/systemd 业务运行时及真实集成验收；不启用 production 或 unsupported 格式。|
 
 ## npm 拒绝式校验
@@ -48,4 +48,4 @@ Dockerfile 复用根 `build:saas` 固定脚本顺序，不单独猜测编辑器�
 
 构建上下文仍必须是仓库根；`COPY . .` 目标为 `/app`。运行时保留 `tsx` 所需 dev dependencies，继续 `npm ci --ignore-scripts --include=dev` 与原锁完整性校验，默认 npm 华为源未变。最终 `USER node` 与对象目录所有权配置不变；本切片不添加 root worker、privileged、Docker socket、XLSX/PPTX capability 或 production 开关。
 
-Node/PG 基础镜像仍由操作者在自己的 SWR 中固定真实 digest 与平台，当前配置没有自动验证其镜像内容/架构。Ubuntu noble APT 示例不得用于 Node bookworm 镜像；Rust/Cargo 镜像仍未验证，不在这次静态资源构建范围。即使 `build:saas` 成功，也不能证明 Rust binary、systemd/zbus、隔离 rootfs、Redis/S3/数据库、模型服务或四格式保存运行链已包含且可用。
+Node/PG 基础镜像仍由操作者在自己的 SWR 中固定真实 digest 与平台，当前配置没有自动验证其镜像内容/架构。Ubuntu noble APT 示例不得用于 Node bookworm 镜像；Rust/Cargo 镜像仍未验证，构建 WASI runner 时需显式满足目标组件与锁文件的下载或缓存要求。即使 `build:saas` 成功，也不能证明 Rust binary、systemd/zbus、隔离 rootfs、Redis/S3/数据库、模型服务或四格式保存运行链已包含且可用。

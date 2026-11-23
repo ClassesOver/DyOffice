@@ -16,6 +16,14 @@ test('revalidates before dispatch and before every output; never sends request o
  await assert.rejects(()=>service.run({...input,request:{...request,apiKey:'secret'}},()=>{}),/Invalid/)
  assert.equal(dispatch,1)
 })
+test('preserves the selected Office format and accepts requests above one MiB',async()=>{
+ let dispatched
+ const service=setup({stream:async function*(permit,r){dispatched=r}})
+ const format='xlsx',message='x'.repeat(1024*1024+1)
+ await service.run({...input,request:{...request,format,messages:[{role:'user',text:message}]}},()=>{})
+ assert.equal(dispatched.format,format)
+ assert.equal(dispatched.messages[0].text.length,message.length)
+})
 test('disabled configuration or revoked session never reaches provider',async()=>{
  let dispatch=0
  const service=setup({revalidate:async()=>{throw new Error('private disabled detail')},stream:async function*(){dispatch++}})
@@ -43,6 +51,33 @@ test('absolute deadline includes stalled authorization and retains capacity for 
  await assert.rejects(()=>service.run(input,()=>{}),/AI turn timed out/)
  assert.equal(service.activeCount(),1)
  await assert.rejects(()=>service.run({...input,turnId:'other'},()=>{}),/capacity/)
+})
+test('uses the selected bounded timeout for both turn cancellation and provider dispatch',async t=>{
+ t.mock.timers.enable({apis:['setTimeout']})
+ const start=new Map(),signals=new Map(),events=[]
+ const service=createProviderTurns({identity:async()=>owner,authorize:async()=>({identity:owner,revision:'1'}),revalidate:async()=>{},async *stream(_permit,_request,signal,{turnId,timeoutMs}){
+  signals.set(turnId,{signal,timeoutMs})
+  let release
+  const waiting=new Promise(resolve=>{release=resolve})
+  signal.addEventListener('abort',release,{once:true})
+  start.get(turnId)(release)
+  await waiting
+  if(!signal.aborted)yield {type:'delta',text:'Rendered slide'}
+ }},{timeoutMs:r=>r.format==='pptx'&&!r.tools.length?90:30})
+ const pending=id=>new Promise(resolve=>start.set(id,resolve))
+ const ordinaryReady=pending('ordinary'),slideReady=pending('slide')
+ const ordinary=service.run({...input,turnId:'ordinary'},()=>{})
+ const ordinaryTimeout=assert.rejects(ordinary,/AI turn timed out/)
+ const slide=service.run({...input,turnId:'slide',request:{...request,format:'pptx'}},event=>events.push(event))
+ const [,finishSlide]=await Promise.all([ordinaryReady,slideReady])
+ t.mock.timers.tick(30)
+ await ordinaryTimeout
+ assert.equal(signals.get('ordinary').timeoutMs,30)
+ assert.equal(signals.get('slide').timeoutMs,90)
+ assert.equal(signals.get('slide').signal.aborted,false)
+ finishSlide()
+ await slide
+ assert.deepEqual(events,[{type:'delta',text:'Rendered slide'}])
 })
 test('duplicate active turn is rejected rather than executed twice',async()=>{
  let started;const ready=new Promise(r=>started=r)
@@ -90,6 +125,18 @@ test('provider exception and oversized events are redacted',async()=>{
    await assert.rejects(()=>setup({stream}).run(input,e=>events.push(e)),/^Error: AI turn unavailable$/)
    assert.deepEqual(events,[])
  }
+})
+
+test('provider failures log only a turn stage and safe error code',async()=>{
+ const original=console.error,logged=[]
+ console.error=(...parts)=>logged.push(parts)
+ try{
+  const service=setup({stream:async function*(){throw Object.assign(Error('private prompt and credential'),{code:'UPSTREAM_TIMEOUT'})}})
+  await assert.rejects(()=>service.run(input,()=>{}),/^Error: AI turn unavailable$/)
+  assert.equal(logged.length,1)
+  assert.deepEqual(logged[0],[ 'dyoffice: AI turn failed', {turnId:'turn',stage:'provider_stream',code:'UPSTREAM_TIMEOUT'} ])
+  assert.doesNotMatch(JSON.stringify(logged),/private prompt/)
+ }finally{console.error=original}
 })
 
 test('cancel identity errors are redacted',async()=>{
