@@ -17,7 +17,7 @@ test('a new Word tab without stored task IDs resumes the original Harness turn o
   const original=await docxBytes(),{file}=await importFile(f,f.alice.token,original,'recover-task.docx')
   const keyring={activeKeyId:'docx-recovery',keys:{'docx-recovery':new Uint8Array(32).fill(42)}}
   await createGlobalConfigService({transactions:f.transactions,keyring}).saveGlobalConfig(f.adminSigned.token,0,{
-    upserts:[{id:'fixture',kind:'chat',providerId:'openai',label:'Fixture',model:'synthetic',baseUrl:'https://provider.example/v1',apiKey:'fixture-key',enabled:true}],
+    upserts:[{id:'fixture',kind:'chat',providerId:'openai',label:'Fixture',model:'synthetic',baseUrl:'https://provider.example/v1/chat/completions',apiKey:'fixture-key',enabled:true}],
     defaults:{chat:'fixture'},
   })
   let runs=0,release

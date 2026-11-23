@@ -37,7 +37,7 @@ test('Word knowledge opens cited XLSX, PPTX and PDF revisions in their native ed
  const keyring={activeKeyId:'cross-format',keys:{'cross-format':new Uint8Array(32).fill(57)}}
  const model=liveConfig?JSON.parse(await readFile(liveConfig,'utf8')).entry:{
   id:'chat',kind:'chat',providerId:'deepseek',label:'Test model',model:'synthetic',
-  baseUrl:'https://provider.example/v1',enabled:true,apiKey:'test-key',
+  baseUrl:'https://provider.example/v1/chat/completions',enabled:true,apiKey:'test-key',
  }
  await createGlobalConfigService({transactions:f.transactions,keyring}).saveGlobalConfig(f.adminSigned.token,0,{upserts:[model],defaults:{chat:model.id}})
  await f.preferences.update(f.alice.token,{language:'zh',showAssistant:true,autoSave:false})

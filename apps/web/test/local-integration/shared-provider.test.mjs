@@ -7,11 +7,13 @@ import {mockProviderNetwork} from '../helpers/provider-network.mjs'
 import {createGlobalConfigService} from '../../server/src/modules/admin/service.ts'
 import {buildLocalApp} from '../../server/src/app.ts'
 import {createCsrfService} from '../../server/src/modules/auth/csrf.ts'
-const entry={id:'shared-chat',kind:'chat',providerId:'deepseek',label:'Shared model',model:'synthetic-model',baseUrl:'https://provider.example/v1',enabled:true}
+import {AgentLoop} from '../../../../packages/agent-core/src/loop.ts'
+import {createAssistantClient} from '../../../../packages/browser-host/src/assistant.ts'
+const entry={id:'shared-chat',kind:'chat',providerId:'deepseek',label:'Shared model',model:'synthetic-model',baseUrl:'https://provider.example/v1/chat/completions',enabled:true}
 const keyring={activeKeyId:'shared-test',keys:{'shared-test':new Uint8Array(32).fill(29)}}
-async function fixture(t){
+async function fixture(t,modelEntry=entry){
  const f=await restrictedFixture(t,{businessMax:2}),config=createGlobalConfigService({transactions:f.transactions,keyring})
- await config.saveGlobalConfig(f.adminSigned.token,0,{upserts:[{...entry,apiKey:'synthetic-shared-key'}],defaults:{chat:entry.id}})
+ await config.saveGlobalConfig(f.adminSigned.token,0,{upserts:[{...modelEntry,apiKey:'synthetic-shared-key'}],defaults:{chat:modelEntry.id}})
  const app=await buildLocalApp({db:f.db,businessPool:f.businessPool,passwords:f.passwords,deploymentId:f.deploymentId,origin:'https://office.example',csrfKey:f.csrfKey,globalConfigKeyring:keyring,providerGateway:{mode:'shared'},codingHarnesses:false})
  f.cleanup.push(()=>app.close())
  const csrf=createCsrfService({db:f.db,deploymentId:f.deploymentId,origin:'https://office.example',key:f.csrfKey})
@@ -67,10 +69,10 @@ test('the shared gateway gives standalone PPTX page generation room to return a 
  await turn('pptx')
  assert.equal(JSON.parse(network.wire).reasoning_effort,'none')
  await turn('pptx',[{name:'generate_deck',description:'Generate editable slides',inputSchema:{type:'object'}}])
- assert.equal(JSON.parse(network.wire).max_tokens,4096)
+ assert.equal(JSON.parse(network.wire).max_tokens,32768)
  assert.equal(JSON.parse(network.wire).reasoning_effort,undefined)
  await turn('docx')
- assert.equal(JSON.parse(network.wire).max_tokens,4096)
+ assert.equal(JSON.parse(network.wire).max_tokens,32768)
  assert.equal(JSON.parse(network.wire).reasoning_effort,undefined)
 })
 test('standalone PPTX page generation can finish beyond two minutes at the gateway',{timeout:15000},async t=>{
@@ -161,4 +163,98 @@ test('administrator can test a saved shared model; ordinary users cannot run the
  const denied=await f.app.inject({...request,headers:f.headers(f.alice)})
  assert.equal(denied.statusCode,403);assert.equal(network.writes,0)
  const result=await f.app.inject(request);assert.equal(result.statusCode,200);assert.deepEqual(result.json(),{ok:true});assert.equal(network.writes,1);assert.ok(!result.body.includes('synthetic-shared-key'))
+})
+test('DeepSeek defaults to Responses, lowers a rejected cap once, remembers it and replays tool reasoning without repeating a call',async t=>{
+ const sent=[]
+ const network=mockProviderNetwork(t,()=>{
+  const body=JSON.parse(network.wire)
+  sent.push(body)
+  if(sent.length===1)return Readable.from([Buffer.from('max_output_tokens supports at most 8192')])
+  const output=sent.length===2?[{type:'reasoning',id:'rs_1',encrypted_content:'sealed'},{type:'function_call',call_id:'c1',name:'read_pages',arguments:'{"start":1}'}]:[]
+  const frame=value=>'data: '+JSON.stringify(value)+'\n\n'
+  const incomplete=sent.length===4
+  if(incomplete)output.push({type:'function_call',call_id:'partial',name:'read_pages',arguments:'{'})
+  return Readable.from([Buffer.from((sent.length>2?frame({type:'response.output_text.delta',delta:'answer'}):'')+frame({type:incomplete?'response.incomplete':'response.completed',response:{status:incomplete?'incomplete':'completed',output,...(incomplete?{incomplete_details:{reason:'max_output_tokens'}}:{})}}))])
+ },{status:n=>n===1?422:200}),f=await fixture(t)
+ await f.config.saveGlobalConfig(f.adminSigned.token,1,{upserts:[{...entry,baseUrl:'https://provider.example/v1',model:'deepseek-v4-flash'}]})
+ const tool={name:'read_pages',description:'Read pages',inputSchema:{type:'object'}}
+ const user={role:'user',text:'Read page one'}
+ const turn=messages=>f.app.inject({method:'POST',url:'/api/v1/ai/turns',headers:f.headers(f.alice),payload:{turnId:randomUUID(),modelId:entry.id,request:{format:'pdf',system:'Office',messages,tools:[tool]}}})
+ const first=await turn([user])
+ assert.match(first.body,/event: tool_call/)
+ const call=JSON.parse(/event: tool_call\ndata: (.+)/.exec(first.body)[1])
+ const second=await turn([user,{role:'assistant',text:'',toolCalls:[call]},{role:'tool',results:[{id:call.id,name:tool.name,output:'Page one'}]}])
+ assert.match(second.body,/event: delta\ndata: {"text":"answer"}/)
+ assert.deepEqual(sent.map(b=>b.max_output_tokens),[32768,8192,8192])
+ assert.equal(sent[2].store,false)
+ assert.deepEqual(sent[2].input.slice(1).map(i=>i.type),['reasoning','function_call','function_call_output'])
+ const cut=await turn([user])
+ assert.match(cut.body,/event: stop_reason\ndata: {"reason":"max_tokens"}/)
+ assert.doesNotMatch(cut.body,/event: (error|tool_call)/)
+ assert.equal(network.writes,4)
+ assert.equal((await f.ownerPool.query("SELECT count(*)::int n FROM shared_provider_dispatches WHERE state='settled'")).rows[0].n,4)
+})
+
+test('a shared Responses model can return one JSON document for a streaming request',async t=>{
+ const body=JSON.stringify({status:'completed',output:[{type:'message',content:[{type:'output_text',text:'已完成'}]}],usage:{input_tokens:4,output_tokens:2}})
+ const bytes=Buffer.from(body),split=bytes.indexOf(Buffer.from('已'))+1
+ const network=mockProviderNetwork(t,[bytes.subarray(0,split),bytes.subarray(split)],{contentType:'application/json; charset=utf-8'})
+ const f=await fixture(t,{...entry,providerId:'openai',model:'gpt-4.1',baseUrl:'https://provider.example/v1'})
+ const response=await f.app.inject({method:'POST',url:'/api/v1/ai/turns',headers:f.headers(f.alice),payload:{
+  turnId:randomUUID(),modelId:entry.id,request:{system:'Office',messages:[{role:'user',text:'Read the summary'}],tools:[]}
+ }})
+ assert.match(response.body,/event: delta\ndata: {"text":"已完成"}/)
+ assert.match(response.body,/event: usage\ndata: {"inputTokens":4,"outputTokens":2}/)
+ assert.doesNotMatch(response.body,/event: error/)
+ assert.equal(network.writes,1)
+ const upstream=JSON.parse(network.wire)
+ assert.equal(upstream.model,'gpt-4.1')
+ assert.equal(upstream.reasoning,undefined)
+ assert.equal(upstream.include,undefined)
+})
+
+test('the PDF editor continues both signed tool calls from Responses item completion events',async t=>{
+ const tool={name:'read_pages',description:'Read pages',inputSchema:{type:'object',properties:{start:{type:'integer'}}}}
+ const items=[1,2].flatMap(n=>[
+  {type:'reasoning',id:'rs_'+n,encrypted_content:'sealed-'+n,summary:[]},
+  {type:'function_call',id:'fc_'+n,call_id:'call_'+n,name:tool.name,arguments:JSON.stringify({start:n})},
+ ])
+ const frame=value=>'data: '+JSON.stringify(value)+'\n\n'
+ const sent=[]
+ const network=mockProviderNetwork(t,()=>{
+  sent.push(JSON.parse(network.wire))
+  const frames=sent.length===1
+   ? [{type:'response.reasoning_summary_text.delta',output_index:0,delta:'Read the pages'},
+      ...items.map((item,output_index)=>({type:'response.output_item.done',output_index,item})),
+      {type:'response.completed',response:{status:'completed'}}]
+   : [{type:'response.completed',response:{status:'completed',output:[{type:'message',content:[{type:'output_text',text:'Read both pages.'}]}]}}]
+  return Readable.from([Buffer.from(frames.map(frame).join(''))])
+ })
+ const f=await fixture(t,{...entry,baseUrl:'https://provider.example/v1',model:'deepseek-v4-flash'})
+ const headers=f.headers(f.alice)
+ const client=await createAssistantClient({
+  format:'pdf',nativeToolNames:new Set([tool.name]),nativeDocumentEditing:true,csrfToken:headers['x-csrf-token'],
+  request:async url=>(await f.app.inject({url,headers})).json(),
+  fetchImpl:async(url,init)=>{
+   const reply=await f.app.inject({method:init.method,url,headers:{...headers,...init.headers},payload:init.body})
+   return new Response(reply.body,{status:reply.statusCode,headers:{'content-type':reply.headers['content-type']}})
+  },
+ })
+ try {
+  const pages=[]
+  const result=await new Promise((resolve,reject)=>{
+   const loop=new AgentLoop({transport:client.transport,skill:{
+    id:'pdf',systemPrompt:'Read the PDF',tools:[tool],buildContext:()=>'',
+    executeTool(call){pages.push(call.input.start);return {output:'Page '+call.input.start,summary:'Read page'}},
+   },events:{onDone:resolve,onError:message=>reject(Error(message))}})
+   loop.run('Read the first two pages')
+  })
+  assert.equal(result.text,'Read both pages.')
+  assert.deepEqual(pages,[1,2])
+  assert.equal(sent.length,2)
+  assert.deepEqual(sent[1].input.filter(item=>item.type).map(item=>[item.type,item.encrypted_content??item.call_id]),[
+   ['reasoning','sealed-1'],['function_call','call_1'],['reasoning','sealed-2'],['function_call','call_2'],
+   ['function_call_output','call_1'],['function_call_output','call_2'],
+  ])
+ }finally{client.dispose()}
 })

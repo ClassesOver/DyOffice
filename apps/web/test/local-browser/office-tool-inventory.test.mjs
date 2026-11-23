@@ -41,7 +41,7 @@ for(const mode of ['creation','no-word','all'])test(mode==='no-word'
  const origin=`https://127.0.0.1:${server.address().port}`,f=await fileFixture(t,{origin,buildApp:false})
  const keyring={activeKeyId:'tools',keys:{tools:new Uint8Array(32).fill(29)}}
  const configs=createGlobalConfigService({transactions:f.transactions,keyring})
- const baseline=await configs.saveGlobalConfig(f.adminSigned.token,0,{upserts:[{id:'chat',kind:'chat',providerId:'deepseek',label:'Office model',model:'synthetic',baseUrl:'https://provider.example/v1',enabled:true,apiKey:'test-key'}],defaults:{chat:'chat'}})
+ const baseline=await configs.saveGlobalConfig(f.adminSigned.token,0,{upserts:[{id:'chat',kind:'chat',providerId:'deepseek',label:'Office model',model:'synthetic',baseUrl:'https://provider.example/v1/chat/completions',enabled:true,apiKey:'test-key'}],defaults:{chat:'chat'}})
  await f.preferences.update(f.alice.token,{language:'zh',autoSave:false,showAssistant:true})
  const gateway=await sheetsGateway(t),metadata=JSON.parse(await readFile(new URL('../../../../.dyoffice-native-build/host-manifest.json',import.meta.url),'utf8'))
  const sheetsNative=createXlsxNativeWorker(createCrossPlatformProcess({deploymentId:f.deploymentId,binary:metadata.nativeBinary,sha256:metadata.nativeSha256,allowedCommands:['open','read_range','read_formula_cells','read_row_outline','read_media','recalc_cells','save_archive','close']}))

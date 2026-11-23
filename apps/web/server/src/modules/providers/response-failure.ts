@@ -17,3 +17,8 @@ export function providerResponseFailure(status: number | undefined): ProviderRes
   if (status === 429) return new ProviderResponseFailure('PROVIDER_RATE_LIMITED')
   if (status !== undefined && status >= 500 && status <= 599) return new ProviderResponseFailure('PROVIDER_TEMPORARILY_UNAVAILABLE')
 }
+
+/** A confirmed pre-generation rejection. Only the numeric limit leaves the transport. */
+export class OutputCapRejection extends Error {
+  constructor(readonly ceiling:number){super('Provider output limit exceeded')}
+}

@@ -1,6 +1,7 @@
 import type { AgentMessage, AgentToolCall, AgentToolDef } from '@genoffice/agent-core'
 import { aiFetch } from '../fetch.ts'
 import { httpBodyDetail } from '../http-error.ts'
+import { modelHasFixedSampling } from '../model-heuristics.ts'
 import type { AiChatResponse, AiProviderConfig, AiTokenUsage } from '../types.ts'
 import { createStreamWatchdog, type StreamWatchdog } from '../watchdog.ts'
 import {
@@ -22,19 +23,17 @@ import {
  * only here (Chat Completions 400s unless reasoning is off), so this is the
  * route that keeps their reasoning on in the agent loop.
  *
- * Nothing is stored server-side (`store: false`); the reasoning the model did
- * before a tool call comes back as an encrypted item and rides on the turn's
- * first tool call `signature`, the same opaque slot Gemini uses for its thought
- * signature, so the next request can replay it ahead of the function calls.
+ * With `store: false`, each encrypted reasoning item rides on the next tool
+ * call's `signature` so the next request can replay both items in order.
  */
 
 const REASONING_SIGNATURE_PREFIX = 'oai-rs:'
 
-function reasoningSignature(id: string, encrypted: string): string {
+export function reasoningSignature(id: string, encrypted: string): string {
   return REASONING_SIGNATURE_PREFIX + JSON.stringify({ id, encrypted })
 }
 
-function parseReasoningSignature(
+export function parseReasoningSignature(
   signature: string | undefined,
 ): { id: string; encrypted: string } | null {
   if (!signature?.startsWith(REASONING_SIGNATURE_PREFIX)) return null
@@ -51,8 +50,9 @@ function parseReasoningSignature(
   }
 }
 
-function responsesInput(messages: AgentMessage[]): unknown[] {
+export function responsesInput(messages: AgentMessage[]): unknown[] {
   const out: unknown[] = []
+  const reasoningIds = new Set<string>()
   for (const m of messages) {
     if (m.role === 'user') {
       out.push({
@@ -68,24 +68,25 @@ function responsesInput(messages: AgentMessage[]): unknown[] {
       })
     } else if (m.role === 'assistant') {
       const calls = m.toolCalls ?? []
-      const reasoning = parseReasoningSignature(calls[0]?.signature)
-      if (reasoning) {
-        out.push({
-          type: 'reasoning',
-          id: reasoning.id,
-          encrypted_content: reasoning.encrypted,
-          summary: [],
-        })
-      }
       // an assistant item with no text and no calls is an empty turn the API
       // rejects, so keep the placeholder the Chat Completions path uses
-      if (m.text || calls.length === 0) {
-        out.push({
-          role: 'assistant',
-          content: [{ type: 'output_text', text: m.text || '(no content)' }],
-        })
+      const textItem = {
+        role: 'assistant',
+        content: [{ type: 'output_text', text: m.text || '(no content)' }],
       }
-      for (const call of calls) {
+      if (calls.length === 0) out.push(textItem)
+      for (const [index, call] of calls.entries()) {
+        const reasoning = parseReasoningSignature(call.signature)
+        if (reasoning && !reasoningIds.has(reasoning.id)) {
+          reasoningIds.add(reasoning.id)
+          out.push({
+            type: 'reasoning',
+            id: reasoning.id,
+            encrypted_content: reasoning.encrypted,
+            summary: [],
+          })
+        }
+        if (index === 0 && m.text) out.push(textItem)
         out.push({
           type: 'function_call',
           call_id: call.id,
@@ -116,7 +117,26 @@ export interface OpenAiResponsesOptions {
   idleTimeoutMs?: number | undefined
 }
 
-function requestBody(
+function supportsResponsesReasoning(model: string): boolean {
+  // Gateways can namespace a model and append routing variants such as `:free`.
+  const id = model
+    .slice(model.lastIndexOf('/') + 1)
+    .toLowerCase()
+    .replace(/[:@].*$/, '')
+  if (/^(?:gpt-|o\d)/.test(id)) {
+    // Within these families the fixed-sampling rule identifies GPT-5+ and o-series IDs.
+    return modelHasFixedSampling(id) && !id.endsWith('-chat-latest')
+  }
+  if (id.includes('-non-reasoning')) return false
+  if (id.startsWith('grok-')) {
+    return /^grok-(?:3-mini|4(?:[.-]\d+)?)(?:-fast)?(?:-reasoning)?(?:-latest|-\d{4,8})?$/.test(id)
+  }
+  return /^deep-?seek-(?:reasoner|r1(?:[-.].+)?|flash|v3\.[12]|v4(?:\.\d+)?-(?:pro|flash))(?:-\d{4,8})?$/.test(
+    id,
+  )
+}
+
+export function requestBody(
   config: AiProviderConfig,
   system: string,
   input: unknown[],
@@ -142,11 +162,15 @@ function requestBody(
       : {}),
     max_output_tokens: maxTokens,
     store: false,
-    include: ['reasoning.encrypted_content'],
-    reasoning: {
-      summary: 'auto',
-      ...(options.reasoningEffort ? { effort: options.reasoningEffort } : {}),
-    },
+    ...(supportsResponsesReasoning(config.model)
+      ? {
+          include: ['reasoning.encrypted_content'],
+          reasoning: {
+            summary: 'auto',
+            ...(options.reasoningEffort ? { effort: options.reasoningEffort } : {}),
+          },
+        }
+      : {}),
     ...options.bodyExtras,
     stream,
   })
@@ -188,12 +212,12 @@ function emitFinishedItems(
   alreadyStreamed: boolean,
 ): boolean {
   let emitted = alreadyStreamed
-  let reasoning: { id: string; encrypted: string } | undefined
+  let signature: string | undefined
   const toolCalls: AgentToolCall[] = []
   for (const item of items) {
     if (item.type === 'reasoning') {
       if (item.id && item.encrypted_content) {
-        reasoning = { id: item.id, encrypted: item.encrypted_content }
+        signature = reasoningSignature(item.id, item.encrypted_content)
       }
       if (!alreadyStreamed) {
         for (const part of item.summary ?? []) {
@@ -220,15 +244,14 @@ function emitFinishedItems(
         name: item.name,
         input,
         inputError: error,
+        ...(signature ? { signature } : {}),
       })
+      signature = undefined
     }
   }
   const cutOff = response?.incomplete_details?.reason === 'max_output_tokens'
   const lastTool = toolCalls.at(-1)
   if (cutOff && lastTool) lastTool.truncated = true
-  if (reasoning && toolCalls[0]) {
-    toolCalls[0].signature = reasoningSignature(reasoning.id, reasoning.encrypted)
-  }
   for (const call of toolCalls) {
     emitted = true
     cb.onToolCall(call)

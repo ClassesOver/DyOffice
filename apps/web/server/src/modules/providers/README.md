@@ -12,13 +12,23 @@ Configuration revisions remain internal concurrency and revocation fences.
 credentials. `shared_provider_dispatch()` commits a session-bound, unique turn
 receipt before networking; `shared_provider_secret()` releases the encrypted
 credential once for that receipt. Runtime roles receive only function EXECUTE,
-and cannot read or change the dispatch table directly. A failed/ambiguous turn
-is never automatically retried. Shared mode does not represent per-user billing.
+and cannot read or change the dispatch table directly. An ambiguous dispatch is never retried. A confirmed HTTP 400/422 output-budget
+rejection can retry once at the reported lower limit, under a new receipt. Shared mode does not represent per-user billing.
 
 The server resolves a public HTTPS destination from administrator-saved metadata
 and uses the existing DNS-pinned TLS transport. This path currently implements
-OpenAI-compatible Chat Completions (including DeepSeek); native Anthropic,
-Gemini and Responses protocols require their corresponding transport adapters.
+the OpenAI Responses API by default for all supported OpenAI-compatible providers,
+including DeepSeek. A base URL such as `https://gateway.example/v1` resolves to
+`/v1/responses`. For a chat-only upstream, save the full URL ending in
+`/chat/completions`. The Responses route accepts event streams and complete
+JSON responses. It forwards refusal text and carries encrypted reasoning items
+into the next tool turn. Reasoning options are sent for models with known support.
+Both protocols start with the desktop output budget (32,768 by default).
+Each budget retry uses the same protocol. The gateway caches lower limits
+per endpoint and model for the lifetime of the gateway. When an
+output limit interrupts generation, the client receives the available text
+and the stop reason. The gateway discards that turn's tool calls. Native
+Anthropic and Gemini protocols require their corresponding transport adapters.
 The administrator's **测试连接** action sends a short real request through this
 same path and returns only success/failure. Browser code never receives API keys.
 

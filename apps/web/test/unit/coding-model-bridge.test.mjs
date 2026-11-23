@@ -6,7 +6,7 @@ import {buildOpenAiChatRequest} from '../../server/src/modules/providers/openai-
 const task={instructions:'Code carefully',input:[{role:'user',content:[{type:'input_text',text:'write a parser'}]}],tools:[{type:'function',name:'exec_command',description:'Run shell',parameters:{type:'object',properties:{cmd:{type:'string'}}}}],stream:true,model:'untrusted-model'}
 test('Codex requests use Office model and session through the budgeted gateway, not supplied model or keys',async()=>{
  const calls=[]
- const bridge=await createCodingModelBridge({token:'office-session',modelId:'office-selected',signal:new AbortController().signal,turns:{async run(input,emit){calls.push(input);await emit({type:'tool_call',id:'call1',name:'exec_command',input:{cmd:'echo ok'}});await emit({type:'usage',inputTokens:4,outputTokens:3})}}})
+ const bridge=await createCodingModelBridge({token:'office-session',modelId:'office-selected',signal:new AbortController().signal,turns:{async run(input,emit){calls.push(input);await emit({type:'tool_call',id:'call1',name:'exec_command',input:{cmd:'echo ok'},signature:'oai-rs:{"id":"rs_1","encrypted":"sealed"}'});await emit({type:'usage',inputTokens:4,outputTokens:3})}}})
  try {
   const rejected=await fetch(bridge.baseUrl+'/responses',{method:'POST',body:JSON.stringify(task),headers:{authorization:'Bearer wrong'}})
   assert.equal(rejected.status,401);assert.equal(calls.length,0)
@@ -17,6 +17,11 @@ test('Codex requests use Office model and session through the budgeted gateway, 
   assert.equal(calls[0].request.messages[0].text,'write a parser')
   assert.match(text,/response.output_item.done/);assert.match(text,/response.completed/);assert.match(text,/exec_command/)
   assert.doesNotMatch(text,/office-session/)
+  const completed=JSON.parse(text.split('response.completed\ndata: ')[1].trim())
+  assert.deepEqual(completed.response.output.map(item=>item.type),['reasoning','function_call'])
+  const next=await fetch(bridge.baseUrl+'/responses',{method:'POST',headers:{authorization:'Bearer '+bridge.apiKey},body:JSON.stringify({...task,input:[...task.input,...completed.response.output,{type:'function_call_output',call_id:'call1',output:'ok'}]})})
+  assert.match(await next.text(),/response.completed/)
+  assert.equal(calls[1].request.messages[1].toolCalls[0].signature,'oai-rs:{"id":"rs_1","encrypted":"sealed"}')
  }finally{await bridge.close()}
 })
 test('quota rejection returns a failed response, never completion or retry',async()=>{

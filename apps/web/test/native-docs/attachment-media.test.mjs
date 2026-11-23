@@ -15,7 +15,7 @@ const frame=(delta,finish_reason)=>Buffer.from('data: '+JSON.stringify({choices:
 test('Word media analysis can use an image from the current send but not an earlier message',{timeout:120_000},async t=>{
  const origin='http://localhost:4264',f=await fileFixture(t,{origin,buildApp:false})
  const keyring={activeKeyId:'test',keys:{test:new Uint8Array(32).fill(25)}}
- const chat={id:'shared-chat',kind:'chat',providerId:'deepseek',label:'Test chat',model:'synthetic',baseUrl:'https://provider.example/v1',enabled:true,apiKey:'synthetic-key'}
+ const chat={id:'shared-chat',kind:'chat',providerId:'deepseek',label:'Test chat',model:'synthetic',baseUrl:'https://provider.example/v1/chat/completions',enabled:true,apiKey:'synthetic-key'}
  const analysis={id:'image-analysis',kind:'image_analysis',providerId:'openai',label:'Test vision',model:'gpt-4.1',baseUrl:'https://images.example/v1',enabled:true,apiKey:'synthetic-vision-key'}
  await createGlobalConfigService({transactions:f.transactions,keyring}).saveGlobalConfig(f.adminSigned.token,0,{upserts:[chat,analysis],defaults:{chat:chat.id,image_analysis:analysis.id}})
  await f.preferences.update(f.alice.token,{language:'en',autoSave:false,showAssistant:true})

@@ -64,7 +64,7 @@ test('Office reads an allowed PostgreSQL schema and Coding plots the frozen resu
  })
  const keyring={activeKeyId:'office',keys:{office:new Uint8Array(32).fill(37)}}
  const model=liveConfig ? JSON.parse(await readFile(liveConfig,'utf8')).entry
-  : {id:'chat',kind:'chat',providerId:'deepseek',label:'Office model',model:'fixture',baseUrl:'https://provider.example/v1',enabled:true,apiKey:'fixture'}
+  : {id:'chat',kind:'chat',providerId:'deepseek',label:'Office model',model:'fixture',baseUrl:'https://provider.example/v1/chat/completions',enabled:true,apiKey:'fixture'}
  if(liveConfig)assert.ok(model?.enabled&&model?.kind==='chat'&&model?.apiKey,'An enabled real-model entry is required')
  await createGlobalConfigService({transactions:f.transactions,keyring}).saveGlobalConfig(f.adminSigned.token,0,{upserts:[model],defaults:{chat:model.id}})
  await f.preferences.update(f.adminSigned.token,{language:'zh',showAssistant:true,autoSave:false})

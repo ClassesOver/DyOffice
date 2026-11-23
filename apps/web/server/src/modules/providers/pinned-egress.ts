@@ -5,7 +5,8 @@ import {createHash} from 'node:crypto'
 import {ASSISTANT_MAX_REQUEST_BYTES,ASSISTANT_MODEL_DEADLINE_MS} from '../../../../../../packages/web-contracts/src/assistant.ts'
 import type {ClientRequest,IncomingMessage} from 'node:http'
 import type {TLSSocket} from 'node:tls'
-import {ProviderResponseFailure,providerResponseFailure} from './response-failure.ts'
+import {parseOutputCapRejection} from '../../../../../../packages/ai-provider/src/output-cap.ts'
+import {OutputCapRejection,ProviderResponseFailure,providerResponseFailure} from './response-failure.ts'
 import {publicIpv4} from '../../security/ip-ranges.ts'
 export {publicIpv4}
 
@@ -15,6 +16,7 @@ export interface EgressProfile {
 export interface EgressScope extends Omit<EgressProfile,'allowedIpv4'> {
  credential:Uint8Array;requestDigest:string;turnId:string;reservationId:string;claimId:string;signal:AbortSignal
 }
+export type ProviderContentType = 'text/event-stream' | 'application/json'
 const fail=()=>new Error('Provider transport unavailable')
 const profileFields=['deploymentId','entryId','revision','providerId','model','baseUrl','endpoint'] as const
 function url(value:string):URL {
@@ -27,8 +29,8 @@ function url(value:string):URL {
  * created here; compose ONLY behind #74's unique durable dispatch gate.
  * Look up IPv4 only; never connect to IPv6 or an unlisted IPv4 address.
  */
-export function createPinnedProviderTransport({profiles,timeoutMs=30_000,maxConcurrent=8,maxResponseBytes=8*1024*1024,authorizationTimeoutMs=5000}:{
- profiles:readonly EgressProfile[];timeoutMs?:number;maxConcurrent?:number;maxResponseBytes?:number;authorizationTimeoutMs?:number
+export function createPinnedProviderTransport({profiles,timeoutMs=30_000,maxConcurrent=8,maxResponseBytes=8*1024*1024,authorizationTimeoutMs=5000,acceptResponsesJson=false}:{
+ profiles:readonly EgressProfile[];timeoutMs?:number;maxConcurrent?:number;maxResponseBytes?:number;authorizationTimeoutMs?:number;acceptResponsesJson?:boolean
 }) {
  let approved:Readonly<EgressProfile>[]
  try{
@@ -42,7 +44,7 @@ export function createPinnedProviderTransport({profiles,timeoutMs=30_000,maxConc
   })
  }catch{throw fail()}
  let active=0
- async function sendAuthorized(scope:Omit<EgressScope,'credential'>,body:Uint8Array,authorize:(write:(credential:Uint8Array)=>Promise<void>,signal:AbortSignal)=>Promise<void>,onChunk:(chunk:Uint8Array)=>void|Promise<void>):Promise<void>{
+ async function sendAuthorized(scope:Omit<EgressScope,'credential'>,body:Uint8Array,authorize:(write:(credential:Uint8Array)=>Promise<void>,signal:AbortSignal)=>Promise<void>,onChunk:(chunk:Uint8Array,contentType:ProviderContentType)=>void|Promise<void>):Promise<void>{
    let wire:Buffer|undefined
    let request:ClientRequest|undefined,response:IncomingMessage|undefined
    let deadline:ReturnType<typeof setTimeout>|undefined
@@ -94,7 +96,7 @@ export function createPinnedProviderTransport({profiles,timeoutMs=30_000,maxConc
        if(typeof options==='object'&&options?.all)(callback as Function)(null,[{address:pinned,family:4}])
        else (callback as Function)(null,pinned,4)
       },
-      headers:{'content-type':'application/json','accept':'text/event-stream','content-length':wire!.length},
+      headers:{'content-type':'application/json',accept:acceptResponsesJson?'text/event-stream, application/json;q=0.9':'text/event-stream','content-length':wire!.length},
      }
      let verifiedSocket:TLSSocket|undefined
      const peerValid=()=>Boolean(verifiedSocket&&request?.socket===verifiedSocket&&!verifiedSocket.destroyed&&verifiedSocket.writable&&verifiedSocket.authorized&&verifiedSocket.remoteAddress===pinned&&verifiedSocket.remotePort===443)
@@ -136,10 +138,24 @@ export function createPinnedProviderTransport({profiles,timeoutMs=30_000,maxConc
       })
      })
     }))
+    if(response.statusCode===400||response.statusCode===422){
+     const chunks:Buffer[]=[];let bytes=0
+     const iterator=response[Symbol.asyncIterator]()
+     for(;;){
+      const part=await step(()=>iterator.next())
+      if(part.done)break
+      bytes+=part.value.length
+      if(bytes>16*1024)throw fail()
+      chunks.push(Buffer.from(part.value))
+     }
+     const limit=parseOutputCapRejection('HTTP '+response.statusCode+': '+Buffer.concat(chunks).toString(),payload.max_output_tokens??payload.max_completion_tokens??payload.max_tokens)
+     if(limit!==null)throw new OutputCapRejection(limit)
+    }
     if(response.statusCode!==200)throw providerResponseFailure(response.statusCode)??fail()
-    if(typeof response.headers['content-type']!=='string'||
-       response.headers['content-type'].split(';',1)[0]!.trim().toLowerCase()!=='text/event-stream'||
-       response.headers['content-encoding']!==undefined&&response.headers['content-encoding']!=='identity')throw fail()
+    const header=response.headers['content-type']
+    const contentType=typeof header==='string'?header.split(';',1)[0]?.trim().toLowerCase():undefined
+    if(contentType!=='text/event-stream'&&!(acceptResponsesJson&&contentType==='application/json'))throw fail()
+    if(response.headers['content-encoding']!==undefined&&response.headers['content-encoding']!=='identity')throw fail()
     const iterator=response[Symbol.asyncIterator]()
     let received=0
     for(;;){
@@ -149,9 +165,9 @@ export function createPinnedProviderTransport({profiles,timeoutMs=30_000,maxConc
      received+=result.value.byteLength
      if(received>maxResponseBytes)throw fail()
      const chunk=Buffer.from(result.value)
-     await step(async()=>{await onChunk(chunk)})
+     await step(async()=>{await onChunk(chunk,contentType)})
     }
-   }catch(error){throw error instanceof ProviderResponseFailure?error:fail()}
+   }catch(error){throw error instanceof ProviderResponseFailure||error instanceof OutputCapRejection?error:fail()}
    finally{
     if(deadline)clearTimeout(deadline)
     externalSignal?.removeEventListener('abort',stop)
@@ -174,7 +190,7 @@ export function createPinnedProviderTransport({profiles,timeoutMs=30_000,maxConc
     if(!(scope?.credential instanceof Uint8Array)||scope.credential.length<1||scope.credential.length>8192)throw fail()
     key=Buffer.from(scope.credential)
     if(key.some(b=>b<33||b>126))throw fail()
-    await sendAuthorized(scope,body,write=>write(key!),onChunk)
+    await sendAuthorized(scope,body,write=>write(key!),chunk=>onChunk(chunk))
    }catch{throw fail()}
    finally{key?.fill(0)}
   },

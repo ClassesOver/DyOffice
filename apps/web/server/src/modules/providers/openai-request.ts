@@ -1,3 +1,5 @@
+import {parseReasoningSignature,requestBody as responsesBody,responsesInput} from '../../../../../../packages/ai-provider/src/protocols/openai-responses.ts'
+import type {AgentMessage,AgentToolDef} from '../../../../../../packages/agent-core/src/types.ts'
 import {createHash} from 'node:crypto'
 import {ASSISTANT_MAX_REQUEST_BYTES} from '../../../../../../packages/web-contracts/src/assistant.ts'
 
@@ -14,7 +16,7 @@ const unsafeKeys=new Set(['__proto__','prototype','constructor'])
  * The returned metadata is frozen; callers must retain a private body snapshot.
  * Transport must independently copy and verify its SHA256 before sending.
  */
-export function buildOpenAiChatRequest(request:unknown,profile:unknown,historicalTools?:ReadonlySet<string>):Readonly<OpenAiBody> {
+export function buildOpenAiChatRequest(request:unknown,profile:unknown,historicalTools?:ReadonlySet<string>,protocol:'chat'|'responses'|'completion-tokens'='chat'):Readonly<OpenAiBody> {
  try {
   let stringBytes=0,nodes=0
   function text(value:unknown,max=MAX_TEXT):string {
@@ -103,7 +105,8 @@ export function buildOpenAiChatRequest(request:unknown,profile:unknown,historica
     object(m,['role','text','toolCalls'],['role','text']);const content=text(m.text)
     let calls:Record<string,unknown>[]|undefined
     if(Object.hasOwn(m,'toolCalls'))calls=array(m.toolCalls,64,1).map(raw=>{
-     const c=object(raw,['id','name','input'],['id','name','input']),id=name(c.id,128),n=name(c.name)
+     const c=object(raw,['id','name','input','signature'],['id','name','input']),id=name(c.id,128),n=name(c.name)
+     if(c.signature!==undefined&&!parseReasoningSignature(text(c.signature,MAX_TEXT)))throw invalid()
      if(seen.has(id)||(!declared.has(n)&&!historicalTools?.has(n)))throw invalid();seen.add(id);pending.set(id,n)
      return {id,type:'function',function:{name:n,arguments:JSON.stringify(jsonObject(c.input))}}
     })
@@ -123,7 +126,7 @@ export function buildOpenAiChatRequest(request:unknown,profile:unknown,historica
    }else throw invalid()
   }
   if(pending.size)throw invalid()
-  const body=Buffer.from(JSON.stringify({model,max_tokens:p.maxOutputTokens,...(p.reasoningEffort?{reasoning_effort:p.reasoningEffort}:{}),stream:true,stream_options:{include_usage:true},messages,...(tools.length?{tools}:{})}),'utf8')
+  const body=Buffer.from(protocol==='responses'?responsesBody({model,apiKey:''},system,responsesInput(r.messages as AgentMessage[]),r.tools as AgentToolDef[],p.maxOutputTokens,{reasoningEffort:p.reasoningEffort as 'none'|undefined},true):JSON.stringify({model,[protocol==='completion-tokens'?'max_completion_tokens':'max_tokens']:p.maxOutputTokens,...(p.reasoningEffort?{reasoning_effort:p.reasoningEffort}:{}),stream:true,stream_options:{include_usage:true},messages,...(tools.length?{tools}:{})}),'utf8')
   if(body.byteLength>MAX_BODY)throw invalid()
   return Object.freeze({body,digest:createHash('sha256').update(body).digest('hex')})
  }catch{throw invalid()}

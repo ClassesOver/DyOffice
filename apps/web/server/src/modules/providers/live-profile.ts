@@ -1,3 +1,4 @@
+import {DEFAULT_MAX_OUTPUT_TOKENS} from '../../../../../../packages/ai-provider/src/providers.ts'
 import dns from 'node:dns/promises'
 import {isIP} from 'node:net'
 import {getProviderAdapter} from '../../../../../../packages/ai-provider/src/registry.ts'
@@ -14,9 +15,12 @@ export async function resolveLiveProviderProfile(entry:LiveProviderEntry,lookup=
   const base=new URL(entry.baseUrl)
   if(base.protocol!=='https:'||base.port||base.username||base.password||base.search||base.hash||isIP(base.hostname)||base.href!==entry.baseUrl)throw fail()
   const adapter=getProviderAdapter(entry.providerId as AiProviderId)
-  if(!adapter||adapter.resolveEndpoint({apiKey:'',model:entry.model,baseUrl:entry.baseUrl}).protocol!=='openai-compatible')throw fail()
+  const route=adapter?.resolveEndpoint({apiKey:'',model:entry.model,baseUrl:entry.baseUrl})
+  if(route?.protocol!=='openai-compatible'&&route?.protocol!=='openai-responses')throw fail()
+  const address=entry.baseUrl.replace(/\/$/,'')
+  const endpoint=/\/(?:responses|chat\/completions)$/.test(address)?address:address+'/responses'
   const answers=await lookup(base.hostname,{family:4,all:true,verbatim:true})
   if(!answers.length||answers.length>64||answers.some(answer=>answer.family!==4||!publicIpv4(answer.address)))throw fail()
   return {deploymentId:entry.deploymentId,entryId:entry.id,revision:entry.revision,providerId:entry.providerId,model:entry.model,baseUrl:entry.baseUrl,
-    endpoint:entry.baseUrl.replace(/\/$/,'')+'/chat/completions',allowedIpv4:[...new Set(answers.map(answer=>answer.address))],maxOutputTokens:4096}
+    endpoint,allowedIpv4:[...new Set(answers.map(answer=>answer.address))],maxOutputTokens:Math.min(DEFAULT_MAX_OUTPUT_TOKENS,route.maxTokens??DEFAULT_MAX_OUTPUT_TOKENS)}
 }

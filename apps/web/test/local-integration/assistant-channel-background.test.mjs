@@ -368,7 +368,7 @@ for(const limited of [false,true])test('application bootstrap '+(limited?'record
  await f.service.configureBackground(f.alice.token,conversationId,{enabled:true})
  const member=await pair(f,conversationId),snapshot=await f.service.memberSnapshot(member.token),memberId=snapshot.member.membershipId
  const keyring={activeKeyId:'background-test',keys:{'background-test':new Uint8Array(32).fill(29)}}
- await createGlobalConfigService({transactions:f.transactions,keyring}).saveGlobalConfig(f.adminSigned.token,0,{upserts:[{id:'shared-chat',kind:'chat',providerId:'deepseek',label:'Shared model',model:'synthetic-model',baseUrl:'https://provider.example/v1',enabled:true,apiKey:'synthetic-key'}],defaults:{chat:'shared-chat'}})
+ await createGlobalConfigService({transactions:f.transactions,keyring}).saveGlobalConfig(f.adminSigned.token,0,{upserts:[{id:'shared-chat',kind:'chat',providerId:'deepseek',label:'Shared model',model:'synthetic-model',baseUrl:'https://provider.example/v1/chat/completions',enabled:true,apiKey:'synthetic-key'}],defaults:{chat:'shared-chat'}})
  const app=await buildLocalApp({db:f.db,businessPool:f.businessPool,passwords:f.passwords,deploymentId:f.deploymentId,origin:restrictedOrigin,csrfKey:f.csrfKey,objectStore:f.objects,globalConfigKeyring:keyring,providerGateway:{mode:'shared'},codingHarnesses:false,assistantChannels:true,assistantBackground:{pool:f.workerPool}})
  t.after(()=>app.close())
  const response=await app.inject({method:'POST',url:'/api/v1/assistant-channels/members/'+memberId+'/actions',headers:{authorization:'Bearer '+member.token},payload:{requestId:randomUUID(),conversationId,to:'office',action:{kind:'delegate',instruction:'预算总额是多少？',execution:'saved-revision'}}})
