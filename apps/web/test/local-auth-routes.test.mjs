@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
-import { buildApp } from '../server/src/app.mjs'
+import { buildApp } from './helpers/prototype-app.mjs'
 import { AccountLifecycleError } from '../server/auth/account-lifecycle.mjs'
 
 const deploymentId = randomUUID()

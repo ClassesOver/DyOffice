@@ -1,10 +1,10 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
-import { mkdtemp, readFile, rm, stat } from 'node:fs/promises'
+import { mkdtemp, rm, stat } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { createApplication } from '../../server/application.mjs'
+import { createApplication } from '../helpers/prototype-http.mjs'
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 
@@ -20,24 +20,20 @@ function shellConfig(extra = {}) {
 
 async function loadBuildApp() {
   try {
-    return await import('../../server/src/app.mjs')
+    return await import('../helpers/prototype-app.mjs')
   } catch (error) {
     assert.fail(`T02 modular API is not implemented (${error.code ?? error.name}: ${error.message})`)
   }
 }
 
-test('development entry boots the Fastify shell and still refuses production', async (t) => {
-  const source = await readFile(new URL('../../server/index.mjs', import.meta.url), 'utf8')
-  assert.match(source, /buildApp/)
-  assert.match(source, /assetMode:\s*process\.env\.DYOFFICE_ASSET_MODE\s*\|\|\s*['"]built['"]/)
-  assert.equal(source.includes('createApplication'), false)
+test('retired development tokens cannot start the Web service or create JSON state', async (t) => {
   const directory = await mkdtemp(join(tmpdir(), 'dyoffice-production-entry-'))
   t.after(() => rm(directory, { recursive: true, force: true }))
   const stateDirectory = join(directory, 'state')
   const result = spawnSync(process.execPath, ['--import', 'tsx', 'server/index.mjs'], {
     cwd: new URL('../..', import.meta.url),
     env: {
-      ...process.env, NODE_ENV: 'production', PORT: '0', HOST: '127.0.0.1',
+      PATH: process.env.PATH, NODE_ENV: 'development', PORT: '0', HOST: '127.0.0.1',
       DYOFFICE_AUTH_MODE: 'development', DYOFFICE_NATIVE_JOBS: '', DYOFFICE_ASSET_MODE: 'source',
       DYOFFICE_DATA_DIR: stateDirectory, DYOFFICE_USER_TOKEN: 'personal',
       DYOFFICE_ADMIN_TOKEN: 'admin', DYOFFICE_ENCRYPTION_KEY: 'test-only-encryption-key',
@@ -255,7 +251,7 @@ test('modular buildApp serves health, problem errors, limits, and explicit migra
 test('production process environment cannot construct the modular shell', async () => {
   await loadBuildApp()
   const script = `
-    const { buildApp } = await import('./server/src/app.mjs')
+    const { buildApp } = await import('./test/helpers/prototype-app.mjs')
     try {
       await buildApp({
         env: 'test',

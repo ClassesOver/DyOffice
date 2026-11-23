@@ -1,14 +1,14 @@
 import { randomUUID } from 'node:crypto'
 import { STATUS_CODES } from 'node:http'
 import Fastify from 'fastify'
-import { authorizeDevApi } from '../request-boundary.mjs'
-import { assertModularConfig } from './config.mjs'
-import { rawBody } from './http-helpers.mjs'
-import { registerLegacyRoutes } from './legacy-dispatch.mjs'
-import { isLocalAuthPath, registerLocalAuthRoutes } from './modules/auth/routes.mjs'
-import { registerHealthRoutes } from './modules/health/routes.mjs'
-import { problem, publicStatus } from './problem.mjs'
-import { createFixedWindowLimiter } from './rate-limit.mjs'
+import { authorizeDevApi } from '../../server/request-boundary.mjs'
+import { assertModularConfig } from '../../server/src/config.mjs'
+import { rawBody } from '../../server/src/http-helpers.mjs'
+import { registerLegacyRoutes } from '../../server/src/legacy-dispatch.mjs'
+import { isLocalAuthPath, registerLocalAuthRoutes } from '../../server/src/modules/auth/routes.mjs'
+import { registerHealthRoutes } from '../../server/src/modules/health/routes.mjs'
+import { problem, publicStatus } from '../../server/src/problem.mjs'
+import { createFixedWindowLimiter } from '../../server/src/rate-limit.mjs'
 
 const HEALTH = new Set(['/api/v1/health/live', '/api/v1/health/ready'])
 const BODY_LIMIT = 1024 * 1024

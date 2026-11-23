@@ -19,7 +19,7 @@ test('retired parser requests reject before body, stored bytes, or revision stat
 })
 
 test('application import graph cannot load the retired DOCX parser helper',async()=>{
-  const app=new URL('../server/application.mjs',import.meta.url).href
+  const app=new URL('../server/src/app.ts',import.meta.url).href
   const parser=new URL('../server/docx-session.mjs',import.meta.url).href
   const loader='export async function resolve(specifier,context,nextResolve){if(specifier.includes("docx-session.mjs"))throw new Error("RETIRED_PARSER_IMPORT");return nextResolve(specifier,context)}'
   const script=`import {register} from 'node:module';register(${JSON.stringify('data:text/javascript,'+encodeURIComponent(loader))});await import(${JSON.stringify(app)});try{await import(${JSON.stringify(parser)});throw new Error('HOOK_NOT_ACTIVE')}catch(e){if(!e.message.includes('RETIRED_PARSER_IMPORT'))throw e}`

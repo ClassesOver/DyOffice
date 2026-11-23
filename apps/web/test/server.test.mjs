@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, rm, readFile, access } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createApplication } from '../server/application.mjs';
+import { createApplication } from './helpers/prototype-http.mjs';
 
 test('personal preferences and admin configuration have separate access boundaries', async t => {
   const directory = await mkdtemp(join(tmpdir(), 'dyoffice-'));

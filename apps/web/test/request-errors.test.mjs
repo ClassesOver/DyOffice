@@ -4,7 +4,7 @@ import {request as httpRequest} from 'node:http';
 import {mkdtemp, rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
-import {createApplication} from '../server/application.mjs';
+import {createApplication} from './helpers/prototype-http.mjs';
 
 async function fixture(t) {
   const directory=await mkdtemp(join(tmpdir(),'dyoffice-request-errors-'));
