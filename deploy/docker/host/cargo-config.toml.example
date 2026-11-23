@@ -1,0 +1,6 @@
+# NOT ready to install: replace the index with your verified mirror.
+# Check its config.json download URL as well; index-only mirroring is insufficient.
+[source.crates-io]
+replace-with = "approved-mirror"
+[source.approved-mirror]
+registry = "sparse+https://REPLACE_WITH_VERIFIED_MIRROR/"

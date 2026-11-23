@@ -1,0 +1,13 @@
+[
+  {
+    "deploymentId": "REPLACE_WITH_EXISTING_DEPLOYMENT_UUID",
+    "entryId": "REPLACE_WITH_DATABASE_ENTRY_ID",
+    "revision": 0,
+    "providerId": "REPLACE_WITH_CONFIGURED_PROVIDER_ID",
+    "model": "REPLACE_WITH_CONFIGURED_MODEL",
+    "baseUrl": "https://provider.example.invalid/v1/",
+    "endpoint": "https://provider.example.invalid/v1/chat/completions",
+    "allowedIpv4": [],
+    "maxOutputTokens": 1024
+  }
+]
