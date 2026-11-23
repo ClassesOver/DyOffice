@@ -12,9 +12,9 @@ const directories:string[]=[]
 afterEach(async()=>{for(const path of directories.splice(0))await rm(path,{recursive:true,force:true})})
 async function directory(){const path=await mkdtemp(join(tmpdir(),'office-harness-data-'));directories.push(path);return path}
 const rawHash=(data:Uint8Array)=>createHash('sha256').update(data).digest('hex')
-function snapshot(value=7) {
+function snapshot(value=7,label='中文') {
   return createQuerySnapshot({sourceId:'sales',sourceVersion:2,timezone:'UTC',sourceTruncated:false,
-    schema:[{name:'z',type:'number',unit:'CNY'},{name:'a',type:'string'}],rows:[{a:'中文',z:value}]})
+    schema:[{name:'z',type:'number',unit:'CNY'},{name:'a',type:'string'}],rows:[{a:label,z:value}]})
 }
 function downloadResponse(value=snapshot(),headers:Record<string,string>={}) {
   const bytes=Buffer.from(JSON.stringify(value))
@@ -22,6 +22,36 @@ function downloadResponse(value=snapshot(),headers:Record<string,string>={}) {
 }
 
 describe('内外部 harness 统一数据客户端',()=>{
+  it.each([
+    {elapsed:180_000,callerCancels:false,succeeds:true},
+    {elapsed:240_001,callerCancels:false,succeeds:false},
+    {elapsed:30_000,callerCancels:true,succeeds:false},
+  ])('bounds a four-query request before headers at $elapsed ms (callerCancels=$callerCancels)',async({elapsed,callerCancels,succeeds})=>{
+    vi.useFakeTimers({toFake:['setTimeout','clearTimeout']})
+    const caller=new AbortController(),cancel=vi.fn()
+    let deliver!:(response:Response)=>void
+    const transport=new Promise<Response>(resolve=>{deliver=resolve})
+    const client=createHarnessDataClient({...options,fetchImpl:async()=>transport})
+    const request=client.execute('sources.query',{sourceId:'sales',queries:['select 1','select 2','select 3','select 4']},caller.signal)
+    const outcome=succeeds?expect(request).resolves.toEqual({items:[]}):expect(request).rejects.toThrow()
+    try{
+      vi.advanceTimersByTime(elapsed)
+      if(callerCancels)caller.abort()
+      const bytes=new TextEncoder().encode('{"items":[]}')
+      const response=new Response(new ReadableStream({start(stream){stream.enqueue(bytes);if(succeeds)stream.close()},cancel}),{headers:{'content-type':'application/json'}})
+      if(succeeds)deliver(response)
+      else {
+        // Even a transport delivering headers late must release the discarded body.
+        const settled=await Promise.race([request.then(()=>false,()=>true),new Promise<false>(resolve=>setImmediate(()=>resolve(false)))])
+        if(!settled)caller.abort()
+        deliver(response)
+        expect(settled).toBe(true)
+      }
+      await outcome
+      if(!succeeds)expect(cancel).toHaveBeenCalledOnce()
+      expect(vi.getTimerCount()).toBe(0)
+    }finally{vi.useRealTimers()}
+  })
   it('用任务凭据调用同一接口，结果只接受有界元数据',async()=>{
     const fetchImpl=vi.fn<typeof fetch>(async()=>Response.json({resultId:'result_1',rowCount:1,truncated:false}))
     const client=createHarnessDataClient({...options,fetchImpl})
@@ -95,10 +125,11 @@ describe('内外部 harness 统一数据客户端',()=>{
     }
   })
 
-  it('截断流和超过1MiB的内容不产生半成品，也不重跑SQL',async()=>{
+  it('截断流和超过冻结结果字节上限的内容不产生半成品，也不重跑SQL',async()=>{
     const root=await directory(),path=join(root,'input.json')
     const broken=new Response(new ReadableStream({start(controller){controller.enqueue(new TextEncoder().encode('{"version":1'));controller.error(Error('disconnected'))}}),{headers:{'content-type':'application/json'}})
-    for(const response of [broken,new Response('x'.repeat(1024*1024+1),{headers:{'content-type':'application/json'}})]) {
+    const oversized=downloadResponse(snapshot(7,'x'.repeat(4_000_000)))
+    for(const response of [broken,oversized]) {
       const fetchImpl=vi.fn(async()=>response)
       await expect(createHarnessDataClient({...options,fetchImpl}).download('result_1',path)).rejects.toThrow()
       expect(fetchImpl).toHaveBeenCalledTimes(1)

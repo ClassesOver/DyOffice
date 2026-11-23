@@ -1,4 +1,5 @@
-import {afterEach, describe, expect, it} from 'vitest'
+import {afterEach, describe, expect, it, vi} from 'vitest'
+import {watch} from 'node:fs'
 import {createServer, type Server, type RequestListener} from 'node:http'
 import {mkdtemp, readFile, stat, writeFile, rm} from 'node:fs/promises'
 import {tmpdir} from 'node:os'
@@ -6,7 +7,7 @@ import {join} from 'node:path'
 import {agentCommand} from '../src/commands/agent'
 import {parseArgs} from '../src/args'
 import {ChannelClient} from '../src/agent-channel/client'
-import {readState, writeState, runAdapter} from '../src/agent-channel/connector'
+import {readState, writeState, runAdapter,watchChannel} from '../src/agent-channel/connector'
 
 let server: Server | undefined
 let directory: string | undefined
@@ -80,15 +81,15 @@ it('does not echo malformed credential file contents in errors',async()=>{
 it('aborts the adapter process group rather than leaving its child running',async()=>{
  const {kill}=process;const controller=new AbortController()
  directory=await mkdtemp(join(tmpdir(),'agent-channel-'));const marker=join(directory,'child.pid')
- const script="const{spawn}=require('node:child_process');const{writeFileSync}=require('node:fs');const c=spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{stdio:'ignore'});writeFileSync(process.argv[1],String(c.pid));setInterval(()=>{},1000)"
- const {watch}=await import('node:fs');const started=new Promise<void>(resolve=>{const watcher=watch(directory!,()=>{watcher.close();resolve()})})
+ const script="const{spawn}=require('node:child_process');const{writeFileSync,renameSync}=require('node:fs');const c=spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{stdio:'ignore'});const marker=process.argv[1];writeFileSync(marker+'.tmp',String(c.pid));renameSync(marker+'.tmp',marker);setInterval(()=>{},1000)"
+ const started=new Promise<void>(resolve=>{const watcher=watch(directory!,(_,name)=>{if(name==='child.pid'){watcher.close();resolve()}})})
  const work=runAdapter({command:process.execPath,args:['-e',script,marker]}, {},{},controller.signal)
  const outcome=expect(work).rejects.toThrow('adapter')
  // File observation is asynchronous; no subprocess output or busy polling is needed.
  await started
  const pid=Number(await readFile(marker,'utf8'));controller.abort();await outcome
- await new Promise(resolve=>setTimeout(resolve,350))
- expect(()=>kill(pid,0)).toThrow()
+ expect(pid).toBeGreaterThan(0)
+ await vi.waitFor(()=>expect(()=>kill(pid,0)).toThrow(),{timeout:3000})
 })
 
 it('watches once per claim and disconnects without replaying a lost result response',async()=>{
@@ -121,4 +122,59 @@ it('exchanges task data only after claim and passes its capability over adapter 
  await writeFile(adapter,JSON.stringify({command:process.execPath,args:['-e',script]}))
  const result=await agentCommand.run(parseArgs(['run','--state-file',state,'--adapter-file',adapter,'--task','task']),{cwd:directory,env:{},log:()=>{},warn:()=>{}})
  expect(order).toEqual(['claim','data','result']);expect(JSON.stringify(result)).not.toContain('secret')
+})
+
+it.each([
+ {scenario:'one-shot source grant',mode:'run',sources:['sales'],deadline:600_000,revoked:false,success:true},
+ {scenario:'watched source grant',mode:'watch',sources:['sales'],deadline:600_000,revoked:false,success:true},
+ {scenario:'ordinary 60 s task',mode:'run',sources:[],deadline:600_000,revoked:false,success:false},
+ {scenario:'earlier channel deadline',mode:'run',sources:['sales'],deadline:80_000,revoked:false,success:false},
+ {scenario:'replaced claim',mode:'run',sources:['sales'],deadline:600_000,revoked:true,success:false},
+])('keeps the managed adapter within its claim and runtime for $scenario',async({mode,sources,deadline,revoked,success})=>{
+ directory=await mkdtemp(join(tmpdir(),'agent-channel-duration-'))
+ const root=directory,statePath=join(root,'state.json'),adapterPath=join(root,'adapter.json')
+ const stop=new AbortController()
+ let claimed=false,renewals=0,submissions=0
+ const origin=await serve((req,res)=>{
+  req.resume()
+  res.setHeader('content-type','application/json')
+  if(req.url?.endsWith('/connect'))res.end(JSON.stringify({connectionEpoch:3}))
+  else if(req.url?.endsWith('/claim')){
+   claimed=true
+   res.end(JSON.stringify({claimId:'claim',instruction:'Analyze',deadlineAt:new Date(Date.now()+deadline).toISOString(),dataInputs:{sourceIds:sources,resultIds:[]}}))
+  }else if(req.url?.endsWith('/data-grant'))res.end(JSON.stringify({baseUrl:origin+'/api/v1/agents',grant:{credential:'cap',inputs:{sourceIds:sources,resultIds:[]}}}))
+  else if(req.url?.endsWith('/tasks')){
+   if(claimed)renewals++
+   res.end(JSON.stringify({paused:false,member:{connectionEpoch:3},tasks:[{taskId:'task',to:'member',state:claimed?'running':'queued',claimId:revoked?'replacement':claimed?'claim':null,connectionEpoch:3}]}))
+  }else if(req.url?.endsWith('/actions')){
+   submissions++;res.end(JSON.stringify({messageId:'done'}));stop.abort()
+  }else res.end('{}')
+ })
+ const state={origin,memberId:'member',memberToken:'secret',conversationId:'channel',connectionId:'connection',connectionEpoch:3}
+ const adapter={command:process.execPath,args:['-e',`
+  const fs=require('node:fs'), path=require('node:path'), dir=process.argv[1];
+  process.stdin.resume();
+  const watcher=fs.watch(dir,(_,name)=>{if(name==='release'){watcher.close();process.stdout.write(JSON.stringify({summary:'done',outcome:'succeeded'}))}});
+  fs.writeFileSync(path.join(dir,'started'),'');
+ `,root]}
+ await writeState(statePath,state);await writeFile(adapterPath,JSON.stringify(adapter))
+ const started=new Promise<void>(resolve=>{const watcher=watch(root,(_,name)=>{if(name==='started'){watcher.close();resolve()}})})
+ vi.useFakeTimers({toFake:['setTimeout','clearTimeout','setInterval','clearInterval']})
+ try{
+  const work=mode==='run'?agentCommand.run(parseArgs(['run','--state-file',statePath,'--adapter-file',adapterPath,'--task','task']),{cwd:root,env:{},log:()=>{},warn:()=>{}}):
+   watchChannel({client:new ChannelClient(origin),state,adapter,env:{},signal:stop.signal,save:async()=>{}})
+  const result=work.then(()=>true,()=>false)
+  await started
+  vi.advanceTimersByTime(revoked?15_000:sources.length?245_500:60_500)
+  vi.useRealTimers()
+  if(revoked){
+   let timer:ReturnType<typeof setTimeout>|undefined
+   try{
+    expect(await Promise.race([result,new Promise<'still running'>(resolve=>{timer=setTimeout(()=>resolve('still running'),2000)})])).toBe(false)
+   }finally{clearTimeout(timer);await writeFile(join(root,'release'),'')}
+  }else await writeFile(join(root,'release'),'')
+  expect(await result).toBe(success)
+  expect(submissions).toBe(success?1:0)
+  if(success||revoked)expect(renewals).toBeGreaterThan(0)
+ }finally{vi.useRealTimers();stop.abort()}
 })

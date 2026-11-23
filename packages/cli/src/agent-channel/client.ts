@@ -10,14 +10,15 @@ export class ChannelClient {
       throw new CliError(EXIT.usage,'Channel origin requires HTTPS (HTTP is allowed only on loopback)')
     this.origin=url.origin
   }
-  async request<T=Record<string,unknown>>(method: 'GET'|'POST',path: string,token?: string,body?: unknown): Promise<T> {
+  async request<T=Record<string,unknown>>(method: 'GET'|'POST',path: string,token?: string,body?: unknown,signal?:AbortSignal): Promise<T> {
     if(!/^\/(applications|members)(\/[^/?#]+)*$/.test(path))throw new CliError(EXIT.usage,'Invalid channel API path')
     const payload=body===undefined ? undefined : JSON.stringify(body)
     if(payload && Buffer.byteLength(payload)>MAX_BYTES)throw new CliError(EXIT.usage,'Channel request exceeds byte limit')
     let response: Response
     try {
+      const deadline=AbortSignal.timeout(30_000)
       response=await fetch(`${this.origin}/api/v1/assistant-channels${path}`,{method,redirect:'error',credentials:'omit',
-        signal:AbortSignal.timeout(30_000),headers:{accept:'application/json',...(payload?{'content-type':'application/json'}:{}),...(token?{authorization:`Bearer ${token}`}:{})},body:payload})
+        signal:signal?AbortSignal.any([deadline,signal]):deadline,headers:{accept:'application/json',...(payload?{'content-type':'application/json'}:{}),...(token?{authorization:`Bearer ${token}`}:{})},body:payload})
     } catch {throw new CliError(EXIT.app,'Channel request failed (network, redirect, or timeout)')}
     if(!response.ok){await response.body?.cancel();throw new CliError(EXIT.app,`Channel request rejected (${response.status})`)}
     const reader=response.body?.getReader(); const chunks: Uint8Array[]=[]; let length=0

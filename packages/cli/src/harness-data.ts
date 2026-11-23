@@ -1,6 +1,9 @@
 import {createHash,randomBytes} from 'node:crypto'
 import {open,link,unlink} from 'node:fs/promises'
 import {basename,dirname,join,resolve} from 'node:path'
+import {HARNESS_DATA_MAX_METADATA_BYTES} from '../../web-contracts/src/harness-data.ts'
+import {SOURCE_QUERY_REQUEST_TIMEOUT_MS,sourceQueryBatchSize} from '../../web-contracts/src/source-query-batch.ts'
+import {SOURCE_RESULT_MAX_BYTES} from '../../web-contracts/src/source-results.ts'
 
 export interface HarnessDataClientOptions {
   baseUrl:string
@@ -24,6 +27,23 @@ const identifier=(value:unknown):string=>{if(typeof value!=='string'||!/^[A-Za-z
 const sha=(value:unknown):value is string=>typeof value==='string'&&/^[a-f0-9]{64}$/.test(value)
 const hash=(bytes:Uint8Array|string)=>createHash('sha256').update(bytes).digest('hex')
 const record=(value:unknown):value is Record<string,unknown>=>!!value&&typeof value==='object'&&!Array.isArray(value)&&[Object.prototype,null].includes(Object.getPrototypeOf(value))
+
+async function timedQuery<T>(send:(signal:AbortSignal)=>Promise<T>,count:number,caller?:AbortSignal):Promise<T> {
+  const deadline=new AbortController()
+  const signal=caller?AbortSignal.any([caller,deadline.signal]):deadline.signal
+  let onAbort!:()=>void
+  const stopped=new Promise<never>((_,reject)=>{
+    onAbort=()=>reject(caller?.aborted?aborted():failure())
+    signal.addEventListener('abort',onAbort,{once:true})
+    if(signal.aborted)onAbort()
+  })
+  const timer=setTimeout(()=>deadline.abort(),count*SOURCE_QUERY_REQUEST_TIMEOUT_MS)
+  try {
+    // A custom fetch can deliver headers after cancellation. The request still
+    // owns that late response and will cancel its body in boundedBody.
+    return await Promise.race([send(signal),stopped])
+  } finally {clearTimeout(timer);signal.removeEventListener('abort',onAbort)}
+}
 
 function baseAddress(value:string):string {
   if(typeof value!=='string'||!/^https?:\/\//.test(value)||/[\s\\?#]/.test(value)||/%(?:2e|2f|5c)/i.test(value)||/(?:^|\/)\.{1,2}(?:\/|$)/.test(value))throw failure()
@@ -138,7 +158,10 @@ export function createHarnessDataClient(options:HarnessDataClientOptions) {
     let body:string
     try{body=JSON.stringify({operation,arguments:args})}catch{throw failure()}
     if(Buffer.byteLength(body)>harnessDataRequestLimit(operation))throw failure()
-    const {bytes}=await request(endpoint+'/execute',{method:'POST',headers:{...headers,'content-type':'application/json'},body},256*1024,signal)
+    // Size the response against the actual wire arguments, including custom JSON serialization.
+    const queryCount=operation==='sources.query'?(sourceQueryBatchSize(operation,JSON.parse(body).arguments)??1):1
+    const send=(active?:AbortSignal)=>request(endpoint+'/execute',{method:'POST',headers:{...headers,'content-type':'application/json'},body},queryCount*HARNESS_DATA_MAX_METADATA_BYTES,active)
+    const {bytes}=await (operation==='sources.query'?timedQuery(send,queryCount,signal):send(signal))
     try {
       const value:unknown=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(bytes))
       if(!record(value))throw failure()
@@ -154,7 +177,7 @@ export function createHarnessDataClient(options:HarnessDataClientOptions) {
       checkAbort(signal);identifier(resultId)
       if(typeof destination!=='string'||!destination.trim()||destination.includes('\0'))throw failure()
       const target=resolve(destination)
-      const {response,bytes}=await request(endpoint+'/results/'+resultId+'/content',{method:'GET',headers},1024*1024,signal)
+      const {response,bytes}=await request(endpoint+'/results/'+resultId+'/content',{method:'GET',headers},SOURCE_RESULT_MAX_BYTES,signal)
       const raw=response.headers.get('x-content-sha256'),snapshot=response.headers.get('x-snapshot-sha256')
       if(!sha(raw)||!sha(snapshot)||hash(bytes)!==raw)throw failure()
       try{verifiedSnapshot(bytes,snapshot)}catch{throw failure()}
