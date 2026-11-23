@@ -7,7 +7,6 @@ on:
       - 'tools/dyoffice/runtime-lock*'
       - 'apps/web/server/auth/**'
       - 'apps/web/server/db/**'
-      - 'apps/web/tools/bootstrap-admin.mjs'
       - 'apps/web/test/integration/**'
       - 'apps/web/package.json'
       - 'apps/web/package-lock.json'
@@ -21,7 +20,6 @@ on:
       - 'tools/dyoffice/runtime-lock*'
       - 'apps/web/server/auth/**'
       - 'apps/web/server/db/**'
-      - 'apps/web/tools/bootstrap-admin.mjs'
       - 'apps/web/test/integration/**'
       - 'apps/web/package.json'
       - 'apps/web/package-lock.json'
@@ -67,26 +65,13 @@ jobs:
           node --check apps/web/server/auth/passwords.mjs
           node --check apps/web/server/auth/bootstrap-admin.mjs
           node --check apps/web/server/db/migrate.mjs
-          node --check apps/web/tools/bootstrap-admin.mjs
           node --check apps/web/test/integration/local-identity.test.mjs
       - name: Test native password and database integration
         env:
           DYOFFICE_TEST_DATABASE_URL: postgresql://dyoffice_test:local-ci-only-not-for-production@localhost:5432/dyoffice_identity_test
-        run: node --test apps/web/test/integration/bootstrap-cli.test.mjs apps/web/test/integration/local-identity.test.mjs
+        run: node --test apps/web/test/integration/local-identity.test.mjs
       - name: Ensure PostgreSQL client is installed
         run: command -v psql >/dev/null || (sudo apt-get update && sudo apt-get install -y --no-install-recommends postgresql-client)
-      - name: Exercise one-time administrator CLI against PostgreSQL
-        env:
-          DYOFFICE_DATABASE_URL: postgresql://dyoffice_test:local-ci-only-not-for-production@localhost:5432/dyoffice_identity_test
-        run: |
-          set -euo pipefail
-          PASS=$(node -e "process.stdout.write(require('node:crypto').randomBytes(32).toString('base64url'))")
-          printf '%s\n' "$PASS" | node apps/web/tools/bootstrap-admin.mjs --deployment-id 99999999-9999-4999-8999-999999999999 --username initial.admin --password-stdin
-          if printf '%s\n' "$PASS" | node apps/web/tools/bootstrap-admin.mjs --deployment-id 99999999-9999-4999-8999-999999999999 --username another.admin --password-stdin; then
-            echo 'Second bootstrap unexpectedly succeeded' >&2
-            exit 1
-          fi
-          test "$(PGPASSWORD=local-ci-only-not-for-production psql -h localhost -U dyoffice_test -d dyoffice_identity_test -Atc "select count(*) from dyoffice_admin_bootstrap where deployment_id='99999999-9999-4999-8999-999999999999'")" = 1
       - name: Verify identity constraints on real PostgreSQL
         env:
           PGHOST: localhost

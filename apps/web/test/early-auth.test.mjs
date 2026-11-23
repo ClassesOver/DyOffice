@@ -4,7 +4,7 @@ import { request as httpRequest } from 'node:http'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { createApplication } from '../server/application.mjs'
+import { createApplication } from './helpers/prototype-http.mjs'
 
 test('API authorization rejects a large body before it is buffered', async (t) => {
   const directory = await mkdtemp(join(tmpdir(), 'dyoffice-early-auth-'))

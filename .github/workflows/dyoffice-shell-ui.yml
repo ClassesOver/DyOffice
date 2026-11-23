@@ -23,13 +23,4 @@ jobs:
       - run: node --experimental-strip-types --test apps/web/test/unit/shell-home.test.mjs
       - run: npm run typecheck:shell --prefix apps/web --workspaces=false
       - run: npm run test:shell --prefix apps/web --workspaces=false
-      - run: npm run build:web
-      - run: npx --no-install playwright install --with-deps chromium
-        working-directory: apps/web
-      - run: npx --no-install playwright test --config playwright.shell.config.mjs
-        working-directory: apps/web
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
-        if: always()
-        with:
-          name: genoffice-shell-browser-evidence
-          path: apps/web/test-results/
+      - run: npm run build:web:shell

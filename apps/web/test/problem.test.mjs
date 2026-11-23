@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, rm } from 'node:fs/promises';
-import { createApplication } from '../server/application.mjs';
+import { createApplication } from './helpers/prototype-http.mjs';
 async function fixture(t) {
   const directory=await mkdtemp('/tmp/dyoffice-problem-');
   const server=await createApplication({directory,userToken:'personal',adminToken:'admin',encryptionKey:'test-key'});

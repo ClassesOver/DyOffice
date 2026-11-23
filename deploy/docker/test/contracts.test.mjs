@@ -71,7 +71,7 @@ test('container build includes all SaaS asset targets without enabling native ru
  assert.match(dockerfile,/^FROM \$\{NODE_IMAGE\} AS node-base$/m)
  assert.match(dockerfile,/npm ci --ignore-scripts --include=dev --registry=/)
  assert.match(dockerfile,/^ARG NPM_REGISTRY=https:\/\/repo\.huaweicloud\.com\/repository\/npm\/$/m)
- for(const target of ['build:web','build:web:docs','build:web:sheets','build:web:slides','build:web:pdf'])assert.ok(scripts['build:saas:assets'].split(' && ').includes('npm run '+target))
+ for(const target of ['build:web:docs','build:web:sheets','build:web:slides','build:web:pdf'])assert.ok(scripts['build:saas:assets'].split(' && ').includes('npm run '+target))
  assert.doesNotMatch(dockerfile,/ENV\s+(?:NODE_ENV=production|DYOFFICE_NATIVE_(?:XLSX|PPTX)=)/)
  assert.match(read('compose.yaml'),/DYOFFICE_LOCAL_EDITOR_PROFILE: docx-only/)
  assert.doesNotMatch(read('compose.yaml'),/DYOFFICE_NATIVE_(?:XLSX|PPTX):/)

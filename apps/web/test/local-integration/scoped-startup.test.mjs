@@ -8,16 +8,20 @@ import { assertRuntimePool } from '../../server/src/db/roles.ts'
 import { restrictedFixture, restrictedOrigin } from '../helpers/restricted.mjs'
 
 const cwd = fileURLToPath(new URL('../../', import.meta.url))
-const environment = f => ({ ...process.env, NODE_ENV: 'development', DYOFFICE_FILE_API: '', DYOFFICE_OBJECT_STORE: '', DYOFFICE_AUTH_MODE: 'local', DYOFFICE_DATABASE_URL: '', DYOFFICE_AUTH_DATABASE_URL: f.urls.auth, DYOFFICE_BUSINESS_DATABASE_URL: f.urls.business, DYOFFICE_DEPLOYMENT_ID: f.deploymentId, DYOFFICE_ORIGIN: restrictedOrigin, DYOFFICE_CSRF_KEY: f.csrfKey, DYOFFICE_USER_TOKEN: '', DYOFFICE_ADMIN_TOKEN: '', PORT: '0', HOST: '127.0.0.1' })
+const environment = f => ({ ...process.env, NODE_ENV: 'development', DYOFFICE_FILE_API: '', DYOFFICE_OBJECT_STORE: '', DYOFFICE_DATABASE_URL: '', DYOFFICE_AUTH_DATABASE_URL: f.urls.auth, DYOFFICE_BUSINESS_DATABASE_URL: f.urls.business, DYOFFICE_DEPLOYMENT_ID: f.deploymentId, DYOFFICE_ORIGIN: restrictedOrigin, DYOFFICE_CSRF_KEY: f.csrfKey, DYOFFICE_USER_TOKEN: '', DYOFFICE_ADMIN_TOKEN: '', PORT: '0', HOST: '127.0.0.1' })
 
 test('local server entry uses separate restricted credentials and serves scoped preferences', { timeout: 15_000 }, async t => {
   const f = await restrictedFixture(t)
-  const child = spawn(process.execPath, ['--import','tsx', 'server/index.mjs'], { cwd, env: environment(f), stdio: ['ignore','pipe','pipe'] })
+  const env = environment(f)
+  delete env.DYOFFICE_AUTH_MODE
+  const child = spawn(process.execPath, ['--import','tsx', 'server/index.mjs'], { cwd, env, stdio: ['ignore','pipe','pipe'] })
   f.cleanup.push(async () => { if (child.exitCode === null && child.signalCode === null) { child.kill('SIGTERM'); await once(child, 'exit') } })
   const exited = once(child, 'exit')
   const [output] = await Promise.race([once(child.stdout, 'data'), exited.then(([code]) => { throw new Error('Scoped entry exited before startup: ' + code) })])
   const address = String(output).match(/http:\/\/127\.0\.0\.1:\d+/)?.[0]
   assert.ok(address)
+  const tokenOnly = await fetch(address + '/api/v1/preferences', { headers: { authorization: 'Bearer test-personal' } })
+  assert.equal(tokenOnly.status, 401)
   const response = await fetch(address + '/api/v1/preferences', { headers: { cookie: '__Host-dyoffice-session=' + f.alice.token } })
   assert.equal(response.status, 200)
   assert.equal((await response.json()).theme, 'system')
