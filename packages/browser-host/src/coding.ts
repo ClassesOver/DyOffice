@@ -17,7 +17,11 @@ export function createCodingClient(options:{agents:readonly HarnessDescriptor[];
   function reportDelivery(result:CodingResult,agent:HarnessDescriptor){
     if(result.delivery&&options.onDelivery)try{void Promise.resolve(options.onDelivery(result.delivery,{id:agent.id,name:agent.name,origin:agent.origin})).catch(()=>{})}catch{}
   }
-  const recovery=options.documentId?createCodingRecovery({...options,documentId:options.documentId,onStatus(status){
+  const recovery=options.documentId?createCodingRecovery({...options,documentId:options.documentId,onUnavailable(id){
+    if(controllers.has(id))return
+    const index=tasks.findIndex(task=>task.id===id&&(task.state==='running'||task.state==='cancel_requested'))
+    if(index>=0){tasks.splice(index,1);notify()}
+  },onStatus(status){
     let task=tasks.find(task=>task.id===status.turnId)
     if(controllers.has(status.turnId))return
     if(!task){

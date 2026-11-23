@@ -279,3 +279,30 @@ test('a task observed as failed after the stream dropped is an ordinary tool err
  assert.match(JSON.stringify(toolResult),/Codex execution failed/)
  assert.equal(client.coding.snapshot()[0].state,'failed')
 })
+
+for(const terminal of [401,403,404,'incomplete result'])test(`a recovered task survives a transient status failure and drops its stale card on ${terminal}`,async t=>{
+ const documentId='10000000-0000-4000-8000-000000000001',turnId='10000000-0000-4000-8000-000000000002'
+ const statuses=[200,503,terminal],methods=[]
+ const client=createCodingClient({agents:descriptors,defaultId:'codex',documentId,csrfToken:'c'.repeat(43),getModelId:()=> 'office-model',fetchImpl:async(url,init)=>{
+  methods.push(init.method)
+  if(url.includes('/events?'))return new Response(null,{status:404})
+  if(!url.includes('/status?'))return Response.json({taskIds:[turnId]})
+  const status=statuses.shift()
+  if(status==='incomplete result')return Response.json({turnId,documentId,agentId:'codex',state:'succeeded'})
+  return status===200?Response.json({turnId,documentId,agentId:'codex',state:'running'}):new Response(null,{status})
+ }})
+ t.after(()=>client.dispose())
+ const tick=()=>new Promise(resolve=>setImmediate(resolve))
+ t.mock.timers.enable({apis:['setTimeout']})
+ await tick()
+ assert.equal(client.snapshot()[0]?.state,'running')
+ t.mock.timers.tick(1000);await tick()
+ assert.equal(client.snapshot()[0]?.state,'running')
+ const changes=[]
+ client.subscribe(()=>changes.push(client.snapshot().length))
+ t.mock.timers.tick(1000);await tick()
+ assert.deepEqual(client.snapshot(),[])
+ assert.deepEqual(changes,[0])
+ t.mock.timers.tick(5000);await tick()
+ assert.deepEqual(methods,['GET','GET','GET','GET','GET'])
+})

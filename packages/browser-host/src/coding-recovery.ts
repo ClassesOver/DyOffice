@@ -18,8 +18,9 @@ const limit=8
 const STREAM_SAFETY_POLLS=10
 type LiveView={activity?:string;progress?:string;state?:'running'|'cancel_requested'}
 
-export function createCodingRecovery({documentId,storage,fetchImpl=fetch,csrfToken,onStatus,events=true}:{
+export function createCodingRecovery({documentId,storage,fetchImpl=fetch,csrfToken,onStatus,onUnavailable,events=true}:{
   documentId:string;storage?:TaskIdStorage;fetchImpl?:typeof fetch;csrfToken:string;onStatus:(status:RecoveryStatus)=>void
+  onUnavailable?:(id:string)=>void
   /** Subscribe to the server's task event stream; polling remains the fallback. */
   events?:boolean
 }){
@@ -138,6 +139,13 @@ export function createCodingRecovery({documentId,storage,fetchImpl=fetch,csrfTok
     }else discoveryFailures=0
     void poll()
   }
+  function forgetUnavailable(id:string){
+    forget(id)
+    watched.delete(id)
+    write(read().filter(saved=>saved!==id))
+    observers.get(id)?.()
+    onUnavailable?.(id)
+  }
   async function poll(){
     if(discovering||pending||controller.signal.aborted||!watched.size)return
     // Exactly one polling loop: drop any scheduled run before starting this one.
@@ -150,7 +158,7 @@ export function createCodingRecovery({documentId,storage,fetchImpl=fetch,csrfTok
           const response=await get(taskPath+'/'+id+'/status'+query)
           if(controller.signal.aborted)return
           if([401,403,404].includes(response.status)){
-            forget(id);watched.delete(id);write(read().filter(saved=>saved!==id));observers.get(id)?.();return
+            forgetUnavailable(id);return
           }
           if(!response.ok)return
           const value=await response.json() as RecoveryStatus
@@ -158,7 +166,7 @@ export function createCodingRecovery({documentId,storage,fetchImpl=fetch,csrfTok
           if(!terminal.has(value.state)&&value.state!=='running'&&value.state!=='cancel_requested')return
           // A terminal status we cannot use is still terminal: stop polling and fail the waiter fast.
           if(value.state==='succeeded'&&(typeof value.result?.summary!=='string'||typeof value.result.output!=='string')){
-            forget(id);watched.delete(id);write(read().filter(saved=>saved!==id));observers.get(id)?.();return
+            forgetUnavailable(id);return
           }
           if(terminal.has(value.state)){watched.delete(id);forget(id);observers.get(id)?.(value);onStatus(value);return}
           latest.set(id,value)
