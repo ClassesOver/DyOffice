@@ -190,3 +190,26 @@ test('AI checkpoint restoration after a real committed revision is dirty and pre
  assert.equal((await f.files.openFile(f.alice.token,fileId)).file.revision,saved.revision)
  assert.deepEqual(await f.files.readFile(f.alice.token,fileId,saved.revision),Buffer.from(draft.bytes))
 })
+
+test('download a displaced editor’s editable draft without modifying its successor or the saved file',async t=>{
+ const f=await fixture(t),{fileId,revision}=f.file.file,token=f.alice.token
+ const old={...f.authority,revision,generation:0}
+ await f.service.open(token,fileId,old)
+ const {generation}=await f.service.apply(token,fileId,{...old,ops:ops('e_904989a1','Recovered PPTX edit')})
+ const editorId=randomUUID()
+ const next=await f.leases.takeoverLease(token,fileId,{editorId,expectedEpoch:old.leaseEpoch})
+ const draft={...old,generation}
+ const live=await f.service.recoverDraft(token,fileId,draft)
+ const successor=await f.service.open(token,fileId,{editorId,leaseEpoch:next.leaseEpoch,revision,generation:0})
+ assert.equal(successor.dirty,false)
+ const title=view=>view.slides[0].nodes.find(node=>node.durableId==='e_904989a1').text.lines.flatMap(line=>line.runs.map(run=>run.text)).join('')
+ assert.equal(title(successor),'Acceptance title')
+ const copy=await f.service.recoverDraft(token,fileId,draft)
+ assert.equal(copy.generation,live.generation)
+ const recovered=await importFile(f,token,copy.bytes,'recovered.pptx')
+ const copyId=recovered.file.fileId,lease=await f.leases.acquireLease(token,copyId,{editorId})
+ const reopened=await f.service.open(token,copyId,{editorId,leaseEpoch:lease.leaseEpoch,revision:recovered.file.revision,generation:0})
+ assert.equal(title(reopened),'Recovered PPTX edit')
+ assert.equal((await f.files.openFile(token,fileId)).file.revision,revision)
+ await assert.rejects(f.service.exportForSave(token,fileId,draft),{statusCode:409})
+})

@@ -89,8 +89,25 @@ export function createSlidesService({ files, leases, revisions, host, maxConcurr
   if (!Number.isSafeInteger(sessionIdleMs) || sessionIdleMs < 10_000 || sessionIdleMs > 24 * 3600_000) throw new Error('Invalid slides session idle bound')
   let active = 0
   const registry = new Map<string, SessionEntry>()
+  // Detached drafts are immutable downloads, never inputs to a new editing session.
+  const copies=new Map<string,{revision:string;generation:number;bytes:Buffer;expires:number}>()
+  const draftKey=(fileId:string,binding:string)=>fileId+':'+binding
+  const editorBinding=(token:string,input:SlidesAuthority)=>createHash('sha256').update(token).digest('hex')+':'+input.editorId+':'+input.leaseEpoch
+  async function retainDraft(entry:SessionEntry,binding:string) {
+    if(!dirty(entry))return
+    const {generation,bytes}=await entry.handle.exportBytes(entry.generation)
+    if(generation!==entry.generation||!bytes.length||bytes.length>MAX_DOWNLOAD)return
+    let size=bytes.length
+    for(const copy of copies.values())size+=copy.bytes.length
+    for(const [key,copy] of copies){
+      if(size<=2*MAX_DOWNLOAD&&copies.size<maxSessions)break
+      size-=copy.bytes.length;copies.delete(key)
+    }
+    copies.set(draftKey(entry.fileId,binding),{revision:entry.revision,generation,bytes:Buffer.from(bytes),expires:Date.now()+sessionIdleMs})
+  }
   const starting = new Set<string>()
   const sweeper = setInterval(() => {
+    for(const [key,copy] of copies)if(copy.expires<=Date.now())copies.delete(key)
     for (const [fileId, entry] of registry) {
       if (Date.now() - entry.lastUsed > sessionIdleMs) { registry.delete(fileId); bindings.delete(fileId); entry.handle.close() }
     }
@@ -449,6 +466,7 @@ export function createSlidesService({ files, leases, revisions, host, maxConcurr
       return { generation: exported.generation, bytes: Buffer.from(exported.bytes) }
     },
     closeAll() {
+      copies.clear()
       for (const [fileId, entry] of registry) { registry.delete(fileId); bindings.delete(fileId); entry.handle.close() }
     },
   }
@@ -475,7 +493,7 @@ export function createSlidesService({ files, leases, revisions, host, maxConcurr
       if(active&&!(method==='generatePage'&&active.method==='generatePage'))throw authError(409)
       if(active)active.count++
       else busy.set(fileId,{method,count:1})
-      const binding=signedRead?'signed:'+input.revision:createHash('sha256').update(token).digest('hex')+':'+input.editorId+':'+input.leaseEpoch
+      const binding=signedRead?'signed:'+input.revision:editorBinding(token,input)
       let entered=false,completed=false
       const discard=()=>{if(bindings.get(fileId)===binding){registry.get(fileId)?.handle.close();registry.delete(fileId);bindings.delete(fileId)}}
       try{
@@ -484,7 +502,9 @@ export function createSlidesService({ files, leases, revisions, host, maxConcurr
         signal?.throwIfAborted()
         if(bindings.has(fileId)&&bindings.get(fileId)!==binding){
           if(!opensSession)throw authError(409)
-          registry.get(fileId)?.handle.close();registry.delete(fileId);bindings.delete(fileId)
+          const previous=registry.get(fileId)
+          if(previous)await retainDraft(previous,bindings.get(fileId)!).catch(()=>{}) // A failed backup must not block the new editor.
+          previous?.handle.close();registry.delete(fileId);bindings.delete(fileId)
         }
         if(opensSession){
           const head=await files.openFile(token,fileId)
@@ -511,6 +531,21 @@ export function createSlidesService({ files, leases, revisions, host, maxConcurr
       finally{const current=busy.get(fileId);if(current&&--current.count===0)busy.delete(fileId)}
     }) as typeof service[K]
   }
-  return {bindPreparedUpload:guarded('bindPreparedUpload'),open:guarded('open'),openOutline:guarded('openOutline'),slide:guarded('slide'),notes:guarded('notes'),comments:guarded('comments'),chartData:guarded('chartData'),chartColorSchemes:guarded('chartColorSchemes'),animations:guarded('animations'),links:guarded('links'),runLinks:guarded('runLinks'),layouts:guarded('layouts'),masterParts:guarded('masterParts'),applyMaster:guarded('applyMaster'),slides:guarded('slides'),apply:guarded('apply'),editChart:guarded('editChart'),generatePage:guarded('generatePage'),landGeneratedPages:guarded('landGeneratedPages'),applyImage:guarded('applyImage'),undo:guarded('undo'),redo:guarded('redo'),beginHistoryBatch:guarded('beginHistoryBatch'),endHistoryBatch:guarded('endHistoryBatch'),restoreSnapshot:guarded('restoreSnapshot'),exportDraft:guarded('exportDraft'),exportForSave:guarded('exportForSave'),closeAll(){service.closeAll();bindings.clear()},dispose(){clearInterval(sweeper);service.closeAll();bindings.clear()}}
+  async function recoverDraft(token:string,fileId:string,input:SlidesReadInput,signal?:AbortSignal){
+    const binding=editorBinding(token,input)
+    await files.openFile(token,fileId)
+    const copy=copies.get(draftKey(fileId,binding))
+    if(copy&&copy.expires>Date.now()&&copy.revision===input.revision&&copy.generation===input.generation)return {generation:copy.generation,bytes:copy.bytes}
+    const entry=registry.get(fileId)
+    if(busy.has(fileId)||!entry||bindings.get(fileId)!==binding||entry.revision!==input.revision||entry.generation!==input.generation)throw authError(409)
+    busy.set(fileId,{method:'exportDraft',count:1})
+    try{
+      const result=await entry.handle.exportBytes(input.generation,signal).catch(mapSessionError)
+      await files.openFile(token,fileId)
+      if(result.generation!==input.generation||registry.get(fileId)!==entry||!result.bytes.length||result.bytes.length>MAX_DOWNLOAD)throw authError(409)
+      return {generation:result.generation,bytes:Buffer.from(result.bytes)}
+    }finally{busy.delete(fileId)}
+  }
+  return {recoverDraft,bindPreparedUpload:guarded('bindPreparedUpload'),open:guarded('open'),openOutline:guarded('openOutline'),slide:guarded('slide'),notes:guarded('notes'),comments:guarded('comments'),chartData:guarded('chartData'),chartColorSchemes:guarded('chartColorSchemes'),animations:guarded('animations'),links:guarded('links'),runLinks:guarded('runLinks'),layouts:guarded('layouts'),masterParts:guarded('masterParts'),applyMaster:guarded('applyMaster'),slides:guarded('slides'),apply:guarded('apply'),editChart:guarded('editChart'),generatePage:guarded('generatePage'),landGeneratedPages:guarded('landGeneratedPages'),applyImage:guarded('applyImage'),undo:guarded('undo'),redo:guarded('redo'),beginHistoryBatch:guarded('beginHistoryBatch'),endHistoryBatch:guarded('endHistoryBatch'),restoreSnapshot:guarded('restoreSnapshot'),exportDraft:guarded('exportDraft'),exportForSave:guarded('exportForSave'),closeAll(){service.closeAll();bindings.clear()},dispose(){clearInterval(sweeper);service.closeAll();bindings.clear()}}
 }
 export type SlidesSessions = ReturnType<typeof createSlidesService>

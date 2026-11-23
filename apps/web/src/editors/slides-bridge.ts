@@ -30,7 +30,7 @@ type SaveResult = {ok: boolean; path?: string; error?: string}
 type SaveReceipt = Awaited<ReturnType<SessionFileHost['saveSlides']>>
 type Recovery = {saved?: SaveReceipt; resolve(value: SaveResult): void; reject(error: unknown): void}
 /** The server pptx session: pinned to the file revision, fenced by generation. */
-type Session = {revision: string; generation: number; dirty: boolean; size: {cx: number; cy: number}; defaultFont: string; writeProtected: boolean}
+type Session = {authority?:{editorId:string;leaseEpoch:number};revision: string; generation: number; dirty: boolean; size: {cx: number; cy: number}; defaultFont: string; writeProtected: boolean}
 type ApplyResponse = {generation: number; dirty: boolean; changed?: number[]; created?: Array<{id:string;slide:number;index:number}>; size?: {cx:number;cy:number}; order?: string[]; index?: number; sections?: SectionInfo[] | null; history?: {canUndo: boolean; canRedo: boolean}; slide?: OpenResult['slides'][number]; transaction?: {applied:boolean;dryRun?:boolean;plan?:string[];failures?:Array<{index:number;error:string}>;records?:Array<{op:{op:string};slidePath?:string;created?:string[];after?:unknown}>}}
 type HistoryState = {canUndo: boolean; canRedo: boolean}
 const SLIDE_IMAGE_LIMIT = 6990508
@@ -194,7 +194,7 @@ export function createSlidesBridge(host: SessionFileHost, fileId: string, prefs:
     const generation = session && session.revision === state.revision.revision ? session.generation : 0
     const raw = await call(state.revision.revision, generation, 'open') as {generation: number; dirty: boolean; size?: {cx: number; cy: number}; defaultFont?: string; slides: OpenResult['slides']; writeProtected?: true}
     if (disposed) throw hostError('UNAVAILABLE', 'disposed')
-    session = {revision: state.revision.revision, generation: raw.generation, dirty: !!raw.dirty, size: raw.size ?? {cx: 12192000, cy: 6858000}, defaultFont: raw.defaultFont ?? 'Calibri',writeProtected: raw.writeProtected===true}
+    session = {...(state.lease?{authority:{editorId:state.lease.editorId,leaseEpoch:state.lease.leaseEpoch}}:{}),revision: state.revision.revision, generation: raw.generation, dirty: !!raw.dirty, size: raw.size ?? {cx: 12192000, cy: 6858000}, defaultFont: raw.defaultFont ?? 'Calibri',writeProtected: raw.writeProtected===true}
     const result: OpenResult = {path: state.name, slides: raw.slides, size: session.size, defaultFont: session.defaultFont}
     if (fire) for (const handler of openedHandlers) { try { handler(result) } catch { /* renderer listeners cannot change durable results */ } }
     return result
@@ -1141,20 +1141,22 @@ export function createSlidesBridge(host: SessionFileHost, fileId: string, prefs:
       throw error
     }
   }
-  async function exportDraftCopy(proof:string,signal:AbortSignal) {
+  async function exportDraftCopy(proof:string|undefined,signal:AbortSignal,mode:'export'|'recover'='export') {
     if(waiting.length>=64)throw hostError('UNAVAILABLE','slides copy capacity')
     await acquireSlot()
     try{
-      const current=requireSession(),{lease}=host.getState(fileId),generation=current.generation
+      const current=requireSession(),lease=mode==='recover'?current.authority:host.getState(fileId).lease,generation=current.generation
+      if(mode==='recover')proof=csrf
+      if(!proof)throw hostError('UNAUTHORIZED','slides copy')
       if(!lease||recovery||opening)throw hostError('CONFLICT','slides copy')
-      const response=await fetchImpl(`/api/v1/files/${fileId}/slides/export`,{method:'POST',credentials:'same-origin',redirect:'error',signal,
+      const response=await fetchImpl(`/api/v1/files/${fileId}/slides/${mode}`,{method:'POST',credentials:'same-origin',redirect:'error',signal,
         headers:{'Content-Type':'application/json','X-CSRF-Token':proof},
         body:JSON.stringify({revision:current.revision,generation,editorId:lease.editorId,leaseEpoch:lease.leaseEpoch})})
       if(!response.ok||response.headers.get('x-slides-generation')!==String(generation))throw hostError('CONFLICT','slides copy')
       const blob=await response.blob()
       signal.throwIfAborted()
       const active=host.getState(fileId).lease
-      if(disposed||session!==current||!active||active.editorId!==lease.editorId||active.leaseEpoch!==lease.leaseEpoch||!blob.size||blob.size>32*1024*1024)throw hostError('CONFLICT','slides copy')
+      if(disposed||session!==current||current.generation!==generation||(mode==='export'&&(!active||active.editorId!==lease.editorId||active.leaseEpoch!==lease.leaseEpoch))||!blob.size||blob.size>32*1024*1024)throw hostError('CONFLICT','slides copy')
       return blob
     }finally{releaseSlot()}
   }
