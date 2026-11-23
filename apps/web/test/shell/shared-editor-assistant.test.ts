@@ -164,3 +164,29 @@ test('assistant dock collapse preserves the draft and returns focus when reopene
  expect(input.value).toBe('保留这份草稿');expect(document.activeElement).toBe(input)
  expect(f.stream).not.toHaveBeenCalled()
 })
+
+test('a channel continuation uses the current editor context after a selection change',async()=>{
+ const f=fixture()
+ let handlers:{continue(instruction:string,token:string):boolean}|undefined
+ const assistant={...(f.assistant as object),control:{
+  register(value:NonNullable<typeof handlers>){handlers=value;return ()=>{}},
+ }} as never
+ const render=(context:string)=>act(async()=>f.root.render(h(SharedEditorAssistant,{assistant,lang:'zh',context})))
+ await render('第 1 页')
+ await render('第 2 页')
+ await act(async()=>{expect(handlers!.continue('概括当前页','turn')).toBe(true)})
+ expect(f.stream.mock.calls[0]![0].messages.at(-1).text).toContain('第 2 页')
+})
+
+test('rejected delegation removes the unsent message and preserves the original draft',async()=>{
+ const f=fixture()
+ f.workspace.select('harness:codex')
+ f.run.mockRejectedValueOnce(Error('unavailable'))
+ await act(async()=>f.root.render(h(SharedEditorAssistant,{assistant:f.assistant,lang:'zh'})))
+ const input=f.host.querySelector('textarea')!
+ const draft=' 检查代码 '
+ await act(async()=>{Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value')!.set!.call(input,draft);input.dispatchEvent(new Event('input',{bubbles:true}))})
+ await act(async()=>f.host.querySelector<HTMLButtonElement>('[aria-label="发送"]')!.click())
+ expect(f.host.querySelector('.ai-msg-user')).toBeNull()
+ expect(input.value).toBe(draft)
+})
