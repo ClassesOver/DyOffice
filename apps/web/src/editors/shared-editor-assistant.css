@@ -9,3 +9,10 @@
 .shared-assistant-file-list{display:flex;flex-wrap:wrap;gap:6px;padding:4px 0;min-width:0;font-size:12px}
 .shared-assistant-file-list>span{display:inline-flex;align-items:center;gap:6px;max-width:100%;padding:4px 7px;border:1px solid var(--border);border-radius:6px;overflow-wrap:anywhere}
 .shared-assistant-file-list button{flex:none;border:0;padding:0;background:none;color:inherit;cursor:pointer}
+.shared-editor-assistant .ai-msg-attachments{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:6px}
+.shared-editor-assistant .ai-msg-attachments .ai-attachment-card{display:flex;align-items:center;gap:10px;border:1px solid var(--border);border-radius:12px}
+.shared-editor-assistant .ai-attachment-card-icon,.shared-editor-assistant .ai-attachment-thumb-pending{display:grid;place-items:center;flex:none;width:32px;height:32px;border-radius:10px;background:var(--surface-subtle)}
+.shared-editor-assistant :is(.ai-attachment-card-icon,.ai-attachment-thumb-pending) img{width:22px;height:22px}
+.shared-editor-assistant .ai-attachment-card-meta{display:flex;flex-direction:column;min-width:0}
+.shared-editor-assistant .ai-attachment-card-name{overflow:hidden;white-space:nowrap;text-overflow:ellipsis;font-size:13px}
+.shared-editor-assistant .ai-attachment-card-size{font-size:11px;color:var(--text-muted)}

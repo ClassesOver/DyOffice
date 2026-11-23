@@ -2313,7 +2313,7 @@ export function App({
         if(handoff)return loop.runDocumentHandoff(withSkills,handoff)
         const imageContext = hostRef.current?.setImageAttachments?.(attachments)
         const modelInstruction = imageContext ? withSkills + '\n\n' + imageContext : withSkills
-        loop.run(modelInstruction, attachments.map(({image}) => image), modelInstruction !== instruction && host?.assistant ? instruction : undefined,continuationToken?undefined:{text:instruction})
+        loop.run(modelInstruction, attachments.map(({image}) => image), modelInstruction !== instruction && host?.assistant ? instruction : undefined,continuationToken?undefined:{text:instruction,attachments:sentAttachments})
       })
   }
 

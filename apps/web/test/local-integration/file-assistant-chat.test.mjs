@@ -15,17 +15,20 @@ test('two authenticated sessions share a file conversation without replaying, re
   const post=(token,body,id=fileId,proof=csrf.sessionToken(token))=>f.app.inject({method:'POST',url:'/api/v1/files/'+id+'/assistant-chat',
     headers:{origin,cookie:SESSION_COOKIE+'='+token,'x-csrf-token':proof},payload:body})
   const turnId=randomUUID(),question={turnId,role:'user',sender:'dsh',text:'Hello',seq:0,state:'done'}
+  const attachments=[{name:'季度报告.docx',ext:'docx',sizeBytes:20040}]
   const assistant={turnId,role:'assistant',text:'Working',seq:0,state:'streaming'}
   assert.equal((await post(f.alice.token,{updates:[question]},fileId,'invalid')).statusCode,403)
   assert.equal((await post(f.bob.token,{})).statusCode,404)
   assert.equal((await post(f.alice.token,{updates:[{...assistant,sender:'dsh'}]})).statusCode,400)
   assert.equal((await post(f.alice.token,{updates:[{...assistant,toolArguments:{private:true}}]})).statusCode,400)
-  const sent=await post(f.alice.token,{updates:[question,assistant]})
+  assert.equal((await post(f.alice.token,{updates:[{...assistant,attachments}]})).statusCode,400)
+  const sent=await post(f.alice.token,{updates:[{...question,attachments},assistant]})
   assert.equal(sent.statusCode,200)
   const first=(await post(peer,{})).json()
   assert.deepEqual(first,sent.json())
   assert.deepEqual(first.messages.map(m=>m.role),['user','assistant'])
   assert.equal(first.messages[0].sender,'dsh')
+  assert.deepEqual(first.messages[0].attachments,attachments)
   assert.equal((await post(peer,{},another)).json().messages.length,0)
   const final={...assistant,text:'Done',seq:2,state:'done'}
   const [one,two]=await Promise.all([post(f.alice.token,{updates:[final]}),post(peer,{updates:[{...assistant,seq:1,text:'Thinking'}]})])

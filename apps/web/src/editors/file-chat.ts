@@ -1,6 +1,6 @@
-import {bindFileChat,type AgentMessage,type AgentTransport,type FileChatTurn,type VisibleChatMessage} from '@genoffice/agent-core'
+import {bindFileChat,type AgentMessage,type AgentTransport,type FileChatTurn,type VisibleChatAttachment,type VisibleChatMessage} from '@genoffice/agent-core'
 
-type Message={turnId:string;role:'user'|'assistant';text:string;seq:number;state:'streaming'|'done'|'failed';sender?:'dsh'}
+type Message={turnId:string;role:'user'|'assistant';text:string;seq:number;state:'streaming'|'done'|'failed';sender?:'dsh';attachments?:VisibleChatAttachment[]}
 type Stored=Message&{order:number}
 type Batch={cursor:number;messages:Stored[];hasMore:boolean}
 type Request=<T>(path:string,method:string,body:unknown,signal:AbortSignal)=>Promise<T>
@@ -75,7 +75,10 @@ export function createFileChat(fileId:string,transport:AgentTransport,request:Re
   function start(message:VisibleChatMessage,loop:object):FileChatTurn {
     const turnId=crypto.randomUUID()
     local.add(turnId)
-    put({turnId,role:'user',state:'done',seq:0,text:bounded(message.text),...(message.sender&&{sender:message.sender})})
+    const attachments=message.attachments?.slice(0,20).map(({name,ext,sizeBytes})=>({
+      name:name.replace(/\0/g,'').slice(0,255).replace(/[\uD800-\uDBFF]$/u,''),ext,sizeBytes,
+    })).filter(a=>a.name&&/^[a-z0-9]{1,12}$/.test(a.ext)&&Number.isSafeInteger(a.sizeBytes)&&a.sizeBytes>0&&a.sizeBytes<=50*1024*1024)
+    put({turnId,role:'user',state:'done',seq:0,text:bounded(message.text),...(message.sender&&{sender:message.sender}),...(attachments?.length&&{attachments})})
     put({turnId,role:'assistant',state:'streaming',seq:1,text:''})
     return attach(turnId,loop,1)
   }
