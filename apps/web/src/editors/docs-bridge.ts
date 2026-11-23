@@ -157,7 +157,7 @@ export function createDocsBridge(host: SessionFileHost, fileId: string, prefs: A
       urls.add(dataUrl)
       return { path: alias,name: state.name,dataUrl,hash: ref.sha256 }
     },
-    async saveDocx(path: string, data: ArrayBuffer) {
+    async saveDocx(path: string, data: ArrayBuffer,_auto?:boolean,candidate?:string) {
       if (disposed || takingOver || path !== alias || (saveFence && !saveFence())) return { ok: false,error: text.saveFailed }
       try {
         const saved = await host.save(fileId,new Uint8Array(data),saveFence??(()=>true),wordVersion)
@@ -165,9 +165,12 @@ export function createDocsBridge(host: SessionFileHost, fileId: string, prefs: A
         // acknowledge it into an editor that has already been torn down.
         if(disposed)return {ok:false,error:text.saveFailed}
         committed = saved
+        if(candidate)await host.nameSavedBlank?.(fileId,saved.revision,candidate).catch(()=>undefined)
+        const name=host.getState(fileId).name
+        if(disposed)return {ok:false,error:text.saveFailed}
         if (ticket) guard.settleSave(ticket,'committed')
         ticket = null; onChange()
-        return { ok: true }
+        return { ok: true,...(name?{name}:{}) }
       } catch {
         if(disposed)return {ok:false,error:text.saveFailed}
         const unknown = host.getState(fileId).status === 'unknown'

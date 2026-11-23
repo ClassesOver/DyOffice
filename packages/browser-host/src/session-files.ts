@@ -4,7 +4,7 @@ import { hostError, HostError } from '../../web-contracts/src/errors.ts'
 
 type Lease = { leaseEpoch: number; editorId: string; expiresAt: string }
 type Pending = { authorized?:()=>boolean; touchedEntries?: string[]; input: SaveInput; sha256: string; size: number }
-type Context = { preparing: boolean; leaseOperation: number; exclusiveLease: number | null; revision: RevisionRef; name: string; lease: Lease | null; pending: Pending | null; status: 'idle' | 'saving' | 'unknown' | 'conflict' | 'unauthorized'; staged: Map<string, { base: string; epoch: number; sha256: string; size: number }> }
+type Context = { autoNamePending:boolean; preparing: boolean; leaseOperation: number; exclusiveLease: number | null; revision: RevisionRef; name: string; lease: Lease | null; pending: Pending | null; status: 'idle' | 'saving' | 'unknown' | 'conflict' | 'unauthorized'; staged: Map<string, { base: string; epoch: number; sha256: string; size: number }> }
 const uuid = (value: string) => { if (typeof value !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value)) throw hostError('INVALID_REVISION','identifier'); return value.toLowerCase() }
 const digest = async (bytes: Uint8Array) => Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',bytes.slice().buffer as ArrayBuffer)),value => value.toString(16).padStart(2,'0')).join('')
 function errorFor(status: number) {
@@ -199,7 +199,7 @@ export function createSessionFileHost({ fetchImpl = fetch, editorId = crypto.ran
       if (initialCitation && initialCitation !== result.file.revision) throw new CitedRevisionChanged()
       citedRevision = undefined
       const name = typeof result.name === 'string' && result.name.length <= 255 ? result.name : id + '.' + result.format
-      contexts.set(id,{ preparing: false,leaseOperation: 0,exclusiveLease: null,revision: { ...result.file },name,lease: null,pending: null,status: 'idle',staged: new Map() }); remember(result.file); emit()
+      contexts.set(id,{ autoNamePending:result.autoNamePending===true, preparing: false,leaseOperation: 0,exclusiveLease: null,revision: { ...result.file },name,lease: null,pending: null,status: 'idle',staged: new Map() }); remember(result.file); emit()
       return result
     },
     async readBytes(fileId, revision) {
@@ -249,7 +249,7 @@ export function createSessionFileHost({ fetchImpl = fetch, editorId = crypto.ran
   return {
     ...host,
     subscribe(listener: () => void) { listeners.add(listener); return () => { listeners.delete(listener) } },
-    getState(fileId: string) { const ctx = liveContext(fileId,false); return { revision: { ...ctx.revision },name: ctx.name,lease: ctx.lease ? { ...ctx.lease } : null,status: ctx.status } },
+    getState(fileId: string) { const ctx = liveContext(fileId,false); return { revision: { ...ctx.revision },name: ctx.name,autoNamePending:ctx.autoNamePending,lease: ctx.lease ? { ...ctx.lease } : null,status: ctx.status } },
     getEditorId: () => editor,
     observeRealtime(fileId: string, remote: { lease: { leaseEpoch: number; editorId: string | null; heldByCurrentSession: boolean; active: boolean; expiresAt: string | null } } | null) {
       const id = uuid(fileId), ctx = liveContext(id, false), lease = ctx.lease
@@ -293,13 +293,22 @@ export function createSessionFileHost({ fetchImpl = fetch, editorId = crypto.ran
       if(context(id)!==ctx || ctx.revision.revision!==base.revision)throw hostError('CONFLICT','changed head')
       return result.file.revision===base.revision && result.file.sha256===base.sha256 && result.file.size===base.size
     },
+    async nameSavedBlank(fileId:string,revision:string,candidate:string){
+      const id=uuid(fileId),ctx=context(id),previous=ctx.name
+      if(!ctx.autoNamePending||ctx.revision.revision!==revision||!candidate.trim())return
+      const result=await mutation(`/api/v1/files/${id}/auto-name`,'POST',{revision,candidate:Array.from(candidate).slice(0,120).join('')})
+      if(context(id)!==ctx||ctx.revision.revision!==revision||result?.renamed!==true||typeof result.name!=='string'||result.name.length>255)return
+      ctx.name=result.name;ctx.autoNamePending=false;emit()
+      if(typeof window!=='undefined'&&window.parent!==window)window.parent.postMessage({type:'dyoffice-file-auto-name',previous,name:ctx.name},window.location.origin)
+      return ctx.name
+    },
     async refreshHead(fileId: string) {
       const id=uuid(fileId),ctx=context(id),base=ctx.revision.revision
       if(ctx.pending || ctx.preparing)throw hostError('UNAVAILABLE','unconfirmed save')
       const result=await get(`/api/v1/files/${id}`) as OpenFileResult & {name?: string}
       if(!isRevisionRef(result?.file)||result.file.fileId!==id)throw hostError('INVALID_RESPONSE','head')
       if(context(id)!==ctx || ctx.pending || ctx.preparing || ctx.revision.revision!==base)throw hostError('CONFLICT','changed head')
-      ctx.revision={...result.file};remember(result.file)
+      ctx.revision={...result.file};ctx.autoNamePending=result.autoNamePending===true;remember(result.file)
       if(typeof result.name==='string' && result.name.length<=255)ctx.name=result.name
       emit();return {...result.file}
     },

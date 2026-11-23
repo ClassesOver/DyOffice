@@ -26,7 +26,7 @@ async function fixture(t,intercept=()=>undefined){
  const lease=()=>({leaseEpoch:epoch,editorId,expiresAt:new Date(Date.now()+60000).toISOString()})
  const fetchImpl=async(path,init={})=>{
   if(path.endsWith('/commits')){commits++;commitInputs.push(JSON.parse(init.body))}
-  const handled=await intercept(path,init,{saved,setHead:value=>{head=value}});if(handled)return handled
+  const handled=await intercept(path,init,{head,saved,setHead:value=>{head=value}});if(handled)return handled
   if(path.endsWith('/csrf'))return json({csrfToken:'a'.repeat(43)})
   if(path.endsWith('/lease')&&!init.method)return json({...lease(),active:true})
   if(path.endsWith('/takeover')){epoch++;return json(lease())}
@@ -44,6 +44,27 @@ async function fixture(t,intercept=()=>undefined){
  const waitForConfirmation=()=>new Promise(resolve=>{const listener=()=>{if(bridge.needsConfirmation()){changes.delete(listener);resolve()}};changes.add(listener);listener()})
  return {host,bridge,fileId,initial,saved,fetchImpl,waitForConfirmation,notifications:()=>notifications,counts:()=>({preparations,commits}),commitInputs}
 }
+
+test('a saved blank workbook adopts its confirmed name in the editor',async t=>{
+ let fileName='未命名.xlsx'
+ const f=await fixture(t,(path,init,{head,saved})=>{
+  if(path.endsWith('/auto-name')){
+   assert.equal(JSON.parse(init.body).revision,saved.revision)
+   fileName='季度汇总.xlsx'
+   return json({renamed:true,name:fileName})
+  }
+  if(path===`/api/v1/files/${head.fileId}`)return json({file:head,format:'xlsx',name:fileName,autoNamePending:fileName==='未命名.xlsx',capabilities:{docx:'editable',xlsx:'editable',pptx:'read_only',pdf:'read_only'},downloadEndpoint:path+'/content?revision='+head.revision})
+ })
+ const file=await f.bridge.api.selectWorkbook()
+ assert.deepEqual(await f.bridge.api.autoRenameWorkbook(file.sessionId,'季度汇总'),{renamed:false})
+ const changes=[]
+ const unsubscribe=f.bridge.api.onWorkbookRenamed(name=>changes.push(name))
+ t.after(unsubscribe)
+ const saved=await f.bridge.api.saveWorkbookEdits({...sheetsSaveRequest(file.sheets[0].id,[{row:0,column:0,writeValue:true,value:42}]),sessionId:file.sessionId})
+ await f.bridge.api.autoRenameWorkbook(saved.file.sessionId,'季度汇总')
+ assert.deepEqual(changes,['季度汇总.xlsx'])
+ assert.equal((await f.bridge.api.selectWorkbook()).name,'季度汇总.xlsx')
+})
 
 // A bounded timeout reports a leaked Promise; barriers, not sleeps, establish
 // exactly which real bridge/host operation is in flight at teardown.

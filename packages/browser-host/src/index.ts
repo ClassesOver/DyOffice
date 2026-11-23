@@ -57,6 +57,7 @@ export function createBrowserHost(adapter: Partial<BrowserHost> = {}): BrowserHo
       if (result.name !== undefined && (typeof result.name !== 'string' || !result.name.length || result.name.length > 255 || /[\\/\u0000-\u001f]/.test(result.name))) throw hostError('INVALID_RESPONSE', 'file name')
       return {
         ...(result.name === undefined ? {} : { name: result.name }),
+        ...(result.format !== 'pdf' && result.autoNamePending === true ? { autoNamePending: true as const } : {}),
         ...(result.format === 'pdf' && result.pdfAutoNamePending === true ? { pdfAutoNamePending: true as const } : {}),
         ...(result.format !== 'pdf' && result.officeSignatureProtected === true ? { officeSignatureProtected: true as const } : {}),
         file: publicRevision(result.file),

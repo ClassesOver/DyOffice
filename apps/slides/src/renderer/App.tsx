@@ -381,6 +381,7 @@ export interface SlidesAppHost {
   saveDownload?: React.ReactNode
   downloadImages?: fileActions.SlideImageDownload
   namedCopy?: fileActions.SlidesNamedCopy
+  hasGeneratedName?:()=>boolean
   analysisGeneration?:()=>number|null
   runAnalysis?:(ops:unknown[],check:()=>boolean,adopt:(slides:RenderSlide[])=>void)=>Promise<boolean>
   /** Another editor holds the document: block text-edit entry and mutating chords (the API layer fences everything else). */
@@ -3771,6 +3772,7 @@ export function App({ host }: { host?: SlidesAppHost } = {}) {
                 extraSkills={host?.assistant?.extraSkills}
                 mediaCapabilities={host?.assistant?.mediaCapabilities}
                 onManageAgents={host?.assistant?.onManageAgents}
+                onGeneratedDraftReady={host?.hasGeneratedName?async()=>{if(hostRef.current?.hasGeneratedName?.())await saveRef.current(true,true)}:undefined}
                 key={aiPanelKey}
                 slides={slides}
                 current={current}

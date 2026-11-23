@@ -6,7 +6,7 @@ import {useEffect,useRef,useState} from 'react'
 import type {DocumentTab,DocumentCloseGuard} from './document-tabs'
 
 type EditorWindow=Omit<Window,'dyofficeEditorCanClose'>&{dyofficeEditorCanClose?:()=>boolean|Promise<boolean>;dyofficeEditorDispose?:()=>boolean|Promise<boolean>}
-export function DocumentFrame({file,registerGuard,sessionActive=()=>false,onAutoPdfName}:{file:DocumentTab;registerGuard:(id:string,guard:DocumentCloseGuard|null)=>void;sessionActive?:()=>boolean;onAutoPdfName?:(id:string,previous:string,name:string)=>void}){
+export function DocumentFrame({file,registerGuard,sessionActive=()=>false,onAutoFileName}:{file:DocumentTab;registerGuard:(id:string,guard:DocumentCloseGuard|null)=>void;sessionActive?:()=>boolean;onAutoFileName?:(id:string,previous:string,name:string)=>void}){
  const embedded=window.parent!==window&&new URLSearchParams(location.search).get('dshEmbed')==='1'
  const source=embedded?file.src+'&dshEmbed=1':file.src
  const frame=useRef<HTMLIFrameElement>(null)
@@ -35,9 +35,9 @@ export function DocumentFrame({file,registerGuard,sessionActive=()=>false,onAuto
     setLoadingState(event.data.state)
     if(event.data.state==='ready')syncTheme()
    }
-   if(event.data?.type==='dyoffice-pdf-auto-name'&&file.format==='pdf'&&session.current()&&
+   if((event.data?.type==='dyoffice-file-auto-name'||(event.data?.type==='dyoffice-pdf-auto-name'&&file.format==='pdf'))&&session.current()&&
       typeof event.data.previous==='string'&&typeof event.data.name==='string'&&event.data.name.length<=255){
-    onAutoPdfName?.(file.id,event.data.previous,event.data.name)
+    onAutoFileName?.(file.id,event.data.previous,event.data.name)
    }
   }
   window.addEventListener('message',receive)
@@ -45,7 +45,7 @@ export function DocumentFrame({file,registerGuard,sessionActive=()=>false,onAuto
    themeObserver.disconnect()
    window.removeEventListener('message',receive)
   }
- },[file.id,file.format,onAutoPdfName])
+ },[file.id,file.format,onAutoFileName])
  async function retryEditor(){
   if(retrying.current)return
   retrying.current=true

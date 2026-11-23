@@ -187,6 +187,7 @@ interface AiPanelProps {
   selectedIds: string[]
   /** no slide carries real content yet — the empty-state copy offers generation instead of polish */
   deckEmpty?: boolean
+  onGeneratedDraftReady?:()=>Promise<void>
   /** Decoded image cache from App (SlideThumb needs it) — powers AI-vision slide screenshots */
   images: Map<string, HTMLImageElement>
   applySlide: (slideIndex: number, updated: RenderSlide) => void
@@ -300,6 +301,7 @@ export function AiPanel({
   current,
   selectedIds,
   deckEmpty,
+  onGeneratedDraftReady,
   images,
   applySlide,
   applyDeck,
@@ -659,6 +661,8 @@ export function AiPanel({
   const qcPagesRef = useRef<number[]>([])
   const qcAbortRef = useRef<AbortController | null>(null)
   const qcRunningRef = useRef(false)
+  const generatedDraftReadyRef=useRef(onGeneratedDraftReady)
+  generatedDraftReadyRef.current=onGeneratedDraftReady
   /** Latest runQcPass closure; the loop's onDone (built once) calls through this ref */
   const runQcPassRef = useRef<() => Promise<void>>(() => Promise.resolve())
   /** DeckAccess reused by the QC pass (same executors as the main loop's slides skill) */
@@ -1413,11 +1417,17 @@ export function AiPanel({
             }
             return next
           })
-          void finishHistoryBatch().finally(() => {
+          void finishHistoryBatch().finally(async () => {
             setBusy(false)
             // Post-generation layout QC: only after a completed run that landed generated pages
             if (cancelled) qcPagesRef.current = []
-            else if (!historyBatchActiveRef.current && qcPagesRef.current.length > 0) void runQcPassRef.current()
+            else if (!historyBatchActiveRef.current && qcPagesRef.current.length > 0) {
+              if(!generatedDraftReadyRef.current)void runQcPassRef.current()
+              else {
+                await runQcPassRef.current()
+                if(!turnLimit&&!truncated&&!yielded)await generatedDraftReadyRef.current?.().catch(()=>{})
+              }
+            }
             // After the batch closes, so the next queued page opens a fresh one
             const resolveQueueRun = queueRunResolverRef.current
             queueRunResolverRef.current = null

@@ -29,7 +29,7 @@ function createLocalNew(format:'xlsx'|'pptx'|'pdf',busyMessage:string,unsupporte
     const file=new File([await response.arrayBuffer()],template.name)
     if(!file.size||file.size>32*1024*1024)throw new Error('原版空白模板无效')
     await requireEditable()
-    const stage=await bound.request<{uploadId:string}>('/api/v1/files/uploads','POST',{name:file.name,size:file.size})
+    const stage=await bound.request<{uploadId:string}>('/api/v1/files/uploads','POST',{name:file.name,size:file.size,autoName:true})
     const upload='/api/v1/uploads/'+encodeURIComponent(stage.uploadId)
     await bound.request(upload+'/content','PUT',file)
     endpoint=upload+'/finish'

@@ -54,8 +54,8 @@ export function registerFileRoutes(app: FastifyInstance, files: FileService, ses
       if(files.capabilities.pdfEditor!=='editable')throw authError(415)
       return reply.code(201).send(await files.createBlankPdf(token(request)))
     }))
-    api.post('/api/v1/files/uploads', { bodyLimit: 4096, schema: { querystring: emptyQuery, body: { type: 'object', additionalProperties: false, required: ['name','size'], properties: { name: { type: 'string', minLength: 1, maxLength: 255 }, size: { type: 'integer', minimum: 1, maximum: MAX_OBJECT_BYTES } } } } }, (request, reply) => transfer(request, reply, async () => {
-      const staged = await files.stageUpload(token(request), request.body as { name: string; size: number })
+    api.post('/api/v1/files/uploads', { bodyLimit: 4096, schema: { querystring: emptyQuery, body: { type: 'object', additionalProperties: false, required: ['name','size'], properties: { name: { type: 'string', minLength: 1, maxLength: 255 }, size: { type: 'integer', minimum: 1, maximum: MAX_OBJECT_BYTES }, autoName:{type:'boolean'} } } } }, (request, reply) => transfer(request, reply, async () => {
+      const staged = await files.stageUpload(token(request), request.body as { name: string; size: number; autoName?:boolean })
       return reply.code(201).send(staged)
     }))
     api.put('/api/v1/uploads/:id/content', { bodyLimit: MAX_OBJECT_BYTES, schema: { params, querystring: emptyQuery } }, (request, reply) => transfer(request, reply, async () => {
@@ -90,6 +90,10 @@ export function registerFileRoutes(app: FastifyInstance, files: FileService, ses
     api.patch('/api/v1/files/:id', { bodyLimit: 4096, schema: { params, querystring: emptyQuery, body: { type: 'object', additionalProperties: false, required: ['name'], properties: { name: { type: 'string', minLength: 1, maxLength: 255 } } } } }, async (request, reply) => {
       await files.renameFile(token(request), (request.params as { id: string }).id, (request.body as { name: string }).name)
       return reply.code(204).send()
+    })
+    api.post('/api/v1/files/:id/auto-name',{bodyLimit:4096,schema:{params,querystring:emptyQuery,body:{type:'object',additionalProperties:false,required:['revision','candidate'],properties:{revision:id,candidate:{type:'string',minLength:1,maxLength:255}}}}},request=>{
+      const {revision,candidate}=request.body as {revision:string;candidate:string}
+      return files.nameBlankFile(token(request),(request.params as {id:string}).id,revision,candidate)
     })
     const trashBatchSchema = {
       querystring: emptyQuery,

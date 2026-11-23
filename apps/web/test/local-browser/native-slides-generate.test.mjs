@@ -44,7 +44,11 @@ for(const live of [false,true])test(live?'a real model generates, redoes and reu
 },async t=>{
  const port=live?43684:43683,origin='http://localhost:'+port,f=await fileFixture(t,{origin,buildApp:false})
  const original=await readFile(new URL('../fixtures/slides/acceptance.pptx',import.meta.url))
- const {file}=await importFile(f,f.alice.token,original,'generate-deck.pptx')
+ const {file}=live?await importFile(f,f.alice.token,original,'generate-deck.pptx'):await (async()=>{
+  const {uploadId}=await f.files.stageUpload(f.alice.token,{name:'未命名.pptx',size:original.length,autoName:true})
+  await f.files.receiveUpload(f.alice.token,uploadId,original)
+  return f.files.finishUpload(f.alice.token,uploadId)
+ })()
  const keyring={activeKeyId:'slides-generate',keys:{'slides-generate':new Uint8Array(32).fill(44)}}
  const entry=live?JSON.parse(await readFile(liveConfig,'utf8')).entry:{
   id:'fixture',kind:'chat',providerId:'openai',label:'Fixture',model:'synthetic',baseUrl:'https://provider.example/v1/chat/completions',apiKey:'fixture-key',enabled:true,
@@ -402,6 +406,8 @@ for(const live of [false,true])test(live?'a real model generates, redoes and reu
  }finally{page.off('response',recordQuestionnaireResponse)}
  await expect(panel.getByText(answer,{exact:true})).toBeVisible({timeout:30000})
  await expect(page.locator('.thumb')).toHaveCount(2)
+ await expect.poll(head,{timeout:15000}).not.toBe(file.revision)
+ await expect.poll(async()=>(await f.files.openFile(f.alice.token,file.fileId)).name).toBe(contents[0][0]+'.pptx')
  await expect.poll(renderedText).toEqual(contents)
  assert.deepEqual(phases.slice(0,3),['office tool','style','outline'])
  assert.deepEqual(phases.slice(3,5).sort(),['page 1','page 2'])
@@ -409,12 +415,6 @@ for(const live of [false,true])test(live?'a real model generates, redoes and reu
  assert.ok(acceptedTools.has('generate_deck'))
  assert.ok(acceptedTools.has('ask_clarification'))
  assert.ok(acceptedTools.has('plan_deck'))
- assert.equal(await page.evaluate(()=>window.slidesApi.isDirty()),true)
- assert.equal(await head(),file.revision)
- assert.deepEqual(await revisions(),[file.revision])
-
- await page.keyboard.press('Control+s')
- await expect.poll(head,{timeout:15000}).not.toBe(file.revision)
  const saved=await head()
  await expect.poll(()=>page.evaluate(()=>window.slidesApi.isDirty())).toBe(false)
  assert.deepEqual(await revisions(),[file.revision,saved])

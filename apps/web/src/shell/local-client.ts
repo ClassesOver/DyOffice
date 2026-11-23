@@ -113,11 +113,11 @@ export function createLocalShellClient(send:typeof fetch=fetch) {
    do{const page:{files:WebFile[];nextCursor:string|null}=await request<{files:WebFile[];nextCursor:string|null}>(`/api/v1/files?limit=100${cursor?'&cursor='+encodeURIComponent(cursor):''}`);files.push(...page.files);cursor=page.nextCursor;if(cursor){if(seen.has(cursor))throw new Error('Invalid file pagination');seen.add(cursor)}}while(cursor)
    return files
   },
-  async upload(file:File,expectedProof:string){
+  async upload(file:File,expectedProof:string,autoName=false){
    if(!expectedProof)throw stale()
    if(file.size>32*1024*1024)throw new Error('文件超过 32 MiB 限制')
    const bound=await bindSession(expectedProof)
-   const stage=await bound.request<{uploadId:string}>('/api/v1/files/uploads','POST',{name:file.name,size:file.size})
+   const stage=await bound.request<{uploadId:string}>('/api/v1/files/uploads','POST',{name:file.name,size:file.size,...(autoName?{autoName:true}:{})})
    await bound.request(`/api/v1/uploads/${encodeURIComponent(stage.uploadId)}/content`,'PUT',file)
    // A failed finish may have committed: never retry or cancel it automatically.
    return bound.request<{file:{fileId:string};format:string}>(`/api/v1/uploads/${encodeURIComponent(stage.uploadId)}/finish`,'POST')
