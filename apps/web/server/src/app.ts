@@ -197,6 +197,7 @@ export async function buildLocalApp(config: LocalWebConfig): Promise<FastifyInst
   if (config.businessPool) {
     const transactions = createPrincipalTransactions({ pool: config.businessPool, deploymentId: config.deploymentId, idleMs: config.idleMs, sessionCredentials: csrf.sessionCredentials })
     const sources = createSourceService({ transactions, credentialKeys: config.sourcesCredentialKeys, egressTargets: config.sourcesEgressTargets })
+    app.addHook('onClose', sources.close)
     const sourceResults = createWorkspaceSourceResults({ transactions })
     const sourceTools = createWorkspaceSourceTools({ sources, results: sourceResults })
     if(config.assistantBackground&&(!config.assistantChannels||!config.objectStore||!config.providerGateway))throw Error('Background execution requires channels, object storage and model gateway')

@@ -7,7 +7,7 @@ import { readSourceEgressTargets } from '../admin/service.ts'
 import { tokenHash } from '../auth/sessions.ts'
 import { createCredentialVault } from './vault.ts'
 import { contentHash, executionFor, object, positiveVersion, secretHash, sourceConfig, sourceError, sourceId, sourceName, validateSourceSecret } from './config.ts'
-import { searchDbhubObjects } from './dbhub.ts'
+import { createDbhubRuntime, searchDbhubObjects } from './dbhub.ts'
 import { queryHttpSource } from './http.ts'
 import { querySqlSource, type SqlRows } from './sql.ts'
 import { createQuerySnapshot, fitSnapshotRows } from './provenance.ts'
@@ -93,11 +93,15 @@ export async function describeSourceMetadata(
 
 export function createSourceService({ transactions, credentialKeys = '', egressTargets }: { transactions: PrincipalTransactions; credentialKeys?: string; egressTargets?: readonly SourceEgressTarget[] }) {
   const vault = createCredentialVault(credentialKeys)
+  const dbhub = createDbhubRuntime()
   const fixedPolicy = egressTargets === undefined ? undefined : createSourceEgressPolicy(egressTargets)
-  async function sourcePolicy(connection: PoolClient, principal: BusinessPrincipal, token: string) {
-    if (fixedPolicy) return fixedPolicy
-    await connection.query("SELECT set_config('dyoffice.global_session_hash',$1,true),set_config('dyoffice.global_idle_ms',$2,true)", [tokenHash(token), String(transactions.sessionIdleMs)])
-    return createSourceEgressPolicy(await readSourceEgressTargets(connection, principal.deploymentId), { allowUnlistedSql: true })
+  async function sourcePolicy(connection: PoolClient, principal: BusinessPrincipal, token: string, row: Row) {
+    let policy = fixedPolicy
+    if (!policy) {
+      await connection.query("SELECT set_config('dyoffice.global_session_hash',$1,true),set_config('dyoffice.global_idle_ms',$2,true)", [tokenHash(token), String(transactions.sessionIdleMs)])
+      policy = createSourceEgressPolicy(await readSourceEgressTargets(connection, principal.deploymentId), { allowUnlistedSql: true })
+    }
+    return dbhub.bind(policy, [principal.deploymentId, principal.userId, row.source_id, row.version])
   }
   async function access<T>(token: string, operation: (connection: PoolClient, principal: BusinessPrincipal) => Promise<T>): Promise<T> {
     return transactions.withPrincipalTransaction({ kind: 'session', token }, async (connection, principal) => {
@@ -140,6 +144,7 @@ export function createSourceService({ transactions, credentialKeys = '', egressT
     return { sql: await querySqlSource(policy, row.kind, secret, query.sql, execution, { allowedTables: row.config.allowedTables, allowedSchemas: row.config.allowedSchemas, defaultSchema: row.kind === 'postgres' ? 'public' : parseSourceDsn(row.kind, secret).database }), execution }
   }
   return Object.freeze({
+    close: dbhub.close,
     /** AI metadata projection: current saved names only, never credentials or configs. */
     async listSavedMetadata(token: string, input: unknown = {}) {
       const query = object(input, ['after'])
@@ -223,7 +228,7 @@ export function createSourceService({ transactions, credentialKeys = '', egressT
       const prepared = await access(token, async (c, p) => {
         const row = await get(c, p, id)
         if (!row.enabled) throw sourceError(409)
-        const policy = await sourcePolicy(c, p, token)
+        const policy = await sourcePolicy(c, p, token, row)
         try { return { row, policy, secret: await readCredential(c, p, id, row) } } catch { return { row, policy, secret: null } }
       })
       let ok = false, code = 'SOURCE_UNAVAILABLE'
@@ -250,7 +255,7 @@ export function createSourceService({ transactions, credentialKeys = '', egressT
         const row = await get(c, p, id)
         if (row.version !== version || !row.enabled) throw sourceError(409)
         if (row.kind === 'http') throw sourceError(400)
-        return {row, secret: await readCredential(c,p,id,row), policy: await sourcePolicy(c,p,token)}
+        return {row, secret: await readCredential(c,p,id,row), policy: await sourcePolicy(c,p,token,row)}
       })
       const {row,secret,policy} = prepared
       const connectedDatabase = parseSourceDsn(row.kind,secret).database
@@ -277,7 +282,7 @@ export function createSourceService({ transactions, credentialKeys = '', egressT
       const prepared = await access(token, async (c, p) => {
         const row = await get(c, p, id)
         if (!row.enabled) throw sourceError(409)
-        return { row, secret: await readCredential(c, p, id, row), policy: await sourcePolicy(c, p, token) }
+        return { row, secret: await readCredential(c, p, id, row), policy: await sourcePolicy(c, p, token, row) }
       })
       const metadata = await describeSourceMetadata(prepared, payload)
       return access(token, async (c, p) => {
@@ -293,7 +298,7 @@ export function createSourceService({ transactions, credentialKeys = '', egressT
         // A batch may execute only against the connection it pinned before its first statement.
         if (!source.enabled || expectedVersion !== undefined && source.version !== expectedVersion) throw sourceError(409)
         const row: Row = { ...source, execution: executionFor(source.kind, source.config) }
-        return { row, secret: await readCredential(c, p, id, row), policy: await sourcePolicy(c, p, token) }
+        return { row, secret: await readCredential(c, p, id, row), policy: await sourcePolicy(c, p, token, row) }
       })
       const result = await execute(prepared.policy, prepared.row, prepared.secret, query)
       const snapshot = snapshotFor(prepared.row, result.execution, result.sql, result.rows)

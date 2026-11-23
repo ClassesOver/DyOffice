@@ -1,5 +1,5 @@
-import { randomUUID } from 'node:crypto'
-import { chmod, rm, writeFile } from 'node:fs/promises'
+import { createHash, randomUUID } from 'node:crypto'
+import { rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
@@ -7,6 +7,8 @@ import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import type { SourceExecution } from '../../../../../../packages/web-contracts/src/sources.ts'
 import type { SourceEgressPolicy, SqlSourceKind } from '../../security/egress.ts'
 import { sourceError } from './config.ts'
+import { validateReadOnlySql, type SqlTableScope } from './sql-policy.ts'
+import { DbhubPool } from './dbhub-pool.ts'
 import type { SqlRows } from './sql-types.ts'
 
 const DEFAULT_PACKAGE = '@bytebase/dbhub@2.1.0'
@@ -66,39 +68,69 @@ function columnType(rows: unknown[][], index: number): 'string' | 'number' | 'bo
   return 'string'
 }
 
+type Session = { client: Client; close(): Promise<void> }
+const bindings = new WeakMap<SourceEgressPolicy, { pool: DbhubPool<Session>; identity: string }>()
+
+export function createDbhubRuntime() {
+  const pool = new DbhubPool<Session>()
+  return {
+    bind(policy: SourceEgressPolicy, identity: readonly unknown[]) {
+      const scoped = { ...policy }
+      bindings.set(scoped, { pool, identity: JSON.stringify(identity) })
+      return scoped
+    },
+    close: () => pool.close(),
+  }
+}
+
+async function openSession(dsn: string, config: string, kind: SqlSourceKind, timeoutMs: number): Promise<Session> {
+  const configPath = join(tmpdir(), `dyoffice-dbhub-${randomUUID()}.toml`)
+  const client = new Client({ name: 'dyoffice-dbhub-client', version: '1.0.0' })
+  const close = async () => { try { await client.close() } finally { await rm(configPath, { force: true }) } }
+  try {
+    await writeFile(configPath, config, { mode: 0o600, flag: 'wx' })
+    const entry = process.env.DYOFFICE_DBHUB_ENTRY
+    const preload = '--import=' + new URL('./dbhub-starrocks.mjs', import.meta.url).href
+    const args = entry ? [...(kind === 'starrocks' ? [preload] : []), entry]
+      : ['-y', ...(kind === 'starrocks' ? ['--node-options=' + preload] : []), process.env.DYOFFICE_DBHUB_PACKAGE || DEFAULT_PACKAGE]
+    const transport = new StdioClientTransport({ command: entry ? process.execPath : process.env.DYOFFICE_DBHUB_COMMAND || 'npx',
+      args: [...args, '--transport', 'stdio', '--config', configPath], env: { DYOFFICE_DBHUB_DSN: dsn, DYOFFICE_DBHUB_DIALECT: kind } })
+    await client.connect(transport, { timeout: timeoutMs + 5000 })
+    return { client, close }
+  } catch (error) { await close(); throw error }
+}
+
 async function callDbhub(policy: SourceEgressPolicy, kind: SqlSourceKind, secret: string, tool: DbhubTool, args: Record<string, unknown>, execution: SourceExecution): Promise<unknown> {
   const target = await policy.sql(kind, secret)
   const timeoutMs = execution.statementTimeoutMs ?? 5000
-  const configPath = join(tmpdir(), `dyoffice-dbhub-${randomUUID()}.toml`)
-  await writeFile(configPath, dbhubConfig(execution.maxRows, timeoutMs), { encoding: 'utf8', mode: 0o600 })
-  await chmod(configPath, 0o600)
-  const command = process.env.DYOFFICE_DBHUB_COMMAND || 'npx'
-  const packageName = process.env.DYOFFICE_DBHUB_PACKAGE || DEFAULT_PACKAGE
-  const controller = new AbortController()
-  const timer = setTimeout(() => controller.abort(new DOMException('DBHub query timed out', 'TimeoutError')), timeoutMs + 5000)
-  const client = new Client({ name: 'dyoffice-dbhub-client', version: '1.0.0' })
-  try {
-    const transport = new StdioClientTransport({ command, args: ['-y', packageName, '--transport', 'stdio', '--config', configPath], env: { ...process.env, DYOFFICE_DBHUB_DSN: dbhubDsn(kind, target) } })
-    await client.connect(transport)
-    const result = await client.callTool({ name: tool, arguments: args }, undefined, { signal: controller.signal, timeout: timeoutMs + 4000 })
+  const config = dbhubConfig(execution.maxRows, timeoutMs), dsn = dbhubDsn(kind, target)
+  const start = () => openSession(dsn, config, kind, timeoutMs)
+  const run = async ({ client }: Session) => {
+    if (!client.transport) throw new Error('DBHub disconnected')
+    const result = await client.callTool({ name: tool, arguments: args }, undefined, { timeout: timeoutMs + 4000 })
     if (result.isError) throw sourceError(400)
     const response = parseToolResult(result) as { success?: boolean; data?: unknown } | undefined
     if (response?.success !== true || response.data === undefined) throw sourceError(502)
     return response.data
+  }
+  try {
+    const binding = bindings.get(policy)
+    if (!binding) {
+      const session = await start()
+      try { return await run(session) } finally { await session.close() }
+    }
+    const key = createHash('sha256').update(JSON.stringify([binding.identity, kind, target, config])).digest('hex')
+    return await binding.pool.use(key, start, run)
   } catch (error) {
-    if (controller.signal.aborted) throw sourceError(504)
+    if ((error as { code?: number }).code === -32001) throw sourceError(504)
     if ((error as { statusCode?: number }).statusCode) throw error
     throw sourceError(502)
-  } finally {
-    clearTimeout(timer)
-    controller.abort()
-    await client.close().catch(() => {})
-    await rm(configPath, { force: true }).catch(() => {})
   }
 }
 
-export async function queryDbhubSource(policy: SourceEgressPolicy, kind: SqlSourceKind, secret: string, sql: string, execution: SourceExecution): Promise<SqlRows> {
-  return statementsToRows(await callDbhub(policy, kind, secret, 'execute_sql', { sql }, execution))
+export async function queryDbhubSource(policy: SourceEgressPolicy, kind: SqlSourceKind, secret: string, sql: unknown, execution: SourceExecution, scope?: SqlTableScope): Promise<SqlRows> {
+  const normalized = validateReadOnlySql(sql, kind, scope)
+  return statementsToRows(await callDbhub(policy, kind, secret, 'execute_sql', { sql: normalized }, execution))
 }
 
 /** Use DBHub's schema search tool for metadata; it avoids connector-specific catalog SQL. */
