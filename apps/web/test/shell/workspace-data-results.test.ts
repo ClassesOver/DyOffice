@@ -30,6 +30,13 @@ test('workspace result list reads frozen pages and downloads authorized JSON wit
  const next=[...host.querySelectorAll('button')].find(button=>button.textContent==='下一批')!
  await act(async()=>next.click())
  expect((calls.at(-1)?.body as {arguments:{offset:number}}).arguments.offset).toBe(1000)
+ expect(choose.getAttribute('aria-expanded')).toBe('true')
+ expect(choose.closest('li')?.querySelector('table')).not.toBeNull()
+ const reads=calls.length
+ await act(async()=>choose.click())
+ expect(choose.getAttribute('aria-expanded')).toBe('false')
+ expect(host.querySelector('table')).toBeNull()
+ expect(calls).toHaveLength(reads)
  const createUrl=vi.spyOn(URL,'createObjectURL').mockReturnValue('blob:authorized')
  const revoke=vi.spyOn(URL,'revokeObjectURL').mockImplementation(()=>{})
  const click=vi.spyOn(HTMLAnchorElement.prototype,'click').mockImplementation(()=>{})
@@ -80,4 +87,38 @@ test('deleting a saved result asks first, calls DELETE once and frees the row; c
  expect(calls.filter(call=>call.method==='DELETE')).toEqual([{path:`/api/v1/workspace/data-results/${resultId}`,method:'DELETE'}])
  expect(remove()).toBeNull()
  expect(host.querySelector('[role=status]')?.textContent).toContain('已删除')
+})
+
+test('the list can recover from a failed load and shows a distinct empty state', async () => {
+ const list=vi.fn().mockRejectedValueOnce(new Error('offline')).mockResolvedValue({items:[],nextCursor:null})
+ const client={...createSourceResultsClient(async()=>undefined as never),list}
+ const host=document.createElement('div');const root=createRoot(host);roots.push(root)
+ await act(async()=>root.render(h(WorkspaceDataResults,{client,onClose(){}})))
+ expect(host.querySelector('[role=alert]')).not.toBeNull()
+ const refresh=[...host.querySelectorAll('button')].find(button=>button.textContent==='刷新列表')
+ expect(refresh).toBeDefined()
+ await act(async()=>refresh!.click())
+ expect(host.querySelector('[role=alert]')).toBeNull()
+ expect(host.textContent).toContain('暂无已保存的数据结果')
+})
+
+test('a search without matches can load the next page and reveal its matching result', async () => {
+ const client=createSourceResultsClient(async()=>undefined as never)
+ const list=vi.fn().mockResolvedValueOnce({items:[artifact],nextCursor:'next'})
+   .mockResolvedValueOnce({items:[{...artifact,resultId:'second',name:'季度报表'}],nextCursor:null})
+ client.list=list
+ const host=document.createElement('div');document.body.append(host)
+ const root=createRoot(host);roots.push(root)
+ await act(async()=>root.render(h(WorkspaceDataResults,{client,onClose(){}})))
+ const input=host.querySelector<HTMLInputElement>('input[type=search]')!
+ await act(async()=>{
+   Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value')!.set!.call(input,'季度')
+   input.dispatchEvent(new Event('input',{bubbles:true}))
+ })
+ expect(host.querySelector('output')?.textContent).toBe('0 / 1')
+ const more=[...host.querySelectorAll('button')].find(button=>button.textContent==='加载更多结果')!
+ await act(async()=>more.click())
+ expect(list).toHaveBeenLastCalledWith('next')
+ expect(host.querySelector('output')?.textContent).toBe('1 / 2')
+ expect(host.querySelector('li')?.textContent).toContain('季度报表')
 })

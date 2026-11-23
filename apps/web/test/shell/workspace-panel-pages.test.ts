@@ -19,13 +19,18 @@ test.each([
  ['sources',SourcesPanel,()=>({client:sourceClient()})],
  ['results',WorkspaceDataResults,()=>({client:resultClient()})],
  ['trash',WorkspaceTrash,()=>({request:async()=>({files:[],total:0}),onChanged(){}})],
-])('%s page presentation has no modal semantics and closes through its callback',async(_name,component,props)=>{
+])('%s embedded page uses the host header and has no modal semantics',async(_name,component,props)=>{
  const close=vi.fn();const host=await mount(component,{...props(),presentation:'page',onClose:close})
  expect(host.querySelector('[role="dialog"], [aria-modal], .set-overlay')).toBeNull()
- if(_name!=='results')expect(host.querySelector('.workspace-panel-header')).toBeNull()
- else expect(host.querySelector('.workspace-panel-header h2')?.textContent).toBeTruthy()
+ expect(host.querySelector('.workspace-panel-header')).toBeNull()
  expect(host.querySelector(_name==='sources'?'.database-connections-list':'.workspace-panel-body')).not.toBeNull()
- if(_name==='results'){await act(async()=>button('关闭').click());expect(close).toHaveBeenCalledOnce()}
+ if(_name==='results')expect(button('关闭')).toBeUndefined()
+})
+
+test('standalone results dialog closes through its callback',async()=>{
+ const close=vi.fn();const host=await mount(WorkspaceDataResults,{client:resultClient(),onClose:close})
+ expect(host.querySelector('[role=dialog] h2')?.textContent).toBeTruthy()
+ await act(async()=>button('关闭').click());expect(close).toHaveBeenCalledOnce()
 })
 
 test('source page close guard confirms dirty drafts before closing',async()=>{

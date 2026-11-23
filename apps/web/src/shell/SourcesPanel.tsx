@@ -470,8 +470,10 @@ export function SourcesPanel({ client, onClose, presentation = 'dialog', onClose
       <div className="dc-category-panel" id="dc-panel-scope" role={isPage&&!legacyHttp?'tabpanel':undefined} aria-labelledby={isPage&&!legacyHttp?'dc-tab-scope':undefined} hidden={isPage&&tab!=='scope'}>
       <fieldset disabled={busy||formBlocked||legacyHttp}><legend>{s('srcVisibleSchemasAndTables')}</legend><p>{s('srcSchemaTableScopeIntersection')}</p>
         {!legacyHttp&&<label>{s('srcOptionalDatabaseName')}<input aria-label={s('srcDatabaseName')} disabled={!publicConfig||busy||formBlocked} value={typeof publicConfig?.database==='string'?publicConfig.database:''} onChange={event=>{if(!publicConfig)return;const next={...publicConfig};const value=event.target.value.trim();if(value)next.database=value;else delete next.database;patch({config:JSON.stringify(next,null,2)})}}/><small>{s('srcDatabaseMustMatchCredentials')}</small></label>}
-        {!legacyHttp&&<label>{s('srcSchemaScope')}<select aria-label={s('srcSchemaScope')} disabled={!publicConfig||busy||formBlocked} value={publicConfig&&Object.hasOwn(publicConfig,'allowedSchemas')?'selected':'all'} onChange={event=>{if(!publicConfig)return;const next={...publicConfig};if(event.target.value==='selected')next.allowedSchemas=[];else delete next.allowedSchemas;patch({config:JSON.stringify(next,null,2)})}}><option value="all">{s('srcAllSchemasRestricted')}</option><option value="selected">{s('srcSelectedSchemasOnly')}</option></select></label>}
+        <div className="dc-scope-modes">
+        {!legacyHttp&&<label>{s('srcSchemaScope')}<select aria-label={s('srcSchemaScope')} disabled={!publicConfig||busy||formBlocked} value={publicConfig&&Object.hasOwn(publicConfig,'allowedSchemas')?'selected':'all'} onChange={event=>{if(!publicConfig)return;const next={...publicConfig};if(event.target.value==='selected')next.allowedSchemas=[];else delete next.allowedSchemas;patch({config:JSON.stringify(next,null,2)});if(event.target.value==='selected'&&!discovered&&canDiscover)void operation(()=>discover())}}><option value="all">{s('srcAllSchemasRestricted')}</option><option value="selected">{s('srcSelectedSchemasOnly')}</option></select></label>}
         {!legacyHttp&&<label>{s('srcTableVisibility')}<select aria-label={s('srcTableVisibility')} disabled={!publicConfig||busy||formBlocked} value={publicConfig&&Object.hasOwn(publicConfig,'allowedTables')?'selected':'all'} onChange={event=>{const value=event.target.value;if(!publicConfig)return;const next={...publicConfig};if(value==='selected')next.allowedTables=[];else delete next.allowedTables;patch({config:JSON.stringify(next,null,2)});if(value==='selected'&&!discovered&&canDiscover)void operation(()=>discover())}}><option value="selected">{s('srcSelectedTablesOnly')}</option><option value="all">{s('srcAllReadableTables')}</option></select></label>}
+        </div>
         {!legacyHttp&&<p>{selectedDirectories ? s('srcSelectedSchemaCount',{count:selectedDirectories.length}) : s('srcAllSchemas')}{s('srcListSeparator')}{selectedTables ? s(selectedDirectories?'srcTableCount':'srcSelectedTableCount',{count:selectedTables.length}) : s('srcAllReadableTables')}</p>}
         {!legacyHttp&&scopeChanged&&<button type="button" onClick={restoreScope}>{s('srcRestoreSavedSchemasAndTables')}</button>}
         {directoryLimit&&<p role="status">{s('srcSchemaLimitReached',{max:maxScopeEntries})}</p>}
@@ -505,16 +507,15 @@ export function SourcesPanel({ client, onClose, presentation = 'dialog', onClose
           {discovered&&<>
             {discovered.directories.truncated&&<p role="status">{s('srcSchemaDisplayLimit')}</p>}
             {!discovered.directories.items.length&&<p>{s('srcNoSchemasAvailable')}</p>}
+            <div className="dc-catalog-columns">
             {discovered.directories.items.length>0&&<details className="dc-picker" open>
               <summary>{discovered.tables ? s('srcSchemaNamed',{name:discovered.tables.directory}) : s('srcSearchOrSelectSchema')}</summary>
-              <label>{s('srcSearchSchemas')}<input aria-label={s('srcSearchSchemas')} type="search" value={directoryFilter} onChange={event=>setDirectoryFilter(event.target.value)}/></label>
-              {!matchingDirectories?.length&&<div className="dc-filter-empty">
-                <p role="status">{s('srcNoMatchingSchemas')}</p>
-                <button type="button" onClick={event=>{
-                  setDirectoryFilter('')
-                  event.currentTarget.closest('details')?.querySelector<HTMLInputElement>('input[type="search"]')?.focus()
-                }}>{s('srcClearSchemaSearch')}</button>
-              </div>}
+              <div className="dc-search-row"><label>{s('srcSearchSchemas')}<input aria-label={s('srcSearchSchemas')} type="search" value={directoryFilter} onChange={event=>setDirectoryFilter(event.target.value)}/></label>
+              {directoryFilter&&<button type="button" onClick={event=>{
+                setDirectoryFilter('')
+                event.currentTarget.closest('details')?.querySelector<HTMLInputElement>('input[type="search"]')?.focus()
+              }}>{s('srcClearSchemaSearch')}</button>}</div>
+              {!matchingDirectories?.length&&<p className="dc-filter-empty" role="status">{s('srcNoMatchingSchemas')}</p>}
               <ul aria-label={s('srcAvailableSchemas')}>{matchingDirectories?.map(directory=><li key={directory}>
               {selectedDirectories ? <label className="dc-check"><input type="checkbox" aria-label={s('srcAllowSchemaNamed',{name:directory})} checked={selectedDirectories.includes(directory)} disabled={directoryLimit&&!selectedDirectories.includes(directory)} onChange={event=>toggleScope('allowedSchemas',directory,event.target.checked)}/>{directory}</label> : <span>{directory}</span>}
               <button type="button" aria-current={discovered.tables?.directory===directory?true:undefined} disabled={!canDiscover} onClick={()=>void operation(()=>discover(directory))}>{s('srcBrowseTablesOf',{name:directory})}</button>
@@ -540,7 +541,11 @@ export function SourcesPanel({ client, onClose, presentation = 'dialog', onClose
               </div>}
               {discovered.tables.result.truncated&&<p role="status">{s('srcTableDisplayLimit')}</p>}
               {!discovered.tables.result.items.length&&<p>{s('srcNoTablesInSchema')}</p>}
-              {discovered.tables.result.items.length>0&&<label>{s('srcSearchTables')}<input aria-label={s('srcSearchTables')} type="search" value={catalogFilter} onChange={event=>setCatalogFilter(event.target.value)}/></label>}
+              {discovered.tables.result.items.length>0&&<div className="dc-search-row"><label>{s('srcSearchTables')}<input aria-label={s('srcSearchTables')} type="search" value={catalogFilter} onChange={event=>setCatalogFilter(event.target.value)}/></label>
+              {catalogFilter&&<button type="button" onClick={event=>{
+                setCatalogFilter('')
+                event.currentTarget.closest('details')?.querySelector<HTMLInputElement>('input[type="search"]')?.focus()
+              }}>{s('srcClearTableSearch')}</button>}</div>}
               {selectedTables&&discovered.tables.result.items.length>0&&<label className="dc-check"><input type="checkbox" aria-label={s('srcShowSelectedTablesOnly')} checked={selectedOnly} onChange={event=>setSelectedOnly(event.target.checked)}/>{s('srcShowSelectedTablesOnly')}</label>}
               {publicConfig&&!selectedTables&&discovered.tables.result.items.length>0&&<div className="dc-directory-warning">
                 <p>{s('srcAllAllowedTablesHelp')}</p>
@@ -549,13 +554,7 @@ export function SourcesPanel({ client, onClose, presentation = 'dialog', onClose
                   event.currentTarget.closest('details')?.querySelector<HTMLInputElement>('input[type="search"]')?.focus()
                 }}>{s('srcSelectIndividualTables')}</button>
               </div>}
-              {(tableSearch||filterSelected)&&!matchingTables.length&&<div className="dc-filter-empty">
-                <p role="status">{filterSelected?s('srcNoMatchingSelectedTables'):s('srcNoMatchingTables')}</p>
-                {tableSearch&&<button type="button" onClick={event=>{
-                  setCatalogFilter('')
-                  event.currentTarget.closest('details')?.querySelector<HTMLInputElement>('input[type="search"]')?.focus()
-                }}>{s('srcClearTableSearch')}</button>}
-              </div>}
+              {(tableSearch||filterSelected)&&!matchingTables.length&&<p className="dc-filter-empty" role="status">{filterSelected?s('srcNoMatchingSelectedTables'):s('srcNoMatchingTables')}</p>}
               {bulkTables&&selectedTables&&<div className="dc-bulk-tables">
                 <button type="button" disabled={!canDiscover||!tablesToAdd.length||exceedsTableLimit} onClick={()=>setTableSelection([...selectedTables,...tablesToAdd])}>{s('srcSelectBulk',{label:bulkLabel,count:bulkTables.length})}</button>
                 <button type="button" disabled={!canDiscover||!tablesToRemove.size} onClick={()=>setTableSelection(selectedTables.filter(id=>!tablesToRemove.has(id)))}>{s('srcUnselectBulk',{label:bulkLabel,count:bulkTables.length})}</button>
@@ -566,6 +565,7 @@ export function SourcesPanel({ client, onClose, presentation = 'dialog', onClose
                 ? <label className="dc-check"><input type="checkbox" aria-label={s('srcAllowTableNamed',{name:id})} checked={checked} disabled={tableLimit&&!checked} onChange={event=>toggleScope('allowedTables',id,event.target.checked,alias)}/>{name}</label>
                 : <span>{name}</span>}</li>)}</ul>
             </details>}
+            </div>
           </>}
         </section>}
         {(selectedDirectories||selectedTables)&&<details className="dc-manual-scope" open={!isPage}><summary>{s('srcEnterScopeManually')}</summary>

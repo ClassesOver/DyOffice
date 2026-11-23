@@ -571,6 +571,8 @@ test('directory bulk selection is available without typing a search and clearing
  await click('勾选当前目录（2）')
  expect(input('允许表 public.orders').checked).toBe(true)
  expect(input('允许表 public.payments').checked).toBe(true)
+ await change('搜索表','orders')
+ await click('清除表搜索')
  await change('搜索表','unmatched')
  await click('清除表搜索')
  expect(document.activeElement).toBe(input('搜索表'))
@@ -710,6 +712,8 @@ test('clearing a directory search restores the catalog without refetching or clo
  await click('可见范围')
  await click('读取目录和表')
  await click('浏览 sales 的表')
+ await change('搜索目录','sales')
+ await click('清除目录搜索')
  await change('搜索目录','nomatch')
  await click('清除目录搜索')
  expect(document.activeElement).toBe(input('搜索目录'))
@@ -853,6 +857,7 @@ test('restoring saved scope preserves unsaved connection and advanced fields',as
  detail.config={...detail.config,allowedTables:['sales.orders']}
  let saved:SaveSourceRequest|undefined
  await mount(async(path,method,body)=>{
+  if(path.endsWith('/discover'))return {items:[],truncated:false}
   if(method==='PUT'){saved=body as SaveSourceRequest;return detail.source}
   return path.includes('?')?{items:[detail.source],nextCursor:null}:detail
  },undefined,'page')
@@ -971,6 +976,20 @@ test('selecting specific tables automatically loads the table picker',async()=>{
  expect(input('允许表 public.orders').checked).toBe(false)
  await act(async()=>input('允许表 public.orders').click())
  expect(input('允许表 public.orders').checked).toBe(true)
+})
+
+test('selecting specific schemas automatically loads the directory picker',async()=>{
+ const detail=initial()
+ const requests:(string|undefined)[]=[]
+ await mount(async(path,_method,body)=>{
+  if(!path.endsWith('/discover'))return path.includes('?')?{items:[detail.source],nextCursor:null}:detail
+  const directory=(body as {directory?:string}).directory
+  requests.push(directory)
+  return {items:directory?['orders']:['public'],truncated:false}
+ },undefined,'page')
+ await click('可见范围')
+ await change('目录范围','selected')
+ expect(requests).toEqual([undefined,'public'])
 })
 
 test('advanced connection settings follow the UI language through the sources dictionary',async()=>{
