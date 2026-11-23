@@ -1,6 +1,6 @@
 # DSH DyOffice 预览
 
-执行 `/dyoffice word 创建一个活动策划` 后，可以在任务消息里阅读已保存的正文，查看 DSH 交办、DyOffice 交付和后续审阅的记录。底部显示同步状态和消息接收方。点击「编辑器」查看原生编辑器预览，点击「在新窗口打开 DyOffice」编辑同一份文件。XLSX、PPTX、PDF 使用相同入口。
+执行 `/dyoffice word 创建一个活动策划` 后，如果已启用网页嵌入，任务消息会直接显示 DyOffice 文档页面，以及 DSH 交办、DyOffice 交付和后续审阅的记录。点击「正文」查看文字摘录，点击「网页预览」切回文档页面。点击「在新窗口打开 DyOffice」可编辑同一份文件。底部显示同步状态和消息接收方。XLSX、PPTX、PDF 使用相同入口。
 
 ![DSH 任务消息中的 Word 正文与双方消息](../../docs/dyoffice/evidence/dsh-plugin-preview.jpg)
 
