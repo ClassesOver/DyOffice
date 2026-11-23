@@ -218,3 +218,50 @@
 .database-connections .dc-credential-input input { min-width:0; }
 .database-connections .dc-credential-input button { flex:none; }
 .database-connections .dc-test-help { flex-basis:100%; margin:0; font-size:12px; color:var(--dc-muted); }
+
+.database-connections .dc-scope-modes {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 15rem), 1fr));
+  gap: 16px;
+}
+
+.database-connections .dc-scope-modes {
+  padding: 14px;
+  background: var(--surface-subtle);
+  border-radius: 10px;
+}
+.database-connections .dc-picker > summary { font-weight: 600; padding-block: 4px; }
+.database-connections .dc-picker li {
+  flex-wrap: wrap;
+  padding: 6px 9px;
+  border-inline-start: 3px solid transparent;
+  border-radius: 6px;
+}
+.database-connections .dc-picker li:has(:checked, [aria-current=true]) {
+  border-inline-start-color: var(--accent);
+  background: var(--accent-soft);
+}
+.database-connections .dc-picker li > :first-child { flex: 1 1 9rem; min-width: 0; }
+.database-connections .dc-picker li button { max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
+.database-connections .dc-picker li:focus-within { outline: 1px solid var(--accent); outline-offset: -1px; }
+
+.database-connections .dc-search-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  align-items: end;
+  padding: 10px;
+  background: var(--surface-subtle);
+  border-radius: 8px;
+}
+.database-connections .dc-search-row label { flex: 1 1 14rem; min-width: 0; }
+.database-connections .dc-search-row button { max-width: 100%; }
+
+.database-connections .dc-catalog-columns {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 19rem), 1fr));
+  align-items: start;
+  gap: 12px;
+}
+.database-connections .dc-catalog-columns > :only-child { grid-column: 1 / -1; }
+.database-connections .dc-picker > summary::marker { color: var(--accent); }

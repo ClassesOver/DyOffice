@@ -23,3 +23,87 @@
 .native-settings-notice.is-error{color:var(--danger);border-color:var(--danger)}
 .native-settings-notice.is-success{color:var(--success)}
 @media(max-width:680px){.workspace-native-dialog{width:calc(100vw - 20px);max-height:94dvh;border-radius:10px}.native-dialog-heading{padding:14px 16px}.native-dialog-body{height:calc(90dvh - 62px)}.native-dialog-footer{padding:12px 16px}.workspace-native-dialog.is-compact .native-dialog-body{padding:16px}}
+
+.dr-toolbar, .dr-actions, .dr-pager {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.dr-toolbar { justify-content: space-between; gap: 12px; }
+.dr-toolbar p { flex: 1 1 22rem; margin: 0; color: var(--text-secondary); line-height: 1.6; }
+.dr-list { display: grid; gap: 12px; padding: 0; list-style: none; }
+.dr-list li {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 20px;
+  align-items: center;
+  padding: 16px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 12px;
+  background: var(--surface);
+}
+.dr-list li:has([aria-expanded="true"]) { border-color: var(--accent); }
+.dr-identity { flex: 1 1 14rem; min-width: 0; }
+.dr-identity .native-settings-button {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 10px;
+  max-width: 100%;
+  text-align: start;
+  overflow-wrap: anywhere;
+  padding: 4px 6px;
+  border-color: transparent;
+  font-weight: 600;
+}
+.dr-identity button::before {
+  content: "";
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-inline-end: 2px solid currentColor;
+  border-block-end: 2px solid currentColor;
+  transform: rotate(-45deg);
+}
+.dr-identity button:dir(rtl)::before { transform: rotate(45deg); }
+.dr-identity button[aria-expanded="true"]::before { transform: rotate(45deg); }
+.dr-identity button[aria-expanded="true"]:dir(rtl)::before { transform: rotate(-45deg); }
+.dr-meta, .dr-saved { padding-inline-start: 24px; color: var(--text-secondary); overflow-wrap: anywhere; }
+.dr-meta { display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: baseline; font-size: 13px; }
+.dr-meta bdi { color: var(--text-primary); font-weight: 500; }
+.dr-saved { margin-block-start: 4px; font-size: 12px; }
+.dr-saved time { font-variant-numeric: tabular-nums; }
+.dr-empty { padding: 20px; border-radius: 10px; background: var(--surface-subtle); }
+.dr-preview { flex: 1 1 100%; min-width: 0; border-top: 1px solid var(--border-subtle); overflow-wrap: anywhere; }
+.dr-preview > p, .dr-checksum { color: var(--text-secondary); font-size: 13px; }
+.dr-preview .source-results { max-width: 100%; max-height: 48vh; overflow: auto; border: 1px solid var(--border-subtle); border-radius: 8px; }
+.dr-preview .source-results table { min-width: 100%; overflow-wrap: normal; border-spacing: 0; }
+.dr-preview .source-results :is(th,td) { padding: 7px 12px; text-align: start; }
+.dr-preview .source-results [data-type="number"] { text-align: end; font-variant-numeric: tabular-nums; }
+.dr-preview .source-results td[data-type="string"] { max-width: 40ch; white-space: normal; overflow-wrap: anywhere; }
+.dr-preview .source-results th { position: sticky; top: 0; background: var(--surface-subtle); }
+.dr-preview tbody tr:nth-child(even) { background: var(--surface-subtle); }
+.dr-checksum, .dr-pager { margin-block-start: 12px; }
+.dr-checksum summary { cursor: pointer; width: fit-content; }
+.dr-checksum code { display: block; margin-block-start: 6px; user-select: all; }
+
+.dr-search {
+  display: flex;
+  align-items: end;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  margin-block: 16px;
+  padding: 12px 14px;
+  border-radius: 10px;
+  background: var(--surface-subtle);
+}
+.dr-search label { flex: 1 1 15rem; min-width: 0; display: grid; gap: 5px; }
+.dr-search label span { font-size: 13px; color: var(--text-secondary); }
+.dr-search output { align-self: center; font-variant-numeric: tabular-nums; }
+
+.workspace-data-results-panel .workspace-panel-body {
+  box-sizing: border-box;
+  padding: clamp(14px, 3vw, 28px);
+}
+.dr-toolbar p { margin: 0; font-size: 13px; }
+.dr-search output { white-space: nowrap; font-size: 12px; color: var(--text-secondary); }
