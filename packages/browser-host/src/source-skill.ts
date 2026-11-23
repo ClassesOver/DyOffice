@@ -33,7 +33,9 @@ function compactCatalog(value: Record<string, unknown>, args: Record<string, unk
   const units = config?.units ?? {}
   const unitForColumn = (row: unknown): [string, string][] => {
     const column = (row as { column_name?: unknown } | null)?.column_name
-    return typeof column === 'string' && Object.hasOwn(units, column) ? [[column, units[column]]] : []
+    if (typeof column !== 'string' || !Object.hasOwn(units, column)) return []
+    const unit = units[column]
+    return typeof unit === 'string' ? [[column, unit]] : []
   }
   // Include the unit key and value in the byte budget before exposing a column.
   const rows = rowsForModel(metadata.rows, 256, row => [row, ...unitForColumn(row)])
