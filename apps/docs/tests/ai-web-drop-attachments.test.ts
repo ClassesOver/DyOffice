@@ -40,7 +40,9 @@ it('Web transport accepts a dropped attachment and exposes its parsed text to re
     Object.defineProperty(drop, 'dataTransfer', { value: { files: [file] } })
     await act(async () => { panel.dispatchEvent(drop); await new Promise(resolve => setTimeout(resolve, 0)) })
     expect(container.querySelector('.ai-attachments')?.textContent).toContain('quarterly.txt')
-    expect(request).toHaveBeenCalledWith('/api/v1/ai/attachments/parse?name=quarterly.txt', 'POST', file)
+    expect(request).toHaveBeenCalledWith(
+      '/api/v1/ai/attachments/parse?name=quarterly.txt', 'POST', file, expect.any(AbortSignal),
+    )
     const path = attachments.getPathForFile(file)
     const skill = createFilesSkill(() => [{ path, name: file.name, ext: 'txt', sizeBytes: file.size }])
     const result = await skill.executeTool({ id: 'read-dropped', name: 'read_attachment', input: { index: 0 } })
