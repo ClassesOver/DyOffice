@@ -1,9 +1,12 @@
 import {createHash,randomBytes,randomUUID,timingSafeEqual} from 'node:crypto'
 import type {HarnessDataGrant,HarnessDataInputs} from '../../../../../../packages/web-contracts/src/harness-data.ts'
 import type {WorkspaceSourceResultDownload} from '../../../../../../packages/web-contracts/src/source-results.ts'
+import type {SourceToolQueryOutcome} from '../../../../../../packages/web-contracts/src/source-tools.ts'
 import type {SessionService,SessionPrincipal} from '../auth/sessions.ts'
-import {runQueryBatch,type WorkspaceSourceTools} from '../sources/tools.ts'
+import type {QueryBatchResult,WorkspaceSourceTools} from '../sources/tools.ts'
 import type {WorkspaceSourceResults} from '../sources/results.ts'
+import type {SourceService} from '../sources/service.ts'
+import {harnessSourceCatalog} from './source-catalog.ts'
 import type {createHarnessArtifacts,AnalysisDelivery} from './artifacts.ts'
 
 const unavailable=(statusCode=403)=>Object.assign(Error('Harness data unavailable'),{statusCode})
@@ -104,16 +107,23 @@ export function createHarnessDataAccess(options:{
     if(!entry.leaseUntil)current(entry)
     return entry
   }
-  async function guarded<T>(entry:Entry,operation:()=>Promise<T>):Promise<T> {
+  async function withGrant<T>(entry:Entry,operation:()=>Promise<T>):Promise<T> {
     if(entry.busy)throw unavailable(429)
     entry.busy=true
     const token=entry.token
-    try {await validate(entry);const result=await operation();await validate(entry);return result}
+    try {await validate(entry);return await operation()}
     // Keep the kinds of failure a task can act on (bad arguments, a conflicting
     // commit, a size/budget limit, rate limit, source timeout); anything else,
     // including revocation, stays an opaque 403. Messages never pass through.
     catch(error){const status=(error as {statusCode?:number}).statusCode;throw unavailable(status!==undefined&&ACTIONABLE_STATUSES.has(status)?status:403)}
     finally {entry.busy=false;if(entries.get(entry.taskId)!==entry)cleanup(entry,token)}
+  }
+  function guarded<T>(entry:Entry,operation:()=>Promise<T>) {
+    return withGrant(entry,async()=>{
+      const result=await operation()
+      await validate(entry)
+      return result
+    })
   }
   function resultId(entry:Entry,value:unknown) {
     const id=uuid(value)
@@ -157,6 +167,30 @@ export function createHarnessDataAccess(options:{
     },
     async execute(taskId:string,bearer:string,operation:string,args:unknown):Promise<unknown> {
       const entry=lookup(taskId,bearer)
+      if(operation==='sources.query')return withGrant(entry,async()=>{
+        const input=object(args,['sourceId','sql','queries','sourceVersion']),id=sourceId(input.sourceId)
+        if(!entry.sourceIds.has(id))throw unavailable()
+        const batch=input.queries!==undefined
+        if(batch&&(input.sql!==undefined||input.sourceVersion!==undefined))throw unavailable(400)
+        const count=batch&&Array.isArray(input.queries)?input.queries.length:1
+        if(entry.resultIds.size+count>64)throw unavailable(429)
+        // Bracket the final locked source read with live claim checks before granting any result IDs.
+        const result=await options.tools.execute(entry.token,{name:operation,arguments:input},entry.documentId,batch?()=>validate(entry):undefined)
+        await validate(entry)
+        const ids:string[]=[]
+        const manifest=(query:SourceToolQueryOutcome)=>{
+          ids.push(uuid(query.artifact?.resultId))
+          const {artifact,schema,timezone,totalRows,sourceTruncated,sha256,notice}=query
+          return {artifact,schema,timezone,totalRows,sourceTruncated,sha256,notice}
+        }
+        const response=batch
+          ? {items:(result as QueryBatchResult<SourceToolQueryOutcome>).items.map(item=>item.ok
+              ? {ok:true,result:manifest(item.result)}
+              : {ok:false,status:item.status,code:item.code})}
+          : manifest(result as SourceToolQueryOutcome)
+        for(const resultId of ids)entry.resultIds.add(resultId)
+        return response
+      })
       return guarded(entry,async()=>{
         if(operation==='sources.list') {
           const input=object(args,['after'])
@@ -177,23 +211,11 @@ export function createHarnessDataAccess(options:{
           }
           throw unavailable()
         }
-        if(operation==='sources.describe'||operation==='sources.query') {
-          const input=object(args,operation==='sources.describe'?['sourceId','table','tables','schema','tablePrefix']:['sourceId','sql','queries','sourceVersion']),id=sourceId(input.sourceId)
+        if(operation==='sources.describe') {
+          const input=object(args,['sourceId','table','tables','schema','tablePrefix','columnOffset']),id=sourceId(input.sourceId)
           if(!entry.sourceIds.has(id))throw unavailable()
-          if(operation==='sources.describe')return options.tools.execute(entry.token,{name:operation,arguments:input},entry.documentId)
-          const batch=input.queries!==undefined
-          if(batch&&(input.sql!==undefined||input.sourceVersion!==undefined))throw unavailable(400)
-          const count=batch&&Array.isArray(input.queries)?input.queries.length:1
-          if(entry.resultIds.size+count>64)throw unavailable(429)
-          const queryOne=async(sql?:string)=>{
-            if(batch)await validate(entry)
-            const result=await options.tools.execute(entry.token,{name:operation,arguments:batch?{sourceId:id,sql}:input},entry.documentId)
-            await validate(entry)
-            const query=result as {artifact:{resultId:string};schema:unknown;timezone:string;totalRows:number;sourceTruncated:boolean;sha256:string;notice:string}
-            entry.resultIds.add(uuid(query.artifact?.resultId))
-            return {artifact:query.artifact,schema:query.schema,timezone:query.timezone,totalRows:query.totalRows,sourceTruncated:query.sourceTruncated,sha256:query.sha256,notice:query.notice}
-          }
-          return batch?runQueryBatch(input.queries,queryOne):queryOne()
+          const catalog=await options.tools.execute(entry.token,{name:operation,arguments:input},entry.documentId) as Awaited<ReturnType<SourceService['describe']>>
+          return harnessSourceCatalog(catalog,input)
         }
         if(operation==='results.get_manifest') {
           const input=object(args,['resultId']),id=resultId(entry,input.resultId)

@@ -31,7 +31,7 @@ export async function createAssistantClient({request, fetchImpl, csrfToken, onDe
   const sourceMode = catalog.sourceMode ?? (catalog.sourceCatalog === true ? 'metadata-only' : 'off')
   const sourceTools = assistantSourceTools(sourceMode)
   const sourceSkill = sourceMode === 'read-only-analysis'
-    ? createWorkspaceSourceSkill(request, {tools:sourceTools, documentId, disposed:() => disposed})
+    ? createWorkspaceSourceSkill(request, {tools:sourceTools, ...(documentId === undefined ? {} : {documentId}), disposed:() => disposed})
     : sourceMode === 'metadata-only' ? createSourceCatalogSkill(request, () => disposed) : undefined
   const formatTools=format?assistantToolsForFormat(format):undefined
   const allowedTools = new Set(format

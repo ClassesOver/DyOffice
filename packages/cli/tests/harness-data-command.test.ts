@@ -1,10 +1,15 @@
 import {spawn} from 'node:child_process'
+import {createHash} from 'node:crypto'
 import {createServer} from 'node:http'
-import {mkdtemp,rm,writeFile,readdir} from 'node:fs/promises'
+import {mkdtemp,rm,writeFile,readdir,readFile} from 'node:fs/promises'
 import {tmpdir} from 'node:os'
 import {join} from 'node:path'
 import {fileURLToPath} from 'node:url'
-import {afterEach,expect,it} from 'vitest'
+import Fastify,{type FastifyInstance} from 'fastify'
+import {afterEach,expect,it,vi} from 'vitest'
+import {createHarnessDataMailbox} from '../../../apps/web/server/src/modules/coding/data-mailbox'
+import {registerHarnessDataRoutes} from '../../../apps/web/server/src/modules/coding/data-routes'
+import {createQuerySnapshot} from '../../../apps/web/server/src/modules/sources/provenance'
 import {parseArgs} from '../src/args'
 import {runHarnessDataCommand} from '../src/harness-data-command'
 
@@ -61,7 +66,6 @@ it('大产物使用本地参数文件，避开 shell argv 限制',async()=>{
 })
 
 it('任务文件邮箱与 HTTP/UDS 使用相同客户端且完成后清理交换文件',async()=>{
- const {createHarnessDataMailbox}=await import('../../../apps/web/server/src/modules/coding/data-mailbox')
  const calls:Array<Record<string,unknown>>=[]
  const mailbox=await createHarnessDataMailbox({async inject(request:Record<string,unknown>){calls.push(request);return {statusCode:200,headers:{'content-type':'application/json'},rawPayload:Buffer.from('{"sources":[{"id":"sales"}]}')}}} as never,'task_1')
  cleanup.push(()=>mailbox.close())
@@ -70,11 +74,128 @@ it('任务文件邮箱与 HTTP/UDS 使用相同客户端且完成后清理交换
  expect(calls).toHaveLength(1);expect(calls[0]!.url).toBe('/api/v1/agents/tasks/task_1/data/execute')
  expect(await readdir(mailbox.directory)).toEqual([])
 })
-it('取消停滞任务邮箱请求会清理文件，绝不切换网络或重试',async()=>{
+
+const taskEnv={OFFICE_HARNESS_DATA_URL:'http://127.0.0.1/api/v1/agents',OFFICE_HARNESS_TASK_ID:'task_1',OFFICE_HARNESS_DATA_CREDENTIAL:'x'.repeat(43)}
+async function taskTransport(app:FastifyInstance,transport:'mailbox'|'socket'|'HTTP',directory:string) {
+ const env:NodeJS.ProcessEnv={...taskEnv}
+ cleanup.push(async()=>{app.server.closeAllConnections();await app.close()})
+ if(transport==='mailbox'){
+  await app.ready()
+  const mailbox=await createHarnessDataMailbox(app,'task_1')
+  env.OFFICE_HARNESS_DATA_MAILBOX=mailbox.directory
+  cleanup.push(()=>mailbox.close())
+ }else if(transport==='socket'){
+  const path=join(directory,'data.sock')
+  await app.listen({path})
+  env.OFFICE_HARNESS_DATA_SOCKET=path
+ }else{
+  env.OFFICE_HARNESS_DATA_URL=await app.listen({host:'127.0.0.1',port:0})+'/api/v1/agents'
+ }
+ return env
+}
+
+it('returns all four wide schemas through the mailbox within the requested batch budget',async()=>{
+ const queries=['select 1','select 2','select 3','select 4']
+ const schema=Array.from({length:256},(_,i)=>({name:'列'.repeat(145)+i,type:'string',unit:'元'.repeat(75)}))
+ const items=queries.map((_,i)=>({ok:true,result:{artifact:{resultId:'result_'+i},schema,timezone:'UTC',totalRows:0,sourceTruncated:false}}))
+ let metadata:unknown={items}
+ const rawPayload=()=>Buffer.from(JSON.stringify(metadata))
+ expect(rawPayload().length).toBeGreaterThan(2*256*1024)
+ expect(rawPayload().length).toBeLessThan(4*256*1024)
+ const mailbox=await createHarnessDataMailbox({async inject(){return {statusCode:200,headers:{'content-type':'application/json'},rawPayload:rawPayload()}}} as never,'task_1')
+ cleanup.push(()=>mailbox.close())
+ const execute=(args:object)=>runHarnessDataCommand(parseArgs(['execute','sources.query','--args',JSON.stringify({sourceId:'sales',...args})]),{
+  cwd:mailbox.directory,env:{...taskEnv,OFFICE_HARNESS_DATA_MAILBOX:mailbox.directory}
+ })
+ expect((await execute({queries})).detail).toEqual({items})
+ await expect(execute({queries:queries.slice(0,2)})).rejects.toThrow('unavailable')
+ await expect(execute({sql:'select 1'})).rejects.toThrow('unavailable')
+ metadata={items:items.map((item,i)=>i===0?{...item,result:{...item.result,preview:[{value:1}]}}:item)}
+ await expect(execute({queries})).rejects.toThrow('unavailable')
+})
+
+it.each(['HTTP','socket','mailbox'] as const)('downloads a verified 4,000,000-byte snapshot and rejects one more byte over %s',async transport=>{
+ const directory=await mkdtemp(join(tmpdir(),'office-data-limit-'))
+ cleanup.push(()=>rm(directory,{recursive:true,force:true}))
+ const snapshot=(value:string)=>createQuerySnapshot({sourceId:'sales',sourceVersion:1,timezone:'UTC',sourceTruncated:false,
+  schema:[{name:'text',type:'string'}],rows:[{text:value}]})
+ const overhead=Buffer.byteLength(JSON.stringify(snapshot('')))
+ const app=Fastify()
+ registerHarnessDataRoutes(app,{
+  async download(_task:string,_bearer:string,id:string){
+   const size=id==='over'?4_000_001:4_000_000
+   const value=snapshot('x'.repeat(size-overhead))
+   return {bytes:Buffer.from(JSON.stringify(value)),sha256:value.sha256}
+  },dispose(){},
+ } as never)
+ const env=await taskTransport(app,transport,directory)
+ const download=(id:string)=>runHarnessDataCommand(parseArgs(['download',id,'--out',id+'.json']),{cwd:directory,env})
+ const result=await download('limit')
+ const bytes=await readFile(join(directory,'limit.json'))
+ expect(bytes.length).toBe(4_000_000)
+ expect(result.detail).toMatchObject({sizeBytes:bytes.length,sha256:createHash('sha256').update(bytes).digest('hex')})
+ await expect(download('over')).rejects.toThrow('unavailable')
+ await expect(readFile(join(directory,'over.json'))).rejects.toMatchObject({code:'ENOENT'})
+})
+
+it.each(['HTTP','socket'] as const)('a stalled query aborts the active %s connection when its deadline expires',async transport=>{
+ const directory=await mkdtemp(join(tmpdir(),'office-query-timeout-'))
+ cleanup.push(()=>rm(directory,{recursive:true,force:true}))
+ let started!:()=>void,release!:()=>void,disconnected!:()=>void
+ const running=new Promise<void>(resolve=>{started=resolve}),finish=new Promise<void>(resolve=>{release=resolve})
+ const closed=new Promise<void>(resolve=>{disconnected=resolve})
+ const app=Fastify()
+ app.post('/api/v1/agents/tasks/task_1/data/execute',async request=>{
+  request.socket.once('close',disconnected);started();await finish;return {items:[]}
+ })
+ const env=await taskTransport(app,transport,directory)
+ vi.useFakeTimers({toFake:['setTimeout','clearTimeout']})
+ try{
+  const work=runHarnessDataCommand(parseArgs(['execute','sources.query','--args','{"sourceId":"sales","queries":["select 1","select 2"]}']),{cwd:directory,env})
+  const outcome=expect(work).rejects.toThrow('unavailable')
+  await running;vi.advanceTimersByTime(120_001);vi.useRealTimers()
+  let timeout:ReturnType<typeof setTimeout>|undefined
+  try{
+   await Promise.race([closed,new Promise<never>((_,reject)=>{timeout=setTimeout(()=>reject(Error('Stalled query connection is still open')),2000)})])
+  }finally{clearTimeout(timeout);release()}
+  await outcome
+ }finally{vi.useRealTimers();release()}
+})
+
+it.each([
+ {scenario:'four queries can finish after 150 seconds',batch:true,elapsed:150_000,succeeds:true},
+ {scenario:'four stalled queries still expire',batch:true,elapsed:240_001,succeeds:false},
+ {scenario:'a single query still expires after 60 seconds',batch:false,elapsed:60_001,succeeds:false},
+])('mailbox deadline: $scenario',async({batch,elapsed,succeeds})=>{
+ let started!:()=>void,release!:()=>void
+ const running=new Promise<void>(resolve=>{started=resolve}),reply=new Promise<void>(resolve=>{release=resolve})
+ const rawPayload=Buffer.from(JSON.stringify(batch?{items:[1,2,3,4]}:{resultId:'one'}))
+ const mailbox=await createHarnessDataMailbox({async inject(){
+  started();await reply
+  return {statusCode:200,headers:{'content-type':'application/json'},rawPayload}
+ }} as never,'task_1')
+ cleanup.push(()=>mailbox.close())
+ vi.useFakeTimers({toFake:['setTimeout','clearTimeout']})
+ const args=batch?{sourceId:'sales',queries:['select 1','select 2','select 3','select 4']}:{sourceId:'sales',sql:'select 1'}
+ const operation=runHarnessDataCommand(parseArgs(['execute','sources.query','--args',JSON.stringify(args)]),{
+  cwd:mailbox.directory,env:{...taskEnv,OFFICE_HARNESS_DATA_MAILBOX:mailbox.directory}
+ })
+ const outcome=succeeds?expect(operation).resolves.toMatchObject({detail:{items:[1,2,3,4]}}):expect(operation).rejects.toThrow('unavailable')
+ try{
+  await running
+  // Four 30 s statements, each with connection and capture overhead.
+  vi.advanceTimersByTime(elapsed)
+ }finally{vi.useRealTimers();release()}
+ await outcome
+})
+it.each([
+ ['sources.list',{}],
+ ['sources.query',{sourceId:'sales',queries:['select 1','select 2']}],
+] as const)('取消停滞的 %s 任务邮箱请求会清理文件，绝不切换网络或重试',async(name,args)=>{
  const directory=await mkdtemp(join(tmpdir(),'office-mailbox-cancel-'))
  cleanup.push(()=>rm(directory,{recursive:true,force:true}))
  const controller=new AbortController()
- const operation=runHarnessDataCommand(parseArgs(['execute','sources.list']),{cwd:directory,env:{OFFICE_HARNESS_DATA_URL:'http://127.0.0.1/api/v1/agents',OFFICE_HARNESS_TASK_ID:'task_1',OFFICE_HARNESS_DATA_CREDENTIAL:'secret-in-env',OFFICE_HARNESS_DATA_MAILBOX:directory},signal:controller.signal})
+ const operation=runHarnessDataCommand(parseArgs(['execute',name,'--args',JSON.stringify(args)]),{cwd:directory,env:{...taskEnv,OFFICE_HARNESS_DATA_MAILBOX:directory},signal:controller.signal})
  setTimeout(()=>controller.abort(),40)
  await expect(operation).rejects.toThrow('cancelled')
  expect(await readdir(directory)).toEqual([])

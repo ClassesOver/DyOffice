@@ -1,4 +1,6 @@
 /** Shared by local and remote harness transports. No Office session secrets. */
+export const HARNESS_DATA_MAX_METADATA_BYTES = 256 * 1024
+
 export interface HarnessDataInputs {sourceIds:string[];resultIds:string[]}
 export interface HarnessDataGrant {
   taskId:string;claimId:string;connectionEpoch:1;credential:string

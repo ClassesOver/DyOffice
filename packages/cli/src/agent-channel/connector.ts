@@ -3,6 +3,9 @@ import {open, rename, unlink} from 'node:fs/promises'
 import {isAbsolute} from 'node:path'
 import {randomUUID} from 'node:crypto'
 import {spawn} from 'node:child_process'
+import {CHANNEL_LIMITS,type ChannelTask} from '../../../web-contracts/src/assistant-channel.ts'
+import type {HarnessDataGrant} from '../../../web-contracts/src/harness-data.ts'
+import type {ChannelClient} from './client'
 import {CliError,EXIT} from '../result'
 
 export interface ChannelState {
@@ -35,7 +38,7 @@ export async function writeState(path: string,state: ChannelState): Promise<void
   try{await file.writeFile(JSON.stringify(state));await file.close();await rename(temporary,path)}catch(error){await file.close().catch(()=>{});await unlink(temporary).catch(()=>{});throw error}
 }
 export interface AdapterConfig {command: string;args: string[]}
-export async function runAdapter(config: AdapterConfig,input: unknown,env: NodeJS.ProcessEnv,signal?:AbortSignal): Promise<{summary:string;outcome:'succeeded'|'failed'}> {
+export async function runAdapter(config: AdapterConfig,input: unknown,env: NodeJS.ProcessEnv,signal?:AbortSignal,timeoutMs=60_000): Promise<{summary:string;outcome:'succeeded'|'failed'}> {
   if(!isAbsolute(config.command) || !Array.isArray(config.args) || config.args.some(arg=>typeof arg!=='string'))
     throw new CliError(EXIT.usage,'Adapter requires an absolute executable and explicit string argv')
   if(signal?.aborted)throw new CliError(EXIT.app,'Harness adapter stopped')
@@ -48,7 +51,7 @@ export async function runAdapter(config: AdapterConfig,input: unknown,env: NodeJ
     const cleanup=()=>{clearTimeout(timer);signal?.removeEventListener('abort',stop)}
     const fail=()=>{if(settled)return;settled=true;cleanup();kill('SIGKILL');reject(new CliError(EXIT.app,'Harness adapter failed or returned invalid bounded JSON'))}
     const stop=()=>{if(stopping||settled)return;stopping=true;kill('SIGTERM');setTimeout(()=>{kill('SIGKILL');fail()},250)}
-    const timer=setTimeout(stop,60_000)
+    const timer=setTimeout(stop,timeoutMs)
     signal?.addEventListener('abort',stop,{once:true})
     child.on('error',fail);child.stdin.on('error',fail)
     child.stdout.on('data',(chunk:Buffer)=>{bytes+=chunk.length;if(bytes>256*1024)fail();else output+=chunk.toString('utf8')})
@@ -61,17 +64,60 @@ export async function runAdapter(config: AdapterConfig,input: unknown,env: NodeJ
   })
 }
 
-export interface ClaimedChannelTask {claimId:string;instruction:string;dataInputs?:{sourceIds:string[];resultIds:string[]}}
+export interface ClaimedChannelTask {claimId:string;instruction:string;deadlineAt?:string;dataInputs?:{sourceIds:string[];resultIds:string[]}}
 /** Member credentials stay in the connector; only the task data grant enters stdin. */
-export async function channelAdapterInput(client:import('./client').ChannelClient,state:ChannelState,taskId:string,claim:ClaimedChannelTask,connectionEpoch:number) {
-  const data=claim.dataInputs===undefined?undefined:await client.request<{baseUrl:string;grant:unknown}>('POST',
+export async function channelAdapterInput(client:ChannelClient,state:ChannelState,taskId:string,claim:ClaimedChannelTask,connectionEpoch:number) {
+  const data=claim.dataInputs===undefined?undefined:await client.request<{baseUrl:string;grant:HarnessDataGrant}>('POST',
     `/members/${encodeURIComponent(state.memberId!)}/tasks/${encodeURIComponent(taskId)}/data-grant`,state.memberToken,{claimId:claim.claimId,connectionEpoch})
   if(data&&data.baseUrl!==client.origin+'/api/v1/agents')throw new CliError(EXIT.app,'Channel data origin changed')
   return {task:{taskId,instruction:claim.instruction},claim:{claimId:claim.claimId},connectionEpoch,...(data?{data}:{})}
 }
 
+type MemberTasks={paused:boolean;member:{connectionEpoch:number};tasks:Pick<ChannelTask,'taskId'|'to'|'state'|'claimId'|'connectionEpoch'>[]}
+function memberTasks(client:ChannelClient,state:ChannelState,signal?:AbortSignal){
+  return client.request<MemberTasks>('GET','/members/'+encodeURIComponent(state.memberId!)+'/tasks',state.memberToken,undefined,signal)
+}
+
+export async function runClaimedAdapter(options:{
+  client:ChannelClient;state:ChannelState;taskId:string;claim:ClaimedChannelTask;connectionEpoch:number
+  adapter:AdapterConfig;env:NodeJS.ProcessEnv;signal?:AbortSignal;renewClaim?:boolean
+}) {
+  const {client,state,taskId,claim,connectionEpoch,adapter,env,signal}=options
+  if(signal?.aborted)throw new CliError(EXIT.app,'Harness adapter stopped')
+  const input=await channelAdapterInput(client,state,taskId,claim,connectionEpoch)
+  const sources=input.data?.grant?.inputs?.sourceIds
+  if(!Array.isArray(sources)||!sources.length)return runAdapter(adapter,input,env,signal)
+  const remaining=claim.deadlineAt===undefined?CHANNEL_LIMITS.deadlineMs:Date.parse(claim.deadlineAt)-Date.now()
+  const timeoutMs=Math.min(CHANNEL_LIMITS.deadlineMs,remaining)
+  if(!Number.isFinite(timeoutMs)||timeoutMs<1)throw new CliError(EXIT.app,'Channel task deadline expired')
+  if(!options.renewClaim)return runAdapter(adapter,input,env,signal,timeoutMs)
+
+  // Watch already polls. A one-shot source task must also renew its 45 s
+  // member lease while the adapter waits for a multi-statement response.
+  const controller=new AbortController(),stop=()=>controller.abort()
+  const active=signal?AbortSignal.any([signal,controller.signal]):controller.signal
+  let polling:Promise<void>|undefined,failure:unknown
+  const timer=setInterval(()=>{
+    if(polling||active.aborted)return
+    polling=memberTasks(client,state,active).then(snapshot=>{
+      if(snapshot.paused||snapshot.member.connectionEpoch!==connectionEpoch||!snapshot.tasks.some(task=>
+        task.taskId===taskId&&task.to===state.memberId&&task.state==='running'&&task.claimId===claim.claimId&&task.connectionEpoch===connectionEpoch)){
+        throw new CliError(EXIT.app,'Channel task claim is no longer active')
+      }
+    }).catch(error=>{if(!active.aborted){failure=error;stop()}}).finally(()=>{polling=undefined})
+  },10_000)
+  process.once('SIGINT',stop);process.once('SIGTERM',stop)
+  try {
+    return await runAdapter(adapter,input,env,active,timeoutMs)
+  }catch(error){throw failure??error}
+  finally {
+    clearInterval(timer);process.removeListener('SIGINT',stop);process.removeListener('SIGTERM',stop)
+    stop();await polling
+  }
+}
+
 /** Explicit Linux worker: never reclaims running/unknown tasks or retries a claim. */
-export async function watchChannel(options:{client:import('./client').ChannelClient;state:ChannelState;adapter:AdapterConfig;env:NodeJS.ProcessEnv;signal:AbortSignal;save:(state:ChannelState)=>Promise<void>}) {
+export async function watchChannel(options:{client:ChannelClient;state:ChannelState;adapter:AdapterConfig;env:NodeJS.ProcessEnv;signal:AbortSignal;save:(state:ChannelState)=>Promise<void>}) {
   if(process.platform!=='linux')throw new CliError(EXIT.usage,'Agent watch requires Linux process-group cancellation')
   const {client,state,adapter,env,signal,save}=options
   if(!state.memberId||!state.memberToken||!state.conversationId)throw new CliError(EXIT.usage,'Redeem membership before watching')
@@ -90,7 +136,7 @@ export async function watchChannel(options:{client:import('./client').ChannelCli
     await save({...state,connectionId,connectionEpoch})
     while(!signal.aborted) {
       if(failure)throw failure
-      const snapshot=await client.request<{paused:boolean;member:{connectionEpoch:number};tasks:{taskId:string;state:string;to:string}[]}>('GET',member+'/tasks',state.memberToken)
+      const snapshot=await memberTasks(client,state)
       if(snapshot.member.connectionEpoch!==connectionEpoch)throw new CliError(EXIT.app,'Channel connection was superseded')
       if(snapshot.paused){active?.controller.abort();break}
       if(active&&!snapshot.tasks.some(task=>task.taskId===active!.taskId&&task.state==='running')){active.controller.abort();break}
@@ -103,9 +149,7 @@ export async function watchChannel(options:{client:import('./client').ChannelCli
           const running={taskId:task.taskId,controller,work:Promise.resolve()}
           active=running
           running.work=(async()=>{
-            const input=await channelAdapterInput(client,state,task.taskId,claim,connectionEpoch)
-            if(controller.signal.aborted||signal.aborted)return
-            const result=await runAdapter(adapter,input,env,controller.signal)
+            const result=await runClaimedAdapter({client,state,taskId:task.taskId,claim,connectionEpoch,adapter,env,signal:AbortSignal.any([signal,controller.signal])})
             if(controller.signal.aborted||signal.aborted)return
             await client.request('POST',member+'/actions',state.memberToken,{requestId:randomUUID(),conversationId:state.conversationId,to:'office',action:{kind:'result',taskId:task.taskId,claimId:claim.claimId,connectionEpoch,...result}})
           })().catch(error=>{failure=error}).finally(()=>{if(active===running)active=undefined})

@@ -97,6 +97,6 @@ node /opt/dyoffice/harness-data.mjs execute artifacts.commit --args-file deliver
 
 连接由任务启动器注入 `OFFICE_HARNESS_DATA_URL`、`OFFICE_HARNESS_TASK_ID`，外部使用 `OFFICE_HARNESS_DATA_CREDENTIAL`；内置使用任务目录内 0600 凭据文件，由 `OFFICE_HARNESS_DATA_CREDENTIAL_FILE` 指定路径，避免凭据值进入 Codex 进程参数。凭据不接收命令行参数，也不需要 Office 会话 cookie、数据库密码或模型密钥。外部 harness 直接连接已授权 HTTP API；Linux 内置 Codex 的网络禁用沙箱连 Unix `connect` 也禁止，因此使用 `OFFICE_HARNESS_DATA_MAILBOX` 指向本任务专属交换目录，服务端将 HTTP 请求信封转入完全相同的鉴权路由。邮箱只承担传输，不计算数据，也不扩大来源权限。普通 Node 外部环境还可通过可信启动配置 `OFFICE_HARNESS_DATA_SOCKET` 使用 UDS；不会在失败后自动切换传输或重跑查询。
 
-查询、manifest 与提交只返回有界元数据，拒绝 `rows`/`preview`。下载单个冻结结果最多 1 MiB，分别重算原始字节 SHA-256 和 PR #132 快照语义摘要，验证后写入调用者指定路径，已有文件不覆盖。请求默认最多 40 KiB，`artifacts.stage` 最多 12 MiB（服务端解码文件最多 8 MiB），`artifacts.commit` 最多 80 KiB。大产物通过本地 JSON 参数文件传递，避免 shell argv 长度限制；stage 使用 `bytesBase64` 字段。
+查询、manifest 与提交只返回有界元数据，拒绝 `rows`/`preview`。普通响应上限为 256 KiB，批量查询的响应上限按每条 SQL 256 KiB 计算。下载单个冻结结果最多 4,000,000 字节，分别重算原始字节 SHA-256 和 PR #132 快照语义摘要，验证后写入调用者指定路径，已有文件不覆盖。请求默认最多 40 KiB，`artifacts.stage` 最多 12 MiB（服务端解码文件最多 8 MiB），`artifacts.commit` 最多 80 KiB。大产物通过本地 JSON 参数文件传递，避免 shell argv 长度限制；stage 使用 `bytesBase64` 字段。
 
 内置数据任务不自动收集工作目录文本，防止冻结结果或上传 base64 经普通编码输出回灌 Office 模型。分析代码通过 stage/commit 回传受管产物及输入证据；Office 继续使用原有文档工具。运行器对实际发布 `manifest.json` 原始字节计算 SHA-256，经 `OFFICE_ANALYSIS_RUNTIME_MANIFEST_SHA256` 和任务指令提供给 Codex；缺失时明确报告证据不可用，不生成占位摘要。任务内不能修改共享 venv、helper 或发布清单。

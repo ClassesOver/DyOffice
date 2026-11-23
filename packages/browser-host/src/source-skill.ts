@@ -2,35 +2,63 @@ import {sourceResultBase} from '../../web-contracts/src/source-results.ts'
 import type { AgentSkill } from '../../agent-core/src/skill.ts'
 import { SOURCE_AGENT_TOOLS, type SourceToolName } from '../../web-contracts/src/source-tools.ts'
 import { isAssistantErrorCode, type AssistantErrorCode } from '../../web-contracts/src/assistant-errors.ts'
+import type { SourceConfig } from '../../web-contracts/src/sources.ts'
 
 type Request = <T>(path: string, method?: string, body?: unknown) => Promise<T>
+type CatalogPage = { rows: unknown[]; truncated?: boolean; nextOffset?: number | null }
 const names = new Map(SOURCE_AGENT_TOOLS.map(tool => [tool.name.replaceAll('.', '_'), tool.name as SourceToolName]))
 const encoder = new TextEncoder()
 const rowBudget = 8192
 
-function rowsForModel(rows: unknown[], limit: number) {
+function rowsForModel<T>(rows: T[], limit: number, entryForBudget: (row: T) => unknown = row => row) {
   let bytes = 2, count = 0
   for (const row of rows.slice(0, limit)) {
-    bytes += encoder.encode(JSON.stringify(row)).length + 1
+    bytes += encoder.encode(JSON.stringify(entryForBudget(row))).length + 1
     if (bytes > rowBudget) break
     count++
   }
   return rows.slice(0, count)
 }
 
+function compactCatalog(value: Record<string, unknown>, args: Record<string, unknown>, metadata: CatalogPage) {
+  const { config: sourceConfig, ...rest } = value
+  const config = sourceConfig as SourceConfig | undefined
+  const timezone = config?.timezone
+  if (args.table === undefined && args.tables === undefined) {
+    const rows = rowsForModel(metadata.rows, 80)
+    const truncated = metadata.truncated === true || rows.length < metadata.rows.length
+    return { ...rest, config: { timezone }, metadata: { rows, truncated,
+      ...(truncated ? { notice: 'Partial table list. Refine the catalog with schema or tablePrefix.' } : {}) } }
+  }
+  const units = config?.units ?? {}
+  const unitForColumn = (row: unknown): [string, string][] => {
+    const column = (row as { column_name?: unknown } | null)?.column_name
+    if (typeof column !== 'string' || !Object.hasOwn(units, column)) return []
+    const unit = units[column]
+    return typeof unit === 'string' ? [[column, unit]] : []
+  }
+  // Include the unit key and value in the byte budget before exposing a column.
+  const rows = rowsForModel(metadata.rows, 256, row => [row, ...unitForColumn(row)])
+  const visibleUnits = Object.fromEntries(rows.flatMap(unitForColumn))
+  const offset = typeof args.columnOffset === 'number' ? args.columnOffset : 0
+  const omitted = rows.length === 0 && metadata.rows.length > 0
+  const consumed = omitted ? 1 : rows.length
+  const nextOffset = consumed < metadata.rows.length ? offset + consumed
+    : metadata.nextOffset ?? (metadata.truncated ? offset + consumed : null)
+  const truncated = omitted || nextOffset !== null
+  const notice = omitted ? 'One column is too large to display. The continuation skips the indicated column.'
+    : 'Partial column list. Call sources_describe with the same table or tables and columnOffset set to metadata.nextOffset.'
+  return { ...rest, config: { timezone, ...(Object.keys(visibleUnits).length ? { units: visibleUnits } : {}) },
+    metadata: { rows, truncated, nextOffset, ...(omitted ? { omittedOversizedColumnOffset: offset } : {}), ...(truncated ? { notice } : {}) } }
+}
+
 function compactSourceResult(name: SourceToolName, args: Record<string, unknown>, result: unknown): unknown {
   if (!result || typeof result !== 'object') return result
   const value = result as Record<string, unknown>
   if (name === 'sources.describe' && value.metadata && typeof value.metadata === 'object') {
-    const metadata = value.metadata as { rows?: unknown; truncated?: boolean }
+    const metadata = value.metadata as CatalogPage
     if (!Array.isArray(metadata.rows)) return result
-    const rows = rowsForModel(metadata.rows, args.table === undefined && !args.tables ? 80 : 256)
-    const truncated = metadata.truncated === true || rows.length < metadata.rows.length
-    const { config, ...rest } = value
-    return { ...rest, config: { timezone: (config as { timezone?: string } | undefined)?.timezone },
-      metadata: { rows, truncated, ...(truncated ? { notice: args.table === undefined && !args.tables
-        ? 'Partial table list. Refine the catalog with schema or tablePrefix.'
-        : 'Partial column list. Confirm required columns before writing SQL.' } : {}) } }
+    return compactCatalog(value, args, metadata)
   }
   const key = name === 'sources.query' ? 'preview' : name === 'sources.read_result' ? 'rows' : undefined
   if (!key) return result
@@ -56,7 +84,7 @@ const GENERIC_FAILURE = 'The workspace source operation did not complete. Check 
  * Say so instead of letting the model conclude the table has no columns.
  */
 export function withDescribeHint(name: SourceToolName, args: Record<string, unknown>, result: unknown): unknown {
-  if (name !== 'sources.describe' || typeof args.table !== 'string' || args.table.includes('.')) return result
+  if (name !== 'sources.describe' || typeof args.table !== 'string' || args.table.includes('.') || (args.columnOffset ?? 0) !== 0) return result
   const rows = (result as { metadata?: { rows?: unknown[] } | null } | null)?.metadata?.rows
   if (!Array.isArray(rows) || rows.length) return result
   return { ...(result as object), hint: `No columns were found for "${args.table}" in the default schema. Call sources_describe with tablePrefix to find the table, then pass the schema-qualified name it returns (for example sales.${args.table}).` }
@@ -102,7 +130,8 @@ export function createWorkspaceSourceSkill(request: Request, options?: { tools: 
     id: 'personal-workspace-sources',
     systemPrompt: [
       'Use only assigned workspace sources. List sources when the source is unknown. Find tables with schema or tablePrefix, then describe only the qualified tables needed.',
-      'Use tables to read several table structures in one call. Submit independent same-source SQL together using queries. Inspect each item in order and retry only a failed statement after correcting it.',
+      'Use tables to inspect several table structures in one call. When a required column is missing and metadata.nextOffset is non-null, repeat the same table or tables with columnOffset set to metadata.nextOffset. Read the configured units for displayed columns from config.units. Carry the input unit through SUM or AVG of a column even when the result has a new alias.',
+      'Submit independent same-source SQL together using queries. Inspect each item in order and retry only a failed statement after correcting it.',
       'sources_query returns a frozen, bounded result and a resultId. Inspect sourceTruncated, units, timezone and hash before drawing conclusions; partial rows do not establish full-dataset totals.',
       ...(options ? [
         'Describe only the source and tables needed. Use the table_schema and table_name returned by metadata to qualify table names. An HTTP source has extraction metadata, not SQL tables.',

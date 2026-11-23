@@ -11,6 +11,70 @@ import {createWorkspaceSourceResults} from '../../server/src/modules/sources/res
 import {createWorkspaceSourceTools} from '../../server/src/modules/sources/tools.ts'
 import {createHarnessDataAccess} from '../../server/src/modules/coding/data-access.ts'
 import {createQuerySnapshot} from '../../server/src/modules/sources/provenance.ts'
+import {postgresTargets} from '../helpers/postgres-source.mjs'
+
+test('Workspace and Codex SQL batches keep each captured result in the authorized document',async t=>{
+ const f=await fileFixture(t,{buildApp:false}),token=f.alice.token,target=await postgresTargets(t,f)
+ const bytes=await docxBytes()
+ const a=(await importFile(f,token,bytes,'A.docx')).file.fileId
+ const b=(await importFile(f,token,bytes,'B.docx')).file.fileId
+ const sources=createSourceService({transactions:f.transactions,credentialKeys:'test:'+randomBytes(32).toString('base64'),egressTargets:target.approvals})
+ const results=createWorkspaceSourceResults({transactions:f.transactions})
+ let inactiveOnError,inactiveAfterCapture,executed=0
+ const tools=createWorkspaceSourceTools({sources:{...sources,async querySource(...args){
+  executed++
+  try{return await sources.querySource(...args)}catch(error){
+   if(inactiveOnError)await f.files.trashFile(token,inactiveOnError)
+   throw error
+  }
+ }},results:{...results,async capture(...args){
+  const artifact=await results.capture(...args)
+  if(inactiveAfterCapture)await f.files.trashFile(token,inactiveAfterCapture)
+  return artifact
+ }}})
+ await sources.create(token,{sourceId:'sales',kind:'postgres',name:'Sales',config:{},secret:target.readerDsn})
+ const data=createHarnessDataAccess({tools,results,sessions:f.sessions})
+ t.after(()=>data.dispose())
+ const issue=(documentId,inputs)=>data.issue({token,documentId,agentId:'worker',inputs,signal:new AbortController().signal})
+ const grant=await issue(b,{sourceIds:['sales'],resultIds:[]})
+ const workspace=queries=>tools.execute(token,{name:'sources.query',arguments:{sourceId:'sales',queries}},a)
+ const codex=queries=>data.execute(grant.taskId,grant.credential,'sources.query',{sourceId:'sales',queries})
+ const missing=`SELECT missing_column FROM ${target.probeTable}`
+ for(const [run,documentId,other] of [[workspace,a,b],[codex,b,a]]){
+  const {items}=await run(['SELECT 1 AS n',missing,'SELECT 3 AS n'])
+  assert.deepEqual(items.map(item=>item.ok),[true,false,true])
+  for(const item of [items[0],items[2]]){
+   const resultId=item.result.artifact.resultId
+   const save={name:'sources.save_result',arguments:{resultId,name:'Frozen',commandId:randomUUID()}}
+   for(const scope of [other,undefined]){
+    await assert.rejects(results.read(token,{resultId},scope),{statusCode:404})
+    await assert.rejects(tools.execute(token,save,scope),{statusCode:404})
+    await assert.rejects(issue(scope,{sourceIds:[],resultIds:[resultId]}),{statusCode:403})
+   }
+   await tools.execute(token,save,documentId)
+   if(run===codex)assert.equal((await data.download(grant.taskId,grant.credential,resultId)).sha256,item.result.sha256)
+   else await assert.rejects(data.download(grant.taskId,grant.credential,resultId),{statusCode:403})
+  }
+  inactiveOnError=documentId
+  await assert.rejects(run(['SELECT 4 AS n',missing]),{statusCode:run===codex?403:404})
+  const prior=executed
+  await assert.rejects(run(['SELECT 5 AS n']),{statusCode:run===codex?403:404})
+  assert.equal(executed,prior,'an inactive document cannot dispatch a statement')
+  await f.files.restoreFile(token,documentId)
+  if(run===codex){
+   const pending=(await results.list(token,{},documentId,true)).items.filter(item=>item.state==='pending')
+   assert.equal(pending.length,1)
+   await assert.rejects(data.download(grant.taskId,grant.credential,pending[0].resultId),{statusCode:403})
+  }
+  inactiveOnError=undefined
+  inactiveAfterCapture=documentId
+  const beforeCapture=executed
+  await assert.rejects(run(['SELECT 6 AS n','SELECT 7 AS n']),{statusCode:run===codex?403:404})
+  assert.equal(executed,beforeCapture+1,'a later statement cannot run after the file is trashed')
+  await f.files.restoreFile(token,documentId)
+  inactiveAfterCapture=undefined
+ }
+})
 
 test('two documents owned by the same user and Home partition frozen results throughout their lifecycle',async t=>{
  let queries=0

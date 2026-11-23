@@ -1,5 +1,8 @@
 import type { QueryCell, QueryColumn } from './sources.ts'
 
+/** Maximum UTF-8 size of one canonical frozen snapshot, including its SHA-256. */
+export const SOURCE_RESULT_MAX_BYTES = 4_000_000
+
 export function isSourceResultName(input: unknown): input is string {
   return !(typeof input !== 'string' || input.length < 1 || input.length > 200 || new TextEncoder().encode(input).length > 240 || input !== input.trim()
     || /[\u0000-\u001f\u007f-\u009f/\\:*?"<>|]/u.test(input) || /[. ]$/.test(input) || /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(input))

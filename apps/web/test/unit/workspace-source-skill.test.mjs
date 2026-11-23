@@ -6,7 +6,10 @@ test('batch source queries capture every result in the requesting document', asy
   const { createWorkspaceSourceTools } = await import('../../server/src/modules/sources/tools.ts')
   const documentId = '11111111-1111-4111-8111-111111111111', captured = []
   const tools = createWorkspaceSourceTools({
-    sources: { querySource: async (_token, sourceId) => ({ sourceId, sourceVersion: 1, schema: [], timezone: 'UTC', rows: [{ n: 1 }], truncated: false, sha256: 'a'.repeat(64) }) },
+    sources: {
+      detail: async () => ({ source: { version: 1, enabled: true, hasCredential: true } }),
+      querySource: async (_token, sourceId) => ({ sourceId, sourceVersion: 1, schema: [], timezone: 'UTC', rows: [{ n: 1 }], truncated: false, sha256: 'a'.repeat(64) }),
+    },
     results: {
       requireDocument: async (token, id) => assert.deepEqual([token, id], ['session', documentId]),
       capture: async (token, _snapshot, _hash, id) => { captured.push([token, id]); return { resultId: String(captured.length) } },
@@ -78,6 +81,7 @@ test('an empty describe of an unqualified table tells the model to use the schem
   const empty = { sourceId: 's', metadata: { rows: [] } }
   assert.match(withDescribeHint('sources.describe', { sourceId: 's', table: 'orders' }, empty).hint, /schema-qualified.*sales\.orders/)
   assert.equal(withDescribeHint('sources.describe', { sourceId: 's', table: 'sales.orders' }, empty), empty)
+  assert.equal(withDescribeHint('sources.describe', { sourceId: 's', table: 'orders', columnOffset: 160 }, empty), empty)
   const found = { metadata: { rows: [{ column_name: 'id' }] } }
   assert.equal(withDescribeHint('sources.describe', { sourceId: 's', table: 'orders' }, found), found)
   const skill = createWorkspaceSourceSkill(async () => empty, { tools: ['sources_describe'], disposed: () => false })
@@ -151,11 +155,56 @@ test('oversized rows are identified explicitly and are never presented as comple
 
 test('large catalog responses use compact metadata with an explicit scope refinement hint', async () => {
   const rows = Array.from({ length: 1000 }, (_, id) => ({ table_schema: 'sales', table_name: 'orders_' + id }))
-  const skill = createWorkspaceSourceSkill(async () => ({ sourceId: 'sales', kind: 'postgres', config: { allowedTables: ['private_config'], timezone: 'UTC' }, metadata: { rows, truncated: true, sha256: 'catalog-hash' } }))
+  const skill = createWorkspaceSourceSkill(async () => ({ sourceId: 'sales', kind: 'postgres', config: { allowedTables: ['private_config'], timezone: 'UTC', units: { amount: 'EUR' } }, metadata: { rows, truncated: true, sha256: 'catalog-hash' } }))
   const output = JSON.parse((await skill.executeTool({ id: 'd', name: 'sources_describe', input: { sourceId: 'sales' } })).output)
   assert.ok(output.metadata.rows.length > 0 && output.metadata.rows.length < rows.length)
   assert.equal(output.metadata.truncated, true)
   assert.match(output.metadata.notice, /tablePrefix/)
   assert.equal(output.config.allowedTables, undefined)
+  assert.equal(output.config.units, undefined)
+  assert.equal(output.metadata.nextOffset, undefined)
   assert.equal(output.metadata.sha256, undefined)
+})
+
+test('Office column pages expose every field of a wide table and only its visible units', async () => {
+  const columns = Array.from({ length: 160 }, (_, i) => ({ column_name: 'metric_' + i, data_type: 'numeric', is_nullable: 'YES' }))
+  const units = Object.fromEntries(columns.filter((_, i) => i % 2 === 0).map(row => [row.column_name, '人民币'.repeat(30)]))
+  units.metric_159 = 'USD'
+  units.private_metric = 'hidden'
+  for (const selection of [{ table: 'sales.wide' }, { tables: ['sales.wide'] }]) {
+    const rows = columns.map(row => selection.tables ? { table_schema: 'sales', table_name: 'wide', ...row } : row)
+    const skill = createWorkspaceSourceSkill(async (_path, _method, call) => {
+      const offset = call.arguments.columnOffset ?? 0, page = rows.slice(offset, offset + 130)
+      const nextOffset = offset + page.length < rows.length ? offset + page.length : null
+      return { sourceId: 'sales', sourceVersion: 1, kind: 'postgres', config: { timezone: 'UTC', units, allowedTables: ['sales.wide'] },
+        metadata: { rows: page, truncated: nextOffset !== null, nextOffset } }
+    }, { tools: ['sources_describe'], disposed: () => false })
+    const seen = []
+    let offset = 0
+    do {
+      const args = { sourceId: 'sales', ...selection, ...(offset ? { columnOffset: offset } : {}) }
+      const reply = await skill.executeTool({ id: 'd', name: 'sources_describe', input: args })
+      const { config, metadata } = JSON.parse(reply.output)
+      assert.ok(metadata.rows.length > 0)
+      seen.push(...metadata.rows)
+      assert.equal(metadata.nextOffset, seen.length < rows.length ? seen.length : null)
+      assert.equal(metadata.truncated, metadata.nextOffset !== null)
+      assert.ok(Buffer.byteLength(reply.output) < 9_000)
+      const visibleUnits = Object.fromEntries(metadata.rows.filter(row => Object.hasOwn(units, row.column_name)).map(row => [row.column_name, units[row.column_name]]))
+      assert.deepEqual(config, { timezone: 'UTC', units: visibleUnits })
+      offset = metadata.nextOffset
+    } while (offset !== null)
+    assert.deepEqual(seen, rows)
+  }
+})
+
+test('an oversized catalog entry identifies the omitted column and preserves access to later columns', async () => {
+  const row = { column_name: 'field', data_type: 'x'.repeat(10_000), is_nullable: 'YES' }
+  const skill = createWorkspaceSourceSkill(async () => ({ config: { timezone: 'UTC' }, metadata: { rows: [row, { column_name: 'next' }], truncated: false, nextOffset: null } }))
+  const reply = await skill.executeTool({ id: 'd', name: 'sources_describe', input: { sourceId: 's', table: 'wide', columnOffset: 12 } })
+  const { metadata } = JSON.parse(reply.output)
+  assert.deepEqual(metadata.rows, [])
+  assert.equal(metadata.truncated, true)
+  assert.equal(metadata.omittedOversizedColumnOffset, 12)
+  assert.equal(metadata.nextOffset, 13)
 })

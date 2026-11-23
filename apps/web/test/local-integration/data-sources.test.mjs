@@ -6,8 +6,13 @@ import { createServer } from 'node:http'
 import { createHash, randomBytes } from 'node:crypto'
 import { restrictedFixture, restrictedOrigin } from '../helpers/restricted.mjs'
 import { createCsrfService } from '../../server/src/modules/auth/csrf.ts'
+import { createSourceService } from '../../server/src/modules/sources/service.ts'
+import { createWorkspaceSourceResults } from '../../server/src/modules/sources/results.ts'
+import { createWorkspaceSourceTools } from '../../server/src/modules/sources/tools.ts'
+import { createHarnessDataAccess } from '../../server/src/modules/coding/data-access.ts'
 import { buildLocalApp } from '../../server/src/app.ts'
-import { Pool, Client } from 'pg'
+import { Client } from 'pg'
+import { postgresTargets } from '../helpers/postgres-source.mjs'
 
 async function fixture(t, options = {}) {
   const keys = options.sourcesCredentialKeys ?? credentialKeys()
@@ -47,43 +52,6 @@ const snapshotHash = snapshot => createHash('sha256')
   .update(JSON.stringify({ version: 1, sourceId: snapshot.sourceId, sourceVersion: snapshot.sourceVersion, schema: snapshot.schema, timezone: snapshot.timezone, rows: snapshot.rows, truncated: snapshot.truncated }))
   .digest('hex')
 
-// A real postgres target database: a read-only role with access to one probe
-// table, plus a role that lacks CONNECT entirely. Both are real PG denials.
-async function postgresTargets(t, f) {
-  const port = new URL(process.env.DYOFFICE_TEST_DATABASE_URL).port || '5432'
-  const suffix = randomBytes(4).toString('hex')
-  const quote = name => '"' + name + '"'
-  const reader = 't15_reader_' + suffix, denied = 't15_denied_' + suffix
-  const readerPw = randomBytes(16).toString('hex'), deniedPw = randomBytes(16).toString('hex')
-  await f.admin.query(`CREATE ROLE ${quote(reader)} LOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '${readerPw}'`)
-  await f.admin.query(`CREATE ROLE ${quote(denied)} LOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '${deniedPw}'`)
-  await f.admin.query(`ALTER ROLE ${quote(reader)} SET default_transaction_read_only=on`)
-  await f.admin.query(`GRANT CONNECT ON DATABASE ${quote(f.database)} TO ${quote(reader)}`)
-  const targetUrl = new URL(process.env.DYOFFICE_TEST_DATABASE_URL); targetUrl.pathname = '/' + f.database
-  const admin = new Pool({ connectionString: targetUrl.href })
-  await admin.query(`REVOKE CONNECT ON DATABASE ${quote(f.database)} FROM PUBLIC`)
-  await admin.query(`CREATE TABLE t15_probe_${suffix}(i integer, label text, ratio double precision, active boolean, note text)`)
-  await admin.query(`INSERT INTO t15_probe_${suffix} VALUES (1,'alpha',1.5,true,NULL),(2,'beta',2.5,false,'x'),(3,'gamma',3.5,true,'y'),(4,'delta',4.5,false,NULL)`)
-  await admin.query(`GRANT USAGE ON SCHEMA public TO ${quote(reader)}`)
-  await admin.query(`GRANT SELECT ON t15_probe_${suffix} TO ${quote(reader)}`)
-  f.cleanup.unshift(async () => {
-    await admin.query(`DROP TABLE t15_probe_${suffix}`)
-    await admin.query(`REVOKE ALL ON DATABASE ${quote(f.database)} FROM ${quote(reader)}`)
-    await admin.query(`REVOKE USAGE ON SCHEMA public FROM ${quote(reader)}`)
-    await admin.end()
-    await f.admin.query(`DROP ROLE ${quote(reader)}`)
-    await f.admin.query(`DROP ROLE ${quote(denied)}`)
-  })
-  const host = '127.0.0.1:' + port
-  return {
-    approvals: [reader, denied].map(username => ({ kind: 'postgres', endpoint: 'postgresql://' + host, username, database: f.database, addresses: ['127.0.0.1'], allowInsecure: true })),
-    admin,
-    probeTable: 't15_probe_' + suffix,
-    readerDsn: `postgresql://${reader}:${readerPw}@${host}/${f.database}`,
-    deniedDsn: `postgresql://${denied}:${deniedPw}@${host}/${f.database}`,
-  }
-}
-
 // Local JSON HTTP server helpers. Servers listen on 127.0.0.1 so the egress
 // guard's private-range semantics can be exercised without real networks.
 async function jsonServer(t, handler) {
@@ -97,6 +65,75 @@ async function jsonServer(t, handler) {
   return { url: 'http://127.0.0.1:' + server.address().port, seen }
 }
 const rowsBody = rows => (req, res) => { res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify({ rows })) }
+
+async function queryBatchFixture(t, afterCapture) {
+  const f = await fixture(t, { buildApp: false }), targets = await postgresTargets(t, f)
+  const sources = createSourceService({ transactions: f.transactions, credentialKeys: credentialKeys(), egressTargets: targets.approvals })
+  const stored = createWorkspaceSourceResults({ transactions: f.transactions })
+  const results = { ...stored, async capture(token, snapshot, hash) {
+    const artifact = await stored.capture(token, snapshot, hash)
+    if (afterCapture) await afterCapture(sources, token, artifact)
+    return artifact
+  } }
+  const tools = createWorkspaceSourceTools({ sources, results })
+  const access = createHarnessDataAccess({ tools, results, sessions: f.sessions })
+  t.after(() => access.dispose())
+  const token = f.alice.token
+  await sources.create(token, { sourceId: 'sales', name: 'Sales', kind: 'postgres', config: {}, secret: targets.readerDsn })
+  const grant = await access.issue({ token, agentId: 'codex', inputs: { sourceIds: ['sales'], resultIds: [] }, signal: new AbortController().signal })
+  return { targets, sources, token, inspect: f.inspect,
+    workspace: queries => tools.execute(token, { name: 'sources.query', arguments: { sourceId: 'sales', queries } }),
+    codex: queries => access.execute(grant.taskId, grant.credential, 'sources.query', { sourceId: 'sales', queries }),
+    download: id => access.download(grant.taskId, grant.credential, id),
+  }
+}
+
+test('query batches return each PostgreSQL statement outcome but abort on source-wide permission loss', async t => {
+  const { targets, sources, token, workspace, codex, download } = await queryBatchFixture(t)
+  await targets.admin.query(`REVOKE SELECT ON ${targets.probeTable} FROM "${new URL(targets.readerDsn).username}"`)
+  const queries = ['SELECT 1 AS n', `SELECT i FROM ${targets.probeTable}`, 'SELECT 3 AS n']
+  for (const run of [workspace, codex]) {
+    const { items } = await run(queries)
+    assert.deepEqual(items.map(item => item.ok), [true, false, true])
+    assert.deepEqual(items[1], { ok: false, status: 403, code: 'SOURCE_SCOPE_DENIED' })
+    const first = items[0].result, last = items[2].result
+    assert.notEqual(first.artifact.resultId, last.artifact.resultId)
+    assert.equal(first.artifact.sourceVersion, 1)
+    assert.equal(last.artifact.sourceVersion, 1)
+    if (run === workspace) assert.deepEqual([first, last].map(result => result.preview.map(row => row.n)), [[1], [3]])
+    else {
+      assert.equal('preview' in first, false)
+      const result = await download(last.artifact.resultId)
+      assert.deepEqual(JSON.parse(Buffer.from(result.bytes).toString()).rows, [{ n: 3 }])
+    }
+  }
+  await sources.save(token, 'sales', { expectedVersion: 1, secret: targets.deniedDsn })
+  for (const run of [workspace, codex]) await assert.rejects(run(queries), { statusCode: 403 })
+})
+
+test('Workspace and Codex reject a source change between captures or after the last capture', async t => {
+  let renameAfter, captured
+  const { workspace, codex, inspect, download } = await queryBatchFixture(t, async (sources, token, artifact) => {
+    captured.push(artifact.resultId)
+    if (captured.length === renameAfter) {
+      await sources.save(token, 'sales', { expectedVersion: artifact.sourceVersion, name: 'Sales ' + artifact.sourceVersion })
+    }
+  })
+  const queries = ['SELECT 1 AS n', 'SELECT 2 AS n']
+  const audits = () => inspect("SELECT id FROM data_source_audit WHERE source_id='sales' AND action='source_queried'")
+  for (const run of [workspace, codex]) {
+    for (renameAfter of [1, 2]) {
+      captured = []
+      const before = (await audits()).rowCount
+      await assert.rejects(run(queries), { statusCode: 409 })
+      assert.equal((await audits()).rowCount - before, renameAfter, 'no statement runs against the new source version')
+      assert.equal(captured.length, renameAfter)
+      if (run === codex) {
+        for (const id of captured) await assert.rejects(download(id), { statusCode: 403 })
+      }
+    }
+  }
+})
 
 test('administrator saves and revokes data source targets without restarting', async t => {
   const f = await fixture(t)
@@ -474,4 +511,47 @@ test('saved table scope restricts queries and AI metadata, and an empty scope st
   await describe(schema+'.orders',403)
   await call(f,'POST','/limited/query',{sql:`SELECT * FROM ${schema}.orders`},undefined,400)
 
+})
+
+test('SQL column pages cross the 1000-row catalog limit in table and ordinal order', async t => {
+  const f = await fixture(t)
+  const targets = await postgresTargets(t, f)
+  const wide = targets.probeTable + '_wide'
+  const columns = Array.from({ length: 1002 }, (_, i) => 'metric_' + i)
+  await targets.admin.query(`CREATE TABLE ${wide} (${columns.map(name => name + ' smallint').join(', ')})`)
+  f.cleanup.unshift(() => targets.admin.query(`DROP TABLE ${wide}`))
+  await targets.admin.query(`GRANT SELECT ON ${wide} TO "${new URL(targets.readerDsn).username}"`)
+  await f.approve(targets.approvals)
+  await call(f, 'POST', '', { sourceId: 'catalog', name: 'Catalog', kind: 'postgres',
+    config: { allowedTables: [wide, targets.probeTable] }, secret: targets.readerDsn }, undefined, 201)
+  const csrf = createCsrfService({ db: f.db, deploymentId: f.deploymentId, origin: restrictedOrigin, key: f.csrfKey })
+  const describe = async (args, status = 200) => {
+    const response = await f.app.inject({ method: 'POST', url: '/api/v1/workspace/source-tools/execute',
+      headers: { origin: restrictedOrigin, cookie: '__Host-dyoffice-session=' + f.alice.token, 'x-csrf-token': csrf.sessionToken(f.alice.token) },
+      payload: { name: 'sources.describe', arguments: { sourceId: 'catalog', ...args } } })
+    assert.equal(response.statusCode, status, response.body.slice(0, 500))
+    return response.json().metadata
+  }
+  const tables = [wide, targets.probeTable]
+  const first = await describe({ tables })
+  assert.equal(first.truncated, true)
+  assert.equal(first.nextOffset, 1000)
+  const last = await describe({ tables, columnOffset: first.nextOffset })
+  assert.equal(last.nextOffset, null)
+  assert.equal(last.truncated, false)
+  const combined = [...first.rows, ...last.rows].map(row => [row.table_name, row.column_name])
+  assert.deepEqual(combined, [
+    ...['i','label','ratio','active','note'].map(name => [targets.probeTable, name]),
+    ...columns.map(name => [wide, name]),
+  ])
+  const single = await describe({ table: wide, columnOffset: 1000 })
+  assert.deepEqual(single.rows, ['metric_1000', 'metric_1001'].map(column_name => ({ column_name, data_type: 'smallint', is_nullable: 'YES' })))
+  assert.equal(single.nextOffset, null)
+  assert.deepEqual((await describe({ table: wide, columnOffset: 1002 })).rows, [])
+  for (const columnOffset of [-1, 0.5, '1', null, 2 ** 53]) await describe({ table: wide, columnOffset }, 400)
+  await describe({ columnOffset: 0 }, 400)
+  await describe({ tablePrefix: wide, columnOffset: 1 }, 400)
+  await describe({ tables: [wide, 'outside_scope'], columnOffset: 1000 }, 403)
+  await call(f, 'POST', '', { sourceId: 'feed', name: 'Feed', kind: 'http', config: {}, secret: 'https://feed.invalid/rows' }, undefined, 201)
+  await describe({ sourceId: 'feed', table: wide, columnOffset: 0 }, 400)
 })

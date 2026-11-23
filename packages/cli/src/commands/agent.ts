@@ -4,7 +4,7 @@ import {randomUUID} from 'node:crypto'
 import {flagString} from '../args'
 import {assertAllowed} from '../fs'
 import {ChannelClient} from '../agent-channel/client'
-import {readState,writeState,runAdapter,watchChannel,channelAdapterInput,type ClaimedChannelTask,type AdapterConfig} from '../agent-channel/connector'
+import {readState,writeState,runClaimedAdapter,watchChannel,type ClaimedChannelTask,type AdapterConfig} from '../agent-channel/connector'
 import type {CommandDef} from '../registry'
 import {CliError,EXIT} from '../result'
 
@@ -90,8 +90,7 @@ export const agentCommand: CommandDef={
     // Validate adapter configuration before acquiring an execution claim.
     if(typeof config.command!=='string' || !config.command.startsWith('/') || !Array.isArray(config.args) || config.args.some(arg=>typeof arg!=='string'))throw new CliError(EXIT.usage,'Invalid adapter configuration')
     const claim=await client.request<ClaimedChannelTask>('POST',`${member}/claim`,state.memberToken,{taskId,connectionId:state.connectionId,connectionEpoch:state.connectionEpoch})
-    const input=await channelAdapterInput(client,state,taskId,claim,state.connectionEpoch!)
-    const result=await runAdapter(config,input,{PATH:ctx.env.PATH})
+    const result=await runClaimedAdapter({client,state,taskId,claim,connectionEpoch:state.connectionEpoch!,adapter:config,env:{PATH:ctx.env.PATH},renewClaim:true})
     const receipt=await client.request('POST',`${member}/actions`,state.memberToken,{requestId:randomUUID(),conversationId:state.conversationId,to:'office',action:{kind:'result',taskId,claimId:claim.claimId,connectionEpoch:state.connectionEpoch,...result}})
     return {summary:'Harness task result submitted.',detail:receipt}
   },

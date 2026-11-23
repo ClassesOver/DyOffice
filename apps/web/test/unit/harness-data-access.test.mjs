@@ -2,6 +2,8 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import {randomUUID} from 'node:crypto'
 import {createHarnessDataAccess} from '../../server/src/modules/coding/data-access.ts'
+import {createWorkspaceSourceTools} from '../../server/src/modules/sources/tools.ts'
+import {createQuerySnapshot} from '../../server/src/modules/sources/provenance.ts'
 
 // Owner-scoped service stubs make boundary decisions observable. Real source
 // authorization and snapshot checks remain in the existing source services.
@@ -297,8 +299,30 @@ test('a data grant follows confirmed lease renewals and stops at the last confir
   await assert.rejects(f.access.authorize(grant.taskId,grant.credential),{statusCode:403})
 })
 
+function attachBatchTools(f,{onDetail,onStatement,documentId}={}) {
+  const statements=[],captured=[]
+  const sources={
+    async detail(){await onDetail?.(captured);return {source:{version:1,enabled:true,hasCredential:true}}},
+    async querySource(token,sourceId,{sql}){
+      statements.push(sql)
+      await onStatement?.(sql,token)
+      return createQuerySnapshot({sourceId,sourceVersion:1,timezone:'UTC',schema:[{name:'n',type:'number'}],rows:[{n:statements.length}],sourceTruncated:false})
+    },
+  }
+  const results={async requireDocument(token,id){assert.deepEqual([token,id],[f.alice,documentId])},async capture(token,snapshot,queryHash,id){
+    assert.equal(id,documentId)
+    const artifact={...f.records.get(f.resultId).artifact,resultId:randomUUID(),sha256:snapshot.sha256,queryHash,state:'pending',savedAt:null,name:null,expiresAt:new Date(Date.now()+60_000).toISOString()}
+    captured.push(artifact.resultId)
+    f.records.set(artifact.resultId,{token,artifact})
+    return artifact
+  }}
+  f.tools.execute=createWorkspaceSourceTools({sources,results}).execute
+  return {statements,captured}
+}
+
 test('batch SQL registers each frozen result in order without exposing rows and rechecks task access',async t=>{
   const f=fixture(t),documentId=randomUUID(),grant=await f.issue(undefined,{documentId})
+  const {statements}=attachBatchTools(f,{documentId,onStatement(sql,token){if(sql==='SELECT 3')f.revoked.add(token)}})
   const run=queries=>f.access.execute(grant.taskId,grant.credential,'sources.query',{sourceId:'sales',queries})
   const {items}=await run(['SELECT 1','SELECT 2'])
   assert.equal(items.length,2)
@@ -307,9 +331,31 @@ test('batch SQL registers each frozen result in order without exposing rows and 
     assert.equal('preview' in item.result,false)
     assert.ok(await f.access.download(grant.taskId,grant.credential,item.result.artifact.resultId))
   }
-  const original=f.tools.execute
-  f.tools.execute=async(...args)=>{const value=await original(...args); f.access.revoke(grant.taskId);return value}
-  await assert.rejects(run(['SELECT 3','SELECT 4']))
-  assert.deepEqual(f.calls.filter(c=>c[2]?.name==='sources.query').map(c=>c[2].arguments.sql),['SELECT 1','SELECT 2','SELECT 3'])
+  await assert.rejects(run(['SELECT 3','SELECT 4']),{statusCode:403})
+  assert.deepEqual(statements,['SELECT 1','SELECT 2','SELECT 3'])
   assert.ok(f.calls.filter(c=>c[0]==='tool').every(c=>c[3]===documentId))
+})
+
+test('a remote claim revoked during the final source check cannot acquire or return any batch result',async t=>{
+  const f=fixture(t)
+  const deadline=Date.now()+60_000
+  let active=true
+  const grant=await f.issue(undefined,{leaseUntil:async()=>{if(!active)throw Error('Claim ended');return deadline}})
+  const {captured}=attachBatchTools(f,{onDetail(ids){if(ids.length)active=false}})
+  await assert.rejects(f.access.execute(grant.taskId,grant.credential,'sources.query',{sourceId:'sales',queries:['SELECT 1']}),{statusCode:403})
+  assert.equal(captured.length,1)
+  active=true
+  await assert.rejects(f.access.download(grant.taskId,grant.credential,captured[0]),{statusCode:403})
+  assert.equal(f.calls.some(call=>call[0]==='download'),false)
+})
+
+test('the task checks its 64-result limit before dispatching a batch',async t=>{
+  const f=fixture(t),grant=await f.issue()
+  const query=args=>f.access.execute(grant.taskId,grant.credential,'sources.query',{sourceId:'sales',...args})
+  for(let i=0;i<63;i++)await query({sql:'SELECT 1'})
+  f.calls.length=0
+  await assert.rejects(query({queries:['SELECT 1','SELECT 2']}),{statusCode:429})
+  assert.equal(f.calls.some(call=>call[0]==='tool'),false)
+  await query({sql:'SELECT 1'})
+  await assert.rejects(query({sql:'SELECT 1'}),{statusCode:429})
 })

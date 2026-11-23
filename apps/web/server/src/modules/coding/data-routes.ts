@@ -3,6 +3,7 @@ import type {FastifyInstance} from 'fastify'
 import type {createHarnessDataAccess} from './data-access.ts'
 import type {createHarnessArtifacts} from './artifacts.ts'
 import {cookies,type createCsrfService} from '../auth/csrf.ts'
+import {extendSourceQueryBatchTimeout} from '../sources/tool-routes.ts'
 
 /** Task bearer only: Office cookies and datasource credentials never enter a harness. */
 export function registerHarnessDataRoutes(app:FastifyInstance,data:ReturnType<typeof createHarnessDataAccess>) {
@@ -15,7 +16,9 @@ export function registerHarnessDataRoutes(app:FastifyInstance,data:ReturnType<ty
     reply.header('Cache-Control','private, no-store')
     const body=request.body as Record<string,unknown>
     if(!body||Array.isArray(body)||Object.keys(body).some(k=>!['operation','arguments'].includes(k))||typeof body.operation!=='string'||body.operation==='results.download')throw Object.assign(Error('Invalid data request'),{statusCode:400})
-    return data.execute(request.params.taskId,credential(request.headers),body.operation,body.arguments)
+    const bearer=credential(request.headers)
+    extendSourceQueryBatchTimeout(request,'operation')
+    return data.execute(request.params.taskId,bearer,body.operation,body.arguments)
   })
   app.get<{Params:{taskId:string;resultId:string}}>('/api/v1/agents/tasks/:taskId/data/results/:resultId/content',async(request,reply)=>{
     const result=await data.download(request.params.taskId,credential(request.headers),request.params.resultId)
