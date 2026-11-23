@@ -1,5 +1,9 @@
 import type { QueryCell, QueryColumn } from './sources.ts'
 
+export function sourceResultBase(documentId?:string) {
+  return documentId === undefined ? '/api/v1/workspace' : '/api/v1/files/' + encodeURIComponent(documentId)
+}
+
 /** Small, frozen JSONB evidence in a personal workspace; never an Office file.
  * A saved result remains readable by its owner after source disable/deletion.
  * Pending evidence is session-bound and expires; it is not an access capability.

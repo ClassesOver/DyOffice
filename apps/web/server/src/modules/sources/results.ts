@@ -100,12 +100,16 @@ export function createWorkspaceSourceResults(options: WorkspaceSourceResultsOpti
     if (!Number.isSafeInteger(value) || value < 1 || value > hardLimits[key]) throw new Error('Invalid workspace source result limit')
     limits[key] = value
   }
-  async function access<T>(token: string, operation: (c: PoolClient, p: BusinessPrincipal, workspaceId: string) => Promise<T>): Promise<T> {
+  async function access<T>(token: string, documentId: string | undefined, operation: (c: PoolClient, p: BusinessPrincipal, workspaceId: string) => Promise<T>): Promise<T> {
     return transactions.withPrincipalTransaction({ kind: 'session', token }, async (c, p) => {
       if (!p.roles.includes('personal') || p.job) throw error(404)
       // Never accept a caller-selected owner/workspace, even from an internal DTO.
       const workspace = (await c.query('SELECT id FROM workspaces WHERE deployment_id=$1 AND owner_id=$2', [p.deploymentId, p.userId])).rows[0]
       if (!workspace) throw error(404)
+      if (documentId !== undefined) {
+        const file = await c.query('SELECT id FROM files WHERE deployment_id=$1 AND owner_id=$2 AND workspace_id=$3 AND id=$4 AND deleted_at IS NULL AND purge_started_at IS NULL FOR SHARE', [...scope(p,workspace.id),uuid(documentId)])
+        if (!file.rowCount) throw error(404)
+      }
       return operation(c, p, workspace.id)
     })
   }
@@ -126,8 +130,8 @@ export function createWorkspaceSourceResults(options: WorkspaceSourceResultsOpti
     // Saved materializations have their own owner authorization.
     if (sourceVersion !== source.draft_version) throw error(409)
   }
-  async function readable(c: PoolClient, p: BusinessPrincipal, workspaceId: string, id: string): Promise<Row> {
-    const row = (await c.query<Row>(`SELECT ${metadata},snapshot FROM workspace_source_results WHERE deployment_id=$1 AND owner_id=$2 AND workspace_id=$3 AND result_id=$4 AND (state='saved' OR (state='pending' AND session_id=$5 AND expires_at>clock_timestamp()))`, [...scope(p, workspaceId), id, p.sessionId])).rows[0]
+  async function readable(c: PoolClient, p: BusinessPrincipal, workspaceId: string, id: string, documentId?: string): Promise<Row> {
+    const row = (await c.query<Row>(`SELECT ${metadata},snapshot FROM workspace_source_results WHERE deployment_id=$1 AND owner_id=$2 AND workspace_id=$3 AND result_id=$4 AND document_id IS NOT DISTINCT FROM $6::uuid AND (state='saved' OR (state='pending' AND session_id=$5 AND expires_at>clock_timestamp()))`, [...scope(p, workspaceId), id, p.sessionId, documentId??null])).rows[0]
     if (!row) throw error(404)
     if (row.state === 'pending') {
       await sourceEnabled(c, p, row.source_id, row.source_version)
@@ -137,31 +141,34 @@ export function createWorkspaceSourceResults(options: WorkspaceSourceResultsOpti
     return row
   }
   return Object.freeze({
-    async capture(token: string, input: QuerySnapshot, queryHash: string): Promise<WorkspaceSourceResultCapture> {
+    async requireDocument(token: string, documentId: string): Promise<void> {
+      await access(token, documentId, async () => {})
+    },
+    async capture(token: string, input: QuerySnapshot, queryHash: string, documentId?: string): Promise<WorkspaceSourceResultCapture> {
       const { snapshot, bytes } = verifiedSnapshot(input, limits.maxSnapshotBytes)
       if (typeof queryHash !== 'string' || !/^[0-9a-f]{64}$/.test(queryHash)) throw error()
-      return access(token, async (c, p, workspaceId) => {
+      return access(token, documentId, async (c, p, workspaceId) => {
         await lockWorkspace(c, p, workspaceId)
         await sourceEnabled(c, p, snapshot.sourceId, snapshot.sourceVersion)
         await c.query(`DELETE FROM workspace_source_results WHERE deployment_id=$1 AND owner_id=$2 AND workspace_id=$3 AND state='pending' AND result_id IN (
           SELECT result_id FROM workspace_source_results WHERE deployment_id=$1 AND owner_id=$2 AND workspace_id=$3 AND state='pending' AND expires_at<=clock_timestamp() ORDER BY expires_at,result_id LIMIT 16
         )`, scope(p, workspaceId))
-        const row = (await c.query<Row>(`INSERT INTO workspace_source_results(result_id,deployment_id,owner_id,workspace_id,source_id,source_version,query_hash,sha256,row_count,truncated,size_bytes,snapshot,state,session_id,expires_at)
-          VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12::jsonb,'pending',$13,clock_timestamp()+$14*interval '1 millisecond') RETURNING ${metadata}`,
-        [randomUUID(), ...scope(p, workspaceId), snapshot.sourceId, snapshot.sourceVersion, queryHash, snapshot.sha256, snapshot.rows.length, snapshot.truncated, bytes.length, bytes.toString('utf8'), p.sessionId, limits.pendingTtlMs])).rows[0]
+        const row = (await c.query<Row>(`INSERT INTO workspace_source_results(result_id,deployment_id,owner_id,workspace_id,source_id,source_version,query_hash,sha256,row_count,truncated,size_bytes,snapshot,state,session_id,expires_at,document_id)
+          VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12::jsonb,'pending',$13,clock_timestamp()+$14*interval '1 millisecond',$15) RETURNING ${metadata}`,
+        [randomUUID(), ...scope(p, workspaceId), snapshot.sourceId, snapshot.sourceVersion, queryHash, snapshot.sha256, snapshot.rows.length, snapshot.truncated, bytes.length, bytes.toString('utf8'), p.sessionId, limits.pendingTtlMs, documentId??null])).rows[0]
         return artifact(row) as WorkspaceSourceResultCapture
       })
     },
-    async save(token: string, input: unknown): Promise<WorkspaceSourceResultArtifact> {
+    async save(token: string, input: unknown, documentId?: string): Promise<WorkspaceSourceResultArtifact> {
       const value = object(input, ['resultId','name','commandId']), id = uuid(value.resultId), name = filename(value.name), commandId = uuid(value.commandId)
       const paramsHash = hash(JSON.stringify({ resultId: id, name }))
-      return access(token, async (c, p, workspaceId) => {
+      return access(token, documentId, async (c, p, workspaceId) => {
         await lockWorkspace(c, p, workspaceId)
         const keys = scope(p, workspaceId)
         // Resolve the scoped target first: a foreign/expired/session-bound handle
         // is always 404, regardless of any command ID supplied alongside it.
-        const row = await readable(c, p, workspaceId, id)
-        const receipt = (await c.query<Row>(`SELECT ${metadata} FROM workspace_source_results WHERE deployment_id=$1 AND owner_id=$2 AND workspace_id=$3 AND save_command_id=$4`, [...keys, commandId])).rows[0]
+        const row = await readable(c, p, workspaceId, id, documentId)
+        const receipt = (await c.query<Row>(`SELECT ${metadata} FROM workspace_source_results WHERE deployment_id=$1 AND owner_id=$2 AND workspace_id=$3 AND save_command_id=$4 AND document_id IS NOT DISTINCT FROM $5::uuid`, [...keys, commandId, documentId??null])).rows[0]
         if (receipt) {
           if (receipt.save_params_hash !== paramsHash || receipt.result_id !== id) throw error(409)
           return artifact(receipt)
@@ -175,33 +182,33 @@ export function createWorkspaceSourceResults(options: WorkspaceSourceResultsOpti
       })
     },
     /** Delete one saved result of the caller's workspace. */
-    async remove(token: string, input: unknown): Promise<void> {
+    async remove(token: string, input: unknown, documentId?: string): Promise<void> {
       const value = object(input, ['resultId']), id = uuid(value.resultId)
-      return access(token, async (c, p, workspaceId) => {
+      return access(token, documentId, async (c, p, workspaceId) => {
         await lockWorkspace(c, p, workspaceId)
-        const removed = await c.query(`DELETE FROM workspace_source_results WHERE deployment_id=$1 AND owner_id=$2 AND workspace_id=$3 AND result_id=$4 AND state='saved'`, [...scope(p, workspaceId), id])
+        const removed = await c.query(`DELETE FROM workspace_source_results WHERE deployment_id=$1 AND owner_id=$2 AND workspace_id=$3 AND result_id=$4 AND state='saved' AND document_id IS NOT DISTINCT FROM $5::uuid`, [...scope(p, workspaceId), id, documentId??null])
         if (!removed.rowCount) throw error(404)
       })
     },
-    async list(token: string, input: unknown = {}): Promise<WorkspaceSourceResultList> {
+    async list(token: string, input: unknown = {}, documentId?: string): Promise<WorkspaceSourceResultList> {
       const value = object(input, ['limit','after']), limit = integer(value.limit, 50, 1, 100), after = value.after === undefined ? null : uuid(value.after)
-      return access(token, async (c, p, workspaceId) => {
-        const rows = (await c.query<Row>(`SELECT ${metadata} FROM workspace_source_results WHERE deployment_id=$1 AND owner_id=$2 AND workspace_id=$3 AND state='saved' AND ($4::uuid IS NULL OR result_id>$4) ORDER BY result_id LIMIT $5`, [...scope(p, workspaceId), after, limit + 1])).rows
+      return access(token, documentId, async (c, p, workspaceId) => {
+        const rows = (await c.query<Row>(`SELECT ${metadata} FROM workspace_source_results WHERE deployment_id=$1 AND owner_id=$2 AND workspace_id=$3 AND state='saved' AND document_id IS NOT DISTINCT FROM $6::uuid AND ($4::uuid IS NULL OR result_id>$4) ORDER BY result_id LIMIT $5`, [...scope(p, workspaceId), after, limit + 1, documentId??null])).rows
         return { items: rows.slice(0, limit).map(artifact), nextCursor: rows.length > limit ? rows[limit - 1].result_id : null }
       })
     },
-    async read(token: string, input: unknown): Promise<WorkspaceSourceResultPage> {
+    async read(token: string, input: unknown, documentId?: string): Promise<WorkspaceSourceResultPage> {
       const value = object(input, ['resultId','offset','limit']), id = uuid(value.resultId), offset = integer(value.offset, 0, 0, 10_000), limit = integer(value.limit, 1000, 1, 1000)
-      return access(token, async (c, p, workspaceId) => {
-        const row = await readable(c, p, workspaceId, id), { snapshot } = storedSnapshot(row)
+      return access(token, documentId, async (c, p, workspaceId) => {
+        const row = await readable(c, p, workspaceId, id, documentId), { snapshot } = storedSnapshot(row)
         const rows = snapshot.rows.slice(offset, offset + limit), next = offset + rows.length
         return { artifact: artifact(row), schema: snapshot.schema, timezone: snapshot.timezone, rows, offset, nextOffset: next < snapshot.rows.length ? next : null, totalRows: snapshot.rows.length, sourceTruncated: snapshot.truncated, sha256: snapshot.sha256 }
       })
     },
-    async download(token: string, input: unknown): Promise<WorkspaceSourceResultDownload & { bytes: Buffer }> {
+    async download(token: string, input: unknown, documentId?: string): Promise<WorkspaceSourceResultDownload & { bytes: Buffer }> {
       const id = uuid(input)
-      return access(token, async (c, p, workspaceId) => {
-        const row = await readable(c, p, workspaceId, id), { snapshot, bytes } = storedSnapshot(row)
+      return access(token, documentId, async (c, p, workspaceId) => {
+        const row = await readable(c, p, workspaceId, id, documentId), { snapshot, bytes } = storedSnapshot(row)
         const name = filename(row.name ?? 'result-' + row.result_id)
         return { name: /\.json$/i.test(name) ? name : name + '.json', bytes, sha256: snapshot.sha256 }
       })

@@ -17,7 +17,7 @@ async function mount(run: (path: string, method?: string, body?: unknown) => Pro
  await act(async () => row.click())
  return { client, host }
 }
-function button(label: string) { const result = [...document.querySelectorAll('button')].find(button => button.textContent === label); expect(result, label).toBeDefined(); return result! }
+function button(label: string) { const result = [...document.querySelectorAll('button')].find(button => button.getAttribute('aria-label') === label || button.textContent === label); expect(result, label).toBeDefined(); return result! }
 async function click(label: string) { await act(async () => button(label).click()) }
 function input(label: string) { const node = document.querySelector<HTMLInputElement>(`[aria-label="${label}"]`); expect(node).not.toBeNull(); return node! }
 async function change(label: string, value: string) {
@@ -391,7 +391,7 @@ test('reads saved connection directories and tables and saves the selected white
   return read(path)
  })
  await click('读取目录和表')
- expect(probes).toEqual([{expectedVersion:3},{expectedVersion:3,directory:'sales'}])
+ expect(probes).toEqual([{expectedVersion:3,page:1},{expectedVersion:3,page:1,directory:'sales'}])
  await change('目录范围','selected')
  const select = (name:string)=>document.querySelector<HTMLInputElement>(`input[aria-label="${name}"]`)!
  await act(async()=>select('允许目录 sales').click())
@@ -470,7 +470,10 @@ test('scope review retains picks across directory changes and preserves an empty
  await change('搜索表','no match')
  const remove=host.querySelector<HTMLButtonElement>('button[aria-label="移除表 sales.orders"]')!
  expect(remove).not.toBeNull()
- expect(remove.closest('details')?.open).toBe(true)
+ const review=remove.closest('details')!
+ expect(review.open).toBe(false)
+ await act(async()=>review.querySelector('summary')!.click())
+ expect(review.open).toBe(true)
  await act(async()=>remove.click())
  expect(host.textContent).toContain('尚未选择表，保存后助手将看不到任何表。')
  await click('保存连接')
@@ -595,7 +598,9 @@ test('reading a single directory opens its tables without selecting any',async()
  },undefined,'page')
  await click('可见范围')
  await click('读取目录和表')
- expect(requests).toEqual([{expectedVersion:3},{expectedVersion:3,directory:'public'}])
+ expect(host.querySelector('input[aria-label="搜索目录"]')).toBeNull()
+ expect(button('浏览 public 的表').textContent).toBe('public')
+ expect(requests).toEqual([{expectedVersion:3,page:1},{expectedVersion:3,page:1,directory:'public'}])
  expect(input('允许表 public.orders').checked).toBe(false)
  expect(host.querySelector<HTMLDetailsElement>('details[aria-label="目录 public 的表"]')?.open).toBe(true)
 })
@@ -670,10 +675,11 @@ test('the scope tab explains that replacement credentials must be saved and link
 
 test('selected tables outside the allowed directories are identified without being removed',async()=>{
  const detail=initial()
- detail.config={...detail.config,allowedTables:['orders','sales.items'],allowedSchemas:['sales']}
+ detail.config={...detail.config,allowedTables:['sales.items','orders'],allowedSchemas:['sales']}
  const {host}=await mount(async path=>path.includes('?')?{items:[detail.source],nextCursor:null}:detail,undefined,'page')
  await click('可见范围')
  const picks=host.querySelector('[aria-label="已选表"]')!
+ expect(picks.firstElementChild?.textContent).toContain('目录未开放')
  expect(picks.querySelector('button[aria-label="移除表 orders"]')?.closest('li')?.textContent).toContain('目录未开放')
  expect(picks.querySelector('button[aria-label="移除表 sales.items"]')?.closest('li')?.textContent).not.toContain('目录未开放')
  expect(host.textContent).toContain('有 1 张已选表不在允许的目录内')
@@ -767,7 +773,7 @@ test('saving scope keeps the table browser open using the new connection version
  await change('表可见范围','selected')
  await act(async()=>input('允许表 sales.orders').click())
  await click('保存连接')
- expect(requests.slice(-2)).toEqual([{expectedVersion:4},{expectedVersion:4,directory:'sales'}])
+ expect(requests.slice(-2)).toEqual([{expectedVersion:4,page:1},{expectedVersion:4,page:1,directory:'sales'}])
  expect(host.querySelector('[aria-label="目录 sales 的表"]')).not.toBeNull()
  expect(input('搜索表').value).toBe('orders')
  expect(input('允许表 sales.orders').checked).toBe(true)
@@ -1056,4 +1062,42 @@ test('a typed connection address can be checked once and is masked when changing
  await click('可见范围');await click('连接设置')
  expect(input('连接凭据').type).toBe('password')
  expect(input('连接凭据').value).toContain('db.example/reporting')
+})
+
+test('directory pagination can return from an empty page without losing a checked schema',async()=>{
+ const detail=initial()
+ detail.config={...detail.config,allowedSchemas:['sales']}
+ const {host}=await mount(async(path,_method,body)=>{
+  if(!path.endsWith('/discover'))return path.includes('?')?{items:[detail.source],nextCursor:null}:detail
+  const {page}=body as {page:number}
+  return {items:page===1?['sales']:[],page,truncated:page===1}
+ },undefined,'page')
+ await click('可见范围')
+ await click('读取目录和表')
+ const picker=()=>host.querySelector('details.dc-picker')!
+ const turn=async(label:string)=>act(async()=>[...picker().querySelectorAll('button')].find(button=>button.textContent===label)!.click())
+ await turn('下一页')
+ expect(picker().textContent).toContain('2')
+ await turn('上一页')
+ expect(input('允许目录 sales').checked).toBe(true)
+})
+
+test('review filters all selected tables and keeps focus when the last match is removed',async()=>{
+ const detail=initial()
+ detail.config={...detail.config,allowedTables:['archive.orders','sales.items','sales.totals']}
+ const {host}=await mount(async path=>path.includes('?')?{items:[detail.source],nextCursor:null}:detail,undefined,'page')
+ await click('可见范围')
+ const search='已选表 · 搜索表'
+ await act(async()=>host.querySelector<HTMLElement>('.dc-selection summary')!.click())
+ await change(search,' ARCHIVE ')
+ const list=host.querySelector('[aria-label="已选表"]')!
+ expect(list.children).toHaveLength(1)
+ await act(async()=>list.querySelector('button')!.click())
+ expect(list.children).toHaveLength(0)
+ expect(document.activeElement).toBe(input(search))
+ const review=list.closest('details')!
+ await act(async()=>[...review.querySelectorAll('button')].find(button=>button.textContent==='清除筛选')!.click())
+ expect(list.children).toHaveLength(2)
+ expect(list.textContent).toContain('sales.items')
+ expect(document.activeElement).toBe(input(search))
 })

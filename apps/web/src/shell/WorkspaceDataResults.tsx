@@ -1,5 +1,5 @@
 import './native-settings.css'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useId, useMemo, useRef, useState } from 'react'
 import {offerSourceResultDownload} from './source-result-download'
 import type { SourceResultsClient } from './source-results-client'
 import type { WorkspaceSourceResultArtifact, WorkspaceSourceResultPage } from '../../../../packages/web-contracts/src/source-results.ts'
@@ -13,6 +13,7 @@ export function WorkspaceDataResults({ client, onClose, presentation = 'dialog' 
   const [revision, setRevision] = useState(0)
   const [loading, setLoading] = useState(true)
   const [filter, setFilter] = useState('')
+  const actionGroup = useId()
   const searchInput = useRef<HTMLInputElement>(null)
   const term = filter.trim().toLowerCase()
   const visible = term ? items.filter(item =>
@@ -49,30 +50,31 @@ export function WorkspaceDataResults({ client, onClose, presentation = 'dialog' 
   }
   return <div className={presentation === 'page' ? 'workspace-panel-host' : 'set-overlay'}><section className={presentation === 'page' ? 'workspace-panel workspace-data-results-panel' : 'set-dialog source-dialog'} role={presentation === 'page' ? undefined : 'dialog'} aria-modal={presentation === 'page' ? undefined : true} aria-label={s('drTitle')}>
     {presentation === 'dialog' && <div className="set-header"><h2 className="set-title">{s('drTitle')}</h2><button type="button" className="native-settings-button" disabled={busy} onClick={onClose}>{s('srcCloseDialog')}</button></div>}
-    <div className={presentation === 'page' ? 'workspace-panel-body' : 'set-body'}><div className="dr-toolbar"><p>{s('drIntro')}</p>
-      <button type="button" className="native-settings-button" disabled={loading || busy} onClick={() => setRevision(value => value + 1)}>{s('srcRefreshList')}</button></div>
-      {(items.length > 0 || cursor || filter) && <div className="dr-search">
-        <label>
-          <span>{s('drSearch')}</span>
-          <input ref={searchInput} className="native-settings-input" type="search" value={filter} onChange={event => setFilter(event.target.value)}/>
-        </label>
+    <div className={presentation === 'page' ? 'workspace-panel-body' : 'set-body'}><div className="dr-toolbar">
+      {(items.length > 0 || cursor || filter) && <>
+        <input ref={searchInput} className="native-settings-input" type="search" aria-label={s('drSearch')} placeholder={s('drSearch')} value={filter} onChange={event => setFilter(event.target.value)}/>
         {filter && <button type="button" className="native-settings-button" onClick={() => {
           setFilter('')
           searchInput.current?.focus()
         }}>{s('srcClearFilters')}</button>}
         {term && items.length > 0 && <output>{visible.length} / {items.length}</output>}
-      </div>}
+      </>}
+      <button type="button" className="native-settings-button dr-refresh" disabled={loading || busy} onClick={() => setRevision(value => value + 1)}>{s('srcRefreshList')}</button>
+      </div>
+      <p className="dr-intro">{s('drIntro')}</p>
       {loading && <p role="status">{s('drLoading')}</p>}
       {!loading && !items.length && !error && <p className="dr-empty">{s('drEmpty')}</p>}
       <ul className="dr-list" aria-busy={loading || busy}>{visible.map(item => <li key={item.resultId}><div className="dr-identity"><button type="button" className="native-settings-button" disabled={busy || loading} aria-current={page?.artifact.resultId === item.resultId || undefined} aria-expanded={page?.artifact.resultId === item.resultId} onClick={() => {
           if (page?.artifact.resultId === item.resultId) setPage(null)
           else void run(() => read(item.resultId))
         }}>{item.name ?? item.resultId}</button>
-        <div className="dr-meta"><bdi>{item.sourceId}</bdi><span>{s('drRowCount', { count: item.rowCount })}{item.truncated ? s('drSourceTruncated') : ''}</span></div>
-        {item.savedAt && <div className="dr-saved">{s('drSavedAt')} <time dateTime={item.savedAt} title={item.savedAt}>{savedDate.format(new Date(item.savedAt))}</time></div>}</div>
-        <div className="dr-actions">
+        <div className="dr-meta"><bdi>{item.sourceId}</bdi><span>{s('drRowCount', { count: item.rowCount })}{item.truncated ? s('drSourceTruncated') : ''}</span>
+        {item.savedAt && <span className="dr-saved">{s('drSavedAt')} <time dateTime={item.savedAt} title={item.savedAt}>{savedDate.format(new Date(item.savedAt))}</time></span>}</div></div>
+        <details className="dr-row-actions" name={actionGroup}>
+          <summary>{s('srcActionsColumn')}</summary>
+          <div className="dr-actions">
         <button type="button" className="native-settings-button" disabled={busy || loading} onClick={() => void run(async () => { const json = await client.download(item.resultId); if (alive.current) offerSourceResultDownload(json, item.resultId) })}>{s('drDownloadJson')}</button>
-        <button type="button" className="native-settings-button is-danger" aria-label={s('drDeleteAria', { name: item.name ?? item.resultId })} disabled={busy || loading} onClick={() => void run(() => remove(item), 'drDeleteFailed')}>{s('drDelete')}</button></div>
+        <button type="button" className="native-settings-button is-danger" aria-label={s('drDeleteAria', { name: item.name ?? item.resultId })} disabled={busy || loading} onClick={() => void run(() => remove(item), 'drDeleteFailed')}>{s('drDelete')}</button></div></details>
       {page?.artifact.resultId === item.resultId && <section className="dr-preview" aria-label={s('drPreviewLabel')}><p>{s('drPageRange', { timezone: page.timezone, from: page.rows.length ? page.offset + 1 : 0, to: page.offset + page.rows.length, total: page.totalRows })}{page.sourceTruncated ? s('drOriginalTruncated') : ''}</p>
         <div className="source-results" role="region" aria-label={s('drPreviewLabel')} tabIndex={0}><table><thead><tr>{page.schema.map(column=><th key={column.name} scope="col" data-type={column.type}>{column.unit?s('drColumnWithUnit',{name:column.name,unit:column.unit}):column.name}</th>)}</tr></thead><tbody>{page.rows.map((row,index)=><tr key={page.offset+index}>{page.schema.map(column=><td key={column.name} data-type={column.type}>{row[column.name]===null?'—':String(row[column.name]??'')}</td>)}</tr>)}</tbody></table></div>
         {(page.offset > 0 || page.nextOffset !== null) && <div className="dr-pager"><button type="button" className="native-settings-button" disabled={busy || loading || page.offset === 0} onClick={() => void run(() => read(page.artifact.resultId, Math.max(0, page.offset - 1000)))}>{s('drPreviousBatch')}</button>

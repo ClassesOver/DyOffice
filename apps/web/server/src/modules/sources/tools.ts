@@ -26,11 +26,14 @@ export const truncatedNotice = (rows: number) => `TRUNCATED: only the first ${ro
 export function createWorkspaceSourceTools({ sources, results }: { sources: SourceService; results: Results }) {
   return {
     definitions: SOURCE_AGENT_TOOLS,
-    async execute(token: string, input: unknown): Promise<unknown> {
+    async execute(token: string, input: unknown, documentId?: string): Promise<unknown> {
       try {
         const call = object(input, ['name','arguments'])
         if (typeof call.name !== 'string' || !SOURCE_AGENT_TOOLS.some(tool => tool.name === call.name)) throw sourceError()
         const name = call.name as SourceToolName
+        if (documentId !== undefined && (name === 'sources.list' || name === 'sources.describe' || name === 'sources.query')) {
+          await results.requireDocument(token, documentId)
+        }
         if (name === 'sources.list') {
           const args = object(call.arguments, ['after'])
           return sources.listSavedMetadata(token, args)
@@ -44,7 +47,7 @@ export function createWorkspaceSourceTools({ sources, results }: { sources: Sour
           const query = { ...(args.sql === undefined ? {} : { sql: args.sql }) }
           const snapshot = await sources.querySource(token, args.sourceId, query)
           const queryHash = createHash('sha256').update(JSON.stringify({ sourceId: snapshot.sourceId, sourceVersion: snapshot.sourceVersion, sql: args.sql ?? null })).digest('hex')
-          const artifact = await results.capture(token, snapshot, queryHash)
+          const artifact = await results.capture(token, snapshot, queryHash, documentId)
           return { artifact, schema: snapshot.schema, timezone: snapshot.timezone, preview: snapshot.rows.slice(0, 100),
             totalRows: snapshot.rows.length, sourceTruncated: snapshot.truncated, sha256: snapshot.sha256,
             nextOffset: snapshot.rows.length > 100 ? 100 : null,
@@ -52,10 +55,10 @@ export function createWorkspaceSourceTools({ sources, results }: { sources: Sour
         }
         if (name === 'sources.save_result') {
           const args = object(call.arguments, ['resultId','name','commandId'])
-          return results.save(token, { resultId: uuid(args.resultId), commandId: uuid(args.commandId), name: args.name })
+          return results.save(token, { resultId: uuid(args.resultId), commandId: uuid(args.commandId), name: args.name }, documentId)
         }
         const args = object(call.arguments, ['resultId','offset','limit'])
-        return results.read(token, { resultId: uuid(args.resultId), ...(args.offset === undefined ? {} : { offset: args.offset }), ...(args.limit === undefined ? {} : { limit: args.limit }) })
+        return results.read(token, { resultId: uuid(args.resultId), ...(args.offset === undefined ? {} : { offset: args.offset }), ...(args.limit === undefined ? {} : { limit: args.limit }) }, documentId)
       } catch (error) { throw safeError(error) }
     },
   }

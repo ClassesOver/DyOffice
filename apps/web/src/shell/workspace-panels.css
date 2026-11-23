@@ -142,26 +142,6 @@
   margin-bottom: 18px;
 }
 
-.workspace-data-results-panel .workspace-panel-body > ul {
-  margin: 20px 0;
-  padding: 0;
-  list-style: none;
-}
-
-.workspace-data-results-panel .workspace-panel-body > ul > li {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 12px;
-  padding: 14px 0;
-  border-bottom: 1px solid var(--border-subtle);
-}
-
-.workspace-data-results-panel .workspace-panel-body > ul > li > span {
-  flex: 1;
-  color: var(--text-secondary);
-}
-
 @media (max-width: 760px) {
   .workspace-panel-header {
     padding: 16px 18px;

@@ -10,7 +10,7 @@ import type {SourceService} from './service.ts'
 export function registerAssistantSourceCatalog(app: FastifyInstance, {sessions, csrf, sources, analysis}: {
   sessions: SessionService; csrf: ReturnType<typeof createCsrfService>; sources: Pick<SourceService, 'listSavedMetadata'>; analysis?: WorkspaceSourceTools
 }) {
-  if (analysis) app.post('/api/v1/ai/sources/execute', {
+  if (analysis) for (const path of ['/api/v1/ai/sources/execute','/api/v1/files/:documentId/ai/sources/execute']) app.post(path, {
     bodyLimit: 40_000,
     onRequest: async (request, reply) => {
       reply.header('Cache-Control', 'private, no-store')
@@ -21,7 +21,7 @@ export function registerAssistantSourceCatalog(app: FastifyInstance, {sessions, 
   }, request => {
     const call = object(request.body, ['name','arguments'])
     if (!ASSISTANT_ANALYSIS_OPERATIONS.some(name => name === call.name)) throw sourceError(403)
-    return analysis.execute(cookies(request).session ?? '', call)
+    return analysis.execute(cookies(request).session ?? '', call, (request.params as {documentId?:string}).documentId)
   })
   app.post('/api/v1/ai/sources/list', {
     bodyLimit: 1024,
