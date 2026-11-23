@@ -11,7 +11,7 @@ function fixture(t){
  let current=revision,epoch=1,owner='a',applied=0,closed=0
  const files={openFile:async()=>({format:'pptx',file:{revision:current,sha256:'x'}}),download:async()=>({format:'pptx',bytes:new Uint8Array([1])})}
  const leases={renewLease:async(token,_file,a)=>{if(token!==owner||a.editorId!==editor||a.leaseEpoch!==epoch)throw Object.assign(Error('lost'),{statusCode:409})}}
- const handle={close(){closed++},outline:async()=>({size:{cx:1,cy:1}}),renderAll:async()=>[],apply:async()=>{applied++;return {generation:1,stateGeneration:1,transaction:{applied:true},records:[],created:[],slideIds:[],paths:[],canUndo:true,canRedo:false}},exportBytes:async()=>({generation:0,bytes:Buffer.from('old draft')})}
+ const handle={close(){closed++},outline:async()=>({size:{cx:1,cy:1}}),renderAll:async()=>[],apply:async()=>{applied++;return {generation:1,stateGeneration:1,transaction:{applied:true},records:[],created:[],slideIds:[],paths:[],canUndo:true,canRedo:false}},exportBytes:async generation=>({generation,bytes:Buffer.from('old draft')})}
  const s=createSlidesService({files,leases,host:{openSession:async()=>handle}});t.after(()=>s.closeAll())
  return {s,files,leases,applied:()=>applied,closed:()=>closed,takeover(){epoch++},newHead(){current='44444444-4444-4444-8444-444444444444';return current},otherSession(){owner='b'}}
 }
@@ -101,4 +101,18 @@ test('large slides apply bodies are accepted only for one analysis picture batch
   assert.doesNotThrow(() => assertApplySize([{ op: 'addPicture', bytes: big }, { op: 'addElement', text: 'Source: s' }]))
   for (const ops of [[{ op: 'addElement', text: big }], [{ op: 'addPicture', bytes: big }, { op: 'addPicture', bytes: 'y' }], [{ op: 'addPicture', bytes: big }, { op: 'a' }, { op: 'b' }]])
     assert.throws(() => assertApplySize(ops), error => error.statusCode === 413)
+})
+
+test('a displaced editor can download its own exact PPTX draft after another editor opens a newer head',async t=>{
+ const f=fixture(t);await f.s.open('a',file,input)
+ await f.s.apply('a',file,{...input,ops:[]})
+ f.takeover();f.otherSession()
+ const old={...input,generation:1}
+ await assert.rejects(f.s.apply('a',file,{...old,ops:[]}),{statusCode:409})
+ const head=f.newHead()
+ await f.s.open('b',file,{...input,revision:head,leaseEpoch:2})
+ assert.equal((await f.s.recoverDraft('a',file,old)).bytes.toString(),'old draft')
+ await assert.rejects(f.s.recoverDraft('b',file,old),{statusCode:409})
+ await assert.rejects(f.s.recoverDraft('a',file,{...old,generation:0}),{statusCode:409})
+ await assert.rejects(f.s.exportForSave('a',file,old),{statusCode:409})
 })

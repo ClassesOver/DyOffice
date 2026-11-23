@@ -300,7 +300,17 @@ test('lease loss after mount preserves dirty renderer and blocks takeover and sa
  await until(()=>window.__slidesEntryProbe.readOnly,'lease loss read-only')
  assert.equal(container.querySelector('[data-slides-app]')===original,true,'dirty renderer remains mounted')
  assert.equal(container.querySelector('.dyoffice-slides-download').disabled,true)
- assert.equal(container.querySelector('.dyoffice-slides-takeover').disabled,true)
+ assert.equal(container.querySelector('.dyoffice-slides-takeover'),null)
+ const recover=container.querySelector('.dyoffice-slides-recover')
+ assert.ok(recover&&!recover.disabled)
+ let downloaded=''
+ const click=dom.window.HTMLAnchorElement.prototype.click
+ dom.window.HTMLAnchorElement.prototype.click=function(){downloaded=this.download}
+ t.after(()=>{dom.window.HTMLAnchorElement.prototype.click=click})
+ recover.click()
+ await until(()=>downloaded.endsWith('-draft.pptx'),'draft download after lease loss')
+ assert.equal(host.getState(id).lease,null)
+ assert.equal(window.__slidesEntryProbe.saves,0)
  assert.equal(window.__slidesEntryProbe.dirty,true)
 })
 

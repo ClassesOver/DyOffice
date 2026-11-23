@@ -319,10 +319,11 @@ export function createSlidesMockServer({name = 'deck.pptx', slideCount = 3, init
         // Receipt shape mirrors the slides save service: {uploadId, baseRevision, leaseEpoch, sha256, size}.
         return json({uploadId, baseRevision: body.baseRevision, leaseEpoch: body.leaseEpoch, sha256: sha256(bytes), size: bytes.byteLength})
       }
-      if (route === 'export') {
+      if (route === 'export'||route === 'recover') {
         const current = requireSession(body)
         requireGeneration(current, body.generation)
         const bytes = new TextEncoder().encode('mock-pptx-export:' + snapshot())
+        if(route==='recover')return new Response(bytes,{headers:{'X-Slides-Generation':String(current.generation),'Content-Type':'application/octet-stream'}})
         return json({sha256: sha256(bytes), size: bytes.byteLength, base64: Buffer.from(bytes).toString('base64')})
       }
       if (route === 'open') {

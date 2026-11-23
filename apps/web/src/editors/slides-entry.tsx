@@ -60,7 +60,7 @@ export async function mountSlidesEditor(host: SessionFileHost, container: HTMLEl
   let installedDesktop: typeof stage.desktop | undefined
   let downloading = false, takingOver = false, confirming = false, actionError = ''
   const copyLifetime=new AbortController()
-  let naming=false,copyNotice=''
+  let naming=false,copyNotice='',recoveryDownload:'idle'|'sent'|'failed'='idle'
   const searchApi = {
     webSearch: (query: string, maxResults?: number) => sharedAssistant?.searchApi.webSearch(query, maxResults) ?? Promise.reject(new Error(text.unavailable)),
     imageSearch: (query: string, maxResults?: number) => sharedAssistant?.searchApi.imageSearch(query, maxResults) ?? Promise.reject(new Error(text.unavailable)),
@@ -119,6 +119,20 @@ export async function mountSlidesEditor(host: SessionFileHost, container: HTMLEl
       anchor.hidden = true; container.append(anchor); anchor.click(); anchor.remove()
     } catch { if (!disposed) actionError = text.saveFailed }
     finally { downloading = false; if (!disposed) changed() }
+  }
+  async function downloadLostDraft(){
+    if(downloading||disposed||takingOver||bridge.needsConfirmation())return
+    downloading=true;recoveryDownload='idle';changed()
+    try{
+      const bytes=await bridge.exportDraftCopy(undefined,copyLifetime.signal,'recover')
+      copyLifetime.signal.throwIfAborted()
+      const url=URL.createObjectURL(bytes),link=stage.document.createElement('a')
+      try{
+        link.href=url;link.download=host.getState(fileId).name.replace(/\.pptx$/i,'')+'-draft.pptx'
+        container.append(link);link.click();recoveryDownload='sent'
+      }finally{link.remove();setTimeout(()=>URL.revokeObjectURL(url),1000)}
+    }catch{recoveryDownload='failed'}
+    finally{downloading=false;if(!disposed)changed()}
   }
   async function takeOver() {
     if (downloading || takingOver || disposed) return
@@ -212,6 +226,11 @@ export async function mountSlidesEditor(host: SessionFileHost, container: HTMLEl
     const showAssistant=prefs.showAssistant!==false||handoffOpen
     const assistantNotice=assistantLoadFinished||!showAssistant?editorAssistantNotice(assistantResult,showAssistant,locale):''
     const warning = failed || state.status === 'unknown' || bridge.needsConfirmation() || state.status === 'unauthorized' || (!signed && !state.lease && (loaded || !editorMounted) && !takingOver) || state.status === 'conflict' ? status : actionError
+    const lostDraft=loaded&&!failed&&!signed&&!state.lease&&state.status!=='unauthorized'&&state.status!=='unknown'&&!bridge.needsConfirmation()&&(dirty()||bridge.isDirty())
+    const recoveryHint=recoveryDownload==='failed'
+      ?(locale==='zh'?'草稿下载未完成，请重试。请保留当前页面；若草稿已过期，可从文件菜单将可见幻灯片导出为图片。':'Draft download failed. Retry and keep this tab open. If the draft expired, export the visible slides as images from the File menu.')
+      :recoveryDownload==='sent'?(locale==='zh'?'请检查下载的草稿，另行保留尚未提交的输入，再重新打开最新版本。':'Check the downloaded draft and copy any unsubmitted input before reopening the latest version.')
+      :(locale==='zh'?'编辑权限已失效。可下载包含已应用修改的 PPTX 草稿；原文件不会被覆盖。':'Editing access was lost. Download a PPTX draft with the applied changes. The original file will stay unchanged.')
     const historical = (!editorMounted || loaded) && !failed && !state.lease && !dirty() && state.status !== 'unknown' && state.status !== 'unauthorized' && !bridge.needsConfirmation() && !takingOver
     const saveDownload = <>
       <button type="button" className="dyoffice-slides-download"
@@ -232,7 +251,10 @@ export async function mountSlidesEditor(host: SessionFileHost, container: HTMLEl
         ...(writeProtected ? [{id:'write-protected',level:'info' as const,
           title:locale==='zh'?'演示文稿受写保护':'Write-protected presentation',
           message:locale==='zh'?'此演示文稿需要修改密码。Web 当前以只读方式打开，可下载已保存版本。':'This presentation requires a password to modify. The Web editor opens it read only, and the saved version can be downloaded.'}] : []),
-        ...(warning ? [{id:'document-state',level:'error' as const,title:locale === 'zh' ? '文档需要处理' : 'Document needs attention',message:warning,actions:<>{!signed && !state.lease && (!editorMounted || !failed) && state.status !== 'unauthorized' && <button className="dyoffice-slides-takeover" disabled={(editorMounted && (!loaded || !editor)) || downloading || takingOver || dirty() || state.status === 'unknown' || bridge.needsConfirmation()} onClick={() => { void takeOver() }}>{text.takeover}</button>}{historical && <a href={`/api/v1/files/${fileId}/content?revision=${state.revision.revision}&download=1`} download={state.name}>{text.downloadReadOnly}</a>}{bridge.needsConfirmation() && <button data-save-fence-allow="confirm" disabled={confirming} onClick={() => { void confirmSave() }}>{text.retry}</button>}</>}] : []),
+        ...(warning ? [{id:'document-state',level:'error' as const,title:locale === 'zh' ? '文档需要处理' : 'Document needs attention',message:lostDraft?recoveryHint:warning,actions:<>{lostDraft&&<>
+          <button type="button" className="dyoffice-slides-recover" disabled={downloading} onClick={()=>{void downloadLostDraft()}}>{locale==='zh'?'下载 PPTX 草稿':'Download PPTX draft'}</button>
+          {recoveryDownload==='sent'&&<button type="button" onClick={()=>{if(stage.confirm(locale==='zh'?'已核对下载的草稿并保留未提交的输入？重新打开会替换当前页面。':'Have you checked the downloaded draft and preserved unsubmitted input? Reopening will replace this view.'))stage.location.reload()}}>{locale==='zh'?'重新打开最新版本':'Reopen latest version'}</button>}
+        </>}{!lostDraft&&!signed && !state.lease && (!editorMounted || !failed) && state.status !== 'unauthorized' && <button className="dyoffice-slides-takeover" disabled={(editorMounted && (!loaded || !editor)) || downloading || takingOver || dirty() || state.status === 'unknown' || bridge.needsConfirmation()} onClick={() => { void takeOver() }}>{text.takeover}</button>}{historical && <a href={`/api/v1/files/${fileId}/content?revision=${state.revision.revision}&download=1`} download={state.name}>{text.downloadReadOnly}</a>}{bridge.needsConfirmation() && <button data-save-fence-allow="confirm" disabled={confirming} onClick={() => { void confirmSave() }}>{text.retry}</button>}</>}] : []),
         ...(notice ? [{id:'version',level:'info' as const,title:locale === 'zh' ? '版本同步' : 'Version updates',message:notice}] : []),
         ...(assistantNotice ? [{id:'assistant',level:showAssistant?'warning' as const:'info' as const,title:locale==='zh'?'AI 助手':'AI Assistant',message:assistantNotice}] : []),
         ...(copyNotice ? [{id:'named-copy',level:'info' as const,title:locale==='zh'?'副本已保存':'Copy saved',message:copyNotice}] : []),
