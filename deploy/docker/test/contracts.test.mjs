@@ -43,6 +43,7 @@ test('lock rewriting preserves all versions and integrity and uses configured HT
 test('secrets excluded from build; worker has no owner/auth credential; AI opt-in only',()=>{
  assert.match(read('Dockerfile.dockerignore'),/\*\*\/secrets/)
  assert.match(read('Dockerfile.dockerignore'),/\*\*\/\*\.env/)
+ for(const path of ['**/.npmrc','**/.superpowers','**/.dyoffice','working_dir','**/dist-*','deploy/docker/ai/provider-profiles.json'])assert.ok(read('Dockerfile.dockerignore').split('\n').includes(path),path)
  assert.doesNotMatch(read('host/worker.env.example'),/DYOFFICE_(AUTH_)?DATABASE_URL=/)
  assert.doesNotMatch(read('compose.yaml'),/DYOFFICE_PROVIDER_GATEWAY_PROFILES/)
  assert.match(read('compose.ai.yaml'),/DYOFFICE_PROVIDER_GATEWAY_PROFILES/)

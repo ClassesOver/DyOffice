@@ -14,3 +14,19 @@
 **/playwright-report
 
 **/*.env
+
+# Local operator state and machine-specific credentials.
+**/.npmrc
+**/.superpowers
+**/.ssh
+**/.aws
+**/.codex
+**/*.key
+**/*.pem
+deploy/docker/ai/provider-profiles.json
+**/dist-*
+**/.dyoffice
+**/.dyoffice-*-build
+working_dir
+**/.claude
+**/*.log

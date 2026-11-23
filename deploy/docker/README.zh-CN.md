@@ -6,7 +6,7 @@
 
 ## HTTP 模式与明确风险
 
-默认 `DYOFFICE_INSECURE_HTTP_DEV=0`：会话仍使用 `__Host-*; HttpOnly; Secure; SameSite=Lax`。localhost 安全上下文特例取决于浏览器；没有真实浏览器验收，不保证默认 HTTP 登录成功。
+默认 `DYOFFICE_INSECURE_HTTP_DEV=0`：会话仍使用 `__Host-*; HttpOnly; Secure; SameSite=Lax`。本次已用 Chromium 在 localhost 上验证登录和刷新。其他浏览器对 localhost 安全上下文的处理需独立核验。
 
 需要其他设备访问时，在 `.env` 显式设置，例如（IP 必须替换为服务器真实、受控局域网 IP）：
 
@@ -23,7 +23,7 @@ DYOFFICE_INSECURE_HTTP_DEV=1
 
 **明文风险：局域网监听者/中间人可读取或篡改密码、会话和文档。HttpOnly/CSRF 不能解决链路窃听。仅用隔离网络、独立测试部署 UUID/数据库/账号和虚假数据，不能复用生产密码。** 切换模式后清除浏览器旧 cookie；停用后应撤销全部开发会话，销毁隔离测试库或凭据，不将该库直接升级为生产。dev 凭证有独立 `dev1.` 格式和绑定部署/origin/用途的 MAC，数据库散列完整凭证；改名、去前缀不能重放到安全模式。关闭后拒绝旧 dev 凭证，既有43字符安全凭证保持兼容；这仍不等于删除数据库内的测试会话。
 
-本次未证明浏览器登录可用：Chromium 实测尝试被执行环境 `socket() Operation not permitted` 阻断。API 注入测试通过不能替代目标浏览器的登录、刷新、退出验收。应用不会在失败时自动放宽安全选项。
+非 localhost 的 HTTP 开发协议已用 Chromium 验证登录、刷新和退出，该测试使用真实认证路由及模拟会话存储。下方另列 localhost 的完整数据库验收。
 
 ## 实际支持和依赖
 
@@ -38,9 +38,9 @@ DYOFFICE_INSECURE_HTTP_DEV=1
 
 ## 默认华为源
 
-- npm 默认 `https://repo.huaweicloud.com/repository/npm/`，可通过 `NPM_REGISTRY` 覆盖。构建副本中重写 npmjs/npmmirror 的锁定下载地址，保留版本与 integrity；未知外链拒绝，绝不静默回源。已核对 1024 个地址，未全量联网下载。
+- npm 默认 `https://repo.huaweicloud.com/repository/npm/`，可通过 `NPM_REGISTRY` 覆盖。构建副本中重写 npmjs/npmmirror 的锁定下载地址，保留版本与 integrity；未知外链拒绝，绝不静默回源。本次 Docker 构建重写了 1087 个锁定地址，并使用默认镜像完成了目标平台的 npm 安装。
 - Node/PostgreSQL（宿主依赖另有 Redis）需用户提前同步官方兼容镜像到**自己的华为 SWR**，填真实镜像地址，建议固定 digest。没有虚构公共镜像或发布好的 DyOffice image。私有 SWR 需预先登录。
-- 当前 Docker build 不运行 apt、Cargo 或 rustup；OS 依赖在基础镜像中提供。宿主可选路径的华为 Ubuntu apt 参考及 Rust 镜像未核实阻塞见 EXTENSIONS。不能声称全部原生依赖已可从华为拉取。
+- 本草稿分支的 Docker build 不运行 apt、Cargo 或 rustup；OS 依赖在基础镜像中提供。宿主可选路径的华为 Ubuntu apt 参考及 Rust 镜像未核实阻塞见 EXTENSIONS。不能声称全部原生依赖已可从华为拉取。
 - 官方 npm 说明：https://www.huaweicloud.com/zhishi/npm.html
 - 镜像加速适用限制：https://support.huaweicloud.com/bulletin-swr/swr_bulletin_0003.html
 
@@ -60,6 +60,8 @@ docker compose up -d web
 docker compose logs --tail=100 web
 ```
 
+镜像构建时会校验 Node 版本与根目录的 `.nvmrc` 一致。Sheets 打包默认使用 2800 MiB 的 V8 老生代堆上限，容器还需为构建工具和系统留出内存。可用 `docker compose build --build-arg BUILD_HEAP_MIB=4096 web` 调整，此参数仅在构建时生效。
+
 管理员 CLI 必须在交互 TTY 内输入用户名和密码（至少 15 字符），不要把管理员密码放环境或命令行。执行 provision/bootstrap 成功后再启动 Web，访问配置的 `DYOFFICE_ORIGIN`（默认 `http://localhost:3080`），遵循上述浏览器验收门槛。原生/AI 并不随以上命令启动。
 
 ## 数据和安全
@@ -67,7 +69,7 @@ docker compose logs --tail=100 web
 - DB 和对象目录均有命名卷。`docker compose down` 不删卷；**不要运行 down -v**，会删除数据。备份 DB、对象卷、部署 UUID 和 secrets 后才升级。
 - owner 仅给 provision/admin，不传 Web。auth/business 分离，数据库角色无 superuser/bypassrls/createdb/createrole/replication/inherit。
 - 本地 Compose secrets 是文件挂载而非加密 secret 服务。生成目录 0700、文件 0444，让非 root node 用户可读容器挂载；宿主依靠私有父目录限制访问。不要共享/提交密钥。自动生成的十六进制密码可安全组成 URL，手工改密码需 URL 编码。
-- 专用 Dockerfile.dockerignore 排除 secrets、实际 env、TLS 和产物。配置目录已忽略密钥；构建上下文仅限干净仓库，不能包含任意额外秘密。
+- 专用 Dockerfile.dockerignore 排除 secrets、实际 env、TLS、本地 npm 配置、个人工作区、复现文档、AI 网关实际配置和宿主构建产物。配置目录已忽略密钥；构建上下文仅限干净仓库，不能包含任意额外秘密。
 - 旧卷不会重跑 init 脚本或自动改密码；生成器不会覆盖原密钥/UUID。已有数据不能靠重生成密钥恢复。
 - 升级前备份并停止 Web，构建后运行 provision，成功再启动；未提供自动回滚。本地对象存储只支持单副本测试。
 
@@ -75,4 +77,10 @@ docker compose logs --tail=100 web
 
 执行静态合约：仓库根目录 `node --test deploy/docker/test/contracts.test.mjs`。
 
-本次通过部署合约 5/5、HTTP开发模式与既有CSRF测试 11/11、server TypeScript、YAML结构及Shell/Python语法。完整 unit 以 `--experimental-test-module-mocks --import tsx` 运行：635 项中632通过、3跳过、0失败（执行环境Node 24.22.1，不代替镜像Node 22.23.5验收）。新增浏览器协议测试使用真实auth路由但模拟DB/session，不是PostgreSQL全链路；实际启动尝试因socket限制失败。没有 Docker Engine，未进行 `docker compose config`、镜像构建、容器启动、数据库初始化或浏览器登录。宿主原生服务和 AI 实调用也未验证。不要把静态通过等同功能可用或生产准入。
+本草稿分支在 Linux 上使用官方 Node 22.23.5 bookworm-slim 和 PostgreSQL 17 alpine 镜像验收，npm 使用默认华为源。已通过：
+
+- 30 项 Node 部署与锁文件测试、6 项 Python 预检测试、7 项 HTTP 开发模式测试；另用 BuildKit 验证了实际配置、构建产物与敏感文件示例的上下文过滤。
+- Compose 基线与 AI overlay 配置解析、完整镜像构建、独立数据库初始化、运行时角色授权、交互式创建管理员、Web 就绪探针。
+- 默认 Secure cookie 模式下，Chromium 在 localhost 登录真实 PostgreSQL 账号并刷新后仍能读取当前会话。
+
+以上验收覆盖草稿分支。目标分支的 `build:saas` 另需 Cargo 和 `wasm32-wasip1`；同步目标分支后必须重新构建并验收。私有 SWR、AI 供应商和四格式隔离运行时未纳入本次验证。
