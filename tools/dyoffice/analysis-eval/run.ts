@@ -20,6 +20,7 @@ import type { AgentStreamCallbacks, AgentStreamRequest, AgentTransport } from '.
 import { streamOpenAiCompatible } from '../../../packages/ai-provider/src/protocols/openai-compatible.ts'
 import { createAnalysisInsertSkill } from '../../../packages/browser-host/src/analysis-insert-skill.ts'
 import { createWorkspaceSourceSkill } from '../../../packages/browser-host/src/source-skill.ts'
+import { sourceResultBase } from '../../../packages/web-contracts/src/source-results.ts'
 import { assistantSourceTools } from '../../../packages/web-contracts/src/assistant.ts'
 import type { AnalysisDocumentTarget, PreparedAnalysisContent } from '../../../packages/web-contracts/src/analysis-document.ts'
 import type { QuerySnapshot } from '../../../packages/web-contracts/src/sources.ts'
@@ -51,7 +52,8 @@ const config = { timezone: 'Asia/Shanghai', maxRows: 1000, units: { order_amount
 const row = { source_id: 'sales', name: '销售库', kind: 'postgres', version: 1, config }
 const httpError = (status: number) => Object.assign(new Error('Source tool failed'), { status })
 
-function createBackend() {
+function createBackend(documentId: string) {
+  const base = sourceResultBase(documentId)
   const results = new Map<string, { snapshot: QuerySnapshot; queryHash: string }>()
   const run = async (sql: string, scope: { defaultSchema: string; allowedTables?: string[] }, units = true) => {
     const execution = executionFor('postgres', config as never)
@@ -97,11 +99,11 @@ function createBackend() {
     throw httpError(403)
   }
   async function request<T>(path: string, method = 'GET', body?: unknown): Promise<T> {
-    if (path === '/api/v1/ai/sources/execute' && method === 'POST') {
+    if (path === base + '/ai/sources/execute' && method === 'POST') {
       const call = body as { name: string; arguments: Record<string, unknown> }
       return execute(call.name, call.arguments ?? {}) as Promise<T>
     }
-    const match = /^\/api\/v1\/workspace\/data-results\/([^?]+)\?offset=(\d+)&limit=(\d+)$/.exec(path)
+    const match = method === 'GET' && path.startsWith(base + '/') && /^\/data-results\/([^?]+)\?offset=(\d+)&limit=(\d+)$/.exec(path.slice(base.length))
     if (match) return page(decodeURIComponent(match[1]!), Number(match[2]), Number(match[3])) as T
     throw httpError(404)
   }
@@ -109,10 +111,10 @@ function createBackend() {
 }
 
 // ---- in-memory document target recording what would be inserted ----
-function createDocument(format: 'docx' | 'xlsx' | 'pptx', inserted: TrialEvidence['inserted']) {
+function createDocument(fileId: string, format: 'docx' | 'xlsx' | 'pptx', inserted: TrialEvidence['inserted']) {
   const target: AnalysisDocumentTarget = {
-    fileId: 'eval', format,
-    capture: () => ({ token: randomUUID(), fileId: 'eval', format, baseRevision: 'r1', leaseEpoch: 1 }),
+    fileId, format,
+    capture: () => ({ token: randomUUID(), fileId, format, baseRevision: 'r1', leaseEpoch: 1 }),
     async apply(_capture, content: PreparedAnalysisContent, _artifact, authorized) {
       if (!authorized()) return { status: 'not_confirmed', reason: 'unavailable' }
       if (content.kind === 'table') inserted.push({ rows: content.rows })
@@ -155,10 +157,11 @@ const OFFICE_INTRO = 'You are the Office assistant inside a document editor. Ans
 async function trial(scenario: Scenario) {
   const evidence: TrialEvidence = { answers: [], calls: [], inserted: [] }
   const usage = { input: 0, output: 0, retries: 0 }
-  const backend = createBackend()
+  const documentId = randomUUID()
+  const backend = createBackend(documentId)
   let disposed = false
-  const sources = createWorkspaceSourceSkill(backend.request as never, { tools: assistantSourceTools('read-only-analysis'), disposed: () => disposed })
-  const insert = createAnalysisInsertSkill({ format: scenario.format, request: backend.request as never, documents: createDocument(scenario.format, evidence.inserted), disposed: () => disposed, dataResults: () => true, images: () => false })
+  const sources = createWorkspaceSourceSkill(backend.request as never, { documentId, tools: assistantSourceTools('read-only-analysis'), disposed: () => disposed })
+  const insert = createAnalysisInsertSkill({ format: scenario.format, request: backend.request as never, documents: createDocument(documentId, scenario.format, evidence.inserted), disposed: () => disposed, dataResults: () => true, images: () => false })
   let turn = 0, errors = ''
   let settle: ((outcome: { text: string; error?: string }) => void) | undefined
   const loop = new AgentLoop({

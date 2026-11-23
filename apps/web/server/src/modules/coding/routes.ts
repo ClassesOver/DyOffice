@@ -71,7 +71,7 @@ export function registerCodingRoutes(app:FastifyInstance,options:{
       const {officeModelId,...task}=input
       if(task.dataInputs!==undefined&&!options.data)throw Error('Harness data unavailable')
       stage='data_authorization'
-      grant=options.data&&task.dataInputs!==undefined?await options.data.issue({token,agentId:permit.revision,inputs:task.dataInputs??{sourceIds:[],resultIds:[]},signal,
+      grant=options.data&&task.dataInputs!==undefined?await options.data.issue({token,documentId,agentId:permit.revision,inputs:task.dataInputs??{sourceIds:[],resultIds:[]},signal,
         ...(documentId&&options.recoveryStore?{leaseUntil:options.recoveryStore.bindGrantLease(token,documentId,turnId)}:{})}):undefined
         // Only bounded public progress crosses SSE; command stdout and reasoning stay local.
         const queue:CodingProgress[]=[]

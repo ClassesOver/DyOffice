@@ -84,7 +84,7 @@ for(const format of ['docx','xlsx','pptx','pdf'])test(format+' resumes after '+(
  const results=createWorkspaceSourceResults({transactions:f.transactions})
  await sources.create(f.alice.token,{sourceId:'metrics',name:'Metrics',kind:'http',config:{timezone:'UTC'},secret:'https://fixture.invalid/data'})
  const data=createQuerySnapshot({sourceId:'metrics',sourceVersion:1,timezone:'UTC',schema:[{name:'amount',type:'number',unit:'CNY'}],rows:[{amount:10},{amount:20},{amount:30}],sourceTruncated:false})
- const frozen=await results.capture(f.alice.token,data,createHash('sha256').update('DSH browser frozen fixture').digest('hex'))
+ const frozen=await results.capture(f.alice.token,data,createHash('sha256').update('DSH browser frozen fixture').digest('hex'),file.fileId)
  const channels=createAssistantChannelService({transactions:f.transactions,credentialKey:f.csrfKey,backgroundEnabled:true})
  const {conversationId}=await channels.createConversation(f.alice.token,{fileId:file.fileId})
  await channels.configureBackground(f.alice.token,conversationId,{enabled:true,fileId:file.fileId})
