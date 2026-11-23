@@ -236,17 +236,25 @@ window.__ModuleLoader__.load({
           t(busy ? 'connecting' : 'authorization')))
     }
 
+    function finishInterruptedTurn(turns) {
+      const turn=turns.at(-1)
+      if(turn?.state!=='pending'&&turn?.state!=='answering')return turns
+      return [...turns.slice(0,-1),{...turn,state:'failed'}]
+    }
+
     function RemoteViewport({anchor,children}) {
       const host=useRef(null)
       useEffect(()=>{
         const el=host.current,target=anchor?.element
         if(!target)return
-        let lastBounds,animation
-        const place=r=>{
-          lastBounds=r
+        let lastStyle={},animation
+        const refresh=()=>{
+          const r=target.getBoundingClientRect()
           let top=Math.max(0,r.top),left=Math.max(0,r.left),bottom=Math.min(window.innerHeight,r.bottom),right=Math.min(window.innerWidth,r.right)
           for(let parent=target.parentElement;parent&&parent!==document.documentElement;parent=parent.parentElement){
-            const style=getComputedStyle(parent),bounds=parent.getBoundingClientRect()
+            const style=getComputedStyle(parent)
+            if(style.overflowX==='visible'&&style.overflowY==='visible')continue
+            const bounds=parent.getBoundingClientRect()
             if(style.overflowY!=='visible'){
               const scale=parent.offsetHeight?bounds.height/parent.offsetHeight:1
               const innerTop=bounds.top+parent.clientTop*scale
@@ -260,15 +268,17 @@ window.__ModuleLoader__.load({
               right=Math.min(right,innerLeft+parent.clientWidth*scale)
             }
           }
-          Object.assign(el.style,{left:r.left+'px',top:r.top+'px',width:r.width+'px',height:r.height+'px',
+          const nextStyle={left:r.left+'px',top:r.top+'px',width:r.width+'px',height:r.height+'px',
             visibility:target.isConnected&&bottom>top&&right>left?'visible':'hidden',
-            clipPath:'inset('+[top-r.top,r.right-right,r.bottom-bottom,left-r.left].map(v=>Math.max(v,0)+'px').join(' ')+')'})
+            clipPath:'inset('+[top-r.top,r.right-right,r.bottom-bottom,left-r.left].map(v=>Math.max(v,0)+'px').join(' ')+')'}
+          for(const key of Object.keys(nextStyle)){
+            if(nextStyle[key]!==lastStyle[key])el.style[key]=nextStyle[key]
+          }
+          lastStyle=nextStyle
         }
-        const refresh=()=>place(target.getBoundingClientRect())
-        // Content above the card can move it without scrolling or resizing it.
+        // An ancestor's computed clip can change while the card stays still.
         const followPosition=()=>{
-          const bounds=target.getBoundingClientRect()
-          if(bounds.top!==lastBounds.top||bounds.left!==lastBounds.left)place(bounds)
+          refresh()
           animation=requestAnimationFrame(followPosition)
         }
         const observer=new IntersectionObserver(entries=>{
@@ -276,15 +286,10 @@ window.__ModuleLoader__.load({
           refresh()
           if(entries[entries.length-1].isIntersecting)animation=requestAnimationFrame(followPosition)
         })
-        const resize=new ResizeObserver(refresh)
-        // The visible portion also changes when a surrounding scroll pane resizes.
-        for(let element=target;element;element=element.parentElement)resize.observe(element)
         observer.observe(target);refresh()
-        window.addEventListener('resize',refresh)
         window.addEventListener('scroll',refresh,true)
         return ()=>{
-          observer.disconnect();resize.disconnect();cancelAnimationFrame(animation)
-          window.removeEventListener('resize',refresh)
+          observer.disconnect();cancelAnimationFrame(animation)
           window.removeEventListener('scroll',refresh,true)
           el.style.visibility='hidden'
         }
@@ -349,7 +354,7 @@ window.__ModuleLoader__.load({
           }
         }
         const onDraft = event => {
-          if (event.origin !== editing.origin ||
+          if (editorWindows.read() !== editing || event.origin !== editing.origin ||
               (event.source !== editing.popup && event.source?.parent !== editing.popup) ||
               event.data?.type !== 'dsh-dyoffice:draft' || event.data.fileId !== editing.fileId) return
           const draft = event.data.draft
@@ -357,7 +362,7 @@ window.__ModuleLoader__.load({
           updateCollaboration(editing.fileId,entry=>entry.syncState==='live'&&entry.draft?.text===draft?.text&&entry.draft?.truncated===draft?.truncated
             ?entry:{...entry,draft:draft??undefined,syncState:'live'})
           const receipt = event.data.writing
-          if (receipt?.id === latestWriting.current?.id && ['planning','writing','saving','saved','conflict','saveFailed','failed','noModel','outputLimit','timedOut','emptyOutput','noTool'].includes(receipt?.state)) {
+          if (typeof receipt?.id === 'string' && receipt.id === latestWriting.current?.id && ['planning','writing','saving','saved','conflict','saveFailed','failed','noModel','outputLimit','timedOut','emptyOutput','noTool'].includes(receipt?.state)) {
             setWritingReceipt(previous => previous?.id === receipt.id && previous.state === receipt.state ? previous : receipt)
             const reply = typeof receipt.reply==='string' ? receipt.reply.slice(0,4000) : undefined
             updateCollaboration(editing.fileId,entry=>!entry.disconnected&&entry.state===receipt.state&&entry.reply===reply?
@@ -391,13 +396,8 @@ window.__ModuleLoader__.load({
           if (editing.popup.closed) {
             if (editorWindows.read() !== editing) return
             editorWindows.set(null)
-            updateCollaboration(editing.fileId,entry=>{
-              const turn=entry.turns.at(-1)
-              const pending=turn&&['pending','answering'].includes(turn.state)
-              return {...entry,disconnected:true,draft:undefined,...(pending&&{
-                turns:[...entry.turns.slice(0,-1),{...turn,state:'failed'}],
-              })}
-            })
+            updateCollaboration(editing.fileId,entry=>({...entry,disconnected:true,draft:undefined,
+              turns:finishInterruptedTurn(entry.turns)}))
             return
           }
           if (editing.automatic && !ticket) return
@@ -737,7 +737,9 @@ window.__ModuleLoader__.load({
             const popup=window.open(receipt.href,'_blank','popup,width=1200,height=850')
             if(!popup){updateCollaboration(fileId,e=>({...e,popupBlocked:true}));return}
             const entries=collaboration.read()??new Map()
-            collaboration.set(new Map(entries).set(fileId,{turns:[],sessionId,...entries.get(fileId),popupBlocked:false,disconnected:false}))
+            const current=entries.get(fileId)
+            collaboration.set(new Map(entries).set(fileId,{...current,sessionId,turns:finishInterruptedTurn(current?.turns??[]),
+              popupBlocked:false,disconnected:false,state:undefined,draft:undefined,syncState:undefined}))
             officeSessions.set(sessionId,fileId)
             startRunner(receipt,false,popup)
           }
@@ -749,7 +751,8 @@ window.__ModuleLoader__.load({
           const ownsSession=entry&&!entry.ended&&officeSessions.get(entry.sessionId)===fileId
           const canChat=ownsSession&&opening&&!entry.disconnected&&entry.state==='saved'
           const needsWindow=remote&&entry?.checked&&entry.topic&&!stage&&!opening&&!allowsEmbed(connection,receipt.origin)
-          const canEnd=canChat||(ownsSession&&(needsWindow||entry.disconnected))
+          const waitingForReceipt=opening&&entry?.topic&&!stage
+          const canEnd=canChat||(ownsSession&&(needsWindow||waitingForReceipt||entry.disconnected))
           let waitingMessage
           if(job&&entry?.topic&&!stage&&!entry.ended){
             if(entry.disconnected)waitingMessage=h('span',{role:'status'},t('reopenForChat'))

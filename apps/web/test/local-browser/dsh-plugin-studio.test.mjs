@@ -173,3 +173,45 @@ test('a resized chat viewport clips the interactive frame and restores it when e
  await viewport.evaluate(el=>el.style.removeProperty('height'))
  await expect.poll(hit).toBe('IFRAME')
 })
+
+for(const state of ['writing','saved'])test(`a replacement Office window must confirm its own task after ${state}`,async t=>{
+ const {page,card,fileId}=await mountCard(t,{dshEditorOrigins:[]},state)
+ const open=async()=>{
+  const opened=page.waitForEvent('popup')
+  await card.getByRole('button',{name:/在新窗口打开/}).click()
+  return opened
+ }
+ const first=await open()
+ await expect(card.getByText('消息同步中',{exact:true})).toBeVisible()
+ await first.close()
+ await expect(card.getByText('同步中断',{exact:true})).toBeVisible()
+ await page.context().addInitScript(()=>{window.stalled=true})
+ const replacement=await open()
+ await replacement.waitForLoadState()
+ assert.equal(await page.evaluate(()=>window.routeMessage()),undefined)
+ await expect(card.getByRole('button',{name:'结束 Office 对话'})).toBeVisible()
+ await replacement.evaluate(id=>window.opener.postMessage({type:'dsh-dyoffice:draft',fileId:id,draft:null},'https://localhost:4681'),fileId)
+ await expect(card.getByText('消息同步中',{exact:true})).toBeVisible()
+ assert.equal(await page.evaluate(()=>window.routeMessage()),undefined)
+ await replacement.evaluate(()=>{window.stalled=false})
+ const stage=state==='saved'?'正文已保存，交给 DSH 审阅。':'DyOffice 正在撰写…'
+ await expect(card.getByText(stage,{exact:true})).toBeVisible()
+ const reply=await page.evaluate(()=>window.routeMessage())
+ assert.equal(reply.kind,state==='saved'?'success':'error')
+})
+
+test('changing overflow without resizing updates the interactive clip in both directions',async t=>{
+ const {page,card}=await mountCard(t,{dshEditorOrigin:'https://localhost:4681'})
+ await page.setViewportSize({width:900,height:1100})
+ await expect(card.getByText('消息同步中',{exact:true})).toBeVisible()
+ const viewport=page.locator('#chat-viewport')
+ await viewport.evaluate(el=>Object.assign(el.style,{height:'510px',overflow:'visible'}))
+ const bounds=await viewport.boundingBox()
+ const point={x:bounds.x+50,y:bounds.y+bounds.height+55}
+ const hit=()=>page.evaluate(({x,y})=>document.elementFromPoint(x,y)?.tagName,point)
+ await expect.poll(hit).toBe('IFRAME')
+ await viewport.evaluate(el=>el.style.overflow='hidden')
+ await expect.poll(hit).not.toBe('IFRAME')
+ await viewport.evaluate(el=>el.style.overflow='visible')
+ await expect.poll(hit).toBe('IFRAME')
+})
