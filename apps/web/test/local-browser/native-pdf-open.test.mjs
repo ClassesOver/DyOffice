@@ -423,7 +423,7 @@ test('GenOffice PDF assistant and ribbon edits preview and save, including recov
  const {file}=await importFile(f,f.alice.token,original,'native-ribbon.pdf')
  const keyring={activeKeyId:'pdf-test',keys:{'pdf-test':new Uint8Array(32).fill(29)}}
  const modelSettings=createGlobalConfigService({transactions:f.transactions,keyring})
- const configured=await modelSettings.saveGlobalConfig(f.adminSigned.token,0,{upserts:[{id:'fixture',kind:'chat',providerId:'openai',label:'Fixture',model:'synthetic',baseUrl:'https://provider.example/v1',apiKey:'fixture-key',enabled:true}],defaults:{chat:'fixture'}})
+ const configured=await modelSettings.saveGlobalConfig(f.adminSigned.token,0,{upserts:[{id:'fixture',kind:'chat',providerId:'openai',label:'Fixture',model:'synthetic',baseUrl:'https://provider.example/v1/chat/completions',apiKey:'fixture-key',enabled:true}],defaults:{chat:'fixture'}})
  const shell=process.env.DYOFFICE_TEST_LOCAL_SHELL_DIRECTORY
  const app=await buildLocalApp({db:f.db,businessPool:f.businessPool,passwords:f.passwords,deploymentId:f.deploymentId,origin,csrfKey:f.csrfKey,objectStore:f.objects,nativePdfDirectory:directory,localShellDirectory:shell??fileURLToPath(new URL('../../dist-local-shell',import.meta.url)),globalConfigKeyring:keyring,providerGateway:{mode:'shared'},codingHarnesses:false})
  f.cleanup.unshift(()=>app.close())

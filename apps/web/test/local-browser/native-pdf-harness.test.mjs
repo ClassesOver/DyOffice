@@ -22,7 +22,7 @@ test('a new PDF tab resumes the parent conversation and saves its draft once',{s
  doc.addPage().drawText('Resume harness fixture')
  const original=Buffer.from(await doc.save()),{file}=await importFile(f,f.alice.token,original,'recover-task.pdf')
  const keyring={activeKeyId:'pdf-recovery',keys:{'pdf-recovery':new Uint8Array(32).fill(42)}}
- await createGlobalConfigService({transactions:f.transactions,keyring}).saveGlobalConfig(f.adminSigned.token,0,{upserts:[{id:'fixture',kind:'chat',providerId:'openai',label:'Fixture',model:'synthetic',baseUrl:'https://provider.example/v1',apiKey:'fixture-key',enabled:true}],defaults:{chat:'fixture'}})
+ await createGlobalConfigService({transactions:f.transactions,keyring}).saveGlobalConfig(f.adminSigned.token,0,{upserts:[{id:'fixture',kind:'chat',providerId:'openai',label:'Fixture',model:'synthetic',baseUrl:'https://provider.example/v1/chat/completions',apiKey:'fixture-key',enabled:true}],defaults:{chat:'fixture'}})
  let runs=0,release
  const gate=new Promise(resolve=>{release=resolve})
  const app=await buildLocalApp({
@@ -168,7 +168,7 @@ for(const mode of ['external','codex','live'])test('native PDF assistant uses '+
  pdfPage.node.addAnnot(savedNote)
  const original=Buffer.from(await pdf.save()),{file}=await importFile(f,f.alice.token,original,'calculation.pdf')
  const keyring={activeKeyId:'pdf-harness',keys:{'pdf-harness':new Uint8Array(32).fill(41)}}
- const entry=live?JSON.parse(await readFile(liveConfig,'utf8')).entry:{id:'fixture',kind:'chat',providerId:'openai',label:'Fixture',model:'synthetic',baseUrl:'https://provider.example/v1',apiKey:'fixture-key',enabled:true}
+ const entry=live?JSON.parse(await readFile(liveConfig,'utf8')).entry:{id:'fixture',kind:'chat',providerId:'openai',label:'Fixture',model:'synthetic',baseUrl:'https://provider.example/v1/chat/completions',apiKey:'fixture-key',enabled:true}
  assert.ok(entry?.enabled&&entry?.apiKey&&entry?.kind==='chat','Enabled test model configuration required')
  await createGlobalConfigService({transactions:f.transactions,keyring}).saveGlobalConfig(f.adminSigned.token,0,{upserts:[entry],defaults:{chat:entry.id}})
  const calls=[],agent=realCodex

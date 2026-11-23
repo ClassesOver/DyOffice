@@ -34,7 +34,7 @@ for(const live of [false,true])test((live?'Live model':'Fixture model')+' finds 
  await f.preferences.update(f.alice.token,{language:'zh',autoSave:false})
  const keyring={activeKeyId:'find-test',keys:{'find-test':new Uint8Array(32).fill(66)}}
  const entry=live?JSON.parse(await readFile(liveConfig,'utf8')).entry:
-  {id:'fixture',kind:'chat',providerId:'openai',label:'Fixture',model:'synthetic',baseUrl:'https://provider.example/v1',apiKey:'fixture-key',enabled:true}
+  {id:'fixture',kind:'chat',providerId:'openai',label:'Fixture',model:'synthetic',baseUrl:'https://provider.example/v1/chat/completions',apiKey:'fixture-key',enabled:true}
  assert.ok(entry?.enabled&&entry?.apiKey&&entry?.kind==='chat','Enabled test model configuration required')
  await createGlobalConfigService({transactions:f.transactions,keyring}).saveGlobalConfig(f.adminSigned.token,0,{upserts:[entry],defaults:{chat:entry.id}})
  const dir=await mkdtemp(join(tmpdir(),'dyoffice-browser-sheets-find-'))

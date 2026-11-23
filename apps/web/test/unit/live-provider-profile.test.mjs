@@ -4,7 +4,7 @@ import {resolveLiveProviderProfile} from '../../server/src/modules/providers/liv
 const entry={deploymentId:'deployment',id:'shared-model',revision:3,providerId:'deepseek',model:'deepseek-v4-flash',baseUrl:'https://api.example.com/v1'}
 test('uses the current saved shared model without an external profile file',async()=>{
  const p=await resolveLiveProviderProfile(entry,async()=>[{address:'8.8.8.8',family:4}])
- assert.equal(p.entryId,entry.id);assert.equal(p.revision,3);assert.equal(p.endpoint,entry.baseUrl+'/chat/completions');assert.deepEqual(p.allowedIpv4,['8.8.8.8'])
+ assert.equal(p.entryId,entry.id);assert.equal(p.revision,3);assert.equal(p.endpoint,entry.baseUrl+'/responses');assert.deepEqual(p.allowedIpv4,['8.8.8.8'])
  const updated=await resolveLiveProviderProfile({...entry,revision:4,model:'updated-model'},async()=>[{address:'8.8.4.4',family:4}])
  assert.equal(updated.revision,4);assert.equal(updated.model,'updated-model')
 })
@@ -14,5 +14,18 @@ test('rejects private, mixed and empty DNS answers before any credential access'
 test('rejects credential URLs, HTTP and native vendor protocols that this gateway cannot send',async()=>{
  for(const change of [{baseUrl:'http://api.example.com/v1'},{baseUrl:'https://key@api.example.com/v1'},{baseUrl:'https://api.example.com/v1?api_key=secret'},{providerId:'anthropic'}]){
  let lookups=0;await assert.rejects(resolveLiveProviderProfile({...entry,...change},async()=>{lookups++;return [{address:'8.8.8.8',family:4}]}));assert.equal(lookups,0)
+ }
+})
+test('OpenAI reasoning models use Responses and the standard desktop output budget',async()=>{
+ const profile=await resolveLiveProviderProfile({...entry,providerId:'openai',model:'gpt-5.4'},async()=>[{address:'8.8.8.8',family:4}])
+ assert.equal(profile.endpoint,entry.baseUrl+'/responses')
+ assert.equal(profile.maxOutputTokens,32768)
+})
+
+test('explicit Responses and legacy chat URLs are used exactly once',async()=>{
+ for(const suffix of ['/responses','/chat/completions']){
+  const endpoint=entry.baseUrl+suffix
+  const profile=await resolveLiveProviderProfile({...entry,baseUrl:endpoint+'/'},async()=>[{address:'8.8.8.8',family:4}])
+  assert.equal(profile.endpoint,endpoint)
  }
 })

@@ -63,7 +63,7 @@ function fixedModel(t){
 for(const live of [false,true])test(`PPTX ${live?'saves real Codex artifacts with a live model':'cancels a real Codex task, then saves a new delivery with a fixed model'}`,{skip:!python||live&&!liveConfig,timeout:live?360000:90000},async t=>{
  const origin='http://127.0.0.1:4255',f=await fileFixture(t,{origin,buildApp:false})
  const keyring={activeKeyId:'live-pptx',keys:{'live-pptx':new Uint8Array(32).fill(66)}}
- const entry=live?JSON.parse(await readFile(liveConfig,'utf8')).entry:{id:'fixture',kind:'chat',providerId:'openai',label:'Fixture',model:'synthetic',baseUrl:'https://provider.example/v1',apiKey:'fixture-key',enabled:true}
+ const entry=live?JSON.parse(await readFile(liveConfig,'utf8')).entry:{id:'fixture',kind:'chat',providerId:'openai',label:'Fixture',model:'synthetic',baseUrl:'https://provider.example/v1/chat/completions',apiKey:'fixture-key',enabled:true}
  assert.ok(entry?.enabled&&entry?.apiKey&&entry?.kind==='chat','Enabled test model configuration required')
  await createGlobalConfigService({transactions:f.transactions,keyring}).saveGlobalConfig(f.adminSigned.token,0,{upserts:[entry],defaults:{chat:entry.id}})
  await f.preferences.update(f.alice.token,{language:'zh',showAssistant:true,autoSave:false})

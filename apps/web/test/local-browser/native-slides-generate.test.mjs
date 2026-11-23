@@ -47,7 +47,7 @@ for(const live of [false,true])test(live?'a real model generates, redoes and reu
  const {file}=await importFile(f,f.alice.token,original,'generate-deck.pptx')
  const keyring={activeKeyId:'slides-generate',keys:{'slides-generate':new Uint8Array(32).fill(44)}}
  const entry=live?JSON.parse(await readFile(liveConfig,'utf8')).entry:{
-  id:'fixture',kind:'chat',providerId:'openai',label:'Fixture',model:'synthetic',baseUrl:'https://provider.example/v1',apiKey:'fixture-key',enabled:true,
+  id:'fixture',kind:'chat',providerId:'openai',label:'Fixture',model:'synthetic',baseUrl:'https://provider.example/v1/chat/completions',apiKey:'fixture-key',enabled:true,
  }
  assert.ok(entry?.enabled&&entry?.kind==='chat','An enabled chat model is required')
  await createGlobalConfigService({transactions:f.transactions,keyring}).saveGlobalConfig(f.adminSigned.token,0,{

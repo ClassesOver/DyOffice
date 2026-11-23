@@ -7,7 +7,7 @@ export interface TurnPermit { identity: TurnIdentity; revision: string }
 export interface TurnRequest { format?: 'docx'|'xlsx'|'pptx'|'pdf'; system: string; messages: unknown[]; tools: unknown[] }
 export type TurnEvent = ({type:'progress'} & CodingProgress)
   | { type: 'delta' | 'reasoning'; text: string }
-  | { type: 'tool_call'; id: string; name: string; input: Record<string, unknown> }
+  | { type: 'tool_call'; id: string; name: string; input: Record<string, unknown>; signature?:string }
   | { type: 'usage'; inputTokens?: number; outputTokens?: number }
   | { type: 'stop_reason'; reason: string }
   | { type: 'error'; message: string; outcome?: 'failed' }
@@ -51,7 +51,7 @@ function normalize(event: TurnEvent): TurnEvent {
   let clean: TurnEvent
   if ((event.type === 'delta' || event.type === 'reasoning') && typeof event.text === 'string') clean = {type:event.type,text:event.text}
   else if(event.type==='progress' && ['status','output'].includes(event.kind) && typeof event.text==='string') clean={type:'progress',kind:event.kind,text:event.text}
-  else if (event.type === 'tool_call' && validId(event.id) && validId(event.name) && event.input && typeof event.input === 'object' && !Array.isArray(event.input)) clean = {type:event.type,id:event.id,name:event.name,input:event.input}
+  else if (event.type === 'tool_call' && validId(event.id) && validId(event.name) && event.input && typeof event.input === 'object' && !Array.isArray(event.input)) clean = {type:event.type,id:event.id,name:event.name,input:event.input,...(typeof event.signature==='string'?{signature:event.signature}:{})}
   else if (event.type === 'stop_reason' && typeof event.reason === 'string') clean = {type:event.type,reason:event.reason}
   else if (event.type === 'error' && typeof event.message === 'string') clean = {type:event.type,message:event.message,...(event.outcome==='failed'?{outcome:event.outcome}:{})}
   else if (event.type === 'usage' && [event.inputTokens,event.outputTokens].every(n=>n===undefined || Number.isSafeInteger(n) && n>=0)) clean = {type:'usage',...(event.inputTokens===undefined?{}:{inputTokens:event.inputTokens}),...(event.outputTokens===undefined?{}:{outputTokens:event.outputTokens})}

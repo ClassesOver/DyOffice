@@ -1,3 +1,4 @@
+import {parseReasoningSignature,reasoningSignature} from '../../../../../../packages/ai-provider/src/protocols/openai-responses.ts'
 import type {CodingProgress} from '../../../../../../packages/agent-core/src/coding-skill.ts'
 import {createServer} from 'node:http'
 import {randomBytes,randomUUID} from 'node:crypto'
@@ -13,7 +14,7 @@ const text=(v:unknown):string=>{if(typeof v!=='string')throw invalid();return v}
 const id=(v:unknown):string=>{const s=text(v);if(!/^[A-Za-z0-9_-]{1,128}$/.test(s))throw invalid();return s}
 export const CODING_MODEL_TOOLS=new Set(['exec_command','write_stdin','apply_patch','shell','shell_command','update_plan'])
 
-/** Codex speaks Responses; Office's authorized/budgeted gateway speaks chat.
+/** Codex speaks Responses; Office's gateway accepts normalized turns.
  * This task-local adapter translates text and native coding tool calls only.
  * Upstream model, destination, credentials and spending remain gateway-owned.
  */
@@ -31,7 +32,8 @@ function convert(body:Record<string,any>) {
       ?{type:'object',properties:{input:{type:'string'}},required:['input'],additionalProperties:false}:object(tool.parameters)})
   }
   const messages:AgentMessage[]=[],system=[typeof body.instructions==='string'?body.instructions:'']
-  const names=new Map<string,string>()
+  let signature:string|undefined
+ const names=new Map<string,string>()
   const items=typeof body.input==='string'?[{role:'user',content:body.input}]:body.input
   if(!Array.isArray(items)||items.length>512)throw invalid()
   function content(value:unknown):string {
@@ -41,12 +43,16 @@ function convert(body:Record<string,any>) {
   }
   for(const raw of items) {
     const item=object(raw)
-    if(item.type==='reasoning')continue // Opaque Responses reasoning cannot enter chat-completions.
+    if(item.type==='reasoning'){
+      signature=typeof item.id==='string'&&typeof item.encrypted_content==='string'?reasoningSignature(item.id,item.encrypted_content):undefined
+      continue
+    }
     if(item.type==='function_call'||item.type==='custom_tool_call') {
       const name=id(item.name),callId=id(item.call_id)
       if(!tools.some(t=>t.name===name)||names.has(callId))throw invalid()
       names.set(callId,name)
-      const call={id:callId,name,input:item.type==='custom_tool_call'?{input:text(item.input)}:object(JSON.parse(text(item.arguments)))}
+      const call={id:callId,name,...(signature?{signature}:{}),input:item.type==='custom_tool_call'?{input:text(item.input)}:object(JSON.parse(text(item.arguments)))}
+      signature=undefined
       const last=messages.at(-1)
       if(last?.role==='assistant') (last.toolCalls??=[]).push(call)
       else messages.push({role:'assistant',text:'',toolCalls:[call]})
@@ -110,6 +116,13 @@ export async function createCodingModelBridge(options:{turns:CodingModelTurns;to
       // Expose executable candidates only after the gateway has settled this round.
       const output:Record<string,unknown>[]=[]
       for(const call of calls) {
+        const reasoning=parseReasoningSignature(call.signature)
+        if(reasoning){
+          const item={type:'reasoning',id:reasoning.id,encrypted_content:reasoning.encrypted,summary:[]}
+          event('response.output_item.added',{output_index:output.length,item})
+          event('response.output_item.done',{output_index:output.length,item})
+          output.push(item)
+        }
         const index=output.length,customCall=custom.has(call.name)
         const item=customCall
           ?{type:'custom_tool_call',id:'ctc_'+call.id,call_id:call.id,name:call.name,input:text(call.input.input),status:'completed'}
