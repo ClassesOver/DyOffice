@@ -34,6 +34,7 @@ export function mountDocumentHandoff(o:{
  let grant:{ticket:string;origin:string;expires:number;write:boolean}|undefined,checking=false,activated=false,started=false
  let job:{id:string;state:string;revision?:string;reply?:string}|undefined
  let lastReview='',rows:Row[]=[]
+ const followupScope=crypto.randomUUID()
  const turns=new Map<string,{id:string;question:string;answer:string;state:string}>()
  const notify=()=>publish({fileId:o.fileId,rows:[...rows]})
  const en=()=>document.documentElement.lang.startsWith('en')
@@ -121,8 +122,14 @@ export function mountDocumentHandoff(o:{
      lastReview=bound(review.text,4000);rows.push({who:'DSH',text:lastReview});notify()
    }
    const q=data.followup
-   if(job.state==='saved'&&runner&&uuid(q?.id)&&typeof q.question==='string'&&q.question.trim()&&q.question.length<=4000)void ask(q.id,q.question,runner)
-   peer.postMessage({type:'dsh-dyoffice:draft',fileId:o.fileId,writing:job,draft:null,followup:turns.get(q?.id)},e.origin)
+   let followup
+   if(uuid(q?.id)){
+     const matches=q.scope===undefined||q.scope===followupScope
+     if(matches&&job.state==='saved'&&runner&&typeof q.question==='string'&&q.question.trim()&&q.question.length<=4000)void ask(q.id,q.question,runner)
+     followup=matches?turns.get(q.id):undefined
+     if(!followup&&(!matches||q.question===undefined))followup={id:q.id,state:'unknown',answer:''}
+   }
+   peer.postMessage({type:'dsh-dyoffice:draft',fileId:o.fileId,writing:job,draft:null,followup,followupScope},e.origin)
  }
  shell.addEventListener('message',receive)
  window.addEventListener('beforeinput',interact,true)

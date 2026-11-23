@@ -15,10 +15,10 @@ window.__ModuleLoader__.load({
         planning: 'DyOffice 助手已接收交接，正在规划正文…', generating: 'DyOffice 正在撰写…', awaitingSave: 'DyOffice 正在保存正文…', writingFailed: '模型连接中断，请检查 DyOffice 的模型设置后重试。',
         noTool: '模型没有写入文档内容，请重试或切换模型。',
         outputLimit: '正文达到输出上限，请缩短要求或分段撰写。', timedOut: '模型响应超时，请重试。', emptyOutput: '模型没有返回正文，请重试或切换模型。',
-        noModel: '请在 DyOffice 配置撰写模型。', waitingWriter: '正在连接文档并启动撰写…',
+        noModel: '请在 DyOffice 配置撰写模型。', waitingWriter: '正在连接文档并启动撰写…', openToWrite: '请在新窗口打开 DyOffice 以开始撰写。',
         reviewing: 'DSH 正在审阅已保存的正文…', reviewReady: 'DSH 审阅意见', reviewFailed: 'DSH 未能完成审阅。', reviewNoModel: '请在 DSH 配置审阅模型。',
         handedOff: '正文已保存，交给 DSH 审阅。', officeChat: '后续消息会发给 DyOffice 助手。', endOfficeChat: '结束 Office 对话',
-        reopenForChat: '原文档窗口已断开。可结束 Office 对话或重新发起。', officeBusy: '请等 DyOffice 助手完成当前任务。', officeTextOnly: 'Office 对话支持最多 4,000 字的纯文本。', officeAnswering: 'DyOffice 助手正在处理这条消息…', officeAnswerFailed: 'DyOffice 未能回答，请重试。', you: '你',
+        reopenForChat: '原文档窗口已断开。可结束 Office 对话或重新发起。', officeBusy: '请等 DyOffice 助手完成当前任务。', officeTextOnly: 'Office 对话支持最多 4,000 字的纯文本。', officeAnswering: 'DyOffice 助手正在处理这条消息…', officeUnconfirmed: '无法确认这次追问的结果，请在 DyOffice 查看记录。', officeAnswerFailed: 'DyOffice 未能回答，请重试。', you: '你',
         requestDraft: '请在文档中完成以下任务，保存后我来审阅：',
         savedWriting: '正文已写入并保存。', writingConflict: '文档已有改动，自动写入已停止。', writingSaveFailed: '正文已写入草稿，保存未确认。请在编辑器中检查并保存。',
         pausedChannel: '频道已暂停。请先在 DyOffice 恢复协作。',
@@ -46,10 +46,10 @@ window.__ModuleLoader__.load({
         planning: 'DyOffice Assistant accepted the handoff and is preparing a plan…', generating: 'DyOffice is writing…', awaitingSave: 'DyOffice is saving the draft…', writingFailed: 'The model connection failed. Check the model in DyOffice and try again.',
         noTool: 'The model did not write any document content. Try again or switch models.',
         outputLimit: 'The draft reached the output limit. Try a shorter request.', timedOut: 'The model took too long to respond. Try again.', emptyOutput: 'The model returned no document text. Try again or switch models.',
-        noModel: 'Configure the writing model in DyOffice.', waitingWriter: 'Connecting the document and starting writing…',
+        noModel: 'Configure the writing model in DyOffice.', waitingWriter: 'Connecting the document and starting writing…', openToWrite: 'Open DyOffice in a new window to start writing.',
         reviewing: 'DSH is reviewing the saved draft…', reviewReady: 'DSH review', reviewFailed: 'DSH could not complete the review.', reviewNoModel: 'Configure the review model in DSH.',
         handedOff: 'Draft saved and handed to DSH for review.', officeChat: 'Follow-up messages go to DyOffice Assistant.', endOfficeChat: 'End Office conversation',
-        reopenForChat: 'The original editor window is disconnected. End the Office conversation or start again.', officeBusy: 'Wait for DyOffice Assistant to finish its current task.', officeTextOnly: 'Office chat accepts plain text up to 4,000 characters.', officeAnswering: 'DyOffice Assistant is working on this message…', officeAnswerFailed: 'DyOffice could not answer. Please try again.', you: 'You',
+        reopenForChat: 'The original editor window is disconnected. End the Office conversation or start again.', officeBusy: 'Wait for DyOffice Assistant to finish its current task.', officeTextOnly: 'Office chat accepts plain text up to 4,000 characters.', officeAnswering: 'DyOffice Assistant is working on this message…', officeUnconfirmed: 'Check the Office conversation for the outcome of this request.', officeAnswerFailed: 'DyOffice could not answer. Please try again.', you: 'You',
         requestDraft: 'Please write about the following topic in the document. I’ll review the saved draft:',
         savedWriting: 'The document was written and saved.', writingConflict: 'Automatic writing stopped because the document already contains changes.', writingSaveFailed: 'The draft was written, but saving was not confirmed. Check and save it in the editor.',
         pausedChannel: 'The channel is paused. Resume it in DyOffice.',
@@ -236,28 +236,77 @@ window.__ModuleLoader__.load({
           t(busy ? 'connecting' : 'authorization')))
     }
 
+    function initialCollaboration(receipt,sessionId) {
+      const endedKey=id+':ended:'+receipt.href
+      let ended=false
+      try { ended=window.localStorage.getItem(endedKey)==='1' } catch {}
+      if(!ended){
+        try {
+          ended=window.sessionStorage.getItem(endedKey)==='1'
+          if(ended)window.localStorage.setItem(endedKey,'1')
+        } catch {}
+      }
+      return {sessionId,turns:[],ended,endedKey}
+    }
+
+    function interruptFollowup(turns,recoverable=false) {
+      const turn=turns.at(-1)
+      if(!turn||!['pending','answering','reconciling'].includes(turn.state))return turns
+      const state=turn.state==='pending'&&!turn.sent?'failed':recoverable?'reconciling':'unknown'
+      return turn.state===state?turns:[...turns.slice(0,-1),{...turn,state}]
+    }
+
     function RemoteViewport({anchor,children}) {
       const host=useRef(null)
       useEffect(()=>{
         const el=host.current,target=anchor?.element
         if(!target)return
-        const place=()=>{
+        let lastStyle={},animation
+        const refresh=()=>{
           const r=target.getBoundingClientRect()
           let top=Math.max(0,r.top),left=Math.max(0,r.left),bottom=Math.min(window.innerHeight,r.bottom),right=Math.min(window.innerWidth,r.right)
-          for(let parent=target.parentElement;parent;parent=parent.parentElement){
-            const style=getComputedStyle(parent),bounds=parent.getBoundingClientRect()
-            if(style.overflowY!=='visible'){top=Math.max(top,bounds.top);bottom=Math.min(bottom,bounds.bottom)}
-            if(style.overflowX!=='visible'){left=Math.max(left,bounds.left);right=Math.min(right,bounds.right)}
+          for(let parent=target.parentElement;parent&&parent!==document.documentElement;parent=parent.parentElement){
+            const style=getComputedStyle(parent)
+            if(style.overflowX==='visible'&&style.overflowY==='visible')continue
+            const bounds=parent.getBoundingClientRect()
+            if(style.overflowY!=='visible'){
+              const scale=parent.offsetHeight?bounds.height/parent.offsetHeight:1
+              const innerTop=bounds.top+parent.clientTop*scale
+              top=Math.max(top,innerTop)
+              bottom=Math.min(bottom,innerTop+parent.clientHeight*scale)
+            }
+            if(style.overflowX!=='visible'){
+              const scale=parent.offsetWidth?bounds.width/parent.offsetWidth:1
+              const innerLeft=bounds.left+parent.clientLeft*scale
+              left=Math.max(left,innerLeft)
+              right=Math.min(right,innerLeft+parent.clientWidth*scale)
+            }
           }
-          Object.assign(el.style,{left:r.left+'px',top:r.top+'px',width:r.width+'px',height:r.height+'px',
+          const nextStyle={left:r.left+'px',top:r.top+'px',width:r.width+'px',height:r.height+'px',
             visibility:target.isConnected&&bottom>top&&right>left?'visible':'hidden',
-            clipPath:'inset('+[top-r.top,r.right-right,r.bottom-bottom,left-r.left].map(v=>Math.max(v,0)+'px').join(' ')+')'})
+            clipPath:'inset('+[top-r.top,r.right-right,r.bottom-bottom,left-r.left].map(v=>Math.max(v,0)+'px').join(' ')+')'}
+          for(const key of Object.keys(nextStyle)){
+            if(nextStyle[key]!==lastStyle[key])el.style[key]=nextStyle[key]
+          }
+          lastStyle=nextStyle
         }
-        const observer=new IntersectionObserver(place)
-        const resize=new ResizeObserver(place)
-        observer.observe(target);resize.observe(target);place()
-        window.addEventListener('scroll',place,true)
-        return ()=>{observer.disconnect();resize.disconnect();window.removeEventListener('scroll',place,true);el.style.visibility='hidden'}
+        // An ancestor's computed clip can change while the card stays still.
+        const followPosition=()=>{
+          refresh()
+          animation=requestAnimationFrame(followPosition)
+        }
+        const observer=new IntersectionObserver(entries=>{
+          cancelAnimationFrame(animation)
+          refresh()
+          if(entries[entries.length-1].isIntersecting)animation=requestAnimationFrame(followPosition)
+        })
+        observer.observe(target);refresh()
+        window.addEventListener('scroll',refresh,true)
+        return ()=>{
+          observer.disconnect();cancelAnimationFrame(animation)
+          window.removeEventListener('scroll',refresh,true)
+          el.style.visibility='hidden'
+        }
       },[anchor])
       return h('div',{ref:host,style:{position:'fixed',overflow:'hidden',visibility:'hidden',
         borderRadius:'0 0 11px 11px',pointerEvents:'auto',zIndex:1}},children)
@@ -301,10 +350,14 @@ window.__ModuleLoader__.load({
         setLiveDraft(null)
         if (!followEditor || !editing) return
         const controller = new AbortController()
-        let expiry, renewal, ticket, reviewRequested
+        let expiry, renewal, ticket, reviewRequested, lookupId
+        let followupScope
         function clearLiveDraft() {
           setLiveDraft(null)
-          updateCollaboration(editing.fileId,entry=>entry.draft===undefined&&entry.syncState!=='live'?entry:{...entry,draft:undefined,syncState:entry.syncState==='live'?'stale':entry.syncState})
+          updateCollaboration(editing.fileId,entry=>{
+            if(!['live','draft'].includes(entry.syncState))return entry
+            return {...entry,draft:undefined,syncState:'stale',turns:interruptFollowup(entry.turns,!entry.disconnected&&!entry.ended)}
+          })
         }
         async function authorize() {
           const url = previewUrl()
@@ -319,19 +372,25 @@ window.__ModuleLoader__.load({
           }
         }
         const onDraft = event => {
-          if (event.origin !== editing.origin ||
+          if (editorWindows.read() !== editing || event.origin !== editing.origin ||
               (event.source !== editing.popup && event.source?.parent !== editing.popup) ||
               event.data?.type !== 'dsh-dyoffice:draft' || event.data.fileId !== editing.fileId) return
           const draft = event.data.draft
           if (draft !== null && (typeof draft?.text !== 'string' || draft.text.length > 24000 || typeof draft.truncated !== 'boolean')) return
-          updateCollaboration(editing.fileId,entry=>entry.syncState==='live'&&entry.draft?.text===draft?.text&&entry.draft?.truncated===draft?.truncated
-            ?entry:{...entry,draft:draft??undefined,syncState:'live'})
           const receipt = event.data.writing
-          if (receipt?.id === latestWriting.current?.id && ['planning','writing','saving','saved','conflict','saveFailed','failed','noModel','outputLimit','timedOut','emptyOutput','noTool'].includes(receipt?.state)) {
+          const confirmed=typeof receipt?.id==='string' && receipt.id===latestWriting.current?.id &&
+            ['planning','writing','saving','saved','conflict','saveFailed','failed','noModel','outputLimit','timedOut','emptyOutput','noTool'].includes(receipt.state)
+          const syncState=confirmed?'live':'draft'
+          const reply=confirmed&&typeof receipt.reply==='string'?receipt.reply.slice(0,4000):undefined
+          updateCollaboration(editing.fileId,entry=>{
+            const turns=confirmed?entry.turns:interruptFollowup(entry.turns,true)
+            if(entry.syncState===syncState&&entry.draft?.text===draft?.text&&entry.draft?.truncated===draft?.truncated&&
+                turns===entry.turns&&(!confirmed||!entry.disconnected&&entry.state===receipt.state&&entry.reply===reply))return entry
+            return {...entry,draft:draft??undefined,syncState,turns,...(confirmed&&{state:receipt.state,reply,disconnected:false})}
+          })
+          if (confirmed) {
+            followupScope=typeof event.data.followupScope==='string'?event.data.followupScope:undefined
             setWritingReceipt(previous => previous?.id === receipt.id && previous.state === receipt.state ? previous : receipt)
-            const reply = typeof receipt.reply==='string' ? receipt.reply.slice(0,4000) : undefined
-            updateCollaboration(editing.fileId,entry=>!entry.disconnected&&entry.state===receipt.state&&entry.reply===reply?
-              entry:{...entry,state:receipt.state,reply,disconnected:false})
             if (receipt.state === 'saved' && uuid.test(receipt.revision ?? '') &&
                 !latestWriting.current.review && reviewRequested !== receipt.id) {
               reviewRequested = receipt.id
@@ -344,13 +403,21 @@ window.__ModuleLoader__.load({
             }
           }
           const answer = event.data.followup
-          if (answer && ['answering','ready','failed'].includes(answer.state) &&
+          if (confirmed && typeof answer?.id==='string' && ['answering','ready','failed','unknown'].includes(answer.state) &&
               typeof answer.answer==='string' && answer.answer.length<=8000) {
             updateCollaboration(editing.fileId,entry=>{
               const turn=entry.turns.at(-1)
-              if(turn?.id!==answer.id || !['pending','answering'].includes(turn.state) ||
-                  turn.state===answer.state && turn.answer===answer.answer)return entry
-              return {...entry,turns:[...entry.turns.slice(0,-1),{...turn,state:answer.state,answer:answer.answer}]}
+              if(turn?.id!==answer.id || !['pending','answering','reconciling'].includes(turn.state))return entry
+              const lookupOnly=turn.lookupOnly||!!turn.scope||answer.id===lookupId
+              if(turn.state===answer.state&&turn.answer===answer.answer&&turn.lookupOnly===lookupOnly)return entry
+              return {...entry,turns:[...entry.turns.slice(0,-1),{...turn,state:answer.state,answer:answer.answer,lookupOnly}]}
+            })
+          } else if(confirmed && lookupId && !answer && !followupScope) {
+            // Older Word editors cannot look up a turn after losing contact.
+            updateCollaboration(editing.fileId,entry=>{
+              const turn=entry.turns.at(-1)
+              if(turn?.id!==lookupId)return entry
+              return {...entry,turns:interruptFollowup(entry.turns)}
             })
           }
           setLiveDraft({editor: editing, draft})
@@ -359,21 +426,26 @@ window.__ModuleLoader__.load({
         }
         const request = () => {
           if (editing.popup.closed) {
-            if (editorWindows.read() === editing) editorWindows.set(null)
-            updateCollaboration(editing.fileId,entry=>{
-              const turn=entry.turns.at(-1)
-              const pending=turn&&['pending','answering'].includes(turn.state)
-              return {...entry,disconnected:true,draft:undefined,...(pending&&{
-                turns:[...entry.turns.slice(0,-1),{...turn,state:'failed'}],
-              })}
-            })
+            if (editorWindows.read() !== editing) return
+            editorWindows.set(null)
+            updateCollaboration(editing.fileId,entry=>({...entry,disconnected:true,draft:undefined,
+              turns:interruptFollowup(entry.turns)}))
             return
           }
           if (editing.automatic && !ticket) return
           const turn=collaboration.read()?.get(editing.fileId)?.turns.at(-1)
-          editing.popup.postMessage({type: 'dsh-dyoffice:draft-request', fileId: editing.fileId, ticket,
-            writing: editing.automatic ? latestWriting.current : null,
-            followup:turn && ['pending','answering'].includes(turn.state) ? {id:turn.id,question:turn.question}:undefined}, editing.origin)
+          const waiting=turn?.state==='pending'||turn?.state==='answering'
+          const lookup=turn?.state==='reconciling'||turn?.state==='answering'&&turn.lookupOnly
+          lookupId=lookup?turn.id:undefined
+          let followup
+          const scope=turn?.sent?turn.scope:followupScope
+          if(lookup)followup={id:turn.id,scope}
+          else if(waiting)followup={id:turn.id,scope,question:turn.question}
+          editing.popup.postMessage({type:'dsh-dyoffice:draft-request',fileId:editing.fileId,ticket,
+            writing:editing.automatic?latestWriting.current:null,followup},editing.origin)
+          if(waiting&&!turn.sent)updateCollaboration(editing.fileId,entry=>({
+            ...entry,turns:[...entry.turns.slice(0,-1),{...turn,sent:true,scope}],
+          }))
         }
         window.addEventListener('message', onDraft)
         request()
@@ -579,24 +651,37 @@ window.__ModuleLoader__.load({
           const next=update(current)
           if(next!==current)collaboration.set(new Map(previous).set(fileId,next))
         }
+        function endOfficeChat(fileId,entry){
+          if(officeSessions.get(entry.sessionId)===fileId)officeSessions.delete(entry.sessionId)
+          stopRunner(fileId)
+          updateCollaboration(fileId,current=>({...current,ended:true,turns:interruptFollowup(current.turns)}))
+        }
+        ctx.effect(()=>{
+          const onStorage=event=>{
+            if(event.newValue!=='1')return
+            for(const [fileId,entry] of collaboration.read()??[]){
+              if(!entry.ended&&entry.endedKey===event.key)endOfficeChat(fileId,entry)
+            }
+          }
+          window.addEventListener?.('storage',onStorage)
+          return ()=>window.removeEventListener?.('storage',onStorage)
+        })
         ctx.on('conversation/route-message', ({sessionId,text,attachmentCount})=>{
           const fileId=officeSessions.get(sessionId), entry=collaboration.read()?.get(fileId)
-          if(!entry?.topic || entry.ended)return
-          if(entry.state && !['saved','planning','writing','saving'].includes(entry.state))return
-          const reject=message=>({kind:'error',text:t(message)})
-          if(!entry.state || entry.state==='planning')return reject('officeBusy')
-          if(attachmentCount || !text.trim() || text.length>4000)return reject('officeTextOnly')
+          if(!entry?.topic || entry.ended || entry.disconnected || entry.syncState!=='live')return
+          if(!['saved','planning','writing','saving'].includes(entry.state))return
           const editor=runners.read()?.get(fileId)?.editor.read()
-          if(editor?.fileId!==fileId || editor.popup.closed) {
-            return reject('reopenForChat')
-          }
-          if(entry.state!=='saved' || ['pending','answering'].includes(entry.turns.at(-1)?.state))return reject('officeBusy')
+          if(editor?.fileId!==fileId || editor.popup.closed)return
+          const reject=message=>({kind:'error',text:t(message)})
+          if(entry.state==='planning')return reject('officeBusy')
+          if(attachmentCount || !text.trim() || text.length>4000)return reject('officeTextOnly')
+          if(entry.state!=='saved' || ['pending','answering','reconciling'].includes(entry.turns.at(-1)?.state))return reject('officeBusy')
           const id=crypto.randomUUID()
           updateCollaboration(fileId,current=>({...current,turns:[...current.turns.slice(-19),{id,question:text,state:'pending'}]}))
           setTimeout(()=>updateCollaboration(fileId,current=>{
             const turn=current.turns.at(-1)
             return turn?.id===id && turn.state==='pending' ?
-              {...current,turns:[...current.turns.slice(0,-1),{...turn,state:'failed'}]} : current
+              {...current,turns:interruptFollowup(current.turns)} : current
           }),135000)
           return {kind:'success'}
         })
@@ -608,9 +693,11 @@ window.__ModuleLoader__.load({
           const receipt=creationReceipt(result.text)
           if(!receipt)return
           const entries=collaboration.read()??new Map()
+          const entry=entries.get(receipt.fileId)??initialCollaboration(receipt,sessionId)
+          if(!entries.has(receipt.fileId))collaboration.set(new Map(entries).set(receipt.fileId,entry))
+          if(entry.ended)return
           startRunner(receipt,true)
           officeSessions.set(sessionId,receipt.fileId)
-          if(!entries.has(receipt.fileId))collaboration.set(new Map(entries).set(receipt.fileId,{turns:[],sessionId}))
         })
         ctx.effect(() => ctx.sidebarRightTabs.register({
           id, kind: 'dyoffice-preview', title: () => t('title'), keepMounted:true,
@@ -666,7 +753,7 @@ window.__ModuleLoader__.load({
               const {preview,writing}=payload??{}
               if(controller.signal.aborted)return
               const entries=collaboration.read()??new Map()
-              const current=entries.get(fileId)??{turns:[],sessionId}
+              const current=entries.get(fileId)??initialCollaboration(receipt,sessionId)
               const snapshot=preview?.fileId===fileId&&uuid.test(preview?.revision??'')?{revision:preview.revision,text:preview.text}:undefined
               collaboration.set(new Map(entries).set(fileId,{...current,snapshot:current.snapshot??snapshot,topic:current.topic??writing?.topic,inlineChecked:true}))
             }
@@ -679,6 +766,7 @@ window.__ModuleLoader__.load({
           const stage={planning:'planning',writing:'generating',saving:'awaitingSave',saved:'handedOff',conflict:'writingConflict',saveFailed:'writingSaveFailed',failed:'writingFailed',noModel:'noModel',outputLimit:'outputLimit',timedOut:'timedOut',emptyOutput:'emptyOutput',noTool:'noTool'}[entry?.state]
           const review=entry?.review
           const inProgress = label=>h(WorkStatus,{label:t(label),started:node.time,t})
+          const connection=useSyncExternalStore(connectionStatus.subscribe,connectionStatus.read)
           const remote=job?.embedded
           const opening=editor?.fileId===fileId&&!!fileId
           const canPreview=remote&&opening&&!entry?.disconnected
@@ -697,7 +785,8 @@ window.__ModuleLoader__.load({
           },[fileId,remote,liveFrame])
           const external=useRef(null)
           const openWindow=()=>{
-            if(remote&&editor?.embedded&&opening){
+            const current=collaboration.read()?.get(fileId)??initialCollaboration(receipt,sessionId)
+            if(current.ended || remote&&editor?.embedded&&opening){
               if(external.current&&!external.current.closed){external.current.focus();return}
               external.current=window.open(receipt.href,'_blank','popup,width=1200,height=850')
               updateCollaboration(fileId,e=>({...e,popupBlocked:!external.current}))
@@ -707,27 +796,42 @@ window.__ModuleLoader__.load({
             const popup=window.open(receipt.href,'_blank','popup,width=1200,height=850')
             if(!popup){updateCollaboration(fileId,e=>({...e,popupBlocked:true}));return}
             const entries=collaboration.read()??new Map()
-            collaboration.set(new Map(entries).set(fileId,{turns:[],sessionId,...entries.get(fileId),popupBlocked:false,disconnected:false}))
+            collaboration.set(new Map(entries).set(fileId,{...current,sessionId,turns:interruptFollowup(current.turns),
+              popupBlocked:false,disconnected:false,state:undefined,draft:undefined,syncState:undefined}))
             officeSessions.set(sessionId,fileId)
             startRunner(receipt,false,popup)
           }
-          const active=!entry?.disconnected&&['planning','writing','saving'].includes(entry?.state)
+          const busyStage=['planning','writing','saving'].includes(entry?.state)
+          const confirmed=entry?.syncState==='live'&&!entry.disconnected
+          const active=confirmed&&busyStage
           if(!receipt)return node.outcome?h('div',{role:node.outcome.kind==='error'?'alert':undefined,style:textStyle},node.outcome.text)
             :inProgress(creation?.id&&creation.sessionId===sessionId?'creating':'sending')
-          const syncLabel=entry?.ended?'syncEnded':entry?.disconnected||entry?.syncState==='stale'?'syncStale':entry?.syncState==='live'?'syncLive':null
+          const syncLabel=entry?.ended?'syncEnded':entry?.disconnected||entry?.syncState==='stale'?'syncStale':['live','draft'].includes(entry?.syncState)?'syncLive':null
           const revision=entry?.snapshot?.revision
-          const canChat=entry?.state==='saved'&&!entry.ended&&officeSessions.get(entry.sessionId)===fileId
+          const ownsSession=entry&&!entry.ended&&officeSessions.get(entry.sessionId)===fileId
+          const canChat=ownsSession&&opening&&confirmed&&entry.state==='saved'
+          const needsWindow=remote&&entry?.checked&&entry.topic&&!stage&&!opening&&!allowsEmbed(connection,receipt.origin)
+          const canEnd=ownsSession&&(needsWindow||entry.disconnected||opening&&entry.topic&&!active)
+          let waitingMessage
+          if(job&&entry?.topic&&!stage&&!entry.ended){
+            if(entry.disconnected)waitingMessage=h('span',{role:'status'},t('reopenForChat'))
+            else if(needsWindow)waitingMessage=t('openToWrite')
+            else waitingMessage=inProgress('waitingWriter')
+          }
+          // An ended conversation no longer needs directions for reconnecting.
+          const interrupted=entry?.disconnected&&busyStage
+          const showStage=stage&&(!busyStage||active||interrupted&&!entry.ended)
           const messages=[
             entry?.topic&&row('DSH',t('requestDraft')+' '+entry.topic,'request'),
-            stage&&row('DyOffice',active?inProgress(stage):h('span',{role:'status'},t(entry.disconnected&&entry.state!=='saved'?'reopenForChat':stage)),'writing'),
-            receipt&&entry?.topic&&!stage&&row('DyOffice',entry.disconnected?h('span',{role:'status'},t('reopenForChat')):inProgress('waitingWriter'),'waiting'),
+            showStage&&row('DyOffice',active?inProgress(stage):h('span',{role:'status'},t(interrupted?'reopenForChat':stage)),'writing'),
+            waitingMessage&&row('DyOffice',waitingMessage,'waiting'),
             receipt&&entry?.checked&&!entry.topic&&!stage&&row('DyOffice',t('created'),'created'),
             entry?.reply&&row('DyOffice',entry.reply,'office-reply'),
             review&&row('DSH',review.state==='reviewing'?inProgress('reviewing'):
               h('div',null,h('strong',null,t({ready:'reviewReady',failed:'reviewFailed',noModel:'reviewNoModel'}[review.state])),review.text&&h('div',null,review.text)),'review'),
             entry?.turns?.flatMap(turn=>[
               row(t('you'),turn.question,turn.id+'-question'),
-              row('DyOffice',turn.state==='failed'?t('officeAnswerFailed'):turn.answer||inProgress('officeAnswering'),turn.id+'-answer'),
+              row('DyOffice',turn.state==='failed'?t('officeAnswerFailed'):turn.state==='unknown'?t('officeUnconfirmed'):turn.answer||inProgress('officeAnswering'),turn.id+'-answer'),
             ]),
           ].flat().filter(Boolean)
           return h('section',{'aria-label':'DyOffice',className:'dsh-office-studio'},
@@ -745,14 +849,14 @@ window.__ModuleLoader__.load({
                 liveFrame?h('div',{ref:previewAnchor,className:'dsh-office-frame'})
                   :h(DocumentExcerpt,{entry,pending:!entry?.inlineChecked&&!entry?.checked,t})),
               messages.length>0&&h('section',{className:'dsh-office-log','aria-label':t('messagesLabel')},messages)),
-            (syncLabel||canChat||entry?.skillName)&&h('footer',{className:'dsh-office-footer'},
+            (syncLabel||canEnd||entry?.skillName)&&h('footer',{className:'dsh-office-footer'},
               syncLabel&&h('span',{role:'status'},t(syncLabel)),
               entry?.skillName&&h('small',null,t('skillLabel'),' · ',entry.skillName),
               canChat&&h('span',null,t('destination'),' · DyOffice'),
-              canChat&&h('button',{type:'button',onClick:()=>{
-                officeSessions.delete(entry.sessionId)
-                stopRunner(receipt.fileId)
-                updateCollaboration(receipt.fileId,current=>({...current,ended:true}))
+              canEnd&&h('button',{type:'button',onClick:()=>{
+                try { window.localStorage.setItem(entry.endedKey,'1') }
+                catch { try { window.sessionStorage.setItem(entry.endedKey,'1') } catch {} }
+                endOfficeChat(fileId,entry)
               }},t('endOfficeChat'))))
         })))
         function AuthorizationPrompt({sessionId}) {
