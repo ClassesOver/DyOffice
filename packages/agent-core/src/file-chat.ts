@@ -1,6 +1,7 @@
 import type {AgentMessage,AgentTransport} from './types'
 
-export interface VisibleChatMessage {text:string; sender?:'dsh'}
+export interface VisibleChatAttachment {readonly name:string;readonly ext:string;readonly sizeBytes:number}
+export interface VisibleChatMessage {text:string; sender?:'dsh'; attachments?:readonly VisibleChatAttachment[]}
 export interface FileChatTurn {
   readonly turnId?: string
   consumedTurns?(): readonly string[]

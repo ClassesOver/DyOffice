@@ -1,7 +1,7 @@
 import {bindDocumentHandoff,createAttachmentsSkill,withAttachedSkills,ATTACHMENT_IMAGE_EXTS,type AgentImage,type AttachedSkill} from '@genoffice/agent-core'
 import {useEffect,useLayoutEffect,useMemo,useRef,useState,type CSSProperties,type ReactNode} from 'react'
 import {AgentLoop,composeSkills} from '../../../../packages/agent-core/src/index'
-import {AiComposer,AiSkillChips,AiSkillsMenu,Markdown,useAiPanelResize,useAssistantFocusRoot,type MarkdownNav,type AiAttachmentLike} from '@genoffice/ui'
+import {AiComposer,AiSkillChips,AiSkillsMenu,Markdown,SentAttachments,useAiPanelResize,useAssistantFocusRoot,type MarkdownNav,type AiAttachmentLike} from '@genoffice/ui'
 import {GensparkMark} from '../../../docs/src/renderer/components/icons'
 import type {createEditorAssistant} from './assistant'
 import '@genoffice/ui/ai-model-picker.css'
@@ -11,7 +11,7 @@ import './ai-dock-theme.css'
 type Assistant=Awaited<ReturnType<typeof createEditorAssistant>>
 type DraftFile=AiAttachmentLike&{image?:AgentImage}
 type ComposerDraft={text:string;files:DraftFile[];skills:string[];version:number}
-type ChatItem={id:number;role:'user'|'assistant';text:string;sender?:'dsh';files?:string[];skills?:string[]}
+type ChatItem={id:number;role:'user'|'assistant';text:string;sender?:'dsh';files?:AiAttachmentLike[];skills?:string[]}
 type ImageAttachments=ReadonlyMap<string,{name:string;image:AgentImage}>
 const toolImageAttachments=new WeakMap<AbortSignal,ImageAttachments>()
 export function resolveTurnImageAttachment(reference:string,signal?:AbortSignal){
@@ -165,7 +165,7 @@ export function SharedEditorAssistant({assistant,lang,context='',dock,widthKey,o
   activeFiles.current=attachments
   recoverableDraft.current=composerDraft
   localEdit.current=handoff?undefined:'local'
-  runToken.current=token;setError('');setItems(current=>[...current,{id:seq.current++,role:'user',text:instruction,files:attachments.map(file=>file.name),skills:composerDraft?.skills,...(handoff&&{sender:'dsh' as const})},{id:seq.current++,role:'assistant',text:''}]);setBusy(true)
+  runToken.current=token;setError('');setItems(current=>[...current,{id:seq.current++,role:'user',text:instruction,files:attachments.map(({path,name,ext,sizeBytes})=>({path,name,ext,sizeBytes})),skills:composerDraft?.skills,...(handoff&&{sender:'dsh' as const})},{id:seq.current++,role:'assistant',text:''}]);setBusy(true)
   try{
    if(handoff)return loop.runDocumentHandoff(instruction,handoff)
    if(imageAttachmentReferences){
@@ -174,7 +174,7 @@ export function SharedEditorAssistant({assistant,lang,context='',dock,widthKey,o
     activeImages.current=images
    }
    const prompt=context?`${instruction}\n\nOpen file context:\n${context}`:instruction
-   loop.run(withAttachedSkills(prompt,skillBodies),attachments.flatMap(file=>file.image?[file.image]:[]),skillBodies.length?instruction:undefined,continuationToken?undefined:{text:instruction})
+   loop.run(withAttachedSkills(prompt,skillBodies),attachments.flatMap(file=>file.image?[file.image]:[]),skillBodies.length?instruction:undefined,continuationToken?undefined:{text:instruction,attachments})
    return true
   }catch(error){if(token)assistant.control?.endRun?.(token,{text:String(error),cancelled:false,failed:true});runToken.current=undefined;clearActiveAttachments();setBusy(false);return false}
  }
@@ -272,7 +272,7 @@ export function SharedEditorAssistant({assistant,lang,context='',dock,widthKey,o
  }
  const conversation=assistant.workspace.conversation
  const messages:ReactNode=<>
-  {items.map(item=><div data-sender={item.sender} className={`ai-msg ai-msg-${item.role}`} key={item.id}>{item.text?<><Markdown text={item.text} nav={item.role==='assistant'?assistantNav:undefined}/><AiSkillChips lang={lang} names={item.skills??[]}/>{!!item.files?.length&&<div className="shared-assistant-file-list">{item.files.map((name,index)=><span key={index}>{name}</span>)}</div>}</>:busy&&item.role==='assistant'?<span role="status">{lang==='zh'?'正在思考…':'Thinking…'}</span>:null}</div>)}
+  {items.map(item=><div data-sender={item.sender} className={`ai-msg ai-msg-${item.role}`} key={item.id}>{item.text?<>{!!item.files?.length&&<SentAttachments atts={item.files} previews={{}}/>}<Markdown text={item.text} nav={item.role==='assistant'?assistantNav:undefined}/><AiSkillChips lang={lang} names={item.skills??[]}/></>:busy&&item.role==='assistant'?<span role="status">{lang==='zh'?'正在思考…':'Thinking…'}</span>:null}</div>)}
   {error&&<p role="alert">{error}</p>}
  </>
  return <div ref={focusRoot} className={`ai-dock shared-assistant-dock${collapsed?' collapsed':''}${resizing?' ai-panel-resizing':''}`} style={widthKey?{'--ai-panel-width':`${width}px`} as CSSProperties:undefined}>

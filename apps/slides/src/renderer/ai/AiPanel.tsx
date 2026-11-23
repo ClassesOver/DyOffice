@@ -1822,7 +1822,7 @@ export function AiPanel({
           ? { text: draft, attachments: sentAtts, skills: sentSkills }
           : undefined
         if(opts?.handoff)return loop.runDocumentHandoff(modelInstruction,opts.handoff)
-        loop.run(modelInstruction, images,undefined,opts?.continuationToken?undefined:{text:shown})
+        loop.run(modelInstruction, images,undefined,opts?.continuationToken?undefined:{text:shown,attachments:sentAtts})
       })
       .catch(() => {
         runStartingRef.current = false

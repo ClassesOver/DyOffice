@@ -82,4 +82,4 @@ export type {CodingTask, CodingResult, CodingSkillDeps, HarnessDescriptor} from 
 export { bindDocumentHandoff, documentHandoffEditor } from './document-handoff'
 
 export type {DocumentHandoffOptions} from './loop'
-export {bindFileChat,type VisibleChatMessage,type FileChatTurn} from './file-chat'
+export {bindFileChat,type VisibleChatAttachment,type VisibleChatMessage,type FileChatTurn} from './file-chat'

@@ -1418,7 +1418,7 @@ export function AiPanel({
         const attached = [...images.values()]
         const imageContext = setImageAttachments?.(attached)
         const prompt = imageContext ? modelInstruction + '\n\n' + imageContext : modelInstruction
-        loop.run(prompt, attached.map(({image}) => image), prompt !== instruction && transport ? instruction : undefined,continuationToken?undefined:{text:displayInstruction})
+        loop.run(prompt, attached.map(({image}) => image), prompt !== instruction && transport ? instruction : undefined,continuationToken?undefined:{text:displayInstruction,attachments:sentAtts})
       })
   }
 

@@ -64,5 +64,15 @@ test('Word media analysis can use an image from the current send but not an earl
  }
  assert.deepEqual(mediaCalls,[{action:'analyze_media',mediaUrls:['data:image/png;base64,'+buffer.toString('base64')],requirements}])
  assert.equal((await f.files.openFile(f.alice.token,opened.fileId)).file.revision,opened.revision)
+ await expect.poll(async()=>{
+  const proof=(await(await page.request.get(origin+'/api/v1/auth/session-proof')).json()).csrfToken
+  const response=await page.request.post(origin+'/api/v1/files/'+opened.fileId+'/assistant-chat',{headers:{origin,'x-csrf-token':proof},data:{}})
+  return response.ok()&&(await response.json()).messages.some(m=>m.attachments?.some(a=>a.name==='red.png'))
+ }).toBe(true)
+ await page.reload()
+ await expect(page.locator('.tiptap.doc-page').first()).toBeVisible()
+ if(await page.locator('.ai-rail').isVisible())await page.locator('.ai-rail').click()
+ const sent=panel.locator('.ai-msg-user').filter({hasText:'Analyze image for round 0'})
+ await expect(sent.locator('.ai-attachment-thumb[title="red.png"]')).toBeVisible()
  recordVerifiedOfficeEffect('docx','analyze_media')
 })
