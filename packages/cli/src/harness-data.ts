@@ -159,9 +159,9 @@ export function createHarnessDataClient(options:HarnessDataClientOptions) {
     try{body=JSON.stringify({operation,arguments:args})}catch{throw failure()}
     if(Buffer.byteLength(body)>harnessDataRequestLimit(operation))throw failure()
     // Size the response against the actual wire arguments, including custom JSON serialization.
-    const queryCount=operation==='sources.query'?(sourceQueryBatchSize(operation,JSON.parse(body).arguments)??1):1
+    const queryCount=operation==='execute_sql'?(sourceQueryBatchSize(operation,JSON.parse(body).arguments)??1):1
     const send=(active?:AbortSignal)=>request(endpoint+'/execute',{method:'POST',headers:{...headers,'content-type':'application/json'},body},queryCount*HARNESS_DATA_MAX_METADATA_BYTES,active)
-    const {bytes}=await (operation==='sources.query'?timedQuery(send,queryCount,signal):send(signal))
+    const {bytes}=await (operation==='execute_sql'?timedQuery(send,queryCount,signal):send(signal))
     try {
       const value:unknown=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(bytes))
       if(!record(value))throw failure()

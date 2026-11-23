@@ -143,7 +143,7 @@ export const en = {
   srcSelectedSchemasOnly: 'Selected schemas only',
   srcSelectedTablesOnly: 'Selected tables only',
   srcRestoreSavedSchemasAndTables: 'Restore saved schemas and tables',
-  srcLoadSavedScopeHelp: 'Load schemas and tables visible to the account in the saved connection. Select items and save to apply the new scope to the assistant.',
+  srcLoadSavedScopeHelp: 'Load schemas first, then open a schema to see its tables. Select items and save to apply the new scope to the assistant.',
   srcTestConnectionViewDetails: 'Test connection and view details',
   srcSchemaDisplayLimit: 'Only the first 1,000 schemas are shown. Enter others manually.',
   srcNoSchemasAvailable: 'No schemas are available to this account.',

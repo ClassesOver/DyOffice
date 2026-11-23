@@ -65,7 +65,7 @@ test('static computed tool properties are inventoried', () => {
 
  test('browser harness and metadata tools are inventoried with explicit boundaries',async()=>{
  const rows=await inventory();
- for(const id of ['packages/browser-host/src/assistant-channel.ts#list_channel_agents','packages/browser-host/src/assistant-channel.ts#delegate_channel_task','packages/browser-host/src/source-catalog-skill.ts#sources_list']) assert.ok(rows.some(row=>row.id===id),id)
+ for(const id of ['packages/browser-host/src/assistant-channel.ts#list_channel_agents','packages/browser-host/src/assistant-channel.ts#delegate_channel_task','packages/browser-host/src/source-catalog-skill.ts#list_connections']) assert.ok(rows.some(row=>row.id===id),id)
  })
 
 test('harness classifications distinguish live channel bindings from authorized service work',async()=>{
@@ -73,7 +73,7 @@ test('harness classifications distinguish live channel bindings from authorized 
  const rows=classifyTools(await inventory(),spec);
  for(const name of ['list_channel_agents','delegate_channel_task'])assert.equal(rows.find(r=>r.id==='packages/browser-host/src/assistant-channel.ts#'+name)?.placement,'live');
  for(const name of ['delegate_agent_task','list_agent_data','list_agents'])assert.equal(rows.find(r=>r.id==='packages/agent-core/src/coding-skill.ts#'+name)?.placement,'headless');
- assert.equal(rows.find(r=>r.id==='packages/browser-host/src/source-catalog-skill.ts#sources_list')?.placement,'headless');
+ assert.equal(rows.find(r=>r.id==='packages/browser-host/src/source-catalog-skill.ts#list_connections')?.placement,'headless');
  assert.match(rows.find(r=>r.name==='delegate_agent_task').rationale,/task-scoped authorization/);
  assert.match(rows.find(r=>r.name==='delegate_channel_task').rationale,/acknowledgement is not success/);
 })

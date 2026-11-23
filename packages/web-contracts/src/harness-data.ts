@@ -6,7 +6,7 @@ export interface HarnessDataGrant {
   taskId:string;claimId:string;connectionEpoch:1;credential:string
   agentId:string;expiresAt:string;inputs:HarnessDataInputs
 }
-export type HarnessDataOperation = 'sources.list'|'sources.describe'|'sources.query'|
+export type HarnessDataOperation = 'list_connections'|'search_objects'|'execute_sql'|
   'results.get_manifest'|'results.download'|'artifacts.stage'|'artifacts.commit'|'artifacts.get_receipt'
 export interface AnalysisInputRef {
   resultId:string;sha256:string;sourceId:string;sourceVersion:number;queryHash:string;rowCount:number;truncated:boolean

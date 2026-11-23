@@ -37,15 +37,15 @@ test('Workspace and Codex SQL batches keep each captured result in the authorize
  t.after(()=>data.dispose())
  const issue=(documentId,inputs)=>data.issue({token,documentId,agentId:'worker',inputs,signal:new AbortController().signal})
  const grant=await issue(b,{sourceIds:['sales'],resultIds:[]})
- const workspace=queries=>tools.execute(token,{name:'sources.query',arguments:{sourceId:'sales',queries}},a)
- const codex=queries=>data.execute(grant.taskId,grant.credential,'sources.query',{sourceId:'sales',queries})
+ const workspace=queries=>tools.execute(token,{name:'execute_sql',arguments:{sourceId:'sales',queries}},a)
+ const codex=queries=>data.execute(grant.taskId,grant.credential,'execute_sql',{sourceId:'sales',queries})
  const missing=`SELECT missing_column FROM ${target.probeTable}`
  for(const [run,documentId,other] of [[workspace,a,b],[codex,b,a]]){
   const {items}=await run(['SELECT 1 AS n',missing,'SELECT 3 AS n'])
   assert.deepEqual(items.map(item=>item.ok),[true,false,true])
   for(const item of [items[0],items[2]]){
    const resultId=item.result.artifact.resultId
-   const save={name:'sources.save_result',arguments:{resultId,name:'Frozen',commandId:randomUUID()}}
+   const save={name:'save_query_result',arguments:{resultId,name:'Frozen',commandId:randomUUID()}}
    for(const scope of [other,undefined]){
     await assert.rejects(results.read(token,{resultId},scope),{statusCode:404})
     await assert.rejects(tools.execute(token,save,scope),{statusCode:404})
@@ -99,7 +99,7 @@ test('two documents owned by the same user and Home partition frozen results thr
  const headers={origin:restrictedOrigin,cookie:'__Host-dyoffice-session='+token,'x-csrf-token':csrf.sessionToken(token)}
  const request=(base,method,path,payload)=>f.app.inject({url:base+path,method,headers,payload})
  const docA='/api/v1/files/'+a,docB='/api/v1/files/'+b,workspace='/api/v1/workspace'
- const query=await request(docA,'POST','/source-tools/execute',{name:'sources.query',arguments:{sourceId:'reporting'}})
+ const query=await request(docA,'POST','/source-tools/execute',{name:'execute_sql',arguments:{sourceId:'reporting'}})
  assert.equal(query.statusCode,200,query.body)
  const captured=query.json().artifact
  const resultId=captured.resultId, args={resultId,name:'Report',commandId:randomUUID()}
@@ -113,7 +113,7 @@ test('two documents owned by the same user and Home partition frozen results thr
  assert.deepEqual((await results.list(otherSession.token,{},a,true)).items,[])
  const home=await results.capture(token,snapshot,'a'.repeat(64))
  await results.save(token,{...args,resultId:home.resultId})
- const save=base=>request(base,'POST','/source-tools/execute',{name:'sources.save_result',arguments:args})
+ const save=base=>request(base,'POST','/source-tools/execute',{name:'save_query_result',arguments:args})
  for(const base of [docB,workspace])assert.equal((await save(base)).statusCode,404)
  assert.equal((await save(docA)).statusCode,200)
  assert.equal((await save(docA)).statusCode,200)
@@ -139,7 +139,7 @@ test('two documents owned by the same user and Home partition frozen results thr
  assert.equal((await data.download(grant.taskId,grant.credential,resultId)).sha256,captured.sha256)
  await f.files.trashFile(token,a)
  assert.equal((await request(docA,'GET','/data-results/'+resultId+'/content')).statusCode,404)
- for(const [name,args] of [['sources.list',{}],['sources.describe',{sourceId:'reporting'}],['sources.query',{sourceId:'reporting'}]]){
+ for(const [name,args] of [['list_connections',{}],['search_objects',{sourceId:'reporting'}],['execute_sql',{sourceId:'reporting'}]]){
   const response=await request(docA,'POST','/source-tools/execute',{name,arguments:args})
   assert.equal(response.statusCode,404,name+' should reject an inactive document before calling the source')
  }

@@ -287,8 +287,8 @@ Only PATH is inherited; configure any harness credentials outside this command.
 Task credentials come from the task environment; data operations cannot widen their grants.
 
 ```sh
-genoffice data execute sources.list --args '{}'
-genoffice data execute sources.query --args-file ./query.json
+genoffice data execute list_connections --args '{}'
+genoffice data execute execute_sql --args-file ./query.json
 genoffice data manifest RESULT_ID
 genoffice data download RESULT_ID --out ./snapshot.json
 ```

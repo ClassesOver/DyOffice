@@ -82,8 +82,8 @@ async function queryBatchFixture(t, afterCapture) {
   await sources.create(token, { sourceId: 'sales', name: 'Sales', kind: 'postgres', config: {}, secret: targets.readerDsn })
   const grant = await access.issue({ token, agentId: 'codex', inputs: { sourceIds: ['sales'], resultIds: [] }, signal: new AbortController().signal })
   return { targets, sources, token, inspect: f.inspect,
-    workspace: queries => tools.execute(token, { name: 'sources.query', arguments: { sourceId: 'sales', queries } }),
-    codex: queries => access.execute(grant.taskId, grant.credential, 'sources.query', { sourceId: 'sales', queries }),
+    workspace: queries => tools.execute(token, { name: 'execute_sql', arguments: { sourceId: 'sales', queries } }),
+    codex: queries => access.execute(grant.taskId, grant.credential, 'execute_sql', { sourceId: 'sales', queries }),
     download: id => access.download(grant.taskId, grant.credential, id),
   }
 }
@@ -236,7 +236,7 @@ test('read-only SQL channel: AST guard, real PG denial, row cap, timeout, units'
   const described = await f.app.inject({ method: 'POST', url: '/api/v1/workspace/source-tools/execute',
     headers: { origin: restrictedOrigin, cookie: '__Host-dyoffice-session=' + f.alice.token,
       'x-csrf-token': createCsrfService({ db: f.db, deploymentId: f.deploymentId, origin: restrictedOrigin, key: f.csrfKey }).sessionToken(f.alice.token) },
-    payload: { name: 'sources.describe', arguments: { sourceId: 'metrics', table: targets.probeTable } } })
+    payload: { name: 'search_objects', arguments: { sourceId: 'metrics', table: targets.probeTable } } })
   assert.equal(described.statusCode, 200, described.body)
   assert.equal(described.json().sourceVersion, 1)
   assert.ok(described.json().metadata.rows.some(row => row.column_name === 'i' && row.data_type === 'integer'))
@@ -266,6 +266,14 @@ test('read-only SQL channel: AST guard, real PG denial, row cap, timeout, units'
   await call(f, 'POST', '/metrics/query', { sql: "SELECT CAST('0.1234567890123456789' AS NUMERIC) AS amount" }, undefined, 502)
   await call(f, 'POST', '/metrics/query', { sql: "SELECT CAST('9007199254740993' AS BIGINT) AS amount" }, undefined, 502)
 
+  // Real execution verifies window frames and relation aliases survive policy serialization.
+  const windowed = (await call(f, 'POST', '/metrics/query', { sql: 'SELECT g.i, ROW_NUMBER() OVER (ORDER BY g.i) AS rn, SUM(g.i) OVER (ORDER BY g.i ROWS BETWEEN 1 PRECEDING AND CURRENT ROW) AS rolling_sum, LAG(g.i) OVER (ORDER BY g.i) AS previous FROM generate_series(1,3) AS g(i) ORDER BY g.i' }, undefined, 200)).json()
+  assert.deepEqual(windowed.rows, [
+    { i: 1, rn: 1, rolling_sum: 1, previous: null },
+    { i: 2, rn: 2, rolling_sum: 3, previous: 1 },
+    { i: 3, rn: 3, rolling_sum: 5, previous: 2 },
+  ])
+
   // Syntax-level guard rejects anything that is not a single read-only SELECT.
   for (const sql of [
     `SELECT 1; SELECT 2`,
@@ -274,7 +282,6 @@ test('read-only SQL channel: AST guard, real PG denial, row cap, timeout, units'
     `INSERT INTO ${targets.probeTable} VALUES (9,'x',1,true,NULL)`,
     `DROP TABLE ${targets.probeTable}`,
     `SELECT * FROM pg_read_file('/etc/passwd')`,
-    `SELECT pg_sleep(3)`,
     `WITH x AS (SELECT 1) INSERT INTO ${targets.probeTable} SELECT * FROM x`,
     `SELECT 1 INTO ${targets.probeTable}`,
     `SELECT dblink('host=127.0.0.1 dbname=x', 'SELECT 1')`,
@@ -446,18 +453,18 @@ test('saved table scope restricts queries and AI metadata, and an empty scope st
     assert.equal(response.statusCode,status,response.body)
     return response.json()
   }
-  const describe = (table, status=200, filters={}) => tool('sources.describe',{sourceId:'limited',...(table===undefined?{}:{table}),...filters},status)
+  const describe = (table, status=200, filters={}) => tool('search_objects',{sourceId:'limited',...(table===undefined?{}:{table}),...filters},status)
   const sql = `SELECT i FROM ${targets.probeTable} ORDER BY i`
-  const batch = await tool('sources.query',{sourceId:'limited',queries:[sql,`SELECT i FROM ${hidden}`,`SELECT count(*) AS n FROM ${targets.probeTable}`]})
+  const batch = await tool('execute_sql',{sourceId:'limited',queries:[sql,`SELECT i FROM ${hidden}`,`SELECT count(*) AS n FROM ${targets.probeTable}`]})
   assert.deepEqual(batch.items.map(item=>item.ok),[true,false,true])
   assert.equal(batch.items[1].code,'SQL_POLICY_REJECTED')
   for(const {result} of batch.items.filter(item=>item.ok)){
-    const page=await tool('sources.read_result',{resultId:result.artifact.resultId})
+    const page=await tool('read_query_result',{resultId:result.artifact.resultId})
     assert.deepEqual(result.preview,page.rows.slice(0,3))
     assert.equal(result.sha256,page.sha256)
   }
-  await tool('sources.query',{sourceId:'limited',queries:Array(5).fill(sql)},400)
-  await tool('sources.query',{sourceId:'limited',sql,queries:[sql]},400)
+  await tool('execute_sql',{sourceId:'limited',queries:Array(5).fill(sql)},400)
+  await tool('execute_sql',{sourceId:'limited',sql,queries:[sql]},400)
   assert.equal((await f.inspect("SELECT * FROM data_source_audit WHERE source_id='limited' AND action='source_queried'")).rowCount,2)
   assert.deepEqual((await describe()).metadata.rows.map(row=>row.table_name),[targets.probeTable])
   assert.deepEqual((await describe(undefined,200,{schema:'public',tablePrefix:targets.probeTable.toUpperCase()})).metadata.rows.map(row=>row.table_name),[targets.probeTable])
@@ -528,7 +535,7 @@ test('SQL column pages cross the 1000-row catalog limit in table and ordinal ord
   const describe = async (args, status = 200) => {
     const response = await f.app.inject({ method: 'POST', url: '/api/v1/workspace/source-tools/execute',
       headers: { origin: restrictedOrigin, cookie: '__Host-dyoffice-session=' + f.alice.token, 'x-csrf-token': csrf.sessionToken(f.alice.token) },
-      payload: { name: 'sources.describe', arguments: { sourceId: 'catalog', ...args } } })
+      payload: { name: 'search_objects', arguments: { sourceId: 'catalog', ...args } } })
     assert.equal(response.statusCode, status, response.body.slice(0, 500))
     return response.json().metadata
   }

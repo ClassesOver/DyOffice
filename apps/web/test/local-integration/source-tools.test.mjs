@@ -10,7 +10,7 @@ import { password } from '../helpers/identity.mjs'
 import { createCsrfService } from '../../server/src/modules/auth/csrf.ts'
 
 const workspacePath = '/api/v1/workspace'
-const toolNames = ['sources.list', 'sources.describe', 'sources.query', 'sources.save_result', 'sources.read_result']
+const toolNames = ['list_connections', 'search_objects', 'execute_sql', 'save_query_result', 'read_query_result']
 const timezone = 'Asia/Shanghai'
 const units = { zz_amount: 'CNY', a_time: 'ISO8601' }
 const schema = [
@@ -124,14 +124,14 @@ test('tool definitions expose the five bounded tools with no caller-selectable o
     assert.equal(tool.inputSchema.additionalProperties, false)
     for (const forbidden of ['ownerId', 'workspaceId', 'dsn', 'secret', 'connectionString']) assert.equal(Object.hasOwn(tool.inputSchema.properties, forbidden), false)
   }
-  const read = definitions.tools.find(tool => tool.name === 'sources.read_result').inputSchema
+  const read = definitions.tools.find(tool => tool.name === 'read_query_result').inputSchema
   assert.equal(read.properties.limit.maximum, 1000)
-  assert.deepEqual(definitions.tools.find(tool => tool.name === 'sources.save_result').inputSchema.required, ['resultId', 'name', 'commandId'])
+  assert.deepEqual(definitions.tools.find(tool => tool.name === 'save_query_result').inputSchema.required, ['resultId', 'name', 'commandId'])
   noSecrets(definitions, f)
   assert.equal(f.http.requests.length, 0)
 })
 
-test('sources.list exposes only the cookie owner enabled saved connections, excluding missing credentials, disabled and deleted sources', async t => {
+test('list_connections exposes only the cookie owner enabled saved connections, excluding missing credentials, disabled and deleted sources', async t => {
   const f = await fixture(t, { alice: rows(2), bob: rows(3, 'Bob') })
   await f.createSource({ sourceId: 'a-enabled' })
   await f.createSource({ sourceId: 'b-empty' })
@@ -142,25 +142,25 @@ test('sources.list exposes only the cookie owner enabled saved connections, excl
   await f.call('DELETE', '/api/v1/sources/d-deleted', { expectedVersion: 1 }, { status: 204 })
   await f.createSource({ sourceId: 'z-enabled' })
   await f.createSource({ sourceId: 'bob-only', name: 'Bob private source', endpointName: 'bob', token: f.bob.token })
-  const listed = await f.execute('sources.list')
+  const listed = await f.execute('list_connections')
   assert.deepEqual(listed, { items: [
     { sourceId: 'a-enabled', name: 'Personal metrics', kind: 'http', sourceVersion: 1 },
     { sourceId: 'z-enabled', name: 'Personal metrics', kind: 'http', sourceVersion: 1 },
   ], nextCursor: null })
-  assert.deepEqual(await f.execute('sources.list', { after: 'a-enabled' }), { items: [listed.items[1]], nextCursor: null })
-  assert.deepEqual((await f.execute('sources.list', {}, { token: f.bob.token })).items.map(item => item.sourceId), ['bob-only'])
+  assert.deepEqual(await f.execute('list_connections', { after: 'a-enabled' }), { items: [listed.items[1]], nextCursor: null })
+  assert.deepEqual((await f.execute('list_connections', {}, { token: f.bob.token })).items.map(item => item.sourceId), ['bob-only'])
   for (const sourceId of ['c-disabled']) {
-    await f.execute('sources.describe', { sourceId }, { status: 409 })
-    await f.execute('sources.query', { sourceId }, { status: 409 })
+    await f.execute('search_objects', { sourceId }, { status: 409 })
+    await f.execute('execute_sql', { sourceId }, { status: 409 })
   }
-  await f.execute('sources.query', { sourceId: 'b-empty' }, { status: 503 })
-  await f.execute('sources.describe', { sourceId: 'd-deleted' }, { status: 404 })
-  await f.execute('sources.query', { sourceId: 'd-deleted' }, { status: 404 })
+  await f.execute('execute_sql', { sourceId: 'b-empty' }, { status: 503 })
+  await f.execute('search_objects', { sourceId: 'd-deleted' }, { status: 404 })
+  await f.execute('execute_sql', { sourceId: 'd-deleted' }, { status: 404 })
   noSecrets(listed, f)
   assert.equal(f.http.requests.length, 0)
 })
 
-test('sources.list filters unavailable connections before paging without empty leading pages',async t=>{
+test('list_connections filters unavailable connections before paging without empty leading pages',async t=>{
  const f=await fixture(t,{alice:rows(1)})
  for(let i=0;i<51;i++){
   const sourceId='hidden-'+String(i).padStart(2,'0')
@@ -168,7 +168,7 @@ test('sources.list filters unavailable connections before paging without empty l
   await f.call('PUT','/api/v1/sources/'+sourceId,{expectedVersion:1,enabled:false})
  }
  await f.createSource({sourceId:'visible'})
- const listed=await f.execute('sources.list')
+ const listed=await f.execute('list_connections')
  assert.deepEqual(listed.items.map(item=>item.sourceId),['visible'])
  assert.equal(listed.nextCursor,null)
  assert.equal(f.http.requests.length,0)
@@ -178,7 +178,7 @@ test('HTTP describe returns current saved extraction metadata and units without 
   const f = await fixture(t)
   await f.createSource()
   await f.call('PUT', '/api/v1/sources/metrics', { expectedVersion: 1, config: { timezone: 'UTC', rowPath: 'draft.rows', units: { zz_amount: 'USD' } } })
-  const described = await f.execute('sources.describe', { sourceId: 'metrics' })
+  const described = await f.execute('search_objects', { sourceId: 'metrics' })
   assert.deepEqual(described, {
     sourceId: 'metrics', sourceVersion: 2, kind: 'http',
     config: { timezone:'UTC', maxRows: 1000, rowPath: 'draft.rows', units: {zz_amount:'USD'} }, metadata: null,
@@ -192,7 +192,7 @@ test('query freezes 1000 rows with a 100-row preview; save retries, Home, paging
   const original = rows(1203), frozenRows = original.slice(0, 1000)
   const f = await fixture(t, { alice: original })
   await f.createSource()
-  const queried = await f.execute('sources.query', { sourceId: 'metrics' })
+  const queried = await f.execute('execute_sql', { sourceId: 'metrics' })
   const artifact = queried.artifact
   assert.match(artifact.resultId, /^[a-f0-9-]{36}$/)
   assert.equal(artifact.state, 'pending')
@@ -220,14 +220,14 @@ test('query freezes 1000 rows with a 100-row preview; save retries, Home, paging
   assert.equal(artifact.workspaceId, workspace[0].id)
   assert.deepEqual(await f.home(), { items: [], nextCursor: null }, 'Pending capture must not appear on Home')
   assert.deepEqual(await f.counts(), { artifacts: [{ state: 'pending', count: 1 }], queries: 1 })
-  const pendingPage = await f.execute('sources.read_result', { resultId: artifact.resultId, offset: 100, limit: 123 })
+  const pendingPage = await f.execute('read_query_result', { resultId: artifact.resultId, offset: 100, limit: 123 })
   assert.deepEqual(pendingPage.rows, frozenRows.slice(100, 223))
   assert.equal(pendingPage.nextOffset, 223)
 
   // Mutating the fixture makes any accidental connector replay observable in both data and counts.
   f.http.replace('alice', rows(1, 'Changed after capture'))
   const command = { resultId: artifact.resultId, name: '个人指标', commandId: randomUUID() }
-  const saved = await f.execute('sources.save_result', command)
+  const saved = await f.execute('save_query_result', command)
   assert.equal(saved.resultId, artifact.resultId)
   assert.equal(saved.workspaceId, artifact.workspaceId)
   assert.equal(saved.state, 'saved')
@@ -236,13 +236,13 @@ test('query freezes 1000 rows with a 100-row preview; save retries, Home, paging
   assert.ok(saved.savedAt)
   assert.equal(saved.sha256, artifact.sha256)
   assert.equal(saved.sizeBytes, artifact.sizeBytes)
-  const retried = await Promise.all(Array.from({ length: 4 }, () => f.execute('sources.save_result', command)))
+  const retried = await Promise.all(Array.from({ length: 4 }, () => f.execute('save_query_result', command)))
   for (const receipt of retried) assert.deepEqual(receipt, saved)
-  await f.execute('sources.save_result', { ...command, name: 'Changed retry' }, { status: 409 })
-  await f.execute('sources.save_result', { ...command, commandId: randomUUID() }, { status: 409 })
+  await f.execute('save_query_result', { ...command, name: 'Changed retry' }, { status: 409 })
+  await f.execute('save_query_result', { ...command, commandId: randomUUID() }, { status: 409 })
   assert.deepEqual(await f.home(), { items: [saved], nextCursor: null })
 
-  const defaultPage = await f.execute('sources.read_result', { resultId: saved.resultId })
+  const defaultPage = await f.execute('read_query_result', { resultId: saved.resultId })
   assert.equal(defaultPage.rows.length, 1000)
   assert.equal(defaultPage.nextOffset, null)
   const captured = []
@@ -282,8 +282,8 @@ test('Home list parses an HTTP string limit and pages saved results without dupl
   await f.createSource()
   const saved = []
   for (const name of ['First result', 'Second result']) {
-    const query = await f.execute('sources.query', { sourceId: 'metrics' })
-    saved.push(await f.execute('sources.save_result', { resultId: query.artifact.resultId, name, commandId: randomUUID() }))
+    const query = await f.execute('execute_sql', { sourceId: 'metrics' })
+    saved.push(await f.execute('save_query_result', { resultId: query.artifact.resultId, name, commandId: randomUUID() }))
   }
   const seen = []
   let after
@@ -304,17 +304,17 @@ test('Bob and Admin guesses of another owner source or pending/saved result retu
   data[0].literal = 'alice-private-captured-value'
   const f = await fixture(t, { alice: data })
   await f.createSource({ sourceId: 'alice-private' })
-  const query = await f.execute('sources.query', { sourceId: 'alice-private' })
+  const query = await f.execute('execute_sql', { sourceId: 'alice-private' })
   const resultId = query.artifact.resultId
   const command = { resultId, name: 'Alice private result', commandId: randomUUID() }
   for (const state of ['pending', 'saved']) {
-    if (state === 'saved') await f.execute('sources.save_result', command)
+    if (state === 'saved') await f.execute('save_query_result', command)
     for (const token of [f.bob.token, f.adminSigned.token]) {
       for (const [name, args] of [
-        ['sources.describe', { sourceId: 'alice-private' }],
-        ['sources.query', { sourceId: 'alice-private' }],
-        ['sources.read_result', { resultId }],
-        ['sources.save_result', command],
+        ['search_objects', { sourceId: 'alice-private' }],
+        ['execute_sql', { sourceId: 'alice-private' }],
+        ['read_query_result', { resultId }],
+        ['save_query_result', command],
       ]) {
         const denied = await f.execute(name, args, { token, status: 404 })
         assert.equal(JSON.stringify(denied).includes('alice-private-captured-value'), false)
@@ -325,7 +325,7 @@ test('Bob and Admin guesses of another owner source or pending/saved result retu
       assert.equal(content.statusCode, 404, content.body)
       assert.equal(content.body.includes('alice-private-captured-value'), false)
     }
-    assert.deepEqual(await f.execute('sources.list', {}, { token: f.bob.token }), { items: [], nextCursor: null })
+    assert.deepEqual(await f.execute('list_connections', {}, { token: f.bob.token }), { items: [], nextCursor: null })
     assert.deepEqual(await f.home('', { token: f.bob.token }), { items: [], nextCursor: null })
     assert.equal(f.http.requests.length, 1, 'A guessed source/result must never contact Alice connector')
   }
@@ -337,8 +337,8 @@ test('identical source IDs, names and save command IDs remain isolated in each o
   const f = await fixture(t, { alice: aliceRows, bob: bobRows })
   await f.createSource({ name: 'Shared source name' })
   await f.createSource({ name: 'Shared source name', endpointName: 'bob', token: f.bob.token, config: { units: { zz_amount: 'USD', a_time: 'ISO8601' } } })
-  const alice = await f.execute('sources.query', { sourceId: 'metrics' })
-  const bob = await f.execute('sources.query', { sourceId: 'metrics' }, { token: f.bob.token })
+  const alice = await f.execute('execute_sql', { sourceId: 'metrics' })
+  const bob = await f.execute('execute_sql', { sourceId: 'metrics' }, { token: f.bob.token })
   assert.notEqual(alice.artifact.resultId, bob.artifact.resultId)
   assert.notEqual(alice.artifact.workspaceId, bob.artifact.workspaceId)
   assert.notEqual(alice.sha256, bob.sha256)
@@ -346,15 +346,15 @@ test('identical source IDs, names and save command IDs remain isolated in each o
   assert.deepEqual(bob.preview, bobRows)
   assert.equal(bob.schema[0].unit, 'USD')
   const commandId = randomUUID(), name = 'Shared result name'
-  const savedAlice = await f.execute('sources.save_result', { resultId: alice.artifact.resultId, name, commandId })
-  const savedBob = await f.execute('sources.save_result', { resultId: bob.artifact.resultId, name, commandId }, { token: f.bob.token })
+  const savedAlice = await f.execute('save_query_result', { resultId: alice.artifact.resultId, name, commandId })
+  const savedBob = await f.execute('save_query_result', { resultId: bob.artifact.resultId, name, commandId }, { token: f.bob.token })
   assert.deepEqual((await f.home()).items, [savedAlice])
   assert.deepEqual((await f.home('', { token: f.bob.token })).items, [savedBob])
   assert.deepEqual((await f.page(savedAlice.resultId)).rows, aliceRows)
   assert.deepEqual((await f.page(savedBob.resultId, '', { token: f.bob.token })).rows, bobRows)
   for (const [token, foreign] of [[f.alice.token, savedBob], [f.bob.token, savedAlice], [f.adminSigned.token, savedAlice]]) {
-    await f.execute('sources.read_result', { resultId: foreign.resultId }, { token, status: 404 })
-    await f.execute('sources.save_result', { resultId: foreign.resultId, name, commandId }, { token, status: 404 })
+    await f.execute('read_query_result', { resultId: foreign.resultId }, { token, status: 404 })
+    await f.execute('save_query_result', { resultId: foreign.resultId, name, commandId }, { token, status: 404 })
     await f.page(foreign.resultId, '', { token, status: 404 })
   }
   assert.equal(f.http.count('alice'), 1)
@@ -366,14 +366,14 @@ test('identical source IDs, names and save command IDs remain isolated in each o
 test('definitions, tools and result routes require a live cookie session; execute also enforces CSRF and same origin', async t => {
   const f = await fixture(t, { alice: rows(2) })
   await f.createSource()
-  const query = await f.execute('sources.query', { sourceId: 'metrics' })
-  const saved = await f.execute('sources.save_result', { resultId: query.artifact.resultId, name: 'Protected', commandId: randomUUID() })
+  const query = await f.execute('execute_sql', { sourceId: 'metrics' })
+  const saved = await f.execute('save_query_result', { resultId: query.artifact.resultId, name: 'Protected', commandId: randomUUID() })
   const paths = [workspacePath + '/source-tools', workspacePath + '/data-results', workspacePath + '/data-results/' + saved.resultId, workspacePath + '/data-results/' + saved.resultId + '/content']
   for (const path of paths) await f.call('GET', path, undefined, { token: null, status: 401 })
   // The write hook rejects anonymous calls at the CSRF gate before authenticating.
-  await f.execute('sources.list', {}, { token: null, status: 403 })
+  await f.execute('list_connections', {}, { token: null, status: 403 })
   const unknown = randomBytes(32).toString('base64url')
-  await f.execute('sources.list', {}, { token: unknown, status: 401 })
+  await f.execute('list_connections', {}, { token: unknown, status: 401 })
   for (const headers of [
     { 'x-csrf-token': undefined },
     { 'x-csrf-token': 'bad' },
@@ -381,27 +381,27 @@ test('definitions, tools and result routes require a live cookie session; execut
     { origin: undefined },
     { origin: 'https://other.example' },
     { 'sec-fetch-site': 'cross-site' },
-  ]) await f.execute('sources.query', { sourceId: 'metrics' }, { headers, status: 403 })
+  ]) await f.execute('execute_sql', { sourceId: 'metrics' }, { headers, status: 403 })
   for (const path of paths) await f.call('GET', path, undefined, { headers: { origin: 'https://other.example' }, status: 403 })
-  await f.execute('sources.list', {}, { headers: { authorization: 'Bearer ' + f.alice.token, cookie: undefined }, status: 401 })
+  await f.execute('list_connections', {}, { headers: { authorization: 'Bearer ' + f.alice.token, cookie: undefined }, status: 401 })
   await f.sessions.logout(f.alice.token)
   for (const path of paths) await f.call('GET', path, undefined, { status: 401 })
-  await f.execute('sources.read_result', { resultId: saved.resultId }, { status: 401 })
-  await f.execute('sources.save_result', { resultId: saved.resultId, name: 'Protected', commandId: randomUUID() }, { status: 401 })
+  await f.execute('read_query_result', { resultId: saved.resultId }, { status: 401 })
+  await f.execute('save_query_result', { resultId: saved.resultId, name: 'Protected', commandId: randomUUID() }, { status: 401 })
   assert.equal(f.http.requests.length, 1)
 })
 
 test('every tool rejects owner/workspace/DSN injection in arguments and envelope without querying or saving', async t => {
   const f = await fixture(t, { alice: rows(2) })
   await f.createSource()
-  const query = await f.execute('sources.query', { sourceId: 'metrics' })
+  const query = await f.execute('execute_sql', { sourceId: 'metrics' })
   const resultId = query.artifact.resultId
   const calls = [
-    ['sources.list', {}],
-    ['sources.describe', { sourceId: 'metrics' }],
-    ['sources.query', { sourceId: 'metrics' }],
-    ['sources.save_result', { resultId, name: 'Must not save', commandId: randomUUID() }],
-    ['sources.read_result', { resultId }],
+    ['list_connections', {}],
+    ['search_objects', { sourceId: 'metrics' }],
+    ['execute_sql', { sourceId: 'metrics' }],
+    ['save_query_result', { resultId, name: 'Must not save', commandId: randomUUID() }],
+    ['read_query_result', { resultId }],
   ]
   for (const [field, value] of [
     ['ownerId', f.bob.user.id], ['workspaceId', randomUUID()],
@@ -414,9 +414,9 @@ test('every tool rejects owner/workspace/DSN injection in arguments and envelope
   await f.home('?ownerId=' + f.bob.user.id, { status: 400 })
   await f.page(resultId, '?workspaceId=' + randomUUID(), { status: 400 })
   await f.call('GET', workspacePath + '/data-results/' + resultId + '/content?ownerId=' + f.bob.user.id, undefined, { status: 400 })
-  await f.execute('sources.read_result', { resultId, limit: '1' }, { status: 400 })
-  await f.execute('sources.read_result', { resultId, limit: 1001 }, { status: 400 })
-  await f.execute('sources.read_result', { resultId, offset: -1 }, { status: 400 })
+  await f.execute('read_query_result', { resultId, limit: '1' }, { status: 400 })
+  await f.execute('read_query_result', { resultId, limit: 1001 }, { status: 400 })
+  await f.execute('read_query_result', { resultId, offset: -1 }, { status: 400 })
   assert.deepEqual(await f.home(), { items: [], nextCursor: null })
   assert.deepEqual(await f.counts(), { artifacts: [{ state: 'pending', count: 1 }], queries: 1 })
   assert.equal(f.http.requests.length, 1)
@@ -426,24 +426,24 @@ test('disabled pending evidence cannot be saved, while an already saved result s
   const original = rows(4)
   const f = await fixture(t, { alice: original })
   await f.createSource()
-  const kept = await f.execute('sources.query', { sourceId: 'metrics' })
-  const saved = await f.execute('sources.save_result', { resultId: kept.artifact.resultId, name: 'Keep after deletion', commandId: randomUUID() })
-  const pending = await f.execute('sources.query', { sourceId: 'metrics' })
+  const kept = await f.execute('execute_sql', { sourceId: 'metrics' })
+  const saved = await f.execute('save_query_result', { resultId: kept.artifact.resultId, name: 'Keep after deletion', commandId: randomUUID() })
+  const pending = await f.execute('execute_sql', { sourceId: 'metrics' })
   const unsavedCommand = { resultId: pending.artifact.resultId, name: 'Disabled pending', commandId: randomUUID() }
   await f.call('PUT', '/api/v1/sources/metrics', { expectedVersion: 1, enabled: false })
-  await f.execute('sources.save_result', unsavedCommand, { status: 409 })
-  await f.execute('sources.read_result', { resultId: pending.artifact.resultId }, { status: 409 })
+  await f.execute('save_query_result', unsavedCommand, { status: 409 })
+  await f.execute('read_query_result', { resultId: pending.artifact.resultId }, { status: 409 })
   await f.page(pending.artifact.resultId, '', { status: 409 })
-  await f.execute('sources.describe', { sourceId: 'metrics' }, { status: 409 })
-  await f.execute('sources.query', { sourceId: 'metrics' }, { status: 409 })
-  assert.deepEqual((await f.execute('sources.read_result', { resultId: saved.resultId })).rows, original)
+  await f.execute('search_objects', { sourceId: 'metrics' }, { status: 409 })
+  await f.execute('execute_sql', { sourceId: 'metrics' }, { status: 409 })
+  assert.deepEqual((await f.execute('read_query_result', { resultId: saved.resultId })).rows, original)
   await f.call('DELETE', '/api/v1/sources/metrics', { expectedVersion: 2 }, { status: 204 })
-  await f.execute('sources.describe', { sourceId: 'metrics' }, { status: 404 })
-  await f.execute('sources.query', { sourceId: 'metrics' }, { status: 404 })
-  await f.execute('sources.save_result', unsavedCommand, { status: 404 })
-  assert.deepEqual(await f.execute('sources.list'), { items: [], nextCursor: null })
+  await f.execute('search_objects', { sourceId: 'metrics' }, { status: 404 })
+  await f.execute('execute_sql', { sourceId: 'metrics' }, { status: 404 })
+  await f.execute('save_query_result', unsavedCommand, { status: 404 })
+  assert.deepEqual(await f.execute('list_connections'), { items: [], nextCursor: null })
   assert.deepEqual((await f.home()).items, [saved])
-  assert.deepEqual((await f.execute('sources.read_result', { resultId: saved.resultId })).rows, original)
+  assert.deepEqual((await f.execute('read_query_result', { resultId: saved.resultId })).rows, original)
   assert.deepEqual((await f.page(saved.resultId)).rows, original)
   const { snapshot } = await download(f, saved.resultId)
   assert.deepEqual(snapshot.rows, original)
@@ -457,19 +457,19 @@ test('disabled pending evidence cannot be saved, while an already saved result s
 test('pending results are session-bound; saved results and the same save receipt remain available to another owner login', async t => {
   const f = await fixture(t, { alice: rows(3) })
   await f.createSource()
-  const pending = await f.execute('sources.query', { sourceId: 'metrics' })
-  const query = await f.execute('sources.query', { sourceId: 'metrics' })
+  const pending = await f.execute('execute_sql', { sourceId: 'metrics' })
+  const query = await f.execute('execute_sql', { sourceId: 'metrics' })
   const command = { resultId: query.artifact.resultId, name: 'Across owner sessions', commandId: randomUUID() }
-  const saved = await f.execute('sources.save_result', command)
+  const saved = await f.execute('save_query_result', command)
   const nextLogin = await f.sessions.login('alice', password)
-  await f.execute('sources.read_result', { resultId: pending.artifact.resultId }, { token: nextLogin.token, status: 404 })
-  await f.execute('sources.save_result', { resultId: pending.artifact.resultId, name: 'Another session', commandId: randomUUID() }, { token: nextLogin.token, status: 404 })
+  await f.execute('read_query_result', { resultId: pending.artifact.resultId }, { token: nextLogin.token, status: 404 })
+  await f.execute('save_query_result', { resultId: pending.artifact.resultId, name: 'Another session', commandId: randomUUID() }, { token: nextLogin.token, status: 404 })
   await f.page(pending.artifact.resultId, '', { token: nextLogin.token, status: 404 })
-  assert.deepEqual(await f.execute('sources.save_result', command, { token: nextLogin.token }), saved)
+  assert.deepEqual(await f.execute('save_query_result', command, { token: nextLogin.token }), saved)
   assert.deepEqual((await f.home('', { token: nextLogin.token })).items, [saved])
   await f.sessions.logout(f.alice.token)
-  await f.execute('sources.read_result', { resultId: saved.resultId }, { status: 401 })
-  assert.deepEqual((await f.execute('sources.read_result', { resultId: saved.resultId }, { token: nextLogin.token })).rows, rows(3))
+  await f.execute('read_query_result', { resultId: saved.resultId }, { status: 401 })
+  assert.deepEqual((await f.execute('read_query_result', { resultId: saved.resultId }, { token: nextLogin.token })).rows, rows(3))
   assert.deepEqual((await download(f, saved.resultId, nextLogin.token)).snapshot.rows, rows(3))
   assert.equal(f.http.requests.length, 2)
 })
@@ -479,7 +479,7 @@ test('HTTP source refuses responses beyond its fixed 1 MB budget without persist
   oversized[0].literal = 'x'.repeat(1_000_001)
   const f = await fixture(t, { alice: oversized })
   await f.createSource()
-  const denied = await f.execute('sources.query', { sourceId: 'metrics' }, { status: 502 })
+  const denied = await f.execute('execute_sql', { sourceId: 'metrics' }, { status: 502 })
   assert.equal(JSON.stringify(denied).includes('x'.repeat(100)), false)
   assert.deepEqual(await f.counts(), { artifacts: [], queries: 0 })
   assert.deepEqual(await f.home(), { items: [], nextCursor: null })

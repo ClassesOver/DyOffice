@@ -3,12 +3,12 @@ import assert from 'node:assert/strict'
 import {createAssistantClient} from '../../../../packages/browser-host/src/assistant.ts'
 
 const catalog = enabled => ({entries: [{id:'chat',label:'Chat',model:'synthetic'}],defaultId:'chat',...(enabled?{sourceCatalog:true}:{})})
-const call = input => ({id:'call1',name:'sources_list',input})
+const call = input => ({id:'call1',name:'list_connections',input})
 test('source catalog skill is absent by default and appears only after explicit server advertisement',async()=>{
  const off=await createAssistantClient({request:async()=>catalog(false),csrfToken:'c'.repeat(43)})
  assert.equal(off.extraSkills[0],undefined)
  const on=await createAssistantClient({request:async()=>catalog(true),csrfToken:'c'.repeat(43)})
- assert.deepEqual(on.extraSkills[0]?.tools.map(t=>t.name),['sources_list'])
+ assert.deepEqual(on.extraSkills[0]?.tools.map(t=>t.name),['list_connections'])
 })
 test('source listing sends only validated pagination through the bound request and projects metadata',async()=>{
  const requests=[]
@@ -21,7 +21,7 @@ test('source listing sends only validated pagination through the bound request a
  assert.deepEqual(JSON.parse(result.output),{items:[{sourceId:'demo',name:'Demo',kind:'postgres',sourceVersion:1}],nextCursor:null})
  assert.deepEqual(requests[1],{path:'/api/v1/ai/sources/list',method:'POST',body:{after:'previous'}})
  for(const input of [{ownerId:'other'},{after:5},{after:'../bad'},42,true,'text'])assert.equal((await client.extraSkills[0].executeTool(call(input))).isError,true)
- assert.equal((await client.extraSkills[0].executeTool({...call({}),name:'sources_query'})).isError,true)
+ assert.equal((await client.extraSkills[0].executeTool({...call({}),name:'execute_sql'})).isError,true)
  assert.equal(requests.length,2)
  client.dispose()
  assert.equal((await client.extraSkills[0].executeTool(call({}))).isError,true)
@@ -47,9 +47,9 @@ test('source capability is offered only when enabled and valid in model tool-res
    sent=JSON.parse(init.body).request
    return new Response('event: done\ndata: {}\n\n',{headers:{'content-type':'text/event-stream'}})
   }})
-  await new Promise(resolve=>client.transport.stream({system:'',messages:[{role:'user',text:'list sources'}],tools:[{name:'sources_list',description:'List',inputSchema:{type:'object'}},{name:'sources_query',description:'Query',inputSchema:{type:'object'}}]}, {onDelta(){},onToolCall(){},onError:assert.fail,onDone:resolve}))
-  assert.deepEqual(sent.tools.map(t=>t.name),enabled?['sources_list']:[])
-  const history={...sent,messages:[{role:'user',text:'list sources'},{role:'assistant',text:'',toolCalls:[call({})]},{role:'tool',results:[{id:'call1',name:'sources_list',output:'{"items":[],"nextCursor":null}'}]}]}
+  await new Promise(resolve=>client.transport.stream({system:'',messages:[{role:'user',text:'list sources'}],tools:[{name:'list_connections',description:'List',inputSchema:{type:'object'}},{name:'execute_sql',description:'Query',inputSchema:{type:'object'}}]}, {onDelta(){},onToolCall(){},onError:assert.fail,onDone:resolve}))
+  assert.deepEqual(sent.tools.map(t=>t.name),enabled?['list_connections']:[])
+  const history={...sent,messages:[{role:'user',text:'list sources'},{role:'assistant',text:'',toolCalls:[call({})]},{role:'tool',results:[{id:'call1',name:'list_connections',output:'{"items":[],"nextCursor":null}'}]}]}
   if(enabled)assert.doesNotThrow(()=>buildOpenAiChatRequest(history,{model:'test',maxOutputTokens:10},assistantReadTools(true)))
   else assert.throws(()=>buildOpenAiChatRequest(history,{model:'test',maxOutputTokens:10},assistantReadTools(false)))
  }

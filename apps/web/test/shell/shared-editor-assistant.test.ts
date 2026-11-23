@@ -28,6 +28,41 @@ test('Office messages stream through the shared assistant transport',async()=>{
  await act(async()=>f.host.querySelector<HTMLButtonElement>('[aria-label="发送"]')!.click())
  expect(f.stream).toHaveBeenCalledOnce();expect(f.host.textContent).toContain('流式回答')
 })
+
+test('shared chat shows the final reply without an execution card and preserves tool results',async()=>{
+ const f=fixture(),onLocalEditDone=vi.fn()
+ const output=JSON.stringify({items:[
+  {ok:true,result:{artifact:{resultId:'result-1'},totalRows:1,preview:[{amount:42,note:'x'.repeat(20000)}]}},
+  {ok:false,status:504,code:'SOURCE_TIMEOUT'},
+ ]})
+ const executeTool=vi.fn(async(call:{name:string})=>call.name==='execute_sql'
+  ?{output,summary:'查询数据'}:{output:'Saved PDF',summary:'修改原文',mutated:true})
+ const skill={id:'pdf-with-sources',systemPrompt:'Query data and edit PDF',tools:[
+  {name:'execute_sql',description:'Query',inputSchema:{type:'object'}},
+  {name:'edit_text',description:'Edit',inputSchema:{type:'object'}},
+ ],executeTool}
+ const assistant={...(f.assistant as object),extraSkills:[skill]} as never
+ f.stream.mockImplementation((_input,callbacks)=>{
+  const turn=f.stream.mock.calls.length
+  if(turn===1)callbacks.onToolCall({id:'query',name:'execute_sql',input:{sourceId:'rj',queries:['SELECT sum(amount) AS amount FROM sales','SELECT count(*) FROM sales']}})
+  else if(turn===2)callbacks.onToolCall({id:'edit',name:'edit_text',input:{text:'42'}})
+  else callbacks.onDelta('已保存修改，另一条查询超时')
+  callbacks.onDone();return {cancel(){}}
+ })
+ await act(async()=>f.root.render(h(SharedEditorAssistant,{assistant,lang:'zh',onLocalEditDone})))
+ const input=f.host.querySelector('textarea')!
+ await act(async()=>{Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value')!.set!.call(input,'查询并写入 PDF');input.dispatchEvent(new Event('input',{bubbles:true}))})
+ await act(async()=>f.host.querySelector<HTMLButtonElement>('[aria-label="发送"]')!.click())
+ expect(executeTool).toHaveBeenCalledTimes(2)
+ expect(onLocalEditDone).toHaveBeenCalledOnce()
+ expect(f.host.querySelector('.ai-execution-record')).toBeNull()
+ expect(f.host.textContent).toContain('已保存修改，另一条查询超时')
+ const modelResults=f.stream.mock.calls[1]![0].messages.flatMap((message:{results?:{output:string}[]})=>message.results??[])
+ expect(modelResults[0].output).toBe(output)
+ expect(f.stream).toHaveBeenCalledTimes(3)
+ expect(onLocalEditDone).toHaveBeenCalledOnce()
+})
+
 test('PDF keeps partial text visible and explains a model output limit',async()=>{
  const f=fixture()
  const onLocalEditDone=vi.fn()

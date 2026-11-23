@@ -22,7 +22,7 @@ export function parsedSourceQueryBatch(queries: unknown): string[] | undefined {
 }
 
 export function sourceQueryBatchSize(operation: unknown, args: unknown): number | undefined {
-  if (operation !== 'sources.query' || !args || typeof args !== 'object') return
+  if (operation !== 'execute_sql' || !args || typeof args !== 'object') return
   const call = args as Record<string, unknown>
   if (typeof call.sourceId !== 'string' || Object.keys(call).some(key => key !== 'sourceId' && key !== 'queries')) return
   return parsedSourceQueryBatch(call.queries)?.length

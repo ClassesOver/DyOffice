@@ -65,18 +65,18 @@ export function createWorkspaceSourceTools({ sources, results }: { sources: Sour
         if (typeof call.name !== 'string' || !SOURCE_AGENT_TOOLS.some(tool => tool.name === call.name)) throw sourceError()
         const name = call.name as SourceToolName
         const requireDocument = documentId === undefined ? undefined : () => results.requireDocument(token, documentId)
-        if (requireDocument && (name === 'sources.list' || name === 'sources.describe' || name === 'sources.query')) {
+        if (requireDocument && (name === 'list_connections' || name === 'search_objects' || name === 'execute_sql')) {
           await requireDocument()
         }
-        if (name === 'sources.list') {
+        if (name === 'list_connections') {
           const args = object(call.arguments, ['after'])
           return sources.listSavedMetadata(token, args)
         }
-        if (name === 'sources.describe') {
+        if (name === 'search_objects') {
           const { sourceId, ...filters } = object(call.arguments, ['sourceId','table','tables','schema','tablePrefix','columnOffset'])
           return sources.describe(token, sourceId, filters)
         }
-        if (name === 'sources.query') {
+        if (name === 'execute_sql') {
           const { sourceId, sql, queries } = object(call.arguments, ['sourceId','sql','queries'])
           const batch = queries !== undefined
           if (batch && sql !== undefined) throw sourceError()
@@ -102,7 +102,7 @@ export function createWorkspaceSourceTools({ sources, results }: { sources: Sour
           }
           return await runQueryBatch(queries, currentVersion, query, checkGrant, requireDocument)
         }
-        if (name === 'sources.save_result') {
+        if (name === 'save_query_result') {
           const args = object(call.arguments, ['resultId','name','commandId'])
           return results.save(token, { resultId: uuid(args.resultId), commandId: uuid(args.commandId), name: args.name }, documentId)
         }

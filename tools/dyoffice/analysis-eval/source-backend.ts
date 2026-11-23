@@ -70,7 +70,7 @@ export function createEvaluationSourceBackend(sourceDsn: string, documentId: str
       try {
         if (path === base + '/ai/sources/execute' && method === 'POST') return await tools.execute('eval', body, documentId) as T
         const page = method === 'GET' && path.startsWith(base + '/') && /^\/data-results\/([^?]+)\?offset=(\d+)&limit=(\d+)$/.exec(path.slice(base.length))
-        if (page) return await tools.execute('eval', { name: 'sources.read_result', arguments: { resultId: decodeURIComponent(page[1]!), offset: Number(page[2]), limit: Number(page[3]) } }, documentId) as T
+        if (page) return await tools.execute('eval', { name: 'read_query_result', arguments: { resultId: decodeURIComponent(page[1]!), offset: Number(page[2]), limit: Number(page[3]) } }, documentId) as T
         throw sourceError(404)
       } catch (cause) {
         const { statusCode = 502, code } = cause as { statusCode?: number; code?: string }

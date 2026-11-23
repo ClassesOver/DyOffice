@@ -7,6 +7,7 @@ import { readSourceEgressTargets } from '../admin/service.ts'
 import { tokenHash } from '../auth/sessions.ts'
 import { createCredentialVault } from './vault.ts'
 import { contentHash, executionFor, object, positiveVersion, secretHash, sourceConfig, sourceError, sourceId, sourceName, validateSourceSecret } from './config.ts'
+import { searchDbhubObjects } from './dbhub.ts'
 import { queryHttpSource } from './http.ts'
 import { querySqlSource, type SqlRows } from './sql.ts'
 import { createQuerySnapshot, fitSnapshotRows } from './provenance.ts'
@@ -48,6 +49,21 @@ export async function describeSourceMetadata(
   const requested = [...new Set(names.map(table => table.includes('.') ? table : `${database}.${table}`))]
   for (const table of requested) {
     if (!schemaAllowed(table) || (allowed ? !allowed.includes(table) : /^(?:pg_|information_schema\.|mysql\.|sys\.|performance_schema\.)/i.test(table))) throw withAssistantErrorCode(sourceError(403), 'SOURCE_SCOPE_DENIED')
+  }
+  // 单表使用原生搜索；宽表和批量查询沿用支持偏移量的 DBHub 目录查询。
+  if (!batch && requested.length === 1 && columnOffset === 0) {
+    const [schema, table] = requested[0]!.split('.')
+    const execution = { ...executionFor(row.kind, row.config), maxRows: 1000 }
+    const page = await searchDbhubObjects(policy, row.kind, secret, { object_type: 'column', schema, table, detail_level: 'summary', limit: 1000 }, execution)
+    if (!Array.isArray(page.results)) throw sourceError(502)
+    if (page.truncated === false && page.results.length) {
+      const rows = page.results.map(column => {
+        if (column?.schema !== schema || column.table !== table || typeof column.name !== 'string' || typeof column.type !== 'string' || typeof column.nullable !== 'boolean') throw sourceError(502)
+        return [column.name, column.type, column.nullable ? 'YES' : 'NO']
+      })
+      const snapshot = snapshotFor({ ...row, config: { ...row.config, units: {} } }, execution, { names: ['column_name','data_type','is_nullable'], types: ['string','string','string'], rows })
+      return { ...snapshot, nextOffset: snapshot.truncated ? snapshot.rows.length : null }
+    }
   }
   const literal = (value: string) => "'" + value.replaceAll("'", "''") + "'"
   const predicate = (table: string) => {

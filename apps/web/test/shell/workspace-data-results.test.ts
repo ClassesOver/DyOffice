@@ -47,7 +47,7 @@ test('workspace result list reads frozen pages and downloads authorized JSON wit
  await new Promise(resolve=>setTimeout(resolve,10));expect(revoke).toHaveBeenCalledWith('blob:authorized')
  vi.restoreAllMocks()
  expect(calls.some(call=>call.path.includes('/sources/'))).toBe(false)
- expect(calls.filter(call=>call.body).every(call=>(call.body as {name:string}).name==='sources.read_result')).toBe(true)
+ expect(calls.filter(call=>call.body).every(call=>(call.body as {name:string}).name==='read_query_result')).toBe(true)
 })
 
 test('new session key clears old preview and late download cannot start after unmount', async () => {

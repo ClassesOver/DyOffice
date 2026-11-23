@@ -32,7 +32,7 @@ describe('内外部 harness 统一数据客户端',()=>{
     let deliver!:(response:Response)=>void
     const transport=new Promise<Response>(resolve=>{deliver=resolve})
     const client=createHarnessDataClient({...options,fetchImpl:async()=>transport})
-    const request=client.execute('sources.query',{sourceId:'sales',queries:['select 1','select 2','select 3','select 4']},caller.signal)
+    const request=client.execute('execute_sql',{sourceId:'sales',queries:['select 1','select 2','select 3','select 4']},caller.signal)
     const outcome=succeeds?expect(request).resolves.toEqual({items:[]}):expect(request).rejects.toThrow()
     try{
       vi.advanceTimersByTime(elapsed)
@@ -55,11 +55,11 @@ describe('内外部 harness 统一数据客户端',()=>{
   it('用任务凭据调用同一接口，结果只接受有界元数据',async()=>{
     const fetchImpl=vi.fn<typeof fetch>(async()=>Response.json({resultId:'result_1',rowCount:1,truncated:false}))
     const client=createHarnessDataClient({...options,fetchImpl})
-    expect(await client.execute('sources.query',{sourceId:'sales',sql:'select amount from sales'})).toEqual({resultId:'result_1',rowCount:1,truncated:false})
+    expect(await client.execute('execute_sql',{sourceId:'sales',sql:'select amount from sales'})).toEqual({resultId:'result_1',rowCount:1,truncated:false})
     const [url,init]=fetchImpl.mock.calls[0]!
     expect(url).toBe(baseUrl+'/tasks/task_123/data/execute')
     expect(init).toMatchObject({method:'POST',redirect:'error',credentials:'omit',headers:{authorization:'Bearer task-scoped-secret'}})
-    expect(JSON.parse(String(init!.body))).toEqual({operation:'sources.query',arguments:{sourceId:'sales',sql:'select amount from sales'}})
+    expect(JSON.parse(String(init!.body))).toEqual({operation:'execute_sql',arguments:{sourceId:'sales',sql:'select amount from sales'}})
     await client.manifest('result_1')
     expect(JSON.parse(String(fetchImpl.mock.calls[1]![1]!.body))).toEqual({operation:'results.get_manifest',arguments:{resultId:'result_1'}})
   })
@@ -70,7 +70,7 @@ describe('内外部 harness 统一数据客户端',()=>{
       expect(()=>createHarnessDataClient({...options,baseUrl:url,fetchImpl})).toThrow()
     expect(()=>createHarnessDataClient({...options,taskId:'../other',fetchImpl})).toThrow()
     const client=createHarnessDataClient({...options,fetchImpl})
-    await expect(client.execute('sources.query',{sql:'中'.repeat(14_000)})).rejects.toThrow()
+    await expect(client.execute('execute_sql',{sql:'中'.repeat(14_000)})).rejects.toThrow()
     await expect(client.manifest('../result')).rejects.toThrow()
     expect(fetchImpl).not.toHaveBeenCalled()
     expect(()=>createHarnessDataClient({...options,baseUrl:'http://127.0.0.1:8080/api/'})).not.toThrow()
@@ -91,9 +91,9 @@ describe('内外部 harness 统一数据客户端',()=>{
     Object.defineProperty(redirected,'redirected',{value:true})
     Object.defineProperty(redirected,'url',{value:'https://other.example/leak'})
     const client=createHarnessDataClient({...options,fetchImpl:async()=>redirected})
-    await expect(client.execute('sources.list',{})).rejects.toThrow()
+    await expect(client.execute('list_connections',{})).rejects.toThrow()
     const fetchImpl=vi.fn<typeof fetch>(async()=>new Response(null,{status:307,headers:{location:'https://other.example/leak'}}))
-    await expect(createHarnessDataClient({...options,fetchImpl}).execute('sources.list',{})).rejects.toThrow()
+    await expect(createHarnessDataClient({...options,fetchImpl}).execute('list_connections',{})).rejects.toThrow()
     expect(fetchImpl).toHaveBeenCalledTimes(1)
     expect(fetchImpl.mock.calls[0]![1]!.redirect).toBe('error')
   })
@@ -101,7 +101,7 @@ describe('内外部 harness 统一数据客户端',()=>{
   it('执行响应不容许原始数据行、预览或超过256KiB的内容',async()=>{
     for(const body of [{artifact:{rows:[{secret:'raw'}]}},{preview:[{amount:1}]},{note:'x'.repeat(256*1024)}]) {
       const client=createHarnessDataClient({...options,fetchImpl:async()=>Response.json(body)})
-      await expect(client.execute('sources.query',{sourceId:'sales'})).rejects.toThrow()
+      await expect(client.execute('execute_sql',{sourceId:'sales'})).rejects.toThrow()
     }
   })
 

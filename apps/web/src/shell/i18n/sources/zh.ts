@@ -142,7 +142,7 @@ export const zh = {
   srcSelectedSchemasOnly: '仅指定目录',
   srcSelectedTablesOnly: '仅指定表',
   srcRestoreSavedSchemasAndTables: '恢复已保存的目录和表',
-  srcLoadSavedScopeHelp: '读取已保存连接中账号可见的目录和表。勾选后保存，助手才会使用新的范围。',
+  srcLoadSavedScopeHelp: '先读取目录，点击目录查看其中的表。勾选后保存，助手才会使用新的范围。',
   srcTestConnectionViewDetails: '测试连接并查看原因',
   srcSchemaDisplayLimit: '目录仅显示前 1000 项，其余可手动填写。',
   srcNoSchemasAvailable: '这个账号没有可选目录。',
