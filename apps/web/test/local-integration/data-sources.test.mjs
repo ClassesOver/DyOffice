@@ -404,13 +404,32 @@ test('saved table scope restricts queries and AI metadata, and an empty scope st
   f.cleanup.unshift(() => targets.admin.query(`DROP TABLE ${hidden}`))
   await f.approve(targets.approvals)
   await call(f, 'POST', '', {sourceId:'limited',name:'Limited',kind:'postgres',config:{allowedTables:[targets.probeTable]},secret:targets.readerDsn},undefined,201)
-  const describe = async (table, status=200) => {
-    const response=await f.app.inject({method:'POST',url:'/api/v1/workspace/source-tools/execute',headers:{origin:restrictedOrigin,cookie:'__Host-dyoffice-session='+f.alice.token,'x-csrf-token':createCsrfService({db:f.db,deploymentId:f.deploymentId,origin:restrictedOrigin,key:f.csrfKey}).sessionToken(f.alice.token)},payload:{name:'sources.describe',arguments:{sourceId:'limited',...(table===undefined?{}:{table})}}})
+  const tool = async (name, args, status=200) => {
+    const response=await f.app.inject({method:'POST',url:'/api/v1/workspace/source-tools/execute',headers:{origin:restrictedOrigin,cookie:'__Host-dyoffice-session='+f.alice.token,'x-csrf-token':createCsrfService({db:f.db,deploymentId:f.deploymentId,origin:restrictedOrigin,key:f.csrfKey}).sessionToken(f.alice.token)},payload:{name,arguments:args}})
     assert.equal(response.statusCode,status,response.body)
     return response.json()
   }
+  const describe = (table, status=200, filters={}) => tool('sources.describe',{sourceId:'limited',...(table===undefined?{}:{table}),...filters},status)
+  const sql = `SELECT i FROM ${targets.probeTable} ORDER BY i`
+  const batch = await tool('sources.query',{sourceId:'limited',queries:[sql,`SELECT i FROM ${hidden}`,`SELECT count(*) AS n FROM ${targets.probeTable}`]})
+  assert.deepEqual(batch.items.map(item=>item.ok),[true,false,true])
+  assert.equal(batch.items[1].code,'SQL_POLICY_REJECTED')
+  for(const {result} of batch.items.filter(item=>item.ok)){
+    const page=await tool('sources.read_result',{resultId:result.artifact.resultId})
+    assert.deepEqual(result.preview,page.rows.slice(0,3))
+    assert.equal(result.sha256,page.sha256)
+  }
+  await tool('sources.query',{sourceId:'limited',queries:Array(5).fill(sql)},400)
+  await tool('sources.query',{sourceId:'limited',sql,queries:[sql]},400)
+  assert.equal((await f.inspect("SELECT * FROM data_source_audit WHERE source_id='limited' AND action='source_queried'")).rowCount,2)
   assert.deepEqual((await describe()).metadata.rows.map(row=>row.table_name),[targets.probeTable])
+  assert.deepEqual((await describe(undefined,200,{schema:'public',tablePrefix:targets.probeTable.toUpperCase()})).metadata.rows.map(row=>row.table_name),[targets.probeTable])
+  assert.deepEqual((await describe(undefined,200,{tablePrefix:hidden})).metadata.rows,[])
+  await describe(targets.probeTable,400,{schema:'public'})
   assert.ok((await describe('public.'+targets.probeTable)).metadata.rows.some(row=>row.column_name==='i'))
+  await describe(undefined,403,{tables:[targets.probeTable,hidden]})
+  await describe(undefined,400,{tables:[]})
+  await describe(targets.probeTable,400,{tables:[targets.probeTable]})
   await describe(hidden,403)
   await call(f,'POST','/limited/query',{sql:`WITH x AS (SELECT * FROM ${targets.probeTable}) SELECT * FROM x`},undefined,200)
   for(const sql of [`SELECT * FROM ${hidden}`,'SELECT * FROM information_schema.tables',`SELECT * FROM ${targets.probeTable} UNION ALL SELECT * FROM ${hidden}`]) await call(f,'POST','/limited/query',{sql},undefined,400)
@@ -428,8 +447,13 @@ test('saved table scope restricts queries and AI metadata, and an empty scope st
     GRANT SELECT ON "${schema}".orders TO "${reader}"`)
   f.cleanup.unshift(()=>targets.admin.query(`DROP SCHEMA "${schema}" CASCADE`))
   assert.deepEqual((await describe()).metadata.rows.map(row=>row.table_name),['orders',targets.probeTable,hidden])
+  const batchColumns = (await describe(undefined,200,{tables:[targets.probeTable,schema+'.orders']})).metadata.rows
+  assert.ok(batchColumns.some(row=>row.table_schema===schema && row.table_name==='orders' && row.column_name==='total'))
+  assert.ok(batchColumns.some(row=>row.table_schema==='public' && row.table_name===targets.probeTable && row.column_name==='i'))
+  assert.ok(batchColumns.every(row=>row.table_name!==hidden))
   await call(f,'PUT','/limited',{expectedVersion:3,config:{allowedSchemas:[schema]}},undefined,200)
   assert.deepEqual((await describe()).metadata.rows,[{table_schema:schema,table_name:'orders',table_type:'BASE TABLE'}])
+  assert.deepEqual((await describe(undefined,200,{schema:'public',tablePrefix:targets.probeTable})).metadata.rows,[])
   const discover = async (body, status = 200, token = f.alice.token) =>
     (await call(f,'POST','/limited/discover',body,token,status)).json()
   const directories=await discover({expectedVersion:4})
