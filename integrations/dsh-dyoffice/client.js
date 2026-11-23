@@ -4,7 +4,7 @@ window.__ModuleLoader__.load({
     const {createElement: h, useEffect, useRef, useState, useSyncExternalStore} = require('react')
     const id = '@local/dsh-dyoffice'
     const copy = {
-      zh: {messagesLabel:'DSH 与 DyOffice 的消息',textMode:'正文',webPreview:'网页预览',syncLive:'消息同步中',syncStale:'同步中断',syncEnded:'对话已结束',destination:'消息接收方',savedPreview:'已保存的正文',sending:'正在提交 DyOffice 请求…', elapsed:'已用时 {time}', snapshot:'预览快照',previewRight:'在右侧打开预览', openWindow:'在新窗口打开 DyOffice', startWriting:'在新窗口打开文档后，DyOffice 助手会接手撰写。',snapshotUnavailable:'未能生成缩略图，点击预览文件',skillLabel:'DSH Skill',title: 'DyOffice', description: '查看已保存文档和任务进度', loading: '正在连接 DyOffice…',
+      zh: {messagesLabel:'DSH 与 DyOffice 的消息',textMode:'正文',webPreview:'Office 网页',syncLive:'消息同步中',syncStale:'同步中断',syncEnded:'对话已结束',destination:'消息接收方',savedPreview:'已保存的正文',sending:'正在提交 DyOffice 请求…', elapsed:'已用时 {time}', snapshot:'预览快照',previewRight:'在右侧打开预览', openWindow:'在新窗口打开 DyOffice',snapshotUnavailable:'未能生成缩略图，点击预览文件',skillLabel:'DSH Skill',title: 'DyOffice', description: '查看已保存文档和任务进度', loading: '正在连接 DyOffice…',
         unavailable: '暂时无法预览，请检查频道连接和后台读取权限。', configure: '请先配置 DyOffice 频道连接。',
         authorization: '连接 DyOffice', pairIntro: '连接频道后，即可在 DSH 创建和预览文档。',
         url: 'DyOffice 服务 URL', code: '授权 Token', codeHint: '粘贴频道分享生成的 Token',
@@ -15,7 +15,7 @@ window.__ModuleLoader__.load({
         planning: 'DyOffice 助手已接收交接，正在规划正文…', generating: 'DyOffice 正在撰写…', awaitingSave: 'DyOffice 正在保存正文…', writingFailed: '模型连接中断，请检查 DyOffice 的模型设置后重试。',
         noTool: '模型没有写入文档内容，请重试或切换模型。',
         outputLimit: '正文达到输出上限，请缩短要求或分段撰写。', timedOut: '模型响应超时，请重试。', emptyOutput: '模型没有返回正文，请重试或切换模型。',
-        noModel: '请在 DyOffice 配置撰写模型。', waitingWriter: '等待 DyOffice 助手打开…',
+        noModel: '请在 DyOffice 配置撰写模型。', waitingWriter: '正在连接文档并启动撰写…',
         reviewing: 'DSH 正在审阅已保存的正文…', reviewReady: 'DSH 审阅意见', reviewFailed: 'DSH 未能完成审阅。', reviewNoModel: '请在 DSH 配置审阅模型。',
         handedOff: '正文已保存，交给 DSH 审阅。', officeChat: '后续消息会发给 DyOffice 助手。', endOfficeChat: '结束 Office 对话',
         reopenForChat: '原文档窗口已断开。可结束 Office 对话或重新发起。', officeBusy: '请等 DyOffice 助手完成当前任务。', officeTextOnly: 'Office 对话支持最多 4,000 字的纯文本。', officeAnswering: 'DyOffice 助手正在处理这条消息…', officeAnswerFailed: 'DyOffice 未能回答，请重试。', you: '你',
@@ -29,13 +29,13 @@ window.__ModuleLoader__.load({
         invalidUrl: '请输入 HTTPS 地址，或本机回环 HTTP 地址。', connecting: '正在连接…', invalidCode: '授权 Token 无效或已过期，请在 DyOffice 重新生成。',
         pairFailed: '连接未完成，请检查 DyOffice 的频道状态后重试。',
         open: '打开 DyOffice 原文', revision: '已保存版本', taskRevision: '任务读取版本', text: '正文预览', details: '版本、频道任务和授权',
-        empty: '当前版本没有可预览的文字。', livePreview:'实时预览', previewLoading:'正在加载文档…',
+        empty: '当前版本没有可预览的文字。', livePreview:'Office 编辑器', previewLoading:'正在加载文档…',
         previewEmpty:'文档还没有正文', previewEmptyHint:'在 DyOffice 开始编辑，正文会同步到这里。',
         previewUnavailable:'此文档暂时无法预览', previewUnavailableHint:'可在新窗口打开原文。',
         truncated: '正文仅显示前 24,000 字符。', tasks: '任务进度', noTasks: '暂无任务。',
         queued: '排队中', running: '运行中', waiting_peer: '等待协作', cancel_requested: '正在取消',
         succeeded: '已完成', failed: '失败', cancelled: '已取消', unknown_outcome: '结果待核对'},
-      en: {messagesLabel:'Messages between DSH and DyOffice',textMode:'Text',webPreview:'Web preview',syncLive:'Sync active',syncStale:'Sync interrupted',syncEnded:'Conversation ended',destination:'Message recipient',savedPreview:'Saved text',sending:'Sending the request to DyOffice…', elapsed:'Elapsed {time}', snapshot:'Preview snapshot',previewRight:'Open preview on the right', openWindow:'Open DyOffice in a new window', startWriting:'Open the document in a new window to start writing with DyOffice.',snapshotUnavailable:'Thumbnail unavailable; open file preview',skillLabel:'DSH Skill',title: 'DyOffice', description: 'Follow the saved document and task progress', loading: 'Connecting to DyOffice…',
+      en: {messagesLabel:'Messages between DSH and DyOffice',textMode:'Text',webPreview:'Office app',syncLive:'Sync active',syncStale:'Sync interrupted',syncEnded:'Conversation ended',destination:'Message recipient',savedPreview:'Saved text',sending:'Sending the request to DyOffice…', elapsed:'Elapsed {time}', snapshot:'Preview snapshot',previewRight:'Open preview on the right', openWindow:'Open DyOffice in a new window',snapshotUnavailable:'Thumbnail unavailable; open file preview',skillLabel:'DSH Skill',title: 'DyOffice', description: 'Follow the saved document and task progress', loading: 'Connecting to DyOffice…',
         unavailable: 'Preview unavailable. Check the channel connection and saved document permissions.', configure: 'Configure a DyOffice channel connection first.',
         authorization: 'Connect DyOffice', pairIntro: 'Connect a channel to create and preview documents in DSH.',
         url: 'DyOffice service URL', code: 'Authorization token', codeHint: 'Paste the token from channel sharing',
@@ -46,7 +46,7 @@ window.__ModuleLoader__.load({
         planning: 'DyOffice Assistant accepted the handoff and is preparing a plan…', generating: 'DyOffice is writing…', awaitingSave: 'DyOffice is saving the draft…', writingFailed: 'The model connection failed. Check the model in DyOffice and try again.',
         noTool: 'The model did not write any document content. Try again or switch models.',
         outputLimit: 'The draft reached the output limit. Try a shorter request.', timedOut: 'The model took too long to respond. Try again.', emptyOutput: 'The model returned no document text. Try again or switch models.',
-        noModel: 'Configure the writing model in DyOffice.', waitingWriter: 'Waiting for DyOffice Assistant…',
+        noModel: 'Configure the writing model in DyOffice.', waitingWriter: 'Connecting the document and starting writing…',
         reviewing: 'DSH is reviewing the saved draft…', reviewReady: 'DSH review', reviewFailed: 'DSH could not complete the review.', reviewNoModel: 'Configure the review model in DSH.',
         handedOff: 'Draft saved and handed to DSH for review.', officeChat: 'Follow-up messages go to DyOffice Assistant.', endOfficeChat: 'End Office conversation',
         reopenForChat: 'The original editor window is disconnected. End the Office conversation or start again.', officeBusy: 'Wait for DyOffice Assistant to finish its current task.', officeTextOnly: 'Office chat accepts plain text up to 4,000 characters.', officeAnswering: 'DyOffice Assistant is working on this message…', officeAnswerFailed: 'DyOffice could not answer. Please try again.', you: 'You',
@@ -60,7 +60,7 @@ window.__ModuleLoader__.load({
         invalidUrl: 'Enter an HTTPS URL or a loopback HTTP URL.', connecting: 'Connecting…', invalidCode: 'The authorization token is invalid or expired. Generate a new one in DyOffice.',
         pairFailed: 'Connection failed. Check the DyOffice channel and try again.',
         open: 'Open document in DyOffice', revision: 'Saved revision', taskRevision: 'Task revision', text: 'Document text', details: 'Revision, channel tasks and authorization',
-        empty: 'This revision has no previewable text.', livePreview:'Live preview', previewLoading:'Loading document…',
+        empty: 'This revision has no previewable text.', livePreview:'Office editor', previewLoading:'Loading document…',
         previewEmpty:'There’s no text yet', previewEmptyHint:'Start editing in DyOffice to see the text here.',
         previewUnavailable:'Preview unavailable for this document', previewUnavailableHint:'Open the original in a new window.',
         truncated: 'Showing the first 24,000 characters.', tasks: 'Task progress', noTasks: 'No tasks yet.',
@@ -109,7 +109,7 @@ window.__ModuleLoader__.load({
     }
     const previewUrl = () => new URL('../dyoffice-preview', window.location.href)
     const allowsEmbed = (connection, origin) => connection?.origin === origin &&
-      connection?.dshEditorOrigin === window.location.origin
+      (connection?.dshEditorOrigins ?? [connection?.dshEditorOrigin]).includes(window.location.origin)
     const studioStyles = `
       .dsh-office-studio{--dsh-office-party-dsh:#8265d0;--dsh-office-party-office:#32827c;container-type:inline-size;box-sizing:border-box;min-width:0;border:1px solid var(--dsw-alias-border-l2,#ccd2da);border-radius:14px;overflow:hidden;background:var(--dsw-alias-bg-layer-1,Canvas);color:var(--dsw-alias-label-primary,CanvasText);font:inherit}
       .dsh-office-studio *{box-sizing:border-box}
@@ -120,14 +120,14 @@ window.__ModuleLoader__.load({
       .dsh-office-studio small{color:var(--dsw-alias-label-secondary,GrayText);font-size:12px}
       .dsh-office-studio button{cursor:pointer;font:inherit;font-size:12px;color:inherit;background:var(--dsw-alias-bg-layer-1,Canvas);border:1px solid var(--dsw-alias-border-l2,#ccd2da);border-radius:7px;padding:5px 9px;min-height:30px}
       .dsh-office-studio button:focus-visible,.dsh-office-paper:focus-visible{outline:2px solid var(--dsw-alias-brand-primary,Highlight);outline-offset:-2px}
-      .dsh-office-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(220px,.78fr)}
+      .dsh-office-grid{display:grid;grid-template-columns:minmax(0,1fr)}
       .dsh-office-grid:has(>.dsh-office-canvas:only-child){grid-template-columns:1fr}
       .dsh-office-canvas{min-width:0;background:color-mix(in srgb,var(--dsw-alias-label-secondary,GrayText) 8%,var(--dsw-alias-bg-layer-1,Canvas));padding:12px}
       .dsh-office-tools{display:flex;gap:8px;align-items:center;justify-content:space-between;margin-bottom:9px}
       .dsh-office-paper,.dsh-office-frame{min-width:0;border:1px solid var(--dsw-alias-border-l2,#ccd2da);border-radius:5px;background:var(--dsw-alias-bg-layer-1,Canvas)}
       .dsh-office-paper{min-height:145px;max-height:340px;overflow:auto;padding:16px 18px;line-height:1.7;font-size:14px;overflow-wrap:anywhere}.dsh-office-paper p,.dsh-office-paper h3{margin:0 0 .6em}
-      .dsh-office-frame{position:relative;aspect-ratio:16/10;overflow:hidden}.dsh-office-frame button{position:absolute;inset:0;width:100%;z-index:2;background:transparent;border:0;cursor:zoom-in}
-      .dsh-office-log{min-width:0;padding:12px 16px;border-inline-start:1px solid var(--dsw-alias-border-l2,#ccd2da)}
+      .dsh-office-frame{position:relative;height:65vh;min-height:480px;max-height:800px;overflow:hidden}
+      .dsh-office-log{min-width:0;padding:12px 16px;border-top:1px solid var(--dsw-alias-border-l2,#ccd2da)}
       .dsh-office-message{position:relative;border-inline-start:1px solid var(--dsw-alias-border-l2,#ccd2da);margin-inline-start:4px;padding:0 0 12px 13px;font-size:13px;line-height:1.55;overflow-wrap:anywhere}
       .dsh-office-message:last-child{padding-bottom:0;border-color:transparent}
       .dsh-office-message:before{content:'';position:absolute;inset-inline-start:-4px;top:6px;width:7px;height:7px;border-radius:50%;background:var(--dsw-alias-label-secondary,GrayText)}
@@ -259,8 +259,8 @@ window.__ModuleLoader__.load({
         window.addEventListener('scroll',place,true)
         return ()=>{observer.disconnect();resize.disconnect();window.removeEventListener('scroll',place,true);el.style.visibility='hidden'}
       },[anchor])
-      return h('div',{ref:el=>{host.current=el;if(el)el.inert=true},style:{position:'fixed',overflow:'hidden',visibility:'hidden',
-        borderRadius:'0 0 11px 11px',pointerEvents:'none',zIndex:1}},children)
+      return h('div',{ref:host,style:{position:'fixed',overflow:'hidden',visibility:'hidden',
+        borderRadius:'0 0 11px 11px',pointerEvents:'auto',zIndex:1}},children)
     }
     function Preview({useTabInfo, t, createdDocuments, creationStatus, editorWindows, collaboration, updateCollaboration, connectionStatus, syncOnly=false, remote=false, anchor}) {
       const {tab} = useTabInfo()
@@ -404,8 +404,8 @@ window.__ModuleLoader__.load({
             }
             const payload = await result.json()
             if (controller.signal.aborted) return
-            if (connectionStatus.read()?.origin !== payload.origin || connectionStatus.read()?.dshEditorOrigin !== payload.dshEditorOrigin) {
-              connectionStatus.set({origin:payload.origin,dshEditorOrigin:payload.dshEditorOrigin})
+            if (connectionStatus.read()?.origin !== payload.origin || connectionStatus.read()?.dshEditorOrigin !== payload.dshEditorOrigin || JSON.stringify(connectionStatus.read()?.dshEditorOrigins) !== JSON.stringify(payload.dshEditorOrigins)) {
+              connectionStatus.set({origin:payload.origin,dshEditorOrigin:payload.dshEditorOrigin,dshEditorOrigins:payload.dshEditorOrigins})
             }
             const {preview} = payload
             current = preview && current && preview.fileId === current.fileId && preview.revision === current.revision ? {...current, ...preview} : preview
@@ -443,8 +443,8 @@ window.__ModuleLoader__.load({
         if(!embedded)return null
         const url=new URL(created.href)
         url.searchParams.set('dshEmbed','1')
-        return h(RemoteViewport,{anchor},h('iframe',{ref:frame,title:created.name,src:url.href,tabIndex:-1,
-          style:{width:'200%',height:'200%',border:0,transform:'scale(.5)',transformOrigin:'top left'}}))
+        return h(RemoteViewport,{anchor},h('iframe',{ref:frame,title:created.name,src:url.href,
+          style:{width:'100%',height:'100%',border:0}}))
       }
       if(syncOnly)return null
       const progress = creation && h('p', {role: creation.error ? 'alert' : 'status',
@@ -650,6 +650,12 @@ window.__ModuleLoader__.load({
           const fileId=receipt?.fileId
           const jobs=useSyncExternalStore(runners.subscribe,runners.read)
           const job=jobs?.get(fileId)
+          useEffect(()=>{
+            if(!receipt||job||!entry?.topic||!entry.inlineChecked||entry.state||entry.ended||
+                !entry.snapshot||entry.snapshot.text?.trim())return
+            officeSessions.set(sessionId,fileId)
+            startRunner(receipt,true)
+          },[fileId,job,entry?.topic,entry?.inlineChecked,entry?.state,entry?.ended,entry?.snapshot,sessionId])
           const editor=useSyncExternalStore(job?.editor.subscribe??noSubscribe,job?.editor.read??emptyValue)
           useEffect(()=>{
             if(!fileId||entry?.snapshot)return
@@ -714,7 +720,7 @@ window.__ModuleLoader__.load({
           const messages=[
             entry?.topic&&row('DSH',t('requestDraft')+' '+entry.topic,'request'),
             stage&&row('DyOffice',active?inProgress(stage):h('span',{role:'status'},t(entry.disconnected&&entry.state!=='saved'?'reopenForChat':stage)),'writing'),
-            receipt&&entry?.topic&&!stage&&row('DyOffice',entry.disconnected?h('span',{role:'status'},t('reopenForChat')):opening||remote&&!entry?.checked?inProgress('waitingWriter'):t('startWriting'),'waiting'),
+            receipt&&entry?.topic&&!stage&&row('DyOffice',entry.disconnected?h('span',{role:'status'},t('reopenForChat')):inProgress('waitingWriter'),'waiting'),
             receipt&&entry?.checked&&!entry.topic&&!stage&&row('DyOffice',t('created'),'created'),
             entry?.reply&&row('DyOffice',entry.reply,'office-reply'),
             review&&row('DSH',review.state==='reviewing'?inProgress('reviewing'):
@@ -736,8 +742,7 @@ window.__ModuleLoader__.load({
                 h('div',{className:'dsh-office-tools'},
                   h('small',null,t(liveFrame?'livePreview':entry?.draft?'draftText':'savedPreview')),
                   canPreview&&h('button',{type:'button',onClick:()=>setShowText(value=>!value)},t(liveFrame?'textMode':'webPreview'))),
-                liveFrame?h('div',{ref:previewAnchor,className:'dsh-office-frame'},
-                  h('button',{type:'button','aria-label':t('openWindow'),onClick:openWindow}))
+                liveFrame?h('div',{ref:previewAnchor,className:'dsh-office-frame'})
                   :h(DocumentExcerpt,{entry,pending:!entry?.inlineChecked&&!entry?.checked,t})),
               messages.length>0&&h('section',{className:'dsh-office-log','aria-label':t('messagesLabel')},messages)),
             (syncLabel||canChat||entry?.skillName)&&h('footer',{className:'dsh-office-footer'},

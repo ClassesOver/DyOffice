@@ -64,3 +64,29 @@ test('a delivered thumbnail opens in the right preview only on click',async()=>{
   button.props.onClick()
   assert.deepEqual(opened,['two.pdf'])
 })
+
+for(const text of ['', 'Existing saved document'])test(`restored writing ${text?'preserves saved content':'starts automatically without a window'}`,async()=>{
+  const slots=new Map(),effects=[]
+  let overlay
+  const fileId='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
+  const react={createElement:(component,props,...children)=>({component,props,children}),useRef:()=>({current:null}),useState:x=>[x,()=>{}],useEffect:f=>effects.push(f),useSyncExternalStore:(_subscribe,read)=>read()}
+  runInNewContext(await readFile(new URL('./client.js',import.meta.url),'utf8'),{URL,AbortController,crypto:globalThis.crypto,
+    fetch:async()=>({ok:true,json:async()=>({preview:{fileId,revision:'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',text},writing:{topic:'Write a report'}})}),
+    window:{location:{href:'http://localhost:3080/',origin:'http://localhost:3080'},open(){assert.fail('must not open a popup')},__ModuleLoader__:{load({factory}){
+      factory(()=>react).apply({locale:{bind(){},register(){}},effect:f=>f(),on(){},sidebarRightTabs:{register(){}},
+        uiConversation:{views:{register(){}},events:{register(){}}},
+        slots:{inject:(_,f)=>f(),register:(spec,component)=>{slots.set(spec.name,component)}}})
+    }}}})
+  const props={node:{outcome:{kind:'success',text:'已创建 report.docx\nhttp://localhost:3081/#/file/'+fileId}},sessionId:'session',t:k=>k}
+  const render=slots.get('conversation.chat.commandview')
+  render(props)
+  for(const effect of effects.splice(0))effect()
+  await new Promise(resolve=>setImmediate(resolve))
+  render(props)
+  for(const effect of effects.splice(0))effect()
+  overlay=slots.get('shell.overlay')({t:k=>k})
+  assert.equal(overlay.length,text?0:1)
+  if(text)return
+  assert.equal(overlay[0].props.remote,true)
+  assert.equal(overlay[0].props.createdDocuments.read().fileId,fileId)
+})

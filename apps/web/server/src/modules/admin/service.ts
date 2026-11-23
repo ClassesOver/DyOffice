@@ -5,7 +5,7 @@ import { authError, tokenHash } from '../auth/sessions.ts'
 import { createSecretBox, type SecretKeyring, type SecretEnvelope } from './secrets.ts'
 import { findProvider, getProviderCatalog } from './catalog.ts'
 import { validateSourceEgressTargets } from '../../security/egress.ts'
-import { GLOBAL_SETTING_KINDS } from '../../../../../../packages/web-contracts/src/settings.ts'
+import { DEFAULT_OFFICE_EMBED_ORIGINS, validateOfficeEmbedOrigins, GLOBAL_SETTING_KINDS } from '../../../../../../packages/web-contracts/src/settings.ts'
 import type { AdminGlobalConfig, AdminGlobalEntry, CheckGlobalConfigRequest, GlobalConfigCheck, GlobalConfigPatch, GlobalDefaults, GlobalEntryUpsert, GlobalSettingKind, PublicGlobalEntry, PublicGlobalSettings } from '../../../../../../packages/web-contracts/src/settings.ts'
 
 const idPattern = /^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,99}$/
@@ -36,7 +36,7 @@ function endpoint(value: unknown, enabled: boolean): string {
   } catch { throw invalid() }
 }
 export function validateGlobalConfigPatch(input: unknown): GlobalConfigPatch {
-  const patch = object(input, ['upserts','removes','defaults','sourceEgressTargets'])
+  const patch = object(input, ['upserts','removes','defaults','sourceEgressTargets','officeEmbedOrigins'])
   const result: GlobalConfigPatch = {}, seen = new Set<string>()
   if (patch.upserts !== undefined) {
     if (!Array.isArray(patch.upserts) || patch.upserts.length > 100) throw invalid()
@@ -67,7 +67,10 @@ export function validateGlobalConfigPatch(input: unknown): GlobalConfigPatch {
   if (patch.sourceEgressTargets !== undefined) {
     try { result.sourceEgressTargets = validateSourceEgressTargets(patch.sourceEgressTargets) } catch { throw invalid() }
   }
-  if (!(result.upserts?.length || result.removes?.length || Object.keys(result.defaults ?? {}).length || result.sourceEgressTargets)) throw invalid()
+  if (patch.officeEmbedOrigins !== undefined) {
+    try { result.officeEmbedOrigins = validateOfficeEmbedOrigins(patch.officeEmbedOrigins) } catch { throw invalid() }
+  }
+  if (!(result.upserts?.length || result.removes?.length || Object.keys(result.defaults ?? {}).length || result.sourceEgressTargets || result.officeEmbedOrigins)) throw invalid()
   return result
 }
 interface EntryRow { id: string; kind: GlobalSettingKind; provider_id: string; label: string; model: string; base_url: string; enabled: boolean; has_key: boolean }
@@ -101,7 +104,7 @@ export function createGlobalConfigService({ transactions, keyring }: { transacti
   }
   async function adminResult(connection: PoolClient, deploymentId: string): Promise<AdminGlobalConfig> {
     const saved = await state(connection, deploymentId, true)
-    return { revision: saved.revision, entries: saved.rows.map(adminEntry), defaults: saved.defaults, providerCatalog: getProviderCatalog(), keyStorageAvailable: Boolean(box), sourceEgressTargets: await readSourceEgressTargets(connection, deploymentId) }
+    return { revision: saved.revision, entries: saved.rows.map(adminEntry), defaults: saved.defaults, providerCatalog: getProviderCatalog(), keyStorageAvailable: Boolean(box), officeEmbedOrigins: validateOfficeEmbedOrigins((await connection.query('SELECT office_embed_origins FROM office_embed_settings WHERE deployment_id=$1', [deploymentId])).rows[0]?.office_embed_origins ?? [...DEFAULT_OFFICE_EMBED_ORIGINS]), sourceEgressTargets: await readSourceEgressTargets(connection, deploymentId) }
   }
   async function lock(connection: PoolClient, deploymentId: string, expectedRevision: number) {
     await connection.query('INSERT INTO global_configs(deployment_id) VALUES($1) ON CONFLICT DO NOTHING', [deploymentId])
@@ -159,6 +162,7 @@ export function createGlobalConfigService({ transactions, keyring }: { transacti
         }
         await connection.query('UPDATE global_configs SET revision=revision+1,defaults=$2::jsonb,updated_at=clock_timestamp() WHERE deployment_id=$1', [deployment,JSON.stringify(defaults)])
         if (patch.sourceEgressTargets) await connection.query('UPDATE global_configs SET source_egress_targets=$2::jsonb WHERE deployment_id=$1', [deployment,JSON.stringify(patch.sourceEgressTargets)])
+        if (patch.officeEmbedOrigins) await connection.query('INSERT INTO office_embed_settings(deployment_id,office_embed_origins) VALUES($1,$2::jsonb) ON CONFLICT(deployment_id) DO UPDATE SET office_embed_origins=EXCLUDED.office_embed_origins', [deployment,JSON.stringify(patch.officeEmbedOrigins)])
         await audit(connection, principal, 'config_saved', expectedRevision+1, [...(patch.upserts ?? []).map(entry => entry.id),...(patch.removes ?? [])].sort())
         return adminResult(connection, deployment)
       }, true)

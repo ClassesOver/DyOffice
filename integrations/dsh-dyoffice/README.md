@@ -1,10 +1,10 @@
-# DSH DyOffice 预览
+# DSH DyOffice
 
-执行 `/dyoffice word 创建一个活动策划` 后，如果已启用网页嵌入，任务消息会直接显示 DyOffice 文档页面，以及 DSH 交办、DyOffice 交付和后续审阅的记录。点击「正文」查看文字摘录，点击「网页预览」切回文档页面。点击「在新窗口打开 DyOffice」可编辑同一份文件。底部显示同步状态和消息接收方。XLSX、PPTX、PDF 使用相同入口。
+执行 `/dyoffice word 创建一个活动策划` 后，如果已启用网页嵌入，任务消息会直接显示 DyOffice 文档页面，以及 DSH 交办、DyOffice 交付和后续审阅的记录。文档页面可直接点击和编辑。点击「正文」查看文字摘录，点击「Office 网页」切回编辑器；也可点击「在新窗口打开 DyOffice」，在独立窗口中编辑同一份文件。底部显示同步状态和消息接收方。XLSX、PPTX、PDF 使用相同入口。
 
 ![DSH 任务消息中的 Word 正文与双方消息](../../docs/dyoffice/evidence/dsh-plugin-preview.jpg)
 
-要在聊天中运行应用，需在 DyOffice 服务端设置 `DYOFFICE_DSH_EMBED_ORIGIN=http://localhost:3080`，从这个地址访问 DSH，并在同一浏览器登录 DyOffice。本机示例：DSH 用 localhost:3080，Office 用 localhost:3081。未允许嵌入时，点击新窗口入口启动 Office。历史消息保留正文摘录和打开原文入口；只有当前任务在聊天里运行原生应用。
+在聊天中运行应用的来源由「全局配置 → 跨域嵌入」管理，默认允许 localhost:3080 和 127.0.0.1:3080；需在同一浏览器登录 DyOffice。未允许嵌入时，点击新窗口入口启动 Office。历史消息保留正文摘录和打开原文入口；只有当前任务在聊天里运行原生应用。
 
 1. 使用本仓库版本启动 DyOffice，依照[频道与后台任务说明](../../docs/dyoffice/assistant-background.md)开启后台执行。
 2. 安装插件并配置授权 Token 文件路径；DyOffice 地址可配置为默认值，也可在授权提示中填写。已有本地源码时，可把下面的 `dsh` 替换为 `node ~/pros/dsh/apps/cli/lib/bin.js`。
@@ -48,3 +48,5 @@ DSH 将需求交给当前文档的 DyOffice 助手。工具由 Office 助手调�
   config:
     memberFile: /absolute/path/to/dyoffice-token.json
 ```
+
+Office 跨域嵌入来源可在「全局配置 → 跨域嵌入」设置，每行一个 HTTP(S) origin，保存后生效。默认允许 `http://localhost:3080` 和 `http://127.0.0.1:3080`；清空列表关闭跨域嵌入。仅显式带 `dshEmbed=1` 的 Office 页面使用此设置，登录和文档权限保持有效。
