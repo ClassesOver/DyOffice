@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { createApplication } from '../server/application.mjs'
+import { createApplication } from './helpers/prototype-http.mjs'
 
 test('versioned file reads retain personal-token boundaries and legacy download compatibility', async t => {
   const directory = await mkdtemp(join(tmpdir(), 'dyoffice-v1-read-'))

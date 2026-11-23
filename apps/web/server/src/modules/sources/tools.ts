@@ -7,7 +7,7 @@ import { object, sourceConnectionFailure, sourceError } from './config.ts'
 import { isAssistantErrorCode, type AssistantErrorCode } from '../../../../../../packages/web-contracts/src/assistant-errors.ts'
 
 type Sources = Pick<SourceService, 'listSavedMetadata' | 'describe' | 'detail' | 'querySource'>
-type Results = Pick<ReturnType<typeof createWorkspaceSourceResults>, 'capture' | 'save' | 'read'>
+type Results = Pick<ReturnType<typeof createWorkspaceSourceResults>, 'capture' | 'save' | 'read' | 'requireDocument'>
 const uuid = (value: unknown): string => { if (typeof value !== 'string' || !/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(value)) throw sourceError(); return value.toLowerCase() }
 const safeError = (error: unknown) => {
   const raw = (error as { statusCode?: number }).statusCode
@@ -21,13 +21,16 @@ const safeError = (error: unknown) => {
 
 export type QueryBatchResult<T> = { items: ({ ok: true; result: T } | { ok: false; status: number; code?: AssistantErrorCode })[] }
 
-async function runQueryBatch<T>(queries: unknown, currentVersion: () => Promise<number>, execute: (sql: string, version: number) => Promise<T>, checkGrant?: () => Promise<void>): Promise<QueryBatchResult<T>> {
+async function runQueryBatch<T>(queries: unknown, currentVersion: () => Promise<number>, execute: (sql: string, version: number) => Promise<T>,
+  checkGrant?: () => Promise<void>, requireDocument?: () => Promise<void>): Promise<QueryBatchResult<T>> {
   const statements = parsedSourceQueryBatch(queries)
   if (!statements) throw sourceError()
   const version = await currentVersion()
   const items = []
-  for (const sql of statements) {
+  for (const [index, sql] of statements.entries()) {
     if (checkGrant) await checkGrant()
+    // Tool admission authorized the first statement's document. Each later statement needs a live file as well.
+    if (index > 0 && requireDocument) await requireDocument()
     try {
       items.push({ ok: true as const, result: await execute(sql, version) })
     } catch (cause) {
@@ -43,6 +46,7 @@ async function runQueryBatch<T>(queries: unknown, currentVersion: () => Promise<
     }
   }
   if (await currentVersion() !== version) throw sourceError(409)
+  if (requireDocument) await requireDocument()
   return { items }
 }
 
@@ -55,11 +59,15 @@ export const truncatedNotice = (rows: number) => `TRUNCATED: only the first ${ro
 export function createWorkspaceSourceTools({ sources, results }: { sources: Sources; results: Results }) {
   return {
     definitions: SOURCE_AGENT_TOOLS,
-    async execute(token: string, input: unknown, checkGrant?: () => Promise<void>): Promise<unknown> {
+    async execute(token: string, input: unknown, documentId?: string, checkGrant?: () => Promise<void>): Promise<unknown> {
       try {
         const call = object(input, ['name','arguments'])
         if (typeof call.name !== 'string' || !SOURCE_AGENT_TOOLS.some(tool => tool.name === call.name)) throw sourceError()
         const name = call.name as SourceToolName
+        const requireDocument = documentId === undefined ? undefined : () => results.requireDocument(token, documentId)
+        if (requireDocument && (name === 'sources.list' || name === 'sources.describe' || name === 'sources.query')) {
+          await requireDocument()
+        }
         if (name === 'sources.list') {
           const args = object(call.arguments, ['after'])
           return sources.listSavedMetadata(token, args)
@@ -76,7 +84,7 @@ export function createWorkspaceSourceTools({ sources, results }: { sources: Sour
             const snapshot = await sources.querySource(token, sourceId, sql === undefined ? {} : { sql }, expectedVersion)
             if (expectedVersion !== undefined && (snapshot.sourceId !== sourceId || snapshot.sourceVersion !== expectedVersion)) throw sourceError(409)
             const queryHash = createHash('sha256').update(JSON.stringify({ sourceId: snapshot.sourceId, sourceVersion: snapshot.sourceVersion, sql: sql ?? null })).digest('hex')
-            const artifact = await results.capture(token, snapshot, queryHash)
+            const artifact = await results.capture(token, snapshot, queryHash, documentId)
             const preview = snapshot.rows.slice(0, batch ? 3 : 100)
             if (batch && Buffer.byteLength(JSON.stringify(preview)) > 2048) preview.length = 0
             return { artifact, schema: snapshot.schema, timezone: snapshot.timezone, preview,
@@ -92,14 +100,14 @@ export function createWorkspaceSourceTools({ sources, results }: { sources: Sour
             if (!source.hasCredential) throw sourceError(503)
             return source.version
           }
-          return await runQueryBatch(queries, currentVersion, query, checkGrant)
+          return await runQueryBatch(queries, currentVersion, query, checkGrant, requireDocument)
         }
         if (name === 'sources.save_result') {
           const args = object(call.arguments, ['resultId','name','commandId'])
-          return results.save(token, { resultId: uuid(args.resultId), commandId: uuid(args.commandId), name: args.name })
+          return results.save(token, { resultId: uuid(args.resultId), commandId: uuid(args.commandId), name: args.name }, documentId)
         }
         const args = object(call.arguments, ['resultId','offset','limit'])
-        return results.read(token, { resultId: uuid(args.resultId), ...(args.offset === undefined ? {} : { offset: args.offset }), ...(args.limit === undefined ? {} : { limit: args.limit }) })
+        return results.read(token, { resultId: uuid(args.resultId), ...(args.offset === undefined ? {} : { offset: args.offset }), ...(args.limit === undefined ? {} : { limit: args.limit }) }, documentId)
       } catch (error) { throw safeError(error) }
     },
   }

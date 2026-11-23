@@ -303,7 +303,7 @@ print(json.dumps(dict(series=line.get_ydata().tolist(), total=sum(line.get_ydata
  let queries=0
  const queryResults=[]
  page.on('response',async res=>{
-  if(!res.url().endsWith('/api/v1/ai/sources/execute'))return
+  if(!res.url().endsWith('/api/v1/files/'+file.fileId+'/ai/sources/execute'))return
   if(!res.ok()){
    const call=res.request().postDataJSON()
    t.diagnostic('Office source response '+res.status()+' for '+call?.name)
@@ -317,7 +317,7 @@ print(json.dumps(dict(series=line.get_ydata().tolist(), total=sum(line.get_ydata
    }catch(error){t.diagnostic(String(error))}
   }
  })
- page.on('request',req=>{if(req.url().endsWith('/api/v1/ai/sources/execute')&&req.postDataJSON()?.name==='sources.query')queries++})
+ page.on('request',req=>{if(req.url().endsWith('/api/v1/files/'+file.fileId+'/ai/sources/execute')&&req.postDataJSON()?.name==='sources.query')queries++})
  async function turn(prompt,answer){
   await composer.fill(prompt);await composer.press('Enter')
   const message=page.locator('.ai-chat .ai-msg-assistant').last()
@@ -348,7 +348,7 @@ print(json.dumps(dict(series=line.get_ydata().tolist(), total=sum(line.get_ydata
   await expect(table.getByRole('row').filter({hasText:'2026-02'})).toContainText('40')
  }
  if(!liveConfig){
-  const savedSnapshot=await app.inject({method:'POST',url:'/api/v1/workspace/source-tools/execute',
+  const savedSnapshot=await app.inject({method:'POST',url:'/api/v1/files/'+file.fileId+'/source-tools/execute',
    headers:{origin,cookie:'__Host-dyoffice-session='+f.adminSigned.token,'x-csrf-token':csrf.sessionToken(f.adminSigned.token)},
    payload:{name:'sources.save_result',arguments:{resultId:first.artifact.resultId,name:'Monthly sales snapshot',commandId:randomUUID()}},
   })
@@ -441,6 +441,14 @@ print(json.dumps(dict(series=line.get_ydata().tolist(), total=sum(line.get_ydata
   assert.ok(!names.includes('sources_save_result'),format+' must not offer saving a source snapshot')
   if(format==='pdf')continue
 
+  // This editor must obtain its own snapshot even when its query matches another file's.
+  const headers={origin,cookie:'__Host-dyoffice-session='+token,'x-csrf-token':csrf.sessionToken(token)}
+  const denied=await app.inject({url:'/api/v1/files/'+entry.fileId+'/data-results/'+first.artifact.resultId,headers})
+  assert.equal(denied.statusCode,404)
+  const own=await app.inject({method:'POST',url:'/api/v1/files/'+entry.fileId+'/ai/sources/execute',headers,
+   payload:{name:'sources.query',arguments:{sourceId:'sales-db',sql:sql.replace('GROUP BY', "AND paid_at <> DATE '2026-01-14' GROUP BY")}}})
+  assert.equal(own.statusCode,200,own.body)
+  first=own.json()
   if(format==='xlsx'){
    await page.evaluate(()=>window.__genofficeDebug.univerAPI.getActiveWorkbook().getActiveSheet().getRange('J10').activate())
    await expect.poll(()=>page.evaluate(()=>{

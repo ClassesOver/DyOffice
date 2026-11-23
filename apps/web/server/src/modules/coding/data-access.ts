@@ -33,7 +33,7 @@ const identity=(principal:SessionPrincipal)=>{
   return JSON.stringify([principal.deploymentId,principal.userId,principal.sessionId,principal.authVersion])
 }
 interface Entry {
-  taskId:string;credentialHash:Buffer;token:string;agentId:string;claimId:string;expiresAt:number
+  documentId?:string;taskId:string;credentialHash:Buffer;token:string;agentId:string;claimId:string;expiresAt:number
   sourceIds:Set<string>;resultIds:Set<string>;signal:AbortSignal;owner?:string;identity?:string
   timer:ReturnType<typeof setTimeout>;abort:()=>void;busy:boolean
   authorize?:()=>Promise<void>
@@ -131,8 +131,8 @@ export function createHarnessDataAccess(options:{
     return id
   }
   return {
-    async issue(input:{token:string;agentId:string;inputs:HarnessDataInputs;signal:AbortSignal;ttlMs?:number;authorize?:()=>Promise<void>;leaseUntil?:()=>Promise<number>}):Promise<HarnessDataGrant> {
-      const value={...object(input,['token','agentId','inputs','signal','ttlMs','authorize','leaseUntil'])},inputs=scope(value.inputs)
+    async issue(input:{documentId?:string;token:string;agentId:string;inputs:HarnessDataInputs;signal:AbortSignal;ttlMs?:number;authorize?:()=>Promise<void>;leaseUntil?:()=>Promise<number>}):Promise<HarnessDataGrant> {
+      const value={...object(input,['token','documentId','agentId','inputs','signal','ttlMs','authorize','leaseUntil'])},inputs=scope(value.inputs)
       if(value.leaseUntil!==undefined&&typeof value.leaseUntil!=='function')throw unavailable(400)
       if(value.authorize!==undefined&&typeof value.authorize!=='function')throw unavailable(400)
       if(typeof value.token!=='string'||!value.token||typeof value.agentId!=='string'||!/^[A-Za-z0-9_-]{1,100}$/.test(value.agentId)||!(value.signal instanceof AbortSignal))throw unavailable(400)
@@ -148,7 +148,7 @@ export function createHarnessDataAccess(options:{
       if(entries.size>=16)throw unavailable(429)
       const taskId=randomUUID(),credential=randomBytes(32).toString('base64url'),claimId=randomUUID(),expiresAt=Date.now()+(ttlMs as number)
       const abort=()=>revoke(taskId),timer=setTimeout(abort,ttlMs as number);timer.unref()
-      const entry:Entry={taskId,credentialHash:hash(credential),token:value.token,agentId:value.agentId,claimId,expiresAt:input.leaseUntil?0:expiresAt,
+      const entry:Entry={documentId:value.documentId===undefined?undefined:uuid(value.documentId),taskId,credentialHash:hash(credential),token:value.token,agentId:value.agentId,claimId,expiresAt:input.leaseUntil?0:expiresAt,
         sourceIds:new Set(inputs.sourceIds),resultIds:new Set(inputs.resultIds),signal:value.signal,timer,abort,busy:false,authorize:input.authorize,leaseUntil:input.leaseUntil}
       // Pending source/result checks consume the same slots as active grants.
       entries.set(taskId,entry);entry.signal.addEventListener('abort',abort,{once:true})
@@ -159,8 +159,8 @@ export function createHarnessDataAccess(options:{
         const owner=JSON.stringify([principal.deploymentId,principal.userId])
         if([...entries.values()].filter(other=>other.owner===owner).length>=2)throw unavailable(429)
         entry.owner=owner
-        for(const id of entry.sourceIds){await options.tools.execute(entry.token,{name:'sources.describe',arguments:{sourceId:id}});current(entry)}
-        for(const id of entry.resultIds){await options.results.read(entry.token,{resultId:id,limit:1});current(entry)}
+        for(const id of entry.sourceIds){await options.tools.execute(entry.token,{name:'sources.describe',arguments:{sourceId:id}},entry.documentId);current(entry)}
+        for(const id of entry.resultIds){await options.results.read(entry.token,{resultId:id,limit:1},entry.documentId);current(entry)}
         await validate(entry)
         return {taskId,claimId,connectionEpoch:1,credential,agentId:entry.agentId,expiresAt:new Date(entry.expiresAt).toISOString(),inputs:{sourceIds:[...entry.sourceIds],resultIds:[...entry.resultIds]}}
       } catch(error){revoke(taskId);throw unavailable((error as {statusCode?:number}).statusCode===429?429:403)}
@@ -175,7 +175,7 @@ export function createHarnessDataAccess(options:{
         const count=batch&&Array.isArray(input.queries)?input.queries.length:1
         if(entry.resultIds.size+count>64)throw unavailable(429)
         // Bracket the final locked source read with live claim checks before granting any result IDs.
-        const result=await options.tools.execute(entry.token,{name:operation,arguments:input},batch?()=>validate(entry):undefined)
+        const result=await options.tools.execute(entry.token,{name:operation,arguments:input},entry.documentId,batch?()=>validate(entry):undefined)
         await validate(entry)
         const ids:string[]=[]
         const manifest=(query:SourceToolQueryOutcome)=>{
@@ -202,7 +202,7 @@ export function createHarnessDataAccess(options:{
           // leave this layer. A task's catalog itself has at most 32 entries.
           for(let page=0;page<32;page++) {
             current(entry)
-            const result=await options.tools.execute(entry.token,{name:'sources.list',arguments:cursor===undefined?{}:{after:cursor}}) as {items:{sourceId:string}[];nextCursor:string|null}
+            const result=await options.tools.execute(entry.token,{name:'sources.list',arguments:cursor===undefined?{}:{after:cursor}},entry.documentId) as {items:{sourceId:string}[];nextCursor:string|null}
             if(!result||!Array.isArray(result.items))throw unavailable()
             for(const item of result.items)if(entry.sourceIds.has(item.sourceId)&&!found.has(item.sourceId)) {items.push(item);found.add(item.sourceId)}
             if(!result.nextCursor||found.size===entry.sourceIds.size)return {items,nextCursor:null}
@@ -214,17 +214,17 @@ export function createHarnessDataAccess(options:{
         if(operation==='sources.describe') {
           const input=object(args,['sourceId','table','tables','schema','tablePrefix','columnOffset']),id=sourceId(input.sourceId)
           if(!entry.sourceIds.has(id))throw unavailable()
-          const catalog=await options.tools.execute(entry.token,{name:operation,arguments:input}) as Awaited<ReturnType<SourceService['describe']>>
+          const catalog=await options.tools.execute(entry.token,{name:operation,arguments:input},entry.documentId) as Awaited<ReturnType<SourceService['describe']>>
           return harnessSourceCatalog(catalog,input)
         }
         if(operation==='results.get_manifest') {
           const input=object(args,['resultId']),id=resultId(entry,input.resultId)
-          const page=await options.results.read(entry.token,{resultId:id,limit:1})
+          const page=await options.results.read(entry.token,{resultId:id,limit:1},entry.documentId)
           return {artifact:page.artifact,schema:page.schema,timezone:page.timezone,totalRows:page.totalRows,sourceTruncated:page.sourceTruncated,sha256:page.sha256}
         }
         if(operation==='results.download') {
           const input=object(args,['resultId'])
-          return options.results.download(entry.token,resultId(entry,input.resultId))
+          return options.results.download(entry.token,resultId(entry,input.resultId),entry.documentId)
         }
         if(operation==='artifacts.get_receipt') {
           if(!options.artifacts?.receipt)throw unavailable()
@@ -257,7 +257,7 @@ export function createHarnessDataAccess(options:{
           const verifiedInputs:unknown[]=[]
           for(const raw of input.inputs) {
             const ref=object(raw,['resultId','sha256','sourceId','sourceVersion','queryHash','rowCount','truncated']),id=resultId(entry,ref.resultId)
-            const page=await options.results.read(entry.token,{resultId:id,limit:1})
+            const page=await options.results.read(entry.token,{resultId:id,limit:1},entry.documentId)
             current(entry)
             for(const key of ['resultId','sha256','sourceId','sourceVersion','queryHash','rowCount','truncated'] as const)if(ref[key]!==page.artifact[key])throw unavailable()
             // These fields come only from the authorized frozen snapshot, never
@@ -274,7 +274,7 @@ export function createHarnessDataAccess(options:{
     },
     async download(taskId:string,bearer:string,id:string):Promise<WorkspaceSourceResultDownload> {
       const entry=lookup(taskId,bearer)
-      return guarded(entry,()=>options.results.download(entry.token,resultId(entry,id)))
+      return guarded(entry,()=>options.results.download(entry.token,resultId(entry,id),entry.documentId))
     },
     async authorize(taskId:string,bearer:string) {
       const entry=lookup(taskId,bearer)

@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import JSZip from 'jszip'
 import { JSDOM } from 'jsdom'
-import { createApplication } from '../server/application.mjs'
+import { createApplication } from './helpers/prototype-http.mjs'
 import { createHttpEditorHost } from '../../../packages/browser-host/src/http-editor.ts'
 
 const NS = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"'

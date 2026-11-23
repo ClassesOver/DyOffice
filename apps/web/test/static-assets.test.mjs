@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, writeFile, rm, symlink, access } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { createApplication } from '../server/application.mjs';
+import { createApplication } from './helpers/prototype-http.mjs';
 
 async function fixture(t) {
   const root = await mkdtemp(join(tmpdir(), 'dyoffice-static-'));

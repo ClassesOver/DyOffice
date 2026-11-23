@@ -40,10 +40,10 @@ if (!values['base-url']) throw new Error('--base-url (or DYOFFICE_EVAL_BASE_URL)
 const MODEL = values.model, TRIALS = Number(values.trials)
 
 // ---- in-memory document target recording what would be inserted ----
-function createDocument(format: 'docx' | 'xlsx' | 'pptx', inserted: TrialEvidence['inserted']) {
+function createDocument(fileId: string, format: 'docx' | 'xlsx' | 'pptx', inserted: TrialEvidence['inserted']) {
   const target: AnalysisDocumentTarget = {
-    fileId: 'eval', format,
-    capture: () => ({ token: randomUUID(), fileId: 'eval', format, baseRevision: 'r1', leaseEpoch: 1 }),
+    fileId, format,
+    capture: () => ({ token: randomUUID(), fileId, format, baseRevision: 'r1', leaseEpoch: 1 }),
     async apply(_capture, content, _artifact, authorized) {
       if (!authorized()) throw new Error('Evaluation document is unavailable')
       if (content.kind === 'table') inserted.push({ rows: content.rows })
@@ -88,10 +88,11 @@ const OFFICE_INTRO = 'You are the Office assistant inside a document editor. Ans
 async function trial(scenario: Scenario) {
   const evidence: TrialEvidence = { answers: [], calls: [], inserted: [] }
   const usage = { input: 0, output: 0, retries: 0 }
-  const backend = createEvaluationSourceBackend(values['source-dsn']!)
+  const documentId = randomUUID()
+  const backend = createEvaluationSourceBackend(values['source-dsn']!, documentId)
   let disposed = false
-  const sources = createWorkspaceSourceSkill(backend.request, { tools: assistantSourceTools('read-only-analysis'), disposed: () => disposed })
-  const insert = createAnalysisInsertSkill({ format: scenario.format, request: backend.request, documents: createDocument(scenario.format, evidence.inserted), disposed: () => disposed, dataResults: () => true, images: () => false })
+  const sources = createWorkspaceSourceSkill(backend.request, { documentId, tools: assistantSourceTools('read-only-analysis'), disposed: () => disposed })
+  const insert = createAnalysisInsertSkill({ format: scenario.format, request: backend.request, documents: createDocument(documentId, scenario.format, evidence.inserted), disposed: () => disposed, dataResults: () => true, images: () => false })
   let turn = 0, errors = ''
   let settle: ((outcome: { text: string; error?: string }) => void) | undefined
   const loop = new AgentLoop({

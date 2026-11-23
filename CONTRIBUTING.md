@@ -4,35 +4,14 @@ Thanks for your interest in contributing. This document covers the local
 setup, the checks a change must pass, and the conventions used in this
 repository.
 
-## How changes land here
-
-This GitHub repository is a mirror: development happens in a private tree,
-and `main` here advances through single squashed snapshot commits
-(`Sync snapshot (<date>)`). That is why every file in a sync shows the same
-last-commit message, and why nobody — maintainers included — pushes to
-`main` directly.
-
-External pull requests are welcome and are reviewed here. Once a change is
-accepted, a maintainer imports it into the private tree with your authorship
-preserved as a `Co-authored-by:` trailer, and it ships to `main` in the next
-snapshot; your PR is then closed with a note pointing at the snapshot that
-carried it. GitHub will show the PR as "closed" rather than "merged" — the
-code and the attribution still land. Issues and feature requests are handled
-directly on this repository as usual.
-
 ## Repository layout
 
-- `apps/*` — the seven Electron apps (docs, sheets, slides, pdf, markdown, html, shell).
-  Each app is an npm workspace with its own `src/main` (Electron main
-  process), `src/renderer` (React UI), and `tests/`.
-- `packages/*` — pure TypeScript engine and shared packages (no Electron
-  dependency, unit-tested): docx/pptx engines, AI agent core, providers,
-  i18n, UI kit.
-- `apps/sheets/native/xlsx-engine` — Rust xlsx engine (runs as a sidecar process) for xlsx import/export.
+- `apps/web` contains the browser workspace, Web API, and document worker.
+- `apps/docs`, `apps/sheets`, `apps/slides`, and `apps/shell` supply editor and shell components used by the Web build.
+- `packages/*` contains reusable document engines, AI providers, and UI libraries.
+- `apps/sheets/native/xlsx-engine` contains the Rust spreadsheet engine.
 
 ## Engine packages
-
-All pure TypeScript, no Electron dependency, unit-tested (except the UI kit):
 
 - `packages/docx-engine` — docx parsing → block tree (with `docxIndex`
   anchors and passthrough), OOXML fragment generation, byte-level paragraph
@@ -80,15 +59,9 @@ editor didn't touch survives the round trip untouched.
 
 ## Getting started
 
-Prerequisites: Node 22+, npm 10+, and a Rust toolchain (`cargo` on PATH,
-needed only for the sheets xlsx sidecar).
-
-```bash
-npm install
-npm run fixtures     # generate test .docx fixtures (one-time, and after docx-engine changes)
-npm run dev          # all editors + shell against Vite dev servers
-npm run dev:docs     # or run a single app
-```
+Follow the [Web setup guide](apps/web/README.md#run-dyoffice-web) for the Node
+and npm requirements, install commands, and runtime environment variables.
+Run `npm run fixtures` after changing the DOCX engine fixtures.
 
 ## Checks every change must pass
 
@@ -97,8 +70,8 @@ CI runs these on every PR; please run them locally first:
 ```bash
 npm run format:check # Prettier check for uncommitted changed/new files
 npm run lint         # ESLint across the repo (0 errors required; warnings allowed)
-npm run typecheck    # tsc --noEmit across every workspace
-npm test             # engine + app unit tests (also runs the Rust sidecar tests)
+npm run typecheck    # shared packages and Web entrypoints
+npm test             # SaaS entrypoints, shared packages, and Web tests
 npm run licenses     # production dependency licenses within the permissive allowlist
 ```
 
@@ -115,62 +88,6 @@ CI supplies the PR or push base automatically and checks only files changed from
 that base. This keeps the formatter gate useful without creating a repository-wide
 formatting diff.
 
-## Building installers
-
-Run these from the repository root — they regenerate the third-party
-notices and build all seven apps before packaging:
-
-```bash
-npm run dist:mac   # dmg + zip
-npm run dist:win   # nsis installer
-```
-
-Without Apple or Windows signing credentials in the environment these produce
-unsigned artifacts: code signing and notarization are skipped with a warning
-rather than failing. That is the expected result for a contributor build.
-
-On macOS, packaging from a repository that lives on an exFAT/FAT32 volume (an
-external USB drive, for example) fails because the OS writes hidden `._`
-AppleDouble sidecar files next to the build output and electron-builder trips
-over them. Point the output directory at an APFS path instead of moving the
-repository:
-
-```bash
-BUILD_DIR=/tmp/genoffice-release npm run dist:mac
-```
-
-`dist:win` takes the xlsx sidecar from the MinGW cross-compilation path when it
-is there (that is what the release pipeline builds). On a Windows host the plain
-`npm run build:all` compiles it with the host toolchain into
-`target/release/xlsx-sidecar.exe` instead, and packaging accepts that build as
-long as the host architecture matches the packaged one (`GENOFFICE_WIN_ARM64=1`
-still needs a cross build for `aarch64-pc-windows-msvc`).
-
-The Windows clipboard helper (`native/win-clipboard-helper`, genoffice#1985)
-follows the same layout rule and is built by the same `native:build`/`native:test`
-scripts; it is a Windows-only one-shot binary, so other platforms bundle nothing
-for it and the sheets resolver silently skips the EMF format when it is absent.
-
-## Environment variables
-
-None are required — the apps run with all of these unset. They exist for
-testing and local overrides:
-
-| Variable                                                                                                               | Effect                                                                                      |
-| ---------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
-| `BUILD_DIR`                                                                                                            | Override the electron-builder output directory (default `apps/shell/release`)               |
-| `GENOFFICE_USER_DATA`                                                                                                  | Override the Electron userData directory (test isolation)                                   |
-| `GENOFFICE_LANG`                                                                                                       | Force the UI language instead of following the OS locale                                    |
-| `GENOFFICE_FAKE_UPDATE`                                                                                                | Exercise the updater UI without a real release feed                                         |
-| `GSK_API_KEY`, `GSK_CLI_PATH`                                                                                          | Genspark credentials / CLI location for the built-in AI provider                            |
-| `AI_SEARCH_DISABLE_GSK`, `SERPER_API_KEY`, `SERPLY_API_KEY`, `SEARCHAPI_API_KEY`, `TAVILY_API_KEY`, `PARALLEL_API_KEY` | Disable the gsk search backend / supply a Serper, Serply, SearchApi, Tavily or Parallel key |
-| `XLSX_SIDECAR_PATH`, `XLSX_OPEN_PATH`, `XLSX_DEBUG_PORT`                                                               | Point at a locally built xlsx sidecar and its debug port                                    |
-| `*_DEV_PORT`, `*_RENDERER_URL`                                                                                         | Per-app Vite dev server ports and renderer URLs (set by `npm run dev`)                      |
-
-AI features degrade rather than break without credentials: requests surface an
-inline sign-in prompt, and web search falls back to keyless backends (Parallel's
-free Search MCP, then DuckDuckGo).
-
 ## Coding conventions
 
 - **English only** in code, comments, commit messages, and docs. User-facing
@@ -179,12 +96,9 @@ free Search MCP, then DuckDuckGo).
   non-English text belongs (plus test fixture text).
 - TypeScript everywhere; avoid adding new `any` surfaces where a precise type
   is cheap.
-- Tests live in `apps/*/tests` and `packages/*/tests` (vitest). New engine
-  behavior needs a unit test; renderer-only UI tweaks generally don't.
-- Playwright/Electron acceptance drivers and Office-app comparison scripts
-  (anything that drives the built app or Word/Excel/PowerPoint on your
-  machine) are local, on-demand tools: keep them out of the tree (they are
-  gitignored) and never wire them into CI.
+- Web tests live in `apps/web/test`. Shared browser layout checks use Playwright
+  in `e2e` and run in CI.
+
 - Keep files from growing without bound: if you are adding a substantial new
   concern to an already-large file, prefer a new module.
 

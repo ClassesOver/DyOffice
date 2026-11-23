@@ -222,8 +222,10 @@ export function createSourceService({ transactions, credentialKeys = '', egressT
       })
     },
     async discover(token: string, input: unknown, payload: unknown): Promise<SourceDiscovery> {
-      const id = sourceId(input), request = object(payload, ['expectedVersion','directory'])
+      const id = sourceId(input), request = object(payload, ['expectedVersion','directory','page'])
       const version = positiveVersion(request.expectedVersion)
+      const page = request.page === undefined ? undefined : positiveVersion(request.page)
+      const maxRows = page === undefined ? 1000 : 50
       const directory = request.directory
       const selectable = (name: unknown): name is string => typeof name === 'string' && /^[A-Za-z_][A-Za-z0-9_$]{0,127}$/.test(name)
       const userDirectory = (name: unknown): name is string => selectable(name) && !/^(?:pg_|information_schema$|mysql$|sys$|performance_schema$)/i.test(name)
@@ -244,14 +246,14 @@ export function createSourceService({ transactions, credentialKeys = '', egressT
         : row.kind !== 'postgres' ? `table_schema = ${quote(connectedDatabase)}`
         : userSchemaFilter
       const column = directory === undefined ? 'table_schema' : 'table_name'
-      const sql = `SELECT DISTINCT ${column} FROM information_schema.tables WHERE ${condition} ORDER BY ${column}`
-      const maxRows = 1000
+      const window = page === undefined ? '' : ` LIMIT ${maxRows + 1} OFFSET ${(page - 1) * maxRows}`
+      const sql = `SELECT DISTINCT ${column} FROM information_schema.tables WHERE ${condition} ORDER BY ${column}${window}`
       const result = await querySqlSource(policy,row.kind,secret,sql,{...executionFor(row.kind,row.config),maxRows},
         {defaultSchema:row.kind === 'postgres' ? 'public' : connectedDatabase,allowedTables:['information_schema.tables']})
       return access(token, async (c,p) => {
         const current = await get(c,p,id,true)
         if (!current.enabled || current.version !== version) throw sourceError(409)
-        return {items:result.rows.slice(0,maxRows).map(([name])=>name).filter(directory === undefined ? userDirectory : selectable),truncated:result.rows.length > maxRows}
+        return {...(page === undefined ? {} : {page}),items:result.rows.slice(0,maxRows).map(([name])=>name).filter(directory === undefined ? userDirectory : selectable),truncated:result.rows.length > maxRows}
       })
     },
     async describe(token: string, input: unknown, payload: unknown = {}) {

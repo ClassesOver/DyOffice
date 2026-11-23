@@ -4,7 +4,7 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { request as httpRequest } from 'node:http'
-import { createApplication } from '../server/application.mjs'
+import { createApplication } from './helpers/prototype-http.mjs'
 
 test('legacy gateway exposes only minimal public health and strict Bearer permissions', async t => {
   const directory = await mkdtemp(join(tmpdir(), 'dyoffice-route-gates-'))

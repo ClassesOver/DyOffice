@@ -46,7 +46,7 @@ export function createSourcesClient(request: Request) {
     create(input: CreateSourceRequest) { const body = structuredClone(input); return run(true, () => request<SourceDescriptor>('/api/v1/sources', 'POST', body),input.sourceId) },
     save(sourceId: string, input: SaveSourceRequest) { const body = structuredClone(input); return run(true, () => request<SourceDescriptor>(path(sourceId), 'PUT', body),sourceId) },
     test(sourceId: string) { return run(false, () => request<SourceConnectionCheck>(path(sourceId) + '/test', 'POST', {})) },
-    discover(sourceId:string, expectedVersion:number, directory?:string) { return run(false, () => request<SourceDiscovery>(path(sourceId) + '/discover', 'POST', {expectedVersion,...(directory === undefined ? {} : {directory})})) },
+    discover(sourceId:string, expectedVersion:number, directory?:string, page=1) { return run(false, () => request<SourceDiscovery>(path(sourceId) + '/discover', 'POST', {expectedVersion,page,...(directory === undefined ? {} : {directory})})) },
     query(sourceId: string, input: SourceQueryRequest) { const body = structuredClone(input); return run(false, () => request<QuerySnapshot>(path(sourceId) + '/query', 'POST', body)) },
     remove(sourceId: string, expectedVersion: number) { return run(true, () => request<void>(path(sourceId), 'DELETE', { expectedVersion }),sourceId) },
   }

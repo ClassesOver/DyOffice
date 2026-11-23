@@ -28,34 +28,38 @@ export function registerWorkspaceSourceToolRoutes(app: FastifyInstance, { tools,
       await sessions.authenticate(token)
     })
     api.get('/api/v1/workspace/source-tools', async () => ({ tools: tools.definitions }))
-    api.post('/api/v1/workspace/source-tools/execute', { bodyLimit: 40_000 }, request => {
+    for (const path of ['/api/v1/workspace/source-tools/execute','/api/v1/files/:documentId/source-tools/execute']) api.post(path, { bodyLimit: 40_000 }, request => {
       extendSourceQueryBatchTimeout(request, 'name')
-      return tools.execute(cookies(request).session ?? '', request.body)
+      return tools.execute(cookies(request).session ?? '', request.body, (request.params as {documentId?:string}).documentId)
     })
-    api.get('/api/v1/workspace/data-results', request => {
-      const query = object(request.query, ['after','limit'])
-      if (query.limit !== undefined && (typeof query.limit !== 'string' || !/^(?:[1-9][0-9]?|100)$/.test(query.limit))) throw sourceError()
-      return results.list(cookies(request).session ?? '', { ...(query.after === undefined ? {} : { after: query.after }), ...(query.limit === undefined ? {} : { limit: Number(query.limit) }) })
-    })
-    api.get('/api/v1/workspace/data-results/:id', request => {
-      const query = object(request.query, ['offset','limit'])
-      const number = (value: unknown) => { if (typeof value !== 'string' || !/^(0|[1-9][0-9]{0,5})$/.test(value)) throw sourceError(); return Number(value) }
-      return results.read(cookies(request).session ?? '', { resultId: (request.params as {id: string}).id,
-        ...(query.offset === undefined ? {} : { offset: number(query.offset) }), ...(query.limit === undefined ? {} : { limit: number(query.limit) }) })
-    })
-    api.delete('/api/v1/workspace/data-results/:id', async (request, reply) => {
-      object(request.query, [])
-      await results.remove(cookies(request).session ?? '', { resultId: (request.params as {id: string}).id })
-      return reply.code(204).send()
-    })
-    api.get('/api/v1/workspace/data-results/:id/content', async (request, reply) => {
-      object(request.query, [])
-      const output = await results.download(cookies(request).session ?? '', (request.params as {id: string}).id)
-      const name = encodeURIComponent(output.name).replace(/[!'()*]/g, char => '%' + char.charCodeAt(0).toString(16).toUpperCase())
-      return reply.header('Content-Type', 'application/json; charset=utf-8')
-        .header('Content-Disposition', `attachment; filename="query-result.json"; filename*=UTF-8''${name}`)
-        .header('Content-Security-Policy', "sandbox; default-src 'none'")
-        .header('X-Content-Type-Options', 'nosniff').send(output.bytes)
-    })
+    for (const base of ['/api/v1/workspace/data-results','/api/v1/files/:documentId/data-results']) {
+      api.get(base, request => {
+        const {documentId} = request.params as {documentId?:string}
+        const query = object(request.query, documentId ? ['after','limit','includePending'] : ['after','limit'])
+        if (query.includePending !== undefined && query.includePending !== 'true') throw sourceError()
+        if (query.limit !== undefined && (typeof query.limit !== 'string' || !/^(?:[1-9][0-9]?|100)$/.test(query.limit))) throw sourceError()
+        return results.list(cookies(request).session ?? '', { ...(query.after === undefined ? {} : { after: query.after }), ...(query.limit === undefined ? {} : { limit: Number(query.limit) }) }, documentId, query.includePending === 'true')
+      })
+      api.get(base+'/:id', request => {
+        const query = object(request.query, ['offset','limit'])
+        const number = (value: unknown) => { if (typeof value !== 'string' || !/^(0|[1-9][0-9]{0,5})$/.test(value)) throw sourceError(); return Number(value) }
+        return results.read(cookies(request).session ?? '', { resultId: (request.params as {id: string}).id,
+          ...(query.offset === undefined ? {} : { offset: number(query.offset) }), ...(query.limit === undefined ? {} : { limit: number(query.limit) }) }, (request.params as {documentId?:string}).documentId)
+      })
+      api.delete(base+'/:id', async (request, reply) => {
+        object(request.query, [])
+        await results.remove(cookies(request).session ?? '', { resultId: (request.params as {id: string}).id }, (request.params as {documentId?:string}).documentId)
+        return reply.code(204).send()
+      })
+      api.get(base+'/:id/content', async (request, reply) => {
+        object(request.query, [])
+        const output = await results.download(cookies(request).session ?? '', (request.params as {id: string}).id,(request.params as {documentId?:string}).documentId)
+        const name = encodeURIComponent(output.name).replace(/[!'()*]/g, char => '%' + char.charCodeAt(0).toString(16).toUpperCase())
+        return reply.header('Content-Type', 'application/json; charset=utf-8')
+          .header('Content-Disposition', `attachment; filename="query-result.json"; filename*=UTF-8''${name}`)
+          .header('Content-Security-Policy', "sandbox; default-src 'none'")
+          .header('X-Content-Type-Options', 'nosniff').send(output.bytes)
+      })
+    }
   })
 }

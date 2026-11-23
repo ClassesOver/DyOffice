@@ -32,6 +32,45 @@ const empty = (): Draft => ({ sourceId: '', name: '', kind: 'postgres', config: 
 const fromDetail = (detail: SourceDetail): Draft => ({ sourceId: detail.source.sourceId, name: detail.source.name, kind: detail.source.kind,
   config: JSON.stringify(detail.config, null, 2), credentialMode: 'retain', secret: '', enabled: detail.source.enabled })
 
+function ScopeSelectionReview({schemas,values,blockedTables,s,remove,focusMode}: {
+  schemas:boolean
+  values:string[]
+  blockedTables:Set<string>
+  s:(key:SourcesStringKey,params?:Record<string,string|number>)=>string
+  remove:(value:string)=>void
+  focusMode:()=>void
+}) {
+  const [filter,setFilter]=useState('')
+  const input=useRef<HTMLInputElement>(null)
+  const term=filter.trim().toLowerCase()
+  const matches=values.filter(value=>value.toLowerCase().includes(term))
+  const visible=!schemas && blockedTables.size
+    ? [...matches.filter(value=>blockedTables.has(value)),...matches.filter(value=>!blockedTables.has(value))]
+    : matches
+  const listLabel=s(schemas?'srcSelectedSchemasList':'srcSelectedTablesList')
+  const searchLabel=s(schemas?'srcSearchSchemas':'srcSearchTables')
+  return <details className="dc-selection" open={!schemas && blockedTables.size>0}>
+    <summary>{s(schemas?'srcSelectedSchemasSummary':'srcSelectedTablesSummary',{count:values.length})}</summary>
+    <div className="dc-review-filter">
+      <input ref={input} type="search" aria-label={listLabel+' · '+searchLabel} placeholder={searchLabel}
+        value={filter} onChange={event=>setFilter(event.target.value)}/>
+      {filter&&<><output>{visible.length} / {values.length}</output>
+        <button type="button" onClick={()=>{setFilter('');input.current?.focus()}}>{s('srcClearFilters')}</button></>}
+    </div>
+    <ul aria-label={listLabel}>{visible.map(value=><li key={value} className={!schemas&&blockedTables.has(value)?'dc-selection-blocked':undefined}>
+      <span>{value}{!schemas&&blockedTables.has(value)&&<small className="dc-scope-blocked">{s('srcSchemaAccessDenied')}</small>}</span>
+      <button type="button" aria-label={s(schemas?'srcRemoveSchemaNamed':'srcRemoveTableNamed',{name:value})} onClick={event=>{
+        const item=event.currentTarget.closest('li')
+        const next=(item?.nextElementSibling??item?.previousElementSibling)?.querySelector<HTMLButtonElement>('button')
+        if (next) next.focus()
+        else if (values.length>1 && input.current) input.current.focus()
+        else focusMode()
+        remove(value)
+      }}>×</button>
+    </li>)}</ul>
+  </details>
+}
+
 export function SourcesPanel({ client, onClose, presentation = 'dialog', onCloseGuardChange }: { client: SourcesClient; onClose: () => void; presentation?: 'dialog' | 'page'; onCloseGuardChange?: (guard: (() => boolean) | null) => void }) {
   // Translate at render time; never put `s` in a hook dependency list.
   const { lang } = useI18n()
@@ -51,7 +90,7 @@ export function SourcesPanel({ client, onClose, presentation = 'dialog', onClose
   const [catalogFilter,setCatalogFilter] = useState('')
   const [selectedOnly,setSelectedOnly] = useState(false)
   const [catalogLoading,setCatalogLoading] = useState('')
-  const [catalogError,setCatalogError] = useState<{message:string;directory?:string}>()
+  const [catalogError,setCatalogError] = useState<{message:string;directory?:string;page?:number}>()
   const [directoryFilter,setDirectoryFilter] = useState('')
   const [tested,setTested] = useState<SourceDetail['source']>()
   const [testing,setTesting] = useState(false)
@@ -143,39 +182,48 @@ export function SourcesPanel({ client, onClose, presentation = 'dialog', onClose
     setTab(target)
     event.currentTarget.querySelector<HTMLButtonElement>('#dc-tab-'+target)?.focus()
   }
-  async function discover(directory?:string) {
+  async function discover(directory?:string,page?:number) {
     if (!detail || !canDiscover) return
     setCatalogError(undefined)
-    const cached=directory!==undefined?discovered?.recent?.find(tables=>tables.directory===directory):undefined
+    const cached=page===undefined&&directory!==undefined?discovered?.recent?.find(tables=>tables.directory===directory):undefined
     if (cached&&discovered) {
       if (cached!==discovered.tables) setCatalogFilter('')
       showTables(discovered,cached)
       return
     }
     setCatalogLoading(directory === undefined ? s('srcLoadingSchemas') : s('srcLoadingTablesOf',{name:directory}))
-    try { await loadCatalog(detail,directory) }
+    try { await loadCatalog(detail,directory,undefined,page) }
     catch (error) {
-      if (alive.current) setCatalogError({directory,message:(directory===undefined?s('srcLoadSchemasFailed'):s('srcLoadTablesFailed',{name:directory}))+errorText(error)})
+      if (alive.current) setCatalogError({directory,page,message:(directory===undefined?s('srcLoadSchemasFailed'):s('srcLoadTablesFailed',{name:directory}))+errorText(error)})
     }
     finally { if (alive.current) setCatalogLoading('') }
+  }
+  function catalogPager(result:SourceDiscovery,directory?:string) {
+    const page=result.page??1
+    if (!result.truncated && page===1) return null
+    return <div className="dc-catalog-pager">
+      <button type="button" disabled={!canDiscover||busy||page===1} onClick={()=>void operation(()=>discover(directory,page-1))}>{s('srcPreviousPage')}</button>
+      <span aria-live="polite">{s('srcPageNumber',{page})}</span>
+      <button type="button" disabled={!canDiscover||busy||!result.truncated} onClick={()=>void operation(()=>discover(directory,page+1))}>{s('srcNextPage')}</button>
+    </div>
   }
   function showTables(catalog:Catalog,tables:DirectoryTables) {
     setCatalog({...catalog,tables,recent:[tables,...(catalog.recent??[]).filter(item=>item.directory!==tables.directory)].slice(0,6)})
   }
-  async function loadCatalog(connection: SourceDetail,directory?:string,restoreDirectory?:string) {
+  async function loadCatalog(connection: SourceDetail,directory?:string,restoreDirectory?:string,page?:number) {
     const {sourceId,version}=connection.source
-    const result=await client.discover(sourceId,version,directory)
+    const result=await client.discover(sourceId,version,directory,page)
     if (!alive.current) return
-    if (restoreDirectory===undefined) setCatalogFilter('')
+    if (restoreDirectory===undefined && page===undefined) setCatalogFilter('')
     if (directory !== undefined) {
       if (discovered) showTables(discovered,{directory,result})
       return
     }
     const catalog={sourceId,version,directories:result}
-    if (restoreDirectory===undefined) setDirectoryFilter('')
+    if (restoreDirectory===undefined && page===undefined) setDirectoryFilter('')
     setCatalog(catalog)
     const directoryToOpen=restoreDirectory&&result.items.includes(restoreDirectory)?restoreDirectory
-      : !result.truncated&&result.items.length===1?result.items[0]:undefined
+      : (result.page??1)===1&&!result.truncated&&result.items.length===1?result.items[0]:undefined
     if (!directoryToOpen) return
     if (restoreDirectory!==directoryToOpen) setCatalogFilter('')
     setCatalogLoading(s('srcLoadingTablesOf',{name:directoryToOpen}))
@@ -193,7 +241,7 @@ export function SourcesPanel({ client, onClose, presentation = 'dialog', onClose
   const selectedDirectories=selection('allowedSchemas'), selectedTables=selection('allowedTables')
   const defaultTableDirectory=draft.kind==='postgres'?'public'
     : typeof publicConfig?.database==='string'?publicConfig.database
-    : canDiscover&&!discovered?.directories.truncated&&discovered?.directories.items.length===1?discovered.directories.items[0]:undefined
+    : canDiscover&&(discovered?.directories.page??1)===1&&!discovered?.directories.truncated&&discovered?.directories.items.length===1?discovered.directories.items[0]:undefined
   const blockedTables=new Set(selectedDirectories&&selectedTables?.filter(table=>{
     const separator=table.indexOf('.')
     const directory=separator<0?defaultTableDirectory:table.slice(0,separator)
@@ -214,7 +262,7 @@ export function SourcesPanel({ client, onClose, presentation = 'dialog', onClose
   })??[]
   const matchingTables=availableTables.filter(table=>(!filterSelected||table.checked)&&table.name.toLowerCase().includes(tableSearch))
   const bulkTables=selectedTables&&matchingTables.length?matchingTables:undefined
-  const bulkLabel=s(filterSelected?'srcBulkSelectedInList':tableSearch?'srcBulkSearchResults':discovered?.tables?.result.truncated?'srcBulkLoadedTables':'srcBulkCurrentSchema')
+  const bulkLabel=s(filterSelected?'srcBulkSelectedInList':tableSearch?'srcBulkSearchResults':(discovered?.tables?.result.truncated||(discovered?.tables?.result.page??1)>1)?'srcBulkLoadedTables':'srcBulkCurrentSchema')
   const tablesToAdd=bulkTables?.filter(table=>!table.checked).map(table=>table.id)??[]
   const tablesToRemove=new Set(bulkTables?.filter(table=>table.checked).flatMap(table=>[table.id,table.alias]))
   const exceedsTableLimit=(selectedTables?.length??0)+tablesToAdd.length>maxScopeEntries
@@ -244,20 +292,9 @@ export function SourcesPanel({ client, onClose, presentation = 'dialog', onClose
   function reviewSelection(key:'allowedSchemas'|'allowedTables', values:string[]|undefined) {
     if (!values?.length) return null
     const schemas=key==='allowedSchemas'
-    return <details className="dc-selection" open>
-      <summary>{s(schemas?'srcSelectedSchemasSummary':'srcSelectedTablesSummary',{count:values.length})}</summary>
-      <ul aria-label={s(schemas?'srcSelectedSchemasList':'srcSelectedTablesList')}>{values.map(value=><li key={value}>
-        <span>{value}{key==='allowedTables'&&blockedTables.has(value)&&<small className="dc-scope-blocked">{s('srcSchemaAccessDenied')}</small>}</span>
-        <button type="button" aria-label={s(schemas?'srcRemoveSchemaNamed':'srcRemoveTableNamed',{name:value})} onClick={event=>{
-          const button=event.currentTarget
-          const item=button.closest('li')
-          const next=(item?.nextElementSibling??item?.previousElementSibling)?.querySelector<HTMLButtonElement>('button')
-          const fallback=surfaceRef.current?.querySelector<HTMLSelectElement>(`select[aria-label="${s(schemas?'srcSchemaScope':'srcTableVisibility')}"]`)
-          ;(next??fallback)?.focus()
-          toggleScope(key,value,false)
-        }}>×</button>
-      </li>)}</ul>
-    </details>
+    return <ScopeSelectionReview key={(detail?.source.sourceId??'')+key} schemas={schemas} values={values} blockedTables={blockedTables} s={s}
+      remove={value=>toggleScope(key,value,false)}
+      focusMode={()=>surfaceRef.current?.querySelector<HTMLSelectElement>(`select[aria-label="${s(schemas?'srcSchemaScope':'srcTableVisibility')}"]`)?.focus()}/>
   }
   async function operation(action: () => Promise<unknown>, clearSubmittedSecret = false) {
     if (busy) return
@@ -473,23 +510,25 @@ export function SourcesPanel({ client, onClose, presentation = 'dialog', onClose
         <div className="dc-scope-modes">
         {!legacyHttp&&<label>{s('srcSchemaScope')}<select aria-label={s('srcSchemaScope')} disabled={!publicConfig||busy||formBlocked} value={publicConfig&&Object.hasOwn(publicConfig,'allowedSchemas')?'selected':'all'} onChange={event=>{if(!publicConfig)return;const next={...publicConfig};if(event.target.value==='selected')next.allowedSchemas=[];else delete next.allowedSchemas;patch({config:JSON.stringify(next,null,2)});if(event.target.value==='selected'&&!discovered&&canDiscover)void operation(()=>discover())}}><option value="all">{s('srcAllSchemasRestricted')}</option><option value="selected">{s('srcSelectedSchemasOnly')}</option></select></label>}
         {!legacyHttp&&<label>{s('srcTableVisibility')}<select aria-label={s('srcTableVisibility')} disabled={!publicConfig||busy||formBlocked} value={publicConfig&&Object.hasOwn(publicConfig,'allowedTables')?'selected':'all'} onChange={event=>{const value=event.target.value;if(!publicConfig)return;const next={...publicConfig};if(value==='selected')next.allowedTables=[];else delete next.allowedTables;patch({config:JSON.stringify(next,null,2)});if(value==='selected'&&!discovered&&canDiscover)void operation(()=>discover())}}><option value="selected">{s('srcSelectedTablesOnly')}</option><option value="all">{s('srcAllReadableTables')}</option></select></label>}
+        {!legacyHttp&&<div className="dc-scope-summary"><p>{selectedDirectories ? s('srcSelectedSchemaCount',{count:selectedDirectories.length}) : s('srcAllSchemas')}{s('srcListSeparator')}{selectedTables ? s(selectedDirectories?'srcTableCount':'srcSelectedTableCount',{count:selectedTables.length}) : s('srcAllReadableTables')}</p>
+        {scopeChanged&&<button type="button" onClick={restoreScope}>{s('srcRestoreSavedSchemasAndTables')}</button>}
+        </div>}
         </div>
-        {!legacyHttp&&<p>{selectedDirectories ? s('srcSelectedSchemaCount',{count:selectedDirectories.length}) : s('srcAllSchemas')}{s('srcListSeparator')}{selectedTables ? s(selectedDirectories?'srcTableCount':'srcSelectedTableCount',{count:selectedTables.length}) : s('srcAllReadableTables')}</p>}
-        {!legacyHttp&&scopeChanged&&<button type="button" onClick={restoreScope}>{s('srcRestoreSavedSchemasAndTables')}</button>}
         {directoryLimit&&<p role="status">{s('srcSchemaLimitReached',{max:maxScopeEntries})}</p>}
         {tableLimit&&<p role="status">{s('srcTableLimitReached',{max:maxScopeEntries})}</p>}
         {!legacyHttp&&(selectedDirectories?.length===0||selectedTables?.length===0)&&
           <p className="dc-scope-empty" role="status">{s(selectedDirectories?.length===0?'srcNoSchemaSelected':'srcNoTableSelected')}</p>}
         {!legacyHttp&&!!selectedDirectories?.length&&blockedTables.size>0&&
           <p className="dc-scope-empty" role="status">{s('srcBlockedTables',{count:blockedTables.size})}</p>}
-        {!legacyHttp&&reviewSelection('allowedSchemas',selectedDirectories)}
-        {!legacyHttp&&reviewSelection('allowedTables',selectedTables)}
         {!legacyHttp&&<section className="dc-discovery" aria-label={s('srcDiscoverSchemasAndTables')}>
-          <p>{s('srcLoadSavedScopeHelp')}</p>
-          <button type="button" disabled={!canDiscover} onClick={()=>void operation(()=>discover())}>{discovered?s('srcReloadSchemasAndTables'):s('srcLoadSchemasAndTables')}</button>
+          <div className="dc-discovery-heading"><div>
+            <h3>{s('srcDiscoverSchemasAndTables')}</h3>
+            <p>{s('srcLoadSavedScopeHelp')}</p>
+          </div>
+          <button type="button" disabled={!canDiscover} onClick={()=>void operation(()=>discover())}>{discovered?s('srcReloadSchemasAndTables'):s('srcLoadSchemasAndTables')}</button></div>
           {catalogLoading&&<p role="status">{catalogLoading}</p>}
           {catalogError&&<Notice type="error" title={catalogError.message} description={canDiscover&&<div className="dc-inline">
-            <button type="button" onClick={()=>void operation(()=>discover(catalogError.directory))}>{catalogError.directory===undefined?s('srcRetryLoadingSchemas'):s('srcRetryLoadingTables')}</button>
+            <button type="button" onClick={()=>void operation(()=>discover(catalogError.directory,catalogError.page))}>{catalogError.directory===undefined?s('srcRetryLoadingSchemas'):s('srcRetryLoadingTables')}</button>
             <button type="button" onClick={()=>void operation(()=>{
             setCatalogError(undefined)
             return testConnection(detail!)
@@ -505,20 +544,20 @@ export function SourcesPanel({ client, onClose, presentation = 'dialog', onClose
             }}>{s('srcGoToTab',{tab:s(connectionTabLabels[discoveryTab])})}</button>}
           </div>}
           {discovered&&<>
-            {discovered.directories.truncated&&<p role="status">{s('srcSchemaDisplayLimit')}</p>}
-            {!discovered.directories.items.length&&<p>{s('srcNoSchemasAvailable')}</p>}
+            {!discovered.directories.items.length&&!discovered.directories.truncated&&(discovered.directories.page??1)===1&&<p>{s('srcNoSchemasAvailable')}</p>}
             <div className="dc-catalog-columns">
-            {discovered.directories.items.length>0&&<details className="dc-picker" open>
-              <summary>{discovered.tables ? s('srcSchemaNamed',{name:discovered.tables.directory}) : s('srcSearchOrSelectSchema')}</summary>
-              <div className="dc-search-row"><label>{s('srcSearchSchemas')}<input aria-label={s('srcSearchSchemas')} type="search" value={directoryFilter} onChange={event=>setDirectoryFilter(event.target.value)}/></label>
+            {(discovered.directories.items.length>0||discovered.directories.truncated||(discovered.directories.page??1)>1)&&<details className="dc-picker" open>
+              <summary>{s('srcAvailableSchemas')}</summary>
+              {(discovered.directories.items.length>1 || discovered.directories.truncated || (discovered.directories.page??1)>1 || directoryFilter) && <div className="dc-search-row"><label>{s('srcSearchSchemas')}<input aria-label={s('srcSearchSchemas')} type="search" placeholder={discovered.directories.truncated||(discovered.directories.page??1)>1?s('srcSearchThisPage'):undefined} value={directoryFilter} onChange={event=>setDirectoryFilter(event.target.value)}/></label>
               {directoryFilter&&<button type="button" onClick={event=>{
                 setDirectoryFilter('')
                 event.currentTarget.closest('details')?.querySelector<HTMLInputElement>('input[type="search"]')?.focus()
-              }}>{s('srcClearSchemaSearch')}</button>}</div>
+              }}>{s('srcClearSchemaSearch')}</button>}</div>}
               {!matchingDirectories?.length&&<p className="dc-filter-empty" role="status">{s('srcNoMatchingSchemas')}</p>}
-              <ul aria-label={s('srcAvailableSchemas')}>{matchingDirectories?.map(directory=><li key={directory}>
-              {selectedDirectories ? <label className="dc-check"><input type="checkbox" aria-label={s('srcAllowSchemaNamed',{name:directory})} checked={selectedDirectories.includes(directory)} disabled={directoryLimit&&!selectedDirectories.includes(directory)} onChange={event=>toggleScope('allowedSchemas',directory,event.target.checked)}/>{directory}</label> : <span>{directory}</span>}
-              <button type="button" aria-current={discovered.tables?.directory===directory?true:undefined} disabled={!canDiscover} onClick={()=>void operation(()=>discover(directory))}>{s('srcBrowseTablesOf',{name:directory})}</button>
+              {catalogPager(discovered.directories)}
+              <ul key={discovered.directories.page??1} aria-label={s('srcAvailableSchemas')}>{matchingDirectories?.map(directory=><li key={directory}>
+              {selectedDirectories && <label className="dc-check"><input type="checkbox" aria-label={s('srcAllowSchemaNamed',{name:directory})} checked={selectedDirectories.includes(directory)} disabled={directoryLimit&&!selectedDirectories.includes(directory)} onChange={event=>toggleScope('allowedSchemas',directory,event.target.checked)}/>{directory}</label>}
+              <button type="button" className="dc-directory-link" aria-label={s('srcBrowseTablesOf',{name:directory})} title={s('srcBrowseTablesOf',{name:directory})} aria-current={discovered.tables?.directory===directory?true:undefined} disabled={!canDiscover} onClick={()=>void operation(()=>discover(directory))}>{!selectedDirectories&&<span>{directory}</span>}<span aria-hidden="true" className="dc-directory-chevron"/></button>
             </li>)}</ul>
             </details>}
             {discovered.tables&&<details key={discovered.tables.directory} className="dc-picker" aria-label={s('srcTablesInSchemaAria',{name:discovered.tables.directory})} open>
@@ -539,14 +578,15 @@ export function SourcesPanel({ client, onClose, presentation = 'dialog', onClose
                     {!selectedTables&&<small>{s('srcAllowSchemaTablesNotice')}</small>}
                   </>}
               </div>}
-              {discovered.tables.result.truncated&&<p role="status">{s('srcTableDisplayLimit')}</p>}
-              {!discovered.tables.result.items.length&&<p>{s('srcNoTablesInSchema')}</p>}
-              {discovered.tables.result.items.length>0&&<div className="dc-search-row"><label>{s('srcSearchTables')}<input aria-label={s('srcSearchTables')} type="search" value={catalogFilter} onChange={event=>setCatalogFilter(event.target.value)}/></label>
+              {!discovered.tables.result.items.length&&<p>{s((discovered.tables.result.page??1)>1||discovered.tables.result.truncated?'srcNoMatchingTables':'srcNoTablesInSchema')}</p>}
+              {discovered.tables.result.items.length>0&&<div className="dc-search-row"><label>{s('srcSearchTables')}<input aria-label={s('srcSearchTables')} type="search" placeholder={discovered.tables.result.truncated||(discovered.tables.result.page??1)>1?s('srcSearchThisPage'):undefined} value={catalogFilter} onChange={event=>setCatalogFilter(event.target.value)}/></label>
               {catalogFilter&&<button type="button" onClick={event=>{
                 setCatalogFilter('')
                 event.currentTarget.closest('details')?.querySelector<HTMLInputElement>('input[type="search"]')?.focus()
-              }}>{s('srcClearTableSearch')}</button>}</div>}
-              {selectedTables&&discovered.tables.result.items.length>0&&<label className="dc-check"><input type="checkbox" aria-label={s('srcShowSelectedTablesOnly')} checked={selectedOnly} onChange={event=>setSelectedOnly(event.target.checked)}/>{s('srcShowSelectedTablesOnly')}</label>}
+              }}>{s('srcClearTableSearch')}</button>}
+              {selectedTables&&<label className="dc-check"><input type="checkbox" aria-label={s('srcShowSelectedTablesOnly')} checked={selectedOnly} onChange={event=>setSelectedOnly(event.target.checked)}/>{s('srcShowSelectedTablesOnly')}</label>}
+              </div>}
+
               {publicConfig&&!selectedTables&&discovered.tables.result.items.length>0&&<div className="dc-directory-warning">
                 <p>{s('srcAllAllowedTablesHelp')}</p>
                 <button type="button" disabled={!canDiscover} onClick={event=>{
@@ -555,19 +595,28 @@ export function SourcesPanel({ client, onClose, presentation = 'dialog', onClose
                 }}>{s('srcSelectIndividualTables')}</button>
               </div>}
               {(tableSearch||filterSelected)&&!matchingTables.length&&<p className="dc-filter-empty" role="status">{filterSelected?s('srcNoMatchingSelectedTables'):s('srcNoMatchingTables')}</p>}
-              {bulkTables&&selectedTables&&<div className="dc-bulk-tables">
+              <div className="dc-table-controls">
+              {bulkTables&&selectedTables&&<details className="dc-bulk-options">
+                <summary>{s('srcBulkSelection',{checked:bulkTables.length-tablesToAdd.length,total:bulkTables.length})}</summary>
+                <div className="dc-bulk-tables">
                 <button type="button" disabled={!canDiscover||!tablesToAdd.length||exceedsTableLimit} onClick={()=>setTableSelection([...selectedTables,...tablesToAdd])}>{s('srcSelectBulk',{label:bulkLabel,count:bulkTables.length})}</button>
                 <button type="button" disabled={!canDiscover||!tablesToRemove.size} onClick={()=>setTableSelection(selectedTables.filter(id=>!tablesToRemove.has(id)))}>{s('srcUnselectBulk',{label:bulkLabel,count:bulkTables.length})}</button>
-                <small role="status">{s('srcBulkCheckedCount',{checked:bulkTables.length-tablesToAdd.length,total:bulkTables.length})}</small>
                 {exceedsTableLimit&&<small>{s(tableSearch?'srcTableLimitNarrowSearch':'srcTableLimitSearchFirst',{max:maxScopeEntries})}</small>}
-              </div>}
-              <ul aria-label={s('srcAvailableTables')}>{matchingTables.map(({name,id,alias,checked})=><li key={id}>{selectedTables
+                </div>
+              </details>}
+              {catalogPager(discovered.tables.result,discovered.tables.directory)}
+              </div>
+              <ul key={discovered.tables.result.page??1} aria-label={s('srcAvailableTables')}>{matchingTables.map(({name,id,alias,checked})=><li key={id}>{selectedTables
                 ? <label className="dc-check"><input type="checkbox" aria-label={s('srcAllowTableNamed',{name:id})} checked={checked} disabled={tableLimit&&!checked} onChange={event=>toggleScope('allowedTables',id,event.target.checked,alias)}/>{name}</label>
                 : <span>{name}</span>}</li>)}</ul>
             </details>}
             </div>
           </>}
         </section>}
+        {!legacyHttp && (!!selectedDirectories?.length || !!selectedTables?.length) && <div className="dc-scope-review">
+        {reviewSelection('allowedSchemas',selectedDirectories)}
+        {reviewSelection('allowedTables',selectedTables)}
+        </div>}
         {(selectedDirectories||selectedTables)&&<details className="dc-manual-scope" open={!isPage}><summary>{s('srcEnterScopeManually')}</summary>
         {!legacyHttp&&publicConfig&&Object.hasOwn(publicConfig,'allowedSchemas')&&<label>{s('srcAllowedSchemas')}<textarea aria-label={s('srcAllowedSchemas')} disabled={busy||formBlocked} rows={3} spellCheck={false} placeholder={draft.kind==='postgres'?'sales':'warehouse'} value={Array.isArray(publicConfig.allowedSchemas)?publicConfig.allowedSchemas.map(String).join('\n'):''} onChange={event=>patch({config:JSON.stringify({...publicConfig,allowedSchemas:event.target.value.split(/[\n,，]/)},null,2)})}/><small>{s('srcManualSchemaScopeHelp')}</small></label>}
         {!legacyHttp&&publicConfig&&Object.hasOwn(publicConfig,'allowedTables')&&<label>{s('srcAllowedTables')}<textarea aria-label={s('srcAllowedTables')} disabled={busy||formBlocked} rows={4} spellCheck={false} placeholder={'public.orders\npublic.order_items'} value={Array.isArray(publicConfig.allowedTables)?publicConfig.allowedTables.map(String).join('\n'):''} onChange={event=>patch({config:JSON.stringify({...publicConfig,allowedTables:event.target.value.split(/[\n,，]/)},null,2)})}/><small>{s('srcManualTableScopeHelp')}</small></label>}

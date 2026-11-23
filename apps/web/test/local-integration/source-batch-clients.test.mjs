@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { randomBytes } from 'node:crypto'
+import { randomBytes, randomUUID } from 'node:crypto'
 import Fastify from 'fastify'
 import { restrictedFixture } from '../helpers/restricted.mjs'
 import { postgresTargets } from '../helpers/postgres-source.mjs'
@@ -12,6 +12,7 @@ import { registerHarnessDataRoutes } from '../../server/src/modules/coding/data-
 import { createHarnessDataMailbox } from '../../server/src/modules/coding/data-mailbox.ts'
 import { runHarnessDataCommand } from '../../../../packages/cli/src/harness-data-command.ts'
 import { parseArgs } from '../../../../packages/cli/src/args.ts'
+import { sourceResultBase } from '../../../../packages/web-contracts/src/source-results.ts'
 
 test('Codex can read the authorized SQL catalog and continue a batch of columns over its mailbox', async t => {
   const f = await restrictedFixture(t), target = await postgresTargets(t, f)
@@ -45,8 +46,9 @@ test('Codex can read the authorized SQL catalog and continue a batch of columns 
 test('analysis evaluation uses production batched catalog, query outcomes and frozen result paging', async t => {
   const { createEvaluationSourceBackend } = await import('../../../../tools/dyoffice/analysis-eval/source-backend.ts')
   const f = await restrictedFixture(t), target = await postgresTargets(t, f)
-  const backend = createEvaluationSourceBackend(target.readerDsn)
-  const execute = (name, args) => backend.request('/api/v1/ai/sources/execute', 'POST', { name, arguments: args })
+  const documentId = randomUUID(), base = sourceResultBase(documentId)
+  const backend = createEvaluationSourceBackend(target.readerDsn, documentId)
+  const execute = (name, args) => backend.request(base + '/ai/sources/execute', 'POST', { name, arguments: args })
   const qualified = 'public.' + target.probeTable
   const list = await execute('sources.describe', { sourceId: 'sales', schema: 'public', tablePrefix: target.probeTable })
   assert.deepEqual(list.metadata.rows.map(row => row.table_name), [target.probeTable])
@@ -59,6 +61,11 @@ test('analysis evaluation uses production batched catalog, query outcomes and fr
   const page = await execute('sources.read_result', { resultId: first.artifact.resultId, offset: first.nextOffset })
   assert.deepEqual([...first.preview, ...page.rows].map(row => row.i), [1, 2, 3, 4])
   assert.equal(page.sha256, first.sha256)
+  const path = '/data-results/' + first.artifact.resultId + '?offset=0&limit=1'
+  assert.deepEqual((await backend.request(base + path)).rows, first.preview.slice(0, 1))
+  for (const other of [sourceResultBase(randomUUID()), sourceResultBase()]) {
+    await assert.rejects(backend.request(other + path), { status: 404 })
+  }
   const clock = t.mock.method(Date, 'now', () => Date.parse(first.artifact.expiresAt))
   try {
     await assert.rejects(execute('sources.read_result', { resultId: first.artifact.resultId }), { status: 404 })

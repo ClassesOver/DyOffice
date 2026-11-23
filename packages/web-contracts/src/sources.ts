@@ -96,4 +96,4 @@ export type MySqlSourceConfig = PostgresSourceConfig
 export interface SourceConnectionCheck { ok: boolean; kind: SourceKind; code?: string }
 
 /** Available to the connection editor; independent of the saved assistant scope. */
-export interface SourceDiscovery { items: string[]; truncated: boolean }
+export interface SourceDiscovery { page?: number; items: string[]; truncated: boolean }

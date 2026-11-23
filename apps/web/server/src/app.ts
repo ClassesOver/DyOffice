@@ -35,9 +35,6 @@ import { createReadinessProbe } from './readiness.ts'
 import { createStaticAssets, createRefreshableStaticAssets } from '../static-assets.mjs'
 import { dshEmbedOrigin, registerLocalShell } from './local-shell.ts'
 import type { FastifyInstance, HTTPMethods } from 'fastify'
-import { buildApp as buildModularApp } from './app.mjs'
-import { createLegacyContext } from './legacy-context.mjs'
-import type { WebConfig } from './config.ts'
 import { registerHealthRoutes } from './modules/health/routes.ts'
 import { createApiShell } from './framework.ts'
 import { registerJobRoutes } from './modules/jobs/routes.ts'
@@ -86,20 +83,6 @@ import type { SourceEgressTarget } from './security/egress.ts'
 import { createPdfService } from './modules/pdf/service.ts'
 import { registerPdfRoutes } from './modules/pdf/routes.ts'
 import { registerMcpRoutes } from './modules/mcp-server/routes.ts'
-
-export async function buildApp(config: WebConfig): Promise<FastifyInstance> {
-  if (process.env.NODE_ENV === 'production') throw new Error('Development token server is not allowed in production')
-  const context = await createLegacyContext({ ...config, assetMode: config.assetMode, assetDirectory: config.assetDirectory, objectQuota: undefined })
-  const app = await buildModularApp({
-    env: 'development',
-    logger: false,
-    rateLimit: { max: config.rateLimit?.max ?? 5000, windowMs: config.rateLimit?.timeWindow ?? 60_000 },
-    readyCheck: () => context.ready(),
-    legacy: context,
-  })
-  await app.ready()
-  return app
-}
 
 export interface LocalWebConfig {
   rateLimit?: { max: number; windowMs: number };

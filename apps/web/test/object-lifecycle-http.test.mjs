@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { createApplication } from '../server/application.mjs'
+import { createApplication } from './helpers/prototype-http.mjs'
 import { objectStoreDirectory } from '../server/src/modules/objects/routes.mjs'
 
 const ZIP = Buffer.from([0x50, 0x4b, 0x03, 0x04, 0x14, 0x00, 0x00, 0x00])

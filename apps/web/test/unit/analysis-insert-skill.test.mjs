@@ -103,7 +103,7 @@ test('insert_data_result reads the frozen snapshot from the server and applies i
   assert.equal(out.isError, undefined, out.output)
   assert.equal(out.mutated, true)
   assert.match(out.output, /not saved yet/)
-  assert.deepEqual(h.requests, [`/api/v1/workspace/data-results/${RESULT.toUpperCase()}?offset=0&limit=496`])
+  assert.deepEqual(h.requests, [`/api/v1/files/f/data-results/${RESULT.toUpperCase()}?offset=0&limit=496`])
   assert.deepEqual(h.applied[0].artifact, { artifactId: RESULT, sha256: SHA })
   assert.deepEqual(h.applied[0].content.rows[1], ['2026-01', '30', 'TRUE'])
   const bad = await h.skill.executeTool({ id: '2', name: ANALYSIS_INSERT_TOOLS.data, input: { resultId: 'not-a-uuid' } })

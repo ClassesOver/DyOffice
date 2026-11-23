@@ -3,6 +3,15 @@ import type { QueryCell, QueryColumn } from './sources.ts'
 /** Maximum UTF-8 size of one canonical frozen snapshot, including its SHA-256. */
 export const SOURCE_RESULT_MAX_BYTES = 4_000_000
 
+export function isSourceResultName(input: unknown): input is string {
+  return !(typeof input !== 'string' || input.length < 1 || input.length > 200 || new TextEncoder().encode(input).length > 240 || input !== input.trim()
+    || /[\u0000-\u001f\u007f-\u009f/\\:*?"<>|]/u.test(input) || /[. ]$/.test(input) || /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(input))
+}
+
+export function sourceResultBase(documentId?:string) {
+  return documentId === undefined ? '/api/v1/workspace' : '/api/v1/files/' + encodeURIComponent(documentId)
+}
+
 /** Small, frozen JSONB evidence in a personal workspace; never an Office file.
  * A saved result remains readable by its owner after source disable/deletion.
  * Pending evidence is session-bound and expires; it is not an access capability.

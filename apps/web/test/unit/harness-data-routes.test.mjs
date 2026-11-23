@@ -32,23 +32,27 @@ test('task HTTP routes expose only bounded operations and verified content heade
 test('batch query handlers can outlast the normal socket timeout on each HTTP transport',async t=>{
  const app=Fastify({connectionTimeout:100})
  t.after(()=>app.close())
- const execute=async()=>{await delay(250);return {completed:true}}
- const sessions={async authenticate(){}},csrf={originCheck(){},requireSession(){}},tools={execute}
- registerHarnessDataRoutes(app,{execute,dispose(){}})
+ const finish=async documentId=>{await delay(250);return {completed:true,...(documentId&&{documentId})}}
+ const sessions={async authenticate(){}},csrf={originCheck(){},requireSession(){}}
+ const tools={execute(token,_call,documentId){assert.equal(token,'x'.repeat(43));return finish(documentId)}}
+ registerHarnessDataRoutes(app,{execute:()=>finish(),dispose(){}})
  registerWorkspaceSourceToolRoutes(app,{tools,sessions,csrf,results:{}})
  registerAssistantSourceCatalog(app,{analysis:tools,sessions,csrf,sources:{}})
  const url=await app.listen({host:'127.0.0.1',port:0})
- for(const [path,field] of [
+ const document='10000000-0000-4000-8000-000000000001'
+ for(const [path,field,documentId] of [
   ['/api/v1/agents/tasks/task/data/execute','operation'],
   ['/api/v1/workspace/source-tools/execute','name'],
   ['/api/v1/ai/sources/execute','name'],
+  ['/api/v1/files/'+document+'/source-tools/execute','name',document],
+  ['/api/v1/files/'+document+'/ai/sources/execute','name',document],
  ])await t.test(path,async()=>{
   const auth=field==='operation'?{authorization:'Bearer '+'x'.repeat(43)}:{cookie:'__Host-dyoffice-session='+'x'.repeat(43)}
   const call=args=>fetch(url+path,{method:'POST',headers:{'content-type':'application/json',...auth},
    body:JSON.stringify({[field]:'sources.query',arguments:{sourceId:'sales',...args}})})
   const response=await call({queries:['select 1','select 2','select 3','select 4']})
   assert.equal(response.status,200)
-  assert.deepEqual(await response.json(),{completed:true})
+  assert.deepEqual(await response.json(),{completed:true,...(documentId&&{documentId})})
   await assert.rejects(call({sql:'select 1'}),error=>error.cause?.code==='UND_ERR_SOCKET')
  })
 })

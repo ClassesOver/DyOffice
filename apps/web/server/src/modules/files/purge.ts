@@ -23,6 +23,7 @@ export async function purgeFile(transactions: PrincipalTransactions, objects: Ob
     const drafts = await c.query<Upload>('SELECT * FROM uploads WHERE deployment_id=$1 AND owner_id=$2 AND file_id=$3 ORDER BY id FOR UPDATE',[...scope(p),id])
     if (drafts.rows.some(u => u.state === 'receiving' || (u.attempt_id && !u.sha256))) throw authError(409)
     for (const upload of drafts.rows) if (upload.state==='staged' || upload.state==='ready') await releaseReservation(c,p,upload,'cancelled')
+    await c.query('DELETE FROM workspace_source_results WHERE deployment_id=$1 AND owner_id=$2 AND document_id=$3',[...scope(p),id])
     await c.query('DELETE FROM file_assistant_messages WHERE deployment_id=$1 AND owner_id=$2 AND file_id=$3',[...scope(p),id])
     await c.query('DELETE FROM task_runtime_codex WHERE deployment_id=$1 AND owner_id=$2 AND file_id=$3',[...scope(p),id])
     await c.query('DELETE FROM word_collab_steps WHERE deployment_id=$1 AND owner_id=$2 AND file_id=$3',[...scope(p),id])

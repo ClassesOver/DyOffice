@@ -15,7 +15,7 @@ test('approved channel member exchanges only its current claim for unified froze
  const results=createWorkspaceSourceResults({transactions:f.transactions})
  await sources.create(f.alice.token,{sourceId:'metrics',name:'Metrics',kind:'http',config:{timezone:'UTC'},secret:'https://fixture.invalid/data'})
  const snapshot=createQuerySnapshot({sourceId:'metrics',sourceVersion:1,timezone:'UTC',schema:[{name:'amount',type:'number'}],rows:[{amount:42}],sourceTruncated:false})
- const frozen=await results.capture(f.alice.token,snapshot,createHash('sha256').update('channel fixture').digest('hex'))
+ const frozen=await results.capture(f.alice.token,snapshot,createHash('sha256').update('channel fixture').digest('hex'),file.fileId)
  const csrf=createCsrfService({db:f.db,deploymentId:f.deploymentId,origin:restrictedOrigin,key:f.csrfKey})
  const ownerHeaders={origin:restrictedOrigin,cookie:'__Host-dyoffice-session='+f.alice.token,'x-csrf-token':csrf.sessionToken(f.alice.token)}
  const base='/api/v1/assistant-channels'
@@ -73,7 +73,7 @@ test('real CLI adapter downloads a frozen result, computes outside Office and co
  const results=createWorkspaceSourceResults({transactions:f.transactions})
  await sources.create(f.alice.token,{sourceId:'metrics',name:'Metrics',kind:'http',config:{timezone:'UTC'},secret:'https://fixture.invalid/data'})
  const snapshot=createQuerySnapshot({sourceId:'metrics',sourceVersion:1,timezone:'UTC',schema:[{name:'amount',type:'number',unit:'CNY'}],rows:[{amount:10},{amount:20},{amount:30}],sourceTruncated:false})
- const frozen=await results.capture(f.alice.token,snapshot,createHash('sha256').update('CLI frozen fixture').digest('hex'))
+ const frozen=await results.capture(f.alice.token,snapshot,createHash('sha256').update('CLI frozen fixture').digest('hex'),file.fileId)
  const receipt=await channels.submit({kind:'owner',token:f.alice.token},{requestId:randomUUID(),conversationId:id,to:memberId,action:{kind:'delegate',instruction:'Total the frozen input and commit a report',dataInputs:{sourceIds:[],resultIds:[frozen.resultId]}}})
  const directory=await mkdtemp(join(tmpdir(),'channel-data-cli-'));t.after(()=>rm(directory,{recursive:true,force:true}))
  const state=join(directory,'state.json'),adapter=join(directory,'adapter.json'),script=join(directory,'adapter.mts'),inputFile=join(directory,'input.json')
