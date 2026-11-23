@@ -10,7 +10,8 @@ and saves send document data to the workspace service. See the
 DyOffice uses PostgreSQL 17 for local accounts and browser sessions. Use the
 [Web setup guide](apps/web/README.md#run-dyoffice-web) to provision the database,
 create the first administrator, build the workspace, and start the service.
-The runtime supports development and isolated evaluation. Production startup is disabled.
+For a containerized Web and DOCX evaluation with PostgreSQL, follow the
+[Docker Compose setup](deploy/docker/README.zh-CN.md). Production startup is disabled.
 
 When the service is running on the default port, run the readiness check.
 

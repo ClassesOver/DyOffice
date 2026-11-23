@@ -26,7 +26,8 @@ accounts. The runtime supports development and isolated evaluation.
    ```sh
    npm run build:web:shell
    cd apps/web
-   cp -n .env.web-local.example .env.web-local
+   (umask 077 && cp -n .env.web-local.example .env.web-local)
+   chmod 600 .env.web-local
    ```
 
 3. Fill in `.env.web-local` with the same deployment UUID, the restricted auth and
