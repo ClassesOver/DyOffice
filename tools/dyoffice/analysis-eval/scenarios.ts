@@ -4,11 +4,12 @@
  * ground truth computed directly in PostgreSQL, never with model text.
  */
 export interface Turn { prompt: string }
+interface TrialCall { turn: number; name: string; input: Record<string, unknown>; isError: boolean; output: string; queryOutcomes?: boolean[] }
 export interface TrialEvidence {
   /** final assistant text per turn */
   answers: string[]
   /** tool calls in order, with name, input and whether it errored */
-  calls: { turn: number; name: string; input: Record<string, unknown>; isError: boolean; output?: string }[]
+  calls: TrialCall[]
   /** table content applied through insert_data_result */
   inserted: { rows: readonly (readonly string[])[] }[]
 }
@@ -56,9 +57,24 @@ const monthLabel = (month: string) => {
     return new RegExp(`(?<![\\d.])0?${value}\\s*月`).test(line) || new RegExp(`\\b(?:${name}|${name.slice(0, 3)})\\b`, 'i').test(line) || Number(line.trim().split(/\s+/)[0]) === value
   }
 }
-const queried = (evidence: TrialEvidence, turn?: number) =>
-  evidence.calls.filter(call => call.name === 'sources_query' && !call.isError && (turn === undefined || call.turn === turn))
-const sqlOf = (evidence: TrialEvidence, turn?: number) => queried(evidence, turn).map(call => String(call.input.sql ?? '')).join('\n')
+export function recordTrialCall(turn: number, name: string, input: Record<string, unknown>, isError: boolean, output: string): TrialCall {
+  const call: TrialCall = { turn, name, input, isError, output: output.slice(0, 600) }
+  if (name === 'sources_query' && Array.isArray(input.queries) && !isError) {
+    // Read outcomes before trimming diagnostic text. An early preview can exceed 600 characters.
+    const { items } = JSON.parse(output)
+    call.queryOutcomes = input.queries.map((_, i) => items?.[i]?.ok === true)
+  }
+  return call
+}
+export function trialSql(evidence: TrialEvidence, turn?: number, successfulOnly = false): string[] {
+  return evidence.calls.flatMap(call => {
+    if (call.name !== 'sources_query' || (turn !== undefined && call.turn !== turn) || (successfulOnly && call.isError)) return []
+    if (Array.isArray(call.input.queries)) return call.input.queries.filter((sql, i): sql is string =>
+      typeof sql === 'string' && (!successfulOnly || call.queryOutcomes?.[i] === true))
+    return typeof call.input.sql === 'string' ? [call.input.sql] : []
+  })
+}
+const sqlOf = (evidence: TrialEvidence, turn?: number) => trialSql(evidence, turn, true).join('\n')
 const check = (name: string, pass: boolean, detail = ''): Check => ({ name, pass, detail })
 
 export const SCENARIOS: Scenario[] = [

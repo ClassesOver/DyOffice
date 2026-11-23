@@ -1,8 +1,11 @@
 import { createHash } from 'node:crypto'
 import type { SourceConfig, SourceExecution, SourceKind } from '../../../../../../packages/web-contracts/src/sources.ts'
+import { SOURCE_RESULT_MAX_BYTES } from '../../../../../../packages/web-contracts/src/source-results.ts'
 import { parseSourceDsn } from '../../security/egress.ts'
 
 export const sourceError = (statusCode = 400) => Object.assign(new Error('Source operation unavailable'), { statusCode })
+/** A connector setup or cleanup error applies to the connection, including a database denial of CONNECT. */
+export const sourceConnectionFailure = Symbol('sourceConnectionFailure')
 export const sourceId = (id: unknown): string => { if (typeof id !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/.test(id)) throw sourceError(); return id }
 export function object(value: unknown, keys: readonly string[]): Record<string, any> {
   if (!value || typeof value !== 'object' || Array.isArray(value) || Object.keys(value).some(k => !keys.includes(k))) throw sourceError()
@@ -55,7 +58,7 @@ export function sourceConfig(kind: SourceKind, input: unknown): SourceConfig {
  * moderate-width detail rows. Rows past it are kept as a truncated prefix
  * rather than failing the query.
  */
-export const SQL_RESULT_MAX_BYTES = 4_000_000
+export const SQL_RESULT_MAX_BYTES = SOURCE_RESULT_MAX_BYTES
 export function executionFor(kind: SourceKind, config: SourceConfig): SourceExecution {
   return kind === 'http' ? { maxRows: config.maxRows!, requestTimeoutMs: 10_000, maxResponseBytes: 1_000_000 } : { maxRows: config.maxRows!, statementTimeoutMs: ('statementTimeoutMs' in config ? config.statementTimeoutMs : undefined) ?? 5000, maxResponseBytes: SQL_RESULT_MAX_BYTES }
 }

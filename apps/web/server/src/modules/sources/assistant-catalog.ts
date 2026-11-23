@@ -3,6 +3,7 @@ import type {SessionService} from '../auth/sessions.ts'
 import {cookies, type createCsrfService} from '../auth/csrf.ts'
 import {ASSISTANT_ANALYSIS_OPERATIONS} from '../../../../../../packages/web-contracts/src/assistant.ts'
 import type {WorkspaceSourceTools} from './tools.ts'
+import {extendSourceQueryBatchTimeout} from './tool-routes.ts'
 import {object,sourceError} from './config.ts'
 import type {SourceService} from './service.ts'
 
@@ -21,6 +22,7 @@ export function registerAssistantSourceCatalog(app: FastifyInstance, {sessions, 
   }, request => {
     const call = object(request.body, ['name','arguments'])
     if (!ASSISTANT_ANALYSIS_OPERATIONS.some(name => name === call.name)) throw sourceError(403)
+    extendSourceQueryBatchTimeout(request, 'name')
     return analysis.execute(cookies(request).session ?? '', call)
   })
   app.post('/api/v1/ai/sources/list', {

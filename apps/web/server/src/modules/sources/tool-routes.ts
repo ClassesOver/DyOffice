@@ -1,9 +1,20 @@
-import type { FastifyInstance } from 'fastify'
+import type { FastifyInstance, FastifyRequest } from 'fastify'
+import { SOURCE_QUERY_REQUEST_TIMEOUT_MS, sourceQueryBatchSize } from '../../../../../../packages/web-contracts/src/source-query-batch.ts'
 import type { SessionService } from '../auth/sessions.ts'
 import { cookies, type createCsrfService } from '../auth/csrf.ts'
 import type { WorkspaceSourceTools } from './tools.ts'
 import type { createWorkspaceSourceResults } from './results.ts'
 import { object, sourceError } from './config.ts'
+
+/** Node restores the listener's timeout on the next keep-alive request. */
+export function extendSourceQueryBatchTimeout(request: FastifyRequest, operationField: 'name' | 'operation') {
+  const current = request.socket.timeout
+  if (!current) return
+  const call = request.body as Record<string, unknown> | null
+  const count = sourceQueryBatchSize(call?.[operationField], call?.arguments) ?? 1
+  const timeout = count * SOURCE_QUERY_REQUEST_TIMEOUT_MS
+  if (count > 1 && timeout > current) request.socket.setTimeout(timeout)
+}
 
 export function registerWorkspaceSourceToolRoutes(app: FastifyInstance, { tools, results, sessions, csrf }: {
   tools: WorkspaceSourceTools; results: ReturnType<typeof createWorkspaceSourceResults>; sessions: SessionService; csrf: ReturnType<typeof createCsrfService>
@@ -17,7 +28,10 @@ export function registerWorkspaceSourceToolRoutes(app: FastifyInstance, { tools,
       await sessions.authenticate(token)
     })
     api.get('/api/v1/workspace/source-tools', async () => ({ tools: tools.definitions }))
-    api.post('/api/v1/workspace/source-tools/execute', { bodyLimit: 40_000 }, request => tools.execute(cookies(request).session ?? '', request.body))
+    api.post('/api/v1/workspace/source-tools/execute', { bodyLimit: 40_000 }, request => {
+      extendSourceQueryBatchTimeout(request, 'name')
+      return tools.execute(cookies(request).session ?? '', request.body)
+    })
     api.get('/api/v1/workspace/data-results', request => {
       const query = object(request.query, ['after','limit'])
       if (query.limit !== undefined && (typeof query.limit !== 'string' || !/^(?:[1-9][0-9]?|100)$/.test(query.limit))) throw sourceError()

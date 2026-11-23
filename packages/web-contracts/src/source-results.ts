@@ -1,5 +1,8 @@
 import type { QueryCell, QueryColumn } from './sources.ts'
 
+/** Maximum UTF-8 size of one canonical frozen snapshot, including its SHA-256. */
+export const SOURCE_RESULT_MAX_BYTES = 4_000_000
+
 /** Small, frozen JSONB evidence in a personal workspace; never an Office file.
  * A saved result remains readable by its owner after source disable/deletion.
  * Pending evidence is session-bound and expires; it is not an access capability.

@@ -7,25 +7,36 @@ import type { SourceExecution } from '../../../../../../packages/web-contracts/s
 import type { SourceEgressPolicy, SqlSourceKind } from '../../security/egress.ts'
 import { validateReadOnlySql, type SqlTableScope } from './sql-policy.ts'
 import { sourceGrantQuery, validateSourceGrantRows } from './grants.ts'
-import { sourceError } from './config.ts'
+import { sourceConnectionFailure, sourceError } from './config.ts'
 import { withAssistantErrorCode } from '../../../../../../packages/web-contracts/src/assistant-errors.ts'
 
 export interface SqlRows { names: string[]; rows: unknown[][]; types: ('string' | 'number' | 'boolean')[] }
 const pgType = (oid: number): 'string' | 'number' | 'boolean' => oid === 16 ? 'boolean' : [20,21,23,26,700,701,1700].includes(oid) ? 'number' : 'string'
 const mysqlType = (id: number): 'string' | 'number' | 'boolean' => [0,1,2,3,4,5,8,9,13,246].includes(id) ? 'number' : 'string'
-export function safeFailure(error: unknown, kind: SqlSourceKind): never {
+function sqlFailure(error: unknown, kind: SqlSourceKind) {
   const code = (error as { code?: string }).code
-  if (kind !== 'postgres' && code === 'HANDSHAKE_NO_SSL_SUPPORT') throw Object.assign(sourceError(502), { code: 'SOURCE_TLS_UNSUPPORTED' })
-  if (code === '42501' || code === '25006' || ['ER_TABLEACCESS_DENIED_ERROR','ER_DBACCESS_DENIED_ERROR','ER_SPECIFIC_ACCESS_DENIED_ERROR'].includes(code ?? '')) throw withAssistantErrorCode(sourceError(403), 'SOURCE_SCOPE_DENIED')
-  if (code === '57014' || ['PROTOCOL_SEQUENCE_TIMEOUT','ER_QUERY_TIMEOUT','ETIMEDOUT'].includes(code ?? '')) throw withAssistantErrorCode(sourceError(504), 'SOURCE_TIMEOUT')
+  if (kind !== 'postgres' && code === 'HANDSHAKE_NO_SSL_SUPPORT') return Object.assign(sourceError(502), { code: 'SOURCE_TLS_UNSUPPORTED' })
+  // A terminated connection can report its failure while executing the caller's SQL.
+  if (/^(?:08[0-9A-Z]{3}|57P0[1-5])$/.test(code ?? '')
+    || ['PROTOCOL_CONNECTION_LOST','ER_SERVER_SHUTDOWN','ECONNRESET','EPIPE','ECONNABORTED','ENOTCONN'].includes(code ?? '')
+    || kind === 'postgres' && error instanceof Error && !code && ['Connection terminated','Connection terminated unexpectedly'].includes(error.message)) {
+    return withAssistantErrorCode(sourceError(502), 'SOURCE_UNAVAILABLE')
+  }
+  if (code === '42501' || code === '25006' || ['ER_TABLEACCESS_DENIED_ERROR','ER_DBACCESS_DENIED_ERROR','ER_SPECIFIC_ACCESS_DENIED_ERROR'].includes(code ?? '')) return withAssistantErrorCode(sourceError(403), 'SOURCE_SCOPE_DENIED')
+  if (code === '57014' || ['PROTOCOL_SEQUENCE_TIMEOUT','ER_QUERY_TIMEOUT','ETIMEDOUT'].includes(code ?? '')) return withAssistantErrorCode(sourceError(504), 'SOURCE_TIMEOUT')
   // The database refused the statement itself (syntax, unknown table/column/
   // function, type or data error): a fixable query, not an unusable source.
-  if (/^(?:42[0-9A-Z]{3}|22[0-9A-Z]{3})$/.test(code ?? '') || ['ER_PARSE_ERROR','ER_BAD_FIELD_ERROR','ER_NO_SUCH_TABLE','ER_SP_DOES_NOT_EXIST','ER_WRONG_FIELD_WITH_GROUP','ER_TRUNCATED_WRONG_VALUE','ER_DIVISION_BY_ZERO'].includes(code ?? '')) throw withAssistantErrorCode(sourceError(400), 'SQL_DATABASE_ERROR')
+  if (/^(?:42[0-9A-Z]{3}|22[0-9A-Z]{3})$/.test(code ?? '') || ['ER_PARSE_ERROR','ER_BAD_FIELD_ERROR','ER_NO_SUCH_TABLE','ER_SP_DOES_NOT_EXIST','ER_WRONG_FIELD_WITH_GROUP','ER_TRUNCATED_WRONG_VALUE','ER_DIVISION_BY_ZERO'].includes(code ?? '')) return withAssistantErrorCode(sourceError(400), 'SQL_DATABASE_ERROR')
   // pg emits this exact local driver error without a SQLSTATE when its
   // query deadline fires before the server cancellation response arrives.
-  if (kind === 'postgres' && error instanceof Error && code === undefined && error.message === 'Query read timeout') throw withAssistantErrorCode(sourceError(504), 'SOURCE_TIMEOUT')
-  if ((error as { statusCode?: number }).statusCode) throw error
-  throw sourceError(502)
+  if (kind === 'postgres' && error instanceof Error && code === undefined && error.message === 'Query read timeout') return withAssistantErrorCode(sourceError(504), 'SOURCE_TIMEOUT')
+  if ((error as { statusCode?: number }).statusCode) return error as { statusCode: number }
+  return sourceError(502)
+}
+export function safeFailure(error: unknown, kind: SqlSourceKind, executingStatement = true): never {
+  const failure = sqlFailure(error, kind)
+  if (!executingStatement) Object.assign(failure, { [sourceConnectionFailure]: true })
+  throw failure
 }
 /** No connectionString is passed to either driver. The socket always dials
  * the numeric address checked by the egress policy. */
@@ -38,7 +49,7 @@ export async function querySqlSource(policy: SourceEgressPolicy, kind: SqlSource
   if (kind === 'postgres') {
     const socket = createBoundedSourceSocket(target, Math.min(wireLimit, 16_000_000))
     const client = new Client({ stream: () => socket, host: target.address, port: target.port, user: target.username, password: target.password, database: target.database, connectionTimeoutMillis: 3000, query_timeout: timeout + 1500, statement_timeout: timeout, application_name: 'dyoffice-source-reader', ssl: target.tls ? { rejectUnauthorized: true, ca: target.ca, servername: isIP(target.hostname) ? undefined : target.hostname, checkServerIdentity: (_host, cert) => checkServerIdentity(target.hostname, cert) } : false })
-    let connected = false, expired = false
+    let connected = false, expired = false, executingStatement = false
     const deadline = setTimeout(() => { expired = true; void client.end().catch(() => {}) }, timeout + 5000)
     client.on('error', () => {})
     try {
@@ -51,17 +62,19 @@ export async function querySqlSource(policy: SourceEgressPolicy, kind: SqlSource
       await client.query('BEGIN READ ONLY')
       await client.query("SELECT set_config('statement_timeout',$1,true),set_config('lock_timeout',$1,true),set_config('search_path','pg_catalog',true)", [String(timeout)])
       // A server cursor bounds transfer/memory even when the SELECT has no LIMIT.
+      executingStatement = true
       await client.query('DECLARE dyoffice_source_result NO SCROLL CURSOR FOR ' + normalized)
       const result = await client.query({ text: `FETCH FORWARD ${maxRows + 1} FROM dyoffice_source_result`, rowMode: 'array', types: { getTypeParser: (oid: number) => [20,21,23,26,700,701,1700].includes(oid) ? (value: string) => value : pgTypes.getTypeParser(oid) } })
+      executingStatement = false
       await client.query('ROLLBACK')
       return { names: result.fields.map(f => f.name), types: result.fields.map(f => pgType(f.dataTypeID)), rows: result.rows }
-    } catch (error) { if (expired) throw sourceError(504); return safeFailure(error, kind) } finally {
+    } catch (error) { return safeFailure(expired ? sourceError(504) : error, kind, executingStatement) } finally {
       clearTimeout(deadline)
       if (connected) await client.end().catch(() => {})
       else await client.end().catch(() => {})
     }
   }
-  let connection: Awaited<ReturnType<typeof mysql.createConnection>> | undefined, expired = false
+  let connection: Awaited<ReturnType<typeof mysql.createConnection>> | undefined, expired = false, executingStatement = false
   const socket = createBoundedSourceSocket(target, Math.min(wireLimit, 16_000_000))
   socket.connect()
   // mysql2 owns handshake errors, but a socket can fail before it attaches.
@@ -83,10 +96,12 @@ export async function querySqlSource(policy: SourceEgressPolicy, kind: SqlSource
       await connection.query('SET SESSION TRANSACTION READ ONLY')
       await connection.query('START TRANSACTION READ ONLY')
     }
+    executingStatement = true
     const [rows, fields] = await connection.query<RowDataPacket[]>({ sql: `SELECT * FROM (${normalized}) AS dyoffice_source_result LIMIT ${maxRows + 1}`, timeout })
+    executingStatement = false
     if (kind === 'mysql') await connection.query('ROLLBACK')
     return { names: fields.map((f: FieldPacket) => f.name), types: fields.map((f: FieldPacket) => mysqlType(f.columnType ?? -1)), rows: rows as unknown as unknown[][] }
-  } catch (error) { if (expired) throw sourceError(504); return safeFailure(error, kind) } finally {
+  } catch (error) { return safeFailure(expired ? sourceError(504) : error, kind, executingStatement) } finally {
     clearTimeout(deadline); connection?.destroy(); socket.destroy()
   }
 }

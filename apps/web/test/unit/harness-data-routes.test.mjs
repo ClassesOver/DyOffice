@@ -4,6 +4,9 @@ import {createHash} from 'node:crypto'
 import Fastify from 'fastify'
 import {registerHarnessDataRoutes,registerAnalysisDeliveryRoutes} from '../../server/src/modules/coding/data-routes.ts'
 import {createHarnessDataMailbox} from '../../server/src/modules/coding/data-mailbox.ts'
+import {registerWorkspaceSourceToolRoutes} from '../../server/src/modules/sources/tool-routes.ts'
+import {registerAssistantSourceCatalog} from '../../server/src/modules/sources/assistant-catalog.ts'
+import {setTimeout as delay} from 'node:timers/promises'
 import {readFile,writeFile,access} from 'node:fs/promises'
 import {join} from 'node:path'
 import {randomUUID} from 'node:crypto'
@@ -24,6 +27,30 @@ test('task HTTP routes expose only bounded operations and verified content heade
  assert.deepEqual(result.rawPayload,bytes)
  assert.equal(result.headers['x-content-sha256'],createHash('sha256').update(bytes).digest('hex'))
  assert.equal(result.headers['x-snapshot-sha256'],'a'.repeat(64))
+})
+
+test('batch query handlers can outlast the normal socket timeout on each HTTP transport',async t=>{
+ const app=Fastify({connectionTimeout:100})
+ t.after(()=>app.close())
+ const execute=async()=>{await delay(250);return {completed:true}}
+ const sessions={async authenticate(){}},csrf={originCheck(){},requireSession(){}},tools={execute}
+ registerHarnessDataRoutes(app,{execute,dispose(){}})
+ registerWorkspaceSourceToolRoutes(app,{tools,sessions,csrf,results:{}})
+ registerAssistantSourceCatalog(app,{analysis:tools,sessions,csrf,sources:{}})
+ const url=await app.listen({host:'127.0.0.1',port:0})
+ for(const [path,field] of [
+  ['/api/v1/agents/tasks/task/data/execute','operation'],
+  ['/api/v1/workspace/source-tools/execute','name'],
+  ['/api/v1/ai/sources/execute','name'],
+ ])await t.test(path,async()=>{
+  const auth=field==='operation'?{authorization:'Bearer '+'x'.repeat(43)}:{cookie:'__Host-dyoffice-session='+'x'.repeat(43)}
+  const call=args=>fetch(url+path,{method:'POST',headers:{'content-type':'application/json',...auth},
+   body:JSON.stringify({[field]:'sources.query',arguments:{sourceId:'sales',...args}})})
+  const response=await call({queries:['select 1','select 2','select 3','select 4']})
+  assert.equal(response.status,200)
+  assert.deepEqual(await response.json(),{completed:true})
+  await assert.rejects(call({sql:'select 1'}),error=>error.cause?.code==='UND_ERR_SOCKET')
+ })
 })
 
 test('Office artifact download remains owner-authenticated and forced attachment',async t=>{

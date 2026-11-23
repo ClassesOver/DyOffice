@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import {createServer} from 'node:net'
 import {Client} from 'pg'
 import {safeFailure} from '../../server/src/modules/sources/sql.ts'
+import {createWorkspaceSourceTools} from '../../server/src/modules/sources/tools.ts'
 
 test('StarRocks without TLS has a specific safe connection failure', () => {
  assert.throws(() => safeFailure({code:'HANDSHAKE_NO_SSL_SUPPORT',message:'private connection details'}, 'starrocks'),
@@ -41,6 +42,30 @@ test('SQL failure classification preserves permission denial and unknown failure
 
 test('pg-specific driver timeout is not applied to other SQL connectors',()=>{
  for(const kind of ['mysql','starrocks'])assert.throws(()=>safeFailure(new Error('Query read timeout'),kind),e=>e.statusCode===502)
+})
+
+test('connection termination during a statement aborts the batch while timeout and unusable results stay per statement', async () => {
+ const dropped = [
+  ['postgres',{code:'08006'}], ['postgres',{code:'57P01'}], ['postgres',new Error('Connection terminated unexpectedly')],
+  ['mysql',{code:'PROTOCOL_CONNECTION_LOST'}], ['mysql',{code:'ECONNRESET'}], ['starrocks',{code:'ER_SERVER_SHUTDOWN'}],
+ ]
+ for (const [kind,error] of dropped) {
+  const statements=[]
+  const tools=createWorkspaceSourceTools({sources:{
+   async detail(){return {source:{version:1,enabled:true,hasCredential:true}}},
+   async querySource(_token,_id,{sql}){
+    statements.push(sql)
+    if(sql==='SELECT 1')safeFailure({code:'57014'},kind)
+    if(sql==='SELECT 2')throw Object.assign(Error('private result details'),{statusCode:502})
+    safeFailure(error,kind)
+   },
+  },results:{}})
+  const run=queries=>tools.execute('owner',{name:'sources.query',arguments:{sourceId:'sales',queries}})
+  const {items}=await run(['SELECT 1','SELECT 2'])
+  assert.deepEqual(items,[{ok:false,status:504,code:'SOURCE_TIMEOUT'},{ok:false,status:502,code:'SOURCE_RESULT_UNUSABLE'}])
+  await assert.rejects(run(['SELECT 3','SELECT 4']),{statusCode:502,code:'SOURCE_UNAVAILABLE'})
+  assert.deepEqual(statements,['SELECT 1','SELECT 2','SELECT 3'])
+ }
 })
 
 test('statement errors reported by the database map to a fixable 400, not an unusable source', () => {
