@@ -15,7 +15,7 @@ window.__ModuleLoader__.load({
         planning: 'DyOffice 助手已接收交接，正在规划正文…', generating: 'DyOffice 正在撰写…', awaitingSave: 'DyOffice 正在保存正文…', writingFailed: '模型连接中断，请检查 DyOffice 的模型设置后重试。',
         noTool: '模型没有写入文档内容，请重试或切换模型。',
         outputLimit: '正文达到输出上限，请缩短要求或分段撰写。', timedOut: '模型响应超时，请重试。', emptyOutput: '模型没有返回正文，请重试或切换模型。',
-        noModel: '请在 DyOffice 配置撰写模型。', waitingWriter: '正在连接文档并启动撰写…',
+        noModel: '请在 DyOffice 配置撰写模型。', waitingWriter: '正在连接文档并启动撰写…', openToWrite: '请在新窗口打开 DyOffice 以开始撰写。',
         reviewing: 'DSH 正在审阅已保存的正文…', reviewReady: 'DSH 审阅意见', reviewFailed: 'DSH 未能完成审阅。', reviewNoModel: '请在 DSH 配置审阅模型。',
         handedOff: '正文已保存，交给 DSH 审阅。', officeChat: '后续消息会发给 DyOffice 助手。', endOfficeChat: '结束 Office 对话',
         reopenForChat: '原文档窗口已断开。可结束 Office 对话或重新发起。', officeBusy: '请等 DyOffice 助手完成当前任务。', officeTextOnly: 'Office 对话支持最多 4,000 字的纯文本。', officeAnswering: 'DyOffice 助手正在处理这条消息…', officeAnswerFailed: 'DyOffice 未能回答，请重试。', you: '你',
@@ -46,7 +46,7 @@ window.__ModuleLoader__.load({
         planning: 'DyOffice Assistant accepted the handoff and is preparing a plan…', generating: 'DyOffice is writing…', awaitingSave: 'DyOffice is saving the draft…', writingFailed: 'The model connection failed. Check the model in DyOffice and try again.',
         noTool: 'The model did not write any document content. Try again or switch models.',
         outputLimit: 'The draft reached the output limit. Try a shorter request.', timedOut: 'The model took too long to respond. Try again.', emptyOutput: 'The model returned no document text. Try again or switch models.',
-        noModel: 'Configure the writing model in DyOffice.', waitingWriter: 'Connecting the document and starting writing…',
+        noModel: 'Configure the writing model in DyOffice.', waitingWriter: 'Connecting the document and starting writing…', openToWrite: 'Open DyOffice in a new window to start writing.',
         reviewing: 'DSH is reviewing the saved draft…', reviewReady: 'DSH review', reviewFailed: 'DSH could not complete the review.', reviewNoModel: 'Configure the review model in DSH.',
         handedOff: 'Draft saved and handed to DSH for review.', officeChat: 'Follow-up messages go to DyOffice Assistant.', endOfficeChat: 'End Office conversation',
         reopenForChat: 'The original editor window is disconnected. End the Office conversation or start again.', officeBusy: 'Wait for DyOffice Assistant to finish its current task.', officeTextOnly: 'Office chat accepts plain text up to 4,000 characters.', officeAnswering: 'DyOffice Assistant is working on this message…', officeAnswerFailed: 'DyOffice could not answer. Please try again.', you: 'You',
@@ -241,8 +241,9 @@ window.__ModuleLoader__.load({
       useEffect(()=>{
         const el=host.current,target=anchor?.element
         if(!target)return
-        const place=()=>{
-          const r=target.getBoundingClientRect()
+        let lastBounds,animation
+        const place=r=>{
+          lastBounds=r
           let top=Math.max(0,r.top),left=Math.max(0,r.left),bottom=Math.min(window.innerHeight,r.bottom),right=Math.min(window.innerWidth,r.right)
           for(let parent=target.parentElement;parent;parent=parent.parentElement){
             const style=getComputedStyle(parent),bounds=parent.getBoundingClientRect()
@@ -253,11 +254,26 @@ window.__ModuleLoader__.load({
             visibility:target.isConnected&&bottom>top&&right>left?'visible':'hidden',
             clipPath:'inset('+[top-r.top,r.right-right,r.bottom-bottom,left-r.left].map(v=>Math.max(v,0)+'px').join(' ')+')'})
         }
-        const observer=new IntersectionObserver(place)
-        const resize=new ResizeObserver(place)
-        observer.observe(target);resize.observe(target);place()
-        window.addEventListener('scroll',place,true)
-        return ()=>{observer.disconnect();resize.disconnect();window.removeEventListener('scroll',place,true);el.style.visibility='hidden'}
+        const refresh=()=>place(target.getBoundingClientRect())
+        // Content above the card can move it without scrolling or resizing it.
+        const followPosition=()=>{
+          const bounds=target.getBoundingClientRect()
+          if(bounds.top!==lastBounds.top||bounds.left!==lastBounds.left)place(bounds)
+          animation=requestAnimationFrame(followPosition)
+        }
+        const observer=new IntersectionObserver(entries=>{
+          cancelAnimationFrame(animation)
+          refresh()
+          if(entries[entries.length-1].isIntersecting)animation=requestAnimationFrame(followPosition)
+        })
+        const resize=new ResizeObserver(refresh)
+        observer.observe(target);resize.observe(target);refresh()
+        window.addEventListener('scroll',refresh,true)
+        return ()=>{
+          observer.disconnect();resize.disconnect();cancelAnimationFrame(animation)
+          window.removeEventListener('scroll',refresh,true)
+          el.style.visibility='hidden'
+        }
       },[anchor])
       return h('div',{ref:host,style:{position:'fixed',overflow:'hidden',visibility:'hidden',
         borderRadius:'0 0 11px 11px',pointerEvents:'auto',zIndex:1}},children)
@@ -582,9 +598,9 @@ window.__ModuleLoader__.load({
         ctx.on('conversation/route-message', ({sessionId,text,attachmentCount})=>{
           const fileId=officeSessions.get(sessionId), entry=collaboration.read()?.get(fileId)
           if(!entry?.topic || entry.ended)return
-          if(entry.state && !['saved','planning','writing','saving'].includes(entry.state))return
+          if(!['saved','planning','writing','saving'].includes(entry.state))return
           const reject=message=>({kind:'error',text:t(message)})
-          if(!entry.state || entry.state==='planning')return reject('officeBusy')
+          if(entry.state==='planning')return reject('officeBusy')
           if(attachmentCount || !text.trim() || text.length>4000)return reject('officeTextOnly')
           const editor=runners.read()?.get(fileId)?.editor.read()
           if(editor?.fileId!==fileId || editor.popup.closed) {
@@ -679,6 +695,7 @@ window.__ModuleLoader__.load({
           const stage={planning:'planning',writing:'generating',saving:'awaitingSave',saved:'handedOff',conflict:'writingConflict',saveFailed:'writingSaveFailed',failed:'writingFailed',noModel:'noModel',outputLimit:'outputLimit',timedOut:'timedOut',emptyOutput:'emptyOutput',noTool:'noTool'}[entry?.state]
           const review=entry?.review
           const inProgress = label=>h(WorkStatus,{label:t(label),started:node.time,t})
+          const connection=useSyncExternalStore(connectionStatus.subscribe,connectionStatus.read)
           const remote=job?.embedded
           const opening=editor?.fileId===fileId&&!!fileId
           const canPreview=remote&&opening&&!entry?.disconnected
@@ -697,7 +714,7 @@ window.__ModuleLoader__.load({
           },[fileId,remote,liveFrame])
           const external=useRef(null)
           const openWindow=()=>{
-            if(remote&&editor?.embedded&&opening){
+            if(entry?.ended || remote&&editor?.embedded&&opening){
               if(external.current&&!external.current.closed){external.current.focus();return}
               external.current=window.open(receipt.href,'_blank','popup,width=1200,height=850')
               updateCollaboration(fileId,e=>({...e,popupBlocked:!external.current}))
@@ -716,11 +733,20 @@ window.__ModuleLoader__.load({
             :inProgress(creation?.id&&creation.sessionId===sessionId?'creating':'sending')
           const syncLabel=entry?.ended?'syncEnded':entry?.disconnected||entry?.syncState==='stale'?'syncStale':entry?.syncState==='live'?'syncLive':null
           const revision=entry?.snapshot?.revision
-          const canChat=entry?.state==='saved'&&!entry.ended&&officeSessions.get(entry.sessionId)===fileId
+          const ownsSession=entry&&!entry.ended&&officeSessions.get(entry.sessionId)===fileId
+          const canChat=ownsSession&&entry.state==='saved'
+          const needsWindow=remote&&entry?.checked&&entry.topic&&!stage&&!opening&&!allowsEmbed(connection,receipt.origin)
+          const canEnd=canChat||(ownsSession&&needsWindow)
+          let waitingMessage
+          if(job&&entry?.topic&&!stage&&!entry.ended){
+            if(entry.disconnected)waitingMessage=h('span',{role:'status'},t('reopenForChat'))
+            else if(needsWindow)waitingMessage=t('openToWrite')
+            else waitingMessage=inProgress('waitingWriter')
+          }
           const messages=[
             entry?.topic&&row('DSH',t('requestDraft')+' '+entry.topic,'request'),
             stage&&row('DyOffice',active?inProgress(stage):h('span',{role:'status'},t(entry.disconnected&&entry.state!=='saved'?'reopenForChat':stage)),'writing'),
-            receipt&&entry?.topic&&!stage&&row('DyOffice',entry.disconnected?h('span',{role:'status'},t('reopenForChat')):inProgress('waitingWriter'),'waiting'),
+            waitingMessage&&row('DyOffice',waitingMessage,'waiting'),
             receipt&&entry?.checked&&!entry.topic&&!stage&&row('DyOffice',t('created'),'created'),
             entry?.reply&&row('DyOffice',entry.reply,'office-reply'),
             review&&row('DSH',review.state==='reviewing'?inProgress('reviewing'):
@@ -745,11 +771,11 @@ window.__ModuleLoader__.load({
                 liveFrame?h('div',{ref:previewAnchor,className:'dsh-office-frame'})
                   :h(DocumentExcerpt,{entry,pending:!entry?.inlineChecked&&!entry?.checked,t})),
               messages.length>0&&h('section',{className:'dsh-office-log','aria-label':t('messagesLabel')},messages)),
-            (syncLabel||canChat||entry?.skillName)&&h('footer',{className:'dsh-office-footer'},
+            (syncLabel||canEnd||entry?.skillName)&&h('footer',{className:'dsh-office-footer'},
               syncLabel&&h('span',{role:'status'},t(syncLabel)),
               entry?.skillName&&h('small',null,t('skillLabel'),' · ',entry.skillName),
               canChat&&h('span',null,t('destination'),' · DyOffice'),
-              canChat&&h('button',{type:'button',onClick:()=>{
+              canEnd&&h('button',{type:'button',onClick:()=>{
                 officeSessions.delete(entry.sessionId)
                 stopRunner(receipt.fileId)
                 updateCollaboration(receipt.fileId,current=>({...current,ended:true}))

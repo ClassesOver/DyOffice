@@ -6,7 +6,7 @@ import { build } from 'esbuild'
 import { expect } from '@playwright/test'
 import { launchTestBrowser } from '../helpers/browser.mjs'
 
-for(const unrestricted of [false,true])test(`DSH command card runs an interactive Office page (cross-origin embedding: ${unrestricted})`,async t=>{
+async function mountCard(t, embedOrigins) {
  const browser=await launchTestBrowser()
  t.after(()=>browser.close())
  const page=await browser.newPage({viewport:{width:800,height:620},deviceScaleFactor:1})
@@ -19,7 +19,7 @@ for(const unrestricted of [false,true])test(`DSH command card runs an interactiv
  const writing={id:'writing-1',topic:'拟一份社区阅读日活动策划，包含时间和流程。',review:{state:'ready',text:'活动流程已齐全，建议补充报名截止时间。'}}
  await page.route(dshOrigin+'/**',route=>{
   const url=new URL(route.request().url())
-  if(url.pathname.endsWith('dyoffice-preview'))return route.fulfill({json:url.searchParams.has('draftSync')?{ticket:'fixture'}:{origin:officeOrigin,...(unrestricted?{dshEditorOrigins:['http://localhost:3080',dshOrigin]}:{dshEditorOrigin:dshOrigin}),preview,writing}})
+  if(url.pathname.endsWith('dyoffice-preview'))return route.fulfill({json:url.searchParams.has('draftSync')?{ticket:'fixture'}:{origin:officeOrigin,...embedOrigins,preview,writing}})
   return route.fulfill({contentType:'text/html',body:'<!doctype html><html lang="zh"><meta charset="utf-8"><style>body{margin:16px;font:14px/1.5 system-ui,sans-serif;color:#243048;background:#fafbfe;--dsw-alias-label-secondary:#536274;--dsw-alias-bg-layer-1:white}</style><main></main></html>'})
  })
  await page.context().route(officeOrigin+'/**',route=>route.fulfill({contentType:'text/html',body:`<!doctype html>
@@ -41,6 +41,7 @@ for(const unrestricted of [false,true])test(`DSH command card runs an interactiv
     sidebarRightTabs:{register(){}},uiConversation:{events:{register(){}},views:{register(){}}},
     slots:{inject:(_,f)=>f(),register:(spec,Component)=>slots[spec.name]=Component}})
   }}
+  window.routeMessage=()=>listeners['conversation/route-message']({sessionId:'studio-session',text:'你好',attachmentCount:0})
   window.mount=(name,fileId)=>{
    const outcome={kind:'success',text:'已创建 '+name+'\n'+officeOrigin+'/#/file/'+fileId}
    listeners['command/executed']('studio-session','dyoffice',outcome)
@@ -52,6 +53,11 @@ for(const unrestricted of [false,true])test(`DSH command card runs an interactiv
  await page.addScriptTag({path:fileURLToPath(new URL('../../../../integrations/dsh-dyoffice/client.js',import.meta.url))})
  await page.evaluate(([name,id])=>mount(name,id),[name,fileId])
  const card=page.locator('.dsh-office-studio')
+ return {page,card,name,fileId,revision,errors,officeOrigin}
+}
+
+for(const embedOrigins of [{dshEditorOrigin:'https://localhost:4681'},{dshEditorOrigins:['http://localhost:3080','https://localhost:4681']}])test(`DSH command card runs an interactive Office page with ${Object.keys(embedOrigins)[0]}`,async t=>{
+ const {page,card,name,fileId,revision,errors,officeOrigin}=await mountCard(t,embedOrigins)
  await expect(card.getByText('消息同步中',{exact:true})).toBeVisible()
  await expect(card.getByText('活动流程已齐全，建议补充报名截止时间。')).toBeVisible()
  await expect(card.getByText('正文已保存，交给 DSH 审阅。')).toBeVisible()
@@ -93,4 +99,37 @@ for(const unrestricted of [false,true])test(`DSH command card runs an interactiv
  await expect(card.getByText('社区阅读日',{exact:true})).toBeVisible()
  await expect(frame).toHaveCount(0)
  assert.deepEqual(errors,[])
+})
+
+test('a pending task without embedding leaves messages with DSH and can be ended',async t=>{
+ const {page,card}=await mountCard(t,{dshEditorOrigins:[]})
+ await expect(card.getByText(/拟一份社区阅读日活动策划/)).toBeVisible()
+ assert.equal(await page.evaluate(()=>window.routeMessage()),undefined)
+ await expect(card.getByText('请在新窗口打开 DyOffice 以开始撰写。')).toBeVisible()
+ await card.getByRole('button',{name:'结束 Office 对话'}).click()
+ await expect(card.getByText('对话已结束',{exact:true})).toBeVisible()
+ await expect(card.getByText('请在新窗口打开 DyOffice 以开始撰写。')).toHaveCount(0)
+ assert.equal(await page.evaluate(()=>window.routeMessage()),undefined)
+})
+
+test('opening the external writer hands follow-up messages to Office after saving',async t=>{
+ const {page,card}=await mountCard(t,{dshEditorOrigins:[]})
+ await expect(card.getByText('请在新窗口打开 DyOffice 以开始撰写。')).toBeVisible()
+ const opened=page.waitForEvent('popup')
+ await card.getByRole('button',{name:'在新窗口打开 DyOffice',exact:false}).click()
+ const popup=await opened
+ await expect(card.getByText('正文已保存，交给 DSH 审阅。')).toBeVisible()
+ assert.deepEqual(await page.evaluate(()=>window.routeMessage()),{kind:'success'})
+ await popup.close()
+})
+
+test('the interactive frame follows a message expanding above the card',async t=>{
+ const {page,card,name}=await mountCard(t,{dshEditorOrigin:'https://localhost:4681'})
+ await page.setViewportSize({width:900,height:1100})
+ const frame=page.locator('iframe[title="'+name+'"]'), anchor=card.locator('.dsh-office-frame')
+ await expect(card.getByText('消息同步中',{exact:true})).toBeVisible()
+ const initial=await anchor.boundingBox()
+ await page.evaluate(()=>{const message=document.createElement('div');message.style.height='64px';document.body.prepend(message)})
+ assert.equal((await anchor.boundingBox()).y,initial.y+64)
+ await expect.poll(async()=>Math.abs((await frame.boundingBox()).y-(await anchor.boundingBox()).y)).toBeLessThan(1)
 })
