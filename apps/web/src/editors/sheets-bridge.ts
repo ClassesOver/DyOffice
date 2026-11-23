@@ -201,7 +201,7 @@ export function createSheetsBridge(host: SessionFileHost, fileId: string, prefs:
     getTheme: async () => prefs.theme,
     getDocumentTheme: async () => 'follow' as const,
     getAutoSaveDefault: async () => ({on:prefs.autoSave === true,updatedAt:1}),
-    getAiPanelPrefs: async () => ({side:'left' as const,fontSize:'default' as const,customFontSize:14,spellcheck:true,openInNewDocs:false,showAiSidebar:false,showAiAskTrigger:true}),
+    getAiPanelPrefs: async () => ({side:'left' as const,fontSize:'default' as const,customFontSize:14,spellcheck:true,openInNewDocs:false,showAiSidebar:false,showAiAskTrigger:false}),
     getUserDisplayName: async () => prefs.authorName ?? '',
     onLanguageChanged:noEvent,onThemeChanged:noEvent,onDocumentThemeChanged:noEvent,onAutoSaveDefaultChanged:noEvent,onAiPanelPrefsChanged:noEvent,onUserDisplayNameChanged:noEvent,
     onWorkbookPickArmed:noEvent,onWorkbookPickSelected:noEvent,onWorkbookPickCancelled:noEvent,

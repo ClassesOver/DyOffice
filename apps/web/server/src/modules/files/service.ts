@@ -273,7 +273,8 @@ export function createFileService({ transactions, objects, quotaBytes = 1024 ** 
     },
     async nameBlankFile(token:FileCredential,fileId:string,revision:string,candidate:string){
       const id=uuid(fileId),rev=uuid(revision)
-      const stem=Array.from(candidate.replace(/[\\/:*?"<>|\u0000-\u001f\u007f]/g,' ').replace(/\s+/g,' ').trim().replace(/^\.+|\.+$/g,'').trim()).slice(0,40).join('').trim()
+      // eslint-disable-next-line no-control-regex -- generated filenames must not contain control characters
+      const stem=candidate.replace(/[\\/:*?"<>|\u0000-\u001f\u007f]/g,' ').replace(/\s+/g,' ').trim().replace(/^\.+|\.+$/g,'').trim()
       if(!stem)return {renamed:false as const}
       return personal(token,'files:write',async(connection,principal)=>{
         await lockAccount(connection,principal)
@@ -282,7 +283,7 @@ export function createFileService({ transactions, objects, quotaBytes = 1024 ** 
         const original=await connection.query("SELECT 1 FROM file_revisions WHERE deployment_id=$1 AND owner_id=$2 AND file_id=$3 AND id=$4 AND source='save'",[...scope(principal),id,rev])
         if(!original.rowCount)return {renamed:false as const}
         const names=new Set((await connection.query<{name:string}>('SELECT name FROM files WHERE deployment_id=$1 AND owner_id=$2 AND deleted_at IS NULL AND id<>$3',[...scope(principal),id])).rows.map(file=>file.name.toLowerCase()))
-        const base=stem.replace(new RegExp('\\.'+row.format+'$','i'),'').trim()
+        const base=Array.from(stem.replace(new RegExp('\\.'+row.format+'$','i'),'')).slice(0,40).join('').trim().replace(/\.+$/g,'').trim()
         if(!base)return {renamed:false as const}
         let name=base+'.'+row.format
         if(name===row.name)return {renamed:false as const}

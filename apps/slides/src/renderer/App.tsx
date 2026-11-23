@@ -3772,7 +3772,7 @@ export function App({ host }: { host?: SlidesAppHost } = {}) {
                 extraSkills={host?.assistant?.extraSkills}
                 mediaCapabilities={host?.assistant?.mediaCapabilities}
                 onManageAgents={host?.assistant?.onManageAgents}
-                onGeneratedDraftReady={host?.hasGeneratedName?async()=>{if(hostRef.current?.hasGeneratedName?.())await saveRef.current(true)}:undefined}
+                onGeneratedDraftReady={host?.hasGeneratedName?async()=>{if(hostRef.current?.hasGeneratedName?.())await saveRef.current(true,true)}:undefined}
                 key={aiPanelKey}
                 slides={slides}
                 current={current}

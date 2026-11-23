@@ -355,6 +355,24 @@ test('slides assistant puts generated images into slides and generated pages usi
   assert.equal(await bridge.api.insertImageUrl({slideIndex:0,url:'https://generated-image.invalid/unknown',xPx:10,yPx:10,wPx:50,hPx:50,fitWidthPx:1280}),null)
 })
 
+test('undoing generated pages drops their pending filename', async t => {
+  const createSlidesBridge = await bundleBridge(t), server = createSlidesMockServer({slideCount:1})
+  const {host, bridge} = await openBridge(createSlidesBridge, server, t)
+  const getState = host.getState
+  host.getState = fileId => ({...getState(fileId), autoNamePending:true})
+  await bridge.api.openPptx(1280)
+  const generate = () => bridge.api.localGeneratePage({specJson:JSON.stringify({elements:[
+    {type:'text',x:10,y:10,w:300,h:100,paragraphs:[{runs:[{text:'Editable title',sizePt:24}]}]},
+  ]})})
+  const first = await generate()
+  await bridge.api.landGeneratedPages([first.marker],1280,'append',undefined,'Discarded title')
+  assert.equal(bridge.hasGeneratedName(),true)
+  await bridge.api.undo()
+  const second = await generate()
+  await bridge.api.landGeneratedPages([second.marker],1280,'append')
+  assert.equal(bridge.hasGeneratedName(),false)
+})
+
 test('slides bridge persists and reloads GenOffice style templates through the authenticated API', {timeout: 30000}, async t=>{
  const createSlidesBridge=await bundleBridge(t),server=createSlidesMockServer({slideCount:1})
  const {bridge}=await openBridge(createSlidesBridge,server,t)

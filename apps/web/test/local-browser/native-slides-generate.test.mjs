@@ -406,6 +406,8 @@ for(const live of [false,true])test(live?'a real model generates, redoes and reu
  }finally{page.off('response',recordQuestionnaireResponse)}
  await expect(panel.getByText(answer,{exact:true})).toBeVisible({timeout:30000})
  await expect(page.locator('.thumb')).toHaveCount(2)
+ await expect.poll(head,{timeout:15000}).not.toBe(file.revision)
+ await expect.poll(async()=>(await f.files.openFile(f.alice.token,file.fileId)).name).toBe(contents[0][0]+'.pptx')
  await expect.poll(renderedText).toEqual(contents)
  assert.deepEqual(phases.slice(0,3),['office tool','style','outline'])
  assert.deepEqual(phases.slice(3,5).sort(),['page 1','page 2'])
@@ -413,8 +415,6 @@ for(const live of [false,true])test(live?'a real model generates, redoes and reu
  assert.ok(acceptedTools.has('generate_deck'))
  assert.ok(acceptedTools.has('ask_clarification'))
  assert.ok(acceptedTools.has('plan_deck'))
- await expect.poll(head,{timeout:15000}).not.toBe(file.revision)
- await expect.poll(async()=>(await f.files.openFile(f.alice.token,file.fileId)).name).toBe(contents[0][0]+'.pptx')
  const saved=await head()
  await expect.poll(()=>page.evaluate(()=>window.slidesApi.isDirty())).toBe(false)
  assert.deepEqual(await revisions(),[file.revision,saved])

@@ -40,5 +40,10 @@ test('only saved workspace blanks can take a generated name; collisions and manu
   assert.deepEqual(await f.files.nameBlankFile(token,manual.file.fileId,receipt.revision,'自动标题'),{renamed:false})
   const imported=await importFile(f,token,bytes,blankName),importedSave=await save(imported,bytes)
   assert.deepEqual(await f.files.nameBlankFile(token,imported.file.fileId,importedSave.revision,'自动标题'),{renamed:false})
+  if(format==='docx'){
+   const longHeading='Quarterly review summary for leaders'
+   const document=await blank(),revision=await save(document,bytes)
+   assert.deepEqual(await f.files.nameBlankFile(token,document.file.fileId,revision.revision,longHeading+'.docx'),{renamed:true,name:longHeading+'.docx'})
+  }
  }
 })

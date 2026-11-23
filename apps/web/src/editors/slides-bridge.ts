@@ -360,8 +360,8 @@ export function createSlidesBridge(host: SessionFileHost, fileId: string, prefs:
     getLanguage: async () => prefs.language === 'en' ? 'en' as const : 'zh' as const,
     getTheme: async (): Promise<UiTheme> => prefs.theme,
     getAutoSaveDefault: async (): Promise<AutoSaveDefault> => ({on: prefs.autoSave === true, updatedAt: 1}),
-    getAiPanelPrefs: async (): Promise<AiPanelPrefs> => ({side: 'left', fontSize: 'default', customFontSize: 14, spellcheck: true, showAiSidebar: false, showAiAskTrigger:true} as AiPanelPrefs),
-    setAiPanelPrefs: async (patch: Partial<AiPanelPrefs>) => ({side: 'left', fontSize: 'default', customFontSize: 14, spellcheck: true, showAiSidebar: false, showAiAskTrigger:true, ...patch} as AiPanelPrefs),
+    getAiPanelPrefs: async (): Promise<AiPanelPrefs> => ({side: 'left', fontSize: 'default', customFontSize: 14, spellcheck: true, showAiSidebar: false, showAiAskTrigger: false} as AiPanelPrefs),
+    setAiPanelPrefs: async (patch: Partial<AiPanelPrefs>) => ({side: 'left', fontSize: 'default', customFontSize: 14, spellcheck: true, showAiSidebar: false, showAiAskTrigger: false, ...patch} as AiPanelPrefs),
     getAiSettings: async () => ({provider: 'genspark', providers: {}}) as unknown as AiSettings,
     setAiSettings: async () => {},
     onLanguageChanged: noEvent, onThemeChanged: noEvent, onAutoSaveDefaultChanged: noEvent,
@@ -397,7 +397,10 @@ export function createSlidesBridge(host: SessionFileHost, fileId: string, prefs:
         slides: OpenResult['slides']; appendedFrom?: number; insertedIndex?: number; replacedIndex?: number
       }
       const {slides, appendedFrom, insertedIndex, replacedIndex} = result
-      if(!current.nameCandidate&&host.getState(fileId).autoNamePending&&deckName?.trim()&&result.dirty)current.nameCandidate=deckName
+      if (result.dirty && host.getState(fileId).autoNamePending) {
+        if (deckName?.trim() && (!current.nameCandidate || mode === 'replace')) current.nameCandidate = deckName
+        else if (mode === 'replace') current.nameCandidate = undefined
+      }
       current.generation = result.generation
       current.dirty = result.dirty
       if (result.size) current.size = result.size
@@ -467,6 +470,7 @@ export function createSlidesBridge(host: SessionFileHost, fileId: string, prefs:
       const current=requireSession()
       if(recovery||!host.getState(fileId).lease)return null
       const raw=await call(current.revision,current.generation,'snapshot-restore',{snapshotId}) as {generation:number;dirty:boolean;size?:{cx:number;cy:number};slides:OpenResult['slides']|null;history:HistoryState}
+      if (raw.slides) current.nameCandidate = undefined
       current.generation=raw.generation;current.dirty=!!raw.dirty
       if(raw.size)current.size=raw.size
       emitHistory(raw.history);onChange()
@@ -665,6 +669,7 @@ export function createSlidesBridge(host: SessionFileHost, fileId: string, prefs:
       if (disposed || !current || recovery) return null
       if (!host.getState(fileId).lease) return null
       const raw = await call(current.revision, current.generation, 'undo') as {generation: number; dirty: boolean; size?: {cx:number;cy:number}; slides: OpenResult['slides'] | null; history: HistoryState}
+      if (raw.slides) current.nameCandidate = undefined
       current.generation = raw.generation
       current.dirty = !!raw.dirty
       if (raw.size) current.size = raw.size
@@ -676,6 +681,7 @@ export function createSlidesBridge(host: SessionFileHost, fileId: string, prefs:
       if (disposed || !current || recovery) return null
       if (!host.getState(fileId).lease) return null
       const raw = await call(current.revision, current.generation, 'redo') as {generation: number; dirty: boolean; size?: {cx:number;cy:number}; slides: OpenResult['slides'] | null; history: HistoryState}
+      if (raw.slides) current.nameCandidate = undefined
       current.generation = raw.generation
       current.dirty = !!raw.dirty
       if (raw.size) current.size = raw.size
