@@ -92,8 +92,8 @@ export async function* parseOpenAiChatStream(source: AsyncIterable<Uint8Array>, 
       }
       if(!completed && frameBytes+encoder.encode(pending).byteLength>maxFrameBytes)throw invalid()
     }
-    if(!completed && (!finish || pending || frameBytes ||
-      (finish!=='length' && (finish==='tool_calls')!==(tools.size>0))))throw invalid()
+    if(!completed && (!finish || pending || frameBytes))throw invalid()
+    if(finish && finish!=='length' && (finish==='tool_calls')!==(tools.size>0))throw invalid()
     if(options.signal?.aborted)throw invalid()
     // Validate the complete collection before exposing any candidate to T14.
     // A length-limited batch cannot execute, even if some tool arguments parse.

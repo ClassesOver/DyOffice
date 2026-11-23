@@ -118,3 +118,15 @@ test('empty continuation IDs preserve the established tool identity',async()=>{
  await assert.rejects(()=>collect(chunks(continuation+start+done)),/Invalid provider stream/)
  await assert.rejects(()=>collect(chunks(start+part('call_2','','{}')+done)),/Invalid provider stream/)
 })
+
+test('DONE preserves the explicit finish reason when validating tool candidates',async()=>{
+ const candidate=frame(choice({tool_calls:[{index:0,id:'lookup',function:{name:'read',arguments:'{}'}}]}))
+ for(const [body,reason] of [[candidate,'stop'],['','tool_calls']]){
+  const events=[]
+  const text=body+frame({choices:[{delta:{},finish_reason:reason}]})+done
+  await assert.rejects(async()=>{
+   for await(const event of parseOpenAiChatStream(chunks(text)))events.push(event)
+  },/Invalid provider stream/)
+  assert.deepEqual(events,[])
+ }
+})

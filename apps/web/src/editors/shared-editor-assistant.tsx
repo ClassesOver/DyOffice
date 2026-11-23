@@ -1,5 +1,5 @@
 import {bindDocumentHandoff,createAttachmentsSkill,withAttachedSkills,ATTACHMENT_IMAGE_EXTS,type AgentImage,type AttachedSkill} from '@genoffice/agent-core'
-import {useEffect,useMemo,useRef,useState,type CSSProperties,type ReactNode} from 'react'
+import {useEffect,useLayoutEffect,useMemo,useRef,useState,type CSSProperties,type ReactNode} from 'react'
 import {AgentLoop,composeSkills} from '../../../../packages/agent-core/src/index'
 import {AiComposer,AiSkillChips,AiSkillsMenu,Markdown,useAiPanelResize,useAssistantFocusRoot,type MarkdownNav,type AiAttachmentLike} from '@genoffice/ui'
 import {GensparkMark} from '../../../docs/src/renderer/components/icons'
@@ -178,10 +178,12 @@ export function SharedEditorAssistant({assistant,lang,context='',dock,widthKey,o
    return true
   }catch(error){if(token)assistant.control?.endRun?.(token,{text:String(error),cancelled:false,failed:true});runToken.current=undefined;clearActiveAttachments();setBusy(false);return false}
  }
+ useLayoutEffect(()=>{
+  continueRef.current=(instruction,token)=>runOffice(instruction,token)===true
+ })
  useEffect(()=>{
   const control=assistant.control
   if(!control)return
-  continueRef.current=(instruction,token)=>runOffice(instruction,token)===true
   return control.register({
    isBusy:()=>loop.busy||!!pendingSkills.current,
    cancelRun:token=>{if(runToken.current===token)loop.cancel()},
@@ -230,8 +232,14 @@ export function SharedEditorAssistant({assistant,lang,context='',dock,widthKey,o
   setError('')
   if(!assistant.workspace.isOffice()){
    const hasExtras=files.length>0||skills.length>0
-   if(!hasExtras){setDraft('');setItems(current=>[...current,{id:seq.current++,role:'user',text}])}
-   void assistant.workspace.submit(text,hasExtras).then(result=>{if(result==='failed')setDraft(current=>current||text)})
+   if(hasExtras){await assistant.workspace.submit(text,true);return}
+   const id=seq.current++, version=draftVersion.current
+   setDraft('')
+   setItems(current=>[...current,{id,role:'user',text}])
+   if(await assistant.workspace.submit(text,false)==='failed'){
+    setItems(current=>current.filter(item=>item.id!==id))
+    if(draftVersion.current===version)setDraft(draft)
+   }
    return
   }
   const original={text:draft,files,skills,version:draftVersion.current}

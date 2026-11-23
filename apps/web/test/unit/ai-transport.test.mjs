@@ -381,3 +381,12 @@ test('SSE done completes successfully and cancels the reader without waiting for
   assert.equal(requests.length, 1)
   assert.equal(JSON.parse(requests[0].init.body).turnId, 'done-before-eof')
 })
+
+test('an error event with an empty message still fails the turn exactly once',async()=>{
+ for(const message of ['', '   ']){
+  const transport=createSseAgentTransport({fetchImpl:async()=>stream(event('delta',{text:'partial'})+event('error',{message})+event('done',{}))})
+  const {calls,callbacks}=callbackRecorder()
+  await new Promise(resolve=>transport.stream({system:'',messages:[],tools:[]},{...callbacks,onDone(){callbacks.onDone();resolve()}}))
+  assert.deepEqual(calls,[['delta','partial'],['error','AI stream failed'],['done']])
+ }
+})

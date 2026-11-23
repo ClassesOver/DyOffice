@@ -108,7 +108,7 @@ export function createSseAgentTransport(options: SseTransportOptions = {}) {
           const localized = isChinese()
             ? data.reason === AI_TURN_TIMED_OUT ? modelTimeoutZh : reason && providerFailureZh[reason]
             : undefined
-          finish(localized ?? (typeof data.message === 'string' ? data.message : 'AI stream failed'))
+          finish(localized ?? (typeof data.message === 'string' && data.message.trim() ? data.message : 'AI stream failed'))
         }
         else if (event === 'done') finish()
       }

@@ -87,3 +87,42 @@ test('Excel retains every supported merge input when its text preview is truncat
   assert.equal((await client.readAttachment(path)).truncated,true)
  }
 })
+
+test('retrying the same File after a transient parser failure registers a usable attachment',async()=>{
+ let attempts=0
+ const client=createWebAttachments(async()=>{
+  if(++attempts===1)throw Error('Parser unavailable')
+  return {ok:true,kind:'text',text:'recovered'}
+ })
+ const file=new File(['recovered'],'notes.txt')
+ assert.deepEqual(await client.addFiles([file]),{accepted:[],rejected:['Parser unavailable']})
+ const retry=await client.addFiles([file])
+ assert.deepEqual(retry.rejected,[])
+ assert.equal((await client.readAttachment(retry.accepted[0].path)).text,'recovered')
+ assert.equal(attempts,2)
+})
+
+test('a later invalid file in a drop waits for its turn without an unhandled rejection',async()=>{
+ const first=Promise.withResolvers()
+ const client=createWebAttachments(()=>first.promise)
+ const paths=[new File(['slow'],'first.txt'),new File(['x'],'second.xyz')].map(file=>client.getPathForFile(file))
+ const adding=client.addAttachmentPaths(paths)
+ await new Promise(resolve=>setImmediate(resolve))
+ first.resolve({ok:true,kind:'text',text:'slow'})
+ const {accepted,rejected}=await adding
+ assert.deepEqual(accepted.map(item=>item.name),['first.txt'])
+ assert.deepEqual(rejected,['second.xyz: unsupported file type'])
+})
+
+test('closing an editor during a batch stops later uploads and discards late results',async()=>{
+ const slow=Promise.withResolvers(),uploaded=[]
+ let uploadSignal
+ const client=createWebAttachments(async(_path,_method,file,signal)=>{uploaded.push(file.name);uploadSignal=signal;return slow.promise})
+ const adding=client.addFiles(['a.txt','b.txt'].map(name=>new File(['notes'],name)))
+ client.dispose()
+ assert.equal(uploadSignal.aborted,true)
+ slow.resolve({ok:true,kind:'text',text:'notes'})
+ const result=await adding
+ assert.deepEqual(uploaded,['a.txt'])
+ assert.deepEqual(result.accepted,[])
+})
