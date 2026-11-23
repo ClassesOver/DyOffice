@@ -179,5 +179,3 @@ export type { AssistantWorkspace } from './assistant-workspace'
 
 export { AssistantConversation } from './assistant-workspace'
 export { assistantHoldsKeyboard, registerAssistantFocusRoot, useAssistantFocusRoot } from './assistant-focus'
-
-export { AiExecutionRecord, withExecutionRecords, compactExecutionOutput, type ExecutionTool } from './AiExecutionRecord'
