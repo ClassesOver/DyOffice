@@ -211,7 +211,7 @@ function createHandler(config, authorizationRequests, createdDocument, creations
     response.once('close', () => abort.abort())
     try {
       const office = await connectOffice(abort.signal, config)
-      const connection = {origin: office.origin, paused: office.paused, canCreate: office.canCreate, dshEditorOrigin: office.dshEditorOrigin}
+      const connection = {origin: office.origin, paused: office.paused, canCreate: office.canCreate, dshEditorOrigin: office.dshEditorOrigin, dshEditorOrigins: office.dshEditorOrigins}
       if (query.has('connection')) return send(200, connection)
       const readPreview = request => request.catch(error => {
         if ([400, 403, 404].includes(error.status)) return null

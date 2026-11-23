@@ -1,3 +1,4 @@
+import {DEFAULT_OFFICE_EMBED_ORIGINS, validateOfficeEmbedOrigins} from '../../../../packages/web-contracts/src/settings.ts'
 import type { AssistantSourceMode } from '../../../../packages/web-contracts/src/assistant.ts'
 import {createKnowledgeService} from './modules/knowledge/service.ts'
 import {registerKnowledgeRoutes} from './modules/knowledge/routes.ts'
@@ -184,14 +185,18 @@ export async function buildLocalApp(config: LocalWebConfig): Promise<FastifyInst
   const throttle = createLoginThrottle(config.db, config.deploymentId, config.csrfKey, config.loginLimits)
   const app = await createApiShell(config.rateLimit?{max:config.rateLimit.max,timeWindow:config.rateLimit.windowMs}:undefined)
   try {
-  const dshEditorOrigin=config.localShellDirectory?dshEmbedOrigin(config.dshEditorOrigin):undefined
-  if(dshEditorOrigin===config.origin)throw new Error('DSH editor embed requires a separate origin')
-  const nativeAncestors=(target:string)=>{
-    const url=new URL(target,config.origin)
-    return dshEditorOrigin&&(url.pathname.endsWith('/')||url.pathname.endsWith('/index.html'))&&url.searchParams.get('dshEmbed')==='1'
-      ? "'self' "+dshEditorOrigin : "'self'"
+  const legacyEmbedOrigin=dshEmbedOrigin(config.dshEditorOrigin)
+  const officeEmbedOrigins=async()=>{
+    if(!config.businessPool)return legacyEmbedOrigin?[legacyEmbedOrigin]:[...DEFAULT_OFFICE_EMBED_ORIGINS]
+    const result=await config.db.pool.query('SELECT read_office_embed_origins($1) AS origins',[config.deploymentId])
+    return validateOfficeEmbedOrigins(result.rows[0]?.origins ?? [...DEFAULT_OFFICE_EMBED_ORIGINS,...(legacyEmbedOrigin?[legacyEmbedOrigin]:[])])
   }
-  if (config.localShellDirectory) await registerLocalShell(app,config.localShellDirectory,dshEditorOrigin)
+  const nativeAncestors=async(target:string)=>{
+    const url=new URL(target,config.origin)
+    return (url.pathname.endsWith('/')||url.pathname.endsWith('/index.html'))&&url.searchParams.get('dshEmbed')==='1'
+      ? ["'self'",...await officeEmbedOrigins()].join(' ') : "'self'"
+  }
+  if (config.localShellDirectory) await registerLocalShell(app,config.localShellDirectory,officeEmbedOrigins)
   const ownedProbes: {dispose():void;drain(options?:{timeoutMs?:number}):Promise<void>}[]=[]
   app.addHook('preClose',async()=>{for(const probe of ownedProbes)probe.dispose()})
   app.addHook('onClose',async()=>{
@@ -230,7 +235,7 @@ export async function buildLocalApp(config: LocalWebConfig): Promise<FastifyInst
       ...(codingConfig.adapters ?? []),
     ], codingConfig.defaultId ?? 'codex') : undefined
     const files = config.objectStore ? createFileService({ transactions, objects: config.objectStore, ...config.filePolicy, capabilities: nativeDocs || nativeSheets || nativeSlides || nativePdf ? { docx: nativeDocs ? 'editable' : 'unsupported',xlsx: nativeSheets ? 'editable' : 'unsupported',pptx: nativeSlides ? 'editable' : 'unsupported',pdf: nativePdf ? 'editable' : 'unsupported',...(nativePdf?{pdfEditor:'editable' as const}:{}) } : undefined }) : undefined
-    if(assistantChannels)registerAssistantChannelRoutes(app,assistantChannels,csrf,{data:harnessData,baseUrl:config.origin+'/api/v1/agents'},config.objectStore,files,dshEditorOrigin)
+    if(assistantChannels)registerAssistantChannelRoutes(app,assistantChannels,csrf,{data:harnessData,baseUrl:config.origin+'/api/v1/agents'},config.objectStore,files,officeEmbedOrigins)
     if(harnesses||assistantChannels){
       registerHarnessDataRoutes(app,harnessData)
       if(artifacts)registerAnalysisDeliveryRoutes(app,artifacts,csrf)
@@ -304,7 +309,7 @@ export async function buildLocalApp(config: LocalWebConfig): Promise<FastifyInst
         method: ['GET','HEAD'], url: '/native-docx/*',
         onRequest: async (request,reply) => {
           reply.raw.setHeader('Cache-Control','private, no-store')
-          reply.raw.setHeader('Content-Security-Policy',`default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data: blob:; worker-src 'self' blob:; connect-src ${nativeConnectSources}; object-src 'none'; base-uri 'none'; frame-ancestors ${nativeAncestors(request.url)}`)
+          reply.raw.setHeader('Content-Security-Policy',`default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data: blob:; worker-src 'self' blob:; connect-src ${nativeConnectSources}; object-src 'none'; base-uri 'none'; frame-ancestors ${await nativeAncestors(request.url)}`)
           await sessions.authenticate(cookies(request).session ?? '')
         },
         handler: async (request,reply) => {
@@ -324,7 +329,7 @@ export async function buildLocalApp(config: LocalWebConfig): Promise<FastifyInst
         method: ['GET','HEAD'], url: '/native-pdf/*',
         onRequest: async (request,reply) => {
           reply.raw.setHeader('Cache-Control','private, no-store')
-          reply.raw.setHeader('Content-Security-Policy',`default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data: blob:; worker-src 'self' blob:; connect-src ${nativeConnectSources}; object-src 'none'; base-uri 'none'; frame-ancestors ${nativeAncestors(request.url)}`)
+          reply.raw.setHeader('Content-Security-Policy',`default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data: blob:; worker-src 'self' blob:; connect-src ${nativeConnectSources}; object-src 'none'; base-uri 'none'; frame-ancestors ${await nativeAncestors(request.url)}`)
           await sessions.authenticate(cookies(request).session ?? '')
         },
         handler: async (request,reply) => {
@@ -343,7 +348,7 @@ export async function buildLocalApp(config: LocalWebConfig): Promise<FastifyInst
           reply.raw.setHeader('Cache-Control','private, no-store')
           // 'wasm-unsafe-eval' keeps harfbuzzjs font shaping working; media-src covers
           // PPTX-embedded audio/video played through the slides renderer.
-          reply.raw.setHeader('Content-Security-Policy',`default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob:; font-src 'self' data: blob:; worker-src 'self' blob:; connect-src ${nativeConnectSources}; object-src 'none'; base-uri 'none'; frame-ancestors ${nativeAncestors(request.url)}`)
+          reply.raw.setHeader('Content-Security-Policy',`default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob:; font-src 'self' data: blob:; worker-src 'self' blob:; connect-src ${nativeConnectSources}; object-src 'none'; base-uri 'none'; frame-ancestors ${await nativeAncestors(request.url)}`)
           await sessions.authenticate(cookies(request).session ?? '')
         },
         handler: async (request,reply) => {
@@ -363,7 +368,7 @@ export async function buildLocalApp(config: LocalWebConfig): Promise<FastifyInst
         method: ['GET','HEAD'], url: '/native-xlsx/*',
         onRequest: async (request,reply) => {
           reply.raw.setHeader('Cache-Control','private, no-store')
-          reply.raw.setHeader('Content-Security-Policy',`default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data: blob:; worker-src 'self' blob:; connect-src ${nativeConnectSources}; object-src 'none'; base-uri 'none'; frame-ancestors ${nativeAncestors(request.url)}`)
+          reply.raw.setHeader('Content-Security-Policy',`default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data: blob:; worker-src 'self' blob:; connect-src ${nativeConnectSources}; object-src 'none'; base-uri 'none'; frame-ancestors ${await nativeAncestors(request.url)}`)
           await sessions.authenticate(cookies(request).session ?? '')
         },
         handler: async (request,reply) => {

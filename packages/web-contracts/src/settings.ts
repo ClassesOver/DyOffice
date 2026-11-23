@@ -16,18 +16,22 @@ export interface SourceEgressTarget {
   username?: string
   database?: string
   allowInsecure?: boolean
+  /** Administrator approval for a privileged StarRocks login; SQL stays read-only. */
+  allowPrivilegedAccount?: boolean
   ca?: string
 }
 export interface AdminGlobalConfig {
   revision: number; entries: AdminGlobalEntry[]; defaults: GlobalDefaults;
   providerCatalog: ProviderCatalogEntry[]; keyStorageAvailable: boolean
   sourceEgressTargets?: SourceEgressTarget[]
+  officeEmbedOrigins?: string[]
 }
 /** Missing/blank apiKey preserves the stored key; only clearKey removes it. */
 export type GlobalEntryUpsert = Omit<AdminGlobalEntry, 'hasKey'> & { apiKey?: string; clearKey?: true }
 export interface GlobalConfigPatch {
   upserts?: GlobalEntryUpsert[]; removes?: string[]; defaults?: Partial<Record<GlobalSettingKind, string | null>>
   sourceEgressTargets?: SourceEgressTarget[]
+  officeEmbedOrigins?: string[]
 }
 export interface SaveGlobalConfigRequest { expectedRevision?: number; patch: GlobalConfigPatch }
 export interface CheckGlobalConfigRequest { expectedRevision?: number; entryId?: string }
@@ -39,3 +43,15 @@ export const MODEL_CONNECTION_FAILURES = ['PROVIDER_AUTH_REJECTED','PROVIDER_RAT
 export type ModelConnectionFailure = typeof MODEL_CONNECTION_FAILURES[number]
 export type ModelConnectionResult = {ok:true} | {ok:false;reason?:ModelConnectionFailure}
 
+
+/** Origins allowed to embed the interactive Office pages. An empty list disables embedding. */
+export const DEFAULT_OFFICE_EMBED_ORIGINS = ['http://localhost:3080', 'http://127.0.0.1:3080'] as const
+export function validateOfficeEmbedOrigins(value: unknown): string[] {
+  if (!Array.isArray(value) || value.length > 64) throw new Error('Invalid Office embed origins')
+  return [...new Set(value.map(origin => {
+    if (typeof origin !== 'string' || origin.length > 2048) throw new Error('Invalid Office embed origin')
+    const url = new URL(origin)
+    if (!['http:', 'https:'].includes(url.protocol) || url.origin !== origin || url.username || url.password) throw new Error('Invalid Office embed origin')
+    return origin
+  }))]
+}

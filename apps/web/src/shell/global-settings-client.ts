@@ -1,4 +1,4 @@
-import {GLOBAL_SETTING_KINDS, MODEL_CONNECTION_FAILURES} from '../../../../packages/web-contracts/src/settings'
+import {validateOfficeEmbedOrigins, GLOBAL_SETTING_KINDS, MODEL_CONNECTION_FAILURES} from '../../../../packages/web-contracts/src/settings'
 import type {AdminGlobalConfig, AdminGlobalEntry, GlobalConfigCheck, GlobalConfigPatch, GlobalDefaults, GlobalEntryUpsert, GlobalSettingKind, ModelConnectionResult, ProviderCatalogEntry, SourceEgressTarget} from '../../../../packages/web-contracts/src/settings'
 
 /** The caller owns cookie authentication, CSRF and session-generation fencing. */
@@ -37,10 +37,12 @@ function sourceTargets(value: unknown, code: 'invalid_request' | 'invalid_respon
       raw.addresses.length > 32 || raw.addresses.some(address => !validText(address, 64)) ||
       (raw.kind !== 'http' && (!validText(raw.username, 128) || !validText(raw.database, 128))) ||
       (raw.allowInsecure !== undefined && typeof raw.allowInsecure !== 'boolean') ||
+      (raw.allowPrivilegedAccount !== undefined && typeof raw.allowPrivilegedAccount !== 'boolean') ||
       (raw.ca !== undefined && (typeof raw.ca !== 'string' || raw.ca.length > 65536))) throw fail(code)
     return { kind: raw.kind as SourceEgressTarget['kind'], endpoint: raw.endpoint, addresses: [...raw.addresses],
       ...(raw.kind !== 'http' ? { username: raw.username as string, database: raw.database as string } : {}),
-      ...(typeof raw.allowInsecure === 'boolean' ? { allowInsecure: raw.allowInsecure } : {}), ...(typeof raw.ca === 'string' ? { ca: raw.ca } : {}) }
+      ...(typeof raw.allowInsecure === 'boolean' ? { allowInsecure: raw.allowInsecure } : {}),
+      ...(typeof raw.allowPrivilegedAccount === 'boolean' ? { allowPrivilegedAccount: raw.allowPrivilegedAccount } : {}), ...(typeof raw.ca === 'string' ? { ca: raw.ca } : {}) }
   })
 }
 
@@ -66,7 +68,9 @@ function snapshot(value: unknown, expectedRevision?: number): AdminGlobalConfig 
     if (!record(raw) || !validId(raw.id) || !validText(raw.label, 200) || !Array.isArray(raw.kinds) || raw.kinds.some(kind => typeof kind !== 'string' || !kinds.has(kind)) || !Array.isArray(raw.models) || raw.models.some(model => !validText(model, 256, true)) || !validText(raw.defaultBaseUrl, 2048, true) || typeof raw.available !== 'boolean' || (raw.unavailableReason !== undefined && !validText(raw.unavailableReason, 1000, true))) throw fail('invalid_response')
     return {id: raw.id, label: raw.label, kinds: [...raw.kinds] as GlobalSettingKind[], models: [...raw.models] as string[], defaultBaseUrl: raw.defaultBaseUrl, available: raw.available, ...(typeof raw.unavailableReason === 'string' ? {unavailableReason: raw.unavailableReason} : {})}
   })
-  return {revision: value.revision, entries, defaults, providerCatalog, keyStorageAvailable: value.keyStorageAvailable,
+  let officeEmbedOrigins: string[] | undefined
+  try { if (value.officeEmbedOrigins !== undefined) officeEmbedOrigins = validateOfficeEmbedOrigins(value.officeEmbedOrigins) } catch { throw fail('invalid_response') }
+  return {...(officeEmbedOrigins ? {officeEmbedOrigins} : {}), revision: value.revision, entries, defaults, providerCatalog, keyStorageAvailable: value.keyStorageAvailable,
     ...(value.sourceEgressTargets === undefined ? {} : {sourceEgressTargets: sourceTargets(value.sourceEgressTargets, 'invalid_response')})}
 }
 
@@ -101,7 +105,8 @@ function safePatch(value: GlobalConfigPatch): GlobalConfigPatch {
     }
   }
   if (value.sourceEgressTargets !== undefined) patch.sourceEgressTargets = sourceTargets(value.sourceEgressTargets, 'invalid_request')
-  if (!(patch.upserts?.length || patch.removes?.length || Object.keys(patch.defaults ?? {}).length || patch.sourceEgressTargets)) throw fail('invalid_request')
+  try { if (value.officeEmbedOrigins !== undefined) patch.officeEmbedOrigins = validateOfficeEmbedOrigins(value.officeEmbedOrigins) } catch { throw fail('invalid_request') }
+  if (!(patch.upserts?.length || patch.removes?.length || Object.keys(patch.defaults ?? {}).length || patch.sourceEgressTargets || patch.officeEmbedOrigins)) throw fail('invalid_request')
   return patch
 }
 

@@ -95,6 +95,27 @@ test('standalone PPTX page generation can finish beyond two minutes at the gatew
   assert.equal(network.writes,1)
  }finally{release();t.mock.timers.reset()}
 })
+for(const format of ['docx','xlsx','pptx','pdf'])test(`shared ${format} tool turns can complete near the 1800-second deadline`,{timeout:15000},async t=>{
+ let started,release
+ const ready=new Promise(resolve=>{started=resolve}),gate=new Promise(resolve=>{release=resolve})
+ const network=mockProviderNetwork(t,()=>Readable.from((async function*(){
+  yield Buffer.from('data: {"choices":[{"delta":{"reasoning_content":"Working"}}]}\n\n')
+  started();await gate
+  yield Buffer.from('data: {"choices":[{"delta":{"content":"Completed"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n')
+ })()))
+ const f=await fixture(t)
+ t.mock.timers.enable({apis:['setTimeout']})
+ try{
+  const response=f.app.inject({method:'POST',url:'/api/v1/ai/turns',headers:f.headers(f.alice),payload:{turnId:randomUUID(),modelId:entry.id,request:{format,system:'',messages:[{role:'user',text:'Complete the document task'}],tools:[{name:'create_document',description:'Create document',inputSchema:{type:'object'}}]}}})
+  await ready
+  t.mock.timers.tick(1799000)
+  release()
+  const result=await response
+  assert.match(result.body,/event: delta\ndata: {"text":"Completed"}/)
+  assert.doesNotMatch(result.body,/event: error/)
+  assert.equal(network.writes,1)
+ }finally{release();t.mock.timers.reset()}
+})
 test('private endpoint and missing CSRF cannot release the shared credential or dispatch',async t=>{
  const network=mockProviderNetwork(t,[]),f=await fixture(t)
  await f.config.saveGlobalConfig(f.adminSigned.token,1,{upserts:[{...entry,baseUrl:'https://127.0.0.1/v1'}]})

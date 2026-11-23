@@ -5,6 +5,7 @@ import { createCredentialVault } from '../../server/src/modules/sources/vault.ts
 import { validateReadOnlySql, validateReadOnlyGrants } from '../../server/src/modules/sources/sql-policy.ts'
 import { createSourceEgressPolicy } from '../../server/src/security/egress.ts'
 import { createSourceService } from '../../server/src/modules/sources/service.ts'
+import { querySqlSource } from '../../server/src/modules/sources/sql.ts'
 
 test('invalid configured egress targets cannot fall back to unset policy', () => {
   for (const egressTargets of [null, false, 0]) {
@@ -13,6 +14,21 @@ test('invalid configured egress targets cannot fall back to unset policy', () =>
 })
 
 const scope = { deploymentId: 'd', ownerId: 'u', sourceId: 's', reference: 'r', revision: 1 }
+test('privileged StarRocks accounts require an explicit identity-scoped administrator approval', async () => {
+  const target = { kind: 'starrocks', endpoint: 'starrocks://127.0.0.1:9030', addresses: ['127.0.0.1'], database: 'sales', username: 'root', allowPrivilegedAccount: true }
+  const policy = createSourceEgressPolicy([target])
+  assert.equal((await policy.sql('starrocks', 'starrocks://root:secret@127.0.0.1:9030/sales')).allowPrivilegedAccount, true)
+  await assert.rejects(policy.sql('starrocks', 'starrocks://root:secret@127.0.0.1:9030/other'))
+  await assert.rejects(policy.sql('starrocks', 'starrocks://reader:secret@127.0.0.1:9030/sales'))
+  const { allowPrivilegedAccount, ...ordinary } = target
+  assert.notEqual((await createSourceEgressPolicy([ordinary]).sql('starrocks', 'starrocks://root:secret@127.0.0.1:9030/sales')).allowPrivilegedAccount, true)
+  for (const value of ['true', 1, null]) assert.throws(() => createSourceEgressPolicy([{ ...target, allowPrivilegedAccount: value }]))
+  assert.throws(() => createSourceEgressPolicy([{ ...target, kind: 'mysql', endpoint: 'mysql://127.0.0.1:9030' }]))
+  for (const sql of ['DELETE FROM orders', 'SELECT * FROM other.orders', "SELECT load_file('/etc/passwd')"]) {
+    await assert.rejects(querySqlSource(policy, 'starrocks', 'starrocks://root:secret@127.0.0.1:9030/sales', sql, { maxRows: 10 }, { defaultSchema: 'sales', allowedSchemas: ['sales'] }), { code: 'SQL_POLICY_REJECTED' })
+  }
+})
+
 test('credential vault binds ciphertext to source/revision and retains old decryption keys', () => {
   const k1 = randomBytes(32).toString('base64'), k2 = randomBytes(32).toString('base64')
   const old = createCredentialVault('old:' + k1), rotated = createCredentialVault('new:' + k2 + ',old:' + k1)

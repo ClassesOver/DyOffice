@@ -2,7 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync, readdirSync, existsSync } from 'node:fs'
 const root = new URL('../../', import.meta.url)
-const retained = ['ai-panel-side.spec.ts', 'docs-header-markup-layout.spec.ts', 'home-row-menu-layout.spec.ts', 'pdf-outline-layout.spec.ts', 'slides-selection-image.spec.ts']
+const retained = ['ai-panel-side.spec.ts', 'docs-header-markup-layout.spec.ts', 'home-entry-b-layout.spec.ts', 'home-row-menu-layout.spec.ts', 'pdf-outline-layout.spec.ts', 'slides-selection-image.spec.ts']
 test('root e2e suite retains shared browser checks and no desktop launcher', () => {
   assert.deepEqual(readdirSync(new URL('e2e/', root)).filter(x => x.endsWith('.spec.ts')).sort(), retained)
   assert.equal(existsSync(new URL('e2e/helpers.ts', root)), false)

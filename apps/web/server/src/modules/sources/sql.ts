@@ -69,12 +69,13 @@ export async function querySqlSource(policy: SourceEgressPolicy, kind: SqlSource
   const deadline = setTimeout(() => { expired = true; socket.destroy(); connection?.destroy() }, timeout + 5000)
   try {
     connection = await mysql.createConnection({ host: target.hostname, port: target.port, user: target.username, password: target.password, database: target.database, stream: socket, connectTimeout: 3000, multipleStatements: false, enableKeepAlive: false, rowsAsArray: true, dateStrings: true, supportBigNumbers: true, bigNumberStrings: true, decimalNumbers: false, charset: 'utf8mb4', flags: ['-LOCAL_FILES'], ssl: target.tls ? { rejectUnauthorized: true, ca: target.ca, verifyIdentity: true } : undefined })
-    // Roles and unknown grant output fail closed. The connector never creates
-    // accounts or grants on a customer target. Only the configured database's
-    // explicit SELECT (plus USAGE) is accepted.
+    // Administrators may approve a privileged StarRocks login for this exact
+    // target. SQL validation and execution limits also apply to that login.
     await connection.query("SET time_zone = '+00:00'")
-    const [grants, grantFields] = await connection.query<RowDataPacket[]>(sourceGrantQuery(kind))
-    validateSourceGrantRows(kind, grants, grantFields, target.database)
+    if (kind !== 'starrocks' || !target.allowPrivilegedAccount) {
+      const [grants, grantFields] = await connection.query<RowDataPacket[]>(sourceGrantQuery(kind))
+      validateSourceGrantRows(kind, grants, grantFields, target.database)
+    }
     if (kind === 'starrocks') {
       await connection.query(`SET query_timeout = ${Math.max(1, Math.ceil(timeout / 1000))}`)
       await connection.query(`SET sql_select_limit = ${maxRows + 1}`)

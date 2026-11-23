@@ -95,6 +95,7 @@ export async function connectOffice(signal, config) {
     paused: identity.paused === true,
     canCreate: identity.canCreate,
     dshEditorOrigin: identity.dshEditorOrigin,
+    dshEditorOrigins: identity.dshEditorOrigins,
     createDocument: body => request('/member/documents', body),
     createdPreview: (fileId, proof, after, head) => request('/member/documents/' + fileId + '/preview' + (head ? '?head=1' : after ? '?after=' + after : ''),
       undefined, {'X-DyOffice-Document-Preview': proof}),

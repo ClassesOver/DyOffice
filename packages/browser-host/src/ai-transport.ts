@@ -2,7 +2,7 @@ import type {CodingProgress} from '../../agent-core/src/coding-skill.ts'
 import type {HarnessCheckpoint} from '../../agent-core/src/loop.ts'
 import type { AgentStreamRequest, AgentStreamCallbacks, AgentToolCall, AgentTokenUsage } from '@genoffice/agent-core'
 import {MODEL_CONNECTION_FAILURES,type ModelConnectionFailure} from '../../web-contracts/src/settings.ts'
-import {AI_TURN_TIMED_OUT} from '../../web-contracts/src/assistant.ts'
+import {AI_TURN_TIMED_OUT,ASSISTANT_MODEL_DEADLINE_MS} from '../../web-contracts/src/assistant.ts'
 
 const MAX_SSE_EVENT_BYTES = 256 * 1024
 const OFFICE_TURNS_ENDPOINT = '/api/v1/ai/turns'
@@ -45,7 +45,7 @@ export function createSseAgentTransport(options: SseTransportOptions = {}) {
       new URL(endpoint, 'https://dyoffice.invalid').origin !== 'https://dyoffice.invalid') {
     throw new Error('AI stream endpoint must be an origin-relative path')
   }
-  const timeoutMs = options.timeoutMs ?? 120_000
+  const timeoutMs = options.timeoutMs ?? ASSISTANT_MODEL_DEADLINE_MS
   if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0 || timeoutMs > 2_147_483_647) throw new Error('Invalid AI stream timeout')
   if (options.modelId !== undefined && !/^[A-Za-z0-9_-]{1,128}$/.test(options.modelId)) throw new Error('Invalid model identifier')
   const fetchImpl = options.fetchImpl ?? fetch

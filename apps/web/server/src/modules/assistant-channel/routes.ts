@@ -8,7 +8,7 @@ import type {ObjectStore} from '../../storage/object-store.ts'
 import type {FileService} from '../files/service.ts'
 import {readBackgroundDocument} from './background-read.ts'
 
-export function registerAssistantChannelRoutes(app:FastifyInstance,service:ReturnType<typeof createAssistantChannelService>,csrf:ReturnType<typeof createCsrfService>,dataOptions?:{data:ReturnType<typeof createHarnessDataAccess>;baseUrl:string},previewObjects?:Pick<ObjectStore,'readVerified'>,files?:FileService,dshEditorOrigin?:string) {
+export function registerAssistantChannelRoutes(app:FastifyInstance,service:ReturnType<typeof createAssistantChannelService>,csrf:ReturnType<typeof createCsrfService>,dataOptions?:{data:ReturnType<typeof createHarnessDataAccess>;baseUrl:string},previewObjects?:Pick<ObjectStore,'readVerified'>,files?:FileService,embedOrigins?:string | (()=>Promise<string[]>)) {
  const base='/api/v1/assistant-channels'
  const owner=(request:FastifyRequest)=>{
   const token=cookies(request).session??''
@@ -99,7 +99,7 @@ export function registerAssistantChannelRoutes(app:FastifyInstance,service:Retur
   })
   api.get<{Params:{id:string}}>(base+'/members/:id/tasks',async request=>(await member(request,request.params.id)).snapshot)
   api.get(base+'/member',async request=>({
-   ...await service.memberSnapshot(bearer(request)),...(dshEditorOrigin&&{dshEditorOrigin}),
+   ...await service.memberSnapshot(bearer(request)),...(typeof embedOrigins==='function'?{dshEditorOrigins:await embedOrigins()}:embedOrigins?{dshEditorOrigin:embedOrigins}:{}),
   }))
   if(files)api.post(base+'/member/documents',{bodyLimit:2048},request=>{
    const token=bearer(request),{format,title}=body(request,['format','title'])

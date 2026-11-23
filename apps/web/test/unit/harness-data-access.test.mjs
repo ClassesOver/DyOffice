@@ -296,3 +296,19 @@ test('a data grant follows confirmed lease renewals and stops at the last confir
   until+=30000
   await assert.rejects(f.access.authorize(grant.taskId,grant.credential),{statusCode:403})
 })
+
+test('batch SQL registers each frozen result in order without exposing rows and rechecks task access',async t=>{
+  const f=fixture(t), grant=await f.issue()
+  const run=queries=>f.access.execute(grant.taskId,grant.credential,'sources.query',{sourceId:'sales',queries})
+  const {items}=await run(['SELECT 1','SELECT 2'])
+  assert.equal(items.length,2)
+  for(const item of items){
+    assert.equal(item.ok,true)
+    assert.equal('preview' in item.result,false)
+    assert.ok(await f.access.download(grant.taskId,grant.credential,item.result.artifact.resultId))
+  }
+  const original=f.tools.execute
+  f.tools.execute=async(...args)=>{const value=await original(...args); f.access.revoke(grant.taskId);return value}
+  await assert.rejects(run(['SELECT 3','SELECT 4']))
+  assert.deepEqual(f.calls.filter(c=>c[2]?.name==='sources.query').map(c=>c[2].arguments.sql),['SELECT 1','SELECT 2','SELECT 3'])
+})

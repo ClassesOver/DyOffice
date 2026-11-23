@@ -71,3 +71,22 @@ test('readiness rejects a forged token hash and an expired global session',async
   await connection.query('SELECT * FROM global_config_key_readiness()')
  }),e=>e.code==='42501')
 })
+
+test('Office embed origins default to loopback, require admin writes and expose only origins to auth runtime',async t=>{
+ const f=await restrictedFixture(t,{buildApp:false})
+ const config=createGlobalConfigService({transactions:f.transactions,keyring})
+ const defaults=['http://localhost:3080','http://127.0.0.1:3080']
+ assert.deepEqual((await config.getAdminConfig(f.adminSigned.token)).officeEmbedOrigins,defaults)
+ await assert.rejects(config.saveGlobalConfig(f.alice.token,0,{officeEmbedOrigins:[]}),e=>e.statusCode===403)
+ for(const origin of ['*','https://example.test/path','https://example.test; frame-ancestors *','https://user:password@example.test','javascript:alert(1)']){
+  await assert.rejects(config.saveGlobalConfig(f.adminSigned.token,0,{officeEmbedOrigins:[origin]}),e=>e.statusCode===400)
+ }
+ const origins=[...defaults,'http://remote.example:3080']
+ assert.deepEqual((await config.saveGlobalConfig(f.adminSigned.token,0,{officeEmbedOrigins:origins})).officeEmbedOrigins,origins)
+ const read=async()=>(await f.authPool.query('SELECT read_office_embed_origins($1) AS origins',[f.deploymentId])).rows[0].origins
+ assert.deepEqual(await read(),origins)
+ await assert.rejects(f.authPool.query('SELECT * FROM global_configs'),e=>e.code==='42501')
+ await assert.rejects(config.saveGlobalConfig(f.adminSigned.token,0,{officeEmbedOrigins:[]}),e=>e.statusCode===409)
+ await config.saveGlobalConfig(f.adminSigned.token,1,{officeEmbedOrigins:[]})
+ assert.deepEqual(await read(),[])
+})

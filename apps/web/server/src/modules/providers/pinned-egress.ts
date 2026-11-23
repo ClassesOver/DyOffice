@@ -2,7 +2,7 @@ import dns from 'node:dns/promises'
 import https from 'node:https'
 import {isIP} from 'node:net'
 import {createHash} from 'node:crypto'
-import {ASSISTANT_MAX_REQUEST_BYTES,PPTX_GENERATION_DEADLINE_MS} from '../../../../../../packages/web-contracts/src/assistant.ts'
+import {ASSISTANT_MAX_REQUEST_BYTES,ASSISTANT_MODEL_DEADLINE_MS} from '../../../../../../packages/web-contracts/src/assistant.ts'
 import type {ClientRequest,IncomingMessage} from 'node:http'
 import type {TLSSocket} from 'node:tls'
 import {ProviderResponseFailure,providerResponseFailure} from './response-failure.ts'
@@ -32,7 +32,7 @@ export function createPinnedProviderTransport({profiles,timeoutMs=30_000,maxConc
 }) {
  let approved:Readonly<EgressProfile>[]
  try{
-  if(!Array.isArray(profiles)||profiles.length>256||![timeoutMs,maxConcurrent,maxResponseBytes,authorizationTimeoutMs].every(Number.isSafeInteger)||authorizationTimeoutMs<1||authorizationTimeoutMs>5000||timeoutMs<1||timeoutMs>PPTX_GENERATION_DEADLINE_MS||maxConcurrent<1||maxConcurrent>64||maxResponseBytes<1||maxResponseBytes>32*1024*1024)throw fail()
+  if(!Array.isArray(profiles)||profiles.length>256||![timeoutMs,maxConcurrent,maxResponseBytes,authorizationTimeoutMs].every(Number.isSafeInteger)||authorizationTimeoutMs<1||authorizationTimeoutMs>5000||timeoutMs<1||timeoutMs>ASSISTANT_MODEL_DEADLINE_MS||maxConcurrent<1||maxConcurrent>64||maxResponseBytes<1||maxResponseBytes>32*1024*1024)throw fail()
   approved=profiles.map((p:EgressProfile)=>{
    if(!p||Object.keys(p).length!==8||Object.keys(p).some(k=>![...profileFields,'allowedIpv4'].includes(k as typeof profileFields[number]))||
       profileFields.some(k=>k==='revision'?!Number.isSafeInteger(p[k])||p[k]<0:typeof p[k]!=='string'||!p[k]||p[k].length>2048))throw fail()
