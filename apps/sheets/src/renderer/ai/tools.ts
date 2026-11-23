@@ -19,6 +19,7 @@ import type {
   CellScalar,
   ChangePlan,
 } from '@genoffice/xlsx-gateway/domain/workbook.types'
+import { MAX_GRID_COLUMNS, MAX_GRID_ROWS } from '@genoffice/xlsx-gateway/shared/grid-bounds'
 import { t } from '../i18n/locale'
 import { formatRangeAggregate, type RangeAggregate } from './aggregate'
 import { guideCatalogSummary, loadGuides } from './guides'
@@ -286,6 +287,7 @@ export const WORKBOOK_TOOLS: AgentToolDef[] = [
     name: 'read_range',
     description:
       'Read current values/formulas by rectangular range, returning a grid with row numbers and column letters. ' +
+      'The range may include blank cells beyond the known data extent. ' +
       'The requested range is not the worksheet data extent: never infer total row or record count from its ending row; use get_workbook_context. ' +
       'This is the preferred way to read data; max 2000 cells — read larger regions in multiple calls.',
     inputSchema: {
@@ -608,8 +610,8 @@ function parseReadSheetId(
 }
 
 /** Clamp a range to the sheet's data extent before a streaming ensure; null
- * when the range lies entirely outside it (nothing to stream — cells there
- * are empty by definition). Sheets without a known extent pass through. */
+ * when the range lies entirely outside it (nothing to stream from the file).
+ * Live edits outside the file extent can still be read from the grid. */
 function clampToExtent(bounds: RangeBounds, sheet: SheetRef | undefined): RangeBounds | null {
   if (sheet?.rows === undefined || sheet.columns === undefined) return bounds
   const endRow = Math.min(bounds.endRow, sheet.rows - 1)
@@ -856,6 +858,12 @@ export function executeWorkbookTool(
       } catch {
         return fail(t('aiToolReadRange'), `Cannot parse range: ${raw}`)
       }
+      if (bounds.endRow >= MAX_GRID_ROWS || bounds.endColumn >= MAX_GRID_COLUMNS) {
+        return fail(
+          t('aiToolReadRange'),
+          'The requested range is outside the Excel worksheet grid A1:XFD1048576.',
+        )
+      }
       if (rangeCellCount(bounds) > MAX_READ_RANGE_CELLS) {
         return fail(
           t('aiToolReadRange'),
@@ -867,23 +875,15 @@ export function executeWorkbookTool(
       if ('fail' in parsedSheet) return parsedSheet.fail
       const sheetId = parsedSheet.sheetId
       const target = info.sheets.find((sheet) => sheet.id === (sheetId ?? info.sheetId))
-      if (target?.rows !== undefined && target.columns !== undefined) {
-        if (target.rows === 0 || target.columns === 0) {
-          return fail(t('aiToolReadRange'), 'The worksheet has no data (empty extent).')
-        }
-        if (bounds.endRow >= target.rows || bounds.endColumn >= target.columns) {
-          return fail(
-            t('aiToolReadRange'),
-            `The requested range is outside the worksheet data extent A1:${columnLabel(target.columns - 1)}${target.rows}.`,
-          )
-        }
-      }
       const executeRead = (): ToolExecution => {
         const normalizedRange = `${formatAddress(bounds.startRow, bounds.startColumn)}:${formatAddress(bounds.endRow, bounds.endColumn)}`
-        const metadata =
+        const extent =
           target?.rows && target.columns
-            ? `Read metadata: requested range ${normalizedRange}; authoritative worksheet data extent A1:${columnLabel(target.columns - 1)}${target.rows} (${target.rows} worksheet rows including any header). Do not infer total rows or records from the requested range.`
-            : `Read metadata: requested range ${normalizedRange}; worksheet data extent is unknown. Do not infer total rows or records from the requested range.`
+            ? `known worksheet data extent A1:${columnLabel(target.columns - 1)}${target.rows} (${target.rows} worksheet rows including any header)`
+            : target?.rows === 0 || target?.columns === 0
+              ? 'known worksheet data extent is empty'
+              : 'worksheet data extent is unknown'
+        const metadata = `Read metadata: requested range ${normalizedRange}; ${extent}. Do not infer total rows or records from the requested range.`
         const addresses: string[] = []
         for (let row = bounds.startRow; row <= bounds.endRow; row += 1) {
           for (let column = bounds.startColumn; column <= bounds.endColumn; column += 1) {
@@ -918,7 +918,8 @@ export function executeWorkbookTool(
           summary: t('aiToolReadRangeOf', { range: raw.trim().toUpperCase() }),
         }
       }
-      const loading = deps.ensureRangeLoaded?.(bounds, sheetId)
+      const ensureBounds = clampToExtent(bounds, target)
+      const loading = ensureBounds ? deps.ensureRangeLoaded?.(ensureBounds, sheetId) : true
       if (loading instanceof Promise) {
         return loading.then((loaded) =>
           loaded
