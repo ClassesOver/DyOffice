@@ -27,7 +27,7 @@ for(const manualEdit of [false,true])test(manualEdit
  const origin=`http://127.0.0.1:${server.address().port}`,f=await fileFixture(t,{origin,buildApp:false})
  await f.preferences.update(f.alice.token,{language:'zh',autoSave:false})
  const keyring={activeKeyId:'sheets-recovery',keys:{'sheets-recovery':new Uint8Array(32).fill(42)}}
- await createGlobalConfigService({transactions:f.transactions,keyring}).saveGlobalConfig(f.adminSigned.token,0,{upserts:[{id:'fixture',kind:'chat',providerId:'openai',label:'Fixture',model:'synthetic',baseUrl:'https://provider.example/v1',apiKey:'fixture-key',enabled:true}],defaults:{chat:'fixture'}})
+ await createGlobalConfigService({transactions:f.transactions,keyring}).saveGlobalConfig(f.adminSigned.token,0,{upserts:[{id:'fixture',kind:'chat',providerId:'openai',label:'Fixture',model:'synthetic',baseUrl:'https://provider.example/v1/chat/completions',apiKey:'fixture-key',enabled:true}],defaults:{chat:'fixture'}})
  const directory=await mkdtemp(join(tmpdir(),'dyoffice-sheets-recovery-'))
  f.cleanup.push(()=>rm(directory,{recursive:true,force:true}))
  await buildSheetsGateway(join(directory,'gateway.mjs'))

@@ -28,7 +28,7 @@ for(const legacy of [true,false])test(legacy?'browser assistant merges BIFF XLS,
  await f.preferences.update(f.alice.token,{language:'zh',autoSave:false})
  const keyring={activeKeyId:'merge-test',keys:{'merge-test':new Uint8Array(32).fill(65)}}
  const entry=legacy
-  ?{id:'fixture',kind:'chat',providerId:'openai',label:'Fixture',model:'synthetic',baseUrl:'https://provider.example/v1',apiKey:'fixture-key',enabled:true}
+  ?{id:'fixture',kind:'chat',providerId:'openai',label:'Fixture',model:'synthetic',baseUrl:'https://provider.example/v1/chat/completions',apiKey:'fixture-key',enabled:true}
   :JSON.parse(await readFile(liveConfig,'utf8')).entry
  assert.ok(entry?.enabled&&entry?.apiKey&&entry?.kind==='chat','Enabled test model configuration required')
  await createGlobalConfigService({transactions:f.transactions,keyring}).saveGlobalConfig(f.adminSigned.token,0,{upserts:[entry],defaults:{chat:entry.id}})

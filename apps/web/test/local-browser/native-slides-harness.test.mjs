@@ -19,7 +19,7 @@ test('a new PPTX tab resumes the conversation once and keeps its edit in the dra
  const original=await readFile(new URL('../fixtures/slides/acceptance.pptx',import.meta.url))
  const {file}=await importFile(f,f.alice.token,original,'recover-task.pptx')
  const keyring={activeKeyId:'slides-recovery',keys:{'slides-recovery':new Uint8Array(32).fill(43)}}
- await createGlobalConfigService({transactions:f.transactions,keyring}).saveGlobalConfig(f.adminSigned.token,0,{upserts:[{id:'fixture',kind:'chat',providerId:'openai',label:'Fixture',model:'synthetic',baseUrl:'https://provider.example/v1',apiKey:'fixture-key',enabled:true}],defaults:{chat:'fixture'}})
+ await createGlobalConfigService({transactions:f.transactions,keyring}).saveGlobalConfig(f.adminSigned.token,0,{upserts:[{id:'fixture',kind:'chat',providerId:'openai',label:'Fixture',model:'synthetic',baseUrl:'https://provider.example/v1/chat/completions',apiKey:'fixture-key',enabled:true}],defaults:{chat:'fixture'}})
  await f.preferences.update(f.alice.token,{language:'zh',showAssistant:true,autoSave:false})
  let runs=0,release
  const gate=new Promise(resolve=>{release=resolve})

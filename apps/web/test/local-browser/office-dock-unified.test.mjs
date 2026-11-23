@@ -34,7 +34,7 @@ test('four real Office editors share assistant chrome and retain drafts across c
  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve))
  const origin=`https://127.0.0.1:${server.address().port}`,f=await fileFixture(t,{origin,buildApp:false})
  const keyring={activeKeyId:'dock',keys:{dock:new Uint8Array(32).fill(29)}}
- await createGlobalConfigService({transactions:f.transactions,keyring}).saveGlobalConfig(f.adminSigned.token,0,{upserts:[{id:'chat',kind:'chat',providerId:'deepseek',label:'Office model',model:'synthetic',baseUrl:'https://provider.example/v1',enabled:true,apiKey:'test-key'}],defaults:{chat:'chat'}})
+ await createGlobalConfigService({transactions:f.transactions,keyring}).saveGlobalConfig(f.adminSigned.token,0,{upserts:[{id:'chat',kind:'chat',providerId:'deepseek',label:'Office model',model:'synthetic',baseUrl:'https://provider.example/v1/chat/completions',enabled:true,apiKey:'test-key'}],defaults:{chat:'chat'}})
  await f.preferences.update(f.alice.token,{language:'zh',autoSave:false,showAssistant:true})
  await createSkillService(f.transactions).save(f.alice.token,'review-office',{description:'核对 Word、Excel、PowerPoint 和 PDF 内容与保存结果，保持修改可追溯。',body:'Review the current document and report the verified results.'})
  const gateway=await sheetsGateway(t),metadata=JSON.parse(await readFile(new URL('../../../../.dyoffice-native-build/host-manifest.json',import.meta.url),'utf8'))

@@ -20,7 +20,7 @@ const frame=(delta,finish_reason)=>Buffer.from('data: '+JSON.stringify({choices:
 test('Word AI inserts generated, linked and attached images into DOCX without reusing expired attachments',{timeout:120_000},async t=>{
  const origin='http://localhost:4254',f=await fileFixture(t,{origin,buildApp:false})
  const keyring={activeKeyId:'test',keys:{test:new Uint8Array(32).fill(25)}}
- const chat={id:'shared-chat',kind:'chat',providerId:'deepseek',label:'Test chat',model:'synthetic',baseUrl:'https://provider.example/v1',enabled:true,apiKey:'synthetic-key'}
+ const chat={id:'shared-chat',kind:'chat',providerId:'deepseek',label:'Test chat',model:'synthetic',baseUrl:'https://provider.example/v1/chat/completions',enabled:true,apiKey:'synthetic-key'}
  const images={id:'image-gen',kind:'image_generation',providerId:'openai',label:'Test images',model:'gpt-image-1',baseUrl:'https://images.example/v1',enabled:true,apiKey:'synthetic-image-key'}
  const searches=['web_search','image_search'].map(kind=>({id:kind,kind,label:kind,providerId:'serper',model:'',baseUrl:'https://google.serper.dev',enabled:true,apiKey:'test-search-key'}))
  await createGlobalConfigService({transactions:f.transactions,keyring}).saveGlobalConfig(f.adminSigned.token,0,{upserts:[chat,images,...searches],defaults:{chat:chat.id,image_generation:images.id,web_search:'web_search',image_search:'image_search'}})

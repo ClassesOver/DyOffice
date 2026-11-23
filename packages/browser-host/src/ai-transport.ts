@@ -90,7 +90,7 @@ export function createSseAgentTransport(options: SseTransportOptions = {}) {
         else if (event === 'reasoning' && typeof data.text === 'string') callbacks.onReasoning?.(data.text)
         else if (event === 'tool_call') {
           if (typeof data.id !== 'string' || typeof data.name !== 'string' || !data.input || typeof data.input !== 'object' || Array.isArray(data.input)) throw new Error('Invalid complete tool call')
-          callbacks.onToolCall({ id: data.id, name: data.name, input: data.input } as AgentToolCall)
+          callbacks.onToolCall({ id: data.id, name: data.name, input: data.input, ...(typeof data.signature==='string'?{signature:data.signature}:{}) } as AgentToolCall)
         } else if (event === 'phase' && typeof data.kind === 'string') callbacks.onPhase?.(data as unknown as Parameters<NonNullable<AgentStreamCallbacks['onPhase']>>[0])
         else if (event === 'usage') {
           const usage: AgentTokenUsage = {}

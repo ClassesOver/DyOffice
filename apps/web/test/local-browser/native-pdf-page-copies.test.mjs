@@ -32,7 +32,7 @@ test('native PDF assistant and ribbon save separate page copies',{skip:!nativePd
  const source=await PDFDocument.create()
  for(const width of [400,500,600])source.addPage([width,300]).drawText('Source '+width,{x:30,y:250})
  const original=Buffer.from(await source.save()),{file}=await importFile(f,f.alice.token,original,'source.pdf')
- await createGlobalConfigService({transactions:f.transactions,keyring}).saveGlobalConfig(f.adminSigned.token,0,{upserts:[{id:'fixture',kind:'chat',providerId:'openai',label:'Fixture',model:'synthetic',baseUrl:'https://provider.example/v1',apiKey:'fixture-key',enabled:true}],defaults:{chat:'fixture'}})
+ await createGlobalConfigService({transactions:f.transactions,keyring}).saveGlobalConfig(f.adminSigned.token,0,{upserts:[{id:'fixture',kind:'chat',providerId:'openai',label:'Fixture',model:'synthetic',baseUrl:'https://provider.example/v1/chat/completions',apiKey:'fixture-key',enabled:true}],defaults:{chat:'fixture'}})
  const app=await buildLocalApp({
   db:f.db,businessPool:f.businessPool,passwords:f.passwords,deploymentId:f.deploymentId,origin,csrfKey:f.csrfKey,objectStore:f.objects,rateLimit:{max:5000,windowMs:60000},
   globalConfigKeyring:keyring,providerGateway:{mode:'shared'},codingHarnesses:false,nativePdfDirectory,
@@ -255,7 +255,7 @@ test('native PDF assistant replaces only the confirmed page and splits the saved
  const port=4290,origin='http://localhost:'+port,f=await fileFixture(t,{origin,buildApp:false})
  const keyring={activeKeyId:'replace',keys:{replace:new Uint8Array(32).fill(37)}}
  await createGlobalConfigService({transactions:f.transactions,keyring}).saveGlobalConfig(f.adminSigned.token,0,{
-  upserts:[{id:'fixture',kind:'chat',providerId:'openai',label:'Fixture',model:'synthetic',baseUrl:'https://provider.example/v1',apiKey:'fixture-key',enabled:true}],
+  upserts:[{id:'fixture',kind:'chat',providerId:'openai',label:'Fixture',model:'synthetic',baseUrl:'https://provider.example/v1/chat/completions',apiKey:'fixture-key',enabled:true}],
   defaults:{chat:'fixture'},
  })
  const originalDoc=await PDFDocument.create()

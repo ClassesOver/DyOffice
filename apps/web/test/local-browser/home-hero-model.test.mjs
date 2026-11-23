@@ -30,7 +30,7 @@ test('homepage model greeting uses the configured gateway, keeps multiline layou
  await expect(page.locator('.recent-row')).toHaveCount(20)
  await expect(page.locator('.hero-title')).toBeVisible();assert.equal(turns.length,0,'unconfigured models retain the original greeting without dispatch')
  const config=createGlobalConfigService({transactions:f.transactions,keyring})
- await config.saveGlobalConfig(f.adminSigned.token,0,{upserts:[{id:'hero-chat',kind:'chat',providerId:'deepseek',label:'Home model',model:'synthetic-hero',baseUrl:'https://provider.example/v1',enabled:true,apiKey:'synthetic-private-key'}],defaults:{chat:'hero-chat'}})
+ await config.saveGlobalConfig(f.adminSigned.token,0,{upserts:[{id:'hero-chat',kind:'chat',providerId:'deepseek',label:'Home model',model:'synthetic-hero',baseUrl:'https://provider.example/v1/chat/completions',enabled:true,apiKey:'synthetic-private-key'}],defaults:{chat:'hero-chat'}})
  const copy={greeting:'让每个好想法顺利落地。',guidance:'写一份新文档，或把手头的数据整理成清晰结论。'}
  let mode='valid'
  const upstream=mockProviderNetwork(t,()=>Readable.from([Buffer.from('data: '+JSON.stringify({choices:[{delta:{content:JSON.stringify(mode==='valid'?copy:{...copy,guidance:'过长'.repeat(100)})}}]})+'\n\ndata: [DONE]\n\n')]))

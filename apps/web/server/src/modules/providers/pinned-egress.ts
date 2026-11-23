@@ -5,7 +5,8 @@ import {createHash} from 'node:crypto'
 import {ASSISTANT_MAX_REQUEST_BYTES,ASSISTANT_MODEL_DEADLINE_MS} from '../../../../../../packages/web-contracts/src/assistant.ts'
 import type {ClientRequest,IncomingMessage} from 'node:http'
 import type {TLSSocket} from 'node:tls'
-import {ProviderResponseFailure,providerResponseFailure} from './response-failure.ts'
+import {parseOutputCapRejection} from '../../../../../../packages/ai-provider/src/output-cap.ts'
+import {OutputCapRejection,ProviderResponseFailure,providerResponseFailure} from './response-failure.ts'
 import {publicIpv4} from '../../security/ip-ranges.ts'
 export {publicIpv4}
 
@@ -136,6 +137,19 @@ export function createPinnedProviderTransport({profiles,timeoutMs=30_000,maxConc
       })
      })
     }))
+    if(response.statusCode===400||response.statusCode===422){
+     const chunks:Buffer[]=[];let bytes=0
+     const iterator=response[Symbol.asyncIterator]()
+     for(;;){
+      const part=await step(()=>iterator.next())
+      if(part.done)break
+      bytes+=part.value.length
+      if(bytes>16*1024)throw fail()
+      chunks.push(Buffer.from(part.value))
+     }
+     const limit=parseOutputCapRejection('HTTP '+response.statusCode+': '+Buffer.concat(chunks).toString(),payload.max_output_tokens??payload.max_completion_tokens??payload.max_tokens)
+     if(limit!==null)throw new OutputCapRejection(limit)
+    }
     if(response.statusCode!==200)throw providerResponseFailure(response.statusCode)??fail()
     if(typeof response.headers['content-type']!=='string'||
        response.headers['content-type'].split(';',1)[0]!.trim().toLowerCase()!=='text/event-stream'||
@@ -151,7 +165,7 @@ export function createPinnedProviderTransport({profiles,timeoutMs=30_000,maxConc
      const chunk=Buffer.from(result.value)
      await step(async()=>{await onChunk(chunk)})
     }
-   }catch(error){throw error instanceof ProviderResponseFailure?error:fail()}
+   }catch(error){throw error instanceof ProviderResponseFailure||error instanceof OutputCapRejection?error:fail()}
    finally{
     if(deadline)clearTimeout(deadline)
     externalSignal?.removeEventListener('abort',stop)

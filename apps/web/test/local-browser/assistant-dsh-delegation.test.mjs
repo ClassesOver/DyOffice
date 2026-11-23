@@ -54,7 +54,7 @@ for(const format of ['docx','xlsx','pptx','pdf'])test(format+' resumes after '+(
  const port=Number(process.env.DYOFFICE_DSH_PORT??4219),origin='http://localhost:'+port,f=await fileFixture(t,{origin,worker:true}),real=live?await realDshBackground(t):null
  await f.preferences.update(f.alice.token,{language:'zh',showAssistant:true,autoSave:false})
  const keyring={activeKeyId:'browser-dsh',keys:{'browser-dsh':new Uint8Array(32).fill(37)}}
- const entry=real?.entry??{id:'fixture',kind:'chat',providerId:'openai',label:'Fixture',model:'synthetic',baseUrl:'https://provider.example/v1',apiKey:'fixture-key',enabled:true}
+ const entry=real?.entry??{id:'fixture',kind:'chat',providerId:'openai',label:'Fixture',model:'synthetic',baseUrl:'https://provider.example/v1/chat/completions',apiKey:'fixture-key',enabled:true}
  await createGlobalConfigService({transactions:f.transactions,keyring}).saveGlobalConfig(f.adminSigned.token,0,{upserts:[entry],defaults:{chat:entry.id}})
  const sheetsDir=format==='xlsx'?await mkdtemp(join(tmpdir(),'dsh-sheets-gateway-')):undefined
  if(sheetsDir){

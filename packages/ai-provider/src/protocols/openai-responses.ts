@@ -30,11 +30,11 @@ import {
 
 const REASONING_SIGNATURE_PREFIX = 'oai-rs:'
 
-function reasoningSignature(id: string, encrypted: string): string {
+export function reasoningSignature(id: string, encrypted: string): string {
   return REASONING_SIGNATURE_PREFIX + JSON.stringify({ id, encrypted })
 }
 
-function parseReasoningSignature(
+export function parseReasoningSignature(
   signature: string | undefined,
 ): { id: string; encrypted: string } | null {
   if (!signature?.startsWith(REASONING_SIGNATURE_PREFIX)) return null
@@ -51,7 +51,7 @@ function parseReasoningSignature(
   }
 }
 
-function responsesInput(messages: AgentMessage[]): unknown[] {
+export function responsesInput(messages: AgentMessage[]): unknown[] {
   const out: unknown[] = []
   for (const m of messages) {
     if (m.role === 'user') {
@@ -116,7 +116,7 @@ export interface OpenAiResponsesOptions {
   idleTimeoutMs?: number | undefined
 }
 
-function requestBody(
+export function requestBody(
   config: AiProviderConfig,
   system: string,
   input: unknown[],

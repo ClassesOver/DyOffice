@@ -7,7 +7,7 @@ import {mockProviderNetwork} from '../helpers/provider-network.mjs'
 import {createGlobalConfigService} from '../../server/src/modules/admin/service.ts'
 import {buildLocalApp} from '../../server/src/app.ts'
 import {createCsrfService} from '../../server/src/modules/auth/csrf.ts'
-const entry={id:'shared-chat',kind:'chat',providerId:'deepseek',label:'Shared model',model:'synthetic-model',baseUrl:'https://provider.example/v1',enabled:true}
+const entry={id:'shared-chat',kind:'chat',providerId:'deepseek',label:'Shared model',model:'synthetic-model',baseUrl:'https://provider.example/v1/chat/completions',enabled:true}
 const keyring={activeKeyId:'shared-test',keys:{'shared-test':new Uint8Array(32).fill(29)}}
 async function fixture(t){
  const f=await restrictedFixture(t,{businessMax:2}),config=createGlobalConfigService({transactions:f.transactions,keyring})
@@ -67,10 +67,10 @@ test('the shared gateway gives standalone PPTX page generation room to return a 
  await turn('pptx')
  assert.equal(JSON.parse(network.wire).reasoning_effort,'none')
  await turn('pptx',[{name:'generate_deck',description:'Generate editable slides',inputSchema:{type:'object'}}])
- assert.equal(JSON.parse(network.wire).max_tokens,4096)
+ assert.equal(JSON.parse(network.wire).max_tokens,32768)
  assert.equal(JSON.parse(network.wire).reasoning_effort,undefined)
  await turn('docx')
- assert.equal(JSON.parse(network.wire).max_tokens,4096)
+ assert.equal(JSON.parse(network.wire).max_tokens,32768)
  assert.equal(JSON.parse(network.wire).reasoning_effort,undefined)
 })
 test('standalone PPTX page generation can finish beyond two minutes at the gateway',{timeout:15000},async t=>{
@@ -161,4 +161,34 @@ test('administrator can test a saved shared model; ordinary users cannot run the
  const denied=await f.app.inject({...request,headers:f.headers(f.alice)})
  assert.equal(denied.statusCode,403);assert.equal(network.writes,0)
  const result=await f.app.inject(request);assert.equal(result.statusCode,200);assert.deepEqual(result.json(),{ok:true});assert.equal(network.writes,1);assert.ok(!result.body.includes('synthetic-shared-key'))
+})
+test('DeepSeek defaults to Responses, lowers a rejected cap once, remembers it and replays tool reasoning without repeating a call',async t=>{
+ const sent=[]
+ const network=mockProviderNetwork(t,()=>{
+  const body=JSON.parse(network.wire)
+  sent.push(body)
+  if(sent.length===1)return Readable.from([Buffer.from('max_output_tokens supports at most 8192')])
+  const output=sent.length===2?[{type:'reasoning',id:'rs_1',encrypted_content:'sealed'},{type:'function_call',call_id:'c1',name:'read_pages',arguments:'{"start":1}'}]:[]
+  const frame=value=>'data: '+JSON.stringify(value)+'\n\n'
+  const incomplete=sent.length===4
+  if(incomplete)output.push({type:'function_call',call_id:'partial',name:'read_pages',arguments:'{'})
+  return Readable.from([Buffer.from((sent.length>2?frame({type:'response.output_text.delta',delta:'answer'}):'')+frame({type:incomplete?'response.incomplete':'response.completed',response:{status:incomplete?'incomplete':'completed',output,...(incomplete?{incomplete_details:{reason:'max_output_tokens'}}:{})}}))])
+ },{status:n=>n===1?422:200}),f=await fixture(t)
+ await f.config.saveGlobalConfig(f.adminSigned.token,1,{upserts:[{...entry,baseUrl:'https://provider.example/v1',model:'deepseek-v4-flash'}]})
+ const tool={name:'read_pages',description:'Read pages',inputSchema:{type:'object'}}
+ const user={role:'user',text:'Read page one'}
+ const turn=messages=>f.app.inject({method:'POST',url:'/api/v1/ai/turns',headers:f.headers(f.alice),payload:{turnId:randomUUID(),modelId:entry.id,request:{format:'pdf',system:'Office',messages,tools:[tool]}}})
+ const first=await turn([user])
+ assert.match(first.body,/event: tool_call/)
+ const call=JSON.parse(/event: tool_call\ndata: (.+)/.exec(first.body)[1])
+ const second=await turn([user,{role:'assistant',text:'',toolCalls:[call]},{role:'tool',results:[{id:call.id,name:tool.name,output:'Page one'}]}])
+ assert.match(second.body,/event: delta\ndata: {"text":"answer"}/)
+ assert.deepEqual(sent.map(b=>b.max_output_tokens),[32768,8192,8192])
+ assert.equal(sent[2].store,false)
+ assert.deepEqual(sent[2].input.slice(1).map(i=>i.type),['reasoning','function_call','function_call_output'])
+ const cut=await turn([user])
+ assert.match(cut.body,/event: stop_reason\ndata: {"reason":"max_tokens"}/)
+ assert.doesNotMatch(cut.body,/event: (error|tool_call)/)
+ assert.equal(network.writes,4)
+ assert.equal((await f.ownerPool.query("SELECT count(*)::int n FROM shared_provider_dispatches WHERE state='settled'")).rows[0].n,4)
 })

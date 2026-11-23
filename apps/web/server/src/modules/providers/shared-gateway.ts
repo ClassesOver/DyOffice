@@ -17,7 +17,8 @@ import {CODING_MODEL_TOOLS} from '../coding/model-bridge.ts'
 import type {HarnessRegistry} from '../coding/registry.ts'
 import {randomUUID} from 'node:crypto'
 import {authError} from '../auth/sessions.ts'
-import {ProviderResponseFailure} from './response-failure.ts'
+import {parseResponsesStream} from './responses-stream.ts'
+import {OutputCapRejection,ProviderResponseFailure} from './response-failure.ts'
 import type {ModelConnectionResult} from '../../../../../../packages/web-contracts/src/settings.ts'
 
 const fail=()=>new Error('Shared model unavailable')
@@ -52,6 +53,7 @@ function bridge() {
 type Row={revision:number;id:string;label:string;provider_id:string;model:string;base_url:string;preferred:boolean}
 interface Permit extends TurnPermit {row:Row}
 export function registerSharedProviderGateway(app:FastifyInstance,options:{transactions:PrincipalTransactions;sessions:SessionService;csrf:ReturnType<typeof createCsrfService>;keyring:SecretKeyring;harnesses?:HarnessRegistry;sourceMode?:AssistantSourceMode;assistantChannels?:boolean;admitContinuation?:AdmitHarnessContinuation}) {
+ const outputCaps=new Map<string,number>()
  const active=new Set<AbortController>()
  const box=createSecretBox(options.keyring)
  async function transaction<T>(token:string,work:(c:Parameters<Parameters<PrincipalTransactions['withPrincipalTransaction']>[1]>[0],p:Parameters<Parameters<PrincipalTransactions['withPrincipalTransaction']>[1]>[1])=>Promise<T>) {
@@ -73,63 +75,77 @@ export function registerSharedProviderGateway(app:FastifyInstance,options:{trans
   async function validate(token:string,permit:Permit){const fresh=await lookup(token,permit.row.id);if(fresh.revision!==permit.revision||JSON.stringify(fresh.identity)!==JSON.stringify(permit.identity))throw fail()}
   return createProviderTurns<Permit>({identity:async token=>transaction(token,async(_c,p)=>({deploymentId:p.deploymentId,userId:p.userId,sessionId:p.sessionId})),authorize:lookup,revalidate:validate,
    async *stream(permit,request,signal,{token,turnId,timeoutMs}){
-    let stage='profile_resolution'
-    let built:ReturnType<typeof buildOpenAiChatRequest>|undefined
-    let control:AbortController|undefined
-    let bytes:ReturnType<typeof bridge>|undefined
-    let producer:Promise<void>|undefined
-    let responseFailure:ProviderResponseFailure|undefined
-    let detach: (()=>void)|undefined
-    try{
-     const profile=await resolveLiveProviderProfile({deploymentId:permit.identity.deploymentId,id:permit.row.id,revision:permit.row.revision,providerId:permit.row.provider_id,model:permit.row.model,baseUrl:permit.row.base_url})
-     const scoped=scopeAssistantRequest(request,tools)
-     stage='request_build'
-     const generation=isSlidesGeneration(request)
-     const reasoningEffort=generation?openAiEffortFor({model:profile.model,thinking:{[profile.model]:'none'}},'openai-compatible'):undefined
-     const requestBody=buildOpenAiChatRequest(scoped.request,{
-      model:profile.model,maxOutputTokens:generation?16_384:profile.maxOutputTokens,
-      ...(reasoningEffort==='none'?{reasoningEffort}:{}),
-     },scoped.historicalTools)
-     built=requestBody
-     const binding=[turnId,profile.entryId,profile.revision,requestBody.digest]
-     // Claim commits before networking. A lost response cannot silently retry dispatch.
-     stage='dispatch_claim'
-     await transaction(token,async c=>{await c.query("SELECT shared_provider_dispatch('claim',$1,$2,$3,$4)",binding)})
-     const transport=createPinnedProviderTransport({profiles:[(({maxOutputTokens,...rest})=>rest)(profile)],timeoutMs,maxConcurrent:1})
-     const turnControl=new AbortController(),turnBytes=bridge(),abort=()=>turnControl.abort()
-     control=turnControl;bytes=turnBytes
-     detach=()=>signal.removeEventListener('abort',abort)
-     active.add(turnControl);signal.addEventListener('abort',abort,{once:true});if(signal.aborted)abort()
-     const {maxOutputTokens,allowedIpv4,...scope}=profile
-     stage='provider_dispatch'
-     producer=transport.sendAuthorized({...scope,requestDigest:requestBody.digest,turnId,reservationId:randomUUID(),claimId:randomUUID(),signal:turnControl.signal},requestBody.body,async(write,dispatchSignal)=>{
-      stage='credential_lookup'
-      await transaction(token,async c=>{
-       const envelope=(await c.query('SELECT shared_provider_secret($1,$2,$3,$4) AS envelope',binding)).rows[0]?.envelope
-       const credential=Buffer.from(box.unseal(envelope,{deploymentId:profile.deploymentId,configId:profile.entryId,providerId:profile.providerId,kind:'chat'}))
-       try{if(dispatchSignal.aborted)throw fail();await write(credential)}finally{credential.fill(0)}
+    const capKey=JSON.stringify([permit.row.base_url,permit.row.model])
+    for(let attempt=0;;attempt++){
+     let binding:(string|number)[]|undefined
+     let stage='profile_resolution'
+     let built:ReturnType<typeof buildOpenAiChatRequest>|undefined
+     let control:AbortController|undefined
+     let bytes:ReturnType<typeof bridge>|undefined
+     let producer:Promise<void>|undefined
+     let responseFailure:ProviderResponseFailure|OutputCapRejection|undefined
+     let detach: (()=>void)|undefined
+     try{
+      const profile=await resolveLiveProviderProfile({deploymentId:permit.identity.deploymentId,id:permit.row.id,revision:permit.row.revision,providerId:permit.row.provider_id,model:permit.row.model,baseUrl:permit.row.base_url})
+      const scoped=scopeAssistantRequest(request,tools)
+      stage='request_build'
+      const generation=isSlidesGeneration(request)
+      const responses=profile.endpoint.endsWith('/responses')
+      const reasoningEffort=generation?openAiEffortFor({model:profile.model,thinking:{[profile.model]:'none'}},responses?'openai-responses':'openai-compatible'):undefined
+      const requestBody=buildOpenAiChatRequest(scoped.request,{
+       model:profile.model,maxOutputTokens:Math.min(profile.maxOutputTokens,outputCaps.get(capKey)??Infinity),
+       ...(reasoningEffort==='none'?{reasoningEffort}:{}),
+      },scoped.historicalTools,responses?'responses':profile.providerId==='openai'?'completion-tokens':'chat')
+      built=requestBody
+      const dispatchId=attempt?randomUUID():turnId
+      const receipt=binding=[dispatchId,profile.entryId,profile.revision,requestBody.digest]
+      // Claim commits before networking. A lost response cannot silently retry dispatch.
+      stage='dispatch_claim'
+      await transaction(token,async c=>{await c.query("SELECT shared_provider_dispatch('claim',$1,$2,$3,$4)",receipt)})
+      const transport=createPinnedProviderTransport({profiles:[(({maxOutputTokens,...rest})=>rest)(profile)],timeoutMs,maxConcurrent:1})
+      const turnControl=new AbortController(),turnBytes=bridge(),abort=()=>turnControl.abort()
+      control=turnControl;bytes=turnBytes
+      detach=()=>signal.removeEventListener('abort',abort)
+      active.add(turnControl);signal.addEventListener('abort',abort,{once:true});if(signal.aborted)abort()
+      const {maxOutputTokens,allowedIpv4,...scope}=profile
+      stage='provider_dispatch'
+      producer=transport.sendAuthorized({...scope,requestDigest:requestBody.digest,turnId:dispatchId,reservationId:randomUUID(),claimId:randomUUID(),signal:turnControl.signal},requestBody.body,async(write,dispatchSignal)=>{
+       stage='credential_lookup'
+       await transaction(token,async c=>{
+        const envelope=(await c.query('SELECT shared_provider_secret($1,$2,$3,$4) AS envelope',receipt)).rows[0]?.envelope
+        const credential=Buffer.from(box.unseal(envelope,{deploymentId:profile.deploymentId,configId:profile.entryId,providerId:profile.providerId,kind:'chat'}))
+        try{if(dispatchSignal.aborted)throw fail();await write(credential)}finally{credential.fill(0)}
+       })
+       },async chunk=>{await validate(token,permit);await turnBytes.push(chunk)})
+      void producer.then(()=>turnBytes.close(),error=>{
+       if(error instanceof ProviderResponseFailure||error instanceof OutputCapRejection)responseFailure=error
+       turnBytes.close(true)
       })
-      },async chunk=>{await validate(token,permit);await turnBytes.push(chunk)})
-     void producer.then(()=>turnBytes.close(),error=>{
-      if(error instanceof ProviderResponseFailure)responseFailure=error
-      turnBytes.close(true)
-     })
-     stage='stream_parse'
-     // No per-event validate here: createProviderTurns revalidates every yielded event before
-     // emitting it, and each network chunk is already validated above.
-     for await(const event of parseOpenAiChatStream(turnBytes.source,{signal:turnControl.signal})){if(event.type==='tool_call'&&!scoped.tools.has(event.name))throw fail();yield event}
-     await producer
-     stage='dispatch_settle'
-     await transaction(token,async c=>{await c.query("SELECT shared_provider_dispatch('settle',$1,$2,$3,$4)",binding)})
-    }catch(cause){
-     const error=responseFailure??cause
-     if(!signal.aborted){
-      const rawCode=error&&typeof error==='object'&&'code'in error?(error as {code?:unknown}).code:undefined
-      const code=typeof rawCode==='string'&&/^[A-Z0-9_-]{1,64}$/.test(rawCode)?rawCode:'UNCLASSIFIED'
-      console.error('dyoffice: shared AI gateway failed',{turnId,stage:responseFailure?'provider_response':stage,code})
-     }
-     throw error
-    }finally{control?.abort();bytes?.close(true);await producer?.catch(()=>{});built?.body.fill(0);detach?.();if(control){active.delete(control)}}
+      stage='stream_parse'
+      // No per-event validate here: createProviderTurns revalidates every yielded event before
+      // emitting it, and each network chunk is already validated above.
+      for await(const event of (responses?parseResponsesStream:parseOpenAiChatStream)(turnBytes.source,{signal:turnControl.signal})){if(event.type==='tool_call'&&!scoped.tools.has(event.name))throw fail();yield event}
+      await producer
+      stage='dispatch_settle'
+      await transaction(token,async c=>{await c.query("SELECT shared_provider_dispatch('settle',$1,$2,$3,$4)",receipt)})
+      return
+     }catch(cause){
+      const error=responseFailure??cause
+      if(error instanceof OutputCapRejection&&binding&&!signal.aborted){
+       await transaction(token,async c=>{await c.query("SELECT shared_provider_dispatch('settle',$1,$2,$3,$4)",binding)})
+       if(!attempt){
+        outputCaps.set(capKey,error.ceiling)
+        continue
+       }
+      }
+      if(!signal.aborted){
+       const rawCode=error&&typeof error==='object'&&'code'in error?(error as {code?:unknown}).code:undefined
+       const code=typeof rawCode==='string'&&/^[A-Z0-9_-]{1,64}$/.test(rawCode)?rawCode:'UNCLASSIFIED'
+       console.error('dyoffice: shared AI gateway failed',{turnId,stage:responseFailure?'provider_response':stage,code})
+      }
+      throw error
+     }finally{control?.abort();bytes?.close(true);await producer?.catch(()=>{});built?.body.fill(0);detach?.();if(control){active.delete(control)}}
+    }
    },
   },{timeoutMs:ASSISTANT_MODEL_DEADLINE_MS,maxActive:8})
  }

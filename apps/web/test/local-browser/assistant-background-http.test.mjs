@@ -17,7 +17,7 @@ for(const format of ['docx','xlsx','pptx','pdf'])test('real homepage shares an e
  const origin='http://localhost:4218',f=await fileFixture(t,{origin,worker:true}),keyring={activeKeyId:'browser-bg',keys:{'browser-bg':new Uint8Array(32).fill(37)}}
  const real=process.env.DYOFFICE_REAL_DSH==='on'?await realDshBackground(t):null
  const network=real?null:mockProviderNetwork(t,[Buffer.from('data: {"choices":[{"delta":{"content":"保存版本中的预算总额为42 CNY。"}}]}\n\ndata: [DONE]\n\n')])
- await createGlobalConfigService({transactions:f.transactions,keyring}).saveGlobalConfig(f.adminSigned.token,0,{upserts:[real?.entry??{id:'shared-chat',kind:'chat',providerId:'deepseek',label:'Shared model',model:'synthetic-model',baseUrl:'https://provider.example/v1',enabled:true,apiKey:'synthetic-key'}],defaults:{chat:'shared-chat'}})
+ await createGlobalConfigService({transactions:f.transactions,keyring}).saveGlobalConfig(f.adminSigned.token,0,{upserts:[real?.entry??{id:'shared-chat',kind:'chat',providerId:'deepseek',label:'Shared model',model:'synthetic-model',baseUrl:'https://provider.example/v1/chat/completions',enabled:true,apiKey:'synthetic-key'}],defaults:{chat:'shared-chat'}})
  const app=await buildLocalApp({db:f.db,businessPool:f.businessPool,passwords:f.passwords,deploymentId:f.deploymentId,origin,csrfKey:f.csrfKey,objectStore:f.objects,globalConfigKeyring:keyring,providerGateway:{mode:'shared'},codingHarnesses:false,assistantChannels:true,assistantBackground:{pool:f.workerPool},localShellDirectory:officeBrowserAsset('local-shell')})
  f.cleanup.push(()=>app.close());await app.listen({port:4218,host:'127.0.0.1'})
  const browser=await launchTestBrowser();t.after(()=>browser.close())

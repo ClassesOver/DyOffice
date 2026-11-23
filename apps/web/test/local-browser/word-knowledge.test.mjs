@@ -23,7 +23,7 @@ const liveConfig=process.env.DYOFFICE_LIVE_WORD_KNOWLEDGE_CONFIG
 test('Word searches a starred saved source, reads its actual text and opens the cited workspace file'+(liveConfig?' with a real model':''),{timeout:180000},async t=>{
  let app,browser;t.after(async()=>{await browser?.close();app?.server.closeAllConnections();await app?.close()})
  const origin='http://127.0.0.1:4291',f=await fileFixture(t,{origin,buildApp:false}),keyring={activeKeyId:'word-kb',keys:{'word-kb':new Uint8Array(32).fill(54)}}
- const modelEntry=liveConfig?JSON.parse(await readFile(liveConfig,'utf8')).entry:{id:'shared-chat',kind:'chat',providerId:'deepseek',label:'Test model',model:'synthetic-model',baseUrl:'https://provider.example/v1',enabled:true,apiKey:'synthetic-key'}
+ const modelEntry=liveConfig?JSON.parse(await readFile(liveConfig,'utf8')).entry:{id:'shared-chat',kind:'chat',providerId:'deepseek',label:'Test model',model:'synthetic-model',baseUrl:'https://provider.example/v1/chat/completions',enabled:true,apiKey:'synthetic-key'}
  assert.ok(modelEntry?.enabled&&modelEntry?.apiKey&&modelEntry?.kind==='chat','Enabled test model configuration required')
  await createGlobalConfigService({transactions:f.transactions,keyring}).saveGlobalConfig(f.adminSigned.token,0,{upserts:[modelEntry],defaults:{chat:modelEntry.id}})
  const marker=liveConfig?'ORCHID-KB-'+randomBytes(5).toString('hex'):'ORCHID-KB-6419'
