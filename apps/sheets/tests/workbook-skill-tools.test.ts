@@ -393,27 +393,68 @@ describe('executeWorkbookTool: read_range', () => {
     expect(result.output).toContain('2000')
   })
 
-  it('rejects a range outside the authoritative worksheet extent before loading it', () => {
-    const ensureRangeLoaded = vi.fn()
-    const readCells = vi.fn()
-    const result = execSync(
-      call('read_range', { range: 'A1:F10' }),
+  it('loads only the saved data area and returns the requested grid including live edits', async () => {
+    let loaded = false
+    const ensureRangeLoaded = vi.fn(async () => {
+      loaded = true
+      return true
+    })
+    const result = await executeWorkbookTool(
+      call('read_range', { range: 'A1:B2', sheetId: 'sheet-2' }),
       fakeDeps({
         getActiveSheetInfo: () => ({
           mode: 'lazy',
+          streaming: true,
           sheetId: 'sheet-1',
           sheetName: 'Data',
           knownAddresses: [],
-          sheets: [{ id: 'sheet-1', name: 'Data', rows: 10, columns: 5 }],
+          sheets: [
+            { id: 'sheet-1', name: 'Data', rows: 10, columns: 5 },
+            { id: 'sheet-2', name: 'Summary', rows: 1, columns: 1 },
+          ],
         }),
         ensureRangeLoaded,
-        readCells,
+        readCells: () => ({
+          ...(loaded ? { A1: { value: 'Saved' } } : {}),
+          B2: { value: 'New edit' },
+        }),
       }),
     )
-    expect(result.isError).toBe(true)
-    expect(result.output).toContain('outside the worksheet data extent A1:E10')
+    expect(result.isError, result.output).toBeFalsy()
+    expect(ensureRangeLoaded).toHaveBeenCalledWith(
+      { startRow: 0, endRow: 0, startColumn: 0, endColumn: 0 },
+      'sheet-2',
+    )
+    expect(result.output).toContain('requested range A1:B2')
+    expect(result.output).toContain('A1:A1')
+    expect(result.output.split('\n').slice(1)).toEqual(['\tA\tB', '1\tSaved\t', '2\t\tNew edit'])
+  })
+
+  it.each([0, 1])('reads blank cells without loading when the data extent is %i row(s)', (rows) => {
+    const ensureRangeLoaded = vi.fn(() => false)
+    const result = execSync(
+      call('read_range', { range: 'C3:D3' }),
+      fakeDeps({
+        getActiveSheetInfo: () => ({
+          mode: 'lazy',
+          streaming: true,
+          sheetId: 'sheet-1',
+          sheetName: 'Data',
+          knownAddresses: [],
+          sheets: [{ id: 'sheet-1', name: 'Data', rows, columns: rows }],
+        }),
+        ensureRangeLoaded,
+      }),
+    )
+    expect(result.isError, result.output).toBeFalsy()
+    expect(result.output.split('\n').slice(1)).toEqual(['\tC\tD', '3\t\t'])
     expect(ensureRangeLoaded).not.toHaveBeenCalled()
-    expect(readCells).not.toHaveBeenCalled()
+  })
+
+  it.each(['XFE1', 'A1048577'])('rejects %s beyond the Excel grid', (range) => {
+    const result = execSync(call('read_range', { range }), fakeDeps())
+    expect(result.isError).toBe(true)
+    expect(result.output).toContain('worksheet grid')
   })
 
   it('returns a labeled grid with formulas and blanks', () => {
@@ -484,7 +525,7 @@ describe('executeWorkbookTool: read_range', () => {
     expect(result.output).not.toContain('\\r')
   })
 
-  it('reports the authoritative sheet extent separately from the requested range', () => {
+  it('reports the known sheet extent separately from the requested range', () => {
     const result = execSync(
       call('read_range', { range: 'A1:E120' }),
       fakeDeps({
@@ -498,7 +539,7 @@ describe('executeWorkbookTool: read_range', () => {
       }),
     )
     expect(result.output).toContain('requested range A1:E120')
-    expect(result.output).toContain('authoritative worksheet data extent A1:E201')
+    expect(result.output).toContain('known worksheet data extent A1:E201')
     expect(result.output).toContain('201 worksheet rows')
   })
 
