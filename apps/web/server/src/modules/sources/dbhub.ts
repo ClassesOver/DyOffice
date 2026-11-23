@@ -9,7 +9,7 @@ import type { SourceEgressPolicy, SqlSourceKind } from '../../security/egress.ts
 import { sourceError } from './config.ts'
 import type { SqlRows } from './sql-types.ts'
 
-const DEFAULT_PACKAGE = '@bytebase/dbhub@latest'
+const DEFAULT_PACKAGE = '@bytebase/dbhub@2.1.0'
 
 export function dbhubDsn(kind: SqlSourceKind, target: Awaited<ReturnType<SourceEgressPolicy['sql']>>): string {
   // DBHub supports MySQL, and StarRocks exposes the MySQL wire protocol.
@@ -19,8 +19,10 @@ export function dbhubDsn(kind: SqlSourceKind, target: Awaited<ReturnType<SourceE
 }
 
 export function dbhubConfig(maxRows: number, timeoutMs: number): string {
-  return `[[sources]]\nid = "default"\ndsn = "${'${DYOFFICE_DBHUB_DSN}'}"\nquery_timeout = ${Math.max(1, Math.ceil(timeoutMs / 1000))}\n\n[[tools]]\nname = "execute_sql"\nreadonly = true\nmax_rows = ${maxRows + 1}\n`
+  return `[[sources]]\nid = "default"\ndsn = "${'${DYOFFICE_DBHUB_DSN}'}"\nquery_timeout = ${Math.max(1, Math.ceil(timeoutMs / 1000))}\n\n[[tools]]\nname = "execute_sql"\nsource = "default"\nreadonly = true\nmax_rows = ${maxRows + 1}\n\n[[tools]]\nname = "search_objects"\nsource = "default"\n`
 }
+
+type DbhubTool = 'execute_sql' | 'search_objects'
 
 function parseToolResult(value: unknown): unknown {
   if (value && typeof value === 'object' && !Array.isArray(value) && 'structuredContent' in value) {
@@ -64,7 +66,7 @@ function columnType(rows: unknown[][], index: number): 'string' | 'number' | 'bo
   return 'string'
 }
 
-export async function queryDbhubSource(policy: SourceEgressPolicy, kind: SqlSourceKind, secret: string, sql: string, execution: SourceExecution): Promise<SqlRows> {
+async function callDbhub(policy: SourceEgressPolicy, kind: SqlSourceKind, secret: string, tool: DbhubTool, args: Record<string, unknown>, execution: SourceExecution): Promise<unknown> {
   const target = await policy.sql(kind, secret)
   const timeoutMs = execution.statementTimeoutMs ?? 5000
   const configPath = join(tmpdir(), `dyoffice-dbhub-${randomUUID()}.toml`)
@@ -78,10 +80,11 @@ export async function queryDbhubSource(policy: SourceEgressPolicy, kind: SqlSour
   try {
     const transport = new StdioClientTransport({ command, args: ['-y', packageName, '--transport', 'stdio', '--config', configPath], env: { ...process.env, DYOFFICE_DBHUB_DSN: dbhubDsn(kind, target) } })
     await client.connect(transport)
-    const result = await client.callTool({ name: 'execute_sql', arguments: { sql } }, undefined, { signal: controller.signal, timeout: timeoutMs + 4000 })
+    const result = await client.callTool({ name: tool, arguments: args }, undefined, { signal: controller.signal, timeout: timeoutMs + 4000 })
     if (result.isError) throw sourceError(400)
-    const parsed = parseToolResult(result)
-    return statementsToRows(parsed)
+    const response = parseToolResult(result) as { success?: boolean; data?: unknown } | undefined
+    if (response?.success !== true || response.data === undefined) throw sourceError(502)
+    return response.data
   } catch (error) {
     if (controller.signal.aborted) throw sourceError(504)
     if ((error as { statusCode?: number }).statusCode) throw error
@@ -92,4 +95,15 @@ export async function queryDbhubSource(policy: SourceEgressPolicy, kind: SqlSour
     await client.close().catch(() => {})
     await rm(configPath, { force: true }).catch(() => {})
   }
+}
+
+export async function queryDbhubSource(policy: SourceEgressPolicy, kind: SqlSourceKind, secret: string, sql: string, execution: SourceExecution): Promise<SqlRows> {
+  return statementsToRows(await callDbhub(policy, kind, secret, 'execute_sql', { sql }, execution))
+}
+
+/** Use DBHub's schema search tool for metadata; it avoids connector-specific catalog SQL. */
+export async function searchDbhubObjects(policy: SourceEgressPolicy, kind: SqlSourceKind, secret: string, args: Record<string, unknown>, execution: SourceExecution): Promise<Record<string, unknown>> {
+  const payload = await callDbhub(policy, kind, secret, 'search_objects', args, execution)
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) throw sourceError(502)
+  return payload as Record<string, unknown>
 }

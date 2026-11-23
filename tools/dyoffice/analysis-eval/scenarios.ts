@@ -59,7 +59,7 @@ const monthLabel = (month: string) => {
 }
 export function recordTrialCall(turn: number, name: string, input: Record<string, unknown>, isError: boolean, output: string): TrialCall {
   const call: TrialCall = { turn, name, input, isError, output: output.slice(0, 600) }
-  if (name === 'sources_query' && Array.isArray(input.queries) && !isError) {
+  if (name === 'execute_sql' && Array.isArray(input.queries) && !isError) {
     // Read outcomes before trimming diagnostic text. An early preview can exceed 600 characters.
     const { items } = JSON.parse(output)
     call.queryOutcomes = input.queries.map((_, i) => items?.[i]?.ok === true)
@@ -68,7 +68,7 @@ export function recordTrialCall(turn: number, name: string, input: Record<string
 }
 export function trialSql(evidence: TrialEvidence, turn?: number, successfulOnly = false): string[] {
   return evidence.calls.flatMap(call => {
-    if (call.name !== 'sources_query' || (turn !== undefined && call.turn !== turn) || (successfulOnly && call.isError)) return []
+    if (call.name !== 'execute_sql' || (turn !== undefined && call.turn !== turn) || (successfulOnly && call.isError)) return []
     if (Array.isArray(call.input.queries)) return call.input.queries.filter((sql, i): sql is string =>
       typeof sql === 'string' && (!successfulOnly || call.queryOutcomes?.[i] === true))
     return typeof call.input.sql === 'string' ? [call.input.sql] : []

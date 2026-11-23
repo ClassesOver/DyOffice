@@ -29,7 +29,7 @@ test('task grants preserve real frozen-result RLS, result-only scope and live ow
   const alice=await issue(f.alice.token,aliceResult.resultId),bob=await issue(f.bob.token,bobResult.resultId)
   await assert.rejects(access.download(alice.taskId,bob.credential,aliceResult.resultId))
   await assert.rejects(access.download(alice.taskId,alice.credential,bobResult.resultId))
-  await assert.rejects(access.execute(alice.taskId,alice.credential,'sources.query',{sourceId:'metrics',sql:'SELECT 1'}))
+  await assert.rejects(access.execute(alice.taskId,alice.credential,'execute_sql',{sourceId:'metrics',sql:'SELECT 1'}))
   const metadata=await access.execute(alice.taskId,alice.credential,'results.get_manifest',{resultId:aliceResult.resultId})
   assert.equal(metadata.artifact.resultId,aliceResult.resultId);assert.equal('rows' in metadata,false)
   const output=await access.download(alice.taskId,alice.credential,aliceResult.resultId)

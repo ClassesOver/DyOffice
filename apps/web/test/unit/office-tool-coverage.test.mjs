@@ -50,7 +50,7 @@ const docxResults = [
 ]
 const sharedResults = [
   'list_agents', 'list_agent_data', 'delegate_agent_task', 'list_channel_agents',
-  'delegate_channel_task', 'sources_list', 'sources_describe', 'sources_query', 'sources_read_result',
+  'delegate_channel_task', 'list_connections', 'search_objects', 'execute_sql', 'read_query_result',
 ]
 const artifacts = [
   ...docxEffects.map(verifiedEffect => ({format:'docx',verifiedEffect})),

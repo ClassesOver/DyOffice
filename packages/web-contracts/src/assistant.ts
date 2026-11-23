@@ -1,9 +1,9 @@
 export type AssistantSourceMode = 'off' | 'metadata-only' | 'read-only-analysis'
-export const ASSISTANT_ANALYSIS_OPERATIONS = ['sources.list','sources.describe','sources.query','sources.read_result'] as const
+export const ASSISTANT_ANALYSIS_OPERATIONS = ['list_connections','search_objects','execute_sql','read_query_result'] as const
 
 export function assistantSourceTools(mode: AssistantSourceMode): string[] {
   if (mode === 'read-only-analysis') return ASSISTANT_ANALYSIS_OPERATIONS.map(name => name.replaceAll('.', '_'))
-  return mode === 'metadata-only' ? ['sources_list'] : []
+  return mode === 'metadata-only' ? ['list_connections'] : []
 }
 
 /** Read tools available to every assistant host. */
@@ -56,7 +56,7 @@ export const ASSISTANT_FORMAT_TOOLS: Readonly<Record<AssistantDocumentFormat, Re
 export function assistantToolsForFormat(format: AssistantDocumentFormat, options: {sourceCatalog?: boolean; delegation?: boolean} = {}): ReadonlySet<string> {
   return new Set([
     ...ASSISTANT_FORMAT_TOOLS[format],
-    ...(options.sourceCatalog ? ['sources_list'] : []),
+    ...(options.sourceCatalog ? ['list_connections'] : []),
     ...(options.delegation ? ASSISTANT_DELEGATION_TOOLS : []),
   ])
 }

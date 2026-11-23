@@ -97,7 +97,7 @@ test('Office reads an allowed PostgreSQL schema and Coding plots the frozen resu
     assert.equal(response.statusCode,status,response.body)
     return response.json()
    }
-   await request('sources.query',{sourceId:'sales-db',sql:'SELECT 1'},403)
+   await request('execute_sql',{sourceId:'sales-db',sql:'SELECT 1'},403)
    const manifest=(await request('results.get_manifest',{resultId:first.artifact.resultId})).artifact
    const rows=await app.inject({url:'/api/v1/agents/tasks/'+grant.taskId+'/data/results/'+manifest.resultId+'/content',headers:{authorization:'Bearer '+grant.credential}})
    assert.equal(rows.statusCode,200,rows.body);assert.equal(rows.json().sha256,first.sha256)
@@ -154,13 +154,13 @@ print(json.dumps(dict(series=line.get_ydata().tolist(), total=sum(line.get_ydata
     answer='已确认委派工具与冻结结果元数据'
    }
   }else if(prompt.includes('有哪些表')){
-   if(!results.length)action=['sources_list',{}]
+   if(!results.length)action=['list_connections',{}]
    else if(results.length===1){
     const listed=output()
     assert.deepEqual(listed.items.map(({sourceId,name,kind})=>[sourceId,name,kind]),[['sales-db','Sales DB','postgres']])
     assert.equal(listed.nextCursor,null)
     assert.ok(listed.items.every(item=>Object.keys(item).sort().join(',')==='kind,name,sourceId,sourceVersion'))
-    action=['sources_describe',{sourceId:listed.items[0].sourceId}]
+    action=['search_objects',{sourceId:listed.items[0].sourceId}]
    }
    else {
     const desc=output()
@@ -169,10 +169,10 @@ print(json.dumps(dict(series=line.get_ydata().tolist(), total=sum(line.get_ydata
     answer='可见表 sales.orders'
    }
   }else if(prompt.includes('有哪些字段')){
-   if(!results.length)action=['sources_describe',{sourceId:'sales-db',table:'sales.orders'}]
+   if(!results.length)action=['search_objects',{sourceId:'sales-db',table:'sales.orders'}]
    else answer=output().metadata.rows.map(r=>r.column_name).join(', ')
   }else if(prompt.includes('读取上次汇总的第二行')){
-   if(!results.length)action=['sources_read_result',{resultId:first.artifact.resultId,offset:1,limit:1}]
+   if(!results.length)action=['read_query_result',{resultId:first.artifact.resultId,offset:1,limit:1}]
    else {
     const page=output()
     assert.equal(page.sha256,first.sha256)
@@ -200,7 +200,7 @@ print(json.dumps(dict(series=line.get_ydata().tolist(), total=sum(line.get_ydata
    if(!results.length)action=['delegate_agent_task',{instruction:'Plot the previous result and sum it',agentId:'test-python',dataInputs:{sourceIds:[],resultIds:[first.artifact.resultId]}}]
    else {assert.match(results.at(-1).content,/Python total 70/);answer='Python total 70'}
   }else{
-   if(!results.length)action=['sources_query',{sourceId:'sales-db',sql}]
+   if(!results.length)action=['execute_sql',{sourceId:'sales-db',sql}]
    else {
     const result=output()
     const amounts=result.preview.map(r=>r.amount)
@@ -216,7 +216,7 @@ print(json.dumps(dict(series=line.get_ydata().tolist(), total=sum(line.get_ydata
  app=await buildLocalApp({db:f.db,businessPool:f.businessPool,passwords:f.passwords,deploymentId:f.deploymentId,origin,csrfKey:f.csrfKey,objectStore:f.objects,globalConfigKeyring:keyring,providerGateway:{mode:'shared'},assistantSourceMode:'read-only-analysis',sourcesCredentialKeys,sourcesEgressTargets:[{kind:'postgres',endpoint:'postgresql://'+target.host,username:reader,database:f.database,addresses:['127.0.0.1'],allowInsecure:true}],codingHarnesses:{adapters:[adapter],defaultId:adapter.descriptor.id},nativeDocsDirectory:dist('docs'),nativeSheetsDirectory:dist('sheets'),nativeSlidesDirectory:dist('slides'),nativePdfDirectory:dist('pdf'),localShellDirectory:dist('local-shell'),sheetsNative,sheetsPlanner:gateway.planWorkbookSave,sheetsPackageReader:gateway.readWorkbookPackage,slidesHost})
  await app.ready()
  const csrf=createCsrfService({db:f.db,deploymentId:f.deploymentId,origin,key:f.csrfKey})
- const probe=await app.inject({method:'POST',url:'/api/v1/ai/sources/execute',headers:{origin,cookie:'__Host-dyoffice-session='+f.adminSigned.token,'x-csrf-token':csrf.sessionToken(f.adminSigned.token)},payload:{name:'sources.describe',arguments:{sourceId:'sales-db'}}})
+ const probe=await app.inject({method:'POST',url:'/api/v1/ai/sources/execute',headers:{origin,cookie:'__Host-dyoffice-session='+f.adminSigned.token,'x-csrf-token':csrf.sessionToken(f.adminSigned.token)},payload:{name:'search_objects',arguments:{sourceId:'sales-db'}}})
  assert.equal(probe.statusCode,200,probe.body)
  browser=await launchTestBrowser()
  const page=await browser.newPage({ignoreHTTPSErrors:true})
@@ -248,9 +248,10 @@ print(json.dumps(dict(series=line.get_ydata().tolist(), total=sum(line.get_ydata
  await saveAndTest.click()
  await expect(page.getByText('连接已保存，测试通过。',{exact:true})).toBeVisible()
  await page.getByRole('button',{name:'选择可见范围',exact:true}).click()
- await expect(page.getByLabel('搜索表',{exact:true})).toBeVisible()
  await page.getByLabel('搜索目录',{exact:true}).fill('sal')
  await expect(page.getByRole('button',{name:'浏览 confidential 的表',exact:true})).toHaveCount(0)
+ await page.getByRole('button',{name:'浏览 sales 的表',exact:true}).click()
+ await expect(page.getByLabel('搜索表',{exact:true})).toBeVisible()
  await page.getByRole('combobox',{name:'目录范围',exact:true}).selectOption('selected')
  await page.getByRole('combobox',{name:'表可见范围',exact:true}).selectOption('all')
  await page.getByLabel('搜索表',{exact:true}).fill('not_found')
@@ -307,17 +308,17 @@ print(json.dumps(dict(series=line.get_ydata().tolist(), total=sum(line.get_ydata
   if(!res.ok()){
    const call=res.request().postDataJSON()
    t.diagnostic('Office source response '+res.status()+' for '+call?.name)
-   if(liveConfig&&call?.name==='sources.query') t.diagnostic('Synthetic fixture SQL: '+JSON.stringify(call.arguments?.sql))
+   if(liveConfig&&call?.name==='execute_sql') t.diagnostic('Synthetic fixture SQL: '+JSON.stringify(call.arguments?.sql))
    return
   }
-  if(res.request().postDataJSON()?.name==='sources.query'){
+  if(res.request().postDataJSON()?.name==='execute_sql'){
    try{
     queryResults.push(await res.json())
     if(liveConfig)t.diagnostic('Accepted synthetic fixture SQL: '+JSON.stringify(res.request().postDataJSON().arguments?.sql))
    }catch(error){t.diagnostic(String(error))}
   }
  })
- page.on('request',req=>{if(req.url().endsWith('/api/v1/files/'+file.fileId+'/ai/sources/execute')&&req.postDataJSON()?.name==='sources.query')queries++})
+ page.on('request',req=>{if(req.url().endsWith('/api/v1/files/'+file.fileId+'/ai/sources/execute')&&req.postDataJSON()?.name==='execute_sql')queries++})
  async function turn(prompt,answer){
   await composer.fill(prompt);await composer.press('Enter')
   const message=page.locator('.ai-chat .ai-msg-assistant').last()
@@ -329,7 +330,7 @@ print(json.dumps(dict(series=line.get_ydata().tolist(), total=sum(line.get_ydata
  if(!liveConfig){
   for (const name of assistantSourceTools('read-only-analysis')) assert.equal(toolFrames[0].filter(n=>n===name).length,1)
   assert.equal(toolFrames[0].filter(name=>name==='insert_data_result').length,1)
-  assert.ok(!toolFrames[0].includes('sources_save_result'))
+  assert.ok(!toolFrames[0].includes('save_query_result'))
  }
  await turn('订单表有哪些字段？',liveConfig?'paid_amount':'paid_at, order_amount, paid_amount')
  const monthlyResults=()=>queryResults.filter(result=>result.totalRows===2&&!result.sourceTruncated)
@@ -350,7 +351,7 @@ print(json.dumps(dict(series=line.get_ydata().tolist(), total=sum(line.get_ydata
  if(!liveConfig){
   const savedSnapshot=await app.inject({method:'POST',url:'/api/v1/files/'+file.fileId+'/source-tools/execute',
    headers:{origin,cookie:'__Host-dyoffice-session='+f.adminSigned.token,'x-csrf-token':csrf.sessionToken(f.adminSigned.token)},
-   payload:{name:'sources.save_result',arguments:{resultId:first.artifact.resultId,name:'Monthly sales snapshot',commandId:randomUUID()}},
+   payload:{name:'save_query_result',arguments:{resultId:first.artifact.resultId,name:'Monthly sales snapshot',commandId:randomUUID()}},
   })
   assert.equal(savedSnapshot.statusCode,200,savedSnapshot.body)
   assert.equal(savedSnapshot.json().sha256,first.sha256)
@@ -387,7 +388,7 @@ print(json.dumps(dict(series=line.get_ydata().tolist(), total=sum(line.get_ydata
   return
  }
  assert.equal(queries,2)
- for(const effect of ['list_agents','list_agent_data','delegate_agent_task','sources_list','sources_describe','sources_query','sources_read_result']){
+ for(const effect of ['list_agents','list_agent_data','delegate_agent_task','list_connections','search_objects','execute_sql','read_query_result']){
   recordVerifiedOfficeEffect('shared',effect)
  }
  const token=f.adminSigned.token
@@ -438,7 +439,7 @@ print(json.dumps(dict(series=line.get_ydata().tolist(), total=sum(line.get_ydata
   const names=toolFrames[start]
   for(const name of assistantSourceTools('read-only-analysis'))assert.equal(names.filter(offered=>offered===name).length,1,format+': '+name)
   assert.equal(names.filter(name=>name==='insert_data_result').length,format==='pdf'?0:1)
-  assert.ok(!names.includes('sources_save_result'),format+' must not offer saving a source snapshot')
+  assert.ok(!names.includes('save_query_result'),format+' must not offer saving a source snapshot')
   if(format==='pdf')continue
 
   // This editor must obtain its own snapshot even when its query matches another file's.
@@ -446,7 +447,7 @@ print(json.dumps(dict(series=line.get_ydata().tolist(), total=sum(line.get_ydata
   const denied=await app.inject({url:'/api/v1/files/'+entry.fileId+'/data-results/'+first.artifact.resultId,headers})
   assert.equal(denied.statusCode,404)
   const own=await app.inject({method:'POST',url:'/api/v1/files/'+entry.fileId+'/ai/sources/execute',headers,
-   payload:{name:'sources.query',arguments:{sourceId:'sales-db',sql:sql.replace('GROUP BY', "AND paid_at <> DATE '2026-01-14' GROUP BY")}}})
+   payload:{name:'execute_sql',arguments:{sourceId:'sales-db',sql:sql.replace('GROUP BY', "AND paid_at <> DATE '2026-01-14' GROUP BY")}}})
   assert.equal(own.statusCode,200,own.body)
   first=own.json()
   if(format==='xlsx'){

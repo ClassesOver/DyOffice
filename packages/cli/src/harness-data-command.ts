@@ -151,7 +151,7 @@ export async function runHarnessDataCommand(args:ParsedArgs,options:{cwd:string;
     if(Buffer.byteLength(raw)>harnessDataRequestLimit(identifier))throw usage()
     const parameters:unknown=JSON.parse(raw)
     if(!parameters||typeof parameters!=='object'||Array.isArray(parameters))throw usage()
-    const data=client(identifier==='sources.query'?(sourceQueryBatchSize(identifier,parameters)??1):undefined)
+    const data=client(identifier==='execute_sql'?(sourceQueryBatchSize(identifier,parameters)??1):undefined)
     return {summary:'Office task data operation completed',detail:await data.execute<Record<string,unknown>>(identifier,parameters as Record<string,unknown>,options.signal)}
   } catch(error) {
     if(error instanceof CliError)throw error

@@ -332,7 +332,7 @@ test('Word knowledge tools survive format scoping while other editor formats ret
 })
 
 test('read-only source tools reach every format and unavailable tools cannot execute', async () => {
- const analysis = ['sources_list','sources_describe','sources_query','sources_read_result']
+ const analysis = ['list_connections','search_objects','execute_sql','read_query_result']
  for (const format of [undefined,'docx','xlsx','pptx','pdf']) {
   const requests=[], sent=[]
   const client=await createAssistantClient({
@@ -348,17 +348,17 @@ test('read-only source tools reach every format and unavailable tools cannot exe
   })
   const skills=client.extraSkills
   assert.deepEqual(skills.flatMap(skill=>skill.tools.map(tool=>tool.name)),analysis)
-  const tools=[...skills.flatMap(skill=>skill.tools),{name:'sources_save_result',description:'Save',inputSchema:{}}]
+  const tools=[...skills.flatMap(skill=>skill.tools),{name:'save_query_result',description:'Save',inputSchema:{}}]
   await new Promise(resolve=>client.transport.stream({system:'',messages:[{role:'user',text:'List tables'}],tools},{onDelta(){},onToolCall(){},onError:assert.fail,onDone:resolve}))
   assert.deepEqual(sent[0].tools.map(tool=>tool.name),analysis)
   assert.deepEqual([...scopeAssistantRequest(sent[0],new Set(analysis)).tools],analysis)
-  assert.deepEqual([...scopeAssistantRequest(sent[0],new Set(['sources_list'])).tools],['sources_list'])
+  assert.deepEqual([...scopeAssistantRequest(sent[0],new Set(['list_connections'])).tools],['list_connections'])
   assert.deepEqual([...scopeAssistantRequest(sent[0],new Set()).tools],[])
-  const skill=skills.find(skill=>skill.tools.some(tool=>tool.name==='sources_describe'))
-  const call={id:'1',name:'sources_describe',input:{sourceId:'sales'}}
+  const skill=skills.find(skill=>skill.tools.some(tool=>tool.name==='search_objects'))
+  const call={id:'1',name:'search_objects',input:{sourceId:'sales'}}
   assert.equal((await skill.executeTool(call)).isError,false)
-  assert.deepEqual(requests,[{path:'/api/v1/ai/sources/execute',method:'POST',body:{name:'sources.describe',arguments:{sourceId:'sales'}}}])
-  assert.equal((await skill.executeTool({...call,name:'sources_save_result'})).isError,true)
+  assert.deepEqual(requests,[{path:'/api/v1/ai/sources/execute',method:'POST',body:{name:'search_objects',arguments:{sourceId:'sales'}}}])
+  assert.equal((await skill.executeTool({...call,name:'save_query_result'})).isError,true)
   client.dispose()
   assert.equal((await skill.executeTool(call)).isError,true)
   assert.equal(requests.length,1)

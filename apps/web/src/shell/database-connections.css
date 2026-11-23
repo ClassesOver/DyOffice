@@ -9,7 +9,7 @@
 .database-connections .database-connections-list{padding:28px 36px;display:grid;gap:20px}
 .database-connections .database-connections-toolbar{display:flex;justify-content:space-between;gap:18px;align-items:center}
 .database-connections .database-connections-table{border:1px solid var(--dc-border);border-radius:12px;overflow:hidden;background:var(--surface)}
-.database-connections .database-connections-columns,.database-connections .database-connection-row{display:grid;grid-template-columns:minmax(180px,2.3fr) minmax(110px,1fr) minmax(90px,.8fr) minmax(90px,.8fr) 80px;align-items:center;gap:16px;padding:17px 22px}
+.database-connections .database-connections-columns,.database-connections .database-connection-row{display:grid;grid-template-columns:minmax(0,2.3fr) minmax(0,1fr) minmax(0,.8fr) minmax(0,.8fr) minmax(148px,max-content);align-items:center;gap:16px;padding:17px 22px}
 .database-connections .database-connections-columns{font-size:12px;font-weight:600;color:var(--dc-muted);background:var(--surface-subtle);border-bottom:1px solid var(--dc-border)}
 .database-connections .database-connection-row+.database-connection-row{border-top:1px solid var(--dc-border)}
 .database-connections .database-connection-row{font-size:13px}
@@ -204,8 +204,8 @@
 .database-connections .dc-scope-empty { padding:8px 12px; border-radius:6px; background:var(--surface-subtle); }
 .database-connections .dc-selection { min-width:0; }
 .database-connections .dc-selection summary { cursor:pointer; }
-.database-connections .dc-selection ul { display:flex; flex-wrap:wrap; align-content:start; gap:6px; margin:8px 0 0; padding:0; max-height:10rem; overflow:auto; list-style:none; }
-.database-connections .dc-selection li { display:flex; align-items:center; gap:4px; max-width:100%; padding:2px 4px 2px 10px; border:1px solid var(--dc-border); border-radius:8px; }
+.database-connections .dc-selection ul { display:grid; gap:4px; margin:8px 0 0; padding:0; max-height:14rem; overflow:auto; list-style:none; }
+.database-connections .dc-selection li { display:flex; justify-content:space-between; align-items:center; gap:6px; min-width:0; padding:4px 6px 4px 10px; border-radius:7px; }
 .database-connections .dc-selection li span { min-width:0; overflow-wrap:anywhere; }
 .database-connections .dc-scope-blocked { display:block; }
 .database-connections .dc-selection li button { min-height:28px; padding:2px 7px; }
@@ -252,7 +252,7 @@
   align-items: end;
   padding: 0;
 }
-.database-connections .dc-search-row label { flex: 1 1 14rem; min-width: 0; }
+.database-connections .dc-search-field { position: relative; flex: 1 1 14rem; min-width: 0; }
 .database-connections .dc-search-row button { max-width: 100%; }
 
 .database-connections .dc-catalog-columns {
@@ -288,8 +288,10 @@
   gap: 12px;
 }
 .database-connections .dc-scope-review .dc-selection {
-  border-block-start: 1px solid var(--dc-border);
-  padding-block: 8px;
+  border: 1px solid var(--dc-border);
+  border-radius: 10px;
+  padding: 12px;
+  background: var(--surface);
 }
 .database-connections .dc-selection li.dc-selection-blocked {
   border-inline-start: 3px solid var(--danger);
@@ -314,7 +316,7 @@
   gap: 8px;
   margin-block-start: 10px;
 }
-.database-connections .dc-review-filter input { flex: 1 1 10rem; min-width: 0; }
+.database-connections .dc-review-filter .dc-search-field { flex-basis: 10rem; }
 .database-connections .dc-review-filter output { font-size: 12px; font-variant-numeric: tabular-nums; color: var(--dc-muted); }
 .database-connections .dc-catalog-pager button { min-height: 32px; }
 
@@ -358,3 +360,260 @@
 }
 .database-connections .dc-table-controls .dc-bulk-options[open] { flex-basis: 100%; }
 .database-connections .dc-table-controls .dc-catalog-pager { margin-inline-start: auto; border: 0; }
+
+.database-connections .dc-discovery {
+  container: source-discovery / inline-size;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid var(--dc-border);
+  border-radius: 12px;
+  background: var(--surface-subtle);
+}
+.database-connections .dc-discovery-heading { justify-content: flex-start; gap: 10px; }
+.database-connections .dc-discovery-heading > div { flex: 1 1 14rem; }
+.database-connections .dc-discovery-icon {
+  display: grid;
+  place-items: center;
+  flex: 0 0 36px;
+  block-size: 36px;
+  border-radius: 9px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 17px;
+}
+.database-connections .dc-discovery-action,
+.database-connections .dc-discovery-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+.database-connections .dc-discovery-status { color: var(--dc-muted); font-size: 13px; }
+.database-connections .dc-discovery .dc-catalog-columns {
+  grid-template-columns: minmax(0, 2fr) minmax(0, 3fr);
+  gap: 0;
+  align-items: stretch;
+  border: 1px solid var(--dc-border);
+  border-radius: 10px;
+  background: var(--surface);
+}
+.database-connections .dc-discovery .dc-catalog-columns:empty { display: none; }
+.database-connections .dc-discovery .dc-picker {
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  padding: 12px;
+}
+.database-connections .dc-discovery .dc-picker--schemas {
+  background: color-mix(in srgb, var(--surface-subtle) 65%, var(--surface));
+  border-start-start-radius: 9px;
+  border-end-start-radius: 9px;
+}
+.database-connections .dc-discovery .dc-picker--schemas:not(:only-child) { border-inline-end: 1px solid var(--dc-border); }
+.database-connections .dc-discovery .dc-picker > summary {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 0;
+  color: var(--text-primary);
+}
+.database-connections .dc-picker > summary .anticon { color: var(--accent); }
+.database-connections .dc-picker > summary::after {
+  content: '';
+  inline-size: 6px;
+  block-size: 6px;
+  flex: none;
+  margin-inline-start: auto;
+  border-inline-end: 1.5px solid var(--dc-muted);
+  border-block-end: 1.5px solid var(--dc-muted);
+  transform: rotate(-45deg);
+}
+.database-connections .dc-picker > summary:dir(rtl)::after { transform: rotate(45deg); }
+.database-connections .dc-picker[open] > summary::after,
+.database-connections .dc-picker[open] > summary:dir(rtl)::after { transform: rotate(45deg); }
+.database-connections .dc-catalog-count {
+  background: var(--accent-soft);
+  color: var(--accent);
+  border-radius: 99px;
+  padding-inline: 4px;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.database-connections .dc-discovery .dc-picker li {
+  flex-wrap: nowrap;
+  min-height: 34px;
+  padding: 3px 6px;
+}
+.database-connections .dc-discovery .dc-picker li:hover { background: var(--surface-subtle); }
+.database-connections .dc-discovery .dc-picker li:has(:checked) { background: var(--accent-soft); }
+.database-connections .dc-discovery .dc-picker li:has([aria-current=true]) {
+  border-inline-start-color: var(--accent);
+  background: var(--accent-soft);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 38%, transparent);
+}
+.database-connections .dc-picker li .dc-check input { flex: none; }
+.database-connections .dc-catalog-placeholder {
+  display: grid;
+  place-items: center;
+  gap: 6px;
+  padding: 20px 10px;
+  align-content: center;
+  min-block-size: 100px;
+  color: var(--dc-muted);
+  font-size: 13px;
+  text-align: center;
+}
+@container source-discovery (max-width: 34rem) {
+  .database-connections .dc-discovery .dc-catalog-columns { grid-template-columns: minmax(0, 1fr); }
+  .database-connections .dc-discovery .dc-picker--schemas { border-end-start-radius: 0; border-start-end-radius: 9px; }
+  .database-connections .dc-discovery .dc-picker--schemas:not(:only-child) { border-inline-end: 0; border-block-end: 1px solid var(--dc-border); }
+}
+
+.database-connections .dc-row-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
+.database-connections .dc-row-actions button { padding-inline: 9px; }
+.database-connections .dc-row-test {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
+  margin-block-start: 5px;
+  border-radius: 6px;
+  padding: 3px 6px;
+  background: var(--surface-subtle);
+  color: var(--dc-muted);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.database-connections .dc-row-test--success { background: var(--success-bg); color: var(--success); }
+.database-connections .dc-row-test--error { background: var(--danger-bg); color: var(--danger); }
+
+.database-connections .dc-search-field > .anticon,
+.database-connections .dc-search-field > button {
+  position: absolute;
+  inset-block-start: 50%;
+  transform: translateY(-50%);
+}
+.database-connections .dc-search-field > .anticon {
+  inset-inline-start: 11px;
+  color: var(--dc-muted);
+  pointer-events: none;
+}
+.database-connections .dc-search-field input[type=search] {
+  padding-inline: 33px;
+  background: var(--surface-subtle);
+}
+.database-connections .dc-search-field input::-webkit-search-cancel-button { display: none; }
+.database-connections .dc-search-field > button {
+  inset-inline-end: 4px;
+  display: grid;
+  place-items: center;
+  inline-size: 28px;
+  block-size: 28px;
+  padding: 0;
+  border-color: transparent;
+  background: transparent;
+  color: var(--dc-muted);
+}
+.database-connections .dc-discovery .dc-picker[open] > summary {
+  padding-block-end: 10px;
+  border-block-end: 1px solid var(--dc-border);
+}
+.database-connections .dc-discovery .dc-picker li { padding-block: 0; }
+.database-connections .dc-discovery .dc-picker li > :is(.dc-check,.dc-directory-link) {
+  min-block-size: 34px;
+  padding-block: 4px;
+}
+.database-connections .dc-discovery .dc-picker li > .dc-check:has(input:enabled) { cursor: pointer; }
+
+.database-connections .dc-row-identity { display: flex; align-items: flex-start; gap: 10px; }
+.database-connections .dc-row-identity > div { min-width: 0; overflow-wrap: anywhere; }
+.database-connections .dc-engine-mark {
+  display: grid;
+  place-items: center;
+  flex: 0 0 32px;
+  block-size: 32px;
+  border-radius: 8px;
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+.database-connections .dc-engine-mark--http { color: var(--dc-muted); background: var(--surface-subtle); }
+.database-connections .dc-row-actions .dc-row-test-action:enabled { color: var(--accent); }
+.database-connections .dc-catalog-name { display: flex; align-items: baseline; gap: 7px; min-width: 0; }
+.database-connections .dc-catalog-name .anticon { flex: none; color: var(--dc-muted); }
+.database-connections .dc-catalog-placeholder .anticon { font-size: 20px; color: var(--accent); }
+
+.database-connections .dc-selection > summary {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-weight: 600;
+  margin-bottom: 0;
+  color: var(--text-primary);
+}
+.database-connections .dc-selection > summary::after {
+  content: '';
+  inline-size: 7px;
+  block-size: 7px;
+  flex: none;
+  margin-inline-start: auto;
+  border-inline-end: 1.5px solid var(--dc-muted);
+  border-block-end: 1.5px solid var(--dc-muted);
+  transform: rotate(-45deg);
+}
+.database-connections .dc-selection > summary:dir(rtl)::after,
+.database-connections .dc-selection[open] > summary::after { transform: rotate(45deg); }
+.database-connections .dc-review-icon {
+  display: grid;
+  place-items: center;
+  flex: 0 0 34px;
+  block-size: 34px;
+  border-radius: 8px;
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.database-connections .dc-selection li { background: var(--surface-subtle); }
+.database-connections .dc-selection li.dc-selection-blocked { background: var(--danger-bg); }
+.database-connections .dc-selection li button {
+  flex: none;
+  min-inline-size: 26px;
+  border-color: transparent;
+  background: transparent;
+  color: var(--dc-muted);
+}
+
+.database-connections .dc-review-heading { display: grid; gap: 3px; flex: 1; min-width: 0; }
+.database-connections .dc-review-title { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
+.database-connections .dc-review-count {
+  border-radius: 999px;
+  padding: 1px 7px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 11px;
+  line-height: 1.6;
+  font-variant-numeric: tabular-nums;
+}
+.database-connections .dc-review-preview {
+  display: flex;
+  gap: 6px;
+  color: var(--dc-muted);
+  font-size: 12px;
+  font-weight: 400;
+  min-width: 0;
+}
+.database-connections .dc-review-preview bdi { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.database-connections .dc-review-preview > span { flex: none; }
+.database-connections .dc-selection[open] .dc-review-preview { display: none; }
+.database-connections .dc-selection[open] > summary { padding-block-end: 10px; border-block-end: 1px solid var(--dc-border); }
+.database-connections .dc-selection li bdi { font-family: ui-monospace, monospace; font-size: 12px; }
+.database-connections .dc-selection li .dc-scope-blocked {
+  width: fit-content;
+  margin-block-start: 3px;
+  padding-inline: 5px;
+  border: 1px solid var(--danger-border);
+  border-radius: 5px;
+}
+.database-connections .dc-selection li button:hover:not(:disabled) {
+  border-color: var(--danger-border);
+  background: var(--danger-bg);
+  color: var(--danger);
+}
+.database-connections .dc-review-empty { padding-block: 10px 0; color: var(--dc-muted); }

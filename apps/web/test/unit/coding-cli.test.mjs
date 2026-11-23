@@ -72,7 +72,7 @@ test('installed Codex accesses the same task data API through a task mailbox wit
  const bridge=await createCodingModelBridge({token:'synthetic-session',modelId:'office-selected',signal:controller.signal,turns:{async run(input,emit){
   rounds++
   if(rounds>1)lastToolOutput=JSON.stringify(input.request.messages.at(-1))
-  if(rounds===1)await emit({type:'tool_call',id:'call_data',name:'exec_command',input:{cmd:JSON.stringify(process.execPath)+' '+JSON.stringify(new URL('../../../../.dyoffice-analysis-build/harness-data.mjs',import.meta.url).pathname)+' execute sources.list',max_output_tokens:200}})
+  if(rounds===1)await emit({type:'tool_call',id:'call_data',name:'exec_command',input:{cmd:JSON.stringify(process.execPath)+' '+JSON.stringify(new URL('../../../../.dyoffice-analysis-build/harness-data.mjs',import.meta.url).pathname)+' execute list_connections',max_output_tokens:200}})
   else await emit({type:'delta',text:'Data available over the task-local transport.'})
  }}})
  try {
@@ -80,7 +80,7 @@ test('installed Codex accesses the same task data API through a task mailbox wit
   assert.equal(rounds,2);assert.equal(requests.length,1,lastToolOutput)
   assert.equal(requests[0].headers.authorization,'Bearer task-only-credential')
   assert.equal(requests[0].url,'/api/v1/agents/tasks/task_1/data/execute')
-  assert.deepEqual(JSON.parse(requests[0].payload),{operation:'sources.list',arguments:{}})
+  assert.deepEqual(JSON.parse(requests[0].payload),{operation:'list_connections',arguments:{}})
   assert.equal(result.output,'');assert.match(result.summary,/Data available/)
  }finally{controller.abort();await bridge.close()}
 })

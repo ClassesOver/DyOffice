@@ -17,10 +17,10 @@ function fixture(t,artifacts) {
   const sessions={async authenticate(token){calls.push(['auth',token]);if(revoked.has(token)||!identities.has(token))throw Error('secret session detail');return {...identities.get(token)}}}
   const tools={async execute(token,input,documentId){
     calls.push(['tool',token,input,documentId]);const args=input.arguments
-    if(input.name==='sources.list')return {items:[{sourceId:'sales',name:'Sales'},{sourceId:'other',name:'Private unrelated'}],nextCursor:null}
+    if(input.name==='list_connections')return {items:[{sourceId:'sales',name:'Sales'},{sourceId:'other',name:'Private unrelated'}],nextCursor:null}
     if(token!==alice||args.sourceId!=='sales')throw Error('private source denial')
-    if(input.name==='sources.describe')return {sourceId:'sales',schema:[{name:'revenue'}]}
-    if(input.name==='sources.query') {
+    if(input.name==='search_objects')return {sourceId:'sales',schema:[{name:'revenue'}]}
+    if(input.name==='execute_sql') {
       const id=randomUUID(),entry={token,artifact:artifact(id,'alice')};records.set(id,entry)
       return {artifact:entry.artifact,schema:[{name:'revenue',type:'number',unit:'CNY'}],timezone:'Asia/Shanghai',preview:[{revenue:42}],rows:[{revenue:42}],totalRows:1,sourceTruncated:false,sha256:entry.artifact.sha256,nextOffset:null,notice:'Frozen'}
     }
@@ -36,20 +36,20 @@ test('issues task-only credentials, filters source catalog, strips all data rows
   const f=fixture(t),grant=await f.issue()
   assert.match(grant.credential,/^[A-Za-z0-9_-]{43}$/)
   assert.equal(grant.connectionEpoch,1);assert.doesNotMatch(JSON.stringify(grant),new RegExp(f.alice))
-  const list=await f.access.execute(grant.taskId,grant.credential,'sources.list',{})
+  const list=await f.access.execute(grant.taskId,grant.credential,'list_connections',{})
   assert.deepEqual(list,{items:[{sourceId:'sales',name:'Sales'}],nextCursor:null})
-  const outcome=await f.access.execute(grant.taskId,grant.credential,'sources.query',{sourceId:'sales',sql:'SELECT revenue FROM sales'})
+  const outcome=await f.access.execute(grant.taskId,grant.credential,'execute_sql',{sourceId:'sales',sql:'SELECT revenue FROM sales'})
   assert.equal('preview' in outcome,false);assert.equal('rows' in outcome,false);assert.equal(outcome.totalRows,1)
   const manifest=await f.access.execute(grant.taskId,grant.credential,'results.get_manifest',{resultId:outcome.artifact.resultId})
   assert.equal('rows' in manifest,false);assert.equal(manifest.artifact.resultId,outcome.artifact.resultId)
   assert.equal((await f.access.download(grant.taskId,grant.credential,outcome.artifact.resultId)).name,'result.json')
-  assert.equal(f.calls.filter(x=>x[0]==='tool'&&x[2].name==='sources.query').length,1)
+  assert.equal(f.calls.filter(x=>x[0]==='tool'&&x[2].name==='execute_sql').length,1)
 })
 
 test('task and owner bounds prevent credential reuse, foreign inputs and result-only reverse querying',async t=>{
   const f=fixture(t),first=await f.issue(),second=await f.issue({sourceIds:[],resultIds:[f.resultId]})
-  await assert.rejects(f.access.execute(second.taskId,first.credential,'sources.list',{}))
-  await assert.rejects(f.access.execute(second.taskId,second.credential,'sources.query',{sourceId:'sales',sql:'SELECT 1'}))
+  await assert.rejects(f.access.execute(second.taskId,first.credential,'list_connections',{}))
+  await assert.rejects(f.access.execute(second.taskId,second.credential,'execute_sql',{sourceId:'sales',sql:'SELECT 1'}))
   await assert.rejects(f.access.download(second.taskId,second.credential,f.foreignId))
   assert.equal((await f.access.download(second.taskId,second.credential,f.resultId)).name,'result.json')
   f.access.revoke(first.taskId)
@@ -60,34 +60,34 @@ test('task and owner bounds prevent credential reuse, foreign inputs and result-
 test('unknown operations, extra arguments and off-scope sources never dispatch to source tools',async t=>{
   const f=fixture(t),g=await f.issue();f.calls.length=0
   for(const [operation,args] of [
-    ['sources.save_result',{resultId:f.resultId,name:'x'}],
-    ['sources.query',{sourceId:'other',sql:'SELECT 1'}],
-    ['sources.query',{sourceId:'sales',sql:'SELECT 1',ownerId:'bob'}],
-    ['sources.describe',{sourceId:'sales',token:f.bob}],
+    ['save_query_result',{resultId:f.resultId,name:'x'}],
+    ['execute_sql',{sourceId:'other',sql:'SELECT 1'}],
+    ['execute_sql',{sourceId:'sales',sql:'SELECT 1',ownerId:'bob'}],
+    ['search_objects',{sourceId:'sales',token:f.bob}],
     ['results.get_manifest',{resultId:f.resultId,path:'/etc/passwd'}],
-    ['sources.list',{ownerId:'bob'}],
+    ['list_connections',{ownerId:'bob'}],
   ])await assert.rejects(f.access.execute(g.taskId,g.credential,operation,args))
   assert.equal(f.calls.some(x=>x[0]==='tool'),false)
 })
 
 test('revocation, parent cancellation, expiry and identity changes revoke grants',async t=>{
   const f=fixture(t),controller=new AbortController(),g=await f.issue(undefined,{signal:controller.signal})
-  controller.abort();await assert.rejects(f.access.execute(g.taskId,g.credential,'sources.list',{}))
+  controller.abort();await assert.rejects(f.access.execute(g.taskId,g.credential,'list_connections',{}))
   const revoked=await f.issue();f.revoked.add(f.alice)
-  await assert.rejects(f.access.execute(revoked.taskId,revoked.credential,'sources.list',{}),/Harness data unavailable/)
+  await assert.rejects(f.access.execute(revoked.taskId,revoked.credential,'list_connections',{}),/Harness data unavailable/)
   f.revoked.delete(f.alice)
   const moved=await f.issue();f.identities.get(f.alice).sessionId='replacement-session'
-  await assert.rejects(f.access.execute(moved.taskId,moved.credential,'sources.list',{}))
+  await assert.rejects(f.access.execute(moved.taskId,moved.credential,'list_connections',{}))
   f.identities.get(f.alice).sessionId=f.alice
   const expired=await f.issue(undefined,{ttlMs:5});await new Promise(resolve=>setTimeout(resolve,15))
-  await assert.rejects(f.access.execute(expired.taskId,expired.credential,'sources.list',{}))
+  await assert.rejects(f.access.execute(expired.taskId,expired.credential,'list_connections',{}))
 })
 
 test('an operation completing after cancellation cannot return rows or newly grant its result',async t=>{
   const f=fixture(t),g=await f.issue();let release,started
   const ready=new Promise(resolve=>{started=resolve}),original=f.tools.execute
-  f.tools.execute=async(token,input)=>{if(input.name==='sources.query'){started();await new Promise(resolve=>{release=resolve})}return original(token,input)}
-  const pending=f.access.execute(g.taskId,g.credential,'sources.query',{sourceId:'sales',sql:'SELECT 1'})
+  f.tools.execute=async(token,input)=>{if(input.name==='execute_sql'){started();await new Promise(resolve=>{release=resolve})}return original(token,input)}
+  const pending=f.access.execute(g.taskId,g.credential,'execute_sql',{sourceId:'sales',sql:'SELECT 1'})
   await ready;f.access.revoke(g.taskId);release();await assert.rejects(pending)
 })
 
@@ -95,13 +95,13 @@ test('issued grant and caller input are snapshots, and per-owner admission inclu
   const f=fixture(t),inputs={sourceIds:['sales'],resultIds:[]},g=await f.issue(inputs)
   const originalId=g.taskId
   inputs.sourceIds.push('other');g.inputs.sourceIds.push('other');g.taskId=randomUUID()
-  await assert.rejects(f.access.execute(originalId,g.credential,'sources.describe',{sourceId:'other'}))
+  await assert.rejects(f.access.execute(originalId,g.credential,'search_objects',{sourceId:'other'}))
   const second=await f.issue()
   await assert.rejects(f.issue(),e=>e.statusCode===429)
-  await assert.rejects(f.access.execute(second.taskId,second.credential,'sources.describe',{sourceId:'other'}))
+  await assert.rejects(f.access.execute(second.taskId,second.credential,'search_objects',{sourceId:'other'}))
   f.access.revoke(second.taskId)
   let release,started;const ready=new Promise(resolve=>{started=resolve}),original=f.tools.execute
-  f.tools.execute=async(token,input)=>{if(input.name==='sources.describe'){started();await new Promise(resolve=>{release=resolve})}return original(token,input)}
+  f.tools.execute=async(token,input)=>{if(input.name==='search_objects'){started();await new Promise(resolve=>{release=resolve})}return original(token,input)}
   const pending=f.issue();await ready
   await assert.rejects(f.issue(),e=>e.statusCode===429)
   release();await pending
@@ -118,7 +118,7 @@ test('invalid issue fields and scopes are rejected before tools execute; disposa
 test('source errors are redacted and queries are not implicitly retried',async t=>{
   const f=fixture(t),g=await f.issue();let queries=0
   f.tools.execute=async()=>{queries++;throw Error('dsn=secret; password=private')}
-  await assert.rejects(f.access.execute(g.taskId,g.credential,'sources.query',{sourceId:'sales',sql:'SELECT 1'}),{message:'Harness data unavailable'})
+  await assert.rejects(f.access.execute(g.taskId,g.credential,'execute_sql',{sourceId:'sales',sql:'SELECT 1'}),{message:'Harness data unavailable'})
   assert.equal(queries,1)
 })
 
@@ -131,18 +131,18 @@ test('global admission stays at sixteen tasks across owners and disposal release
   }
   await assert.rejects(f.issue({sourceIds:[],resultIds:[]}),e=>e.statusCode===429)
   f.access.dispose()
-  for(const grant of grants)await assert.rejects(f.access.execute(grant.taskId,grant.credential,'sources.list',{}))
+  for(const grant of grants)await assert.rejects(f.access.execute(grant.taskId,grant.credential,'list_connections',{}))
 })
 
 test('source catalog scans original pages without leaking unrelated cursors or names',async t=>{
   const f=fixture(t),g=await f.issue();let pages=0
   f.tools.execute=async(_token,input)=>{
-    assert.equal(input.name,'sources.list');pages++
+    assert.equal(input.name,'list_connections');pages++
     return input.arguments.after===undefined
       ?{items:[{sourceId:'hidden',name:'Never expose'}],nextCursor:'hidden'}
       :{items:[{sourceId:'sales',name:'Sales'}],nextCursor:'unrelated-next'}
   }
-  const catalog=await f.access.execute(g.taskId,g.credential,'sources.list',{})
+  const catalog=await f.access.execute(g.taskId,g.credential,'list_connections',{})
   assert.equal(pages,2);assert.deepEqual(catalog,{items:[{sourceId:'sales',name:'Sales'}],nextCursor:null})
   assert.doesNotMatch(JSON.stringify(catalog),/hidden|unrelated|Never expose/)
 })
@@ -184,14 +184,14 @@ test('channel claim binding is revalidated before and after data operations and 
  const f=fixture(t);let active=true,checks=0
  const authorize=async()=>{checks++;if(!active)throw Error('Channel claim no longer active')}
  const g=await f.issue(undefined,{authorize})
- const listed=await f.access.execute(g.taskId,g.credential,'sources.list',{})
+ const listed=await f.access.execute(g.taskId,g.credential,'list_connections',{})
  assert.equal(listed.items.length,1);assert.ok(checks>=3)
  let release,started;const ready=new Promise(resolve=>{started=resolve}),original=f.tools.execute
- f.tools.execute=async(token,input)=>{if(input.name==='sources.query'){started();await new Promise(resolve=>{release=resolve})}return original(token,input)}
- const query=f.access.execute(g.taskId,g.credential,'sources.query',{sourceId:'sales',sql:'SELECT 1'})
+ f.tools.execute=async(token,input)=>{if(input.name==='execute_sql'){started();await new Promise(resolve=>{release=resolve})}return original(token,input)}
+ const query=f.access.execute(g.taskId,g.credential,'execute_sql',{sourceId:'sales',sql:'SELECT 1'})
  await ready;active=false;release();await assert.rejects(query)
  active=true
- await assert.rejects(f.access.execute(g.taskId,g.credential,'sources.list',{}))
+ await assert.rejects(f.access.execute(g.taskId,g.credential,'list_connections',{}))
 })
 
 test('finished channel claims release bounded grant slots before the next task is admitted',async t=>{
@@ -250,15 +250,15 @@ test('expired frozen inputs never requery; a separate source query still needs a
  f.calls.length=0
  await assert.rejects(f.access.execute(onlyResult.taskId,onlyResult.credential,'results.get_manifest',{resultId:f.resultId}))
  await assert.rejects(f.access.download(onlyResult.taskId,onlyResult.credential,f.resultId))
- await assert.rejects(f.access.execute(onlyResult.taskId,onlyResult.credential,'sources.query',{sourceId:'sales',sql:'SELECT 1'}))
+ await assert.rejects(f.access.execute(onlyResult.taskId,onlyResult.credential,'execute_sql',{sourceId:'sales',sql:'SELECT 1'}))
  assert.equal(f.calls.some(call=>call[0]==='tool'),false,'failure must not query or expand a result-only grant')
  const source=await f.issue({sourceIds:['sales'],resultIds:[]})
- const outcome=await f.access.execute(source.taskId,source.credential,'sources.query',{sourceId:'sales',sourceVersion:1,sql:'SELECT 1'})
+ const outcome=await f.access.execute(source.taskId,source.credential,'execute_sql',{sourceId:'sales',sourceVersion:1,sql:'SELECT 1'})
  assert.notEqual(outcome.artifact.resultId,f.resultId)
- assert.equal(f.calls.filter(call=>call[0]==='tool'&&call[2].name==='sources.query').length,1)
+ assert.equal(f.calls.filter(call=>call[0]==='tool'&&call[2].name==='execute_sql').length,1)
  f.revoked.add(f.alice)
- await assert.rejects(f.access.execute(source.taskId,source.credential,'sources.query',{sourceId:'sales',sql:'SELECT 1'}))
- assert.equal(f.calls.filter(call=>call[0]==='tool'&&call[2].name==='sources.query').length,1,'revoked source query never reaches connector')
+ await assert.rejects(f.access.execute(source.taskId,source.credential,'execute_sql',{sourceId:'sales',sql:'SELECT 1'}))
+ assert.equal(f.calls.filter(call=>call[0]==='tool'&&call[2].name==='execute_sql').length,1,'revoked source query never reaches connector')
 })
 
 test('a default grant outlives the 600 s Harness deadline plus setup and delivery', async () => {
@@ -323,7 +323,7 @@ function attachBatchTools(f,{onDetail,onStatement,documentId}={}) {
 test('batch SQL registers each frozen result in order without exposing rows and rechecks task access',async t=>{
   const f=fixture(t),documentId=randomUUID(),grant=await f.issue(undefined,{documentId})
   const {statements}=attachBatchTools(f,{documentId,onStatement(sql,token){if(sql==='SELECT 3')f.revoked.add(token)}})
-  const run=queries=>f.access.execute(grant.taskId,grant.credential,'sources.query',{sourceId:'sales',queries})
+  const run=queries=>f.access.execute(grant.taskId,grant.credential,'execute_sql',{sourceId:'sales',queries})
   const {items}=await run(['SELECT 1','SELECT 2'])
   assert.equal(items.length,2)
   for(const item of items){
@@ -342,7 +342,7 @@ test('a remote claim revoked during the final source check cannot acquire or ret
   let active=true
   const grant=await f.issue(undefined,{leaseUntil:async()=>{if(!active)throw Error('Claim ended');return deadline}})
   const {captured}=attachBatchTools(f,{onDetail(ids){if(ids.length)active=false}})
-  await assert.rejects(f.access.execute(grant.taskId,grant.credential,'sources.query',{sourceId:'sales',queries:['SELECT 1']}),{statusCode:403})
+  await assert.rejects(f.access.execute(grant.taskId,grant.credential,'execute_sql',{sourceId:'sales',queries:['SELECT 1']}),{statusCode:403})
   assert.equal(captured.length,1)
   active=true
   await assert.rejects(f.access.download(grant.taskId,grant.credential,captured[0]),{statusCode:403})
@@ -351,7 +351,7 @@ test('a remote claim revoked during the final source check cannot acquire or ret
 
 test('the task checks its 64-result limit before dispatching a batch',async t=>{
   const f=fixture(t),grant=await f.issue()
-  const query=args=>f.access.execute(grant.taskId,grant.credential,'sources.query',{sourceId:'sales',...args})
+  const query=args=>f.access.execute(grant.taskId,grant.credential,'execute_sql',{sourceId:'sales',...args})
   for(let i=0;i<63;i++)await query({sql:'SELECT 1'})
   f.calls.length=0
   await assert.rejects(query({queries:['SELECT 1','SELECT 2']}),{statusCode:429})

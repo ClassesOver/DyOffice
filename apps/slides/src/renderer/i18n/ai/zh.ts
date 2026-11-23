@@ -34,7 +34,7 @@ export const zh = {
   aiEmptyBody1: '可以下达指令,也可以直接提问;',
   aiEmptyBody2: '选中元素后,改写类指令默认作用于选中元素。',
   aiThinking: '思考中',
-  aiWorkedSteps: '执行记录 · {n} 个步骤',
+  aiWorkedSteps: '已完成 · {n} 个步骤',
   aiGroupWorking: '处理中…',
   aiContinuing: '继续处理中',
   aiMsgError: '出错: {error}',

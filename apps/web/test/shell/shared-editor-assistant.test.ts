@@ -29,22 +29,22 @@ test('Office messages stream through the shared assistant transport',async()=>{
  expect(f.stream).toHaveBeenCalledOnce();expect(f.host.textContent).toContain('流式回答')
 })
 
-test('execution records retain batch failures across turns without changing editing or model results',async()=>{
+test('shared chat shows the final reply without an execution card and preserves tool results',async()=>{
  const f=fixture(),onLocalEditDone=vi.fn()
  const output=JSON.stringify({items:[
   {ok:true,result:{artifact:{resultId:'result-1'},totalRows:1,preview:[{amount:42,note:'x'.repeat(20000)}]}},
   {ok:false,status:504,code:'SOURCE_TIMEOUT'},
  ]})
- const executeTool=vi.fn(async(call:{name:string})=>call.name==='sources_query'
+ const executeTool=vi.fn(async(call:{name:string})=>call.name==='execute_sql'
   ?{output,summary:'查询数据'}:{output:'Saved PDF',summary:'修改原文',mutated:true})
  const skill={id:'pdf-with-sources',systemPrompt:'Query data and edit PDF',tools:[
-  {name:'sources_query',description:'Query',inputSchema:{type:'object'}},
+  {name:'execute_sql',description:'Query',inputSchema:{type:'object'}},
   {name:'edit_text',description:'Edit',inputSchema:{type:'object'}},
  ],executeTool}
  const assistant={...(f.assistant as object),extraSkills:[skill]} as never
  f.stream.mockImplementation((_input,callbacks)=>{
   const turn=f.stream.mock.calls.length
-  if(turn===1)callbacks.onToolCall({id:'query',name:'sources_query',input:{sourceId:'rj',queries:['SELECT sum(amount) AS amount FROM sales','SELECT count(*) FROM sales']}})
+  if(turn===1)callbacks.onToolCall({id:'query',name:'execute_sql',input:{sourceId:'rj',queries:['SELECT sum(amount) AS amount FROM sales','SELECT count(*) FROM sales']}})
   else if(turn===2)callbacks.onToolCall({id:'edit',name:'edit_text',input:{text:'42'}})
   else callbacks.onDelta('已保存修改，另一条查询超时')
   callbacks.onDone();return {cancel(){}}
@@ -55,17 +55,10 @@ test('execution records retain batch failures across turns without changing edit
  await act(async()=>f.host.querySelector<HTMLButtonElement>('[aria-label="发送"]')!.click())
  expect(executeTool).toHaveBeenCalledTimes(2)
  expect(onLocalEditDone).toHaveBeenCalledOnce()
- expect(f.host.querySelectorAll('.ai-execution-record')).toHaveLength(1)
- expect(f.host.querySelector('.ai-execution-summary')?.textContent).toContain('3 个步骤')
- expect(f.host.querySelector('.ai-execution-record')?.getAttribute('data-status')).toBe('partial')
+ expect(f.host.querySelector('.ai-execution-record')).toBeNull()
+ expect(f.host.textContent).toContain('已保存修改，另一条查询超时')
  const modelResults=f.stream.mock.calls[1]![0].messages.flatMap((message:{results?:{output:string}[]})=>message.results??[])
  expect(modelResults[0].output).toBe(output)
- await act(async()=>f.host.querySelector<HTMLButtonElement>('.ai-execution-summary')!.click())
- expect(f.host.querySelectorAll('.ai-execution-step')).toHaveLength(2)
- expect(f.host.querySelectorAll('[data-query-status]')).toHaveLength(2)
- await act(async()=>f.host.querySelector<HTMLButtonElement>('.ai-execution-query-title')!.click())
- expect(f.host.textContent).toContain('SELECT sum(amount) AS amount FROM sales')
- expect(f.host.textContent).toContain('42')
  expect(f.stream).toHaveBeenCalledTimes(3)
  expect(onLocalEditDone).toHaveBeenCalledOnce()
 })

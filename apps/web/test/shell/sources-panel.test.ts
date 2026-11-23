@@ -391,6 +391,7 @@ test('reads saved connection directories and tables and saves the selected white
   return read(path)
  })
  await click('读取目录和表')
+ await click('浏览 sales 的表')
  expect(probes).toEqual([{expectedVersion:3,page:1},{expectedVersion:3,page:1,directory:'sales'}])
  await change('目录范围','selected')
  const select = (name:string)=>document.querySelector<HTMLInputElement>(`input[aria-label="${name}"]`)!
@@ -585,7 +586,7 @@ test('directory bulk selection is available without typing a search and clearing
  expect(document.querySelector('[aria-label="已选表"]')?.textContent).toContain('archive.orders')
 })
 
-test('reading a single directory opens its tables without selecting any',async()=>{
+test('reading a single directory waits for an explicit table browse without selecting any',async()=>{
  const detail=initial()
  detail.config={...detail.config,allowedTables:[]}
  const requests:unknown[]=[]
@@ -600,12 +601,15 @@ test('reading a single directory opens its tables without selecting any',async()
  await click('读取目录和表')
  expect(host.querySelector('input[aria-label="搜索目录"]')).toBeNull()
  expect(button('浏览 public 的表').textContent).toBe('public')
+ expect(requests).toEqual([{expectedVersion:3,page:1}])
+ expect(host.querySelector('[aria-label="可选表"]')).toBeNull()
+ await click('浏览 public 的表')
  expect(requests).toEqual([{expectedVersion:3,page:1},{expectedVersion:3,page:1,directory:'public'}])
  expect(input('允许表 public.orders').checked).toBe(false)
  expect(host.querySelector<HTMLDetailsElement>('details[aria-label="目录 public 的表"]')?.open).toBe(true)
 })
 
-test('a failed automatic table read keeps the directory available for retry',async()=>{
+test('a failed table read keeps the directory available for retry',async()=>{
  let attempts=0
  const {host}=await mount(async(path,_method,body)=>{
   if(path.endsWith('/discover')){
@@ -617,7 +621,8 @@ test('a failed automatic table read keeps the directory available for retry',asy
  },undefined,'page')
  await click('可见范围')
  await click('读取目录和表')
- expect(host.querySelector('[role="alert"]')?.textContent).toContain('未能自动读取 public 的表')
+ await click('浏览 public 的表')
+ expect(host.querySelector('[role="alert"]')?.textContent).toContain('无法读取 public 的表')
  await click('浏览 public 的表')
  expect(host.querySelector('[aria-label="可选表"]')?.textContent).toContain('orders')
  expect(host.querySelector('[role="alert"]')).toBeNull()
@@ -636,6 +641,7 @@ test('catalog discovery shows which step is loading until the tables arrive',asy
  expect(host.textContent).toContain('正在读取目录…')
  expect(button('读取目录和表').matches(':disabled')).toBe(true)
  await act(async()=>finishDirectories({items:['public'],truncated:false}))
+ await click('浏览 public 的表')
  expect(host.textContent).toContain('正在读取 public 的表…')
  await act(async()=>finishTables({items:['orders'],truncated:false}))
  expect(host.textContent).not.toContain('正在读取')
@@ -849,6 +855,7 @@ test('selected-only view filters tables without removing other picks',async()=>{
   : path.includes('?')?{items:[detail.source],nextCursor:null}:detail,undefined,'page')
  await click('可见范围')
  await click('读取目录和表')
+ await click('浏览 sales 的表')
  await act(async()=>input('只看已选表').click())
  expect(host.querySelector('[aria-label="可选表"]')?.textContent).not.toContain('items')
  expect(host.querySelector('[aria-label="已选表"]')?.textContent).toContain('finance.payments')
@@ -890,6 +897,7 @@ test('selection limits prevent individual additions while allowing removals',asy
   : path.includes('?')?{items:[detail.source],nextCursor:null}:detail,undefined,'page')
  await click('可见范围')
  await click('读取目录和表')
+ await click('浏览 public 的表')
  expect(input('允许表 public.items').disabled).toBe(true)
  expect(input('允许表 public.orders').disabled).toBe(false)
  expect(host.textContent).toContain('已达到 256 张表的上限')
@@ -925,6 +933,7 @@ test('the current directory shows its picked count independently of search',asyn
   : path.includes('?')?{items:[detail.source],nextCursor:null}:detail,undefined,'page')
  await click('可见范围')
  await click('读取目录和表')
+ await click('浏览 public 的表')
  await change('搜索表','items')
  expect(host.querySelector('[aria-label="目录 public 的表"] summary')?.textContent).toBe('public 的表（已选 1）')
 })
@@ -937,6 +946,7 @@ test('a browsed directory can become the only allowed directory without changing
   : path.includes('?')?{items:[detail.source],nextCursor:null}:detail,undefined,'page')
  await click('可见范围')
  await click('读取目录和表')
+ await click('浏览 public 的表')
  await click('仅允许此目录')
  expect(input('目录范围').value).toBe('selected')
  expect(input('允许目录 public').checked).toBe(true)
@@ -967,7 +977,7 @@ test('TLS connection advice points to the saved target option',async()=>{
  expect(host.textContent).toContain('请在全局配置中核对该目标是否启用了「使用 TLS」')
 })
 
-test('selecting specific tables automatically loads the table picker',async()=>{
+test('selecting specific tables loads directories first and tables on demand',async()=>{
  const detail=initial()
  const requests:(string|undefined)[]=[]
  await mount(async(path,_method,body)=>{
@@ -978,6 +988,8 @@ test('selecting specific tables automatically loads the table picker',async()=>{
  },undefined,'page')
  await click('可见范围')
  await change('表可见范围','selected')
+ expect(requests).toEqual([undefined])
+ await click('浏览 public 的表')
  expect(requests).toEqual([undefined,'public'])
  expect(input('允许表 public.orders').checked).toBe(false)
  await act(async()=>input('允许表 public.orders').click())
@@ -995,7 +1007,7 @@ test('selecting specific schemas automatically loads the directory picker',async
  },undefined,'page')
  await click('可见范围')
  await change('目录范围','selected')
- expect(requests).toEqual([undefined,'public'])
+ expect(requests).toEqual([undefined])
 })
 
 test('advanced connection settings follow the UI language through the sources dictionary',async()=>{
@@ -1100,4 +1112,27 @@ test('review filters all selected tables and keeps focus when the last match is 
  expect(list.children).toHaveLength(2)
  expect(list.textContent).toContain('sales.items')
  expect(document.activeElement).toBe(input(search))
+})
+
+test('tests a saved connection from its list row and leaves the editor closed', async()=>{
+ const current=initial()
+ const requests:string[]=[]
+ let ok=false
+ const client=createSourcesClient((async (path:string)=>{
+  requests.push(path)
+  if(path.endsWith('/test'))return {ok, kind:'postgres'}
+  return {items:[current.source,{...current.source,sourceId:'disabled',enabled:false}],nextCursor:null}
+ }) as Request)
+ const host=document.createElement('div');document.body.append(host);const root=createRoot(host);roots.push(root)
+ await act(async()=>root.render(h(SourcesPanel,{client,onClose(){},presentation:'page'})))
+ const [row,disabledRow]=Array.from(host.querySelectorAll('.database-connection-row'))
+ const testButton=(node:Element)=>Array.from(node.querySelectorAll('button')).find(button=>button.textContent==='测试连接')!
+ expect(testButton(disabledRow!).disabled).toBe(true)
+ await act(async()=>testButton(row!).click())
+ expect(row!.querySelector('[role="status"]')?.textContent).toContain('连接测试未通过')
+ ok=true
+ await act(async()=>testButton(row!).click())
+ expect(row!.querySelector('[role="status"]')?.textContent).toBe('连接测试通过。')
+ expect(requests.filter(path=>!path.includes('?'))).toEqual(['/api/v1/sources/revenue/test','/api/v1/sources/revenue/test'])
+ expect(host.querySelector('.database-connections-form')).toBeNull()
 })

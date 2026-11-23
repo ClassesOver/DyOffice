@@ -189,7 +189,7 @@ test('Office discovers only metadata and passes explicit data scope to either pe
  const skill=client.extraSkills[0]
  const listed=await skill.executeTool({id:'catalog',name:'list_agent_data',input:{}})
  assert.equal(listed.isError,undefined);assert.doesNotMatch(listed.output,/'rows'|'preview'/)
- assert.deepEqual(requests[1].body,{name:'sources.list',arguments:{}})
+ assert.deepEqual(requests[1].body,{name:'list_connections',arguments:{}})
  for(const agentId of ['codex','remote'])await skill.executeTool({id:'a',name:'delegate_agent_task',input:{instruction:'Analyze',agentId,dataInputs:{sourceIds:['sales'],resultIds:[resultId]}}})
  assert.deepEqual(sent.map(x=>x.dataInputs),[{sourceIds:['sales'],resultIds:[resultId]},{sourceIds:['sales'],resultIds:[resultId]}])
  client.dispose()

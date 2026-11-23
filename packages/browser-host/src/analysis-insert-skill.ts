@@ -20,7 +20,7 @@ const uuid = { type: 'string', pattern: '^[0-9a-fA-F-]{36}$' }
 
 const DATA_TOOL: AgentToolDef = {
   name: 'insert_data_result',
-  description: 'Insert a frozen query result (the artifact.resultId returned by sources_query) into the open file as a native table: a Word table after the cursor paragraph, cells from the top-left of the current Excel selection (numbers stay numeric), or a table on the current slide. The values come from the stored snapshot, not from your text, so never retype query rows yourself. A header row with units and provenance notes (source, snapshot hash, row count, truncation, timezone) are added. Large results are refused rather than silently cut: aggregate in SQL, choose columns, or pass maxRows. The change is not saved; the normal document save applies.',
+  description: 'Insert a frozen query result (the artifact.resultId returned by execute_sql) into the open file as a native table: a Word table after the cursor paragraph, cells from the top-left of the current Excel selection (numbers stay numeric), or a table on the current slide. The values come from the stored snapshot, not from your text, so never retype query rows yourself. A header row with units and provenance notes (source, snapshot hash, row count, truncation, timezone) are added. Large results are refused rather than silently cut: aggregate in SQL, choose columns, or pass maxRows. The change is not saved; the normal document save applies.',
   inputSchema: {
     type: 'object', additionalProperties: false, required: ['resultId'],
     properties: {

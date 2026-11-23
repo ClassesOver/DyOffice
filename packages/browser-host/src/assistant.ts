@@ -42,7 +42,7 @@ export async function createAssistantClient({request, fetchImpl, csrfToken, onDe
     ? createCodingClient({agents: catalog.agents, defaultId: catalog.defaultAgentId, csrfToken: csrf, getModelId: () => runModel,
       ...(documentId!==undefined?{documentId}:{}),...(taskStorage?{storage:taskStorage}:{}),...(continuationRevision?{continuationRevision}:{}), ...(onDelivery ? {onDelivery} : {}), dataCatalog:async input=>{
       const [sources,results]=await Promise.all([
-        request(sourceResultBase(documentId)+'/source-tools/execute','POST',{name:'sources.list',arguments:input.sourcesAfter?{after:input.sourcesAfter}:{}}),
+        request(sourceResultBase(documentId)+'/source-tools/execute','POST',{name:'list_connections',arguments:input.sourcesAfter?{after:input.sourcesAfter}:{}}),
         request(sourceResultBase(documentId)+'/data-results'+(input.resultsAfter?'?after='+encodeURIComponent(input.resultsAfter):'')),
       ])
       return {sources,results}

@@ -43,7 +43,7 @@ test('approved channel member exchanges only its current claim for unified froze
  const execute=(operation,args)=>f.app.inject({method:'POST',url:endpoint+'/execute',headers:dataHeaders,payload:{operation,arguments:args}})
  const manifest=await execute('results.get_manifest',{resultId:frozen.resultId})
  assert.equal(manifest.statusCode,200,manifest.body);assert.equal('rows' in manifest.json(),false)
- assert.equal((await execute('sources.query',{sourceId:'metrics',sql:'SELECT 1'})).statusCode,403)
+ assert.equal((await execute('execute_sql',{sourceId:'metrics',sql:'SELECT 1'})).statusCode,403)
  const downloaded=await f.app.inject({url:endpoint+'/results/'+frozen.resultId+'/content',headers:dataHeaders})
  assert.equal(downloaded.statusCode,200,downloaded.body);assert.deepEqual(downloaded.json().rows,[{amount:42}])
  await post('/actions',{requestId:randomUUID(),conversationId,to:member.memberId,action:{kind:'cancel',taskId:claim.taskId}})

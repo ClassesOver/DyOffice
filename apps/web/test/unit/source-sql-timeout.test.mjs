@@ -60,7 +60,7 @@ test('connection termination during a statement aborts the batch while timeout a
     safeFailure(error,kind)
    },
   },results:{}})
-  const run=queries=>tools.execute('owner',{name:'sources.query',arguments:{sourceId:'sales',queries}})
+  const run=queries=>tools.execute('owner',{name:'execute_sql',arguments:{sourceId:'sales',queries}})
   const {items}=await run(['SELECT 1','SELECT 2'])
   assert.deepEqual(items,[{ok:false,status:504,code:'SOURCE_TIMEOUT'},{ok:false,status:502,code:'SOURCE_RESULT_UNUSABLE'}])
   await assert.rejects(run(['SELECT 3','SELECT 4']),{statusCode:502,code:'SOURCE_UNAVAILABLE'})

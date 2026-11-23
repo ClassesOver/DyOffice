@@ -10,7 +10,7 @@ let root: ReturnType<typeof createRoot>
 beforeEach(() => { host = document.createElement('div'); document.body.append(host); root = createRoot(host) })
 afterEach(() => { act(() => root.unmount()); host.remove() })
 const tool = (summary: string): ExecutionTool => ({ name: 'read_blocks', summary, output: 'Original result' })
-const batch: ExecutionTool = { name: 'sources_query', summary: 'sources_query', input: JSON.stringify({ sourceId: 'rj', queries: ['SELECT count(*) AS n FROM sales', 'SELECT amount FROM sales'] }), output: JSON.stringify({ items: [
+const batch: ExecutionTool = { name: 'execute_sql', summary: 'execute_sql', input: JSON.stringify({ sourceId: 'rj', queries: ['SELECT count(*) AS n FROM sales', 'SELECT amount FROM sales'] }), output: JSON.stringify({ items: [
   { ok: true, result: { artifact: { resultId: 'result-1' }, totalRows: 1, schema: [{ name: 'n' }], preview: [{ n: 42 }], sourceTruncated: true } },
   { ok: false, status: 504, code: 'SOURCE_TIMEOUT' },
 ] }) }
@@ -66,7 +66,7 @@ it('keeps ordinary tool output and custom media rendering available', () => {
 })
 it('preserves complete batch status when long output is retained for display and history', () => {
   const output = JSON.stringify({ items: [ { ok: true, result: { totalRows: 1000, sourceTruncated: true, artifact: { resultId: 'r-1' }, preview: [{ big: 'x'.repeat(30000) }] } }, { ok: false, status: 504, code: 'SOURCE_TIMEOUT' } ] })
-  const saved = compactExecutionOutput('sources_query', output, 2000)
+  const saved = compactExecutionOutput('execute_sql', output, 2000)
   expect(saved.length).toBeLessThanOrEqual(16000)
   const result = JSON.parse(saved)
   expect(result.items[0].result.artifact.resultId).toBe('r-1')

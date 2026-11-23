@@ -1,15 +1,21 @@
+import { randomUUID } from 'node:crypto'
 import sqlParser from 'node-sql-parser'
 import type { SqlSourceKind } from '../../security/egress.ts'
 
 const parser = new sqlParser.Parser()
 const invalid = () => Object.assign(new Error('Only an approved read-only SELECT is allowed'), { statusCode: 400, code: 'SQL_POLICY_REJECTED' as const })
-const functions = new Set(['abs','ceil','ceiling','floor','round','mod','power','sqrt','lower','upper','length','char_length','concat','concat_ws','substring','substr','trim','ltrim','rtrim','replace','coalesce','nullif','ifnull','greatest','least','current_date','current_timestamp','date_trunc','date_part','date_format','year','month','day','date','extract','generate_series'])
+// These functions write state, execute opaque SQL or access resources outside
+// the table scope. Ordinary analytical functions do not need an allowlist.
+const deniedFunctions = new Set(['load_file','set_config','nextval','setval','setseed','dblink','files','jdbc_query','query','query_to_xml','query_to_xmlschema','query_to_xml_and_xmlschema','table_to_xml','table_to_xmlschema','table_to_xml_and_xmlschema','schema_to_xml','schema_to_xmlschema','schema_to_xml_and_xmlschema','database_to_xml','database_to_xmlschema','database_to_xml_and_xmlschema','get_lock','release_lock','release_all_locks','lo_import','lo_export','lo_create','lo_creat','lo_unlink','lo_open','lo_get','lo_put','lowrite','loread'])
+const purePgFunctions = new Set(['pg_typeof','pg_size_bytes','pg_size_pretty','pg_sleep','pg_sleep_for','pg_sleep_until'])
+function checkFunction(name: string): void {
+  const fn = name.toLowerCase()
+  if (deniedFunctions.has(fn) || fn.startsWith('dblink_') || fn.startsWith('pg_') && !purePgFunctions.has(fn)) throw invalid()
+}
 const extractFields = new Set(['YEAR','QUARTER','MONTH','WEEK','DAY','DOW','ISODOW','DOY','HOUR','MINUTE','SECOND','EPOCH'])
 const intervalUnits = new Set(['YEAR','QUARTER','MONTH','WEEK','DAY','HOUR','MINUTE','SECOND'])
 const intervalText = /^\s*-?\d{1,6}(?:\.\d{1,6})?\s*(?:years?|mons?|months?|weeks?|days?|hours?|mins?|minutes?|secs?|seconds?)(?:\s+-?\d{1,6}(?:\.\d{1,6})?\s*(?:years?|mons?|months?|weeks?|days?|hours?|mins?|minutes?|secs?|seconds?)){0,5}\s*$/i
-const aggregates = new Set(['count','sum','avg','min','max','stddev','stddev_pop','stddev_samp','variance','var_pop','var_samp'])
-const operators = new Set(['=','!=','<>','<','>','<=','>=','+','-','*','/','%','AND','OR','LIKE','NOT LIKE','ILIKE','NOT ILIKE','IS','IS NOT','IN','NOT IN','BETWEEN','NOT BETWEEN','||'])
-const nodeTypes = new Set(['select','expr','column_ref','number','single_quote_string','double_quote_string','string','bool','null','star','default','origin','expr_list','binary_expr','unary_expr','function','aggr_func','case','when','else','cast','array'])
+const nodeTypes = new Set(['select','expr','column_ref','number','single_quote_string','double_quote_string','string','bool','null','star','default','origin','expr_list','binary_expr','unary_expr','function','aggr_func','case','when','else','cast','array','window','window_func','rows','range'])
 const selectKeys = new Set(['type','with','options','distinct','columns','into','from','where','groupby','having','orderby','limit','window','locking_read','collate','_next','set_op','parentheses'])
 /** Fail closed on role grants, global SELECT, write/admin privileges and unknown
  * grant syntaxes. Unsupported StarRocks privilege output is an unverified role,
@@ -40,16 +46,29 @@ export function validateReadOnlySql(sql: unknown, dialect: SqlSourceKind, scope?
     // strings/quoted identifiers/comments and reject >15 digit literals before
     // parsing; exact large decimals may use CAST('text' AS NUMERIC) and the
     // evidence boundary will reject values that cannot survive the DTO number.
-    const tokens = sql.replace(/'(?:''|\\.|[^'\\])*'|"(?:""|[^"])*"|`(?:``|[^`])*`|--[^\r\n]*|\/\*[\s\S]*?\*\//g, ' ')
+    const tokens = sql.replace(/'(?:''|\\.|[^'\\])*'|"(?:""|[^"])*"|`(?:``|[^`])*`|--[^\r\n]*|\/\*[\s\S]*?\*\//g, match => ' '.repeat(match.length))
     for (const match of tokens.matchAll(/\b(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?/g)) if ((match[0].match(/\d/g)?.length ?? 0) > 15) throw invalid()
-    const result = parser.astify(sql, { database })
+    // The parser serializes AS g(x) as the single identifier "g(x)".
+    // Replace only unquoted alias lists before parsing, then restore their SQL.
+    const aliases = new Map<string, string>()
+    let parseSql = sql
+    const aliasLists = [...tokens.matchAll(/(?:\bAS\s+|\)\s*)([A-Za-z_][A-Za-z0-9_$]*)\s*\(\s*([A-Za-z_][A-Za-z0-9_$]*(?:\s*,\s*[A-Za-z_][A-Za-z0-9_$]*)*)\s*\)/gi)]
+    for (const match of aliasLists.reverse()) {
+      const start = match.index! + match[0].indexOf(match[1], match[0].startsWith(')') ? 1 : 2)
+      const marker = 'alias_' + randomUUID().replaceAll('-', '')
+      const quote = database === 'Postgresql' ? '"' : '`'
+      const identifier = (name: string) => quote + (dialect === 'postgres' ? name.toLowerCase() : name) + quote
+      aliases.set(quote + marker + quote, identifier(match[1]) + '(' + match[2].split(/\s*,\s*/).map(identifier).join(', ') + ')')
+      parseSql = parseSql.slice(0, start) + marker + parseSql.slice(match.index! + match[0].length)
+    }
+    const result = parser.astify(parseSql, { database })
     if (Array.isArray(result) && result.length !== 1) throw invalid()
     const ast = Array.isArray(result) ? result[0] : result
     let nodes = 0
-    function walk(value: unknown, depth = 0): void {
+    function walk(value: unknown, depth = 0, inFrame = false): void {
       if (value === null || value === undefined || typeof value !== 'object') return
       if (++nodes > 8000 || depth > 64) throw invalid()
-      if (Array.isArray(value)) { for (const item of value) walk(item, depth + 1); return }
+      if (Array.isArray(value)) { for (const item of value) walk(item, depth + 1, inFrame); return }
       const node = value as Record<string, any>
       const pgDate = dialect === 'postgres' && node.type === 'date' && typeof node.value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(node.value) && Object.keys(node).length === 2
       // EXTRACT(<field> FROM <expr>) parses to its own node; only fixed date-part names are accepted.
@@ -62,24 +81,21 @@ export function validateReadOnlySql(sql: unknown, dialect: SqlSourceKind, scope?
       if (node.type === 'interval' && !interval) throw invalid()
       if (node.type !== undefined && node.type !== null && !nodeTypes.has(node.type) && !['ASC','DESC','DISTINCT'].includes(node.type) && !pgDate && !extract && !interval) throw invalid()
       if (node.type === 'select') {
-        if (Object.keys(node).some(key => !selectKeys.has(key)) || node.options || node.locking_read || node.window || node.collate || node.into && Object.values(node.into).some(v => v !== null) || node.set_op && !['union','union all','intersect','except'].includes(node.set_op)) throw invalid()
+        if (Object.keys(node).some(key => !selectKeys.has(key)) || node.options || node.locking_read || node.into && Object.values(node.into).some(v => v !== null) || node.set_op && !['union','union all','intersect','except'].includes(node.set_op)) throw invalid()
       }
       if (node.type === 'function') {
         const name = node.name
-        if (!name || name.schema || !Array.isArray(name.name) || name.name.length !== 1 || node.over) throw invalid()
+        if (!name || name.schema || !Array.isArray(name.name) || name.name.length !== 1) throw invalid()
         const fn = String(name.name[0].value).toLowerCase()
-        if (!functions.has(fn) && !(dialect === 'postgres' && fn === 'to_char')) throw invalid()
+        checkFunction(fn)
       }
-      if (node.type === 'aggr_func' && (!aggregates.has(String(node.name).toLowerCase()) || node.over)) throw invalid()
-      if (node.type === 'number' && (!Number.isFinite(Number(node.value)) || Number.isInteger(Number(node.value)) && !Number.isSafeInteger(Number(node.value)))) throw invalid()
-      if (node.type === 'binary_expr' && !operators.has(String(node.operator).toUpperCase())) throw invalid()
-      if (node.type === 'unary_expr' && !['NOT','+','-'].includes(String(node.operator).toUpperCase())) throw invalid()
-      if (node.type === 'cast' && (!Array.isArray(node.target) || node.target.some((target: any) => !['INT','INTEGER','BIGINT','SMALLINT','DECIMAL','NUMERIC','DOUBLE','DOUBLE PRECISION','FLOAT','REAL','TEXT','VARCHAR','CHAR','DATE','TIMESTAMP','BOOLEAN','SIGNED','UNSIGNED'].includes(String(target.dataType).toUpperCase()) || target.schema))) throw invalid()
-      // A relation column alias list (FROM f() AS g(x)) does not survive re-serialization: it would
-      // come back as the identifier "g(x)". Output labels such as AS "Paid (USD)" are unaffected.
-      if (Array.isArray(node.from) && node.from.some((item: any) => typeof item?.as === 'string' && /[()]/.test(item.as))) throw invalid()
-      if (node.collate || node.suffix && Array.isArray(node.suffix) && node.suffix.length) throw invalid()
-      for (const child of Object.values(node)) walk(child, depth + 1)
+      if (node.type === 'aggr_func' || node.type === 'window_func') checkFunction(String(node.name))
+      const frameOffset = inFrame && typeof node.value === 'string' && /^\d{1,15} (?:PRECEDING|FOLLOWING)$/i.test(node.value)
+      if (node.type === 'number' && !frameOffset && (!Number.isFinite(Number(node.value)) || Number.isInteger(Number(node.value)) && !Number.isSafeInteger(Number(node.value)))) throw invalid()
+      if (node.type === 'binary_expr' && [':=','=:', 'ASSIGN'].includes(String(node.operator).toUpperCase())) throw invalid()
+      if (node.type === 'cast' && (!Array.isArray(node.target) || node.target.some((target: any) => target.schema))) throw invalid()
+      if (node.suffix && Array.isArray(node.suffix) && node.suffix.length) throw invalid()
+      for (const [key, child] of Object.entries(node)) walk(child, depth + 1, inFrame || key === 'window_frame_clause')
     }
     if (!ast || ast.type !== 'select') throw invalid()
     walk(ast)
@@ -112,6 +128,8 @@ export function validateReadOnlySql(sql: unknown, dialect: SqlSourceKind, scope?
       for (const [key, child] of Object.entries(value)) if (key !== 'with') qualify(child, names)
     }
     qualify(ast, new Set())
-    return parser.sqlify(ast, { database })
+    let normalized = parser.sqlify(ast, { database })
+    for (const [marker, alias] of aliases) normalized = normalized.replaceAll(marker, alias)
+    return normalized
   } catch { throw invalid() }
 }

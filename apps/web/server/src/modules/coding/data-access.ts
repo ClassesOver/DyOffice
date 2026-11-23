@@ -159,7 +159,7 @@ export function createHarnessDataAccess(options:{
         const owner=JSON.stringify([principal.deploymentId,principal.userId])
         if([...entries.values()].filter(other=>other.owner===owner).length>=2)throw unavailable(429)
         entry.owner=owner
-        for(const id of entry.sourceIds){await options.tools.execute(entry.token,{name:'sources.describe',arguments:{sourceId:id}},entry.documentId);current(entry)}
+        for(const id of entry.sourceIds){await options.tools.execute(entry.token,{name:'search_objects',arguments:{sourceId:id}},entry.documentId);current(entry)}
         for(const id of entry.resultIds){await options.results.read(entry.token,{resultId:id,limit:1},entry.documentId);current(entry)}
         await validate(entry)
         return {taskId,claimId,connectionEpoch:1,credential,agentId:entry.agentId,expiresAt:new Date(entry.expiresAt).toISOString(),inputs:{sourceIds:[...entry.sourceIds],resultIds:[...entry.resultIds]}}
@@ -167,7 +167,7 @@ export function createHarnessDataAccess(options:{
     },
     async execute(taskId:string,bearer:string,operation:string,args:unknown):Promise<unknown> {
       const entry=lookup(taskId,bearer)
-      if(operation==='sources.query')return withGrant(entry,async()=>{
+      if(operation==='execute_sql')return withGrant(entry,async()=>{
         const input=object(args,['sourceId','sql','queries','sourceVersion']),id=sourceId(input.sourceId)
         if(!entry.sourceIds.has(id))throw unavailable()
         const batch=input.queries!==undefined
@@ -192,7 +192,7 @@ export function createHarnessDataAccess(options:{
         return response
       })
       return guarded(entry,async()=>{
-        if(operation==='sources.list') {
+        if(operation==='list_connections') {
           const input=object(args,['after'])
           const after=input.after===undefined?undefined:sourceId(input.after)
           if(after!==undefined&&!entry.sourceIds.has(after))throw unavailable()
@@ -202,7 +202,7 @@ export function createHarnessDataAccess(options:{
           // leave this layer. A task's catalog itself has at most 32 entries.
           for(let page=0;page<32;page++) {
             current(entry)
-            const result=await options.tools.execute(entry.token,{name:'sources.list',arguments:cursor===undefined?{}:{after:cursor}},entry.documentId) as {items:{sourceId:string}[];nextCursor:string|null}
+            const result=await options.tools.execute(entry.token,{name:'list_connections',arguments:cursor===undefined?{}:{after:cursor}},entry.documentId) as {items:{sourceId:string}[];nextCursor:string|null}
             if(!result||!Array.isArray(result.items))throw unavailable()
             for(const item of result.items)if(entry.sourceIds.has(item.sourceId)&&!found.has(item.sourceId)) {items.push(item);found.add(item.sourceId)}
             if(!result.nextCursor||found.size===entry.sourceIds.size)return {items,nextCursor:null}
@@ -211,7 +211,7 @@ export function createHarnessDataAccess(options:{
           }
           throw unavailable()
         }
-        if(operation==='sources.describe') {
+        if(operation==='search_objects') {
           const input=object(args,['sourceId','table','tables','schema','tablePrefix','columnOffset']),id=sourceId(input.sourceId)
           if(!entry.sourceIds.has(id))throw unavailable()
           const catalog=await options.tools.execute(entry.token,{name:operation,arguments:input},entry.documentId) as Awaited<ReturnType<SourceService['describe']>>

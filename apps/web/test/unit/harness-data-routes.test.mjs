@@ -19,9 +19,9 @@ test('task HTTP routes expose only bounded operations and verified content heade
   async download(task,bearer,id){assert.equal(bearer,'x'.repeat(43));return {bytes,sha256:'a'.repeat(64)}},dispose(){},
  })
  const url='/api/v1/agents/tasks/task/data/execute',headers={authorization:'Bearer '+'x'.repeat(43)}
- assert.equal((await app.inject({method:'POST',url,payload:{operation:'sources.list',arguments:{}}})).statusCode,403)
+ assert.equal((await app.inject({method:'POST',url,payload:{operation:'list_connections',arguments:{}}})).statusCode,403)
  assert.equal((await app.inject({method:'POST',url,headers,payload:{operation:'results.download',arguments:{}}})).statusCode,400)
- assert.equal((await app.inject({method:'POST',url,headers,payload:{operation:'sources.list',arguments:{}}})).statusCode,200)
+ assert.equal((await app.inject({method:'POST',url,headers,payload:{operation:'list_connections',arguments:{}}})).statusCode,200)
  assert.equal(calls.length,1)
  const result=await app.inject({url:'/api/v1/agents/tasks/task/data/results/result/content',headers})
  assert.deepEqual(result.rawPayload,bytes)
@@ -49,7 +49,7 @@ test('batch query handlers can outlast the normal socket timeout on each HTTP tr
  ])await t.test(path,async()=>{
   const auth=field==='operation'?{authorization:'Bearer '+'x'.repeat(43)}:{cookie:'__Host-dyoffice-session='+'x'.repeat(43)}
   const call=args=>fetch(url+path,{method:'POST',headers:{'content-type':'application/json',...auth},
-   body:JSON.stringify({[field]:'sources.query',arguments:{sourceId:'sales',...args}})})
+   body:JSON.stringify({[field]:'execute_sql',arguments:{sourceId:'sales',...args}})})
   const response=await call({queries:['select 1','select 2','select 3','select 4']})
   assert.equal(response.status,200)
   assert.deepEqual(await response.json(),{completed:true,...(documentId&&{documentId})})
@@ -75,7 +75,7 @@ test('network-free mailbox forwards the same task API and removes its transport 
  try {
   async function submit(path){
    const id=randomUUID()
-   await writeFile(join(mailbox.directory,id+'.request'),JSON.stringify({path,method:'POST',headers:{authorization:'Bearer '+'x'.repeat(43)},body:JSON.stringify({operation:'sources.list',arguments:{}})}))
+   await writeFile(join(mailbox.directory,id+'.request'),JSON.stringify({path,method:'POST',headers:{authorization:'Bearer '+'x'.repeat(43)},body:JSON.stringify({operation:'list_connections',arguments:{}})}))
    for(let attempt=0;attempt<100;attempt++) {
     try{return JSON.parse(await readFile(join(mailbox.directory,id+'.response'),'utf8'))}catch(error){if(error.code!=='ENOENT')throw error}
     await new Promise(resolve=>setTimeout(resolve,25))
@@ -108,7 +108,7 @@ test('a slow mailbox request is forwarded once and answered once, never with a s
  const mailbox=await createHarnessDataMailbox(app,'task')
  try {
   const ids=[randomUUID(),randomUUID()]
-  for(const id of ids)await writeFile(join(mailbox.directory,id+'.request'),JSON.stringify({path:'/api/v1/agents/tasks/task/data/execute',method:'POST',headers:{authorization:'Bearer '+'x'.repeat(43)},body:JSON.stringify({operation:'sources.list',arguments:{}})}))
+  for(const id of ids)await writeFile(join(mailbox.directory,id+'.request'),JSON.stringify({path:'/api/v1/agents/tasks/task/data/execute',method:'POST',headers:{authorization:'Bearer '+'x'.repeat(43)},body:JSON.stringify({operation:'list_connections',arguments:{}})}))
   const responses=[]
   for(const id of ids){
    for(let attempt=0;attempt<100;attempt++){

@@ -1,4 +1,3 @@
-import { AiExecutionRecord, withExecutionRecords } from '@genoffice/ui'
 import {
   useAssistantFocusRoot, useAiPanelResize,
   AiPanelSideButton,
@@ -107,7 +106,6 @@ export function AiPanel({
 }): ReactElement {
   const { lang, t } = useI18n()
   const [chat, setChat] = useState<ChatEntry[]>([])
-  const executionRecords = withExecutionRecords(chat)
   const [prompt, setPrompt] = useState('')
   const [attachedSkills, setAttachedSkills] = useState<string[]>([])
   const attachedSkillsRef = useRef(attachedSkills)
@@ -750,7 +748,7 @@ export function AiPanel({
               key={i}
               className={`ai-msg ai-msg-assistant${entry.isError ? ' ai-msg-error' : ''}`}
             >
-              {!!executionRecords[i].tools?.length && <ToolChipList tools={executionRecords[i].tools!} />}
+              {hasTools && <ToolChipList tools={entry.tools!} />}
               {entry.usage && (
                 <div className="ai-message-usage">
                   <AiUsageChip usage={entry.usage} lang={lang} />
@@ -894,9 +892,136 @@ export function AiPanel({
 }
 
 /** Tool row list (unified with docs/slides/sheets): dot + summary, expandable details when there's output */
+/** Step-row status icons (timeline glyphs: 14px in a 20px slot, 1.6 stroke) */
+function StepIcon({ status }: { status: 'running' | 'done' | 'error' }) {
+  if (status === 'running') {
+    return (
+      <svg
+        viewBox="0 0 24 24"
+        width="14"
+        height="14"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.6"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        aria-hidden
+      >
+        <path d="M6.5 3.5h11M6.5 20.5h11M8 3.5v3.2c0 2.6 4 4.2 4 5.3 0 1.1 4 2.7 4 5.3v3.2M16 3.5v3.2c0 2.6-4 4.2-4 5.3 0 1.1-4 2.7-4 5.3v3.2" />
+      </svg>
+    )
+  }
+  if (status === 'error') {
+    return (
+      <svg
+        viewBox="0 0 24 24"
+        width="14"
+        height="14"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.6"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        aria-hidden
+      >
+        <circle cx="12" cy="12" r="9" />
+        <path d="m9.2 9.2 5.6 5.6M14.8 9.2l-5.6 5.6" />
+      </svg>
+    )
+  }
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      width="14"
+      height="14"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.6"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+    >
+      <circle cx="12" cy="12" r="9" />
+      <path d="m8.5 12.4 2.4 2.4 4.6-5" />
+    </svg>
+  )
+}
+
+/** Tool activity group: a single quiet summary row
+ *  that auto-opens while tools run, auto-collapses into "Worked · N steps" when they finish,
+ *  and a manual toggle that always wins. Rows inside are step rows with 1px connectors. */
 function ToolChipList({ tools }: { tools: ToolActivity[] }) {
-  const { lang } = useI18n()
-  return <AiExecutionRecord tools={tools} lang={lang} />
+  const { t: tr } = useI18n()
+  const [expanded, setExpanded] = useState<Set<number>>(new Set())
+  const [userOpen, setUserOpen] = useState<boolean | null>(null)
+
+  const toggle = (j: number) => {
+    setExpanded((prev) => {
+      const next = new Set(prev)
+      if (next.has(j)) next.delete(j)
+      else next.add(j)
+      return next
+    })
+  }
+
+  const open = userOpen ?? false
+  const label = tr('aiWorkedSteps', { n: tools.length })
+
+  return (
+    <div className="ai-work-group">
+      <button
+        type="button"
+        className={`ai-work-group-summary`}
+        aria-expanded={open}
+        onClick={() => setUserOpen(!open)}
+      >
+        <span className="ai-work-group-label">{label}</span>
+        <span className={`ai-tool-chip-caret${open ? ' open' : ''}`} aria-hidden>
+          ›
+        </span>
+      </button>
+      <div className={`ai-work-group-body${open ? ' open' : ''}`}>
+        <div className="ai-work-group-body-inner">
+          {tools.map((tool, j) => {
+            const hasOutput = !!tool.output
+            const isOpen = expanded.has(j)
+            const stepStatus = tool.isError ? 'error' : 'done'
+            return (
+              <div key={j} className="ai-step-row">
+                <span className={`ai-step-icon ${stepStatus}`} aria-hidden>
+                  <StepIcon status={stepStatus} />
+                </span>
+                <div className="ai-step-content">
+                  {hasOutput ? (
+                    <button
+                      type="button"
+                      className="ai-step-title clickable"
+                      data-tip={tool.name}
+                      aria-expanded={isOpen}
+                      onClick={() => toggle(j)}
+                    >
+                      {tool.summary}
+                    </button>
+                  ) : (
+                    <span className="ai-step-title" data-tip={tool.name}>
+                      {tool.summary}
+                    </span>
+                  )}
+                  {hasOutput && isOpen && (
+                    <div className="ai-step-detail">
+                      <div className="ai-tool-output">
+                        <div className="ai-tool-output-pre">{tool.output}</div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      </div>
+    </div>
+  )
 }
 
 function Svg({ children }: { children: React.ReactNode }): ReactElement {

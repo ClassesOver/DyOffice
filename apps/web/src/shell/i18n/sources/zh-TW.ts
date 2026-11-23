@@ -143,7 +143,7 @@ export const zhTW = {
   srcSelectedSchemasOnly: '僅限選取的 Schema',
   srcSelectedTablesOnly: '僅限選取的資料表',
   srcRestoreSavedSchemasAndTables: '還原已儲存的 Schema 與資料表',
-  srcLoadSavedScopeHelp: '載入已儲存連線中帳號可見的 Schema 與資料表。勾選並儲存後，助手才會使用新範圍。',
+  srcLoadSavedScopeHelp: '先載入 Schema，再點選 Schema 查看資料表。勾選並儲存後，助手才會使用新範圍。',
   srcTestConnectionViewDetails: '測試連線並檢視詳細資訊',
   srcSchemaDisplayLimit: '僅顯示前 1000 個 Schema，其餘可手動輸入。',
   srcNoSchemasAvailable: '此帳號沒有可選的 Schema。',

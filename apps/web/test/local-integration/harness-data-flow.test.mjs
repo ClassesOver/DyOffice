@@ -68,7 +68,7 @@ import {readFile,writeFile} from 'node:fs/promises'
 import {createHash,randomUUID} from 'node:crypto'
 import {createHarnessDataClient} from ${JSON.stringify(clientModule)}
 const client=createHarnessDataClient({baseUrl:process.env.HARNESS_BASE_URL,taskId:process.env.HARNESS_TASK_ID,credential:process.env.HARNESS_TASK_TOKEN})
-const query=await client.execute('sources.query',{sourceId:'metrics'})
+const query=await client.execute('execute_sql',{sourceId:'metrics'})
 if('preview' in query||'rows' in query)throw Error('Data leaked into metadata')
 await client.download(query.artifact.resultId,'input.json')
 await client.download(query.artifact.resultId,'input-retry.json')
@@ -107,7 +107,7 @@ console.log(JSON.stringify({total,resultId:query.artifact.resultId,commandId:rec
       'def execute(operation,args):',
       '    Path("request.json").write_text(json.dumps(args))',
       '    return command("execute",operation,"--args-file","request.json")',
-      'query=execute("sources.query",{"sourceId":"metrics"})',
+      'query=execute("execute_sql",{"sourceId":"metrics"})',
       'assert "rows" not in query and "preview" not in query',
       'command("download",query["artifact"]["resultId"],"--out","input.json")',
       'command("download",query["artifact"]["resultId"],"--out","input-retry.json")',
@@ -186,7 +186,7 @@ if(process.env.HARNESS_EXPECT_DENIED==='1') {
   assert.equal(queries,1,'Restarted receipt recovery must not rerun the source')
   const deliveryCount=await f.transactions.withPrincipalTransaction({kind:'session',token:f.alice.token},async c=>c.query('SELECT count(*)::int AS count FROM harness_analysis_deliveries'))
   assert.equal(deliveryCount.rows[0].count,1,'Restarted receipt recovery must not duplicate commit')
-  const forged=await fetch(baseUrl+'/tasks/'+bob.taskId+'/data/execute',{method:'POST',headers:{authorization:'Bearer '+grant.credential,'content-type':'application/json'},body:JSON.stringify({operation:'sources.list',arguments:{}})})
+  const forged=await fetch(baseUrl+'/tasks/'+bob.taskId+'/data/execute',{method:'POST',headers:{authorization:'Bearer '+grant.credential,'content-type':'application/json'},body:JSON.stringify({operation:'list_connections',arguments:{}})})
   assert.equal(forged.status,403)
   const otherTask=await data.issue({token:f.alice.token,agentId:'same-owner-peer',inputs:{sourceIds:[],resultIds:[]},signal:new AbortController().signal})
   for(const peer of [bob,otherTask]) {

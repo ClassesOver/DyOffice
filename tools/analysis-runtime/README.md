@@ -87,8 +87,8 @@ node .dyoffice-analysis-build/harness-data.mjs --help
 helper 仅依赖 Node 22+ 内置模块，不需要目标机器安装 npm 包。内置 Codex 使用服务端注入的 Node 绝对路径执行只读 helper。完整 Office CLI 同时提供 `genoffice data`，两者复用相同客户端与命令实现：
 
 ```sh
-node /opt/dyoffice/harness-data.mjs execute sources.list
-node /opt/dyoffice/harness-data.mjs execute sources.query --args-file query.json
+node /opt/dyoffice/harness-data.mjs execute list_connections
+node /opt/dyoffice/harness-data.mjs execute execute_sql --args-file query.json
 node /opt/dyoffice/harness-data.mjs manifest RESULT_ID
 node /opt/dyoffice/harness-data.mjs download RESULT_ID --out input.json
 node /opt/dyoffice/harness-data.mjs execute artifacts.stage --args-file artifact.json

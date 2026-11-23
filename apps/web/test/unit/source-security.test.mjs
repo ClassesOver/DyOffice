@@ -42,14 +42,14 @@ test('credential vault binds ciphertext to source/revision and retains old decry
   for (const value of ['x:bad', 'x:' + k1 + ',x:' + k2, 'x:' + k1 + ',']) assert.throws(() => createCredentialVault(value))
 })
 
-test('SQL policy parses one SELECT and positively allows AST nodes, operators and functions', () => {
+test('SQL policy accepts read queries and rejects writes or access outside the source', () => {
   for (const dialect of ['postgres', 'mysql', 'starrocks']) {
-    for (const sql of ['SELECT 1', 'SELECT count(*) FROM sales', 'WITH x AS (SELECT 1 AS v) SELECT v FROM x', 'SELECT sum(amount) AS total FROM sales WHERE id=2 GROUP BY region', 'SELECT 1 UNION ALL SELECT 2']) assert.equal(typeof validateReadOnlySql(sql, dialect), 'string')
+    for (const sql of ['SELECT 1', 'SELECT count(*) FROM sales', 'WITH x AS (SELECT 1 AS v) SELECT v FROM x', 'SELECT sum(amount) AS total FROM sales WHERE id=2 GROUP BY region', 'SELECT 1 UNION ALL SELECT 2', 'SELECT pg_sleep(0)', 'SELECT sleep(0)']) assert.equal(typeof validateReadOnlySql(sql, dialect), 'string')
     for (const sql of [
       '', 'SELECT 1; SELECT 2', 'DELETE FROM sales', 'SELECT 1 INTO tmp', 'SELECT * FROM sales FOR UPDATE',
-      "SELECT pg_read_file('/etc/passwd')", 'SELECT pg_sleep(10)', 'SELECT sleep(10)', 'SELECT benchmark(10000,1)',
-      "SELECT load_file('/etc/passwd')", "SELECT set_config('a','b',false)", 'SELECT custom_unsafe(1)',
-      'SELECT pg_catalog.pg_sleep(3)', 'SELECT public.count(1)', 'SELECT * FROM dblink(1)',
+      "SELECT pg_read_file('/etc/passwd')",
+      "SELECT load_file('/etc/passwd')", "SELECT set_config('a','b',false)",
+      'SELECT other.custom_reader(3)', 'SELECT public.count(1)', 'SELECT * FROM dblink(1)',
       'WITH x AS (DELETE FROM sales RETURNING *) SELECT * FROM x', 'SELECT @x:=1',
       "SELECT 1 INTO OUTFILE '/tmp/t15'", 'SELECT /*!50000 sleep(10) */ 1', 'SELECT * FROM sales LOCK IN SHARE MODE',
     ]) assert.throws(() => validateReadOnlySql(sql, dialect), sql)
@@ -129,7 +129,7 @@ test('EXTRACT accepts fixed date parts only, in both dialects, and its source is
   for (const sql of [
     'SELECT EXTRACT(foo FROM order_date) AS q FROM sales.orders',
     "SELECT EXTRACT(year FROM (SELECT pg_read_file('x'))) AS q FROM sales.orders",
-    'SELECT EXTRACT(year FROM pg_sleep(10)) AS q FROM sales.orders',
+    "SELECT EXTRACT(year FROM nextval('seq')) AS q FROM sales.orders",
   ]) assert.throws(() => validateReadOnlySql(sql, 'postgres', { defaultSchema: 'db' }), /approved read-only SELECT/, sql)
 })
 
@@ -145,11 +145,58 @@ test('INTERVAL literals are accepted only as a plain duration', () => {
   ]) assert.throws(() => validateReadOnlySql(sql, 'postgres', { defaultSchema: 'db' }), /approved read-only SELECT/, sql)
 })
 
-test('column alias lists are refused because re-serialization would corrupt them; DOUBLE PRECISION casts are accepted', () => {
-  assert.throws(() => validateReadOnlySql('SELECT g.x FROM generate_series(1, 3) AS g(x)', 'postgres', { defaultSchema: 'db' }), /approved read-only SELECT/)
+test('relation column aliases survive serialization; DOUBLE PRECISION casts are accepted', () => {
+  assert.match(validateReadOnlySql('SELECT g.x FROM generate_series(1, 3) AS g(x)', 'postgres', { defaultSchema: 'db' }), /AS "g"\("x"\)/)
+  assert.match(validateReadOnlySql('SELECT g.x FROM generate_series(1, 3) AS G(X)', 'postgres'), /AS "g"\("x"\)/)
   assert.match(validateReadOnlySql('SELECT x FROM generate_series(1, 3) AS x', 'postgres', { defaultSchema: 'db' }), /generate_series/)
   assert.doesNotThrow(() => validateReadOnlySql('SELECT SUM(paid_amount)::double precision AS p FROM sales.orders', 'postgres', { defaultSchema: 'db' }))
   // Parenthesised output labels are ordinary aliases and round-trip intact.
   assert.match(validateReadOnlySql('SELECT SUM(paid_amount) AS "Paid amount (USD)" FROM sales.orders', 'postgres', { defaultSchema: 'db' }), /AS "Paid amount \(USD\)"/)
-  assert.throws(() => validateReadOnlySql('SELECT o.id FROM sales.orders AS o JOIN generate_series(1, 3) AS g(x) ON o.id = g.x', 'postgres', { defaultSchema: 'db' }), /approved read-only SELECT/)
+  assert.match(validateReadOnlySql('SELECT o.id FROM sales.orders AS o JOIN generate_series(1, 3) AS g(x) ON o.id = g.x', 'postgres', { defaultSchema: 'db' }), /AS "g"\("x"\)/)
+  assert.match(validateReadOnlySql('SELECT * FROM sales AS "g(x)"', 'postgres'), /AS "g\(x\)"/)
+  assert.match(validateReadOnlySql('SELECT * FROM sales AS "g(x)" JOIN generate_series(1, 3) AS g(x) ON true', 'postgres'), /AS "g\(x\)".*JOIN.*AS "g"\("x"\)/)
+})
+
+test('window functions, named windows and bounded or unbounded frames are accepted across dialects', () => {
+  for (const dialect of ['postgres', 'mysql', 'starrocks']) {
+    for (const sql of [
+      'SELECT ROW_NUMBER() OVER (PARTITION BY region ORDER BY amount) AS n FROM sales',
+      'SELECT RANK() OVER w, DENSE_RANK() OVER w FROM sales WINDOW w AS (ORDER BY amount)',
+      'SELECT LAG(amount, 1, 0) OVER (ORDER BY amount), LEAD(amount) OVER (ORDER BY amount) FROM sales',
+      'SELECT FIRST_VALUE(amount) OVER w, LAST_VALUE(amount) OVER w, NTH_VALUE(amount, 2) OVER w FROM sales WINDOW w AS (ORDER BY amount)',
+      'SELECT NTILE(4) OVER (ORDER BY amount) FROM sales',
+      'SELECT SUM(amount) OVER (ORDER BY amount ROWS BETWEEN 2 PRECEDING AND CURRENT ROW), COUNT(*) OVER () FROM sales',
+      'SELECT AVG(amount) OVER (ORDER BY amount ROWS UNBOUNDED PRECEDING) FROM sales',
+      'SELECT SUM(amount) OVER (ORDER BY amount ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING) FROM sales',
+    ]) assert.match(validateReadOnlySql(sql, dialect), /OVER/i, dialect + ': ' + sql)
+  }
+})
+
+test('ordinary analysis functions, operators and built-in casts do not need a function whitelist', () => {
+  for (const sql of [
+    'SELECT IF(amount > 0, amount, 0), DATEDIFF(day, CURRENT_DATE()), DATE_ADD(day, INTERVAL 1 DAY) FROM sales',
+    'SELECT APPROX_COUNT_DISTINCT(region), PERCENTILE_APPROX(amount, 0.5) FROM sales',
+    "SELECT JSON_EXTRACT(payload, '$.value') FROM sales WHERE region REGEXP '^a'",
+  ]) assert.doesNotThrow(() => validateReadOnlySql(sql, 'starrocks'))
+  for (const dialect of ['mysql', 'starrocks']) assert.doesNotThrow(() => validateReadOnlySql('SELECT CUME_DIST() OVER (ORDER BY amount), PERCENT_RANK() OVER (ORDER BY amount) FROM sales', dialect))
+  assert.doesNotThrow(() => validateReadOnlySql("SELECT PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY amount), BOOL_OR(amount > 0) FROM sales WHERE region ~ '^a'", 'postgres'))
+  assert.doesNotThrow(() => validateReadOnlySql("SELECT CAST(payload AS JSONB), pg_typeof(amount) FROM sales", 'postgres'))
+})
+
+test('window expressions and function arguments cannot hide writes or out-of-scope access', () => {
+  for (const dialect of ['postgres', 'mysql', 'starrocks']) {
+    const scope = { defaultSchema: 'sales', allowedSchemas: ['sales'], allowedTables: ['sales.orders'] }
+    for (const sql of [
+      'SELECT ROW_NUMBER() OVER (ORDER BY (SELECT id FROM other.orders)) FROM sales.orders',
+      'SELECT LAG((SELECT id FROM sales.secrets)) OVER (ORDER BY id) FROM sales.orders',
+      "SELECT SUM(id) OVER (ORDER BY load_file('/etc/passwd')) FROM sales.orders",
+      "SELECT nextval('seq') FROM sales.orders",
+      "SELECT query_to_xml('SELECT * FROM other.orders', true, false, '')",
+      "SELECT * FROM files('path' = 's3://private/data')",
+      "SELECT * FROM jdbc_query('remote', 'SELECT * FROM secrets')",
+      'SELECT other.custom_reader(id) FROM sales.orders',
+      'WITH x AS (DELETE FROM sales.orders RETURNING *) SELECT count(*) OVER () FROM x',
+      'SELECT ROW_NUMBER() OVER () FROM sales.orders; DELETE FROM sales.orders',
+    ]) assert.throws(() => validateReadOnlySql(sql, dialect, scope), { code: 'SQL_POLICY_REJECTED' }, dialect + ': ' + sql)
+  }
 })

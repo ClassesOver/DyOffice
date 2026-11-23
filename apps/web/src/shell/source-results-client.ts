@@ -11,9 +11,9 @@ export function createSourceResultsClient(request: Request, documentId?:string) 
   const base=sourceResultBase(documentId)
   const tool = <T>(name: string, args: object) => request<T>(base+'/source-tools/execute', 'POST', { name, arguments: args })
   return {
-    query(sourceId: string, input: { sql?: string }) { return tool<SourceToolQueryOutcome>('sources.query', { sourceId, ...input }) },
-    save(resultId: string, name: string, commandId: string) { return tool<WorkspaceSourceResultArtifact>('sources.save_result', { resultId, name, commandId }) },
-    read(resultId: string, offset = 0) { return tool<WorkspaceSourceResultPage>('sources.read_result', { resultId, offset, limit: 1000 }) },
+    query(sourceId: string, input: { sql?: string }) { return tool<SourceToolQueryOutcome>('execute_sql', { sourceId, ...input }) },
+    save(resultId: string, name: string, commandId: string) { return tool<WorkspaceSourceResultArtifact>('save_query_result', { resultId, name, commandId }) },
+    read(resultId: string, offset = 0) { return tool<WorkspaceSourceResultPage>('read_query_result', { resultId, offset, limit: 1000 }) },
     list(after?: string) {
       const query = new URLSearchParams()
       if (after) query.set('after', after)

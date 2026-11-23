@@ -14,6 +14,6 @@ test('source catalog route maps only list, never accepts identity or query argum
  const request={method:'POST',url:'/api/v1/ai/sources/list',headers:{cookie:'__Host-dyoffice-session=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'}}
  assert.equal((await app.inject({...request,payload:{after:'previous'}})).statusCode,200)
  assert.deepEqual(calls,[{token:'a'.repeat(43),input:{after:'previous'}}])
- for(const payload of [{ownerId:'other'},{sql:'SELECT 1'},{after:'../x'},{name:'sources.query'}])assert.equal((await app.inject({...request,payload})).statusCode,400)
+ for(const payload of [{ownerId:'other'},{sql:'SELECT 1'},{after:'../x'},{name:'execute_sql'}])assert.equal((await app.inject({...request,payload})).statusCode,400)
  assert.equal(calls.length,1)
 })

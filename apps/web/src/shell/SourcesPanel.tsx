@@ -1,4 +1,5 @@
 import { useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
+import { CheckCircleFilled, CloseCircleFilled, CloseOutlined, DatabaseOutlined, FolderOpenOutlined, FolderOutlined, LoadingOutlined, ReloadOutlined, SearchOutlined, TableOutlined } from '@ant-design/icons'
 import './database-connections.css'
 import type { SourceDetail, SourceDescriptor, SourceDiscovery, SourceConfig, SourceKind } from '../../../../packages/web-contracts/src/sources.ts'
 import type { SourcesClient } from './sources-client'
@@ -50,23 +51,33 @@ function ScopeSelectionReview({schemas,values,blockedTables,s,remove,focusMode}:
   const listLabel=s(schemas?'srcSelectedSchemasList':'srcSelectedTablesList')
   const searchLabel=s(schemas?'srcSearchSchemas':'srcSearchTables')
   return <details className="dc-selection" open={!schemas && blockedTables.size>0}>
-    <summary>{s(schemas?'srcSelectedSchemasSummary':'srcSelectedTablesSummary',{count:values.length})}</summary>
+    <summary>
+      <span className="dc-review-icon" aria-hidden="true">{schemas?<FolderOutlined />:<TableOutlined />}</span>
+      <span className="dc-review-heading">
+        <span className="dc-review-title">{listLabel} <span className="dc-review-count">{values.length}</span></span>
+        <span className="dc-review-preview" aria-hidden="true"><bdi>{values[0]}</bdi>{values.length>1&&<span>+{values.length-1}</span>}</span>
+      </span>
+    </summary>
     <div className="dc-review-filter">
-      <input ref={input} type="search" aria-label={listLabel+' · '+searchLabel} placeholder={searchLabel}
-        value={filter} onChange={event=>setFilter(event.target.value)}/>
+      <div className="dc-search-field">
+        <SearchOutlined aria-hidden="true" />
+        <input ref={input} type="search" aria-label={listLabel+' · '+searchLabel} placeholder={searchLabel}
+          value={filter} onChange={event=>setFilter(event.target.value)}/>
+      </div>
       {filter&&<><output>{visible.length} / {values.length}</output>
         <button type="button" onClick={()=>{setFilter('');input.current?.focus()}}>{s('srcClearFilters')}</button></>}
     </div>
+    {!visible.length&&<p className="dc-review-empty" role="status">{s(schemas?'srcNoMatchingSchemas':'srcNoMatchingSelectedTables')}</p>}
     <ul aria-label={listLabel}>{visible.map(value=><li key={value} className={!schemas&&blockedTables.has(value)?'dc-selection-blocked':undefined}>
-      <span>{value}{!schemas&&blockedTables.has(value)&&<small className="dc-scope-blocked">{s('srcSchemaAccessDenied')}</small>}</span>
-      <button type="button" aria-label={s(schemas?'srcRemoveSchemaNamed':'srcRemoveTableNamed',{name:value})} onClick={event=>{
+      <span><bdi>{value}</bdi>{!schemas&&blockedTables.has(value)&&<small className="dc-scope-blocked">{s('srcSchemaAccessDenied')}</small>}</span>
+      <button type="button" title={s(schemas?'srcRemoveSchemaNamed':'srcRemoveTableNamed',{name:value})} aria-label={s(schemas?'srcRemoveSchemaNamed':'srcRemoveTableNamed',{name:value})} onClick={event=>{
         const item=event.currentTarget.closest('li')
         const next=(item?.nextElementSibling??item?.previousElementSibling)?.querySelector<HTMLButtonElement>('button')
         if (next) next.focus()
         else if (values.length>1 && input.current) input.current.focus()
         else focusMode()
         remove(value)
-      }}>×</button>
+      }}><CloseOutlined aria-hidden="true" /></button>
     </li>)}</ul>
   </details>
 }
@@ -94,6 +105,7 @@ export function SourcesPanel({ client, onClose, presentation = 'dialog', onClose
   const [directoryFilter,setDirectoryFilter] = useState('')
   const [tested,setTested] = useState<SourceDetail['source']>()
   const [testing,setTesting] = useState(false)
+  const [listTest,setListTest] = useState<{sourceId:string;version:number;status:'pending'|'success'|'error';message:string}>()
   const [fieldError,setFieldError] = useState<{field:'name'|'sourceId'|'secret';message:string}>()
   const [catalog, setCatalog] = useState<Catalog>()
   const [filter, setFilter] = useState(''), [view, setView] = useState<'list'|'form'>('list')
@@ -222,10 +234,9 @@ export function SourcesPanel({ client, onClose, presentation = 'dialog', onClose
     const catalog={sourceId,version,directories:result}
     if (restoreDirectory===undefined && page===undefined) setDirectoryFilter('')
     setCatalog(catalog)
-    const directoryToOpen=restoreDirectory&&result.items.includes(restoreDirectory)?restoreDirectory
-      : (result.page??1)===1&&!result.truncated&&result.items.length===1?result.items[0]:undefined
-    if (!directoryToOpen) return
-    if (restoreDirectory!==directoryToOpen) setCatalogFilter('')
+    // Only restore a directory the user already opened before saving.
+    if (!restoreDirectory || !result.items.includes(restoreDirectory)) return
+    const directoryToOpen=restoreDirectory
     setCatalogLoading(s('srcLoadingTablesOf',{name:directoryToOpen}))
     try {
       const tables=await client.discover(sourceId,version,directoryToOpen)
@@ -440,6 +451,18 @@ export function SourcesPanel({ client, onClose, presentation = 'dialog', onClose
       if (testAfterSave&&current?.source.enabled&&current.source.hasCredential&&alive.current) await testConnection(current,true)
     },true)
   }
+  async function testListConnection(item:SourceDescriptor) {
+    if (client.getState().pending || !item.enabled || !item.hasCredential || item.kind==='http') return
+    const identity = {sourceId:item.sourceId,version:item.version}
+    setListTest({...identity,status:'pending',message:s('srcTestingConnection')})
+    try {
+      const checked = await client.test(item.sourceId)
+      if (alive.current) setListTest({...identity,status:checked.ok?'success':'error',
+        message:checked.ok?s('srcConnectionTestPassed'):s('srcConnectionTestFailed')+s(testAdvice[checked.code??'']??'srcCheckConnectionDetails')})
+    } catch (error) {
+      if (alive.current) setListTest({...identity,status:'error',message:s('srcConnectionTestFailed')+errorText(error)})
+    }
+  }
   function backToList() {
     if (busy || dirty && !window.confirm(s('srcDiscardChangesReturnToList'))) return
     setSavedReadPending(null); setTab('connection'); setView('list'); setDetail(null); setDraft(empty()); setTested(undefined); setFieldError(undefined); setLatest(null); setMissing(null); setConfirmDelete(false); setMessage(''); setError(''); setCatalogError(undefined); setSelectedOnly(false)
@@ -473,7 +496,21 @@ export function SourcesPanel({ client, onClose, presentation = 'dialog', onClose
     {view==='list'?<main className="database-connections-list">
       <div className="database-connections-toolbar"><input ref={searchRef} aria-label={s('srcSearchDataConnections')} placeholder={s('srcSearchCurrentPage')} value={filter} disabled={busy} onChange={event=>setFilter(event.target.value)}/><div className="dc-inline"><button disabled={busy} onClick={()=>void operation(()=>reloadList())}>{s('srcRefreshList')}</button><button className="dc-primary" disabled={busy||unknown} onClick={()=>{setDetail(null);setDraft(empty());setLatest(null);setMissing(null);setConfirmDelete(false);setError('');setMessage('');setView('form')}}>{s('srcNewDataConnection')}</button></div></div>
       {visibleItems.length > 0 && <div className="database-connections-table" role="table" aria-label={s('srcConnectionList')}><div className="database-connections-columns" role="row"><span role="columnheader">{s('srcNameColumn')}</span><span role="columnheader">{s('srcTypeColumn')}</span><span role="columnheader">{s('srcStatusColumn')}</span><span role="columnheader">{s('srcCredentialsColumn')}</span><span role="columnheader">{s('srcActionsColumn')}</span></div>
-        {visibleItems.map(item=><div className="database-connection-row" role="row" key={item.sourceId}><div role="cell"><button className="database-connection-name" disabled={busy} onClick={()=>void operation(()=>select(item.sourceId))}>{item.name}</button><small>{item.sourceId}</small></div><span role="cell">{item.kind==='postgres'?'PostgreSQL':item.kind==='mysql'?'MySQL':item.kind==='starrocks'?'StarRocks':s('srcHttpReadOnly')}</span><span role="cell"><span className={item.enabled?"dc-badge dc-badge--enabled":"dc-badge"}>{item.enabled?s('srcStatusEnabled'):s('srcStatusDisabled')}</span></span><span role="cell">{item.hasCredential?s('srcStatusConfigured'):s('srcStatusNotConfigured')}</span><span role="cell"><button aria-label={s(item.kind==='http'?'srcViewConnectionNamed':'srcEditConnectionNamed',{name:item.name})} disabled={busy} onClick={()=>void operation(()=>select(item.sourceId))}>{s(item.kind==='http'?'srcView':'srcEdit')}</button></span></div>)}
+        {visibleItems.map(item=>{
+          const result=listTest?.sourceId===item.sourceId&&listTest.version===item.version?listTest:undefined
+          return <div className="database-connection-row" role="row" key={item.sourceId}>
+            <div role="cell" className="dc-row-identity"><span className={`dc-engine-mark dc-engine-mark--${item.kind}`} aria-hidden="true"><DatabaseOutlined /></span><div><button className="database-connection-name" disabled={busy} onClick={()=>void operation(()=>select(item.sourceId))}>{item.name}</button><small>{item.sourceId}</small>
+              {result&&<span role="status" className={`dc-row-test dc-row-test--${result.status}`}>{result.status==='pending'?<LoadingOutlined aria-hidden="true" />:result.status==='success'?<CheckCircleFilled aria-hidden="true" />:<CloseCircleFilled aria-hidden="true" />}<span>{result.message}</span></span>}
+            </div></div>
+            <span role="cell">{item.kind==='postgres'?'PostgreSQL':item.kind==='mysql'?'MySQL':item.kind==='starrocks'?'StarRocks':s('srcHttpReadOnly')}</span>
+            <span role="cell"><span className={item.enabled?"dc-badge dc-badge--enabled":"dc-badge"}>{item.enabled?s('srcStatusEnabled'):s('srcStatusDisabled')}</span></span>
+            <span role="cell">{item.hasCredential?s('srcStatusConfigured'):s('srcStatusNotConfigured')}</span>
+            <span role="cell" className="dc-row-actions">
+              {item.kind!=='http'&&<button className="dc-row-test-action" type="button" disabled={busy||!item.enabled||!item.hasCredential} title={!item.enabled||!item.hasCredential?s('srcPrepareConnectionTest'):undefined} onClick={()=>void testListConnection(item)}>{s('srcTestConnection')}</button>}
+              <button aria-label={s(item.kind==='http'?'srcViewConnectionNamed':'srcEditConnectionNamed',{name:item.name})} disabled={busy} onClick={()=>void operation(()=>select(item.sourceId))}>{s(item.kind==='http'?'srcView':'srcEdit')}</button>
+            </span>
+          </div>
+        })}
       </div>}
       {listState==='loading'&&<p className="database-connections-empty" role="status">{s('srcLoadingDataConnections')}</p>}
       {listState==='error'&&<p className="database-connections-empty">{s('srcConnectionListLoadFailed')}</p>}
@@ -521,12 +558,12 @@ export function SourcesPanel({ client, onClose, presentation = 'dialog', onClose
         {!legacyHttp&&!!selectedDirectories?.length&&blockedTables.size>0&&
           <p className="dc-scope-empty" role="status">{s('srcBlockedTables',{count:blockedTables.size})}</p>}
         {!legacyHttp&&<section className="dc-discovery" aria-label={s('srcDiscoverSchemasAndTables')}>
-          <div className="dc-discovery-heading"><div>
+          <div className="dc-discovery-heading"><span className="dc-discovery-icon" aria-hidden="true"><DatabaseOutlined /></span><div>
             <h3>{s('srcDiscoverSchemasAndTables')}</h3>
             <p>{s('srcLoadSavedScopeHelp')}</p>
           </div>
-          <button type="button" disabled={!canDiscover} onClick={()=>void operation(()=>discover())}>{discovered?s('srcReloadSchemasAndTables'):s('srcLoadSchemasAndTables')}</button></div>
-          {catalogLoading&&<p role="status">{catalogLoading}</p>}
+          <button className={discovered?"dc-discovery-action":"dc-discovery-action dc-primary"} type="button" disabled={!canDiscover||!!catalogLoading} onClick={()=>void operation(()=>discover())}><ReloadOutlined aria-hidden="true" />{discovered?s('srcReloadSchemasAndTables'):s('srcLoadSchemasAndTables')}</button></div>
+          {catalogLoading&&<p className="dc-discovery-status" role="status"><LoadingOutlined aria-hidden="true" />{catalogLoading}</p>}
           {catalogError&&<Notice type="error" title={catalogError.message} description={canDiscover&&<div className="dc-inline">
             <button type="button" onClick={()=>void operation(()=>discover(catalogError.directory,catalogError.page))}>{catalogError.directory===undefined?s('srcRetryLoadingSchemas'):s('srcRetryLoadingTables')}</button>
             <button type="button" onClick={()=>void operation(()=>{
@@ -546,22 +583,22 @@ export function SourcesPanel({ client, onClose, presentation = 'dialog', onClose
           {discovered&&<>
             {!discovered.directories.items.length&&!discovered.directories.truncated&&(discovered.directories.page??1)===1&&<p>{s('srcNoSchemasAvailable')}</p>}
             <div className="dc-catalog-columns">
-            {(discovered.directories.items.length>0||discovered.directories.truncated||(discovered.directories.page??1)>1)&&<details className="dc-picker" open>
-              <summary>{s('srcAvailableSchemas')}</summary>
-              {(discovered.directories.items.length>1 || discovered.directories.truncated || (discovered.directories.page??1)>1 || directoryFilter) && <div className="dc-search-row"><label>{s('srcSearchSchemas')}<input aria-label={s('srcSearchSchemas')} type="search" placeholder={discovered.directories.truncated||(discovered.directories.page??1)>1?s('srcSearchThisPage'):undefined} value={directoryFilter} onChange={event=>setDirectoryFilter(event.target.value)}/></label>
-              {directoryFilter&&<button type="button" onClick={event=>{
+            {(discovered.directories.items.length>0||discovered.directories.truncated||(discovered.directories.page??1)>1)&&<details className="dc-picker dc-picker--schemas" open>
+              <summary><FolderOutlined aria-hidden="true" />{s('srcAvailableSchemas')}</summary>
+              {(discovered.directories.items.length>1 || discovered.directories.truncated || (discovered.directories.page??1)>1 || directoryFilter) && <div className="dc-search-row"><div className="dc-search-field"><SearchOutlined aria-hidden="true" /><input aria-label={s('srcSearchSchemas')} type="search" placeholder={discovered.directories.truncated||(discovered.directories.page??1)>1?s('srcSearchThisPage'):s('srcSearchSchemas')} value={directoryFilter} onChange={event=>setDirectoryFilter(event.target.value)}/>
+              {directoryFilter&&<button type="button" aria-label={s('srcClearSchemaSearch')} title={s('srcClearSchemaSearch')} onClick={event=>{
                 setDirectoryFilter('')
                 event.currentTarget.closest('details')?.querySelector<HTMLInputElement>('input[type="search"]')?.focus()
-              }}>{s('srcClearSchemaSearch')}</button>}</div>}
+              }}><CloseOutlined aria-hidden="true" /></button>}</div></div>}
               {!matchingDirectories?.length&&<p className="dc-filter-empty" role="status">{s('srcNoMatchingSchemas')}</p>}
               {catalogPager(discovered.directories)}
               <ul key={discovered.directories.page??1} aria-label={s('srcAvailableSchemas')}>{matchingDirectories?.map(directory=><li key={directory}>
               {selectedDirectories && <label className="dc-check"><input type="checkbox" aria-label={s('srcAllowSchemaNamed',{name:directory})} checked={selectedDirectories.includes(directory)} disabled={directoryLimit&&!selectedDirectories.includes(directory)} onChange={event=>toggleScope('allowedSchemas',directory,event.target.checked)}/>{directory}</label>}
-              <button type="button" className="dc-directory-link" aria-label={s('srcBrowseTablesOf',{name:directory})} title={s('srcBrowseTablesOf',{name:directory})} aria-current={discovered.tables?.directory===directory?true:undefined} disabled={!canDiscover} onClick={()=>void operation(()=>discover(directory))}>{!selectedDirectories&&<span>{directory}</span>}<span aria-hidden="true" className="dc-directory-chevron"/></button>
+              <button type="button" className="dc-directory-link" aria-label={s('srcBrowseTablesOf',{name:directory})} title={s('srcBrowseTablesOf',{name:directory})} aria-current={discovered.tables?.directory===directory?true:undefined} disabled={!canDiscover} onClick={()=>void operation(()=>discover(directory))}>{!selectedDirectories&&<span className="dc-catalog-name">{discovered.tables?.directory===directory?<FolderOpenOutlined aria-hidden="true" />:<FolderOutlined aria-hidden="true" />}<span>{directory}</span></span>}<span aria-hidden="true" className="dc-directory-chevron"/></button>
             </li>)}</ul>
             </details>}
-            {discovered.tables&&<details key={discovered.tables.directory} className="dc-picker" aria-label={s('srcTablesInSchemaAria',{name:discovered.tables.directory})} open>
-              <summary>{s('srcTablesOf',{name:discovered.tables.directory})}{selectedTables&&s('srcSelectedCountSuffix',{count:availableTables.filter(table=>table.checked).length})}</summary>
+            {discovered.tables&&<details key={discovered.tables.directory} className="dc-picker dc-picker--tables" aria-label={s('srcTablesInSchemaAria',{name:discovered.tables.directory})} open>
+              <summary><TableOutlined aria-hidden="true" /><span>{s('srcTablesOf',{name:discovered.tables.directory})}</span>{selectedTables&&<span className="dc-catalog-count">{s('srcSelectedCountSuffix',{count:availableTables.filter(table=>table.checked).length})}</span>}</summary>
               {publicConfig&&!selectedDirectories&&<button type="button" disabled={!canDiscover} onClick={event=>{
                 patch({config:JSON.stringify({...publicConfig,allowedSchemas:[tableDirectory]},null,2)})
                 event.currentTarget.closest('details')?.querySelector('summary')?.focus()
@@ -579,11 +616,11 @@ export function SourcesPanel({ client, onClose, presentation = 'dialog', onClose
                   </>}
               </div>}
               {!discovered.tables.result.items.length&&<p>{s((discovered.tables.result.page??1)>1||discovered.tables.result.truncated?'srcNoMatchingTables':'srcNoTablesInSchema')}</p>}
-              {discovered.tables.result.items.length>0&&<div className="dc-search-row"><label>{s('srcSearchTables')}<input aria-label={s('srcSearchTables')} type="search" placeholder={discovered.tables.result.truncated||(discovered.tables.result.page??1)>1?s('srcSearchThisPage'):undefined} value={catalogFilter} onChange={event=>setCatalogFilter(event.target.value)}/></label>
-              {catalogFilter&&<button type="button" onClick={event=>{
+              {discovered.tables.result.items.length>0&&<div className="dc-search-row"><div className="dc-search-field"><SearchOutlined aria-hidden="true" /><input aria-label={s('srcSearchTables')} type="search" placeholder={discovered.tables.result.truncated||(discovered.tables.result.page??1)>1?s('srcSearchThisPage'):s('srcSearchTables')} value={catalogFilter} onChange={event=>setCatalogFilter(event.target.value)}/>
+              {catalogFilter&&<button type="button" aria-label={s('srcClearTableSearch')} title={s('srcClearTableSearch')} onClick={event=>{
                 setCatalogFilter('')
                 event.currentTarget.closest('details')?.querySelector<HTMLInputElement>('input[type="search"]')?.focus()
-              }}>{s('srcClearTableSearch')}</button>}
+              }}><CloseOutlined aria-hidden="true" /></button>}</div>
               {selectedTables&&<label className="dc-check"><input type="checkbox" aria-label={s('srcShowSelectedTablesOnly')} checked={selectedOnly} onChange={event=>setSelectedOnly(event.target.checked)}/>{s('srcShowSelectedTablesOnly')}</label>}
               </div>}
 
@@ -608,8 +645,9 @@ export function SourcesPanel({ client, onClose, presentation = 'dialog', onClose
               </div>
               <ul key={discovered.tables.result.page??1} aria-label={s('srcAvailableTables')}>{matchingTables.map(({name,id,alias,checked})=><li key={id}>{selectedTables
                 ? <label className="dc-check"><input type="checkbox" aria-label={s('srcAllowTableNamed',{name:id})} checked={checked} disabled={tableLimit&&!checked} onChange={event=>toggleScope('allowedTables',id,event.target.checked,alias)}/>{name}</label>
-                : <span>{name}</span>}</li>)}</ul>
+                : <span className="dc-catalog-name"><TableOutlined aria-hidden="true" /><span>{name}</span></span>}</li>)}</ul>
             </details>}
+            {!discovered.tables&&!catalogLoading&&!catalogError&&!!discovered.directories.items.length&&<p className="dc-catalog-placeholder"><TableOutlined aria-hidden="true" />{s('srcSearchOrSelectSchema')}</p>}
             </div>
           </>}
         </section>}

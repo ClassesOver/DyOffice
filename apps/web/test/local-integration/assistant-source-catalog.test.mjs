@@ -36,15 +36,15 @@ test('opt-in assistant lists only own saved enabled metadata; no source connecti
  const url='/api/v1/ai/sources/execute'
  const execute=(instance,name,arguments_,token=f.alice.token)=>instance.inject({method:'POST',url,headers:headers(token),payload:{name,arguments:arguments_}})
  assert.equal((await analysis.inject({url:'/api/v1/ai/catalog',headers:headers(f.alice.token)})).json().sourceMode,'read-only-analysis')
- assert.notEqual((await execute(off,'sources.describe',{sourceId:'visible'})).statusCode,200)
- assert.notEqual((await execute(app,'sources.describe',{sourceId:'visible'})).statusCode,200)
- const desc=await execute(analysis,'sources.describe',{sourceId:'visible'})
+ assert.notEqual((await execute(off,'search_objects',{sourceId:'visible'})).statusCode,200)
+ assert.notEqual((await execute(app,'search_objects',{sourceId:'visible'})).statusCode,200)
+ const desc=await execute(analysis,'search_objects',{sourceId:'visible'})
  assert.equal(desc.statusCode,200,desc.body)
  assert.equal(desc.json().kind,'http')
  assert.equal(desc.json().metadata,null)
  assert.doesNotMatch(desc.body,/synthetic-secret/)
- assert.equal((await execute(analysis,'sources.describe',{sourceId:'visible'},f.bob.token)).statusCode,404)
- assert.equal((await execute(analysis,'sources.save_result',{})).statusCode,403)
+ assert.equal((await execute(analysis,'search_objects',{sourceId:'visible'},f.bob.token)).statusCode,404)
+ assert.equal((await execute(analysis,'save_query_result',{})).statusCode,403)
  const offered=[]
  const network=mockProviderNetwork(t,()=>{
   const wire=JSON.parse(network.wire.toString())
@@ -52,8 +52,8 @@ test('opt-in assistant lists only own saved enabled metadata; no source connecti
   return Readable.from([Buffer.from('data: {"choices":[{"delta":{"content":"checked"}}]}\n\ndata: [DONE]\n\n')])
  })
  const formats=['docx','xlsx','pptx','pdf']
- const analysisNames=['sources_list','sources_describe','sources_query','sources_read_result']
- const tools=[...analysisNames,'sources_save_result'].map(name=>({name,description:name,inputSchema:{type:'object'}}))
+ const analysisNames=['list_connections','search_objects','execute_sql','read_query_result']
+ const tools=[...analysisNames,'save_query_result'].map(name=>({name,description:name,inputSchema:{type:'object'}}))
  const turn=(instance,format)=>instance.inject({method:'POST',url:'/api/v1/ai/turns',headers:headers(f.alice.token),payload:{
   turnId:randomUUID(),modelId:'chat',request:{format,system:'Test analysis tool policy',messages:[{role:'user',text:'List tables'}],tools},
  }})
@@ -63,7 +63,7 @@ test('opt-in assistant lists only own saved enabled metadata; no source connecti
   assert.deepEqual(offered.at(-1),analysisNames)
  }
  assert.match((await turn(app,'docx')).body,/checked/)
- assert.deepEqual(offered.at(-1),['sources_list'])
+ assert.deepEqual(offered.at(-1),['list_connections'])
  assert.match((await turn(off,'docx')).body,/checked/)
  assert.deepEqual(offered.at(-1),[])
 
