@@ -30,7 +30,7 @@ type SaveResult = {ok: boolean; path?: string; error?: string}
 type SaveReceipt = Awaited<ReturnType<SessionFileHost['saveSlides']>>
 type Recovery = {saved?: SaveReceipt; resolve(value: SaveResult): void; reject(error: unknown): void}
 /** The server pptx session: pinned to the file revision, fenced by generation. */
-type Session = {authority?:{editorId:string;leaseEpoch:number};revision: string; generation: number; dirty: boolean; size: {cx: number; cy: number}; defaultFont: string; writeProtected: boolean}
+type Session = {nameCandidate?:string;authority?:{editorId:string;leaseEpoch:number};revision: string; generation: number; dirty: boolean; size: {cx: number; cy: number}; defaultFont: string; writeProtected: boolean}
 type ApplyResponse = {generation: number; dirty: boolean; changed?: number[]; created?: Array<{id:string;slide:number;index:number}>; size?: {cx:number;cy:number}; order?: string[]; index?: number; sections?: SectionInfo[] | null; history?: {canUndo: boolean; canRedo: boolean}; slide?: OpenResult['slides'][number]; transaction?: {applied:boolean;dryRun?:boolean;plan?:string[];failures?:Array<{index:number;error:string}>;records?:Array<{op:{op:string};slidePath?:string;created?:string[];after?:unknown}>}}
 type HistoryState = {canUndo: boolean; canRedo: boolean}
 const SLIDE_IMAGE_LIMIT = 6990508
@@ -360,8 +360,8 @@ export function createSlidesBridge(host: SessionFileHost, fileId: string, prefs:
     getLanguage: async () => prefs.language === 'en' ? 'en' as const : 'zh' as const,
     getTheme: async (): Promise<UiTheme> => prefs.theme,
     getAutoSaveDefault: async (): Promise<AutoSaveDefault> => ({on: prefs.autoSave === true, updatedAt: 1}),
-    getAiPanelPrefs: async (): Promise<AiPanelPrefs> => ({side: 'left', fontSize: 'default', customFontSize: 14, spellcheck: true, showAiSidebar: false, showAiAskTrigger: false} as AiPanelPrefs),
-    setAiPanelPrefs: async (patch: Partial<AiPanelPrefs>) => ({side: 'left', fontSize: 'default', customFontSize: 14, spellcheck: true, showAiSidebar: false, showAiAskTrigger: false, ...patch} as AiPanelPrefs),
+    getAiPanelPrefs: async (): Promise<AiPanelPrefs> => ({side: 'left', fontSize: 'default', customFontSize: 14, spellcheck: true, showAiSidebar: false, showAiAskTrigger:true} as AiPanelPrefs),
+    setAiPanelPrefs: async (patch: Partial<AiPanelPrefs>) => ({side: 'left', fontSize: 'default', customFontSize: 14, spellcheck: true, showAiSidebar: false, showAiAskTrigger:true, ...patch} as AiPanelPrefs),
     getAiSettings: async () => ({provider: 'genspark', providers: {}}) as unknown as AiSettings,
     setAiSettings: async () => {},
     onLanguageChanged: noEvent, onThemeChanged: noEvent, onAutoSaveDefaultChanged: noEvent,
@@ -390,13 +390,14 @@ export function createSlidesBridge(host: SessionFileHost, fileId: string, prefs:
       const result = await call(revision, generation, 'generate-page', {specJson, images}) as {marker: string; imageFailures: string[]}
       return {ok: true, marker: result.marker, imageFailures: result.imageFailures}
     },
-    async landGeneratedPages(markers: string[], _fitWidthPx: number, mode: NonNullable<Parameters<SlidesApi['landGeneratedPages']>[2]> = 'replace', atIndex?: number) {
+    async landGeneratedPages(markers: string[], _fitWidthPx: number, mode: NonNullable<Parameters<SlidesApi['landGeneratedPages']>[2]> = 'replace', atIndex?: number,deckName?:string) {
       const current = requireSession()
       if (recovery || !host.getState(fileId).lease) return {error: text.saveFailed}
       const result = await call(current.revision, current.generation, 'generated-pages', {markers, mode, atIndex}) as ApplyResponse & {
         slides: OpenResult['slides']; appendedFrom?: number; insertedIndex?: number; replacedIndex?: number
       }
       const {slides, appendedFrom, insertedIndex, replacedIndex} = result
+      if(!current.nameCandidate&&host.getState(fileId).autoNamePending&&deckName?.trim()&&result.dirty)current.nameCandidate=deckName
       current.generation = result.generation
       current.dirty = result.dirty
       if (result.size) current.size = result.size
@@ -710,6 +711,7 @@ export function createSlidesBridge(host: SessionFileHost, fileId: string, prefs:
       // Adopt the committed head: the pinned revision moved, the generation continues.
       current.revision = saved.revision
       current.dirty = false
+      if(current.nameCandidate)await host.nameSavedBlank?.(fileId,saved.revision,current.nameCandidate).catch(()=>undefined)
       return {ok: true as const, path: host.getState(fileId).name}
     },
     onHistoryChanged(handler: (state: HistoryState) => void) {
@@ -1097,7 +1099,10 @@ export function createSlidesBridge(host: SessionFileHost, fileId: string, prefs:
       // Adopt the confirmed head and clear the tracked dirty flag: the parked
       // receipt fenced mutations, so nothing was edited between the export and
       // this confirmation; edits made afterwards take the normal path.
-      if (session) { session.revision = saved.revision; session.dirty = false }
+      if (session) {
+        session.revision = saved.revision; session.dirty = false
+        if(session.nameCandidate)await host.nameSavedBlank?.(fileId,saved.revision,session.nameCandidate).catch(()=>undefined)
+      }
       committed=saved
       recovery = null
       pending.resolve({ok: true, path: host.getState(fileId).name})
@@ -1163,7 +1168,7 @@ export function createSlidesBridge(host: SessionFileHost, fileId: string, prefs:
   return {
     api,guardedSave,guardedApply,getReceipt:()=>committed,getAnalysisGeneration:()=>session?.generation??null,
     confirmSave,
-    prepareDownload,exportDraftCopy,
+    prepareDownload,exportDraftCopy,hasGeneratedName:()=>Boolean(session?.nameCandidate&&session.dirty&&host.getState(fileId).autoNamePending),
     takeover,
     needsConfirmation: () => recovery !== null,
     isDirty: () => session?.dirty ?? false,

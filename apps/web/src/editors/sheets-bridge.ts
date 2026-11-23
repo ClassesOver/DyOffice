@@ -33,6 +33,7 @@ export function createSheetsBridge(host: SessionFileHost, fileId: string, prefs:
   }
   let committed: import('../../../../packages/web-contracts/src/api').RevisionRef | null = null
   const sessions = new Map<string,Session>(), controllers = new Set<AbortController>()
+  const renameListeners = new Set<(name:string)=>void>()
   const text = messages[prefs.language === 'en' ? 'en' : 'zh']
   let recovery: Recovery | null = null, confirming = false
   let inFlight = 0
@@ -200,12 +201,16 @@ export function createSheetsBridge(host: SessionFileHost, fileId: string, prefs:
     getTheme: async () => prefs.theme,
     getDocumentTheme: async () => 'follow' as const,
     getAutoSaveDefault: async () => ({on:prefs.autoSave === true,updatedAt:1}),
-    getAiPanelPrefs: async () => ({side:'left' as const,fontSize:'default' as const,customFontSize:14,spellcheck:true,openInNewDocs:false,showAiSidebar:false,showAiAskTrigger:false}),
+    getAiPanelPrefs: async () => ({side:'left' as const,fontSize:'default' as const,customFontSize:14,spellcheck:true,openInNewDocs:false,showAiSidebar:false,showAiAskTrigger:true}),
     getUserDisplayName: async () => prefs.authorName ?? '',
     onLanguageChanged:noEvent,onThemeChanged:noEvent,onDocumentThemeChanged:noEvent,onAutoSaveDefaultChanged:noEvent,onAiPanelPrefsChanged:noEvent,onUserDisplayNameChanged:noEvent,
     onWorkbookPickArmed:noEvent,onWorkbookPickSelected:noEvent,onWorkbookPickCancelled:noEvent,
     isCopyEmfAvailable:async()=>false,
-    onChromePressed:noEvent,onMenuAction:noEvent,onCloseSaveRequest:noEvent,onWorkbookRenamed:noEvent,onRecoveryPrompt:noEvent,onSidecarCrashed:noEvent,
+    onChromePressed:noEvent,onMenuAction:noEvent,onCloseSaveRequest:noEvent,onRecoveryPrompt:noEvent,onSidecarCrashed:noEvent,
+    onWorkbookRenamed(listener:(name:string)=>void){
+      renameListeners.add(listener)
+      return ()=>{renameListeners.delete(listener)}
+    },
     hasQueuedWorkbook:async()=>queued,consumeNewBlankWorkbook:async()=>false,consumeHeadlessExport:async()=>null,
     notifyPendingEdits(count: number){pendingEdits=count;onChange()},
     selectWorkbook:open,
@@ -282,6 +287,15 @@ export function createSheetsBridge(host: SessionFileHost, fileId: string, prefs:
         // Confirmation resumes that exact save, including its late-edit carry.
         return new Promise<SaveResult>((resolve,reject)=>{recovery={...(saved ? {saved} : {}),resolve,reject};onChange()})
       }
+    },
+    async autoRenameWorkbook(sessionId:string,candidate:string){
+      const current=session(sessionId)
+      if(committed?.revision!==current.revision)return {renamed:false}
+      const name=await host.nameSavedBlank?.(fileId,current.revision,candidate)
+      if(!name)return {renamed:false}
+      current.file={...current.file,name}
+      if(sessions.get(sessionId)===current)for(const listener of renameListeners)listener(name)
+      return {renamed:true,name}
     },
     async createDocument(input:import('../../../sheets/src/shared/desktop-api').WorkbookCreateDocumentRequest){
       try{

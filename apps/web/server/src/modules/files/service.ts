@@ -86,9 +86,10 @@ export function createFileService({ transactions, objects, quotaBytes = 1024 ** 
       if (!canReclaim) return { reclaimedBytes: 0, reclaimedUploads: 0 }
       return personal(token, 'files:write', (connection,principal) => reclaimAbandonedUploads(connection,principal,objects))
     },
-    async stageUpload(token: FileCredential, metadata: { name: string; size: number }) {
-      if (!metadata || typeof metadata !== 'object' || Object.keys(metadata).some(key => !['name','size'].includes(key))) throw authError(400)
+    async stageUpload(token: FileCredential, metadata: { name: string; size: number; autoName?:boolean }) {
+      if (!metadata || typeof metadata !== 'object' || Object.keys(metadata).some(key => !['name','size','autoName'].includes(key))) throw authError(400)
       const name = metadata.name, format = validateFileName(name), size = metadata.size
+      if(metadata.autoName!==undefined&&(typeof metadata.autoName!=='boolean'||(metadata.autoName&&(format==='pdf'||name!=='未命名.'+format))))throw authError(400)
       if (!Number.isSafeInteger(size) || size < 1) throw authError(400)
       if (size > MAX_OBJECT_BYTES) throw authError(413)
       // Separate commit: quota reclamation survives a subsequent quota rejection.
@@ -99,7 +100,7 @@ export function createFileService({ transactions, objects, quotaBytes = 1024 ** 
         const pending = await connection.query("SELECT 1 FROM uploads WHERE deployment_id=$1 AND owner_id=$2 AND state IN ('staged','receiving','ready')", scope(principal))
         if (pending.rowCount! >= maxUploads) throw Object.assign(authError(429), { retryAfter: 60 })
         const id = randomUUID(), fileId = randomUUID(), revisionId = randomUUID()
-        const result = await connection.query("INSERT INTO uploads(id,deployment_id,owner_id,workspace_id,file_id,revision_id,name,format,expected_size,auth_version,state,expires_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'staged',clock_timestamp()+$11*interval '1 millisecond') RETURNING expires_at", [id,...scope(principal),account.workspaceId,fileId,revisionId,name,format,size,principal.authVersion,uploadTtlMs])
+        const result = await connection.query("INSERT INTO uploads(id,deployment_id,owner_id,workspace_id,file_id,revision_id,name,format,expected_size,auth_version,state,expires_at,auto_name_pending) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'staged',clock_timestamp()+$11*interval '1 millisecond',$12) RETURNING expires_at", [id,...scope(principal),account.workspaceId,fileId,revisionId,name,format,size,principal.authVersion,uploadTtlMs,metadata.autoName===true])
         await connection.query('UPDATE storage_accounts SET reserved_bytes=reserved_bytes+$3 WHERE deployment_id=$1 AND owner_id=$2', [...scope(principal),size])
         return { uploadId: id, fileId, expiresAt: (result.rows[0].expires_at as Date).toISOString() }
       })
@@ -215,7 +216,7 @@ export function createFileService({ transactions, objects, quotaBytes = 1024 ** 
         }
         if (row.state !== 'ready' || !row.sha256) throw authError(409)
         await objects.verifyObject({ key: objectKey(principal,row.revision_id), size: row.expected_size, sha256: row.sha256 })
-        await connection.query('INSERT INTO files(id,deployment_id,owner_id,workspace_id,name,format,current_revision,pdf_auto_name_pending) VALUES($1,$2,$3,$4,$5,$6,$7,$8)', [row.file_id,...scope(principal),row.workspace_id,row.name,row.format,row.revision_id,blankPdf])
+        await connection.query('INSERT INTO files(id,deployment_id,owner_id,workspace_id,name,format,current_revision,pdf_auto_name_pending,auto_name_pending) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)', [row.file_id,...scope(principal),row.workspace_id,row.name,row.format,row.revision_id,blankPdf,row.auto_name_pending])
         await connection.query('INSERT INTO file_revisions(id,deployment_id,owner_id,file_id,object_key,sha256,size,office_signature_protected) VALUES($1,$2,$3,$4,$5,$6,$7,$8)', [row.revision_id,...scope(principal),row.file_id,objectKey(principal,row.revision_id),row.sha256,row.expected_size,row.office_signature_protected])
         await connection.query("UPDATE uploads SET state='committed',completed_file_id=file_id WHERE deployment_id=$1 AND owner_id=$2 AND id=$3", [...scope(principal),id])
         await connection.query('UPDATE storage_accounts SET reserved_bytes=reserved_bytes-$3,stored_bytes=stored_bytes+$3 WHERE deployment_id=$1 AND owner_id=$2', [...scope(principal),row.expected_size])
@@ -267,7 +268,28 @@ export function createFileService({ transactions, objects, quotaBytes = 1024 ** 
       return personal(token, 'files:write', async (connection, principal) => {
         const row = await loadFile(connection, principal, id, false, 'UPDATE')
         if (format !== row.format) throw authError(400)
-        await connection.query('UPDATE files SET name=$4,pdf_auto_name_pending=false,updated_at=clock_timestamp() WHERE deployment_id=$1 AND owner_id=$2 AND id=$3', [...scope(principal),id,name])
+        await connection.query('UPDATE files SET name=$4,pdf_auto_name_pending=false,auto_name_pending=false,updated_at=clock_timestamp() WHERE deployment_id=$1 AND owner_id=$2 AND id=$3', [...scope(principal),id,name])
+      })
+    },
+    async nameBlankFile(token:FileCredential,fileId:string,revision:string,candidate:string){
+      const id=uuid(fileId),rev=uuid(revision)
+      const stem=Array.from(candidate.replace(/[\\/:*?"<>|\u0000-\u001f\u007f]/g,' ').replace(/\s+/g,' ').trim().replace(/^\.+|\.+$/g,'').trim()).slice(0,40).join('').trim()
+      if(!stem)return {renamed:false as const}
+      return personal(token,'files:write',async(connection,principal)=>{
+        await lockAccount(connection,principal)
+        const row=await loadFile(connection,principal,id,false,'UPDATE')
+        if(!row.auto_name_pending||row.current_revision!==rev||row.name!=='未命名.'+row.format)return {renamed:false as const}
+        const original=await connection.query("SELECT 1 FROM file_revisions WHERE deployment_id=$1 AND owner_id=$2 AND file_id=$3 AND id=$4 AND source='save'",[...scope(principal),id,rev])
+        if(!original.rowCount)return {renamed:false as const}
+        const names=new Set((await connection.query<{name:string}>('SELECT name FROM files WHERE deployment_id=$1 AND owner_id=$2 AND deleted_at IS NULL AND id<>$3',[...scope(principal),id])).rows.map(file=>file.name.toLowerCase()))
+        const base=stem.replace(new RegExp('\\.'+row.format+'$','i'),'').trim()
+        if(!base)return {renamed:false as const}
+        let name=base+'.'+row.format
+        if(name===row.name)return {renamed:false as const}
+        for(let i=2;names.has(name.toLowerCase());i++)name=base+'-'+i+'.'+row.format
+        try{validateFileName(name)}catch{return {renamed:false as const}}
+        await connection.query('UPDATE files SET name=$4,auto_name_pending=false,updated_at=clock_timestamp() WHERE deployment_id=$1 AND owner_id=$2 AND id=$3',[...scope(principal),id,name])
+        return {renamed:true as const,name}
       })
     },
     trashBatch: (token: FileCredential, fileIds: string[], inspectOnly = false) =>

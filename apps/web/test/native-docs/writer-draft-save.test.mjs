@@ -26,7 +26,12 @@ test(liveConfig?'native Word writes and saves a real model response in the curre
  await createGlobalConfigService({transactions:f.transactions,keyring}).saveGlobalConfig(f.adminSigned.token,0,{upserts:[entry],defaults:{chat:entry.id}})
  if(!liveConfig)await f.ownerPool.query('INSERT INTO provider_budget_accounts(deployment_id,owner_id,entry_id,config_revision,available_units,per_call_units) VALUES($1,$2,$3,1,100,10)',[f.deploymentId,f.alice.user.id,profile.entryId])
  await f.preferences.update(f.alice.token,{language:'en',autoSave:!liveConfig,showAssistant:true})
- const original=await docxBytes(),opened=await importFile(f,f.alice.token,original)
+ const original=await docxBytes()
+ const opened=liveConfig?await importFile(f,f.alice.token,original):await (async()=>{
+  const {uploadId}=await f.files.stageUpload(f.alice.token,{name:'未命名.docx',size:original.length,autoName:true})
+  await f.files.receiveUpload(f.alice.token,uploadId,original)
+  return f.files.finishUpload(f.alice.token,uploadId)
+ })()
  const app=await buildLocalApp({db:f.db,businessPool:f.businessPool,passwords:f.passwords,deploymentId:f.deploymentId,origin,csrfKey:f.csrfKey,objectStore:f.objects,globalConfigKeyring:keyring,providerGateway:liveConfig?{mode:'shared'}:{profiles:[profile]},nativeDocsDirectory:process.env.DYOFFICE_TEST_DOCS_DIST??fileURLToPath(new URL('../../dist-docs',import.meta.url))})
  f.cleanup.push(()=>app.close());await app.listen({host:'127.0.0.1',port:4251})
  const browser=await launchTestBrowser();t.after(()=>browser.close())
@@ -37,7 +42,7 @@ test(liveConfig?'native Word writes and saves a real model response in the curre
  const network=liveConfig?undefined:mockProviderNetwork(t,()=>{
   const current=turn++
   if(current===0)return Readable.from([frame({tool_calls:[{index:0,id:'writer-fixture',type:'function',function:{name:'write_document',arguments:JSON.stringify({plan:'Write the synthetic fixture paragraph',afterBlockIndex:0})}}]},'tool_calls'),done])
-  if(current===1)return Readable.from((async function*(){yield frame({content:'<p>STREAMING_WRITER_MARKER'});await release.promise;yield frame({content:' accepted final body</p>'},'stop');yield done})())
+  if(current===1)return Readable.from((async function*(){yield frame({content:'<h1>Orchid Handover</h1><p>STREAMING_WRITER_MARKER'});await release.promise;yield frame({content:' accepted final body</p>'},'stop');yield done})())
   return Readable.from([frame({content:'Synthetic writer completed.'},'stop'),done])
  })
  await page.goto(origin+'/native-docx/?fileId='+opened.file.fileId)
@@ -66,6 +71,7 @@ test(liveConfig?'native Word writes and saves a real model response in the curre
  const committed=page.waitForResponse(response=>response.url().endsWith('/commits')&&response.status()===200)
  await page.keyboard.press('Control+s');await committed
  await expect(page.locator('.dyoffice-docs-persistence-state')).toHaveAttribute('data-dirty','false')
+ if(network)await expect.poll(async()=>(await f.files.openFile(f.alice.token,opened.file.fileId)).name).toBe('Orchid Handover.docx')
  const saved=(await f.files.openFile(f.alice.token,opened.file.fileId)).file
  assert.notEqual(saved.revision,opened.file.revision)
  const zip=await JSZip.loadAsync(await f.files.readFile(f.alice.token,saved.fileId,saved.revision))

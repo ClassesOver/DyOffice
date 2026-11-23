@@ -834,8 +834,8 @@ export function sanitizeFileBaseName(raw: string): string | null {
  * from the first heading, so the first silent save (and with it the shell tab
  * title) picks up a content-derived name instead of "Untitled.docx".
  */
-function deriveAutoFileName(editor: Editor): string | null {
-  const body = (editor.getJSON() as PmNode).content ?? []
+function deriveAutoFileName(document: PmNode): string | null {
+  const body = document.content ?? []
   for (const node of body) {
     if (node.type !== 'docHeading') continue
     const base = sanitizeFileBaseName(pmNodeText(node))
@@ -1273,6 +1273,7 @@ async function saveOnce(
     let savedPath = doc.filePath ?? pathlessDocSavedPath
     let passwordIntentPending = false
     let fullBytes: Uint8Array | undefined
+    let savedName:string|undefined
     if (explicitTarget) {
       // MCP-driven explicit output: no dialog, no derived name — always write to
       // the caller's path (overwrite policy is enforced in the main process).
@@ -1304,7 +1305,7 @@ async function saveOnce(
       // asked for.
       const autoName =
         !newDocName && !doc.filePath && doc.fileName === t('appUntitledDocx') && ctx.editor
-          ? deriveAutoFileName(ctx.editor)
+          ? deriveAutoFileName(docSnapshot.toJSON() as PmNode)
           : null
       // Save As keeps the dialog; a new document's first save lands silently in the default
       // folder. The source path identifies the desired password state to snapshot.
@@ -1339,7 +1340,9 @@ async function saveOnce(
       if (docGeneration !== generation) return false
       if (!doc.filePath) pathlessDocSavedPath = savedPath
     } else {
-      const result = await window.desktop.saveDocx(savedPath, buffer, auto)
+      const candidate=(doc.fileName==='未命名.docx'||doc.fileName===t('appUntitledDocx'))?deriveAutoFileName(docSnapshot.toJSON() as PmNode):null
+      const result = await window.desktop.saveDocx(savedPath, buffer, auto,candidate??undefined)
+      savedName=result.name
       if (docGeneration !== generation) return false
       if (!result.ok) {
         // external-modified: the main process already prompted (or the autosave
@@ -1378,7 +1381,7 @@ async function saveOnce(
           ? {
               ...prev,
               filePath: savedPath,
-              fileName: savedPath?.split(/[\\/]/).pop() ?? prev.fileName,
+              fileName: savedName ?? savedPath?.split(/[\\/]/).pop() ?? prev.fileName,
             }
           : prev,
       )
@@ -1440,7 +1443,7 @@ async function saveOnce(
             ...prev,
             parsed: reparsed,
             filePath: savedPath,
-            fileName: savedPath?.split(/[\\/]/).pop() ?? prev.fileName,
+            fileName: savedName ?? savedPath?.split(/[\\/]/).pop() ?? prev.fileName,
           }
         : prev,
     )

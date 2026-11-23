@@ -40,14 +40,14 @@ describe('capability-gated document creation',()=>{
   const deps={getSessionProof:()=> 'A'.repeat(43),bindSession:vi.fn(async()=>({request})),fetchTemplate:vi.fn(async()=>new Response('pptx')),open:vi.fn(async()=>{}),changed:vi.fn()}
   const createSlide=createLocalNewSlide(deps as any)
   await createSlide()
-  expect(request).toHaveBeenCalledWith('/api/v1/files/uploads','POST',{name:'未命名.pptx',size:4})
+  expect(request).toHaveBeenCalledWith('/api/v1/files/uploads','POST',{name:'未命名.pptx',size:4,autoName:true})
   expect(deps.open).toHaveBeenCalledWith('created-deck',request)
  })
  it('uploads the blank template through bound requests then opens exactly that file',async()=>{
   const {deps,request,create}=setup();await create()
   expect(deps.bindSession).toHaveBeenCalledWith('A'.repeat(43))
   expect(request.mock.calls.map(c=>c[0])).toEqual(['/api/v1/capabilities','/api/v1/capabilities','/api/v1/files/uploads','/api/v1/uploads/upload/content','/api/v1/uploads/upload/finish'])
-  expect(request).toHaveBeenCalledWith('/api/v1/files/uploads','POST',{name:'未命名.xlsx',size:4})
+  expect(request).toHaveBeenCalledWith('/api/v1/files/uploads','POST',{name:'未命名.xlsx',size:4,autoName:true})
   expect(deps.open).toHaveBeenCalledWith('created',request)
  })
  it('does not fetch or upload when the runtime is unsupported',async()=>{

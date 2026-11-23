@@ -483,8 +483,10 @@ export interface DesktopApi {
     path: string,
     data: ArrayBuffer,
     auto?: boolean,
+    nameCandidate?: string,
   ): Promise<{
     ok: boolean
+    name?: string
     error?: string
     reason?: 'external-modified'
     /** a newer password choice arrived after this save's snapshot */
