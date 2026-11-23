@@ -7,9 +7,9 @@ import {AccountMenu} from '../../src/shell/AccountMenu'
 const cleanups:Array<()=>Promise<void>>=[]
 beforeEach(()=>{vi.spyOn(HTMLElement.prototype,'getBoundingClientRect').mockReturnValue({width:100,height:30,left:20,top:500,right:120,bottom:530,x:20,y:500,toJSON(){}});vi.stubGlobal('ResizeObserver',class{observe(){}unobserve(){}disconnect(){}});vi.stubGlobal('matchMedia',vi.fn((query:string)=>({matches:false,media:query,onchange:null,addListener:vi.fn(),removeListener:vi.fn(),addEventListener:vi.fn(),removeEventListener:vi.fn(),dispatchEvent:vi.fn()})));})
 afterEach(async()=>{for(const cleanup of cleanups.splice(0))await cleanup();vi.unstubAllGlobals();vi.restoreAllMocks()})
-async function mount(roles:string[]=[],collaboration=false){
+async function mount(roles:string[]=[],collaboration=false, results=false){
  const host=document.createElement('div');document.body.append(host);const root=createRoot(host)
- const actions={...(collaboration?{onChannels:vi.fn(),onTasks:vi.fn()}:{}),onSettings:vi.fn(),onTrash:vi.fn(),onSources:vi.fn(),onGlobalSettings:vi.fn(),onUsers:vi.fn(),onLogout:vi.fn()}
+ const actions={...(results?{onDataResults:vi.fn()}:{}),...(collaboration?{onChannels:vi.fn(),onTasks:vi.fn()}:{}),onSettings:vi.fn(),onTrash:vi.fn(),onSources:vi.fn(),onGlobalSettings:vi.fn(),onUsers:vi.fn(),onLogout:vi.fn()}
  await act(async()=>root.render(h(AccountMenu,{user:{username:'alice',displayName:'爱丽丝',roles},...actions})))
  cleanups.push(async()=>{await act(async()=>root.unmount());host.remove()})
  return {host,actions,trigger:host.querySelector('button')!}
@@ -96,4 +96,15 @@ test('top account entry opens below and realigns above when the trigger moves',a
  await act(async()=>window.dispatchEvent(new Event('resize')))
  expect(popup.style.top).toBe('190px')
  expect(popup.style.maxHeight).toBe('680px')
+})
+
+
+test('personal workspace exposes saved data results without the admin role',async()=>{
+ const {trigger,actions}=await mount([],false,true)
+ await open(trigger)
+ const entry=items().find(item=>item.textContent==='数据结果')
+ expect(entry?.closest('[aria-label="个人工作区"]')).not.toBeNull()
+ await act(async()=>entry!.click())
+ expect(actions.onDataResults).toHaveBeenCalledOnce()
+ expect(document.activeElement).toBe(trigger)
 })

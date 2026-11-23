@@ -33,6 +33,7 @@ import {WorkspaceTrash} from './WorkspaceTrash'
 import {createUserSkillsClient} from './user-skills-client'
 import {UserSkillsPanel} from './UserSkillsPanel'
 import {SourcesPanel} from './SourcesPanel'
+import {WorkspaceDataResults} from './WorkspaceDataResults'
 import {createSourceWorkspaceSession} from './source-workspace-session'
 import blankDocx from '../../../shell/build/shell-new/blank.docx?url'
 import blankXlsx from '../../../shell/build/shell-new/blank.xlsx?url'
@@ -48,7 +49,7 @@ import {createLoginHistoryClient} from './local-login-history-client'
 import {ConfigProvider,theme as antdTheme,Dropdown,Button,Alert,Form,Input,Card,Typography} from 'antd'
 import logo from '../../../shell/src/renderer/src/assets/dyoffice-logo.svg'
 import zhCN from 'antd/locale/zh_CN'
-const workspacePages={channels:'频道分享',tasks:'后台任务',settings:'个人设置',trash:'回收站',sources:'数据连接',global:'全局配置',users:'用户管理'} as const
+const workspacePages={channels:'频道分享',tasks:'后台任务',settings:'个人设置',trash:'回收站',results:'数据结果',sources:'数据连接',global:'全局配置',users:'用户管理'} as const
 type WorkspacePage=keyof typeof workspacePages
 import {AccountMenu} from './AccountMenu'
 import {CitationTabUnverified,createDocumentTabs,type DocumentFormat} from './document-tabs'
@@ -292,10 +293,11 @@ function WorkspacePageContent({page,onClose,onCloseGuardChange,settingsTab,onSet
  if(page==='users'&&user?.roles.includes('config_admin'))return <section className="workspace-panel"><LocalAdminPanel client={adminClient} presentation="page" currentUserId={user.id} onSessionRotated={proof=>{client.invalidateCsrf();if(proof)void updateSession(proof).catch(e=>notice(e.message))}} onOwnAuthorityChanged={()=>client.endSession('expired')} onClose={onClose} onCloseGuardChange={registerGuard}/></section>
  if(page==='global'&&user?.roles.includes('config_admin'))return <GlobalSettingsPanel client={globalSettings} onClose={onClose} presentation="page" onCloseGuardChange={registerGuard}/>
  if(page==='sources'&&sourceWorkspace)return <SourcesPanel key={sessionVersion} client={sourceWorkspace.sources} onClose={onClose} presentation="page" onCloseGuardChange={registerGuard}/>
+ if(page==='results'&&sourceWorkspace)return <WorkspaceDataResults key={sessionVersion} client={sourceWorkspace.results} onClose={onClose} presentation="page"/>
  if(page==='trash'&&sourceWorkspace)return <WorkspaceTrash request={sourceWorkspace.bound.request} onChanged={notifyFilesChanged} onClose={onClose} presentation="page" onCloseGuardChange={registerGuard}/>
  return null
 }
-function Account({onOpen}:{onOpen:(page:WorkspacePage)=>void}){return <div className="account-entry">{user&&<AccountMenu user={user} onSettings={()=>onOpen('settings')} onChannels={()=>onOpen('channels')} onTasks={()=>onOpen('tasks')} onTrash={()=>onOpen('trash')} onSources={()=>onOpen('sources')} onGlobalSettings={()=>onOpen('global')} onUsers={()=>onOpen('users')} onLogout={()=>void logout().catch(e=>notice(e.message))}/>}</div>}
+function Account({onOpen}:{onOpen:(page:WorkspacePage)=>void}){return <div className="account-entry">{user&&<AccountMenu user={user} onSettings={()=>onOpen('settings')} onChannels={()=>onOpen('channels')} onTasks={()=>onOpen('tasks')} onDataResults={user.roles.includes('personal')?()=>onOpen('results'):undefined} onTrash={()=>onOpen('trash')} onSources={()=>onOpen('sources')} onGlobalSettings={()=>onOpen('global')} onUsers={()=>onOpen('users')} onLogout={()=>void logout().catch(e=>notice(e.message))}/>}</div>}
 
 function Shell({recovery=false}:{recovery?:boolean}){
  const [message,setMessage]=useState(entryRecoveryNotice),[page,setPage]=useState<WorkspacePage|null>(()=>new URLSearchParams(location.search).get('panel')==='channels'?'channels':null)

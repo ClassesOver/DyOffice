@@ -76,7 +76,8 @@ test('error codes select precise advice; status remains the fallback for older s
   assert.match(sourceFailure('sources.query', 400, 'SQL_POLICY_REJECTED'), /read-only policy rejected/)
   assert.match(sourceFailure('sources.describe', 403, 'SOURCE_SCOPE_DENIED'), /outside the connection's allowed scope/)
   assert.match(sourceFailure('sources.query', 400, 'SOURCE_TARGET_NOT_APPROVED'), /administrator must approve/)
-  assert.match(sourceFailure('sources.query', 413, 'RESULT_QUOTA_EXCEEDED'), /delete saved data results/)
+  assert.match(sourceFailure('sources.query', 413, 'RESULT_QUOTA_EXCEEDED'), /temporary query results/i)
+  assert.match(sourceFailure('sources.save_result', 413, 'RESULT_QUOTA_EXCEEDED'), /Home.*Data results.*delete/i)
   assert.match(sourceFailure('sources.query', 504), /statement timeout/)
   assert.match(sourceFailure('sources.query', 500, 'NOT_A_PUBLIC_CODE'), /did not complete/)
   const skill = createWorkspaceSourceSkill(async () => { throw Object.assign(new Error('x'), { status: 400, code: 'SQL_DATABASE_ERROR' }) }, { tools: ['sources_query'], disposed: () => false })
@@ -94,4 +95,13 @@ test('the shared error handler forwards only public error codes, never messages'
   assert.equal('code' in hidden.json(), false)
   assert.doesNotMatch(hidden.body, /hunter2|ECONNREFUSED/)
   await app.close()
+})
+
+
+test('a saved-result quota failure from an older server gives recovery guidance through the save tool', async () => {
+  const skill = createWorkspaceSourceSkill(async () => { throw Object.assign(new Error('private'), { status: 413, code: 'RESULT_QUOTA_EXCEEDED' }) })
+  const result = await skill.executeTool({ id: '1', name: 'sources_save_result', input: {} })
+  assert.equal(result.isError, true)
+  assert.match(result.output, /Data results.*delete/i)
+  assert.doesNotMatch(result.output, /Tell the user|private/)
 })

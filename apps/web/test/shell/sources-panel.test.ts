@@ -990,3 +990,51 @@ test('advanced connection settings follow the UI language through the sources di
  const labels=[...host.querySelectorAll('[aria-label],[placeholder],[title]')].flatMap(node=>['aria-label','placeholder','title'].map(name=>node.getAttribute(name)??'')).join(' ').replaceAll('营业收入','')
  expect(labels.match(/[\u4e00-\u9fff]+/g)).toBeNull()
 })
+
+test('confirmed connection save recovers with a read while stale writes are disabled', async()=>{
+ let writes=0, failDetails=false, saved=initial()
+ await mount(async(path,method='GET',body)=>{
+  if(method==='PUT'){
+   writes++
+   saved={...saved,source:{...saved.source,name:(body as SaveSourceRequest).name!,version:saved.source.version+1}}
+   failDetails=true
+   return saved.source
+  }
+  if(path.includes('?'))return {items:[saved.source],nextCursor:null}
+  if(failDetails)throw Object.assign(Error('read failed'),{status:503})
+  return saved
+ },undefined,'page')
+ await change('连接名称','已经保存')
+ await click('保存连接')
+ expect(document.querySelector('[role="alert"]')?.textContent).toContain('连接已保存')
+ expect(button('保存连接').disabled).toBe(true)
+ failDetails=false
+ await click('读取最新配置并核对')
+ expect(input('连接名称').value).toBe('已经保存')
+ expect(button('测试连接').disabled).toBe(false)
+ expect(writes).toBe(1)
+})
+
+test('clearing the query row limit lets the server restore its default',async()=>{
+ let saved:SaveSourceRequest|undefined
+ await mount(async(path,method='GET',body)=>{
+  if(method==='PUT'){saved=body as SaveSourceRequest;return initial().source}
+  return read(path)
+ })
+ await change('查询最大行数','')
+ expect(input('查询最大行数').value).toBe('')
+ await click('保存连接')
+ expect(saved?.config).not.toHaveProperty('maxRows')
+})
+
+test('a typed connection address can be checked once and is masked when changing tabs',async()=>{
+ await mount(async path=>read(path),undefined,'page')
+ await change('凭据操作','replace')
+ await change('连接凭据','postgresql://reader:test-only@db.example/reporting')
+ expect(input('连接凭据').type).toBe('password')
+ await click('显示连接地址')
+ expect(input('连接凭据').type).toBe('text')
+ await click('可见范围');await click('连接设置')
+ expect(input('连接凭据').type).toBe('password')
+ expect(input('连接凭据').value).toContain('db.example/reporting')
+})

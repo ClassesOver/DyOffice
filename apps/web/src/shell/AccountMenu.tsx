@@ -4,15 +4,16 @@ import './account-menu.css'
 
 export type AccountMenuProps={
  user:{username:string;displayName:string;roles:string[]}|null
- onChannels?:()=>void;onTasks?:()=>void
+ onChannels?:()=>void;onTasks?:()=>void;onDataResults?:()=>void
  onSettings:()=>void;onTrash:()=>void;onSources:()=>void
  onGlobalSettings:()=>void;onUsers:()=>void;onLogout:()=>void
 }
-type IconName='settings'|'channels'|'tasks'|'trash'|'sources'|'global'|'users'|'logout'
+type IconName='settings'|'channels'|'tasks'|'results'|'trash'|'sources'|'global'|'users'|'logout'
 const iconPaths:Record<IconName,React.ReactNode>={
  settings:<><path d="m9 3 .6 2.2a7 7 0 0 1 1.8 0L12 3l2.6 1.5-.6 2.2a7 7 0 0 1 .9 1.6l2.2.6v3l-2.2.6a7 7 0 0 1-.9 1.6l.6 2.2L12 18l-.6-2.2a7 7 0 0 1-1.8 0L9 18l-2.6-1.5.6-2.2a7 7 0 0 1-.9-1.6l-2.2-.6v-3l2.2-.6A7 7 0 0 1 7 6.7l-.6-2.2Z"/><circle cx="10.5" cy="10.5" r="2.5"/></>,
  channels:<><circle cx="5" cy="10" r="2"/><circle cx="15" cy="4" r="2"/><circle cx="15" cy="16" r="2"/><path d="m7 9 6-4M7 11l6 4"/></>,
  tasks:<><rect x="4" y="3" width="12" height="15" rx="2"/><path d="M8 7h5M8 11h5M8 15h3"/></>,
+ results:<><rect x="3" y="4" width="14" height="13" rx="2"/><path d="M3 8h14M8 8v9M3 12h14"/></>,
  trash:<><path d="M3 5h14M8 5V3h4v2M5 5l1 13h8l1-13M8 8v7M12 8v7"/></>,
  sources:<><ellipse cx="10" cy="4" rx="7" ry="2.5"/><path d="M3 4v11c0 3.3 14 3.3 14 0V4M3 9c0 3.3 14 3.3 14 0"/></>,
  global:<><path d="M4 3v14M10 3v14M16 3v14M2 7h4M8 13h4M14 7h4"/><circle cx="4" cy="7" r="1.5"/><circle cx="10" cy="13" r="1.5"/><circle cx="16" cy="7" r="1.5"/></>,
@@ -35,6 +36,7 @@ export function AccountMenu(props:AccountMenuProps){
   {key:'settings',label:'个人设置',action:props.onSettings},
   ...(props.onChannels?[{key:'channels' as const,label:'频道分享',action:props.onChannels}]:[]),
   ...(props.onTasks?[{key:'tasks' as const,label:'后台任务',action:props.onTasks}]:[]),
+  ...(props.onDataResults?[{key:'results' as const,label:'数据结果',action:props.onDataResults}]:[]),
   {key:'trash',label:'回收站',action:props.onTrash},
  ]
  const organization=[{key:'sources' as const,label:'数据连接',action:props.onSources},{key:'global' as const,label:'全局配置',action:props.onGlobalSettings},{key:'users' as const,label:'用户管理',action:props.onUsers}]

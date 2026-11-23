@@ -110,9 +110,9 @@ test('expired or disabled pending results reject read/save; capture verifies cur
   assert.equal((await f.results.capture(f.alice.token, snapshot({ sourceId: 'draft-only', count: 1 }), queryHash)).sourceId, 'draft-only')
 })
 
-test('save is durable across owner sessions, idempotent with frozen receipt and bounded quota, and retains data after source tombstone', async t => {
+test('save is durable across owner sessions, idempotent with a frozen receipt, and retains data after source tombstone', async t => {
   const s = snapshot({ count: 3 }), bytes = Buffer.byteLength(canonical(s))
-  const f = await fixture(t, { maxSavedResults: 1, maxSavedBytes: bytes })
+  const f = await fixture(t)
   const pending = await f.results.capture(f.alice.token, s, queryHash)
   const command = { resultId: pending.resultId, name: '个人结果.json', commandId: randomUUID() }
   const saved = await f.results.save(f.alice.token, command)
@@ -126,7 +126,6 @@ test('save is durable across owner sessions, idempotent with frozen receipt and 
   assert.deepEqual(await rowCounts(f), [{ state: 'saved', count: 1, bytes }])
   const other = await f.results.capture(f.alice.token, s, queryHash)
   await assert.rejects(f.results.save(f.alice.token, { ...command, resultId: other.resultId }), status(409))
-  await assert.rejects(f.results.save(f.alice.token, { resultId: other.resultId, name: 'Over quota', commandId: randomUUID() }), error => error.statusCode === 413 && error.code === 'RESULT_QUOTA_EXCEEDED')
   await f.sources.remove(f.alice.token, 'metrics', { expectedVersion: 1 })
   const page = await f.results.read(login.token, { resultId: saved.resultId })
   assert.deepEqual(page.rows, s.rows); assert.equal(page.artifact.state, 'saved')
@@ -140,31 +139,25 @@ test('save is durable across owner sessions, idempotent with frozen receipt and 
   await assert.rejects(f.results.save(f.bob.token, command), status(404))
   await assert.rejects(f.results.download(f.adminSigned.token, saved.resultId), status(404))
   await assert.rejects(f.results.read(f.alice.token, { resultId: other.resultId }), status(404))
-  // Data JSONB has an independent logical quota, never T05 object physical bytes.
+  // Data JSONB is stored separately from T05 object bytes.
   assert.equal((await f.scoped('SELECT COALESCE(sum(stored_bytes),0)::integer AS bytes FROM storage_accounts')).rows[0].bytes, 0)
-  // A full quota names its cause, and the owner (only) can free it by removing a saved result.
   await assert.rejects(f.results.remove(f.bob.token, { resultId: saved.resultId }), status(404))
   await f.results.remove(login.token, { resultId: saved.resultId })
   await assert.rejects(f.results.remove(login.token, { resultId: saved.resultId }), status(404))
   assert.equal((await f.results.list(login.token)).items.length, 0)
   await assert.rejects(f.results.save(login.token, command), status(404))
-  // The saved quota is free again (saving a pending result needs the source, deleted above).
   assert.equal((await rowCounts(f)).some(row => row.state === 'saved'), false)
 })
 
-test('parallel capture and save serialize workspace count/byte quotas, duplicate command makes one artifact', async t => {
+test('parallel captures and saves preserve separate results and make one artifact for a duplicate command', async t => {
   const s = snapshot({ count: 1 }), bytes = Buffer.byteLength(canonical(s))
-  const f = await fixture(t, { maxPendingResults: 3, maxPendingBytes: bytes * 3, maxSavedResults: 2, maxSavedBytes: bytes * 2 })
+  const f = await fixture(t)
   const logins = [f.alice, await f.anotherLogin(), await f.anotherLogin(), await f.anotherLogin(), await f.anotherLogin()]
-  const captures = await Promise.allSettled(logins.map(login => f.results.capture(login.token, s, queryHash)))
-  const accepted = captures.flatMap((r, i) => r.status === 'fulfilled' ? [{ ...r.value, token: logins[i].token }] : [])
-  assert.equal(accepted.length, 3)
-  for (const failed of captures.filter(r => r.status === 'rejected')) assert.equal(failed.reason.statusCode, 413)
-  const saves = await Promise.allSettled(accepted.map(result => f.results.save(result.token, { resultId: result.resultId, name: result.resultId, commandId: randomUUID() })))
-  assert.equal(saves.filter(r => r.status === 'fulfilled').length, 2)
-  assert.equal(saves.find(r => r.status === 'rejected').reason.statusCode, 413)
-  assert.deepEqual(await rowCounts(f), [{ state: 'pending', count: 1, bytes }, { state: 'saved', count: 2, bytes: bytes * 2 }])
-  const fresh = await fixture(t, { maxSavedResults: 1, maxSavedBytes: bytes })
+  const captures = await Promise.all(logins.map(async ({token}) => ({ ...await f.results.capture(token, s, queryHash), token })))
+  const saves = await Promise.all(captures.map(({resultId, token}) => f.results.save(token, { resultId, name: resultId, commandId: randomUUID() })))
+  assert.equal(new Set(saves.map(result => result.resultId)).size, logins.length)
+  assert.deepEqual(await rowCounts(f), [{ state: 'saved', count: logins.length, bytes: bytes * logins.length }])
+  const fresh = await fixture(t)
   const pending = await fresh.results.capture(fresh.alice.token, s, queryHash)
   const command = { resultId: pending.resultId, name: 'Once', commandId: randomUUID() }
   const duplicate = await Promise.all(Array.from({ length: 6 }, () => fresh.results.save(fresh.alice.token, command)))
@@ -172,14 +165,12 @@ test('parallel capture and save serialize workspace count/byte quotas, duplicate
   assert.deepEqual(await rowCounts(fresh), [{ state: 'saved', count: 1, bytes }])
 })
 
-test('byte budgets reject independently of counts and expired reclamation deletes at most 16 pending rows, never saved', async t => {
-  const s = snapshot({ count: 1 }), bytes = Buffer.byteLength(canonical(s))
-  const f = await fixture(t, { maxPendingBytes: bytes, maxSavedBytes: bytes })
+test('reclamation deletes at most 16 expired pending rows and preserves saved results', async t => {
+  const s = snapshot({ count: 1 })
+  const f = await fixture(t)
   const first = await f.results.capture(f.alice.token, s, queryHash)
-  await assert.rejects(f.results.capture(f.alice.token, s, queryHash), status(413))
   const saved = await f.results.save(f.alice.token, { resultId: first.resultId, name: 'Keep', commandId: randomUUID() })
   const next = await f.results.capture(f.alice.token, s, queryHash)
-  await assert.rejects(f.results.save(f.alice.token, { resultId: next.resultId, name: 'Too many bytes', commandId: randomUUID() }), status(413))
   // Seed stale rows as migration owner solely to observe the bounded reclaimer.
   await f.scoped(`INSERT INTO workspace_source_results(result_id,deployment_id,owner_id,workspace_id,source_id,source_version,query_hash,sha256,row_count,truncated,size_bytes,snapshot,state,session_id,expires_at)
     SELECT gen_random_uuid(),deployment_id,owner_id,workspace_id,source_id,source_version,query_hash,sha256,row_count,truncated,size_bytes,snapshot,'pending',session_id,clock_timestamp()-interval '1 second'
@@ -247,7 +238,7 @@ test('capture rejects forged snapshots, oversized snapshots, raw query text and 
 
 test('limits are downward-configurable, capture detaches evidence, and runtime cannot rewrite its snapshot', async t => {
   const f = await fixture(t), s = snapshot({ count: 1 }), bytes = Buffer.byteLength(canonical(s))
-  for (const options of [{ maxSavedBytes: 256 * 1024 * 1024 + 1 }, { maxSavedResults: 65 }, { maxPendingBytes: 32 * 1024 * 1024 + 1 }, { maxPendingResults: 9 }, { maxSnapshotBytes: 4_000_001 }, { pendingTtlMs: 900_001 }, { maxPendingResults: 0 }]) {
+  for (const options of [{ maxSnapshotBytes: 4_000_001 }, { pendingTtlMs: 900_001 }, { pendingTtlMs: 0 }]) {
     assert.throws(() => createWorkspaceSourceResults({ transactions: f.transactions, ...options }), /Invalid workspace source result limit/)
   }
   const small = createWorkspaceSourceResults({ transactions: f.transactions, maxSnapshotBytes: bytes - 1 })
@@ -283,4 +274,14 @@ test('logout/revocation stops every read, save, list, download and capture even 
   const login = await f.anotherLogin()
   assert.equal((await f.results.read(login.token, { resultId: saved.resultId })).artifact.state, 'saved')
   await assert.rejects(f.results.read(login.token, { resultId: unsaved.resultId }), status(404))
+})
+
+test('workspace captures and saves can both exceed the former result counts', async t => {
+  const f = await fixture(t), token = f.alice.token, s = snapshot({ count: 1 })
+  const pending = []
+  for (let index = 0; index < 65; index++) pending.push(await f.results.capture(token, s, queryHash))
+  for (const [index, result] of pending.entries()) {
+    await f.results.save(token, { resultId: result.resultId, name: `Report ${index + 1}`, commandId: randomUUID() })
+  }
+  assert.equal((await f.results.list(token, { limit: 100 })).items.length, 65)
 })

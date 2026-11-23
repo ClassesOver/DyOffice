@@ -213,3 +213,8 @@
 .database-connections .dc-category-tabs { display:flex; flex-wrap:wrap; gap:8px; }
 .database-connections .dc-category-tabs button[aria-selected=true] { background:var(--surface-subtle); border-color:var(--accent); color:var(--accent); }
 .database-connections .dc-category-panel:not([hidden]) { display:grid; gap:20px; min-width:0; }
+.database-connections .dc-credentials { display:grid; gap:8px; min-width:0; }
+.database-connections .dc-credentials small { font-size:12px; font-weight:400; line-height:1.7; }
+.database-connections .dc-credential-input input { min-width:0; }
+.database-connections .dc-credential-input button { flex:none; }
+.database-connections .dc-test-help { flex-basis:100%; margin:0; font-size:12px; color:var(--dc-muted); }

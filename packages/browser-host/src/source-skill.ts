@@ -34,11 +34,12 @@ const CODE_ADVICE: Partial<Record<AssistantErrorCode, string>> = {
   SOURCE_TARGET_NOT_APPROVED: 'The database host is not an approved target. Do not retry; tell the user an administrator must approve this connection target.',
   SOURCE_TLS_UNSUPPORTED: 'The database does not support the configured TLS mode. Do not retry; tell the user an administrator must check the TLS setting of this target.',
   SOURCE_UNAVAILABLE: 'The data source is temporarily unavailable. Wait briefly and retry once; if it fails again, tell the user.',
-  RESULT_QUOTA_EXCEEDED: 'The workspace result storage is full. Tell the user to delete saved data results they no longer need (Home, data results), then retry.',
+  RESULT_QUOTA_EXCEEDED: 'Saved data results have reached the workspace limit. Open Home → Personal workspace → Data results, delete a saved result you no longer need, then retry the save.',
 }
 
 /** Recovery advice so the model rewrites the query instead of retrying it unchanged. */
 export function sourceFailure(name: SourceToolName, status: number | undefined, code?: unknown): string {
+  if (name === 'sources.query' && code === 'RESULT_QUOTA_EXCEEDED') return 'Temporary query results have reached the workspace limit. Reuse an existing result if it answers the question, or wait for temporary results to expire (up to 15 minutes) before running another query.'
   if (isAssistantErrorCode(code) && CODE_ADVICE[code] && (name === 'sources.query' || !code.startsWith('SQL_'))) return CODE_ADVICE[code]!
   if (name === 'sources.query' && status === 504) return TIMEOUT_ADVICE
   if (name === 'sources.query' && status === 502) return CODE_ADVICE.SOURCE_RESULT_UNUSABLE!
@@ -78,9 +79,10 @@ export function createWorkspaceSourceSkill(request: Request, options?: { tools: 
         if (options?.disposed() || signal?.aborted) return { output: name === 'sources.save_result' ? 'The tool response was interrupted. A save may have completed; reconcile the exact same commandId before claiming success or repeating it.' : 'The tool response was interrupted.', isError: true, summary: call.name }
         return { output: JSON.stringify(withDescribeHint(name, args, result)), isError: false, summary: call.name }
       } catch (error) {
-        return { output: name === 'sources.save_result'
+        const { status, code } = (error as { status?: number; code?: unknown } | undefined) ?? {}
+        return { output: name === 'sources.save_result' && code !== 'RESULT_QUOTA_EXCEEDED'
           ? 'The result save was not confirmed. Do not claim it was saved. Verify permission and retry only the same commandId, resultId and name.'
-          : sourceFailure(name, (error as { status?: number } | undefined)?.status, (error as { code?: unknown } | undefined)?.code), isError: true, summary: call.name }
+          : sourceFailure(name, status, code), isError: true, summary: call.name }
       }
     },
   }
