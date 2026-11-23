@@ -8,7 +8,7 @@ import {createSecretBox,type SecretKeyring} from '../admin/secrets.ts'
 import {createProviderTurns,type TurnPermit,type TurnRequest} from './turns.ts'
 import {registerProviderRoutes,type AdmitHarnessContinuation} from './routes.ts'
 import {resolveLiveProviderProfile} from './live-profile.ts'
-import {createPinnedProviderTransport} from './pinned-egress.ts'
+import {createPinnedProviderTransport,type ProviderContentType} from './pinned-egress.ts'
 import {buildOpenAiChatRequest} from './openai-request.ts'
 import {parseOpenAiChatStream} from './openai-stream.ts'
 import {assistantReadTools,ASSISTANT_DOCUMENT_TOOLS,ASSISTANT_DELEGATION_TOOLS,ASSISTANT_MODEL_DEADLINE_MS,scopeAssistantRequest,type AssistantSourceMode} from '../../../../../../packages/web-contracts/src/assistant.ts'
@@ -17,20 +17,32 @@ import {CODING_MODEL_TOOLS} from '../coding/model-bridge.ts'
 import type {HarnessRegistry} from '../coding/registry.ts'
 import {randomUUID} from 'node:crypto'
 import {authError} from '../auth/sessions.ts'
-import {parseResponsesStream} from './responses-stream.ts'
+import {parseResponsesJson,parseResponsesStream} from './responses-stream.ts'
 import {OutputCapRejection,ProviderResponseFailure} from './response-failure.ts'
 import type {ModelConnectionResult} from '../../../../../../packages/web-contracts/src/settings.ts'
 
+const responsesDecoders = {'text/event-stream':parseResponsesStream,'application/json':parseResponsesJson}
 const fail=()=>new Error('Shared model unavailable')
 function bridge() {
  type Item={value:Uint8Array;resolve:()=>void;reject:(error:Error)=>void}
  let slot:Item|undefined,pending:Item|undefined,awake:(()=>void)|undefined,ended=false,error:Error|undefined
+ let contentType:ProviderContentType='text/event-stream'
  const wake=()=>{awake?.();awake=undefined}
+ const waitForData=()=>{
+  if(slot||ended)return Promise.resolve()
+  return new Promise<void>(resolve=>{awake=resolve})
+ }
  const close=(failed=false)=>{ended=true;if(failed)error=fail();pending?.reject(fail());pending=undefined;slot=undefined;wake()}
  return {
   close,
-  push(value:Uint8Array):Promise<void>{
+  async contentType(){
+   await waitForData()
+   if(error)throw error
+   return contentType
+  },
+  push(value:Uint8Array,type:ProviderContentType):Promise<void>{
    if(ended||pending) return Promise.reject(fail())
+   contentType=type
    return new Promise((resolve,reject)=>{pending=slot={value:Buffer.from(value),resolve,reject};wake()})
   },
   source:{
@@ -42,7 +54,7 @@ function bridge() {
        const item=slot;slot=undefined
        try{yield item.value}finally{item.resolve();if(pending===item)pending=undefined}
       }else if(ended)return
-      else await new Promise<void>(resolve=>{awake=resolve})
+      else await waitForData()
      }
     }finally{close()}
    },
@@ -102,7 +114,7 @@ export function registerSharedProviderGateway(app:FastifyInstance,options:{trans
       // Claim commits before networking. A lost response cannot silently retry dispatch.
       stage='dispatch_claim'
       await transaction(token,async c=>{await c.query("SELECT shared_provider_dispatch('claim',$1,$2,$3,$4)",receipt)})
-      const transport=createPinnedProviderTransport({profiles:[(({maxOutputTokens,...rest})=>rest)(profile)],timeoutMs,maxConcurrent:1})
+      const transport=createPinnedProviderTransport({profiles:[(({maxOutputTokens,...rest})=>rest)(profile)],timeoutMs,maxConcurrent:1,acceptResponsesJson:responses})
       const turnControl=new AbortController(),turnBytes=bridge(),abort=()=>turnControl.abort()
       control=turnControl;bytes=turnBytes
       detach=()=>signal.removeEventListener('abort',abort)
@@ -116,7 +128,7 @@ export function registerSharedProviderGateway(app:FastifyInstance,options:{trans
         const credential=Buffer.from(box.unseal(envelope,{deploymentId:profile.deploymentId,configId:profile.entryId,providerId:profile.providerId,kind:'chat'}))
         try{if(dispatchSignal.aborted)throw fail();await write(credential)}finally{credential.fill(0)}
        })
-       },async chunk=>{await validate(token,permit);await turnBytes.push(chunk)})
+       },async (chunk,type)=>{await validate(token,permit);await turnBytes.push(chunk,type)})
       void producer.then(()=>turnBytes.close(),error=>{
        if(error instanceof ProviderResponseFailure||error instanceof OutputCapRejection)responseFailure=error
        turnBytes.close(true)
@@ -124,7 +136,13 @@ export function registerSharedProviderGateway(app:FastifyInstance,options:{trans
       stage='stream_parse'
       // No per-event validate here: createProviderTurns revalidates every yielded event before
       // emitting it, and each network chunk is already validated above.
-      for await(const event of (responses?parseResponsesStream:parseOpenAiChatStream)(turnBytes.source,{signal:turnControl.signal})){if(event.type==='tool_call'&&!scoped.tools.has(event.name))throw fail();yield event}
+      const parse=responses
+       ? responsesDecoders[await turnBytes.contentType()]
+       : parseOpenAiChatStream
+      for await(const event of parse(turnBytes.source,{signal:turnControl.signal})){
+       if(event.type==='tool_call'&&!scoped.tools.has(event.name))throw fail()
+       yield event
+      }
       await producer
       stage='dispatch_settle'
       await transaction(token,async c=>{await c.query("SELECT shared_provider_dispatch('settle',$1,$2,$3,$4)",receipt)})

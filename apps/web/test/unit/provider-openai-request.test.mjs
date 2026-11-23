@@ -12,6 +12,25 @@ test('builds exact compact UTF8 bytes and their only SHA256 from trusted model a
  assert.deepEqual(payload,{model:'gpt-test',max_tokens:1024,stream:true,stream_options:{include_usage:true},messages:[{role:'system',content:'Be helpful'},{role:'user',content:'你好'}]})
  assert.equal(r.digest,createHash('sha256').update(r.body).digest('hex'));assert.ok(Object.isFrozen(r));assert.equal(r.body.toString(),JSON.stringify(payload))
 })
+test('Responses requests ask for encrypted reasoning only on models with a known OpenAI reasoning surface',()=>{
+ const bodyFor=model=>JSON.parse(m.buildOpenAiChatRequest(base(),{...profile,model},undefined,'responses').body)
+ const plainModels=[
+  'gpt-4.1','openai/gpt-4o-mini','openai/gpt-5-chat-latest','gpt-50',
+  'deepseek/deepseek-chat','deepseek-ai/DeepSeek-Coder-V2-Instruct','deepseek-unlisted-custom',
+  'deepseek-ai/other-model','grok-2-latest','x-ai/grok-4-fast-non-reasoning','custom-chat',
+ ]
+ for(const model of plainModels){
+  const wire=bodyFor(model)
+  assert.equal(wire.reasoning,undefined,model)
+  assert.equal(wire.include,undefined,model)
+  assert.equal(wire.max_output_tokens,profile.maxOutputTokens)
+ }
+ for(const model of ['gpt-5.4','openai/o3:free','deepseek-flash','deepseek-ai/DeepSeek-V4.1-Flash','deepseek-v4-pro','x-ai/grok-4.6']){
+  const wire=bodyFor(model)
+  assert.deepEqual(wire.reasoning,{summary:'auto'},model)
+  assert.deepEqual(wire.include,['reasoning.encrypted_content'],model)
+ }
+})
 test('sends bounded supported image attachments as OpenAI multimodal user content',()=>{
  const image={base64:Buffer.from('image bytes').toString('base64'),mime:'image/png'}
  const wire=JSON.parse(build({...base(),messages:[{role:'user',text:'Describe this',images:[image]}]}).body)

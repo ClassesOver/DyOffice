@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { AgentMessage, AgentToolCall } from '@genoffice/agent-core'
 import { chatForProvider } from '../src/chat'
+import { responsesInput } from '../src/protocols/openai-responses'
 import { streamForProvider } from '../src/stream'
 import { jsonResponse, okResponse, sseStream } from './test-utils'
 
@@ -182,6 +183,30 @@ describe('openai-responses: request shape', () => {
     ])
     expect(body.tools).toBeUndefined()
   })
+
+  it('replays each distinct reasoning item before its own tool call in a batch', () => {
+    const call = { name: 'get_weather', input: {} }
+    const first = 'oai-rs:{"id":"rs_1","encrypted":"ENC"}'
+    const second = 'oai-rs:{"id":"rs_2","encrypted":"ENC2"}'
+    const input = responsesInput([
+      {
+        role: 'assistant',
+        text: '',
+        toolCalls: [
+          { ...call, id: 'call_1', signature: first },
+          { ...call, id: 'call_2', signature: second },
+          { ...call, id: 'call_3', signature: second },
+        ],
+      },
+    ])
+    expect(input).toEqual([
+      REASONING_ITEM,
+      { type: 'function_call', call_id: 'call_1', name: 'get_weather', arguments: '{}' },
+      { type: 'reasoning', id: 'rs_2', encrypted_content: 'ENC2', summary: [] },
+      { type: 'function_call', call_id: 'call_2', name: 'get_weather', arguments: '{}' },
+      { type: 'function_call', call_id: 'call_3', name: 'get_weather', arguments: '{}' },
+    ])
+  })
 })
 
 describe('openai-responses: stream handling', () => {
@@ -210,6 +235,32 @@ describe('openai-responses: stream handling', () => {
     expect(c.deltas).toEqual([])
     expect(c.stopReasons).toEqual([])
     expect(c.usage).toEqual([{ inputTokens: 63, outputTokens: 48 }])
+  })
+
+  it('attaches each encrypted reasoning item to the next tool call', async () => {
+    const stream = toolTurnStream(
+      [
+        { ...REASONING_ITEM, id: 'rs_2', encrypted_content: 'ENC2' },
+        { ...CALL_ITEM, id: 'fc_2', call_id: 'call_2' },
+        { ...CALL_ITEM, id: 'fc_3', call_id: 'call_3' },
+      ].map((item) => ({ type: 'response.output_item.done', item })),
+    )
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(okResponse(stream)))
+    const c = collector()
+    await streamForProvider(
+      'openai',
+      { apiKey: 'k', model: 'gpt-6.1-terra' },
+      'sys',
+      [{ role: 'user', text: 'Compare the weather' }],
+      [TOOL],
+      100,
+      c.cb,
+    )
+    expect(c.toolCalls.map(({ id, signature }) => [id, signature])).toEqual([
+      ['call_1', 'oai-rs:{"id":"rs_1","encrypted":"ENC"}'],
+      ['call_2', 'oai-rs:{"id":"rs_2","encrypted":"ENC2"}'],
+      ['call_3', undefined],
+    ])
   })
 
   it('streams text deltas and does not re-emit the finished message item', async () => {
