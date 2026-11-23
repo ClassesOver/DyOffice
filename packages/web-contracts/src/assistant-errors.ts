@@ -20,7 +20,7 @@ export const ASSISTANT_ERROR_CODES = Object.freeze({
   SOURCE_TARGET_NOT_APPROVED: 'user_action',
   SOURCE_TLS_UNSUPPORTED: 'user_action',
   SOURCE_UNAVAILABLE: 'retry_later',
-  RESULT_QUOTA_EXCEEDED: 'user_action',
+  RESULT_QUOTA_EXCEEDED: 'user_action', // Compatibility with servers that enforced workspace result quotas.
 } as const satisfies Record<string, AssistantErrorKind>)
 
 export type AssistantErrorCode = keyof typeof ASSISTANT_ERROR_CODES

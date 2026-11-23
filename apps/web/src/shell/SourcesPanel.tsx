@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
+import { useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
 import './database-connections.css'
 import type { SourceDetail, SourceDescriptor, SourceDiscovery, SourceConfig, SourceKind } from '../../../../packages/web-contracts/src/sources.ts'
 import type { SourcesClient } from './sources-client'
@@ -42,6 +42,9 @@ export function SourcesPanel({ client, onClose, presentation = 'dialog', onClose
   const [listState,setListState]=useState<'loading'|'ready'|'error'>('loading')
   const [listPage,setListPage]=useState(0),[pageStarts,setPageStarts]=useState<(string|undefined)[]>([undefined])
   const [detail, setDetail] = useState<SourceDetail | null>(null), [latest, setLatest] = useState<SourceDetail | null>(null)
+  const [savedReadPending,setSavedReadPending] = useState<string|null>(null)
+  const [showAddress,setShowAddress] = useState(false)
+  const credentialId = useId()
   const [missing, setMissing] = useState<string|null>(null)
   const [draft, setDraft] = useState<Draft>(empty), [confirmDelete, setConfirmDelete] = useState(false)
   const [tab,setTab] = useState<ConnectionTab>('connection')
@@ -57,6 +60,7 @@ export function SourcesPanel({ client, onClose, presentation = 'dialog', onClose
   const [filter, setFilter] = useState(''), [view, setView] = useState<'list'|'form'>('list')
   const [message, setMessage] = useState(''), [error, setError] = useState(''), [, tick] = useState(0)
   const alive = useRef(true), busy = client.getState().pending, unknown = client.getState().unknownWrite
+  const formBlocked = unknown || savedReadPending !== null
   const inputRef = useRef<HTMLInputElement>(null)
   const focusCredential = useRef(false)
   const surfaceRef = useRef<HTMLElement>(null)
@@ -64,6 +68,7 @@ export function SourcesPanel({ client, onClose, presentation = 'dialog', onClose
   const searchRef = useRef<HTMLInputElement>(null)
   const previousView = useRef(view)
   const isPage = presentation === 'page'
+  useEffect(() => { setShowAddress(false) }, [tab, view, draft.kind, draft.credentialMode])
   useEffect(() => {
     if (fieldError) surfaceRef.current?.querySelector<HTMLInputElement>('input[aria-invalid="true"]')?.focus()
   }, [fieldError])
@@ -92,7 +97,7 @@ export function SourcesPanel({ client, onClose, presentation = 'dialog', onClose
   const legacyHttp = detail?.source.kind === 'http'
   const searchTerm = filter.trim().toLocaleLowerCase()
   const visibleItems = items.filter(item => `${item.name} ${item.sourceId} ${item.kind}`.toLocaleLowerCase().includes(searchTerm))
-  const dirty = view === 'form' && JSON.stringify(draft) !== JSON.stringify(detail ? fromDetail(detail) : empty())
+  const dirty = view === 'form' && savedReadPending === null && JSON.stringify(draft) !== JSON.stringify(detail ? fromDetail(detail) : empty())
   function canClose() {
     if (client.getState().pending) { setError(s('srcConnectionOperationPending')); return false }
     if (client.getState().unknownWrite) { setError(s('srcVerifyOperationBeforeClosing')); return false }
@@ -111,11 +116,12 @@ export function SourcesPanel({ client, onClose, presentation = 'dialog', onClose
   const patch = (value: Partial<Draft>) => { setDraft(current => ({ ...current, ...value })); if(fieldError&&fieldError.field in value)setFieldError(undefined); setLatest(null); setConfirmDelete(false); setMessage('') }
   let publicConfig: Record<string, unknown> | null = null
   try { const value = JSON.parse(draft.config); if (value && typeof value === 'object' && !Array.isArray(value)) publicConfig = value } catch { /* Advanced JSON validation is reported on save. */ }
-  function patchConfig(key: string, value: string | number) {
+  function patchConfig(key: string, value: string | number | undefined) {
     if (publicConfig) patch({config: JSON.stringify({...publicConfig, [key]: value}, null, 2)})
   }
   const discovered = detail && catalog?.sourceId === detail.source.sourceId && catalog.version === detail.source.version ? catalog : undefined
-  const discoveryBlock = !publicConfig ? {message:s('srcCorrectPublicConfiguration'),tab:'advanced'} as const
+  const discoveryBlock = savedReadPending ? {message:s('srcSavedConfigurationReloadFailed')} as const
+    : !publicConfig ? {message:s('srcCorrectPublicConfiguration'),tab:'advanced'} as const
     : !detail ? {message:s('srcSaveBeforeLoadingSchemas'),tab:'connection'} as const
     : !draft.enabled ? {message:s('srcEnableBeforeLoadingSchemas'),tab:'connection'} as const
     : draft.credentialMode!=='retain' ? {message:s('srcSaveChangedCredentials'),tab:'connection'} as const
@@ -274,7 +280,7 @@ export function SourcesPanel({ client, onClose, presentation = 'dialog', onClose
   async function select(sourceId: string, keepTab = false) {
     const value = await client.detail(sourceId)
     if (alive.current&&!keepTab) setSelectedOnly(false)
-    if (alive.current) { if (!keepTab) setTab('connection'); setDetail(value); setCatalog(undefined); setCatalogError(undefined); setTested(undefined); setFieldError(undefined); setDraft(fromDetail(value)); setLatest(null); setMissing(null); setConfirmDelete(false); setView('form') }
+    if (alive.current) { if (!keepTab) setTab('connection'); setDetail(value); setSavedReadPending(null); setCatalog(undefined); setCatalogError(undefined); setTested(undefined); setFieldError(undefined); setDraft(fromDetail(value)); setLatest(null); setMissing(null); setConfirmDelete(false); setView('form') }
     return value
   }
   async function readLatest(sourceId:string){
@@ -307,15 +313,23 @@ export function SourcesPanel({ client, onClose, presentation = 'dialog', onClose
       setTab('advanced')
       throw Error(s('srcTimeoutHint'))
     }
-    if (!detail) {
-      if (!draft.secret) throw Error(s('srcCreationRequiresCredentials'))
-      await client.create({ sourceId: draft.sourceId, name: draft.name, kind: draft.kind, config, secret: draft.secret, enabled: draft.enabled })
-    } else await client.save(detail.source.sourceId, { expectedVersion: detail.source.version, name: draft.name, config, enabled: draft.enabled,
-      ...(draft.credentialMode === 'replace' ? { secret: draft.secret } : draft.credentialMode === 'clear' ? { secret: null } : {}) })
+    if (!detail&&!draft.secret) throw Error(s('srcCreationRequiresCredentials'))
+    const saved = detail
+      ? await client.save(detail.source.sourceId, { expectedVersion: detail.source.version, name: draft.name, config, enabled: draft.enabled,
+        ...(draft.credentialMode === 'replace' ? { secret: draft.secret } : draft.credentialMode === 'clear' ? { secret: null } : {}) })
+      : await client.create({ sourceId: draft.sourceId, name: draft.name, kind: draft.kind, config, secret: draft.secret, enabled: draft.enabled })
     if (!alive.current) return
     let current:SourceDetail
     try { current=await select(draft.sourceId,true) }
-    catch { throw Error(s('srcSavedConfigurationReloadFailed')) }
+    catch {
+      if (alive.current) {
+        setSavedReadPending(draft.sourceId)
+        setItems(items=>items.some(item=>item.sourceId===saved.sourceId)
+          ? items.map(item=>item.sourceId===saved.sourceId?saved:item)
+          : [saved,...items])
+      }
+      throw Error(s('srcSavedConfigurationReloadFailed'))
+    }
     await reloadList().catch(()=>{/* The list already shows its own retry state when opened. */})
     const restore=tab==='scope'&&canDiscover?discovered?.tables?.directory:undefined
     if (restore && current.source.enabled && current.source.hasCredential && alive.current) {
@@ -324,8 +338,17 @@ export function SourcesPanel({ client, onClose, presentation = 'dialog', onClose
       catch (error) { if(alive.current)setCatalogError({message:s('srcSavedScopeRefreshFailed')+errorText(error)}) }
       finally { if(alive.current)setCatalogLoading('') }
     }
-    if (alive.current) setMessage(!current.source.enabled?s('srcConnectionSavedDisabled'):!current.source.hasCredential?s('srcSavedConfigureCredentials'):s('srcConnectionSavedActive'))
+    if (alive.current) showSavedMessage(current)
     return current
+  }
+  function showSavedMessage(current:SourceDetail) {
+    setMessage(!current.source.enabled?s('srcConnectionSavedDisabled'):!current.source.hasCredential?s('srcSavedConfigureCredentials'):s('srcConnectionSavedActive'))
+  }
+  async function retrySavedConfiguration(sourceId:string) {
+    try {
+      const current=await select(sourceId,true)
+      if (alive.current) showSavedMessage(current)
+    } catch { throw Error(s('srcSavedConfigurationReloadFailed')) }
   }
   function validateConnection() {
     if (!isPage||!publicConfig) return true
@@ -373,7 +396,8 @@ export function SourcesPanel({ client, onClose, presentation = 'dialog', onClose
     } finally { if (alive.current) setTesting(false) }
   }
   function submit(testAfterSave=false) {
-    if (!validateConnection()) return
+    if (formBlocked||!validateConnection()) return
+    setShowAddress(false)
     void operation(async()=>{
       const current=await save()
       if (testAfterSave&&current?.source.enabled&&current.source.hasCredential&&alive.current) await testConnection(current,true)
@@ -381,10 +405,13 @@ export function SourcesPanel({ client, onClose, presentation = 'dialog', onClose
   }
   function backToList() {
     if (busy || dirty && !window.confirm(s('srcDiscardChangesReturnToList'))) return
-    setTab('connection'); setView('list'); setDetail(null); setDraft(empty()); setTested(undefined); setFieldError(undefined); setLatest(null); setMissing(null); setConfirmDelete(false); setMessage(''); setError(''); setCatalogError(undefined); setSelectedOnly(false)
+    setSavedReadPending(null); setTab('connection'); setView('list'); setDetail(null); setDraft(empty()); setTested(undefined); setFieldError(undefined); setLatest(null); setMissing(null); setConfirmDelete(false); setMessage(''); setError(''); setCatalogError(undefined); setSelectedOnly(false)
   }
   const canSaveAndTest = isPage&&tab==='connection'&&draft.enabled&&draft.credentialMode!=='clear'&&(!detail||draft.credentialMode==='replace'||detail.source.hasCredential)
   const canChooseScope = isPage&&tab==='connection'&&!dirty&&canDiscover&&tested?.sourceId===detail?.source.sourceId&&tested?.version===detail?.source.version
+  const testBlocked = dirty||legacyHttp||!detail?.source.enabled||!detail.source.hasCredential
+  const showTestHint = testBlocked&&!legacyHttp&&!formBlocked&&!busy&&!error&&!message
+  const testHelpId = useId()
   const inlineFeedback = isPage && view === 'form'
   const fieldFeedback = (field:NonNullable<typeof fieldError>['field']) => fieldError?.field===field ? <small id={'dc-error-'+field} className="dc-field-error" role="alert">{fieldError.message}</small> : null
   const fieldAttributes = (field:NonNullable<typeof fieldError>['field']) => fieldError?.field===field ? {'aria-invalid':true as const,'aria-describedby':'dc-error-'+field} : {}
@@ -422,22 +449,29 @@ export function SourcesPanel({ client, onClose, presentation = 'dialog', onClose
       {legacyHttp&&<Notice type="info" showIcon title={s('srcSupportedConnectionTypes')}/>}
       {dirty&&!inlineFeedback&&<p className="database-connections-dirty" role="status">{s('srcUnsavedChangesBeforeLeaving')}</p>}
       <div className="dc-category-panel" id="dc-panel-connection" role={isPage&&!legacyHttp?'tabpanel':undefined} aria-labelledby={isPage&&!legacyHttp?'dc-tab-connection':undefined} hidden={isPage&&tab!=='connection'}>
-      <fieldset disabled={busy||unknown||legacyHttp}><legend>{s('srcBasicInformation')}</legend><div className="database-connections-grid">
-        <label>{s('srcNameColumn')}<input {...fieldAttributes('name')} aria-label={s('srcConnectionName')} disabled={busy||unknown||legacyHttp} value={draft.name} maxLength={200} placeholder={s('srcConnectionNameExample')} onChange={event=>patch({name:event.target.value})}/>{fieldFeedback('name')}</label>
-        <label>{s('srcConnectionIdentifier')}<input {...fieldAttributes('sourceId')} aria-label={s('srcConnectionIdentifier')} disabled={!!detail||busy||unknown||legacyHttp} value={draft.sourceId} maxLength={64} placeholder={s('srcConnectionIdentifierExample')} onChange={event=>patch({sourceId:event.target.value})}/>{fieldFeedback('sourceId')}</label>
-        <label>{s('srcConnectionConnector')}<select aria-label={s('srcConnectionConnector')} disabled={!!detail||busy||unknown} value={draft.kind} onChange={event=>patch({kind:event.target.value as SourceKind})}>{legacyHttp&&<option value="http">{s('srcHttpJsonReadOnly')}</option>}<option value="postgres">PostgreSQL</option><option value="mysql">MySQL</option><option value="starrocks">StarRocks</option></select></label>
-        <div className="database-connections-enabled"><label className="dc-check"><input type="checkbox" aria-label={s('srcEnableDataConnection')} disabled={busy||unknown||legacyHttp} checked={draft.enabled} onChange={event=>patch({enabled:event.target.checked})}/>{s('srcEnableDataConnection')}</label></div>
+      <fieldset disabled={busy||formBlocked||legacyHttp}><legend>{s('srcBasicInformation')}</legend><div className="database-connections-grid">
+        <label>{s('srcNameColumn')}<input {...fieldAttributes('name')} aria-label={s('srcConnectionName')} disabled={busy||formBlocked||legacyHttp} value={draft.name} maxLength={200} placeholder={s('srcConnectionNameExample')} onChange={event=>patch({name:event.target.value})}/>{fieldFeedback('name')}</label>
+        <label>{s('srcConnectionIdentifier')}<input {...fieldAttributes('sourceId')} aria-label={s('srcConnectionIdentifier')} disabled={!!detail||busy||formBlocked||legacyHttp} value={draft.sourceId} maxLength={64} placeholder={s('srcConnectionIdentifierExample')} onChange={event=>patch({sourceId:event.target.value})}/>{fieldFeedback('sourceId')}</label>
+        <label>{s('srcConnectionConnector')}<select aria-label={s('srcConnectionConnector')} disabled={!!detail||busy||formBlocked} value={draft.kind} onChange={event=>patch({kind:event.target.value as SourceKind})}>{legacyHttp&&<option value="http">{s('srcHttpJsonReadOnly')}</option>}<option value="postgres">PostgreSQL</option><option value="mysql">MySQL</option><option value="starrocks">StarRocks</option></select></label>
+        <div className="database-connections-enabled"><label className="dc-check"><input type="checkbox" aria-label={s('srcEnableDataConnection')} disabled={busy||formBlocked||legacyHttp} checked={draft.enabled} onChange={event=>patch({enabled:event.target.checked})}/>{s('srcEnableDataConnection')}</label></div>
       </div></fieldset>
-      <fieldset disabled={busy||unknown||legacyHttp}><legend>{s('srcCredentialsColumn')}</legend><p>{s('srcEncryptedCredentialsNotice')}</p>
-        {detail&&!legacyHttp&&<label>{s('srcCredentialActions')}<select aria-label={s('srcCredentialActions')} value={draft.credentialMode} disabled={busy||unknown} onChange={event=>patch({credentialMode:event.target.value as Draft['credentialMode'],secret:''})}><option value="retain">{s('srcRetainCredentials')}{s(detail.source.hasCredential?'srcConfiguredSuffix':'srcNotConfiguredSuffix')}</option><option value="replace">{s('srcReplaceCredentials')}</option><option value="clear">{s('srcClearConnectionCredentials')}</option></select></label>}
-        {!legacyHttp&&(!detail||draft.credentialMode==='replace')&&<label>{s('srcDatabaseConnectionUrl')}<input {...fieldAttributes('secret')} ref={inputRef} aria-label={s('srcConnectionCredentials')} type="password" autoComplete="new-password" value={draft.secret} placeholder={s('srcReadOnlyUrlPlaceholder')} onChange={event=>patch({secret:event.target.value})}/><small>{s('srcExamplePrefix')}<code>{credentialExamples[draft.kind].replace('{password}',s('srcPasswordWord'))}</code></small>{fieldFeedback('secret')}</label>}
+      <fieldset disabled={busy||formBlocked||legacyHttp}><legend>{s('srcCredentialsColumn')}</legend><p>{s('srcEncryptedCredentialsNotice')}</p>
+        {detail&&!legacyHttp&&<label>{s('srcCredentialActions')}<select aria-label={s('srcCredentialActions')} value={draft.credentialMode} disabled={busy||formBlocked} onChange={event=>patch({credentialMode:event.target.value as Draft['credentialMode'],secret:''})}><option value="retain">{s('srcRetainCredentials')}{s(detail.source.hasCredential?'srcConfiguredSuffix':'srcNotConfiguredSuffix')}</option><option value="replace">{s('srcReplaceCredentials')}</option><option value="clear">{s('srcClearConnectionCredentials')}</option></select></label>}
+        {!legacyHttp&&(!detail||draft.credentialMode==='replace')&&<div className="dc-credentials">
+          <label htmlFor={credentialId}>{s('srcDatabaseConnectionUrl')}</label>
+          <div className="dc-inline dc-credential-input">
+            <input {...fieldAttributes('secret')} id={credentialId} ref={inputRef} aria-label={s('srcConnectionCredentials')} type={showAddress?'text':'password'} autoComplete="new-password" spellCheck={false} autoCapitalize="none" value={draft.secret} placeholder={s('srcReadOnlyUrlPlaceholder')} onChange={event=>{if(!event.target.value)setShowAddress(false);patch({secret:event.target.value})}}/>
+            <button type="button" disabled={!draft.secret} onClick={()=>setShowAddress(shown=>!shown)}>{s(showAddress?'srcHideAddress':'srcShowAddress')}</button>
+          </div>
+          <small>{s('srcExamplePrefix')}<code>{credentialExamples[draft.kind].replace('{password}',s('srcPasswordWord'))}</code></small>{fieldFeedback('secret')}
+        </div>}
       </fieldset>
       </div>
       <div className="dc-category-panel" id="dc-panel-scope" role={isPage&&!legacyHttp?'tabpanel':undefined} aria-labelledby={isPage&&!legacyHttp?'dc-tab-scope':undefined} hidden={isPage&&tab!=='scope'}>
-      <fieldset disabled={busy||unknown||legacyHttp}><legend>{s('srcVisibleSchemasAndTables')}</legend><p>{s('srcSchemaTableScopeIntersection')}</p>
-        {!legacyHttp&&<label>{s('srcOptionalDatabaseName')}<input aria-label={s('srcDatabaseName')} disabled={!publicConfig||busy||unknown} value={typeof publicConfig?.database==='string'?publicConfig.database:''} onChange={event=>{if(!publicConfig)return;const next={...publicConfig};const value=event.target.value.trim();if(value)next.database=value;else delete next.database;patch({config:JSON.stringify(next,null,2)})}}/><small>{s('srcDatabaseMustMatchCredentials')}</small></label>}
-        {!legacyHttp&&<label>{s('srcSchemaScope')}<select aria-label={s('srcSchemaScope')} disabled={!publicConfig||busy||unknown} value={publicConfig&&Object.hasOwn(publicConfig,'allowedSchemas')?'selected':'all'} onChange={event=>{if(!publicConfig)return;const next={...publicConfig};if(event.target.value==='selected')next.allowedSchemas=[];else delete next.allowedSchemas;patch({config:JSON.stringify(next,null,2)})}}><option value="all">{s('srcAllSchemasRestricted')}</option><option value="selected">{s('srcSelectedSchemasOnly')}</option></select></label>}
-        {!legacyHttp&&<label>{s('srcTableVisibility')}<select aria-label={s('srcTableVisibility')} disabled={!publicConfig||busy||unknown} value={publicConfig&&Object.hasOwn(publicConfig,'allowedTables')?'selected':'all'} onChange={event=>{const value=event.target.value;if(!publicConfig)return;const next={...publicConfig};if(value==='selected')next.allowedTables=[];else delete next.allowedTables;patch({config:JSON.stringify(next,null,2)});if(value==='selected'&&!discovered&&canDiscover)void operation(()=>discover())}}><option value="selected">{s('srcSelectedTablesOnly')}</option><option value="all">{s('srcAllReadableTables')}</option></select></label>}
+      <fieldset disabled={busy||formBlocked||legacyHttp}><legend>{s('srcVisibleSchemasAndTables')}</legend><p>{s('srcSchemaTableScopeIntersection')}</p>
+        {!legacyHttp&&<label>{s('srcOptionalDatabaseName')}<input aria-label={s('srcDatabaseName')} disabled={!publicConfig||busy||formBlocked} value={typeof publicConfig?.database==='string'?publicConfig.database:''} onChange={event=>{if(!publicConfig)return;const next={...publicConfig};const value=event.target.value.trim();if(value)next.database=value;else delete next.database;patch({config:JSON.stringify(next,null,2)})}}/><small>{s('srcDatabaseMustMatchCredentials')}</small></label>}
+        {!legacyHttp&&<label>{s('srcSchemaScope')}<select aria-label={s('srcSchemaScope')} disabled={!publicConfig||busy||formBlocked} value={publicConfig&&Object.hasOwn(publicConfig,'allowedSchemas')?'selected':'all'} onChange={event=>{if(!publicConfig)return;const next={...publicConfig};if(event.target.value==='selected')next.allowedSchemas=[];else delete next.allowedSchemas;patch({config:JSON.stringify(next,null,2)})}}><option value="all">{s('srcAllSchemasRestricted')}</option><option value="selected">{s('srcSelectedSchemasOnly')}</option></select></label>}
+        {!legacyHttp&&<label>{s('srcTableVisibility')}<select aria-label={s('srcTableVisibility')} disabled={!publicConfig||busy||formBlocked} value={publicConfig&&Object.hasOwn(publicConfig,'allowedTables')?'selected':'all'} onChange={event=>{const value=event.target.value;if(!publicConfig)return;const next={...publicConfig};if(value==='selected')next.allowedTables=[];else delete next.allowedTables;patch({config:JSON.stringify(next,null,2)});if(value==='selected'&&!discovered&&canDiscover)void operation(()=>discover())}}><option value="selected">{s('srcSelectedTablesOnly')}</option><option value="all">{s('srcAllReadableTables')}</option></select></label>}
         {!legacyHttp&&<p>{selectedDirectories ? s('srcSelectedSchemaCount',{count:selectedDirectories.length}) : s('srcAllSchemas')}{s('srcListSeparator')}{selectedTables ? s(selectedDirectories?'srcTableCount':'srcSelectedTableCount',{count:selectedTables.length}) : s('srcAllReadableTables')}</p>}
         {!legacyHttp&&scopeChanged&&<button type="button" onClick={restoreScope}>{s('srcRestoreSavedSchemasAndTables')}</button>}
         {directoryLimit&&<p role="status">{s('srcSchemaLimitReached',{max:maxScopeEntries})}</p>}
@@ -535,29 +569,30 @@ export function SourcesPanel({ client, onClose, presentation = 'dialog', onClose
           </>}
         </section>}
         {(selectedDirectories||selectedTables)&&<details className="dc-manual-scope" open={!isPage}><summary>{s('srcEnterScopeManually')}</summary>
-        {!legacyHttp&&publicConfig&&Object.hasOwn(publicConfig,'allowedSchemas')&&<label>{s('srcAllowedSchemas')}<textarea aria-label={s('srcAllowedSchemas')} disabled={busy||unknown} rows={3} spellCheck={false} placeholder={draft.kind==='postgres'?'sales':'warehouse'} value={Array.isArray(publicConfig.allowedSchemas)?publicConfig.allowedSchemas.map(String).join('\n'):''} onChange={event=>patch({config:JSON.stringify({...publicConfig,allowedSchemas:event.target.value.split(/[\n,，]/)},null,2)})}/><small>{s('srcManualSchemaScopeHelp')}</small></label>}
-        {!legacyHttp&&publicConfig&&Object.hasOwn(publicConfig,'allowedTables')&&<label>{s('srcAllowedTables')}<textarea aria-label={s('srcAllowedTables')} disabled={busy||unknown} rows={4} spellCheck={false} placeholder={'public.orders\npublic.order_items'} value={Array.isArray(publicConfig.allowedTables)?publicConfig.allowedTables.map(String).join('\n'):''} onChange={event=>patch({config:JSON.stringify({...publicConfig,allowedTables:event.target.value.split(/[\n,，]/)},null,2)})}/><small>{s('srcManualTableScopeHelp')}</small></label>}
+        {!legacyHttp&&publicConfig&&Object.hasOwn(publicConfig,'allowedSchemas')&&<label>{s('srcAllowedSchemas')}<textarea aria-label={s('srcAllowedSchemas')} disabled={busy||formBlocked} rows={3} spellCheck={false} placeholder={draft.kind==='postgres'?'sales':'warehouse'} value={Array.isArray(publicConfig.allowedSchemas)?publicConfig.allowedSchemas.map(String).join('\n'):''} onChange={event=>patch({config:JSON.stringify({...publicConfig,allowedSchemas:event.target.value.split(/[\n,，]/)},null,2)})}/><small>{s('srcManualSchemaScopeHelp')}</small></label>}
+        {!legacyHttp&&publicConfig&&Object.hasOwn(publicConfig,'allowedTables')&&<label>{s('srcAllowedTables')}<textarea aria-label={s('srcAllowedTables')} disabled={busy||formBlocked} rows={4} spellCheck={false} placeholder={'public.orders\npublic.order_items'} value={Array.isArray(publicConfig.allowedTables)?publicConfig.allowedTables.map(String).join('\n'):''} onChange={event=>patch({config:JSON.stringify({...publicConfig,allowedTables:event.target.value.split(/[\n,，]/)},null,2)})}/><small>{s('srcManualTableScopeHelp')}</small></label>}
         </details>}
       </fieldset>
       </div>
       <div className="dc-category-panel" id="dc-panel-advanced" role={isPage&&!legacyHttp?'tabpanel':undefined} aria-labelledby={isPage&&!legacyHttp?'dc-tab-advanced':undefined} hidden={isPage&&tab!=='advanced'}>
-      <fieldset disabled={busy||unknown||legacyHttp}><legend>{s('srcAdvancedLegend')}</legend><div className="database-connections-grid">
-        <label>{s('srcTimezone')}<input aria-label={s('srcTimezone')} disabled={!publicConfig||busy||unknown||legacyHttp} placeholder={s('srcTimezonePlaceholder')} value={typeof publicConfig?.timezone==='string'?publicConfig.timezone:''} onChange={event=>patchConfig('timezone',event.target.value)}/></label>
-        <label>{s('srcMaxRows')}<input aria-label={s('srcMaxRowsAria')} disabled={!publicConfig||busy||unknown||legacyHttp} type="number" min={1} max={10000} step={1} value={typeof publicConfig?.maxRows==='number'?publicConfig.maxRows:''} onChange={event=>patchConfig('maxRows',Number(event.target.value))}/></label>
-        {draft.kind!=='http'&&<label>{s('srcTimeout')}<input aria-label={s('srcTimeoutAria')} title={s('srcTimeoutHint')} disabled={!publicConfig||busy||unknown||legacyHttp} type="number" min={100} max={30000} step={100} placeholder="5000" value={typeof publicConfig?.statementTimeoutMs==='number'?publicConfig.statementTimeoutMs:''} onChange={event=>{if(event.target.value!=='')patchConfig('statementTimeoutMs',Number(event.target.value));else if(publicConfig){const {statementTimeoutMs:_,...rest}=publicConfig;patch({config:JSON.stringify(rest,null,2)})}}}/></label>}
-      </div><details><summary>{s('srcAdvancedConfigurationDetails')}</summary><label>{s('srcPublicConfigurationJson')}<textarea aria-label={s('srcPublicConfigurationJson')} disabled={busy||unknown||legacyHttp} rows={7} spellCheck={false} value={draft.config} onChange={event=>patch({config:event.target.value})}/></label><p>{s('srcPublicConfigurationOnlyHelp')}</p></details></fieldset>
+      <fieldset disabled={busy||formBlocked||legacyHttp}><legend>{s('srcAdvancedLegend')}</legend><div className="database-connections-grid">
+        <label>{s('srcTimezone')}<input aria-label={s('srcTimezone')} disabled={!publicConfig||busy||formBlocked||legacyHttp} placeholder={s('srcTimezonePlaceholder')} value={typeof publicConfig?.timezone==='string'?publicConfig.timezone:''} onChange={event=>patchConfig('timezone',event.target.value)}/></label>
+        <label>{s('srcMaxRows')}<input aria-label={s('srcMaxRowsAria')} disabled={!publicConfig||busy||formBlocked||legacyHttp} type="number" min={1} max={10000} step={1} placeholder="1000" value={typeof publicConfig?.maxRows==='number'?publicConfig.maxRows:''} onChange={event=>patchConfig('maxRows',event.target.value===''?undefined:Number(event.target.value))}/></label>
+        {draft.kind!=='http'&&<label>{s('srcTimeout')}<input aria-label={s('srcTimeoutAria')} title={s('srcTimeoutHint')} disabled={!publicConfig||busy||formBlocked||legacyHttp} type="number" min={100} max={30000} step={100} placeholder="5000" value={typeof publicConfig?.statementTimeoutMs==='number'?publicConfig.statementTimeoutMs:''} onChange={event=>patchConfig('statementTimeoutMs',event.target.value===''?undefined:Number(event.target.value))}/></label>}
+      </div><details><summary>{s('srcAdvancedConfigurationDetails')}</summary><label>{s('srcPublicConfigurationJson')}<textarea aria-label={s('srcPublicConfigurationJson')} disabled={busy||formBlocked||legacyHttp} rows={7} spellCheck={false} value={draft.config} onChange={event=>patch({config:event.target.value})}/></label><p>{s('srcPublicConfigurationOnlyHelp')}</p></details></fieldset>
       </div>
-      {detail&&(!isPage||tab==='connection')&&<section className="database-connections-danger" aria-label={s('srcDeleteConnection')}><h3>{s('srcDeleteConnection')}</h3><p>{s('srcDeletionPermanentWarning')}</p><label className="dc-check"><input type="checkbox" aria-label={s('srcConfirmConnectionDeletion')} disabled={busy||unknown||legacyHttp} checked={confirmDelete} onChange={event=>setConfirmDelete(event.target.checked)}/>{s('srcConfirmDeletionRetainTombstone')}</label><button className="dc-danger" disabled={busy||unknown||legacyHttp||!confirmDelete} onClick={()=>void operation(async()=>{await client.remove(detail.source.sourceId,detail.source.version);if(!alive.current)return;setDetail(null);setDraft(empty());setView('list');await reloadList()})}>{s('srcDeleteConnection')}</button></section>}
+      {detail&&(!isPage||tab==='connection')&&<section className="database-connections-danger" aria-label={s('srcDeleteConnection')}><h3>{s('srcDeleteConnection')}</h3><p>{s('srcDeletionPermanentWarning')}</p><label className="dc-check"><input type="checkbox" aria-label={s('srcConfirmConnectionDeletion')} disabled={busy||formBlocked||legacyHttp} checked={confirmDelete} onChange={event=>setConfirmDelete(event.target.checked)}/>{s('srcConfirmDeletionRetainTombstone')}</label><button className="dc-danger" disabled={busy||formBlocked||legacyHttp||!confirmDelete} onClick={()=>void operation(async()=>{await client.remove(detail.source.sourceId,detail.source.version);if(!alive.current)return;setDetail(null);setDraft(empty());setView('list');await reloadList()})}>{s('srcDeleteConnection')}</button></section>}
       <footer className="database-connections-actions">
         {testing&&<Notice type="info" title={s('srcTestingConnection')}/>}
         {inlineFeedback && (resultNotice || (dirty && <p className="database-connections-dirty" role="status">{s('srcUnsavedChangesNotice')}</p>))}
+        {showTestHint&&<p id={testHelpId} className="dc-test-help">{s('srcPrepareConnectionTest')}</p>}
         <div>
-          {canSaveAndTest&&<button className="dc-primary" disabled={busy||unknown||legacyHttp} onClick={()=>submit(true)}>{s('srcSaveAndTest')}</button>}
-          <button className={canSaveAndTest?undefined:'dc-primary'} disabled={busy||unknown||legacyHttp} onClick={()=>submit()}>{s('srcSaveConnection')}</button>
-          {canChooseScope&&<button disabled={busy||unknown} onClick={()=>{setTab('scope');if(!discovered)void operation(()=>discover())}}>{s('srcSelectVisibilityScope')}</button>}
-          <button disabled={busy||dirty||unknown||legacyHttp||!detail?.source.enabled||!detail.source.hasCredential} onClick={()=>void operation(()=>testConnection(detail!))}>{s('srcTestConnection')}</button>
-          {dirty&&<button disabled={busy||unknown} onClick={()=>{setDraft(detail?fromDetail(detail):empty());setLatest(null);setFieldError(undefined);setError('')}}>{s('srcDiscardChanges')}</button>}
-        </div>{(detail||unknown&&draft.sourceId)&&<button disabled={busy} onClick={()=>void operation(()=>readLatest(detail?.source.sourceId??draft.sourceId))}>{s('srcLoadReviewLatestConfiguration')}</button>}
+          {canSaveAndTest&&<button className="dc-primary" disabled={busy||formBlocked||legacyHttp} onClick={()=>submit(true)}>{s('srcSaveAndTest')}</button>}
+          <button className={canSaveAndTest?undefined:'dc-primary'} disabled={busy||formBlocked||legacyHttp} onClick={()=>submit()}>{s('srcSaveConnection')}</button>
+          {canChooseScope&&<button disabled={busy||formBlocked} onClick={()=>{setTab('scope');if(!discovered)void operation(()=>discover())}}>{s('srcSelectVisibilityScope')}</button>}
+          <button disabled={busy||formBlocked||testBlocked} aria-describedby={showTestHint?testHelpId:undefined} onClick={()=>void operation(()=>testConnection(detail!))}>{s('srcTestConnection')}</button>
+          {dirty&&<button disabled={busy||formBlocked} onClick={()=>{setShowAddress(false);setDraft(detail?fromDetail(detail):empty());setLatest(null);setFieldError(undefined);setError('')}}>{s('srcDiscardChanges')}</button>}
+        </div>{(detail||savedReadPending||unknown&&draft.sourceId)&&<button disabled={busy} onClick={()=>void operation(()=>savedReadPending?retrySavedConfiguration(savedReadPending):readLatest(detail?.source.sourceId??draft.sourceId))}>{s('srcLoadReviewLatestConfiguration')}</button>}
       </footer>
     </main>}
   </section></div>
