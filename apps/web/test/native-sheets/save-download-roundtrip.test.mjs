@@ -141,6 +141,36 @@ test('XLSX chart moves once and the save shortcut persists its new anchor', {tim
   await expect.poll(async()=>(await files.openFile(alice.token,opened.file.fileId)).file.revision,{timeout:15000}).not.toBe(revision)
 })
 
+test('Web XLSX preserves formatting on valued and blank cells after saving and reloading through Node', {timeout:90000}, async t => {
+  const {page,files,alice,opened} = await fixture(t,false,false,undefined,undefined,false,true)
+  const formats = () => page.evaluate(() => {
+    const sheet=window.__genofficeDebug?.univerAPI.getActiveWorkbook()?.getActiveSheet()
+    if (!sheet) return null
+    return ['A2','D2'].map(address => {
+      const cell=sheet.getRange(address)
+      const style=cell.getCellStyleData()
+      return [style?.bl===1?'bold':'normal',style?.cl?.rgb,style?.bg?.rgb,cell.getHorizontalAlignment()]
+    })
+  })
+  await page.evaluate(() => {
+    const sheet=window.__genofficeDebug.univerAPI.getActiveWorkbook().getActiveSheet()
+    for(const address of ['A2','D2']){
+      const cell=sheet.getRange(address)
+      cell.setFontWeight('bold').setFontColor('#123456').setBackgroundColor('#FEDCBA').setHorizontalAlignment('center')
+    }
+  })
+  const expected=await formats()
+  assert.deepEqual(expected.map(([weight,font,fill,align])=>[weight,font?.toUpperCase(),fill?.toUpperCase(),align]),Array(2).fill(['bold','#123456','#FEDCBA','center']))
+  await page.keyboard.press('Control+s')
+  const head=async()=>(await files.openFile(alice.token,opened.file.fileId)).file.revision
+  await expect.poll(head,{timeout:15000}).not.toBe(opened.file.revision)
+  const saved=await JSZip.loadAsync(await files.readFile(alice.token,opened.file.fileId,await head()))
+  assert.match(await saved.file('xl/styles.xml').async('string'),/FFFEDCBA/i)
+  assert.match(await saved.file('xl/worksheets/sheet1.xml').async('string'),/<c\b[^>]*r="D2"[^>]*s="\d+"/)
+  await page.reload()
+  await expect.poll(formats,{timeout:9000}).toEqual(expected)
+})
+
 async function verifyAssistant(t, replay, live) {
   const {page, opened, files, original, alice, ownerPool} = await fixture(t, false, true, replay, live)
   const net = live ? undefined : mockProviderNetwork(t, [Buffer.from('data: {"choices":[{"delta":{"content":"Verified workbook reply"},"finish_reason":"stop"}]}\n\n'), Buffer.from('data: [DONE]\n\n')])
@@ -528,4 +558,38 @@ test('native XLSX explicitly writes literal analysis cells and independently sav
  await page.reload()
  await expect.poll(()=>page.evaluate(()=>window.__genofficeDebug?.univerAPI.getActiveWorkbook()?.getActiveSheet()?.getRange('J10').getValue()),{timeout:30_000}).toBe('=1+1')
  await expect.poll(()=>page.evaluate(()=>window.__genofficeDebug.univerAPI.getActiveWorkbook().getActiveSheet().getRange('J11').getValue())).toBe('0012')
+})
+
+test('Node XLSX restores worksheet layout and color scales after save and refresh', {timeout:90000}, async t => {
+  const {page,files,alice,opened}=await fixture(t,false,false,undefined,undefined,false,true)
+  const layout=()=>page.evaluate(()=>{
+    const sheet=window.__genofficeDebug?.univerAPI.getActiveWorkbook()?.getActiveSheet()
+    if(!sheet)return null
+    return {
+      merged:sheet.getMergedRanges().some(range=>range.getA1Notation()==='H2:I2'),
+      height:sheet.getRowHeight(1),width:Math.round(sheet.getColumnWidth(1)),
+      freeze:[sheet.getFreeze().xSplit,sheet.getFreeze().ySplit],
+      scale:sheet.getConditionalFormattingRules().find(rule=>rule.ranges.some(range=>range.startColumn===7))?.rule.config?.map(stop=>stop.color.toUpperCase()),
+    }
+  })
+  await page.evaluate(()=>{
+    const sheet=window.__genofficeDebug.univerAPI.getActiveWorkbook().getActiveSheet()
+    sheet.setRowHeight(1,66)
+    sheet.setColumnWidth(1,224)
+    sheet.getRange('H2:I2').merge()
+    sheet.setFreeze({startColumn:1,startRow:1,xSplit:1,ySplit:1})
+    sheet.addConditionalFormattingRule(sheet.newConditionalFormattingRule().setColorScale([
+      {index:0,color:'#FF0000',value:{type:'min'}},{index:1,color:'#00FF00',value:{type:'max'}},
+    ]).setRanges([sheet.getRange('H3:H5').getRange()]).build())
+  })
+  const expected={merged:true,height:66,width:224,freeze:[1,1],scale:['#FF0000','#00FF00']}
+  assert.deepEqual(await layout(),expected)
+  await page.keyboard.press('Control+s')
+  const head=async()=>(await files.openFile(alice.token,opened.file.fileId)).file.revision
+  await expect.poll(head,{timeout:15000}).not.toBe(opened.file.revision)
+  const saved=await JSZip.loadAsync(await files.readFile(alice.token,opened.file.fileId,await head()))
+  const xml=await saved.file('xl/worksheets/sheet1.xml').async('string')
+  for(const part of ['ref="H2:I2"','customHeight="1"','xSplit="1"','type="colorScale"'])assert.ok(xml.includes(part),part)
+  await page.reload()
+  await expect.poll(layout,{timeout:12000}).toEqual(expected)
 })
