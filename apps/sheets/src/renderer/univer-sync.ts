@@ -8068,7 +8068,6 @@ export function queueVisualInstall(
       visualInstallTimerRef.current = setTimeout(install, 100)
       return
     }
-    disposeVisuals(visualDisposablesRef.current)
     const addedVisuals = state.editJournal.visualAdds
     const visualEdits = state.editJournal.visualEdits
     // File visuals reflect pending edits: deleted ones disappear, moved ones
