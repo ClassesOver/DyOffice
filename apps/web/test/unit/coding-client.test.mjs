@@ -1,3 +1,4 @@
+import {createAssistantWorkspace} from '../../../../packages/browser-host/src/assistant-workspace.ts'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import {createAssistantClient} from '../../../../packages/browser-host/src/assistant.ts'
@@ -97,14 +98,20 @@ test('closing the document observer keeps its task ID and reopening reads the or
  await pending
  assert.doesNotMatch(JSON.stringify([...saved]),/Compute the total|cccccccc/)
  const reopened=create()
+ const workspace=createAssistantWorkspace({agents:descriptors,coding:reopened})
+ workspace.resetConversationTasks()
  try{
   for(let i=0;i<20&&!reopened.snapshot().length;i++)await new Promise(resolve=>setImmediate(resolve))
   assert.equal(reopened.snapshot()[0].id,id)
   assert.equal(reopened.snapshot()[0].state,'succeeded')
   assert.equal(reopened.snapshot()[0].output,'42')
+  assert.deepEqual(workspace.snapshot().conversationTasks,[])
+  assert.equal(workspace.snapshot().teamTasks[0].executionId,id)
+  workspace.openConversation('harness:'+id)
+  assert.equal(workspace.hasConversationTasks(),true)
   assert.deepEqual(calls,[{url:discovery,method:'GET'},{url:'/api/v1/agents/tasks',method:'POST'},
    {url:discovery,method:'GET'},{url:'/api/v1/agents/tasks/'+id+'/status?documentId='+documentId,method:'GET'}])
- }finally{reopened.dispose()}
+ }finally{workspace.dispose();reopened.dispose()}
 })
 
 test('cancelling a recovered running task targets its original ID without submitting work',async t=>{

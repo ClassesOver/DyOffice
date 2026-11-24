@@ -11,7 +11,8 @@ const bounded=(text:string)=>text.replace(/\0/g,'').slice(0,24000).replace(/[\uD
  * published; receiving messages never submits them to an editor or model. */
 export function createFileChat(fileId:string,transport:AgentTransport,request:Request){
   const path='/api/v1/files/'+fileId+'/assistant-chat'
-  const lifetime=new AbortController(),listeners=new Set<()=>void>()
+  let conversation=new AbortController()
+  const listeners=new Set<()=>void>()
   const records=new Map<string,Stored>(),outbox=new Map<string,Message>(),local=new Set<string>()
   const hidden=new Set<string>()
   const consumed=new WeakMap<object,Set<string>>()
@@ -25,15 +26,16 @@ export function createFileChat(fileId:string,transport:AgentTransport,request:Re
       let changed=false
       // A stalled history sync must not keep the Office turn from reaching the model.
       // Updates without a receipt stay queued for the next sync.
-      const signal=AbortSignal.any([lifetime.signal,AbortSignal.timeout(5000)])
+      const owner=conversation.signal
+      const signal=AbortSignal.any([owner,AbortSignal.timeout(5000)])
       try{
         for(;;){
           const updates=Array.from(outbox.values()).slice(0,8)
           const batch=await request<Batch>(path,'POST',{after:cursor,updates},signal)
-          if(closed)return
+          if(closed||owner.aborted)return
           for(const u of updates)if(outbox.get(key(u))===u)outbox.delete(key(u))
           for(const m of batch.messages){
-            // A sync started before reset can return several old pages alongside new local turns.
+            // The reset snapshot can span multiple pages alongside new local turns.
             if(hidePendingHistory&&!local.has(m.turnId))hidden.add(m.turnId)
             if(hidden.has(m.turnId))continue
             records.set(key(m),m);if(!local.has(m.turnId))changed=true
@@ -43,13 +45,15 @@ export function createFileChat(fileId:string,transport:AgentTransport,request:Re
           if(!batch.hasMore&&outbox.size===0)break
         }
       }catch(error){
-        if((error as {code?:string}).code==='stale_session'||[401,403,404].includes((error as {status:number}).status)){
+        if(!owner.aborted&&((error as {code?:string}).code==='stale_session'||[401,403,404].includes((error as {status:number}).status))){
           closed=true;outbox.clear();records.clear();changed=true
         }
       }finally{
-        if(changed){remote=[...records.values()].filter(m=>!local.has(m.turnId)).sort((a,b)=>a.order-b.order);for(const notify of listeners)notify()}
-        active=undefined
-        if(!closed)timer=setTimeout(refresh,700)
+        if(!owner.aborted){
+          if(changed){remote=[...records.values()].filter(m=>!local.has(m.turnId)).sort((a,b)=>a.order-b.order);for(const notify of listeners)notify()}
+          active=undefined
+          if(!closed)timer=setTimeout(refresh,700)
+        }
       }
     })()
     return active
@@ -97,6 +101,9 @@ export function createFileChat(fileId:string,transport:AgentTransport,request:Re
     return attach(turnId,loop,answer.seq,answer.text)
   }
   function reset(){
+    // An outstanding poll may already have read a snapshot from before the click.
+    // Take a new one immediately; unacknowledged outbox entries can safely be retried.
+    conversation.abort();conversation=new AbortController();active=undefined
     hidePendingHistory=true
     for(const m of records.values())hidden.add(m.turnId)
     for(const id of local)hidden.add(id)
@@ -107,5 +114,5 @@ export function createFileChat(fileId:string,transport:AgentTransport,request:Re
   const unbind=bindFileChat(transport,start)
   void refresh()
   return {resume,reset,read:()=>remote,subscribe:(listener:()=>void)=>{listeners.add(listener);return ()=>{listeners.delete(listener)}},
-    dispose(){unbind();closed=true;clearTimeout(timer);lifetime.abort();outbox.clear();listeners.clear()}}
+    dispose(){unbind();closed=true;clearTimeout(timer);conversation.abort();outbox.clear();listeners.clear()}}
 }

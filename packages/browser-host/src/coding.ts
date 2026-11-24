@@ -4,7 +4,7 @@ import {createSseAgentTransport,type SseTransportOptions} from './ai-transport.t
 import {createCodingRecovery,type TaskIdStorage} from './coding-recovery.ts'
 import type {AgentMessage} from '../../agent-core/src/types.ts'
 
-export interface CodingTaskView {id:string;agent:HarnessDescriptor;instruction:string;initiator:'office'|'user';state:'running'|'cancel_requested'|'succeeded'|'failed'|'unknown_outcome';summary?:string;failure?:string;output?:string;progress?:string;activity?:string;continuationModelId?:string}
+export interface CodingTaskView {id:string;restored?:boolean;agent:HarnessDescriptor;instruction:string;initiator:'office'|'user';state:'running'|'cancel_requested'|'succeeded'|'failed'|'unknown_outcome';summary?:string;failure?:string;output?:string;progress?:string;activity?:string;continuationModelId?:string}
 
 /** Reuses the bounded SSE transport. No process starts until Office invokes the tool. */
 export function createCodingClient(options:{agents:readonly HarnessDescriptor[];defaultId:string;csrfToken:string;getModelId:()=>string|null;documentId?:string;continuationRevision?:()=>string|undefined;storage?:TaskIdStorage;dataCatalog?:(input:{sourcesAfter?:string;resultsAfter?:string})=>Promise<unknown>;fetchImpl?:typeof fetch;onDelivery?:(hint:unknown,agent:{id:string;name:string;origin:'builtin'|'external'})=>void|Promise<void>}) {
@@ -27,7 +27,7 @@ export function createCodingClient(options:{agents:readonly HarnessDescriptor[];
     if(!task){
       const agent=agents.find(agent=>agent.id===status.agentId)
       if(!agent)return
-      task={id:status.turnId,agent,instruction:typeof status.instruction==='string'?status.instruction:'',initiator:'office',state:status.state}
+      task={id:status.turnId,restored:true,agent,instruction:typeof status.instruction==='string'?status.instruction:'',initiator:'office',state:status.state}
       tasks.push(task)
     }
     Object.assign(task,{state:status.state,activity:typeof status.activity==='string'?status.activity:undefined,progress:typeof status.progress==='string'?status.progress:undefined,failure:typeof status.failure==='string'?status.failure:undefined,summary:status.result?.summary,output:status.result?.output,continuationModelId:status.hasContinuation===true&&typeof status.continuationModelId==='string'?status.continuationModelId:undefined})

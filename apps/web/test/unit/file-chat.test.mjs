@@ -108,3 +108,25 @@ test('reset fences remote turns written between polls',async t=>{
   const fresh=startFileChat(transport,{text:'fresh start'},{})
   assert.deepEqual(texts(await fresh.history()),['after boundary','keep this'])
 })
+
+test('reset takes a fresh snapshot even when an older poll is still in flight',async t=>{
+  const server=transcript(),transport={},pending=Promise.withResolvers()
+  let delayNext=false
+  const chat=createFileChat('file',transport,async(...args)=>{
+    const snapshot=server.request(...args)
+    if(delayNext){delayNext=false;await pending.promise}
+    return snapshot
+  })
+  t.after(()=>chat.dispose())
+  await chat.resume('absent',{})
+  delayNext=true
+  const poll=chat.resume('absent',{})
+  server.add('before reset','old answer')
+  chat.reset()
+  server.add('after reset','new answer')
+  pending.resolve()
+  await poll
+  const fresh=startFileChat(transport,{text:'fresh question'},{})
+  assert.deepEqual(texts(await fresh.history()),['after reset','new answer'])
+  assert.deepEqual(texts(chat.read()),['after reset','new answer'])
+})

@@ -11,6 +11,7 @@ export interface WorkspaceTarget {
   kind: 'office' | 'harness' | 'channel'
 }
 export interface TeamTask {
+  restored?: boolean | undefined
   id: string
   executionId: string
   agent: Pick<WorkspaceTarget, 'name' | 'origin'>
@@ -55,8 +56,10 @@ export function createAssistantWorkspace(options: {
     focusedTask = '',
     focusRequest: WorkspaceFocusRequest | null = null,
     focusRequests = 0
-  const hiddenConversationTasks = new Set<string>()
-  const visibleInConversation = (task: TeamTask) => !hiddenConversationTasks.has(task.id)
+  let hasReset = false
+  const conversationVisibility = new Map<string, boolean>()
+  const visibleInConversation = (task: TeamTask) =>
+    conversationVisibility.get(task.id) ?? !(hasReset && task.restored)
   const directChannelTasks = new Set<string>()
   const listeners = new Set<() => void>()
   const notify = () => {
@@ -90,6 +93,7 @@ export function createAssistantWorkspace(options: {
     return [
       ...(options.coding?.snapshot().map((task) => ({
         id: 'harness:' + task.id,
+        restored: task.restored,
         executionId: task.id,
         targetId: 'harness:' + task.agent.id,
         agent: task.agent,
@@ -148,7 +152,8 @@ export function createAssistantWorkspace(options: {
     },
     hasConversationTasks: () => teamTasks().some(visibleInConversation),
     resetConversationTasks() {
-      for (const task of teamTasks()) hiddenConversationTasks.add(task.id)
+      hasReset = true
+      for (const task of teamTasks()) conversationVisibility.set(task.id, false)
       notify()
     },
     subscribe(listener: () => void) {
@@ -169,7 +174,7 @@ export function createAssistantWorkspace(options: {
       notify()
     },
     openConversation(id: string) {
-      hiddenConversationTasks.delete(id)
+      conversationVisibility.set(id, true)
       view = 'chat'
       focusedTask = id
       focusRequest = { id: ++focusRequests, view: 'chat', task: id }
