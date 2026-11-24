@@ -6,6 +6,7 @@
 import { decodeXlsxEscapes, decodeXmlText } from './xlsx-escapes.ts'
 import { resolveRelTarget } from './xlsx-drawing-add.ts'
 import { nextFreeRelationshipId } from './xlsx-sheets.ts'
+import { rootTail } from './xlsx-root-tail.ts'
 
 export const THREADED_COMMENTS_REL_TYPE =
   'http://schemas.microsoft.com/office/2017/10/relationships/threadedComment'
@@ -103,6 +104,29 @@ function xmlText(text: string): string {
   ).join('')
 }
 
+const THREAD_TEXT = /<([\w.-]+:)?text(?=[\s/>])([^>]*?)(?:\/>|>([\s\S]*?)<\/\1text\s*>)/
+
+function partRoot(xml: string, name: string) {
+  for (const match of xml.matchAll(/<!--[\s\S]*?-->|<([\w.-]+:)?([\w.-]+)(?=[\s/>])(?:[^"'<>]|"[^"]*"|'[^']*')*>/g)) {
+    if (match[0].startsWith('<!--')) continue
+    if (match[2] !== name) break
+    return { prefix: match[1] ?? '', tag: match[0], index: match.index! }
+  }
+  throw new Error(`Invalid ${name} part.`)
+}
+
+function appendPartChildren(xml: string, name: string, children: string): string {
+  const { prefix, tag, index } = partRoot(xml, name)
+  const element = prefix + name
+  if (tag.endsWith('/>')) {
+    return xml.slice(0, index) + tag.slice(0, -2) + '>' + children +
+      `</${element}>` + xml.slice(index + tag.length)
+  }
+  const tail = rootTail(xml, element)
+  if (!tail) throw new Error(`Invalid ${name} part.`)
+  return xml.slice(0, tail.rootClose) + children + xml.slice(tail.rootClose)
+}
+
 /// Stable person GUID derived from the display name, so the same user maps
 /// to one `<person>` across sessions without storing anything (FNV-1a over
 /// four seeds, laid out as a braced GUID like Excel's).
@@ -142,19 +166,21 @@ export function parseLegacyComments(commentsXml: string): Map<string, LegacyComm
 function parseThreads(xml: string): Map<string, ThreadEntry[]> {
   const threads = new Map<string, ThreadEntry[]>()
   for (const match of xml.matchAll(
-    /<threadedComment\b([^>]*)(?:\/>|>([\s\S]*?)<\/threadedComment>)/g,
+    /<([\w.-]+:)?threadedComment(?=[\s/>])([^>]*?)(?:\/>|>([\s\S]*?)<\/\1threadedComment\s*>)/g,
   )) {
-    const ref = attribute(match[1]!, 'ref')
+    const attrs = match[2]!
+    const ref = attribute(attrs, 'ref')
     if (ref === null) continue
-    const textMatch = /<text\b[^>]*>([\s\S]*?)<\/text>/.exec(match[2] ?? '')
+    const textMatch = THREAD_TEXT.exec(match[3] ?? '')
+    const done = attribute(attrs, 'done')
     const entry: ThreadEntry = {
       raw: match[0],
-      id: attribute(match[1]!, 'id') ?? '',
-      personId: attribute(match[1]!, 'personId') ?? '',
-      dT: attribute(match[1]!, 'dT') ?? '',
-      done: attribute(match[1]!, 'done') === '1',
-      parentId: attribute(match[1]!, 'parentId'),
-      text: textMatch ? xmlText(textMatch[1]!) : '',
+      id: attribute(attrs, 'id') ?? '',
+      personId: attribute(attrs, 'personId') ?? '',
+      dT: attribute(attrs, 'dT') ?? '',
+      done: done === '1' || done === 'true',
+      parentId: attribute(attrs, 'parentId'),
+      text: xmlText(textMatch?.[3] ?? ''),
     }
     const list = threads.get(ref)
     if (list) list.push(entry)
@@ -206,24 +232,25 @@ export function threadMirrorText(rootText: string, replies: readonly { text: str
 }
 
 function entryXml(
+  prefix: string,
   ref: string,
   entry: { id: string; personId: string; dT: string; text: string },
   parentId: string | null,
   done: boolean,
 ): string {
   return (
-    `<threadedComment ref="${escapeXml(ref)}" dT="${escapeXml(entry.dT)}"` +
+    `<${prefix}threadedComment ref="${escapeXml(ref)}" dT="${escapeXml(entry.dT)}"` +
     ` personId="${escapeXml(entry.personId)}" id="${escapeXml(entry.id)}"` +
     (parentId === null ? '' : ` parentId="${escapeXml(parentId)}"`) +
     (done ? ' done="1"' : '') +
-    `><text>${escapeXml(entry.text)}</text></threadedComment>`
+    `><${prefix}text>${escapeXml(entry.text)}</${prefix}text></${prefix}threadedComment>`
   )
 }
 
-function threadXml(ref: string, note: ThreadedNote, thread: SheetThread): string {
+function threadXml(prefix: string, ref: string, note: ThreadedNote, thread: SheetThread): string {
   return (
-    entryXml(ref, { ...thread, text: note.text }, null, thread.done) +
-    thread.replies.map((reply) => entryXml(ref, reply, thread.id, false)).join('')
+    entryXml(prefix, ref, { ...thread, text: note.text }, null, thread.done) +
+    thread.replies.map((reply) => entryXml(prefix, ref, reply, thread.id, false)).join('')
   )
 }
 
@@ -279,7 +306,7 @@ async function readPersons(pkg: ThreadedPackage): Promise<PersonsPart> {
   }
   const xml = await pkg.readText(path)
   const ids = new Set(
-    [...xml.matchAll(/<person\b([^>]*)\/?>/g)]
+    [...xml.matchAll(/<(?:[\w.-]+:)?person(?=[\s/>])([^>]*)>/g)]
       .map((match) => attribute(match[1]!, 'id'))
       .filter((id): id is string => id !== null),
   )
@@ -290,9 +317,11 @@ function ensurePerson(persons: PersonsPart, id: string, displayName: string): bo
   if (persons.ids.has(id)) return false
   persons.ids.add(id)
   const name = escapeXml(displayName)
-  persons.xml = persons.xml.replace(
-    '</personList>',
-    `<person displayName="${name}" id="${escapeXml(id)}" userId="${name}" providerId="None"/></personList>`,
+  const { prefix } = partRoot(persons.xml, 'personList')
+  persons.xml = appendPartChildren(
+    persons.xml,
+    'personList',
+    `<${prefix}person displayName="${name}" id="${escapeXml(id)}" userId="${name}" providerId="None"/>`,
   )
   return true
 }
@@ -353,11 +382,14 @@ async function savePersons(
 
 function replaceEntryText(raw: string, text: string): string {
   const escaped = escapeXml(text)
-  if (/<text\b[^>]*>[\s\S]*?<\/text>/.test(raw)) {
-    return raw.replace(/<text\b[^>]*>[\s\S]*?<\/text>/, () => `<text>${escaped}</text>`)
+  if (THREAD_TEXT.test(raw)) {
+    return raw.replace(THREAD_TEXT, (_tag, prefix = '', attrs: string) =>
+      `<${prefix}text${attrs}>${escaped}</${prefix}text>`)
   }
-  if (raw.endsWith('/>')) return `${raw.slice(0, -2)}><text>${escaped}</text></threadedComment>`
-  return raw.replace('</threadedComment>', () => `<text>${escaped}</text></threadedComment>`)
+  const prefix = /^<([\w.-]+:)?threadedComment/.exec(raw)?.[1] ?? ''
+  const child = `<${prefix}text>${escaped}</${prefix}text>`
+  if (raw.endsWith('/>')) return `${raw.slice(0, -2)}>${child}</${prefix}threadedComment>`
+  return raw.replace(/<\/(?:[\w.-]+:)?threadedComment\s*>$/, closing => child + closing)
 }
 
 async function nextFreeThreadPath(pkg: ThreadedPackage): Promise<string> {
@@ -412,6 +444,7 @@ export async function syncThreadedComments(
     xml ??
     '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n' +
       `<ThreadedComments xmlns="${THREADED_NS}"></ThreadedComments>`
+  const { prefix } = partRoot(updated, 'ThreadedComments')
   const written = new Set<string>()
 
   const writeThread = (ref: string, note: ThreadedNote, thread: SheetThread): string => {
@@ -424,7 +457,7 @@ export async function syncThreadedComments(
       text: threadMirrorText(note.text, thread.replies),
     })
     written.add(ref)
-    return threadXml(ref, note, thread)
+    return threadXml(prefix, ref, note, thread)
   }
 
   for (const [ref, entries] of threads) {
@@ -479,12 +512,12 @@ export async function syncThreadedComments(
     .map(([ref, note]) => writeThread(ref, note, note.thread))
     .join('')
   if (additions.length > 0) {
-    updated = updated.replace('</ThreadedComments>', () => `${additions}</ThreadedComments>`)
+    updated = appendPartChildren(updated, 'ThreadedComments', additions)
   }
 
   if (personsChanged) await savePersons(pkg, persons, touchedEntries)
   if (updated === xml) return { legacy, partRemoved: false, partPath, relsXml }
-  if (!/<threadedComment\b/.test(updated)) {
+  if (!/<(?:[\w.-]+:)?threadedComment(?=[\s/>])/.test(updated)) {
     if (partPath !== null) {
       pkg.remove(partPath)
       touchedEntries.add(partPath)

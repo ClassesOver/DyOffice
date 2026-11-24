@@ -87,6 +87,29 @@ test('Node XLSX keeps existing notes and comment threads when a new note is save
   assert.equal((await inspect(result))[1].thread.text,'Edited threaded root')
  })
 
+ await t.test('reads and saves prefixed threaded comment and person parts',async()=>{
+  const book=await JSZip.loadAsync(input)
+  const personsPath='xl/persons/person.xml'
+  for(const path of [threadPath,personsPath]){
+   const xml=await book.file(path).async('string')
+   book.file(path,xml.replace(/<(\/?)(ThreadedComments|threadedComment|text|personList|person)(?=[\s/>])/g,'<$1tc:$2')
+    .replace(' xmlns=',' xmlns:tc='))
+  }
+  const prefixed=await book.generateAsync({type:'nodebuffer'})
+  assert.deepEqual(await inspect(prefixed),[importedLegacy,importedModern])
+  const edited={...modern,text:'Edited prefixed root'}
+  const newThread={...thread,id:'{55555555-5555-5555-5555-555555555555}',
+   personId:'{66666666-6666-6666-6666-666666666666}',author:'Lin',replies:[]}
+  const result=await saveNotes(prefixed,[legacy,edited,{row:4,column:0,author:'Lin',text:'New prefixed thread',thread:newThread}])
+  const comments=await inspect(result)
+  assert.equal(comments[1].thread.text,'Edited prefixed root')
+  assert.deepEqual(comments[1].thread.replies,[reply])
+  assert.equal(comments[2].thread.author,'Lin')
+  const output=await JSZip.loadAsync(result)
+  assert.match(await output.file(threadPath).async('string'),/<tc:threadedComment ref="A5"/)
+  assert.match(await output.file(personsPath).async('string'),/<tc:person displayName="Lin"/)
+ })
+
  await t.test('unsupported thread metadata remains in the package when another note is added',async()=>{
   const altered=await JSZip.loadAsync(deleted)
   const threads=(await altered.file(threadPath).async('string')).replace(thread.dT,'x'.repeat(41))

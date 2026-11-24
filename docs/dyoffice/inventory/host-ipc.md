@@ -20,11 +20,11 @@
 
 | App | `browser-native` | `server-api` | `isolated-worker` | `unsupported` | `desktop-only` | Total |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| docs | 22 | 49 | 8 | 15 | 23 | 117 |
+| docs | 23 | 49 | 8 | 15 | 23 | 118 |
 | sheets | 18 | 42 | 24 | 20 | 11 | 115 |
-| slides | 157 | 46 | 1 | 7 | 12 | 223 |
+| slides | 160 | 46 | 1 | 7 | 12 | 226 |
 | pdf | 10 | 32 | 26 | 10 | 8 | 86 |
-| **all** | 207 | 169 | 59 | 52 | 54 | 541 |
+| **all** | 211 | 169 | 59 | 52 | 54 | 545 |
 
 Lifecycle is derived from the IPC operations the preload member performs:
 `request` (invoke/sendSync), `subscription` (main→renderer events, returns an
@@ -35,6 +35,7 @@ renderer call sites resolved by symbol, including shared workspace packages.
 
 | Rule | Class | Members | Verify in | Web seam | Rationale |
 | --- | --- | ---: | --- | --- | --- |
+| `docs-clipboard-image` | `browser-native` | 1 | T07 | Read same-origin clipboard URLs or rasterize CORS-enabled images in the browser | The browser uses its own origin policy and does not send clipboard URLs to the server media gateway. The native preload leaves this override undefined. |
 | `xlsx-inline-save-hint` | `browser-native` | 1 | T09 | Local same-process inline-save byte hint; final authenticated HTTP envelope remains bounded | Native preload explicitly leaves this hint undefined to preserve IPC chunking. Only the Web bridge supplies a bounded value; the hint grants no file or worker authority. |
 | `shell-chrome` | `desktop-only` | 18 | T07 | Web shell routes, tabs and in-page menus | Menu, tab, context-menu and window events originate in Electron's main process; a Web page owns its own menus and tabs. |
 | `shell-close-handshake` | `desktop-only` | 14 | T07 | beforeunload guard plus in-page save/print commands | Window-close and menu-driven save/print handshakes exist because the desktop main process owns the window; Web has no equivalent channel. |
@@ -76,7 +77,7 @@ renderer call sites resolved by symbol, including shared workspace packages.
 | `xlsx-external-data` | `unsupported` | 5 | T15 | Read-only data sources (T15) are the governed replacement | Workbook connections and external links reach arbitrary local files/servers; enabling them server-side needs T15 egress and credential policy. |
 | `xlsx-cross-window-pick` | `unsupported` | 7 | T09 | None in first release | Picking a range in another open workbook relies on shell-managed sibling tabs. |
 | `slides-presenter` | `browser-native` | 10 | T10 | Second window + BroadcastChannel (Presentation API where available) | Presenter/audience windows are coordinated through main today; same-origin windows can coordinate directly. |
-| `slides-deck-session` | `browser-native` | 123 | T10 | Deck session in a browser worker reusing pptx-ops; open/save through T06 | The deck model and journaled ops live in the Electron main process today. @genoffice/pptx-ops has no Node imports in src; @genoffice/pptx-engine has 3 Node-importing files that must be isolated before relocation. |
+| `slides-deck-session` | `browser-native` | 126 | T10 | Deck session in a browser worker reusing pptx-ops; open/save through T06 | The deck model and journaled ops live in the Electron main process today. @genoffice/pptx-ops has no Node imports in src; @genoffice/pptx-engine has 3 Node-importing files that must be isolated before relocation. |
 | `pdf-signing` | `unsupported` | 5 | T11 | None; signature validity is displayed only | Signing uses OS certificate stores (system-certificates.ts execs platform tools) and node-forge private keys on the client machine. |
 | `pdf-ocr` | `unsupported` | 1 | T11 | None in first release | ocr.ts bridges to the operating system OCR engine. |
 | `pdf-document-ops` | `isolated-worker` | 26 | T11 | PDF worker job reusing main-process code (pdf-lib + PDFium WASM on Node), output via T06 | Main-process PDF code uses pdf-lib, PDFium WASM, node:crypto and node:zlib. A browser port is possible later but is not assumed. |
@@ -173,6 +174,7 @@ renderer call sites resolved by symbol, including shared workspace packages.
 | `desktop.imageSearch` | request | invoke `ai:image-search` | 1 | `server-api` | `ai-media-search` |
 | `desktop.analyzeMedia` | request | invoke `docs:analyze-media` | 1 | `server-api` | `ai-media-search` |
 | `desktop.fetchImage` | request | invoke `ai:fetch-image` | 4 | `server-api` | `ai-media-search` |
+| `desktop.fetchClipboardImage` | local | — | 1 | `browser-native` | `docs-clipboard-image` |
 | `desktop.aiGenerateImage` | request | invoke `docs:ai-generate-image` | 1 | `server-api` | `ai-media-search` |
 | `desktop.pickAttachments` | request | invoke `files:pick` | 2 | `server-api` | `attachments` |
 | `desktop.addAttachmentPaths` | request | invoke `files:add` | 5 | `server-api` | `attachments` |
@@ -457,6 +459,8 @@ renderer call sites resolved by symbol, including shared workspace packages.
 | `slidesApi.setAnimations` | request | invoke `slides:set-animations` | 1 | `browser-native` | `slides-deck-session` |
 | `slidesApi.setSlideHidden` | request | invoke `slides:set-hidden` | 0 | `browser-native` | `slides-deck-session` |
 | `slidesApi.setSlidesHidden` | request | invoke `slides:set-slides-hidden` | 1 | `browser-native` | `slides-deck-session` |
+| `slidesApi.getCustomShows` | request | invoke `slides:get-custom-shows` | 2 | `browser-native` | `slides-deck-session` |
+| `slidesApi.setCustomShows` | request | invoke `slides:set-custom-shows` | 1 | `browser-native` | `slides-deck-session` |
 | `slidesApi.getSections` | request | invoke `slides:get-sections` | 1 | `browser-native` | `slides-deck-session` |
 | `slidesApi.setSections` | request | invoke `slides:set-sections` | 3 | `browser-native` | `slides-deck-session` |
 | `slidesApi.addSection` | request | invoke `slides:add-section` | 1 | `browser-native` | `slides-deck-session` |
@@ -496,6 +500,7 @@ renderer call sites resolved by symbol, including shared workspace packages.
 | `slidesApi.onCloseSaveRequest` | subscription | on `slides:close-save-request` | 1 | `desktop-only` | `shell-close-handshake` |
 | `slidesApi.onHistoryChanged` | subscription | on `slides:history-changed` | 1 | `browser-native` | `slides-deck-session` |
 | `slidesApi.onDeckChanged` | subscription | on `slides:deck-changed` | 2 | `browser-native` | `slides-deck-session` |
+| `slidesApi.reportCustomShowDraft` | notify | send `slides:custom-show-draft` | 1 | `browser-native` | `slides-deck-session` |
 | `slidesApi.reportCloseSaveResult` | notify | send `slides:close-save-result` | 2 | `desktop-only` | `shell-close-handshake` |
 | `slidesApi.setAutoSavePref` | notify | send `slides:autosave-pref` | 1 | `browser-native` | `dirty-and-drafts` |
 | `slidesApi.isDirty` | request | invoke `slides:is-dirty` | 6 | `browser-native` | `dirty-and-drafts` |
