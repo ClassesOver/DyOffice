@@ -107,6 +107,26 @@ describe('createSaveGate', () => {
     expect(gate.busy).toBe(false)
   })
 
+  it('waits for the active save including its renderer-side completion', async () => {
+    const gate = createSaveGate()
+    let finishRenderer!: () => void
+    const save = gate.run(async () => {
+      await new Promise<void>((resolve) => (finishRenderer = resolve))
+      return true
+    })
+    const waiting = gate.waitForCurrent()
+    expect(waiting).toBeDefined()
+    let settled = false
+    void waiting!.then(() => { settled = true })
+    await settle()
+    expect(settled).toBe(false)
+    finishRenderer()
+    await save
+    await waiting
+    expect(settled).toBe(true)
+    expect(gate.waitForCurrent()).toBeUndefined()
+  })
+
   it('a failed save does not block the next one and the gate reopens', async () => {
     const gate = createSaveGate()
     const failed = gate.run(() => Promise.reject(new Error('boom')))

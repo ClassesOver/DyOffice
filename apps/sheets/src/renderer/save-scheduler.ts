@@ -8,6 +8,7 @@
 export interface SaveGate {
   readonly busy: boolean
   run<T>(task: () => Promise<T>): Promise<T>
+  waitForCurrent(): Promise<void> | undefined
 }
 
 export function createSaveGate(): SaveGate {
@@ -15,6 +16,9 @@ export function createSaveGate(): SaveGate {
   return {
     get busy() {
       return inFlight !== null
+    },
+    waitForCurrent() {
+      return inFlight?.then(() => undefined, () => undefined)
     },
     run(task) {
       const next = (inFlight ?? Promise.resolve()).catch(() => undefined).then(task)

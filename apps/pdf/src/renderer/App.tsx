@@ -468,6 +468,7 @@ export type PdfAssistantView = {
 export type PdfHostLifecycle = {
   status: 'loading' | 'error' | 'empty' | 'password' | 'ready'
   state(): { dirty: boolean; blocked: boolean }
+  waitForSave?(): Promise<void>|undefined
   save(): Promise<boolean>
   gotoPage(page: number): void
 }
@@ -4969,6 +4970,7 @@ export default function App({ hostReadOnly = false, hostEditRestriction, hostSav
         dirty: dirty || !!textDraftRef.current || !!noteDraft,
         blocked: !!saveInFlightRef.current || !!confirmSaveRef.current || redactionRequestInFlightRef.current,
       }),
+      waitForSave:()=>confirmSaveRef.current?undefined:saveInFlightRef.current?.then(()=>undefined,()=>undefined),
       save: () => save(false, true),
       gotoPage: scrollToPage,
     })

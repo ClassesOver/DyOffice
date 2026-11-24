@@ -9,3 +9,21 @@ test('failed release can be retried while keeping mounted state',async()=>{const
 test('edits arriving after an approved close check are preserved',async()=>{const f=fixture();expect(await f.lifecycle.canClose()).toBe(true);f.dirty();expect(await f.lifecycle.dispose()).toBe(false);expect(f.release).not.toHaveBeenCalled();expect(f.cleanup).not.toHaveBeenCalled()})
 test('simultaneous close checks share the same save and retain edits made during saving',async()=>{const f=fixture();f.dirty();let finish!:(ok:boolean)=>void;f.save.mockImplementation(()=>new Promise(resolve=>{finish=resolve}));const first=f.lifecycle.canClose(),second=f.lifecycle.canClose();expect(f.save).toHaveBeenCalledOnce();finish(true);expect(await first).toBe(false);expect(await second).toBe(false);expect(f.release).not.toHaveBeenCalled()})
 test('disposing keeps the editor inert until lease release and restores interaction on failure',async()=>{let finish!:(value:void)=>void;let blocked=false;const setClosing=vi.fn(),cleanup=vi.fn();const life=createEditorCloseLifecycle({state:()=>({dirty:false,blocked}),save:async()=>true,release:()=>new Promise(resolve=>{finish=resolve}),cleanup,confirm:()=>true,notify:()=>{},setClosing});const pending=life.dispose();expect(setClosing).toHaveBeenLastCalledWith(true);blocked=true;finish();expect(await pending).toBe(false);expect(cleanup).not.toHaveBeenCalled();expect(setClosing).toHaveBeenLastCalledWith(false)})
+
+test('close waits for an in-flight save to settle before showing a prompt or pending warning',async()=>{
+ const f=fixture()
+ let finish!:()=>void
+ let active=true
+ let dirty=true
+ const pending=new Promise<void>(resolve=>{finish=()=>{active=false;dirty=false;resolve()}})
+ const waitForSave=vi.fn(()=>active?pending:undefined)
+ const life=createEditorCloseLifecycle({state:()=>({dirty,blocked:active}),waitForSave,save:f.save,release:f.release,cleanup:f.cleanup,confirm:f.confirm,notify:f.notify})
+ const closing=life.canClose()
+ await Promise.resolve()
+ expect(f.notify).not.toHaveBeenCalled()
+ expect(f.confirm).not.toHaveBeenCalled()
+ finish()
+ expect(await closing).toBe(true)
+ expect(waitForSave).toHaveBeenCalledTimes(2)
+ expect(f.notify).not.toHaveBeenCalled()
+})

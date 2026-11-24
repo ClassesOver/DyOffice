@@ -316,7 +316,7 @@ export async function mountSlidesEditor(host: SessionFileHost, container: HTMLEl
     stage.removeEventListener('beforeunload',beforeUnload);stage.removeEventListener('keydown',onKeyDown)
     sharedAssistant?.dispose();realtime.dispose();stop();unsubscribe();root.unmount();bridge.dispose()
   }
-  const lifecycle=createEditorCloseLifecycle({state:closeState,save:()=>editor?.saveAndWait()??Promise.resolve(false),release:()=>host.releaseLease(fileId),cleanup,setClosing:value=>{closing=value;container.inert=value;if(!value)changed()},confirm:()=>stage.confirm('演示文稿有未保存的更改，是否保存后关闭？取消将保留当前页签。'),notify:()=>stage.alert('保存仍在进行或结果待确认，请先在演示文稿中核对后再关闭。')})
+  const lifecycle=createEditorCloseLifecycle({state:closeState,waitForSave:()=>editor?.waitForSave()??bridge.waitForSave(),save:()=>editor?.saveAndWait()??Promise.resolve(false),release:()=>host.releaseLease(fileId),cleanup,setClosing:value=>{closing=value;container.inert=value;if(!value)changed()},confirm:()=>stage.confirm('演示文稿有未保存的更改，是否保存后关闭？取消将保留当前页签。'),notify:()=>stage.alert('保存仍在进行或结果待确认，请先在演示文稿中核对后再关闭。')})
   return {save:()=>editor?.saveAndWait()??Promise.resolve(false),canClose:lifecycle.canClose,dispose:lifecycle.dispose,unload(){void host.releaseLease(fileId,true).catch(()=>{});cleanup()}}
 }
 async function bootstrap() {
