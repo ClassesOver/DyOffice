@@ -9,7 +9,8 @@ import type {FastifyInstance} from 'fastify'
  * file transport forwards HTTP envelopes to the exact same authenticated API.
  * It never interprets SQL, performs analysis or accepts filesystem destinations.
  */
-export async function createHarnessDataMailbox(app:FastifyInstance,taskId:string) {
+export async function createHarnessDataMailbox(app:FastifyInstance,taskId:string,origin:string) {
+  const host=new URL(origin).host
   const directory=await mkdtemp(join(tmpdir(),'office-data-'))
   const prefix='/api/v1/agents/tasks/'+taskId+'/data/'
   let stopped=false,polling=false
@@ -36,7 +37,7 @@ export async function createHarnessDataMailbox(app:FastifyInstance,taskId:string
         !envelope.headers||typeof envelope.headers.authorization!=='string'||
         (envelope.body!==undefined&&typeof envelope.body!=='string'))throw Error('Invalid envelope')
       const result=await app.inject({method:envelope.method as 'GET'|'POST',url:envelope.path,
-        headers:{authorization:envelope.headers.authorization,'content-type':'application/json'},
+        headers:{host,authorization:envelope.headers.authorization,'content-type':'application/json'},
         ...(envelope.body===undefined?{}:{payload:envelope.body})})
       if(stopped)return
       const headers:Record<string,string>={}

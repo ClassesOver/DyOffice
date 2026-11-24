@@ -65,7 +65,7 @@ test('installed Codex accesses the same task data API through a task mailbox wit
  const mailbox=await createHarnessDataMailbox({async inject(request){
   requests.push(request)
   return {statusCode:200,headers:{'content-type':'application/json'},rawPayload:Buffer.from(JSON.stringify({sources:[{id:'sales'}]}))}
- }},'task_1')
+ }},'task_1','http://127.0.0.1')
  t.after(()=>mailbox.close())
  const controller=new AbortController(),grant={taskId:'task_1',credential:'task-only-credential',inputs:{sourceIds:['sales'],resultIds:[]}}
  let rounds=0,lastToolOutput=''

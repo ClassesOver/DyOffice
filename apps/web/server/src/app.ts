@@ -214,7 +214,7 @@ export async function buildLocalApp(config: LocalWebConfig): Promise<FastifyInst
         const bridge=await context.openModel()
         let mailbox:Awaited<ReturnType<typeof createHarnessDataMailbox>>|undefined
         try{
-          mailbox=context.data?await createHarnessDataMailbox(app,context.data.grant.taskId):undefined
+          mailbox=context.data?await createHarnessDataMailbox(app,context.data.grant.taskId,config.origin):undefined
           return await codingRuntime.run(input,signal,bridge,context.data?{...context.data,mailboxDirectory:mailbox!.directory}:undefined,context.onProgress)
         } finally{try{await mailbox?.close()}finally{await bridge.close()}}
       }},

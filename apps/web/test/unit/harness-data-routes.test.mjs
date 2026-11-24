@@ -4,6 +4,7 @@ import {createHash} from 'node:crypto'
 import Fastify from 'fastify'
 import {registerHarnessDataRoutes,registerAnalysisDeliveryRoutes} from '../../server/src/modules/coding/data-routes.ts'
 import {createHarnessDataMailbox} from '../../server/src/modules/coding/data-mailbox.ts'
+import {createCsrfService} from '../../server/src/modules/auth/csrf.ts'
 import {registerWorkspaceSourceToolRoutes} from '../../server/src/modules/sources/tool-routes.ts'
 import {registerAssistantSourceCatalog} from '../../server/src/modules/sources/assistant-catalog.ts'
 import {setTimeout as delay} from 'node:timers/promises'
@@ -69,9 +70,19 @@ test('Office artifact download remains owner-authenticated and forced attachment
 
 test('network-free mailbox forwards the same task API and removes its transport directory',async t=>{
  const app=Fastify();t.after(()=>app.close())
+ const origin='http://localhost:3081'
+ const previous=process.env.NODE_ENV
+ process.env.NODE_ENV='development'
+ try {
+  const csrf=createCsrfService({origin,insecureHttpDev:true,key:'x'.repeat(32),deploymentId:randomUUID()})
+  app.addHook('onRequest',async request=>csrf.bindRequest(request))
+ } finally {
+  if(previous===undefined)delete process.env.NODE_ENV
+  else process.env.NODE_ENV=previous
+ }
  registerHarnessDataRoutes(app,{async execute(){return {items:['authorized']}},dispose(){}})
  await app.ready()
- const mailbox=await createHarnessDataMailbox(app,'task')
+ const mailbox=await createHarnessDataMailbox(app,'task',origin)
  try {
   async function submit(path){
    const id=randomUUID()
@@ -105,7 +116,7 @@ test('a slow mailbox request is forwarded once and answered once, never with a s
  let executions=0
  registerHarnessDataRoutes(app,{async execute(){executions++;await new Promise(resolve=>setTimeout(resolve,200));return {items:['slow']}},dispose(){}})
  await app.ready()
- const mailbox=await createHarnessDataMailbox(app,'task')
+ const mailbox=await createHarnessDataMailbox(app,'task','http://localhost')
  try {
   const ids=[randomUUID(),randomUUID()]
   for(const id of ids)await writeFile(join(mailbox.directory,id+'.request'),JSON.stringify({path:'/api/v1/agents/tasks/task/data/execute',method:'POST',headers:{authorization:'Bearer '+'x'.repeat(43)},body:JSON.stringify({operation:'list_connections',arguments:{}})}))
