@@ -92,7 +92,7 @@ console.log(JSON.stringify({total,resultId:query.artifact.resultId,commandId:rec
   if(origin==='external')outcome=await runHarness(script,{HARNESS_BASE_URL:baseUrl,HARNESS_TASK_ID:grant.taskId,HARNESS_TASK_TOKEN:grant.credential},scratch)
   else {
     const {createHarnessDataMailbox}=await import('../../server/src/modules/coding/data-mailbox.ts')
-    const mailbox=await createHarnessDataMailbox(app,grant.taskId)
+    const mailbox=await createHarnessDataMailbox(app,grant.taskId,new URL(baseUrl).origin)
     t.after(()=>mailbox.close())
     const python=process.env.DYOFFICE_TEST_ANALYSIS_PYTHON
     const helper=join(root,'.dyoffice-analysis-build/harness-data.mjs')

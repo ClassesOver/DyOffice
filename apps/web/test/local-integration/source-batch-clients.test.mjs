@@ -28,7 +28,7 @@ test('Codex can read the authorized SQL catalog and continue a batch of columns 
   const grant = await access.issue({ token: f.alice.token, agentId: 'codex', inputs: { sourceIds: ['metrics'], resultIds: [] }, signal: new AbortController().signal })
   const app = Fastify()
   registerHarnessDataRoutes(app, access)
-  const mailbox = await createHarnessDataMailbox(app, grant.taskId)
+  const mailbox = await createHarnessDataMailbox(app, grant.taskId, 'http://127.0.0.1')
   t.after(async () => { await mailbox.close(); await app.close() })
   const env = { OFFICE_HARNESS_DATA_MAILBOX: mailbox.directory, OFFICE_HARNESS_DATA_URL: 'http://127.0.0.1/api/v1/agents', OFFICE_HARNESS_TASK_ID: grant.taskId, OFFICE_HARNESS_DATA_CREDENTIAL: grant.credential }
   const describe = async args => (await runHarnessDataCommand(parseArgs(['execute', 'search_objects', '--args', JSON.stringify({ sourceId: 'metrics', ...args })]), { cwd: process.cwd(), env })).detail

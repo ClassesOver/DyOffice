@@ -21,6 +21,7 @@ export interface HarnessDataDownload {
 }
 export const harnessDataRequestLimit=(operation:string)=>operation==='artifacts.stage'?12*1024*1024:operation==='artifacts.commit'?80*1024:40*1024
 const failure=()=>new Error('Harness data operation unavailable')
+const sourceOperations=new Set(['list_connections','search_objects','execute_sql'])
 const aborted=()=>new DOMException('Harness data operation cancelled','AbortError')
 const checkAbort=(signal?:AbortSignal)=>{if(signal?.aborted)throw aborted()}
 const identifier=(value:unknown):string=>{if(typeof value!=='string'||!/^[A-Za-z0-9_-]{1,128}$/.test(value))throw failure();return value}
@@ -154,7 +155,7 @@ export function createHarnessDataClient(options:HarnessDataClientOptions) {
   }
   async function execute<T=unknown>(operation:string,args:Record<string,unknown>,signal?:AbortSignal):Promise<T> {
     checkAbort(signal)
-    if(typeof operation!=='string'||operation.length>100||!/^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*){1,3}$/.test(operation)||!record(args))throw failure()
+    if(typeof operation!=='string'||operation.length>100||(!sourceOperations.has(operation)&&!/^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*){1,3}$/.test(operation))||!record(args))throw failure()
     let body:string
     try{body=JSON.stringify({operation,arguments:args})}catch{throw failure()}
     if(Buffer.byteLength(body)>harnessDataRequestLimit(operation))throw failure()
