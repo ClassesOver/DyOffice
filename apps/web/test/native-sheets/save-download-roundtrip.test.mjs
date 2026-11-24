@@ -14,6 +14,7 @@ import { password } from '../helpers/identity.mjs'
 import { sheetsGateway } from '../helpers/sheets-gateway.mjs'
 import { sandboxFixture } from '../helpers/native-sandbox.mjs'
 import { createXlsxNativeWorker } from '../../worker/src/native/xlsx.ts'
+import { createCrossPlatformProcess } from '../../worker/src/sandbox/cross-platform-process.ts'
 import { buildLocalApp } from '../../server/src/app.ts'
 import { createGlobalConfigService } from '../../server/src/modules/admin/service.ts'
 import { createSkillService } from '../../server/src/modules/skills/service.ts'
@@ -23,7 +24,7 @@ import { configuredSheetsRuntime } from '../../server/src/modules/sheets/runtime
 import { buildSheetsGateway } from '../../server/sheets/build.mjs'
 import { holdFirstResponseEnd } from '../helpers/delayed-http-response.mjs'
 
-async function fixture(t, autoSave = false, enableAssistant = false, replay = undefined, live = undefined, analysis = false, namedCopy = false) {
+async function fixture(t, autoSave = false, enableAssistant = false, replay = undefined, live = undefined, analysis = false, namedCopy = false, nativeSandbox) {
   const directory = await mkdtemp(join(tmpdir(), 'dyoffice-sheets-download-'))
   let f, app, browser, server, analysisAdapter, beforeHttpRequest
   t.after(async () => {
@@ -56,7 +57,7 @@ async function fixture(t, autoSave = false, enableAssistant = false, replay = un
     },
     readSheet: async (input, _name, kind) => bound(kind === 'formulas' ? replay.formulas : replay.outline)(input),
     savePlan: async () => assert.fail('The assistant must not save the workbook'),
-  } : copyRuntime?.sheetsNative ?? createXlsxNativeWorker(await sandboxFixture('native'))
+  } : copyRuntime?.sheetsNative ?? createXlsxNativeWorker(nativeSandbox ?? await sandboxFixture('native'))
   const sheets = { ...(copyRuntime ?? { sheetsNative: native, sheetsPlanner: gateway.planWorkbookSave, sheetsPackageReader: gateway.readWorkbookPackage }), nativeSheetsDirectory: process.env.DYOFFICE_TEST_SHEETS_DIRECTORY ?? fileURLToPath(new URL('../../dist-sheets/', import.meta.url)) }
   f = await fileFixture(t, { origin, ...sheets })
   app = f.app
@@ -109,6 +110,36 @@ async function assertWorkbook(bytes, expectedA2, expectedA3 = 7.5) {
 }
 
 const saveAndDownload = page => page.getByRole('button', { name: 'Save and download', exact: true })
+
+test('XLSX chart moves once and the save shortcut persists its new anchor', {timeout:120_000}, async t => {
+  const manifest = JSON.parse(await readFile(process.env.DYOFFICE_TEST_HOST_MANIFEST ?? new URL('../../../../.dyoffice-native-build/host-manifest.json',import.meta.url),'utf8'))
+  const sandbox = createCrossPlatformProcess({deploymentId:randomUUID(),binary:manifest.nativeBinary,sha256:manifest.nativeSha256,
+    allowedCommands:['open','read_range','read_formula_cells','read_row_outline','read_media','recalc_cells','save_archive','close']})
+  const {page,files,alice,opened} = await fixture(t,false,false,undefined,undefined,false,false,sandbox)
+  const chart = page.locator('.shape-editable').filter({has:page.locator('.xlsx-chart')})
+  await expect(chart).toBeVisible()
+  const before = await chart.boundingBox()
+  const x = before.x + 15, y = before.y + 15
+  await page.mouse.move(x,y)
+  await page.mouse.down()
+  await page.mouse.move(x+80,y+40,{steps:8})
+  await expect(page.locator('.shape-drag-ghost')).toBeVisible()
+  await expect(page.locator('.shape-drag-ghost .xlsx-chart')).toHaveCount(0)
+  await page.mouse.up()
+  await expect(page.locator('.shape-drag-ghost')).toHaveCount(0)
+  await expect.poll(async()=>Math.round((await chart.boundingBox())?.x-before.x)).toBe(80)
+  await page.keyboard.press('Control+s')
+  await expect.poll(async()=>(await files.openFile(alice.token,opened.file.fileId)).file.revision,{timeout:15000}).not.toBe(opened.file.revision)
+  const moved = await chart.boundingBox()
+  await page.reload()
+  await expect(chart).toBeVisible({timeout:30000})
+  const reopened = await chart.boundingBox()
+  assert.ok(Math.abs(reopened.x-moved.x)<2 && Math.abs(reopened.y-moved.y)<2)
+  const revision = (await files.openFile(alice.token,opened.file.fileId)).file.revision
+  await page.evaluate(()=>window.__genofficeDebug.univerAPI.getActiveWorkbook().getActiveSheet().getRange('A2').setValue(19))
+  await page.keyboard.press('Meta+s')
+  await expect.poll(async()=>(await files.openFile(alice.token,opened.file.fileId)).file.revision,{timeout:15000}).not.toBe(revision)
+})
 
 async function verifyAssistant(t, replay, live) {
   const {page, opened, files, original, alice, ownerPool} = await fixture(t, false, true, replay, live)

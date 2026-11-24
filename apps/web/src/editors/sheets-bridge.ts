@@ -206,7 +206,18 @@ export function createSheetsBridge(host: SessionFileHost, fileId: string, prefs:
     onLanguageChanged:noEvent,onThemeChanged:noEvent,onDocumentThemeChanged:noEvent,onAutoSaveDefaultChanged:noEvent,onAiPanelPrefsChanged:noEvent,onUserDisplayNameChanged:noEvent,
     onWorkbookPickArmed:noEvent,onWorkbookPickSelected:noEvent,onWorkbookPickCancelled:noEvent,
     isCopyEmfAvailable:async()=>false,
-    onChromePressed:noEvent,onMenuAction:noEvent,onCloseSaveRequest:noEvent,onRecoveryPrompt:noEvent,onSidecarCrashed:noEvent,
+    onChromePressed:noEvent,onCloseSaveRequest:noEvent,onRecoveryPrompt:noEvent,onSidecarCrashed:noEvent,
+    onMenuAction(listener: Parameters<DesktopApi['onMenuAction']>[0]){
+      const keydown = (event: KeyboardEvent) => {
+        if (disposed || event.isComposing || event.altKey || event.shiftKey ||
+            (!event.ctrlKey && !event.metaKey) || event.key.toLowerCase() !== 's') return
+        event.preventDefault()
+        event.stopPropagation()
+        if (!event.repeat) listener('save')
+      }
+      window.addEventListener('keydown', keydown, true)
+      return () => window.removeEventListener('keydown', keydown, true)
+    },
     onWorkbookRenamed(listener:(name:string)=>void){
       renameListeners.add(listener)
       return ()=>{renameListeners.delete(listener)}

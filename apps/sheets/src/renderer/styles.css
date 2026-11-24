@@ -2785,6 +2785,11 @@ textarea:focus {
   will-change: transform;
 }
 
+.shape-drag-ghost.chart-move-outline {
+  box-sizing: border-box;
+  border: 1.5px dashed var(--sheets-select-frame);
+}
+
 .shape-editable .shape-resize-outline {
   position: absolute;
   top: 0;
