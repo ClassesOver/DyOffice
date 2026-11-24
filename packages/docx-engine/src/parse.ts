@@ -8551,10 +8551,9 @@ async function mediaPartSrc(
   partPath: string,
   mime: string,
 ): Promise<string> {
-  const declared = (file as unknown as { _data?: { uncompressedSize?: number } })._data
-    ?.uncompressedSize
-  if (declared === LAZY_MEDIA_PLACEHOLDER_BYTES) {
-    const hash = lazyMediaHashOf(await file.async('uint8array'))
+  const bytes = await file.async('uint8array')
+  if (bytes.length === LAZY_MEDIA_PLACEHOLDER_BYTES) {
+    const hash = lazyMediaHashOf(bytes)
     if (hash) {
       let seen = lazyHashesByZip.get(zip)
       if (!seen) lazyHashesByZip.set(zip, (seen = new Set()))
@@ -8562,7 +8561,21 @@ async function mediaPartSrc(
       return lazyMediaUrl(hash, partPath)
     }
   }
-  return `data:${mime};base64,${await file.async('base64')}`
+  return `data:${mime};base64,${encodeMediaBytes(bytes)}`
+}
+
+function encodeMediaBytes(bytes: Uint8Array & { toBase64?: () => string }): string {
+  if (bytes.toBase64) return bytes.toBase64()
+  if (typeof Buffer !== 'undefined') {
+    return Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength).toString('base64')
+  }
+  // 旧浏览器每次编码 3 的整数倍字节，只有最后一段可能出现填充符。
+  const step = 3 * 8192
+  let encoded = ''
+  for (let i = 0; i < bytes.length; i += step) {
+    encoded += btoa(String.fromCharCode(...bytes.subarray(i, i + step)))
+  }
+  return encoded
 }
 
 /** attach the media data URL of each w:numPicBullet to the levels referencing it */

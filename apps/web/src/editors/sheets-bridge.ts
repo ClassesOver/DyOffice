@@ -11,7 +11,7 @@ import {
   workbookRecalcRequestSchema,workbookRecalcResultSchema,
   workbookConnectionsResultSchema, workbookSaveRequestSchema,
   workbookFindCellsRequestSchema, workbookFindCellsResultSchema,
-  type DesktopApi, type WorkbookFile, type WorkbookSaveRequest,
+  type DesktopApi, type WorkbookFile, type WorkbookSaveRequest, type WorkbookRangeResult,
 } from '../../../sheets/src/shared/desktop-api'
 
 type Preferences = Awaited<ReturnType<SessionFileHost['getPreferences']>>
@@ -21,7 +21,8 @@ type ParentAiWindow = Window & {
 }
 type SaveResult = {canceled: false; file: WorkbookFile; touchedEntries: string[]}
 type Recovery = {saved?: Awaited<ReturnType<SessionFileHost['saveSheets']>>; resolve(value: SaveResult): void; reject(error: unknown): void}
-type Session = {revision: string; file: WorkbookFile; attachment?: boolean; extras?: Promise<Record<string,unknown>>}
+type OpeningViewport = {sheetId:string;endRow:number;endColumn:number;result:WorkbookRangeResult}
+type Session = {openingViewport?:OpeningViewport; revision: string; file: WorkbookFile; attachment?: boolean; extras?: Promise<Record<string,unknown>>}
 type WorkspaceWorkbook = {id:string;name:string;revision:string}
 const workbookId=/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/
 export function createSheetsBridge(host: SessionFileHost, fileId: string, prefs: Preferences, {fetchImpl = fetch, onChange = () => {},getAttachmentFile,docxCreationAvailable=false}: {fetchImpl?: typeof fetch; onChange?: () => void; getAttachmentFile?:(path:string)=>Promise<File|null>; docxCreationAvailable?:boolean} = {}) {
@@ -107,11 +108,16 @@ export function createSheetsBridge(host: SessionFileHost, fileId: string, prefs:
     try { return await request(revision,method,input) }
     finally { const next=waiting.shift(); if(next) next(); else inFlight-- }
   }
-  async function open() {
-    const state = host.getState(fileId), raw = await call(state.revision.revision,'inspect')
+  async function open(withViewport=false) {
+    const state = host.getState(fileId), {openingViewport,...raw} = await call(state.revision.revision,'inspect',withViewport?{openingViewport:true}:{})
     const file = workbookFileSchema.parse({...raw,sessionId:crypto.randomUUID(),name:state.name,sha256:state.revision.sha256,fileBytes:state.revision.size,readOnly:!state.lease,needsSaveAs:false,automaticRecoveryDisabled:true})
     if (disposed) throw hostError('UNAVAILABLE','disposed')
-    sessions.set(file.sessionId,{revision:state.revision.revision,file}); queued=false
+    const result=withViewport&&openingViewport&&file.sheets.some(s=>s.id===openingViewport.sheetId)
+      &&Number.isInteger(openingViewport.endRow)&&openingViewport.endRow>=0&&openingViewport.endRow<160
+      &&Number.isInteger(openingViewport.endColumn)&&openingViewport.endColumn>=0&&openingViewport.endColumn<34
+      ? workbookRangeResultSchema.safeParse(openingViewport.result) : undefined
+    const preview=result?.success&&result.data.indexingComplete ? {...openingViewport,result:result.data} : undefined
+    sessions.set(file.sessionId,{revision:state.revision.revision,file,openingViewport:preview}); queued=false
     return file
   }
   function sheet(current: Session, sheetId: string) {
@@ -224,7 +230,7 @@ export function createSheetsBridge(host: SessionFileHost, fileId: string, prefs:
     },
     hasQueuedWorkbook:async()=>queued,consumeNewBlankWorkbook:async()=>false,consumeHeadlessExport:async()=>null,
     notifyPendingEdits(count: number){pendingEdits=count;onChange()},
-    selectWorkbook:open,
+    selectWorkbook:()=>open(queued),
     async closeWorkbook(id: string){const current=sessions.get(id);sessions.delete(id);if(current?.attachment)await call(current.revision,'merge-sources/close',{sessionId:id})},
     async readWorkbookMedia(input){const request=workbookMediaRequestSchema.parse(input),current=session(request.sessionId);return workbookMediaResultSchema.parse(await call(current.revision,'media',{visualId:request.visualId}))},
     async recalcWorkbook(input){
@@ -245,6 +251,11 @@ export function createSheetsBridge(host: SessionFileHost, fileId: string, prefs:
         { ...(current.attachment ? {sessionId: request.sessionId} : {}), sheetName, range },
       ))
       const range = request.range
+      const preview=current.openingViewport
+      if(preview&&preview.sheetId===request.sheetId&&range.endRow<=preview.endRow&&range.endColumn<=preview.endColumn&&host.getState(fileId).revision.revision===current.revision){
+        // The Node reader's only range-dependent field is cells. Hand the renderer its own copy.
+        return structuredClone({...preview.result,cells:preview.result.cells.filter(c=>c.row>=range.startRow&&c.row<=range.endRow&&c.column>=range.startColumn&&c.column<=range.endColumn)})
+      }
       const columns = range.endColumn - range.startColumn + 1
       // Match the Web native worker's per-request limit while keeping the renderer's range intact.
       const rowsPerBatch = Math.max(1, Math.floor(20_000 / columns))

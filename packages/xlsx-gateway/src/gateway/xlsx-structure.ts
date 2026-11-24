@@ -91,6 +91,8 @@ export function inferWorksheetAddresses(worksheetXml: string): string {
 
   const bodyStart = sheetDataOpen.index + sheetDataOpen[0].length
   const body = worksheetXml.slice(bodyStart, closeIndex)
+  // 常见工作表把地址写在首个属性。只要有例外，就交给下方的完整推断流程。
+  if (!/<(?:row|c)\b(?!\s+r="[^">]*")/.test(body)) return worksheetXml
   let currentRow = 0
   let firstRow = true
   let changed = false

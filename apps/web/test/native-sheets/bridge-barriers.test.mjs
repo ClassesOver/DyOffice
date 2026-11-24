@@ -224,3 +224,25 @@ for(const extra of [-1,0,1])test(`full UTF-8 save envelope at 4 MiB ${extra>=0?'
   assert.deepEqual(f.counts(),{preparations:1,commits:1})
  }
 })
+
+test('opening viewport serves only matching revision, sheet and bounds, with independent cell values',async t=>{
+ const data={cells:[{row:0,column:0,value:1},{row:1,column:0,value:2},{row:1,column:1,value:4,formula:'A2*2'}],rows:[],merges:[],hyperlinks:[],conditionalRules:[],autoFilter:null,autoFilterColumns:[],dataValidations:[],sheetProtection:null,rowBreaks:[],colBreaks:[],pageSetup:null,protectedRanges:[],indexedThroughRow:9,indexingComplete:true}
+ const calls=[],f=await fixture(t,(path,init)=>{
+  if(path.endsWith('/inspect')){
+   const {openingViewport}=JSON.parse(init.body)
+   return json({...metadata,sheets:[metadata.sheets[0],{...metadata.sheets[0],id:'2',name:'Other'}],...(openingViewport?{openingViewport:{sheetId:'1',endRow:3,endColumn:2,result:data}}:{})})
+  }
+  if(path.endsWith('/range')){calls.push(JSON.parse(init.body));return json({...data,cells:[]})}
+ })
+ const file=await f.bridge.api.selectWorkbook(),read=(sheetId,endRow,startColumn=0)=>f.bridge.api.readWorkbookRange({sessionId:file.sessionId,sheetId,range:{startRow:1,endRow,startColumn,endColumn:1}})
+ const first=await read('1',1)
+ assert.deepEqual(first.cells,data.cells.slice(1))
+ first.cells[1].value=999
+ assert.deepEqual((await read('1',2,1)).cells,[data.cells[2]])
+ assert.equal(calls.length,0)
+ await read('2',1);await read('1',4)
+ assert.deepEqual(calls.map(call=>call.sheetName),['Other','Sheet1'])
+ await f.bridge.api.saveWorkbookEdits({...sheetsSaveRequest('1',[{row:1,column:0,writeValue:true,value:10}]),sessionId:file.sessionId})
+ await read('1',1)
+ assert.equal(calls.length,3)
+})

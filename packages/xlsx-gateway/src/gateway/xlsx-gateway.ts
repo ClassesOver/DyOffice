@@ -3559,7 +3559,7 @@ function parseWorksheetCells(
   let match: RegExpExecArray | null
   while ((match = cellPattern.exec(worksheetXml)) !== null) {
     const attributes = match[1] ?? ''
-    const address = readXmlAttribute(attributes, 'r')
+    const address = /(?:^|\s)r="([^"]*)"/.exec(attributes)?.[1]
     if (!address || !isGridCellAddress(address)) continue
     const body = match[2] ?? ''
     const formula = /<f(?:\s[^>]*[^/>])?>([\s\S]*?)<\/f>/.exec(body)?.[1]
@@ -3567,7 +3567,7 @@ function parseWorksheetCells(
       cells[address] = { value: null, formula: `=${decodeXmlText(formula)}` }
       continue
     }
-    const type = readXmlAttribute(attributes, 't')
+    const type = /(?:^|\s)t="([^"]*)"/.exec(attributes)?.[1]
     if (type === 'inlineStr') {
       const text = [...body.matchAll(/<t(?:\s[^>]*)?>([\s\S]*?)<\/t>/g)]
         .map((textMatch) => decodeCellText(textMatch[1] ?? ''))

@@ -241,9 +241,11 @@ async function readSheetMetadata(text: ZipText) {
     const xml = await text(path)
     const cells = new Map<string, number>()
     for (const match of xml.matchAll(/<(?:[\w.-]+:)?c\b([^>]*)>/g)) {
-      const address = readAttribute(match[1]!, 'r')
-      const style = readAttribute(match[1]!, 's')
-      if (address && style !== null && /^\d+$/.test(style)) cells.set(decodeAttribute(address), Number(style))
+      const attrs = match[1]!
+      const style = /(?:^|\s)s="(\d+)"/.exec(attrs)?.[1]
+      if (style === undefined) continue
+      const address = /(?:^|\s)r="([^"]*)"/.exec(attrs)?.[1]
+      if (address) cells.set(decodeAttribute(address), Number(style))
     }
     sheets.set(sheet.name,{styleIndexes:cells,...readWorksheetMetadata(xml)})
   }
@@ -287,6 +289,45 @@ async function entryDigests(zip: JSZip) {
     entries.push({ name, crc32: crc32(buf) >>> 0, uncompressedSize: buf.byteLength })
   }
   return entries
+}
+
+type Bounds = {startRow: number; endRow: number; startColumn: number; endColumn: number}
+function readRange(sheet: ParsedSheet,r: Bounds) {
+  const cells = sheet.cells.filter(
+    c => c.row >= r.startRow && c.row <= r.endRow && c.column >= r.startColumn && c.column <= r.endColumn,
+  )
+  return {
+    cells,
+    rows: [],
+    merges: [],
+    hyperlinks: [],
+    conditionalRules: [],
+    autoFilter: sheet.autoFilter,
+    autoFilterColumns: sheet.autoFilterColumns,
+    dataValidations: [],
+    sheetProtection: sheet.sheetProtection,
+    rowBreaks: [],
+    colBreaks: [],
+    pageSetup: null,
+    protectedRanges: sheet.protectedRanges,
+    indexedThroughRow: sheet.rowCount-1,
+    indexingComplete: true,
+  }
+}
+
+// The fallback viewport is 80 rows × 26 columns with an 80-row / 8-column buffer.
+// Keep the optional first read small even when many cells reference one large shared string.
+function openingViewport(sheet: ParsedSheet) {
+  const endRow=Math.min(159,sheet.rowCount-1),endColumn=Math.min(33,sheet.columnCount-1)
+  const result=readRange(sheet,{startRow:0,endRow,startColumn:0,endColumn})
+  const limit=256*1024
+  let chars=0
+  for(const cell of result.cells){
+    chars+=(typeof cell.value==='string'?cell.value.length:0)+(cell.formula?.length??0)
+    if(chars>limit)return undefined
+  }
+  if(Buffer.byteLength(JSON.stringify(result))>limit)return undefined
+  return {sheetId:sheet.id,endRow,endColumn,result}
 }
 
 async function handleCommand(packet: Record<string, unknown>): Promise<unknown> {
@@ -342,7 +383,7 @@ async function handleCommand(packet: Record<string, unknown>): Promise<unknown> 
     const sessionId = randomUUID()
     sessions.set(sessionId, { sheets: parsedSheets, zip })
     const workbookProtection=readWorkbookProtection(workbookXml)
-    return {
+    const inspection = {
       sessionId,
       entryCount,
       sheets: parsedSheets.map(s => ({
@@ -375,6 +416,10 @@ async function handleCommand(packet: Record<string, unknown>): Promise<unknown> 
       definedNames: [],
       ...(workbookProtection?{workbookProtection}:{}),
     }
+    if(packet.openingViewport===true&&Buffer.byteLength(JSON.stringify(inspection))<=256*1024){
+      return {...inspection,openingViewport:openingViewport(parsedSheets[inspection.activeTab]!)}
+    }
+    return inspection
   }
   if (cmd === 'close') {
     sessions.delete(String(packet.sessionId ?? ''))
@@ -390,26 +435,7 @@ async function handleCommand(packet: Record<string, unknown>): Promise<unknown> 
       startColumn: number
       endColumn: number
     }
-    const cells = sheet.cells.filter(
-      c => c.row >= r.startRow && c.row <= r.endRow && c.column >= r.startColumn && c.column <= r.endColumn,
-    )
-    return {
-      cells,
-      rows: [],
-      merges: [],
-      hyperlinks: [],
-      conditionalRules: [],
-      autoFilter: sheet.autoFilter,
-      autoFilterColumns: sheet.autoFilterColumns,
-      dataValidations: [],
-      sheetProtection: sheet.sheetProtection,
-      rowBreaks: [],
-      colBreaks: [],
-      pageSetup: null,
-      protectedRanges: sheet.protectedRanges,
-      indexedThroughRow: sheet.rowCount-1,
-      indexingComplete: true,
-    }
+    return readRange(sheet,r)
   }
   if (cmd === 'find_cells') {
     const sheet=sessions.get(String(packet.sessionId??''))?.sheets.find(s=>s.id===packet.sheetId)
