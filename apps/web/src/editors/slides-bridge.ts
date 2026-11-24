@@ -29,7 +29,7 @@ import type {
 type Preferences = Awaited<ReturnType<SessionFileHost['getPreferences']>>
 type SaveResult = {ok: boolean; path?: string; error?: string}
 type SaveReceipt = Awaited<ReturnType<SessionFileHost['saveSlides']>>
-type Recovery = {saved?: SaveReceipt; resolve(value: SaveResult): void; reject(error: unknown): void}
+type Recovery = {candidate?:string|undefined;saved?: SaveReceipt; resolve(value: SaveResult): void; reject(error: unknown): void}
 /** The server pptx session: pinned to the file revision, fenced by generation. */
 type Session = {nameCandidate?:string;authority?:{editorId:string;leaseEpoch:number};revision: string; generation: number; dirty: boolean; size: {cx: number; cy: number}; defaultFont: string; writeProtected: boolean}
 type ApplyResponse = {generation: number; dirty: boolean; changed?: number[]; created?: Array<{id:string;slide:number;index:number}>; size?: {cx:number;cy:number}; order?: string[]; index?: number; sections?: SectionInfo[] | null; history?: {canUndo: boolean; canRedo: boolean}; slide?: OpenResult['slides'][number]; transaction?: {applied:boolean;dryRun?:boolean;plan?:string[];failures?:Array<{index:number;error:string}>;records?:Array<{op:{op:string};slidePath?:string;created?:string[];after?:unknown}>}}
@@ -349,6 +349,21 @@ export function createSlidesBridge(host: SessionFileHost, fileId: string, prefs:
   async function fetchSlide(index: number): Promise<OpenResult['slides'][number]> {
     const current = requireSession()
     return await call(current.revision, current.generation, 'slide', {index}) as OpenResult['slides'][number]
+  }
+  // Read the first slide from the exact generation about to be saved. A newer draft must never name an older revision.
+  async function firstSlideName(current: Session): Promise<string | undefined> {
+    if (!host.getState(fileId).autoNamePending) return
+    if (current.nameCandidate) return current.nameCandidate
+    const slide = await fetchSlide(0)
+    let first: string | undefined
+    for (const node of slide.nodes) {
+      if (node.type !== 'text' && node.type !== 'shape') continue
+      const line = node.text?.lines.map(line => line.runs.filter(run => !run.isBullet && !run.redact).map(run => run.text).join('').trim()).find(Boolean)
+      if (!line) continue
+      if (node.placeholder === 'title' || node.placeholder === 'ctrTitle') return line
+      first ??= line
+    }
+    return first
   }
   async function fetchDeck(): Promise<{slides: OpenResult['slides']}> {
     const current = requireSession()
@@ -947,6 +962,8 @@ export function createSlidesBridge(host: SessionFileHost, fileId: string, prefs:
       // flushActiveEdit runs before this point, so an overlay edit that just committed
       // has already marked the session dirty and takes the full receipt path.
       if (!current.dirty) return {ok: true as const, path: host.getState(fileId).name}
+      const generation=current.generation
+      const candidate=await firstSlideName(current).catch(()=>undefined)
       let saved: SaveReceipt | undefined
       await acquireSlot()
       try {
@@ -960,13 +977,13 @@ export function createSlidesBridge(host: SessionFileHost, fileId: string, prefs:
         if (!saved && host.getState(fileId).status !== 'unknown') return {ok: false as const, error: text.saveFailed}
         // The receipt is unknown: the renderer's save promise stays pending and
         // its exact journal survives until the entry's Confirm save outcome resolves it.
-        return new Promise<SaveResult>((resolve, reject) => { recovery = {resolve, reject}; onChange() })
+        return new Promise<SaveResult>((resolve, reject) => { recovery = {resolve, reject,candidate:current.generation===generation?candidate:undefined}; onChange() })
       } finally {releaseSlot()}
       if (disposed) throw hostError('UNAVAILABLE', 'disposed')
       // Adopt the committed head: the pinned revision moved, the generation continues.
       current.revision = saved.revision
       current.dirty = false
-      if(current.nameCandidate)await host.nameSavedBlank?.(fileId,saved.revision,current.nameCandidate).catch(()=>undefined)
+      if(candidate&&current.generation===generation)await host.nameSavedBlank?.(fileId,saved.revision,candidate).catch(()=>undefined)
       return {ok: true as const, path: host.getState(fileId).name}
     },
     onHistoryChanged(handler: (state: HistoryState) => void) {
@@ -1440,7 +1457,7 @@ export function createSlidesBridge(host: SessionFileHost, fileId: string, prefs:
       // this confirmation; edits made afterwards take the normal path.
       if (session) {
         session.revision = saved.revision; session.dirty = false
-        if(session.nameCandidate)await host.nameSavedBlank?.(fileId,saved.revision,session.nameCandidate).catch(()=>undefined)
+        if(pending.candidate)await host.nameSavedBlank?.(fileId,saved.revision,pending.candidate).catch(()=>undefined)
       }
       committed=saved
       recovery = null

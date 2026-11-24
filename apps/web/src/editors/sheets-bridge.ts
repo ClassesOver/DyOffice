@@ -17,7 +17,7 @@ import {
 
 type Preferences = Awaited<ReturnType<SessionFileHost['getPreferences']>>
 type ParentAiWindow = Window & {
-  dyofficeCreateAiXlsx?: (request:{title:string;sheetName?:string;content:string})=>Promise<void>
+  dyofficeCreateAiXlsx?: (request:{title:string;sheetName?:string;content:string;layout?:import('@genoffice/xlsx-gateway/gateway/csv-import').SheetExportLayout})=>Promise<void>
   dyofficeCreateAiDoc?: (request:{type?:'docx'|'pdf';title:string;content:string;file?:Blob})=>Promise<void>
 }
 type SaveResult = {canceled: false; file: WorkbookFile; touchedEntries: string[]}
@@ -27,7 +27,7 @@ type Session = {openingViewport?:OpeningViewport; revision: string; file: Workbo
 type WorkspaceWorkbook = {id:string;name:string;revision:string}
 const mergeExtensions = ['xlsx','xlsm','xls','csv','tsv'] as const
 const workbookId=/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/
-export function createSheetsBridge(host: SessionFileHost, fileId: string, prefs: Preferences, {fetchImpl = fetch, onChange = () => {},getAttachmentFile,docxCreationAvailable=false,pickMergeFiles=(signal:AbortSignal)=>pickLocalFiles(mergeExtensions.map(ext=>'.'+ext).join(','),signal,true)}: {fetchImpl?: typeof fetch; onChange?: () => void; getAttachmentFile?:(path:string)=>Promise<File|null>; docxCreationAvailable?:boolean; pickMergeFiles?:(signal:AbortSignal)=>Promise<File[]>} = {}) {
+export function createSheetsBridge(host: SessionFileHost, fileId: string, prefs: Preferences, {fetchImpl = fetch, onChange = () => {},getAttachmentFile,getExportLayout,docxCreationAvailable=false,pickMergeFiles=(signal:AbortSignal)=>pickLocalFiles(mergeExtensions.map(ext=>'.'+ext).join(','),signal,true)}: {fetchImpl?: typeof fetch; onChange?: () => void; getAttachmentFile?:(path:string)=>Promise<File|null>; docxCreationAvailable?:boolean;getExportLayout?:(sheetName:string)=>import('@genoffice/xlsx-gateway/gateway/csv-import').SheetExportLayout; pickMergeFiles?:(signal:AbortSignal)=>Promise<File[]>} = {}) {
   let saveFence:(()=>boolean)|null=null
   async function guardedSave(check:()=>boolean,action:()=>Promise<boolean>){
     if(saveFence||!check())return false
@@ -145,6 +145,30 @@ export function createSheetsBridge(host: SessionFileHost, fileId: string, prefs:
     const preview=result?.success&&result.data.indexingComplete ? {...openingViewport,result:result.data} : undefined
     sessions.set(file.sessionId,{revision:state.revision.revision,file,openingViewport:preview}); queued=false
     return file
+  }
+  async function openSaved(revision:string):Promise<WorkbookFile> {
+    const file=await open(),current=session(file.sessionId)
+    if(current.revision!==revision||!host.getState(fileId).autoNamePending)return file
+    try {
+      const visible=file.sheets.filter(sheet=>!sheet.hidden)
+      let candidate=visible.map(sheet=>sheet.name.trim()).find(name=>name&&!/^(?:sheet|工作表|ワークシート|シート)\s*\d*$/i.test(name))
+      if(!candidate){
+        const first=visible.find(sheet=>(sheet.valueCellCount??sheet.storedCellCount??1)>0)
+        if(first){
+          const range={startRow:0,endRow:Math.min(first.rowCount,8)-1,startColumn:0,endColumn:Math.min(first.columnCount,8)-1}
+          const {cells}=workbookRangeResultSchema.parse(await call(revision,'range',{sheetName:first.name,range}))
+          const redactions=await api.readWorkbookRedactions({sessionId:file.sessionId})
+          if(redactions.status==='unreadable')return file
+          const marks=redactions.status==='ok'?redactions.states.filter(state=>state.sheetName===first.name).flatMap(state=>state.marks):[]
+          const title=cells.find(cell=>!cell.formula&&typeof cell.value==='string'&&cell.value.trim()&&
+            !marks.some(mark=>cell.row>=mark.startRow&&cell.row<=mark.endRow&&cell.column>=mark.startColumn&&cell.column<=mark.endColumn))?.value
+          if(typeof title==='string')candidate=title.trim().split(/[\r\n]/,1)[0]
+        }
+      }
+      if(candidate&&!disposed)await api.autoRenameWorkbook(file.sessionId,candidate)
+    }catch{ /* Naming is optional; the revision has already been saved. */ }
+    if(disposed)throw hostError('UNAVAILABLE','disposed')
+    return current.file
   }
   function sheet(current: Session, sheetId: string) {
     const value = current.file.sheets.find(value => value.id === sheetId)
@@ -322,7 +346,7 @@ export function createSheetsBridge(host: SessionFileHost, fileId: string, prefs:
       try {
         saved=await host.saveSheets(fileId,request,saveFence??(()=>true))
         committed=saved
-        return {canceled:false as const,file:await open(),touchedEntries:saved.touchedEntries}
+        return {canceled:false as const,file:await openSaved(saved.revision),touchedEntries:saved.touchedEntries}
       } catch(error) {
         // Teardown cannot undo a dispatched commit. Leave its durable/unknown
         // state in the host, but never recreate recovery for an unmounted view.
@@ -348,7 +372,7 @@ export function createSheetsBridge(host: SessionFileHost, fileId: string, prefs:
     async createDocument(input:import('../../../sheets/src/shared/desktop-api').WorkbookCreateDocumentRequest){
       try{
         const parent=parentWindow()
-        if(input.type==='xlsx'&&typeof parent?.dyofficeCreateAiXlsx==='function'){await parent.dyofficeCreateAiXlsx({title:input.title,...(input.sheetName?{sheetName:input.sheetName}:{}),content:input.content});return {ok:true}}
+        if(input.type==='xlsx'&&typeof parent?.dyofficeCreateAiXlsx==='function'){await parent.dyofficeCreateAiXlsx({title:input.title,...(input.sheetName?{sheetName:input.sheetName,...(getExportLayout?{layout:getExportLayout(input.sheetName)}:{})}:{}),content:input.content});return {ok:true}}
         if(input.type==='docx'&&docxCreationAvailable&&typeof parent?.dyofficeCreateAiDoc==='function'){await parent.dyofficeCreateAiDoc({title:input.title,content:input.content});return {ok:true}}
         if(input.type==='pdf'&&typeof parent?.dyofficeCreateAiDoc==='function'){
           const response=await fetchImpl(new URL('../../../docs/src/renderer/fonts/NotoSansCJKsc-Regular-subset.woff2',import.meta.url))
@@ -441,7 +465,7 @@ export function createSheetsBridge(host: SessionFileHost, fileId: string, prefs:
       pending.saved ??= await host.reconcileSheets(fileId,saveFence??(()=>true))
       if (disposed) throw hostError('UNAVAILABLE','disposed')
       committed=pending.saved
-      const file=await open()
+      const file=await openSaved(pending.saved.revision)
       recovery=null
       pending.resolve({canceled:false,file,touchedEntries:pending.saved.touchedEntries})
     } catch(error) {

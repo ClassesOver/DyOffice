@@ -65,7 +65,7 @@ export async function mountSheetsEditor(host: SessionFileHost, container: HTMLEl
   else document.documentElement.dataset.theme = prefs.theme
   let naming = false, copying = false, copyNotice = ''
   const copyLifetime = new AbortController()
-  const bridge = createSheetsBridge(host,fileId,prefs,{docxCreationAvailable:opened.capabilities?.docx==='editable',onChange:()=>changed(),getAttachmentFile:path=>assistant?.api.getAttachmentFile(path)??Promise.resolve(null)})
+  const bridge = createSheetsBridge(host,fileId,prefs,{getExportLayout:name=>{if(!editor)throw new Error(text.unavailable);return editor.getExportLayout(name)},docxCreationAvailable:opened.capabilities?.docx==='editable',onChange:()=>changed(),getAttachmentFile:path=>assistant?.api.getAttachmentFile(path)??Promise.resolve(null)})
   const documentApi=createWebWorkbookDocumentApi(bridge.api,async input=>downloadWebCsv(input),{language:locale})
   const assistantNotice = editorAssistantNotice(assistantResult,prefs.showAssistant,locale)
   const assistantAvailable = Boolean(assistant?.available && prefs.showAssistant !== false)
@@ -192,6 +192,7 @@ export async function mountSheetsEditor(host: SessionFileHost, container: HTMLEl
       {fileOpen&&<div className="file-menu" role="group" aria-label={fileLabel}>
         <button type="button" disabled={downloadDisabled} title={text.saveDownloadVersionHint} onClick={()=>{setFileOpen(false);fileButton.current?.focus();void saveAndDownload()}}>{text.saveDownload}</button>
         <button type="button" disabled={csvDisabled} onClick={()=>{setFileOpen(false);fileButton.current?.focus();void exportCsv()}}>{exportCsvLabel}</button>
+        {namedCopy&&<button type="button" disabled={!loaded||!canCopy()||readOnly||copying} onClick={()=>{setFileOpen(false);void editor?.nameWithAi()}}>{locale==='zh'?'用 AI 命名副本…':'Name a copy with AI…'}</button>}
         {signed&&historical&&<a href={`/api/v1/files/${fileId}/content?revision=${state.revision.revision}&download=1`} download={state.name}>{text.download}</a>}
       </div>}
     </div>

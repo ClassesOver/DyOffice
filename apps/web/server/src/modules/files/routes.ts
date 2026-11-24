@@ -12,8 +12,12 @@ import { uuidSchema as id, fileParamsSchema as params, emptyQuerySchema as empty
 import { registerRevisionRoutes } from '../revisions/routes.ts'
 import type { RevisionService } from '../revisions/service.ts'
 import type { LeaseService } from '../leases/service.ts'
-import { createAiXlsxDocument } from '../sheets/create-document.ts'
+import { createAiXlsxDocument, type AiXlsxInput } from '../sheets/create-document.ts'
 
+const sheetSizes = (maxIndex:number) => ({type:'array',maxItems:maxIndex,items:{type:'array',minItems:2,maxItems:2,items:[{type:'integer',minimum:1,maximum:maxIndex},{type:'number',exclusiveMinimum:0}]}})
+const sheetLayout = {type:'object',additionalProperties:false,required:['defaultRowHeight','defaultColumnWidth','rows','columns'],properties:{
+  defaultRowHeight:{type:'number',exclusiveMinimum:0},defaultColumnWidth:{type:'number',exclusiveMinimum:0},rows:sheetSizes(1048576),columns:sheetSizes(16384),
+}}
 const token = (request: FastifyRequest) => cookies(request).session ?? ''
 export function registerFileRoutes(app: FastifyInstance, files: FileService, sessions: SessionService, csrf: ReturnType<typeof createCsrfService>, saves?: { revisions: RevisionService; leases: LeaseService; wordCollaboration?: boolean }) {
   const admission = objectTransferAdmission(app)
@@ -66,9 +70,9 @@ export function registerFileRoutes(app: FastifyInstance, files: FileService, ses
       if (request.body !== undefined) throw authError(400)
       return files.finishUpload(token(request), (request.params as { id: string }).id)
     }))
-    api.post('/api/v1/ai/xlsx-documents', { bodyLimit: 16*1024*1024, schema: { querystring: emptyQuery, body: { type:'object',additionalProperties:false,required:['title','content'],properties:{title:{type:'string',minLength:1,maxLength:200},sheetName:{type:'string',minLength:1,maxLength:31},content:{type:'string',minLength:1,maxLength:15*1024*1024}} } } }, (request,reply) => transfer(request,reply,async()=>{
+    api.post('/api/v1/ai/xlsx-documents', { bodyLimit: 16*1024*1024, schema: { querystring: emptyQuery, body: { type:'object',additionalProperties:false,required:['title','content'],properties:{title:{type:'string',minLength:1,maxLength:200},sheetName:{type:'string',minLength:1,maxLength:31},content:{type:'string',minLength:1,maxLength:15*1024*1024},layout:sheetLayout} } } }, (request,reply) => transfer(request,reply,async()=>{
       if(files.capabilities.xlsx!=='editable')throw authError(415)
-      return createAiXlsxDocument(files,token(request),request.body as {title:string;sheetName?:string;content:string})
+      return createAiXlsxDocument(files,token(request),request.body as AiXlsxInput)
     }))
     api.delete('/api/v1/uploads/:id', { schema: { params, querystring: emptyQuery } }, async (request, reply) => {
       await files.cancelUpload(token(request), (request.params as { id: string }).id)

@@ -19,6 +19,7 @@ import {
   worksheetXmlChunks,
   type CsvGridShape,
   type CsvImportOptions,
+  type SheetExportLayout,
 } from './csv-import.ts'
 import { DEFAULT_THEME_XML } from './xlsx-default-theme.ts'
 import { MINIMAL_STYLESHEET_XML } from './xlsx-default-styles.ts'
@@ -63,7 +64,7 @@ export async function csvToXlsxBufferForOpen(
 export async function sheetCsvToXlsxBuffer(
   csvText: string,
   sheetName = 'Sheet1',
-  options?: CsvImportOptions,
+  options?: CsvImportOptions & { layout?: SheetExportLayout | undefined },
 ): Promise<Buffer> {
   const shape = csvGridShape(csvText, ',', options)
   return xlsxBufferFromGrid(csvRows(csvText, ','), shape, sheetName, options)
@@ -83,7 +84,7 @@ async function xlsxBufferFromGrid(
   rows: Iterable<readonly string[]>,
   shape: CsvGridShape,
   sheetName: string,
-  options?: CsvImportOptions,
+  options?: CsvImportOptions & { layout?: SheetExportLayout | undefined },
 ): Promise<Buffer> {
   validateSheetName(sheetName)
   const zip = new JSZip()
@@ -141,7 +142,7 @@ async function xlsxBufferFromGrid(
 function worksheetXmlStream(
   rows: Iterable<readonly string[]>,
   shape: CsvGridShape,
-  options?: CsvImportOptions,
+  options?: CsvImportOptions & { layout?: SheetExportLayout | undefined },
 ): Readable {
   return Readable.from(
     (function* (): Generator<Buffer> {
@@ -150,6 +151,7 @@ function worksheetXmlStream(
       // abort lands while the compression is still running (the error the
       // generator throws ends the archive).
       const chunks = worksheetXmlChunks(rows, shape, {
+        layout: options?.layout,
         onRow: (rowsWritten) => {
           options?.onProgress?.({
             phase: 'write',

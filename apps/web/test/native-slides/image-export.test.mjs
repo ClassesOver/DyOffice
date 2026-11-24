@@ -319,6 +319,7 @@ test('PPTX saves authored shape colors and reopens editable objects in both UI t
   }
 })
 
+
 test('PPTX thumbnail menus copy and paste an editable slide that survives saving and reloading',{timeout:120000},async t=>{
   const f=await fixture(t),{page}=f
   const original=await readFile(deckFixture)
@@ -1148,4 +1149,30 @@ test('PPTX pastes a copied object as an editable shape across browser tabs',{tim
   await destination.route('**/slides/clipboard-paste',route=>route.fulfill({json:null,contentType:'application/json'}))
   await destination.keyboard.press('Control+v')
   await expect.poll(pictureCount).toBe(before+1)
+})
+
+test('Ctrl+S names an untitled presentation from the first slide once', {timeout:90000},async t=>{
+  const f=await fixture(t),{page}=f
+  const bytes=await readFile(new URL('../../../shell/build/shell-new/blank.pptx',import.meta.url))
+  const upload=await f.files.stageUpload(f.alice.token,{name:'未命名.pptx',size:bytes.length,autoName:true})
+  await f.files.receiveUpload(f.alice.token,upload.uploadId,bytes)
+  const {file}=await f.files.finishUpload(f.alice.token,upload.uploadId)
+  await page.goto(f.origin+'/native-pptx/?fileId='+file.fileId)
+  await expect(page.locator('.app-main')).toBeVisible({timeout:45000})
+  await expect.poll(()=>page.evaluate(async()=>(await window.slidesApi?.getRenderSlides())?.length??0),{timeout:30000}).toBeGreaterThan(0)
+  const title='季度工作回顾'
+  const added=await page.evaluate(text=>window.slidesApi.addElement({slideIndex:0,kind:'textbox',xPx:40,yPx:40,wPx:360,hPx:60,fitWidthPx:960,text}),title)
+  assert.ok(added?.sourceId)
+  const save=async()=>{
+    const [commit]=await Promise.all([page.waitForResponse(r=>r.request().method()==='POST'&&new URL(r.url()).pathname==='/api/v1/files/'+file.fileId+'/commits',{timeout:15000}),page.keyboard.press('Control+s')])
+    assert.ok(commit.ok(),'commit status '+commit.status())
+  }
+  await save()
+  const name=async()=>(await f.files.openFile(f.alice.token,file.fileId)).name
+  await expect.poll(name,{timeout:10000}).toBe(title+'.pptx')
+  await expect(page.locator('.qa-btn.qa-name-with-ai')).toHaveCount(0)
+  const next=await page.evaluate(()=>window.slidesApi.addElement({slideIndex:0,kind:'textbox',xPx:40,yPx:140,wPx:360,hPx:60,fitWidthPx:960,text:'补充说明'}))
+  assert.ok(next?.sourceId)
+  await save()
+  assert.equal(await name(),title+'.pptx')
 })

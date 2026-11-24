@@ -1,4 +1,5 @@
 import { test } from 'node:test'
+import { Readable } from 'node:stream'
 import assert from 'node:assert/strict'
 import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -141,6 +142,36 @@ test('XLSX chart moves once and the save shortcut persists its new anchor', {tim
   await expect.poll(async()=>(await files.openFile(alice.token,opened.file.fileId)).file.revision,{timeout:15000}).not.toBe(revision)
 })
 
+test('Web XLSX preserves formatting on valued and blank cells after saving and reloading through Node', {timeout:90000}, async t => {
+  const {page,files,alice,opened} = await fixture(t,false,false,undefined,undefined,false,true)
+  const formats = () => page.evaluate(() => {
+    const sheet=window.__genofficeDebug?.univerAPI.getActiveWorkbook()?.getActiveSheet()
+    if (!sheet) return null
+    return ['A2','D2'].map(address => {
+      const cell=sheet.getRange(address)
+      const style=cell.getCellStyleData()
+      return [style?.bl===1?'bold':'normal',style?.cl?.rgb,style?.bg?.rgb,cell.getHorizontalAlignment()]
+    })
+  })
+  await page.evaluate(() => {
+    const sheet=window.__genofficeDebug.univerAPI.getActiveWorkbook().getActiveSheet()
+    for(const address of ['A2','D2']){
+      const cell=sheet.getRange(address)
+      cell.setFontWeight('bold').setFontColor('#123456').setBackgroundColor('#FEDCBA').setHorizontalAlignment('center')
+    }
+  })
+  const expected=await formats()
+  assert.deepEqual(expected.map(([weight,font,fill,align])=>[weight,font?.toUpperCase(),fill?.toUpperCase(),align]),Array(2).fill(['bold','#123456','#FEDCBA','center']))
+  await page.keyboard.press('Control+s')
+  const head=async()=>(await files.openFile(alice.token,opened.file.fileId)).file.revision
+  await expect.poll(head,{timeout:15000}).not.toBe(opened.file.revision)
+  const saved=await JSZip.loadAsync(await files.readFile(alice.token,opened.file.fileId,await head()))
+  assert.match(await saved.file('xl/styles.xml').async('string'),/FFFEDCBA/i)
+  assert.match(await saved.file('xl/worksheets/sheet1.xml').async('string'),/<c\b[^>]*r="D2"[^>]*s="\d+"/)
+  await page.reload()
+  await expect.poll(formats,{timeout:9000}).toEqual(expected)
+})
+
 async function verifyAssistant(t, replay, live) {
   const {page, opened, files, original, alice, ownerPool} = await fixture(t, false, true, replay, live)
   const net = live ? undefined : mockProviderNetwork(t, [Buffer.from('data: {"choices":[{"delta":{"content":"Verified workbook reply"},"finish_reason":"stop"}]}\n\n'), Buffer.from('data: [DONE]\n\n')])
@@ -224,7 +255,10 @@ test('XLSX AI naming confirms an independent current draft and leaves no copy on
      {op:'add_table',sheetId:sheet.getSheetId(),range:'J1:J2',name:'DraftItems'},
    ])
  })).ok,true)
- const naming=page.getByRole('button',{name:'Name with AI…',exact:true})
+ const naming=page.getByRole('button',{name:'Name a copy with AI…',exact:true})
+ const fileMenu=page.getByRole('button',{name:'File',exact:true})
+ await expect(page.locator('.qa-btn.qa-name-with-ai')).toHaveCount(0)
+ await fileMenu.click()
  const dialog=page.getByRole('dialog').filter({has:page.getByRole('textbox',{name:'File name'})})
  await expect(naming).toBeEnabled()
  await naming.click()
@@ -233,6 +267,7 @@ test('XLSX AI naming confirms an independent current draft and leaves no copy on
  await expect(dialog).toHaveCount(0)
  assert.equal((await f.files.listFiles(f.alice.token)).files.length,1)
  assert.ok(!requests.some(path=>path.endsWith('/sheets/export')||path.endsWith('/uploads')))
+ await fileMenu.click()
  await naming.click()
  await dialog.getByRole('textbox',{name:'File name'}).fill('Reviewed Draft.xlsx')
  await dialog.getByRole('button',{name:'Save copy',exact:true}).click()
@@ -528,4 +563,101 @@ test('native XLSX explicitly writes literal analysis cells and independently sav
  await page.reload()
  await expect.poll(()=>page.evaluate(()=>window.__genofficeDebug?.univerAPI.getActiveWorkbook()?.getActiveSheet()?.getRange('J10').getValue()),{timeout:30_000}).toBe('=1+1')
  await expect.poll(()=>page.evaluate(()=>window.__genofficeDebug.univerAPI.getActiveWorkbook().getActiveSheet().getRange('J11').getValue())).toBe('0012')
+})
+
+test('Node XLSX restores worksheet layout and color scales after save and refresh', {timeout:90000}, async t => {
+  const {page,files,alice,opened}=await fixture(t,false,false,undefined,undefined,false,true)
+  const layout=()=>page.evaluate(()=>{
+    const sheet=window.__genofficeDebug?.univerAPI.getActiveWorkbook()?.getActiveSheet()
+    if(!sheet)return null
+    return {
+      merged:sheet.getMergedRanges().some(range=>range.getA1Notation()==='H2:I2'),
+      height:sheet.getRowHeight(1),width:Math.round(sheet.getColumnWidth(1)),
+      freeze:[sheet.getFreeze().xSplit,sheet.getFreeze().ySplit],
+      scale:sheet.getConditionalFormattingRules().find(rule=>rule.ranges.some(range=>range.startColumn===7))?.rule.config?.map(stop=>stop.color.toUpperCase()),
+    }
+  })
+  await page.evaluate(async()=>{
+    const {univerAPI,applyOps}=window.__genofficeDebug
+    const sheet=univerAPI.getActiveWorkbook().getActiveSheet(),sheetId=sheet.getSheetId()
+    const result=await applyOps([{op:'set_row_height',sheetId,row:2,heightPoints:49.5,count:1},
+      {op:'set_col_width',sheetId,column:'B',widthPx:224,count:1}])
+    if(!result?.ok)throw new Error(JSON.stringify(result))
+    sheet.getRange('H2:I2').merge()
+    sheet.setFreeze({startColumn:1,startRow:1,xSplit:1,ySplit:1})
+    sheet.addConditionalFormattingRule(sheet.newConditionalFormattingRule().setColorScale([
+      {index:0,color:'#FF0000',value:{type:'min'}},{index:1,color:'#00FF00',value:{type:'max'}},
+    ]).setRanges([sheet.getRange('H3:H5').getRange()]).build())
+  })
+  const expected={merged:true,height:66,width:224,freeze:[1,1],scale:['#FF0000','#00FF00']}
+  assert.deepEqual(await layout(),expected)
+  await page.keyboard.press('Control+s')
+  const head=async()=>(await files.openFile(alice.token,opened.file.fileId)).file.revision
+  await expect.poll(head,{timeout:15000}).not.toBe(opened.file.revision)
+  const saved=await JSZip.loadAsync(await files.readFile(alice.token,opened.file.fileId,await head()))
+  const xml=await saved.file('xl/worksheets/sheet1.xml').async('string')
+  for(const part of ['ref="H2:I2"','customHeight="1"','xSplit="1"','type="colorScale"'])assert.ok(xml.includes(part),part)
+  await page.reload()
+  await expect.poll(layout,{timeout:12000}).toEqual(expected)
+})
+
+test('assistant creates a separate XLSX with the dimensions of its live source sheet', {timeout:120000}, async t=>{
+  const {page,files,alice,opened,origin}=await fixture(t,false,true,undefined,undefined,false,true)
+  let turn=0
+  mockProviderNetwork(t,()=>{
+    const delta=turn++===0?{tool_calls:[{index:0,id:'export',type:'function',function:{name:'create_document',arguments:JSON.stringify({type:'xlsx',title:'Layout copy'})}}]}:{content:'Created layout copy.'}
+    return Readable.from([Buffer.from(`data: ${JSON.stringify({choices:[{delta,finish_reason:delta.tool_calls?'tool_calls':'stop'}]})}\n\ndata: [DONE]\n\n`)])
+  })
+  await page.addInitScript(()=>{
+    window.dyofficeCreateAiXlsx=async input=>{
+      const {csrfToken}=await (await fetch('/api/v1/auth/csrf')).json()
+      const result=await fetch('/api/v1/ai/xlsx-documents',{method:'POST',headers:{'content-type':'application/json','x-csrf-token':csrfToken},body:JSON.stringify(input)})
+      if(!result.ok)throw new Error(await result.text())
+      window.__layoutCopy=(await result.json()).file.fileId
+    }
+  })
+  await page.reload()
+  await expect.poll(()=>page.evaluate(()=>window.__genofficeDebug?.univerAPI.getActiveWorkbook()?.getActiveSheet()?.getRange('A2').getValue()),{timeout:30000}).toBe(12.5)
+  const resized=await page.evaluate(()=>{
+    const {univerAPI,applyOps}=window.__genofficeDebug,sheetId=univerAPI.getActiveWorkbook().getActiveSheet().getSheetId()
+    return applyOps([{op:'set_row_height',sheetId,row:2,heightPoints:39,count:1},{op:'set_col_width',sheetId,column:'B',widthPx:224,count:1}])
+  })
+  assert.equal(resized.ok,true)
+  const open=page.getByRole('button',{name:'Open AI assistant',exact:true})
+  if(await open.isVisible())await open.click()
+  const composer=page.getByRole('textbox',{name:'AI instruction',exact:true})
+  await composer.fill('Create an XLSX copy of this worksheet.');await composer.press('Enter')
+  await expect.poll(()=>page.evaluate(()=>window.__layoutCopy),{timeout:20000}).toBeTruthy()
+  const copy=await page.evaluate(()=>window.__layoutCopy)
+  assert.notEqual(copy,opened.file.fileId)
+  assert.equal((await files.openFile(alice.token,opened.file.fileId)).file.revision,opened.file.revision)
+  await page.goto(origin+'/native-xlsx/?fileId='+copy)
+  await expect.poll(()=>page.evaluate(()=>{
+    const sheet=window.__genofficeDebug?.univerAPI.getActiveWorkbook()?.getActiveSheet()
+    return sheet&&[sheet.getRowHeight(1),Math.round(sheet.getColumnWidth(1)),sheet.getRange('A2').getValue()]
+  }),{timeout:30000}).toEqual([52,224,12.5])
+})
+
+test('Ctrl+S names a new Web workbook from its saved title once', {timeout:120000}, async t=>{
+ const {files,alice,page,origin}=await fixture(t,false,false,undefined,undefined,false,true)
+ const template=await readFile(new URL('../../../shell/build/shell-new/blank.xlsx',import.meta.url))
+ const stage=await files.stageUpload(alice.token,{name:'未命名.xlsx',autoName:true,size:template.length})
+ await files.receiveUpload(alice.token,stage.uploadId,template)
+ const {file}=await files.finishUpload(alice.token,stage.uploadId)
+ await page.goto(origin+'/native-xlsx/?fileId='+file.fileId)
+ await expect.poll(()=>page.evaluate(()=>!!window.__genofficeDebug?.univerAPI.getActiveWorkbook()?.getActiveSheet()),{timeout:30000}).toBe(true)
+ const edit=async title=>{
+   const outcome=await page.evaluate(text=>{const {applyOps,univerAPI}=window.__genofficeDebug;return applyOps([{op:'set_cell',sheetId:univerAPI.getActiveWorkbook().getActiveSheet().getSheetId(),address:'A1',value:text}])},title)
+   assert.equal(outcome.ok,true,JSON.stringify(outcome))
+   await expect(page.locator('.ribbon-tabs button.qa-btn').first()).toBeEnabled({timeout:10000})
+ }
+ const save=async()=>{const done=page.waitForResponse(r=>r.url().endsWith('/commits')&&r.status()===200);await page.keyboard.press('Control+s');await done}
+ const name=async()=>(await files.openFile(alice.token,file.fileId)).name
+ await edit('年度预算分析');await save()
+ await expect.poll(name).toBe('年度预算分析.xlsx')
+ await expect(page.locator('.qa-btn.qa-name-with-ai')).toHaveCount(0)
+ await page.reload()
+ await expect.poll(()=>page.evaluate(()=>window.__genofficeDebug?.univerAPI.getActiveWorkbook()?.getActiveSheet()?.getRange('A1').getValue()),{timeout:30000}).toBe('年度预算分析')
+ await edit('修订标题');await save()
+ assert.equal(await name(),'年度预算分析.xlsx')
 })

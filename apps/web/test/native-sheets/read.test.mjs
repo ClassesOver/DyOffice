@@ -49,6 +49,39 @@ test('Node XLSX inspection and range reads retain built-in and custom number for
  assert.deepEqual(range.cells.map(cell=>cell.styleIndex),[1,2])
 })
 
+test('Node XLSX resolves theme and indexed colors, borders and alignment from cell styles',async t=>{
+ const native=await nodeRuntime(t)
+ const zip=await JSZip.loadAsync(await readFile(new URL('../fixtures/sheets/acceptance.xlsx',import.meta.url)))
+ const slots=['lt1','dk1','lt2','dk2','accent1','accent2','accent3','accent4','accent5','accent6','hlink','folHlink']
+ zip.file('xl/theme/theme1.xml','<a:theme xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:themeElements><a:clrScheme>'+
+  slots.map(slot=>`<a:${slot}><a:srgbClr val="${slot==='accent1'?'000000':'FFFFFF'}"/></a:${slot}>`).join('')+'</a:clrScheme></a:themeElements></a:theme>')
+ zip.file('xl/styles.xml',`<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <fonts><font><name val="Example Font"/><sz val="14"/><b/><i val="0"/><color indexed="2"/></font></fonts>
+  <fills><fill><patternFill patternType="solid"><fgColor theme="4" tint="0.5"/></patternFill></fill></fills>
+  <borders><border diagonalUp="1"><bottom style="medium"><color rgb="FF123456"/></bottom><diagonal style="thin"/></border></borders>
+  <cellXfs><xf fontId="0" fillId="0" borderId="0" numFmtId="10"><alignment horizontal="center" vertical="top" wrapText="1" indent="2"/></xf></cellXfs>
+ </styleSheet>`)
+ const workbook=await native.inspect(await zip.generateAsync({type:'nodebuffer'}))
+ const style=workbook.styles[0]
+ assert.equal(workbook.themeColors[4],'#000000')
+ assert.equal(style.fillColor,'#808080')
+ assert.equal(style.fillColorTheme,4)
+ assert.equal(style.fillColorTint,0.5)
+ assert.equal(style.fontColor,'#FF0000')
+ assert.equal(style.fontFamily,'Example Font')
+ assert.equal(style.fontSize,14)
+ assert.equal(style.bold,true)
+ assert.equal(style.italic,false)
+ assert.equal(style.numberFormat,'0.00%')
+ assert.equal(style.horizontalAlignment,'center')
+ assert.equal(style.verticalAlignment,'top')
+ assert.equal(style.wrapText,true)
+ assert.equal(style.indent,2)
+ assert.deepEqual(style.borderBottom,{style:'medium',color:'#123456'})
+ assert.equal(style.borderDiagonal.style,'thin')
+ assert.equal(style.diagonalUp,true)
+})
+
 test('Node XLSX reports the same workbook, worksheet and cell protection as Rust',async t=>{
  const node=await nodeRuntime(t),rust=createXlsxNativeWorker(await sandboxFixture('native'))
  const zip=await JSZip.loadAsync(await readFile(new URL('../fixtures/sheets/acceptance.xlsx',import.meta.url)))
@@ -74,6 +107,7 @@ test('Node XLSX reports the same workbook, worksheet and cell protection as Rust
  assert.equal(fromNode.cells.find(cell=>cell.column===1).styleIndex,1)
 })
 
+
 test('opening viewport matches a normal Node range and skips oversized cell text',async t=>{
  const native=await nodeRuntime(t)
  const bytes=await readFile(new URL('../fixtures/sheets/acceptance.xlsx',import.meta.url))
@@ -88,4 +122,32 @@ test('opening viewport matches a normal Node range and skips oversized cell text
  const large=await native.inspect(await zip.generateAsync({type:'nodebuffer'}),undefined,true)
  assert.equal(large.openingViewport,undefined)
  assert.equal(large.sheets[0].rowCount,12)
+})
+
+test('Node XLSX keeps sparse layout beyond the last value and returns intersecting merges',async t=>{
+ const native=await nodeRuntime(t)
+ const zip=await JSZip.loadAsync(await readFile(new URL('../fixtures/sheets/acceptance.xlsx',import.meta.url)))
+ zip.file('xl/worksheets/sheet1.xml',`<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <sheetViews><sheetView workbookViewId="0"><pane state="frozenSplit" ySplit="2"/></sheetView></sheetViews>
+  <sheetFormatPr defaultRowHeight="18" customHeight="1" defaultColWidth="12"/>
+  <cols><col min="2" max="4" width="28" customWidth="1"/></cols>
+  <sheetData><row r="1"><c r="A1"><v>1</v></c></row><row r="8" ht="36" customHeight="1"/></sheetData>
+  <mergeCells><mergeCell ref="B8:D8"/><mergeCell ref="A10:A11"/></mergeCells>
+  <conditionalFormatting sqref="B8:D8 A10:A11"><cfRule type="colorScale" priority="3"><colorScale>
+    <cfvo type="min"/><cfvo type="percentile" val="50"/><cfvo type="max"/>
+    <color rgb="FFFF0000"/><color rgb="FFFFFF00"/><color rgb="FF00FF00"/>
+  </colorScale></cfRule></conditionalFormatting></worksheet>`)
+ const bytes=await zip.generateAsync({type:'nodebuffer'}),sheet=(await native.inspect(bytes)).sheets[0]
+ assert.deepEqual(sheet.freeze,{frozenColumns:0,frozenRows:2})
+ assert.deepEqual(sheet.columnWidths,[{startColumn:1,endColumn:3,width:28,hidden:false}])
+ assert.deepEqual([sheet.defaultRowHeight,sheet.defaultRowHeightFixed,sheet.defaultColumnWidth],[18,true,12])
+ assert.ok(sheet.rowCount>=11 && sheet.columnCount>=4)
+ assert.deepEqual([sheet.valueCellCount,sheet.valueRowCount,sheet.valueColumnCount],[1,1,1])
+ const range=await native.readRange(bytes,'Acceptance',{startRow:7,endRow:7,startColumn:2,endColumn:2})
+ assert.deepEqual(range.rows,[{row:7,height:36,customHeight:true,hidden:false}])
+ assert.deepEqual(range.merges,[{startRow:7,endRow:7,startColumn:1,endColumn:3}])
+ const [rule]=range.conditionalRules
+ assert.deepEqual(rule.colors,['#FF0000','#FFFF00','#00FF00'])
+ assert.deepEqual(rule.cfvos,[{kind:'min'},{kind:'percentile',value:'50'},{kind:'max'}])
+ assert.equal(rule.ranges.length,2)
 })
