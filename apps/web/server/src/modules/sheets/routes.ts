@@ -64,7 +64,7 @@ export function registerSheetsRoutes(app: FastifyInstance, sheets: ReturnType<ty
     },(token,id,body,signal)=>sheets.previewExternalLinkRefresh(token,id,body.revision,body.sources,signal),65536)
     route<{revision: string}>('/api/v1/files/:id/sheets/package', revisionBody, (token,id,body,signal) => sheets.readPackage(token,id,body.revision,signal))
     route<{revision: string; sheetName: string; kind: 'formulas' | 'outline'}>('/api/v1/files/:id/sheets/sheet', {...revisionBody,sheetName: {type:'string',minLength:1,maxLength:255},kind: {type:'string',enum:['formulas','outline']}}, (token,id,body,signal) => sheets.readSheet(token,id,body.revision,body.sheetName,body.kind,signal))
-    route<{revision: string}>('/api/v1/files/:id/sheets/inspect', revisionBody, (token, id, body, signal) => sheets.inspect(token, id, body.revision, signal))
+    route<{revision: string;openingViewport?:boolean}>('/api/v1/files/:id/sheets/inspect', {...revisionBody,openingViewport:{type:'boolean'}}, (token, id, body, signal) => sheets.inspect(token, id, body.revision, signal,body.openingViewport),4096,['openingViewport'])
     route('/api/v1/files/:id/sheets/range', {
       ...revisionBody,
       sheetName: { type: 'string', minLength: 1, maxLength: 255 },

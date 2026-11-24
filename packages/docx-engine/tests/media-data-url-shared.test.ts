@@ -1,7 +1,8 @@
 import JSZip from 'jszip'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { parseDocx } from '../src/parse'
-import { buildDocx } from './helpers/build-docx'
+import { LAZY_MEDIA_PLACEHOLDER_BYTES } from '../src/lazy-media'
+import { buildDocx, TINY_PNG_BASE64 } from './helpers/build-docx'
 
 const INLINE_PIC =
   '<w:drawing><wp:inline><wp:extent cx="914400" cy="914400"/><wp:docPr id="1" name="P"/>' +
@@ -15,9 +16,23 @@ const INLINE_PIC =
 describe('media data URLs', () => {
   afterEach(() => vi.restoreAllMocks())
 
-  it('a media part referenced by many blocks is read and encoded once', async () => {
+  it.each([
+    Buffer.from(TINY_PNG_BASE64, 'base64'),
+    Buffer.alloc(LAZY_MEDIA_PLACEHOLDER_BYTES, 0xfb),
+  ])('a shared picture is read once and retains its original bytes (case %#)', async (picture) => {
     const bodyXml = Array.from({ length: 3 }, () => `<w:p><w:r>${INLINE_PIC}</w:r></w:p>`).join('')
-    const bytes = await buildDocx({ bodyXml, withImage: true })
+    const bytes = await buildDocx({
+      bodyXml,
+      withImage: true,
+      binaryParts: [
+        {
+          path: 'word/media/image1.png',
+          extension: 'png',
+          contentType: 'image/png',
+          base64: picture.toString('base64'),
+        },
+      ],
+    })
     const probe = await JSZip.loadAsync(bytes)
     const zipObjectProto = Object.getPrototypeOf(probe.file('word/media/image1.png')!) as {
       async: (type: string) => Promise<unknown>
@@ -26,8 +41,12 @@ describe('media data URLs', () => {
     const doc = await parseDocx(bytes)
     const urls = doc.blocks.map((b) => b.imageDataUrl).filter((u): u is string => !!u)
     expect(urls).toHaveLength(3)
-    expect(urls[0]).toMatch(/^data:image\/png;base64,/)
+    expect(urls[0]).toBe('data:image/png;base64,' + picture.toString('base64'))
     expect(new Set(urls).size).toBe(1)
-    expect(asyncSpy.mock.calls.filter((c) => c[0] === 'base64')).toHaveLength(1)
+    expect(
+      asyncSpy.mock.contexts.filter(
+        (entry) => (entry as { name?: string }).name === 'word/media/image1.png',
+      ),
+    ).toHaveLength(1)
   })
 })

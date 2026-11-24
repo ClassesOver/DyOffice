@@ -55,7 +55,7 @@ export interface BoundWorkbookSource {
 }
 /** Uses the original sidecar's archive writer. This is an archive roundtrip,
  * not an editor or persisted recalculation implementation. */
-export function createXlsxNativeWorker(process: NativeProcess) {
+export function createXlsxNativeWorker(process: NativeProcess, supportsOpeningViewport=false) {
   const native = createNativeAdmission(process)
   let refreshing = false
   return {
@@ -122,9 +122,9 @@ export function createXlsxNativeWorker(process: NativeProcess) {
         } finally {await io.request('close',{sessionId:source.sessionId})}
       },{signal})
     },
-    inspect(input:Uint8Array,signal?:AbortSignal){
+    inspect(input:Uint8Array,signal?:AbortSignal,openingViewport=false){
       return native.run(input,async io=>{
-        const result=await io.request('open',{path:'/work/input.xlsx',locale:'en'}) as Record<string,unknown>
+        const result=await io.request('open',{path:'/work/input.xlsx',locale:'en',...(openingViewport&&supportsOpeningViewport?{openingViewport:true}:{})}) as Record<string,unknown>
         const source=opened(result)
         await io.request('close',{sessionId:source.sessionId})
         const {sessionId: _session,path: _path,...metadata}=result

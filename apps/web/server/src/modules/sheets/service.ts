@@ -17,7 +17,7 @@ export interface SheetsNative {
   readSheet?(input: Uint8Array, sheetName: string, kind: 'formulas' | 'outline', signal?: AbortSignal): Promise<unknown>
   findCells?(input:Uint8Array,sheetName:string,request:FindInput,signal?:AbortSignal):Promise<unknown>
   refreshExternalLinks?(input:Uint8Array,sources:readonly BoundWorkbookSource[],signal?:AbortSignal):Promise<unknown>
-  inspect(input: Uint8Array, signal?: AbortSignal): Promise<unknown>
+  inspect(input: Uint8Array, signal?: AbortSignal, openingViewport?: boolean): Promise<unknown>
   readRange(input: Uint8Array, sheetName: string, range: SheetRange, signal?: AbortSignal): Promise<unknown>
 }
 
@@ -93,7 +93,7 @@ export function createSheetsService({ files, native, readPackage, maxConcurrent 
       return report
     },signal),
     readPackage: (token: string, fileId: string, revision: string, signal?: AbortSignal) => read(token,fileId,revision,bytes => { if (!readPackage) throw authError(501); return readPackage(bytes,signal) },signal),
-    inspect: (token: string, fileId: string, revision: string, signal?: AbortSignal) => read(token, fileId, revision, bytes => native.inspect(bytes, signal), signal),
+    inspect: (token: string, fileId: string, revision: string, signal?: AbortSignal, openingViewport=false) => read(token, fileId, revision, bytes => native.inspect(bytes, signal, openingViewport), signal),
     readRange: (token: string, fileId: string, revision: string, sheetName: string, range: SheetRange, signal?: AbortSignal) => read(token, fileId, revision, bytes => native.readRange(bytes, sheetName, range, signal), signal),
     async openMergeWorkbook(token:string,fileId:string,revision:string,input:Uint8Array,name:string,signal?:AbortSignal){
       pruneMergeSessions()

@@ -1,3 +1,6 @@
+import { Readable } from 'node:stream'
+import { createBrotliCompress } from 'node:zlib'
+import { acceptsBrotli, fastBrotli, minCompressionBytes } from '../../../response-encoding.mjs'
 import type { SlidesSessions } from './service.ts'
 import { withDisconnect } from '../request-signal.ts'
 import type { SlidesSaveService, SlidesSaveInput } from './save.ts'
@@ -31,6 +34,15 @@ export function registerSlidesRoutes(app: FastifyInstance, slides: SlidesSession
       csrf.originCheck(request, true)
       csrf.requireSession(request, token)
       await sessions.authenticate(token)
+    })
+    api.addHook('onSend', async (request,reply,payload) => {
+      if (request.routeOptions.url !== '/api/v1/files/:id/slides/open' || reply.statusCode !== 200 ||
+          typeof payload !== 'string' || Buffer.byteLength(payload) < minCompressionBytes || reply.hasHeader('content-encoding')) return payload
+      reply.header('Vary','Accept-Encoding')
+      if (!acceptsBrotli(request.headers)) return payload
+      reply.header('Content-Encoding','br')
+      reply.removeHeader('content-length')
+      return Readable.from([payload]).pipe(createBrotliCompress(fastBrotli))
     })
     function route<T>(path: string, properties: Record<string, unknown>, operation: (token: string, fileId: string, body: T & {editorId:string;leaseEpoch:number}, signal: AbortSignal) => Promise<unknown>, bodyLimit = 4096, optionalKeys: string[] = []) {
       api.post(path, { bodyLimit, schema: { params: fileParamsSchema, querystring: emptyQuerySchema, body: { type: 'object', additionalProperties: false, required: Object.keys(properties).filter(key=>key!=='fitWidthPx'&&!optionalKeys.includes(key)), properties } } }, async (request, reply) => {

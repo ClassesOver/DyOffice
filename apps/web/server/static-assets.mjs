@@ -1,7 +1,12 @@
+import { createHash } from 'node:crypto';
+import { brotliCompress } from 'node:zlib';
+import { promisify } from 'node:util';
+import { acceptsBrotli, fastBrotli, minCompressionBytes } from './response-encoding.mjs';
 import { readFile, realpath, stat } from 'node:fs/promises';
 import { dirname, extname, join, relative, sep, isAbsolute } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+const compress = promisify(brotliCompress);
 const webRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 const contentTypes = {
   '.html':'text/html; charset=utf-8', '.js':'text/javascript; charset=utf-8', '.mjs':'text/javascript; charset=utf-8',
@@ -80,6 +85,8 @@ export async function createStaticAssets({ assetMode = 'source', assetDirectory,
   }
   // Fail startup before creating app state when a selected build is missing/incomplete.
   for (const name of allowed) await resolvedFile(name);
+  // Only allowlisted build assets are retained, one representation per filename.
+  const compressed = new Map();
   return async function serveStatic(request, response, pathname) {
     const name = pathname === '/' ? 'index.html' : pathname === '/admin' ? 'admin.html' : pathname.slice(1);
     if (!allowed.has(name)) return false;
@@ -88,9 +95,25 @@ export async function createStaticAssets({ assetMode = 'source', assetDirectory,
     }
     // Recheck realpath on each request: replacing an asset with an escaping symlink is not allowed.
     const data = await readFile(await resolvedFile(name));
-    const headers = { 'Content-Type':contentTypes[extname(name)], 'Cache-Control':cacheControl, 'Content-Length':data.length };
+    let body = data;
+    const headers = { 'Content-Type':contentTypes[extname(name)], 'Cache-Control':cacheControl };
+    if (assetInventory && /\.(?:js|css)$/.test(name) && data.length >= minCompressionBytes) {
+      headers.Vary = 'Accept-Encoding';
+      if (acceptsBrotli(request.headers)) {
+        const hash = createHash('sha256').update(data).digest('hex');
+        let entry = compressed.get(name);
+        if (entry?.hash !== hash) {
+          entry = {hash, bytes:compress(data, fastBrotli)};
+          compressed.set(name, entry);
+        }
+        try { body = await entry.bytes; }
+        catch (error) { if (compressed.get(name) === entry) compressed.delete(name); throw error; }
+        headers['Content-Encoding'] = 'br';
+      }
+    }
+    headers['Content-Length'] = body.length;
     response.writeHead(200, headers);
-    response.end(request.method === 'HEAD' ? undefined : data);
+    response.end(request.method === 'HEAD' ? undefined : body);
     return true;
   };
 }

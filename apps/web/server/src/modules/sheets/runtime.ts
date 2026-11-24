@@ -68,7 +68,7 @@ export async function configuredSheetsRuntime(environment: NodeJS.ProcessEnv = p
     },
   })
   const gateway=createGatewayAdapter(tracked(gatewaySandbox))
-  const native=createXlsxNativeWorker(tracked(sandbox))
+  const native=createXlsxNativeWorker(tracked(sandbox),Boolean(nodeEngine))
   const refresh=refreshSandbox===sandbox?native:refreshSandbox?createXlsxNativeWorker(tracked(refreshSandbox)):undefined
   return {
     sheetsNative:{
