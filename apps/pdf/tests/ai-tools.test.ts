@@ -2490,7 +2490,7 @@ describe('set_watermark / set_header_footer', () => {
     expect(result.isError).toBeUndefined()
     expect(result.mutated).toBe(true)
     expect(deps.setStamps).toHaveBeenCalledWith({
-      wm: { text: 'DRAFT', angle: 35, opacity: 0.3, color: '#ff0000', sizeRatio: 0.11 },
+      wm: { text: 'DRAFT', angle: 35, opacity: 0.3, color: '#ff0000', sizeRatio: 0.055 },
       hf: HF,
     })
     const bad = await executePdfTool(deps, call('set_watermark', { text: 'X', opacity: 2 }))

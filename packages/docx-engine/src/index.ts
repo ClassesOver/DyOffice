@@ -211,6 +211,7 @@ export {
 } from './section'
 export { nextNoteId, parseNoteSeparator, parseNotesXml, type NoteKind } from './notes'
 export {
+  DEFAULT_TEXT_WATERMARK_STYLE,
   isPictureWatermark,
   pictureWatermarkPreviewImage,
   textWatermarkPreviewImage,

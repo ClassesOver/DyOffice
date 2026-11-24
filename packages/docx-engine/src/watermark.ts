@@ -83,19 +83,21 @@ export function readWatermarkShape(pictXml: string): HfImage | null {
   return img
 }
 
+export const DEFAULT_TEXT_WATERMARK_STYLE = { colorHex: '64748B', opacity: 0.22 } as const
+
 /** Text watermark as written by set_watermark / the Design tab; a bare string is the text alone. */
 export interface WatermarkSpec {
   text: string
   fontFamily?: string
-  /** hex without '#' (default silver) */
+  /** hex without '#' (default muted gray) */
   colorHex?: string
-  /** 0..1 fill opacity (default 0.5) */
+  /** 0..1 fill opacity */
   opacity?: number
   /** rotated 315 degrees like Word's diagonal layout (default true) */
   diagonal?: boolean
   bold?: boolean
   italic?: boolean
-  /** shape box for an explicit font size (Word's Size != Auto); absent = Word's auto box */
+  /** shape box for an explicit font size; absent = compact auto size */
   boxPt?: { widthPt: number; heightPt: number }
   /** the Size `boxPt` was measured at, so the dialog reopens on it (not written to the file) */
   sizePt?: number
@@ -167,12 +169,18 @@ export function pictureWatermarkPreviewImage(
   }
 }
 
-/** Box of the text watermark shape in points (explicit size, or Word's auto box per layout). */
+/** Word stretches the ink to the box; use a compact box proportional to the text. */
 export function textWatermarkBoxPt(spec: WatermarkSpec): { widthPt: number; heightPt: number } {
   if (spec.boxPt) return spec.boxPt
-  return spec.diagonal !== false
-    ? { widthPt: 412.4, heightPt: 247.45 }
-    : { widthPt: 527.85, heightPt: 131.95 }
+  const width = Math.max(
+    18,
+    Array.from(spec.text).reduce(
+      (sum, char) => sum + (/\s/u.test(char) ? 9 : char.codePointAt(0)! >= 0x2e80 ? 32 : 18),
+      0,
+    ),
+  )
+  const widthPt = Math.min(width, 240)
+  return { widthPt, heightPt: Math.round(((30 * widthPt) / width) * 100) / 100 }
 }
 
 /** The header image a pending text watermark parses back as (see readWatermarkShape). */
@@ -191,8 +199,10 @@ export function textWatermarkPreviewImage(spec: WatermarkSpec): HfImage {
     ...(spec.diagonal !== false ? { rotationDeg: 315 } : {}),
     wordArt: {
       text: spec.text,
-      colorHex: (spec.colorHex ?? 'C0C0C0').replace(/^#/, '').toUpperCase(),
-      opacity: Math.max(0, Math.min(1, spec.opacity ?? 0.5)),
+      colorHex: (spec.colorHex ?? DEFAULT_TEXT_WATERMARK_STYLE.colorHex)
+        .replace(/^#/, '')
+        .toUpperCase(),
+      opacity: Math.max(0, Math.min(1, spec.opacity ?? DEFAULT_TEXT_WATERMARK_STYLE.opacity)),
       fontFamily: spec.fontFamily ?? 'DengXian',
       ...(spec.bold ? { bold: true } : {}),
       ...(spec.italic ? { italic: true } : {}),
@@ -310,8 +320,8 @@ export function watermarkParagraphXml(spec: string | WatermarkSpec): string {
   const diagonal = wm.diagonal !== false
   const { widthPt, heightPt } = textWatermarkBoxPt(wm)
   const box = `width:${widthPt}pt;height:${heightPt}pt;${diagonal ? 'rotation:315;' : ''}`
-  const opacity = Math.max(0, Math.min(1, wm.opacity ?? 0.5))
-  const fill = wm.colorHex ? `#${wm.colorHex.replace(/^#/, '')}` : 'silver'
+  const opacity = Math.max(0, Math.min(1, wm.opacity ?? DEFAULT_TEXT_WATERMARK_STYLE.opacity))
+  const fill = `#${(wm.colorHex ?? DEFAULT_TEXT_WATERMARK_STYLE.colorHex).replace(/^#/, '')}`
   const font = escapeXmlAttr(wm.fontFamily ?? 'DengXian')
   const tpStyle =
     `font-family:&quot;${font}&quot;;font-size:1pt` +

@@ -23,6 +23,22 @@ const originalOrder = (doc: Awaited<ReturnType<typeof parseDocx>>) =>
     .map((b) => ({ kind: 'original' as const, docxIndex: b.docxIndex! }))
 
 describe('watermark spec', () => {
+  it('keeps a short default watermark compact and muted after saving', async () => {
+    const doc = await parseDocx(await buildDocx({ bodyXml: BODY }))
+    const saved = await saveDocx(doc, originalOrder(doc), { watermark: 'junge' })
+    const shape = (await parseDocx(saved)).headerImages?.find((img) => img.wordArt)
+    expect(shape).toMatchObject({
+      widthPx: 120,
+      heightPx: 40,
+      rotationDeg: 315,
+      behind: true,
+      wordArt: { text: 'junge', colorHex: '64748B', opacity: 0.22 },
+    })
+    const preview = textWatermarkPreviewImage({ text: 'junge' })
+    expect(preview.widthPx).toBe(shape?.widthPx)
+    expect(preview.wordArt).toEqual(shape?.wordArt)
+  })
+
   it('writes the Watermarks-gallery sdt with the requested face, color and orientation', async () => {
     const doc = await parseDocx(await buildDocx({ bodyXml: BODY }))
     const saved = await saveDocx(doc, originalOrder(doc), {
@@ -58,7 +74,12 @@ describe('watermark spec', () => {
 
   it('an explicit box (Size != Auto) sizes the shape and the pending preview alike', async () => {
     const doc = await parseDocx(await buildDocx({ bodyXml: BODY }))
-    const spec = { text: 'DRAFT', boxPt: { widthPt: 200, heightPt: 52.5 } }
+    const spec = {
+      text: 'DRAFT',
+      boxPt: { widthPt: 200, heightPt: 52.5 },
+      colorHex: 'C0C0C0',
+      opacity: 0.5,
+    }
     const xml = await headerXml(await saveDocx(doc, originalOrder(doc), { watermark: spec }))
     expect(xml).toContain('width:200pt;height:52.5pt;rotation:315;')
 
@@ -75,7 +96,7 @@ describe('watermark spec', () => {
     })
     const flat = textWatermarkPreviewImage({ text: 'X', diagonal: false, colorHex: '#ff0000' })
     expect(flat.rotationDeg).toBeUndefined()
-    expect(flat.widthPx).toBe(704)
+    expect(flat.widthPx).toBe(24)
     expect(flat.wordArt?.colorHex).toBe('FF0000')
   })
 
