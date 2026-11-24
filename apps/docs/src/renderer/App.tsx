@@ -1281,7 +1281,14 @@ export function App({ host }: { host?: { fileActions?: React.ReactNode; saveStat
   }, [])
   const [viewImage, setViewImage] = useState<string | null>(null)
   useEffect(() => window.desktop.onViewImage?.((src) => setViewImage(src)), [])
-  const saveImageAs = useCallback((src: string) => void window.desktop.saveImageAs(src), [])
+  const saveImageAs = useCallback(async (src: string) => {
+    try {
+      const result = await window.desktop.saveImageAs(src)
+      if (!result.ok && result.error) showToast(t('appSaveFailed', { error: result.error }), 'error')
+    } catch (error) {
+      showToast(t('appSaveFailed', { error: String(error) }), 'error')
+    }
+  }, [])
   const [showFontDialog, setShowFontDialog] = useState(false)
   const [showParaDialog, setShowParaDialog] = useState(false)
   /** label the reader gives a span they are withholding from the model */
@@ -1502,8 +1509,8 @@ export function App({ host }: { host?: { fileActions?: React.ReactNode; saveStat
           if (ed) insertBlobImage(ed, imageFile)
           return true
         }
-        // bitmap-less web image copy: fetch the referenced image(s) through the
-        // hardened main-process fetcher (SSRF-guarded, CDN headers) and insert
+        // bitmap-less web image copy: load the referenced image through the
+        // platform bridge before inserting it.
         if (!imageFile && imageOnlyHtml) {
           const ed = editorRef.current
           if (ed) {
@@ -4415,10 +4422,9 @@ export function App({ host }: { host?: { fileActions?: React.ReactNode; saveStat
     }
     const remeasure = () => {
       if (disposed) return
-      // a pass during a PDF export re-slices under the print media and rebuilds
-      // the preview; the export keeps its page list, so the new sheets print in
-      // every later group
-      if (scroller.closest('.app.pv-exporting')) {
+      // A pass under print media could rebuild the preview and lose the
+      // job's page selection. Resume measurement after printing or export.
+      if (scroller.closest('.app.pv-exporting, .app.pv-printing')) {
         timer = window.setTimeout(remeasure, EXPORT_PASS_RETRY_MS)
         return
       }
@@ -6322,20 +6328,29 @@ export function App({ host }: { host?: { fileActions?: React.ReactNode; saveStat
     return () => window.removeEventListener('ai-docs-run-done', handler)
   }, [editor, save])
 
-  // Save runs ahead of the editor keymaps (capture phase): with a non-Latin
-  // layout active the keystroke otherwise reaches the editor's own bindings and
-  // the report sees Ctrl+S undo the last edit instead of saving the document.
+  // Save and Web Print run ahead of editor keymaps. The capture phase also
+  // keeps non-Latin shortcuts from falling through to the editor's bindings.
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && isCommandLetter(e, 's')) {
         e.preventDefault()
         e.stopPropagation()
         void save(e.shiftKey)
+      } else if (
+        desktopActionsAvailable === false &&
+        fileCtxRef.current.doc &&
+        (e.metaKey || e.ctrlKey) &&
+        !e.shiftKey && !e.altKey && !e.isComposing &&
+        isCommandLetter(e, 'p')
+      ) {
+        e.preventDefault()
+        e.stopPropagation()
+        if (!e.repeat && !showPrintDialogRef.current) printDoc()
       }
     }
     window.addEventListener('keydown', handler, true)
     return () => window.removeEventListener('keydown', handler, true)
-  }, [save])
+  }, [save, desktopActionsAvailable, printDoc])
 
   useEffect(() => {
     // editing shortcuts only fire when focus is in an editor surface (main
@@ -7724,6 +7739,7 @@ export function App({ host }: { host?: { fileActions?: React.ReactNode; saveStat
     onOpen: () => void openFile(),
     onSave: () => void save(false),
     onSaveAs: () => void save(true),
+    onPrint: printDoc,
     onConvert: (format: ConvertFormat) => {
       if (format === 'pdf') void exportPdf()
       else if (format === 'html') void exportHtml()

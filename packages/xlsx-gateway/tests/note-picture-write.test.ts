@@ -14,6 +14,8 @@ import { applySheetNotes, type SheetNote } from '../src/gateway/xlsx-notes'
 const SHEET_PATH = 'xl/worksheets/sheet1.xml'
 const VML_PATH = 'xl/drawings/vmlDrawing1.vml'
 const VML_RELS_PATH = 'xl/drawings/_rels/vmlDrawing1.vml.rels'
+const COMMENTS_PATH = 'xl/comments1.xml'
+const SHEET_RELS_PATH = 'xl/worksheets/_rels/sheet1.xml.rels'
 
 /// A 1×1 PNG: enough bytes for the media part. The picture's size travels
 /// separately, so the bytes themselves are not what is measured.
@@ -184,5 +186,75 @@ describe('a picture a note was already carrying', () => {
     const { files } = await run([NOTE], workbookWithPictureNote())
     // the picture is still reached through the relationship it came in with
     expect(files.get(VML_RELS_PATH)).toContain('Id="rId1"')
+  })
+})
+
+describe('editing an existing notes part', () => {
+  const richNote =
+    `<s:comment ref='A1' authorId='1' shapeId='2048' xmlns:extra="urn:note-extra">` +
+    '<s:text><s:r><s:rPr><s:b/></s:rPr><s:t>the </s:t></s:r><s:r><s:t>pedigree</s:t></s:r></s:text>' +
+    '</s:comment>'
+  const offsetShape =
+    `<v:shape id='_x0000_s2048' type="#_x0000_t202" style="margin-left:123pt;width:222pt;height:40pt">` +
+    `<x:ClientData ObjectType='Note'><x:Anchor>1,2,3,4,5,6,7,8</x:Anchor>` +
+    '<x:Row>0</x:Row><x:Column>0</x:Column></x:ClientData></v:shape>'
+  const secondNote: SheetNote = { row: 0, column: 1, author: 'Bob', text: 'Second note' }
+
+  function richFixture(): Map<string, string> {
+    const files = fixture()
+    files.set(
+      COMMENTS_PATH,
+      '<s:comments xmlns:s="http://schemas.openxmlformats.org/spreadsheetml/2006/main">' +
+        '<s:authors><s:author>Unused</s:author><s:author>Ada</s:author></s:authors>' +
+        `<s:commentList>${richNote}</s:commentList></s:comments>`,
+    )
+    const rels = files.get(SHEET_RELS_PATH)!.replace(
+      '</Relationships>',
+      "<Relationship Target='../comments1.xml' Type='http://schemas.openxmlformats.org/officeDocument/2006/relationships/comments' Id='rId1'/>" +
+        '</Relationships>',
+    ).replace(/"([^"]*)"/g, "'$1'")
+    files.set(SHEET_RELS_PATH, rels)
+    files.set(VML_PATH, files.get(VML_PATH)!.replace(/<v:shape\b[\s\S]*?<\/v:shape>/, offsetShape))
+    return files
+  }
+
+  it('preserves the raw rich-text note, author index, and positioned VML when adding another cell note', async () => {
+    const files = richFixture()
+    const rels = files.get(SHEET_RELS_PATH)
+    await run([NOTE, secondNote], files)
+    expect(files.get(SHEET_RELS_PATH)).toBe(rels)
+    expect(files.has('xl/comments2.xml')).toBe(false)
+    expect(files.get(COMMENTS_PATH)).toContain(richNote)
+    expect(files.get(COMMENTS_PATH)).toContain('<s:author>Ada</s:author><s:author>Bob</s:author>')
+    expect(files.get(COMMENTS_PATH)).toContain('<s:comment ref="B1" authorId="2">')
+    expect(files.get(VML_PATH)).toContain(offsetShape)
+    expect(files.get(VML_PATH)).toContain('id="_x0000_s2049"')
+  })
+
+  it('removes a deleted note and its single-quoted relationships', async () => {
+    const { files } = await run([], richFixture())
+    expect(files.has(COMMENTS_PATH)).toBe(false)
+    expect(files.has(VML_PATH)).toBe(false)
+    expect(files.get(SHEET_RELS_PATH)).not.toContain('relationships/comments')
+    expect(files.get(SHEET_RELS_PATH)).not.toContain('relationships/vmlDrawing')
+  })
+
+  it('keeps the original geometry when editing text, then replaces a picture on request', async () => {
+    const files = richFixture()
+    const edited = { ...NOTE, text: 'Updated content' }
+    await run([edited], files)
+    expect(files.get(VML_PATH)).toContain(offsetShape)
+    expect(files.get(COMMENTS_PATH)).not.toContain(richNote)
+    expect(files.get(COMMENTS_PATH)).toContain('Updated content')
+    await run([{ ...edited, picture: PICTURE }], files)
+    expect(files.get(VML_PATH)).not.toContain(offsetShape)
+    expect(files.get(VML_PATH)).toContain('type="frame"')
+  })
+
+  it('keeps the shape identity referenced by a surviving comment when its picture changes', async () => {
+    const { files } = await run([{ ...NOTE, picture: PICTURE }], richFixture())
+    expect(files.get(COMMENTS_PATH)).toContain(richNote)
+    expect(files.get(VML_PATH)).toContain('<v:shape id="_x0000_s2048"')
+    expect(files.get(VML_PATH)).toContain('type="frame"')
   })
 })

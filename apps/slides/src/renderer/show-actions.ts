@@ -35,18 +35,6 @@ export function exitSlideShow(ctx: ActionCtx, lastIndex: number): void {
   ctx.setCurrent(lastIndex)
 }
 
-/** Update the custom show list overwrite-style and persist */
-export function updateCustomShows(ctx: ActionCtx, shows: CustomShow[], scope: string | null = ctx.path): void {
-  ctx.setCustomShows(shows)
-  if (scope) {
-    try {
-      localStorage.setItem(`ai-slides-custom-shows:${scope}`, JSON.stringify(shows))
-    } catch {
-      // Degrade to memory-only when localStorage is full/unavailable
-    }
-  }
-}
-
 /** Play a custom show: only its included slides (filtering out-of-range indexes stale after deletions) */
 export function playCustomShow(ctx: ActionCtx, show: CustomShow): void {
   if (ctx.slideShow || ctx.presenter) return
@@ -58,7 +46,6 @@ export function playCustomShow(ctx: ActionCtx, show: CustomShow): void {
   dropShowCurtain()
   ctx.setEditing(null)
   ctx.setCtxMenu(null)
-  ctx.setCustomShowDlgOpen(false)
   ctx.setSlideShow({ startAt: order[0]!, customOrder: order })
 }
 

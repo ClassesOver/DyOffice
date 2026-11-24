@@ -305,6 +305,7 @@ interface RibbonProps {
   onOpen: () => void
   onSave: () => void
   onSaveAs: () => void
+  onPrint: () => void
   onConvert: (format: ConvertFormat) => void
   /** File ▸ Name with AI…: ask the model for a name and offer it in the dialog */
   onNameWithAi: () => void
@@ -746,6 +747,7 @@ function RibbonInner({
   onOpen,
   onSave,
   onSaveAs,
+  onPrint,
   onConvert,
   onNameWithAi,
   showAi,
@@ -2189,19 +2191,22 @@ function RibbonInner({
       ['md', 'ribbonConvertMarkdown'],
       ['images', 'ribbonConvertImages'],
     ] as const
-  ).map(([format, key]) => (
-    <button
-      key={format}
-      disabled={!hasDoc || (!desktopActionsAvailable && format !== 'html')}
-      title={!desktopActionsAvailable && format !== 'html' ? '此导出格式暂不支持 Web，请下载原件。' : undefined}
-      onClick={() => {
-        setDropdown(null)
-        onConvert(format)
-      }}
-    >
-      {t(key)}
-    </button>
-  ))
+  ).map(([format, key]) => {
+    const unavailable = !desktopActionsAvailable && format !== 'html' && format !== 'md'
+    return (
+      <button
+        key={format}
+        disabled={!hasDoc || unavailable}
+        title={unavailable ? '此导出格式暂不支持 Web，请下载原件。' : undefined}
+        onClick={() => {
+          setDropdown(null)
+          onConvert(format)
+        }}
+      >
+        {t(key)}
+      </button>
+    )
+  })
 
   return (
     <div
@@ -2252,6 +2257,18 @@ function RibbonInner({
                 >
                   {t('ribbonSaveAs')} <span className="file-menu-key">Ctrl+Shift+S</span>
                 </button>
+                {!desktopActionsAvailable && (
+                  <button
+                    disabled={!hasDoc}
+                    onClick={() => {
+                      setDropdown(null)
+                      onPrint()
+                    }}
+                  >
+                    {t('appPrintTitle')}{' '}
+                    <span className="file-menu-key" aria-hidden="true">{IS_MAC ? '⌘P' : 'Ctrl+P'}</span>
+                  </button>
+                )}
                 <button
                   className="qa-name-with-ai"
                   disabled={!hasDoc || !aiNamingAvailable}

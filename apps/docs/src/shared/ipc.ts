@@ -142,8 +142,18 @@ export interface PdfInternalLink {
 export interface MarkdownImage {
   /** file name inside the media folder */
   name: string
-  /** data: URL or lazy docx-media URL the main process resolves */
+  /** Data URL, local browser Blob URL, or desktop lazy DOCX media URL. */
   src: string
+}
+
+export const MARKDOWN_IMAGE_EXTENSIONS: Readonly<Record<string, string>> = {
+  'image/png': 'png',
+  'image/jpeg': 'jpg',
+  'image/gif': 'gif',
+  'image/bmp': 'bmp',
+  'image/webp': 'webp',
+  'image/svg+xml': 'svg',
+  'image/tiff': 'tif',
 }
 
 /**
@@ -680,6 +690,8 @@ export interface DesktopApi {
     requirements: string
   }): Promise<{ text?: string; error?: string }>
   fetchImage(url: string): Promise<{ base64: string; mime: string } | null>
+  /** Browser image retrieval for clipboard URLs, independent of the AI media gateway. */
+  fetchClipboardImage?(url: string): Promise<{ base64: string; mime: string } | null>
   /** AI image generation via the Genspark cloud channel (requires login + cloud tools) */
   aiGenerateImage(op: {
     prompt: string

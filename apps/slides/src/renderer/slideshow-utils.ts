@@ -3,7 +3,7 @@
  * Extracted from SlideShowView for unit testing (no React/DOM dependency).
  */
 
-/** Custom show: subset of slides in user-specified order (original indexes). App persists it per document to localStorage. */
+/** A custom show resolved to the editor’s current slide order. */
 export interface CustomShow {
   id: string
   name: string

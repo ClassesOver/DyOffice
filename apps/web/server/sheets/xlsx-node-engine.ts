@@ -9,7 +9,11 @@ import {relsPathFor,resolveRelTarget} from '../../../../packages/xlsx-gateway/sr
 import {parseRef} from '../../../../packages/xlsx-gateway/src/gateway/xlsx-table-add.ts'
 import {resolvedStyleEntries} from '../../../../packages/xlsx-gateway/src/gateway/xlsx-style-entries.ts'
 import {parseSheetProtectionAttributes} from '../../../../packages/xlsx-gateway/src/gateway/xlsx-protection.ts'
+import {withoutFutureFunctionMarkers} from '../../../../packages/xlsx-gateway/src/gateway/future-functions.ts'
 import {pivotBandMetadata,pivotTheme} from './pivot-band-metadata'
+import {readNodeSheetComments} from './xlsx-node-comments'
+import {readCustomTableStyles,readWorksheetTables} from './xlsx-node-tables'
+import {readWorkbookVisuals,visualMediaType} from './xlsx-node-visuals'
 import {applyTint} from '../../../sheets/src/renderer/table-styles'
 import type {WorkbookCellStyle,WorkbookFile,WorkbookRangeResult} from '../../../sheets/src/shared/desktop-api.ts'
 import { readBasicWorkbook } from '../../../../packages/xlsx-gateway/src/gateway/xlsx-gateway.ts'
@@ -32,11 +36,14 @@ interface ParsedCell {
   formula?: string
 }
 
-type SheetMetadata=Pick<WorkbookRangeResult,'sheetProtection'|'protectedRanges'|'autoFilter'|'autoFilterColumns'|'rows'|'merges'|'conditionalRules'>
-  & Pick<WorkbookFile['sheets'][number],'columnWidths'|'defaultRowHeight'|'defaultColumnWidth'|'defaultRowHeightFixed'|'baseColumnWidth'|'freeze'>
+type SheetViewMetadata=Pick<WorkbookFile['sheets'][number],'tabColor'|'showGridLines'|'showFormulas'|'showRowColHeaders'|'rightToLeft'|'zoomScale'>
+type SheetMetadata=Pick<WorkbookRangeResult,'sheetProtection'|'protectedRanges'|'autoFilter'|'autoFilterColumns'|'rows'|'merges'|'conditionalRules'|'hyperlinks'|'dataValidations'|'rowBreaks'|'colBreaks'|'pageSetup'>
+  & Pick<WorkbookFile['sheets'][number],'columnWidths'|'defaultRowHeight'|'defaultColumnWidth'|'defaultRowHeightFixed'|'baseColumnWidth'|'freeze'|'comments'|'tables'>
+  & { view: SheetViewMetadata }
 type FilterColumn=WorkbookRangeResult['autoFilterColumns'][number]
 const EMPTY_SHEET_METADATA:SheetMetadata={sheetProtection:null,protectedRanges:[],autoFilter:null,autoFilterColumns:[],
-  rows:[],merges:[],conditionalRules:[],columnWidths:[],defaultRowHeight:null,defaultColumnWidth:null,freeze:null}
+  rows:[],merges:[],conditionalRules:[],hyperlinks:[],columnWidths:[],defaultRowHeight:null,defaultColumnWidth:null,freeze:null,
+  dataValidations:[],rowBreaks:[],colBreaks:[],pageSetup:null,comments:[],tables:[],view:{tabColor:null,showGridLines:true}}
 
 interface ParsedSheet extends SheetMetadata {
   id: string
@@ -49,7 +56,7 @@ interface ParsedSheet extends SheetMetadata {
   valueColumnCount: number
 }
 
-const sessions = new Map<string, { sheets: ParsedSheet[]; zip: JSZip }>()
+const sessions = new Map<string, { sheets: ParsedSheet[]; visuals: WorkbookFile['visuals']; zip: JSZip }>()
 
 const star=Symbol('star'),one=Symbol('one')
 function matchFindText(query:string,matchCase:boolean,whole:boolean,wildcards:boolean){
@@ -84,15 +91,20 @@ type ZipText=(path:string)=>Promise<string>
 type XmlElement={ [name: `@_${string}`]: string|undefined }
 const metadataXml=new XMLParser({
   ignoreAttributes:false,removeNSPrefix:true,processEntities:false,parseTagValue:false,trimValues:false,
+  cdataPropName:'#cdata',
   // The basic workbook reader already imports cell values. Keep only row headers with layout here.
   stopNodes:['worksheet.sheetData.row'],
   updateTag:(name,_path,attrs)=>name==='row'&&attrs?.['@_ht']===undefined&&attrs?.['@_hidden']===undefined
     &&attrs?.['@_s']===undefined?false:name,
   isArray:(_name,path)=>typeof path==='string'&&[
+    'Relationships.Relationship',
     'worksheet.sheetData.row',
     'worksheet.cols.col','worksheet.mergeCells.mergeCell','worksheet.sheetViews.sheetView','worksheet.conditionalFormatting',
     'worksheet.conditionalFormatting.cfRule','worksheet.conditionalFormatting.cfRule.colorScale.cfvo',
     'worksheet.conditionalFormatting.cfRule.colorScale.color',
+    'worksheet.hyperlinks.hyperlink',
+    'worksheet.dataValidations.dataValidation','worksheet.extLst.ext','worksheet.extLst.ext.dataValidations.dataValidation',
+    'worksheet.rowBreaks.brk','worksheet.colBreaks.brk',
     'worksheet.protectedRanges.protectedRange','worksheet.autoFilter','worksheet.autoFilter.filterColumn',
     'worksheet.autoFilter.filterColumn.filters.filter','worksheet.autoFilter.filterColumn.customFilters.customFilter',
   ].includes(path),
@@ -104,12 +116,64 @@ const attribute=(element:XmlElement|undefined,name:string)=>{
 const enabled=(value:string|undefined)=>value==='1'||value==='true'
 const disabled=(value:string|undefined)=>value==='0'||value==='false'
 
-function readWorkbookProtection(xml:string):WorkbookFile['workbookProtection']{
-  if(!xml.includes('workbookProtection'))return undefined
-  const element=metadataXml.parse(xml).workbook?.workbookProtection
-  if(element===undefined)return undefined
-  return {lockStructure:enabled(attribute(element,'lockStructure')),
-    hasPassword:attribute(element,'workbookPassword')!==undefined||attribute(element,'workbookHashValue')!==undefined}
+type OrderedXml = {':@'?:XmlElement;'#text'?:string;'#cdata'?:OrderedXml[];[name:string]:unknown}
+const workbookMetadataXml=new XMLParser({
+  ignoreAttributes:false,removeNSPrefix:true,processEntities:false,parseTagValue:false,trimValues:false,
+  preserveOrder:true,cdataPropName:'#cdata',
+})
+function readWorkbookMetadata(xml:string,readableSheets:readonly {name:string}[]){
+  const elements=(nodes:OrderedXml[],tag:string)=>nodes.flatMap(node=>
+    Array.isArray(node[tag])?[{attrs:node[':@'],children:node[tag] as OrderedXml[]}]:[])
+  const children=(nodes:OrderedXml[],tag:string)=>elements(nodes,tag)[0]?.children??[]
+  const nonnegativeIndex=(raw:string|undefined)=>{
+    const index=Number(raw)
+    return raw!==undefined&&/^\d+$/.test(raw)&&Number.isSafeInteger(index)?index:undefined
+  }
+  const workbook=children(workbookMetadataXml.parse(xml),'workbook')
+  const declarations=elements(children(workbook,'sheets'),'sheet').map(({attrs})=>({
+    name:attribute(attrs,'name'),
+    state:attribute(attrs,'state'),
+  }))
+  const visibility=new Map(declarations.flatMap(({name,state})=>name===undefined?[]:[[name,state]] as const))
+  const readableIndexes=new Map(readableSheets.map(({name},index)=>[name,index]))
+  const readableIndex=(declaredIndex:number)=>{
+    const name=declarations[declaredIndex]?.name
+    return name===undefined?undefined:readableIndexes.get(name)
+  }
+  let savedTab=0
+  for(const {attrs} of elements(children(workbook,'bookViews'),'workbookView')){
+    const activeTab=attribute(attrs,'activeTab')
+    if(activeTab!==undefined)savedTab=nonnegativeIndex(activeTab)??0
+  }
+  const definedNames:WorkbookFile['definedNames']=[]
+  const scopedSheets=new Set<number>()
+  const printNames=new Map<number,Pick<WorkbookFile['sheets'][number],'printArea'|'printTitles'>>()
+  for(const {attrs,children:body} of elements(children(workbook,'definedNames'),'definedName')){
+    const name=attribute(attrs,'name')
+    if(!name)continue
+    const local=nonnegativeIndex(attribute(attrs,'localSheetId'))
+    const sheetIndex=local===undefined?undefined:readableIndex(local)
+    if(local!==undefined&&sheetIndex===undefined)continue
+    if(sheetIndex!==undefined)scopedSheets.add(sheetIndex)
+    const formula=body.map(node=>node['#cdata']?.[0]?.['#text']??decodeAttribute(node['#text']??'')).join('')
+    if(!formula)continue
+    if(name==='_xlnm.Print_Area'||name==='_xlnm.Print_Titles'){
+      if(sheetIndex!==undefined&&formula.length<=2_000){
+        const names=printNames.get(sheetIndex)??{}
+        if(name==='_xlnm.Print_Area')names.printArea=formula
+        else names.printTitles=formula
+        printNames.set(sheetIndex,names)
+      }
+      continue
+    }
+    if(!name.startsWith('_xlnm')&&!enabled(attribute(attrs,'hidden'))){
+      definedNames.push({name,formula:withoutFutureFunctionMarkers(formula),...(sheetIndex===undefined?{}:{sheetIndex})})
+    }
+  }
+  const protection=elements(workbook,'workbookProtection')[0]
+  const workbookProtection=protection&&{lockStructure:enabled(attribute(protection.attrs,'lockStructure')),
+    hasPassword:attribute(protection.attrs,'workbookPassword')!==undefined||attribute(protection.attrs,'workbookHashValue')!==undefined}
+  return {activeTab:readableIndex(savedTab)??0,visibility,definedNames,scopedSheets,printNames,workbookProtection}
 }
 
 const filterOperators=['notEqual','greaterThan','greaterThanOrEqual','lessThan','lessThanOrEqual'] as const
@@ -127,8 +191,101 @@ function sizeAttribute(element:XmlElement|undefined,name:string){
   return raw?.trim()&&Number.isFinite(n)&&n>=0?n:undefined
 }
 
-type ResolveColor=(element:XmlElement)=>{rgb:string|undefined}
-function readWorksheetMetadata(xml:string,resolveColor:ResolveColor):SheetMetadata{
+type ElementText = string | { '#text'?: string; '#cdata'?: string }
+function elementText(node: ElementText | undefined): string {
+  if (typeof node === 'string') return decodeAttribute(node)
+  return decodeAttribute(node?.['#text']??'') + (node?.['#cdata']??'')
+}
+
+type ValidationElement = XmlElement & {
+  sqref?: ElementText
+  formula1?: ElementText | {f?: ElementText}
+  formula2?: ElementText | {f?: ElementText}
+}
+const validationExtension = '{CCE6A557-97BC-4B89-ADB6-D9C93CAAB3DF}'
+function readDataValidations(
+  legacy: readonly ValidationElement[],
+  extensions: readonly (XmlElement & {dataValidations?: {dataValidation?: ValidationElement[]}})[],
+): SheetMetadata['dataValidations'] {
+  function formulaText(formula: ValidationElement['formula1']) {
+    if (typeof formula === 'object' && 'f' in formula) return elementText(formula.f)
+    return elementText(formula as ElementText | undefined)
+  }
+
+  const extended = extensions.flatMap(extension =>
+    attribute(extension,'uri')?.toUpperCase() === validationExtension
+      ? extension.dataValidations?.dataValidation ?? []
+      : [],
+  )
+  return [...legacy.map(rule=>({rule,ref:attribute(rule,'sqref')??''})),
+    ...extended.map(rule=>({rule,ref:elementText(rule.sqref)}))].flatMap(({rule,ref})=>{
+    const ranges = ref.trim().split(/\s+/).map(sheetArea).filter(area=>area!==null)
+    if (!ranges.length) return []
+    const formulas = [rule.formula1,rule.formula2].filter(formula=>formula!==undefined).map(formulaText)
+    return [{
+      ranges,ruleType:attribute(rule,'type')??'none',operator:attribute(rule,'operator'),formulas,
+      allowBlank:enabled(attribute(rule,'allowBlank')),suppressDropdown:enabled(attribute(rule,'showDropDown')),
+      showInputMessage:enabled(attribute(rule,'showInputMessage')),showErrorMessage:enabled(attribute(rule,'showErrorMessage')),
+      errorStyle:attribute(rule,'errorStyle'),errorTitle:attribute(rule,'errorTitle'),error:attribute(rule,'error'),
+      promptTitle:attribute(rule,'promptTitle'),prompt:attribute(rule,'prompt'),
+    }]
+  })
+}
+
+type PageSetup = NonNullable<SheetMetadata['pageSetup']>
+const headerFooterSections = ['oddHeader','oddFooter','evenHeader','evenFooter','firstHeader','firstFooter'] as const
+type SheetPrintElements = {
+  sheetPr?: {pageSetUpPr?: XmlElement}
+  pageSetup?: XmlElement
+  pageMargins?: XmlElement
+  printOptions?: XmlElement
+  headerFooter?: XmlElement & Partial<Record<(typeof headerFooterSections)[number],ElementText>>
+}
+
+function integerAttribute(element: XmlElement | undefined, name: string, min: number, max: number) {
+  const value = sizeAttribute(element,name)
+  return value!==undefined && Number.isInteger(value) && value>=min && value<=max ? value : undefined
+}
+
+function readPageSetup(worksheet: SheetPrintElements | undefined): SheetMetadata['pageSetup'] {
+  const setup=worksheet?.pageSetup, options=worksheet?.printOptions, footer=worksheet?.headerFooter
+  const orientation=attribute(setup,'orientation')
+  const keys=['left','right','top','bottom','header','footer'] as const
+  const margins=keys.map(key=>sizeAttribute(worksheet?.pageMargins,key))
+  const print:PageSetup={
+    orientation:orientation==='portrait'||orientation==='landscape'?orientation:undefined,
+    paperSize:integerAttribute(setup,'paperSize',1,256),scale:integerAttribute(setup,'scale',10,400),
+    fitToWidth:integerAttribute(setup,'fitToWidth',0,32_767),fitToHeight:integerAttribute(setup,'fitToHeight',0,32_767),
+    fitToPage:enabled(attribute(worksheet?.sheetPr?.pageSetUpPr,'fitToPage'))||undefined,
+    printGridlines:enabled(attribute(options,'gridLines'))||undefined,
+    printHeadings:enabled(attribute(options,'headings'))||undefined,
+    differentOddEven:enabled(attribute(footer,'differentOddEven'))||undefined,
+    differentFirst:enabled(attribute(footer,'differentFirst'))||undefined,
+    headerFooterFixedSize:disabled(attribute(footer,'scaleWithDoc'))||undefined,
+  }
+  if (margins.every(value=>value!==undefined&&value<=10)) {
+    print.margins={left:margins[0]!,right:margins[1]!,top:margins[2]!,bottom:margins[3]!,header:margins[4]!,footer:margins[5]!}
+  }
+  for(const section of headerFooterSections){
+    const content=elementText(footer?.[section])
+    if(content.length>0&&content.length<=500)print[section]=content
+  }
+  return Object.values(print).some(value=>value!==undefined)?print:null
+}
+
+function readManualBreaks(items: readonly XmlElement[], max: number): number[] {
+  const breaks = new Set<number>()
+  for (const item of items) {
+    if (!enabled(attribute(item,'man'))) continue
+    const id = integerAttribute(item,'id',0,max)
+    if (id!==undefined) breaks.add(id)
+    if (breaks.size===1_023) break
+  }
+  return [...breaks].sort((a,b)=>a-b)
+}
+
+type ResolveColor=(element:XmlElement|undefined)=>{rgb:string|undefined}
+function readWorksheetMetadata(xml:string,resolveColor:ResolveColor,linkTargets:ReadonlyMap<string,string>):Omit<SheetMetadata,'comments'|'tables'>{
   const worksheet=metadataXml.parse(xml).worksheet
   const element=worksheet?.sheetProtection
   const parsed=element===undefined?null:parseSheetProtectionAttributes(name=>attribute(element,name))
@@ -154,6 +311,16 @@ function readWorksheetMetadata(xml:string,resolveColor:ResolveColor):SheetMetada
   for(const merge of worksheet?.mergeCells?.mergeCell??[]){
     const area=sheetArea(attribute(merge,'ref'))
     if(area)merges.push(area)
+  }
+  const hyperlinks:SheetMetadata['hyperlinks']=[]
+  for(const link of worksheet?.hyperlinks?.hyperlink??[]){
+    // A hyperlink on a range is anchored at its first cell, as in the Rust reader.
+    const anchor=attribute(link,'ref')?.split(':',1)[0]?.replaceAll('$','').toUpperCase()
+    const cell=anchor&&parseA1(anchor)
+    if(!cell)continue
+    const id=attribute(link,'id'),location=attribute(link,'location')
+    const target=id!==undefined?linkTargets.get(id):location!==undefined?'#'+location:undefined
+    if(target!==undefined)hyperlinks.push({...cell,target})
   }
   const conditionalRules:SheetMetadata['conditionalRules']=[]
   for(const cf of worksheet?.conditionalFormatting??[]){
@@ -182,12 +349,30 @@ function readWorksheetMetadata(xml:string,resolveColor:ResolveColor):SheetMetada
     rows.push({row:r-1,height:sizeAttribute(node,'ht'),customHeight:enabled(attribute(node,'customHeight'))||undefined,
       hidden:enabled(attribute(node,'hidden')),styleIndex:positiveStyle(attribute(node,'s'))})
   }
-  const pane=worksheet?.sheetViews?.sheetView?.[0]?.pane
+  const view=worksheet?.sheetViews?.sheetView?.[0]
+  const pane=view?.pane
+  const viewKind=attribute(view,'view')
+  const zoomAttribute=(name:string)=>sizeAttribute(view,name)||undefined
+  const savedZoom=viewKind==='pageBreakPreview'||viewKind==='pageLayout'
+    ?zoomAttribute('zoomScaleNormal'):zoomAttribute('zoomScale')??zoomAttribute('zoomScaleNormal')
+  const zoomScale=savedZoom===undefined?100:Math.max(10,Math.min(400,Math.round(savedZoom)))
   const split=(name:string,max:number)=>{const n=Number(attribute(pane,name));return Number.isInteger(n)&&n>=0&&n<=max?n:0}
   const frozenRows=split('ySplit',1_048_576),frozenColumns=split('xSplit',16_384)
   const frozen=['frozen','frozenSplit'].includes(attribute(pane,'state')??'')
   const format=worksheet?.sheetFormatPr
-  return {sheetProtection,protectedRanges,...readAutoFilter(worksheet?.autoFilter?.[0]),rows,columnWidths:columns,merges,conditionalRules,
+  return {sheetProtection,protectedRanges,...readAutoFilter(worksheet?.autoFilter?.[0]),rows,columnWidths:columns,merges,conditionalRules,hyperlinks,
+    dataValidations:readDataValidations(worksheet?.dataValidations?.dataValidation??[],worksheet?.extLst?.ext??[]),
+    rowBreaks:readManualBreaks(worksheet?.rowBreaks?.brk??[],1_048_575),
+    colBreaks:readManualBreaks(worksheet?.colBreaks?.brk??[],16_383),
+    pageSetup:readPageSetup(worksheet),
+    view:{
+      tabColor:resolveColor(worksheet?.sheetPr?.tabColor).rgb??null,
+      showGridLines:!disabled(attribute(view,'showGridLines')),
+      showFormulas:enabled(attribute(view,'showFormulas'))||undefined,
+      showRowColHeaders:disabled(attribute(view,'showRowColHeaders'))?false:undefined,
+      rightToLeft:enabled(attribute(view,'rightToLeft'))||undefined,
+      zoomScale:zoomScale===100?undefined:zoomScale,
+    },
     freeze:frozen&&(frozenRows||frozenColumns)?{frozenRows,frozenColumns}:null,
     defaultRowHeight:sizeAttribute(format,'defaultRowHeight')||null,defaultColumnWidth:sizeAttribute(format,'defaultColWidth')||null,
     defaultRowHeightFixed:enabled(attribute(format,'customHeight'))||undefined,baseColumnWidth:sizeAttribute(format,'baseColWidth')??null}
@@ -340,7 +525,8 @@ async function readWorkbookStyles(text: ZipText) {
   return {styles,theme,color}
 }
 
-async function readSheetMetadata(text: ZipText,resolveColor:ResolveColor) {
+async function readSheetMetadata(text: ZipText,resolveColor:ResolveColor,theme:readonly string[]) {
+  const customTableStyles=readCustomTableStyles(await text('xl/styles.xml'),resolveColor)
   const workbookPath = 'xl/workbook.xml'
   const workbookRels = parseRelationships(await text(relsPathFor(workbookPath)))
   const sheets = new Map<string, SheetMetadata & {styleIndexes:Map<string,number>}>()
@@ -349,13 +535,27 @@ async function readSheetMetadata(text: ZipText,resolveColor:ResolveColor) {
     if (!rel) continue
     const path = resolveRelTarget(workbookPath, rel.target)
     const xml = await text(path)
+    const linkTargets=new Map<string,string>()
+    if(xml.includes('hyperlink')){
+      const linkRelationships=metadataXml.parse(await text(relsPathFor(path))).Relationships?.Relationship??[]
+      for(const relation of linkRelationships){
+        const id=attribute(relation,'Id'),target=attribute(relation,'Target')
+        if(id!==undefined&&target!==undefined&&attribute(relation,'Type')?.endsWith('/hyperlink')){
+          linkTargets.set(id,target)
+        }
+      }
+    }
     const cells = new Map<string, number>()
     for (const match of xml.matchAll(/<(?:[\w.-]+:)?c\b([^>]*)>/g)) {
       const address = readAttribute(match[1]!, 'r')
       const style = readAttribute(match[1]!, 's')
       if (address && style !== undefined && /^\d+$/.test(style)) cells.set(decodeAttribute(address), Number(style))
     }
-    sheets.set(sheet.name,{styleIndexes:cells,...readWorksheetMetadata(xml,resolveColor)})
+    const [comments,tables]=await Promise.all([
+      readNodeSheetComments(text,path),
+      readWorksheetTables(text,path,xml,theme,customTableStyles),
+    ])
+    sheets.set(sheet.name,{styleIndexes:cells,...readWorksheetMetadata(xml,resolveColor,linkTargets),comments,tables})
   }
   return sheets
 }
@@ -408,15 +608,15 @@ function readRange(sheet: ParsedSheet,r: Bounds) {
     cells,
     rows:sheet.rows.filter(row=>row.row>=r.startRow&&row.row<=r.endRow),
     merges:sheet.merges.filter(area=>area.startRow<=r.endRow&&area.endRow>=r.startRow&&area.startColumn<=r.endColumn&&area.endColumn>=r.startColumn),
-    hyperlinks: [],
+    hyperlinks: sheet.hyperlinks.filter(link=>link.row>=r.startRow&&link.row<=r.endRow&&link.column>=r.startColumn&&link.column<=r.endColumn),
     conditionalRules: sheet.conditionalRules,
     autoFilter: sheet.autoFilter,
     autoFilterColumns: sheet.autoFilterColumns,
-    dataValidations: [],
+    dataValidations: sheet.dataValidations,
     sheetProtection: sheet.sheetProtection,
-    rowBreaks: [],
-    colBreaks: [],
-    pageSetup: null,
+    rowBreaks: sheet.rowBreaks,
+    colBreaks: sheet.colBreaks,
+    pageSetup: sheet.pageSetup,
     protectedRanges: sheet.protectedRanges,
     indexedThroughRow: sheet.rowCount-1,
     indexingComplete: true,
@@ -452,7 +652,7 @@ async function handleCommand(packet: Record<string, unknown>): Promise<unknown> 
     const styling=readWorkbookStyles(text)
     const [imported, pivots, {styles,theme}, metadata, workbookXml] = await Promise.all([
       readBasicWorkbook(bytes, { includeFormulaCache: true }),
-      readPivotMetadata(text), styling, styling.then(({color})=>readSheetMetadata(text,color)),text('xl/workbook.xml'),
+      readPivotMetadata(text), styling, styling.then(({color,theme})=>readSheetMetadata(text,color,theme)),text('xl/workbook.xml'),
     ])
     let entryCount = 0
     for (const file of Object.values(zip.files)) if (!file.dir) entryCount++
@@ -480,13 +680,13 @@ async function handleCommand(packet: Record<string, unknown>): Promise<unknown> 
           ...(cell.formula ? { formula: cell.formula } : {}),
         })
       }
-      for(const area of pivots.get(s.name)?.pivotRanges??[]){
+      for(const area of [...(pivots.get(s.name)?.pivotRanges??[]),...sheetMetadata.merges,...sheetMetadata.tables.map(table=>table.range)]){
         rowCount=Math.max(rowCount,area.endRow+1)
         columnCount=Math.max(columnCount,area.endColumn+1)
       }
-      for(const area of sheetMetadata.merges){
-        rowCount=Math.max(rowCount,area.endRow+1)
-        columnCount=Math.max(columnCount,area.endColumn+1)
+      for(const cell of [...sheetMetadata.hyperlinks,...sheetMetadata.comments]){
+        rowCount=Math.max(rowCount,cell.row+1)
+        columnCount=Math.max(columnCount,cell.column+1)
       }
       for(const col of sheetMetadata.columnWidths)columnCount=Math.max(columnCount,col.endColumn+1)
       for(const row of sheetMetadata.rows)rowCount=Math.max(rowCount,row.row+1)
@@ -494,43 +694,52 @@ async function handleCommand(packet: Record<string, unknown>): Promise<unknown> 
       return { id: s.id, name: s.name, cells, rowCount, columnCount, valueCellCount, valueRowCount, valueColumnCount,
         ...sheetMetadata }
     })
+    const {activeTab,visibility,definedNames,scopedSheets,printNames,workbookProtection}=readWorkbookMetadata(workbookXml,parsedSheets)
+    const visuals=await readWorkbookVisuals(text,parsedSheets,theme,path=>zip.file(path)!==null)
     const sessionId = randomUUID()
-    sessions.set(sessionId, { sheets: parsedSheets, zip })
-    const workbookProtection=readWorkbookProtection(workbookXml)
+    sessions.set(sessionId, { sheets: parsedSheets, visuals, zip })
     const inspection = {
       sessionId,
       entryCount,
-      sheets: parsedSheets.map(s => ({
-        id: s.id,
-        name: s.name,
-        rowCount:s.rowCount,
-        columnCount:s.columnCount,
-        storedCellCount:s.cells.length,
-        valueCellCount:s.valueCellCount,
-        valueRowCount:s.valueRowCount,
-        valueColumnCount:s.valueColumnCount,
-        columnWidths:s.columnWidths,defaultRowHeight:s.defaultRowHeight,defaultRowHeightFixed:s.defaultRowHeightFixed,
-        defaultColumnWidth:s.defaultColumnWidth,baseColumnWidth:s.baseColumnWidth,freeze:s.freeze,
-        hidden: false,
-        tabColor: null,
-        showGridLines: true,
-        tables: [],
-        comments: [],
-        pivotRanges: pivots.get(s.name)?.pivotRanges ?? [],
-        pivotTables: pivots.get(s.name)?.pivotTables ?? [],
-        sparklines: [],
-        cellImages: [],
-      })),
-      activeTab: 0,
+      sheets: parsedSheets.map((s,index) => {
+        const state=visibility.get(s.name)
+        return {
+          id: s.id,
+          name: s.name,
+          rowCount:s.rowCount,
+          columnCount:s.columnCount,
+          storedCellCount:s.cells.length,
+          valueCellCount:s.valueCellCount,
+          valueRowCount:s.valueRowCount,
+          valueColumnCount:s.valueColumnCount,
+          columnWidths:s.columnWidths,defaultRowHeight:s.defaultRowHeight,defaultRowHeightFixed:s.defaultRowHeightFixed,
+          defaultColumnWidth:s.defaultColumnWidth,baseColumnWidth:s.baseColumnWidth,freeze:s.freeze,
+          hidden: state==='hidden'||state==='veryHidden',
+          ...(state==='veryHidden'?{veryHidden:true}:{}),
+          ...(scopedSheets.has(index)?{hasScopedDefinedNames:true}:{}),
+          ...printNames.get(index),
+          ...s.view,
+          tables:s.tables,
+          comments:s.comments,
+          pivotRanges: pivots.get(s.name)?.pivotRanges ?? [],
+          pivotTables: pivots.get(s.name)?.pivotTables ?? [],
+          sparklines: [],
+          cellImages: [],
+        }
+      }),
+      activeTab,
       styles,
       ...(theme.length?{themeColors:theme}:{}),
       dxfStyles: [],
-      visuals: [],
-      definedNames: [],
+      visuals,
+      definedNames,
       ...(workbookProtection?{workbookProtection}:{}),
     }
     if(packet.openingViewport===true&&Buffer.byteLength(JSON.stringify(inspection))<=256*1024){
-      return {...inspection,openingViewport:openingViewport(parsedSheets[inspection.activeTab]!)}
+      const visible=inspection.sheets[activeTab]?.hidden
+        ?inspection.sheets.findIndex(sheet=>!sheet.hidden):activeTab
+      const sheet=parsedSheets[visible]
+      if(sheet)return {...inspection,openingViewport:openingViewport(sheet)}
     }
     return inspection
   }
@@ -587,12 +796,13 @@ async function handleCommand(packet: Record<string, unknown>): Promise<unknown> 
   if (cmd === 'read_media') {
     const session = sessions.get(String(packet.sessionId ?? ''))
     const visualId = String(packet.visualId ?? '')
-    const file = session?.zip.file(`xl/media/${visualId}`) ?? null
+    const visual=session?.visuals.find(item=>item.id===visualId&&item.kind==='image')
+    const path=visual?.mediaPath??`xl/media/${visualId}`
+    const file = session?.zip.file(path) ?? null
     if (!file) throw new Error('MEDIA_NOT_FOUND')
     const bytes = await file.async('nodebuffer')
-    const ext = visualId.split('.').pop()?.toLowerCase() ?? 'png'
-    const mimeType = ext === 'jpg' || ext === 'jpeg' ? 'image/jpeg' : ext === 'gif' ? 'image/gif' : 'image/png'
-    return { mimeType, dataBase64: bytes.toString('base64') }
+    const mediaType = visualMediaType(path)??'image/png'
+    return { mediaType, base64: bytes.toString('base64') }
   }
   if (cmd === 'recalc_cells') {
     const reads = (packet.reads ?? []) as {

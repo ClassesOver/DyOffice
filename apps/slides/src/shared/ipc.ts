@@ -9,7 +9,7 @@ import type { AiPanelPrefs } from '@genoffice/ui'
  * them to the model and rebuilds the RenderSlide.
  */
 import type { RenderSlide } from '@genoffice/pptx-render'
-import type { CustGeomPathCmd, HeaderFooterState, SectionInfo, SlideComment, SlideShapeKey } from '@genoffice/pptx-engine'
+import type { CustomShowInfo, CustGeomPathCmd, HeaderFooterState, SectionInfo, SlideComment, SlideShapeKey } from '@genoffice/pptx-engine'
 import type { FontSizeStep } from '@genoffice/pptx-ops/font-size'
 // the font catalog's shape is the store's to declare, not a copy kept in step by hand
 import type { CatalogEntry as FontCatalogEntry } from '@genoffice/electron-utils/font-store'
@@ -47,7 +47,7 @@ export type {
   LinkTargetOp,
 }
 
-export type { HeaderFooterState, SectionInfo, SlideComment } from '@genoffice/pptx-engine'
+export type { CustomShowInfo, HeaderFooterState, SectionInfo, SlideComment } from '@genoffice/pptx-engine'
 
 // Canonical definitions of AI-related types live in @genoffice/ai-provider / @genoffice/agent-core (shared with docs)
 export type {
@@ -1673,6 +1673,8 @@ export interface SlidesApi {
   setSlideHidden: (op: SetSlideHiddenOp) => Promise<RenderSlide | null>
   /** Hide/unhide a thumbnail selection in one undo step; returns a partial update */
   setSlidesHidden: (op: SetSlidesHiddenOp) => Promise<SlideUpdate | null>
+  getCustomShows: () => Promise<CustomShowInfo[]>
+  setCustomShows: (shows: CustomShowInfo[]) => Promise<CustomShowInfo[] | null>
   /** The current document's section list ([] when there are no sections) */
   getSections: () => Promise<SectionInfo[]>
   /** Overwrite-write the section structure; returns the updated section list */
@@ -1781,6 +1783,7 @@ export interface SlidesApi {
   onHistoryChanged: (handler: (state: { canUndo: boolean; canRedo: boolean }) => void) => () => void
   /** Another window attached to the same file changed the deck (shared session): fresh render state to apply */
   onDeckChanged: (handler: (state: DeckChange) => void) => () => void
+  reportCustomShowDraft?: (pending: boolean) => void
   reportCloseSaveResult: (ok: boolean) => void
   /** Mirror the autosave toggle state to the main process: files with it on save silently on close, no dialog */
   setAutoSavePref: (on: boolean) => void

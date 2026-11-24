@@ -78,6 +78,14 @@ Common mistakes
 
 - Re-sending identical settings: the op reports "nothing changed" as an error; skip it when the values are already in place.
 
+### setCustomShows (not-ai-callable)
+
+`{shows:[{id,name,slidePaths},…]} — full replace`
+
+Replaces the presentation's custom show list. Reuse the saved numeric ID to
+edit a show. A temporary ID creates a new native numeric ID. Each show can
+list slide part paths in its own order and can include a slide more than once.
+
 ### setSections
 
 `{sections:[{id,name,slideIndices},…]} — full replace`
@@ -98,6 +106,13 @@ GUID for a new one.
 ```
 
 Related: `addSection`, `renameSection`, `removeSection`, `moveSection` for single changes.
+
+### removeSectionSlides (not-ai-callable)
+
+`{id} — remove a section and its slides`
+
+Pass an existing section ID to delete it with its slides, or `null` to delete
+the slides before the first section. At least one slide must remain.
 
 ### applyTheme
 

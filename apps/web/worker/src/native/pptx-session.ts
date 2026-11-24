@@ -4,8 +4,9 @@ import {safeExternalUrl} from '../../../../../packages/electron-utils/src/safe-e
 import {sniffImageMime} from '../../../../slides/src/main/media-mime.ts'
 import {pictureFrame} from '../../../../slides/src/main/picture-frame.ts'
 import {tiffToPng} from '../../../../slides/src/main/tiff-decode.ts'
+import type {CustomShowInfo} from '@genoffice/pptx-engine'
 import type {AnimationItem,RunLink,SlidePresentationInfo} from './pptx-session-host'
-import {getRunLinks,getSlideTransition,getSlideAdvanceTime,getSlideShapeKeys,getSections,narrationSpids,readHeaderFooter,MAX_INSERT_TABLE_DIM,NAMED_ACTIONS} from '@genoffice/pptx-engine'
+import {getCustomShows,getRunLinks,getSlideTransition,getSlideAdvanceTime,getSlideShapeKeys,getSections,narrationSpids,readHeaderFooter,MAX_INSERT_TABLE_DIM,NAMED_ACTIONS} from '@genoffice/pptx-engine'
 import type {LinkTarget as LinkTargetOp} from '@genoffice/pptx-engine'
 import { openPptx, savePptx, getChartElementData, getSlideLinks, getSlideAnimations, elementSpid, parseTheme, getSlideNotes, getSlideComments, materializeSlide, listSlideLayouts, builtinLayoutInfos, shouldOfferBuiltinLayouts, type OpenedPptx, type SectionInfo, type Slide, type SlideSize, type SlideComment } from '@genoffice/pptx-engine'
 import { matchesElementRef } from '@genoffice/pptx-engine/identity'
@@ -81,6 +82,7 @@ export interface PptxSession extends Pick<PptxChildSession, 'copyClipboard'|'med
   layouts(expectedGeneration: number, signal?: AbortSignal): Promise<{layouts: ReturnType<typeof listSlideLayouts>; size: SlideSize}>
   masterParts(expectedGeneration: number, fitWidthPx?: number, signal?: AbortSignal): Promise<SlidesMasterView[]>
   applyMaster(expectedGeneration: number, partPath: string, operation: unknown, fitWidthPx?: number, signal?: AbortSignal): Promise<SlidesMasterEditResult>
+  customShows(expectedGeneration: number, signal?: AbortSignal): Promise<CustomShowInfo[]>
   renderAll(expectedGeneration: number, fitWidthPx?: number, signal?: AbortSignal): Promise<RenderSlide[]>
   outline(expectedGeneration: number, signal?: AbortSignal): Promise<SlidesOutline>
   exportBytes(expectedGeneration: number, signal?: AbortSignal): Promise<{generation:number;bytes:Uint8Array}>
@@ -269,6 +271,7 @@ const OP_FIELDS: Record<string, readonly string[]> = {
   setTransition: ['op','target','kind'],
   setHidden: ['op','target','hidden'],
   setSections: ['op','sections'],
+  setCustomShows: ['op','shows'],
   addSection: ['op','atSlideIndex','name'],
   renameSection: ['op','id','name'],
   removeSection: ['op','id'],
@@ -992,7 +995,12 @@ export async function createPptxSession(bytes: Uint8Array, signal?: AbortSignal)
           generation++
           stateGeneration=generation
         }
-        const journal=(result.records ?? []).map(record=>({op:{op:record.op.op},...(record.slideId ? {slideId:record.slideId} : {}),...(record.created ? {created:record.created} : {})}))
+        const journal=(result.records ?? []).map(record=>({
+          op:{op:record.op.op},
+          ...(record.slideId ? {slideId:record.slideId} : {}),
+          ...(record.created ? {created:record.created} : {}),
+          ...(record.op.op==='setCustomShows' ? {after:record.after} : {}),
+        }))
         const records=(result.records??[]).map((record,index)=>record.op.op==='addPicture'?journal[index]!:record)
         return {generation,stateGeneration,...history(),records,...outlineOf(state),created:createdOf(state,result.records ?? []),transaction:{applied:result.applied,...(result.dryRun ? {dryRun:true} : {}),...(result.plan ? {plan:result.plan} : {}),...(result.failures ? {failures:result.failures.map(({index,error})=>({index,error}))} : {}),...(result.records ? {records:journal} : {})}}
       })
@@ -1331,6 +1339,9 @@ export async function createPptxSession(bytes: Uint8Array, signal?: AbortSignal)
         return {layouts,size:{...state.deck.size}}
       })
     },
+    customShows(expected,signal) {
+      return enqueue(expected,signal,getCustomShows)
+    },
     renderAll(expected,width,signal) {
       return enqueue(expected,signal,state=>renderSlides(state,fitWidth(width)))
     },
@@ -1403,6 +1414,7 @@ export function runPptxSessionChild(): void {
           case 'layouts': reply(id,{id,ok:true,result:await session.layouts(raw.expected!)}); return
           case 'masterParts': reply(id,{id,ok:true,result:await session.masterParts(raw.expected!,raw.width)}); return
           case 'applyMaster': reply(id,{id,ok:true,result:await session.applyMaster(raw.expected!,raw.partPath!,raw.operation,raw.width)}); return
+          case 'customShows': reply(id,{id,ok:true,result:await session.customShows(raw.expected!)}); return
           case 'renderAll': reply(id,{id,ok:true,result:await session.renderAll(raw.expected!,raw.width)}); return
           case 'outline': reply(id,{id,ok:true,result:await session.outline(raw.expected!)}); return
           case 'export': reply(id,{id,ok:true,result:await session.exportBytes(raw.expected!)}); return

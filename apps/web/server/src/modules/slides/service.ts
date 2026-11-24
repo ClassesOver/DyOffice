@@ -364,6 +364,12 @@ export function createSlidesService({ files, leases, revisions, host, maxConcurr
       entry.history = {canUndo:result.canUndo, canRedo:result.canRedo}
       return {generation:entry.generation, dirty:dirty(entry), slide:result.slide, sourceId:result.sourceId, history:entry.history}
     },
+    async customShows(token: string, fileId: string, input: SlidesReadInput, signal?: AbortSignal) {
+      const {entry} = await pinned(token, fileId, input.revision, signal)
+      if (!entry) throw authError(409)
+      fence(entry, input.generation)
+      return entry.handle.customShows(input.generation, signal).catch(mapSessionError)
+    },
     async slides(token: string, fileId: string, input: SlidesReadInput, signal?: AbortSignal): Promise<SlidesSlidesView> {
       const { entry } = await pinned(token, fileId, input.revision, signal)
       if (!entry) throw authError(409)
@@ -614,8 +620,8 @@ export function createSlidesService({ files, leases, revisions, host, maxConcurr
   // the authenticated token digest + exact editor/lease epoch. A new lease opens
   // a fresh persisted document, never inherits another editor's dirty child.
   const bindings=new Map<string,string>(),busy=new Map<string,{method:Method;count:number}>()
-  type Method='open'|'openOutline'|'slideInfo'|'mediaData'|'applyRecording'|'slide'|'notes'|'comments'|'animations'|'links'|'runLinks'|'chartData'|'chartColorSchemes'|'layouts'|'masterParts'|'applyMaster'|'slides'|'apply'|'editChart'|'generatePage'|'landGeneratedPages'|'applyImage'|'copyClipboard'|'pasteClipboard'|'duplicateClipboard'|'undo'|'redo'|'beginHistoryBatch'|'endHistoryBatch'|'restoreSnapshot'|'exportDraft'|'exportForSave'|'bindPreparedUpload'
-  const signedReads=new Set<Method>(['open','slide','slideInfo','mediaData','slides','notes','comments','animations','links','runLinks','chartData','chartColorSchemes','layouts','masterParts','copyClipboard'])
+  type Method='open'|'openOutline'|'slideInfo'|'mediaData'|'applyRecording'|'slide'|'notes'|'comments'|'animations'|'links'|'runLinks'|'chartData'|'chartColorSchemes'|'layouts'|'masterParts'|'applyMaster'|'customShows'|'slides'|'apply'|'editChart'|'generatePage'|'landGeneratedPages'|'applyImage'|'copyClipboard'|'pasteClipboard'|'duplicateClipboard'|'undo'|'redo'|'beginHistoryBatch'|'endHistoryBatch'|'restoreSnapshot'|'exportDraft'|'exportForSave'|'bindPreparedUpload'
+  const signedReads=new Set<Method>(['open','slide','slideInfo','mediaData','slides','notes','comments','animations','links','runLinks','chartData','chartColorSchemes','layouts','masterParts','customShows','copyClipboard'])
   function guarded<K extends Method>(method:K):typeof service[K]{
     const opensSession=method==='open'||method==='openOutline'
     return (async(token:string,fileId:string,input:SlidesReadInput,signal?:AbortSignal)=>{
@@ -712,6 +718,6 @@ export function createSlidesService({ files, leases, revisions, host, maxConcurr
     return {id,count:result.count}
   }
   function closeAll(){ service.closeAll(); bindings.clear(); clipboards.clear() }
-  return {recoverDraft,copyClipboard,pasteClipboard:authorizedPaste,duplicateClipboard:authorizedDuplicate,bindPreparedUpload:guarded('bindPreparedUpload'),open:guarded('open'),openOutline:guarded('openOutline'),slide:guarded('slide'),mediaData:guarded('mediaData'),applyRecording:guarded('applyRecording'),notes:guarded('notes'),comments:guarded('comments'),chartData:guarded('chartData'),chartColorSchemes:guarded('chartColorSchemes'),slideInfo:guarded('slideInfo'),animations:guarded('animations'),links:guarded('links'),runLinks:guarded('runLinks'),layouts:guarded('layouts'),masterParts:guarded('masterParts'),applyMaster:guarded('applyMaster'),slides:guarded('slides'),apply:guarded('apply'),editChart:guarded('editChart'),generatePage:guarded('generatePage'),landGeneratedPages:guarded('landGeneratedPages'),applyImage:guarded('applyImage'),undo:guarded('undo'),redo:guarded('redo'),beginHistoryBatch:guarded('beginHistoryBatch'),endHistoryBatch:guarded('endHistoryBatch'),restoreSnapshot:guarded('restoreSnapshot'),exportDraft:guarded('exportDraft'),exportForSave:guarded('exportForSave'),closeAll,dispose(){clearInterval(sweeper);closeAll()}}
+  return {recoverDraft,copyClipboard,pasteClipboard:authorizedPaste,duplicateClipboard:authorizedDuplicate,bindPreparedUpload:guarded('bindPreparedUpload'),open:guarded('open'),openOutline:guarded('openOutline'),slide:guarded('slide'),mediaData:guarded('mediaData'),applyRecording:guarded('applyRecording'),notes:guarded('notes'),comments:guarded('comments'),chartData:guarded('chartData'),chartColorSchemes:guarded('chartColorSchemes'),slideInfo:guarded('slideInfo'),animations:guarded('animations'),links:guarded('links'),runLinks:guarded('runLinks'),layouts:guarded('layouts'),masterParts:guarded('masterParts'),applyMaster:guarded('applyMaster'),customShows:guarded('customShows'),slides:guarded('slides'),apply:guarded('apply'),editChart:guarded('editChart'),generatePage:guarded('generatePage'),landGeneratedPages:guarded('landGeneratedPages'),applyImage:guarded('applyImage'),undo:guarded('undo'),redo:guarded('redo'),beginHistoryBatch:guarded('beginHistoryBatch'),endHistoryBatch:guarded('endHistoryBatch'),restoreSnapshot:guarded('restoreSnapshot'),exportDraft:guarded('exportDraft'),exportForSave:guarded('exportForSave'),closeAll,dispose(){clearInterval(sweeper);closeAll()}}
 }
 export type SlidesSessions = ReturnType<typeof createSlidesService>

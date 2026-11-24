@@ -204,7 +204,7 @@ describe('note pictures', () => {
       plan.replaced.get('xl/drawings/vmlDrawing1.vml') ??
       plan.added.get('xl/drawings/vmlDrawing1.vml')
     expect(vml).toBeDefined()
-    // the picture rides on the rebuilt shape as the frame fill it came in as
+    // Keep the shape's existing picture fill and relationship.
     expect(vml).toContain(
       '<v:fill o:relid="rId1" o:title="photo.png" recolor="t" rotate="t" type="frame"/>',
     )
@@ -223,13 +223,15 @@ describe('note pictures', () => {
 
   it('an imagedata placeholder without a relationship is no picture', async () => {
     // WPS writes an empty <v:imagedata> on every note; nothing may grow a
-    // picture from it.
+    // picture from it when the original shape is carried through verbatim.
     const plan = await planNotes(NOTES, await workbookWithPictureNote('<v:imagedata o:title=""/>'))
     const vml =
       plan.replaced.get('xl/drawings/vmlDrawing1.vml') ??
       plan.added.get('xl/drawings/vmlDrawing1.vml')
     expect(vml).not.toContain('type="frame"')
-    expect(vml).not.toContain('<v:imagedata')
+    expect(vml).toContain('<v:imagedata o:title=""/>')
+    expect(vml).not.toContain('relid=')
+    expect([...plan.addedBinary.keys()].some((path) => path.startsWith('xl/media/'))).toBe(false)
   })
 
   it('leaves the VML relationships and the media part alone', async () => {

@@ -78,6 +78,8 @@ import { PrintDialog } from './components/PrintDialog'
 import { ExportVideoDialog } from './components/ExportVideoDialog'
 import { FindReplaceDialog } from './components/FindReplaceDialog'
 import { formatClock, type CustomShow } from './slideshow-utils'
+import { customShowPaths, customShowIndexes, readLegacyShows, type LegacyShows } from './custom-shows'
+import type { CustomShowInfo } from '../shared/ipc'
 import { ContextMenu } from './components/ContextMenu'
 import { ShapeGalleryPopover } from './components/ShapeGalleryPopover'
 import { PasteOptionsFloater } from './components/PasteOptionsFloater'
@@ -414,6 +416,9 @@ export interface SlidesAppHost {
   onEditorReady?: (handle: SlidesEditorHandle) => void
 }
 
+type CustomShowLegacy = LegacyShows & { before: string }
+type CustomShowMigration = CustomShowLegacy & { after: string; undone: boolean | undefined }
+type CustomShowDraft = { shows: CustomShowInfo[]; changed: boolean; legacy?: CustomShowLegacy }
 type NotesKey = string | number
 type PendingNotes = NotesDraft & { writeFailed?: boolean }
 type SlideGuide = { axis: 'v' | 'h'; pos: number }
@@ -637,9 +642,53 @@ export function App({ host }: { host?: SlidesAppHost } = {}) {
   const [slideShow, setSlideShow] = useState<SlideShowState | null>(null)
   /** Presenter view (single-window version; mutually exclusive with slideShow) */
   const [presenter, setPresenter] = useState<{ startAt: number } | null>(null)
-  // ── Custom shows: document-level list (persisted to localStorage by file path) + management dialog ──
-  const [customShows, setCustomShows] = useState<CustomShow[]>([])
-  const [customShowDlgOpen, setCustomShowDlgOpen] = useState(false)
+  const [customShowDraft, setCustomShowDraftState] = useState<CustomShowDraft | null>(null)
+  const customShowDraftRef = useRef<CustomShowDraft | null>(null)
+  const customShowOpenRequest = useRef(0)
+  const customShowOpenSlides = useRef<Array<Pick<RenderSlide, 'partPath'>>>([])
+  const customShowWrite = useRef<Promise<boolean> | null>(null)
+  const [writingCustomShows, setWritingCustomShows] = useState(false)
+  const [customShowError, setCustomShowError] = useState<string | null>(null)
+  const migratedCustomShows = useRef<CustomShowMigration | undefined>(undefined)
+  const setCustomShowDraft = useCallback((draft: CustomShowDraft | null) => {
+    const pending = draft?.changed === true
+    if (draft === null || pending !== (customShowDraftRef.current?.changed === true)) {
+      window.slidesApi.reportCustomShowDraft?.(pending)
+    }
+    customShowDraftRef.current = draft
+    setCustomShowDraftState(draft)
+  }, [])
+  const commitCustomShows = useCallback((): Promise<boolean> => {
+    if (customShowWrite.current) return customShowWrite.current
+    const draft = customShowDraftRef.current
+    if (!draft?.changed) return Promise.resolve(true)
+    setWritingCustomShows(true)
+    setCustomShowError(null)
+    const write = (async () => {
+      let stored: CustomShowInfo[] | null = null
+      try {
+        stored = await window.slidesApi.setCustomShows(draft.shows)
+      } catch {
+        // Keep the entire draft so the user can retry without losing edits.
+      }
+      if (customShowDraftRef.current !== draft) return false
+      if (stored) {
+        if (draft.legacy) {
+          migratedCustomShows.current = { ...draft.legacy, after: JSON.stringify(stored), undone: false }
+        }
+        setCustomShowDraft({ shows: stored, changed: false })
+        setDirty(true)
+      } else {
+        setCustomShowError(t('appStatusSaveFailed', { error: t('paneCsdTitle') }))
+      }
+      return stored !== null
+    })().finally(() => {
+      customShowWrite.current = null
+      setWritingCustomShows(false)
+    })
+    customShowWrite.current = write
+    return write
+  }, [setCustomShowDraft, setDirty])
   const [findOpen, setFindOpen] = useState(false)
   /** Per-page dwell seconds awaiting confirmation after rehearsal (non-null shows the "save?" confirmation dialog) */
   const [pendingRehearse, setPendingRehearse] = useState<number[] | null>(null)
@@ -1057,6 +1106,11 @@ export function App({ host }: { host?: SlidesAppHost } = {}) {
       setEditing(null)
       loadNotes(null)
       updateNotesDrafts(drafts => drafts.clear())
+      customShowOpenRequest.current++
+      customShowOpenSlides.current = result.slides.map((slide) => slide.partPath ? { partPath: slide.partPath } : {})
+      setCustomShowDraft(null)
+      setCustomShowError(null)
+      migratedCustomShows.current = undefined
       setDirty(false)
       setInkTool('select')
       setUngroupedSets([])
@@ -1076,7 +1130,7 @@ export function App({ host }: { host?: SlidesAppHost } = {}) {
       // Fetch the layout list asynchronously (doesn't block opening)
       void window.slidesApi.getLayouts().then((r) => setLayoutsResult(r))
     },
-    [fitZoom, loadNotes, updateNotesDrafts],
+    [fitZoom, loadNotes, setCustomShowDraft, updateNotesDrafts],
   )
 
   const setSelectedId = useCallback((id: string | null, additive = false) => {
@@ -1114,6 +1168,7 @@ export function App({ host }: { host?: SlidesAppHost } = {}) {
   )
 
   const openDialog = useCallback(async () => {
+    if (customShowDraftRef.current) return
     const r = await window.slidesApi.openPptx(FIT_WIDTH)
     applyOpen(r)
   }, [applyOpen])
@@ -1130,9 +1185,26 @@ export function App({ host }: { host?: SlidesAppHost } = {}) {
     async (quiet = false,automatic=false): Promise<boolean> => {
       if(analysisApplying.current)return false
       analysisSaving.current++
-      try{return await analysisConsent.current.run(automatic,()=>fileActions.save(() => ctxRef.current, quiet),ok=>ok,false)}finally{analysisSaving.current--}
+      try {
+        return await analysisConsent.current.run(automatic, async () => {
+          if (!await commitCustomShows()) return false
+          const migrated = migratedCustomShows.current
+          const saved = await fileActions.save(() => ctxRef.current, quiet)
+          if (saved && migrated && migrated.undone === false && migratedCustomShows.current === migrated) {
+            try {
+              if (localStorage.getItem(migrated.key) === migrated.value) localStorage.removeItem(migrated.key)
+            } catch {
+              // Browser storage can be unavailable in restricted contexts.
+            }
+            migratedCustomShows.current = undefined
+          }
+          return saved
+        }, ok => ok, false)
+      } finally {
+        analysisSaving.current--
+      }
     },
-    [],
+    [commitCustomShows],
   )
 
   // Web host seam (T10): hand the entry the save/dirty/reopen cycle. Latest state
@@ -1149,10 +1221,10 @@ export function App({ host }: { host?: SlidesAppHost } = {}) {
         if(!ctx.slide||generation==null||(!forSave&&(hostRef.current?.readOnly||analysisSaving.current>0))||ctx.editingActiveRef.current||notesDraftsRef.current.size||ctx.masterItems||effectsInFlight.current||mouseDownRef.current)return null
         return {identity:ctx.slides,slideId:ctx.slide.partPath??'',index:ctx.current,selection:JSON.stringify(ctx.selectedIds),generation,width:ctx.slide.widthPx,height:ctx.slide.heightPx,scale:ctx.slide.scale}
       },hold:()=>analysisConsent.current.hold(),run:async(ops,check)=>{analysisApplying.current=true;try{return await (hostRef.current?.runAnalysis?.(ops,check,all=>flushSync(()=>ctxRef.current.applyDeck(all,ctxRef.current.current)))??false)}finally{analysisApplying.current=false}}})},
-      isDirty: () => dirtyRef.current || notesDraftsRef.current.size > 0,
+      isDirty: () => dirtyRef.current || notesDraftsRef.current.size > 0 || !!customShowDraftRef.current?.changed,
       canContinueAssistant: () => !dirtyRef.current && !editingActiveRef.current && !notesDraftsRef.current.size &&
         !ctxRef.current.masterItems && !effectsInFlight.current && !mouseDownRef.current &&
-        !analysisSaving.current && !analysisApplying.current,
+        !analysisSaving.current && !analysisApplying.current && !customShowDraftRef.current?.changed,
       reload: async () => {
         try {
           const r = await window.slidesApi.openPptx(FIT_WIDTH)
@@ -1235,7 +1307,7 @@ export function App({ host }: { host?: SlidesAppHost } = {}) {
     const tick = () => {
       if (saving || editing || editingCell || mouseDownRef.current) return
       void window.slidesApi.isDirty().then((d) => {
-        if ((!d && !notesDraftsRef.current.size) || saving) return
+        if ((!d && !notesDraftsRef.current.size && !customShowDraftRef.current?.changed) || saving) return
         saving = true
         void save(true,true).finally(() => {
           saving = false
@@ -1250,8 +1322,12 @@ export function App({ host }: { host?: SlidesAppHost } = {}) {
     }
   }, [autoSave, path, editing, editingCell, save])
 
-  const saveAs = useCallback(() => fileActions.saveAs(() => ctxRef.current), [])
-  const nameWithAi = useCallback(() => fileActions.nameWithAi(() => ctxRef.current, hostRef.current?.namedCopy), [])
+  const saveAs = useCallback(async () => {
+    if (await commitCustomShows()) await fileActions.saveAs(() => ctxRef.current)
+  }, [commitCustomShows])
+  const nameWithAi = useCallback(async () => {
+    if (await commitCustomShows()) await fileActions.nameWithAi(() => ctxRef.current, hostRef.current?.namedCopy)
+  }, [commitCustomShows])
   const exportingImages = useRef(false)
   const exportImages = useCallback(async (format: 'png' | 'jpg' = 'png') => {
     if (exportingImages.current) return
@@ -1314,7 +1390,7 @@ export function App({ host }: { host?: SlidesAppHost } = {}) {
 
   /** Apply the full slides set after undo/redo, keeping the current slide when it still exists. */
   const applyHistoryResult = useCallback(
-    (r: RenderSlide[] | null, current: number, partPath?: string) => {
+    async (r: RenderSlide[] | null, current: number, partPath?: string) => {
       if (!r) return
       setSlides(r)
       setCurrent(currentAfterHistory(r, current, partPath))
@@ -1324,6 +1400,18 @@ export function App({ host }: { host?: SlidesAppHost } = {}) {
       setPasteFloater(null) // The paste the floater refers to may have just been undone
       reconcileNotes(r)
       void window.slidesApi.isDirty().then(setDirty)
+      const migrated = migratedCustomShows.current
+      if (migrated && migrated.before !== migrated.after) {
+        try {
+          const stored = await window.slidesApi.getCustomShows()
+          if (migratedCustomShows.current === migrated) {
+            migrated.undone = JSON.stringify(stored) === migrated.before
+          }
+        } catch {
+          // Preserve the legacy copy if the history state could not be read.
+          if (migratedCustomShows.current === migrated) migrated.undone = undefined
+        }
+      }
     },
     [reconcileNotes],
   )
@@ -1336,7 +1424,7 @@ export function App({ host }: { host?: SlidesAppHost } = {}) {
       return
     }
     const { current, slide } = ctxRef.current
-    applyHistoryResult(await window.slidesApi.undo(), current, slide?.partPath)
+    await applyHistoryResult(await window.slidesApi.undo(), current, slide?.partPath)
   }, [editing, applyHistoryResult])
 
   const redo = useCallback(async () => {
@@ -1346,7 +1434,7 @@ export function App({ host }: { host?: SlidesAppHost } = {}) {
       return
     }
     const { current, slide } = ctxRef.current
-    applyHistoryResult(await window.slidesApi.redo(), current, slide?.partPath)
+    await applyHistoryResult(await window.slidesApi.redo(), current, slide?.partPath)
   }, [editing, applyHistoryResult])
 
   // Global shortcuts (keyboard-actions.ts): the handler reads the latest state via ctxRef, so attach once
@@ -1355,6 +1443,7 @@ export function App({ host }: { host?: SlidesAppHost } = {}) {
       // Read-only host: swallow the mutating chords (new slide, delete) before the
       // shared handler; navigation and server-fenced ops pass through harmlessly.
       if (hostReadOnly && (e.key === 'Delete' || e.key === 'Backspace' || ((e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey && (e.key === 'm' || e.key === 'M')))) return
+      if (customShowDraftRef.current) return
       handleGlobalKeydown(ctxRef.current, e)
     }
     window.addEventListener('keydown', onKey)
@@ -2130,30 +2219,52 @@ export function App({ host }: { host?: SlidesAppHost } = {}) {
     [],
   )
 
-  // The Web host supplies a stable workspace identity. Unsaved desktop decks stay in memory.
-  useEffect(() => {
-    setCustomShowDlgOpen(false)
-    if (!documentStorageScope) {
-      setCustomShows([])
-      return
-    }
+  const openCustomShows = useCallback(async () => {
+    const request = ++customShowOpenRequest.current
     try {
-      const raw = localStorage.getItem(`ai-slides-custom-shows:${documentStorageScope}`)
-      const parsed: unknown = raw ? JSON.parse(raw) : []
-      setCustomShows(Array.isArray(parsed) ? (parsed as CustomShow[]) : [])
+      const shows = await window.slidesApi.getCustomShows()
+      if (customShowOpenRequest.current !== request) return
+      const migrated = migratedCustomShows.current
+      const legacy = readLegacyShows(
+        documentStorageScope, shows, customShowOpenSlides.current, ctxRef.current.slides,
+        migrated?.undone ? undefined : migrated,
+      )
+      const readOnly = hostRef.current?.readOnly === true
+      setCustomShowError(null)
+      if (!legacy) {
+        setCustomShowDraft({ shows, changed: false })
+        return
+      }
+      const before = JSON.stringify(shows)
+      if (!readOnly && legacy.shows.length === 0) {
+        migratedCustomShows.current = { ...legacy, before, after: before, undone: false }
+      }
+      setCustomShowDraft({
+        shows: [...shows, ...legacy.shows],
+        changed: !readOnly && legacy.shows.length > 0,
+        ...(!readOnly && legacy.shows.length ? { legacy: { ...legacy, before } } : {}),
+      })
     } catch {
-      setCustomShows([])
+      if (customShowOpenRequest.current === request) showToast(t('aiReadFailed', { name: t('paneCsdTitle') }), 'error')
     }
-  }, [documentStorageScope])
-
-  const updateCustomShows = useCallback(
-    (shows: CustomShow[]) => showActions.updateCustomShows(ctxRef.current, shows, documentStorageScope),
-    [documentStorageScope],
-  )
-  const playCustomShow = useCallback(
-    (show: CustomShow) => showActions.playCustomShow(ctxRef.current, show),
-    [],
-  )
+  }, [documentStorageScope, setCustomShowDraft])
+  const updateCustomShows = useCallback((shows: CustomShow[]) => {
+    const draft = customShowDraftRef.current
+    if (!draft || customShowWrite.current || hostRef.current?.readOnly) return
+    setCustomShowDraft({ ...draft, shows: customShowPaths(shows, ctxRef.current.slides), changed: true })
+  }, [setCustomShowDraft])
+  const closeCustomShows = useCallback(async (show?: CustomShow) => {
+    const current = customShowDraftRef.current
+    if (!current) return
+    const selection = show && customShowPaths([show], ctxRef.current.slides)[0]
+    const request = customShowOpenRequest.current
+    if (!await commitCustomShows() || request !== customShowOpenRequest.current) return
+    setCustomShowDraft(null)
+    if (selection) {
+      const [playback] = customShowIndexes([selection], ctxRef.current.slides)
+      if (playback) showActions.playCustomShow(ctxRef.current, playback)
+    }
+  }, [commitCustomShows, setCustomShowDraft])
   const startRehearseShow = useCallback(() => showActions.startRehearseShow(ctxRef.current), [])
   const onRehearseDone = useCallback(
     (perPageSec: number[]) => showActions.onRehearseDone(ctxRef.current, perPageSec),
@@ -3414,8 +3525,6 @@ export function App({ host }: { host?: SlidesAppHost } = {}) {
     setSlideShow,
     presenter,
     setPresenter,
-    setCustomShows,
-    setCustomShowDlgOpen,
     pendingRehearse,
     setPendingRehearse,
     pendingRecording,
@@ -3551,7 +3660,7 @@ export function App({ host }: { host?: SlidesAppHost } = {}) {
         deckEmpty={deckEmpty}
         canUndo={histState.canUndo}
         canRedo={histState.canRedo}
-        dirty={dirty || notesDrafts.size > 0}
+        dirty={dirty || notesDrafts.size > 0 || !!customShowDraft?.changed}
         editing={!!editing || !!editingCell}
         autoSave={autoSave}
         onAutoSaveChange={setAutoSave}
@@ -3658,7 +3767,7 @@ export function App({ host }: { host?: SlidesAppHost } = {}) {
         onAnimPreview={() => setAnimPreview((n) => n + 1)}
         onSlideShow={startSlideShow}
         onPresenterView={startPresenterView}
-        onCustomShow={() => setCustomShowDlgOpen(true)}
+        onCustomShow={() => void openCustomShows()}
         onRehearse={startRehearseShow}
         onRecord={startRecordShow}
         onClearNarration={clearNarration}
@@ -4923,13 +5032,17 @@ export function App({ host }: { host?: SlidesAppHost } = {}) {
         />
       )}
 
-      {customShowDlgOpen && (
+      {customShowDraft && (
         <CustomShowDialog
-          shows={customShows}
+          shows={customShowIndexes(customShowDraft.shows, slides)}
           slideCount={slides.length}
+          readOnly={hostReadOnly}
+          pending={writingCustomShows}
+          error={customShowError}
           onChange={updateCustomShows}
-          onPlay={playCustomShow}
-          onClose={() => setCustomShowDlgOpen(false)}
+          onPlay={(show) => void closeCustomShows(show)}
+          onClose={() => void closeCustomShows()}
+          onDiscard={() => setCustomShowDraft(null)}
         />
       )}
 

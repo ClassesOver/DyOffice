@@ -22,7 +22,7 @@ export type ClipboardPayload = { html: string; text: string; image: Blob | null 
 /** A paste-special choice: one of the paste modes, or the bitmap flavor. */
 export type PasteChoice = PasteMode | 'picture'
 
-/** Remote clipboard images use the desktop bridge; Web can retain their plain text. */
+/** Load image-only clipboard URLs through the platform bridge. */
 export async function pasteRemoteImages(
   editor: Editor,
   sources: string[],
@@ -36,7 +36,8 @@ export async function pasteRemoteImages(
     for (const src of sources.slice(0, 10)) {
       if (!current()) return
       try {
-        const fetched = await window.desktop.fetchImage(src)
+        const fetchImage = window.desktop.fetchClipboardImage ?? window.desktop.fetchImage
+        const fetched = await fetchImage(src)
         if (!current()) return
         if (fetched) {
           const success = await insertImageFromDataUrl(

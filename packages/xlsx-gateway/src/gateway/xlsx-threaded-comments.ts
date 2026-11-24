@@ -3,7 +3,7 @@
 /// the legacy comments part only mirrors it behind a "[Threaded comment]"
 /// notice. Rewriting the mirror alone leaves Excel showing the stale thread.
 
-import { decodeXlsxEscapes } from './xlsx-escapes.ts'
+import { decodeXlsxEscapes, decodeXmlText } from './xlsx-escapes.ts'
 import { resolveRelTarget } from './xlsx-drawing-add.ts'
 import { nextFreeRelationshipId } from './xlsx-sheets.ts'
 
@@ -72,17 +72,6 @@ interface ThreadEntry {
   readonly text: string
 }
 
-function unescapeXml(value: string): string {
-  return value
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&quot;/g, '"')
-    .replace(/&apos;/g, "'")
-    .replace(/&#(\d+);/g, (_, code: string) => String.fromCodePoint(Number(code)))
-    .replace(/&#x([0-9a-fA-F]+);/g, (_, code: string) => String.fromCodePoint(parseInt(code, 16)))
-    .replace(/&amp;/g, '&')
-}
-
 function escapeXml(value: string): string {
   return value
     .replace(/&/g, '&amp;')
@@ -92,8 +81,26 @@ function escapeXml(value: string): string {
 }
 
 function attribute(tag: string, name: string): string | null {
-  const found = new RegExp(`\\s${name}="([^"]*)"`).exec(tag)
-  return found ? unescapeXml(found[1]!) : null
+  for (const [, key, , value] of tag.matchAll(/\s+([\w:.-]+)\s*=\s*(["'])([\s\S]*?)\2/g)) {
+    if (key === name) return decodeXmlText(value!)
+  }
+  return null
+}
+
+function relationshipTarget(xml: string, type: string): string | null {
+  for (const [tag] of xml.matchAll(/<!--[\s\S]*?-->|<(?:[\w.-]+:)?Relationship\b(?:[^"'<>]|"[^"]*"|'[^']*')*>/g)) {
+    if (tag.startsWith('<!--')) continue
+    if (attribute(tag,'Type') === type && attribute(tag,'TargetMode') !== 'External') {
+      return attribute(tag,'Target')
+    }
+  }
+  return null
+}
+
+function xmlText(text: string): string {
+  return text.split(/(<!\[CDATA\[[\s\S]*?\]\]>)/).map(part =>
+    part.startsWith('<![CDATA[') ? part.slice(9, -3) : decodeXmlText(part),
+  ).join('')
 }
 
 /// Stable person GUID derived from the display name, so the same user maps
@@ -116,16 +123,16 @@ export function personIdFor(displayName: string): string {
 /// Legacy `<comment>` entries keyed by cell reference, so the untouched
 /// mirror of a thread (author `tc={id}`, notice text) survives the rewrite.
 export function parseLegacyComments(commentsXml: string): Map<string, LegacyCommentEntry> {
-  const authors = [...commentsXml.matchAll(/<author>([\s\S]*?)<\/author>/g)].map((match) =>
-    decodeXlsxEscapes(unescapeXml(match[1]!)),
+  const authors = [...commentsXml.matchAll(/<(?:[\w.-]+:)?author\b[^>]*?(?:\/>|>([\s\S]*?)<\/(?:[\w.-]+:)?author\s*>)/g)].map((match) =>
+    decodeXlsxEscapes(xmlText(match[1] ?? '')),
   )
   const entries = new Map<string, LegacyCommentEntry>()
-  for (const match of commentsXml.matchAll(/<comment\b([^>]*)>([\s\S]*?)<\/comment>/g)) {
+  for (const match of commentsXml.matchAll(/<(?:[\w.-]+:)?comment\b([^>]*?)(?:\/>|>([\s\S]*?)<\/(?:[\w.-]+:)?comment\s*>)/g)) {
     const ref = attribute(match[1]!, 'ref')
     if (ref === null) continue
     const authorId = Number(attribute(match[1]!, 'authorId') ?? -1)
-    const text = [...match[2]!.matchAll(/<t\b[^>]*>([\s\S]*?)<\/t>/g)]
-      .map((part) => decodeXlsxEscapes(unescapeXml(part[1]!)))
+    const text = [...(match[2] ?? '').matchAll(/<(?:[\w.-]+:)?t\b[^>]*?(?:\/>|>([\s\S]*?)<\/(?:[\w.-]+:)?t\s*>)/g)]
+      .map((part) => decodeXlsxEscapes(xmlText(part[1] ?? '')))
       .join('')
     entries.set(ref, { author: authors[authorId] ?? '', text })
   }
@@ -147,11 +154,35 @@ function parseThreads(xml: string): Map<string, ThreadEntry[]> {
       dT: attribute(match[1]!, 'dT') ?? '',
       done: attribute(match[1]!, 'done') === '1',
       parentId: attribute(match[1]!, 'parentId'),
-      text: textMatch ? unescapeXml(textMatch[1]!) : '',
+      text: textMatch ? xmlText(textMatch[1]!) : '',
     }
     const list = threads.get(ref)
     if (list) list.push(entry)
     else threads.set(ref, [entry])
+  }
+  return threads
+}
+
+/** Reads the same root/reply grouping that the note writer synchronizes. */
+export function parseSheetCommentThreads(xml: string, personsXml: string) {
+  const authors = new Map<string, string>()
+  for (const match of personsXml.matchAll(/<(?:[\w.-]+:)?person\b([^>]*)>/g)) {
+    const id = attribute(match[1]!, 'id')
+    const displayName = attribute(match[1]!, 'displayName')
+    if (id !== null && displayName !== null) authors.set(id, displayName)
+  }
+  const threads = new Map<string, SheetThread & {text:string;displayText:string;structured:boolean}>()
+  for (const [ref, entries] of parseThreads(xml)) {
+    const root = entries.find(entry => entry.parentId === null)
+    if (!root) continue
+    const describe = ({id,personId,dT,text}:ThreadEntry) => ({
+      id,personId,dT,text,author:authors.get(personId) ?? '',
+    })
+    const replies = entries.filter(entry => entry !== root)
+    threads.set(ref, {...describe(root),done:root.done,replies:replies.map(describe),
+      displayText:threadDisplayText(entries),
+      structured:replies.every(entry => entry.parentId === root.id),
+    })
   }
   return threads
 }
@@ -233,8 +264,7 @@ async function readPersons(pkg: ThreadedPackage): Promise<PersonsPart> {
   let path = DEFAULT_PERSONS_PATH
   if (await pkg.has(WORKBOOK_RELS_PATH)) {
     const rels = await pkg.readText(WORKBOOK_RELS_PATH)
-    const rel = new RegExp(`<Relationship\\b[^>]*Type="${PERSONS_REL_TYPE}"[^>]*/?>`).exec(rels)
-    const target = rel ? / Target="([^"]*)"/.exec(rel[0])?.[1] : undefined
+    const target = relationshipTarget(rels, PERSONS_REL_TYPE)
     if (target) path = resolveRelTarget(WORKBOOK_PATH, target)
   }
   if (!(await pkg.has(path))) {
@@ -363,11 +393,8 @@ export async function syncThreadedComments(
   existingLegacy: ReadonlyMap<string, LegacyCommentEntry>,
   touchedEntries: Set<string>,
 ): Promise<ThreadedSyncResult> {
-  const rel = new RegExp(`<Relationship\\b[^>]*Type="${THREADED_COMMENTS_REL_TYPE}"[^>]*/?>`).exec(
-    relsXml,
-  )
-  const target = rel ? / Target="([^"]*)"/.exec(rel[0])?.[1] : undefined
-  let partPath = target === undefined ? null : resolveRelTarget(worksheetPath, target)
+  const target = relationshipTarget(relsXml, THREADED_COMMENTS_REL_TYPE)
+  let partPath = target === null ? null : resolveRelTarget(worksheetPath, target)
   if (partPath !== null && !(await pkg.has(partPath))) partPath = null
   const structured = [...notes].filter(
     (entry): entry is [string, ThreadedNote & { thread: SheetThread }] =>
@@ -429,8 +456,11 @@ export async function syncThreadedComments(
     }
     // Callers that read the legacy part (CLI) hand the mirror text back.
     const untouched = note.text === threadDisplayText(entries) || note.text === mirror?.text
-    if (untouched && mirror !== undefined) {
-      legacy.set(ref, mirror)
+    if (untouched) {
+      legacy.set(ref, mirror ?? {
+        author: `tc=${root.id}`,
+        text: threadMirrorText(root.text, entries.filter(entry => entry !== root)),
+      })
       continue
     }
     if (!persons.ids.has(root.personId)) {

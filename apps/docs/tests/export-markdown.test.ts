@@ -66,6 +66,30 @@ describe('restrictedHtmlToMarkdown', () => {
 })
 
 describe('documentToMarkdown', () => {
+  it('collects blob pictures for the browser writer to resolve their file type', () => {
+    const editor = new Editor({
+      element: document.createElement('div'),
+      extensions: editorExtensions,
+      content: '<p></p>',
+    })
+    const src = 'blob:https://office.example/4397e0a7-bf37-40f3-98da-34aa8a2ef18a'
+    try {
+      editor.commands.setContent({
+        type: 'doc',
+        content: [
+          { type: 'docParagraph', content: [{ type: 'docInlineImage', attrs: { dataUrl: src } }] },
+          { type: 'docProtected', attrs: { blockType: 'image', imageDataUrl: src } },
+        ],
+      })
+      expect(documentToMarkdown(editor)).toEqual({
+        markdown: '![](__genoffice_media__/image1.blob)\n\n![](__genoffice_media__/image1.blob)\n',
+        images: [{ name: 'image1.blob', src }],
+      })
+    } finally {
+      editor.destroy()
+    }
+  })
+
   it('serializes a real editor document', () => {
     const editor = new Editor({
       element: document.createElement('div'),

@@ -9,6 +9,7 @@
 import { PackageArchive, relsPathFor, resolveTarget, type Relationship } from './zip'
 import { hasContentTypeOverride, maxRelationshipIdNumber } from './xml-utils'
 import { ensureNotesMaster } from './notes'
+import type { CustomShowInfo } from './custom-shows'
 
 const LAYOUT_REL = '/slideLayout'
 const NOTES_REL = '/notesSlide'
@@ -38,6 +39,8 @@ export interface SlideBundleChain {
 
 export interface SlideBundle {
   readonly sourcePath?: string
+  /** Only applied when an explicitly cut slide is restored to its original deck. */
+  readonly customShowMemberships?: readonly Pick<CustomShowInfo, 'id' | 'slidePaths'>[]
   readonly slideXml: string
   readonly rels: readonly SlideBundleRel[]
   /** every dependency part, base64 so the bundle survives IPC and JSON */

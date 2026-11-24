@@ -947,7 +947,7 @@ test('Web plays an existing embedded video in the editor and slide show',{timeou
   await expect(page.locator('.slideshow')).toHaveCount(0)
 })
 
-test('Web custom shows stay with the workspace file through duplicate names and rename',{timeout:90000},async t=>{
+test('Web migrates legacy custom shows through duplicate names and rename',{timeout:90000},async t=>{
  const f=await fixture(t),{page}=f
  await f.preferences.update(f.alice.token,{theme:'light'})
  const bytes=await readFile(deckFixture),name='Same display name.pptx'
@@ -956,29 +956,87 @@ test('Web custom shows stay with the workspace file through duplicate names and 
  assert.notEqual(first.fileId,second.fileId)
  assert.equal(first.name,second.name)
  const openShows=async()=>{
-  await page.getByText('Slide Show',{exact:true}).first().click()
-  await page.getByRole('button',{name:'Custom Slide Show',exact:true}).click()
+  const button=page.getByRole('button',{name:'Custom Slide Show',exact:true})
+  if(!await button.isVisible())await page.getByText('Slide Show',{exact:true}).first().click()
+  await button.click()
   return page.getByRole('dialog',{name:'Custom Shows'})
  }
  await openDeck(f,first.fileId,'light')
+ const legacyKey='ai-slides-custom-shows:workspace:'+first.fileId
+ await page.evaluate(key=>localStorage.setItem(key,JSON.stringify([
+  {id:'legacy',name:'First deck only',slideIndices:[0]},
+ ])),legacyKey)
  const one=await openShows()
- await one.getByRole('button',{name:'New',exact:true}).click()
- await one.getByPlaceholder('Custom show name').fill('First deck only')
- await one.getByRole('checkbox',{name:'Slide 1',exact:true}).check()
  await expect(one.getByRole('option',{name:/First deck only/})).toBeVisible()
+ await one.getByPlaceholder('Custom show name').fill('Migrated deck show')
+ await one.getByRole('button',{name:'Close',exact:true}).click()
+ await expect(one).toHaveCount(0)
+ assert.ok(await page.evaluate(key=>localStorage.getItem(key),legacyKey))
+ await page.locator('.thumb').nth(1).click({button:'right'})
+ await page.getByText('New Slide',{exact:true}).click()
+ await expect(page.locator('.thumb')).toHaveCount(3)
+ await page.locator('button.qa-btn[aria-label^="Undo"]').click()
+ await expect(page.locator('.thumb')).toHaveCount(2)
+ const afterUndo=await openShows()
+ await expect(afterUndo.getByRole('option',{name:/Migrated deck show/})).toBeVisible()
+ await expect(afterUndo.getByRole('option',{name:/First deck only/})).toHaveCount(0)
+ await afterUndo.getByRole('button',{name:'Close',exact:true}).click()
+ await expect(afterUndo).toHaveCount(0)
+ await page.keyboard.press('Control+s')
+ await expect(page.locator('.status-msg')).toContainText('Saved')
+ assert.equal(await page.evaluate(key=>localStorage.getItem(key),legacyKey),null)
 
  await openDeck(f,second.fileId,'light')
  const two=await openShows()
  await expect(two.getByText('No custom shows yet')).toBeVisible()
- await two.getByRole('button',{name:'New',exact:true}).click()
- await two.getByPlaceholder('Custom show name').fill('Second deck only')
 
  await f.files.renameFile(f.alice.token,first.fileId,'Renamed slides.pptx')
  await openDeck(f,first.fileId,'light')
  const reopened=await openShows()
- await expect(reopened.getByRole('option',{name:/First deck only/})).toBeVisible()
+ await expect(reopened.getByRole('option',{name:/Migrated deck show/})).toBeVisible()
  await expect(reopened.getByRole('option',{name:/Second deck only/})).toHaveCount(0)
  await expect(reopened.getByRole('checkbox',{name:'Slide 1',exact:true})).toBeChecked()
+})
+
+test('Web custom shows round-trip in PPTX and keep the intended slides after reordering',{timeout:90000},async t=>{
+ const f=await fixture(t),{page}=f
+ await f.preferences.update(f.alice.token,{theme:'light'})
+ const path='ppt/presentation.xml'
+ const zip=await JSZip.loadAsync(await readFile(deckFixture))
+ zip.file(path,(await zip.file(path).async('string')).replace('</p:presentation>',
+  '<p:custShowLst><p:custShow name="Imported reverse order" id="1"><p:sldLst><p:sld r:id="rId3"/><p:sld r:id="rId2"/></p:sldLst></p:custShow></p:custShowLst></p:presentation>'))
+ const {file}=await importFile(f,f.alice.token,await zip.generateAsync({type:'nodebuffer'}),'Custom show links.pptx')
+ const showDialog=async()=>{
+  await page.getByText('Slide Show',{exact:true}).first().click()
+  await page.getByRole('button',{name:'Custom Slide Show',exact:true}).click()
+  return page.getByRole('dialog',{name:'Custom Shows'})
+ }
+ const getPaths=()=>page.evaluate(async()=> (await window.slidesApi.getRenderSlides()).map(s=>s.partPath))
+ await openDeck(f,file.fileId,'light')
+ const initial=await getPaths()
+ const dialog=await showDialog()
+ await expect(dialog.getByRole('option',{name:/Imported reverse order/})).toBeVisible()
+ await dialog.getByRole('button',{name:'New',exact:true}).click()
+ await dialog.getByPlaceholder('Custom show name').fill('Second slide only')
+ await dialog.getByRole('checkbox',{name:'Slide 2',exact:true}).check()
+ await dialog.getByRole('button',{name:'Close',exact:true}).click()
+ await expect(dialog).toHaveCount(0)
+ await page.evaluate(async()=>{
+  await window.slidesApi.moveSlides({slideIndexes:[1],insertAt:0,fitWidthPx:960})
+  if(!(await window.slidesApi.save()).ok)throw Error('Could not save reordered deck')
+ })
+ const current=(await f.files.openFile(f.alice.token,file.fileId)).file
+ const saved=await JSZip.loadAsync(await f.files.readFile(f.alice.token,file.fileId,current.revision))
+ const xml=await saved.file(path).async('string')
+ assert.match(xml,/<p:custShow name="Imported reverse order"/)
+ assert.match(xml,/<p:custShow name="Second slide only"/)
+ await page.evaluate(()=>localStorage.clear())
+ await openDeck(f,file.fileId,'light')
+ assert.deepEqual(await getPaths(),initial.toReversed())
+ const reopened=await showDialog()
+ await reopened.getByRole('option',{name:/Second slide only/}).click()
+ await expect(reopened.getByRole('checkbox',{name:'Slide 1',exact:true})).toBeChecked()
+ await expect(reopened.getByRole('checkbox',{name:'Slide 2',exact:true})).not.toBeChecked()
 })
 
 test('Web reference lines stay with the workspace file through duplicate names and rename',{timeout:90000},async t=>{

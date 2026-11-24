@@ -14,7 +14,7 @@ import {browserFileName, decodeBrowserBase64, downloadBrowserFile} from './brows
 import {createDocumentImageApi} from './web-ai-media-api.ts'
 import type {AiPanelPrefs} from '@genoffice/ui'
 import type {
-  SlidesApi, OpenResult, SlideUpdate, SectionInfo, UiTheme, AutoSaveDefault, ApplyTxnOp, ApplyTxnResult,
+  SlidesApi, OpenResult, SlideUpdate, SectionInfo, CustomShowInfo, UiTheme, AutoSaveDefault, ApplyTxnOp, ApplyTxnResult,
   AiSettings, TransitionKind, ShowTiming, GetLayoutsResult, SlideComment, AnimationItem, ShapeKey,
   ApplyEditScriptOp,
   EditTextOp, AddSlideOp, AddBlankSlideOp, MoveSlideOp, AddElementOp, DeleteElementOp,
@@ -272,7 +272,7 @@ export function createSlidesBridge(host: SessionFileHost, fileId: string, prefs:
     if(method!=='open'&&opening)throw hostError('CONFLICT','slides session reopening')
     if (waiting.length >= 64) throw hostError('UNAVAILABLE', 'read capacity')
     const captured=session,epoch=openEpoch
-    const readOnly=['slide','slides','notes','comments','animations','slide-info','media-data','links','run-links','layouts','chart-data','chart-color-schemes','master-parts','clipboard-copy'].includes(method)
+    const readOnly=['slide','slides','notes','comments','animations','slide-info','media-data','links','run-links','layouts','chart-data','chart-color-schemes','master-parts','custom-shows','clipboard-copy'].includes(method)
     if(method!=='open'&&!readOnly&&captured?.writeProtected)throw hostError('UNAVAILABLE','write-protected presentation')
     if(!readOnly)changing++
     await acquireSlot()
@@ -899,6 +899,17 @@ export function createSlidesBridge(host: SessionFileHost, fileId: string, prefs:
       const raw = await applyOps([op('setHidden', {target: {slide: input.slideIndex}, hidden: input.hidden})])
       if (!raw?.changed?.length) return null
       return await fetchSlide(raw.changed[0]!)
+    },
+    async getCustomShows() {
+      const current = requireSession()
+      return await call(current.revision, current.generation, 'custom-shows') as CustomShowInfo[]
+    },
+    async setCustomShows(shows) {
+      const raw = await applyOps([op('setCustomShows', {shows})])
+      const stored = raw?.transaction?.records?.[0]?.after
+      if (raw?.transaction?.applied !== true || !Array.isArray(stored)) return null
+      onChange()
+      return stored as CustomShowInfo[]
     },
     async getSections() { return sections },
     async setSections(input: SectionInfo[]) {

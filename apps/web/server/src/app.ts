@@ -166,6 +166,7 @@ export async function buildLocalApp(config: LocalWebConfig): Promise<FastifyInst
   const realtimeSource = new URL(config.origin)
   realtimeSource.protocol = realtimeSource.protocol === 'https:' ? 'wss:' : 'ws:'
   const nativeConnectSources = `'self' blob: ${realtimeSource.origin}`
+  const docsImageSources = `'self' data: blob: https:${config.insecureHttpDev ? ' http:' : ''}`
   const throttle = createLoginThrottle(config.db, config.deploymentId, config.csrfKey, config.loginLimits)
   const app = await createApiShell(config.rateLimit?{max:config.rateLimit.max,timeWindow:config.rateLimit.windowMs}:undefined)
   try {
@@ -295,7 +296,7 @@ export async function buildLocalApp(config: LocalWebConfig): Promise<FastifyInst
         method: ['GET','HEAD'], url: '/native-docx/*',
         onRequest: async (request,reply) => {
           reply.raw.setHeader('Cache-Control','private, no-store')
-          reply.raw.setHeader('Content-Security-Policy',`default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data: blob:; worker-src 'self' blob:; connect-src ${nativeConnectSources}; object-src 'none'; base-uri 'none'; frame-ancestors ${await nativeAncestors(request.url)}`)
+          reply.raw.setHeader('Content-Security-Policy',`default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src ${docsImageSources}; font-src 'self' data: blob:; worker-src 'self' blob:; connect-src ${nativeConnectSources}; object-src 'none'; base-uri 'none'; frame-ancestors ${await nativeAncestors(request.url)}`)
           await sessions.authenticate(cookies(request).session ?? '')
         },
         handler: async (request,reply) => {
