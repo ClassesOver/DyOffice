@@ -18,7 +18,7 @@ import { fileURLToPath } from 'node:url'
 import JSZip from 'jszip'
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
 
-import { XlsxSidecarClient } from '../src/main/xlsx-sidecar-client'
+import { XlsxSidecarClient } from '../src/node/xlsx-sidecar-client'
 
 const SEEDS = Math.max(1, Number(process.env.HOSTILE_SEEDS ?? 10))
 const CASE_TIMEOUT_MS = 20_000

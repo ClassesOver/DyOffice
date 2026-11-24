@@ -24,7 +24,7 @@ import {
 } from '@genoffice/xlsx-gateway/gateway/xlsx-gateway'
 import type { SheetVisualAddition } from '@genoffice/xlsx-gateway/gateway/xlsx-gateway'
 import { workbookFileSchema } from '../src/shared/desktop-api'
-import { XlsxSidecarClient } from '../src/main/xlsx-sidecar-client'
+import { XlsxSidecarClient } from '../src/node/xlsx-sidecar-client'
 import { buildEditFixture } from './fixture-builder'
 
 const ANCHOR = {

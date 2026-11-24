@@ -1,6 +1,6 @@
 import { resolve } from 'node:path'
 
-import { XlsxSidecarClient } from '../src/main/xlsx-sidecar-client'
+import { XlsxSidecarClient } from '../src/node/xlsx-sidecar-client'
 import { workbookFindCellsResultSchema, workbookRangeResultSchema } from '../src/shared/desktop-api'
 
 const fixture = process.argv[2]

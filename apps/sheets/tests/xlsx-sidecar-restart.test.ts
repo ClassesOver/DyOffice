@@ -30,7 +30,7 @@ describe('XlsxSidecarClient restart', () => {
     const first = new FakeSidecarProcess(101)
     const second = new FakeSidecarProcess(102)
     spawnMock.mockReturnValueOnce(first).mockReturnValueOnce(second)
-    const { XlsxSidecarClient } = await import('../src/main/xlsx-sidecar-client')
+    const { XlsxSidecarClient } = await import('../src/node/xlsx-sidecar-client')
     const client = new XlsxSidecarClient('/nonexistent/sidecar')
 
     const before = client.readRange({ sessionId: 's-1', sheetId: 'sheet-1', range })
@@ -55,7 +55,7 @@ describe('XlsxSidecarClient error teardown', () => {
   it('an error closes the reader so the following exit has nothing to leak', async () => {
     const fake = new FakeSidecarProcess(201)
     spawnMock.mockReturnValue(fake)
-    const { XlsxSidecarClient } = await import('../src/main/xlsx-sidecar-client')
+    const { XlsxSidecarClient } = await import('../src/node/xlsx-sidecar-client')
     const client = new XlsxSidecarClient('/nonexistent/sidecar')
     const read = client.readRange({ sessionId: 's-1', sheetId: 'sheet-1', range })
     expect(fake.stdout.listenerCount('data')).toBeGreaterThan(0)
@@ -73,7 +73,7 @@ describe('XlsxSidecarClient stdin error', () => {
   it('an async stdin EPIPE tears the client down instead of crashing the app', async () => {
     const child = new FakeSidecarProcess(201)
     spawnMock.mockReturnValueOnce(child)
-    const { XlsxSidecarClient } = await import('../src/main/xlsx-sidecar-client')
+    const { XlsxSidecarClient } = await import('../src/node/xlsx-sidecar-client')
     const client = new XlsxSidecarClient('/nonexistent/sidecar')
 
     // a pending request, then the child dies OOM-style: killed stays false
@@ -101,7 +101,7 @@ describe('XlsxSidecarClient crash signal', () => {
   it('reports a process death, which invalidates every session id we hold', async () => {
     const fake = new FakeSidecarProcess(301)
     spawnMock.mockReturnValue(fake)
-    const { XlsxSidecarClient } = await import('../src/main/xlsx-sidecar-client')
+    const { XlsxSidecarClient } = await import('../src/node/xlsx-sidecar-client')
     const client = new XlsxSidecarClient('/nonexistent/sidecar')
     const crashes = vi.fn()
     client.onProcessExit(crashes)
@@ -120,7 +120,7 @@ describe('XlsxSidecarClient crash signal', () => {
   it('stays silent for the deliberate close of one workbook', async () => {
     const fake = new FakeSidecarProcess(302)
     spawnMock.mockReturnValue(fake)
-    const { XlsxSidecarClient } = await import('../src/main/xlsx-sidecar-client')
+    const { XlsxSidecarClient } = await import('../src/node/xlsx-sidecar-client')
     const client = new XlsxSidecarClient('/nonexistent/sidecar')
     const crashes = vi.fn()
     client.onProcessExit(crashes)
@@ -149,7 +149,7 @@ describe('XlsxSidecarClient crash signal', () => {
   it('stays silent for the app-quit stop', async () => {
     const fake = new FakeSidecarProcess(303)
     spawnMock.mockReturnValue(fake)
-    const { XlsxSidecarClient } = await import('../src/main/xlsx-sidecar-client')
+    const { XlsxSidecarClient } = await import('../src/node/xlsx-sidecar-client')
     const client = new XlsxSidecarClient('/nonexistent/sidecar')
     const crashes = vi.fn()
     client.onProcessExit(crashes)
@@ -165,7 +165,7 @@ describe('XlsxSidecarClient crash signal', () => {
   it('unsubscribes cleanly', async () => {
     const fake = new FakeSidecarProcess(304)
     spawnMock.mockReturnValue(fake)
-    const { XlsxSidecarClient } = await import('../src/main/xlsx-sidecar-client')
+    const { XlsxSidecarClient } = await import('../src/node/xlsx-sidecar-client')
     const client = new XlsxSidecarClient('/nonexistent/sidecar')
     const crashes = vi.fn()
     const off = client.onProcessExit(crashes)

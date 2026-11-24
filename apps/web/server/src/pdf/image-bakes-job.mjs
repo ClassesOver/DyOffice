@@ -6,7 +6,7 @@ import {openPdfForPendingEdits} from './pending-document.mjs'
 import {assertPdfInsertFormPreserved} from './insert-form-integrity.mjs'
 import {pdfToView,pdfRectToCss,viewToPdf} from '../../../../pdf/src/renderer/annotations.ts'
 import {flipPixels,multiplyAlpha,DEFAULT_CUTOUT_TOLERANCE} from '../../../../pdf/src/renderer/image-bake.ts'
-import {removeBackground} from '../../../../pdf/src/renderer/cutout.ts'
+import {removeBackground} from '../../../../../packages/ui/src/cutout.ts'
 import {concatMat,transformRect} from '../../../../pdf/src/main/form-text.ts'
 import {fail,check,hash,requireEnvelope} from './job-common.mjs'
 export const pdfImageBakesSafetyCodes=new Set([...pdfImageEditsSafetyCodes,'INVALID_PDF_IMAGE_BAKE','PDF_IMAGE_BAKE_UNSUPPORTED_TRANSFORM','PDF_IMAGE_BAKE_LIMIT','PDF_IMAGE_RESOURCE_UNSUPPORTED'])

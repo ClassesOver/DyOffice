@@ -22,7 +22,7 @@ import { join } from 'node:path'
 
 import { describe, expect, it } from 'vitest'
 
-import { readWorkbookRedactionPart } from '../src/main/workbook-redactions'
+import { readWorkbookRedactionPart } from '../src/node/workbook-redactions'
 import type { ArchiveClient } from '@genoffice/xlsx-gateway/gateway/xlsx-package-io'
 import {
   REDACTION_PART_PATH,

@@ -7,7 +7,7 @@ import JSZip from 'jszip'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
 import { saveWorkbookViaSidecar } from '@genoffice/xlsx-gateway/gateway/xlsx-package-io'
-import { XlsxSidecarClient } from '../src/main/xlsx-sidecar-client'
+import { XlsxSidecarClient } from '../src/node/xlsx-sidecar-client'
 import { workbookFileSchema } from '../src/shared/desktop-api'
 
 const OLE_PARTS = [

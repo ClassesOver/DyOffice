@@ -144,7 +144,7 @@ import type { PartReader } from '@genoffice/xlsx-gateway/gateway/xlsx-connection
 import { parsePivotDefinition } from '@genoffice/xlsx-gateway/gateway/xlsx-pivot'
 import { parseSlicerState } from '@genoffice/xlsx-gateway/gateway/xlsx-slicer'
 import { listWorkbookQueries } from '@genoffice/xlsx-gateway/gateway/xlsx-connections'
-import { manifestNamesSchema, readWorkbookRedactionPart } from './workbook-redactions'
+import { manifestNamesSchema, readWorkbookRedactionPart } from '../node/workbook-redactions'
 import type {
   AttachmentAddResult,
   AttachmentImageResult,
@@ -205,7 +205,7 @@ import {
   type WorkbookSaveRequest,
 } from '../shared/desktop-api'
 import { IPC_CHANNELS } from '../shared/ipc-channels'
-import { atomicWriteFile } from './atomic-write'
+import { atomicWriteFile } from '@genoffice/electron-utils/atomic-write'
 import { closeGuardDecision, ShutdownLatch } from './close-guard'
 import { SaveEditsTransferStore } from './save-edits-transfer'
 import { exportPdf, printWorkbook } from './pdf-export'
@@ -219,7 +219,7 @@ import {
   cleanupImportTempDirectory,
   cleanupSessionResources,
 } from './temp-files'
-import { XlsxSidecarClient } from './xlsx-sidecar-client'
+import { XlsxSidecarClient } from '../node/xlsx-sidecar-client'
 import { sessionAfterRename } from './session-rename'
 
 /**

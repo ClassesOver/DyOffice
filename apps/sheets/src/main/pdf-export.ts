@@ -10,7 +10,7 @@ import { BrowserWindow, dialog } from 'electron'
 
 import { isHeadlessMode, showSaveDialogWithMemory } from '@genoffice/electron-utils'
 
-import { atomicWriteFile } from './atomic-write'
+import { atomicWriteFile } from '@genoffice/electron-utils/atomic-write'
 import { evenPageRanges, stitchPlan, type PageVariant } from './pdf-page-variants'
 import { printOptionsFor } from './print-options'
 import { printPdfViaCups, printToPdfOptionsFor } from '@genoffice/electron-utils/print-cups'
