@@ -9,7 +9,7 @@ import { z } from 'zod'
 
 import { applyCellEditsToXlsx } from '@genoffice/xlsx-gateway/gateway/xlsx-gateway'
 
-import { XlsxSidecarClient } from '../src/main/xlsx-sidecar-client'
+import { XlsxSidecarClient } from '../src/node/xlsx-sidecar-client'
 import { toUniverDvRule } from '../src/renderer/univer-sync'
 import { workbookRangeResultSchema } from '../src/shared/desktop-api'
 

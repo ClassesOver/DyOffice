@@ -7,7 +7,7 @@ import JSZip from 'jszip'
 import { describe, expect, it } from 'vitest'
 
 import { saveWorkbookViaSidecar } from '@genoffice/xlsx-gateway/gateway/xlsx-package-io'
-import { XlsxSidecarClient } from '../src/main/xlsx-sidecar-client'
+import { XlsxSidecarClient } from '../src/node/xlsx-sidecar-client'
 
 // The shape Hancom Cell (HCell 11.0) saves: every spreadsheetml element is
 // x:-prefixed, and individual styles.xml entries are mc:AlternateContent

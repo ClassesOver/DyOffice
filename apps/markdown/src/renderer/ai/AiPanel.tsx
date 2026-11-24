@@ -19,7 +19,6 @@ import {
   composeSkills,
   streamText,
   withAttachedSkills,
-  type MindMapTreeNode,
 } from '@genoffice/agent-core'
 import { imageGenerationAvailable, type AiSettings } from '@genoffice/ai-provider/browser'
 import {
@@ -43,10 +42,7 @@ import sendEnterOff from '../assets/send-enter-off.png'
 import sendStop from '../assets/send-stop.png'
 import { clearAiHighlights } from '../editor/aiHighlight'
 import { setInactiveSelectionShown } from '../editor/inactiveSelection'
-import { uiOp } from '../editor/ops'
 import { createMarkdownSkill, MARKDOWN_RULES } from './markdown-skill'
-import { MindMapCard } from './MindMapCard'
-import { mindMapToMermaid } from '@genoffice/agent-core/mind-map'
 import {
   buildDocWriterRequest,
   countMarkdownBlocks,
@@ -99,9 +95,6 @@ interface ChatEntry {
   /** the run failed and this user message was rolled back out of the model context */
   undelivered?: boolean
   tools?: ToolActivity[]
-  /** interactive mind map from generate_mindmap's side-channel display (session-only;
-   * the persisted transcript keeps the tool call, so a reopened file can regenerate) */
-  mindmap?: MindMapTreeNode
   /** the selection this user message targeted, frozen at send */
   scope?: AiScopeQuoteData
   /** skills the user attached to this message from the composer menu */
@@ -441,9 +434,6 @@ export function AiPanel({
               [...prev, { label, time, doc: snapshotBefore }].slice(-MAX_SNAPSHOTS),
             )
           }
-          // mind maps ride the UI-only display side channel onto the message
-          const display = execution.display
-          const mindmap = display?.kind === 'mindmap' ? display.tree : undefined
           const activity: ToolActivity = {
             name: call.name,
             summary: execution.summary,
@@ -455,7 +445,7 @@ export function AiPanel({
             // Swap out the running placeholder pushed by onToolStart (parse-fail calls have none)
             const tools = [...(last.tools ?? [])]
             if (tools.at(-1)?.running) tools.pop()
-            return { tools: [...tools, activity], ...(mindmap ? { mindmap } : {}) }
+            return { tools: [...tools, activity] }
           })
         },
         onTurnEnd: () => {
@@ -995,28 +985,6 @@ export function AiPanel({
                 )
               )}
               {hasTools && <ToolChipList tools={entry.tools!} />}
-              {entry.mindmap && (
-                <MindMapCard
-                  tree={entry.mindmap}
-                  onAsk={(label) => {
-                    setPrompt(t('aiMindMapAskPrompt', { label }))
-                    inputRef.current?.focus()
-                  }}
-                  onJumpBlock={(index) => {
-                    const current = depsRef.current.getEditor()
-                    if (current) navigateToBlock(current, index)
-                  }}
-                  onInsert={() => {
-                    const current = depsRef.current.getEditor()
-                    if (!current || !entry.mindmap) return
-                    uiOp(current, {
-                      op: 'insertContent',
-                      after: current.state.doc.childCount - 1,
-                      markdown: ['```mermaid', mindMapToMermaid(entry.mindmap), '```'].join('\n'),
-                    })
-                  }}
-                />
-              )}
               {entry.usage && (
                 <div className="ai-message-usage">
                   <AiUsageChip usage={entry.usage} lang={lang} />

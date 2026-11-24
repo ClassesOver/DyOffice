@@ -11,7 +11,7 @@ import {
   assertManifestPreserved,
   saveWorkbookViaSidecar,
 } from '@genoffice/xlsx-gateway/gateway/xlsx-package-io'
-import { XlsxSidecarClient } from '../src/main/xlsx-sidecar-client'
+import { XlsxSidecarClient } from '../src/node/xlsx-sidecar-client'
 import { buildEditFixture } from './fixture-builder'
 
 describe('saveWorkbookViaSidecar', () => {

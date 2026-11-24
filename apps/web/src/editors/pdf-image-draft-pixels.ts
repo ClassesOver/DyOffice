@@ -1,5 +1,5 @@
 import {flipPixels,multiplyAlpha} from '../../../pdf/src/renderer/image-bake'
-import {removeBackground,type PixelImage} from '../../../pdf/src/renderer/cutout'
+import {removeBackground,type PixelImage} from '../../../../packages/ui/src/cutout'
 import type {PdfImageBytes} from './pdf-types'
 
 export type PdfImageDraftBakeOperation=

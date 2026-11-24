@@ -33,7 +33,7 @@ describe('XlsxSidecarClient cancel wiring', () => {
   async function clientWithFake() {
     const fake = new FakeSidecarProcess()
     spawnMock.mockReturnValue(fake)
-    const { XlsxSidecarClient } = await import('../src/main/xlsx-sidecar-client')
+    const { XlsxSidecarClient } = await import('../src/node/xlsx-sidecar-client')
     return { client: new XlsxSidecarClient('/nonexistent/sidecar'), fake }
   }
 

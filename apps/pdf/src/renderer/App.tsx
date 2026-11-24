@@ -121,7 +121,7 @@ import type { LocalImageEdit } from './ImageEditLayer'
 import { CropDialog, CutoutDialog, cropImagePng } from './ImageDialogs'
 import { cropRect, flipPixels, multiplyAlpha } from './image-bake'
 import type { CropFractions, ImageBakeOp } from './image-bake'
-import { removeBackground, type PixelImage } from './cutout'
+import { removeBackground, type PixelImage } from '@genoffice/ui'
 import { navAction, shouldHandleDocumentUndo } from './keyNav'
 import { rowOfVisIdx, spreadRows, stepPage } from './spread'
 import {

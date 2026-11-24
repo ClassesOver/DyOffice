@@ -1,4 +1,4 @@
-import { readWorkbookRedactionSource } from '../../../sheets/src/main/workbook-redactions'
+import { readWorkbookRedactionSource } from '../../../sheets/src/node/workbook-redactions'
 import { parseSlicerState } from '../../../../packages/xlsx-gateway/src/gateway/xlsx-slicer'
 import { listWorkbookQueries } from '../../../../packages/xlsx-gateway/src/gateway/xlsx-connections'
 import { refreshableQueriesOf } from '../../../../packages/xlsx-gateway/src/gateway/xlsx-connection-refresh'

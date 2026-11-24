@@ -15,7 +15,7 @@ test('CI no longer downloads or launches the retired desktop product or weakens 
   assert.match(ci, /npm run test:e2e/)
 })
 test('SaaS shared renderer and workbook adapter are preserved', () => {
-  for (const file of ['apps/shell/src/renderer/src/AppFrame.tsx','apps/docs/src/renderer/editor/approved-text-command.ts','apps/sheets/src/main/workbook-redactions.ts','apps/web/server/sheets/gateway.ts']) {
+  for (const file of ['apps/shell/src/renderer/src/AppFrame.tsx','apps/docs/src/renderer/editor/approved-text-command.ts','apps/sheets/src/node/workbook-redactions.ts','apps/web/server/sheets/gateway.ts']) {
     assert.ok(existsSync(new URL(file, root)), file)
   }
 })

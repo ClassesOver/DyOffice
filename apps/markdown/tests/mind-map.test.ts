@@ -1,7 +1,5 @@
-import { Editor } from '@tiptap/core'
-import { afterEach, describe, expect, it } from 'vitest'
-import { buildExtensions } from '../src/renderer/editor/extensions'
-import { executeTool } from '../src/renderer/ai/tools'
+import { describe, expect, it } from 'vitest'
+import { AGENT_TOOLS } from '../src/renderer/ai/tools'
 import { createMarkdownSkill } from '../src/renderer/ai/markdown-skill'
 import {
   countMindMapNodes,
@@ -15,41 +13,6 @@ import {
   wrapLabel,
 } from '@genoffice/agent-core/mind-map'
 import type { MindMapTreeNode } from '@genoffice/agent-core'
-
-// Undestroyed views leave DOMObserver flush timers that fire after jsdom teardown
-// ("document is not defined" unhandled error) — destroy every editor we create.
-const editors: Editor[] = []
-afterEach(() => {
-  for (const e of editors.splice(0)) e.destroy()
-})
-
-/** 0 h1 | 1 p | 2 h2 | 3 p */
-function createEditor(): Editor {
-  const editor = new Editor({
-    extensions: buildExtensions({
-      slashController: {
-        onOpen: () => {},
-        onUpdate: () => {},
-        onKeyDown: () => false,
-        onClose: () => {},
-      },
-      slashItems: () => [],
-    }),
-    content: '',
-  })
-  editor.commands.setContent(
-    '# Chapter 1 Overview\n\nGenSpark is an AI office suite.\n\n## Risk Notes\n\nThis document is for reference only.',
-    { contentType: 'markdown' },
-  )
-  editors.push(editor)
-  return editor
-}
-
-const call = (name: string, input: Record<string, unknown> = {}) => ({
-  id: 't1',
-  name,
-  input,
-})
 
 interface Point {
   x: number
@@ -372,46 +335,11 @@ describe('model-facing mind map text', () => {
 
   it('keeps the system prompt free of CJK', () => {
     const systemPrompt = createMarkdownSkill(() => null).systemPrompt
-    expect(systemPrompt).toContain('generate_mindmap')
+    expect(systemPrompt).toMatch(/mind map.*Mermaid/i)
+    expect(AGENT_TOOLS.map(({ name }) => name)).not.toContain('generate_mindmap')
     for (const line of systemPrompt.split('\n')) {
       expect(line, `CJK in prompt line: ${line}`).not.toMatch(HAN)
     }
-  })
-})
-
-describe('generate_mindmap tool', () => {
-  it('returns the tree on the display side channel without mutating the document', async () => {
-    const editor = createEditor()
-    const before = editor.state.doc.childCount
-    expect(before).toBe(4)
-    const exec = await executeTool(
-      editor,
-      call('generate_mindmap', {
-        focus: 'risk controls',
-        root: {
-          label: 'Quarterly Report',
-          children: [
-            { label: 'Overview', block: 0, children: [{ label: 'Suite', block: 1 }] },
-            { label: 'Risks', block: 2 },
-          ],
-        },
-      }),
-    )
-    expect(exec.isError).toBeUndefined()
-    expect(exec.mutated).toBe(false)
-    expect(exec.summary).toBe('\u751F\u6210\u601D\u7EF4\u5BFC\u56FE')
-    expect(exec.display?.kind).toBe('mindmap')
-    expect(exec.display?.tree?.label).toBe('Quarterly Report')
-    expect(exec.output).toContain('4 nodes')
-    expect(exec.output).toContain('risk controls')
-    expect(editor.state.doc.childCount).toBe(before)
-  })
-
-  it('reports an error when the model sends no branches', async () => {
-    const editor = createEditor()
-    const exec = await executeTool(editor, call('generate_mindmap', { root: { label: 'Lonely' } }))
-    expect(exec.isError).toBe(true)
-    expect(exec.display).toBeUndefined()
   })
 })
 
