@@ -172,6 +172,14 @@ export interface CsvImportProgress {
   readonly fraction: number
 }
 
+/** Sparse dimensions for a generated single-sheet XLSX. Indices are 1-based, sizes use OOXML units. */
+export interface SheetExportLayout {
+  defaultRowHeight: number
+  defaultColumnWidth: number
+  rows: [number, number][]
+  columns: [number, number][]
+}
+
 export interface CsvImportOptions {
   /** called as the import advances */
   readonly onProgress?: (progress: CsvImportProgress) => void
@@ -382,12 +390,23 @@ export function csvGridShape(
 export function* worksheetXmlChunks(
   rows: Iterable<readonly string[]>,
   shape: CsvGridShape,
-  options?: { readonly onRow?: (rowsWritten: number) => void },
+  options?: { readonly onRow?: (rowsWritten: number) => void; readonly layout?: SheetExportLayout | undefined },
 ): Generator<string> {
   yield '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n'
   yield '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
-  const lastColumn = columnLabel(Math.max(shape.columns, 1) - 1)
-  yield `<dimension ref="A1:${lastColumn}${Math.max(shape.rows, 1)}"/>`
+  const layout = options?.layout
+  const heights = new Map(layout?.rows)
+  const lastRow = layout?.rows.reduce((n, [i]) => Math.max(i, n), shape.rows) ?? shape.rows
+  const cols = layout?.columns.reduce((n, [i]) => Math.max(i, n), shape.columns) ?? shape.columns
+  yield `<dimension ref="A1:${columnLabel(Math.max(cols, 1) - 1)}${Math.max(lastRow, 1)}"/>`
+  if (layout) {
+    yield `<sheetFormatPr defaultColWidth="${layout.defaultColumnWidth}" defaultRowHeight="${layout.defaultRowHeight}" customHeight="1"/>`
+    if (layout.columns.length) {
+      yield '<cols>'
+      for (const [i, width] of layout.columns) yield `<col min="${i}" max="${i}" width="${width}" customWidth="1"/>`
+      yield '</cols>'
+    }
+  }
   yield '<sheetData>'
   let rowIndex = 0
   for (const row of rows) {
@@ -401,9 +420,16 @@ export function* worksheetXmlChunks(
           : `<c r="${reference}" t="inlineStr"><is><t xml:space="preserve">${escapeXml(encodeXlsxEscapes(value))}</t></is></c>`,
       )
     })
-    if (cells.length > 0) yield `<row r="${rowIndex + 1}">${cells.join('')}</row>`
+    const height = heights.get(rowIndex + 1)
+    if (height !== undefined || cells.length) {
+      const size = height === undefined ? '' : ` ht="${height}" customHeight="1"`
+      yield `<row r="${rowIndex + 1}"${size}>${cells.join('')}</row>`
+    }
     rowIndex += 1
     options?.onRow?.(rowIndex)
+  }
+  for (const [i, height] of [...heights].filter(([i]) => i > rowIndex).sort(([a], [b]) => a - b)) {
+    yield `<row r="${i}" ht="${height}" customHeight="1"/>`
   }
   yield '</sheetData></worksheet>'
 }

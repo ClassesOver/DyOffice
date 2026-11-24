@@ -880,6 +880,7 @@ for (const theme of ['light', 'dark']) test(`Word saves and downloads the author
   await expectCleanPersistence(f.page)
 })
 
+
 test('Web Word protection keeps the supported modify password option usable',{timeout:90000},async t=>{
   const f=await fixture(t),{page}=f
   const {fileId,revision}=f.opened.file
@@ -901,4 +902,19 @@ test('Web Word protection keeps the supported modify password option usable',{ti
   await expect.poll(head,{timeout:30000}).not.toBe(revision)
   const saved=await JSZip.loadAsync(await f.files.readFile(f.alice.token,fileId,await head()))
   assert.match(await saved.file('word/settings.xml').async('string'),/<w:writeProtection\b/)
+})
+
+test('Ctrl+S names an untitled Word document from its first paragraph', {timeout:90000},async t=>{
+ const f=await fixture(t),{page}=f
+ const bytes=await readFile(new URL('../../../shell/build/shell-new/blank.docx',import.meta.url))
+ const upload=await f.files.stageUpload(f.alice.token,{name:'未命名.docx',size:bytes.length,autoName:true})
+ await f.files.receiveUpload(f.alice.token,upload.uploadId,bytes)
+ const {file}=await f.files.finishUpload(f.alice.token,upload.uploadId)
+ await page.goto(f.origin+'/native-docx/?fileId='+file.fileId)
+ const editor=page.locator('.tiptap.doc-page[contenteditable="true"]').first()
+ await editor.click({timeout:45000});await page.keyboard.insertText('Quarterly review')
+ await page.keyboard.press('Control+s')
+ await expect.poll(async()=>(await f.files.openFile(f.alice.token,file.fileId)).name,{timeout:10000}).toBe('Quarterly review.docx')
+ await expect(page.locator('.qa-btn.qa-name-with-ai')).toHaveCount(0)
+})
 })

@@ -299,12 +299,12 @@ export async function mountSlidesEditor(host: SessionFileHost, container: HTMLEl
   const beforeUnload = (event: BeforeUnloadEvent) => { if (closeState().dirty||closeState().blocked) { event.preventDefault(); event.returnValue = '' } }
   stage.addEventListener('beforeunload', beforeUnload)
   // Ctrl/Cmd+S saves in place through the renderer's own save flow (no download).
-  // A read-only session is never dirty, so the save is naturally a no-op there.
+  // Flush pending text edits before the bridge decides whether a revision is needed.
   const onKeyDown = (event: KeyboardEvent) => {
     if (!(event.ctrlKey || event.metaKey) || event.altKey || event.shiftKey) return
     if (event.key !== 's' && event.key !== 'S') return
     event.preventDefault()
-    if (disposed || !editor?.isDirty()) return
+    if (disposed || !editor || event.repeat || event.isComposing || !host.getState(fileId).lease) return
     void editor.saveAndWait().catch(() => {})
   }
   window.addEventListener('keydown', onKeyDown)

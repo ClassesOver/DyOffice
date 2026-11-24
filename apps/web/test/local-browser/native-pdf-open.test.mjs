@@ -468,7 +468,8 @@ for (const theme of ['light','dark']) test(`native PDF saves and reopens an assi
  const head=async()=>(await f.files.openFile(f.alice.token,file.fileId)).file.revision
  assert.equal(await head(),file.revision)
  assert.equal(commits,0)
- await page.getByRole('button',{name:'保存',exact:true}).click()
+ if(theme==='light')await page.keyboard.press('Control+s')
+ else await page.getByRole('button',{name:'保存',exact:true}).click()
  await expect(page.locator('.dyoffice-pdf-persistence-state')).toHaveText('已保存',{timeout:15000})
  const revision=await head()
  assert.notEqual(revision,file.revision)

@@ -112,7 +112,7 @@ declare global {
   dyofficeOpenPdfCopy?:(receipt:RevisionRef,proof:string,signal?:AbortSignal)=>Promise<void>
   dyofficeOpenKnowledgeSource?:(id:string,revision:string)=>Promise<void>
   dyofficeCreateAiDoc?:(request:{type?:'docx'|'pdf';title:string;content:string;file?:Blob})=>Promise<RevisionRef>
-  dyofficeCreateAiXlsx?:(request:{title:string;sheetName?:string;content:string})=>Promise<void>
+  dyofficeCreateAiXlsx?:(request:{title:string;sheetName?:string;content:string;layout?:import('@genoffice/xlsx-gateway/gateway/csv-import').SheetExportLayout})=>Promise<void>
  }
 }
 let entryRecovery:ReturnType<typeof createEntryRecovery>|undefined

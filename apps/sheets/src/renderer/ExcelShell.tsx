@@ -321,7 +321,7 @@ interface ExcelShellProps {
   readonly fileMenu?: React.ReactNode
   readonly externalLinkSourceActions?: boolean
   /** Ask the model for a name, then open Save As with it prefilled */
-  readonly onNameWithAi: () => void
+  readonly onNameWithAi?: (() => void) | undefined
   /// QAT redo (workbook history, same path as the app menu's ⇧⌘Z); undo
   /// shares the AI panel's onUndo above.
   readonly onRedo: () => void
@@ -952,7 +952,7 @@ export function ExcelShell({
           >
             <SaveAsIcon />
           </button>}
-          <button
+          {onNameWithAi && <button
             type="button"
             className="qa-btn qa-name-with-ai"
             data-tip={t('aiNameFile')}
@@ -961,7 +961,7 @@ export function ExcelShell({
             onClick={onNameWithAi}
           >
             <GensparkMark />
-          </button>
+          </button>}
           <button
             type="button"
             className="qa-btn"

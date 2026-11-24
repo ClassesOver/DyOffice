@@ -634,13 +634,17 @@ function dateTextKind(value: string): 'date-like' | 'text' {
   return kind
 }
 
+type SheetExportLayout = import('@genoffice/xlsx-gateway/gateway/csv-import').SheetExportLayout
+
 export interface SheetsEditorHandle {
+  getExportLayout(sheetName: string): SheetExportLayout
   analysis?: import('../../../../packages/web-contracts/src/analysis-document').NativeAnalysisEditor
   save(): Promise<boolean>
   /** Commit the editor and await formula/chart work without writing the file. */
   flush(): Promise<boolean>
   /** Wait behind any current save and drain late edits; fail closed if still dirty. */
   prepareHandoff(): Promise<void>
+  nameWithAi(): Promise<void>
   saveAndWait(): Promise<boolean>
   saveForDownload(): Promise<boolean>
   exportCsv(): Promise<void>
@@ -794,6 +798,7 @@ export function App({
       flush: () => saveGateRef.current.run(flushEditor),
       saveAndWait,
       saveForDownload: saveAndWait,
+      nameWithAi,
       exportCsv: async () => {
         const context = csvExportContext()
         const runtime = univerRef.current
@@ -853,6 +858,22 @@ export function App({
       }),
       isDirty: editorIsDirty,
       getWorkbookSessionId: () => lazyWorkbookRef.current?.file.sessionId,
+      getExportLayout: (name) => {
+        const sheet = univerRef.current?.univerAPI.getActiveWorkbook()?.getSheetByName(name)
+        if (!sheet) throw new Error('The worksheet is no longer available.')
+        const config = sheet.getSheet().getConfig()
+        const rows: SheetExportLayout['rows'] = [], columns: SheetExportLayout['columns'] = []
+        // A standalone export uses Calibri 11 (8 px per character), independent of the source font.
+        const width = (px: number) => Math.round(px / 8 * 256) / 256
+        for (const [index, row] of Object.entries(config.rowData)) {
+          const px = row.ia && row.ah !== undefined ? row.ah : row.h
+          if (px !== undefined && px > 0) rows.push([Number(index) + 1, px * 0.75])
+        }
+        for (const [index, col] of Object.entries(config.columnData)) {
+          if (col.w !== undefined && col.w > 0) columns.push([Number(index) + 1, width(col.w)])
+        }
+        return { defaultRowHeight: config.defaultRowHeight * 0.75, defaultColumnWidth: width(config.defaultColumnWidth), rows, columns }
+      },
     })
     return () => host?.onEditorReady?.(null)
   })
@@ -6661,7 +6682,7 @@ export function App({
         saveDownload={host?.saveDownload}
         fileMenu={host?.fileMenu}
         externalLinkSourceActions={!host?.inPlaceSave}
-        onNameWithAi={() => void nameWithAi()}
+        onNameWithAi={host ? undefined : () => void nameWithAi()}
         onRedo={handleRedo}
         autoSave={autoSave}
         onAutoSaveChange={setAutoSave}

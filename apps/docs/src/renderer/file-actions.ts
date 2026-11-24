@@ -834,12 +834,19 @@ export function sanitizeFileBaseName(raw: string): string | null {
  * from the first heading, so the first silent save (and with it the shell tab
  * title) picks up a content-derived name instead of "Untitled.docx".
  */
-function deriveAutoFileName(document: PmNode): string | null {
+function deriveAutoFileName(document: PmNode, allowParagraph = false): string | null {
   const body = document.content ?? []
   for (const node of body) {
     if (node.type !== 'docHeading') continue
     const base = sanitizeFileBaseName(pmNodeText(node))
     if (base) return `${base}.docx`
+  }
+  if (allowParagraph) {
+    for (const node of body) {
+      if (node.type !== 'docParagraph') continue
+      const base = sanitizeFileBaseName(modelTextOf(node as RedactableNode, { maxChars: 120 }))
+      if (base) return `${base}.docx`
+    }
   }
   return null
 }
@@ -1340,7 +1347,7 @@ async function saveOnce(
       if (docGeneration !== generation) return false
       if (!doc.filePath) pathlessDocSavedPath = savedPath
     } else {
-      const candidate=(doc.fileName==='未命名.docx'||doc.fileName===t('appUntitledDocx'))?deriveAutoFileName(docSnapshot.toJSON() as PmNode):null
+      const candidate=(doc.fileName==='未命名.docx'||doc.fileName===t('appUntitledDocx'))?deriveAutoFileName(docSnapshot.toJSON() as PmNode, !!ctx.hostLifecycle):null
       const result = await window.desktop.saveDocx(savedPath, buffer, auto,candidate??undefined)
       savedName=result.name
       if (docGeneration !== generation) return false
