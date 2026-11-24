@@ -6,6 +6,7 @@ import { pdfToText } from './pdf'
 import { pptToText } from './ppt'
 import { pptxToText } from './pptx'
 import { xlsxToText } from './xlsx'
+import { docxFormatDetails, pptxFormatDetails } from './office-details'
 
 export type ParsedFileKind = 'text' | 'image' | 'unsupported'
 
@@ -165,11 +166,25 @@ export async function parseBytesToText(
           text: sniffed === 'zip' ? await docxToText(bytes, opts) : await docToText(bytes),
         }
       case 'docx':
-        return { ok: true, kind: 'text', text: await docxToText(bytes, opts) }
+        return {
+          ok: true,
+          kind: 'text',
+          text: await appendDetails(
+            await docxToText(bytes, opts),
+            await docxFormatDetails(bytes).catch(() => ''),
+          ),
+        }
       case 'ppt':
         return { ok: true, kind: 'text', text: await pptToText(bytes) }
       case 'pptx':
-        return { ok: true, kind: 'text', text: await pptxToText(bytes) }
+        return {
+          ok: true,
+          kind: 'text',
+          text: await appendDetails(
+            await pptxToText(bytes),
+            await pptxFormatDetails(bytes).catch(() => ''),
+          ),
+        }
       case 'xlsx':
       case 'xlsm':
         return { ok: true, kind: 'text', text: await xlsxToText(bytes, opts) }
@@ -180,4 +195,8 @@ export async function parseBytesToText(
     return { ok: false, kind: 'text', error: e instanceof Error ? e.message : String(e) }
   }
   return { ok: false, kind: 'unsupported', error: `Unsupported file type: .${ext || 'unknown'}` }
+}
+
+function appendDetails(text: string, details: string): string {
+  return details ? `${text}\n\n${details}` : text
 }
